@@ -32,8 +32,14 @@ entry:
     ; Set up graphics mode and show Hello World
     call setup_graphics
 
-    ; Main loop - clock and character demo
-    call main_loop
+    ; DEBUG: Skip main loop for clean coordinate test
+    ; ; Main loop - clock and character demo
+    ; call main_loop
+
+    ; Halt after coordinate test
+.halt:
+    hlt
+    jmp .halt
 
 ; ============================================================================
 ; Memory Detection
@@ -148,9 +154,117 @@ setup_graphics:
     mov bl, 0x01            ; Blue background
     int 0x10
 
-    ; Draw the graphical Hello World
-    call draw_hello_gfx
+    ; DEBUG: Only draw coordinate markers, nothing else
+    call draw_coordinate_test
 
+    ret
+
+; ============================================================================
+; Coordinate Test - Draw markers at regular intervals
+; ============================================================================
+
+draw_coordinate_test:
+    pusha
+
+    ; Draw Y-axis markers at X=0 (left edge)
+    ; Markers every 20 pixels from Y=0 to Y=180
+    ; Using hex digits: 0,1,2,3,4,5,6,7,8,9 for Y=0,20,40,60,80,100,120,140,160,180
+
+    mov word [draw_x], 0
+    mov word [draw_y], 0
+    mov al, '0'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 20
+    mov al, '1'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 40
+    mov al, '2'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 60
+    mov al, '3'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 80
+    mov al, '4'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 100
+    mov al, '5'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 120
+    mov al, '6'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 140
+    mov al, '7'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 160
+    mov al, '8'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 0
+    mov word [draw_y], 180
+    mov al, '9'
+    call draw_ascii_4x6
+
+    ; Draw X-axis markers at Y=0 (top edge)
+    ; Markers every 40 pixels from X=0 to X=280
+    ; Using letters: A,B,C,D,E,F,G,H for X=40,80,120,160,200,240,280,320
+
+    mov word [draw_x], 40
+    mov word [draw_y], 0
+    mov al, 'A'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 80
+    mov word [draw_y], 0
+    mov al, 'B'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 120
+    mov word [draw_y], 0
+    mov al, 'C'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 160
+    mov word [draw_y], 0
+    mov al, 'D'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 200
+    mov word [draw_y], 0
+    mov al, 'E'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 240
+    mov word [draw_y], 0
+    mov al, 'F'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 280
+    mov word [draw_y], 0
+    mov al, 'G'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 310
+    mov word [draw_y], 0
+    mov al, 'H'
+    call draw_ascii_4x6
+
+    popa
     ret
 
 ; ============================================================================
