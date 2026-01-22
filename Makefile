@@ -52,8 +52,9 @@ $(BOOT_BIN): $(BOOT_DIR)/boot.asm | $(BUILD_DIR) check-deps
 	$(NASM) -f bin -o $@ $<
 
 # Assemble second stage loader
-$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
-	$(NASM) -f bin -o $@ $<
+# -I flag adds include path for font files
+$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm $(BOOT_DIR)/font8x8.asm $(BOOT_DIR)/font4x6.asm | $(BUILD_DIR)
+	$(NASM) -f bin -I$(BOOT_DIR)/ -o $@ $<
 
 # Create 360KB floppy image (target platform)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN)
