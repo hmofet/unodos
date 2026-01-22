@@ -519,6 +519,18 @@ draw_clock:
     mov al, '4'
     call draw_ascii_4x6
 
+    ; DEBUG: Also draw "TEST" at demo position (Y=120) to check visibility
+    mov word [draw_x], DEMO_START_X
+    mov word [draw_y], DEMO_START_Y
+    mov al, 'T'
+    call draw_ascii_4x6
+    mov al, 'E'
+    call draw_ascii_4x6
+    mov al, 'S'
+    call draw_ascii_4x6
+    mov al, 'T'
+    call draw_ascii_4x6
+
     popa
     ret
 
