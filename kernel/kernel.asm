@@ -112,22 +112,27 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Draw exclamation mark (first char after space in font)
-    ; font_8x8 + 8 should be '!' character
-    mov word [draw_x], 70
+    ; Test: Various offset sizes
+    mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; First: hardcoded W (known working)
+    ; 1. Hardcoded W (known working)
     mov si, test_W_char
     call draw_char
 
-    ; Second: font_8x8 directly (should be space - blank)
-    mov si, font_8x8
-    call draw_char
-
-    ; Third: font_8x8 + 8 (should be '!')
+    ; 2. '!' at offset 8 (small offset - works)
     mov si, font_8x8
     add si, 8
+    call draw_char
+
+    ; 3. 'A' at offset (65-32)*8 = 264
+    mov si, font_8x8
+    add si, 264
+    call draw_char
+
+    ; 4. 'W' at offset (87-32)*8 = 440
+    mov si, font_8x8
+    add si, 440
     call draw_char
 
     pop es
