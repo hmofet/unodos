@@ -5,6 +5,24 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-01-22
+
+### Added
+- Complete ASCII bitmap font set (characters 32-126)
+  - 8x8 font in boot/font8x8.asm (95 characters, 760 bytes)
+  - 4x6 small font in boot/font4x6.asm (95 characters, 570 bytes)
+- Generic text rendering functions for any ASCII string:
+  - draw_string_8x8: Render null-terminated string with 8x8 font
+  - draw_string_4x6: Render null-terminated string with 4x6 font
+  - draw_ascii_8x8: Render single ASCII character with 8x8 font
+  - draw_ascii_4x6: Render single ASCII character with 4x6 font
+- Font tables accessible via font_8x8 and font_4x6 labels
+- Legacy character aliases (char_H, char_E, etc.) maintained for compatibility
+
+### Changed
+- Font data moved from inline definitions to separate include files
+- Makefile updated with NASM include path for font files
+
 ## [3.0.1] - 2026-01-22
 
 ### Added
