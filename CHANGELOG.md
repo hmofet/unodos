@@ -5,6 +5,18 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.4] - 2026-01-22
+
+### Fixed
+- Clock and character demo now visible on HP Omnibook 600C
+  - Clock moved to Y=60 (just above welcome message)
+  - Character demo moved to Y=108 (just below version text)
+  - Positions within known visible area (Y=4-106 confirmed visible)
+
+### Changed
+- Separated clock_loop as independent function
+- Added main_loop to coordinate clock and demo updates
+
 ## [3.1.3] - 2026-01-22
 
 ### Fixed
