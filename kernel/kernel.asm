@@ -112,16 +112,21 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Draw two W's - one hardcoded, one from font include
-    mov word [draw_x], 80
+    ; Test: Draw three W's to debug font addressing
+    mov word [draw_x], 70
     mov word [draw_y], 80
 
     ; First W - hardcoded (known working)
     mov si, test_W_char
     call draw_char
 
-    ; Second W - from included font8x8.asm
+    ; Second W - using char_W equ (broken?)
     mov si, char_W
+    call draw_char
+
+    ; Third W - calculate address manually at runtime
+    mov si, font_8x8
+    add si, ('W' - 32) * 8        ; Same calculation as char_W equ
     call draw_char
 
     pop es
