@@ -32,14 +32,8 @@ entry:
     ; Set up graphics mode and show Hello World
     call setup_graphics
 
-    ; DEBUG: Skip main loop for clean coordinate test
-    ; ; Main loop - clock and character demo
-    ; call main_loop
-
-    ; Halt after coordinate test
-.halt:
-    hlt
-    jmp .halt
+    ; Main loop - clock and character demo
+    call main_loop
 
 ; ============================================================================
 ; Memory Detection
@@ -128,8 +122,8 @@ setup_graphics:
     mov bl, 0x01            ; Blue background
     int 0x10
 
-    ; DEBUG: Only draw coordinate markers, nothing else
-    call draw_coordinate_test
+    ; Draw the welcome screen
+    call draw_hello_gfx
 
     ret
 
@@ -363,7 +357,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.5" in smaller text (4x6 font)
+    ; Draw version "v3.1.6" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -383,8 +377,8 @@ draw_hello_gfx:
     ; .
     mov si, char_dot_small
     call draw_char_small
-    ; 0
-    mov si, char_0_small
+    ; 6
+    mov si, char_6_small
     call draw_char_small
 
 .skip_text:
@@ -494,87 +488,60 @@ draw_ram_info:
 ; Clock Display (top left corner) - Reads from RTC
 ; ============================================================================
 
-; Clock position (above white box at Y=50)
+; Clock position (top left, above white box)
 CLOCK_X     equ 4
-CLOCK_Y     equ 40
+CLOCK_Y     equ 4
 
-; Draw clock (HH:MM:SS format)
+; Draw clock (HH:MM format) using RTC
 draw_clock:
     pusha
 
-    ; Set draw position first
+    ; Clear clock area first to prevent overdraw
+    call clear_clock_area
+
+    ; Read RTC time using BIOS INT 1Ah, AH=02h
+    mov ah, 0x02
+    int 0x1A
+    jc .clock_error         ; If carry set, RTC not available
+
+    ; CH = hours (BCD), CL = minutes (BCD), DH = seconds (BCD)
+    mov [rtc_hours], ch
+    mov [rtc_minutes], cl
+    mov [rtc_seconds], dh
+
+    ; Set draw position
     mov word [draw_x], CLOCK_X
     mov word [draw_y], CLOCK_Y
 
-    ; DEBUG: Draw static "12:34" to test if draw_ascii_4x6 works
-    mov al, '1'
-    call draw_ascii_4x6
-    mov al, '2'
-    call draw_ascii_4x6
+    ; Draw hours
+    mov al, [rtc_hours]
+    call draw_bcd_small
+
+    ; Draw colon
     mov al, ':'
     call draw_ascii_4x6
-    mov al, '3'
-    call draw_ascii_4x6
-    mov al, '4'
-    call draw_ascii_4x6
 
-    ; DEBUG: Draw X position markers at Y=95 to find visible X range
-    ; Each marker shows X/50: 0,1,2,3,4,5,6 at X=0,50,100,150,200,250,300
-
-    ; X=0 marker "0"
-    mov word [draw_x], 0
-    mov word [draw_y], 95
-    mov al, '0'
-    call draw_ascii_4x6
-
-    ; X=50 marker "1"
-    mov word [draw_x], 50
-    mov word [draw_y], 95
-    mov al, '1'
-    call draw_ascii_4x6
-
-    ; X=100 marker "2"
-    mov word [draw_x], 100
-    mov word [draw_y], 95
-    mov al, '2'
-    call draw_ascii_4x6
-
-    ; X=150 marker "3"
-    mov word [draw_x], 150
-    mov word [draw_y], 95
-    mov al, '3'
-    call draw_ascii_4x6
-
-    ; X=200 marker "4"
-    mov word [draw_x], 200
-    mov word [draw_y], 95
-    mov al, '4'
-    call draw_ascii_4x6
-
-    ; X=250 marker "5"
-    mov word [draw_x], 250
-    mov word [draw_y], 95
-    mov al, '5'
-    call draw_ascii_4x6
-
-    ; X=300 marker "6"
-    mov word [draw_x], 300
-    mov word [draw_y], 95
-    mov al, '6'
-    call draw_ascii_4x6
+    ; Draw minutes
+    mov al, [rtc_minutes]
+    call draw_bcd_small
 
     popa
     ret
 
-    ; Original RTC code commented out for debugging
-    ; Read RTC time using BIOS INT 1Ah, AH=02h
-    ;mov ah, 0x02
-    ;int 0x1A
-    ;jc .clock_error         ; If carry set, RTC not available
-    ;... (rest commented)
-
 .clock_error:
-    ; RTC not available - draw dashes (unused for now)
+    ; RTC not available - draw "--:--"
+    mov word [draw_x], CLOCK_X
+    mov word [draw_y], CLOCK_Y
+    mov al, '-'
+    call draw_ascii_4x6
+    mov al, '-'
+    call draw_ascii_4x6
+    mov al, ':'
+    call draw_ascii_4x6
+    mov al, '-'
+    call draw_ascii_4x6
+    mov al, '-'
+    call draw_ascii_4x6
     popa
     ret
 
@@ -603,7 +570,7 @@ draw_bcd_small:
     ret
 
 ; Clear clock area (to prevent overdraw artifacts)
-; Clock is at y=40, spans 6 rows (y=40-45), row 20-22 in CGA
+; Clock is at y=4, spans 6 rows (y=4-9), CGA row = y/2
 clear_clock_area:
     pusha
     push es
@@ -611,8 +578,8 @@ clear_clock_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Even rows (y=40,42,44 -> row 20,21,22)
-    mov di, 20 * 80         ; Start at row 20
+    ; Even rows (y=4,6,8 -> CGA row 2,3,4)
+    mov di, 2 * 80          ; Start at row 2
     mov cx, 3               ; 3 rows
 .clear_even:
     push cx
@@ -625,8 +592,8 @@ clear_clock_area:
     pop cx
     loop .clear_even
 
-    ; Odd rows (y=41,43,45 -> row 20,21,22 in odd bank)
-    mov di, 20 * 80 + 0x2000
+    ; Odd rows (y=5,7,9 -> CGA row 2,3,4 in odd bank)
+    mov di, 2 * 80 + 0x2000
     mov cx, 3
 .clear_odd:
     push cx
@@ -652,10 +619,10 @@ rtc_seconds:    db 0
 ; Character Demo - Cycles through all ASCII characters
 ; ============================================================================
 
-; Demo area: y=95 (between "UNODOS 3!" at Y=86 and version at Y=106)
+; Demo area: below the welcome box (box ends at Y=150)
 ; Using 4x6 font, can fit ~53 chars per row (320 / 6 = 53)
-DEMO_START_X    equ 65
-DEMO_START_Y    equ 95
+DEMO_START_X    equ 4
+DEMO_START_Y    equ 160
 DEMO_CHAR_WIDTH equ 6
 DEMO_CHARS_PER_ROW equ 52
 
@@ -724,7 +691,7 @@ char_demo_loop:
 
     ret
 
-; Clear the demo area (inside white box, between text lines)
+; Clear the demo area (below welcome box at Y=160)
 clear_demo_area:
     pusha
     push es
@@ -732,19 +699,18 @@ clear_demo_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clear even scanlines (y=95-100, CGA uses y/2)
-    ; y=95: row 47, y=100: row 50
-    ; Even rows start at offset = row * 80
-    ; Only clear inside box area (x=65 to x=255, ~190 pixels = 48 bytes)
-    ; Starting at x=65: byte offset = 65/4 = 16
+    ; Clear scanlines at y=160-165 (6 rows for 4x6 font)
+    ; y=160: CGA row 80, y=165: CGA row 82
+    ; Clear full width from x=4 to ~x=316 (80 bytes per row)
+    ; Starting at x=4: byte offset = 4/4 = 1
 
-    ; Clear rows 47-49 in even bank
-    mov di, 47 * 80 + 16    ; Start at row 47, x=64
+    ; Clear rows 80-82 in even bank (y=160,162,164)
+    mov di, 80 * 80 + 1     ; Start at row 80, x=4
     mov cx, 3               ; 3 rows
 .clear_even:
     push cx
     push di
-    mov cx, 24              ; 48 bytes = 24 words (covers ~192 pixels)
+    mov cx, 39              ; 78 bytes = 39 words (covers ~312 pixels)
     xor ax, ax
     rep stosw
     pop di
@@ -752,13 +718,13 @@ clear_demo_area:
     pop cx
     loop .clear_even
 
-    ; Clear odd scanlines (add 0x2000)
-    mov di, 47 * 80 + 16 + 0x2000
+    ; Clear odd scanlines (y=161,163,165) (add 0x2000)
+    mov di, 80 * 80 + 1 + 0x2000
     mov cx, 3
 .clear_odd:
     push cx
     push di
-    mov cx, 24
+    mov cx, 39
     xor ax, ax
     rep stosw
     pop di
