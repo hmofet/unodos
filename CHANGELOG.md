@@ -5,6 +5,28 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-01-22
+
+### Changed
+- **Major architectural change: Split kernel from stage2 loader**
+  - Stage2 is now a minimal 2KB loader with progress indicator
+  - Kernel is a separate 16KB binary loaded at 0x1000:0000 (64KB mark)
+  - Enables kernel to grow beyond 8KB limit
+  - Future-proof architecture for XT through 486 hardware
+- Boot sequence now shows "Loading kernel" with dot progress bar
+- Removed text-mode debug output from bootloader (cleaner boot)
+- RAM display now shows correct memory usage (~20KB for loader+kernel)
+
+### Added
+- New kernel/ directory for OS code
+- kernel/kernel.asm - Main operating system (16KB)
+- Kernel signature verification ('UK' = 0x4B55)
+
+### Technical Details
+- Disk layout: Boot (1 sector) + Stage2 (4 sectors) + Kernel (32 sectors)
+- Stage2 loads kernel sector-by-sector with progress indicator
+- Kernel loaded at segment 0x1000 (linear address 0x10000)
+
 ## [3.1.7] - 2026-01-22
 
 ### Changed

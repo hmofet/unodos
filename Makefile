@@ -7,12 +7,14 @@ QEMU = qemu-system-i386
 # Output files
 BOOT_BIN = build/boot.bin
 STAGE2_BIN = build/stage2.bin
+KERNEL_BIN = build/kernel.bin
 FLOPPY_IMG = build/unodos.img
 FLOPPY_144 = build/unodos-144.img
 
 # Directories
 BUILD_DIR = build
 BOOT_DIR = boot
+KERNEL_DIR = kernel
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -51,25 +53,32 @@ $(BUILD_DIR):
 $(BOOT_BIN): $(BOOT_DIR)/boot.asm | $(BUILD_DIR) check-deps
 	$(NASM) -f bin -o $@ $<
 
-# Assemble second stage loader
+# Assemble stage 2 loader (minimal, 2KB)
+$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+# Assemble kernel (16KB)
 # -I flag adds include path for font files
-$(STAGE2_BIN): $(BOOT_DIR)/stage2.asm $(BOOT_DIR)/font8x8.asm $(BOOT_DIR)/font4x6.asm | $(BUILD_DIR)
+$(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(BOOT_DIR)/font8x8.asm $(BOOT_DIR)/font4x6.asm | $(BUILD_DIR)
 	$(NASM) -f bin -I$(BOOT_DIR)/ -o $@ $<
 
 # Create 360KB floppy image (target platform)
-$(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN)
+# Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
+$(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Creating 360KB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=720 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Created $@ (360KB)"
 
 # Create 1.44MB floppy image (for modern hardware testing)
-$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN)
+$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Creating 1.44MB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Created $@ (1.44MB)"
 
 floppy144: $(FLOPPY_144)
@@ -105,7 +114,8 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 # Show sizes
-sizes: $(BOOT_BIN) $(STAGE2_BIN)
+sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Boot sector: $$(wc -c < $(BOOT_BIN)) bytes (max 512)"
-	@echo "Stage 2:     $$(wc -c < $(STAGE2_BIN)) bytes"
-	@echo "Total:       $$(($$(wc -c < $(BOOT_BIN)) + $$(wc -c < $(STAGE2_BIN)))) bytes"
+	@echo "Stage 2:     $$(wc -c < $(STAGE2_BIN)) bytes (loader)"
+	@echo "Kernel:      $$(wc -c < $(KERNEL_BIN)) bytes"
+	@echo "Total:       $$(($$(wc -c < $(BOOT_BIN)) + $$(wc -c < $(STAGE2_BIN)) + $$(wc -c < $(KERNEL_BIN)))) bytes"
