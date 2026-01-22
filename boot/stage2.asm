@@ -298,61 +298,99 @@ draw_hello_gfx:
     cmp bx, 150
     jle .right_border
 
-    ; Draw "HELLO" text using simple bitmap font
-    ; Each letter is 8x8 pixels, starting at x=100, y=80
-    mov word [draw_x], 100
-    mov word [draw_y], 80
+    ; Draw "WELCOME TO" on first line (8x8 font)
+    ; Centered: 10 chars * 12 pixels = 120 pixels, so start at (160-60)=100
+    mov word [draw_x], 76
+    mov word [draw_y], 70
 
-    ; H
-    mov si, char_H
+    ; W
+    mov si, char_W
     call draw_char
-
     ; E
     mov si, char_E
     call draw_char
-
     ; L
     mov si, char_L
     call draw_char
-
-    ; L
-    mov si, char_L
+    ; C
+    mov si, char_C
     call draw_char
-
     ; O
     mov si, char_O
+    call draw_char
+    ; M
+    mov si, char_M
+    call draw_char
+    ; E
+    mov si, char_E
     call draw_char
 
     ; Space
     add word [draw_x], 12
 
-    ; Draw "WORLD" on next line
-    mov word [draw_x], 92
-    add word [draw_y], 20
-
-    ; W
-    mov si, char_W
+    ; T
+    mov si, char_T
     call draw_char
-
     ; O
     mov si, char_O
     call draw_char
 
-    ; R
-    mov si, char_R
-    call draw_char
+    ; Draw "UNODOS 3!" on second line
+    mov word [draw_x], 88
+    add word [draw_y], 16
 
-    ; L
-    mov si, char_L
+    ; U
+    mov si, char_U
     call draw_char
-
+    ; N
+    mov si, char_N
+    call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
     ; D
     mov si, char_D
     call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
+    ; S
+    mov si, char_S
+    call draw_char
 
+    ; Space
+    add word [draw_x], 12
+
+    ; 3
+    mov si, char_3
+    call draw_char
     ; !
     mov si, char_excl
     call draw_char
+
+    ; Draw version "v3.0.0" in smaller text (4x6 font)
+    ; Centered below main text
+    mov word [draw_x], 136
+    add word [draw_y], 20
+
+    ; v
+    mov si, char_v_small
+    call draw_char_small
+    ; 3
+    mov si, char_3_small
+    call draw_char_small
+    ; .
+    mov si, char_dot_small
+    call draw_char_small
+    ; 0
+    mov si, char_0_small
+    call draw_char_small
+    ; .
+    mov si, char_dot_small
+    call draw_char_small
+    ; 0
+    mov si, char_0_small
+    call draw_char_small
 
 .skip_text:
     pop es
@@ -458,6 +496,40 @@ draw_char:
     popa                    ; Restore all registers
     ret
 
+; Draw 4x6 small character
+; Input: SI = pointer to 6-byte character bitmap
+;        draw_x, draw_y = top-left position
+draw_char_small:
+    pusha                   ; Save all registers
+
+    mov bx, [draw_y]        ; BX = current Y
+    mov bp, 6               ; BP = row counter (6 rows)
+
+.row_loop_small:
+    lodsb                   ; Get row bitmap into AL
+    mov ah, al              ; AH = bitmap for this row
+    mov cx, [draw_x]        ; CX = current X
+    mov dx, 4               ; DX = column counter (4 columns)
+
+.col_loop_small:
+    test ah, 0x80           ; Check leftmost bit
+    jz .skip_pixel_small
+    call plot_pixel_white   ; Plot at (CX, BX)
+.skip_pixel_small:
+    shl ah, 1               ; Next bit
+    inc cx                  ; Next X
+    dec dx                  ; Decrement column counter
+    jnz .col_loop_small
+
+    inc bx                  ; Next Y
+    dec bp                  ; Decrement row counter
+    jnz .row_loop_small
+
+    add word [draw_x], 6    ; Advance to next character position (4 + 2 spacing)
+
+    popa                    ; Restore all registers
+    ret
+
 ; ============================================================================
 ; Utility Functions
 ; ============================================================================
@@ -540,8 +612,8 @@ msg_cga_gfx:    db 'CGA 320x200', 0x0D, 0x0A, 0
 msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
-hello_text:     db '      HELLO WORLD!      ', 0, 0, 0, 0
-version_text:   db '      UnoDOS v0.2.4     ', 0, 0, 0, 0
+hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
+version_text:   db '        v3.0.0          ', 0, 0, 0, 0
 
 ; 8x8 character bitmaps (1 = pixel on)
 char_H:
@@ -623,6 +695,109 @@ char_excl:
     db 0b00000000
     db 0b00011000
     db 0b00011000
+
+char_C:
+    db 0b00111110
+    db 0b01111111
+    db 0b11000000
+    db 0b11000000
+    db 0b11000000
+    db 0b11000000
+    db 0b01111111
+    db 0b00111110
+
+char_M:
+    db 0b11000011
+    db 0b11100111
+    db 0b11111111
+    db 0b11011011
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+
+char_T:
+    db 0b11111111
+    db 0b11111111
+    db 0b00011000
+    db 0b00011000
+    db 0b00011000
+    db 0b00011000
+    db 0b00011000
+    db 0b00011000
+
+char_U:
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+    db 0b11000011
+    db 0b01111110
+    db 0b00111100
+
+char_N:
+    db 0b11000011
+    db 0b11100011
+    db 0b11110011
+    db 0b11011011
+    db 0b11001111
+    db 0b11000111
+    db 0b11000011
+    db 0b11000011
+
+char_S:
+    db 0b00111110
+    db 0b01111111
+    db 0b11000000
+    db 0b01111110
+    db 0b00000011
+    db 0b00000011
+    db 0b11111110
+    db 0b01111100
+
+char_3:
+    db 0b01111110
+    db 0b11111111
+    db 0b00000011
+    db 0b00111110
+    db 0b00000011
+    db 0b00000011
+    db 0b11111111
+    db 0b01111110
+
+; Small 4x6 character bitmaps for version string
+char_v_small:
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b01100000
+    db 0b01100000
+
+char_3_small:
+    db 0b11100000
+    db 0b00010000
+    db 0b01100000
+    db 0b00010000
+    db 0b00010000
+    db 0b11100000
+
+char_0_small:
+    db 0b01100000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b01100000
+
+char_dot_small:
+    db 0b00000000
+    db 0b00000000
+    db 0b00000000
+    db 0b00000000
+    db 0b01100000
+    db 0b01100000
 
 ; ============================================================================
 ; Padding
