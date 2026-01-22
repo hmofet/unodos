@@ -1,1 +1,16 @@
-build/
+# Build artifacts (intermediate files)
+build/*.bin
+build/*.o
+
+# Keep final floppy images
+!build/*.img
+
+# Temporary files
+*.tmp
+*~
+*.swp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
