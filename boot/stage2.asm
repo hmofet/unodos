@@ -503,66 +503,34 @@ CLOCK_Y     equ 40
 draw_clock:
     pusha
 
-    ; Read RTC time using BIOS INT 1Ah, AH=02h
-    mov ah, 0x02
-    int 0x1A
-    jc .clock_error         ; If carry set, RTC not available
-
-    ; Save time values (BCD format)
-    ; CH = hours, CL = minutes, DH = seconds
-    mov [rtc_hours], ch
-    mov [rtc_minutes], cl
-    mov [rtc_seconds], dh
-
-    ; Clear clock area first (36 pixels wide x 6 pixels tall)
-    call clear_clock_area
-
-    ; Set draw position
+    ; Set draw position first
     mov word [draw_x], CLOCK_X
     mov word [draw_y], CLOCK_Y
 
-    ; Draw hours (BCD)
-    mov al, [rtc_hours]
-    call draw_bcd_small
-
-    ; Draw ':'
+    ; DEBUG: Draw static "12:34" to test if draw_ascii_4x6 works
+    mov al, '1'
+    call draw_ascii_4x6
+    mov al, '2'
+    call draw_ascii_4x6
     mov al, ':'
     call draw_ascii_4x6
-
-    ; Draw minutes (BCD)
-    mov al, [rtc_minutes]
-    call draw_bcd_small
-
-    ; Draw ':'
-    mov al, ':'
+    mov al, '3'
     call draw_ascii_4x6
-
-    ; Draw seconds (BCD)
-    mov al, [rtc_seconds]
-    call draw_bcd_small
+    mov al, '4'
+    call draw_ascii_4x6
 
     popa
     ret
 
+    ; Original RTC code commented out for debugging
+    ; Read RTC time using BIOS INT 1Ah, AH=02h
+    ;mov ah, 0x02
+    ;int 0x1A
+    ;jc .clock_error         ; If carry set, RTC not available
+    ;... (rest commented)
+
 .clock_error:
-    ; RTC not available - draw dashes
-    mov word [draw_x], CLOCK_X
-    mov word [draw_y], CLOCK_Y
-
-    mov al, '-'
-    call draw_ascii_4x6
-    call draw_ascii_4x6
-    mov al, ':'
-    call draw_ascii_4x6
-    mov al, '-'
-    call draw_ascii_4x6
-    call draw_ascii_4x6
-    mov al, ':'
-    call draw_ascii_4x6
-    mov al, '-'
-    call draw_ascii_4x6
-    call draw_ascii_4x6
-
+    ; RTC not available - draw dashes (unused for now)
     popa
     ret
 
