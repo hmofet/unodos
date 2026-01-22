@@ -19,24 +19,32 @@ Build a GUI operating system for PC XT-class machines with direct BIOS interacti
   - Memory detection (INT 12h)
   - Video adapter detection (MDA/CGA/EGA/VGA)
   - CGA 320x200 graphics mode
-  - Graphical "HELLO WORLD!" with bitmap font
+  - Custom 8x8 bitmap font for main text
+  - Custom 4x6 small bitmap font for version display
   - MDA text-mode fallback
 - **Created build system (Makefile)**
   - Builds 360KB and 1.44MB floppy images
-  - QEMU integration for testing
+  - QEMU integration for testing (using `-M isapc`)
   - Debug mode with QEMU monitor
-- **Created floppy write utility (tools/writeflop.sh)**
+- **Created floppy write utilities**
+  - tools/writeflop.sh (Linux)
+  - tools/writeflop.bat (Windows CMD)
+  - tools/Write-Floppy.ps1 (Windows PowerShell)
+- **Fixed graphics corruption bug (v0.2.4)**
+  - BIOS teletype output was rendering as stray pixels after graphics mode switch
+- **Major version bump to UnoDOS 3 (v3.0.0)**
+  - New welcome message: "WELCOME TO UNODOS 3!"
+  - Version number displayed in smaller font below
 
 ### Next Steps
-- Install nasm and qemu to test the build
-- Test boot sequence in QEMU
 - Add keyboard input handling
 - Begin GUI shell implementation
+- File system support
 
 ### Current State
-- Version: 0.2.0
-- Boot loader complete with graphical hello world
-- Ready for testing
+- Version: 3.0.0
+- Boot loader complete with graphical welcome screen
+- Tested working in QEMU
 
 ### Key Decisions Made
 1. GUI-first design (no command line)
@@ -45,3 +53,4 @@ Build a GUI operating system for PC XT-class machines with direct BIOS interacti
 4. Semantic versioning with CHANGELOG.md tracking
 5. Two-stage boot loader (512-byte boot + 8KB stage2)
 6. CGA 320x200 as primary graphics mode, MDA text fallback
+7. Major version 3.x.y series (user approval required for v4.0.0+)

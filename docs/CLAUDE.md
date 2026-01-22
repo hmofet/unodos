@@ -1,8 +1,8 @@
-# UnoDOS - GUI Operating System for PC XT
+# UnoDOS 3 - GUI Operating System for PC XT
 
 ## Project Summary
 
-UnoDOS is a graphical operating system designed for IBM PC XT-compatible computers. Unlike traditional DOS-based systems, UnoDOS interacts directly with BIOS and the Intel 8088 processor, providing a GUI-first experience without any command-line interface.
+UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible computers. Unlike traditional DOS-based systems, UnoDOS interacts directly with BIOS and the Intel 8088 processor, providing a GUI-first experience without any command-line interface.
 
 ## Target Hardware Specifications
 
@@ -32,10 +32,14 @@ UnoDOS is a graphical operating system designed for IBM PC XT-compatible compute
 
 ## Development Status
 
-- [ ] Boot loader
+- [x] Boot loader (512-byte boot sector + 8KB second stage)
+- [x] Memory detection (INT 12h)
+- [x] Video adapter detection (MDA/CGA/EGA)
+- [x] CGA 320x200 4-color graphics mode
+- [x] Custom bitmap fonts (8x8 and 4x6)
+- [x] Graphical welcome screen
 - [ ] Kernel initialization
 - [ ] Memory management
-- [ ] Display drivers (MDA/CGA)
 - [ ] Keyboard driver
 - [ ] Floppy driver
 - [ ] GUI shell
