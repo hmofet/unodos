@@ -495,6 +495,11 @@ CLOCK_Y     equ 4
 ; Draw clock (HH:MM format) using RTC
 draw_clock:
     pusha
+    push es
+
+    ; Set ES to CGA video memory
+    mov ax, 0xB800
+    mov es, ax
 
     ; Clear clock area first to prevent overdraw
     call clear_clock_area
@@ -525,6 +530,7 @@ draw_clock:
     mov al, [rtc_minutes]
     call draw_bcd_small
 
+    pop es
     popa
     ret
 
@@ -542,6 +548,7 @@ draw_clock:
     call draw_ascii_4x6
     mov al, '-'
     call draw_ascii_4x6
+    pop es
     popa
     ret
 
@@ -651,6 +658,12 @@ clock_loop:
 ; ============================================================================
 
 char_demo_loop:
+    push es
+
+    ; Set ES to CGA video memory
+    mov ax, 0xB800
+    mov es, ax
+
     ; Clear the demo area first
     call clear_demo_area
 
@@ -689,6 +702,7 @@ char_demo_loop:
     call delay_short
     loop .pause_delay
 
+    pop es
     ret
 
 ; Clear the demo area (below welcome box at Y=160)
