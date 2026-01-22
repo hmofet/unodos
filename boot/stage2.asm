@@ -364,7 +364,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.1" in smaller text (4x6 font)
+    ; Draw version "v3.1.2" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -389,8 +389,11 @@ draw_hello_gfx:
     call draw_char_small
 
 .skip_text:
-    ; Draw RAM info in bottom right
+    ; Draw RAM info in top right
     call draw_ram_info
+
+    ; Draw initial clock in top left
+    call draw_clock
 
     pop es
     ret
@@ -489,6 +492,154 @@ draw_ram_info:
     ret
 
 ; ============================================================================
+; Clock Display (top left corner) - Reads from RTC
+; ============================================================================
+
+; Clock position
+CLOCK_X     equ 4
+CLOCK_Y     equ 4
+
+; Draw clock (HH:MM:SS format)
+draw_clock:
+    pusha
+
+    ; Read RTC time using BIOS INT 1Ah, AH=02h
+    mov ah, 0x02
+    int 0x1A
+    jc .clock_error         ; If carry set, RTC not available
+
+    ; Save time values (BCD format)
+    ; CH = hours, CL = minutes, DH = seconds
+    mov [rtc_hours], ch
+    mov [rtc_minutes], cl
+    mov [rtc_seconds], dh
+
+    ; Clear clock area first (36 pixels wide x 6 pixels tall)
+    call clear_clock_area
+
+    ; Set draw position
+    mov word [draw_x], CLOCK_X
+    mov word [draw_y], CLOCK_Y
+
+    ; Draw hours (BCD)
+    mov al, [rtc_hours]
+    call draw_bcd_small
+
+    ; Draw ':'
+    mov al, ':'
+    call draw_ascii_4x6
+
+    ; Draw minutes (BCD)
+    mov al, [rtc_minutes]
+    call draw_bcd_small
+
+    ; Draw ':'
+    mov al, ':'
+    call draw_ascii_4x6
+
+    ; Draw seconds (BCD)
+    mov al, [rtc_seconds]
+    call draw_bcd_small
+
+    popa
+    ret
+
+.clock_error:
+    ; RTC not available - draw dashes
+    mov word [draw_x], CLOCK_X
+    mov word [draw_y], CLOCK_Y
+
+    mov al, '-'
+    call draw_ascii_4x6
+    call draw_ascii_4x6
+    mov al, ':'
+    call draw_ascii_4x6
+    mov al, '-'
+    call draw_ascii_4x6
+    call draw_ascii_4x6
+    mov al, ':'
+    call draw_ascii_4x6
+    mov al, '-'
+    call draw_ascii_4x6
+    call draw_ascii_4x6
+
+    popa
+    ret
+
+; Draw a BCD byte as two decimal digits using 4x6 font
+; Input: AL = BCD value (e.g., 0x23 = 23)
+draw_bcd_small:
+    push ax
+    push bx
+
+    mov bl, al              ; Save original
+
+    ; High nibble (tens digit)
+    shr al, 4
+    and al, 0x0F
+    add al, '0'             ; Convert to ASCII
+    call draw_ascii_4x6
+
+    ; Low nibble (ones digit)
+    mov al, bl
+    and al, 0x0F
+    add al, '0'             ; Convert to ASCII
+    call draw_ascii_4x6
+
+    pop bx
+    pop ax
+    ret
+
+; Clear clock area (to prevent overdraw artifacts)
+clear_clock_area:
+    pusha
+    push es
+
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Clock is at y=4, spans 6 rows (y=4-9)
+    ; Clear rows 2-4 in even bank (y/2 = 2-4)
+    ; Each row is 80 bytes, clock spans ~48 pixels = 12 bytes
+
+    ; Even rows (y=4,6,8 -> row 2,3,4)
+    mov di, 2 * 80          ; Start at row 2
+    mov cx, 3               ; 3 rows
+.clear_even:
+    push cx
+    push di
+    mov cx, 6               ; 12 bytes = 6 words (covers ~48 pixels)
+    xor ax, ax
+    rep stosw
+    pop di
+    add di, 80              ; Next row
+    pop cx
+    loop .clear_even
+
+    ; Odd rows (y=5,7,9 -> row 2,3,4 in odd bank)
+    mov di, 2 * 80 + 0x2000
+    mov cx, 3
+.clear_odd:
+    push cx
+    push di
+    mov cx, 6
+    xor ax, ax
+    rep stosw
+    pop di
+    add di, 80
+    pop cx
+    loop .clear_odd
+
+    pop es
+    popa
+    ret
+
+; RTC storage
+rtc_hours:      db 0
+rtc_minutes:    db 0
+rtc_seconds:    db 0
+
+; ============================================================================
 ; Character Demo - Cycles through all ASCII characters
 ; ============================================================================
 
@@ -513,6 +664,9 @@ char_demo_loop:
     mov byte [demo_char], 32
 
 .draw_next_char:
+    ; Update clock display
+    call draw_clock
+
     ; Draw current character
     mov al, [demo_char]
     call draw_ascii_4x6
@@ -533,6 +687,7 @@ char_demo_loop:
     ; All characters displayed - pause before clearing
     mov cx, 60
 .pause_delay:
+    call draw_clock         ; Keep updating clock during pause
     call delay_short
     loop .pause_delay
 
@@ -962,7 +1117,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.1.1          ', 0, 0, 0, 0
+version_text:   db '        v3.1.2          ', 0, 0, 0, 0
 
 ; ============================================================================
 ; Font Data - Complete ASCII Character Sets
