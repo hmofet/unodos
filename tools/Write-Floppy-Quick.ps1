@@ -4,21 +4,53 @@
 
 param(
     [string]$ImagePath,
-    [string]$DriveLetter = "A"
+    [string]$DriveLetter = "A",
+    [switch]$SkipPull
 )
 
 $ErrorActionPreference = "Stop"
 
+# Determine project directory
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectDir = Split-Path -Parent $scriptDir
+
+# Git pull and rebuild if not skipped
+if (-not $SkipPull) {
+    Write-Host "Checking for updates from GitHub..." -ForegroundColor Cyan
+
+    Push-Location $projectDir
+    try {
+        # Check if this is a git repository
+        $isGitRepo = Test-Path ".git"
+        if ($isGitRepo) {
+            # Fetch latest changes
+            Write-Host "Fetching latest changes..." -ForegroundColor Yellow
+            git fetch origin 2>&1 | Out-Null
+
+            # Force pull (reset to origin/master)
+            Write-Host "Pulling latest version (force)..." -ForegroundColor Yellow
+            git reset --hard origin/master 2>&1 | Out-Null
+
+            Write-Host "Repository updated!" -ForegroundColor Green
+        } else {
+            Write-Host "Not a git repository, skipping update." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Warning "Git pull failed: $_"
+        Write-Host "Continuing with current version..." -ForegroundColor Yellow
+    } finally {
+        Pop-Location
+    }
+}
+
 # Find image file
 if (-not $ImagePath) {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $projectDir = Split-Path -Parent $scriptDir
     if (Test-Path "$projectDir\build\unodos-144.img") {
         $ImagePath = "$projectDir\build\unodos-144.img"
     } elseif (Test-Path "$projectDir\build\unodos.img") {
         $ImagePath = "$projectDir\build\unodos.img"
     } else {
-        Write-Error "No image found. Run 'make' first."
+        Write-Error "No image found in build directory."
         exit 1
     }
 }

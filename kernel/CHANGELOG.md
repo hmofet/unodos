@@ -4,6 +4,18 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.0.10] - 2026-01-22
+
+### Changed
+- Switched from offset arithmetic to direct label addressing for font characters
+- Using `mov si, char_X` instead of `mov si, font_8x8; add si, offset`
+- This eliminates any potential addressing mode issues and relies on NASM's assembler
+
+### Technical Details
+- Added character aliases: char_0, char_4, char_9, char_gt
+- Direct labels should work regardless of any segment or addressing quirks
+- Still testing same characters: '0', '4', '9', '>'
+
 ## [3.2.0.9] - 2026-01-22
 
 ### Fixed
