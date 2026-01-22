@@ -166,103 +166,89 @@ setup_graphics:
 draw_coordinate_test:
     pusha
 
-    ; Draw Y-axis markers at X=0 (left edge)
-    ; Markers every 20 pixels from Y=0 to Y=180
-    ; Using hex digits: 0,1,2,3,4,5,6,7,8,9 for Y=0,20,40,60,80,100,120,140,160,180
+    ; The welcome box was at Y=50-150, X=60-260 and was visible
+    ; Let's put a test pattern in that known-visible area
 
-    mov word [draw_x], 0
-    mov word [draw_y], 0
-    mov al, '0'
+    ; Draw "TEST" in center of screen (where welcome text was)
+    ; Welcome text "WELCOME TO" was at X=76, Y=70 - that was visible
+    mov word [draw_x], 100
+    mov word [draw_y], 70
+    mov al, 'T'
+    call draw_ascii_4x6
+    mov al, 'E'
+    call draw_ascii_4x6
+    mov al, 'S'
+    call draw_ascii_4x6
+    mov al, 'T'
     call draw_ascii_4x6
 
-    mov word [draw_x], 0
-    mov word [draw_y], 20
+    ; Draw corner markers inside the box area
+    ; Top-left of box area (X=65, Y=55)
+    mov word [draw_x], 65
+    mov word [draw_y], 55
     mov al, '1'
     call draw_ascii_4x6
 
-    mov word [draw_x], 0
-    mov word [draw_y], 40
+    ; Top-right of box area (X=250, Y=55)
+    mov word [draw_x], 250
+    mov word [draw_y], 55
     mov al, '2'
     call draw_ascii_4x6
 
-    mov word [draw_x], 0
-    mov word [draw_y], 60
+    ; Bottom-left of box area (X=65, Y=140)
+    mov word [draw_x], 65
+    mov word [draw_y], 140
     mov al, '3'
     call draw_ascii_4x6
 
-    mov word [draw_x], 0
-    mov word [draw_y], 80
+    ; Bottom-right of box area (X=250, Y=140)
+    mov word [draw_x], 250
+    mov word [draw_y], 140
     mov al, '4'
     call draw_ascii_4x6
 
-    mov word [draw_x], 0
-    mov word [draw_y], 100
-    mov al, '5'
-    call draw_ascii_4x6
+    ; Draw the actual box borders to confirm what's visible
+    ; Top border (y=50, x=60 to x=260) - same as welcome screen
+    push es
+    mov ax, 0xB800
+    mov es, ax
 
-    mov word [draw_x], 0
-    mov word [draw_y], 120
-    mov al, '6'
-    call draw_ascii_4x6
+    mov bx, 50              ; Y coordinate
+    mov cx, 60              ; Start X
+.top_border:
+    call plot_pixel_white
+    inc cx
+    cmp cx, 260
+    jl .top_border
 
-    mov word [draw_x], 0
-    mov word [draw_y], 140
-    mov al, '7'
-    call draw_ascii_4x6
+    ; Bottom border (y=150)
+    mov bx, 150
+    mov cx, 60
+.bottom_border:
+    call plot_pixel_white
+    inc cx
+    cmp cx, 260
+    jl .bottom_border
 
-    mov word [draw_x], 0
-    mov word [draw_y], 160
-    mov al, '8'
-    call draw_ascii_4x6
+    ; Left border (x=60, y=50 to y=150)
+    mov cx, 60
+    mov bx, 50
+.left_border:
+    call plot_pixel_white
+    inc bx
+    cmp bx, 150
+    jle .left_border
 
-    mov word [draw_x], 0
-    mov word [draw_y], 180
-    mov al, '9'
-    call draw_ascii_4x6
+    ; Right border (x=259, y=50 to y=150)
+    mov cx, 259
+    mov bx, 50
+.right_border:
+    call plot_pixel_white
+    inc bx
+    cmp bx, 150
+    jle .right_border
 
-    ; Draw X-axis markers at Y=0 (top edge)
-    ; Markers every 40 pixels from X=0 to X=280
-    ; Using letters: A,B,C,D,E,F,G,H for X=40,80,120,160,200,240,280,320
-
-    mov word [draw_x], 40
-    mov word [draw_y], 0
-    mov al, 'A'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 80
-    mov word [draw_y], 0
-    mov al, 'B'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 120
-    mov word [draw_y], 0
-    mov al, 'C'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 160
-    mov word [draw_y], 0
-    mov al, 'D'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 200
-    mov word [draw_y], 0
-    mov al, 'E'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 240
-    mov word [draw_y], 0
-    mov al, 'F'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 280
-    mov word [draw_y], 0
-    mov al, 'G'
-    call draw_ascii_4x6
-
-    mov word [draw_x], 310
-    mov word [draw_y], 0
-    mov al, 'H'
-    call draw_ascii_4x6
+    pop es
 
     popa
     ret
