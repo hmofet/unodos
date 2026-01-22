@@ -112,20 +112,20 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Use direct label addressing instead of offset arithmetic
+    ; Test: Narrow the boundary between 200 and 240
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; Character '0' at offset (48-32)*8 = 128
-    mov si, char_0
-    call draw_char
-
-    ; Character '4' at offset (52-32)*8 = 160
-    mov si, char_4
-    call draw_char
-
-    ; Character '9' at offset (57-32)*8 = 200
+    ; Character '9' at offset (57-32)*8 = 200 (known working)
     mov si, char_9
+    call draw_char
+
+    ; Character ':' at offset (58-32)*8 = 208
+    mov si, char_colon
+    call draw_char
+
+    ; Character '=' at offset (61-32)*8 = 232
+    mov si, char_eq
     call draw_char
 
     ; Character '>' at offset (62-32)*8 = 240
@@ -284,6 +284,8 @@ char_excl   equ font_8x8 + ('!' - 32) * 8
 char_0      equ font_8x8 + ('0' - 32) * 8
 char_4      equ font_8x8 + ('4' - 32) * 8
 char_9      equ font_8x8 + ('9' - 32) * 8
+char_colon  equ font_8x8 + (':' - 32) * 8
+char_eq     equ font_8x8 + ('=' - 32) * 8
 char_gt     equ font_8x8 + ('>' - 32) * 8
 
 ; ============================================================================
