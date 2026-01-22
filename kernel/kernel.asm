@@ -112,28 +112,24 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Force word-sized immediate values
+    ; Test: Use direct label addressing instead of offset arithmetic
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; 1. offset 128 - '0' (known working)
-    mov si, font_8x8
-    add si, word 128
+    ; Character '0' at offset (48-32)*8 = 128
+    mov si, char_0
     call draw_char
 
-    ; 2. offset 160 - '4' = (52-32)*8
-    mov si, font_8x8
-    add si, word 160
+    ; Character '4' at offset (52-32)*8 = 160
+    mov si, char_4
     call draw_char
 
-    ; 3. offset 200 - '9' = (57-32)*8
-    mov si, font_8x8
-    add si, word 200
+    ; Character '9' at offset (57-32)*8 = 200
+    mov si, char_9
     call draw_char
 
-    ; 4. offset 240 - '>' = (62-32)*8
-    mov si, font_8x8
-    add si, word 240
+    ; Character '>' at offset (62-32)*8 = 240
+    mov si, char_gt
     call draw_char
 
     pop es
@@ -284,6 +280,11 @@ char_D      equ font_8x8 + ('D' - 32) * 8
 char_S      equ font_8x8 + ('S' - 32) * 8
 char_3      equ font_8x8 + ('3' - 32) * 8
 char_excl   equ font_8x8 + ('!' - 32) * 8
+; Test characters
+char_0      equ font_8x8 + ('0' - 32) * 8
+char_4      equ font_8x8 + ('4' - 32) * 8
+char_9      equ font_8x8 + ('9' - 32) * 8
+char_gt     equ font_8x8 + ('>' - 32) * 8
 
 ; ============================================================================
 ; Padding
