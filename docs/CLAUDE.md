@@ -166,6 +166,17 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 ---
 
+## Testing Workflow
+
+**IMPORTANT**: When the user needs to test on hardware (HP Omnibook 600C), Claude MUST:
+1. Build the project (`make clean && make && make floppy144`)
+2. Commit and push to GitHub so binaries are available for download
+3. The user will download from GitHub and write to floppy for testing
+
+Testing always happens on the Omnibook unless otherwise specified. Always push before asking the user to test.
+
+---
+
 ## Known Hardware Quirks
 
 ### HP Omnibook 600C
