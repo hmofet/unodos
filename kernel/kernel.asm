@@ -112,28 +112,28 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Find the boundary where offsets fail
+    ; Test: Narrow down boundary between 128-248
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; 1. offset 120 (under 127) - char '/' = (47-32)*8 = 120
-    mov si, font_8x8
-    add si, 120
-    call draw_char
-
-    ; 2. offset 128 (over 127) - char '0' = (48-32)*8 = 128
+    ; 1. offset 128 - '0' (known working)
     mov si, font_8x8
     add si, 128
     call draw_char
 
-    ; 3. offset 248 (under 256) - char '?' = (63-32)*8 = 248
+    ; 2. offset 160 - '4' = (52-32)*8
     mov si, font_8x8
-    add si, 248
+    add si, 160
     call draw_char
 
-    ; 4. offset 256 (exactly 256) - char '@' = (64-32)*8 = 256
+    ; 3. offset 200 - '9' = (57-32)*8
     mov si, font_8x8
-    add si, 256
+    add si, 200
+    call draw_char
+
+    ; 4. offset 240 - '>' = (62-32)*8
+    mov si, font_8x8
+    add si, 240
     call draw_char
 
     pop es
