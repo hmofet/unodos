@@ -21,7 +21,7 @@ entry:
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
-    ; Draw welcome box
+    ; Draw welcome box with text
     call draw_welcome_box
 
     ; Halt
@@ -66,7 +66,7 @@ setup_graphics:
     ret
 
 ; ============================================================================
-; Welcome Box - White bordered rectangle
+; Welcome Box - White bordered rectangle with text
 ; ============================================================================
 
 draw_welcome_box:
@@ -112,7 +112,112 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
+    ; Draw "WELCOME TO" text (8x8 font, 12 pixels per char with spacing)
+    ; 10 chars * 12 = 120 pixels, centered: start at x = 160 - 60 = 100
+    ; But "WELCOME TO" is 10 chars, so x = (320 - 10*12)/2 + 60 = 76 inside box
+    mov word [draw_x], 76
+    mov word [draw_y], 70
+
+    ; W
+    mov si, char_W
+    call draw_char
+    ; E
+    mov si, char_E
+    call draw_char
+    ; L
+    mov si, char_L
+    call draw_char
+    ; C
+    mov si, char_C
+    call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
+    ; M
+    mov si, char_M
+    call draw_char
+    ; E
+    mov si, char_E
+    call draw_char
+    ; Space
+    add word [draw_x], 12
+    ; T
+    mov si, char_T
+    call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
+
+    ; Draw "UNODOS 3!" on second line
+    mov word [draw_x], 88
+    add word [draw_y], 16
+
+    ; U
+    mov si, char_U
+    call draw_char
+    ; N
+    mov si, char_N
+    call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
+    ; D
+    mov si, char_D
+    call draw_char
+    ; O
+    mov si, char_O
+    call draw_char
+    ; S
+    mov si, char_S
+    call draw_char
+    ; Space
+    add word [draw_x], 12
+    ; 3
+    mov si, char_3
+    call draw_char
+    ; !
+    mov si, char_excl
+    call draw_char
+
     pop es
+    ret
+
+; ============================================================================
+; Draw 8x8 character
+; Input: SI = pointer to 8-byte character bitmap
+;        draw_x, draw_y = top-left position
+; Modifies: draw_x (advances by 12)
+; ============================================================================
+
+draw_char:
+    pusha
+
+    mov bx, [draw_y]                ; BX = current Y
+    mov bp, 8                       ; BP = row counter
+
+.row_loop:
+    lodsb                           ; Get row bitmap into AL (from DS:SI)
+    mov ah, al                      ; AH = bitmap for this row
+    mov cx, [draw_x]                ; CX = current X
+    mov dx, 8                       ; DX = column counter
+
+.col_loop:
+    test ah, 0x80                   ; Check leftmost bit
+    jz .skip_pixel
+    call plot_pixel_white           ; Plot at (CX, BX)
+.skip_pixel:
+    shl ah, 1                       ; Next bit
+    inc cx                          ; Next X
+    dec dx                          ; Decrement column counter
+    jnz .col_loop
+
+    inc bx                          ; Next Y
+    dec bp                          ; Decrement row counter
+    jnz .row_loop
+
+    add word [draw_x], 12           ; Advance to next character position
+
+    popa
     ret
 
 ; ============================================================================
@@ -183,6 +288,34 @@ plot_pixel_white:
 
 .save_x: dw 0
 .save_y: dw 0
+
+; ============================================================================
+; Variables
+; ============================================================================
+
+draw_x: dw 0
+draw_y: dw 0
+
+; ============================================================================
+; Font Data - 8x8 characters
+; ============================================================================
+
+%include "font8x8.asm"
+
+; Character aliases for convenience
+char_W      equ font_8x8 + ('W' - 32) * 8
+char_E      equ font_8x8 + ('E' - 32) * 8
+char_L      equ font_8x8 + ('L' - 32) * 8
+char_C      equ font_8x8 + ('C' - 32) * 8
+char_O      equ font_8x8 + ('O' - 32) * 8
+char_M      equ font_8x8 + ('M' - 32) * 8
+char_T      equ font_8x8 + ('T' - 32) * 8
+char_U      equ font_8x8 + ('U' - 32) * 8
+char_N      equ font_8x8 + ('N' - 32) * 8
+char_D      equ font_8x8 + ('D' - 32) * 8
+char_S      equ font_8x8 + ('S' - 32) * 8
+char_3      equ font_8x8 + ('3' - 32) * 8
+char_excl   equ font_8x8 + ('!' - 32) * 8
 
 ; ============================================================================
 ; Padding
