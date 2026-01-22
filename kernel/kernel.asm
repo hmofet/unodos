@@ -112,11 +112,16 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Draw hardcoded "W" pattern to verify draw_char works
-    mov word [draw_x], 100
+    ; Test: Draw two W's - one hardcoded, one from font include
+    mov word [draw_x], 80
     mov word [draw_y], 80
 
-    mov si, test_W_char           ; Use local hardcoded font data
+    ; First W - hardcoded (known working)
+    mov si, test_W_char
+    call draw_char
+
+    ; Second W - from included font8x8.asm
+    mov si, char_W
     call draw_char
 
     pop es
