@@ -166,6 +166,11 @@ setup_graphics:
 draw_coordinate_test:
     pusha
 
+    ; Set ES to CGA video memory FIRST - required for plot_pixel_white
+    push es
+    mov ax, 0xB800
+    mov es, ax
+
     ; The welcome box was at Y=50-150, X=60-260 and was visible
     ; Let's put a test pattern in that known-visible area
 
@@ -209,9 +214,7 @@ draw_coordinate_test:
 
     ; Draw the actual box borders to confirm what's visible
     ; Top border (y=50, x=60 to x=260) - same as welcome screen
-    push es
-    mov ax, 0xB800
-    mov es, ax
+    ; ES already set to 0xB800 at function start
 
     mov bx, 50              ; Y coordinate
     mov cx, 60              ; Start X
@@ -249,7 +252,6 @@ draw_coordinate_test:
     jle .right_border
 
     pop es
-
     popa
     ret
 
