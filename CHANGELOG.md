@@ -5,6 +5,28 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.6] - 2026-01-22
+
+### Fixed
+- Clock and character demo now visible on HP Omnibook 600C
+  - Added ES segment initialization in draw_clock and char_demo_loop
+  - ES must point to 0xB800 (CGA video memory) for pixel plotting
+- Slowed down animations for 486/DSTN display compatibility
+  - Increased delay_short to nested loop (~4 million iterations)
+  - Character demo now visible on slow DSTN displays with ghosting
+
+### Changed
+- Clock moved to top-left corner (X=4, Y=4)
+- Character demo moved below welcome box (Y=160)
+- Removed MDA text mode support (CGA-only now)
+- Simplified video detection (no longer tracks video_type)
+
+### Added
+- Comprehensive coordinate visibility testing
+- Confirmed full 320x200 CGA area visible on Omnibook 600C
+- New documentation: ARCHITECTURE.md, FEATURES.md
+- Comprehensive README update
+
 ## [3.1.5] - 2026-01-22
 
 ### Fixed

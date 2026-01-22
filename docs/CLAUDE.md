@@ -1,4 +1,6 @@
-# UnoDOS 3 - GUI Operating System for PC XT
+# UnoDOS 3 - Development Context
+
+This document provides context for Claude (AI assistant) when working on UnoDOS 3.
 
 ## Project Summary
 
@@ -6,74 +8,95 @@ UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible compu
 
 ## Target Hardware Specifications
 
+### Minimum (IBM PC XT)
 - **CPU**: Intel 8088 (4.77 MHz)
-- **RAM**: 128 KB minimum
-- **Display**: MDA (Monochrome Display Adapter) and CGA (Color Graphics Adapter)
-- **Storage**: 5.25" Floppy Drive (360KB) - serves as both installation and runtime media
+- **RAM**: 128 KB
+- **Display**: CGA (Color Graphics Adapter)
+- **Storage**: 5.25" Floppy Drive (360KB)
 - **BIOS**: IBM PC/XT compatible
+
+### Test Hardware (HP Omnibook 600C)
+- **CPU**: Intel 486DX4-75 MHz
+- **RAM**: 8-40 MB
+- **Display**: VGA 640x480 DSTN (CGA emulated)
+- **Storage**: 1.44MB floppy drive
+- **Graphics Chip**: Chips & Technologies 65545
 
 ## Architecture Principles
 
-1. **GUI-First Design**: No command line - the system boots directly into a graphical shell
-2. **Direct Hardware Access**: Uses BIOS interrupts and direct 8088 instructions, not DOS
-3. **Minimal Footprint**: Designed to run efficiently in 128KB RAM
+1. **GUI-First Design**: No command line - boots directly into graphical shell
+2. **Direct Hardware Access**: Uses BIOS interrupts, not DOS
+3. **Minimal Footprint**: Designed for 128KB RAM minimum
 4. **Self-Contained**: Boots and runs entirely from floppy disk
+5. **CGA-Only Graphics**: 320x200 4-color mode for maximum compatibility
 
-## Project Structure
+## Current Project Structure
 
 ```
-/boot           - Boot loader (512-byte boot sector)
-/kernel         - Core kernel code
-/drivers        - Hardware drivers (display, keyboard, floppy)
-/gui            - Graphical shell and window manager
-/apps           - Built-in applications
-/tools          - Build tools and utilities
+unodos/
+├── boot/
+│   ├── boot.asm        # Stage 1: 512-byte boot sector
+│   ├── stage2.asm      # Stage 2: 8KB main loader
+│   ├── font8x8.asm     # 8x8 bitmap font (95 chars)
+│   └── font4x6.asm     # 4x6 small font (95 chars)
+├── build/
+│   ├── unodos.img      # 360KB floppy image
+│   └── unodos-144.img  # 1.44MB floppy image
+├── docs/
+│   ├── ARCHITECTURE.md # Boot process documentation
+│   ├── FEATURES.md     # Planned features roadmap
+│   ├── CLAUDE.md       # This file
+│   └── SESSION_SUMMARY.md
+├── tools/
+│   ├── writeflop.sh    # Linux floppy writer
+│   ├── writeflop.bat   # Windows CMD writer
+│   ├── Write-Floppy.ps1       # PowerShell with verify
+│   └── Write-Floppy-Quick.ps1 # PowerShell quick write
+├── Makefile
+├── README.md
+├── CHANGELOG.md
+└── VERSION
 ```
 
 ## Development Status
 
-- [x] Boot loader (512-byte boot sector + 8KB second stage)
+### Completed (v3.1.6)
+- [x] Two-stage boot loader
 - [x] Memory detection (INT 12h)
-- [x] Video adapter detection (MDA/CGA/EGA)
-- [x] CGA 320x200 4-color graphics mode
-- [x] Custom bitmap fonts (8x8 and 4x6)
+- [x] Video adapter detection (CGA/EGA/VGA)
+- [x] CGA 320x200 4-color graphics
+- [x] Custom bitmap fonts (8x8, 4x6)
 - [x] Graphical welcome screen
-- [ ] Kernel initialization
-- [ ] Memory management
-- [ ] Keyboard driver
-- [ ] Floppy driver
-- [ ] GUI shell
-- [ ] File system
-- [ ] Applications
+- [x] Real-time clock display
+- [x] RAM status display
+- [x] Character demonstration
 
-## Build Requirements
-
-- NASM (Netwide Assembler) for 8086/8088 assembly
-- QEMU with 8086 emulation for testing
-- dd or similar for floppy image creation
+### Next Priority
+- [ ] Keyboard input handling
+- [ ] Basic window manager
+- [ ] FAT12 file system (read)
 
 ## Technical Notes
 
-### Memory Map (128KB System)
-```
-0x00000 - 0x003FF  Interrupt Vector Table (1KB)
-0x00400 - 0x004FF  BIOS Data Area (256 bytes)
-0x00500 - 0x07BFF  Free conventional memory (~30KB)
-0x07C00 - 0x07DFF  Boot sector load address (512 bytes)
-0x07E00 - 0x1FFFF  Free conventional memory (~96KB)
-```
+### CGA Memory Layout
+- Video memory at 0xB800:0000
+- Mode 4: 320x200, 4 colors
+- Interlaced: even lines at 0x0000, odd at 0x2000
+- 2 bits per pixel, 4 pixels per byte
 
-### Display Modes
-- **MDA**: 80x25 text mode, monochrome, no graphics
-- **CGA**: 320x200 4-color, 640x200 2-color, 80x25/40x25 text
+### Segment Register Convention
+- ES must be 0xB800 when calling pixel/drawing functions
+- DS is 0x0800 (Stage 2 data segment)
+- Stack at SS:SP = 0x0000:0x7C00
 
-### Key BIOS Interrupts
-- INT 10h - Video services
-- INT 13h - Disk services
-- INT 16h - Keyboard services
-- INT 19h - Bootstrap loader
+### Display Compatibility Notes
+- HP Omnibook 600C: Full 320x200 visible in CGA mode
+- DSTN displays have ghosting - avoid fast animations
+- 486 is much faster than 8088 - delays must be long
 
-## Versioning (IMPORTANT - Claude MUST follow)
+---
+
+## Versioning (IMPORTANT)
 
 This project uses **Semantic Versioning** (MAJOR.MINOR.PATCH):
 - **MAJOR**: Breaking changes or major new features
@@ -86,79 +109,60 @@ This project uses **Semantic Versioning** (MAJOR.MINOR.PATCH):
 2. **Update CHANGELOG.md** - Add an entry documenting the changes
 3. **Use versioned commit message** - Format: `vX.Y.Z: summary of change`
 
-## Changelog (IMPORTANT - Claude MUST maintain)
+---
 
-## Documentation (IMPORTANT - Claude MUST follow)
+## Documentation Guidelines
 
 ### Document Locations
 
-**Root directory (only these 3):**
-- `README.md` - End-user/developer setup guide, nicely formatted for GitHub
-- `CHANGELOG.md` - Extensive changelog, updated with every deployment and in between
+**Root directory:**
+- `README.md` - User/developer setup guide
+- `CHANGELOG.md` - Version history (update with every change)
 - `VERSION` - Semantic version number
 
 **docs/ directory:**
-- `docs/SESSION_SUMMARY.md` - Session context for continuity between sessions
-- `docs/CLAUDE.md` - Project context, workflow, preferences, long-running journal
-- Other docs as needed (architecture, transcripts, technical summaries)
+- `ARCHITECTURE.md` - Technical boot process documentation
+- `FEATURES.md` - Planned features roadmap
+- `SESSION_SUMMARY.md` - Session context for continuity
+- `CLAUDE.md` - This file (development context)
 
 ### When to Update
 
-**CHANGELOG.md** - Most frequently updated. Update automatically as changes are made.
-
-**docs/SESSION_SUMMARY.md** and **docs/CLAUDE.md** - Update automatically when:
-- Major changes are made
-- User says "update the docs", "I'm done for the night", "we'll pick this up later", or similar
-
-**README.md** - Only when there are user-facing changes (features, usage, setup)
-
-### "Update the docs" means:
-1. `CHANGELOG.md` - Add any new changes
-2. `docs/SESSION_SUMMARY.md` - Update with current session state
-3. `docs/CLAUDE.md` - Update if significant project-level changes
-4. Any docs in `docs/` that have significant topic updates
-
-### Additional Documents
-User may request architectural docs, technical summaries, or chat transcripts.
-- Create/update these in `docs/` folder only
-- Do not create automatically - only when requested
-
-## Deploy Workflow (IMPORTANT)
-
-When deploying changes, **always use a commit message**:
-
-**Claude MUST provide:**
-- `-m "vX.Y.Z: summary"` - Version number + short summary (REQUIRED)
-- `-d "description"` - Detailed bullet-point description of all changes (REQUIRED)
-
-**Before running deploy.sh, Claude MUST:**
-1. Update `VERSION` file with the new version number
-2. Update `CHANGELOG.md` with all changes made
-
-
-
-
-The `CHANGELOG.md` file tracks all changes. Claude MUST update it with every change.
-
-**Format:**
-```markdown
-## [X.Y.Z] - YYYY-MM-DD
-
-### Added
-- New features
-
-### Changed
-- Changes to existing features
-
-### Fixed
-- Bug fixes
-```
-
-**CRITICAL: Claude MUST always provide commit messages when deploying.**
-- NEVER use `--no-commit` for final deployments
-- ALWAYS use `-m "vX.Y.Z: summary"` with descriptive message
-- ALWAYS use `-d "description"` with detailed bullet points
+- **CHANGELOG.md**: Every code change
+- **VERSION**: Every release
+- **SESSION_SUMMARY.md**: End of session or major milestones
+- **CLAUDE.md**: When project-level decisions change
+- **README.md**: User-facing feature changes
 
 ---
 
-*Project initialized: 2026-01-22*
+## Commit Message Format
+
+```
+vX.Y.Z: Short summary
+
+- Detailed change 1
+- Detailed change 2
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+```
+
+---
+
+## Known Hardware Quirks
+
+### HP Omnibook 600C
+- DSTN display has significant ghosting
+- Very fast compared to target 8088
+- Full CGA 320x200 visible (no overscan)
+- RTC works via INT 1Ah
+
+### IBM PC XT (Target)
+- 4.77 MHz is very slow
+- May have CGA snow on original cards
+- 360KB floppy is primary storage
+- May not have RTC (show --:--)
+
+---
+
+*Last updated: 2026-01-22 (v3.1.6)*
