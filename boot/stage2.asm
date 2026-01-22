@@ -519,16 +519,49 @@ draw_clock:
     mov al, '4'
     call draw_ascii_4x6
 
-    ; DEBUG: Also draw "TEST" at demo position (Y=120) to check visibility
-    mov word [draw_x], DEMO_START_X
-    mov word [draw_y], DEMO_START_Y
-    mov al, 'T'
+    ; DEBUG: Draw row markers at different Y positions to find visible range
+    ; Each marker is a single digit showing Y/10
+
+    ; Y=50 marker "5" (at left edge of box)
+    mov word [draw_x], 4
+    mov word [draw_y], 50
+    mov al, '5'
     call draw_ascii_4x6
-    mov al, 'E'
+
+    ; Y=60 marker "6"
+    mov word [draw_x], 4
+    mov word [draw_y], 60
+    mov al, '6'
     call draw_ascii_4x6
-    mov al, 'S'
+
+    ; Y=70 marker "7"
+    mov word [draw_x], 4
+    mov word [draw_y], 70
+    mov al, '7'
     call draw_ascii_4x6
-    mov al, 'T'
+
+    ; Y=80 marker "8"
+    mov word [draw_x], 4
+    mov word [draw_y], 80
+    mov al, '8'
+    call draw_ascii_4x6
+
+    ; Y=90 marker "9"
+    mov word [draw_x], 4
+    mov word [draw_y], 90
+    mov al, '9'
+    call draw_ascii_4x6
+
+    ; Y=100 marker "A" (hex for 10)
+    mov word [draw_x], 4
+    mov word [draw_y], 100
+    mov al, 'A'
+    call draw_ascii_4x6
+
+    ; Y=110 marker "B"
+    mov word [draw_x], 4
+    mov word [draw_y], 110
+    mov al, 'B'
     call draw_ascii_4x6
 
     popa
