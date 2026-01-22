@@ -28,7 +28,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.1.6)
+## Current Features (v3.1.7)
 
 - Two-stage boot loader (512-byte boot sector + 8KB second stage)
 - CGA 320x200 4-color graphics mode
@@ -187,7 +187,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.1.6**
+Current version: **3.1.7**
 
 ## Contributing
 
@@ -195,7 +195,13 @@ This project is in active development. See the documentation in `docs/` for tech
 
 ## License
 
-TBD
+UnoDOS License - Copyright (c) 2026 Arin Bakht
+
+- **Distribution**: Allowed in original, unmodified form with attribution
+- **Modification**: NOT permitted (no derivatives)
+- **Attribution**: Required - credit original author and link to source
+
+See [LICENSE.md](../LICENSE.md) for full terms.
 
 ---
 

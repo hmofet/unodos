@@ -60,7 +60,7 @@ unodos/
 
 ## Development Status
 
-### Completed (v3.1.6)
+### Completed (v3.1.7)
 - [x] Two-stage boot loader
 - [x] Memory detection (INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
@@ -165,4 +165,13 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 ---
 
-*Last updated: 2026-01-22 (v3.1.6)*
+## License
+
+This project uses the **UnoDOS License** (see `/LICENSE.md` in project root):
+- **Distribution allowed**: Original, unmodified form only
+- **No modifications**: Derivatives and alterations are NOT permitted
+- **Attribution required**: Must credit original author (Arin Bakht) and link to source
+
+---
+
+*Last updated: 2026-01-22 (v3.1.7)*

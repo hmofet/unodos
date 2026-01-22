@@ -357,7 +357,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.6" in smaller text (4x6 font)
+    ; Draw version "v3.1.7" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -654,7 +654,7 @@ clock_loop:
     ret
 
 ; ============================================================================
-; Character Demo Loop
+; Character Demo Loop - Display all ASCII characters in a grid
 ; ============================================================================
 
 char_demo_loop:
@@ -667,42 +667,48 @@ char_demo_loop:
     ; Clear the demo area first
     call clear_demo_area
 
-    ; Reset position
+    ; Draw all printable ASCII characters (32-126) in a grid
+    ; Row 1: characters 32-79 (48 chars) at Y=160
+    ; Row 2: characters 80-126 (47 chars) at Y=168
+
+    ; Row 1: ASCII 32-79
     mov word [draw_x], DEMO_START_X
     mov word [draw_y], DEMO_START_Y
-
-    ; Start with space (ASCII 32)
     mov byte [demo_char], 32
 
-.draw_next_char:
-    ; Update clock display
-    call draw_clock
-
-    ; Draw current character
+.draw_row1:
     mov al, [demo_char]
     call draw_ascii_4x6
 
-    ; Delay between characters for visual effect (one long delay)
-    call delay_short
-
-    ; Next character
     inc byte [demo_char]
+    cmp byte [demo_char], 80    ; Stop at character 80
+    jb .draw_row1
 
-    ; Check if we've reached end of printable ASCII (126)
-    cmp byte [demo_char], 127
-    jb .draw_next_char
+    ; Row 2: ASCII 80-126
+    mov word [draw_x], DEMO_START_X
+    mov word [draw_y], DEMO_START_Y + 8   ; Next row (6 pixels + 2 spacing)
 
-    ; All characters displayed - pause before clearing
-    mov cx, 10
-.pause_delay:
-    call draw_clock         ; Keep updating clock during pause
+.draw_row2:
+    mov al, [demo_char]
+    call draw_ascii_4x6
+
+    inc byte [demo_char]
+    cmp byte [demo_char], 127   ; Stop at character 127
+    jb .draw_row2
+
+    ; All characters now visible - long pause to inspect them
+    ; Update clock during the pause
+    mov cx, 100                 ; Long pause (~100 delay cycles)
+.pause_loop:
+    call draw_clock
     call delay_short
-    loop .pause_delay
+    loop .pause_loop
 
     pop es
     ret
 
-; Clear the demo area (below welcome box at Y=160)
+; Clear the demo area (below welcome box at Y=160, two rows of text)
+; Clears Y=160-175 (16 pixels for 2 rows of 4x6 font + spacing)
 clear_demo_area:
     pusha
     push es
@@ -710,18 +716,17 @@ clear_demo_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clear scanlines at y=160-165 (6 rows for 4x6 font)
-    ; y=160: CGA row 80, y=165: CGA row 82
-    ; Clear full width from x=4 to ~x=316 (80 bytes per row)
-    ; Starting at x=4: byte offset = 4/4 = 1
+    ; Clear scanlines at y=160-175 (covers 2 rows of text)
+    ; CGA row = y/2, so rows 80-87
+    ; Clear full width from x=0 to x=320 (80 bytes per row)
 
-    ; Clear rows 80-82 in even bank (y=160,162,164)
-    mov di, 80 * 80 + 1     ; Start at row 80, x=4
-    mov cx, 3               ; 3 rows
+    ; Clear rows 80-87 in even bank (y=160,162,164,166,168,170,172,174)
+    mov di, 80 * 80         ; Start at row 80
+    mov cx, 8               ; 8 rows
 .clear_even:
     push cx
     push di
-    mov cx, 39              ; 78 bytes = 39 words (covers ~312 pixels)
+    mov cx, 40              ; 80 bytes = 40 words (full width)
     xor ax, ax
     rep stosw
     pop di
@@ -729,13 +734,13 @@ clear_demo_area:
     pop cx
     loop .clear_even
 
-    ; Clear odd scanlines (y=161,163,165) (add 0x2000)
-    mov di, 80 * 80 + 1 + 0x2000
-    mov cx, 3
+    ; Clear odd scanlines (y=161,163,...,175) (add 0x2000)
+    mov di, 80 * 80 + 0x2000
+    mov cx, 8
 .clear_odd:
     push cx
     push di
-    mov cx, 39
+    mov cx, 40
     xor ax, ax
     rep stosw
     pop di
