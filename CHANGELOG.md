@@ -5,6 +5,16 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-01-22
+
+### Fixed
+- QEMU boot compatibility: Changed machine type from `-machine pc` to `-M isapc`
+  for proper PC/XT BIOS boot behavior
+- Boot now works correctly in QEMU with graphical Hello World display
+
+### Changed
+- Makefile now uses `isapc` machine type for all QEMU targets
+
 ## [0.2.1] - 2026-01-22
 
 ### Added
