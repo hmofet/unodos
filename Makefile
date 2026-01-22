@@ -74,8 +74,9 @@ $(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN)
 floppy144: $(FLOPPY_144)
 
 # Run in QEMU (emulating older hardware)
+# Note: Using -M isapc for proper PC/XT BIOS boot compatibility
 run: $(FLOPPY_IMG) check-qemu
-	$(QEMU) -machine pc -cpu 486 \
+	$(QEMU) -M isapc \
 		-m 640K \
 		-drive file=$(FLOPPY_IMG),format=raw,if=floppy \
 		-boot a \
@@ -83,7 +84,7 @@ run: $(FLOPPY_IMG) check-qemu
 
 # Run with 1.44MB image
 run144: $(FLOPPY_144) check-qemu
-	$(QEMU) -machine pc -cpu 486 \
+	$(QEMU) -M isapc \
 		-m 640K \
 		-drive file=$(FLOPPY_144),format=raw,if=floppy \
 		-boot a \
@@ -91,7 +92,7 @@ run144: $(FLOPPY_144) check-qemu
 
 # Debug mode with QEMU monitor
 debug: $(FLOPPY_IMG) check-qemu
-	$(QEMU) -machine pc -cpu 486 \
+	$(QEMU) -M isapc \
 		-m 640K \
 		-drive file=$(FLOPPY_IMG),format=raw,if=floppy \
 		-boot a \
