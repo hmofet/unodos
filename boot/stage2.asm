@@ -32,12 +32,8 @@ entry:
     ; Set up graphics mode and show Hello World
     call setup_graphics
 
-    ; Main loop - system is running
-    ; NOTE: Can't use print_string after graphics mode - it writes to screen!
-
-.idle:
-    hlt
-    jmp .idle
+    ; Main loop - run character demo
+    call char_demo_loop
 
 ; ============================================================================
 ; Memory Detection
@@ -368,7 +364,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.0" in smaller text (4x6 font)
+    ; Draw version "v3.1.1" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -404,9 +400,9 @@ draw_hello_gfx:
 ; ============================================================================
 
 draw_ram_info:
-    ; Draw "RAM:" label
-    mov word [draw_x], 230
-    mov word [draw_y], 180
+    ; Draw "RAM:" label (top right corner)
+    mov word [draw_x], 266
+    mov word [draw_y], 4
 
     ; R
     mov si, char_R_small
@@ -423,7 +419,7 @@ draw_ram_info:
 
     ; Draw total RAM value (from mem_kb)
     mov ax, [mem_kb]
-    mov word [draw_x], 254
+    mov word [draw_x], 290
     call draw_number_small
 
     ; K
@@ -431,7 +427,7 @@ draw_ram_info:
     call draw_char_small
 
     ; Next line: "Used:"
-    mov word [draw_x], 224
+    mov word [draw_x], 260
     add word [draw_y], 8
 
     ; U
@@ -453,7 +449,7 @@ draw_ram_info:
     ; Calculate used memory (stage2 loaded at 0x8000, size ~8KB + boot sector)
     ; For now, estimate: boot sector (512) + stage2 (~8KB) + stack (~1KB) = ~10KB
     mov ax, 10
-    mov word [draw_x], 254
+    mov word [draw_x], 290
     call draw_number_small
 
     ; K
@@ -461,7 +457,7 @@ draw_ram_info:
     call draw_char_small
 
     ; Next line: "Free:"
-    mov word [draw_x], 224
+    mov word [draw_x], 260
     add word [draw_y], 8
 
     ; F
@@ -483,7 +479,7 @@ draw_ram_info:
     ; Calculate free memory (total - used)
     mov ax, [mem_kb]
     sub ax, 10              ; Subtract used (~10KB)
-    mov word [draw_x], 254
+    mov word [draw_x], 290
     call draw_number_small
 
     ; K
@@ -491,6 +487,100 @@ draw_ram_info:
     call draw_char_small
 
     ret
+
+; ============================================================================
+; Character Demo - Cycles through all ASCII characters
+; ============================================================================
+
+; Demo area: y=160-175 (bottom of screen, below welcome box)
+; Using 4x6 font, can fit ~53 chars per row (320 / 6 = 53)
+DEMO_START_X    equ 4
+DEMO_START_Y    equ 165
+DEMO_CHAR_WIDTH equ 6
+DEMO_CHARS_PER_ROW equ 52
+
+char_demo_loop:
+    ; Infinite loop that cycles through characters
+.cycle_start:
+    ; Clear the demo area first
+    call clear_demo_area
+
+    ; Reset position
+    mov word [draw_x], DEMO_START_X
+    mov word [draw_y], DEMO_START_Y
+
+    ; Start with space (ASCII 32)
+    mov byte [demo_char], 32
+
+.draw_next_char:
+    ; Draw current character
+    mov al, [demo_char]
+    call draw_ascii_4x6
+
+    ; Small delay between characters for visual effect
+    mov cx, 8
+.char_delay:
+    call delay_short
+    loop .char_delay
+
+    ; Next character
+    inc byte [demo_char]
+
+    ; Check if we've reached end of printable ASCII (126)
+    cmp byte [demo_char], 127
+    jb .draw_next_char
+
+    ; All characters displayed - pause before clearing
+    mov cx, 60
+.pause_delay:
+    call delay_short
+    loop .pause_delay
+
+    ; Loop back to start
+    jmp .cycle_start
+
+; Clear the demo area (bottom strip of screen)
+clear_demo_area:
+    pusha
+    push es
+
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Clear even scanlines (y=165-175, but CGA uses y/2)
+    ; y=165: row 82-83, y=175: row 87-88
+    ; Even rows start at offset = row * 80
+
+    ; Clear rows 82-87 in even bank (6 rows * 80 bytes = 480 bytes)
+    mov di, 82 * 80         ; Start at row 82
+    mov cx, 6 * 80 / 2      ; 6 rows, 80 bytes each, 2 bytes per word
+    xor ax, ax              ; Clear to background color
+    cld
+    rep stosw
+
+    ; Clear odd scanlines (add 0x2000)
+    mov di, 82 * 80 + 0x2000
+    mov cx, 6 * 80 / 2
+    xor ax, ax
+    rep stosw
+
+    pop es
+    popa
+    ret
+
+; Short delay loop
+delay_short:
+    pusha
+    mov cx, 0x1000
+.loop:
+    nop
+    nop
+    loop .loop
+    popa
+    ret
+
+; Demo variables
+demo_char:  db 32
 
 ; Draw a number using small font (AX = number to draw)
 ; Draws right-aligned at current draw_x position
@@ -872,7 +962,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.1.0          ', 0, 0, 0, 0
+version_text:   db '        v3.1.1          ', 0, 0, 0, 0
 
 ; ============================================================================
 ; Font Data - Complete ASCII Character Sets

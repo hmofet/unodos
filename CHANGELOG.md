@@ -5,6 +5,18 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-01-22
+
+### Added
+- Character demo at boot: cycles through all ASCII characters (32-126)
+  - Displays characters horizontally at bottom of screen using 4x6 font
+  - Clears and repeats in an infinite loop
+  - Visual delay between characters for effect
+- New functions: char_demo_loop, clear_demo_area, delay_short
+
+### Changed
+- Moved RAM status display from bottom right to top right corner
+
 ## [3.1.0] - 2026-01-22
 
 ### Added
