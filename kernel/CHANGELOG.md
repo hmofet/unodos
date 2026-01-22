@@ -4,6 +4,17 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.0.11] - 2026-01-22
+
+### Changed
+- Narrowing boundary test: now testing offsets 200, 208, 232, 240
+- Characters: '9' (200), ':' (208), '=' (232), '>' (240)
+- v3.2.0.10 showed '0' '4' '9', confirming boundary is between 200-240
+
+### Technical Details
+- Testing intermediate offsets to find exact cutoff point
+- This will help identify if issue is offset-specific or character-count-specific
+
 ## [3.2.0.10] - 2026-01-22
 
 ### Changed
