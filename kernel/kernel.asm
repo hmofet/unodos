@@ -112,15 +112,26 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Draw just "W" to verify font rendering works
+    ; Test: Draw hardcoded "W" pattern to verify draw_char works
     mov word [draw_x], 100
     mov word [draw_y], 80
 
-    mov si, char_W
+    mov si, test_W_char           ; Use local hardcoded font data
     call draw_char
 
     pop es
     ret
+
+; Hardcoded W character for testing (same as font8x8.asm char8_W)
+test_W_char:
+    db 0b01100011
+    db 0b01100011
+    db 0b01100011
+    db 0b01101011
+    db 0b01111111
+    db 0b01110111
+    db 0b01100011
+    db 0b00000000
 
 ; ============================================================================
 ; Draw 8x8 character
