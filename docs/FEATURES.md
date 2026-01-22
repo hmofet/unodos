@@ -269,11 +269,11 @@ The following are explicitly out of scope for UnoDOS 3:
 
 | Version | Target Features |
 |---------|-----------------|
-| 3.2.0 | Keyboard input working |
-| 3.3.0 | Basic window manager |
-| 3.4.0 | FAT12 read support |
-| 3.5.0 | File manager application |
-| 4.0.0 | Text editor, multiple apps |
+| 3.3.0 | Keyboard input working |
+| 3.4.0 | Basic window manager |
+| 3.5.0 | FAT12 read support |
+| 3.6.0 | File manager application |
+| 3.7.0 | Text editor, multiple apps |
 
 ---
 

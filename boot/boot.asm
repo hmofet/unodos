@@ -39,7 +39,7 @@ start:
     call print_string
 
     ; Load second stage loader
-    ; Load 16 sectors (8KB) starting from sector 2 to 0x0800:0000 (0x8000)
+    ; Load 4 sectors (2KB) starting from sector 2 to 0x0800:0000 (0x8000)
     mov si, msg_loading
     call print_string
 
@@ -48,7 +48,7 @@ start:
     xor bx, bx              ; Offset 0
 
     mov ah, 0x02            ; BIOS read sectors function
-    mov al, 16              ; Number of sectors to read (8KB)
+    mov al, 4               ; Number of sectors to read (2KB)
     mov ch, 0               ; Cylinder 0
     mov cl, 2               ; Start from sector 2 (sector 1 is boot sector)
     mov dh, 0               ; Head 0

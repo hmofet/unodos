@@ -36,10 +36,15 @@ UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible compu
 unodos/
 ├── boot/
 │   ├── boot.asm        # Stage 1: 512-byte boot sector
-│   ├── stage2.asm      # Stage 2: 8KB main loader
+│   ├── stage2.asm      # Stage 2: 2KB minimal loader
 │   ├── font8x8.asm     # 8x8 bitmap font (95 chars)
 │   └── font4x6.asm     # 4x6 small font (95 chars)
+├── kernel/
+│   └── kernel.asm      # Main OS kernel (16KB)
 ├── build/
+│   ├── boot.bin        # Compiled boot sector
+│   ├── stage2.bin      # Compiled stage2 loader
+│   ├── kernel.bin      # Compiled kernel
 │   ├── unodos.img      # 360KB floppy image
 │   └── unodos-144.img  # 1.44MB floppy image
 ├── docs/
@@ -60,8 +65,10 @@ unodos/
 
 ## Development Status
 
-### Completed (v3.1.7)
-- [x] Two-stage boot loader
+### Completed (v3.2.0)
+- [x] Three-stage boot architecture (boot + stage2 + kernel)
+- [x] Separate 16KB kernel loaded at 64KB mark
+- [x] Boot progress indicator (dots during kernel load)
 - [x] Memory detection (INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
 - [x] CGA 320x200 4-color graphics
@@ -86,8 +93,14 @@ unodos/
 
 ### Segment Register Convention
 - ES must be 0xB800 when calling pixel/drawing functions
-- DS is 0x0800 (Stage 2 data segment)
+- DS is 0x1000 (Kernel data segment)
 - Stack at SS:SP = 0x0000:0x7C00
+
+### Memory Map
+- 0x0000:7C00 - Boot sector (512 bytes)
+- 0x0800:0000 - Stage2 loader (2KB)
+- 0x1000:0000 - Kernel (16KB, expandable)
+- 0xB800:0000 - CGA video memory (16KB)
 
 ### Display Compatibility Notes
 - HP Omnibook 600C: Full 320x200 visible in CGA mode
@@ -98,10 +111,14 @@ unodos/
 
 ## Versioning (IMPORTANT)
 
-This project uses **Semantic Versioning** (MAJOR.MINOR.PATCH):
-- **MAJOR**: Breaking changes or major new features
-- **MINOR**: New features, backward compatible
-- **PATCH**: Bug fixes, small improvements
+This project uses a modified **Semantic Versioning** (3.MINOR.PATCH.HOTFIX):
+
+**CRITICAL: The MAJOR version is permanently fixed at 3** ("Uno dos tres" - Spanish for 1, 2, 3). Never increment the major version without explicit user request.
+
+- **MAJOR (3)**: Fixed at 3 - do NOT increment
+- **MINOR**: Treat as major - increment for breaking changes, major new features, architectural changes
+- **PATCH**: New features, bug fixes, improvements
+- **HOTFIX** (optional): Small bug fixes, typos, minor corrections
 
 **Claude MUST do the following with EVERY code change:**
 
@@ -174,4 +191,4 @@ This project uses the **UnoDOS License** (see `/LICENSE.md` in project root):
 
 ---
 
-*Last updated: 2026-01-22 (v3.1.7)*
+*Last updated: 2026-01-22 (v3.2.0)*

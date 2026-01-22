@@ -28,9 +28,11 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.1.7)
+## Current Features (v3.2.0)
 
-- Two-stage boot loader (512-byte boot sector + 8KB second stage)
+- Three-stage boot architecture (boot sector + stage2 loader + kernel)
+- Separate 16KB kernel loaded at 64KB mark
+- Boot progress indicator (dots during kernel load)
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
 - Graphical welcome screen with bordered window
@@ -130,10 +132,15 @@ tools\writeflop.bat
 unodos/
 ├── boot/
 │   ├── boot.asm        # First stage boot loader (512 bytes)
-│   ├── stage2.asm      # Second stage loader (8KB)
+│   ├── stage2.asm      # Second stage loader (2KB)
 │   ├── font8x8.asm     # 8x8 bitmap font data
 │   └── font4x6.asm     # 4x6 small font data
+├── kernel/
+│   └── kernel.asm      # Main OS kernel (16KB)
 ├── build/
+│   ├── boot.bin        # Compiled boot sector
+│   ├── stage2.bin      # Compiled stage2 loader
+│   ├── kernel.bin      # Compiled kernel
 │   ├── unodos.img      # 360KB floppy image
 │   └── unodos-144.img  # 1.44MB floppy image
 ├── docs/
@@ -161,8 +168,9 @@ unodos/
 ## Development Status
 
 ### Completed
-- [x] Boot sector with debug output
-- [x] Two-stage boot loader
+- [x] Three-stage boot architecture (boot + stage2 + kernel)
+- [x] Separate kernel (16KB, loaded at 64KB mark)
+- [x] Boot progress indicator
 - [x] Memory detection (BIOS INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
 - [x] CGA 320x200 4-color graphics
@@ -171,9 +179,6 @@ unodos/
 - [x] Real-time clock display
 - [x] RAM status display
 - [x] Character demonstration
-
-### In Progress
-- [ ] Character demo animation tuning
 
 ### Planned
 - [ ] Keyboard input handling
@@ -187,7 +192,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.1.7**
+Current version: **3.2.0**
 
 ## Contributing
 
