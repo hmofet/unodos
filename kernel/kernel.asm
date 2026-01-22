@@ -112,21 +112,22 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Draw three W's to debug font addressing
+    ; Test: Draw exclamation mark (first char after space in font)
+    ; font_8x8 + 8 should be '!' character
     mov word [draw_x], 70
     mov word [draw_y], 80
 
-    ; First W - hardcoded (known working)
+    ; First: hardcoded W (known working)
     mov si, test_W_char
     call draw_char
 
-    ; Second W - using char_W equ (broken?)
-    mov si, char_W
+    ; Second: font_8x8 directly (should be space - blank)
+    mov si, font_8x8
     call draw_char
 
-    ; Third W - calculate address manually at runtime
+    ; Third: font_8x8 + 8 (should be '!')
     mov si, font_8x8
-    add si, ('W' - 32) * 8        ; Same calculation as char_W equ
+    add si, 8
     call draw_char
 
     pop es
