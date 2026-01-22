@@ -5,6 +5,14 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.5] - 2026-01-22
+
+### Fixed
+- Fixed graphical corruption of version text caused by overlapping elements
+  - Clock moved to Y=40 (above white box which starts at Y=50)
+  - Character demo moved to Y=120 (inside box, below version at Y=106)
+  - Demo now starts at X=65 to stay within box boundaries (X=60-260)
+
 ## [3.1.4] - 2026-01-22
 
 ### Fixed
