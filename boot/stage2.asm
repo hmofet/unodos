@@ -368,7 +368,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.0.1" in smaller text (4x6 font)
+    ; Draw version "v3.1.0" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -382,14 +382,14 @@ draw_hello_gfx:
     ; .
     mov si, char_dot_small
     call draw_char_small
-    ; 0
-    mov si, char_0_small
+    ; 1
+    mov si, char_1_small
     call draw_char_small
     ; .
     mov si, char_dot_small
     call draw_char_small
-    ; 1
-    mov si, char_1_small
+    ; 0
+    mov si, char_0_small
     call draw_char_small
 
 .skip_text:
@@ -522,6 +522,136 @@ draw_number_small:
     call draw_char_small
     loop .print_loop
 
+    popa
+    ret
+
+; ============================================================================
+; Generic Text Rendering Functions (using font tables)
+; ============================================================================
+
+; Draw a null-terminated string using 8x8 font
+; Input: SI = pointer to null-terminated string
+;        draw_x, draw_y = starting position
+; Modifies: draw_x (advances for each character)
+draw_string_8x8:
+    pusha
+
+.loop:
+    lodsb                       ; Get next character
+    test al, al                 ; Check for null terminator
+    jz .done
+
+    ; Calculate font table offset: (char - 32) * 8
+    sub al, 32                  ; Convert ASCII to font index
+    jb .skip_char               ; Skip if < 32
+    cmp al, 95                  ; Check if > 126 (95 = 126-32+1)
+    jae .skip_char
+
+    xor ah, ah
+    shl ax, 3                   ; Multiply by 8
+    add ax, font_8x8            ; Add font base address
+    push si
+    mov si, ax
+    call draw_char              ; Draw the character
+    pop si
+    jmp .loop
+
+.skip_char:
+    add word [draw_x], 12       ; Skip space for unprintable chars
+    jmp .loop
+
+.done:
+    popa
+    ret
+
+; Draw a null-terminated string using 4x6 font
+; Input: SI = pointer to null-terminated string
+;        draw_x, draw_y = starting position
+; Modifies: draw_x (advances for each character)
+draw_string_4x6:
+    pusha
+
+.loop:
+    lodsb                       ; Get next character
+    test al, al                 ; Check for null terminator
+    jz .done
+
+    ; Calculate font table offset: (char - 32) * 6
+    sub al, 32                  ; Convert ASCII to font index
+    jb .skip_char               ; Skip if < 32
+    cmp al, 95                  ; Check if > 126
+    jae .skip_char
+
+    xor ah, ah
+    mov bl, 6
+    mul bl                      ; AX = index * 6
+    add ax, font_4x6            ; Add font base address
+    push si
+    mov si, ax
+    call draw_char_small        ; Draw the character
+    pop si
+    jmp .loop
+
+.skip_char:
+    add word [draw_x], 6        ; Skip space for unprintable chars
+    jmp .loop
+
+.done:
+    popa
+    ret
+
+; Draw a single ASCII character using 8x8 font
+; Input: AL = ASCII character
+;        draw_x, draw_y = position
+; Modifies: draw_x (advances by 12)
+draw_ascii_8x8:
+    pusha
+
+    ; Calculate font table offset: (char - 32) * 8
+    sub al, 32
+    jb .skip
+    cmp al, 95
+    jae .skip
+
+    xor ah, ah
+    shl ax, 3                   ; Multiply by 8
+    add ax, font_8x8
+    mov si, ax
+    call draw_char
+    jmp .done
+
+.skip:
+    add word [draw_x], 12
+
+.done:
+    popa
+    ret
+
+; Draw a single ASCII character using 4x6 font
+; Input: AL = ASCII character
+;        draw_x, draw_y = position
+; Modifies: draw_x (advances by 6)
+draw_ascii_4x6:
+    pusha
+
+    ; Calculate font table offset: (char - 32) * 6
+    sub al, 32
+    jb .skip
+    cmp al, 95
+    jae .skip
+
+    xor ah, ah
+    mov bl, 6
+    mul bl
+    add ax, font_4x6
+    mov si, ax
+    call draw_char_small
+    jmp .done
+
+.skip:
+    add word [draw_x], 6
+
+.done:
     popa
     ret
 
@@ -742,345 +872,60 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.0.1          ', 0, 0, 0, 0
+version_text:   db '        v3.1.0          ', 0, 0, 0, 0
 
-; 8x8 character bitmaps (1 = pixel on)
-char_H:
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11111111
-    db 0b11111111
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
+; ============================================================================
+; Font Data - Complete ASCII Character Sets
+; ============================================================================
 
-char_E:
-    db 0b11111111
-    db 0b11111111
-    db 0b11000000
-    db 0b11111100
-    db 0b11111100
-    db 0b11000000
-    db 0b11111111
-    db 0b11111111
+; Include 8x8 font (95 characters, 760 bytes)
+%include "font8x8.asm"
 
-char_L:
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b11111111
-    db 0b11111111
+; Include 4x6 font (95 characters, 570 bytes)
+%include "font4x6.asm"
 
-char_O:
-    db 0b00111100
-    db 0b01111110
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b01111110
-    db 0b00111100
+; Legacy aliases for backward compatibility with existing code
+; These point into the font tables at the appropriate offsets
+char_H  equ font_8x8 + ('H' - 32) * 8
+char_E  equ font_8x8 + ('E' - 32) * 8
+char_L  equ font_8x8 + ('L' - 32) * 8
+char_O  equ font_8x8 + ('O' - 32) * 8
+char_W  equ font_8x8 + ('W' - 32) * 8
+char_R  equ font_8x8 + ('R' - 32) * 8
+char_D  equ font_8x8 + ('D' - 32) * 8
+char_excl equ font_8x8 + ('!' - 32) * 8
+char_C  equ font_8x8 + ('C' - 32) * 8
+char_M  equ font_8x8 + ('M' - 32) * 8
+char_T  equ font_8x8 + ('T' - 32) * 8
+char_U  equ font_8x8 + ('U' - 32) * 8
+char_N  equ font_8x8 + ('N' - 32) * 8
+char_S  equ font_8x8 + ('S' - 32) * 8
+char_3  equ font_8x8 + ('3' - 32) * 8
 
-char_W:
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11011011
-    db 0b11011011
-    db 0b11111111
-    db 0b01100110
-    db 0b01100110
-
-char_R:
-    db 0b11111100
-    db 0b11111110
-    db 0b11000011
-    db 0b11111110
-    db 0b11111100
-    db 0b11001100
-    db 0b11000110
-    db 0b11000011
-
-char_D:
-    db 0b11111100
-    db 0b11111110
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11111110
-    db 0b11111100
-
-char_excl:
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00000000
-    db 0b00011000
-    db 0b00011000
-
-char_C:
-    db 0b00111110
-    db 0b01111111
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b11000000
-    db 0b01111111
-    db 0b00111110
-
-char_M:
-    db 0b11000011
-    db 0b11100111
-    db 0b11111111
-    db 0b11011011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-
-char_T:
-    db 0b11111111
-    db 0b11111111
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-    db 0b00011000
-
-char_U:
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b11000011
-    db 0b01111110
-    db 0b00111100
-
-char_N:
-    db 0b11000011
-    db 0b11100011
-    db 0b11110011
-    db 0b11011011
-    db 0b11001111
-    db 0b11000111
-    db 0b11000011
-    db 0b11000011
-
-char_S:
-    db 0b00111110
-    db 0b01111111
-    db 0b11000000
-    db 0b01111110
-    db 0b00000011
-    db 0b00000011
-    db 0b11111110
-    db 0b01111100
-
-char_3:
-    db 0b01111110
-    db 0b11111111
-    db 0b00000011
-    db 0b00111110
-    db 0b00000011
-    db 0b00000011
-    db 0b11111111
-    db 0b01111110
-
-; Small 4x6 character bitmaps for version string
-char_v_small:
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b01100000
-    db 0b01100000
-
-; Small digits 0-9 (must be contiguous for draw_number_small)
-char_0_small:
-    db 0b01100000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b01100000
-
-char_1_small:
-    db 0b00100000
-    db 0b01100000
-    db 0b00100000
-    db 0b00100000
-    db 0b00100000
-    db 0b01110000
-
-char_2_small:
-    db 0b01100000
-    db 0b10010000
-    db 0b00100000
-    db 0b01000000
-    db 0b10000000
-    db 0b11110000
-
-char_3_small:
-    db 0b11100000
-    db 0b00010000
-    db 0b01100000
-    db 0b00010000
-    db 0b00010000
-    db 0b11100000
-
-char_4_small:
-    db 0b10010000
-    db 0b10010000
-    db 0b11110000
-    db 0b00010000
-    db 0b00010000
-    db 0b00010000
-
-char_5_small:
-    db 0b11110000
-    db 0b10000000
-    db 0b11100000
-    db 0b00010000
-    db 0b00010000
-    db 0b11100000
-
-char_6_small:
-    db 0b01100000
-    db 0b10000000
-    db 0b11100000
-    db 0b10010000
-    db 0b10010000
-    db 0b01100000
-
-char_7_small:
-    db 0b11110000
-    db 0b00010000
-    db 0b00100000
-    db 0b01000000
-    db 0b01000000
-    db 0b01000000
-
-char_8_small:
-    db 0b01100000
-    db 0b10010000
-    db 0b01100000
-    db 0b10010000
-    db 0b10010000
-    db 0b01100000
-
-char_9_small:
-    db 0b01100000
-    db 0b10010000
-    db 0b10010000
-    db 0b01110000
-    db 0b00010000
-    db 0b01100000
-
-char_dot_small:
-    db 0b00000000
-    db 0b00000000
-    db 0b00000000
-    db 0b00000000
-    db 0b01100000
-    db 0b01100000
-
-; Small letters for RAM display
-char_R_small:
-    db 0b11100000
-    db 0b10010000
-    db 0b11100000
-    db 0b10100000
-    db 0b10010000
-    db 0b10010000
-
-char_A_small:
-    db 0b01100000
-    db 0b10010000
-    db 0b10010000
-    db 0b11110000
-    db 0b10010000
-    db 0b10010000
-
-char_M_small:
-    db 0b10010000
-    db 0b11110000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-
-char_colon_small:
-    db 0b00000000
-    db 0b01100000
-    db 0b00000000
-    db 0b00000000
-    db 0b01100000
-    db 0b00000000
-
-char_K_small:
-    db 0b10010000
-    db 0b10100000
-    db 0b11000000
-    db 0b10100000
-    db 0b10010000
-    db 0b10010000
-
-char_U_small:
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b10010000
-    db 0b01100000
-
-char_s_small:
-    db 0b00000000
-    db 0b01110000
-    db 0b10000000
-    db 0b01100000
-    db 0b00010000
-    db 0b11100000
-
-char_e_small:
-    db 0b00000000
-    db 0b01100000
-    db 0b10010000
-    db 0b11110000
-    db 0b10000000
-    db 0b01100000
-
-char_d_small:
-    db 0b00010000
-    db 0b00010000
-    db 0b01110000
-    db 0b10010000
-    db 0b10010000
-    db 0b01110000
-
-char_F_small:
-    db 0b11110000
-    db 0b10000000
-    db 0b11100000
-    db 0b10000000
-    db 0b10000000
-    db 0b10000000
-
-char_r_small:
-    db 0b00000000
-    db 0b10110000
-    db 0b11000000
-    db 0b10000000
-    db 0b10000000
-    db 0b10000000
+; Small font aliases
+char_v_small equ font_4x6 + ('v' - 32) * 6
+char_0_small equ font_4x6 + ('0' - 32) * 6
+char_1_small equ font_4x6 + ('1' - 32) * 6
+char_2_small equ font_4x6 + ('2' - 32) * 6
+char_3_small equ font_4x6 + ('3' - 32) * 6
+char_4_small equ font_4x6 + ('4' - 32) * 6
+char_5_small equ font_4x6 + ('5' - 32) * 6
+char_6_small equ font_4x6 + ('6' - 32) * 6
+char_7_small equ font_4x6 + ('7' - 32) * 6
+char_8_small equ font_4x6 + ('8' - 32) * 6
+char_9_small equ font_4x6 + ('9' - 32) * 6
+char_dot_small equ font_4x6 + ('.' - 32) * 6
+char_R_small equ font_4x6 + ('R' - 32) * 6
+char_A_small equ font_4x6 + ('A' - 32) * 6
+char_M_small equ font_4x6 + ('M' - 32) * 6
+char_colon_small equ font_4x6 + (':' - 32) * 6
+char_K_small equ font_4x6 + ('K' - 32) * 6
+char_U_small equ font_4x6 + ('U' - 32) * 6
+char_s_small equ font_4x6 + ('s' - 32) * 6
+char_e_small equ font_4x6 + ('e' - 32) * 6
+char_d_small equ font_4x6 + ('d' - 32) * 6
+char_F_small equ font_4x6 + ('F' - 32) * 6
+char_r_small equ font_4x6 + ('r' - 32) * 6
 
 ; ============================================================================
 ; Padding
@@ -1088,3 +933,4 @@ char_r_small:
 
 ; Pad to fill sectors (we're loading 16 sectors = 8KB)
 times 8192 - ($ - $$) db 0
+
