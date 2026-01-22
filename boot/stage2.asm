@@ -68,7 +68,7 @@ detect_video:
     mov si, msg_detect_vid
     call print_string
 
-    ; Check for CGA/MDA by reading BIOS equipment list
+    ; Check for CGA/EGA/VGA by reading BIOS equipment list
     int 0x11                ; Get equipment list in AX
     mov [equipment], ax
 
@@ -78,27 +78,16 @@ detect_video:
     mov cl, 4
     shr ax, cl
 
-    cmp al, 3
-    je .mda
     cmp al, 0
     je .ega_vga
-    ; Otherwise it's CGA
+    ; CGA (modes 01 or 10)
     mov si, msg_cga
     call print_string
-    mov byte [video_type], 1    ; CGA
-    ret
-
-.mda:
-    mov si, msg_mda
-    call print_string
-    mov byte [video_type], 0    ; MDA
     ret
 
 .ega_vga:
-    ; Could be EGA or VGA, treat as CGA-compatible for now
     mov si, msg_ega
     call print_string
-    mov byte [video_type], 2    ; EGA/VGA
     ret
 
 ; ============================================================================
@@ -109,22 +98,7 @@ setup_graphics:
     mov si, msg_setup_gfx
     call print_string
 
-    ; Check video type
-    mov al, [video_type]
-    cmp al, 0
-    je .mda_mode
-
-    ; CGA or EGA/VGA - use CGA graphics mode
-    jmp .cga_mode
-
-.mda_mode:
-    ; MDA doesn't support graphics, use text-based "graphics"
-    mov si, msg_mda_text
-    call print_string
-    call draw_hello_text
-    ret
-
-.cga_mode:
+    ; CGA graphics mode (works for CGA and EGA/VGA)
     ; Set CGA 320x200 4-color mode (mode 4)
     mov ah, 0x00
     mov al, 0x04            ; 320x200, 4 colors
@@ -171,182 +145,105 @@ draw_coordinate_test:
     mov ax, 0xB800
     mov es, ax
 
-    ; The welcome box was at Y=50-150, X=60-260 and was visible
-    ; Let's put a test pattern in that known-visible area
+    ; Comprehensive coordinate test to find visible area
+    ; Y markers on left edge (X=4), every 20 pixels
+    ; 0=Y0, 1=Y20, 2=Y40, 3=Y60, 4=Y80, 5=Y100, 6=Y120, 7=Y140, 8=Y160, 9=Y180
 
-    ; Draw "TEST" in center of screen (where welcome text was)
-    ; Welcome text "WELCOME TO" was at X=76, Y=70 - that was visible
-    mov word [draw_x], 100
-    mov word [draw_y], 70
-    mov al, 'T'
-    call draw_ascii_4x6
-    mov al, 'E'
-    call draw_ascii_4x6
-    mov al, 'S'
-    call draw_ascii_4x6
-    mov al, 'T'
+    mov word [draw_x], 4
+    mov word [draw_y], 0
+    mov al, '0'
     call draw_ascii_4x6
 
-    ; Draw corner markers inside the box area
-    ; Top-left of box area (X=65, Y=55)
-    mov word [draw_x], 65
-    mov word [draw_y], 55
+    mov word [draw_x], 4
+    mov word [draw_y], 20
     mov al, '1'
     call draw_ascii_4x6
 
-    ; Top-right of box area (X=250, Y=55)
-    mov word [draw_x], 250
-    mov word [draw_y], 55
+    mov word [draw_x], 4
+    mov word [draw_y], 40
     mov al, '2'
     call draw_ascii_4x6
 
-    ; Bottom-left of box area (X=65, Y=140)
-    mov word [draw_x], 65
-    mov word [draw_y], 140
+    mov word [draw_x], 4
+    mov word [draw_y], 60
     mov al, '3'
     call draw_ascii_4x6
 
-    ; Bottom-right of box area (X=250, Y=140)
-    mov word [draw_x], 250
-    mov word [draw_y], 140
+    mov word [draw_x], 4
+    mov word [draw_y], 80
     mov al, '4'
     call draw_ascii_4x6
 
-    ; Draw the actual box borders to confirm what's visible
-    ; Top border (y=50, x=60 to x=260) - same as welcome screen
-    ; ES already set to 0xB800 at function start
+    mov word [draw_x], 4
+    mov word [draw_y], 100
+    mov al, '5'
+    call draw_ascii_4x6
 
-    mov bx, 50              ; Y coordinate
-    mov cx, 60              ; Start X
-.top_border:
-    call plot_pixel_white
-    inc cx
-    cmp cx, 260
-    jl .top_border
+    mov word [draw_x], 4
+    mov word [draw_y], 120
+    mov al, '6'
+    call draw_ascii_4x6
 
-    ; Bottom border (y=150)
-    mov bx, 150
-    mov cx, 60
-.bottom_border:
-    call plot_pixel_white
-    inc cx
-    cmp cx, 260
-    jl .bottom_border
+    mov word [draw_x], 4
+    mov word [draw_y], 140
+    mov al, '7'
+    call draw_ascii_4x6
 
-    ; Left border (x=60, y=50 to y=150)
-    mov cx, 60
-    mov bx, 50
-.left_border:
-    call plot_pixel_white
-    inc bx
-    cmp bx, 150
-    jle .left_border
+    mov word [draw_x], 4
+    mov word [draw_y], 160
+    mov al, '8'
+    call draw_ascii_4x6
 
-    ; Right border (x=259, y=50 to y=150)
-    mov cx, 259
-    mov bx, 50
-.right_border:
-    call plot_pixel_white
-    inc bx
-    cmp bx, 150
-    jle .right_border
+    mov word [draw_x], 4
+    mov word [draw_y], 180
+    mov al, '9'
+    call draw_ascii_4x6
+
+    ; X markers on top (Y=10), every 40 pixels
+    ; A=X40, B=X80, C=X120, D=X160, E=X200, F=X240, G=X280, H=X310
+
+    mov word [draw_x], 40
+    mov word [draw_y], 10
+    mov al, 'A'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 80
+    mov word [draw_y], 10
+    mov al, 'B'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 120
+    mov word [draw_y], 10
+    mov al, 'C'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 160
+    mov word [draw_y], 10
+    mov al, 'D'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 200
+    mov word [draw_y], 10
+    mov al, 'E'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 240
+    mov word [draw_y], 10
+    mov al, 'F'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 280
+    mov word [draw_y], 10
+    mov al, 'G'
+    call draw_ascii_4x6
+
+    mov word [draw_x], 310
+    mov word [draw_y], 10
+    mov al, 'H'
+    call draw_ascii_4x6
 
     pop es
     popa
-    ret
-
-; ============================================================================
-; Text Mode Hello World (for MDA)
-; ============================================================================
-
-draw_hello_text:
-    push es
-
-    ; Point to MDA video memory
-    mov ax, 0xB000
-    mov es, ax
-
-    ; Clear screen with spaces
-    mov di, 0
-    mov cx, 2000            ; 80x25 = 2000 characters
-    mov ax, 0x0720          ; Space with normal attribute
-    rep stosw
-
-    ; Draw a simple box in the center
-    ; Box at row 10, column 25, 30 chars wide, 5 rows tall
-
-    ; Top border
-    mov di, (10 * 160) + (25 * 2)   ; Row 10, Column 25
-    mov ah, 0x0F            ; Bright white on black
-
-    mov al, 0xDA            ; Top-left corner
-    stosw
-    mov cx, 28
-    mov al, 0xC4            ; Horizontal line
-.top_loop:
-    stosw
-    loop .top_loop
-    mov al, 0xBF            ; Top-right corner
-    stosw
-
-    ; Middle rows with text
-    mov di, (11 * 160) + (25 * 2)
-    mov al, 0xB3            ; Vertical line
-    stosw
-    mov si, hello_text
-    mov cx, 28
-.text_loop1:
-    lodsb
-    mov ah, 0x0F
-    stosw
-    loop .text_loop1
-    mov al, 0xB3
-    mov ah, 0x0F
-    stosw
-
-    ; "UnoDOS v0.2.4" centered
-    mov di, (12 * 160) + (25 * 2)
-    mov al, 0xB3
-    mov ah, 0x0F
-    stosw
-    mov si, version_text
-    mov cx, 28
-.text_loop2:
-    lodsb
-    mov ah, 0x0E            ; Yellow
-    stosw
-    loop .text_loop2
-    mov al, 0xB3
-    mov ah, 0x0F
-    stosw
-
-    ; Empty row
-    mov di, (13 * 160) + (25 * 2)
-    mov al, 0xB3
-    mov ah, 0x0F
-    stosw
-    mov cx, 28
-    mov al, ' '
-.empty_loop:
-    stosw
-    loop .empty_loop
-    mov al, 0xB3
-    stosw
-
-    ; Bottom border
-    mov di, (14 * 160) + (25 * 2)
-    mov al, 0xC0            ; Bottom-left corner
-    mov ah, 0x0F
-    stosw
-    mov cx, 28
-    mov al, 0xC4            ; Horizontal line
-.bottom_loop:
-    stosw
-    loop .bottom_loop
-    mov al, 0xD9            ; Bottom-right corner
-    stosw
-
-    pop es
     ret
 
 ; ============================================================================
@@ -1248,7 +1145,6 @@ print_decimal:
 ; Variables
 mem_kb:         dw 0
 equipment:      dw 0
-video_type:     db 0        ; 0=MDA, 1=CGA, 2=EGA/VGA
 draw_x:         dw 0
 draw_y:         dw 0
 
@@ -1257,17 +1153,9 @@ msg_stage2:     db 'Stage2 loaded', 0x0D, 0x0A, 0
 msg_detect_mem: db 'Memory: ', 0
 msg_kb:         db ' KB', 0x0D, 0x0A, 0
 msg_detect_vid: db 'Video: ', 0
-msg_mda:        db 'MDA', 0x0D, 0x0A, 0
 msg_cga:        db 'CGA', 0x0D, 0x0A, 0
 msg_ega:        db 'EGA/VGA', 0x0D, 0x0A, 0
 msg_setup_gfx:  db 'Init graphics...', 0x0D, 0x0A, 0
-msg_mda_text:   db 'MDA text mode', 0x0D, 0x0A, 0
-msg_cga_gfx:    db 'CGA 320x200', 0x0D, 0x0A, 0
-msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
-
-; Text for MDA display
-hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.1.5          ', 0, 0, 0, 0
 
 ; ============================================================================
 ; Font Data - Complete ASCII Character Sets
