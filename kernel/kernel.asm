@@ -112,28 +112,28 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Narrow down boundary between 128-248
+    ; Test: Force word-sized immediate values
     mov word [draw_x], 65
     mov word [draw_y], 80
 
     ; 1. offset 128 - '0' (known working)
     mov si, font_8x8
-    add si, 128
+    add si, word 128
     call draw_char
 
     ; 2. offset 160 - '4' = (52-32)*8
     mov si, font_8x8
-    add si, 160
+    add si, word 160
     call draw_char
 
     ; 3. offset 200 - '9' = (57-32)*8
     mov si, font_8x8
-    add si, 200
+    add si, word 200
     call draw_char
 
     ; 4. offset 240 - '>' = (62-32)*8
     mov si, font_8x8
-    add si, 240
+    add si, word 240
     call draw_char
 
     pop es
