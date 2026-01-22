@@ -32,8 +32,8 @@ entry:
     ; Set up graphics mode and show Hello World
     call setup_graphics
 
-    ; Main loop - run character demo
-    call char_demo_loop
+    ; Main loop - clock and character demo
+    call main_loop
 
 ; ============================================================================
 ; Memory Detection
@@ -364,7 +364,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.3" in smaller text (4x6 font)
+    ; Draw version "v3.1.4" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -495,9 +495,9 @@ draw_ram_info:
 ; Clock Display (top left corner) - Reads from RTC
 ; ============================================================================
 
-; Clock position
+; Clock position (above welcome message, known visible area)
 CLOCK_X     equ 4
-CLOCK_Y     equ 4
+CLOCK_Y     equ 60
 
 ; Draw clock (HH:MM:SS format)
 draw_clock:
@@ -591,6 +591,7 @@ draw_bcd_small:
     ret
 
 ; Clear clock area (to prevent overdraw artifacts)
+; Clock is at y=60, spans 6 rows (y=60-65), row 30-32 in CGA
 clear_clock_area:
     pusha
     push es
@@ -598,12 +599,8 @@ clear_clock_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clock is at y=4, spans 6 rows (y=4-9)
-    ; Clear rows 2-4 in even bank (y/2 = 2-4)
-    ; Each row is 80 bytes, clock spans ~48 pixels = 12 bytes
-
-    ; Even rows (y=4,6,8 -> row 2,3,4)
-    mov di, 2 * 80          ; Start at row 2
+    ; Even rows (y=60,62,64 -> row 30,31,32)
+    mov di, 30 * 80         ; Start at row 30
     mov cx, 3               ; 3 rows
 .clear_even:
     push cx
@@ -616,8 +613,8 @@ clear_clock_area:
     pop cx
     loop .clear_even
 
-    ; Odd rows (y=5,7,9 -> row 2,3,4 in odd bank)
-    mov di, 2 * 80 + 0x2000
+    ; Odd rows (y=61,63,65 -> row 30,31,32 in odd bank)
+    mov di, 30 * 80 + 0x2000
     mov cx, 3
 .clear_odd:
     push cx
@@ -643,16 +640,38 @@ rtc_seconds:    db 0
 ; Character Demo - Cycles through all ASCII characters
 ; ============================================================================
 
-; Demo area: y=130-135 (below welcome box, safe for real hardware overscan)
+; Demo area: y=108 (just below version text, known visible area)
 ; Using 4x6 font, can fit ~53 chars per row (320 / 6 = 53)
 DEMO_START_X    equ 4
-DEMO_START_Y    equ 130
+DEMO_START_Y    equ 108
 DEMO_CHAR_WIDTH equ 6
 DEMO_CHARS_PER_ROW equ 52
 
+; ============================================================================
+; Main Loop - Updates clock and runs character demo
+; ============================================================================
+
+main_loop:
+    ; Draw initial clock
+    call draw_clock
+    ; Run character demo (also updates clock)
+    call char_demo_loop
+    jmp main_loop
+
+; ============================================================================
+; Clock Update Loop - Independent clock updater
+; ============================================================================
+
+clock_loop:
+    call draw_clock
+    call delay_short
+    ret
+
+; ============================================================================
+; Character Demo Loop
+; ============================================================================
+
 char_demo_loop:
-    ; Infinite loop that cycles through characters
-.cycle_start:
     ; Clear the demo area first
     call clear_demo_area
 
@@ -691,10 +710,9 @@ char_demo_loop:
     call delay_short
     loop .pause_delay
 
-    ; Loop back to start
-    jmp .cycle_start
+    ret
 
-; Clear the demo area (strip below welcome message)
+; Clear the demo area (strip below version text)
 clear_demo_area:
     pusha
     push es
@@ -702,19 +720,19 @@ clear_demo_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clear even scanlines (y=130-135, CGA uses y/2)
-    ; y=130: row 65, y=135: row 67
+    ; Clear even scanlines (y=108-113, CGA uses y/2)
+    ; y=108: row 54, y=113: row 56
     ; Even rows start at offset = row * 80
 
-    ; Clear rows 65-67 in even bank (3 rows * 80 bytes = 240 bytes)
-    mov di, 65 * 80         ; Start at row 65
+    ; Clear rows 54-56 in even bank (3 rows * 80 bytes = 240 bytes)
+    mov di, 54 * 80         ; Start at row 54
     mov cx, 3 * 80 / 2      ; 3 rows, 80 bytes each, 2 bytes per word
     xor ax, ax              ; Clear to background color
     cld
     rep stosw
 
     ; Clear odd scanlines (add 0x2000)
-    mov di, 65 * 80 + 0x2000
+    mov di, 54 * 80 + 0x2000
     mov cx, 3 * 80 / 2
     xor ax, ax
     rep stosw
@@ -1117,7 +1135,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.1.3          ', 0, 0, 0, 0
+version_text:   db '        v3.1.4          ', 0, 0, 0, 0
 
 ; ============================================================================
 ; Font Data - Complete ASCII Character Sets
