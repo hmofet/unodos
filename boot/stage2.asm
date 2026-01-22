@@ -368,7 +368,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.0.0" in smaller text (4x6 font)
+    ; Draw version "v3.0.1" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -388,12 +388,141 @@ draw_hello_gfx:
     ; .
     mov si, char_dot_small
     call draw_char_small
-    ; 0
-    mov si, char_0_small
+    ; 1
+    mov si, char_1_small
     call draw_char_small
 
 .skip_text:
+    ; Draw RAM info in bottom right
+    call draw_ram_info
+
     pop es
+    ret
+
+; ============================================================================
+; RAM Info Display (bottom right corner)
+; ============================================================================
+
+draw_ram_info:
+    ; Draw "RAM:" label
+    mov word [draw_x], 230
+    mov word [draw_y], 180
+
+    ; R
+    mov si, char_R_small
+    call draw_char_small
+    ; A
+    mov si, char_A_small
+    call draw_char_small
+    ; M
+    mov si, char_M_small
+    call draw_char_small
+    ; :
+    mov si, char_colon_small
+    call draw_char_small
+
+    ; Draw total RAM value (from mem_kb)
+    mov ax, [mem_kb]
+    mov word [draw_x], 254
+    call draw_number_small
+
+    ; K
+    mov si, char_K_small
+    call draw_char_small
+
+    ; Next line: "Used:"
+    mov word [draw_x], 224
+    add word [draw_y], 8
+
+    ; U
+    mov si, char_U_small
+    call draw_char_small
+    ; s
+    mov si, char_s_small
+    call draw_char_small
+    ; e
+    mov si, char_e_small
+    call draw_char_small
+    ; d
+    mov si, char_d_small
+    call draw_char_small
+    ; :
+    mov si, char_colon_small
+    call draw_char_small
+
+    ; Calculate used memory (stage2 loaded at 0x8000, size ~8KB + boot sector)
+    ; For now, estimate: boot sector (512) + stage2 (~8KB) + stack (~1KB) = ~10KB
+    mov ax, 10
+    mov word [draw_x], 254
+    call draw_number_small
+
+    ; K
+    mov si, char_K_small
+    call draw_char_small
+
+    ; Next line: "Free:"
+    mov word [draw_x], 224
+    add word [draw_y], 8
+
+    ; F
+    mov si, char_F_small
+    call draw_char_small
+    ; r
+    mov si, char_r_small
+    call draw_char_small
+    ; e
+    mov si, char_e_small
+    call draw_char_small
+    ; e
+    mov si, char_e_small
+    call draw_char_small
+    ; :
+    mov si, char_colon_small
+    call draw_char_small
+
+    ; Calculate free memory (total - used)
+    mov ax, [mem_kb]
+    sub ax, 10              ; Subtract used (~10KB)
+    mov word [draw_x], 254
+    call draw_number_small
+
+    ; K
+    mov si, char_K_small
+    call draw_char_small
+
+    ret
+
+; Draw a number using small font (AX = number to draw)
+; Draws right-aligned at current draw_x position
+draw_number_small:
+    pusha
+
+    ; Convert number to digits and store on stack
+    mov bx, 10
+    xor cx, cx              ; Digit counter
+
+.divide_loop:
+    xor dx, dx
+    div bx                  ; AX = AX / 10, DX = remainder
+    push dx                 ; Save digit
+    inc cx
+    test ax, ax
+    jnz .divide_loop
+
+    ; Now print digits from stack
+.print_loop:
+    pop ax                  ; Get digit (0-9)
+
+    ; Calculate address of digit character
+    mov bx, 6               ; Each small char is 6 bytes
+    mul bx                  ; AX = digit * 6
+    add ax, char_0_small    ; Add base address
+    mov si, ax
+
+    call draw_char_small
+    loop .print_loop
+
+    popa
     ret
 
 ; Plot a white pixel (color 3)
@@ -613,7 +742,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.0.0          ', 0, 0, 0, 0
+version_text:   db '        v3.0.1          ', 0, 0, 0, 0
 
 ; 8x8 character bitmaps (1 = pixel on)
 char_H:
@@ -775,6 +904,31 @@ char_v_small:
     db 0b01100000
     db 0b01100000
 
+; Small digits 0-9 (must be contiguous for draw_number_small)
+char_0_small:
+    db 0b01100000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b01100000
+
+char_1_small:
+    db 0b00100000
+    db 0b01100000
+    db 0b00100000
+    db 0b00100000
+    db 0b00100000
+    db 0b01110000
+
+char_2_small:
+    db 0b01100000
+    db 0b10010000
+    db 0b00100000
+    db 0b01000000
+    db 0b10000000
+    db 0b11110000
+
 char_3_small:
     db 0b11100000
     db 0b00010000
@@ -783,12 +937,52 @@ char_3_small:
     db 0b00010000
     db 0b11100000
 
-char_0_small:
+char_4_small:
+    db 0b10010000
+    db 0b10010000
+    db 0b11110000
+    db 0b00010000
+    db 0b00010000
+    db 0b00010000
+
+char_5_small:
+    db 0b11110000
+    db 0b10000000
+    db 0b11100000
+    db 0b00010000
+    db 0b00010000
+    db 0b11100000
+
+char_6_small:
+    db 0b01100000
+    db 0b10000000
+    db 0b11100000
+    db 0b10010000
+    db 0b10010000
+    db 0b01100000
+
+char_7_small:
+    db 0b11110000
+    db 0b00010000
+    db 0b00100000
+    db 0b01000000
+    db 0b01000000
+    db 0b01000000
+
+char_8_small:
+    db 0b01100000
+    db 0b10010000
     db 0b01100000
     db 0b10010000
     db 0b10010000
+    db 0b01100000
+
+char_9_small:
+    db 0b01100000
     db 0b10010000
     db 0b10010000
+    db 0b01110000
+    db 0b00010000
     db 0b01100000
 
 char_dot_small:
@@ -798,6 +992,95 @@ char_dot_small:
     db 0b00000000
     db 0b01100000
     db 0b01100000
+
+; Small letters for RAM display
+char_R_small:
+    db 0b11100000
+    db 0b10010000
+    db 0b11100000
+    db 0b10100000
+    db 0b10010000
+    db 0b10010000
+
+char_A_small:
+    db 0b01100000
+    db 0b10010000
+    db 0b10010000
+    db 0b11110000
+    db 0b10010000
+    db 0b10010000
+
+char_M_small:
+    db 0b10010000
+    db 0b11110000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+
+char_colon_small:
+    db 0b00000000
+    db 0b01100000
+    db 0b00000000
+    db 0b00000000
+    db 0b01100000
+    db 0b00000000
+
+char_K_small:
+    db 0b10010000
+    db 0b10100000
+    db 0b11000000
+    db 0b10100000
+    db 0b10010000
+    db 0b10010000
+
+char_U_small:
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b10010000
+    db 0b01100000
+
+char_s_small:
+    db 0b00000000
+    db 0b01110000
+    db 0b10000000
+    db 0b01100000
+    db 0b00010000
+    db 0b11100000
+
+char_e_small:
+    db 0b00000000
+    db 0b01100000
+    db 0b10010000
+    db 0b11110000
+    db 0b10000000
+    db 0b01100000
+
+char_d_small:
+    db 0b00010000
+    db 0b00010000
+    db 0b01110000
+    db 0b10010000
+    db 0b10010000
+    db 0b01110000
+
+char_F_small:
+    db 0b11110000
+    db 0b10000000
+    db 0b11100000
+    db 0b10000000
+    db 0b10000000
+    db 0b10000000
+
+char_r_small:
+    db 0b00000000
+    db 0b10110000
+    db 0b11000000
+    db 0b10000000
+    db 0b10000000
+    db 0b10000000
 
 ; ============================================================================
 ; Padding
