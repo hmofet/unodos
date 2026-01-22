@@ -519,49 +519,49 @@ draw_clock:
     mov al, '4'
     call draw_ascii_4x6
 
-    ; DEBUG: Draw row markers at different Y positions to find visible range
-    ; Each marker is a single digit showing Y/10
+    ; DEBUG: Draw X position markers at Y=95 to find visible X range
+    ; Each marker shows X/50: 0,1,2,3,4,5,6 at X=0,50,100,150,200,250,300
 
-    ; Y=50 marker "5" (at left edge of box)
-    mov word [draw_x], 4
-    mov word [draw_y], 50
+    ; X=0 marker "0"
+    mov word [draw_x], 0
+    mov word [draw_y], 95
+    mov al, '0'
+    call draw_ascii_4x6
+
+    ; X=50 marker "1"
+    mov word [draw_x], 50
+    mov word [draw_y], 95
+    mov al, '1'
+    call draw_ascii_4x6
+
+    ; X=100 marker "2"
+    mov word [draw_x], 100
+    mov word [draw_y], 95
+    mov al, '2'
+    call draw_ascii_4x6
+
+    ; X=150 marker "3"
+    mov word [draw_x], 150
+    mov word [draw_y], 95
+    mov al, '3'
+    call draw_ascii_4x6
+
+    ; X=200 marker "4"
+    mov word [draw_x], 200
+    mov word [draw_y], 95
+    mov al, '4'
+    call draw_ascii_4x6
+
+    ; X=250 marker "5"
+    mov word [draw_x], 250
+    mov word [draw_y], 95
     mov al, '5'
     call draw_ascii_4x6
 
-    ; Y=60 marker "6"
-    mov word [draw_x], 4
-    mov word [draw_y], 60
+    ; X=300 marker "6"
+    mov word [draw_x], 300
+    mov word [draw_y], 95
     mov al, '6'
-    call draw_ascii_4x6
-
-    ; Y=70 marker "7"
-    mov word [draw_x], 4
-    mov word [draw_y], 70
-    mov al, '7'
-    call draw_ascii_4x6
-
-    ; Y=80 marker "8"
-    mov word [draw_x], 4
-    mov word [draw_y], 80
-    mov al, '8'
-    call draw_ascii_4x6
-
-    ; Y=90 marker "9"
-    mov word [draw_x], 4
-    mov word [draw_y], 90
-    mov al, '9'
-    call draw_ascii_4x6
-
-    ; Y=100 marker "A" (hex for 10)
-    mov word [draw_x], 4
-    mov word [draw_y], 100
-    mov al, 'A'
-    call draw_ascii_4x6
-
-    ; Y=110 marker "B"
-    mov word [draw_x], 4
-    mov word [draw_y], 110
-    mov al, 'B'
     call draw_ascii_4x6
 
     popa
