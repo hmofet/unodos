@@ -682,11 +682,8 @@ char_demo_loop:
     mov al, [demo_char]
     call draw_ascii_4x6
 
-    ; Small delay between characters for visual effect
-    mov cx, 8
-.char_delay:
+    ; Delay between characters for visual effect (one long delay)
     call delay_short
-    loop .char_delay
 
     ; Next character
     inc byte [demo_char]
@@ -696,7 +693,7 @@ char_demo_loop:
     jb .draw_next_char
 
     ; All characters displayed - pause before clearing
-    mov cx, 60
+    mov cx, 10
 .pause_delay:
     call draw_clock         ; Keep updating clock during pause
     call delay_short
@@ -750,14 +747,21 @@ clear_demo_area:
     popa
     ret
 
-; Short delay loop
+; Short delay loop - tuned for 486 with slow DSTN display
 delay_short:
     pusha
-    mov cx, 0x1000
-.loop:
+    mov cx, 0xFFFF          ; Outer loop: 65535 iterations
+.outer:
+    push cx
+    mov cx, 0x0040          ; Inner loop: 64 iterations
+.inner:
     nop
     nop
-    loop .loop
+    nop
+    nop
+    loop .inner
+    pop cx
+    loop .outer
     popa
     ret
 
