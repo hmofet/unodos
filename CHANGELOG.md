@@ -5,6 +5,15 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-01-22
+
+### Fixed
+- Graphics corruption bug: BIOS teletype output (INT 10h AH=0Eh) was being
+  called after switching to CGA graphics mode, causing text to render as
+  stray pixels in the top-left corner of the screen
+- Removed post-graphics print_string call that caused the corruption
+- Hello World graphics now display correctly with no stray pixels
+
 ## [0.2.3] - 2026-01-22
 
 ### Added

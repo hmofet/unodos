@@ -33,8 +33,7 @@ entry:
     call setup_graphics
 
     ; Main loop - system is running
-    mov si, msg_running
-    call print_string
+    ; NOTE: Can't use print_string after graphics mode - it writes to screen!
 
 .idle:
     hlt
@@ -124,13 +123,22 @@ setup_graphics:
     ret
 
 .cga_mode:
-    mov si, msg_cga_gfx
-    call print_string
-
     ; Set CGA 320x200 4-color mode (mode 4)
     mov ah, 0x00
     mov al, 0x04            ; 320x200, 4 colors
     int 0x10
+
+    ; Clear all CGA video memory explicitly
+    ; Mode 4 uses 0xB800:0000-0x3FFF (16KB)
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    xor di, di
+    xor ax, ax              ; Fill with 0 (background color)
+    mov cx, 8192            ; 16KB / 2 = 8192 words
+    cld
+    rep stosw
+    pop es
 
     ; Select color palette (cyan/magenta/white)
     mov ah, 0x0B
@@ -198,7 +206,7 @@ draw_hello_text:
     mov ah, 0x0F
     stosw
 
-    ; "UnoDOS v0.2.0" centered
+    ; "UnoDOS v0.2.4" centered
     mov di, (12 * 160) + (25 * 2)
     mov al, 0xB3
     mov ah, 0x0F
@@ -254,13 +262,6 @@ draw_hello_gfx:
     mov ax, 0xB800
     mov es, ax
 
-    ; CGA 320x200 mode uses interleaved memory:
-    ; Even lines: 0xB800:0000
-    ; Odd lines:  0xB800:2000
-
-    ; Draw a border rectangle
-    ; Using color 3 (white in palette 1)
-
     ; Draw top border (y=50, x=60 to x=260)
     mov bx, 50              ; Y coordinate
     mov cx, 60              ; Start X
@@ -299,7 +300,6 @@ draw_hello_gfx:
 
     ; Draw "HELLO" text using simple bitmap font
     ; Each letter is 8x8 pixels, starting at x=100, y=80
-
     mov word [draw_x], 100
     mov word [draw_y], 80
 
@@ -354,37 +354,41 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
+.skip_text:
     pop es
     ret
 
 ; Plot a white pixel (color 3)
 ; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
+; Preserves all registers
 plot_pixel_white:
-    push ax
-    push di
-    push bx
-    push cx
+    pusha                   ; Save all general registers
+
+    ; Save input values to temp storage
+    mov [.save_x], cx
+    mov [.save_y], bx
 
     ; Calculate memory address
     ; For CGA 320x200 4-color:
     ; Byte offset = (Y/2) * 80 + (X/4)
     ; If Y is odd, add 0x2000
 
-    mov ax, bx              ; Y coordinate
-    test al, 1              ; Check if odd
-    pushf                   ; Save flags
-    shr ax, 1               ; Y / 2
-    mov di, 80
-    mul di                  ; AX = (Y/2) * 80
-
+    ; Calculate row offset
+    mov ax, bx              ; AX = Y
+    shr ax, 1               ; AX = Y / 2
+    mov cx, 80
+    mul cx                  ; AX = (Y/2) * 80, DX = high word (ignored)
     mov di, ax              ; DI = row offset
 
-    mov ax, cx              ; X coordinate
+    ; Add column offset
+    mov ax, [.save_x]       ; AX = X
     shr ax, 1
-    shr ax, 1               ; X / 4
+    shr ax, 1               ; AX = X / 4
     add di, ax              ; DI = byte offset
 
-    popf                    ; Restore odd/even flag
+    ; Check if Y was odd
+    mov ax, [.save_y]
+    test al, 1
     jz .even_row
     add di, 0x2000          ; Odd rows are in second bank
 .even_row:
@@ -392,77 +396,66 @@ plot_pixel_white:
     ; Calculate bit position within byte
     ; Each pixel is 2 bits, 4 pixels per byte
     ; Pixel 0 is bits 7-6, pixel 1 is bits 5-4, etc.
-    mov ax, cx
+    mov ax, [.save_x]       ; AX = X
     and ax, 3               ; Get pixel position (0-3)
 
     ; Calculate shift amount: (3 - position) * 2
-    mov cl, 3
+    mov cx, 3
     sub cl, al
-    shl cl, 1               ; Shift amount
+    shl cl, 1               ; Shift amount in CL
 
     ; Read current byte, set our pixel to white (11b)
     mov al, [es:di]
     mov ah, 0x03            ; Color 3 (white)
     shl ah, cl              ; Shift color to correct position
 
-    ; Create mask to clear old pixel
-    mov ch, 0xFC            ; 11111100b
-    rol ch, cl              ; Rotate mask to correct position
-    ; Actually we need inverse: clear the 2 bits
-    mov ch, 0x03
-    shl ch, cl
-    not ch                  ; Now CH has 0s where we want to write
+    ; Create mask to clear old pixel (2 bits at position)
+    mov bl, 0x03
+    shl bl, cl
+    not bl                  ; Now BL has 0s where we want to write
 
-    and al, ch              ; Clear old pixel
+    and al, bl              ; Clear old pixel
     or al, ah               ; Set new pixel
     mov [es:di], al
 
-    pop cx
-    pop bx
-    pop di
-    pop ax
+    popa                    ; Restore all general registers
     ret
+
+.save_x: dw 0
+.save_y: dw 0
 
 ; Draw 8x8 character
 ; Input: SI = pointer to 8-byte character bitmap
 ;        draw_x, draw_y = top-left position
 draw_char:
-    push ax
-    push bx
-    push cx
-    push dx
+    pusha                   ; Save all registers
 
-    mov dx, 8               ; 8 rows
-    mov bx, [draw_y]
+    mov bx, [draw_y]        ; BX = current Y
+    mov bp, 8               ; BP = row counter
 
 .row_loop:
-    lodsb                   ; Get row bitmap
-    mov ah, al
-    mov cx, [draw_x]
-    push cx
+    lodsb                   ; Get row bitmap into AL
+    mov ah, al              ; AH = bitmap for this row
+    mov cx, [draw_x]        ; CX = current X
+    mov dx, 8               ; DX = column counter
 
-    mov al, 8               ; 8 columns
 .col_loop:
     test ah, 0x80           ; Check leftmost bit
     jz .skip_pixel
-    call plot_pixel_white
+    call plot_pixel_white   ; Plot at (CX, BX)
 .skip_pixel:
     shl ah, 1               ; Next bit
     inc cx                  ; Next X
-    dec al
+    dec dx                  ; Decrement column counter
     jnz .col_loop
 
-    pop cx                  ; Restore X
     inc bx                  ; Next Y
-    dec dx
+    dec bp                  ; Decrement row counter
     jnz .row_loop
 
     add word [draw_x], 12   ; Advance to next character position
 
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    popa                    ; Restore all registers
     ret
 
 ; ============================================================================
@@ -548,7 +541,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '      HELLO WORLD!      ', 0, 0, 0, 0
-version_text:   db '      UnoDOS v0.2.0     ', 0, 0, 0, 0
+version_text:   db '      UnoDOS v0.2.4     ', 0, 0, 0, 0
 
 ; 8x8 character bitmaps (1 = pixel on)
 char_H:
