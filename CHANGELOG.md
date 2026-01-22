@@ -5,6 +5,16 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-01-22
+
+### Added
+- RAM status display in bottom right corner of screen
+  - Shows total RAM (from BIOS INT 12h)
+  - Shows estimated used memory (~10K for boot code)
+  - Shows free memory (total - used)
+- New 4x6 small character bitmaps: digits 1-9, R, A, M, K, U, F, s, e, d, r, colon
+- draw_number_small function for rendering numbers with small font
+
 ## [3.0.0] - 2026-01-22
 
 ### Changed
