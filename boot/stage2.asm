@@ -620,10 +620,10 @@ rtc_seconds:    db 0
 ; Character Demo - Cycles through all ASCII characters
 ; ============================================================================
 
-; Demo area: y=120 (below version at Y=106, inside box which ends at Y=150)
+; Demo area: y=95 (between "UNODOS 3!" at Y=86 and version at Y=106)
 ; Using 4x6 font, can fit ~53 chars per row (320 / 6 = 53)
 DEMO_START_X    equ 65
-DEMO_START_Y    equ 120
+DEMO_START_Y    equ 95
 DEMO_CHAR_WIDTH equ 6
 DEMO_CHARS_PER_ROW equ 52
 
@@ -692,7 +692,7 @@ char_demo_loop:
 
     ret
 
-; Clear the demo area (inside white box, below version)
+; Clear the demo area (inside white box, between text lines)
 clear_demo_area:
     pusha
     push es
@@ -700,14 +700,14 @@ clear_demo_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clear even scanlines (y=120-125, CGA uses y/2)
-    ; y=120: row 60, y=125: row 62
+    ; Clear even scanlines (y=95-100, CGA uses y/2)
+    ; y=95: row 47, y=100: row 50
     ; Even rows start at offset = row * 80
     ; Only clear inside box area (x=65 to x=255, ~190 pixels = 48 bytes)
     ; Starting at x=65: byte offset = 65/4 = 16
 
-    ; Clear rows 60-62 in even bank
-    mov di, 60 * 80 + 16    ; Start at row 60, x=64
+    ; Clear rows 47-49 in even bank
+    mov di, 47 * 80 + 16    ; Start at row 47, x=64
     mov cx, 3               ; 3 rows
 .clear_even:
     push cx
@@ -721,7 +721,7 @@ clear_demo_area:
     loop .clear_even
 
     ; Clear odd scanlines (add 0x2000)
-    mov di, 60 * 80 + 16 + 0x2000
+    mov di, 47 * 80 + 16 + 0x2000
     mov cx, 3
 .clear_odd:
     push cx
