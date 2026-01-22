@@ -364,7 +364,7 @@ draw_hello_gfx:
     mov si, char_excl
     call draw_char
 
-    ; Draw version "v3.1.2" in smaller text (4x6 font)
+    ; Draw version "v3.1.3" in smaller text (4x6 font)
     ; Centered below main text
     mov word [draw_x], 136
     add word [draw_y], 20
@@ -643,10 +643,10 @@ rtc_seconds:    db 0
 ; Character Demo - Cycles through all ASCII characters
 ; ============================================================================
 
-; Demo area: y=160-175 (bottom of screen, below welcome box)
+; Demo area: y=130-135 (below welcome box, safe for real hardware overscan)
 ; Using 4x6 font, can fit ~53 chars per row (320 / 6 = 53)
 DEMO_START_X    equ 4
-DEMO_START_Y    equ 165
+DEMO_START_Y    equ 130
 DEMO_CHAR_WIDTH equ 6
 DEMO_CHARS_PER_ROW equ 52
 
@@ -694,7 +694,7 @@ char_demo_loop:
     ; Loop back to start
     jmp .cycle_start
 
-; Clear the demo area (bottom strip of screen)
+; Clear the demo area (strip below welcome message)
 clear_demo_area:
     pusha
     push es
@@ -702,20 +702,20 @@ clear_demo_area:
     mov ax, 0xB800
     mov es, ax
 
-    ; Clear even scanlines (y=165-175, but CGA uses y/2)
-    ; y=165: row 82-83, y=175: row 87-88
+    ; Clear even scanlines (y=130-135, CGA uses y/2)
+    ; y=130: row 65, y=135: row 67
     ; Even rows start at offset = row * 80
 
-    ; Clear rows 82-87 in even bank (6 rows * 80 bytes = 480 bytes)
-    mov di, 82 * 80         ; Start at row 82
-    mov cx, 6 * 80 / 2      ; 6 rows, 80 bytes each, 2 bytes per word
+    ; Clear rows 65-67 in even bank (3 rows * 80 bytes = 240 bytes)
+    mov di, 65 * 80         ; Start at row 65
+    mov cx, 3 * 80 / 2      ; 3 rows, 80 bytes each, 2 bytes per word
     xor ax, ax              ; Clear to background color
     cld
     rep stosw
 
     ; Clear odd scanlines (add 0x2000)
-    mov di, 82 * 80 + 0x2000
-    mov cx, 6 * 80 / 2
+    mov di, 65 * 80 + 0x2000
+    mov cx, 3 * 80 / 2
     xor ax, ax
     rep stosw
 
@@ -1117,7 +1117,7 @@ msg_running:    db 'UnoDOS running!', 0x0D, 0x0A, 0
 
 ; Text for MDA display
 hello_text:     db '   Welcome to UnoDOS 3! ', 0, 0, 0, 0
-version_text:   db '        v3.1.2          ', 0, 0, 0, 0
+version_text:   db '        v3.1.3          ', 0, 0, 0, 0
 
 ; ============================================================================
 ; Font Data - Complete ASCII Character Sets
