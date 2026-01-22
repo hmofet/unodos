@@ -112,71 +112,11 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Draw "WELCOME TO" text (8x8 font, 12 pixels per char with spacing)
-    ; 10 chars * 12 = 120 pixels, centered: start at x = 160 - 60 = 100
-    ; But "WELCOME TO" is 10 chars, so x = (320 - 10*12)/2 + 60 = 76 inside box
-    mov word [draw_x], 76
-    mov word [draw_y], 70
+    ; Test: Draw just "W" to verify font rendering works
+    mov word [draw_x], 100
+    mov word [draw_y], 80
 
-    ; W
     mov si, char_W
-    call draw_char
-    ; E
-    mov si, char_E
-    call draw_char
-    ; L
-    mov si, char_L
-    call draw_char
-    ; C
-    mov si, char_C
-    call draw_char
-    ; O
-    mov si, char_O
-    call draw_char
-    ; M
-    mov si, char_M
-    call draw_char
-    ; E
-    mov si, char_E
-    call draw_char
-    ; Space
-    add word [draw_x], 12
-    ; T
-    mov si, char_T
-    call draw_char
-    ; O
-    mov si, char_O
-    call draw_char
-
-    ; Draw "UNODOS 3!" on second line
-    mov word [draw_x], 88
-    add word [draw_y], 16
-
-    ; U
-    mov si, char_U
-    call draw_char
-    ; N
-    mov si, char_N
-    call draw_char
-    ; O
-    mov si, char_O
-    call draw_char
-    ; D
-    mov si, char_D
-    call draw_char
-    ; O
-    mov si, char_O
-    call draw_char
-    ; S
-    mov si, char_S
-    call draw_char
-    ; Space
-    add word [draw_x], 12
-    ; 3
-    mov si, char_3
-    call draw_char
-    ; !
-    mov si, char_excl
     call draw_char
 
     pop es

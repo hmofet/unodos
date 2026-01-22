@@ -111,20 +111,36 @@ unodos/
 
 ## Versioning (IMPORTANT)
 
-This project uses a modified **Semantic Versioning** (3.MINOR.PATCH.HOTFIX):
+This project maintains **separate version numbers** for the bootloader and kernel:
 
-**CRITICAL: The MAJOR version is permanently fixed at 3** ("Uno dos tres" - Spanish for 1, 2, 3). Never increment the major version without explicit user request.
+- **Bootloader version**: `boot/VERSION` - For boot.asm and stage2.asm changes
+- **Kernel version**: `kernel/VERSION` - For kernel.asm changes
+- **Changelogs**: `boot/CHANGELOG.md` and `kernel/CHANGELOG.md`
 
-- **MAJOR (3)**: Fixed at 3 - do NOT increment
-- **MINOR**: Treat as major - increment for breaking changes, major new features, architectural changes
+### Version Format
+
+Uses **Semantic Versioning** (MAJOR.MINOR.PATCH.HOTFIX):
+
+**Bootloader:** Standard semver - can go above major version 3
+
+**Kernel:** MAJOR version permanently fixed at 3 ("Uno dos tres" - Spanish for 1, 2, 3). Never increment kernel major version without explicit user request.
+
+- **MAJOR**: Bootloader can increment; Kernel fixed at 3
+- **MINOR**: Treat as major for kernel - increment for breaking changes, major new features, architectural changes
 - **PATCH**: New features, bug fixes, improvements
 - **HOTFIX** (optional): Small bug fixes, typos, minor corrections
 
-**Claude MUST do the following with EVERY code change:**
+### Claude MUST do the following with code changes:
 
-1. **Update VERSION file** - Increment the appropriate version number
-2. **Update CHANGELOG.md** - Add an entry documenting the changes
-3. **Use versioned commit message** - Format: `vX.Y.Z: summary of change`
+**For bootloader changes (boot.asm, stage2.asm):**
+1. Update `boot/VERSION`
+2. Update `boot/CHANGELOG.md`
+
+**For kernel changes (kernel.asm):**
+1. Update `kernel/VERSION`
+2. Update `kernel/CHANGELOG.md`
+
+**Commit message format:** `[boot|kernel] vX.Y.Z: summary of change`
 
 ---
 
