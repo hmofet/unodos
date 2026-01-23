@@ -112,17 +112,16 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Can '=' and '>' render on their own?
+    ; Test: Use hardcoded '=' instead of font data
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; Skip '9' and ':' - test if '=' and '>' work when called first
-    ; Character '=' at offset (61-32)*8 = 232
-    mov si, char_eq
+    ; Test with hardcoded '=' data (not from font)
+    mov si, test_eq_char
     call draw_char
 
-    ; Character '>' at offset (62-32)*8 = 240
-    mov si, char_gt
+    ; Test '9' from font (known to work)
+    mov si, char_9
     call draw_char
 
     pop es
@@ -137,6 +136,17 @@ test_W_char:
     db 0b01111111
     db 0b01110111
     db 0b01100011
+    db 0b00000000
+
+; Hardcoded '=' character for testing
+test_eq_char:
+    db 0b00000000
+    db 0b00000000
+    db 0b01111110
+    db 0b00000000
+    db 0b01111110
+    db 0b00000000
+    db 0b00000000
     db 0b00000000
 
 ; ============================================================================
