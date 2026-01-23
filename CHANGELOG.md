@@ -5,6 +5,33 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] - 2026-01-23
+
+### Changed
+- **Aggressive Kernel Optimization (Pre-Foundation 1.4/1.5)**
+  - Removed test functions (test_int_80, test_graphics_api): ~200 bytes freed
+  - Removed 21 character alias definitions (char_W, char_E, etc.)
+  - Optimized all graphics API functions: replaced pusha/popa with targeted register saves
+  - Optimized gfx_draw_rect_stub: eliminated ~80 bytes of redundant push/pop operations
+  - Optimized plot_pixel_white: removed variable storage (pixel_save_x/y), stack-only implementation
+  - Optimized setup_graphics: tighter BIOS call sequence
+  - Optimized install_int_80: minimal register preservation
+  - Welcome message now uses gfx_draw_string (string-based) instead of individual char draws
+
+### Technical Details
+- Kernel code: 2436 → 2416 bytes (20 bytes from optimization, ~200 from removal)
+- Total space gained: ~220 bytes
+- Available in 24KB kernel: **22,160 bytes** (sufficient for Foundation 1.4 + 1.5 + future features)
+- Removed variables: pixel_save_x, pixel_save_y
+- Removed test chars: test_W_char, test_eq_char
+- Optimized functions maintain identical behavior, purely size/speed improvements
+
+### Rationale
+- Maximize space for Foundation 1.4 (Keyboard Driver ~800B) and 1.5 (Event System ~400B)
+- Eliminate production overhead from debug/test code
+- Optimize frequently-called graphics primitives
+- Prepare for remaining Foundation Layer implementation
+
 ## [3.6.0] - 2026-01-23
 
 ### Changed

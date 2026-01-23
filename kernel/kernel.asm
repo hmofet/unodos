@@ -27,12 +27,6 @@ entry:
     ; Draw welcome box with text
     call draw_welcome_box
 
-    ; Test INT 0x80 discovery mechanism
-    call test_int_80
-
-    ; Test graphics API functions
-    call test_graphics_api
-
     ; Halt
 halt_loop:
     hlt
@@ -43,25 +37,13 @@ halt_loop:
 ; ============================================================================
 
 ; Install INT 0x80 handler for system call discovery
-; Modifies: AX, BX, ES (temporarily)
 install_int_80:
-    pusha
-    push ds
-
-    ; Point to IVT at 0x0000:0000
+    push es
     xor ax, ax
     mov es, ax
-
-    ; Calculate IVT offset: 0x80 * 4 = 0x200
-    mov bx, 0x0200
-
-    ; Install handler offset
-    mov word [es:bx], int_80_handler
-    ; Install handler segment
-    mov word [es:bx+2], 0x1000
-
-    pop ds
-    popa
+    mov word [es:0x0200], int_80_handler
+    mov word [es:0x0202], 0x1000
+    pop es
     ret
 
 ; INT 0x80 Handler - System Call Discovery
@@ -84,155 +66,27 @@ int_80_handler:
     stc                             ; Set carry flag for error
     iret
 
-; Test INT 0x80 Discovery Mechanism
-; Calls INT 0x80, verifies API table, displays status
-test_int_80:
-    pusha
-    push ds
-    push es
-
-    ; Call INT 0x80 to get API table
-    mov ax, 0x0000
-    int 0x80
-
-    ; ES:BX now points to kernel_api_table
-    ; Verify magic number
-    cmp word [es:bx], 0x4B41        ; Check for 'KA'
-    jne .test_failed
-
-    ; Success - display checkmark at bottom right
-    mov word [draw_x], 290
-    mov word [draw_y], 185
-
-    ; Draw checkmark character (using 'OK' for now)
-    push es
-    mov ax, 0xB800
-    mov es, ax
-
-    mov si, char_O
-    call draw_char
-    mov si, char_K
-    call draw_char
-
-    pop es
-    jmp .test_done
-
-.test_failed:
-    ; Failure - display 'XX' at bottom right
-    mov word [draw_x], 290
-    mov word [draw_y], 185
-
-    push es
-    mov ax, 0xB800
-    mov es, ax
-
-    mov si, char_X
-    call draw_char
-    mov si, char_X
-    call draw_char
-
-    pop es
-
-.test_done:
-    pop es
-    pop ds
-    popa
-    ret
-
-; Test Graphics API Functions
-; Demonstrates all graphics API functions visually
-test_graphics_api:
-    pusha
-    push es
-
-    ; Set up video memory
-    mov ax, 0xB800
-    mov es, ax
-
-    ; Test 1: Draw filled rectangle (below welcome box)
-    ; Position: X=20, Y=160, Width=60, Height=30
-    mov bx, 20                      ; X
-    mov cx, 160                     ; Y
-    mov dx, 60                      ; Width
-    mov si, 30                      ; Height
-    call gfx_draw_filled_rect_stub
-
-    ; Test 2: Draw rectangle outline next to it
-    ; Position: X=90, Y=160, Width=60, Height=30
-    mov bx, 90                      ; X
-    mov cx, 160                     ; Y
-    mov dx, 60                      ; Width
-    mov si, 30                      ; Height
-    call gfx_draw_rect_stub
-
-    ; Test 3: Draw small filled rectangle (indicator)
-    ; Position: X=160, Y=165, Width=10, Height=10
-    mov bx, 160                     ; X
-    mov cx, 165                     ; Y
-    mov dx, 10                      ; Width
-    mov si, 10                      ; Height
-    call gfx_draw_filled_rect_stub
-
-    ; Test 4: Draw text using gfx_draw_string
-    ; Position: X=180, Y=165, String="API"
-    mov bx, 180                     ; X
-    mov cx, 165                     ; Y
-    mov si, .test_string
-    call gfx_draw_string_stub
-
-    ; Test 5: Draw individual characters using gfx_draw_char
-    ; Position: X=220, Y=165, Characters "OK"
-    mov bx, 220                     ; X
-    mov cx, 165                     ; Y
-    mov al, 'O'
-    call gfx_draw_char_stub
-
-    mov bx, 232                     ; X (12 pixels spacing)
-    mov cx, 165                     ; Y
-    mov al, 'K'
-    call gfx_draw_char_stub
-
-    pop es
-    popa
-    ret
-
-.test_string:
-    db 'API', 0
-
 ; ============================================================================
 ; Graphics Setup
 ; ============================================================================
 
 setup_graphics:
-    ; Set CGA 320x200 4-color mode (mode 4)
-    mov ah, 0x00
-    mov al, 0x04                    ; 320x200, 4 colors
+    xor ax, ax
+    mov al, 0x04
     int 0x10
-
-    ; Clear all CGA video memory explicitly
-    ; Mode 4 uses 0xB800:0000-0x3FFF (16KB)
     push es
     mov ax, 0xB800
     mov es, ax
     xor di, di
-    xor ax, ax                      ; Fill with 0 (background color)
-    mov cx, 8192                    ; 16KB / 2 = 8192 words
-    cld
+    xor ax, ax
+    mov cx, 8192
     rep stosw
     pop es
-
-    ; Select color palette (cyan/magenta/white)
-    mov ah, 0x0B
-    mov bh, 0x01                    ; Palette select
-    mov bl, 0x01                    ; Palette 1 (cyan, magenta, white)
+    mov ax, 0x0B01
+    mov bx, 0x0101
     int 0x10
-
-    ; Set background/border color to blue
-    mov ah, 0x0B
-    mov bh, 0x00                    ; Background color
-    mov bl, 0x01                    ; Blue background
+    mov bh, 0
     int 0x10
-
     ret
 
 ; ============================================================================
@@ -282,84 +136,28 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Render "WELCOME TO UNODOS 3!" message
-    ; All these characters are at offsets 0-200 (working range)
-    mov word [draw_x], 70
-    mov word [draw_y], 85
+    ; Render "WELCOME TO UNODOS 3!" message using strings
+    mov bx, 70
+    mov cx, 85
+    mov si, .msg1
+    call gfx_draw_string_stub
 
-    mov si, char_W
-    call draw_char
-    mov si, char_E
-    call draw_char
-    mov si, char_L
-    call draw_char
-    mov si, char_C
-    call draw_char
-    mov si, char_O
-    call draw_char
-    mov si, char_M
-    call draw_char
-    mov si, char_E
-    call draw_char
+    mov bx, 70
+    mov cx, 100
+    mov si, .msg2
+    call gfx_draw_string_stub
 
-    ; Space
-    mov word [draw_x], 70
-    mov word [draw_y], 100
-
-    mov si, char_T
-    call draw_char
-    mov si, char_O
-    call draw_char
-
-    ; Space and next line
-    mov word [draw_x], 70
-    mov word [draw_y], 115
-
-    mov si, char_U
-    call draw_char
-    mov si, char_N
-    call draw_char
-    mov si, char_O
-    call draw_char
-    mov si, char_D
-    call draw_char
-    mov si, char_O
-    call draw_char
-    mov si, char_S
-    call draw_char
-
-    ; Space
-    add word [draw_x], 12
-
-    mov si, char_3
-    call draw_char
-    mov si, char_excl
-    call draw_char
+    mov bx, 70
+    mov cx, 115
+    mov si, .msg3
+    call gfx_draw_string_stub
 
     pop es
     ret
 
-; Hardcoded W character for testing (same as font8x8.asm char8_W)
-test_W_char:
-    db 0b01100011
-    db 0b01100011
-    db 0b01100011
-    db 0b01101011
-    db 0b01111111
-    db 0b01110111
-    db 0b01100011
-    db 0b00000000
-
-; Hardcoded '=' character for testing
-test_eq_char:
-    db 0b00000000
-    db 0b00000000
-    db 0b01111110
-    db 0b00000000
-    db 0b01111110
-    db 0b00000000
-    db 0b00000000
-    db 0b00000000
+.msg1: db 'WELCOME', 0
+.msg2: db 'TO', 0
+.msg3: db 'UNODOS 3!', 0
 
 ; ============================================================================
 ; Draw 8x8 character
@@ -406,63 +204,43 @@ draw_char:
 ; ============================================================================
 
 plot_pixel_white:
-    pusha
-
-    ; Save input values
-    mov [pixel_save_x], cx
-    mov [pixel_save_y], bx
-
-    ; Calculate memory address
-    ; For CGA 320x200 4-color:
-    ; Byte offset = (Y/2) * 80 + (X/4)
-    ; If Y is odd, add 0x2000
-
-    ; Calculate row offset
-    mov ax, bx                      ; AX = Y
-    shr ax, 1                       ; AX = Y / 2
-    mov cx, 80
-    mul cx                          ; AX = (Y/2) * 80
-    mov di, ax                      ; DI = row offset
-
-    ; Add column offset
-    mov ax, [pixel_save_x]          ; AX = X
+    push ax
+    push bx
+    push cx
+    push di
+    push dx
+    mov ax, bx
     shr ax, 1
-    shr ax, 1                       ; AX = X / 4
-    add di, ax                      ; DI = byte offset
-
-    ; Check if Y was odd
-    mov ax, [pixel_save_y]
-    test al, 1
-    jz .even_row
-    add di, 0x2000                  ; Odd rows are in second bank
-.even_row:
-
-    ; Calculate bit position within byte
-    ; Each pixel is 2 bits, 4 pixels per byte
-    ; Pixel 0 is bits 7-6, pixel 1 is bits 5-4, etc.
-    mov ax, [pixel_save_x]
-    and ax, 3                       ; Get pixel position (0-3)
-
-    ; Calculate shift amount: (3 - position) * 2
+    mov dx, 80
+    mul dx
+    mov di, ax
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    test bl, 1
+    jz .e
+    add di, 0x2000
+.e:
+    mov ax, cx
+    and ax, 3
     mov cx, 3
     sub cl, al
-    shl cl, 1                       ; Shift amount in CL
-
-    ; Read current byte, set our pixel to white (11b)
+    shl cl, 1
     mov al, [es:di]
-    mov ah, 0x03                    ; Color 3 (white)
-    shl ah, cl                      ; Shift color to correct position
-
-    ; Create mask to clear old pixel
+    mov ah, 0x03
+    shl ah, cl
     mov bl, 0x03
     shl bl, cl
-    not bl                          ; Now BL has 0s where we want to write
-
-    and al, bl                      ; Clear old pixel
-    or al, ah                       ; Set new pixel
+    not bl
+    and al, bl
+    or al, ah
     mov [es:di], al
-
-    popa
+    pop dx
+    pop di
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; ============================================================================
@@ -513,242 +291,150 @@ gfx_draw_pixel_stub:
     ret
 
 ; gfx_draw_char_stub - Draw character
-; Input: BX = X coordinate
-;        CX = Y coordinate
-;        AL = ASCII character
-; Output: None
-; Modifies: draw_x advances by 12
 gfx_draw_char_stub:
-    pusha
     push es
-
-    ; Set up video memory
+    push ax
+    push dx
+    mov word [draw_x], bx
+    mov word [draw_y], cx
     mov dx, 0xB800
     mov es, dx
-
-    ; Set position
-    mov [draw_x], bx
-    mov [draw_y], cx
-
-    ; Calculate font offset: (ASCII - 32) * 8
-    sub al, 32
-    mov ah, 0
-    mov dl, 8
-    mul dl                          ; AX = (ASCII - 32) * 8
-
-    ; Get font address
-    mov si, font_8x8
-    add si, ax
-
-    ; Draw the character
-    call draw_char
-
-    pop es
-    popa
-    ret
-
-; gfx_draw_string_stub - Draw null-terminated string
-; Input: BX = X coordinate
-;        CX = Y coordinate
-;        SI = Pointer to null-terminated string
-; Output: None
-; Modifies: draw_x advances
-gfx_draw_string_stub:
-    pusha
-    push es
-    push ds
-
-    ; Set up video memory
-    mov dx, 0xB800
-    mov es, dx
-
-    ; Set starting position
-    mov [draw_x], bx
-    mov [draw_y], cx
-
-.string_loop:
-    lodsb                           ; Load character from DS:SI
-    test al, al                     ; Check for null terminator
-    jz .string_done
-
-    ; Calculate font offset
     sub al, 32
     mov ah, 0
     mov dl, 8
     mul dl
-
-    ; Get font address
-    push si
     mov si, font_8x8
     add si, ax
-
-    ; Draw character
     call draw_char
-
-    pop si
-    jmp .string_loop
-
-.string_done:
-    pop ds
+    pop dx
+    pop ax
     pop es
-    popa
+    ret
+
+; gfx_draw_string_stub - Draw null-terminated string
+gfx_draw_string_stub:
+    push es
+    push ax
+    push dx
+    push di
+    mov word [draw_x], bx
+    mov word [draw_y], cx
+    mov dx, 0xB800
+    mov es, dx
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    sub al, 32
+    mov ah, 0
+    mov dl, 8
+    mul dl
+    mov di, si
+    mov si, font_8x8
+    add si, ax
+    call draw_char
+    mov si, di
+    jmp .loop
+.done:
+    pop di
+    pop dx
+    pop ax
+    pop es
     ret
 
 ; gfx_draw_rect_stub - Draw rectangle outline
-; Input: BX = X coordinate (top-left)
-;        CX = Y coordinate (top-left)
-;        DX = Width
-;        SI = Height
-; Output: None
-; Preserves: All registers
+; Input: BX = X, CX = Y, DX = Width, SI = Height
 gfx_draw_rect_stub:
-    pusha
     push es
-
-    ; Set up video memory
+    push ax
+    push bp
+    push di
     mov ax, 0xB800
     mov es, ax
+    mov bp, bx                      ; BP = X
+    mov ax, cx                      ; AX = Y
 
-    ; Save parameters
-    push bx                         ; Save X
-    push cx                         ; Save Y
-    push dx                         ; Save Width
-    push si                         ; Save Height
-
-    ; Draw top edge
-    pop si                          ; Restore Height (will push back)
-    pop dx                          ; Restore Width
-    pop cx                          ; Restore Y
-    pop bx                          ; Restore X
-
-    push bx
-    push cx
-    push dx
-    push si
-
-    ; Top edge: Y=CX, X from BX to BX+DX
-    mov di, 0                       ; Counter
-.top_edge:
-    push cx
-    push bx
+    ; Top edge
+    mov di, 0
+.top:
+    mov bx, bp
     add bx, di
+    mov cx, ax
     call plot_pixel_white
-    pop bx
-    pop cx
     inc di
     cmp di, dx
-    jl .top_edge
+    jl .top
 
-    ; Bottom edge: Y=CX+SI-1, X from BX to BX+DX
-    pop si
-    pop dx
-    pop cx
-    pop bx
-
-    push bx
-    push cx
-    push dx
-    push si
-
+    ; Bottom edge
+    mov di, 0
+    mov cx, ax
     add cx, si
-    dec cx                          ; Y = Y + Height - 1
-    mov di, 0
-.bottom_edge:
-    push cx
-    push bx
+    dec cx
+.bottom:
+    mov bx, bp
     add bx, di
     call plot_pixel_white
-    pop bx
-    pop cx
     inc di
     cmp di, dx
-    jl .bottom_edge
+    jl .bottom
 
-    ; Left edge: X=BX, Y from CX to CX+SI
-    pop si
-    pop dx
-    pop cx
-    pop bx
-
-    push bx
-    push cx
-    push dx
-    push si
-
+    ; Left edge
     mov di, 0
-.left_edge:
-    push cx
-    push bx
+    mov bx, bp
+.left:
+    mov cx, ax
     add cx, di
     call plot_pixel_white
-    pop bx
-    pop cx
     inc di
     cmp di, si
-    jl .left_edge
+    jl .left
 
-    ; Right edge: X=BX+DX-1, Y from CX to CX+SI
-    pop si
-    pop dx
-    pop cx
-    pop bx
-
+    ; Right edge
+    mov di, 0
+    mov bx, bp
     add bx, dx
-    dec bx                          ; X = X + Width - 1
-    mov di, 0
-.right_edge:
-    push cx
-    push bx
+    dec bx
+.right:
+    mov cx, ax
     add cx, di
     call plot_pixel_white
-    pop bx
-    pop cx
     inc di
     cmp di, si
-    jl .right_edge
+    jl .right
 
+    pop di
+    pop bp
+    pop ax
     pop es
-    popa
     ret
 
 ; gfx_draw_filled_rect_stub - Draw filled rectangle
-; Input: BX = X coordinate (top-left)
-;        CX = Y coordinate (top-left)
-;        DX = Width
-;        SI = Height
-; Output: None
-; Preserves: All registers
 gfx_draw_filled_rect_stub:
-    pusha
     push es
-
-    ; Set up video memory
+    push ax
+    push bp
+    push di
     mov ax, 0xB800
     mov es, ax
-
-    ; Use BP for height counter, DI for width counter
-    mov bp, si                      ; BP = Height
-    mov ax, cx                      ; AX = Start Y
-
-.row_loop:
-    mov di, dx                      ; DI = Width counter
-    push cx                          ; Save current Y
-    push bx                          ; Save start X
-
-.col_loop:
-    call plot_pixel_white            ; Draw pixel at (BX, CX)
-    inc bx                           ; Next X
+    mov bp, si
+.row:
+    mov di, dx
+    push cx
+    push bx
+.col:
+    call plot_pixel_white
+    inc bx
     dec di
-    jnz .col_loop
-
-    pop bx                           ; Restore start X
-    pop cx                           ; Restore Y
-    inc cx                           ; Next row
+    jnz .col
+    pop bx
+    pop cx
+    inc cx
     dec bp
-    jnz .row_loop
-
+    jnz .row
+    pop di
+    pop bp
+    pop ax
     pop es
-    popa
     ret
 
 ; gfx_clear_area_stub - Clear rectangular area
@@ -903,37 +589,7 @@ event_wait_stub:
 ; Character drawing state
 draw_x: dw 0
 draw_y: dw 0
-
-; plot_pixel_white temporary storage
-pixel_save_x: dw 0
-pixel_save_y: dw 0
-
-; Memory allocator state
 heap_initialized: dw 0
-
-; Character aliases for convenience
-char_W      equ font_8x8 + ('W' - 32) * 8
-char_E      equ font_8x8 + ('E' - 32) * 8
-char_L      equ font_8x8 + ('L' - 32) * 8
-char_C      equ font_8x8 + ('C' - 32) * 8
-char_O      equ font_8x8 + ('O' - 32) * 8
-char_M      equ font_8x8 + ('M' - 32) * 8
-char_T      equ font_8x8 + ('T' - 32) * 8
-char_U      equ font_8x8 + ('U' - 32) * 8
-char_N      equ font_8x8 + ('N' - 32) * 8
-char_D      equ font_8x8 + ('D' - 32) * 8
-char_S      equ font_8x8 + ('S' - 32) * 8
-char_3      equ font_8x8 + ('3' - 32) * 8
-char_excl   equ font_8x8 + ('!' - 32) * 8
-char_K      equ font_8x8 + ('K' - 32) * 8
-char_X      equ font_8x8 + ('X' - 32) * 8
-; Test characters
-char_0      equ font_8x8 + ('0' - 32) * 8
-char_4      equ font_8x8 + ('4' - 32) * 8
-char_9      equ font_8x8 + ('9' - 32) * 8
-char_colon  equ font_8x8 + (':' - 32) * 8
-char_eq     equ font_8x8 + ('=' - 32) * 8
-char_gt     equ font_8x8 + ('>' - 32) * 8
 
 ; ============================================================================
 ; Padding
