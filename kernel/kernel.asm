@@ -289,7 +289,7 @@ test_filesystem:
 
     ; Display instruction to insert test floppy
     mov bx, 10
-    mov cx, 15
+    mov cx, 20
     mov si, .insert_msg
     call gfx_draw_string_stub
 
@@ -301,7 +301,7 @@ test_filesystem:
 
     ; Display "Testing..." message
     mov bx, 10
-    mov cx, 35
+    mov cx, 45
     mov si, .testing_msg
     call gfx_draw_string_stub
 
@@ -319,28 +319,38 @@ test_filesystem:
 
     ; Display mount success
     mov bx, 10
-    mov cx, 50
+    mov cx, 60
     mov si, .mount_ok
     call gfx_draw_string_stub
 
     ; DEBUG: Display first directory entry to verify we can read directory
-    ; Read first directory sector
+    ; Read first directory sector (use calculated root_dir_start, not hardcoded 19!)
     push ax
     push bx
     push cx
     push dx
     push es
-    mov ax, 0x0201                  ; Read 1 sector
+
+    ; Get root directory start sector
+    mov ax, [root_dir_start]
+
+    ; Convert logical sector to CHS
     mov bx, 0x1000
     mov es, bx
     mov bx, bpb_buffer
-    mov cx, 19                      ; Root dir starts at sector 19 (typical)
-    mov dx, 0x0000                  ; Drive 0, head 0
+    mov cx, ax                      ; CX = logical sector number
+    and cx, 0x003F                  ; CL = sector (bits 0-5)
+    inc cl                          ; BIOS sectors start at 1
+    mov ax, cx
+    shr ax, 6
+    mov ch, al                      ; CH = cylinder
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
     int 0x13
 
     ; Display "Dir:" label
     mov bx, 10
-    mov cx, 65
+    mov cx, 75
     mov si, .dir_label
     call gfx_draw_string_stub
 
@@ -369,7 +379,7 @@ test_filesystem:
     loop .find_entry
 .show_none:
     mov bx, 50
-    mov cx, 65
+    mov cx, 75
     mov si, .no_entry
     call gfx_draw_string_stub
     jmp .done_debug
@@ -380,7 +390,7 @@ test_filesystem:
     push si
     mov di, si                      ; Save SI in DI
     mov word [debug_x], 50
-    mov word [debug_y], 65
+    mov word [debug_y], 75
     mov cx, 11                      ; 11 characters
 .draw_loop:
     push cx
@@ -417,7 +427,7 @@ test_filesystem:
     ; Display open success
     push ax                         ; Save file handle
     mov bx, 10
-    mov cx, 80
+    mov cx, 90
     mov si, .open_ok
     call gfx_draw_string_stub
     pop ax                          ; Restore file handle
@@ -433,13 +443,13 @@ test_filesystem:
 
     ; Display read success
     mov bx, 10
-    mov cx, 95
+    mov cx, 105
     mov si, .read_ok
     call gfx_draw_string_stub
 
-    ; Display file contents at Y=110
+    ; Display file contents at Y=120
     mov bx, 10
-    mov cx, 110
+    mov cx, 120
     mov si, fs_read_buffer
     call gfx_draw_string_stub
 
@@ -457,13 +467,13 @@ test_filesystem:
 
 .mount_failed:
     mov bx, 10
-    mov cx, 50
+    mov cx, 60
     mov si, .mount_err
     call gfx_draw_string_stub
 
     ; Show error code for debugging
     mov bx, 180
-    mov cx, 65
+    mov cx, 75
     mov si, .err_code_msg
     call gfx_draw_string_stub
 
@@ -480,7 +490,7 @@ test_filesystem:
 
 .open_failed:
     mov bx, 10
-    mov cx, 80
+    mov cx, 90
     mov si, .open_err
     call gfx_draw_string_stub
     pop di
@@ -494,7 +504,7 @@ test_filesystem:
 .read_failed:
     pop ax                          ; Clean up file handle
     mov bx, 10
-    mov cx, 95
+    mov cx, 105
     mov si, .read_err
     call gfx_draw_string_stub
     pop di
