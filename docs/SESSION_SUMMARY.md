@@ -1,15 +1,55 @@
 # Session Summary
 
-## Current Session: 2026-01-22
+## Current Session: 2026-01-23
 
 ### Session Goal
-Build a GUI operating system for PC XT-class machines with direct BIOS interaction.
+Debug and fix font rendering issues in kernel after bootloader/kernel separation.
 
 ### Test Hardware
 - **HP Omnibook 600C**: 486DX4-75 MHz, VGA (640x480 DSTN), 1.44MB floppy
 - CGA mode emulated via VGA, confirmed full 320x200 visible
 
 ### Completed This Session
+
+#### Version 3.2.0 - Kernel Separation & Font Debugging (2026-01-23)
+
+**Major Architecture Change (v3.2.0):**
+- Split kernel from stage2 bootloader
+- Stage2 now minimal 2KB loader with progress indicator
+- Kernel is separate 16KB binary loaded at 0x1000:0000 (64KB mark)
+- Enables kernel to grow beyond previous 8KB limit
+
+**Font Rendering Issue Discovered:**
+After kernel separation, text rendering stopped working for characters beyond a certain offset in the font data.
+
+**Systematic Debugging (v3.2.0.8 - v3.2.0.14):**
+1. **v3.2.0.8**: Discovered boundary at offset 160-200
+2. **v3.2.0.9**: Attempted fix with `word` qualifier (no change)
+3. **v3.2.0.10**: Switched to direct label addressing (progress: boundary moved to 200-240)
+4. **v3.2.0.11**: Critical clue - ':' character rendered partially (top dot only)
+5. **v3.2.0.12**: Confirmed '=' and '>' at offsets 232/240 cannot be accessed
+6. **v3.2.0.13**: **BREAKTHROUGH** - Hardcoded '=' works, font '=' fails
+7. **v3.2.0.14**: Documentation and analysis
+
+**Key Findings:**
+- Font data IS present in binary (verified with hexdump)
+- NASM addressing IS correct (verified in listings)
+- `draw_char` function works correctly (hardcoded data renders)
+- Font data accessible up to offset ~200
+- Font data beyond offset ~208 NOT accessible at runtime
+- Issue is with accessing included font data, not rendering logic
+
+**Documentation Created:**
+- docs/GRAPHICS_DEBUG.md - Complete debugging analysis
+- Updated Write-Floppy-Quick.ps1 with git retry logic
+
+**Current Status:**
+- Root cause identified: Font data access issue beyond offset ~208
+- Next step: Investigate why included font data not accessible at higher offsets
+
+---
+
+### Previous Session Accomplishments
 
 #### Boot Loader (v0.2.0 - v3.0.0)
 - Created GitHub repository: https://github.com/hmofet/unodos
@@ -63,11 +103,12 @@ Build a GUI operating system for PC XT-class machines with direct BIOS interacti
 3. Begin GUI window manager
 
 ### Current State
-- **Version**: 3.1.6
+- **Version**: 3.2.0.14
+- **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
 - **Boot loader**: Fully functional
-- **Graphics**: CGA 320x200 working on Omnibook
-- **Clock**: Working (HH:MM display)
-- **Character demo**: Visible but needs tuning
+- **Graphics**: CGA 320x200 working, welcome box displays
+- **Text rendering**: DEBUGGING - font access issue beyond offset ~208
+- **Known issue**: Cannot access included font data at higher offsets
 - **Test hardware**: HP Omnibook 600C (486DX4-75)
 
 ### Key Decisions Made

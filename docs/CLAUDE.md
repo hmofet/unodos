@@ -218,4 +218,25 @@ This project uses the **UnoDOS License** (see `/LICENSE.md` in project root):
 
 ---
 
-*Last updated: 2026-01-22 (v3.2.0)*
+## Current Debugging Issue (v3.2.0.14)
+
+### Font Rendering Problem
+
+After separating kernel from bootloader, font rendering partially works:
+- Font characters at offset 0-200: ✓ Work correctly
+- Font characters at offset 208+: ✗ Not accessible
+- Hardcoded character data: ✓ Works correctly
+- `draw_char` function: ✓ Works correctly
+
+**Root Cause**: Included font data (via `%include "font8x8.asm"`) is not fully accessible at runtime beyond offset ~208.
+
+**See**: [docs/GRAPHICS_DEBUG.md](GRAPHICS_DEBUG.md) for complete debugging analysis.
+
+**Next Steps**:
+1. Investigate memory access to font data region
+2. Test alternative font storage methods
+3. Consider copying font to different memory location
+
+---
+
+*Last updated: 2026-01-23 (v3.2.0.14)*

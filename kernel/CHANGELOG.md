@@ -4,6 +4,25 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.0.14] - 2026-01-23
+
+### Changed
+- Updated documentation with complete debugging findings
+- Created docs/GRAPHICS_DEBUG.md with full analysis of font rendering issue
+- Updated Write-Floppy-Quick.ps1 with retry logic for git fetch failures
+
+### Findings Summary
+- v3.2.0.13 confirmed issue: Font data beyond offset ~208 cannot be accessed
+- Hardcoded '=' character works, font '=' at offset 232 fails
+- Issue is NOT with draw_char function or encoding
+- Issue IS with accessing included font data at higher offsets
+- Font data verified present in binary, but not accessible at runtime
+
+### Next Steps
+- Investigate why font data beyond offset ~208 is not accessible
+- Test direct memory access to font data region
+- Consider alternative font storage methods
+
 ## [3.2.0.13] - 2026-01-23
 
 ### Changed
