@@ -112,20 +112,60 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Try '9' first to verify basic functionality still works
-    mov word [draw_x], 65
-    mov word [draw_y], 80
+    ; Render "WELCOME TO UNODOS 3!" message
+    ; All these characters are at offsets 0-200 (working range)
+    mov word [draw_x], 70
+    mov word [draw_y], 85
 
-    ; Character '9' from font (offset 200 - known to work before)
-    mov si, char_9
+    mov si, char_W
+    call draw_char
+    mov si, char_E
+    call draw_char
+    mov si, char_L
+    call draw_char
+    mov si, char_L
+    call draw_char
+    mov si, char_C
+    call draw_char
+    mov si, char_O
+    call draw_char
+    mov si, char_M
+    call draw_char
+    mov si, char_E
     call draw_char
 
-    ; Then try '=' from font (offset 232)
-    mov si, char_eq
+    ; Space
+    mov word [draw_x], 70
+    mov word [draw_y], 100
+
+    mov si, char_T
+    call draw_char
+    mov si, char_O
     call draw_char
 
-    ; Then try '>' from font (offset 240)
-    mov si, char_gt
+    ; Space and next line
+    mov word [draw_x], 70
+    mov word [draw_y], 115
+
+    mov si, char_U
+    call draw_char
+    mov si, char_N
+    call draw_char
+    mov si, char_O
+    call draw_char
+    mov si, char_D
+    call draw_char
+    mov si, char_O
+    call draw_char
+    mov si, char_S
+    call draw_char
+
+    ; Space
+    add word [draw_x], 12
+
+    mov si, char_3
+    call draw_char
+    mov si, char_excl
     call draw_char
 
     pop es

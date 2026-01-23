@@ -4,6 +4,24 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.3] - 2026-01-23
+
+### Added
+- Implemented "WELCOME TO UNODOS 3!" message display
+- Uses only characters from working range (offsets 0-200)
+- Message rendered in three lines within welcome box
+
+### Changed
+- Replaced test characters with actual welcome message
+- Workaround for font access issue: use only working character range
+- Characters used: W, E, L, C, O, M, T, U, N, D, S, 3, ! (all at offsets < 200)
+
+### Technical Details
+- Font access issue beyond offset ~208 remains unresolved
+- Working range: ASCII 32-57 (space through '9')
+- Sufficient for welcome message and basic UI
+- Future work: investigate and fix root cause of font access issue
+
 ## [3.2.2] - 2026-01-23
 
 ### Fixed
