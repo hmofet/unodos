@@ -23,20 +23,36 @@ if (-not $SkipPull) {
         # Check if this is a git repository
         $isGitRepo = Test-Path ".git"
         if ($isGitRepo) {
-            # Fetch latest changes
+            # Fetch latest changes (with retry)
             Write-Host "Fetching latest changes..." -ForegroundColor Yellow
-            git fetch origin 2>&1 | Out-Null
+            $fetchSuccess = $false
+            for ($i = 1; $i -le 3; $i++) {
+                try {
+                    git fetch origin 2>&1 | Out-Null
+                    $fetchSuccess = $true
+                    break
+                } catch {
+                    if ($i -lt 3) {
+                        Write-Host "Fetch failed, retrying ($i/3)..." -ForegroundColor Yellow
+                        Start-Sleep -Seconds 2
+                    }
+                }
+            }
 
-            # Force pull (reset to origin/master)
-            Write-Host "Pulling latest version (force)..." -ForegroundColor Yellow
-            git reset --hard origin/master 2>&1 | Out-Null
-
-            Write-Host "Repository updated!" -ForegroundColor Green
+            if (-not $fetchSuccess) {
+                Write-Warning "Failed to fetch after 3 attempts"
+                Write-Host "Continuing with current version..." -ForegroundColor Yellow
+            } else {
+                # Force pull (reset to origin/master)
+                Write-Host "Pulling latest version (force)..." -ForegroundColor Yellow
+                git reset --hard origin/master 2>&1 | Out-Null
+                Write-Host "Repository updated!" -ForegroundColor Green
+            }
         } else {
             Write-Host "Not a git repository, skipping update." -ForegroundColor Yellow
         }
     } catch {
-        Write-Warning "Git pull failed: $_"
+        Write-Warning "Git operation failed: $_"
         Write-Host "Continuing with current version..." -ForegroundColor Yellow
     } finally {
         Pop-Location
