@@ -5,6 +5,37 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-01-23
+
+### Added
+- **Memory Allocator (Foundation 1.3)**
+  - malloc(size): Allocate memory dynamically
+  - free(ptr): Free allocated memory
+  - First-fit allocation algorithm
+  - Heap at 0x1400:0000, extends to ~640KB limit
+  - Block header structure (size + flags)
+  - Integrated with API table (offsets 6, 7)
+
+### Technical Details
+- Memory block header: 4 bytes [size:2][flags:2]
+  * size: Total block size including header
+  * flags: 0x0000 (free) or 0xFFFF (allocated)
+- First-fit search algorithm for allocation
+- Automatic heap initialization on first malloc
+- Initial heap block: ~60KB (0xF000 bytes)
+- 4-byte aligned allocations
+
+### Implementation
+- malloc(AX=size) → AX=pointer (offset from 0x1400:0000), 0 if failed
+- free(AX=pointer) → frees memory block
+- Heap starts at segment 0x1400 (linear 0x14000)
+- Applications use ES=0x1400 + offset for memory access
+
+### Size Impact
+- Memory allocator: ~600 bytes
+- Kernel size: Still 16KB (16384 bytes exact)
+- Remaining capacity: ~0 bytes (at maximum)
+
 ## [3.4.0] - 2026-01-23
 
 ### Added
