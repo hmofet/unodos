@@ -1587,6 +1587,10 @@ fat12_open:
     jc .read_error_cleanup
 
     ; Search through 16 entries in this sector
+    ; Set DS to 0x1000 so we can read from bpb_buffer correctly
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
     mov cx, 16
     mov si, bpb_buffer
 
@@ -1641,6 +1645,7 @@ fat12_open:
     loop .search_entry
 
     ; Move to next sector
+    pop ds                          ; Restore DS (we pushed it before .search_entry)
     pop ax
     pop cx
     inc ax
