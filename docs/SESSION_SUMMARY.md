@@ -219,22 +219,81 @@ gfx_clear_area(BX=X, CX=Y, DX=width, SI=height)
 - ✓ Characters "OK" display correctly
 - ✓ All 6 graphics API functions working on real hardware
 
+#### Version 3.5.0 - Memory Allocator (Foundation 1.3) (2026-01-23)
+
+**Memory Allocator Implementation:**
+- malloc(AX=size) → AX=pointer (offset from 0x1400:0000), 0 if failed
+- free(AX=pointer) → frees memory block
+- First-fit allocation algorithm
+- Heap at 0x1400:0000, extends to ~640KB limit
+- Block header structure: 4 bytes [size:2][flags:2]
+  * size: Total block size including header
+  * flags: 0x0000 (free) or 0xFFFF (allocated)
+- 4-byte aligned allocations
+- Automatic heap initialization on first malloc
+- Initial heap block: ~60KB (0xF000 bytes)
+
+**API Integration:**
+- Added to API table at offsets 6, 7
+- mem_alloc_stub and mem_free_stub implemented
+- Applications use ES=0x1400 + offset for memory access
+
+**Size Impact:**
+- Memory allocator: ~600 bytes
+- Kernel size: 16384 bytes (exactly at 16KB limit)
+- Remaining capacity: 0 bytes - **KERNEL AT MAXIMUM**
+
+**Critical Status:**
+- Foundation 1.4 (Keyboard ~800 bytes) and 1.5 (Event ~400 bytes) cannot fit
+- Kernel expansion required before continuing Foundation Layer
+
+#### Version 3.6.0 - Kernel Expansion (2026-01-23)
+
+**Kernel Size Expansion: 16KB → 24KB**
+- Modified boot/stage2.asm: KERNEL_SECTORS 32 → 48
+- Modified kernel/kernel.asm: Final padding 16384 → 24576
+- Kernel binary verified: exactly 24576 bytes (24KB)
+
+**Memory Layout Changes:**
+- Kernel: 0x1000:0x0000 - 0x15FF:0x000F (24KB, was 16KB)
+- Heap start: 0x1600:0000 (was 0x1400:0000)
+- Available heap: ~532KB (was 540KB, loses 8KB)
+
+**Rationale:**
+- v3.5.0 reached exact 16KB capacity
+- Foundation 1.4 and 1.5 require ~1200 bytes minimum
+- 24KB expansion provides ~7KB headroom for future components
+- 8KB heap reduction is negligible (532KB still ample for apps)
+- Conservative expansion, can expand to 32KB later if needed
+
+**Testing:**
+- ✓ Build successful
+- ✓ Kernel binary exactly 24576 bytes
+- ✓ QEMU boot test passed
+- Ready for Foundation 1.4 (Keyboard Driver)
+
 ### Next Immediate Task
-**Foundation 1.3: Memory Allocator**
-- Implement malloc/free with first-fit algorithm
-- Free list management
+**Foundation 1.4: Keyboard Driver**
+- Scan code reading (Port 60h or INT 9h)
+- Scan code → ASCII translation
+- Modifier keys (Shift, Ctrl, Alt)
+- Key buffer (16 keys)
 - API table integration
 
-### Current State (Updated 2026-01-23 - v3.4.0)
+### Current State (Updated 2026-01-23 - v3.6.0)
 - **Bootloader Version**: 3.2.1 ✓
-- **Kernel Version**: 3.4.0 ✓
+- **Kernel Version**: 3.6.0 ✓
+- **Kernel Size**: 24KB (expanded from 16KB)
+- **Available Heap**: ~532KB (was 540KB)
 - **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
 - **Boot loader**: Fully functional, BX register bug fixed
-- **Graphics API**: ✓ 6 functions implemented and hardware tested
 - **System calls**: ✓ INT 0x80 + API table working
+- **Graphics API**: ✓ 6 functions implemented and hardware tested
+- **Memory Allocator**: ✓ malloc/free with first-fit algorithm
 - **Welcome message**: "WELCOME TO UNODOS 3!" displays correctly
 - **Test hardware**: HP Omnibook 600C (486DX4-75) - All tests passing
-- **Status**: Foundation 1.2 complete and verified, ready for Foundation 1.3
+- **Foundation Layer Progress**: 3/5 complete (1.1, 1.2, 1.3 done; 1.4, 1.5 pending)
+- **Status**: Kernel expanded to 24KB, ready for Foundation 1.4 (Keyboard Driver)
 
 ### Key Decisions Made
 1. GUI-first design (no command line)
