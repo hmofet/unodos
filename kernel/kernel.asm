@@ -1615,24 +1615,32 @@ fat12_open:
     jnz .next_entry                 ; Skip it
 
     ; Compare filename (11 bytes)
-    push si
-    push di
+    ; At this point: SI = dir entry pointer, SP points 4 bytes below our filename
+    ; Save SI, setup segments, use cmpsb
+    mov ax, si                      ; AX = save directory entry pointer
+    mov si, sp
+    add si, 4                       ; SI = our filename (SP + 4 to skip CX and AX)
+    mov di, ax                      ; DI = directory entry pointer
     push ds
-    push si                         ; SI pushed again for cmpsb source
-    ; Now calculate offset to filename on stack
-    mov di, sp
-    add di, 12                      ; Skip SI, DS, SI, DI, AX, CX (12 bytes) to point to 8.3 name
     push ss
-    pop es
+    pop ds                          ; DS = SS (for our filename)
     mov cx, 11
+    push es
     mov ax, 0x1000
-    mov ds, ax
-    rep cmpsb
-    pop si
+    mov es, ax                      ; ES = 0x1000 (for directory)
+    repe cmpsb                      ; Compare DS:SI with ES:DI
+    pop es
     pop ds
-    pop di
-    pop si
-    je .found_file
+    je .match_found
+
+    ; No match - restore SI and continue
+    jmp .next_entry
+
+.match_found:
+    ; Restore SI to directory entry pointer (it's been incremented by cmpsb)
+    sub di, 11                      ; Back up DI 11 bytes
+    mov si, di                      ; SI = directory entry start
+    jmp .found_file
 
 .next_entry:
     add si, 32                      ; Next directory entry
