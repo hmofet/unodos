@@ -210,19 +210,31 @@ gfx_draw_filled_rect(BX=X, CX=Y, DX=width, SI=height)
 gfx_clear_area(BX=X, CX=Y, DX=width, SI=height)
 ```
 
+**Hardware Testing (HP Omnibook 600C):**
+- ✓ Visual tests display correctly
+- ✓ Filled rectangle at X=20, Y=160 (60x30)
+- ✓ Rectangle outline at X=90, Y=160 (60x30)
+- ✓ Small filled square at X=160, Y=165 (10x10)
+- ✓ String "API" displays correctly
+- ✓ Characters "OK" display correctly
+- ✓ All 6 graphics API functions working on real hardware
+
 ### Next Immediate Task
-**Test graphics API functions** - Create visual demonstration
+**Foundation 1.3: Memory Allocator**
+- Implement malloc/free with first-fit algorithm
+- Free list management
+- API table integration
 
 ### Current State (Updated 2026-01-23 - v3.4.0)
 - **Bootloader Version**: 3.2.1 ✓
 - **Kernel Version**: 3.4.0 ✓
 - **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
 - **Boot loader**: Fully functional, BX register bug fixed
-- **Graphics API**: ✓ 6 functions implemented
+- **Graphics API**: ✓ 6 functions implemented and hardware tested
 - **System calls**: ✓ INT 0x80 + API table working
 - **Welcome message**: "WELCOME TO UNODOS 3!" displays correctly
 - **Test hardware**: HP Omnibook 600C (486DX4-75) - All tests passing
-- **Status**: Foundation 1.2 complete, creating visual tests
+- **Status**: Foundation 1.2 complete and verified, ready for Foundation 1.3
 
 ### Key Decisions Made
 1. GUI-first design (no command line)
