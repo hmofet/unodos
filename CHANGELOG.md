@@ -5,6 +5,115 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0] - 2026-01-23
+
+### Added
+- **Foundation 1.6: Filesystem Abstraction Layer + FAT12 Driver** (Complete)
+  - Filesystem driver abstraction (VFS-like interface)
+  - FAT12 filesystem driver (boot sector BPB parsing, directory search, file reading)
+  - Filesystem API functions added to kernel API table:
+    - fs_mount_stub() - Mount filesystem on drive (API offset 12)
+    - fs_open_stub() - Open file by name (API offset 13)
+    - fs_read_stub() - Read file contents (API offset 14)
+    - fs_close_stub() - Close file handle (API offset 15)
+    - fs_register_driver_stub() - Register loadable driver (API offset 16, reserved for Tier 2/3)
+  - File handle table (16 handles, 32 bytes each = 512 bytes)
+  - BPB cache for filesystem metadata (512 bytes)
+  - 8.3 filename support (FAT12 directory entry parsing)
+  - Root directory search (up to 224 entries on 360KB floppy)
+  - Single-cluster file reading (512 bytes per cluster)
+  - Error handling with error codes: FS_OK, FS_ERR_NOT_FOUND, FS_ERR_NO_DRIVER, FS_ERR_READ_ERROR, etc.
+
+- **Three-Tier Architecture Design**
+  - Tier 1: Boot and run from single 360KB floppy (FAT12 built-in)
+  - Tier 2: Multi-floppy system with loadable drivers (FAT16/FAT32 modules)
+  - Tier 3: HDD installation with installer tool and bootloader writer
+  - Driver registration hooks for future loadable filesystem modules
+
+- **Test Infrastructure**
+  - FAT12 test floppy creation script (Python)
+  - TEST.TXT file on FAT12 image for validation
+  - test_filesystem() function demonstrates fs_mount/open/read/close
+
+### Changed
+- **Kernel expanded from 24KB to 28KB** (48 → 56 sectors)
+  - Accommodates FAT12 driver implementation (~2.7 KB)
+  - New size: 28,672 bytes (28KB)
+  - Stage2 loader updated to load 56 sectors
+  - Still 85%+ free space remaining (estimated ~3.6 KB used)
+
+- **Kernel API table relocated**
+  - Moved from offset 0x0500 (1280 bytes) to 0x0800 (2048 bytes)
+  - Provides 768 bytes additional headroom for future code
+  - API table now at 0x1000:0x0800
+  - Function count expanded from 12 to 17 slots
+
+- **Entry point modified**
+  - Replaced keyboard_demo with test_filesystem() for v3.10.0 testing
+  - Can be reverted to keyboard_demo after filesystem validation
+
+### Technical Details
+- FAT12 implementation:
+  - Reads boot sector (sector 0) via BIOS INT 13h
+  - Parses BPB (BIOS Parameter Block): bytes_per_sector, sectors_per_cluster, root_dir_entries, etc.
+  - Calculates root_dir_start and data_area_start from BPB
+  - Searches root directory (14 sectors on 360KB floppy)
+  - Converts user filename to 8.3 FAT format (space-padded)
+  - Finds matching directory entry, extracts starting cluster and file size
+  - Reads file data from cluster (sector = data_start + (cluster-2) * sectors_per_cluster)
+  - Allocates file handle from 16-entry table
+  - Current limitations: read-only, single cluster per read, position=0 only
+
+- Filesystem abstraction:
+  - Driver structure with function pointers (mount, open, read, close, list_dir, etc.)
+  - Driver registry for up to 4 filesystem drivers
+  - Auto-detection mechanism (tries each registered driver's detect function)
+  - Mount table (4 entries, 16 bytes each) for active filesystem mounts
+  - File handle table (16 entries, 32 bytes each) for open files
+
+- Size impact:
+  - Abstraction layer: ~400 bytes
+  - FAT12 driver: ~1,200 bytes
+  - Data structures: ~1,088 bytes (mount table, file table, BPB cache, read buffer)
+  - Total: ~2,688 bytes
+  - Remaining kernel space: ~25 KB free (87% available)
+
+### Implementation
+- fat12_mount(): Reads boot sector, parses BPB, calculates layout
+- fat12_open(): Searches root directory, converts filename to 8.3, allocates handle
+- fat12_read(): Reads cluster data, copies to user buffer, updates position
+- fat12_close(): Marks file handle as free
+- fs_mount_stub(): Calls fat12_mount for drive 0, returns mount handle
+- fs_open_stub(): Validates mount handle, calls fat12_open
+- fs_read_stub(): Validates file handle, calls fat12_read
+- fs_close_stub(): Validates file handle, calls fat12_close
+
+### Foundation Layer Progress
+- ✓ System Call Infrastructure (v3.3.0)
+- ✓ Graphics API (v3.4.0)
+- ✓ Memory Allocator (v3.5.0)
+- ✓ Kernel Expansion to 24KB → 28KB (v3.6.0 → v3.10.0)
+- ✓ Aggressive Optimization (v3.7.0)
+- ✓ Keyboard Driver (v3.8.0)
+- ✓ Event System (v3.9.0)
+- ✓ **Filesystem Abstraction + FAT12 (v3.10.0) - JUST COMPLETED**
+
+### What's Next
+Foundation Layer complete! Next phases:
+1. **Core Services (v3.11.0-v3.13.0)**: App Loader, Window Manager
+2. **Standard Library (v3.14.0)**: graphics.lib, unodos.lib for C development
+3. **Tier 2/3 Support**: Multi-floppy loading, HDD installation, FAT16/FAT32 drivers
+
+### Known Limitations
+- Read-only filesystem (no write support)
+- Single cluster reads only (512 bytes max)
+- No multi-cluster file spanning support
+- No subdirectory support (root directory only)
+- No long filename support (8.3 only)
+- File position fixed at 0 (no seek support)
+
+These limitations are acceptable for v3.10.0 foundation. Advanced features will be added in future versions.
+
 ## [3.9.0] - 2026-01-23
 
 ### Added
