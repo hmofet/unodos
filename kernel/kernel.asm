@@ -27,8 +27,8 @@ entry:
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
-    ; Draw welcome box with text
-    call draw_welcome_box
+    ; Welcome box removed - clutters test output
+    ; call draw_welcome_box
 
     ; Enable interrupts
     sti
@@ -329,6 +329,51 @@ test_filesystem:
     mov si, .mount_ok
     call gfx_draw_string_stub
 
+    ; Debug: Read and display first directory entry
+    ; Read first sector of root directory
+    push ax
+    mov ax, [root_dir_start]
+    mov bx, 0x1000
+    push bx
+    pop ds
+    mov bx, bpb_buffer
+    mov cx, ax
+    and cx, 0x003F
+    inc cl
+    mov ax, cx
+    shr ax, 6
+    mov ch, al
+    mov ax, 0x0201                  ; Read 1 sector
+    mov dx, 0x0000                  ; Drive A:
+    int 0x13
+    push cs
+    pop ds
+    pop ax
+
+    ; Display first filename found (first 11 bytes of first entry)
+    mov bx, 10
+    mov cx, 75
+    mov si, .debug_msg
+    call gfx_draw_string_stub
+
+    ; Copy first directory entry name to a buffer
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, bpb_buffer
+    mov di, .debug_fname
+    push cs
+    pop es
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    ; Display the filename
+    mov bx, 70
+    mov cx, 75
+    mov si, .debug_fname
+    call gfx_draw_string_stub
+
     ; Try to open TEST.TXT
     xor bx, bx                      ; Mount handle 0
     mov si, .filename
@@ -432,6 +477,8 @@ test_filesystem:
 .mount_ok:      db 'Mount: OK', 0
 .mount_err:     db 'Mount: FAIL (Check: FAT12? 512B sectors?)', 0
 .err_code_msg:  db 'Err:', 0
+.debug_msg:     db 'Dir:', 0
+.debug_fname:   times 12 db 0
 .open_ok:       db 'Open TEST.TXT: OK', 0
 .open_err:      db 'Open TEST.TXT: FAIL (not found)', 0
 .read_ok:       db 'Read: OK - File contents:', 0
