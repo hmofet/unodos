@@ -18,16 +18,123 @@ entry:
     mov ds, ax
     mov es, ax
 
+    ; Install INT 0x80 handler for system calls
+    call install_int_80
+
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
     ; Draw welcome box with text
     call draw_welcome_box
 
+    ; Test INT 0x80 discovery mechanism
+    call test_int_80
+
     ; Halt
 halt_loop:
     hlt
     jmp halt_loop
+
+; ============================================================================
+; System Call Infrastructure
+; ============================================================================
+
+; Install INT 0x80 handler for system call discovery
+; Modifies: AX, BX, ES (temporarily)
+install_int_80:
+    pusha
+    push ds
+
+    ; Point to IVT at 0x0000:0000
+    xor ax, ax
+    mov es, ax
+
+    ; Calculate IVT offset: 0x80 * 4 = 0x200
+    mov bx, 0x0200
+
+    ; Install handler offset
+    mov word [es:bx], int_80_handler
+    ; Install handler segment
+    mov word [es:bx+2], 0x1000
+
+    pop ds
+    popa
+    ret
+
+; INT 0x80 Handler - System Call Discovery
+; Input: AX = function number
+;   AX = 0x0000: Get API table pointer
+; Output: ES:BX = pointer to kernel_api_table
+; Preserves: All other registers
+int_80_handler:
+    cmp ax, 0x0000
+    jne .unknown_function
+
+    ; Return pointer to API table
+    mov bx, cs
+    mov es, bx
+    mov bx, kernel_api_table
+    iret
+
+.unknown_function:
+    ; Unknown function - return error
+    stc                             ; Set carry flag for error
+    iret
+
+; Test INT 0x80 Discovery Mechanism
+; Calls INT 0x80, verifies API table, displays status
+test_int_80:
+    pusha
+    push ds
+    push es
+
+    ; Call INT 0x80 to get API table
+    mov ax, 0x0000
+    int 0x80
+
+    ; ES:BX now points to kernel_api_table
+    ; Verify magic number
+    cmp word [es:bx], 0x4B41        ; Check for 'KA'
+    jne .test_failed
+
+    ; Success - display checkmark at bottom right
+    mov word [draw_x], 290
+    mov word [draw_y], 185
+
+    ; Draw checkmark character (using 'OK' for now)
+    push es
+    mov ax, 0xB800
+    mov es, ax
+
+    mov si, char_O
+    call draw_char
+    mov si, char_K
+    call draw_char
+
+    pop es
+    jmp .test_done
+
+.test_failed:
+    ; Failure - display 'XX' at bottom right
+    mov word [draw_x], 290
+    mov word [draw_y], 185
+
+    push es
+    mov ax, 0xB800
+    mov es, ax
+
+    mov si, char_X
+    call draw_char
+    mov si, char_X
+    call draw_char
+
+    pop es
+
+.test_done:
+    pop es
+    pop ds
+    popa
+    ret
 
 ; ============================================================================
 ; Graphics Setup
@@ -298,6 +405,88 @@ plot_pixel_white:
     ret
 
 ; ============================================================================
+; Kernel API Table - At fixed address 0x1000:0x0500
+; ============================================================================
+
+; Pad to exactly offset 0x0500 (1280 bytes)
+times 0x0500 - ($ - $$) db 0
+
+kernel_api_table:
+    ; Header
+    dw 0x4B41                       ; Magic: 'KA' (Kernel API)
+    dw 0x0001                       ; Version: 1.0
+    dw 10                           ; Number of function slots
+    dw 0                            ; Reserved for future use
+
+    ; Function Pointers (Offset from table start)
+    ; Graphics API (frequent calls - optimize for speed)
+    dw gfx_draw_pixel_stub          ; 0: Draw single pixel
+    dw gfx_draw_rect_stub           ; 1: Draw rectangle outline
+    dw gfx_draw_filled_rect_stub    ; 2: Draw filled rectangle
+    dw gfx_draw_char_stub           ; 3: Draw character
+    dw gfx_draw_string_stub         ; 4: Draw string
+    dw gfx_clear_area_stub          ; 5: Clear rectangular area
+
+    ; Memory Management
+    dw mem_alloc_stub               ; 6: Allocate memory (malloc)
+    dw mem_free_stub                ; 7: Free memory
+
+    ; Event System
+    dw event_get_stub               ; 8: Get next event (non-blocking)
+    dw event_wait_stub              ; 9: Wait for event (blocking)
+
+; ============================================================================
+; API Stub Functions (Temporary - To Be Implemented)
+; ============================================================================
+
+; Graphics stubs
+gfx_draw_pixel_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+gfx_draw_rect_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+gfx_draw_filled_rect_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+gfx_draw_char_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+gfx_draw_string_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+gfx_clear_area_stub:
+    ; TODO: Implement in Foundation 1.2
+    ret
+
+; Memory management stubs
+mem_alloc_stub:
+    ; TODO: Implement in Foundation 1.3
+    xor ax, ax                      ; Return NULL for now
+    ret
+
+mem_free_stub:
+    ; TODO: Implement in Foundation 1.3
+    ret
+
+; Event system stubs
+event_get_stub:
+    ; TODO: Implement in Foundation 1.5
+    xor ax, ax                      ; Return 0 (no event)
+    ret
+
+event_wait_stub:
+    ; TODO: Implement in Foundation 1.5
+    hlt                             ; Wait for interrupt
+    xor ax, ax                      ; Return 0 (no event)
+    ret
+
+; ============================================================================
 ; Font Data - 8x8 characters
 ; ============================================================================
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
@@ -330,6 +519,8 @@ char_D      equ font_8x8 + ('D' - 32) * 8
 char_S      equ font_8x8 + ('S' - 32) * 8
 char_3      equ font_8x8 + ('3' - 32) * 8
 char_excl   equ font_8x8 + ('!' - 32) * 8
+char_K      equ font_8x8 + ('K' - 32) * 8
+char_X      equ font_8x8 + ('X' - 32) * 8
 ; Test characters
 char_0      equ font_8x8 + ('0' - 32) * 8
 char_4      equ font_8x8 + ('4' - 32) * 8
