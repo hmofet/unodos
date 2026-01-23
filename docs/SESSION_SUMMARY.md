@@ -159,23 +159,47 @@ Total: 12-16 hours
 - docs/ARCHITECTURE_PLAN.md - Complete architectural analysis and roadmap
 - Referenced docs/SYSCALL.md for performance analysis
 
-### Next Immediate Task
-**Foundation 1.1: System Call Infrastructure**
-- Implement INT 0x80 handler
-- Create kernel API table at 0x1000:0x0500
-- Add stub functions
-- Test harness
+---
 
-### Current State (Updated 2026-01-23)
+## Session: 2026-01-23 (Continued) - Foundation 1.1 Implementation
+
+### Version 3.3.0 Completed
+
+**Foundation 1.1: System Call Infrastructure**
+- ✓ INT 0x80 handler implemented
+- ✓ Kernel API table at 0x1000:0x0500
+- ✓ 10 stub functions created
+- ✓ Visual test (displays "OK" on success)
+
+**Hardware Testing:**
+- Tested on HP Omnibook 600C (486DX4-75)
+- INT 0x80 discovery mechanism: ✓ WORKING
+- "OK" indicator displays correctly at bottom right
+- API table magic number verified in binary
+
+**Bug Fixed:**
+- Typo in welcome message: "WELLCOME" → "WELCOME" (removed duplicate L)
+
+### Next Immediate Task
+**Foundation 1.2: Graphics API Abstraction**
+- Implement gfx_draw_pixel (wrap plot_pixel_white)
+- Implement gfx_draw_char (wrap draw_char)
+- Implement gfx_draw_rect
+- Implement gfx_draw_filled_rect
+- Implement gfx_draw_string
+- Implement gfx_clear_area
+
+### Current State (Updated 2026-01-23 - v3.3.0)
 - **Bootloader Version**: 3.2.1 ✓
-- **Kernel Version**: 3.2.3 ✓
+- **Kernel Version**: 3.3.0 ✓
 - **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
 - **Boot loader**: Fully functional, BX register bug fixed
 - **Graphics**: CGA 320x200 working
 - **Text rendering**: ✓ WORKING - all font characters accessible
+- **System calls**: ✓ INT 0x80 + API table working
 - **Welcome message**: "WELCOME TO UNODOS 3!" displays correctly
-- **Test hardware**: HP Omnibook 600C (486DX4-75)
-- **Status**: Ready to begin Foundation Layer implementation
+- **Test hardware**: HP Omnibook 600C (486DX4-75) - All tests passing
+- **Status**: Foundation 1.1 complete, proceeding to Foundation 1.2
 
 ### Key Decisions Made
 1. GUI-first design (no command line)

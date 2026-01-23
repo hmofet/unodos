@@ -230,8 +230,6 @@ draw_welcome_box:
     call draw_char
     mov si, char_L
     call draw_char
-    mov si, char_L
-    call draw_char
     mov si, char_C
     call draw_char
     mov si, char_O
