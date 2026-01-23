@@ -50,74 +50,7 @@ if (-not $SkipPull) {
                     Write-Warning "Git reset failed!"
                     Write-Host "Continuing with current version..." -ForegroundColor Yellow
                 } else {
-                    Write-Host "Repository updated!" -ForegroundColor Green
-
-                    # Rebuild the image
-                    Write-Host "Building image..." -ForegroundColor Cyan
-                    if (Test-Path "Makefile") {
-                        # Check if WSL is installed
-                        $wslInstalled = $false
-                        try {
-                            wsl --version 2>&1 | Out-Null
-                            if ($LASTEXITCODE -eq 0) {
-                                $wslInstalled = $true
-                            }
-                        } catch {
-                            # WSL not available
-                        }
-
-                        if (-not $wslInstalled) {
-                            Write-Warning "WSL not installed!"
-                            Write-Host ""
-                            Write-Host "WSL is required to build UnoDOS images." -ForegroundColor Yellow
-                            Write-Host "To install WSL:" -ForegroundColor Cyan
-                            Write-Host "  1. Open PowerShell as Administrator" -ForegroundColor White
-                            Write-Host "  2. Run: wsl --install" -ForegroundColor White
-                            Write-Host "  3. Restart your computer" -ForegroundColor White
-                            Write-Host "  4. Run this script again" -ForegroundColor White
-                            Write-Host ""
-                            Write-Host "Using existing pre-built image (may be outdated)..." -ForegroundColor Yellow
-                        } else {
-                            # Check if make is available
-                            $hasMake = $false
-                            try {
-                                wsl which make 2>&1 | Out-Null
-                                if ($LASTEXITCODE -eq 0) {
-                                    $hasMake = $true
-                                }
-                            } catch {
-                                # Make not found
-                            }
-
-                            if (-not $hasMake) {
-                                Write-Warning "Build tools not installed in WSL!"
-                                Write-Host ""
-                                Write-Host "Installing build tools (nasm, make)..." -ForegroundColor Cyan
-                                wsl sudo apt-get update
-                                wsl sudo apt-get install -y nasm make
-                                if ($LASTEXITCODE -eq 0) {
-                                    Write-Host "Build tools installed!" -ForegroundColor Green
-                                    $hasMake = $true
-                                } else {
-                                    Write-Warning "Failed to install build tools"
-                                    Write-Host "Please run manually in WSL: sudo apt-get install nasm make" -ForegroundColor Yellow
-                                    Write-Host "Using existing pre-built image (may be outdated)..." -ForegroundColor Yellow
-                                }
-                            }
-
-                            if ($hasMake) {
-                                Write-Host "Building with WSL make..." -ForegroundColor Yellow
-                                wsl make clean
-                                wsl make floppy144
-                                if ($LASTEXITCODE -eq 0) {
-                                    Write-Host "Build successful!" -ForegroundColor Green
-                                } else {
-                                    Write-Error "Build failed! Check output above for errors."
-                                    exit 1
-                                }
-                            }
-                        }
-                    }
+                    Write-Host "Repository updated! Pre-built image downloaded." -ForegroundColor Green
                 }
             }
         } else {
