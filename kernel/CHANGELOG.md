@@ -4,6 +4,18 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.0.12] - 2026-01-22
+
+### Changed
+- Test only '=' and '>' characters (offsets 232, 240)
+- v3.2.0.11 showed '9' fully, top dot of ':', then nothing
+- This tests if '=' and '>' can render when called first
+
+### Findings
+- Previous test revealed partial rendering: '9' worked, ':' showed only top dot
+- Suggests issue happens during execution, not at specific offset
+- Testing if issue is cumulative (number of previous calls) or character-specific
+
 ## [3.2.0.11] - 2026-01-22
 
 ### Changed

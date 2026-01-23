@@ -112,18 +112,11 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Narrow the boundary between 200 and 240
+    ; Test: Can '=' and '>' render on their own?
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; Character '9' at offset (57-32)*8 = 200 (known working)
-    mov si, char_9
-    call draw_char
-
-    ; Character ':' at offset (58-32)*8 = 208
-    mov si, char_colon
-    call draw_char
-
+    ; Skip '9' and ':' - test if '=' and '>' work when called first
     ; Character '=' at offset (61-32)*8 = 232
     mov si, char_eq
     call draw_char
