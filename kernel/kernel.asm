@@ -30,6 +30,9 @@ entry:
     ; Test INT 0x80 discovery mechanism
     call test_int_80
 
+    ; Test graphics API functions
+    call test_graphics_api
+
     ; Halt
 halt_loop:
     hlt
@@ -135,6 +138,66 @@ test_int_80:
     pop ds
     popa
     ret
+
+; Test Graphics API Functions
+; Demonstrates all graphics API functions visually
+test_graphics_api:
+    pusha
+    push es
+
+    ; Set up video memory
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Test 1: Draw filled rectangle (below welcome box)
+    ; Position: X=20, Y=160, Width=60, Height=30
+    mov bx, 20                      ; X
+    mov cx, 160                     ; Y
+    mov dx, 60                      ; Width
+    mov si, 30                      ; Height
+    call gfx_draw_filled_rect_stub
+
+    ; Test 2: Draw rectangle outline next to it
+    ; Position: X=90, Y=160, Width=60, Height=30
+    mov bx, 90                      ; X
+    mov cx, 160                     ; Y
+    mov dx, 60                      ; Width
+    mov si, 30                      ; Height
+    call gfx_draw_rect_stub
+
+    ; Test 3: Draw small filled rectangle (indicator)
+    ; Position: X=160, Y=165, Width=10, Height=10
+    mov bx, 160                     ; X
+    mov cx, 165                     ; Y
+    mov dx, 10                      ; Width
+    mov si, 10                      ; Height
+    call gfx_draw_filled_rect_stub
+
+    ; Test 4: Draw text using gfx_draw_string
+    ; Position: X=180, Y=165, String="API"
+    mov bx, 180                     ; X
+    mov cx, 165                     ; Y
+    mov si, .test_string
+    call gfx_draw_string_stub
+
+    ; Test 5: Draw individual characters using gfx_draw_char
+    ; Position: X=220, Y=165, Characters "OK"
+    mov bx, 220                     ; X
+    mov cx, 165                     ; Y
+    mov al, 'O'
+    call gfx_draw_char_stub
+
+    mov bx, 232                     ; X (12 pixels spacing)
+    mov cx, 165                     ; Y
+    mov al, 'K'
+    call gfx_draw_char_stub
+
+    pop es
+    popa
+    ret
+
+.test_string:
+    db 'API', 0
 
 ; ============================================================================
 ; Graphics Setup
