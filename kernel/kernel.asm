@@ -1726,7 +1726,7 @@ fat12_open:
     je .next_entry                  ; Deleted entry
 
     ; Skip special entries: VFAT long filenames (0x0F) and volume labels (0x08)
-    ; Windows creates volume labels ("MSDOS 5.0") and VFAT entries we need to skip
+    ; Also skip directories, system files, hidden files (match debug code logic)
     push ds
     push si
     mov ax, 0x1000
@@ -1736,10 +1736,14 @@ fat12_open:
     pop ds
     cmp al, 0x0F                    ; Long filename entry?
     je .next_entry                  ; Skip it
-    cmp al, 0x08                    ; Volume label entry?
-    je .next_entry                  ; Skip it
     test al, 0x08                   ; Volume label bit set?
-    jnz .next_entry                 ; Skip it
+    jnz .next_entry                 ; Skip volume labels
+    test al, 0x10                   ; Directory bit set?
+    jnz .next_entry                 ; Skip directories (SYSTEM~1)
+    test al, 0x04                   ; System bit set?
+    jnz .next_entry                 ; Skip system files
+    test al, 0x02                   ; Hidden bit set?
+    jnz .next_entry                 ; Skip hidden files
 
     ; Compare filename (11 bytes)
     ; Push everything FIRST, then calculate pointer
@@ -1772,7 +1776,8 @@ fat12_open:
     pop ax
     pop cx
     inc ax
-    loop .search_next_sector
+    dec cx
+    jnz .search_next_sector
 
 .not_found_cleanup:
     add sp, 2                       ; Clean up sector counter
