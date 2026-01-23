@@ -4,6 +4,19 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.0.13] - 2026-01-23
+
+### Changed
+- Test hardcoded '=' character vs '9' from font
+- Added test_eq_char with hardcoded bitmap data
+- v3.2.0.12 showed nothing (blank box) for '=' and '>' from font
+
+### Purpose
+- Determine if issue is with font data access or draw_char function itself
+- Hardcoded '=' at low memory offset, '9' from font at higher offset
+- If hardcoded '=' works but font '=' doesn't, issue is with font data access
+- If both fail, issue is with draw_char after certain number of calls
+
 ## [3.2.0.12] - 2026-01-22
 
 ### Changed
