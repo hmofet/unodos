@@ -5,6 +5,44 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-01-23
+
+### Added
+- **Foundation 1.4: Keyboard Driver** (Complete)
+  - INT 09h keyboard interrupt handler with proper PIC EOI signaling
+  - Scan code to ASCII translation tables (normal and shifted)
+  - Modifier key state tracking (Shift, Ctrl, Alt)
+  - 16-byte circular buffer for keyboard input
+  - Non-blocking kbd_getchar() function (API offset 10)
+  - Blocking kbd_wait_key() function (API offset 11)
+  - Support for alphanumeric keys, punctuation, and special keys
+  - Proper handling of key press and release events
+
+### Technical Details
+- INT 09h handler chains to original BIOS handler after processing
+- Two 96-byte scan code translation tables (normal and shifted)
+- Circular buffer prevents key loss during high-frequency input
+- API table expanded: 10 → 12 function slots
+- Estimated size: ~800 bytes (keyboard driver code + translation tables)
+- Variables added: old_int9_offset/segment, kbd_buffer[16], buffer pointers, modifier states
+- Interrupts enabled via STI after keyboard initialization
+
+### Implementation
+- install_keyboard(): Saves original INT 9h vector, installs handler, initializes buffer
+- int_09_handler(): Reads scan code (port 0x60), tracks modifiers, translates to ASCII, stores in buffer
+- kbd_getchar(): Returns next character from buffer (0 if empty)
+- kbd_wait_key(): Blocks until key available, returns character
+- Translation supports: A-Z, 0-9, punctuation, Escape, Backspace, Tab, Enter, Space
+
+### Foundation Layer Progress
+- ✓ System Call Infrastructure (v3.3.0)
+- ✓ Graphics API (v3.4.0)
+- ✓ Memory Allocator (v3.5.0)
+- ✓ Kernel Expansion to 24KB (v3.6.0)
+- ✓ Aggressive Optimization (v3.7.0)
+- ✓ Keyboard Driver (v3.8.0)
+- ⏳ Event System (v3.9.0 - Next)
+
 ## [3.7.0] - 2026-01-23
 
 ### Changed
