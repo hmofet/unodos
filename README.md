@@ -187,9 +187,10 @@ unodos/
 - [x] Graphics API abstraction layer - v3.4.0
 - [x] Memory allocator (malloc/free) - v3.5.0
 - [x] Kernel expansion (16KB → 24KB) - v3.6.0
+- [x] Aggressive kernel optimization - v3.7.0
+- [x] Keyboard input handling (INT 09h driver) - v3.8.0
 
 ### In Progress (Foundation Layer)
-- [ ] Keyboard input handling
 - [ ] Event system (circular queue)
 
 ### Planned (Foundation Layer - v3.7.0-v3.8.0)
@@ -214,7 +215,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.6.0**
+Current version: **3.8.0**
 
 ## Contributing
 

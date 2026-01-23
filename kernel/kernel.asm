@@ -21,11 +21,17 @@ entry:
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
+    ; Install keyboard handler (Foundation 1.4)
+    call install_keyboard
+
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
     ; Draw welcome box with text
     call draw_welcome_box
+
+    ; Enable interrupts
+    sti
 
     ; Halt
 halt_loop:
@@ -65,6 +71,191 @@ int_80_handler:
     ; Unknown function - return error
     stc                             ; Set carry flag for error
     iret
+
+; ============================================================================
+; Keyboard Driver (Foundation 1.4)
+; ============================================================================
+
+; Install keyboard interrupt handler
+install_keyboard:
+    push es
+    push ax
+    push bx
+
+    ; Save original INT 9h vector
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:0x0024]
+    mov [old_int9_offset], ax
+    mov ax, [es:0x0026]
+    mov [old_int9_segment], ax
+
+    ; Install our handler
+    mov word [es:0x0024], int_09_handler
+    mov word [es:0x0026], 0x1000
+
+    ; Initialize keyboard buffer
+    mov word [kbd_buffer_head], 0
+    mov word [kbd_buffer_tail], 0
+    mov byte [kbd_shift_state], 0
+    mov byte [kbd_ctrl_state], 0
+    mov byte [kbd_alt_state], 0
+
+    pop bx
+    pop ax
+    pop es
+    ret
+
+; INT 09h - Keyboard interrupt handler
+int_09_handler:
+    push ax
+    push bx
+    push ds
+
+    ; Set DS to kernel segment
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Read scan code from keyboard port
+    in al, 0x60
+
+    ; Check for modifier keys
+    cmp al, 0x2A                    ; Left Shift press
+    je .shift_press
+    cmp al, 0x36                    ; Right Shift press
+    je .shift_press
+    cmp al, 0xAA                    ; Left Shift release
+    je .shift_release
+    cmp al, 0xB6                    ; Right Shift release
+    je .shift_release
+    cmp al, 0x1D                    ; Ctrl press
+    je .ctrl_press
+    cmp al, 0x9D                    ; Ctrl release
+    je .ctrl_release
+    cmp al, 0x38                    ; Alt press
+    je .alt_press
+    cmp al, 0xB8                    ; Alt release
+    je .alt_release
+
+    ; Check if it's a key release (bit 7 set)
+    test al, 0x80
+    jnz .done
+
+    ; Translate scan code to ASCII
+    mov bx, ax                      ; BX = scan code
+    xor bh, bh
+
+    ; Check shift state
+    cmp byte [kbd_shift_state], 0
+    je .use_lower
+
+    ; Use shifted table
+    mov al, [scancode_shifted + bx]
+    jmp .store_key
+
+.use_lower:
+    mov al, [scancode_normal + bx]
+
+.store_key:
+    ; Don't store null characters
+    test al, al
+    jz .done
+
+    ; Store in circular buffer
+    mov bx, [kbd_buffer_tail]
+    mov [kbd_buffer + bx], al
+    inc bx
+    and bx, 0x0F                    ; Wrap at 16
+    cmp bx, [kbd_buffer_head]       ; Buffer full?
+    je .done                        ; Skip if full
+    mov [kbd_buffer_tail], bx
+    jmp .done
+
+.shift_press:
+    mov byte [kbd_shift_state], 1
+    jmp .done
+
+.shift_release:
+    mov byte [kbd_shift_state], 0
+    jmp .done
+
+.ctrl_press:
+    mov byte [kbd_ctrl_state], 1
+    jmp .done
+
+.ctrl_release:
+    mov byte [kbd_ctrl_state], 0
+    jmp .done
+
+.alt_press:
+    mov byte [kbd_alt_state], 1
+    jmp .done
+
+.alt_release:
+    mov byte [kbd_alt_state], 0
+
+.done:
+    ; Send EOI to PIC
+    mov al, 0x20
+    out 0x20, al
+
+    pop ds
+    pop bx
+    pop ax
+    iret
+
+; Get next character from keyboard buffer (non-blocking)
+; Output: AL = ASCII character, 0 if no key available
+kbd_getchar:
+    push bx
+    push ds
+
+    mov ax, 0x1000
+    mov ds, ax
+
+    mov bx, [kbd_buffer_head]
+    cmp bx, [kbd_buffer_tail]
+    je .no_key
+
+    mov al, [kbd_buffer + bx]
+    inc bx
+    and bx, 0x0F
+    mov [kbd_buffer_head], bx
+
+    pop ds
+    pop bx
+    ret
+
+.no_key:
+    xor al, al
+    pop ds
+    pop bx
+    ret
+
+; Wait for keypress (blocking)
+; Output: AL = ASCII character
+kbd_wait_key:
+    call kbd_getchar
+    test al, al
+    jz kbd_wait_key
+    ret
+
+; Scan code to ASCII translation tables
+scancode_normal:
+    db 0,27,'1','2','3','4','5','6','7','8','9','0','-','=',8,9
+    db 'q','w','e','r','t','y','u','i','o','p','[',']',13,0,'a','s'
+    db 'd','f','g','h','j','k','l',';',39,'`',0,92,'z','x','c','v'
+    db 'b','n','m',',','.','/',0,'*',0,' ',0,0,0,0,0,0
+    db 0,0,0,0,0,0,0,'7','8','9','-','4','5','6','+','1'
+    db '2','3','0','.',0,0,0,0,0,0,0,0,0,0,0,0
+
+scancode_shifted:
+    db 0,27,'!','@','#','$','%','^','&','*','(',')','_','+',8,9
+    db 'Q','W','E','R','T','Y','U','I','O','P','{','}',13,0,'A','S'
+    db 'D','F','G','H','J','K','L',':','"','~',0,'|','Z','X','C','V'
+    db 'B','N','M','<','>','?',0,'*',0,' ',0,0,0,0,0,0
+    db 0,0,0,0,0,0,0,'7','8','9','-','4','5','6','+','1'
+    db '2','3','0','.',0,0,0,0,0,0,0,0,0,0,0,0
 
 ; ============================================================================
 ; Graphics Setup
@@ -254,7 +445,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 10                           ; Number of function slots
+    dw 12                           ; Number of function slots
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -273,6 +464,10 @@ kernel_api_table:
     ; Event System
     dw event_get_stub               ; 8: Get next event (non-blocking)
     dw event_wait_stub              ; 9: Wait for event (blocking)
+
+    ; Keyboard Input (Foundation 1.4)
+    dw kbd_getchar                  ; 10: Get character (non-blocking)
+    dw kbd_wait_key                 ; 11: Wait for key (blocking)
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -590,6 +785,16 @@ event_wait_stub:
 draw_x: dw 0
 draw_y: dw 0
 heap_initialized: dw 0
+
+; Keyboard driver state (Foundation 1.4)
+old_int9_offset: dw 0
+old_int9_segment: dw 0
+kbd_buffer: times 16 db 0
+kbd_buffer_head: dw 0
+kbd_buffer_tail: dw 0
+kbd_shift_state: db 0
+kbd_ctrl_state: db 0
+kbd_alt_state: db 0
 
 ; ============================================================================
 ; Padding
