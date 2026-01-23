@@ -109,6 +109,15 @@ debug: $(FLOPPY_IMG) check-qemu
 		-monitor stdio \
 		-d int,cpu_reset
 
+# Test FAT12 filesystem with two drives
+test-fat12: $(FLOPPY_IMG) build/test-fat12.img check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=build/test-fat12.img,format=raw,if=floppy,index=1 \
+		-boot a \
+		-display gtk
+
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
