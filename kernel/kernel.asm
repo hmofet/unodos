@@ -261,11 +261,6 @@ plot_pixel_white:
 ; Font Data - 8x8 characters
 ; ============================================================================
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
-; WORKAROUND: Add padding to push font past 0x0200 boundary (512 bytes)
-; This ensures font doesn't straddle a critical boundary
-
-; Pad to align font at 0x0200 (512 bytes from kernel start)
-times 512 - ($ - $$) db 0
 
 %include "font8x8.asm"
 
