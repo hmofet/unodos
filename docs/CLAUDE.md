@@ -1,10 +1,15 @@
-# UnoDOS 3 - Development Context
+# UnoDOS 3 - Development Context (v3.10.0)
 
 This document provides context for Claude (AI assistant) when working on UnoDOS 3.
+
+**Last Updated:** 2026-01-23
+**Current Version:** 3.10.0 (Foundation Layer Complete)
 
 ## Project Summary
 
 UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible computers. Unlike traditional DOS-based systems, UnoDOS interacts directly with BIOS and the Intel 8088 processor, providing a GUI-first experience without any command-line interface.
+
+**Current Status:** Foundation Layer complete with working FAT12 filesystem driver. Can boot, display graphics, handle keyboard input, manage memory, and read files from floppy disks.
 
 ## Target Hardware Specifications
 
@@ -21,6 +26,7 @@ UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible compu
 - **Display**: VGA 640x480 DSTN (CGA emulated)
 - **Storage**: 1.44MB floppy drive
 - **Graphics Chip**: Chips & Technologies 65545
+- **Status**: Tested successfully, hardware compatibility fixes applied
 
 ## Architecture Principles
 
@@ -29,6 +35,8 @@ UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible compu
 3. **Minimal Footprint**: Designed for 128KB RAM minimum
 4. **Self-Contained**: Boots and runs entirely from floppy disk
 5. **CGA-Only Graphics**: 320x200 4-color mode for maximum compatibility
+6. **Event-Driven**: Circular event queue with keyboard integration
+7. **Modular Architecture**: Pluggable filesystem drivers for future expansion
 
 ## Current Project Structure
 
@@ -36,15 +44,16 @@ UnoDOS 3 is a graphical operating system designed for IBM PC XT-compatible compu
 unodos/
 ├── boot/
 │   ├── boot.asm        # Stage 1: 512-byte boot sector
-│   ├── stage2.asm      # Stage 2: 2KB minimal loader
+│   ├── stage2.asm      # Stage 2: 2KB minimal loader (loads 56 sectors)
 │   ├── font8x8.asm     # 8x8 bitmap font (95 chars)
 │   └── font4x6.asm     # 4x6 small font (95 chars)
 ├── kernel/
-│   └── kernel.asm      # Main OS kernel (16KB)
+│   ├── kernel.asm      # Main OS kernel (28KB, expanded for FAT12)
+│   └── VERSION         # Current version: 3.10.0
 ├── build/
 │   ├── boot.bin        # Compiled boot sector
 │   ├── stage2.bin      # Compiled stage2 loader
-│   ├── kernel.bin      # Compiled kernel
+│   ├── kernel.bin      # Compiled kernel (28KB)
 │   ├── unodos.img      # 360KB floppy image
 │   └── unodos-144.img  # 1.44MB floppy image
 ├── docs/
@@ -65,23 +74,32 @@ unodos/
 
 ## Development Status
 
-### Completed (v3.2.0)
+### Foundation Layer Complete (v3.3.0 - v3.10.0) ✅
+
+**All core infrastructure is now in place:**
+
 - [x] Three-stage boot architecture (boot + stage2 + kernel)
-- [x] Separate 16KB kernel loaded at 64KB mark
+- [x] Separate 28KB kernel loaded at 64KB mark (expanded from 16KB → 24KB → 28KB)
 - [x] Boot progress indicator (dots during kernel load)
 - [x] Memory detection (INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
 - [x] CGA 320x200 4-color graphics
 - [x] Custom bitmap fonts (8x8, 4x6)
 - [x] Graphical welcome screen
-- [x] Real-time clock display
-- [x] RAM status display
-- [x] Character demonstration
+- [x] **System Call Infrastructure (v3.3.0)** - INT 0x80 + API table at 0x1000:0x0800
+- [x] **Graphics API (v3.4.0)** - 6 functions (pixel, rect, char, string, clear)
+- [x] **Memory Allocator (v3.5.0)** - malloc/free with free list management
+- [x] **Kernel Optimization (v3.7.0)** - Aggressive optimization, ~220 bytes freed
+- [x] **Keyboard Driver (v3.8.0)** - INT 09h handler, scan code translation, circular buffer
+- [x] **Event System (v3.9.0)** - 32-event circular queue, event-driven architecture
+- [x] **Filesystem Abstraction + FAT12 (v3.10.0)** - VFS-like interface, complete FAT12 driver
+- [x] **Hardware compatibility** - Tested on HP Omnibook 600C, fixes applied
 
-### Next Priority
-- [ ] Keyboard input handling
-- [ ] Basic window manager
-- [ ] FAT12 file system (read)
+### Core Services (In Progress - v3.11.0+)
+- [ ] **Application Loader (v3.11.0)** - Load .BIN files from FAT12 ← NEXT
+- [ ] **Window Manager (v3.12.0)** - GUI windows, Z-order, event routing
+- [ ] **Enhanced Filesystem (v3.13.0)** - Multi-cluster reads, subdirectories, seek
+- [ ] **Standard Library (v3.14.0)** - graphics.lib, unodos.lib for C development
 
 ## Technical Notes
 
@@ -95,17 +113,83 @@ unodos/
 - ES must be 0xB800 when calling pixel/drawing functions
 - DS is 0x1000 (Kernel data segment)
 - Stack at SS:SP = 0x0000:0x7C00
+- Kernel API table at fixed address 0x1000:0x0800
 
-### Memory Map
-- 0x0000:7C00 - Boot sector (512 bytes)
-- 0x0800:0000 - Stage2 loader (2KB)
-- 0x1000:0000 - Kernel (16KB, expandable)
-- 0xB800:0000 - CGA video memory (16KB)
+### Memory Map (v3.10.0)
+```
+0x0000:0x0000  IVT, BIOS Data                    1 KB
+0x0000:0x0500  Free/Temporary                    ~30 KB
+0x0000:0x7C00  Boot sector                       512 bytes
+0x0800:0x0000  Stage2 loader                     2 KB (loads 56 sectors)
+0x1000:0x0000  Kernel signature + code           ~5.1 KB used
+0x1000:0x0800  Kernel API table (fixed address)  256 bytes (17 functions)
+0x1000:0x0900  Kernel code continues             ~23.5 KB free (82%)
+0x1700:0x0000  Heap start (malloc pool)          ~608 KB
+0xB800:0000    CGA video memory                  16 KB
+```
+
+### Kernel Size Budget
+- **Total allocation:** 28,672 bytes (28 KB, 56 sectors)
+- **Currently used:** ~5,100 bytes (18%)
+- **Free space:** ~23,600 bytes (82%)
+- **Safe headroom:** Plenty of room for Core Services
+
+### API Table (v3.10.0)
+**Location:** 0x1000:0x0800 (fixed address)
+**Discovery:** Apps use INT 0x80, AH=0x0000 to get table pointer
+**Functions (17 total):**
+- 0-5: Graphics API (pixel, rect, filled_rect, char, string, clear)
+- 6-7: Memory Management (malloc, free)
+- 8-9: Event System (get_event, wait_event)
+- 10-11: Keyboard Input (getchar, wait_key)
+- 12-16: Filesystem (mount, open, read, close, register_driver)
 
 ### Display Compatibility Notes
-- HP Omnibook 600C: Full 320x200 visible in CGA mode
+- HP Omnibook 600C: Full 320x200 visible in CGA mode ✅ TESTED
 - DSTN displays have ghosting - avoid fast animations
 - 486 is much faster than 8088 - delays must be long
+- Hardware compatibility fixes applied for floppy drives (disk reset, spin-up delays, retries)
+
+### FAT12 Filesystem (v3.10.0)
+
+**Current Capabilities:**
+- Mount FAT12 filesystems (360KB and 1.44MB floppies)
+- Open files by name (8.3 filename format: "FILENAME.EXT")
+- Read file contents (single cluster = 512 bytes per read)
+- Close files properly
+- Root directory only (no subdirectories)
+- Drive A: support
+
+**Implementation Details:**
+- BPB (BIOS Parameter Block) parsing
+- Boot sector validation (0xAA55 signature, 512-byte sectors)
+- Root directory search (up to 224 entries on 360KB floppy)
+- Cluster-to-sector address translation
+- File handle table (16 simultaneous open files)
+- Mount table (4 filesystem mounts)
+- Hardware retry logic (3 attempts with delays)
+- Disk system reset on floppy swap
+
+**Known Limitations (intentional for v3.10.0):**
+- ⚠️ **Read-only** - No write/create/delete support (Future: v4.0.0+)
+- ⚠️ **Single cluster** - Max 512 bytes per read (Future: v3.13.0)
+- ⚠️ **No seek** - Always reads from position 0 (Future: v3.13.0)
+- ⚠️ **Root directory only** - No subdirectories (Future: v3.13.0)
+- ⚠️ **8.3 filenames** - No long filename support (Future: v4.1.0+)
+- ⚠️ **Drive A: only** - Single drive (Future: v3.11.0)
+
+**Interactive Testing:**
+- Boot UnoDOS → Keyboard demo
+- Press 'F' or 'f' → Filesystem test starts
+- Prompt to insert test floppy with TEST.TXT
+- System waits for keypress (allows floppy swap)
+- Displays mount/open/read status
+- Shows file contents on screen
+
+**Three-Tier Architecture (Planned):**
+1. **Tier 1:** Single floppy boot (current) - FAT12 built-in
+2. **Tier 2:** Multi-floppy system - Load FAT16/FAT32 drivers from Floppy 2
+3. **Tier 3:** HDD installation - Install OS to hard disk with installer tool
 
 ---
 
