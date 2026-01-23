@@ -118,6 +118,19 @@ test-fat12: $(FLOPPY_IMG) build/test-fat12.img check-qemu
 		-boot a \
 		-display gtk
 
+# Test FAT12 with multi-cluster file (>512 bytes)
+test-fat12-multi: $(FLOPPY_IMG) build/test-fat12-multi.img check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=build/test-fat12-multi.img,format=raw,if=floppy,index=1 \
+		-boot a \
+		-display gtk
+
+# Rebuild multi-cluster test image
+build/test-fat12-multi.img: tools/create_multicluster_test.py
+	python3 tools/create_multicluster_test.py $@
+
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)

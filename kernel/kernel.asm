@@ -343,12 +343,12 @@ test_filesystem:
     call gfx_draw_string_stub
     pop ax                          ; Restore file handle
 
-    ; Read file contents
+    ; Read file contents (up to 1024 bytes for multi-cluster test)
     push ax                         ; Save file handle
     mov bx, 0x1000
     mov es, bx
     mov di, fs_read_buffer
-    mov cx, 200                     ; Read up to 200 bytes
+    mov cx, 1024                    ; Read up to 1024 bytes (multi-cluster)
     call fs_read_stub
     jc .read_failed
 
@@ -1745,7 +1745,139 @@ alloc_file_handle:
     pop si
     ret
 
+; ============================================================================
+; get_next_cluster - Read next cluster from FAT12 chain
+; ============================================================================
+; Input: AX = current cluster number
+; Output: AX = next cluster number
+;         CF = 1 if end-of-chain (or error), CF = 0 if valid cluster
+; Preserves: BX, CX, DX, SI, DI, ES
+; Algorithm:
+;   FAT12 stores 12-bit entries: offset = (cluster * 3) / 2
+;   If cluster is even: value = word[offset] & 0x0FFF
+;   If cluster is odd:  value = word[offset] >> 4
+;   End-of-chain: >= 0xFF8
+get_next_cluster:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+
+    ; Save cluster number for even/odd test
+    mov bp, ax                      ; BP = original cluster number
+
+    ; Calculate FAT offset: (cluster * 3) / 2
+    mov bx, ax
+    mov cx, ax
+    shl ax, 1                       ; AX = cluster * 2
+    add ax, bx                      ; AX = cluster * 3
+    shr ax, 1                       ; AX = (cluster * 3) / 2 = byte offset in FAT
+    mov si, ax                      ; SI = FAT byte offset
+
+    ; Calculate FAT sector number
+    ; FAT sector = reserved_sectors + (byte_offset / 512)
+    xor dx, dx
+    mov cx, 512
+    div cx                          ; AX = sector offset in FAT, DX = byte offset in sector
+    mov di, dx                      ; DI = byte offset within sector
+    add ax, [reserved_sectors]      ; AX = absolute FAT sector number
+
+    ; Check if this FAT sector is already cached
+    cmp ax, [fat_cache_sector]
+    je .sector_cached
+
+    ; Load FAT sector into cache
+    mov [fat_cache_sector], ax      ; Update cached sector number
+
+    push ax
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache
+
+    ; Convert sector to CHS for INT 13h
+    mov cx, ax                      ; CX = sector
+    and cx, 0x003F
+    inc cl                          ; CL = sector (1-based)
+    mov ax, cx
+    shr ax, 6
+    mov ch, al                      ; CH = cylinder
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    int 0x13
+    pop ax
+
+    jc .read_error
+
+.sector_cached:
+    ; Read 2 bytes from FAT cache at offset DI
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, fat_cache
+    add si, di
+    mov ax, [si]                    ; AX = 2 bytes from FAT
+    pop ds
+
+    ; Check if original cluster number (saved in BP) is even or odd
+    mov bx, bp                      ; BP has the original cluster number
+    test bx, 1                      ; Test bit 0
+    jnz .odd_cluster
+
+.even_cluster:
+    ; Even cluster: value = word & 0x0FFF
+    and ax, 0x0FFF
+    jmp .check_end_of_chain
+
+.odd_cluster:
+    ; Odd cluster: value = word >> 4
+    shr ax, 4
+
+.check_end_of_chain:
+    ; Check if end of chain (>= 0xFF8)
+    cmp ax, 0xFF8
+    jae .end_of_chain
+
+    ; Valid cluster - return with CF=0
+    clc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.end_of_chain:
+    ; End of chain - return with CF=1
+    stc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.read_error:
+    ; Disk read error - return with CF=1
+    stc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
 ; fat12_read - Read data from file
+; ============================================================================
 ; Input: AX = file handle
 ;        ES:DI = buffer to read into
 ;        CX = number of bytes to read
@@ -1793,38 +1925,51 @@ fat12_read:
     mov cx, bx                      ; CX = min(requested, remaining)
 
 .read_start:
-    ; Save requested bytes for return value
-    push cx
-
     ; For simplicity, only support reading from start of file (position = 0)
-    ; TODO: Add support for arbitrary file positions
+    ; Multi-cluster reads ARE supported by following FAT chain
     cmp bp, 0
     jne .not_supported
 
-    ; Read first cluster
-    ; Cluster to sector: sector = data_area_start + (cluster - 2) * sectors_per_cluster
+    ; Store variables in temp space (using reserved bytes in file handle)
+    mov [si + 12], ax               ; Store starting cluster
+    mov [si + 14], cx               ; Store bytes to read
+    xor ax, ax
+    mov [si + 16], ax               ; Store bytes read = 0
+
+.cluster_loop:
+    ; Check if we've read all requested bytes
+    mov cx, [si + 14]               ; CX = bytes remaining
+    test cx, cx
+    jz .read_complete_multi
+
+    ; Get current cluster
+    mov ax, [si + 12]               ; AX = current cluster
+
+    ; Convert cluster to sector
     sub ax, 2
     xor bh, bh
     mov bl, [sectors_per_cluster]
-    mul bx                          ; AX = (cluster - 2) * sectors_per_cluster
-    add ax, [data_area_start]
+    mul bx
+    add ax, [data_area_start]       ; AX = sector number
 
-    ; Read one sector (512 bytes max per cluster for FAT12)
+    ; Read sector into bpb_buffer
     push es
     push di
-    push cx
+    push si
 
     mov bx, 0x1000
     push bx
     pop ds
     mov bx, bpb_buffer
+
+    ; Convert LBA to CHS
     push ax
     mov cx, ax
     and cx, 0x003F
-    inc cl
+    inc cl                          ; CL = sector (1-based)
     mov ax, cx
     shr ax, 6
-    mov ch, al
+    mov ch, al                      ; CH = cylinder
     mov ax, 0x0201                  ; Read 1 sector
     mov dx, 0x0000                  ; Drive A:
     int 0x13
@@ -1833,39 +1978,73 @@ fat12_read:
     push cs
     pop ds
 
-    pop cx
+    pop si
     pop di
     pop es
 
-    jc .read_error
+    jc .read_error_multi
 
-    ; Copy data from buffer to user buffer
-    ; Copy min(cx, 512) bytes
-    push cx
+    ; Calculate bytes to copy from this cluster
+    mov cx, [si + 14]               ; CX = bytes remaining
     cmp cx, 512
-    jbe .copy_size_ok
-    mov cx, 512
-.copy_size_ok:
-    push si
-    push di
-    mov si, bpb_buffer
-    push ds
-    mov ax, 0x1000
-    mov ds, ax
-    rep movsb
-    pop ds
-    pop di
-    pop si
-    pop ax                          ; AX = bytes copied
+    jbe .bytes_ok_multi
+    mov cx, 512                     ; Max 512 bytes per cluster
+.bytes_ok_multi:
 
+    ; Copy CX bytes from bpb_buffer to ES:DI
+    push si
+    push ax
+    push ds
+
+    mov ax, cx                      ; Save bytes to copy
+    mov si, bpb_buffer
+    mov bx, 0x1000
+    mov ds, bx
+    rep movsb                       ; Copy and advance DI automatically
+
+    pop ds
+    mov cx, ax                      ; Restore bytes copied to CX
+    pop ax
+    pop si
+
+    ; Update counters (CX has bytes just copied)
+    mov ax, [si + 14]               ; AX = bytes remaining before
+    sub ax, cx                      ; AX = bytes remaining after
+    mov [si + 14], ax               ; Store updated bytes remaining
+
+    mov ax, [si + 16]               ; AX = total bytes read so far
+    add ax, cx                      ; AX += bytes just copied
+    mov [si + 16], ax               ; Store updated total
+    ; Note: DI has already been advanced by movsb
+
+    ; Get next cluster in chain
+    mov ax, [si + 12]               ; Current cluster
+    call get_next_cluster
+    jc .read_complete_multi         ; End of chain reached
+
+    mov [si + 12], ax               ; Store next cluster
+    jmp .cluster_loop
+
+.read_complete_multi:
     ; Update file position
-    mov bp, [si + 8]
-    add bp, ax
-    mov [si + 8], bp
+    mov ax, [si + 8]                ; Current position
+    add ax, [si + 16]               ; Add bytes read
+    mov [si + 8], ax                ; Store new position
 
     ; Return bytes read
-    pop cx                          ; Original requested bytes
+    mov ax, [si + 16]
     clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.read_error_multi:
+    mov ax, FS_ERR_READ_ERROR
+    stc
     pop bp
     pop di
     pop si
@@ -1996,8 +2175,13 @@ data_area_start: dw 33              ; Calculated: root_dir_start + root_dir_sect
 ;   Bytes 12-31: Reserved
 file_table: times 512 db 0          ; 16 entries * 32 bytes
 
-; Read buffer for filesystem test
-fs_read_buffer: times 512 db 0
+; Read buffer for filesystem test (1024 bytes for multi-cluster testing)
+fs_read_buffer: times 1024 db 0
+
+; FAT cache (for cluster chain following)
+; Stores one sector of FAT at a time
+fat_cache: times 512 db 0
+fat_cache_sector: dw 0xFFFF          ; Currently cached FAT sector (0xFFFF = invalid)
 
 ; ============================================================================
 ; Padding
