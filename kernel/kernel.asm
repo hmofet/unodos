@@ -112,15 +112,19 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Try font '=' and '>' after memory reorganization
+    ; Test: Try '9' first to verify basic functionality still works
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; Character '=' from font (offset 232)
+    ; Character '9' from font (offset 200 - known to work before)
+    mov si, char_9
+    call draw_char
+
+    ; Then try '=' from font (offset 232)
     mov si, char_eq
     call draw_char
 
-    ; Character '>' from font (offset 240)
+    ; Then try '>' from font (offset 240)
     mov si, char_gt
     call draw_char
 
