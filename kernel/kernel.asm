@@ -252,6 +252,22 @@ kbd_wait_key:
     jz kbd_wait_key
     ret
 
+; Clear keyboard buffer and event queue
+; Drains all pending keys
+clear_kbd_buffer:
+    push ax
+.drain_loop:
+    call kbd_getchar
+    test al, al
+    jnz .drain_loop
+    ; Also drain event queue
+.drain_events:
+    call event_get_stub
+    test al, al
+    jnz .drain_events
+    pop ax
+    ret
+
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
 ; ============================================================================
@@ -283,6 +299,9 @@ test_filesystem:
     mov si, .insert_msg
     call gfx_draw_string_stub
 
+    ; Clear keyboard buffer (F key still in buffer from previous press)
+    call clear_kbd_buffer
+
     ; Wait for keypress
     call kbd_wait_key
 
@@ -291,6 +310,12 @@ test_filesystem:
     mov cx, 50
     mov si, .testing_msg
     call gfx_draw_string_stub
+
+    ; Small delay to let floppy drive settle after swap
+    mov cx, 0x8000
+.settle_delay:
+    nop
+    loop .settle_delay
 
     ; Try to mount filesystem
     mov al, 0                       ; Drive A:
@@ -356,6 +381,16 @@ test_filesystem:
     mov cx, 65
     mov si, .mount_err
     call gfx_draw_string_stub
+
+    ; Show error code for debugging
+    mov bx, 180
+    mov cx, 65
+    mov si, .err_code_msg
+    call gfx_draw_string_stub
+
+    ; Display error code in AX (saved from mount call)
+    ; For now just show generic error
+
     pop di
     pop si
     pop dx
@@ -395,7 +430,8 @@ test_filesystem:
 .insert_msg:    db 'Insert test floppy (with TEST.TXT) - Press any key', 0
 .testing_msg:   db 'Testing...', 0
 .mount_ok:      db 'Mount: OK', 0
-.mount_err:     db 'Mount: FAIL', 0
+.mount_err:     db 'Mount: FAIL (Check: FAT12? 512B sectors?)', 0
+.err_code_msg:  db 'Err:', 0
 .open_ok:       db 'Open TEST.TXT: OK', 0
 .open_err:      db 'Open TEST.TXT: FAIL (not found)', 0
 .read_ok:       db 'Read: OK - File contents:', 0
@@ -1338,23 +1374,61 @@ fat12_mount:
     push si
     push di
 
+    ; Reset disk system first (important after floppy swap!)
+    xor ax, ax                      ; AH=00 (reset disk system)
+    xor dx, dx                      ; DL=0 (drive A:)
+    int 0x13
+    jc .read_error
+
+    ; Small delay for drive to spin up
+    push cx
+    mov cx, 0x4000
+.spinup:
+    nop
+    loop .spinup
+    pop cx
+
     ; Read boot sector (sector 0) into bpb_buffer
+    ; Try multiple times in case drive not ready
+    push bp
+    mov bp, 3                       ; Retry count in BP
+
+.retry_read:
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
     mov cx, 0x0001                  ; CH=0 (cylinder), CL=1 (sector)
     mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    push es
     mov bx, 0x1000
     mov es, bx
     mov bx, bpb_buffer
     int 0x13
-    jc .read_error
+    pop es
+    jnc .read_success
+
+    ; Retry on error
+    dec bp
+    jnz .retry_read
+    pop bp
+    jmp .read_error
+
+.read_success:
+    pop bp                          ; Restore BP after successful read
+
+    ; Validate boot sector signature (0xAA55 at offset 510)
+    cmp word [bpb_buffer + 510], 0xAA55
+    jne .read_error
 
     ; Parse BPB (BIOS Parameter Block)
     ; Bytes per sector at offset 0x0B
     mov ax, [bpb_buffer + 0x0B]
+    cmp ax, 512                     ; Must be 512 for FAT12
+    jne .read_error
     mov [bytes_per_sector], ax
 
     ; Sectors per cluster at offset 0x0D
     mov al, [bpb_buffer + 0x0D]
+    test al, al                     ; Must not be zero
+    jz .read_error
     mov [sectors_per_cluster], al
 
     ; Reserved sectors at offset 0x0E
