@@ -434,32 +434,270 @@ kernel_api_table:
     dw event_wait_stub              ; 9: Wait for event (blocking)
 
 ; ============================================================================
-; API Stub Functions (Temporary - To Be Implemented)
+; Graphics API Functions (Foundation 1.2)
 ; ============================================================================
 
-; Graphics stubs
+; gfx_draw_pixel_stub - Draw single pixel
+; Input: CX = X coordinate (0-319)
+;        BX = Y coordinate (0-199)
+;        AL = Color (0-3)
+; Output: None
+; Preserves: All registers
 gfx_draw_pixel_stub:
-    ; TODO: Implement in Foundation 1.2
+    ; For now, only supports color 3 (white)
+    ; TODO: Add multi-color support
+    call plot_pixel_white
     ret
 
-gfx_draw_rect_stub:
-    ; TODO: Implement in Foundation 1.2
-    ret
-
-gfx_draw_filled_rect_stub:
-    ; TODO: Implement in Foundation 1.2
-    ret
-
+; gfx_draw_char_stub - Draw character
+; Input: BX = X coordinate
+;        CX = Y coordinate
+;        AL = ASCII character
+; Output: None
+; Modifies: draw_x advances by 12
 gfx_draw_char_stub:
-    ; TODO: Implement in Foundation 1.2
+    pusha
+    push es
+
+    ; Set up video memory
+    mov dx, 0xB800
+    mov es, dx
+
+    ; Set position
+    mov [draw_x], bx
+    mov [draw_y], cx
+
+    ; Calculate font offset: (ASCII - 32) * 8
+    sub al, 32
+    mov ah, 0
+    mov dl, 8
+    mul dl                          ; AX = (ASCII - 32) * 8
+
+    ; Get font address
+    mov si, font_8x8
+    add si, ax
+
+    ; Draw the character
+    call draw_char
+
+    pop es
+    popa
     ret
 
+; gfx_draw_string_stub - Draw null-terminated string
+; Input: BX = X coordinate
+;        CX = Y coordinate
+;        SI = Pointer to null-terminated string
+; Output: None
+; Modifies: draw_x advances
 gfx_draw_string_stub:
-    ; TODO: Implement in Foundation 1.2
+    pusha
+    push es
+    push ds
+
+    ; Set up video memory
+    mov dx, 0xB800
+    mov es, dx
+
+    ; Set starting position
+    mov [draw_x], bx
+    mov [draw_y], cx
+
+.string_loop:
+    lodsb                           ; Load character from DS:SI
+    test al, al                     ; Check for null terminator
+    jz .string_done
+
+    ; Calculate font offset
+    sub al, 32
+    mov ah, 0
+    mov dl, 8
+    mul dl
+
+    ; Get font address
+    push si
+    mov si, font_8x8
+    add si, ax
+
+    ; Draw character
+    call draw_char
+
+    pop si
+    jmp .string_loop
+
+.string_done:
+    pop ds
+    pop es
+    popa
     ret
 
+; gfx_draw_rect_stub - Draw rectangle outline
+; Input: BX = X coordinate (top-left)
+;        CX = Y coordinate (top-left)
+;        DX = Width
+;        SI = Height
+; Output: None
+; Preserves: All registers
+gfx_draw_rect_stub:
+    pusha
+    push es
+
+    ; Set up video memory
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Save parameters
+    push bx                         ; Save X
+    push cx                         ; Save Y
+    push dx                         ; Save Width
+    push si                         ; Save Height
+
+    ; Draw top edge
+    pop si                          ; Restore Height (will push back)
+    pop dx                          ; Restore Width
+    pop cx                          ; Restore Y
+    pop bx                          ; Restore X
+
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Top edge: Y=CX, X from BX to BX+DX
+    mov di, 0                       ; Counter
+.top_edge:
+    push cx
+    push bx
+    add bx, di
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc di
+    cmp di, dx
+    jl .top_edge
+
+    ; Bottom edge: Y=CX+SI-1, X from BX to BX+DX
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    push bx
+    push cx
+    push dx
+    push si
+
+    add cx, si
+    dec cx                          ; Y = Y + Height - 1
+    mov di, 0
+.bottom_edge:
+    push cx
+    push bx
+    add bx, di
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc di
+    cmp di, dx
+    jl .bottom_edge
+
+    ; Left edge: X=BX, Y from CX to CX+SI
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov di, 0
+.left_edge:
+    push cx
+    push bx
+    add cx, di
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc di
+    cmp di, si
+    jl .left_edge
+
+    ; Right edge: X=BX+DX-1, Y from CX to CX+SI
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    add bx, dx
+    dec bx                          ; X = X + Width - 1
+    mov di, 0
+.right_edge:
+    push cx
+    push bx
+    add cx, di
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc di
+    cmp di, si
+    jl .right_edge
+
+    pop es
+    popa
+    ret
+
+; gfx_draw_filled_rect_stub - Draw filled rectangle
+; Input: BX = X coordinate (top-left)
+;        CX = Y coordinate (top-left)
+;        DX = Width
+;        SI = Height
+; Output: None
+; Preserves: All registers
+gfx_draw_filled_rect_stub:
+    pusha
+    push es
+
+    ; Set up video memory
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Use BP for height counter, DI for width counter
+    mov bp, si                      ; BP = Height
+    mov ax, cx                      ; AX = Start Y
+
+.row_loop:
+    mov di, dx                      ; DI = Width counter
+    push cx                          ; Save current Y
+    push bx                          ; Save start X
+
+.col_loop:
+    call plot_pixel_white            ; Draw pixel at (BX, CX)
+    inc bx                           ; Next X
+    dec di
+    jnz .col_loop
+
+    pop bx                           ; Restore start X
+    pop cx                           ; Restore Y
+    inc cx                           ; Next row
+    dec bp
+    jnz .row_loop
+
+    pop es
+    popa
+    ret
+
+; gfx_clear_area_stub - Clear rectangular area
+; Input: BX = X coordinate (top-left)
+;        CX = Y coordinate (top-left)
+;        DX = Width
+;        SI = Height
+; Output: None
+; Preserves: All registers
 gfx_clear_area_stub:
-    ; TODO: Implement in Foundation 1.2
+    ; TODO: Implement proper clear (set pixels to background color)
+    ; For now, just return (no-op)
     ret
 
 ; Memory management stubs
