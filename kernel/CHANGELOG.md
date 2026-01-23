@@ -4,6 +4,29 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.1] - 2026-01-23
+
+### Fixed
+- Font rendering issue for characters beyond offset ~208
+- Reorganized memory layout: moved font data BEFORE variables
+- Font now occupies clean contiguous block (0x0120-0x0417)
+- All variables moved after font data (0x0418+)
+
+### Changed
+- Renamed `.save_x`/`.save_y` to `pixel_save_x`/`pixel_save_y` (global scope)
+- Updated test to use actual font characters '=' and '>'
+
+### Technical Details
+**Old layout (broken):**
+- Variables at 0x0120-0x0127
+- Font started at 0x0128
+- Issue: Unknown addressing problem prevented access beyond ~offset 208
+
+**New layout (fixed):**
+- Font: 0x0120-0x0417 (760 bytes, contiguous)
+- Variables: 0x0418+ (draw_x, draw_y, pixel_save_x, pixel_save_y)
+- Font data now in clean block with no interspersed variables
+
 ## [3.2.0.14] - 2026-01-23
 
 ### Changed
