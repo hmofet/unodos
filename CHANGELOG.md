@@ -5,6 +5,62 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.1] - 2026-01-23
+
+### Added
+- **Multi-cluster file reading** - FAT12 driver now reads files larger than 512 bytes
+  - get_next_cluster() function reads FAT12 entries and follows cluster chains
+  - Handles 12-bit FAT entries with even/odd cluster logic
+  - FAT sector caching (512-byte fat_cache buffer + fat_cache_sector tracker)
+  - Reads end-of-chain markers (0xFF8-0xFFF) to detect file end
+
+- **Enhanced test infrastructure**
+  - tools/create_multicluster_test.py - generates 1024-byte test files
+  - Test file spans 2 clusters with "CLUSTER 1:" and "CLUSTER 2:" markers
+  - FAT chain validation: cluster 2 → cluster 3 → EOF
+  - make test-fat12-multi target for testing
+  - fs_read_buffer expanded from 512 to 1024 bytes
+
+### Changed
+- **fat12_read() rewritten for multi-cluster support**
+  - Now loops through cluster chain until EOF or all bytes read
+  - Reads each cluster sequentially into bpb_buffer
+  - Copies data to user buffer and advances pointer (ES:DI) automatically
+  - Updates file position correctly for multi-cluster reads
+  - Still requires position=0 (arbitrary position seeking planned for v3.11.0)
+
+- **test_filesystem() updated**
+  - Now reads 1024 bytes instead of 200 bytes
+  - Displays content from both clusters on screen
+  - Validates multi-cluster reading works correctly
+
+### Technical Details
+- FAT12 cluster chain algorithm:
+  - Calculate FAT offset: `(cluster × 3) / 2`
+  - Determine FAT sector: `reserved_sectors + (offset / 512)`
+  - Cache FAT sector if not already loaded
+  - Read 2 bytes from FAT at offset
+  - If cluster is even: `value = word & 0x0FFF`
+  - If cluster is odd: `value = word >> 4`
+  - Check for end-of-chain: `value >= 0xFF8`
+
+- Files can now be read up to full FAT12 capacity (~1.44MB on floppy)
+- Each fs_read() call follows the cluster chain until requested bytes are satisfied
+- Future: Arbitrary position seeking (requires calculating cluster offset from file position)
+
+### Testing
+```bash
+make test-fat12-multi      # Test with 1024-byte file
+# Boot, press F, swap to test floppy, verify both clusters display
+```
+
+### Notes
+- This patch release enables loading applications larger than 512 bytes
+- Critical for Application Loader (v3.11.0) which needs to load multi-KB programs
+- Hardware testing on HP Omnibook 600C recommended before next release
+
+---
+
 ## [3.10.0] - 2026-01-23
 
 ### Added
