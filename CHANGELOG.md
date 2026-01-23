@@ -5,6 +5,54 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] - 2026-01-23
+
+### Added
+- **Foundation 1.5: Event System** (Complete)
+  - Circular event queue (32 events, 3 bytes each = 96 bytes)
+  - Event structure: type (byte) + data (word)
+  - post_event() function for posting events to queue
+  - event_get_stub() - Non-blocking event retrieval (API offset 8)
+  - event_wait_stub() - Blocking event wait (API offset 9)
+  - Event types: KEY_PRESS (1), KEY_RELEASE (2), TIMER (3), MOUSE (4)
+  - Keyboard integration: INT 09h now posts KEY_PRESS events
+
+### Changed
+- **Keyboard Demo Updated to Use Event System**
+  - Now uses event_wait_stub() instead of kbd_wait_key()
+  - Demonstrates event-driven programming model
+  - Updated instruction text: "Uses: Event System + Graphics API"
+  - Updated exit message: "Event demo complete!"
+  - Validates event system integration with keyboard driver
+
+### Technical Details
+- Event queue: 32-event circular buffer (96 bytes total)
+- Each event: 1 byte type + 2 bytes data
+- Queue management: head/tail pointers with wraparound at 32
+- Keyboard events: ASCII character stored in data field
+- Backward compatibility: kbd_getchar/kbd_wait_key still available
+- Dual posting: Keys stored in both keyboard buffer and event queue
+- Event types extensible for future timer, mouse, custom events
+
+### Implementation
+- post_event(): Adds event to tail of queue, advances tail pointer
+- event_get_stub(): Removes event from head, returns type and data
+- event_wait_stub(): Loops on event_get_stub() until event available
+- INT 09h handler: Calls post_event() after storing key in buffer
+- Variables: event_queue[96], event_queue_head, event_queue_tail
+
+### Foundation Layer Progress
+- ✓ System Call Infrastructure (v3.3.0)
+- ✓ Graphics API (v3.4.0)
+- ✓ Memory Allocator (v3.5.0)
+- ✓ Kernel Expansion to 24KB (v3.6.0)
+- ✓ Aggressive Optimization (v3.7.0)
+- ✓ Keyboard Driver (v3.8.0)
+- ✓ **Event System (v3.9.0) - JUST COMPLETED**
+
+### What's Next
+Foundation Layer is now complete! Next phase: Standard Library (graphics.lib, unodos.lib)
+
 ## [3.8.0] - 2026-01-23
 
 ### Added

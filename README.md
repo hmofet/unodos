@@ -182,19 +182,20 @@ unodos/
 - [x] RAM status display
 - [x] Character demonstration
 
-### Completed (Foundation Layer)
+### Completed (Foundation Layer) ✅
 - [x] System call infrastructure (INT 0x80 + Far Call Table) - v3.3.0
 - [x] Graphics API abstraction layer - v3.4.0
 - [x] Memory allocator (malloc/free) - v3.5.0
 - [x] Kernel expansion (16KB → 24KB) - v3.6.0
 - [x] Aggressive kernel optimization - v3.7.0
 - [x] Keyboard input handling (INT 09h driver) - v3.8.0
+- [x] Event system (circular queue, event-driven architecture) - v3.9.0
 
-### In Progress (Foundation Layer)
-- [ ] Event system (circular queue)
+**Foundation Layer Complete!** All core infrastructure is now in place.
 
-### Planned (Foundation Layer - v3.7.0-v3.8.0)
-- [ ] Standard library (graphics.lib, unodos.lib)
+### In Progress (Standard Library)
+- [ ] graphics.lib - C-callable wrappers for Graphics API
+- [ ] unodos.lib - Initialization and utility functions
 
 ### Planned (Core Services - v3.5.0-v3.7.0)
 - [ ] GUI window manager
@@ -215,7 +216,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.8.0**
+Current version: **3.9.0**
 
 ## Contributing
 
