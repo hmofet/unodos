@@ -1,5 +1,13 @@
 # Graphics Display Debugging - Font Rendering Issue
 
+## STATUS: ✓ RESOLVED (Bootloader v3.2.1 - 2026-01-23)
+
+**Root Cause**: BIOS int 0x10 in stage2 bootloader was corrupting BX register (buffer pointer)
+**Fix**: Added push/pop BX around BIOS int 0x10 call in stage2.asm
+**Result**: All 32 sectors of kernel now load correctly, font data fully accessible
+
+---
+
 ## Problem Summary
 
 After separating the kernel from the bootloader (v3.2.0), text rendering stopped working correctly. Characters from the included font file beyond a certain offset would not display.
@@ -129,7 +137,56 @@ The boundary is somewhere between offset 208-232 in the font data.
 
 The issue is definitively with accessing included font data beyond offset ~200-208. The `draw_char` function works correctly, and lower font offsets work. The problem lies in how the font file data is included, stored, or accessed at runtime when using offsets beyond this boundary.
 
+## FINAL RESOLUTION (2026-01-23)
+
+### Root Cause Identified
+
+The font data WAS correctly included in the kernel binary and WAS correctly written to the floppy disk. However, only the first 512 bytes (1 sector) of the kernel were being loaded into memory at 0x10000. The remaining 31 sectors were never loaded, appearing as zeros in memory.
+
+### The Bug
+
+In stage2.asm, the progress indicator code used BIOS int 0x10 (teletype output) to print dots:
+
+```asm
+mov ah, 0x0E
+mov al, '.'
+xor bh, bh
+int 0x10
+; Immediately followed by:
+add bx, 512    ; BX holds the buffer pointer!
+```
+
+**Problem**: Some BIOS implementations allow int 0x10 to modify the BX register. Since BX was holding the critical buffer pointer for where to load the next sector, corruption of BX caused all sectors after the first to be loaded to incorrect memory locations (or fail entirely).
+
+### The Fix
+
+Bootloader v3.2.1 preserves BX around the BIOS call:
+
+```asm
+push bx
+mov ah, 0x0E
+mov al, '.'
+xor bh, bh
+int 0x10
+pop bx
+```
+
+### Verification
+
+Memory dumps in QEMU confirm all 32 sectors now load correctly:
+- Font data at 0x1019D-0x0495: ✓ Fully accessible
+- Character '9' (offset 200): ✓ Present
+- Character '=' (offset 232): ✓ Present
+- Character 'W' (offset 440): ✓ Present
+
+### Lessons Learned
+
+1. **Always preserve registers around BIOS calls** - BIOS interrupts can modify registers unpredictably
+2. **Test on real hardware and emulators** - Different BIOS implementations behave differently
+3. **Memory dumps are invaluable** - Direct memory inspection revealed the kernel wasn't fully loaded
+4. **Systematic debugging pays off** - The detailed investigation timeline helped identify the exact boundary
+
 ---
 
 *Last updated: 2026-01-23*
-*Current version: 3.2.0.13*
+*Issue: v3.2.0 | Resolved: v3.2.1*

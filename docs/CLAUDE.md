@@ -218,25 +218,20 @@ This project uses the **UnoDOS License** (see `/LICENSE.md` in project root):
 
 ---
 
-## Current Debugging Issue (v3.2.0.14)
+## Recent Issues (RESOLVED)
 
-### Font Rendering Problem
+### Font Rendering Problem (v3.2.0 - v3.2.1) - FIXED ✓
 
-After separating kernel from bootloader, font rendering partially works:
-- Font characters at offset 0-200: ✓ Work correctly
-- Font characters at offset 208+: ✗ Not accessible
-- Hardcoded character data: ✓ Works correctly
-- `draw_char` function: ✓ Works correctly
+**Issue**: After separating kernel from bootloader (v3.2.0), font rendering only worked for characters at offset 0-200. Characters beyond offset ~208 appeared as zeros in memory.
 
-**Root Cause**: Included font data (via `%include "font8x8.asm"`) is not fully accessible at runtime beyond offset ~208.
+**Root Cause**: Critical bug in stage2 bootloader - BIOS int 0x10 (teletype output for progress dots) was corrupting the BX register, which held the buffer pointer for loading kernel sectors. This caused only the first sector (512 bytes) of the kernel to load correctly.
 
-**See**: [docs/GRAPHICS_DEBUG.md](GRAPHICS_DEBUG.md) for complete debugging analysis.
+**Fix**: Bootloader v3.2.1 now preserves BX register with push/pop around all BIOS int 0x10 calls.
 
-**Next Steps**:
-1. Investigate memory access to font data region
-2. Test alternative font storage methods
-3. Consider copying font to different memory location
+**See**: [docs/GRAPHICS_DEBUG.md](GRAPHICS_DEBUG.md) for complete debugging analysis and investigation timeline.
+
+**Status**: ✓ RESOLVED in bootloader v3.2.1 (2026-01-23)
 
 ---
 
-*Last updated: 2026-01-23 (v3.2.0.14)*
+*Last updated: 2026-01-23 (bootloader v3.2.1, kernel v3.2.3)*

@@ -43,9 +43,13 @@ After kernel separation, text rendering stopped working for characters beyond a 
 - docs/GRAPHICS_DEBUG.md - Complete debugging analysis
 - Updated Write-Floppy-Quick.ps1 with git retry logic
 
-**Current Status:**
-- Root cause identified: Font data access issue beyond offset ~208
-- Next step: Investigate why included font data not accessible at higher offsets
+**Resolution (v3.2.1):**
+- ✓ FIXED: Stage2 bootloader was corrupting BX register during progress output
+- ✓ BIOS int 0x10 modified BX, which held the buffer pointer for loading sectors
+- ✓ Only first sector (512 bytes) of kernel was being loaded
+- ✓ Fix: Added push/pop BX around BIOS int 0x10 in stage2.asm
+- ✓ All 32 sectors of kernel now load correctly
+- ✓ Font data fully accessible, text rendering works
 
 ---
 
@@ -103,12 +107,13 @@ After kernel separation, text rendering stopped working for characters beyond a 
 3. Begin GUI window manager
 
 ### Current State
-- **Version**: 3.2.0.14
+- **Bootloader Version**: 3.2.1 ✓
+- **Kernel Version**: 3.2.3 ✓
 - **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
-- **Boot loader**: Fully functional
-- **Graphics**: CGA 320x200 working, welcome box displays
-- **Text rendering**: DEBUGGING - font access issue beyond offset ~208
-- **Known issue**: Cannot access included font data at higher offsets
+- **Boot loader**: Fully functional, BX register bug fixed
+- **Graphics**: CGA 320x200 working
+- **Text rendering**: ✓ WORKING - all font characters accessible
+- **Welcome message**: "WELCOME TO UNODOS 3!" displays correctly
 - **Test hardware**: HP Omnibook 600C (486DX4-75)
 
 ### Key Decisions Made

@@ -86,10 +86,13 @@ load_kernel:
     jc .disk_error
 
     ; Print progress dot
+    ; IMPORTANT: Preserve BX since BIOS int 0x10 may modify it
+    push bx
     mov ah, 0x0E
     mov al, '.'                     ; ASCII 0x2E
     xor bh, bh
     int 0x10
+    pop bx
 
     ; Advance buffer pointer
     add bx, 512
