@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support for alphanumeric keys, punctuation, and special keys
   - Proper handling of key press and release events
 
+- **Interactive Keyboard Demo** (Foundation Layer Integration Test)
+  - Tests Graphics API + Keyboard Driver integration
+  - Real-time keyboard input echo to screen
+  - Displays prompt and instructions on boot
+  - Handles special keys: ESC (exit), Enter (newline), Backspace (cursor back)
+  - Auto-wraps at screen edges
+  - Demonstrates API table function calls working in practice
+
 ### Technical Details
 - INT 09h handler chains to original BIOS handler after processing
 - Two 96-byte scan code translation tables (normal and shifted)
