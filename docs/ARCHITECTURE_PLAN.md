@@ -216,13 +216,13 @@ The app binary **never changes**. Only the thunk stubs need to be rewritten.
 0x0000:0x0500  Free/Temporary                     ~30 KB
 0x0000:0x7C00  Boot sector                        512 bytes
 0x0800:0x0000  Stage2 loader                      2 KB
-0x1000:0x0000  Kernel code + API table            16 KB
+0x1000:0x0000  Kernel code + API table            24 KB (expanded v3.6.0)
    0x1000:0000    Kernel signature + entry
    0x1000:0200    Graphics functions
    0x1000:0400    Memory management
    0x1000:0500    Kernel API table (256 bytes)
    0x1000:0600    Other kernel code
-0x1400:0x0000  Heap start (malloc pool)           ~550 KB
+0x1600:0x0000  Heap start (malloc pool)           ~532 KB
 0xB800:0x0000  CGA video memory                   16 KB
 ```
 
@@ -365,8 +365,9 @@ Functions:
 | **Fonts (included)** | 1.5 KB | 10.9 KB |
 | **Total kernel+services** | | **~11 KB** |
 
-**Remaining in 16KB kernel:** ~5 KB
-**Remaining for apps on 360KB floppy:** ~340 KB
+**Kernel expanded to 24KB (v3.6.0):**
+- **Remaining in 24KB kernel:** ~13 KB
+- **Remaining for apps on 360KB floppy:** ~332 KB (24KB kernel + 4KB boot/stage2 = 28KB used)
 
 This leaves plenty of room for additional kernel features and many applications.
 
