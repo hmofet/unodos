@@ -1617,13 +1617,14 @@ fat12_open:
     ; Compare filename (11 bytes)
     push si
     push di
+    push ds
+    push si                         ; SI pushed again for cmpsb source
+    ; Now calculate offset to filename on stack
     mov di, sp
-    add di, 8                       ; Skip SI, DI, AX, CX to point to 8.3 name on stack
+    add di, 12                      ; Skip SI, DS, SI, DI, AX, CX (12 bytes) to point to 8.3 name
     push ss
     pop es
     mov cx, 11
-    push ds
-    push si
     mov ax, 0x1000
     mov ds, ax
     rep cmpsb
