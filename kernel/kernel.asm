@@ -33,6 +33,9 @@ entry:
     ; Enable interrupts
     sti
 
+    ; Run keyboard input demo
+    call keyboard_demo
+
     ; Halt
 halt_loop:
     hlt
@@ -239,6 +242,107 @@ kbd_wait_key:
     test al, al
     jz kbd_wait_key
     ret
+
+; ============================================================================
+; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
+; ============================================================================
+
+keyboard_demo:
+    push ax
+    push bx
+    push cx
+    push si
+
+    ; Display prompt: "Type text (ESC to exit):"
+    mov bx, 10                      ; X position
+    mov cx, 160                     ; Y position (below welcome box)
+    mov si, .prompt
+    call gfx_draw_string_stub
+
+    ; Display instruction: "Uses: Graphics API + Keyboard Driver"
+    mov bx, 10
+    mov cx, 170
+    mov si, .instruction
+    call gfx_draw_string_stub
+
+    ; Initialize cursor position for input
+    mov word [demo_cursor_x], 10
+    mov word [demo_cursor_y], 185
+
+.input_loop:
+    ; Wait for keypress
+    call kbd_wait_key               ; Returns ASCII in AL
+
+    ; Check for ESC (exit)
+    cmp al, 27
+    je .exit
+
+    ; Check for Enter (newline)
+    cmp al, 13
+    je .handle_enter
+
+    ; Check for Backspace
+    cmp al, 8
+    je .handle_backspace
+
+    ; Check for printable characters (space to ~)
+    cmp al, 32
+    jb .input_loop                  ; Skip control characters
+    cmp al, 126
+    ja .input_loop                  ; Skip extended ASCII
+
+    ; Draw character at cursor position
+    mov bx, [demo_cursor_x]
+    mov cx, [demo_cursor_y]
+    call gfx_draw_char_stub         ; AL already contains character
+
+    ; Advance cursor
+    add word [demo_cursor_x], 8     ; 8 pixels per character
+    cmp word [demo_cursor_x], 310   ; Check right edge
+    jl .input_loop
+
+    ; Wrap to next line
+    mov word [demo_cursor_x], 10
+    add word [demo_cursor_y], 10
+    cmp word [demo_cursor_y], 195   ; Check bottom edge
+    jl .input_loop
+
+    ; Reset to top if at bottom
+    mov word [demo_cursor_y], 185
+    jmp .input_loop
+
+.handle_enter:
+    ; Move to next line
+    mov word [demo_cursor_x], 10
+    add word [demo_cursor_y], 10
+    cmp word [demo_cursor_y], 195
+    jl .input_loop
+    mov word [demo_cursor_y], 185
+    jmp .input_loop
+
+.handle_backspace:
+    ; Move cursor back (simple version - doesn't erase)
+    cmp word [demo_cursor_x], 10    ; Already at start of line?
+    jle .input_loop
+    sub word [demo_cursor_x], 8
+    jmp .input_loop
+
+.exit:
+    ; Display exit message
+    mov bx, 10
+    mov cx, 195
+    mov si, .exit_msg
+    call gfx_draw_string_stub
+
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.prompt: db 'Type text (ESC to exit):', 0
+.instruction: db 'Uses: Graphics API + Keyboard Driver', 0
+.exit_msg: db 'Exiting demo...', 0
 
 ; Scan code to ASCII translation tables
 scancode_normal:
@@ -795,6 +899,10 @@ kbd_buffer_tail: dw 0
 kbd_shift_state: db 0
 kbd_ctrl_state: db 0
 kbd_alt_state: db 0
+
+; Keyboard demo state
+demo_cursor_x: dw 0
+demo_cursor_y: dw 0
 
 ; ============================================================================
 ; Padding
