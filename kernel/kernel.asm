@@ -112,16 +112,16 @@ draw_welcome_box:
     cmp bx, 150
     jle .right_border
 
-    ; Test: Use hardcoded '=' instead of font data
+    ; Test: Try font '=' and '>' after memory reorganization
     mov word [draw_x], 65
     mov word [draw_y], 80
 
-    ; Test with hardcoded '=' data (not from font)
-    mov si, test_eq_char
+    ; Character '=' from font (offset 232)
+    mov si, char_eq
     call draw_char
 
-    ; Test '9' from font (known to work)
-    mov si, char_9
+    ; Character '>' from font (offset 240)
+    mov si, char_gt
     call draw_char
 
     pop es
@@ -197,8 +197,8 @@ plot_pixel_white:
     pusha
 
     ; Save input values
-    mov [.save_x], cx
-    mov [.save_y], bx
+    mov [pixel_save_x], cx
+    mov [pixel_save_y], bx
 
     ; Calculate memory address
     ; For CGA 320x200 4-color:
@@ -213,13 +213,13 @@ plot_pixel_white:
     mov di, ax                      ; DI = row offset
 
     ; Add column offset
-    mov ax, [.save_x]               ; AX = X
+    mov ax, [pixel_save_x]          ; AX = X
     shr ax, 1
     shr ax, 1                       ; AX = X / 4
     add di, ax                      ; DI = byte offset
 
     ; Check if Y was odd
-    mov ax, [.save_y]
+    mov ax, [pixel_save_y]
     test al, 1
     jz .even_row
     add di, 0x2000                  ; Odd rows are in second bank
@@ -228,7 +228,7 @@ plot_pixel_white:
     ; Calculate bit position within byte
     ; Each pixel is 2 bits, 4 pixels per byte
     ; Pixel 0 is bits 7-6, pixel 1 is bits 5-4, etc.
-    mov ax, [.save_x]
+    mov ax, [pixel_save_x]
     and ax, 3                       ; Get pixel position (0-3)
 
     ; Calculate shift amount: (3 - position) * 2
@@ -253,21 +253,24 @@ plot_pixel_white:
     popa
     ret
 
-.save_x: dw 0
-.save_y: dw 0
+; ============================================================================
+; Font Data - 8x8 characters
+; ============================================================================
+; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
+
+%include "font8x8.asm"
 
 ; ============================================================================
 ; Variables
 ; ============================================================================
 
+; Character drawing state
 draw_x: dw 0
 draw_y: dw 0
 
-; ============================================================================
-; Font Data - 8x8 characters
-; ============================================================================
-
-%include "font8x8.asm"
+; plot_pixel_white temporary storage
+pixel_save_x: dw 0
+pixel_save_y: dw 0
 
 ; Character aliases for convenience
 char_W      equ font_8x8 + ('W' - 32) * 8
