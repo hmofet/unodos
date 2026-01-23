@@ -45,8 +45,39 @@ if (-not $SkipPull) {
             } else {
                 # Force pull (reset to origin/master)
                 Write-Host "Pulling latest version (force)..." -ForegroundColor Yellow
-                git reset --hard origin/master 2>&1 | Out-Null
-                Write-Host "Repository updated!" -ForegroundColor Green
+                git reset --hard origin/master
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Git reset failed!"
+                    Write-Host "Continuing with current version..." -ForegroundColor Yellow
+                } else {
+                    Write-Host "Repository updated!" -ForegroundColor Green
+
+                    # Rebuild the image
+                    Write-Host "Building image..." -ForegroundColor Cyan
+                    if (Test-Path "Makefile") {
+                        # Try WSL make first (faster)
+                        $hasMake = $false
+                        try {
+                            wsl which make 2>&1 | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-Host "Building with WSL make..." -ForegroundColor Yellow
+                                wsl make clean
+                                wsl make floppy144
+                                if ($LASTEXITCODE -eq 0) {
+                                    $hasMake = $true
+                                    Write-Host "Build successful!" -ForegroundColor Green
+                                }
+                            }
+                        } catch {
+                            # WSL not available, skip
+                        }
+
+                        if (-not $hasMake) {
+                            Write-Warning "WSL make not available - using pre-built image"
+                            Write-Warning "For best results, build manually with: wsl make floppy144"
+                        }
+                    }
+                }
             }
         } else {
             Write-Host "Not a git repository, skipping update." -ForegroundColor Yellow
