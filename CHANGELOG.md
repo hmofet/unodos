@@ -5,6 +5,35 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-01-23
+
+### Added
+- **Graphics API Abstraction (Foundation 1.2)**
+  - gfx_draw_pixel: Wraps plot_pixel_white for API table access
+  - gfx_draw_char: Character rendering with coordinate parameters
+  - gfx_draw_string: Null-terminated string rendering
+  - gfx_draw_rect: Rectangle outline drawing
+  - gfx_draw_filled_rect: Filled rectangle drawing
+  - gfx_clear_area: Clear rectangular area (stub for now)
+
+### Fixed
+- Welcome message typo: "WELLCOME" → "WELCOME"
+
+### Technical Details
+- All graphics functions accessible via kernel API table
+- Register-based calling convention:
+  * gfx_draw_pixel(CX=X, BX=Y, AL=color)
+  * gfx_draw_char(BX=X, CX=Y, AL=ASCII)
+  * gfx_draw_string(BX=X, CX=Y, SI=string_ptr)
+  * gfx_draw_rect(BX=X, CX=Y, DX=width, SI=height)
+  * gfx_draw_filled_rect(BX=X, CX=Y, DX=width, SI=height)
+- Kernel size: Still within 16KB limit
+
+### Hardware Testing
+- Tested on HP Omnibook 600C (486DX4-75)
+- INT 0x80 discovery working ✓
+- "OK" indicator displays correctly ✓
+
 ## [3.3.0] - 2026-01-23
 
 ### Added
