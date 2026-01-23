@@ -4,6 +4,31 @@ All notable changes to the UnoDOS kernel will be documented here.
 
 **NOTE:** Kernel version is permanently fixed at major version 3 ("Uno dos tres").
 
+## [3.2.2] - 2026-01-23
+
+### Fixed
+- Added padding to align font at 0x0200 (512-byte boundary)
+- Discovered issue: Font data crossing 0x0200 boundary caused access failures
+- v3.2.1.1 test showed '9' worked but '=' and '>' still failed
+
+### Technical Details
+**Root cause identified:**
+- Font was starting at 0x0120
+- Character ':' (offset 208) straddles 0x01F8-0x0200 boundary (explains partial render)
+- Characters '=' and '>' beyond 0x0200 boundary couldn't be accessed
+- 0x0200 = 512 bytes = disk sector boundary
+
+**Solution:**
+- Added `times 512 - ($ - $$) db 0` padding before font
+- Font now starts cleanly at 0x0200
+- All font data (760 bytes) now at 0x0200-0x04F8
+- No characters cross critical boundaries
+
+**New addresses:**
+- '9' (offset 200): 0x0320
+- '=' (offset 232): 0x02E8
+- '>' (offset 240): 0x02F0
+
 ## [3.2.1] - 2026-01-23
 
 ### Fixed
