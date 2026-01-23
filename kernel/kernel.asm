@@ -379,7 +379,7 @@ test_filesystem:
     mov si, .dir_label
     call gfx_draw_string_stub
 
-    ; Find first non-deleted, non-volume entry
+    ; Find first regular file (not directory, not system, not hidden)
     mov si, bpb_buffer
     mov cx, 16                      ; Max 16 entries
 .find_entry:
@@ -397,7 +397,13 @@ test_filesystem:
     je .try_next
     test ah, 0x08                   ; Volume label bit set?
     jnz .try_next                   ; Skip volume labels
-    ; If we get here, found a regular file!
+    test ah, 0x10                   ; Directory bit set?
+    jnz .try_next                   ; Skip directories (SYSTEM~1)
+    test ah, 0x04                   ; System bit set?
+    jnz .try_next                   ; Skip system files
+    test ah, 0x02                   ; Hidden bit set?
+    jnz .try_next                   ; Skip hidden files
+    ; If we get here, found a regular file (typically attr=0x20 ARCHIVE)
     jmp .found_entry
 .try_next:
     add si, 32
