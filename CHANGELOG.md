@@ -5,6 +5,33 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-01-23
+
+### Added
+- **System Call Infrastructure (Foundation 1.1)**
+  - INT 0x80 handler for system call discovery mechanism
+  - Kernel API table at fixed address 0x1000:0x0500
+  - Hybrid approach: INT 0x80 for discovery + Far Call Table for execution
+  - API table header with magic number ('KA' = 0x4B41), version (1.0), function count
+  - 10 stub functions for future implementation:
+    * Graphics API (6 functions): draw_pixel, draw_rect, draw_filled_rect, draw_char, draw_string, clear_area
+    * Memory management (2 functions): malloc, free
+    * Event system (2 functions): get_event, wait_event
+- Visual test for INT 0x80 - displays "OK" at bottom right if successful
+
+### Technical Details
+- API table positioned at exactly offset 0x0500 (verified in binary)
+- Follows Windows 1.x/2.x, GEOS pattern for performance
+- Far Call approach saves ~40 cycles per call vs pure INT approach (~9% CPU at 4.77MHz)
+- Foundation for third-party application development
+- Enables future protected mode transition via thunking
+
+### Documentation
+- Added docs/ARCHITECTURE_PLAN.md - Complete architectural analysis and roadmap
+- Added docs/SYSCALL.md - System call performance analysis
+- Updated README.md with phase-based feature roadmap
+- Updated docs/SESSION_SUMMARY.md with architectural decisions
+
 ## [3.2.0] - 2026-01-22
 
 ### Changed
