@@ -28,10 +28,10 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.2.0)
+## Current Features (v3.6.0)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
-- Separate 16KB kernel loaded at 64KB mark
+- Separate 24KB kernel loaded at 64KB mark
 - Boot progress indicator (dots during kernel load)
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
@@ -136,7 +136,7 @@ unodos/
 │   ├── font8x8.asm     # 8x8 bitmap font data
 │   └── font4x6.asm     # 4x6 small font data
 ├── kernel/
-│   └── kernel.asm      # Main OS kernel (16KB)
+│   └── kernel.asm      # Main OS kernel (24KB)
 ├── build/
 │   ├── boot.bin        # Compiled boot sector
 │   ├── stage2.bin      # Compiled stage2 loader
@@ -171,7 +171,7 @@ unodos/
 
 ### Completed
 - [x] Three-stage boot architecture (boot + stage2 + kernel)
-- [x] Separate kernel (16KB, loaded at 64KB mark)
+- [x] Separate kernel (24KB, loaded at 64KB mark)
 - [x] Boot progress indicator
 - [x] Memory detection (BIOS INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
@@ -182,14 +182,17 @@ unodos/
 - [x] RAM status display
 - [x] Character demonstration
 
-### In Progress (v3.3.0)
-- [ ] System call infrastructure (INT 0x80 + Far Call Table)
-- [ ] Graphics API abstraction layer
+### Completed (Foundation Layer)
+- [x] System call infrastructure (INT 0x80 + Far Call Table) - v3.3.0
+- [x] Graphics API abstraction layer - v3.4.0
+- [x] Memory allocator (malloc/free) - v3.5.0
+- [x] Kernel expansion (16KB → 24KB) - v3.6.0
 
-### Planned (Foundation Layer - v3.3.0-v3.4.0)
-- [ ] Memory allocator (malloc/free)
+### In Progress (Foundation Layer)
 - [ ] Keyboard input handling
 - [ ] Event system (circular queue)
+
+### Planned (Foundation Layer - v3.7.0-v3.8.0)
 - [ ] Standard library (graphics.lib, unodos.lib)
 
 ### Planned (Core Services - v3.5.0-v3.7.0)
@@ -211,7 +214,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.2.0**
+Current version: **3.6.0**
 
 ## Contributing
 

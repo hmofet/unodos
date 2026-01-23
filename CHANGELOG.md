@@ -5,6 +5,31 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-01-23
+
+### Changed
+- **Kernel Expansion: 16KB → 24KB**
+  - Kernel size increased from 16384 bytes (32 sectors) to 24576 bytes (48 sectors)
+  - Provides headroom for Foundation 1.4 (Keyboard Driver, ~800 bytes) and Foundation 1.5 (Event System, ~400 bytes)
+  - Heap start moved from 0x1400:0000 to 0x1600:0000
+  - Available heap reduced from 540KB to 532KB (loses 8KB)
+
+### Technical Details
+- Modified boot/stage2.asm: KERNEL_SECTORS 32 → 48
+- Modified kernel/kernel.asm: Final padding 16384 → 24576
+- New memory layout:
+  * 0x1000:0x0000 - Kernel (24KB, was 16KB)
+  * 0x1600:0x0000 - Heap start (was 0x1400:0x0000)
+  * ~532KB available for applications (was 540KB)
+- Kernel headroom: ~7KB for future Foundation Layer components
+
+### Rationale
+- v3.5.0 reached exact 16KB capacity with Memory Allocator
+- Foundation 1.4 and 1.5 require additional ~1200 bytes minimum
+- 24KB expansion is conservative, leaves room for future enhancements
+- 8KB heap reduction is negligible (still 532KB for apps)
+- See docs/MEMORY_LAYOUT.md for detailed analysis
+
 ## [3.5.0] - 2026-01-23
 
 ### Added
