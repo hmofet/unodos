@@ -763,14 +763,118 @@ gfx_clear_area_stub:
     ; For now, just return (no-op)
     ret
 
-; Memory management stubs
+; ============================================================================
+; Memory Management API (Foundation 1.3)
+; ============================================================================
+
+; Simple memory allocator - First-fit algorithm
+; Heap starts at 0x1400:0x0000, extends to ~0x9FFF (640KB limit)
+; Each block has 4-byte header: [size:2][flags:2]
+;   size = total block size including header
+;   flags = 0x0000 (free) or 0xFFFF (allocated)
+
+; mem_alloc_stub - Allocate memory
+; Input: AX = Size in bytes
+; Output: AX = Pointer (offset from 0x1400:0000), 0 if failed
+; Preserves: BX, CX, DX
 mem_alloc_stub:
-    ; TODO: Implement in Foundation 1.3
-    xor ax, ax                      ; Return NULL for now
+    push bx
+    push si
+    push es
+
+    test ax, ax
+    jz .fail                        ; Don't allocate 0 bytes
+
+    ; Round up to 4-byte boundary, add header
+    add ax, 7                       ; +4 header +3 for rounding
+    and ax, 0xFFFC                  ; Round to 4-byte
+    mov bx, ax                      ; BX = requested size
+
+    ; Set up heap segment
+    push ds
+    mov ax, 0x1400
+    mov ds, ax
+    mov es, ax
+
+    ; Initialize heap if needed (first allocation)
+    cmp word [heap_initialized], 0
+    jne .heap_ready
+
+    ; Initialize first free block
+    mov word [0], 0xF000            ; Size: ~60KB initially
+    mov word [2], 0                 ; Flags: free
+    mov word [heap_initialized], 1
+
+.heap_ready:
+    ; Search for first-fit block
+    xor si, si                      ; SI = current block offset
+
+.search:
+    mov ax, [si]                    ; AX = block size
+    test ax, ax
+    jz .fail_restore                ; End of heap
+
+    ; Check if block is free
+    cmp word [si+2], 0
+    jne .next                       ; Block allocated, skip
+
+    ; Check if large enough
+    cmp ax, bx
+    jge .allocate                   ; Found suitable block
+
+.next:
+    add si, ax                      ; Move to next block
+    cmp si, 0xF000                  ; Check heap limit
+    jb .search
+
+.fail_restore:
+    pop ds
+.fail:
+    xor ax, ax                      ; Return NULL
+    jmp .done
+
+.allocate:
+    ; Mark block as allocated
+    mov word [si+2], 0xFFFF
+
+    ; Return pointer (skip header)
+    mov ax, si
+    add ax, 4
+
+    pop ds
+
+.done:
+    pop es
+    pop si
+    pop bx
     ret
 
+; mem_free_stub - Free memory
+; Input: AX = Pointer (offset from 0x1400:0000)
+; Output: None
 mem_free_stub:
-    ; TODO: Implement in Foundation 1.3
+    push ax
+    push bx
+    push ds
+
+    test ax, ax
+    jz .done                        ; NULL pointer, ignore
+
+    ; Set up heap segment
+    mov bx, 0x1400
+    mov ds, bx
+
+    ; Get block header
+    sub ax, 4                       ; Point to header
+
+    ; Mark as free
+    mov bx, ax
+    mov word [bx+2], 0              ; Clear allocated flag
+
+.done:
+    pop ds
+    pop bx
+    pop ax
     ret
 
 ; Event system stubs
@@ -803,6 +907,9 @@ draw_y: dw 0
 ; plot_pixel_white temporary storage
 pixel_save_x: dw 0
 pixel_save_y: dw 0
+
+; Memory allocator state
+heap_initialized: dw 0
 
 ; Character aliases for convenience
 char_W      equ font_8x8 + ('W' - 32) * 8
