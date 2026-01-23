@@ -27,6 +27,12 @@ entry:
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
+    ; Display version number (top-left corner)
+    mov bx, 4
+    mov cx, 4
+    mov si, version_string
+    call gfx_draw_string_stub
+
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
 
@@ -267,6 +273,12 @@ clear_kbd_buffer:
     jnz .drain_events
     pop ax
     ret
+
+; ============================================================================
+; Version String
+; ============================================================================
+
+version_string: db 'UnoDOS v3.10.1', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
