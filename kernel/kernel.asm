@@ -1618,7 +1618,7 @@ fat12_open:
     push si
     push di
     mov di, sp
-    add di, 4                       ; Point to our 8.3 name on stack
+    add di, 8                       ; Skip SI, DI, AX, CX to point to 8.3 name on stack
     push ss
     pop es
     mov cx, 11
