@@ -287,15 +287,9 @@ test_filesystem:
     mov si, 190
     call gfx_clear_area_stub
 
-    ; Display test header
-    mov bx, 10
-    mov cx, 15
-    mov si, .test_msg
-    call gfx_draw_string_stub
-
     ; Display instruction to insert test floppy
     mov bx, 10
-    mov cx, 30
+    mov cx, 15
     mov si, .insert_msg
     call gfx_draw_string_stub
 
@@ -307,7 +301,7 @@ test_filesystem:
 
     ; Display "Testing..." message
     mov bx, 10
-    mov cx, 50
+    mov cx, 35
     mov si, .testing_msg
     call gfx_draw_string_stub
 
@@ -325,7 +319,7 @@ test_filesystem:
 
     ; Display mount success
     mov bx, 10
-    mov cx, 65
+    mov cx, 50
     mov si, .mount_ok
     call gfx_draw_string_stub
 
@@ -346,7 +340,7 @@ test_filesystem:
 
     ; Display "Dir:" label
     mov bx, 10
-    mov cx, 80
+    mov cx, 65
     mov si, .dir_label
     call gfx_draw_string_stub
 
@@ -366,26 +360,27 @@ test_filesystem:
     je .try_next
     cmp ah, 0x0F                    ; LFN?
     je .try_next
-    test ah, 0x08                   ; Volume label?
-    jz .found_entry
+    test ah, 0x08                   ; Volume label bit set?
+    jnz .try_next                   ; Skip volume labels
+    ; If we get here, found a regular file!
+    jmp .found_entry
 .try_next:
     add si, 32
     loop .find_entry
 .show_none:
     mov bx, 50
-    mov cx, 80
+    mov cx, 65
     mov si, .no_entry
     call gfx_draw_string_stub
     jmp .done_debug
 .found_entry:
     ; Display the 11-byte filename from 0x1000:SI (no null terminator!)
-    ; Draw each character individually
+    ; Draw each character individually with FIXED Y coordinate
     push di
     push si
     mov di, si                      ; Save SI in DI
-    mov bx, 50
-    mov cx, 80
-    push cx
+    mov word [debug_x], 50
+    mov word [debug_y], 65
     mov cx, 11                      ; 11 characters
 .draw_loop:
     push cx
@@ -397,12 +392,13 @@ test_filesystem:
     mov si, char_buffer
     mov [si], al                    ; Put in null-terminated buffer
     mov byte [si + 1], 0
+    mov bx, [debug_x]               ; Get X coordinate
+    mov cx, [debug_y]               ; Get Y coordinate (FIXED!)
     call gfx_draw_string_stub       ; Draw single char
-    add bx, 8                       ; Move X position right
+    add word [debug_x], 8           ; Move X position right
     inc di                          ; Next character
     pop cx
     loop .draw_loop
-    pop cx
     pop si
     pop di
 .done_debug:
@@ -461,7 +457,7 @@ test_filesystem:
 
 .mount_failed:
     mov bx, 10
-    mov cx, 65
+    mov cx, 50
     mov si, .mount_err
     call gfx_draw_string_stub
 
@@ -533,21 +529,9 @@ keyboard_demo:
     push cx
     push si
 
-    ; Display prompt: "Type text (ESC to exit, F for file test):"
-    mov bx, 10                      ; X position
-    mov cx, 160                     ; Y position (below welcome box)
-    mov si, .prompt
-    call gfx_draw_string_stub
-
-    ; Display instruction: "Uses: Event System + Graphics API"
-    mov bx, 10
-    mov cx, 170
-    mov si, .instruction
-    call gfx_draw_string_stub
-
     ; Initialize cursor position for input
     mov word [demo_cursor_x], 10
-    mov word [demo_cursor_y], 185
+    mov word [demo_cursor_y], 160
 
 .input_loop:
     ; Wait for event (event-driven approach)
@@ -2259,6 +2243,8 @@ demo_cursor_y: dw 0
 
 ; Debug character buffer (for displaying single chars)
 char_buffer: db 0, 0
+debug_x: dw 0
+debug_y: dw 0
 
 ; Event system state (Foundation 1.5)
 event_queue: times 96 db 0          ; 32 events * 3 bytes each
