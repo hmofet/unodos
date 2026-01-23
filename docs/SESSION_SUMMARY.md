@@ -101,12 +101,72 @@ After kernel separation, text rendering stopped working for characters beyond a 
 - Character demo runs too fast even with increased delays
 - Need to tune animation speed for DSTN display ghosting
 
-### Next Steps
-1. Fix character demo animation (runs across screen, not just single character)
-2. Implement keyboard input handling
-3. Begin GUI window manager
+---
 
-### Current State
+## Session: 2026-01-23 (Continued) - Architectural Planning
+
+### Session Goal
+Define comprehensive architecture for UnoDOS as a third-party app development platform.
+
+### Major Architectural Decision
+**Deferred "live memory display" feature** in favor of building foundation layer first.
+
+**Reasoning:**
+- Live display as kernel feature creates monolithic design
+- Blocking delay loop prevents event-driven architecture
+- Doesn't build reusable components for future apps
+- Should be implemented as loadable application after foundation exists
+
+### Architecture Approved: Hybrid System Call Model
+
+**Key Decision:** Use INT 0x80 + Far Call Table hybrid approach
+
+**Performance Analysis:**
+- INT 0x80: ~50-70 cycles per call
+- CALL FAR: ~28-35 cycles per call
+- Savings: ~40 cycles per call (~9% CPU at 4.77MHz for graphics-heavy apps)
+- Critical for graphical OS with hundreds of calls per frame
+
+**Pattern:** Follows Windows 1.x/2.x, GEOS, early Mac OS
+- INT 0x80 for discovery (one-time setup)
+- Far Call Table for execution (frequent calls)
+- Enables future protected mode transition via thunking
+
+### Implementation Roadmap Defined
+
+**Phase 1: Foundation Layer (v3.3.0 - v3.4.0)**
+1. System call infrastructure (INT 0x80 + API table) - ~300 bytes
+2. Graphics API abstraction - ~500 bytes
+3. Memory allocator (malloc/free) - ~600 bytes
+4. Keyboard driver - ~800 bytes
+5. Event system - ~400 bytes
+Total: ~2.8 KB, 15-18 hours
+
+**Phase 2: Standard Library (v3.5.0)**
+1. graphics.lib (C wrappers)
+2. unodos.lib (initialization)
+Total: 5-7 hours
+
+**Phase 3: Core Services (v3.6.0 - v3.7.0)**
+1. Window manager - 6-8 hours
+2. FAT12 + App loader - 6-8 hours
+Total: 12-16 hours
+
+**Phase 4: Demo Application (v3.8.0)**
+1. Clock display as loadable app - 2-3 hours
+
+### Documentation Created
+- docs/ARCHITECTURE_PLAN.md - Complete architectural analysis and roadmap
+- Referenced docs/SYSCALL.md for performance analysis
+
+### Next Immediate Task
+**Foundation 1.1: System Call Infrastructure**
+- Implement INT 0x80 handler
+- Create kernel API table at 0x1000:0x0500
+- Add stub functions
+- Test harness
+
+### Current State (Updated 2026-01-23)
 - **Bootloader Version**: 3.2.1 ✓
 - **Kernel Version**: 3.2.3 ✓
 - **Architecture**: Three-stage boot (boot sector → stage2 → kernel)
@@ -115,6 +175,7 @@ After kernel separation, text rendering stopped working for characters beyond a 
 - **Text rendering**: ✓ WORKING - all font characters accessible
 - **Welcome message**: "WELCOME TO UNODOS 3!" displays correctly
 - **Test hardware**: HP Omnibook 600C (486DX4-75)
+- **Status**: Ready to begin Foundation Layer implementation
 
 ### Key Decisions Made
 1. GUI-first design (no command line)
