@@ -164,14 +164,23 @@ int_09_handler:
     test al, al
     jz .done
 
-    ; Store in circular buffer
+    ; Store in circular buffer (for backward compatibility)
     mov bx, [kbd_buffer_tail]
     mov [kbd_buffer + bx], al
     inc bx
     and bx, 0x0F                    ; Wrap at 16
     cmp bx, [kbd_buffer_head]       ; Buffer full?
-    je .done                        ; Skip if full
+    je .skip_buffer                 ; Skip buffer update if full
     mov [kbd_buffer_tail], bx
+
+.skip_buffer:
+    ; Post KEY_PRESS event (Foundation 1.5)
+    push ax
+    xor dx, dx
+    mov dl, al                      ; DX = ASCII character
+    mov al, EVENT_KEY_PRESS         ; AL = event type
+    call post_event
+    pop ax
     jmp .done
 
 .shift_press:
@@ -259,7 +268,7 @@ keyboard_demo:
     mov si, .prompt
     call gfx_draw_string_stub
 
-    ; Display instruction: "Uses: Graphics API + Keyboard Driver"
+    ; Display instruction: "Uses: Event System + Graphics API"
     mov bx, 10
     mov cx, 170
     mov si, .instruction
@@ -270,8 +279,15 @@ keyboard_demo:
     mov word [demo_cursor_y], 185
 
 .input_loop:
-    ; Wait for keypress
-    call kbd_wait_key               ; Returns ASCII in AL
+    ; Wait for event (event-driven approach)
+    call event_wait_stub            ; Returns AL=type, DX=data
+
+    ; Check event type
+    cmp al, EVENT_KEY_PRESS
+    jne .input_loop                 ; Ignore non-keyboard events
+
+    ; Extract ASCII character from event data
+    mov al, dl                      ; AL = ASCII character from DX
 
     ; Check for ESC (exit)
     cmp al, 27
@@ -341,8 +357,8 @@ keyboard_demo:
     ret
 
 .prompt: db 'Type text (ESC to exit):', 0
-.instruction: db 'Uses: Graphics API + Keyboard Driver', 0
-.exit_msg: db 'Exiting demo...', 0
+.instruction: db 'Uses: Event System + Graphics API', 0
+.exit_msg: db 'Event demo complete!', 0
 
 ; Scan code to ASCII translation tables
 scancode_normal:
@@ -862,16 +878,104 @@ mem_free_stub:
     pop ax
     ret
 
-; Event system stubs
-event_get_stub:
-    ; TODO: Implement in Foundation 1.5
-    xor ax, ax                      ; Return 0 (no event)
+; ============================================================================
+; Event System (Foundation 1.5)
+; ============================================================================
+
+; Event Types
+EVENT_NONE          equ 0
+EVENT_KEY_PRESS     equ 1
+EVENT_KEY_RELEASE   equ 2           ; Future
+EVENT_TIMER         equ 3           ; Future
+EVENT_MOUSE         equ 4           ; Future
+
+; Event structure (3 bytes):
+;   +0: type (byte)
+;   +1: data (word) - key code, timer value, mouse position, etc.
+
+; Post event to event queue
+; Input: AL = event type, DX = event data
+; Preserves: All registers
+post_event:
+    push bx
+    push si
+    push ds
+
+    mov bx, 0x1000
+    mov ds, bx
+
+    ; Calculate tail position (events are 3 bytes each)
+    mov bx, [event_queue_tail]
+    mov si, bx
+    add si, bx                      ; SI = tail * 2
+    add si, bx                      ; SI = tail * 3
+
+    ; Store event in queue
+    mov [event_queue + si], al      ; type
+    mov [event_queue + si + 1], dx  ; data (word)
+
+    ; Advance tail
+    inc bx
+    and bx, 0x1F                    ; Wrap at 32 events
+    cmp bx, [event_queue_head]      ; Buffer full?
+    je .done                        ; Skip if full
+    mov [event_queue_tail], bx
+
+.done:
+    pop ds
+    pop si
+    pop bx
     ret
 
+; event_get_stub - Get next event (non-blocking)
+; Output: AL = event type (0 if no event), DX = event data
+; Preserves: BX, CX, SI, DI
+event_get_stub:
+    push bx
+    push si
+    push ds
+
+    mov bx, 0x1000
+    mov ds, bx
+
+    mov bx, [event_queue_head]
+    cmp bx, [event_queue_tail]
+    je .no_event
+
+    ; Calculate head position (events are 3 bytes each)
+    mov si, bx
+    add si, bx                      ; SI = head * 2
+    add si, bx                      ; SI = head * 3
+
+    ; Read event from queue
+    mov al, [event_queue + si]      ; type
+    mov dx, [event_queue + si + 1]  ; data (word)
+
+    ; Advance head
+    inc bx
+    and bx, 0x1F                    ; Wrap at 32 events
+    mov [event_queue_head], bx
+
+    pop ds
+    pop si
+    pop bx
+    ret
+
+.no_event:
+    xor al, al                      ; EVENT_NONE
+    xor dx, dx
+    pop ds
+    pop si
+    pop bx
+    ret
+
+; event_wait_stub - Wait for event (blocking)
+; Output: AL = event type, DX = event data
+; Preserves: BX, CX, SI, DI
 event_wait_stub:
-    ; TODO: Implement in Foundation 1.5
-    hlt                             ; Wait for interrupt
-    xor ax, ax                      ; Return 0 (no event)
+    call event_get_stub
+    test al, al
+    jz event_wait_stub              ; Loop if no event
     ret
 
 ; ============================================================================
@@ -903,6 +1007,11 @@ kbd_alt_state: db 0
 ; Keyboard demo state
 demo_cursor_x: dw 0
 demo_cursor_y: dw 0
+
+; Event system state (Foundation 1.5)
+event_queue: times 96 db 0          ; 32 events * 3 bytes each
+event_queue_head: dw 0
+event_queue_tail: dw 0
 
 ; ============================================================================
 ; Padding
