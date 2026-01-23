@@ -144,28 +144,38 @@ Entry  4: 'TEST    TXT' attr=0x20 (ARCHIVE) cluster=4 size=1024
 
 ## Writing to Floppy
 
-### Quick Method (Recommended)
+### Quick Method (Recommended - No WSL Required!)
 ```powershell
 cd unodos\tools
 .\Write-Floppy-Quick.ps1
 ```
 
 This script:
-1. Pulls latest code from GitHub
-2. **Builds image automatically** (requires WSL + nasm + make)
-3. Writes to floppy drive A:
-4. Auto-installs build tools if missing
+1. Pulls latest code from GitHub (includes **pre-built image**)
+2. Writes to floppy drive A:
+3. **No build tools required!**
 
-### Manual Method
+**Note:** Pre-built images are committed to git by the developer after each change.
+You don't need WSL, make, or nasm on Windows!
+
+### Manual Method (For Developers with Linux)
 ```bash
-# On Linux/WSL
+# Build from source
 cd unodos/unodos
 make clean && make floppy144
 
+# Commit the built image (developer only)
+git add build/unodos-144.img
+git commit -m "Update pre-built image"
+git push
+
 # Write to physical floppy (Linux)
 sudo dd if=build/unodos-144.img of=/dev/fd0 bs=512
+```
 
-# Write to physical floppy (Windows PowerShell as Admin)
+### Alternative Windows Method
+```powershell
+# With verification (slower but more reliable)
 cd unodos\tools
 .\Write-Floppy.ps1
 ```
@@ -250,17 +260,17 @@ cd unodos\tools
 ### Development Tools
 - `dump_fat12.py` - Examine floppy structure (Python)
 - `Create-TestFloppy.ps1` - Create test floppy (Windows PowerShell)
-- `Write-Floppy-Quick.ps1` - Write image with auto-build (Windows PowerShell)
+- `Write-Floppy-Quick.ps1` - Write pre-built image (Windows PowerShell, **No WSL required!**)
 - `Write-Floppy.ps1` - Write image with verification (Windows PowerShell)
 
-### Build System
+### Build System (Developer Only)
 - `make clean` - Clean build directory
 - `make floppy144` - Build 1.44MB floppy image
 - `make run144` - Build and run in QEMU
 
 ### Dependencies
-- **Linux/WSL:** nasm, make, qemu-system-i386 (optional)
-- **Windows:** WSL (for building), PowerShell (for floppy writing)
+- **Windows Users:** PowerShell only (no build tools needed!)
+- **Linux Developers:** nasm, make, qemu-system-i386 (optional)
 
 ## References
 
