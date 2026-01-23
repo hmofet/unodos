@@ -33,7 +33,7 @@ entry:
     ; Enable interrupts
     sti
 
-    ; Run keyboard input demo
+    ; Run keyboard demo (with filesystem test on 'F' key)
     call keyboard_demo
 
     ; Halt
@@ -253,6 +253,156 @@ kbd_wait_key:
     ret
 
 ; ============================================================================
+; Filesystem Test - Tests FAT12 Driver (v3.10.0)
+; ============================================================================
+
+test_filesystem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Clear previous display area
+    mov bx, 0
+    mov cx, 10
+    mov dx, 320
+    mov si, 190
+    call gfx_clear_area_stub
+
+    ; Display test header
+    mov bx, 10
+    mov cx, 15
+    mov si, .test_msg
+    call gfx_draw_string_stub
+
+    ; Display instruction to insert test floppy
+    mov bx, 10
+    mov cx, 30
+    mov si, .insert_msg
+    call gfx_draw_string_stub
+
+    ; Wait for keypress
+    call kbd_wait_key
+
+    ; Display "Testing..." message
+    mov bx, 10
+    mov cx, 50
+    mov si, .testing_msg
+    call gfx_draw_string_stub
+
+    ; Try to mount filesystem
+    mov al, 0                       ; Drive A:
+    xor ah, ah                      ; Auto-detect
+    call fs_mount_stub
+    jc .mount_failed
+
+    ; Display mount success
+    mov bx, 10
+    mov cx, 65
+    mov si, .mount_ok
+    call gfx_draw_string_stub
+
+    ; Try to open TEST.TXT
+    xor bx, bx                      ; Mount handle 0
+    mov si, .filename
+    call fs_open_stub
+    jc .open_failed
+
+    ; Display open success
+    push ax                         ; Save file handle
+    mov bx, 10
+    mov cx, 80
+    mov si, .open_ok
+    call gfx_draw_string_stub
+    pop ax                          ; Restore file handle
+
+    ; Read file contents
+    push ax                         ; Save file handle
+    mov bx, 0x1000
+    mov es, bx
+    mov di, fs_read_buffer
+    mov cx, 200                     ; Read up to 200 bytes
+    call fs_read_stub
+    jc .read_failed
+
+    ; Display read success
+    mov bx, 10
+    mov cx, 95
+    mov si, .read_ok
+    call gfx_draw_string_stub
+
+    ; Display file contents at Y=110
+    mov bx, 10
+    mov cx, 110
+    mov si, fs_read_buffer
+    call gfx_draw_string_stub
+
+    ; Close file
+    pop ax                          ; Restore file handle
+    call fs_close_stub
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.mount_failed:
+    mov bx, 10
+    mov cx, 65
+    mov si, .mount_err
+    call gfx_draw_string_stub
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.open_failed:
+    mov bx, 10
+    mov cx, 80
+    mov si, .open_err
+    call gfx_draw_string_stub
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.read_failed:
+    pop ax                          ; Clean up file handle
+    mov bx, 10
+    mov cx, 95
+    mov si, .read_err
+    call gfx_draw_string_stub
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.test_msg:      db 'FAT12 Filesystem Test', 0
+.insert_msg:    db 'Insert test floppy (with TEST.TXT) - Press any key', 0
+.testing_msg:   db 'Testing...', 0
+.mount_ok:      db 'Mount: OK', 0
+.mount_err:     db 'Mount: FAIL', 0
+.open_ok:       db 'Open TEST.TXT: OK', 0
+.open_err:      db 'Open TEST.TXT: FAIL (not found)', 0
+.read_ok:       db 'Read: OK - File contents:', 0
+.read_err:      db 'Read: FAIL', 0
+.filename:      db 'TEST.TXT', 0
+
+; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
 ; ============================================================================
 
@@ -262,7 +412,7 @@ keyboard_demo:
     push cx
     push si
 
-    ; Display prompt: "Type text (ESC to exit):"
+    ; Display prompt: "Type text (ESC to exit, F for file test):"
     mov bx, 10                      ; X position
     mov cx, 160                     ; Y position (below welcome box)
     mov si, .prompt
@@ -292,6 +442,12 @@ keyboard_demo:
     ; Check for ESC (exit)
     cmp al, 27
     je .exit
+
+    ; Check for 'F' or 'f' (filesystem test)
+    cmp al, 'F'
+    je .file_test
+    cmp al, 'f'
+    je .file_test
 
     ; Check for Enter (newline)
     cmp al, 13
@@ -343,6 +499,19 @@ keyboard_demo:
     sub word [demo_cursor_x], 8
     jmp .input_loop
 
+.file_test:
+    ; Restore registers before calling test_filesystem
+    pop si
+    pop cx
+    pop bx
+    pop ax
+
+    ; Call filesystem test
+    call test_filesystem
+
+    ; Return (test_filesystem will halt or continue)
+    ret
+
 .exit:
     ; Display exit message
     mov bx, 10
@@ -356,8 +525,8 @@ keyboard_demo:
     pop ax
     ret
 
-.prompt: db 'Type text (ESC to exit):', 0
-.instruction: db 'Uses: Event System + Graphics API', 0
+.prompt: db 'Type text (ESC to exit, F for file test):', 0
+.instruction: db 'Event System + Graphics API', 0
 .exit_msg: db 'Event demo complete!', 0
 
 ; Scan code to ASCII translation tables
@@ -555,17 +724,17 @@ plot_pixel_white:
     ret
 
 ; ============================================================================
-; Kernel API Table - At fixed address 0x1000:0x0500
+; Kernel API Table - At fixed address 0x1000:0x0800
 ; ============================================================================
 
-; Pad to exactly offset 0x0500 (1280 bytes)
-times 0x0500 - ($ - $$) db 0
+; Pad to exactly offset 0x0800 (2048 bytes) - expanded for FAT12 (v3.10.0)
+times 0x0800 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 12                           ; Number of function slots
+    dw 17                           ; Number of function slots
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -588,6 +757,13 @@ kernel_api_table:
     ; Keyboard Input (Foundation 1.4)
     dw kbd_getchar                  ; 10: Get character (non-blocking)
     dw kbd_wait_key                 ; 11: Wait for key (blocking)
+
+    ; Filesystem API (Foundation 1.6)
+    dw fs_mount_stub                ; 12: Mount filesystem
+    dw fs_open_stub                 ; 13: Open file
+    dw fs_read_stub                 ; 14: Read from file
+    dw fs_close_stub                ; 15: Close file
+    dw fs_register_driver_stub      ; 16: Register filesystem driver
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -979,6 +1155,717 @@ event_wait_stub:
     ret
 
 ; ============================================================================
+; Filesystem Abstraction Layer (Foundation 1.6)
+; ============================================================================
+
+; Filesystem error codes
+FS_OK                   equ 0
+FS_ERR_NOT_FOUND        equ 1
+FS_ERR_NO_DRIVER        equ 2
+FS_ERR_READ_ERROR       equ 3
+FS_ERR_INVALID_HANDLE   equ 4
+FS_ERR_NO_HANDLES       equ 5
+
+; fs_mount_stub - Mount a filesystem on a drive
+; Input: AL = drive number (0=A:, 1=B:, 0x80=HDD0)
+;        AH = driver ID (0=auto-detect, 1-3=specific driver)
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = error code if CF=1
+;         BX = mount handle if CF=0
+; Preserves: CX, DX, SI, DI
+fs_mount_stub:
+    push si
+    push di
+
+    ; For now, only support drive 0 (A:) with FAT12
+    cmp al, 0
+    jne .unsupported
+
+    ; Try to mount FAT12
+    call fat12_mount
+    jc .error
+
+    ; Success - return mount handle 0
+    xor bx, bx
+    clc
+    pop di
+    pop si
+    ret
+
+.unsupported:
+.error:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    pop di
+    pop si
+    ret
+
+; fs_open_stub - Open a file for reading
+; Input: BX = mount handle (from fs_mount)
+;        DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = file handle (0-15) if CF=0, error code if CF=1
+; Preserves: BX, CX, DX
+fs_open_stub:
+    push bx
+    push di
+
+    ; For now, only support mount handle 0 (FAT12)
+    test bx, bx
+    jnz .invalid_mount
+
+    ; Call FAT12 open
+    call fat12_open
+    jc .error
+
+    ; Success - return file handle in AX
+    clc
+    pop di
+    pop bx
+    ret
+
+.invalid_mount:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    pop di
+    pop bx
+    ret
+
+.error:
+    ; Error code already in AX
+    stc
+    pop di
+    pop bx
+    ret
+
+; fs_read_stub - Read data from file
+; Input: AX = file handle
+;        ES:DI = buffer to read into
+;        CX = number of bytes to read
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = actual bytes read if CF=0, error code if CF=1
+; Preserves: BX, DX
+fs_read_stub:
+    push bx
+    push si
+
+    ; Validate file handle (0-15)
+    cmp ax, 16
+    jae .invalid_handle
+
+    ; Call FAT12 read
+    call fat12_read
+    jc .error
+
+    ; Success - bytes read in AX
+    clc
+    pop si
+    pop bx
+    ret
+
+.invalid_handle:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop si
+    pop bx
+    ret
+
+.error:
+    ; Error code already in AX
+    stc
+    pop si
+    pop bx
+    ret
+
+; fs_close_stub - Close an open file
+; Input: AX = file handle
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = error code if CF=1
+; Preserves: BX, CX, DX
+fs_close_stub:
+    push si
+
+    ; Validate file handle (0-15)
+    cmp ax, 16
+    jae .invalid_handle
+
+    ; Call FAT12 close
+    call fat12_close
+    jc .error
+
+    ; Success
+    clc
+    pop si
+    ret
+
+.invalid_handle:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop si
+    ret
+
+.error:
+    ; Error code already in AX
+    stc
+    pop si
+    ret
+
+; fs_register_driver_stub - Register a loadable filesystem driver
+; Input: ES:BX = pointer to driver structure
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = driver ID (0-3) if CF=0, error code if CF=1
+; Preserves: BX, CX, DX
+fs_register_driver_stub:
+    ; Not implemented in v3.10.0 - reserved for Tier 2/3
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    ret
+
+; ============================================================================
+; FAT12 Driver Implementation
+; ============================================================================
+
+; FAT12 mount - Initialize FAT12 filesystem on drive A:
+; Input: None (always uses drive 0)
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = error code if CF=1
+; Preserves: BX, CX, DX, SI, DI
+fat12_mount:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Read boot sector (sector 0) into bpb_buffer
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov cx, 0x0001                  ; CH=0 (cylinder), CL=1 (sector)
+    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    int 0x13
+    jc .read_error
+
+    ; Parse BPB (BIOS Parameter Block)
+    ; Bytes per sector at offset 0x0B
+    mov ax, [bpb_buffer + 0x0B]
+    mov [bytes_per_sector], ax
+
+    ; Sectors per cluster at offset 0x0D
+    mov al, [bpb_buffer + 0x0D]
+    mov [sectors_per_cluster], al
+
+    ; Reserved sectors at offset 0x0E
+    mov ax, [bpb_buffer + 0x0E]
+    mov [reserved_sectors], ax
+
+    ; Number of FATs at offset 0x10
+    mov al, [bpb_buffer + 0x10]
+    mov [num_fats], al
+
+    ; Root directory entries at offset 0x11
+    mov ax, [bpb_buffer + 0x11]
+    mov [root_dir_entries], ax
+
+    ; Sectors per FAT at offset 0x16
+    mov ax, [bpb_buffer + 0x16]
+    mov [sectors_per_fat], ax
+
+    ; Calculate root directory start sector
+    ; root_dir_start = reserved + (num_fats * sectors_per_fat)
+    mov ax, [reserved_sectors]
+    mov bl, [num_fats]
+    xor bh, bh
+    mov cx, [sectors_per_fat]
+    push ax
+    mov ax, cx
+    mul bx                          ; AX = num_fats * sectors_per_fat
+    mov bx, ax
+    pop ax
+    add ax, bx
+    mov [root_dir_start], ax
+
+    ; Calculate data area start sector
+    ; data_start = root_dir_start + root_dir_sectors
+    ; root_dir_sectors = (root_dir_entries * 32) / bytes_per_sector
+    mov ax, [root_dir_entries]
+    mov cx, 32
+    mul cx                          ; AX = root_dir_entries * 32
+    mov cx, [bytes_per_sector]
+    xor dx, dx
+    div cx                          ; AX = root_dir_sectors
+    mov bx, ax
+    mov ax, [root_dir_start]
+    add ax, bx
+    mov [data_area_start], ax
+
+    ; Success
+    xor ax, ax
+    clc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.read_error:
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+; fat12_open - Open a file from root directory
+; Input: DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = file handle (0-15) if CF=0, error code if CF=1
+; Preserves: BX, CX, DX
+fat12_open:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Convert filename to 8.3 FAT format (padded with spaces)
+    ; Allocate 11 bytes on stack
+    sub sp, 11
+    mov di, sp
+    push ss
+    pop es
+
+    ; Initialize with spaces
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Copy filename (up to 8 chars before '.')
+    mov cx, 8
+.copy_name:
+    lodsb
+    test al, al
+    jz .name_done
+    cmp al, '.'
+    je .copy_ext
+    mov [es:di], al
+    inc di
+    loop .copy_name
+
+    ; Skip remaining chars before '.'
+.skip_to_dot:
+    lodsb
+    test al, al
+    jz .name_done
+    cmp al, '.'
+    jne .skip_to_dot
+
+.copy_ext:
+    ; Copy extension (up to 3 chars)
+    mov di, sp
+    add di, 8                       ; Point to extension part
+    mov cx, 3
+.copy_ext_loop:
+    lodsb
+    test al, al
+    jz .name_done
+    mov [es:di], al
+    inc di
+    loop .copy_ext_loop
+
+.name_done:
+    ; Now search root directory
+    ; Root directory starts at sector [root_dir_start]
+    ; Each entry is 32 bytes, max 224 entries (14 sectors for 360KB floppy)
+
+    mov ax, [root_dir_start]
+    mov cx, 14                      ; Max 14 sectors for root dir
+
+.search_next_sector:
+    push cx
+    push ax
+
+    ; Read one sector of root directory
+    push ax
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    mov cx, ax
+    and cx, 0x003F                  ; CL = sector (1-63)
+    inc cl                          ; BIOS sectors start at 1
+    mov ax, cx
+    shr ax, 6
+    mov ch, al                      ; CH = cylinder
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    int 0x13
+    pop ax
+    jc .read_error_cleanup
+
+    ; Search through 16 entries in this sector
+    mov cx, 16
+    mov si, bpb_buffer
+
+.search_entry:
+    ; Check if entry is free (first byte = 0x00 or 0xE5)
+    mov al, [si]
+    test al, al
+    jz .not_found_cleanup           ; End of directory
+    cmp al, 0xE5
+    je .next_entry                  ; Deleted entry
+
+    ; Compare filename (11 bytes)
+    push si
+    push di
+    mov di, sp
+    add di, 4                       ; Point to our 8.3 name on stack
+    push ss
+    pop es
+    mov cx, 11
+    push ds
+    push si
+    mov ax, 0x1000
+    mov ds, ax
+    rep cmpsb
+    pop si
+    pop ds
+    pop di
+    pop si
+    je .found_file
+
+.next_entry:
+    add si, 32                      ; Next directory entry
+    loop .search_entry
+
+    ; Move to next sector
+    pop ax
+    pop cx
+    inc ax
+    loop .search_next_sector
+
+.not_found_cleanup:
+    add sp, 2                       ; Clean up sector counter
+    add sp, 2                       ; Clean up sector number
+    add sp, 11                      ; Clean up 8.3 filename
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.read_error_cleanup:
+    add sp, 2                       ; Clean up sector counter
+    add sp, 2                       ; Clean up sector number
+    add sp, 11                      ; Clean up 8.3 filename
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.found_file:
+    ; SI points to directory entry
+    ; Extract: starting cluster (offset 0x1A), file size (offset 0x1C)
+    mov ax, 0x1000
+    mov ds, ax
+    mov ax, [si + 0x1A]             ; Starting cluster
+    mov bx, [si + 0x1C]             ; File size (low word)
+    mov dx, [si + 0x1E]             ; File size (high word)
+
+    ; Restore DS
+    push cs
+    pop ds
+
+    ; Clean up stack
+    add sp, 2                       ; sector counter
+    add sp, 2                       ; sector number
+    add sp, 11                      ; 8.3 filename
+
+    ; Find free file handle
+    push ax
+    push bx
+    push dx
+    call alloc_file_handle
+    pop dx
+    pop bx
+    pop cx                          ; CX = starting cluster (was AX)
+    jc .no_handles
+
+    ; AX now contains file handle index
+    ; Initialize file handle entry
+    mov di, ax
+    shl di, 5                       ; DI = handle * 32 (entry size)
+    add di, file_table
+
+    mov byte [di], 1                ; Status = open
+    mov byte [di + 1], 0            ; Mount handle = 0
+    mov [di + 2], cx                ; Starting cluster
+    mov [di + 4], bx                ; File size (low)
+    mov [di + 6], dx                ; File size (high)
+    mov word [di + 8], 0            ; Current position (low)
+    mov word [di + 10], 0           ; Current position (high)
+
+    ; Return file handle in AX (already set)
+    clc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.no_handles:
+    mov ax, FS_ERR_NO_HANDLES
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+; alloc_file_handle - Find a free file handle
+; Output: CF = 0 on success, CF = 1 if no handles available
+;         AX = file handle index (0-15) if CF=0
+; Preserves: BX, CX, DX, SI, DI
+alloc_file_handle:
+    push si
+    xor ax, ax
+    mov cx, 16
+    mov si, file_table
+
+.check_handle:
+    cmp byte [si], 0                ; Status = 0 (free)?
+    je .found
+    add si, 32
+    inc ax
+    loop .check_handle
+
+    ; No free handles
+    stc
+    pop si
+    ret
+
+.found:
+    clc
+    pop si
+    ret
+
+; fat12_read - Read data from file
+; Input: AX = file handle
+;        ES:DI = buffer to read into
+;        CX = number of bytes to read
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = actual bytes read if CF=0, error code if CF=1
+; Preserves: BX, DX
+fat12_read:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Validate file handle
+    cmp ax, 16
+    jae .invalid_handle
+
+    ; Get file handle entry
+    mov si, ax
+    shl si, 5                       ; SI = handle * 32
+    add si, file_table
+
+    ; Check if file is open
+    cmp byte [si], 1
+    jne .invalid_handle
+
+    ; Get file info
+    mov ax, [si + 2]                ; Starting cluster
+    mov bx, [si + 4]                ; File size (low)
+    mov dx, [si + 6]                ; File size (high)
+    mov bp, [si + 8]                ; Current position (low)
+
+    ; Calculate remaining bytes in file
+    ; remaining = file_size - current_position
+    sub bx, bp                      ; BX = remaining bytes
+    jnc .check_read_size
+    ; Handle high word if needed (files > 64KB not supported yet)
+    xor bx, bx
+
+.check_read_size:
+    ; Limit read to remaining bytes
+    cmp cx, bx
+    jbe .read_start
+    mov cx, bx                      ; CX = min(requested, remaining)
+
+.read_start:
+    ; Save requested bytes for return value
+    push cx
+
+    ; For simplicity, only support reading from start of file (position = 0)
+    ; TODO: Add support for arbitrary file positions
+    cmp bp, 0
+    jne .not_supported
+
+    ; Read first cluster
+    ; Cluster to sector: sector = data_area_start + (cluster - 2) * sectors_per_cluster
+    sub ax, 2
+    xor bh, bh
+    mov bl, [sectors_per_cluster]
+    mul bx                          ; AX = (cluster - 2) * sectors_per_cluster
+    add ax, [data_area_start]
+
+    ; Read one sector (512 bytes max per cluster for FAT12)
+    push es
+    push di
+    push cx
+
+    mov bx, 0x1000
+    push bx
+    pop ds
+    mov bx, bpb_buffer
+    push ax
+    mov cx, ax
+    and cx, 0x003F
+    inc cl
+    mov ax, cx
+    shr ax, 6
+    mov ch, al
+    mov ax, 0x0201                  ; Read 1 sector
+    mov dx, 0x0000                  ; Drive A:
+    int 0x13
+    pop ax
+
+    push cs
+    pop ds
+
+    pop cx
+    pop di
+    pop es
+
+    jc .read_error
+
+    ; Copy data from buffer to user buffer
+    ; Copy min(cx, 512) bytes
+    push cx
+    cmp cx, 512
+    jbe .copy_size_ok
+    mov cx, 512
+.copy_size_ok:
+    push si
+    push di
+    mov si, bpb_buffer
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    rep movsb
+    pop ds
+    pop di
+    pop si
+    pop ax                          ; AX = bytes copied
+
+    ; Update file position
+    mov bp, [si + 8]
+    add bp, ax
+    mov [si + 8], bp
+
+    ; Return bytes read
+    pop cx                          ; Original requested bytes
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.not_supported:
+    pop cx
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.invalid_handle:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.read_error:
+    pop cx
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; fat12_close - Close a file
+; Input: AX = file handle
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = error code if CF=1
+fat12_close:
+    push si
+
+    ; Validate file handle
+    cmp ax, 16
+    jae .invalid_handle
+
+    ; Get file handle entry
+    mov si, ax
+    shl si, 5                       ; SI = handle * 32
+    add si, file_table
+
+    ; Mark as free
+    mov byte [si], 0
+
+    xor ax, ax
+    clc
+    pop si
+    ret
+
+.invalid_handle:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop si
+    ret
+
+; ============================================================================
 ; Font Data - 8x8 characters
 ; ============================================================================
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
@@ -1013,9 +1900,34 @@ event_queue: times 96 db 0          ; 32 events * 3 bytes each
 event_queue_head: dw 0
 event_queue_tail: dw 0
 
+; Filesystem state (Foundation 1.6)
+; BPB (BIOS Parameter Block) cache
+bpb_buffer: times 512 db 0          ; Boot sector buffer
+bytes_per_sector: dw 512
+sectors_per_cluster: db 1
+reserved_sectors: dw 1
+num_fats: db 2
+root_dir_entries: dw 224
+sectors_per_fat: dw 9
+root_dir_start: dw 19               ; Calculated: reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 33              ; Calculated: root_dir_start + root_dir_sectors
+
+; File handle table (16 entries, 32 bytes each)
+; Entry format:
+;   Byte 0: Status (0=free, 1=open)
+;   Byte 1: Mount handle
+;   Bytes 2-3: Starting cluster
+;   Bytes 4-7: File size (32-bit)
+;   Bytes 8-11: Current position (32-bit)
+;   Bytes 12-31: Reserved
+file_table: times 512 db 0          ; 16 entries * 32 bytes
+
+; Read buffer for filesystem test
+fs_read_buffer: times 512 db 0
+
 ; ============================================================================
 ; Padding
 ; ============================================================================
 
-; Pad to 24KB (48 sectors)
-times 24576 - ($ - $$) db 0
+; Pad to 28KB (56 sectors) - expanded for FAT12 filesystem (v3.10.0)
+times 28672 - ($ - $$) db 0

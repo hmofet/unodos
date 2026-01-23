@@ -28,17 +28,21 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.6.0)
+## Current Features (v3.10.0)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
-- Separate 24KB kernel loaded at 64KB mark
+- Separate 28KB kernel loaded at 64KB mark
 - Boot progress indicator (dots during kernel load)
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
 - Graphical welcome screen with bordered window
-- Real-time clock display (reads from RTC via BIOS)
-- Memory detection and display
-- Character set demonstration
+- System call infrastructure (INT 0x80 + API table with 17 functions)
+- Graphics API (draw pixel, rectangle, character, string)
+- Memory allocator (malloc/free)
+- Keyboard driver (INT 09h with scan code translation)
+- Event system (32-event circular queue)
+- Filesystem abstraction layer + FAT12 driver (read-only)
+- File operations (mount, open, read, close)
 
 ## Building
 
@@ -186,21 +190,22 @@ unodos/
 - [x] System call infrastructure (INT 0x80 + Far Call Table) - v3.3.0
 - [x] Graphics API abstraction layer - v3.4.0
 - [x] Memory allocator (malloc/free) - v3.5.0
-- [x] Kernel expansion (16KB → 24KB) - v3.6.0
+- [x] Kernel expansion (16KB → 24KB → 28KB) - v3.6.0 → v3.10.0
 - [x] Aggressive kernel optimization - v3.7.0
 - [x] Keyboard input handling (INT 09h driver) - v3.8.0
 - [x] Event system (circular queue, event-driven architecture) - v3.9.0
+- [x] Filesystem abstraction layer + FAT12 driver - v3.10.0
 
 **Foundation Layer Complete!** All core infrastructure is now in place.
 
-### In Progress (Standard Library)
+### In Progress (Core Services - v3.11.0-v3.13.0)
+- [ ] Application loader (load .BIN from FAT12)
+- [ ] GUI window manager
+- [ ] Bootloader installation tool (Tier 3 support)
+
+### Planned (Standard Library - v3.14.0)
 - [ ] graphics.lib - C-callable wrappers for Graphics API
 - [ ] unodos.lib - Initialization and utility functions
-
-### Planned (Core Services - v3.5.0-v3.7.0)
-- [ ] GUI window manager
-- [ ] File system (FAT12)
-- [ ] Application loader
 
 ### Planned (Applications - v3.8.0+)
 - [ ] Clock display application
@@ -216,7 +221,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.9.0**
+Current version: **3.10.0**
 
 ## Contributing
 
