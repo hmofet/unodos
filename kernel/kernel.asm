@@ -289,7 +289,7 @@ test_filesystem:
 
     ; Display instruction to insert test floppy
     mov bx, 10
-    mov cx, 20
+    mov cx, 30
     mov si, .insert_msg
     call gfx_draw_string_stub
 
@@ -301,7 +301,7 @@ test_filesystem:
 
     ; Display "Testing..." message
     mov bx, 10
-    mov cx, 45
+    mov cx, 55
     mov si, .testing_msg
     call gfx_draw_string_stub
 
@@ -319,7 +319,7 @@ test_filesystem:
 
     ; Display mount success
     mov bx, 10
-    mov cx, 60
+    mov cx, 70
     mov si, .mount_ok
     call gfx_draw_string_stub
 
@@ -331,26 +331,39 @@ test_filesystem:
     push dx
     push es
 
-    ; Get root directory start sector
-    mov ax, [root_dir_start]
+    ; Get root directory start sector and convert LBA to CHS
+    mov ax, [root_dir_start]        ; AX = LBA
 
-    ; Convert logical sector to CHS
+    ; LBA to CHS conversion for floppy
+    ; sector = (LBA % sectors_per_track) + 1
+    ; head = (LBA / sectors_per_track) % num_heads
+    ; cylinder = LBA / (sectors_per_track * num_heads)
+
+    push ax
+    xor dx, dx
+    mov bx, 18                      ; sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+
+    xor dx, dx
+    mov bx, 2                       ; num heads (1.44MB floppy)
+    div bx                          ; AX = cylinder, DX = head
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop ax
+
+    ; Now read the sector
     mov bx, 0x1000
     mov es, bx
     mov bx, bpb_buffer
-    mov cx, ax                      ; CX = logical sector number
-    and cx, 0x003F                  ; CL = sector (bits 0-5)
-    inc cl                          ; BIOS sectors start at 1
-    mov ax, cx
-    shr ax, 6
-    mov ch, al                      ; CH = cylinder
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    mov dl, 0                       ; DL = drive A:
     int 0x13
 
     ; Display "Dir:" label
     mov bx, 10
-    mov cx, 75
+    mov cx, 85
     mov si, .dir_label
     call gfx_draw_string_stub
 
@@ -379,7 +392,7 @@ test_filesystem:
     loop .find_entry
 .show_none:
     mov bx, 50
-    mov cx, 75
+    mov cx, 85
     mov si, .no_entry
     call gfx_draw_string_stub
     jmp .done_debug
@@ -390,7 +403,7 @@ test_filesystem:
     push si
     mov di, si                      ; Save SI in DI
     mov word [debug_x], 50
-    mov word [debug_y], 75
+    mov word [debug_y], 85
     mov cx, 11                      ; 11 characters
 .draw_loop:
     push cx
@@ -427,7 +440,7 @@ test_filesystem:
     ; Display open success
     push ax                         ; Save file handle
     mov bx, 10
-    mov cx, 90
+    mov cx, 100
     mov si, .open_ok
     call gfx_draw_string_stub
     pop ax                          ; Restore file handle
@@ -443,13 +456,13 @@ test_filesystem:
 
     ; Display read success
     mov bx, 10
-    mov cx, 105
+    mov cx, 115
     mov si, .read_ok
     call gfx_draw_string_stub
 
-    ; Display file contents at Y=120
+    ; Display file contents at Y=130
     mov bx, 10
-    mov cx, 120
+    mov cx, 130
     mov si, fs_read_buffer
     call gfx_draw_string_stub
 
@@ -467,13 +480,13 @@ test_filesystem:
 
 .mount_failed:
     mov bx, 10
-    mov cx, 60
+    mov cx, 70
     mov si, .mount_err
     call gfx_draw_string_stub
 
     ; Show error code for debugging
     mov bx, 180
-    mov cx, 75
+    mov cx, 85
     mov si, .err_code_msg
     call gfx_draw_string_stub
 
@@ -490,7 +503,7 @@ test_filesystem:
 
 .open_failed:
     mov bx, 10
-    mov cx, 90
+    mov cx, 100
     mov si, .open_err
     call gfx_draw_string_stub
     pop di
@@ -504,7 +517,7 @@ test_filesystem:
 .read_failed:
     pop ax                          ; Clean up file handle
     mov bx, 10
-    mov cx, 105
+    mov cx, 115
     mov si, .read_err
     call gfx_draw_string_stub
     pop di
@@ -516,7 +529,7 @@ test_filesystem:
     ret
 
 .test_msg:      db 'FAT12 Filesystem Test', 0
-.insert_msg:    db 'Insert test floppy - Press any key', 0
+.insert_msg:    db 'Insert test disk, press key', 0
 .testing_msg:   db 'Testing...', 0
 .mount_ok:      db 'Mount: OK', 0
 .mount_err:     db 'Mount: FAIL', 0
@@ -1649,20 +1662,33 @@ fat12_open:
     push ax
 
     ; Read one sector of root directory
-    push ax
+    push ax                         ; Save sector number
+
+    ; LBA to CHS conversion for floppy
+    ; sector = (LBA % sectors_per_track) + 1
+    ; head = (LBA / sectors_per_track) % num_heads
+    ; cylinder = LBA / (sectors_per_track * num_heads)
+    xor dx, dx
+    mov bx, 18                      ; sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+
+    xor dx, dx
+    mov bx, 2                       ; num heads (1.44MB floppy)
+    div bx                          ; AX = cylinder, DX = head
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+
+    ; Now read the sector
     mov bx, 0x1000
     mov es, bx
     mov bx, bpb_buffer
-    mov cx, ax
-    and cx, 0x003F                  ; CL = sector (1-63)
-    inc cl                          ; BIOS sectors start at 1
-    mov ax, cx
-    shr ax, 6
-    mov ch, al                      ; CH = cylinder
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    mov dl, 0                       ; DL = drive A:
     int 0x13
-    pop ax
+
+    pop ax                          ; Restore sector number
     jc .read_error_cleanup
 
     ; Search through 16 entries in this sector
