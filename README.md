@@ -162,7 +162,9 @@ unodos/
 ## Documentation
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Technical details of the boot process
-- [FEATURES.md](docs/FEATURES.md) - Planned features and roadmap
+- [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) - System architecture and implementation roadmap
+- [SYSCALL.md](docs/SYSCALL.md) - System call architecture analysis
+- [FEATURES.md](docs/FEATURES.md) - Planned features roadmap
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes
 
 ## Development Status
@@ -180,13 +182,30 @@ unodos/
 - [x] RAM status display
 - [x] Character demonstration
 
-### Planned
+### In Progress (v3.3.0)
+- [ ] System call infrastructure (INT 0x80 + Far Call Table)
+- [ ] Graphics API abstraction layer
+
+### Planned (Foundation Layer - v3.3.0-v3.4.0)
+- [ ] Memory allocator (malloc/free)
 - [ ] Keyboard input handling
-- [ ] Mouse support (serial mouse)
+- [ ] Event system (circular queue)
+- [ ] Standard library (graphics.lib, unodos.lib)
+
+### Planned (Core Services - v3.5.0-v3.7.0)
 - [ ] GUI window manager
 - [ ] File system (FAT12)
-- [ ] Built-in applications
+- [ ] Application loader
+
+### Planned (Applications - v3.8.0+)
+- [ ] Clock display application
+- [ ] Text editor
+- [ ] File manager
+- [ ] Calculator
+- [ ] Mouse support (serial mouse)
 - [ ] Sound support (PC speaker)
+
+See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 ## Version History
 
