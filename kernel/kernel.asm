@@ -329,6 +329,89 @@ test_filesystem:
     mov si, .mount_ok
     call gfx_draw_string_stub
 
+    ; DEBUG: Display first directory entry to verify we can read directory
+    ; Read first directory sector
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    mov ax, 0x0201                  ; Read 1 sector
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    mov cx, 19                      ; Root dir starts at sector 19 (typical)
+    mov dx, 0x0000                  ; Drive 0, head 0
+    int 0x13
+
+    ; Display "Dir:" label
+    mov bx, 10
+    mov cx, 80
+    mov si, .dir_label
+    call gfx_draw_string_stub
+
+    ; Find first non-deleted, non-volume entry
+    mov si, bpb_buffer
+    mov cx, 16                      ; Max 16 entries
+.find_entry:
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov al, [si]                    ; First byte of entry
+    mov ah, [si + 0x0B]             ; Attribute byte
+    pop ds
+    test al, al                     ; Empty?
+    jz .show_none
+    cmp al, 0xE5                    ; Deleted?
+    je .try_next
+    cmp ah, 0x0F                    ; LFN?
+    je .try_next
+    test ah, 0x08                   ; Volume label?
+    jz .found_entry
+.try_next:
+    add si, 32
+    loop .find_entry
+.show_none:
+    mov bx, 50
+    mov cx, 80
+    mov si, .no_entry
+    call gfx_draw_string_stub
+    jmp .done_debug
+.found_entry:
+    ; Display the 11-byte filename from 0x1000:SI (no null terminator!)
+    ; Draw each character individually
+    push di
+    push si
+    mov di, si                      ; Save SI in DI
+    mov bx, 50
+    mov cx, 80
+    push cx
+    mov cx, 11                      ; 11 characters
+.draw_loop:
+    push cx
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov al, [di]                    ; Get character from directory entry
+    pop ds
+    mov si, char_buffer
+    mov [si], al                    ; Put in null-terminated buffer
+    mov byte [si + 1], 0
+    call gfx_draw_string_stub       ; Draw single char
+    add bx, 8                       ; Move X position right
+    inc di                          ; Next character
+    pop cx
+    loop .draw_loop
+    pop cx
+    pop si
+    pop di
+.done_debug:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
     ; Try to open TEST.TXT
     xor bx, bx                      ; Mount handle 0
     mov si, .filename
@@ -427,13 +510,15 @@ test_filesystem:
     ret
 
 .test_msg:      db 'FAT12 Filesystem Test', 0
-.insert_msg:    db 'Insert test floppy (with TEST.TXT) - Press any key', 0
+.insert_msg:    db 'Insert test floppy - Press any key', 0
 .testing_msg:   db 'Testing...', 0
 .mount_ok:      db 'Mount: OK', 0
-.mount_err:     db 'Mount: FAIL (Check: FAT12? 512B sectors?)', 0
+.mount_err:     db 'Mount: FAIL', 0
 .err_code_msg:  db 'Err:', 0
+.dir_label:     db 'Dir:', 0
+.no_entry:      db '(empty)', 0
 .open_ok:       db 'Open TEST.TXT: OK', 0
-.open_err:      db 'Open TEST.TXT: FAIL (not found)', 0
+.open_err:      db 'Open TEST.TXT: FAIL', 0
 .read_ok:       db 'Read: OK - File contents:', 0
 .read_err:      db 'Read: FAIL', 0
 .filename:      db 'TEST.TXT', 0
@@ -2171,6 +2256,9 @@ kbd_alt_state: db 0
 ; Keyboard demo state
 demo_cursor_x: dw 0
 demo_cursor_y: dw 0
+
+; Debug character buffer (for displaying single chars)
+char_buffer: db 0, 0
 
 ; Event system state (Foundation 1.5)
 event_queue: times 96 db 0          ; 32 events * 3 bytes each
