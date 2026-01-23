@@ -1645,6 +1645,18 @@ fat12_open:
     cmp al, 0xE5
     je .next_entry                  ; Deleted entry
 
+    ; Skip VFAT long filename entries (attribute = 0x0F at offset 0x0B)
+    ; Windows creates these for files, but we only want the 8.3 entry
+    push ds
+    push si
+    mov ax, 0x1000
+    mov ds, ax
+    mov al, [si + 0x0B]             ; Read attribute byte
+    pop si
+    pop ds
+    cmp al, 0x0F                    ; Long filename entry?
+    je .next_entry                  ; Skip it
+
     ; Compare filename (11 bytes)
     push si
     push di
