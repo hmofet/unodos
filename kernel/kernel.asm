@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: 003', 0
+build_string:   db 'Build: 004', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -473,13 +473,7 @@ test_app_loader:
     mov si, .prompt
     call gfx_draw_string_stub
 
-    ; Drain any pending events (e.g., KEY_UP from 'L' press)
-.drain_events:
-    mov ax, 0x0001                  ; Get event
-    int 0x80
-    jnc .drain_events               ; Keep draining while events exist
-
-    ; Debug: show '1' = drain complete
+    ; Debug: show '1' = prompt shown
     mov al, '1'
     mov bx, 300
     mov cx, 30
