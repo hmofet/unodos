@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug05', 0
+build_string:   db 'Build: debug06', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1642,28 +1642,26 @@ fat12_open:
     jnz .next_entry                 ; Skip hidden files
 
     ; Compare filename (11 bytes)
-    ; DEBUG: Show D:X S:Y A:ZZ (dir char, search char, attribute hex)
+    ; DEBUG: Show D:X S:Y A:ZZ F:ZZ (dir char, search char, debug attr, filter attr)
     push ax
     push bx
     push cx
     push dx
     push ds
+    push si                         ; SAVE SI (directory entry) FIRST!
+    ; Read dir entry data while SI still points to it
+    mov al, [si]                    ; First char of directory entry
+    mov [cs:.dbg_char], al
+    mov al, [si + 0x0B]             ; Attribute byte (with DS=0x1000)
+    mov [cs:.dbg_attr], al          ; Save for A: display
+    ; Now we can use SI for strings
     push cs
     pop ds
-    ; Show D: and first char of directory entry
+    ; Show D: label
     mov bx, 10
     mov cx, 85
     mov si, .dbg_dir
     call gfx_draw_string_stub
-    pop ds                          ; Restore DS (0x1000)
-    push si
-    mov al, [si]                    ; First char of directory entry
-    mov [cs:.dbg_char], al
-    mov al, [si + 0x0B]             ; Attribute byte
-    mov [cs:.dbg_attr], al          ; Save for later display
-    pop si
-    push cs
-    pop ds
     mov bx, 30
     mov cx, 85
     mov si, .dbg_char
@@ -1674,7 +1672,7 @@ fat12_open:
     mov si, .dbg_srch
     call gfx_draw_string_stub
     mov bp, sp
-    add bp, 14                      ; 4 regs (8) + DS(2) + AX(2) + CX(2) = 14 after pop ds
+    add bp, 18                      ; 6 regs (12) + DS(2) + AX(2) + CX(2) = 18
     mov al, [ss:bp]
     mov [.dbg_char], al
     mov bx, 70
@@ -1732,14 +1730,12 @@ fat12_open:
     mov cx, 85
     mov si, .dbg_hex
     call gfx_draw_string_stub
+    ; Restore all registers (reverse order of push)
+    pop si                          ; Restore SI (directory entry pointer)
+    pop ds                          ; Restore DS (0x1000)
     pop dx
     pop cx
     pop bx
-    pop ax
-    ; Restore DS to 0x1000 for actual comparison
-    push ax
-    mov ax, 0x1000
-    mov ds, ax
     pop ax
 
     ; Push everything FIRST, then calculate pointer
