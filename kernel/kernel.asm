@@ -125,6 +125,7 @@ install_keyboard:
 int_09_handler:
     push ax
     push bx
+    push dx
     push ds
 
     ; Set DS to kernel segment
@@ -224,6 +225,7 @@ int_09_handler:
     out 0x20, al
 
     pop ds
+    pop dx
     pop bx
     pop ax
     iret
@@ -539,7 +541,7 @@ test_app_loader:
 
     ; Display error code after string
     pop ax                          ; Restore error code
-    mov bx, 100                     ; Position after "Load: FAIL "
+    mov bx, 136                     ; Position after "Load: FAIL " (11 chars × 12px + 4)
     add al, '0'                     ; Convert to ASCII digit
     call gfx_draw_char_stub
 
