@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug04', 0
+build_string:   db 'Build: debug05', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1619,11 +1619,17 @@ fat12_open:
     cmp al, 0xE5
     je .next_entry                  ; Deleted entry
 
-    ; Skip special entries: VFAT long filenames (0x0F) and volume labels (0x08)
-    ; Also skip directories, system files, hidden files (match debug code logic)
-    ; Attribute byte is at offset 0x0B from entry start
-    ; DS is already 0x1000, SI points to entry
-    mov al, [si + 0x0B]             ; Read attribute byte directly
+    ; Skip special entries: check attribute byte at offset 0x0B
+    ; Use explicit segment - DS should be 0x1000 but let's be sure
+    push es
+    push bx
+    mov bx, 0x1000
+    mov es, bx
+    mov al, [es:si + 0x0B]          ; Read attribute with explicit segment
+    mov [cs:.filt_attr], al         ; Save what filter sees
+    pop bx
+    pop es
+    ; Now check attributes
     cmp al, 0x0F                    ; Long filename entry?
     je .next_entry                  ; Skip it
     test al, 0x08                   ; Volume label bit set?
@@ -1697,6 +1703,32 @@ fat12_open:
     mov [.dbg_hex], ah
     mov [.dbg_hex+1], al
     mov bx, 110
+    mov cx, 85
+    mov si, .dbg_hex
+    call gfx_draw_string_stub
+    ; Also show F: (what filter saw)
+    mov bx, 130
+    mov cx, 85
+    mov si, .dbg_fstr
+    call gfx_draw_string_stub
+    ; Convert filter attr to hex
+    mov al, [.filt_attr]
+    mov ah, al
+    shr ah, 4
+    and al, 0x0F
+    add ah, '0'
+    cmp ah, '9'
+    jbe .fah_ok
+    add ah, 7
+.fah_ok:
+    add al, '0'
+    cmp al, '9'
+    jbe .fal_ok
+    add al, 7
+.fal_ok:
+    mov [.dbg_hex], ah
+    mov [.dbg_hex+1], al
+    mov bx, 150
     mov cx, 85
     mov si, .dbg_hex
     call gfx_draw_string_stub
@@ -1859,8 +1891,10 @@ fat12_open:
 .dbg_dir:   db 'D:', 0
 .dbg_srch:  db 'S:', 0
 .dbg_astr:  db 'A:', 0
+.dbg_fstr:  db 'F:', 0              ; Filter attribute label
 .dbg_char:  db ' ', 0, 0            ; Single char + null + padding
-.dbg_attr:  db 0                    ; Attribute byte storage
+.dbg_attr:  db 0                    ; Attribute byte storage (debug)
+.filt_attr: db 0                    ; Attribute byte storage (filter)
 .dbg_hex:   db '00', 0              ; Hex display
 
 ; alloc_file_handle - Find a free file handle
