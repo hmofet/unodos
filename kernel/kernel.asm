@@ -449,6 +449,14 @@ test_filesystem:
     pop bx
     pop ax
 
+    ; DEBUG: Show we're about to try opening
+    push ax
+    mov bx, 10
+    mov cx, 95
+    mov si, .trying_open
+    call gfx_draw_string_stub
+    pop ax
+
     ; Try to open TEST.TXT
     xor bx, bx                      ; Mount handle 0
     mov si, .filename
@@ -554,6 +562,7 @@ test_filesystem:
 .err_code_msg:  db 'Err:', 0
 .dir_label:     db 'Dir:', 0
 .no_entry:      db '(empty)', 0
+.trying_open:   db 'Trying open...', 0
 .open_ok:       db 'Open TEST.TXT: OK', 0
 .open_err:      db 'Open TEST.TXT: FAIL', 0
 .read_ok:       db 'Read: OK - File contents:', 0
