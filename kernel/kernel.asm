@@ -1615,7 +1615,7 @@ fat12_open:
     ; Check if entry is free (first byte = 0x00 or 0xE5)
     mov al, [si]
     test al, al
-    jz .not_found_cleanup           ; End of directory
+    jz .end_of_dir                  ; End of directory (need to pop DS first!)
     cmp al, 0xE5
     je .next_entry                  ; Deleted entry
 
@@ -1660,6 +1660,12 @@ fat12_open:
     pop di
     pop si
     je .found_file
+
+.end_of_dir:
+    ; End of directory reached (first byte was 0x00)
+    ; DS is on stack, need to pop it before cleanup
+    pop ds
+    jmp .not_found_cleanup
 
 .next_entry:
     add si, 32                      ; Next directory entry
