@@ -15,12 +15,16 @@ FLOPPY_144 = build/unodos-144.img
 BUILD_DIR = build
 BOOT_DIR = boot
 KERNEL_DIR = kernel
+APPS_DIR = apps
+
+# Application binaries
+HELLO_BIN = build/hello.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
 FLOPPY_144M = 1474560
 
-.PHONY: all clean run debug floppy144 check-deps help
+.PHONY: all clean run debug floppy144 check-deps help apps test-app
 
 all: $(FLOPPY_IMG)
 
@@ -57,10 +61,14 @@ $(BOOT_BIN): $(BOOT_DIR)/boot.asm | $(BUILD_DIR) check-deps
 $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
-# Assemble kernel (16KB)
-# -I flag adds include path for font files
-$(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(BOOT_DIR)/font8x8.asm $(BOOT_DIR)/font4x6.asm | $(BUILD_DIR)
-	$(NASM) -f bin -I$(BOOT_DIR)/ -o $@ $<
+# Assemble kernel (28KB)
+# Font files now in kernel directory
+$(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(KERNEL_DIR)/font8x8.asm $(KERNEL_DIR)/font4x6.asm | $(BUILD_DIR)
+	$(NASM) -f bin -I$(KERNEL_DIR)/ -o $@ $<
+
+# Assemble test application
+$(HELLO_BIN): $(APPS_DIR)/hello.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
 
 # Create 360KB floppy image (target platform)
 # Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
@@ -130,6 +138,25 @@ test-fat12-multi: $(FLOPPY_IMG) build/test-fat12-multi.img check-qemu
 # Rebuild multi-cluster test image
 build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
+
+# Build all applications
+apps: $(HELLO_BIN)
+	@echo "Built applications:"
+	@echo "  $(HELLO_BIN) ($$(wc -c < $(HELLO_BIN)) bytes)"
+
+# Create app test floppy image (FAT12 with HELLO.BIN)
+build/app-test.img: $(HELLO_BIN)
+	@echo "Creating app test floppy image..."
+	python3 tools/create_app_test.py $@ $(HELLO_BIN)
+
+# Test application loader with QEMU
+test-app: $(FLOPPY_IMG) build/app-test.img check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=build/app-test.img,format=raw,if=floppy,index=1 \
+		-boot a \
+		-display gtk
 
 # Clean build artifacts
 clean:

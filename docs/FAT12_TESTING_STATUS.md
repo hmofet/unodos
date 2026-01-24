@@ -1,34 +1,34 @@
 # FAT12 Testing Status
 
-## Current Status: ✅ WORKING (with minor graphics issues)
+## Current Status: ✅ FULLY WORKING
 
-**Date:** 2026-01-23
-**Version:** UnoDOS v3.10.1
+**Date:** 2026-01-24
+**Version:** UnoDOS v3.10.1 (release)
 **Hardware Tested:** HP Omnibook 600C
 
 ## Test Results
 
-### Latest Test (2026-01-23)
+### Latest Test (2026-01-24)
 ```
 UnoDOS v3.10.1
+Build: release
 [Press F for filesystem test]
 Insert test disk, press key
 Testing...
 Mount: OK
-Dir: TEST     TXT
-Open TEST.TXT: [Result pending - likely OK based on Dir success]
+Open TEST.TXT: OK
+Read: OK - File contents:
+C1:A C2:B
 ```
 
-**Status:** ✅ **FAT12 directory reading is WORKING!**
+**Status:** ✅ **FAT12 filesystem FULLY WORKING on real hardware!**
 - Boot sector parsing: ✅ Working
-- Directory sector reading: ✅ Working (corrected CHS conversion)
-- Directory entry parsing: ✅ Working (showing TEST.TXT correctly)
-- File skip logic: ✅ Working (skips SYSTEM~1, shows TEST.TXT)
-
-**Known Issues:**
-- Graphics rendering has artifacts (text corruption, spacing issues)
-- Does NOT affect functionality - disk I/O is working correctly
-- Graphics fixes can be done later
+- Directory sector reading: ✅ Working
+- Directory entry parsing: ✅ Working
+- File open: ✅ Working
+- Single-cluster read: ✅ Working
+- Multi-cluster read: ✅ Working (FAT chain following)
+- File close: ✅ Working
 
 ## Critical Bugs Fixed
 
@@ -97,11 +97,13 @@ For LBA 19 (typical root dir start):
 
 ## Next Steps
 
-### Immediate (v3.10.x)
-- [ ] Fix graphics rendering artifacts
-- [ ] Test multi-cluster file reading (TEST.TXT is 1024 bytes = 2 clusters)
-- [ ] Verify "Open TEST.TXT: OK" appears
-- [ ] Verify file contents display correctly
+### Completed (v3.10.1) ✅
+- [x] Fix stack cleanup bug in .found_file
+- [x] Fix LBA→CHS conversion in fat12_read
+- [x] Test multi-cluster file reading (TEST.TXT is 1024 bytes = 2 clusters)
+- [x] Verify "Open TEST.TXT: OK" appears
+- [x] Verify file contents display correctly (C1:A C2:B)
+- [x] Clean up debug code for release
 
 ### Short-term (v3.11.0)
 - [ ] Implement application loader
@@ -218,7 +220,7 @@ cd unodos\tools
 
 ## Success Criteria
 
-### ✅ Completed
+### ✅ All Completed
 - [x] Boot from floppy
 - [x] Switch to graphics mode (320x200 CGA)
 - [x] Parse FAT12 boot sector (BPB)
@@ -228,16 +230,15 @@ cd unodos\tools
 - [x] Skip volume labels, LFN, directories, system, hidden
 - [x] Find TEST.TXT file
 - [x] Display filename correctly
+- [x] Open file (get starting cluster, size)
+- [x] Read file contents (single cluster)
+- [x] Read file contents (multi-cluster)
+- [x] Follow FAT chain (cluster 2 → 3 → EOF)
+- [x] Display file contents on screen (C1:A C2:B)
 
-### 🚧 In Progress (Graphics Issues)
+### 🚧 Future Improvements (Low Priority)
 - [ ] Clean text rendering (spacing, corruption)
 - [ ] Proper line wrapping
-
-### ⏳ Pending
-- [ ] Open file (get starting cluster, size)
-- [ ] Read file contents (multi-cluster)
-- [ ] Follow FAT chain (cluster 4 → 5 → EOF)
-- [ ] Display file contents on screen
 
 ## Known Issues
 
