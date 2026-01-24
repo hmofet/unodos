@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: 005', 0
+build_string:   db 'Build: 006', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -478,6 +478,9 @@ test_app_loader:
     mov bx, 300
     mov cx, 30
     call gfx_draw_char_stub
+
+    ; Clear any pending keys (e.g., from pressing 'L')
+    call clear_kbd_buffer
 
     ; Wait for key (swap disks)
     call kbd_wait_key
