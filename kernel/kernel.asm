@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug08', 0
+build_string:   db 'Build: debug09', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -2153,28 +2153,38 @@ fat12_read:
     mul bx
     add ax, [data_area_start]       ; AX = sector number
 
-    ; Read sector into bpb_buffer
+    ; Read sector into bpb_buffer (ES:BX = 0x1000:bpb_buffer)
     push es
     push di
     push si
 
     mov bx, 0x1000
+    mov es, bx                      ; ES = 0x1000 (for INT 13h read)
     push bx
-    pop ds
-    mov bx, bpb_buffer
+    pop ds                          ; DS = 0x1000 (for later access)
+    mov bx, bpb_buffer              ; BX = buffer offset
 
-    ; Convert LBA to CHS
-    push ax
-    mov cx, ax
-    and cx, 0x003F
-    inc cl                          ; CL = sector (1-based)
-    mov ax, cx
-    shr ax, 6
+    ; Convert LBA to CHS (proper conversion for floppy)
+    ; AX = LBA sector number
+    push bx                         ; Save buffer pointer
+    push ax                         ; Save LBA
+    xor dx, dx
+    mov bx, 18                      ; Sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+    xor dx, dx
+    mov bx, 2                       ; Number of heads
+    div bx                          ; AX = cylinder, DX = head
     mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop ax                          ; Restore LBA (saved for FAT chain)
+    pop bx                          ; Restore buffer pointer
+    push ax                         ; Save LBA again
     mov ax, 0x0201                  ; Read 1 sector
-    mov dx, 0x0000                  ; Drive A:
+    mov dl, 0x00                    ; Drive A:
     int 0x13
-    pop ax
+    pop ax                          ; Restore LBA
 
     push cs
     pop ds
