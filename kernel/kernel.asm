@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug09', 0
+build_string:   db 'Build: debug10', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -371,10 +371,16 @@ test_filesystem:
     mov si, .read_ok
     call gfx_draw_string_stub
 
-    ; Display file contents at Y=130
+    ; Display file contents at Y=130 (cluster 1)
     mov bx, 10
     mov cx, 130
     mov si, fs_read_buffer
+    call gfx_draw_string_stub
+
+    ; Display cluster 2 content at Y=145 (offset 512)
+    mov bx, 10
+    mov cx, 145
+    mov si, fs_read_buffer + 512
     call gfx_draw_string_stub
 
     ; Close file
