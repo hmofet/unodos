@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: 004', 0
+build_string:   db 'Build: 005', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -509,6 +509,10 @@ test_app_loader:
     call app_load_stub
     jc .load_failed
 
+    ; Restore DS to kernel segment
+    push cs
+    pop ds
+
     ; Save app handle
     mov [.app_handle], ax
 
@@ -532,6 +536,10 @@ test_app_loader:
     jmp .done
 
 .load_failed:
+    ; Restore DS to kernel segment (was changed to 0x1000 for app_load_stub)
+    push cs
+    pop ds
+
     ; Save error code - gfx_draw_string_stub destroys AL
     push ax
 
