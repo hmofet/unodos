@@ -1666,7 +1666,20 @@ fat12_open:
     dec cx
     jnz .search_next_sector
 
+    ; Searched all sectors, file not found (CX/AX already popped)
+    add sp, 11                      ; Clean up 8.3 filename only
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
 .not_found_cleanup:
+    ; Jumped here from inside search loop (CX/AX still on stack)
     add sp, 2                       ; Clean up sector counter
     add sp, 2                       ; Clean up sector number
     add sp, 11                      ; Clean up 8.3 filename
