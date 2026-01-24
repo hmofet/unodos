@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug06', 0
+build_string:   db 'Build: debug07', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1753,6 +1753,28 @@ fat12_open:
     mov ds, ax                      ; DS = 0x1000 (for directory entry)
     mov cx, 11
     repe cmpsb                      ; Compare DS:SI (directory) with ES:DI (our name)
+    ; DEBUG: Show comparison result
+    pushf                           ; Save flags (ZF = result)
+    push ax
+    push bx
+    push cx
+    push ds
+    push cs
+    pop ds
+    mov bx, 170
+    mov cx, 85
+    jz .cmp_ok
+    mov si, .dbg_fail               ; '!'
+    jmp .cmp_show
+.cmp_ok:
+    mov si, .dbg_pass               ; '='
+.cmp_show:
+    call gfx_draw_string_stub
+    pop ds
+    pop cx
+    pop bx
+    pop ax
+    popf
     pop si
     pop ds
     pop di
@@ -1892,6 +1914,8 @@ fat12_open:
 .dbg_attr:  db 0                    ; Attribute byte storage (debug)
 .filt_attr: db 0                    ; Attribute byte storage (filter)
 .dbg_hex:   db '00', 0              ; Hex display
+.dbg_pass:  db '=', 0               ; Comparison passed
+.dbg_fail:  db '!', 0               ; Comparison failed
 
 ; alloc_file_handle - Find a free file handle
 ; Output: CF = 0 on success, CF = 1 if no handles available
