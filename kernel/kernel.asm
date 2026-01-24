@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug02', 0
+build_string:   db 'Build: debug03', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1640,24 +1640,25 @@ fat12_open:
     jnz .next_entry                 ; Skip hidden files
 
     ; Compare filename (11 bytes)
-    ; DEBUG: Show directory entry first char and our search name first char
+    ; DEBUG: Show D:X S:Y A:ZZ (dir char, search char, attribute hex)
     push ax
     push bx
     push cx
     push dx
     push ds
-    ; Show 'D:' then first char of directory entry
     push cs
     pop ds
+    ; Show D: and first char of directory entry
     mov bx, 10
-    mov cx, 85                      ; Y position for debug
+    mov cx, 85
     mov si, .dbg_dir
     call gfx_draw_string_stub
-    ; Get first char of dir entry (DS is still 0x1000 from earlier, SI points to entry)
     pop ds                          ; Restore DS (0x1000)
     push si
     mov al, [si]                    ; First char of directory entry
     mov [cs:.dbg_char], al
+    mov al, [si + 0x0B]             ; Attribute byte
+    mov [cs:.dbg_attr], al          ; Save for later display
     pop si
     push cs
     pop ds
@@ -1665,21 +1666,43 @@ fat12_open:
     mov cx, 85
     mov si, .dbg_char
     call gfx_draw_string_stub
-    ; Show 'S:' then first char of our 8.3 name
+    ; Show S: and first char of our search name
     mov bx, 50
     mov cx, 85
     mov si, .dbg_srch
     call gfx_draw_string_stub
-    ; Get first char of our search name from stack
-    ; Stack layout: [11-byte name][CX][AX][DS][...debug pushes...]
-    ; After pop ds, only 4 debug regs remain: (4*2=8) + DS(2) + AX(2) + CX(2) = 14 bytes
     mov bp, sp
-    add bp, 14
+    add bp, 14                      ; 4 regs (8) + DS(2) + AX(2) + CX(2) = 14 after pop ds
     mov al, [ss:bp]
     mov [.dbg_char], al
     mov bx, 70
     mov cx, 85
     mov si, .dbg_char
+    call gfx_draw_string_stub
+    ; Show A: and attribute in hex
+    mov bx, 90
+    mov cx, 85
+    mov si, .dbg_astr
+    call gfx_draw_string_stub
+    mov al, [.dbg_attr]
+    mov ah, al
+    shr ah, 4                       ; High nibble
+    and al, 0x0F                    ; Low nibble
+    add ah, '0'
+    cmp ah, '9'
+    jbe .ah_ok
+    add ah, 7                       ; A-F
+.ah_ok:
+    add al, '0'
+    cmp al, '9'
+    jbe .al_ok
+    add al, 7                       ; A-F
+.al_ok:
+    mov [.dbg_hex], ah
+    mov [.dbg_hex+1], al
+    mov bx, 110
+    mov cx, 85
+    mov si, .dbg_hex
     call gfx_draw_string_stub
     pop dx
     pop cx
@@ -1839,7 +1862,10 @@ fat12_open:
 ; Debug strings for fat12_open (local labels)
 .dbg_dir:   db 'D:', 0
 .dbg_srch:  db 'S:', 0
+.dbg_astr:  db 'A:', 0
 .dbg_char:  db ' ', 0, 0            ; Single char + null + padding
+.dbg_attr:  db 0                    ; Attribute byte storage
+.dbg_hex:   db '00', 0              ; Hex display
 
 ; alloc_file_handle - Find a free file handle
 ; Output: CF = 0 on success, CF = 1 if no handles available
