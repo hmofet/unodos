@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug07', 0
+build_string:   db 'Build: debug08', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1845,6 +1845,7 @@ fat12_open:
 .found_file:
     ; SI points to directory entry
     ; Extract: starting cluster (offset 0x1A), file size (offset 0x1C)
+    ; DS is still 0x1000 from the search loop (or we set it)
     mov ax, 0x1000
     mov ds, ax
     mov ax, [si + 0x1A]             ; Starting cluster
@@ -1855,9 +1856,10 @@ fat12_open:
     push cs
     pop ds
 
-    ; Clean up stack
-    add sp, 2                       ; sector counter
-    add sp, 2                       ; sector number
+    ; Clean up stack - DS from line 1608 is still on stack!
+    add sp, 2                       ; DS from search loop (line 1608)
+    add sp, 2                       ; sector number (AX from line 1574)
+    add sp, 2                       ; sector counter (CX from line 1573)
     add sp, 11                      ; 8.3 filename
 
     ; Find free file handle
