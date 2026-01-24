@@ -28,7 +28,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.10.0)
+## Current Features (v3.11.0)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
@@ -36,13 +36,15 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
 - Graphical welcome screen with bordered window
-- System call infrastructure (INT 0x80 + API table with 17 functions)
+- System call infrastructure (INT 0x80 + API table with 19 functions)
 - Graphics API (draw pixel, rectangle, character, string)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
 - Event system (32-event circular queue)
 - Filesystem abstraction layer + FAT12 driver (read-only)
 - File operations (mount, open, read, close)
+- Multi-cluster file reading (FAT chain following)
+- **Application Loader** (load and run .BIN apps from FAT12)
 
 ## Building
 
@@ -134,17 +136,20 @@ tools\writeflop.bat
 
 ```
 unodos/
+├── apps/
+│   └── hello.asm       # Test application for app loader
 ├── boot/
 │   ├── boot.asm        # First stage boot loader (512 bytes)
-│   ├── stage2.asm      # Second stage loader (2KB)
+│   └── stage2.asm      # Second stage loader (2KB)
+├── kernel/
+│   ├── kernel.asm      # Main OS kernel (28KB)
 │   ├── font8x8.asm     # 8x8 bitmap font data
 │   └── font4x6.asm     # 4x6 small font data
-├── kernel/
-│   └── kernel.asm      # Main OS kernel (24KB)
 ├── build/
 │   ├── boot.bin        # Compiled boot sector
 │   ├── stage2.bin      # Compiled stage2 loader
 │   ├── kernel.bin      # Compiled kernel
+│   ├── hello.bin       # Compiled test application
 │   ├── unodos.img      # 360KB floppy image
 │   └── unodos-144.img  # 1.44MB floppy image
 ├── docs/
@@ -156,7 +161,8 @@ unodos/
 │   ├── writeflop.sh    # Linux floppy write utility
 │   ├── writeflop.bat   # Windows CMD floppy write
 │   ├── Write-Floppy.ps1       # PowerShell with verification
-│   └── Write-Floppy-Quick.ps1 # PowerShell quick write
+│   ├── Write-Floppy-Quick.ps1 # PowerShell quick write
+│   └── create_app_test.py     # Create app test floppy image
 ├── Makefile
 ├── README.md
 ├── CHANGELOG.md
@@ -168,6 +174,8 @@ unodos/
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Technical details of the boot process
 - [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) - System architecture and implementation roadmap
 - [SYSCALL.md](docs/SYSCALL.md) - System call architecture analysis
+- [FAT12_IMPLEMENTATION_SUMMARY.md](docs/FAT12_IMPLEMENTATION_SUMMARY.md) - FAT12 filesystem implementation
+- [FAT12_HARDWARE_DEBUG.md](docs/FAT12_HARDWARE_DEBUG.md) - Hardware debugging and bug fixes
 - [FEATURES.md](docs/FEATURES.md) - Planned features roadmap
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes
 
@@ -198,8 +206,10 @@ unodos/
 
 **Foundation Layer Complete!** All core infrastructure is now in place.
 
-### In Progress (Core Services - v3.11.0-v3.13.0)
-- [ ] Application loader (load .BIN from FAT12)
+### Completed (Core Services) ✅
+- [x] Application loader (load .BIN from FAT12) - v3.11.0
+
+### In Progress (Core Services - v3.12.0-v3.13.0)
 - [ ] GUI window manager
 - [ ] Bootloader installation tool (Tier 3 support)
 
@@ -221,7 +231,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.10.0**
+Current version: **3.11.0**
 
 ## Contributing
 
