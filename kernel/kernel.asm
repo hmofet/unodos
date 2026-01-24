@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: d28906f', 0
+build_string:   db 'Build: debug01', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1640,6 +1640,57 @@ fat12_open:
     jnz .next_entry                 ; Skip hidden files
 
     ; Compare filename (11 bytes)
+    ; DEBUG: Show directory entry first char and our search name first char
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+    ; Show 'D:' then first char of directory entry
+    push cs
+    pop ds
+    mov bx, 10
+    mov cx, 85                      ; Y position for debug
+    mov si, .dbg_dir
+    call gfx_draw_string_stub
+    ; Get first char of dir entry (DS is still 0x1000 from earlier, SI points to entry)
+    pop ds                          ; Restore DS (0x1000)
+    push si
+    mov al, [si]                    ; First char of directory entry
+    mov [cs:.dbg_char], al
+    pop si
+    push cs
+    pop ds
+    mov bx, 30
+    mov cx, 85
+    mov si, .dbg_char
+    call gfx_draw_string_stub
+    ; Show 'S:' then first char of our 8.3 name
+    mov bx, 50
+    mov cx, 85
+    mov si, .dbg_srch
+    call gfx_draw_string_stub
+    ; Get first char of our search name from stack
+    ; Stack layout: [11-byte name][CX][AX][DS][...debug pushes...]
+    ; Need to reach past our debug pushes (5*2=10) + DS(2) + AX(2) + CX(2) = 16 bytes
+    mov bp, sp
+    add bp, 16
+    mov al, [ss:bp]
+    mov [.dbg_char], al
+    mov bx, 70
+    mov cx, 85
+    mov si, .dbg_char
+    call gfx_draw_string_stub
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ; Restore DS to 0x1000 for actual comparison
+    push ax
+    mov ax, 0x1000
+    mov ds, ax
+    pop ax
+
     ; Push everything FIRST, then calculate pointer
     push si                         ; Save directory entry pointer
     push di
@@ -1660,6 +1711,7 @@ fat12_open:
     pop di
     pop si
     je .found_file
+    jmp .next_entry                 ; Comparison failed, try next entry
 
 .end_of_dir:
     ; End of directory reached (first byte was 0x00)
@@ -1669,7 +1721,8 @@ fat12_open:
 
 .next_entry:
     add si, 32                      ; Next directory entry
-    loop .search_entry
+    dec cx
+    jnz .search_entry               ; Use jnz instead of loop (longer range)
 
     ; Move to next sector
     pop ds                          ; Restore DS (we pushed it before .search_entry)
@@ -1782,6 +1835,11 @@ fat12_open:
     pop bx
     pop es
     ret
+
+; Debug strings for fat12_open (local labels)
+.dbg_dir:   db 'D:', 0
+.dbg_srch:  db 'S:', 0
+.dbg_char:  db ' ', 0, 0            ; Single char + null + padding
 
 ; alloc_file_handle - Find a free file handle
 ; Output: CF = 0 on success, CF = 1 if no handles available
