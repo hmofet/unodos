@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug03', 0
+build_string:   db 'Build: debug04', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1621,13 +1621,9 @@ fat12_open:
 
     ; Skip special entries: VFAT long filenames (0x0F) and volume labels (0x08)
     ; Also skip directories, system files, hidden files (match debug code logic)
-    push ds
-    push si
-    mov ax, 0x1000
-    mov ds, ax
-    mov al, [si + 0x0B]             ; Read attribute byte
-    pop si
-    pop ds
+    ; Attribute byte is at offset 0x0B from entry start
+    ; DS is already 0x1000, SI points to entry
+    mov al, [si + 0x0B]             ; Read attribute byte directly
     cmp al, 0x0F                    ; Long filename entry?
     je .next_entry                  ; Skip it
     test al, 0x08                   ; Volume label bit set?
