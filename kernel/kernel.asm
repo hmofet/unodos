@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: 006', 0
+build_string:   db 'Build: 007', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -467,17 +467,15 @@ test_app_loader:
     push si
     push di
 
+    ; Ensure DS is set to kernel segment
+    push cs
+    pop ds
+
     ; Display prompt
     mov bx, 4
     mov cx, 30
     mov si, .prompt
     call gfx_draw_string_stub
-
-    ; Debug: show '1' = prompt shown
-    mov al, '1'
-    mov bx, 300
-    mov cx, 30
-    call gfx_draw_char_stub
 
     ; Clear any pending keys (e.g., from pressing 'L')
     call clear_kbd_buffer
@@ -485,36 +483,26 @@ test_app_loader:
     ; Wait for key (swap disks)
     call kbd_wait_key
 
-    ; Debug: show '2' = key received
-    mov al, '2'
-    mov bx, 308
-    mov cx, 30
-    call gfx_draw_char_stub
-
     ; Display "Loading..."
     mov bx, 4
     mov cx, 40
     mov si, .loading
     call gfx_draw_string_stub
 
-    ; Debug: show '3' = about to load
-    mov al, '3'
-    mov bx, 300
-    mov cx, 40
-    call gfx_draw_char_stub
+    ; Save DS before changing it for app_load_stub
+    push ds
 
     ; Load application from drive A: (0x00)
-    ; User swaps disks after booting, then loads from same drive
     mov ax, 0x1000
     mov ds, ax
     mov si, .app_filename
     mov dl, 0x00                    ; Drive A:
     call app_load_stub
-    jc .load_failed
 
-    ; Restore DS to kernel segment
-    push cs
+    ; Restore DS immediately
     pop ds
+
+    jc .load_failed
 
     ; Save app handle
     mov [.app_handle], ax
@@ -539,10 +527,7 @@ test_app_loader:
     jmp .done
 
 .load_failed:
-    ; Restore DS to kernel segment (was changed to 0x1000 for app_load_stub)
-    push cs
-    pop ds
-
+    ; DS already restored after app_load_stub
     ; Save error code - gfx_draw_string_stub destroys AL
     push ax
 
