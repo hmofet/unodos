@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: release', 0
+build_string:   db 'Build: 001', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -482,11 +482,12 @@ test_app_loader:
     mov si, .loading
     call gfx_draw_string_stub
 
-    ; Load application from drive B: (0x01)
+    ; Load application from drive A: (0x00)
+    ; User swaps disks after booting, then loads from same drive
     mov ax, 0x1000
     mov ds, ax
     mov si, .app_filename
-    mov dl, 0x01                    ; Drive B:
+    mov dl, 0x00                    ; Drive A:
     call app_load_stub
     jc .load_failed
 
@@ -513,14 +514,18 @@ test_app_loader:
     jmp .done
 
 .load_failed:
-    ; Display "Load: FAIL" with error code
+    ; Save error code - gfx_draw_string_stub destroys AL
+    push ax
+
+    ; Display "Load: FAIL "
     mov bx, 4
     mov cx, 50
     mov si, .load_err
     call gfx_draw_string_stub
 
-    ; Display error code
-    add bx, 80
+    ; Display error code after string
+    pop ax                          ; Restore error code
+    mov bx, 100                     ; Position after "Load: FAIL "
     add al, '0'                     ; Convert to ASCII digit
     call gfx_draw_char_stub
 
