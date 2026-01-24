@@ -5,7 +5,56 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.10.1] - 2026-01-23
+## [3.11.0] - 2026-01-24
+
+### Added
+- **Application Loader** - First Core Services feature (v3.11.0)
+  - `app_load_stub` (API 17) - Load .BIN applications from FAT12 into heap memory
+  - `app_run_stub` (API 18) - Execute loaded applications via far CALL
+  - app_table structure tracks up to 16 loaded applications (512 bytes)
+  - Entry includes: state, priority, code segment/offset, stack (for future multitasking)
+  - BIOS drive number support (0x00=A:, 0x01=B:, 0x80=C:, etc.)
+
+- **Test Application Framework**
+  - apps/hello.asm - Simple test app that draws 'H' pattern to verify loader
+  - tools/create_app_test.py - Creates FAT12 floppy with HELLO.BIN
+  - `make apps` target to build applications
+  - `make test-app` target to test app loader in QEMU
+
+- **'L' key handler** in keyboard demo
+  - Press 'L' to trigger app loader test
+  - Prompts to insert app disk in drive B:
+  - Loads and runs HELLO.BIN from disk
+
+### Changed
+- API table expanded from 17 to 19 functions
+- Keyboard demo prompt updated to show L key option
+
+### Technical Details
+- App calling convention:
+  - Entry point at offset 0x0000 within loaded segment
+  - Kernel calls app via far CALL
+  - App returns via RETF with return code in AX
+  - Apps can discover kernel API via INT 0x80 (returns ES:BX = API table pointer)
+
+- Memory layout:
+  - Kernel at 0x1000:0000 (28KB)
+  - Heap at 0x1400:0000 (apps loaded here via mem_alloc)
+
+- App table entry (32 bytes):
+  - Offset 0: State (0=free, 1=loaded, 2=running, 3=suspended)
+  - Offset 2: Code segment
+  - Offset 4: Code offset (entry point)
+  - Offset 6: Code size
+  - Offset 8-10: Stack segment/pointer (for future multitasking)
+  - Offset 12-22: Filename (8.3 format)
+
+### Future Enhancements Prepared
+- App table includes state field for cooperative multitasking
+- Stack segment/pointer fields for context switching
+- Priority field for future scheduler
+
+## [3.10.1] - 2026-01-24
 
 ### Added
 - **Multi-cluster file reading** - FAT12 driver now reads files larger than 512 bytes
@@ -21,18 +70,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - make test-fat12-multi target for testing
   - fs_read_buffer expanded from 512 to 1024 bytes
 
+- **Hardware debugging documentation**
+  - docs/FAT12_HARDWARE_DEBUG.md - complete debugging process documentation
+
+### Fixed
+- **Stack cleanup bug in fat12_open .found_file** (Critical)
+  - DS register pushed during search loop wasn't being popped in .found_file path
+  - Caused system hang after finding file
+  - Fixed by adding `add sp, 2` for DS cleanup
+
+- **LBA to CHS conversion in fat12_read** (Critical)
+  - Original code used bitmasks instead of proper division
+  - DH (head) was never calculated
+  - ES segment wasn't set for INT 13h read
+  - BX (buffer pointer) was clobbered during division
+  - Fixed with proper formula matching fat12_open's working code
+
+- **Simplified attribute reading in fat12_open**
+  - Removed unnecessary ES segment override
+  - DS is already 0x1000 in the search loop
+
 ### Changed
 - **fat12_read() rewritten for multi-cluster support**
   - Now loops through cluster chain until EOF or all bytes read
   - Reads each cluster sequentially into bpb_buffer
   - Copies data to user buffer and advances pointer (ES:DI) automatically
   - Updates file position correctly for multi-cluster reads
-  - Still requires position=0 (arbitrary position seeking planned for v3.11.0)
 
-- **test_filesystem() updated**
-  - Now reads 1024 bytes instead of 200 bytes
-  - Displays content from both clusters on screen
-  - Validates multi-cluster reading works correctly
+- **Debug code removed for release**
+  - Removed D:, S:, A:, F: debug output from fat12_open
+  - Removed comparison result (=/!) debug output
+  - Removed unused debug strings (.dbg_dir, .dbg_srch, etc.)
+  - Build string changed from "debug11" to "release"
 
 ### Technical Details
 - FAT12 cluster chain algorithm:
@@ -44,20 +113,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - If cluster is odd: `value = word >> 4`
   - Check for end-of-chain: `value >= 0xFF8`
 
-- Files can now be read up to full FAT12 capacity (~1.44MB on floppy)
-- Each fs_read() call follows the cluster chain until requested bytes are satisfied
-- Future: Arbitrary position seeking (requires calculating cluster offset from file position)
+- LBA to CHS conversion for 1.44MB floppy (18 sectors/track, 2 heads):
+  - Sector: `(LBA % 18) + 1`
+  - Head: `(LBA / 18) % 2`
+  - Cylinder: `LBA / 36`
+
+### Hardware Verified
+- ✅ Tested on HP Omnibook 600C (486DX4-75)
+- ✅ Mount: OK
+- ✅ Open TEST.TXT: OK
+- ✅ Read: OK (multi-cluster)
+- ✅ C1:A C2:B displayed correctly
 
 ### Testing
 ```bash
 make test-fat12-multi      # Test with 1024-byte file
-# Boot, press F, swap to test floppy, verify both clusters display
+# Boot, press F, swap to test floppy
+# Expected output: Mount: OK, Open: OK, Read: OK, C1:A C2:B
 ```
 
 ### Notes
-- This patch release enables loading applications larger than 512 bytes
-- Critical for Application Loader (v3.11.0) which needs to load multi-KB programs
-- Hardware testing on HP Omnibook 600C recommended before next release
+- This release marks completion of FAT12 filesystem on real hardware
+- Multi-cluster support enables loading applications larger than 512 bytes
+- Critical foundation for Application Loader (v3.11.0)
 
 ---
 

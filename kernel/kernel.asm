@@ -284,8 +284,8 @@ clear_kbd_buffer:
 ; Version String
 ; ============================================================================
 
-version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug11', 0
+version_string: db 'UnoDOS v3.11.0', 0
+build_string:   db 'Build: release', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -408,16 +408,6 @@ test_filesystem:
     mov cx, 70
     mov si, .mount_err
     call gfx_draw_string_stub
-
-    ; Show error code for debugging
-    mov bx, 180
-    mov cx, 85
-    mov si, .err_code_msg
-    call gfx_draw_string_stub
-
-    ; Display error code in AX (saved from mount call)
-    ; For now just show generic error
-
     pop di
     pop si
     pop dx
@@ -453,15 +443,10 @@ test_filesystem:
     pop ax
     ret
 
-.test_msg:      db 'FAT12 Filesystem Test', 0
 .insert_msg:    db 'Insert test disk, press key', 0
 .testing_msg:   db 'Testing...', 0
 .mount_ok:      db 'Mount: OK', 0
 .mount_err:     db 'Mount: FAIL', 0
-.err_code_msg:  db 'Err:', 0
-.dir_label:     db 'Dir:', 0
-.no_entry:      db '(empty)', 0
-.trying_open:   db 'Trying open...', 0
 .open_ok:       db 'Open TEST.TXT: OK', 0
 .open_err:      db 'Open TEST.TXT: FAIL', 0
 .read_ok:       db 'Read: OK - File contents:', 0
@@ -469,6 +454,104 @@ test_filesystem:
 .filename:      db 'TEST.TXT', 0
 .c1_label:      db 'C1:', 0
 .c2_label:      db 'C2:', 0
+
+; ============================================================================
+; Application Loader Test - Tests Core Services 2.1
+; ============================================================================
+
+test_app_loader:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Display prompt
+    mov bx, 4
+    mov cx, 30
+    mov si, .prompt
+    call gfx_draw_string_stub
+
+    ; Wait for key (swap disks)
+    call kbd_wait_key
+
+    ; Display "Loading..."
+    mov bx, 4
+    mov cx, 40
+    mov si, .loading
+    call gfx_draw_string_stub
+
+    ; Load application from drive B: (0x01)
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, .app_filename
+    mov dl, 0x01                    ; Drive B:
+    call app_load_stub
+    jc .load_failed
+
+    ; Save app handle
+    mov [.app_handle], ax
+
+    ; Display "Load: OK"
+    mov bx, 4
+    mov cx, 50
+    mov si, .load_ok
+    call gfx_draw_string_stub
+
+    ; Run the application
+    mov ax, [.app_handle]
+    call app_run_stub
+    jc .run_failed
+
+    ; Display "Run: OK"
+    mov bx, 4
+    mov cx, 60
+    mov si, .run_ok
+    call gfx_draw_string_stub
+
+    jmp .done
+
+.load_failed:
+    ; Display "Load: FAIL" with error code
+    mov bx, 4
+    mov cx, 50
+    mov si, .load_err
+    call gfx_draw_string_stub
+
+    ; Display error code
+    add bx, 80
+    add al, '0'                     ; Convert to ASCII digit
+    call gfx_draw_char_stub
+
+    jmp .done
+
+.run_failed:
+    ; Display "Run: FAIL"
+    mov bx, 4
+    mov cx, 60
+    mov si, .run_err
+    call gfx_draw_string_stub
+    jmp .done
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Local data
+.app_handle:    dw 0
+.prompt:        db 'Insert app disk, press key', 0
+.loading:       db 'Loading...', 0
+.load_ok:       db 'Load: OK', 0
+.load_err:      db 'Load: FAIL ', 0
+.run_ok:        db 'Run: OK', 0
+.run_err:       db 'Run: FAIL', 0
+.app_filename:  db 'HELLO   BIN'    ; 8.3 format, space-padded
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
@@ -504,6 +587,12 @@ keyboard_demo:
     je .file_test
     cmp al, 'f'
     je .file_test
+
+    ; Check for 'L' or 'l' (app loader test)
+    cmp al, 'L'
+    je .app_test
+    cmp al, 'l'
+    je .app_test
 
     ; Check for Enter (newline)
     cmp al, 13
@@ -568,6 +657,19 @@ keyboard_demo:
     ; Return (test_filesystem will halt or continue)
     ret
 
+.app_test:
+    ; Restore registers before calling test_app_loader
+    pop si
+    pop cx
+    pop bx
+    pop ax
+
+    ; Call app loader test
+    call test_app_loader
+
+    ; Return (test_app_loader will continue)
+    ret
+
 .exit:
     ; Display exit message
     mov bx, 10
@@ -581,7 +683,7 @@ keyboard_demo:
     pop ax
     ret
 
-.prompt: db 'Type text (ESC to exit, F for file test):', 0
+.prompt: db 'ESC=exit F=file L=app:', 0
 .instruction: db 'Event System + Graphics API', 0
 .exit_msg: db 'Event demo complete!', 0
 
@@ -790,7 +892,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 17                           ; Number of function slots
+    dw 19                           ; Number of function slots
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -820,6 +922,10 @@ kernel_api_table:
     dw fs_read_stub                 ; 14: Read from file
     dw fs_close_stub                ; 15: Close file
     dw fs_register_driver_stub      ; 16: Register filesystem driver
+
+    ; Application Loader (Core Services 2.1)
+    dw app_load_stub                ; 17: Load application from disk
+    dw app_run_stub                 ; 18: Run loaded application
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -1636,15 +1742,8 @@ fat12_open:
     je .next_entry                  ; Deleted entry
 
     ; Skip special entries: check attribute byte at offset 0x0B
-    ; Use explicit segment - DS should be 0x1000 but let's be sure
-    push es
-    push bx
-    mov bx, 0x1000
-    mov es, bx
-    mov al, [es:si + 0x0B]          ; Read attribute with explicit segment
-    mov [cs:.filt_attr], al         ; Save what filter sees
-    pop bx
-    pop es
+    ; DS should be 0x1000, read attribute directly
+    mov al, [si + 0x0B]             ; Read attribute byte
     ; Now check attributes
     cmp al, 0x0F                    ; Long filename entry?
     je .next_entry                  ; Skip it
@@ -1658,102 +1757,6 @@ fat12_open:
     jnz .next_entry                 ; Skip hidden files
 
     ; Compare filename (11 bytes)
-    ; DEBUG: Show D:X S:Y A:ZZ F:ZZ (dir char, search char, debug attr, filter attr)
-    push ax
-    push bx
-    push cx
-    push dx
-    push ds
-    push si                         ; SAVE SI (directory entry) FIRST!
-    ; Read dir entry data while SI still points to it
-    mov al, [si]                    ; First char of directory entry
-    mov [cs:.dbg_char], al
-    mov al, [si + 0x0B]             ; Attribute byte (with DS=0x1000)
-    mov [cs:.dbg_attr], al          ; Save for A: display
-    ; Now we can use SI for strings
-    push cs
-    pop ds
-    ; Show D: label
-    mov bx, 10
-    mov cx, 85
-    mov si, .dbg_dir
-    call gfx_draw_string_stub
-    mov bx, 30
-    mov cx, 85
-    mov si, .dbg_char
-    call gfx_draw_string_stub
-    ; Show S: and first char of our search name
-    mov bx, 50
-    mov cx, 85
-    mov si, .dbg_srch
-    call gfx_draw_string_stub
-    mov bp, sp
-    add bp, 18                      ; 6 regs (12) + DS(2) + AX(2) + CX(2) = 18
-    mov al, [ss:bp]
-    mov [.dbg_char], al
-    mov bx, 70
-    mov cx, 85
-    mov si, .dbg_char
-    call gfx_draw_string_stub
-    ; Show A: and attribute in hex
-    mov bx, 90
-    mov cx, 85
-    mov si, .dbg_astr
-    call gfx_draw_string_stub
-    mov al, [.dbg_attr]
-    mov ah, al
-    shr ah, 4                       ; High nibble
-    and al, 0x0F                    ; Low nibble
-    add ah, '0'
-    cmp ah, '9'
-    jbe .ah_ok
-    add ah, 7                       ; A-F
-.ah_ok:
-    add al, '0'
-    cmp al, '9'
-    jbe .al_ok
-    add al, 7                       ; A-F
-.al_ok:
-    mov [.dbg_hex], ah
-    mov [.dbg_hex+1], al
-    mov bx, 110
-    mov cx, 85
-    mov si, .dbg_hex
-    call gfx_draw_string_stub
-    ; Also show F: (what filter saw)
-    mov bx, 130
-    mov cx, 85
-    mov si, .dbg_fstr
-    call gfx_draw_string_stub
-    ; Convert filter attr to hex
-    mov al, [.filt_attr]
-    mov ah, al
-    shr ah, 4
-    and al, 0x0F
-    add ah, '0'
-    cmp ah, '9'
-    jbe .fah_ok
-    add ah, 7
-.fah_ok:
-    add al, '0'
-    cmp al, '9'
-    jbe .fal_ok
-    add al, 7
-.fal_ok:
-    mov [.dbg_hex], ah
-    mov [.dbg_hex+1], al
-    mov bx, 150
-    mov cx, 85
-    mov si, .dbg_hex
-    call gfx_draw_string_stub
-    ; Restore all registers (reverse order of push)
-    pop si                          ; Restore SI (directory entry pointer)
-    pop ds                          ; Restore DS (0x1000)
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-
     ; Push everything FIRST, then calculate pointer
     push si                         ; Save directory entry pointer
     push di
@@ -1769,28 +1772,6 @@ fat12_open:
     mov ds, ax                      ; DS = 0x1000 (for directory entry)
     mov cx, 11
     repe cmpsb                      ; Compare DS:SI (directory) with ES:DI (our name)
-    ; DEBUG: Show comparison result
-    pushf                           ; Save flags (ZF = result)
-    push ax
-    push bx
-    push cx
-    push ds
-    push cs
-    pop ds
-    mov bx, 170
-    mov cx, 85
-    jz .cmp_ok
-    mov si, .dbg_fail               ; '!'
-    jmp .cmp_show
-.cmp_ok:
-    mov si, .dbg_pass               ; '='
-.cmp_show:
-    call gfx_draw_string_stub
-    pop ds
-    pop cx
-    pop bx
-    pop ax
-    popf
     pop si
     pop ds
     pop di
@@ -1922,18 +1903,6 @@ fat12_open:
     pop bx
     pop es
     ret
-
-; Debug strings for fat12_open (local labels)
-.dbg_dir:   db 'D:', 0
-.dbg_srch:  db 'S:', 0
-.dbg_astr:  db 'A:', 0
-.dbg_fstr:  db 'F:', 0              ; Filter attribute label
-.dbg_char:  db ' ', 0, 0            ; Single char + null + padding
-.dbg_attr:  db 0                    ; Attribute byte storage (debug)
-.filt_attr: db 0                    ; Attribute byte storage (filter)
-.dbg_hex:   db '00', 0              ; Hex display
-.dbg_pass:  db '=', 0               ; Comparison passed
-.dbg_fail:  db '!', 0               ; Comparison failed
 
 ; alloc_file_handle - Find a free file handle
 ; Output: CF = 0 on success, CF = 1 if no handles available
@@ -2346,6 +2315,266 @@ fat12_close:
     ret
 
 ; ============================================================================
+; Application Loader (Core Services 2.1)
+; ============================================================================
+
+; Error codes for application loader
+APP_ERR_NO_SLOT         equ 1       ; No free app slot
+APP_ERR_MOUNT_FAILED    equ 2       ; Failed to mount filesystem
+APP_ERR_FILE_NOT_FOUND  equ 3       ; File not found
+APP_ERR_ALLOC_FAILED    equ 4       ; Memory allocation failed
+APP_ERR_READ_FAILED     equ 5       ; File read failed
+APP_ERR_INVALID_HANDLE  equ 6       ; Invalid app handle
+APP_ERR_NOT_LOADED      equ 7       ; App not loaded
+
+; app_load_stub - Load application from disk
+; Input: DS:SI = Pointer to filename (8.3 format, space-padded)
+;        DL = BIOS drive number (0=A:, 1=B:, 0x80=C:, etc.)
+; Output: CF clear on success, AX = app handle (0-15)
+;         CF set on error, AX = error code
+; Preserves: None (registers may be modified)
+app_load_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+
+    ; Save drive number and filename pointer
+    mov [.drive], dl
+    mov [.filename_off], si
+    mov ax, ds
+    mov [.filename_seg], ax
+
+    ; Step 1: Find free slot in app_table
+    mov ax, 0x1000
+    mov es, ax
+    mov di, app_table
+    xor cx, cx                      ; CX = slot index
+
+.find_slot:
+    cmp cx, APP_MAX_COUNT
+    jae .no_slot
+    cmp byte [es:di], APP_STATE_FREE
+    je .found_slot
+    add di, APP_ENTRY_SIZE
+    inc cx
+    jmp .find_slot
+
+.no_slot:
+    mov ax, APP_ERR_NO_SLOT
+    jmp .error
+
+.found_slot:
+    mov [.slot], cx
+    mov [.slot_off], di
+
+    ; Step 2: Mount filesystem
+    mov dl, [.drive]
+    call fs_mount_stub
+    jc .mount_failed
+
+    ; Step 3: Open file
+    mov ax, [.filename_seg]
+    mov ds, ax
+    mov si, [.filename_off]
+    call fs_open_stub
+    jc .file_not_found
+
+    mov [.file_handle], ax
+
+    ; Step 4: Get file size from file handle
+    ; File handle entry is at file_table + handle * 32
+    ; Size is at offset 4 (low) and 6 (high)
+    mov bx, ax
+    shl bx, 5
+    add bx, file_table
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, [bx + 4]                ; CX = file size (low word)
+    mov [.file_size], cx
+
+    ; Step 5: Allocate memory for app code
+    mov ax, cx
+    call mem_alloc_stub
+    jc .alloc_failed
+
+    ; AX = offset in heap segment (0x1400)
+    mov [.code_off], ax
+
+    ; Step 6: Read file into allocated memory
+    mov ax, [.file_handle]
+    mov bx, 0x1400                  ; Segment where heap is
+    mov es, bx
+    mov di, [.code_off]             ; Offset in heap (fat12_read expects ES:DI)
+    mov cx, [.file_size]            ; Bytes to read
+    call fs_read_stub
+    jc .read_failed
+
+    ; Step 7: Close file
+    mov ax, [.file_handle]
+    call fs_close_stub
+
+    ; Step 8: Store app info in app_table entry
+    mov ax, 0x1000
+    mov ds, ax
+    mov es, ax
+    mov di, [.slot_off]
+
+    mov byte [di + 0], APP_STATE_LOADED  ; State = loaded
+    mov byte [di + 1], 0                 ; Priority = 0
+    mov word [di + 2], 0x1400            ; Code segment
+    mov ax, [.code_off]
+    mov [di + 4], ax                     ; Code offset
+    mov ax, [.file_size]
+    mov [di + 6], ax                     ; Code size
+    mov word [di + 8], 0                 ; Stack segment (unused for now)
+    mov word [di + 10], 0                ; Stack pointer (unused for now)
+
+    ; Copy filename (11 bytes)
+    push ds
+    mov ax, [.filename_seg]
+    mov ds, ax
+    mov si, [.filename_off]
+    add di, 12
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    ; Step 9: Return app handle
+    mov ax, [.slot]
+    clc
+    jmp .done
+
+.mount_failed:
+    mov ax, APP_ERR_MOUNT_FAILED
+    jmp .error
+
+.file_not_found:
+    mov ax, APP_ERR_FILE_NOT_FOUND
+    jmp .error
+
+.alloc_failed:
+    ; Close file before returning error
+    mov ax, [.file_handle]
+    call fs_close_stub
+    mov ax, APP_ERR_ALLOC_FAILED
+    jmp .error
+
+.read_failed:
+    ; Close file before returning error
+    mov ax, [.file_handle]
+    call fs_close_stub
+    mov ax, APP_ERR_READ_FAILED
+    jmp .error
+
+.error:
+    stc
+
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; Local variables for app_load_stub
+.drive:        db 0
+.filename_seg: dw 0
+.filename_off: dw 0
+.slot:         dw 0
+.slot_off:     dw 0
+.file_handle:  dw 0
+.file_size:    dw 0
+.code_off:     dw 0
+
+; app_run_stub - Execute loaded application
+; Input: AX = App handle (0-15)
+; Output: CF clear on success, AX = return value from app
+;         CF set on error, AX = error code
+; Preserves: None (registers may be modified by app)
+app_run_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Validate app handle
+    cmp ax, APP_MAX_COUNT
+    jae .invalid_handle
+
+    ; Get app entry
+    mov bx, ax
+    shl bx, 5                       ; BX = handle * 32
+    add bx, app_table
+
+    ; Check if app is loaded
+    cmp byte [bx + 0], APP_STATE_LOADED
+    jne .not_loaded
+
+    ; Mark as running
+    mov byte [bx + 0], APP_STATE_RUNNING
+
+    ; Get code segment and offset
+    mov cx, [bx + 2]                ; Code segment
+    mov dx, [bx + 4]                ; Code offset (entry point)
+
+    ; Save app table offset for later
+    push bx
+
+    ; Set up for far call
+    ; We'll push return address and use retf to call the app
+    push cs
+    push word .app_return
+
+    ; Push app entry point
+    push cx                         ; Segment
+    push dx                         ; Offset
+
+    ; Far return to app (acts as far call)
+    retf
+
+.app_return:
+    ; App has returned, AX contains return value
+    mov bx, ax                      ; Save return value
+
+    ; Restore app table offset
+    pop si                          ; SI = app table offset
+
+    ; Mark as loaded (no longer running)
+    mov byte [si + 0], APP_STATE_LOADED
+
+    ; Return app's return value
+    mov ax, bx
+    clc
+    jmp .done
+
+.invalid_handle:
+    mov ax, APP_ERR_INVALID_HANDLE
+    stc
+    jmp .done
+
+.not_loaded:
+    mov ax, APP_ERR_NOT_LOADED
+    stc
+
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
 ; Font Data - 8x8 characters
 ; ============================================================================
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
@@ -2414,6 +2643,32 @@ fs_read_buffer: times 1024 db 0
 ; Stores one sector of FAT at a time
 fat_cache: times 512 db 0
 fat_cache_sector: dw 0xFFFF          ; Currently cached FAT sector (0xFFFF = invalid)
+
+; ============================================================================
+; Application Table (Core Services 2.1)
+; ============================================================================
+
+; Application table - track up to 16 loaded apps
+; Each entry: 32 bytes
+;   Offset 0:  1 byte  - State (0=free, 1=loaded, 2=running, 3=suspended)
+;   Offset 1:  1 byte  - Priority (for future scheduler)
+;   Offset 2:  2 bytes - Code segment
+;   Offset 4:  2 bytes - Code offset (entry point, always 0)
+;   Offset 6:  2 bytes - Code size
+;   Offset 8:  2 bytes - Stack segment (for future multitasking)
+;   Offset 10: 2 bytes - Stack pointer (for future multitasking)
+;   Offset 12: 11 bytes - Filename (8.3 format)
+;   Offset 23: 9 bytes - Reserved
+
+APP_STATE_FREE      equ 0
+APP_STATE_LOADED    equ 1
+APP_STATE_RUNNING   equ 2
+APP_STATE_SUSPENDED equ 3
+
+APP_MAX_COUNT       equ 16
+APP_ENTRY_SIZE      equ 32
+
+app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
 
 ; ============================================================================
 ; Padding
