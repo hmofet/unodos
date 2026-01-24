@@ -33,6 +33,12 @@ entry:
     mov si, version_string
     call gfx_draw_string_stub
 
+    ; Display build number (below version)
+    mov bx, 4
+    mov cx, 14
+    mov si, build_string
+    call gfx_draw_string_stub
+
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
 
@@ -279,6 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
+build_string:   db 'Build: f24fabc', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
