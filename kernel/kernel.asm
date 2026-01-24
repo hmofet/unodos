@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug01', 0
+build_string:   db 'Build: debug02', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -1672,9 +1672,9 @@ fat12_open:
     call gfx_draw_string_stub
     ; Get first char of our search name from stack
     ; Stack layout: [11-byte name][CX][AX][DS][...debug pushes...]
-    ; Need to reach past our debug pushes (5*2=10) + DS(2) + AX(2) + CX(2) = 16 bytes
+    ; After pop ds, only 4 debug regs remain: (4*2=8) + DS(2) + AX(2) + CX(2) = 14 bytes
     mov bp, sp
-    add bp, 16
+    add bp, 14
     mov al, [ss:bp]
     mov [.dbg_char], al
     mov bx, 70
