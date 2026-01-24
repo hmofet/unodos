@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.11.0', 0
-build_string:   db 'Build: 002', 0
+build_string:   db 'Build: 003', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -479,14 +479,32 @@ test_app_loader:
     int 0x80
     jnc .drain_events               ; Keep draining while events exist
 
+    ; Debug: show '1' = drain complete
+    mov al, '1'
+    mov bx, 300
+    mov cx, 30
+    call gfx_draw_char_stub
+
     ; Wait for key (swap disks)
     call kbd_wait_key
+
+    ; Debug: show '2' = key received
+    mov al, '2'
+    mov bx, 308
+    mov cx, 30
+    call gfx_draw_char_stub
 
     ; Display "Loading..."
     mov bx, 4
     mov cx, 40
     mov si, .loading
     call gfx_draw_string_stub
+
+    ; Debug: show '3' = about to load
+    mov al, '3'
+    mov bx, 300
+    mov cx, 40
+    call gfx_draw_char_stub
 
     ; Load application from drive A: (0x00)
     ; User swaps disks after booting, then loads from same drive
