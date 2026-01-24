@@ -285,7 +285,7 @@ clear_kbd_buffer:
 ; ============================================================================
 
 version_string: db 'UnoDOS v3.10.1', 0
-build_string:   db 'Build: debug10', 0
+build_string:   db 'Build: debug11', 0
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
@@ -371,17 +371,25 @@ test_filesystem:
     mov si, .read_ok
     call gfx_draw_string_stub
 
-    ; Display file contents at Y=130 (cluster 1)
+    ; Show cluster 1: "C1:" + char at offset 11 (should be 'A')
     mov bx, 10
     mov cx, 130
-    mov si, fs_read_buffer
+    mov si, .c1_label
     call gfx_draw_string_stub
+    mov al, [fs_read_buffer + 11]       ; Char after "CLUSTER 1: "
+    mov bx, 42
+    mov cx, 130
+    call gfx_draw_char_stub
 
-    ; Display cluster 2 content at Y=145 (offset 512)
-    mov bx, 10
-    mov cx, 145
-    mov si, fs_read_buffer + 512
+    ; Show cluster 2: "C2:" + char at offset 512+11 (should be 'B')
+    mov bx, 60
+    mov cx, 130
+    mov si, .c2_label
     call gfx_draw_string_stub
+    mov al, [fs_read_buffer + 512 + 11] ; Char after "CLUSTER 2: "
+    mov bx, 92
+    mov cx, 130
+    call gfx_draw_char_stub
 
     ; Close file
     pop ax                          ; Restore file handle
@@ -459,6 +467,8 @@ test_filesystem:
 .read_ok:       db 'Read: OK - File contents:', 0
 .read_err:      db 'Read: FAIL', 0
 .filename:      db 'TEST.TXT', 0
+.c1_label:      db 'C1:', 0
+.c2_label:      db 'C2:', 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
