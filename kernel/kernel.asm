@@ -1646,9 +1646,9 @@ fat12_open:
     push ds
     push si                         ; SI for cmpsb source
     ; Now calculate DI to point to our 8.3 name on stack
-    ; Stack: [name][CX][AX][saved SI][saved DI][saved DS][SI for cmpsb] ← SP
+    ; Stack: [name][CX][AX][DS from 1608][saved SI][saved DI][saved DS][SI for cmpsb] ← SP
     mov di, sp
-    add di, 12                      ; Skip SI(2), DS(2), DI(2), SI(2), AX(2), CX(2) = 12 bytes
+    add di, 14                      ; Skip SI(2), DS(2), DI(2), SI(2), DS(2), AX(2), CX(2) = 14 bytes
     push ss
     pop es                          ; ES = SS (stack segment for our name)
     mov ax, 0x1000
