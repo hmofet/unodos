@@ -89,6 +89,10 @@ int_80_handler:
     cmp ah, 25                      ; Max function + 1
     jae .invalid_function
 
+    ; Save caller's DS and ES for API functions to use
+    mov [cs:caller_ds], ds
+    mov [cs:caller_es], es
+
     ; Save caller's DS (apps may have different DS)
     push ds
 
@@ -1194,30 +1198,39 @@ gfx_draw_char_stub:
     ret
 
 ; gfx_draw_string_stub - Draw null-terminated string
+; Input: BX = X, CX = Y, DS:SI = string (caller's DS segment)
+; Note: Caller's DS was saved in caller_ds by INT 0x80 handler
 gfx_draw_string_stub:
     push es
     push ax
     push dx
     push di
+    push bp
     mov word [draw_x], bx
     mov word [draw_y], cx
     mov dx, 0xB800
     mov es, dx
+    ; Save string offset, we'll read from caller_ds:SI
+    mov bp, si                      ; BP = string offset in caller's segment
 .loop:
-    lodsb
+    ; Read character from caller's segment
+    push ds
+    mov ds, [cs:caller_ds]          ; DS = caller's segment
+    mov al, [bp]                    ; Read character from caller's string
+    pop ds                          ; DS = kernel segment again
+    inc bp                          ; Advance string pointer
     test al, al
     jz .done
     sub al, 32
     mov ah, 0
     mov dl, 8
     mul dl
-    mov di, si
     mov si, font_8x8
     add si, ax
     call draw_char
-    mov si, di
     jmp .loop
 .done:
+    pop bp
     pop di
     pop dx
     pop ax
@@ -2973,15 +2986,16 @@ win_create_stub:
     mov byte [bx + WIN_OFF_OWNER], 0xFF         ; Kernel owned
 
     ; Copy title (up to 11 chars)
-    ; Currently: DS = 0x1000 (kernel), stack has [orig DS] from line 2776
-    ; Need: DS = caller's segment (to read title), ES = 0x1000 (to write)
+    ; App passes title as ES:DI, saved in caller_es and .save_title
+    ; DS = 0x1000 (kernel), we need to read from caller_es:saved_title
     mov di, bx
-    add di, WIN_OFF_TITLE           ; DI = window_table entry + title offset
-    mov si, [.save_title]           ; SI = title pointer (read while DS=0x1000!)
+    add di, WIN_OFF_TITLE           ; DI = dest offset in window_table
+    mov si, [.save_title]           ; SI = title offset from caller
     mov ax, 0x1000
     mov es, ax                      ; ES = 0x1000 for writing to kernel
-    pop ds                          ; DS = caller's segment (for reading title)
-    push ds                         ; Save it back for later pop
+    push ds                         ; Save kernel DS
+    mov ax, [cs:caller_es]          ; AX = caller's ES (where title lives)
+    mov ds, ax                      ; DS = caller's ES for reading title
     mov cx, 11
 .copy_title:
     lodsb                           ; AL = [DS:SI++] from caller's segment
@@ -2993,7 +3007,8 @@ win_create_stub:
 .title_done:
     mov byte [es:di], 0             ; Null terminate in kernel segment
 
-    pop ds                          ; Restore caller's DS (balanced stack)
+    pop ds                          ; Restore kernel DS from push above
+    pop ds                          ; Balance push ds from line 2941
 
     ; Draw the window
     mov ax, bp                      ; Window handle
@@ -3352,6 +3367,8 @@ heap_initialized: dw 0
 
 ; System call dispatcher temp (v3.12.0)
 syscall_func: dw 0
+caller_ds: dw 0                     ; Caller's DS segment (for API string access)
+caller_es: dw 0                     ; Caller's ES segment (for API pointer access)
 
 ; Keyboard driver state (Foundation 1.4)
 old_int9_offset: dw 0
