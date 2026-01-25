@@ -2729,19 +2729,16 @@ app_load_stub:
     mov cx, [bx + 4]                ; CX = file size (low word)
     mov [.file_size], cx
 
-    ; Step 5: Allocate memory for app code
-    mov ax, cx
-    call mem_alloc_stub
-    jc .alloc_failed
+    ; Step 5: Load app at fixed segment 0x2000 offset 0
+    ; Apps use ORG 0x0000, so they must be loaded at offset 0 in their segment
+    ; This supports one app at a time (sufficient for current needs)
+    mov word [.code_off], 0         ; Always load at offset 0
 
-    ; AX = offset in heap segment (0x1400)
-    mov [.code_off], ax
-
-    ; Step 6: Read file into allocated memory
+    ; Step 6: Read file into app code segment
     mov ax, [.file_handle]
-    mov bx, 0x1400                  ; Segment where heap is
+    mov bx, 0x2000                  ; Dedicated app code segment
     mov es, bx
-    mov di, [.code_off]             ; Offset in heap (fat12_read expects ES:DI)
+    xor di, di                      ; Offset 0 (for ORG 0 apps)
     mov cx, [.file_size]            ; Bytes to read
     call fs_read_stub
     jc .read_failed
@@ -2758,7 +2755,7 @@ app_load_stub:
 
     mov byte [di + 0], APP_STATE_LOADED  ; State = loaded
     mov byte [di + 1], 0                 ; Priority = 0
-    mov word [di + 2], 0x1400            ; Code segment
+    mov word [di + 2], 0x2000            ; Code segment (apps loaded at 0x2000:0)
     mov ax, [.code_off]
     mov [di + 4], ax                     ; Code offset
     mov ax, [.file_size]
@@ -2787,13 +2784,6 @@ app_load_stub:
 
 .file_not_found:
     mov ax, APP_ERR_FILE_NOT_FOUND
-    jmp .error
-
-.alloc_failed:
-    ; Close file before returning error
-    mov ax, [.file_handle]
-    call fs_close_stub
-    mov ax, APP_ERR_ALLOC_FAILED
     jmp .error
 
 .read_failed:
