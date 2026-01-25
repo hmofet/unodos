@@ -619,6 +619,12 @@ keyboard_demo:
     cmp al, 'l'
     je .app_test
 
+    ; Check for 'W' or 'w' (window test)
+    cmp al, 'W'
+    je .window_test
+    cmp al, 'w'
+    je .window_test
+
     ; Check for Enter (newline)
     cmp al, 13
     je .handle_enter
@@ -695,6 +701,44 @@ keyboard_demo:
     ; Return (test_app_loader will continue)
     ret
 
+.window_test:
+    ; Create a test window
+    pop si
+    pop cx
+    pop bx
+    pop ax
+
+    ; Create window at (50, 30), size 200x100
+    mov bx, 50                      ; X
+    mov cx, 30                      ; Y
+    mov dx, 200                     ; Width
+    mov si, 100                     ; Height
+    mov di, .win_title              ; Title
+    mov al, WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    call win_create_stub
+
+    jc .win_fail
+
+    ; Display success message
+    push ax                         ; Save window handle
+    mov bx, 4
+    mov cx, 180
+    mov si, .win_ok
+    call gfx_draw_string_stub
+    pop ax
+    ret
+
+.win_fail:
+    mov bx, 4
+    mov cx, 180
+    mov si, .win_err
+    call gfx_draw_string_stub
+    ret
+
+.win_title: db 'Test Window', 0
+.win_ok:    db 'Window: OK', 0
+.win_err:   db 'Window: FAIL', 0
+
 .exit:
     ; Display exit message
     mov bx, 10
@@ -708,7 +752,7 @@ keyboard_demo:
     pop ax
     ret
 
-.prompt: db 'ESC=exit F=file L=app:', 0
+.prompt: db 'ESC=exit F=file L=app W=win:', 0
 .instruction: db 'Event System + Graphics API', 0
 .exit_msg: db 'Event demo complete!', 0
 
@@ -917,7 +961,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 19                           ; Number of function slots
+    dw 25                           ; Number of function slots
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -951,6 +995,14 @@ kernel_api_table:
     ; Application Loader (Core Services 2.1)
     dw app_load_stub                ; 17: Load application from disk
     dw app_run_stub                 ; 18: Run loaded application
+
+    ; Window Manager (Core Services 2.2)
+    dw win_create_stub              ; 19: Create window
+    dw win_destroy_stub             ; 20: Destroy window
+    dw win_draw_stub                ; 21: Draw/redraw window frame
+    dw win_focus_stub               ; 22: Bring window to front
+    dw win_move_stub                ; 23: Move window
+    dw win_get_content_stub         ; 24: Get content area bounds
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -1123,8 +1175,89 @@ gfx_draw_filled_rect_stub:
 ; Output: None
 ; Preserves: All registers
 gfx_clear_area_stub:
-    ; TODO: Implement proper clear (set pixels to background color)
-    ; For now, just return (no-op)
+    push es
+    push ax
+    push bp
+    push di
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, 0xB800
+    mov es, ax
+    mov bp, si                      ; BP = height counter
+
+.clear_row:
+    mov di, dx                      ; DI = width counter
+    push cx                         ; Save Y
+    push bx                         ; Save X
+
+.clear_col:
+    ; Plot pixel with color 0 (background)
+    call .plot_bg
+    inc bx                          ; Next X
+    dec di
+    jnz .clear_col
+
+    pop bx                          ; Restore X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next Y
+    dec bp
+    jnz .clear_row
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop di
+    pop bp
+    pop ax
+    pop es
+    ret
+
+; Internal helper: Clear pixel at BX=X, CX=Y to background color
+.plot_bg:
+    push ax
+    push bx
+    push cx
+    push di
+    push dx
+
+    ; Calculate video memory offset (same as plot_pixel_white)
+    mov ax, cx                      ; AX = Y
+    shr ax, 1                       ; AX = Y / 2
+    mov dx, 80
+    mul dx                          ; AX = (Y / 2) * 80
+    mov di, ax
+
+    mov ax, bx                      ; AX = X
+    shr ax, 1
+    shr ax, 1                       ; AX = X / 4
+    add di, ax
+
+    test cl, 1                      ; Odd scanline?
+    jz .even
+    add di, 0x2000
+.even:
+    ; Calculate bit position
+    mov ax, bx
+    and ax, 3                       ; X % 4
+    mov cx, 3
+    sub cl, al
+    shl cl, 1                       ; Shift amount
+
+    ; Clear pixel (set to color 0)
+    mov al, 0x03
+    shl al, cl
+    not al
+    and [es:di], al                 ; Clear the 2 bits
+
+    pop dx
+    pop di
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; ============================================================================
@@ -2600,6 +2733,444 @@ app_run_stub:
     ret
 
 ; ============================================================================
+; Window Manager API (v3.12.0)
+; ============================================================================
+
+; Window error codes
+WIN_ERR_NO_SLOT     equ 1
+WIN_ERR_INVALID     equ 2
+
+; win_create_stub - Create a new window
+; Input:  BX = X position, CX = Y position
+;         DX = Width, SI = Height
+;         DI = Pointer to title string (max 11 chars, null-terminated)
+;         AL = Flags (WIN_FLAG_TITLE, WIN_FLAG_BORDER)
+; Output: CF = 0 on success, AX = window handle (0-15)
+;         CF = 1 on error, AX = error code
+win_create_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+
+    ; Save parameters
+    mov [.save_x], bx
+    mov [.save_y], cx
+    mov [.save_w], dx
+    mov [.save_h], si
+    mov [.save_title], di
+    mov [.save_flags], al
+
+    ; Find free window slot
+    push ds
+    mov bp, 0x1000
+    mov ds, bp
+    xor bp, bp                      ; BP = slot index
+
+.find_slot:
+    cmp bp, WIN_MAX_COUNT
+    jae .no_slot
+    mov bx, bp
+    shl bx, 5                       ; BX = slot * 32
+    add bx, window_table
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+    je .found_slot
+    inc bp
+    jmp .find_slot
+
+.no_slot:
+    pop ds
+    mov ax, WIN_ERR_NO_SLOT
+    stc
+    jmp .exit
+
+.found_slot:
+    ; BX = pointer to window entry, BP = handle
+    mov [.slot_off], bx
+
+    ; Initialize window entry
+    mov al, [.save_flags]
+    test al, al
+    jnz .has_flags
+    mov al, WIN_FLAG_TITLE | WIN_FLAG_BORDER   ; Default flags
+.has_flags:
+    mov byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    mov [bx + WIN_OFF_FLAGS], al
+
+    mov ax, [.save_x]
+    mov [bx + WIN_OFF_X], ax
+    mov ax, [.save_y]
+    mov [bx + WIN_OFF_Y], ax
+    mov ax, [.save_w]
+    mov [bx + WIN_OFF_WIDTH], ax
+    mov ax, [.save_h]
+    mov [bx + WIN_OFF_HEIGHT], ax
+
+    mov byte [bx + WIN_OFF_ZORDER], 15          ; Top of stack
+    mov byte [bx + WIN_OFF_OWNER], 0xFF         ; Kernel owned
+
+    ; Copy title (up to 11 chars)
+    pop ds                          ; Restore DS for title access
+    push ds
+    mov si, [.save_title]
+    mov di, bx
+    add di, WIN_OFF_TITLE
+    mov cx, 11
+.copy_title:
+    lodsb
+    test al, al
+    jz .title_done
+    mov [di], al
+    inc di
+    loop .copy_title
+.title_done:
+    mov byte [di], 0                ; Null terminate
+
+    pop ds
+
+    ; Draw the window
+    mov ax, bp                      ; Window handle
+    call win_draw_stub
+
+    ; Return handle
+    mov ax, bp
+    clc
+
+.exit:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.save_x:     dw 0
+.save_y:     dw 0
+.save_w:     dw 0
+.save_h:     dw 0
+.save_title: dw 0
+.save_flags: db 0
+.slot_off:   dw 0
+
+; win_destroy_stub - Destroy a window
+; Input:  AX = Window handle
+; Output: CF = 0 on success
+win_destroy_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+
+    ; Validate handle
+    cmp ax, WIN_MAX_COUNT
+    jae .invalid
+
+    ; Get window entry
+    mov bx, 0x1000
+    mov ds, bx
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+
+    ; Check if window exists
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+    je .invalid
+
+    ; Clear window area
+    push bx
+    mov cx, [bx + WIN_OFF_X]
+    mov dx, [bx + WIN_OFF_Y]
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov di, [bx + WIN_OFF_HEIGHT]
+    ; gfx_clear_area expects: BX=X, CX=Y, DX=Width, SI=Height
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, di                      ; SI = Height
+    call gfx_clear_area_stub
+    pop bx
+
+    ; Mark as free
+    mov byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+
+    clc
+    jmp .done
+
+.invalid:
+    mov ax, WIN_ERR_INVALID
+    stc
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; win_draw_stub - Draw/redraw window frame (title bar and border)
+; Input:  AX = Window handle
+; Output: CF = 0 on success
+win_draw_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+
+    ; Validate handle
+    cmp ax, WIN_MAX_COUNT
+    jae .invalid
+
+    ; Get window entry
+    mov bx, 0x1000
+    mov ds, bx
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+
+    ; Check if window is visible
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .invalid
+
+    mov [.win_ptr], bx
+
+    ; Get window dimensions
+    mov cx, [bx + WIN_OFF_X]
+    mov dx, [bx + WIN_OFF_Y]
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov di, [bx + WIN_OFF_HEIGHT]
+
+    ; Draw title bar (filled rectangle, 10 pixels high)
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
+    call gfx_draw_filled_rect_stub
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    ; Draw title text (inside title bar)
+    push bx
+    mov si, bx
+    add si, WIN_OFF_TITLE           ; SI = title pointer
+    mov bx, cx                      ; X position
+    add bx, 4                       ; 4px padding
+    mov cx, dx                      ; Y position
+    add cx, 1                       ; 1px padding
+    call gfx_draw_string_stub
+    pop bx
+
+    ; Draw border (rectangle outline)
+    push bx
+    mov bx, [.win_ptr]
+    mov cx, [bx + WIN_OFF_X]
+    mov dx, [bx + WIN_OFF_Y]
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov di, [bx + WIN_OFF_HEIGHT]
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, di                      ; SI = Height
+    call gfx_draw_rect_stub
+    pop bx
+
+    clc
+    jmp .done
+
+.invalid:
+    mov ax, WIN_ERR_INVALID
+    stc
+
+.done:
+    pop ds
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.win_ptr: dw 0
+
+; win_focus_stub - Bring window to front (set z-order to max)
+; Input:  AX = Window handle
+; Output: CF = 0 on success
+win_focus_stub:
+    push bx
+    push cx
+    push ds
+
+    cmp ax, WIN_MAX_COUNT
+    jae .invalid
+
+    mov bx, 0x1000
+    mov ds, bx
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+    je .invalid
+
+    ; Set z-order to 15 (top)
+    mov byte [bx + WIN_OFF_ZORDER], 15
+
+    clc
+    jmp .done
+
+.invalid:
+    stc
+
+.done:
+    pop ds
+    pop cx
+    pop bx
+    ret
+
+; win_move_stub - Move window to new position
+; Input:  AX = Window handle, BX = New X, CX = New Y
+; Output: CF = 0 on success
+win_move_stub:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+
+    mov [.new_x], bx
+    mov [.new_y], cx
+    mov [.handle], ax
+
+    cmp ax, WIN_MAX_COUNT
+    jae .invalid
+
+    mov bx, 0x1000
+    mov ds, bx
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+    je .invalid
+
+    ; Save window pointer
+    mov bp, bx
+
+    ; Clear old position
+    mov cx, [bx + WIN_OFF_X]
+    mov dx, [bx + WIN_OFF_Y]
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov di, [bx + WIN_OFF_HEIGHT]
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, di                      ; SI = Height
+    call gfx_clear_area_stub
+
+    ; Update position (BP = window pointer)
+    mov bx, [.new_x]
+    mov [bp + WIN_OFF_X], bx
+    mov cx, [.new_y]
+    mov [bp + WIN_OFF_Y], cx
+
+    ; Redraw at new position
+    mov ax, [.handle]
+    call win_draw_stub
+
+    clc
+    jmp .done
+
+.invalid:
+    stc
+
+.done:
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.new_x:  dw 0
+.new_y:  dw 0
+.handle: dw 0
+
+; win_get_content_stub - Get content area bounds
+; Input:  AX = Window handle
+; Output: BX = Content X, CX = Content Y
+;         DX = Content Width, SI = Content Height
+;         CF = 0 on success
+win_get_content_stub:
+    push di
+    push ds
+
+    cmp ax, WIN_MAX_COUNT
+    jae .invalid
+
+    mov di, 0x1000
+    mov ds, di
+    mov di, ax
+    shl di, 5
+    add di, window_table
+
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_FREE
+    je .invalid
+
+    ; Calculate content area
+    ; Content X = Window X + 1 (border)
+    mov bx, [di + WIN_OFF_X]
+    inc bx
+
+    ; Content Y = Window Y + titlebar + 1 (border)
+    mov cx, [di + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT
+    inc cx
+
+    ; Content Width = Window Width - 2 (borders)
+    mov dx, [di + WIN_OFF_WIDTH]
+    sub dx, 2
+
+    ; Content Height = Window Height - titlebar - 2 (borders)
+    mov si, [di + WIN_OFF_HEIGHT]
+    sub si, WIN_TITLEBAR_HEIGHT
+    sub si, 2
+
+    clc
+    jmp .done
+
+.invalid:
+    stc
+
+.done:
+    pop ds
+    pop di
+    ret
+
+; ============================================================================
 ; Font Data - 8x8 characters
 ; ============================================================================
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
@@ -2694,6 +3265,49 @@ APP_MAX_COUNT       equ 16
 APP_ENTRY_SIZE      equ 32
 
 app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
+
+; ============================================================================
+; Window Manager Data (v3.12.0)
+; ============================================================================
+
+; Window states
+WIN_STATE_FREE      equ 0
+WIN_STATE_VISIBLE   equ 1
+WIN_STATE_HIDDEN    equ 2
+
+; Window flags
+WIN_FLAG_TITLE      equ 0x01
+WIN_FLAG_BORDER     equ 0x02
+
+; Window structure constants
+WIN_MAX_COUNT       equ 16
+WIN_ENTRY_SIZE      equ 32
+WIN_TITLEBAR_HEIGHT equ 10
+
+; Window entry structure (32 bytes):
+;   Offset 0:  1 byte  - State (0=free, 1=visible, 2=hidden)
+;   Offset 1:  1 byte  - Flags (bit 0=title, bit 1=border)
+;   Offset 2:  2 bytes - X position
+;   Offset 4:  2 bytes - Y position
+;   Offset 6:  2 bytes - Width
+;   Offset 8:  2 bytes - Height
+;   Offset 10: 1 byte  - Z-order (0=bottom, 15=top)
+;   Offset 11: 1 byte  - Owner app handle (0xFF=kernel)
+;   Offset 12: 12 bytes - Title (11 chars + null)
+;   Offset 24: 8 bytes - Reserved
+
+; Window entry field offsets
+WIN_OFF_STATE       equ 0
+WIN_OFF_FLAGS       equ 1
+WIN_OFF_X           equ 2
+WIN_OFF_Y           equ 4
+WIN_OFF_WIDTH       equ 6
+WIN_OFF_HEIGHT      equ 8
+WIN_OFF_ZORDER      equ 10
+WIN_OFF_OWNER       equ 11
+WIN_OFF_TITLE       equ 12
+
+window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
 
 ; ============================================================================
 ; Padding

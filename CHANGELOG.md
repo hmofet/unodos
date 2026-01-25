@@ -5,6 +5,70 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0] - 2026-01-25
+
+### Added
+- **Window Manager** - Second Core Services feature (v3.12.0)
+  - `win_create_stub` (API 19) - Create new window with position, size, title, and flags
+  - `win_destroy_stub` (API 20) - Destroy window and clear its area
+  - `win_draw_stub` (API 21) - Redraw window frame (title bar and border)
+  - `win_focus_stub` (API 22) - Bring window to front (set z_order to 15, demote others)
+  - `win_move_stub` (API 23) - Move window to new position
+  - `win_get_content_stub` (API 24) - Get content area bounds for app drawing
+  - window_table structure tracks up to 16 windows (512 bytes)
+  - Window structure (32 bytes): state, flags, x, y, width, height, z_order, owner_app, title
+
+- **Window Visual Design**
+  - 10-pixel white title bar with centered title text
+  - 1-pixel white border around window
+  - Content area calculation: accounts for title bar and borders
+  - Window flags: WIN_FLAG_TITLE (show title bar), WIN_FLAG_BORDER (show border)
+
+- **'W' key handler** in keyboard demo
+  - Press 'W' to create a test window at (50, 30) with size 200x100
+  - Displays "Window: OK" or "Window: FAIL" status message
+
+### Fixed
+- **gfx_clear_area_stub** - Was previously a no-op stub, now properly clears rectangular areas
+  - Implements pixel-by-pixel clearing to background color
+  - Required for window background clearing
+
+### Changed
+- API table expanded from 19 to 25 functions
+- Keyboard demo prompt updated to show W key option: "ESC=exit F=file L=app W=win:"
+
+### Technical Details
+- Window structure (32 bytes):
+  - Offset 0: State (0=free, 1=visible, 2=hidden)
+  - Offset 1: Flags (bit 0: has_title, bit 1: has_border)
+  - Offset 2-3: X position (0-319)
+  - Offset 4-5: Y position (0-199)
+  - Offset 6-7: Width in pixels
+  - Offset 8-9: Height in pixels
+  - Offset 10: Z-order (0=bottom, 15=top)
+  - Offset 11: Owner app handle (0xFF = kernel)
+  - Offset 12-23: Title (11 chars + null)
+  - Offset 24-31: Reserved
+
+- Content area calculation:
+  - Content X = Window X + 1 (border)
+  - Content Y = Window Y + 10 (titlebar) + 1 (border)
+  - Content Width = Window Width - 2 (borders)
+  - Content Height = Window Height - 12 (titlebar + borders)
+
+### Constraints (v3.12.0)
+- No overlapping windows (windows must not overlap)
+- No dragging (win_move is API-only, no mouse drag)
+- No close button (destroy via API only)
+- White only (title bar uses white, no inverse video)
+
+### Future Enhancements
+- v3.13.0: Mouse support for window interaction
+- v3.14.0: Window dragging via mouse
+- v3.15.0: Overlapping window redraw
+
+---
+
 ## [3.11.0] - 2026-01-25
 
 ### Added
