@@ -67,23 +67,61 @@ install_int_80:
     pop es
     ret
 
-; INT 0x80 Handler - System Call Discovery
-; Input: AX = function number
-;   AX = 0x0000: Get API table pointer
-; Output: ES:BX = pointer to kernel_api_table
-; Preserves: All other registers
+; INT 0x80 Handler - System Call Dispatcher
+; Input: AH = function number (0 = discovery, 1-24 = API function)
+;        Other registers = function parameters
+; Output: Depends on function called
+;   AH=0: ES:BX = pointer to kernel_api_table
+;   AH>0: Function-specific return values, CF=error status
 int_80_handler:
-    cmp ax, 0x0000
-    jne .unknown_function
+    cmp ah, 0x00
+    jne .dispatch_function
 
-    ; Return pointer to API table
+    ; AH=0: Return pointer to API table (discovery)
     mov bx, cs
     mov es, bx
     mov bx, kernel_api_table
     iret
 
-.unknown_function:
-    ; Unknown function - return error
+.dispatch_function:
+    ; AH contains function index (1-24)
+    ; Validate function number
+    cmp ah, 25                      ; Max function + 1
+    jae .invalid_function
+
+    ; Save caller's DS (apps may have different DS)
+    push ds
+
+    ; Set DS to kernel segment for API functions
+    push ax
+    mov ax, 0x1000
+    mov ds, ax
+    pop ax
+
+    ; Get function pointer from API table
+    ; Function pointer = kernel_api_table + 8 + (index * 2)
+    push bx                         ; Save BX (may be parameter)
+    push ax                         ; Save AX (has function index in AH)
+    mov bl, ah
+    xor bh, bh                      ; BX = function index
+    shl bx, 1                       ; BX = index * 2
+    add bx, kernel_api_table + 8    ; BX = address of function pointer
+    mov bx, [bx]                    ; BX = function offset
+    mov [cs:syscall_func], bx       ; Save function addr (in data area)
+    pop ax                          ; Restore AX
+    pop bx                          ; Restore BX
+
+    ; Call the function - it will use near RET
+    ; We simulate a CALL by pushing return address then jumping
+    push word .return_point
+    jmp word [cs:syscall_func]
+
+.return_point:
+    ; Function returned, restore caller's DS
+    pop ds                          ; Restore caller's DS
+    iret
+
+.invalid_function:
     stc                             ; Set carry flag for error
     iret
 
@@ -1065,11 +1103,11 @@ gfx_draw_string_inverted:
     ret
 
 ; ============================================================================
-; Kernel API Table - At fixed address 0x1000:0x0800
+; Kernel API Table - At fixed address 0x1000:0x0900
 ; ============================================================================
 
-; Pad to exactly offset 0x0800 (2048 bytes) - expanded for FAT12 (v3.10.0)
-times 0x0800 - ($ - $$) db 0
+; Pad to exactly offset 0x0900 (2304 bytes) - expanded for syscall dispatch
+times 0x0900 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -3311,6 +3349,9 @@ win_get_content_stub:
 draw_x: dw 0
 draw_y: dw 0
 heap_initialized: dw 0
+
+; System call dispatcher temp (v3.12.0)
+syscall_func: dw 0
 
 ; Keyboard driver state (Foundation 1.4)
 old_int9_offset: dw 0
