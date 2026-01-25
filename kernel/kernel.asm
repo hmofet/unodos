@@ -18,6 +18,11 @@ entry:
     mov ds, ax
     mov es, ax
 
+    ; Initialize caller segment variables for kernel-direct API calls
+    ; (INT 0x80 will override these when apps call APIs)
+    mov word [caller_ds], ax
+    mov word [caller_es], ax
+
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
