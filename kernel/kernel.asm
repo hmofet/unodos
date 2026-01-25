@@ -1081,56 +1081,62 @@ gfx_draw_rect_stub:
     push di
     mov ax, 0xB800
     mov es, ax
+    ; API: BX=X, CX=Y. plot_pixel_white needs CX=X, BX=Y
+    ; Save: BP = X (from BX), AX = Y (from CX)
     mov bp, bx                      ; BP = X
     mov ax, cx                      ; AX = Y
 
-    ; Top edge
+    ; Top edge: Y=AX, X varies from BP to BP+DX-1
     mov di, 0
 .top:
-    mov bx, bp
-    add bx, di
-    mov cx, ax
+    mov cx, bp                      ; CX = X (for plot_pixel_white)
+    add cx, di
+    mov bx, ax                      ; BX = Y (for plot_pixel_white)
     call plot_pixel_white
     inc di
     cmp di, dx
     jl .top
 
-    ; Bottom edge
+    ; Bottom edge: Y=AX+SI-1, X varies from BP to BP+DX-1
     mov di, 0
-    mov cx, ax
-    add cx, si
-    dec cx
+    push ax
+    add ax, si
+    dec ax                          ; AX = Y + Height - 1
 .bottom:
-    mov bx, bp
-    add bx, di
+    mov cx, bp
+    add cx, di
+    mov bx, ax
     call plot_pixel_white
     inc di
     cmp di, dx
     jl .bottom
+    pop ax
 
-    ; Left edge
+    ; Left edge: X=BP, Y varies from AX to AX+SI-1
     mov di, 0
-    mov bx, bp
 .left:
-    mov cx, ax
-    add cx, di
+    mov cx, bp                      ; CX = X (left edge)
+    mov bx, ax                      ; BX = Y
+    add bx, di
     call plot_pixel_white
     inc di
     cmp di, si
     jl .left
 
-    ; Right edge
+    ; Right edge: X=BP+DX-1, Y varies from AX to AX+SI-1
     mov di, 0
-    mov bx, bp
-    add bx, dx
-    dec bx
+    push bp
+    add bp, dx
+    dec bp                          ; BP = X + Width - 1
 .right:
-    mov cx, ax
-    add cx, di
+    mov cx, bp                      ; CX = X (right edge)
+    mov bx, ax                      ; BX = Y
+    add bx, di
     call plot_pixel_white
     inc di
     cmp di, si
     jl .right
+    pop bp
 
     pop di
     pop bp
@@ -1147,18 +1153,20 @@ gfx_draw_filled_rect_stub:
     mov ax, 0xB800
     mov es, ax
     mov bp, si
+    ; Swap BX/CX: API has BX=X,CX=Y but plot_pixel_white needs CX=X,BX=Y
+    xchg bx, cx
 .row:
     mov di, dx
-    push cx
-    push bx
+    push bx                         ; Save Y
+    push cx                         ; Save X
 .col:
-    call plot_pixel_white
-    inc bx
+    call plot_pixel_white           ; CX=X, BX=Y
+    inc cx                          ; Next X
     dec di
     jnz .col
-    pop bx
-    pop cx
-    inc cx
+    pop cx                          ; Restore X
+    pop bx                          ; Restore Y
+    inc bx                          ; Next Y
     dec bp
     jnz .row
     pop di
@@ -2813,23 +2821,27 @@ win_create_stub:
     mov byte [bx + WIN_OFF_OWNER], 0xFF         ; Kernel owned
 
     ; Copy title (up to 11 chars)
-    pop ds                          ; Restore DS for title access
-    push ds
-    mov si, [.save_title]
+    ; Currently: DS = 0x1000 (kernel), stack has [orig DS] from line 2776
+    ; Need: DS = caller's segment (to read title), ES = 0x1000 (to write)
     mov di, bx
-    add di, WIN_OFF_TITLE
+    add di, WIN_OFF_TITLE           ; DI = window_table entry + title offset
+    mov ax, 0x1000
+    mov es, ax                      ; ES = 0x1000 for writing to kernel
+    pop ds                          ; DS = caller's segment (for reading title)
+    push ds                         ; Save it back for later pop
+    mov si, [.save_title]           ; SI = title pointer in caller's segment
     mov cx, 11
 .copy_title:
-    lodsb
+    lodsb                           ; AL = [DS:SI++] from caller's segment
     test al, al
     jz .title_done
-    mov [di], al
+    mov [es:di], al                 ; Write to ES:DI = 0x1000:window_table
     inc di
     loop .copy_title
 .title_done:
-    mov byte [di], 0                ; Null terminate
+    mov byte [es:di], 0             ; Null terminate in kernel segment
 
-    pop ds
+    pop ds                          ; Restore caller's DS (balanced stack)
 
     ; Draw the window
     mov ax, bp                      ; Window handle
