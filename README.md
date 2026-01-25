@@ -88,8 +88,17 @@ make run144
 # Debug mode with QEMU monitor
 make debug
 
+# Build test applications
+make apps
+
+# Test app loader in QEMU (two floppy drives)
+make test-app
+
 # Show binary sizes
 make sizes
+
+# Increment build number for next build
+make bump-build
 
 # Clean build artifacts
 make clean
@@ -116,14 +125,14 @@ sudo ./tools/writeflop.sh -1 /dev/fd0
 ### Windows (PowerShell, Run as Administrator)
 
 ```powershell
-# Quick write (no verification)
-.\tools\Write-Floppy-Quick.ps1
+# Write boot floppy (pulls latest from git first)
+.\tools\boot.ps1
 
-# With verification
-.\tools\Write-Floppy.ps1
+# Write app test floppy (for testing app loader)
+.\tools\app-test.ps1
 
 # Specify drive letter
-.\tools\Write-Floppy-Quick.ps1 -DriveLetter B
+.\tools\boot.ps1 -DriveLetter B
 ```
 
 ### Windows (Command Prompt, Run as Administrator)
@@ -131,6 +140,15 @@ sudo ./tools/writeflop.sh -1 /dev/fd0
 ```cmd
 tools\writeflop.bat
 ```
+
+### Testing App Loader on Real Hardware
+
+1. Write boot floppy: `.\tools\boot.ps1`
+2. Write app floppy: `.\tools\app-test.ps1`
+3. Boot from boot floppy
+4. Press **L** key to trigger app loader
+5. When prompted, swap to app floppy
+6. Press any key - "Load: OK" and app runs
 
 ## Project Structure
 
@@ -154,9 +172,10 @@ unodos/
 │   └── unodos-144.img  # 1.44MB floppy image
 ├── docs/
 │   ├── ARCHITECTURE.md # Boot loader architecture
+│   ├── ARCHITECTURE_PLAN.md # System architecture roadmap
 │   ├── FEATURES.md     # Planned features roadmap
 │   ├── CLAUDE.md       # Development context
-│   └── SESSION_SUMMARY.md
+│   └── SESSION_2026-01-25.md # Latest session summary
 ├── tools/
 │   ├── writeflop.sh    # Linux floppy write utility
 │   ├── writeflop.bat   # Windows CMD floppy write
@@ -166,7 +185,8 @@ unodos/
 ├── Makefile
 ├── README.md
 ├── CHANGELOG.md
-└── VERSION
+├── VERSION           # Version string (e.g., 3.11.0)
+└── BUILD_NUMBER      # Build number (auto-incremented)
 ```
 
 ## Documentation
@@ -177,6 +197,7 @@ unodos/
 - [FAT12_IMPLEMENTATION_SUMMARY.md](docs/FAT12_IMPLEMENTATION_SUMMARY.md) - FAT12 filesystem implementation
 - [FAT12_HARDWARE_DEBUG.md](docs/FAT12_HARDWARE_DEBUG.md) - Hardware debugging and bug fixes
 - [FEATURES.md](docs/FEATURES.md) - Planned features roadmap
+- [SESSION_2026-01-25.md](docs/SESSION_2026-01-25.md) - Latest development session
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes
 
 ## Development Status
@@ -231,7 +252,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.11.0**
+Current version: **3.11.0** (Build 009)
 
 ## Contributing
 
