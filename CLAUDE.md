@@ -114,6 +114,45 @@ call gfx_draw_string_stub
 .msg2: db 'continue test', 0
 ```
 
+## Application Loading (ORG 0 Requirement)
+
+**CRITICAL**: Apps using `[ORG 0x0000]` must be loaded at offset 0 in their segment.
+
+**Problem** (Build 018 crash): The clock app used `[ORG 0x0000]`, but the app loader was using the heap allocator which returned a non-zero offset (e.g., 0x1400:4). When the app referenced `window_title` at offset 0xDC, it pointed to 0x1400:0xDC instead of the correct 0x1400:(4+0xDC).
+
+**Solution**: Apps are now loaded at segment 0x2000 offset 0:
+- `app_load_stub` uses segment 0x2000 (dedicated app code segment)
+- Apps always loaded at offset 0 within that segment
+- This matches the `[ORG 0x0000]` directive in app source files
+
+**Memory Map**:
+```
+0x0000 - 0x0FFF  : BIOS/IVT
+0x1000 - 0x13FF  : Kernel code and data
+0x1400 - 0x1FFF  : Heap (for kernel allocations)
+0x2000 - 0x2FFF  : App code segment (apps loaded here at offset 0)
+```
+
+## Segment Handling for App API Calls
+
+**Problem**: When apps call kernel APIs via INT 0x80, the kernel sets DS=0x1000 (kernel segment). But apps pass string pointers in their own segment (ES:DI for titles, DS:SI for strings).
+
+**Solution**: The INT 0x80 handler saves caller's segments:
+```asm
+.dispatch_function:
+    mov [cs:caller_ds], ds      ; Save app's DS
+    mov [cs:caller_es], es      ; Save app's ES
+    push ds
+    mov ax, 0x1000
+    mov ds, ax                  ; Set kernel DS
+```
+
+API functions that need app strings use these saved values:
+- `gfx_draw_string_stub` uses `caller_ds` for string access
+- `win_create_stub` uses `caller_es` for window title
+
+**Important**: `caller_ds` and `caller_es` are initialized to 0x1000 so direct kernel calls (not via INT 0x80) work correctly during boot.
+
 ## Git Workflow
 
 **Pre-built binaries are committed**: Unlike typical projects, build/unodos-144.img is checked into git so Windows users can pull and write directly.
@@ -139,5 +178,6 @@ Add build number display (Build: f24fabc)
 
 ---
 
-**Last Updated**: 2026-01-24
-**Current Version**: v3.10.1
+**Last Updated**: 2026-01-25
+**Current Version**: v3.12.0
+**Current Build**: 019
