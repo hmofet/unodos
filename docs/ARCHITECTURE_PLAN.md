@@ -247,103 +247,63 @@ kernel_api_table:
 
 # PART 3: IMPLEMENTATION ROADMAP
 
-## Phase 1: Foundation Layer (v3.3.0 - v3.4.0)
+## Phase 1: Foundation Layer (v3.3.0 - v3.10.0) ✅ COMPLETE
 
-### 1.1 System Call Infrastructure (FIRST - Everything Depends On This)
-**Critical:** Implement the hybrid INT 0x80 + Far Call Table
+### 1.1 System Call Infrastructure ✅
+- [x] INT 0x80 handler (discovery mechanism)
+- [x] Kernel API table at fixed address (0x1000:0x0800)
+- [x] 19 API functions implemented
 
-**Components:**
-- INT 0x80 handler (discovery mechanism)
-- Kernel API table at fixed address (0x1000:0x0500)
-- Table population with stub functions initially
-- Test harness to verify table works
+### 1.2 Graphics API Abstraction ✅
+- [x] gfx_draw_pixel, gfx_draw_rect, gfx_draw_filled_rect
+- [x] gfx_draw_char, gfx_draw_string, gfx_clear_area
 
-**Size:** ~300 bytes
-**Time:** 2-3 hours
-**Impact:** Enables all future development; must get this right
+### 1.3 Memory Allocator ✅
+- [x] malloc/free implementation with first-fit algorithm
+- [x] Heap at 0x1400:0000 (~532KB available)
 
-### 1.2 Graphics API Abstraction
-**Wraps existing functions, adds to API table**
+### 1.4 Keyboard Driver ✅
+- [x] INT 09h handler with scan code translation
+- [x] 16-byte circular buffer, modifier key tracking
+- [x] kbd_getchar (non-blocking), kbd_wait_key (blocking)
 
-Functions:
-- gfx_draw_pixel (wraps plot_pixel_white)
-- gfx_draw_rect
-- gfx_draw_filled_rect
-- gfx_draw_char (wraps draw_char)
-- gfx_draw_string
-- gfx_clear_area
+### 1.5 Event System ✅
+- [x] 32-event circular queue
+- [x] event_get / event_wait functions
+- [x] KEY_PRESS events from keyboard driver
 
-**Size:** ~500 bytes
-**Time:** 2-3 hours
+### 1.6 Filesystem ✅
+- [x] Filesystem abstraction layer (VFS-like)
+- [x] FAT12 driver with mount, open, read, close
+- [x] Multi-cluster file reading (FAT chain following)
 
-### 1.3 Memory Allocator
-- malloc/free implementation
-- Add to API table at offsets 28, 32
+## Phase 2: Core Services (v3.11.0+)
 
-**Size:** ~600 bytes
-**Time:** 3-4 hours
+### 2.1 Application Loader ✅
+- [x] app_load_stub - Load .BIN from FAT12 to heap
+- [x] app_run_stub - Execute via far CALL
+- [x] App table (16 entries, 32 bytes each)
+- [x] Test application framework (HELLO.BIN)
 
-### 1.4 Keyboard Driver
-- Scan code reading (Port 60h)
-- ASCII translation
-- Key buffer
-- Add kbd_getchar to API table
+### 2.2 Window Manager (In Progress)
+- [ ] Window structure (position, size, title, content)
+- [ ] Window drawing (title bar, borders, content area)
+- [ ] Window stacking (Z-order)
 
-**Size:** ~800 bytes
-**Time:** 4-5 hours
+## Phase 3: Standard Library (Future)
 
-### 1.5 Event System
-- Circular event queue
-- event_get / event_wait functions
-- Add to API table
+### 3.1 Create graphics.lib
+- [ ] C-callable wrappers for API table functions
+- [ ] Stack-based parameter conversion
 
-**Size:** ~400 bytes
-**Time:** 2-3 hours
+### 3.2 Create unodos.lib
+- [ ] Initialization (_unodos_init calls INT 0x80)
+- [ ] Memory and event wrappers
 
-**Phase 1 Total:** ~15-18 hours, ~2.8 KB code
-
-## Phase 2: Standard Library (v3.5.0)
-
-### 2.1 Create graphics.lib
-- C-callable wrappers for API table functions
-- Stack-based parameter conversion
-- Distribute with graphics.h header
-
-**Time:** 3-4 hours
-
-### 2.2 Create unodos.lib
-- Initialization (_unodos_init calls INT 0x80)
-- Memory wrappers
-- Event wrappers
-
-**Time:** 2-3 hours
-
-**Phase 2 Total:** ~5-7 hours
-
-## Phase 3: Core Services (v3.6.0 - v3.7.0)
-
-### 3.1 Window Manager
-- Uses graphics API (via table calls)
-- Adds window_* functions to API table
-
-**Time:** 6-8 hours
-
-### 3.2 FAT12 + App Loader
-- file_* functions added to API table
-- Load .BIN apps from disk
-
-**Time:** 6-8 hours
-
-**Phase 3 Total:** ~12-16 hours
-
-## Phase 4: Demo Application (v3.8.0)
+## Phase 4: Demo Applications (Future)
 
 ### 4.1 Clock Display App
-- First third-party app
-- Uses graphics.lib
-- Demonstrates API usage
-
-**Time:** 2-3 hours
+- [ ] First third-party app using graphics.lib
 
 ---
 
@@ -449,5 +409,6 @@ The system call architecture is now decided (Hybrid approach). Remaining decisio
 ---
 
 *Document created: 2026-01-23*
-*Status: Approved - Ready for implementation*
-*Next step: Foundation 1.1 - System Call Infrastructure*
+*Last updated: 2026-01-25*
+*Status: Foundation Layer COMPLETE, Core Services in progress*
+*Current version: v3.11.0 (Application Loader complete)*

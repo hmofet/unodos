@@ -1,6 +1,6 @@
 # UnoDOS 3 Features Roadmap
 
-This document outlines planned features for UnoDOS 3, tailored for the IBM PC XT hardware platform and tested on the HP Omnibook 600C.
+This document outlines the feature status and roadmap for UnoDOS 3, designed for IBM PC XT-compatible hardware and tested on the HP Omnibook 600C.
 
 ## Hardware Target Summary
 
@@ -13,242 +13,203 @@ This document outlines planned features for UnoDOS 3, tailored for the IBM PC XT
 | Input | PC/XT keyboard, optional serial mouse |
 | Audio | PC speaker (optional) |
 
-## Current Features (v3.1.x)
+---
+
+## Completed Features (v3.11.0)
 
 ### Boot System
-- [x] Two-stage boot loader
-- [x] Memory detection
-- [x] Video adapter detection
+- [x] Three-stage boot loader (boot sector + stage2 + kernel)
+- [x] Memory detection (BIOS INT 12h)
+- [x] Video adapter detection (CGA/EGA/VGA)
+- [x] Boot progress indicator (dots during kernel load)
+- [x] Signature verification at each stage
 
-### Graphics
+### Graphics System
 - [x] CGA 320x200 4-color mode
-- [x] Custom 8x8 bitmap font
-- [x] Custom 4x6 small font
+- [x] Custom 8x8 bitmap font (95 ASCII characters)
+- [x] Custom 4x6 small font (95 ASCII characters)
 - [x] Pixel plotting routines
-- [x] Box/border drawing
+- [x] Rectangle drawing (outline and filled)
+- [x] String rendering
+
+### System Call Infrastructure (Foundation 1.1)
+- [x] INT 0x80 handler for API discovery
+- [x] Kernel API table at fixed address (0x1000:0x0800)
+- [x] Hybrid approach: INT for discovery, far call for execution
+- [x] 19 API functions implemented
+
+### Graphics API (Foundation 1.2)
+- [x] gfx_draw_pixel - Plot single pixel
+- [x] gfx_draw_rect - Rectangle outline
+- [x] gfx_draw_filled_rect - Filled rectangle
+- [x] gfx_draw_char - Single character
+- [x] gfx_draw_string - Null-terminated string
+- [x] gfx_clear_area - Clear rectangular region
+
+### Memory Allocator (Foundation 1.3)
+- [x] malloc(size) - Allocate memory dynamically
+- [x] free(ptr) - Free allocated memory
+- [x] First-fit allocation algorithm
+- [x] Heap at 0x1400:0000 (~532KB available)
+
+### Keyboard Driver (Foundation 1.4)
+- [x] INT 09h keyboard interrupt handler
+- [x] Scan code to ASCII translation (normal + shifted)
+- [x] Modifier key tracking (Shift, Ctrl, Alt)
+- [x] 16-byte circular buffer
+- [x] kbd_getchar() - Non-blocking input
+- [x] kbd_wait_key() - Blocking input
+
+### Event System (Foundation 1.5)
+- [x] Circular event queue (32 events)
+- [x] Event types: KEY_PRESS, KEY_RELEASE, TIMER, MOUSE
+- [x] event_get_stub() - Non-blocking event retrieval
+- [x] event_wait_stub() - Blocking event wait
+- [x] Keyboard integration (posts KEY_PRESS events)
+
+### Filesystem (Foundation 1.6)
+- [x] Filesystem abstraction layer (VFS-like)
+- [x] FAT12 driver (read-only)
+- [x] fs_mount_stub() - Mount filesystem
+- [x] fs_open_stub() - Open file by name
+- [x] fs_read_stub() - Read file contents
+- [x] fs_close_stub() - Close file handle
+- [x] Multi-cluster file reading (FAT chain following)
+- [x] 8.3 filename support
+
+### Application Loader (Core Services 2.1)
+- [x] app_load_stub() - Load .BIN from FAT12 to heap
+- [x] app_run_stub() - Execute loaded application
+- [x] App table (16 entries, 32 bytes each)
+- [x] Far CALL/RETF calling convention
+- [x] BIOS drive number support (A:, B:, HDD)
+- [x] Test application framework (HELLO.BIN)
 
 ### User Interface
-- [x] Graphical welcome screen
+- [x] Graphical welcome screen with bordered window
 - [x] Real-time clock display (RTC)
 - [x] RAM status display
-- [x] Character set demonstration
+- [x] Interactive keyboard demo
+- [x] 'L' key to trigger app loader test
 
 ---
 
-## Phase 1: Input & Basic GUI
+## In Progress (v3.12.0+)
 
-**Goal**: Enable user interaction and basic window management.
-
-### Keyboard Driver
-- [ ] Scan code reading (INT 9h / Port 60h)
-- [ ] Key-to-ASCII translation
-- [ ] Keyboard buffer management
-- [ ] Modifier key tracking (Shift, Ctrl, Alt)
-- [ ] Special keys (arrows, function keys, Escape)
-
-### Mouse Driver (Optional)
-- [ ] Microsoft serial mouse protocol
-- [ ] Mouse cursor rendering
-- [ ] Click detection
-- [ ] Cursor movement and bounds checking
-
-### Window Manager
+### Window Manager (Core Services 2.2)
 - [ ] Window structure (position, size, title, content)
 - [ ] Window drawing (title bar, borders, content area)
 - [ ] Window stacking (Z-order)
 - [ ] Active window highlighting
-- [ ] Window moving (keyboard-based initially)
-- [ ] Window resizing (fixed sizes or snap-to-grid)
+- [ ] Window moving/resizing
 
-### Basic Widgets
-- [ ] Button widget
-- [ ] Label widget
-- [ ] Text input field (single line)
-- [ ] List/menu widget
-- [ ] Scrollbar (optional, for longer lists)
+### App Management
+- [ ] app_unload_stub() - Free app memory
+- [ ] app_get_info_stub() - Query app state
 
 ---
 
-## Phase 2: File System
+## Planned Features
 
-**Goal**: Read and write files from the floppy disk.
+### Standard Library (v3.14.0)
+- [ ] graphics.lib - C-callable wrappers for Graphics API
+- [ ] unodos.lib - Initialization and utility functions
+- [ ] C compiler support (Turbo C, OpenWatcom)
 
-### FAT12 Support
-- [ ] Boot sector parsing (BPB - BIOS Parameter Block)
-- [ ] FAT table reading
-- [ ] Directory entry parsing
-- [ ] File reading (sequential)
-- [ ] Filename display (8.3 format)
+### Applications
+- [ ] Clock display application
+- [ ] Text editor
+- [ ] File manager
+- [ ] Calculator
+- [ ] Settings/Control Panel
 
-### File Manager Application
-- [ ] Directory listing display
-- [ ] File selection
-- [ ] File information display (size, date)
-- [ ] Navigation between directories
+### Hardware Support
+- [ ] Mouse driver (Microsoft serial mouse)
+- [ ] Sound support (PC speaker beeps/tunes)
+- [ ] FAT16 driver (for hard drives)
+- [ ] Hard drive boot support
 
-### Advanced File Operations (Later)
-- [ ] File writing
-- [ ] File creation
-- [ ] File deletion
-- [ ] Disk formatting
-
----
-
-## Phase 3: Built-in Applications
-
-**Goal**: Provide useful applications within the 360KB floppy constraint.
-
-### Text Editor
-- [ ] Load and display text files
-- [ ] Cursor movement
-- [ ] Text insertion and deletion
-- [ ] Line wrapping
-- [ ] Save to disk
-- [ ] Simple search function
-
-### Calculator
-- [ ] Numeric keypad input
-- [ ] Basic operations (+, -, *, /)
-- [ ] Memory functions (M+, M-, MR, MC)
-- [ ] Display with result history
-
-### Clock Application
-- [ ] Large time display
-- [ ] Date display (if RTC supports it)
-- [ ] Alarm function (PC speaker beep)
-- [ ] Stopwatch/timer
-
-### Settings/Control Panel
-- [ ] Display settings (if applicable)
-- [ ] Date/time setting
-- [ ] System information display
-- [ ] About UnoDOS screen
-
-### Game: Snake or Similar
-- [ ] Simple graphics game
-- [ ] Keyboard controls
-- [ ] Score display
-- [ ] Demonstrates graphics capability
+### Future Enhancements
+- [ ] Cooperative multitasking (app_yield)
+- [ ] Inter-app messaging
+- [ ] File writing support
+- [ ] Long filename support
 
 ---
 
-## Phase 4: System Services
+## API Table Summary (v3.11.0)
 
-**Goal**: Provide APIs for applications and system stability.
-
-### Memory Management
-- [ ] Simple memory allocator
-- [ ] Free list management
-- [ ] Out-of-memory handling
-
-### Timer Services
-- [ ] System tick counter
-- [ ] Delay functions
-- [ ] Timer callbacks (if feasible)
-
-### String/Utility Library
-- [ ] String comparison
-- [ ] String copying
-- [ ] Number-to-string conversion
-- [ ] String-to-number parsing
-
-### Error Handling
-- [ ] Error code definitions
-- [ ] Error message display
-- [ ] Graceful failure recovery
-
----
-
-## Phase 5: Polish & Optimization
-
-**Goal**: Improve user experience and performance.
-
-### Visual Improvements
-- [ ] Custom window themes/colors
-- [ ] Icons (if space permits)
-- [ ] Splash screen improvements
-- [ ] Smoother animations
-
-### Performance
-- [ ] Optimized pixel routines
-- [ ] Dirty rectangle tracking (partial screen updates)
-- [ ] Reduced flicker
-
-### Sound (PC Speaker)
-- [ ] Beep for alerts
-- [ ] Key click feedback
-- [ ] Simple melodies/tunes
-
-### Documentation
-- [ ] User manual (on disk or in-app help)
-- [ ] Keyboard shortcut reference
-- [ ] Quick start guide
+| Index | Function | Description |
+|-------|----------|-------------|
+| 0 | gfx_draw_pixel | Plot single pixel |
+| 1 | gfx_draw_rect | Draw rectangle outline |
+| 2 | gfx_draw_filled_rect | Draw filled rectangle |
+| 3 | gfx_draw_char | Draw single character |
+| 4 | gfx_draw_string | Draw null-terminated string |
+| 5 | gfx_clear_area | Clear rectangular area |
+| 6 | mem_alloc | Allocate memory |
+| 7 | mem_free | Free memory |
+| 8 | event_get | Get event (non-blocking) |
+| 9 | event_wait | Wait for event (blocking) |
+| 10 | kbd_getchar | Get key (non-blocking) |
+| 11 | kbd_wait_key | Wait for key (blocking) |
+| 12 | fs_mount | Mount filesystem |
+| 13 | fs_open | Open file |
+| 14 | fs_read | Read file |
+| 15 | fs_close | Close file |
+| 16 | fs_register_driver | Register filesystem driver |
+| 17 | app_load | Load application |
+| 18 | app_run | Run application |
 
 ---
 
-## Hardware-Specific Considerations
+## Memory Layout (v3.11.0)
 
-### For IBM PC XT (8088)
+```
+0x0000:0x0000   Interrupt Vector Table        1 KB
+0x0000:0x0400   BIOS Data Area                256 bytes
+0x0000:0x7C00   Boot sector                   512 bytes
+0x0800:0x0000   Stage2 loader                 2 KB
+0x1000:0x0000   Kernel                        28 KB
+  └─ 0x1000:0x0800  API table (256 bytes)
+0x1400:0x0000   Heap (malloc pool)            ~532 KB
+0xB800:0x0000   CGA video memory              16 KB
+```
 
-- **CPU Speed**: 4.77 MHz is slow; minimize complex calculations
-- **No Math Coprocessor**: Avoid floating-point; use integer/fixed-point
-- **Limited RAM**: 128KB minimum; keep data structures compact
-- **Slow Floppy**: Minimize disk access; cache when possible
+---
 
-### For HP Omnibook 600C (486)
+## Size Budget
 
-- **Much Faster CPU**: Can use longer delays for animations
-- **VGA Display**: CGA mode is emulated; full 320x200 visible
-- **DSTN Display**: Has ghosting; avoid fast-moving elements
-- **1.44MB Floppy**: More space for applications and data
+| Component | Size |
+|-----------|------|
+| Boot sector | 512 bytes |
+| Stage 2 loader | 2 KB |
+| Kernel | 28 KB |
+| Fonts (8x8 + 4x6) | ~1.5 KB (in kernel) |
+| **Total boot code** | **~30.5 KB** |
+| Available for apps (360KB) | ~329 KB |
+| Available for apps (1.44MB) | ~1.41 MB |
+
+---
+
+## Hardware Compatibility
+
+### Tested Hardware
+- **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
+- **QEMU** (PC/XT emulation mode)
 
 ### Display Compatibility
-
-The CGA 320x200 mode works across:
+CGA 320x200 mode works on:
 - Original CGA cards
 - EGA cards (backward compatible)
 - VGA cards (backward compatible)
-- Modern VGA implementations (Omnibook)
+- Modern VGA implementations
 
-Color palette (Palette 1):
+### Color Palette (Palette 1)
 - Background: Blue (configurable)
 - Color 1: Cyan
 - Color 2: Magenta
 - Color 3: White
-
----
-
-## Size Budget (360KB Floppy)
-
-| Component | Estimated Size |
-|-----------|----------------|
-| Boot sector | 512 bytes |
-| Stage 2 loader | 8 KB |
-| Fonts | 1.5 KB |
-| Kernel/drivers | ~10 KB |
-| Window manager | ~5 KB |
-| Applications | ~30 KB |
-| File system overhead | ~10 KB |
-| User data area | ~300 KB |
-| **Total** | ~360 KB |
-
-This leaves significant room for user files on a 360KB disk, and even more on 1.44MB.
-
----
-
-## Feature Priority Matrix
-
-| Feature | User Value | Complexity | Priority |
-|---------|-----------|------------|----------|
-| Keyboard input | High | Medium | **P1** |
-| Window manager | High | High | **P1** |
-| FAT12 read | High | Medium | **P1** |
-| Text editor | High | High | **P2** |
-| Mouse support | Medium | Medium | **P2** |
-| Calculator | Medium | Low | **P2** |
-| File writing | Medium | Medium | **P3** |
-| Games | Low | Medium | **P3** |
-| Sound | Low | Low | **P3** |
 
 ---
 
@@ -257,24 +218,12 @@ This leaves significant room for user files on a 360KB disk, and even more on 1.
 The following are explicitly out of scope for UnoDOS 3:
 
 - **Networking**: No TCP/IP, no modem support
-- **Multitasking**: Single application at a time
+- **Preemptive Multitasking**: Single app or cooperative only
 - **Protected Mode**: Stays in real mode for XT compatibility
 - **High Resolution**: Sticks to CGA modes for compatibility
-- **Modern File Systems**: No FAT32, NTFS, ext4, etc.
+- **Modern File Systems**: No FAT32, NTFS, ext4
 - **DOS Compatibility**: Not a DOS clone; different API
 
 ---
 
-## Version Milestones
-
-| Version | Target Features |
-|---------|-----------------|
-| 3.3.0 | Keyboard input working |
-| 3.4.0 | Basic window manager |
-| 3.5.0 | FAT12 read support |
-| 3.6.0 | File manager application |
-| 3.7.0 | Text editor, multiple apps |
-
----
-
-*Document version: 1.0 (2026-01-22)*
+*Document version: 3.0 (2026-01-25) - Updated for v3.11.0*
