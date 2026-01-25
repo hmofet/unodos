@@ -275,6 +275,15 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 Testing always happens on the Omnibook unless otherwise specified. Always push before asking the user to test.
 
+## Windows Development Constraints
+
+**CRITICAL**: The Windows machine used for writing floppies **cannot build images**.
+- No NASM or Python installed on Windows
+- All `.img` files must be **pre-built here** and pushed to Git
+- PowerShell scripts (e.g., `boot.ps1`, `clock.ps1`) pull from Git and write to floppy
+- **Never** create a Windows script that tries to build - it will fail
+- Always ensure `build/*.img` files are committed and pushed before testing
+
 ---
 
 ## Known Hardware Quirks
@@ -284,6 +293,10 @@ Testing always happens on the Omnibook unless otherwise specified. Always push b
 - Very fast compared to target 8088
 - Full CGA 320x200 visible (no overscan)
 - RTC works via INT 1Ah
+- **IMPORTANT: Only has drive A: (floppy) and drive C: (HDD) - NO drive B:**
+  - Apps must be loaded from drive A: after disk swap
+  - The 'L' key loads HELLO.BIN from drive A:
+  - For testing apps, boot from UnoDOS, press 'L', swap disk, press key
 
 ### IBM PC XT (Target)
 - 4.77 MHz is very slow
