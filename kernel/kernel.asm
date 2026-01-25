@@ -18,11 +18,6 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; Initialize caller segment variables for kernel-direct API calls
-    ; (INT 0x80 will override these when apps call APIs)
-    mov word [caller_ds], ax
-    mov word [caller_es], ax
-
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
@@ -94,7 +89,7 @@ int_80_handler:
     cmp ah, 25                      ; Max function + 1
     jae .invalid_function
 
-    ; Save caller's DS and ES for API functions to use
+    ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
     mov [cs:caller_ds], ds
     mov [cs:caller_es], es
 
@@ -1203,9 +1198,7 @@ gfx_draw_char_stub:
     ret
 
 ; gfx_draw_string_stub - Draw null-terminated string
-; Input: BX = X, CX = Y, SI = string offset
-; For direct kernel calls: DS = 0x1000 (kernel segment)
-; For app calls via INT 0x80: uses caller_ds for string access
+; Uses caller_ds for string access (supports apps calling through INT 0x80)
 gfx_draw_string_stub:
     push es
     push ax
@@ -1215,8 +1208,7 @@ gfx_draw_string_stub:
     push ds
     mov word [draw_x], bx
     mov word [draw_y], cx
-    ; Load caller's DS before switching segments
-    mov bp, [caller_ds]             ; BP = caller's segment (read while DS=kernel)
+    mov bp, [caller_ds]             ; BP = caller's segment (0x1000 at boot, app seg via INT 0x80)
     mov dx, 0xB800
     mov es, dx
     mov ds, bp                      ; DS = caller's segment for string access
@@ -1224,20 +1216,19 @@ gfx_draw_string_stub:
     lodsb                           ; AL = [DS:SI++] from caller's segment
     test al, al
     jz .done
-    ; Switch to kernel segment for font access
-    push ds
-    push si                         ; Save string pointer
-    mov si, 0x1000
-    mov ds, si                      ; DS = kernel for font_8x8
+    push ds                         ; Save caller's DS
+    mov bp, 0x1000
+    mov ds, bp                      ; DS = kernel for font_8x8 access
     sub al, 32
     mov ah, 0
     mov dl, 8
     mul dl
+    mov di, si                      ; Save string pointer
     mov si, font_8x8
     add si, ax
     call draw_char
-    pop si                          ; Restore string pointer
-    pop ds                          ; Restore caller's segment
+    mov si, di                      ; Restore string pointer
+    pop ds                          ; Restore caller's DS
     jmp .loop
 .done:
     pop ds
@@ -2997,15 +2988,15 @@ win_create_stub:
     mov byte [bx + WIN_OFF_OWNER], 0xFF         ; Kernel owned
 
     ; Copy title (up to 11 chars)
-    ; App passes title as ES:DI, saved in caller_es and .save_title
-    ; DS = 0x1000 (kernel), we need to read from caller_es:saved_title
+    ; App passes title as ES:DI. caller_es has the app's ES segment.
+    ; DS = 0x1000 (kernel), we read from caller_es:saved_title, write to kernel
     mov di, bx
     add di, WIN_OFF_TITLE           ; DI = dest offset in window_table
-    mov si, [.save_title]           ; SI = title offset from caller
+    mov si, [.save_title]           ; SI = title offset from caller's DI
     mov ax, 0x1000
     mov es, ax                      ; ES = 0x1000 for writing to kernel
     push ds                         ; Save kernel DS
-    mov ax, [cs:caller_es]          ; AX = caller's ES (where title lives)
+    mov ax, [caller_es]             ; AX = caller's ES (where title lives)
     mov ds, ax                      ; DS = caller's ES for reading title
     mov cx, 11
 .copy_title:
@@ -3018,7 +3009,7 @@ win_create_stub:
 .title_done:
     mov byte [es:di], 0             ; Null terminate in kernel segment
 
-    pop ds                          ; Restore kernel DS from push above
+    pop ds                          ; Restore kernel DS
     pop ds                          ; Balance push ds from line 2941
 
     ; Draw the window
@@ -3378,8 +3369,8 @@ heap_initialized: dw 0
 
 ; System call dispatcher temp (v3.12.0)
 syscall_func: dw 0
-caller_ds: dw 0                     ; Caller's DS segment (for API string access)
-caller_es: dw 0                     ; Caller's ES segment (for API pointer access)
+caller_ds: dw 0x1000                ; Caller's DS segment (init to kernel for direct calls)
+caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for direct calls)
 
 ; Keyboard driver state (Foundation 1.4)
 old_int9_offset: dw 0
