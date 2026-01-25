@@ -2,6 +2,9 @@
 build/*.bin
 build/*.o
 
+# Auto-generated files
+kernel/build_info.inc
+
 # Keep final floppy images
 !build/*.img
 
