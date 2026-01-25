@@ -17,9 +17,6 @@ API_WIN_GET_CONTENT     equ 24
 ; Event types
 EVENT_KEY_PRESS         equ 1
 
-; Kernel segment
-KERNEL_SEG              equ 0x1000
-
 ; Entry point - called by kernel via far CALL
 entry:
     ; Save all registers
@@ -30,11 +27,6 @@ entry:
     ; Save our code segment for data access
     mov ax, cs
     mov [cs:our_seg], ax
-
-    ; Discover kernel API via INT 0x80
-    xor ax, ax
-    int 0x80                        ; ES:BX = API table pointer
-    mov [cs:api_off], bx            ; Save API table offset
 
     ; Create clock window
     mov bx, 100                     ; X position
@@ -122,44 +114,14 @@ entry:
     retf                            ; Far return to kernel
 
 ; ============================================================================
-; Call Kernel API Function
+; Call Kernel API Function via INT 0x80
 ; Input: AH = API function index
 ;        Other registers = function parameters
 ; Output: Depends on function called
 ; ============================================================================
 call_kernel_api:
-    push bp
-    mov bp, sp
-    push di
-
-    ; Get function offset from API table
-    ; API table is at KERNEL_SEG:api_off
-    ; Function pointer is at table + 8 + (index * 2)
-    push es
-    push bx
-    mov bx, KERNEL_SEG
-    mov es, bx
-    mov bx, [cs:api_off]            ; BX = API table offset
-    add bx, 8                       ; Skip header
-    mov al, ah                      ; AL = function index
-    xor ah, ah
-    shl ax, 1                       ; AX = index * 2
-    add bx, ax                      ; BX = offset to function pointer
-    mov di, [es:bx]                 ; DI = function offset in kernel
-    mov [cs:call_off], di           ; Save for far call
-    pop bx                          ; Restore original BX
-    pop es                          ; Restore original ES
-
-    ; Do far call to KERNEL_SEG:function_offset
-    call far [cs:call_ptr]
-
-    pop di
-    pop bp
+    int 0x80                        ; Kernel dispatches based on AH
     ret
-
-call_ptr:
-call_off:   dw 0                    ; Function offset (filled in)
-call_seg:   dw KERNEL_SEG           ; Kernel segment (constant)
 
 ; ============================================================================
 ; Read RTC time via BIOS
@@ -261,7 +223,6 @@ window_title:   db 'Clock', 0
 time_string:    db '00:00:00', 0
 
 our_seg:        dw 0
-api_off:        dw 0
 win_handle:     dw 0
 content_x:      dw 0
 content_y:      dw 0
