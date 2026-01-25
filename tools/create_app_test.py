@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Create a FAT12 floppy image with HELLO.BIN for UnoDOS app loader testing.
-Usage: python3 create_app_test.py output.img hello.bin
+Create a FAT12 floppy image with an application for UnoDOS app loader testing.
+Usage: python3 create_app_test.py output.img app.bin [FAT_FILENAME]
+If FAT_FILENAME not provided, derives from input filename (e.g., clock.bin -> CLOCK.BIN)
 """
 
 import sys
 import struct
+import os
 
-def create_fat12_floppy(output_path, app_bin_path):
+def create_fat12_floppy(output_path, app_bin_path, fat_filename=None):
     """Create a 1.44MB FAT12 floppy with the app binary."""
 
     # Read the app binary
@@ -15,7 +17,21 @@ def create_fat12_floppy(output_path, app_bin_path):
         app_data = f.read()
 
     app_size = len(app_data)
+
+    # Derive FAT filename from input path if not provided
+    if fat_filename is None:
+        basename = os.path.basename(app_bin_path)
+        name, ext = os.path.splitext(basename)
+        fat_filename = name.upper()[:8].ljust(8) + ext.upper()[1:4].ljust(3)
+    else:
+        # Ensure proper 8.3 format
+        parts = fat_filename.upper().split('.')
+        name = parts[0][:8].ljust(8)
+        ext = (parts[1] if len(parts) > 1 else '')[:3].ljust(3)
+        fat_filename = name + ext
+
     print(f"App size: {app_size} bytes")
+    print(f"FAT filename: '{fat_filename}'")
 
     # FAT12 parameters for 1.44MB floppy
     SECTOR_SIZE = 512
@@ -121,9 +137,9 @@ def create_fat12_floppy(output_path, app_bin_path):
     vol_entry[11] = 0x08  # Volume label attribute
     image[root_dir_start:root_dir_start + 32] = vol_entry
 
-    # Second entry: HELLO.BIN
+    # Second entry: Application file
     file_entry = bytearray(32)
-    file_entry[0:11] = b'HELLO   BIN'  # Filename in 8.3 format
+    file_entry[0:11] = fat_filename.encode('ascii')  # Filename in 8.3 format
     file_entry[11] = 0x20  # Archive attribute
     file_entry[12:22] = b'\x00' * 10  # Reserved
     struct.pack_into('<H', file_entry, 22, 0x0000)  # Creation time
@@ -141,11 +157,12 @@ def create_fat12_floppy(output_path, app_bin_path):
         f.write(image)
 
     print(f"Created {output_path} ({len(image)} bytes)")
-    print(f"  HELLO.BIN at cluster 2, size {app_size} bytes")
+    print(f"  {fat_filename.strip()} at cluster 2, size {app_size} bytes")
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} output.img app.bin")
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} output.img app.bin [FAT_FILENAME]")
         sys.exit(1)
 
-    create_fat12_floppy(sys.argv[1], sys.argv[2])
+    fat_name = sys.argv[3] if len(sys.argv) > 3 else None
+    create_fat12_floppy(sys.argv[1], sys.argv[2], fat_name)
