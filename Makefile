@@ -10,12 +10,16 @@ STAGE2_BIN = build/stage2.bin
 KERNEL_BIN = build/kernel.bin
 FLOPPY_IMG = build/unodos.img
 FLOPPY_144 = build/unodos-144.img
+BUILD_INFO = kernel/build_info.inc
 
 # Directories
 BUILD_DIR = build
 BOOT_DIR = boot
 KERNEL_DIR = kernel
 APPS_DIR = apps
+
+# Build number from file
+BUILD_NUMBER := $(shell cat BUILD_NUMBER 2>/dev/null || echo 0)
 
 # Application binaries
 HELLO_BIN = build/hello.bin
@@ -61,9 +65,15 @@ $(BOOT_BIN): $(BOOT_DIR)/boot.asm | $(BUILD_DIR) check-deps
 $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
+# Generate build info include file
+$(BUILD_INFO): BUILD_NUMBER VERSION
+	@echo "; Auto-generated build info - DO NOT EDIT" > $@
+	@echo "BUILD_NUMBER_STR: db 'Build: $(shell printf '%03d' $(BUILD_NUMBER))', 0" >> $@
+	@echo "VERSION_STR: db 'UnoDOS v$(shell cat VERSION)', 0" >> $@
+
 # Assemble kernel (28KB)
 # Font files now in kernel directory
-$(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(KERNEL_DIR)/font8x8.asm $(KERNEL_DIR)/font4x6.asm | $(BUILD_DIR)
+$(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(KERNEL_DIR)/font8x8.asm $(KERNEL_DIR)/font4x6.asm $(BUILD_INFO) | $(BUILD_DIR)
 	$(NASM) -f bin -I$(KERNEL_DIR)/ -o $@ $<
 
 # Assemble test application
@@ -161,6 +171,12 @@ test-app: $(FLOPPY_IMG) build/app-test.img check-qemu
 # Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f $(BUILD_INFO)
+
+# Increment build number
+bump-build:
+	@echo $$(($$(cat BUILD_NUMBER) + 1)) > BUILD_NUMBER
+	@echo "Build number: $$(cat BUILD_NUMBER)"
 
 # Show sizes
 sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
