@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Error code display position** - Error digit was drawn at X=100, overlapping with
   'I' in "FAIL". Moved to X=136 (after 11-character string)
 
+### Fixed (Build 009)
+- **App loader filename format** - fat12_open expects "HELLO.BIN" (with dot separator)
+  but kernel was passing "HELLO   BIN" (raw FAT 8.3 format without dot)
+  - Changed .app_filename to include dot separator
+  - fat12_open parses the dot to split name/extension correctly
+- **Dynamic build numbers** - Version and build strings are now generated from files
+  - BUILD_NUMBER file contains current build number
+  - VERSION file contains version string
+  - Makefile generates kernel/build_info.inc before assembly
+  - `make bump-build` increments build number for next build
+
 ### Changed
 - API table expanded from 17 to 19 functions
 - Keyboard demo prompt updated to show L key option
