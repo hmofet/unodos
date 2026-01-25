@@ -1203,29 +1203,32 @@ gfx_draw_char_stub:
     ret
 
 ; gfx_draw_string_stub - Draw null-terminated string
-; Input: BX = X, CX = Y, DS:SI = string (caller's DS segment)
-; Note: Caller's DS was saved in caller_ds by INT 0x80 handler
+; Input: BX = X, CX = Y, SI = string offset
+; For direct kernel calls: DS = 0x1000 (kernel segment)
+; For app calls via INT 0x80: uses caller_ds for string access
 gfx_draw_string_stub:
     push es
     push ax
     push dx
     push di
     push bp
+    push ds
     mov word [draw_x], bx
     mov word [draw_y], cx
+    ; Load caller's DS before switching segments
+    mov bp, [caller_ds]             ; BP = caller's segment (read while DS=kernel)
     mov dx, 0xB800
     mov es, dx
-    ; Save string offset, we'll read from caller_ds:SI
-    mov bp, si                      ; BP = string offset in caller's segment
+    mov ds, bp                      ; DS = caller's segment for string access
 .loop:
-    ; Read character from caller's segment
-    push ds
-    mov ds, [cs:caller_ds]          ; DS = caller's segment
-    mov al, [bp]                    ; Read character from caller's string
-    pop ds                          ; DS = kernel segment again
-    inc bp                          ; Advance string pointer
+    lodsb                           ; AL = [DS:SI++] from caller's segment
     test al, al
     jz .done
+    ; Switch to kernel segment for font access
+    push ds
+    push si                         ; Save string pointer
+    mov si, 0x1000
+    mov ds, si                      ; DS = kernel for font_8x8
     sub al, 32
     mov ah, 0
     mov dl, 8
@@ -1233,8 +1236,11 @@ gfx_draw_string_stub:
     mov si, font_8x8
     add si, ax
     call draw_char
+    pop si                          ; Restore string pointer
+    pop ds                          ; Restore caller's segment
     jmp .loop
 .done:
+    pop ds
     pop bp
     pop di
     pop dx
