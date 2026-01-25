@@ -951,6 +951,120 @@ plot_pixel_white:
     ret
 
 ; ============================================================================
+; Plot a black pixel (color 0) - for inverted text on white backgrounds
+; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
+; Preserves all registers except flags
+; ============================================================================
+
+plot_pixel_black:
+    push ax
+    push bx
+    push cx
+    push di
+    push dx
+    mov ax, bx
+    shr ax, 1
+    mov dx, 80
+    mul dx
+    mov di, ax
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    test bl, 1
+    jz .e
+    add di, 0x2000
+.e:
+    mov ax, cx
+    and ax, 3
+    mov cx, 3
+    sub cl, al
+    shl cl, 1
+    mov al, [es:di]
+    mov bl, 0x03
+    shl bl, cl
+    not bl
+    and al, bl                      ; Clear bits = color 0 (black)
+    mov [es:di], al
+    pop dx
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; Draw character in inverted colors (black on white)
+; Uses draw_x, draw_y for position, SI = font data pointer
+; ============================================================================
+
+draw_char_inverted:
+    pusha
+
+    mov bx, [draw_y]                ; BX = current Y
+    mov bp, 8                       ; BP = row counter
+
+.row_loop:
+    lodsb                           ; Get row bitmap into AL (from DS:SI)
+    mov ah, al                      ; AH = bitmap for this row
+    mov cx, [draw_x]                ; CX = current X
+    mov dx, 8                       ; DX = column counter
+
+.col_loop:
+    test ah, 0x80                   ; Check leftmost bit
+    jz .skip_pixel
+    call plot_pixel_black           ; Plot BLACK at (CX, BX)
+.skip_pixel:
+    shl ah, 1                       ; Next bit
+    inc cx                          ; Next X
+    dec dx                          ; Decrement column counter
+    jnz .col_loop
+
+    inc bx                          ; Next Y
+    dec bp                          ; Decrement row counter
+    jnz .row_loop
+
+    add word [draw_x], 12           ; Advance to next character position
+
+    popa
+    ret
+
+; ============================================================================
+; Draw string in inverted colors (black text)
+; Input: BX = X, CX = Y, SI = string pointer (DS:SI)
+; ============================================================================
+
+gfx_draw_string_inverted:
+    push es
+    push ax
+    push dx
+    push di
+    mov word [draw_x], bx
+    mov word [draw_y], cx
+    mov dx, 0xB800
+    mov es, dx
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    sub al, 32
+    mov ah, 0
+    mov dl, 8
+    mul dl
+    mov di, si
+    mov si, font_8x8
+    add si, ax
+    call draw_char_inverted
+    mov si, di
+    jmp .loop
+.done:
+    pop di
+    pop dx
+    pop ax
+    pop es
+    ret
+
+; ============================================================================
 ; Kernel API Table - At fixed address 0x1000:0x0800
 ; ============================================================================
 
@@ -2979,7 +3093,7 @@ win_draw_stub:
     pop cx
     pop bx
 
-    ; Draw title text (inside title bar)
+    ; Draw title text (inside title bar) - inverted (black on white)
     push bx
     mov si, bx
     add si, WIN_OFF_TITLE           ; SI = title pointer
@@ -2987,7 +3101,7 @@ win_draw_stub:
     add bx, 4                       ; 4px padding
     mov cx, dx                      ; Y position
     add cx, 1                       ; 1px padding
-    call gfx_draw_string_stub
+    call gfx_draw_string_inverted   ; Black text on white title bar
     pop bx
 
     ; Draw border (rectangle outline)
