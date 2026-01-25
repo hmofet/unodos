@@ -2825,11 +2825,11 @@ win_create_stub:
     ; Need: DS = caller's segment (to read title), ES = 0x1000 (to write)
     mov di, bx
     add di, WIN_OFF_TITLE           ; DI = window_table entry + title offset
+    mov si, [.save_title]           ; SI = title pointer (read while DS=0x1000!)
     mov ax, 0x1000
     mov es, ax                      ; ES = 0x1000 for writing to kernel
     pop ds                          ; DS = caller's segment (for reading title)
     push ds                         ; Save it back for later pop
-    mov si, [.save_title]           ; SI = title pointer in caller's segment
     mov cx, 11
 .copy_title:
     lodsb                           ; AL = [DS:SI++] from caller's segment
