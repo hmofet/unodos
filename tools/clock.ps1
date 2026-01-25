@@ -23,50 +23,17 @@ try {
 }
 Pop-Location
 
-# Ensure build directory exists
-$buildDir = "$projectDir\build"
-if (-not (Test-Path $buildDir)) {
-    New-Item -ItemType Directory -Path $buildDir | Out-Null
-}
-
-# Build clock.bin with NASM
-Write-Host "Building clock.bin..." -ForegroundColor Cyan
-$clockAsm = "$projectDir\apps\clock.asm"
-$clockBin = "$buildDir\clock.bin"
-
-if (-not (Test-Path $clockAsm)) {
-    Write-Error "clock.asm not found in apps directory"
+# Find clock-app image
+$ImagePath = "$projectDir\build\clock-app.img"
+if (-not (Test-Path $ImagePath)) {
+    Write-Error "clock-app.img not found in build directory"
     exit 1
 }
 
-$nasmResult = & nasm -f bin -o $clockBin $clockAsm 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "NASM failed: $nasmResult"
-    exit 1
-}
-Write-Host "Built clock.bin ($((Get-Item $clockBin).Length) bytes)" -ForegroundColor Green
-
-# Create FAT12 floppy image with clock.bin
-Write-Host "Creating clock-app.img..." -ForegroundColor Cyan
-$clockImg = "$buildDir\clock-app.img"
-$createScript = "$scriptDir\create_app_test.py"
-
-$pythonResult = & python3 $createScript $clockImg $clockBin 2>&1
-if ($LASTEXITCODE -ne 0) {
-    # Try python instead of python3
-    $pythonResult = & python $createScript $clockImg $clockBin 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Python failed: $pythonResult"
-        exit 1
-    }
-}
-Write-Host "Created clock-app.img" -ForegroundColor Green
-
-# Write to floppy
 Write-Host "Writing clock-app.img to ${DriveLetter}:..." -ForegroundColor Cyan
 
 $drivePath = "\\.\${DriveLetter}:"
-$imageBytes = [System.IO.File]::ReadAllBytes($clockImg)
+$imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
 $stream = [System.IO.File]::Open($drivePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
 try {
     $stream.Write($imageBytes, 0, $imageBytes.Length)
