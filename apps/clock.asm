@@ -28,6 +28,15 @@ entry:
     mov ax, cs
     mov [cs:our_seg], ax
 
+    ; DEBUG: Draw "APP" at top of screen to prove we're running
+    mov bx, 4                       ; X
+    mov cx, 70                      ; Y
+    mov ax, cs
+    mov ds, ax
+    mov si, debug_msg
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
     ; Create clock window
     mov bx, 100                     ; X position
     mov cx, 60                      ; Y position
@@ -219,6 +228,7 @@ bcd_to_ascii:
 ; Data Section
 ; ============================================================================
 
+debug_msg:      db 'APP RUNNING', 0
 window_title:   db 'Clock', 0
 time_string:    db '00:00:00', 0
 
