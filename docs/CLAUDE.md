@@ -1,9 +1,9 @@
-# UnoDOS 3 - Development Context (v3.10.0)
+# UnoDOS 3 - Development Context (v3.12.0)
 
 This document provides context for Claude (AI assistant) when working on UnoDOS 3.
 
-**Last Updated:** 2026-01-23
-**Current Version:** 3.10.0 (Foundation Layer Complete)
+**Last Updated:** 2026-01-25
+**Current Version:** 3.12.0 Build 014 (Window Manager Complete)
 
 ## Project Summary
 
@@ -86,8 +86,8 @@ unodos/
 - [x] CGA 320x200 4-color graphics
 - [x] Custom bitmap fonts (8x8, 4x6)
 - [x] Graphical welcome screen
-- [x] **System Call Infrastructure (v3.3.0)** - INT 0x80 + API table at 0x1000:0x0800
-- [x] **Graphics API (v3.4.0)** - 6 functions (pixel, rect, char, string, clear)
+- [x] **System Call Infrastructure (v3.3.0)** - INT 0x80 + API dispatch
+- [x] **Graphics API (v3.4.0)** - 6 functions + inverted text
 - [x] **Memory Allocator (v3.5.0)** - malloc/free with free list management
 - [x] **Kernel Optimization (v3.7.0)** - Aggressive optimization, ~220 bytes freed
 - [x] **Keyboard Driver (v3.8.0)** - INT 09h handler, scan code translation, circular buffer
@@ -95,11 +95,22 @@ unodos/
 - [x] **Filesystem Abstraction + FAT12 (v3.10.0)** - VFS-like interface, complete FAT12 driver
 - [x] **Hardware compatibility** - Tested on HP Omnibook 600C, fixes applied
 
-### Core Services (In Progress - v3.11.0+)
-- [ ] **Application Loader (v3.11.0)** - Load .BIN files from FAT12 ← NEXT
-- [ ] **Window Manager (v3.12.0)** - GUI windows, Z-order, event routing
-- [ ] **Enhanced Filesystem (v3.13.0)** - Multi-cluster reads, subdirectories, seek
-- [ ] **Standard Library (v3.14.0)** - graphics.lib, unodos.lib for C development
+### Core Services (v3.11.0 - v3.12.0) ✅
+
+- [x] **Application Loader (v3.11.0)** - Load/run .BIN files from FAT12
+- [x] **Window Manager (v3.12.0)** - Create windows with title bar and border
+- [x] **INT 0x80 Dispatch (v3.12.0)** - Apps call kernel via interrupt
+
+### Applications
+
+- [x] hello.bin - Minimal test app (112 bytes)
+- [x] clock.bin - Clock display app (300 bytes) - READY FOR TESTING
+
+### Next Steps (v3.13.0+)
+- [ ] **Mouse Support (v3.13.0)** - PS/2 mouse driver
+- [ ] **Window Dragging (v3.14.0)** - Mouse drag to move windows
+- [ ] **Enhanced Filesystem (v3.15.0)** - Multi-cluster reads, subdirectories, seek
+- [ ] **Standard Library (v3.16.0)** - graphics.lib, unodos.lib for C development
 
 ## Technical Notes
 
@@ -115,16 +126,16 @@ unodos/
 - Stack at SS:SP = 0x0000:0x7C00
 - Kernel API table at fixed address 0x1000:0x0800
 
-### Memory Map (v3.10.0)
+### Memory Map (v3.12.0)
 ```
 0x0000:0x0000  IVT, BIOS Data                    1 KB
 0x0000:0x0500  Free/Temporary                    ~30 KB
 0x0000:0x7C00  Boot sector                       512 bytes
 0x0800:0x0000  Stage2 loader                     2 KB (loads 56 sectors)
-0x1000:0x0000  Kernel signature + code           ~5.1 KB used
-0x1000:0x0800  Kernel API table (fixed address)  256 bytes (17 functions)
-0x1000:0x0900  Kernel code continues             ~23.5 KB free (82%)
-0x1700:0x0000  Heap start (malloc pool)          ~608 KB
+0x1000:0x0000  Kernel signature + code           ~2.3 KB (to 0x900)
+0x1000:0x0900  Kernel API table (fixed address)  256 bytes (25 functions)
+0x1000:0x0A00  Kernel code continues             ~22 KB available
+0x1400:0x0000  Heap start (malloc pool)          ~608 KB
 0xB800:0000    CGA video memory                  16 KB
 ```
 
@@ -134,15 +145,18 @@ unodos/
 - **Free space:** ~23,600 bytes (82%)
 - **Safe headroom:** Plenty of room for Core Services
 
-### API Table (v3.10.0)
-**Location:** 0x1000:0x0800 (fixed address)
-**Discovery:** Apps use INT 0x80, AH=0x0000 to get table pointer
-**Functions (17 total):**
+### API Table (v3.12.0)
+**Location:** 0x1000:0x0900 (fixed address, moved from 0x800 in Build 014)
+**Discovery:** Apps use INT 0x80 with AH=0 to get table pointer
+**Dispatch:** Apps use INT 0x80 with AH=function_index to call functions
+**Functions (25 total):**
 - 0-5: Graphics API (pixel, rect, filled_rect, char, string, clear)
 - 6-7: Memory Management (malloc, free)
 - 8-9: Event System (get_event, wait_event)
 - 10-11: Keyboard Input (getchar, wait_key)
 - 12-16: Filesystem (mount, open, read, close, register_driver)
+- 17-18: Application Loader (load, run)
+- 19-24: Window Manager (create, destroy, draw, focus, move, get_content)
 
 ### Display Compatibility Notes
 - HP Omnibook 600C: Full 320x200 visible in CGA mode ✅ TESTED
@@ -331,4 +345,4 @@ This project uses the **UnoDOS License** (see `/LICENSE.md` in project root):
 
 ---
 
-*Last updated: 2026-01-23 (bootloader v3.2.1, kernel v3.2.3)*
+*Last updated: 2026-01-25 (kernel v3.12.0 Build 014)*
