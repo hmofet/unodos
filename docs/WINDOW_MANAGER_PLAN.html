@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>UnoDOS v3.12.0 - Window Manager Implementation Plan</title>
+<style>
+body { font-family: Georgia, serif; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+h2 { color: #333; margin-top: 30px; }
+h3 { color: #555; }
+code { background: #f4f4f4; padding: 2px 6px; font-family: monospace; }
+pre { background: #f4f4f4; padding: 15px; overflow-x: auto; font-family: monospace; font-size: 14px; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+th { background: #f0f0f0; }
+hr { border: none; border-top: 1px solid #ccc; margin: 30px 0; }
+</style>
+</head>
+<body>
+
+<h1>UnoDOS v3.12.0 - Window Manager Implementation Plan</h1>
+
+<h2>Overview</h2>
+<p>Implement a minimal Window Manager for UnoDOS, building on the completed Foundation Layer and Application Loader. This enables GUI applications to create and manage windows.</p>
+
+<h2>Current State (v3.11.0 Build 009)</h2>
+<p><strong>Completed:</strong></p>
+<ul>
+<li>System Call Infrastructure (INT 0x80 + API table with 19 functions)</li>
+<li>Graphics API (pixel, rect, filled_rect, char, string, clear_area)</li>
+<li>Memory Allocator (malloc/free at 0x1400:0000)</li>
+<li>Keyboard Driver (INT 09h with scan code translation)</li>
+<li>Event System (32-event circular queue)</li>
+<li>FAT12 Filesystem (mount, open, read, close)</li>
+<li>Application Loader (load, run .BIN files)</li>
+</ul>
+<p><strong>Tested on:</strong> HP Omnibook 600C (486DX4-75, VGA, 1.44MB floppy)</p>
+
+<hr>
+
+<h2>Window Structure (32 bytes)</h2>
+<p>Following established kernel patterns (app_table, file_table):</p>
+
+<table>
+<tr><th>Offset</th><th>Size</th><th>Field</th><th>Description</th></tr>
+<tr><td>0</td><td>1</td><td>state</td><td>0=free, 1=visible, 2=hidden</td></tr>
+<tr><td>1</td><td>1</td><td>flags</td><td>Bit 0: has_title, Bit 1: has_border</td></tr>
+<tr><td>2</td><td>2</td><td>x</td><td>X position (0-319)</td></tr>
+<tr><td>4</td><td>2</td><td>y</td><td>Y position (0-199)</td></tr>
+<tr><td>6</td><td>2</td><td>width</td><td>Width in pixels</td></tr>
+<tr><td>8</td><td>2</td><td>height</td><td>Height in pixels</td></tr>
+<tr><td>10</td><td>1</td><td>z_order</td><td>0=bottom, 15=top (stacking order)</td></tr>
+<tr><td>11</td><td>1</td><td>owner_app</td><td>App handle that owns window (0xFF=kernel)</td></tr>
+<tr><td>12</td><td>12</td><td>title</td><td>Window title (11 chars + null)</td></tr>
+<tr><td>24</td><td>8</td><td>reserved</td><td>Future use</td></tr>
+</table>
+
+<p><strong>Constants:</strong></p>
+<pre>
+WIN_STATE_FREE      equ 0
+WIN_STATE_VISIBLE   equ 1
+WIN_STATE_HIDDEN    equ 2
+
+WIN_FLAG_TITLE      equ 0x01
+WIN_FLAG_BORDER     equ 0x02
+
+WIN_MAX_COUNT       equ 16
+WIN_ENTRY_SIZE      equ 32
+WIN_TITLEBAR_HEIGHT equ 10
+</pre>
+
+<hr>
+
+<h2>API Functions to Add (6 new functions)</h2>
+
+<table>
+<tr><th>Index</th><th>Function</th><th>Description</th></tr>
+<tr><td>19</td><td>win_create_stub</td><td>Create new window</td></tr>
+<tr><td>20</td><td>win_destroy_stub</td><td>Destroy window</td></tr>
+<tr><td>21</td><td>win_draw_stub</td><td>Redraw window frame</td></tr>
+<tr><td>22</td><td>win_focus_stub</td><td>Bring window to front</td></tr>
+<tr><td>23</td><td>win_move_stub</td><td>Move window position</td></tr>
+<tr><td>24</td><td>win_get_content_stub</td><td>Get content area bounds</td></tr>
+</table>
+
+<h3>Function Signatures</h3>
+
+<p><strong>win_create_stub</strong></p>
+<pre>
+; Input:  BX = X, CX = Y, DX = Width, SI = Height
+;         DI = Pointer to title string (max 11 chars)
+;         AL = Flags
+; Output: AX = Window handle (0-15), CF=0 success
+</pre>
+
+<p><strong>win_destroy_stub</strong></p>
+<pre>
+; Input:  AX = Window handle
+; Output: CF=0 success
+</pre>
+
+<p><strong>win_draw_stub</strong></p>
+<pre>
+; Input:  AX = Window handle
+; Output: CF=0 success (redraws title bar and border only)
+</pre>
+
+<p><strong>win_focus_stub</strong></p>
+<pre>
+; Input:  AX = Window handle
+; Output: CF=0 success (sets z_order to 15, demotes others)
+</pre>
+
+<p><strong>win_move_stub</strong></p>
+<pre>
+; Input:  AX = Window handle, BX = New X, CX = New Y
+; Output: CF=0 success
+</pre>
+
+<p><strong>win_get_content_stub</strong></p>
+<pre>
+; Input:  AX = Window handle
+; Output: BX = Content X, CX = Content Y
+;         DX = Content Width, SI = Content Height
+</pre>
+
+<hr>
+
+<h2>Window Visual Design</h2>
+<pre>
++--[Title Text]--------+  &lt;- Title bar (10px, white)
+|                      |  &lt;- 1px top border
+|    Content Area      |  &lt;- App draws here
+|                      |
++----------------------+  &lt;- 1px bottom border
+^                      ^
+1px left              1px right
+</pre>
+
+<p><strong>Content area calculation:</strong></p>
+<ul>
+<li>Content X = Window X + 1 (border)</li>
+<li>Content Y = Window Y + 10 (titlebar) + 1 (border)</li>
+<li>Content Width = Window Width - 2 (borders)</li>
+<li>Content Height = Window Height - 12 (titlebar + borders)</li>
+</ul>
+
+<hr>
+
+<h2>Implementation Steps</h2>
+
+<h3>Step 1: Fix gfx_clear_area_stub</h3>
+<p>Currently a no-op. Must implement to clear window backgrounds.</p>
+
+<h3>Step 2: Add Window Table Data</h3>
+<p>Location: After app_table (around line 2700)</p>
+<pre>window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0</pre>
+
+<h3>Step 3: Implement Helper Functions</h3>
+<pre>
+alloc_window_handle   ; Find free slot in window_table
+draw_window_titlebar  ; Draw filled rect + title text
+draw_window_border    ; Draw rect outline
+</pre>
+
+<h3>Step 4: Implement API Functions</h3>
+<ol>
+<li>win_create_stub - Most critical</li>
+<li>win_destroy_stub - Clear and free</li>
+<li>win_draw_stub - Redraw frame</li>
+<li>win_get_content_stub - Calculate bounds</li>
+<li>win_focus_stub - Z-order management</li>
+<li>win_move_stub - Position update</li>
+</ol>
+
+<h3>Step 5: Update API Table</h3>
+<ul>
+<li>Increment function count from 19 to 25</li>
+<li>Add 6 new function pointers at indices 19-24</li>
+</ul>
+
+<h3>Step 6: Add Demo Trigger</h3>
+<p>Modify keyboard_demo to create test window on 'W' key press.</p>
+
+<hr>
+
+<h2>Size Budget</h2>
+
+<table>
+<tr><th>Component</th><th>Size</th></tr>
+<tr><td>window_table</td><td>512 bytes</td></tr>
+<tr><td>gfx_clear_area_stub fix</td><td>~100 bytes</td></tr>
+<tr><td>win_create_stub</td><td>~200 bytes</td></tr>
+<tr><td>win_destroy_stub</td><td>~80 bytes</td></tr>
+<tr><td>win_draw_stub</td><td>~150 bytes</td></tr>
+<tr><td>win_focus_stub</td><td>~100 bytes</td></tr>
+<tr><td>win_move_stub</td><td>~100 bytes</td></tr>
+<tr><td>win_get_content_stub</td><td>~50 bytes</td></tr>
+<tr><td>Helper functions</td><td>~200 bytes</td></tr>
+<tr><td><strong>Total</strong></td><td><strong>~1.5 KB</strong></td></tr>
+</table>
+
+<p>Current kernel: ~28KB. Well within limit.</p>
+
+<hr>
+
+<h2>Constraints (v3.12.0)</h2>
+<ol>
+<li><strong>No overlapping windows</strong> - Windows must not overlap</li>
+<li><strong>No dragging</strong> - win_move is API-only, no mouse drag</li>
+<li><strong>No close button</strong> - Destroy via API only</li>
+<li><strong>White only</strong> - Title bar uses white, no inverse video</li>
+</ol>
+<p>These constraints can be lifted in future versions.</p>
+
+<hr>
+
+<h2>Verification</h2>
+<ol>
+<li><strong>Build test:</strong> <code>make bump-build && make clean && make floppy144</code></li>
+<li><strong>QEMU test:</strong> <code>make run144</code> - Press 'W' to create test window</li>
+<li><strong>Hardware test:</strong> HP Omnibook 600C - Write to floppy, boot, press 'W'</li>
+</ol>
+
+<hr>
+
+<h2>Future Enhancements</h2>
+<ul>
+<li><strong>v3.13.0</strong>: Mouse support for window interaction</li>
+<li><strong>v3.14.0</strong>: Window dragging via mouse</li>
+<li><strong>v3.15.0</strong>: Overlapping window redraw</li>
+<li><strong>Future</strong>: Close button, minimize, resize</li>
+</ul>
+
+<hr>
+<p><em>Plan created: 2026-01-25 | Target version: v3.12.0</em></p>
+
+</body>
+</html>
