@@ -5,7 +5,7 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.11.0] - 2026-01-24
+## [3.11.0] - 2026-01-25
 
 ### Added
 - **Application Loader** - First Core Services feature (v3.11.0)
@@ -23,8 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **'L' key handler** in keyboard demo
   - Press 'L' to trigger app loader test
-  - Prompts to insert app disk in drive B:
+  - Prompts to insert app disk
   - Loads and runs HELLO.BIN from disk
+
+### Fixed (Build 008)
+- **Keyboard ISR register corruption** - INT 09h handler was modifying DX register
+  without saving/restoring it, causing display corruption on real hardware
+  - Added push/pop dx to int_09_handler
+- **Error code display position** - Error digit was drawn at X=100, overlapping with
+  'I' in "FAIL". Moved to X=136 (after 11-character string)
 
 ### Changed
 - API table expanded from 17 to 19 functions

@@ -8,7 +8,7 @@ UnoDOS uses a three-stage boot architecture:
 
 1. **Stage 1 (Boot Sector)**: 512 bytes, loaded by BIOS from the first sector
 2. **Stage 2 (Loader)**: 2KB, loaded by Stage 1, loads and verifies the kernel
-3. **Kernel**: 16KB, loaded by Stage 2, contains the main operating system
+3. **Kernel**: 28KB, loaded by Stage 2, contains the main operating system
 
 This design separates the bootloader from the OS code, allowing the kernel to grow independently while maintaining a simple, reliable boot process.
 
@@ -49,7 +49,7 @@ Power On
 ┌─────────────────────────────────────────────────────────┐
 │  Stage 2: Loader (boot/stage2.asm)                      │
 │  - Display "Loading kernel" message                     │
-│  - Load kernel from sectors 6-37 (16KB) with progress   │
+│  - Load kernel from sectors 6-61 (28KB) with progress   │
 │  - Verify kernel signature ("UK" at offset 0)           │
 │  - Jump to kernel at 0x1000:0x0002                      │
 └─────────────────────────────────────────────────────────┘
@@ -57,10 +57,15 @@ Power On
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Kernel (kernel/kernel.asm)                             │
+│  - Install INT 0x80 handler (API discovery)             │
+│  - Install INT 09h handler (keyboard driver)            │
+│  - Initialize memory allocator (heap at 0x1400:0000)    │
+│  - Initialize event system (32-event queue)             │
+│  - Initialize FAT12 filesystem driver                   │
 │  - Detect conventional memory (INT 12h)                 │
 │  - Switch to CGA 320x200 graphics mode                  │
 │  - Draw welcome screen                                  │
-│  - Enter main loop (clock + character demo)             │
+│  - Enter main event loop (keyboard demo)                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -77,8 +82,9 @@ Linear Address    Segment:Offset    Description
 0x07C00-0x07DFF   0000:7C00-7DFF    Boot Sector (512 bytes)
 0x07E00-0x07FFF   0000:7E00-7FFF    Stack area
 0x08000-0x087FF   0800:0000-07FF    Stage 2 Loader (2KB)
-0x10000-0x13FFF   1000:0000-3FFF    Kernel (16KB)
-0x14000-0x9FFFF   ----:----         Free conventional memory
+0x10000-0x16FFF   1000:0000-6FFF    Kernel (28KB)
+  └─ 0x10800     1000:0800          API table (256 bytes)
+0x17000-0x9FFFF   1700:0000+        Heap (malloc pool, ~532KB)
 0xA0000-0xBFFFF   ----:----         Video memory (EGA/VGA)
 0xB8000-0xBFFFF   B800:0000-7FFF    CGA video memory (used by UnoDOS)
 0xC0000-0xFFFFF   ----:----         ROM area (BIOS, adapters)
@@ -91,8 +97,8 @@ Sector    Offset      Content                 Size
 ────────────────────────────────────────────────────
 1         0x0000      Boot sector             512 bytes
 2-5       0x0200      Stage 2 Loader          2KB (4 sectors)
-6-37      0x0A00      Kernel                  16KB (32 sectors)
-38+       0x4A00      Future: File system     Remaining space
+6-61      0x0A00      Kernel                  28KB (56 sectors)
+62+       0x7A00      FAT12 filesystem        Remaining space
 ```
 
 ## Stage 1: Boot Sector
@@ -173,30 +179,47 @@ Loading kernel................................ OK
 ## Kernel
 
 **File**: `kernel/kernel.asm`
-**Size**: 16KB (32 sectors, expandable)
+**Size**: 28KB (56 sectors)
 **Load Address**: 0x1000:0x0000 (linear 0x10000 = 64KB mark)
 
 ### Responsibilities
 
-1. Detect system resources (memory, video)
-2. Initialize CGA graphics mode
-3. Draw welcome screen with bordered window
-4. Display RAM information and clock
-5. Run main event loop
+1. Install system call handler (INT 0x80)
+2. Install keyboard driver (INT 09h)
+3. Initialize memory allocator (heap)
+4. Initialize event system
+5. Initialize FAT12 filesystem driver
+6. Detect system resources (memory, video)
+7. Initialize CGA graphics mode
+8. Draw welcome screen with bordered window
+9. Run main event loop
+
+### Key Subsystems
+
+| Subsystem | Description |
+|-----------|-------------|
+| System Calls | INT 0x80 for API discovery, far call table for execution |
+| Graphics API | 6 functions: pixel, rect, filled_rect, char, string, clear |
+| Memory | malloc/free with first-fit allocation |
+| Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
+| Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE types |
+| Filesystem | FAT12 driver with mount, open, read, close operations |
+| App Loader | Load and execute .BIN applications from FAT12 |
 
 ### Key Functions
 
 | Function | Description |
 |----------|-------------|
-| `detect_memory` | Get conventional memory size via INT 12h |
-| `setup_graphics` | Initialize CGA mode and palette |
-| `draw_hello_gfx` | Draw the welcome screen |
-| `draw_clock` | Read RTC and display time |
-| `draw_ram_info` | Display memory statistics |
-| `char_demo_loop` | Display ASCII character grid |
-| `plot_pixel_white` | Set a pixel to white (color 3) |
-| `draw_char` | Draw 8x8 character bitmap |
-| `draw_char_small` | Draw 4x6 character bitmap |
+| `install_int_80` | Install system call handler |
+| `install_keyboard` | Install keyboard interrupt handler |
+| `gfx_draw_string_stub` | Draw null-terminated string |
+| `mem_alloc_stub` | Allocate memory from heap |
+| `event_wait_stub` | Wait for next event |
+| `fs_mount_stub` | Mount FAT12 filesystem |
+| `fs_open_stub` | Open file by 8.3 name |
+| `fs_read_stub` | Read file contents |
+| `app_load_stub` | Load .BIN application |
+| `app_run_stub` | Execute loaded application |
 
 ## Font System
 
@@ -287,7 +310,7 @@ Color palette (Palette 1):
 
 1. **Stage 1** (512 bytes): BIOS limitation - can only load first sector
 2. **Stage 2** (2KB): Minimal loader, handles disk I/O complexity
-3. **Kernel** (16KB+): Full OS code, can grow independently
+3. **Kernel** (28KB): Full OS code with Foundation Layer complete
 
 ### Why Separate Kernel?
 
@@ -305,4 +328,4 @@ Color palette (Palette 1):
 
 ---
 
-*Document version: 2.0 (2026-01-22) - Updated for v3.2.0 three-stage architecture*
+*Document version: 3.0 (2026-01-25) - Updated for v3.11.0 with Foundation Layer and App Loader*

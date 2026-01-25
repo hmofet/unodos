@@ -183,7 +183,7 @@ unodos/
 
 ### Completed
 - [x] Three-stage boot architecture (boot + stage2 + kernel)
-- [x] Separate kernel (24KB, loaded at 64KB mark)
+- [x] Separate kernel (28KB, loaded at 64KB mark)
 - [x] Boot progress indicator
 - [x] Memory detection (BIOS INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
