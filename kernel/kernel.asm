@@ -122,19 +122,19 @@ int_80_handler:
 
 .return_point:
     ; Function returned - preserve CF from function in return FLAGS
-    ; Stack after pop ds will be: [IP] [CS] [FLAGS]
-    pushf                           ; Save function's FLAGS (has CF result)
-    pop ax                          ; AX = function's FLAGS
+    ; Stack: [caller's DS] [IP] [CS] [FLAGS]
+    ; IMPORTANT: Do NOT destroy AX - functions return values in AX!
     pop ds                          ; Restore caller's DS
-    ; Now modify FLAGS on stack to preserve CF from function
+    ; Stack: [IP] [CS] [FLAGS]
     push bp
     mov bp, sp
-    test ax, 0x0001                 ; Was CF set by function?
-    jz .cf_clear
-    or word [bp+6], 0x0001          ; Set CF in return FLAGS
-    jmp .iret_done
-.cf_clear:
+    ; Stack: [BP] [IP] [CS] [FLAGS]
+    ; [bp+0]=BP, [bp+2]=IP, [bp+4]=CS, [bp+6]=FLAGS
+    jc .set_carry                   ; Test CF directly (preserves AX!)
     and word [bp+6], 0xFFFE         ; Clear CF in return FLAGS
+    jmp .iret_done
+.set_carry:
+    or word [bp+6], 0x0001          ; Set CF in return FLAGS
 .iret_done:
     pop bp
     iret
