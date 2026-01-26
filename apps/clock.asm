@@ -56,6 +56,19 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; DEBUG 2: Write after INT 0x80 to prove it returned
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 0x0C80 + 20             ; Y=80, X=80 (right of first bar)
+    mov byte [es:di], 0xAA          ; Different pattern
+    mov byte [es:di+1], 0xAA
+    mov byte [es:di+2], 0xAA
+    mov byte [es:di+3], 0xAA
+    pop di
+    pop es
+
     ; Create clock window
     mov bx, 100                     ; X position
     mov cx, 60                      ; Y position
