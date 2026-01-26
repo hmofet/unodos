@@ -129,6 +129,19 @@ entry:
 
     ; Main loop
 .main_loop:
+    ; DEBUG: Show loop is running - increment a pixel at Y=88
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+    mov di, [cs:loop_counter]
+    and di, 0x3F                    ; Keep within 64 pixels
+    add di, 0x0DC0                  ; Y=88 base offset
+    mov byte [es:di], 0xFF          ; White pixel
+    inc word [cs:loop_counter]
+    pop di
+    pop es
+
     ; Check for ESC key (non-blocking)
     mov ah, API_EVENT_GET
     call call_kernel_api
@@ -141,7 +154,23 @@ entry:
 .no_event:
     ; Read RTC time
     call read_rtc_time
-    jc .skip_update                 ; RTC error, skip
+    jc .rtc_failed                  ; RTC error - show debug
+
+    jmp .rtc_ok
+
+.rtc_failed:
+    ; DEBUG: RTC failed - draw red marker at Y=90
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 0x0E00 + 10             ; Y=90
+    mov byte [es:di], 0x55          ; Pattern for RTC fail
+    pop di
+    pop es
+    jmp .skip_update
+
+.rtc_ok:
 
     ; Format time string
     call format_time
@@ -309,3 +338,4 @@ content_h:      dw 0
 rtc_hours:      db 0
 rtc_minutes:    db 0
 rtc_seconds:    db 0
+loop_counter:   dw 0
