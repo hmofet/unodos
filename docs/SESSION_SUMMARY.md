@@ -1,35 +1,57 @@
 # UnoDOS Development Session Summary
 **Last Updated:** 2026-01-26
 **Current Version:** v3.12.0
-**Current Build:** 024
-**Status:** Debugging clock app - window content area empty
+**Current Build:** 029
+**Status:** Desktop Launcher implementation complete - awaiting test
 
 ---
 
-## Latest Session (2026-01-26) - Continued
+## Latest Session (2026-01-26) - Desktop Launcher
 
-### Clock App Window Content Empty (Builds 020-024)
+### Desktop Launcher (Build 029)
 
-**Problem:** Clock app title bar shows "Clock" correctly (ORG 0 fix worked!), but the window content area is empty - no time displayed, no debug markers visible inside window.
+**Implemented:** Full desktop launcher with dual app segment architecture.
 
-**Debugging Progress:**
+**Architecture:**
+- **Shell segment (0x2000):** Launcher app loads here, persists while user apps run
+- **User segment (0x3000):** User apps (Clock, Hello) load here
+- Launcher can load apps without overwriting itself
 
-| Build | Change | Result |
-|-------|--------|--------|
-| 020 | Fixed INT 0x80 CF preservation, window handle in AL | Load: Fail 3 |
-| 020a | Fixed Makefile to use HELLO.BIN filename | Clock title works, content empty |
-| 021 | Added "TEST" string draw after win_get_content | No TEST visible |
-| 022 | Added direct video memory marker at content coords | Pink marker at WRONG location (top-middle) |
-| 023 | Bypassed win_get_content, hardcoded X=105, Y=75 | Still no markers inside window |
-| 024 | Added marker at Y=0, X=0 (very top-left of screen) | **AWAITING TEST** |
+**Kernel Changes:**
+- Added `APP_SEGMENT_SHELL` (0x2000) and `APP_SEGMENT_USER` (0x3000) constants
+- Modified `app_load_stub` to accept DH parameter for target segment
+- Added `shell_handle` variable for future auto-return support
+- Added `register_shell_stub` (API 25) for shell registration
 
-**Current Theory:**
-Either the app is crashing/stuck after win_create, OR the direct video memory writes have some issue. Build 024 adds a marker at absolute position (0,0) to verify if app code runs at all after win_create.
+**New Files:**
+- `apps/launcher.asm` - Desktop launcher application (578 bytes)
 
-**Next Steps:**
-1. Test Build 024 - look for white pixels at very top-left corner of screen
-2. If marker appears: Issue is with content coordinates - investigate calculation
-3. If marker doesn't appear: App crashes at or after win_create - investigate stack/segment issue
+**Launcher Features:**
+- Window-based menu UI
+- W/S keys for navigation
+- Enter to launch selected app
+- ESC to exit
+- Returns to launcher after app exits
+
+**Testing:**
+```
+git pull
+.\tools\boot.ps1       # Write UnoDOS to floppy A:
+.\tools\launcher.ps1   # Write launcher+clock to floppy B:
+```
+Boot, press L, swap floppy, press key. Launcher window should appear with Clock and Hello menu items.
+
+---
+
+### Previous: Clock App Working (Builds 025-028)
+
+**Resolved Issues:**
+- Build 025: Fixed INT 0x80 destroying AX return values
+- Build 026: Implemented RTC time reading
+- Build 027: Fixed time updates (save RTC values immediately)
+- Build 028: Added clear-before-draw to prevent ghosting
+
+Clock app now shows real-time updating clock with slight flicker (optimization TODO).
 
 ### Fixes Applied This Session
 

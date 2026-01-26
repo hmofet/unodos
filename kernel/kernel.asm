@@ -1173,6 +1173,7 @@ kernel_api_table:
     dw win_focus_stub               ; 22: Bring window to front
     dw win_move_stub                ; 23: Move window
     dw win_get_content_stub         ; 24: Get content area bounds
+    dw register_shell_stub          ; 25: Register app as shell (auto-return)
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -2677,6 +2678,8 @@ APP_ERR_NOT_LOADED      equ 7       ; App not loaded
 ; app_load_stub - Load application from disk
 ; Input: DS:SI = Pointer to filename (8.3 format, space-padded)
 ;        DL = BIOS drive number (0=A:, 1=B:, 0x80=C:, etc.)
+;        DH = Target segment high byte (0x20=0x2000 shell, 0x30=0x3000 user)
+;             If DH=0, defaults to 0x20 (APP_SEGMENT_SHELL) for compatibility
 ; Output: CF clear on success, AX = app handle (0-15)
 ;         CF set on error, AX = error code
 ; Preserves: None (registers may be modified)
@@ -2689,8 +2692,14 @@ app_load_stub:
     push bp
     push es
 
-    ; Save drive number and filename pointer
+    ; Save drive number, target segment, and filename pointer
     mov [.drive], dl
+    ; Handle target segment - default to 0x20 if DH=0
+    or dh, dh
+    jnz .save_seg
+    mov dh, 0x20                    ; Default to APP_SEGMENT_SHELL (0x2000)
+.save_seg:
+    mov [.target_seg], dh
     mov [.filename_off], si
     mov ax, ds
     mov [.filename_seg], ax
@@ -2743,14 +2752,16 @@ app_load_stub:
     mov cx, [bx + 4]                ; CX = file size (low word)
     mov [.file_size], cx
 
-    ; Step 5: Load app at fixed segment 0x2000 offset 0
+    ; Step 5: Load app at target segment offset 0
     ; Apps use ORG 0x0000, so they must be loaded at offset 0 in their segment
-    ; This supports one app at a time (sufficient for current needs)
+    ; DH parameter specifies target: 0x20=shell (0x2000), 0x30=user (0x3000)
     mov word [.code_off], 0         ; Always load at offset 0
 
     ; Step 6: Read file into app code segment
     mov ax, [.file_handle]
-    mov bx, 0x2000                  ; Dedicated app code segment
+    ; Build segment from high byte: 0x20 -> 0x2000, 0x30 -> 0x3000
+    xor bx, bx
+    mov bh, [.target_seg]           ; BX = target segment (e.g., 0x2000 or 0x3000)
     mov es, bx
     xor di, di                      ; Offset 0 (for ORG 0 apps)
     mov cx, [.file_size]            ; Bytes to read
@@ -2769,7 +2780,10 @@ app_load_stub:
 
     mov byte [di + 0], APP_STATE_LOADED  ; State = loaded
     mov byte [di + 1], 0                 ; Priority = 0
-    mov word [di + 2], 0x2000            ; Code segment (apps loaded at 0x2000:0)
+    ; Store actual target segment
+    xor ax, ax
+    mov ah, [.target_seg]
+    mov [di + 2], ax                     ; Code segment (from DH parameter)
     mov ax, [.code_off]
     mov [di + 4], ax                     ; Code offset
     mov ax, [.file_size]
@@ -2822,6 +2836,7 @@ app_load_stub:
 
 ; Local variables for app_load_stub
 .drive:        db 0
+.target_seg:   db 0                     ; Target segment high byte (0x20 or 0x30)
 .filename_seg: dw 0
 .filename_off: dw 0
 .slot:         dw 0
@@ -2908,6 +2923,38 @@ app_run_stub:
     pop si
     pop dx
     pop cx
+    pop bx
+    ret
+
+; register_shell_stub - Register application as shell (auto-return target)
+; Input: AL = App handle to register as shell
+; Output: CF clear on success
+;         CF set on error (invalid handle)
+; Notes: When any non-shell app returns, kernel will auto-run shell
+register_shell_stub:
+    push bx
+    push ds
+
+    ; Validate handle
+    cmp al, APP_MAX_COUNT
+    jae .invalid
+
+    ; Set kernel DS
+    mov bx, 0x1000
+    mov ds, bx
+
+    ; Store shell handle
+    xor ah, ah
+    mov [shell_handle], ax
+
+    clc
+    jmp .done
+
+.invalid:
+    stc
+
+.done:
+    pop ds
     pop bx
     ret
 
@@ -3462,7 +3509,14 @@ APP_STATE_SUSPENDED equ 3
 APP_MAX_COUNT       equ 16
 APP_ENTRY_SIZE      equ 32
 
+; App segment constants (for dual-segment architecture)
+APP_SEGMENT_SHELL   equ 0x2000              ; Shell/launcher segment
+APP_SEGMENT_USER    equ 0x3000              ; User app segment
+
 app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
+
+; Shell tracking (for auto-return to launcher)
+shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none)
 
 ; ============================================================================
 ; Window Manager Data (v3.12.0)
