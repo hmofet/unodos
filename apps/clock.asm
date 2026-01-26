@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Simplified debug version - Build 024
+; Build 025 - Test win_get_content fix
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -38,58 +38,63 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
     jc .win_create_failed
-    mov [cs:win_handle], ax
+    mov [cs:win_handle], al         ; Save handle (only low byte needed)
 
-    ; DEBUG: Draw marker at VERY TOP of screen (Y=0, X=0)
-    ; This should be visible NO MATTER WHAT
+    ; DEBUG: Draw marker at VERY TOP of screen (Y=0) to show we got here
     push es
     mov ax, 0xB800
     mov es, ax
-    mov di, 0                       ; Y=0 (even), X=0
+    mov di, 0
     mov byte [es:di], 0xFF          ; White at top-left
     mov byte [es:di+1], 0xFF
     mov byte [es:di+2], 0xFF
-    mov byte [es:di+3], 0xFF
-    mov byte [es:di+4], 0xFF
     pop es
 
-    mov word [cs:content_x], 105
-    mov word [cs:content_y], 75
+    ; NOW TEST win_get_content with the REAL handle
+    mov al, [cs:win_handle]         ; Window handle in AL
+    mov ah, API_WIN_GET_CONTENT
+    int 0x80
+    jc .get_content_failed
 
-    ; DEBUG: Draw marker at FIXED position (X=110, Y=75)
-    ; This is inside the window content area if window is at X=100, Y=60+10(titlebar)=70
+    ; win_get_content returns:
+    ; BX = Content X, CX = Content Y, DX = Content Width, SI = Content Height
+    mov [cs:content_x], bx
+    mov [cs:content_y], cx
+    mov [cs:content_w], dx
+    mov [cs:content_h], si
+
+    ; Draw marker at returned content coords using direct video memory
     push es
     mov ax, 0xB800
     mov es, ax
-    ; Calculate offset for Y=75: (75/2)*80 = 37*80 = 2960 = 0x0B90
-    ; For X=110: 110/4 = 27
-    mov di, 0x0B90 + 27             ; Y=75 (odd), need to add 0x2000
-    add di, 0x2000                  ; Odd scanline
-    mov byte [es:di], 0xFF          ; White marker
-    mov byte [es:di+1], 0xFF
-    mov byte [es:di+2], 0xFF
-    pop es
-
-    ; DEBUG: Also draw marker at content_x, content_y to compare
-    push es
-    mov ax, 0xB800
-    mov es, ax
+    ; Calculate video offset for content_y, content_x
     mov ax, [cs:content_y]
-    shr ax, 1
-    mov bx, 80
-    mul bx
+    mov bx, ax                      ; Save Y for odd/even check
+    shr ax, 1                       ; Y/2
+    mov cx, 80
+    mul cx                          ; AX = (Y/2) * 80
     mov di, ax
     mov ax, [cs:content_x]
     shr ax, 1
-    shr ax, 1
+    shr ax, 1                       ; X/4
     add di, ax
-    mov ax, [cs:content_y]
-    test ax, 1
-    jz .even
-    add di, 0x2000
-.even:
-    mov byte [es:di], 0xAA          ; Pink marker at content coords
-    mov byte [es:di+1], 0xAA
+    test bx, 1                      ; Was Y odd?
+    jz .even_line
+    add di, 0x2000                  ; Odd scanline offset
+.even_line:
+    ; Draw GREEN marker (0x55 pattern in CGA = green-ish)
+    mov byte [es:di], 0x55
+    mov byte [es:di+1], 0x55
+    mov byte [es:di+2], 0x55
+    pop es
+
+    ; Also draw at row 2 on screen to show win_get_content succeeded
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 80                      ; Y=2 (row 1)
+    mov byte [es:di], 0xFF
+    mov byte [es:di+1], 0xFF
     pop es
 
     ; Main loop - just wait for ESC
@@ -103,31 +108,29 @@ entry:
     je .exit_ok
 
 .no_event:
-    ; Small delay
     mov cx, 0x8000
 .delay:
     loop .delay
     jmp .main_loop
 
 .win_create_failed:
-    ; Draw red marker at Y=10 to show win_create failed
+    ; Draw marker at Y=10 to show win_create failed
     push es
     mov ax, 0xB800
     mov es, ax
-    mov di, 0x0140                  ; Y=10
-    mov byte [es:di], 0x55
-    mov byte [es:di+1], 0x55
+    mov di, 5*80                    ; Y=10
+    mov byte [es:di], 0xAA          ; Pink
+    mov byte [es:di+1], 0xAA
     pop es
     jmp .exit_fail
 
 .get_content_failed:
-    ; Draw blue marker at Y=15 to show get_content failed
+    ; Draw marker at Y=14 to show get_content failed
     push es
     mov ax, 0xB800
     mov es, ax
-    mov di, 0x0258                  ; Y=15 = (15/2)*80 = 600 = 0x258
-    add di, 0x2000                  ; Odd line
-    mov byte [es:di], 0xAA
+    mov di, 7*80                    ; Y=14
+    mov byte [es:di], 0xAA          ; Pink
     mov byte [es:di+1], 0xAA
     pop es
     jmp .exit_fail
@@ -150,3 +153,5 @@ window_title:   db 'Clock', 0
 win_handle:     dw 0
 content_x:      dw 0
 content_y:      dw 0
+content_w:      dw 0
+content_h:      dw 0
