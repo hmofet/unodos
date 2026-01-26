@@ -121,8 +121,22 @@ int_80_handler:
     jmp word [cs:syscall_func]
 
 .return_point:
-    ; Function returned, restore caller's DS
+    ; Function returned - preserve CF from function in return FLAGS
+    ; Stack after pop ds will be: [IP] [CS] [FLAGS]
+    pushf                           ; Save function's FLAGS (has CF result)
+    pop ax                          ; AX = function's FLAGS
     pop ds                          ; Restore caller's DS
+    ; Now modify FLAGS on stack to preserve CF from function
+    push bp
+    mov bp, sp
+    test ax, 0x0001                 ; Was CF set by function?
+    jz .cf_clear
+    or word [bp+6], 0x0001          ; Set CF in return FLAGS
+    jmp .iret_done
+.cf_clear:
+    and word [bp+6], 0xFFFE         ; Clear CF in return FLAGS
+.iret_done:
+    pop bp
     iret
 
 .invalid_function:
@@ -3038,7 +3052,8 @@ win_destroy_stub:
     push si
     push ds
 
-    ; Validate handle
+    ; Window handle is in AL (AH has function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, use AL as window handle
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
@@ -3098,7 +3113,8 @@ win_draw_stub:
     push es
     push ds
 
-    ; Validate handle
+    ; Window handle is in AL (AH has function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, use AL as window handle
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
@@ -3191,6 +3207,8 @@ win_focus_stub:
     push cx
     push ds
 
+    ; Window handle is in AL (AH has function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, use AL as window handle
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
@@ -3230,6 +3248,8 @@ win_move_stub:
     push bp
     push ds
 
+    ; Window handle is in AL (AH has function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, use AL as window handle
     mov [.new_x], bx
     mov [.new_y], cx
     mov [.handle], ax
@@ -3299,6 +3319,8 @@ win_get_content_stub:
     push di
     push ds
 
+    ; Window handle is in AL (AH has function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, use AL as window handle
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
