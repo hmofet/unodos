@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 033 - Fixed filename format for fat12_open (use dot-separated)
+; Build 034 - Fixed fat12_open DS segment issue
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
