@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Build 026 - Display actual time
+; Build 027 - Fix time updates
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -56,30 +56,33 @@ entry:
     ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
     mov ah, 02h
     int 1Ah
-    jc .skip_update                 ; RTC not available or busy
+    ; Ignore CF - some BIOSes set it during RTC update, values still valid
+
+    ; Save RTC values immediately (before any calls clobber them)
+    mov [cs:rtc_hours], ch
+    mov [cs:rtc_mins], cl
+    mov [cs:rtc_secs], dh
 
     ; Convert BCD time to ASCII string
-    ; Hours (CH)
-    mov al, ch
+    ; Hours
+    mov al, [cs:rtc_hours]
     call .bcd_to_ascii
     mov [cs:time_str], ah           ; Tens digit
     mov [cs:time_str+1], al         ; Ones digit
 
-    ; Minutes (CL)
-    mov al, cl
+    ; Minutes
+    mov al, [cs:rtc_mins]
     call .bcd_to_ascii
     mov [cs:time_str+3], ah         ; Tens digit
     mov [cs:time_str+4], al         ; Ones digit
 
-    ; Seconds (DH)
-    mov al, dh
+    ; Seconds
+    mov al, [cs:rtc_secs]
     call .bcd_to_ascii
     mov [cs:time_str+6], ah         ; Tens digit
     mov [cs:time_str+7], al         ; Ones digit
 
     ; Draw time string at content area + offset for centering
-    ; Time string "HH:MM:SS" = 8 chars * 8 pixels = 64 pixels
-    ; Content width ~118, so offset ~27 to center
     mov bx, [cs:content_x]
     add bx, 27                      ; Center horizontally
     mov cx, [cs:content_y]
@@ -88,7 +91,6 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-.skip_update:
     ; Check for keypress (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
@@ -99,8 +101,8 @@ entry:
     je .exit_ok
 
 .no_event:
-    ; Delay loop (~100ms) to avoid hammering RTC
-    mov cx, 0xFFFF
+    ; Short delay - just enough to not spin too fast
+    mov cx, 0x4000
 .delay:
     loop .delay
 
@@ -136,3 +138,6 @@ win_handle:     dw 0
 content_x:      dw 0
 content_y:      dw 0
 time_str:       db '00:00:00', 0
+rtc_hours:      db 0
+rtc_mins:       db 0
+rtc_secs:       db 0
