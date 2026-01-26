@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Simplified debug version - Build 023
+; Simplified debug version - Build 024
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -40,9 +40,19 @@ entry:
     jc .win_create_failed
     mov [cs:win_handle], ax
 
-    ; SKIP win_get_content - use hardcoded values to test
-    ; Window at X=100, Y=60, title bar=10px
-    ; Content should be at X=101, Y=71
+    ; DEBUG: Draw marker at VERY TOP of screen (Y=0, X=0)
+    ; This should be visible NO MATTER WHAT
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 0                       ; Y=0 (even), X=0
+    mov byte [es:di], 0xFF          ; White at top-left
+    mov byte [es:di+1], 0xFF
+    mov byte [es:di+2], 0xFF
+    mov byte [es:di+3], 0xFF
+    mov byte [es:di+4], 0xFF
+    pop es
+
     mov word [cs:content_x], 105
     mov word [cs:content_y], 75
 
