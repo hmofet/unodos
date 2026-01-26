@@ -127,6 +127,18 @@ entry:
     mov [cs:content_w], dx
     mov [cs:content_h], si
 
+    ; DEBUG: Draw test string immediately after window creation
+    ; This tests if gfx_draw_string_stub works from app at all
+    mov bx, [cs:content_x]
+    add bx, 10
+    mov cx, [cs:content_y]
+    add cx, 5
+    mov ax, cs
+    mov ds, ax
+    mov si, test_msg                ; "TEST" string
+    mov ah, API_GFX_DRAW_STRING
+    call call_kernel_api
+
     ; Main loop
 .main_loop:
     ; DEBUG: Show loop is running - increment a pixel at Y=88
@@ -327,6 +339,7 @@ bcd_to_ascii:
 debug_msg:      db 'APP RUNNING', 0
 window_title:   db 'Clock', 0
 time_string:    db '00:00:00', 0
+test_msg:       db 'TEST', 0
 
 our_seg:        dw 0
 win_handle:     dw 0
