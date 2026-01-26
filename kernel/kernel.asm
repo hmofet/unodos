@@ -2847,7 +2847,7 @@ app_load_stub:
 .code_off:     dw 0
 
 ; app_run_stub - Execute loaded application
-; Input: AX = App handle (0-15)
+; Input: AL = App handle (0-15) - only AL used, AH ignored (for INT 0x80 compatibility)
 ; Output: CF clear on success, AX = return value from app
 ;         CF set on error, AX = error code
 ; Preserves: None (registers may be modified by app)
@@ -2859,7 +2859,8 @@ app_run_stub:
     push di
     push bp
 
-    ; Validate app handle
+    ; Validate app handle (use only AL - AH may contain function number from INT 0x80)
+    xor ah, ah                      ; Clear AH, AX = handle
     cmp ax, APP_MAX_COUNT
     jae .invalid_handle
 
