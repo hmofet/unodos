@@ -1,12 +1,38 @@
 # UnoDOS Development Session Summary
 **Last Updated:** 2026-01-26
 **Current Version:** v3.12.0
-**Current Build:** 029
-**Status:** Desktop Launcher implementation complete - awaiting test
+**Current Build:** 033
+**Status:** Desktop Launcher with app loading - awaiting test
 
 ---
 
 ## Latest Session (2026-01-26) - Desktop Launcher
+
+### Launcher App Loading Fix (Build 033)
+
+**Fixed:** Filename format mismatch causing "Load failed!" error.
+
+**Root Cause:** The launcher's menu_data used raw 8.3 FAT format ('CLOCK   BIN') but
+`fat12_open` expects dot-separated format ('CLOCK.BIN\0'). The kernel's FAT12 code
+converts "NAME.EXT" to 8.3 internally.
+
+**Fix:** Changed launcher menu_data from:
+```asm
+db 'CLOCK   BIN'                ; Wrong: raw 8.3 format
+```
+To:
+```asm
+db 'CLOCK.BIN', 0               ; Correct: dot-separated, null-terminated
+```
+
+### Previous Fixes (Builds 030-032)
+
+| Build | Issue | Root Cause | Fix |
+|-------|-------|------------|-----|
+| 030 | Menu not showing | draw_menu stack corruption | Rewrite with memory variables |
+| 031 | App load failed | app_load_stub used DS after INT 0x80 changed it | Use caller_ds variable |
+| 032 | App doesn't run | app_run_stub used AX (AH=18 function#) as handle | Clear AH before validation |
+| 033 | Load failed | Filename format mismatch | Use 'NAME.EXT\0' format |
 
 ### Desktop Launcher (Build 029)
 
@@ -24,7 +50,7 @@
 - Added `register_shell_stub` (API 25) for shell registration
 
 **New Files:**
-- `apps/launcher.asm` - Desktop launcher application (578 bytes)
+- `apps/launcher.asm` - Desktop launcher application (616 bytes)
 
 **Launcher Features:**
 - Window-based menu UI
