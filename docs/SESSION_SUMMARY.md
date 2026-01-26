@@ -1,16 +1,65 @@
 # UnoDOS Development Session Summary
 **Last Updated:** 2026-01-26
 **Current Version:** v3.12.0
-**Current Build:** 019
-**Status:** Clock app fix ready for hardware testing
+**Current Build:** 024
+**Status:** Debugging clock app - window content area empty
 
 ---
 
-## Latest Session (2026-01-26)
+## Latest Session (2026-01-26) - Continued
+
+### Clock App Window Content Empty (Builds 020-024)
+
+**Problem:** Clock app title bar shows "Clock" correctly (ORG 0 fix worked!), but the window content area is empty - no time displayed, no debug markers visible inside window.
+
+**Debugging Progress:**
+
+| Build | Change | Result |
+|-------|--------|--------|
+| 020 | Fixed INT 0x80 CF preservation, window handle in AL | Load: Fail 3 |
+| 020a | Fixed Makefile to use HELLO.BIN filename | Clock title works, content empty |
+| 021 | Added "TEST" string draw after win_get_content | No TEST visible |
+| 022 | Added direct video memory marker at content coords | Pink marker at WRONG location (top-middle) |
+| 023 | Bypassed win_get_content, hardcoded X=105, Y=75 | Still no markers inside window |
+| 024 | Added marker at Y=0, X=0 (very top-left of screen) | **AWAITING TEST** |
+
+**Current Theory:**
+Either the app is crashing/stuck after win_create, OR the direct video memory writes have some issue. Build 024 adds a marker at absolute position (0,0) to verify if app code runs at all after win_create.
+
+**Next Steps:**
+1. Test Build 024 - look for white pixels at very top-left corner of screen
+2. If marker appears: Issue is with content coordinates - investigate calculation
+3. If marker doesn't appear: App crashes at or after win_create - investigate stack/segment issue
+
+### Fixes Applied This Session
+
+**INT 0x80 Carry Flag Preservation:**
+```asm
+; Before IRET, update FLAGS on stack to preserve CF
+mov bp, sp
+mov ax, [bp+4]          ; Get saved FLAGS
+jc .set_carry
+and ax, 0xFFFE          ; Clear CF
+jmp .store_flags
+.set_carry:
+or ax, 0x0001           ; Set CF
+.store_flags:
+mov [bp+4], ax          ; Store modified FLAGS
+```
+
+**Window Handle Extraction:**
+Window functions were receiving AX but AH contains function number. Fixed by adding `xor ah, ah` to use only AL as handle.
+
+**Filename Mismatch:**
+Kernel looks for HELLO.BIN but Makefile was creating CLOCK.BIN. Fixed Makefile to pass HELLO.BIN to create_app_test.py.
+
+---
+
+## Previous Session (2026-01-26)
 
 ### Clock App Crash Fixed (Build 019)
 
-**Problem:** Clock app crashed when loaded. Title bar showed garbage "SQRMU" instead of "Clock", no time displayed.
+**Problem:** Clock app crashed when loaded. Title bar showed garbage "SQRMU" instead of "Clock".
 
 **Root Cause:** Apps use `[ORG 0x0000]`, meaning all data references are relative to offset 0. But the app loader was using the heap allocator which returned non-zero offsets (e.g., 0x1400:4). When the app referenced `window_title` at offset 0xDC, it pointed to wrong memory.
 
@@ -19,7 +68,7 @@
 - Apps always loaded at offset 0 within that segment
 - This matches the `[ORG 0x0000]` directive in app source files
 
-**Memory Map (Updated):**
+**Memory Map:**
 ```
 0x0000 - 0x0FFF  : BIOS/IVT
 0x1000 - 0x13FF  : Kernel code and data
@@ -27,20 +76,23 @@
 0x2000 - 0x2FFF  : App code segment (apps loaded at offset 0)
 ```
 
-### Testing Procedure
+---
+
+## Testing Procedure
 
 ```powershell
 git pull
-.\tools\boot.ps1
+.\tools\boot.ps1    # Write UnoDOS to floppy A:
+.\tools\clock.ps1   # Write clock app to floppy B: (second USB floppy)
 ```
 
-Boot from floppy, press 'L', swap to clock floppy, press key. Clock app should show "Clock" title and display time.
+Boot from floppy A:, press 'L', swap to clock floppy, press key. Clock app should show "Clock" title and display time.
 
 ---
 
-## Previous Session (2026-01-25)
+## Previous Sessions
 
-### Window Manager Completed (Builds 010-014)
+### Window Manager Completed (2026-01-25, Builds 010-014)
 
 **Window Manager API (6 functions):**
 - win_create_stub (API 19) - Create window with title and border
@@ -58,35 +110,7 @@ Boot from floppy, press 'L', swap to clock floppy, press key. Clock app should s
 | White on white | Title invisible | Same color as bar | Inverted text | 013 |
 | Far call crash | App crashes | near ret vs far call | INT 0x80 dispatch | 014 |
 
-### Clock Application Created
-
-First real windowed application:
-- apps/clock.asm - Displays RTC time (HH:MM:SS) in a window
-- Uses Window Manager API via INT 0x80
-- Reads BIOS RTC via INT 1Ah
-- Responds to ESC key to exit
-- Size: 300 bytes
-
-### INT 0x80 System Call Interface
-
-Apps call kernel functions via INT 0x80:
-```asm
-mov ah, 19              ; API_WIN_CREATE
-mov bx, 100             ; X position
-mov cx, 60              ; Y position
-mov dx, 120             ; Width
-mov si, 50              ; Height
-mov al, 0x03            ; Flags
-int 0x80                ; Create window
-jc error                ; CF set on error
-mov [win_handle], ax    ; AX = window handle
-```
-
----
-
-## Foundation Complete (2026-01-23)
-
-### v3.10.0 - Foundation Layer
+### Foundation Complete (2026-01-23)
 
 All components complete:
 - System Call Infrastructure (INT 0x80 + API dispatch, 25 functions)
@@ -98,7 +122,7 @@ All components complete:
 - Application Loader
 - Window Manager
 
-### Kernel Metrics
+**Kernel Metrics:**
 - **Total:** 28 KB (56 sectors)
 - **Used:** ~5.1 KB (18%)
 - **Free:** ~23 KB (82%)
@@ -143,7 +167,7 @@ All components complete:
 - CPU: 486DX4-75
 - Display: VGA (CGA 320x200 mode used)
 - Storage: 1.44MB floppy (A:), HDD (C:) - NO drive B:
-- Testing via floppy disk swap
+- Testing via USB floppy drives and disk swap
 
 ---
 
@@ -151,24 +175,32 @@ All components complete:
 
 | Build | Date | Changes |
 |-------|------|---------|
+| 024 | 2026-01-26 | Debug: Y=0 marker to verify app execution |
+| 023 | 2026-01-26 | Debug: Simplified app, hardcoded coords |
+| 022 | 2026-01-26 | Debug: Direct video memory marker |
+| 021 | 2026-01-26 | Debug: Added TEST string draw |
+| 020 | 2026-01-26 | Fixed INT 0x80 CF preservation, window handle |
 | 019 | 2026-01-26 | Fix app loader to use segment 0x2000 offset 0 |
 | 018 | 2026-01-26 | Add caller_ds/caller_es segment tracking |
 | 014 | 2026-01-25 | INT 0x80 dispatch, clock app working |
-| 013 | 2026-01-25 | Inverted text for title bars |
-| 012 | 2026-01-25 | Title segment fix |
-| 011 | 2026-01-25 | Coordinate swap fix |
-| 010 | 2026-01-25 | Initial Window Manager |
 
 ---
 
-## Next Steps
+## Current Debug State (Build 024)
 
-1. **Test Build 019** on HP Omnibook - verify clock app works
-2. **Mouse Support** (v3.13.0) - PS/2 mouse driver
-3. **Window Dragging** (v3.14.0) - Mouse drag to move windows
-4. **More Applications** - File manager, text editor
+**Clock app (apps/clock.asm) contains:**
+1. Create window at X=100, Y=60, W=120, H=50
+2. Draw white marker at Y=0, X=0 (very top-left) - **KEY TEST**
+3. Hardcoded content coords X=105, Y=75
+4. Draw pink marker at content coords
+5. Draw white markers at fixed position
+6. Main loop waits for ESC to exit
+
+**What to look for:**
+- White pixels at top-left corner = App runs after win_create
+- No white pixels = App crashes/stuck at win_create
 
 ---
 
 *Foundation Layer: COMPLETE*
-*Core Services: IN PROGRESS (App Loader + Window Manager done)*
+*Core Services: IN PROGRESS (Debugging clock app content display)*
