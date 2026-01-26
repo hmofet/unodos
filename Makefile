@@ -173,10 +173,10 @@ test-app: $(FLOPPY_IMG) build/app-test.img check-qemu
 		-boot a \
 		-display gtk
 
-# Create clock app floppy image (FAT12 with CLOCK.BIN)
+# Create clock app floppy image (FAT12 with HELLO.BIN - kernel expects this name)
 build/clock-app.img: $(CLOCK_BIN)
 	@echo "Creating clock app floppy image..."
-	python3 tools/create_app_test.py $@ $(CLOCK_BIN)
+	python3 tools/create_app_test.py $@ $(CLOCK_BIN) HELLO.BIN
 
 # Test clock application with QEMU
 test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
