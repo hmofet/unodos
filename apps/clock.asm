@@ -47,25 +47,25 @@ entry:
     mov ax, cs
     mov [cs:our_seg], ax
 
-    ; DEBUG: Skip INT 0x80 and draw directly to video memory
-    ; to prove string access works from app segment
+    ; DEBUG: Test string access from app segment
     mov ax, cs
     mov ds, ax
     mov si, debug_msg
 
-    ; Draw first char of debug_msg directly to video memory
-    ; This tests if DS:SI actually points to valid data
+    ; Read first character and write to Y=84 (even scanline)
+    ; Y=84 offset = (84/2)*80 = 42*80 = 3360 = 0x0D20
     push es
     push di
     mov ax, 0xB800
     mov es, ax
-
-    ; Read first character from string
-    lodsb                           ; AL = first char of debug_msg ('A' = 0x41)
-
-    ; Write AL value as pattern to video memory at Y=82
-    ; If we see pattern 0x41 (alternating), string access works
-    mov di, 0x0C80 + 160 + 10       ; Y=82 (below the bars)
+    lodsb                           ; AL = first char ('A' = 0x41)
+    mov di, 0x0D20 + 10             ; Y=84, X=40
+    mov [es:di], al
+    mov [es:di+1], al
+    mov [es:di+2], al
+    mov [es:di+3], al
+    ; Also Y=85 (odd scanline) at 0x2000 base
+    mov di, 0x2000 + 0x0D20 + 10    ; Y=85
     mov [es:di], al
     mov [es:di+1], al
     mov [es:di+2], al
@@ -73,13 +73,22 @@ entry:
     pop di
     pop es
 
-    ; Now try the INT 0x80 call
-    mov ax, cs
-    mov ds, ax
-    mov si, debug_msg
-    mov bx, 4                       ; X
-    mov cx, 70                      ; Y
-    mov ah, API_GFX_DRAW_STRING
+    ; Test simpler API: draw single pixel via INT 0x80
+    ; API 0 = gfx_draw_pixel_stub: CX=X, BX=Y, AL=color
+    mov cx, 160                     ; X = center of screen
+    mov bx, 100                     ; Y = center of screen
+    mov al, 3                       ; color = white
+    mov ah, 0                       ; API_GFX_DRAW_PIXEL
+    int 0x80
+
+    ; Draw a few more pixels to make it visible
+    mov cx, 161
+    int 0x80
+    mov cx, 162
+    int 0x80
+    mov cx, 163
+    int 0x80
+    mov cx, 164
     int 0x80
 
     ; DEBUG 2: Write after INT 0x80 to prove it returned
