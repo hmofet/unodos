@@ -42,10 +42,10 @@ try {
     $stream.Close()
 }
 
-Write-Host "Done! Clock app floppy ready (contains CLOCK.BIN)." -ForegroundColor Green
+Write-Host "Done! Clock app floppy ready (contains HELLO.BIN)." -ForegroundColor Green
 Write-Host ""
 Write-Host "To test:" -ForegroundColor Yellow
 Write-Host "  1. Boot UnoDOS from boot floppy"
-Write-Host "  2. Type 'L' to list files on B:"
-Write-Host "  3. Type 'R CLOCK.BIN' to run the clock"
-Write-Host "  4. Press ESC to exit"
+Write-Host "  2. Press 'L' to load app (loads HELLO.BIN)"
+Write-Host "  3. Swap floppies when prompted"
+Write-Host "  4. Press ESC to exit clock app"
