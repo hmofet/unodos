@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 030 - Fixed draw_menu stack corruption
+; Build 033 - Fixed filename format for fat12_open (use dot-separated)
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -262,11 +262,11 @@ draw_menu:
     add word [cs:draw_x], 16        ; Move X past indicator
 
 .draw_name:
-    ; Get display name pointer: menu_data + (index * 24) + 11
+    ; Get display name pointer: menu_data + (index * 24) + 12
     mov al, [cs:draw_index]
     mov cl, 24
     mul cl                          ; AX = index * 24
-    add ax, menu_data + 11          ; Point to display name
+    add ax, menu_data + 12          ; Point to display name
     mov si, ax
 
     ; Draw the display name
@@ -357,16 +357,19 @@ selected:       db 0
 app_handle:     dw 0
 last_error:     db 0
 
-; Menu data: 11-byte FAT name + 13-byte display name (null-terminated)
+; Menu data: 12-byte filename + 12-byte display name (null-terminated)
 ; Each entry is 24 bytes
+; Filename format: "NAME.EXT", 0 (fat12_open expects dot-separated, null-terminated)
 menu_data:
-    db 'CLOCK   BIN'                ; FAT filename (11 bytes, space-padded)
+    db 'CLOCK.BIN', 0               ; Filename (10 bytes with null)
+    db 0, 0                         ; Padding to 12 bytes
     db 'Clock', 0                   ; Display name (null-terminated)
-    times 7 db 0                    ; Padding to 24 bytes
+    times 6 db 0                    ; Padding to 24 bytes
 
-    db 'HELLO   BIN'
-    db 'Hello Test', 0
-    times 2 db 0
+    db 'HELLO.BIN', 0               ; Filename (10 bytes with null)
+    db 0, 0                         ; Padding to 12 bytes
+    db 'Hello Test', 0              ; Display name
+    db 0                            ; Padding to 24 bytes
 
 menu_count:     db 2
 
