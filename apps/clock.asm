@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Build 025 - Test win_get_content fix
+; Build 026 - Display actual time
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -37,68 +37,59 @@ entry:
     mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
     mov ah, API_WIN_CREATE
     int 0x80
-    jc .win_create_failed
-    mov [cs:win_handle], al         ; Save handle (only low byte needed)
+    jc .exit_fail
+    mov [cs:win_handle], al         ; Save handle
 
-    ; DEBUG: Draw marker at VERY TOP of screen (Y=0) to show we got here
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov di, 0
-    mov byte [es:di], 0xFF          ; White at top-left
-    mov byte [es:di+1], 0xFF
-    mov byte [es:di+2], 0xFF
-    pop es
-
-    ; NOW TEST win_get_content with the REAL handle
-    mov al, [cs:win_handle]         ; Window handle in AL
+    ; Get content area coordinates
+    mov al, [cs:win_handle]
     mov ah, API_WIN_GET_CONTENT
     int 0x80
-    jc .get_content_failed
+    jc .exit_fail
 
-    ; win_get_content returns:
-    ; BX = Content X, CX = Content Y, DX = Content Width, SI = Content Height
+    ; Save content area (BX=X, CX=Y, DX=Width, SI=Height)
     mov [cs:content_x], bx
     mov [cs:content_y], cx
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
 
-    ; Draw marker at returned content coords using direct video memory
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    ; Calculate video offset for content_y, content_x
-    mov ax, [cs:content_y]
-    mov bx, ax                      ; Save Y for odd/even check
-    shr ax, 1                       ; Y/2
-    mov cx, 80
-    mul cx                          ; AX = (Y/2) * 80
-    mov di, ax
-    mov ax, [cs:content_x]
-    shr ax, 1
-    shr ax, 1                       ; X/4
-    add di, ax
-    test bx, 1                      ; Was Y odd?
-    jz .even_line
-    add di, 0x2000                  ; Odd scanline offset
-.even_line:
-    ; Draw GREEN marker (0x55 pattern in CGA = green-ish)
-    mov byte [es:di], 0x55
-    mov byte [es:di+1], 0x55
-    mov byte [es:di+2], 0x55
-    pop es
-
-    ; Also draw at row 2 on screen to show win_get_content succeeded
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov di, 80                      ; Y=2 (row 1)
-    mov byte [es:di], 0xFF
-    mov byte [es:di+1], 0xFF
-    pop es
-
-    ; Main loop - just wait for ESC
+    ; Main loop - update time and check for ESC
 .main_loop:
+    ; Read RTC time using BIOS INT 1Ah, AH=02h
+    ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
+    mov ah, 02h
+    int 1Ah
+    jc .skip_update                 ; RTC not available or busy
+
+    ; Convert BCD time to ASCII string
+    ; Hours (CH)
+    mov al, ch
+    call .bcd_to_ascii
+    mov [cs:time_str], ah           ; Tens digit
+    mov [cs:time_str+1], al         ; Ones digit
+
+    ; Minutes (CL)
+    mov al, cl
+    call .bcd_to_ascii
+    mov [cs:time_str+3], ah         ; Tens digit
+    mov [cs:time_str+4], al         ; Ones digit
+
+    ; Seconds (DH)
+    mov al, dh
+    call .bcd_to_ascii
+    mov [cs:time_str+6], ah         ; Tens digit
+    mov [cs:time_str+7], al         ; Ones digit
+
+    ; Draw time string at content area + offset for centering
+    ; Time string "HH:MM:SS" = 8 chars * 8 pixels = 64 pixels
+    ; Content width ~118, so offset ~27 to center
+    mov bx, [cs:content_x]
+    add bx, 27                      ; Center horizontally
+    mov cx, [cs:content_y]
+    add cx, 10                      ; Down a bit from top
+    mov si, time_str
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.skip_update:
+    ; Check for keypress (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
@@ -108,32 +99,23 @@ entry:
     je .exit_ok
 
 .no_event:
-    mov cx, 0x8000
+    ; Delay loop (~100ms) to avoid hammering RTC
+    mov cx, 0xFFFF
 .delay:
     loop .delay
+
     jmp .main_loop
 
-.win_create_failed:
-    ; Draw marker at Y=10 to show win_create failed
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov di, 5*80                    ; Y=10
-    mov byte [es:di], 0xAA          ; Pink
-    mov byte [es:di+1], 0xAA
-    pop es
-    jmp .exit_fail
-
-.get_content_failed:
-    ; Draw marker at Y=14 to show get_content failed
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov di, 7*80                    ; Y=14
-    mov byte [es:di], 0xAA          ; Pink
-    mov byte [es:di+1], 0xAA
-    pop es
-    jmp .exit_fail
+; Convert BCD byte in AL to two ASCII digits
+; Input: AL = BCD byte (e.g., 0x23 for 23)
+; Output: AH = tens digit ASCII, AL = ones digit ASCII
+.bcd_to_ascii:
+    mov ah, al
+    and al, 0x0F                    ; Low nibble (ones)
+    shr ah, 4                       ; High nibble (tens)
+    add al, '0'
+    add ah, '0'
+    ret
 
 .exit_ok:
     xor ax, ax
@@ -153,5 +135,4 @@ window_title:   db 'Clock', 0
 win_handle:     dw 0
 content_x:      dw 0
 content_y:      dw 0
-content_w:      dw 0
-content_h:      dw 0
+time_str:       db '00:00:00', 0
