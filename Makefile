@@ -24,6 +24,7 @@ BUILD_NUMBER := $(shell cat BUILD_NUMBER 2>/dev/null || echo 0)
 # Application binaries
 HELLO_BIN = build/hello.bin
 CLOCK_BIN = build/clock.bin
+LAUNCHER_BIN = build/launcher.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -82,6 +83,9 @@ $(HELLO_BIN): $(APPS_DIR)/hello.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 $(CLOCK_BIN): $(APPS_DIR)/clock.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+$(LAUNCHER_BIN): $(APPS_DIR)/launcher.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 # Create 360KB floppy image (target platform)
@@ -154,10 +158,11 @@ build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
 
 # Build all applications
-apps: $(HELLO_BIN) $(CLOCK_BIN)
+apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN)
 	@echo "Built applications:"
 	@echo "  $(HELLO_BIN) ($$(wc -c < $(HELLO_BIN)) bytes)"
 	@echo "  $(CLOCK_BIN) ($$(wc -c < $(CLOCK_BIN)) bytes)"
+	@echo "  $(LAUNCHER_BIN) ($$(wc -c < $(LAUNCHER_BIN)) bytes)"
 
 # Create app test floppy image (FAT12 with HELLO.BIN)
 build/app-test.img: $(HELLO_BIN)
@@ -184,6 +189,20 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-m 640K \
 		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
 		-drive file=build/clock-app.img,format=raw,if=floppy,index=1 \
+		-boot a \
+		-display gtk
+
+# Create launcher app floppy image (FAT12 with HELLO.BIN=launcher + CLOCK.BIN)
+build/launcher-app.img: $(LAUNCHER_BIN) $(CLOCK_BIN)
+	@echo "Creating launcher app floppy image..."
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) HELLO.BIN $(CLOCK_BIN) CLOCK.BIN
+
+# Test launcher application with QEMU
+test-launcher: $(FLOPPY_144) build/launcher-app.img check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
+		-drive file=build/launcher-app.img,format=raw,if=floppy,index=1 \
 		-boot a \
 		-display gtk
 
