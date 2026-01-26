@@ -24,11 +24,30 @@ entry:
     push ds
     push es
 
+    ; DEBUG: Write directly to video memory to prove app executes
+    ; This avoids INT 0x80 to isolate the problem
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+    mov di, 0x0C80 + 10             ; Y=80, X=40
+    mov byte [es:di], 0xFF          ; White pixels
+    mov byte [es:di+1], 0xFF
+    mov byte [es:di+2], 0xFF
+    mov byte [es:di+3], 0xFF
+    mov di, 0x2000 + 0x0C80 + 10    ; Y=81 (odd line)
+    mov byte [es:di], 0xFF
+    mov byte [es:di+1], 0xFF
+    mov byte [es:di+2], 0xFF
+    mov byte [es:di+3], 0xFF
+    pop di
+    pop es
+
     ; Save our code segment for data access
     mov ax, cs
     mov [cs:our_seg], ax
 
-    ; DEBUG: Draw "APP" at top of screen to prove we're running
+    ; DEBUG: Draw "APP" at top of screen via INT 0x80
     mov bx, 4                       ; X
     mov cx, 70                      ; Y
     mov ax, cs
