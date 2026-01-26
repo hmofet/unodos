@@ -2701,7 +2701,8 @@ app_load_stub:
 .save_seg:
     mov [.target_seg], dh
     mov [.filename_off], si
-    mov ax, ds
+    ; Use caller_ds since DS is now kernel segment after INT 0x80 dispatch
+    mov ax, [caller_ds]
     mov [.filename_seg], ax
 
     ; Step 1: Find free slot in app_table
