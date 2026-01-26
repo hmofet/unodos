@@ -2032,6 +2032,11 @@ fat12_open:
     loop .copy_ext_loop
 
 .name_done:
+    ; Filename has been copied to stack - now set DS to kernel segment
+    ; so we can access kernel variables (root_dir_start, etc.)
+    mov ax, 0x1000
+    mov ds, ax
+
     ; Now search root directory
     ; Root directory starts at sector [root_dir_start]
     ; Each entry is 32 bytes, max 224 entries (14 sectors for 360KB floppy)
