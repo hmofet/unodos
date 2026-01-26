@@ -40,12 +40,11 @@ entry:
     jc .win_create_failed
     mov [cs:win_handle], ax
 
-    ; Get content area bounds
-    mov ah, API_WIN_GET_CONTENT
-    int 0x80
-    jc .get_content_failed
-    mov [cs:content_x], bx
-    mov [cs:content_y], cx
+    ; SKIP win_get_content - use hardcoded values to test
+    ; Window at X=100, Y=60, title bar=10px
+    ; Content should be at X=101, Y=71
+    mov word [cs:content_x], 105
+    mov word [cs:content_y], 75
 
     ; DEBUG: Draw marker at FIXED position (X=110, Y=75)
     ; This is inside the window content area if window is at X=100, Y=60+10(titlebar)=70
