@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Build 027 - Fix time updates
+; Build 028 - Clear before drawing time
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -81,6 +81,17 @@ entry:
     call .bcd_to_ascii
     mov [cs:time_str+6], ah         ; Tens digit
     mov [cs:time_str+7], al         ; Ones digit
+
+    ; Clear time area before drawing (prevents ghosting)
+    ; gfx_clear_area: BX=X, CX=Y, DX=Width, SI=Height
+    mov bx, [cs:content_x]
+    add bx, 27                      ; Same X offset as text
+    mov cx, [cs:content_y]
+    add cx, 10                      ; Same Y offset as text
+    mov dx, 100                     ; Width (8 chars * ~12 pixels)
+    mov si, 10                      ; Height (8 pixel font + margin)
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
 
     ; Draw time string at content area + offset for centering
     mov bx, [cs:content_x]
