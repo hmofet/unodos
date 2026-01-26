@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 029 - Initial launcher with dual segment support
+; Build 030 - Fixed draw_menu stack corruption
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -229,56 +229,53 @@ draw_menu:
     int 0x80
 
     ; Draw each menu item
-    xor cx, cx                      ; CX = item index
+    mov byte [cs:draw_index], 0     ; Item index
+
 .draw_loop:
-    cmp cl, [cs:menu_count]
+    mov al, [cs:draw_index]
+    cmp al, [cs:menu_count]
     jae .draw_help
 
     ; Calculate Y position: content_y + MENU_TOP_PADDING + (index * MENU_ITEM_HEIGHT)
-    mov al, cl
     mov bl, MENU_ITEM_HEIGHT
     mul bl                          ; AX = index * MENU_ITEM_HEIGHT
     add ax, [cs:content_y]
     add ax, MENU_TOP_PADDING
-    push ax                         ; Save Y position
+    mov [cs:draw_y], ax             ; Save Y position
 
     ; Calculate X position
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
+    mov ax, [cs:content_x]
+    add ax, MENU_LEFT_PADDING
+    mov [cs:draw_x], ax             ; Save X position
 
     ; Check if this item is selected
-    cmp cl, [cs:selected]
-    jne .draw_normal
+    mov al, [cs:draw_index]
+    cmp al, [cs:selected]
+    jne .draw_name
 
     ; Draw selection indicator "> "
-    push cx
-    pop cx                          ; CX preserved
+    mov bx, [cs:draw_x]
+    mov cx, [cs:draw_y]
     mov si, indicator
-    pop cx                          ; CX = Y position
-    push cx                         ; Re-save for name draw
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    add bx, 16                      ; Move X past indicator
+    add word [cs:draw_x], 16        ; Move X past indicator
 
-.draw_normal:
+.draw_name:
     ; Get display name pointer: menu_data + (index * 24) + 11
-    push cx                         ; Save index
-    mov al, cl
+    mov al, [cs:draw_index]
     mov cl, 24
     mul cl                          ; AX = index * 24
     add ax, menu_data + 11          ; Point to display name
     mov si, ax
-    pop cx                          ; Restore index
 
     ; Draw the display name
-    pop ax                          ; AX = Y position
-    push cx                         ; Save index
-    mov cx, ax                      ; CX = Y
+    mov bx, [cs:draw_x]
+    mov cx, [cs:draw_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    pop cx                          ; Restore index
 
-    inc cl
+    inc byte [cs:draw_index]
     jmp .draw_loop
 
 .draw_help:
@@ -299,6 +296,11 @@ draw_menu:
 
     popa
     ret
+
+; Temporary variables for draw_menu
+draw_index: db 0
+draw_x:     dw 0
+draw_y:     dw 0
 
 ; ============================================================================
 ; draw_error - Draw error message (brief, then clears)
