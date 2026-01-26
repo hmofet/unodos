@@ -47,12 +47,38 @@ entry:
     mov ax, cs
     mov [cs:our_seg], ax
 
-    ; DEBUG: Draw "APP" at top of screen via INT 0x80
-    mov bx, 4                       ; X
-    mov cx, 70                      ; Y
+    ; DEBUG: Skip INT 0x80 and draw directly to video memory
+    ; to prove string access works from app segment
     mov ax, cs
     mov ds, ax
     mov si, debug_msg
+
+    ; Draw first char of debug_msg directly to video memory
+    ; This tests if DS:SI actually points to valid data
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Read first character from string
+    lodsb                           ; AL = first char of debug_msg ('A' = 0x41)
+
+    ; Write AL value as pattern to video memory at Y=82
+    ; If we see pattern 0x41 (alternating), string access works
+    mov di, 0x0C80 + 160 + 10       ; Y=82 (below the bars)
+    mov [es:di], al
+    mov [es:di+1], al
+    mov [es:di+2], al
+    mov [es:di+3], al
+    pop di
+    pop es
+
+    ; Now try the INT 0x80 call
+    mov ax, cs
+    mov ds, ax
+    mov si, debug_msg
+    mov bx, 4                       ; X
+    mov cx, 70                      ; Y
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
