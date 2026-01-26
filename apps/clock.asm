@@ -127,17 +127,38 @@ entry:
     mov [cs:content_w], dx
     mov [cs:content_h], si
 
-    ; DEBUG: Draw test string immediately after window creation
-    ; This tests if gfx_draw_string_stub works from app at all
-    mov bx, [cs:content_x]
-    add bx, 10
-    mov cx, [cs:content_y]
-    add cx, 5
-    mov ax, cs
-    mov ds, ax
-    mov si, test_msg                ; "TEST" string
-    mov ah, API_GFX_DRAW_STRING
-    call call_kernel_api
+    ; DEBUG: Draw directly to video memory at content area
+    ; This tests if content_x/content_y values are correct
+    push es
+    push di
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Draw white pixels at content_x, content_y (should be inside window)
+    mov ax, [cs:content_y]
+    shr ax, 1                       ; Y/2
+    mov bx, 80
+    mul bx                          ; AX = (Y/2) * 80
+    mov di, ax
+    mov ax, [cs:content_x]
+    shr ax, 1
+    shr ax, 1                       ; X/4
+    add di, ax                      ; DI = offset
+
+    ; Check if odd scanline
+    mov ax, [cs:content_y]
+    test ax, 1
+    jz .even_line
+    add di, 0x2000
+.even_line:
+    ; Draw a white marker (should appear inside window content area)
+    mov byte [es:di], 0xFF
+    mov byte [es:di+1], 0xFF
+    mov byte [es:di+2], 0xFF
+    mov byte [es:di+3], 0xFF
+    mov byte [es:di+4], 0xFF
+    pop di
+    pop es
 
     ; Main loop
 .main_loop:
