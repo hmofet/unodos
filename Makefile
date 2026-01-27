@@ -192,17 +192,21 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-boot a \
 		-display gtk
 
-# Create launcher app floppy image (FAT12 with HELLO.BIN=launcher + CLOCK.BIN)
-build/launcher-app.img: $(LAUNCHER_BIN) $(CLOCK_BIN)
-	@echo "Creating launcher app floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) HELLO.BIN $(CLOCK_BIN) CLOCK.BIN
+# Create launcher app floppy image (FAT12 with HELLO.BIN=launcher + CLOCK.BIN + TEST.BIN)
+build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN)
+	@echo "Creating launcher floppy image..."
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) HELLO.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN
+
+# Legacy alias
+build/launcher-app.img: build/launcher-floppy.img
+	cp $< $@
 
 # Test launcher application with QEMU
-test-launcher: $(FLOPPY_144) build/launcher-app.img check-qemu
+test-launcher: $(FLOPPY_144) build/launcher-floppy.img check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
 		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
-		-drive file=build/launcher-app.img,format=raw,if=floppy,index=1 \
+		-drive file=build/launcher-floppy.img,format=raw,if=floppy,index=1 \
 		-boot a \
 		-display gtk
 

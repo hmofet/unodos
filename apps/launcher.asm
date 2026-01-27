@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 039 - Drain event queue at startup to prevent auto-launch
+; Build 040 - Fix TEST.BIN naming to avoid recursive HELLO.BIN load
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -430,10 +430,10 @@ menu_data:
     db 'Clock', 0                   ; Display name (null-terminated)
     times 6 db 0                    ; Padding to 24 bytes
 
-    db 'HELLO.BIN', 0               ; Filename (10 bytes with null)
+    db 'TEST.BIN', 0, 0              ; Filename (10 bytes with null)
     db 0, 0                         ; Padding to 12 bytes
-    db 'Hello Test', 0              ; Display name
-    db 0                            ; Padding to 24 bytes
+    db 'Test App', 0                ; Display name
+    db 0, 0, 0                      ; Padding to 24 bytes
 
 menu_count:     db 2
 
