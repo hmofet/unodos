@@ -25,6 +25,7 @@ BUILD_NUMBER := $(shell cat BUILD_NUMBER 2>/dev/null || echo 0)
 HELLO_BIN = build/hello.bin
 CLOCK_BIN = build/clock.bin
 LAUNCHER_BIN = build/launcher.bin
+BROWSER_BIN = build/browser.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -86,6 +87,9 @@ $(CLOCK_BIN): $(APPS_DIR)/clock.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 $(LAUNCHER_BIN): $(APPS_DIR)/launcher.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+$(BROWSER_BIN): $(APPS_DIR)/browser.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 # Create 360KB floppy image (target platform)
@@ -158,11 +162,12 @@ build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
 
 # Build all applications
-apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN)
+apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN)
 	@echo "Built applications:"
 	@echo "  $(HELLO_BIN) ($$(wc -c < $(HELLO_BIN)) bytes)"
 	@echo "  $(CLOCK_BIN) ($$(wc -c < $(CLOCK_BIN)) bytes)"
 	@echo "  $(LAUNCHER_BIN) ($$(wc -c < $(LAUNCHER_BIN)) bytes)"
+	@echo "  $(BROWSER_BIN) ($$(wc -c < $(BROWSER_BIN)) bytes)"
 
 # Create app test floppy image (FAT12 with HELLO.BIN)
 build/app-test.img: $(HELLO_BIN)
@@ -192,10 +197,10 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-boot a \
 		-display gtk
 
-# Create launcher app floppy image (FAT12 with LAUNCHER.BIN + CLOCK.BIN + TEST.BIN)
-build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN)
+# Create launcher app floppy image (FAT12 with LAUNCHER.BIN + apps)
+build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN)
 	@echo "Creating launcher floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN
 
 # Legacy alias
 build/launcher-app.img: build/launcher-floppy.img
