@@ -23,14 +23,14 @@ try {
 }
 Pop-Location
 
-# Find launcher-app image
-$ImagePath = "$projectDir\build\launcher-app.img"
+# Find launcher floppy image
+$ImagePath = "$projectDir\build\launcher-floppy.img"
 if (-not (Test-Path $ImagePath)) {
-    Write-Error "launcher-app.img not found in build directory"
+    Write-Error "launcher-floppy.img not found in build directory"
     exit 1
 }
 
-Write-Host "Writing launcher-app.img to ${DriveLetter}:..." -ForegroundColor Cyan
+Write-Host "Writing launcher-floppy.img to ${DriveLetter}:..." -ForegroundColor Cyan
 
 $drivePath = "\\.\${DriveLetter}:"
 $imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
