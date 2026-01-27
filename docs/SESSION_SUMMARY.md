@@ -1,7 +1,7 @@
 # UnoDOS Development Session Summary
 **Last Updated:** 2026-01-26
 **Current Version:** v3.12.0
-**Current Build:** 034
+**Current Build:** 035
 **Status:** Desktop Launcher with app loading - awaiting test
 
 ---
@@ -34,6 +34,7 @@ db 'CLOCK.BIN', 0               ; Correct: dot-separated, null-terminated
 | 032 | App doesn't run | app_run_stub used AX (AH=18 function#) as handle | Clear AH before validation |
 | 033 | Load failed | Filename format mismatch | Use 'NAME.EXT\0' format |
 | 034 | Load failed | fat12_open accessed kernel vars with wrong DS | Set DS=0x1000 after filename copy |
+| 035 | Load failed | app_load_stub passed drive in DL not AL | Use AL for fs_mount_stub call |
 
 ### Desktop Launcher (Build 029)
 
