@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 037 - Debug: show error code on load failure
+; Build 038 - Fix error display, fix app_load DS bug
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -347,7 +347,8 @@ draw_y:     dw 0
 draw_error:
     pusha
 
-    ; Draw error message
+    ; Draw error message with error code
+    ; Format: "Err: X" where X is the error code digit
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
@@ -357,8 +358,18 @@ draw_error:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw error code as digit after message
-    add bx, 104                     ; After "Load failed! "
+    ; Draw error code on next line
+    mov bx, [cs:content_x]
+    add bx, MENU_LEFT_PADDING
+    add cx, 10                      ; Next line
+    mov si, error_code_label
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw the error digit
+    mov bx, [cs:content_x]
+    add bx, MENU_LEFT_PADDING
+    add bx, 48                      ; After "Code: "
     mov al, [cs:last_error]
     add al, '0'                     ; Convert to ASCII digit
     mov ah, API_GFX_DRAW_CHAR
@@ -424,3 +435,4 @@ indicator:      db '> ', 0
 help_line1:     db 'W/S: Select', 0
 help_line2:     db 'Enter: Run', 0
 error_msg:      db 'Load failed!', 0
+error_code_label: db 'Code: ', 0

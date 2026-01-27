@@ -2740,9 +2740,10 @@ app_load_stub:
     jc .mount_failed
 
     ; Step 3: Open file
+    ; IMPORTANT: Read filename_off BEFORE changing DS, since local vars are in kernel segment
+    mov si, [.filename_off]
     mov ax, [.filename_seg]
     mov ds, ax
-    mov si, [.filename_off]
     call fs_open_stub
     jc .file_not_found
 
