@@ -2734,7 +2734,8 @@ app_load_stub:
     mov [.slot_off], di
 
     ; Step 2: Mount filesystem
-    mov dl, [.drive]
+    mov al, [.drive]                ; AL = drive number (fs_mount_stub expects AL, not DL!)
+    xor ah, ah                      ; AH = 0 (auto-detect driver)
     call fs_mount_stub
     jc .mount_failed
 
