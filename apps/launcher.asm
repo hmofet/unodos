@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 036 - Debug: display event type and key code
+; Build 037 - Debug: show error code on load failure
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -341,7 +341,8 @@ draw_x:     dw 0
 draw_y:     dw 0
 
 ; ============================================================================
-; draw_error - Draw error message (brief, then clears)
+; draw_error - Draw error message with error code
+; Error codes: 1=no slot, 2=mount fail, 3=file not found, 4=read fail
 ; ============================================================================
 draw_error:
     pusha
@@ -354,6 +355,13 @@ draw_error:
     sub cx, 36                      ; Above help text
     mov si, error_msg
     mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw error code as digit after message
+    add bx, 104                     ; After "Load failed! "
+    mov al, [cs:last_error]
+    add al, '0'                     ; Convert to ASCII digit
+    mov ah, API_GFX_DRAW_CHAR
     int 0x80
 
     ; Wait a moment so user sees it
