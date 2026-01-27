@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 044 - Display directory contents with file sizes
+; Build 045 - Debug marker + fix file size offset
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -48,6 +48,13 @@ entry:
 
     ; Scan and display files
     call scan_and_display
+
+    ; DEBUG: Show marker that we reached main loop
+    mov bx, 300                     ; X position (right side)
+    mov cx, 10                      ; Y position (top)
+    mov al, '!'                     ; Marker character
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
 
     ; Event loop - wait for ESC
 .main_loop:
@@ -268,9 +275,9 @@ display_file_entry:
     jmp .pad_loop
 
 .show_size:
-    ; Get file size from directory entry (offset 26-29, 32-bit)
+    ; Get file size from directory entry (offset 0x1C = 28, 32-bit)
     ; For simplicity, just show lower 16 bits (up to 65535)
-    mov ax, [cs:dir_entry_buffer + 26]
+    mov ax, [cs:dir_entry_buffer + 28]
 
     ; Convert to decimal string
     call word_to_decimal
