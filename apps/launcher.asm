@@ -1,9 +1,10 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 040 - Fix TEST.BIN naming to avoid recursive HELLO.BIN load
+; Build 042 - Dynamic app discovery using fs_readdir API
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
 ; Loads at segment 0x2000 (shell), launches apps to 0x3000 (user)
+; Scans floppy for .BIN files and displays them dynamically
 
 [BITS 16]
 [ORG 0x0000]
@@ -13,12 +14,13 @@ API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 8
+API_FS_MOUNT            equ 12
+API_FS_READDIR          equ 26
 API_APP_LOAD            equ 17
 API_APP_RUN             equ 18
 API_WIN_CREATE          equ 19
 API_WIN_DESTROY         equ 20
 API_WIN_GET_CONTENT     equ 24
-API_REGISTER_SHELL      equ 25
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -27,6 +29,7 @@ EVENT_KEY_PRESS         equ 1
 MENU_ITEM_HEIGHT        equ 12          ; Pixels per menu item
 MENU_LEFT_PADDING       equ 10          ; Left margin for text
 MENU_TOP_PADDING        equ 4           ; Top margin
+MAX_MENU_ITEMS          equ 8           ; Maximum apps to display
 
 ; Entry point - called by kernel via far CALL
 entry:
@@ -49,6 +52,9 @@ entry:
     test al, al                     ; AL=0 means no more events
     jnz .drain_events
 
+    ; Scan for .BIN files on the floppy
+    call scan_for_apps
+
     ; Draw initial menu
     call draw_menu
 
@@ -59,50 +65,17 @@ entry:
     int 0x80
     jc .no_event
 
-    ; DEBUG: Show event type and key code at top of window
-    push ax
-    push dx
-    ; Show event type (AL) as hex digit at position (content_x, content_y-10)
-    mov bx, [cs:content_x]
-    add bx, 120                     ; Right side of window
-    mov cx, [cs:content_y]
-    add cx, 4
-    ; Convert AL to hex character
-    push ax
-    and al, 0x0F
-    cmp al, 10
-    jb .digit1
-    add al, 'A' - 10
-    jmp .show1
-.digit1:
-    add al, '0'
-.show1:
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop ax
-    pop dx
-    pop ax
-
     ; Check if key press
     cmp al, EVENT_KEY_PRESS
     jne .no_event
 
-    ; DEBUG: Show key character
-    push ax
-    push dx
-    mov bx, [cs:content_x]
-    add bx, 130
-    mov cx, [cs:content_y]
-    add cx, 4
-    mov al, dl                      ; Key character
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop dx
-    pop ax
-
     ; Handle key
     cmp dl, 27                      ; ESC?
     je .exit_ok
+
+    ; Only handle navigation if we have apps
+    cmp byte [cs:discovered_count], 0
+    je .no_event
 
     cmp dl, 'w'
     je .move_up
@@ -129,7 +102,7 @@ entry:
     jmp .redraw
 
 .wrap_to_bottom:
-    mov al, [cs:menu_count]
+    mov al, [cs:discovered_count]
     dec al
     mov [cs:selected], al
     jmp .redraw
@@ -138,7 +111,7 @@ entry:
     ; Increment selection with wrap
     mov al, [cs:selected]
     inc al
-    cmp al, [cs:menu_count]
+    cmp al, [cs:discovered_count]
     jb .no_wrap
     xor al, al                      ; Wrap to 0
 .no_wrap:
@@ -212,6 +185,91 @@ entry:
     retf
 
 ; ============================================================================
+; scan_for_apps - Scan floppy for .BIN files
+; Populates discovered_apps and discovered_count
+; ============================================================================
+scan_for_apps:
+    pusha
+
+    ; Initialize
+    mov byte [cs:discovered_count], 0
+    mov word [cs:dir_state], 0
+
+    ; Mount filesystem (drive A:)
+    mov al, 0                       ; Drive A:
+    xor ah, ah                      ; Auto-detect
+    mov ah, API_FS_MOUNT
+    int 0x80
+    jc .scan_done                   ; Mount failed, leave empty list
+
+.scan_loop:
+    ; Check if we have room for more
+    cmp byte [cs:discovered_count], MAX_MENU_ITEMS
+    jae .scan_done
+
+    ; Read next directory entry
+    mov al, 0                       ; Mount handle
+    mov cx, [cs:dir_state]          ; Iteration state
+    push cs
+    pop es
+    mov di, dir_entry_buffer        ; ES:DI = buffer
+    mov ah, API_FS_READDIR
+    int 0x80
+    jc .scan_done                   ; End of directory or error
+
+    ; Save new state
+    mov [cs:dir_state], cx
+
+    ; Check if this is a .BIN file (extension at offset 8-10)
+    cmp byte [cs:dir_entry_buffer + 8], 'B'
+    jne .scan_loop
+    cmp byte [cs:dir_entry_buffer + 9], 'I'
+    jne .scan_loop
+    cmp byte [cs:dir_entry_buffer + 10], 'N'
+    jne .scan_loop
+
+    ; Skip LAUNCHER.BIN (don't show ourselves)
+    ; Compare first 8 characters with "LAUNCHER"
+    mov si, dir_entry_buffer
+    mov di, launcher_name
+    mov cx, 8
+.cmp_launcher:
+    mov al, [cs:si]
+    cmp al, [cs:di]
+    jne .not_launcher
+    inc si
+    inc di
+    loop .cmp_launcher
+    jmp .scan_loop                  ; It's LAUNCHER, skip it
+
+.not_launcher:
+    ; Add to discovered_apps list
+    ; Calculate destination: discovered_apps + (count * 12)
+    mov al, [cs:discovered_count]
+    mov cl, 12
+    mul cl                          ; AX = count * 12
+    mov di, ax
+    add di, discovered_apps         ; DI = destination offset
+
+    ; Copy 11 bytes (8.3 FAT name) and add null terminator
+    mov si, dir_entry_buffer
+    mov cx, 11
+.copy_name:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .copy_name
+    mov byte [cs:di], 0             ; Null terminator
+
+    inc byte [cs:discovered_count]
+    jmp .scan_loop
+
+.scan_done:
+    popa
+    ret
+
+; ============================================================================
 ; create_window - Create the launcher window
 ; Output: CF=0 success, CF=1 error
 ; ============================================================================
@@ -273,12 +331,16 @@ draw_menu:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
+    ; Check if we have any apps
+    cmp byte [cs:discovered_count], 0
+    je .no_apps
+
     ; Draw each menu item
     mov byte [cs:draw_index], 0     ; Item index
 
 .draw_loop:
     mov al, [cs:draw_index]
-    cmp al, [cs:menu_count]
+    cmp al, [cs:discovered_count]
     jae .draw_help
 
     ; Calculate Y position: content_y + MENU_TOP_PADDING + (index * MENU_ITEM_HEIGHT)
@@ -307,14 +369,15 @@ draw_menu:
     add word [cs:draw_x], 16        ; Move X past indicator
 
 .draw_name:
-    ; Get display name pointer: menu_data + (index * 24) + 12
+    ; Get filename pointer: discovered_apps + (index * 12)
     mov al, [cs:draw_index]
-    mov cl, 24
-    mul cl                          ; AX = index * 24
-    add ax, menu_data + 12          ; Point to display name
+    mov cl, 12
+    mul cl                          ; AX = index * 12
+    add ax, discovered_apps
     mov si, ax
 
-    ; Draw the display name
+    ; Format and draw: convert "CLOCK   BIN" to displayable name
+    ; For simplicity, just draw the raw 8.3 name
     mov bx, [cs:draw_x]
     mov cx, [cs:draw_y]
     mov ah, API_GFX_DRAW_STRING
@@ -323,7 +386,19 @@ draw_menu:
     inc byte [cs:draw_index]
     jmp .draw_loop
 
+.no_apps:
+    ; Display "No apps found" message
+    mov bx, [cs:content_x]
+    add bx, MENU_LEFT_PADDING
+    mov cx, [cs:content_y]
+    add cx, MENU_TOP_PADDING
+    mov si, no_apps_msg
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .draw_help_only
+
 .draw_help:
+.draw_help_only:
     ; Draw help text at bottom of content area
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
@@ -349,13 +424,10 @@ draw_y:     dw 0
 
 ; ============================================================================
 ; draw_error - Draw error message with error code
-; Error codes: 1=no slot, 2=mount fail, 3=file not found, 4=read fail
 ; ============================================================================
 draw_error:
     pusha
 
-    ; Draw error message with error code
-    ; Format: "Err: X" where X is the error code digit
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
@@ -368,7 +440,7 @@ draw_error:
     ; Draw error code on next line
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
-    add cx, 10                      ; Next line
+    add cx, 10
     mov si, error_code_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -376,13 +448,13 @@ draw_error:
     ; Draw the error digit
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
-    add bx, 48                      ; After "Code: "
+    add bx, 48
     mov al, [cs:last_error]
-    add al, '0'                     ; Convert to ASCII digit
+    add al, '0'
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
 
-    ; Wait a moment so user sees it
+    ; Wait a moment
     mov cx, 0xFFFF
 .wait:
     loop .wait
@@ -390,21 +462,20 @@ draw_error:
 .wait2:
     loop .wait2
 
-    ; Redraw menu to clear error
     popa
     ret
 
 ; ============================================================================
-; get_selected_filename - Get pointer to selected app's FAT filename
-; Output: SI = pointer to 11-byte FAT filename
+; get_selected_filename - Get pointer to selected app's filename
+; Output: SI = pointer to null-terminated filename (8.3 format with spaces)
 ; ============================================================================
 get_selected_filename:
-    ; Calculate: menu_data + (selected * 24)
+    ; Calculate: discovered_apps + (selected * 12)
     mov al, [cs:selected]
-    mov cl, 24
-    mul cl                          ; AX = selected * 24
-    add ax, menu_data
-    mov si, ax                      ; SI = pointer to FAT filename
+    mov cl, 12
+    mul cl                          ; AX = selected * 12
+    add ax, discovered_apps
+    mov si, ax                      ; SI = pointer to filename
     ret
 
 ; ============================================================================
@@ -421,25 +492,19 @@ selected:       db 0
 app_handle:     dw 0
 last_error:     db 0
 
-; Menu data: 12-byte filename + 12-byte display name (null-terminated)
-; Each entry is 24 bytes
-; Filename format: "NAME.EXT", 0 (fat12_open expects dot-separated, null-terminated)
-menu_data:
-    db 'CLOCK.BIN', 0               ; Filename (10 bytes with null)
-    db 0, 0                         ; Padding to 12 bytes
-    db 'Clock', 0                   ; Display name (null-terminated)
-    times 6 db 0                    ; Padding to 24 bytes
+; Dynamic app discovery data
+discovered_apps: times (MAX_MENU_ITEMS * 12) db 0   ; 8 apps × 12 bytes each
+discovered_count: db 0
+dir_entry_buffer: times 32 db 0                     ; For fs_readdir
+dir_state:       dw 0                               ; Iteration state
 
-    db 'TEST.BIN', 0, 0              ; Filename (10 bytes with null)
-    db 0, 0                         ; Padding to 12 bytes
-    db 'Test App', 0                ; Display name
-    db 0, 0, 0                      ; Padding to 24 bytes
-
-menu_count:     db 2
+; String to match against for skipping ourselves
+launcher_name:  db 'LAUNCHER'                       ; 8 chars, no null needed
 
 ; UI strings
 indicator:      db '> ', 0
 help_line1:     db 'W/S: Select', 0
 help_line2:     db 'Enter: Run', 0
+no_apps_msg:    db 'No apps found', 0
 error_msg:      db 'Load failed!', 0
 error_code_label: db 'Code: ', 0

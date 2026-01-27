@@ -86,7 +86,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-24)
     ; Validate function number
-    cmp ah, 25                      ; Max function + 1
+    cmp ah, 27                      ; Max function + 1 (0-26)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1174,6 +1174,7 @@ kernel_api_table:
     dw win_move_stub                ; 23: Move window
     dw win_get_content_stub         ; 24: Get content area bounds
     dw register_shell_stub          ; 25: Register app as shell (auto-return)
+    dw fs_readdir_stub              ; 26: Read directory entry
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -1675,6 +1676,7 @@ FS_ERR_NO_DRIVER        equ 2
 FS_ERR_READ_ERROR       equ 3
 FS_ERR_INVALID_HANDLE   equ 4
 FS_ERR_NO_HANDLES       equ 5
+FS_ERR_END_OF_DIR       equ 6
 
 ; fs_mount_stub - Mount a filesystem on a drive
 ; Input: AL = drive number (0=A:, 1=B:, 0x80=HDD0)
@@ -1819,6 +1821,179 @@ fs_close_stub:
     stc
     pop si
     ret
+
+; fs_readdir_stub - Read next directory entry
+; Input: AL = mount handle (0 for FAT12)
+;        CX = iteration state (0 = start fresh)
+;        ES:DI = pointer to 32-byte buffer for entry
+; Output: CF = 0 success (entry copied to buffer)
+;         CF = 1 end of directory or error
+;         CX = new state for next call
+;         AX = FS_ERR_END_OF_DIR (6) when done
+; State encoding: bits 0-3 = entry index (0-15), bits 4-15 = sector offset (0-13)
+fs_readdir_stub:
+    push bx
+    push dx
+    push si
+    push bp
+    push di                         ; Save caller's DI
+
+    ; Parse state from CX
+    mov bp, cx                      ; BP = iteration state
+    mov ax, bp
+    and ax, 0x000F                  ; AX = entry index (0-15)
+    mov bx, bp
+    shr bx, 4                       ; BX = sector offset (0-13)
+
+    ; Save parsed values
+    mov [.entry_idx], ax
+    mov [.sector_off], bx
+
+.read_next_sector:
+    ; Check if we've passed all root directory sectors
+    cmp word [.sector_off], 14
+    jae .end_of_dir
+
+    ; Calculate absolute sector = root_dir_start + sector_offset
+    mov ax, [root_dir_start]
+    add ax, [.sector_off]
+
+    ; LBA to CHS conversion (same pattern as fat12_open)
+    push ax                         ; Save LBA
+    xor dx, dx
+    mov bx, 18                      ; sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector number
+
+    xor dx, dx
+    mov bx, 2                       ; num heads
+    div bx                          ; AX = cylinder, DX = head
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+
+    ; Read sector to bpb_buffer
+    push es
+    push di
+    mov ax, 0x1000
+    mov es, ax
+    mov bx, bpb_buffer
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov dl, 0                       ; DL = drive A:
+    int 0x13
+    pop di
+    pop es
+    pop ax                          ; Restore LBA (not needed but clean stack)
+    jc .read_error
+
+.scan_entries:
+    ; Calculate entry pointer: bpb_buffer + (entry_idx * 32)
+    mov ax, [.entry_idx]
+    shl ax, 5                       ; * 32
+    mov si, ax
+    add si, bpb_buffer
+
+.check_entry:
+    ; Check bounds - if entry >= 16, go to next sector
+    cmp word [.entry_idx], 16
+    jae .next_sector
+
+    ; Check first byte of entry
+    push ds
+    mov ax, 0x1000
+    mov ds, ax                      ; DS = kernel segment for bpb_buffer access
+    mov al, [si]
+    pop ds
+
+    ; End of directory marker
+    test al, al
+    jz .end_of_dir
+
+    ; Deleted entry - skip
+    cmp al, 0xE5
+    je .skip_entry
+
+    ; Check attributes at offset 0x0B
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov al, [si + 0x0B]
+    pop ds
+
+    ; Skip LFN entries (attribute = 0x0F)
+    cmp al, 0x0F
+    je .skip_entry
+
+    ; Skip volume labels (attribute & 0x08)
+    test al, 0x08
+    jnz .skip_entry
+
+    ; Valid entry found - copy 32 bytes to caller's buffer (ES:DI)
+    push cx
+    push si
+    push di
+    push ds
+    mov ax, 0x1000
+    mov ds, ax                      ; DS:SI = source (bpb_buffer entry)
+    mov cx, 32
+    cld
+    rep movsb                       ; Copy to ES:DI
+    pop ds
+    pop di
+    pop si
+    pop cx
+
+    ; Increment state for next call
+    inc word [.entry_idx]
+    cmp word [.entry_idx], 16
+    jb .encode_state
+    ; Wrapped to next sector
+    mov word [.entry_idx], 0
+    inc word [.sector_off]
+
+.encode_state:
+    ; CX = (sector_off << 4) | entry_idx
+    mov cx, [.sector_off]
+    shl cx, 4
+    or cx, [.entry_idx]
+
+    ; Success - clear carry
+    clc
+    jmp .done
+
+.skip_entry:
+    inc word [.entry_idx]
+    mov ax, [.entry_idx]
+    shl ax, 5
+    mov si, ax
+    add si, bpb_buffer
+    jmp .check_entry
+
+.next_sector:
+    mov word [.entry_idx], 0
+    inc word [.sector_off]
+    jmp .read_next_sector
+
+.read_error:
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    jmp .done
+
+.end_of_dir:
+    mov ax, FS_ERR_END_OF_DIR
+    stc
+
+.done:
+    pop di
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; Local variables for fs_readdir_stub
+.entry_idx:     dw 0
+.sector_off:    dw 0
 
 ; fs_register_driver_stub - Register a loadable filesystem driver
 ; Input: ES:BX = pointer to driver structure
