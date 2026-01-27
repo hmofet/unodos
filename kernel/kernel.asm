@@ -632,7 +632,7 @@ test_app_loader:
 .load_err:      db 'Load: FAIL ', 0
 .run_ok:        db 'Run: OK', 0
 .run_err:       db 'Run: FAIL', 0
-.app_filename:  db 'HELLO.BIN', 0   ; Parsed by fat12_open into 8.3 format
+.app_filename:  db 'LAUNCHER.BIN', 0   ; Parsed by fat12_open into 8.3 format
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
