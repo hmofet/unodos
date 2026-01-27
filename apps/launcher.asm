@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 038 - Fix error display, fix app_load DS bug
+; Build 039 - Drain event queue at startup to prevent auto-launch
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -41,6 +41,13 @@ entry:
     ; Create launcher window
     call create_window
     jc .exit_fail
+
+    ; Drain any pending events (leftover from disk swap confirmation)
+.drain_events:
+    mov ah, API_EVENT_GET
+    int 0x80
+    test al, al                     ; AL=0 means no more events
+    jnz .drain_events
 
     ; Draw initial menu
     call draw_menu
