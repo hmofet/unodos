@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 042 - Dynamic app discovery using fs_readdir API
+; Build 043 - Fix filename format conversion (FAT -> dot format)
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -467,16 +467,78 @@ draw_error:
 
 ; ============================================================================
 ; get_selected_filename - Get pointer to selected app's filename
-; Output: SI = pointer to null-terminated filename (8.3 format with spaces)
+; Converts FAT format "CLOCK   BIN" to dot format "CLOCK.BIN"
+; Output: SI = pointer to null-terminated filename in dot format
 ; ============================================================================
 get_selected_filename:
-    ; Calculate: discovered_apps + (selected * 12)
+    push di
+    push cx
+    push ax
+
+    ; Get source: discovered_apps + (selected * 12)
     mov al, [cs:selected]
     mov cl, 12
     mul cl                          ; AX = selected * 12
     add ax, discovered_apps
-    mov si, ax                      ; SI = pointer to filename
+    mov si, ax                      ; SI = source (FAT format)
+    mov di, filename_buffer         ; DI = destination
+
+    ; Copy filename part (up to 8 chars, stop at space)
+    mov cx, 8
+.copy_name:
+    mov al, [cs:si]
+    cmp al, ' '                     ; Stop at space
+    je .add_dot
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .copy_name
+
+.add_dot:
+    ; Skip remaining spaces in filename part
+    mov ax, si
+    sub ax, discovered_apps
+    ; Calculate how many chars we copied
+    push di
+    mov di, filename_buffer
+    mov ax, di
+    pop di
+    ; SI should point to extension (offset 8 from start of entry)
+    mov al, [cs:selected]
+    mov cl, 12
+    mul cl
+    add ax, discovered_apps
+    add ax, 8                       ; Extension starts at offset 8
+    mov si, ax
+
+    ; Add dot
+    mov byte [cs:di], '.'
+    inc di
+
+    ; Copy extension (3 chars)
+    mov cx, 3
+.copy_ext:
+    mov al, [cs:si]
+    cmp al, ' '                     ; Stop at space
+    je .add_null
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .copy_ext
+
+.add_null:
+    mov byte [cs:di], 0             ; Null terminator
+
+    ; Return pointer to converted filename
+    mov si, filename_buffer
+
+    pop ax
+    pop cx
+    pop di
     ret
+
+; Buffer for converted filename (8 + 1 + 3 + 1 = 13 bytes)
+filename_buffer: times 13 db 0
 
 ; ============================================================================
 ; Data Section
