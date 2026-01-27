@@ -1,5 +1,5 @@
 ; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 034 - Fixed fat12_open DS segment issue
+; Build 036 - Debug: display event type and key code
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
@@ -9,6 +9,7 @@
 [ORG 0x0000]
 
 ; API function indices
+API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 8
@@ -51,9 +52,46 @@ entry:
     int 0x80
     jc .no_event
 
+    ; DEBUG: Show event type and key code at top of window
+    push ax
+    push dx
+    ; Show event type (AL) as hex digit at position (content_x, content_y-10)
+    mov bx, [cs:content_x]
+    add bx, 120                     ; Right side of window
+    mov cx, [cs:content_y]
+    add cx, 4
+    ; Convert AL to hex character
+    push ax
+    and al, 0x0F
+    cmp al, 10
+    jb .digit1
+    add al, 'A' - 10
+    jmp .show1
+.digit1:
+    add al, '0'
+.show1:
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    pop ax
+    pop dx
+    pop ax
+
     ; Check if key press
     cmp al, EVENT_KEY_PRESS
     jne .no_event
+
+    ; DEBUG: Show key character
+    push ax
+    push dx
+    mov bx, [cs:content_x]
+    add bx, 130
+    mov cx, [cs:content_y]
+    add cx, 4
+    mov al, dl                      ; Key character
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    pop dx
+    pop ax
 
     ; Handle key
     cmp dl, 27                      ; ESC?
