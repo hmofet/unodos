@@ -1,12 +1,38 @@
 # UnoDOS Development Session Summary
 **Last Updated:** 2026-01-27
 **Current Version:** v3.12.0
-**Current Build:** 035
-**Status:** Desktop Launcher debugging - awaiting test
+**Current Build:** 036
+**Status:** Debugging W/S key navigation in launcher
 
 ---
 
-## Latest Session (2026-01-27) - Launcher App Loading Debug
+## Latest Session (2026-01-27) - Keyboard Navigation Debug
+
+### Current Issue
+User reports W/S keys don't work for menu navigation in the launcher.
+- Launcher window displays correctly
+- Menu draws with items visible
+- Key navigation not responding
+
+### Build 036 - Debug Output
+Added visual debug display to launcher to diagnose keyboard issue:
+- Shows event type (hex digit) at right side of window content area
+- Shows key character when key press event received
+- Helps identify if events are being received or if the issue is elsewhere
+
+**Test procedure:**
+1. Boot from UnoDOS floppy (verify "Build: 036")
+2. Press L to load launcher
+3. Swap to launcher floppy, press any key
+4. Launcher should appear with debug area on right
+5. Press W, S, or any key - should see event type "1" and key character displayed
+
+If no debug output appears when pressing keys, the event system isn't reaching the launcher.
+If debug shows correct keys, the issue is in the menu update logic.
+
+---
+
+## Previous Session - Launcher App Loading Debug
 
 ### Bug Fix Summary (Builds 030-035)
 
