@@ -42,7 +42,7 @@ try {
     $stream.Close()
 }
 
-Write-Host "Done! Launcher app floppy ready (HELLO.BIN=launcher, CLOCK.BIN)." -ForegroundColor Green
+Write-Host "Done! Launcher floppy ready (LAUNCHER.BIN, CLOCK.BIN, TEST.BIN)." -ForegroundColor Green
 Write-Host ""
 Write-Host "To test:" -ForegroundColor Yellow
 Write-Host "  1. Boot UnoDOS from boot floppy"

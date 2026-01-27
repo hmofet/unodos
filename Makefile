@@ -192,10 +192,10 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-boot a \
 		-display gtk
 
-# Create launcher app floppy image (FAT12 with HELLO.BIN=launcher + CLOCK.BIN + TEST.BIN)
+# Create launcher app floppy image (FAT12 with LAUNCHER.BIN + CLOCK.BIN + TEST.BIN)
 build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN)
 	@echo "Creating launcher floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) HELLO.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN
 
 # Legacy alias
 build/launcher-app.img: build/launcher-floppy.img
