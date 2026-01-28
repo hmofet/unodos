@@ -46,7 +46,6 @@ make clean &>/dev/null
 start=$(date +%s.%N)
 make floppy144 &>/dev/null
 make apps &>/dev/null
-make build/launcher-floppy.img &>/dev/null
 make hd-image &>/dev/null
 end=$(date +%s.%N)
 total_elapsed=$(echo "$end - $start" | bc)
