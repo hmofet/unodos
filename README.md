@@ -28,7 +28,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.11.0)
+## Current Features (v3.12.0 Build 053)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
@@ -36,15 +36,18 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
 - Graphical welcome screen with bordered window
-- System call infrastructure (INT 0x80 + API table with 19 functions)
+- System call infrastructure (INT 0x80 + API table with 30 functions)
 - Graphics API (draw pixel, rectangle, character, string)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
-- Event system (32-event circular queue)
+- **PS/2 Mouse driver (IRQ12/INT 0x74)** - NEW
+- Event system (32-event circular queue with KEY and MOUSE events)
 - Filesystem abstraction layer + FAT12 driver (read-only)
-- File operations (mount, open, read, close)
+- File operations (mount, open, read, close, readdir)
 - Multi-cluster file reading (FAT chain following)
 - **Application Loader** (load and run .BIN apps from FAT12)
+- **Window Manager** (create, destroy, draw windows)
+- **Desktop Launcher** with dynamic app discovery
 
 ## Building
 
@@ -141,21 +144,27 @@ sudo ./tools/writeflop.sh -1 /dev/fd0
 tools\writeflop.bat
 ```
 
-### Testing App Loader on Real Hardware
+### Testing Launcher on Real Hardware
 
 1. Write boot floppy: `.\tools\boot.ps1`
-2. Write app floppy: `.\tools\app-test.ps1`
-3. Boot from boot floppy
-4. Press **L** key to trigger app loader
-5. When prompted, swap to app floppy
-6. Press any key - "Load: OK" and app runs
+2. Write launcher floppy: `.\tools\launcher.ps1`
+3. Boot from boot floppy (verify Build: 053)
+4. Press **L** key to load launcher
+5. When prompted, swap to launcher floppy
+6. Launcher shows apps: CLOCK, TEST, BROWSER, MOUSE
+7. Navigate with W/S keys, press Enter to launch
+8. ESC returns to launcher
 
 ## Project Structure
 
 ```
 unodos/
 ├── apps/
-│   └── hello.asm       # Test application for app loader
+│   ├── hello.asm       # Test application (TEST.BIN)
+│   ├── clock.asm       # Real-time clock display
+│   ├── launcher.asm    # Desktop launcher
+│   ├── browser.asm     # File browser
+│   └── mouse_test.asm  # PS/2 mouse test application
 ├── boot/
 │   ├── boot.asm        # First stage boot loader (512 bytes)
 │   └── stage2.asm      # Second stage loader (2KB)
@@ -167,26 +176,30 @@ unodos/
 │   ├── boot.bin        # Compiled boot sector
 │   ├── stage2.bin      # Compiled stage2 loader
 │   ├── kernel.bin      # Compiled kernel
-│   ├── hello.bin       # Compiled test application
+│   ├── launcher.bin    # Desktop launcher application
+│   ├── clock.bin       # Clock application
+│   ├── browser.bin     # File browser application
+│   ├── mouse_test.bin  # Mouse test application
 │   ├── unodos.img      # 360KB floppy image
-│   └── unodos-144.img  # 1.44MB floppy image
+│   ├── unodos-144.img  # 1.44MB boot floppy image
+│   └── launcher-floppy.img # Launcher + apps floppy image
 ├── docs/
 │   ├── ARCHITECTURE.md # Boot loader architecture
 │   ├── ARCHITECTURE_PLAN.md # System architecture roadmap
-│   ├── FEATURES.md     # Planned features roadmap
-│   ├── CLAUDE.md       # Development context
-│   └── SESSION_2026-01-25.md # Latest session summary
+│   ├── FEATURES.md     # Features and API reference
+│   ├── SESSION_SUMMARY.md # Latest session summary
+│   └── ...             # Additional technical docs
 ├── tools/
 │   ├── writeflop.sh    # Linux floppy write utility
-│   ├── writeflop.bat   # Windows CMD floppy write
-│   ├── Write-Floppy.ps1       # PowerShell with verification
-│   ├── Write-Floppy-Quick.ps1 # PowerShell quick write
-│   └── create_app_test.py     # Create app test floppy image
+│   ├── boot.ps1        # PowerShell - write boot floppy
+│   ├── launcher.ps1    # PowerShell - write launcher floppy
+│   └── create_app_test.py # Create app floppy images
 ├── Makefile
 ├── README.md
 ├── CHANGELOG.md
-├── VERSION           # Version string (e.g., 3.11.0)
-└── BUILD_NUMBER      # Build number (auto-incremented)
+├── CLAUDE.md         # Development guidelines
+├── VERSION           # Version string (3.12.0)
+└── BUILD_NUMBER      # Build number (053)
 ```
 
 ## Documentation
@@ -224,26 +237,31 @@ unodos/
 - [x] Keyboard input handling (INT 09h driver) - v3.8.0
 - [x] Event system (circular queue, event-driven architecture) - v3.9.0
 - [x] Filesystem abstraction layer + FAT12 driver - v3.10.0
+- [x] **PS/2 Mouse driver (IRQ12/INT 0x74)** - v3.12.0 Build 053
 
 **Foundation Layer Complete!** All core infrastructure is now in place.
 
 ### Completed (Core Services) ✅
 - [x] Application loader (load .BIN from FAT12) - v3.11.0
+- [x] Window Manager (create, destroy, draw, focus, move) - v3.12.0
+- [x] Desktop Launcher with dynamic app discovery - v3.12.0 Build 042
+- [x] Directory iteration (fs_readdir API) - v3.12.0 Build 042
 
-### In Progress (Core Services - v3.12.0-v3.13.0)
-- [ ] GUI window manager
-- [ ] Bootloader installation tool (Tier 3 support)
+### Completed (Applications) ✅
+- [x] LAUNCHER.BIN - Desktop launcher with dynamic discovery (1061 bytes)
+- [x] CLOCK.BIN - Real-time clock display (249 bytes)
+- [x] TEST.BIN - Hello test application (112 bytes)
+- [x] BROWSER.BIN - File browser showing files with sizes (564 bytes)
+- [x] MOUSE.BIN - PS/2 mouse test/demo application (578 bytes)
 
 ### Planned (Standard Library - v3.14.0)
 - [ ] graphics.lib - C-callable wrappers for Graphics API
 - [ ] unodos.lib - Initialization and utility functions
 
-### Planned (Applications - v3.8.0+)
-- [ ] Clock display application
+### Planned (Future)
 - [ ] Text editor
-- [ ] File manager
 - [ ] Calculator
-- [ ] Mouse support (serial mouse)
+- [ ] Serial mouse support (Microsoft compatible)
 - [ ] Sound support (PC speaker)
 
 See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
@@ -252,7 +270,7 @@ See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.11.0** (Build 009)
+Current version: **3.12.0** (Build 053)
 
 ## Contributing
 

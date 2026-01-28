@@ -360,7 +360,14 @@ mov cx, [kernel_size_sectors]  ; Dynamic sector count
 - 92% memory utilization is excellent
 
 **Recommended Action:**
-Expand kernel to 24KB, keep architecture simple.
+Kernel is now 28KB. Memory layout is stable.
+
+**Current Memory Usage (Build 053):**
+- Kernel code: ~28KB (includes fonts, PS/2 mouse driver, window manager)
+- API table at 0x1000:0x0B00 (30 functions)
+- Dual segment apps: Shell at 0x2000, User apps at 0x3000
+- Heap at 0x1400:0000 (~532KB available)
 
 *Document created: 2026-01-23*
-*UnoDOS v3.5.0*
+*Last updated: 2026-01-28*
+*UnoDOS v3.13.0 Build 054*

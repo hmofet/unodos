@@ -186,13 +186,15 @@ Loading kernel................................ OK
 
 1. Install system call handler (INT 0x80)
 2. Install keyboard driver (INT 09h)
-3. Initialize memory allocator (heap)
-4. Initialize event system
-5. Initialize FAT12 filesystem driver
-6. Detect system resources (memory, video)
-7. Initialize CGA graphics mode
-8. Draw welcome screen with bordered window
-9. Run main event loop
+3. Install PS/2 mouse driver (INT 0x74/IRQ12)
+4. Initialize memory allocator (heap)
+5. Initialize event system
+6. Initialize FAT12 filesystem driver
+7. Initialize window manager
+8. Detect system resources (memory, video)
+9. Initialize CGA graphics mode
+10. Draw welcome screen with bordered window
+11. Run main event loop
 
 ### Key Subsystems
 
@@ -202,9 +204,11 @@ Loading kernel................................ OK
 | Graphics API | 6 functions: pixel, rect, filled_rect, char, string, clear |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
-| Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE types |
-| Filesystem | FAT12 driver with mount, open, read, close operations |
+| PS/2 Mouse | INT 0x74 (IRQ12) handler, 3-byte packet protocol, 8042 controller |
+| Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE/MOUSE types |
+| Filesystem | FAT12 driver with mount, open, read, close, readdir operations |
 | App Loader | Load and execute .BIN applications from FAT12 |
+| Window Manager | Create, destroy, draw, focus, move windows (16 max) |
 
 ### Key Functions
 
@@ -212,14 +216,20 @@ Loading kernel................................ OK
 |----------|-------------|
 | `install_int_80` | Install system call handler |
 | `install_keyboard` | Install keyboard interrupt handler |
+| `install_mouse` | Install PS/2 mouse driver (IRQ12) |
 | `gfx_draw_string_stub` | Draw null-terminated string |
 | `mem_alloc_stub` | Allocate memory from heap |
 | `event_wait_stub` | Wait for next event |
 | `fs_mount_stub` | Mount FAT12 filesystem |
 | `fs_open_stub` | Open file by 8.3 name |
 | `fs_read_stub` | Read file contents |
+| `fs_readdir_stub` | Read directory entry |
 | `app_load_stub` | Load .BIN application |
 | `app_run_stub` | Execute loaded application |
+| `win_create_stub` | Create window with title/border |
+| `win_destroy_stub` | Destroy window and clear area |
+| `mouse_get_state` | Get mouse X, Y, buttons |
+| `mouse_is_enabled` | Check if mouse available |
 
 ## Font System
 
@@ -328,4 +338,4 @@ Color palette (Palette 1):
 
 ---
 
-*Document version: 3.0 (2026-01-25) - Updated for v3.11.0 with Foundation Layer and App Loader*
+*Document version: 3.2 (2026-01-28) - Updated for v3.13.0 Build 054 with FAT16/IDE Hard Drive Support*

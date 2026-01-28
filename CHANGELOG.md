@@ -5,9 +5,100 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.12.0] - 2026-01-25
+## [3.13.0] - 2026-01-28
 
-### Added
+### Added (Build 054) - Hard Drive / FAT16 Support
+
+- **FAT16 Filesystem Driver** - Read-only support for hard drives
+  - `fat16_mount` - Mount FAT16 partition from MBR/partition table
+  - `fat16_open` - Open files from FAT16 root directory
+  - `fat16_read` - Read file data following FAT16 cluster chains
+  - `fat16_get_next_cluster` - 16-bit FAT entry reading (simpler than FAT12's 12-bit)
+  - `fat16_read_sector` - Sector read with INT 13h LBA extensions + CHS fallback
+
+- **IDE/ATA Direct Access Driver** - Fallback for BIOS issues
+  - `ide_detect` - Detect IDE drive presence via IDENTIFY command
+  - `ide_wait_ready` - Wait for drive ready (BSY clear, DRDY set)
+  - `ide_read_sector` - Direct port I/O read (ports 0x1F0-0x1F7)
+  - Supports LBA addressing mode
+
+- **HD Boot Support** - Boot UnoDOS directly from hard drive
+  - `boot/mbr.asm` - Master Boot Record with partition table parsing
+  - `boot/vbr.asm` - Volume Boot Record with FAT16 BPB
+  - `boot/stage2_hd.asm` - HD kernel loader (finds KERNEL.BIN on FAT16)
+  - Standard MBR relocation to 0x0600 for VBR loading
+
+- **HD Image Creation Tools**
+  - `tools/create_hd_image.py` - Create 64MB FAT16 bootable HD image
+  - `tools/hd.ps1` - PowerShell script to write HD image to CF cards
+  - Apps automatically included: KERNEL.BIN, LAUNCHER.BIN, CLOCK.BIN, BROWSER.BIN, MOUSE.BIN, TEST.BIN
+
+- **New Makefile Targets**
+  - `make hd-image` - Build bootable FAT16 HD image
+  - `make run-hd` - Test HD image in QEMU
+
+### Changed
+
+- Filesystem stubs now route by drive type:
+  - Drive 0 (A:) -> FAT12 driver (mount handle 0)
+  - Drive 0x80+ (HD) -> FAT16 driver (mount handle 1)
+- Kernel size increased to accommodate FAT16/IDE drivers
+
+### Technical Details (HD Driver - Build 054)
+
+- **Partition Table Parsing**
+  - MBR at sector 0, partition table at offset 0x1BE
+  - Supports FAT16 partition types: 0x04, 0x06, 0x0E
+  - Hidden sectors field used for partition-relative LBA
+
+- **INT 13h Extensions**
+  - Uses AH=42h (extended read) with disk address packet
+  - Falls back to CHS conversion for older BIOSes
+  - Drive geometry queried via AH=08h
+
+- **IDE Port I/O Protocol**
+  - Primary controller: 0x1F0-0x1F7
+  - Status polling: Wait for BSY=0, DRDY=1
+  - LBA mode via 0xE0 in drive/head register
+  - 256-word (512-byte) sector transfer via REP INSW
+
+---
+
+## [3.12.0] - 2026-01-28
+
+### Added (Build 053) - PS/2 Mouse Driver
+- **PS/2 Mouse Driver** - Foundation 1.7 complete
+  - INT 0x74 (IRQ12) mouse interrupt handler
+  - 8042 keyboard controller interface (ports 0x60/0x64)
+  - 3-byte packet protocol parsing with sync bit detection
+  - Automatic mouse detection at boot
+  - Position tracking clamped to screen (0-319 X, 0-199 Y)
+  - Button state tracking (left, right, middle)
+  - Posts EVENT_MOUSE (type 4) to event queue
+
+- **New Mouse APIs (27-29)**
+  - `mouse_get_state` (API 27) - Returns BX=X, CX=Y, DL=buttons, DH=enabled
+  - `mouse_set_position` (API 28) - Sets cursor position
+  - `mouse_is_enabled` (API 29) - Checks if mouse available
+
+- **MOUSE.BIN Test Application** (578 bytes)
+  - Window-based UI with mouse cursor tracking
+  - Displays '+' cursor that follows mouse position
+  - Shows '*' when button pressed
+  - Displays X,Y coordinates
+  - Gracefully handles "no mouse detected"
+  - ESC to exit
+
+### Added (Build 042) - Dynamic Discovery & Browser
+- **fs_readdir API (Index 26)** - Kernel directory iteration
+- **Dynamic App Discovery** - Launcher scans for .BIN files
+- **BROWSER.BIN** - File browser showing all files with sizes (564 bytes)
+
+### Fixed (Builds 042-052)
+- Build 051: Browser ESC doesn't work - Added STI, use JC pattern
+- Build 052: Cleanup - Removed debug code
+
+### Added (Build 010-041) - Window Manager
 - **Window Manager** - Second Core Services feature (v3.12.0)
   - `win_create_stub` (API 19) - Create new window with position, size, title, and flags
   - `win_destroy_stub` (API 20) - Destroy window and clear its area
@@ -34,10 +125,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Required for window background clearing
 
 ### Changed
-- API table expanded from 19 to 25 functions
+- API table expanded from 19 to 30 functions (Builds 010-053)
+- API table padding increased from 0x0900 to 0x0B00 (Build 053 - mouse driver code size)
 - Keyboard demo prompt updated to show W key option: "ESC=exit F=file L=app W=win:"
 
-### Technical Details
+### Technical Details (PS/2 Mouse - Build 053)
+- PS/2 mouse packet format:
+  - Byte 0: YO XO YS XS 1 M R L (overflow, sign, sync bit, buttons)
+  - Byte 1: X movement delta (8-bit, sign-extended with XS)
+  - Byte 2: Y movement delta (8-bit, sign-extended with YS)
+- IRQ12 requires EOI to both slave PIC (0xA0) and master PIC (0x20)
+- Sync bit (bit 3) in first byte ensures packet alignment
+- AUXB bit (0x20) in status port distinguishes mouse from keyboard data
+
+### Technical Details (Window Manager)
 - Window structure (32 bytes):
   - Offset 0: State (0=free, 1=visible, 2=hidden)
   - Offset 1: Flags (bit 0: has_title, bit 1: has_border)
