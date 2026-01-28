@@ -21,11 +21,14 @@ This document contains important instructions for AI assistants working on UnoDO
 
 **Workflow**:
 1. Make code changes on Linux development machine
-2. Run `make clean && make floppy144` to build binaries
-3. Run `make apps && make build/launcher-floppy.img` for apps
-4. **Commit and push** both .img files to git
-5. Developer pulls the repo and uses PowerShell scripts to write to floppy
-6. No build step on developer's machine - they get pre-built binaries from git
+2. Run `make clean && make floppy144 && make apps && make hd-image` to build all images
+3. **Commit and push** all .img files to git
+4. Developer pulls the repo and uses PowerShell scripts to write to media
+5. No build step on developer's machine - they get pre-built binaries from git
+
+**Images built**:
+- `build/unodos-144.img` - Floppy with OS + Launcher
+- `build/unodos-hd.img` - HDD/USB with OS + Launcher + All Apps
 
 **Never**: Don't tell the developer to "run make" - they can't. Always build and commit for them.
 
@@ -74,16 +77,19 @@ This document contains important instructions for AI assistants working on UnoDO
 
 ## Testing Procedure for Hardware
 
-**Launcher Test**:
-1. Build: `make clean && make floppy144 && make apps && make build/launcher-floppy.img`
-2. Commit and push both .img files
-3. Developer runs: `.\tools\boot.ps1` (writes UnoDOS to A:)
-4. Swap to blank floppy
-5. Developer runs: `.\tools\launcher.ps1` (writes launcher floppy)
-6. Boot from UnoDOS floppy
-7. Press 'L' to load launcher
-8. When prompted, swap to launcher floppy
-9. Test: navigate with W/S, launch apps with Enter, ESC to exit
+**Floppy Test**:
+1. Build: `make clean && make floppy144`
+2. Commit and push .img file
+3. Developer runs: `.\tools\floppy.ps1` (writes UnoDOS + Launcher to A:)
+4. Boot from floppy - launcher auto-loads!
+5. Test: navigate with W/S, launch apps with Enter, ESC to exit
+
+**HDD/USB Test**:
+1. Build: `make apps && make hd-image`
+2. Commit and push .img file
+3. Developer runs: `.\tools\hd.ps1 -ImagePath build\unodos-hd.img -DiskNumber N`
+4. Boot from HDD/USB - launcher auto-loads!
+5. All apps available immediately (Clock, Browser, Mouse, Test)
 
 **Always verify**: Developer should report the build number displayed on screen to confirm they're testing the right binary.
 
@@ -123,9 +129,9 @@ API functions that need app strings use these saved values:
 
 **Pre-built binaries are committed**: Unlike typical projects, build/*.img files are checked into git so Windows users can pull and write directly.
 
-**Always commit both images**:
+**Always commit all images**:
 ```bash
-git add BUILD_NUMBER apps/*.asm build/unodos-144.img build/launcher-floppy.img
+git add BUILD_NUMBER apps/*.asm build/unodos-144.img build/unodos-hd.img
 git commit -m "Description (Build XXX)"
 git push
 ```
@@ -134,4 +140,4 @@ git push
 
 **Last Updated**: 2026-01-28
 **Current Version**: v3.13.0
-**Current Build**: 054
+**Current Build**: 073
