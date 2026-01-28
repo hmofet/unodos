@@ -91,8 +91,12 @@ boot_code:
     ; Parse geometry: CL[5:0] = max sector, DH = max head
     mov al, cl
     and al, 0x3F                    ; Sectors per track (1-63)
+    test al, al                     ; Check for 0 (invalid)
+    jz .use_default_geometry
     mov [queried_spt], al
     inc dh                          ; Max head -> number of heads
+    test dh, dh                     ; Check for 0 (wrapped from 0xFF)
+    jz .use_default_geometry
     mov [queried_heads], dh
     jmp .calc_chs
 
@@ -152,7 +156,33 @@ boot_code:
     mov dh, [chs_head]              ; Head
     mov dl, [drive_number]
     int 0x13
-    jc .disk_error
+    jc .try_lba                     ; CHS failed, try LBA
+
+    ; Quick check if we got valid data
+    cmp word [es:0x0000], 0x5355    ; Check stage2 signature
+    je .verify_stage2               ; Got it!
+
+.try_lba:
+    ; Debug: print 'L' to show LBA fallback
+    mov ah, 0x0E
+    mov al, 'L'
+    xor bx, bx
+    int 0x10
+
+    ; CHS failed or got zeros - try INT 13h extensions
+    ; Build DAP on stack for LBA 64
+    push dword 0                    ; High LBA (0)
+    push dword 64                   ; Low LBA (stage2 at sector 64)
+    push word 0x0800                ; Buffer segment
+    push word 0x0000                ; Buffer offset
+    push word 4                     ; Read 4 sectors
+    push word 0x0010                ; DAP size (16 bytes)
+    mov si, sp
+    mov ah, 0x42
+    mov dl, [drive_number]
+    int 0x13
+    add sp, 16                      ; Clean up stack
+    jc .disk_error                  ; Both methods failed
 
 .verify_stage2:
     ; Verify stage2 signature
