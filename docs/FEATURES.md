@@ -1,6 +1,6 @@
 # UnoDOS 3 Features Roadmap
 
-This document outlines the feature status and roadmap for UnoDOS 3, designed for IBM PC XT-compatible hardware and tested on the HP Omnibook 600C.
+This document outlines the feature status and roadmap for UnoDOS 3, designed for IBM PC XT-compatible hardware and tested on the HP Omnibook 600C and Asus EeePC.
 
 ## Hardware Target Summary
 
@@ -15,7 +15,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## Completed Features (v3.11.0)
+## Completed Features (v3.12.0 Build 052)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -23,6 +23,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Video adapter detection (CGA/EGA/VGA)
 - [x] Boot progress indicator (dots during kernel load)
 - [x] Signature verification at each stage
+- [x] Build number display for debugging
 
 ### Graphics System
 - [x] CGA 320x200 4-color mode
@@ -33,10 +34,10 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] String rendering
 
 ### System Call Infrastructure (Foundation 1.1)
-- [x] INT 0x80 handler for API discovery
+- [x] INT 0x80 handler for API dispatch
 - [x] Kernel API table at fixed address (0x1000:0x0800)
-- [x] Hybrid approach: INT for discovery, far call for execution
-- [x] 19 API functions implemented
+- [x] 27 API functions implemented (indices 0-26)
+- [x] Caller segment preservation for string parameters
 
 ### Graphics API (Foundation 1.2)
 - [x] gfx_draw_pixel - Plot single pixel
@@ -74,70 +75,41 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] fs_open_stub() - Open file by name
 - [x] fs_read_stub() - Read file contents
 - [x] fs_close_stub() - Close file handle
+- [x] **fs_readdir_stub() - Directory iteration (NEW Build 042)**
 - [x] Multi-cluster file reading (FAT chain following)
 - [x] 8.3 filename support
 
 ### Application Loader (Core Services 2.1)
-- [x] app_load_stub() - Load .BIN from FAT12 to heap
+- [x] app_load_stub() - Load .BIN from FAT12
 - [x] app_run_stub() - Execute loaded application
-- [x] App table (16 entries, 32 bytes each)
+- [x] Dual segment architecture (shell 0x2000, user 0x3000)
 - [x] Far CALL/RETF calling convention
-- [x] BIOS drive number support (A:, B:, HDD)
-- [x] Test application framework (HELLO.BIN)
-
-### User Interface
-- [x] Graphical welcome screen with bordered window
-- [x] Real-time clock display (RTC)
-- [x] RAM status display
-- [x] Interactive keyboard demo
-- [x] 'L' key to trigger app loader test
-
----
-
-## In Progress (v3.12.0+)
+- [x] Apps survive shell execution and return
 
 ### Window Manager (Core Services 2.2)
-- [ ] Window structure (position, size, title, content)
-- [ ] Window drawing (title bar, borders, content area)
-- [ ] Window stacking (Z-order)
-- [ ] Active window highlighting
-- [ ] Window moving/resizing
+- [x] win_create_stub() - Create window with title/border
+- [x] win_destroy_stub() - Destroy window
+- [x] win_draw_stub() - Draw window frame
+- [x] win_focus_stub() - Set active window
+- [x] win_move_stub() - Move window
+- [x] win_get_content_stub() - Get content area bounds
 
-### App Management
-- [ ] app_unload_stub() - Free app memory
-- [ ] app_get_info_stub() - Query app state
-
----
-
-## Planned Features
-
-### Standard Library (v3.14.0)
-- [ ] graphics.lib - C-callable wrappers for Graphics API
-- [ ] unodos.lib - Initialization and utility functions
-- [ ] C compiler support (Turbo C, OpenWatcom)
+### Desktop Launcher (Core Services 2.3)
+- [x] **Dynamic app discovery - scans floppy for .BIN files (NEW Build 042)**
+- [x] Window-based menu UI
+- [x] W/S navigation, Enter to launch, ESC to exit
+- [x] Automatic return after app exits
+- [x] Skips LAUNCHER.BIN in menu display
 
 ### Applications
-- [ ] Clock display application
-- [ ] Text editor
-- [ ] File manager
-- [ ] Calculator
-- [ ] Settings/Control Panel
-
-### Hardware Support
-- [ ] Mouse driver (Microsoft serial mouse)
-- [ ] Sound support (PC speaker beeps/tunes)
-- [ ] FAT16 driver (for hard drives)
-- [ ] Hard drive boot support
-
-### Future Enhancements
-- [ ] Cooperative multitasking (app_yield)
-- [ ] Inter-app messaging
-- [ ] File writing support
-- [ ] Long filename support
+- [x] **LAUNCHER.BIN** - Desktop launcher (1061 bytes)
+- [x] **CLOCK.BIN** - Real-time clock display (249 bytes)
+- [x] **BROWSER.BIN** - File browser showing files with sizes (564 bytes)
+- [x] **TEST.BIN** - Hello test application (112 bytes)
 
 ---
 
-## API Table Summary (v3.11.0)
+## API Table Summary (v3.12.0)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -160,10 +132,18 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 16 | fs_register_driver | Register filesystem driver |
 | 17 | app_load | Load application |
 | 18 | app_run | Run application |
+| 19 | win_create | Create window |
+| 20 | win_destroy | Destroy window |
+| 21 | win_draw | Draw window |
+| 22 | win_focus | Focus window |
+| 23 | win_move | Move window |
+| 24 | win_get_content | Get content area |
+| 25 | register_shell | Register shell callback |
+| **26** | **fs_readdir** | **Read directory entry (NEW)** |
 
 ---
 
-## Memory Layout (v3.11.0)
+## Memory Layout (v3.12.0)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -171,10 +151,39 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
 0x1000:0x0000   Kernel                        28 KB
-  └─ 0x1000:0x0800  API table (256 bytes)
+  +-- 0x1000:0x0800  API table (256 bytes)
 0x1400:0x0000   Heap (malloc pool)            ~532 KB
+0x2000:0x0000   Shell/Launcher segment        64 KB
+0x3000:0x0000   User app segment              64 KB
 0xB800:0x0000   CGA video memory              16 KB
 ```
+
+---
+
+## Planned Features
+
+### Standard Library (v3.14.0)
+- [ ] graphics.lib - C-callable wrappers for Graphics API
+- [ ] unodos.lib - Initialization and utility functions
+- [ ] C compiler support (Turbo C, OpenWatcom)
+
+### Additional Applications
+- [ ] Text editor
+- [ ] Calculator
+- [ ] Settings/Control Panel
+- [ ] Simple games
+
+### Hardware Support
+- [ ] Mouse driver (Microsoft serial mouse)
+- [ ] Sound support (PC speaker beeps/tunes)
+- [ ] FAT16 driver (for hard drives)
+- [ ] Hard drive boot support
+
+### Future Enhancements
+- [ ] Cooperative multitasking (app_yield)
+- [ ] Inter-app messaging
+- [ ] File writing support
+- [ ] Long filename support
 
 ---
 
@@ -184,7 +193,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 |-----------|------|
 | Boot sector | 512 bytes |
 | Stage 2 loader | 2 KB |
-| Kernel | 28 KB |
+| Kernel | ~28 KB |
 | Fonts (8x8 + 4x6) | ~1.5 KB (in kernel) |
 | **Total boot code** | **~30.5 KB** |
 | Available for apps (360KB) | ~329 KB |
@@ -196,6 +205,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ### Tested Hardware
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
+- **Asus EeePC 1005PEB** (Atom, external USB floppy)
 - **QEMU** (PC/XT emulation mode)
 
 ### Display Compatibility
@@ -226,4 +236,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 3.0 (2026-01-25) - Updated for v3.11.0*
+*Document version: 3.1 (2026-01-28) - Updated for v3.12.0 Build 052*
