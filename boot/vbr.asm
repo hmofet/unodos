@@ -97,12 +97,12 @@ boot_code:
     jnc .verify_stage2
 
     ; Extended read failed - try CHS
-    ; Stage2 is at LBA 2 (partition sector 1) = CHS 0/0/3
+    ; Stage2 is at LBA 64 (partition at 63 + 1) = CHS 0/1/2
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
     mov ch, 0                       ; Cylinder 0
-    mov cl, 3                       ; Sector 3 (LBA 2 = sector 3 in 1-based CHS)
-    mov dh, 0                       ; Head 0
+    mov cl, 2                       ; Sector 2 (LBA 64 mod 63 + 1 = 2)
+    mov dh, 1                       ; Head 1 (LBA 64 / 63 = 1)
     mov dl, [drive_number]
     mov bx, 0x0800
     mov es, bx

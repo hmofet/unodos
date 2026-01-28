@@ -36,7 +36,7 @@ RESERVED_SECTORS = 5               # VBR + 4 sectors for stage2_hd
 SECTORS_PER_CLUSTER = 4            # 2KB clusters
 FAT_COPIES = 2
 ROOT_ENTRIES = 512                 # 32 sectors for root dir
-PARTITION_START = 1                # Partition starts at sector 1 (after MBR)
+PARTITION_START = 63               # Partition at sector 63 (standard CHS alignment)
 PARTITION_SECTORS = TOTAL_SECTORS - PARTITION_START
 
 # Calculate FAT size
