@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 049 - Use BIOS INT 16h directly to bypass event system
+; Build 050 - Use direct keyboard port I/O (bypass kernel AND BIOS)
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -77,24 +77,49 @@ entry:
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
 
-    ; Use BIOS INT 16h directly to check keyboard (bypass event system)
-    mov ah, 01h                     ; Check key available
-    int 16h
-    jz .no_event                    ; ZF=1 means no key
+    ; Direct keyboard port I/O (bypass kernel AND BIOS)
+    in al, 0x64                     ; Read keyboard controller status
+    test al, 0x01                   ; Output buffer full? (key available)
+    jz .no_event
 
-    ; Key available - read it
-    mov ah, 00h                     ; Read key
-    int 16h                         ; AL = ASCII, AH = scan code
+    ; Key available - read scancode from port 0x60
+    in al, 0x60                     ; AL = scancode (make/break)
 
-    ; Show key at position 280
+    ; Show scancode at position 280
     push ax
+    mov bl, al
+    shr bl, 4                       ; High nibble
+    cmp bl, 10
+    jb .high_digit
+    add bl, 'A' - 10
+    jmp .show_high
+.high_digit:
+    add bl, '0'
+.show_high:
+    mov al, bl
+    mov bx, 275
+    mov cx, 10
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    pop ax
+
+    push ax
+    and al, 0x0F                    ; Low nibble
+    cmp al, 10
+    jb .low_digit
+    add al, 'A' - 10
+    jmp .show_low
+.low_digit:
+    add al, '0'
+.show_low:
     mov bx, 280
     mov cx, 10
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
     pop ax
 
-    cmp al, 27                      ; ESC?
+    ; ESC scancode is 0x01 (make) or 0x81 (break)
+    cmp al, 0x01                    ; ESC pressed?
     je .exit_ok
 
 .no_event:
