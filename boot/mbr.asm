@@ -18,6 +18,12 @@ start:
     mov ss, ax
     mov sp, 0x7C00                  ; Stack below MBR
 
+    ; Debug: print 'M' to show MBR is running
+    mov ah, 0x0E
+    mov al, 'M'
+    xor bx, bx
+    int 0x10
+
     ; Save boot drive number (BIOS passes in DL)
     mov [boot_drive], dl
 

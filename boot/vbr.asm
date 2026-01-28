@@ -56,6 +56,12 @@ boot_code:
     mov ds, ax
     mov es, ax
 
+    ; Debug: print 'V' to show VBR is running
+    mov ah, 0x0E
+    mov al, 'V'
+    xor bx, bx
+    int 0x10
+
     ; Save boot drive number (MBR passes in DL)
     mov [drive_number], dl
 
@@ -88,11 +94,11 @@ boot_code:
     jnc .verify_stage2
 
     ; Extended read failed - try CHS
-    ; For simplicity, assume stage2 is within first few tracks
+    ; Stage2 is at LBA 2 (partition sector 1) = CHS 0/0/3
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
     mov ch, 0                       ; Cylinder 0
-    mov cl, 2                       ; Sector 2 (1-based)
+    mov cl, 3                       ; Sector 3 (LBA 2 = sector 3 in 1-based CHS)
     mov dh, 0                       ; Head 0
     mov dl, [drive_number]
     mov bx, 0x0800
