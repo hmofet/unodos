@@ -229,6 +229,18 @@ entry:
     cmp word [es:0x0000], 0x4B55    ; 'UK' = UnoDOS Kernel
     jne .invalid_kernel
 
+    ; Debug: print 'J' and first 4 bytes at entry point
+    mov al, 'J'
+    call print_char
+    mov al, [es:0x0002]             ; First byte of entry code
+    call print_hex_byte
+    mov al, [es:0x0003]             ; Second byte
+    call print_hex_byte
+    mov al, [es:0x0004]             ; Third byte
+    call print_hex_byte
+    mov al, [es:0x0005]             ; Fourth byte
+    call print_hex_byte
+
     ; Jump to kernel
     ; Pass drive number in DL
     mov dl, [boot_drive]
