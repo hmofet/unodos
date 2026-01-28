@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 045 - Debug marker + fix file size offset
+; Build 046 - Debug key code display next to '!'
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -64,6 +64,15 @@ entry:
 
     cmp al, EVENT_KEY_PRESS
     jne .no_event
+
+    ; DEBUG: Show key code received
+    push dx
+    mov bx, 310                     ; X position
+    mov cx, 10                      ; Y position
+    mov al, dl                      ; Key code
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    pop dx
 
     cmp dl, 27                      ; ESC?
     je .exit_ok
