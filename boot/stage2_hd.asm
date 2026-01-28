@@ -90,6 +90,10 @@ entry:
     mov eax, [root_start_lba]
     call print_hex_word             ; Print low 16 bits of root LBA
 
+    ; Restore ES to stage2 segment (was set to 0 for BPB read)
+    mov ax, 0x0800
+    mov es, ax
+
     ; Search root directory for KERNEL.BIN
     mov eax, [root_start_lba]
     movzx ecx, word [root_entries]
