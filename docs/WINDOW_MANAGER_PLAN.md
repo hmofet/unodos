@@ -1,21 +1,26 @@
-# UnoDOS v3.12.0 - Window Manager Implementation Plan
+# UnoDOS v3.12.0 - Window Manager Implementation
 
 ## Overview
 
-Implement a minimal Window Manager for UnoDOS, building on the completed Foundation Layer and Application Loader. This enables GUI applications to create and manage windows.
+This document describes the Window Manager implemented in UnoDOS v3.12.0, enabling GUI applications to create and manage windows.
 
-## Current State (v3.11.0 Build 009)
+**Status: COMPLETE (Build 053)**
 
-**Completed:**
-- System Call Infrastructure (INT 0x80 + API table with 19 functions)
+## Current State (v3.12.0 Build 053)
+
+**All Features Implemented:**
+- System Call Infrastructure (INT 0x80 + API table with 30 functions)
 - Graphics API (pixel, rect, filled_rect, char, string, clear_area)
 - Memory Allocator (malloc/free at 0x1400:0000)
 - Keyboard Driver (INT 09h with scan code translation)
-- Event System (32-event circular queue)
-- FAT12 Filesystem (mount, open, read, close)
+- **PS/2 Mouse Driver (INT 0x74/IRQ12 with 3-byte packet protocol)**
+- Event System (32-event circular queue with KEY and MOUSE events)
+- FAT12 Filesystem (mount, open, read, close, readdir)
 - Application Loader (load, run .BIN files)
+- **Window Manager (create, destroy, draw, focus, move, get_content)**
+- **Desktop Launcher with dynamic app discovery**
 
-**Tested on:** HP Omnibook 600C (486DX4-75, VGA, 1.44MB floppy)
+**Tested on:** HP Omnibook 600C (486DX4-75, VGA, 1.44MB floppy), QEMU
 
 ---
 
@@ -238,14 +243,21 @@ These constraints can be lifted in future versions.
 
 ---
 
-## Future Enhancements (Not in v3.12.0)
+## Implementation Complete ✅
 
-- **v3.13.0**: Mouse support for window interaction
-- **v3.14.0**: Window dragging via mouse
-- **v3.15.0**: Overlapping window redraw (complex)
+All window manager features for v3.12.0 have been implemented:
+- win_create_stub, win_destroy_stub, win_draw_stub
+- win_focus_stub, win_move_stub, win_get_content_stub
+- PS/2 mouse driver now available for window interaction
+
+## Future Enhancements
+
+- **v3.13.0**: Window dragging via mouse
+- **v3.14.0**: Overlapping window redraw
 - **Future**: Close button, minimize, resize
 
 ---
 
 *Plan created: 2026-01-25*
-*Target version: v3.12.0*
+*Completed: 2026-01-28 (Build 053)*
+*Status: COMPLETE*

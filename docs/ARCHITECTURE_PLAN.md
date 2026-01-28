@@ -247,12 +247,12 @@ kernel_api_table:
 
 # PART 3: IMPLEMENTATION ROADMAP
 
-## Phase 1: Foundation Layer (v3.3.0 - v3.10.0) ✅ COMPLETE
+## Phase 1: Foundation Layer (v3.3.0 - v3.12.0) ✅ COMPLETE
 
 ### 1.1 System Call Infrastructure ✅
 - [x] INT 0x80 handler (discovery mechanism)
-- [x] Kernel API table at fixed address (0x1000:0x0800)
-- [x] 19 API functions implemented
+- [x] Kernel API table at fixed address (0x1000:0x0B00)
+- [x] 30 API functions implemented
 
 ### 1.2 Graphics API Abstraction ✅
 - [x] gfx_draw_pixel, gfx_draw_rect, gfx_draw_filled_rect
@@ -270,25 +270,44 @@ kernel_api_table:
 ### 1.5 Event System ✅
 - [x] 32-event circular queue
 - [x] event_get / event_wait functions
-- [x] KEY_PRESS events from keyboard driver
+- [x] KEY_PRESS and MOUSE events from drivers
 
 ### 1.6 Filesystem ✅
 - [x] Filesystem abstraction layer (VFS-like)
-- [x] FAT12 driver with mount, open, read, close
+- [x] FAT12 driver with mount, open, read, close, readdir
 - [x] Multi-cluster file reading (FAT chain following)
 
-## Phase 2: Core Services (v3.11.0+)
+### 1.7 PS/2 Mouse Driver ✅ (Build 053)
+- [x] INT 0x74 (IRQ12) mouse interrupt handler
+- [x] 8042 keyboard controller interface (ports 0x60/0x64)
+- [x] 3-byte packet protocol parsing with sync bit
+- [x] Automatic mouse detection at boot
+- [x] mouse_get_state, mouse_set_position, mouse_is_enabled APIs
+
+## Phase 2: Core Services (v3.11.0 - v3.12.0) ✅ COMPLETE
 
 ### 2.1 Application Loader ✅
 - [x] app_load_stub - Load .BIN from FAT12 to heap
 - [x] app_run_stub - Execute via far CALL
 - [x] App table (16 entries, 32 bytes each)
-- [x] Test application framework (HELLO.BIN)
+- [x] Dual segment architecture (shell 0x2000, user 0x3000)
 
-### 2.2 Window Manager (In Progress)
-- [ ] Window structure (position, size, title, content)
-- [ ] Window drawing (title bar, borders, content area)
-- [ ] Window stacking (Z-order)
+### 2.2 Window Manager ✅
+- [x] Window structure (position, size, title, content)
+- [x] Window drawing (title bar, borders, content area)
+- [x] Window stacking (Z-order)
+- [x] win_create, win_destroy, win_draw, win_focus, win_move, win_get_content
+
+### 2.3 Desktop Launcher ✅
+- [x] LAUNCHER.BIN - Dynamic app discovery
+- [x] fs_readdir API for directory iteration
+- [x] Keyboard navigation (W/S), Enter to launch, ESC to exit
+
+### 2.4 Test Applications ✅
+- [x] CLOCK.BIN - Real-time clock display (249 bytes)
+- [x] TEST.BIN - Hello test application (112 bytes)
+- [x] BROWSER.BIN - File browser with sizes (564 bytes)
+- [x] MOUSE.BIN - Mouse test/demo application (578 bytes)
 
 ## Phase 3: Standard Library (Future)
 
@@ -300,10 +319,13 @@ kernel_api_table:
 - [ ] Initialization (_unodos_init calls INT 0x80)
 - [ ] Memory and event wrappers
 
-## Phase 4: Demo Applications (Future)
+## Phase 4: Additional Features (Future)
 
-### 4.1 Clock Display App
-- [ ] First third-party app using graphics.lib
+### 4.1 Serial Mouse Driver
+- [ ] Microsoft-compatible serial mouse support
+
+### 4.2 Text Editor Application
+- [ ] Window-based text editor
 
 ---
 
@@ -398,17 +420,19 @@ See Part 2 for full memory layout.
 
 ---
 
-# PART 7: REMAINING OPEN QUESTIONS
+# PART 7: DECISIONS MADE
 
-The system call architecture is now decided (Hybrid approach). Remaining decisions to be made during implementation:
+The major architectural decisions have been implemented:
 
-1. **App binary format:** Flat .BIN or header format? (Start with flat .BIN)
-2. **Memory allocator:** First-fit, best-fit, or fixed blocks? (Decide when implementing)
-3. **Window manager scope:** Minimal, basic, or full? (Decide when implementing)
+1. **App binary format:** Flat .BIN files with ORG 0x0000 ✅
+2. **Memory allocator:** First-fit algorithm ✅
+3. **Window manager scope:** Minimal - title bar, border, basic API ✅
+4. **Mouse support:** PS/2 via 8042 controller (IRQ12) ✅
+5. **Desktop launcher:** Dynamic discovery via fs_readdir ✅
 
 ---
 
 *Document created: 2026-01-23*
-*Last updated: 2026-01-25*
-*Status: Foundation Layer COMPLETE, Core Services in progress*
-*Current version: v3.11.0 (Application Loader complete)*
+*Last updated: 2026-01-28*
+*Status: Foundation Layer COMPLETE, Core Services COMPLETE, HD Support COMPLETE*
+*Current version: v3.13.0 Build 054 (FAT16/IDE Hard Drive Driver)*

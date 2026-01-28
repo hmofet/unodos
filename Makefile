@@ -12,6 +12,12 @@ FLOPPY_IMG = build/unodos.img
 FLOPPY_144 = build/unodos-144.img
 BUILD_INFO = kernel/build_info.inc
 
+# HD boot files
+MBR_BIN = build/mbr.bin
+VBR_BIN = build/vbr.bin
+STAGE2_HD_BIN = build/stage2_hd.bin
+HD_IMG = build/unodos-hd.img
+
 # Directories
 BUILD_DIR = build
 BOOT_DIR = boot
@@ -32,7 +38,7 @@ MOUSE_TEST_BIN = build/mouse_test.bin
 FLOPPY_360K = 368640
 FLOPPY_144M = 1474560
 
-.PHONY: all clean run debug floppy144 check-deps help apps test-app
+.PHONY: all clean run debug floppy144 check-deps help apps test-app hd-image run-hd
 
 all: $(FLOPPY_IMG)
 
@@ -46,17 +52,24 @@ check-qemu:
 help:
 	@echo "UnoDOS Build System"
 	@echo ""
-	@echo "Targets:"
+	@echo "Floppy Targets:"
 	@echo "  all        - Build 360KB floppy image (default)"
 	@echo "  floppy144  - Build 1.44MB floppy image"
 	@echo "  run        - Build and run in QEMU (360KB)"
 	@echo "  run144     - Build and run in QEMU (1.44MB)"
+	@echo ""
+	@echo "Hard Drive Targets:"
+	@echo "  hd-image   - Build 64MB FAT16 HD image"
+	@echo "  run-hd     - Build and run HD image in QEMU"
+	@echo ""
+	@echo "Other:"
+	@echo "  apps       - Build all applications"
 	@echo "  debug      - Run with QEMU monitor"
 	@echo "  sizes      - Show binary sizes"
 	@echo "  clean      - Remove build artifacts"
 	@echo ""
-	@echo "Requirements: nasm, qemu-system-x86"
-	@echo "  sudo apt install nasm qemu-system-x86"
+	@echo "Requirements: nasm, qemu-system-x86, python3"
+	@echo "  sudo apt install nasm qemu-system-x86 python3"
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -236,3 +249,43 @@ sizes: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Stage 2:     $$(wc -c < $(STAGE2_BIN)) bytes (loader)"
 	@echo "Kernel:      $$(wc -c < $(KERNEL_BIN)) bytes"
 	@echo "Total:       $$(($$(wc -c < $(BOOT_BIN)) + $$(wc -c < $(STAGE2_BIN)) + $$(wc -c < $(KERNEL_BIN)))) bytes"
+
+# ============================================================================
+# Hard Drive / IDE Support (v3.13.0)
+# ============================================================================
+
+# Build HD MBR
+$(MBR_BIN): $(BOOT_DIR)/mbr.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+# Build HD VBR
+$(VBR_BIN): $(BOOT_DIR)/vbr.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+# Build HD Stage2 loader
+$(STAGE2_HD_BIN): $(BOOT_DIR)/stage2_hd.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
+# Create bootable FAT16 hard drive image
+$(HD_IMG): $(MBR_BIN) $(VBR_BIN) $(STAGE2_HD_BIN) $(KERNEL_BIN) apps
+	@echo "Creating bootable FAT16 hard drive image..."
+	python3 tools/create_hd_image.py $@
+
+hd-image: $(HD_IMG)
+
+# Run HD image in QEMU
+run-hd: $(HD_IMG) check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-hda $(HD_IMG) \
+		-boot c \
+		-display gtk
+
+# Run HD image with PS/2 mouse enabled
+run-hd-mouse: $(HD_IMG) check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-hda $(HD_IMG) \
+		-boot c \
+		-device usb-mouse \
+		-display gtk
