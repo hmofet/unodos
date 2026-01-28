@@ -75,21 +75,81 @@ boot_code:
     ; Load stage2_hd from reserved sectors
     ; Stage2 is 2KB (4 sectors) starting at partition sector 1
     ; Load to 0x0800:0x0000 (linear 0x8000)
+    ; LBA 64 (partition at 63 + sector 1 within partition)
     ;
-    ; NOTE: Always use CHS mode here because some USB BIOSes have
-    ; buggy INT 13h extensions that return success but load zeros.
-    ; Stage2 is at a known fixed location so CHS is reliable.
+    ; NOTE: Must query drive geometry - USB drives use different
+    ; CHS translation than standard 63/16 HDD geometry.
 
-    ; Stage2 is at LBA 64 (partition at 63 + 1) = CHS 0/1/2
+    ; Get drive geometry from BIOS
+    mov ah, 0x08
+    mov dl, [drive_number]
+    xor di, di
+    mov es, di                      ; ES:DI = 0 (some BIOSes require this)
+    int 0x13
+    jc .use_default_geometry
+
+    ; Parse geometry: CL[5:0] = max sector, DH = max head
+    mov al, cl
+    and al, 0x3F                    ; Sectors per track (1-63)
+    mov [queried_spt], al
+    inc dh                          ; Max head -> number of heads
+    mov [queried_heads], dh
+    jmp .calc_chs
+
+.use_default_geometry:
+    ; Fallback to standard HD geometry
+    mov byte [queried_spt], 63
+    mov byte [queried_heads], 16
+
+.calc_chs:
+    ; Convert LBA 64 to CHS
+    ; Sector = (LBA mod SPT) + 1
+    ; Head = (LBA / SPT) mod Heads
+    ; Cylinder = (LBA / SPT) / Heads
+
+    mov ax, 64                      ; LBA of stage2
+    xor dx, dx
+    xor bh, bh
+    mov bl, [queried_spt]
+    div bx                          ; AX = LBA / SPT, DX = LBA mod SPT
+    inc dl                          ; Sector (1-based)
+    mov [chs_sector], dl
+
+    xor dx, dx
+    mov bl, [queried_heads]
+    div bx                          ; AX = cylinder, DX = head
+    mov [chs_head], dl
+    mov [chs_cylinder], al
+
+    ; Debug: print geometry info
+    mov ah, 0x0E
+    mov al, '('
+    xor bx, bx
+    int 0x10
+    mov al, [queried_spt]
+    call print_hex_byte
+    mov ah, 0x0E
+    mov al, '/'
+    xor bx, bx
+    int 0x10
+    mov al, [queried_heads]
+    call print_hex_byte
+    mov ah, 0x0E
+    mov al, ')'
+    xor bx, bx
+    int 0x10
+
+    ; Set up buffer
     mov ax, 0x0800
     mov es, ax
     xor bx, bx                      ; ES:BX = 0x0800:0x0000
 
+    ; Read 4 sectors using calculated CHS
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
-    mov ch, 0                       ; Cylinder 0
-    mov cl, 2                       ; Sector 2 (LBA 64 mod 63 + 1 = 2)
-    mov dh, 1                       ; Head 1 (LBA 64 / 63 = 1)
+    mov ch, [chs_cylinder]          ; Cylinder
+    mov cl, [chs_sector]            ; Sector
+    mov dh, [chs_head]              ; Head
     mov dl, [drive_number]
     int 0x13
     jc .disk_error
@@ -188,6 +248,15 @@ print_hex_byte:
 loading_msg:        db 'Loading stage2...', 13, 10, 0
 disk_err_msg:       db 'Disk error', 13, 10, 0
 invalid_stage2_msg: db 'Invalid stage2', 13, 10, 0
+
+; Drive geometry (filled by INT 13h AH=08h)
+queried_spt:        db 63
+queried_heads:      db 16
+
+; Calculated CHS for stage2
+chs_cylinder:       db 0
+chs_head:           db 0
+chs_sector:         db 0
 
 ; ============================================================================
 ; Padding and signature
