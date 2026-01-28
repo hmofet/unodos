@@ -10,12 +10,12 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | RAM | 128 KB minimum, 640 KB typical |
 | Display | CGA 320x200 4-color (also works on VGA in CGA mode) |
 | Storage | 360KB or 1.44MB floppy disk |
-| Input | PC/XT keyboard, optional serial mouse |
+| Input | PC/XT keyboard, PS/2 mouse (optional) |
 | Audio | PC speaker (optional) |
 
 ---
 
-## Completed Features (v3.12.0 Build 052)
+## Completed Features (v3.12.0 Build 053)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -35,8 +35,8 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ### System Call Infrastructure (Foundation 1.1)
 - [x] INT 0x80 handler for API dispatch
-- [x] Kernel API table at fixed address (0x1000:0x0800)
-- [x] 27 API functions implemented (indices 0-26)
+- [x] Kernel API table at fixed address (0x1000:0x0B00)
+- [x] 30 API functions implemented (indices 0-29)
 - [x] Caller segment preservation for string parameters
 
 ### Graphics API (Foundation 1.2)
@@ -67,6 +67,19 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] event_get_stub() - Non-blocking event retrieval
 - [x] event_wait_stub() - Blocking event wait
 - [x] Keyboard integration (posts KEY_PRESS events)
+- [x] Mouse integration (posts MOUSE events)
+
+### PS/2 Mouse Driver (Foundation 1.7) - NEW Build 053
+- [x] INT 0x74 (IRQ12) mouse interrupt handler
+- [x] 8042 keyboard controller interface (ports 0x60/0x64)
+- [x] 3-byte packet protocol parsing
+- [x] Automatic mouse detection at boot
+- [x] Position tracking (0-319 X, 0-199 Y)
+- [x] Button state tracking (left, right, middle)
+- [x] mouse_get_state() - Get position and buttons
+- [x] mouse_set_position() - Set cursor position
+- [x] mouse_is_enabled() - Check mouse availability
+- [x] Graceful degradation when no mouse present
 
 ### Filesystem (Foundation 1.6)
 - [x] Filesystem abstraction layer (VFS-like)
@@ -106,6 +119,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] **CLOCK.BIN** - Real-time clock display (249 bytes)
 - [x] **BROWSER.BIN** - File browser showing files with sizes (564 bytes)
 - [x] **TEST.BIN** - Hello test application (112 bytes)
+- [x] **MOUSE.BIN** - Mouse test/demo application (578 bytes) - NEW Build 053
 
 ---
 
@@ -139,7 +153,10 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 23 | win_move | Move window |
 | 24 | win_get_content | Get content area |
 | 25 | register_shell | Register shell callback |
-| **26** | **fs_readdir** | **Read directory entry (NEW)** |
+| 26 | fs_readdir | Read directory entry |
+| **27** | **mouse_get_state** | **Get mouse position/buttons (NEW)** |
+| **28** | **mouse_set_position** | **Set mouse cursor position (NEW)** |
+| **29** | **mouse_is_enabled** | **Check if mouse available (NEW)** |
 
 ---
 
@@ -151,7 +168,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
 0x1000:0x0000   Kernel                        28 KB
-  +-- 0x1000:0x0800  API table (256 bytes)
+  +-- 0x1000:0x0B00  API table (256 bytes)
 0x1400:0x0000   Heap (malloc pool)            ~532 KB
 0x2000:0x0000   Shell/Launcher segment        64 KB
 0x3000:0x0000   User app segment              64 KB
@@ -174,7 +191,8 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [ ] Simple games
 
 ### Hardware Support
-- [ ] Mouse driver (Microsoft serial mouse)
+- [x] PS/2 mouse driver (COMPLETE - Build 053)
+- [ ] Serial mouse driver (Microsoft compatible)
 - [ ] Sound support (PC speaker beeps/tunes)
 - [ ] FAT16 driver (for hard drives)
 - [ ] Hard drive boot support
@@ -236,4 +254,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 3.1 (2026-01-28) - Updated for v3.12.0 Build 052*
+*Document version: 3.2 (2026-01-28) - Updated for v3.12.0 Build 053 - PS/2 Mouse Driver*
