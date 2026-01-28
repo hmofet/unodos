@@ -1,6 +1,7 @@
 #Requires -RunAsAdministrator
-# UnoDOS Launcher App Floppy Writer
-# Usage: .\launcher.ps1 [DriveLetter]
+# UnoDOS Floppy Writer
+# Writes UnoDOS OS + Launcher to floppy disk
+# Usage: .\floppy.ps1 [DriveLetter]
 
 param(
     [string]$DriveLetter = "A"
@@ -23,14 +24,17 @@ try {
 }
 Pop-Location
 
-# Find launcher floppy image
-$ImagePath = "$projectDir\build\launcher-floppy.img"
+# Find image
+$ImagePath = "$projectDir\build\unodos-144.img"
 if (-not (Test-Path $ImagePath)) {
-    Write-Error "launcher-floppy.img not found in build directory"
+    $ImagePath = "$projectDir\build\unodos.img"
+}
+if (-not (Test-Path $ImagePath)) {
+    Write-Error "No image found in build directory"
     exit 1
 }
 
-Write-Host "Writing launcher-floppy.img to ${DriveLetter}:..." -ForegroundColor Cyan
+Write-Host "Writing $(Split-Path -Leaf $ImagePath) to ${DriveLetter}:..." -ForegroundColor Cyan
 
 $drivePath = "\\.\${DriveLetter}:"
 $imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
@@ -42,11 +46,6 @@ try {
     $stream.Close()
 }
 
-Write-Host "Done! Launcher floppy ready (LAUNCHER.BIN, CLOCK.BIN, TEST.BIN)." -ForegroundColor Green
+Write-Host "Done! UnoDOS floppy ready (OS + Launcher)." -ForegroundColor Green
 Write-Host ""
-Write-Host "To test:" -ForegroundColor Yellow
-Write-Host "  1. Boot UnoDOS from boot floppy"
-Write-Host "  2. Press 'L' to load app (loads launcher)"
-Write-Host "  3. Swap floppies when prompted"
-Write-Host "  4. Use W/S to navigate, Enter to launch Clock"
-Write-Host "  5. Press ESC in clock to return to launcher"
+Write-Host "Boot from this floppy - launcher will auto-load!" -ForegroundColor Yellow
