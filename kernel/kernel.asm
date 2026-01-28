@@ -69,6 +69,16 @@ entry:
     int 0x10
     jmp .print_ver
 .ver_done:
+    ; Print newline and wait for key
+    mov ah, 0x0E
+    mov al, 13
+    int 0x10
+    mov al, 10
+    int 0x10
+    mov al, '>'                     ; Prompt
+    int 0x10
+    xor ah, ah
+    int 0x16                        ; Wait for keypress
 
     ; Set up graphics mode (blue screen)
     call setup_graphics
