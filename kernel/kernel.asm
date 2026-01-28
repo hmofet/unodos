@@ -13,19 +13,49 @@ signature:
     dw 0x4B55                       ; 'UK' signature for kernel verification
 
 entry:
+    ; Debug: print 'K' to show kernel entry reached
+    mov ah, 0x0E
+    mov al, 'K'
+    xor bx, bx
+    int 0x10
+
     ; Set up segment registers for our location
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
 
+    ; Debug: print '1' after segment setup
+    mov ah, 0x0E
+    mov al, '1'
+    xor bx, bx
+    int 0x10
+
     ; Install INT 0x80 handler for system calls
     call install_int_80
+
+    ; Debug: print '2' after INT 0x80 install
+    mov ah, 0x0E
+    mov al, '2'
+    xor bx, bx
+    int 0x10
 
     ; Install keyboard handler (Foundation 1.4)
     call install_keyboard
 
+    ; Debug: print '3' after keyboard install
+    mov ah, 0x0E
+    mov al, '3'
+    xor bx, bx
+    int 0x10
+
     ; Install PS/2 mouse handler (if present)
     call install_mouse              ; CF set if no mouse - that's OK
+
+    ; Debug: print '4' after mouse install
+    mov ah, 0x0E
+    mov al, '4'
+    xor bx, bx
+    int 0x10
 
     ; Set up graphics mode (blue screen)
     call setup_graphics
