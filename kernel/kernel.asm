@@ -61,6 +61,9 @@ entry:
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
+    ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
+    mov word [caller_ds], 0x1000
+
     ; Display version number (top-left corner)
     mov bx, 4
     mov cx, 4
