@@ -14,10 +14,17 @@ signature:
 
 entry:
     ; ========== PHASE 1: Early init (before keyboard handler) ==========
+    ; Save boot drive number (DL contains drive: 0x00=floppy, 0x80=HDD)
+    push dx                         ; Save DL (boot drive)
+
     ; Set up segment registers first
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
+
+    ; Store boot drive number
+    pop dx                          ; Restore DL
+    mov [boot_drive], dl            ; Save for later use
 
     ; Print newline then kernel banner
     mov ah, 0x0E
@@ -56,18 +63,12 @@ entry:
     mov al, ')'
     int 0x10
 
-    ; Newline and prompt
+    ; Newline
     mov ah, 0x0E
     mov al, 13
     int 0x10
     mov al, 10
     int 0x10
-    mov si, press_key_msg
-    call print_string_bios
-
-    ; Wait for keypress using BIOS (before we install our keyboard handler)
-    xor ah, ah
-    int 0x16                        ; Wait for keypress
 
     ; ========== PHASE 2: Install interrupt handlers ==========
     ; Now safe to install keyboard handler (won't break INT 16h)
@@ -97,8 +98,8 @@ entry:
     ; Enable interrupts
     sti
 
-    ; Run keyboard demo (with filesystem test on 'F' key)
-    call keyboard_demo
+    ; Auto-load launcher from boot disk
+    call auto_load_launcher
 
     ; Halt
 halt_loop:
@@ -746,7 +747,9 @@ build_string   equ BUILD_NUMBER_STR
 
 ; Boot messages
 kernel_prefix:  db 'Kernel: ', 0
-press_key_msg:  db 'Press any key...', 0
+
+; Boot configuration
+boot_drive:     db 0                    ; Boot drive number (0x00=floppy, 0x80=HDD)
 
 ; ============================================================================
 ; BIOS Print String (for early boot before our handlers are installed)
@@ -1055,6 +1058,117 @@ test_app_loader:
 .run_ok:        db 'Run: OK', 0
 .run_err:       db 'Run: FAIL', 0
 .app_filename:  db 'LAUNCHER.BIN', 0   ; Parsed by fat12_open into 8.3 format
+
+; ============================================================================
+; Auto-load Launcher - Automatically loads and runs launcher on boot
+; ============================================================================
+
+auto_load_launcher:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Ensure DS is set to kernel segment
+    push cs
+    pop ds
+
+    ; Display "Loading launcher..."
+    mov bx, 4
+    mov cx, 30
+    mov si, .loading_msg
+    call gfx_draw_string_stub
+
+    ; Save DS before changing it for app_load_stub
+    push ds
+
+    ; Load LAUNCHER.BIN from boot drive
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, .launcher_filename
+    mov dl, [boot_drive]            ; Use saved boot drive number
+    mov dh, 0x20                    ; Load to shell segment (0x2000)
+    call app_load_stub
+
+    ; Restore DS immediately
+    pop ds
+
+    jc .load_failed
+
+    ; Save app handle
+    mov [.app_handle], ax
+
+    ; Display "Running..."
+    mov bx, 4
+    mov cx, 40
+    mov si, .running_msg
+    call gfx_draw_string_stub
+
+    ; Run the launcher application
+    mov ax, [.app_handle]
+    call app_run_stub
+    jc .run_failed
+
+    ; Launcher exited normally - return to demo mode
+    mov bx, 4
+    mov cx, 50
+    mov si, .exit_msg
+    call gfx_draw_string_stub
+
+    ; Fall through to keyboard demo for debugging
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    call keyboard_demo
+    ret
+
+.load_failed:
+    ; Display error message
+    mov bx, 4
+    mov cx, 50
+    mov si, .load_err
+    call gfx_draw_string_stub
+
+    ; Fall back to keyboard demo
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    call keyboard_demo
+    ret
+
+.run_failed:
+    ; Display error message
+    mov bx, 4
+    mov cx, 60
+    mov si, .run_err
+    call gfx_draw_string_stub
+
+    ; Fall back to keyboard demo
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    call keyboard_demo
+    ret
+
+; Local data
+.app_handle:        dw 0
+.loading_msg:       db 'Loading launcher...', 0
+.running_msg:       db 'Running...', 0
+.exit_msg:          db 'Launcher exited', 0
+.load_err:          db 'Error: Cannot load launcher', 0
+.run_err:           db 'Error: Launcher failed', 0
+.launcher_filename: db 'LAUNCHER.BIN', 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
