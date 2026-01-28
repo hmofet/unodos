@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 051 - Add STI to enable interrupts, use event system like Clock
+; Build 051 - Working file browser with keyboard support
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -357,4 +357,3 @@ display_buffer: times 32 db 0       ; For formatted output
 
 mount_error_msg: db 'Mount failed', 0
 no_files_msg:   db 'No files', 0
-loop_counter:   db 0
