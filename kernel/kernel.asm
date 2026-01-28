@@ -19,6 +19,22 @@ entry:
     xor bx, bx
     int 0x10
 
+    ; Test: print "UnoDOS" char by char to find which chars break
+    mov al, 'U'
+    int 0x10
+    mov al, 'n'
+    int 0x10
+    mov al, 'o'
+    int 0x10
+    mov al, 'D'
+    int 0x10
+    mov al, 'O'
+    int 0x10
+    mov al, 'S'
+    int 0x10
+    mov al, ' '
+    int 0x10
+
     ; Set up segment registers for our location
     mov ax, 0x1000
     mov ds, ax
