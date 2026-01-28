@@ -72,54 +72,25 @@ boot_code:
     mov si, loading_msg
     call print_string
 
-    ; Load stage2_hd from reserved sectors 1-3
-    ; stage2_hd is up to 1.5KB (3 sectors)
+    ; Load stage2_hd from reserved sectors
+    ; Stage2 is 2KB (4 sectors) starting at partition sector 1
     ; Load to 0x0800:0x0000 (linear 0x8000)
-
-    ; Try INT 13h extended read first
-    ; Calculate absolute LBA: hidden_sectors + 1
-    mov eax, [hidden_sectors]
-    inc eax                         ; Skip VBR (sector 0)
-
-    ; Build disk address packet
-    push dword 0                    ; High 32 bits of LBA
-    push eax                        ; Low 32 bits of LBA
-    push word 0x0800                ; Buffer segment
-    push word 0x0000                ; Buffer offset
-    push word 4                     ; Number of sectors (stage2 = 2KB)
-    push word 0x0010                ; Packet size
-    mov si, sp
-
-    mov ah, 0x42                    ; Extended read
-    mov dl, [drive_number]
-    int 0x13
-    add sp, 16
-    jc .try_chs                     ; Extended read failed, try CHS
-
-    ; Extended read succeeded - print 'E'
-    mov ah, 0x0E
-    mov al, 'E'
-    xor bx, bx
-    int 0x10
-    jmp .verify_stage2
-
-.try_chs:
-    ; Extended read failed - print 'C' and try CHS
-    mov ah, 0x0E
-    mov al, 'C'
-    xor bx, bx
-    int 0x10
+    ;
+    ; NOTE: Always use CHS mode here because some USB BIOSes have
+    ; buggy INT 13h extensions that return success but load zeros.
+    ; Stage2 is at a known fixed location so CHS is reliable.
 
     ; Stage2 is at LBA 64 (partition at 63 + 1) = CHS 0/1/2
+    mov ax, 0x0800
+    mov es, ax
+    xor bx, bx                      ; ES:BX = 0x0800:0x0000
+
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
     mov ch, 0                       ; Cylinder 0
     mov cl, 2                       ; Sector 2 (LBA 64 mod 63 + 1 = 2)
     mov dh, 1                       ; Head 1 (LBA 64 / 63 = 1)
     mov dl, [drive_number]
-    mov bx, 0x0800
-    mov es, bx
-    xor bx, bx                      ; ES:BX = 0x0800:0x0000
     int 0x13
     jc .disk_error
 
