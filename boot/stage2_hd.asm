@@ -84,12 +84,6 @@ entry:
     add eax, ebx
     mov [data_start_lba], eax
 
-    ; Debug: print root_start_lba
-    mov al, 'R'
-    call print_char
-    mov eax, [root_start_lba]
-    call print_hex_word             ; Print low 16 bits of root LBA
-
     ; Restore ES to stage2 segment (was set to 0 for BPB read)
     mov ax, 0x0800
     mov es, ax
@@ -106,10 +100,6 @@ entry:
     ; Read root directory sector
     call read_sector_lba
     jc near .disk_error
-
-    ; Debug: print first byte of sector
-    mov al, [sector_buffer]
-    call print_hex_byte
 
     ; Search 16 entries in this sector
     mov si, sector_buffer
@@ -228,18 +218,6 @@ entry:
     mov es, ax
     cmp word [es:0x0000], 0x4B55    ; 'UK' = UnoDOS Kernel
     jne .invalid_kernel
-
-    ; Debug: print 'J' and first 4 bytes at entry point
-    mov al, 'J'
-    call print_char
-    mov al, [es:0x0002]             ; First byte of entry code
-    call print_hex_byte
-    mov al, [es:0x0003]             ; Second byte
-    call print_hex_byte
-    mov al, [es:0x0004]             ; Third byte
-    call print_hex_byte
-    mov al, [es:0x0005]             ; Fourth byte
-    call print_hex_byte
 
     ; Jump to kernel
     ; Pass drive number in DL
