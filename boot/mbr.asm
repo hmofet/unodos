@@ -2,6 +2,9 @@
 ; Loaded by BIOS at 0x0000:0x7C00
 ; Relocates to 0x0000:0x0600, finds bootable partition, loads VBR
 ;
+; NOTE: This version requires 386+ CPU (uses EAX, push dword).
+; TODO: Create 8086-compatible version for HP 200LX, Sharp PC-3100, etc.
+;
 ; MBR Layout:
 ;   0x000-0x1BD: Boot code (446 bytes)
 ;   0x1BE-0x1FD: Partition table (4 × 16 bytes)
