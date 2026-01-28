@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 048 - Debug: show event type and key at visible positions
+; Build 049 - Use BIOS INT 16h directly to bypass event system
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -77,35 +77,24 @@ entry:
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
 
-    mov ah, API_EVENT_GET
-    int 0x80
-    jc .no_event
+    ; Use BIOS INT 16h directly to check keyboard (bypass event system)
+    mov ah, 01h                     ; Check key available
+    int 16h
+    jz .no_event                    ; ZF=1 means no key
 
-    ; Got an event! Show event TYPE (AL) at position 280
+    ; Key available - read it
+    mov ah, 00h                     ; Read key
+    int 16h                         ; AL = ASCII, AH = scan code
+
+    ; Show key at position 280
     push ax
-    push dx
     mov bx, 280
     mov cx, 10
-    ; AL = event type, show as digit
-    add al, '0'
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
-    pop dx
     pop ax
 
-    cmp al, EVENT_KEY_PRESS
-    jne .no_event
-
-    ; Show key code at position 290 (on screen)
-    push dx
-    mov bx, 290
-    mov cx, 10
-    mov al, dl
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop dx
-
-    cmp dl, 27                      ; ESC?
+    cmp al, 27                      ; ESC?
     je .exit_ok
 
 .no_event:
