@@ -51,6 +51,27 @@ Get-Disk
 
 ---
 
+### apps.ps1
+Creates and writes an app-only floppy for swapping.
+
+**What it does:**
+- Pulls latest code from GitHub
+- Creates FAT12 floppy with all apps (no OS)
+- Writes to floppy drive
+
+**Usage:**
+```powershell
+.\tools\apps.ps1          # Write to A:
+.\tools\apps.ps1 B        # Write to B:
+```
+
+**Use case:**
+- Boot from OS floppy (launcher auto-loads)
+- Swap to this apps floppy for different app selection
+- Launcher will refresh and show apps from new disk
+
+---
+
 ## New Unified Boot Flow (Build 073+)
 
 **Before:** Boot floppy → Press 'L' → Swap floppy → Launcher loads
