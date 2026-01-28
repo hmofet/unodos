@@ -1065,24 +1065,8 @@ test_app_loader:
 
 auto_load_launcher:
     push ax
-    push bx
-    push cx
     push dx
     push si
-    push di
-
-    ; Ensure DS is set to kernel segment
-    push cs
-    pop ds
-
-    ; Display "Loading launcher..."
-    mov bx, 4
-    mov cx, 30
-    mov si, .loading_msg
-    call gfx_draw_string_stub
-
-    ; Save DS before changing it for app_load_stub
-    push ds
 
     ; Load LAUNCHER.BIN from boot drive
     mov ax, 0x1000
@@ -1091,83 +1075,20 @@ auto_load_launcher:
     mov dl, [boot_drive]            ; Use saved boot drive number
     mov dh, 0x20                    ; Load to shell segment (0x2000)
     call app_load_stub
+    jc .failed                      ; On error, fall back to demo
 
-    ; Restore DS immediately
-    pop ds
-
-    jc .load_failed
-
-    ; Save app handle
-    mov [.app_handle], ax
-
-    ; Display "Running..."
-    mov bx, 4
-    mov cx, 40
-    mov si, .running_msg
-    call gfx_draw_string_stub
-
-    ; Run the launcher application
-    mov ax, [.app_handle]
+    ; Run the launcher
     call app_run_stub
-    jc .run_failed
 
-    ; Launcher exited normally - return to demo mode
-    mov bx, 4
-    mov cx, 50
-    mov si, .exit_msg
-    call gfx_draw_string_stub
-
-    ; Fall through to keyboard demo for debugging
-    pop di
+.failed:
+    ; On any error or launcher exit, fall through to keyboard demo
     pop si
     pop dx
-    pop cx
-    pop bx
-    pop ax
-    call keyboard_demo
-    ret
-
-.load_failed:
-    ; Display error message
-    mov bx, 4
-    mov cx, 50
-    mov si, .load_err
-    call gfx_draw_string_stub
-
-    ; Fall back to keyboard demo
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    call keyboard_demo
-    ret
-
-.run_failed:
-    ; Display error message
-    mov bx, 4
-    mov cx, 60
-    mov si, .run_err
-    call gfx_draw_string_stub
-
-    ; Fall back to keyboard demo
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     call keyboard_demo
     ret
 
 ; Local data
-.app_handle:        dw 0
-.loading_msg:       db 'Loading launcher...', 0
-.running_msg:       db 'Running...', 0
-.exit_msg:          db 'Launcher exited', 0
-.load_err:          db 'Error: Cannot load launcher', 0
-.run_err:           db 'Error: Launcher failed', 0
 .launcher_filename: db 'LAUNCHER.BIN', 0
 
 ; ============================================================================
