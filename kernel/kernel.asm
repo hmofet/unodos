@@ -2029,6 +2029,36 @@ FS_ERR_INVALID_HANDLE   equ 4
 FS_ERR_NO_HANDLES       equ 5
 FS_ERR_END_OF_DIR       equ 6
 
+; Filesystem type constants
+FS_TYPE_FAT12           equ 1
+FS_TYPE_FAT16           equ 2
+
+; FAT16 constants
+FAT16_EOC               equ 0xFFF8      ; End of cluster chain (0xFFF8-0xFFFF)
+FAT16_BAD               equ 0xFFF7      ; Bad cluster marker
+
+; Primary IDE controller ports
+IDE_DATA                equ 0x1F0       ; Data register (16-bit)
+IDE_ERROR               equ 0x1F1       ; Error register (read)
+IDE_FEATURES            equ 0x1F1       ; Features register (write)
+IDE_SECT_COUNT          equ 0x1F2       ; Sector count
+IDE_SECT_NUM            equ 0x1F3       ; Sector number (LBA 0-7)
+IDE_CYL_LOW             equ 0x1F4       ; Cylinder low (LBA 8-15)
+IDE_CYL_HIGH            equ 0x1F5       ; Cylinder high (LBA 16-23)
+IDE_HEAD                equ 0x1F6       ; Drive/head (LBA 24-27 + flags)
+IDE_STATUS              equ 0x1F7       ; Status register (read)
+IDE_CMD                 equ 0x1F7       ; Command register (write)
+
+; IDE status bits
+IDE_STAT_BSY            equ 0x80        ; Busy
+IDE_STAT_DRDY           equ 0x40        ; Drive ready
+IDE_STAT_DRQ            equ 0x08        ; Data request
+IDE_STAT_ERR            equ 0x01        ; Error
+
+; IDE commands
+IDE_CMD_READ            equ 0x20        ; Read sectors (with retry)
+IDE_CMD_IDENTIFY        equ 0xEC        ; Identify drive
+
 ; fs_mount_stub - Mount a filesystem on a drive
 ; Input: AL = drive number (0=A:, 1=B:, 0x80=HDD0)
 ;        AH = driver ID (0=auto-detect, 1-3=specific driver)
@@ -2039,8 +2069,13 @@ FS_ERR_END_OF_DIR       equ 6
 fs_mount_stub:
     push si
     push di
+    push dx
 
-    ; For now, only support drive 0 (A:) with FAT12
+    ; Check if this is a hard drive (0x80+)
+    test al, 0x80
+    jnz .try_fat16
+
+    ; Floppy drive - use FAT12
     cmp al, 0
     jne .unsupported
 
@@ -2048,9 +2083,24 @@ fs_mount_stub:
     call fat12_mount
     jc .error
 
-    ; Success - return mount handle 0
+    ; Success - return mount handle 0 (FAT12)
     xor bx, bx
     clc
+    pop dx
+    pop di
+    pop si
+    ret
+
+.try_fat16:
+    ; Hard drive - use FAT16
+    mov dl, al                      ; Drive number in DL
+    call fat16_mount
+    jc .error
+
+    ; Success - return mount handle 1 (FAT16)
+    mov bx, 1
+    clc
+    pop dx
     pop di
     pop si
     ret
@@ -2059,6 +2109,7 @@ fs_mount_stub:
 .error:
     mov ax, FS_ERR_NO_DRIVER
     stc
+    pop dx
     pop di
     pop si
     ret
@@ -2073,14 +2124,25 @@ fs_open_stub:
     push bx
     push di
 
-    ; For now, only support mount handle 0 (FAT12)
-    test bx, bx
-    jnz .invalid_mount
+    ; Route based on mount handle
+    cmp bx, 0
+    je .fat12
+    cmp bx, 1
+    je .fat16
+    jmp .invalid_mount
 
+.fat12:
     ; Call FAT12 open
     call fat12_open
     jc .error
+    jmp .success
 
+.fat16:
+    ; Call FAT16 open
+    call fat16_open
+    jc .error
+
+.success:
     ; Success - return file handle in AX
     clc
     pop di
@@ -2116,10 +2178,31 @@ fs_read_stub:
     cmp ax, 16
     jae .invalid_handle
 
+    ; Get file table entry to check mount handle
+    mov si, ax
+    shl si, 5                       ; * 32 bytes per entry
+    add si, file_table
+
+    ; Check mount handle (offset 1)
+    cmp byte [si + 1], 0            ; FAT12?
+    je .fat12
+    cmp byte [si + 1], 1            ; FAT16?
+    je .fat16
+    jmp .invalid_handle
+
+.fat12:
     ; Call FAT12 read
     call fat12_read
     jc .error
+    jmp .success
 
+.fat16:
+    ; Call FAT16 read (ES:DI -> ES:BX)
+    mov bx, di
+    call fat16_read
+    jc .error
+
+.success:
     ; Success - bytes read in AX
     clc
     pop si
@@ -3194,6 +3277,880 @@ fat12_close:
     ret
 
 ; ============================================================================
+; FAT16/Hard Drive Driver Implementation (v3.13.0)
+; ============================================================================
+
+; fat16_read_sector - Read a sector from hard drive
+; Input: EAX = LBA sector number (relative to partition start)
+;        ES:BX = buffer to read into
+; Output: CF = 0 on success, CF = 1 on error
+; Note: Adds partition offset automatically
+fat16_read_sector:
+    push eax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Add partition start offset to get absolute LBA
+    add eax, [fat16_partition_lba]
+
+    ; Try INT 13h extended read first (LBA mode)
+    ; Build disk address packet on stack
+    push dword 0                    ; High 32 bits of LBA (0 for <2TB)
+    push eax                        ; Low 32 bits of LBA
+    push es                         ; Buffer segment
+    push bx                         ; Buffer offset
+    push word 1                     ; Number of sectors to read
+    push word 0x0010                ; Packet size (16 bytes)
+    mov si, sp                      ; DS:SI = packet address
+
+    mov ah, 0x42                    ; Extended read
+    mov dl, [fat16_drive]           ; Drive number
+    push ds
+    push ss
+    pop ds                          ; DS:SI points to stack packet
+    int 0x13
+    pop ds
+    add sp, 16                      ; Clean up stack packet
+    jnc .success                    ; If no error, we're done
+
+    ; Extended read failed - try CHS fallback
+    ; First get drive geometry
+    mov ah, 0x08                    ; Get drive parameters
+    mov dl, [fat16_drive]
+    int 0x13
+    jc .error
+
+    ; DH = max head number, CL[5:0] = max sector, CL[7:6]:CH = max cylinder
+    mov al, cl
+    and al, 0x3F                    ; AL = sectors per track
+    mov [ide_sectors], al
+    inc dh
+    mov [ide_heads], dh             ; heads = max_head + 1
+
+    ; Convert LBA to CHS
+    ; Restore EAX (LBA)
+    mov eax, [esp + 16]             ; Get original EAX from stack
+    add eax, [fat16_partition_lba]  ; Add partition offset
+
+    ; Sector = (LBA mod sectors_per_track) + 1
+    xor edx, edx
+    movzx ecx, byte [ide_sectors]
+    div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
+    inc dl                          ; Sector is 1-based
+    mov cl, dl                      ; CL = sector
+
+    ; Head = (temp / sectors_per_track) mod heads
+    ; Cylinder = (temp / sectors_per_track) / heads
+    xor edx, edx
+    movzx ecx, byte [ide_heads]
+    div ecx                         ; EAX = cylinder, EDX = head
+    mov dh, dl                      ; DH = head
+    mov ch, al                      ; CH = cylinder low 8 bits
+    shl ah, 6
+    or cl, ah                       ; CL[7:6] = cylinder high 2 bits
+
+    ; Perform CHS read
+    mov ah, 0x02                    ; Read sectors
+    mov al, 1                       ; 1 sector
+    mov dl, [fat16_drive]           ; Drive number
+    int 0x13
+    jc .error
+
+.success:
+    clc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+.error:
+    stc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+; fat16_mount - Mount FAT16 partition from hard drive
+; Input: DL = drive number (0x80 = first HD)
+; Output: CF = 0 on success, CF = 1 on error
+;         AX = error code if CF = 1
+fat16_mount:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Save drive number
+    mov [fat16_drive], dl
+
+    ; Reset drive
+    xor ax, ax
+    int 0x13
+    jc .read_error
+
+    ; Read MBR (sector 0)
+    mov ax, 0x1000
+    mov es, ax
+    mov bx, fat16_sector_buf
+    xor eax, eax                    ; LBA 0
+    mov [fat16_partition_lba], eax  ; Temporarily 0 for absolute read
+
+    ; Use BIOS INT 13h to read MBR directly
+    mov ah, 0x02                    ; Read sectors
+    mov al, 1                       ; 1 sector
+    mov cx, 0x0001                  ; Cylinder 0, sector 1
+    xor dh, dh                      ; Head 0
+    mov dl, [fat16_drive]
+    int 0x13
+    jc .read_error
+
+    ; Verify MBR signature
+    cmp word [fat16_sector_buf + 510], 0xAA55
+    jne .read_error
+
+    ; Find first bootable FAT16 partition in partition table
+    ; Partition table starts at offset 0x1BE
+    mov si, fat16_sector_buf + 0x1BE
+    mov cx, 4                       ; 4 partition entries
+
+.find_partition:
+    ; Check partition type (offset 4)
+    mov al, [si + 4]
+    ; FAT16 types: 0x04 (FAT16 <32MB), 0x06 (FAT16 >32MB), 0x0E (FAT16 LBA)
+    cmp al, 0x04
+    je .found_partition
+    cmp al, 0x06
+    je .found_partition
+    cmp al, 0x0E
+    je .found_partition
+
+    add si, 16                      ; Next partition entry
+    loop .find_partition
+
+    ; No FAT16 partition found
+    jmp .read_error
+
+.found_partition:
+    ; Get partition start LBA (offset 8 in partition entry)
+    mov eax, [si + 8]
+    mov [fat16_partition_lba], eax
+
+    ; Read VBR (Volume Boot Record) - first sector of partition
+    mov bx, fat16_sector_buf
+    xor eax, eax                    ; Sector 0 relative to partition
+    call fat16_read_sector
+    jc .read_error
+
+    ; Verify VBR signature
+    cmp word [fat16_sector_buf + 510], 0xAA55
+    jne .read_error
+
+    ; Parse BPB (BIOS Parameter Block)
+    ; Bytes per sector at offset 0x0B (must be 512)
+    cmp word [fat16_sector_buf + 0x0B], 512
+    jne .read_error
+
+    ; Sectors per cluster at offset 0x0D
+    mov al, [fat16_sector_buf + 0x0D]
+    test al, al
+    jz .read_error
+    mov [fat16_sects_per_clust], al
+
+    ; Reserved sectors at offset 0x0E
+    mov ax, [fat16_sector_buf + 0x0E]
+    mov [fat16_bpb_cache], ax       ; Store at offset 0 of cache
+
+    ; Number of FATs at offset 0x10
+    mov al, [fat16_sector_buf + 0x10]
+    mov [fat16_bpb_cache + 2], al
+
+    ; Root directory entries at offset 0x11
+    mov ax, [fat16_sector_buf + 0x11]
+    mov [fat16_root_entries], ax
+
+    ; Sectors per FAT at offset 0x16
+    mov ax, [fat16_sector_buf + 0x16]
+    mov [fat16_bpb_cache + 4], ax   ; Store sectors per FAT
+
+    ; Calculate FAT start sector
+    ; fat_start = reserved_sectors
+    movzx eax, word [fat16_bpb_cache]
+    mov [fat16_fat_start], eax
+
+    ; Calculate root directory start sector
+    ; root_start = reserved + (num_fats * sectors_per_fat)
+    movzx eax, byte [fat16_bpb_cache + 2]  ; num_fats
+    movzx ebx, word [fat16_bpb_cache + 4]  ; sectors_per_fat
+    imul eax, ebx
+    movzx ebx, word [fat16_bpb_cache]      ; reserved_sectors
+    add eax, ebx
+    mov [fat16_root_start], eax
+
+    ; Calculate data area start sector
+    ; data_start = root_start + (root_entries * 32 / 512)
+    movzx ebx, word [fat16_root_entries]
+    shr ebx, 4                      ; root_entries * 32 / 512 = root_entries / 16
+    add eax, ebx
+    mov [fat16_data_start], eax
+
+    ; Mark as mounted
+    mov byte [fat16_mounted], 1
+
+    ; Invalidate FAT cache
+    mov dword [fat16_fat_cached_sect], 0xFFFFFFFF
+
+    ; Success
+    xor ax, ax
+    clc
+    jmp .done
+
+.read_error:
+    mov ax, FS_ERR_READ_ERROR
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+; fat16_open - Open a file on FAT16 volume
+; Input: DS:SI = filename (null-terminated, "FILENAME.EXT")
+; Output: CF = 0 on success, AX = file handle
+;         CF = 1 on error, AX = error code
+fat16_open:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Check if FAT16 is mounted
+    cmp byte [fat16_mounted], 1
+    jne .not_mounted
+
+    ; Convert filename to FAT 8.3 format (space-padded)
+    ; Use 11 bytes on stack for converted name
+    sub sp, 12                      ; 11 bytes + 1 for alignment
+    mov di, sp
+    push ss
+    pop es
+
+    ; Initialize with spaces
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Copy filename (up to 8 chars before '.')
+    mov cx, 8
+.copy_name:
+    lodsb
+    test al, al
+    jz .name_done
+    cmp al, '.'
+    je .copy_ext
+    ; Convert to uppercase
+    cmp al, 'a'
+    jb .store_char
+    cmp al, 'z'
+    ja .store_char
+    sub al, 32                      ; Convert to uppercase
+.store_char:
+    stosb
+    loop .copy_name
+
+    ; Skip to dot if still more chars
+.skip_to_dot:
+    lodsb
+    test al, al
+    jz .name_done
+    cmp al, '.'
+    jne .skip_to_dot
+
+.copy_ext:
+    ; Copy extension (up to 3 chars)
+    mov di, sp
+    add di, 8                       ; Extension starts at offset 8
+    mov cx, 3
+.copy_ext_loop:
+    lodsb
+    test al, al
+    jz .name_done
+    ; Convert to uppercase
+    cmp al, 'a'
+    jb .store_ext
+    cmp al, 'z'
+    ja .store_ext
+    sub al, 32
+.store_ext:
+    stosb
+    loop .copy_ext_loop
+
+.name_done:
+    ; Now search root directory for file
+    ; Read root directory sectors
+    mov eax, [fat16_root_start]
+    movzx ecx, word [fat16_root_entries]
+    shr ecx, 4                      ; root_sectors = entries / 16 (16 entries per sector)
+    test ecx, ecx
+    jz .not_found
+
+    mov di, sp                      ; DI = pointer to converted filename
+
+.search_sector:
+    push ecx                        ; Save sector count
+    push eax                        ; Save current sector
+
+    ; Read root directory sector
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    jc .search_error
+
+    ; Search 16 entries in this sector
+    mov si, fat16_sector_buf
+    mov cx, 16
+
+.search_entry:
+    ; Check if entry is used (first byte != 0 and != 0xE5)
+    mov al, [si]
+    test al, al                     ; End of directory?
+    jz .not_found
+    cmp al, 0xE5                    ; Deleted entry?
+    je .next_entry
+
+    ; Compare 11-byte filename
+    push cx
+    push si
+    push di
+    mov cx, 11
+    push ss
+    pop es                          ; ES:DI = stack filename
+    repe cmpsb
+    pop di
+    pop si
+    pop cx
+    je .found_file
+
+.next_entry:
+    add si, 32                      ; Next directory entry
+    loop .search_entry
+
+    ; Move to next sector
+    pop eax
+    pop ecx
+    inc eax
+    loop .search_sector
+
+    jmp .not_found
+
+.found_file:
+    ; Found the file - allocate file handle
+    ; First clean up search loop stack
+    add sp, 8                       ; Pop saved eax and ecx
+
+    ; Get file info from directory entry
+    mov ax, [si + 26]               ; Starting cluster (offset 26)
+    mov dx, [si + 28]               ; File size low word
+    mov cx, [si + 30]               ; File size high word
+
+    ; Find free file handle
+    push ax
+    push cx
+    push dx
+    mov si, file_table
+    xor bx, bx                      ; Handle counter
+
+.find_handle:
+    cmp byte [si], 0                ; Free slot?
+    je .got_handle
+    add si, 32
+    inc bx
+    cmp bx, 16                      ; Max 16 handles
+    jb .find_handle
+
+    ; No free handles
+    pop dx
+    pop cx
+    pop ax
+    add sp, 12                      ; Clean up filename
+    mov ax, FS_ERR_NO_HANDLES
+    stc
+    jmp .done
+
+.got_handle:
+    pop dx                          ; File size low
+    pop cx                          ; File size high
+    pop ax                          ; Starting cluster
+
+    ; Fill in file handle
+    mov byte [si], 1                ; Status = open
+    mov byte [si + 1], 1            ; Mount handle = 1 (FAT16)
+    mov [si + 2], ax                ; Starting cluster
+    mov [si + 4], dx                ; File size low
+    mov [si + 6], cx                ; File size high
+    mov dword [si + 8], 0           ; Current position = 0
+    mov [si + 12], ax               ; Current cluster = starting cluster
+
+    ; Clean up filename and return handle
+    add sp, 12
+    mov ax, bx                      ; Return handle in AX
+    clc
+    jmp .done
+
+.search_error:
+    add sp, 8                       ; Pop saved eax and ecx
+.not_found:
+    add sp, 12                      ; Clean up filename
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    jmp .done
+
+.not_mounted:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+; fat16_get_next_cluster - Get next cluster in FAT chain
+; Input: AX = current cluster
+; Output: AX = next cluster (0xFFF8+ = end of chain)
+;         CF = 1 if error
+fat16_get_next_cluster:
+    push bx
+    push cx
+    push dx
+    push es
+
+    ; Calculate FAT sector containing this cluster
+    ; Each sector holds 256 cluster entries (512 bytes / 2 bytes per entry)
+    mov bx, ax                      ; Save cluster number
+    shr ax, 8                       ; sector_index = cluster / 256
+
+    ; Check if this sector is cached
+    movzx eax, ax
+    add eax, [fat16_fat_start]      ; Absolute FAT sector
+    cmp eax, [fat16_fat_cached_sect]
+    je .cached
+
+    ; Need to load this FAT sector
+    mov [fat16_fat_cached_sect], eax
+    push bx
+    mov cx, 0x1000
+    mov es, cx
+    mov cx, fat16_fat_cache
+    mov bx, cx
+    call fat16_read_sector
+    pop bx
+    jc .error
+
+.cached:
+    ; Get cluster entry from cache
+    ; offset = (cluster mod 256) * 2
+    mov ax, bx
+    and ax, 0x00FF                  ; cluster mod 256
+    shl ax, 1                       ; * 2 bytes per entry
+    mov bx, ax
+    mov ax, [fat16_fat_cache + bx]  ; Get next cluster value
+
+    clc
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.error:
+    mov dword [fat16_fat_cached_sect], 0xFFFFFFFF  ; Invalidate cache
+    stc
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; fat16_read - Read from open FAT16 file
+; Input: AX = file handle
+;        ES:BX = buffer
+;        CX = bytes to read
+; Output: AX = bytes actually read
+;         CF = 1 on error
+fat16_read:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Validate handle
+    cmp ax, 16
+    jae .invalid_handle
+
+    ; Get file table entry
+    mov si, ax
+    shl si, 5                       ; * 32 bytes per entry
+    add si, file_table
+
+    ; Check if handle is open and is FAT16
+    cmp byte [si], 1
+    jne .invalid_handle
+    cmp byte [si + 1], 1            ; Mount handle 1 = FAT16
+    jne .invalid_handle
+
+    ; Save buffer pointer
+    mov [.buffer_seg], es
+    mov [.buffer_off], bx
+    mov [.bytes_requested], cx
+
+    ; Check if at end of file
+    mov eax, [si + 8]               ; Current position
+    mov edx, [si + 4]               ; File size
+    cmp eax, edx
+    jae .eof
+
+    ; Calculate bytes remaining in file
+    sub edx, eax                    ; bytes_remaining = size - position
+    movzx ecx, word [.bytes_requested]
+    cmp ecx, edx
+    jbe .size_ok
+    mov ecx, edx                    ; Limit to remaining bytes
+.size_ok:
+    mov [.bytes_to_read], cx
+
+    ; Calculate offset within current cluster
+    ; offset_in_cluster = position mod cluster_size
+    movzx eax, byte [fat16_sects_per_clust]
+    shl eax, 9                      ; cluster_size = sects_per_clust * 512
+    mov [.cluster_size], ax
+
+    mov eax, [si + 8]               ; Current position
+    xor edx, edx
+    movzx ecx, word [.cluster_size]
+    div ecx                         ; EAX = cluster index, EDX = offset in cluster
+    mov [.offset_in_cluster], dx
+
+    ; Get current cluster from file handle
+    mov ax, [si + 12]               ; Current cluster
+
+    ; Read loop
+    xor di, di                      ; Total bytes read
+
+.read_loop:
+    ; Check if done
+    cmp di, [.bytes_to_read]
+    jae .read_done
+
+    ; Calculate sector within cluster
+    mov ax, [.offset_in_cluster]
+    shr ax, 9                       ; sector_in_cluster = offset / 512
+
+    ; Calculate absolute sector
+    ; sector = data_start + (cluster - 2) * sects_per_clust + sector_in_cluster
+    mov bx, [si + 12]               ; Current cluster
+    sub bx, 2
+    movzx eax, byte [fat16_sects_per_clust]
+    movzx ecx, bx
+    imul eax, ecx
+    movzx ecx, ax                   ; sector_in_cluster is in ax from before
+    mov ax, [.offset_in_cluster]
+    shr ax, 9
+    add eax, ecx
+    add eax, [fat16_data_start]
+
+    ; Read sector
+    push di
+    push si
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    pop es
+    pop si
+    pop di
+    jc .read_error
+
+    ; Copy data from sector to user buffer
+    mov cx, [.offset_in_cluster]
+    and cx, 0x01FF                  ; offset in sector
+    mov bx, 512
+    sub bx, cx                      ; bytes available in this sector
+
+    mov ax, [.bytes_to_read]
+    sub ax, di                      ; bytes still needed
+    cmp bx, ax
+    jbe .copy_partial
+    mov bx, ax                      ; Only copy what we need
+.copy_partial:
+
+    ; Copy BX bytes from fat16_sector_buf+CX to user buffer
+    push si
+    push di
+    mov si, fat16_sector_buf
+    add si, cx                      ; Source offset
+    mov ax, [.buffer_seg]
+    push es
+    mov es, ax
+    mov ax, [.buffer_off]
+    add ax, di                      ; Destination includes bytes already read
+    mov di, ax
+    mov cx, bx
+    rep movsb
+    pop es
+    pop di
+    pop si
+
+    ; Update counters
+    add di, bx                      ; Total bytes read
+    add [.offset_in_cluster], bx    ; Offset in cluster
+
+    ; Check if we need next cluster
+    mov ax, [.offset_in_cluster]
+    cmp ax, [.cluster_size]
+    jb .read_loop
+
+    ; Move to next cluster
+    mov ax, [si + 12]               ; Current cluster
+    call fat16_get_next_cluster
+    jc .read_error
+    cmp ax, FAT16_EOC
+    jae .read_done                  ; End of chain
+    mov [si + 12], ax               ; Update current cluster
+    mov word [.offset_in_cluster], 0
+    jmp .read_loop
+
+.read_done:
+    ; Update file position
+    movzx eax, di
+    add [si + 8], eax
+    mov ax, di                      ; Return bytes read
+    clc
+    jmp .done
+
+.eof:
+    xor ax, ax                      ; 0 bytes read
+    clc
+    jmp .done
+
+.invalid_handle:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    jmp .done
+
+.read_error:
+    mov ax, FS_ERR_READ_ERROR
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; Local variables for fat16_read
+.buffer_seg:        dw 0
+.buffer_off:        dw 0
+.bytes_requested:   dw 0
+.bytes_to_read:     dw 0
+.cluster_size:      dw 0
+.offset_in_cluster: dw 0
+
+; ============================================================================
+; IDE Direct Access Driver (fallback for INT 13h failures)
+; ============================================================================
+
+; ide_wait_ready - Wait for IDE drive to become ready
+; Output: CF = 0 if ready, CF = 1 if timeout
+ide_wait_ready:
+    push ax
+    push cx
+    push dx
+
+    mov cx, 0xFFFF                  ; Timeout counter
+    mov dx, IDE_STATUS
+.wait:
+    in al, dx
+    test al, IDE_STAT_BSY           ; Busy?
+    jz .not_busy
+    loop .wait
+    stc                             ; Timeout
+    jmp .done
+
+.not_busy:
+    test al, IDE_STAT_DRDY          ; Ready?
+    jnz .ready
+    loop .wait
+    stc                             ; Timeout
+    jmp .done
+
+.ready:
+    clc
+
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; ide_read_sector - Read sector directly via IDE ports
+; Input: EAX = LBA sector number, ES:BX = buffer
+; Output: CF = 0 on success, CF = 1 on error
+ide_read_sector:
+    push eax
+    push bx
+    push cx
+    push dx
+
+    ; Wait for drive ready
+    call ide_wait_ready
+    jc .error
+
+    ; Set up LBA address in registers
+    mov dx, IDE_SECT_COUNT
+    mov al, 1                       ; Read 1 sector
+    out dx, al
+
+    mov dx, IDE_SECT_NUM
+    mov eax, [esp + 12]             ; Get LBA from stack
+    out dx, al                      ; LBA bits 0-7
+
+    mov dx, IDE_CYL_LOW
+    shr eax, 8
+    out dx, al                      ; LBA bits 8-15
+
+    mov dx, IDE_CYL_HIGH
+    shr eax, 8
+    out dx, al                      ; LBA bits 16-23
+
+    mov dx, IDE_HEAD
+    shr eax, 8
+    and al, 0x0F                    ; LBA bits 24-27
+    or al, 0xE0                     ; LBA mode, master drive
+    out dx, al
+
+    ; Issue read command
+    mov dx, IDE_CMD
+    mov al, IDE_CMD_READ
+    out dx, al
+
+    ; Wait for data ready
+    call ide_wait_ready
+    jc .error
+
+    ; Check DRQ
+    mov dx, IDE_STATUS
+    in al, dx
+    test al, IDE_STAT_DRQ
+    jz .error
+
+    ; Read 256 words (512 bytes)
+    mov dx, IDE_DATA
+    mov cx, 256
+    rep insw
+
+    clc
+    jmp .done
+
+.error:
+    stc
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+; ide_detect - Detect IDE drive presence
+; Output: CF = 0 if drive found, CF = 1 if not
+;         AL = drive type info (if found)
+ide_detect:
+    push bx
+    push cx
+    push dx
+
+    ; Select master drive
+    mov dx, IDE_HEAD
+    mov al, 0xA0                    ; Master, no LBA bits
+    out dx, al
+
+    ; Small delay
+    mov cx, 10
+.delay1:
+    in al, dx
+    loop .delay1
+
+    ; Check if drive responds
+    mov dx, IDE_STATUS
+    in al, dx
+    cmp al, 0xFF                    ; No drive returns 0xFF
+    je .no_drive
+    test al, al                     ; No drive may return 0
+    jz .no_drive
+
+    ; Try IDENTIFY command
+    mov dx, IDE_CMD
+    mov al, IDE_CMD_IDENTIFY
+    out dx, al
+
+    ; Wait for response
+    call ide_wait_ready
+    jc .no_drive
+
+    ; Check DRQ
+    mov dx, IDE_STATUS
+    in al, dx
+    test al, IDE_STAT_DRQ
+    jz .no_drive
+
+    ; Drive found - read and discard identify data
+    mov dx, IDE_DATA
+    mov cx, 256
+.discard:
+    in ax, dx
+    loop .discard
+
+    ; Mark drive as present
+    or byte [ide_drive_present], 0x01
+
+    clc
+    mov al, 0x01                    ; Drive present
+    jmp .done
+
+.no_drive:
+    stc
+
+.done:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
 ; Application Loader (Core Services 2.1)
 ; ============================================================================
 
@@ -4029,6 +4986,37 @@ fs_read_buffer: times 1024 db 0
 ; Stores one sector of FAT at a time
 fat_cache: times 512 db 0
 fat_cache_sector: dw 0xFFFF          ; Currently cached FAT sector (0xFFFF = invalid)
+
+; ============================================================================
+; FAT16/Hard Drive Driver Data (v3.13.0)
+; ============================================================================
+
+; FAT16 mount state
+fat16_mounted:          db 0            ; 1 if FAT16 volume mounted
+fat16_drive:            db 0x80         ; Drive number (0x80=first HD)
+fat16_partition_lba:    dd 0            ; Partition start LBA
+fat16_bpb_cache:        times 62 db 0   ; BPB cache (just the important fields)
+
+; FAT16 calculated offsets (32-bit LBA values)
+fat16_fat_start:        dd 0            ; First FAT sector (LBA)
+fat16_root_start:       dd 0            ; Root directory start (LBA)
+fat16_data_start:       dd 0            ; Data area start (LBA)
+fat16_root_entries:     dw 0            ; Number of root directory entries
+fat16_sects_per_clust:  db 0            ; Sectors per cluster
+fat16_reserved:         db 0            ; Reserved for alignment
+
+; FAT16 FAT cache
+fat16_fat_cache:        times 512 db 0  ; One sector FAT cache
+fat16_fat_cached_sect:  dd 0xFFFFFFFF   ; Currently cached FAT sector (0xFFFFFFFF = invalid)
+
+; Sector read buffer for FAT16 (used during mount/open)
+fat16_sector_buf:       times 512 db 0
+
+; IDE driver state
+ide_drive_present:      db 0            ; Bit 0 = master, bit 1 = slave
+ide_use_lba:            db 1            ; 1 = use LBA mode, 0 = CHS
+ide_heads:              dw 16           ; Heads per cylinder (for CHS fallback)
+ide_sectors:            dw 63           ; Sectors per track (for CHS fallback)
 
 ; ============================================================================
 ; Application Table (Core Services 2.1)
