@@ -13,88 +13,65 @@ signature:
     dw 0x4B55                       ; 'UK' signature for kernel verification
 
 entry:
-    ; Debug: print 'K' to show kernel entry reached
-    mov ah, 0x0E
-    mov al, 'K'
-    xor bx, bx
-    int 0x10
-
-    ; Test: print "UnoDOS" char by char to find which chars break
-    mov al, 'U'
-    int 0x10
-    mov al, 'n'
-    int 0x10
-    mov al, 'o'
-    int 0x10
-    mov al, 'D'
-    int 0x10
-    mov al, 'O'
-    int 0x10
-    mov al, 'S'
-    int 0x10
-    mov al, ' '
-    int 0x10
-
-    ; Set up segment registers for our location
+    ; ========== PHASE 1: Early init (before keyboard handler) ==========
+    ; Set up segment registers first
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
 
-    ; Debug: print '1' after segment setup
-    mov ah, 0x0E
-    mov al, '1'
-    xor bx, bx
-    int 0x10
-
-    ; Install INT 0x80 handler for system calls
-    call install_int_80
-
-    ; Debug: print '2' after INT 0x80 install
-    mov ah, 0x0E
-    mov al, '2'
-    xor bx, bx
-    int 0x10
-
-    ; Install keyboard handler (Foundation 1.4)
-    call install_keyboard
-
-    ; Debug: print '3' after keyboard install
-    mov ah, 0x0E
-    mov al, '3'
-    xor bx, bx
-    int 0x10
-
-    ; Skip mouse init for USB boot debugging
-    ; call install_mouse              ; CF set if no mouse - that's OK
-    mov byte [mouse_enabled], 0     ; Mark mouse as disabled
-
-    ; Debug: print '4' after mouse install
-    mov ah, 0x0E
-    mov al, '4'
-    xor bx, bx
-    int 0x10
-
-    ; Debug: print version string in text mode before graphics
-    mov si, version_string
-.print_ver:
-    lodsb
-    test al, al
-    jz .ver_done
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
-    jmp .print_ver
-.ver_done:
-    ; Print newline and wait for key
+    ; Print newline then kernel banner
     mov ah, 0x0E
     mov al, 13
     int 0x10
     mov al, 10
     int 0x10
-    mov al, '>'                     ; Prompt
+
+    ; Print "Kernel: " prefix
+    mov si, kernel_prefix
+    call print_string_bios
+
+    ; Install INT 0x80 handler for system calls
+    call install_int_80
+    mov ah, 0x0E
+    mov al, '.'
+    xor bx, bx
     int 0x10
+
+    ; Skip mouse init for USB boot (8042 controller issues)
+    mov byte [mouse_enabled], 0
+
+    ; Print version string
+    mov si, version_string
+    call print_string_bios
+
+    ; Print build string
+    mov al, ' '
+    mov ah, 0x0E
+    int 0x10
+    mov al, '('
+    int 0x10
+    mov si, build_string
+    call print_string_bios
+    mov ah, 0x0E
+    mov al, ')'
+    int 0x10
+
+    ; Newline and prompt
+    mov ah, 0x0E
+    mov al, 13
+    int 0x10
+    mov al, 10
+    int 0x10
+    mov si, press_key_msg
+    call print_string_bios
+
+    ; Wait for keypress using BIOS (before we install our keyboard handler)
     xor ah, ah
     int 0x16                        ; Wait for keypress
+
+    ; ========== PHASE 2: Install interrupt handlers ==========
+    ; Now safe to install keyboard handler (won't break INT 16h)
+    call install_keyboard
 
     ; Set up graphics mode (blue screen)
     call setup_graphics
@@ -766,6 +743,33 @@ mouse_is_enabled:
 ; Aliases for compatibility
 version_string equ VERSION_STR
 build_string   equ BUILD_NUMBER_STR
+
+; Boot messages
+kernel_prefix:  db 'Kernel: ', 0
+press_key_msg:  db 'Press any key...', 0
+
+; ============================================================================
+; BIOS Print String (for early boot before our handlers are installed)
+; Input: DS:SI = null-terminated string
+; ============================================================================
+
+print_string_bios:
+    push ax
+    push bx
+    push si
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    jmp .loop
+.done:
+    pop si
+    pop bx
+    pop ax
+    ret
 
 ; ============================================================================
 ; Filesystem Test - Tests FAT12 Driver (v3.10.0)
