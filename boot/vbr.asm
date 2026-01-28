@@ -94,9 +94,22 @@ boot_code:
     mov dl, [drive_number]
     int 0x13
     add sp, 16
-    jnc .verify_stage2
+    jc .try_chs                     ; Extended read failed, try CHS
 
-    ; Extended read failed - try CHS
+    ; Extended read succeeded - print 'E'
+    mov ah, 0x0E
+    mov al, 'E'
+    xor bx, bx
+    int 0x10
+    jmp .verify_stage2
+
+.try_chs:
+    ; Extended read failed - print 'C' and try CHS
+    mov ah, 0x0E
+    mov al, 'C'
+    xor bx, bx
+    int 0x10
+
     ; Stage2 is at LBA 64 (partition at 63 + 1) = CHS 0/1/2
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
@@ -114,6 +127,19 @@ boot_code:
     ; Verify stage2 signature
     mov ax, 0x0800
     mov es, ax
+
+    ; Debug: print first byte loaded
+    mov ah, 0x0E
+    mov al, '['
+    xor bx, bx
+    int 0x10
+    mov al, [es:0x0000]             ; First byte
+    call print_hex_byte
+    mov ah, 0x0E
+    mov al, ']'
+    xor bx, bx
+    int 0x10
+
     cmp word [es:0x0000], 0x5355    ; 'US' (UnoDOS Stage2)
     jne .invalid_stage2
 
@@ -157,6 +183,32 @@ print_string:
 halt:
     hlt
     jmp halt
+
+; print_hex_byte - Print AL as hex
+print_hex_byte:
+    push ax
+    push bx
+    mov bx, ax
+    shr al, 4                       ; High nibble
+    call .print_nibble
+    mov al, bl
+    and al, 0x0F                    ; Low nibble
+    call .print_nibble
+    pop bx
+    pop ax
+    ret
+.print_nibble:
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp .print
+.digit:
+    add al, '0'
+.print:
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    ret
 
 ; ============================================================================
 ; Data
