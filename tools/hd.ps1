@@ -25,11 +25,13 @@ if (-not $isAdmin) {
     exit 1
 }
 
-# Check if image file exists
+# Check if image file exists and resolve to absolute path
 if (-not (Test-Path $ImagePath)) {
     Write-Host "ERROR: Image file not found: $ImagePath" -ForegroundColor Red
     exit 1
 }
+# Convert to absolute path (required for .NET methods when running as Admin)
+$ImagePath = (Resolve-Path $ImagePath).Path
 
 # Get disk information
 try {
