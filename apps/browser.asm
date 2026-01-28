@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 050 - Use direct keyboard port I/O (bypass kernel AND BIOS)
+; Build 051 - Add STI to enable interrupts, use event system like Clock
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -49,77 +49,18 @@ entry:
     ; Scan and display files
     call scan_and_display
 
-    ; DEBUG: Show marker that we reached main loop
-    mov bx, 300                     ; X position (right side)
-    mov cx, 10                      ; Y position (top)
-    mov al, '!'                     ; Marker character
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-
-    ; DEBUG: Show loop counter to prove loop runs
-    mov byte [cs:loop_counter], 0
-
-    ; Event loop - wait for ESC
+    ; Event loop - wait for ESC (like Clock app)
 .main_loop:
-    ; Increment and show loop counter (proves loop is running)
-    inc byte [cs:loop_counter]
-    mov al, [cs:loop_counter]
-    and al, 0x0F                    ; Keep low nibble
-    cmp al, 10
-    jb .digit
-    add al, 'A' - 10
-    jmp .show_count
-.digit:
-    add al, '0'
-.show_count:
-    mov bx, 305
-    mov cx, 10
-    mov ah, API_GFX_DRAW_CHAR
+    ; Ensure interrupts are enabled (keyboard IRQ needs this)
+    sti
+
+    ; Check for keypress using event system (like Clock)
+    mov ah, API_EVENT_GET
     int 0x80
-
-    ; Direct keyboard port I/O (bypass kernel AND BIOS)
-    in al, 0x64                     ; Read keyboard controller status
-    test al, 0x01                   ; Output buffer full? (key available)
-    jz .no_event
-
-    ; Key available - read scancode from port 0x60
-    in al, 0x60                     ; AL = scancode (make/break)
-
-    ; Show scancode at position 280
-    push ax
-    mov bl, al
-    shr bl, 4                       ; High nibble
-    cmp bl, 10
-    jb .high_digit
-    add bl, 'A' - 10
-    jmp .show_high
-.high_digit:
-    add bl, '0'
-.show_high:
-    mov al, bl
-    mov bx, 275
-    mov cx, 10
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop ax
-
-    push ax
-    and al, 0x0F                    ; Low nibble
-    cmp al, 10
-    jb .low_digit
-    add al, 'A' - 10
-    jmp .show_low
-.low_digit:
-    add al, '0'
-.show_low:
-    mov bx, 280
-    mov cx, 10
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop ax
-
-    ; ESC scancode is 0x01 (make) or 0x81 (break)
-    cmp al, 0x01                    ; ESC pressed?
+    jc .no_event                    ; CF set = no event or error
+    cmp al, EVENT_KEY_PRESS
+    jne .no_event
+    cmp dl, 27                      ; ESC key?
     je .exit_ok
 
 .no_event:
