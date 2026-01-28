@@ -24,6 +24,9 @@ entry:
     ; Install keyboard handler (Foundation 1.4)
     call install_keyboard
 
+    ; Install PS/2 mouse handler (if present)
+    call install_mouse              ; CF set if no mouse - that's OK
+
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
@@ -84,9 +87,9 @@ int_80_handler:
     iret
 
 .dispatch_function:
-    ; AH contains function index (1-24)
+    ; AH contains function index (1-29)
     ; Validate function number
-    cmp ah, 27                      ; Max function + 1 (0-26)
+    cmp ah, 30                      ; Max function + 1 (0-29)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -336,6 +339,349 @@ clear_kbd_buffer:
     test al, al
     jnz .drain_events
     pop ax
+    ret
+
+; ============================================================================
+; PS/2 Mouse Driver
+; ============================================================================
+
+; 8042 Keyboard Controller ports
+KBC_DATA            equ 0x60        ; Data port (read/write)
+KBC_STATUS          equ 0x64        ; Status register (read)
+KBC_CMD             equ 0x64        ; Command register (write)
+
+; 8042 Status bits
+KBC_STAT_OBF        equ 0x01        ; Output buffer full (data ready)
+KBC_STAT_IBF        equ 0x02        ; Input buffer full (busy)
+KBC_STAT_AUXB       equ 0x20        ; Aux data (mouse vs keyboard)
+
+; 8042 Commands
+KBC_CMD_WRITE_AUX   equ 0xD4        ; Write to auxiliary device (mouse)
+KBC_CMD_ENABLE_AUX  equ 0xA8        ; Enable auxiliary interface
+KBC_CMD_READ_CFG    equ 0x20        ; Read configuration byte
+KBC_CMD_WRITE_CFG   equ 0x60        ; Write configuration byte
+
+; Mouse commands (sent via 0xD4)
+MOUSE_CMD_RESET     equ 0xFF        ; Reset mouse
+MOUSE_CMD_ENABLE    equ 0xF4        ; Enable data reporting
+MOUSE_CMD_DISABLE   equ 0xF5        ; Disable data reporting
+MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
+
+; install_mouse - Initialize PS/2 mouse
+; Output: CF=0 success, CF=1 no mouse detected
+install_mouse:
+    push ax
+    push bx
+    push es
+
+    ; Save original INT 0x74 (IRQ12) vector
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:0x01D0]             ; INT 0x74 offset (0x74 * 4 = 0x1D0)
+    mov [old_int74_offset], ax
+    mov ax, [es:0x01D2]             ; INT 0x74 segment
+    mov [old_int74_segment], ax
+
+    ; Enable auxiliary (mouse) interface
+    call kbc_wait_write
+    mov al, KBC_CMD_ENABLE_AUX
+    out KBC_CMD, al
+
+    ; Read controller configuration
+    call kbc_wait_write
+    mov al, KBC_CMD_READ_CFG
+    out KBC_CMD, al
+    call kbc_wait_read
+    in al, KBC_DATA
+    mov bl, al                      ; Save config
+
+    ; Enable IRQ12 (bit 1) and auxiliary clock (clear bit 5)
+    or bl, 0x02                     ; Enable IRQ12
+    and bl, 0xDF                    ; Enable aux clock
+
+    ; Write updated configuration
+    call kbc_wait_write
+    mov al, KBC_CMD_WRITE_CFG
+    out KBC_CMD, al
+    call kbc_wait_write
+    mov al, bl
+    out KBC_DATA, al
+
+    ; Reset mouse
+    mov al, MOUSE_CMD_RESET
+    call mouse_send_cmd
+    cmp al, 0xFA                    ; ACK?
+    jne .no_mouse
+
+    ; Wait for self-test result (0xAA) and device ID (0x00)
+    call kbc_wait_read
+    in al, KBC_DATA                 ; Should be 0xAA
+    cmp al, 0xAA
+    jne .no_mouse
+
+    call kbc_wait_read
+    in al, KBC_DATA                 ; Should be 0x00 (standard mouse)
+
+    ; Set defaults
+    mov al, MOUSE_CMD_DEFAULTS
+    call mouse_send_cmd
+
+    ; Enable data reporting
+    mov al, MOUSE_CMD_ENABLE
+    call mouse_send_cmd
+    cmp al, 0xFA
+    jne .no_mouse
+
+    ; Install our interrupt handler
+    cli
+    xor ax, ax
+    mov es, ax
+    mov word [es:0x01D0], int_74_handler
+    mov word [es:0x01D2], 0x1000    ; Kernel segment
+    sti
+
+    ; Enable IRQ12 in slave PIC (unmask)
+    in al, 0xA1                     ; Read slave PIC mask
+    and al, 0xEF                    ; Clear bit 4 (IRQ12)
+    out 0xA1, al
+
+    ; Initialize mouse state
+    mov word [mouse_x], 160
+    mov word [mouse_y], 100
+    mov byte [mouse_buttons], 0
+    mov byte [mouse_packet_idx], 0
+    mov byte [mouse_enabled], 1
+
+    clc
+    jmp .done
+
+.no_mouse:
+    mov byte [mouse_enabled], 0
+    stc
+
+.done:
+    pop es
+    pop bx
+    pop ax
+    ret
+
+; kbc_wait_write - Wait for keyboard controller ready to accept command
+; Clobbers: AL
+kbc_wait_write:
+    push cx
+    mov cx, 0xFFFF
+.wait:
+    in al, KBC_STATUS
+    test al, KBC_STAT_IBF           ; Input buffer full?
+    jz .done                        ; No, ready to write
+    loop .wait
+.done:
+    pop cx
+    ret
+
+; kbc_wait_read - Wait for keyboard controller to have data
+; Clobbers: AL
+kbc_wait_read:
+    push cx
+    mov cx, 0xFFFF
+.wait:
+    in al, KBC_STATUS
+    test al, KBC_STAT_OBF           ; Output buffer full?
+    jnz .done                       ; Yes, data available
+    loop .wait
+.done:
+    pop cx
+    ret
+
+; mouse_send_cmd - Send command to mouse via 8042 controller
+; Input: AL = command byte
+; Output: AL = response (0xFA = ACK)
+mouse_send_cmd:
+    push bx
+    mov bl, al                      ; Save command
+
+    call kbc_wait_write
+    mov al, KBC_CMD_WRITE_AUX       ; Tell 8042 next byte goes to mouse
+    out KBC_CMD, al
+
+    call kbc_wait_write
+    mov al, bl                      ; Send actual command
+    out KBC_DATA, al
+
+    call kbc_wait_read
+    in al, KBC_DATA                 ; Read response
+
+    pop bx
+    ret
+
+; INT 0x74 - IRQ12 PS/2 Mouse Handler
+int_74_handler:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Check if this is really mouse data (aux bit set)
+    in al, KBC_STATUS
+    test al, KBC_STAT_AUXB
+    jz .not_mouse
+
+    ; Read mouse byte
+    in al, KBC_DATA
+
+    ; Store byte in packet buffer
+    xor bx, bx
+    mov bl, [mouse_packet_idx]
+    cmp bl, 3
+    jae .send_eoi                   ; Overflow protection
+    mov [mouse_packet + bx], al
+    inc byte [mouse_packet_idx]
+
+    ; First byte must have bit 3 set (sync bit)
+    cmp bl, 0
+    jne .check_complete
+    test al, 0x08                   ; Bit 3 = always 1 in first byte
+    jz .resync                      ; Not synced, reset
+
+.check_complete:
+    ; Check if packet complete (3 bytes)
+    cmp byte [mouse_packet_idx], 3
+    jne .send_eoi
+
+    ; Parse complete packet
+    ; Byte 0: YO XO YS XS 1 M R L
+    ;   YO/XO = overflow, YS/XS = sign, M/R/L = buttons
+    ; Byte 1: X movement (signed 9-bit with XS)
+    ; Byte 2: Y movement (signed 9-bit with YS)
+
+    ; Get buttons (bits 0-2 of byte 0)
+    mov al, [mouse_packet]
+    and al, 0x07
+    mov [mouse_buttons], al
+
+    ; Check for overflow - skip if overflow
+    mov al, [mouse_packet]
+    test al, 0xC0                   ; XO or YO set?
+    jnz .reset_packet
+
+    ; Calculate delta X (signed)
+    mov al, [mouse_packet + 1]      ; X movement
+    mov ah, [mouse_packet]
+    test ah, 0x10                   ; X sign bit
+    jz .x_positive
+    ; Negative: sign extend
+    mov ah, 0xFF
+    jmp .apply_x
+.x_positive:
+    xor ah, ah
+.apply_x:
+    ; AX now has signed 16-bit delta X
+    add [mouse_x], ax
+
+    ; Clamp X to 0-319
+    cmp word [mouse_x], 0x8000      ; Negative (wrapped)?
+    jb .x_not_neg
+    mov word [mouse_x], 0
+    jmp .do_y
+.x_not_neg:
+    cmp word [mouse_x], 319
+    jbe .do_y
+    mov word [mouse_x], 319
+
+.do_y:
+    ; Calculate delta Y (signed, inverted for screen coords)
+    mov al, [mouse_packet + 2]      ; Y movement
+    mov ah, [mouse_packet]
+    test ah, 0x20                   ; Y sign bit
+    jz .y_positive
+    mov ah, 0xFF
+    jmp .apply_y
+.y_positive:
+    xor ah, ah
+.apply_y:
+    neg ax                          ; Invert for screen Y (mouse up = screen up)
+    add [mouse_y], ax
+
+    ; Clamp Y to 0-199
+    cmp word [mouse_y], 0x8000
+    jb .y_not_neg
+    mov word [mouse_y], 0
+    jmp .post_event
+.y_not_neg:
+    cmp word [mouse_y], 199
+    jbe .post_event
+    mov word [mouse_y], 199
+
+.post_event:
+    ; Post mouse event: DL = buttons
+    xor dx, dx
+    mov dl, [mouse_buttons]
+    mov al, EVENT_MOUSE             ; Type = 4
+    call post_event
+
+.reset_packet:
+    mov byte [mouse_packet_idx], 0
+    jmp .send_eoi
+
+.resync:
+    mov byte [mouse_packet_idx], 0
+    jmp .send_eoi
+
+.not_mouse:
+    ; Not mouse data - chain to keyboard or ignore
+    in al, KBC_DATA                 ; Clear the byte
+
+.send_eoi:
+    ; Send EOI to both PICs (slave then master)
+    mov al, 0x20
+    out 0xA0, al                    ; EOI to slave PIC
+    out 0x20, al                    ; EOI to master PIC
+
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+; mouse_get_state - Get current mouse state
+; Input: None
+; Output: BX = X position (0-319)
+;         CX = Y position (0-199)
+;         DL = buttons (bit0=left, bit1=right, bit2=middle)
+;         DH = enabled flag (0=no mouse, 1=mouse active)
+mouse_get_state:
+    mov bx, [mouse_x]
+    mov cx, [mouse_y]
+    mov dl, [mouse_buttons]
+    mov dh, [mouse_enabled]
+    ret
+
+; mouse_set_position - Set mouse cursor position
+; Input: BX = X position, CX = Y position
+; Output: None
+mouse_set_position:
+    cmp bx, 319
+    jbe .x_ok
+    mov bx, 319
+.x_ok:
+    mov [mouse_x], bx
+    cmp cx, 199
+    jbe .y_ok
+    mov cx, 199
+.y_ok:
+    mov [mouse_y], cx
+    ret
+
+; mouse_is_enabled - Check if mouse is available
+; Input: None
+; Output: AL = enabled flag (0=no, 1=yes)
+mouse_is_enabled:
+    mov al, [mouse_enabled]
     ret
 
 ; ============================================================================
@@ -1124,14 +1470,14 @@ gfx_draw_string_inverted:
 ; Kernel API Table - At fixed address 0x1000:0x0900
 ; ============================================================================
 
-; Pad to exactly offset 0x0900 (2304 bytes) - expanded for syscall dispatch
-times 0x0900 - ($ - $$) db 0
+; Pad to exactly offset 0x0B00 (2816 bytes) - expanded for mouse driver
+times 0x0B00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 25                           ; Number of function slots
+    dw 30                           ; Number of function slots (0-29)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -1175,6 +1521,11 @@ kernel_api_table:
     dw win_get_content_stub         ; 24: Get content area bounds
     dw register_shell_stub          ; 25: Register app as shell (auto-return)
     dw fs_readdir_stub              ; 26: Read directory entry
+
+    ; Mouse API
+    dw mouse_get_state              ; 27: Get mouse position/buttons
+    dw mouse_set_position           ; 28: Set mouse position
+    dw mouse_is_enabled             ; 29: Check if mouse available
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -3624,6 +3975,16 @@ kbd_buffer_tail: dw 0
 kbd_shift_state: db 0
 kbd_ctrl_state: db 0
 kbd_alt_state: db 0
+
+; PS/2 Mouse driver state
+old_int74_offset:   dw 0            ; Original IRQ12 vector
+old_int74_segment:  dw 0
+mouse_packet:       times 3 db 0    ; 3-byte packet buffer
+mouse_packet_idx:   db 0            ; Current byte in packet (0-2)
+mouse_x:            dw 160          ; Current X position (0-319)
+mouse_y:            dw 100          ; Current Y position (0-199)
+mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
+mouse_enabled:      db 0            ; 1 if mouse detected/enabled
 
 ; Keyboard demo state
 demo_cursor_x: dw 0
