@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 047 - Debug: loop counter + event detection
+; Build 048 - Debug: show event type and key at visible positions
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -81,12 +81,13 @@ entry:
     int 0x80
     jc .no_event
 
-    ; Got an event! Show '+' at position 315
+    ; Got an event! Show event TYPE (AL) at position 280
     push ax
     push dx
-    mov bx, 315
+    mov bx, 280
     mov cx, 10
-    mov al, '+'
+    ; AL = event type, show as digit
+    add al, '0'
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
     pop dx
@@ -95,9 +96,9 @@ entry:
     cmp al, EVENT_KEY_PRESS
     jne .no_event
 
-    ; Show key code at position 320
+    ; Show key code at position 290 (on screen)
     push dx
-    mov bx, 320                     ; X position (off screen on 320-wide, but try)
+    mov bx, 290
     mov cx, 10
     mov al, dl
     mov ah, API_GFX_DRAW_CHAR
