@@ -58,6 +58,18 @@ entry:
     xor bx, bx
     int 0x10
 
+    ; Debug: print version string in text mode before graphics
+    mov si, version_string
+.print_ver:
+    lodsb
+    test al, al
+    jz .ver_done
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    jmp .print_ver
+.ver_done:
+
     ; Set up graphics mode (blue screen)
     call setup_graphics
 
