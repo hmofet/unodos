@@ -84,6 +84,12 @@ entry:
     add eax, ebx
     mov [data_start_lba], eax
 
+    ; Debug: print root_start_lba
+    mov al, 'R'
+    call print_char
+    mov eax, [root_start_lba]
+    call print_hex_word             ; Print low 16 bits of root LBA
+
     ; Search root directory for KERNEL.BIN
     mov eax, [root_start_lba]
     movzx ecx, word [root_entries]
@@ -96,6 +102,10 @@ entry:
     ; Read root directory sector
     call read_sector_lba
     jc near .disk_error
+
+    ; Debug: print first byte of sector
+    mov al, [sector_buffer]
+    call print_hex_byte
 
     ; Search 16 entries in this sector
     mov si, sector_buffer
@@ -483,6 +493,45 @@ print_char:
     xor bx, bx
     int 0x10
     pop bx
+    pop ax
+    ret
+
+; print_hex_byte - Print AL as hex
+print_hex_byte:
+    push ax
+    push bx
+    push cx
+    mov cl, al
+    shr al, 4
+    call .nibble
+    mov al, cl
+    and al, 0x0F
+    call .nibble
+    pop cx
+    pop bx
+    pop ax
+    ret
+.nibble:
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp .out
+.digit:
+    add al, '0'
+.out:
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    ret
+
+; print_hex_word - Print AX as hex
+print_hex_word:
+    push ax
+    mov al, ah
+    call print_hex_byte
+    pop ax
+    push ax
+    call print_hex_byte
     pop ax
     ret
 
