@@ -48,8 +48,9 @@ entry:
     xor bx, bx
     int 0x10
 
-    ; Install PS/2 mouse handler (if present)
-    call install_mouse              ; CF set if no mouse - that's OK
+    ; Skip mouse init for USB boot debugging
+    ; call install_mouse              ; CF set if no mouse - that's OK
+    mov byte [mouse_enabled], 0     ; Mark mouse as disabled
 
     ; Debug: print '4' after mouse install
     mov ah, 0x0E
