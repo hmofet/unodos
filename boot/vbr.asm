@@ -125,24 +125,6 @@ boot_code:
     mov [chs_head], dl
     mov [chs_cylinder], al
 
-    ; Debug: print geometry info
-    mov ah, 0x0E
-    mov al, '('
-    xor bx, bx
-    int 0x10
-    mov al, [queried_spt]
-    call print_hex_byte
-    mov ah, 0x0E
-    mov al, '/'
-    xor bx, bx
-    int 0x10
-    mov al, [queried_heads]
-    call print_hex_byte
-    mov ah, 0x0E
-    mov al, ')'
-    xor bx, bx
-    int 0x10
-
     ; Set up buffer
     mov ax, 0x0800
     mov es, ax
@@ -163,12 +145,6 @@ boot_code:
     je .verify_stage2               ; Got it!
 
 .try_lba:
-    ; Debug: print 'L' to show LBA fallback
-    mov ah, 0x0E
-    mov al, 'L'
-    xor bx, bx
-    int 0x10
-
     ; CHS failed or got zeros - try INT 13h extensions
     ; Build DAP on stack for LBA 64
     push dword 0                    ; High LBA (0)
@@ -188,19 +164,6 @@ boot_code:
     ; Verify stage2 signature
     mov ax, 0x0800
     mov es, ax
-
-    ; Debug: print first byte loaded
-    mov ah, 0x0E
-    mov al, '['
-    xor bx, bx
-    int 0x10
-    mov al, [es:0x0000]             ; First byte
-    call print_hex_byte
-    mov ah, 0x0E
-    mov al, ']'
-    xor bx, bx
-    int 0x10
-
     cmp word [es:0x0000], 0x5355    ; 'US' (UnoDOS Stage2)
     jne .invalid_stage2
 
