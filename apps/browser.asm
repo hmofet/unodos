@@ -1,5 +1,5 @@
 ; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 046 - Debug key code display next to '!'
+; Build 047 - Debug: loop counter + event detection
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -56,20 +56,50 @@ entry:
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
 
+    ; DEBUG: Show loop counter to prove loop runs
+    mov byte [cs:loop_counter], 0
+
     ; Event loop - wait for ESC
 .main_loop:
+    ; Increment and show loop counter (proves loop is running)
+    inc byte [cs:loop_counter]
+    mov al, [cs:loop_counter]
+    and al, 0x0F                    ; Keep low nibble
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp .show_count
+.digit:
+    add al, '0'
+.show_count:
+    mov bx, 305
+    mov cx, 10
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
 
+    ; Got an event! Show '+' at position 315
+    push ax
+    push dx
+    mov bx, 315
+    mov cx, 10
+    mov al, '+'
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    pop dx
+    pop ax
+
     cmp al, EVENT_KEY_PRESS
     jne .no_event
 
-    ; DEBUG: Show key code received
+    ; Show key code at position 320
     push dx
-    mov bx, 310                     ; X position
-    mov cx, 10                      ; Y position
-    mov al, dl                      ; Key code
+    mov bx, 320                     ; X position (off screen on 320-wide, but try)
+    mov cx, 10
+    mov al, dl
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
     pop dx
@@ -371,3 +401,4 @@ display_buffer: times 32 db 0       ; For formatted output
 
 mount_error_msg: db 'Mount failed', 0
 no_files_msg:   db 'No files', 0
+loop_counter:   db 0
