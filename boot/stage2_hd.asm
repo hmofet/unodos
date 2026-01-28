@@ -270,7 +270,11 @@ read_sector_to_esbx:
     push dx
     push si
 
-    ; Try INT 13h extended read
+    ; Save buffer location for verification
+    mov [temp_seg], es
+    mov [temp_off], bx
+
+    ; Try INT 13h extended read first
     push dword 0                    ; High LBA
     push eax                        ; Low LBA
     push es                         ; Buffer segment
@@ -287,31 +291,53 @@ read_sector_to_esbx:
     int 0x13
     pop ds
     add sp, 16
-    jnc .success
+    jc .try_chs                     ; LBA failed, try CHS
 
-    ; Fallback to CHS (simplified - assumes first ~8MB accessible)
-    ; This is a limitation for boot, but works for most HD boot scenarios
+    ; Verify we didn't get zeros (USB BIOS bug)
+    push es
+    mov es, [temp_seg]
+    mov si, [temp_off]
+    mov cx, 8                       ; Check first 8 bytes
+    xor ax, ax
+.check_zeros:
+    or al, [es:si]
+    inc si
+    loop .check_zeros
+    pop es
+    test al, al
+    jnz .success                    ; Got non-zero data, success
+    ; Fall through to CHS if all zeros
 
+.try_chs:
     ; Get drive geometry
     push es
+    xor di, di
+    mov es, di
     mov ah, 0x08
     mov dl, [boot_drive]
     int 0x13
     pop es
-    jc .error
+    jc .use_defaults
 
-    ; Save geometry
+    ; Parse and validate geometry
     mov al, cl
     and al, 0x3F                    ; Sectors per track
+    test al, al                     ; Check for 0 (invalid)
+    jz .use_defaults
     mov [saved_spt], al
-    inc dh
+    inc dh                          ; Max head -> number of heads
+    test dh, dh                     ; Check for 0 (wrapped)
+    jz .use_defaults
     mov [saved_heads], dh
+    jmp .do_chs_read
 
+.use_defaults:
+    mov byte [saved_spt], 63
+    mov byte [saved_heads], 16
+
+.do_chs_read:
     ; Convert LBA to CHS
-    ; Sector = (LBA mod SPT) + 1
-    ; Head = (LBA / SPT) mod Heads
-    ; Cylinder = (LBA / SPT) / Heads
-    mov eax, [esp + 12]             ; Get original EAX
+    mov eax, [esp + 12]             ; Get original EAX from stack
     xor edx, edx
     movzx ecx, byte [saved_spt]
     div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
@@ -328,8 +354,12 @@ read_sector_to_esbx:
 
     mov ah, 0x02                    ; Read sectors
     mov al, 1
+    push es
+    mov es, [temp_seg]
+    mov bx, [temp_off]
     mov dl, [boot_drive]
     int 0x13
+    pop es
     jc .error
 
 .success:
@@ -349,6 +379,8 @@ read_sector_to_esbx:
 ; Saved geometry for CHS conversion
 saved_spt:   db 63
 saved_heads: db 16
+temp_seg:    dw 0
+temp_off:    dw 0
 
 ; ============================================================================
 ; read_sector_to_esdi - Read sector to ES:DI
