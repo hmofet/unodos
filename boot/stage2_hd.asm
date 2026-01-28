@@ -2,6 +2,9 @@
 ; Loaded by VBR at 0x0800:0x0000
 ; Loads KERNEL.BIN from FAT16 filesystem
 ;
+; NOTE: This version requires 386+ CPU (uses EAX, EBX, ECX, EDX, movzx, etc.)
+; TODO: Create 8086-compatible version for HP 200LX, Sharp PC-3100, etc.
+;
 ; Memory layout during boot:
 ;   0x0600:0x0000 - Relocated MBR
 ;   0x0000:0x7C00 - VBR (contains BPB)

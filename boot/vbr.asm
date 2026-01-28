@@ -3,6 +3,9 @@
 ; Loaded by MBR at 0x0000:0x7C00
 ; Loads stage2_hd from reserved sectors, jumps to it
 ;
+; NOTE: This version requires 386+ CPU (uses EAX, push dword).
+; TODO: Create 8086-compatible version for HP 200LX, Sharp PC-3100, etc.
+;
 ; VBR Layout:
 ;   0x000-0x002: Jump instruction
 ;   0x003-0x00A: OEM name
