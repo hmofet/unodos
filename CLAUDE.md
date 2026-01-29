@@ -136,8 +136,31 @@ git commit -m "Description (Build XXX)"
 git push
 ```
 
+## Launcher Drive Detection (Build 074)
+
+**Issue**: Launcher was hardcoded to scan drive A: (0x00), so HDD boots couldn't find apps even though they were in the FAT16 filesystem.
+
+**Solution**: Launcher now tries HDD (0x80) first, then falls back to floppy (0x00). It saves which drive successfully mounted and uses that for app loading.
+
+**Key Code** ([launcher.asm:199-219](apps/launcher.asm#L199-L219)):
+```asm
+; Try HDD first (0x80)
+mov al, 0x80
+mov ah, API_FS_MOUNT
+int 0x80
+jnc .mounted_hdd
+
+; HDD failed, try floppy (0x00)
+mov al, 0
+mov ah, API_FS_MOUNT
+int 0x80
+jc .scan_done
+```
+
+**Result**: Both floppy and HDD versions now work - launcher automatically detects which drive has apps.
+
 ---
 
 **Last Updated**: 2026-01-28
 **Current Version**: v3.13.0
-**Current Build**: 073
+**Current Build**: 074
