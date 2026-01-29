@@ -2626,8 +2626,10 @@ fat12_mount:
 
 .retry_read:
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov cx, 0x0001                  ; CH=0 (cylinder), CL=1 (sector)
-    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    ; Read sector 62 (FAT12 boot sector, not UnoDOS boot at sector 0)
+    ; LBA 62 = C:1, H:1, S:9 (62 = 1*36 + 1*18 + 9-1)
+    mov cx, 0x0109                  ; CH=1 (cylinder), CL=9 (sector)
+    mov dx, 0x0100                  ; DH=1 (head), DL=0 (drive A:)
     push es
     mov bx, 0x1000
     mov es, bx
@@ -2679,7 +2681,8 @@ fat12_mount:
     mov [sectors_per_fat], ax
 
     ; Calculate root directory start sector
-    ; root_dir_start = reserved + (num_fats * sectors_per_fat)
+    ; root_dir_start = 62 + reserved + (num_fats * sectors_per_fat)
+    ; (62 = offset where FAT12 filesystem starts on floppy)
     mov ax, [reserved_sectors]
     mov bl, [num_fats]
     xor bh, bh
@@ -2690,6 +2693,7 @@ fat12_mount:
     mov bx, ax
     pop ax
     add ax, bx
+    add ax, 62                      ; Add filesystem start offset
     mov [root_dir_start], ax
 
     ; Calculate data area start sector
