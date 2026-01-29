@@ -4,7 +4,9 @@
 # Usage: .\floppy.ps1 [DriveLetter]
 
 param(
-    [string]$DriveLetter = "A"
+    [string]$DriveLetter = "A",
+    [switch]$Verify,
+    [switch]$v
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,5 +65,46 @@ try {
 }
 
 Write-Host "Done! UnoDOS floppy ready (OS + Launcher)." -ForegroundColor Green
+
+# Verify if requested
+if ($Verify -or $v) {
+    Write-Host ""
+    Write-Host "Verifying written data..." -ForegroundColor Yellow
+
+    try {
+        # Read back first 51200 bytes (100 sectors) from floppy
+        $readStream = [System.IO.File]::Open($drivePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $readBuffer = New-Object byte[] 51200
+        $bytesRead = $readStream.Read($readBuffer, 0, 51200)
+        $readStream.Close()
+
+        # Compare with source
+        $differences = 0
+        for ($i = 0; $i -lt [Math]::Min($bytesRead, 51200); $i++) {
+            if ($readBuffer[$i] -ne $imageBytes[$i]) {
+                $differences++
+                if ($differences -le 5) {
+                    $sector = [Math]::Floor($i / 512)
+                    $offset = $i % 512
+                    Write-Host "  Byte $i (sector $sector, offset $offset): Expected 0x$($imageBytes[$i].ToString('X2')), Got 0x$($readBuffer[$i].ToString('X2'))"
+                }
+            }
+        }
+
+        if ($differences -eq 0) {
+            Write-Host "Verification PASSED! First 100 sectors match perfectly." -ForegroundColor Green
+        } else {
+            Write-Host "Verification FAILED! Found $differences byte differences." -ForegroundColor Red
+            if ($differences -gt 5) {
+                Write-Host "  (showing first 5 differences)" -ForegroundColor Yellow
+            }
+        }
+    }
+    catch {
+        Write-Host "Verification failed: $_" -ForegroundColor Red
+        Write-Host "  Note: Some drives may not support immediate read-back" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "Boot from this floppy - launcher will auto-load!" -ForegroundColor Yellow
