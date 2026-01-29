@@ -238,12 +238,13 @@ scan_for_apps:
     mov word [cs:dir_state], 0
     mov word [cs:scan_safety], 0    ; Safety counter to prevent infinite loops
 
+    ; TEMPORARY: Skip HDD due to FAT16 readdir hang - debug this separately
     ; Try HDD first (0x80)
-    mov al, 0x80                    ; Drive 0x80 (HDD/IDE)
-    xor ah, ah                      ; Auto-detect
-    mov ah, API_FS_MOUNT
-    int 0x80
-    jnc .mounted_hdd                ; Success! Save drive and scan
+    ; mov al, 0x80                    ; Drive 0x80 (HDD/IDE)
+    ; xor ah, ah                      ; Auto-detect
+    ; mov ah, API_FS_MOUNT
+    ; int 0x80
+    ; jnc .mounted_hdd                ; Success! Save drive and scan
 
     ; HDD failed, try floppy (0x00)
     mov al, 0                       ; Drive A: (floppy)
