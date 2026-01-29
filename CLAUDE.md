@@ -159,8 +159,32 @@ jc .scan_done
 
 **Result**: Both floppy and HDD versions now work - launcher automatically detects which drive has apps.
 
+## FAT16 Readdir Implementation (Build 076)
+
+**Problem**: Even with Build 074's drive detection fix, launcher still showed "No apps found" on HDD. Root cause: `fs_readdir_stub` only supported FAT12, not FAT16!
+
+**Context**:
+- Floppy uses FAT12 filesystem (mount handle 0)
+- HDD uses FAT16 filesystem (mount handle 1)
+- Launcher calls `API_FS_READDIR` to scan for .BIN files
+- Previous `fs_readdir_stub` was hardcoded for FAT12 only
+
+**Solution** ([kernel.asm:2382-2418, 4121-4229](kernel/kernel.asm)):
+1. Added routing in `fs_readdir_stub` to check mount handle
+2. Implemented `fat16_readdir()` function
+3. Reads FAT16 root directory sectors using `fat16_read_sector`
+4. Skips deleted entries (0xE5) and volume labels (attribute 0x0F)
+5. Returns 32-byte FAT directory entries to caller
+
+**State Management**:
+- State CX = entry index (0 to `fat16_root_entries - 1`)
+- Calculates sector and offset automatically
+- Returns `FS_ERR_END_OF_DIR` when all entries scanned
+
+**Result**: Both floppy (FAT12) and HDD (FAT16) app scanning fully work!
+
 ---
 
 **Last Updated**: 2026-01-28
 **Current Version**: v3.13.0
-**Current Build**: 074
+**Current Build**: 076
