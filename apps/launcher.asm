@@ -131,7 +131,7 @@ entry:
     call get_selected_filename      ; Returns SI = filename pointer
 
     ; Load app to segment 0x3000 (user segment)
-    mov dl, 0                       ; Drive A:
+    mov dl, [cs:mounted_drive]      ; Use the drive we successfully mounted
     mov dh, 0x30                    ; Target segment 0x3000
     mov ah, API_APP_LOAD
     int 0x80
@@ -185,8 +185,9 @@ entry:
     retf
 
 ; ============================================================================
-; scan_for_apps - Scan floppy for .BIN files
+; scan_for_apps - Scan for .BIN files on available drives
 ; Populates discovered_apps and discovered_count
+; Tries HDD (0x80) first, then floppy (0x00)
 ; ============================================================================
 scan_for_apps:
     pusha
@@ -195,12 +196,27 @@ scan_for_apps:
     mov byte [cs:discovered_count], 0
     mov word [cs:dir_state], 0
 
-    ; Mount filesystem (drive A:)
-    mov al, 0                       ; Drive A:
+    ; Try HDD first (0x80)
+    mov al, 0x80                    ; Drive 0x80 (HDD/IDE)
     xor ah, ah                      ; Auto-detect
     mov ah, API_FS_MOUNT
     int 0x80
-    jc .scan_done                   ; Mount failed, leave empty list
+    jnc .mounted_hdd                ; Success! Save drive and scan
+
+    ; HDD failed, try floppy (0x00)
+    mov al, 0                       ; Drive A: (floppy)
+    xor ah, ah                      ; Auto-detect
+    mov ah, API_FS_MOUNT
+    int 0x80
+    jc .scan_done                   ; Both failed, leave empty list
+
+    ; Save floppy as mounted drive
+    mov byte [cs:mounted_drive], 0
+    jmp .scan_loop
+
+.mounted_hdd:
+    ; Save HDD as mounted drive
+    mov byte [cs:mounted_drive], 0x80
 
 .scan_loop:
     ; Check if we have room for more
@@ -553,6 +569,7 @@ content_h:      dw 0
 selected:       db 0
 app_handle:     dw 0
 last_error:     db 0
+mounted_drive:  db 0                ; Drive number that was successfully mounted
 
 ; Dynamic app discovery data
 discovered_apps: times (MAX_MENU_ITEMS * 12) db 0   ; 8 apps × 12 bytes each
