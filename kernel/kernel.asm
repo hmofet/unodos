@@ -4183,8 +4183,19 @@ fat16_readdir:
     mov ds, dx
     mov al, [bx + 11]
     pop ds
-    test al, 0x0F                   ; Volume label or long filename?
-    jnz .skip_entry                 ; Skip if not a regular entry
+
+    ; Check for long filename entry (attr == 0x0F)
+    cmp al, 0x0F
+    je .skip_entry
+
+    ; Check for volume label (attr & 0x08, but not directory)
+    test al, 0x08                   ; Volume label bit set?
+    jz .valid_entry                 ; No, it's valid
+    test al, 0x10                   ; Directory bit set?
+    jnz .valid_entry                ; Yes, it's a dir, allow it
+    jmp .skip_entry                 ; Volume label, skip
+
+.valid_entry:
 
     ; Valid entry - copy to caller's buffer
     push ds
