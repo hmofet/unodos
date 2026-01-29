@@ -2,6 +2,24 @@
 
 This document contains important instructions for AI assistants working on UnoDOS during long debugging sessions.
 
+## Transcript Instructions for Claude Sessions
+
+Maintain a file called `TRANSCRIPT.md` in the project root. Update it **after every single response you give** — do not batch updates or wait until later. If the file already exists, append to it; never overwrite.
+
+Format each exchange as:
+
+```
+**User:** [their exact message]
+
+**Claude:** [your full response — conversational text verbatim, tool actions summarized in brackets like [Created file X], key output included]
+
+---
+```
+
+New sessions get a header: `## Session N - YYYY-MM-DD`
+
+Prioritize keeping the transcript current. If you notice it's fallen behind, catch it up immediately before doing other work.
+
 ## Build Number Requirement
 
 **CRITICAL**: For any persistent debugging issue that requires multiple build-test cycles:
