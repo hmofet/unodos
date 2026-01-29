@@ -81,7 +81,7 @@ entry:
     mov word [caller_ds], 0x1000
 
     ; DEBUG: Draw test rectangles to confirm pixel plotting works
-    ; Red rectangle at top-left
+    ; Test rectangle at top-left (white pixels)
     mov bx, 10
     mov cx, 10
     mov dx, 50
@@ -92,7 +92,7 @@ entry:
     mov ax, 0x1000
     mov ds, ax
 
-    ; Display version number (top-left corner) - TEST: Use inverted (black) text
+    ; Display version number (top-left corner) - black text
     mov bx, 4
     mov cx, 35
     mov si, version_string
@@ -1568,25 +1568,33 @@ gfx_draw_string_inverted:
     push ax
     push dx
     push di
+    push bp
+    push ds                         ; Save caller's DS
     mov word [draw_x], bx
     mov word [draw_y], cx
     mov dx, 0xB800
     mov es, dx
 .loop:
-    lodsb
+    lodsb                           ; Load character from DS:SI
     test al, al
     jz .done
+    push ds                         ; Save caller's DS for string
+    mov bp, 0x1000
+    mov ds, bp                      ; DS = kernel segment for font access
     sub al, 32
     mov ah, 0
     mov dl, 8
     mul dl
-    mov di, si
-    mov si, font_8x8
+    mov di, si                      ; Save string pointer
+    mov si, font_8x8                ; SI = font offset (now in kernel DS!)
     add si, ax
-    call draw_char_inverted
-    mov si, di
+    call draw_char_inverted         ; Draw with DS=0x1000 for font
+    mov si, di                      ; Restore string pointer
+    pop ds                          ; Restore caller's DS for string
     jmp .loop
 .done:
+    pop ds                          ; Restore original DS
+    pop bp
     pop di
     pop dx
     pop ax
