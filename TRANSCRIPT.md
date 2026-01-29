@@ -85,3 +85,9 @@
 **Claude:** [Checked BUILD_NUMBER file vs image contents. Found issue: BUILD_NUMBER file is 100 but the image still contains Build 099 - never rebuilt after updating BUILD_NUMBER.] Rebuilt image with BUILD_NUMBER=100 and committed. Pull again to get the correct Build 100 image.
 
 ---
+
+**User:** Just get the same white square, no loader
+
+**Claude:** [CRITICAL BUG FOUND: Function 11 in API table is kbd_wait_key, NOT white text! Launcher was calling function 11 for white text, causing it to hang waiting for keyboard input. Created Build 101: Added gfx_draw_string_inverted as function 6, renumbered all API functions 6-26 to 7-27, changed all launcher calls from `mov ah, 11` to `mov ah, 6`. Fixed at [kernel.asm:1440-1472](kernel/kernel.asm#L1440-L1472) and [launcher.asm:472,482,496,513,518](apps/launcher.asm).] Build 101 ready for testing - launcher should now display white text messages instead of hanging.
+
+---
