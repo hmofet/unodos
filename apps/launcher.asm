@@ -10,6 +10,7 @@
 [ORG 0x0000]
 
 ; API function indices
+API_GFX_DRAW_FILLED_RECT equ 2
 API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
@@ -347,6 +348,16 @@ draw_menu:
     mov dx, [cs:content_w]
     mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; DEBUG: Draw a small white rectangle to show we're alive
+    mov bx, [cs:content_x]
+    add bx, 4
+    mov cx, [cs:content_y]
+    add cx, 4
+    mov dx, 8                       ; 8 pixels wide
+    mov si, 8                       ; 8 pixels high
+    mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
 
     ; Check if we have any apps

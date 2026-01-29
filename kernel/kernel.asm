@@ -84,13 +84,13 @@ entry:
     ; Draw white background rectangles at top-left for version/build
     mov bx, 2                       ; X
     mov cx, 2                       ; Y (top of screen)
-    mov dx, 140                     ; Width
+    mov dx, 150                     ; Width (wider for full version)
     mov si, 10                      ; Height
     call gfx_draw_filled_rect_stub
 
     mov bx, 2
     mov cx, 12                      ; Below version
-    mov dx, 100                     ; Width
+    mov dx, 120                     ; Width (wider for "Build: 087")
     mov si, 10                      ; Height
     call gfx_draw_filled_rect_stub
 
