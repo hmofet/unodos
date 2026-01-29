@@ -79,3 +79,9 @@
 **Claude:** [Adding transcript instructions to CLAUDE.md now. Creating TRANSCRIPT.md with session history. Will maintain after every response going forward.] Added instructions to CLAUDE.md, created TRANSCRIPT.md with full Session 1 history. Committed both files (commit 79bacc1). Transcript will be updated after every response from now on.
 
 ---
+
+**User:** Still says build 099 when I run it [after git reset to 9f9c0bc]
+
+**Claude:** [Checked BUILD_NUMBER file vs image contents. Found issue: BUILD_NUMBER file is 100 but the image still contains Build 099 - never rebuilt after updating BUILD_NUMBER.] Rebuilt image with BUILD_NUMBER=100 and committed. Pull again to get the correct Build 100 image.
+
+---
