@@ -81,34 +81,22 @@ entry:
     mov word [caller_ds], 0x1000
 
     ; DEBUG: Draw test rectangles to confirm pixel plotting works
-    ; Draw white background rectangles at top-left for version/build
-    mov bx, 2                       ; X
-    mov cx, 2                       ; Y (top of screen)
-    mov dx, 150                     ; Width (wider for full version)
-    mov si, 10                      ; Height
-    call gfx_draw_filled_rect_stub
-
-    mov bx, 2
-    mov cx, 12                      ; Below version
-    mov dx, 120                     ; Width (wider for "Build: 087")
-    mov si, 10                      ; Height
-    call gfx_draw_filled_rect_stub
-
-    ; Ensure DS is set
+    ; Ensure DS is set and set caller_ds for API calls
     mov ax, 0x1000
     mov ds, ax
+    mov word [caller_ds], 0x1000
 
-    ; Display version number - black text on white background at top-left
+    ; Display version number - WHITE text (we know this works)
     mov bx, 4
     mov cx, 4
     mov si, version_string
-    call gfx_draw_string_inverted
+    call gfx_draw_string_stub
 
-    ; Display build number - black text on white background
+    ; Display build number - WHITE text
     mov bx, 4
     mov cx, 14
     mov si, build_string
-    call gfx_draw_string_inverted
+    call gfx_draw_string_stub
 
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
