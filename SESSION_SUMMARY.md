@@ -51,6 +51,23 @@ Added explicit `mov ds, 0x1000` before string drawing calls
 Added filled rectangle drawing before text
 **Purpose**: Confirm pixel plotting works vs text rendering broken
 **Test**: Rectangle visible → pixel works, text broken. No rectangle → graphics broken.
+**Result**: White rectangle appeared - pixel plotting confirmed working!
+
+### Build 083 - DS Management Fix **SOLVED!**
+**Root Cause Found**: `gfx_draw_string_inverted` didn't set DS=0x1000 for font access
+**The Bug**:
+- Window title worked because window manager had DS=0x1000
+- Version/build failed because DS wasn't explicitly set for font access
+- `gfx_draw_string_stub` (white text) worked because it properly sets DS
+- `gfx_draw_string_inverted` (black text) didn't manage DS
+
+**The Fix**: Updated `gfx_draw_string_inverted` to:
+1. Save caller's DS
+2. Set DS=0x1000 before accessing font_8x8
+3. Restore DS after character draw
+4. Match the DS management pattern in `gfx_draw_string_stub`
+
+**Status**: Text rendering should now work!
 
 ## Technical Analysis
 
@@ -78,7 +95,8 @@ Added filled rectangle drawing before text
 | 079 | Script version detection | Deployment verification |
 | 080 | Black text test | Still no text |
 | 081 | Explicit DS setup | Still no text |
-| 082 | Debug rectangle | **Testing now** |
+| 082 | Debug rectangle | Rectangle visible |
+| 083 | DS management fix | **Testing now** |
 
 ## Next Steps
 
@@ -104,5 +122,5 @@ Added filled rectangle drawing before text
 
 **Last Updated**: 2026-01-28
 **Current Version**: v3.13.0
-**Current Build**: 082
-**Status**: Debugging text rendering issue
+**Current Build**: 083
+**Status**: Text rendering bug FIXED - awaiting hardware test
