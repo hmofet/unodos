@@ -16,6 +16,8 @@ Format each exchange as:
 ---
 ```
 
+**SECURITY**: Never include sensitive information in TRANSCRIPT.md — no keys, passwords, usernames, tokens, API keys, or credentials. Redact or omit such content entirely.
+
 New sessions get a header: `## Session N - YYYY-MM-DD`
 
 Prioritize keeping the transcript current. If you notice it's fallen behind, catch it up immediately before doing other work.
