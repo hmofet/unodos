@@ -4239,8 +4239,7 @@ fat16_readdir:
     pop ax                          ; Current entry index
     inc ax                          ; Next entry
     mov cx, ax                      ; Return new state in CX
-    push ax
-    clc
+    clc                             ; Success - removed buggy push ax
     jmp .done
 
 .skip_entry:
