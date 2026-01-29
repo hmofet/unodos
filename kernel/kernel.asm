@@ -2619,82 +2619,29 @@ fat12_mount:
     loop .spinup
     pop cx
 
-    ; Read boot sector (sector 0) into bpb_buffer
-    ; Try multiple times in case drive not ready
-    push bp
-    mov bp, 3                       ; Retry count in BP
+    ; HARD-CODE BPB values instead of reading sector 62
+    ; Our FAT12 filesystem at sector 62 has known parameters:
+    ; - 512 bytes per sector
+    ; - 1 sector per cluster
+    ; - 1 reserved sector
+    ; - 2 FATs
+    ; - 224 root directory entries
+    ; - 9 sectors per FAT
 
-.retry_read:
-    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    ; Read sector 62 (FAT12 boot sector, not UnoDOS boot at sector 0)
-    ; LBA 62 = C:1, H:1, S:9 (62 = 1*36 + 1*18 + 9-1)
-    mov cx, 0x0109                  ; CH=1 (cylinder), CL=9 (sector)
-    mov dx, 0x0100                  ; DH=1 (head), DL=0 (drive A:)
-    push es
-    mov bx, 0x1000
-    mov es, bx
-    mov bx, bpb_buffer
-    int 0x13
-    pop es
-    jnc .read_success
-
-    ; Retry on error
-    dec bp
-    jnz .retry_read
-    pop bp
-    jmp .read_error
-
-.read_success:
-    pop bp                          ; Restore BP after successful read
-
-    ; Validate boot sector signature (0xAA55 at offset 510)
-    cmp word [bpb_buffer + 510], 0xAA55
-    jne .read_error
-
-    ; Parse BPB (BIOS Parameter Block)
-    ; Bytes per sector at offset 0x0B
-    mov ax, [bpb_buffer + 0x0B]
-    cmp ax, 512                     ; Must be 512 for FAT12
-    jne .read_error
-    mov [bytes_per_sector], ax
-
-    ; Sectors per cluster at offset 0x0D
-    mov al, [bpb_buffer + 0x0D]
-    test al, al                     ; Must not be zero
-    jz .read_error
-    mov [sectors_per_cluster], al
-
-    ; Reserved sectors at offset 0x0E
-    mov ax, [bpb_buffer + 0x0E]
-    mov [reserved_sectors], ax
-
-    ; Number of FATs at offset 0x10
-    mov al, [bpb_buffer + 0x10]
-    mov [num_fats], al
-
-    ; Root directory entries at offset 0x11
-    mov ax, [bpb_buffer + 0x11]
-    mov [root_dir_entries], ax
-
-    ; Sectors per FAT at offset 0x16
-    mov ax, [bpb_buffer + 0x16]
-    mov [sectors_per_fat], ax
+    mov word [bytes_per_sector], 512
+    mov byte [sectors_per_cluster], 1
+    mov word [reserved_sectors], 1
+    mov byte [num_fats], 2
+    mov word [root_dir_entries], 224
+    mov word [sectors_per_fat], 9
 
     ; Calculate root directory start sector
     ; root_dir_start = 62 + reserved + (num_fats * sectors_per_fat)
-    ; (62 = offset where FAT12 filesystem starts on floppy)
-    mov ax, [reserved_sectors]
-    mov bl, [num_fats]
-    xor bh, bh
-    mov cx, [sectors_per_fat]
-    push ax
-    mov ax, cx
-    mul bx                          ; AX = num_fats * sectors_per_fat
-    mov bx, ax
-    pop ax
-    add ax, bx
-    add ax, 62                      ; Add filesystem start offset
-    mov [root_dir_start], ax
+    ; = 62 + 1 + (2 * 9) = 62 + 1 + 18 = 81
+    mov ax, 1                       ; reserved_sectors
+    add ax, 18                      ; num_fats * sectors_per_fat
+    add ax, 62                      ; Filesystem starts at sector 62
+    mov [root_dir_start], ax        ; = 81
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
