@@ -34,10 +34,26 @@ if (-not (Test-Path $ImagePath)) {
     exit 1
 }
 
-Write-Host "Writing $(Split-Path -Leaf $ImagePath) to ${DriveLetter}:..." -ForegroundColor Cyan
+# Read version and build from image
+$imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
+$imageText = [System.Text.Encoding]::ASCII.GetString($imageBytes)
+
+# Search for version string (e.g., "UnoDOS v3.13.0")
+$versionMatch = [regex]::Match($imageText, 'UnoDOS v[\d.]+')
+$versionString = if ($versionMatch.Success) { $versionMatch.Value } else { "Unknown" }
+
+# Search for build string (e.g., "Build: 078")
+$buildMatch = [regex]::Match($imageText, 'Build: \d+')
+$buildString = if ($buildMatch.Success) { $buildMatch.Value } else { "Unknown" }
+
+Write-Host ""
+Write-Host "Image: $(Split-Path -Leaf $ImagePath)" -ForegroundColor Cyan
+Write-Host "  Version: $versionString" -ForegroundColor Cyan
+Write-Host "  $buildString" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Writing to ${DriveLetter}:..." -ForegroundColor Yellow
 
 $drivePath = "\\.\${DriveLetter}:"
-$imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
 $stream = [System.IO.File]::Open($drivePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
 try {
     $stream.Write($imageBytes, 0, $imageBytes.Length)
