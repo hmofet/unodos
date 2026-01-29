@@ -1,104 +1,108 @@
-# Session Summary - HDD App Scanning Fix (Builds 074-077)
+# Session Summary - HDD App Scanning & Text Rendering Debug (Builds 074-082)
 
-## Problem Statement
-HDD bootloader worked, launcher auto-loaded, but showed "No apps found" even though apps existed in FAT16 filesystem.
-
-## Root Cause Analysis
+## Part 1: HDD App Scanning Fixes (Builds 074-078)
 
 ### Issue 1 - Launcher Drive Hardcoded (Build 074)
 **Problem**: Launcher hardcoded to scan drive A: (0x00)
-**Location**: [apps/launcher.asm:198](apps/launcher.asm#L198)
 **Fix**: Try HDD (0x80) first, fall back to floppy (0x00)
 **Result**: Mount succeeded, but still no apps found
 
 ### Issue 2 - Missing FAT16 Readdir (Build 076)
 **Problem**: `fs_readdir_stub` only supported FAT12, not FAT16
-**Location**: [kernel/kernel.asm:2382-2418](kernel/kernel.asm#L2382-L2418)
-**Fix**:
-- Added routing for mount handle 0 (FAT12) vs 1 (FAT16)
-- Implemented `fat16_readdir()` function at line 4121-4229
-- Reads FAT16 root directory, skips deleted/volume entries
-**Result**: Kernel could scan FAT16, but launcher still didn't call it!
+**Fix**: Implemented `fat16_readdir()` function, added routing
+**Result**: Kernel could scan FAT16, but launcher didn't use it
 
 ### Issue 3 - Launcher Mount Handle Hardcoded (Build 077)
 **Problem**: Launcher saved mount handle but passed hardcoded 0 to readdir
-**Location**: [apps/launcher.asm:227](apps/launcher.asm#L227)
-**Fix**:
-- Save mount handle (BX) from `fs_mount` along with drive number
-- Pass `mount_handle` to `API_FS_READDIR` instead of hardcoded 0
-**Result**: Should finally work!
+**Fix**: Save and use mount handle (BX) from `fs_mount`
+**Result**: Should work, but attribute filtering was broken
 
-## Changes by Build
+### Issue 4 - FAT16 Attribute Check Wrong (Build 078)
+**Problem**: Used `test al, 0x0F` which skips files with any bottom 4 bits set
+**Fix**: Check for exact 0x0F (LFN) and volume label (0x08) specifically
+**Result**: Proper attribute filtering
 
-### Build 074
-- Launcher tries HDD (0x80) first, then floppy (0x00)
-- Saves `mounted_drive` variable
-- Uses saved drive for app loading
+## Part 2: Text Rendering Debug (Builds 079-082)
 
-### Build 075
-- Added version/build display in bottom-right for hardware verification
-- (Later removed due to screen overflow)
+### Observation (Hardware Testing)
+**What Works**:
+- Blue screen background ✓
+- Window borders/frames (white lines) ✓
+- Window title "Launcher" (black text on white bar) ✓
 
-### Build 076
-- Implemented FAT16 readdir support in kernel
-- Added `fat16_readdir()` function
-- `fs_readdir_stub` routes based on mount handle
+**What Doesn't Work**:
+- Version/build text (should be black, top-left) ✗
+- Launcher window content (app names, "No apps found") ✗
 
-### Build 077 (FINAL)
-- Launcher saves `mount_handle` from `fs_mount` return value
-- Passes correct mount handle to `API_FS_READDIR`
-- Removed duplicate version displays (kept top-left only)
+### Build 079 - Version Detection in Scripts
+Added version/build extraction to PowerShell deployment scripts
+- Scripts read .img file and display version/build before writing
+- Confirms correct build is being deployed
 
-## Technical Details
+### Build 080 - Black Text Test
+Changed version/build to use `gfx_draw_string_inverted` (black text)
+**Result**: Still no text visible (not white, not black)
 
-### FAT12 vs FAT16 Mount Handles
-- FAT12 (floppy): Drive 0x00, mount handle 0
-- FAT16 (HDD): Drive 0x80, mount handle 1
-- `fs_mount` returns mount handle in BX
-- `fs_readdir` expects mount handle in AL
+### Build 081 - Explicit DS Setup
+Added explicit `mov ds, 0x1000` before string drawing calls
+**Result**: Still no text visible
 
-### Launcher Flow (Build 077)
-```asm
-1. Try mount HDD (0x80) → Returns handle 1 in BX → Save both
-2. Call readdir with AL=1 → Routes to fat16_readdir → Success!
-3. Scan .BIN files, display in launcher window
-4. Load selected app from correct drive
-```
+### Build 082 - Visual Debug Rectangle
+Added filled rectangle drawing before text
+**Purpose**: Confirm pixel plotting works vs text rendering broken
+**Test**: Rectangle visible → pixel works, text broken. No rectangle → graphics broken.
 
-### File Locations
+## Technical Analysis
+
+### Text Rendering Paradox
+- Window TITLE works (uses `gfx_draw_string_inverted`)
+- Version/build doesn't work (also uses `gfx_draw_string_inverted`)
+- Both call the same function with DS=0x1000
+- Window title drawn by window manager, version by kernel
+- **Same function, same segment, different results!**
+
+### Possible Causes Under Investigation
+1. Graphics memory access from kernel vs window manager differs
+2. Stack/register corruption in direct kernel calls
+3. Timing issue (text drawn before mode fully initialized?)
+4. Font data not accessible when called early in boot
+
+## Build History
+
+| Build | Change | Result |
+|-------|--------|--------|
+| 074 | Launcher drive detection | Mount works, no apps |
+| 076 | FAT16 readdir implementation | Kernel can scan FAT16 |
+| 077 | Mount handle usage | Should work (untested) |
+| 078 | Attribute filtering fix | Correct LFN/volume skip |
+| 079 | Script version detection | Deployment verification |
+| 080 | Black text test | Still no text |
+| 081 | Explicit DS setup | Still no text |
+| 082 | Debug rectangle | **Testing now** |
+
+## Next Steps
+
+**If Build 082 shows rectangle**:
+- Pixel plotting works
+- Issue is specific to text/character drawing
+- Check font data access, draw_char function
+
+**If Build 082 shows NO rectangle**:
+- Graphics memory access from kernel is broken
+- But window manager works, so issue is context-specific
+- Check ES register, video memory segment
+
+## File Locations
 - Launcher: `apps/launcher.asm`
 - Kernel: `kernel/kernel.asm`
 - FAT16 functions: Lines 3403-4229 in kernel.asm
+- Graphics functions: Lines 1389-1578 in kernel.asm
 - HDD image creation: `tools/create_hd_image.py`
+- Deployment scripts: `tools/hd.ps1`, `tools/floppy.ps1`
 
-## Testing Status
-- Build 077 compiled successfully
-- Needs QEMU testing before hardware deployment
-- Version/build display: Top-left only
+---
 
-### Build 078 (CRITICAL FIX)
-**Problem**: FAT16 readdir attribute check was wrong!
-**Location**: [kernel/kernel.asm:4186](kernel/kernel.asm#L4186)
-**Bug**: Used `test al, 0x0F` which would skip ANY file with read-only, hidden, system, or volume bits
-**Fix**:
-- Check for exact match 0x0F (long filename)
-- Check for volume label (0x08) but not directory (0x10)
-- Allow all other entries including Archive (0x20)
-
-**Why it seemed to work**: Our .BIN files have attribute 0x20 (Archive), and 0x20 & 0x0F = 0, so they passed the test. But the logic was still wrong and could fail with other attribute combinations.
-
-## Summary of All Fixes
-
-Build 074: Launcher drive detection (try 0x80 then 0x00)
-Build 076: Kernel FAT16 readdir implementation
-Build 077: Launcher mount handle usage (pass handle to readdir)
-Build 078: FAT16 attribute filtering (proper LFN/volume skip)
-
-## Ready for Testing
-Build 078 should now correctly:
-1. Mount HDD drive 0x80 → Get handle 1
-2. Call readdir with handle 1 → Route to fat16_readdir
-3. Read FAT16 root directory
-4. Skip volume label and LFN entries
-5. Return .BIN file entries to launcher
-6. Display apps in launcher window
+**Last Updated**: 2026-01-28
+**Current Version**: v3.13.0
+**Current Build**: 082
+**Status**: Debugging text rendering issue
