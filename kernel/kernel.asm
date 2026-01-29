@@ -92,18 +92,34 @@ entry:
     mov ax, 0x1000
     mov ds, ax
 
-    ; TEST: Try white text using gfx_draw_string_stub instead
-    mov word [caller_ds], 0x1000    ; Set caller_ds for gfx_draw_string_stub
+    ; Draw white background rectangles for text (so black text is visible!)
+    mov bx, 2                       ; X
+    mov cx, 33                      ; Y
+    mov dx, 150                     ; Width
+    mov si, 12                      ; Height
+    call gfx_draw_filled_rect_stub
+
+    mov bx, 2
+    mov cx, 43
+    mov dx, 150
+    mov si, 12
+    call gfx_draw_filled_rect_stub
+
+    ; Ensure DS is set
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Display version number - black text on white background
     mov bx, 4
     mov cx, 35
     mov si, version_string
-    call gfx_draw_string_stub       ; Use WHITE text function
+    call gfx_draw_string_inverted
 
-    ; Display build number
+    ; Display build number - black text on white background
     mov bx, 4
     mov cx, 45
     mov si, build_string
-    call gfx_draw_string_stub       ; Use WHITE text function
+    call gfx_draw_string_inverted
 
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
