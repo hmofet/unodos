@@ -80,19 +80,13 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
-    ; DEBUG: Draw test rectangles to confirm pixel plotting works
-    ; Ensure DS is set and set caller_ds for API calls
-    mov ax, 0x1000
-    mov ds, ax
-    mov word [caller_ds], 0x1000
-
-    ; Display version number - WHITE text (we know this works)
+    ; Display version number (top-left corner)
     mov bx, 4
     mov cx, 4
     mov si, version_string
     call gfx_draw_string_stub
 
-    ; Display build number - WHITE text
+    ; Display build number (below version)
     mov bx, 4
     mov cx, 14
     mov si, build_string
