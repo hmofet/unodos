@@ -469,7 +469,7 @@ draw_menu:
     mov cx, [cs:content_y]
     add cx, MENU_TOP_PADDING
     mov si, no_apps_msg
-    mov ah, 11                      ; API_GFX_DRAW_STRING_INVERTED (white)
+    mov ah, 6                       ; API_GFX_DRAW_STRING_INVERTED (white)
     int 0x80
 
     ; DEBUG: Show mount info in WHITE
@@ -479,7 +479,7 @@ draw_menu:
     add cx, MENU_TOP_PADDING
     add cx, 10
     mov si, debug_drive_msg
-    mov ah, 11                      ; White
+    mov ah, 6                       ; White
     int 0x80
 
     ; Show mounted drive number
@@ -493,7 +493,7 @@ draw_menu:
     add cx, MENU_TOP_PADDING
     add cx, 20
     mov si, debug_handle_msg
-    mov ah, 11                      ; White
+    mov ah, 6                       ; White
     int 0x80
 
     mov al, [cs:mount_handle]
@@ -510,12 +510,12 @@ draw_menu:
     add cx, [cs:content_h]
     sub cx, 24                      ; Two lines from bottom
     mov si, help_line1
-    mov ah, 11                      ; White
+    mov ah, 6                       ; White
     int 0x80
 
     add cx, 10                      ; Next line
     mov si, help_line2
-    mov ah, 11                      ; White
+    mov ah, 6                       ; White
     int 0x80
 
     popa

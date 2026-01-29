@@ -148,7 +148,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-29)
     ; Validate function number
-    cmp ah, 30                      ; Max function + 1 (0-29)
+    cmp ah, 31                      ; Max function + 1 (0-30)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1609,7 +1609,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 30                           ; Number of function slots (0-29)
+    dw 31                           ; Number of function slots (0-30)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -1618,41 +1618,42 @@ kernel_api_table:
     dw gfx_draw_rect_stub           ; 1: Draw rectangle outline
     dw gfx_draw_filled_rect_stub    ; 2: Draw filled rectangle
     dw gfx_draw_char_stub           ; 3: Draw character
-    dw gfx_draw_string_stub         ; 4: Draw string
+    dw gfx_draw_string_stub         ; 4: Draw string (black)
     dw gfx_clear_area_stub          ; 5: Clear rectangular area
+    dw gfx_draw_string_inverted     ; 6: Draw string (white)
 
     ; Memory Management
-    dw mem_alloc_stub               ; 6: Allocate memory (malloc)
-    dw mem_free_stub                ; 7: Free memory
+    dw mem_alloc_stub               ; 7: Allocate memory (malloc)
+    dw mem_free_stub                ; 8: Free memory
 
     ; Event System
-    dw event_get_stub               ; 8: Get next event (non-blocking)
-    dw event_wait_stub              ; 9: Wait for event (blocking)
+    dw event_get_stub               ; 9: Get next event (non-blocking)
+    dw event_wait_stub              ; 10: Wait for event (blocking)
 
     ; Keyboard Input (Foundation 1.4)
-    dw kbd_getchar                  ; 10: Get character (non-blocking)
-    dw kbd_wait_key                 ; 11: Wait for key (blocking)
+    dw kbd_getchar                  ; 11: Get character (non-blocking)
+    dw kbd_wait_key                 ; 12: Wait for key (blocking)
 
     ; Filesystem API (Foundation 1.6)
-    dw fs_mount_stub                ; 12: Mount filesystem
-    dw fs_open_stub                 ; 13: Open file
-    dw fs_read_stub                 ; 14: Read from file
-    dw fs_close_stub                ; 15: Close file
-    dw fs_register_driver_stub      ; 16: Register filesystem driver
+    dw fs_mount_stub                ; 13: Mount filesystem
+    dw fs_open_stub                 ; 14: Open file
+    dw fs_read_stub                 ; 15: Read from file
+    dw fs_close_stub                ; 16: Close file
+    dw fs_register_driver_stub      ; 17: Register filesystem driver
 
     ; Application Loader (Core Services 2.1)
-    dw app_load_stub                ; 17: Load application from disk
-    dw app_run_stub                 ; 18: Run loaded application
+    dw app_load_stub                ; 18: Load application from disk
+    dw app_run_stub                 ; 19: Run loaded application
 
     ; Window Manager (Core Services 2.2)
-    dw win_create_stub              ; 19: Create window
-    dw win_destroy_stub             ; 20: Destroy window
-    dw win_draw_stub                ; 21: Draw/redraw window frame
-    dw win_focus_stub               ; 22: Bring window to front
-    dw win_move_stub                ; 23: Move window
-    dw win_get_content_stub         ; 24: Get content area bounds
-    dw register_shell_stub          ; 25: Register app as shell (auto-return)
-    dw fs_readdir_stub              ; 26: Read directory entry
+    dw win_create_stub              ; 20: Create window
+    dw win_destroy_stub             ; 21: Destroy window
+    dw win_draw_stub                ; 22: Draw/redraw window frame
+    dw win_focus_stub               ; 23: Bring window to front
+    dw win_move_stub                ; 24: Move window
+    dw win_get_content_stub         ; 25: Get content area bounds
+    dw register_shell_stub          ; 26: Register app as shell (auto-return)
+    dw fs_readdir_stub              ; 27: Read directory entry
 
     ; Mouse API
     dw mouse_get_state              ; 27: Get mouse position/buttons
