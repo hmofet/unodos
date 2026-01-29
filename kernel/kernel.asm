@@ -92,18 +92,6 @@ entry:
     mov si, build_string
     call gfx_draw_string_stub
 
-    ; Display version in bottom right for hardware verification
-    mov bx, 220
-    mov cx, 180
-    mov si, version_string
-    call gfx_draw_string_stub
-
-    ; Display build in bottom right (below version)
-    mov bx, 220
-    mov cx, 190
-    mov si, build_string
-    call gfx_draw_string_stub
-
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
 

@@ -210,13 +210,15 @@ scan_for_apps:
     int 0x80
     jc .scan_done                   ; Both failed, leave empty list
 
-    ; Save floppy as mounted drive
-    mov byte [cs:mounted_drive], 0
+    ; Save floppy mount info (mount returned handle in BX)
+    mov byte [cs:mounted_drive], 0  ; Drive A:
+    mov byte [cs:mount_handle], bl  ; Mount handle (should be 0 for FAT12)
     jmp .scan_loop
 
 .mounted_hdd:
-    ; Save HDD as mounted drive
-    mov byte [cs:mounted_drive], 0x80
+    ; Save HDD mount info (mount returned handle in BX)
+    mov byte [cs:mounted_drive], 0x80    ; Drive 0x80
+    mov byte [cs:mount_handle], bl       ; Mount handle (should be 1 for FAT16)
 
 .scan_loop:
     ; Check if we have room for more
@@ -224,7 +226,7 @@ scan_for_apps:
     jae .scan_done
 
     ; Read next directory entry
-    mov al, 0                       ; Mount handle
+    mov al, [cs:mount_handle]       ; Use saved mount handle (0=FAT12, 1=FAT16)
     mov cx, [cs:dir_state]          ; Iteration state
     push cs
     pop es
@@ -570,6 +572,7 @@ selected:       db 0
 app_handle:     dw 0
 last_error:     db 0
 mounted_drive:  db 0                ; Drive number that was successfully mounted
+mount_handle:   db 0                ; Mount handle (0=FAT12, 1=FAT16)
 
 ; Dynamic app discovery data
 discovered_apps: times (MAX_MENU_ITEMS * 12) db 0   ; 8 apps × 12 bytes each
