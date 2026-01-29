@@ -101,3 +101,15 @@
 **Claude:** [Updated TRANSCRIPT.md with final session exchange. Session saved.] Session ended. Build 101 awaiting hardware testing. Next step: Pull latest, write to floppy with verification (`.\tools\floppy.ps1 -v`), and boot test.
 
 ---
+
+**User:** add to CLAUDE.md: Ensure any keys, passwords, usernames, are NOT added to TRANSCRIPT.md
+
+**Claude:** [Added security guideline to CLAUDE.md Transcript Instructions section: "SECURITY: Never include sensitive information in TRANSCRIPT.md — no keys, passwords, usernames, tokens, API keys, or credentials. Redact or omit such content entirely." Committed (commit 5f383ab).]
+
+---
+
+**User:** any that already exist should be redacted
+
+**Claude:** [Reviewed entire TRANSCRIPT.md for sensitive information.] Checked all 104 lines - no keys, passwords, usernames, tokens, or credentials found. Content contains only technical debugging information, build numbers, commit hashes (public), and file paths. No redactions needed.
+
+---
