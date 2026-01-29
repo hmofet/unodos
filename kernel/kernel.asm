@@ -92,21 +92,18 @@ entry:
     mov ax, 0x1000
     mov ds, ax
 
-    ; Display version number (top-left corner) - black text
+    ; TEST: Try white text using gfx_draw_string_stub instead
+    mov word [caller_ds], 0x1000    ; Set caller_ds for gfx_draw_string_stub
     mov bx, 4
     mov cx, 35
     mov si, version_string
-    call gfx_draw_string_inverted
+    call gfx_draw_string_stub       ; Use WHITE text function
 
-    ; Ensure DS is still set
-    mov ax, 0x1000
-    mov ds, ax
-
-    ; Display build number (below version) - TEST: Use inverted (black) text
+    ; Display build number
     mov bx, 4
     mov cx, 45
     mov si, build_string
-    call gfx_draw_string_inverted
+    call gfx_draw_string_stub       ; Use WHITE text function
 
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
