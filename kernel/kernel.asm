@@ -80,17 +80,17 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
-    ; Display version number (top-left corner)
+    ; Display version number (top-left corner) - TEST: Use inverted (black) text
     mov bx, 4
     mov cx, 4
     mov si, version_string
-    call gfx_draw_string_stub
+    call gfx_draw_string_inverted
 
-    ; Display build number (below version)
+    ; Display build number (below version) - TEST: Use inverted (black) text
     mov bx, 4
     mov cx, 14
     mov si, build_string
-    call gfx_draw_string_stub
+    call gfx_draw_string_inverted
 
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
