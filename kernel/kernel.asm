@@ -95,13 +95,14 @@ entry:
     ; Welcome box removed - clutters test output
     ; call draw_welcome_box
 
+    ; TEMPORARY TEST: Skip launcher loading to isolate the issue
     ; Enable interrupts
     sti
 
-    ; Auto-load launcher from boot disk
-    call auto_load_launcher
+    ; SKIP launcher for this test build
+    ; call auto_load_launcher
 
-    ; Halt
+    ; Halt immediately after displaying version/build
 halt_loop:
     hlt
     jmp halt_loop
