@@ -2380,7 +2380,7 @@ fs_close_stub:
     ret
 
 ; fs_readdir_stub - Read next directory entry
-; Input: AL = mount handle (0 for FAT12)
+; Input: AL = mount handle (0 for FAT12, 1 for FAT16)
 ;        CX = iteration state (0 = start fresh)
 ;        ES:DI = pointer to 32-byte buffer for entry
 ; Output: CF = 0 success (entry copied to buffer)
@@ -2389,6 +2389,22 @@ fs_close_stub:
 ;         AX = FS_ERR_END_OF_DIR (6) when done
 ; State encoding: bits 0-3 = entry index (0-15), bits 4-15 = sector offset (0-13)
 fs_readdir_stub:
+    ; Route based on mount handle
+    cmp al, 0
+    je .fat12
+    cmp al, 1
+    je .fat16
+    ; Invalid mount handle
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    ret
+
+.fat16:
+    ; Call FAT16 readdir
+    call fat16_readdir
+    ret
+
+.fat12:
     push bx
     push dx
     push si
@@ -4101,6 +4117,139 @@ fat16_read:
 .bytes_to_read:     dw 0
 .cluster_size:      dw 0
 .offset_in_cluster: dw 0
+
+; fat16_readdir - Read FAT16 root directory entry
+; Input: CX = iteration state (0 = start, or previous state)
+;        ES:DI = pointer to 32-byte buffer for entry
+; Output: CF = 0 success (entry copied to buffer)
+;         CF = 1 end of directory
+;         CX = new state for next call
+;         AX = FS_ERR_END_OF_DIR when done
+; State encoding: CX = entry index (0 to fat16_root_entries-1)
+fat16_readdir:
+    push bx
+    push dx
+    push si
+    push di
+
+    ; Check if FAT16 is mounted
+    cmp byte [fat16_mounted], 1
+    jne .not_mounted
+
+    ; CX contains entry index
+    mov ax, cx                      ; AX = entry index
+
+.scan_entries:
+    ; Check if we've scanned all root entries
+    cmp ax, [fat16_root_entries]
+    jae .end_of_dir
+
+    ; Calculate sector: entry_index / 16 (16 entries per sector)
+    push ax
+    mov bx, 16
+    xor dx, dx
+    div bx                          ; AX = sector offset, DX = entry within sector
+    mov [.sector_off], ax
+    mov [.entry_idx], dx
+    pop ax                          ; Restore entry index
+    push ax                         ; Save for later
+
+    ; Calculate LBA: root_start + sector_offset
+    mov eax, [fat16_root_start]
+    movzx ebx, word [.sector_off]
+    add eax, ebx
+
+    ; Read root directory sector
+    push es
+    push di
+    mov bx, fat16_sector_buf
+    push ds
+    pop es                          ; ES = kernel segment
+    call fat16_read_sector
+    pop di
+    pop es
+    pop ax                          ; Restore entry index
+    jc .read_error
+
+    ; Calculate entry offset in sector: entry_idx * 32
+    mov bx, [.entry_idx]
+    shl bx, 5                       ; * 32
+    add bx, fat16_sector_buf        ; BX = pointer to entry
+
+    ; Check first byte of entry
+    push ds
+    mov dx, ds
+    mov ds, dx                      ; Ensure DS = kernel segment
+    mov al, [bx]
+    pop ds
+
+    ; Check for end marker (0x00) or deleted entry (0xE5)
+    cmp al, 0x00
+    je .end_of_dir                  ; 0x00 = no more entries
+    cmp al, 0xE5
+    je .skip_entry                  ; 0xE5 = deleted
+
+    ; Check attributes (offset 11)
+    push ds
+    mov dx, ds
+    mov ds, dx
+    mov al, [bx + 11]
+    pop ds
+    test al, 0x0F                   ; Volume label or long filename?
+    jnz .skip_entry                 ; Skip if not a regular entry
+
+    ; Valid entry - copy to caller's buffer
+    push ds
+    mov dx, ds
+    mov ds, dx                      ; DS = kernel segment
+    mov si, bx                      ; SI = source
+    mov cx, 32                      ; 32 bytes
+.copy_loop:
+    lodsb
+    stosb
+    loop .copy_loop
+    pop ds
+
+    ; Increment state and return success
+    pop ax                          ; Current entry index
+    inc ax                          ; Next entry
+    mov cx, ax                      ; Return new state in CX
+    push ax
+    clc
+    jmp .done
+
+.skip_entry:
+    ; Move to next entry
+    pop ax                          ; Current entry index
+    inc ax                          ; Next entry
+    jmp .scan_entries
+
+.not_mounted:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    jmp .done
+
+.end_of_dir:
+    pop ax                          ; Clean stack
+    mov ax, FS_ERR_END_OF_DIR
+    stc
+    jmp .done
+
+.read_error:
+    pop ax                          ; Clean stack
+    mov ax, FS_ERR_READ_ERROR
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; Local variables
+.sector_off:    dw 0
+.entry_idx:     dw 0
 
 ; ============================================================================
 ; IDE Direct Access Driver (fallback for INT 13h failures)
