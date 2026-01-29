@@ -236,6 +236,7 @@ scan_for_apps:
     ; Initialize
     mov byte [cs:discovered_count], 0
     mov word [cs:dir_state], 0
+    mov word [cs:scan_safety], 0    ; Safety counter to prevent infinite loops
 
     ; Try HDD first (0x80)
     mov al, 0x80                    ; Drive 0x80 (HDD/IDE)
@@ -262,6 +263,11 @@ scan_for_apps:
     mov byte [cs:mount_handle], bl       ; Mount handle (should be 1 for FAT16)
 
 .scan_loop:
+    ; Safety check - prevent infinite loop
+    inc word [cs:scan_safety]
+    cmp word [cs:scan_safety], 500  ; Max 500 iterations
+    jae .scan_done                  ; Exit if too many iterations
+
     ; Check if we have room for more
     cmp byte [cs:discovered_count], MAX_MENU_ITEMS
     jae .scan_done
@@ -698,6 +704,7 @@ app_handle:     dw 0
 last_error:     db 0
 mounted_drive:  db 0                ; Drive number that was successfully mounted
 mount_handle:   db 0                ; Mount handle (0=FAT12, 1=FAT16)
+scan_safety:    dw 0                ; Safety counter for infinite loop prevention
 
 ; Dynamic app discovery data
 discovered_apps: times (MAX_MENU_ITEMS * 12) db 0   ; 8 apps × 12 bytes each
