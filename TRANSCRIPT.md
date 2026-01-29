@@ -91,3 +91,13 @@
 **Claude:** [CRITICAL BUG FOUND: Function 11 in API table is kbd_wait_key, NOT white text! Launcher was calling function 11 for white text, causing it to hang waiting for keyboard input. Created Build 101: Added gfx_draw_string_inverted as function 6, renumbered all API functions 6-26 to 7-27, changed all launcher calls from `mov ah, 11` to `mov ah, 6`. Fixed at [kernel.asm:1440-1472](kernel/kernel.asm#L1440-L1472) and [launcher.asm:472,482,496,513,518](apps/launcher.asm).] Build 101 ready for testing - launcher should now display white text messages instead of hanging.
 
 ---
+
+**Claude:** [Session resumed. Updated TRANSCRIPT.md with Build 101 exchange. Confirmed Build 101 (commit 22fbace) is built and ready with correct image file containing "Build: 101". Committed transcript update (commit 595ec66).] Build 101 ready for testing on hardware. Expected: launcher displays white text messages ("No apps found", drive/handle info, help text) instead of hanging with white square.
+
+---
+
+**User:** save the session, let's end for now
+
+**Claude:** [Updated TRANSCRIPT.md with final session exchange. Session saved.] Session ended. Build 101 awaiting hardware testing. Next step: Pull latest, write to floppy with verification (`.\tools\floppy.ps1 -v`), and boot test.
+
+---
