@@ -80,11 +80,19 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
+    ; Ensure DS is set for string access
+    mov ax, 0x1000
+    mov ds, ax
+
     ; Display version number (top-left corner) - TEST: Use inverted (black) text
     mov bx, 4
     mov cx, 4
     mov si, version_string
     call gfx_draw_string_inverted
+
+    ; Ensure DS is still set
+    mov ax, 0x1000
+    mov ds, ax
 
     ; Display build number (below version) - TEST: Use inverted (black) text
     mov bx, 4
