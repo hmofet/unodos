@@ -80,13 +80,21 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
+    ; DEBUG: Draw test rectangles to confirm pixel plotting works
+    ; Red rectangle at top-left
+    mov bx, 10
+    mov cx, 10
+    mov dx, 50
+    mov si, 20
+    call gfx_draw_filled_rect_stub
+
     ; Ensure DS is set for string access
     mov ax, 0x1000
     mov ds, ax
 
     ; Display version number (top-left corner) - TEST: Use inverted (black) text
     mov bx, 4
-    mov cx, 4
+    mov cx, 35
     mov si, version_string
     call gfx_draw_string_inverted
 
@@ -96,7 +104,7 @@ entry:
 
     ; Display build number (below version) - TEST: Use inverted (black) text
     mov bx, 4
-    mov cx, 14
+    mov cx, 45
     mov si, build_string
     call gfx_draw_string_inverted
 
