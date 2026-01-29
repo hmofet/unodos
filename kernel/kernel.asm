@@ -92,17 +92,25 @@ entry:
     mov si, build_string
     call gfx_draw_string_stub
 
-    ; Welcome box removed - clutters test output
-    ; call draw_welcome_box
+    ; DEBUG: Show we're about to load launcher
+    mov bx, 4
+    mov cx, 24
+    mov si, debug_before_launcher
+    call gfx_draw_string_stub
 
-    ; TEMPORARY TEST: Skip launcher loading to isolate the issue
     ; Enable interrupts
     sti
 
-    ; SKIP launcher for this test build
-    ; call auto_load_launcher
+    ; Auto-load launcher from boot disk
+    call auto_load_launcher
 
-    ; Halt immediately after displaying version/build
+    ; DEBUG: Show launcher returned (probably won't reach here)
+    mov bx, 4
+    mov cx, 34
+    mov si, debug_after_launcher
+    call gfx_draw_string_stub
+
+    ; Halt
 halt_loop:
     hlt
     jmp halt_loop
@@ -745,6 +753,10 @@ mouse_is_enabled:
 ; Aliases for compatibility
 version_string equ VERSION_STR
 build_string   equ BUILD_NUMBER_STR
+
+; Debug messages
+debug_before_launcher: db 'Load...', 0
+debug_after_launcher:  db 'OK!', 0
 
 ; Boot messages
 kernel_prefix:  db 'Kernel: ', 0
