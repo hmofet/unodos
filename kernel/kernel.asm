@@ -81,43 +81,32 @@ entry:
     mov word [caller_ds], 0x1000
 
     ; DEBUG: Draw test rectangles to confirm pixel plotting works
-    ; Test rectangle at top-left (white pixels)
-    mov bx, 10
-    mov cx, 10
-    mov dx, 50
-    mov si, 20
-    call gfx_draw_filled_rect_stub
-
-    ; Ensure DS is set for string access
-    mov ax, 0x1000
-    mov ds, ax
-
-    ; Draw white background rectangles for text (so black text is visible!)
+    ; Draw white background rectangles at top-left for version/build
     mov bx, 2                       ; X
-    mov cx, 33                      ; Y
-    mov dx, 150                     ; Width
-    mov si, 12                      ; Height
+    mov cx, 2                       ; Y (top of screen)
+    mov dx, 140                     ; Width
+    mov si, 10                      ; Height
     call gfx_draw_filled_rect_stub
 
     mov bx, 2
-    mov cx, 43
-    mov dx, 150
-    mov si, 12
+    mov cx, 12                      ; Below version
+    mov dx, 100                     ; Width
+    mov si, 10                      ; Height
     call gfx_draw_filled_rect_stub
 
     ; Ensure DS is set
     mov ax, 0x1000
     mov ds, ax
 
-    ; Display version number - black text on white background
+    ; Display version number - black text on white background at top-left
     mov bx, 4
-    mov cx, 35
+    mov cx, 4
     mov si, version_string
     call gfx_draw_string_inverted
 
     ; Display build number - black text on white background
     mov bx, 4
-    mov cx, 45
+    mov cx, 14
     mov si, build_string
     call gfx_draw_string_inverted
 
