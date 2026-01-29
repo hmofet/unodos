@@ -463,37 +463,37 @@ draw_menu:
     jmp .draw_loop
 
 .no_apps:
-    ; Display "No apps found" message
+    ; Display "No apps found" message in WHITE
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
     add cx, MENU_TOP_PADDING
     mov si, no_apps_msg
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, 11                      ; API_GFX_DRAW_STRING_INVERTED (white)
     int 0x80
 
-    ; DEBUG: Show mount info
+    ; DEBUG: Show mount info in WHITE
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
     add cx, MENU_TOP_PADDING
     add cx, 10
     mov si, debug_drive_msg
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, 11                      ; White
     int 0x80
 
     ; Show mounted drive number
     mov al, [cs:mounted_drive]
     call show_hex_byte
 
-    ; Show mount handle
+    ; Show mount handle in WHITE
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
     add cx, MENU_TOP_PADDING
     add cx, 20
     mov si, debug_handle_msg
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, 11                      ; White
     int 0x80
 
     mov al, [cs:mount_handle]
@@ -503,19 +503,19 @@ draw_menu:
 
 .draw_help:
 .draw_help_only:
-    ; Draw help text at bottom of content area
+    ; Draw help text at bottom in WHITE
     mov bx, [cs:content_x]
     add bx, MENU_LEFT_PADDING
     mov cx, [cs:content_y]
     add cx, [cs:content_h]
     sub cx, 24                      ; Two lines from bottom
     mov si, help_line1
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, 11                      ; White
     int 0x80
 
     add cx, 10                      ; Next line
     mov si, help_line2
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, 11                      ; White
     int 0x80
 
     popa
