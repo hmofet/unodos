@@ -48,6 +48,18 @@ $imageInfo = Get-Item $ImagePath
 $imageSizeMB = [math]::Round($imageInfo.Length / 1MB, 2)
 $diskSizeMB = [math]::Round($disk.Size / 1MB, 2)
 
+# Read version and build from image
+$imageBytes = [System.IO.File]::ReadAllBytes($ImagePath)
+$imageText = [System.Text.Encoding]::ASCII.GetString($imageBytes)
+
+# Search for version string (e.g., "UnoDOS v3.13.0")
+$versionMatch = [regex]::Match($imageText, 'UnoDOS v[\d.]+')
+$versionString = if ($versionMatch.Success) { $versionMatch.Value } else { "Unknown" }
+
+# Search for build string (e.g., "Build: 078")
+$buildMatch = [regex]::Match($imageText, 'Build: \d+')
+$buildString = if ($buildMatch.Success) { $buildMatch.Value } else { "Unknown" }
+
 # Display warning
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Yellow
@@ -55,6 +67,8 @@ Write-Host "     UnoDOS Hard Drive Image Writer     " -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Image: $ImagePath ($imageSizeMB MB)"
+Write-Host "  Version: $versionString" -ForegroundColor Cyan
+Write-Host "  $buildString" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Target Disk:"
 Write-Host "  Number: $DiskNumber"
