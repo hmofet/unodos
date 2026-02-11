@@ -6,16 +6,16 @@
 [BITS 16]
 [ORG 0x0000]
 
-; API function indices
+; API function indices (must match kernel_api_table in kernel.asm)
 API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
-API_EVENT_GET           equ 8
-API_FS_MOUNT            equ 12
-API_FS_READDIR          equ 26
-API_WIN_CREATE          equ 19
-API_WIN_DESTROY         equ 20
-API_WIN_GET_CONTENT     equ 24
+API_EVENT_GET           equ 9
+API_FS_MOUNT            equ 13
+API_FS_READDIR          equ 27
+API_WIN_CREATE          equ 20
+API_WIN_DESTROY         equ 21
+API_WIN_GET_CONTENT     equ 25
 
 ; Event types
 EVENT_KEY_PRESS         equ 1

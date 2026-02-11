@@ -1677,9 +1677,9 @@ kernel_api_table:
     dw fs_readdir_stub              ; 27: Read directory entry
 
     ; Mouse API
-    dw mouse_get_state              ; 27: Get mouse position/buttons
-    dw mouse_set_position           ; 28: Set mouse position
-    dw mouse_is_enabled             ; 29: Check if mouse available
+    dw mouse_get_state              ; 28: Get mouse position/buttons
+    dw mouse_set_position           ; 29: Set mouse position
+    dw mouse_is_enabled             ; 30: Check if mouse available
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
