@@ -42,65 +42,27 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; DEBUG: Draw marker #1 - Launcher started
-    mov bx, 160
-    mov cx, 50
-    mov dx, 8
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
-
     ; Create launcher window
     call create_window
     jc .exit_fail
 
-    ; DEBUG: Draw marker #2 - Window created
-    mov bx, 170
-    mov cx, 50
-    mov dx, 8
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
-
     ; Drain any pending events (leftover from disk swap confirmation)
 .drain_events:
+    sti                             ; Keep interrupts enabled
     mov ah, API_EVENT_GET
     int 0x80
     test al, al                     ; AL=0 means no more events
     jnz .drain_events
 
-    ; DEBUG: Draw marker #3 - Events drained
-    mov bx, 180
-    mov cx, 50
-    mov dx, 8
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
-
-    ; Scan for .BIN files on the floppy
+    ; Scan for .BIN files on the boot disk
     call scan_for_apps
-
-    ; DEBUG: Draw marker #4 - Scanning done
-    mov bx, 190
-    mov cx, 50
-    mov dx, 8
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
 
     ; Draw initial menu
     call draw_menu
 
-    ; DEBUG: Draw marker #5 - Menu drawn
-    mov bx, 200
-    mov cx, 50
-    mov dx, 8
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
-
     ; Main event loop
 .main_loop:
+    sti                             ; RE-ENABLE INTERRUPTS (INT 0x80 clears IF)
     ; Get event (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
@@ -395,16 +357,6 @@ draw_menu:
     mov dx, [cs:content_w]
     mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    ; DEBUG: Draw a small white rectangle to show we're alive
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 4
-    mov dx, 8                       ; 8 pixels wide
-    mov si, 8                       ; 8 pixels high
-    mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
 
     ; Check if we have any apps
