@@ -42,9 +42,23 @@ entry:
     mov ax, cs
     mov ds, ax
 
+    ; DEBUG: Draw 'L' at (100,24) to confirm launcher is executing
+    mov al, 'L'
+    mov bx, 100
+    mov cx, 24
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+
     ; Create launcher window
     call create_window
-    jc .exit_fail
+    jc .win_failed
+
+    ; DEBUG: Draw 'W' to confirm window created
+    mov al, 'W'
+    mov bx, 108
+    mov cx, 24
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
 
     ; Drain any pending events (leftover from disk swap confirmation)
 .drain_events:
@@ -57,10 +71,29 @@ entry:
     ; Scan for .BIN files on the boot disk
     call scan_for_apps
 
+    ; DEBUG: Draw app count digit
+    mov al, [cs:discovered_count]
+    add al, '0'
+    mov bx, 116
+    mov cx, 24
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+
     ; Draw initial menu
     call draw_menu
+    jmp .enter_main_loop
+
+.win_failed:
+    ; DEBUG: Draw 'X' to show window creation failed
+    mov al, 'X'
+    mov bx, 108
+    mov cx, 24
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    jmp .exit_fail
 
     ; Main event loop
+.enter_main_loop:
 .main_loop:
     sti                             ; RE-ENABLE INTERRUPTS (INT 0x80 clears IF)
     ; Get event (non-blocking)
