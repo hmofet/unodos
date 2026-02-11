@@ -92,23 +92,11 @@ entry:
     mov si, build_string
     call gfx_draw_string_stub
 
-    ; DEBUG: Show we're about to load launcher
-    mov bx, 4
-    mov cx, 24
-    mov si, debug_before_launcher
-    call gfx_draw_string_stub
-
     ; Enable interrupts
     sti
 
     ; Auto-load launcher from boot disk
     call auto_load_launcher
-
-    ; DEBUG: Show launcher returned (probably won't reach here)
-    mov bx, 4
-    mov cx, 34
-    mov si, debug_after_launcher
-    call gfx_draw_string_stub
 
     ; Halt
 halt_loop:
@@ -754,10 +742,6 @@ mouse_is_enabled:
 version_string equ VERSION_STR
 build_string   equ BUILD_NUMBER_STR
 
-; Debug messages
-debug_before_launcher: db 'Load...', 0
-debug_after_launcher:  db 'OK!', 0
-
 ; Boot messages
 kernel_prefix:  db 'Kernel: ', 0
 
@@ -1078,8 +1062,16 @@ test_app_loader:
 
 auto_load_launcher:
     push ax
+    push bx
+    push cx
     push dx
     push si
+
+    ; Debug: Show mount attempt
+    mov bx, 60
+    mov cx, 24
+    mov si, .dbg_mount
+    call gfx_draw_string_stub
 
     ; Load LAUNCHER.BIN from boot drive
     mov ax, 0x1000
@@ -1088,21 +1080,50 @@ auto_load_launcher:
     mov dl, [boot_drive]            ; Use saved boot drive number
     mov dh, 0x20                    ; Load to shell segment (0x2000)
     call app_load_stub
-    jc .failed                      ; On error, fall back to demo
+    jc .load_failed
+
+    ; Debug: Show load success
+    mov bx, 60
+    mov cx, 34
+    mov si, .dbg_run
+    call gfx_draw_string_stub
 
     ; Run the launcher
     call app_run_stub
 
-.failed:
+    jmp .done
+
+.load_failed:
+    ; Debug: Show error code (AX has error code from app_load_stub)
+    ; Convert AX to hex digit and display
+    push ax
+    mov bx, 60
+    mov cx, 34
+    mov si, .dbg_fail
+    call gfx_draw_string_stub
+    pop ax
+
+    ; Show error code as number
+    add al, '0'                     ; Convert to ASCII digit
+    mov bx, 120
+    mov cx, 34
+    call gfx_draw_char_stub
+
+.done:
     ; On any error or launcher exit, fall through to keyboard demo
     pop si
     pop dx
+    pop cx
+    pop bx
     pop ax
     call keyboard_demo
     ret
 
 ; Local data
 .launcher_filename: db 'LAUNCHER.BIN', 0
+.dbg_mount: db 'M', 0
+.dbg_run:   db 'R', 0
+.dbg_fail:  db 'E', 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
