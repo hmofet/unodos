@@ -2476,19 +2476,40 @@ fs_readdir_stub:
     mov ch, al                      ; CH = cylinder
     mov dh, dl                      ; DH = head
 
-    ; Read sector to bpb_buffer
+    ; Read sector to bpb_buffer (with retry for real floppy drives)
     push es
     push di
+    mov [.save_ch], ch              ; Save CHS for retry
+    mov [.save_cl], cl
+    mov [.save_dh], dh
+    mov byte [.retry], 3           ; 3 attempts
+.retry_read:
     mov ax, 0x1000
     mov es, ax
     mov bx, bpb_buffer
+    mov ch, [.save_ch]
+    mov cl, [.save_cl]
+    mov dh, [.save_dh]
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
     mov dl, 0                       ; DL = drive A:
     int 0x13
+    jnc .read_ok_dir
+    ; Reset drive and retry
+    dec byte [.retry]
+    jz .retry_failed
+    xor ah, ah
+    mov dl, 0
+    int 0x13
+    jmp .retry_read
+.retry_failed:
+    pop di
+    pop es
+    pop ax
+    jmp .read_error
+.read_ok_dir:
     pop di
     pop es
     pop ax                          ; Restore LBA (not needed but clean stack)
-    jc .read_error
 
 .scan_entries:
     ; Calculate entry pointer: bpb_buffer + (entry_idx * 32)
@@ -2598,6 +2619,10 @@ fs_readdir_stub:
 ; Local variables for fs_readdir_stub
 .entry_idx:     dw 0
 .sector_off:    dw 0
+.save_ch:       db 0
+.save_cl:       db 0
+.save_dh:       db 0
+.retry:         db 0
 
 ; fs_register_driver_stub - Register a loadable filesystem driver
 ; Input: ES:BX = pointer to driver structure
