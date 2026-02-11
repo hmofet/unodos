@@ -74,8 +74,10 @@ load_kernel:
     mov byte [current_cyl], 0
 
 .load_loop:
-    ; Calculate how many sectors we can read (max 18 per track on 1.44MB)
-    ; For simplicity, read one sector at a time with progress
+    ; Read one sector with retry (real floppy drives need this)
+    mov byte [retry_count], 3       ; Try 3 times
+
+.retry:
     mov ah, 0x02                    ; BIOS read sectors
     mov al, 1                       ; Read 1 sector at a time
     mov ch, [current_cyl]
@@ -83,7 +85,17 @@ load_kernel:
     mov dh, [current_head]
     mov dl, [boot_drive]
     int 0x13
-    jc .disk_error
+    jnc .read_ok
+
+    ; Read failed - reset drive and retry
+    dec byte [retry_count]
+    jz .disk_error                  ; All retries exhausted
+    xor ah, ah                      ; AH=0 reset disk
+    mov dl, [boot_drive]
+    int 0x13
+    jmp .retry
+
+.read_ok:
 
     ; Print progress dot
     ; IMPORTANT: Preserve BX since BIOS int 0x10 may modify it
@@ -179,6 +191,7 @@ sectors_left:   db 0
 current_sector: db 0
 current_head:   db 0
 current_cyl:    db 0
+retry_count:    db 0
 
 msg_loading:    db 'Loading kernel', 0
 msg_done:       db ' OK', 0x0D, 0x0A, 0
