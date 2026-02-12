@@ -86,10 +86,14 @@ entry:
     je .move_up
     cmp dl, 'W'
     je .move_up
+    cmp dl, 128                     ; Up arrow
+    je .move_up
 
     cmp dl, 's'
     je .move_down
     cmp dl, 'S'
+    je .move_down
+    cmp dl, 129                     ; Down arrow
     je .move_down
 
     cmp dl, 13                      ; Enter?
@@ -665,8 +669,8 @@ launcher_name:  db 'LAUNCHER'                       ; 8 chars, no null needed
 
 ; UI strings
 indicator:      db '> ', 0
-help_line1:     db 'W/S: Select', 0
-help_line2:     db 'Enter: Run', 0
+help_line1:     db 'W/S/Arrows: Select', 0
+help_line2:     db 'Enter: Run  ESC: Exit', 0
 no_apps_msg:    db 'No apps found', 0
 debug_drive_msg: db 'Drive: 0x', 0
 debug_handle_msg: db 'Handle: 0x', 0
