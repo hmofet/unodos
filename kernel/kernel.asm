@@ -1716,7 +1716,11 @@ cursor_xor_sprite:
 ; mouse_cursor_hide - Erase cursor if currently visible
 ; Safe to call even if not visible (no-op)
 ; Preserves all registers
+; IMPORTANT: Uses PUSHF/CLI/POPF to prevent IRQ12 from interleaving
+; XOR operations, which would cause cursor ghost artifacts.
 mouse_cursor_hide:
+    pushf                           ; Save interrupt state
+    cli                             ; Atomic: check + XOR + flag update
     cmp byte [cursor_locked], 0
     jne .skip                       ; Skip if locked (counter > 0)
     cmp byte [cursor_visible], 0
@@ -1736,11 +1740,16 @@ mouse_cursor_hide:
     pop cx
     pop es
 .skip:
+    popf                            ; Restore interrupt state
     ret
 
 ; mouse_cursor_show - Draw cursor at current mouse position
 ; Preserves all registers
+; IMPORTANT: Uses PUSHF/CLI/POPF to prevent IRQ12 from interleaving
+; XOR operations, which would cause cursor ghost artifacts.
 mouse_cursor_show:
+    pushf                           ; Save interrupt state
+    cli                             ; Atomic: check + XOR + flag update
     cmp byte [cursor_locked], 0
     jne .skip                       ; Skip if locked (counter > 0)
     cmp byte [mouse_enabled], 0
@@ -1764,6 +1773,7 @@ mouse_cursor_show:
     pop cx
     pop es
 .skip:
+    popf                            ; Restore interrupt state
     ret
 
 ; ============================================================================
@@ -1922,19 +1932,23 @@ mouse_process_drag:
     cmp byte [drag_needs_update], 0
     je .done
 
+    ; Read drag state atomically (IRQ12 could update these mid-read)
+    ; We're in INT 0x80 context where STI was already called, so CLI/STI is safe
+    cli
     mov byte [drag_needs_update], 0
-
-    ; Hide cursor before window redraw
-    call mouse_cursor_hide
-
-    ; Move the window
-    push ax
-    push bx
-    push cx
     xor ax, ax
     mov al, [drag_window]
     mov bx, [drag_target_x]
     mov cx, [drag_target_y]
+    sti                             ; Re-enable interrupts for window move
+
+    ; Hide cursor before window redraw
+    push ax
+    push bx
+    push cx
+    call mouse_cursor_hide
+
+    ; Move the window (slow operation, runs with interrupts enabled)
     call win_move_stub
     pop cx
     pop bx
@@ -2285,6 +2299,12 @@ gfx_draw_filled_rect_stub:
 ; Output: None
 ; Preserves: All registers
 gfx_clear_area_stub:
+    ; Defensive guard: 0 width or height would cause 65536-iteration loop
+    test dx, dx
+    jz .early_ret
+    test si, si
+    jz .early_ret
+
     call mouse_cursor_hide
     inc byte [cursor_locked]
     push es
@@ -2328,6 +2348,7 @@ gfx_clear_area_stub:
     pop es
     dec byte [cursor_locked]
     call mouse_cursor_show
+.early_ret:
     ret
 
 ; Internal helper: Clear pixel at BX=X, CX=Y to background color
