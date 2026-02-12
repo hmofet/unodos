@@ -141,6 +141,28 @@ load_kernel:
 .disk_error:
     mov si, msg_disk_err
     call print_string
+
+    ; Print diagnostic: CHS and error code
+    ; AH still has BIOS error code from last int 0x13
+    mov si, msg_diag_cyl
+    call print_string
+    mov al, [current_cyl]
+    call print_hex_byte
+    mov si, msg_diag_head
+    call print_string
+    mov al, [current_head]
+    call print_hex_byte
+    mov si, msg_diag_sec
+    call print_string
+    mov al, [current_sector]
+    call print_hex_byte
+    mov si, msg_diag_left
+    call print_string
+    mov al, [sectors_left]
+    call print_hex_byte
+    mov si, msg_crlf
+    call print_string
+
     jmp halt
 
 ; ============================================================================
@@ -183,6 +205,39 @@ print_string:
     ret
 
 ; ============================================================================
+; Print Hex Byte (AL = value to print)
+; ============================================================================
+
+print_hex_byte:
+    push ax
+    push bx
+    push cx
+    mov cl, al                      ; Save value
+    ; High nibble
+    shr al, 4
+    call .print_nibble
+    ; Low nibble
+    mov al, cl
+    and al, 0x0F
+    call .print_nibble
+    pop cx
+    pop bx
+    pop ax
+    ret
+.print_nibble:
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp .print_it
+.digit:
+    add al, '0'
+.print_it:
+    mov ah, 0x0E
+    xor bh, bh
+    int 0x10
+    ret
+
+; ============================================================================
 ; Data
 ; ============================================================================
 
@@ -198,6 +253,11 @@ msg_done:       db ' OK', 0x0D, 0x0A, 0
 msg_disk_err:   db 0x0D, 0x0A, 'Disk error!', 0x0D, 0x0A, 0
 msg_kern_err:   db 0x0D, 0x0A, 'Bad kernel!', 0x0D, 0x0A, 0
 msg_halt:       db 'Halted.', 0x0D, 0x0A, 0
+msg_diag_cyl:   db 'C:', 0
+msg_diag_head:  db ' H:', 0
+msg_diag_sec:   db ' S:', 0
+msg_diag_left:  db ' Left:', 0
+msg_crlf:       db 0x0D, 0x0A, 0
 
 ; ============================================================================
 ; Padding
