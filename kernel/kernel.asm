@@ -5519,6 +5519,8 @@ win_focus_stub:
 ; win_move_stub - Move window to new position
 ; Input:  AX = Window handle, BX = New X, CX = New Y
 ; Output: CF = 0 on success
+; Algorithm: Draw frame at new position FIRST, then clear only exposed edges.
+; This avoids the full-window clear that causes "blue screen" on slow hardware.
 win_move_stub:
     call mouse_cursor_hide
     inc byte [cursor_locked]
@@ -5552,12 +5554,13 @@ win_move_stub:
     ; Save window pointer
     mov bp, bx
 
-    ; Clamp new position to keep window on screen
+    ; Read window dimensions
     mov ax, [bp + WIN_OFF_WIDTH]
     mov [.win_w], ax
     mov ax, [bp + WIN_OFF_HEIGHT]
     mov [.win_h], ax
 
+    ; Clamp new position to keep window on screen
     mov ax, 320
     sub ax, [.win_w]                ; AX = max X (320 - width)
     js .x_clamp_done                ; Skip if window wider than screen
@@ -5573,23 +5576,104 @@ win_move_stub:
     mov [.new_y], ax
 .y_clamp_done:
 
-    ; Clear old position
-    mov bx, [bp + WIN_OFF_X]
-    mov cx, [bp + WIN_OFF_Y]
-    mov dx, [.win_w]
-    mov si, [.win_h]
-    call gfx_clear_area_stub
+    ; Save old position before updating
+    mov ax, [bp + WIN_OFF_X]
+    mov [.old_x], ax
+    mov ax, [bp + WIN_OFF_Y]
+    mov [.old_y], ax
 
-    ; Update position (BP = window pointer)
+    ; Update position in window table FIRST
     mov bx, [.new_x]
     mov [bp + WIN_OFF_X], bx
     mov cx, [.new_y]
     mov [bp + WIN_OFF_Y], cx
 
-    ; Redraw at new position
+    ; Draw window frame at new position immediately (makes window visible fast)
     mov ax, [.handle]
     call win_draw_stub
 
+    ; Calculate deltas: dx = new_x - old_x, dy = new_y - old_y
+    mov ax, [.new_x]
+    sub ax, [.old_x]
+    mov [.dx], ax
+    mov ax, [.new_y]
+    sub ax, [.old_y]
+    mov [.dy], ax
+
+    ; --- Clear exposed vertical strip (left or right edge) ---
+    mov ax, [.dx]
+    test ax, ax
+    jz .no_v_strip                  ; No horizontal movement
+
+    ; Check sign of dx
+    test ax, 0x8000
+    jnz .moved_left
+
+    ; Moved RIGHT: clear left strip at old_x, width = dx
+    cmp ax, [.win_w]
+    jae .clear_full_old             ; No overlap, clear entire old rect
+    mov bx, [.old_x]
+    mov cx, [.old_y]
+    mov dx, ax                      ; Strip width = dx
+    mov si, [.win_h]
+    call gfx_clear_area_stub
+    jmp .no_v_strip
+
+.moved_left:
+    neg ax                          ; AX = |dx|
+    cmp ax, [.win_w]
+    jae .clear_full_old             ; No overlap, clear entire old rect
+    ; Clear right strip: x = old_x + width - |dx|
+    mov bx, [.old_x]
+    add bx, [.win_w]
+    sub bx, ax
+    mov cx, [.old_y]
+    mov dx, ax                      ; Strip width = |dx|
+    mov si, [.win_h]
+    call gfx_clear_area_stub
+
+.no_v_strip:
+    ; --- Clear exposed horizontal strip (top or bottom edge) ---
+    mov ax, [.dy]
+    test ax, ax
+    jz .clear_done                  ; No vertical movement
+
+    test ax, 0x8000
+    jnz .moved_up
+
+    ; Moved DOWN: clear top strip at old_y, height = dy
+    cmp ax, [.win_h]
+    jae .clear_full_old             ; No overlap, clear entire old rect
+    mov bx, [.old_x]
+    mov cx, [.old_y]
+    mov dx, [.win_w]
+    mov si, ax                      ; Strip height = dy
+    call gfx_clear_area_stub
+    jmp .clear_done
+
+.moved_up:
+    neg ax                          ; AX = |dy|
+    cmp ax, [.win_h]
+    jae .clear_full_old             ; No overlap, clear entire old rect
+    ; Clear bottom strip: y = old_y + height - |dy|
+    mov bx, [.old_x]
+    mov cx, [.old_y]
+    add cx, [.win_h]
+    sub cx, ax
+    mov dx, [.win_w]
+    mov si, ax                      ; Strip height = |dy|
+    call gfx_clear_area_stub
+    jmp .clear_done
+
+.clear_full_old:
+    ; No overlap between old and new rects - clear entire old area
+    mov bx, [.old_x]
+    mov cx, [.old_y]
+    mov dx, [.win_w]
+    mov si, [.win_h]
+    call gfx_clear_area_stub
+
+.clear_done:
     clc
     jmp .done
 
@@ -5610,9 +5694,13 @@ win_move_stub:
 
 .new_x:  dw 0
 .new_y:  dw 0
+.old_x:  dw 0
+.old_y:  dw 0
 .handle: dw 0
 .win_w:  dw 0
 .win_h:  dw 0
+.dx:     dw 0
+.dy:     dw 0
 
 ; win_get_content_stub - Get content area bounds
 ; Input:  AX = Window handle
