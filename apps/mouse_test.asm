@@ -160,12 +160,12 @@ entry:
     add bx, 4
     mov cx, [cs:content_y]
     add cx, 32
-    mov dx, 180
+    mov dx, 200
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Build button string: "L:ON  R:OFF  M:OFF"
+    ; Build button string: "L:ON  R:--  M:--"
     mov di, str_buffer
     mov al, [cs:cur_btn]
 
