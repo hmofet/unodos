@@ -43,23 +43,9 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; DEBUG: Draw 'L' at (100,24) to confirm launcher is executing
-    mov al, 'L'
-    mov bx, 100
-    mov cx, 24
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-
     ; Create launcher window
     call create_window
-    jc .win_failed
-
-    ; DEBUG: Draw 'W' to confirm window created
-    mov al, 'W'
-    mov bx, 108
-    mov cx, 24
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
+    jc .exit_fail
 
     ; Drain any pending events (leftover from disk swap confirmation)
 .drain_events:
@@ -72,26 +58,8 @@ entry:
     ; Scan for .BIN files on the boot disk
     call scan_for_apps
 
-    ; DEBUG: Draw app count digit
-    mov al, [cs:discovered_count]
-    add al, '0'
-    mov bx, 116
-    mov cx, 24
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-
     ; Draw initial menu
     call draw_menu
-    jmp .enter_main_loop
-
-.win_failed:
-    ; DEBUG: Draw 'X' to show window creation failed
-    mov al, 'X'
-    mov bx, 108
-    mov cx, 24
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    jmp .exit_fail
 
     ; Main event loop
 .enter_main_loop:
@@ -234,20 +202,12 @@ scan_for_apps:
     mov word [cs:dir_state], 0
     mov word [cs:scan_safety], 0    ; Safety counter to prevent infinite loops
 
-    ; TEMPORARY: Skip HDD due to FAT16 readdir hang - debug this separately
-    ; Try HDD first (0x80)
-    ; mov al, 0x80                    ; Drive 0x80 (HDD/IDE)
-    ; xor ah, ah                      ; Auto-detect
-    ; mov ah, API_FS_MOUNT
-    ; int 0x80
-    ; jnc .mounted_hdd                ; Success! Save drive and scan
-
-    ; HDD failed, try floppy (0x00)
+    ; Try floppy (0x00)
     mov al, 0                       ; Drive A: (floppy)
     xor ah, ah                      ; Auto-detect
     mov ah, API_FS_MOUNT
     int 0x80
-    jc .scan_done                   ; Both failed, leave empty list
+    jc .scan_done                   ; Mount failed
 
     ; Save floppy mount info (mount returned handle in BX)
     mov byte [cs:mounted_drive], 0  ; Drive A:
@@ -275,6 +235,7 @@ scan_for_apps:
     push cs
     pop es
     mov di, dir_entry_buffer        ; ES:DI = buffer
+
     mov ah, API_FS_READDIR
     int 0x80
     jc .scan_done                   ; End of directory or error

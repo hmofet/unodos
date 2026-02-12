@@ -143,6 +143,12 @@ int_80_handler:
     mov [cs:caller_ds], ds
     mov [cs:caller_es], es
 
+    ; Re-enable hardware interrupts for API functions
+    ; INT instruction clears IF, but API functions (especially disk I/O via INT 0x13)
+    ; need IRQ 6 (floppy controller) to complete DMA transfers on real hardware.
+    ; IRET will restore original FLAGS including IF state.
+    sti
+
     ; Save caller's DS (apps may have different DS)
     push ds
 
@@ -1062,16 +1068,8 @@ test_app_loader:
 
 auto_load_launcher:
     push ax
-    push bx
-    push cx
     push dx
     push si
-
-    ; Debug: Show mount attempt
-    mov bx, 60
-    mov cx, 24
-    mov si, .dbg_mount
-    call gfx_draw_string_stub
 
     ; Load LAUNCHER.BIN from boot drive
     mov ax, 0x1000
@@ -1080,50 +1078,21 @@ auto_load_launcher:
     mov dl, [boot_drive]            ; Use saved boot drive number
     mov dh, 0x20                    ; Load to shell segment (0x2000)
     call app_load_stub
-    jc .load_failed
-
-    ; Debug: Show load success
-    mov bx, 60
-    mov cx, 34
-    mov si, .dbg_run
-    call gfx_draw_string_stub
+    jc .failed
 
     ; Run the launcher
     call app_run_stub
 
-    jmp .done
-
-.load_failed:
-    ; Debug: Show error code (AX has error code from app_load_stub)
-    ; Convert AX to hex digit and display
-    push ax
-    mov bx, 60
-    mov cx, 34
-    mov si, .dbg_fail
-    call gfx_draw_string_stub
-    pop ax
-
-    ; Show error code as number
-    add al, '0'                     ; Convert to ASCII digit
-    mov bx, 120
-    mov cx, 34
-    call gfx_draw_char_stub
-
-.done:
+.failed:
     ; On any error or launcher exit, fall through to keyboard demo
     pop si
     pop dx
-    pop cx
-    pop bx
     pop ax
     call keyboard_demo
     ret
 
 ; Local data
 .launcher_filename: db 'LAUNCHER.BIN', 0
-.dbg_mount: db 'M', 0
-.dbg_run:   db 'R', 0
-.dbg_fail:  db 'E', 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
@@ -2682,6 +2651,10 @@ fat12_mount:
     mov word [root_dir_entries], 224
     mov word [sectors_per_fat], 9
 
+    ; Calculate FAT start sector (absolute)
+    ; fat_start = 62 + reserved_sectors = 63
+    mov word [fat_start], 63        ; Filesystem at sector 62 + 1 reserved
+
     ; Calculate root directory start sector
     ; root_dir_start = 62 + reserved + (num_fats * sectors_per_fat)
     ; = 62 + 1 + (2 * 9) = 62 + 1 + 18 = 81
@@ -3072,12 +3045,12 @@ get_next_cluster:
     mov si, ax                      ; SI = FAT byte offset
 
     ; Calculate FAT sector number
-    ; FAT sector = reserved_sectors + (byte_offset / 512)
+    ; FAT sector = fat_start + (byte_offset / 512)
     xor dx, dx
     mov cx, 512
     div cx                          ; AX = sector offset in FAT, DX = byte offset in sector
     mov di, dx                      ; DI = byte offset within sector
-    add ax, [reserved_sectors]      ; AX = absolute FAT sector number
+    add ax, [fat_start]             ; AX = absolute FAT sector number
 
     ; Check if this FAT sector is already cached
     cmp ax, [fat_cache_sector]
@@ -3091,15 +3064,22 @@ get_next_cluster:
     mov es, bx
     mov bx, fat_cache
 
-    ; Convert sector to CHS for INT 13h
-    mov cx, ax                      ; CX = sector
-    and cx, 0x003F
-    inc cl                          ; CL = sector (1-based)
-    mov ax, cx
-    shr ax, 6
+    ; Convert LBA to CHS (proper floppy geometry)
+    ; AX = LBA sector number
+    push bx                         ; Save buffer pointer
+    xor dx, dx
+    mov bx, 18                      ; Sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+    xor dx, dx
+    mov bx, 2                       ; Number of heads
+    div bx                          ; AX = cylinder, DX = head
     mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop bx                          ; Restore buffer pointer
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dx, 0x0000                  ; DH=0 (head), DL=0 (drive A:)
+    mov dl, 0x00                    ; DL=0 (drive A:)
     int 0x13
     pop ax
 
@@ -5255,6 +5235,7 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
+fat_start: dw 63                    ; Absolute FAT sector = filesystem_start(62) + reserved(1)
 root_dir_start: dw 19               ; Calculated: reserved + (num_fats * sectors_per_fat)
 data_area_start: dw 33              ; Calculated: root_dir_start + root_dir_sectors
 
