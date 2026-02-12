@@ -1730,6 +1730,8 @@ mouse_cursor_show:
     jne .skip                       ; Skip if locked (counter > 0)
     cmp byte [mouse_enabled], 0
     je .skip
+    cmp byte [cursor_visible], 1
+    je .skip                        ; Already drawn, don't XOR again (causes erase!)
     push es
     push cx
     push bx
@@ -2088,6 +2090,8 @@ gfx_draw_pixel_stub:
 
 ; gfx_draw_char_stub - Draw character
 gfx_draw_char_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push ax
     push dx
@@ -2105,11 +2109,15 @@ gfx_draw_char_stub:
     pop dx
     pop ax
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; gfx_draw_string_stub - Draw null-terminated string
 ; Uses caller_ds for string access (supports apps calling through INT 0x80)
 gfx_draw_string_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push ax
     push dx
@@ -2147,6 +2155,8 @@ gfx_draw_string_stub:
     pop dx
     pop ax
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; gfx_draw_rect_stub - Draw rectangle outline
@@ -2260,6 +2270,8 @@ gfx_draw_filled_rect_stub:
 ; Output: None
 ; Preserves: All registers
 gfx_clear_area_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push ax
     push bp
@@ -2299,6 +2311,8 @@ gfx_clear_area_stub:
     pop bp
     pop ax
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; Internal helper: Clear pixel at BX=X, CX=Y to background color
