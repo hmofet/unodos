@@ -6,7 +6,35 @@
 [ORG 0x7C00]
 
 ; ============================================================================
-; Boot Sector Entry Point
+; BPB - BIOS Parameter Block (required for correct floppy geometry)
+; Many BIOSes read sectors/track and heads from here for INT 0x13
+; ============================================================================
+
+    jmp short start         ; 2-byte jump (offset 0)
+    nop                     ; 1-byte NOP  (offset 2)
+
+bpb_oem:        db 'UNODOS  '  ; offset  3: OEM name (8 bytes)
+bpb_bps:        dw 512          ; offset 11: bytes per sector
+bpb_spc:        db 1            ; offset 13: sectors per cluster
+bpb_rsvd:       dw 62           ; offset 14: reserved sectors (OS area)
+bpb_fats:       db 2            ; offset 16: number of FATs
+bpb_rootent:    dw 224          ; offset 17: root directory entries
+bpb_sectors:    dw 2880         ; offset 19: total sectors (1.44MB)
+bpb_media:      db 0xF0         ; offset 21: media descriptor (1.44MB floppy)
+bpb_fpf:        dw 9            ; offset 22: sectors per FAT
+bpb_spt:        dw 18           ; offset 24: sectors per track
+bpb_heads:      dw 2            ; offset 26: number of heads
+bpb_hidden:     dd 0            ; offset 28: hidden sectors
+bpb_total32:    dd 0            ; offset 32: total sectors (32-bit, 0 = use 16-bit)
+bpb_drive:      db 0            ; offset 36: drive number
+bpb_rsv:        db 0            ; offset 37: reserved
+bpb_bootsig:    db 0x29         ; offset 38: extended boot signature
+bpb_volid:      dd 0x554E4F53  ; offset 39: volume serial ('UNOS')
+bpb_vollabel:   db 'UNODOS     '; offset 43: volume label (11 bytes)
+bpb_fstype:     db 'FAT12   '  ; offset 54: filesystem type (8 bytes)
+
+; ============================================================================
+; Boot Sector Entry Point (offset 62)
 ; ============================================================================
 
 start:
