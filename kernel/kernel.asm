@@ -247,6 +247,14 @@ int_09_handler:
     ; Read scan code from keyboard port
     in al, 0x60
 
+    ; Handle E0 prefix (extended keys like arrow keys)
+    cmp al, 0xE0
+    je .set_e0_flag
+
+    ; Check if previous scancode was E0 prefix
+    cmp byte [kbd_e0_flag], 1
+    je .handle_extended
+
     ; Check for modifier keys
     cmp al, 0x2A                    ; Left Shift press
     je .shift_press
@@ -283,6 +291,34 @@ int_09_handler:
 
 .use_lower:
     mov al, [scancode_normal + bx]
+    jmp .store_key
+
+.set_e0_flag:
+    mov byte [kbd_e0_flag], 1
+    jmp .done
+
+.handle_extended:
+    mov byte [kbd_e0_flag], 0       ; Clear flag
+    ; Ignore extended key releases
+    test al, 0x80
+    jnz .done
+    ; Map extended scancodes to special key codes
+    cmp al, 0x48                    ; Up arrow
+    je .arrow_up
+    cmp al, 0x50                    ; Down arrow
+    je .arrow_down
+    cmp al, 0x1C                    ; Numpad Enter
+    je .numpad_enter
+    jmp .done                       ; Ignore other extended keys
+
+.arrow_up:
+    mov al, 128                     ; Special code for Up arrow
+    jmp .store_key
+.arrow_down:
+    mov al, 129                     ; Special code for Down arrow
+    jmp .store_key
+.numpad_enter:
+    mov al, 13                      ; Same as regular Enter
 
 .store_key:
     ; Don't store null characters
@@ -1589,11 +1625,11 @@ gfx_draw_string_inverted:
     ret
 
 ; ============================================================================
-; Kernel API Table - At fixed address 0x1000:0x0900
+; Kernel API Table - At fixed address 0x1000:0x0B10
 ; ============================================================================
 
-; Pad to exactly offset 0x0B00 (2816 bytes) - expanded for mouse driver
-times 0x0B00 - ($ - $$) db 0
+; Pad to exactly offset 0x0B10 - expanded for arrow key handler
+times 0x0B10 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5201,6 +5237,7 @@ kbd_buffer_tail: dw 0
 kbd_shift_state: db 0
 kbd_ctrl_state: db 0
 kbd_alt_state: db 0
+kbd_e0_flag: db 0
 
 ; PS/2 Mouse driver state
 old_int74_offset:   dw 0            ; Original IRQ12 vector
