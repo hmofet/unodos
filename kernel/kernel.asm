@@ -508,13 +508,14 @@ install_mouse:
     cmp al, 0xFA                    ; ACK?
     jne .no_mouse
 
-    ; Wait for self-test result (0xAA) and device ID (0x00)
-    call kbc_wait_read
+    ; Wait for self-test result (0xAA) - takes 300-500ms on real hardware!
+    call kbc_wait_read_long
     in al, KBC_DATA                 ; Should be 0xAA
     cmp al, 0xAA
     jne .no_mouse
 
-    call kbc_wait_read
+    ; Wait for device ID (0x00) - comes quickly after self-test
+    call kbc_wait_read_long
     in al, KBC_DATA                 ; Should be 0x00 (standard mouse)
 
     ; Set defaults
@@ -598,6 +599,32 @@ kbc_wait_read:
     jnz .done                       ; Yes, data available
     loop .wait
 .done:
+    pop cx
+    ret
+
+; kbc_wait_read_long - Wait for KBC data with ~1 second timeout
+; Uses BIOS timer tick at 0040:006C (18.2 Hz) for CPU-speed independence
+; Needed for mouse reset self-test which takes 300-500ms on real hardware
+; Clobbers: AL
+kbc_wait_read_long:
+    push cx
+    push es
+    push ax
+    mov ax, 0x0040
+    mov es, ax
+    sti                             ; Ensure timer IRQ is firing
+    mov cx, [es:0x006C]            ; Start tick
+.wait:
+    in al, KBC_STATUS
+    test al, KBC_STAT_OBF
+    jnz .ready
+    mov ax, [es:0x006C]
+    sub ax, cx                      ; Elapsed ticks (wraps correctly)
+    cmp ax, 20                      ; ~1.1 second timeout
+    jb .wait
+.ready:
+    pop ax
+    pop es
     pop cx
     ret
 
@@ -1986,7 +2013,7 @@ gfx_draw_string_inverted:
 ; ============================================================================
 
 ; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag support
-times 0x0D10 - ($ - $$) db 0
+times 0x0D20 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
