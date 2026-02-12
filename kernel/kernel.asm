@@ -1868,6 +1868,15 @@ mouse_drag_update:
     mov [drag_window], al
     mov byte [drag_active], 1
 
+    ; DEBUG: Mark VRAM byte 0 = hittest hit
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:0], 0xFF
+    pop di
+    pop es
+
     ; Calculate grab offset = mouse_pos - window_pos
     xor ah, ah
     mov bx, ax
@@ -1909,6 +1918,16 @@ mouse_drag_update:
     mov [drag_target_y], ax
 
     mov byte [drag_needs_update], 1
+
+    ; DEBUG: Mark VRAM byte 1 = drag_needs_update set
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:1], 0xFF
+    pop di
+    pop es
+
     jmp .done
 
 .button_released:
@@ -1931,6 +1950,15 @@ mouse_drag_update:
 mouse_process_drag:
     cmp byte [drag_needs_update], 0
     je .done
+
+    ; DEBUG: Mark VRAM byte 2 = process_drag running
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:2], 0xFF
+    pop di
+    pop es
 
     ; Read drag state atomically (IRQ12 could update these mid-read)
     ; We're in INT 0x80 context where STI was already called, so CLI/STI is safe
@@ -2044,7 +2072,7 @@ gfx_draw_string_inverted:
 ; ============================================================================
 
 ; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag + bounds checks
-times 0x0D50 - ($ - $$) db 0
+times 0x0D80 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
