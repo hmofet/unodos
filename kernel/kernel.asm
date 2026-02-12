@@ -452,6 +452,7 @@ KBC_CMD_WRITE_AUX   equ 0xD4        ; Write to auxiliary device (mouse)
 KBC_CMD_ENABLE_AUX  equ 0xA8        ; Enable auxiliary interface
 KBC_CMD_READ_CFG    equ 0x20        ; Read configuration byte
 KBC_CMD_WRITE_CFG   equ 0x60        ; Write configuration byte
+KBC_CMD_DISABLE_AUX equ 0xA7        ; Disable auxiliary interface
 
 ; Mouse commands (sent via 0xD4)
 MOUSE_CMD_RESET     equ 0xFF        ; Reset mouse
@@ -474,20 +475,22 @@ install_mouse:
     mov ax, [es:0x01D2]             ; INT 0x74 segment
     mov [old_int74_segment], ax
 
-    ; Enable auxiliary (mouse) interface
-    call kbc_wait_write
-    mov al, KBC_CMD_ENABLE_AUX
-    out KBC_CMD, al
-
-    ; Read controller configuration
+    ; Read controller configuration BEFORE any modifications
+    ; Save original config so we can restore on failure
     call kbc_wait_write
     mov al, KBC_CMD_READ_CFG
     out KBC_CMD, al
     call kbc_wait_read
     in al, KBC_DATA
-    mov bl, al                      ; Save config
+    mov [saved_kbc_config], al      ; Save ORIGINAL config
+
+    ; Enable auxiliary (mouse) interface
+    call kbc_wait_write
+    mov al, KBC_CMD_ENABLE_AUX
+    out KBC_CMD, al
 
     ; Enable IRQ12 (bit 1) and auxiliary clock (clear bit 5)
+    mov bl, [saved_kbc_config]
     or bl, 0x02                     ; Enable IRQ12
     and bl, 0xDF                    ; Enable aux clock
 
@@ -548,6 +551,19 @@ install_mouse:
     jmp .done
 
 .no_mouse:
+    ; Restore original 8042 configuration (undo our modifications)
+    call kbc_wait_write
+    mov al, KBC_CMD_WRITE_CFG
+    out KBC_CMD, al
+    call kbc_wait_write
+    mov al, [saved_kbc_config]
+    out KBC_DATA, al
+
+    ; Disable auxiliary interface (undo ENABLE_AUX)
+    call kbc_wait_write
+    mov al, KBC_CMD_DISABLE_AUX
+    out KBC_CMD, al
+
     mov byte [mouse_enabled], 0
     stc
 
@@ -1624,11 +1640,11 @@ cursor_xor_sprite:
     mov si, cursor_bitmap           ; SI = bitmap pointer
 
 .row_loop:
+    push cx                         ; Save base X (before bounds check!)
     cmp bx, 200                     ; Bounds check Y
-    jae .next_row
+    jae .skip_row                   ; Skip drawing but still pop cx
 
     mov al, [si]                    ; AL = bitmap row (MSB = leftmost)
-    push cx                         ; Save base X
     mov di, 8                       ; 8 bits to check
 
 .col_loop:
@@ -1643,7 +1659,8 @@ cursor_xor_sprite:
     dec di
     jnz .col_loop
 
-    pop cx                          ; Restore base X
+.skip_row:
+    pop cx                          ; Restore base X (always matches push)
 
 .next_row:
     inc si                          ; Next bitmap row
@@ -5611,6 +5628,7 @@ mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
+saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
 
 ; Mouse cursor state
 cursor_visible:     db 0            ; 1 = cursor currently drawn on screen
