@@ -5543,6 +5543,22 @@ win_move_stub:
     mov ax, [bp + WIN_OFF_HEIGHT]
     mov [.win_h], ax
 
+    ; Clamp new position to keep window on screen
+    mov ax, 320
+    sub ax, [.win_w]                ; AX = max X (320 - width)
+    js .x_clamp_done                ; Skip if window wider than screen
+    cmp [.new_x], ax
+    jbe .x_clamp_done
+    mov [.new_x], ax
+.x_clamp_done:
+    mov ax, 200
+    sub ax, [.win_h]                ; AX = max Y (200 - height)
+    js .y_clamp_done                ; Skip if window taller than screen
+    cmp [.new_y], ax
+    jbe .y_clamp_done
+    mov [.new_y], ax
+.y_clamp_done:
+
     ; Update to new position FIRST
     mov bx, [.new_x]
     mov [bp + WIN_OFF_X], bx
