@@ -1933,38 +1933,36 @@ mouse_drag_update:
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - Execute pending window move (polling approach)
-; Checks drag_active and compares target vs current window position.
-; Bypasses drag_needs_update flag entirely - polls on every event_get call.
-; Safe to call from INT 0x80 context (no reentrancy risk)
+; mouse_process_drag - DIAGNOSTIC BUILD 122
+; Force-moves window 0 to (10,10) on every EVENT_GET call.
+; If the window moves, this function IS being called and win_move_stub works.
+; If not, the call path itself is broken.
 mouse_process_drag:
-    cmp byte [drag_active], 0
-    je .done
+    pusha
+    push es
 
-    ; Read target position atomically (IRQ12 could update mid-read on 8088)
-    cli
+    ; Write VRAM marker at top-left: 16 white pixels (4 bytes)
+    mov ax, 0xB800
+    mov es, ax
+    mov word [es:0], 0xFFFF
+    mov word [es:2], 0xFFFF
+
+    ; Also write drag_active value amplified at byte 5
+    mov byte [es:5], 0x55          ; Default: cyan pattern (func called, no drag)
+    cmp byte [drag_active], 0
+    je .skip_force
+    mov byte [es:5], 0xFF          ; White: drag IS active
+
+    ; Force-move the dragged window to (10, 10)
     xor ax, ax
     mov al, [drag_window]
-    mov bx, [drag_target_x]
-    mov cx, [drag_target_y]
-    sti
-
-    ; Compare target with current window position to skip no-op moves
-    mov di, ax
-    shl di, 5
-    add di, window_table
-    cmp bx, [di + WIN_OFF_X]
-    jne .do_move
-    cmp cx, [di + WIN_OFF_Y]
-    je .done
-
-.do_move:
-    ; AX=handle, BX=new_x, CX=new_y (mouse_cursor_hide preserves these)
-    call mouse_cursor_hide
+    mov bx, 10
+    mov cx, 10
     call win_move_stub
-    call mouse_cursor_show
 
-.done:
+.skip_force:
+    pop es
+    popa
     ret
 
 ; ============================================================================
