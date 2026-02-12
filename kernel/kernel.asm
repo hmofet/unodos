@@ -1864,18 +1864,8 @@ mouse_drag_update:
     call mouse_hittest_titlebar
     jc .done                        ; No hit
 
-    ; Start drag
+    ; Start drag setup
     mov [drag_window], al
-    mov byte [drag_active], 1
-
-    ; DEBUG: Mark VRAM byte 0 = hittest hit
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:0], 0xFF
-    pop di
-    pop es
 
     ; Calculate grab offset = mouse_pos - window_pos
     xor ah, ah
@@ -1890,6 +1880,15 @@ mouse_drag_update:
     mov ax, [mouse_y]
     sub ax, [bx + WIN_OFF_Y]
     mov [drag_offset_y], ax
+
+    ; Initialize target to current window position (prevents jump on first frame)
+    mov ax, [bx + WIN_OFF_X]
+    mov [drag_target_x], ax
+    mov ax, [bx + WIN_OFF_Y]
+    mov [drag_target_y], ax
+
+    ; Set active LAST - after target is initialized (prevents race with process_drag)
+    mov byte [drag_active], 1
 
     jmp .done
 
@@ -1917,17 +1916,6 @@ mouse_drag_update:
 .target_y_ok:
     mov [drag_target_y], ax
 
-    mov byte [drag_needs_update], 1
-
-    ; DEBUG: Mark VRAM byte 1 = drag_needs_update set
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:1], 0xFF
-    pop di
-    pop es
-
     jmp .done
 
 .button_released:
@@ -1945,44 +1933,35 @@ mouse_drag_update:
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - Execute pending window move
+; mouse_process_drag - Execute pending window move (polling approach)
+; Checks drag_active and compares target vs current window position.
+; Bypasses drag_needs_update flag entirely - polls on every event_get call.
 ; Safe to call from INT 0x80 context (no reentrancy risk)
 mouse_process_drag:
-    cmp byte [drag_needs_update], 0
+    cmp byte [drag_active], 0
     je .done
 
-    ; DEBUG: Mark VRAM byte 2 = process_drag running
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:2], 0xFF
-    pop di
-    pop es
-
-    ; Read drag state atomically (IRQ12 could update these mid-read)
-    ; We're in INT 0x80 context where STI was already called, so CLI/STI is safe
+    ; Read target position atomically (IRQ12 could update mid-read on 8088)
     cli
-    mov byte [drag_needs_update], 0
     xor ax, ax
     mov al, [drag_window]
     mov bx, [drag_target_x]
     mov cx, [drag_target_y]
-    sti                             ; Re-enable interrupts for window move
+    sti
 
-    ; Hide cursor before window redraw
-    push ax
-    push bx
-    push cx
+    ; Compare target with current window position to skip no-op moves
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    cmp bx, [di + WIN_OFF_X]
+    jne .do_move
+    cmp cx, [di + WIN_OFF_Y]
+    je .done
+
+.do_move:
+    ; AX=handle, BX=new_x, CX=new_y (mouse_cursor_hide preserves these)
     call mouse_cursor_hide
-
-    ; Move the window (slow operation, runs with interrupts enabled)
     call win_move_stub
-    pop cx
-    pop bx
-    pop ax
-
-    ; Show cursor after window redraw
     call mouse_cursor_show
 
 .done:
