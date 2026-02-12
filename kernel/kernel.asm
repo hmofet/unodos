@@ -1526,6 +1526,10 @@ draw_char:
 ; ============================================================================
 
 plot_pixel_white:
+    cmp cx, 320
+    jae .out
+    cmp bx, 200
+    jae .out
     push ax
     push bx
     push cx
@@ -1563,6 +1567,7 @@ plot_pixel_white:
     pop cx
     pop bx
     pop ax
+.out:
     ret
 
 ; ============================================================================
@@ -1572,6 +1577,10 @@ plot_pixel_white:
 ; ============================================================================
 
 plot_pixel_black:
+    cmp cx, 320
+    jae .out
+    cmp bx, 200
+    jae .out
     push ax
     push bx
     push cx
@@ -1606,6 +1615,7 @@ plot_pixel_black:
     pop cx
     pop bx
     pop ax
+.out:
     ret
 
 ; ============================================================================
@@ -1616,6 +1626,10 @@ plot_pixel_black:
 ; ============================================================================
 
 plot_pixel_xor:
+    cmp cx, 320
+    jae .out
+    cmp bx, 200
+    jae .out
     push ax
     push bx
     push cx
@@ -1647,6 +1661,7 @@ plot_pixel_xor:
     pop cx
     pop bx
     pop ax
+.out:
     ret
 
 ; ============================================================================
@@ -2014,8 +2029,8 @@ gfx_draw_string_inverted:
 ; Kernel API Table - At fixed address 0x1000:0x0D10
 ; ============================================================================
 
-; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag support
-times 0x0D20 - ($ - $$) db 0
+; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag + bounds checks
+times 0x0D50 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -2317,6 +2332,10 @@ gfx_clear_area_stub:
 
 ; Internal helper: Clear pixel at BX=X, CX=Y to background color
 .plot_bg:
+    cmp bx, 320
+    jae .bg_out
+    cmp cx, 200
+    jae .bg_out
     push ax
     push bx
     push cx
@@ -2357,6 +2376,7 @@ gfx_clear_area_stub:
     pop cx
     pop bx
     pop ax
+.bg_out:
     ret
 
 ; ============================================================================
@@ -5496,8 +5516,7 @@ win_focus_stub:
     pop bx
     ret
 
-; win_move_stub - Move window to new position (flicker-free)
-; Draws new frame first, then clears only exposed edges from old position.
+; win_move_stub - Move window to new position
 ; Input:  AX = Window handle, BX = New X, CX = New Y
 ; Output: CF = 0 on success
 win_move_stub:
@@ -5533,17 +5552,12 @@ win_move_stub:
     ; Save window pointer
     mov bp, bx
 
-    ; Save old position and dimensions
-    mov ax, [bp + WIN_OFF_X]
-    mov [.old_x], ax
-    mov ax, [bp + WIN_OFF_Y]
-    mov [.old_y], ax
+    ; Clamp new position to keep window on screen
     mov ax, [bp + WIN_OFF_WIDTH]
     mov [.win_w], ax
     mov ax, [bp + WIN_OFF_HEIGHT]
     mov [.win_h], ax
 
-    ; Clamp new position to keep window on screen
     mov ax, 320
     sub ax, [.win_w]                ; AX = max X (320 - width)
     js .x_clamp_done                ; Skip if window wider than screen
@@ -5559,90 +5573,23 @@ win_move_stub:
     mov [.new_y], ax
 .y_clamp_done:
 
-    ; Update to new position FIRST
+    ; Clear old position
+    mov bx, [bp + WIN_OFF_X]
+    mov cx, [bp + WIN_OFF_Y]
+    mov dx, [.win_w]
+    mov si, [.win_h]
+    call gfx_clear_area_stub
+
+    ; Update position (BP = window pointer)
     mov bx, [.new_x]
     mov [bp + WIN_OFF_X], bx
     mov cx, [.new_y]
     mov [bp + WIN_OFF_Y], cx
 
-    ; Draw window frame at new position (title bar + border)
-    ; Title bar drawn white immediately - no black flash
+    ; Redraw at new position
     mov ax, [.handle]
     call win_draw_stub
 
-    ; Clear content area of new window (body below title bar, inside border)
-    mov bx, [.new_x]
-    inc bx                          ; Skip left border
-    mov cx, [.new_y]
-    add cx, WIN_TITLEBAR_HEIGHT
-    inc cx                          ; Below title bar + border pixel
-    mov dx, [.win_w]
-    sub dx, 2                       ; Exclude left+right border
-    mov si, [.win_h]
-    sub si, WIN_TITLEBAR_HEIGHT
-    sub si, 2                       ; Exclude title bar + top/bottom border
-    cmp dx, 0
-    jle .clear_edges
-    cmp si, 0
-    jle .clear_edges
-    call gfx_clear_area_stub
-
-.clear_edges:
-    ; Clear exposed edges of old position not covered by new position
-    ; Uses at most 2 thin strips that never overlap the new window rect
-
-    ; --- Vertical strip (left or right edge) ---
-    mov ax, [.new_x]
-    sub ax, [.old_x]               ; AX = dx (signed)
-    test ax, ax
-    jz .no_vstrip
-    js .vstrip_left
-
-    ; dx > 0, moved right: clear left edge (old_x, old_y, dx, h)
-    mov bx, [.old_x]
-    mov cx, [.old_y]
-    mov dx, ax                      ; width = dx
-    mov si, [.win_h]
-    call gfx_clear_area_stub
-    jmp .no_vstrip
-
-.vstrip_left:
-    ; dx < 0, moved left: clear right edge (new_x + w, old_y, |dx|, h)
-    neg ax
-    mov bx, [.new_x]
-    add bx, [.win_w]
-    mov cx, [.old_y]
-    mov dx, ax                      ; width = |dx|
-    mov si, [.win_h]
-    call gfx_clear_area_stub
-
-.no_vstrip:
-    ; --- Horizontal strip (top or bottom edge) ---
-    mov ax, [.new_y]
-    sub ax, [.old_y]               ; AX = dy (signed)
-    test ax, ax
-    jz .no_hstrip
-    js .hstrip_up
-
-    ; dy > 0, moved down: clear top edge (old_x, old_y, w, dy)
-    mov bx, [.old_x]
-    mov cx, [.old_y]
-    mov dx, [.win_w]
-    mov si, ax                      ; height = dy
-    call gfx_clear_area_stub
-    jmp .no_hstrip
-
-.hstrip_up:
-    ; dy < 0, moved up: clear bottom edge (old_x, new_y + h, w, |dy|)
-    neg ax
-    mov bx, [.old_x]
-    mov cx, [.new_y]
-    add cx, [.win_h]
-    mov dx, [.win_w]
-    mov si, ax                      ; height = |dy|
-    call gfx_clear_area_stub
-
-.no_hstrip:
     clc
     jmp .done
 
@@ -5664,8 +5611,6 @@ win_move_stub:
 .new_x:  dw 0
 .new_y:  dw 0
 .handle: dw 0
-.old_x:  dw 0
-.old_y:  dw 0
 .win_w:  dw 0
 .win_h:  dw 0
 
