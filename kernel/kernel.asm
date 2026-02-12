@@ -5565,6 +5565,24 @@ win_move_stub:
     mov [.new_y], cx
     mov [.handle], ax
 
+    ; DEBUG: Mark VRAM byte 10 = win_move_stub entered
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:10], 0xFF          ; Entry marker
+    ; Write handle value to VRAM byte 11 (amplified: handle*0x55)
+    push ax
+    mov di, ax
+    shl di, 2
+    add di, di                      ; DI = handle * 8 (visual scaling)
+    mov al, 0x55
+    add al, dl                      ; Vary pattern
+    mov byte [es:11], al
+    pop ax
+    pop di
+    pop es
+
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
@@ -5576,6 +5594,18 @@ win_move_stub:
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
+
+    ; DEBUG: Mark VRAM byte 12 = validation passed
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:12], 0xFF          ; Validation OK marker
+    ; Write window state to byte 13
+    mov al, [bx + WIN_OFF_STATE]
+    mov byte [es:13], al
+    pop di
+    pop es
 
     ; Save window pointer
     mov bp, bx
@@ -5700,10 +5730,26 @@ win_move_stub:
     call gfx_clear_area_stub
 
 .clear_done:
+    ; DEBUG: Mark VRAM byte 15 = move completed successfully
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:15], 0xFF
+    pop di
+    pop es
     clc
     jmp .done
 
 .invalid:
+    ; DEBUG: Mark VRAM byte 14 = INVALID path taken
+    push es
+    push di
+    mov di, 0xB800
+    mov es, di
+    mov byte [es:14], 0xFF
+    pop di
+    pop es
     stc
 
 .done:
