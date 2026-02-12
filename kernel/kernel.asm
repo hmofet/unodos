@@ -44,8 +44,8 @@ entry:
     xor bx, bx
     int 0x10
 
-    ; Skip mouse init for USB boot (8042 controller issues)
-    mov byte [mouse_enabled], 0
+    ; Initialize PS/2 mouse (sets mouse_enabled=1 on success, 0 on failure)
+    call install_mouse
 
     ; Print version string
     mov si, version_string
@@ -94,6 +94,9 @@ entry:
 
     ; Enable interrupts
     sti
+
+    ; Draw initial mouse cursor (if mouse was detected)
+    call mouse_cursor_show
 
     ; Auto-load launcher from boot disk
     call auto_load_launcher
@@ -610,6 +613,10 @@ int_74_handler:
     push cx
     push dx
     push ds
+    push es
+    push si
+    push di
+    push bp
 
     mov ax, 0x1000
     mov ds, ax
@@ -656,6 +663,9 @@ int_74_handler:
     mov al, [mouse_packet]
     test al, 0xC0                   ; XO or YO set?
     jnz .reset_packet
+
+    ; Erase cursor before updating position
+    call mouse_cursor_hide
 
     ; Calculate delta X (signed)
     mov al, [mouse_packet + 1]      ; X movement
@@ -706,6 +716,12 @@ int_74_handler:
     mov word [mouse_y], 199
 
 .post_event:
+    ; Update drag state machine (sets flags only, no win_move)
+    call mouse_drag_update
+
+    ; Redraw cursor at new position
+    call mouse_cursor_show
+
     ; Post mouse event: DL = buttons
     xor dx, dx
     mov dl, [mouse_buttons]
@@ -730,6 +746,10 @@ int_74_handler:
     out 0xA0, al                    ; EOI to slave PIC
     out 0x20, al                    ; EOI to master PIC
 
+    pop bp
+    pop di
+    pop si
+    pop es
     pop ds
     pop dx
     pop cx
@@ -1546,6 +1566,326 @@ plot_pixel_black:
     ret
 
 ; ============================================================================
+; Plot a pixel using XOR with color 3 (white) - for mouse cursor
+; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
+; ES must be 0xB800
+; Preserves all registers except flags
+; ============================================================================
+
+plot_pixel_xor:
+    push ax
+    push bx
+    push cx
+    push di
+    push dx
+    mov ax, bx
+    shr ax, 1
+    mov dx, 80
+    mul dx
+    mov di, ax
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    test bl, 1
+    jz .e
+    add di, 0x2000
+.e:
+    mov ax, cx
+    and ax, 3
+    mov cx, 3
+    sub cl, al
+    shl cl, 1
+    mov al, 0x03                    ; White color bits
+    shl al, cl                      ; Position to correct pixel
+    xor [es:di], al                 ; XOR with screen (self-inverse)
+    pop dx
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; Mouse Cursor Sprite (XOR-based)
+; ============================================================================
+
+CURSOR_WIDTH    equ 8
+CURSOR_HEIGHT   equ 10
+
+; cursor_xor_sprite - Draw/erase cursor at given position via XOR
+; Input: CX = cursor X, BX = cursor Y (hotspot at top-left)
+; ES must be 0xB800
+; Preserves all registers
+cursor_xor_sprite:
+    pusha
+
+    mov bp, CURSOR_HEIGHT           ; Row counter
+    mov si, cursor_bitmap           ; SI = bitmap pointer
+
+.row_loop:
+    cmp bx, 200                     ; Bounds check Y
+    jae .next_row
+
+    mov al, [si]                    ; AL = bitmap row (MSB = leftmost)
+    push cx                         ; Save base X
+    mov di, 8                       ; 8 bits to check
+
+.col_loop:
+    test al, 0x80                   ; Check MSB
+    jz .skip_pixel
+    cmp cx, 320                     ; Bounds check X
+    jae .skip_pixel
+    call plot_pixel_xor             ; CX = X, BX = Y
+.skip_pixel:
+    shl al, 1                       ; Next bit
+    inc cx                          ; Next X
+    dec di
+    jnz .col_loop
+
+    pop cx                          ; Restore base X
+
+.next_row:
+    inc si                          ; Next bitmap row
+    inc bx                          ; Next Y
+    dec bp
+    jnz .row_loop
+
+    popa
+    ret
+
+; mouse_cursor_hide - Erase cursor if currently visible
+; Safe to call even if not visible (no-op)
+; Preserves all registers
+mouse_cursor_hide:
+    cmp byte [cursor_locked], 0
+    jne .skip                       ; Skip if locked (counter > 0)
+    cmp byte [cursor_visible], 0
+    je .skip
+    push es
+    push cx
+    push bx
+    push ax
+    mov ax, 0xB800
+    mov es, ax
+    mov cx, [cursor_drawn_x]
+    mov bx, [cursor_drawn_y]
+    call cursor_xor_sprite          ; XOR erase at old position
+    mov byte [cursor_visible], 0
+    pop ax
+    pop bx
+    pop cx
+    pop es
+.skip:
+    ret
+
+; mouse_cursor_show - Draw cursor at current mouse position
+; Preserves all registers
+mouse_cursor_show:
+    cmp byte [cursor_locked], 0
+    jne .skip                       ; Skip if locked (counter > 0)
+    cmp byte [mouse_enabled], 0
+    je .skip
+    push es
+    push cx
+    push bx
+    push ax
+    mov ax, 0xB800
+    mov es, ax
+    mov cx, [mouse_x]
+    mov bx, [mouse_y]
+    mov [cursor_drawn_x], cx
+    mov [cursor_drawn_y], bx
+    call cursor_xor_sprite          ; XOR draw at new position
+    mov byte [cursor_visible], 1
+    pop ax
+    pop bx
+    pop cx
+    pop es
+.skip:
+    ret
+
+; ============================================================================
+; Window Title Bar Hit Testing
+; ============================================================================
+
+; mouse_hittest_titlebar - Test if mouse position hits any window title bar
+; Input: mouse_x, mouse_y (global vars)
+; Output: CF=0 hit, AL=window handle; CF=1 no hit
+mouse_hittest_titlebar:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov cx, [mouse_x]
+    mov dx, [mouse_y]
+
+    xor si, si                      ; SI = window index
+    mov di, window_table
+
+.check_loop:
+    cmp si, WIN_MAX_COUNT
+    jae .no_hit
+
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .next
+
+    ; Check X: window_x <= mouse_x < window_x + width
+    mov ax, [di + WIN_OFF_X]
+    cmp cx, ax
+    jb .next
+    add ax, [di + WIN_OFF_WIDTH]
+    cmp cx, ax
+    jae .next
+
+    ; Check Y: window_y <= mouse_y < window_y + titlebar_height
+    mov ax, [di + WIN_OFF_Y]
+    cmp dx, ax
+    jb .next
+    add ax, WIN_TITLEBAR_HEIGHT
+    cmp dx, ax
+    jae .next
+
+    ; Hit - return window handle
+    mov ax, si
+    clc
+    jmp .done
+
+.next:
+    add di, WIN_ENTRY_SIZE
+    inc si
+    jmp .check_loop
+
+.no_hit:
+    stc
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
+; Mouse Drag State Machine
+; ============================================================================
+
+; mouse_drag_update - Track window drag state from button transitions
+; Called from int_74_handler after position update
+; Sets flags only - never calls win_move_stub (avoids reentrancy)
+mouse_drag_update:
+    pusha
+
+    mov al, [mouse_buttons]
+    mov ah, [drag_prev_buttons]
+    mov [drag_prev_buttons], al
+
+    ; Detect left button press (0 -> 1 transition)
+    test ah, 0x01                   ; Was left pressed before?
+    jnz .already_held
+    test al, 0x01                   ; Is left pressed now?
+    jz .check_release
+
+    ; === Left button JUST pressed: hit-test title bars ===
+    call mouse_hittest_titlebar
+    jc .done                        ; No hit
+
+    ; Start drag
+    mov [drag_window], al
+    mov byte [drag_active], 1
+
+    ; Calculate grab offset = mouse_pos - window_pos
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5                      ; BX = handle * 32
+    add bx, window_table
+
+    mov ax, [mouse_x]
+    sub ax, [bx + WIN_OFF_X]
+    mov [drag_offset_x], ax
+
+    mov ax, [mouse_y]
+    sub ax, [bx + WIN_OFF_Y]
+    mov [drag_offset_y], ax
+
+    jmp .done
+
+.already_held:
+    test al, 0x01                   ; Still held?
+    jz .button_released
+
+    cmp byte [drag_active], 0
+    je .done
+
+    ; Calculate target = mouse - offset
+    mov ax, [mouse_x]
+    sub ax, [drag_offset_x]
+    cmp ax, 0x8000                  ; Negative wrap?
+    jb .target_x_ok
+    xor ax, ax
+.target_x_ok:
+    mov [drag_target_x], ax
+
+    mov ax, [mouse_y]
+    sub ax, [drag_offset_y]
+    cmp ax, 0x8000
+    jb .target_y_ok
+    xor ax, ax
+.target_y_ok:
+    mov [drag_target_y], ax
+
+    mov byte [drag_needs_update], 1
+    jmp .done
+
+.button_released:
+    mov byte [drag_active], 0
+    jmp .done
+
+.check_release:
+    mov byte [drag_active], 0
+
+.done:
+    popa
+    ret
+
+; ============================================================================
+; Deferred Drag Processing (called from event_get_stub)
+; ============================================================================
+
+; mouse_process_drag - Execute pending window move
+; Safe to call from INT 0x80 context (no reentrancy risk)
+mouse_process_drag:
+    cmp byte [drag_needs_update], 0
+    je .done
+
+    mov byte [drag_needs_update], 0
+
+    ; Hide cursor before window redraw
+    call mouse_cursor_hide
+
+    ; Move the window
+    push ax
+    push bx
+    push cx
+    xor ax, ax
+    mov al, [drag_window]
+    mov bx, [drag_target_x]
+    mov cx, [drag_target_y]
+    call win_move_stub
+    pop cx
+    pop bx
+    pop ax
+
+    ; Show cursor after window redraw
+    call mouse_cursor_show
+
+.done:
+    ret
+
+; ============================================================================
 ; Draw character in inverted colors (black on white)
 ; Uses draw_x, draw_y for position, SI = font data pointer
 ; ============================================================================
@@ -1625,11 +1965,11 @@ gfx_draw_string_inverted:
     ret
 
 ; ============================================================================
-; Kernel API Table - At fixed address 0x1000:0x0B10
+; Kernel API Table - At fixed address 0x1000:0x0D10
 ; ============================================================================
 
-; Pad to exactly offset 0x0B10 - expanded for arrow key handler
-times 0x0B10 - ($ - $$) db 0
+; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag support
+times 0x0D10 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -2134,6 +2474,9 @@ event_get_stub:
 
     mov bx, 0x1000
     mov ds, bx
+
+    ; Process any pending window drag (deferred from IRQ12)
+    call mouse_process_drag
 
     mov bx, [event_queue_head]
     cmp bx, [event_queue_tail]
@@ -4771,6 +5114,9 @@ WIN_ERR_INVALID     equ 2
 ; Output: CF = 0 on success, AX = window handle (0-15)
 ;         CF = 1 on error, AX = error code
 win_create_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
     push bx
     push cx
     push dx
@@ -4876,6 +5222,8 @@ win_create_stub:
     pop dx
     pop cx
     pop bx
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 .save_x:     dw 0
@@ -4890,6 +5238,9 @@ win_create_stub:
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
 win_destroy_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
     push bx
     push cx
     push dx
@@ -4942,12 +5293,17 @@ win_destroy_stub:
     pop dx
     pop cx
     pop bx
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; win_draw_stub - Draw/redraw window frame (title bar and border)
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
 win_draw_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
     push bx
     push cx
     push dx
@@ -5039,6 +5395,8 @@ win_draw_stub:
     pop dx
     pop cx
     pop bx
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 .win_ptr: dw 0
@@ -5084,6 +5442,9 @@ win_focus_stub:
 ; Input:  AX = Window handle, BX = New X, CX = New Y
 ; Output: CF = 0 on success
 win_move_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
     push bx
     push cx
     push dx
@@ -5148,6 +5509,8 @@ win_move_stub:
     pop dx
     pop cx
     pop bx
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 .new_x:  dw 0
@@ -5248,6 +5611,36 @@ mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
+
+; Mouse cursor state
+cursor_visible:     db 0            ; 1 = cursor currently drawn on screen
+cursor_drawn_x:     dw 0            ; X where cursor was last drawn
+cursor_drawn_y:     dw 0            ; Y where cursor was last drawn
+cursor_locked:      db 0            ; Lock counter (>0 = cursor rendering suppressed)
+
+; Cursor bitmap: 8 pixels wide, 10 rows tall
+; Each byte = 1 row, MSB = leftmost pixel, 1 = draw (XOR white)
+cursor_bitmap:
+    db 0x80                         ; X.......
+    db 0xC0                         ; XX......
+    db 0xE0                         ; XXX.....
+    db 0xF0                         ; XXXX....
+    db 0xF8                         ; XXXXX...
+    db 0xFC                         ; XXXXXX..
+    db 0xFE                         ; XXXXXXX.
+    db 0xF0                         ; XXXX....
+    db 0xB0                         ; X.XX....
+    db 0x10                         ; ...X....
+
+; Window drag state
+drag_active:        db 0            ; 1 = currently dragging a window
+drag_window:        db 0            ; Window handle being dragged (0-15)
+drag_offset_x:      dw 0            ; Mouse X offset from window X at grab
+drag_offset_y:      dw 0            ; Mouse Y offset from window Y at grab
+drag_target_x:      dw 0            ; Desired new window X position
+drag_target_y:      dw 0            ; Desired new window Y position
+drag_needs_update:  db 0            ; 1 = win_move_stub needs to be called
+drag_prev_buttons:  db 0            ; Previous button state (for edge detection)
 
 ; Keyboard demo state
 demo_cursor_x: dw 0
