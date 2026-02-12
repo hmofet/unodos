@@ -1,5 +1,5 @@
-; MOUSE_TEST.BIN - Mouse test application for UnoDOS v3.12.0
-; Build 053 - PS/2 mouse demonstration
+; MOUSE_TEST.BIN - Mouse test application for UnoDOS
+; PS/2 mouse demonstration with button state display
 ;
 ; Build: nasm -f bin -o mouse_test.bin mouse_test.asm
 
@@ -7,8 +7,6 @@
 [ORG 0x0000]
 
 ; API function indices (must match kernel_api_table in kernel.asm)
-API_GFX_DRAW_PIXEL      equ 0
-API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
@@ -31,10 +29,10 @@ entry:
     mov ds, ax
 
     ; Create window
-    mov bx, 60                      ; X position
-    mov cx, 40                      ; Y position
-    mov dx, 200                     ; Width
-    mov si, 100                     ; Height
+    mov bx, 50                      ; X position
+    mov cx, 50                      ; Y position
+    mov dx, 220                     ; Width
+    mov si, 80                      ; Height
     mov ax, cs
     mov es, ax
     mov di, window_title
@@ -50,8 +48,6 @@ entry:
     jc .exit_fail
     mov [cs:content_x], bx
     mov [cs:content_y], cx
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
 
     ; Drain pending events
 .drain_events:
@@ -66,77 +62,191 @@ entry:
     test al, al
     jz .no_mouse
 
-    ; Display instructions
+    ; Draw static labels
     mov bx, [cs:content_x]
     add bx, 4
     mov cx, [cs:content_y]
     add cx, 4
-    mov si, instructions_msg
+    mov si, label_pos
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Initialize last position
+    mov bx, [cs:content_x]
+    add bx, 4
+    mov cx, [cs:content_y]
+    add cx, 20
+    mov si, label_buttons
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, [cs:content_x]
+    add bx, 4
+    mov cx, [cs:content_y]
+    add cx, 48
+    mov si, help_msg
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Initialize tracking state
     mov word [cs:last_x], 0xFFFF
-    mov word [cs:last_y], 0xFFFF
+    mov byte [cs:last_btn], 0xFF
 
     ; Main loop
 .main_loop:
-    sti                             ; Enable interrupts for mouse IRQ
+    sti
 
-    ; Get mouse state: BX=X, CX=Y, DL=buttons, DH=enabled
+    ; Get mouse state: BX=X, CX=Y, DL=buttons
     mov ah, API_MOUSE_GET_STATE
     int 0x80
 
-    ; Save state
     mov [cs:cur_x], bx
     mov [cs:cur_y], cx
-    mov [cs:cur_buttons], dl
+    mov [cs:cur_btn], dl
 
-    ; Only redraw if position changed
+    ; Check if position changed
     mov ax, [cs:last_x]
     cmp ax, bx
-    jne .need_redraw
+    jne .update_pos
     mov ax, [cs:last_y]
     cmp ax, cx
-    je .check_key
+    jne .update_pos
+    jmp .check_buttons
 
-.need_redraw:
-    ; Erase old cursor (if valid)
-    mov ax, [cs:last_x]
-    cmp ax, 0xFFFF
-    je .draw_new
-    mov bx, ax
-    mov cx, [cs:last_y]
-    call erase_cursor
-
-.draw_new:
-    ; Draw new cursor
-    mov bx, [cs:cur_x]
-    mov cx, [cs:cur_y]
-
-    ; Choose character based on button state
-    mov al, [cs:cur_buttons]
-    test al, 0x01                   ; Left button?
-    jnz .draw_star
-    mov al, '+'                     ; Normal cursor
-    jmp .draw_cursor
-.draw_star:
-    mov al, '*'                     ; Button pressed
-.draw_cursor:
-    mov [cs:cursor_char], al
-    call draw_cursor
-
-    ; Update last position
+.update_pos:
+    ; Update position display
     mov ax, [cs:cur_x]
     mov [cs:last_x], ax
     mov ax, [cs:cur_y]
     mov [cs:last_y], ax
 
-    ; Display coordinates
-    call show_coordinates
+    ; Clear position value area
+    mov bx, [cs:content_x]
+    add bx, 36
+    mov cx, [cs:content_y]
+    add cx, 4
+    mov dx, 100
+    mov si, 10
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Build position string
+    mov di, str_buffer
+    mov ax, [cs:cur_x]
+    call word_to_decimal
+    mov byte [cs:di], ','
+    inc di
+    mov ax, [cs:cur_y]
+    call word_to_decimal
+    mov byte [cs:di], 0
+
+    ; Draw position
+    mov bx, [cs:content_x]
+    add bx, 36
+    mov cx, [cs:content_y]
+    add cx, 4
+    mov si, str_buffer
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.check_buttons:
+    ; Check if button state changed
+    mov al, [cs:cur_btn]
+    cmp al, [cs:last_btn]
+    je .check_key
+    mov [cs:last_btn], al
+
+    ; Clear button area
+    mov bx, [cs:content_x]
+    add bx, 4
+    mov cx, [cs:content_y]
+    add cx, 32
+    mov dx, 180
+    mov si, 10
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Build button string: "L:ON  R:OFF  M:OFF"
+    mov di, str_buffer
+    mov al, [cs:cur_btn]
+
+    ; Left button (bit 0)
+    mov byte [cs:di], 'L'
+    inc di
+    mov byte [cs:di], ':'
+    inc di
+    test al, 0x01
+    jz .l_off
+    mov byte [cs:di], 'O'
+    inc di
+    mov byte [cs:di], 'N'
+    inc di
+    jmp .l_done
+.l_off:
+    mov byte [cs:di], '-'
+    inc di
+    mov byte [cs:di], '-'
+    inc di
+.l_done:
+    mov byte [cs:di], ' '
+    inc di
+    mov byte [cs:di], ' '
+    inc di
+
+    ; Right button (bit 1)
+    mov al, [cs:cur_btn]
+    mov byte [cs:di], 'R'
+    inc di
+    mov byte [cs:di], ':'
+    inc di
+    test al, 0x02
+    jz .r_off
+    mov byte [cs:di], 'O'
+    inc di
+    mov byte [cs:di], 'N'
+    inc di
+    jmp .r_done
+.r_off:
+    mov byte [cs:di], '-'
+    inc di
+    mov byte [cs:di], '-'
+    inc di
+.r_done:
+    mov byte [cs:di], ' '
+    inc di
+    mov byte [cs:di], ' '
+    inc di
+
+    ; Middle button (bit 2)
+    mov al, [cs:cur_btn]
+    mov byte [cs:di], 'M'
+    inc di
+    mov byte [cs:di], ':'
+    inc di
+    test al, 0x04
+    jz .m_off
+    mov byte [cs:di], 'O'
+    inc di
+    mov byte [cs:di], 'N'
+    inc di
+    jmp .m_done
+.m_off:
+    mov byte [cs:di], '-'
+    inc di
+    mov byte [cs:di], '-'
+    inc di
+.m_done:
+    mov byte [cs:di], 0
+
+    ; Draw button state
+    mov bx, [cs:content_x]
+    add bx, 4
+    mov cx, [cs:content_y]
+    add cx, 32
+    mov si, str_buffer
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
 
 .check_key:
-    ; Check for ESC key
     mov ah, API_EVENT_GET
     int 0x80
     jc .delay
@@ -146,23 +256,20 @@ entry:
     je .exit_ok
 
 .delay:
-    ; Small delay
-    mov cx, 0x800
+    mov cx, 0x400
 .delay_loop:
     loop .delay_loop
     jmp .main_loop
 
 .no_mouse:
-    ; Display "No mouse detected"
     mov bx, [cs:content_x]
     add bx, 4
     mov cx, [cs:content_y]
-    add cx, 30
+    add cx, 20
     mov si, no_mouse_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Wait for ESC
 .wait_esc:
     sti
     mov ah, API_EVENT_GET
@@ -193,92 +300,6 @@ entry:
     pop ds
     popa
     retf
-
-; ============================================================================
-; draw_cursor - Draw cursor character at BX,CX
-; ============================================================================
-draw_cursor:
-    push ax
-    push bx
-    push cx
-    mov al, [cs:cursor_char]
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; ============================================================================
-; erase_cursor - Erase cursor at BX,CX (draw space)
-; ============================================================================
-erase_cursor:
-    push ax
-    push bx
-    push cx
-    mov al, ' '
-    mov ah, API_GFX_DRAW_CHAR
-    int 0x80
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; ============================================================================
-; show_coordinates - Display X,Y coordinates
-; ============================================================================
-show_coordinates:
-    pusha
-
-    ; Clear coordinate area
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 60
-    mov dx, 100
-    mov si, 12
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    ; Build coordinate string "X:nnn Y:nnn"
-    mov di, coord_buffer
-
-    ; "X:"
-    mov byte [cs:di], 'X'
-    inc di
-    mov byte [cs:di], ':'
-    inc di
-
-    ; X value
-    mov ax, [cs:cur_x]
-    call word_to_decimal
-
-    ; " Y:"
-    mov byte [cs:di], ' '
-    inc di
-    mov byte [cs:di], 'Y'
-    inc di
-    mov byte [cs:di], ':'
-    inc di
-
-    ; Y value
-    mov ax, [cs:cur_y]
-    call word_to_decimal
-
-    ; Null terminate
-    mov byte [cs:di], 0
-
-    ; Draw it
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 60
-    mov si, coord_buffer
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    popa
-    ret
 
 ; ============================================================================
 ; word_to_decimal - Convert AX to decimal string at CS:DI
@@ -325,21 +346,21 @@ word_to_decimal:
 ; Data Section
 ; ============================================================================
 
-window_title:       db 'Mouse Test', 0
-win_handle:         db 0
-content_x:          dw 0
-content_y:          dw 0
-content_w:          dw 0
-content_h:          dw 0
+window_title:   db 'Mouse Test', 0
+win_handle:     db 0
+content_x:      dw 0
+content_y:      dw 0
 
-cur_x:              dw 0
-cur_y:              dw 0
-cur_buttons:        db 0
-last_x:             dw 0xFFFF
-last_y:             dw 0xFFFF
-cursor_char:        db '+'
+cur_x:          dw 0
+cur_y:          dw 0
+cur_btn:        db 0
+last_x:         dw 0xFFFF
+last_y:         dw 0xFFFF
+last_btn:       db 0xFF
 
-coord_buffer:       times 20 db 0
+str_buffer:     times 24 db 0
 
-instructions_msg:   db 'Move mouse, ESC to exit', 0
-no_mouse_msg:       db 'No mouse detected', 0
+label_pos:      db 'Pos: ', 0
+label_buttons:  db 'Buttons:', 0
+help_msg:       db 'ESC to exit', 0
+no_mouse_msg:   db 'No mouse detected', 0
