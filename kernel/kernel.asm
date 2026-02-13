@@ -1502,9 +1502,12 @@ draw_char:
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
-    jz .skip_pixel
-    call plot_pixel_white           ; Plot at (CX, BX)
-.skip_pixel:
+    jz .clear_pixel
+    call plot_pixel_white           ; "1" bit: white pixel
+    jmp .next_pixel
+.clear_pixel:
+    call plot_pixel_black           ; "0" bit: clear to black
+.next_pixel:
     shl ah, 1                       ; Next bit
     inc cx                          ; Next X
     dec dx                          ; Decrement column counter
@@ -1971,17 +1974,14 @@ debug_hex_byte:
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - DIAGNOSTIC BUILD 125
-; Shows target coordinates as hex at Y=190.
-; Format: "X:HH Y:HH" where HH = low byte of target coordinate
+; mouse_process_drag - Build 126
+; Polls drag state and moves window if target differs from current position.
+; Debug: shows "T:XX,YY C:XX,YY" (Target vs Current) at Y=190
 mouse_process_drag:
-    ; Reset debug position for this pass
-    mov word [debug_x], 0
-
     cmp byte [drag_active], 0
-    je .inactive
+    je .done
 
-    ; Read drag state
+    ; Read drag state atomically
     cli
     xor ax, ax
     mov al, [drag_window]
@@ -1989,28 +1989,63 @@ mouse_process_drag:
     mov cx, [drag_target_y]
     sti
 
-    ; Print "X:" then target_x low byte as hex
+    ; Compare target with current window position - skip if no change
     push ax
-    mov al, 'X'
+    push bx
+    push cx
+    xor ah, ah
+    mov si, ax
+    shl si, 5                       ; SI = handle * 32
+    add si, window_table
+    cmp bx, [si + WIN_OFF_X]
+    jne .needs_move
+    cmp cx, [si + WIN_OFF_Y]
+    jne .needs_move
+    ; Target == current position, skip redundant move
+    pop cx
+    pop bx
+    pop ax
+    jmp .done
+
+.needs_move:
+    pop cx
+    pop bx
+    pop ax
+
+    ; Clear debug line before drawing (320px wide, 10px tall at Y=190)
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, 0                       ; X=0
+    mov cx, 190                     ; Y=190
+    mov dx, 200                     ; Width=200
+    mov si, 10                      ; Height=10
+    call gfx_clear_area_stub
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    ; Debug: show target and current positions
+    mov word [debug_x], 0
+    push ax
+    push bx
+    push cx
+    mov al, 'T'
     call debug_char
-    mov al, bl                      ; Low byte of target_x
+    mov al, bl                      ; Target X low byte
     call debug_hex_byte
-    ; Print " Y:" then target_y low byte as hex
-    mov al, ' '
+    mov al, ','
     call debug_char
-    mov al, 'Y'
-    call debug_char
-    mov al, cl                      ; Low byte of target_y
+    mov al, cl                      ; Target Y low byte
     call debug_hex_byte
+    pop cx
+    pop bx
     pop ax
 
     ; AX=handle, BX=target_x, CX=target_y
     call win_move_stub
-    jmp .done
-
-.inactive:
-    mov al, '-'                     ; '-' = no drag active
-    call debug_char
 
 .done:
     ret
@@ -2034,9 +2069,12 @@ draw_char_inverted:
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
-    jz .skip_pixel
-    call plot_pixel_black           ; Plot BLACK at (CX, BX)
-.skip_pixel:
+    jz .clear_pixel
+    call plot_pixel_black           ; "1" bit: black pixel (inverted)
+    jmp .next_pixel
+.clear_pixel:
+    call plot_pixel_white           ; "0" bit: white background
+.next_pixel:
     shl ah, 1                       ; Next bit
     inc cx                          ; Next X
     dec dx                          ; Decrement column counter
@@ -2099,7 +2137,7 @@ gfx_draw_string_inverted:
 ; ============================================================================
 
 ; Pad to exactly offset 0x0D10 - expanded for debug hex output
-times 0x0DC0 - ($ - $$) db 0
+times 0x0E00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5615,15 +5653,6 @@ win_move_stub:
     mov [.new_y], cx
     mov [.handle], ax
 
-    ; DEBUG: 'E' = win_move_stub entered, then handle digit
-    push ax
-    mov al, 'E'
-    call debug_char
-    mov ax, [.handle]
-    add al, '0'                     ; Convert handle to ASCII digit
-    call debug_char
-    pop ax
-
     cmp ax, WIN_MAX_COUNT
     jae .invalid
 
@@ -5635,12 +5664,6 @@ win_move_stub:
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
-
-    ; DEBUG: 'V' = validation passed
-    push ax
-    mov al, 'V'
-    call debug_char
-    pop ax
 
     ; Save window pointer
     mov bp, bx
@@ -5679,17 +5702,9 @@ win_move_stub:
     mov cx, [.new_y]
     mov [bp + WIN_OFF_Y], cx
 
-    ; DEBUG: 'U' = position updated in window table
-    mov al, 'U'
-    call debug_char
-
     ; Draw window frame at new position immediately (makes window visible fast)
     mov ax, [.handle]
     call win_draw_stub
-
-    ; DEBUG: 'D' = draw completed
-    mov al, 'D'
-    call debug_char
 
     ; Calculate deltas: dx = new_x - old_x, dy = new_y - old_y
     mov ax, [.new_x]
@@ -5773,16 +5788,10 @@ win_move_stub:
     call gfx_clear_area_stub
 
 .clear_done:
-    ; DEBUG: 'C' = move completed successfully
-    mov al, 'C'
-    call debug_char
     clc
     jmp .done
 
 .invalid:
-    ; DEBUG: 'X' = INVALID path taken (bad handle or window state)
-    mov al, 'X'
-    call debug_char
     stc
 
 .done:
