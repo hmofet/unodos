@@ -2213,8 +2213,15 @@ mouse_process_drag:
     call win_move_stub
 
     ; Restore saved content at new position
+    xor ah, ah
     mov al, [drag_window]
     call restore_drag_content
+
+    ; Redraw frame on top - content restore uses byte-aligned CGA copies
+    ; which may overwrite border pixels at the edges
+    xor ah, ah
+    mov al, [drag_window]
+    call win_draw_stub
     pop ax
 
 .done:
