@@ -423,33 +423,6 @@ draw_menu:
     mov ah, 6                       ; API_GFX_DRAW_STRING_INVERTED (white)
     int 0x80
 
-    ; DEBUG: Show mount info in WHITE
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, MENU_TOP_PADDING
-    add cx, 10
-    mov si, debug_drive_msg
-    mov ah, 6                       ; White
-    int 0x80
-
-    ; Show mounted drive number
-    mov al, [cs:mounted_drive]
-    call show_hex_byte
-
-    ; Show mount handle in WHITE
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, MENU_TOP_PADDING
-    add cx, 20
-    mov si, debug_handle_msg
-    mov ah, 6                       ; White
-    int 0x80
-
-    mov al, [cs:mount_handle]
-    call show_hex_byte
-
     jmp .draw_help_only
 
 .draw_help:
@@ -592,52 +565,6 @@ get_selected_filename:
     pop di
     ret
 
-; ============================================================================
-; Show hex byte - displays AL as 2 hex digits at current BX,CX position
-; ============================================================================
-show_hex_byte:
-    push ax
-    push bx
-    push cx
-    push si
-
-    ; Save position
-    add bx, 48                      ; Move X right for hex display
-
-    ; Convert high nibble
-    mov cl, al
-    shr cl, 4
-    and cl, 0x0F
-    add cl, '0'
-    cmp cl, '9'
-    jbe .high_ok
-    add cl, 7                       ; 'A'-'9'-1
-.high_ok:
-    mov [cs:hex_buffer], cl
-
-    ; Convert low nibble
-    mov cl, al
-    and cl, 0x0F
-    add cl, '0'
-    cmp cl, '9'
-    jbe .low_ok
-    add cl, 7
-.low_ok:
-    mov [cs:hex_buffer+1], cl
-
-    ; Draw it
-    mov si, hex_buffer
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-hex_buffer: db 0, 0, 0              ; 2 hex chars + null
-
 ; Buffer for converted filename (8 + 1 + 3 + 1 = 13 bytes)
 filename_buffer: times 13 db 0
 
@@ -672,7 +599,5 @@ indicator:      db '> ', 0
 help_line1:     db 'W/S/Arrows: Select', 0
 help_line2:     db 'Enter: Run  ESC: Exit', 0
 no_apps_msg:    db 'No apps found', 0
-debug_drive_msg: db 'Drive: 0x', 0
-debug_handle_msg: db 'Handle: 0x', 0
 error_msg:      db 'Load failed!', 0
 error_code_label: db 'Code: ', 0
