@@ -1,84 +1,117 @@
-; HELLO.BIN - Simple test application for UnoDOS v3.11.0
-; Proves application loader works by drawing a visible pattern
+; HELLO.BIN - Hello World application for UnoDOS
+; Displays a message in a draggable window
 ;
 ; Build: nasm -f bin -o hello.bin hello.asm
-; Copy to FAT12 floppy as HELLO.BIN (8.3 format)
 
 [BITS 16]
 [ORG 0x0000]
 
+; API function indices (must match kernel_api_table in kernel.asm)
+API_GFX_DRAW_STRING     equ 4
+API_EVENT_GET           equ 9
+API_WIN_CREATE          equ 20
+API_WIN_DESTROY         equ 21
+API_WIN_BEGIN_DRAW      equ 31
+API_WIN_END_DRAW        equ 32
+
+; Event types
+EVENT_KEY_PRESS         equ 1
+EVENT_WIN_MOVED         equ 5
+
 ; Entry point - called by kernel via far CALL
 entry:
+    pusha
     push ds
     push es
-    push di
-    push cx
 
-    ; Write "HI" pattern directly to CGA video memory
-    ; CGA mode 04h: 320x200, 4 colors, memory at B800:0000
-    ; Each byte contains 4 pixels (2 bits per pixel)
-    ; We'll draw at y=80 (middle-ish of screen)
+    mov ax, cs
+    mov ds, ax
 
-    mov ax, 0xB800
+    ; Create window at X=80, Y=70, W=160, H=50
+    mov bx, 80                      ; X position
+    mov cx, 70                      ; Y position
+    mov dx, 160                     ; Width
+    mov si, 50                      ; Height
+    mov ax, cs
     mov es, ax
+    mov di, window_title
+    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    mov ah, API_WIN_CREATE
+    int 0x80
+    jc .exit_fail
+    mov [cs:win_handle], al
 
-    ; In CGA mode 04h:
-    ; Even scanlines: offset 0x0000 - 0x1F3F
-    ; Odd scanlines: offset 0x2000 - 0x3F3F
-    ; Each scanline = 80 bytes (320 pixels / 4 pixels per byte)
-    ;
-    ; Y=80 is even, so offset = (80/2) * 80 = 40 * 80 = 3200 = 0x0C80
-    ; Let's draw at X=150 (middle of screen)
-    ; X=150 means byte offset = 150/4 = 37, bit position = (150%4)*2 = 0
+    ; Set window drawing context
+    mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
 
-    ; Draw a simple 8x8 'H' pattern at (150, 80)
-    ; Using color 3 (white) = binary 11
+    ; Draw content
+    call draw_content
 
-    ; Row 0: |*  * | = 11 00 11 00 = 0xCC (pixels at 0,1 and 4,5)
-    mov di, 0x0C80 + 37             ; Y=80, X=148 (byte 37)
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
+    ; Event loop
+.main_loop:
+    sti
 
-    ; Row 1: |*  * |
-    mov di, 0x2000 + 0x0C80 + 37    ; Y=81 (odd)
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
+    mov ah, API_EVENT_GET
+    int 0x80
+    jc .no_event
+    cmp al, EVENT_KEY_PRESS
+    jne .check_win_moved
+    cmp dl, 27                      ; ESC key?
+    je .exit_ok
+    jmp .no_event
 
-    ; Row 2: |*  * |
-    mov di, 0x0C80 + 80 + 37        ; Y=82
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
+.check_win_moved:
+    cmp al, EVENT_WIN_MOVED
+    jne .no_event
+    call draw_content
 
-    ; Row 3: |****|
-    mov di, 0x2000 + 0x0C80 + 80 + 37  ; Y=83
-    mov byte [es:di], 0xFF
-    mov byte [es:di+1], 0xFF
+.no_event:
+    mov cx, 0x1000
+.delay:
+    loop .delay
+    jmp .main_loop
 
-    ; Row 4: |****|
-    mov di, 0x0C80 + 160 + 37       ; Y=84
-    mov byte [es:di], 0xFF
-    mov byte [es:di+1], 0xFF
+.exit_ok:
+    mov ah, API_WIN_END_DRAW
+    int 0x80
 
-    ; Row 5: |*  * |
-    mov di, 0x2000 + 0x0C80 + 160 + 37  ; Y=85
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_DESTROY
+    int 0x80
+    xor ax, ax
+    jmp .exit
 
-    ; Row 6: |*  * |
-    mov di, 0x0C80 + 240 + 37       ; Y=86
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
+.exit_fail:
+    mov ax, 1
 
-    ; Row 7: |*  * |
-    mov di, 0x2000 + 0x0C80 + 240 + 37  ; Y=87
-    mov byte [es:di], 0xCC
-    mov byte [es:di+1], 0xCC
-
-    pop cx
-    pop di
+.exit:
     pop es
     pop ds
+    popa
+    retf
 
-    ; Return success (AX = 0)
-    xor ax, ax
-    retf                            ; Far return to kernel
+; Draw window content (window-relative coordinates)
+draw_content:
+    pusha
+
+    mov bx, 20                      ; X within content area
+    mov cx, 8                       ; Y within content area
+    mov si, msg_hello
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 16
+    mov cx, 22
+    mov si, msg_esc
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    popa
+    ret
+
+; Data Section
+window_title:   db 'Hello', 0
+win_handle:     db 0
+msg_hello:      db 'Hello, World!', 0
+msg_esc:        db 'Press ESC to exit', 0
