@@ -137,9 +137,9 @@ int_80_handler:
     iret
 
 .dispatch_function:
-    ; AH contains function index (1-29)
+    ; AH contains function index (1-32)
     ; Validate function number
-    cmp ah, 31                      ; Max function + 1 (0-30)
+    cmp ah, 33                      ; Max function + 1 (0-32)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -161,6 +161,33 @@ int_80_handler:
     mov ds, ax
     pop ax
 
+    ; --- Window-relative coordinate translation ---
+    ; If draw_context is active (valid window handle) and function is a
+    ; drawing API (0-6), translate BX/CX from window-relative to absolute
+    ; screen coordinates. Apps draw at (0,0) = top-left of content area.
+    cmp byte [draw_context], 0xFF
+    je .no_translate                ; No active context
+    cmp ah, 6
+    ja .no_translate                ; Not a drawing function (API 0-6)
+
+    ; Translate: BX += content_x, CX += content_y
+    push si
+    push ax
+    xor ah, ah
+    mov al, [draw_context]
+    mov si, ax
+    shl si, 5                       ; SI = handle * 32
+    add si, window_table
+    ; content_x = win_x + 1 (inside left border)
+    add bx, [si + WIN_OFF_X]
+    inc bx
+    ; content_y = win_y + titlebar height (below title bar)
+    add cx, [si + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT
+    pop ax
+    pop si
+
+.no_translate:
     ; Get function pointer from API table
     ; Function pointer = kernel_api_table + 8 + (index * 2)
     push bx                         ; Save BX (may be parameter)
@@ -834,6 +861,27 @@ mouse_set_position:
 ; Output: AL = enabled flag (0=no, 1=yes)
 mouse_is_enabled:
     mov al, [mouse_enabled]
+    ret
+
+; ============================================================================
+; Window Drawing Context API
+; Apps call begin_draw with their window handle. All subsequent drawing
+; calls (API 0-6) auto-translate coordinates to window-relative.
+; End_draw switches back to absolute/fullscreen mode.
+; ============================================================================
+
+; win_begin_draw - Set window drawing context
+; Input: AL = window handle
+; Effect: Drawing APIs (0-6) will translate coordinates relative to
+;         window content area until win_end_draw is called
+win_begin_draw:
+    mov [draw_context], al
+    ret
+
+; win_end_draw - Clear window drawing context (fullscreen mode)
+; Effect: Drawing APIs use absolute screen coordinates
+win_end_draw:
+    mov byte [draw_context], 0xFF
     ret
 
 ; ============================================================================
@@ -1974,9 +2022,8 @@ debug_hex_byte:
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - Build 126
+; mouse_process_drag - Process pending window drag (called from event_get_stub)
 ; Polls drag state and moves window if target differs from current position.
-; Debug: shows "T:XX,YY C:XX,YY" (Target vs Current) at Y=190
 mouse_process_drag:
     cmp byte [drag_active], 0
     je .done
@@ -2001,45 +2048,12 @@ mouse_process_drag:
     jne .needs_move
     cmp cx, [si + WIN_OFF_Y]
     jne .needs_move
-    ; Target == current position, skip redundant move
     pop cx
     pop bx
     pop ax
     jmp .done
 
 .needs_move:
-    pop cx
-    pop bx
-    pop ax
-
-    ; Clear debug line before drawing (320px wide, 10px tall at Y=190)
-    push bx
-    push cx
-    push dx
-    push si
-    mov bx, 0                       ; X=0
-    mov cx, 190                     ; Y=190
-    mov dx, 200                     ; Width=200
-    mov si, 10                      ; Height=10
-    call gfx_clear_area_stub
-    pop si
-    pop dx
-    pop cx
-    pop bx
-
-    ; Debug: show target and current positions
-    mov word [debug_x], 0
-    push ax
-    push bx
-    push cx
-    mov al, 'T'
-    call debug_char
-    mov al, bl                      ; Target X low byte
-    call debug_hex_byte
-    mov al, ','
-    call debug_char
-    mov al, cl                      ; Target Y low byte
-    call debug_hex_byte
     pop cx
     pop bx
     pop ax
@@ -2137,13 +2151,13 @@ gfx_draw_string_inverted:
 ; ============================================================================
 
 ; Pad to exactly offset 0x0D10 - expanded for debug hex output
-times 0x0E00 - ($ - $$) db 0
+times 0x0E20 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 31                           ; Number of function slots (0-30)
+    dw 33                           ; Number of function slots (0-32)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2193,6 +2207,10 @@ kernel_api_table:
     dw mouse_get_state              ; 28: Get mouse position/buttons
     dw mouse_set_position           ; 29: Set mouse position
     dw mouse_is_enabled             ; 30: Check if mouse available
+
+    ; Window Drawing Context API
+    dw win_begin_draw               ; 31: Set draw context (AL=window handle)
+    dw win_end_draw                 ; 32: Clear draw context (fullscreen mode)
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -5903,6 +5921,10 @@ heap_initialized: dw 0
 syscall_func: dw 0
 caller_ds: dw 0x1000                ; Caller's DS segment (init to kernel for direct calls)
 caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for direct calls)
+
+; Window drawing context (0xFF = no context / fullscreen, 0-15 = window handle)
+; When active, drawing APIs (0-6) auto-translate coordinates to window-relative
+draw_context: db 0xFF
 
 ; Keyboard driver state (Foundation 1.4)
 old_int9_offset: dw 0
