@@ -1,5 +1,5 @@
 ; CLOCK.BIN - Clock application for UnoDOS
-; Displays RTC time in a draggable window
+; Displays RTC time in a draggable window, updates once per second
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -46,7 +46,10 @@ entry:
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Main loop - update time and check for ESC
+    ; Initialize last_secs to impossible value to force first draw
+    mov byte [cs:last_secs], 0xFF
+
+    ; Main loop - update time only when seconds change
 .main_loop:
     sti
 
@@ -54,47 +57,49 @@ entry:
     ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
     mov ah, 02h
     int 1Ah
-    ; Ignore CF - some BIOSes set it during RTC update, values still valid
 
-    ; Save RTC values immediately (before any calls clobber them)
+    ; Only redraw if seconds changed
+    cmp dh, [cs:last_secs]
+    je .check_event
+    mov [cs:last_secs], dh
+
+    ; Save RTC values (before any calls clobber them)
     mov [cs:rtc_hours], ch
     mov [cs:rtc_mins], cl
     mov [cs:rtc_secs], dh
 
     ; Convert BCD time to ASCII string
-    ; Hours
     mov al, [cs:rtc_hours]
     call .bcd_to_ascii
-    mov [cs:time_str], ah           ; Tens digit
-    mov [cs:time_str+1], al         ; Ones digit
+    mov [cs:time_str], ah
+    mov [cs:time_str+1], al
 
-    ; Minutes
     mov al, [cs:rtc_mins]
     call .bcd_to_ascii
-    mov [cs:time_str+3], ah         ; Tens digit
-    mov [cs:time_str+4], al         ; Ones digit
+    mov [cs:time_str+3], ah
+    mov [cs:time_str+4], al
 
-    ; Seconds
     mov al, [cs:rtc_secs]
     call .bcd_to_ascii
-    mov [cs:time_str+6], ah         ; Tens digit
-    mov [cs:time_str+7], al         ; Ones digit
+    mov [cs:time_str+6], ah
+    mov [cs:time_str+7], al
 
     ; Clear time area (window-relative)
-    mov bx, 27                      ; X within content area
-    mov cx, 10                      ; Y within content area
-    mov dx, 100                     ; Width
-    mov si, 10                      ; Height
+    mov bx, 27
+    mov cx, 10
+    mov dx, 100
+    mov si, 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Draw time string (window-relative)
-    mov bx, 27                      ; Center horizontally
-    mov cx, 10                      ; Down from top
+    mov bx, 27
+    mov cx, 10
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+.check_event:
     ; Check for keypress (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
@@ -105,8 +110,8 @@ entry:
     je .exit_ok
 
 .no_event:
-    ; Short delay
-    mov cx, 0x4000
+    ; Short delay to avoid busy-spinning
+    mov cx, 0x2000
 .delay:
     loop .delay
 
@@ -117,8 +122,8 @@ entry:
 ; Output: AH = tens digit ASCII, AL = ones digit ASCII
 .bcd_to_ascii:
     mov ah, al
-    and al, 0x0F                    ; Low nibble (ones)
-    shr ah, 4                       ; High nibble (tens)
+    and al, 0x0F
+    shr ah, 4
     add al, '0'
     add ah, '0'
     ret
@@ -149,3 +154,4 @@ time_str:       db '00:00:00', 0
 rtc_hours:      db 0
 rtc_mins:       db 0
 rtc_secs:       db 0
+last_secs:      db 0xFF             ; Last displayed seconds (0xFF forces first draw)
