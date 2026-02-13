@@ -15,7 +15,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## Completed Features (v3.13.0 Build 135)
+## Completed Features (v3.14.0 Build 144)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -37,7 +37,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 ### System Call Infrastructure
 - [x] INT 0x80 handler for API dispatch
 - [x] Kernel API table at fixed address (0x1000:0x0F80)
-- [x] 34 API functions implemented (indices 0-33)
+- [x] 41 API functions implemented (indices 0-40)
 - [x] Caller segment preservation (caller_ds/caller_es) for string parameters
 - [x] Window-relative coordinate translation for APIs 0-6
 
@@ -112,27 +112,43 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 ### Application Loader
 - [x] app_load_stub() - Load .BIN from FAT12
 - [x] app_run_stub() - Execute loaded application
+- [x] app_start_stub() - Start app non-blocking (cooperative multitasking)
 - [x] Dual segment architecture (shell 0x2000, user 0x3000)
 - [x] Far CALL/RETF calling convention
 - [x] Apps survive shell execution and return
+- [x] Cooperative multitasking with round-robin scheduler
+
+### Desktop & Icons
+- [x] Fullscreen desktop (no window, draws directly to screen)
+- [x] 4x2 icon grid with 16x16 2bpp CGA icon bitmaps
+- [x] BIN file icon headers (80 bytes: JMP + "UI" magic + name + bitmap)
+- [x] Automatic icon detection from BIN headers at boot
+- [x] Default icon for legacy apps without headers
+- [x] Mouse double-click to launch apps (~0.5s threshold)
+- [x] Keyboard icon navigation (arrows/WASD + Enter)
+- [x] Icon selection highlight (white rectangle border)
+- [x] Floppy disk swap detection (~2 second polling via INT 13h)
+- [x] Kernel-managed desktop repaint during window operations
+- [x] Desktop icon registration API for kernel-level repaint support
 
 ### Desktop Launcher
 - [x] Dynamic app discovery - scans floppy for .BIN files
-- [x] Window-based menu UI with selection indicator
-- [x] W/S/Arrow navigation, Enter to launch, ESC to exit
-- [x] Automatic return after app exits
-- [x] Skips LAUNCHER.BIN in menu display
+- [x] Reads icon headers from BIN files (API 40: fs_read_header)
+- [x] Icon grid display with app names
+- [x] Arrow/WASD navigation, Enter or double-click to launch
+- [x] Skips LAUNCHER.BIN in icon display
+- [x] Auto-rescans disk on floppy swap
 
 ### Applications
-- [x] **LAUNCHER.BIN** - Desktop launcher (1069 bytes)
-- [x] **CLOCK.BIN** - Real-time clock display (238 bytes)
-- [x] **BROWSER.BIN** - File browser showing files with sizes (477 bytes)
-- [x] **TEST.BIN** - Hello test application (159 bytes)
-- [x] **MOUSE.BIN** - Mouse test/demo application (634 bytes)
+- [x] **LAUNCHER.BIN** - Desktop launcher with icon grid (2769 bytes)
+- [x] **CLOCK.BIN** - Real-time clock display (330 bytes, icon: clock face)
+- [x] **BROWSER.BIN** - File browser showing files with sizes (565 bytes, icon: folder)
+- [x] **TEST.BIN** - Hello test application (247 bytes, icon: speech bubble)
+- [x] **MOUSE.BIN** - Mouse test/demo application (741 bytes, icon: arrow cursor)
 
 ---
 
-## API Table Summary (v3.13.0 Build 135)
+## API Table Summary (v3.14.0 Build 144)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -155,7 +171,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 16 | fs_close | Close file |
 | 17 | fs_register_driver | Register filesystem driver |
 | 18 | app_load | Load application |
-| 19 | app_run | Run application |
+| 19 | app_run | Run application (blocking) |
 | 20 | win_create | Create window |
 | 21 | win_destroy | Destroy window |
 | 22 | win_draw | Draw window frame |
@@ -170,10 +186,129 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 31 | win_begin_draw | Set window drawing context |
 | 32 | win_end_draw | Clear drawing context |
 | 33 | gfx_text_width | Measure string width in pixels |
+| 34 | app_yield | Yield to scheduler (cooperative multitasking) |
+| 35 | app_start | Start loaded app (non-blocking) |
+| 36 | app_get_state | Get app running state |
+| 37 | desktop_set_icon | Register desktop icon with kernel |
+| 38 | desktop_clear_icons | Clear all registered desktop icons |
+| 39 | gfx_draw_icon | Draw 16x16 2bpp icon bitmap |
+| 40 | fs_read_header | Read first N bytes from a file |
+
+### New API Details (Build 144)
+
+**API 34: app_yield** - Yield to scheduler
+- Input: none
+- Output: none
+- Description: Yields CPU to the cooperative scheduler, allowing other tasks to run.
+
+**API 35: app_start** - Start loaded app (non-blocking)
+- Input: AL = app handle (from app_load)
+- Output: CF=0 success, CF=1 error
+- Description: Starts a loaded application as a cooperative task. The caller continues execution.
+
+**API 37: desktop_set_icon** - Register desktop icon
+- Input: AL = slot (0-7), BX = X screen position, CX = Y screen position, SI -> 76 bytes (64B bitmap + 12B name) in caller's DS
+- Output: CF=0 success, CF=1 invalid slot
+- Description: Registers an icon with the kernel for automatic desktop repaint during window operations.
+
+**API 38: desktop_clear_icons** - Clear all icons
+- Input: none
+- Output: none
+- Description: Zeros all 8 icon slots and resets the icon count. Call before rescanning disk.
+
+**API 39: gfx_draw_icon** - Draw 16x16 icon bitmap
+- Input: BX = X position (should be divisible by 4), CX = Y position, SI -> 64-byte bitmap in caller's DS
+- Output: none
+- Description: Draws a 16x16 2bpp icon to CGA video memory, handling even/odd row interlacing.
+
+**API 40: fs_read_header** - Read file header bytes
+- Input: BX = mount handle, SI -> filename (null-terminated, in caller's segment), ES:DI = destination buffer, CX = bytes to read
+- Output: CF=0 success (AX = bytes read), CF=1 error
+- Description: Opens a file, reads CX bytes, closes it. Designed for reading BIN icon headers without manual open/read/close.
 
 ---
 
-## Memory Layout (v3.13.0)
+## BIN File Icon Header Format
+
+Applications can embed a 16x16 icon and display name in an 80-byte header at the start of the BIN file. The kernel and desktop launcher use this header to display app icons.
+
+### Header Layout (80 bytes, 0x00-0x4F)
+
+```
+Offset  Size   Description
+0x00    2      JMP short 0x50 (bytes: 0xEB, 0x4E) - skip to code entry
+0x02    2      Magic: "UI" (0x55, 0x49) - identifies icon header
+0x04    12     App display name (null-padded ASCII, e.g. "Clock\0\0...")
+0x10    64     Icon bitmap: 16x16 pixels, 2 bits per pixel, CGA format
+               16 rows x 4 bytes/row, top-to-bottom, MSB first
+0x50    ...    Code entry point (pusha, push ds, push es, ...)
+```
+
+### Detection Algorithm
+
+Read first 4 bytes of each BIN file:
+- If `byte[0] == 0xEB` AND `byte[2] == 'U'` AND `byte[3] == 'I'` -> has icon header
+- Otherwise -> legacy app (use default icon, derive name from FAT filename)
+
+Old apps start with `0x60` (pusha), never `0xEB`, so detection is safe.
+
+### Icon Bitmap Format
+
+The 64-byte bitmap is a 16x16 image in CGA 2bpp format:
+- 4 bytes per row, 16 rows
+- Each byte contains 4 pixels (2 bits each)
+- Bit layout per byte: `[px0:7-6] [px1:5-4] [px2:3-2] [px3:1-0]`
+- MSB = leftmost pixel
+
+CGA Palette 1 color values:
+- `00` = Black (background/transparent)
+- `01` = Cyan
+- `10` = Magenta
+- `11` = White
+
+### Example Header (NASM)
+
+```asm
+[BITS 16]
+[ORG 0x0000]
+
+; --- Icon Header (80 bytes: 0x00-0x4F) ---
+    db 0xEB, 0x4E                   ; JMP short to offset 0x50
+    db 'UI'                         ; Magic bytes
+    db 'MyApp', 0                   ; App name (12 bytes, null-padded)
+    times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
+
+    ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
+    db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 0:  all white pixels
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 1:  white border, black inside
+    ; ... 14 more rows (4 bytes each) ...
+    db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 15: all white pixels
+
+    times 0x50 - ($ - $$) db 0     ; Pad to code entry at offset 0x50
+
+; --- Code Entry (offset 0x50) ---
+entry:
+    pusha
+    push ds
+    push es
+    ; ... app code here ...
+    pop es
+    pop ds
+    popa
+    retf
+```
+
+### Icon Design Guidelines
+
+- Use white (color 3) for outlines and main shapes - most visible on black desktop
+- Use black (color 0) for background/transparent areas
+- Cyan and magenta can be used for accents but are less visible
+- Keep designs simple - 16x16 at 2bpp is very low resolution
+- Icon X position should be divisible by 4 for byte alignment (the grid handles this)
+
+---
+
+## Memory Layout (v3.14.0)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -199,7 +334,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [ ] Settings/Control Panel
 
 ### Window Manager Enhancements
-- [ ] Overlapping window redraw
+- [x] Overlapping window redraw (z-order clipping)
 - [ ] Close button
 - [ ] Window resize
 
@@ -208,7 +343,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [ ] Serial mouse driver (Microsoft compatible)
 
 ### Future Enhancements
-- [ ] Cooperative multitasking (app_yield)
+- [x] Cooperative multitasking (app_yield, app_start)
 - [ ] File writing support
 - [ ] Long filename support
 
@@ -261,4 +396,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 4.0 (2026-02-11) - Updated for v3.13.0 Build 135*
+*Document version: 5.0 (2026-02-13) - Updated for v3.14.0 Build 144*
