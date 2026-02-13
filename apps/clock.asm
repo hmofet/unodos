@@ -28,10 +28,10 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Create clock window at X=110, Y=60, W=90, H=40
-    mov bx, 110                     ; X position
+    ; Create clock window at X=100, Y=60, W=110, H=40
+    mov bx, 100                     ; X position
     mov cx, 60                      ; Y position
-    mov dx, 90                      ; Width (content=88, fits "00:00:00"=64px + padding)
+    mov dx, 110                     ; Width (content=108, fits "00:00:00"=64px centered)
     mov si, 40                      ; Height
     mov ax, cs
     mov es, ax
@@ -84,8 +84,8 @@ entry:
     mov [cs:time_str+6], ah
     mov [cs:time_str+7], al
 
-    ; Clear time area (window-relative, centered in 88px content)
-    mov bx, 12
+    ; Clear time area (window-relative, centered in 108px content)
+    mov bx, 22
     mov cx, 8
     mov dx, 66
     mov si, 10
@@ -93,7 +93,7 @@ entry:
     int 0x80
 
     ; Draw time string (window-relative, centered)
-    mov bx, 12
+    mov bx, 22
     mov cx, 8
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING
