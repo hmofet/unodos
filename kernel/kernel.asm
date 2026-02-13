@@ -5666,12 +5666,14 @@ win_move_stub:
     je .invalid
 
     ; Save window pointer
+    ; NOTE: BP defaults to SS segment in x86 real mode!
+    ; Must use ds: override for all [bp + ...] accesses to reach kernel data.
     mov bp, bx
 
-    ; Read window dimensions
-    mov ax, [bp + WIN_OFF_WIDTH]
+    ; Read window dimensions (ds: override required - BP defaults to SS!)
+    mov ax, [ds:bp + WIN_OFF_WIDTH]
     mov [.win_w], ax
-    mov ax, [bp + WIN_OFF_HEIGHT]
+    mov ax, [ds:bp + WIN_OFF_HEIGHT]
     mov [.win_h], ax
 
     ; Clamp new position to keep window on screen
@@ -5690,17 +5692,17 @@ win_move_stub:
     mov [.new_y], ax
 .y_clamp_done:
 
-    ; Save old position before updating
-    mov ax, [bp + WIN_OFF_X]
+    ; Save old position before updating (ds: override for BP)
+    mov ax, [ds:bp + WIN_OFF_X]
     mov [.old_x], ax
-    mov ax, [bp + WIN_OFF_Y]
+    mov ax, [ds:bp + WIN_OFF_Y]
     mov [.old_y], ax
 
-    ; Update position in window table FIRST
+    ; Update position in window table FIRST (ds: override for BP)
     mov bx, [.new_x]
-    mov [bp + WIN_OFF_X], bx
+    mov [ds:bp + WIN_OFF_X], bx
     mov cx, [.new_y]
-    mov [bp + WIN_OFF_Y], cx
+    mov [ds:bp + WIN_OFF_Y], cx
 
     ; Draw window frame at new position immediately (makes window visible fast)
     mov ax, [.handle]
