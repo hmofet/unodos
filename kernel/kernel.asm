@@ -1873,55 +1873,67 @@ mouse_hittest_titlebar:
     mov cx, [mouse_x]
     mov dx, [mouse_y]
 
+    ; Step 1: Find topmost window (highest z-order) whose FULL AREA contains click
     xor si, si                      ; SI = window index
     mov di, window_table
     mov bp, 0xFFFF                  ; BP = best handle (0xFFFF = none)
     mov bl, 0                       ; BL = best z-order so far
 
-.check_loop:
+.find_topmost:
     cmp si, WIN_MAX_COUNT
-    jae .check_done
+    jae .found_topmost
 
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
-    jne .next
+    jne .ft_next
 
     ; Check X: window_x <= mouse_x < window_x + width
     mov ax, [di + WIN_OFF_X]
     cmp cx, ax
-    jb .next
+    jb .ft_next
     add ax, [di + WIN_OFF_WIDTH]
     cmp cx, ax
-    jae .next
+    jae .ft_next
 
-    ; Check Y: window_y <= mouse_y < window_y + titlebar_height
+    ; Check Y: window_y <= mouse_y < window_y + height (FULL window)
     mov ax, [di + WIN_OFF_Y]
     cmp dx, ax
-    jb .next
-    add ax, WIN_TITLEBAR_HEIGHT
+    jb .ft_next
+    add ax, [di + WIN_OFF_HEIGHT]
     cmp dx, ax
-    jae .next
+    jae .ft_next
 
-    ; Hit - check if this window has higher z-order than best
+    ; Point is inside this window - check z-order
     mov al, [di + WIN_OFF_ZORDER]
     cmp bp, 0xFFFF                  ; First hit?
-    je .new_best
-    cmp al, bl                      ; Higher z-order than current best?
-    jbe .next                       ; No, skip
+    je .ft_new_best
+    cmp al, bl
+    jbe .ft_next
 
-.new_best:
-    mov bp, si                      ; BP = best handle
-    mov bl, al                      ; BL = best z-order
+.ft_new_best:
+    mov bp, si                      ; BP = topmost window handle
+    mov bl, al                      ; BL = its z-order
 
-.next:
+.ft_next:
     add di, WIN_ENTRY_SIZE
     inc si
-    jmp .check_loop
+    jmp .find_topmost
 
-.check_done:
+.found_topmost:
     cmp bp, 0xFFFF
-    je .no_hit
+    je .no_hit                      ; Click not inside any window
 
-    ; Return best handle
+    ; Step 2: Check if click is in that window's TITLE BAR specifically
+    mov ax, bp
+    shl ax, 5
+    add ax, window_table
+    mov di, ax
+
+    mov ax, [di + WIN_OFF_Y]
+    add ax, WIN_TITLEBAR_HEIGHT
+    cmp dx, ax                      ; mouse_y < window_y + titlebar_height?
+    jae .no_hit                     ; Click is in body, not title bar
+
+    ; Click is in the topmost window's title bar
     mov ax, bp
     clc
     jmp .done
@@ -2239,9 +2251,46 @@ mouse_process_drag:
     je .no_focus
     mov byte [drag_needs_focus], 0
     push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     mov al, [drag_window]
     call win_focus_stub             ; Update z-order
-    call win_draw_stub              ; Redraw on top
+    call win_draw_stub              ; Redraw frame on top
+
+    ; Clear content area and trigger app redraw
+    xor ah, ah
+    mov al, [drag_window]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+
+    ; Clear content area: inside border, below title bar
+    mov bx, [si + WIN_OFF_X]
+    inc bx                          ; Inside left border
+    mov cx, [si + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov dx, [si + WIN_OFF_WIDTH]
+    sub dx, 2                       ; Inside both borders
+    mov di, [si + WIN_OFF_HEIGHT]
+    sub di, WIN_TITLEBAR_HEIGHT
+    dec di                          ; Above bottom border
+    mov si, di                      ; SI = height
+    call gfx_clear_area_stub
+
+    ; Post redraw event so the app redraws content
+    mov al, EVENT_WIN_REDRAW
+    xor dx, dx
+    mov dl, [drag_window]
+    call post_event
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
 .no_focus:
 
