@@ -12,9 +12,10 @@ API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
-API_WIN_GET_CONTENT     equ 25
 API_MOUSE_GET_STATE     equ 28
 API_MOUSE_IS_ENABLED    equ 30
+API_WIN_BEGIN_DRAW      equ 31
+API_WIN_END_DRAW        equ 32
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -42,12 +43,10 @@ entry:
     jc .exit_fail
     mov [cs:win_handle], al
 
-    ; Get content area
-    mov ah, API_WIN_GET_CONTENT
+    ; Set window drawing context - all draw calls are now relative to
+    ; this window's content area (0,0 = top-left of content)
+    mov ah, API_WIN_BEGIN_DRAW
     int 0x80
-    jc .exit_fail
-    mov [cs:content_x], bx
-    mov [cs:content_y], cx
 
     ; Drain pending events
 .drain_events:
@@ -62,27 +61,21 @@ entry:
     test al, al
     jz .no_mouse
 
-    ; Draw static labels
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 4
+    ; Draw static labels (window-relative coordinates)
+    mov bx, 4                       ; X=4 within content area
+    mov cx, 4                       ; Y=4 within content area
     mov si, label_pos
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 20
+    mov bx, 4
+    mov cx, 20
     mov si, label_buttons
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 48
+    mov bx, 4
+    mov cx, 48
     mov si, help_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -119,11 +112,9 @@ entry:
     mov ax, [cs:cur_y]
     mov [cs:last_y], ax
 
-    ; Clear position value area
-    mov bx, [cs:content_x]
-    add bx, 36
-    mov cx, [cs:content_y]
-    add cx, 4
+    ; Clear position value area (window-relative)
+    mov bx, 36
+    mov cx, 4
     mov dx, 100
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
@@ -139,11 +130,9 @@ entry:
     call word_to_decimal
     mov byte [cs:di], 0
 
-    ; Draw position
-    mov bx, [cs:content_x]
-    add bx, 36
-    mov cx, [cs:content_y]
-    add cx, 4
+    ; Draw position (window-relative)
+    mov bx, 36
+    mov cx, 4
     mov si, str_buffer
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -155,11 +144,9 @@ entry:
     je .check_key
     mov [cs:last_btn], al
 
-    ; Clear button area
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 32
+    ; Clear button area (window-relative)
+    mov bx, 4
+    mov cx, 32
     mov dx, 200
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
@@ -237,11 +224,9 @@ entry:
 .m_done:
     mov byte [cs:di], 0
 
-    ; Draw button state
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 32
+    ; Draw button state (window-relative)
+    mov bx, 4
+    mov cx, 32
     mov si, str_buffer
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -262,10 +247,8 @@ entry:
     jmp .main_loop
 
 .no_mouse:
-    mov bx, [cs:content_x]
-    add bx, 4
-    mov cx, [cs:content_y]
-    add cx, 20
+    mov bx, 4                       ; Window-relative
+    mov cx, 20
     mov si, no_mouse_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -286,6 +269,10 @@ entry:
     jmp .wait_esc
 
 .exit_ok:
+    ; Clear draw context before destroying window
+    mov ah, API_WIN_END_DRAW
+    int 0x80
+
     mov al, [cs:win_handle]
     mov ah, API_WIN_DESTROY
     int 0x80
@@ -348,8 +335,6 @@ word_to_decimal:
 
 window_title:   db 'Mouse Test', 0
 win_handle:     db 0
-content_x:      dw 0
-content_y:      dw 0
 
 cur_x:          dw 0
 cur_y:          dw 0
