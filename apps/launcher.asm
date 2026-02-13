@@ -23,11 +23,18 @@ API_APP_START           equ 35
 API_APP_YIELD           equ 34
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
-API_WIN_GET_CONTENT     equ 25
+API_WIN_BEGIN_DRAW      equ 31
+API_WIN_END_DRAW        equ 32
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
+
+; Window dimensions
+WIN_WIDTH               equ 160
+WIN_HEIGHT              equ 100
+CONTENT_WIDTH           equ 158         ; WIN_WIDTH - 2 (borders)
+CONTENT_HEIGHT          equ 89          ; WIN_HEIGHT - 10 (titlebar) - 1 (border)
 
 ; Menu constants
 MENU_ITEM_HEIGHT        equ 12          ; Pixels per menu item
@@ -176,6 +183,10 @@ entry:
     jmp .main_loop
 
 .exit_ok:
+    ; Clear draw context before destroying window
+    mov ah, API_WIN_END_DRAW
+    int 0x80
+
     ; Destroy window
     mov al, [cs:win_handle]
     mov ah, API_WIN_DESTROY
@@ -309,8 +320,8 @@ create_window:
     ; Create window: X=80, Y=40, W=160, H=100
     mov bx, 80                      ; X position
     mov cx, 40                      ; Y position
-    mov dx, 160                     ; Width
-    mov si, 100                     ; Height
+    mov dx, WIN_WIDTH               ; Width
+    mov si, WIN_HEIGHT              ; Height
     mov ax, cs
     mov es, ax
     mov di, window_title            ; ES:DI = title
@@ -322,16 +333,9 @@ create_window:
     ; Save window handle
     mov [cs:win_handle], al
 
-    ; Get content area
-    mov ah, API_WIN_GET_CONTENT
+    ; Set drawing context - all coordinates now window-relative
+    mov ah, API_WIN_BEGIN_DRAW
     int 0x80
-    jc .done
-
-    ; Save content area bounds
-    mov [cs:content_x], bx
-    mov [cs:content_y], cx
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
 
     clc
 
@@ -349,11 +353,11 @@ create_window:
 draw_menu:
     pusha
 
-    ; Clear content area first
-    mov bx, [cs:content_x]
-    mov cx, [cs:content_y]
-    mov dx, [cs:content_w]
-    mov si, [cs:content_h]
+    ; Clear content area (window-relative: 0,0 is top-left of content)
+    xor bx, bx
+    xor cx, cx
+    mov dx, CONTENT_WIDTH
+    mov si, CONTENT_HEIGHT
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -369,16 +373,14 @@ draw_menu:
     cmp al, [cs:discovered_count]
     jae .draw_help
 
-    ; Calculate Y position: content_y + MENU_TOP_PADDING + (index * MENU_ITEM_HEIGHT)
+    ; Calculate Y position: MENU_TOP_PADDING + (index * MENU_ITEM_HEIGHT)
     mov bl, MENU_ITEM_HEIGHT
     mul bl                          ; AX = index * MENU_ITEM_HEIGHT
-    add ax, [cs:content_y]
     add ax, MENU_TOP_PADDING
     mov [cs:draw_y], ax             ; Save Y position
 
     ; Calculate X position
-    mov ax, [cs:content_x]
-    add ax, MENU_LEFT_PADDING
+    mov ax, MENU_LEFT_PADDING
     mov [cs:draw_x], ax             ; Save X position
 
     ; Check if this item is selected
@@ -413,11 +415,9 @@ draw_menu:
     jmp .draw_loop
 
 .no_apps:
-    ; Display "No apps found" message in WHITE
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, MENU_TOP_PADDING
+    ; Display "No apps found" message in WHITE (window-relative)
+    mov bx, MENU_LEFT_PADDING
+    mov cx, MENU_TOP_PADDING
     mov si, no_apps_msg
     mov ah, 6                       ; API_GFX_DRAW_STRING_INVERTED (white)
     int 0x80
@@ -440,27 +440,23 @@ draw_y:     dw 0
 draw_error:
     pusha
 
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, [cs:content_h]
+    ; Window-relative coordinates
+    mov bx, MENU_LEFT_PADDING
+    mov cx, CONTENT_HEIGHT
     sub cx, 36                      ; Above help text
     mov si, error_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Draw error code on next line
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
+    mov bx, MENU_LEFT_PADDING
     add cx, 10
     mov si, error_code_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Draw the error digit
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    add bx, 48
+    mov bx, MENU_LEFT_PADDING + 48
     mov al, [cs:last_error]
     add al, '0'
     mov ah, API_GFX_DRAW_CHAR
@@ -558,10 +554,6 @@ filename_buffer: times 13 db 0
 
 window_title:   db 'Launcher', 0
 win_handle:     db 0
-content_x:      dw 0
-content_y:      dw 0
-content_w:      dw 0
-content_h:      dw 0
 selected:       db 0
 app_handle:     dw 0
 last_error:     db 0

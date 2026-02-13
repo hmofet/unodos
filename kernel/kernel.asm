@@ -6180,11 +6180,12 @@ redraw_affected_windows:
     push di
     push bp
 
-    ; Outer loop: z = 0 to 15 (draw lowest z first, highest last = on top)
+    ; Outer loop: z = 0 to 14 (draw lowest z first)
+    ; Skip z=15 (topmost) - callers handle the topmost window separately
     mov byte [.cur_z], 0
 
 .z_loop:
-    cmp byte [.cur_z], 16
+    cmp byte [.cur_z], 15
     jae .raw_done
 
     ; Inner loop: scan all windows for matching z-order
@@ -6232,17 +6233,32 @@ redraw_affected_windows:
     cmp [redraw_old_y], ax
     jge .raw_next
 
-    ; Windows overlap - redraw this window's frame
+    ; Windows overlap - redraw this window's frame and clear content
     push si
     push bp
     mov ax, bp                      ; AX = window handle
     and al, 0x0F
     call win_draw_stub
 
-    ; Post EVENT_WIN_REDRAW so the app redraws content
+    ; Clear content area (background apps can't draw due to z-order clipping)
+    ; SI still points to window table entry (preserved by win_draw_stub)
+    mov bx, [si + WIN_OFF_X]
+    inc bx                          ; Inside left border
+    mov cx, [si + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov dx, [si + WIN_OFF_WIDTH]
+    sub dx, 2                       ; Inside both borders
+    push word [si + WIN_OFF_HEIGHT]
+    pop si
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si                          ; Above bottom border
+    call gfx_clear_area_stub
+
+    ; Post EVENT_WIN_REDRAW so app can redraw when focused
     mov al, EVENT_WIN_REDRAW
-    mov dx, bp                      ; DX = window handle
+    mov dx, bp                      ; DX = window handle (BP preserved)
     call post_event
+
     pop bp
     pop si
 
