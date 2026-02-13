@@ -1942,25 +1942,44 @@ debug_char:
     popa
     ret
 
+; debug_hex_byte - Print AL as 2 hex digits on debug line
+; Preserves all registers.
+debug_hex_byte:
+    push ax
+    push cx
+    mov cl, al
+    shr al, 4
+    add al, '0'
+    cmp al, '9'
+    jbe .high_ok
+    add al, 7                       ; Adjust for A-F
+.high_ok:
+    call debug_char
+    mov al, cl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .low_ok
+    add al, 7
+.low_ok:
+    call debug_char
+    pop cx
+    pop ax
+    ret
+
 ; ============================================================================
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - DIAGNOSTIC BUILD 124
-; Draws character codes at Y=190 to trace execution path.
-; Expected output when clicking title bar: "1 2 3 E V U D C"
+; mouse_process_drag - DIAGNOSTIC BUILD 125
+; Shows target coordinates as hex at Y=190.
+; Format: "X:HH Y:HH" where HH = low byte of target coordinate
 mouse_process_drag:
     ; Reset debug position for this pass
     mov word [debug_x], 0
 
-    mov al, '1'                     ; '1' = function was called
-    call debug_char
-
     cmp byte [drag_active], 0
-    je .done
-
-    mov al, '2'                     ; '2' = drag_active is 1
-    call debug_char
+    je .inactive
 
     ; Read drag state
     cli
@@ -1970,15 +1989,27 @@ mouse_process_drag:
     mov cx, [drag_target_y]
     sti
 
-    push ax                         ; Save handle for debug_char
-    mov al, '3'                     ; '3' = about to call win_move_stub
+    ; Print "X:" then target_x low byte as hex
+    push ax
+    mov al, 'X'
     call debug_char
-    pop ax                          ; Restore handle
+    mov al, bl                      ; Low byte of target_x
+    call debug_hex_byte
+    ; Print " Y:" then target_y low byte as hex
+    mov al, ' '
+    call debug_char
+    mov al, 'Y'
+    call debug_char
+    mov al, cl                      ; Low byte of target_y
+    call debug_hex_byte
+    pop ax
 
     ; AX=handle, BX=target_x, CX=target_y
     call win_move_stub
+    jmp .done
 
-    mov al, '!'                     ; '!' = returned from win_move_stub
+.inactive:
+    mov al, '-'                     ; '-' = no drag active
     call debug_char
 
 .done:
@@ -2067,8 +2098,8 @@ gfx_draw_string_inverted:
 ; Kernel API Table - At fixed address 0x1000:0x0D10
 ; ============================================================================
 
-; Pad to exactly offset 0x0D10 - expanded for mouse cursor + drag + bounds checks
-times 0x0D80 - ($ - $$) db 0
+; Pad to exactly offset 0x0D10 - expanded for debug hex output
+times 0x0DC0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
