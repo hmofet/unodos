@@ -17,8 +17,12 @@ API_MOUSE_IS_ENABLED    equ 30
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 
+; Multitasking
+API_APP_YIELD           equ 34
+
 ; Event types
 EVENT_KEY_PRESS         equ 1
+EVENT_WIN_REDRAW        equ 6
 
 ; Entry point
 entry:
@@ -61,24 +65,8 @@ entry:
     test al, al
     jz .no_mouse
 
-    ; Draw static labels (window-relative coordinates)
-    mov bx, 4                       ; X=4 within content area
-    mov cx, 4                       ; Y=4 within content area
-    mov si, label_pos
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov bx, 4
-    mov cx, 20
-    mov si, label_buttons
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov bx, 4
-    mov cx, 48
-    mov si, help_msg
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
+    ; Draw static labels
+    call draw_labels
 
     ; Initialize tracking state
     mov word [cs:last_x], 0xFFFF
@@ -87,6 +75,8 @@ entry:
     ; Main loop
 .main_loop:
     sti
+    mov ah, API_APP_YIELD           ; Yield to other tasks
+    int 0x80
 
     ; Get mouse state: BX=X, CX=Y, DL=buttons
     mov ah, API_MOUSE_GET_STATE
@@ -235,15 +225,20 @@ entry:
     mov ah, API_EVENT_GET
     int 0x80
     jc .delay
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    ; Redraw static labels and force value refresh
+    call draw_labels
+    mov word [cs:last_x], 0xFFFF
+    mov byte [cs:last_btn], 0xFF
+    jmp .main_loop
+.not_redraw:
     cmp al, EVENT_KEY_PRESS
     jne .delay
     cmp dl, 27                      ; ESC?
     je .exit_ok
 
 .delay:
-    mov cx, 0x400
-.delay_loop:
-    loop .delay_loop
     jmp .main_loop
 
 .no_mouse:
@@ -255,17 +250,15 @@ entry:
 
 .wait_esc:
     sti
+    mov ah, API_APP_YIELD
+    int 0x80
     mov ah, API_EVENT_GET
     int 0x80
-    jc .wait_delay
+    jc .wait_esc
     cmp al, EVENT_KEY_PRESS
-    jne .wait_delay
+    jne .wait_esc
     cmp dl, 27
     je .exit_ok
-.wait_delay:
-    mov cx, 0x1000
-.wait_delay_loop:
-    loop .wait_delay_loop
     jmp .wait_esc
 
 .exit_ok:
@@ -287,6 +280,33 @@ entry:
     pop ds
     popa
     retf
+
+; ============================================================================
+; draw_labels - Draw static labels (window-relative coordinates)
+; ============================================================================
+draw_labels:
+    pusha
+
+    mov bx, 4                       ; X=4 within content area
+    mov cx, 4                       ; Y=4 within content area
+    mov si, label_pos
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 4
+    mov cx, 20
+    mov si, label_buttons
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 4
+    mov cx, 48
+    mov si, help_msg
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    popa
+    ret
 
 ; ============================================================================
 ; word_to_decimal - Convert AX to decimal string at CS:DI

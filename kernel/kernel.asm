@@ -139,7 +139,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-32)
     ; Validate function number
-    cmp ah, 33                      ; Max function + 1 (0-32)
+    cmp ah, 36                      ; Max function + 1 (0-36)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -203,10 +203,14 @@ int_80_handler:
 
     ; Call the function - it will use near RET
     ; We simulate a CALL by pushing return address then jumping
-    push word .return_point
+    push word int80_return_point
     jmp word [cs:syscall_func]
 
-.return_point:
+.invalid_function:
+    stc                             ; Set carry flag for error
+    iret
+
+int80_return_point:
     ; Function returned - preserve CF from function in return FLAGS
     ; Stack: [caller's DS] [IP] [CS] [FLAGS]
     ; IMPORTANT: Do NOT destroy AX - functions return values in AX!
@@ -223,10 +227,6 @@ int_80_handler:
     or word [bp+6], 0x0001          ; Set CF in return FLAGS
 .iret_done:
     pop bp
-    iret
-
-.invalid_function:
-    stc                             ; Set carry flag for error
     iret
 
 ; ============================================================================
@@ -1215,6 +1215,7 @@ test_app_loader:
 
 auto_load_launcher:
     push ax
+    push bx
     push dx
     push si
 
@@ -1227,13 +1228,40 @@ auto_load_launcher:
     call app_load_stub
     jc .failed
 
-    ; Run the launcher
-    call app_run_stub
+    ; Start launcher as a cooperative task (non-blocking)
+    call app_start_stub
+    jc .failed
+
+    ; Enter scheduler - switch to the launcher task
+    mov byte [current_task], 0xFF   ; Kernel is not a task
+    call scheduler_next             ; Find the launcher task
+    cmp al, 0xFF
+    je .failed
+
+    ; Initial context switch to first task
+    mov [current_task], al
+    mov [scheduler_last], al
+
+    ; Restore per-task state
+    mov al, [bx + APP_OFF_DRAW_CTX]
+    mov [draw_context], al
+    mov ax, [bx + APP_OFF_CALLER_DS]
+    mov [caller_ds], ax
+    mov ax, [bx + APP_OFF_CALLER_ES]
+    mov [caller_es], ax
+
+    ; Switch stack and enter task
+    cli
+    mov ss, [bx + APP_OFF_STACK_SEG]
+    mov sp, [bx + APP_OFF_STACK_PTR]
+    sti
+    ret                             ; Enters launcher via int80_return_point
 
 .failed:
-    ; On any error or launcher exit, fall through to keyboard demo
+    ; On any error, fall through to keyboard demo
     pop si
     pop dx
+    pop bx
     pop ax
     call keyboard_demo
     ret
@@ -2375,7 +2403,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 34                           ; Number of function slots (0-33)
+    dw 37                           ; Number of function slots (0-36)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2432,6 +2460,11 @@ kernel_api_table:
 
     ; Text Measurement API
     dw gfx_text_width               ; 33: Measure string width in pixels
+
+    ; Cooperative Multitasking API
+    dw app_yield_stub               ; 34: Yield CPU to next task
+    dw app_start_stub               ; 35: Start task (non-blocking)
+    dw app_exit_stub                ; 36: Exit current task
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -2857,6 +2890,7 @@ EVENT_KEY_RELEASE   equ 2           ; Future
 EVENT_TIMER         equ 3           ; Future
 EVENT_MOUSE         equ 4
 EVENT_WIN_MOVED     equ 5
+EVENT_WIN_REDRAW    equ 6               ; Window needs content redraw (DX = handle)
 
 ; Event structure (3 bytes):
 ;   +0: type (byte)
@@ -5296,6 +5330,33 @@ app_load_stub:
     mov [.slot], cx
     mov [.slot_off], di
 
+    ; Safety: Terminate any RUNNING app in the target segment
+    ; Prevents overwriting running code when launching a new app
+    push di
+    push cx
+    xor bx, bx
+    mov bh, [.target_seg]          ; BX = target segment (e.g., 0x2000 or 0x3000)
+    mov di, app_table
+    xor cx, cx
+.kill_existing:
+    cmp cx, APP_MAX_COUNT
+    jae .kill_done
+    cmp byte [di + APP_OFF_STATE], APP_STATE_RUNNING
+    jne .kill_next
+    cmp [di + APP_OFF_CODE_SEG], bx
+    jne .kill_next
+    ; Found running app at target segment - force terminate
+    mov byte [di + APP_OFF_STATE], APP_STATE_FREE
+    mov al, cl                      ; AL = task handle for destroy_task_windows
+    call destroy_task_windows
+.kill_next:
+    add di, APP_ENTRY_SIZE
+    inc cx
+    jmp .kill_existing
+.kill_done:
+    pop cx
+    pop di
+
     ; Step 2: Mount filesystem
     mov al, [.drive]                ; AL = drive number (fs_mount_stub expects AL, not DL!)
     xor ah, ah                      ; AH = 0 (auto-detect driver)
@@ -5531,6 +5592,275 @@ register_shell_stub:
     ret
 
 ; ============================================================================
+; Cooperative Multitasking (v3.14.0)
+; ============================================================================
+
+; scheduler_next - Find next RUNNING task (round-robin)
+; Output: AL = task handle (0xFF if none), BX = app_table entry offset
+; Preserves: CX, DX, SI, DI
+scheduler_next:
+    push cx
+    mov cl, [scheduler_last]
+    inc cl
+    and cl, 0x0F                    ; Wrap to 0-15
+    mov ch, 16                      ; Check all 16 slots
+
+.scan:
+    cmp ch, 0
+    je .none_found
+
+    ; Calculate entry offset
+    mov al, cl
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5                      ; BX = slot * 32
+    add bx, app_table
+
+    cmp byte [bx + APP_OFF_STATE], APP_STATE_RUNNING
+    je .found
+
+    inc cl
+    and cl, 0x0F                    ; Wrap
+    dec ch
+    jmp .scan
+
+.found:
+    mov al, cl                      ; AL = task handle
+    pop cx
+    ret
+
+.none_found:
+    mov al, 0xFF
+    pop cx
+    ret
+
+; app_yield_stub - Yield CPU to next task (API 34)
+; Cooperative context switch: saves current task state, switches to next RUNNING task
+; Called by apps via INT 0x80 with AH=34
+app_yield_stub:
+    ; --- Save current task context ---
+    mov al, [current_task]
+    cmp al, 0xFF
+    je .no_save
+
+    xor ah, ah
+    mov si, ax
+    shl si, 5                      ; SI = handle * 32
+    add si, app_table
+
+    ; Save draw_context per task
+    mov al, [draw_context]
+    mov [si + APP_OFF_DRAW_CTX], al
+    ; Save caller_ds/es per task
+    mov ax, [caller_ds]
+    mov [si + APP_OFF_CALLER_DS], ax
+    mov ax, [caller_es]
+    mov [si + APP_OFF_CALLER_ES], ax
+    ; Save SS:SP (this captures the full stack state)
+    mov [si + APP_OFF_STACK_SEG], ss
+    mov [si + APP_OFF_STACK_PTR], sp
+
+.no_save:
+    ; --- Find next task ---
+    call scheduler_next             ; AL = next handle, BX = entry offset
+    cmp al, 0xFF
+    je .idle
+
+    cmp al, [current_task]
+    je .same_task                   ; Only one task running, just return
+
+    ; --- Switch to next task ---
+    mov [current_task], al
+    mov [scheduler_last], al
+
+    ; Restore draw_context
+    mov al, [bx + APP_OFF_DRAW_CTX]
+    mov [draw_context], al
+    ; Restore caller_ds/es
+    mov ax, [bx + APP_OFF_CALLER_DS]
+    mov [caller_ds], ax
+    mov ax, [bx + APP_OFF_CALLER_ES]
+    mov [caller_es], ax
+    ; Restore SS:SP (this switches to the other task's stack!)
+    cli
+    mov ss, [bx + APP_OFF_STACK_SEG]
+    mov sp, [bx + APP_OFF_STACK_PTR]
+    sti
+
+.same_task:
+    ret                             ; Returns via int80_return_point → pop ds → iret
+
+.idle:
+    sti
+    hlt                             ; Wait for interrupt
+    jmp .no_save                    ; Try scheduler again
+
+; app_start_stub - Start task non-blocking (API 35)
+; Input: AL = app handle (must be in LOADED state)
+; Output: CF clear on success, CF set on error
+app_start_stub:
+    push bx
+    push cx
+    push es
+
+    ; Validate handle
+    xor ah, ah
+    cmp ax, APP_MAX_COUNT
+    jae .start_invalid
+
+    ; Get app entry
+    mov bx, ax
+    shl bx, 5
+    add bx, app_table
+
+    ; Must be LOADED
+    cmp byte [bx + APP_OFF_STATE], APP_STATE_LOADED
+    jne .start_invalid
+
+    ; Build initial stack frame in app's segment
+    ; When the scheduler first switches to this task, yield_stub's ret
+    ; pops int80_return_point, which does pop ds → iret into the app.
+    ;
+    ; Stack layout (growing down from FFFE):
+    ;   FFFC: task_exit_handler CS (0x1000)  ← for app's RETF exit
+    ;   FFFA: task_exit_handler offset       ← for app's RETF exit
+    ;   FFF8: FLAGS (0x0202, IF=1)           ← for IRET
+    ;   FFF6: app CS                         ← for IRET
+    ;   FFF4: app IP (0x0000)                ← for IRET
+    ;   FFF2: app DS (= app CS)              ← for pop ds
+    ;   FFF0: int80_return_point             ← for yield's ret
+    ;   Saved SP = FFF0
+
+    mov cx, [bx + APP_OFF_CODE_SEG] ; CX = app segment
+    mov es, cx
+
+    mov word [es:0xFFFC], 0x1000            ; task_exit CS
+    mov word [es:0xFFFA], task_exit_handler  ; task_exit IP
+    mov word [es:0xFFF8], 0x0202            ; FLAGS (IF=1)
+    mov [es:0xFFF6], cx                     ; CS = app segment
+    mov word [es:0xFFF4], 0x0000            ; IP = entry point
+    mov [es:0xFFF2], cx                     ; DS = app segment
+    mov word [es:0xFFF0], int80_return_point
+
+    ; Save initial SS:SP to app_table
+    mov [bx + APP_OFF_STACK_SEG], cx        ; SS = app segment
+    mov word [bx + APP_OFF_STACK_PTR], 0xFFF0
+
+    ; Initialize per-task saved context
+    mov byte [bx + APP_OFF_DRAW_CTX], 0xFF  ; No draw context
+    mov [bx + APP_OFF_CALLER_DS], cx        ; caller_ds = app seg
+    mov [bx + APP_OFF_CALLER_ES], cx        ; caller_es = app seg
+
+    ; Mark as RUNNING
+    mov byte [bx + APP_OFF_STATE], APP_STATE_RUNNING
+
+    clc
+    jmp .start_done
+
+.start_invalid:
+    stc
+
+.start_done:
+    pop es
+    pop cx
+    pop bx
+    ret
+
+; task_exit_handler - Reached when app does RETF (normal exit)
+; The initial stack frame has CS:IP = 0x1000:task_exit_handler
+task_exit_handler:
+    ; We're in kernel CS (0x1000) since RETF popped our CS:IP
+    mov ax, 0x1000
+    mov ds, ax
+    ; Fall through to app_exit_common
+
+; app_exit_stub - Exit current task (API 36)
+app_exit_stub:
+    ; Mark current task as FREE
+    mov al, [current_task]
+    cmp al, 0xFF
+    je .exit_no_task
+
+    xor ah, ah
+    mov si, ax
+    shl si, 5
+    add si, app_table
+    mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+
+    ; Destroy all windows owned by this task
+    push ax                         ; Save task handle
+    call destroy_task_windows
+    pop ax
+
+    ; Find next task to run
+    mov byte [current_task], 0xFF
+    call scheduler_next
+    cmp al, 0xFF
+    je .exit_no_tasks
+
+    ; Switch to next task
+    mov [current_task], al
+    mov [scheduler_last], al
+
+    mov al, [bx + APP_OFF_DRAW_CTX]
+    mov [draw_context], al
+    mov ax, [bx + APP_OFF_CALLER_DS]
+    mov [caller_ds], ax
+    mov ax, [bx + APP_OFF_CALLER_ES]
+    mov [caller_es], ax
+    cli
+    mov ss, [bx + APP_OFF_STACK_SEG]
+    mov sp, [bx + APP_OFF_STACK_PTR]
+    sti
+    ret                             ; Resumes next task via int80_return_point
+
+.exit_no_tasks:
+    ; No tasks left - reload launcher
+    call auto_load_launcher
+.exit_no_task:
+    ret
+
+; destroy_task_windows - Destroy all windows owned by a task
+; Input: AL = task handle to match against window owners
+destroy_task_windows:
+    push ax
+    push bx
+    push cx
+    push si
+
+    mov si, window_table
+    xor cx, cx                      ; CX = window handle counter
+
+.dtw_loop:
+    cmp cx, WIN_MAX_COUNT
+    jae .dtw_done
+
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .dtw_next
+    cmp [si + WIN_OFF_OWNER], al
+    jne .dtw_next
+
+    ; Destroy this window
+    push ax
+    push cx
+    mov al, cl                      ; AL = window handle
+    call win_destroy_stub
+    pop cx
+    pop ax
+
+.dtw_next:
+    add si, WIN_ENTRY_SIZE
+    inc cx
+    jmp .dtw_loop
+
+.dtw_done:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
 ; Window Manager API (v3.12.0)
 ; ============================================================================
 
@@ -5611,7 +5941,10 @@ win_create_stub:
     mov [bx + WIN_OFF_HEIGHT], ax
 
     mov byte [bx + WIN_OFF_ZORDER], 15          ; Top of stack
-    mov byte [bx + WIN_OFF_OWNER], 0xFF         ; Kernel owned
+    push ax
+    mov al, [current_task]
+    mov [bx + WIN_OFF_OWNER], al                ; Owned by creating task
+    pop ax
 
     ; Copy title (up to 11 chars)
     ; App passes title as ES:DI. caller_es has the app's ES segment.
@@ -5666,6 +5999,92 @@ win_create_stub:
 .save_flags: db 0
 .slot_off:   dw 0
 
+; redraw_affected_windows - Redraw windows that overlapped a cleared rectangle
+; Input: Variables redraw_old_x/y/w/h set by caller
+; Redraws frames and posts EVENT_WIN_REDRAW for each affected window
+redraw_affected_windows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov si, window_table
+    xor bp, bp                      ; BP = window handle counter
+
+.raw_loop:
+    cmp bp, WIN_MAX_COUNT
+    jae .raw_done
+
+    ; Skip non-visible windows
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .raw_next
+
+    ; Rectangle intersection test:
+    ; win_x < old_x + old_w  AND  old_x < win_x + win_w
+    ; win_y < old_y + old_h  AND  old_y < win_y + win_h
+
+    ; Test: win_x < old_x + old_w
+    mov ax, [redraw_old_x]
+    add ax, [redraw_old_w]
+    cmp [si + WIN_OFF_X], ax
+    jge .raw_next                   ; win_x >= old_x + old_w → no overlap
+
+    ; Test: old_x < win_x + win_w
+    mov ax, [si + WIN_OFF_X]
+    add ax, [si + WIN_OFF_WIDTH]
+    cmp [redraw_old_x], ax
+    jge .raw_next                   ; old_x >= win_x + win_w → no overlap
+
+    ; Test: win_y < old_y + old_h
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
+    cmp [si + WIN_OFF_Y], ax
+    jge .raw_next                   ; win_y >= old_y + old_h → no overlap
+
+    ; Test: old_y < win_y + win_h
+    mov ax, [si + WIN_OFF_Y]
+    add ax, [si + WIN_OFF_HEIGHT]
+    cmp [redraw_old_y], ax
+    jge .raw_next                   ; old_y >= win_y + win_h → no overlap
+
+    ; Windows overlap - redraw this window's frame
+    push si
+    push bp
+    mov ax, bp                      ; AX = window handle
+    and al, 0x0F
+    call win_draw_stub
+
+    ; Post EVENT_WIN_REDRAW so the app redraws content
+    mov al, EVENT_WIN_REDRAW
+    mov dx, bp                      ; DX = window handle
+    call post_event
+    pop bp
+    pop si
+
+.raw_next:
+    add si, WIN_ENTRY_SIZE
+    inc bp
+    jmp .raw_loop
+
+.raw_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Variables for redraw_affected_windows
+redraw_old_x:   dw 0
+redraw_old_y:   dw 0
+redraw_old_w:   dw 0
+redraw_old_h:   dw 0
+
 ; win_destroy_stub - Destroy a window
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
@@ -5695,12 +6114,18 @@ win_destroy_stub:
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
 
+    ; Save window bounds for redraw_affected_windows
+    mov cx, [bx + WIN_OFF_X]
+    mov [redraw_old_x], cx
+    mov dx, [bx + WIN_OFF_Y]
+    mov [redraw_old_y], dx
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov [redraw_old_w], si
+    mov di, [bx + WIN_OFF_HEIGHT]
+    mov [redraw_old_h], di
+
     ; Clear window area
     push bx
-    mov cx, [bx + WIN_OFF_X]
-    mov dx, [bx + WIN_OFF_Y]
-    mov si, [bx + WIN_OFF_WIDTH]
-    mov di, [bx + WIN_OFF_HEIGHT]
     ; gfx_clear_area expects: BX=X, CX=Y, DX=Width, SI=Height
     mov bx, cx                      ; BX = X
     mov cx, dx                      ; CX = Y
@@ -5709,8 +6134,11 @@ win_destroy_stub:
     call gfx_clear_area_stub
     pop bx
 
-    ; Mark as free
+    ; Mark as free BEFORE redrawing (so this window isn't redrawn)
     mov byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
+
+    ; Redraw any windows that were overlapped by this one
+    call redraw_affected_windows
 
     clc
     jmp .done
@@ -6042,6 +6470,17 @@ win_move_stub:
     call gfx_clear_area_stub
 
 .clear_done:
+    ; Trigger redraw of windows that overlapped the old position
+    mov ax, [.old_x]
+    mov [redraw_old_x], ax
+    mov ax, [.old_y]
+    mov [redraw_old_y], ax
+    mov ax, [.win_w]
+    mov [redraw_old_w], ax
+    mov ax, [.win_h]
+    mov [redraw_old_h], ax
+    call redraw_affected_windows
+
     clc
     jmp .done
 
@@ -6295,10 +6734,26 @@ ide_sectors:            dw 63           ; Sectors per track (for CHS fallback)
 ;   Offset 2:  2 bytes - Code segment
 ;   Offset 4:  2 bytes - Code offset (entry point, always 0)
 ;   Offset 6:  2 bytes - Code size
-;   Offset 8:  2 bytes - Stack segment (for future multitasking)
-;   Offset 10: 2 bytes - Stack pointer (for future multitasking)
+;   Offset 8:  2 bytes - Stack segment (context switch)
+;   Offset 10: 2 bytes - Stack pointer (context switch)
 ;   Offset 12: 11 bytes - Filename (8.3 format)
-;   Offset 23: 9 bytes - Reserved
+;   Offset 23: 1 byte  - Saved draw_context
+;   Offset 24: 2 bytes - Saved caller_ds
+;   Offset 26: 2 bytes - Saved caller_es
+;   Offset 28: 4 bytes - Reserved
+
+; App entry field offsets
+APP_OFF_STATE       equ 0
+APP_OFF_PRIORITY    equ 1
+APP_OFF_CODE_SEG    equ 2
+APP_OFF_CODE_OFF    equ 4
+APP_OFF_CODE_SIZE   equ 6
+APP_OFF_STACK_SEG   equ 8
+APP_OFF_STACK_PTR   equ 10
+APP_OFF_FILENAME    equ 12
+APP_OFF_DRAW_CTX    equ 23
+APP_OFF_CALLER_DS   equ 24
+APP_OFF_CALLER_ES   equ 26
 
 APP_STATE_FREE      equ 0
 APP_STATE_LOADED    equ 1
@@ -6316,6 +6771,10 @@ app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
 
 ; Shell tracking (for auto-return to launcher)
 shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none)
+
+; Cooperative multitasking scheduler state
+current_task:       db 0xFF                 ; Currently running task (0xFF = kernel/none)
+scheduler_last:     db 0                    ; Last task checked (for round-robin)
 
 ; ============================================================================
 ; Window Manager Data (v3.12.0)

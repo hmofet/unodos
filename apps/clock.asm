@@ -15,8 +15,12 @@ API_WIN_DESTROY         equ 21
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 
+; Multitasking
+API_APP_YIELD           equ 34
+
 ; Event types
 EVENT_KEY_PRESS         equ 1
+EVENT_WIN_REDRAW        equ 6
 
 ; Entry point - called by kernel via far CALL
 entry:
@@ -52,6 +56,8 @@ entry:
     ; Main loop - update time only when seconds change
 .main_loop:
     sti
+    mov ah, API_APP_YIELD           ; Yield to other tasks
+    int 0x80
 
     ; Read RTC time using BIOS INT 1Ah, AH=02h
     ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
@@ -105,17 +111,17 @@ entry:
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    mov byte [cs:last_secs], 0xFF   ; Force redraw on next loop
+    jmp .main_loop
+.not_redraw:
     cmp al, EVENT_KEY_PRESS
     jne .no_event
     cmp dl, 27                      ; ESC key?
     je .exit_ok
 
 .no_event:
-    ; Short delay to avoid busy-spinning
-    mov cx, 0x2000
-.delay:
-    loop .delay
-
     jmp .main_loop
 
 ; Convert BCD byte in AL to two ASCII digits
