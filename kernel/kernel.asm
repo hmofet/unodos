@@ -1868,16 +1868,19 @@ mouse_hittest_titlebar:
     push dx
     push si
     push di
+    push bp
 
     mov cx, [mouse_x]
     mov dx, [mouse_y]
 
     xor si, si                      ; SI = window index
     mov di, window_table
+    mov bp, 0xFFFF                  ; BP = best handle (0xFFFF = none)
+    mov bl, 0                       ; BL = best z-order so far
 
 .check_loop:
     cmp si, WIN_MAX_COUNT
-    jae .no_hit
+    jae .check_done
 
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .next
@@ -1898,20 +1901,36 @@ mouse_hittest_titlebar:
     cmp dx, ax
     jae .next
 
-    ; Hit - return window handle
-    mov ax, si
-    clc
-    jmp .done
+    ; Hit - check if this window has higher z-order than best
+    mov al, [di + WIN_OFF_ZORDER]
+    cmp bp, 0xFFFF                  ; First hit?
+    je .new_best
+    cmp al, bl                      ; Higher z-order than current best?
+    jbe .next                       ; No, skip
+
+.new_best:
+    mov bp, si                      ; BP = best handle
+    mov bl, al                      ; BL = best z-order
 
 .next:
     add di, WIN_ENTRY_SIZE
     inc si
     jmp .check_loop
 
+.check_done:
+    cmp bp, 0xFFFF
+    je .no_hit
+
+    ; Return best handle
+    mov ax, bp
+    clc
+    jmp .done
+
 .no_hit:
     stc
 
 .done:
+    pop bp
     pop di
     pop si
     pop dx
@@ -1945,6 +1964,7 @@ mouse_drag_update:
 
     ; Start drag setup
     mov [drag_window], al
+    mov byte [drag_needs_focus], 1  ; Signal focus needed (handled in main thread)
 
     ; Calculate grab offset = mouse_pos - window_pos
     xor ah, ah
@@ -2214,6 +2234,17 @@ restore_drag_content:
 ; mouse_process_drag - Process pending window drag (called from event_get_stub)
 ; Polls drag state and moves window if target differs from current position.
 mouse_process_drag:
+    ; Handle deferred focus (bring clicked window to front)
+    cmp byte [drag_needs_focus], 0
+    je .no_focus
+    mov byte [drag_needs_focus], 0
+    push ax
+    mov al, [drag_window]
+    call win_focus_stub             ; Update z-order
+    call win_draw_stub              ; Redraw on top
+    pop ax
+.no_focus:
+
     cmp byte [drag_active], 0
     je .done
 
@@ -2393,11 +2424,11 @@ gfx_text_width:
     ret
 
 ; ============================================================================
-; Kernel API Table - At fixed address 0x1000:0x0D10
+; Kernel API Table
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x0F80 - ($ - $$) db 0
+times 0x1010 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5940,6 +5971,25 @@ win_create_stub:
     mov ax, [.save_h]
     mov [bx + WIN_OFF_HEIGHT], ax
 
+    ; Demote all other visible windows' z-order before setting ours to top
+    push si
+    push cx
+    mov si, window_table
+    mov cx, WIN_MAX_COUNT
+.demote_loop:
+    cmp si, bx                      ; Skip our own entry
+    je .demote_next
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .demote_next
+    cmp byte [si + WIN_OFF_ZORDER], 0
+    je .demote_next
+    dec byte [si + WIN_OFF_ZORDER]
+.demote_next:
+    add si, WIN_ENTRY_SIZE
+    loop .demote_loop
+    pop cx
+    pop si
+
     mov byte [bx + WIN_OFF_ZORDER], 15          ; Top of stack
     push ax
     mov al, [current_task]
@@ -6025,6 +6075,7 @@ win_create_stub:
 ; redraw_affected_windows - Redraw windows that overlapped a cleared rectangle
 ; Input: Variables redraw_old_x/y/w/h set by caller
 ; Redraws frames and posts EVENT_WIN_REDRAW for each affected window
+; Draws in z-order (lowest first) so topmost windows end up on top
 redraw_affected_windows:
     push ax
     push bx
@@ -6034,15 +6085,28 @@ redraw_affected_windows:
     push di
     push bp
 
+    ; Outer loop: z = 0 to 15 (draw lowest z first, highest last = on top)
+    mov byte [.cur_z], 0
+
+.z_loop:
+    cmp byte [.cur_z], 16
+    jae .raw_done
+
+    ; Inner loop: scan all windows for matching z-order
     mov si, window_table
     xor bp, bp                      ; BP = window handle counter
 
 .raw_loop:
     cmp bp, WIN_MAX_COUNT
-    jae .raw_done
+    jae .z_next
 
     ; Skip non-visible windows
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .raw_next
+
+    ; Skip if z-order doesn't match current pass
+    mov al, [si + WIN_OFF_ZORDER]
+    cmp al, [.cur_z]
     jne .raw_next
 
     ; Rectangle intersection test:
@@ -6053,25 +6117,25 @@ redraw_affected_windows:
     mov ax, [redraw_old_x]
     add ax, [redraw_old_w]
     cmp [si + WIN_OFF_X], ax
-    jge .raw_next                   ; win_x >= old_x + old_w → no overlap
+    jge .raw_next
 
     ; Test: old_x < win_x + win_w
     mov ax, [si + WIN_OFF_X]
     add ax, [si + WIN_OFF_WIDTH]
     cmp [redraw_old_x], ax
-    jge .raw_next                   ; old_x >= win_x + win_w → no overlap
+    jge .raw_next
 
     ; Test: win_y < old_y + old_h
     mov ax, [redraw_old_y]
     add ax, [redraw_old_h]
     cmp [si + WIN_OFF_Y], ax
-    jge .raw_next                   ; win_y >= old_y + old_h → no overlap
+    jge .raw_next
 
     ; Test: old_y < win_y + win_h
     mov ax, [si + WIN_OFF_Y]
     add ax, [si + WIN_OFF_HEIGHT]
     cmp [redraw_old_y], ax
-    jge .raw_next                   ; old_y >= win_y + win_h → no overlap
+    jge .raw_next
 
     ; Windows overlap - redraw this window's frame
     push si
@@ -6092,6 +6156,10 @@ redraw_affected_windows:
     inc bp
     jmp .raw_loop
 
+.z_next:
+    inc byte [.cur_z]
+    jmp .z_loop
+
 .raw_done:
     pop bp
     pop di
@@ -6101,6 +6169,8 @@ redraw_affected_windows:
     pop bx
     pop ax
     ret
+
+.cur_z: db 0
 
 ; Variables for redraw_affected_windows
 redraw_old_x:   dw 0
@@ -6290,6 +6360,7 @@ win_draw_stub:
 win_focus_stub:
     push bx
     push cx
+    push si
     push ds
 
     ; Window handle is in AL (AH has function number from INT 0x80)
@@ -6306,6 +6377,26 @@ win_focus_stub:
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
 
+    ; Already on top? Skip demotion
+    cmp byte [bx + WIN_OFF_ZORDER], 15
+    je .already_top
+
+    ; Demote all other visible windows' z-order
+    mov si, window_table
+    mov cx, WIN_MAX_COUNT
+.demote_loop:
+    cmp si, bx                      ; Skip our own entry
+    je .demote_next
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .demote_next
+    cmp byte [si + WIN_OFF_ZORDER], 0
+    je .demote_next
+    dec byte [si + WIN_OFF_ZORDER]
+.demote_next:
+    add si, WIN_ENTRY_SIZE
+    loop .demote_loop
+
+.already_top:
     ; Set z-order to 15 (top)
     mov byte [bx + WIN_OFF_ZORDER], 15
 
@@ -6317,6 +6408,7 @@ win_focus_stub:
 
 .done:
     pop ds
+    pop si
     pop cx
     pop bx
     ret
@@ -6662,6 +6754,7 @@ drag_target_y:      dw 0            ; Desired new window Y position
 drag_needs_update:  db 0            ; 1 = win_move_stub needs to be called
 drag_prev_buttons:  db 0            ; Previous button state (for edge detection)
 drag_content_saved: db 0            ; 1 = content saved in scratch buffer
+drag_needs_focus:   db 0            ; 1 = need to focus dragged window
 
 ; Content save/restore state (used by save/restore_drag_content)
 wc_cx:      dw 0                    ; Saved content X
