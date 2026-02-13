@@ -1,10 +1,10 @@
-; LAUNCHER.BIN - Desktop launcher for UnoDOS v3.12.0
-; Build 043 - Fix filename format conversion (FAT -> dot format)
+; LAUNCHER.BIN - Desktop for UnoDOS v3.14.0
+; Fullscreen desktop with app icons, double-click to launch
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm
 ;
 ; Loads at segment 0x2000 (shell), launches apps to 0x3000 (user)
-; Scans floppy for .BIN files and displays them dynamically
+; Scans floppy for .BIN files, reads icon headers, displays icon grid
 
 [BITS 16]
 [ORG 0x0000]
@@ -21,26 +21,37 @@ API_FS_READDIR          equ 27
 API_APP_LOAD            equ 18
 API_APP_START           equ 35
 API_APP_YIELD           equ 34
-API_WIN_CREATE          equ 20
-API_WIN_DESTROY         equ 21
-API_WIN_BEGIN_DRAW      equ 31
-API_WIN_END_DRAW        equ 32
+API_MOUSE_GET_STATE     equ 28
+API_DESKTOP_SET_ICON    equ 37
+API_DESKTOP_CLEAR       equ 38
+API_GFX_DRAW_ICON       equ 39
+API_FS_READ_HEADER      equ 40
+API_GFX_TEXT_WIDTH      equ 33
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
-EVENT_WIN_REDRAW        equ 6
 
-; Window dimensions
-WIN_WIDTH               equ 160
-WIN_HEIGHT              equ 100
-CONTENT_WIDTH           equ 158         ; WIN_WIDTH - 2 (borders)
-CONTENT_HEIGHT          equ 89          ; WIN_HEIGHT - 10 (titlebar) - 1 (border)
+; Icon grid constants
+GRID_COLS               equ 4
+GRID_ROWS               equ 2
+MAX_ICONS               equ 8
+COL_WIDTH               equ 80
+ROW_HEIGHT              equ 80
+GRID_START_Y            equ 24
+ICON_SIZE               equ 16          ; 16x16 pixels
+ICON_X_OFFSET           equ 32          ; Center 16px icon in 80px column
+ICON_Y_OFFSET           equ 5           ; Top padding within row
+LABEL_Y_GAP             equ 20          ; Below icon top (16px + 4px gap)
+HITBOX_HEIGHT           equ 40          ; Clickable area height
 
-; Menu constants
-MENU_ITEM_HEIGHT        equ 12          ; Pixels per menu item
-MENU_LEFT_PADDING       equ 10          ; Left margin for text
-MENU_TOP_PADDING        equ 4           ; Top margin
-MAX_MENU_ITEMS          equ 8           ; Maximum apps to display
+; Double-click threshold
+DOUBLE_CLICK_TICKS      equ 9           ; ~0.5s at 18.2 Hz BIOS timer
+
+; Floppy poll interval
+POLL_INTERVAL           equ 36          ; ~2 seconds
+
+; Background color (CGA palette)
+BG_COLOR                equ 1           ; Cyan
 
 ; Entry point - called by kernel via far CALL
 entry:
@@ -48,216 +59,224 @@ entry:
     push ds
     push es
 
-    ; Save our code segment
+    ; Set up segment
     mov ax, cs
     mov ds, ax
 
-    ; Create launcher window
-    call create_window
-    jc .exit_fail
+    ; Initialize state
+    mov byte [cs:icon_count], 0
+    mov byte [cs:selected_icon], 0xFF
+    mov byte [cs:prev_buttons], 0
+    mov word [cs:last_click_tick], 0
+    mov byte [cs:last_click_icon], 0xFF
 
-    ; Drain any pending events (leftover from disk swap confirmation)
-.drain_events:
-    sti                             ; Keep interrupts enabled
-    mov ah, API_EVENT_GET
+    ; Draw desktop background (fullscreen cyan fill)
+    call draw_background
+
+    ; Draw title
+    mov bx, 4
+    mov cx, 4
+    mov si, title_str
+    mov ah, API_GFX_DRAW_WHITE
     int 0x80
-    test al, al                     ; AL=0 means no more events
-    jnz .drain_events
 
-    ; Scan for .BIN files on the boot disk
-    call scan_for_apps
+    ; Mount filesystem and scan for apps
+    call scan_disk
 
-    ; Draw initial menu
-    call draw_menu
+    ; Draw all icons
+    call draw_all_icons
+
+    ; Read initial BIOS tick counter for polling
+    call read_bios_ticks
+    mov [cs:last_poll_tick], ax
 
     ; Main event loop
-.enter_main_loop:
 .main_loop:
     sti
-    mov ah, API_APP_YIELD           ; Yield to other tasks
+    mov ah, API_APP_YIELD
     int 0x80
 
-    ; Get event (non-blocking)
+    ; --- Mouse polling ---
+    mov ah, API_MOUSE_GET_STATE
+    int 0x80
+    ; BX=X, CX=Y, DL=buttons
+
+    ; Check for left button transition (released -> pressed)
+    mov al, dl
+    and al, 0x01                    ; Isolate left button
+    mov ah, [cs:prev_buttons]
+    mov [cs:prev_buttons], dl       ; Save current state
+    and ah, 0x01
+    ; AH = prev left button, AL = current left button
+    cmp al, 1
+    jne .no_click
+    cmp ah, 0
+    jne .no_click                   ; Not a transition
+
+    ; Left button just pressed - handle click
+    call handle_click               ; BX=mouse X, CX=mouse Y
+
+.no_click:
+    ; --- Floppy swap polling ---
+    call read_bios_ticks
+    mov bx, ax
+    sub bx, [cs:last_poll_tick]
+    cmp bx, POLL_INTERVAL
+    jb .no_poll
+    call read_bios_ticks
+    mov [cs:last_poll_tick], ax
+    call check_floppy_swap
+.no_poll:
+
+    ; --- Keyboard events ---
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
-
-    ; Check for window redraw event
-    cmp al, EVENT_WIN_REDRAW
-    jne .not_redraw
-    call draw_menu
-    jmp .main_loop
-.not_redraw:
-
-    ; Check if key press
     cmp al, EVENT_KEY_PRESS
     jne .no_event
 
-    ; Handle key
-    cmp dl, 27                      ; ESC?
-    je .exit_ok
-
-    ; Only handle navigation if we have apps
-    cmp byte [cs:discovered_count], 0
-    je .no_event
-
-    cmp dl, 'w'
-    je .move_up
-    cmp dl, 'W'
-    je .move_up
-    cmp dl, 128                     ; Up arrow
-    je .move_up
-
-    cmp dl, 's'
-    je .move_down
-    cmp dl, 'S'
-    je .move_down
-    cmp dl, 129                     ; Down arrow
-    je .move_down
-
+    ; Handle keyboard
     cmp dl, 13                      ; Enter?
-    je .launch_app
-
+    je .kb_launch
+    cmp dl, 128                     ; Up arrow
+    je .kb_up
+    cmp dl, 129                     ; Down arrow
+    je .kb_down
+    cmp dl, 130                     ; Left arrow
+    je .kb_left
+    cmp dl, 131                     ; Right arrow
+    je .kb_right
+    cmp dl, 'w'
+    je .kb_up
+    cmp dl, 'W'
+    je .kb_up
+    cmp dl, 's'
+    je .kb_down
+    cmp dl, 'S'
+    je .kb_down
+    cmp dl, 'a'
+    je .kb_left
+    cmp dl, 'A'
+    je .kb_left
+    cmp dl, 'd'
+    je .kb_right
+    cmp dl, 'D'
+    je .kb_right
     jmp .no_event
 
-.move_up:
-    ; Decrement selection with wrap
-    mov al, [cs:selected]
+.kb_up:
+    ; Move selection up (subtract GRID_COLS)
+    cmp byte [cs:icon_count], 0
+    je .no_event
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .kb_select_first
+    cmp al, GRID_COLS
+    jb .no_event                    ; Already in top row
+    sub al, GRID_COLS
+    call select_icon
+    jmp .no_event
+
+.kb_down:
+    cmp byte [cs:icon_count], 0
+    je .no_event
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .kb_select_first
+    add al, GRID_COLS
+    cmp al, [cs:icon_count]
+    jae .no_event                   ; Past last icon
+    call select_icon
+    jmp .no_event
+
+.kb_left:
+    cmp byte [cs:icon_count], 0
+    je .no_event
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .kb_select_first
     or al, al
-    jz .wrap_to_bottom
+    jz .no_event                    ; Already at 0
     dec al
-    mov [cs:selected], al
-    jmp .redraw
-
-.wrap_to_bottom:
-    mov al, [cs:discovered_count]
-    dec al
-    mov [cs:selected], al
-    jmp .redraw
-
-.move_down:
-    ; Increment selection with wrap
-    mov al, [cs:selected]
-    inc al
-    cmp al, [cs:discovered_count]
-    jb .no_wrap
-    xor al, al                      ; Wrap to 0
-.no_wrap:
-    mov [cs:selected], al
-
-.redraw:
-    call draw_menu
+    call select_icon
     jmp .no_event
 
-.launch_app:
-    ; Get filename pointer for selected app
-    call get_selected_filename      ; Returns SI = filename pointer
+.kb_right:
+    cmp byte [cs:icon_count], 0
+    je .no_event
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .kb_select_first
+    inc al
+    cmp al, [cs:icon_count]
+    jae .no_event                   ; Past last icon
+    call select_icon
+    jmp .no_event
 
-    ; Load app to segment 0x3000 (user segment)
-    ; Note: app_load_stub auto-terminates any existing app at 0x3000
-    mov dl, [cs:mounted_drive]      ; Use the drive we successfully mounted
-    mov dh, 0x30                    ; Target segment 0x3000
-    mov ah, API_APP_LOAD
-    int 0x80
-    jc .load_error
+.kb_select_first:
+    xor al, al
+    call select_icon
+    jmp .no_event
 
-    ; Save app handle
-    mov [cs:app_handle], al
-
-    ; Start the app (non-blocking - runs cooperatively)
-    mov ah, API_APP_START
-    int 0x80
-
-    ; Continue launcher event loop (both windows now visible)
-    jmp .main_loop
-
-.load_error:
-    ; Save error code
-    mov [cs:last_error], al
-
-    ; Show error
-    call draw_error
-    jmp .main_loop
+.kb_launch:
+    ; Launch selected app
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .no_event
+    call launch_app
+    jmp .no_event
 
 .no_event:
     jmp .main_loop
 
-.exit_ok:
-    ; Clear draw context before destroying window
-    mov ah, API_WIN_END_DRAW
-    int 0x80
-
-    ; Destroy window
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_DESTROY
-    int 0x80
-    xor ax, ax
-    jmp .exit
-
-.exit_fail:
-    mov ax, 1
-
-.exit:
-    pop es
-    pop ds
-    popa
-    retf
-
 ; ============================================================================
-; scan_for_apps - Scan for .BIN files on available drives
-; Populates discovered_apps and discovered_count
-; Tries HDD (0x80) first, then floppy (0x00)
+; scan_disk - Mount filesystem and scan for .BIN files
+; Populates icon data arrays
 ; ============================================================================
-scan_for_apps:
+scan_disk:
     pusha
+    push es
 
-    ; Initialize
-    mov byte [cs:discovered_count], 0
-    mov word [cs:dir_state], 0
-    mov word [cs:scan_safety], 0    ; Safety counter to prevent infinite loops
-
-    ; Try floppy (0x00)
-    mov al, 0                       ; Drive A: (floppy)
-    xor ah, ah                      ; Auto-detect
+    ; Mount floppy
+    mov al, 0                       ; Drive A:
+    xor ah, ah
     mov ah, API_FS_MOUNT
     int 0x80
-    jc .scan_done                   ; Mount failed
+    jc .scan_fail
 
-    ; Save floppy mount info (mount returned handle in BX)
-    mov byte [cs:mounted_drive], 0  ; Drive A:
-    mov byte [cs:mount_handle], bl  ; Mount handle (should be 0 for FAT12)
-    jmp .scan_loop
+    mov byte [cs:mounted_drive], 0
+    mov word [cs:dir_state], 0
+    mov word [cs:scan_safety], 0
 
-.mounted_hdd:
-    ; Save HDD mount info (mount returned handle in BX)
-    mov byte [cs:mounted_drive], 0x80    ; Drive 0x80
-    mov byte [cs:mount_handle], bl       ; Mount handle (should be 1 for FAT16)
+    ; Clear all kernel desktop icons
+    mov ah, API_DESKTOP_CLEAR
+    int 0x80
+
+    mov byte [cs:icon_count], 0
 
 .scan_loop:
-    ; Safety check - prevent infinite loop
+    ; Safety check
     inc word [cs:scan_safety]
-    cmp word [cs:scan_safety], 500  ; Max 500 iterations
-    jae .scan_done                  ; Exit if too many iterations
+    cmp word [cs:scan_safety], 500
+    jae .scan_done
 
-    ; Check if we have room for more
-    cmp byte [cs:discovered_count], MAX_MENU_ITEMS
+    ; Check if we have room
+    cmp byte [cs:icon_count], MAX_ICONS
     jae .scan_done
 
     ; Read next directory entry
-    mov al, [cs:mount_handle]       ; Use saved mount handle (0=FAT12, 1=FAT16)
-    mov cx, [cs:dir_state]          ; Iteration state
+    mov al, 0                       ; Mount handle
+    mov cx, [cs:dir_state]
     push cs
     pop es
-    mov di, dir_entry_buffer        ; ES:DI = buffer
-
+    mov di, dir_entry_buffer
     mov ah, API_FS_READDIR
     int 0x80
-    jc .scan_done                   ; End of directory or error
+    jc .scan_done
 
-    ; Save new state
     mov [cs:dir_state], cx
 
-    ; Check if this is a .BIN file (extension at offset 8-10)
+    ; Check if .BIN file (extension at offset 8-10)
     cmp byte [cs:dir_entry_buffer + 8], 'B'
     jne .scan_loop
     cmp byte [cs:dir_entry_buffer + 9], 'I'
@@ -265,8 +284,7 @@ scan_for_apps:
     cmp byte [cs:dir_entry_buffer + 10], 'N'
     jne .scan_loop
 
-    ; Skip LAUNCHER.BIN (don't show ourselves)
-    ; Compare first 8 characters with "LAUNCHER"
+    ; Skip LAUNCHER.BIN
     mov si, dir_entry_buffer
     mov di, launcher_name
     mov cx, 8
@@ -277,301 +295,857 @@ scan_for_apps:
     inc si
     inc di
     loop .cmp_launcher
-    jmp .scan_loop                  ; It's LAUNCHER, skip it
+    jmp .scan_loop                  ; It's LAUNCHER, skip
 
 .not_launcher:
-    ; Add to discovered_apps list
-    ; Calculate destination: discovered_apps + (count * 12)
-    mov al, [cs:discovered_count]
-    mov cl, 12
-    mul cl                          ; AX = count * 12
-    mov di, ax
-    add di, discovered_apps         ; DI = destination offset
+    ; Convert FAT name to dot format for app_info storage
+    mov al, [cs:icon_count]
+    call store_app_info
 
-    ; Copy 11 bytes (8.3 FAT name) and add null terminator
-    mov si, dir_entry_buffer
-    mov cx, 11
-.copy_name:
-    mov al, [cs:si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .copy_name
-    mov byte [cs:di], 0             ; Null terminator
+    ; Try to read BIN header to get icon
+    mov al, [cs:icon_count]
+    call read_bin_header
 
-    inc byte [cs:discovered_count]
+    ; Calculate grid position and register icon with kernel
+    mov al, [cs:icon_count]
+    call register_icon
+
+    inc byte [cs:icon_count]
     jmp .scan_loop
 
+.scan_fail:
 .scan_done:
+    pop es
     popa
     ret
 
 ; ============================================================================
-; create_window - Create the launcher window
-; Output: CF=0 success, CF=1 error
+; store_app_info - Store app filename info
+; Input: AL = icon slot, dir_entry_buffer has FAT entry
 ; ============================================================================
-create_window:
+store_app_info:
+    push ax
+    push cx
+    push si
+    push di
+
+    ; Calculate destination: app_info + (slot * 16)
+    xor ah, ah
+    shl ax, 4                       ; * 16
+    add ax, app_info
+    mov di, ax
+
+    ; Convert FAT "CLOCK   BIN" to "CLOCK.BIN\0"
+    mov si, dir_entry_buffer
+    mov cx, 8
+.sai_name:
+    mov al, [cs:si]
+    cmp al, ' '
+    je .sai_dot
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .sai_name
+
+.sai_dot:
+    mov byte [cs:di], '.'
+    inc di
+
+    ; Copy extension
+    mov si, dir_entry_buffer
+    add si, 8
+    mov cx, 3
+.sai_ext:
+    mov al, [cs:si]
+    cmp al, ' '
+    je .sai_null
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .sai_ext
+
+.sai_null:
+    mov byte [cs:di], 0
+
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; ============================================================================
+; read_bin_header - Read first 80 bytes of a BIN file for icon data
+; Input: AL = icon slot (app_info already populated)
+; Sets icon_bitmaps[slot] and icon_names[slot] from BIN header
+; ============================================================================
+read_bin_header:
+    push ax
     push bx
     push cx
     push dx
     push si
     push di
+    push es
 
-    ; Create window: X=80, Y=40, W=160, H=100
-    mov bx, 80                      ; X position
-    mov cx, 40                      ; Y position
-    mov dx, WIN_WIDTH               ; Width
-    mov si, WIN_HEIGHT              ; Height
-    mov ax, cs
-    mov es, ax
-    mov di, window_title            ; ES:DI = title
-    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
-    mov ah, API_WIN_CREATE
+    mov [cs:.rbh_slot], al
+
+    ; Get filename pointer: app_info + (slot * 16)
+    xor ah, ah
+    shl ax, 4
+    add ax, app_info
+    mov si, ax                      ; SI = filename in our segment
+
+    ; Read first 80 bytes of the file
+    xor bx, bx                     ; Mount handle 0 (FAT12)
+    push cs
+    pop es
+    mov di, header_buffer           ; ES:DI = buffer in our segment
+    mov cx, 80                      ; Read 80 bytes
+    mov ah, API_FS_READ_HEADER
     int 0x80
-    jc .done
+    jc .rbh_default                 ; Read failed, use default icon
 
-    ; Save window handle
-    mov [cs:win_handle], al
+    ; Check for icon header magic: byte[0]=0xEB, byte[2]='U', byte[3]='I'
+    cmp byte [cs:header_buffer], 0xEB
+    jne .rbh_default
+    cmp byte [cs:header_buffer + 2], 'U'
+    jne .rbh_default
+    cmp byte [cs:header_buffer + 3], 'I'
+    jne .rbh_default
 
-    ; Set drawing context - all coordinates now window-relative
-    mov ah, API_WIN_BEGIN_DRAW
-    int 0x80
+    ; Has icon header - copy bitmap (64 bytes at offset 0x10)
+    mov al, [cs:.rbh_slot]
+    xor ah, ah
+    shl ax, 6                       ; * 64
+    add ax, icon_bitmaps
+    mov di, ax
+    mov si, header_buffer + 0x10    ; Source: bitmap at offset 0x10
+    mov cx, 64
+.rbh_copy_bmp:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .rbh_copy_bmp
 
-    clc
+    ; Copy name (12 bytes at offset 0x04)
+    mov al, [cs:.rbh_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl                          ; AX = slot * 12
+    add ax, icon_names
+    mov di, ax
+    mov si, header_buffer + 0x04
+    mov cx, 12
+.rbh_copy_name:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .rbh_copy_name
+    jmp .rbh_done
 
-.done:
+.rbh_default:
+    ; No icon header - use default icon and derive name from FAT filename
+    mov al, [cs:.rbh_slot]
+    xor ah, ah
+    shl ax, 6                       ; * 64
+    add ax, icon_bitmaps
+    mov di, ax
+    mov si, default_icon
+    mov cx, 64
+.rbh_def_bmp:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .rbh_def_bmp
+
+    ; Derive name from FAT filename (first 8 chars, strip trailing spaces)
+    mov al, [cs:.rbh_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov di, ax
+    mov si, dir_entry_buffer        ; FAT name
+    mov cx, 8
+.rbh_def_name:
+    mov al, [cs:si]
+    cmp al, ' '
+    je .rbh_def_name_end
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .rbh_def_name
+.rbh_def_name_end:
+    mov byte [cs:di], 0
+
+.rbh_done:
+    pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
     ret
 
+.rbh_slot: db 0
+
 ; ============================================================================
-; draw_menu - Draw all menu items
+; register_icon - Register icon with kernel for desktop repaint
+; Input: AL = icon slot
 ; ============================================================================
-draw_menu:
+register_icon:
+    push ax
+    push bx
+    push cx
+    push si
+
+    mov [cs:.ri_slot], al
+
+    ; Calculate grid position
+    xor ah, ah
+    mov bl, GRID_COLS
+    div bl                          ; AL = row, AH = col
+
+    ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
+    push ax
+    mov al, ah                      ; AL = col
+    xor ah, ah
+    mov bl, COL_WIDTH
+    mul bl                          ; AX = col * 80
+    add ax, ICON_X_OFFSET
+    mov [cs:.ri_x], ax
+    pop ax
+
+    ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
+    xor ah, ah                      ; AL = row
+    mov bl, ROW_HEIGHT
+    mul bl                          ; AX = row * 80
+    add ax, GRID_START_Y
+    add ax, ICON_Y_OFFSET
+    mov [cs:.ri_y], ax
+
+    ; Build 76-byte data block: 64B bitmap + 12B name
+    ; Point SI to bitmap for this slot
+    mov al, [cs:.ri_slot]
+    xor ah, ah
+    shl ax, 6                       ; * 64
+    add ax, icon_bitmaps
+    mov si, ax                      ; SI = bitmap source
+
+    ; Copy bitmap to register_buffer
+    mov di, register_buffer
+    mov cx, 64
+.ri_copy_bmp:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .ri_copy_bmp
+
+    ; Copy name
+    mov al, [cs:.ri_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov si, ax
+    mov cx, 12
+.ri_copy_name:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .ri_copy_name
+
+    ; Register with kernel API 37
+    mov al, [cs:.ri_slot]
+    mov bx, [cs:.ri_x]
+    mov cx, [cs:.ri_y]
+    mov si, register_buffer
+    mov ah, API_DESKTOP_SET_ICON
+    int 0x80
+
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.ri_slot: db 0
+.ri_x:    dw 0
+.ri_y:    dw 0
+
+; ============================================================================
+; draw_background - Fill screen with background color
+; ============================================================================
+draw_background:
     pusha
 
-    ; Clear content area (window-relative: 0,0 is top-left of content)
+    ; Fill entire screen with background color (cyan)
+    ; Use filled rect API (draws white, but we need cyan)
+    ; Instead, use clear area (draws black) - then we need a colored fill
+    ; The kernel's gfx_fill_color isn't an API, so we'll use clear_area for now
+    ; and accept black background for simplicity
+    ; Actually, use filled rect which draws color 3 (white) - not what we want
+    ; Let's just use clear_area for a black background for now
     xor bx, bx
     xor cx, cx
-    mov dx, CONTENT_WIDTH
-    mov si, CONTENT_HEIGHT
+    mov dx, 320
+    mov si, 200
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Check if we have any apps
-    cmp byte [cs:discovered_count], 0
-    je .no_apps
-
-    ; Draw each menu item
-    mov byte [cs:draw_index], 0     ; Item index
-
-.draw_loop:
-    mov al, [cs:draw_index]
-    cmp al, [cs:discovered_count]
-    jae .draw_help
-
-    ; Calculate Y position: MENU_TOP_PADDING + (index * MENU_ITEM_HEIGHT)
-    mov bl, MENU_ITEM_HEIGHT
-    mul bl                          ; AX = index * MENU_ITEM_HEIGHT
-    add ax, MENU_TOP_PADDING
-    mov [cs:draw_y], ax             ; Save Y position
-
-    ; Calculate X position
-    mov ax, MENU_LEFT_PADDING
-    mov [cs:draw_x], ax             ; Save X position
-
-    ; Check if this item is selected
-    mov al, [cs:draw_index]
-    cmp al, [cs:selected]
-    jne .draw_name
-
-    ; Draw selection indicator "> "
-    mov bx, [cs:draw_x]
-    mov cx, [cs:draw_y]
-    mov si, indicator
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    add word [cs:draw_x], 16        ; Move X past indicator
-
-.draw_name:
-    ; Get filename pointer: discovered_apps + (index * 12)
-    mov al, [cs:draw_index]
-    mov cl, 12
-    mul cl                          ; AX = index * 12
-    add ax, discovered_apps
-    mov si, ax
-
-    ; Format and draw: convert "CLOCK   BIN" to displayable name
-    ; For simplicity, just draw the raw 8.3 name
-    mov bx, [cs:draw_x]
-    mov cx, [cs:draw_y]
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    inc byte [cs:draw_index]
-    jmp .draw_loop
-
-.no_apps:
-    ; Display "No apps found" message in WHITE (window-relative)
-    mov bx, MENU_LEFT_PADDING
-    mov cx, MENU_TOP_PADDING
-    mov si, no_apps_msg
-    mov ah, 6                       ; API_GFX_DRAW_STRING_INVERTED (white)
-    int 0x80
-
-    jmp .draw_help_only
-
-.draw_help:
-.draw_help_only:
     popa
     ret
 
-; Temporary variables for draw_menu
-draw_index: db 0
-draw_x:     dw 0
-draw_y:     dw 0
-
 ; ============================================================================
-; draw_error - Draw error message with error code
+; draw_all_icons - Draw all discovered icons on the desktop
 ; ============================================================================
-draw_error:
+draw_all_icons:
     pusha
 
-    ; Window-relative coordinates
-    mov bx, MENU_LEFT_PADDING
-    mov cx, CONTENT_HEIGHT
-    sub cx, 36                      ; Above help text
-    mov si, error_msg
-    mov ah, API_GFX_DRAW_STRING
+    mov byte [cs:.dai_idx], 0
+
+.dai_loop:
+    mov al, [cs:.dai_idx]
+    cmp al, [cs:icon_count]
+    jae .dai_done
+
+    call draw_single_icon
+
+    inc byte [cs:.dai_idx]
+    jmp .dai_loop
+
+.dai_done:
+    ; If no icons, show message
+    cmp byte [cs:icon_count], 0
+    jne .dai_ret
+    mov bx, 80
+    mov cx, 80
+    mov si, no_apps_msg
+    mov ah, API_GFX_DRAW_WHITE
     int 0x80
 
-    ; Draw error code on next line
-    mov bx, MENU_LEFT_PADDING
-    add cx, 10
-    mov si, error_code_label
-    mov ah, API_GFX_DRAW_STRING
+.dai_ret:
+    popa
+    ret
+
+.dai_idx: db 0
+
+; ============================================================================
+; draw_single_icon - Draw one icon at its grid position
+; Input: AL = icon slot
+; ============================================================================
+draw_single_icon:
+    pusha
+
+    mov [cs:.dsi_slot], al
+
+    ; Calculate grid position
+    xor ah, ah
+    mov bl, GRID_COLS
+    div bl                          ; AL = row, AH = col
+
+    ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
+    push ax
+    mov al, ah
+    xor ah, ah
+    mov bl, COL_WIDTH
+    mul bl
+    add ax, ICON_X_OFFSET
+    mov [cs:.dsi_x], ax
+    pop ax
+
+    ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
+    xor ah, ah
+    mov bl, ROW_HEIGHT
+    mul bl
+    add ax, GRID_START_Y
+    add ax, ICON_Y_OFFSET
+    mov [cs:.dsi_y], ax
+
+    ; Draw icon bitmap using API 39
+    mov bx, [cs:.dsi_x]
+    mov cx, [cs:.dsi_y]
+    ; Point SI to bitmap data
+    mov al, [cs:.dsi_slot]
+    xor ah, ah
+    shl ax, 6                       ; * 64
+    add ax, icon_bitmaps
+    mov si, ax
+    mov ah, API_GFX_DRAW_ICON
     int 0x80
 
-    ; Draw the error digit
-    mov bx, MENU_LEFT_PADDING + 48
-    mov al, [cs:last_error]
-    add al, '0'
-    mov ah, API_GFX_DRAW_CHAR
+    ; Draw name label below icon
+    mov bx, [cs:.dsi_x]
+    sub bx, 8                       ; Shift left a bit for longer names
+    mov cx, [cs:.dsi_y]
+    add cx, LABEL_Y_GAP            ; Below icon
+    ; Point SI to name
+    mov al, [cs:.dsi_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov si, ax
+    mov cx, [cs:.dsi_y]
+    add cx, LABEL_Y_GAP
+    mov ah, API_GFX_DRAW_WHITE
     int 0x80
 
-    ; Wait a moment
-    mov cx, 0xFFFF
-.wait:
-    loop .wait
-    mov cx, 0xFFFF
-.wait2:
-    loop .wait2
+    ; Draw selection highlight if this is the selected icon
+    mov al, [cs:.dsi_slot]
+    cmp al, [cs:selected_icon]
+    jne .dsi_done
 
+    call draw_highlight
+
+.dsi_done:
+    popa
+    ret
+
+.dsi_slot: db 0
+.dsi_x:    dw 0
+.dsi_y:    dw 0
+
+; ============================================================================
+; draw_highlight - Draw selection rectangle around selected icon
+; Uses draw_single_icon's .dsi_x/.dsi_y
+; ============================================================================
+draw_highlight:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Draw a white rectangle border around the icon area
+    ; Top line
+    mov bx, [cs:draw_single_icon.dsi_x]
+    sub bx, 2
+    mov cx, [cs:draw_single_icon.dsi_y]
+    sub cx, 2
+    mov dx, 20                      ; 16 + 4
+    mov si, 1
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; Bottom line
+    mov bx, [cs:draw_single_icon.dsi_x]
+    sub bx, 2
+    mov cx, [cs:draw_single_icon.dsi_y]
+    add cx, ICON_SIZE
+    add cx, 1
+    mov dx, 20
+    mov si, 1
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; Left line
+    mov bx, [cs:draw_single_icon.dsi_x]
+    sub bx, 2
+    mov cx, [cs:draw_single_icon.dsi_y]
+    sub cx, 1
+    mov dx, 1
+    mov si, 18                      ; 16 + 2
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; Right line
+    mov bx, [cs:draw_single_icon.dsi_x]
+    add bx, ICON_SIZE
+    add bx, 1
+    mov cx, [cs:draw_single_icon.dsi_y]
+    sub cx, 1
+    mov dx, 1
+    mov si, 18
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; handle_click - Process a mouse click
+; Input: BX = mouse X, CX = mouse Y
+; ============================================================================
+handle_click:
+    pusha
+
+    ; Hit test: which icon was clicked?
+    mov [cs:.hc_mx], bx
+    mov [cs:.hc_my], cx
+    mov byte [cs:.hc_hit], 0xFF     ; No hit
+
+    xor dx, dx                      ; Icon counter
+.hc_test:
+    cmp dl, [cs:icon_count]
+    jae .hc_tested
+
+    ; Calculate icon hitbox for slot DL
+    mov al, dl
+    xor ah, ah
+    push dx
+    mov bl, GRID_COLS
+    div bl                          ; AL = row, AH = col
+
+    ; Hitbox X = col * COL_WIDTH
+    push ax
+    mov al, ah
+    xor ah, ah
+    mov bl, COL_WIDTH
+    mul bl
+    mov [cs:.hc_hx], ax
+    pop ax
+
+    ; Hitbox Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
+    xor ah, ah
+    mov bl, ROW_HEIGHT
+    mul bl
+    add ax, GRID_START_Y
+    add ax, ICON_Y_OFFSET
+    mov [cs:.hc_hy], ax
+    pop dx
+
+    ; Check: hx <= mx < hx + COL_WIDTH
+    mov ax, [cs:.hc_mx]
+    cmp ax, [cs:.hc_hx]
+    jb .hc_next
+    mov bx, [cs:.hc_hx]
+    add bx, COL_WIDTH
+    cmp ax, bx
+    jae .hc_next
+
+    ; Check: hy <= my < hy + HITBOX_HEIGHT
+    mov ax, [cs:.hc_my]
+    cmp ax, [cs:.hc_hy]
+    jb .hc_next
+    mov bx, [cs:.hc_hy]
+    add bx, HITBOX_HEIGHT
+    cmp ax, bx
+    jae .hc_next
+
+    ; Hit!
+    mov [cs:.hc_hit], dl
+    jmp .hc_tested
+
+.hc_next:
+    inc dl
+    jmp .hc_test
+
+.hc_tested:
+    ; Check if we hit an icon
+    mov al, [cs:.hc_hit]
+    cmp al, 0xFF
+    je .hc_deselect
+
+    ; Check for double-click
+    cmp al, [cs:last_click_icon]
+    jne .hc_single_click
+
+    ; Same icon - check timing
+    call read_bios_ticks
+    mov bx, ax
+    sub bx, [cs:last_click_tick]
+    cmp bx, DOUBLE_CLICK_TICKS
+    jae .hc_single_click
+
+    ; Double click! Launch the app
+    mov al, [cs:.hc_hit]
+    call launch_app
+    mov byte [cs:last_click_icon], 0xFF
+    jmp .hc_done
+
+.hc_single_click:
+    ; Select this icon
+    mov al, [cs:.hc_hit]
+    call select_icon
+
+    ; Record click for double-click detection
+    mov al, [cs:.hc_hit]
+    mov [cs:last_click_icon], al
+    call read_bios_ticks
+    mov [cs:last_click_tick], ax
+    jmp .hc_done
+
+.hc_deselect:
+    ; Clicked on empty space - deselect
+    cmp byte [cs:selected_icon], 0xFF
+    je .hc_done
+    mov byte [cs:selected_icon], 0xFF
+    mov byte [cs:last_click_icon], 0xFF
+    ; Redraw to remove highlight
+    call draw_background
+    mov bx, 4
+    mov cx, 4
+    mov si, title_str
+    mov ah, API_GFX_DRAW_WHITE
+    int 0x80
+    call draw_all_icons
+
+.hc_done:
+    popa
+    ret
+
+.hc_mx: dw 0
+.hc_my: dw 0
+.hc_hx: dw 0
+.hc_hy: dw 0
+.hc_hit: db 0xFF
+
+; ============================================================================
+; select_icon - Select an icon (highlight it)
+; Input: AL = icon slot to select
+; ============================================================================
+select_icon:
+    push ax
+    push bx
+    push cx
+    push si
+
+    ; If same icon already selected, nothing to do
+    cmp al, [cs:selected_icon]
+    je .si_done
+
+    ; Deselect old icon (redraw without highlight)
+    push ax
+    mov al, [cs:selected_icon]
+    cmp al, 0xFF
+    je .si_no_old
+    ; Clear old highlight area and redraw old icon
+    call clear_icon_area
+    call draw_single_icon
+.si_no_old:
+    pop ax
+
+    ; Set new selection
+    mov [cs:selected_icon], al
+
+    ; Draw new icon with highlight
+    call draw_single_icon
+
+.si_done:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; clear_icon_area - Clear the area around an icon (for removing highlight)
+; Input: AL = icon slot
+; ============================================================================
+clear_icon_area:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Calculate position
+    xor ah, ah
+    push ax
+    mov bl, GRID_COLS
+    div bl
+
+    push ax
+    mov al, ah
+    xor ah, ah
+    mov bl, COL_WIDTH
+    mul bl
+    add ax, ICON_X_OFFSET
+    sub ax, 4
+    mov [cs:.cia_x], ax
+    pop ax
+
+    xor ah, ah
+    mov bl, ROW_HEIGHT
+    mul bl
+    add ax, GRID_START_Y
+    add ax, ICON_Y_OFFSET
+    sub ax, 4
+    mov [cs:.cia_y], ax
+    pop ax
+
+    ; Clear area
+    mov bx, [cs:.cia_x]
+    mov cx, [cs:.cia_y]
+    mov dx, 24                      ; 16 + 8
+    mov si, 24                      ; 16 + 8
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.cia_x: dw 0
+.cia_y: dw 0
+
+; ============================================================================
+; launch_app - Launch the selected app
+; Input: AL = icon slot
+; ============================================================================
+launch_app:
+    pusha
+
+    ; Get filename for this slot: app_info + (slot * 16)
+    xor ah, ah
+    shl ax, 4
+    add ax, app_info
+    mov si, ax
+
+    ; Load app to segment 0x3000
+    mov dl, [cs:mounted_drive]
+    mov dh, 0x30                    ; Target segment
+    mov ah, API_APP_LOAD
+    int 0x80
+    jc .la_error
+
+    ; Start app (non-blocking)
+    mov ah, API_APP_START
+    int 0x80
+
+    jmp .la_done
+
+.la_error:
+    ; Show error briefly (draw on desktop)
+    mov bx, 100
+    mov cx, 180
+    mov si, load_error_msg
+    mov ah, API_GFX_DRAW_WHITE
+    int 0x80
+
+.la_done:
     popa
     ret
 
 ; ============================================================================
-; get_selected_filename - Get pointer to selected app's filename
-; Converts FAT format "CLOCK   BIN" to dot format "CLOCK.BIN"
-; Output: SI = pointer to null-terminated filename in dot format
+; check_floppy_swap - Check if floppy disk was swapped
 ; ============================================================================
-get_selected_filename:
-    push di
-    push cx
-    push ax
+check_floppy_swap:
+    pusha
 
-    ; Get source: discovered_apps + (selected * 12)
-    mov al, [cs:selected]
-    mov cl, 12
-    mul cl                          ; AX = selected * 12
-    add ax, discovered_apps
-    mov si, ax                      ; SI = source (FAT format)
-    mov di, filename_buffer         ; DI = destination
+    ; INT 13h AH=16h: Check disk change status
+    mov ah, 16h
+    mov dl, 0                       ; Drive A:
+    int 13h
+    jnc .cfs_no_change              ; CF=0: no change
 
-    ; Copy filename part (up to 8 chars, stop at space)
-    mov cx, 8
-.copy_name:
-    mov al, [cs:si]
-    cmp al, ' '                     ; Stop at space
-    je .add_dot
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .copy_name
+    ; Disk changed - rescan
+    mov byte [cs:icon_count], 0
+    mov byte [cs:selected_icon], 0xFF
 
-.add_dot:
-    ; Skip remaining spaces in filename part
-    mov ax, si
-    sub ax, discovered_apps
-    ; Calculate how many chars we copied
-    push di
-    mov di, filename_buffer
-    mov ax, di
-    pop di
-    ; SI should point to extension (offset 8 from start of entry)
-    mov al, [cs:selected]
-    mov cl, 12
-    mul cl
-    add ax, discovered_apps
-    add ax, 8                       ; Extension starts at offset 8
-    mov si, ax
+    ; Clear kernel icons
+    mov ah, API_DESKTOP_CLEAR
+    int 0x80
 
-    ; Add dot
-    mov byte [cs:di], '.'
-    inc di
+    ; Rescan
+    call scan_disk
 
-    ; Copy extension (3 chars)
-    mov cx, 3
-.copy_ext:
-    mov al, [cs:si]
-    cmp al, ' '                     ; Stop at space
-    je .add_null
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .copy_ext
+    ; Redraw
+    call draw_background
+    mov bx, 4
+    mov cx, 4
+    mov si, title_str
+    mov ah, API_GFX_DRAW_WHITE
+    int 0x80
+    call draw_all_icons
 
-.add_null:
-    mov byte [cs:di], 0             ; Null terminator
-
-    ; Return pointer to converted filename
-    mov si, filename_buffer
-
-    pop ax
-    pop cx
-    pop di
+.cfs_no_change:
+    popa
     ret
 
-; Buffer for converted filename (8 + 1 + 3 + 1 = 13 bytes)
-filename_buffer: times 13 db 0
+; ============================================================================
+; read_bios_ticks - Read BIOS tick counter
+; Output: AX = tick count (low word)
+; ============================================================================
+read_bios_ticks:
+    push es
+    push bx
+    mov ax, 0x0040
+    mov es, ax
+    mov ax, [es:0x006C]
+    pop bx
+    pop es
+    ret
 
 ; ============================================================================
 ; Data Section
 ; ============================================================================
 
-window_title:   db 'Launcher', 0
-win_handle:     db 0
-selected:       db 0
-app_handle:     dw 0
-last_error:     db 0
-mounted_drive:  db 0                ; Drive number that was successfully mounted
-mount_handle:   db 0                ; Mount handle (0=FAT12, 1=FAT16)
-scan_safety:    dw 0                ; Safety counter for infinite loop prevention
-
-; Dynamic app discovery data
-discovered_apps: times (MAX_MENU_ITEMS * 12) db 0   ; 8 apps × 12 bytes each
-discovered_count: db 0
-dir_entry_buffer: times 32 db 0                     ; For fs_readdir
-dir_state:       dw 0                               ; Iteration state
-
-; String to match against for skipping ourselves
-launcher_name:  db 'LAUNCHER'                       ; 8 chars, no null needed
-
-; UI strings
-indicator:      db '> ', 0
+title_str:      db 'UnoDOS', 0
 no_apps_msg:    db 'No apps found', 0
-error_msg:      db 'Load failed!', 0
-error_code_label: db 'Code: ', 0
+load_error_msg: db 'Load failed!', 0
+
+; Drive and scan state
+mounted_drive:  db 0
+dir_state:      dw 0
+scan_safety:    dw 0
+
+; Icon tracking
+icon_count:     db 0
+selected_icon:  db 0xFF
+
+; Mouse state
+prev_buttons:   db 0
+last_click_tick: dw 0
+last_click_icon: db 0xFF
+
+; Floppy polling
+last_poll_tick: dw 0
+
+; Per-app info: 8 slots x 16 bytes (13B filename + 1B drive + 2B reserved)
+app_info:       times (MAX_ICONS * 16) db 0
+
+; Icon bitmaps: 8 slots x 64 bytes
+icon_bitmaps:   times (MAX_ICONS * 64) db 0
+
+; Icon names: 8 slots x 12 bytes
+icon_names:     times (MAX_ICONS * 12) db 0
+
+; Buffer for kernel icon registration (76 bytes: 64B bitmap + 12B name)
+register_buffer: times 76 db 0
+
+; Buffer for reading BIN file headers
+header_buffer:  times 80 db 0
+
+; Directory entry buffer (32 bytes for fs_readdir)
+dir_entry_buffer: times 32 db 0
+
+; FAT name for skipping ourselves
+launcher_name:  db 'LAUNCHER'
+
+; Default icon for apps without headers (simple square/app shape)
+; White outline rectangle with inner dot
+default_icon:
+    db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 0:  ################
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 1:  #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 2:  #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 3:  #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 4:  #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 5:  #..............#
+    db 0xC0, 0x03, 0xC0, 0x03      ; Row 6:  #.....##.......#
+    db 0xC0, 0x03, 0xC0, 0x03      ; Row 7:  #.....##.......#
+    db 0xC0, 0x03, 0xC0, 0x03      ; Row 8:  #.....##.......#
+    db 0xC0, 0x03, 0xC0, 0x03      ; Row 9:  #.....##.......#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 10: #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 11: #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 12: #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 13: #..............#
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 14: #..............#
+    db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 15: ################
+
+; App handle for launched app
+app_handle:     dw 0
