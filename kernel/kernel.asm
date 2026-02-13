@@ -5708,6 +5708,18 @@ win_move_stub:
     mov ax, [.handle]
     call win_draw_stub
 
+    ; Clear content area at new position (inside border, below title bar)
+    mov bx, [.new_x]
+    inc bx                          ; Inside left border
+    mov cx, [.new_y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov dx, [.win_w]
+    sub dx, 2                       ; Inside both borders
+    mov si, [.win_h]
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si                          ; Above bottom border
+    call gfx_clear_area_stub
+
     ; Calculate deltas: dx = new_x - old_x, dy = new_y - old_y
     mov ax, [.new_x]
     sub ax, [.old_x]
