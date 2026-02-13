@@ -2109,6 +2109,24 @@ restore_drag_content:
     shr ax, 2
     mov [.new_sb], ax
 
+    ; Calculate new bytes per row based on new position
+    ; (may differ from saved wc_bpr due to CGA byte alignment)
+    mov ax, [.new_cx]
+    add ax, [cs:wc_cw]
+    dec ax
+    shr ax, 2
+    sub ax, [.new_sb]
+    inc ax
+    mov [.new_bpr], ax
+
+    ; Use min(wc_bpr, new_bpr) to avoid writing past window right edge
+    mov ax, [cs:wc_bpr]
+    cmp ax, [.new_bpr]
+    jbe .use_saved_bpr
+    mov ax, [.new_bpr]
+.use_saved_bpr:
+    mov [.copy_bpr], ax
+
     ; Setup: DS=scratch (source), ES=CGA (dest)
     mov ax, 0x5000
     mov ds, ax
@@ -2137,8 +2155,13 @@ restore_drag_content:
     add ax, dx
     mov di, ax
 
-    mov cx, [cs:wc_bpr]
+    mov cx, [cs:.copy_bpr]
     rep movsb                       ; scratch -> CGA
+
+    ; Skip remaining source bytes if saved row was wider
+    mov ax, [cs:wc_bpr]
+    sub ax, [cs:.copy_bpr]
+    add si, ax
 
     inc bx
     pop cx
@@ -2150,9 +2173,11 @@ restore_drag_content:
     popa
     ret
 
-.new_cx:  dw 0
-.new_cy:  dw 0
-.new_sb:  dw 0
+.new_cx:   dw 0
+.new_cy:   dw 0
+.new_sb:   dw 0
+.new_bpr:  dw 0
+.copy_bpr: dw 0
 
 ; ============================================================================
 ; Deferred Drag Processing (called from event_get_stub)
@@ -2310,17 +2335,45 @@ gfx_draw_string_inverted:
     ret
 
 ; ============================================================================
+; gfx_text_width - Measure string width in pixels
+; Input: SI = pointer to string (uses caller_ds for segment)
+; Output: DX = width in pixels (characters * 8)
+; Preserves: All other registers
+; ============================================================================
+gfx_text_width:
+    push ax
+    push si
+    push ds
+
+    mov ds, [cs:caller_ds]          ; Use app's data segment
+    xor dx, dx                      ; DX = pixel width accumulator
+
+.tw_loop:
+    lodsb
+    test al, al
+    jz .tw_done
+    add dx, 8                       ; Each character is 8 pixels wide
+    jmp .tw_loop
+
+.tw_done:
+    pop ds
+    pop si
+    pop ax
+    clc
+    ret
+
+; ============================================================================
 ; Kernel API Table - At fixed address 0x1000:0x0D10
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x0F00 - ($ - $$) db 0
+times 0x0F80 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 33                           ; Number of function slots (0-32)
+    dw 34                           ; Number of function slots (0-33)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2374,6 +2427,9 @@ kernel_api_table:
     ; Window Drawing Context API
     dw win_begin_draw               ; 31: Set draw context (AL=window handle)
     dw win_end_draw                 ; 32: Clear draw context (fullscreen mode)
+
+    ; Text Measurement API
+    dw gfx_text_width               ; 33: Measure string width in pixels
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
