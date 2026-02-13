@@ -1,12 +1,12 @@
 # Build artifacts (intermediate files)
-build/*.bin
 build/*.o
 
 # Auto-generated files
 kernel/build_info.inc
 
-# Keep final floppy images
+# Keep final images and app binaries
 !build/*.img
+!build/*.bin
 
 # Temporary files
 *.tmp
