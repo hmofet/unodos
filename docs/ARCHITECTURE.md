@@ -153,8 +153,8 @@ Loading kernel................................ OK
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 34 functions |
-| Graphics API | 7 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width |
+| System Calls | INT 0x80 for API dispatch, 41 functions |
+| Graphics API | 8 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width, draw_icon |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
 | PS/2 Mouse | INT 0x74 (IRQ12) handler, XOR cursor, title bar drag |
@@ -164,6 +164,8 @@ Loading kernel................................ OK
 | Window Manager | Create, destroy, draw, focus, move, drag windows (16 max) |
 | Drawing Context | Window-relative coordinate translation for APIs 0-6 |
 | Content Preserve | Save/restore window content during drags (scratch at 0x5000) |
+| Desktop Icons | 8 registered icon slots, kernel repaints during window operations |
+| Multitasking | Cooperative round-robin scheduler with app_yield/app_start |
 
 ### Window Drawing Context
 
@@ -252,6 +254,21 @@ Color palette (Palette 1):
 - Apps return to shell via RETF
 - Shell re-creates its window and redraws menu after app returns
 
+## BIN File Icon Headers (v3.14.0)
+
+Applications can embed a 16x16 icon in an 80-byte header. See `docs/FEATURES.md` for the full specification.
+
+```
+Offset  Content
+0x00    EB 4E           JMP short to 0x50 (skip header)
+0x02    55 49           "UI" magic
+0x04    12 bytes        App display name (null-padded)
+0x10    64 bytes        16x16 2bpp CGA icon bitmap
+0x50    ...             Code entry point
+```
+
+Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
+
 ---
 
-*Document version: 4.0 (2026-02-11) - Updated for v3.13.0 Build 135*
+*Document version: 5.0 (2026-02-13) - Updated for v3.14.0 Build 144*
