@@ -17,8 +17,12 @@ API_FS_READDIR          equ 27
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 
+; Multitasking
+API_APP_YIELD           equ 34
+
 ; Event types
 EVENT_KEY_PRESS         equ 1
+EVENT_WIN_REDRAW        equ 6
 
 ; Display constants
 LINE_HEIGHT             equ 10          ; Pixels per line
@@ -64,22 +68,26 @@ entry:
     ; Scan and display files
     call scan_and_display
 
-    ; Event loop - wait for ESC, redraw on window move
+    ; Event loop - wait for ESC
 .main_loop:
     sti
+    mov ah, API_APP_YIELD           ; Yield to other tasks
+    int 0x80
 
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    call scan_and_display
+    jmp .main_loop
+.not_redraw:
     cmp al, EVENT_KEY_PRESS
     jne .no_event
     cmp dl, 27                      ; ESC key?
     je .exit_ok
 
 .no_event:
-    mov cx, 0x1000
-.delay:
-    loop .delay
     jmp .main_loop
 
 .exit_ok:
