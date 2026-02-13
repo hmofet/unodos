@@ -427,21 +427,6 @@ draw_menu:
 
 .draw_help:
 .draw_help_only:
-    ; Draw help text at bottom in WHITE
-    mov bx, [cs:content_x]
-    add bx, MENU_LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, [cs:content_h]
-    sub cx, 24                      ; Two lines from bottom
-    mov si, help_line1
-    mov ah, 6                       ; White
-    int 0x80
-
-    add cx, 10                      ; Next line
-    mov si, help_line2
-    mov ah, 6                       ; White
-    int 0x80
-
     popa
     ret
 
@@ -596,8 +581,6 @@ launcher_name:  db 'LAUNCHER'                       ; 8 chars, no null needed
 
 ; UI strings
 indicator:      db '> ', 0
-help_line1:     db 'W/S/Arrows: Select', 0
-help_line2:     db 'Enter: Run  ESC: Exit', 0
 no_apps_msg:    db 'No apps found', 0
 error_msg:      db 'Load failed!', 0
 error_code_label: db 'Code: ', 0

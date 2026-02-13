@@ -5,7 +5,49 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.13.0] - 2026-01-28
+## [3.13.0] - 2026-02-11
+
+### Fixed (Build 135) - Text Width Measurement
+
+- **gfx_text_width returned wrong values** - Was reporting 8px per character but draw_char advances 12px (8px glyph + 4px gap). Fixed to return 12px per character, matching actual rendering.
+- **Clock content overflowed window** - "00:00:00" = 96px (8×12) but was drawn at X=22 in 108px content area. Repositioned to X=6 for proper centering.
+- **Launcher help text caused white boxes** - "W/S/Arrows: Select" = 216px (18×12), far too wide for window. Removed help text from launcher.
+
+### Added (Builds 127-134) - Mouse Cursor, Window Dragging, Drawing Context
+
+- **XOR Mouse Cursor** - 8x10 arrow sprite drawn with plot_pixel_xor (self-erasing)
+  - Cursor hide/show with `cursor_locked` flag for flicker-free rendering
+  - Visible on all backgrounds (white on black, black on white)
+
+- **Window Title Bar Dragging** - Click and drag windows by title bar
+  - Three-layer architecture: IRQ12 detection → drag state machine → deferred processing
+  - `mouse_hittest_titlebar` checks all visible windows for click hits
+  - `mouse_drag_update` tracks offset and target position
+  - `mouse_process_drag` called from event_get_stub (safe from reentrancy)
+
+- **OS-Managed Content Preservation** - Window content saved during drags
+  - Scratch buffer at segment 0x5000 stores CGA pixel data
+  - Byte-aligned save/restore with `min(old_bpr, new_bpr)` for cross-boundary moves
+  - Apps don't need to redraw when their window is dragged
+
+- **Window Drawing Context** (APIs 31-32) - Apps use window-relative coordinates
+  - `win_begin_draw` activates context for a window handle
+  - `win_end_draw` deactivates context
+  - APIs 0-6 automatically translate BX/CX from (0,0)=content-top-left to absolute screen
+
+- **Text Width Measurement** (API 33) - `gfx_text_width` returns string width in pixels
+
+- **gfx_draw_string_inverted** (API 6) - Fixed to use caller_ds for string access
+  - Was reading from kernel segment (DS=0x1000) instead of app's segment
+  - Caused white garbage boxes when launcher drew help text
+
+### Changed (Builds 127-134)
+
+- API table moved from 0x0F00 to 0x0F80 (more code space)
+- API count increased from 30 to 34 (functions 30-33)
+- Mouse enabled by default at boot (was disabled)
+- Launcher binary: 1304 → 1069 bytes (removed debug code and help text)
+- Clock window: W=90 → W=110 with centered time display at X=6
 
 ### Added (Build 054) - Hard Drive / FAT16 Support
 

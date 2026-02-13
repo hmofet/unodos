@@ -1,6 +1,6 @@
 # UnoDOS Boot Architecture
 
-This document describes the boot process and architecture of UnoDOS, from power-on to the graphical welcome screen.
+This document describes the boot process and architecture of UnoDOS, from power-on to the graphical desktop.
 
 ## Overview
 
@@ -57,15 +57,21 @@ Power On
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Kernel (kernel/kernel.asm)                             │
-│  - Install INT 0x80 handler (API discovery)             │
+│  Phase 1: Early init (text mode, BIOS output)           │
+│  - Install INT 0x80 handler (API dispatch)              │
+│  - Install PS/2 mouse driver (INT 0x74/IRQ12)           │
+│  - Print version/build to serial/text output            │
+│                                                         │
+│  Phase 2: Interrupt handlers + graphics                 │
 │  - Install INT 09h handler (keyboard driver)            │
-│  - Initialize memory allocator (heap at 0x1400:0000)    │
-│  - Initialize event system (32-event queue)             │
-│  - Initialize FAT12 filesystem driver                   │
-│  - Detect conventional memory (INT 12h)                 │
 │  - Switch to CGA 320x200 graphics mode                  │
-│  - Draw welcome screen                                  │
-│  - Enter main event loop (keyboard demo)                │
+│  - Draw welcome screen with version/build info          │
+│  - Show mouse cursor                                    │
+│                                                         │
+│  Phase 3: System services                               │
+│  - Mount boot floppy (FAT12)                            │
+│  - Auto-load LAUNCHER.BIN from floppy                   │
+│  - Enter main event loop                                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -83,8 +89,11 @@ Linear Address    Segment:Offset    Description
 0x07E00-0x07FFF   0000:7E00-7FFF    Stack area
 0x08000-0x087FF   0800:0000-07FF    Stage 2 Loader (2KB)
 0x10000-0x16FFF   1000:0000-6FFF    Kernel (28KB)
-  └─ 0x10800     1000:0800          API table (256 bytes)
-0x17000-0x9FFFF   1700:0000+        Heap (malloc pool, ~532KB)
+  └─ 0x10F80     1000:0F80          API table
+0x14000-0x1FFFF   1400:0000+        Heap (malloc pool)
+0x20000-0x2FFFF   2000:0000-FFFF    Shell/Launcher segment (64KB)
+0x30000-0x3FFFF   3000:0000-FFFF    User app segment (64KB)
+0x50000-0x5FFFF   5000:0000-FFFF    Scratch buffer (window drag content)
 0xA0000-0xBFFFF   ----:----         Video memory (EGA/VGA)
 0xB8000-0xBFFFF   B800:0000-7FFF    CGA video memory (used by UnoDOS)
 0xC0000-0xFFFFF   ----:----         ROM area (BIOS, adapters)
@@ -114,27 +123,6 @@ Sector    Offset      Content                 Size
 3. Validate Stage 2 signature ("UN")
 4. Transfer control to Stage 2
 
-### Key Code
-
-```nasm
-; Load Stage 2 using BIOS INT 13h
-mov ah, 0x02        ; BIOS read sectors function
-mov al, 4           ; Number of sectors to read (2KB)
-mov ch, 0           ; Cylinder 0
-mov cl, 2           ; Starting sector (1-indexed)
-mov dh, 0           ; Head 0
-mov dl, [boot_drive]; Drive number
-int 0x13            ; Call BIOS
-
-; Signature validation
-mov ax, [es:0x0000]
-cmp ax, 0x4E55      ; 'UN' in little-endian
-jne boot_error
-
-; Jump to Stage 2
-jmp 0x0800:0x0002
-```
-
 ## Stage 2: Loader
 
 **File**: `boot/stage2.asm`
@@ -151,29 +139,8 @@ jmp 0x0800:0x0002
 
 ### Progress Indicator
 
-Stage 2 prints a dot (`.`) after each sector is loaded, providing visual feedback during the kernel load. This is especially useful on slow floppy drives.
-
 ```
 Loading kernel................................ OK
-```
-
-### Key Code
-
-```nasm
-.load_loop:
-    ; Read one sector
-    mov ah, 0x02
-    mov al, 1
-    int 0x13
-
-    ; Print progress dot
-    mov ah, 0x0E
-    mov al, '.'
-    int 0x10
-
-    ; Advance to next sector
-    ...
-    loop .load_loop
 ```
 
 ## Kernel
@@ -182,65 +149,48 @@ Loading kernel................................ OK
 **Size**: 28KB (56 sectors)
 **Load Address**: 0x1000:0x0000 (linear 0x10000 = 64KB mark)
 
-### Responsibilities
-
-1. Install system call handler (INT 0x80)
-2. Install keyboard driver (INT 09h)
-3. Install PS/2 mouse driver (INT 0x74/IRQ12)
-4. Initialize memory allocator (heap)
-5. Initialize event system
-6. Initialize FAT12 filesystem driver
-7. Initialize window manager
-8. Detect system resources (memory, video)
-9. Initialize CGA graphics mode
-10. Draw welcome screen with bordered window
-11. Run main event loop
-
 ### Key Subsystems
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API discovery, far call table for execution |
-| Graphics API | 6 functions: pixel, rect, filled_rect, char, string, clear |
+| System Calls | INT 0x80 for API dispatch, 34 functions |
+| Graphics API | 7 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
-| PS/2 Mouse | INT 0x74 (IRQ12) handler, 3-byte packet protocol, 8042 controller |
+| PS/2 Mouse | INT 0x74 (IRQ12) handler, XOR cursor, title bar drag |
 | Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE/MOUSE types |
-| Filesystem | FAT12 driver with mount, open, read, close, readdir operations |
+| Filesystem | FAT12 driver with mount, open, read, close, readdir |
 | App Loader | Load and execute .BIN applications from FAT12 |
-| Window Manager | Create, destroy, draw, focus, move windows (16 max) |
+| Window Manager | Create, destroy, draw, focus, move, drag windows (16 max) |
+| Drawing Context | Window-relative coordinate translation for APIs 0-6 |
+| Content Preserve | Save/restore window content during drags (scratch at 0x5000) |
 
-### Key Functions
+### Window Drawing Context
 
-| Function | Description |
-|----------|-------------|
-| `install_int_80` | Install system call handler |
-| `install_keyboard` | Install keyboard interrupt handler |
-| `install_mouse` | Install PS/2 mouse driver (IRQ12) |
-| `gfx_draw_string_stub` | Draw null-terminated string |
-| `mem_alloc_stub` | Allocate memory from heap |
-| `event_wait_stub` | Wait for next event |
-| `fs_mount_stub` | Mount FAT12 filesystem |
-| `fs_open_stub` | Open file by 8.3 name |
-| `fs_read_stub` | Read file contents |
-| `fs_readdir_stub` | Read directory entry |
-| `app_load_stub` | Load .BIN application |
-| `app_run_stub` | Execute loaded application |
-| `win_create_stub` | Create window with title/border |
-| `win_destroy_stub` | Destroy window and clear area |
-| `mouse_get_state` | Get mouse X, Y, buttons |
-| `mouse_is_enabled` | Check if mouse available |
+When an app calls `win_begin_draw` (API 31), a drawing context is activated. All subsequent calls to APIs 0-6 have their BX/CX coordinates automatically translated from window-relative to absolute screen coordinates:
+
+```
+absolute_x = window_x + 1 (border) + relative_x
+absolute_y = window_y + 10 (title bar) + relative_y
+```
+
+This allows apps to draw at (0,0) meaning the top-left of the window's content area.
+
+### Text Rendering
+
+Characters are 8x8 pixels but advance by **12 pixels** (8px glyph + 4px gap). To calculate the pixel width of a string, use `gfx_text_width` (API 33) which returns `num_chars * 12`.
 
 ## Font System
 
 Two bitmap fonts are included:
 
-**8x8 Font** (`boot/font8x8.asm`)
+**8x8 Font** (`kernel/font8x8.asm`)
 - 95 characters (ASCII 32-126)
-- 8 bytes per character
-- Used for main titles
+- 8 bytes per character, 8x8 pixels
+- 12px advance (8px char + 4px spacing)
+- Used for window titles, app text
 
-**4x6 Font** (`boot/font4x6.asm`)
+**4x6 Font** (`kernel/font4x6.asm`)
 - 95 characters (ASCII 32-126)
 - 6 bytes per character
 - Used for small text (version, clock, RAM info)
@@ -264,24 +214,13 @@ Bit 3-2: Pixel 2
 Bit 1-0: Pixel 3 (rightmost)
 ```
 
+**Important**: CGA operations must be byte-aligned (4-pixel boundaries) for save/restore operations.
+
 Color palette (Palette 1):
 - 00: Background color (blue)
 - 01: Cyan
 - 10: Magenta
 - 11: White
-
-## BIOS Interrupts Used
-
-| Interrupt | Function | Description |
-|-----------|----------|-------------|
-| INT 10h, AH=00h | Set Video Mode | Switch to CGA mode 4 |
-| INT 10h, AH=0Bh | Set Color Palette | Configure background/palette |
-| INT 10h, AH=0Eh | Teletype Output | Print characters (text mode) |
-| INT 11h | Equipment List | Detect video adapter type |
-| INT 12h | Memory Size | Get conventional memory in KB |
-| INT 13h, AH=00h | Reset Disk | Reset floppy controller |
-| INT 13h, AH=02h | Read Sectors | Load data from floppy |
-| INT 1Ah, AH=02h | Read RTC Time | Get hours, minutes, seconds |
 
 ## Segment Register Usage
 
@@ -301,41 +240,18 @@ Color palette (Palette 1):
 | Stage 2 | "UN" | 0x4E55 | Loader verification |
 | Kernel | "UK" | 0x4B55 | Kernel verification |
 
-## Error Handling
+## Dual Segment App Architecture
 
-### Stage 1 Errors
-- **Disk read error**: Display error message, halt
-- **Invalid Stage 2 signature**: Display error message, halt
+```
+0x2000:0x0000  Shell/Launcher (persists during user app execution)
+0x3000:0x0000  User app (Clock, Browser, Mouse Test, etc.)
+```
 
-### Stage 2 Errors
-- **Disk read error**: Display error message, halt
-- **Invalid kernel signature**: Display error message, halt
-
-### Kernel Errors
-- **RTC not available**: Display "--:--" instead of time
-
-## Design Rationale
-
-### Why Three Stages?
-
-1. **Stage 1** (512 bytes): BIOS limitation - can only load first sector
-2. **Stage 2** (2KB): Minimal loader, handles disk I/O complexity
-3. **Kernel** (28KB): Full OS code with Foundation Layer complete
-
-### Why Separate Kernel?
-
-- Kernel can exceed 8KB limit without modifying bootloader
-- Cleaner architecture for future development
-- Boot progress indicator during kernel load
-- Foundation for loading multiple kernels (debug/release)
-
-### Why 0x1000:0x0000 for Kernel?
-
-- Above Stage 2 (0x0800)
-- Linear address 0x10000 = 64KB mark
-- Leaves room for kernel growth (up to ~550KB)
-- Below video memory (0xA0000)
+- Apps use `[ORG 0x0000]` and are loaded at offset 0 in their segment
+- Shell at 0x2000 survives while user apps run at 0x3000
+- Apps return to shell via RETF
+- Shell re-creates its window and redraws menu after app returns
 
 ---
 
-*Document version: 3.2 (2026-01-28) - Updated for v3.13.0 Build 054 with FAT16/IDE Hard Drive Support*
+*Document version: 4.0 (2026-02-11) - Updated for v3.13.0 Build 135*

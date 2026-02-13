@@ -2354,7 +2354,7 @@ gfx_text_width:
     lodsb
     test al, al
     jz .tw_done
-    add dx, 8                       ; Each character is 8 pixels wide
+    add dx, 12                      ; Each character is 12 pixels wide (8px glyph + 4px gap)
     jmp .tw_loop
 
 .tw_done:

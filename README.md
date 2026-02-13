@@ -21,6 +21,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 | RAM | 128 KB | 256 KB+ |
 | Display | CGA (Color Graphics Adapter) | CGA or EGA |
 | Storage | 5.25" 360KB Floppy Drive | 3.5" 1.44MB Floppy |
+| Input | PC/XT keyboard | PS/2 mouse (optional) |
 | BIOS | IBM PC/XT compatible | Any PC-compatible BIOS |
 
 ### Tested Hardware
@@ -28,25 +29,23 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.12.0 Build 053)
+## Current Features (v3.13.0 Build 135)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
-- Boot progress indicator (dots during kernel load)
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
-- Graphical welcome screen with bordered window
-- System call infrastructure (INT 0x80 + API table with 30 functions)
-- Graphics API (draw pixel, rectangle, character, string)
+- System call infrastructure (INT 0x80 + API table with 34 functions)
+- Graphics API (pixel, rectangle, character, string, text measurement)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
-- **PS/2 Mouse driver (IRQ12/INT 0x74)** - NEW
-- Event system (32-event circular queue with KEY and MOUSE events)
-- Filesystem abstraction layer + FAT12 driver (read-only)
-- File operations (mount, open, read, close, readdir)
-- Multi-cluster file reading (FAT chain following)
-- **Application Loader** (load and run .BIN apps from FAT12)
-- **Window Manager** (create, destroy, draw windows)
+- PS/2 Mouse driver (IRQ12/INT 0x74) with visible XOR cursor
+- Event system (32-event circular queue)
+- FAT12 filesystem (read-only: mount, open, read, close, readdir)
+- Application Loader (load and run .BIN apps from FAT12)
+- **Window Manager** with mouse-driven title bar dragging
+- **Window Drawing Context** (apps use window-relative coordinates)
+- **OS-managed content preservation** during window drags
 - **Desktop Launcher** with dynamic app discovery
 
 ## Building
@@ -55,53 +54,20 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 
 **Linux (Ubuntu/Debian):**
 ```bash
-sudo apt install nasm qemu-system-x86 make
+sudo apt install nasm qemu-system-x86 make python3
 ```
-
-**Linux (Fedora):**
-```bash
-sudo dnf install nasm qemu-system-x86 make
-```
-
-**Linux (Arch):**
-```bash
-sudo pacman -S nasm qemu make
-```
-
-**Windows:**
-- Install [NASM](https://nasm.us/) and add to PATH
-- Install [QEMU](https://www.qemu.org/download/) (optional, for testing)
-- Use WSL or MinGW for `make`
 
 ### Build Commands
 
 ```bash
-# Build both 360KB and 1.44MB floppy images
-make
-
-# Build only 1.44MB image (for modern testing)
+# Build 1.44MB floppy image with OS + apps
 make floppy144
 
-# Run in QEMU (360KB image)
-make run
+# Build launcher floppy image
+make apps && make build/launcher-floppy.img
 
 # Run in QEMU (1.44MB image)
 make run144
-
-# Debug mode with QEMU monitor
-make debug
-
-# Build test applications
-make apps
-
-# Test app loader in QEMU (two floppy drives)
-make test-app
-
-# Show binary sizes
-make sizes
-
-# Increment build number for next build
-make bump-build
 
 # Clean build artifacts
 make clean
@@ -110,50 +76,39 @@ make clean
 ### Build Output
 
 After building, you'll find:
-- `build/unodos.img` - 360KB floppy image (for vintage 5.25" drives)
-- `build/unodos-144.img` - 1.44MB floppy image (for modern 3.5" drives)
+- `build/unodos-144.img` - 1.44MB floppy image (OS + apps)
+- `build/launcher-floppy.img` - Launcher + apps floppy image
+- `build/*.bin` - Individual compiled binaries
 
 ## Writing to Physical Floppy
-
-### Linux
-
-```bash
-# Write to 5.25" floppy drive
-sudo ./tools/writeflop.sh /dev/fd0
-
-# Write 1.44MB image to 3.5" floppy
-sudo ./tools/writeflop.sh -1 /dev/fd0
-```
 
 ### Windows (PowerShell, Run as Administrator)
 
 ```powershell
-# Write boot floppy (pulls latest from git first)
+# Write boot floppy
 .\tools\boot.ps1
 
-# Write app test floppy (for testing app loader)
-.\tools\app-test.ps1
-
-# Specify drive letter
-.\tools\boot.ps1 -DriveLetter B
+# Write launcher floppy
+.\tools\launcher.ps1
 ```
 
-### Windows (Command Prompt, Run as Administrator)
+### Linux
 
-```cmd
-tools\writeflop.bat
+```bash
+sudo dd if=build/unodos-144.img of=/dev/fd0 bs=512
 ```
 
-### Testing Launcher on Real Hardware
+### Testing on Real Hardware
 
 1. Write boot floppy: `.\tools\boot.ps1`
 2. Write launcher floppy: `.\tools\launcher.ps1`
-3. Boot from boot floppy (verify Build: 053)
+3. Boot from boot floppy (verify Build number on screen)
 4. Press **L** key to load launcher
 5. When prompted, swap to launcher floppy
 6. Launcher shows apps: CLOCK, TEST, BROWSER, MOUSE
 7. Navigate with W/S keys, press Enter to launch
 8. ESC returns to launcher
+9. Mouse cursor visible; drag windows by title bar
 
 ## Project Structure
 
@@ -173,108 +128,64 @@ unodos/
 │   ├── font8x8.asm     # 8x8 bitmap font data
 │   └── font4x6.asm     # 4x6 small font data
 ├── build/
-│   ├── boot.bin        # Compiled boot sector
-│   ├── stage2.bin      # Compiled stage2 loader
-│   ├── kernel.bin      # Compiled kernel
-│   ├── launcher.bin    # Desktop launcher application
-│   ├── clock.bin       # Clock application
-│   ├── browser.bin     # File browser application
-│   ├── mouse_test.bin  # Mouse test application
-│   ├── unodos.img      # 360KB floppy image
-│   ├── unodos-144.img  # 1.44MB boot floppy image
-│   └── launcher-floppy.img # Launcher + apps floppy image
-├── docs/
-│   ├── ARCHITECTURE.md # Boot loader architecture
-│   ├── ARCHITECTURE_PLAN.md # System architecture roadmap
-│   ├── FEATURES.md     # Features and API reference
-│   ├── SESSION_SUMMARY.md # Latest session summary
-│   └── ...             # Additional technical docs
-├── tools/
-│   ├── writeflop.sh    # Linux floppy write utility
-│   ├── boot.ps1        # PowerShell - write boot floppy
-│   ├── launcher.ps1    # PowerShell - write launcher floppy
-│   └── create_app_test.py # Create app floppy images
+│   ├── *.bin            # Compiled binaries
+│   ├── unodos-144.img   # 1.44MB boot floppy image
+│   └── launcher-floppy.img # Launcher + apps floppy
+├── docs/                # Technical documentation
+├── tools/               # Build and deployment utilities
 ├── Makefile
 ├── README.md
 ├── CHANGELOG.md
-├── CLAUDE.md         # Development guidelines
-├── VERSION           # Version string (3.12.0)
-└── BUILD_NUMBER      # Build number (053)
+├── CLAUDE.md            # AI development guidelines
+├── VERSION              # Version string (3.13.0)
+└── BUILD_NUMBER         # Build number (134)
 ```
 
 ## Documentation
 
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Technical details of the boot process
-- [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) - System architecture and implementation roadmap
-- [SYSCALL.md](docs/SYSCALL.md) - System call architecture analysis
-- [FAT12_IMPLEMENTATION_SUMMARY.md](docs/FAT12_IMPLEMENTATION_SUMMARY.md) - FAT12 filesystem implementation
-- [FAT12_HARDWARE_DEBUG.md](docs/FAT12_HARDWARE_DEBUG.md) - Hardware debugging and bug fixes
-- [FEATURES.md](docs/FEATURES.md) - Planned features roadmap
-- [SESSION_2026-01-25.md](docs/SESSION_2026-01-25.md) - Latest development session
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Boot process and system architecture
+- [FEATURES.md](docs/FEATURES.md) - Features roadmap and API reference
+- [WINDOW_MANAGER_PLAN.md](docs/WINDOW_MANAGER_PLAN.md) - Window manager design
+- [MEMORY_LAYOUT.md](docs/MEMORY_LAYOUT.md) - Memory layout analysis
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes
 
 ## Development Status
 
-### Completed
-- [x] Three-stage boot architecture (boot + stage2 + kernel)
-- [x] Separate kernel (28KB, loaded at 64KB mark)
-- [x] Boot progress indicator
-- [x] Memory detection (BIOS INT 12h)
-- [x] Video adapter detection (CGA/EGA/VGA)
-- [x] CGA 320x200 4-color graphics
-- [x] Custom bitmap fonts (8x8, 4x6)
-- [x] Graphical welcome screen
-- [x] Real-time clock display
-- [x] RAM status display
-- [x] Character demonstration
+### Completed (Foundation Layer)
+- [x] System call infrastructure (INT 0x80 + Far Call Table)
+- [x] Graphics API (7 functions including text measurement)
+- [x] Memory allocator (malloc/free)
+- [x] Keyboard driver (INT 09h)
+- [x] PS/2 Mouse driver (IRQ12/INT 0x74) with XOR cursor
+- [x] Event system (32-event circular queue)
+- [x] FAT12 filesystem (read-only)
 
-### Completed (Foundation Layer) ✅
-- [x] System call infrastructure (INT 0x80 + Far Call Table) - v3.3.0
-- [x] Graphics API abstraction layer - v3.4.0
-- [x] Memory allocator (malloc/free) - v3.5.0
-- [x] Kernel expansion (16KB → 24KB → 28KB) - v3.6.0 → v3.10.0
-- [x] Aggressive kernel optimization - v3.7.0
-- [x] Keyboard input handling (INT 09h driver) - v3.8.0
-- [x] Event system (circular queue, event-driven architecture) - v3.9.0
-- [x] Filesystem abstraction layer + FAT12 driver - v3.10.0
-- [x] **PS/2 Mouse driver (IRQ12/INT 0x74)** - v3.12.0 Build 053
+### Completed (Core Services)
+- [x] Application loader (load .BIN from FAT12)
+- [x] Window Manager (create, destroy, draw, focus, move, dragging)
+- [x] Window drawing context (window-relative coordinates)
+- [x] OS-managed content preservation during window drags
+- [x] Desktop Launcher with dynamic app discovery
+- [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine)
 
-**Foundation Layer Complete!** All core infrastructure is now in place.
-
-### Completed (Core Services) ✅
-- [x] Application loader (load .BIN from FAT12) - v3.11.0
-- [x] Window Manager (create, destroy, draw, focus, move) - v3.12.0
-- [x] Desktop Launcher with dynamic app discovery - v3.12.0 Build 042
-- [x] Directory iteration (fs_readdir API) - v3.12.0 Build 042
-
-### Completed (Applications) ✅
-- [x] LAUNCHER.BIN - Desktop launcher with dynamic discovery (1061 bytes)
-- [x] CLOCK.BIN - Real-time clock display (249 bytes)
-- [x] TEST.BIN - Hello test application (112 bytes)
-- [x] BROWSER.BIN - File browser showing files with sizes (564 bytes)
-- [x] MOUSE.BIN - PS/2 mouse test/demo application (578 bytes)
-
-### Planned (Standard Library - v3.14.0)
-- [ ] graphics.lib - C-callable wrappers for Graphics API
-- [ ] unodos.lib - Initialization and utility functions
+### Completed (Applications)
+- [x] LAUNCHER.BIN - Desktop launcher (1069 bytes)
+- [x] CLOCK.BIN - Real-time clock display (238 bytes)
+- [x] TEST.BIN - Hello World window (159 bytes)
+- [x] BROWSER.BIN - File browser with file sizes (477 bytes)
+- [x] MOUSE.BIN - Mouse test/demo (634 bytes)
 
 ### Planned (Future)
 - [ ] Text editor
 - [ ] Calculator
-- [ ] Serial mouse support (Microsoft compatible)
+- [ ] Overlapping window redraw
 - [ ] Sound support (PC speaker)
-
-See [ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for detailed roadmap.
 
 ## Version History
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.12.0** (Build 053)
-
-## Contributing
-
-This project is in active development. See the documentation in `docs/` for technical details.
+Current version: **3.13.0** (Build 135)
 
 ## License
 
@@ -283,8 +194,6 @@ UnoDOS License - Copyright (c) 2026 Arin Bakht
 - **Distribution**: Allowed in original, unmodified form with attribution
 - **Modification**: NOT permitted (no derivatives)
 - **Attribution**: Required - credit original author and link to source
-
-See [LICENSE.md](../LICENSE.md) for full terms.
 
 ---
 
