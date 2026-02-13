@@ -1,5 +1,5 @@
-; CLOCK.BIN - Clock application for UnoDOS v3.12.0
-; Build 028 - Clear before drawing time
+; CLOCK.BIN - Clock application for UnoDOS
+; Displays RTC time in a draggable window
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -11,7 +11,9 @@ API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
-API_WIN_GET_CONTENT     equ 25
+API_WIN_DESTROY         equ 21
+API_WIN_BEGIN_DRAW      equ 31
+API_WIN_END_DRAW        equ 32
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -40,18 +42,14 @@ entry:
     jc .exit_fail
     mov [cs:win_handle], al         ; Save handle
 
-    ; Get content area coordinates
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_GET_CONTENT
+    ; Set window drawing context - coordinates now relative to content area
+    mov ah, API_WIN_BEGIN_DRAW
     int 0x80
-    jc .exit_fail
-
-    ; Save content area (BX=X, CX=Y, DX=Width, SI=Height)
-    mov [cs:content_x], bx
-    mov [cs:content_y], cx
 
     ; Main loop - update time and check for ESC
 .main_loop:
+    sti
+
     ; Read RTC time using BIOS INT 1Ah, AH=02h
     ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
     mov ah, 02h
@@ -82,22 +80,17 @@ entry:
     mov [cs:time_str+6], ah         ; Tens digit
     mov [cs:time_str+7], al         ; Ones digit
 
-    ; Clear time area before drawing (prevents ghosting)
-    ; gfx_clear_area: BX=X, CX=Y, DX=Width, SI=Height
-    mov bx, [cs:content_x]
-    add bx, 27                      ; Same X offset as text
-    mov cx, [cs:content_y]
-    add cx, 10                      ; Same Y offset as text
-    mov dx, 100                     ; Width (8 chars * ~12 pixels)
-    mov si, 10                      ; Height (8 pixel font + margin)
+    ; Clear time area (window-relative)
+    mov bx, 27                      ; X within content area
+    mov cx, 10                      ; Y within content area
+    mov dx, 100                     ; Width
+    mov si, 10                      ; Height
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Draw time string at content area + offset for centering
-    mov bx, [cs:content_x]
-    add bx, 27                      ; Center horizontally
-    mov cx, [cs:content_y]
-    add cx, 10                      ; Down a bit from top
+    ; Draw time string (window-relative)
+    mov bx, 27                      ; Center horizontally
+    mov cx, 10                      ; Down from top
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -112,7 +105,7 @@ entry:
     je .exit_ok
 
 .no_event:
-    ; Short delay - just enough to not spin too fast
+    ; Short delay
     mov cx, 0x4000
 .delay:
     loop .delay
@@ -131,6 +124,12 @@ entry:
     ret
 
 .exit_ok:
+    mov ah, API_WIN_END_DRAW
+    int 0x80
+
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_DESTROY
+    int 0x80
     xor ax, ax
     jmp .exit
 
@@ -145,9 +144,7 @@ entry:
 
 ; Data Section
 window_title:   db 'Clock', 0
-win_handle:     dw 0
-content_x:      dw 0
-content_y:      dw 0
+win_handle:     db 0
 time_str:       db '00:00:00', 0
 rtc_hours:      db 0
 rtc_mins:       db 0

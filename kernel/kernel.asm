@@ -2059,7 +2059,17 @@ mouse_process_drag:
     pop ax
 
     ; AX=handle, BX=target_x, CX=target_y
+    push ax
     call win_move_stub
+    pop ax
+
+    ; Post EVENT_WIN_MOVED so app can redraw content
+    push dx
+    xor dx, dx
+    mov dl, al                      ; DX = window handle
+    mov al, EVENT_WIN_MOVED
+    call post_event
+    pop dx
 
 .done:
     ret
@@ -2634,7 +2644,8 @@ EVENT_NONE          equ 0
 EVENT_KEY_PRESS     equ 1
 EVENT_KEY_RELEASE   equ 2           ; Future
 EVENT_TIMER         equ 3           ; Future
-EVENT_MOUSE         equ 4           ; Future
+EVENT_MOUSE         equ 4
+EVENT_WIN_MOVED     equ 5
 
 ; Event structure (3 bytes):
 ;   +0: type (byte)
