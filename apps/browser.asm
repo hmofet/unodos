@@ -19,7 +19,6 @@ API_WIN_END_DRAW        equ 32
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
-EVENT_WIN_MOVED         equ 5
 
 ; Display constants
 LINE_HEIGHT             equ 10          ; Pixels per line
@@ -73,16 +72,9 @@ entry:
     int 0x80
     jc .no_event
     cmp al, EVENT_KEY_PRESS
-    jne .check_win_moved
+    jne .no_event
     cmp dl, 27                      ; ESC key?
     je .exit_ok
-    jmp .no_event
-
-.check_win_moved:
-    cmp al, EVENT_WIN_MOVED
-    jne .no_event
-    ; Window was dragged - redraw content
-    call scan_and_display
 
 .no_event:
     mov cx, 0x1000
