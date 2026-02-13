@@ -19,13 +19,15 @@ API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
 API_FS_READDIR          equ 27
 API_APP_LOAD            equ 18
-API_APP_RUN             equ 19
+API_APP_START           equ 35
+API_APP_YIELD           equ 34
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_WIN_GET_CONTENT     equ 25
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
+EVENT_WIN_REDRAW        equ 6
 
 ; Menu constants
 MENU_ITEM_HEIGHT        equ 12          ; Pixels per menu item
@@ -64,11 +66,21 @@ entry:
     ; Main event loop
 .enter_main_loop:
 .main_loop:
-    sti                             ; RE-ENABLE INTERRUPTS (INT 0x80 clears IF)
+    sti
+    mov ah, API_APP_YIELD           ; Yield to other tasks
+    int 0x80
+
     ; Get event (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
+
+    ; Check for window redraw event
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    call draw_menu
+    jmp .main_loop
+.not_redraw:
 
     ; Check if key press
     cmp al, EVENT_KEY_PRESS
@@ -131,15 +143,11 @@ entry:
     jmp .no_event
 
 .launch_app:
-    ; Destroy launcher window before launching
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_DESTROY
-    int 0x80
-
     ; Get filename pointer for selected app
     call get_selected_filename      ; Returns SI = filename pointer
 
     ; Load app to segment 0x3000 (user segment)
+    ; Note: app_load_stub auto-terminates any existing app at 0x3000
     mov dl, [cs:mounted_drive]      ; Use the drive we successfully mounted
     mov dh, 0x30                    ; Target segment 0x3000
     mov ah, API_APP_LOAD
@@ -149,31 +157,22 @@ entry:
     ; Save app handle
     mov [cs:app_handle], al
 
-    ; Run the app
-    xor ah, ah                      ; AX = app handle
-    mov ah, API_APP_RUN
+    ; Start the app (non-blocking - runs cooperatively)
+    mov ah, API_APP_START
     int 0x80
 
-    ; App returned - recreate our window
-    call create_window
-    call draw_menu
+    ; Continue launcher event loop (both windows now visible)
     jmp .main_loop
 
 .load_error:
     ; Save error code
     mov [cs:last_error], al
 
-    ; Recreate window and show error
-    call create_window
-    call draw_menu
+    ; Show error
     call draw_error
     jmp .main_loop
 
 .no_event:
-    ; Small delay to avoid CPU spin
-    mov cx, 0x1000
-.delay:
-    loop .delay
     jmp .main_loop
 
 .exit_ok:
