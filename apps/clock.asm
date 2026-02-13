@@ -85,15 +85,16 @@ entry:
     mov [cs:time_str+7], al
 
     ; Clear time area (window-relative, centered in 108px content)
-    mov bx, 22
+    ; "00:00:00" = 8 chars × 12px advance = 96px wide
+    mov bx, 6
     mov cx, 8
-    mov dx, 66
+    mov dx, 98
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Draw time string (window-relative, centered)
-    mov bx, 22
+    ; Draw time string (window-relative, centered: (108-96)/2 = 6)
+    mov bx, 6
     mov cx, 8
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING

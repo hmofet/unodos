@@ -2,26 +2,6 @@
 
 This document contains important instructions for AI assistants working on UnoDOS during long debugging sessions.
 
-## Transcript Instructions for Claude Sessions
-
-Maintain a file called `TRANSCRIPT.md` in the project root. Update it **after every single response you give** — do not batch updates or wait until later. If the file already exists, append to it; never overwrite.
-
-Format each exchange as:
-
-```
-**User:** [their exact message]
-
-**Claude:** [your full response — conversational text verbatim, tool actions summarized in brackets like [Created file X], key output included]
-
----
-```
-
-**SECURITY**: Never include sensitive information in TRANSCRIPT.md — no keys, passwords, usernames, tokens, API keys, or credentials. Redact or omit such content entirely.
-
-New sessions get a header: `## Session N - YYYY-MM-DD`
-
-Prioritize keeping the transcript current. If you notice it's fallen behind, catch it up immediately before doing other work.
-
 ## Build Number Requirement
 
 **CRITICAL**: For any persistent debugging issue that requires multiple build-test cycles:
@@ -29,9 +9,9 @@ Prioritize keeping the transcript current. If you notice it's fallen behind, cat
 1. **Always display a unique build number** on the boot screen
 2. Build number MUST change with every new build
 3. Build number stored in BUILD_NUMBER file
-4. Display format: `Build: XXX` (e.g., "Build: 052")
+4. Display format: `Build: XXX` (e.g., "Build: 135")
 
-**Why**: During hardware testing sessions, the developer needs to verify they're testing the correct build. Static version numbers (v3.12.0) don't change between debug builds, making it impossible to confirm the right binary is running.
+**Why**: During hardware testing sessions, the developer needs to verify they're testing the correct build. Static version numbers (v3.13.0) don't change between debug builds, making it impossible to confirm the right binary is running.
 
 **Location**: Display build number below the version string at coordinates (4, 14)
 
@@ -41,14 +21,15 @@ Prioritize keeping the transcript current. If you notice it's fallen behind, cat
 
 **Workflow**:
 1. Make code changes on Linux development machine
-2. Run `make clean && make floppy144 && make apps && make hd-image` to build all images
-3. **Commit and push** all .img files to git
-4. Developer pulls the repo and uses PowerShell scripts to write to media
-5. No build step on developer's machine - they get pre-built binaries from git
+2. Run `make clean && make floppy144` to build OS floppy (includes apps)
+3. Run `make apps && make build/launcher-floppy.img` to build launcher floppy
+4. **Commit and push** all .img and .bin files to git
+5. Developer pulls the repo and uses PowerShell scripts to write to media
+6. No build step on developer's machine - they get pre-built binaries from git
 
 **Images built**:
-- `build/unodos-144.img` - Floppy with OS + Launcher
-- `build/unodos-hd.img` - HDD/USB with OS + Launcher + All Apps
+- `build/unodos-144.img` - 1.44MB floppy with OS + apps (FAT12)
+- `build/launcher-floppy.img` - Separate apps-only floppy
 
 **Never**: Don't tell the developer to "run make" - they can't. Always build and commit for them.
 
@@ -70,15 +51,43 @@ Prioritize keeping the transcript current. If you notice it's fallen behind, cat
 
 **Why**: INT 0x80 (and all interrupts) automatically clears the IF flag. Without STI, no keyboard IRQs fire and no events are queued.
 
+## Window Drawing Context API
+
+**CRITICAL**: Apps MUST use `WIN_BEGIN_DRAW` / `WIN_END_DRAW` for window-relative drawing:
+
+```asm
+    ; After win_create, set drawing context
+    mov ah, API_WIN_BEGIN_DRAW      ; Function 31
+    int 0x80
+
+    ; Now all drawing calls (functions 0-6) use window-relative coordinates
+    ; BX=0, CX=0 is the top-left of the content area (inside border/title)
+    mov bx, 10                      ; X relative to content area
+    mov cx, 5                       ; Y relative to content area
+    mov si, my_string
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Before destroying window, clear context
+    mov ah, API_WIN_END_DRAW        ; Function 32
+    int 0x80
+```
+
+**Why**: The INT 0x80 handler auto-translates BX/CX for drawing APIs 0-6 when a draw context is active. This means apps don't need absolute screen coordinates and content is preserved correctly during window drags.
+
+**Content preservation**: The OS automatically saves and restores window content during mouse-driven drags. Apps do NOT need to handle redraw events.
+
 ## Dual Segment App Architecture
 
 **Memory Layout**:
 ```
 0x0000 - 0x0FFF  : BIOS/IVT
-0x1000 - 0x13FF  : Kernel code and data
+0x1000 - 0x13FF  : Kernel code and data (API table at 0x0F80)
 0x1400 - 0x1FFF  : Heap (kernel allocations)
 0x2000 - 0x2FFF  : Shell/Launcher segment (persists during app execution)
 0x3000 - 0x3FFF  : User app segment (Clock, Browser, etc.)
+0x5000           : Scratch buffer (used by OS for drag content preservation)
+0xB800           : CGA video memory
 ```
 
 - **Shell (0x2000)**: Launcher loads here, survives while user apps run
@@ -95,21 +104,24 @@ Prioritize keeping the transcript current. If you notice it's fallen behind, cat
 - Split cleanup paths when code can exit a function through multiple routes
 - Use comments to track stack state: `; Stack: [CX] [AX] [filename]`
 
+## BP/SS Segment Bug
+
+**CRITICAL**: In x86 real mode, `[bp + displacement]` defaults to the SS segment, NOT DS!
+
+Since the kernel uses DS=0x1000 but SS=0x0000, any `[bp + offset]` access reads from the wrong segment. Always use explicit `[ds:bp + offset]` override when accessing kernel data via BP.
+
 ## Testing Procedure for Hardware
 
 **Floppy Test**:
-1. Build: `make clean && make floppy144`
-2. Commit and push .img file
-3. Developer runs: `.\tools\floppy.ps1` (writes UnoDOS + Launcher to A:)
-4. Boot from floppy - launcher auto-loads!
-5. Test: navigate with W/S, launch apps with Enter, ESC to exit
-
-**HDD/USB Test**:
-1. Build: `make apps && make hd-image`
-2. Commit and push .img file
-3. Developer runs: `.\tools\hd.ps1 -ImagePath build\unodos-hd.img -DiskNumber N`
-4. Boot from HDD/USB - launcher auto-loads!
-5. All apps available immediately (Clock, Browser, Mouse, Test)
+1. Build: `make clean && make floppy144 && make apps && make build/launcher-floppy.img`
+2. Commit and push .img files
+3. Developer runs: `.\tools\boot.ps1` (writes OS to A:)
+4. Swap to blank floppy
+5. Developer runs: `.\tools\launcher.ps1` (writes launcher floppy)
+6. Boot from OS floppy
+7. Press 'L' to load launcher, swap to launcher floppy when prompted
+8. Test: navigate with W/S, launch apps with Enter, ESC to exit
+9. Test mouse: cursor visible, drag windows by title bar
 
 **Always verify**: Developer should report the build number displayed on screen to confirm they're testing the right binary.
 
@@ -142,69 +154,32 @@ The `fs_readdir` API returns FAT format. The `app_load` API expects dot format. 
 ```
 
 API functions that need app strings use these saved values:
-- `gfx_draw_string_stub` uses `caller_ds` for string access
+- `gfx_draw_string_stub` (function 4) uses `caller_ds` for string access
+- `gfx_draw_string_inverted` (function 6) uses `caller_ds` for string access
+- `gfx_text_width` (function 33) uses `caller_ds` for string access
 - `win_create_stub` uses `caller_es` for window title
+
+## CGA Byte Alignment
+
+**Problem**: CGA mode 4 stores 4 pixels per byte (2bpp). When saving/restoring window content during drags, byte boundaries don't align with pixel boundaries.
+
+**Key insight**: Content save/restore operates on whole CGA bytes. When window position changes, the byte alignment can change, so `restore_drag_content` must calculate `new_bpr` (bytes per row) for the new position and use `min(saved_bpr, new_bpr)` to avoid writing past the window's right edge.
 
 ## Git Workflow
 
-**Pre-built binaries are committed**: Unlike typical projects, build/*.img files are checked into git so Windows users can pull and write directly.
+**Pre-built binaries are committed**: Unlike typical projects, build/*.img and build/*.bin files are checked into git so Windows users can pull and write directly.
 
-**Always commit all images**:
+**Always commit all images and binaries**:
 ```bash
-git add BUILD_NUMBER apps/*.asm build/unodos-144.img build/unodos-hd.img
+git add BUILD_NUMBER apps/*.asm kernel/kernel.asm \
+  build/unodos-144.img build/launcher-floppy.img \
+  build/*.bin
 git commit -m "Description (Build XXX)"
 git push
 ```
 
-## Launcher Drive Detection (Build 074)
-
-**Issue**: Launcher was hardcoded to scan drive A: (0x00), so HDD boots couldn't find apps even though they were in the FAT16 filesystem.
-
-**Solution**: Launcher now tries HDD (0x80) first, then falls back to floppy (0x00). It saves which drive successfully mounted and uses that for app loading.
-
-**Key Code** ([launcher.asm:199-219](apps/launcher.asm#L199-L219)):
-```asm
-; Try HDD first (0x80)
-mov al, 0x80
-mov ah, API_FS_MOUNT
-int 0x80
-jnc .mounted_hdd
-
-; HDD failed, try floppy (0x00)
-mov al, 0
-mov ah, API_FS_MOUNT
-int 0x80
-jc .scan_done
-```
-
-**Result**: Both floppy and HDD versions now work - launcher automatically detects which drive has apps.
-
-## FAT16 Readdir Implementation (Build 076)
-
-**Problem**: Even with Build 074's drive detection fix, launcher still showed "No apps found" on HDD. Root cause: `fs_readdir_stub` only supported FAT12, not FAT16!
-
-**Context**:
-- Floppy uses FAT12 filesystem (mount handle 0)
-- HDD uses FAT16 filesystem (mount handle 1)
-- Launcher calls `API_FS_READDIR` to scan for .BIN files
-- Previous `fs_readdir_stub` was hardcoded for FAT12 only
-
-**Solution** ([kernel.asm:2382-2418, 4121-4229](kernel/kernel.asm)):
-1. Added routing in `fs_readdir_stub` to check mount handle
-2. Implemented `fat16_readdir()` function
-3. Reads FAT16 root directory sectors using `fat16_read_sector`
-4. Skips deleted entries (0xE5) and volume labels (attribute 0x0F)
-5. Returns 32-byte FAT directory entries to caller
-
-**State Management**:
-- State CX = entry index (0 to `fat16_root_entries - 1`)
-- Calculates sector and offset automatically
-- Returns `FS_ERR_END_OF_DIR` when all entries scanned
-
-**Result**: Both floppy (FAT12) and HDD (FAT16) app scanning fully work!
-
 ---
 
-**Last Updated**: 2026-01-28
+**Last Updated**: 2026-02-11
 **Current Version**: v3.13.0
-**Current Build**: 076
+**Current Build**: 135
