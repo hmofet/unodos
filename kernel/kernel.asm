@@ -139,7 +139,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-32)
     ; Validate function number
-    cmp ah, 36                      ; Max function + 1 (0-36)
+    cmp ah, 41                      ; Max function count (0-40 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -2518,7 +2518,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 37                           ; Number of function slots (0-36)
+    dw 41                           ; Number of function slots (0-40)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2580,6 +2580,12 @@ kernel_api_table:
     dw app_yield_stub               ; 34: Yield CPU to next task
     dw app_start_stub               ; 35: Start task (non-blocking)
     dw app_exit_stub                ; 36: Exit current task
+
+    ; Desktop Icon API (v3.14.0)
+    dw desktop_set_icon_stub        ; 37: Register desktop icon
+    dw desktop_clear_icons_stub     ; 38: Clear all desktop icons
+    dw gfx_draw_icon_stub           ; 39: Draw 16x16 icon bitmap
+    dw fs_read_header_stub          ; 40: Read file header bytes
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -6189,6 +6195,498 @@ win_create_stub:
 .save_flags: db 0
 .slot_off:   dw 0
 
+; ============================================================================
+; Desktop Icon APIs (v3.14.0)
+; ============================================================================
+
+; desktop_set_icon_stub - Register a desktop icon
+; Input: AL = slot (0-7), BX = X pos, CX = Y pos
+;        SI -> 76 bytes in caller's DS: 64B bitmap + 12B name
+; Output: CF=0 success, CF=1 invalid slot
+desktop_set_icon_stub:
+    push di
+    push si
+    push cx
+    push bx
+    push ax
+    push es
+    push ds
+
+    ; Validate slot
+    cmp al, DESKTOP_MAX_ICONS
+    jae .dsi_invalid
+
+    ; Calculate destination: desktop_icons + (slot * 80)
+    xor ah, ah
+    mov di, DESKTOP_ICON_SIZE
+    mul di                          ; AX = slot * 80
+    add ax, desktop_icons
+    mov di, ax                      ; DI = destination in kernel data
+
+    ; Set kernel DS for writing
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Store X and Y position
+    mov [di + DESKTOP_ICON_OFF_X], bx
+    mov [di + DESKTOP_ICON_OFF_Y], cx
+
+    ; Copy 76 bytes (64B bitmap + 12B name) from caller's segment
+    mov ax, [caller_ds]
+    mov ds, ax                      ; DS = caller's segment
+    ; DI = destination offset (kernel), SI = source offset (caller)
+    ; Need ES:DI = kernel, DS:SI = caller
+    mov ax, 0x1000
+    mov es, ax
+    add di, DESKTOP_ICON_OFF_BITMAP ; DI points to bitmap field
+    mov cx, 76                      ; 64 bitmap + 12 name
+    rep movsb
+
+    ; Update icon count (in kernel DS)
+    mov ax, 0x1000
+    mov ds, ax
+    ; Count occupied slots
+    mov si, desktop_icons
+    xor cx, cx                      ; Count
+    mov al, DESKTOP_MAX_ICONS
+.dsi_count:
+    cmp word [si + DESKTOP_ICON_OFF_X], 0
+    jne .dsi_has_icon
+    cmp word [si + DESKTOP_ICON_OFF_Y], 0
+    je .dsi_count_next
+.dsi_has_icon:
+    inc cl
+.dsi_count_next:
+    add si, DESKTOP_ICON_SIZE
+    dec al
+    jnz .dsi_count
+    mov [desktop_icon_count], cl
+
+    pop ds
+    pop es
+    pop ax
+    pop bx
+    pop cx
+    pop si
+    pop di
+    clc
+    ret
+
+.dsi_invalid:
+    pop ds
+    pop es
+    pop ax
+    pop bx
+    pop cx
+    pop si
+    pop di
+    stc
+    ret
+
+; desktop_clear_icons_stub - Clear all desktop icons
+; Input: none
+; Output: CF=0 always
+desktop_clear_icons_stub:
+    push ax
+    push cx
+    push di
+    push es
+
+    mov ax, 0x1000
+    mov es, ax
+    mov di, desktop_icons
+    mov cx, (DESKTOP_MAX_ICONS * DESKTOP_ICON_SIZE)
+    xor al, al
+    rep stosb
+    mov byte [desktop_icon_count], 0
+
+    pop es
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+
+; gfx_draw_icon_stub - Draw a 16x16 2bpp icon to screen
+; Input: BX = X position (should be divisible by 4 for byte alignment)
+;        CX = Y position
+;        SI -> 64-byte bitmap in caller's DS segment
+; Output: none
+; Handles CGA interlacing (even rows bank 0, odd rows bank 1)
+gfx_draw_icon_stub:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+
+    ; Set up source segment from caller_ds
+    mov ax, [caller_ds]
+    mov ds, ax
+
+    ; Set up CGA video segment
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Hide cursor during draw
+    push bx
+    push cx
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    pop ds
+    pop cx
+    pop bx
+
+    ; Draw 16 rows, 4 bytes per row
+    mov dx, 16                      ; Row counter
+
+.icon_row:
+    ; Calculate CGA address for row at (BX, CX)
+    ; Even rows: (CX/2)*80 + BX/4
+    ; Odd rows:  (CX/2)*80 + BX/4 + 0x2000
+    push cx
+    push bx
+    mov ax, cx
+    shr ax, 1                       ; AX = Y / 2
+    push dx
+    mov di, 80
+    mul di                          ; AX = (Y/2) * 80
+    pop dx
+    mov di, ax                      ; DI = row base
+
+    mov ax, bx
+    shr ax, 1
+    shr ax, 1                       ; AX = X / 4
+    add di, ax                      ; DI = row base + byte offset
+
+    test cl, 1                      ; Odd row?
+    jz .icon_even
+    add di, 0x2000
+.icon_even:
+    ; Copy 4 bytes from DS:SI to ES:DI
+    movsb
+    movsb
+    movsb
+    movsb
+
+    pop bx
+    pop cx
+    inc cx                          ; Next Y row
+    dec dx
+    jnz .icon_row
+
+    ; Show cursor again
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    pop ds
+
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; fs_read_header_stub - Read first N bytes from a file by name
+; Opens the file, reads CX bytes into ES:DI, closes it
+; Input: BX = mount handle (0=FAT12, 1=FAT16)
+;        SI -> filename (null-terminated, in caller's segment)
+;        ES:DI = buffer to read into (caller sets ES before INT 0x80)
+;        CX = bytes to read
+; Output: CF=0 success (AX=bytes read), CF=1 error
+; Note: Uses caller_ds for the filename segment
+fs_read_header_stub:
+    push bx
+    push dx
+    push si
+    push di
+
+    ; Save read params
+    mov [cs:.rh_count], cx
+    mov [cs:.rh_buf_seg], es
+    mov [cs:.rh_buf_off], di
+
+    ; Open file: need DS:SI = filename in caller's segment
+    ; Save mount handle
+    mov [cs:.rh_mount], bx
+
+    push ds
+    mov ax, [cs:caller_ds]
+    mov ds, ax                      ; DS = caller's segment for filename
+    call fs_open_stub               ; BX = mount handle, DS:SI = filename
+    pop ds                          ; fat12_open changes DS to 0x1000 internally
+    jc .rh_open_err
+
+    ; File opened, AX = file handle
+    mov [cs:.rh_handle], ax
+
+    ; Read CX bytes into ES:DI
+    ; fs_read_stub: AX = handle, ES:DI = buffer, CX = count
+    mov es, [cs:.rh_buf_seg]
+    mov di, [cs:.rh_buf_off]
+    mov cx, [cs:.rh_count]
+    call fs_read_stub
+    push ax                         ; Save bytes read / error
+    pushf                           ; Save CF
+
+    ; Close file regardless of read result
+    mov ax, [cs:.rh_handle]
+    call fs_close_stub
+
+    popf                            ; Restore CF from read
+    pop ax                          ; Restore bytes read
+
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+.rh_open_err:
+    stc
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+.rh_mount: dw 0
+.rh_handle: dw 0
+.rh_count: dw 0
+.rh_buf_seg: dw 0
+.rh_buf_off: dw 0
+
+; draw_desktop_region - Internal: paint desktop background + icons in a region
+; Input: redraw_old_x/y/w/h define the region
+; Called from redraw_affected_windows before the z-order window loop
+draw_desktop_region:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Fill affected area with background color
+    ; Use byte-level CGA fill for the background color
+    mov bx, [redraw_old_x]
+    mov cx, [redraw_old_y]
+    mov dx, [redraw_old_w]
+    mov si, [redraw_old_h]
+    mov al, [desktop_bg_color]
+    call gfx_fill_color             ; Fill rectangle with color AL
+
+    ; Draw any registered icons that overlap the affected region
+    mov si, desktop_icons
+    xor bp, bp                      ; Icon counter
+.ddr_icon_loop:
+    cmp bp, DESKTOP_MAX_ICONS
+    jae .ddr_done
+
+    ; Check if this icon slot is used (has non-zero position or is slot 0 with count > 0)
+    ; Simple: check if we've passed icon_count
+    cmp byte [desktop_icon_count], 0
+    je .ddr_done
+    xor ax, ax
+    mov al, [desktop_icon_count]
+    cmp bp, ax
+    jae .ddr_done
+
+    ; Check if icon overlaps with affected region
+    ; Icon rect: (ix, iy, 16, 24) where 24 = 16px icon + 8px label
+    ; Affected rect: (old_x, old_y, old_w, old_h)
+
+    ; Test: ix < old_x + old_w
+    mov ax, [redraw_old_x]
+    add ax, [redraw_old_w]
+    cmp [si + DESKTOP_ICON_OFF_X], ax
+    jge .ddr_next
+
+    ; Test: old_x < ix + 16
+    mov ax, [si + DESKTOP_ICON_OFF_X]
+    add ax, 16
+    cmp [redraw_old_x], ax
+    jge .ddr_next
+
+    ; Test: iy < old_y + old_h
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
+    cmp [si + DESKTOP_ICON_OFF_Y], ax
+    jge .ddr_next
+
+    ; Test: old_y < iy + 24
+    mov ax, [si + DESKTOP_ICON_OFF_Y]
+    add ax, 24
+    cmp [redraw_old_y], ax
+    jge .ddr_next
+
+    ; Icon overlaps - draw it
+    push si
+    push bp
+
+    ; Draw icon bitmap
+    mov bx, [si + DESKTOP_ICON_OFF_X]
+    mov cx, [si + DESKTOP_ICON_OFF_Y]
+    ; Point SI to the bitmap within the icon entry
+    add si, DESKTOP_ICON_OFF_BITMAP
+    ; Set caller_ds to kernel segment for gfx_draw_icon internal call
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    call gfx_draw_icon_stub
+    pop word [caller_ds]
+
+    ; Draw icon name label below the icon
+    ; Restore SI to icon entry base
+    pop bp
+    pop si
+    push si
+    push bp
+
+    mov bx, [si + DESKTOP_ICON_OFF_X]
+    mov cx, [si + DESKTOP_ICON_OFF_Y]
+    add cx, 20                      ; 16px icon + 4px gap
+    ; Point to name string
+    push si
+    add si, DESKTOP_ICON_OFF_NAME
+    ; Draw name in white - use gfx_draw_string_stub
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    call gfx_draw_string_stub
+    pop word [caller_ds]
+    pop si
+
+    pop bp
+    pop si
+
+.ddr_next:
+    add si, DESKTOP_ICON_SIZE
+    inc bp
+    jmp .ddr_icon_loop
+
+.ddr_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; gfx_fill_color - Fill a rectangle with a specific CGA color
+; Input: BX = X, CX = Y, DX = width, SI = height, AL = color (0-3)
+; Uses CGA byte-level operations for speed
+gfx_fill_color:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    ; Build the color byte: replicate 2-bit color across all 4 pixels
+    ; Color 0 = 0x00, Color 1 = 0x55, Color 2 = 0xAA, Color 3 = 0xFF
+    and al, 3
+    mov ah, al
+    shl ah, 2
+    or al, ah
+    mov ah, al
+    shl ah, 4
+    or al, ah                       ; AL = color byte (4 identical pixels)
+    mov [.fill_byte], al
+
+    mov ax, 0xB800
+    mov es, ax
+    mov bp, si                      ; BP = height counter
+
+    ; Bounds check
+    test dx, dx
+    jz .gfc_done
+    test bp, bp
+    jz .gfc_done
+
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+.gfc_row:
+    ; Calculate CGA row address
+    push cx                         ; Save Y
+    push bx                         ; Save X
+    push dx                         ; Save width
+
+    ; Row base address
+    mov ax, cx
+    shr ax, 1
+    push dx
+    mov di, 80
+    mul di
+    pop dx
+    mov di, ax                      ; DI = (Y/2) * 80
+
+    test cl, 1
+    jz .gfc_even
+    add di, 0x2000
+.gfc_even:
+    ; Byte offset for X
+    mov ax, bx
+    shr ax, 1
+    shr ax, 1                       ; AX = X / 4
+    add di, ax                      ; DI = start byte in CGA memory
+
+    ; Calculate bytes to fill: (X + width) / 4 - X / 4
+    mov ax, bx
+    add ax, dx                      ; AX = X + width
+    add ax, 3                       ; Round up
+    shr ax, 1
+    shr ax, 1                       ; AX = ceil((X+width)/4)
+    mov cx, bx
+    shr cx, 1
+    shr cx, 1                       ; CX = X / 4
+    sub ax, cx                      ; AX = bytes to fill
+    mov cx, ax
+
+    ; Fill bytes
+    mov al, [.fill_byte]
+    rep stosb
+
+    pop dx                          ; Restore width
+    pop bx                          ; Restore X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next Y
+    dec bp
+    jnz .gfc_row
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+
+.gfc_done:
+    pop bp
+    pop es
+    pop di
+    pop dx
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.fill_byte: db 0
+
 ; redraw_affected_windows - Redraw windows that overlapped a cleared rectangle
 ; Input: Variables redraw_old_x/y/w/h set by caller
 ; Redraws frames and posts EVENT_WIN_REDRAW for each affected window
@@ -6201,6 +6699,12 @@ redraw_affected_windows:
     push si
     push di
     push bp
+
+    ; Paint desktop background + icons in the affected region (if active)
+    cmp byte [desktop_icon_count], 0
+    je .no_desktop_repaint
+    call draw_desktop_region
+.no_desktop_repaint:
 
     ; Outer loop: z = 0 to 14 (draw lowest z first)
     ; Skip z=15 (topmost) - callers handle the topmost window separately
@@ -7068,6 +7572,22 @@ shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none
 current_task:       db 0xFF                 ; Currently running task (0xFF = kernel/none)
 scheduler_last:     db 0                    ; Last task checked (for round-robin)
 focused_task:       db 0xFF                 ; Task owning topmost window (receives keyboard)
+
+; ============================================================================
+; Desktop Icon Data (v3.14.0)
+; ============================================================================
+
+; Desktop icon constants
+DESKTOP_MAX_ICONS       equ 8
+DESKTOP_ICON_SIZE       equ 80      ; 2+2+64+12 bytes per entry
+DESKTOP_ICON_OFF_X      equ 0       ; word: X screen position
+DESKTOP_ICON_OFF_Y      equ 2       ; word: Y screen position
+DESKTOP_ICON_OFF_BITMAP equ 4       ; 64 bytes: 16x16 icon (2bpp CGA)
+DESKTOP_ICON_OFF_NAME   equ 68      ; 12 bytes: display name (null-terminated)
+
+desktop_icons:      times (DESKTOP_MAX_ICONS * DESKTOP_ICON_SIZE) db 0
+desktop_icon_count: db 0
+desktop_bg_color:   db 0            ; CGA palette color 0 (black)
 
 ; ============================================================================
 ; Window Manager Data (v3.12.0)

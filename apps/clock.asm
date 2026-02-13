@@ -6,6 +6,35 @@
 [BITS 16]
 [ORG 0x0000]
 
+; --- Icon Header (80 bytes: 0x00-0x4F) ---
+    db 0xEB, 0x4E                   ; JMP short to offset 0x50
+    db 'UI'                         ; Magic bytes
+    db 'Clock', 0                   ; App name
+    times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
+
+    ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
+    ; Clock face: white circle outline with two hands
+    db 0x00, 0xFF, 0xFF, 0x00      ; Row 0
+    db 0x0F, 0x00, 0x00, 0xF0      ; Row 1
+    db 0x30, 0x0F, 0x00, 0x0C      ; Row 2
+    db 0xC0, 0x0F, 0x00, 0x03      ; Row 3
+    db 0xC0, 0x03, 0x00, 0x03      ; Row 4
+    db 0xC0, 0x03, 0x00, 0x03      ; Row 5
+    db 0xC0, 0x03, 0x00, 0x03      ; Row 6
+    db 0xC0, 0x03, 0xFF, 0x03      ; Row 7
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 8
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 9
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 10
+    db 0xC0, 0x00, 0x00, 0x03      ; Row 11
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 12
+    db 0x0F, 0x00, 0x00, 0xF0      ; Row 13
+    db 0x00, 0xFF, 0xFF, 0x00      ; Row 14
+    db 0x00, 0x00, 0x00, 0x00      ; Row 15
+
+    times 0x50 - ($ - $$) db 0     ; Pad to code entry at offset 0x50
+
+; --- Code Entry (offset 0x50) ---
+
 ; API function indices (must match kernel_api_table in kernel.asm)
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
@@ -91,7 +120,7 @@ entry:
     mov [cs:time_str+7], al
 
     ; Clear time area (window-relative, centered in 108px content)
-    ; "00:00:00" = 8 chars × 12px advance = 96px wide
+    ; "00:00:00" = 8 chars x 12px advance = 96px wide
     mov bx, 6
     mov cx, 8
     mov dx, 98
