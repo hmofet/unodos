@@ -165,6 +165,7 @@ int_80_handler:
     ; If draw_context is active (valid window handle) and function is a
     ; drawing API (0-6), translate BX/CX from window-relative to absolute
     ; screen coordinates. Apps draw at (0,0) = top-left of content area.
+    ; Z-ORDER CLIPPING: skip draw entirely if window is not topmost.
     cmp byte [draw_context], 0xFF
     je .no_translate                ; No active context
     cmp ah, 6
@@ -178,6 +179,11 @@ int_80_handler:
     mov si, ax
     shl si, 5                       ; SI = handle * 32
     add si, window_table
+
+    ; Z-order clipping: only allow draws to topmost window
+    cmp byte [si + WIN_OFF_ZORDER], 15
+    jne .skip_bg_draw               ; Not topmost → skip draw silently
+
     ; content_x = win_x + 1 (inside left border)
     add bx, [si + WIN_OFF_X]
     inc bx
@@ -186,6 +192,13 @@ int_80_handler:
     add cx, WIN_TITLEBAR_HEIGHT
     pop ax
     pop si
+    jmp .no_translate
+
+.skip_bg_draw:
+    pop ax
+    pop si
+    clc                             ; No error
+    jmp int80_return_point          ; Return without calling draw function
 
 .no_translate:
     ; Get function pointer from API table
@@ -3024,6 +3037,7 @@ event_get_stub:
     ; Process any pending window drag (deferred from IRQ12)
     call mouse_process_drag
 
+.evt_check_next:
     mov bx, [event_queue_head]
     cmp bx, [event_queue_tail]
     je .no_event
@@ -3042,6 +3056,26 @@ event_get_stub:
     and bx, 0x1F                    ; Wrap at 32 events
     mov [event_queue_head], bx
 
+    ; Filter: skip WIN_REDRAW events not for current task's window
+    cmp al, EVENT_WIN_REDRAW
+    jne .evt_return                 ; Not a redraw event, return it
+    cmp dl, WIN_MAX_COUNT
+    jae .evt_check_next             ; Invalid window handle, discard
+    push si
+    push ax
+    xor ah, ah
+    mov al, dl
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    mov al, [si + WIN_OFF_OWNER]
+    cmp al, [current_task]
+    pop ax
+    pop si
+    je .evt_return                  ; Window belongs to current task, return it
+    jmp .evt_check_next             ; Wrong task's window, discard
+
+.evt_return:
     pop ds
     pop si
     pop bx
