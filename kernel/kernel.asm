@@ -2302,13 +2302,15 @@ gfx_draw_string_inverted:
     push dx
     push di
     push bp
-    push ds                         ; Save caller's DS
+    push ds                         ; Save kernel DS
     mov word [draw_x], bx
     mov word [draw_y], cx
+    mov bp, [caller_ds]             ; BP = caller's segment
     mov dx, 0xB800
     mov es, dx
+    mov ds, bp                      ; DS = caller's segment for string access
 .loop:
-    lodsb                           ; Load character from DS:SI
+    lodsb                           ; Load character from caller's DS:SI
     test al, al
     jz .done
     push ds                         ; Save caller's DS for string
