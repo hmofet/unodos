@@ -1971,52 +1971,188 @@ mouse_drag_update:
 
 .button_released:
     mov byte [drag_active], 0
+    mov byte [drag_content_saved], 0
     jmp .done
 
 .check_release:
     mov byte [drag_active], 0
+    mov byte [drag_content_saved], 0
 
 .done:
     popa
     ret
 
 ; ============================================================================
-; Debug character output - draws AL at next position on debug line (Y=190)
-; Preserves all registers. Uses debug_x for horizontal position.
+; save_drag_content - Save window content area pixels to scratch buffer
+; Input: AL = window handle
+; Uses scratch buffer at segment 0x5000
 ; ============================================================================
-debug_char:
+save_drag_content:
     pusha
-    mov bx, [debug_x]
-    mov cx, 190
-    call gfx_draw_char_stub
-    add word [debug_x], 8
+    push ds
+    push es
+
+    ; Look up window in table
+    xor ah, ah
+    shl ax, 5
+    add ax, window_table
+    mov bp, ax
+
+    ; Calculate content rectangle
+    mov ax, [ds:bp + WIN_OFF_X]
+    inc ax
+    mov [wc_cx], ax
+
+    mov ax, [ds:bp + WIN_OFF_Y]
+    add ax, WIN_TITLEBAR_HEIGHT
+    mov [wc_cy], ax
+
+    mov ax, [ds:bp + WIN_OFF_WIDTH]
+    sub ax, 2
+    mov [wc_cw], ax
+    cmp ax, 0
+    jle .save_done
+
+    mov ax, [ds:bp + WIN_OFF_HEIGHT]
+    sub ax, WIN_TITLEBAR_HEIGHT
+    dec ax
+    mov [wc_ch], ax
+    cmp ax, 0
+    jle .save_done
+
+    ; Calculate byte range
+    mov ax, [wc_cx]
+    shr ax, 2
+    mov [wc_sb], ax                 ; start byte offset in row
+
+    mov ax, [wc_cx]
+    add ax, [wc_cw]
+    dec ax
+    shr ax, 2
+    sub ax, [wc_sb]
+    inc ax
+    mov [wc_bpr], ax                ; bytes per row
+
+    ; Setup: DS=CGA (source), ES=scratch (dest)
+    mov ax, 0xB800
+    mov ds, ax
+    mov ax, 0x5000
+    mov es, ax
+    xor di, di                      ; Scratch offset = 0
+
+    mov bx, [cs:wc_cy]             ; BX = current Y
+    mov cx, [cs:wc_ch]             ; CX = row counter
+    mov dx, [cs:wc_sb]             ; DX = start byte offset
+
+.save_row:
+    push cx
+
+    ; Calculate CGA offset for row BX
+    mov ax, bx
+    shr ax, 1                      ; AX = Y / 2
+    push dx
+    mov cx, 80
+    mul cx                          ; AX = (Y/2) * 80
+    pop dx
+    test bl, 1
+    jz .save_even
+    add ax, 0x2000
+.save_even:
+    add ax, dx                      ; + start byte
+    mov si, ax
+
+    mov cx, [cs:wc_bpr]
+    rep movsb                       ; CGA -> scratch
+
+    inc bx
+    pop cx
+    loop .save_row
+
+.save_done:
+    pop es
+    pop ds
     popa
     ret
 
-; debug_hex_byte - Print AL as 2 hex digits on debug line
-; Preserves all registers.
-debug_hex_byte:
-    push ax
+; ============================================================================
+; restore_drag_content - Restore saved content to new window position
+; Input: AL = window handle (reads new position from window table)
+; ============================================================================
+restore_drag_content:
+    pusha
+    push ds
+    push es
+
+    ; Check content was saved
+    cmp word [wc_ch], 0
+    jle .restore_done
+    cmp word [wc_cw], 0
+    jle .restore_done
+
+    ; Look up new window position
+    xor ah, ah
+    shl ax, 5
+    add ax, window_table
+    mov bp, ax
+
+    ; Calculate new content position
+    mov ax, [ds:bp + WIN_OFF_X]
+    inc ax
+    mov [.new_cx], ax
+
+    mov ax, [ds:bp + WIN_OFF_Y]
+    add ax, WIN_TITLEBAR_HEIGHT
+    mov [.new_cy], ax
+
+    ; Calculate new start byte
+    mov ax, [.new_cx]
+    shr ax, 2
+    mov [.new_sb], ax
+
+    ; Setup: DS=scratch (source), ES=CGA (dest)
+    mov ax, 0x5000
+    mov ds, ax
+    mov ax, 0xB800
+    mov es, ax
+    xor si, si                      ; Scratch offset = 0
+
+    mov bx, [cs:.new_cy]           ; BX = current Y
+    mov cx, [cs:wc_ch]             ; CX = row counter
+    mov dx, [cs:.new_sb]           ; DX = new start byte
+
+.restore_row:
     push cx
-    mov cl, al
-    shr al, 4
-    add al, '0'
-    cmp al, '9'
-    jbe .high_ok
-    add al, 7                       ; Adjust for A-F
-.high_ok:
-    call debug_char
-    mov al, cl
-    and al, 0x0F
-    add al, '0'
-    cmp al, '9'
-    jbe .low_ok
-    add al, 7
-.low_ok:
-    call debug_char
+
+    ; Calculate CGA offset for row BX
+    mov ax, bx
+    shr ax, 1
+    push dx
+    mov cx, 80
+    mul cx
+    pop dx
+    test bl, 1
+    jz .restore_even
+    add ax, 0x2000
+.restore_even:
+    add ax, dx
+    mov di, ax
+
+    mov cx, [cs:wc_bpr]
+    rep movsb                       ; scratch -> CGA
+
+    inc bx
     pop cx
-    pop ax
+    loop .restore_row
+
+.restore_done:
+    pop es
+    pop ds
+    popa
     ret
+
+.new_cx:  dw 0
+.new_cy:  dw 0
+.new_sb:  dw 0
 
 ; ============================================================================
 ; Deferred Drag Processing (called from event_get_stub)
@@ -2058,18 +2194,28 @@ mouse_process_drag:
     pop bx
     pop ax
 
+    ; First move of this drag? Save content to scratch buffer
+    cmp byte [drag_content_saved], 0
+    jne .already_saved
+    push ax
+    push bx
+    push cx
+    mov al, [drag_window]
+    call save_drag_content
+    pop cx
+    pop bx
+    pop ax
+    mov byte [drag_content_saved], 1
+.already_saved:
+
     ; AX=handle, BX=target_x, CX=target_y
     push ax
     call win_move_stub
-    pop ax
 
-    ; Post EVENT_WIN_MOVED so app can redraw content
-    push dx
-    xor dx, dx
-    mov dl, al                      ; DX = window handle
-    mov al, EVENT_WIN_MOVED
-    call post_event
-    pop dx
+    ; Restore saved content at new position
+    mov al, [drag_window]
+    call restore_drag_content
+    pop ax
 
 .done:
     ret
@@ -2160,8 +2306,8 @@ gfx_draw_string_inverted:
 ; Kernel API Table - At fixed address 0x1000:0x0D10
 ; ============================================================================
 
-; Pad to exactly offset 0x0D10 - expanded for debug hex output
-times 0x0E20 - ($ - $$) db 0
+; Pad to API table alignment
+times 0x0F00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5988,6 +6134,15 @@ drag_target_x:      dw 0            ; Desired new window X position
 drag_target_y:      dw 0            ; Desired new window Y position
 drag_needs_update:  db 0            ; 1 = win_move_stub needs to be called
 drag_prev_buttons:  db 0            ; Previous button state (for edge detection)
+drag_content_saved: db 0            ; 1 = content saved in scratch buffer
+
+; Content save/restore state (used by save/restore_drag_content)
+wc_cx:      dw 0                    ; Saved content X
+wc_cy:      dw 0                    ; Saved content Y
+wc_cw:      dw 0                    ; Saved content width (pixels)
+wc_ch:      dw 0                    ; Saved content height (pixels)
+wc_sb:      dw 0                    ; Start byte offset in CGA row
+wc_bpr:     dw 0                    ; Bytes per row saved
 
 ; Keyboard demo state
 demo_cursor_x: dw 0
@@ -5995,7 +6150,6 @@ demo_cursor_y: dw 0
 
 ; Debug character buffer (for displaying single chars)
 char_buffer: db 0, 0
-debug_x: dw 0
 debug_y: dw 0
 
 ; Event system state (Foundation 1.5)
