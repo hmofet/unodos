@@ -2269,6 +2269,17 @@ mouse_process_drag:
     push dx
     push si
     push di
+
+    ; Check if window is already topmost - skip content clear if so
+    xor ah, ah
+    mov al, [drag_window]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    cmp byte [si + WIN_OFF_ZORDER], 15
+    je .focus_already_top           ; Already focused, just redraw frame
+
+    ; Window is being brought to front - focus, clear, and redraw
     mov al, [drag_window]
     call win_focus_stub             ; Update z-order
     call win_draw_stub              ; Redraw frame on top
@@ -2280,7 +2291,6 @@ mouse_process_drag:
     shl si, 5
     add si, window_table
 
-    ; Clear content area: inside border, below title bar
     mov bx, [si + WIN_OFF_X]
     inc bx                          ; Inside left border
     mov cx, [si + WIN_OFF_Y]
@@ -2298,7 +2308,14 @@ mouse_process_drag:
     xor dx, dx
     mov dl, [drag_window]
     call post_event
+    jmp .focus_done
 
+.focus_already_top:
+    ; Already topmost - just redraw frame (no content clear/redraw)
+    mov al, [drag_window]
+    call win_draw_stub
+
+.focus_done:
     pop di
     pop si
     pop dx
@@ -2368,6 +2385,11 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     call win_draw_stub
+
+    ; Re-draw background window frames - content restore may have
+    ; overwritten their borders due to CGA byte alignment
+    ; (redraw_old_x/y/w/h still set from win_move_stub)
+    call redraw_affected_windows
     pop ax
 
 .done:
@@ -2490,7 +2512,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1010 - ($ - $$) db 0
+times 0x1040 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -6344,6 +6366,40 @@ win_destroy_stub:
     ; Redraw any windows that were overlapped by this one
     call redraw_affected_windows
 
+    ; Promote next highest z-order window to topmost (z=15)
+    ; Without this, no window can draw after the topmost is destroyed
+    mov si, window_table
+    mov cx, WIN_MAX_COUNT
+    mov byte [.best_z], 0
+    mov byte [.best_handle], 0xFF
+    xor bx, bx                     ; BX = window handle counter
+.promote_scan:
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .promote_skip
+    mov al, [si + WIN_OFF_ZORDER]
+    cmp al, [.best_z]
+    jb .promote_skip
+    mov [.best_z], al
+    mov [.best_handle], bl          ; BL = handle (0-15)
+.promote_skip:
+    add si, WIN_ENTRY_SIZE
+    inc bl
+    loop .promote_scan
+
+    ; If we found a window, focus it and trigger redraw
+    cmp byte [.best_handle], 0xFF
+    je .promote_done
+    xor ah, ah
+    mov al, [.best_handle]
+    call win_focus_stub             ; Promotes to z=15, updates focused_task
+    call win_draw_stub              ; Redraw frame at top
+    ; Post EVENT_WIN_REDRAW so app redraws content
+    mov al, EVENT_WIN_REDRAW
+    xor dh, dh
+    mov dl, [.best_handle]
+    call post_event
+.promote_done:
+
     clc
     jmp .done
 
@@ -6360,6 +6416,9 @@ win_destroy_stub:
     dec byte [cursor_locked]
     call mouse_cursor_show
     ret
+
+.best_z:      db 0
+.best_handle: db 0xFF
 
 ; win_draw_stub - Draw/redraw window frame (title bar and border)
 ; Input:  AX = Window handle
