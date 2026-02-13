@@ -1,5 +1,5 @@
-; BROWSER.BIN - File browser for UnoDOS v3.12.0
-; Build 051 - Working file browser with keyboard support
+; BROWSER.BIN - File browser for UnoDOS
+; Displays directory listing in a draggable window
 ;
 ; Build: nasm -f bin -o browser.bin browser.asm
 
@@ -7,18 +7,19 @@
 [ORG 0x0000]
 
 ; API function indices (must match kernel_api_table in kernel.asm)
-API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
-API_FS_READDIR          equ 27
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
-API_WIN_GET_CONTENT     equ 25
+API_FS_READDIR          equ 27
+API_WIN_BEGIN_DRAW      equ 31
+API_WIN_END_DRAW        equ 32
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
+EVENT_WIN_MOVED         equ 5
 
 ; Display constants
 LINE_HEIGHT             equ 10          ; Pixels per line
@@ -36,8 +37,23 @@ entry:
     mov ds, ax
 
     ; Create browser window (wider for filename + size)
-    call create_window
+    mov bx, 40                      ; X position
+    mov cx, 30                      ; Y position
+    mov dx, 240                     ; Width
+    mov si, 120                     ; Height
+    mov ax, cs
+    mov es, ax
+    mov di, window_title
+    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    mov ah, API_WIN_CREATE
+    int 0x80
     jc .exit_fail
+
+    mov [cs:win_handle], al
+
+    ; Set window drawing context - coordinates now relative to content area
+    mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
 
     ; Drain pending events
 .drain_events:
@@ -49,19 +65,24 @@ entry:
     ; Scan and display files
     call scan_and_display
 
-    ; Event loop - wait for ESC (like Clock app)
+    ; Event loop - wait for ESC, redraw on window move
 .main_loop:
-    ; Ensure interrupts are enabled (keyboard IRQ needs this)
     sti
 
-    ; Check for keypress using event system (like Clock)
     mov ah, API_EVENT_GET
     int 0x80
-    jc .no_event                    ; CF set = no event or error
+    jc .no_event
     cmp al, EVENT_KEY_PRESS
-    jne .no_event
+    jne .check_win_moved
     cmp dl, 27                      ; ESC key?
     je .exit_ok
+    jmp .no_event
+
+.check_win_moved:
+    cmp al, EVENT_WIN_MOVED
+    jne .no_event
+    ; Window was dragged - redraw content
+    call scan_and_display
 
 .no_event:
     mov cx, 0x1000
@@ -70,6 +91,9 @@ entry:
     jmp .main_loop
 
 .exit_ok:
+    mov ah, API_WIN_END_DRAW
+    int 0x80
+
     mov al, [cs:win_handle]
     mov ah, API_WIN_DESTROY
     int 0x80
@@ -86,60 +110,17 @@ entry:
     retf
 
 ; ============================================================================
-; create_window - Create the browser window
-; ============================================================================
-create_window:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    ; Create window: X=40, Y=30, W=240, H=120
-    mov bx, 40                      ; X position
-    mov cx, 30                      ; Y position
-    mov dx, 240                     ; Width (wider for size column)
-    mov si, 120                     ; Height
-    mov ax, cs
-    mov es, ax
-    mov di, window_title
-    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
-    mov ah, API_WIN_CREATE
-    int 0x80
-    jc .done
-
-    mov [cs:win_handle], al
-
-    mov ah, API_WIN_GET_CONTENT
-    int 0x80
-    jc .done
-
-    mov [cs:content_x], bx
-    mov [cs:content_y], cx
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
-
-    clc
-
-.done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; ============================================================================
 ; scan_and_display - Mount FS, scan directory, display files
+; All coordinates are window-relative (draw context active)
 ; ============================================================================
 scan_and_display:
     pusha
 
-    ; Clear content area
-    mov bx, [cs:content_x]
-    mov cx, [cs:content_y]
-    mov dx, [cs:content_w]
-    mov si, [cs:content_h]
+    ; Clear entire content area (window-relative: 0,0)
+    mov bx, 0
+    mov cx, 0
+    mov dx, 238                     ; Full content width
+    mov si, 100                     ; Full content height
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -153,12 +134,7 @@ scan_and_display:
     ; Initialize
     mov word [cs:dir_state], 0
     mov byte [cs:file_count], 0
-    mov word [cs:current_y], 0
-
-    ; Set initial Y position
-    mov ax, [cs:content_y]
-    add ax, TOP_PADDING
-    mov [cs:current_y], ax
+    mov word [cs:current_y], TOP_PADDING
 
 .scan_loop:
     ; Check if we have room for more
@@ -190,11 +166,9 @@ scan_and_display:
     jmp .scan_loop
 
 .mount_failed:
-    ; Display error
-    mov bx, [cs:content_x]
-    add bx, LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, TOP_PADDING
+    ; Display error (window-relative)
+    mov bx, LEFT_PADDING
+    mov cx, TOP_PADDING
     mov si, mount_error_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -205,10 +179,8 @@ scan_and_display:
     cmp byte [cs:file_count], 0
     jne .done
 
-    mov bx, [cs:content_x]
-    add bx, LEFT_PADDING
-    mov cx, [cs:content_y]
-    add cx, TOP_PADDING
+    mov bx, LEFT_PADDING
+    mov cx, TOP_PADDING
     mov si, no_files_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -220,6 +192,7 @@ scan_and_display:
 ; ============================================================================
 ; display_file_entry - Display one directory entry
 ; Format: "FILENAME.EXT  12345"
+; All coordinates are window-relative
 ; ============================================================================
 display_file_entry:
     pusha
@@ -280,9 +253,8 @@ display_file_entry:
     ; Null terminate
     mov byte [cs:di], 0
 
-    ; Draw the string
-    mov bx, [cs:content_x]
-    add bx, LEFT_PADDING
+    ; Draw the string (window-relative)
+    mov bx, LEFT_PADDING
     mov cx, [cs:current_y]
     mov si, display_buffer
     mov ah, API_GFX_DRAW_STRING
@@ -343,10 +315,6 @@ word_to_decimal:
 
 window_title:   db 'Files', 0
 win_handle:     db 0
-content_x:      dw 0
-content_y:      dw 0
-content_w:      dw 0
-content_h:      dw 0
 
 dir_entry_buffer: times 32 db 0
 dir_state:      dw 0
