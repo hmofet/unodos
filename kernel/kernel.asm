@@ -3056,9 +3056,20 @@ event_get_stub:
     and bx, 0x1F                    ; Wrap at 32 events
     mov [event_queue_head], bx
 
+    ; Filter keyboard events: only deliver to focused task
+    cmp al, EVENT_KEY_PRESS
+    jne .evt_not_key
+    push ax
+    mov al, [focused_task]
+    cmp al, [current_task]
+    pop ax
+    je .evt_return                  ; This task has focus, deliver key
+    jmp .evt_check_next             ; Not focused, discard key event
+
+.evt_not_key:
     ; Filter: skip WIN_REDRAW events not for current task's window
     cmp al, EVENT_WIN_REDRAW
-    jne .evt_return                 ; Not a redraw event, return it
+    jne .evt_return                 ; Other event types pass through
     cmp dl, WIN_MAX_COUNT
     jae .evt_check_next             ; Invalid window handle, discard
     push si
@@ -6077,6 +6088,7 @@ win_create_stub:
     push ax
     mov al, [current_task]
     mov [bx + WIN_OFF_OWNER], al                ; Owned by creating task
+    mov [focused_task], al                       ; New window gets keyboard focus
     pop ax
 
     ; Copy title (up to 11 chars)
@@ -6482,6 +6494,12 @@ win_focus_stub:
 .already_top:
     ; Set z-order to 15 (top)
     mov byte [bx + WIN_OFF_ZORDER], 15
+
+    ; Track which task owns the focused window
+    push ax
+    mov al, [bx + WIN_OFF_OWNER]
+    mov [focused_task], al
+    pop ax
 
     clc
     jmp .done
@@ -6974,6 +6992,7 @@ shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none
 ; Cooperative multitasking scheduler state
 current_task:       db 0xFF                 ; Currently running task (0xFF = kernel/none)
 scheduler_last:     db 0                    ; Last task checked (for round-robin)
+focused_task:       db 0xFF                 ; Task owning topmost window (receives keyboard)
 
 ; ============================================================================
 ; Window Manager Data (v3.12.0)
