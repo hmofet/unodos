@@ -1930,39 +1930,58 @@ mouse_drag_update:
     ret
 
 ; ============================================================================
+; Debug character output - draws AL at next position on debug line (Y=190)
+; Preserves all registers. Uses debug_x for horizontal position.
+; ============================================================================
+debug_char:
+    pusha
+    mov bx, [debug_x]
+    mov cx, 190
+    call gfx_draw_char_stub
+    add word [debug_x], 8
+    popa
+    ret
+
+; ============================================================================
 ; Deferred Drag Processing (called from event_get_stub)
 ; ============================================================================
 
-; mouse_process_drag - DIAGNOSTIC BUILD 122
-; Force-moves window 0 to (10,10) on every EVENT_GET call.
-; If the window moves, this function IS being called and win_move_stub works.
-; If not, the call path itself is broken.
+; mouse_process_drag - DIAGNOSTIC BUILD 124
+; Draws character codes at Y=190 to trace execution path.
+; Expected output when clicking title bar: "1 2 3 E V U D C"
 mouse_process_drag:
-    pusha
-    push es
+    ; Reset debug position for this pass
+    mov word [debug_x], 0
 
-    ; Write VRAM marker at top-left: 16 white pixels (4 bytes)
-    mov ax, 0xB800
-    mov es, ax
-    mov word [es:0], 0xFFFF
-    mov word [es:2], 0xFFFF
+    mov al, '1'                     ; '1' = function was called
+    call debug_char
 
-    ; Also write drag_active value amplified at byte 5
-    mov byte [es:5], 0x55          ; Default: cyan pattern (func called, no drag)
     cmp byte [drag_active], 0
-    je .skip_force
-    mov byte [es:5], 0xFF          ; White: drag IS active
+    je .done
 
-    ; Force-move the dragged window to (10, 10)
+    mov al, '2'                     ; '2' = drag_active is 1
+    call debug_char
+
+    ; Read drag state
+    cli
     xor ax, ax
     mov al, [drag_window]
-    mov bx, 10
-    mov cx, 10
+    mov bx, [drag_target_x]
+    mov cx, [drag_target_y]
+    sti
+
+    push ax                         ; Save handle for debug_char
+    mov al, '3'                     ; '3' = about to call win_move_stub
+    call debug_char
+    pop ax                          ; Restore handle
+
+    ; AX=handle, BX=target_x, CX=target_y
     call win_move_stub
 
-.skip_force:
-    pop es
-    popa
+    mov al, '!'                     ; '!' = returned from win_move_stub
+    call debug_char
+
+.done:
     ret
 
 ; ============================================================================
@@ -5565,23 +5584,14 @@ win_move_stub:
     mov [.new_y], cx
     mov [.handle], ax
 
-    ; DEBUG: Mark VRAM byte 10 = win_move_stub entered
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:10], 0xFF          ; Entry marker
-    ; Write handle value to VRAM byte 11 (amplified: handle*0x55)
+    ; DEBUG: 'E' = win_move_stub entered, then handle digit
     push ax
-    mov di, ax
-    shl di, 2
-    add di, di                      ; DI = handle * 8 (visual scaling)
-    mov al, 0x55
-    add al, dl                      ; Vary pattern
-    mov byte [es:11], al
+    mov al, 'E'
+    call debug_char
+    mov ax, [.handle]
+    add al, '0'                     ; Convert handle to ASCII digit
+    call debug_char
     pop ax
-    pop di
-    pop es
 
     cmp ax, WIN_MAX_COUNT
     jae .invalid
@@ -5595,17 +5605,11 @@ win_move_stub:
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
 
-    ; DEBUG: Mark VRAM byte 12 = validation passed
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:12], 0xFF          ; Validation OK marker
-    ; Write window state to byte 13
-    mov al, [bx + WIN_OFF_STATE]
-    mov byte [es:13], al
-    pop di
-    pop es
+    ; DEBUG: 'V' = validation passed
+    push ax
+    mov al, 'V'
+    call debug_char
+    pop ax
 
     ; Save window pointer
     mov bp, bx
@@ -5644,9 +5648,17 @@ win_move_stub:
     mov cx, [.new_y]
     mov [bp + WIN_OFF_Y], cx
 
+    ; DEBUG: 'U' = position updated in window table
+    mov al, 'U'
+    call debug_char
+
     ; Draw window frame at new position immediately (makes window visible fast)
     mov ax, [.handle]
     call win_draw_stub
+
+    ; DEBUG: 'D' = draw completed
+    mov al, 'D'
+    call debug_char
 
     ; Calculate deltas: dx = new_x - old_x, dy = new_y - old_y
     mov ax, [.new_x]
@@ -5730,26 +5742,16 @@ win_move_stub:
     call gfx_clear_area_stub
 
 .clear_done:
-    ; DEBUG: Mark VRAM byte 15 = move completed successfully
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:15], 0xFF
-    pop di
-    pop es
+    ; DEBUG: 'C' = move completed successfully
+    mov al, 'C'
+    call debug_char
     clc
     jmp .done
 
 .invalid:
-    ; DEBUG: Mark VRAM byte 14 = INVALID path taken
-    push es
-    push di
-    mov di, 0xB800
-    mov es, di
-    mov byte [es:14], 0xFF
-    pop di
-    pop es
+    ; DEBUG: 'X' = INVALID path taken (bad handle or window state)
+    mov al, 'X'
+    call debug_char
     stc
 
 .done:
