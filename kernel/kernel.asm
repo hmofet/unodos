@@ -5975,6 +5975,29 @@ win_create_stub:
     mov ax, bp                      ; Window handle
     call win_draw_stub
 
+    ; Clear content area (inside border, below title bar)
+    mov bx, [.slot_off]
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, [bx + WIN_OFF_X]
+    inc cx                          ; Inside left border
+    mov dx, [bx + WIN_OFF_Y]
+    add dx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov si, [bx + WIN_OFF_WIDTH]
+    sub si, 2                       ; Inside both borders
+    mov di, [bx + WIN_OFF_HEIGHT]
+    sub di, WIN_TITLEBAR_HEIGHT
+    dec di                          ; Above bottom border
+    pop ds
+    push bx
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, di                      ; SI = Height
+    call gfx_clear_area_stub
+    pop bx
+
     ; Return handle
     mov ax, bp
     clc
