@@ -14,7 +14,6 @@ API_GFX_DRAW_FILLED_RECT equ 2
 API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
-API_GFX_DRAW_WHITE      equ 6
 API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
 API_FS_READDIR          equ 27
@@ -77,7 +76,7 @@ entry:
     mov bx, 4
     mov cx, 4
     mov si, title_str
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Mount filesystem and scan for apps
@@ -627,7 +626,7 @@ draw_all_icons:
     mov bx, 80
     mov cx, 80
     mov si, no_apps_msg
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .dai_ret:
@@ -694,7 +693,7 @@ draw_single_icon:
     mov si, ax
     mov cx, [cs:.dsi_y]
     add cx, LABEL_Y_GAP
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Draw selection highlight if this is the selected icon
@@ -887,7 +886,7 @@ handle_click:
     mov bx, 4
     mov cx, 4
     mov si, title_str
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
     call draw_all_icons
 
@@ -1024,7 +1023,7 @@ launch_app:
     mov bx, 100
     mov cx, 180
     mov si, load_error_msg
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .la_done:
@@ -1059,7 +1058,7 @@ check_floppy_swap:
     mov bx, 4
     mov cx, 4
     mov si, title_str
-    mov ah, API_GFX_DRAW_WHITE
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
     call draw_all_icons
 
