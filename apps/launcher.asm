@@ -50,10 +50,6 @@ DOUBLE_CLICK_TICKS      equ 9           ; ~0.5s at 18.2 Hz BIOS timer
 ; Floppy poll interval
 POLL_INTERVAL           equ 36          ; ~2 seconds
 
-; Floppy scan timeouts (BIOS ticks at 18.2 Hz)
-FLOPPY_TIMEOUT_INITIAL  equ 91          ; ~5 seconds
-FLOPPY_TIMEOUT_RETRY    equ 182         ; ~10 seconds
-
 ; Background color (CGA palette)
 BG_COLOR                equ 1           ; Cyan
 
@@ -73,20 +69,12 @@ entry:
     mov byte [cs:prev_buttons], 0
     mov word [cs:last_click_tick], 0
     mov byte [cs:last_click_icon], 0xFF
-    mov byte [cs:floppy_icon_slot], 0xFF
 
-    ; Mount filesystem and scan for apps (5 second timeout)
-    mov ax, FLOPPY_TIMEOUT_INITIAL
+    ; Mount filesystem and scan for apps
     call scan_disk
 
     ; Draw full desktop (background + title + version + icons)
     call redraw_desktop
-
-    ; If scan timed out, show floppy icon
-    cmp byte [cs:scan_timed_out], 0
-    je .no_floppy_icon
-    call show_floppy_icon
-.no_floppy_icon:
 
     ; Read initial BIOS tick counter for polling
     call read_bios_ticks
@@ -236,23 +224,15 @@ entry:
 ; Populates icon data arrays
 ; ============================================================================
 scan_disk:
-    ; Input: AX = timeout in BIOS ticks (0 = no timeout)
-    mov [cs:scan_timeout_ticks], ax
-    mov byte [cs:scan_timed_out], 0
-
     pusha
     push es
-
-    ; Record start time for timeout
-    call read_bios_ticks
-    mov [cs:scan_start_tick], ax
 
     ; Mount floppy
     mov al, 0                       ; Drive A:
     xor ah, ah
     mov ah, API_FS_MOUNT
     int 0x80
-    jc .scan_fail
+    jc .scan_done
 
     mov byte [cs:mounted_drive], 0
     mov word [cs:dir_state], 0
@@ -269,15 +249,6 @@ scan_disk:
     inc word [cs:scan_safety]
     cmp word [cs:scan_safety], 500
     jae .scan_done
-
-    ; Timeout check
-    cmp word [cs:scan_timeout_ticks], 0
-    je .no_timeout_check
-    call read_bios_ticks
-    sub ax, [cs:scan_start_tick]
-    cmp ax, [cs:scan_timeout_ticks]
-    jae .scan_timeout
-.no_timeout_check:
 
     ; Check if we have room
     cmp byte [cs:icon_count], MAX_ICONS
@@ -332,14 +303,7 @@ scan_disk:
     inc byte [cs:icon_count]
     jmp .scan_loop
 
-.scan_timeout:
-.scan_fail:
-    ; Mount failure or timeout - show floppy icon
-    mov byte [cs:scan_timed_out], 1
-    jmp .scan_exit
-
 .scan_done:
-.scan_exit:
     pop es
     popa
     ret
@@ -856,12 +820,14 @@ handle_click:
     mov bl, GRID_COLS
     div bl                          ; AL = row, AH = col
 
-    ; Hitbox X = col * COL_WIDTH
+    ; Hitbox X = col * COL_WIDTH + ICON_X_OFFSET - 4 (centered on icon area)
     push ax
     mov al, ah
     xor ah, ah
     mov bl, COL_WIDTH
     mul bl
+    add ax, ICON_X_OFFSET
+    sub ax, 4                       ; Slightly wider than 16px icon
     mov [cs:.hc_hx], ax
     pop ax
 
@@ -874,12 +840,12 @@ handle_click:
     mov [cs:.hc_hy], ax
     pop dx
 
-    ; Check: hx <= mx < hx + COL_WIDTH
+    ; Check: hx <= mx < hx + 24 (icon width + padding)
     mov ax, [cs:.hc_mx]
     cmp ax, [cs:.hc_hx]
     jb .hc_next
     mov bx, [cs:.hc_hx]
-    add bx, COL_WIDTH
+    add bx, 24                     ; 16px icon + 4px padding each side
     cmp ax, bx
     jae .hc_next
 
@@ -917,18 +883,10 @@ handle_click:
     cmp bx, DOUBLE_CLICK_TICKS
     jae .hc_single_click
 
-    ; Double click! Check if it's the floppy icon
+    ; Double click! Launch the app
     mov al, [cs:.hc_hit]
-    cmp al, [cs:floppy_icon_slot]
-    je .hc_retry_floppy
     call launch_app
     mov byte [cs:last_click_icon], 0xFF
-    jmp .hc_done
-
-.hc_retry_floppy:
-    call retry_floppy_scan
-    mov byte [cs:last_click_icon], 0xFF
-    mov byte [cs:selected_icon], 0xFF
     jmp .hc_done
 
 .hc_single_click:
@@ -1094,78 +1052,6 @@ launch_app:
     popa
     ret
 
-; ============================================================================
-; show_floppy_icon - Add a floppy disk icon to the desktop grid
-; Called when scan_disk times out. Places icon in next available slot.
-; ============================================================================
-show_floppy_icon:
-    pusha
-
-    ; Check if we have room
-    cmp byte [cs:icon_count], MAX_ICONS
-    jae .sfi_done
-
-    mov al, [cs:icon_count]
-    mov [cs:floppy_icon_slot], al
-
-    ; Copy floppy bitmap to icon_bitmaps for this slot
-    xor ah, ah
-    shl ax, 6                       ; * 64
-    add ax, icon_bitmaps
-    mov di, ax
-    mov si, floppy_icon
-    mov cx, 64
-.sfi_copy_bmp:
-    mov al, [cs:si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .sfi_copy_bmp
-
-    ; Copy floppy label to icon_names for this slot
-    mov al, [cs:floppy_icon_slot]
-    xor ah, ah
-    mov cl, 12
-    mul cl
-    add ax, icon_names
-    mov di, ax
-    mov si, floppy_label
-    mov cx, 7                       ; "Floppy\0"
-.sfi_copy_name:
-    mov al, [cs:si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .sfi_copy_name
-
-    ; Store floppy marker in app_info (so launch_app can identify it)
-    mov al, [cs:floppy_icon_slot]
-    xor ah, ah
-    shl ax, 4                       ; * 16
-    add ax, app_info
-    mov di, ax
-    mov si, floppy_marker
-    mov cx, 13
-.sfi_copy_marker:
-    mov al, [cs:si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .sfi_copy_marker
-
-    ; Register icon with kernel
-    mov al, [cs:floppy_icon_slot]
-    call register_icon
-
-    ; Draw the floppy icon
-    mov al, [cs:floppy_icon_slot]
-    call draw_single_icon
-
-    inc byte [cs:icon_count]
-
-.sfi_done:
-    popa
-    ret
 
 ; ============================================================================
 ; repaint_all_windows - Redraw all window frames on top of the desktop
@@ -1187,41 +1073,6 @@ repaint_all_windows:
     ret
 .raw_idx: db 0
 
-; ============================================================================
-; retry_floppy_scan - Retry scanning for apps (double-click on floppy icon)
-; Rescans with 10-second timeout
-; ============================================================================
-retry_floppy_scan:
-    pusha
-
-    ; Remove floppy icon from tracking
-    mov byte [cs:floppy_icon_slot], 0xFF
-
-    ; Reset icon count (floppy icon was the last one)
-    cmp byte [cs:icon_count], 0
-    je .rfs_scan
-    dec byte [cs:icon_count]
-
-.rfs_scan:
-    ; Rescan with longer timeout
-    mov ax, FLOPPY_TIMEOUT_RETRY
-    call scan_disk
-
-    ; Redraw entire desktop
-    call redraw_desktop
-
-    ; If still timed out, show floppy icon again
-    cmp byte [cs:scan_timed_out], 0
-    je .rfs_no_floppy
-    call show_floppy_icon
-.rfs_no_floppy:
-
-    ; Repaint any open app windows on top of the desktop
-    call repaint_all_windows
-
-.rfs_done:
-    popa
-    ret
 
 ; ============================================================================
 ; check_floppy_swap - Check if floppy disk was swapped
@@ -1238,20 +1089,11 @@ check_floppy_swap:
     ; Disk changed - rescan
     mov byte [cs:icon_count], 0
     mov byte [cs:selected_icon], 0xFF
-    mov byte [cs:floppy_icon_slot], 0xFF
 
-    ; Rescan with initial timeout
-    mov ax, FLOPPY_TIMEOUT_INITIAL
     call scan_disk
 
     ; Redraw desktop
     call redraw_desktop
-
-    ; If timed out, show floppy icon
-    cmp byte [cs:scan_timed_out], 0
-    je .cfs_no_floppy
-    call show_floppy_icon
-.cfs_no_floppy:
 
     ; Repaint any open app windows on top of the desktop
     call repaint_all_windows
@@ -1299,12 +1141,6 @@ last_click_icon: db 0xFF
 ; Floppy polling
 last_poll_tick: dw 0
 
-; Floppy scan timeout state
-scan_timed_out:     db 0
-scan_timeout_ticks: dw 0
-scan_start_tick:    dw 0
-floppy_icon_slot:   db 0xFF         ; 0xFF = no floppy icon shown
-
 ; Per-app info: 8 slots x 16 bytes (13B filename + 1B drive + 2B reserved)
 app_info:       times (MAX_ICONS * 16) db 0
 
@@ -1345,32 +1181,6 @@ default_icon:
     db 0xC0, 0x00, 0x00, 0x03      ; Row 13: #..............#
     db 0xC0, 0x00, 0x00, 0x03      ; Row 14: #..............#
     db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 15: ################
-
-; Floppy disk icon (16x16, 2bpp CGA) - shown when scan times out
-; 3.5" floppy shape: metal slider top, body, label area
-floppy_icon:
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 0:  .##############.
-    db 0x3F, 0x00, 0x00, 0xFC      ; Row 1:  .##..........##.
-    db 0x3F, 0x00, 0x00, 0xFC      ; Row 2:  .##..........##.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 3:  .##############.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 4:  .##############.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 5:  .##############.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 6:  .##############.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 7:  .##############.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 8:  .##############.
-    db 0x3C, 0xFF, 0xFF, 0x3C      ; Row 9:  .####.######.##.
-    db 0x3C, 0x00, 0x00, 0x3C      ; Row 10: .####........##.
-    db 0x3C, 0x00, 0x00, 0x3C      ; Row 11: .####........##.
-    db 0x3C, 0x00, 0x00, 0x3C      ; Row 12: .####........##.
-    db 0x3C, 0x00, 0x00, 0x3C      ; Row 13: .####........##.
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14: .##############.
-    db 0x00, 0x00, 0x00, 0x00      ; Row 15: ................
-
-; Floppy icon label
-floppy_label:   db 'Floppy', 0
-
-; Special filename marker for floppy icon slot
-floppy_marker:  db 'FLOPPY', 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; App handle for launched app
 app_handle:     dw 0
