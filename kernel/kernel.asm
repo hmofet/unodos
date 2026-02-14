@@ -188,36 +188,16 @@ int_80_handler:
     add cx, [si + WIN_OFF_Y]
     add cx, WIN_TITLEBAR_HEIGHT
 
-    ; --- Z-order clipping: skip draw if point is inside topmost window ---
-    ; Only clip non-topmost windows (topmost always draws freely)
+    ; --- Z-order clipping: only topmost window can draw to screen ---
+    ; Background apps keep running but their draws are silently dropped.
+    ; When they become foreground, WIN_REDRAW triggers a full repaint.
     cmp byte [si + WIN_OFF_ZORDER], 15
     je .zclip_ok                    ; This IS the topmost window, draw freely
-    cmp byte [topmost_handle], 0xFF
-    je .zclip_ok                    ; No topmost window cached
-
-    ; Check if translated BX, CX is inside topmost window bounds
-    cmp bx, [topmost_win_x]
-    jb .zclip_ok
-    cmp cx, [topmost_win_y]
-    jb .zclip_ok
-    push dx
-    mov dx, [topmost_win_x]
-    add dx, [topmost_win_w]
-    cmp bx, dx
-    pop dx
-    jae .zclip_ok
-    push dx
-    mov dx, [topmost_win_y]
-    add dx, [topmost_win_h]
-    cmp cx, dx
-    pop dx
-    jae .zclip_ok
-
-    ; Draw point is inside topmost window — skip this draw
+    ; Not topmost — skip draw entirely
     pop ax
     pop si
     clc
-    jmp int80_return_point          ; Pop DS and iret without calling function
+    jmp int80_return_point
 
 .zclip_ok:
     pop ax
@@ -6262,12 +6242,36 @@ win_create_stub:
     pop cx
     pop si
 
+    ; Redraw old topmost window's title bar as inactive
+    push ax
+    cmp byte [topmost_handle], 0xFF
+    je .skip_old_create_redraw
+    xor ah, ah
+    mov al, [topmost_handle]
+    call win_draw_stub
+.skip_old_create_redraw:
+    pop ax
+
     mov byte [bx + WIN_OFF_ZORDER], 15          ; Top of stack
     push ax
     mov al, [current_task]
     mov [bx + WIN_OFF_OWNER], al                ; Owned by creating task
     mov [focused_task], al                       ; New window gets keyboard focus
     pop ax
+
+    ; Update topmost cache for z-order clipping
+    push ax
+    mov ax, bp
+    mov [topmost_handle], al        ; BP = window handle (low byte)
+    pop ax
+    push word [bx + WIN_OFF_X]
+    pop word [topmost_win_x]
+    push word [bx + WIN_OFF_Y]
+    pop word [topmost_win_y]
+    push word [bx + WIN_OFF_WIDTH]
+    pop word [topmost_win_w]
+    push word [bx + WIN_OFF_HEIGHT]
+    pop word [topmost_win_h]
 
     ; Copy title (up to 11 chars)
     ; App passes title as ES:DI. caller_es has the app's ES segment.
@@ -7175,7 +7179,11 @@ win_draw_stub:
     mov si, [bx + WIN_OFF_WIDTH]
     mov di, [bx + WIN_OFF_HEIGHT]
 
-    ; Draw title bar (filled rectangle, 10 pixels high)
+    ; Check if this is the active (topmost) window
+    cmp byte [bx + WIN_OFF_ZORDER], 15
+    jne .draw_inactive_titlebar
+
+    ; === Active window: filled white title bar with inverted text ===
     push bx
     push cx
     push dx
@@ -7192,23 +7200,21 @@ win_draw_stub:
     pop cx
     pop bx
 
-    ; Draw title text (inside title bar) - inverted (black on white)
-    ; Title lives in kernel's window_table (DS=0x1000), but gfx_draw_string_inverted
-    ; reads from caller_ds. Temporarily override caller_ds to kernel segment.
+    ; Draw title text - inverted (black on white)
     push bx
     push word [caller_ds]
-    mov word [caller_ds], 0x1000    ; Read title from kernel segment
+    mov word [caller_ds], 0x1000
     mov si, bx
-    add si, WIN_OFF_TITLE           ; SI = title pointer in window_table
-    mov bx, cx                      ; X position
-    add bx, 4                       ; 4px padding
-    mov cx, dx                      ; Y position
-    add cx, 1                       ; 1px padding
-    call gfx_draw_string_inverted   ; Black text on white title bar
-    pop word [caller_ds]            ; Restore caller's DS
+    add si, WIN_OFF_TITLE
+    mov bx, cx
+    add bx, 4
+    mov cx, dx
+    add cx, 1
+    call gfx_draw_string_inverted
+    pop word [caller_ds]
     pop bx
 
-    ; Draw close button [X] at right side of title bar
+    ; Draw close button [X] - inverted
     push bx
     push cx
     push dx
@@ -7216,18 +7222,74 @@ win_draw_stub:
     mov si, [.win_ptr]
     mov bx, [si + WIN_OFF_X]
     add bx, [si + WIN_OFF_WIDTH]
-    sub bx, 10                      ; BX = X = right edge - 10px
+    sub bx, 10
     mov cx, [si + WIN_OFF_Y]
-    inc cx                          ; CX = Y = win_y + 1
+    inc cx
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     mov si, close_btn_str
-    call gfx_draw_string_inverted   ; Black X on white title bar
+    call gfx_draw_string_inverted
     pop word [caller_ds]
     pop si
     pop dx
     pop cx
     pop bx
+    jmp .draw_border
+
+.draw_inactive_titlebar:
+    ; === Inactive window: clear title bar area, draw title in white ===
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, cx                      ; BX = X
+    mov cx, dx                      ; CX = Y
+    mov dx, si                      ; DX = Width
+    mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
+    call gfx_clear_area_stub        ; Black title bar background
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+    ; Draw title text - normal white on black
+    push bx
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    mov si, bx
+    add si, WIN_OFF_TITLE
+    mov bx, cx
+    add bx, 4
+    mov cx, dx
+    add cx, 1
+    call gfx_draw_string_stub
+    pop word [caller_ds]
+    pop bx
+
+    ; Draw close button [X] - normal white
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [.win_ptr]
+    mov bx, [si + WIN_OFF_X]
+    add bx, [si + WIN_OFF_WIDTH]
+    sub bx, 10
+    mov cx, [si + WIN_OFF_Y]
+    inc cx
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    mov si, close_btn_str
+    call gfx_draw_string_stub
+    pop word [caller_ds]
+    pop si
+    pop dx
+    pop cx
+    pop bx
+
+.draw_border:
 
     ; Draw border (rectangle outline)
     push bx
@@ -7307,6 +7369,16 @@ win_focus_stub:
 .demote_next:
     add si, WIN_ENTRY_SIZE
     loop .demote_loop
+
+    ; Redraw old topmost window's title bar as inactive
+    push ax
+    cmp byte [topmost_handle], 0xFF
+    je .skip_old_redraw
+    xor ah, ah
+    mov al, [topmost_handle]
+    call win_draw_stub              ; Now draws with inactive style (z<15)
+.skip_old_redraw:
+    pop ax
 
 .already_top:
     ; Set z-order to 15 (top)
