@@ -78,6 +78,7 @@ entry:
 
     ; Set window drawing context - all draw calls are now relative to
     ; this window's content area (0,0 = top-left of content)
+    mov al, [cs:win_handle]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 

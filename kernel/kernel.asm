@@ -6496,15 +6496,10 @@ draw_desktop_region:
     mov al, [desktop_bg_color]
     call gfx_fill_color             ; Fill rectangle with color AL
 
-    ; Draw any registered icons that overlap the affected region
+    ; Draw ALL registered icons (no overlap test - icons are small, always redraw)
     mov si, desktop_icons
     xor bp, bp                      ; Icon counter
 .ddr_icon_loop:
-    cmp bp, DESKTOP_MAX_ICONS
-    jae .ddr_done
-
-    ; Check if this icon slot is used (has non-zero position or is slot 0 with count > 0)
-    ; Simple: check if we've passed icon_count
     cmp byte [desktop_icon_count], 0
     je .ddr_done
     xor ax, ax
@@ -6512,63 +6507,30 @@ draw_desktop_region:
     cmp bp, ax
     jae .ddr_done
 
-    ; Check if icon overlaps with affected region
-    ; Icon rect: (ix, iy, 16, 24) where 24 = 16px icon + 8px label
-    ; Affected rect: (old_x, old_y, old_w, old_h)
-
-    ; Test: ix < old_x + old_w
-    mov ax, [redraw_old_x]
-    add ax, [redraw_old_w]
-    cmp [si + DESKTOP_ICON_OFF_X], ax
-    jge .ddr_next
-
-    ; Test: old_x < ix + 16
-    mov ax, [si + DESKTOP_ICON_OFF_X]
-    add ax, 16
-    cmp [redraw_old_x], ax
-    jge .ddr_next
-
-    ; Test: iy < old_y + old_h
-    mov ax, [redraw_old_y]
-    add ax, [redraw_old_h]
-    cmp [si + DESKTOP_ICON_OFF_Y], ax
-    jge .ddr_next
-
-    ; Test: old_y < iy + 24
-    mov ax, [si + DESKTOP_ICON_OFF_Y]
-    add ax, 24
-    cmp [redraw_old_y], ax
-    jge .ddr_next
-
-    ; Icon overlaps - draw it
+    ; Draw icon bitmap
     push si
     push bp
 
-    ; Draw icon bitmap
     mov bx, [si + DESKTOP_ICON_OFF_X]
     mov cx, [si + DESKTOP_ICON_OFF_Y]
-    ; Point SI to the bitmap within the icon entry
     add si, DESKTOP_ICON_OFF_BITMAP
-    ; Set caller_ds to kernel segment for gfx_draw_icon internal call
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     call gfx_draw_icon_stub
     pop word [caller_ds]
 
-    ; Draw icon name label below the icon
-    ; Restore SI to icon entry base
     pop bp
     pop si
     push si
     push bp
 
+    ; Draw icon name label below the icon (shifted left to match launcher)
     mov bx, [si + DESKTOP_ICON_OFF_X]
+    sub bx, 8                      ; Match launcher's label offset
     mov cx, [si + DESKTOP_ICON_OFF_Y]
     add cx, 20                      ; 16px icon + 4px gap
-    ; Point to name string
     push si
     add si, DESKTOP_ICON_OFF_NAME
-    ; Draw name in white - use gfx_draw_string_stub
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     call gfx_draw_string_stub
@@ -6578,7 +6540,6 @@ draw_desktop_region:
     pop bp
     pop si
 
-.ddr_next:
     add si, DESKTOP_ICON_SIZE
     inc bp
     jmp .ddr_icon_loop
