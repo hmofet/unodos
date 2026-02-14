@@ -2371,6 +2371,12 @@ mouse_process_drag:
     mov byte [drag_content_saved], 1
 .already_saved:
 
+    ; --- Outer cursor lock: single hide/show for entire drag step ---
+    ; Prevents flicker from multiple inner cursor brackets and protects
+    ; restore_drag_content's CGA writes from IRQ12 XOR cursor corruption
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
     ; AX=handle, BX=target_x, CX=target_y
     push ax
     call win_move_stub
@@ -2386,11 +2392,12 @@ mouse_process_drag:
     mov al, [drag_window]
     call win_draw_stub
 
-    ; Re-draw background window frames - content restore may have
-    ; overwritten their borders due to CGA byte alignment
-    ; (redraw_old_x/y/w/h still set from win_move_stub)
-    call redraw_affected_windows
+    ; Note: redraw_affected_windows already called inside win_move_stub
+    ; for the old position - no need to call again here
     pop ax
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
 
 .done:
     ret
