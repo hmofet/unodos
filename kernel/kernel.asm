@@ -3881,34 +3881,11 @@ fat12_open:
     push cx
     push ax
 
-    ; Read one sector of root directory
-    push ax                         ; Save sector number
-
-    ; LBA to CHS conversion for floppy
-    ; sector = (LBA % sectors_per_track) + 1
-    ; head = (LBA / sectors_per_track) % num_heads
-    ; cylinder = LBA / (sectors_per_track * num_heads)
-    xor dx, dx
-    mov bx, 18                      ; sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
-    inc dx                          ; DX = sector (1-based)
-    mov cl, dl                      ; CL = sector
-
-    xor dx, dx
-    mov bx, 2                       ; num heads (1.44MB floppy)
-    div bx                          ; AX = cylinder, DX = head
-    mov ch, al                      ; CH = cylinder
-    mov dh, dl                      ; DH = head
-
-    ; Now read the sector
+    ; Read one sector of root directory with retry
     mov bx, 0x1000
     mov es, bx
     mov bx, bpb_buffer
-    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dl, 0                       ; DL = drive A:
-    int 0x13
-
-    pop ax                          ; Restore sector number
+    call floppy_read_sector         ; AX = LBA, ES:BX = buffer (preserves AX)
     jc .read_error_cleanup
 
     ; Search through 16 entries in this sector
@@ -4161,7 +4138,7 @@ get_next_cluster:
     cmp ax, [fat_cache_sector]
     je .sector_cached
 
-    ; Load FAT sector into cache
+    ; Load FAT sector into cache with retry
     mov [fat_cache_sector], ax      ; Update cached sector number
 
     push ax
@@ -4169,23 +4146,8 @@ get_next_cluster:
     mov es, bx
     mov bx, fat_cache
 
-    ; Convert LBA to CHS (proper floppy geometry)
-    ; AX = LBA sector number
-    push bx                         ; Save buffer pointer
-    xor dx, dx
-    mov bx, 18                      ; Sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
-    inc dx                          ; DX = sector (1-based)
-    mov cl, dl                      ; CL = sector
-    xor dx, dx
-    mov bx, 2                       ; Number of heads
-    div bx                          ; AX = cylinder, DX = head
-    mov ch, al                      ; CH = cylinder
-    mov dh, dl                      ; DH = head
-    pop bx                          ; Restore buffer pointer
-    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dl, 0x00                    ; DL=0 (drive A:)
-    int 0x13
+    ; AX = absolute FAT sector number
+    call floppy_read_sector         ; Read with retry (preserves AX)
     pop ax
 
     jc .read_error
@@ -4253,6 +4215,54 @@ get_next_cluster:
     pop cx
     pop bx
     ret
+
+; ============================================================================
+; floppy_read_sector - Read one sector with retry logic
+; Input: AX = LBA sector number, ES:BX = buffer to read into
+; Output: CF = 0 on success, CF = 1 on error
+; Preserves: AX, ES, BX (buffer pointer)
+; Clobbers: CX, DX
+; ============================================================================
+floppy_read_sector:
+    push ax
+    mov [cs:.frs_lba], ax
+    mov byte [cs:.frs_retry], 3     ; 3 attempts
+.frs_loop:
+    ; Convert LBA to CHS
+    mov ax, [cs:.frs_lba]
+    xor dx, dx
+    push bx                         ; Save buffer pointer
+    mov bx, 18                      ; Sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+    xor dx, dx
+    mov bx, 2                       ; Number of heads
+    div bx                          ; AX = cylinder, DX = head
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop bx                          ; Restore buffer pointer
+    mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
+    mov dl, 0x00                    ; Drive A:
+    int 0x13
+    jnc .frs_ok
+    ; Reset drive and retry
+    dec byte [cs:.frs_retry]
+    jz .frs_fail
+    xor ah, ah
+    mov dl, 0
+    int 0x13
+    jmp .frs_loop
+.frs_fail:
+    pop ax
+    stc
+    ret
+.frs_ok:
+    pop ax
+    clc
+    ret
+.frs_lba:   dw 0
+.frs_retry: db 0
 
 ; ============================================================================
 ; fat12_read - Read data from file
@@ -4331,7 +4341,7 @@ fat12_read:
     mul bx
     add ax, [data_area_start]       ; AX = sector number
 
-    ; Read sector into bpb_buffer (ES:BX = 0x1000:bpb_buffer)
+    ; Read sector into bpb_buffer with retry (ES:BX = 0x1000:bpb_buffer)
     push es
     push di
     push si
@@ -4342,27 +4352,8 @@ fat12_read:
     pop ds                          ; DS = 0x1000 (for later access)
     mov bx, bpb_buffer              ; BX = buffer offset
 
-    ; Convert LBA to CHS (proper conversion for floppy)
     ; AX = LBA sector number
-    push bx                         ; Save buffer pointer
-    push ax                         ; Save LBA
-    xor dx, dx
-    mov bx, 18                      ; Sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
-    inc dx                          ; DX = sector (1-based)
-    mov cl, dl                      ; CL = sector
-    xor dx, dx
-    mov bx, 2                       ; Number of heads
-    div bx                          ; AX = cylinder, DX = head
-    mov ch, al                      ; CH = cylinder
-    mov dh, dl                      ; DH = head
-    pop ax                          ; Restore LBA (saved for FAT chain)
-    pop bx                          ; Restore buffer pointer
-    push ax                         ; Save LBA again
-    mov ax, 0x0201                  ; Read 1 sector
-    mov dl, 0x00                    ; Drive A:
-    int 0x13
-    pop ax                          ; Restore LBA
+    call floppy_read_sector         ; Read with retry (preserves AX)
 
     push cs
     pop ds
