@@ -11,8 +11,8 @@ Address Range          Size    Usage
 0x0000:0x7C00          512 B   Boot Sector (loaded by BIOS)
 0x0000:0x7E00          ~1 KB   FREE (after boot sector)
 0x0800:0x0000          2 KB    Stage2 Bootloader
-0x1000:0x0000          28 KB   Kernel (v3.14.0)
-  0x1000:0x1060        ~128 B    ↳ API Table (41 functions)
+0x1000:0x0000          28 KB   Kernel (v3.15.0)
+  0x1000:0x1100        ~128 B    ↳ API Table (43 functions)
 0x1400:0x0000          ~64 KB  Heap (malloc pool)
 0x2000:0x0000          64 KB   Shell/Launcher segment (fixed)
 0x3000:0x0000          64 KB   User app slot 0 (dynamic pool)
@@ -51,21 +51,21 @@ Offset    Content
           - Mouse cursor (XOR sprite, hide/show, drag state)
           - Content preservation (save/restore scratch buffer)
           - Segment pool (alloc_segment, free_segment)
-0x1060    API table (header + 41 function pointers)
+0x1100    API table (header + 43 function pointers)
 ~0x1084   Font data (8x8 + 4x6)
 ~0x1500   Data section (window_table, app_table, segment_pool, variables)
 ~0x6FFF   End of 28KB kernel (padded)
 ```
 
-### API Table Structure (at 0x1000:0x1060)
+### API Table Structure (at 0x1000:0x1100)
 
 ```
 Offset  Size  Content
 0x00    2     Magic: 0x4B41 ('KA')
 0x02    2     Version: 0x0100 (1.0)
-0x04    2     Function count: 41
+0x04    2     Function count: 43
 0x06    2     Reserved
-0x08    82    Function pointers (41 × 2 bytes)
+0x08    86    Function pointers (43 × 2 bytes)
 ```
 
 ---
@@ -107,15 +107,14 @@ Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
 ### Scratch Buffer (0x9000)
 
 Used for OS-managed content preservation during window drags:
-- Before moving a window, its CGA pixel content is saved here
-- After the move, content is restored at the new position
-- Prevents apps from needing to redraw during drags
-- Size: up to 64KB (enough for full-screen window content)
+- Reserved for future use (formerly used for window drag content save/restore)
+- Build 156: Outline drag replaced content save/restore approach
+- Size: up to 64KB
 - Moved from 0x5000 to 0x9000 in Build 149 to free segment for app pool
 
 ---
 
-## Current Memory Usage (Build 151)
+## Current Memory Usage (Build 159)
 
 | Region | Size | Usage | Notes |
 |--------|------|-------|-------|
@@ -124,12 +123,12 @@ Used for OS-managed content preservation during window drags:
 | 0x1400-0x1FFF | 48KB | Heap | Available for malloc |
 | 0x2000-0x2FFF | 64KB | Shell segment | Launcher (fixed) |
 | 0x3000-0x8FFF | 384KB | User app pool | 6 × 64KB segments |
-| 0x9000-0x9FFF | 64KB | Scratch buffer | Window drag content |
+| 0x9000-0x9FFF | 64KB | Scratch buffer | Reserved (formerly drag content) |
 
 **Overall:** 7 app segments (1 shell + 6 user) using 448KB of the 640KB address space.
 
 ---
 
 *Document created: 2026-01-23*
-*Last updated: 2026-02-13*
-*UnoDOS v3.14.0 Build 151*
+*Last updated: 2026-02-14*
+*UnoDOS v3.15.0 Build 159*

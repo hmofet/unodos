@@ -15,7 +15,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## Completed Features (v3.14.0 Build 151)
+## Completed Features (v3.15.0 Build 159)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -37,7 +37,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 ### System Call Infrastructure
 - [x] INT 0x80 handler for API dispatch
 - [x] Kernel API table at fixed address (0x1000:0x1060)
-- [x] 41 API functions implemented (indices 0-40)
+- [x] 43 API functions implemented (indices 0-42)
 - [x] Caller segment preservation (caller_ds/caller_es) for string parameters
 - [x] Window-relative coordinate translation for APIs 0-6
 
@@ -89,14 +89,22 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 ### Window Manager
 - [x] win_create_stub() - Create window with title/border
 - [x] win_destroy_stub() - Destroy window and clear area
-- [x] win_draw_stub() - Redraw window frame
+- [x] win_draw_stub() - Redraw window frame (active/inactive title bar styles)
 - [x] win_focus_stub() - Set active window (z-order)
 - [x] win_move_stub() - Move window to new position
 - [x] win_get_content_stub() - Get content area bounds
-- [x] Mouse-driven title bar dragging (deferred via event_get)
-- [x] OS-managed content preservation during drags (scratch buffer at 0x9000)
+- [x] Close button [X] on title bar (click to terminate app)
+- [x] Mouse-driven outline drag (XOR rectangle, Windows 3.1 style)
+- [x] Z-order management (background draws blocked, topmost always on top)
+- [x] Active/inactive title bars (filled white vs black with white text)
 - [x] Window drawing context (apps use window-relative 0,0 coordinates)
 - [x] Automatic coordinate translation for APIs 0-6
+
+### PC Speaker
+- [x] speaker_tone_stub() - Play tone at specified frequency
+- [x] speaker_off_stub() - Silence speaker
+- [x] PIT Channel 2 frequency programming
+- [x] Automatic speaker silence on task exit
 
 ### Filesystem
 - [x] Filesystem abstraction layer (VFS-like)
@@ -142,15 +150,16 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Auto-rescans disk on floppy swap
 
 ### Applications
-- [x] **LAUNCHER.BIN** - Desktop launcher with icon grid (2769 bytes)
+- [x] **LAUNCHER.BIN** - Desktop launcher with icon grid (2903 bytes)
 - [x] **CLOCK.BIN** - Real-time clock display (330 bytes, icon: clock face)
-- [x] **BROWSER.BIN** - File browser showing files with sizes (565 bytes, icon: folder)
-- [x] **TEST.BIN** - Hello test application (247 bytes, icon: speech bubble)
-- [x] **MOUSE.BIN** - Mouse test/demo application (741 bytes, icon: arrow cursor)
+- [x] **BROWSER.BIN** - File browser showing files with sizes (569 bytes, icon: folder)
+- [x] **TEST.BIN** - Hello test application (251 bytes, icon: speech bubble)
+- [x] **MOUSE.BIN** - Mouse test/demo application (745 bytes, icon: arrow cursor)
+- [x] **MUSIC.BIN** - Fur Elise music player (649 bytes, icon: musical note)
 
 ---
 
-## API Table Summary (v3.14.0 Build 151)
+## API Table Summary (v3.15.0 Build 159)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -195,6 +204,8 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 38 | desktop_clear_icons | Clear all registered desktop icons |
 | 39 | gfx_draw_icon | Draw 16x16 2bpp icon bitmap |
 | 40 | fs_read_header | Read first N bytes from a file |
+| 41 | speaker_tone | Play tone (BX=frequency Hz) |
+| 42 | speaker_off | Turn off PC speaker |
 
 ### New API Details (Build 144)
 
@@ -227,6 +238,18 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - Input: BX = mount handle, SI -> filename (null-terminated, in caller's segment), ES:DI = destination buffer, CX = bytes to read
 - Output: CF=0 success (AX = bytes read), CF=1 error
 - Description: Opens a file, reads CX bytes, closes it. Designed for reading BIN icon headers without manual open/read/close.
+
+### New API Details (Build 152)
+
+**API 41: speaker_tone** - Play tone on PC speaker
+- Input: BX = frequency in Hz (0 = turn off)
+- Output: none
+- Description: Programs PIT Channel 2 to generate a square wave at the specified frequency. BX=0 is equivalent to speaker_off.
+
+**API 42: speaker_off** - Turn off PC speaker
+- Input: none
+- Output: none
+- Description: Silences the PC speaker by clearing port 0x61 bits 0-1. Also called automatically on task exit.
 
 ---
 
@@ -310,7 +333,7 @@ entry:
 
 ---
 
-## Memory Layout (v3.14.0 Build 149+)
+## Memory Layout (v3.15.0 Build 159)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -318,7 +341,7 @@ entry:
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
 0x1000:0x0000   Kernel                        28 KB
-  +-- 0x1000:0x1060  API table (41 functions)
+  +-- 0x1000:0x1100  API table (43 functions)
 0x1400:0x0000   Heap (malloc pool)            ~64 KB
 0x2000:0x0000   Shell/Launcher segment        64 KB (fixed)
 0x3000:0x0000   User app slot 0               64 KB (dynamic pool)
@@ -327,7 +350,7 @@ entry:
 0x6000:0x0000   User app slot 3               64 KB
 0x7000:0x0000   User app slot 4               64 KB
 0x8000:0x0000   User app slot 5               64 KB
-0x9000:0x0000   Scratch buffer (drag content) 64 KB
+0x9000:0x0000   Scratch buffer                64 KB
 0xB800:0x0000   CGA video memory              16 KB
 ```
 
@@ -342,11 +365,13 @@ entry:
 
 ### Window Manager Enhancements
 - [x] Overlapping window redraw (z-order clipping)
-- [ ] Close button
+- [x] Close button [X]
+- [x] Outline drag (Windows 3.1 style)
+- [x] Active/inactive title bars
 - [ ] Window resize
 
 ### Hardware Support
-- [ ] Sound support (PC speaker beeps/tunes)
+- [x] PC Speaker sound (tone generation + music playback)
 - [ ] Serial mouse driver (Microsoft compatible)
 
 ### Future Enhancements
@@ -403,4 +428,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 6.0 (2026-02-13) - Updated for v3.14.0 Build 151*
+*Document version: 7.0 (2026-02-14) - Updated for v3.15.0 Build 159*

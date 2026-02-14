@@ -11,7 +11,7 @@ This document contains important instructions for AI assistants working on UnoDO
 3. Build number stored in BUILD_NUMBER file
 4. Display format: `Build: XXX` (e.g., "Build: 135")
 
-**Why**: During hardware testing sessions, the developer needs to verify they're testing the correct build. Static version numbers (v3.13.0) don't change between debug builds, making it impossible to confirm the right binary is running.
+**Why**: During hardware testing sessions, the developer needs to verify they're testing the correct build. Static version numbers (v3.15.0) don't change between debug builds, making it impossible to confirm the right binary is running.
 
 **Location**: Display build number below the version string at coordinates (4, 14)
 
@@ -75,7 +75,7 @@ This document contains important instructions for AI assistants working on UnoDO
 
 **Why**: The INT 0x80 handler auto-translates BX/CX for drawing APIs 0-6 when a draw context is active. This means apps don't need absolute screen coordinates and content is preserved correctly during window drags.
 
-**Content preservation**: The OS automatically saves and restores window content during mouse-driven drags. Apps do NOT need to handle redraw events.
+**Window dragging**: Outline drag (XOR rectangle) — window moves on mouse release. Apps receive WIN_REDRAW to repaint content. Background window draws are silently blocked; apps repaint on focus.
 
 ## Multi-App Segment Architecture (Build 149+)
 
@@ -91,7 +91,7 @@ This document contains important instructions for AI assistants working on UnoDO
 0x6000 - 0x6FFF  : User app slot 3
 0x7000 - 0x7FFF  : User app slot 4
 0x8000 - 0x8FFF  : User app slot 5
-0x9000           : Scratch buffer (window drag content preservation)
+0x9000           : Scratch buffer (reserved)
 0xB800           : CGA video memory
 ```
 
@@ -187,6 +187,6 @@ git push
 
 ---
 
-**Last Updated**: 2026-02-13
-**Current Version**: v3.14.0
-**Current Build**: 150
+**Last Updated**: 2026-02-14
+**Current Version**: v3.15.0
+**Current Build**: 159

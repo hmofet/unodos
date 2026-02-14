@@ -5,6 +5,58 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.15.0] - 2026-02-14
+
+### Added (Builds 151-159) - Window Manager, Sound, Close Button
+
+- **Window Close Button** (Build 152)
+  - [X] button drawn at right side of title bar
+  - Click to terminate app and destroy window
+  - Speaker silenced on app exit (prevents stuck tones)
+  - Works for both current and background tasks
+
+- **PC Speaker Sound** (Build 152)
+  - New APIs: speaker_tone (41), speaker_off (42)
+  - PIT Channel 2 programming for frequency generation
+  - Automatic speaker silence on task termination
+
+- **Music Player App** (Build 152)
+  - MUSIC.BIN - Beethoven's Fur Elise opening theme
+  - Sequential note playback via PC speaker
+  - BIOS tick counter timing (~18.2 Hz)
+  - Musical note icon in app header
+
+- **Outline Drag** (Build 156)
+  - XOR rectangle outline during window drag (Windows 3.1 style)
+  - Window moves once on mouse release, single clean repaint
+  - Replaced pixel save/restore drag (~235 lines removed)
+
+- **Z-Order Window Management** (Builds 155-159)
+  - Background windows blocked from drawing over foreground
+  - Topmost window bounds cache for O(1) clipping
+  - Active/inactive title bar visual distinction
+  - Active: filled white title bar with black text
+  - Inactive: black title bar with white text outline
+  - Automatic title bar style update on focus change
+
+### Fixed (Builds 151-159)
+
+- Build 153: Floppy read retry logic for reliable loading on real hardware
+- Build 154: App load error code diagnostic in launcher
+- Build 155: Background windows losing content due to overzealous z-order clipping
+- Build 157: Post-drag z-order — desktop icons and background frames showing through moved window
+- Build 158: Per-draw-call z-order clipping (point-inside-topmost check)
+- Build 159: Simplified to full background draw blocking (fixes multi-pixel bleed-through)
+
+### Changed
+
+- API table expanded from 41 to 43 functions (speaker_tone, speaker_off)
+- Window drag: outline-based instead of content save/restore
+- Draw API calls from background windows silently dropped (apps repaint on focus)
+- Title bar style differentiates active vs inactive windows
+
+---
+
 ## [3.14.0] - 2026-02-13
 
 ### Added (Builds 144-150) - Desktop Icons, Multi-App, Multitasking
