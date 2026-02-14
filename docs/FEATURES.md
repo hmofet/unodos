@@ -15,7 +15,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## Completed Features (v3.14.0 Build 144)
+## Completed Features (v3.14.0 Build 151)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -36,7 +36,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ### System Call Infrastructure
 - [x] INT 0x80 handler for API dispatch
-- [x] Kernel API table at fixed address (0x1000:0x0F80)
+- [x] Kernel API table at fixed address (0x1000:0x1060)
 - [x] 41 API functions implemented (indices 0-40)
 - [x] Caller segment preservation (caller_ds/caller_es) for string parameters
 - [x] Window-relative coordinate translation for APIs 0-6
@@ -94,7 +94,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] win_move_stub() - Move window to new position
 - [x] win_get_content_stub() - Get content area bounds
 - [x] Mouse-driven title bar dragging (deferred via event_get)
-- [x] OS-managed content preservation during drags (scratch buffer at 0x5000)
+- [x] OS-managed content preservation during drags (scratch buffer at 0x9000)
 - [x] Window drawing context (apps use window-relative 0,0 coordinates)
 - [x] Automatic coordinate translation for APIs 0-6
 
@@ -109,13 +109,15 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Multi-cluster file reading (FAT chain following)
 - [x] 8.3 filename support
 
-### Application Loader
-- [x] app_load_stub() - Load .BIN from FAT12
+### Application Loader & Multitasking
+- [x] app_load_stub() - Load .BIN from FAT12 with dynamic segment allocation
 - [x] app_run_stub() - Execute loaded application
 - [x] app_start_stub() - Start app non-blocking (cooperative multitasking)
-- [x] Dual segment architecture (shell 0x2000, user 0x3000)
+- [x] Multi-app segment pool (shell 0x2000 fixed, user 0x3000-0x8000 dynamic)
+- [x] Up to 6 concurrent user apps + launcher
+- [x] Dynamic segment allocation (alloc_segment / free_segment)
+- [x] Automatic segment cleanup on task exit
 - [x] Far CALL/RETF calling convention
-- [x] Apps survive shell execution and return
 - [x] Cooperative multitasking with round-robin scheduler
 
 ### Desktop & Icons
@@ -148,7 +150,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## API Table Summary (v3.14.0 Build 144)
+## API Table Summary (v3.14.0 Build 151)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -308,7 +310,7 @@ entry:
 
 ---
 
-## Memory Layout (v3.14.0)
+## Memory Layout (v3.14.0 Build 149+)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -316,11 +318,16 @@ entry:
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
 0x1000:0x0000   Kernel                        28 KB
-  +-- 0x1000:0x0F80  API table
-0x1400:0x0000   Heap (malloc pool)            ~532 KB
-0x2000:0x0000   Shell/Launcher segment        64 KB
-0x3000:0x0000   User app segment              64 KB
-0x5000:0x0000   Scratch buffer (drag content) 64 KB
+  +-- 0x1000:0x1060  API table (41 functions)
+0x1400:0x0000   Heap (malloc pool)            ~64 KB
+0x2000:0x0000   Shell/Launcher segment        64 KB (fixed)
+0x3000:0x0000   User app slot 0               64 KB (dynamic pool)
+0x4000:0x0000   User app slot 1               64 KB
+0x5000:0x0000   User app slot 2               64 KB
+0x6000:0x0000   User app slot 3               64 KB
+0x7000:0x0000   User app slot 4               64 KB
+0x8000:0x0000   User app slot 5               64 KB
+0x9000:0x0000   Scratch buffer (drag content) 64 KB
 0xB800:0x0000   CGA video memory              16 KB
 ```
 
@@ -343,7 +350,7 @@ entry:
 - [ ] Serial mouse driver (Microsoft compatible)
 
 ### Future Enhancements
-- [x] Cooperative multitasking (app_yield, app_start)
+- [x] Cooperative multitasking (app_yield, app_start, 6 concurrent apps)
 - [ ] File writing support
 - [ ] Long filename support
 
@@ -388,7 +395,7 @@ CGA 320x200 mode works on:
 The following are explicitly out of scope for UnoDOS 3:
 
 - **Networking**: No TCP/IP, no modem support
-- **Preemptive Multitasking**: Single app or cooperative only
+- **Preemptive Multitasking**: Cooperative only (apps must yield)
 - **Protected Mode**: Stays in real mode for XT compatibility
 - **High Resolution**: Sticks to CGA modes for compatibility
 - **Modern File Systems**: No FAT32, NTFS, ext4
@@ -396,4 +403,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 5.0 (2026-02-13) - Updated for v3.14.0 Build 144*
+*Document version: 6.0 (2026-02-13) - Updated for v3.14.0 Build 151*
