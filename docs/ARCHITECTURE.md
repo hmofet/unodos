@@ -158,7 +158,7 @@ Loading kernel................................ OK
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 41 functions |
+| System Calls | INT 0x80 for API dispatch, 43 functions |
 | Graphics API | 8 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width, draw_icon |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
@@ -166,7 +166,8 @@ Loading kernel................................ OK
 | Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE/MOUSE types |
 | Filesystem | FAT12 driver with mount, open, read, close, readdir |
 | App Loader | Load and execute .BIN applications from FAT12 |
-| Window Manager | Create, destroy, draw, focus, move, drag windows (16 max) |
+| Window Manager | Create, destroy, draw, focus, move, close, outline drag (16 max) |
+| PC Speaker | PIT Channel 2 tone generation, auto-silence on exit |
 | Drawing Context | Window-relative coordinate translation for APIs 0-6 |
 | Content Preserve | Save/restore window content during drags (scratch at 0x9000) |
 | Desktop Icons | 8 registered icon slots, kernel repaints during window operations |
@@ -284,4 +285,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*Document version: 6.0 (2026-02-13) - Updated for v3.14.0 Build 151*
+*Document version: 7.0 (2026-02-14) - Updated for v3.15.0 Build 159*
