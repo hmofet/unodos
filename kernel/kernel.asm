@@ -3082,14 +3082,9 @@ event_get_stub:
     add si, bx                      ; SI = head * 2
     add si, bx                      ; SI = head * 3
 
-    ; Read event from queue
+    ; Read event from queue (DO NOT advance head yet)
     mov al, [event_queue + si]      ; type
     mov dx, [event_queue + si + 1]  ; data (word)
-
-    ; Advance head
-    inc bx
-    and bx, 0x1F                    ; Wrap at 32 events
-    mov [event_queue_head], bx
 
     ; Filter keyboard events: only deliver to focused task
     cmp al, EVENT_KEY_PRESS
@@ -3098,15 +3093,15 @@ event_get_stub:
     mov al, [focused_task]
     cmp al, [current_task]
     pop ax
-    je .evt_return                  ; This task has focus, deliver key
-    jmp .evt_check_next             ; Not focused, discard key event
+    je .evt_consume                 ; This task has focus, consume and deliver
+    jmp .no_event                   ; Not focused - leave event in queue for correct task
 
 .evt_not_key:
     ; Filter: skip WIN_REDRAW events not for current task's window
     cmp al, EVENT_WIN_REDRAW
-    jne .evt_return                 ; Other event types pass through
+    jne .evt_consume                ; Other event types: consume and pass through
     cmp dl, WIN_MAX_COUNT
-    jae .evt_check_next             ; Invalid window handle, discard
+    jae .evt_discard                ; Invalid window handle: consume garbage and retry
     push si
     push ax
     xor ah, ah
@@ -3118,14 +3113,27 @@ event_get_stub:
     cmp al, [current_task]
     pop ax
     pop si
-    je .evt_return                  ; Window belongs to current task, return it
-    jmp .evt_check_next             ; Wrong task's window, discard
+    je .evt_consume                 ; Window belongs to current task, consume and return
+    jmp .no_event                   ; Wrong task's window - leave in queue
+
+.evt_consume:
+    ; Now advance head (event confirmed for this task)
+    inc bx
+    and bx, 0x1F                    ; Wrap at 32 events
+    mov [event_queue_head], bx
 
 .evt_return:
     pop ds
     pop si
     pop bx
     ret
+
+.evt_discard:
+    ; Consume invalid event and try next
+    inc bx
+    and bx, 0x1F
+    mov [event_queue_head], bx
+    jmp .evt_check_next
 
 .no_event:
     xor al, al                      ; EVENT_NONE

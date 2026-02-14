@@ -84,6 +84,7 @@ entry:
     mov [cs:win_handle], al
 
     ; Set window drawing context - coordinates now relative to content area
+    mov al, [cs:win_handle]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 

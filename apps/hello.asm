@@ -59,10 +59,10 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Create window at X=80, Y=70, W=160, H=50
-    mov bx, 80                      ; X position
+    ; Create window at X=50, Y=70, W=220, H=50
+    mov bx, 50                      ; X position
     mov cx, 70                      ; Y position
-    mov dx, 160                     ; Width
+    mov dx, 220                     ; Width
     mov si, 50                      ; Height
     mov ax, cs
     mov es, ax
@@ -74,6 +74,7 @@ entry:
     mov [cs:win_handle], al
 
     ; Set window drawing context
+    mov al, [cs:win_handle]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
@@ -125,13 +126,13 @@ entry:
 draw_content:
     pusha
 
-    mov bx, 20                      ; X within content area
+    mov bx, 33                      ; X within content area (centered)
     mov cx, 8                       ; Y within content area
     mov si, msg_hello
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, 16
+    mov bx, 9
     mov cx, 22
     mov si, msg_esc
     mov ah, API_GFX_DRAW_STRING
