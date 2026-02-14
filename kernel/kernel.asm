@@ -7045,14 +7045,19 @@ win_draw_stub:
     pop bx
 
     ; Draw title text (inside title bar) - inverted (black on white)
+    ; Title lives in kernel's window_table (DS=0x1000), but gfx_draw_string_inverted
+    ; reads from caller_ds. Temporarily override caller_ds to kernel segment.
     push bx
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000    ; Read title from kernel segment
     mov si, bx
-    add si, WIN_OFF_TITLE           ; SI = title pointer
+    add si, WIN_OFF_TITLE           ; SI = title pointer in window_table
     mov bx, cx                      ; X position
     add bx, 4                       ; 4px padding
     mov cx, dx                      ; Y position
     add cx, 1                       ; 1px padding
     call gfx_draw_string_inverted   ; Black text on white title bar
+    pop word [caller_ds]            ; Restore caller's DS
     pop bx
 
     ; Draw border (rectangle outline)
