@@ -26,6 +26,7 @@ API_DESKTOP_CLEAR       equ 38
 API_GFX_DRAW_ICON       equ 39
 API_FS_READ_HEADER      equ 40
 API_GFX_TEXT_WIDTH      equ 33
+API_WIN_DRAW            equ 22
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -74,22 +75,12 @@ entry:
     mov byte [cs:last_click_icon], 0xFF
     mov byte [cs:floppy_icon_slot], 0xFF
 
-    ; Draw desktop background (fullscreen cyan fill)
-    call draw_background
-
-    ; Draw title
-    mov bx, 4
-    mov cx, 4
-    mov si, title_str
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     ; Mount filesystem and scan for apps (5 second timeout)
     mov ax, FLOPPY_TIMEOUT_INITIAL
     call scan_disk
 
-    ; Draw all icons
-    call draw_all_icons
+    ; Draw full desktop (background + title + version + icons)
+    call redraw_desktop
 
     ; If scan timed out, show floppy icon
     cmp byte [cs:scan_timed_out], 0
@@ -342,10 +333,11 @@ scan_disk:
     jmp .scan_loop
 
 .scan_timeout:
+.scan_fail:
+    ; Mount failure or timeout - show floppy icon
     mov byte [cs:scan_timed_out], 1
     jmp .scan_exit
 
-.scan_fail:
 .scan_done:
 .scan_exit:
     pop es
@@ -636,6 +628,40 @@ draw_background:
     ret
 
 ; ============================================================================
+; redraw_desktop - Full desktop repaint (background + title + version + icons)
+; ============================================================================
+redraw_desktop:
+    pusha
+
+    call draw_background
+
+    ; Title at top-left
+    mov bx, 4
+    mov cx, 4
+    mov si, title_str
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Version at bottom-left
+    mov bx, 4
+    mov cx, 190
+    mov si, VERSION_STR
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Build number at bottom-right area
+    mov bx, 200
+    mov cx, 190
+    mov si, BUILD_NUMBER_STR
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    call draw_all_icons
+
+    popa
+    ret
+
+; ============================================================================
 ; draw_all_icons - Draw all discovered icons on the desktop
 ; ============================================================================
 draw_all_icons:
@@ -921,16 +947,12 @@ handle_click:
     ; Clicked on empty space - deselect
     cmp byte [cs:selected_icon], 0xFF
     je .hc_done
+    mov al, [cs:selected_icon]
     mov byte [cs:selected_icon], 0xFF
     mov byte [cs:last_click_icon], 0xFF
-    ; Redraw to remove highlight
-    call draw_background
-    mov bx, 4
-    mov cx, 4
-    mov si, title_str
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    call draw_all_icons
+    ; Only clear highlight and redraw that one icon (no full screen redraw)
+    call clear_icon_area
+    call draw_single_icon
 
 .hc_done:
     popa
@@ -1146,6 +1168,26 @@ show_floppy_icon:
     ret
 
 ; ============================================================================
+; repaint_all_windows - Redraw all window frames on top of the desktop
+; Called after a full desktop repaint to prevent desktop from obscuring apps
+; ============================================================================
+repaint_all_windows:
+    pusha
+    mov byte [cs:.raw_idx], 0
+.raw_loop:
+    cmp byte [cs:.raw_idx], 16
+    jae .raw_done
+    mov al, [cs:.raw_idx]
+    mov ah, API_WIN_DRAW
+    int 0x80
+    inc byte [cs:.raw_idx]
+    jmp .raw_loop
+.raw_done:
+    popa
+    ret
+.raw_idx: db 0
+
+; ============================================================================
 ; retry_floppy_scan - Retry scanning for apps (double-click on floppy icon)
 ; Rescans with 10-second timeout
 ; ============================================================================
@@ -1166,18 +1208,16 @@ retry_floppy_scan:
     call scan_disk
 
     ; Redraw entire desktop
-    call draw_background
-    mov bx, 4
-    mov cx, 4
-    mov si, title_str
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    call draw_all_icons
+    call redraw_desktop
 
     ; If still timed out, show floppy icon again
     cmp byte [cs:scan_timed_out], 0
-    je .rfs_done
+    je .rfs_no_floppy
     call show_floppy_icon
+.rfs_no_floppy:
+
+    ; Repaint any open app windows on top of the desktop
+    call repaint_all_windows
 
 .rfs_done:
     popa
@@ -1204,19 +1244,17 @@ check_floppy_swap:
     mov ax, FLOPPY_TIMEOUT_INITIAL
     call scan_disk
 
-    ; Redraw
-    call draw_background
-    mov bx, 4
-    mov cx, 4
-    mov si, title_str
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    call draw_all_icons
+    ; Redraw desktop
+    call redraw_desktop
 
     ; If timed out, show floppy icon
     cmp byte [cs:scan_timed_out], 0
-    je .cfs_no_change
+    je .cfs_no_floppy
     call show_floppy_icon
+.cfs_no_floppy:
+
+    ; Repaint any open app windows on top of the desktop
+    call repaint_all_windows
 
 .cfs_no_change:
     popa
@@ -1336,3 +1374,6 @@ floppy_marker:  db 'FLOPPY', 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; App handle for launched app
 app_handle:     dw 0
+
+; Build info strings (auto-generated from BUILD_NUMBER and VERSION)
+%include "kernel/build_info.inc"
