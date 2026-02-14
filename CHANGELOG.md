@@ -5,6 +5,49 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.0] - 2026-02-13
+
+### Added (Builds 144-150) - Desktop Icons, Multi-App, Multitasking
+
+- **Desktop Icon System** (Build 144)
+  - 4x2 icon grid with 16x16 2bpp CGA icon bitmaps on desktop
+  - BIN file icon headers (80 bytes: JMP + "UI" magic + 12B name + 64B bitmap)
+  - Automatic icon detection from BIN headers at boot
+  - Default icon for legacy apps without headers
+  - Mouse double-click to launch (~0.5s threshold)
+  - Keyboard navigation (arrows/WASD + Enter)
+  - New APIs: desktop_set_icon (37), desktop_clear_icons (38), gfx_draw_icon (39), fs_read_header (40)
+
+- **Cooperative Multitasking** (Build 144)
+  - Round-robin cooperative scheduler (app_yield, app_start)
+  - Per-task draw_context save/restore
+  - Per-task event filtering (KEY_PRESS to focused, WIN_REDRAW to owner)
+
+- **Multi-App Concurrent Execution** (Build 149)
+  - Dynamic segment pool: 6 user segments (0x3000-0x8000)
+  - alloc_segment / free_segment kernel helpers
+  - Up to 6 concurrent user apps + launcher
+  - Scratch buffer moved from 0x5000 to 0x9000
+
+- **Window Title Bar Text** (Build 150)
+  - Fixed gfx_draw_string_inverted reading from wrong segment for titles
+
+### Fixed (Builds 145-148)
+
+- Build 145: Window drag content flicker
+- Build 146: Desktop z-order, floppy detection, version display
+- Build 147: Mouse test app, icon repaint, icon deselect
+- Build 148: Double-ESC exit bug (event queue), hello window sizing
+
+### Changed
+
+- API table expanded from 34 to 41 functions
+- Memory: 6 dynamic user segments (0x3000-0x8000) replace single 0x3000
+- Scratch buffer relocated from 0x5000 to 0x9000
+- Launcher rewritten as fullscreen desktop with icon grid
+
+---
+
 ## [3.13.0] - 2026-02-11
 
 ### Fixed (Build 135) - Text Width Measurement

@@ -29,24 +29,25 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.13.0 Build 135)
+## Current Features (v3.14.0 Build 151)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
-- System call infrastructure (INT 0x80 + API table with 34 functions)
-- Graphics API (pixel, rectangle, character, string, text measurement)
+- System call infrastructure (INT 0x80 + API table with 41 functions)
+- Graphics API (pixel, rectangle, character, string, text measurement, icons)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
 - PS/2 Mouse driver (IRQ12/INT 0x74) with visible XOR cursor
-- Event system (32-event circular queue)
+- Event system (32-event circular queue, per-task filtering)
 - FAT12 filesystem (read-only: mount, open, read, close, readdir)
-- Application Loader (load and run .BIN apps from FAT12)
-- **Window Manager** with mouse-driven title bar dragging
+- Application Loader with dynamic segment allocation
+- **Cooperative multitasking** - up to 6 concurrent user apps + launcher
+- **Window Manager** with mouse-driven title bar dragging (16 windows max)
 - **Window Drawing Context** (apps use window-relative coordinates)
 - **OS-managed content preservation** during window drags
-- **Desktop Launcher** with dynamic app discovery
+- **Desktop Launcher** with icon grid, double-click launch, floppy swap detection
 
 ## Building
 
@@ -137,8 +138,8 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
-├── VERSION              # Version string (3.13.0)
-└── BUILD_NUMBER         # Build number (134)
+├── VERSION              # Version string (3.14.0)
+└── BUILD_NUMBER         # Build number (150)
 ```
 
 ## Documentation
@@ -161,31 +162,33 @@ unodos/
 - [x] FAT12 filesystem (read-only)
 
 ### Completed (Core Services)
-- [x] Application loader (load .BIN from FAT12)
+- [x] Application loader with dynamic segment allocation
+- [x] Cooperative multitasking (6 concurrent user apps + launcher)
 - [x] Window Manager (create, destroy, draw, focus, move, dragging)
 - [x] Window drawing context (window-relative coordinates)
 - [x] OS-managed content preservation during window drags
-- [x] Desktop Launcher with dynamic app discovery
+- [x] Desktop Launcher with icon grid and dynamic app discovery
 - [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine)
+- [x] Desktop icons (16x16 2bpp CGA, auto-detected from BIN headers)
 
 ### Completed (Applications)
-- [x] LAUNCHER.BIN - Desktop launcher (1069 bytes)
-- [x] CLOCK.BIN - Real-time clock display (238 bytes)
-- [x] TEST.BIN - Hello World window (159 bytes)
-- [x] BROWSER.BIN - File browser with file sizes (477 bytes)
-- [x] MOUSE.BIN - Mouse test/demo (634 bytes)
+- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2833 bytes)
+- [x] CLOCK.BIN - Real-time clock display (330 bytes)
+- [x] TEST.BIN - Hello World window (251 bytes)
+- [x] BROWSER.BIN - File browser with file sizes (569 bytes)
+- [x] MOUSE.BIN - Mouse test/demo (745 bytes)
 
 ### Planned (Future)
 - [ ] Text editor
 - [ ] Calculator
-- [ ] Overlapping window redraw
+- [ ] Close button on windows
 - [ ] Sound support (PC speaker)
 
 ## Version History
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.13.0** (Build 135)
+Current version: **3.14.0** (Build 151)
 
 ## License
 

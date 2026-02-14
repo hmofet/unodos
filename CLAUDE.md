@@ -77,21 +77,28 @@ This document contains important instructions for AI assistants working on UnoDO
 
 **Content preservation**: The OS automatically saves and restores window content during mouse-driven drags. Apps do NOT need to handle redraw events.
 
-## Dual Segment App Architecture
+## Multi-App Segment Architecture (Build 149+)
 
 **Memory Layout**:
 ```
 0x0000 - 0x0FFF  : BIOS/IVT
-0x1000 - 0x13FF  : Kernel code and data (API table at 0x0F80)
+0x1000 - 0x16FF  : Kernel code and data (28KB)
 0x1400 - 0x1FFF  : Heap (kernel allocations)
-0x2000 - 0x2FFF  : Shell/Launcher segment (persists during app execution)
-0x3000 - 0x3FFF  : User app segment (Clock, Browser, etc.)
-0x5000           : Scratch buffer (used by OS for drag content preservation)
+0x2000 - 0x2FFF  : Shell/Launcher segment (fixed, persists always)
+0x3000 - 0x3FFF  : User app slot 0 (dynamic pool)
+0x4000 - 0x4FFF  : User app slot 1
+0x5000 - 0x5FFF  : User app slot 2
+0x6000 - 0x6FFF  : User app slot 3
+0x7000 - 0x7FFF  : User app slot 4
+0x8000 - 0x8FFF  : User app slot 5
+0x9000           : Scratch buffer (window drag content preservation)
 0xB800           : CGA video memory
 ```
 
 - **Shell (0x2000)**: Launcher loads here, survives while user apps run
-- **User (0x3000)**: Apps launched from launcher load here
+- **User (0x3000-0x8000)**: Up to 6 concurrent user apps, each in its own segment
+- Segments allocated dynamically from pool by `alloc_segment` / freed by `free_segment`
+- `DH > 0x20` in app_load triggers auto-allocation; `DH = 0x20` = shell (fixed)
 - Apps use `[ORG 0x0000]` and are loaded at offset 0 in their segment
 
 ## Stack Management in x86 Assembly
@@ -182,4 +189,4 @@ git push
 
 **Last Updated**: 2026-02-13
 **Current Version**: v3.14.0
-**Current Build**: 144
+**Current Build**: 150
