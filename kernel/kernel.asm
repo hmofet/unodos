@@ -165,7 +165,6 @@ int_80_handler:
     ; If draw_context is active (valid window handle) and function is a
     ; drawing API (0-6), translate BX/CX from window-relative to absolute
     ; screen coordinates. Apps draw at (0,0) = top-left of content area.
-    ; Z-ORDER CLIPPING: skip draw entirely if window is not topmost.
     cmp byte [draw_context], 0xFF
     je .no_translate                ; No active context
     cmp byte [draw_context], WIN_MAX_COUNT
@@ -7421,6 +7420,23 @@ win_move_stub:
     mov ax, [.win_h]
     mov [redraw_old_h], ax
     call redraw_affected_windows
+
+    ; Redraw moved window ON TOP - background repaints and desktop icon
+    ; draws may have painted over the new position when areas overlap
+    mov ax, [.handle]
+    call win_draw_stub
+
+    ; Re-clear content area (desktop icons / background frames may be in it)
+    mov bx, [.new_x]
+    inc bx                          ; Inside left border
+    mov cx, [.new_y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov dx, [.win_w]
+    sub dx, 2                       ; Inside both borders
+    mov si, [.win_h]
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si                          ; Above bottom border
+    call gfx_clear_area_stub
 
     clc
     jmp .done
