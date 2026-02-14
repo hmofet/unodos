@@ -2061,214 +2061,102 @@ mouse_drag_update:
     jmp .done
 
 .button_released:
+    ; If drag was active, set up deferred finish (move window on release)
+    cmp byte [drag_active], 0
+    je .button_released_done
+    mov ax, [drag_target_x]
+    mov [drag_finish_x], ax
+    mov ax, [drag_target_y]
+    mov [drag_finish_y], ax
+    mov byte [drag_needs_finish], 1
+.button_released_done:
     mov byte [drag_active], 0
-    mov byte [drag_content_saved], 0
     jmp .done
 
 .check_release:
     mov byte [drag_active], 0
-    mov byte [drag_content_saved], 0
 
 .done:
     popa
     ret
 
 ; ============================================================================
-; save_drag_content - Save window content area pixels to scratch buffer
-; Input: AL = window handle
-; Uses scratch buffer at SCRATCH_SEGMENT (0x9000)
+; draw_xor_rect_outline - Draw/erase XOR rectangle outline on screen
+; Self-inverse: call twice at same position to erase
+; Input: BX=X, CX=Y, DX=width, SI=height
+; Uses plot_pixel_xor (ES must be 0xB800)
 ; ============================================================================
-save_drag_content:
+draw_xor_rect_outline:
     pusha
-    push ds
     push es
 
-    ; Look up window in table
-    xor ah, ah
-    shl ax, 5
-    add ax, window_table
-    mov bp, ax
-
-    ; Calculate content rectangle
-    mov ax, [ds:bp + WIN_OFF_X]
-    inc ax
-    mov [wc_cx], ax
-
-    mov ax, [ds:bp + WIN_OFF_Y]
-    add ax, WIN_TITLEBAR_HEIGHT
-    mov [wc_cy], ax
-
-    mov ax, [ds:bp + WIN_OFF_WIDTH]
-    sub ax, 2
-    mov [wc_cw], ax
-    cmp ax, 0
-    jle .save_done
-
-    mov ax, [ds:bp + WIN_OFF_HEIGHT]
-    sub ax, WIN_TITLEBAR_HEIGHT
-    dec ax
-    mov [wc_ch], ax
-    cmp ax, 0
-    jle .save_done
-
-    ; Calculate byte range
-    mov ax, [wc_cx]
-    shr ax, 2
-    mov [wc_sb], ax                 ; start byte offset in row
-
-    mov ax, [wc_cx]
-    add ax, [wc_cw]
-    dec ax
-    shr ax, 2
-    sub ax, [wc_sb]
-    inc ax
-    mov [wc_bpr], ax                ; bytes per row
-
-    ; Setup: DS=CGA (source), ES=scratch (dest)
     mov ax, 0xB800
-    mov ds, ax
-    mov ax, SCRATCH_SEGMENT
     mov es, ax
-    xor di, di                      ; Scratch offset = 0
 
-    mov bx, [cs:wc_cy]             ; BX = current Y
-    mov cx, [cs:wc_ch]             ; CX = row counter
-    mov dx, [cs:wc_sb]             ; DX = start byte offset
+    ; Save parameters
+    mov [.rx], bx
+    mov [.ry], cx
+    mov [.rw], dx
+    mov [.rh], si
 
-.save_row:
-    push cx
+    ; --- Top edge: (x..x+w-1, y) ---
+    mov cx, bx                      ; CX = X start
+    mov bx, [.ry]                   ; BX = Y
+    mov dx, [.rw]
+.top:
+    call plot_pixel_xor
+    inc cx
+    dec dx
+    jnz .top
 
-    ; Calculate CGA offset for row BX
-    mov ax, bx
-    shr ax, 1                      ; AX = Y / 2
-    push dx
-    mov cx, 80
-    mul cx                          ; AX = (Y/2) * 80
-    pop dx
-    test bl, 1
-    jz .save_even
-    add ax, 0x2000
-.save_even:
-    add ax, dx                      ; + start byte
-    mov si, ax
+    ; --- Bottom edge: (x..x+w-1, y+h-1) ---
+    mov cx, [.rx]
+    mov bx, [.ry]
+    add bx, [.rh]
+    dec bx                          ; BX = Y + H - 1
+    mov dx, [.rw]
+.bottom:
+    call plot_pixel_xor
+    inc cx
+    dec dx
+    jnz .bottom
 
-    mov cx, [cs:wc_bpr]
-    rep movsb                       ; CGA -> scratch
-
+    ; --- Left edge: (x, y+1..y+h-2) ---
+    mov cx, [.rx]
+    mov bx, [.ry]
+    inc bx                          ; BX = Y + 1
+    mov dx, [.rh]
+    sub dx, 2                       ; skip corners
+    jle .skip_sides
+.left:
+    call plot_pixel_xor
     inc bx
-    pop cx
-    loop .save_row
+    dec dx
+    jnz .left
 
-.save_done:
+    ; --- Right edge: (x+w-1, y+1..y+h-2) ---
+    mov cx, [.rx]
+    add cx, [.rw]
+    dec cx                          ; CX = X + W - 1
+    mov bx, [.ry]
+    inc bx
+    mov dx, [.rh]
+    sub dx, 2
+.right:
+    call plot_pixel_xor
+    inc bx
+    dec dx
+    jnz .right
+
+.skip_sides:
     pop es
-    pop ds
     popa
     ret
 
-; ============================================================================
-; restore_drag_content - Restore saved content to new window position
-; Input: AL = window handle (reads new position from window table)
-; ============================================================================
-restore_drag_content:
-    pusha
-    push ds
-    push es
-
-    ; Check content was saved
-    cmp word [wc_ch], 0
-    jle .restore_done
-    cmp word [wc_cw], 0
-    jle .restore_done
-
-    ; Look up new window position
-    xor ah, ah
-    shl ax, 5
-    add ax, window_table
-    mov bp, ax
-
-    ; Calculate new content position
-    mov ax, [ds:bp + WIN_OFF_X]
-    inc ax
-    mov [.new_cx], ax
-
-    mov ax, [ds:bp + WIN_OFF_Y]
-    add ax, WIN_TITLEBAR_HEIGHT
-    mov [.new_cy], ax
-
-    ; Calculate new start byte
-    mov ax, [.new_cx]
-    shr ax, 2
-    mov [.new_sb], ax
-
-    ; Calculate new bytes per row based on new position
-    ; (may differ from saved wc_bpr due to CGA byte alignment)
-    mov ax, [.new_cx]
-    add ax, [cs:wc_cw]
-    dec ax
-    shr ax, 2
-    sub ax, [.new_sb]
-    inc ax
-    mov [.new_bpr], ax
-
-    ; Use min(wc_bpr, new_bpr) to avoid writing past window right edge
-    mov ax, [cs:wc_bpr]
-    cmp ax, [.new_bpr]
-    jbe .use_saved_bpr
-    mov ax, [.new_bpr]
-.use_saved_bpr:
-    mov [.copy_bpr], ax
-
-    ; Setup: DS=scratch (source), ES=CGA (dest)
-    mov ax, SCRATCH_SEGMENT
-    mov ds, ax
-    mov ax, 0xB800
-    mov es, ax
-    xor si, si                      ; Scratch offset = 0
-
-    mov bx, [cs:.new_cy]           ; BX = current Y
-    mov cx, [cs:wc_ch]             ; CX = row counter
-    mov dx, [cs:.new_sb]           ; DX = new start byte
-
-.restore_row:
-    push cx
-
-    ; Calculate CGA offset for row BX
-    mov ax, bx
-    shr ax, 1
-    push dx
-    mov cx, 80
-    mul cx
-    pop dx
-    test bl, 1
-    jz .restore_even
-    add ax, 0x2000
-.restore_even:
-    add ax, dx
-    mov di, ax
-
-    mov cx, [cs:.copy_bpr]
-    rep movsb                       ; scratch -> CGA
-
-    ; Skip remaining source bytes if saved row was wider
-    mov ax, [cs:wc_bpr]
-    sub ax, [cs:.copy_bpr]
-    add si, ax
-
-    inc bx
-    pop cx
-    loop .restore_row
-
-.restore_done:
-    pop es
-    pop ds
-    popa
-    ret
-
-.new_cx:   dw 0
-.new_cy:   dw 0
-.new_sb:   dw 0
-.new_bpr:  dw 0
-.copy_bpr: dw 0
+.rx: dw 0
+.ry: dw 0
+.rw: dw 0
+.rh: dw 0
 
 ; ============================================================================
 ; Deferred Drag Processing (called from event_get_stub)
@@ -2396,8 +2284,9 @@ mouse_process_drag:
     jmp app_exit_stub               ; Never returns
 
 .no_close_kill:
+    ; --- Phase 3: Handle active drag (draw XOR outline) ---
     cmp byte [drag_active], 0
-    je .done
+    je .check_finish
 
     ; Read drag state atomically
     cli
@@ -2407,67 +2296,108 @@ mouse_process_drag:
     mov cx, [drag_target_y]
     sti
 
-    ; Compare target with current window position - skip if no change
-    push ax
-    push bx
-    push cx
-    xor ah, ah
-    mov si, ax
-    shl si, 5                       ; SI = handle * 32
-    add si, window_table
-    cmp bx, [si + WIN_OFF_X]
-    jne .needs_move
-    cmp cx, [si + WIN_OFF_Y]
-    jne .needs_move
-    pop cx
-    pop bx
-    pop ax
-    jmp .done
+    ; If outline already drawn at this exact position, skip
+    cmp byte [drag_outline_drawn], 0
+    je .need_outline
+    cmp bx, [drag_outline_x]
+    jne .need_outline
+    cmp cx, [drag_outline_y]
+    je .done                        ; Same position, nothing to do
 
-.needs_move:
-    pop cx
-    pop bx
-    pop ax
-
-    ; First move of this drag? Save content to scratch buffer
-    cmp byte [drag_content_saved], 0
-    jne .already_saved
-    push ax
-    push bx
-    push cx
-    mov al, [drag_window]
-    call save_drag_content
-    pop cx
-    pop bx
-    pop ax
-    mov byte [drag_content_saved], 1
-.already_saved:
-
-    ; --- Outer cursor lock: single hide/show for entire drag step ---
-    ; Prevents flicker from multiple inner cursor brackets and protects
-    ; restore_drag_content's CGA writes from IRQ12 XOR cursor corruption
+.need_outline:
+    ; Hide cursor for clean XOR drawing
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
-    ; AX=handle, BX=target_x, CX=target_y
+    ; Erase old outline if one is drawn
+    cmp byte [drag_outline_drawn], 0
+    je .no_erase
+    push bx
+    push cx
+    mov bx, [drag_outline_x]
+    mov cx, [drag_outline_y]
+    mov dx, [drag_outline_w]
+    mov si, [drag_outline_h]
+    call draw_xor_rect_outline
+    pop cx
+    pop bx
+
+.no_erase:
+    ; Get window dimensions from window table
     push ax
-    call win_move_stub
-
-    ; Restore saved content at new position
     xor ah, ah
     mov al, [drag_window]
-    call restore_drag_content
-
-    ; Redraw frame on top - content restore uses byte-aligned CGA copies
-    ; which may overwrite border pixels at the edges
-    xor ah, ah
-    mov al, [drag_window]
-    call win_draw_stub
-
-    ; Note: redraw_affected_windows already called inside win_move_stub
-    ; for the old position - no need to call again here
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    mov dx, [si + WIN_OFF_WIDTH]
+    mov [drag_outline_w], dx
+    mov si, [si + WIN_OFF_HEIGHT]
+    mov [drag_outline_h], si
     pop ax
 
+    ; Draw new outline at target position
+    mov [drag_outline_x], bx
+    mov [drag_outline_y], cx
+    mov dx, [drag_outline_w]
+    mov si, [drag_outline_h]
+    call draw_xor_rect_outline
+    mov byte [drag_outline_drawn], 1
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    jmp .done
+
+.check_finish:
+    ; --- Phase 4: Handle drag finish (move window to final position) ---
+    cmp byte [drag_needs_finish], 0
+    je .done
+    mov byte [drag_needs_finish], 0
+
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+    ; Erase outline if one is drawn
+    cmp byte [drag_outline_drawn], 0
+    je .no_final_erase
+    mov bx, [drag_outline_x]
+    mov cx, [drag_outline_y]
+    mov dx, [drag_outline_w]
+    mov si, [drag_outline_h]
+    call draw_xor_rect_outline
+    mov byte [drag_outline_drawn], 0
+
+.no_final_erase:
+    ; Check if window actually moved (skip if same position)
+    xor ah, ah
+    mov al, [drag_window]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    mov bx, [drag_finish_x]
+    cmp bx, [si + WIN_OFF_X]
+    jne .do_final_move
+    mov cx, [drag_finish_y]
+    cmp cx, [si + WIN_OFF_Y]
+    je .finish_done                 ; Same position, skip move
+
+.do_final_move:
+    ; Move window to final position
+    ; win_move_stub: draws frame, clears content, clears old strips,
+    ; calls redraw_affected_windows for background windows
+    xor ah, ah
+    mov al, [drag_window]
+    mov bx, [drag_finish_x]
+    mov cx, [drag_finish_y]
+    call win_move_stub
+
+    ; Post redraw event so the dragged window's app repaints content
+    mov al, EVENT_WIN_REDRAW
+    xor dx, dx
+    mov dl, [drag_window]
+    call post_event
+
+.finish_done:
     dec byte [cursor_locked]
     call mouse_cursor_show
 
@@ -7647,21 +7577,21 @@ drag_offset_x:      dw 0            ; Mouse X offset from window X at grab
 drag_offset_y:      dw 0            ; Mouse Y offset from window Y at grab
 drag_target_x:      dw 0            ; Desired new window X position
 drag_target_y:      dw 0            ; Desired new window Y position
-drag_needs_update:  db 0            ; 1 = win_move_stub needs to be called
 drag_prev_buttons:  db 0            ; Previous button state (for edge detection)
-drag_content_saved: db 0            ; 1 = content saved in scratch buffer
 drag_needs_focus:   db 0            ; 1 = need to focus dragged window
 close_needs_kill:   db 0            ; 1 = close button clicked, need to kill task
 close_kill_window:  db 0            ; Window handle that was close-clicked
 close_btn_str:      db 'X', 0       ; Close button text
 
-; Content save/restore state (used by save/restore_drag_content)
-wc_cx:      dw 0                    ; Saved content X
-wc_cy:      dw 0                    ; Saved content Y
-wc_cw:      dw 0                    ; Saved content width (pixels)
-wc_ch:      dw 0                    ; Saved content height (pixels)
-wc_sb:      dw 0                    ; Start byte offset in CGA row
-wc_bpr:     dw 0                    ; Bytes per row saved
+; Outline drag state (draw XOR outline during drag, move on release)
+drag_outline_drawn: db 0            ; 1 = XOR outline currently visible on screen
+drag_outline_x:     dw 0            ; Current outline X position
+drag_outline_y:     dw 0            ; Current outline Y position
+drag_outline_w:     dw 0            ; Outline width (from window)
+drag_outline_h:     dw 0            ; Outline height (from window)
+drag_needs_finish:  db 0            ; 1 = drag completed, need to move window
+drag_finish_x:      dw 0            ; Final target X position
+drag_finish_y:      dw 0            ; Final target Y position
 
 ; Keyboard demo state
 demo_cursor_x: dw 0
