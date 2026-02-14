@@ -1039,15 +1039,43 @@ launch_app:
     jmp .la_done
 
 .la_error:
-    ; Show error briefly (draw on desktop)
-    mov bx, 100
+    ; Show error with background so it's visible
+    mov bx, 0                       ; Color 0 (black) background
+    mov cx, 88                      ; X
+    mov dx, 176                     ; Y
+    mov si, 150                     ; Width
+    mov di, 18                      ; Height
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+    mov bx, 92
     mov cx, 180
     mov si, load_error_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
+    ; Brief delay so user can see error
+    call .la_delay
+    call .la_delay
 
 .la_done:
     popa
+    ret
+
+.la_delay:
+    ; Wait ~1 second using BIOS tick counter
+    push ds
+    push ax
+    push bx
+    mov ax, 0x0040
+    mov ds, ax
+    mov bx, [0x006C]               ; Start tick
+.la_dwait:
+    mov ax, [0x006C]
+    sub ax, bx
+    cmp ax, 18                      ; ~1 second at 18.2 Hz
+    jb .la_dwait
+    pop bx
+    pop ax
+    pop ds
     ret
 
 
