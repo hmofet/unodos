@@ -182,10 +182,6 @@ int_80_handler:
     shl si, 5                       ; SI = handle * 32
     add si, window_table
 
-    ; Z-order clipping: only allow draws to topmost window
-    cmp byte [si + WIN_OFF_ZORDER], 15
-    jne .skip_bg_draw               ; Not topmost → skip draw silently
-
     ; content_x = win_x + 1 (inside left border)
     add bx, [si + WIN_OFF_X]
     inc bx
@@ -195,12 +191,6 @@ int_80_handler:
     pop ax
     pop si
     jmp .no_translate
-
-.skip_bg_draw:
-    pop ax
-    pop si
-    clc                             ; No error
-    jmp int80_return_point          ; Return without calling draw function
 
 .no_translate:
     ; Get function pointer from API table
@@ -6925,7 +6915,7 @@ redraw_affected_windows:
     and al, 0x0F
     call win_draw_stub
 
-    ; Clear content area (background apps can't draw due to z-order clipping)
+    ; Clear content area before app redraws it via WIN_REDRAW event
     ; SI still points to window table entry (preserved by win_draw_stub)
     mov bx, [si + WIN_OFF_X]
     inc bx                          ; Inside left border
