@@ -29,13 +29,13 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.14.0 Build 151)
+## Current Features (v3.15.0 Build 159)
 
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
-- System call infrastructure (INT 0x80 + API table with 41 functions)
+- System call infrastructure (INT 0x80 + API table with 43 functions)
 - Graphics API (pixel, rectangle, character, string, text measurement, icons)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
@@ -44,9 +44,10 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - FAT12 filesystem (read-only: mount, open, read, close, readdir)
 - Application Loader with dynamic segment allocation
 - **Cooperative multitasking** - up to 6 concurrent user apps + launcher
-- **Window Manager** with mouse-driven title bar dragging (16 windows max)
+- **Window Manager** with close button, outline drag, z-order management (16 windows max)
+- **Active/inactive title bars** - visual distinction for foreground window
 - **Window Drawing Context** (apps use window-relative coordinates)
-- **OS-managed content preservation** during window drags
+- **PC Speaker sound** - tone generation API + Fur Elise music player app
 - **Desktop Launcher** with icon grid, double-click launch, floppy swap detection
 
 ## Building
@@ -106,7 +107,7 @@ sudo dd if=build/unodos-144.img of=/dev/fd0 bs=512
 3. Boot from boot floppy (verify Build number on screen)
 4. Press **L** key to load launcher
 5. When prompted, swap to launcher floppy
-6. Launcher shows apps: CLOCK, TEST, BROWSER, MOUSE
+6. Launcher shows apps: CLOCK, TEST, BROWSER, MOUSE, MUSIC
 7. Navigate with W/S keys, press Enter to launch
 8. ESC returns to launcher
 9. Mouse cursor visible; drag windows by title bar
@@ -120,7 +121,8 @@ unodos/
 │   ├── clock.asm       # Real-time clock display
 │   ├── launcher.asm    # Desktop launcher
 │   ├── browser.asm     # File browser
-│   └── mouse_test.asm  # PS/2 mouse test application
+│   ├── mouse_test.asm  # PS/2 mouse test application
+│   └── music.asm       # Fur Elise music player
 ├── boot/
 │   ├── boot.asm        # First stage boot loader (512 bytes)
 │   └── stage2.asm      # Second stage loader (2KB)
@@ -138,8 +140,8 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
-├── VERSION              # Version string (3.14.0)
-└── BUILD_NUMBER         # Build number (150)
+├── VERSION              # Version string (3.15.0)
+└── BUILD_NUMBER         # Build number (159)
 ```
 
 ## Documentation
@@ -164,31 +166,32 @@ unodos/
 ### Completed (Core Services)
 - [x] Application loader with dynamic segment allocation
 - [x] Cooperative multitasking (6 concurrent user apps + launcher)
-- [x] Window Manager (create, destroy, draw, focus, move, dragging)
+- [x] Window Manager (create, destroy, draw, focus, move, close button, outline drag)
+- [x] Z-order management (background draw blocking, active/inactive title bars)
 - [x] Window drawing context (window-relative coordinates)
-- [x] OS-managed content preservation during window drags
 - [x] Desktop Launcher with icon grid and dynamic app discovery
 - [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine)
 - [x] Desktop icons (16x16 2bpp CGA, auto-detected from BIN headers)
+- [x] PC Speaker sound (tone generation + silence APIs)
 
 ### Completed (Applications)
-- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2833 bytes)
+- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2903 bytes)
 - [x] CLOCK.BIN - Real-time clock display (330 bytes)
 - [x] TEST.BIN - Hello World window (251 bytes)
 - [x] BROWSER.BIN - File browser with file sizes (569 bytes)
 - [x] MOUSE.BIN - Mouse test/demo (745 bytes)
+- [x] MUSIC.BIN - Fur Elise music player (649 bytes)
 
 ### Planned (Future)
 - [ ] Text editor
 - [ ] Calculator
-- [ ] Close button on windows
-- [ ] Sound support (PC speaker)
+- [ ] Window resize
 
 ## Version History
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.14.0** (Build 151)
+Current version: **3.15.0** (Build 159)
 
 ## License
 
