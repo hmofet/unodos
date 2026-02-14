@@ -1025,9 +1025,9 @@ launch_app:
     add ax, app_info
     mov si, ax
 
-    ; Load app to segment 0x3000
+    ; Load app to auto-allocated user segment (DH>0x20 triggers pool alloc)
     mov dl, [cs:mounted_drive]
-    mov dh, 0x30                    ; Target segment
+    mov dh, 0x30                    ; User segment (auto-allocated by kernel)
     mov ah, API_APP_LOAD
     int 0x80
     jc .la_error
