@@ -515,6 +515,12 @@ install_mouse:
     push bx
     push es
 
+    ; Quick probe: if KBC status port returns 0xFF, no 8042 present
+    ; (common on USB-only systems without PS/2 controller)
+    in al, KBC_STATUS
+    cmp al, 0xFF
+    je .no_mouse
+
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
     mov es, ax
@@ -626,7 +632,7 @@ install_mouse:
 ; Clobbers: AL
 kbc_wait_write:
     push cx
-    mov cx, 0xFFFF
+    mov cx, 0x2000                  ; 8192 iterations (~33ms on real HW, fast on SMI)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_IBF           ; Input buffer full?
@@ -640,7 +646,7 @@ kbc_wait_write:
 ; Clobbers: AL
 kbc_wait_read:
     push cx
-    mov cx, 0xFFFF
+    mov cx, 0x2000                  ; 8192 iterations (~33ms on real HW, fast on SMI)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF           ; Output buffer full?
