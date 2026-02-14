@@ -89,11 +89,16 @@ Linear Address    Segment:Offset    Description
 0x07E00-0x07FFF   0000:7E00-7FFF    Stack area
 0x08000-0x087FF   0800:0000-07FF    Stage 2 Loader (2KB)
 0x10000-0x16FFF   1000:0000-6FFF    Kernel (28KB)
-  └─ 0x10F80     1000:0F80          API table
+  └─ 0x11060     1000:1060          API table
 0x14000-0x1FFFF   1400:0000+        Heap (malloc pool)
-0x20000-0x2FFFF   2000:0000-FFFF    Shell/Launcher segment (64KB)
-0x30000-0x3FFFF   3000:0000-FFFF    User app segment (64KB)
-0x50000-0x5FFFF   5000:0000-FFFF    Scratch buffer (window drag content)
+0x20000-0x2FFFF   2000:0000-FFFF    Shell/Launcher segment (fixed)
+0x30000-0x3FFFF   3000:0000-FFFF    User app slot 0 (dynamic pool)
+0x40000-0x4FFFF   4000:0000-FFFF    User app slot 1
+0x50000-0x5FFFF   5000:0000-FFFF    User app slot 2
+0x60000-0x6FFFF   6000:0000-FFFF    User app slot 3
+0x70000-0x7FFFF   7000:0000-FFFF    User app slot 4
+0x80000-0x8FFFF   8000:0000-FFFF    User app slot 5
+0x90000-0x9FFFF   9000:0000-FFFF    Scratch buffer (window drag content)
 0xA0000-0xBFFFF   ----:----         Video memory (EGA/VGA)
 0xB8000-0xBFFFF   B800:0000-7FFF    CGA video memory (used by UnoDOS)
 0xC0000-0xFFFFF   ----:----         ROM area (BIOS, adapters)
@@ -163,9 +168,10 @@ Loading kernel................................ OK
 | App Loader | Load and execute .BIN applications from FAT12 |
 | Window Manager | Create, destroy, draw, focus, move, drag windows (16 max) |
 | Drawing Context | Window-relative coordinate translation for APIs 0-6 |
-| Content Preserve | Save/restore window content during drags (scratch at 0x5000) |
+| Content Preserve | Save/restore window content during drags (scratch at 0x9000) |
 | Desktop Icons | 8 registered icon slots, kernel repaints during window operations |
-| Multitasking | Cooperative round-robin scheduler with app_yield/app_start |
+| Multitasking | Cooperative round-robin scheduler, 6 concurrent user apps |
+| Segment Pool | Dynamic segment allocation (0x3000-0x8000) with alloc/free |
 
 ### Window Drawing Context
 
@@ -242,17 +248,24 @@ Color palette (Palette 1):
 | Stage 2 | "UN" | 0x4E55 | Loader verification |
 | Kernel | "UK" | 0x4B55 | Kernel verification |
 
-## Dual Segment App Architecture
+## Multi-App Segment Architecture (Build 149+)
 
 ```
-0x2000:0x0000  Shell/Launcher (persists during user app execution)
-0x3000:0x0000  User app (Clock, Browser, Mouse Test, etc.)
+0x2000:0x0000  Shell/Launcher (fixed, persists always)
+0x3000:0x0000  User app slot 0 (dynamic pool)
+0x4000:0x0000  User app slot 1
+0x5000:0x0000  User app slot 2
+0x6000:0x0000  User app slot 3
+0x7000:0x0000  User app slot 4
+0x8000:0x0000  User app slot 5
+0x9000:0x0000  Scratch buffer (window drag content)
 ```
 
+- Up to 6 concurrent user apps, each in its own 64KB segment
+- Segments allocated from pool by `alloc_segment`, freed by `free_segment`
+- Shell at 0x2000 survives while user apps run
+- Apps return via RETF, segment freed on exit
 - Apps use `[ORG 0x0000]` and are loaded at offset 0 in their segment
-- Shell at 0x2000 survives while user apps run at 0x3000
-- Apps return to shell via RETF
-- Shell re-creates its window and redraws menu after app returns
 
 ## BIN File Icon Headers (v3.14.0)
 
@@ -271,4 +284,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*Document version: 5.0 (2026-02-13) - Updated for v3.14.0 Build 144*
+*Document version: 6.0 (2026-02-13) - Updated for v3.14.0 Build 151*

@@ -137,7 +137,7 @@ int_80_handler:
     iret
 
 .dispatch_function:
-    ; AH contains function index (1-32)
+    ; AH contains function index (1-40)
     ; Validate function number
     cmp ah, 41                      ; Max function count (0-40 valid)
     jae .invalid_function
@@ -168,6 +168,8 @@ int_80_handler:
     ; Z-ORDER CLIPPING: skip draw entirely if window is not topmost.
     cmp byte [draw_context], 0xFF
     je .no_translate                ; No active context
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .no_translate               ; Invalid context, treat as no context
     cmp ah, 6
     ja .no_translate                ; Not a drawing function (API 0-6)
 
@@ -888,7 +890,12 @@ mouse_is_enabled:
 ; Effect: Drawing APIs (0-6) will translate coordinates relative to
 ;         window content area until win_end_draw is called
 win_begin_draw:
+    cmp al, WIN_MAX_COUNT
+    jae .wbd_invalid
     mov [draw_context], al
+    ret
+.wbd_invalid:
+    stc
     ret
 
 ; win_end_draw - Clear window drawing context (fullscreen mode)
@@ -2519,7 +2526,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1040 - ($ - $$) db 0
+times 0x1060 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -3109,6 +3116,8 @@ event_get_stub:
     mov si, ax
     shl si, 5
     add si, window_table
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .evt_discard_pop            ; Window freed/destroyed: discard stale event
     mov al, [si + WIN_OFF_OWNER]
     cmp al, [current_task]
     pop ax
@@ -3128,6 +3137,10 @@ event_get_stub:
     pop bx
     ret
 
+.evt_discard_pop:
+    pop ax
+    pop si
+    ; fall through to evt_discard
 .evt_discard:
     ; Consume invalid event and try next
     inc bx
@@ -5477,13 +5490,14 @@ alloc_segment:
 
 ; free_segment - Return a segment to the pool
 ; Input: BX = segment to free
+; Output: CF clear on success, CF set if segment not in pool
 free_segment:
     push cx
     push si
     xor cx, cx
 .fs_scan:
     cmp cx, APP_NUM_USER_SEGS
-    jae .fs_done
+    jae .fs_fail
     mov si, cx
     shl si, 1
     cmp [segment_pool + si], bx
@@ -5493,7 +5507,12 @@ free_segment:
 .fs_found:
     shr si, 1
     mov byte [segment_owner + si], 0xFF
-.fs_done:
+    clc
+    pop si
+    pop cx
+    ret
+.fs_fail:
+    stc
     pop si
     pop cx
     ret
@@ -5583,6 +5602,10 @@ app_load_stub:
     cmp [di + APP_OFF_CODE_SEG], bx
     jne .kill_next
     ; Found running app at target segment - force terminate
+    push bx
+    mov bx, [di + APP_OFF_CODE_SEG]
+    call free_segment               ; Free segment if in pool (no-op for shell)
+    pop bx
     mov byte [di + APP_OFF_STATE], APP_STATE_FREE
     mov al, cl                      ; AL = task handle for destroy_task_windows
     call destroy_task_windows
@@ -7099,6 +7122,7 @@ win_draw_stub:
 ; win_focus_stub - Bring window to front (set z-order to max)
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
+; Note: No ownership check - kernel mouse handler must focus any window on click
 win_focus_stub:
     push bx
     push cx
