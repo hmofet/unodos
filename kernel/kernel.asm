@@ -187,6 +187,39 @@ int_80_handler:
     ; content_y = win_y + titlebar height (below title bar)
     add cx, [si + WIN_OFF_Y]
     add cx, WIN_TITLEBAR_HEIGHT
+
+    ; --- Z-order clipping: skip draw if point is inside topmost window ---
+    ; Only clip non-topmost windows (topmost always draws freely)
+    cmp byte [si + WIN_OFF_ZORDER], 15
+    je .zclip_ok                    ; This IS the topmost window, draw freely
+    cmp byte [topmost_handle], 0xFF
+    je .zclip_ok                    ; No topmost window cached
+
+    ; Check if translated BX, CX is inside topmost window bounds
+    cmp bx, [topmost_win_x]
+    jb .zclip_ok
+    cmp cx, [topmost_win_y]
+    jb .zclip_ok
+    push dx
+    mov dx, [topmost_win_x]
+    add dx, [topmost_win_w]
+    cmp bx, dx
+    pop dx
+    jae .zclip_ok
+    push dx
+    mov dx, [topmost_win_y]
+    add dx, [topmost_win_h]
+    cmp cx, dx
+    pop dx
+    jae .zclip_ok
+
+    ; Draw point is inside topmost window — skip this draw
+    pop ax
+    pop si
+    clc
+    jmp int80_return_point          ; Pop DS and iret without calling function
+
+.zclip_ok:
     pop ax
     pop si
     jmp .no_translate
@@ -6876,6 +6909,63 @@ redraw_affected_windows:
     jmp .z_loop
 
 .raw_done:
+    ; After z-orders 0-14, redraw topmost window (z=15) if it overlaps
+    ; the affected region. This ensures the foreground is always on top.
+    cmp byte [topmost_handle], 0xFF
+    je .topmost_done                ; No topmost window
+
+    ; Find topmost window in table
+    xor ax, ax
+    mov al, [topmost_handle]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .topmost_done
+
+    ; Rectangle intersection test with affected area
+    mov ax, [redraw_old_x]
+    add ax, [redraw_old_w]
+    cmp [si + WIN_OFF_X], ax
+    jge .topmost_done
+    mov ax, [si + WIN_OFF_X]
+    add ax, [si + WIN_OFF_WIDTH]
+    cmp [redraw_old_x], ax
+    jge .topmost_done
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
+    cmp [si + WIN_OFF_Y], ax
+    jge .topmost_done
+    mov ax, [si + WIN_OFF_Y]
+    add ax, [si + WIN_OFF_HEIGHT]
+    cmp [redraw_old_y], ax
+    jge .topmost_done
+
+    ; Topmost window overlaps — redraw frame and clear content
+    xor ah, ah
+    mov al, [topmost_handle]
+    call win_draw_stub
+
+    ; Clear content area
+    mov bx, [si + WIN_OFF_X]
+    inc bx
+    mov cx, [si + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT
+    mov dx, [si + WIN_OFF_WIDTH]
+    sub dx, 2
+    push word [si + WIN_OFF_HEIGHT]
+    pop si
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si
+    call gfx_clear_area_stub
+
+    ; Post WIN_REDRAW so topmost app repaints content
+    mov al, EVENT_WIN_REDRAW
+    xor dx, dx
+    mov dl, [topmost_handle]
+    call post_event
+
+.topmost_done:
     pop bp
     pop di
     pop si
@@ -6947,6 +7037,9 @@ win_destroy_stub:
 
     ; Redraw any windows that were overlapped by this one
     call redraw_affected_windows
+
+    ; Invalidate topmost cache (will be set by win_focus_stub if promoted)
+    mov byte [topmost_handle], 0xFF
 
     ; Promote next highest z-order window to topmost (z=15)
     ; Without this, no window can draw after the topmost is destroyed
@@ -7225,6 +7318,19 @@ win_focus_stub:
     mov [focused_task], al
     pop ax
 
+    ; Cache topmost window bounds for z-order clipping
+    mov [topmost_handle], al        ; AL = window handle
+    push si
+    mov si, [bx + WIN_OFF_X]
+    mov [topmost_win_x], si
+    mov si, [bx + WIN_OFF_Y]
+    mov [topmost_win_y], si
+    mov si, [bx + WIN_OFF_WIDTH]
+    mov [topmost_win_w], si
+    mov si, [bx + WIN_OFF_HEIGHT]
+    mov [topmost_win_h], si
+    pop si
+
     clc
     jmp .done
 
@@ -7311,6 +7417,16 @@ win_move_stub:
     mov [ds:bp + WIN_OFF_X], bx
     mov cx, [.new_y]
     mov [ds:bp + WIN_OFF_Y], cx
+
+    ; Update topmost bounds cache if this is the topmost window
+    push ax
+    mov ax, [.handle]
+    cmp al, [topmost_handle]
+    jne .not_topmost_move
+    mov [topmost_win_x], bx
+    mov [topmost_win_y], cx
+.not_topmost_move:
+    pop ax
 
     ; Draw window frame at new position immediately (makes window visible fast)
     mov ax, [.handle]
@@ -7742,6 +7858,14 @@ shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none
 current_task:       db 0xFF                 ; Currently running task (0xFF = kernel/none)
 scheduler_last:     db 0                    ; Last task checked (for round-robin)
 focused_task:       db 0xFF                 ; Task owning topmost window (receives keyboard)
+
+; Topmost window bounds cache (for z-order clipping in INT 0x80)
+; Updated by win_focus_stub and win_move_stub
+topmost_handle:     db 0xFF                 ; Window handle of topmost (0xFF = none)
+topmost_win_x:      dw 0
+topmost_win_y:      dw 0
+topmost_win_w:      dw 0
+topmost_win_h:      dw 0
 
 ; ============================================================================
 ; Desktop Icon Data (v3.14.0)
