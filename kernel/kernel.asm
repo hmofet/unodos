@@ -46,6 +46,10 @@ entry:
 
     ; Initialize PS/2 mouse (sets mouse_enabled=1 on success, 0 on failure)
     call install_mouse
+    mov ah, 0x0E
+    mov al, '.'
+    xor bx, bx
+    int 0x10
 
     ; Print version string
     mov si, version_string
@@ -649,26 +653,35 @@ kbc_wait_read:
 ; kbc_wait_read_long - Wait for KBC data with ~1 second timeout
 ; Uses BIOS timer tick at 0040:006C (18.2 Hz) for CPU-speed independence
 ; Needed for mouse reset self-test which takes 300-500ms on real hardware
+; Has raw counter fallback in case BIOS timer is not running (USB boot)
 ; Clobbers: AL
 kbc_wait_read_long:
     push cx
+    push dx
     push es
     push ax
     mov ax, 0x0040
     mov es, ax
     sti                             ; Ensure timer IRQ is firing
     mov cx, [es:0x006C]            ; Start tick
+    xor dx, dx                     ; Raw fallback counter (65536 iterations)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF
     jnz .ready
+    ; BIOS timer check (primary timeout)
     mov ax, [es:0x006C]
     sub ax, cx                      ; Elapsed ticks (wraps correctly)
     cmp ax, 20                      ; ~1.1 second timeout
-    jb .wait
+    jae .ready
+    ; Raw counter fallback (prevents hang if BIOS timer not running)
+    ; Each I/O read takes ~1-4us, so 65536 iters = 65-260ms
+    inc dx
+    jnz .wait
 .ready:
     pop ax
     pop es
+    pop dx
     pop cx
     ret
 
