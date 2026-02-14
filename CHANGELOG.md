@@ -5,6 +5,35 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.16.0] - 2026-02-14
+
+### Added (Build 161) - Hard Drive Boot Support
+
+- **Hard Drive Boot Verified** (Build 161)
+  - Full MBR → VBR → Stage2_hd → Kernel boot chain tested
+  - FAT16 filesystem on 64MB partition with all apps
+  - Boots from hard drives, CF cards, and USB flash drives (via BIOS emulation)
+
+- **Boot Drive Query API** (Build 161)
+  - New API 43: get_boot_drive — returns boot drive number in AL
+  - Enables apps to detect floppy (0x00) vs hard drive (0x80) boot
+
+### Fixed (Build 161)
+
+- Launcher now queries boot drive from kernel instead of hardcoding floppy
+- Launcher uses correct mount handle for FAT12/FAT16 routing
+- read_bin_header uses dynamic mount handle (was hardcoded FAT12)
+- Floppy swap detection skipped when booted from hard drive
+- fat16_read 32-bit arithmetic: sector calculation no longer truncates to 16 bits
+- MUSIC.BIN added to HD image (was missing from create_hd_image.py)
+
+### Changed
+
+- API table expanded from 43 to 44 functions (get_boot_drive)
+- Launcher detects boot media type automatically
+
+---
+
 ## [3.15.0] - 2026-02-14
 
 ### Added (Builds 151-159) - Window Manager, Sound, Close Button

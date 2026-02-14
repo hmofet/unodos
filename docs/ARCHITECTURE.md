@@ -158,7 +158,7 @@ Loading kernel................................ OK
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 43 functions |
+| System Calls | INT 0x80 for API dispatch, 44 functions |
 | Graphics API | 8 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width, draw_icon |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
@@ -285,4 +285,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*Document version: 7.0 (2026-02-14) - Updated for v3.15.0 Build 159*
+*Document version: 8.0 (2026-02-14) - Updated for v3.16.0 Build 161*

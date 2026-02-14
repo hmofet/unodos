@@ -27,6 +27,7 @@ API_GFX_DRAW_ICON       equ 39
 API_FS_READ_HEADER      equ 40
 API_GFX_TEXT_WIDTH      equ 33
 API_WIN_DRAW            equ 22
+API_GET_BOOT_DRIVE      equ 43
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -227,14 +228,17 @@ scan_disk:
     pusha
     push es
 
-    ; Mount floppy
-    mov al, 0                       ; Drive A:
-    xor ah, ah
+    ; Query boot drive from kernel
+    mov ah, API_GET_BOOT_DRIVE
+    int 0x80
+    mov [cs:mounted_drive], al      ; Save boot drive (0x00=floppy, 0x80=HDD)
+
+    ; Mount the boot drive filesystem
     mov ah, API_FS_MOUNT
     int 0x80
     jc .scan_done
 
-    mov byte [cs:mounted_drive], 0
+    mov [cs:mount_handle], bl       ; Save mount handle (0=FAT12, 1=FAT16)
     mov word [cs:dir_state], 0
     mov word [cs:scan_safety], 0
 
@@ -255,7 +259,7 @@ scan_disk:
     jae .scan_done
 
     ; Read next directory entry
-    mov al, 0                       ; Mount handle
+    mov al, [cs:mount_handle]       ; Mount handle (0=FAT12, 1=FAT16)
     mov cx, [cs:dir_state]
     push cs
     pop es
@@ -385,7 +389,8 @@ read_bin_header:
     mov si, ax                      ; SI = filename in our segment
 
     ; Read first 80 bytes of the file
-    xor bx, bx                     ; Mount handle 0 (FAT12)
+    mov bl, [cs:mount_handle]       ; Mount handle (0=FAT12, 1=FAT16)
+    xor bh, bh
     push cs
     pop es
     mov di, header_buffer           ; ES:DI = buffer in our segment
@@ -1116,6 +1121,10 @@ repaint_all_windows:
 check_floppy_swap:
     pusha
 
+    ; Skip floppy polling if booted from hard drive
+    test byte [cs:mounted_drive], 0x80
+    jnz .cfs_no_change
+
     ; INT 13h AH=16h: Check disk change status
     mov ah, 16h
     mov dl, 0                       ; Drive A:
@@ -1163,6 +1172,7 @@ la_errcode:     db 0
 
 ; Drive and scan state
 mounted_drive:  db 0
+mount_handle:   db 0                ; 0=FAT12, 1=FAT16
 dir_state:      dw 0
 scan_safety:    dw 0
 
