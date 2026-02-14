@@ -905,12 +905,10 @@ handle_click:
     ; Clicked on empty space - deselect
     cmp byte [cs:selected_icon], 0xFF
     je .hc_done
-    mov al, [cs:selected_icon]
     mov byte [cs:selected_icon], 0xFF
     mov byte [cs:last_click_icon], 0xFF
-    ; Only clear highlight and redraw that one icon (no full screen redraw)
-    call clear_icon_area
-    call draw_single_icon
+    ; Full desktop redraw to guarantee highlight removal
+    call redraw_desktop
 
 .hc_done:
     popa
