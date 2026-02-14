@@ -2058,7 +2058,7 @@ mouse_drag_update:
 ; ============================================================================
 ; save_drag_content - Save window content area pixels to scratch buffer
 ; Input: AL = window handle
-; Uses scratch buffer at segment 0x5000
+; Uses scratch buffer at SCRATCH_SEGMENT (0x9000)
 ; ============================================================================
 save_drag_content:
     pusha
@@ -2109,7 +2109,7 @@ save_drag_content:
     ; Setup: DS=CGA (source), ES=scratch (dest)
     mov ax, 0xB800
     mov ds, ax
-    mov ax, 0x5000
+    mov ax, SCRATCH_SEGMENT
     mov es, ax
     xor di, di                      ; Scratch offset = 0
 
@@ -2201,7 +2201,7 @@ restore_drag_content:
     mov [.copy_bpr], ax
 
     ; Setup: DS=scratch (source), ES=CGA (dest)
-    mov ax, 0x5000
+    mov ax, SCRATCH_SEGMENT
     mov ds, ax
     mov ax, 0xB800
     mov es, ax
@@ -5445,10 +5445,63 @@ APP_ERR_READ_FAILED     equ 5       ; File read failed
 APP_ERR_INVALID_HANDLE  equ 6       ; Invalid app handle
 APP_ERR_NOT_LOADED      equ 7       ; App not loaded
 
+; alloc_segment - Allocate a free user segment from the pool
+; Input: AL = task handle (owner)
+; Output: BX = segment (e.g., 0x3000), CF clear on success
+;         CF set if no free segments
+alloc_segment:
+    push cx
+    push si
+    xor cx, cx
+.as_scan:
+    cmp cx, APP_NUM_USER_SEGS
+    jae .as_fail
+    mov si, cx
+    cmp byte [segment_owner + si], 0xFF
+    je .as_found
+    inc cx
+    jmp .as_scan
+.as_found:
+    mov [segment_owner + si], al        ; Mark as owned by task
+    shl si, 1
+    mov bx, [segment_pool + si]         ; BX = segment value
+    clc
+    pop si
+    pop cx
+    ret
+.as_fail:
+    stc
+    pop si
+    pop cx
+    ret
+
+; free_segment - Return a segment to the pool
+; Input: BX = segment to free
+free_segment:
+    push cx
+    push si
+    xor cx, cx
+.fs_scan:
+    cmp cx, APP_NUM_USER_SEGS
+    jae .fs_done
+    mov si, cx
+    shl si, 1
+    cmp [segment_pool + si], bx
+    je .fs_found
+    inc cx
+    jmp .fs_scan
+.fs_found:
+    shr si, 1
+    mov byte [segment_owner + si], 0xFF
+.fs_done:
+    pop si
+    pop cx
+    ret
+
 ; app_load_stub - Load application from disk
 ; Input: DS:SI = Pointer to filename (8.3 format, space-padded)
 ;        DL = BIOS drive number (0=A:, 1=B:, 0x80=C:, etc.)
-;        DH = Target segment high byte (0x20=0x2000 shell, 0x30=0x3000 user)
+;        DH = Target segment: 0x20=shell (fixed), >0x20=auto-allocate user segment
 ;             If DH=0, defaults to 0x20 (APP_SEGMENT_SHELL) for compatibility
 ; Output: CF clear on success, AX = app handle (0-15)
 ;         CF set on error, AX = error code
@@ -5462,18 +5515,15 @@ app_load_stub:
     push bp
     push es
 
-    ; Save drive number, target segment, and filename pointer
+    ; Save drive number, segment mode, and filename pointer
     mov [.drive], dl
-    ; Handle target segment - default to 0x20 if DH=0
-    or dh, dh
-    jnz .save_seg
-    mov dh, 0x20                    ; Default to APP_SEGMENT_SHELL (0x2000)
-.save_seg:
-    mov [.target_seg], dh
+    mov [.seg_mode], dh             ; Save DH for segment decision later
     mov [.filename_off], si
     ; Use caller_ds since DS is now kernel segment after INT 0x80 dispatch
     mov ax, [caller_ds]
     mov [.filename_seg], ax
+    mov word [.target_seg], 0       ; Clear (will be set below)
+    mov byte [.did_alloc], 0        ; No segment allocated yet
 
     ; Step 1: Find free slot in app_table
     mov ax, 0x1000
@@ -5498,12 +5548,31 @@ app_load_stub:
     mov [.slot], cx
     mov [.slot_off], di
 
-    ; Safety: Terminate any RUNNING app in the target segment
-    ; Prevents overwriting running code when launching a new app
+    ; Step 2: Determine target segment
+    mov dh, [.seg_mode]
+    cmp dh, 0x20
+    ja .alloc_user_seg
+    ; DH=0 or DH=0x20 → shell segment (fixed)
+    mov word [.target_seg], APP_SEGMENT_SHELL
+    jmp .seg_ready
+
+.alloc_user_seg:
+    ; DH > 0x20 → auto-allocate from segment pool
+    mov ax, [.slot]
+    call alloc_segment              ; AL=task handle, returns BX=segment
+    jc .alloc_failed
+    mov [.target_seg], bx
+    mov byte [.did_alloc], 1        ; Remember we allocated (for error cleanup)
+
+.seg_ready:
+    ; Safety: For shell segment, terminate any RUNNING app there
+    ; For user segments, pool guarantees no conflict
+    cmp word [.target_seg], APP_SEGMENT_SHELL
+    jne .skip_kill
+
     push di
     push cx
-    xor bx, bx
-    mov bh, [.target_seg]          ; BX = target segment (e.g., 0x2000 or 0x3000)
+    mov bx, [.target_seg]
     mov di, app_table
     xor cx, cx
 .kill_existing:
@@ -5525,13 +5594,14 @@ app_load_stub:
     pop cx
     pop di
 
-    ; Step 2: Mount filesystem
+.skip_kill:
+    ; Step 3: Mount filesystem
     mov al, [.drive]                ; AL = drive number (fs_mount_stub expects AL, not DL!)
     xor ah, ah                      ; AH = 0 (auto-detect driver)
     call fs_mount_stub
     jc .mount_failed
 
-    ; Step 3: Open file
+    ; Step 4: Open file
     ; IMPORTANT: Read filename_off BEFORE changing DS, since local vars are in kernel segment
     mov si, [.filename_off]
     mov ax, [.filename_seg]
@@ -5541,7 +5611,7 @@ app_load_stub:
 
     mov [.file_handle], ax
 
-    ; Step 4: Get file size from file handle
+    ; Step 5: Get file size from file handle
     ; File handle entry is at file_table + handle * 32
     ; Size is at offset 4 (low) and 6 (high)
     mov bx, ax
@@ -5552,16 +5622,11 @@ app_load_stub:
     mov cx, [bx + 4]                ; CX = file size (low word)
     mov [.file_size], cx
 
-    ; Step 5: Load app at target segment offset 0
-    ; Apps use ORG 0x0000, so they must be loaded at offset 0 in their segment
-    ; DH parameter specifies target: 0x20=shell (0x2000), 0x30=user (0x3000)
     mov word [.code_off], 0         ; Always load at offset 0
 
     ; Step 6: Read file into app code segment
     mov ax, [.file_handle]
-    ; Build segment from high byte: 0x20 -> 0x2000, 0x30 -> 0x3000
-    xor bx, bx
-    mov bh, [.target_seg]           ; BX = target segment (e.g., 0x2000 or 0x3000)
+    mov bx, [.target_seg]           ; Full segment word (e.g., 0x3000)
     mov es, bx
     xor di, di                      ; Offset 0 (for ORG 0 apps)
     mov cx, [.file_size]            ; Bytes to read
@@ -5580,16 +5645,14 @@ app_load_stub:
 
     mov byte [di + 0], APP_STATE_LOADED  ; State = loaded
     mov byte [di + 1], 0                 ; Priority = 0
-    ; Store actual target segment
-    xor ax, ax
-    mov ah, [.target_seg]
-    mov [di + 2], ax                     ; Code segment (from DH parameter)
+    mov ax, [.target_seg]
+    mov [di + 2], ax                     ; Code segment (full word)
     mov ax, [.code_off]
     mov [di + 4], ax                     ; Code offset
     mov ax, [.file_size]
     mov [di + 6], ax                     ; Code size
-    mov word [di + 8], 0                 ; Stack segment (unused for now)
-    mov word [di + 10], 0                ; Stack pointer (unused for now)
+    mov word [di + 8], 0                 ; Stack segment (set by app_start)
+    mov word [di + 10], 0                ; Stack pointer (set by app_start)
 
     ; Copy filename (11 bytes)
     push ds
@@ -5606,20 +5669,35 @@ app_load_stub:
     clc
     jmp .done
 
+.alloc_failed:
+    mov ax, APP_ERR_ALLOC_FAILED
+    jmp .error
+
 .mount_failed:
     mov ax, APP_ERR_MOUNT_FAILED
-    jmp .error
+    jmp .error_free_seg
 
 .file_not_found:
     mov ax, APP_ERR_FILE_NOT_FOUND
-    jmp .error
+    jmp .error_free_seg
 
 .read_failed:
     ; Close file before returning error
+    push word APP_ERR_READ_FAILED
     mov ax, [.file_handle]
     call fs_close_stub
-    mov ax, APP_ERR_READ_FAILED
-    jmp .error
+    pop ax
+    ; Fall through to error_free_seg
+
+.error_free_seg:
+    ; Free allocated segment on failure (if we allocated one)
+    push ax
+    cmp byte [.did_alloc], 0
+    je .no_free
+    mov bx, [.target_seg]
+    call free_segment
+.no_free:
+    pop ax
 
 .error:
     stc
@@ -5636,7 +5714,9 @@ app_load_stub:
 
 ; Local variables for app_load_stub
 .drive:        db 0
-.target_seg:   db 0                     ; Target segment high byte (0x20 or 0x30)
+.seg_mode:     db 0                     ; Original DH parameter
+.target_seg:   dw 0                     ; Full target segment (e.g., 0x3000)
+.did_alloc:    db 0                     ; 1 if we allocated from pool
 .filename_seg: dw 0
 .filename_off: dw 0
 .slot:         dw 0
@@ -5954,6 +6034,13 @@ app_exit_stub:
     shl si, 5
     add si, app_table
     mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+
+    ; Free allocated segment back to pool (skip shell segment)
+    mov bx, [si + APP_OFF_CODE_SEG]
+    cmp bx, APP_SEGMENT_SHELL
+    je .skip_free_seg
+    call free_segment
+.skip_free_seg:
 
     ; Destroy all windows owned by this task
     push ax                         ; Save task handle
@@ -7535,11 +7622,16 @@ APP_STATE_SUSPENDED equ 3
 APP_MAX_COUNT       equ 16
 APP_ENTRY_SIZE      equ 32
 
-; App segment constants (for dual-segment architecture)
-APP_SEGMENT_SHELL   equ 0x2000              ; Shell/launcher segment
-APP_SEGMENT_USER    equ 0x3000              ; User app segment
+; App segment constants
+APP_SEGMENT_SHELL   equ 0x2000              ; Shell/launcher segment (fixed)
+APP_NUM_USER_SEGS   equ 6                   ; Number of dynamic user segments
+SCRATCH_SEGMENT     equ 0x9000              ; Scratch buffer (moved from 0x5000)
 
 app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
+
+; Dynamic segment allocation pool (6 user segments: 0x3000-0x8000)
+segment_pool:   dw 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000
+segment_owner:  db 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF  ; 0xFF = free
 
 ; Shell tracking (for auto-return to launcher)
 shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none)
