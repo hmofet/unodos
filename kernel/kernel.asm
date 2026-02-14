@@ -139,7 +139,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-40)
     ; Validate function number
-    cmp ah, 41                      ; Max function count (0-40 valid)
+    cmp ah, 43                      ; Max function count (0-42 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1994,6 +1994,27 @@ mouse_drag_update:
     call mouse_hittest_titlebar
     jc .done                        ; No hit
 
+    ; Check if click is on close button (rightmost 12px of title bar)
+    push si
+    xor ah, ah
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    mov bx, [si + WIN_OFF_X]
+    add bx, [si + WIN_OFF_WIDTH]
+    sub bx, 12                      ; BX = left edge of close button zone
+    cmp word [mouse_x], bx
+    pop si
+    jb .start_drag                  ; Click left of close button → drag
+
+    ; Close button clicked — set flag for deferred processing
+    mov [drag_window], al
+    mov byte [drag_needs_focus], 1
+    mov [close_kill_window], al
+    mov byte [close_needs_kill], 1
+    jmp .done
+
+.start_drag:
     ; Start drag setup
     mov [drag_window], al
     mov byte [drag_needs_focus], 1  ; Signal focus needed (handled in main thread)
@@ -2331,6 +2352,60 @@ mouse_process_drag:
     pop ax
 .no_focus:
 
+    ; Handle deferred close button kill
+    cmp byte [close_needs_kill], 0
+    je .no_close_kill
+    mov byte [close_needs_kill], 0
+
+    ; Look up the window's owner task
+    push ax
+    push bx
+    push si
+    xor ah, ah
+    mov al, [close_kill_window]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .close_kill_done            ; Window already gone
+    mov al, [si + WIN_OFF_OWNER]
+    cmp al, 0xFF
+    je .close_kill_done             ; Kernel-owned window, skip
+
+    cmp al, [current_task]
+    je .close_kill_self
+
+    ; --- Kill a different task ---
+    xor ah, ah
+    mov si, ax
+    shl si, 5
+    add si, app_table
+    cmp byte [si + APP_OFF_STATE], APP_STATE_RUNNING
+    jne .close_kill_done
+    mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+    ; Free segment
+    mov bx, [si + APP_OFF_CODE_SEG]
+    cmp bx, APP_SEGMENT_SHELL
+    je .close_kill_skip_free
+    call free_segment
+.close_kill_skip_free:
+    call speaker_off_stub           ; Silence speaker
+    call destroy_task_windows       ; AL = task handle
+.close_kill_done:
+    pop si
+    pop bx
+    pop ax
+    jmp .no_close_kill
+
+.close_kill_self:
+    ; Killing the current task — app_exit_stub handles full teardown + context switch
+    pop si
+    pop bx
+    pop ax
+    call speaker_off_stub
+    jmp app_exit_stub               ; Never returns
+
+.no_close_kill:
     cmp byte [drag_active], 0
     je .done
 
@@ -2526,13 +2601,13 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1060 - ($ - $$) db 0
+times 0x1100 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 41                           ; Number of function slots (0-40)
+    dw 43                           ; Number of function slots (0-42)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2600,6 +2675,10 @@ kernel_api_table:
     dw desktop_clear_icons_stub     ; 38: Clear all desktop icons
     dw gfx_draw_icon_stub           ; 39: Draw 16x16 icon bitmap
     dw fs_read_header_stub          ; 40: Read file header bytes
+
+    ; PC Speaker API (v3.15.0)
+    dw speaker_tone_stub            ; 41: Play tone (BX=freq Hz, 0=off)
+    dw speaker_off_stub             ; 42: Turn off speaker
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -6047,6 +6126,9 @@ task_exit_handler:
 
 ; app_exit_stub - Exit current task (API 36)
 app_exit_stub:
+    ; Silence speaker (in case task was playing sound)
+    call speaker_off_stub
+
     ; Mark current task as FREE
     mov al, [current_task]
     cmp al, 0xFF
@@ -7010,6 +7092,46 @@ win_destroy_stub:
 .best_z:      db 0
 .best_handle: db 0xFF
 
+; ============================================================================
+; PC Speaker API
+; ============================================================================
+
+; speaker_tone_stub - Play a tone on the PC speaker (API 41)
+; Input: BX = frequency in Hz (20-20000). BX=0 turns off speaker.
+; Preserves: All registers
+speaker_tone_stub:
+    test bx, bx
+    jz speaker_off_stub
+    push ax
+    push dx
+    ; Program PIT Channel 2 for square wave (mode 3)
+    mov al, 0xB6                    ; Channel 2, access lo/hi, mode 3, binary
+    out 0x43, al
+    ; Calculate divisor = 1193182 / frequency
+    mov ax, 0x34DE                  ; Low word of 1193182 (0x001234DE)
+    mov dx, 0x0012                  ; High word
+    div bx                          ; AX = divisor
+    out 0x42, al                    ; Low byte of divisor to PIT
+    mov al, ah
+    out 0x42, al                    ; High byte of divisor to PIT
+    ; Enable speaker gate and data
+    in al, 0x61
+    or al, 0x03                     ; Set bits 0 (gate) and 1 (speaker)
+    out 0x61, al
+    pop dx
+    pop ax
+    ret
+
+; speaker_off_stub - Turn off the PC speaker (API 42)
+; Preserves: All registers
+speaker_off_stub:
+    push ax
+    in al, 0x61
+    and al, 0xFC                    ; Clear bits 0 and 1
+    out 0x61, al
+    pop ax
+    ret
+
 ; win_draw_stub - Draw/redraw window frame (title bar and border)
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
@@ -7081,6 +7203,27 @@ win_draw_stub:
     add cx, 1                       ; 1px padding
     call gfx_draw_string_inverted   ; Black text on white title bar
     pop word [caller_ds]            ; Restore caller's DS
+    pop bx
+
+    ; Draw close button [X] at right side of title bar
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [.win_ptr]
+    mov bx, [si + WIN_OFF_X]
+    add bx, [si + WIN_OFF_WIDTH]
+    sub bx, 10                      ; BX = X = right edge - 10px
+    mov cx, [si + WIN_OFF_Y]
+    inc cx                          ; CX = Y = win_y + 1
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    mov si, close_btn_str
+    call gfx_draw_string_inverted   ; Black X on white title bar
+    pop word [caller_ds]
+    pop si
+    pop dx
+    pop cx
     pop bx
 
     ; Draw border (rectangle outline)
@@ -7527,6 +7670,9 @@ drag_needs_update:  db 0            ; 1 = win_move_stub needs to be called
 drag_prev_buttons:  db 0            ; Previous button state (for edge detection)
 drag_content_saved: db 0            ; 1 = content saved in scratch buffer
 drag_needs_focus:   db 0            ; 1 = need to focus dragged window
+close_needs_kill:   db 0            ; 1 = close button clicked, need to kill task
+close_kill_window:  db 0            ; Window handle that was close-clicked
+close_btn_str:      db 'X', 0       ; Close button text
 
 ; Content save/restore state (used by save/restore_drag_content)
 wc_cx:      dw 0                    ; Saved content X
