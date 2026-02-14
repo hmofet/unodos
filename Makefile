@@ -100,7 +100,7 @@ $(HELLO_BIN): $(APPS_DIR)/hello.asm | $(BUILD_DIR)
 $(CLOCK_BIN): $(APPS_DIR)/clock.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
-$(LAUNCHER_BIN): $(APPS_DIR)/launcher.asm | $(BUILD_DIR)
+$(LAUNCHER_BIN): $(APPS_DIR)/launcher.asm $(BUILD_INFO) | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 $(BROWSER_BIN): $(APPS_DIR)/browser.asm | $(BUILD_DIR)
