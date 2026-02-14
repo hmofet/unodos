@@ -139,7 +139,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-40)
     ; Validate function number
-    cmp ah, 43                      ; Max function count (0-42 valid)
+    cmp ah, 44                      ; Max function count (0-43 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -2539,7 +2539,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 43                           ; Number of function slots (0-42)
+    dw 44                           ; Number of function slots (0-43)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2611,6 +2611,7 @@ kernel_api_table:
     ; PC Speaker API (v3.15.0)
     dw speaker_tone_stub            ; 41: Play tone (BX=freq Hz, 0=off)
     dw speaker_off_stub             ; 42: Turn off speaker
+    dw get_boot_drive_stub          ; 43: Get boot drive (AL=drive number)
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -5026,10 +5027,10 @@ fat16_read:
     sub bx, 2
     movzx eax, byte [fat16_sects_per_clust]
     movzx ecx, bx
-    imul eax, ecx
-    movzx ecx, ax                   ; sector_in_cluster is in ax from before
-    mov ax, [.offset_in_cluster]
-    shr ax, 9
+    imul eax, ecx                   ; EAX = (cluster - 2) * sects_per_clust
+    mov ecx, eax                    ; ECX = full 32-bit cluster sector offset
+    movzx eax, word [.offset_in_cluster]
+    shr eax, 9                      ; EAX = sector offset within cluster
     add eax, ecx
     add eax, [fat16_data_start]
 
@@ -7137,6 +7138,13 @@ speaker_off_stub:
     and al, 0xFC                    ; Clear bits 0 and 1
     out 0x61, al
     pop ax
+    ret
+
+; get_boot_drive_stub - Get boot drive number (API 43)
+; Output: AL = boot drive (0x00=floppy, 0x80=first HDD)
+; Preserves: All other registers
+get_boot_drive_stub:
+    mov al, [boot_drive]
     ret
 
 ; win_draw_stub - Draw/redraw window frame (title bar and border)

@@ -9,21 +9,24 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | CPU | Intel 8088/8086 (4.77-10 MHz) to 486 |
 | RAM | 128 KB minimum, 256 KB recommended |
 | Display | CGA 320x200 4-color (also works on VGA in CGA mode) |
-| Storage | 360KB or 1.44MB floppy disk |
+| Storage | 360KB/1.44MB floppy, hard drive, CF card, USB flash drive |
 | Input | PC/XT keyboard, PS/2 mouse (optional) |
 | Audio | PC speaker (optional) |
 
 ---
 
-## Completed Features (v3.15.0 Build 159)
+## Completed Features (v3.16.0 Build 161)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
+- [x] Floppy boot: boot.asm → stage2.asm → kernel (FAT12)
+- [x] Hard drive boot: mbr.asm → vbr.asm → stage2_hd.asm → kernel (FAT16)
 - [x] Memory detection (BIOS INT 12h)
 - [x] Video adapter detection (CGA/EGA/VGA)
 - [x] Boot progress indicator (dots during kernel load)
 - [x] Signature verification at each stage
 - [x] Build number display for debugging
+- [x] Boot drive auto-detection (floppy, hard drive, CF card, USB)
 
 ### Graphics System
 - [x] CGA 320x200 4-color mode
@@ -37,7 +40,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 ### System Call Infrastructure
 - [x] INT 0x80 handler for API dispatch
 - [x] Kernel API table at fixed address (0x1000:0x1060)
-- [x] 43 API functions implemented (indices 0-42)
+- [x] 44 API functions implemented (indices 0-43)
 - [x] Caller segment preservation (caller_ds/caller_es) for string parameters
 - [x] Window-relative coordinate translation for APIs 0-6
 
@@ -107,9 +110,10 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Automatic speaker silence on task exit
 
 ### Filesystem
-- [x] Filesystem abstraction layer (VFS-like)
-- [x] FAT12 driver (read-only)
-- [x] fs_mount_stub() - Mount filesystem
+- [x] Filesystem abstraction layer (VFS-like, auto-routes FAT12/FAT16)
+- [x] FAT12 driver (floppy, read-only)
+- [x] FAT16 driver (hard drive, read-only)
+- [x] fs_mount_stub() - Mount filesystem (auto-detect FAT12/FAT16 by drive type)
 - [x] fs_open_stub() - Open file by name
 - [x] fs_read_stub() - Read file contents
 - [x] fs_close_stub() - Close file handle
@@ -118,7 +122,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] 8.3 filename support
 
 ### Application Loader & Multitasking
-- [x] app_load_stub() - Load .BIN from FAT12 with dynamic segment allocation
+- [x] app_load_stub() - Load .BIN from FAT12/FAT16 with dynamic segment allocation
 - [x] app_run_stub() - Execute loaded application
 - [x] app_start_stub() - Start app non-blocking (cooperative multitasking)
 - [x] Multi-app segment pool (shell 0x2000 fixed, user 0x3000-0x8000 dynamic)
@@ -150,7 +154,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Auto-rescans disk on floppy swap
 
 ### Applications
-- [x] **LAUNCHER.BIN** - Desktop launcher with icon grid (2903 bytes)
+- [x] **LAUNCHER.BIN** - Desktop launcher with icon grid (2922 bytes)
 - [x] **CLOCK.BIN** - Real-time clock display (330 bytes, icon: clock face)
 - [x] **BROWSER.BIN** - File browser showing files with sizes (569 bytes, icon: folder)
 - [x] **TEST.BIN** - Hello test application (251 bytes, icon: speech bubble)
@@ -159,7 +163,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## API Table Summary (v3.15.0 Build 159)
+## API Table Summary (v3.16.0 Build 161)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -206,6 +210,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 | 40 | fs_read_header | Read first N bytes from a file |
 | 41 | speaker_tone | Play tone (BX=frequency Hz) |
 | 42 | speaker_off | Turn off PC speaker |
+| 43 | get_boot_drive | Get boot drive number (AL=0x00 floppy, 0x80 HDD) |
 
 ### New API Details (Build 144)
 
@@ -250,6 +255,13 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - Input: none
 - Output: none
 - Description: Silences the PC speaker by clearing port 0x61 bits 0-1. Also called automatically on task exit.
+
+### New API Details (Build 161)
+
+**API 43: get_boot_drive** - Get boot drive number
+- Input: none
+- Output: AL = boot drive number (0x00 = floppy A:, 0x80 = first hard drive)
+- Description: Returns the BIOS drive number that the system booted from. Used by the launcher to determine which drive to mount for app loading.
 
 ---
 
@@ -333,7 +345,7 @@ entry:
 
 ---
 
-## Memory Layout (v3.15.0 Build 159)
+## Memory Layout (v3.16.0 Build 161)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -341,7 +353,7 @@ entry:
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
 0x1000:0x0000   Kernel                        28 KB
-  +-- 0x1000:0x1100  API table (43 functions)
+  +-- 0x1000:0x1100  API table (44 functions)
 0x1400:0x0000   Heap (malloc pool)            ~64 KB
 0x2000:0x0000   Shell/Launcher segment        64 KB (fixed)
 0x3000:0x0000   User app slot 0               64 KB (dynamic pool)
@@ -372,6 +384,7 @@ entry:
 
 ### Hardware Support
 - [x] PC Speaker sound (tone generation + music playback)
+- [x] Hard drive / CF card / USB boot (MBR + FAT16)
 - [ ] Serial mouse driver (Microsoft compatible)
 
 ### Future Enhancements
@@ -428,4 +441,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 7.0 (2026-02-14) - Updated for v3.15.0 Build 159*
+*Document version: 8.0 (2026-02-14) - Updated for v3.16.0 Build 161*

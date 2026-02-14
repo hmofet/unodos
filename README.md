@@ -29,26 +29,27 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.15.0 Build 159)
+## Current Features (v3.16.0 Build 161)
 
+- **Boots from floppy disk, hard drive, CF card, or USB flash drive**
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
 - CGA 320x200 4-color graphics mode
 - Custom bitmap fonts (8x8 for titles, 4x6 for small text)
-- System call infrastructure (INT 0x80 + API table with 43 functions)
+- System call infrastructure (INT 0x80 + API table with 44 functions)
 - Graphics API (pixel, rectangle, character, string, text measurement, icons)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
 - PS/2 Mouse driver (IRQ12/INT 0x74) with visible XOR cursor
 - Event system (32-event circular queue, per-task filtering)
-- FAT12 filesystem (read-only: mount, open, read, close, readdir)
+- FAT12 filesystem (floppy) and FAT16 filesystem (hard drive) — read-only
 - Application Loader with dynamic segment allocation
 - **Cooperative multitasking** - up to 6 concurrent user apps + launcher
 - **Window Manager** with close button, outline drag, z-order management (16 windows max)
 - **Active/inactive title bars** - visual distinction for foreground window
 - **Window Drawing Context** (apps use window-relative coordinates)
 - **PC Speaker sound** - tone generation API + Fur Elise music player app
-- **Desktop Launcher** with icon grid, double-click launch, floppy swap detection
+- **Desktop Launcher** with icon grid, double-click launch, auto boot media detection
 
 ## Building
 
@@ -68,8 +69,14 @@ make floppy144
 # Build launcher floppy image
 make apps && make build/launcher-floppy.img
 
-# Run in QEMU (1.44MB image)
+# Build 64MB hard drive image (FAT16)
+make hd-image
+
+# Run in QEMU (1.44MB floppy)
 make run144
+
+# Run in QEMU (hard drive)
+make run-hd
 
 # Clean build artifacts
 make clean
@@ -78,8 +85,9 @@ make clean
 ### Build Output
 
 After building, you'll find:
-- `build/unodos-144.img` - 1.44MB floppy image (OS + apps)
+- `build/unodos-144.img` - 1.44MB floppy image (OS + apps, FAT12)
 - `build/launcher-floppy.img` - Launcher + apps floppy image
+- `build/unodos-hd.img` - 64MB hard drive image (OS + apps, FAT16)
 - `build/*.bin` - Individual compiled binaries
 
 ## Writing to Physical Floppy
@@ -132,7 +140,8 @@ unodos/
 │   └── font4x6.asm     # 4x6 small font data
 ├── build/
 │   ├── *.bin            # Compiled binaries
-│   ├── unodos-144.img   # 1.44MB boot floppy image
+│   ├── unodos-144.img   # 1.44MB boot floppy image (FAT12)
+│   ├── unodos-hd.img    # 64MB hard drive image (FAT16)
 │   └── launcher-floppy.img # Launcher + apps floppy
 ├── docs/                # Technical documentation
 ├── tools/               # Build and deployment utilities
@@ -140,8 +149,8 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
-├── VERSION              # Version string (3.15.0)
-└── BUILD_NUMBER         # Build number (159)
+├── VERSION              # Version string (3.16.0)
+└── BUILD_NUMBER         # Build number (161)
 ```
 
 ## Documentation
@@ -161,7 +170,8 @@ unodos/
 - [x] Keyboard driver (INT 09h)
 - [x] PS/2 Mouse driver (IRQ12/INT 0x74) with XOR cursor
 - [x] Event system (32-event circular queue)
-- [x] FAT12 filesystem (read-only)
+- [x] FAT12 filesystem (floppy, read-only)
+- [x] FAT16 filesystem (hard drive, read-only)
 
 ### Completed (Core Services)
 - [x] Application loader with dynamic segment allocation
@@ -169,13 +179,14 @@ unodos/
 - [x] Window Manager (create, destroy, draw, focus, move, close button, outline drag)
 - [x] Z-order management (background draw blocking, active/inactive title bars)
 - [x] Window drawing context (window-relative coordinates)
-- [x] Desktop Launcher with icon grid and dynamic app discovery
+- [x] Desktop Launcher with icon grid, app discovery, auto boot media detection
 - [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine)
 - [x] Desktop icons (16x16 2bpp CGA, auto-detected from BIN headers)
 - [x] PC Speaker sound (tone generation + silence APIs)
+- [x] Hard drive boot (MBR → VBR → Stage2_hd, FAT16 partition)
 
 ### Completed (Applications)
-- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2903 bytes)
+- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2922 bytes)
 - [x] CLOCK.BIN - Real-time clock display (330 bytes)
 - [x] TEST.BIN - Hello World window (251 bytes)
 - [x] BROWSER.BIN - File browser with file sizes (569 bytes)
@@ -191,7 +202,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.15.0** (Build 159)
+Current version: **3.16.0** (Build 161)
 
 ## License
 
