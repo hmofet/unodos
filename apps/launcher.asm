@@ -1039,18 +1039,28 @@ launch_app:
     jmp .la_done
 
 .la_error:
+    ; Save error code before it gets clobbered
+    mov [cs:la_errcode], al
     ; Show error with background so it's visible
     mov bx, 0                       ; Color 0 (black) background
-    mov cx, 88                      ; X
+    mov cx, 68                      ; X
     mov dx, 176                     ; Y
-    mov si, 150                     ; Width
+    mov si, 190                     ; Width
     mov di, 18                      ; Height
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
-    mov bx, 92
+    ; Draw "Load err:" prefix
+    mov bx, 72
     mov cx, 180
     mov si, load_error_msg
     mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    ; Draw error code digit after message
+    mov al, [cs:la_errcode]
+    add al, '0'                     ; Convert to ASCII digit
+    mov bx, 192                     ; After "Load err: " (10 chars * 12px)
+    mov cx, 180
+    mov ah, API_GFX_DRAW_CHAR
     int 0x80
     ; Brief delay so user can see error
     call .la_delay
@@ -1148,7 +1158,8 @@ read_bios_ticks:
 
 title_str:      db 'UnoDOS', 0
 no_apps_msg:    db 'No apps found', 0
-load_error_msg: db 'Load failed!', 0
+load_error_msg: db 'Load err: ', 0
+la_errcode:     db 0
 
 ; Drive and scan state
 mounted_drive:  db 0
