@@ -45,14 +45,34 @@ entry:
     mov al, ' '
     int 0x10
 
+    ; Debug: print boot_drive value as hex
+    mov al, 'D'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    mov al, [boot_drive]
+    call print_hex_byte_bios
+
     ; Install INT 0x80 handler for system calls
     call install_int_80
+    mov al, '1'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
 
     ; Initialize PS/2 mouse
     call install_mouse
+    mov al, '2'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
 
     ; Install keyboard handler
     call install_keyboard
+    mov al, '3'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
 
     ; Print version before entering graphics mode
     mov al, ' '
@@ -62,9 +82,19 @@ entry:
     mov si, version_string
     call print_string_bios
 
+    mov al, '4'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+
     ; Print video mode diagnostic
     mov si, mode_test_msg
     call print_string_bios
+
+    mov al, '5'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
 
     ; Set CGA mode 4 (320x200 4-color)
     xor ax, ax
@@ -74,22 +104,39 @@ entry:
     ; Check if mode 4 was actually set
     mov ah, 0x0F                    ; Get current video mode
     int 0x10                        ; Returns AL = current mode
-    cmp al, 0x04
-    je .mode4_ok
+    push ax                         ; Save mode byte
 
-    ; Mode 4 failed — stay in text mode, print error, halt
-    ; Restore text mode 3 to get a usable screen
+    ; Restore text mode to print result
+    push ax
     xor ax, ax
     mov al, 0x03
     int 0x10
     mov ax, 0x1000
     mov ds, ax
+    pop ax
+
+    ; Print what mode was returned
+    mov si, mode_result_msg
+    call print_string_bios
+    pop ax                          ; Restore mode byte
+    call print_hex_byte_bios
+
+    ; Now check if mode 4 was actually set
+    cmp al, 0x04
+    je .mode4_ok
+
+    ; Mode 4 failed
     mov si, mode_fail_msg
     call print_string_bios
     jmp halt_loop
 
 .mode4_ok:
-    ; Mode 4 set successfully — continue with normal graphics init
+    ; Mode 4 verified - now set it again (we restored text mode for debug)
+    xor ax, ax
+    mov al, 0x04
+    int 0x10
+
+    ; Continue with normal graphics init
     call setup_graphics_post_mode
 
     ; ========== PHASE 2: Graphics init complete ==========
@@ -970,9 +1017,9 @@ build_string   equ BUILD_NUMBER_STR
 
 ; Boot messages
 kernel_prefix:  db 'Kernel ', 0
-mode_test_msg:  db 13, 10, 'Setting CGA mode 4...', 0
-mode_fail_msg:  db 'ERROR: CGA mode 4 not supported!', 13, 10
-                db 'This hardware cannot run UnoDOS graphics.', 13, 10, 0
+mode_test_msg:  db 13, 10, 'CGA4...', 0
+mode_result_msg: db 13, 10, 'Mode=0x', 0
+mode_fail_msg:  db ' FAIL!', 13, 10, 0
 
 ; Boot configuration
 boot_drive:         db 0                ; Boot drive number (0x00=floppy, 0x80=HDD)
@@ -999,6 +1046,36 @@ print_string_bios:
     pop si
     pop bx
     pop ax
+    ret
+
+; print_hex_byte_bios - Print AL as two hex chars via BIOS
+; Input: AL = byte to print
+; Preserves all registers
+print_hex_byte_bios:
+    push ax
+    push bx
+    push cx
+    mov cl, al              ; Save byte
+    shr al, 4               ; High nibble
+    call .phb_nibble
+    mov al, cl
+    and al, 0x0F            ; Low nibble
+    call .phb_nibble
+    pop cx
+    pop bx
+    pop ax
+    ret
+.phb_nibble:
+    cmp al, 10
+    jb .phb_digit
+    add al, 'A' - 10
+    jmp .phb_out
+.phb_digit:
+    add al, '0'
+.phb_out:
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
     ret
 
 ; ============================================================================
