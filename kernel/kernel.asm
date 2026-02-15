@@ -959,12 +959,14 @@ int_74_handler:
 ; BIOS PS/2 mouse callback handler
 ; Called by BIOS via FAR CALL from its own IRQ12 handler.
 ; The BIOS handles all KBC/USB/PIC details — we just process the packet.
-; Stack after push bp; mov bp, sp:
-;   [BP+0]  = saved BP
-;   [BP+2]  = return IP
-;   [BP+4]  = return CS
-;   Packet bytes pushed as words before the call (order varies by BIOS).
-;   We detect byte order by finding the status byte (bit 3 always set).
+;
+; Standard stack layout (SeaBIOS, AMI, Award, Phoenix):
+;   BIOS pushes: 0, Y_delta, X_delta, status, then CALL FAR handler
+;   After push bp / mov bp, sp:
+;     [BP+6]  = status byte  (YO XO YS XS 1 M R L)
+;     [BP+8]  = X delta      (0-255, sign in status bit 4)
+;     [BP+10] = Y delta      (0-255, sign in status bit 5)
+;     [BP+12] = 0
 mouse_bios_callback:
     push bp
     mov bp, sp
@@ -980,96 +982,63 @@ mouse_bios_callback:
     mov ax, 0x1000
     mov ds, ax
 
-    ; Read the 3 packet words from stack
-    ; Try [BP+6]=status, [BP+8]=X, [BP+10]=Y first (most common)
-    mov al, [bp+6]
-    test al, 0x08                   ; Status byte has bit 3 always set
-    jnz .bios_order_ok
-    ; Try reverse order: [BP+10]=status, [BP+8]=X, [BP+6]=Y
-    mov al, [bp+10]
-    test al, 0x08
-    jnz .bios_order_rev
-    ; Neither matches — bad packet, bail out
-    jmp .bios_cb_done
-
-.bios_order_rev:
-    ; Reversed: status=[BP+10], X=[BP+8], Y=[BP+6]
-    mov ah, al                      ; AH = status
-    mov bl, [bp+8]                  ; BL = X delta
-    mov cl, [bp+6]                  ; CL = Y delta
-    jmp .bios_process
-
-.bios_order_ok:
-    ; Standard: status=[BP+6], X=[BP+8], Y=[BP+10]
-    mov ah, al                      ; AH = status
+    ; Read packet from stack — DH holds status throughout (never clobbered)
+    mov dh, [bp+6]                  ; DH = status byte
     mov bl, [bp+8]                  ; BL = X delta
     mov cl, [bp+10]                 ; CL = Y delta
 
-.bios_process:
-    ; AH = status byte, BL = X delta, CL = Y delta
+    ; Verify sync bit (bit 3 must be 1 in status byte)
+    test dh, 0x08
+    jz .bios_cb_done
+
     ; Extract buttons (bits 0-2 of status)
-    mov al, ah
+    mov al, dh
     and al, 0x07
     mov [mouse_buttons], al
 
-    ; Check overflow — skip if set
-    test ah, 0xC0
+    ; Skip if overflow
+    test dh, 0xC0
     jnz .bios_cb_done
 
     ; Hide cursor before updating position
     call mouse_cursor_hide
 
-    ; Apply X delta (sign-extend using bit 4 of status)
-    mov al, bl
-    test ah, 0x10                   ; X sign bit
+    ; === X delta: sign-extend BL using status bit 4 ===
+    xor ah, ah
+    mov al, bl                      ; AX = unsigned X (0-255)
+    test dh, 0x10                   ; X sign bit in status
     jz .bios_x_pos
-    mov bh, 0xFF                    ; Negative
-    jmp .bios_apply_x
+    mov ah, 0xFF                    ; Sign-extend negative
 .bios_x_pos:
-    xor bh, bh
-.bios_apply_x:
-    mov al, bl
-    mov ah, bh
     add [mouse_x], ax
 
     ; Clamp X to 0-319
     cmp word [mouse_x], 0x8000
-    jb .bios_x_ok
+    jb .bios_x_not_neg
     mov word [mouse_x], 0
     jmp .bios_do_y
-.bios_x_ok:
+.bios_x_not_neg:
     cmp word [mouse_x], 319
     jbe .bios_do_y
     mov word [mouse_x], 319
 
 .bios_do_y:
-    ; Reload status for Y sign check
-    mov ah, [bp+6]
-    test ah, 0x08
-    jnz .bios_y_status_ok
-    mov ah, [bp+10]                 ; Reversed order
-.bios_y_status_ok:
-
-    ; Apply Y delta (inverted, sign-extend using bit 5 of status)
-    mov al, cl
-    test ah, 0x20                   ; Y sign bit
+    ; === Y delta: sign-extend CL using status bit 5, then negate ===
+    xor ah, ah
+    mov al, cl                      ; AX = unsigned Y (0-255)
+    test dh, 0x20                   ; Y sign bit in status (DH still intact!)
     jz .bios_y_pos
-    mov ch, 0xFF
-    jmp .bios_apply_y
+    mov ah, 0xFF                    ; Sign-extend negative
 .bios_y_pos:
-    xor ch, ch
-.bios_apply_y:
-    mov al, cl
-    mov ah, ch
-    neg ax                          ; Invert for screen Y
+    neg ax                          ; Invert for screen coords (mouse up = Y--)
     add [mouse_y], ax
 
     ; Clamp Y to 0-199
     cmp word [mouse_y], 0x8000
-    jb .bios_y_ok
+    jb .bios_y_not_neg
     mov word [mouse_y], 0
     jmp .bios_post
-.bios_y_ok:
+.bios_y_not_neg:
     cmp word [mouse_y], 199
     jbe .bios_post
     mov word [mouse_y], 199
