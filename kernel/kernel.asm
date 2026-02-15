@@ -48,8 +48,22 @@ entry:
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
-    ; Initialize mouse (skips KBC I/O on HD/USB boot for safety)
+    ; Initialize mouse
     call install_mouse
+
+    ; Show mouse init result (text mode, before CGA switch)
+    ; Prints: 'M' if OK, or failure code: 'R'=reset, 'S'=selftest, 'E'=enable
+    mov ah, 0x0E
+    xor bx, bx
+    cmp byte [mouse_enabled], 1
+    jne .print_mouse_fail
+    mov al, 'M'
+    int 0x10
+    jmp .mouse_diag_done
+.print_mouse_fail:
+    mov al, [mouse_diag]
+    int 0x10
+.mouse_diag_done:
 
     ; Install keyboard handler
     call install_keyboard
@@ -567,13 +581,13 @@ install_mouse:
     mov al, MOUSE_CMD_RESET
     call mouse_send_cmd
     cmp al, 0xFA                    ; ACK?
-    jne .no_mouse
+    jne .fail_reset
 
     ; Wait for self-test result (0xAA) - takes 300-500ms on real hardware!
     call kbc_wait_read_long
     in al, KBC_DATA                 ; Should be 0xAA
     cmp al, 0xAA
-    jne .no_mouse
+    jne .fail_selftest
 
     ; Wait for device ID (0x00) - comes quickly after self-test
     call kbc_wait_read_long
@@ -587,7 +601,7 @@ install_mouse:
     mov al, MOUSE_CMD_ENABLE
     call mouse_send_cmd
     cmp al, 0xFA
-    jne .no_mouse
+    jne .fail_enable
 
     ; Install our interrupt handler
     cli
@@ -611,6 +625,15 @@ install_mouse:
 
     clc
     jmp .done
+
+.fail_reset:
+    mov byte [mouse_diag], 'R'     ; Reset ACK failed
+    jmp .no_mouse
+.fail_selftest:
+    mov byte [mouse_diag], 'S'     ; Self-test failed
+    jmp .no_mouse
+.fail_enable:
+    mov byte [mouse_diag], 'E'     ; Enable ACK failed
 
 .no_mouse:
     ; Restore original 8042 configuration (undo our modifications)
@@ -677,7 +700,7 @@ kbc_wait_read_long:
     mov es, ax
     sti                             ; Ensure timer IRQ is firing
     mov cx, [es:0x006C]            ; Start tick
-    mov dx, 0x1000                 ; Raw fallback counter (4096 iterations)
+    mov dx, 0xFFFF                 ; Raw fallback counter (~1s on XT-class hardware)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF
@@ -2606,7 +2629,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1180 - ($ - $$) db 0
+times 0x11A0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -7869,6 +7892,7 @@ mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
+mouse_diag:         db '?'          ; Diagnostic: 'M'=OK, 'R'=reset, 'S'=selftest, 'E'=enable
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
 
 ; Mouse cursor state
