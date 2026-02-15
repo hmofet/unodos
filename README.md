@@ -29,7 +29,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.16.0 Build 161)
+## Current Features (v3.17.0 Build 193)
 
 - **Boots from floppy disk, hard drive, CF card, or USB flash drive**
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
@@ -40,7 +40,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - Graphics API (pixel, rectangle, character, string, text measurement, icons)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
-- PS/2 Mouse driver (IRQ12/INT 0x74) with visible XOR cursor
+- PS/2 Mouse driver (BIOS services + KBC fallback) with visible XOR cursor, USB mouse support
 - Event system (32-event circular queue, per-task filtering)
 - FAT12 filesystem (floppy) and FAT16 filesystem (hard drive) — read-only
 - Application Loader with dynamic segment allocation
@@ -149,8 +149,8 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
-├── VERSION              # Version string (3.16.0)
-└── BUILD_NUMBER         # Build number (161)
+├── VERSION              # Version string (3.17.0)
+└── BUILD_NUMBER         # Build number (193)
 ```
 
 ## Documentation
@@ -168,7 +168,7 @@ unodos/
 - [x] Graphics API (7 functions including text measurement)
 - [x] Memory allocator (malloc/free)
 - [x] Keyboard driver (INT 09h)
-- [x] PS/2 Mouse driver (IRQ12/INT 0x74) with XOR cursor
+- [x] PS/2 Mouse driver (BIOS INT 15h/C2 + KBC fallback) with XOR cursor
 - [x] Event system (32-event circular queue)
 - [x] FAT12 filesystem (floppy, read-only)
 - [x] FAT16 filesystem (hard drive, read-only)
@@ -180,7 +180,7 @@ unodos/
 - [x] Z-order management (background draw blocking, active/inactive title bars)
 - [x] Window drawing context (window-relative coordinates)
 - [x] Desktop Launcher with icon grid, app discovery, auto boot media detection
-- [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine)
+- [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine, USB mouse via BIOS)
 - [x] Desktop icons (16x16 2bpp CGA, auto-detected from BIN headers)
 - [x] PC Speaker sound (tone generation + silence APIs)
 - [x] Hard drive boot (MBR → VBR → Stage2_hd, FAT16 partition)
@@ -202,7 +202,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.16.0** (Build 161)
+Current version: **3.17.0** (Build 193)
 
 ## License
 
