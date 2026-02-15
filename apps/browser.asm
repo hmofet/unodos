@@ -46,6 +46,9 @@ API_FS_READDIR          equ 27
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 
+; Boot drive
+API_GET_BOOT_DRIVE      equ 43
+
 ; Multitasking
 API_APP_YIELD           equ 34
 
@@ -154,12 +157,16 @@ scan_and_display:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Mount filesystem
-    mov al, 0                       ; Drive A:
-    xor ah, ah
+    ; Query boot drive from kernel
+    mov ah, API_GET_BOOT_DRIVE
+    int 0x80                        ; AL = 0x00 (floppy) or 0x80 (HDD)
+
+    ; Mount the boot drive
     mov ah, API_FS_MOUNT
     int 0x80
     jc .mount_failed
+
+    mov [cs:mount_handle], bl       ; Save mount handle (0=FAT12, 1=FAT16)
 
     ; Initialize
     mov word [cs:dir_state], 0
@@ -172,7 +179,7 @@ scan_and_display:
     jae .scan_done
 
     ; Read next directory entry
-    mov al, 0
+    mov al, [cs:mount_handle]
     mov cx, [cs:dir_state]
     push cs
     pop es
@@ -346,6 +353,7 @@ word_to_decimal:
 window_title:   db 'Files', 0
 win_handle:     db 0
 
+mount_handle:   db 0                ; 0=FAT12, 1=FAT16
 dir_entry_buffer: times 32 db 0
 dir_state:      dw 0
 file_count:     db 0
