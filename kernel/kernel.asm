@@ -273,6 +273,19 @@ install_keyboard:
     push ax
     push bx
 
+    ; Initialize keyboard buffer
+    mov word [kbd_buffer_head], 0
+    mov word [kbd_buffer_tail], 0
+    mov byte [kbd_shift_state], 0
+    mov byte [kbd_ctrl_state], 0
+    mov byte [kbd_alt_state], 0
+
+    ; Skip custom INT 9 handler on HD/USB boot
+    ; Our handler reads port 0x60 directly which deadlocks through SMI
+    ; on USB-booted systems. BIOS INT 16h will be used instead.
+    cmp byte [boot_drive], 0x80
+    jae .skip_handler
+
     ; Save original INT 9h vector
     xor ax, ax
     mov es, ax
@@ -284,14 +297,13 @@ install_keyboard:
     ; Install our handler
     mov word [es:0x0024], int_09_handler
     mov word [es:0x0026], 0x1000
+    mov byte [use_bios_keyboard], 0
+    jmp .done
 
-    ; Initialize keyboard buffer
-    mov word [kbd_buffer_head], 0
-    mov word [kbd_buffer_tail], 0
-    mov byte [kbd_shift_state], 0
-    mov byte [kbd_ctrl_state], 0
-    mov byte [kbd_alt_state], 0
+.skip_handler:
+    mov byte [use_bios_keyboard], 1
 
+.done:
     pop bx
     pop ax
     pop es
@@ -963,7 +975,8 @@ mode_fail_msg:  db 'ERROR: CGA mode 4 not supported!', 13, 10
                 db 'This hardware cannot run UnoDOS graphics.', 13, 10, 0
 
 ; Boot configuration
-boot_drive:     db 0                    ; Boot drive number (0x00=floppy, 0x80=HDD)
+boot_drive:         db 0                ; Boot drive number (0x00=floppy, 0x80=HDD)
+use_bios_keyboard:  db 0                ; 1=use INT 16h (USB boot), 0=custom INT 9
 
 ; ============================================================================
 ; BIOS Print String (for early boot before our handlers are installed)
@@ -3213,6 +3226,26 @@ event_get_stub:
     jmp .evt_check_next
 
 .no_event:
+    ; On USB boot, poll BIOS keyboard since our INT 9 handler isn't installed
+    cmp byte [use_bios_keyboard], 1
+    jne .no_event_return
+    ; Check BIOS keyboard buffer (INT 16h AH=01h)
+    mov ah, 0x01
+    int 0x16
+    jz .no_event_return             ; ZF=1 means no key available
+    ; Key available — read it (INT 16h AH=00h)
+    xor ah, ah
+    int 0x16                        ; AH=scancode, AL=ASCII
+    ; Synthesize a KEY_PRESS event
+    mov dl, al                      ; DL = ASCII char
+    mov dh, ah                      ; DH = scancode
+    mov al, EVENT_KEY_PRESS
+    pop ds
+    pop si
+    pop bx
+    ret
+
+.no_event_return:
     xor al, al                      ; EVENT_NONE
     xor dx, dx
     pop ds
