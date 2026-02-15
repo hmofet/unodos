@@ -57,9 +57,96 @@ entry:
     mov al, [mouse_diag]
     int 0x10
 
+    ; If BIOS method succeeded, dump raw callback stack on first mouse move
+    cmp byte [mouse_diag], 'B'
+    jne .skip_bios_dump
+
+    ; Print prompt
+    mov si, .msg_move
+    call .print_str_bios
+
+    ; Wait for user to move mouse (callback sets bios_diag_ready=1)
+    sti
+.wait_mouse_data:
+    cmp byte [bios_diag_ready], 1
+    jne .wait_mouse_data
+
+    ; Print the 4 raw stack bytes: [BP+6] [BP+8] [BP+10] [BP+12]
+    mov al, [bios_diag_b6]
+    call .print_hex_bios
+    mov al, ' '
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    mov al, [bios_diag_b8]
+    call .print_hex_bios
+    mov al, ' '
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    mov al, [bios_diag_b10]
+    call .print_hex_bios
+    mov al, ' '
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    mov al, [bios_diag_b12]
+    call .print_hex_bios
+
+.skip_bios_dump:
     ; Wait for keypress so user can read diagnostic
     xor ax, ax
     int 0x16                        ; BIOS wait for key
+    jmp .after_diag_helpers
+
+; --- Diagnostic helpers (text mode, before CGA switch) ---
+.msg_move: db ' Move mouse: ', 0
+
+.print_str_bios:
+    push ax
+    push bx
+    xor bx, bx
+.psl:
+    lodsb
+    test al, al
+    jz .psd
+    mov ah, 0x0E
+    int 0x10
+    jmp .psl
+.psd:
+    pop bx
+    pop ax
+    ret
+
+.print_hex_bios:
+    push ax
+    push bx
+    push cx
+    mov cl, al
+    xor bx, bx
+    mov ah, 0x0E
+    mov al, cl
+    shr al, 4
+    add al, '0'
+    cmp al, '9'
+    jbe .ph1
+    add al, 7
+.ph1:
+    int 0x10
+    mov al, cl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .ph2
+    add al, 7
+.ph2:
+    int 0x10
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.after_diag_helpers:
 
     ; Install keyboard handler
     call install_keyboard
@@ -981,6 +1068,21 @@ mouse_bios_callback:
 
     mov ax, 0x1000
     mov ds, ax
+
+    ; First callback: capture raw stack bytes for diagnostic, then return
+    cmp byte [bios_diag_ready], 0
+    jne .bios_diag_done
+    mov al, [bp+6]
+    mov [bios_diag_b6], al
+    mov al, [bp+8]
+    mov [bios_diag_b8], al
+    mov al, [bp+10]
+    mov [bios_diag_b10], al
+    mov al, [bp+12]
+    mov [bios_diag_b12], al
+    mov byte [bios_diag_ready], 1
+    jmp .bios_cb_done
+.bios_diag_done:
 
     ; Read packet from stack — DH holds status throughout (never clobbered)
     ; Convention A (SeaBIOS): [BP+6]=status, [BP+8]=X, [BP+10]=Y, [BP+12]=0
@@ -2838,7 +2940,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1300 - ($ - $$) db 0
+times 0x13A0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -8103,6 +8205,11 @@ mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
 mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, R/S/E=failure
 bios_mouse_conv:    db 0xFF         ; BIOS callback convention: 0=A, 1=B, 0xFF=unknown
+bios_diag_ready:    db 0            ; 1 = first callback captured raw bytes
+bios_diag_b6:      db 0            ; Raw [BP+6] from first callback
+bios_diag_b8:      db 0            ; Raw [BP+8] from first callback
+bios_diag_b10:     db 0            ; Raw [BP+10] from first callback
+bios_diag_b12:     db 0            ; Raw [BP+12] from first callback
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
 
 ; Mouse cursor state
