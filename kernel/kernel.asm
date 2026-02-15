@@ -520,19 +520,13 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 
 ; install_mouse - Initialize PS/2 mouse
 ; Output: CF=0 success, CF=1 no mouse detected
-; NOTE: On USB-booted systems, even a single `in al, 0x64` can hang forever
-; due to BIOS SMI handler deadlock. Skip ALL KBC I/O on HD/USB boot.
+; NOTE: Mouse init uses KBC port 0x64 I/O. All wait functions have timeouts
+; so this should not hang, but if it does on specific hardware, the .no_mouse
+; path restores the original KBC configuration.
 install_mouse:
     push ax
     push bx
     push es
-
-    ; Skip mouse init entirely on HD/USB boot (drive >= 0x80)
-    ; Port 0x64 I/O triggers BIOS SMI that can deadlock on USB systems
-    ; Target hardware (PC XT, floppy boot) unaffected by this check
-    ; Use cs: override in case DS was changed by a BIOS call
-    cmp byte [cs:boot_drive], 0x80
-    jae .no_kbc
 
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
@@ -632,12 +626,6 @@ install_mouse:
     mov al, KBC_CMD_DISABLE_AUX
     out KBC_CMD, al
 
-    mov byte [mouse_enabled], 0
-    stc
-    jmp .done
-
-.no_kbc:
-    ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
