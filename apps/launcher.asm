@@ -64,6 +64,42 @@ entry:
     mov ax, cs
     mov ds, ax
 
+    ; === DIAGNOSTIC: Direct CGA write to prove launcher is executing ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw white block at top-left (mark 1: launcher entry reached)
+    mov byte [es:0x0000], 0xFF
+    mov byte [es:0x2000], 0xFF     ; Odd row interlace
+    pop es
+
+    ; === DIAGNOSTIC: Test if INT 0x80 works from launcher context ===
+    mov ah, API_GET_BOOT_DRIVE     ; Simple API call (43)
+    int 0x80
+    ; If we reach here, INT 0x80 returned successfully
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw white block at (8,0) (mark 2: INT 0x80 works)
+    mov byte [es:0x0002], 0xFF
+    mov byte [es:0x2002], 0xFF
+    pop es
+
+    ; === DIAGNOSTIC: Test fs_mount via INT 0x80 ===
+    mov ah, API_FS_MOUNT           ; Mount filesystem (13)
+    ; AL still has boot_drive from get_boot_drive
+    int 0x80
+    ; If we reach here, fs_mount returned
+    push es
+    push ax
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw white block at (16,0) (mark 3: fs_mount returned)
+    mov byte [es:0x0004], 0xFF
+    mov byte [es:0x2004], 0xFF
+    pop ax
+    pop es
+
     ; Initialize state
     mov byte [cs:icon_count], 0
     mov byte [cs:selected_icon], 0xFF
@@ -73,6 +109,14 @@ entry:
 
     ; Mount filesystem and scan for apps
     call scan_disk
+
+    ; === DIAGNOSTIC: mark 4 - scan_disk completed ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0x0006], 0xFF
+    mov byte [es:0x2006], 0xFF
+    pop es
 
     ; Draw full desktop (background + title + version + icons)
     call redraw_desktop
