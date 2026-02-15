@@ -64,6 +64,9 @@ entry:
     mov al, [mouse_diag]
     int 0x10
 .mouse_diag_done:
+    ; Wait for keypress so user can read diagnostic
+    xor ax, ax
+    int 0x16                        ; BIOS wait for key
 
     ; Install keyboard handler
     call install_keyboard
