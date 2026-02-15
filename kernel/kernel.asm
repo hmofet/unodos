@@ -518,35 +518,18 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 
 ; install_mouse - Initialize PS/2 mouse
 ; Output: CF=0 success, CF=1 no mouse detected
-; NOTE: KBC I/O operations hang on some USB-booted systems due to BIOS SMI
-; overhead. We now probe the BIOS timer first; if it's not ticking, we skip
-; all KBC I/O since timeout loops would hang.
+; NOTE: On USB-booted systems, even a single `in al, 0x64` can hang forever
+; due to BIOS SMI handler deadlock. Skip ALL KBC I/O on HD/USB boot.
 install_mouse:
     push ax
     push bx
     push es
 
-    ; Probe BIOS timer: read tick count, busy-wait briefly, check if it changed
-    ; If timer isn't running, all KBC timeout loops will hang forever
-    push ds
-    mov ax, 0x0040
-    mov ds, ax
-    sti                             ; Ensure IRQs enabled
-    mov bx, [0x006C]               ; Read current tick
-    mov cx, 0x1000                  ; Brief busy-wait
-.timer_probe:
-    nop
-    loop .timer_probe
-    mov ax, [0x006C]               ; Read tick again
-    pop ds
-    cmp ax, bx                     ; Did it change?
-    je .no_kbc                     ; Timer not running → skip all KBC I/O
-
-    ; Quick probe: if KBC status port returns 0xFF, no 8042 present
-    ; (common on USB-only systems without PS/2 controller)
-    in al, KBC_STATUS
-    cmp al, 0xFF
-    je .no_kbc
+    ; Skip mouse init entirely on HD/USB boot (drive >= 0x80)
+    ; Port 0x64 I/O triggers BIOS SMI that can deadlock on USB systems
+    ; Target hardware (PC XT, floppy boot) unaffected by this check
+    cmp byte [boot_drive], 0x80
+    jae .no_kbc
 
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
