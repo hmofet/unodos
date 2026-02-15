@@ -543,6 +543,7 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 install_mouse:
     push ax
     push bx
+    push cx
     push es
 
     ; Save original INT 0x74 (IRQ12) vector
@@ -552,6 +553,21 @@ install_mouse:
     mov [old_int74_offset], ax
     mov ax, [es:0x01D2]             ; INT 0x74 segment
     mov [old_int74_segment], ax
+
+    ; Flush any stale data from KBC output buffer
+    mov cx, 16                       ; Max bytes to drain
+.flush_kbc:
+    in al, KBC_STATUS
+    test al, KBC_STAT_OBF
+    jz .flush_done
+    in al, KBC_DATA                  ; Discard stale byte
+    loop .flush_kbc
+.flush_done:
+
+    ; Disable keyboard interface during mouse init to avoid interference
+    call kbc_wait_write
+    mov al, 0xAD                     ; Disable keyboard interface
+    out KBC_CMD, al
 
     ; Read controller configuration BEFORE any modifications
     ; Save original config so we can restore on failure
@@ -580,11 +596,27 @@ install_mouse:
     mov al, bl
     out KBC_DATA, al
 
-    ; Reset mouse
+    ; Flush again after config change — some KBCs echo data
+    mov cx, 16
+.flush_kbc2:
+    in al, KBC_STATUS
+    test al, KBC_STAT_OBF
+    jz .flush_done2
+    in al, KBC_DATA
+    loop .flush_kbc2
+.flush_done2:
+
+    ; Reset mouse (try up to 3 times — some KBCs need retries)
+    mov cl, 3
+.try_reset:
     mov al, MOUSE_CMD_RESET
     call mouse_send_cmd
     cmp al, 0xFA                    ; ACK?
-    jne .fail_reset
+    je .reset_ok
+    dec cl
+    jnz .try_reset
+    jmp .fail_reset
+.reset_ok:
 
     ; Wait for self-test result (0xAA) - takes 300-500ms on real hardware!
     call kbc_wait_read_long
@@ -626,6 +658,11 @@ install_mouse:
     mov byte [mouse_packet_idx], 0
     mov byte [mouse_enabled], 1
 
+    ; Re-enable keyboard interface
+    call kbc_wait_write
+    mov al, 0xAE                     ; Enable keyboard interface
+    out KBC_CMD, al
+
     clc
     jmp .done
 
@@ -652,11 +689,17 @@ install_mouse:
     mov al, KBC_CMD_DISABLE_AUX
     out KBC_CMD, al
 
+    ; Re-enable keyboard interface
+    call kbc_wait_write
+    mov al, 0xAE                     ; Enable keyboard interface
+    out KBC_CMD, al
+
     mov byte [mouse_enabled], 0
     stc
 
 .done:
     pop es
+    pop cx
     pop bx
     pop ax
     ret
@@ -738,7 +781,7 @@ mouse_send_cmd:
     mov al, bl                      ; Send actual command
     out KBC_DATA, al
 
-    call kbc_wait_read
+    call kbc_wait_read_long          ; Long timeout — real hardware can be slow
     in al, KBC_DATA                 ; Read response
 
     pop bx
@@ -2632,7 +2675,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x11A0 - ($ - $$) db 0
+times 0x11E0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
