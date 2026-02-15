@@ -295,22 +295,8 @@ read_sector_to_esbx:
     int 0x13
     pop ds
     add sp, 16
-    jc .try_chs                     ; LBA failed, try CHS
-
-    ; Verify we didn't get zeros (USB BIOS bug)
-    push es
-    mov es, [temp_seg]
-    mov si, [temp_off]
-    mov cx, 8                       ; Check first 8 bytes
-    xor ax, ax
-.check_zeros:
-    or al, [es:si]
-    inc si
-    loop .check_zeros
-    pop es
-    test al, al
-    jnz .success                    ; Got non-zero data, success
-    ; Fall through to CHS if all zeros
+    jnc .success                    ; LBA succeeded, trust it
+    ; LBA failed, try CHS
 
 .try_chs:
     ; Get drive geometry
@@ -341,7 +327,7 @@ read_sector_to_esbx:
 
 .do_chs_read:
     ; Convert LBA to CHS
-    mov eax, [esp + 12]             ; Get original EAX from stack
+    mov eax, [esp + 6]              ; Get original EAX from stack (after si,dx,cx pushes)
     xor edx, edx
     movzx ecx, byte [saved_spt]
     div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
