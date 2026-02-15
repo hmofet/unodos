@@ -510,16 +510,35 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 
 ; install_mouse - Initialize PS/2 mouse
 ; Output: CF=0 success, CF=1 no mouse detected
+; NOTE: KBC I/O operations hang on some USB-booted systems due to BIOS SMI
+; overhead. We now probe the BIOS timer first; if it's not ticking, we skip
+; all KBC I/O since timeout loops would hang.
 install_mouse:
     push ax
     push bx
     push es
 
+    ; Probe BIOS timer: read tick count, busy-wait briefly, check if it changed
+    ; If timer isn't running, all KBC timeout loops will hang forever
+    push ds
+    mov ax, 0x0040
+    mov ds, ax
+    sti                             ; Ensure IRQs enabled
+    mov bx, [0x006C]               ; Read current tick
+    mov cx, 0x1000                  ; Brief busy-wait
+.timer_probe:
+    nop
+    loop .timer_probe
+    mov ax, [0x006C]               ; Read tick again
+    pop ds
+    cmp ax, bx                     ; Did it change?
+    je .no_kbc                     ; Timer not running → skip all KBC I/O
+
     ; Quick probe: if KBC status port returns 0xFF, no 8042 present
     ; (common on USB-only systems without PS/2 controller)
     in al, KBC_STATUS
     cmp al, 0xFF
-    je .no_mouse
+    je .no_kbc
 
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
@@ -619,6 +638,12 @@ install_mouse:
     mov al, KBC_CMD_DISABLE_AUX
     out KBC_CMD, al
 
+    mov byte [mouse_enabled], 0
+    stc
+    jmp .done
+
+.no_kbc:
+    ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
