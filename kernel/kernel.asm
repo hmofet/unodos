@@ -77,6 +77,12 @@ entry:
     mov si, build_string
     call gfx_draw_string_stub
 
+    ; Draw diagnostic marker to confirm CGA drawing works
+    mov bx, 4
+    mov cx, 30
+    mov si, diag_pre
+    call gfx_draw_string_stub
+
     ; Enable interrupts
     sti
 
@@ -86,10 +92,21 @@ entry:
     ; Auto-load launcher from boot disk
     call auto_load_launcher
 
+    ; If we get here, auto_load_launcher failed (error was drawn)
+    ; Draw post-fail marker
+    mov word [caller_ds], 0x1000
+    mov bx, 4
+    mov cx, 60
+    mov si, diag_post
+    call gfx_draw_string_stub
+
     ; Halt
 halt_loop:
     hlt
     jmp halt_loop
+
+diag_pre:  db 'PRE', 0
+diag_post: db 'POST', 0
 
 ; ============================================================================
 ; System Call Infrastructure
