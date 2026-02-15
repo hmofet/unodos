@@ -26,46 +26,59 @@ entry:
     pop dx                          ; Restore DL
     mov [boot_drive], dl            ; Save for later use
 
-    ; Print newline then kernel banner
+    ; Print newline then kernel banner with build number for verification
     mov ah, 0x0E
     mov al, 13
     int 0x10
     mov al, 10
     int 0x10
 
-    ; Print "Kernel: " prefix
+    ; Print "Kernel " then build number immediately (before any init)
     mov si, kernel_prefix
     call print_string_bios
-
-    ; Install INT 0x80 handler for system calls
-    call install_int_80
-    mov ah, 0x0E
-    mov al, '.'
-    xor bx, bx
-    int 0x10
-
-    ; Initialize PS/2 mouse (sets mouse_enabled=1 on success, 0 on failure)
-    call install_mouse
-    mov ah, 0x0E
-    mov al, '.'
-    xor bx, bx
-    int 0x10
-
-    ; Print version string
-    mov si, version_string
-    call print_string_bios
-
-    ; Print build string
-    mov al, ' '
-    mov ah, 0x0E
-    int 0x10
-    mov al, '('
-    int 0x10
     mov si, build_string
     call print_string_bios
     mov ah, 0x0E
-    mov al, ')'
+    mov al, ':'
+    xor bx, bx
     int 0x10
+    mov al, ' '
+    int 0x10
+
+    ; Checkpoint 1: Install INT 0x80 handler
+    call install_int_80
+    mov ah, 0x0E
+    mov al, '1'
+    xor bx, bx
+    int 0x10
+
+    ; Checkpoint 2: Initialize PS/2 mouse
+    call install_mouse
+    mov ah, 0x0E
+    mov al, '2'
+    xor bx, bx
+    int 0x10
+
+    ; Checkpoint 3: Install keyboard handler
+    call install_keyboard
+    mov ah, 0x0E
+    mov al, '3'
+    xor bx, bx
+    int 0x10
+
+    ; Checkpoint 4: Set up graphics mode
+    call setup_graphics
+    mov ah, 0x0E
+    mov al, '4'
+    xor bx, bx
+    int 0x10
+
+    ; Print version
+    mov al, ' '
+    mov ah, 0x0E
+    int 0x10
+    mov si, version_string
+    call print_string_bios
 
     ; Newline
     mov ah, 0x0E
@@ -74,12 +87,7 @@ entry:
     mov al, 10
     int 0x10
 
-    ; ========== PHASE 2: Install interrupt handlers ==========
-    ; Now safe to install keyboard handler (won't break INT 16h)
-    call install_keyboard
-
-    ; Set up graphics mode (blue screen)
-    call setup_graphics
+    ; ========== PHASE 2: Graphics init complete ==========
 
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
@@ -962,7 +970,7 @@ version_string equ VERSION_STR
 build_string   equ BUILD_NUMBER_STR
 
 ; Boot messages
-kernel_prefix:  db 'Kernel: ', 0
+kernel_prefix:  db 'Kernel ', 0
 
 ; Boot configuration
 boot_drive:     db 0                    ; Boot drive number (0x00=floppy, 0x80=HDD)
