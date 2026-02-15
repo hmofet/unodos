@@ -51,82 +51,15 @@ entry:
     ; Initialize mouse
     call install_mouse
 
-    ; Show mouse init result and hardware state
-    ; Format: "M PIC:xx/xx KBC:xx" or "R" / "S" / "E"
+    ; Show mouse init result: B=BIOS method, K=KBC method, R/S/E=failure
     mov ah, 0x0E
     xor bx, bx
-    cmp byte [mouse_enabled], 1
-    jne .print_mouse_fail
-    mov al, 'M'
-    int 0x10
-
-    ; Print PIC masks and KBC config for diagnosis
-    mov al, ' '
-    int 0x10
-    ; Master PIC mask (bit 2 = IRQ2 cascade, should be 0)
-    in al, 0x21
-    mov cl, al
-    mov al, 'P'
-    int 0x10
-    mov al, cl
-    call .print_hex_byte
-    mov al, '/'
-    int 0x10
-    ; Slave PIC mask (bit 4 = IRQ12, should be 0)
-    in al, 0xA1
-    call .print_hex_byte
-    mov al, ' '
-    int 0x10
-    ; Read KBC config byte (bit 1 = IRQ12 enable, bit 5 = aux clock disable)
-    call kbc_wait_write
-    mov al, KBC_CMD_READ_CFG
-    out KBC_CMD, al
-    call kbc_wait_read
-    in al, KBC_DATA
-    mov cl, al
-    mov al, 'K'
-    int 0x10
-    mov al, cl
-    call .print_hex_byte
-
-    jmp .mouse_diag_done
-
-.print_mouse_fail:
     mov al, [mouse_diag]
     int 0x10
 
-.mouse_diag_done:
     ; Wait for keypress so user can read diagnostic
     xor ax, ax
     int 0x16                        ; BIOS wait for key
-    jmp .diag_continue
-
-; Helper: print AL as 2-digit hex via BIOS teletype
-.print_hex_byte:
-    push ax
-    push bx
-    xor bx, bx
-    mov ah, 0x0E
-    push ax
-    shr al, 4
-    call .hex_nibble
-    int 0x10
-    pop ax
-    and al, 0x0F
-    call .hex_nibble
-    int 0x10
-    pop bx
-    pop ax
-    ret
-.hex_nibble:
-    add al, '0'
-    cmp al, '9'
-    jbe .hex_ok
-    add al, 7                       ; 'A'-'9'-1
-.hex_ok:
-    ret
-
-.diag_continue:
 
     ; Install keyboard handler
     call install_keyboard
@@ -596,59 +529,85 @@ MOUSE_CMD_DISABLE   equ 0xF5        ; Disable data reporting
 MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 
 ; install_mouse - Initialize PS/2 mouse
+; Tries BIOS INT 15h/C2 services first (works with USB legacy emulation),
+; falls back to direct KBC port I/O for native PS/2 / QEMU.
 ; Output: CF=0 success, CF=1 no mouse detected
-; NOTE: Mouse init uses KBC port 0x64 I/O. All wait functions have timeouts
-; so this should not hang, but if it does on specific hardware, the .no_mouse
-; path restores the original KBC configuration.
 install_mouse:
     push ax
     push bx
     push cx
     push es
 
+    ; ===== Method 1: BIOS PS/2 mouse services (INT 15h/C2xx) =====
+    ; Works on any BIOS with PS/2 support — handles USB emulation transparently.
+    ; We don't touch KBC ports or PIC masks; the BIOS manages all of that.
+
+    ; Initialize pointing device interface (3-byte packets)
+    mov ax, 0xC205
+    mov bh, 3
+    int 0x15
+    jc .try_kbc                      ; BIOS PS/2 services not available
+
+    ; Set our callback handler (ES:BX = handler address)
+    mov ax, 0x1000
+    mov es, ax
+    mov bx, mouse_bios_callback
+    mov ax, 0xC207
+    int 0x15
+    jc .try_kbc
+
+    ; Enable pointing device
+    mov ax, 0xC200
+    mov bh, 1                        ; 1 = enable
+    int 0x15
+    jc .try_kbc
+
+    ; BIOS method succeeded
+    mov byte [mouse_diag], 'B'      ; B = BIOS method
+    jmp .init_success
+
+    ; ===== Method 2: Direct KBC port I/O (fallback) =====
+.try_kbc:
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
     mov es, ax
-    mov ax, [es:0x01D0]             ; INT 0x74 offset (0x74 * 4 = 0x1D0)
+    mov ax, [es:0x01D0]
     mov [old_int74_offset], ax
-    mov ax, [es:0x01D2]             ; INT 0x74 segment
+    mov ax, [es:0x01D2]
     mov [old_int74_segment], ax
 
-    ; Flush any stale data from KBC output buffer
-    mov cx, 16                       ; Max bytes to drain
+    ; Flush stale data from KBC output buffer
+    mov cx, 16
 .flush_kbc:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF
     jz .flush_done
-    in al, KBC_DATA                  ; Discard stale byte
+    in al, KBC_DATA
     loop .flush_kbc
 .flush_done:
 
-    ; Disable keyboard interface during mouse init to avoid interference
+    ; Disable keyboard during mouse init
     call kbc_wait_write
-    mov al, 0xAD                     ; Disable keyboard interface
+    mov al, 0xAD
     out KBC_CMD, al
 
-    ; Read controller configuration BEFORE any modifications
-    ; Save original config so we can restore on failure
+    ; Save original KBC config
     call kbc_wait_write
     mov al, KBC_CMD_READ_CFG
     out KBC_CMD, al
     call kbc_wait_read
     in al, KBC_DATA
-    mov [saved_kbc_config], al      ; Save ORIGINAL config
+    mov [saved_kbc_config], al
 
-    ; Enable auxiliary (mouse) interface
+    ; Enable auxiliary interface
     call kbc_wait_write
     mov al, KBC_CMD_ENABLE_AUX
     out KBC_CMD, al
 
-    ; Enable IRQ12 (bit 1) and auxiliary clock (clear bit 5)
+    ; Write config: enable IRQ12 (bit 1), enable aux clock (clear bit 5)
     mov bl, [saved_kbc_config]
-    or bl, 0x02                     ; Enable IRQ12
-    and bl, 0xDF                    ; Enable aux clock
-
-    ; Write updated configuration
+    or bl, 0x02
+    and bl, 0xDF
     call kbc_wait_write
     mov al, KBC_CMD_WRITE_CFG
     out KBC_CMD, al
@@ -656,7 +615,7 @@ install_mouse:
     mov al, bl
     out KBC_DATA, al
 
-    ; Flush again after config change — some KBCs echo data
+    ; Flush after config change
     mov cx, 16
 .flush_kbc2:
     in al, KBC_STATUS
@@ -666,102 +625,95 @@ install_mouse:
     loop .flush_kbc2
 .flush_done2:
 
-    ; Reset mouse (try up to 3 times — some KBCs need retries)
+    ; Reset mouse (retry up to 3 times)
     mov cl, 3
 .try_reset:
     mov al, MOUSE_CMD_RESET
     call mouse_send_cmd
-    cmp al, 0xFA                    ; ACK?
+    cmp al, 0xFA
     je .reset_ok
     dec cl
     jnz .try_reset
     jmp .fail_reset
 .reset_ok:
 
-    ; Wait for self-test result (0xAA) - takes 300-500ms on real hardware!
+    ; Wait for self-test (0xAA)
     call kbc_wait_read_long
-    in al, KBC_DATA                 ; Should be 0xAA
+    in al, KBC_DATA
     cmp al, 0xAA
     jne .fail_selftest
 
-    ; Wait for device ID (0x00) - comes quickly after self-test
+    ; Read device ID
     call kbc_wait_read_long
-    in al, KBC_DATA                 ; Should be 0x00 (standard mouse)
+    in al, KBC_DATA
 
-    ; Set defaults
+    ; Set defaults + enable data reporting
     mov al, MOUSE_CMD_DEFAULTS
     call mouse_send_cmd
-
-    ; Enable data reporting
     mov al, MOUSE_CMD_ENABLE
     call mouse_send_cmd
     cmp al, 0xFA
     jne .fail_enable
 
-    ; Install our interrupt handler
+    ; Install our IRQ12 handler
     cli
     xor ax, ax
     mov es, ax
     mov word [es:0x01D0], int_74_handler
-    mov word [es:0x01D2], 0x1000    ; Kernel segment
+    mov word [es:0x01D2], 0x1000
     sti
 
-    ; Enable IRQ12 in slave PIC (unmask)
-    in al, 0xA1                     ; Read slave PIC mask
-    and al, 0xEF                    ; Clear bit 4 (IRQ12)
+    ; Unmask IRQ12 on slave PIC and IRQ2 cascade on master PIC
+    in al, 0xA1
+    and al, 0xEF
     out 0xA1, al
-
-    ; Ensure IRQ2 (cascade) is unmasked on master PIC
-    ; Without this, no slave PIC interrupts (IRQ8-15) can fire
-    in al, 0x21                     ; Read master PIC mask
-    and al, 0xFB                    ; Clear bit 2 (IRQ2 cascade)
+    in al, 0x21
+    and al, 0xFB
     out 0x21, al
 
-    ; Initialize mouse state
-    mov word [mouse_x], 160
-    mov word [mouse_y], 100
-    mov byte [mouse_buttons], 0
-    mov byte [mouse_packet_idx], 0
-    mov byte [mouse_enabled], 1
-
-    ; Re-enable keyboard interface
+    ; Re-enable keyboard
     call kbc_wait_write
-    mov al, 0xAE                     ; Enable keyboard interface
+    mov al, 0xAE
     out KBC_CMD, al
 
-    clc
-    jmp .done
+    mov byte [mouse_diag], 'K'      ; K = KBC method
+    jmp .init_success
 
 .fail_reset:
-    mov byte [mouse_diag], 'R'     ; Reset ACK failed
+    mov byte [mouse_diag], 'R'
     jmp .no_mouse
 .fail_selftest:
-    mov byte [mouse_diag], 'S'     ; Self-test failed
+    mov byte [mouse_diag], 'S'
     jmp .no_mouse
 .fail_enable:
-    mov byte [mouse_diag], 'E'     ; Enable ACK failed
+    mov byte [mouse_diag], 'E'
 
 .no_mouse:
-    ; Restore original 8042 configuration (undo our modifications)
+    ; Restore original KBC config
     call kbc_wait_write
     mov al, KBC_CMD_WRITE_CFG
     out KBC_CMD, al
     call kbc_wait_write
     mov al, [saved_kbc_config]
     out KBC_DATA, al
-
-    ; Disable auxiliary interface (undo ENABLE_AUX)
     call kbc_wait_write
     mov al, KBC_CMD_DISABLE_AUX
     out KBC_CMD, al
-
-    ; Re-enable keyboard interface
     call kbc_wait_write
-    mov al, 0xAE                     ; Enable keyboard interface
+    mov al, 0xAE
     out KBC_CMD, al
 
     mov byte [mouse_enabled], 0
     stc
+    jmp .done
+
+.init_success:
+    mov word [mouse_x], 160
+    mov word [mouse_y], 100
+    mov byte [mouse_buttons], 0
+    mov byte [mouse_packet_idx], 0
+    mov byte [mouse_enabled], 1
+    clc
 
 .done:
     pop es
@@ -1003,6 +955,146 @@ int_74_handler:
     pop bx
     pop ax
     iret
+
+; BIOS PS/2 mouse callback handler
+; Called by BIOS via FAR CALL from its own IRQ12 handler.
+; The BIOS handles all KBC/USB/PIC details — we just process the packet.
+; Stack after push bp; mov bp, sp:
+;   [BP+0]  = saved BP
+;   [BP+2]  = return IP
+;   [BP+4]  = return CS
+;   Packet bytes pushed as words before the call (order varies by BIOS).
+;   We detect byte order by finding the status byte (bit 3 always set).
+mouse_bios_callback:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+    push es
+    push si
+    push di
+
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Read the 3 packet words from stack
+    ; Try [BP+6]=status, [BP+8]=X, [BP+10]=Y first (most common)
+    mov al, [bp+6]
+    test al, 0x08                   ; Status byte has bit 3 always set
+    jnz .bios_order_ok
+    ; Try reverse order: [BP+10]=status, [BP+8]=X, [BP+6]=Y
+    mov al, [bp+10]
+    test al, 0x08
+    jnz .bios_order_rev
+    ; Neither matches — bad packet, bail out
+    jmp .bios_cb_done
+
+.bios_order_rev:
+    ; Reversed: status=[BP+10], X=[BP+8], Y=[BP+6]
+    mov ah, al                      ; AH = status
+    mov bl, [bp+8]                  ; BL = X delta
+    mov cl, [bp+6]                  ; CL = Y delta
+    jmp .bios_process
+
+.bios_order_ok:
+    ; Standard: status=[BP+6], X=[BP+8], Y=[BP+10]
+    mov ah, al                      ; AH = status
+    mov bl, [bp+8]                  ; BL = X delta
+    mov cl, [bp+10]                 ; CL = Y delta
+
+.bios_process:
+    ; AH = status byte, BL = X delta, CL = Y delta
+    ; Extract buttons (bits 0-2 of status)
+    mov al, ah
+    and al, 0x07
+    mov [mouse_buttons], al
+
+    ; Check overflow — skip if set
+    test ah, 0xC0
+    jnz .bios_cb_done
+
+    ; Hide cursor before updating position
+    call mouse_cursor_hide
+
+    ; Apply X delta (sign-extend using bit 4 of status)
+    mov al, bl
+    test ah, 0x10                   ; X sign bit
+    jz .bios_x_pos
+    mov bh, 0xFF                    ; Negative
+    jmp .bios_apply_x
+.bios_x_pos:
+    xor bh, bh
+.bios_apply_x:
+    mov al, bl
+    mov ah, bh
+    add [mouse_x], ax
+
+    ; Clamp X to 0-319
+    cmp word [mouse_x], 0x8000
+    jb .bios_x_ok
+    mov word [mouse_x], 0
+    jmp .bios_do_y
+.bios_x_ok:
+    cmp word [mouse_x], 319
+    jbe .bios_do_y
+    mov word [mouse_x], 319
+
+.bios_do_y:
+    ; Reload status for Y sign check
+    mov ah, [bp+6]
+    test ah, 0x08
+    jnz .bios_y_status_ok
+    mov ah, [bp+10]                 ; Reversed order
+.bios_y_status_ok:
+
+    ; Apply Y delta (inverted, sign-extend using bit 5 of status)
+    mov al, cl
+    test ah, 0x20                   ; Y sign bit
+    jz .bios_y_pos
+    mov ch, 0xFF
+    jmp .bios_apply_y
+.bios_y_pos:
+    xor ch, ch
+.bios_apply_y:
+    mov al, cl
+    mov ah, ch
+    neg ax                          ; Invert for screen Y
+    add [mouse_y], ax
+
+    ; Clamp Y to 0-199
+    cmp word [mouse_y], 0x8000
+    jb .bios_y_ok
+    mov word [mouse_y], 0
+    jmp .bios_post
+.bios_y_ok:
+    cmp word [mouse_y], 199
+    jbe .bios_post
+    mov word [mouse_y], 199
+
+.bios_post:
+    call mouse_drag_update
+    call mouse_cursor_show
+
+    ; Post mouse event
+    xor dx, dx
+    mov dl, [mouse_buttons]
+    mov al, EVENT_MOUSE
+    call post_event
+
+.bios_cb_done:
+    pop di
+    pop si
+    pop es
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    retf                            ; Far return to BIOS IRQ handler
 
 ; mouse_get_state - Get current mouse state
 ; Input: None
@@ -2741,7 +2833,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1240 - ($ - $$) db 0
+times 0x1300 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
