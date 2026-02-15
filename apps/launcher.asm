@@ -64,40 +64,12 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; === DIAGNOSTIC: Direct CGA write to prove launcher is executing ===
+    ; === DIAGNOSTIC: mark 1 - launcher entry ===
     push es
     mov ax, 0xB800
     mov es, ax
-    ; Draw white block at top-left (mark 1: launcher entry reached)
     mov byte [es:0x0000], 0xFF
-    mov byte [es:0x2000], 0xFF     ; Odd row interlace
-    pop es
-
-    ; === DIAGNOSTIC: Test if INT 0x80 works from launcher context ===
-    mov ah, API_GET_BOOT_DRIVE     ; Simple API call (43)
-    int 0x80
-    ; If we reach here, INT 0x80 returned successfully
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    ; Draw white block at (8,0) (mark 2: INT 0x80 works)
-    mov byte [es:0x0002], 0xFF
-    mov byte [es:0x2002], 0xFF
-    pop es
-
-    ; === DIAGNOSTIC: Test fs_mount via INT 0x80 ===
-    mov ah, API_FS_MOUNT           ; Mount filesystem (13)
-    ; AL still has boot_drive from get_boot_drive
-    int 0x80
-    ; If we reach here, fs_mount returned
-    push es
-    push ax
-    mov ax, 0xB800
-    mov es, ax
-    ; Draw white block at (16,0) (mark 3: fs_mount returned)
-    mov byte [es:0x0004], 0xFF
-    mov byte [es:0x2004], 0xFF
-    pop ax
+    mov byte [es:0x2000], 0xFF
     pop es
 
     ; Initialize state
@@ -110,12 +82,12 @@ entry:
     ; Mount filesystem and scan for apps
     call scan_disk
 
-    ; === DIAGNOSTIC: mark 4 - scan_disk completed ===
+    ; === mark 6: scan_disk completed ===
     push es
     mov ax, 0xB800
     mov es, ax
-    mov byte [es:0x0006], 0xFF
-    mov byte [es:0x2006], 0xFF
+    mov byte [es:0x000A], 0xFF
+    mov byte [es:0x200A], 0xFF
     pop es
 
     ; Draw full desktop (background + title + version + icons)
@@ -286,9 +258,25 @@ scan_disk:
     mov word [cs:dir_state], 0
     mov word [cs:scan_safety], 0
 
+    ; === mark 2: fs_mount OK ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0x0002], 0xFF
+    mov byte [es:0x2002], 0xFF
+    pop es
+
     ; Clear all kernel desktop icons
     mov ah, API_DESKTOP_CLEAR
     int 0x80
+
+    ; === mark 3: desktop_clear OK ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0x0004], 0xFF
+    mov byte [es:0x2004], 0xFF
+    pop es
 
     mov byte [cs:icon_count], 0
 
@@ -302,6 +290,14 @@ scan_disk:
     cmp byte [cs:icon_count], MAX_ICONS
     jae .scan_done
 
+    ; === mark 4: about to call readdir ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0x0006], 0xFF
+    mov byte [es:0x2006], 0xFF
+    pop es
+
     ; Read next directory entry
     mov al, [cs:mount_handle]       ; Mount handle (0=FAT12, 1=FAT16)
     mov cx, [cs:dir_state]
@@ -311,6 +307,14 @@ scan_disk:
     mov ah, API_FS_READDIR
     int 0x80
     jc .scan_done
+
+    ; === mark 5: readdir returned OK ===
+    push es
+    mov ax, 0xB800
+    mov es, ax
+    mov byte [es:0x0008], 0xFF
+    mov byte [es:0x2008], 0xFF
+    pop es
 
     mov [cs:dir_state], cx
 
