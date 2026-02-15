@@ -53,6 +53,10 @@ entry:
     int 0x10
 
     ; Checkpoint 2: Initialize PS/2 mouse
+    mov ah, 0x0E
+    mov al, '>'
+    xor bx, bx
+    int 0x10
     call install_mouse
     mov ah, 0x0E
     mov al, '2'
@@ -525,6 +529,12 @@ install_mouse:
     push bx
     push es
 
+    ; DEBUG: confirm we entered install_mouse
+    mov ah, 0x0E
+    mov al, 'A'
+    xor bx, bx
+    int 0x10
+
     ; Skip mouse init entirely on HD/USB boot (drive >= 0x80)
     ; Port 0x64 I/O triggers BIOS SMI that can deadlock on USB systems
     ; Target hardware (PC XT, floppy boot) unaffected by this check
@@ -634,11 +644,23 @@ install_mouse:
     jmp .done
 
 .no_kbc:
+    ; DEBUG: confirm we reached .no_kbc
+    mov ah, 0x0E
+    mov al, 'B'
+    xor bx, bx
+    int 0x10
+
     ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
 .done:
+    ; DEBUG: confirm we reached .done
+    mov ah, 0x0E
+    mov al, 'C'
+    xor bx, bx
+    int 0x10
+
     pop es
     pop bx
     pop ax
