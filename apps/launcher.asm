@@ -340,6 +340,20 @@ scan_disk:
     jmp .scan_loop                  ; It's LAUNCHER, skip
 
 .not_launcher:
+    ; Skip KERNEL.BIN (not an app, would crash if launched)
+    mov si, dir_entry_buffer
+    mov di, kernel_name
+    mov cx, 8
+.cmp_kernel:
+    mov al, [cs:si]
+    cmp al, [cs:di]
+    jne .not_kernel
+    inc si
+    inc di
+    loop .cmp_kernel
+    jmp .scan_loop                  ; It's KERNEL, skip
+
+.not_kernel:
     ; Convert FAT name to dot format for app_info storage
     mov al, [cs:icon_count]
     call store_app_info
@@ -1254,8 +1268,9 @@ header_buffer:  times 80 db 0
 ; Directory entry buffer (32 bytes for fs_readdir)
 dir_entry_buffer: times 32 db 0
 
-; FAT name for skipping ourselves
+; FAT names for skipping non-app files
 launcher_name:  db 'LAUNCHER'
+kernel_name:    db 'KERNEL  '
 
 ; Default icon for apps without headers (simple square/app shape)
 ; White outline rectangle with inner dot
