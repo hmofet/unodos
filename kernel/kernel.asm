@@ -1318,11 +1318,21 @@ auto_load_launcher:
     ret                             ; Enters launcher via int80_return_point
 
 .fail_load:
-    ; app_load_stub failed — draw error on CGA screen
+    ; app_load_stub failed — draw error code (AX) on CGA screen
+    ; AX has the error code from app_load_stub
+    push ax                         ; Save error code
     mov word [caller_ds], 0x1000
     mov bx, 4
     mov cx, 30
     mov si, .err_load_msg
+    call gfx_draw_string_stub
+    pop ax                          ; Restore error code
+    ; Draw error code digit at (170, 30)
+    add al, '0'                     ; Convert 1-7 to ASCII digit
+    mov [.err_code_str], al
+    mov bx, 170
+    mov cx, 30
+    mov si, .err_code_str
     call gfx_draw_string_stub
     jmp .failed
 .fail_start:
@@ -1351,6 +1361,7 @@ auto_load_launcher:
 ; Local data
 .launcher_filename: db 'LAUNCHER.BIN', 0
 .err_load_msg:  db 'ERR: app_load failed', 0
+.err_code_str:  db '?', 0
 .err_start_msg: db 'ERR: app_start failed', 0
 .err_sched_msg: db 'ERR: scheduler failed', 0
 
@@ -5287,6 +5298,7 @@ fat16_readdir:
     pop di
     pop es
     pop ax                          ; Restore entry index
+    mov [.current_entry], ax        ; Save for .skip_entry path
     jc .read_error
 
     ; Calculate entry offset in sector: entry_idx * 32
@@ -5340,15 +5352,15 @@ fat16_readdir:
     pop ds
 
     ; Increment state and return success
-    pop ax                          ; Current entry index
+    mov ax, [.current_entry]        ; Load saved entry index
     inc ax                          ; Next entry
     mov cx, ax                      ; Return new state in CX
     clc                             ; Success - removed buggy push ax
     jmp .done
 
 .skip_entry:
-    ; Move to next entry
-    pop ax                          ; Current entry index
+    ; Move to next entry (load from saved variable, not stack)
+    mov ax, [.current_entry]
     inc ax                          ; Next entry
     jmp .scan_entries
 
@@ -5358,13 +5370,11 @@ fat16_readdir:
     jmp .done
 
 .end_of_dir:
-    pop ax                          ; Clean stack
     mov ax, FS_ERR_END_OF_DIR
     stc
     jmp .done
 
 .read_error:
-    pop ax                          ; Clean stack
     mov ax, FS_ERR_READ_ERROR
     stc
 
@@ -5376,8 +5386,9 @@ fat16_readdir:
     ret
 
 ; Local variables
-.sector_off:    dw 0
-.entry_idx:     dw 0
+.sector_off:      dw 0
+.entry_idx:       dw 0
+.current_entry:   dw 0
 
 ; ============================================================================
 ; IDE Direct Access Driver (fallback for INT 13h failures)
