@@ -985,25 +985,44 @@ mouse_bios_callback:
     ; Read packet from stack — DH holds status throughout (never clobbered)
     ; Convention A (SeaBIOS): [BP+6]=status, [BP+8]=X, [BP+10]=Y, [BP+12]=0
     ; Convention B (some BIOS): [BP+6]=Y, [BP+8]=X, [BP+10]=status, [BP+12]=0
-    ; Detect by checking bit 3 (always 1 in status byte)
-    mov dh, [bp+6]
-    test dh, 0x08
-    jnz .bios_conv_a
+    ; X is always at [BP+8]; status and Y swap between [BP+6] and [BP+10].
+    ;
+    ; Detection: lock in convention on first unambiguous packet (where only
+    ; one of [BP+6]/[BP+10] has bit 3 set). Skip ambiguous packets.
+    cmp byte [bios_mouse_conv], 0
+    je .bios_use_a
+    cmp byte [bios_mouse_conv], 1
+    je .bios_use_b
 
-    ; [BP+6] isn't status — try [BP+10]
-    mov dh, [bp+10]
-    test dh, 0x08
-    jz .bios_cb_done                ; Can't find status, bail
+    ; Convention unknown (0xFF) — detect from this packet
+    mov al, [bp+6]
+    mov ah, [bp+10]
+    test al, 0x08
+    jnz .bios_maybe_a
+    ; [BP+6] has bit 3 clear → NOT status → Convention B
+    test ah, 0x08
+    jz .bios_cb_done                ; Neither has bit 3?? bail
+    mov byte [bios_mouse_conv], 1
+    jmp .bios_use_b
 
-    ; Convention B: status=[BP+10], X=[BP+8], Y=[BP+6]
-    mov bl, [bp+8]
-    mov cl, [bp+6]
-    jmp .bios_got_packet
+.bios_maybe_a:
+    test ah, 0x08
+    jnz .bios_cb_done              ; Both have bit 3 — ambiguous, skip packet
+    ; [BP+10] has bit 3 clear → NOT status → Convention A
+    mov byte [bios_mouse_conv], 0
 
-.bios_conv_a:
+.bios_use_a:
     ; Convention A: status=[BP+6], X=[BP+8], Y=[BP+10]
+    mov dh, [bp+6]
     mov bl, [bp+8]
     mov cl, [bp+10]
+    jmp .bios_got_packet
+
+.bios_use_b:
+    ; Convention B: status=[BP+10], X=[BP+8], Y=[BP+6]
+    mov dh, [bp+10]
+    mov bl, [bp+8]
+    mov cl, [bp+6]
 
 .bios_got_packet:
     ; DH = status, BL = X delta, CL = Y delta (preserved throughout)
@@ -8082,7 +8101,8 @@ mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
-mouse_diag:         db '?'          ; Diagnostic: 'M'=OK, 'R'=reset, 'S'=selftest, 'E'=enable
+mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, R/S/E=failure
+bios_mouse_conv:    db 0xFF         ; BIOS callback convention: 0=A, 1=B, 0xFF=unknown
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
 
 ; Mouse cursor state
