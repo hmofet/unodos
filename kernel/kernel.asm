@@ -48,8 +48,8 @@ entry:
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
-    ; Skip mouse entirely — just disable it
-    mov byte [mouse_enabled], 0
+    ; Initialize mouse (skips KBC I/O on HD/USB boot for safety)
+    call install_mouse
 
     ; Install keyboard handler
     call install_keyboard
@@ -530,7 +530,8 @@ install_mouse:
     ; Skip mouse init entirely on HD/USB boot (drive >= 0x80)
     ; Port 0x64 I/O triggers BIOS SMI that can deadlock on USB systems
     ; Target hardware (PC XT, floppy boot) unaffected by this check
-    cmp byte [boot_drive], 0x80
+    ; Use cs: override in case DS was changed by a BIOS call
+    cmp byte [cs:boot_drive], 0x80
     jae .no_kbc
 
     ; Save original INT 0x74 (IRQ12) vector
@@ -4804,9 +4805,10 @@ fat16_open:
     push dx
     push si
     push di
+    push ds                         ; Save caller's DS (may be app segment)
 
-    ; Check if FAT16 is mounted
-    cmp byte [fat16_mounted], 1
+    ; Check if FAT16 is mounted (CS: because DS may be caller's segment)
+    cmp byte [cs:fat16_mounted], 1
     jne .not_mounted
 
     ; Convert filename to FAT 8.3 format (space-padded)
@@ -4869,6 +4871,11 @@ fat16_open:
     loop .copy_ext_loop
 
 .name_done:
+    ; Switch DS to kernel segment for root directory search
+    ; (Filename conversion used caller's DS:SI, but is now on stack via SS:DI)
+    mov ax, 0x1000
+    mov ds, ax
+
     ; Now search root directory for file
     ; Read root directory sectors
     mov eax, [fat16_root_start]
@@ -4994,6 +5001,7 @@ fat16_open:
     stc
 
 .done:
+    pop ds                          ; Restore caller's DS
     pop di
     pop si
     pop dx
