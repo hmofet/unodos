@@ -60,13 +60,8 @@ entry:
     xor bx, bx
     int 0x10
 
-    ; Initialize PS/2 mouse
-    call install_mouse
-    ; Debug: print 'R' for returned from install_mouse
-    mov al, 'R'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
+    ; Skip mouse entirely — just disable it
+    mov byte [mouse_enabled], 0
     mov al, '2'
     mov ah, 0x0E
     xor bx, bx
@@ -79,7 +74,7 @@ entry:
     xor bx, bx
     int 0x10
 
-    ; Print version before entering graphics mode
+    ; Print version
     mov al, ' '
     mov ah, 0x0E
     xor bx, bx
@@ -87,61 +82,39 @@ entry:
     mov si, version_string
     call print_string_bios
 
-    mov al, '4'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
+    ; Debug: halt before mode switch so user can read text
+    mov si, halt_msg
+    call print_string_bios
 
-    ; Print video mode diagnostic
+    ; Wait for keypress via BIOS INT 16h
+    xor ah, ah
+    int 0x16
+
+    ; Set CGA mode 4 (320x200 4-color)
     mov si, mode_test_msg
     call print_string_bios
 
-    mov al, '5'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
-
-    ; Set CGA mode 4 (320x200 4-color)
     xor ax, ax
     mov al, 0x04
     int 0x10
 
-    ; Check if mode 4 was actually set
-    mov ah, 0x0F                    ; Get current video mode
-    int 0x10                        ; Returns AL = current mode
-    push ax                         ; Save mode byte
+    ; Verify mode 4
+    mov ah, 0x0F
+    int 0x10
+    cmp al, 0x04
+    je .mode4_ok
 
-    ; Restore text mode to print result
-    push ax
+    ; Mode 4 failed — restore text, print error, halt
     xor ax, ax
     mov al, 0x03
     int 0x10
     mov ax, 0x1000
     mov ds, ax
-    pop ax
-
-    ; Print what mode was returned
-    mov si, mode_result_msg
-    call print_string_bios
-    pop ax                          ; Restore mode byte
-    call print_hex_byte_bios
-
-    ; Now check if mode 4 was actually set
-    cmp al, 0x04
-    je .mode4_ok
-
-    ; Mode 4 failed
     mov si, mode_fail_msg
     call print_string_bios
     jmp halt_loop
 
 .mode4_ok:
-    ; Mode 4 verified - now set it again (we restored text mode for debug)
-    xor ax, ax
-    mov al, 0x04
-    int 0x10
-
-    ; Continue with normal graphics init
     call setup_graphics_post_mode
 
     ; ========== PHASE 2: Graphics init complete ==========
@@ -590,16 +563,6 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 ; NOTE: On USB-booted systems, even a single `in al, 0x64` can hang forever
 ; due to BIOS SMI handler deadlock. Skip ALL KBC I/O on HD/USB boot.
 install_mouse:
-    ; Debug: print 'A' at entry
-    push ax
-    push bx
-    mov al, 'A'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
-    pop bx
-    pop ax
-
     push ax
     push bx
     push es
@@ -609,12 +572,6 @@ install_mouse:
     ; Target hardware (PC XT, floppy boot) unaffected by this check
     cmp byte [boot_drive], 0x80
     jae .no_kbc
-
-    ; Debug: print 'K' for KBC path taken
-    mov al, 'K'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
 
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
@@ -719,25 +676,11 @@ install_mouse:
     jmp .done
 
 .no_kbc:
-    ; Debug: print 'S' for skip path
-    mov al, 'S'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
-
     ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
 .done:
-    ; Debug: print 'X' before pops
-    pushf                   ; Save flags (CF from stc)
-    mov al, 'X'
-    mov ah, 0x0E
-    xor bx, bx
-    int 0x10
-    popf                    ; Restore flags
-
     pop es
     pop bx
     pop ax
@@ -1052,9 +995,10 @@ build_string   equ BUILD_NUMBER_STR
 
 ; Boot messages
 kernel_prefix:  db 'Kernel ', 0
-mode_test_msg:  db 13, 10, 'CGA4...', 0
-mode_result_msg: db 13, 10, 'Mode=0x', 0
-mode_fail_msg:  db ' FAIL!', 13, 10, 0
+halt_msg:       db 13, 10, 'Press key for CGA...', 0
+mode_test_msg:  db 13, 10, 'Setting CGA mode 4...', 0
+mode_fail_msg:  db 'ERROR: CGA mode 4 not supported!', 13, 10
+                db 'This hardware cannot run UnoDOS graphics.', 13, 10, 0
 
 ; Boot configuration
 boot_drive:         db 0                ; Boot drive number (0x00=floppy, 0x80=HDD)
@@ -1415,17 +1359,17 @@ auto_load_launcher:
     mov dl, [boot_drive]            ; Use saved boot drive number
     mov dh, 0x20                    ; Load to shell segment (0x2000)
     call app_load_stub
-    jc .failed
+    jc .fail_load
 
     ; Start launcher as a cooperative task (non-blocking)
     call app_start_stub
-    jc .failed
+    jc .fail_start
 
     ; Enter scheduler - switch to the launcher task
     mov byte [current_task], 0xFF   ; Kernel is not a task
     call scheduler_next             ; Find the launcher task
     cmp al, 0xFF
-    je .failed
+    je .fail_sched
 
     ; Initial context switch to first task
     mov [current_task], al
@@ -1446,6 +1390,28 @@ auto_load_launcher:
     sti
     ret                             ; Enters launcher via int80_return_point
 
+.fail_load:
+    ; app_load_stub failed — draw error on CGA screen
+    mov word [caller_ds], 0x1000
+    mov bx, 4
+    mov cx, 30
+    mov si, .err_load_msg
+    call gfx_draw_string_stub
+    jmp .failed
+.fail_start:
+    mov word [caller_ds], 0x1000
+    mov bx, 4
+    mov cx, 30
+    mov si, .err_start_msg
+    call gfx_draw_string_stub
+    jmp .failed
+.fail_sched:
+    mov word [caller_ds], 0x1000
+    mov bx, 4
+    mov cx, 30
+    mov si, .err_sched_msg
+    call gfx_draw_string_stub
+
 .failed:
     ; On any error, fall through to keyboard demo
     pop si
@@ -1457,6 +1423,9 @@ auto_load_launcher:
 
 ; Local data
 .launcher_filename: db 'LAUNCHER.BIN', 0
+.err_load_msg:  db 'ERR: app_load failed', 0
+.err_start_msg: db 'ERR: app_start failed', 0
+.err_sched_msg: db 'ERR: scheduler failed', 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
@@ -2710,7 +2679,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1200 - ($ - $$) db 0
+times 0x1280 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
