@@ -4542,26 +4542,22 @@ fat16_read_sector:
 
     ; Add partition start offset to get absolute LBA
     add eax, [fat16_partition_lba]
+    mov [.saved_lba], eax           ; Save for CHS fallback
 
-    ; Try INT 13h extended read first (LBA mode)
-    ; Build disk address packet on stack
-    push dword 0                    ; High 32 bits of LBA (0 for <2TB)
-    push eax                        ; Low 32 bits of LBA
-    push es                         ; Buffer segment
-    push bx                         ; Buffer offset
-    push word 1                     ; Number of sectors to read
-    push word 0x0010                ; Packet size (16 bytes)
-    mov si, sp                      ; DS:SI = packet address
+    ; Build DAP in static kernel buffer (NOT on stack — stack may be in app segment)
+    mov word [fat16_dap + 0], 0x0010    ; Packet size = 16
+    mov word [fat16_dap + 2], 1         ; Read 1 sector
+    mov [fat16_dap + 4], bx             ; Buffer offset
+    mov [fat16_dap + 6], es             ; Buffer segment
+    mov [fat16_dap + 8], eax            ; LBA low 32
+    mov dword [fat16_dap + 12], 0       ; LBA high 32
 
-    mov ah, 0x42                    ; Extended read
-    mov dl, [fat16_drive]           ; Drive number
-    push ds
-    push ss
-    pop ds                          ; DS:SI points to stack packet
+    ; Try INT 13h extended read (LBA mode)
+    mov si, fat16_dap               ; DS:SI = kernel-segment DAP (DS=0x1000 always)
+    mov ah, 0x42
+    mov dl, [fat16_drive]
     int 0x13
-    pop ds
-    add sp, 16                      ; Clean up stack packet
-    jnc .success                    ; If no error, we're done
+    jnc .success                    ; CF preserved — no stack cleanup needed
 
     ; Extended read failed - try CHS fallback
     ; First get drive geometry
@@ -4577,10 +4573,8 @@ fat16_read_sector:
     inc dh
     mov [ide_heads], dh             ; heads = max_head + 1
 
-    ; Convert LBA to CHS
-    ; Restore EAX (LBA)
-    mov eax, [esp + 16]             ; Get original EAX from stack
-    add eax, [fat16_partition_lba]  ; Add partition offset
+    ; Convert saved LBA to CHS
+    mov eax, [.saved_lba]
 
     ; Sector = (LBA mod sectors_per_track) + 1
     xor edx, edx
@@ -4623,6 +4617,8 @@ fat16_read_sector:
     pop bx
     pop eax
     ret
+
+.saved_lba: dd 0
 
 ; fat16_mount - Mount FAT16 partition from hard drive
 ; Input: DL = drive number (0x80 = first HD)
@@ -7963,6 +7959,9 @@ fat16_reserved:         db 0            ; Reserved for alignment
 ; FAT16 FAT cache
 fat16_fat_cache:        times 512 db 0  ; One sector FAT cache
 fat16_fat_cached_sect:  dd 0xFFFFFFFF   ; Currently cached FAT sector (0xFFFFFFFF = invalid)
+
+; Static Disk Address Packet for INT 13h extended read (must be in kernel segment)
+fat16_dap:              times 16 db 0
 
 ; Sector read buffer for FAT16 (used during mount/open)
 fat16_sector_buf:       times 512 db 0
