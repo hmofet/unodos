@@ -651,6 +651,12 @@ install_mouse:
     and al, 0xEF                    ; Clear bit 4 (IRQ12)
     out 0xA1, al
 
+    ; Ensure IRQ2 (cascade) is unmasked on master PIC
+    ; Without this, no slave PIC interrupts (IRQ8-15) can fire
+    in al, 0x21                     ; Read master PIC mask
+    and al, 0xFB                    ; Clear bit 2 (IRQ2 cascade)
+    out 0x21, al
+
     ; Initialize mouse state
     mov word [mouse_x], 160
     mov word [mouse_y], 100
