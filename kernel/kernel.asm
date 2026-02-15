@@ -45,51 +45,52 @@ entry:
     mov al, ' '
     int 0x10
 
-    ; Checkpoint 1: Install INT 0x80 handler
+    ; Install INT 0x80 handler for system calls
     call install_int_80
-    mov ah, 0x0E
-    mov al, '1'
-    xor bx, bx
-    int 0x10
 
-    ; Checkpoint 2: Initialize PS/2 mouse
-    mov ah, 0x0E
-    mov al, '>'
-    xor bx, bx
-    int 0x10
+    ; Initialize PS/2 mouse
     call install_mouse
-    mov ah, 0x0E
-    mov al, '2'
-    xor bx, bx
-    int 0x10
 
-    ; Checkpoint 3: Install keyboard handler
+    ; Install keyboard handler
     call install_keyboard
-    mov ah, 0x0E
-    mov al, '3'
-    xor bx, bx
-    int 0x10
 
-    ; Checkpoint 4: Set up graphics mode
-    call setup_graphics
-    mov ah, 0x0E
-    mov al, '4'
-    xor bx, bx
-    int 0x10
-
-    ; Print version
+    ; Print version before entering graphics mode
     mov al, ' '
     mov ah, 0x0E
+    xor bx, bx
     int 0x10
     mov si, version_string
     call print_string_bios
 
-    ; Newline
-    mov ah, 0x0E
-    mov al, 13
+    ; Print video mode diagnostic
+    mov si, mode_test_msg
+    call print_string_bios
+
+    ; Set CGA mode 4 (320x200 4-color)
+    xor ax, ax
+    mov al, 0x04
     int 0x10
-    mov al, 10
+
+    ; Check if mode 4 was actually set
+    mov ah, 0x0F                    ; Get current video mode
+    int 0x10                        ; Returns AL = current mode
+    cmp al, 0x04
+    je .mode4_ok
+
+    ; Mode 4 failed — stay in text mode, print error, halt
+    ; Restore text mode 3 to get a usable screen
+    xor ax, ax
+    mov al, 0x03
     int 0x10
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, mode_fail_msg
+    call print_string_bios
+    jmp halt_loop
+
+.mode4_ok:
+    ; Mode 4 set successfully — continue with normal graphics init
+    call setup_graphics_post_mode
 
     ; ========== PHASE 2: Graphics init complete ==========
 
@@ -529,12 +530,6 @@ install_mouse:
     push bx
     push es
 
-    ; DEBUG: confirm we entered install_mouse
-    mov ah, 0x0E
-    mov al, 'A'
-    xor bx, bx
-    int 0x10
-
     ; Skip mouse init entirely on HD/USB boot (drive >= 0x80)
     ; Port 0x64 I/O triggers BIOS SMI that can deadlock on USB systems
     ; Target hardware (PC XT, floppy boot) unaffected by this check
@@ -644,23 +639,11 @@ install_mouse:
     jmp .done
 
 .no_kbc:
-    ; DEBUG: confirm we reached .no_kbc
-    mov ah, 0x0E
-    mov al, 'B'
-    xor bx, bx
-    int 0x10
-
     ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
 .done:
-    ; DEBUG: confirm we reached .done
-    mov ah, 0x0E
-    mov al, 'C'
-    xor bx, bx
-    int 0x10
-
     pop es
     pop bx
     pop ax
@@ -975,6 +958,9 @@ build_string   equ BUILD_NUMBER_STR
 
 ; Boot messages
 kernel_prefix:  db 'Kernel ', 0
+mode_test_msg:  db 13, 10, 'Setting CGA mode 4...', 0
+mode_fail_msg:  db 'ERROR: CGA mode 4 not supported!', 13, 10
+                db 'This hardware cannot run UnoDOS graphics.', 13, 10, 0
 
 ; Boot configuration
 boot_drive:     db 0                    ; Boot drive number (0x00=floppy, 0x80=HDD)
@@ -1546,10 +1532,15 @@ scancode_shifted:
 ; Graphics Setup
 ; ============================================================================
 
+; setup_graphics - Set CGA mode 4 (called from old code paths, e.g. floppy boot)
 setup_graphics:
     xor ax, ax
     mov al, 0x04
     int 0x10
+    ; Fall through to post-mode setup
+
+; setup_graphics_post_mode - Clear screen and set palette (after mode already set)
+setup_graphics_post_mode:
     push es
     mov ax, 0xB800
     mov es, ax
@@ -1558,10 +1549,15 @@ setup_graphics:
     mov cx, 8192
     rep stosw
     pop es
-    mov ax, 0x0B01
-    mov bx, 0x0101
+    ; Select palette 1 (cyan/magenta/white)
+    mov ax, 0x0B00
+    mov bx, 0x0100                  ; BH=1 (select palette), BL=0 → palette 0? No...
+    mov bl, 0x01                    ; BL=1 = palette 1
     int 0x10
-    mov bh, 0
+    ; Set background/border color to blue (index 1)
+    mov ax, 0x0B00                  ; AH=0x0B (must set explicitly!)
+    xor bx, bx                     ; BH=0 (set background color)
+    mov bl, 0x01                    ; BL=1 (blue)
     int 0x10
     ret
 
@@ -2589,7 +2585,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1100 - ($ - $$) db 0
+times 0x1180 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
