@@ -665,7 +665,7 @@ install_mouse:
 ; Clobbers: AL
 kbc_wait_write:
     push cx
-    mov cx, 0x2000                  ; 8192 iterations (~33ms on real HW, fast on SMI)
+    mov cx, 0x0100                  ; 256 iterations (real KBC responds in <10)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_IBF           ; Input buffer full?
@@ -679,7 +679,7 @@ kbc_wait_write:
 ; Clobbers: AL
 kbc_wait_read:
     push cx
-    mov cx, 0x2000                  ; 8192 iterations (~33ms on real HW, fast on SMI)
+    mov cx, 0x0100                  ; 256 iterations (real KBC responds in <10)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF           ; Output buffer full?
@@ -703,7 +703,7 @@ kbc_wait_read_long:
     mov es, ax
     sti                             ; Ensure timer IRQ is firing
     mov cx, [es:0x006C]            ; Start tick
-    xor dx, dx                     ; Raw fallback counter (65536 iterations)
+    mov dx, 0x1000                 ; Raw fallback counter (4096 iterations)
 .wait:
     in al, KBC_STATUS
     test al, KBC_STAT_OBF
@@ -713,9 +713,8 @@ kbc_wait_read_long:
     sub ax, cx                      ; Elapsed ticks (wraps correctly)
     cmp ax, 20                      ; ~1.1 second timeout
     jae .ready
-    ; Raw counter fallback (prevents hang if BIOS timer not running)
-    ; Each I/O read takes ~1-4us, so 65536 iters = 65-260ms
-    inc dx
+    ; Raw counter fallback (fast bail on SMI-heavy systems)
+    dec dx
     jnz .wait
 .ready:
     pop ax
