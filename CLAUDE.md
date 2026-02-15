@@ -172,14 +172,36 @@ API functions that need app strings use these saved values:
 
 **Key insight**: Content save/restore operates on whole CGA bytes. When window position changes, the byte alignment can change, so `restore_drag_content` must calculate `new_bpr` (bytes per row) for the new position and use `min(saved_bpr, new_bpr)` to avoid writing past the window's right edge.
 
+## BIOS PS/2 Mouse Architecture (Build 192+)
+
+**Primary method**: BIOS INT 15h/C2xx services (works with USB legacy emulation)
+**Fallback**: Direct KBC port I/O (for BIOSes without INT 15h/C2 support)
+
+**BIOS callback stack layout** (verified via QEMU SeaBIOS raw dump `00 FB 0A 28`):
+```
+BIOS pushes: status, X, Y, 0, then CALL FAR handler
+After push bp / mov bp, sp:
+  [BP+6]  = 0 (padding)
+  [BP+8]  = Y delta (0-255, sign in status bit 5)
+  [BP+10] = X delta (0-255, sign in status bit 4)
+  [BP+12] = status byte (YO XO YS XS 1 M R L)
+```
+
+**Boot diagnostic**: Letter printed before CGA mode switch + keypress wait:
+- `B` = BIOS method succeeded
+- `K` = KBC direct method succeeded
+- `R` = Mouse reset failed
+- `S` = Mouse stream enable failed
+- `E` = No mouse detected
+
 ## Git Workflow
 
 **Pre-built binaries are committed**: Unlike typical projects, build/*.img and build/*.bin files are checked into git so Windows users can pull and write directly.
 
 **Always commit all images and binaries**:
 ```bash
-git add BUILD_NUMBER apps/*.asm kernel/kernel.asm \
-  build/unodos-144.img build/launcher-floppy.img \
+git add BUILD_NUMBER kernel/kernel.asm apps/*.asm \
+  build/unodos-144.img build/launcher-floppy.img build/unodos-hd.img \
   build/*.bin
 git commit -m "Description (Build XXX)"
 git push
@@ -187,6 +209,6 @@ git push
 
 ---
 
-**Last Updated**: 2026-02-14
-**Current Version**: v3.16.0
-**Current Build**: 161
+**Last Updated**: 2026-02-15
+**Current Version**: v3.17.0
+**Current Build**: 193

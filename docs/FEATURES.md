@@ -15,7 +15,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## Completed Features (v3.16.0 Build 161)
+## Completed Features (v3.17.0 Build 193)
 
 ### Boot System
 - [x] Three-stage boot loader (boot sector + stage2 + kernel)
@@ -77,10 +77,13 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 - [x] Mouse integration (posts MOUSE events)
 
 ### PS/2 Mouse Driver
-- [x] INT 0x74 (IRQ12) mouse interrupt handler
-- [x] 8042 keyboard controller interface (ports 0x60/0x64)
-- [x] 3-byte packet protocol parsing
-- [x] Automatic mouse detection at boot
+- [x] Dual-mode: BIOS INT 15h/C2xx services (primary) + direct KBC (fallback)
+- [x] USB mouse support via BIOS legacy emulation (SMI-based)
+- [x] BIOS callback handler (FAR CALL from BIOS IRQ12 handler)
+- [x] Direct KBC fallback: INT 0x74 (IRQ12), 8042 ports 0x60/0x64
+- [x] Robust init: KBC flush, keyboard disable, 3x retry, long ACK timeout
+- [x] 3-byte packet protocol parsing with sign extension
+- [x] Automatic mouse detection at boot (diagnostic: B/K/R/S/E)
 - [x] Position tracking (0-319 X, 0-199 Y)
 - [x] Button state tracking (left, right, middle)
 - [x] XOR sprite cursor (8x10 arrow, self-erasing)
@@ -163,7 +166,7 @@ This document outlines the feature status and roadmap for UnoDOS 3, designed for
 
 ---
 
-## API Table Summary (v3.16.0 Build 161)
+## API Table Summary (v3.17.0 Build 193)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -345,7 +348,7 @@ entry:
 
 ---
 
-## Memory Layout (v3.16.0 Build 161)
+## Memory Layout (v3.17.0 Build 193)
 
 ```
 0x0000:0x0000   Interrupt Vector Table        1 KB
@@ -385,6 +388,7 @@ entry:
 ### Hardware Support
 - [x] PC Speaker sound (tone generation + music playback)
 - [x] Hard drive / CF card / USB boot (MBR + FAT16)
+- [x] USB mouse support (via BIOS PS/2 legacy emulation)
 - [ ] Serial mouse driver (Microsoft compatible)
 
 ### Future Enhancements
@@ -441,4 +445,4 @@ The following are explicitly out of scope for UnoDOS 3:
 
 ---
 
-*Document version: 8.0 (2026-02-14) - Updated for v3.16.0 Build 161*
+*Document version: 9.0 (2026-02-15) - Updated for v3.17.0 Build 193*

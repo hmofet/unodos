@@ -5,6 +5,48 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.17.0] - 2026-02-15
+
+### Added (Builds 162-193) - Universal PS/2 Mouse via BIOS Services
+
+- **BIOS PS/2 Mouse Driver** (Build 187+)
+  - Uses BIOS INT 15h/C2xx services instead of direct KBC port I/O
+  - INT 15h/C205 (init), C207 (set callback), C200 (enable)
+  - Works with USB mice via BIOS legacy emulation (SMI-based)
+  - FAR CALL callback handler (`mouse_bios_callback`) processes packets from BIOS
+  - Falls back to direct KBC method if BIOS services unavailable
+
+- **Robust KBC Mouse Init** (Build 185)
+  - KBC output buffer flush (16-byte drain loop) before init
+  - Keyboard interface disabled (0xAD) during mouse setup
+  - Long timeout for ACK wait (~1 second via BIOS timer tick)
+  - Mouse reset retried up to 3 times
+  - Keyboard re-enabled (0xAE) on both success and failure
+
+- **Boot Diagnostic** (Build 184+)
+  - Mouse init result displayed at boot: B=BIOS, K=KBC, R/S/E=failure
+  - Keypress wait after diagnostic for hardware verification
+
+### Fixed (Builds 162-193)
+
+- **USB Legacy Emulation Conflict** (Build 187): BIOS SMI handler was overriding
+  direct KBC port writes, re-masking IRQ12 and disabling aux clock. Solved by
+  switching to BIOS INT 15h/C2 services which work *with* the SMI handler.
+- **BIOS Callback AH Corruption** (Build 188): `mov ah, bh` in X sign-extend
+  overwrote the status byte stored in AH, breaking Y sign extension.
+- **Callback Byte Order** (Build 192): Discovered via QEMU raw stack dump that
+  BIOS pushes status,X,Y,0 before CALL FAR, making [BP+12]=status, [BP+10]=X,
+  [BP+8]=Y, [BP+6]=padding. All previous convention assumptions were wrong.
+- IRQ2 cascade unmask added for IRQ12 propagation (Build 186)
+- Removed fragile auto-detection of callback byte conventions (Build 192)
+
+### Changed
+
+- Mouse driver architecture: BIOS services primary, direct KBC fallback
+- Kernel alignment pad bumped (0x11A0 → 0x13A0) for new mouse init code
+
+---
+
 ## [3.16.0] - 2026-02-14
 
 ### Added (Build 161) - Hard Drive Boot Support
