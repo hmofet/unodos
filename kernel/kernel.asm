@@ -983,13 +983,30 @@ mouse_bios_callback:
     mov ds, ax
 
     ; Read packet from stack — DH holds status throughout (never clobbered)
-    mov dh, [bp+6]                  ; DH = status byte
-    mov bl, [bp+8]                  ; BL = X delta
-    mov cl, [bp+10]                 ; CL = Y delta
-
-    ; Verify sync bit (bit 3 must be 1 in status byte)
+    ; Convention A (SeaBIOS): [BP+6]=status, [BP+8]=X, [BP+10]=Y, [BP+12]=0
+    ; Convention B (some BIOS): [BP+6]=Y, [BP+8]=X, [BP+10]=status, [BP+12]=0
+    ; Detect by checking bit 3 (always 1 in status byte)
+    mov dh, [bp+6]
     test dh, 0x08
-    jz .bios_cb_done
+    jnz .bios_conv_a
+
+    ; [BP+6] isn't status — try [BP+10]
+    mov dh, [bp+10]
+    test dh, 0x08
+    jz .bios_cb_done                ; Can't find status, bail
+
+    ; Convention B: status=[BP+10], X=[BP+8], Y=[BP+6]
+    mov bl, [bp+8]
+    mov cl, [bp+6]
+    jmp .bios_got_packet
+
+.bios_conv_a:
+    ; Convention A: status=[BP+6], X=[BP+8], Y=[BP+10]
+    mov bl, [bp+8]
+    mov cl, [bp+10]
+
+.bios_got_packet:
+    ; DH = status, BL = X delta, CL = Y delta (preserved throughout)
 
     ; Extract buttons (bits 0-2 of status)
     mov al, dh
