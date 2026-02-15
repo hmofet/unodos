@@ -62,6 +62,11 @@ entry:
 
     ; Initialize PS/2 mouse
     call install_mouse
+    ; Debug: print 'R' for returned from install_mouse
+    mov al, 'R'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
     mov al, '2'
     mov ah, 0x0E
     xor bx, bx
@@ -585,6 +590,16 @@ MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 ; NOTE: On USB-booted systems, even a single `in al, 0x64` can hang forever
 ; due to BIOS SMI handler deadlock. Skip ALL KBC I/O on HD/USB boot.
 install_mouse:
+    ; Debug: print 'A' at entry
+    push ax
+    push bx
+    mov al, 'A'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    pop bx
+    pop ax
+
     push ax
     push bx
     push es
@@ -594,6 +609,12 @@ install_mouse:
     ; Target hardware (PC XT, floppy boot) unaffected by this check
     cmp byte [boot_drive], 0x80
     jae .no_kbc
+
+    ; Debug: print 'K' for KBC path taken
+    mov al, 'K'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
 
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
@@ -698,11 +719,25 @@ install_mouse:
     jmp .done
 
 .no_kbc:
+    ; Debug: print 'S' for skip path
+    mov al, 'S'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+
     ; No working KBC or BIOS timer — skip ALL I/O, just disable mouse
     mov byte [mouse_enabled], 0
     stc
 
 .done:
+    ; Debug: print 'X' before pops
+    pushf                   ; Save flags (CF from stc)
+    mov al, 'X'
+    mov ah, 0x0E
+    xor bx, bx
+    int 0x10
+    popf                    ; Restore flags
+
     pop es
     pop bx
     pop ax
@@ -2675,7 +2710,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1180 - ($ - $$) db 0
+times 0x1200 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
