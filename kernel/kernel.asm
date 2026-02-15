@@ -4544,26 +4544,39 @@ fat16_read_sector:
     add eax, [fat16_partition_lba]
     mov [.saved_lba], eax           ; Save for CHS fallback
 
-    ; Build DAP in static kernel buffer (NOT on stack — stack may be in app segment)
-    mov word [fat16_dap + 0], 0x0010    ; Packet size = 16
-    mov word [fat16_dap + 2], 1         ; Read 1 sector
-    mov [fat16_dap + 4], bx             ; Buffer offset
-    mov [fat16_dap + 6], es             ; Buffer segment
-    mov [fat16_dap + 8], eax            ; LBA low 32
-    mov dword [fat16_dap + 12], 0       ; LBA high 32
+    ; Build DAP at 0x0000:0x0600 (low memory — USB BIOSes require DAP below 64KB)
+    push es
+    mov cx, es                      ; CX = caller's buffer segment
+    xor si, si
+    mov es, si                      ; ES = 0x0000
+    mov word [es:0x0600], 0x0010    ; Packet size = 16
+    mov word [es:0x0602], 1         ; Read 1 sector
+    mov [es:0x0604], bx             ; Buffer offset
+    mov [es:0x0606], cx             ; Buffer segment (from caller's ES)
+    mov [es:0x0608], eax            ; LBA low 32
+    mov dword [es:0x060C], 0        ; LBA high 32
+    pop es                          ; Restore caller's ES
 
-    ; Try INT 13h extended read (LBA mode)
-    mov si, fat16_dap               ; DS:SI = kernel-segment DAP (DS=0x1000 always)
+    ; Try INT 13h extended read (LBA mode) with DS:SI = 0x0000:0x0600
+    mov dl, [fat16_drive]           ; Drive number (DS=0x1000 still)
+    push ds
+    xor si, si
+    mov ds, si                      ; DS = 0x0000
+    mov si, 0x0600                  ; DS:SI = 0x0000:0x0600
     mov ah, 0x42
-    mov dl, [fat16_drive]
     int 0x13
-    jnc .success                    ; CF preserved — no stack cleanup needed
+    pop ds                          ; Restore DS = 0x1000 (pop doesn't affect CF)
+    jnc .success
 
     ; Extended read failed - try CHS fallback
-    ; First get drive geometry
+    ; First get drive geometry (INT 0x13/08 destroys ES, so save it)
+    push es
+    push bx
     mov ah, 0x08                    ; Get drive parameters
     mov dl, [fat16_drive]
     int 0x13
+    pop bx                          ; Restore caller's BX
+    pop es                          ; Restore caller's ES
     jc .error
 
     ; DH = max head number, CL[5:0] = max sector, CL[7:6]:CH = max cylinder
@@ -7960,8 +7973,6 @@ fat16_reserved:         db 0            ; Reserved for alignment
 fat16_fat_cache:        times 512 db 0  ; One sector FAT cache
 fat16_fat_cached_sect:  dd 0xFFFFFFFF   ; Currently cached FAT sector (0xFFFFFFFF = invalid)
 
-; Static Disk Address Packet for INT 13h extended read (must be in kernel segment)
-fat16_dap:              times 16 db 0
 
 ; Sector read buffer for FAT16 (used during mount/open)
 fat16_sector_buf:       times 512 db 0
