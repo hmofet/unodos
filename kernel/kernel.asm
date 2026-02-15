@@ -51,22 +51,82 @@ entry:
     ; Initialize mouse
     call install_mouse
 
-    ; Show mouse init result (text mode, before CGA switch)
-    ; Prints: 'M' if OK, or failure code: 'R'=reset, 'S'=selftest, 'E'=enable
+    ; Show mouse init result and hardware state
+    ; Format: "M PIC:xx/xx KBC:xx" or "R" / "S" / "E"
     mov ah, 0x0E
     xor bx, bx
     cmp byte [mouse_enabled], 1
     jne .print_mouse_fail
     mov al, 'M'
     int 0x10
+
+    ; Print PIC masks and KBC config for diagnosis
+    mov al, ' '
+    int 0x10
+    ; Master PIC mask (bit 2 = IRQ2 cascade, should be 0)
+    in al, 0x21
+    mov cl, al
+    mov al, 'P'
+    int 0x10
+    mov al, cl
+    call .print_hex_byte
+    mov al, '/'
+    int 0x10
+    ; Slave PIC mask (bit 4 = IRQ12, should be 0)
+    in al, 0xA1
+    call .print_hex_byte
+    mov al, ' '
+    int 0x10
+    ; Read KBC config byte (bit 1 = IRQ12 enable, bit 5 = aux clock disable)
+    call kbc_wait_write
+    mov al, KBC_CMD_READ_CFG
+    out KBC_CMD, al
+    call kbc_wait_read
+    in al, KBC_DATA
+    mov cl, al
+    mov al, 'K'
+    int 0x10
+    mov al, cl
+    call .print_hex_byte
+
     jmp .mouse_diag_done
+
 .print_mouse_fail:
     mov al, [mouse_diag]
     int 0x10
+
 .mouse_diag_done:
     ; Wait for keypress so user can read diagnostic
     xor ax, ax
     int 0x16                        ; BIOS wait for key
+    jmp .diag_continue
+
+; Helper: print AL as 2-digit hex via BIOS teletype
+.print_hex_byte:
+    push ax
+    push bx
+    xor bx, bx
+    mov ah, 0x0E
+    push ax
+    shr al, 4
+    call .hex_nibble
+    int 0x10
+    pop ax
+    and al, 0x0F
+    call .hex_nibble
+    int 0x10
+    pop bx
+    pop ax
+    ret
+.hex_nibble:
+    add al, '0'
+    cmp al, '9'
+    jbe .hex_ok
+    add al, 7                       ; 'A'-'9'-1
+.hex_ok:
+    ret
+
+.diag_continue:
 
     ; Install keyboard handler
     call install_keyboard
@@ -2681,7 +2741,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x11E0 - ($ - $$) db 0
+times 0x1240 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
