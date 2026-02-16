@@ -30,27 +30,29 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **IBM PS/2 L40** (386SX, B&W display, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.18.0 Build 196)
+## Current Features (v3.18.0)
 
 - **Boots from floppy disk, hard drive, CF card, or USB flash drive**
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
 - Separate 28KB kernel loaded at 64KB mark
 - CGA 320x200 4-color graphics mode
-- Custom bitmap fonts (8x8 for titles, 4x6 for small text)
-- System call infrastructure (INT 0x80 + API table with 44 functions)
+- Three bitmap fonts (4x6, 8x8, 8x12) with runtime selection
+- System call infrastructure (INT 0x80 + API table with 56 functions)
 - Graphics API (pixel, rectangle, character, string, text measurement, icons)
 - Memory allocator (malloc/free)
 - Keyboard driver (INT 09h with scan code translation)
 - PS/2 Mouse driver (BIOS services + KBC fallback) with visible XOR cursor, USB mouse support
 - Event system (32-event circular queue, per-task filtering)
-- FAT12 filesystem (floppy) and FAT16 filesystem (hard drive) — read-only
+- FAT12 filesystem (floppy) and FAT16 filesystem (hard drive) with read/write support
 - Application Loader with dynamic segment allocation
 - **Cooperative multitasking** - up to 6 concurrent user apps + launcher
 - **Window Manager** with close button, outline drag, z-order management (16 windows max)
 - **Active/inactive title bars** - visual distinction for foreground window
 - **Window Drawing Context** (apps use window-relative coordinates)
 - **PC Speaker sound** - tone generation API + Fur Elise music player app
+- **GUI Toolkit** - button/radio widgets, hit testing, word wrap, color themes
 - **Desktop Launcher** with icon grid, double-click launch, auto boot media detection
+- **8 applications** - launcher, clock, file browser, mouse test, music player, boot creator, settings
 
 ## Building
 
@@ -116,7 +118,7 @@ sudo dd if=build/unodos-144.img of=/dev/fd0 bs=512
 3. Boot from boot floppy (verify Build number on screen)
 4. Press **L** key to load launcher
 5. When prompted, swap to launcher floppy
-6. Launcher shows apps: CLOCK, TEST, BROWSER, MOUSE, MUSIC
+6. Launcher shows apps with icons
 7. Navigate with W/S keys, press Enter to launch
 8. ESC returns to launcher
 9. Mouse cursor visible; drag windows by title bar
@@ -131,14 +133,20 @@ unodos/
 │   ├── launcher.asm    # Desktop launcher
 │   ├── browser.asm     # File browser
 │   ├── mouse_test.asm  # PS/2 mouse test application
-│   └── music.asm       # Fur Elise music player
+│   ├── music.asm       # Fur Elise music player
+│   ├── mkboot.asm      # Boot floppy creator
+│   └── settings.asm    # System settings
 ├── boot/
 │   ├── boot.asm        # First stage boot loader (512 bytes)
-│   └── stage2.asm      # Second stage loader (2KB)
+│   ├── stage2.asm      # Second stage loader (2KB)
+│   ├── mbr.asm         # Master Boot Record (HDD/USB)
+│   ├── vbr.asm         # Volume Boot Record (HDD/USB)
+│   └── stage2_hd.asm   # HDD stage 2 loader
 ├── kernel/
 │   ├── kernel.asm      # Main OS kernel (28KB)
+│   ├── font4x6.asm     # 4x6 small font data
 │   ├── font8x8.asm     # 8x8 bitmap font data
-│   └── font4x6.asm     # 4x6 small font data
+│   └── font8x12.asm    # 8x12 large font data
 ├── build/
 │   ├── *.bin            # Compiled binaries
 │   ├── unodos-144.img   # 1.44MB boot floppy image (FAT12)
@@ -150,15 +158,17 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
+├── LICENSE              # CC BY-NC 4.0
 ├── VERSION              # Version string (3.18.0)
-└── BUILD_NUMBER         # Build number (193)
+└── BUILD_NUMBER         # Build counter
 ```
 
 ## Documentation
 
+- [APP_DEVELOPMENT.md](docs/APP_DEVELOPMENT.md) - How to write applications for UnoDOS
+- [API_REFERENCE.md](docs/API_REFERENCE.md) - Complete API reference (all 56 system calls)
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Boot process and system architecture
-- [FEATURES.md](docs/FEATURES.md) - Features roadmap and API reference
-- [WINDOW_MANAGER_PLAN.md](docs/WINDOW_MANAGER_PLAN.md) - Window manager design
+- [FEATURES.md](docs/FEATURES.md) - Features and API summary
 - [MEMORY_LAYOUT.md](docs/MEMORY_LAYOUT.md) - Memory layout analysis
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes
 
@@ -172,7 +182,7 @@ unodos/
 - [x] PS/2 Mouse driver (BIOS INT 15h/C2 + KBC fallback) with XOR cursor
 - [x] Event system (32-event circular queue)
 - [x] FAT12 filesystem (floppy, read-only)
-- [x] FAT16 filesystem (hard drive, read-only)
+- [x] FAT16 filesystem (hard drive, read/write)
 
 ### Completed (Core Services)
 - [x] Application loader with dynamic segment allocation
@@ -184,15 +194,20 @@ unodos/
 - [x] Mouse cursor (XOR sprite, title bar hit testing, drag state machine, USB mouse via BIOS)
 - [x] Desktop icons (16x16 2bpp CGA, auto-detected from BIN headers)
 - [x] PC Speaker sound (tone generation + silence APIs)
-- [x] Hard drive boot (MBR → VBR → Stage2_hd, FAT16 partition)
+- [x] Hard drive boot (MBR -> VBR -> Stage2_hd, FAT16 partition)
+- [x] GUI toolkit (buttons, radio buttons, hit testing, word wrap)
+- [x] Multi-font support (4x6, 8x8, 8x12) with runtime selection
+- [x] Color theme system
 
 ### Completed (Applications)
-- [x] LAUNCHER.BIN - Desktop launcher with icon grid (2922 bytes)
-- [x] CLOCK.BIN - Real-time clock display (330 bytes)
-- [x] TEST.BIN - Hello World window (251 bytes)
-- [x] BROWSER.BIN - File browser with file sizes (569 bytes)
-- [x] MOUSE.BIN - Mouse test/demo (745 bytes)
-- [x] MUSIC.BIN - Fur Elise music player (649 bytes)
+- [x] LAUNCHER.BIN - Desktop launcher with icon grid
+- [x] CLOCK.BIN - Real-time clock display
+- [x] TEST.BIN - Hello World window
+- [x] BROWSER.BIN - File browser with file sizes
+- [x] MOUSE.BIN - Mouse test/demo
+- [x] MUSIC.BIN - Fur Elise music player
+- [x] MKBOOT.BIN - Boot floppy creator (floppy-to-floppy copy)
+- [x] SETTINGS.BIN - System settings (theme colors)
 
 ### Planned (Future)
 - [ ] Text editor
@@ -203,7 +218,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.18.0** (Build 196)
+Current version: **3.18.0**
 
 ## License
 

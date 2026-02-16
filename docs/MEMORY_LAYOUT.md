@@ -1,6 +1,6 @@
-# UnoDOS Memory Layout Analysis
+# UnoDOS Memory Layout
 
-## Physical Memory Map (Real Mode, 640KB System)
+## Physical Memory Map (Real Mode, 640KB)
 
 ```
 Address Range          Size    Usage
@@ -11,8 +11,8 @@ Address Range          Size    Usage
 0x0000:0x7C00          512 B   Boot Sector (loaded by BIOS)
 0x0000:0x7E00          ~1 KB   FREE (after boot sector)
 0x0800:0x0000          2 KB    Stage2 Bootloader
-0x1000:0x0000          28 KB   Kernel (v3.16.0)
-  0x1000:0x1100        ~128 B    ↳ API Table (44 functions)
+0x1000:0x0000          28 KB   Kernel
+  0x1000:0x13A0        ~224 B    API dispatch table (56 functions)
 0x1400:0x0000          ~64 KB  Heap (malloc pool)
 0x2000:0x0000          64 KB   Shell/Launcher segment (fixed)
 0x3000:0x0000          64 KB   User app slot 0 (dynamic pool)
@@ -51,7 +51,7 @@ Offset    Content
           - Mouse cursor (XOR sprite, hide/show, drag state)
           - Content preservation (save/restore scratch buffer)
           - Segment pool (alloc_segment, free_segment)
-0x1100    API table (header + 44 function pointers)
+0x1100    API table (header + 56 function pointers)
 ~0x1084   Font data (8x8 + 4x6)
 ~0x1500   Data section (window_table, app_table, segment_pool, variables)
 ~0x6FFF   End of 28KB kernel (padded)
@@ -63,9 +63,9 @@ Offset    Content
 Offset  Size  Content
 0x00    2     Magic: 0x4B41 ('KA')
 0x02    2     Version: 0x0100 (1.0)
-0x04    2     Function count: 44
+0x04    2     Function count: 56
 0x06    2     Reserved
-0x08    88    Function pointers (44 × 2 bytes)
+0x08    112   Function pointers (56 × 2 bytes)
 ```
 
 ---
@@ -114,7 +114,7 @@ Used for OS-managed content preservation during window drags:
 
 ---
 
-## Current Memory Usage (Build 161)
+## Current Memory Usage
 
 | Region | Size | Usage | Notes |
 |--------|------|-------|-------|
@@ -129,6 +129,4 @@ Used for OS-managed content preservation during window drags:
 
 ---
 
-*Document created: 2026-01-23*
-*Last updated: 2026-02-14*
-*UnoDOS v3.16.0 Build 161*
+*v3.18.0 Build 207*
