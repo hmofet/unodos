@@ -73,7 +73,7 @@ This document contains important instructions for AI assistants working on UnoDO
     int 0x80
 ```
 
-**Why**: The INT 0x80 handler auto-translates BX/CX for drawing APIs 0-6 when a draw context is active. This means apps don't need absolute screen coordinates and content is preserved correctly during window drags.
+**Why**: The INT 0x80 handler auto-translates BX/CX for drawing APIs 0-6 AND 50-52 (widget APIs) when a draw context is active. This means apps don't need absolute screen coordinates and content is preserved correctly during window drags.
 
 **Window dragging**: Outline drag (XOR rectangle) — window moves on mouse release. Apps receive WIN_REDRAW to repaint content. Background window draws are silently blocked; apps repaint on focus.
 
@@ -164,6 +164,7 @@ API functions that need app strings use these saved values:
 - `gfx_draw_string_stub` (function 4) uses `caller_ds` for string access
 - `gfx_draw_string_inverted` (function 6) uses `caller_ds` for string access
 - `gfx_text_width` (function 33) uses `caller_ds` for string access
+- `gfx_draw_string_wrap` (function 50) uses `caller_ds` for string access
 - `win_create_stub` uses `caller_es` for window title
 
 ## CGA Byte Alignment
@@ -207,8 +208,58 @@ git commit -m "Description (Build XXX)"
 git push
 ```
 
+## FAT12 Write Support (Build 201+)
+
+**APIs for writing files to FAT12 floppies**:
+- `fs_write_sector_stub` (API 44) — Write raw sector to disk
+- `fs_create_stub` (API 45) — Create new file (BL=mount handle, SI=filename)
+- `fs_write_stub` (API 46) — Write to open file (AL=handle, ES:BX=data, CX=size)
+- `fs_delete_stub` (API 47) — Delete file (BL=mount handle, SI=filename)
+
+**Mount handle routing**: All filesystem stubs route by mount handle byte (BL):
+- `BL=0` → FAT12 (floppy)
+- `BL=1` → FAT16 (hard drive)
+- Always compare BL (byte), never BX (word) — dirty BH causes silent failures.
+
+## GUI Toolkit (Build 205+)
+
+**Multi-font system** with 3 built-in fonts:
+- Font 0: 4x6 small font
+- Font 1: 8x8 medium font (default)
+- Font 2: 8x14 large font
+
+**APIs**:
+- `gfx_set_font` (API 48) — Set current font (AL=index 0-2)
+- `gfx_get_font_metrics` (API 49) — Get font metrics (returns char width/height)
+- `gfx_draw_string_wrap` (API 50) — Draw string with word wrap
+- `widget_draw_button` (API 51) — Draw button with label and clip bounds
+- `widget_draw_radio` (API 52) — Draw radio button
+- `widget_hit_test` (API 53) — Hit test rectangle (BX,CX=point, DX,SI=rect)
+- `theme_set_colors` (API 54) — Set theme colors (AL=text, BL=bg, CL=win)
+- `theme_get_colors` (API 55) — Get current theme colors
+
+**Coordinate translation**: APIs 50-52 are auto-translated by draw_context (like APIs 0-6).
+
+## Settings Persistence (Build 210+)
+
+**SETTINGS.CFG** on boot floppy: 5-byte file (magic 0xA5 + font + text_color + bg_color + win_color).
+- Kernel `load_settings` reads at boot (after filesystem mount, before launcher start)
+- Settings app saves via FAT12 write APIs on Apply/OK
+
+## Cursor Protection for Drawing APIs
+
+**All drawing APIs (0-6, 51) must hide the mouse cursor** before drawing and restore after. The pattern:
+```asm
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    ; ... drawing code ...
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+```
+Without this, IRQ12 can XOR the cursor over drawing pixels between API calls, causing progressive corruption of window frames and UI elements.
+
 ---
 
 **Last Updated**: 2026-02-16
-**Current Version**: v3.18.0
-**Current Build**: 196
+**Current Version**: v3.19.0
+**Current Build**: 212

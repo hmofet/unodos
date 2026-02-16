@@ -1990,6 +1990,35 @@ draw_char:
 ; Preserves all registers except flags
 ; ============================================================================
 
+; ============================================================================
+; cga_pixel_calc - Calculate CGA byte offset and bit shift for a pixel
+; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
+;        ES must be 0xB800
+; Output: DI = CGA byte offset in video memory
+;         CL = bit shift for 2-bit pixel within byte
+; Trashes: AX, BX, DX (caller must save these registers)
+; ============================================================================
+cga_pixel_calc:
+    mov ax, bx
+    shr ax, 1                       ; AX = Y / 2
+    mov dx, 80
+    mul dx                          ; AX = (Y/2) * 80
+    mov di, ax
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1                       ; AX = X / 4
+    add di, ax
+    test bl, 1                      ; Odd scanline?
+    jz .even
+    add di, 0x2000                  ; Odd row: +8K interlace offset
+.even:
+    mov ax, cx
+    and ax, 3
+    mov cx, 3
+    sub cl, al
+    shl cl, 1                       ; CL = (3 - (X mod 4)) * 2
+    ret
+
 plot_pixel_white:
     cmp cx, 320
     jae .out
@@ -2000,24 +2029,7 @@ plot_pixel_white:
     push cx
     push di
     push dx
-    mov ax, bx
-    shr ax, 1
-    mov dx, 80
-    mul dx
-    mov di, ax
-    mov ax, cx
-    shr ax, 1
-    shr ax, 1
-    add di, ax
-    test bl, 1
-    jz .e
-    add di, 0x2000
-.e:
-    mov ax, cx
-    and ax, 3
-    mov cx, 3
-    sub cl, al
-    shl cl, 1
+    call cga_pixel_calc
     mov al, [es:di]
     mov ah, [draw_fg_color]
     shl ah, cl
@@ -2051,24 +2063,7 @@ plot_pixel_black:
     push cx
     push di
     push dx
-    mov ax, bx
-    shr ax, 1
-    mov dx, 80
-    mul dx
-    mov di, ax
-    mov ax, cx
-    shr ax, 1
-    shr ax, 1
-    add di, ax
-    test bl, 1
-    jz .e
-    add di, 0x2000
-.e:
-    mov ax, cx
-    and ax, 3
-    mov cx, 3
-    sub cl, al
-    shl cl, 1
+    call cga_pixel_calc
     mov al, [es:di]
     mov bl, 0x03
     shl bl, cl
@@ -2100,24 +2095,7 @@ plot_pixel_xor:
     push cx
     push di
     push dx
-    mov ax, bx
-    shr ax, 1
-    mov dx, 80
-    mul dx
-    mov di, ax
-    mov ax, cx
-    shr ax, 1
-    shr ax, 1
-    add di, ax
-    test bl, 1
-    jz .e
-    add di, 0x2000
-.e:
-    mov ax, cx
-    and ax, 3
-    mov cx, 3
-    sub cl, al
-    shl cl, 1
+    call cga_pixel_calc
     mov al, 0x03                    ; White color bits
     shl al, cl                      ; Position to correct pixel
     xor [es:di], al                 ; XOR with screen (self-inverse)
@@ -3228,25 +3206,7 @@ plot_pixel_color:
     push cx
     push di
     push dx
-    ; Calculate CGA row address (same as plot_pixel_white)
-    mov ax, bx
-    shr ax, 1                      ; AX = Y / 2
-    mov dx, 80
-    mul dx                          ; AX = (Y/2) * 80
-    mov di, ax
-    mov ax, cx
-    shr ax, 2                      ; AX = X / 4 (byte offset)
-    add di, ax
-    test bl, 1
-    jz .ppc_even
-    add di, 0x2000                  ; Odd rows offset
-.ppc_even:
-    ; Calculate bit shift: (3 - (X mod 4)) * 2
-    mov ax, cx
-    and ax, 3
-    mov cx, 3
-    sub cl, al
-    shl cl, 1                      ; CL = bit shift
+    call cga_pixel_calc
     ; Read-modify-write: clear old 2 bits, OR in color
     mov al, [es:di]                ; Read current byte
     mov ah, 0x03
@@ -4341,7 +4301,7 @@ fs_read_stub:
     xor ah, ah                      ; AL = file handle, AH was function 15
 
     ; Validate file handle (0-15)
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .invalid_handle
 
     ; Get file table entry to check mount handle
@@ -4401,7 +4361,7 @@ fs_close_stub:
     xor ah, ah                      ; AL = file handle
 
     ; Validate file handle (0-15)
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .invalid_handle
 
     ; Call FAT12 close
@@ -4920,9 +4880,9 @@ fat12_open:
 
 .not_found_cleanup:
     ; Jumped here from inside search loop (CX/AX still on stack)
-    add sp, 2                       ; Clean up sector counter
-    add sp, 2                       ; Clean up sector number
-    add sp, 11                      ; Clean up 8.3 filename
+    add sp, 2                       ; CX (sector counter) from .search_next_sector
+    add sp, 2                       ; AX (sector number) from .search_next_sector
+    add sp, 11                      ; 8.3 filename allocated with sub sp, 11
     mov ax, FS_ERR_NOT_FOUND
     stc
     pop di
@@ -4934,9 +4894,9 @@ fat12_open:
     ret
 
 .read_error_cleanup:
-    add sp, 2                       ; Clean up sector counter
-    add sp, 2                       ; Clean up sector number
-    add sp, 11                      ; Clean up 8.3 filename
+    add sp, 2                       ; CX (sector counter) from .search_next_sector
+    add sp, 2                       ; AX (sector number) from .search_next_sector
+    add sp, 11                      ; 8.3 filename allocated with sub sp, 11
     mov ax, FS_ERR_READ_ERROR
     stc
     pop di
@@ -4961,11 +4921,11 @@ fat12_open:
     push cs
     pop ds
 
-    ; Clean up stack - DS from line 1608 is still on stack!
-    add sp, 2                       ; DS from search loop (line 1608)
-    add sp, 2                       ; sector number (AX from line 1574)
-    add sp, 2                       ; sector counter (CX from line 1573)
-    add sp, 11                      ; 8.3 filename
+    ; Clean up stack from search loop
+    add sp, 2                       ; DS pushed at .search_next_sector (push ds)
+    add sp, 2                       ; AX (sector number) from .search_next_sector
+    add sp, 2                       ; CX (sector counter) from .search_next_sector
+    add sp, 11                      ; 8.3 filename allocated with sub sp, 11
 
     ; Find free file handle
     push ax
@@ -5019,7 +4979,7 @@ fat12_open:
 alloc_file_handle:
     push si
     xor ax, ax
-    mov cx, 16
+    mov cx, FILE_MAX_HANDLES
     mov si, file_table
 
 .check_handle:
@@ -5511,7 +5471,7 @@ fat12_read:
     push bp
 
     ; Validate file handle
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .invalid_handle
 
     ; Get file handle entry
@@ -5705,7 +5665,7 @@ fat12_close:
     push si
 
     ; Validate file handle
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .invalid_handle
 
     ; Get file handle entry
@@ -6272,7 +6232,7 @@ fat16_read:
     push di
 
     ; Validate handle
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .invalid_handle
 
     ; Get file table entry
@@ -8863,7 +8823,7 @@ fat12_write:
     push bp
 
     ; Validate file handle
-    cmp ax, 16
+    cmp ax, FILE_MAX_HANDLES
     jae .fw_invalid
 
     ; Get file table entry
@@ -10121,7 +10081,9 @@ data_area_start: dw 103             ; Calculated: root_dir_start + root_dir_sect
 ;   Bytes 4-7: File size (32-bit)
 ;   Bytes 8-11: Current position (32-bit)
 ;   Bytes 12-31: Reserved
-file_table: times 512 db 0          ; 16 entries * 32 bytes
+FILE_MAX_HANDLES    equ 16
+FILE_ENTRY_SIZE     equ 32
+file_table: times (FILE_MAX_HANDLES * FILE_ENTRY_SIZE) db 0
 
 ; Read buffer for filesystem test (1024 bytes for multi-cluster testing)
 fs_read_buffer: times 1024 db 0

@@ -5,6 +5,62 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.19.0] - 2026-02-16
+
+### Added (Builds 202-212) - FAT12 Write, GUI Toolkit, Settings Persistence
+
+- **FAT12 Write Support** (Build 202)
+  - `fs_create_stub` (API 45) — Create new file on FAT12 floppy
+  - `fs_write_stub` (API 46) — Write data to open file
+  - `fs_delete_stub` (API 47) — Delete file from FAT12 floppy
+  - `fs_write_sector_stub` (API 44) — Write raw sector to disk
+  - Full FAT12 cluster chain allocation for multi-cluster files
+
+- **Boot Floppy Creator (MkBoot)** (Builds 202-204)
+  - New app: creates bootable UnoDOS floppy from running system
+  - Pre-reads apps to RAM, prompts for disk swap, writes boot+kernel+apps
+  - Floppy-to-floppy copy workflow for users without build tools
+
+- **GUI Toolkit Foundation** (Build 205)
+  - Multi-font system: 4x6 small, 8x8 medium, 8x14 large fonts
+  - `gfx_set_font` (API 48), `gfx_get_font_metrics` (API 49)
+  - Word-wrap text drawing: `gfx_draw_string_wrap` (API 50)
+  - Widget APIs: `widget_draw_button` (51), `widget_draw_radio` (52), `widget_hit_test` (53)
+  - Clip rectangle system for constraining drawing operations
+
+- **Settings App** (Builds 206-210)
+  - Font selection (small/medium/large) with live preview
+  - Color theme: text color, desktop background, window color (4 CGA colors)
+  - Color swatch picker with radio buttons for font selection
+  - Apply/OK/Defaults buttons
+  - Settings persist to `SETTINGS.CFG` on boot floppy via FAT12 write APIs
+  - Kernel loads settings at boot before launching apps
+
+- **Color Theme System** (Builds 208-209)
+  - `theme_set_colors` (API 54), `theme_get_colors` (API 55)
+  - `draw_bg_color` for text background rendering
+  - Desktop background color, window frame color, text color all configurable
+
+### Fixed (Builds 202-212)
+
+- **Disappearing Windows** (Build 211): Drawing APIs 0 (pixel), 1 (rect), 2 (filled rect) didn't hide mouse cursor during drawing. IRQ12 could XOR the cursor over window frame pixels between API calls, progressively corrupting borders. Fixed by adding cursor_hide/cursor_locked to all drawing APIs.
+- **MkBoot Window Redraw** (Build 211): MkBoot defined `API_WIN_DRAW equ 30` but the correct value is 22. API 30 is `mouse_is_enabled`, so the window redraw call was silently doing nothing.
+- **draw_bg_color Pollution** (Build 211): `draw_desktop_region` set `draw_bg_color` to desktop color but never restored it, leaking into subsequent window drawing operations.
+- **fs_open_stub Mount Handle** (Build 210): Compared full 16-bit BX for mount handle routing, but callers set only BL. Dirty BH caused silent open failures. Fixed to compare BL only.
+- **fs_readdir_stub Mount Handle** (Build 209): Same BX vs BL routing bug as fs_open_stub.
+- **Button Text Overflow** (Build 210): `widget_draw_button` didn't clip label text to button bounds. Fixed by setting clip rectangle before drawing label.
+- **Mouse Click Events** (Build 207): `event_get_stub` wasn't setting CF flag correctly for mouse events, causing click handlers to miss events.
+
+### Changed (Builds 202-212)
+
+- API table expanded from 44 to 56 function slots (APIs 44-55)
+- CGA pixel plotting functions refactored: shared `cga_pixel_calc` helper saves ~100 bytes (Build 212)
+- FAT12 stack cleanup comments updated from stale line numbers to descriptive labels (Build 212)
+- File handle validation uses `FILE_MAX_HANDLES` constant instead of magic number 16 (Build 212)
+- Coordinate translation in INT 0x80 handler now covers APIs 0-6 and 50-52 (widget APIs)
+
+---
+
 ## [3.18.0] - 2026-02-16
 
 ### Added (Builds 194-201) - Splash Screen, Multitasking Fixes, Refresh Icon
