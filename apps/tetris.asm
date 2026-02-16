@@ -454,7 +454,7 @@ draw_static_ui:
     mov bx, 184
     mov cx, 2
     mov si, str_title
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Switch back to medium font for labels
@@ -466,28 +466,28 @@ draw_static_ui:
     mov bx, 168
     mov cx, 26
     mov si, str_score
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Lines label
     mov bx, 168
     mov cx, 38
     mov si, str_lines
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Level label
     mov bx, 168
     mov cx, 50
     mov si, str_level
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; "Next:" label
     mov bx, 168
     mov cx, 68
     mov si, str_next
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Next piece preview border
@@ -531,13 +531,13 @@ draw_static_ui:
     mov bx, 168
     mov cx, 148
     mov si, str_help1
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     mov bx, 168
     mov cx, 156
     mov si, str_help2
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Restore medium font
@@ -651,6 +651,8 @@ draw_cell:
 
 .clear_cell:
     ; Use clear_area API for fast erase
+    mov ch, bh                      ; Save row before BX is overwritten
+
     xor ah, ah
     mov al, bl
     shl ax, 3
@@ -658,7 +660,7 @@ draw_cell:
     mov bx, ax                      ; BX = screen X
 
     xor ah, ah
-    mov al, bh
+    mov al, ch                      ; Restore saved row
     shl ax, 3
     add ax, BOARD_Y
     mov cx, ax                      ; CX = screen Y
@@ -1880,7 +1882,7 @@ update_score_display:
     mov bx, 240
     mov cx, 26
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Draw lines value
@@ -1889,7 +1891,7 @@ update_score_display:
     mov bx, 240
     mov cx, 38
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Draw level value
@@ -1899,7 +1901,7 @@ update_score_display:
     mov bx, 240
     mov cx, 50
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     popa
