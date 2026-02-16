@@ -3588,6 +3588,9 @@ fs_read_stub:
     push bx
     push si
 
+    ; Clear AH (still has function number from INT 0x80 dispatch)
+    xor ah, ah                      ; AL = file handle, AH was function 15
+
     ; Validate file handle (0-15)
     cmp ax, 16
     jae .invalid_handle
@@ -3644,6 +3647,9 @@ fs_read_stub:
 ; Preserves: BX, CX, DX
 fs_close_stub:
     push si
+
+    ; Clear AH (still has function number from INT 0x80 dispatch)
+    xor ah, ah                      ; AL = file handle
 
     ; Validate file handle (0-15)
     cmp ax, 16
@@ -7724,11 +7730,12 @@ get_boot_drive_stub:
 ; ============================================================================
 
 ; fs_write_sector_stub - Write raw sector to disk
-; Input: AX = LBA sector number, ES:BX = 512-byte data buffer, DL = drive
+; Input: SI = LBA sector number, ES:BX = 512-byte data buffer, DL = drive
 ; Output: CF=0 success, CF=1 error
 fs_write_sector_stub:
     test dl, 0x80
     jnz .ws_not_supported           ; HD write not supported yet
+    mov ax, si                      ; floppy_write_sector expects AX = LBA
     call floppy_write_sector
     ret
 .ws_not_supported:
@@ -7754,10 +7761,11 @@ fs_create_stub:
     ret
 
 ; fs_write_stub - Write data to open file
-; Input: AX = file handle, ES:BX = data buffer, CX = byte count
+; Input: AL = file handle, ES:BX = data buffer, CX = byte count
 ; Output: AX = bytes written, CF=0 success; CF=1 error
 ; Note: Caller's ES:BX is in caller_es:BX
 fs_write_stub:
+    xor ah, ah                      ; Clear AH (was function number 46)
     push es
     mov es, [cs:caller_es]          ; ES = caller's data segment for buffer
     call fat12_write
