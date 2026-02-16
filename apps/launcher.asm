@@ -697,18 +697,18 @@ show_splash:
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
 
-    ; "UnoDOS 3" centered below logo
+    ; "UnoDOS 3" centered below logo (white text, black bg = transparent on black screen)
     mov bx, 112
     mov cx, 90
     mov si, splash_name
-    mov ah, API_GFX_DRAW_STRING_INVERTED
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; "Loading..." centered
     mov bx, 100
     mov cx, 120
     mov si, splash_loading
-    mov ah, API_GFX_DRAW_STRING_INVERTED
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Progress bar outline: (90, 140) w=140, h=10
