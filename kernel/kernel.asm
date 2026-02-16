@@ -3034,6 +3034,8 @@ kernel_api_table:
 ; Output: None
 ; Preserves: All registers
 gfx_draw_pixel_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push dx
     mov dx, 0xB800
@@ -3044,6 +3046,8 @@ gfx_draw_pixel_stub:
     xchg bx, cx                    ; Restore BX=X, CX=Y
     pop dx
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; gfx_draw_char_stub - Draw character
@@ -3667,6 +3671,8 @@ theme_get_colors:
 ; gfx_draw_rect_stub - Draw rectangle outline
 ; Input: BX = X, CX = Y, DX = Width, SI = Height
 gfx_draw_rect_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push ax
     push bp
@@ -3734,10 +3740,14 @@ gfx_draw_rect_stub:
     pop bp
     pop ax
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; gfx_draw_filled_rect_stub - Draw filled rectangle
 gfx_draw_filled_rect_stub:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     push es
     push ax
     push bp
@@ -3765,6 +3775,8 @@ gfx_draw_filled_rect_stub:
     pop bp
     pop ax
     pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; gfx_clear_area_stub - Clear rectangular area
@@ -8016,6 +8028,8 @@ draw_desktop_region:
     jmp .ddr_icon_loop
 
 .ddr_done:
+    ; Restore draw_bg_color to 0 (prevent color pollution for window drawing)
+    mov byte [draw_bg_color], 0
     pop bp
     pop di
     pop si
