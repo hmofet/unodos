@@ -46,6 +46,10 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
+    ; Initialize draw foreground color from theme
+    mov al, [text_color]
+    mov [draw_fg_color], al
+
     ; Display version number (top-left corner)
     mov bx, 4
     mov cx, 4
@@ -93,8 +97,8 @@ install_int_80:
 ; Output: Function-specific return values, CF=error status
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
-    ; Validate function number (0-53 valid)
-    cmp ah, 54                      ; Max function count (0-53 valid)
+    ; Validate function number (0-55 valid)
+    cmp ah, 56                      ; Max function count (0-55 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -114,6 +118,9 @@ int_80_handler:
     push ax
     mov ax, 0x1000
     mov ds, ax
+    ; Set draw foreground color from text theme color
+    mov al, [text_color]
+    mov [draw_fg_color], al
     pop ax
 
     ; --- Window-relative coordinate translation ---
@@ -1909,7 +1916,7 @@ plot_pixel_white:
     sub cl, al
     shl cl, 1
     mov al, [es:di]
-    mov ah, 0x03
+    mov ah, [draw_fg_color]
     shl ah, cl
     mov bl, 0x03
     shl bl, cl
@@ -2823,7 +2830,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 54                           ; Number of function slots (0-53)
+    dw 56                           ; Number of function slots (0-55)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2910,6 +2917,10 @@ kernel_api_table:
     dw widget_draw_button           ; 51: Draw button
     dw widget_draw_radio            ; 52: Draw radio button
     dw widget_hit_test              ; 53: Hit test rectangle
+
+    ; Theme API (Build 208)
+    dw theme_set_colors             ; 54: Set theme colors
+    dw theme_get_colors             ; 55: Get theme colors
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -3257,6 +3268,11 @@ widget_draw_button:
     ; BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI), AL=flags
     call mouse_cursor_hide
     inc byte [cursor_locked]
+    ; Use win_color for button chrome
+    push ax
+    mov al, [win_color]
+    mov [draw_fg_color], al
+    pop ax
     push es
     push ax
     push bx
@@ -3332,6 +3348,9 @@ widget_draw_button:
     ; Restore caller_ds
     mov ax, [btn_saved_cds]
     mov [caller_ds], ax
+    ; Restore text_color as foreground
+    mov al, [text_color]
+    mov [draw_fg_color], al
     pop di
     pop si
     pop dx
@@ -3488,6 +3507,34 @@ widget_hit_test:
     pop dx
     pop cx
     pop bx
+    clc
+    ret
+
+; ============================================================================
+; theme_set_colors - Set theme colors (API 54)
+; Input: AL = text_color, BL = desktop_bg_color, CL = win_color
+; Output: CF = 0
+; ============================================================================
+theme_set_colors:
+    and al, 0x03
+    mov [text_color], al
+    mov [draw_fg_color], al
+    and bl, 0x03
+    mov [desktop_bg_color], bl
+    and cl, 0x03
+    mov [win_color], cl
+    clc
+    ret
+
+; ============================================================================
+; theme_get_colors - Get theme colors (API 55)
+; Input: None
+; Output: AL = text_color, BL = desktop_bg_color, CL = win_color, CF = 0
+; ============================================================================
+theme_get_colors:
+    mov al, [text_color]
+    mov bl, [desktop_bg_color]
+    mov cl, [win_color]
     clc
     ret
 
@@ -4537,6 +4584,10 @@ fat12_mount:
     mov ax, [root_dir_start]
     add ax, bx
     mov [data_area_start], ax
+
+    ; Invalidate FAT cache (critical after floppy swap — stale cache
+    ; from a previous mount would corrupt fat12_alloc_cluster/set_fat_entry)
+    mov word [fat_cache_sector], 0xFFFF
 
     ; Success
     xor ax, ax
@@ -8503,7 +8554,7 @@ fat12_create:
 .fc_found_free:
     ; Found free entry at bpb_buffer + DX
     ; Save dir entry offset
-    mov [cs:.fc_dir_offset], dl     ; DX fits in byte (0-480, step 32)
+    mov [cs:.fc_dir_offset], dx     ; DX = 0-480 (entry offset in sector)
 
     ; Pop sector loop state
     pop ax                          ; Sector number (from push ax)
@@ -8518,8 +8569,7 @@ fat12_create:
     mov bx, 0x1000
     mov es, bx
     mov di, bpb_buffer
-    xor dh, dh
-    mov dl, [cs:.fc_dir_offset]
+    mov dx, [cs:.fc_dir_offset]
     add di, dx                      ; DI = pointer to dir entry in buffer
 
     ; Copy 8.3 filename from stack
@@ -8595,8 +8645,8 @@ fat12_create:
     ; Save dir sector and offset for later size updates
     mov cx, [cs:.fc_dir_sector]
     mov [di + 18], cx               ; Dir sector LBA
-    mov cl, [cs:.fc_dir_offset]
-    mov [di + 20], cl               ; Dir entry offset
+    mov cx, [cs:.fc_dir_offset]
+    mov [di + 20], cx               ; Dir entry offset (word)
     mov cx, [cs:.fc_start_cluster]
     mov [di + 22], cx               ; Last cluster (= start, file is empty)
 
@@ -8652,7 +8702,7 @@ fat12_create:
     ret
 
 .fc_dir_sector:  dw 0
-.fc_dir_offset:  db 0
+.fc_dir_offset:  dw 0
 .fc_start_cluster: dw 0
 
 ; ============================================================================
@@ -8841,8 +8891,7 @@ fat12_write:
     jc .fw_write_error
 
     ; Update size in directory entry
-    xor bh, bh
-    mov bl, [si + 20]               ; Dir entry offset within sector
+    mov bx, [si + 20]              ; Dir entry offset within sector (word)
     mov di, bpb_buffer
     add di, bx
     mov ax, [cs:.fw_file_size]
@@ -9194,6 +9243,13 @@ win_draw_stub:
     ; Get window entry
     mov bx, 0x1000
     mov ds, bx
+
+    ; Use win_color for window chrome drawing
+    push ax
+    mov al, [win_color]
+    mov [draw_fg_color], al
+    pop ax
+
     mov bx, ax
     shl bx, 5
     add bx, window_table
@@ -9344,6 +9400,12 @@ win_draw_stub:
     stc
 
 .done:
+    ; Restore text_color as foreground
+    push ax
+    mov al, [text_color]
+    mov [draw_fg_color], al
+    pop ax
+
     pop ds
     pop es
     pop bp
@@ -9780,6 +9842,12 @@ clip_x1:      dw 0                    ; Left (inclusive, absolute)
 clip_y1:      dw 0                    ; Top (inclusive, absolute)
 clip_x2:      dw 319                  ; Right (inclusive, absolute)
 clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
+
+; Color theme variables (Build 208)
+draw_fg_color:  db 3                    ; Current foreground drawing color (0-3)
+text_color:     db 3                    ; Text/foreground color (default: white)
+win_color:      db 3                    ; Window chrome color (default: white)
+; desktop_bg_color is at line ~10033
 
 ; Widget scratch variables (Build 205)
 btn_flags:      db 0                    ; Button/radio flags

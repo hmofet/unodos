@@ -77,6 +77,10 @@ BTN_CANCEL_X    equ 222
 BTN_CANCEL_Y    equ 48
 BTN_CANCEL_W    equ 72
 BTN_CANCEL_H    equ 16
+BTN_WRITE_X     equ 100
+BTN_WRITE_Y     equ 66
+BTN_WRITE_W     equ 96
+BTN_WRITE_H     equ 16
 
 ; Floppy layout constants
 FLOPPY_STAGE2_START     equ 1
@@ -243,9 +247,9 @@ entry:
     jnz .no_swap
     mov si, msg_swap1
     call show_status
-    mov si, msg_swap2
-    call show_status
-    call wait_any_key
+    ; Draw "Write" button below the swap message
+    call draw_write_btn
+    call wait_write_btn
     ; Clear swap message area for write status
     mov bx, 0
     mov cx, 44
@@ -843,14 +847,67 @@ show_status:
     pop ax
     ret
 
-wait_any_key:
+draw_write_btn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_WRITE_X
+    mov cx, BTN_WRITE_Y
+    mov dx, BTN_WRITE_W
+    mov si, BTN_WRITE_H
+    mov di, lbl_write_btn
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+wait_write_btn:
     sti
     mov ah, API_APP_YIELD
     int 0x80
+    ; Check keyboard events
     mov ah, API_EVENT_GET
     int 0x80
+    jc .wb_check_mouse
     cmp al, EVENT_KEY_PRESS
-    jne wait_any_key
+    je .wb_done
+    cmp al, EVENT_WIN_REDRAW
+    jne wait_write_btn
+    call draw_write_btn
+    jmp wait_write_btn
+.wb_check_mouse:
+    mov ah, API_MOUSE_STATE
+    int 0x80
+    test dl, 1
+    jz .wb_mouse_up
+    cmp byte [cs:wb_prev], 0
+    jne wait_write_btn
+    mov byte [cs:wb_prev], 1
+    ; Hit test Write button
+    mov bx, BTN_WRITE_X
+    mov cx, BTN_WRITE_Y
+    mov dx, BTN_WRITE_W
+    mov si, BTN_WRITE_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .wb_done
+    jmp wait_write_btn
+.wb_mouse_up:
+    mov byte [cs:wb_prev], 0
+    jmp wait_write_btn
+.wb_done:
     ret
 
 build_fs_bpb:
@@ -974,8 +1031,8 @@ btn_full_lbl:   db 'Full', 0
 btn_bare_lbl:   db 'Barebones', 0
 btn_cancel_lbl: db 'Cancel', 0
 msg_reading:    db 'Reading apps...', 0
-msg_swap1:      db 'Swap to blank floppy,', 0
-msg_swap2:      db 'press any key.', 0
+msg_swap1:      db 'Insert blank floppy:', 0
+lbl_write_btn:  db 'Write Disk', 0
 msg_writing_boot:  db 'Boot sector...', 0
 msg_writing_stage2: db 'Stage2 loader...', 0
 msg_writing_kernel: db 'Kernel (32KB)...', 0
@@ -995,6 +1052,7 @@ win_handle:     db 0
 boot_drive:     db 0
 copy_apps:      db 0
 prev_btn:       db 0
+wb_prev:        db 0
 cur_lba:        dw 0
 buf_off:        dw 0
 status_y:       dw 94

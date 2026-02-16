@@ -1,5 +1,5 @@
 ; SETTINGS.BIN - System Settings for UnoDOS
-; Font size selector, UI widget showcase
+; Font size selector, color theme selector
 ;
 ; Build: nasm -f bin -o settings.bin settings.asm
 
@@ -52,6 +52,8 @@ API_DRAW_STRING_WRAP    equ 50
 API_DRAW_BUTTON         equ 51
 API_DRAW_RADIO          equ 52
 API_HIT_TEST            equ 53
+API_SET_THEME           equ 54
+API_GET_THEME           equ 55
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -62,6 +64,19 @@ WIN_Y       equ 10
 WIN_W       equ 300
 WIN_H       equ 180
 
+; Color swatch layout
+SW_SIZE     equ 10                  ; Swatch width/height
+SW_X0       equ 70                  ; Swatch X positions (10px wide, 4px gap)
+SW_X1       equ 84
+SW_X2       equ 98
+SW_X3       equ 112
+
+CLR_Y_TEXT  equ 78                  ; Text color row Y
+CLR_Y_BG    equ 94                  ; Desktop bg row Y
+CLR_Y_WIN   equ 110                 ; Window color row Y
+
+BTN_Y       equ 136                 ; Button row Y
+
 entry:
     pusha
     push ds
@@ -69,6 +84,13 @@ entry:
 
     mov ax, cs
     mov ds, ax
+
+    ; Load current theme colors from kernel
+    mov ah, API_GET_THEME
+    int 0x80
+    mov [cs:cur_text_clr], al
+    mov [cs:cur_bg_clr], bl
+    mov [cs:cur_win_clr], cl
 
     ; Create window
     mov bx, WIN_X
@@ -125,9 +147,9 @@ entry:
     jne .main_loop
     mov byte [cs:prev_btn], 1
 
-    ; Hit test radio buttons (left column)
+    ; Hit test font radio buttons
     mov bx, 4
-    mov cx, 24
+    mov cx, 18
     mov dx, 120
     mov si, 12
     mov ah, API_HIT_TEST
@@ -136,7 +158,7 @@ entry:
     jnz .select_small
 
     mov bx, 4
-    mov cx, 40
+    mov cx, 32
     mov dx, 120
     mov si, 12
     mov ah, API_HIT_TEST
@@ -145,7 +167,7 @@ entry:
     jnz .select_medium
 
     mov bx, 4
-    mov cx, 56
+    mov cx, 46
     mov dx, 120
     mov si, 12
     mov ah, API_HIT_TEST
@@ -153,21 +175,36 @@ entry:
     test al, al
     jnz .select_large
 
+    ; Hit test text color swatches
+    mov cx, CLR_Y_TEXT
+    call hit_test_swatch_row
+    jnc .set_text_clr
+
+    ; Hit test bg color swatches
+    mov cx, CLR_Y_BG
+    call hit_test_swatch_row
+    jnc .set_bg_clr
+
+    ; Hit test window color swatches
+    mov cx, CLR_Y_WIN
+    call hit_test_swatch_row
+    jnc .set_win_clr
+
     ; Apply button
     mov bx, 4
-    mov cx, 76
-    mov dx, 80
-    mov si, 16
+    mov cx, BTN_Y
+    mov dx, 60
+    mov si, 14
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
-    jnz .apply_font
+    jnz .apply_all
 
     ; OK button (apply + close)
-    mov bx, 92
-    mov cx, 76
-    mov dx, 50
-    mov si, 16
+    mov bx, 70
+    mov cx, BTN_Y
+    mov dx, 40
+    mov si, 14
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -194,16 +231,45 @@ entry:
     call draw_ui
     jmp .main_loop
 
-.apply_font:
+.set_text_clr:
+    mov [cs:cur_text_clr], al
+    call draw_ui
+    jmp .main_loop
+
+.set_bg_clr:
+    mov [cs:cur_bg_clr], al
+    call draw_ui
+    jmp .main_loop
+
+.set_win_clr:
+    mov [cs:cur_win_clr], al
+    call draw_ui
+    jmp .main_loop
+
+.apply_all:
+    ; Apply font
     mov al, [cs:cur_font]
     mov ah, API_SET_FONT
+    int 0x80
+    ; Apply theme colors
+    mov al, [cs:cur_text_clr]
+    mov bl, [cs:cur_bg_clr]
+    mov cl, [cs:cur_win_clr]
+    mov ah, API_SET_THEME
     int 0x80
     call draw_ui
     jmp .main_loop
 
 .ok_and_close:
+    ; Apply font
     mov al, [cs:cur_font]
     mov ah, API_SET_FONT
+    int 0x80
+    ; Apply theme colors
+    mov al, [cs:cur_text_clr]
+    mov bl, [cs:cur_bg_clr]
+    mov cl, [cs:cur_win_clr]
+    mov ah, API_SET_THEME
     int 0x80
     ; Fall through to exit
 
@@ -219,6 +285,68 @@ entry:
     pop ds
     popa
     retf
+
+; ============================================================================
+; Hit test a row of 4 color swatches
+; Input: CX = row Y
+; Output: AL = color (0-3), CF=0 on hit; CF=1 on miss
+; Preserves: CX
+; ============================================================================
+hit_test_swatch_row:
+    push bx
+    push dx
+    push si
+
+    mov dx, SW_SIZE
+    mov si, SW_SIZE
+
+    mov bx, SW_X0
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .sw_hit_0
+
+    mov bx, SW_X1
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .sw_hit_1
+
+    mov bx, SW_X2
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .sw_hit_2
+
+    mov bx, SW_X3
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .sw_hit_3
+
+    stc                             ; No hit
+    pop si
+    pop dx
+    pop bx
+    ret
+
+.sw_hit_0:
+    xor al, al
+    jmp .sw_done
+.sw_hit_1:
+    mov al, 1
+    jmp .sw_done
+.sw_hit_2:
+    mov al, 2
+    jmp .sw_done
+.sw_hit_3:
+    mov al, 3
+.sw_done:
+    clc
+    pop si
+    pop dx
+    pop bx
+    ret
 
 ; ============================================================================
 ; Draw the complete UI
@@ -239,7 +367,7 @@ draw_ui:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; === Left column: Font selection ===
+    ; === Font selection (left column) ===
     mov si, lbl_font_size
     mov bx, 4
     mov cx, 4
@@ -249,7 +377,7 @@ draw_ui:
     ; Radio: Small (4x6)
     mov si, lbl_small
     mov bx, 4
-    mov cx, 24
+    mov cx, 18
     xor al, al
     cmp byte [cs:cur_font], 0
     jne .r1
@@ -261,7 +389,7 @@ draw_ui:
     ; Radio: Medium (8x8)
     mov si, lbl_medium
     mov bx, 4
-    mov cx, 40
+    mov cx, 32
     xor al, al
     cmp byte [cs:cur_font], 1
     jne .r2
@@ -273,7 +401,7 @@ draw_ui:
     ; Radio: Large (8x12)
     mov si, lbl_large
     mov bx, 4
-    mov cx, 56
+    mov cx, 46
     xor al, al
     cmp byte [cs:cur_font], 2
     jne .r3
@@ -282,33 +410,9 @@ draw_ui:
     mov ah, API_DRAW_RADIO
     int 0x80
 
-    ; Apply button
-    mov ax, cs
-    mov es, ax
-    mov bx, 4
-    mov cx, 76
-    mov dx, 80
-    mov si, 16
-    mov di, lbl_apply
-    xor al, al
-    mov ah, API_DRAW_BUTTON
-    int 0x80
-
-    ; OK button
-    mov ax, cs
-    mov es, ax
-    mov bx, 92
-    mov cx, 76
-    mov dx, 50
-    mov si, 16
-    mov di, lbl_ok
-    xor al, al
-    mov ah, API_DRAW_BUTTON
-    int 0x80
-
-    ; === Right column: Preview ===
+    ; === Preview (right column) ===
     mov si, lbl_preview
-    mov bx, 150
+    mov bx, 160
     mov cx, 4
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -318,8 +422,8 @@ draw_ui:
     mov ah, API_SET_FONT
     int 0x80
     mov si, lbl_sample_s
-    mov bx, 150
-    mov cx, 24
+    mov bx, 160
+    mov cx, 18
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -328,8 +432,8 @@ draw_ui:
     mov ah, API_SET_FONT
     int 0x80
     mov si, lbl_sample_m
-    mov bx, 150
-    mov cx, 36
+    mov bx, 160
+    mov cx, 30
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -338,8 +442,8 @@ draw_ui:
     mov ah, API_SET_FONT
     int 0x80
     mov si, lbl_sample_l
-    mov bx, 150
-    mov cx, 52
+    mov bx, 160
+    mov cx, 44
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -348,36 +452,78 @@ draw_ui:
     mov ah, API_SET_FONT
     int 0x80
 
-    ; === Word wrap demo ===
+    ; === Word wrap demo (right column) ===
     mov si, lbl_wrap
-    mov bx, 150
-    mov cx, 76
+    mov bx, 160
+    mov cx, 64
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     mov si, lbl_wrap_text
-    mov bx, 150
-    mov cx, 90
-    mov dx, 140
+    mov bx, 160
+    mov cx, 78
+    mov dx, 130
     mov ah, API_DRAW_STRING_WRAP
     int 0x80
 
-    ; === Color pixel demo ===
+    ; === Color selection (left column, below fonts) ===
     mov si, lbl_colors
     mov bx, 4
-    mov cx, 100
+    mov cx, 64
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw colored rectangles using pixel API
-    ; Color 1 (cyan): 8x8 block at (4, 114)
-    call draw_swatches
-
-    ; Color labels
-    mov si, lbl_clabels
-    mov bx, 4
-    mov cx, 128
+    ; Text color row
+    mov si, lbl_text
+    mov bx, 8
+    mov cx, CLR_Y_TEXT
     mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov al, [cs:cur_text_clr]
+    mov cx, CLR_Y_TEXT
+    call draw_swatch_row
+
+    ; Desktop bg row
+    mov si, lbl_desktop
+    mov bx, 8
+    mov cx, CLR_Y_BG
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov al, [cs:cur_bg_clr]
+    mov cx, CLR_Y_BG
+    call draw_swatch_row
+
+    ; Window color row
+    mov si, lbl_window
+    mov bx, 8
+    mov cx, CLR_Y_WIN
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov al, [cs:cur_win_clr]
+    mov cx, CLR_Y_WIN
+    call draw_swatch_row
+
+    ; === Buttons ===
+    mov ax, cs
+    mov es, ax
+    mov bx, 4
+    mov cx, BTN_Y
+    mov dx, 60
+    mov si, 14
+    mov di, lbl_apply
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    mov ax, cs
+    mov es, ax
+    mov bx, 70
+    mov cx, BTN_Y
+    mov dx, 40
+    mov si, 14
+    mov di, lbl_ok
+    xor al, al
+    mov ah, API_DRAW_BUTTON
     int 0x80
 
     pop di
@@ -389,57 +535,80 @@ draw_ui:
     ret
 
 ; ============================================================================
-; Draw 4 color swatches using pixel API
+; Draw a row of 4 color swatches with selection indicator
+; Input: AL = selected color (0-3), CX = row Y
 ; ============================================================================
-draw_swatches:
+draw_swatch_row:
     push ax
     push bx
     push cx
+    push dx
+    push si
+    mov [cs:sel_color], al
+    mov [cs:row_y], cx
 
-    ; Draw 4 swatches: colors 0-3, 10x10 each with 2px gap
-    ; Swatch 0 (black) - outline only
-    mov bx, 4
-    mov cx, 114
-    mov dx, 10
-    mov si, 10
+    ; Swatch 0 (black) - outline only since fill is invisible on black bg
+    mov bx, SW_X0
+    mov cx, [cs:row_y]
+    mov dx, SW_SIZE
+    mov si, SW_SIZE
     mov ah, API_GFX_DRAW_RECT
     int 0x80
 
     ; Swatch 1 (cyan) - fill with color 1
     mov byte [cs:swatch_clr], 1
-    mov word [cs:swatch_sx], 18
+    mov word [cs:swatch_sx], SW_X1
     call draw_one_swatch
 
     ; Swatch 2 (magenta) - fill with color 2
     mov byte [cs:swatch_clr], 2
-    mov word [cs:swatch_sx], 32
+    mov word [cs:swatch_sx], SW_X2
     call draw_one_swatch
 
     ; Swatch 3 (white) - fill with color 3
     mov byte [cs:swatch_clr], 3
-    mov word [cs:swatch_sx], 46
+    mov word [cs:swatch_sx], SW_X3
     call draw_one_swatch
 
+    ; Draw selection indicator (border around selected swatch)
+    mov al, [cs:sel_color]
+    xor ah, ah
+    mov bx, SW_SIZE + 4            ; 14 = swatch pitch
+    mul bx                         ; AX = color * 14
+    add ax, SW_X0 - 2              ; Offset to 2px outside swatch
+    mov bx, ax
+    mov cx, [cs:row_y]
+    sub cx, 2
+    mov dx, SW_SIZE + 4            ; 14
+    mov si, SW_SIZE + 4            ; 14
+    mov ah, API_GFX_DRAW_RECT
+    int 0x80
+
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
     ret
 
+; ============================================================================
+; Draw one filled color swatch (pixel by pixel)
+; Uses: swatch_clr, swatch_sx, row_y
+; ============================================================================
 draw_one_swatch:
     push ax
     push bx
     push cx
     push dx
-    ; Fill 8x8 block at (swatch_sx, 115) with swatch_clr
-    mov cx, 8                       ; row count
-    mov word [cs:swatch_row], 115
-.dos_row:
+    mov cx, SW_SIZE                 ; row count
+    mov dx, [cs:row_y]
+    mov [cs:swatch_row], dx
+.ds_row:
     push cx
-    mov cx, 8                       ; col count
+    mov cx, SW_SIZE                 ; col count
     mov word [cs:swatch_col], 0
-.dos_col:
+.ds_col:
     push cx
-    ; Draw pixel: BX=X, CX=Y, AL=color
     mov bx, [cs:swatch_sx]
     add bx, [cs:swatch_col]
     mov cx, [cs:swatch_row]
@@ -448,10 +617,10 @@ draw_one_swatch:
     int 0x80
     inc word [cs:swatch_col]
     pop cx
-    loop .dos_col
+    loop .ds_col
     inc word [cs:swatch_row]
     pop cx
-    loop .dos_row
+    loop .ds_row
     pop dx
     pop cx
     pop bx
@@ -462,7 +631,7 @@ draw_one_swatch:
 ; Strings
 ; ============================================================================
 window_title:       db 'Settings', 0
-lbl_font_size:      db 'Font Size (1/2/3):', 0
+lbl_font_size:      db 'Font Size:', 0
 lbl_small:          db 'Small 4x6', 0
 lbl_medium:         db 'Medium 8x8', 0
 lbl_large:          db 'Large 8x12', 0
@@ -472,10 +641,12 @@ lbl_preview:        db 'Preview:', 0
 lbl_sample_s:       db 'Small font text', 0
 lbl_sample_m:       db 'Medium font', 0
 lbl_sample_l:       db 'Large font', 0
+lbl_colors:         db 'Colors:', 0
+lbl_text:           db 'Text:', 0
+lbl_desktop:        db 'Desk:', 0
+lbl_window:         db 'Win:', 0
 lbl_wrap:           db 'Word Wrap:', 0
-lbl_wrap_text:      db 'This text wraps automatically when it reaches the edge.', 0
-lbl_colors:         db 'CGA Colors:', 0
-lbl_clabels:        db 'Bk Cy Mg Wh', 0
+lbl_wrap_text:      db 'This text wraps at the edge.', 0
 
 ; ============================================================================
 ; Variables
@@ -483,7 +654,12 @@ lbl_clabels:        db 'Bk Cy Mg Wh', 0
 win_handle:     db 0
 cur_font:       db 1
 prev_btn:       db 0
-swatch_clr:     db 0
-swatch_sx:      dw 0
-swatch_row:     dw 0
-swatch_col:     dw 0
+cur_text_clr:   db 3                ; Current text color selection
+cur_bg_clr:     db 0                ; Current desktop bg selection
+cur_win_clr:    db 3                ; Current window color selection
+sel_color:      db 0                ; Currently selected color in draw_swatch_row
+row_y:          dw 0                ; Row Y for draw_swatch_row
+swatch_clr:     db 0                ; Fill color for draw_one_swatch
+swatch_sx:      dw 0                ; Start X for draw_one_swatch
+swatch_row:     dw 0                ; Current row in draw_one_swatch
+swatch_col:     dw 0                ; Current col in draw_one_swatch
