@@ -49,6 +49,7 @@ API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_FS_READDIR          equ 27
 API_MOUSE_STATE         equ 28
+API_WIN_DRAW            equ 30
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
@@ -524,6 +525,11 @@ entry:
     jmp .hd_copy_loop
 
 .show_count:
+    ; Redraw window frame (may have been overdrawn during write ops)
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_DRAW
+    int 0x80
+
     ; Show file count
     mov al, [cs:n_copied]
     add al, '0'

@@ -1468,6 +1468,9 @@ auto_load_launcher:
     call app_load_stub
     jc .fail_load
 
+    ; Load saved settings (font + colors) from SETTINGS.CFG if it exists
+    call load_settings
+
     ; Start launcher as a cooperative task (non-blocking)
     call app_start_stub
     jc .fail_start
@@ -1545,6 +1548,87 @@ auto_load_launcher:
 .err_code_str:  db '?', 0
 .err_start_msg: db 'ERR: app_start failed', 0
 .err_sched_msg: db 'ERR: scheduler failed', 0
+
+; ============================================================================
+; Load saved settings from SETTINGS.CFG on boot drive
+; Called after app_load_stub (filesystem is mounted)
+; Silently does nothing if file doesn't exist or is invalid
+; ============================================================================
+load_settings:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    ; Open SETTINGS.CFG (DS=0x1000, filesystem already mounted by app_load_stub)
+    mov bx, 0                          ; Mount handle 0 (FAT12)
+    mov si, .ls_filename
+    call fat12_open
+    jc .ls_done                         ; File not found = use defaults
+
+    ; Save file handle
+    mov [.ls_fh], al
+
+    ; Read 5 bytes
+    xor ah, ah                          ; AX = file handle
+    mov bx, 0x1000
+    mov es, bx
+    mov di, .ls_buf
+    mov cx, 5
+    call fat12_read
+    jc .ls_close
+
+    ; Close file first
+    xor ah, ah
+    mov al, [.ls_fh]
+    call fat12_close
+
+    ; Verify magic byte
+    cmp byte [.ls_buf], 0xA5
+    jne .ls_done
+
+    ; Apply font (validate 0-2)
+    mov al, [.ls_buf + 1]
+    cmp al, 3
+    jae .ls_done
+    call gfx_set_font                  ; AL = font index, sets all metrics
+
+    ; Apply colors (mask to 0-3)
+    mov al, [.ls_buf + 2]
+    and al, 0x03
+    mov [text_color], al
+    mov [draw_fg_color], al
+    mov al, [.ls_buf + 3]
+    and al, 0x03
+    mov [desktop_bg_color], al
+    mov [draw_bg_color], al
+    mov al, [.ls_buf + 4]
+    and al, 0x03
+    mov [win_color], al
+
+    jmp .ls_done
+
+.ls_close:
+    xor ah, ah
+    mov al, [.ls_fh]
+    call fat12_close
+
+.ls_done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.ls_filename: db 'SETTINGS.CFG', 0
+.ls_fh:       db 0
+.ls_buf:      times 5 db 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
@@ -3362,8 +3446,31 @@ widget_draw_button:
     inc bx
     inc cx
 .btn_draw_label:
+    ; Set clip bounds to button rect so text doesn't overflow
+    push word [clip_x1]
+    push word [clip_x2]
+    push word [clip_y1]
+    push word [clip_y2]
+    push word [clip_enabled]
+    mov ax, [btn_x]
+    mov [clip_x1], ax
+    add ax, [btn_w]
+    dec ax
+    mov [clip_x2], ax
+    mov ax, [btn_y]
+    mov [clip_y1], ax
+    add ax, [btn_h]
+    dec ax
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
     ; Draw inverted text (black on white) - caller_ds now points to label segment
     call gfx_draw_string_inverted
+    ; Restore clip state
+    pop word [clip_enabled]
+    pop word [clip_y2]
+    pop word [clip_y1]
+    pop word [clip_x2]
+    pop word [clip_x1]
     ; Restore caller_ds
     mov ax, [btn_saved_cds]
     mov [caller_ds], ax
@@ -4168,10 +4275,10 @@ fs_open_stub:
     push bx
     push di
 
-    ; Route based on mount handle
-    cmp bx, 0
+    ; Route based on mount handle (check BL only, not full BX)
+    cmp bl, 0
     je .fat12
-    cmp bx, 1
+    cmp bl, 1
     je .fat16
     jmp .invalid_mount
 

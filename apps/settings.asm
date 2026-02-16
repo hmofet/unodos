@@ -52,6 +52,12 @@ API_DRAW_STRING_WRAP    equ 50
 API_DRAW_BUTTON         equ 51
 API_DRAW_RADIO          equ 52
 API_HIT_TEST            equ 53
+API_FS_MOUNT            equ 13
+API_FS_CLOSE            equ 16
+API_GET_BOOT_DRIVE      equ 43
+API_FS_CREATE           equ 45
+API_FS_WRITE            equ 46
+API_FS_DELETE           equ 47
 API_SET_THEME           equ 54
 API_GET_THEME           equ 55
 
@@ -76,6 +82,8 @@ CLR_Y_BG    equ 94                  ; Desktop bg row Y
 CLR_Y_WIN   equ 110                 ; Window color row Y
 
 BTN_Y       equ 136                 ; Button row Y
+BTN_DEF_X   equ 116                 ; Defaults button X
+BTN_DEF_W   equ 72                  ; Defaults button width
 
 entry:
     pusha
@@ -210,6 +218,16 @@ entry:
     test al, al
     jnz .ok_and_close
 
+    ; Defaults button
+    mov bx, BTN_DEF_X
+    mov cx, BTN_Y
+    mov dx, BTN_DEF_W
+    mov si, 14
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .defaults
+
     jmp .main_loop
 
 .mouse_up:
@@ -246,31 +264,23 @@ entry:
     call draw_ui
     jmp .main_loop
 
+.defaults:
+    mov byte [cs:cur_font], 1
+    mov byte [cs:cur_text_clr], 3
+    mov byte [cs:cur_bg_clr], 0
+    mov byte [cs:cur_win_clr], 3
+    call draw_ui
+    jmp .main_loop
+
 .apply_all:
-    ; Apply font
-    mov al, [cs:cur_font]
-    mov ah, API_SET_FONT
-    int 0x80
-    ; Apply theme colors
-    mov al, [cs:cur_text_clr]
-    mov bl, [cs:cur_bg_clr]
-    mov cl, [cs:cur_win_clr]
-    mov ah, API_SET_THEME
-    int 0x80
+    call apply_settings
+    call save_settings
     call draw_ui
     jmp .main_loop
 
 .ok_and_close:
-    ; Apply font
-    mov al, [cs:cur_font]
-    mov ah, API_SET_FONT
-    int 0x80
-    ; Apply theme colors
-    mov al, [cs:cur_text_clr]
-    mov bl, [cs:cur_bg_clr]
-    mov cl, [cs:cur_win_clr]
-    mov ah, API_SET_THEME
-    int 0x80
+    call apply_settings
+    call save_settings
     ; Fall through to exit
 
 .exit_ok:
@@ -526,6 +536,17 @@ draw_ui:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_DEF_X
+    mov cx, BTN_Y
+    mov dx, BTN_DEF_W
+    mov si, 14
+    mov di, lbl_defaults
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
     pop di
     pop si
     pop dx
@@ -628,6 +649,91 @@ draw_one_swatch:
     ret
 
 ; ============================================================================
+; Apply current settings to kernel (font + colors)
+; ============================================================================
+apply_settings:
+    push ax
+    push bx
+    push cx
+    mov al, [cs:cur_font]
+    mov ah, API_SET_FONT
+    int 0x80
+    mov al, [cs:cur_text_clr]
+    mov bl, [cs:cur_bg_clr]
+    mov cl, [cs:cur_win_clr]
+    mov ah, API_SET_THEME
+    int 0x80
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; Save settings to SETTINGS.CFG on boot drive
+; ============================================================================
+save_settings:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+
+    ; Get boot drive and mount filesystem
+    mov ah, API_GET_BOOT_DRIVE
+    int 0x80
+    mov ah, API_FS_MOUNT
+    int 0x80
+
+    ; Delete existing SETTINGS.CFG (ignore error if not found)
+    mov si, cfg_filename
+    mov bl, 0
+    mov ah, API_FS_DELETE
+    int 0x80
+
+    ; Create new SETTINGS.CFG
+    mov si, cfg_filename
+    mov bl, 0
+    mov ah, API_FS_CREATE
+    int 0x80
+    jc .ss_done
+    mov [cs:cfg_fh], al
+
+    ; Build 5-byte settings buffer
+    mov byte [cs:cfg_buf], 0xA5        ; Magic byte
+    mov al, [cs:cur_font]
+    mov [cs:cfg_buf + 1], al
+    mov al, [cs:cur_text_clr]
+    mov [cs:cfg_buf + 2], al
+    mov al, [cs:cur_bg_clr]
+    mov [cs:cfg_buf + 3], al
+    mov al, [cs:cur_win_clr]
+    mov [cs:cfg_buf + 4], al
+
+    ; Write 5 bytes
+    mov ax, cs
+    mov es, ax
+    mov bx, cfg_buf
+    mov cx, 5
+    mov al, [cs:cfg_fh]
+    mov ah, API_FS_WRITE
+    int 0x80
+
+    ; Close file
+    mov al, [cs:cfg_fh]
+    mov ah, API_FS_CLOSE
+    int 0x80
+
+.ss_done:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
 ; Strings
 ; ============================================================================
 window_title:       db 'Settings', 0
@@ -637,6 +743,8 @@ lbl_medium:         db 'Medium 8x8', 0
 lbl_large:          db 'Large 8x12', 0
 lbl_apply:          db 'Apply', 0
 lbl_ok:             db 'OK', 0
+lbl_defaults:       db 'Defaults', 0
+cfg_filename:       db 'SETTINGS.CFG', 0
 lbl_preview:        db 'Preview:', 0
 lbl_sample_s:       db 'Small font text', 0
 lbl_sample_m:       db 'Medium font', 0
@@ -663,3 +771,5 @@ swatch_clr:     db 0                ; Fill color for draw_one_swatch
 swatch_sx:      dw 0                ; Start X for draw_one_swatch
 swatch_row:     dw 0                ; Current row in draw_one_swatch
 swatch_col:     dw 0                ; Current col in draw_one_swatch
+cfg_fh:         db 0                ; File handle for settings save
+cfg_buf:        times 5 db 0        ; Settings buffer (magic + 4 bytes)
