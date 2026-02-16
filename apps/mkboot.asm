@@ -1,7 +1,7 @@
 ; MKBOOT.BIN - Boot Floppy Creator for UnoDOS
-; Creates a bootable 1.44MB floppy disk from HD
-; Embeds boot sector and stage2, copies kernel from memory,
-; builds FAT12 filesystem, optionally copies apps from HD
+; Creates bootable 1.44MB floppies from any boot source.
+; Floppy boot: pre-reads apps into memory, swaps disk, writes.
+; HD boot: reads apps directly from HD during write.
 ;
 ; Build: nasm -f bin -o mkboot.bin mkboot.asm
 
@@ -16,22 +16,22 @@
 
     ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
     ; Arrow pointing down into a disk shape
-    db 0x00, 0x0F, 0xF0, 0x00      ; Row 0:  ....####....
-    db 0x00, 0x0F, 0xF0, 0x00      ; Row 1:  ....####....
-    db 0x00, 0x0F, 0xF0, 0x00      ; Row 2:  ....####....
-    db 0x00, 0x0F, 0xF0, 0x00      ; Row 3:  ....####....
-    db 0x03, 0xFF, 0xFF, 0xC0      ; Row 4:  ##..####..##
-    db 0x00, 0xFF, 0xFF, 0x00      ; Row 5:  ..########..
-    db 0x00, 0x3F, 0xFC, 0x00      ; Row 6:  ....######..
-    db 0x00, 0x0F, 0xF0, 0x00      ; Row 7:  ....####....
-    db 0x00, 0x03, 0xC0, 0x00      ; Row 8:  ......##....
-    db 0x00, 0x00, 0x00, 0x00      ; Row 9:  ............
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 10: ##############
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 11: ##..........##
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 12: ##..........##
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 13: ##..........##
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14: ##############
-    db 0x00, 0x00, 0x00, 0x00      ; Row 15: ............
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 0
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 1
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 2
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 3
+    db 0x03, 0xFF, 0xFF, 0xC0      ; Row 4
+    db 0x00, 0xFF, 0xFF, 0x00      ; Row 5
+    db 0x00, 0x3F, 0xFC, 0x00      ; Row 6
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 7
+    db 0x00, 0x03, 0xC0, 0x00      ; Row 8
+    db 0x00, 0x00, 0x00, 0x00      ; Row 9
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 10
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 11
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 12
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 13
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14
+    db 0x00, 0x00, 0x00, 0x00      ; Row 15
 
     times 0x50 - ($ - $$) db 0     ; Pad to code entry at offset 0x50
 
@@ -40,7 +40,6 @@
 ; API constants
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
-API_GFX_DRAW_STRING_INV equ 6
 API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
 API_FS_OPEN             equ 14
@@ -48,6 +47,7 @@ API_FS_READ             equ 15
 API_FS_CLOSE            equ 16
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
+API_FS_READDIR          equ 27
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
@@ -55,23 +55,25 @@ API_GET_BOOT_DRIVE      equ 43
 API_FS_WRITE_SECTOR     equ 44
 API_FS_CREATE           equ 45
 API_FS_WRITE            equ 46
-API_FS_READDIR          equ 27
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
 ; Floppy layout constants
-FLOPPY_STAGE2_START     equ 1       ; Sectors 1-4
+FLOPPY_STAGE2_START     equ 1
 FLOPPY_STAGE2_SECTORS   equ 4
-FLOPPY_KERNEL_START     equ 5       ; Sectors 5-68
+FLOPPY_KERNEL_START     equ 5
 FLOPPY_KERNEL_SECTORS   equ 64
-FLOPPY_FS_START         equ 70      ; Sector 70
+FLOPPY_FS_START         equ 70
 
 ; FAT12 filesystem parameters
 FAT12_RESERVED          equ 1
 FAT12_NUM_FATS          equ 2
 FAT12_SPF               equ 9
 FAT12_ROOT_SECTORS      equ 14
+
+MAX_APPS                equ 8
+SCRATCH_SEG             equ 0x9000
 
 entry:
     pusha
@@ -81,15 +83,15 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Create window - use moderate size
-    mov bx, 40                      ; X
-    mov cx, 35                      ; Y
-    mov dx, 240                     ; Width
-    mov si, 120                     ; Height
+    ; Create window
+    mov bx, 40
+    mov cx, 30
+    mov dx, 240
+    mov si, 130
     mov ax, cs
     mov es, ax
     mov di, window_title
-    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    mov al, 0x03
     mov ah, API_WIN_CREATE
     int 0x80
     jc .exit_fail
@@ -98,44 +100,63 @@ entry:
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Draw initial UI
-    call draw_ui
+    ; Draw title
+    mov si, msg_title
+    mov bx, 4
+    mov cx, 4
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
 
-    ; Check boot drive
+    ; Get boot drive
     mov ah, API_GET_BOOT_DRIVE
     int 0x80
     mov [cs:boot_drive], al
+
+    ; Mount source and show context
     test al, 0x80
     jnz .hd_boot
 
-    ; Booting from floppy - can't create boot floppies
-    mov si, msg_need_hd
+    ; === Floppy boot ===
+    mov al, 0x00
+    mov ah, API_FS_MOUNT
+    int 0x80
+    mov si, msg_floppy_src
     mov bx, 4
-    mov cx, 60
+    mov cx, 18
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    jmp .wait_exit
+    jmp .show_options
 
 .hd_boot:
-    ; Mount HD filesystem
+    ; === HD boot ===
     mov al, 0x80
     mov ah, API_FS_MOUNT
     int 0x80
+    mov si, msg_insert
+    mov bx, 4
+    mov cx, 18
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov si, msg_then
+    mov bx, 4
+    mov cx, 30
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
 
-    ; Show options
+.show_options:
     mov si, msg_option_f
     mov bx, 4
-    mov cx, 48
+    mov cx, 46
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov si, msg_option_b
     mov bx, 4
-    mov cx, 60
+    mov cx, 58
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov si, msg_option_esc
     mov bx, 4
-    mov cx, 76
+    mov cx, 74
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -145,7 +166,6 @@ entry:
     int 0x80
     mov ah, API_EVENT_GET
     int 0x80
-    jc .wait_choice
     cmp al, EVENT_KEY_PRESS
     jne .check_redraw1
     cmp dl, 'f'
@@ -156,13 +176,18 @@ entry:
     je .start_barebones
     cmp dl, 'B'
     je .start_barebones
-    cmp dl, 27                      ; ESC
+    cmp dl, 27
     je .exit_ok
     jmp .wait_choice
 .check_redraw1:
     cmp al, EVENT_WIN_REDRAW
     jne .wait_choice
-    call draw_ui
+    ; Minimal redraw - just title
+    mov si, msg_title
+    mov bx, 4
+    mov cx, 4
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
     jmp .wait_choice
 
 .start_full:
@@ -173,7 +198,7 @@ entry:
     mov byte [cs:copy_apps], 0
 
 .do_write:
-    ; Clear options area
+    ; Clear lower area for status messages
     mov bx, 0
     mov cx, 44
     mov dx, 236
@@ -182,6 +207,35 @@ entry:
     int 0x80
     mov word [cs:status_y], 46
 
+    ; === Pre-read apps from floppy if needed ===
+    cmp byte [cs:copy_apps], 1
+    jne .skip_preread
+    test byte [cs:boot_drive], 0x80
+    jnz .skip_preread
+    ; Floppy full: read all BIN files into scratch buffer
+    mov si, msg_reading
+    call show_status
+    call preread_apps
+.skip_preread:
+
+    ; === Swap prompt if floppy boot ===
+    test byte [cs:boot_drive], 0x80
+    jnz .no_swap
+    mov si, msg_swap1
+    call show_status
+    mov si, msg_swap2
+    call show_status
+    call wait_any_key
+    ; Clear swap message area for write status
+    mov bx, 0
+    mov cx, 44
+    mov dx, 236
+    mov si, 100
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    mov word [cs:status_y], 46
+.no_swap:
+
     ; === Write boot sector ===
     mov si, msg_writing_boot
     call show_status
@@ -189,7 +243,7 @@ entry:
     mov ax, cs
     mov es, ax
     mov bx, embedded_boot
-    mov si, 0                       ; LBA 0
+    mov si, 0
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
@@ -226,7 +280,7 @@ entry:
     mov word [cs:buf_off], 0
 .wr_kernel:
     push cx
-    mov ax, 0x1000                  ; Kernel segment
+    mov ax, 0x1000
     mov es, ax
     mov bx, [cs:buf_off]
     mov si, [cs:cur_lba]
@@ -239,11 +293,11 @@ entry:
     inc word [cs:cur_lba]
     loop .wr_kernel
 
-    ; === Write FAT12 filesystem ===
+    ; === Write FAT12 filesystem structure ===
     mov si, msg_writing_fs
     call show_status
 
-    ; FS BPB at sector 70
+    ; BPB at sector 70
     call build_fs_bpb
     mov ax, cs
     mov es, ax
@@ -283,7 +337,7 @@ entry:
     inc word [cs:cur_lba]
     loop .wr_fat1
 
-    ; FAT2 first sector (media byte)
+    ; FAT2 first sector
     call build_fat_first
     mov ax, cs
     mov es, ax
@@ -294,7 +348,7 @@ entry:
     int 0x80
     jc .error
 
-    ; FAT2 remaining sectors (zero)
+    ; FAT2 remaining sectors
     call clear_secbuf
     mov cx, FAT12_SPF - 1
     mov word [cs:cur_lba], FLOPPY_FS_START + FAT12_RESERVED + FAT12_SPF + 1
@@ -312,7 +366,7 @@ entry:
     inc word [cs:cur_lba]
     loop .wr_fat2
 
-    ; Root directory first sector (volume label)
+    ; Root dir first sector (volume label)
     call build_rootdir
     mov ax, cs
     mov es, ax
@@ -323,7 +377,7 @@ entry:
     int 0x80
     jc .error
 
-    ; Root dir remaining sectors (zero)
+    ; Root dir remaining sectors
     call clear_secbuf
     mov cx, FAT12_ROOT_SECTORS - 1
     mov word [cs:cur_lba], FLOPPY_FS_START + FAT12_RESERVED + (FAT12_NUM_FATS * FAT12_SPF) + 1
@@ -341,7 +395,7 @@ entry:
     inc word [cs:cur_lba]
     loop .wr_rootdir
 
-    ; === Optionally copy apps ===
+    ; === Copy apps if requested ===
     cmp byte [cs:copy_apps], 0
     je .write_done
 
@@ -353,43 +407,51 @@ entry:
     mov ah, API_FS_MOUNT
     int 0x80
 
-    ; Scan HD directory and copy BIN files
+    ; Choose write path based on boot source
+    test byte [cs:boot_drive], 0x80
+    jnz .copy_from_hd
+
+    ; === Write pre-read apps from buffer ===
+    call write_buffered_apps
+    jmp .show_count
+
+.copy_from_hd:
+    ; === Copy apps from HD (stream copy) ===
     mov word [cs:dir_idx], 0
     mov byte [cs:n_copied], 0
 
-.copy_loop:
+.hd_copy_loop:
     mov ax, cs
     mov es, ax
-    mov di, dirent                  ; ES:DI = dir entry buffer
+    mov di, dirent
     mov ax, [cs:dir_idx]
     mov bl, 1                       ; Mount handle 1 = HD
     mov ah, API_FS_READDIR
     int 0x80
-    jc .write_done                  ; End of directory
+    jc .show_count
 
     inc word [cs:dir_idx]
 
-    ; Check for .BIN extension
+    ; Check .BIN extension
     cmp byte [cs:dirent + 8], 'B'
-    jne .copy_loop
+    jne .hd_copy_loop
     cmp byte [cs:dirent + 9], 'I'
-    jne .copy_loop
+    jne .hd_copy_loop
     cmp byte [cs:dirent + 10], 'N'
-    jne .copy_loop
+    jne .hd_copy_loop
 
     ; Skip KERNEL.BIN
     cmp byte [cs:dirent], 'K'
-    je .copy_loop
+    je .hd_copy_loop
 
-    ; Convert 8.3 to dot format
     call convert_83_to_dot
 
     ; Open on HD
     mov si, dotname
-    mov bx, 1
+    mov bl, 1
     mov ah, API_FS_OPEN
     int 0x80
-    jc .copy_loop
+    jc .hd_copy_loop
     mov [cs:hd_fh], al
 
     ; Create on floppy
@@ -397,13 +459,12 @@ entry:
     mov bl, 0
     mov ah, API_FS_CREATE
     int 0x80
-    jc .close_hd
+    jc .hd_close_src
 
     mov [cs:fl_fh], al
 
-    ; Copy data
-.copy_data:
-    mov al, [cs:hd_fh]
+    ; Stream copy
+.hd_stream:
     mov ax, cs
     mov es, ax
     mov di, cpybuf
@@ -411,9 +472,9 @@ entry:
     mov al, [cs:hd_fh]
     mov ah, API_FS_READ
     int 0x80
-    jc .close_both
+    jc .hd_close_both
     test ax, ax
-    jz .close_both
+    jz .hd_close_both
     mov [cs:nbytes], ax
 
     mov ax, cs
@@ -423,29 +484,23 @@ entry:
     mov al, [cs:fl_fh]
     mov ah, API_FS_WRITE
     int 0x80
-    jc .close_both
+    jc .hd_close_both
 
     cmp word [cs:nbytes], 512
-    je .copy_data
+    je .hd_stream
 
-.close_both:
+.hd_close_both:
     mov al, [cs:fl_fh]
     mov ah, API_FS_CLOSE
     int 0x80
-.close_hd:
+.hd_close_src:
     mov al, [cs:hd_fh]
     mov ah, API_FS_CLOSE
     int 0x80
     inc byte [cs:n_copied]
-    jmp .copy_loop
+    jmp .hd_copy_loop
 
-.write_done:
-    ; Show success
-    mov si, msg_done
-    call show_status
-
-    cmp byte [cs:copy_apps], 0
-    je .wait_exit
+.show_count:
     ; Show file count
     mov al, [cs:n_copied]
     add al, '0'
@@ -455,6 +510,11 @@ entry:
     mov cx, [cs:status_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
+    add word [cs:status_y], 10
+
+.write_done:
+    mov si, msg_done
+    call show_status
 
 .wait_exit:
     sti
@@ -462,7 +522,6 @@ entry:
     int 0x80
     mov ah, API_EVENT_GET
     int 0x80
-    jc .wait_exit
     cmp al, EVENT_KEY_PRESS
     jne .check_redraw2
     cmp dl, 27
@@ -471,7 +530,11 @@ entry:
 .check_redraw2:
     cmp al, EVENT_WIN_REDRAW
     jne .wait_exit
-    call draw_ui
+    mov si, msg_title
+    mov bx, 4
+    mov cx, 4
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
     jmp .wait_exit
 
 .error:
@@ -493,34 +556,168 @@ entry:
     retf
 
 ; ============================================================================
+; Pre-read apps from source floppy into scratch buffer (0x9000)
+; ============================================================================
+preread_apps:
+    mov byte [cs:n_apps], 0
+    mov word [cs:buf_pos], 0
+    mov word [cs:dir_idx], 0
+
+.pr_loop:
+    mov ax, cs
+    mov es, ax
+    mov di, dirent
+    mov ax, [cs:dir_idx]
+    mov bl, 0                       ; Mount handle 0 = floppy
+    mov ah, API_FS_READDIR
+    int 0x80
+    jc .pr_done
+
+    inc word [cs:dir_idx]
+
+    ; Check .BIN extension
+    cmp byte [cs:dirent + 8], 'B'
+    jne .pr_loop
+    cmp byte [cs:dirent + 9], 'I'
+    jne .pr_loop
+    cmp byte [cs:dirent + 10], 'N'
+    jne .pr_loop
+
+    ; Skip KERNEL.BIN
+    cmp byte [cs:dirent], 'K'
+    je .pr_loop
+
+    ; Check capacity
+    cmp byte [cs:n_apps], MAX_APPS
+    jae .pr_done
+
+    call convert_83_to_dot
+
+    ; Save filename to app_names table
+    mov al, [cs:n_apps]
+    xor ah, ah
+    mov cx, 13
+    mul cx
+    add ax, app_names
+    mov di, ax
+    mov si, dotname
+    mov cx, 13
+.pr_copy_name:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .pr_copy_name
+
+    ; Open file on floppy
+    mov si, dotname
+    mov bl, 0
+    mov ah, API_FS_OPEN
+    int 0x80
+    jc .pr_loop
+    mov [cs:hd_fh], al
+
+    ; Read entire file into 0x9000:buf_pos
+    mov ax, SCRATCH_SEG
+    mov es, ax
+    mov di, [cs:buf_pos]
+    mov cx, 0xFFFF
+    mov al, [cs:hd_fh]
+    mov ah, API_FS_READ
+    int 0x80
+    jc .pr_close
+
+    ; Save size
+    push ax
+    mov al, [cs:n_apps]
+    xor ah, ah
+    shl ax, 1
+    mov si, ax
+    add si, app_sizes
+    pop ax
+    mov [cs:si], ax
+
+    ; Advance buffer
+    add [cs:buf_pos], ax
+    inc byte [cs:n_apps]
+
+.pr_close:
+    mov al, [cs:hd_fh]
+    mov ah, API_FS_CLOSE
+    int 0x80
+    jmp .pr_loop
+
+.pr_done:
+    ret
+
+; ============================================================================
+; Write pre-read apps from scratch buffer to new floppy
+; ============================================================================
+write_buffered_apps:
+    mov byte [cs:n_copied], 0
+    mov word [cs:wr_off], 0
+    mov byte [cs:app_idx], 0
+
+.wb_loop:
+    mov al, [cs:app_idx]
+    cmp al, [cs:n_apps]
+    jae .wb_done
+
+    ; Get filename: app_names + idx * 13
+    xor ah, ah
+    mov cx, 13
+    mul cx
+    add ax, app_names
+    mov si, ax
+
+    ; Create file on new floppy
+    mov bl, 0
+    mov ah, API_FS_CREATE
+    int 0x80
+    jc .wb_next
+    mov [cs:fl_fh], al
+
+    ; Get size: app_sizes + idx * 2
+    mov al, [cs:app_idx]
+    xor ah, ah
+    shl ax, 1
+    mov si, ax
+    add si, app_sizes
+    mov cx, [cs:si]
+
+    ; Write from 0x9000:wr_off
+    mov ax, SCRATCH_SEG
+    mov es, ax
+    mov bx, [cs:wr_off]
+    mov al, [cs:fl_fh]
+    mov ah, API_FS_WRITE
+    int 0x80
+
+    ; Close
+    mov al, [cs:fl_fh]
+    mov ah, API_FS_CLOSE
+    int 0x80
+
+    ; Advance: wr_off += size
+    mov al, [cs:app_idx]
+    xor ah, ah
+    shl ax, 1
+    mov si, ax
+    add si, app_sizes
+    mov ax, [cs:si]
+    add [cs:wr_off], ax
+
+    inc byte [cs:n_copied]
+.wb_next:
+    inc byte [cs:app_idx]
+    jmp .wb_loop
+
+.wb_done:
+    ret
+
+; ============================================================================
 ; Helpers
 ; ============================================================================
-
-draw_ui:
-    push ax
-    push bx
-    push cx
-    push si
-    mov si, msg_title
-    mov bx, 4
-    mov cx, 4
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov si, msg_insert
-    mov bx, 4
-    mov cx, 20
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov si, msg_then
-    mov bx, 4
-    mov cx, 32
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 show_status:
     push ax
@@ -534,6 +731,16 @@ show_status:
     pop cx
     pop bx
     pop ax
+    ret
+
+wait_any_key:
+    sti
+    mov ah, API_APP_YIELD
+    int 0x80
+    mov ah, API_EVENT_GET
+    int 0x80
+    cmp al, EVENT_KEY_PRESS
+    jne wait_any_key
     ret
 
 build_fs_bpb:
@@ -652,15 +859,18 @@ window_title:   db 'Make Boot Floppy', 0
 msg_title:      db 'Boot Floppy Creator', 0
 msg_insert:     db 'Insert blank floppy in A:', 0
 msg_then:       db 'then choose an option.', 0
+msg_floppy_src: db 'Source floppy in drive.', 0
 msg_option_f:   db 'F = Full (OS + all apps)', 0
 msg_option_b:   db 'B = Barebones (OS only)', 0
 msg_option_esc: db 'ESC = Cancel', 0
-msg_need_hd:    db 'Must boot from HD!', 0
+msg_reading:    db 'Reading apps...', 0
+msg_swap1:      db 'Swap to blank floppy,', 0
+msg_swap2:      db 'press any key.', 0
 msg_writing_boot:  db 'Boot sector...', 0
 msg_writing_stage2: db 'Stage2 loader...', 0
 msg_writing_kernel: db 'Kernel (32KB)...', 0
 msg_writing_fs: db 'FAT12 filesystem...', 0
-msg_copying:    db 'Copying apps...', 0
+msg_copying:    db 'Writing apps...', 0
 msg_done:       db 'Done! Floppy is bootable.', 0
 msg_err:        db 'ERROR: Write failed!', 0
 msg_files:      db 'Copied '
@@ -683,8 +893,18 @@ hd_fh:          db 0
 fl_fh:          db 0
 nbytes:         dw 0
 
+; Pre-read state
+n_apps:         db 0
+buf_pos:        dw 0
+app_idx:        db 0
+wr_off:         dw 0
+
 dirent:         times 32 db 0
 dotname:        times 13 db 0
+
+; App info tables (for floppy-to-floppy pre-read)
+app_names:      times (MAX_APPS * 13) db 0
+app_sizes:      times (MAX_APPS * 2) db 0
 
 ; ============================================================================
 ; Embedded boot sector (512 bytes) and stage2 (2048 bytes)
