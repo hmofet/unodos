@@ -46,9 +46,11 @@ entry:
     ; Initialize caller_ds for direct kernel calls to gfx_draw_string_stub
     mov word [caller_ds], 0x1000
 
-    ; Initialize draw foreground color from theme
+    ; Initialize draw colors from theme
     mov al, [text_color]
     mov [draw_fg_color], al
+    mov al, [desktop_bg_color]
+    mov [draw_bg_color], al
 
     ; Display version number (top-left corner)
     mov bx, 4
@@ -121,6 +123,15 @@ int_80_handler:
     ; Set draw foreground color from text theme color
     mov al, [text_color]
     mov [draw_fg_color], al
+    ; Auto-set draw_bg_color: window context = 0 (black), no context = desktop color
+    cmp byte [draw_context], 0xFF
+    jne .set_bg_win
+    mov al, [desktop_bg_color]
+    mov [draw_bg_color], al
+    jmp .set_bg_end
+.set_bg_win:
+    mov byte [draw_bg_color], 0
+.set_bg_end:
     pop ax
 
     ; --- Window-relative coordinate translation ---
@@ -1860,10 +1871,18 @@ draw_char:
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
     jz .clear_pixel
-    call plot_pixel_white           ; "1" bit: white pixel
+    call plot_pixel_white           ; "1" bit: foreground color
     jmp .next_pixel
 .clear_pixel:
-    call plot_pixel_black           ; "0" bit: clear to black
+    cmp byte [draw_bg_color], 0
+    jne .bg_color_pixel
+    call plot_pixel_black           ; Fast path: black background
+    jmp .next_pixel
+.bg_color_pixel:
+    push dx
+    mov dl, [draw_bg_color]
+    call plot_pixel_color
+    pop dx
 .next_pixel:
     shl ah, 1                       ; Next bit
     inc cx                          ; Next X
@@ -7837,6 +7856,10 @@ draw_desktop_region:
     mov al, [desktop_bg_color]
     call gfx_fill_color             ; Fill rectangle with color AL
 
+    ; Set draw_bg_color for icon label text on desktop
+    mov al, [desktop_bg_color]
+    mov [draw_bg_color], al
+
     ; Draw ALL registered icons (no overlap test - icons are small, always redraw)
     mov si, desktop_icons
     xor bp, bp                      ; Icon counter
@@ -9244,10 +9267,11 @@ win_draw_stub:
     mov bx, 0x1000
     mov ds, bx
 
-    ; Use win_color for window chrome drawing
+    ; Use win_color for window chrome, black bg for title bar text
     push ax
     mov al, [win_color]
     mov [draw_fg_color], al
+    mov byte [draw_bg_color], 0
     pop ax
 
     mov bx, ax
@@ -9845,6 +9869,7 @@ clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
 
 ; Color theme variables (Build 208)
 draw_fg_color:  db 3                    ; Current foreground drawing color (0-3)
+draw_bg_color:  db 0                    ; Current background drawing color (0-3)
 text_color:     db 3                    ; Text/foreground color (default: white)
 win_color:      db 3                    ; Window chrome color (default: white)
 ; desktop_bg_color is at line ~10033
