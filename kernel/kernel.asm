@@ -344,6 +344,10 @@ int_09_handler:
     je .arrow_up
     cmp al, 0x50                    ; Down arrow
     je .arrow_down
+    cmp al, 0x4B                    ; Left arrow
+    je .arrow_left
+    cmp al, 0x4D                    ; Right arrow
+    je .arrow_right
     cmp al, 0x1C                    ; Numpad Enter
     je .numpad_enter
     jmp .done                       ; Ignore other extended keys
@@ -353,6 +357,12 @@ int_09_handler:
     jmp .store_key
 .arrow_down:
     mov al, 129                     ; Special code for Down arrow
+    jmp .store_key
+.arrow_left:
+    mov al, 130                     ; Special code for Left arrow
+    jmp .store_key
+.arrow_right:
+    mov al, 131                     ; Special code for Right arrow
     jmp .store_key
 .numpad_enter:
     mov al, 13                      ; Same as regular Enter

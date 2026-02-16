@@ -36,6 +36,7 @@ MOUSE_TEST_BIN = build/mouse_test.bin
 MUSIC_BIN = build/music.bin
 MKBOOT_BIN = build/mkboot.bin
 SETTINGS_BIN = build/settings.bin
+TETRIS_BIN = build/tetris.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -122,6 +123,9 @@ $(MKBOOT_BIN): $(APPS_DIR)/mkboot.asm $(BOOT_BIN) $(STAGE2_BIN) | $(BUILD_DIR)
 $(SETTINGS_BIN): $(APPS_DIR)/settings.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
+$(TETRIS_BIN): $(APPS_DIR)/tetris.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
 # Create 360KB floppy image (target platform)
 # Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
@@ -133,14 +137,14 @@ $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Created $@ (360KB)"
 
 # Create 1.44MB floppy image (for modern hardware testing)
-$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN)
+$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN)
 	@echo "Creating 1.44MB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Adding FAT12 filesystem with apps..."
-	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN
+	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN
 	@echo "Created $@ (1.44MB)"
 
 floppy144: $(FLOPPY_144)
@@ -194,7 +198,7 @@ build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
 
 # Build all applications
-apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN)
+apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN)
 	@echo "Built applications:"
 	@echo "  $(HELLO_BIN) ($$(wc -c < $(HELLO_BIN)) bytes)"
 	@echo "  $(CLOCK_BIN) ($$(wc -c < $(CLOCK_BIN)) bytes)"
@@ -204,6 +208,7 @@ apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN)
 	@echo "  $(MUSIC_BIN) ($$(wc -c < $(MUSIC_BIN)) bytes)"
 	@echo "  $(MKBOOT_BIN) ($$(wc -c < $(MKBOOT_BIN)) bytes)"
 	@echo "  $(SETTINGS_BIN) ($$(wc -c < $(SETTINGS_BIN)) bytes)"
+	@echo "  $(TETRIS_BIN) ($$(wc -c < $(TETRIS_BIN)) bytes)"
 
 # Create app test floppy image (FAT12 with HELLO.BIN)
 build/app-test.img: $(HELLO_BIN)
@@ -234,9 +239,9 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-display gtk
 
 # Create launcher app floppy image (FAT12 with LAUNCHER.BIN + apps)
-build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN)
+build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN)
 	@echo "Creating launcher floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN
 
 # Legacy alias
 build/launcher-app.img: build/launcher-floppy.img
