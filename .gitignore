@@ -1,5 +1,7 @@
 # Build artifacts (intermediate files)
 build/*.o
+apps/launcher
+kernel/kernel
 
 # Auto-generated files
 kernel/build_info.inc
@@ -17,3 +19,13 @@ kernel/build_info.inc
 # OS files
 .DS_Store
 Thumbs.db
+
+# Claude Code
+.claude/
+
+# IDE / editor config
+*.code-workspace
+
+# Session transcripts
+TRANSCRIPT.md
+SESSION_SUMMARY.md
