@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.18.0] - 2026-02-16
 
-### Added (Builds 194-196) - Splash Screen, File Browser Fix, Refresh Icon
+### Added (Builds 194-201) - Splash Screen, Multitasking Fixes, Refresh Icon
 
-- **Splash Screen with Logo** (Build 196)
+- **Splash Screen with Logo** (Builds 196-201)
   - "U" logo drawn with white filled rectangles during boot
   - "UnoDOS 3" title and "Loading..." text displayed
   - Progress bar fills as apps are discovered from disk
   - Replaces blank/debug screen during launcher initialization
+  - Fast CGA memory clear via REP STOSW (Build 200)
 
 - **Floppy Refresh Icon** (Build 195)
   - Manual disk rescan icon appears as last desktop icon on floppy boot
@@ -25,18 +26,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - "Insert app disk" message for mount/file errors (codes 2, 3)
   - Error message auto-clears after ~2 seconds with desktop redraw
 
-### Fixed (Builds 194-196)
+### Fixed (Builds 194-201)
 
 - **File Browser HD Support** (Build 194): Browser now queries boot drive
   and saves mount handle, fixing blank listing on HD/CF/USB boot
 - **Floppy Seeking Noise** (Build 195): Removed automatic floppy swap
   polling (INT 13h AH=16h) that caused audible seeking on IBM PS/2 L40
+- **Music App Single Tone** (Build 197): App played one constant note
+  instead of Fur Elise melody. Root cause: `app_yield_stub` didn't
+  preserve general-purpose registers across context switches, so CX
+  (note duration) was clobbered by the launcher. Fixed with pusha/popa.
+- **App Launch Crash** (Build 198): Adding pusha/popa to yield broke
+  new task startup — `popa` consumed return addresses instead of
+  register values. Fixed by adding dummy pusha frame (8 zero words)
+  to initial task stack built by `app_start_stub`.
+- **Initial Context Switch Loop** (Build 201): `auto_load_launcher`
+  did bare `ret` without `popa`, popping 0 from the dummy pusha frame
+  instead of `int80_return_point`. This jumped to kernel entry (0x0000)
+  in an infinite loop: boot → load launcher → ret to kernel → repeat.
+  Fixed by adding `popa` before `ret` in both `auto_load_launcher` and
+  `app_exit_common`.
 
 ### Changed
 
 - Bootloader version updated from v0.2 to v3.18
 - All boot diagnostic code removed (keypress wait, BIOS teletype,
   CGA white boxes, PRE/POST markers)
+- Splash screen text uses transparent background (Build 199)
+- Desktop/splash screen clear uses direct CGA REP STOSW (Build 200)
 
 ### Removed
 
