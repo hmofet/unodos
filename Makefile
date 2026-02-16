@@ -322,3 +322,19 @@ run-hd-mouse: $(HD_IMG) check-qemu
 		-boot c \
 		-device usb-mouse \
 		-display gtk
+
+# Auto-launch Tetris for testing (Tetris loaded as launcher)
+build/tetris-autolaunch.img: $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(TETRIS_BIN)
+	@echo "Creating Tetris auto-launch floppy..."
+	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
+	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
+	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
+	python3 tools/add_floppy_fs.py $@ $(TETRIS_BIN) LAUNCHER.BIN
+
+test-tetris: build/tetris-autolaunch.img check-qemu
+	$(QEMU) -M isapc \
+		-m 640K \
+		-drive file=build/tetris-autolaunch.img,format=raw,if=floppy \
+		-boot a \
+		-display gtk
