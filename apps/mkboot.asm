@@ -1,7 +1,7 @@
 ; MKBOOT.BIN - Boot Floppy Creator for UnoDOS
-; Creates a bootable 1.44MB floppy disk
+; Creates a bootable 1.44MB floppy disk from HD
 ; Embeds boot sector and stage2, copies kernel from memory,
-; builds FAT12 filesystem, and copies apps from HD
+; builds FAT12 filesystem, optionally copies apps from HD
 ;
 ; Build: nasm -f bin -o mkboot.bin mkboot.asm
 
@@ -15,23 +15,23 @@
     times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
 
     ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
-    ; Floppy disk icon
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 0:  top edge
-    db 0x30, 0x3F, 0xFC, 0x0C      ; Row 1:  label area
-    db 0x30, 0x3F, 0xFC, 0x0C      ; Row 2:  label
-    db 0x30, 0x3F, 0xFC, 0x0C      ; Row 3:  label
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 4:  body
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 5:  body
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 6:  body
-    db 0x30, 0x0F, 0xF0, 0x0C      ; Row 7:  hub top
-    db 0x30, 0x0C, 0x30, 0x0C      ; Row 8:  hub
-    db 0x30, 0x0C, 0x30, 0x0C      ; Row 9:  hub
-    db 0x30, 0x0F, 0xF0, 0x0C      ; Row 10: hub bottom
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 11: body
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 12: body
-    db 0x30, 0x00, 0x00, 0x0C      ; Row 13: body
-    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14: bottom edge
-    db 0x00, 0x00, 0x00, 0x00      ; Row 15: empty
+    ; Arrow pointing down into a disk shape
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 0:  ....####....
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 1:  ....####....
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 2:  ....####....
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 3:  ....####....
+    db 0x03, 0xFF, 0xFF, 0xC0      ; Row 4:  ##..####..##
+    db 0x00, 0xFF, 0xFF, 0x00      ; Row 5:  ..########..
+    db 0x00, 0x3F, 0xFC, 0x00      ; Row 6:  ....######..
+    db 0x00, 0x0F, 0xF0, 0x00      ; Row 7:  ....####....
+    db 0x00, 0x03, 0xC0, 0x00      ; Row 8:  ......##....
+    db 0x00, 0x00, 0x00, 0x00      ; Row 9:  ............
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 10: ##############
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 11: ##..........##
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 12: ##..........##
+    db 0x30, 0x00, 0x00, 0x0C      ; Row 13: ##..........##
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14: ##############
+    db 0x00, 0x00, 0x00, 0x00      ; Row 15: ............
 
     times 0x50 - ($ - $$) db 0     ; Pad to code entry at offset 0x50
 
@@ -40,6 +40,7 @@
 ; API constants
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
+API_GFX_DRAW_STRING_INV equ 6
 API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
 API_FS_OPEN             equ 14
@@ -60,20 +61,17 @@ EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
 ; Floppy layout constants
-FLOPPY_BOOT_SECTORS     equ 1       ; Sector 0
 FLOPPY_STAGE2_START     equ 1       ; Sectors 1-4
 FLOPPY_STAGE2_SECTORS   equ 4
 FLOPPY_KERNEL_START     equ 5       ; Sectors 5-68
 FLOPPY_KERNEL_SECTORS   equ 64
 FLOPPY_FS_START         equ 70      ; Sector 70
-FLOPPY_TOTAL_SECTORS    equ 2880
 
-; FAT12 filesystem parameters (matching kernel's hard-coded values)
-FAT12_RESERVED          equ 1       ; 1 reserved sector (FS BPB)
+; FAT12 filesystem parameters
+FAT12_RESERVED          equ 1
 FAT12_NUM_FATS          equ 2
-FAT12_SPF               equ 9       ; Sectors per FAT
-FAT12_ROOT_ENTRIES      equ 224
-FAT12_ROOT_SECTORS      equ 14      ; (224 * 32) / 512
+FAT12_SPF               equ 9
+FAT12_ROOT_SECTORS      equ 14
 
 entry:
     pusha
@@ -83,15 +81,15 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Create window
-    mov bx, 30                      ; X
-    mov cx, 30                      ; Y
-    mov dx, 260                     ; Width
-    mov si, 130                     ; Height
+    ; Create window - use moderate size
+    mov bx, 40                      ; X
+    mov cx, 35                      ; Y
+    mov dx, 240                     ; Width
+    mov si, 120                     ; Height
     mov ax, cs
     mov es, ax
     mov di, window_title
-    mov al, 0x03
+    mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
     mov ah, API_WIN_CREATE
     int 0x80
     jc .exit_fail
@@ -100,361 +98,364 @@ entry:
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Show initial instructions
+    ; Draw initial UI
     call draw_ui
 
-    ; Check boot drive - must be HD for this to make sense
+    ; Check boot drive
     mov ah, API_GET_BOOT_DRIVE
     int 0x80
+    mov [cs:boot_drive], al
     test al, 0x80
-    jnz .hd_boot_ok
+    jnz .hd_boot
 
-    ; Booting from floppy - warn user
-    mov si, msg_floppy_warn
+    ; Booting from floppy - can't create boot floppies
+    mov si, msg_need_hd
     mov bx, 4
-    mov cx, 48
+    mov cx, 60
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov si, msg_floppy_warn2
-    mov bx, 4
-    mov cx, 58
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    jmp .wait_key
+    jmp .wait_exit
 
-.hd_boot_ok:
-    ; Mount HD filesystem (mount handle 1)
+.hd_boot:
+    ; Mount HD filesystem
     mov al, 0x80
     mov ah, API_FS_MOUNT
     int 0x80
 
-.wait_key:
-    ; Wait for ENTER to start, ESC to cancel
+    ; Show options
+    mov si, msg_option_f
+    mov bx, 4
+    mov cx, 48
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov si, msg_option_b
+    mov bx, 4
+    mov cx, 60
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov si, msg_option_esc
+    mov bx, 4
+    mov cx, 76
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.wait_choice:
     sti
     mov ah, API_APP_YIELD
     int 0x80
-
     mov ah, API_EVENT_GET
     int 0x80
-    jc .wait_key
+    jc .wait_choice
     cmp al, EVENT_KEY_PRESS
-    jne .check_redraw
-    cmp dl, 13                      ; ENTER
-    je .start_write
+    jne .check_redraw1
+    cmp dl, 'f'
+    je .start_full
+    cmp dl, 'F'
+    je .start_full
+    cmp dl, 'b'
+    je .start_barebones
+    cmp dl, 'B'
+    je .start_barebones
     cmp dl, 27                      ; ESC
     je .exit_ok
-    jmp .wait_key
-
-.check_redraw:
+    jmp .wait_choice
+.check_redraw1:
     cmp al, EVENT_WIN_REDRAW
-    jne .wait_key
+    jne .wait_choice
     call draw_ui
-    jmp .wait_key
+    jmp .wait_choice
 
-.start_write:
-    ; Clear status area
-    call clear_status
+.start_full:
+    mov byte [cs:copy_apps], 1
+    jmp .do_write
 
-    ; === Step 1: Write boot sector ===
-    mov si, msg_step_boot
+.start_barebones:
+    mov byte [cs:copy_apps], 0
+
+.do_write:
+    ; Clear options area
+    mov bx, 0
+    mov cx, 44
+    mov dx, 236
+    mov si, 100
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    mov word [cs:status_y], 46
+
+    ; === Write boot sector ===
+    mov si, msg_writing_boot
     call show_status
 
     mov ax, cs
     mov es, ax
-    mov bx, embedded_boot          ; ES:BX = boot sector data
-    mov si, 0                       ; LBA sector 0
-    mov dl, 0x00                    ; Drive A:
+    mov bx, embedded_boot
+    mov si, 0                       ; LBA 0
+    mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
-    jc .error_write
+    jc .error
 
-    ; === Step 2: Write stage2 (4 sectors) ===
-    mov si, msg_step_stage2
+    ; === Write stage2 (4 sectors) ===
+    mov si, msg_writing_stage2
     call show_status
 
     mov cx, FLOPPY_STAGE2_SECTORS
-    mov word [cs:current_lba], FLOPPY_STAGE2_START
-    mov word [cs:buffer_offset], embedded_stage2
-.write_stage2_loop:
+    mov word [cs:cur_lba], FLOPPY_STAGE2_START
+    mov word [cs:buf_off], embedded_stage2
+.wr_stage2:
     push cx
     mov ax, cs
     mov es, ax
-    mov bx, [cs:buffer_offset]
-    mov si, [cs:current_lba]
+    mov bx, [cs:buf_off]
+    mov si, [cs:cur_lba]
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
     pop cx
-    jc .error_write
-    add word [cs:buffer_offset], 512
-    inc word [cs:current_lba]
-    loop .write_stage2_loop
+    jc .error
+    add word [cs:buf_off], 512
+    inc word [cs:cur_lba]
+    loop .wr_stage2
 
-    ; === Step 3: Write kernel from memory (64 sectors from 0x1000:0000) ===
-    mov si, msg_step_kernel
+    ; === Write kernel from memory (64 sectors) ===
+    mov si, msg_writing_kernel
     call show_status
 
     mov cx, FLOPPY_KERNEL_SECTORS
-    mov word [cs:current_lba], FLOPPY_KERNEL_START
-    mov word [cs:buffer_offset], 0
-.write_kernel_loop:
+    mov word [cs:cur_lba], FLOPPY_KERNEL_START
+    mov word [cs:buf_off], 0
+.wr_kernel:
     push cx
     mov ax, 0x1000                  ; Kernel segment
     mov es, ax
-    mov bx, [cs:buffer_offset]
-    mov si, [cs:current_lba]
+    mov bx, [cs:buf_off]
+    mov si, [cs:cur_lba]
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
     pop cx
-    jc .error_write
-    add word [cs:buffer_offset], 512
-    inc word [cs:current_lba]
-    loop .write_kernel_loop
+    jc .error
+    add word [cs:buf_off], 512
+    inc word [cs:cur_lba]
+    loop .wr_kernel
 
-    ; === Step 4: Write FAT12 filesystem structure ===
-    mov si, msg_step_fat
+    ; === Write FAT12 filesystem ===
+    mov si, msg_writing_fs
     call show_status
 
-    ; 4a: Write FS BPB at sector 70
-    call build_fs_bpb               ; Builds BPB in sector_buffer
+    ; FS BPB at sector 70
+    call build_fs_bpb
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
+    mov bx, secbuf
     mov si, FLOPPY_FS_START
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
-    jc .error_write
+    jc .error
 
-    ; 4b: Write FAT1 (9 sectors starting at sector 71)
-    ; First sector has media byte + 2 reserved entries
-    call build_empty_fat_sector     ; Builds first FAT sector in sector_buffer
+    ; FAT1 first sector (media byte)
+    call build_fat_first
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
+    mov bx, secbuf
     mov si, FLOPPY_FS_START + FAT12_RESERVED
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
-    jc .error_write
+    jc .error
 
-    ; Remaining FAT1 sectors (8 sectors of zeros)
-    call clear_sector_buffer
-    mov cx, FAT12_SPF - 1           ; 8 more sectors
-    mov word [cs:current_lba], FLOPPY_FS_START + FAT12_RESERVED + 1
-.write_fat1_loop:
+    ; FAT1 remaining sectors (zero)
+    call clear_secbuf
+    mov cx, FAT12_SPF - 1
+    mov word [cs:cur_lba], FLOPPY_FS_START + FAT12_RESERVED + 1
+.wr_fat1:
     push cx
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
-    mov si, [cs:current_lba]
+    mov bx, secbuf
+    mov si, [cs:cur_lba]
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
     pop cx
-    jc .error_write
-    inc word [cs:current_lba]
-    loop .write_fat1_loop
+    jc .error
+    inc word [cs:cur_lba]
+    loop .wr_fat1
 
-    ; 4c: Write FAT2 (copy of FAT1)
-    ; First sector with media byte
-    call build_empty_fat_sector
+    ; FAT2 first sector (media byte)
+    call build_fat_first
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
+    mov bx, secbuf
     mov si, FLOPPY_FS_START + FAT12_RESERVED + FAT12_SPF
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
-    jc .error_write
+    jc .error
 
-    ; Remaining FAT2 sectors
-    call clear_sector_buffer
+    ; FAT2 remaining sectors (zero)
+    call clear_secbuf
     mov cx, FAT12_SPF - 1
-    mov word [cs:current_lba], FLOPPY_FS_START + FAT12_RESERVED + FAT12_SPF + 1
-.write_fat2_loop:
+    mov word [cs:cur_lba], FLOPPY_FS_START + FAT12_RESERVED + FAT12_SPF + 1
+.wr_fat2:
     push cx
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
-    mov si, [cs:current_lba]
+    mov bx, secbuf
+    mov si, [cs:cur_lba]
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
     pop cx
-    jc .error_write
-    inc word [cs:current_lba]
-    loop .write_fat2_loop
+    jc .error
+    inc word [cs:cur_lba]
+    loop .wr_fat2
 
-    ; 4d: Write empty root directory (14 sectors)
-    ; First sector: volume label entry
-    call build_root_dir_sector      ; Volume label in first entry
+    ; Root directory first sector (volume label)
+    call build_rootdir
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
+    mov bx, secbuf
     mov si, FLOPPY_FS_START + FAT12_RESERVED + (FAT12_NUM_FATS * FAT12_SPF)
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
-    jc .error_write
+    jc .error
 
-    ; Remaining root dir sectors (zeros)
-    call clear_sector_buffer
+    ; Root dir remaining sectors (zero)
+    call clear_secbuf
     mov cx, FAT12_ROOT_SECTORS - 1
-    mov word [cs:current_lba], FLOPPY_FS_START + FAT12_RESERVED + (FAT12_NUM_FATS * FAT12_SPF) + 1
-.write_rootdir_loop:
+    mov word [cs:cur_lba], FLOPPY_FS_START + FAT12_RESERVED + (FAT12_NUM_FATS * FAT12_SPF) + 1
+.wr_rootdir:
     push cx
     mov ax, cs
     mov es, ax
-    mov bx, sector_buffer
-    mov si, [cs:current_lba]
+    mov bx, secbuf
+    mov si, [cs:cur_lba]
     mov dl, 0x00
     mov ah, API_FS_WRITE_SECTOR
     int 0x80
     pop cx
-    jc .error_write
-    inc word [cs:current_lba]
-    loop .write_rootdir_loop
+    jc .error
+    inc word [cs:cur_lba]
+    loop .wr_rootdir
 
-    ; === Step 5: Mount the new floppy filesystem ===
-    mov si, msg_step_copy
+    ; === Optionally copy apps ===
+    cmp byte [cs:copy_apps], 0
+    je .write_done
+
+    mov si, msg_copying
     call show_status
 
-    ; Mount floppy (mount handle 0) - sets kernel's FAT12 variables
+    ; Mount the new floppy filesystem
     mov al, 0x00
     mov ah, API_FS_MOUNT
     int 0x80
 
-    ; === Step 6: Copy app files from HD to floppy ===
-    ; Scan HD directory and copy each .BIN file
-    mov word [cs:dir_index], 0
-    mov byte [cs:files_copied], 0
+    ; Scan HD directory and copy BIN files
+    mov word [cs:dir_idx], 0
+    mov byte [cs:n_copied], 0
 
-.copy_next_file:
-    ; Read next directory entry from HD (mount handle 1)
+.copy_loop:
     mov ax, cs
     mov es, ax
-    mov di, dir_entry_buf           ; ES:DI = buffer for dir entry
-    mov ax, [cs:dir_index]
+    mov di, dirent                  ; ES:DI = dir entry buffer
+    mov ax, [cs:dir_idx]
     mov bl, 1                       ; Mount handle 1 = HD
     mov ah, API_FS_READDIR
     int 0x80
-    jc .copy_done                   ; End of directory or error
+    jc .write_done                  ; End of directory
 
-    inc word [cs:dir_index]
+    inc word [cs:dir_idx]
 
-    ; Check if it's a BIN file (extension at offset 8-10)
-    cmp byte [cs:dir_entry_buf + 8], 'B'
-    jne .copy_next_file
-    cmp byte [cs:dir_entry_buf + 9], 'I'
-    jne .copy_next_file
-    cmp byte [cs:dir_entry_buf + 10], 'N'
-    jne .copy_next_file
+    ; Check for .BIN extension
+    cmp byte [cs:dirent + 8], 'B'
+    jne .copy_loop
+    cmp byte [cs:dirent + 9], 'I'
+    jne .copy_loop
+    cmp byte [cs:dirent + 10], 'N'
+    jne .copy_loop
 
-    ; Skip KERNEL.BIN (it's already written as raw sectors)
-    cmp byte [cs:dir_entry_buf], 'K'
-    je .copy_next_file
+    ; Skip KERNEL.BIN
+    cmp byte [cs:dirent], 'K'
+    je .copy_loop
 
-    ; Convert FAT 8.3 name to dot format for fs_open/fs_create
-    call convert_fat_to_dot         ; Converts dir_entry_buf → dot_filename
+    ; Convert 8.3 to dot format
+    call convert_83_to_dot
 
-    ; Show which file we're copying
-    mov si, dot_filename
-    mov bx, 4
-    mov cx, 78
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Open file on HD
-    mov si, dot_filename
-    mov bx, 1                       ; Mount handle 1 = HD (uses BX not BL)
+    ; Open on HD
+    mov si, dotname
+    mov bx, 1
     mov ah, API_FS_OPEN
     int 0x80
-    jc .copy_next_file              ; Skip if can't open
+    jc .copy_loop
+    mov [cs:hd_fh], al
 
-    mov [cs:hd_file_handle], al
-
-    ; Create file on floppy
-    mov si, dot_filename
-    mov bl, 0                       ; Mount handle 0 = floppy
+    ; Create on floppy
+    mov si, dotname
+    mov bl, 0
     mov ah, API_FS_CREATE
     int 0x80
-    jc .close_hd_skip
+    jc .close_hd
 
-    mov [cs:floppy_file_handle], al
+    mov [cs:fl_fh], al
 
-    ; Copy loop: read from HD, write to floppy
-.copy_file_loop:
-    ; Read 512 bytes from HD file
-    mov al, [cs:hd_file_handle]
+    ; Copy data
+.copy_data:
+    mov al, [cs:hd_fh]
     mov ax, cs
     mov es, ax
-    mov di, copy_buffer             ; ES:DI for fs_read
+    mov di, cpybuf
     mov cx, 512
-    mov al, [cs:hd_file_handle]
+    mov al, [cs:hd_fh]
     mov ah, API_FS_READ
     int 0x80
-    jc .copy_file_done              ; Error or EOF
+    jc .close_both
     test ax, ax
-    jz .copy_file_done              ; 0 bytes = done
+    jz .close_both
+    mov [cs:nbytes], ax
 
-    mov [cs:bytes_read], ax
-
-    ; Write to floppy file
     mov ax, cs
     mov es, ax
-    mov bx, copy_buffer             ; ES:BX for fs_write
-    mov cx, [cs:bytes_read]
-    mov al, [cs:floppy_file_handle]
+    mov bx, cpybuf
+    mov cx, [cs:nbytes]
+    mov al, [cs:fl_fh]
     mov ah, API_FS_WRITE
     int 0x80
-    jc .copy_file_done
+    jc .close_both
 
-    ; Check if we read a full sector (more data might follow)
-    cmp word [cs:bytes_read], 512
-    je .copy_file_loop
+    cmp word [cs:nbytes], 512
+    je .copy_data
 
-.copy_file_done:
-    ; Close floppy file
-    mov al, [cs:floppy_file_handle]
+.close_both:
+    mov al, [cs:fl_fh]
     mov ah, API_FS_CLOSE
     int 0x80
-
-.close_hd_skip:
-    ; Close HD file
-    mov al, [cs:hd_file_handle]
+.close_hd:
+    mov al, [cs:hd_fh]
     mov ah, API_FS_CLOSE
     int 0x80
+    inc byte [cs:n_copied]
+    jmp .copy_loop
 
-    inc byte [cs:files_copied]
-
-    ; Clear the filename display line
-    mov bx, 4
-    mov cx, 78
-    mov dx, 250
-    mov si, 88
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    jmp .copy_next_file
-
-.copy_done:
-    ; === Done! ===
+.write_done:
+    ; Show success
     mov si, msg_done
     call show_status
 
+    cmp byte [cs:copy_apps], 0
+    je .wait_exit
     ; Show file count
-    mov al, [cs:files_copied]
+    mov al, [cs:n_copied]
     add al, '0'
-    mov [cs:count_char], al
-    mov si, msg_file_count
+    mov [cs:cnt_ch], al
+    mov si, msg_files
     mov bx, 4
-    mov cx, 78
+    mov cx, [cs:status_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Wait for ESC to exit
 .wait_exit:
     sti
     mov ah, API_APP_YIELD
@@ -473,8 +474,8 @@ entry:
     call draw_ui
     jmp .wait_exit
 
-.error_write:
-    mov si, msg_error
+.error:
+    mov si, msg_err
     call show_status
     jmp .wait_exit
 
@@ -492,175 +493,102 @@ entry:
     retf
 
 ; ============================================================================
-; Helper: Draw main UI
+; Helpers
 ; ============================================================================
+
 draw_ui:
     push ax
     push bx
     push cx
     push si
-
     mov si, msg_title
     mov bx, 4
     mov cx, 4
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-
     mov si, msg_insert
     mov bx, 4
     mov cx, 20
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-
-    mov si, msg_press_enter
+    mov si, msg_then
     mov bx, 4
     mov cx, 32
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-
     pop si
     pop cx
     pop bx
     pop ax
     ret
 
-; ============================================================================
-; Helper: Show status message at line 48
-; ============================================================================
 show_status:
     push ax
     push bx
     push cx
-    push si
-
-    ; Status line Y position advances with each call
     mov cx, [cs:status_y]
     mov bx, 4
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     add word [cs:status_y], 10
-
-    pop si
     pop cx
     pop bx
     pop ax
     ret
 
-; ============================================================================
-; Helper: Clear status area
-; ============================================================================
-clear_status:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov bx, 0
-    mov cx, 46
-    mov dx, 258
-    mov si, 120
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-    mov word [cs:status_y], 48
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; ============================================================================
-; Helper: Build FAT12 BPB in sector_buffer
-; ============================================================================
 build_fs_bpb:
-    push ax
-    push cx
-    push di
-    push es
-
-    ; Clear buffer
-    call clear_sector_buffer
-
-    mov ax, cs
-    mov es, ax
-    mov di, sector_buffer
-
-    ; BPB fields
-    mov byte [es:di + 0], 0xEB      ; JMP short
-    mov byte [es:di + 1], 0x3C
-    mov byte [es:di + 2], 0x90      ; NOP
-
-    ; OEM name
-    mov dword [es:di + 3], 'UNOD'
-    mov dword [es:di + 7], 'OS  '
-
-    mov word [es:di + 11], 512      ; Bytes per sector
-    mov byte [es:di + 13], 1        ; Sectors per cluster
-    mov word [es:di + 14], 1        ; Reserved sectors
-    mov byte [es:di + 16], 2        ; Number of FATs
-    mov word [es:di + 17], 224      ; Root entries
-    mov word [es:di + 19], 2810     ; Total sectors in FS area
-    mov byte [es:di + 21], 0xF0     ; Media descriptor
-    mov word [es:di + 22], 9        ; Sectors per FAT
-    mov word [es:di + 24], 18       ; Sectors per track
-    mov word [es:di + 26], 2        ; Heads
-    mov byte [es:di + 38], 0x29     ; Extended boot sig
-    mov dword [es:di + 39], 0x12345678  ; Volume serial
-    ; Volume label
-    mov dword [es:di + 43], 'UNOD'
-    mov dword [es:di + 47], 'OS  '
-    mov word [es:di + 51], '  '
-    mov byte [es:di + 53], ' '
-    ; FS type
-    mov dword [es:di + 54], 'FAT1'
-    mov dword [es:di + 58], '2   '
-    ; Boot signature
-    mov byte [es:di + 510], 0x55
-    mov byte [es:di + 511], 0xAA
-
-    pop es
-    pop di
-    pop cx
-    pop ax
+    call clear_secbuf
+    mov byte [cs:secbuf + 0], 0xEB
+    mov byte [cs:secbuf + 1], 0x3C
+    mov byte [cs:secbuf + 2], 0x90
+    mov dword [cs:secbuf + 3], 'UNOD'
+    mov dword [cs:secbuf + 7], 'OS  '
+    mov word [cs:secbuf + 11], 512
+    mov byte [cs:secbuf + 13], 1
+    mov word [cs:secbuf + 14], 1
+    mov byte [cs:secbuf + 16], 2
+    mov word [cs:secbuf + 17], 224
+    mov word [cs:secbuf + 19], 2810
+    mov byte [cs:secbuf + 21], 0xF0
+    mov word [cs:secbuf + 22], 9
+    mov word [cs:secbuf + 24], 18
+    mov word [cs:secbuf + 26], 2
+    mov byte [cs:secbuf + 38], 0x29
+    mov dword [cs:secbuf + 39], 0x12345678
+    mov dword [cs:secbuf + 43], 'UNOD'
+    mov dword [cs:secbuf + 47], 'OS  '
+    mov word [cs:secbuf + 51], '  '
+    mov byte [cs:secbuf + 53], ' '
+    mov dword [cs:secbuf + 54], 'FAT1'
+    mov dword [cs:secbuf + 58], '2   '
+    mov byte [cs:secbuf + 510], 0x55
+    mov byte [cs:secbuf + 511], 0xAA
     ret
 
-; ============================================================================
-; Helper: Build first FAT sector (media byte + reserved entries)
-; ============================================================================
-build_empty_fat_sector:
-    call clear_sector_buffer
-    ; FAT12 first 3 bytes: media descriptor + EOF markers
-    mov byte [cs:sector_buffer], 0xF0
-    mov byte [cs:sector_buffer + 1], 0xFF
-    mov byte [cs:sector_buffer + 2], 0xFF
+build_fat_first:
+    call clear_secbuf
+    mov byte [cs:secbuf], 0xF0
+    mov byte [cs:secbuf + 1], 0xFF
+    mov byte [cs:secbuf + 2], 0xFF
     ret
 
-; ============================================================================
-; Helper: Build root directory first sector (volume label)
-; ============================================================================
-build_root_dir_sector:
-    call clear_sector_buffer
-    ; Volume label entry (32 bytes)
-    mov dword [cs:sector_buffer + 0], 'UNOD'
-    mov dword [cs:sector_buffer + 4], 'OS  '
-    mov word [cs:sector_buffer + 8], '  '
-    mov byte [cs:sector_buffer + 10], ' '
-    mov byte [cs:sector_buffer + 11], 0x08  ; Volume label attribute
+build_rootdir:
+    call clear_secbuf
+    mov dword [cs:secbuf + 0], 'UNOD'
+    mov dword [cs:secbuf + 4], 'OS  '
+    mov word [cs:secbuf + 8], '  '
+    mov byte [cs:secbuf + 10], ' '
+    mov byte [cs:secbuf + 11], 0x08
     ret
 
-; ============================================================================
-; Helper: Clear sector_buffer (512 bytes of zeros)
-; ============================================================================
-clear_sector_buffer:
+clear_secbuf:
     push ax
     push cx
     push di
     push es
     mov ax, cs
     mov es, ax
-    mov di, sector_buffer
+    mov di, secbuf
     xor ax, ax
     mov cx, 256
     rep stosw
@@ -670,63 +598,46 @@ clear_sector_buffer:
     pop ax
     ret
 
-; ============================================================================
-; Helper: Convert FAT 8.3 name (dir_entry_buf) to dot format (dot_filename)
-; Input: dir_entry_buf contains 11-byte FAT name
-; Output: dot_filename contains "NAME.EXT",0
-; ============================================================================
-convert_fat_to_dot:
+convert_83_to_dot:
     push ax
     push cx
     push si
     push di
-
-    mov si, dir_entry_buf
-    mov di, dot_filename
-
-    ; Copy name part (8 bytes, strip trailing spaces)
+    mov si, dirent
+    mov di, dotname
     mov cx, 8
-.copy_name:
+.cn:
     mov al, [cs:si]
     cmp al, ' '
-    je .name_done
+    je .cn_done
     mov [cs:di], al
     inc si
     inc di
-    loop .copy_name
-    jmp .add_dot
-.name_done:
-    ; SI might not have advanced past all 8 name bytes
-    mov si, dir_entry_buf
-    add si, 8                       ; Point to extension
-
-    jmp .check_ext
-.add_dot:
-    mov si, dir_entry_buf
+    loop .cn
+    jmp .dot
+.cn_done:
+    mov si, dirent
     add si, 8
-.check_ext:
-    ; Check if extension exists (not all spaces)
+    jmp .ext
+.dot:
+    mov si, dirent
+    add si, 8
+.ext:
     cmp byte [cs:si], ' '
-    je .no_ext
-
+    je .ext_done
     mov byte [cs:di], '.'
     inc di
-
-    ; Copy extension (3 bytes, strip trailing spaces)
     mov cx, 3
-.copy_ext:
+.ce:
     mov al, [cs:si]
     cmp al, ' '
     je .ext_done
     mov [cs:di], al
     inc si
     inc di
-    loop .copy_ext
-
+    loop .ce
 .ext_done:
-.no_ext:
-    mov byte [cs:di], 0             ; Null terminate
-
+    mov byte [cs:di], 0
     pop di
     pop si
     pop cx
@@ -740,56 +651,52 @@ convert_fat_to_dot:
 window_title:   db 'Make Boot Floppy', 0
 msg_title:      db 'Boot Floppy Creator', 0
 msg_insert:     db 'Insert blank floppy in A:', 0
-msg_press_enter: db 'ENTER=Start  ESC=Cancel', 0
-msg_floppy_warn: db 'Warning: Boot from HD to', 0
-msg_floppy_warn2: db 'create floppies.', 0
-msg_step_boot:  db 'Writing boot sector...', 0
-msg_step_stage2: db 'Writing stage2 loader...', 0
-msg_step_kernel: db 'Writing kernel (32KB)...', 0
-msg_step_fat:   db 'Writing FAT12 filesystem...', 0
-msg_step_copy:  db 'Copying apps to floppy...', 0
+msg_then:       db 'then choose an option.', 0
+msg_option_f:   db 'F = Full (OS + all apps)', 0
+msg_option_b:   db 'B = Barebones (OS only)', 0
+msg_option_esc: db 'ESC = Cancel', 0
+msg_need_hd:    db 'Must boot from HD!', 0
+msg_writing_boot:  db 'Boot sector...', 0
+msg_writing_stage2: db 'Stage2 loader...', 0
+msg_writing_kernel: db 'Kernel (32KB)...', 0
+msg_writing_fs: db 'FAT12 filesystem...', 0
+msg_copying:    db 'Copying apps...', 0
 msg_done:       db 'Done! Floppy is bootable.', 0
-msg_error:      db 'ERROR: Write failed!', 0
-msg_file_count: db 'Copied '
-count_char:     db '0'
-              db ' files.', 0
+msg_err:        db 'ERROR: Write failed!', 0
+msg_files:      db 'Copied '
+cnt_ch:         db '0'
+                db ' files.', 0
 
 ; ============================================================================
 ; Variables
 ; ============================================================================
 
-win_handle:         db 0
-current_lba:        dw 0
-buffer_offset:      dw 0
-status_y:           dw 48
-dir_index:          dw 0
-files_copied:       db 0
-hd_file_handle:     db 0
-floppy_file_handle: db 0
-bytes_read:         dw 0
+win_handle:     db 0
+boot_drive:     db 0
+copy_apps:      db 0
+cur_lba:        dw 0
+buf_off:        dw 0
+status_y:       dw 46
+dir_idx:        dw 0
+n_copied:       db 0
+hd_fh:          db 0
+fl_fh:          db 0
+nbytes:         dw 0
 
-; 8.3 FAT name buffer and dot format buffer
-dir_entry_buf:  times 32 db 0       ; Raw directory entry (32 bytes)
-dot_filename:   times 13 db 0       ; "FILENAME.EXT",0
+dirent:         times 32 db 0
+dotname:        times 13 db 0
 
 ; ============================================================================
-; Embedded boot sector (512 bytes)
+; Embedded boot sector (512 bytes) and stage2 (2048 bytes)
 ; ============================================================================
 embedded_boot:
     incbin 'build/boot.bin'
 
-; ============================================================================
-; Embedded stage2 loader (2048 bytes)
-; ============================================================================
 embedded_stage2:
     incbin 'build/stage2.bin'
 
 ; ============================================================================
-; Sector buffer (512 bytes for building FAT/root dir sectors)
+; Buffers
 ; ============================================================================
-sector_buffer:  times 512 db 0
-
-; ============================================================================
-; Copy buffer (512 bytes for file copy operations)
-; ============================================================================
-copy_buffer:    times 512 db 0
+secbuf:     times 512 db 0
+cpybuf:     times 512 db 0
