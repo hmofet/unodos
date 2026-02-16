@@ -207,11 +207,13 @@ Current version: **3.18.0** (Build 196)
 
 ## License
 
-UnoDOS License - Copyright (c) 2026 Arin Bakht
+Copyright (c) 2026 Arin Bakht
 
-- **Distribution**: Allowed in original, unmodified form with attribution
-- **Modification**: NOT permitted (no derivatives)
-- **Attribution**: Required - credit original author and link to source
+This project is licensed under the [Creative Commons Attribution-NonCommercial 4.0 International License](LICENSE) (CC BY-NC 4.0).
+
+- **Modification**: Allowed
+- **Attribution**: Required — credit the original author and link to this repository
+- **Commercial use**: Not permitted
 
 ---
 
