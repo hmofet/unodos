@@ -1454,7 +1454,8 @@ auto_load_launcher:
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
-    ret                             ; Enters launcher via int80_return_point
+    popa                            ; Consume dummy pusha frame (Build 198 added this)
+    ret                             ; Now pops int80_return_point correctly
 
 .fail_load:
     ; app_load_stub failed — draw error code (AX) on CGA screen
@@ -6373,7 +6374,8 @@ app_exit_stub:
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
-    ret                             ; Resumes next task via int80_return_point
+    popa                            ; Consume pusha frame from yielded task
+    ret                             ; Now pops int80_return_point correctly
 
 .exit_no_tasks:
     ; No tasks left - reload launcher
