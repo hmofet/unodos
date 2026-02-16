@@ -6257,8 +6257,9 @@ app_start_stub:
     jne .start_invalid
 
     ; Build initial stack frame in app's segment
-    ; When the scheduler first switches to this task, yield_stub's ret
-    ; pops int80_return_point, which does pop ds → iret into the app.
+    ; When the scheduler first switches to this task, yield_stub does
+    ; popa (restores dummy registers) then ret → int80_return_point
+    ; → pop ds → iret into the app.
     ;
     ; Stack layout (growing down from FFFE):
     ;   FFFC: task_exit_handler CS (0x1000)  ← for app's RETF exit
@@ -6268,7 +6269,8 @@ app_start_stub:
     ;   FFF4: app IP (0x0000)                ← for IRET
     ;   FFF2: app DS (= app CS)              ← for pop ds
     ;   FFF0: int80_return_point             ← for yield's ret
-    ;   Saved SP = FFF0
+    ;   FFEE-FFE0: pusha frame (8 words)     ← for yield's popa
+    ;   Saved SP = FFE0
 
     mov cx, [bx + APP_OFF_CODE_SEG] ; CX = app segment
     mov es, cx
@@ -6281,9 +6283,19 @@ app_start_stub:
     mov [es:0xFFF2], cx                     ; DS = app segment
     mov word [es:0xFFF0], int80_return_point
 
+    ; Dummy pusha frame (AX,CX,DX,BX,SP,BP,SI,DI — all zero)
+    mov word [es:0xFFEE], 0                 ; AX
+    mov word [es:0xFFEC], 0                 ; CX
+    mov word [es:0xFFEA], 0                 ; DX
+    mov word [es:0xFFE8], 0                 ; BX
+    mov word [es:0xFFE6], 0                 ; SP (ignored by popa)
+    mov word [es:0xFFE4], 0                 ; BP
+    mov word [es:0xFFE2], 0                 ; SI
+    mov word [es:0xFFE0], 0                 ; DI
+
     ; Save initial SS:SP to app_table
     mov [bx + APP_OFF_STACK_SEG], cx        ; SS = app segment
-    mov word [bx + APP_OFF_STACK_PTR], 0xFFF0
+    mov word [bx + APP_OFF_STACK_PTR], 0xFFE0
 
     ; Initialize per-task saved context
     mov byte [bx + APP_OFF_DRAW_CTX], 0xFF  ; No draw context
