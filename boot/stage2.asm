@@ -11,7 +11,7 @@
 ; ============================================================================
 
 KERNEL_SEGMENT  equ 0x1000          ; Kernel loads at 0x1000:0000 (64KB mark)
-KERNEL_SECTORS  equ 56              ; 28KB kernel (expanded for FAT12 filesystem - v3.10.0)
+KERNEL_SECTORS  equ 64              ; 32KB kernel (expanded for FS write support - Build 202)
 KERNEL_START    equ 6               ; Kernel starts at sector 6 (after 4-sector stage2 + 1 reserved)
 KERNEL_SIG      equ 0x4B55          ; 'UK' signature for kernel
 

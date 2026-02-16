@@ -106,7 +106,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-40)
     ; Validate function number
-    cmp ah, 44                      ; Max function count (0-43 valid)
+    cmp ah, 48                      ; Max function count (0-47 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -2763,7 +2763,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 44                           ; Number of function slots (0-43)
+    dw 48                           ; Number of function slots (0-47)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2836,6 +2836,12 @@ kernel_api_table:
     dw speaker_tone_stub            ; 41: Play tone (BX=freq Hz, 0=off)
     dw speaker_off_stub             ; 42: Turn off speaker
     dw get_boot_drive_stub          ; 43: Get boot drive (AL=drive number)
+
+    ; Filesystem Write API (v3.19.0)
+    dw fs_write_sector_stub         ; 44: Write raw sector to disk
+    dw fs_create_stub               ; 45: Create new file
+    dw fs_write_stub                ; 46: Write to open file
+    dw fs_delete_stub               ; 47: Delete file
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -3433,6 +3439,9 @@ FS_ERR_READ_ERROR       equ 3
 FS_ERR_INVALID_HANDLE   equ 4
 FS_ERR_NO_HANDLES       equ 5
 FS_ERR_END_OF_DIR       equ 6
+FS_ERR_WRITE_ERROR      equ 7
+FS_ERR_DISK_FULL        equ 8
+FS_ERR_DIR_FULL         equ 9
 
 ; Filesystem type constants
 FS_TYPE_FAT12           equ 1
@@ -3934,16 +3943,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 62 + reserved_sectors = 63
-    mov word [fat_start], 63        ; Filesystem at sector 62 + 1 reserved
+    ; fat_start = 70 + reserved_sectors = 71
+    mov word [fat_start], 71        ; Filesystem at sector 70 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 62 + reserved + (num_fats * sectors_per_fat)
-    ; = 62 + 1 + (2 * 9) = 62 + 1 + 18 = 81
+    ; root_dir_start = 70 + reserved + (num_fats * sectors_per_fat)
+    ; = 70 + 1 + (2 * 9) = 70 + 1 + 18 = 89
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 62                      ; Filesystem starts at sector 62
-    mov [root_dir_start], ax        ; = 81
+    add ax, 70                      ; Filesystem starts at sector 70
+    mov [root_dir_start], ax        ; = 89
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -4440,6 +4449,290 @@ floppy_read_sector:
     ret
 .frs_lba:   dw 0
 .frs_retry: db 0
+
+; ============================================================================
+; floppy_write_sector - Write one sector with retry logic
+; Input: AX = LBA sector number, ES:BX = buffer to write from
+; Output: CF = 0 on success, CF = 1 on error
+; Preserves: AX, ES, BX (buffer pointer)
+; Clobbers: CX, DX
+; ============================================================================
+floppy_write_sector:
+    push ax
+    mov [cs:.fws_lba], ax
+    mov byte [cs:.fws_retry], 3     ; 3 attempts
+.fws_loop:
+    ; Convert LBA to CHS
+    mov ax, [cs:.fws_lba]
+    xor dx, dx
+    push bx                         ; Save buffer pointer
+    mov bx, 18                      ; Sectors per track (1.44MB floppy)
+    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    inc dx                          ; DX = sector (1-based)
+    mov cl, dl                      ; CL = sector
+    xor dx, dx
+    mov bx, 2                       ; Number of heads
+    div bx                          ; AX = cylinder, DX = head
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop bx                          ; Restore buffer pointer
+    mov ax, 0x0301                  ; AH=03 (write), AL=01 (1 sector)
+    mov dl, 0x00                    ; Drive A:
+    int 0x13
+    jnc .fws_ok
+    ; Reset drive and retry
+    dec byte [cs:.fws_retry]
+    jz .fws_fail
+    xor ah, ah
+    mov dl, 0
+    int 0x13
+    jmp .fws_loop
+.fws_fail:
+    pop ax
+    stc
+    ret
+.fws_ok:
+    pop ax
+    clc
+    ret
+.fws_lba:   dw 0
+.fws_retry: db 0
+
+; ============================================================================
+; fat12_alloc_cluster - Find and allocate a free cluster in FAT12
+; Input: None
+; Output: AX = allocated cluster number, CF=0 success
+;         CF=1 if disk full (AX = FS_ERR_DISK_FULL)
+; Clobbers: CX, DX
+; ============================================================================
+fat12_alloc_cluster:
+    push bx
+    push si
+    push di
+    push bp
+    push es
+
+    ; Scan FAT entries starting from cluster 2
+    ; Total data clusters on 1.44MB floppy with our layout:
+    ; (2880 - 70) total FS sectors = 2810, minus overhead = ~2780 data clusters
+    mov cx, 2                       ; Start scanning from cluster 2
+.scan_loop:
+    cmp cx, 2847                    ; Max cluster for our floppy (conservative limit)
+    jae .disk_full
+
+    ; Calculate FAT byte offset: (cluster * 3) / 2
+    mov ax, cx
+    mov bx, cx
+    shl ax, 1                      ; AX = cluster * 2
+    add ax, bx                     ; AX = cluster * 3
+    shr ax, 1                      ; AX = byte offset in FAT
+    mov si, ax                     ; SI = FAT byte offset
+
+    ; Calculate which FAT sector and offset within it
+    xor dx, dx
+    push cx
+    mov cx, 512
+    div cx                          ; AX = sector offset, DX = byte in sector
+    pop cx
+    mov di, dx                      ; DI = byte offset within sector
+    add ax, [fat_start]             ; AX = absolute FAT sector number
+
+    ; Check if this FAT sector is cached
+    cmp ax, [fat_cache_sector]
+    je .ac_cached
+
+    ; Load FAT sector into cache
+    mov [fat_cache_sector], ax
+    push cx
+    push ax
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache
+    call floppy_read_sector
+    pop ax
+    pop cx
+    jc .alloc_error
+
+.ac_cached:
+    ; Read 2 bytes from FAT cache at offset DI
+    mov si, fat_cache
+    add si, di
+    mov ax, [si]                    ; AX = 2 bytes from FAT
+
+    ; Check even/odd cluster
+    test cx, 1
+    jnz .ac_odd
+
+.ac_even:
+    and ax, 0x0FFF
+    jmp .ac_check_free
+
+.ac_odd:
+    shr ax, 4
+
+.ac_check_free:
+    cmp ax, 0                       ; 0 = free cluster
+    je .found_free
+    inc cx
+    jmp .scan_loop
+
+.found_free:
+    ; Found free cluster in CX - mark it as end-of-chain (0xFFF)
+    mov ax, cx                      ; AX = cluster to allocate
+    mov dx, 0x0FFF                  ; DX = end-of-chain marker
+    call fat12_set_fat_entry
+    jc .alloc_error
+
+    ; Return allocated cluster in AX
+    mov ax, cx
+    clc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+
+.disk_full:
+    mov ax, FS_ERR_DISK_FULL
+    stc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+
+.alloc_error:
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+
+; ============================================================================
+; fat12_set_fat_entry - Set a FAT12 entry to a given value
+; Input: AX = cluster number, DX = new 12-bit value
+; Output: CF=0 success, CF=1 error
+; Clobbers: BX, CX, SI, DI
+; Writes to both FAT copies on disk
+; ============================================================================
+fat12_set_fat_entry:
+    push ax
+    push dx
+    push bp
+    push es
+
+    mov bp, ax                      ; BP = cluster number
+    mov [cs:.sfe_value], dx         ; Save new value
+
+    ; Calculate FAT byte offset: (cluster * 3) / 2
+    mov bx, ax
+    shl ax, 1                       ; AX = cluster * 2
+    add ax, bx                      ; AX = cluster * 3
+    shr ax, 1                       ; AX = byte offset in FAT
+    mov [cs:.sfe_fat_offset], ax
+
+    ; Calculate FAT sector and byte position
+    xor dx, dx
+    mov cx, 512
+    div cx                          ; AX = sector offset, DX = byte in sector
+    mov di, dx                      ; DI = byte offset within sector
+    mov [cs:.sfe_sector_off], ax    ; Save sector offset within FAT
+
+    ; Calculate absolute FAT sector
+    add ax, [fat_start]             ; AX = absolute FAT1 sector
+
+    ; Ensure FAT sector is cached
+    cmp ax, [fat_cache_sector]
+    je .sfe_cached
+
+    mov [fat_cache_sector], ax
+    push ax
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache
+    call floppy_read_sector
+    pop ax
+    jc .sfe_error
+
+.sfe_cached:
+    ; Modify the entry in fat_cache
+    mov si, fat_cache
+    add si, di                      ; SI = pointer to entry bytes
+
+    mov dx, [cs:.sfe_value]         ; DX = new 12-bit value
+
+    ; Handle even/odd cluster
+    test bp, 1
+    jnz .sfe_odd
+
+.sfe_even:
+    ; Even cluster: low 12 bits of word at offset
+    ; byte[off] = val & 0xFF
+    ; byte[off+1] = (byte[off+1] & 0xF0) | ((val >> 8) & 0x0F)
+    mov [si], dl                    ; Low byte of value
+    mov al, [si + 1]
+    and al, 0xF0                    ; Preserve high nibble of next byte
+    mov ah, dh
+    and ah, 0x0F                    ; High nibble of value
+    or al, ah
+    mov [si + 1], al
+    jmp .sfe_write_back
+
+.sfe_odd:
+    ; Odd cluster: high 12 bits of word at offset
+    ; byte[off] = (byte[off] & 0x0F) | ((val << 4) & 0xF0)
+    ; byte[off+1] = (val >> 4) & 0xFF
+    mov al, [si]
+    and al, 0x0F                    ; Preserve low nibble
+    mov ah, dl
+    shl ah, 4                       ; Shift value low nibble to high
+    or al, ah
+    mov [si], al
+    ; byte[off+1] = (val >> 4)
+    mov ax, dx
+    shr ax, 4
+    mov [si + 1], al
+
+.sfe_write_back:
+    ; Write modified sector to FAT1
+    mov ax, [cs:.sfe_sector_off]
+    add ax, [fat_start]
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache
+    call floppy_write_sector
+    jc .sfe_error
+
+    ; Write same sector to FAT2 (fat_start + sectors_per_fat + sector_offset)
+    mov ax, [cs:.sfe_sector_off]
+    add ax, [fat_start]
+    add ax, [sectors_per_fat]       ; FAT2 offset
+    call floppy_write_sector
+    jc .sfe_error
+
+    clc
+    pop es
+    pop bp
+    pop dx
+    pop ax
+    ret
+
+.sfe_error:
+    stc
+    pop es
+    pop bp
+    pop dx
+    pop ax
+    ret
+
+.sfe_value:      dw 0
+.sfe_fat_offset: dw 0
+.sfe_sector_off: dw 0
 
 ; ============================================================================
 ; fat12_read - Read data from file
@@ -7426,6 +7719,885 @@ get_boot_drive_stub:
     mov al, [boot_drive]
     ret
 
+; ============================================================================
+; Filesystem Write API Stubs (v3.19.0, Build 202)
+; ============================================================================
+
+; fs_write_sector_stub - Write raw sector to disk
+; Input: AX = LBA sector number, ES:BX = 512-byte data buffer, DL = drive
+; Output: CF=0 success, CF=1 error
+fs_write_sector_stub:
+    test dl, 0x80
+    jnz .ws_not_supported           ; HD write not supported yet
+    call floppy_write_sector
+    ret
+.ws_not_supported:
+    stc
+    ret
+
+; fs_create_stub - Create new file
+; Input: DS:SI = filename (dot format), BL = mount handle (0=FAT12)
+; Output: AX = file handle, CF=0 success; CF=1 error (AX=error code)
+; Note: Caller's DS:SI is in caller_ds:SI
+fs_create_stub:
+    cmp bl, 0
+    jne .fc_not_supported
+    ; Set up DS:SI from caller's segment
+    push ds
+    mov ds, [cs:caller_ds]          ; DS = caller's data segment
+    call fat12_create
+    pop ds
+    ret
+.fc_not_supported:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    ret
+
+; fs_write_stub - Write data to open file
+; Input: AX = file handle, ES:BX = data buffer, CX = byte count
+; Output: AX = bytes written, CF=0 success; CF=1 error
+; Note: Caller's ES:BX is in caller_es:BX
+fs_write_stub:
+    push es
+    mov es, [cs:caller_es]          ; ES = caller's data segment for buffer
+    call fat12_write
+    pop es
+    ret
+
+; fs_delete_stub - Delete a file
+; Input: DS:SI = filename (dot format), BL = mount handle (0=FAT12)
+; Output: CF=0 success, CF=1 error (AX=error code)
+; Note: Caller's DS:SI is in caller_ds:SI
+fs_delete_stub:
+    cmp bl, 0
+    jne .fd_not_supported
+    push ds
+    mov ds, [cs:caller_ds]
+    call fat12_delete
+    pop ds
+    ret
+.fd_not_supported:
+    mov ax, FS_ERR_NO_DRIVER
+    stc
+    ret
+
+; ============================================================================
+; fat12_create - Create a new file in FAT12 root directory
+; Input: DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF=0 success, AX = file handle
+;         CF=1 error, AX = error code
+; ============================================================================
+fat12_create:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert filename to 8.3 FAT format (padded with spaces)
+    sub sp, 12                      ; 11 bytes for name + 1 padding for alignment
+    mov di, sp
+    push ss
+    pop es
+
+    ; Initialize with spaces
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Copy name part (up to 8 chars before '.')
+    mov cx, 8
+.fc_copy_name:
+    lodsb
+    test al, al
+    jz .fc_name_done
+    cmp al, '.'
+    je .fc_copy_ext
+    ; Convert to uppercase
+    cmp al, 'a'
+    jb .fc_store_name
+    cmp al, 'z'
+    ja .fc_store_name
+    sub al, 32
+.fc_store_name:
+    mov [es:di], al
+    inc di
+    loop .fc_copy_name
+    ; Skip to dot
+.fc_skip_dot:
+    lodsb
+    test al, al
+    jz .fc_name_done
+    cmp al, '.'
+    jne .fc_skip_dot
+
+.fc_copy_ext:
+    mov di, sp
+    add di, 8                       ; Point to extension part
+    mov cx, 3
+.fc_copy_ext_loop:
+    lodsb
+    test al, al
+    jz .fc_name_done
+    ; Convert to uppercase
+    cmp al, 'a'
+    jb .fc_store_ext
+    cmp al, 'z'
+    ja .fc_store_ext
+    sub al, 32
+.fc_store_ext:
+    mov [es:di], al
+    inc di
+    loop .fc_copy_ext_loop
+
+.fc_name_done:
+    ; Switch DS to kernel segment
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Search root directory for free entry (0x00 or 0xE5)
+    mov ax, [root_dir_start]
+    mov cx, 14                      ; Max 14 root dir sectors
+    mov word [cs:.fc_dir_sector], 0 ; Track which sector has free entry
+
+.fc_search_sector:
+    push cx
+    push ax
+    mov [cs:.fc_dir_sector], ax     ; Save current sector LBA
+
+    ; Read root dir sector into bpb_buffer
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector
+    jc .fc_read_error
+
+    ; Search 16 entries in this sector
+    mov cx, 16
+    mov si, bpb_buffer
+    xor dx, dx                      ; DX = byte offset within sector
+
+.fc_check_entry:
+    mov al, [si]
+    test al, al                     ; 0x00 = end of directory (free)
+    jz .fc_found_free
+    cmp al, 0xE5                    ; Deleted entry (free)
+    je .fc_found_free
+
+    add si, 32
+    add dx, 32
+    dec cx
+    jnz .fc_check_entry
+
+    ; Next sector
+    pop ax
+    pop cx
+    inc ax
+    dec cx
+    jnz .fc_search_sector
+
+    ; Directory full
+    add sp, 12                      ; Clean up filename
+    mov ax, FS_ERR_DIR_FULL
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_read_error:
+    pop ax
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_found_free:
+    ; Found free entry at bpb_buffer + DX
+    ; Save dir entry offset
+    mov [cs:.fc_dir_offset], dl     ; DX fits in byte (0-480, step 32)
+
+    ; Pop sector loop state
+    pop ax                          ; Sector number (from push ax)
+    pop cx                          ; Sector counter (from push cx)
+
+    ; Allocate a cluster for the file
+    call fat12_alloc_cluster
+    jc .fc_alloc_failed
+    mov [cs:.fc_start_cluster], ax
+
+    ; Build directory entry at bpb_buffer + offset
+    mov bx, 0x1000
+    mov es, bx
+    mov di, bpb_buffer
+    xor dh, dh
+    mov dl, [cs:.fc_dir_offset]
+    add di, dx                      ; DI = pointer to dir entry in buffer
+
+    ; Copy 8.3 filename from stack
+    push ds
+    push ss
+    pop ds
+    ; Calculate filename position on stack
+    ; Stack currently: [12-byte filename] [bp] [di] [si] [dx] [cx] [bx] [es]
+    ; SP points past the push cx/ax we popped, so filename is at current SP + (amount pushed since sub sp)
+    ; Actually filename is at a fixed position. Let me calculate properly.
+    ; When we did sub sp, 12 the filename started at that SP. Let's use BP to find it.
+    mov si, sp
+    ; Stack: [12-byte filename is deep in the stack]
+    ; Actually we need to find where the 12 bytes are relative to current SP
+    ; After sub sp,12: filename at SP
+    ; Then we pushed bp,di,si,dx,cx (from fat12_create entry) = already on stack before sub sp
+    ; Wait - sub sp,12 was AFTER all the pushes. So filename is at SP + 0 from when we did sub sp.
+    ; But then we pushed more stuff: cx, ax (from .fc_search_sector loop), and popped them.
+    ; So the filename is still at the same position.
+    ; Current stack layout:
+    ;   SP → [pushed by us in between...]
+    ; Let me just save BP at entry and use it.
+    ; Actually the simplest approach: after sub sp,12, the filename is at the SP value at that point.
+    ; Since we've popped cx and ax from the loop, and haven't pushed anything else new,
+    ; the filename should be right at current SP position going back...
+    ;
+    ; Let me reconsider. At .fc_name_done we switched DS. Since then:
+    ;   push cx, push ax (loop), pop ax, pop cx - net 0
+    ; So the filename is still at exactly where sub sp,12 left it.
+    ; But we also did push ds just now. So filename is at SP + 2.
+    add si, 2                       ; Skip the DS we just pushed
+    mov cx, 11
+    rep movsb                       ; Copy filename to dir entry
+    pop ds
+
+    ; Set attributes and cluster/size
+    mov byte [es:di], 0x20          ; Attribute = archive at offset +11
+    inc di                          ; DI now at +12
+    ; Clear bytes 12-25 (reserved, time, date fields)
+    mov cx, 14
+    xor al, al
+    rep stosb                       ; DI now at offset +26
+    ; Write starting cluster at offset +26
+    mov ax, [cs:.fc_start_cluster]
+    mov [es:di], ax                 ; Starting cluster
+    add di, 2                       ; DI at offset +28
+    mov word [es:di], 0             ; File size low
+    mov word [es:di + 2], 0         ; File size high
+
+    ; Write modified directory sector back to disk
+    mov ax, [cs:.fc_dir_sector]
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_write_sector
+    jc .fc_write_error
+
+    ; Allocate file handle
+    call alloc_file_handle
+    jc .fc_no_handles
+
+    ; Initialize file handle entry
+    mov di, ax
+    shl di, 5
+    add di, file_table
+
+    mov byte [di], 1                ; Status = open
+    mov byte [di + 1], 0            ; Mount handle = FAT12
+    mov cx, [cs:.fc_start_cluster]
+    mov [di + 2], cx                ; Starting cluster
+    mov dword [di + 4], 0           ; File size = 0
+    mov dword [di + 8], 0           ; Position = 0
+    ; Save dir sector and offset for later size updates
+    mov cx, [cs:.fc_dir_sector]
+    mov [di + 18], cx               ; Dir sector LBA
+    mov cl, [cs:.fc_dir_offset]
+    mov [di + 20], cl               ; Dir entry offset
+    mov cx, [cs:.fc_start_cluster]
+    mov [di + 22], cx               ; Last cluster (= start, file is empty)
+
+    ; Clean up and return handle in AX
+    add sp, 12                      ; Clean up filename
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_alloc_failed:
+    add sp, 12
+    ; AX already has error code from fat12_alloc_cluster
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_write_error:
+    add sp, 12
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_no_handles:
+    add sp, 12
+    mov ax, FS_ERR_NO_HANDLES
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fc_dir_sector:  dw 0
+.fc_dir_offset:  db 0
+.fc_start_cluster: dw 0
+
+; ============================================================================
+; fat12_write - Write data to an open FAT12 file
+; Input: AX = file handle, ES:BX = data buffer, CX = byte count
+; Output: AX = bytes written, CF=0 success; CF=1 error
+; ============================================================================
+fat12_write:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Validate file handle
+    cmp ax, 16
+    jae .fw_invalid
+
+    ; Get file table entry
+    mov si, ax
+    shl si, 5
+    add si, file_table
+    mov [cs:.fw_handle_ptr], si     ; Save pointer to file table entry
+
+    ; Check if file is open
+    cmp byte [si], 1
+    jne .fw_invalid
+
+    ; Save write parameters
+    mov [cs:.fw_buffer_seg], es     ; Caller's buffer segment
+    mov [cs:.fw_buffer_off], bx     ; Caller's buffer offset
+    mov [cs:.fw_bytes_left], cx     ; Bytes remaining to write
+    mov word [cs:.fw_bytes_written], 0
+
+    ; Get current cluster (last_cluster field, byte 22-23)
+    mov ax, [si + 22]              ; Last cluster
+    mov [cs:.fw_current_cluster], ax
+
+    ; Get current file size (used to determine position within cluster)
+    mov ax, [si + 4]               ; File size low word
+    mov [cs:.fw_file_size], ax
+
+.fw_write_loop:
+    mov cx, [cs:.fw_bytes_left]
+    test cx, cx
+    jz .fw_done                     ; No more bytes to write
+
+    ; Calculate position within current cluster (file_size % 512)
+    mov ax, [cs:.fw_file_size]
+    and ax, 0x01FF                  ; AX = byte offset within sector (0-511)
+    mov [cs:.fw_sector_offset], ax
+
+    ; Bytes we can write to this sector
+    mov bx, 512
+    sub bx, ax                      ; BX = space left in current sector
+    cmp cx, bx
+    jbe .fw_count_ok
+    mov cx, bx                      ; Cap at remaining space in sector
+.fw_count_ok:
+    mov [cs:.fw_chunk_size], cx
+
+    ; If sector_offset > 0, we need to read existing sector first (partial write)
+    cmp word [cs:.fw_sector_offset], 0
+    je .fw_skip_read
+
+    ; Read existing sector into bpb_buffer
+    mov ax, [cs:.fw_current_cluster]
+    sub ax, 2
+    add ax, [data_area_start]       ; AX = data sector LBA
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector
+    pop es
+    jc .fw_write_error
+    jmp .fw_copy_data
+
+.fw_skip_read:
+    ; Starting at sector boundary - check if we need a new cluster
+    ; If file_size > 0 and file_size is sector-aligned, we need a new cluster
+    mov ax, [cs:.fw_file_size]
+    test ax, ax
+    jz .fw_copy_data                ; File is empty, use the starting cluster
+
+    ; File_size > 0 and sector-aligned: allocate new cluster
+    call fat12_alloc_cluster
+    jc .fw_write_error
+
+    ; Link previous cluster to new one
+    push ax                         ; Save new cluster
+    mov dx, ax                      ; DX = new cluster number
+    mov ax, [cs:.fw_current_cluster] ; AX = previous cluster
+    call fat12_set_fat_entry        ; Set prev -> new
+    pop ax
+    jc .fw_write_error
+
+    ; Update current cluster
+    mov [cs:.fw_current_cluster], ax
+
+.fw_copy_data:
+    ; Clear bpb_buffer if writing full sector from offset 0
+    cmp word [cs:.fw_sector_offset], 0
+    jne .fw_do_copy
+    ; Zero out bpb_buffer first
+    push es
+    push di
+    push cx
+    mov ax, 0x1000
+    mov es, ax
+    mov di, bpb_buffer
+    mov cx, 256                     ; 512 bytes / 2
+    xor ax, ax
+    rep stosw
+    pop cx
+    pop di
+    pop es
+
+.fw_do_copy:
+    ; Copy data from caller's buffer to bpb_buffer at sector_offset
+    push es
+    push ds
+    push si
+    push di
+    push cx
+
+    ; Source: caller's buffer
+    mov ax, [cs:.fw_buffer_seg]
+    mov ds, ax
+    mov si, [cs:.fw_buffer_off]
+
+    ; Destination: bpb_buffer + sector_offset
+    mov ax, 0x1000
+    mov es, ax
+    mov di, bpb_buffer
+    add di, [cs:.fw_sector_offset]
+
+    ; CX already set to chunk size
+    rep movsb
+
+    pop cx
+    pop di
+    pop si
+    pop ds
+    pop es
+
+    ; Write sector to disk
+    mov ax, [cs:.fw_current_cluster]
+    sub ax, 2
+    add ax, [data_area_start]       ; AX = data sector LBA
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_write_sector
+    pop es
+    jc .fw_write_error
+
+    ; Update counters
+    mov cx, [cs:.fw_chunk_size]
+    add [cs:.fw_bytes_written], cx
+    sub [cs:.fw_bytes_left], cx
+    add [cs:.fw_file_size], cx
+    add [cs:.fw_buffer_off], cx
+
+    jmp .fw_write_loop
+
+.fw_done:
+    ; Update file table entry with new size and last cluster
+    mov si, [cs:.fw_handle_ptr]
+    mov ax, [cs:.fw_file_size]
+    mov [si + 4], ax                ; Update file size low word
+    mov word [si + 6], 0            ; High word stays 0 (files < 64KB)
+    mov ax, [cs:.fw_current_cluster]
+    mov [si + 22], ax               ; Update last cluster
+
+    ; Update directory entry on disk with new file size
+    mov ax, [si + 18]               ; Dir sector LBA
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector         ; Read dir sector
+    pop es
+    jc .fw_write_error
+
+    ; Update size in directory entry
+    xor bh, bh
+    mov bl, [si + 20]               ; Dir entry offset within sector
+    mov di, bpb_buffer
+    add di, bx
+    mov ax, [cs:.fw_file_size]
+    mov [di + 28], ax               ; File size low word
+    mov word [di + 30], 0           ; File size high word
+
+    ; Write dir sector back
+    mov ax, [si + 18]
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_write_sector
+    pop es
+    jc .fw_write_error
+
+    ; Return bytes written
+    mov ax, [cs:.fw_bytes_written]
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.fw_invalid:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.fw_write_error:
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.fw_handle_ptr:     dw 0
+.fw_buffer_seg:     dw 0
+.fw_buffer_off:     dw 0
+.fw_bytes_left:     dw 0
+.fw_bytes_written:  dw 0
+.fw_current_cluster: dw 0
+.fw_file_size:      dw 0
+.fw_sector_offset:  dw 0
+.fw_chunk_size:     dw 0
+
+; ============================================================================
+; fat12_delete - Delete a file from FAT12 root directory
+; Input: DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF=0 success, CF=1 error (AX=error code)
+; ============================================================================
+fat12_delete:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert filename to 8.3 FAT format (same as fat12_open)
+    sub sp, 12
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    mov cx, 8
+.fd_copy_name:
+    lodsb
+    test al, al
+    jz .fd_name_done
+    cmp al, '.'
+    je .fd_copy_ext
+    cmp al, 'a'
+    jb .fd_store_name
+    cmp al, 'z'
+    ja .fd_store_name
+    sub al, 32
+.fd_store_name:
+    mov [es:di], al
+    inc di
+    loop .fd_copy_name
+.fd_skip_dot:
+    lodsb
+    test al, al
+    jz .fd_name_done
+    cmp al, '.'
+    jne .fd_skip_dot
+
+.fd_copy_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.fd_copy_ext_loop:
+    lodsb
+    test al, al
+    jz .fd_name_done
+    cmp al, 'a'
+    jb .fd_store_ext
+    cmp al, 'z'
+    ja .fd_store_ext
+    sub al, 32
+.fd_store_ext:
+    mov [es:di], al
+    inc di
+    loop .fd_copy_ext_loop
+
+.fd_name_done:
+    ; Switch to kernel DS
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Search root directory for the file
+    mov ax, [root_dir_start]
+    mov cx, 14
+
+.fd_search_sector:
+    push cx
+    push ax
+
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector
+    jc .fd_read_error
+
+    mov cx, 16
+    mov si, bpb_buffer
+    xor dx, dx                      ; DX = byte offset within sector
+
+.fd_check_entry:
+    mov al, [si]
+    test al, al
+    jz .fd_not_found_pop            ; End of directory
+    cmp al, 0xE5
+    je .fd_next_entry
+
+    ; Compare filename: DS:SI=dir entry, ES:DI=8.3 name on stack
+    push si
+    push di
+    push ds
+    push cx
+    ; Stack: [cx][ds][di][si] [ax][cx from loop] [12-byte name] ...
+    ; Filename is at SP + 8 (our pushes) + 4 (loop pushes) = SP + 12
+    mov di, sp
+    add di, 12                      ; Point to 8.3 name on stack
+    push ss
+    pop es
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, 11
+    repe cmpsb
+    pop cx
+    pop ds
+    pop di
+    pop si
+    je .fd_found_file
+
+.fd_next_entry:
+    add si, 32
+    add dx, 32
+    dec cx
+    jnz .fd_check_entry
+
+    pop ax
+    pop cx
+    inc ax
+    dec cx
+    jnz .fd_search_sector
+
+    ; File not found
+    add sp, 12
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fd_not_found_pop:
+    pop ax
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fd_read_error:
+    pop ax
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fd_found_file:
+    ; SI points to directory entry in bpb_buffer
+    ; Get starting cluster before marking as deleted
+    mov ax, [si + 0x1A]             ; Starting cluster
+    mov [cs:.fd_start_cluster], ax
+
+    ; Mark entry as deleted
+    mov byte [si], 0xE5
+
+    ; Save current dir sector LBA (it's on the stack from push ax)
+    ; Stack: AX (sector), CX (counter) under us
+    mov bp, sp
+    mov ax, [ss:bp]                 ; This is the saved SI actually... no
+    ; Actually the search compare block popped everything. The loop pushes are:
+    ; [AX=sector] [CX=counter] are next on stack
+    ; Wait - we jumped to .fd_found_file from je, which was after pop si. So:
+    ;   pop cx, pop ds, pop di, pop si all happened
+    ;   AX (sector) and CX (counter) are on stack
+    mov bp, sp
+    mov ax, [ss:bp]                 ; AX = sector number from push ax
+    mov [cs:.fd_dir_sector], ax
+
+    ; Write modified directory sector back
+    push es
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_write_sector
+    pop es
+    jc .fd_write_error_cleanup
+
+    ; Now walk the FAT chain and free all clusters
+    mov ax, [cs:.fd_start_cluster]
+
+.fd_free_chain:
+    cmp ax, 2
+    jb .fd_chain_done               ; Invalid cluster
+    cmp ax, 0xFF8
+    jae .fd_chain_done              ; End of chain
+
+    ; Save current cluster and get next before zeroing
+    push ax
+    call get_next_cluster           ; Get next cluster in AX
+    mov [cs:.fd_next_cluster], ax
+    mov cx, ax                      ; CX = carry flag state... no
+    ; CF set if end of chain
+    pushf                           ; Save CF state
+    pop bx                          ; BX = flags
+    pop ax                          ; AX = current cluster to free
+
+    ; Zero out this FAT entry
+    xor dx, dx                      ; DX = 0 (free)
+    call fat12_set_fat_entry
+
+    ; Check if we should continue
+    test bx, 1                      ; Test CF in saved flags
+    jnz .fd_chain_done              ; End of chain reached
+    mov ax, [cs:.fd_next_cluster]
+    jmp .fd_free_chain
+
+.fd_chain_done:
+    ; Clean up and return success
+    pop ax                          ; Sector number
+    pop cx                          ; Sector counter
+    add sp, 12                      ; Filename
+    xor ax, ax
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fd_write_error_cleanup:
+    pop ax
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.fd_dir_sector:    dw 0
+.fd_start_cluster: dw 0
+.fd_next_cluster:  dw 0
+
 ; win_draw_stub - Draw/redraw window frame (title bar and border)
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
@@ -8107,9 +9279,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 63                    ; Absolute FAT sector = filesystem_start(62) + reserved(1)
-root_dir_start: dw 19               ; Calculated: reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 33              ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 71                    ; Absolute FAT sector = filesystem_start(70) + reserved(1)
+root_dir_start: dw 89               ; Calculated: 70 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 103             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -8291,5 +9463,5 @@ window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
 ; Padding
 ; ============================================================================
 
-; Pad to 28KB (56 sectors) - expanded for FAT12 filesystem (v3.10.0)
-times 28672 - ($ - $$) db 0
+; Pad to 32KB (64 sectors) - expanded for FS write support (Build 202)
+times 32768 - ($ - $$) db 0
