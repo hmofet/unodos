@@ -90,22 +90,10 @@ install_int_80:
 ; INT 0x80 Handler - System Call Dispatcher
 ; Input: AH = function number (0 = discovery, 1-24 = API function)
 ;        Other registers = function parameters
-; Output: Depends on function called
-;   AH=0: ES:BX = pointer to kernel_api_table
-;   AH>0: Function-specific return values, CF=error status
+; Output: Function-specific return values, CF=error status
+; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
-    cmp ah, 0x00
-    jne .dispatch_function
-
-    ; AH=0: Return pointer to API table (discovery)
-    mov bx, cs
-    mov es, bx
-    mov bx, kernel_api_table
-    iret
-
-.dispatch_function:
-    ; AH contains function index (1-40)
-    ; Validate function number
+    ; Validate function number (0-53 valid)
     cmp ah, 54                      ; Max function count (0-53 valid)
     jae .invalid_function
 
@@ -3947,6 +3935,7 @@ event_get_stub:
     mov [event_queue_head], bx
 
 .evt_return:
+    clc                             ; CF=0 = event available
     pop ds
     pop si
     pop bx
@@ -3978,6 +3967,7 @@ event_get_stub:
     mov dl, al                      ; DL = ASCII char
     mov dh, ah                      ; DH = scancode
     mov al, EVENT_KEY_PRESS
+    clc                             ; CF=0 = event available
     pop ds
     pop si
     pop bx
@@ -3986,6 +3976,7 @@ event_get_stub:
 .no_event_return:
     xor al, al                      ; EVENT_NONE
     xor dx, dx
+    stc                             ; CF=1 = no event available
     pop ds
     pop si
     pop bx
