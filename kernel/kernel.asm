@@ -6171,6 +6171,11 @@ scheduler_next:
 ; Cooperative context switch: saves current task state, switches to next RUNNING task
 ; Called by apps via INT 0x80 with AH=34
 app_yield_stub:
+    ; Save all general-purpose registers on the current stack.
+    ; Context switch swaps SS:SP — without this, registers get clobbered
+    ; by whatever the other task was doing when it yielded.
+    pusha
+
     ; --- Save current task context ---
     mov al, [current_task]
     cmp al, 0xFF
@@ -6221,6 +6226,7 @@ app_yield_stub:
     sti
 
 .same_task:
+    popa                            ; Restore all general-purpose registers
     ret                             ; Returns via int80_return_point → pop ds → iret
 
 .idle:
