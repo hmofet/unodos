@@ -291,6 +291,7 @@ def find_apps():
         ('hello.bin', 'TEST.BIN'),
         ('music.bin', 'MUSIC.BIN'),
         ('mkboot.bin', 'MKBOOT.BIN'),
+        ('settings.bin', 'SETTINGS.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
