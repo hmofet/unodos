@@ -664,13 +664,8 @@ register_icon:
 show_splash:
     pusha
 
-    ; Clear screen to black
-    xor bx, bx
-    xor cx, cx
-    mov dx, 320
-    mov si, 200
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
+    ; Fast clear CGA screen (direct memory write — instant vs pixel-by-pixel API)
+    call fast_clear_screen
 
     ; Draw "U" logo — 3 filled white rectangles
     ; Left pillar: (140, 40) w=10, h=36
@@ -750,19 +745,8 @@ update_progress:
 draw_background:
     pusha
 
-    ; Fill entire screen with background color (cyan)
-    ; Use filled rect API (draws white, but we need cyan)
-    ; Instead, use clear area (draws black) - then we need a colored fill
-    ; The kernel's gfx_fill_color isn't an API, so we'll use clear_area for now
-    ; and accept black background for simplicity
-    ; Actually, use filled rect which draws color 3 (white) - not what we want
-    ; Let's just use clear_area for a black background for now
-    xor bx, bx
-    xor cx, cx
-    mov dx, 320
-    mov si, 200
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
+    ; Fast clear CGA screen (direct memory write — instant vs pixel-by-pixel API)
+    call fast_clear_screen
 
     popa
     ret
@@ -1364,6 +1348,28 @@ read_bios_ticks:
     mov es, ax
     mov ax, [es:0x006C]
     pop bx
+    pop es
+    ret
+
+; ============================================================================
+; fast_clear_screen - Clear entire CGA screen using REP STOSW
+; Clears both interlace banks (16KB at 0xB800) in microseconds.
+; Much faster than pixel-by-pixel API_GFX_CLEAR_AREA on real hardware.
+; ============================================================================
+fast_clear_screen:
+    push es
+    push ax
+    push cx
+    push di
+    mov ax, 0xB800
+    mov es, ax
+    xor ax, ax                      ; Fill with 0 (black)
+    xor di, di                      ; Start at offset 0
+    mov cx, 8192                    ; 16KB / 2 = 8192 words
+    rep stosw                       ; Clear even + odd scanline banks
+    pop di
+    pop cx
+    pop ax
     pop es
     ret
 
