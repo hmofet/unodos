@@ -158,21 +158,21 @@ Loading kernel................................ OK
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 44 functions |
-| Graphics API | 8 functions: pixel, rect, filled_rect, char, string, string_inverted, clear, text_width, draw_icon |
+| System Calls | INT 0x80 for API dispatch, 56 functions (indices 0-55) |
+| Graphics | Pixel, rect, filled rect, char, string, inverted string, clear, text width, icons, word wrap |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
-| PS/2 Mouse | INT 0x74 (IRQ12) handler, XOR cursor, title bar drag |
-| Events | 32-event circular queue, KEY_PRESS/KEY_RELEASE/MOUSE types |
-| Filesystem | FAT12 driver with mount, open, read, close, readdir |
-| App Loader | Load and execute .BIN applications from FAT12 |
-| Window Manager | Create, destroy, draw, focus, move, close, outline drag (16 max) |
+| PS/2 Mouse | BIOS INT 15h/C2 (primary) + KBC fallback, XOR cursor, title bar drag |
+| Events | 32-event circular queue, KEY_PRESS/MOUSE/WIN_REDRAW types |
+| Filesystem | FAT12 (floppy) + FAT16 (HDD) with mount, open, read, write, close, readdir |
+| App Loader | Load and execute .BIN applications from FAT12/FAT16 |
+| Window Manager | Create, destroy, draw, focus, move, close button, outline drag (16 max) |
 | PC Speaker | PIT Channel 2 tone generation, auto-silence on exit |
-| Drawing Context | Window-relative coordinate translation for APIs 0-6 |
-| Content Preserve | Save/restore window content during drags (scratch at 0x9000) |
+| Drawing Context | Window-relative coordinate translation for drawing APIs |
 | Desktop Icons | 8 registered icon slots, kernel repaints during window operations |
 | Multitasking | Cooperative round-robin scheduler, 6 concurrent user apps |
 | Segment Pool | Dynamic segment allocation (0x3000-0x8000) with alloc/free |
+| GUI Toolkit | Button/radio widgets, hit testing, font selection, color themes |
 
 ### Window Drawing Context
 
@@ -191,18 +191,13 @@ Characters are 8x8 pixels but advance by **12 pixels** (8px glyph + 4px gap). To
 
 ## Font System
 
-Two bitmap fonts are included:
+Three bitmap fonts are available (selectable via API 48):
 
-**8x8 Font** (`kernel/font8x8.asm`)
-- 95 characters (ASCII 32-126)
-- 8 bytes per character, 8x8 pixels
-- 12px advance (8px char + 4px spacing)
-- Used for window titles, app text
+**Font 0: 4x6** (`kernel/font4x6.asm`) - 95 chars, 6px advance, small text
 
-**4x6 Font** (`kernel/font4x6.asm`)
-- 95 characters (ASCII 32-126)
-- 6 bytes per character
-- Used for small text (version, clock, RAM info)
+**Font 1: 8x8** (`kernel/font8x8.asm`) - 95 chars, 12px advance, default
+
+**Font 2: 8x12** (`kernel/font8x12.asm`) - 95 chars, 12px advance, large text
 
 ## CGA Video Memory
 
@@ -285,4 +280,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*Document version: 8.0 (2026-02-14) - Updated for v3.16.0 Build 161*
+*v3.18.0 Build 207*
