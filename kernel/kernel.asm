@@ -3315,9 +3315,16 @@ widget_draw_button:
     call gfx_text_width             ; DX = label width
     ; Center horizontally: x = btn_x + (btn_w - text_width) / 2
     mov bx, [btn_w]
+    cmp bx, dx
+    jb .btn_left_align             ; Text wider than button: left-align
     sub bx, dx
     shr bx, 1
     add bx, [btn_x]
+    jmp .btn_x_done
+.btn_left_align:
+    mov bx, [btn_x]
+    add bx, 2                     ; Small left padding
+.btn_x_done:
     ; Center vertically: y = btn_y + (btn_h - font_height) / 2
     xor cx, cx
     mov cl, [draw_font_height]

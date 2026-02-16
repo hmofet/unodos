@@ -65,17 +65,17 @@ EVENT_MOUSE_CLICK       equ 4
 EVENT_WIN_REDRAW        equ 6
 
 ; Button positions (window-relative)
-BTN_FULL_X      equ 10
+BTN_FULL_X      equ 6
 BTN_FULL_Y      equ 48
-BTN_FULL_W      equ 100
+BTN_FULL_W      equ 84
 BTN_FULL_H      equ 16
-BTN_BARE_X      equ 120
+BTN_BARE_X      equ 96
 BTN_BARE_Y      equ 48
-BTN_BARE_W      equ 100
+BTN_BARE_W      equ 120
 BTN_BARE_H      equ 16
-BTN_CANCEL_X    equ 10
-BTN_CANCEL_Y    equ 72
-BTN_CANCEL_W    equ 100
+BTN_CANCEL_X    equ 222
+BTN_CANCEL_Y    equ 48
+BTN_CANCEL_W    equ 72
 BTN_CANCEL_H    equ 16
 
 ; Floppy layout constants
@@ -103,9 +103,9 @@ entry:
     mov ds, ax
 
     ; Create window
-    mov bx, 40
-    mov cx, 25
-    mov dx, 240
+    mov bx, 10
+    mov cx, 20
+    mov dx, 300
     mov si, 140
     mov ax, cs
     mov es, ax
@@ -173,8 +173,8 @@ entry:
     ; Poll mouse for button clicks
     mov ah, API_MOUSE_STATE
     int 0x80
-    ; AL = buttons (bit 0 = left)
-    test al, 1
+    ; DL = buttons (bit 0 = left)
+    test dl, 1
     jz .mouse_up
     ; Left button pressed - check if just pressed (edge detect)
     cmp byte [cs:prev_btn], 0
@@ -221,8 +221,8 @@ entry:
     ; Clear button area + status area for write messages
     mov bx, 0
     mov cx, 44
-    mov dx, 236
-    mov si, 84
+    mov dx, 296
+    mov si, 76
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
     mov word [cs:status_y], 46
@@ -249,8 +249,8 @@ entry:
     ; Clear swap message area for write status
     mov bx, 0
     mov cx, 44
-    mov dx, 236
-    mov si, 100
+    mov dx, 296
+    mov si, 76
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
     mov word [cs:status_y], 46
