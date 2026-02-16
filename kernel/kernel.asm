@@ -106,7 +106,7 @@ int_80_handler:
 .dispatch_function:
     ; AH contains function index (1-40)
     ; Validate function number
-    cmp ah, 48                      ; Max function count (0-47 valid)
+    cmp ah, 54                      ; Max function count (0-53 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -137,7 +137,12 @@ int_80_handler:
     cmp byte [draw_context], WIN_MAX_COUNT
     jae .no_translate               ; Invalid context, treat as no context
     cmp ah, 6
-    ja .no_translate                ; Not a drawing function (API 0-6)
+    jbe .do_translate               ; APIs 0-6: drawing functions
+    cmp ah, 50
+    jb .no_translate                ; APIs 7-49: no translation
+    cmp ah, 52
+    ja .no_translate                ; APIs 53+: no translation (hit_test does its own)
+.do_translate:                      ; APIs 0-6 and 50-52: translate coords
 
     ; Translate: BX += content_x, CX += content_y
     push si
@@ -1073,6 +1078,35 @@ win_begin_draw:
     cmp al, WIN_MAX_COUNT
     jae .wbd_invalid
     mov [draw_context], al
+    ; Set up clip rectangle from window content area
+    push bx
+    push si
+    mov bl, al
+    xor bh, bh
+    shl bx, 5                      ; BX = handle * 32
+    add bx, window_table
+    mov si, bx
+    ; clip_x1 = win_x + 1
+    mov bx, [si + WIN_OFF_X]
+    inc bx
+    mov [clip_x1], bx
+    ; clip_y1 = win_y + TITLEBAR_HEIGHT
+    mov bx, [si + WIN_OFF_Y]
+    add bx, WIN_TITLEBAR_HEIGHT
+    mov [clip_y1], bx
+    ; clip_x2 = win_x + win_w - 2 (inside right border)
+    mov bx, [si + WIN_OFF_X]
+    add bx, [si + WIN_OFF_WIDTH]
+    sub bx, 2
+    mov [clip_x2], bx
+    ; clip_y2 = win_y + win_h - 2 (inside bottom border)
+    mov bx, [si + WIN_OFF_Y]
+    add bx, [si + WIN_OFF_HEIGHT]
+    sub bx, 2
+    mov [clip_y2], bx
+    mov byte [clip_enabled], 1
+    pop si
+    pop bx
     ret
 .wbd_invalid:
     stc
@@ -1082,6 +1116,7 @@ win_begin_draw:
 ; Effect: Drawing APIs use absolute screen coordinates
 win_end_draw:
     mov byte [draw_context], 0xFF
+    mov byte [clip_enabled], 0
     ret
 
 ; ============================================================================
@@ -1805,22 +1840,27 @@ draw_welcome_box:
 
 ; ============================================================================
 ; Draw 8x8 character
-; Input: SI = pointer to 8-byte character bitmap
+; Input: SI = pointer to character bitmap
 ;        draw_x, draw_y = top-left position
-; Modifies: draw_x (advances by 12)
+;        draw_font_height, draw_font_width, draw_font_advance must be set
+; Modifies: draw_x (advances by draw_font_advance)
 ; ============================================================================
 
 draw_char:
     pusha
 
     mov bx, [draw_y]                ; BX = current Y
-    mov bp, 8                       ; BP = row counter
+    xor bp, bp
+    mov bl, [draw_font_height]
+    mov bp, bx                      ; BP = row counter
+    mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
-    mov dx, 8                       ; DX = column counter
+    xor dx, dx
+    mov dl, [draw_font_width]       ; DX = column counter
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
@@ -1839,7 +1879,9 @@ draw_char:
     dec bp                          ; Decrement row counter
     jnz .row_loop
 
-    add word [draw_x], 12           ; Advance to next character position
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add [draw_x], ax                ; Advance to next character position
 
     popa
     ret
@@ -2649,13 +2691,17 @@ draw_char_inverted:
     pusha
 
     mov bx, [draw_y]                ; BX = current Y
-    mov bp, 8                       ; BP = row counter
+    xor bp, bp
+    mov bl, [draw_font_height]
+    mov bp, bx                      ; BP = row counter
+    mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
-    mov dx, 8                       ; DX = column counter
+    xor dx, dx
+    mov dl, [draw_font_width]       ; DX = column counter
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
@@ -2674,7 +2720,9 @@ draw_char_inverted:
     dec bp                          ; Decrement row counter
     jnz .row_loop
 
-    add word [draw_x], 12           ; Advance to next character position
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add [draw_x], ax                ; Advance to next character position
 
     popa
     ret
@@ -2704,17 +2752,40 @@ gfx_draw_string_inverted:
     push ds                         ; Save caller's DS for string
     mov bp, 0x1000
     mov ds, bp                      ; DS = kernel segment for font access
+    ; --- Character-level clipping ---
+    cmp byte [clip_enabled], 0
+    je .no_clip
+    mov di, [draw_y]
+    cmp di, [clip_y2]
+    ja .clip_exit
+    mov di, [draw_x]
+    cmp di, [clip_x2]
+    ja .skip_char
+    xor dx, dx
+    mov dl, [draw_font_width]
+    add di, dx
+    cmp di, [clip_x1]
+    jb .skip_char
+.no_clip:
     sub al, 32
     mov ah, 0
-    mov dl, 8
+    mov dl, [draw_font_bpc]
     mul dl
     mov di, si                      ; Save string pointer
-    mov si, font_8x8                ; SI = font offset (now in kernel DS!)
+    mov si, [draw_font_base]        ; SI = font offset (now in kernel DS!)
     add si, ax
     call draw_char_inverted         ; Draw with DS=0x1000 for font
     mov si, di                      ; Restore string pointer
     pop ds                          ; Restore caller's DS for string
     jmp .loop
+.skip_char:
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add [draw_x], ax
+    pop ds
+    jmp .loop
+.clip_exit:
+    pop ds
 .done:
     pop ds                          ; Restore original DS
     pop bp
@@ -2727,7 +2798,7 @@ gfx_draw_string_inverted:
 ; ============================================================================
 ; gfx_text_width - Measure string width in pixels
 ; Input: SI = pointer to string (uses caller_ds for segment)
-; Output: DX = width in pixels (characters * 8)
+; Output: DX = width in pixels (characters * advance)
 ; Preserves: All other registers
 ; ============================================================================
 gfx_text_width:
@@ -2742,7 +2813,8 @@ gfx_text_width:
     lodsb
     test al, al
     jz .tw_done
-    add dx, 12                      ; Each character is 12 pixels wide (8px glyph + 4px gap)
+    add dl, [cs:draw_font_advance]  ; Use current font advance
+    adc dh, 0
     jmp .tw_loop
 
 .tw_done:
@@ -2763,7 +2835,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 48                           ; Number of function slots (0-47)
+    dw 54                           ; Number of function slots (0-53)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -2843,20 +2915,33 @@ kernel_api_table:
     dw fs_write_stub                ; 46: Write to open file
     dw fs_delete_stub               ; 47: Delete file
 
+    ; GUI Toolkit API (Build 205)
+    dw gfx_set_font                 ; 48: Set current font (AL=index)
+    dw gfx_get_font_metrics         ; 49: Get font metrics (AL=index)
+    dw gfx_draw_string_wrap         ; 50: Draw string with word wrap
+    dw widget_draw_button           ; 51: Draw button
+    dw widget_draw_radio            ; 52: Draw radio button
+    dw widget_hit_test              ; 53: Hit test rectangle
+
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
 ; ============================================================================
 
-; gfx_draw_pixel_stub - Draw single pixel
-; Input: CX = X coordinate (0-319)
-;        BX = Y coordinate (0-199)
-;        AL = Color (0-3)
+; gfx_draw_pixel_stub - Draw single pixel (API 0)
+; Input: BX = X coordinate (0-319), CX = Y coordinate (0-199), AL = Color (0-3)
 ; Output: None
 ; Preserves: All registers
 gfx_draw_pixel_stub:
-    ; For now, only supports color 3 (white)
-    ; TODO: Add multi-color support
-    call plot_pixel_white
+    push es
+    push dx
+    mov dx, 0xB800
+    mov es, dx
+    xchg bx, cx                    ; plot_pixel_color wants CX=X, BX=Y
+    mov dl, al                     ; DL = color (0-3)
+    call plot_pixel_color
+    xchg bx, cx                    ; Restore BX=X, CX=Y
+    pop dx
+    pop es
     ret
 
 ; gfx_draw_char_stub - Draw character
@@ -2872,9 +2957,9 @@ gfx_draw_char_stub:
     mov es, dx
     sub al, 32
     mov ah, 0
-    mov dl, 8
+    mov dl, [draw_font_bpc]
     mul dl
-    mov si, font_8x8
+    mov si, [draw_font_base]
     add si, ax
     call draw_char
     pop dx
@@ -2907,18 +2992,45 @@ gfx_draw_string_stub:
     jz .done
     push ds                         ; Save caller's DS
     mov bp, 0x1000
-    mov ds, bp                      ; DS = kernel for font_8x8 access
+    mov ds, bp                      ; DS = kernel for font access
+    ; --- Character-level clipping ---
+    cmp byte [clip_enabled], 0
+    je .no_clip
+    ; If draw_y > clip_y2, exit early (past bottom)
+    mov di, [draw_y]
+    cmp di, [clip_y2]
+    ja .clip_exit
+    ; If draw_x > clip_x2, skip char (past right edge) but advance
+    mov di, [draw_x]
+    cmp di, [clip_x2]
+    ja .skip_char
+    ; If draw_x + font_width < clip_x1, skip char (before left edge)
+    xor dx, dx
+    mov dl, [draw_font_width]
+    add di, dx
+    cmp di, [clip_x1]
+    jb .skip_char
+.no_clip:
     sub al, 32
     mov ah, 0
-    mov dl, 8
+    mov dl, [draw_font_bpc]
     mul dl
     mov di, si                      ; Save string pointer
-    mov si, font_8x8
+    mov si, [draw_font_base]
     add si, ax
     call draw_char
     mov si, di                      ; Restore string pointer
     pop ds                          ; Restore caller's DS
     jmp .loop
+.skip_char:
+    ; Advance draw_x without drawing
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add [draw_x], ax
+    pop ds
+    jmp .loop
+.clip_exit:
+    pop ds                          ; Balance stack from push ds
 .done:
     pop ds
     pop bp
@@ -2928,6 +3040,460 @@ gfx_draw_string_stub:
     pop es
     dec byte [cursor_locked]
     call mouse_cursor_show
+    ret
+
+; ============================================================================
+; gfx_set_font - Set current font (API 48)
+; Input: AL = font index (0=4x6, 1=8x8, 2=8x12)
+; Output: CF=0 on success, CF=1 if invalid index
+; ============================================================================
+gfx_set_font:
+    cmp al, FONT_COUNT
+    jae .bad_font
+    push bx
+    push si
+    mov [current_font], al
+    ; Calculate font_table offset: index * FONT_DESC_SIZE
+    mov bl, al
+    xor bh, bh
+    mov al, FONT_DESC_SIZE
+    mul bl                          ; AX = index * 6
+    mov si, font_table
+    add si, ax
+    ; Load descriptor into working variables
+    mov ax, [si]                    ; Font data pointer
+    mov [draw_font_base], ax
+    mov al, [si + 2]               ; Height
+    mov [draw_font_height], al
+    mov al, [si + 3]               ; Width
+    mov [draw_font_width], al
+    mov al, [si + 4]               ; Advance
+    mov [draw_font_advance], al
+    mov al, [si + 5]               ; Bytes per char
+    mov [draw_font_bpc], al
+    pop si
+    pop bx
+    clc
+    ret
+.bad_font:
+    stc
+    ret
+
+; ============================================================================
+; gfx_get_font_metrics - Get metrics for a font (API 49)
+; Input: AL = font index (0=4x6, 1=8x8, 2=8x12)
+; Output: BL=width, BH=height, CL=advance, CF=0
+;         CF=1 if invalid index
+; ============================================================================
+gfx_get_font_metrics:
+    cmp al, FONT_COUNT
+    jae .bad_idx
+    push si
+    mov bl, al
+    xor bh, bh
+    push ax
+    mov al, FONT_DESC_SIZE
+    mul bl
+    mov si, font_table
+    add si, ax
+    pop ax
+    mov bh, [si + 2]               ; Height
+    mov bl, [si + 3]               ; Width
+    mov cl, [si + 4]               ; Advance
+    pop si
+    clc
+    ret
+.bad_idx:
+    stc
+    ret
+
+; ============================================================================
+; plot_pixel_color - Plot pixel with arbitrary CGA color (0-3)
+; Input: CX = X (0-319), BX = Y (0-199), DL = color (0-3), ES = 0xB800
+; Preserves all registers except flags
+; ============================================================================
+plot_pixel_color:
+    cmp cx, 320
+    jae .ppc_out
+    cmp bx, 200
+    jae .ppc_out
+    push ax
+    push bx
+    push cx
+    push di
+    push dx
+    ; Calculate CGA row address (same as plot_pixel_white)
+    mov ax, bx
+    shr ax, 1                      ; AX = Y / 2
+    mov dx, 80
+    mul dx                          ; AX = (Y/2) * 80
+    mov di, ax
+    mov ax, cx
+    shr ax, 2                      ; AX = X / 4 (byte offset)
+    add di, ax
+    test bl, 1
+    jz .ppc_even
+    add di, 0x2000                  ; Odd rows offset
+.ppc_even:
+    ; Calculate bit shift: (3 - (X mod 4)) * 2
+    mov ax, cx
+    and ax, 3
+    mov cx, 3
+    sub cl, al
+    shl cl, 1                      ; CL = bit shift
+    ; Read-modify-write: clear old 2 bits, OR in color
+    mov al, [es:di]                ; Read current byte
+    mov ah, 0x03
+    shl ah, cl                     ; AH = mask for our pixel's 2 bits
+    not ah
+    and al, ah                     ; Clear old pixel
+    ; Get color from stack (DL was pushed last as part of DX)
+    mov bx, sp
+    mov ah, [ss:bx]                ; AH = saved DL (color) from pushed DX
+    and ah, 0x03                   ; Ensure 2-bit color
+    shl ah, cl                     ; Shift color into position
+    or al, ah                      ; Set new color
+    mov [es:di], al                ; Write back
+    pop dx
+    pop di
+    pop cx
+    pop bx
+    pop ax
+.ppc_out:
+    ret
+
+; ============================================================================
+; gfx_draw_string_wrap - Draw string with word wrapping (API 50)
+; Input: BX=X, CX=Y, DX=wrap_width, SI=string (caller_ds)
+; Output: CX=final Y after last line
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+gfx_draw_string_wrap:
+    ; Save all registers we'll modify
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push dx
+    push di
+    push bp
+    push ds
+    ; BX=X (start), CX=Y, DX=wrap_width, SI=string
+    mov word [draw_x], bx
+    mov word [draw_y], cx
+    mov [wrap_start_x], bx         ; Remember starting X for line breaks
+    mov [wrap_width], dx            ; Remember wrap width
+    mov bp, [caller_ds]
+    mov dx, 0xB800
+    mov es, dx
+    mov ds, bp                      ; DS = caller's segment
+.wrap_loop:
+    lodsb
+    test al, al
+    jz .wrap_done
+    cmp al, 10                      ; Newline?
+    je .wrap_newline
+    ; Check if character would exceed wrap boundary
+    push ds
+    mov bp, 0x1000
+    mov ds, bp
+    mov di, [draw_x]
+    xor dx, dx
+    mov dl, [draw_font_advance]
+    add di, dx                      ; DI = draw_x after this char
+    mov dx, [wrap_start_x]
+    add dx, [wrap_width]            ; DX = right edge
+    cmp di, dx
+    jbe .wrap_draw                  ; Fits on this line
+    ; Line break: reset X, advance Y
+    mov dx, [wrap_start_x]
+    mov [draw_x], dx
+    xor dx, dx
+    mov dl, [draw_font_height]
+    add dx, 2                       ; Line spacing
+    add [draw_y], dx
+    pop ds
+    dec si                          ; Re-process this character on new line
+    jmp .wrap_loop
+.wrap_draw:
+    ; Draw the character (DS=kernel here)
+    sub al, 32
+    mov ah, 0
+    mov dl, [draw_font_bpc]
+    mul dl
+    mov di, si
+    mov si, [draw_font_base]
+    add si, ax
+    call draw_char
+    mov si, di
+    pop ds
+    jmp .wrap_loop
+.wrap_newline:
+    ; Force line break
+    push ds
+    mov bp, 0x1000
+    mov ds, bp
+    mov dx, [wrap_start_x]
+    mov [draw_x], dx
+    xor dx, dx
+    mov dl, [draw_font_height]
+    add dx, 2
+    add [draw_y], dx
+    pop ds
+    jmp .wrap_loop
+.wrap_done:
+    ; Return final Y in CX
+    push ds
+    mov bp, 0x1000
+    mov ds, bp
+    mov cx, [draw_y]
+    pop ds
+    pop ds
+    pop bp
+    pop di
+    pop dx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_button - Draw a clickable button (API 51)
+; Input: BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI)
+;        AL=flags (bit 0: pressed)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_button:
+    ; BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI), AL=flags
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [btn_h], si
+    ; Set up ES for CGA
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw white filled rect (button background)
+    call gfx_draw_filled_rect_stub
+    ; Draw border rect
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    call gfx_draw_rect_stub
+    ; If pressed, draw inset border (1px offset)
+    test byte [btn_flags], 1
+    jz .btn_label
+    mov bx, [btn_x]
+    inc bx
+    mov cx, [btn_y]
+    inc cx
+    mov dx, [btn_w]
+    sub dx, 2
+    mov si, [btn_h]
+    sub si, 2
+    call gfx_draw_rect_stub
+.btn_label:
+    ; Save original caller_ds, set caller_ds = caller_es for label access
+    mov ax, [caller_ds]
+    mov [btn_saved_cds], ax
+    mov ax, [caller_es]
+    mov [caller_ds], ax
+    ; Measure label width
+    mov si, di                      ; SI = label pointer
+    call gfx_text_width             ; DX = label width
+    ; Center horizontally: x = btn_x + (btn_w - text_width) / 2
+    mov bx, [btn_w]
+    sub bx, dx
+    shr bx, 1
+    add bx, [btn_x]
+    ; Center vertically: y = btn_y + (btn_h - font_height) / 2
+    xor cx, cx
+    mov cl, [draw_font_height]
+    mov ax, [btn_h]
+    sub ax, cx
+    shr ax, 1
+    add ax, [btn_y]
+    mov cx, ax
+    ; If pressed, offset text by 1px
+    test byte [btn_flags], 1
+    jz .btn_draw_label
+    inc bx
+    inc cx
+.btn_draw_label:
+    ; Draw inverted text (black on white) - caller_ds now points to label segment
+    call gfx_draw_string_inverted
+    ; Restore caller_ds
+    mov ax, [btn_saved_cds]
+    mov [caller_ds], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_radio - Draw a radio button (API 52)
+; Input: BX=X, CX=Y, SI=label (caller_ds), AL=flags (bit 0: selected)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_radio:
+    ; BX=X, CX=Y, SI=label (caller_ds), AL=flags (bit 0: selected)
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw radio circle using draw_char (8 rows, 8 cols)
+    mov word [draw_x], bx
+    mov word [draw_y], cx
+    ; Save and set font params for 8x8 bitmap
+    mov al, [draw_font_height]
+    mov [btn_saved_fh], al
+    mov al, [draw_font_width]
+    mov [btn_saved_fw], al
+    mov al, [draw_font_advance]
+    mov [btn_saved_fa], al
+    mov byte [draw_font_height], 8
+    mov byte [draw_font_width], 8
+    mov byte [draw_font_advance], 10  ; Advance past radio circle
+    mov si, radio_empty_bitmap
+    test byte [btn_flags], 1
+    jz .radio_draw
+    mov si, radio_filled_bitmap
+.radio_draw:
+    call draw_char
+    ; Restore font params
+    mov al, [btn_saved_fh]
+    mov [draw_font_height], al
+    mov al, [btn_saved_fw]
+    mov [draw_font_width], al
+    mov al, [btn_saved_fa]
+    mov [draw_font_advance], al
+    ; Draw label string at (btn_x + 12, btn_y)
+    pop si                          ; Restore label pointer (SI)
+    mov bx, [btn_x]
+    add bx, 12
+    mov cx, [btn_y]
+    call gfx_draw_string_stub
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; Radio button bitmaps (8x8)
+radio_empty_bitmap:
+    db 0b00111100                   ; ..XXXX..
+    db 0b01000010                   ; .X....X.
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b01000010                   ; .X....X.
+    db 0b00111100                   ; ..XXXX..
+
+radio_filled_bitmap:
+    db 0b00111100                   ; ..XXXX..
+    db 0b01000010                   ; .X....X.
+    db 0b10011001                   ; X..XX..X
+    db 0b10111101                   ; X.XXXX.X
+    db 0b10111101                   ; X.XXXX.X
+    db 0b10011001                   ; X..XX..X
+    db 0b01000010                   ; .X....X.
+    db 0b00111100                   ; ..XXXX..
+
+; ============================================================================
+; widget_hit_test - Test if mouse is inside a rectangle (API 53)
+; Input: BX=X, CX=Y, DX=width, SI=height (window-relative)
+; Output: AL=1 if mouse inside, AL=0 if outside
+; NOT auto-translated (handles its own translation)
+; ============================================================================
+widget_hit_test:
+    ; BX=X, CX=Y, DX=width, SI=height (window-relative)
+    ; Output: AL=1 if mouse inside, AL=0 if outside
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    ; Translate to absolute coords if draw_context active
+    cmp byte [draw_context], 0xFF
+    je .ht_abs
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .ht_abs
+    ; Translate BX,CX using window content area
+    push ax
+    xor ah, ah
+    mov al, [draw_context]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    add bx, [di + WIN_OFF_X]
+    inc bx
+    add cx, [di + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT
+    pop ax
+.ht_abs:
+    ; Now BX=abs_x, CX=abs_y, DX=width, SI=height
+    ; Get mouse position
+    mov di, [mouse_x]
+    ; Check X: mouse_x >= abs_x && mouse_x < abs_x + width
+    cmp di, bx
+    jb .ht_miss
+    add bx, dx                     ; BX = abs_x + width
+    cmp di, bx
+    jae .ht_miss
+    ; Check Y: mouse_y >= abs_y && mouse_y < abs_y + height
+    mov di, [mouse_y]
+    cmp di, cx
+    jb .ht_miss
+    add cx, si                     ; CX = abs_y + height
+    cmp di, cx
+    jae .ht_miss
+    ; Hit!
+    mov al, 1
+    jmp .ht_done
+.ht_miss:
+    xor al, al
+.ht_done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
     ret
 
 ; gfx_draw_rect_stub - Draw rectangle outline
@@ -9180,6 +9746,8 @@ win_get_content_stub:
 ; IMPORTANT: Font must come BEFORE variables to avoid addressing issues
 
 %include "font8x8.asm"
+%include "font4x6.asm"
+%include "font8x12.asm"
 
 ; ============================================================================
 ; Variables
@@ -9188,6 +9756,48 @@ win_get_content_stub:
 ; Character drawing state
 draw_x: dw 0
 draw_y: dw 0
+
+; Font system variables (Build 205)
+current_font:      db 1              ; 0=4x6, 1=8x8, 2=8x12
+draw_font_height:  db 8              ; Current font height in pixels
+draw_font_width:   db 8              ; Current font glyph width in pixels
+draw_font_advance: db 12             ; Pixels to advance per character
+draw_font_bpc:     db 8              ; Bytes per character in font data
+draw_font_base:    dw font_8x8       ; Pointer to current font data
+
+; Font descriptor table: 6 bytes per entry (pointer, height, width, advance, bpc)
+FONT_DESC_SIZE     equ 6
+FONT_COUNT         equ 3
+font_table:
+    dw font_4x6                       ; Font 0: small
+    db 6, 4, 6, 6                     ; height=6, width=4, advance=6, bpc=6
+    dw font_8x8                       ; Font 1: medium (default)
+    db 8, 8, 12, 8                    ; height=8, width=8, advance=12, bpc=8
+    dw font_8x12                      ; Font 2: large
+    db 12, 8, 12, 12                  ; height=12, width=8, advance=12, bpc=12
+
+; Text clipping variables (Build 205)
+clip_enabled: db 0                    ; 0=no clipping, 1=clip to rect
+clip_x1:      dw 0                    ; Left (inclusive, absolute)
+clip_y1:      dw 0                    ; Top (inclusive, absolute)
+clip_x2:      dw 319                  ; Right (inclusive, absolute)
+clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
+
+; Widget scratch variables (Build 205)
+btn_flags:      db 0                    ; Button/radio flags
+btn_x:          dw 0                    ; Button X
+btn_y:          dw 0                    ; Button Y
+btn_w:          dw 0                    ; Button width
+btn_h:          dw 0                    ; Button height
+btn_saved_cds:  dw 0                    ; Saved caller_ds during button draw
+btn_saved_fh:   db 0                    ; Saved font height
+btn_saved_fw:   db 0                    ; Saved font width
+btn_saved_fa:   db 0                    ; Saved font advance
+
+; Word-wrap scratch variables (Build 205)
+wrap_start_x:   dw 0                    ; Starting X for line breaks
+wrap_width:     dw 0                    ; Wrap width in pixels
+
 heap_initialized: dw 0
 
 ; System call dispatcher temp (v3.12.0)

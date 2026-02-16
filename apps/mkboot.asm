@@ -48,6 +48,7 @@ API_FS_CLOSE            equ 16
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_FS_READDIR          equ 27
+API_MOUSE_STATE         equ 28
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
@@ -55,9 +56,27 @@ API_GET_BOOT_DRIVE      equ 43
 API_FS_WRITE_SECTOR     equ 44
 API_FS_CREATE           equ 45
 API_FS_WRITE            equ 46
+API_DRAW_STRING_WRAP    equ 50
+API_DRAW_BUTTON         equ 51
+API_HIT_TEST            equ 53
 
 EVENT_KEY_PRESS         equ 1
+EVENT_MOUSE_CLICK       equ 4
 EVENT_WIN_REDRAW        equ 6
+
+; Button positions (window-relative)
+BTN_FULL_X      equ 10
+BTN_FULL_Y      equ 48
+BTN_FULL_W      equ 100
+BTN_FULL_H      equ 16
+BTN_BARE_X      equ 120
+BTN_BARE_Y      equ 48
+BTN_BARE_W      equ 100
+BTN_BARE_H      equ 16
+BTN_CANCEL_X    equ 10
+BTN_CANCEL_Y    equ 72
+BTN_CANCEL_W    equ 100
+BTN_CANCEL_H    equ 16
 
 ; Floppy layout constants
 FLOPPY_STAGE2_START     equ 1
@@ -85,9 +104,9 @@ entry:
 
     ; Create window
     mov bx, 40
-    mov cx, 30
+    mov cx, 25
     mov dx, 240
-    mov si, 130
+    mov si, 140
     mov ax, cs
     mov es, ax
     mov di, window_title
@@ -100,65 +119,29 @@ entry:
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Draw title
-    mov si, msg_title
-    mov bx, 4
-    mov cx, 4
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     ; Get boot drive
     mov ah, API_GET_BOOT_DRIVE
     int 0x80
     mov [cs:boot_drive], al
 
-    ; Mount source and show context
+    ; Mount source
     test al, 0x80
-    jnz .hd_boot
+    jnz .hd_boot_mount
 
     ; === Floppy boot ===
     mov al, 0x00
     mov ah, API_FS_MOUNT
     int 0x80
-    mov si, msg_floppy_src
-    mov bx, 4
-    mov cx, 18
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    jmp .show_options
+    jmp .draw_ui
 
-.hd_boot:
+.hd_boot_mount:
     ; === HD boot ===
     mov al, 0x80
     mov ah, API_FS_MOUNT
     int 0x80
-    mov si, msg_insert
-    mov bx, 4
-    mov cx, 18
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov si, msg_then
-    mov bx, 4
-    mov cx, 30
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
 
-.show_options:
-    mov si, msg_option_f
-    mov bx, 4
-    mov cx, 46
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov si, msg_option_b
-    mov bx, 4
-    mov cx, 58
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov si, msg_option_esc
-    mov bx, 4
-    mov cx, 74
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
+.draw_ui:
+    call draw_main_ui
 
 .wait_choice:
     sti
@@ -166,6 +149,7 @@ entry:
     int 0x80
     mov ah, API_EVENT_GET
     int 0x80
+    jc .check_mouse
     cmp al, EVENT_KEY_PRESS
     jne .check_redraw1
     cmp dl, 'f'
@@ -182,12 +166,48 @@ entry:
 .check_redraw1:
     cmp al, EVENT_WIN_REDRAW
     jne .wait_choice
-    ; Minimal redraw - just title
-    mov si, msg_title
-    mov bx, 4
-    mov cx, 4
-    mov ah, API_GFX_DRAW_STRING
+    call draw_main_ui
+    jmp .wait_choice
+
+.check_mouse:
+    ; Poll mouse for button clicks
+    mov ah, API_MOUSE_STATE
     int 0x80
+    ; AL = buttons (bit 0 = left)
+    test al, 1
+    jz .mouse_up
+    ; Left button pressed - check if just pressed (edge detect)
+    cmp byte [cs:prev_btn], 0
+    jne .wait_choice              ; Already held down
+    mov byte [cs:prev_btn], 1
+    ; Hit test each button
+    mov bx, BTN_FULL_X
+    mov cx, BTN_FULL_Y
+    mov dx, BTN_FULL_W
+    mov si, BTN_FULL_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .start_full
+    mov bx, BTN_BARE_X
+    mov cx, BTN_BARE_Y
+    mov dx, BTN_BARE_W
+    mov si, BTN_BARE_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .start_barebones
+    mov bx, BTN_CANCEL_X
+    mov cx, BTN_CANCEL_Y
+    mov dx, BTN_CANCEL_W
+    mov si, BTN_CANCEL_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .exit_ok
+    jmp .wait_choice
+.mouse_up:
+    mov byte [cs:prev_btn], 0
     jmp .wait_choice
 
 .start_full:
@@ -198,11 +218,11 @@ entry:
     mov byte [cs:copy_apps], 0
 
 .do_write:
-    ; Clear lower area for status messages
+    ; Clear button area + status area for write messages
     mov bx, 0
     mov cx, 44
     mov dx, 236
-    mov si, 100
+    mov si, 84
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
     mov word [cs:status_y], 46
@@ -522,6 +542,7 @@ entry:
     int 0x80
     mov ah, API_EVENT_GET
     int 0x80
+    jc .wait_exit
     cmp al, EVENT_KEY_PRESS
     jne .check_redraw2
     cmp dl, 27
@@ -530,6 +551,7 @@ entry:
 .check_redraw2:
     cmp al, EVENT_WIN_REDRAW
     jne .wait_exit
+    ; On redraw, show the done message
     mov si, msg_title
     mov bx, 4
     mov cx, 4
@@ -719,6 +741,94 @@ write_buffered_apps:
 ; Helpers
 ; ============================================================================
 
+; ============================================================================
+; Draw the main UI (title, source info, buttons)
+; ============================================================================
+draw_main_ui:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Draw title
+    mov si, msg_title
+    mov bx, 4
+    mov cx, 4
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show source info
+    test byte [cs:boot_drive], 0x80
+    jnz .ui_hd_info
+
+    ; Floppy source
+    mov si, msg_floppy_src
+    mov bx, 4
+    mov cx, 18
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .ui_buttons
+
+.ui_hd_info:
+    ; HD source - show insert message
+    mov si, msg_insert
+    mov bx, 4
+    mov cx, 18
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov si, msg_then
+    mov bx, 4
+    mov cx, 30
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.ui_buttons:
+    ; Draw "Full" button
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_FULL_X
+    mov cx, BTN_FULL_Y
+    mov dx, BTN_FULL_W
+    mov si, BTN_FULL_H
+    mov di, btn_full_lbl
+    xor al, al                     ; Not pressed
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; Draw "Barebones" button
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_BARE_X
+    mov cx, BTN_BARE_Y
+    mov dx, BTN_BARE_W
+    mov si, BTN_BARE_H
+    mov di, btn_bare_lbl
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; Draw "Cancel" button
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_CANCEL_X
+    mov cx, BTN_CANCEL_Y
+    mov dx, BTN_CANCEL_W
+    mov si, BTN_CANCEL_H
+    mov di, btn_cancel_lbl
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 show_status:
     push ax
     push bx
@@ -860,9 +970,9 @@ msg_title:      db 'Boot Floppy Creator', 0
 msg_insert:     db 'Insert blank floppy in A:', 0
 msg_then:       db 'then choose an option.', 0
 msg_floppy_src: db 'Source floppy in drive.', 0
-msg_option_f:   db 'F = Full (OS + all apps)', 0
-msg_option_b:   db 'B = Barebones (OS only)', 0
-msg_option_esc: db 'ESC = Cancel', 0
+btn_full_lbl:   db 'Full', 0
+btn_bare_lbl:   db 'Barebones', 0
+btn_cancel_lbl: db 'Cancel', 0
 msg_reading:    db 'Reading apps...', 0
 msg_swap1:      db 'Swap to blank floppy,', 0
 msg_swap2:      db 'press any key.', 0
@@ -884,9 +994,10 @@ cnt_ch:         db '0'
 win_handle:     db 0
 boot_drive:     db 0
 copy_apps:      db 0
+prev_btn:       db 0
 cur_lba:        dw 0
 buf_off:        dw 0
-status_y:       dw 46
+status_y:       dw 94
 dir_idx:        dw 0
 n_copied:       db 0
 hd_fh:          db 0
