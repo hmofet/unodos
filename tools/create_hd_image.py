@@ -292,6 +292,7 @@ def find_apps():
         ('music.bin', 'MUSIC.BIN'),
         ('mkboot.bin', 'MKBOOT.BIN'),
         ('settings.bin', 'SETTINGS.BIN'),
+        ('tetris.bin', 'TETRIS.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
