@@ -290,6 +290,7 @@ def find_apps():
         ('mouse_test.bin', 'MOUSE.BIN'),
         ('hello.bin', 'TEST.BIN'),
         ('music.bin', 'MUSIC.BIN'),
+        ('mkboot.bin', 'MKBOOT.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:

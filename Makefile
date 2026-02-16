@@ -34,6 +34,7 @@ LAUNCHER_BIN = build/launcher.bin
 BROWSER_BIN = build/browser.bin
 MOUSE_TEST_BIN = build/mouse_test.bin
 MUSIC_BIN = build/music.bin
+MKBOOT_BIN = build/mkboot.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -113,6 +114,10 @@ $(MOUSE_TEST_BIN): $(APPS_DIR)/mouse_test.asm | $(BUILD_DIR)
 $(MUSIC_BIN): $(APPS_DIR)/music.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
+# mkboot depends on boot.bin and stage2.bin (embedded via incbin)
+$(MKBOOT_BIN): $(APPS_DIR)/mkboot.asm $(BOOT_BIN) $(STAGE2_BIN) | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
 # Create 360KB floppy image (target platform)
 # Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
@@ -124,14 +129,14 @@ $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Created $@ (360KB)"
 
 # Create 1.44MB floppy image (for modern hardware testing)
-$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN)
+$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN)
 	@echo "Creating 1.44MB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Adding FAT12 filesystem with apps..."
-	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN
+	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN
 	@echo "Created $@ (1.44MB)"
 
 floppy144: $(FLOPPY_144)
@@ -185,7 +190,7 @@ build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
 
 # Build all applications
-apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN)
+apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN)
 	@echo "Built applications:"
 	@echo "  $(HELLO_BIN) ($$(wc -c < $(HELLO_BIN)) bytes)"
 	@echo "  $(CLOCK_BIN) ($$(wc -c < $(CLOCK_BIN)) bytes)"
@@ -193,6 +198,7 @@ apps: $(HELLO_BIN) $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN)
 	@echo "  $(BROWSER_BIN) ($$(wc -c < $(BROWSER_BIN)) bytes)"
 	@echo "  $(MOUSE_TEST_BIN) ($$(wc -c < $(MOUSE_TEST_BIN)) bytes)"
 	@echo "  $(MUSIC_BIN) ($$(wc -c < $(MUSIC_BIN)) bytes)"
+	@echo "  $(MKBOOT_BIN) ($$(wc -c < $(MKBOOT_BIN)) bytes)"
 
 # Create app test floppy image (FAT12 with HELLO.BIN)
 build/app-test.img: $(HELLO_BIN)
@@ -223,9 +229,9 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-display gtk
 
 # Create launcher app floppy image (FAT12 with LAUNCHER.BIN + apps)
-build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN)
+build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(HELLO_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN)
 	@echo "Creating launcher floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(HELLO_BIN) TEST.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN
 
 # Legacy alias
 build/launcher-app.img: build/launcher-floppy.img
@@ -285,6 +291,16 @@ run-hd: $(HD_IMG) check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
 		-hda $(HD_IMG) \
+		-boot c \
+		-display gtk
+
+# Run HD image with blank floppy (for testing mkboot)
+run-hd-floppy: $(HD_IMG) check-qemu
+	@dd if=/dev/zero of=build/blank-floppy.img bs=512 count=2880 2>/dev/null
+	$(QEMU) -M isapc \
+		-m 640K \
+		-hda $(HD_IMG) \
+		-drive file=build/blank-floppy.img,format=raw,if=floppy \
 		-boot c \
 		-display gtk
 
