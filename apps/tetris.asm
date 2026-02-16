@@ -64,47 +64,40 @@ entry:
     je .exit_game
 
     sti
-    mov ah, API_APP_YIELD
+
+    ; --- Poll keyboard directly (bypasses per-task event queue) ---
+    mov ah, API_KBD_GETCHAR
     int 0x80
+    test al, al
+    jz .no_key_event
 
-    ; --- Poll events ---
-    mov ah, API_EVENT_GET
-    int 0x80
-    jc .no_key_event
-
-    cmp al, EVENT_KEY_PRESS
-    jne .no_key_event
-
-    ; --- Handle keyboard ---
-    cmp dl, 27                      ; ESC
-    je .quit
-
+    ; AL = keycode (arrows: 128-131)
     cmp byte [cs:game_state], STATE_PLAYING
     jne .check_pause_key
 
     ; Game keys (only when playing)
-    cmp dl, 130                     ; Left arrow
+    cmp al, 130                     ; Left arrow
     je .move_left
-    cmp dl, 131                     ; Right arrow
+    cmp al, 131                     ; Right arrow
     je .move_right
-    cmp dl, 128                     ; Up arrow = rotate
+    cmp al, 128                     ; Up arrow = rotate
     je .rotate
-    cmp dl, 129                     ; Down arrow = soft drop
+    cmp al, 129                     ; Down arrow = soft drop
     je .soft_drop
-    cmp dl, ' '                     ; Space = hard drop
+    cmp al, ' '                     ; Space = hard drop
     je .hard_drop
-    cmp dl, 'p'
+    cmp al, 'p'
     je .pause_game
-    cmp dl, 'P'
+    cmp al, 'P'
     je .pause_game
     jmp .no_key_event
 
 .check_pause_key:
     cmp byte [cs:game_state], STATE_PAUSED
     jne .no_key_event
-    cmp dl, 'p'
+    cmp al, 'p'
     je .unpause_game
-    cmp dl, 'P'
+    cmp al, 'P'
     je .unpause_game
     jmp .no_key_event
 
@@ -149,10 +142,6 @@ entry:
     mov [cs:music_tick], ax
     mov [cs:last_drop_tick], ax
     jmp .no_key_event
-.quit:
-    mov byte [cs:quit_flag], 1
-    jmp .no_key_event
-
 .no_key_event:
     ; --- Handle mouse clicks ---
     call check_mouse
@@ -185,19 +174,18 @@ entry:
 API_GFX_DRAW_PIXEL      equ 0
 API_GFX_DRAW_RECT       equ 1
 API_GFX_DRAW_FILLED_RECT equ 2
+API_GFX_DRAW_CHAR        equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_GFX_DRAW_STRING_INV equ 6
-API_EVENT_GET            equ 9
+API_KBD_GETCHAR          equ 11
 API_MOUSE_GET_STATE      equ 28
 API_GFX_SET_FONT         equ 48
 API_DRAW_BUTTON          equ 51
 API_HIT_TEST             equ 53
-API_APP_YIELD            equ 34
+API_THEME_SET_COLORS     equ 54
 API_SPEAKER_TONE         equ 41
 API_SPEAKER_OFF          equ 42
-
-EVENT_KEY_PRESS          equ 1
 
 STATE_MENU               equ 0
 STATE_PLAYING            equ 1
@@ -212,10 +200,13 @@ CELL_SIZE                equ 8
 
 BTN_NEWGAME_X            equ 168
 BTN_NEWGAME_Y            equ 124
-BTN_NEWGAME_W            equ 68
-BTN_PAUSE_X              equ 244
+BTN_NEWGAME_W            equ 58
+BTN_PAUSE_X              equ 230
 BTN_PAUSE_Y              equ 124
-BTN_PAUSE_W              equ 56
+BTN_PAUSE_W              equ 40
+BTN_QUIT_X               equ 274
+BTN_QUIT_Y               equ 124
+BTN_QUIT_W               equ 36
 BTN_H                    equ 14
 
 PREVIEW_X                equ 170
@@ -387,18 +378,21 @@ MELODY_NOTES equ ($ - korobeiniki) / 4 - 1  ; Exclude end marker
 ; ============================================================================
 ; Strings
 ; ============================================================================
-str_title:      db 'TETRIS', 0
 str_score:      db 'Score:', 0
 str_lines:      db 'Lines:', 0
 str_level:      db 'Level:', 0
 str_next:       db 'Next:', 0
 str_newgame:    db 'New Game', 0
 str_pause:      db 'Pause', 0
+str_quit:       db 'Quit', 0
 str_help1:      db 'Arrows:Move', 0
-str_help2:      db 'Up:Rot ESC:Quit', 0
+str_help2:      db 'Up:Rot Space:Drop', 0
 str_gameover:   db 'GAME OVER', 0
-str_paused:      db 'PAUSED', 0
-str_press_new:  db 'Click New Game', 0
+str_paused:     db 'PAUSED', 0
+
+; Title character data for colored rendering
+title_chars:    db 'TETRIS'
+title_clrs:     db 1, 2, 3, 1, 2, 3    ; cyan, magenta, white per letter
 
 ; ============================================================================
 ; clear_screen - Fill entire screen with black
@@ -447,14 +441,38 @@ draw_static_ui:
     mov ah, API_GFX_DRAW_RECT
     int 0x80
 
-    ; Title "TETRIS" (large font)
-    mov al, 2                       ; Large font 8x14
+    ; Title "TETRIS" in alternating colors (large font)
+    mov al, 2                       ; Large font 8x12
     mov ah, API_GFX_SET_FONT
     int 0x80
-    mov bx, 184
-    mov cx, 2
-    mov si, str_title
-    mov ah, API_GFX_DRAW_STRING
+
+    mov byte [cs:cell_px], 0        ; Letter index
+    mov word [cs:cell_sx], 184      ; X position
+.title_color_loop:
+    xor bx, bx
+    mov bl, [cs:cell_px]
+    mov al, [cs:title_clrs + bx]    ; Color for this letter
+    xor bl, bl                      ; Keep desktop_bg black
+    mov cl, 3                       ; Keep win_color white
+    mov ah, API_THEME_SET_COLORS
+    int 0x80
+    xor bx, bx
+    mov bl, [cs:cell_px]
+    mov al, [cs:title_chars + bx]   ; Character
+    mov bx, [cs:cell_sx]            ; X position
+    mov cx, 2                       ; Y position
+    mov ah, API_GFX_DRAW_CHAR
+    int 0x80
+    add word [cs:cell_sx], 12       ; Large font advance
+    inc byte [cs:cell_px]
+    cmp byte [cs:cell_px], 6
+    jb .title_color_loop
+
+    ; Restore white text color
+    mov al, 3
+    xor bl, bl
+    mov cl, 3
+    mov ah, API_THEME_SET_COLORS
     int 0x80
 
     ; Switch back to medium font for labels
@@ -498,6 +516,11 @@ draw_static_ui:
     mov ah, API_GFX_DRAW_RECT
     int 0x80
 
+    ; Set small font for compact button labels
+    mov al, 0
+    mov ah, API_GFX_SET_FONT
+    int 0x80
+
     ; Buttons
     mov ax, cs
     mov es, ax
@@ -522,12 +545,17 @@ draw_static_ui:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    ; Switch to small font for help text
-    mov al, 0
-    mov ah, API_GFX_SET_FONT
+    ; Quit button
+    mov bx, BTN_QUIT_X
+    mov cx, BTN_QUIT_Y
+    mov dx, BTN_QUIT_W
+    mov si, BTN_H
+    mov di, str_quit
+    xor al, al
+    mov ah, API_DRAW_BUTTON
     int 0x80
 
-    ; Help text
+    ; Help text (already small font)
     mov bx, 168
     mov cx, 148
     mov si, str_help1
@@ -543,13 +571,6 @@ draw_static_ui:
     ; Restore medium font
     mov al, 1
     mov ah, API_GFX_SET_FONT
-    int 0x80
-
-    ; Show initial "Click New Game" message
-    mov bx, 168
-    mov cx, 108
-    mov si, str_press_new
-    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Display initial score values
@@ -1252,8 +1273,6 @@ animate_line_clear:
     mov [cs:cell_sy], ax
 .alc_w1:
     sti
-    mov ah, API_APP_YIELD
-    int 0x80
     call read_tick
     sub ax, [cs:cell_sy]
     cmp ax, 2
@@ -1289,8 +1308,6 @@ animate_line_clear:
     mov [cs:cell_sy], ax
 .alc_w2:
     sti
-    mov ah, API_APP_YIELD
-    int 0x80
     call read_tick
     sub ax, [cs:cell_sy]
     cmp ax, 2
@@ -1654,6 +1671,16 @@ check_mouse:
     test al, al
     jnz .cm_toggle_pause
 
+    ; Hit test Quit button
+    mov bx, BTN_QUIT_X
+    mov cx, BTN_QUIT_Y
+    mov dx, BTN_QUIT_W
+    mov si, BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .cm_quit
+
     jmp .cm_done
 
 .cm_up:
@@ -1693,6 +1720,10 @@ check_mouse:
     call read_tick
     mov [cs:music_tick], ax
     mov [cs:last_drop_tick], ax
+    jmp .cm_done
+
+.cm_quit:
+    mov byte [cs:quit_flag], 1
     jmp .cm_done
 
 .cm_done:
