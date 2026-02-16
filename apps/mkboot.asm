@@ -441,20 +441,19 @@ entry:
 
 .copy_from_hd:
     ; === Copy apps from HD (stream copy) ===
-    mov word [cs:dir_idx], 0
+    mov word [cs:dir_state], 0
     mov byte [cs:n_copied], 0
 
 .hd_copy_loop:
     mov ax, cs
     mov es, ax
     mov di, dirent
-    mov ax, [cs:dir_idx]
-    mov bl, 1                       ; Mount handle 1 = HD
+    mov al, 1                       ; Mount handle 1 = HD
+    mov cx, [cs:dir_state]
     mov ah, API_FS_READDIR
     int 0x80
     jc .show_count
-
-    inc word [cs:dir_idx]
+    mov [cs:dir_state], cx
 
     ; Check .BIN extension
     cmp byte [cs:dirent + 8], 'B'
@@ -587,19 +586,18 @@ entry:
 preread_apps:
     mov byte [cs:n_apps], 0
     mov word [cs:buf_pos], 0
-    mov word [cs:dir_idx], 0
+    mov word [cs:dir_state], 0
 
 .pr_loop:
     mov ax, cs
     mov es, ax
     mov di, dirent
-    mov ax, [cs:dir_idx]
-    mov bl, 0                       ; Mount handle 0 = floppy
+    mov al, 0                       ; Mount handle 0 = floppy
+    mov cx, [cs:dir_state]
     mov ah, API_FS_READDIR
     int 0x80
     jc .pr_done
-
-    inc word [cs:dir_idx]
+    mov [cs:dir_state], cx
 
     ; Check .BIN extension
     cmp byte [cs:dirent + 8], 'B'
@@ -1056,7 +1054,7 @@ wb_prev:        db 0
 cur_lba:        dw 0
 buf_off:        dw 0
 status_y:       dw 94
-dir_idx:        dw 0
+dir_state:      dw 0
 n_copied:       db 0
 hd_fh:          db 0
 fl_fh:          db 0
