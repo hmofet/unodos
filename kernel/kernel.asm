@@ -26,40 +26,11 @@ entry:
     pop dx                          ; Restore DL
     mov [boot_drive], dl            ; Save for later use
 
-    ; Print newline then kernel banner with build number for verification
-    mov ah, 0x0E
-    mov al, 13
-    int 0x10
-    mov al, 10
-    int 0x10
-
-    ; Print "Kernel " then build number immediately (before any init)
-    mov si, kernel_prefix
-    call print_string_bios
-    mov si, build_string
-    call print_string_bios
-    mov ah, 0x0E
-    mov al, ':'
-    xor bx, bx
-    int 0x10
-    mov al, ' '
-    int 0x10
-
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
     ; Initialize mouse
     call install_mouse
-
-    ; Show mouse init result: B=BIOS method, K=KBC method, R/S/E=failure
-    mov ah, 0x0E
-    xor bx, bx
-    mov al, [mouse_diag]
-    int 0x10
-
-    ; Wait for keypress
-    xor ax, ax
-    int 0x16
 
     ; Install keyboard handler
     call install_keyboard
@@ -87,12 +58,6 @@ entry:
     mov si, build_string
     call gfx_draw_string_stub
 
-    ; Draw diagnostic marker to confirm CGA drawing works
-    mov bx, 4
-    mov cx, 30
-    mov si, diag_pre
-    call gfx_draw_string_stub
-
     ; Enable interrupts
     sti
 
@@ -102,21 +67,11 @@ entry:
     ; Auto-load launcher from boot disk
     call auto_load_launcher
 
-    ; If we get here, auto_load_launcher failed (error was drawn)
-    ; Draw post-fail marker
-    mov word [caller_ds], 0x1000
-    mov bx, 4
-    mov cx, 60
-    mov si, diag_post
-    call gfx_draw_string_stub
-
-    ; Halt
+    ; If we get here, auto_load_launcher failed
 halt_loop:
     hlt
     jmp halt_loop
 
-diag_pre:  db 'PRE', 0
-diag_post: db 'POST', 0
 
 ; ============================================================================
 ; System Call Infrastructure
@@ -1139,9 +1094,6 @@ win_end_draw:
 ; Aliases for compatibility
 version_string equ VERSION_STR
 build_string   equ BUILD_NUMBER_STR
-
-; Boot messages
-kernel_prefix:  db 'Kernel ', 0
 
 ; Boot configuration
 boot_drive:         db 0                ; Boot drive number (0x00=floppy, 0x80=HDD)

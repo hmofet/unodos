@@ -5,6 +5,48 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.18.0] - 2026-02-16
+
+### Added (Builds 194-196) - Splash Screen, File Browser Fix, Refresh Icon
+
+- **Splash Screen with Logo** (Build 196)
+  - "U" logo drawn with white filled rectangles during boot
+  - "UnoDOS 3" title and "Loading..." text displayed
+  - Progress bar fills as apps are discovered from disk
+  - Replaces blank/debug screen during launcher initialization
+
+- **Floppy Refresh Icon** (Build 195)
+  - Manual disk rescan icon appears as last desktop icon on floppy boot
+  - 3.5" floppy disk shape (16x16 2bpp CGA bitmap)
+  - Replaces automatic INT 13h AH=16h polling (caused constant floppy seeking)
+  - Only shown when booted from floppy
+
+- **Launch Error Feedback** (Build 195)
+  - "Insert app disk" message for mount/file errors (codes 2, 3)
+  - Error message auto-clears after ~2 seconds with desktop redraw
+
+### Fixed (Builds 194-196)
+
+- **File Browser HD Support** (Build 194): Browser now queries boot drive
+  and saves mount handle, fixing blank listing on HD/CF/USB boot
+- **Floppy Seeking Noise** (Build 195): Removed automatic floppy swap
+  polling (INT 13h AH=16h) that caused audible seeking on IBM PS/2 L40
+
+### Changed
+
+- Bootloader version updated from v0.2 to v3.18
+- All boot diagnostic code removed (keypress wait, BIOS teletype,
+  CGA white boxes, PRE/POST markers)
+
+### Removed
+
+- Kernel boot keypress wait
+- Kernel BIOS teletype diagnostic output
+- Kernel "PRE"/"POST" CGA diagnostic strings
+- Launcher CGA diagnostic white boxes (marks 1-6)
+
+---
+
 ## [3.17.0] - 2026-02-15
 
 ### Added (Builds 162-193) - Universal PS/2 Mouse via BIOS Services

@@ -27,9 +27,10 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 ### Tested Hardware
 
 - **HP Omnibook 600C** (486DX4-75, VGA with CGA emulation, 1.44MB floppy)
+- **IBM PS/2 L40** (386SX, B&W display, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.17.0 Build 193)
+## Current Features (v3.18.0 Build 196)
 
 - **Boots from floppy disk, hard drive, CF card, or USB flash drive**
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)
@@ -149,7 +150,7 @@ unodos/
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md            # AI development guidelines
-├── VERSION              # Version string (3.17.0)
+├── VERSION              # Version string (3.18.0)
 └── BUILD_NUMBER         # Build number (193)
 ```
 
@@ -202,7 +203,7 @@ unodos/
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Current version: **3.17.0** (Build 193)
+Current version: **3.18.0** (Build 196)
 
 ## License
 

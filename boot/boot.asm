@@ -150,7 +150,7 @@ print_string:
 
 boot_drive:     db 0
 
-msg_boot:       db 'UnoDOS Boot v0.2', 0x0D, 0x0A, 0
+msg_boot:       db 'UnoDOS Boot v3.18', 0x0D, 0x0A, 0
 msg_reset:      db 'Reset disk... ', 0
 msg_loading:    db 'Load stage2... ', 0
 msg_ok:         db 'OK', 0x0D, 0x0A, 0

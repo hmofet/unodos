@@ -10,10 +10,12 @@
 [ORG 0x0000]
 
 ; API function indices (must match kernel_api_table in kernel.asm)
+API_GFX_DRAW_RECT       equ 1
 API_GFX_DRAW_FILLED_RECT equ 2
 API_GFX_DRAW_CHAR       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
+API_GFX_DRAW_STRING_INVERTED equ 6
 API_EVENT_GET           equ 9
 API_FS_MOUNT            equ 13
 API_FS_READDIR          equ 27
@@ -64,14 +66,6 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; === DIAGNOSTIC: mark 1 - launcher entry ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x0000], 0xFF
-    mov byte [es:0x2000], 0xFF
-    pop es
-
     ; Initialize state
     mov byte [cs:icon_count], 0
     mov byte [cs:selected_icon], 0xFF
@@ -79,18 +73,13 @@ entry:
     mov word [cs:last_click_tick], 0
     mov byte [cs:last_click_icon], 0xFF
 
-    ; Mount filesystem and scan for apps
+    ; Show splash screen with logo and progress bar
+    call show_splash
+
+    ; Mount filesystem and scan for apps (updates progress bar)
     call scan_disk
 
-    ; === mark 6: scan_disk completed ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x000A], 0xFF
-    mov byte [es:0x200A], 0xFF
-    pop es
-
-    ; Draw full desktop (background + title + version + icons)
+    ; Clear splash and draw full desktop
     call redraw_desktop
 
     ; Read initial BIOS tick counter for polling
@@ -250,25 +239,9 @@ scan_disk:
     mov word [cs:dir_state], 0
     mov word [cs:scan_safety], 0
 
-    ; === mark 2: fs_mount OK ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x0002], 0xFF
-    mov byte [es:0x2002], 0xFF
-    pop es
-
     ; Clear all kernel desktop icons
     mov ah, API_DESKTOP_CLEAR
     int 0x80
-
-    ; === mark 3: desktop_clear OK ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x0004], 0xFF
-    mov byte [es:0x2004], 0xFF
-    pop es
 
     mov byte [cs:icon_count], 0
 
@@ -290,14 +263,6 @@ scan_disk:
     cmp byte [cs:icon_count], MAX_ICONS
     jae .scan_done
 
-    ; === mark 4: about to call readdir ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x0006], 0xFF
-    mov byte [es:0x2006], 0xFF
-    pop es
-
     ; Read next directory entry
     mov al, [cs:mount_handle]       ; Mount handle (0=FAT12, 1=FAT16)
     mov cx, [cs:dir_state]
@@ -307,14 +272,6 @@ scan_disk:
     mov ah, API_FS_READDIR
     int 0x80
     jc .scan_done
-
-    ; === mark 5: readdir returned OK ===
-    push es
-    mov ax, 0xB800
-    mov es, ax
-    mov byte [es:0x0008], 0xFF
-    mov byte [es:0x2008], 0xFF
-    pop es
 
     mov [cs:dir_state], cx
 
@@ -367,6 +324,7 @@ scan_disk:
     call register_icon
 
     inc byte [cs:icon_count]
+    call update_progress            ; Fill one segment of progress bar
     jmp .scan_loop
 
 .scan_done:
@@ -379,6 +337,7 @@ scan_disk:
     mov al, [cs:icon_count]
     call add_refresh_icon
     inc byte [cs:icon_count]
+    call update_progress            ; Fill one segment of progress bar
 
 .scan_really_done:
     pop es
@@ -698,6 +657,92 @@ register_icon:
 .ri_slot: db 0
 .ri_x:    dw 0
 .ri_y:    dw 0
+
+; ============================================================================
+; show_splash - Display splash screen with logo and progress bar
+; ============================================================================
+show_splash:
+    pusha
+
+    ; Clear screen to black
+    xor bx, bx
+    xor cx, cx
+    mov dx, 320
+    mov si, 200
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Draw "U" logo — 3 filled white rectangles
+    ; Left pillar: (140, 40) w=10, h=36
+    mov bx, 140
+    mov cx, 40
+    mov dx, 10
+    mov si, 36
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; Right pillar: (170, 40) w=10, h=36
+    mov bx, 170
+    mov cx, 40
+    mov dx, 10
+    mov si, 36
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; Bottom bar: (140, 68) w=40, h=8
+    mov bx, 140
+    mov cx, 68
+    mov dx, 40
+    mov si, 8
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+
+    ; "UnoDOS 3" centered below logo
+    mov bx, 112
+    mov cx, 90
+    mov si, splash_name
+    mov ah, API_GFX_DRAW_STRING_INVERTED
+    int 0x80
+
+    ; "Loading..." centered
+    mov bx, 100
+    mov cx, 120
+    mov si, splash_loading
+    mov ah, API_GFX_DRAW_STRING_INVERTED
+    int 0x80
+
+    ; Progress bar outline: (90, 140) w=140, h=10
+    mov bx, 90
+    mov cx, 140
+    mov dx, 140
+    mov si, 10
+    mov ah, API_GFX_DRAW_RECT
+    int 0x80
+
+    popa
+    ret
+
+; ============================================================================
+; update_progress - Fill one segment of the splash progress bar
+; Called after icon_count is incremented
+; ============================================================================
+update_progress:
+    pusha
+    ; Fill segment N (0-based): X = 91 + N*17, width=17, height=8
+    mov al, [cs:icon_count]
+    dec al                          ; Just incremented, use N-1
+    xor ah, ah
+    mov bl, 17
+    mul bl
+    add ax, 91
+    mov bx, ax
+    mov cx, 141
+    mov dx, 17
+    mov si, 8
+    mov ah, API_GFX_DRAW_FILLED_RECT
+    int 0x80
+    popa
+    ret
 
 ; ============================================================================
 ; draw_background - Fill screen with background color
@@ -1327,6 +1372,8 @@ read_bios_ticks:
 ; ============================================================================
 
 title_str:      db 'UnoDOS', 0
+splash_name:    db 'UnoDOS 3', 0
+splash_loading: db 'Loading...', 0
 no_apps_msg:    db 'No apps found', 0
 load_error_msg: db 'Load err: ', 0
 insert_disk_msg: db 'Insert app disk', 0
