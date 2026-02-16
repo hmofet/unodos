@@ -841,12 +841,13 @@ check_collision:
     jnz .cc_ok_cell
 
     ; Check board occupancy: board[row*10 + col]
+    mov cl, dl                       ; Save column (mul clobbers DX)
     xor ax, ax
     mov al, dh
     mov bx, BOARD_COLS
-    mul bx                           ; AX = row * 10
+    mul bx                           ; AX = row * 10 (DX clobbered)
     xor bx, bx
-    mov bl, dl
+    mov bl, cl                       ; Restore column from CL
     add ax, bx                       ; AX = row*10 + col
     mov bx, ax
     cmp byte [cs:board + bx], 0
@@ -1024,12 +1025,13 @@ lock_piece:
     jnz .lp_skip
 
     ; board[row*10 + col] = cur_color
+    mov cl, dl                       ; Save column (mul clobbers DX)
     xor ax, ax
     mov al, dh
     mov bx, BOARD_COLS
-    mul bx
+    mul bx                           ; AX = row * 10 (DX clobbered)
     xor bx, bx
-    mov bl, dl
+    mov bl, cl                       ; Restore column from CL
     add ax, bx
     mov bx, ax
     mov al, [cs:cur_color]
@@ -1068,7 +1070,7 @@ lock_piece:
     mov bx, 48
     mov cx, 84
     mov si, str_gameover
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .lp_ok:
