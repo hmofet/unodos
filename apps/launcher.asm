@@ -124,16 +124,8 @@ entry:
     call handle_click               ; BX=mouse X, CX=mouse Y
 
 .no_click:
-    ; --- Floppy swap polling ---
-    call read_bios_ticks
-    mov bx, ax
-    sub bx, [cs:last_poll_tick]
-    cmp bx, POLL_INTERVAL
-    jb .no_poll
-    call read_bios_ticks
-    mov [cs:last_poll_tick], ax
-    call check_floppy_swap
-.no_poll:
+    ; Floppy swap polling removed — caused constant seeking on real hardware
+    ; User clicks Refresh icon to rescan disk instead
 
     ; --- Keyboard events ---
     mov ah, API_EVENT_GET
@@ -280,6 +272,14 @@ scan_disk:
 
     mov byte [cs:icon_count], 0
 
+    ; Clear is_refresh flags
+    mov di, is_refresh
+    mov cx, 8
+.clear_refresh:
+    mov byte [cs:di], 0
+    inc di
+    loop .clear_refresh
+
 .scan_loop:
     ; Safety check
     inc word [cs:scan_safety]
@@ -370,9 +370,73 @@ scan_disk:
     jmp .scan_loop
 
 .scan_done:
+    ; On floppy boot, add a Refresh icon as the last slot
+    test byte [cs:mounted_drive], 0x80
+    jnz .scan_really_done             ; Skip on HD boot
+    cmp byte [cs:icon_count], MAX_ICONS
+    jae .scan_really_done             ; No room
+
+    mov al, [cs:icon_count]
+    call add_refresh_icon
+    inc byte [cs:icon_count]
+
+.scan_really_done:
     pop es
     popa
     ret
+
+; ============================================================================
+; add_refresh_icon - Add the floppy refresh icon to a slot
+; Input: AL = slot number
+; ============================================================================
+add_refresh_icon:
+    pusha
+
+    mov [cs:.ari_slot], al
+
+    ; Mark this slot as refresh
+    xor ah, ah
+    mov di, ax
+    mov byte [cs:is_refresh + di], 1
+
+    ; Copy bitmap: icon_bitmaps + slot*64
+    mov al, [cs:.ari_slot]
+    xor ah, ah
+    shl ax, 6
+    add ax, icon_bitmaps
+    mov di, ax
+    mov si, refresh_icon
+    mov cx, 64
+.ari_bmp:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .ari_bmp
+
+    ; Copy name: icon_names + slot*12
+    mov al, [cs:.ari_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov di, ax
+    mov si, refresh_name
+    mov cx, 12
+.ari_name:
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .ari_name
+
+    ; Register with kernel for desktop repaint
+    mov al, [cs:.ari_slot]
+    call register_icon
+
+    popa
+    ret
+.ari_slot: db 0
 
 ; ============================================================================
 ; store_app_info - Store app filename info
@@ -1086,8 +1150,22 @@ clear_icon_area:
 launch_app:
     pusha
 
-    ; Get filename for this slot: app_info + (slot * 16)
+    ; Check if this is the refresh icon
     xor ah, ah
+    mov di, ax
+    cmp byte [cs:is_refresh + di], 1
+    jne .la_normal_launch
+
+    ; Refresh icon — rescan disk
+    mov byte [cs:icon_count], 0
+    mov byte [cs:selected_icon], 0xFF
+    call scan_disk
+    call redraw_desktop
+    call repaint_all_windows
+    jmp .la_done
+
+.la_normal_launch:
+    ; Get filename for this slot: app_info + (slot * 16)
     shl ax, 4
     add ax, app_info
     mov si, ax
@@ -1108,30 +1186,51 @@ launch_app:
 .la_error:
     ; Save error code before it gets clobbered
     mov [cs:la_errcode], al
-    ; Show error with background so it's visible
-    mov bx, 0                       ; Color 0 (black) background
-    mov cx, 68                      ; X
-    mov dx, 176                     ; Y
-    mov si, 190                     ; Width
-    mov di, 18                      ; Height
+
+    ; Draw black background bar for message
+    mov bx, 0
+    mov cx, 68
+    mov dx, 176
+    mov si, 240
+    mov di, 18
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
-    ; Draw "Load err:" prefix
+
+    ; Error 2 = mount failed, Error 3 = file not found → "Insert app disk"
+    mov al, [cs:la_errcode]
+    cmp al, 2
+    je .la_show_insert
+    cmp al, 3
+    je .la_show_insert
+
+    ; Other errors: show generic "Load err: X"
     mov bx, 72
     mov cx, 180
     mov si, load_error_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Draw error code digit after message
     mov al, [cs:la_errcode]
-    add al, '0'                     ; Convert to ASCII digit
-    mov bx, 192                     ; After "Load err: " (10 chars * 12px)
+    add al, '0'
+    mov bx, 192
     mov cx, 180
     mov ah, API_GFX_DRAW_CHAR
     int 0x80
+    jmp .la_after_msg
+
+.la_show_insert:
+    mov bx, 72
+    mov cx, 180
+    mov si, insert_disk_msg
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.la_after_msg:
     ; Brief delay so user can see error
     call .la_delay
     call .la_delay
+    ; Redraw desktop to clear error message
+    call redraw_desktop
+    call repaint_all_windows
 
 .la_done:
     popa
@@ -1230,6 +1329,7 @@ read_bios_ticks:
 title_str:      db 'UnoDOS', 0
 no_apps_msg:    db 'No apps found', 0
 load_error_msg: db 'Load err: ', 0
+insert_disk_msg: db 'Insert app disk', 0
 la_errcode:     db 0
 
 ; Drive and scan state
@@ -1291,6 +1391,30 @@ default_icon:
     db 0xC0, 0x00, 0x00, 0x03      ; Row 13: #..............#
     db 0xC0, 0x00, 0x00, 0x03      ; Row 14: #..............#
     db 0xFF, 0xFF, 0xFF, 0xFF      ; Row 15: ################
+
+; Refresh/floppy icon (3.5" floppy shape: metal slider top, label bottom)
+refresh_icon:
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 0:  .##############.
+    db 0xC0, 0x00, 0x00, 0x0F      ; Row 1:  ##..............##
+    db 0xCF, 0x0C, 0xF0, 0x0F      ; Row 2:  ##..####..####..##
+    db 0xCF, 0x0C, 0xF0, 0x0F      ; Row 3:  ##..####..####..##
+    db 0xCF, 0x0C, 0xF0, 0x0F      ; Row 4:  ##..####..####..##
+    db 0xC0, 0x00, 0x00, 0x0F      ; Row 5:  ##..............##
+    db 0xC0, 0x00, 0x00, 0x0C      ; Row 6:  ##..............#.
+    db 0xC0, 0x00, 0x00, 0x0C      ; Row 7:  ##..............#.
+    db 0xC0, 0x00, 0x00, 0x0C      ; Row 8:  ##..............#.
+    db 0xC3, 0xFF, 0xFF, 0x0C      ; Row 9:  ##..############.#.
+    db 0xC3, 0x00, 0x03, 0x0C      ; Row 10: ##..#.........#.#.
+    db 0xC3, 0x00, 0x03, 0x0C      ; Row 11: ##..#.........#.#.
+    db 0xC3, 0xFF, 0xFF, 0x0C      ; Row 12: ##..############.#.
+    db 0xC0, 0x00, 0x00, 0x0C      ; Row 13: ##..............#.
+    db 0x3F, 0xFF, 0xFF, 0xFC      ; Row 14: .################.
+    db 0x00, 0x00, 0x00, 0x00      ; Row 15: ..................
+
+refresh_name:   db 'Refresh', 0, 0, 0, 0, 0   ; 12 bytes padded
+
+; Per-slot flag: 0=app, 1=refresh icon
+is_refresh:     times 8 db 0
 
 ; App handle for launched app
 app_handle:     dw 0
