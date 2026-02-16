@@ -17,8 +17,8 @@ import struct
 import os
 
 SECTOR_SIZE = 512
-OS_SECTORS = 62  # Boot + Stage2 + Reserved + Kernel
-FS_START_SECTOR = 62
+OS_SECTORS = 70  # Boot + Stage2 + Reserved + Kernel (expanded Build 202)
+FS_START_SECTOR = 70
 
 def format_fat_filename(filename):
     """Convert filename to 8.3 FAT format (11 bytes, space-padded)."""
