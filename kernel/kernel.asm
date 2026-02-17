@@ -7373,15 +7373,18 @@ app_exit_stub:
 
     ; Destroy all windows owned by this task
     push ax                         ; Save task handle
-    call destroy_task_windows
+    call destroy_task_windows       ; ZF=1 if no windows destroyed
     pop ax
 
-    ; Always repaint full desktop (fullscreen apps may have drawn over everything)
+    ; Only repaint full desktop if no windows were destroyed (windowless/fullscreen app)
+    ; Windowed apps already trigger redraw via win_destroy_stub
+    jnz .skip_fullscreen_repaint
     mov word [redraw_old_x], 0
     mov word [redraw_old_y], 0
     mov word [redraw_old_w], 320
     mov word [redraw_old_h], 200
     call redraw_affected_windows
+.skip_fullscreen_repaint:
 
     ; Restore default font (medium 8x8) in case app changed it
     push ax
@@ -7426,6 +7429,7 @@ destroy_task_windows:
     push cx
     push si
 
+    xor bx, bx                     ; BX = destroyed count
     mov si, window_table
     xor cx, cx                      ; CX = window handle counter
 
@@ -7445,6 +7449,7 @@ destroy_task_windows:
     call win_destroy_stub
     pop cx
     pop ax
+    inc bx                          ; Count destroyed windows
 
 .dtw_next:
     add si, WIN_ENTRY_SIZE
@@ -7452,6 +7457,7 @@ destroy_task_windows:
     jmp .dtw_loop
 
 .dtw_done:
+    test bx, bx                    ; ZF=1 if no windows destroyed (POP won't change flags)
     pop si
     pop cx
     pop bx
