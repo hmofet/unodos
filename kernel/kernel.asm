@@ -39,6 +39,9 @@ entry:
     xor ax, ax
     mov al, 0x04
     int 0x10
+    ; Reset cursor state: mode switch cleared video memory but cursor_visible
+    ; may be stale if a mouse IRQ drew the cursor before the mode switch
+    mov byte [cursor_visible], 0
     call setup_graphics_post_mode
 
     ; ========== PHASE 2: Graphics init complete ==========
@@ -8205,7 +8208,19 @@ redraw_affected_windows:
     cmp al, [.cur_z]
     jne .raw_next
 
-    ; Rectangle intersection test:
+    ; Always redraw frame for ALL visible windows at this z-level.
+    ; This ensures z-order correctness: lower-z frames drawn first,
+    ; higher-z frames cover them. Without this, a lower-z window's
+    ; frame could extend beyond the affected rect and corrupt a
+    ; higher-z window that doesn't overlap the rect.
+    push si
+    push bp
+    mov ax, bp                      ; AX = window handle
+    and al, 0x0F
+    call win_draw_stub
+
+    ; Rectangle intersection test: only clear content + post WIN_REDRAW
+    ; for windows that actually overlap the affected rect
     ; win_x < old_x + old_w  AND  old_x < win_x + win_w
     ; win_y < old_y + old_h  AND  old_y < win_y + win_h
 
@@ -8213,35 +8228,27 @@ redraw_affected_windows:
     mov ax, [redraw_old_x]
     add ax, [redraw_old_w]
     cmp [si + WIN_OFF_X], ax
-    jge .raw_next
+    jge .raw_no_clear
 
     ; Test: old_x < win_x + win_w
     mov ax, [si + WIN_OFF_X]
     add ax, [si + WIN_OFF_WIDTH]
     cmp [redraw_old_x], ax
-    jge .raw_next
+    jge .raw_no_clear
 
     ; Test: win_y < old_y + old_h
     mov ax, [redraw_old_y]
     add ax, [redraw_old_h]
     cmp [si + WIN_OFF_Y], ax
-    jge .raw_next
+    jge .raw_no_clear
 
     ; Test: old_y < win_y + win_h
     mov ax, [si + WIN_OFF_Y]
     add ax, [si + WIN_OFF_HEIGHT]
     cmp [redraw_old_y], ax
-    jge .raw_next
+    jge .raw_no_clear
 
-    ; Windows overlap - redraw this window's frame and clear content
-    push si
-    push bp
-    mov ax, bp                      ; AX = window handle
-    and al, 0x0F
-    call win_draw_stub
-
-    ; Clear content area before app redraws it via WIN_REDRAW event
-    ; SI still points to window table entry (preserved by win_draw_stub)
+    ; Window overlaps affected rect - clear content and request app redraw
     mov bx, [si + WIN_OFF_X]
     inc bx                          ; Inside left border
     mov cx, [si + WIN_OFF_Y]
@@ -8259,6 +8266,7 @@ redraw_affected_windows:
     mov dx, bp                      ; DX = window handle (BP preserved)
     call post_event
 
+.raw_no_clear:
     pop bp
     pop si
 
@@ -8272,8 +8280,8 @@ redraw_affected_windows:
     jmp .z_loop
 
 .raw_done:
-    ; After z-orders 0-14, redraw topmost window (z=15) if it overlaps
-    ; the affected region. This ensures the foreground is always on top.
+    ; After z-orders 0-14, always redraw topmost window (z=15) frame
+    ; to ensure it is always visually on top of everything
     cmp byte [topmost_handle], 0xFF
     je .topmost_done                ; No topmost window
 
@@ -8286,7 +8294,12 @@ redraw_affected_windows:
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .topmost_done
 
-    ; Rectangle intersection test with affected area
+    ; Always redraw topmost frame (ensures it's on top after z-loop)
+    xor ah, ah
+    mov al, [topmost_handle]
+    call win_draw_stub
+
+    ; Only clear content + post WIN_REDRAW if topmost overlaps affected area
     mov ax, [redraw_old_x]
     add ax, [redraw_old_w]
     cmp [si + WIN_OFF_X], ax
@@ -8304,12 +8317,7 @@ redraw_affected_windows:
     cmp [redraw_old_y], ax
     jge .topmost_done
 
-    ; Topmost window overlaps — redraw frame and clear content
-    xor ah, ah
-    mov al, [topmost_handle]
-    call win_draw_stub
-
-    ; Clear content area
+    ; Topmost overlaps — clear content and request app redraw
     mov bx, [si + WIN_OFF_X]
     inc bx
     mov cx, [si + WIN_OFF_Y]
