@@ -205,6 +205,7 @@ print_string:
     ret
 
 halt:
+    cli                             ; Disable interrupts to prevent wakeup
     hlt
     jmp halt
 

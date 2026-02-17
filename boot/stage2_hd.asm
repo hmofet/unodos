@@ -516,6 +516,7 @@ print_hex_word:
     ret
 
 halt:
+    cli                             ; Disable interrupts to prevent wakeup
     hlt
     jmp halt
 
