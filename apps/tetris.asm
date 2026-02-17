@@ -157,7 +157,10 @@ entry:
     cmp byte [cs:game_state], STATE_PLAYING
     jne .main_loop
 
+    cmp byte [cs:sound_enabled], 0
+    je .skip_music
     call music_update
+.skip_music:
     call check_drop_timer
 
     jmp .main_loop
@@ -198,6 +201,7 @@ API_THEME_SET_COLORS     equ 54
 API_THEME_GET_COLORS     equ 55
 API_SPEAKER_TONE         equ 41
 API_SPEAKER_OFF          equ 42
+API_DRAW_CHECKBOX        equ 56
 
 STATE_MENU               equ 0
 STATE_PLAYING            equ 1
@@ -224,6 +228,11 @@ BTN_H                    equ 14
 PREVIEW_X                equ 170
 PREVIEW_Y                equ 82
 
+CHK_SOUND_X              equ 168
+CHK_SOUND_Y              equ 168
+CHK_SOUND_W              equ 36
+CHK_SOUND_H              equ 10
+
 ; ============================================================================
 ; Game variables
 ; ============================================================================
@@ -249,6 +258,7 @@ music_idx:      dw 0
 music_tick:     dw 0
 music_dur:      dw 0
 music_gap:      db 0                ; 0=playing note, 1=in gap
+sound_enabled:  db 1                ; 1=sound on, 0=sound off
 
 ; Saved theme colors (restored on exit)
 saved_text_clr: db 0
@@ -407,6 +417,7 @@ str_help1:      db 'Arrows:Move', 0
 str_help2:      db 'Up:Rot Space:Drop', 0
 str_gameover:   db 'GAME OVER', 0
 str_paused:     db 'PAUSED', 0
+str_sound:      db 'Sound', 0
 
 ; Title character data for colored rendering
 title_chars:    db 'TETRIS'
@@ -584,6 +595,14 @@ draw_static_ui:
     mov cx, 156
     mov si, str_help2
     mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Sound checkbox (still small font)
+    mov bx, CHK_SOUND_X
+    mov cx, CHK_SOUND_Y
+    mov si, str_sound
+    mov al, [cs:sound_enabled]
+    mov ah, API_DRAW_CHECKBOX
     int 0x80
 
     ; Restore medium font
@@ -1701,6 +1720,16 @@ check_mouse:
     test al, al
     jnz .cm_quit
 
+    ; Hit test Sound checkbox
+    mov bx, CHK_SOUND_X
+    mov cx, CHK_SOUND_Y
+    mov dx, CHK_SOUND_W
+    mov si, CHK_SOUND_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .cm_toggle_sound
+
     jmp .cm_done
 
 .cm_up:
@@ -1744,6 +1773,36 @@ check_mouse:
 
 .cm_quit:
     mov byte [cs:quit_flag], 1
+    jmp .cm_done
+
+.cm_toggle_sound:
+    ; Toggle sound_enabled
+    xor byte [cs:sound_enabled], 1
+    ; Redraw checkbox with small font
+    mov al, 0
+    mov ah, API_GFX_SET_FONT
+    int 0x80
+    mov bx, CHK_SOUND_X
+    mov cx, CHK_SOUND_Y
+    mov si, str_sound
+    mov al, [cs:sound_enabled]
+    mov ah, API_DRAW_CHECKBOX
+    int 0x80
+    mov al, 1
+    mov ah, API_GFX_SET_FONT
+    int 0x80
+    ; If sound turned off, stop speaker immediately
+    cmp byte [cs:sound_enabled], 0
+    jne .cm_sound_on
+    mov ah, API_SPEAKER_OFF
+    int 0x80
+    jmp .cm_done
+.cm_sound_on:
+    ; Sound turned on - reset music timing so it resumes
+    cmp byte [cs:game_state], STATE_PLAYING
+    jne .cm_done
+    call read_tick
+    mov [cs:music_tick], ax
     jmp .cm_done
 
 .cm_done:
@@ -1796,7 +1855,9 @@ start_new_game:
     ; Draw first piece
     call draw_piece
 
-    ; Start music
+    ; Start music (if sound enabled)
+    cmp byte [cs:sound_enabled], 0
+    je .sng_no_music
     mov si, korobeiniki
     mov bx, [cs:si]                 ; First note frequency
     cmp bx, 0xFFFF
