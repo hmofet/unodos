@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 57                      ; Max function count (0-56 valid)
+    cmp ah, 63                      ; Max function count (0-62 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -162,11 +162,13 @@ int_80_handler:
     jbe .do_translate               ; APIs 0-6: drawing functions
     cmp ah, 50
     jb .no_translate                ; APIs 7-49: no translation
-    cmp ah, 52
-    jbe .do_translate               ; APIs 50-52: translate coords
+    cmp ah, 53
+    jb .do_translate                ; APIs 50-52: translate coords
     cmp ah, 56
-    jne .no_translate               ; API 56: checkbox widget; 53-55: no translation
-.do_translate:                      ; APIs 0-6 and 50-52: translate coords
+    jb .no_translate                ; APIs 53-55: no translation
+    cmp ah, 63
+    jb .do_translate                ; APIs 56-62: widget APIs
+.do_translate:                      ; APIs 0-6, 50-52, 56-62: translate coords
 
     ; Translate: BX += content_x, CX += content_y
     push si
@@ -2950,7 +2952,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 57                           ; Number of function slots (0-56)
+    dw 63                           ; Number of function slots (0-62)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -3044,6 +3046,14 @@ kernel_api_table:
 
     ; Checkbox widget (Build 226)
     dw widget_draw_checkbox         ; 56: Draw checkbox
+
+    ; Extended Widget Toolkit (Build 235)
+    dw widget_draw_textfield        ; 57: Draw text input field
+    dw widget_draw_scrollbar        ; 58: Draw scrollbar
+    dw widget_draw_listitem         ; 59: Draw list item
+    dw widget_draw_progress         ; 60: Draw progress bar
+    dw widget_draw_groupbox         ; 61: Draw group box
+    dw widget_draw_separator        ; 62: Draw separator line
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -3663,6 +3673,641 @@ checkbox_checked_bitmap:
     db 0b10100101                   ; X.X..X.X
     db 0b11000011                   ; XX....XX
     db 0b11111111                   ; XXXXXXXX
+
+; ============================================================================
+; widget_draw_separator - Draw a separator line (API 62)
+; Input: BX=X, CX=Y, DX=length, AL=flags (bit 0: vertical, else horizontal)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_separator:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [btn_flags], al
+    mov ax, 0xB800
+    mov es, ax
+    ; Swap BX/CX: plot_pixel_white wants CX=X, BX=Y
+    xchg bx, cx                    ; Now BX=Y, CX=X
+    mov di, dx                     ; DI = length counter
+    test byte [btn_flags], 1
+    jnz .sep_vert
+.sep_horiz:
+    call plot_pixel_white
+    inc cx
+    dec di
+    jnz .sep_horiz
+    jmp .sep_done
+.sep_vert:
+    call plot_pixel_white
+    inc bx
+    dec di
+    jnz .sep_vert
+.sep_done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_listitem - Draw a list item row (API 59)
+; Input: BX=X, CX=Y, DX=width, SI=text_ptr (caller_ds), AL=flags
+;        bit 0: selected (inverted colors)
+; Height: font_height (auto)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_listitem:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [wgt_text_ptr], si          ; Save text pointer to variable
+    ; Height = current font height
+    xor ah, ah
+    mov al, [draw_font_height]
+    mov [btn_h], ax
+    mov ax, 0xB800
+    mov es, ax
+    test byte [btn_flags], 1
+    jz .li_normal
+    ; Selected: draw filled rect background, then inverted text
+    mov si, [btn_h]
+    call gfx_draw_filled_rect_stub  ; BX=X, CX=Y, DX=W, SI=H
+    ; Set clip bounds to item rect
+    push word [clip_x1]
+    push word [clip_x2]
+    push word [clip_y1]
+    push word [clip_y2]
+    push word [clip_enabled]
+    mov ax, [btn_x]
+    mov [clip_x1], ax
+    add ax, [btn_w]
+    dec ax
+    mov [clip_x2], ax
+    mov ax, [btn_y]
+    mov [clip_y1], ax
+    add ax, [btn_h]
+    dec ax
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    ; Draw inverted (black) text
+    mov si, [wgt_text_ptr]
+    mov bx, [btn_x]
+    add bx, 2                      ; 2px left padding
+    mov cx, [btn_y]
+    call gfx_draw_string_inverted
+    ; Restore clip state
+    pop word [clip_enabled]
+    pop word [clip_y2]
+    pop word [clip_y1]
+    pop word [clip_x2]
+    pop word [clip_x1]
+    jmp .li_done
+.li_normal:
+    ; Normal: clear area, then draw normal text
+    mov si, [btn_h]
+    call gfx_clear_area_stub        ; BX=X, CX=Y, DX=W, SI=H
+    mov si, [wgt_text_ptr]
+    mov bx, [btn_x]
+    add bx, 2                      ; 2px left padding
+    mov cx, [btn_y]
+    call gfx_draw_string_stub
+.li_done:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_progress - Draw a progress bar (API 60)
+; Input: BX=X, CX=Y, DX=width, SI=value (0-100), AL=flags
+;        bit 0: show percentage text centered on bar
+; Height: 8px fixed
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+PROGRESS_HEIGHT equ 8
+
+widget_draw_progress:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    ; Clamp value to 0-100
+    cmp si, 100
+    jbe .prog_val_ok
+    mov si, 100
+.prog_val_ok:
+    mov [wgt_scratch], si           ; Store value (0-100)
+    mov ax, 0xB800
+    mov es, ax
+    ; Clear the entire bar area first
+    mov si, PROGRESS_HEIGHT
+    call gfx_clear_area_stub        ; BX=X, CX=Y, DX=width, SI=height
+    ; Draw outer border
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, PROGRESS_HEIGHT
+    call gfx_draw_rect_stub
+    ; Calculate fill width: (value * (width-2)) / 100
+    mov ax, [wgt_scratch]           ; AX = value (0-100)
+    mov dx, [btn_w]
+    sub dx, 2                       ; DX = inner width
+    mul dx                          ; DX:AX = value * inner_width
+    mov cx, 100
+    div cx                          ; AX = fill width in pixels
+    ; Draw filled portion
+    test ax, ax
+    jz .prog_no_fill
+    mov dx, ax                      ; DX = fill width
+    mov bx, [btn_x]
+    inc bx                          ; Inside left border
+    mov cx, [btn_y]
+    inc cx                          ; Inside top border
+    mov si, PROGRESS_HEIGHT - 2     ; Inner height
+    call gfx_draw_filled_rect_stub
+.prog_no_fill:
+    ; Optionally draw percentage text
+    test byte [btn_flags], 1
+    jz .prog_done
+    ; Build percentage string: "NN%" or "100%"
+    mov ax, [wgt_scratch]           ; AX = value
+    cmp ax, 100
+    jne .prog_not_100
+    mov byte [prog_str_buf], '1'
+    mov byte [prog_str_buf+1], '0'
+    mov byte [prog_str_buf+2], '0'
+    mov byte [prog_str_buf+3], '%'
+    mov byte [prog_str_buf+4], 0
+    jmp .prog_draw_text
+.prog_not_100:
+    xor dx, dx
+    mov cx, 10
+    div cx                          ; AX = tens, DX = ones
+    test ax, ax
+    jz .prog_ones_only
+    add al, '0'
+    mov [prog_str_buf], al
+    add dl, '0'
+    mov [prog_str_buf+1], dl
+    mov byte [prog_str_buf+2], '%'
+    mov byte [prog_str_buf+3], 0
+    jmp .prog_draw_text
+.prog_ones_only:
+    add dl, '0'
+    mov [prog_str_buf], dl
+    mov byte [prog_str_buf+1], '%'
+    mov byte [prog_str_buf+2], 0
+.prog_draw_text:
+    ; Measure text width (string in kernel segment)
+    mov ax, [caller_ds]
+    mov [btn_saved_cds], ax
+    mov word [caller_ds], 0x1000
+    mov si, prog_str_buf
+    call gfx_text_width             ; DX = text width
+    ; Center: x = btn_x + (btn_w - text_width) / 2
+    mov bx, [btn_w]
+    sub bx, dx
+    shr bx, 1
+    add bx, [btn_x]
+    ; y = btn_y + (PROGRESS_HEIGHT - font_height) / 2
+    xor cx, cx
+    mov cl, [draw_font_height]
+    mov ax, PROGRESS_HEIGHT
+    sub ax, cx
+    shr ax, 1
+    add ax, [btn_y]
+    mov cx, ax
+    call gfx_draw_string_stub
+    ; Restore caller_ds
+    mov ax, [btn_saved_cds]
+    mov [caller_ds], ax
+.prog_done:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; Progress bar string buffer
+prog_str_buf: db '100%', 0, 0
+
+; ============================================================================
+; widget_draw_groupbox - Draw a group box with label (API 61)
+; Input: BX=X, CX=Y, DX=width, SI=height, DI=label_ptr (caller_es), AL=flags
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_groupbox:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [btn_h], si
+    mov [wgt_text_ptr], di          ; Save label pointer
+    mov ax, 0xB800
+    mov es, ax
+    ; Border starts font_height/2 below Y, so label sits on the top edge
+    xor ax, ax
+    mov al, [draw_font_height]
+    shr al, 1
+    mov [wgt_scratch], ax           ; half_fh
+    ; Draw border rect at (X, Y+half_fh) with (width, height-half_fh)
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    add cx, [wgt_scratch]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    sub si, [wgt_scratch]
+    call gfx_draw_rect_stub
+    ; Measure label to clear gap behind it
+    mov ax, [caller_ds]
+    mov [btn_saved_cds], ax
+    mov ax, [caller_es]
+    mov [caller_ds], ax             ; caller_ds = label segment
+    mov si, [wgt_text_ptr]
+    call gfx_text_width             ; DX = label width
+    ; Clear area at (X+6, Y) size (label_width+4, font_height)
+    mov bx, [btn_x]
+    add bx, 6
+    mov cx, [btn_y]
+    add dx, 4
+    xor ax, ax
+    mov al, [draw_font_height]
+    mov si, ax
+    call gfx_clear_area_stub
+    ; Draw label text at (X+8, Y)
+    mov si, [wgt_text_ptr]
+    mov bx, [btn_x]
+    add bx, 8
+    mov cx, [btn_y]
+    call gfx_draw_string_stub
+    ; Restore caller_ds
+    mov ax, [btn_saved_cds]
+    mov [caller_ds], ax
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_textfield - Draw a text input field (API 57)
+; Input: BX=X, CX=Y, DX=width, SI=text_ptr (caller_ds), DI=cursor_pos
+;        AL=flags: bit 0=focused (show cursor), bit 1=password mode (dots)
+; Height: font_height + 4 (auto)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_textfield:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [wgt_cursor_pos], di
+    mov [wgt_text_ptr], si          ; Save text pointer
+    ; Field height = font_height + 4
+    xor ah, ah
+    mov al, [draw_font_height]
+    add ax, 4
+    mov [btn_h], ax
+    mov ax, 0xB800
+    mov es, ax
+    ; Clear area and draw border
+    mov si, [btn_h]
+    call gfx_clear_area_stub
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    call gfx_draw_rect_stub
+    ; Set clipping to field interior
+    push word [clip_x1]
+    push word [clip_x2]
+    push word [clip_y1]
+    push word [clip_y2]
+    push word [clip_enabled]
+    mov ax, [btn_x]
+    inc ax
+    mov [clip_x1], ax
+    mov ax, [btn_x]
+    add ax, [btn_w]
+    sub ax, 2
+    mov [clip_x2], ax
+    mov ax, [btn_y]
+    inc ax
+    mov [clip_y1], ax
+    mov ax, [btn_y]
+    add ax, [btn_h]
+    sub ax, 2
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    ; Draw text at (X+2, Y+2)
+    mov si, [wgt_text_ptr]
+    mov bx, [btn_x]
+    add bx, 2
+    mov cx, [btn_y]
+    add cx, 2
+    test byte [btn_flags], 2
+    jnz .tf_password
+    call gfx_draw_string_stub
+    jmp .tf_cursor
+.tf_password:
+    ; Count string length in caller segment
+    mov ax, [caller_ds]
+    mov [btn_saved_cds], ax
+    push ds
+    mov ds, ax
+    xor cx, cx
+.tf_count:
+    lodsb
+    test al, al
+    jz .tf_count_done
+    inc cx
+    jmp .tf_count
+.tf_count_done:
+    pop ds
+    ; Draw CX dots
+    mov word [caller_ds], 0x1000
+    mov [wgt_scratch], cx
+    mov bx, [btn_x]
+    add bx, 2
+    xor di, di
+.tf_draw_dots:
+    cmp di, [wgt_scratch]
+    jge .tf_dots_done
+    mov si, tf_dot_char
+    mov cx, [btn_y]
+    add cx, 2
+    call gfx_draw_string_stub
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add bx, ax
+    inc di
+    jmp .tf_draw_dots
+.tf_dots_done:
+    mov ax, [btn_saved_cds]
+    mov [caller_ds], ax
+.tf_cursor:
+    ; Draw cursor if focused
+    test byte [btn_flags], 1
+    jz .tf_no_cursor
+    ; Cursor X = btn_x + 2 + cursor_pos * font_advance
+    xor ax, ax
+    mov al, [draw_font_advance]
+    mul word [wgt_cursor_pos]
+    add ax, [btn_x]
+    add ax, 2
+    ; plot_pixel_white: CX=X, BX=Y
+    mov cx, ax
+    mov bx, [btn_y]
+    add bx, 2
+    xor di, di
+    xor ax, ax
+    mov al, [draw_font_height]
+    mov [wgt_scratch], ax
+.tf_cursor_loop:
+    cmp di, [wgt_scratch]
+    jge .tf_no_cursor
+    push cx
+    push bx
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc bx
+    inc di
+    jmp .tf_cursor_loop
+.tf_no_cursor:
+    ; Restore clip state
+    pop word [clip_enabled]
+    pop word [clip_y2]
+    pop word [clip_y1]
+    pop word [clip_x2]
+    pop word [clip_x1]
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+tf_dot_char: db '*', 0
+
+; ============================================================================
+; widget_draw_scrollbar - Draw a scrollbar (API 58)
+; Input: BX=X, CX=Y, SI=track_height, DX=position, DI=max_range, AL=flags
+;        bit 0: horizontal (else vertical)
+; Width: 8px (vertical)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+SCROLLBAR_WIDTH equ 8
+SCROLLBAR_ARROW_H equ 8
+SCROLLBAR_MIN_THUMB equ 4
+
+widget_draw_scrollbar:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], si                 ; Track height
+    ; Clamp position to max_range
+    cmp dx, di
+    jbe .sb_pos_ok
+    mov dx, di
+.sb_pos_ok:
+    mov [btn_h], dx                 ; Position
+    mov [wgt_scratch], di           ; Max range
+    mov ax, 0xB800
+    mov es, ax
+    ; Clear track area
+    mov dx, SCROLLBAR_WIDTH
+    mov si, [btn_w]
+    call gfx_clear_area_stub
+    ; Draw track border
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, SCROLLBAR_WIDTH
+    mov si, [btn_w]
+    call gfx_draw_rect_stub
+    ; Draw up arrow bitmap at top
+    mov bx, [btn_x]
+    mov word [draw_x], bx
+    mov cx, [btn_y]
+    mov word [draw_y], cx
+    ; Save and set font params for 8x8 bitmap
+    mov al, [draw_font_height]
+    mov [btn_saved_fh], al
+    mov al, [draw_font_width]
+    mov [btn_saved_fw], al
+    mov al, [draw_font_advance]
+    mov [btn_saved_fa], al
+    mov byte [draw_font_height], 8
+    mov byte [draw_font_width], 8
+    mov byte [draw_font_advance], 8
+    mov si, scrollbar_up_bitmap
+    call draw_char
+    ; Draw down arrow bitmap at bottom
+    mov bx, [btn_x]
+    mov word [draw_x], bx
+    mov cx, [btn_y]
+    add cx, [btn_w]
+    sub cx, SCROLLBAR_ARROW_H
+    mov word [draw_y], cx
+    mov si, scrollbar_down_bitmap
+    call draw_char
+    ; Restore font params
+    mov al, [btn_saved_fh]
+    mov [draw_font_height], al
+    mov al, [btn_saved_fw]
+    mov [draw_font_width], al
+    mov al, [btn_saved_fa]
+    mov [draw_font_advance], al
+    ; Calculate thumb
+    ; Usable = track_height - 2*arrow_h
+    mov ax, [btn_w]
+    sub ax, SCROLLBAR_ARROW_H * 2
+    cmp ax, SCROLLBAR_MIN_THUMB
+    jl .sb_no_thumb
+    ; Thumb height = max(MIN_THUMB, usable/4)
+    mov cx, ax
+    shr cx, 2
+    cmp cx, SCROLLBAR_MIN_THUMB
+    jge .sb_thumb_ok
+    mov cx, SCROLLBAR_MIN_THUMB
+.sb_thumb_ok:
+    mov [wgt_cursor_pos], cx        ; Save thumb height
+    ; Travel range = usable - thumb_h
+    mov di, ax
+    sub di, cx
+    ; If max_range == 0, thumb at top
+    cmp word [wgt_scratch], 0
+    je .sb_thumb_top
+    mov ax, [btn_h]                 ; position
+    mul di                          ; DX:AX = pos * travel
+    div word [wgt_scratch]          ; AX = thumb offset
+    jmp .sb_draw_thumb
+.sb_thumb_top:
+    xor ax, ax
+.sb_draw_thumb:
+    ; Filled rect for thumb
+    add ax, [btn_y]
+    add ax, SCROLLBAR_ARROW_H
+    mov cx, ax                      ; CX = thumb Y
+    mov bx, [btn_x]
+    inc bx
+    mov dx, SCROLLBAR_WIDTH - 2
+    mov si, [wgt_cursor_pos]        ; SI = thumb height
+    call gfx_draw_filled_rect_stub
+.sb_no_thumb:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; Scrollbar arrow bitmaps (8x8)
+scrollbar_up_bitmap:
+    db 0b11111111                   ; XXXXXXXX
+    db 0b10000001                   ; X......X
+    db 0b10011001                   ; X..XX..X
+    db 0b10111101                   ; X.XXXX.X
+    db 0b10011001                   ; X..XX..X
+    db 0b10011001                   ; X..XX..X
+    db 0b10000001                   ; X......X
+    db 0b11111111                   ; XXXXXXXX
+
+scrollbar_down_bitmap:
+    db 0b11111111                   ; XXXXXXXX
+    db 0b10000001                   ; X......X
+    db 0b10011001                   ; X..XX..X
+    db 0b10011001                   ; X..XX..X
+    db 0b10111101                   ; X.XXXX.X
+    db 0b10011001                   ; X..XX..X
+    db 0b10000001                   ; X......X
+    db 0b11111111                   ; XXXXXXXX
+
 
 ; ============================================================================
 ; widget_hit_test - Test if mouse is inside a rectangle (API 53)
@@ -10292,6 +10937,9 @@ btn_saved_cds:  dw 0                    ; Saved caller_ds during button draw
 btn_saved_fh:   db 0                    ; Saved font height
 btn_saved_fw:   db 0                    ; Saved font width
 btn_saved_fa:   db 0                    ; Saved font advance
+wgt_text_ptr:   dw 0                    ; Widget text/label pointer (Build 235)
+wgt_scratch:    dw 0                    ; Widget scratch variable (Build 235)
+wgt_cursor_pos: dw 0                    ; Widget cursor position (Build 235)
 
 ; Word-wrap scratch variables (Build 205)
 wrap_start_x:   dw 0                    ; Starting X for line breaks
