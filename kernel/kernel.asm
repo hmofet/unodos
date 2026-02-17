@@ -4056,10 +4056,15 @@ event_get_stub:
     jne .evt_not_key
     push ax
     mov al, [focused_task]
+    cmp al, 0xFF                    ; No window focused? Deliver to current task
+    je .evt_focus_ok
     cmp al, [current_task]
+    je .evt_focus_ok
     pop ax
-    je .evt_consume                 ; This task has focus, consume and deliver
     jmp .no_event                   ; Not focused - leave event in queue for correct task
+.evt_focus_ok:
+    pop ax
+    jmp .evt_consume                ; This task has focus (or no focus set), consume and deliver
 
 .evt_not_key:
     ; Filter: skip WIN_REDRAW events not for current task's window
@@ -7371,6 +7376,12 @@ app_exit_stub:
     call free_segment
 .skip_free_seg:
 
+    ; Restore default font BEFORE destroying windows (so title bars render correctly)
+    push ax
+    mov al, 1
+    call gfx_set_font
+    pop ax
+
     ; Destroy all windows owned by this task
     push ax                         ; Save task handle
     call destroy_task_windows       ; ZF=1 if no windows destroyed
@@ -7385,12 +7396,6 @@ app_exit_stub:
     mov word [redraw_old_h], 200
     call redraw_affected_windows
 .skip_fullscreen_repaint:
-
-    ; Restore default font (medium 8x8) in case app changed it
-    push ax
-    mov al, 1
-    call gfx_set_font
-    pop ax
 
     ; Find next task to run
     mov byte [current_task], 0xFF
@@ -7968,7 +7973,7 @@ draw_desktop_region:
     mov al, [desktop_bg_color]
     mov [draw_bg_color], al
 
-    ; Draw ALL registered icons (no overlap test - icons are small, always redraw)
+    ; Draw icons that overlap the affected rect (skip far-away icons to prevent corruption)
     mov si, desktop_icons
     xor bp, bp                      ; Icon counter
 .ddr_icon_loop:
@@ -7979,7 +7984,33 @@ draw_desktop_region:
     cmp bp, ax
     jae .ddr_done
 
-    ; Draw icon bitmap
+    ; Bounds check: skip icons whose bounding box doesn't overlap affected rect
+    ; Icon bbox approx: (x-12, y) to (x+52, y+30) includes 16x16 bitmap + label
+    ; Test: icon fully right of rect?
+    mov ax, [si + DESKTOP_ICON_OFF_X]
+    mov dx, [redraw_old_x]
+    add dx, [redraw_old_w]
+    add dx, 12                      ; Account for label left shift
+    cmp ax, dx
+    jae .ddr_skip_icon
+    ; Test: icon fully left of rect?
+    mov ax, [si + DESKTOP_ICON_OFF_X]
+    add ax, 52                      ; Icon bitmap + label right extent
+    cmp ax, [redraw_old_x]
+    jbe .ddr_skip_icon
+    ; Test: icon fully below rect?
+    mov ax, [si + DESKTOP_ICON_OFF_Y]
+    mov dx, [redraw_old_y]
+    add dx, [redraw_old_h]
+    cmp ax, dx
+    jae .ddr_skip_icon
+    ; Test: icon fully above rect?
+    mov ax, [si + DESKTOP_ICON_OFF_Y]
+    add ax, 30                      ; Icon height + gap + label height
+    cmp ax, [redraw_old_y]
+    jbe .ddr_skip_icon
+
+    ; Icon overlaps affected rect - draw it
     push si
     push bp
 
@@ -8012,6 +8043,7 @@ draw_desktop_region:
     pop bp
     pop si
 
+.ddr_skip_icon:
     add si, DESKTOP_ICON_SIZE
     inc bp
     jmp .ddr_icon_loop
