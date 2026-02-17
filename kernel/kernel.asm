@@ -35,19 +35,27 @@ entry:
     ; Install keyboard handler
     call install_keyboard
 
-    ; Disable interrupts for the entire boot drawing phase.
-    ; install_mouse enables IRQ12, so mouse IRQs could fire during CGA mode
-    ; switch or setup_graphics_post_mode (which writes CGA memory without
-    ; cursor protection). This breaks the XOR cursor invariant, creating a
-    ; permanent ghost cursor at (160,100). Keep IF=0 until line 71 (sti).
+    ; Disable mouse cursor rendering for the entire boot graphics phase.
+    ; CLI alone is NOT sufficient: BIOS INT 0x10 can execute STI internally
+    ; during mode switch, palette and background register writes. If IRQ12
+    ; fires during a BIOS call, mouse_cursor_show XOR-draws the cursor into
+    ; CGA memory that then gets cleared by rep stosw or BIOS reinitialization,
+    ; breaking the XOR invariant and leaving a permanent ghost at (160,100).
+    ; Setting mouse_enabled=0 makes mouse_cursor_show a no-op even if called.
+    mov byte [mouse_enabled], 0
     cli
 
     ; Set CGA mode 4 (320x200 4-color)
     xor ax, ax
     mov al, 0x04
     int 0x10
-    mov byte [cursor_visible], 0
     call setup_graphics_post_mode
+
+    ; Reset cursor state: even if IRQ12 fired during BIOS calls and set
+    ; cursor_visible=1, force it to 0 so mouse_cursor_show at line 79
+    ; will draw the cursor fresh at the correct position.
+    mov byte [cursor_visible], 0
+    mov byte [mouse_enabled], 1
 
     ; ========== PHASE 2: Graphics init complete ==========
 
@@ -1506,6 +1514,11 @@ auto_load_launcher:
     ; Restore per-task state
     mov al, [bx + APP_OFF_DRAW_CTX]
     mov [draw_context], al
+    mov byte [clip_enabled], 0          ; New task starts with no clip
+    mov al, [bx + APP_OFF_FONT]
+    push bx
+    call gfx_set_font
+    pop bx
     mov ax, [bx + APP_OFF_CALLER_DS]
     mov [caller_ds], ax
     mov ax, [bx + APP_OFF_CALLER_ES]
@@ -2548,6 +2561,11 @@ mouse_process_drag:
     push si
     push di
 
+    ; Save and disable clip state - win_draw_stub uses gfx_draw_string_inverted
+    ; which checks clip_enabled; stale clip rect from calling task clips title text
+    push word [clip_enabled]
+    mov byte [clip_enabled], 0
+
     ; Check if window is already topmost - skip content clear if so
     xor ah, ah
     mov al, [drag_window]
@@ -2594,6 +2612,7 @@ mouse_process_drag:
     call win_draw_stub
 
 .focus_done:
+    pop word [clip_enabled]         ; Restore clip state
     pop di
     pop si
     pop dx
@@ -7225,6 +7244,9 @@ app_yield_stub:
     ; Save draw_context per task
     mov al, [draw_context]
     mov [si + APP_OFF_DRAW_CTX], al
+    ; Save current font per task
+    mov al, [current_font]
+    mov [si + APP_OFF_FONT], al
     ; Save caller_ds/es per task
     mov ax, [caller_ds]
     mov [si + APP_OFF_CALLER_DS], ax
@@ -7264,6 +7286,11 @@ app_yield_stub:
 .restore_no_clip:
     mov byte [clip_enabled], 0
 .restore_clip_done:
+    ; Restore font per task (prevents wrong font in win_draw_stub/app drawing)
+    mov al, [bx + APP_OFF_FONT]
+    push bx
+    call gfx_set_font               ; Loads all font variables from descriptor
+    pop bx
     ; Restore caller_ds/es
     mov ax, [bx + APP_OFF_CALLER_DS]
     mov [caller_ds], ax
@@ -7349,6 +7376,7 @@ app_start_stub:
 
     ; Initialize per-task saved context
     mov byte [bx + APP_OFF_DRAW_CTX], 0xFF  ; No draw context
+    mov byte [bx + APP_OFF_FONT], 1         ; Default font (8x8 medium)
     mov [bx + APP_OFF_CALLER_DS], cx        ; caller_ds = app seg
     mov [bx + APP_OFF_CALLER_ES], cx        ; caller_es = app seg
 
@@ -7431,6 +7459,23 @@ app_exit_stub:
 
     mov al, [bx + APP_OFF_DRAW_CTX]
     mov [draw_context], al
+    ; Recalculate clip state from draw_context
+    cmp al, 0xFF
+    je .exit_no_clip
+    cmp al, WIN_MAX_COUNT
+    jae .exit_no_clip
+    push bx
+    call win_begin_draw
+    pop bx
+    jmp .exit_clip_done
+.exit_no_clip:
+    mov byte [clip_enabled], 0
+.exit_clip_done:
+    ; Restore font
+    mov al, [bx + APP_OFF_FONT]
+    push bx
+    call gfx_set_font
+    pop bx
     mov ax, [bx + APP_OFF_CALLER_DS]
     mov [caller_ds], ax
     mov ax, [bx + APP_OFF_CALLER_ES]
@@ -10292,7 +10337,8 @@ ide_sectors:            dw 63           ; Sectors per track (for CHS fallback)
 ;   Offset 23: 1 byte  - Saved draw_context
 ;   Offset 24: 2 bytes - Saved caller_ds
 ;   Offset 26: 2 bytes - Saved caller_es
-;   Offset 28: 4 bytes - Reserved
+;   Offset 28: 1 byte  - Saved current_font
+;   Offset 29: 3 bytes - Reserved
 
 ; App entry field offsets
 APP_OFF_STATE       equ 0
@@ -10306,6 +10352,7 @@ APP_OFF_FILENAME    equ 12
 APP_OFF_DRAW_CTX    equ 23
 APP_OFF_CALLER_DS   equ 24
 APP_OFF_CALLER_ES   equ 26
+APP_OFF_FONT        equ 28
 
 APP_STATE_FREE      equ 0
 APP_STATE_LOADED    equ 1
