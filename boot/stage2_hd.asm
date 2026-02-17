@@ -69,6 +69,15 @@ entry:
     mov byte [bios_heads], 16
 
 .geo_done:
+    ; ── Diagnostic: show read method ─────────────────────────────────────
+
+    mov al, 'L'
+    cmp byte [lba_supported], 0
+    jne .show_method
+    mov al, 'C'
+.show_method:
+    call print_char
+
     ; ── Display loading message ───────────────────────────────────────────
 
     mov si, loading_msg
@@ -142,6 +151,12 @@ entry:
     ; Read root directory sector
     call read_sector_lba
     jc near .disk_error
+
+    ; Progress dot for each root dir sector
+    push ax
+    mov al, '.'
+    call print_char
+    pop ax
 
     ; Search 16 entries in this sector
     mov si, sector_buffer
@@ -328,12 +343,21 @@ read_sector_to_esbx:
     cmp byte [lba_supported], 0
     je .chs_read
 
+    ; CRITICAL: Use DS=0 for INT 13h AH=42h DAP pointer.
+    ; MBR and VBR both use DS=0 and work. Some BIOSes have bugs
+    ; reading the DAP from non-zero segments (e.g. CF-to-IDE on
+    ; Omnibook 600C). Convert DAP address to linear for DS=0.
+    mov dl, [boot_drive]            ; Load before switching DS
+    push ds
     push si
     mov si, dap
+    add si, 0x8000                  ; Linear: 0x0800*16 + offset
+    xor ax, ax
+    mov ds, ax                      ; DS = 0
     mov ah, 0x42
-    mov dl, [boot_drive]
     int 0x13
     pop si
+    pop ds
     jnc .read_ok
 
     ; LBA failed - fall through to CHS
