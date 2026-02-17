@@ -3,7 +3,6 @@
 ; Loads KERNEL.BIN from FAT16 filesystem
 ;
 ; NOTE: This version requires 386+ CPU (uses EAX, EBX, ECX, EDX, movzx, etc.)
-; TODO: Create 8086-compatible version for HP 200LX, Sharp PC-3100, etc.
 ;
 ; Memory layout during boot:
 ;   0x0600:0x0000 - Relocated MBR
@@ -29,12 +28,54 @@ entry:
     ; Save boot drive
     mov [boot_drive], dl
 
-    ; Display loading message
+    ; ── Probe BIOS capabilities (once at startup) ─────────────────────────
+
+    ; Check INT 13h extensions (AH=41h)
+    mov byte [lba_supported], 0
+    mov ah, 0x41
+    mov bx, 0x55AA
+    int 0x13
+    jc .no_ext
+    cmp bx, 0xAA55
+    jne .no_ext
+    mov byte [lba_supported], 1
+.no_ext:
+
+    ; Query BIOS drive geometry for CHS fallback
+    push es
+    xor ax, ax
+    mov es, ax
+    xor di, di
+    mov ah, 0x08
+    mov dl, [boot_drive]
+    int 0x13
+    pop es
+    jc .default_geo
+
+    ; Parse geometry: CL[5:0] = max sector, DH = max head
+    mov al, cl
+    and al, 0x3F
+    test al, al
+    jz .default_geo
+    mov [bios_spt], al
+    inc dh
+    test dh, dh
+    jz .default_geo
+    mov [bios_heads], dh
+    jmp .geo_done
+
+.default_geo:
+    mov byte [bios_spt], 63
+    mov byte [bios_heads], 16
+
+.geo_done:
+    ; ── Display loading message ───────────────────────────────────────────
+
     mov si, loading_msg
     call print_string
 
-    ; Parse BPB from VBR (still in memory at 0x7C00)
-    ; Store key values for calculations
+    ; ── Parse BPB from VBR (still in memory at 0x7C00) ───────────────────
+
     xor ax, ax
     mov es, ax                      ; ES = 0 for accessing 0x7C00
 
@@ -88,7 +129,8 @@ entry:
     mov ax, 0x0800
     mov es, ax
 
-    ; Search root directory for KERNEL.BIN
+    ; ── Search root directory for KERNEL.BIN ──────────────────────────────
+
     mov eax, [root_start_lba]
     movzx ecx, word [root_entries]
     shr ecx, 4                      ; Root directory sectors
@@ -266,76 +308,47 @@ read_sector_lba:
 ; read_sector_to_esbx - Read sector to ES:BX
 ; Input: EAX = LBA, ES:BX = buffer
 ; Output: CF = 0 success
+;
+; Uses static DAP for LBA reads (avoids push dword stack issues on some
+; BIOSes) and pre-queried BIOS geometry for CHS fallback.
 ; ============================================================================
 
 read_sector_to_esbx:
     push eax
     push cx
     push dx
+
+    ; Fill static DAP with current read parameters
+    mov [dap_buf_off], bx
+    mov [dap_buf_seg], es
+    mov [dap_lba], eax
+    mov dword [dap_lba + 4], 0
+
+    ; Try LBA if BIOS supports extensions
+    cmp byte [lba_supported], 0
+    je .chs_read
+
     push si
-
-    ; Save buffer location for verification
-    mov [temp_seg], es
-    mov [temp_off], bx
-
-    ; Try INT 13h extended read first
-    push dword 0                    ; High LBA
-    push eax                        ; Low LBA
-    push es                         ; Buffer segment
-    push bx                         ; Buffer offset
-    push word 1                     ; Sectors
-    push word 0x0010                ; Packet size
-    mov si, sp
-
+    mov si, dap
     mov ah, 0x42
     mov dl, [boot_drive]
-    push ds
-    push ss
-    pop ds
     int 0x13
-    pop ds
-    add sp, 16
-    jnc .success                    ; LBA succeeded, trust it
-    ; LBA failed, try CHS
+    pop si
+    jnc .read_ok
 
-.try_chs:
-    ; Get drive geometry
-    push es
-    xor di, di
-    mov es, di
-    mov ah, 0x08
-    mov dl, [boot_drive]
-    int 0x13
-    pop es
-    jc .use_defaults
+    ; LBA failed - fall through to CHS
 
-    ; Parse and validate geometry
-    mov al, cl
-    and al, 0x3F                    ; Sectors per track
-    test al, al                     ; Check for 0 (invalid)
-    jz .use_defaults
-    mov [saved_spt], al
-    inc dh                          ; Max head -> number of heads
-    test dh, dh                     ; Check for 0 (wrapped)
-    jz .use_defaults
-    mov [saved_heads], dh
-    jmp .do_chs_read
-
-.use_defaults:
-    mov byte [saved_spt], 63
-    mov byte [saved_heads], 16
-
-.do_chs_read:
-    ; Convert LBA to CHS
-    mov eax, [esp + 6]              ; Get original EAX from stack (after si,dx,cx pushes)
+.chs_read:
+    ; Convert LBA to CHS using pre-queried BIOS geometry
+    mov eax, [dap_lba]
     xor edx, edx
-    movzx ecx, byte [saved_spt]
+    movzx ecx, byte [bios_spt]
     div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
     inc dl                          ; Sector (1-based)
-    mov cl, dl                      ; CL = sector
+    mov cl, dl                      ; CL[5:0] = sector
 
     xor edx, edx
-    movzx ecx, byte [saved_heads]
+    movzx ecx, byte [bios_heads]
     div ecx                         ; EAX = cylinder, EDX = head
     mov dh, dl                      ; DH = head
     mov ch, al                      ; CH = cylinder low
@@ -344,33 +357,24 @@ read_sector_to_esbx:
 
     mov ah, 0x02                    ; Read sectors
     mov al, 1
-    push es
-    mov es, [temp_seg]
-    mov bx, [temp_off]
+    mov es, [dap_buf_seg]
+    mov bx, [dap_buf_off]
     mov dl, [boot_drive]
     int 0x13
-    pop es
-    jc .error
+    jc .read_err
 
-.success:
+.read_ok:
     clc
-    jmp .done
+    jmp .read_done
 
-.error:
+.read_err:
     stc
 
-.done:
-    pop si
+.read_done:
     pop dx
     pop cx
     pop eax
     ret
-
-; Saved geometry for CHS conversion
-saved_spt:   db 63
-saved_heads: db 16
-temp_seg:    dw 0
-temp_off:    dw 0
 
 ; ============================================================================
 ; read_sector_to_esdi - Read sector to ES:DI
@@ -525,6 +529,9 @@ halt:
 ; ============================================================================
 
 boot_drive:         db 0x80
+lba_supported:      db 0
+bios_spt:           db 63
+bios_heads:         db 16
 reserved_sects:     dw 0
 sects_per_fat:      dw 0
 num_fats:           db 0
@@ -537,6 +544,20 @@ data_start_lba:     dd 0
 kernel_cluster:     dw 0
 kernel_size:        dd 0
 cached_fat_sector:  dd 0xFFFFFFFF
+
+; Static Disk Address Packet for INT 13h extended read
+; (avoids push dword on stack which fails on some BIOSes)
+dap:
+    db 0x10                         ; Packet size
+    db 0                            ; Reserved
+    dw 1                            ; Number of sectors
+dap_buf_off:
+    dw 0                            ; Buffer offset (filled per read)
+dap_buf_seg:
+    dw 0                            ; Buffer segment (filled per read)
+dap_lba:
+    dd 0                            ; LBA low (filled per read)
+    dd 0                            ; LBA high
 
 kernel_name:        db 'KERNEL  BIN'    ; 8.3 format (no dot)
 

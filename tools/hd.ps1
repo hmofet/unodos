@@ -83,19 +83,6 @@ try {
     $row = Draw-Banner
     $row++
 
-    # Git pull
-    Write-At 3 $row "Updating from GitHub..." Cyan
-    Push-Location $projectDir
-    try {
-        git fetch origin 2>&1 | Out-Null
-        git reset --hard origin/master 2>&1 | Out-Null
-        Write-At 3 $row "Updating from GitHub... Done!       " Green
-    } catch {
-        Write-At 3 $row "Updating from GitHub... Skipped (using local)" Yellow
-    }
-    Pop-Location
-    $row++
-
     # Find image
     if (-not $ImagePath) {
         $ImagePath = "$projectDir\build\unodos-hd.img"
@@ -281,46 +268,49 @@ try {
     Write-At 3 $row "+----------------------------------------------+" Red
     $row += 2
 
-    Write-At 5 $row "Type ERASE to continue, or Esc to cancel:" White
-    $row++
-    Write-At 5 $row "> " Yellow
-    $inputCol = 7
-    $inputRow = $row
+    Write-At 5 $row "Erase this disk and write UnoDOS?" White
+    $row += 2
 
-    [Console]::CursorVisible = $true
-    [Console]::SetCursorPosition($inputCol, $inputRow)
+    # Y/N button selection
+    $btnRow = $row
+    $btnSel = 1  # 0 = Yes, 1 = No (default to No for safety)
 
-    $input = ""
-    $confirmed = $false
-    while ($true) {
-        $key = [Console]::ReadKey($true)
-        if ($key.Key -eq 'Escape') {
-            [Console]::Clear()
-            [Console]::CursorVisible = $origCursorVisible
-            Write-Host "Operation cancelled."
-            exit 0
-        }
-        if ($key.Key -eq 'Enter') {
-            if ($input -eq "ERASE") { $confirmed = $true }
-            break
-        }
-        if ($key.Key -eq 'Backspace') {
-            if ($input.Length -gt 0) {
-                $input = $input.Substring(0, $input.Length - 1)
-                [Console]::SetCursorPosition($inputCol, $inputRow)
-                [Console]::Write($input + " ")
-                [Console]::SetCursorPosition($inputCol + $input.Length, $inputRow)
-            }
-            continue
-        }
-        if ($key.KeyChar -match '[a-zA-Z]') {
-            $input += $key.KeyChar
-            [Console]::SetCursorPosition($inputCol, $inputRow)
-            [Console]::Write($input)
+    function Render-Buttons {
+        param([int]$Sel, [int]$Y)
+        if ($Sel -eq 0) {
+            Write-At 10 $Y "[ YES ]" Black Green
+            Write-At 22 $Y "  No   " Gray
+        } else {
+            Write-At 10 $Y "  Yes  " Gray
+            Write-At 22 $Y "[  NO  ]" Black Red
         }
     }
 
-    [Console]::CursorVisible = $false
+    Render-Buttons $btnSel $btnRow
+
+    $confirmed = $false
+    $btnDone = $false
+    while (-not $btnDone) {
+        $key = [Console]::ReadKey($true)
+
+        if ($key.Key -eq 'LeftArrow' -or $key.Key -eq 'RightArrow') {
+            $btnSel = 1 - $btnSel
+            Render-Buttons $btnSel $btnRow
+        }
+        elseif ($key.Key -eq 'Y') {
+            $btnSel = 0
+            Render-Buttons $btnSel $btnRow
+            $confirmed = $true
+            $btnDone = $true
+        }
+        elseif ($key.Key -eq 'N' -or $key.Key -eq 'Escape') {
+            $btnDone = $true
+        }
+        elseif ($key.Key -eq 'Enter') {
+            if ($btnSel -eq 0) { $confirmed = $true }
+            $btnDone = $true
+        }
+    }
 
     if (-not $confirmed) {
         [Console]::Clear()
