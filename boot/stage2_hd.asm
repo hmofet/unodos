@@ -28,12 +28,70 @@ entry:
     ; Save boot drive
     mov [boot_drive], dl
 
-    ; ── Probe BIOS capabilities (once at startup) ─────────────────────────
+    ; ── Parse BPB from VBR FIRST (while 0x7C00 is pristine) ────────────
+    ; CRITICAL: Read BPB before any INT 13h calls. Some old BIOSes
+    ; may use 0x7C00 area as scratch during INT 13h.
+
+    xor ax, ax
+    mov es, ax                      ; ES = 0 for accessing 0x7C00
+
+    ; Reserved sectors
+    mov ax, [es:0x7C00 + 0x0E]
+    mov [reserved_sects], ax
+
+    ; Sectors per FAT
+    mov ax, [es:0x7C00 + 0x16]
+    mov [sects_per_fat], ax
+
+    ; Number of FATs
+    xor ah, ah
+    mov al, [es:0x7C00 + 0x10]
+    mov [num_fats], al
+
+    ; Root directory entries
+    mov ax, [es:0x7C00 + 0x11]
+    mov [root_entries], ax
+
+    ; Sectors per cluster
+    mov al, [es:0x7C00 + 0x0D]
+    mov [sects_per_cluster], al
+
+    ; Hidden sectors (partition start LBA)
+    mov eax, [es:0x7C00 + 0x1C]
+    mov [partition_lba], eax
+
+    ; Restore ES to stage2 segment
+    mov ax, 0x0800
+    mov es, ax
+
+    ; Calculate FAT start sector
+    ; fat_start = hidden_sectors + reserved_sectors
+    movzx eax, word [reserved_sects]
+    add eax, [partition_lba]
+    mov [fat_start_lba], eax
+
+    ; Calculate root directory start sector
+    ; root_start = fat_start + (num_fats * sectors_per_fat)
+    movzx eax, byte [num_fats]
+    movzx ebx, word [sects_per_fat]
+    imul eax, ebx
+    add eax, [fat_start_lba]
+    mov [root_start_lba], eax
+
+    ; Calculate data area start sector
+    ; data_start = root_start + (root_entries * 32 / 512)
+    movzx ebx, word [root_entries]
+    shr ebx, 4                      ; Divide by 16 (32/512 = 1/16)
+    add eax, ebx
+    mov [data_start_lba], eax
+
+    ; ── Probe BIOS capabilities (BPB already saved) ─────────────────────
 
     ; Check INT 13h extensions (AH=41h)
     mov byte [lba_supported], 0
     mov ah, 0x41
     mov bx, 0x55AA
+    mov dl, [boot_drive]
     int 0x13
     jc .no_ext
     cmp bx, 0xAA55
@@ -69,8 +127,9 @@ entry:
     mov byte [bios_heads], 16
 
 .geo_done:
-    ; ── Diagnostic: show read method ─────────────────────────────────────
+    ; ── Diagnostic: show read method and root LBA ───────────────────────
 
+    ; Show read method: L=LBA, C=CHS
     mov al, 'L'
     cmp byte [lba_supported], 0
     jne .show_method
@@ -78,65 +137,17 @@ entry:
 .show_method:
     call print_char
 
+    ; Show root_start_lba as hex (expected: 0144 = 324 decimal)
+    mov ax, word [root_start_lba]
+    call print_hex_word
+
+    mov al, ' '
+    call print_char
+
     ; ── Display loading message ───────────────────────────────────────────
 
     mov si, loading_msg
     call print_string
-
-    ; ── Parse BPB from VBR (still in memory at 0x7C00) ───────────────────
-
-    xor ax, ax
-    mov es, ax                      ; ES = 0 for accessing 0x7C00
-
-    ; Reserved sectors
-    mov ax, [es:0x7C00 + 0x0E]
-    mov [reserved_sects], ax
-
-    ; Sectors per FAT
-    mov ax, [es:0x7C00 + 0x16]
-    mov [sects_per_fat], ax
-
-    ; Number of FATs
-    xor ah, ah
-    mov al, [es:0x7C00 + 0x10]
-    mov [num_fats], al
-
-    ; Root directory entries
-    mov ax, [es:0x7C00 + 0x11]
-    mov [root_entries], ax
-
-    ; Sectors per cluster
-    mov al, [es:0x7C00 + 0x0D]
-    mov [sects_per_cluster], al
-
-    ; Hidden sectors (partition start LBA)
-    mov eax, [es:0x7C00 + 0x1C]
-    mov [partition_lba], eax
-
-    ; Calculate FAT start sector
-    ; fat_start = hidden_sectors + reserved_sectors
-    movzx eax, word [reserved_sects]
-    add eax, [partition_lba]
-    mov [fat_start_lba], eax
-
-    ; Calculate root directory start sector
-    ; root_start = fat_start + (num_fats * sectors_per_fat)
-    movzx eax, byte [num_fats]
-    movzx ebx, word [sects_per_fat]
-    imul eax, ebx
-    add eax, [fat_start_lba]
-    mov [root_start_lba], eax
-
-    ; Calculate data area start sector
-    ; data_start = root_start + (root_entries * 32 / 512)
-    movzx ebx, word [root_entries]
-    shr ebx, 4                      ; Divide by 16 (32/512 = 1/16)
-    add eax, ebx
-    mov [data_start_lba], eax
-
-    ; Restore ES to stage2 segment (was set to 0 for BPB read)
-    mov ax, 0x0800
-    mov es, ax
 
     ; ── Search root directory for KERNEL.BIN ──────────────────────────────
 
@@ -364,20 +375,24 @@ read_sector_to_esbx:
 
 .chs_read:
     ; Convert LBA to CHS using pre-queried BIOS geometry
+    ; CRITICAL: Use EBX for divisor (not ECX!) to avoid clobbering CL
+    ; which holds the sector number between the two divisions.
+    push ebx
     mov eax, [dap_lba]
     xor edx, edx
-    movzx ecx, byte [bios_spt]
-    div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
+    movzx ebx, byte [bios_spt]
+    div ebx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
     inc dl                          ; Sector (1-based)
     mov cl, dl                      ; CL[5:0] = sector
 
     xor edx, edx
-    movzx ecx, byte [bios_heads]
-    div ecx                         ; EAX = cylinder, EDX = head
+    movzx ebx, byte [bios_heads]
+    div ebx                         ; EAX = cylinder, EDX = head
     mov dh, dl                      ; DH = head
     mov ch, al                      ; CH = cylinder low
     shl ah, 6
     or cl, ah                       ; CL[7:6] = cylinder high
+    pop ebx
 
     mov ah, 0x02                    ; Read sectors
     mov al, 1
@@ -585,7 +600,7 @@ dap_lba:
 
 kernel_name:        db 'KERNEL  BIN'    ; 8.3 format (no dot)
 
-loading_msg:        db 'Loading UnoDOS kernel', 0
+loading_msg:        db 'Loading kernel', 0
 ok_msg:             db ' OK', 13, 10, 0
 disk_err_msg:       db 13, 10, 'Disk error!', 13, 10, 0
 not_found_msg:      db 13, 10, 'KERNEL.BIN not found!', 13, 10, 0
