@@ -7376,6 +7376,19 @@ app_exit_stub:
     call destroy_task_windows
     pop ax
 
+    ; Always repaint full desktop (fullscreen apps may have drawn over everything)
+    mov word [redraw_old_x], 0
+    mov word [redraw_old_y], 0
+    mov word [redraw_old_w], 320
+    mov word [redraw_old_h], 200
+    call redraw_affected_windows
+
+    ; Restore default font (medium 8x8) in case app changed it
+    push ax
+    mov al, 1
+    call gfx_set_font
+    pop ax
+
     ; Find next task to run
     mov byte [current_task], 0xFF
     call scheduler_next

@@ -17,7 +17,7 @@ Files needed in build/ directory:
 - kernel.bin  (28KB)
 
 Files from apps/ directory automatically included:
-- CLOCK.BIN, BROWSER.BIN, MOUSE.BIN, TEST.BIN, MUSIC.BIN, LAUNCHER.BIN
+- CLOCK.BIN, BROWSER.BIN, MOUSE.BIN, MUSIC.BIN, LAUNCHER.BIN
 """
 
 import sys
@@ -288,7 +288,6 @@ def find_apps():
         ('clock.bin', 'CLOCK.BIN'),
         ('browser.bin', 'BROWSER.BIN'),
         ('mouse_test.bin', 'MOUSE.BIN'),
-        ('hello.bin', 'TEST.BIN'),
         ('music.bin', 'MUSIC.BIN'),
         ('mkboot.bin', 'MKBOOT.BIN'),
         ('settings.bin', 'SETTINGS.BIN'),
