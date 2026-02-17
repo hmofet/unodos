@@ -1069,6 +1069,7 @@ handle_click:
     mov byte [cs:last_click_icon], 0xFF
     ; Full desktop redraw to guarantee highlight removal
     call redraw_desktop
+    call repaint_all_windows
 
 .hc_done:
     popa
@@ -1357,20 +1358,23 @@ read_bios_ticks:
 ; Much faster than pixel-by-pixel API_GFX_CLEAR_AREA on real hardware.
 ; ============================================================================
 fast_clear_screen:
-    push es
-    push ax
+    ; Use API 5 (gfx_clear_area) instead of direct CGA writes.
+    ; Direct CGA writes break the XOR cursor invariant, leaving ghost cursors.
+    ; The kernel's fast byte-fill path handles aligned full-screen clears efficiently.
+    push bx
     push cx
-    push di
-    mov ax, 0xB800
-    mov es, ax
-    xor ax, ax                      ; Fill with 0 (black)
-    xor di, di                      ; Start at offset 0
-    mov cx, 8192                    ; 16KB / 2 = 8192 words
-    rep stosw                       ; Clear even + odd scanline banks
-    pop di
+    push dx
+    push si
+    xor bx, bx                     ; X = 0
+    xor cx, cx                     ; Y = 0
+    mov dx, 320                     ; Width = 320
+    mov si, 200                     ; Height = 200
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    pop si
+    pop dx
     pop cx
-    pop ax
-    pop es
+    pop bx
     ret
 
 ; ============================================================================
