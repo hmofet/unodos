@@ -714,8 +714,8 @@ get_piece_cells:
     shl bx, 5                       ; type * 32
     add bx, piece_data
 
-    xor al, al
     mov al, ah
+    xor ah, ah                      ; Clear AH before shift
     shl ax, 3                       ; rot * 8
     add bx, ax
     mov si, bx
