@@ -149,21 +149,23 @@ Since the kernel uses DS=0x1000 but SS=0x0000, any `[bp + offset]` access reads 
 
 ## Testing Procedure for Hardware
 
+**Writing images** (unified `write.ps1` script):
+- Developer runs: `.\tools\write.ps1` (interactive TUI — selects image + target drive)
+- Or quick mode: `.\tools\write.ps1 -DriveLetter A` (floppy) or `.\tools\write.ps1 -DiskNumber 2` (CF/USB)
+- Legacy wrappers still work: `floppy.ps1`, `hd.ps1`, `apps.ps1`
+
 **Floppy Test**:
 1. Build: `make clean && make floppy144 && make apps && make build/launcher-floppy.img`
 2. Commit and push .img files
-3. Developer runs: `.\tools\boot.ps1` (writes OS to A:)
-4. Swap to blank floppy
-5. Developer runs: `.\tools\launcher.ps1` (writes launcher floppy)
-6. Boot from OS floppy
-7. Press 'L' to load launcher, swap to launcher floppy when prompted
-8. Test: navigate with W/S, launch apps with Enter, ESC to exit
-9. Test mouse: cursor visible, drag windows by title bar
+3. Developer runs: `.\tools\write.ps1` → selects `unodos-144.img` → selects floppy drive
+4. Boot from floppy — launcher auto-loads
+5. Test: navigate with W/S, launch apps with Enter, ESC to exit
+6. Test mouse: cursor visible, drag windows by title bar
 
 **HD / CF Card Test**:
 1. Build: `make clean && make floppy144 && make apps && make build/launcher-floppy.img && make hd-image`
 2. Commit and push .img files
-3. Developer runs: `.\tools\hd.ps1` (interactive TUI drive selector, writes HD image to CF/USB)
+3. Developer runs: `.\tools\write.ps1` → selects `unodos-hd.img` → selects CF/USB drive
 4. Boot from CF card
 5. Stage2 diagnostic shows: `L0144` or `C0144` (L=LBA, C=CHS, 0144=root_start_lba hex)
 6. Launcher should auto-load from FAT16 partition

@@ -203,10 +203,11 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 ## Planned Features
 
 - [ ] Text editor
-- [ ] Calculator
-- [ ] Window resize
-- [ ] Serial mouse driver
-- [ ] Long filename support
+- [ ] Serial mouse support
+- [ ] FAT16 write support
+- [x] Consolidate floppy, CF/USB/HD writing scripts into one script (Build 234)
+- [ ] Improve Tetris performance for 386 processors
+- [ ] Add threading
 
 ## Non-Goals
 
