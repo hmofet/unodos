@@ -2,79 +2,67 @@
 
 Scripts for writing UnoDOS images to physical media.
 
-## PowerShell Scripts (Windows)
+## write.ps1 — Unified Disk Image Writer
 
-### floppy.ps1
-Writes UnoDOS to a 1.44MB floppy disk.
+Interactive TUI that writes any UnoDOS image to any target drive. Replaces the old `floppy.ps1`, `hd.ps1`, and `apps.ps1` scripts.
 
 **What it does:**
 - Pulls latest code from GitHub
-- Writes `build/unodos-144.img` to floppy drive
-- Includes OS + Launcher on the same disk
+- Shows available images (floppy, HD, apps-only) with version/build info
+- Detects floppy drives and removable/fixed disks
+- Filters out boot/system drives for safety
+- Warns on drives >256 GB (requires double confirmation)
+- Writes with progress bar and optional verification
 
 **Usage:**
 ```powershell
-.\tools\floppy.ps1          # Write to A:
-.\tools\floppy.ps1 B        # Write to B:
+# Full interactive mode (recommended):
+.\tools\write.ps1
+
+# Quick floppy write:
+.\tools\write.ps1 -DriveLetter A
+
+# Quick HD/CF write to specific disk:
+.\tools\write.ps1 -DiskNumber 2
+
+# Explicit image + drive:
+.\tools\write.ps1 -ImagePath build\unodos-hd.img -DiskNumber 2
+
+# With read-back verification:
+.\tools\write.ps1 -Verify
+
+# Skip git pull:
+.\tools\write.ps1 -NoGitPull
 ```
 
 **Requirements:**
 - Run as Administrator
-- 1.44MB floppy disk in drive
+- Target media (floppy, CF card, USB drive, or HDD)
 
-**What you get:**
-- Bootable UnoDOS floppy
-- Launcher auto-loads on boot
-
----
-
-### hd.ps1
-Writes UnoDOS to a hard drive, CF card, or USB drive.
-
-**What it does:**
-- Writes `build/unodos-hd.img` to physical disk
-- Includes OS + Launcher + All Apps (Clock, Browser, Mouse, Test)
-- Creates bootable FAT16 partition
-
-**Usage:**
-```powershell
-# First, find your disk number:
-Get-Disk
-
-# Then write (WARNING: ERASES ALL DATA):
-.\tools\hd.ps1 -ImagePath build\unodos-hd.img -DiskNumber N
-```
-
-**Requirements:**
-- Run as Administrator
-- Target disk (CF card, USB, or HDD)
+**Safety features:**
+- Boot and system drives are excluded from the drive list
+- Drives >256 GB are greyed out and require a second "Are you REALLY sure?" confirmation
+- Default confirmation button is NO
+- Drives too small for the selected image are blocked
 
 ---
 
-### apps.ps1
-Creates and writes an app-only floppy for swapping.
+## Legacy Wrappers
 
-**What it does:**
-- Pulls latest code from GitHub
-- Creates FAT12 floppy with all apps (no OS)
-- Writes to floppy drive
+The old scripts still work — they now call `write.ps1` internally:
 
-**Usage:**
-```powershell
-.\tools\apps.ps1          # Write to A:
-.\tools\apps.ps1 B        # Write to B:
-```
-
-**Use case:**
-- Boot from OS floppy (launcher auto-loads)
-- Swap to this apps floppy for different app selection
-- Launcher will refresh and show apps from new disk
+| Script | Equivalent |
+|--------|-----------|
+| `floppy.ps1 [letter]` | `write.ps1 -ImagePath build\unodos-144.img -DriveLetter A` |
+| `hd.ps1` | `write.ps1 -ImagePath build\unodos-hd.img` |
+| `apps.ps1 [letter]` | `write.ps1 -ImagePath build\launcher-floppy.img -DriveLetter A` |
 
 ---
 
-## New Unified Boot Flow (Build 073+)
+## Boot Flow
 
-**Before:** Boot floppy → Press 'L' → Swap floppy → Launcher loads
-**Now:** Boot floppy/HDD → Launcher auto-loads!
+**Floppy:** Boot from `unodos-144.img` → Launcher auto-loads, all apps included.
 
-No disk swapping needed!
+**Hard Drive / CF:** Boot from `unodos-hd.img` → Launcher and all apps immediately available.
+
+**Apps-only floppy:** Boot from OS floppy, then swap to `launcher-floppy.img` for different app selection.
