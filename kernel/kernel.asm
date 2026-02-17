@@ -5924,24 +5924,28 @@ fat16_read_sector:
     mov [ide_heads], dh             ; heads = max_head + 1
 
     ; Convert saved LBA to CHS
+    ; CRITICAL: Use EBX for divisor (not ECX!) to avoid clobbering CL
+    ; which holds the sector number between the two divisions.
     mov eax, [.saved_lba]
 
     ; Sector = (LBA mod sectors_per_track) + 1
+    push ebx                        ; Save buffer offset for INT 13h
     xor edx, edx
-    movzx ecx, byte [ide_sectors]
-    div ecx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
+    movzx ebx, byte [ide_sectors]
+    div ebx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
     inc dl                          ; Sector is 1-based
     mov cl, dl                      ; CL = sector
 
     ; Head = (temp / sectors_per_track) mod heads
     ; Cylinder = (temp / sectors_per_track) / heads
     xor edx, edx
-    movzx ecx, byte [ide_heads]
-    div ecx                         ; EAX = cylinder, EDX = head
+    movzx ebx, byte [ide_heads]
+    div ebx                         ; EAX = cylinder, EDX = head
     mov dh, dl                      ; DH = head
     mov ch, al                      ; CH = cylinder low 8 bits
     shl ah, 6
     or cl, ah                       ; CL[7:6] = cylinder high 2 bits
+    pop ebx                         ; Restore buffer offset
 
     ; Perform CHS read
     mov ah, 0x02                    ; Read sectors
