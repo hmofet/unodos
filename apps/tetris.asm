@@ -43,6 +43,13 @@ entry:
     mov ax, cs
     mov ds, ax
 
+    ; Save current theme colors for restore on exit
+    mov ah, API_THEME_GET_COLORS
+    int 0x80
+    mov [cs:saved_text_clr], al
+    mov [cs:saved_bg_clr], bl
+    mov [cs:saved_win_clr], cl
+
     ; Initialize RNG seed from BIOS tick
     call read_tick
     mov [cs:rng_seed], ax
@@ -160,8 +167,12 @@ entry:
     mov ah, API_SPEAKER_OFF
     int 0x80
 
-    ; Clear screen
-    call clear_screen
+    ; Restore theme colors
+    mov al, [cs:saved_text_clr]
+    mov bl, [cs:saved_bg_clr]
+    mov cl, [cs:saved_win_clr]
+    mov ah, API_THEME_SET_COLORS
+    int 0x80
 
     pop es
     pop ds
@@ -184,6 +195,7 @@ API_GFX_SET_FONT         equ 48
 API_DRAW_BUTTON          equ 51
 API_HIT_TEST             equ 53
 API_THEME_SET_COLORS     equ 54
+API_THEME_GET_COLORS     equ 55
 API_SPEAKER_TONE         equ 41
 API_SPEAKER_OFF          equ 42
 
@@ -238,6 +250,11 @@ music_tick:     dw 0
 music_dur:      dw 0
 music_gap:      db 0                ; 0=playing note, 1=in gap
 
+; Saved theme colors (restored on exit)
+saved_text_clr: db 0
+saved_bg_clr:   db 0
+saved_win_clr:  db 0
+
 ; Temp variables for draw_cell
 cell_sx:        dw 0
 cell_sy:        dw 0
@@ -251,6 +268,7 @@ chk_y:          db 0
 ; Line clear temp
 clear_count:    db 0
 clear_rows:     times 4 db 0        ; Up to 4 rows cleared at once
+flash_count:    db 0                 ; Animation counter (not shared with draw_cell)
 
 ; Number display buffer
 num_buf:        times 6 db 0        ; "00000\0"
@@ -1243,7 +1261,7 @@ collapse_row:
 animate_line_clear:
     pusha
 
-    mov byte [cs:cell_px], 3        ; 3 flash cycles
+    mov byte [cs:flash_count], 3     ; 3 flash cycles
 .alc_flash:
     ; Draw all cleared rows as white
     xor cx, cx
@@ -1315,7 +1333,7 @@ animate_line_clear:
     cmp ax, 2
     jb .alc_w2
 
-    dec byte [cs:cell_px]
+    dec byte [cs:flash_count]
     jnz .alc_flash
 
     popa
