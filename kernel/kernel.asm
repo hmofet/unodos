@@ -7247,9 +7247,23 @@ app_yield_stub:
     mov [current_task], al
     mov [scheduler_last], al
 
-    ; Restore draw_context
+    ; Restore draw_context and recalculate clip state.
+    ; clip_enabled / clip_x1/x2/y1/y2 are global state NOT saved per-task.
+    ; Without this, a task inherits the previous task's clip rect, causing
+    ; drawing to be clipped to the wrong window's bounds.
     mov al, [bx + APP_OFF_DRAW_CTX]
     mov [draw_context], al
+    cmp al, 0xFF
+    je .restore_no_clip
+    cmp al, WIN_MAX_COUNT
+    jae .restore_no_clip
+    push bx
+    call win_begin_draw             ; Sets clip_enabled=1, clip rect from window
+    pop bx
+    jmp .restore_clip_done
+.restore_no_clip:
+    mov byte [clip_enabled], 0
+.restore_clip_done:
     ; Restore caller_ds/es
     mov ax, [bx + APP_OFF_CALLER_DS]
     mov [caller_ds], ax
@@ -8182,6 +8196,14 @@ redraw_affected_windows:
     push di
     push bp
 
+    ; Disable clipping for all kernel-internal drawing in this function.
+    ; The caller's task may have clip_enabled=1 with its window's clip rect,
+    ; which would cause gfx_draw_string_stub to skip text outside that rect.
+    ; This was the root cause of missing desktop icon labels on window close
+    ; and corrupted window title bars during z-order redraws.
+    push word [clip_enabled]
+    mov byte [clip_enabled], 0
+
     ; Paint desktop background + icons in the affected region (if active)
     cmp byte [desktop_icon_count], 0
     je .no_desktop_repaint
@@ -8395,6 +8417,7 @@ redraw_affected_windows:
     call post_event
 
 .topmost_done:
+    pop word [clip_enabled]         ; Restore caller's clip state
     pop bp
     pop di
     pop si
