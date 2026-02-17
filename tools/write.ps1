@@ -2,7 +2,7 @@
 # UnoDOS Disk Image Writer - Unified TUI
 # Writes floppy or HD images to any target drive
 #
-# Usage: .\tools\write.ps1 [-ImagePath path] [-DriveLetter X] [-DiskNumber N] [-Verify] [-NoGitPull]
+# Usage: .\tools\write.ps1 [-ImagePath path] [-DriveLetter X] [-DiskNumber N] [-Verify]
 #
 # No arguments = full interactive mode (image selection + drive selection)
 
@@ -10,8 +10,7 @@ param(
     [string]$ImagePath,
     [string]$DriveLetter,
     [int]$DiskNumber = -1,
-    [switch]$Verify,
-    [switch]$NoGitPull
+    [switch]$Verify
 )
 
 $ErrorActionPreference = "Stop"
@@ -225,23 +224,6 @@ function Find-AvailableImages {
     return $images
 }
 
-# ─── Git Pull ────────────────────────────────────────────────────────────────
-
-function Invoke-GitPull {
-    param([int]$Row)
-    Write-At 3 $Row "Pulling latest from GitHub..." Cyan
-    Push-Location $projectDir
-    try {
-        git fetch origin 2>&1 | Out-Null
-        git reset --hard origin/master 2>&1 | Out-Null
-        Write-At 3 $Row "Pulling latest from GitHub... Updated!    " Green
-    } catch {
-        Write-At 3 $Row "Pulling latest from GitHub... Skipped (git failed)" Yellow
-    }
-    Pop-Location
-    return ($Row + 1)
-}
-
 # ─── Render Functions ────────────────────────────────────────────────────────
 
 function Render-ImageList {
@@ -255,23 +237,25 @@ function Render-ImageList {
         $bld = if ($img.Build) { $img.Build } else { "" }
         $desc = Get-ImageDescription (Split-Path -Leaf $img.Path)
         $verStr = "$ver $bld".Trim()
-        if ($verStr) { $verStr = $verStr.PadRight(24) } else { $verStr = "".PadRight(24) }
 
         $lineW = [Math]::Min(78, [Console]::WindowWidth - 3)
+        # Two-column layout: name+size on left, version+desc on right
+        $descCol = 8 + 20 + 8 + [Math]::Max(26, $verStr.Length + 1)
+        if ($descCol -gt $lineW - 10) { $descCol = $lineW - 10 }
         if ($i -eq $Sel) {
             Write-At 3 $y (" " * $lineW) Black White
             Write-At 4 $y "[>]" Black White
-            Write-At 8 $y $name Black White
-            Write-At 30 $y $size Black White
-            Write-At 40 $y $verStr Black White
-            Write-At 64 $y (Truncate-String $desc ($lineW - 62)) Black White
+            Write-At 8 $y (Truncate-String $name 19).PadRight(20) Black White
+            Write-At 28 $y (Format-Size $img.Size).PadRight(8) Black White
+            Write-At 36 $y $verStr Black White
+            Write-At $descCol $y (Truncate-String $desc ($lineW - $descCol)) Black White
         } else {
             Clear-Row $y 3
             Write-At 4 $y "[ ]" DarkGray
-            Write-At 8 $y $name Gray
-            Write-At 30 $y $size DarkGray
-            Write-At 40 $y $verStr DarkCyan
-            Write-At 64 $y (Truncate-String $desc ($lineW - 62)) DarkGray
+            Write-At 8 $y (Truncate-String $name 19).PadRight(20) Gray
+            Write-At 28 $y (Format-Size $img.Size).PadRight(8) DarkGray
+            Write-At 36 $y $verStr DarkCyan
+            Write-At $descCol $y (Truncate-String $desc ($lineW - $descCol)) DarkGray
         }
     }
 }
@@ -288,7 +272,9 @@ function Render-DriveList {
         $size = (Format-Size $d.Size).PadRight(10)
         $bus = if ($d.BusType) { "$($d.BusType)".PadRight(8) } else { "?".PadRight(8) }
 
-        $tooSmall = ($d.Size -gt 0 -and $d.Size -lt $ImageSize)
+        # Floppy drives: WMI reports filesystem capacity (smaller than raw device),
+        # so skip the too-small check — raw floppy device is always 1.44MB
+        $tooSmall = ($d.TargetType -ne "Floppy" -and $d.Size -gt 0 -and $d.Size -lt $ImageSize)
         $isLarge = ($d.Size -gt 256GB)
         $suffix = ""
         if ($tooSmall) { $suffix = "(too small)" }
@@ -373,18 +359,13 @@ try {
     $row = Draw-Banner
     $row++
 
-    if (-not $NoGitPull) {
-        $row = Invoke-GitPull $row
-    }
-    $row++
-
     Start-Sleep -Milliseconds 300
 
-    # ── Resolve image ────────────────────────────────────────────────────────
+    # ── Resolve command-line arguments ────────────────────────────────────
     $selectedImage = $null
+    $selectedTarget = $null
 
     if ($ImagePath) {
-        # Explicit image path provided
         if (-not (Test-Path $ImagePath)) {
             Write-At 3 $row "ERROR: Image not found: $ImagePath" Red
             $row += 2
@@ -394,72 +375,9 @@ try {
         }
         $ImagePath = (Resolve-Path $ImagePath).Path
         $selectedImage = Get-ImageInfo $ImagePath
-    } else {
-        # ── Screen 2: Image Selection ────────────────────────────────────────
-        [Console]::Clear()
-        $row = Draw-Banner
-        $row++
-
-        Write-At 3 $row "Select image to write:" White
-        $row++
-        Write-At 3 $row "Up/Down = navigate   Enter = select   Esc = cancel" DarkGray
-        $row += 2
-
-        $imagePaths = @(Find-AvailableImages)
-        if ($imagePaths.Count -eq 0) {
-            Write-At 3 $row "No images found in build/ directory!" Red
-            $row++
-            Write-At 3 $row "Run 'git pull' to get latest binaries." Yellow
-            $row += 2
-            Write-At 3 $row "Press any key to exit..." DarkGray
-            [Console]::ReadKey($true) | Out-Null
-            exit 1
-        }
-
-        Write-At 3 $row "Loading image info..." Cyan
-        $imageInfos = @()
-        foreach ($ip in $imagePaths) {
-            $imageInfos += Get-ImageInfo $ip
-        }
-        Clear-Row $row
-
-        $listTop = $row
-        $imgSel = 0
-
-        Render-ImageList $imageInfos $imgSel $listTop
-
-        $imgDone = $false
-        while (-not $imgDone) {
-            $key = [Console]::ReadKey($true)
-            if ($key.Key -eq 'UpArrow' -and $imgSel -gt 0) {
-                $imgSel--
-                Render-ImageList $imageInfos $imgSel $listTop
-            }
-            elseif ($key.Key -eq 'DownArrow' -and $imgSel -lt ($imageInfos.Count - 1)) {
-                $imgSel++
-                Render-ImageList $imageInfos $imgSel $listTop
-            }
-            elseif ($key.Key -eq 'Enter') {
-                $imgDone = $true
-            }
-            elseif ($key.Key -eq 'Escape') {
-                [Console]::Clear()
-                [Console]::CursorVisible = $origCursorVisible
-                Write-Host "Operation cancelled."
-                exit 0
-            }
-        }
-
-        $selectedImage = $imageInfos[$imgSel]
     }
 
-    $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
-
-    # ── Resolve target drive ─────────────────────────────────────────────────
-    $selectedTarget = $null
-
     if ($DriveLetter) {
-        # Explicit floppy drive letter
         $selectedTarget = [PSCustomObject]@{
             TargetType = "Floppy"
             Letter     = $DriveLetter.TrimEnd(':')
@@ -471,7 +389,6 @@ try {
         }
     }
     elseif ($DiskNumber -ge 0) {
-        # Explicit disk number
         $disk = Get-Disk -Number $DiskNumber
         $selectedTarget = [PSCustomObject]@{
             TargetType = "Disk"
@@ -483,180 +400,294 @@ try {
             WritePath  = "\\.\PhysicalDrive$DiskNumber"
         }
     }
-    else {
-        # ── Screen 3: Drive Selection ────────────────────────────────────────
-        [Console]::Clear()
-        $row = Draw-Banner
-        $row++
 
-        # Show selected image info
-        Write-At 3 $row "Image:  $($selectedImage.FileName) ($imageSizeMB MB)" White
-        $row++
-        $verLine = "$($selectedImage.Version) $($selectedImage.Build)".Trim()
-        if ($verLine) {
-            Write-At 3 $row "        $verLine" Cyan
-            $row++
-        }
-        $row++
-
-        Write-At 3 $row "Select target drive:" White
-        $row++
-        Write-At 3 $row "Up/Down = navigate   Enter = select   Esc = cancel" DarkGray
-        $row += 2
-
-        # Table header
-        Write-At 4 $row "Type" DarkCyan
-        Write-At 13 $row "#" DarkCyan
-        Write-At 19 $row "Name" DarkCyan
-        Write-At 50 $row "Size" DarkCyan
-        Write-At 61 $row "Bus" DarkCyan
-        $row++
-        $w = [Console]::WindowWidth
-        Write-At 3 $row ("-" * [Math]::Min(74, $w - 6)) DarkGray
-        $row++
-
-        $targets = @(Get-AllWriteTargets)
-
-        if ($targets.Count -eq 0) {
-            Write-At 3 $row "No eligible drives found!" Red
-            $row++
-            Write-At 3 $row "(System and boot drives are automatically excluded)" DarkGray
-            $row += 2
-            Write-At 3 $row "Connect a floppy, CF card, or USB drive and try again." Yellow
-            $row += 2
-            Write-At 3 $row "Press any key to exit..." DarkGray
-            [Console]::ReadKey($true) | Out-Null
-            exit 1
-        }
-
-        $listTop = $row
-        $drvSel = 0
-
-        Render-DriveList $targets $drvSel $listTop $selectedImage.Size
-
-        $drvDone = $false
-        while (-not $drvDone) {
-            $key = [Console]::ReadKey($true)
-            if ($key.Key -eq 'UpArrow' -and $drvSel -gt 0) {
-                $drvSel--
-                Render-DriveList $targets $drvSel $listTop $selectedImage.Size
-            }
-            elseif ($key.Key -eq 'DownArrow' -and $drvSel -lt ($targets.Count - 1)) {
-                $drvSel++
-                Render-DriveList $targets $drvSel $listTop $selectedImage.Size
-            }
-            elseif ($key.Key -eq 'Enter') {
-                $t = $targets[$drvSel]
-                # Block if drive too small
-                if ($t.Size -gt 0 -and $t.Size -lt $selectedImage.Size) {
-                    # Flash error, don't proceed
-                } else {
-                    $drvDone = $true
-                }
-            }
-            elseif ($key.Key -eq 'Escape') {
-                [Console]::Clear()
-                [Console]::CursorVisible = $origCursorVisible
-                Write-Host "Operation cancelled."
-                exit 0
-            }
-        }
-
-        $selectedTarget = $targets[$drvSel]
-    }
-
-    # ── Screen 4: Confirmation ───────────────────────────────────────────────
-    [Console]::Clear()
-    $row = Draw-Banner
-    $row++
-
-    Write-At 3 $row "CONFIRM WRITE" Red
-    $row += 2
-
-    Write-At 5 $row "Image:" DarkGray
-    Write-At 14 $row "$($selectedImage.FileName) ($imageSizeMB MB)" White
-    $row++
-    $verLine = "$($selectedImage.Version) $($selectedImage.Build)".Trim()
-    if ($verLine) {
-        Write-At 14 $row $verLine Cyan
-        $row++
-    }
-    $row++
-
-    $targetLabel = if ($selectedTarget.TargetType -eq "Floppy") {
-        "$($selectedTarget.Letter): - $($selectedTarget.Name)"
-    } else {
-        "Disk $($selectedTarget.DiskNumber) - $($selectedTarget.Name)"
-    }
-    $targetSize = Format-Size $selectedTarget.Size
-    Write-At 5 $row "Target:" DarkGray
-    Write-At 14 $row (Truncate-String $targetLabel 50) White
-    $row++
-    Write-At 14 $row "$targetSize   $($selectedTarget.BusType)" DarkGray
-    $row += 2
-
-    # Size warnings
-    if ($selectedTarget.Size -gt 256GB) {
-        Write-At 5 $row "WARNING: This drive is very large (>256 GB)!" Red
-        $row++
-        Write-At 5 $row "Double-check this is the correct target!" Red
-        $row += 2
-    } elseif ($selectedTarget.Size -gt 32GB) {
-        Write-At 5 $row "NOTE: Drive is larger than 32 GB - verify this is correct." Yellow
-        $row += 2
-    }
-
-    Write-At 3 $row "+----------------------------------------------+" Red
-    $row++
-    Write-At 3 $row "|  ALL DATA ON THIS DISK WILL BE ERASED!       |" Red
-    $row++
-    Write-At 3 $row "|  THIS CANNOT BE UNDONE!                      |" Red
-    $row++
-    Write-At 3 $row "+----------------------------------------------+" Red
-    $row += 2
-
-    Write-At 5 $row "Erase this disk and write UnoDOS?" White
-    $row += 2
-
-    # Y/N buttons (default to No)
-    $btnRow = $row
-    $btnSel = 1  # 0 = Yes, 1 = No
-
-    Render-Buttons $btnSel $btnRow
+    # ── Interactive screen navigation ────────────────────────────────────
+    # Determine starting screen based on CLI args
+    $firstScreen = "image"
+    if ($selectedImage) { $firstScreen = "drive" }
+    if ($selectedImage -and $selectedTarget) { $firstScreen = "confirm" }
+    $navScreen = $firstScreen
 
     $confirmed = $false
-    $btnDone = $false
-    while (-not $btnDone) {
-        $key = [Console]::ReadKey($true)
-        if ($key.Key -eq 'LeftArrow' -or $key.Key -eq 'RightArrow') {
-            $btnSel = 1 - $btnSel
-            Render-Buttons $btnSel $btnRow
-        }
-        elseif ($key.Key -eq 'Y') {
-            $btnSel = 0
-            Render-Buttons $btnSel $btnRow
-            $confirmed = $true
-            $btnDone = $true
-        }
-        elseif ($key.Key -eq 'N' -or $key.Key -eq 'Escape') {
-            $btnDone = $true
-        }
-        elseif ($key.Key -eq 'Enter') {
-            if ($btnSel -eq 0) { $confirmed = $true }
-            $btnDone = $true
-        }
-    }
+    $imageInfos = $null
 
-    if (-not $confirmed) {
-        [Console]::Clear()
-        [Console]::CursorVisible = $origCursorVisible
-        Write-Host "Operation cancelled."
-        exit 0
+    while ($true) {
+        switch ($navScreen) {
+
+            "image" {
+                # ── Screen: Image Selection ──────────────────────────────
+                [Console]::Clear()
+                $row = Draw-Banner
+                $row++
+
+                Write-At 3 $row "Select image to write:" White
+                Write-At 55 $row "Step 1 of 3" DarkGray
+                $row++
+                Write-At 3 $row "Up/Down = navigate   Enter = next   Esc = cancel" DarkGray
+                $row += 2
+
+                if (-not $imageInfos) {
+                    $imagePaths = @(Find-AvailableImages)
+                    if ($imagePaths.Count -eq 0) {
+                        Write-At 3 $row "No images found in build/ directory!" Red
+                        $row++
+                        Write-At 3 $row "Run 'git pull' to get latest binaries." Yellow
+                        $row += 2
+                        Write-At 3 $row "Press any key to exit..." DarkGray
+                        [Console]::ReadKey($true) | Out-Null
+                        exit 1
+                    }
+                    Write-At 3 $row "Loading image info..." Cyan
+                    $imageInfos = @()
+                    foreach ($ip in $imagePaths) {
+                        $imageInfos += Get-ImageInfo $ip
+                    }
+                    Clear-Row $row
+                }
+
+                $listTop = $row
+                $imgSel = 0
+                Render-ImageList $imageInfos $imgSel $listTop
+
+                $screenDone = $false
+                while (-not $screenDone) {
+                    $key = [Console]::ReadKey($true)
+                    if ($key.Key -eq 'UpArrow' -and $imgSel -gt 0) {
+                        $imgSel--
+                        Render-ImageList $imageInfos $imgSel $listTop
+                    }
+                    elseif ($key.Key -eq 'DownArrow' -and $imgSel -lt ($imageInfos.Count - 1)) {
+                        $imgSel++
+                        Render-ImageList $imageInfos $imgSel $listTop
+                    }
+                    elseif ($key.Key -eq 'Enter') {
+                        $selectedImage = $imageInfos[$imgSel]
+                        $navScreen = "drive"
+                        $screenDone = $true
+                    }
+                    elseif ($key.Key -eq 'Escape') {
+                        [Console]::Clear()
+                        [Console]::CursorVisible = $origCursorVisible
+                        Write-Host "Operation cancelled."
+                        exit 0
+                    }
+                }
+            }
+
+            "drive" {
+                # ── Screen: Drive Selection ──────────────────────────────
+                [Console]::Clear()
+                $row = Draw-Banner
+                $row++
+
+                $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+                $canGoBack = ($firstScreen -eq "image")
+                $stepNum = if ($canGoBack) { 2 } else { 1 }
+                $stepTotal = if ($canGoBack) { 3 } else { 2 }
+
+                Write-At 3 $row "Image:  $($selectedImage.FileName) ($imageSizeMB MB)" White
+                $row++
+                $verLine = "$($selectedImage.Version) $($selectedImage.Build)".Trim()
+                if ($verLine) {
+                    Write-At 3 $row "        $verLine" Cyan
+                    $row++
+                }
+                $row++
+
+                Write-At 3 $row "Select target drive:" White
+                Write-At 55 $row "Step $stepNum of $stepTotal" DarkGray
+                $row++
+                $hints = "Up/Down = navigate   Enter = next"
+                if ($canGoBack) { $hints += "   Bksp = back" }
+                $hints += "   Esc = cancel"
+                Write-At 3 $row $hints DarkGray
+                $row += 2
+
+                # Table header
+                Write-At 4 $row "Type" DarkCyan
+                Write-At 13 $row "#" DarkCyan
+                Write-At 19 $row "Name" DarkCyan
+                Write-At 50 $row "Size" DarkCyan
+                Write-At 61 $row "Bus" DarkCyan
+                $row++
+                $w = [Console]::WindowWidth
+                Write-At 3 $row ("-" * [Math]::Min(74, $w - 6)) DarkGray
+                $row++
+
+                $targets = @(Get-AllWriteTargets)
+
+                if ($targets.Count -eq 0) {
+                    Write-At 3 $row "No eligible drives found!" Red
+                    $row++
+                    Write-At 3 $row "(System and boot drives are automatically excluded)" DarkGray
+                    $row += 2
+                    Write-At 3 $row "Connect a floppy, CF card, or USB drive and try again." Yellow
+                    $row += 2
+                    Write-At 3 $row "Press any key to exit..." DarkGray
+                    [Console]::ReadKey($true) | Out-Null
+                    exit 1
+                }
+
+                $listTop = $row
+                $drvSel = 0
+                Render-DriveList $targets $drvSel $listTop $selectedImage.Size
+
+                $screenDone = $false
+                while (-not $screenDone) {
+                    $key = [Console]::ReadKey($true)
+                    if ($key.Key -eq 'UpArrow' -and $drvSel -gt 0) {
+                        $drvSel--
+                        Render-DriveList $targets $drvSel $listTop $selectedImage.Size
+                    }
+                    elseif ($key.Key -eq 'DownArrow' -and $drvSel -lt ($targets.Count - 1)) {
+                        $drvSel++
+                        Render-DriveList $targets $drvSel $listTop $selectedImage.Size
+                    }
+                    elseif ($key.Key -eq 'Enter') {
+                        $t = $targets[$drvSel]
+                        # Block if drive too small (skip for floppies — WMI reports FS capacity, not raw)
+                        if ($t.TargetType -ne "Floppy" -and $t.Size -gt 0 -and $t.Size -lt $selectedImage.Size) {
+                            # Flash error, don't proceed
+                        } else {
+                            $selectedTarget = $t
+                            $navScreen = "confirm"
+                            $screenDone = $true
+                        }
+                    }
+                    elseif ($key.Key -eq 'Backspace' -and $canGoBack) {
+                        $navScreen = "image"
+                        $screenDone = $true
+                    }
+                    elseif ($key.Key -eq 'Escape') {
+                        [Console]::Clear()
+                        [Console]::CursorVisible = $origCursorVisible
+                        Write-Host "Operation cancelled."
+                        exit 0
+                    }
+                }
+            }
+
+            "confirm" {
+                # ── Screen: Confirmation ─────────────────────────────────
+                [Console]::Clear()
+                $row = Draw-Banner
+                $row++
+
+                $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+                $canGoBackToDrive = (-not $DriveLetter -and $DiskNumber -lt 0)
+
+                # Step indicator
+                $stepTotal = 1
+                if ($firstScreen -eq "image") { $stepTotal = 3 }
+                elseif ($firstScreen -eq "drive") { $stepTotal = 2 }
+
+                Write-At 3 $row "CONFIRM WRITE" Red
+                Write-At 55 $row "Step $stepTotal of $stepTotal" DarkGray
+                $row += 2
+
+                Write-At 5 $row "Image:" DarkGray
+                Write-At 14 $row "$($selectedImage.FileName) ($imageSizeMB MB)" White
+                $row++
+                $verLine = "$($selectedImage.Version) $($selectedImage.Build)".Trim()
+                if ($verLine) {
+                    Write-At 14 $row $verLine Cyan
+                    $row++
+                }
+                $row++
+
+                $targetLabel = if ($selectedTarget.TargetType -eq "Floppy") {
+                    "$($selectedTarget.Letter): - $($selectedTarget.Name)"
+                } else {
+                    "Disk $($selectedTarget.DiskNumber) - $($selectedTarget.Name)"
+                }
+                $targetSize = Format-Size $selectedTarget.Size
+                Write-At 5 $row "Target:" DarkGray
+                Write-At 14 $row (Truncate-String $targetLabel 50) White
+                $row++
+                Write-At 14 $row "$targetSize   $($selectedTarget.BusType)" DarkGray
+                $row += 2
+
+                # Size warnings
+                if ($selectedTarget.Size -gt 256GB) {
+                    Write-At 5 $row "WARNING: This drive is very large (>256 GB)!" Red
+                    $row++
+                    Write-At 5 $row "Double-check this is the correct target!" Red
+                    $row += 2
+                } elseif ($selectedTarget.Size -gt 32GB) {
+                    Write-At 5 $row "NOTE: Drive is larger than 32 GB - verify this is correct." Yellow
+                    $row += 2
+                }
+
+                Write-At 3 $row "+----------------------------------------------+" Red
+                $row++
+                Write-At 3 $row "|  ALL DATA ON THIS DISK WILL BE ERASED!       |" Red
+                $row++
+                Write-At 3 $row "|  THIS CANNOT BE UNDONE!                      |" Red
+                $row++
+                Write-At 3 $row "+----------------------------------------------+" Red
+                $row += 2
+
+                Write-At 5 $row "Erase this disk and write UnoDOS?" White
+                $row += 2
+
+                # Y/N buttons (default to No)
+                $btnRow = $row
+                $btnSel = 1  # 0 = Yes, 1 = No
+                Render-Buttons $btnSel $btnRow
+
+                $row += 2
+                $hints = "Left/Right or Y/N   Enter = confirm"
+                if ($canGoBackToDrive) { $hints += "   Bksp = back" }
+                $hints += "   Esc = cancel"
+                Write-At 3 $row $hints DarkGray
+
+                $screenDone = $false
+                while (-not $screenDone) {
+                    $key = [Console]::ReadKey($true)
+                    if ($key.Key -eq 'LeftArrow' -or $key.Key -eq 'RightArrow') {
+                        $btnSel = 1 - $btnSel
+                        Render-Buttons $btnSel $btnRow
+                    }
+                    elseif ($key.Key -eq 'Y') {
+                        $btnSel = 0
+                        Render-Buttons $btnSel $btnRow
+                        $confirmed = $true
+                        $navScreen = "write"
+                        $screenDone = $true
+                    }
+                    elseif ($key.Key -eq 'N' -or $key.Key -eq 'Escape') {
+                        [Console]::Clear()
+                        [Console]::CursorVisible = $origCursorVisible
+                        Write-Host "Operation cancelled."
+                        exit 0
+                    }
+                    elseif ($key.Key -eq 'Backspace' -and $canGoBackToDrive) {
+                        $navScreen = "drive"
+                        $screenDone = $true
+                    }
+                    elseif ($key.Key -eq 'Enter') {
+                        if ($btnSel -eq 0) {
+                            $confirmed = $true
+                            $navScreen = "write"
+                            $screenDone = $true
+                        } else {
+                            # "No" selected — cancel
+                            [Console]::Clear()
+                            [Console]::CursorVisible = $origCursorVisible
+                            Write-Host "Operation cancelled."
+                            exit 0
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($navScreen -eq "write") { break }
     }
 
     # Extra confirmation for drives >256 GB
     if ($confirmed -and $selectedTarget.Size -gt 256GB) {
-        $row = $btnRow + 2
+        $row = $btnRow + 4
         Write-At 5 $row "This drive is >256 GB. Are you REALLY sure?" Red
         $row += 2
         $btn2Row = $row
@@ -693,6 +724,14 @@ try {
             Write-Host "Operation cancelled."
             exit 0
         }
+    }
+
+    # Set variables needed by write screen
+    $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+    $targetLabel = if ($selectedTarget.TargetType -eq "Floppy") {
+        "$($selectedTarget.Letter): - $($selectedTarget.Name)"
+    } else {
+        "Disk $($selectedTarget.DiskNumber) - $($selectedTarget.Name)"
     }
 
     # ── Screen 5: Writing ────────────────────────────────────────────────────

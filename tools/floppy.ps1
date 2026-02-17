@@ -10,6 +10,9 @@ param(
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$args = @("-ImagePath", "$scriptDir\..\build\unodos-144.img", "-DriveLetter", $DriveLetter)
-if ($Verify -or $v) { $args += "-Verify" }
-& "$scriptDir\write.ps1" @args
+$writeArgs = @{
+    ImagePath   = "$scriptDir\..\build\unodos-144.img"
+    DriveLetter = $DriveLetter
+}
+if ($Verify -or $v) { $writeArgs.Verify = $true }
+& "$scriptDir\write.ps1" @writeArgs
