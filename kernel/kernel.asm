@@ -115,8 +115,8 @@ install_int_80:
 ; Output: Function-specific return values, CF=error status
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
-    ; Validate function number (0-55 valid)
-    cmp ah, 56                      ; Max function count (0-55 valid)
+    ; Validate function number (0-56 valid)
+    cmp ah, 57                      ; Max function count (0-56 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -163,7 +163,9 @@ int_80_handler:
     cmp ah, 50
     jb .no_translate                ; APIs 7-49: no translation
     cmp ah, 52
-    ja .no_translate                ; APIs 53+: no translation (hit_test does its own)
+    jbe .do_translate               ; APIs 50-52: translate coords
+    cmp ah, 56
+    jne .no_translate               ; API 56: checkbox widget; 53-55: no translation
 .do_translate:                      ; APIs 0-6 and 50-52: translate coords
 
     ; Translate: BX += content_x, CX += content_y
@@ -2948,7 +2950,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 56                           ; Number of function slots (0-55)
+    dw 57                           ; Number of function slots (0-56)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -3039,6 +3041,9 @@ kernel_api_table:
     ; Theme API (Build 208)
     dw theme_set_colors             ; 54: Set theme colors
     dw theme_get_colors             ; 55: Get theme colors
+
+    ; Checkbox widget (Build 226)
+    dw widget_draw_checkbox         ; 56: Draw checkbox
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -3574,6 +3579,90 @@ radio_filled_bitmap:
     db 0b10011001                   ; X..XX..X
     db 0b01000010                   ; .X....X.
     db 0b00111100                   ; ..XXXX..
+
+; ============================================================================
+; widget_draw_checkbox - Draw a checkbox (API 56)
+; Input: BX=X, CX=Y, SI=label (caller_ds), AL=flags (bit 0: checked)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+widget_draw_checkbox:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov ax, 0xB800
+    mov es, ax
+    ; Draw checkbox using draw_char (8x8 bitmap)
+    mov word [draw_x], bx
+    mov word [draw_y], cx
+    ; Save and set font params for 8x8 bitmap
+    mov al, [draw_font_height]
+    mov [btn_saved_fh], al
+    mov al, [draw_font_width]
+    mov [btn_saved_fw], al
+    mov al, [draw_font_advance]
+    mov [btn_saved_fa], al
+    mov byte [draw_font_height], 8
+    mov byte [draw_font_width], 8
+    mov byte [draw_font_advance], 10
+    mov si, checkbox_empty_bitmap
+    test byte [btn_flags], 1
+    jz .chk_draw
+    mov si, checkbox_checked_bitmap
+.chk_draw:
+    call draw_char
+    ; Restore font params
+    mov al, [btn_saved_fh]
+    mov [draw_font_height], al
+    mov al, [btn_saved_fw]
+    mov [draw_font_width], al
+    mov al, [btn_saved_fa]
+    mov [draw_font_advance], al
+    ; Draw label string at (btn_x + 12, btn_y)
+    pop si                          ; Restore label pointer (SI)
+    mov bx, [btn_x]
+    add bx, 12
+    mov cx, [btn_y]
+    call gfx_draw_string_stub
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; Checkbox bitmaps (8x8)
+checkbox_empty_bitmap:
+    db 0b11111111                   ; XXXXXXXX
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b10000001                   ; X......X
+    db 0b11111111                   ; XXXXXXXX
+
+checkbox_checked_bitmap:
+    db 0b11111111                   ; XXXXXXXX
+    db 0b11000011                   ; XX....XX
+    db 0b10100101                   ; X.X..X.X
+    db 0b10011001                   ; X..XX..X
+    db 0b10011001                   ; X..XX..X
+    db 0b10100101                   ; X.X..X.X
+    db 0b11000011                   ; XX....XX
+    db 0b11111111                   ; XXXXXXXX
 
 ; ============================================================================
 ; widget_hit_test - Test if mouse is inside a rectangle (API 53)
