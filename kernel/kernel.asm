@@ -3894,13 +3894,55 @@ gfx_clear_area_stub:
     mov es, ax
     mov bp, si                      ; BP = height counter
 
+    ; Check for byte-aligned fast path (BX % 4 == 0 AND DX % 4 == 0)
+    mov ax, bx
+    and ax, 3
+    jnz .slow_path
+    mov ax, dx
+    and ax, 3
+    jnz .slow_path
+
+    ; Fast path: byte-aligned, use rep stosb per row
+    mov si, dx
+    shr si, 2                       ; SI = bytes per row (DX / 4)
+.fast_row:
+    push cx                         ; Save Y
+    push bx                         ; Save X
+    ; Calculate CGA row offset
+    mov ax, cx
+    shr ax, 1
+    push dx
+    mov di, 80
+    mul di
+    pop dx
+    mov di, ax                      ; DI = (Y/2) * 80
+    ; Add X byte offset
+    mov ax, bx
+    shr ax, 2
+    add di, ax
+    ; Handle interlacing (odd rows at +0x2000)
+    test cl, 1
+    jz .fast_even
+    add di, 0x2000
+.fast_even:
+    mov cx, si                      ; CX = byte count
+    xor al, al
+    rep stosb
+    pop bx
+    pop cx
+    inc cx                          ; Next Y
+    dec bp
+    jnz .fast_row
+    jmp .clear_done
+
+.slow_path:
+    ; Pixel-by-pixel fallback for non-aligned areas
 .clear_row:
     mov di, dx                      ; DI = width counter
     push cx                         ; Save Y
     push bx                         ; Save X
 
 .clear_col:
-    ; Plot pixel with color 0 (background)
     call .plot_bg
     inc bx                          ; Next X
     dec di
@@ -3912,6 +3954,7 @@ gfx_clear_area_stub:
     dec bp
     jnz .clear_row
 
+.clear_done:
     pop si
     pop dx
     pop cx
@@ -3937,7 +3980,7 @@ gfx_clear_area_stub:
     push di
     push dx
 
-    ; Calculate video memory offset (same as plot_pixel_white)
+    ; Calculate video memory offset
     mov ax, cx                      ; AX = Y
     shr ax, 1                       ; AX = Y / 2
     mov dx, 80
