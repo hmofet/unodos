@@ -7691,32 +7691,24 @@ win_create_stub:
     pop ds                          ; Restore kernel DS
     pop ds                          ; Balance push ds from line 2941
 
-    ; Draw the window
-    mov ax, bp                      ; Window handle
-    call win_draw_stub
-
-    ; Clear content area (inside border, below title bar)
+    ; Full z-order repaint of new window area: ensures background windows
+    ; overlapping this area have their frames properly drawn (painter's algorithm).
+    ; Without this, only the old topmost is redrawn above; lower z-order windows
+    ; accumulate frame damage from content clears and are never repaired.
     mov bx, [.slot_off]
     push ds
     mov ax, 0x1000
     mov ds, ax
-    mov cx, [bx + WIN_OFF_X]
-    inc cx                          ; Inside left border
-    mov dx, [bx + WIN_OFF_Y]
-    add dx, WIN_TITLEBAR_HEIGHT     ; Below title bar
-    mov si, [bx + WIN_OFF_WIDTH]
-    sub si, 2                       ; Inside both borders
-    mov di, [bx + WIN_OFF_HEIGHT]
-    sub di, WIN_TITLEBAR_HEIGHT
-    dec di                          ; Above bottom border
+    mov ax, [bx + WIN_OFF_X]
+    mov [redraw_old_x], ax
+    mov ax, [bx + WIN_OFF_Y]
+    mov [redraw_old_y], ax
+    mov ax, [bx + WIN_OFF_WIDTH]
+    mov [redraw_old_w], ax
+    mov ax, [bx + WIN_OFF_HEIGHT]
+    mov [redraw_old_h], ax
     pop ds
-    push bx
-    mov bx, cx                      ; BX = X
-    mov cx, dx                      ; CX = Y
-    mov dx, si                      ; DX = Width
-    mov si, di                      ; SI = Height
-    call gfx_clear_area_stub
-    pop bx
+    call redraw_affected_windows
 
     ; Return handle
     mov ax, bp
@@ -8561,10 +8553,14 @@ win_destroy_stub:
     ; If we found a window, focus it and trigger redraw
     cmp byte [.best_handle], 0xFF
     je .promote_done
+    ; Save and disable clip state - stale clip from calling task can clip title text
+    push word [clip_enabled]
+    mov byte [clip_enabled], 0
     xor ah, ah
     mov al, [.best_handle]
     call win_focus_stub             ; Promotes to z=15, updates focused_task
     call win_draw_stub              ; Redraw frame at top
+    pop word [clip_enabled]         ; Restore clip state
     ; Post EVENT_WIN_REDRAW so app redraws content
     mov al, EVENT_WIN_REDRAW
     xor dh, dh
