@@ -35,12 +35,17 @@ entry:
     ; Install keyboard handler
     call install_keyboard
 
+    ; Disable interrupts for the entire boot drawing phase.
+    ; install_mouse enables IRQ12, so mouse IRQs could fire during CGA mode
+    ; switch or setup_graphics_post_mode (which writes CGA memory without
+    ; cursor protection). This breaks the XOR cursor invariant, creating a
+    ; permanent ghost cursor at (160,100). Keep IF=0 until line 71 (sti).
+    cli
+
     ; Set CGA mode 4 (320x200 4-color)
     xor ax, ax
     mov al, 0x04
     int 0x10
-    ; Reset cursor state: mode switch cleared video memory but cursor_visible
-    ; may be stale if a mouse IRQ drew the cursor before the mode switch
     mov byte [cursor_visible], 0
     call setup_graphics_post_mode
 
@@ -8208,65 +8213,91 @@ redraw_affected_windows:
     cmp al, [.cur_z]
     jne .raw_next
 
-    ; Always redraw frame for ALL visible windows at this z-level.
-    ; This ensures z-order correctness: lower-z frames drawn first,
-    ; higher-z frames cover them. Without this, a lower-z window's
-    ; frame could extend beyond the affected rect and corrupt a
-    ; higher-z window that doesn't overlap the rect.
+    ; Rectangle intersection test: only process windows overlapping affected rect
+    ; win_x < old_x + old_w  AND  old_x < win_x + win_w
+    ; win_y < old_y + old_h  AND  old_y < win_y + win_h
+    mov ax, [redraw_old_x]
+    add ax, [redraw_old_w]
+    cmp [si + WIN_OFF_X], ax
+    jge .raw_next
+
+    mov ax, [si + WIN_OFF_X]
+    add ax, [si + WIN_OFF_WIDTH]
+    cmp [redraw_old_x], ax
+    jge .raw_next
+
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
+    cmp [si + WIN_OFF_Y], ax
+    jge .raw_next
+
+    mov ax, [si + WIN_OFF_Y]
+    add ax, [si + WIN_OFF_HEIGHT]
+    cmp [redraw_old_y], ax
+    jge .raw_next
+
+    ; Window overlaps affected rect - redraw frame and clipped content area
     push si
     push bp
     mov ax, bp                      ; AX = window handle
     and al, 0x0F
     call win_draw_stub
 
-    ; Rectangle intersection test: only clear content + post WIN_REDRAW
-    ; for windows that actually overlap the affected rect
-    ; win_x < old_x + old_w  AND  old_x < win_x + win_w
-    ; win_y < old_y + old_h  AND  old_y < win_y + win_h
-
-    ; Test: win_x < old_x + old_w
+    ; Clear only the INTERSECTION of content area and affected rect.
+    ; Clearing the full content area would erase higher-z windows that
+    ; sit on top of this window but outside the affected rect.
+    ; Content bounds: (win_x+1, win_y+TITLEBAR) to (win_x+win_w-1, win_y+win_h-1)
+    ; Clip left = max(content_left, rect_left)
+    mov bx, [si + WIN_OFF_X]
+    inc bx                          ; BX = content left
+    mov ax, [redraw_old_x]
+    cmp ax, bx
+    jle .raw_cl_ok
+    mov bx, ax
+.raw_cl_ok:
+    ; Clip top = max(content_top, rect_top)
+    mov cx, [si + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; CX = content top
+    mov ax, [redraw_old_y]
+    cmp ax, cx
+    jle .raw_ct_ok
+    mov cx, ax
+.raw_ct_ok:
+    ; Clip right = min(content_right, rect_right)
+    mov dx, [si + WIN_OFF_X]
+    add dx, [si + WIN_OFF_WIDTH]
+    dec dx                          ; DX = content right
     mov ax, [redraw_old_x]
     add ax, [redraw_old_w]
-    cmp [si + WIN_OFF_X], ax
-    jge .raw_no_clear
-
-    ; Test: old_x < win_x + win_w
-    mov ax, [si + WIN_OFF_X]
-    add ax, [si + WIN_OFF_WIDTH]
-    cmp [redraw_old_x], ax
-    jge .raw_no_clear
-
-    ; Test: win_y < old_y + old_h
-    mov ax, [redraw_old_y]
-    add ax, [redraw_old_h]
-    cmp [si + WIN_OFF_Y], ax
-    jge .raw_no_clear
-
-    ; Test: old_y < win_y + win_h
+    cmp ax, dx
+    jge .raw_cr_ok
+    mov dx, ax
+.raw_cr_ok:
+    ; Clip bottom = min(content_bottom, rect_bottom)
     mov ax, [si + WIN_OFF_Y]
     add ax, [si + WIN_OFF_HEIGHT]
-    cmp [redraw_old_y], ax
-    jge .raw_no_clear
-
-    ; Window overlaps affected rect - clear content and request app redraw
-    mov bx, [si + WIN_OFF_X]
-    inc bx                          ; Inside left border
-    mov cx, [si + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
-    mov dx, [si + WIN_OFF_WIDTH]
-    sub dx, 2                       ; Inside both borders
-    push word [si + WIN_OFF_HEIGHT]
-    pop si
-    sub si, WIN_TITLEBAR_HEIGHT
-    dec si                          ; Above bottom border
+    dec ax                          ; AX = content bottom
+    push ax                         ; save content_bottom
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
+    pop si                          ; SI = content bottom
+    cmp ax, si
+    jge .raw_cb_ok
+    mov si, ax                      ; SI = clipped bottom
+.raw_cb_ok:
+    ; Convert to (x, y, width, height) for gfx_clear_area_stub
+    sub dx, bx                      ; DX = width
+    jle .raw_skip_clear
+    sub si, cx                      ; SI = height
+    jle .raw_skip_clear
     call gfx_clear_area_stub
 
+.raw_skip_clear:
     ; Post EVENT_WIN_REDRAW so app can redraw when focused
     mov al, EVENT_WIN_REDRAW
     mov dx, bp                      ; DX = window handle (BP preserved)
     call post_event
 
-.raw_no_clear:
     pop bp
     pop si
 
@@ -8280,8 +8311,7 @@ redraw_affected_windows:
     jmp .z_loop
 
 .raw_done:
-    ; After z-orders 0-14, always redraw topmost window (z=15) frame
-    ; to ensure it is always visually on top of everything
+    ; After z-orders 0-14, redraw topmost window (z=15) if it overlaps
     cmp byte [topmost_handle], 0xFF
     je .topmost_done                ; No topmost window
 
@@ -8317,17 +8347,45 @@ redraw_affected_windows:
     cmp [redraw_old_y], ax
     jge .topmost_done
 
-    ; Topmost overlaps — clear content and request app redraw
+    ; Topmost overlaps — clipped content clear (same algorithm as z-loop)
     mov bx, [si + WIN_OFF_X]
     inc bx
+    mov ax, [redraw_old_x]
+    cmp ax, bx
+    jle .top_cl_ok
+    mov bx, ax
+.top_cl_ok:
     mov cx, [si + WIN_OFF_Y]
     add cx, WIN_TITLEBAR_HEIGHT
-    mov dx, [si + WIN_OFF_WIDTH]
-    sub dx, 2
-    push word [si + WIN_OFF_HEIGHT]
+    mov ax, [redraw_old_y]
+    cmp ax, cx
+    jle .top_ct_ok
+    mov cx, ax
+.top_ct_ok:
+    mov dx, [si + WIN_OFF_X]
+    add dx, [si + WIN_OFF_WIDTH]
+    dec dx
+    mov ax, [redraw_old_x]
+    add ax, [redraw_old_w]
+    cmp ax, dx
+    jge .top_cr_ok
+    mov dx, ax
+.top_cr_ok:
+    mov ax, [si + WIN_OFF_Y]
+    add ax, [si + WIN_OFF_HEIGHT]
+    dec ax
+    push ax
+    mov ax, [redraw_old_y]
+    add ax, [redraw_old_h]
     pop si
-    sub si, WIN_TITLEBAR_HEIGHT
-    dec si
+    cmp ax, si
+    jge .top_cb_ok
+    mov si, ax
+.top_cb_ok:
+    sub dx, bx
+    jle .topmost_done
+    sub si, cx
+    jle .topmost_done
     call gfx_clear_area_stub
 
     ; Post WIN_REDRAW so topmost app repaints content
