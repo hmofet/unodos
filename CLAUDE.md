@@ -117,6 +117,36 @@ This document contains important instructions for AI assistants working on UnoDO
 
 Since the kernel uses DS=0x1000 but SS=0x0000, any `[bp + offset]` access reads from the wrong segment. Always use explicit `[ds:bp + offset]` override when accessing kernel data via BP.
 
+## CHS LBA-to-CHS Conversion Bug Pattern (Build 231+)
+
+**CRITICAL**: When converting LBA to CHS using two successive `div` instructions, **never use ECX as the divisor** because CL holds the sector number between divisions.
+
+**The bug**: `movzx ecx, byte [heads]` clobbers CL (sector number stored earlier), causing every CHS read to use the wrong sector.
+
+**Correct pattern** (use EBX for divisor):
+```asm
+    push ebx
+    movzx ebx, byte [spt]
+    div ebx                     ; EAX = LBA / SPT, EDX = remainder
+    inc dl
+    mov cl, dl                  ; CL = sector (safe — EBX doesn't touch CL)
+
+    xor edx, edx
+    movzx ebx, byte [heads]    ; EBX, not ECX!
+    div ebx                     ; EAX = cylinder, EDX = head
+    mov dh, dl
+    mov ch, al
+    shl ah, 6
+    or cl, ah                   ; CL = sector | (cyl_high << 6)
+    pop ebx
+```
+
+**Affected locations** (both fixed in Builds 231-232):
+- `boot/stage2_hd.asm` — `read_sector_to_esbx` CHS fallback
+- `kernel/kernel.asm` — `fat16_read_sector` CHS fallback
+
+**The MBR (`boot/mbr.asm`) was always correct** — it used EBX from the start.
+
 ## Testing Procedure for Hardware
 
 **Floppy Test**:
@@ -129,6 +159,14 @@ Since the kernel uses DS=0x1000 but SS=0x0000, any `[bp + offset]` access reads 
 7. Press 'L' to load launcher, swap to launcher floppy when prompted
 8. Test: navigate with W/S, launch apps with Enter, ESC to exit
 9. Test mouse: cursor visible, drag windows by title bar
+
+**HD / CF Card Test**:
+1. Build: `make clean && make floppy144 && make apps && make build/launcher-floppy.img && make hd-image`
+2. Commit and push .img files
+3. Developer runs: `.\tools\hd.ps1` (interactive TUI drive selector, writes HD image to CF/USB)
+4. Boot from CF card
+5. Stage2 diagnostic shows: `L0144` or `C0144` (L=LBA, C=CHS, 0144=root_start_lba hex)
+6. Launcher should auto-load from FAT16 partition
 
 **Always verify**: Developer should report the build number displayed on screen to confirm they're testing the right binary.
 
@@ -201,7 +239,8 @@ After push bp / mov bp, sp:
 
 **Always commit all images and binaries**:
 ```bash
-git add BUILD_NUMBER kernel/kernel.asm apps/*.asm \
+make clean && make floppy144 && make apps && make build/launcher-floppy.img && make hd-image
+git add BUILD_NUMBER kernel/kernel.asm apps/*.asm boot/*.asm \
   build/unodos-144.img build/launcher-floppy.img build/unodos-hd.img \
   build/*.bin
 git commit -m "Description (Build XXX)"
@@ -246,6 +285,24 @@ git push
 - Kernel `load_settings` reads at boot (after filesystem mount, before launcher start)
 - Settings app saves via FAT12 write APIs on Apply/OK
 
+## HD Boot Chain (Build 228+)
+
+**Boot sequence**: MBR (0x7C00 → relocated 0x0600) → VBR (0x7C00) → Stage2 (0x0800:0x0000) → Kernel (0x1000:0x0000)
+
+**Key design decisions**:
+- MBR uses `[ORG 0x0600]` so all data/code lives in relocated region, safe from VBR overwrite at 0x7C00
+- Stage2 parses BPB from VBR (0x7C00) **before** any INT 13h calls — old BIOSes may use 0x7C00 as scratch
+- All boot components use static DAP (not stack-built `push dword`) for INT 13h AH=42h
+- DAP pointer uses DS=0 with linear address conversion for BIOS compatibility
+- CHS fallback uses BIOS-queried geometry (INT 13h AH=08h), not hardcoded values
+- PCMCIA CF cards (e.g. Omnibook 600C) may lack INT 13h extension support, requiring CHS fallback
+
+**Stage2 boot diagnostic** (printed before kernel load):
+- `L` or `C` = read method (LBA or CHS)
+- `0144` = root_start_lba in hex (expected value for standard 64MB image)
+
+**HD image tool** (`tools/hd.ps1`): Interactive TUI with arrow-key drive selector, Y/N overwrite confirmation (defaults to No for safety).
+
 ## Cursor Protection for Drawing APIs
 
 **All drawing APIs (0-6, 51) must hide the mouse cursor** before drawing and restore after. The pattern:
@@ -260,6 +317,6 @@ Without this, IRQ12 can XOR the cursor over drawing pixels between API calls, ca
 
 ---
 
-**Last Updated**: 2026-02-16
-**Current Version**: v3.19.0
-**Current Build**: 212
+**Last Updated**: 2026-02-17
+**Current Version**: v3.20.0
+**Current Build**: 232
