@@ -2147,12 +2147,13 @@ plot_pixel_xor:
 ; ============================================================================
 
 CURSOR_WIDTH    equ 8
-CURSOR_HEIGHT   equ 10
+CURSOR_HEIGHT   equ 14
 
-; cursor_xor_sprite - Draw/erase cursor at given position via XOR
+; cursor_xor_sprite - Draw/erase 2bpp color cursor via XOR
 ; Input: CX = cursor X, BX = cursor Y (hotspot at top-left)
 ; ES must be 0xB800
 ; Preserves all registers
+; Bitmap: 2 bytes/row, 8 pixels of 2bpp (00=skip, 01=cyan, 10=magenta, 11=white)
 cursor_xor_sprite:
     pusha
 
@@ -2160,30 +2161,48 @@ cursor_xor_sprite:
     mov si, cursor_bitmap           ; SI = bitmap pointer
 
 .row_loop:
-    push cx                         ; Save base X (before bounds check!)
+    push cx                         ; Save base X
     cmp bx, 200                     ; Bounds check Y
-    jae .skip_row                   ; Skip drawing but still pop cx
+    jae .skip_row
 
-    mov al, [si]                    ; AL = bitmap row (MSB = leftmost)
-    mov di, 8                       ; 8 bits to check
+    ; Load 2-byte row as big-endian 16-bit value
+    mov ah, [si]                    ; AH = first byte (pixels 0-3)
+    mov al, [si+1]                  ; AL = second byte (pixels 4-7)
+    mov di, 8                       ; 8 pixels per row
 
 .col_loop:
-    test al, 0x80                   ; Check MSB
+    mov dl, ah
+    shr dl, 6                       ; DL = top 2 bits = pixel color (0-3)
+    test dl, dl
     jz .skip_pixel
     cmp cx, 320                     ; Bounds check X
     jae .skip_pixel
-    call plot_pixel_xor             ; CX = X, BX = Y
+
+    ; Inline XOR pixel plot with color DL
+    mov [cs:cursor_color], dl       ; Save color
+    push ax
+    push bx
+    push cx
+    push di
+    call cga_pixel_calc             ; DI=byte offset, CL=shift
+    mov al, [cs:cursor_color]
+    shl al, cl
+    xor [es:di], al
+    pop di
+    pop cx
+    pop bx
+    pop ax
+
 .skip_pixel:
-    shl al, 1                       ; Next bit
+    shl ax, 2                       ; Next pixel (shift 2 bits left)
     inc cx                          ; Next X
     dec di
     jnz .col_loop
 
 .skip_row:
-    pop cx                          ; Restore base X (always matches push)
+    pop cx                          ; Restore base X
 
-.next_row:
-    inc si                          ; Next bitmap row
+    add si, 2                       ; Next bitmap row (2 bytes)
     inc bx                          ; Next Y
     dec bp
     jnz .row_loop
@@ -2946,7 +2965,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x13A0 - ($ - $$) db 0
+times 0x13C0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -10987,17 +11006,22 @@ cursor_locked:      db 0            ; Lock counter (>0 = cursor rendering suppre
 
 ; Cursor bitmap: 8 pixels wide, 10 rows tall
 ; Each byte = 1 row, MSB = leftmost pixel, 1 = draw (XOR white)
-cursor_bitmap:
-    db 0x80                         ; X.......
-    db 0xC0                         ; XX......
-    db 0xE0                         ; XXX.....
-    db 0xF0                         ; XXXX....
-    db 0xF8                         ; XXXXX...
-    db 0xFC                         ; XXXXXX..
-    db 0xFE                         ; XXXXXXX.
-    db 0xF0                         ; XXXX....
-    db 0xB0                         ; X.XX....
-    db 0x10                         ; ...X....
+cursor_bitmap:              ; 2bpp: 2 bytes/row, W=white c=cyan .=transparent
+    db 0xC0, 0x00               ; W.......
+    db 0xF0, 0x00               ; WW......
+    db 0xD4, 0x00               ; Wcc.....
+    db 0xD5, 0x00               ; Wccc....
+    db 0xD5, 0x40               ; Wcccc...
+    db 0xD5, 0x50               ; Wccccc..
+    db 0xD5, 0x54               ; Wcccccc.
+    db 0xD5, 0x55               ; Wccccccc
+    db 0xD5, 0x40               ; Wcccc...
+    db 0xF1, 0x40               ; WW.cc...
+    db 0xC0, 0x50               ; W...cc..
+    db 0x00, 0x50               ; ....cc..
+    db 0x00, 0x14               ; .....cc.
+    db 0x00, 0x14               ; .....cc.
+cursor_color:   db 0            ; Scratch for cursor sprite
 
 ; Window drag state
 drag_active:        db 0            ; 1 = currently dragging a window

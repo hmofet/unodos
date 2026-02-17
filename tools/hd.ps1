@@ -8,10 +8,7 @@ param(
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$args = @()
-if ($ImagePath) {
-    $args += @("-ImagePath", $ImagePath)
-} else {
-    $args += @("-ImagePath", "$scriptDir\..\build\unodos-hd.img")
+$writeArgs = @{
+    ImagePath = if ($ImagePath) { $ImagePath } else { "$scriptDir\..\build\unodos-hd.img" }
 }
-& "$scriptDir\write.ps1" @args
+& "$scriptDir\write.ps1" @writeArgs

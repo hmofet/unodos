@@ -1,4 +1,4 @@
-; DEMO.BIN - Widget Toolkit Demo for UnoDOS
+; DEMO.BIN - UI Demo for UnoDOS
 ; Showcases all GUI widget types (Build 235)
 ;
 ; Build: nasm -f bin -o demo.bin demo.asm
@@ -9,7 +9,7 @@
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
     db 'UI'                         ; Magic bytes
-    db 'Demo', 0                    ; App name
+    db 'UI Demo', 0                 ; App name
     times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
 
     ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
@@ -582,7 +582,7 @@ check_list_click:
 animate_progress:
     ; Simple counter-based animation
     inc word [cs:anim_counter]
-    cmp word [cs:anim_counter], 8
+    cmp word [cs:anim_counter], 18  ; ~1 second at 18.2 Hz PIT rate
     jb .anim_done
     mov word [cs:anim_counter], 0
     ; Advance progress value
@@ -610,7 +610,7 @@ animate_progress:
 ; Data
 ; ============================================================================
 
-window_title:   db 'Widget Demo', 0
+window_title:   db 'UI Demo', 0
 grp_label:      db 'Options', 0
 radio_a_label:  db 'Option A', 0
 radio_b_label:  db 'Option B', 0
