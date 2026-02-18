@@ -12747,7 +12747,7 @@ topmost_win_h:      dw 0
 ; ============================================================================
 
 ; Desktop icon constants
-DESKTOP_MAX_ICONS       equ 8
+DESKTOP_MAX_ICONS       equ 12
 DESKTOP_ICON_SIZE       equ 80      ; 2+2+64+12 bytes per entry
 DESKTOP_ICON_OFF_X      equ 0       ; word: X screen position
 DESKTOP_ICON_OFF_Y      equ 2       ; word: Y screen position
