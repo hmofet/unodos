@@ -114,9 +114,9 @@ LIST_VISIBLE equ 6
 LIST_COUNT  equ 12
 
 ; Scrollbar (next to list)
-SB_X        equ 250
+SB_X        equ 248
 SB_Y        equ 10
-SB_H        equ 42
+SB_H        equ 36
 
 ; Multi-select checkbox (below list)
 MSEL_X      equ 142
@@ -978,17 +978,16 @@ draw_list:
     or al, 1
 .dl_no_sel:
     ; Check cursor (bit 1): only when list focused
-    pop bx                          ; BX = item index
-    push bx
+    pop dx                          ; DX = item index (don't clobber BX=LIST_X!)
     cmp byte [cs:focus], FOCUS_LIST
     jne .dl_draw
-    cmp bl, [cs:list_cursor]
+    cmp dl, [cs:list_cursor]
     jne .dl_draw
     or al, 2                        ; Cursor flag
 .dl_draw:
+    mov dx, LIST_W                  ; Restore width for API call
     mov ah, API_DRAW_LISTITEM
     int 0x80
-    pop ax                          ; balance the push
     pop cx
     inc cx
     jmp .dl_loop
