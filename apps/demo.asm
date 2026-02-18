@@ -1,5 +1,5 @@
 ; DEMO.BIN - UI Demo for UnoDOS
-; Showcases all GUI widget types (Build 241)
+; Showcases all GUI widget types (Build 245)
 ;
 ; Build: nasm -f bin -o demo.bin demo.asm
 
@@ -122,15 +122,25 @@ SB_H        equ 36
 MSEL_X      equ 142
 MSEL_Y      equ 54
 
-; Progress bar (below combo dropdown area, safe from overlap)
+; Multiline text box (below combo dropdown area)
+ML_LBL_X    equ 4
+ML_LBL_Y    equ 78
+ML_X        equ 4
+ML_Y        equ 84
+ML_W        equ 130
+ML_H        equ 26
+ML_MAX_COL  equ 31
+ML_MAX_LINE equ 3
+
+; Progress bar
 PROG_X      equ 4
-PROG_LBL_Y  equ 106
-PROG_BAR_Y  equ 114
+PROG_LBL_Y  equ 112
+PROG_BAR_Y  equ 120
 PROG_W      equ 265
 
 ; Separator
 SEP_X       equ 4
-SEP_Y       equ 128
+SEP_Y       equ 132
 SEP_W       equ 265
 
 ; Buttons
@@ -138,7 +148,7 @@ BTN_OK_X    equ 170
 BTN_OK_W    equ 46
 BTN_CAN_X   equ 222
 BTN_CAN_W   equ 46
-BTN_Y       equ 134
+BTN_Y       equ 140
 BTN_H       equ 14
 
 ; Menu dropdown geometry
@@ -156,6 +166,7 @@ MHELP_CNT   equ 1
 FOCUS_TF    equ 0
 FOCUS_LIST  equ 1
 FOCUS_COMBO equ 2
+FOCUS_MULTI equ 3
 
 ; ============================================================================
 entry:
@@ -226,6 +237,8 @@ entry:
     je .key_list
     cmp byte [cs:focus], FOCUS_COMBO
     je .key_combo_focus
+    cmp byte [cs:focus], FOCUS_MULTI
+    je .key_multiline
     jmp .main_loop
 
 .handle_esc:
@@ -237,6 +250,10 @@ entry:
 
 .key_textfield:
     call handle_textfield_key
+    jmp .main_loop
+
+.key_multiline:
+    call handle_multiline_key
     jmp .main_loop
 
 .key_list:
@@ -282,13 +299,10 @@ entry:
     cmp byte [cs:list_cursor], 0
     je .main_loop
     dec byte [cs:list_cursor]
-    ; In single-select mode, move selection with cursor
     cmp byte [cs:multisel], 0
     jne .list_up_scroll
-    ; Single select: selection follows cursor
     call list_single_select
 .list_up_scroll:
-    ; Auto-scroll if cursor above viewport
     mov al, [cs:list_cursor]
     cmp al, [cs:scroll_off]
     jge .list_redraw
@@ -303,12 +317,10 @@ entry:
     cmp al, LIST_COUNT - 1
     jge .main_loop
     inc byte [cs:list_cursor]
-    ; In single-select mode, move selection with cursor
     cmp byte [cs:multisel], 0
     jne .list_down_scroll
     call list_single_select
 .list_down_scroll:
-    ; Auto-scroll if cursor below viewport
     mov al, [cs:list_cursor]
     mov ah, [cs:scroll_off]
     add ah, LIST_VISIBLE - 1
@@ -318,10 +330,8 @@ entry:
     jmp .list_redraw
 
 .list_toggle:
-    ; Space toggles selection in multiselect mode
     cmp byte [cs:multisel], 0
     je .main_loop
-    ; Toggle bit for cursor item
     xor bx, bx
     mov bl, [cs:list_cursor]
     mov ax, 1
@@ -342,13 +352,14 @@ entry:
     jne .close_combo_then_tab
 .do_toggle:
     inc byte [cs:focus]
-    cmp byte [cs:focus], 3
+    cmp byte [cs:focus], 4
     jb .focus_ok
     mov byte [cs:focus], 0
 .focus_ok:
     call draw_textfield_widget
     call draw_list
     call draw_combobox
+    call draw_multiline
     jmp .main_loop
 
 .close_menu_then_tab:
@@ -377,6 +388,7 @@ entry:
     jmp .main_loop
 
 .menu_select:
+    call delay_short                ; Brief visual feedback
     cmp byte [cs:menu_open], 0
     jne .close_menu
     cmp byte [cs:menu_sel], 3
@@ -403,7 +415,7 @@ entry:
     jmp .main_loop
 
 .combo_select:
-    call delay_short            ; Brief visual feedback
+    call delay_short
     call close_combo_popup
     jmp .main_loop
 
@@ -492,6 +504,16 @@ entry:
     test al, al
     jnz .click_multisel
 
+    ; Hit test text field
+    mov bx, TF_X
+    mov cx, TF_Y
+    mov dx, TF_W
+    mov si, 10
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .click_textfield
+
     ; Hit test combo header
     mov bx, CB_X
     mov cx, CB_Y
@@ -501,6 +523,16 @@ entry:
     int 0x80
     test al, al
     jnz .click_combobox
+
+    ; Hit test multiline text area
+    mov bx, ML_X
+    mov cx, ML_Y
+    mov dx, ML_W
+    mov si, ML_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .click_multiline
 
     ; Hit test scrollbar (up arrow = top half, down arrow = bottom half)
     mov bx, SB_X
@@ -554,7 +586,6 @@ entry:
     cmp byte [cs:scroll_off], 0
     je .main_loop
     dec byte [cs:scroll_off]
-    ; Also move cursor if in single-select
     cmp byte [cs:multisel], 0
     jne .sb_redraw
     cmp byte [cs:list_cursor], 0
@@ -583,7 +614,6 @@ entry:
 ; --- Menu bar click ---
 .click_menubar:
     ; Hit zones match kernel MENUBAR_PAD=6, 4x6 font
-    ; File at X=6 (w=16), Edit at X=28 (w=16), Help at X=50 (w=16)
     mov bx, 0
     mov cx, MENU_Y
     mov dx, 26
@@ -643,28 +673,28 @@ entry:
     jz .click_menu_outside
     ; Find which item was clicked
     mov al, [cs:menu_open]
-    call get_menu_count         ; AX = item count
-    xor di, di                  ; DI = item index
+    call get_menu_count
+    xor di, di
 .mdd_loop:
     cmp di, ax
     jge .close_menu_jmp
-    push ax                     ; Save count
-    push di                     ; Save index
+    push ax
+    push di
     mov al, [cs:menu_open]
-    call get_menu_geometry      ; BX=menu_x, DX=width (fresh each time)
-    inc bx                      ; Inside border
-    sub dx, 2                   ; Content width
+    call get_menu_geometry
+    inc bx
+    sub dx, 2
     ; CX = MENU_H + 1 + di * 6
     mov ax, di
     mov cx, ax
-    shl cx, 1                   ; cx = di*2
-    add cx, ax                  ; cx = di*3
-    shl cx, 1                   ; cx = di*6
+    shl cx, 1
+    add cx, ax
+    shl cx, 1
     add cx, MENU_H + 1
     mov si, 6
     mov ah, API_HIT_TEST
     int 0x80
-    test al, al                 ; POP doesn't affect flags
+    test al, al
     pop di
     pop ax
     jnz .mdd_hit
@@ -673,6 +703,8 @@ entry:
 .mdd_hit:
     mov ax, di
     mov [cs:menu_sel], al
+    call draw_menu_dropdown         ; Show selected item highlighted
+    call delay_short                ; Brief visual feedback
     cmp byte [cs:menu_open], 0
     jne .close_menu_jmp
     cmp byte [cs:menu_sel], 3
@@ -697,13 +729,20 @@ entry:
 
 ; --- Combo click ---
 .click_combobox:
+    mov byte [cs:focus], FOCUS_COMBO
     cmp byte [cs:combo_open], 0
     jne .close_combo_click
     mov byte [cs:combo_open], 1
+    call draw_textfield_widget
+    call draw_list
+    call draw_multiline
     call draw_combo_dropdown
     jmp .main_loop
 .close_combo_click:
     call close_combo_popup
+    call draw_textfield_widget
+    call draw_list
+    call draw_multiline
     jmp .main_loop
 
 .click_combo_dropdown:
@@ -738,8 +777,8 @@ entry:
     jmp .cbd_loop
 .cbd_hit:
     mov [cs:combo_sel], cl
-    call draw_combo_dropdown    ; Show selected item highlighted
-    call delay_short            ; Brief visual feedback
+    call draw_combo_dropdown        ; Show selected item highlighted
+    call delay_short                ; Brief visual feedback
     call close_combo_popup
     jmp .main_loop
 .close_combo_outside:
@@ -772,13 +811,28 @@ entry:
 
 .click_multisel:
     xor byte [cs:multisel], 1
-    ; When switching to single-select, set mask to just cursor item
     cmp byte [cs:multisel], 0
     jne .ms_draw
     call list_single_select
 .ms_draw:
     call draw_multisel_chk
     call draw_list
+    jmp .main_loop
+
+.click_textfield:
+    mov byte [cs:focus], FOCUS_TF
+    call draw_textfield_widget
+    call draw_list
+    call draw_combobox
+    call draw_multiline
+    jmp .main_loop
+
+.click_multiline:
+    mov byte [cs:focus], FOCUS_MULTI
+    call draw_textfield_widget
+    call draw_list
+    call draw_combobox
+    call draw_multiline
     jmp .main_loop
 
 ; ============================================================================
@@ -815,6 +869,8 @@ draw_all:
     call draw_list
     call draw_scrollbar
     call draw_multisel_chk
+    call draw_ml_label
+    call draw_multiline
     call draw_prog_label
     call draw_prog_bar
     call draw_separator
@@ -941,52 +997,45 @@ draw_combobox:
     ret
 
 draw_list:
-    ; Draw visible items with multiselect support
-    xor cx, cx                      ; Visible slot index
+    xor cx, cx
 .dl_loop:
     cmp cx, LIST_VISIBLE
     jge .dl_done
     push cx
-    ; Actual item index = slot + scroll_off
     mov al, [cs:scroll_off]
     xor ah, ah
     add ax, cx
     cmp ax, LIST_COUNT
     jge .dl_blank
-    ; Get item string
     push ax
     mov si, ax
     shl si, 1
     add si, list_ptrs
     mov si, [cs:si]
     pop ax
-    ; Calculate Y = LIST_Y + slot * 6
     push ax
     mov ax, cx
     mov bx, 6
     mul bx
     add ax, LIST_Y
     mov cx, ax
-    pop ax                          ; AX = item index
+    pop ax
     mov bx, LIST_X
     mov dx, LIST_W
-    ; Build flags in AL
     push ax
-    ; Check selected (bit 0): multisel uses mask, single uses list_cursor
-    call item_is_selected           ; AL = item index → CF set if selected
+    call item_is_selected
     mov al, 0
     jnc .dl_no_sel
     or al, 1
 .dl_no_sel:
-    ; Check cursor (bit 1): only when list focused
-    pop dx                          ; DX = item index (don't clobber BX=LIST_X!)
+    pop dx
     cmp byte [cs:focus], FOCUS_LIST
     jne .dl_draw
     cmp dl, [cs:list_cursor]
     jne .dl_draw
-    or al, 2                        ; Cursor flag
+    or al, 2
 .dl_draw:
-    mov dx, LIST_W                  ; Restore width for API call
+    mov dx, LIST_W
     mov ah, API_DRAW_LISTITEM
     int 0x80
     pop cx
@@ -1009,14 +1058,11 @@ draw_list:
 .dl_done:
     ret
 
-; Check if item AL is selected. Returns CF=1 if selected.
 item_is_selected:
     push bx
     push cx
-    ; In single-select: selected if item == list_cursor
     cmp byte [cs:multisel], 0
     jne .iis_multi
-    ; Single select: the cursor IS the selection
     pop cx
     pop bx
     cmp al, [cs:list_cursor]
@@ -1027,7 +1073,6 @@ item_is_selected:
     stc
     ret
 .iis_multi:
-    ; Multiselect: check bit in list_mask
     xor bx, bx
     mov bl, al
     mov ax, 1
@@ -1047,7 +1092,6 @@ item_is_selected:
     clc
     ret
 
-; Set single-select: clear mask, set only cursor item
 list_single_select:
     push ax
     push cx
@@ -1075,6 +1119,78 @@ draw_scrollbar:
     xor al, al
     mov ah, API_DRAW_SCROLLBAR
     int 0x80
+    ret
+
+draw_ml_label:
+    mov bx, ML_LBL_X
+    mov cx, ML_LBL_Y
+    mov si, ml_label
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    ret
+
+draw_multiline:
+    ; Draw border rect
+    mov bx, ML_X
+    mov cx, ML_Y
+    mov dx, ML_W
+    mov si, ML_H
+    mov ah, API_GFX_DRAW_RECT
+    int 0x80
+    ; Clear interior
+    mov bx, ML_X + 1
+    mov cx, ML_Y + 1
+    mov dx, ML_W - 2
+    mov si, ML_H - 2
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    ; Draw each line of text
+    xor cx, cx
+.dml_loop:
+    cmp cx, 4
+    jge .dml_cursor
+    push cx
+    ; SI = ml_ptrs[cx]
+    mov si, cx
+    shl si, 1
+    add si, ml_ptrs
+    mov si, [cs:si]
+    ; Y = ML_Y + 1 + cx * 6
+    mov ax, cx
+    shl ax, 1
+    add ax, cx
+    shl ax, 1
+    add ax, ML_Y + 1
+    mov cx, ax
+    mov bx, ML_X + 2
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    pop cx
+    inc cx
+    jmp .dml_loop
+.dml_cursor:
+    ; Draw cursor if focused
+    cmp byte [cs:focus], FOCUS_MULTI
+    jne .dml_done
+    ; X = ML_X + 2 + cur_col * 4
+    xor ax, ax
+    mov al, [cs:ml_cur_col]
+    shl ax, 2                      ; * 4 (font advance)
+    add ax, ML_X + 2
+    mov bx, ax
+    ; Y = ML_Y + 1 + cur_line * 6
+    xor ax, ax
+    mov al, [cs:ml_cur_line]
+    mov cx, ax
+    shl cx, 1
+    add cx, ax
+    shl cx, 1
+    add cx, ML_Y + 1
+    mov dx, 1
+    mov si, 6
+    mov ah, API_GFX_FILLED_RECT
+    int 0x80
+.dml_done:
     ret
 
 draw_prog_label:
@@ -1165,6 +1281,80 @@ handle_textfield_key:
     ret
 
 ; ============================================================================
+; Multiline text box key handling
+; ============================================================================
+handle_multiline_key:
+    cmp dl, 8
+    je .ml_bs
+    cmp dl, 13                      ; Enter = new line
+    je .ml_enter
+    cmp dl, 32
+    jb .ml_done
+    cmp dl, 126
+    ja .ml_done
+    ; Printable char: add to current line if not full
+    mov al, [cs:ml_cur_col]
+    cmp al, ML_MAX_COL
+    jge .ml_done
+    ; Get pointer to current line buffer
+    xor bx, bx
+    mov bl, [cs:ml_cur_line]
+    shl bx, 1
+    mov si, [cs:ml_ptrs + bx]
+    xor cx, cx
+    mov cl, [cs:ml_cur_col]
+    add si, cx
+    mov [cs:si], dl
+    mov byte [cs:si + 1], 0
+    inc byte [cs:ml_cur_col]
+    call draw_multiline
+.ml_done:
+    ret
+.ml_enter:
+    mov al, [cs:ml_cur_line]
+    cmp al, ML_MAX_LINE
+    jge .ml_done
+    inc byte [cs:ml_cur_line]
+    mov byte [cs:ml_cur_col], 0
+    call draw_multiline
+    ret
+.ml_bs:
+    cmp byte [cs:ml_cur_col], 0
+    jne .ml_bs_col
+    ; At start of line: go to previous line end
+    cmp byte [cs:ml_cur_line], 0
+    je .ml_done
+    dec byte [cs:ml_cur_line]
+    ; Find length of previous line
+    xor bx, bx
+    mov bl, [cs:ml_cur_line]
+    shl bx, 1
+    mov si, [cs:ml_ptrs + bx]
+    xor cx, cx
+.ml_bs_findlen:
+    cmp byte [cs:si], 0
+    je .ml_bs_setlen
+    inc si
+    inc cx
+    jmp .ml_bs_findlen
+.ml_bs_setlen:
+    mov [cs:ml_cur_col], cl
+    call draw_multiline
+    ret
+.ml_bs_col:
+    dec byte [cs:ml_cur_col]
+    xor bx, bx
+    mov bl, [cs:ml_cur_line]
+    shl bx, 1
+    mov si, [cs:ml_ptrs + bx]
+    xor cx, cx
+    mov cl, [cs:ml_cur_col]
+    add si, cx
+    mov byte [cs:si], 0
+    call draw_multiline
+    ret
+
+; ============================================================================
 ; List click handling (with scroll viewport + multiselect)
 ; ============================================================================
 check_list_click:
@@ -1176,7 +1366,6 @@ check_list_click:
     int 0x80
     test al, al
     jz .lc_done
-    ; Find which visible slot was clicked
     xor cx, cx
 .lc_loop:
     cmp cx, LIST_VISIBLE
@@ -1198,16 +1387,13 @@ check_list_click:
     inc cx
     jmp .lc_loop
 .lc_hit:
-    ; item = slot + scroll_off
     mov al, [cs:scroll_off]
     add al, cl
     cmp al, LIST_COUNT
     jge .lc_done
     mov [cs:list_cursor], al
-    ; In multiselect: toggle selection
     cmp byte [cs:multisel], 0
     je .lc_single
-    ; Toggle bit in mask
     push ax
     xor bx, bx
     mov bl, al
@@ -1229,6 +1415,7 @@ check_list_click:
     call draw_scrollbar
     call draw_textfield_widget
     call draw_combobox
+    call draw_multiline
 .lc_done:
     ret
 
@@ -1365,11 +1552,10 @@ draw_menu_dropdown:
     ret
 
 close_menu_popup:
-    ; Clear dropdown area before resetting state
     mov al, [cs:menu_open]
     cmp al, 0xFF
     je .cmp_skip
-    call get_menu_geometry      ; BX=x, CX=MENU_H, DX=width, SI=height
+    call get_menu_geometry
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 .cmp_skip:
@@ -1429,15 +1615,16 @@ draw_combo_dropdown:
 
 close_combo_popup:
     mov byte [cs:combo_open], 0
-    ; Clear the entire dropdown area
     mov bx, CB_X
     mov cx, CB_Y + 10
     mov dx, CB_W
     mov si, CB_ITEMS * 6 + 2
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
-    ; Repaint combo header
     call draw_combobox
+    ; Repaint multiline area if overlapped by dropdown
+    call draw_ml_label
+    call draw_multiline
     ret
 
 ; ============================================================================
@@ -1446,19 +1633,19 @@ close_combo_popup:
 delay_short:
     mov ah, API_GET_TICK
     int 0x80
-    add ax, 4                   ; 4 ticks ≈ 220ms at 18.2 Hz
-    push ax                     ; Save target tick on stack
+    add ax, 4
+    push ax
 .ds_wait:
     sti
     mov ah, API_APP_YIELD
     int 0x80
     mov ah, API_GET_TICK
     int 0x80
-    pop cx                      ; CX = target tick
-    push cx                     ; Keep on stack for next iteration
+    pop cx
+    push cx
     cmp ax, cx
     jb .ds_wait
-    pop cx                      ; Clean stack
+    pop cx
     ret
 
 ; ============================================================================
@@ -1506,6 +1693,7 @@ chk_label:      db 'Enable', 0
 msel_label:     db 'Multi-sel', 0
 tf_label:       db 'Name:', 0
 cb_label:       db 'Style:', 0
+ml_label:       db 'Notes:', 0
 prog_label:     db 'Progress:', 0
 btn_ok_label:   db 'OK', 0
 btn_cancel_label: db 'Cancel', 0
@@ -1556,16 +1744,28 @@ list_ptrs:
     dw list_str_10
     dw list_str_11
 
+; Multiline text buffers (4 lines x 32 bytes each)
+ml_line0:       times 32 db 0
+ml_line1:       times 32 db 0
+ml_line2:       times 32 db 0
+ml_line3:       times 32 db 0
+
+ml_ptrs:
+    dw ml_line0
+    dw ml_line1
+    dw ml_line2
+    dw ml_line3
+
 ; State variables
 win_handle:     db 0
 prev_btn:       db 0
-focus:          db 0                ; 0=textfield, 1=list, 2=combo
+focus:          db 0                ; 0=TF, 1=list, 2=combo, 3=multi
 radio_sel:      db 0
 chk_state:      db 0
-multisel:       db 0                ; 0=single select, 1=multiselect
-list_cursor:    db 0                ; Cursor position (0-11)
-list_mask:      dw 0x0001           ; Selected items bitmask
-scroll_off:     db 0                ; List scroll viewport offset
+multisel:       db 0
+list_cursor:    db 0
+list_mask:      dw 0x0001
+scroll_off:     db 0
 tf_cursor:      dw 0
 tf_len:         db 0
 tf_buffer:      times 22 db 0
@@ -1573,6 +1773,8 @@ combo_sel:      db 0
 combo_open:     db 0
 menu_open:      db 0xFF
 menu_sel:       db 0
+ml_cur_line:    db 0
+ml_cur_col:     db 0
 prog_value:     dw 45
 prog_dir:       db 0
 anim_counter:   dw 0
