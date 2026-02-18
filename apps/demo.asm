@@ -56,6 +56,7 @@ API_DRAW_LISTITEM       equ 59
 API_DRAW_PROGRESS       equ 60
 API_DRAW_GROUPBOX       equ 61
 API_DRAW_SEPARATOR      equ 62
+API_GET_TICK            equ 63
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -580,9 +581,14 @@ check_list_click:
 ; Progress bar animation
 ; ============================================================================
 animate_progress:
-    ; Simple counter-based animation
+    ; Gate on BIOS tick counter via API for consistent timing
+    mov ah, API_GET_TICK
+    int 0x80                        ; AX = tick count (18.2 Hz)
+    cmp ax, [cs:last_tick]
+    je .anim_done                   ; Same tick = no time passed
+    mov [cs:last_tick], ax
     inc word [cs:anim_counter]
-    cmp word [cs:anim_counter], 18  ; ~1 second at 18.2 Hz PIT rate
+    cmp word [cs:anim_counter], 18  ; ~1 second (18 ticks)
     jb .anim_done
     mov word [cs:anim_counter], 0
     ; Advance progress value
@@ -647,3 +653,4 @@ tf_buffer:      times 22 db 0       ; Text field buffer (20 chars + null + spare
 prog_value:     dw 45               ; Progress bar value (0-100)
 prog_dir:       db 0                ; 0=increasing, 1=decreasing
 anim_counter:   dw 0                ; Animation tick counter
+last_tick:      dw 0                ; Last BIOS tick for timing

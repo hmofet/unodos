@@ -93,7 +93,7 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Load current theme colors from kernel
+    ; Load current theme from kernel
     mov ah, API_GET_THEME
     int 0x80
     mov [cs:cur_text_clr], al
@@ -655,6 +655,7 @@ apply_settings:
     push ax
     push bx
     push cx
+    push dx
     mov al, [cs:cur_font]
     mov ah, API_SET_FONT
     int 0x80
@@ -663,6 +664,7 @@ apply_settings:
     mov cl, [cs:cur_win_clr]
     mov ah, API_SET_THEME
     int 0x80
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -755,7 +757,6 @@ lbl_desktop:        db 'Desk:', 0
 lbl_window:         db 'Win:', 0
 lbl_wrap:           db 'Word Wrap:', 0
 lbl_wrap_text:      db 'This text wraps at the edge.', 0
-
 ; ============================================================================
 ; Variables
 ; ============================================================================
@@ -772,4 +773,4 @@ swatch_sx:      dw 0                ; Start X for draw_one_swatch
 swatch_row:     dw 0                ; Current row in draw_one_swatch
 swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
-cfg_buf:        times 5 db 0        ; Settings buffer (magic + 4 bytes)
+cfg_buf:        times 5 db 0        ; Settings buffer (magic + 4 settings bytes)
