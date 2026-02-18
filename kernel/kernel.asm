@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 81                      ; Max function count (0-80 valid)
+    cmp ah, 83                      ; Max function count (0-82 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -3104,6 +3104,8 @@ kernel_api_table:
 
     ; Scroll API (Build 247)
     dw gfx_scroll_area              ; 80: Scroll rectangular area
+    dw set_rtc_time                 ; 81: Set real-time clock
+    dw get_screen_info              ; 82: Get screen dimensions/mode
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -11753,6 +11755,27 @@ get_rtc_time:
     mov ah, 0x02
     int 0x1A
     pop ax
+    clc
+    ret
+
+; set_rtc_time - Set real-time clock (API 81)
+; Input: CH=hours(BCD), CL=minutes(BCD), DH=seconds(BCD)
+; Output: CF=0
+set_rtc_time:
+    push ax
+    mov ah, 0x03
+    int 0x1A
+    pop ax
+    clc
+    ret
+
+; get_screen_info - Get screen dimensions and mode (API 82)
+; Output: BX=width, CX=height, AL=mode, AH=colors, CF=0
+get_screen_info:
+    mov bx, 320
+    mov cx, 200
+    mov al, 4
+    mov ah, 4
     clc
     ret
 
