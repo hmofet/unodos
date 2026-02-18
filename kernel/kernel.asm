@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 64                      ; Max function count (0-63 valid)
+    cmp ah, 65                      ; Max function count (0-64 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -3065,6 +3065,7 @@ kernel_api_table:
     dw widget_draw_groupbox         ; 61: Draw group box
     dw widget_draw_separator        ; 62: Draw separator line
     dw get_tick_count               ; 63: Get BIOS tick counter
+    dw point_over_window            ; 64: Check if point is over a window
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -4478,6 +4479,61 @@ get_tick_count:
     pop bx
     pop es
     clc
+    ret
+
+; point_over_window - Check if a screen point is over any visible window (API 64)
+; Input: BX = X position, CX = Y position
+; Output: CF=0 if over a visible window (AL=window handle), CF=1 if not
+; Preserves: BX, CX
+point_over_window:
+    push si
+    push di
+    push dx
+
+    xor si, si                      ; SI = window index
+    mov di, window_table
+
+.pow_scan:
+    cmp si, WIN_MAX_COUNT
+    jae .pow_not_over
+
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .pow_next
+
+    ; Check X: win_x <= BX < win_x + width
+    mov ax, [di + WIN_OFF_X]
+    cmp bx, ax
+    jb .pow_next
+    add ax, [di + WIN_OFF_WIDTH]
+    cmp bx, ax
+    jae .pow_next
+
+    ; Check Y: win_y <= CX < win_y + height
+    mov ax, [di + WIN_OFF_Y]
+    cmp cx, ax
+    jb .pow_next
+    add ax, [di + WIN_OFF_HEIGHT]
+    cmp cx, ax
+    jae .pow_next
+
+    ; Point is inside this window
+    mov ax, si                      ; AL = window handle
+    pop dx
+    pop di
+    pop si
+    clc
+    ret
+
+.pow_next:
+    add di, WIN_ENTRY_SIZE
+    inc si
+    jmp .pow_scan
+
+.pow_not_over:
+    pop dx
+    pop di
+    pop si
+    stc
     ret
 
 ; gfx_draw_rect_stub - Draw rectangle outline
