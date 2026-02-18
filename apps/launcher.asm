@@ -30,6 +30,7 @@ API_FS_READ_HEADER      equ 40
 API_GFX_TEXT_WIDTH      equ 33
 API_WIN_DRAW            equ 22
 API_GET_BOOT_DRIVE      equ 43
+API_POINT_OVER_WINDOW   equ 64
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -109,7 +110,11 @@ entry:
     cmp ah, 0
     jne .no_click                   ; Not a transition
 
-    ; Left button just pressed - handle click
+    ; Left button just pressed - check if click is over a window
+    mov ah, API_POINT_OVER_WINDOW
+    int 0x80                        ; BX=X, CX=Y preserved
+    jnc .no_click                   ; CF=0 → over a window, skip desktop click
+
     call handle_click               ; BX=mouse X, CX=mouse Y
 
 .no_click:
