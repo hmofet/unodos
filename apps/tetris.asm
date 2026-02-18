@@ -71,40 +71,43 @@ entry:
     je .exit_game
 
     sti
-
-    ; --- Poll keyboard directly (bypasses per-task event queue) ---
-    mov ah, API_KBD_GETCHAR
+    mov ah, API_APP_YIELD
     int 0x80
-    test al, al
-    jz .no_key_event
 
-    ; AL = keycode (arrows: 128-131)
+    ; --- Check events via per-task event queue ---
+    mov ah, API_EVENT_GET
+    int 0x80
+    jc .no_key_event
+    cmp al, EVENT_KEY_PRESS
+    jne .no_key_event
+
+    ; DL = keycode (arrows: 128-131)
     cmp byte [cs:game_state], STATE_PLAYING
     jne .check_pause_key
 
     ; Game keys (only when playing)
-    cmp al, 130                     ; Left arrow
+    cmp dl, 130                     ; Left arrow
     je .move_left
-    cmp al, 131                     ; Right arrow
+    cmp dl, 131                     ; Right arrow
     je .move_right
-    cmp al, 128                     ; Up arrow = rotate
+    cmp dl, 128                     ; Up arrow = rotate
     je .rotate
-    cmp al, 129                     ; Down arrow = soft drop
+    cmp dl, 129                     ; Down arrow = soft drop
     je .soft_drop
-    cmp al, ' '                     ; Space = hard drop
+    cmp dl, ' '                     ; Space = hard drop
     je .hard_drop
-    cmp al, 'p'
+    cmp dl, 'p'
     je .pause_game
-    cmp al, 'P'
+    cmp dl, 'P'
     je .pause_game
     jmp .no_key_event
 
 .check_pause_key:
     cmp byte [cs:game_state], STATE_PAUSED
     jne .no_key_event
-    cmp al, 'p'
+    cmp dl, 'p'
     je .unpause_game
-    cmp al, 'P'
+    cmp dl, 'P'
     je .unpause_game
     jmp .no_key_event
 
@@ -192,8 +195,9 @@ API_GFX_DRAW_CHAR        equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_GFX_DRAW_STRING_INV equ 6
-API_KBD_GETCHAR          equ 11
+API_EVENT_GET            equ 9
 API_MOUSE_GET_STATE      equ 28
+API_APP_YIELD            equ 34
 API_GFX_SET_FONT         equ 48
 API_DRAW_BUTTON          equ 51
 API_HIT_TEST             equ 53
@@ -202,6 +206,9 @@ API_THEME_GET_COLORS     equ 55
 API_SPEAKER_TONE         equ 41
 API_SPEAKER_OFF          equ 42
 API_DRAW_CHECKBOX        equ 56
+API_GET_TICK             equ 63
+
+EVENT_KEY_PRESS          equ 1
 
 STATE_MENU               equ 0
 STATE_PLAYING            equ 1
@@ -2062,15 +2069,10 @@ word_to_decimal:
     ret
 
 ; ============================================================================
-; read_tick - Read BIOS tick counter
+; read_tick - Read tick counter via kernel API
 ; Output: AX = tick count (low word)
 ; ============================================================================
 read_tick:
-    push ds
-    push bx
-    mov ax, 0x0040
-    mov ds, ax
-    mov ax, [0x006C]
-    pop bx
-    pop ds
+    mov ah, API_GET_TICK
+    int 0x80
     ret

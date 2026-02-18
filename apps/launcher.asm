@@ -31,6 +31,7 @@ API_GFX_TEXT_WIDTH      equ 33
 API_WIN_DRAW            equ 22
 API_GET_BOOT_DRIVE      equ 43
 API_POINT_OVER_WINDOW   equ 64
+API_GET_TICK            equ 63
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -1272,21 +1273,19 @@ launch_app:
     ret
 
 .la_delay:
-    ; Wait ~1 second using BIOS tick counter
-    push ds
+    ; Wait ~1 second using kernel tick API
     push ax
     push bx
-    mov ax, 0x0040
-    mov ds, ax
-    mov bx, [0x006C]               ; Start tick
+    call read_bios_ticks
+    mov bx, ax                      ; BX = start tick
 .la_dwait:
-    mov ax, [0x006C]
+    sti
+    call read_bios_ticks
     sub ax, bx
     cmp ax, 18                      ; ~1 second at 18.2 Hz
     jb .la_dwait
     pop bx
     pop ax
-    pop ds
     ret
 
 
@@ -1344,17 +1343,12 @@ check_floppy_swap:
     ret
 
 ; ============================================================================
-; read_bios_ticks - Read BIOS tick counter
+; read_bios_ticks - Read tick counter via kernel API
 ; Output: AX = tick count (low word)
 ; ============================================================================
 read_bios_ticks:
-    push es
-    push bx
-    mov ax, 0x0040
-    mov es, ax
-    mov ax, [es:0x006C]
-    pop bx
-    pop es
+    mov ah, API_GET_TICK
+    int 0x80
     ret
 
 ; ============================================================================
