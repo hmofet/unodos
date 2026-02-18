@@ -142,13 +142,13 @@ BTN_Y       equ 134
 BTN_H       equ 14
 
 ; Menu dropdown geometry
-MFILE_X     equ 4
+MFILE_X     equ 5
 MFILE_W     equ 36
 MFILE_CNT   equ 4
-MEDIT_X     equ 26
+MEDIT_X     equ 27
 MEDIT_W     equ 36
 MEDIT_CNT   equ 3
-MHELP_X     equ 48
+MHELP_X     equ 49
 MHELP_W     equ 36
 MHELP_CNT   equ 1
 
@@ -582,16 +582,18 @@ entry:
 
 ; --- Menu bar click ---
 .click_menubar:
+    ; Hit zones match kernel MENUBAR_PAD=6, 4x6 font
+    ; File at X=6 (w=16), Edit at X=28 (w=16), Help at X=50 (w=16)
     mov bx, 0
     mov cx, MENU_Y
-    mov dx, 24
+    mov dx, 26
     mov si, MENU_H
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .open_file_menu
 
-    mov bx, 22
+    mov bx, 26
     mov cx, MENU_Y
     mov dx, 24
     mov si, MENU_H
@@ -600,7 +602,7 @@ entry:
     test al, al
     jnz .open_edit_menu
 
-    mov bx, 44
+    mov bx, 50
     mov cx, MENU_Y
     mov dx, 24
     mov si, MENU_H
