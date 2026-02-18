@@ -207,6 +207,10 @@ API_SPEAKER_TONE         equ 41
 API_SPEAKER_OFF          equ 42
 API_DRAW_CHECKBOX        equ 56
 API_GET_TICK             equ 63
+API_FILLED_RECT_COLOR    equ 67
+API_DRAW_HLINE           equ 69
+API_DRAW_VLINE           equ 70
+API_DELAY_TICKS          equ 73
 
 EVENT_KEY_PRESS          equ 1
 
@@ -657,59 +661,33 @@ draw_cell:
     mov [cs:cell_sy], ax
 
     ; Draw 3D block: 1px white highlight on top and left, fill rest with color
-    ; Top edge (8 pixels wide, white)
-    mov byte [cs:cell_py], 0
-    mov byte [cs:cell_px], 0
-.top_edge:
+    ; Top edge: horizontal line (CELL_SIZE pixels wide, white)
     mov bx, [cs:cell_sx]
-    xor ah, ah
-    mov al, [cs:cell_px]
-    add bx, ax
     mov cx, [cs:cell_sy]
+    mov dx, CELL_SIZE
     mov al, 3                       ; White highlight
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_DRAW_HLINE
     int 0x80
-    inc byte [cs:cell_px]
-    cmp byte [cs:cell_px], CELL_SIZE
-    jb .top_edge
 
-    ; Left edge (7 pixels tall, white) - skip row 0 (already drawn)
-    mov byte [cs:cell_py], 1
-.left_edge:
+    ; Left edge: vertical line (CELL_SIZE-1 pixels tall, white, skip row 0)
     mov bx, [cs:cell_sx]
     mov cx, [cs:cell_sy]
-    xor ah, ah
-    mov al, [cs:cell_py]
-    add cx, ax
+    inc cx
+    mov dx, CELL_SIZE - 1
     mov al, 3                       ; White highlight
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_DRAW_VLINE
     int 0x80
-    inc byte [cs:cell_py]
-    cmp byte [cs:cell_py], CELL_SIZE
-    jb .left_edge
 
-    ; Fill inner area (7x7 from (1,1) to (7,7)) with piece color
-    mov byte [cs:cell_py], 1
-.fill_row:
-    mov byte [cs:cell_px], 1
-.fill_col:
+    ; Fill inner area ((CELL_SIZE-1)x(CELL_SIZE-1) from (1,1)) with piece color
     mov bx, [cs:cell_sx]
-    xor ah, ah
-    mov al, [cs:cell_px]
-    add bx, ax
+    inc bx
     mov cx, [cs:cell_sy]
-    xor ah, ah
-    mov al, [cs:cell_py]
-    add cx, ax
+    inc cx
+    mov dx, CELL_SIZE - 1
+    mov si, CELL_SIZE - 1
     mov al, [cs:cell_color]
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_FILLED_RECT_COLOR
     int 0x80
-    inc byte [cs:cell_px]
-    cmp byte [cs:cell_px], CELL_SIZE
-    jb .fill_col
-    inc byte [cs:cell_py]
-    cmp byte [cs:cell_py], CELL_SIZE
-    jb .fill_row
 
     popa
     ret
@@ -1315,14 +1293,9 @@ animate_line_clear:
     jnz .alc_white
 
     ; Wait ~2 ticks
-    call read_tick
-    mov [cs:cell_sy], ax
-.alc_w1:
-    sti
-    call read_tick
-    sub ax, [cs:cell_sy]
-    cmp ax, 2
-    jb .alc_w1
+    mov cx, 2
+    mov ah, API_DELAY_TICKS
+    int 0x80
 
     ; Draw all cleared rows as black
     xor cx, cx
@@ -1350,14 +1323,9 @@ animate_line_clear:
     jnz .alc_black
 
     ; Wait ~2 ticks
-    call read_tick
-    mov [cs:cell_sy], ax
-.alc_w2:
-    sti
-    call read_tick
-    sub ax, [cs:cell_sy]
-    cmp ax, 2
-    jb .alc_w2
+    mov cx, 2
+    mov ah, API_DELAY_TICKS
+    int 0x80
 
     dec byte [cs:flash_count]
     jnz .alc_flash
@@ -1580,58 +1548,33 @@ draw_preview_cell:
     pusha
     mov [cs:cell_color], al
 
-    ; Top edge white
-    mov byte [cs:cell_px], 0
-.dpc_top:
+    ; Top edge: horizontal line (CELL_SIZE pixels wide, white)
     mov bx, [cs:cell_sx]
-    xor ah, ah
-    mov al, [cs:cell_px]
-    add bx, ax
     mov cx, [cs:cell_sy]
-    mov al, 3
-    mov ah, API_GFX_DRAW_PIXEL
+    mov dx, CELL_SIZE
+    mov al, 3                       ; White highlight
+    mov ah, API_DRAW_HLINE
     int 0x80
-    inc byte [cs:cell_px]
-    cmp byte [cs:cell_px], CELL_SIZE
-    jb .dpc_top
 
-    ; Left edge white
-    mov byte [cs:cell_py], 1
-.dpc_left:
+    ; Left edge: vertical line (CELL_SIZE-1 pixels tall, white)
     mov bx, [cs:cell_sx]
     mov cx, [cs:cell_sy]
-    xor ah, ah
-    mov al, [cs:cell_py]
-    add cx, ax
+    inc cx
+    mov dx, CELL_SIZE - 1
     mov al, 3
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_DRAW_VLINE
     int 0x80
-    inc byte [cs:cell_py]
-    cmp byte [cs:cell_py], CELL_SIZE
-    jb .dpc_left
 
-    ; Fill inner
-    mov byte [cs:cell_py], 1
-.dpc_row:
-    mov byte [cs:cell_px], 1
-.dpc_col:
+    ; Fill inner area with piece color
     mov bx, [cs:cell_sx]
-    xor ah, ah
-    mov al, [cs:cell_px]
-    add bx, ax
+    inc bx
     mov cx, [cs:cell_sy]
-    xor ah, ah
-    mov al, [cs:cell_py]
-    add cx, ax
+    inc cx
+    mov dx, CELL_SIZE - 1
+    mov si, CELL_SIZE - 1
     mov al, [cs:cell_color]
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_FILLED_RECT_COLOR
     int 0x80
-    inc byte [cs:cell_px]
-    cmp byte [cs:cell_px], CELL_SIZE
-    jb .dpc_col
-    inc byte [cs:cell_py]
-    cmp byte [cs:cell_py], CELL_SIZE
-    jb .dpc_row
 
     popa
     ret
