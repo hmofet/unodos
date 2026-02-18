@@ -3741,6 +3741,7 @@ widget_draw_separator:
 ; widget_draw_listitem - Draw a list item row (API 59)
 ; Input: BX=X, CX=Y, DX=width, SI=text_ptr (caller_ds), AL=flags
 ;        bit 0: selected (inverted colors)
+;        bit 1: cursor (draw left-edge marker)
 ; Height: font_height (auto)
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
@@ -3799,7 +3800,7 @@ widget_draw_listitem:
     pop word [clip_y1]
     pop word [clip_x2]
     pop word [clip_x1]
-    jmp .li_done
+    jmp .li_cursor
 .li_normal:
     ; Normal: clear area, then draw normal text
     mov si, [btn_h]
@@ -3809,6 +3810,22 @@ widget_draw_listitem:
     add bx, 2                      ; 2px left padding
     mov cx, [btn_y]
     call gfx_draw_string_stub
+.li_cursor:
+    ; Draw cursor marker if bit 1 set
+    test byte [btn_flags], 2
+    jz .li_done
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, 1                       ; 1px wide
+    xor ax, ax
+    mov al, [draw_font_height]
+    mov si, ax                      ; Height = font_height
+    test byte [btn_flags], 1
+    jnz .li_cursor_inv
+    call gfx_draw_filled_rect_stub  ; White bar on black background
+    jmp .li_done
+.li_cursor_inv:
+    call gfx_clear_area_stub        ; Black bar on white selected background
 .li_done:
     pop si
     pop di
