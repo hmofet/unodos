@@ -47,6 +47,9 @@ API_WIN_END_DRAW        equ 32
 ; Multitasking
 API_APP_YIELD           equ 34
 
+; RTC
+API_GET_RTC_TIME        equ 72
+
 ; Event types
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -88,10 +91,10 @@ entry:
     mov ah, API_APP_YIELD           ; Yield to other tasks
     int 0x80
 
-    ; Read RTC time using BIOS INT 1Ah, AH=02h
+    ; Read RTC time using kernel API 72
     ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
-    mov ah, 02h
-    int 1Ah
+    mov ah, API_GET_RTC_TIME
+    int 0x80
 
     ; Only redraw if seconds changed
     cmp dh, [cs:last_secs]

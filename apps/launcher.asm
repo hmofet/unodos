@@ -32,6 +32,7 @@ API_WIN_DRAW            equ 22
 API_GET_BOOT_DRIVE      equ 43
 API_POINT_OVER_WINDOW   equ 64
 API_GET_TICK            equ 63
+API_DELAY_TICKS         equ 73
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -1273,19 +1274,12 @@ launch_app:
     ret
 
 .la_delay:
-    ; Wait ~1 second using kernel tick API
-    push ax
-    push bx
-    call read_bios_ticks
-    mov bx, ax                      ; BX = start tick
-.la_dwait:
-    sti
-    call read_bios_ticks
-    sub ax, bx
-    cmp ax, 18                      ; ~1 second at 18.2 Hz
-    jb .la_dwait
-    pop bx
-    pop ax
+    ; Wait ~1 second using kernel delay API
+    push cx
+    mov cx, 18                      ; ~1 second at 18.2 Hz
+    mov ah, API_DELAY_TICKS
+    int 0x80
+    pop cx
     ret
 
 

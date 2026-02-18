@@ -60,6 +60,7 @@ API_FS_WRITE            equ 46
 API_FS_DELETE           equ 47
 API_SET_THEME           equ 54
 API_GET_THEME           equ 55
+API_FILLED_RECT_COLOR   equ 67
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -621,27 +622,15 @@ draw_one_swatch:
     push bx
     push cx
     push dx
-    mov cx, SW_SIZE                 ; row count
-    mov dx, [cs:row_y]
-    mov [cs:swatch_row], dx
-.ds_row:
-    push cx
-    mov cx, SW_SIZE                 ; col count
-    mov word [cs:swatch_col], 0
-.ds_col:
-    push cx
+    push si
     mov bx, [cs:swatch_sx]
-    add bx, [cs:swatch_col]
-    mov cx, [cs:swatch_row]
+    mov cx, [cs:row_y]
+    mov dx, SW_SIZE
+    mov si, SW_SIZE
     mov al, [cs:swatch_clr]
-    mov ah, API_GFX_DRAW_PIXEL
+    mov ah, API_FILLED_RECT_COLOR
     int 0x80
-    inc word [cs:swatch_col]
-    pop cx
-    loop .ds_col
-    inc word [cs:swatch_row]
-    pop cx
-    loop .ds_row
+    pop si
     pop dx
     pop cx
     pop bx
