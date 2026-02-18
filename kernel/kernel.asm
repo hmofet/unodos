@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 67                      ; Max function count (0-66 valid)
+    cmp ah, 81                      ; Max function count (0-80 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -172,7 +172,13 @@ int_80_handler:
     jb .no_translate                ; APIs 63-64: not drawing, skip
     cmp ah, 67
     jb .do_translate                ; APIs 65-66: combobox, menubar
-    jmp .no_translate               ; API 67+: skip translation
+    cmp ah, 72
+    jb .do_translate                ; APIs 67-71: colored drawing + line
+    cmp ah, 80
+    jb .no_translate                ; APIs 72-79: non-drawing
+    cmp ah, 81
+    jb .do_translate                ; API 80: gfx_scroll_area
+    jmp .no_translate               ; API 81+: skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
 
     ; Translate: BX += content_x, CX += content_y
@@ -3072,6 +3078,32 @@ kernel_api_table:
     dw point_over_window            ; 64: Check if point is over a window
     dw widget_draw_combobox         ; 65: Draw combo box
     dw widget_draw_menubar          ; 66: Draw menu bar
+
+    ; Colored Drawing APIs (Build 247)
+    dw gfx_draw_filled_rect_color   ; 67: Draw filled rect with color
+    dw gfx_draw_rect_color          ; 68: Draw rect outline with color
+    dw gfx_draw_hline               ; 69: Draw horizontal line
+    dw gfx_draw_vline               ; 70: Draw vertical line
+    dw gfx_draw_line                ; 71: Draw line (Bresenham's)
+
+    ; System APIs (Build 247)
+    dw get_rtc_time                 ; 72: Read real-time clock
+    dw delay_ticks                  ; 73: Delay with yield
+    dw get_task_info                ; 74: Get task info
+
+    ; Filesystem APIs (Build 247)
+    dw fs_seek_stub                 ; 75: Seek file position
+    dw fs_get_file_size_stub        ; 76: Get file size
+
+    ; File Rename API (Build 247)
+    dw fs_rename_stub               ; 77: Rename file
+
+    ; Window APIs (Build 247)
+    dw win_resize_stub              ; 78: Resize window
+    dw win_get_info_stub            ; 79: Get window info
+
+    ; Scroll API (Build 247)
+    dw gfx_scroll_area              ; 80: Scroll rectangular area
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -11358,6 +11390,1060 @@ win_get_content_stub:
     pop ds
     pop di
     ret
+
+; ============================================================================
+; New APIs (Build 247) — Colored Drawing, System, Filesystem, Window
+; ============================================================================
+
+; gfx_draw_filled_rect_color - Draw filled rectangle with color (API 67)
+; Input: BX=X, CX=Y, DX=W, SI=H, AL=color(0-3)
+; Output: CF=0
+; Wraps existing internal gfx_fill_color which has cursor protection
+gfx_draw_filled_rect_color:
+    call gfx_fill_color
+    clc
+    ret
+
+; gfx_draw_rect_color - Draw colored outline rectangle (API 68)
+; Input: BX=X, CX=Y, DX=W, SI=H, AL=color(0-3)
+; Output: CF=0
+gfx_draw_rect_color:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bp
+    push di
+    mov [cs:.drc_color], al
+    mov ax, 0xB800
+    mov es, ax
+    ; API: BX=X, CX=Y. plot_pixel_color needs CX=X, BX=Y, DL=color
+    mov bp, bx                      ; BP = X
+    mov ax, cx                      ; AX = Y
+
+    ; Top edge: Y=AX, X varies from BP to BP+DX-1
+    mov di, 0
+.drc_top:
+    cmp di, dx
+    jge .drc_top_done
+    mov cx, bp
+    add cx, di
+    mov bx, ax
+    mov dl, [cs:.drc_color]
+    call plot_pixel_color
+    inc di
+    jmp .drc_top
+.drc_top_done:
+
+    ; Bottom edge: Y=AX+SI-1, X varies from BP to BP+DX-1
+    mov di, 0
+    push ax
+    add ax, si
+    dec ax
+.drc_bottom:
+    cmp di, dx
+    jge .drc_bottom_done
+    mov cx, bp
+    add cx, di
+    mov bx, ax
+    mov dl, [cs:.drc_color]
+    call plot_pixel_color
+    inc di
+    jmp .drc_bottom
+.drc_bottom_done:
+    pop ax
+
+    ; Left edge: X=BP, Y varies from AX to AX+SI-1
+    mov di, 0
+.drc_left:
+    cmp di, si
+    jge .drc_left_done
+    mov cx, bp
+    mov bx, ax
+    add bx, di
+    mov dl, [cs:.drc_color]
+    call plot_pixel_color
+    inc di
+    jmp .drc_left
+.drc_left_done:
+
+    ; Right edge: X=BP+DX-1, Y varies from AX to AX+SI-1
+    mov di, 0
+    push bp
+    add bp, dx
+    dec bp
+.drc_right:
+    cmp di, si
+    jge .drc_right_done
+    mov cx, bp
+    mov bx, ax
+    add bx, di
+    mov dl, [cs:.drc_color]
+    call plot_pixel_color
+    inc di
+    jmp .drc_right
+.drc_right_done:
+    pop bp
+
+    pop di
+    pop bp
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+.drc_color: db 0
+
+; gfx_draw_hline - Draw horizontal line (API 69)
+; Input: BX=X, CX=Y, DX=length, AL=color(0-3)
+; Output: CF=0
+gfx_draw_hline:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [cs:.hl_color], al
+    mov ax, 0xB800
+    mov es, ax
+    ; plot_pixel_color: CX=X, BX=Y, DL=color
+    xchg bx, cx                    ; BX=Y, CX=X
+    mov di, dx                     ; DI=length counter
+.hl_loop:
+    test di, di
+    jz .hl_done
+    mov dl, [cs:.hl_color]
+    call plot_pixel_color
+    inc cx                          ; Next X
+    dec di
+    jnz .hl_loop
+.hl_done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+.hl_color: db 0
+
+; gfx_draw_vline - Draw vertical line (API 70)
+; Input: BX=X, CX=Y, DX=height, AL=color(0-3)
+; Output: CF=0
+gfx_draw_vline:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [cs:.vl_color], al
+    mov ax, 0xB800
+    mov es, ax
+    ; plot_pixel_color: CX=X, BX=Y, DL=color
+    xchg bx, cx                    ; BX=Y, CX=X
+    mov di, dx                     ; DI=height counter
+.vl_loop:
+    test di, di
+    jz .vl_done
+    mov dl, [cs:.vl_color]
+    call plot_pixel_color
+    inc bx                          ; Next Y
+    dec di
+    jnz .vl_loop
+.vl_done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+.vl_color: db 0
+
+; gfx_draw_line - Bresenham's line algorithm (API 71)
+; Input: BX=X1, CX=Y1, DX=X2, SI=Y2, AL=color(0-3)
+; Output: CF=0
+gfx_draw_line:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov [cs:.bl_color], al
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Store endpoints: X1=BX, Y1=CX, X2=DX, Y2=SI
+    mov [cs:.bl_x], bx
+    mov [cs:.bl_y], cx
+    mov [cs:.bl_x2], dx
+    mov [cs:.bl_y2], si
+    ; DX = abs(X2 - X1), step_x = sign
+    sub dx, bx                     ; DX = X2 - X1
+    mov word [cs:.bl_sx], 1
+    test dx, dx
+    jge .bl_dx_pos
+    neg dx
+    mov word [cs:.bl_sx], -1
+.bl_dx_pos:
+    mov [cs:.bl_dx], dx
+
+    ; DY = -abs(Y2 - Y1), step_y = sign
+    sub si, cx                     ; SI = Y2 - Y1
+    mov word [cs:.bl_sy], 1
+    test si, si
+    jge .bl_dy_pos
+    neg si
+    mov word [cs:.bl_sy], -1
+.bl_dy_pos:
+    neg si                          ; SI = -abs(dy)
+    mov [cs:.bl_dy], si
+
+    ; err = dx + dy
+    mov ax, dx
+    add ax, si
+    mov [cs:.bl_err], ax
+
+.bl_pixel:
+    ; Plot current point
+    mov cx, [cs:.bl_x]
+    mov bx, [cs:.bl_y]
+    mov dl, [cs:.bl_color]
+    call plot_pixel_color
+
+    ; Check if we reached the endpoint
+    mov ax, [cs:.bl_x]
+    cmp ax, [cs:.bl_x2]
+    jne .bl_continue
+    mov ax, [cs:.bl_y]
+    cmp ax, [cs:.bl_y2]
+    je .bl_done
+
+.bl_continue:
+    mov ax, [cs:.bl_err]
+    mov bp, ax
+    shl bp, 1                      ; BP = 2*err
+
+    ; if 2*err >= dy: err += dy, x += sx
+    cmp bp, [cs:.bl_dy]
+    jl .bl_skip_x
+    mov ax, [cs:.bl_err]
+    add ax, [cs:.bl_dy]
+    mov [cs:.bl_err], ax
+    mov ax, [cs:.bl_x]
+    add ax, [cs:.bl_sx]
+    mov [cs:.bl_x], ax
+.bl_skip_x:
+
+    ; if 2*err <= dx: err += dx, y += sy
+    cmp bp, [cs:.bl_dx]
+    jg .bl_skip_y
+    mov ax, [cs:.bl_err]
+    add ax, [cs:.bl_dx]
+    mov [cs:.bl_err], ax
+    mov ax, [cs:.bl_y]
+    add ax, [cs:.bl_sy]
+    mov [cs:.bl_y], ax
+.bl_skip_y:
+    jmp .bl_pixel
+
+.bl_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+.bl_x:     dw 0
+.bl_y:     dw 0
+.bl_x2:    dw 0
+.bl_y2:    dw 0
+.bl_dx:    dw 0
+.bl_dy:    dw 0
+.bl_sx:    dw 0
+.bl_sy:    dw 0
+.bl_err:   dw 0
+.bl_color: db 0
+
+; get_rtc_time - Read real-time clock (API 72)
+; Input: none
+; Output: CH=hours(BCD), CL=minutes(BCD), DH=seconds(BCD), CF=0
+get_rtc_time:
+    push ax
+    mov ah, 0x02
+    int 0x1A
+    pop ax
+    clc
+    ret
+
+; delay_ticks - Sleep with yield (API 73)
+; Input: CX=ticks to wait (1 tick ~ 55ms at 18.2Hz)
+; Output: none, CF=0
+delay_ticks:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Read initial tick count
+    push es
+    mov bx, 0x0040
+    mov es, bx
+    mov dx, [es:0x006C]             ; DX = start tick
+    pop es
+
+.dt_loop:
+    ; Yield to other tasks
+    call app_yield_stub
+
+    ; Read current tick
+    push es
+    mov bx, 0x0040
+    mov es, bx
+    mov ax, [es:0x006C]             ; AX = current tick
+    pop es
+
+    ; Calculate elapsed = current - start (handles 16-bit wrap)
+    sub ax, dx                      ; AX = elapsed ticks
+    cmp ax, cx                      ; Elapsed >= requested?
+    jb .dt_loop
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; get_task_info - Current task and focus info (API 74)
+; Input: none
+; Output: AL=current_task_id, BL=focused_task_id, CL=running_task_count, CF=0
+get_task_info:
+    mov al, [current_task]
+    mov bl, [focused_task]
+
+    ; Count running tasks
+    push si
+    push di
+    xor cl, cl                      ; CL = count
+    xor si, si                      ; SI = index
+    mov di, app_table
+.gti_loop:
+    cmp si, APP_MAX_COUNT
+    jae .gti_done
+    cmp byte [di + APP_OFF_STATE], APP_STATE_FREE
+    je .gti_next
+    inc cl
+.gti_next:
+    add di, APP_ENTRY_SIZE
+    inc si
+    jmp .gti_loop
+.gti_done:
+    pop di
+    pop si
+    clc
+    ret
+
+; fs_seek_stub - Seek file position (API 75)
+; Input: AL=file_handle, CX=position_hi, DX=position_lo
+; Output: CF=0 success, CF=1 error
+fs_seek_stub:
+    push bx
+    push si
+
+    ; Validate handle
+    xor ah, ah
+    cmp ax, FILE_MAX_HANDLES
+    jae .fss_invalid
+
+    ; Calculate file table entry offset
+    mov si, ax
+    shl si, 5                       ; SI = handle * 32
+    add si, file_table
+
+    ; Check if handle is open
+    cmp byte [si], 1                ; Status: 1=open
+    jne .fss_invalid
+
+    ; Check if position is past EOF
+    ; Compare position (CX:DX) with file size (bytes 4-7)
+    cmp cx, [si + 6]                ; Compare hi word
+    ja .fss_past_eof
+    jb .fss_ok
+    cmp dx, [si + 4]                ; Compare lo word
+    ja .fss_past_eof
+
+.fss_ok:
+    ; Set position (bytes 8-11)
+    mov [si + 8], dx                ; Position lo
+    mov [si + 10], cx               ; Position hi
+    clc
+    pop si
+    pop bx
+    ret
+
+.fss_past_eof:
+.fss_invalid:
+    stc
+    pop si
+    pop bx
+    ret
+
+; fs_get_file_size_stub - Query file size (API 76)
+; Input: AL=file_handle
+; Output: DX=size_hi, AX=size_lo, CF=0 success; CF=1 error
+fs_get_file_size_stub:
+    push bx
+    push si
+
+    ; Validate handle
+    xor ah, ah
+    cmp ax, FILE_MAX_HANDLES
+    jae .fgs_invalid
+
+    ; Calculate file table entry offset
+    mov si, ax
+    shl si, 5
+    add si, file_table
+
+    ; Check if handle is open
+    cmp byte [si], 1
+    jne .fgs_invalid
+
+    ; Read size (bytes 4-7)
+    mov ax, [si + 4]                ; Size lo
+    mov dx, [si + 6]                ; Size hi
+    clc
+    pop si
+    pop bx
+    ret
+
+.fgs_invalid:
+    xor ax, ax
+    xor dx, dx
+    stc
+    pop si
+    pop bx
+    ret
+
+; fs_rename_stub - Rename file (API 77)
+; Input: DS:SI=old_name (caller_ds), ES:DI=new_name (caller_es), BL=mount_handle
+; Output: CF=0 success, CF=1 error
+fs_rename_stub:
+    cmp bl, 0
+    je .frn_fat12
+    ; FAT16 rename not implemented yet
+    stc
+    ret
+.frn_fat12:
+    push ds
+    mov ds, [cs:caller_ds]
+    call fat12_rename
+    pop ds
+    ret
+
+; fat12_rename - Rename a file in FAT12 root directory
+; Input: DS:SI = old filename (dot format), caller_es:DI has new name
+; Output: CF=0 success, CF=1 error
+fat12_rename:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert OLD filename to 8.3 FAT format on stack
+    sub sp, 12                      ; 11 bytes + 1 alignment
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    mov cx, 8
+.frn_copy_old_name:
+    lodsb
+    test al, al
+    jz .frn_old_done
+    cmp al, '.'
+    je .frn_copy_old_ext
+    cmp al, 'a'
+    jb .frn_store_old
+    cmp al, 'z'
+    ja .frn_store_old
+    sub al, 32
+.frn_store_old:
+    mov [es:di], al
+    inc di
+    loop .frn_copy_old_name
+.frn_skip_old_dot:
+    lodsb
+    test al, al
+    jz .frn_old_done
+    cmp al, '.'
+    jne .frn_skip_old_dot
+.frn_copy_old_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.frn_copy_old_ext_loop:
+    lodsb
+    test al, al
+    jz .frn_old_done
+    cmp al, 'a'
+    jb .frn_store_old_ext
+    cmp al, 'z'
+    ja .frn_store_old_ext
+    sub al, 32
+.frn_store_old_ext:
+    mov [es:di], al
+    inc di
+    loop .frn_copy_old_ext_loop
+
+.frn_old_done:
+    ; Now convert NEW filename to 8.3 on stack (another 12 bytes)
+    sub sp, 12
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Read new name from caller_es:DI_saved
+    ; DI was pushed on main stack — we saved original DI
+    ; Get it from stack: original DI is at known offset
+    push ds
+    mov ds, [cs:caller_es]
+    ; Original DI is saved in the push frame. We need to recover it.
+    ; Stack layout: [12 new name][12 old name][BP][DI][SI][DX][CX][BX][ES]
+    ; Original DI is at SP + 12 + 12 + 2 + 0 = SP + 26... but that's the pushed DI
+    mov si, sp
+    add si, 12 + 12 + 2             ; Skip new_name(12) + old_name(12) + BP(2)
+    mov si, [ss:si]                  ; SI = original DI (the new filename pointer)
+
+    mov cx, 8
+.frn_copy_new_name:
+    lodsb
+    test al, al
+    jz .frn_new_done
+    cmp al, '.'
+    je .frn_copy_new_ext
+    cmp al, 'a'
+    jb .frn_store_new
+    cmp al, 'z'
+    ja .frn_store_new
+    sub al, 32
+.frn_store_new:
+    mov [es:di], al
+    inc di
+    loop .frn_copy_new_name
+.frn_skip_new_dot:
+    lodsb
+    test al, al
+    jz .frn_new_done
+    cmp al, '.'
+    jne .frn_skip_new_dot
+.frn_copy_new_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.frn_copy_new_ext_loop:
+    lodsb
+    test al, al
+    jz .frn_new_done
+    cmp al, 'a'
+    jb .frn_store_new_ext
+    cmp al, 'z'
+    ja .frn_store_new_ext
+    sub al, 32
+.frn_store_new_ext:
+    mov [es:di], al
+    inc di
+    loop .frn_copy_new_ext_loop
+
+.frn_new_done:
+    pop ds
+
+    ; Switch to kernel DS for directory search
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Search root directory for old name
+    mov ax, [root_dir_start]
+    mov cx, 14
+
+.frn_search_sector:
+    push cx
+    push ax
+    mov [cs:.frn_dir_sector], ax
+
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector
+    jc .frn_read_error
+
+    mov cx, 16
+    mov si, bpb_buffer
+    xor dx, dx
+
+.frn_check_entry:
+    mov al, [si]
+    test al, al
+    jz .frn_not_found_pop
+    cmp al, 0xE5
+    je .frn_next_entry
+
+    ; Compare with old name on stack
+    push si
+    push di
+    push ds
+    push cx
+    ; Old name is at SP + 8 (our pushes) + 4 (loop pushes) + 12 (new name) = SP + 24
+    mov di, sp
+    add di, 24
+    push ss
+    pop es
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, 11
+    repe cmpsb
+    pop cx
+    pop ds
+    pop di
+    pop si
+    je .frn_found_file
+
+.frn_next_entry:
+    add si, 32
+    add dx, 32
+    dec cx
+    jnz .frn_check_entry
+
+    pop ax
+    pop cx
+    inc ax
+    dec cx
+    jnz .frn_search_sector
+
+    ; Not found
+    add sp, 24                      ; Remove both names
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    jmp .frn_cleanup
+
+.frn_not_found_pop:
+    pop ax
+    pop cx
+    add sp, 24
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    jmp .frn_cleanup
+
+.frn_read_error:
+    pop ax
+    pop cx
+    add sp, 24
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    jmp .frn_cleanup
+
+.frn_found_file:
+    ; SI points to directory entry in bpb_buffer
+    ; Copy new name (11 bytes) over the old name in the entry
+    push si
+    push di
+    push cx
+    mov di, si                      ; DI = dir entry in bpb_buffer
+    ; New name is at SP + 6 (our pushes) + 4 (loop pushes) = SP + 10
+    mov si, sp
+    add si, 10
+    push ss
+    pop ds
+    mov ax, 0x1000
+    mov es, ax                      ; ES = kernel (bpb_buffer segment)
+    mov cx, 11
+    rep movsb
+    ; Restore DS to kernel
+    mov ax, 0x1000
+    mov ds, ax
+    pop cx
+    pop di
+    pop si
+
+    ; Write the modified sector back
+    pop ax                          ; AX = sector LBA
+    pop cx                          ; CX = remaining sectors counter
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_write_sector
+    jc .frn_write_error
+
+    add sp, 24                      ; Remove both names from stack
+    clc
+    jmp .frn_cleanup
+
+.frn_write_error:
+    add sp, 24
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+
+.frn_cleanup:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.frn_dir_sector: dw 0
+
+; win_resize_stub - Resize existing window (API 78)
+; Input: AL=window_handle, DX=new_width, SI=new_height
+; Output: CF=0 success, CF=1 error
+win_resize_stub:
+    push bx
+    push cx
+    push di
+
+    ; Validate handle
+    xor ah, ah
+    cmp ax, WIN_MAX_COUNT
+    jae .wrs_invalid
+
+    ; Get window entry
+    mov di, ax
+    shl di, 5
+    add di, window_table
+
+    ; Check if window is visible
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .wrs_invalid
+
+    ; Save old dimensions for desktop redraw
+    push ax
+    mov ax, [di + WIN_OFF_X]
+    mov [redraw_old_x], ax
+    mov ax, [di + WIN_OFF_Y]
+    mov [redraw_old_y], ax
+    mov ax, [di + WIN_OFF_WIDTH]
+    mov [redraw_old_w], ax
+    mov ax, [di + WIN_OFF_HEIGHT]
+    mov [redraw_old_h], ax
+    pop ax
+
+    ; Update dimensions to new size
+    mov [di + WIN_OFF_WIDTH], dx
+    mov [di + WIN_OFF_HEIGHT], si
+
+    ; Redraw the background where old window was, then redraw frame
+    push ax
+    call draw_desktop_region
+    call win_draw_stub              ; Redraw frame with new size
+    pop ax
+
+    ; Post WIN_REDRAW event so app repaints content
+    push ax
+    push dx
+    xor dh, dh
+    mov dl, al                      ; DL = window handle
+    mov al, EVENT_WIN_REDRAW
+    call post_event
+    pop dx
+    pop ax
+
+    clc
+    pop di
+    pop cx
+    pop bx
+    ret
+
+.wrs_invalid:
+    stc
+    pop di
+    pop cx
+    pop bx
+    ret
+
+; win_get_info_stub - Query window properties (API 79)
+; Input: AL=window_handle
+; Output: BX=X, CX=Y, DX=width, SI=height, DI=flags<<8|state, CF=0
+win_get_info_stub:
+    push ax
+
+    ; Validate handle
+    xor ah, ah
+    cmp ax, WIN_MAX_COUNT
+    jae .wgi_invalid
+
+    ; Get window entry
+    mov di, ax
+    shl di, 5
+    add di, window_table
+
+    ; Check if entry is used
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_FREE
+    je .wgi_invalid
+
+    ; Read fields
+    mov bx, [di + WIN_OFF_X]
+    mov cx, [di + WIN_OFF_Y]
+    mov dx, [di + WIN_OFF_WIDTH]
+    mov si, [di + WIN_OFF_HEIGHT]
+    ; Pack flags and state into DI
+    mov ah, [di + WIN_OFF_FLAGS]
+    mov al, [di + WIN_OFF_STATE]
+    mov di, ax
+
+    pop ax
+    clc
+    ret
+
+.wgi_invalid:
+    pop ax
+    stc
+    ret
+
+; gfx_scroll_area - Scroll rectangular region vertically (API 80)
+; Input: BX=X, CX=Y, DX=W, SI=H, DI=scroll_pixels (positive=up)
+; Output: none, CF=0
+; Note: Operates on CGA byte boundaries for X/W (rounds to 4-pixel groups)
+gfx_scroll_area:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    mov ax, 0xB800
+    mov es, ax
+
+    ; Save parameters
+    mov [cs:.sa_x], bx
+    mov [cs:.sa_y], cx
+    mov [cs:.sa_w], dx
+    mov [cs:.sa_h], si
+    mov [cs:.sa_scroll], di
+
+    ; Calculate bytes per row for the region
+    mov ax, bx
+    add ax, dx                      ; AX = X + W
+    add ax, 3
+    shr ax, 1
+    shr ax, 1                       ; AX = ceil((X+W)/4)
+    mov bp, bx
+    shr bp, 1
+    shr bp, 1                       ; BP = X/4 (start byte)
+    sub ax, bp                      ; AX = bytes per row
+    mov [cs:.sa_bpr], ax
+
+    ; Number of rows to copy = H - scroll_pixels
+    mov ax, si
+    sub ax, di                      ; AX = rows to copy
+    test ax, ax
+    jle .sa_clear_all               ; Scroll >= height, just clear everything
+
+    mov cx, ax                      ; CX = rows to copy
+
+    ; Copy rows: for scroll up, copy from (Y+scroll) to Y
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax          ; dst starts at Y
+    add ax, di
+    mov [cs:.sa_src_y], ax          ; src starts at Y + scroll
+
+.sa_copy_loop:
+    push cx
+
+    ; Calculate source row CGA address
+    mov ax, [cs:.sa_src_y]
+    push ax
+    shr ax, 1
+    push dx
+    mov dx, 80
+    mul dx
+    pop dx
+    mov si, ax
+    pop ax
+    test al, 1
+    jz .sa_src_even
+    add si, 0x2000
+.sa_src_even:
+    ; Add X byte offset
+    mov ax, [cs:.sa_x]
+    shr ax, 1
+    shr ax, 1
+    add si, ax
+
+    ; Calculate dest row CGA address
+    mov ax, [cs:.sa_dst_y]
+    push ax
+    shr ax, 1
+    push dx
+    mov dx, 80
+    mul dx
+    pop dx
+    mov di, ax
+    pop ax
+    test al, 1
+    jz .sa_dst_even
+    add di, 0x2000
+.sa_dst_even:
+    mov ax, [cs:.sa_x]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+
+    ; Copy bytes for this row
+    mov cx, [cs:.sa_bpr]
+    push ds
+    push es
+    pop ds                          ; DS = ES = 0xB800
+    rep movsb
+    pop ds
+
+    ; Advance Y positions
+    inc word [cs:.sa_src_y]
+    inc word [cs:.sa_dst_y]
+
+    pop cx
+    dec cx
+    jnz .sa_copy_loop
+
+    ; Clear the exposed strip at bottom (scroll_pixels rows)
+    mov cx, [cs:.sa_scroll]
+    ; dst_y is already positioned at first exposed row
+.sa_clear_loop:
+    push cx
+
+    mov ax, [cs:.sa_dst_y]
+    push ax
+    shr ax, 1
+    push dx
+    mov dx, 80
+    mul dx
+    pop dx
+    mov di, ax
+    pop ax
+    test al, 1
+    jz .sa_clr_even
+    add di, 0x2000
+.sa_clr_even:
+    mov ax, [cs:.sa_x]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+
+    mov cx, [cs:.sa_bpr]
+    xor al, al
+    rep stosb
+
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_clear_loop
+    jmp .sa_done
+
+.sa_clear_all:
+    ; Clear entire region
+    mov cx, [cs:.sa_h]
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax
+.sa_clear_all_loop:
+    push cx
+
+    mov ax, [cs:.sa_dst_y]
+    push ax
+    shr ax, 1
+    push dx
+    mov dx, 80
+    mul dx
+    pop dx
+    mov di, ax
+    pop ax
+    test al, 1
+    jz .sa_clra_even
+    add di, 0x2000
+.sa_clra_even:
+    mov ax, [cs:.sa_x]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+
+    mov cx, [cs:.sa_bpr]
+    xor al, al
+    rep stosb
+
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_clear_all_loop
+
+.sa_done:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+.sa_x:       dw 0
+.sa_y:       dw 0
+.sa_w:       dw 0
+.sa_h:       dw 0
+.sa_scroll:  dw 0
+.sa_bpr:     dw 0
+.sa_src_y:   dw 0
+.sa_dst_y:   dw 0
 
 ; ============================================================================
 ; Font Data - 8x8 characters
