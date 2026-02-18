@@ -403,8 +403,8 @@ entry:
     jmp .main_loop
 
 .combo_select:
+    call delay_short            ; Brief visual feedback
     call close_combo_popup
-    call draw_combobox
     jmp .main_loop
 
 .close_combo:
@@ -639,35 +639,33 @@ entry:
     int 0x80
     test al, al
     jz .click_menu_outside
-    ; Inside - find item by Y
+    ; Find which item was clicked
     mov al, [cs:menu_open]
-    call get_menu_geometry
-    inc cx
-    mov al, [cs:menu_open]
-    call get_menu_count
-    xor di, di
+    call get_menu_count         ; AX = item count
+    xor di, di                  ; DI = item index
 .mdd_loop:
     cmp di, ax
     jge .close_menu_jmp
-    push ax
-    push cx
-    push di
-    mov dx, 34
+    push ax                     ; Save count
+    push di                     ; Save index
+    mov al, [cs:menu_open]
+    call get_menu_geometry      ; BX=menu_x, DX=width (fresh each time)
+    inc bx                      ; Inside border
+    sub dx, 2                   ; Content width
+    ; CX = MENU_H + 1 + di * 6
+    mov ax, di
+    mov cx, ax
+    shl cx, 1                   ; cx = di*2
+    add cx, ax                  ; cx = di*3
+    shl cx, 1                   ; cx = di*6
+    add cx, MENU_H + 1
     mov si, 6
-    inc bx
     mov ah, API_HIT_TEST
     int 0x80
+    test al, al                 ; POP doesn't affect flags
     pop di
-    pop cx
     pop ax
-    test al, al
     jnz .mdd_hit
-    add cx, 6
-    push ax
-    mov al, [cs:menu_open]
-    call get_menu_geometry
-    pop ax
-    inc bx
     inc di
     jmp .mdd_loop
 .mdd_hit:
@@ -738,8 +736,9 @@ entry:
     jmp .cbd_loop
 .cbd_hit:
     mov [cs:combo_sel], cl
+    call draw_combo_dropdown    ; Show selected item highlighted
+    call delay_short            ; Brief visual feedback
     call close_combo_popup
-    call draw_combobox
     jmp .main_loop
 .close_combo_outside:
     mov bx, CB_X
@@ -1364,6 +1363,14 @@ draw_menu_dropdown:
     ret
 
 close_menu_popup:
+    ; Clear dropdown area before resetting state
+    mov al, [cs:menu_open]
+    cmp al, 0xFF
+    je .cmp_skip
+    call get_menu_geometry      ; BX=x, CX=MENU_H, DX=width, SI=height
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+.cmp_skip:
     mov byte [cs:menu_open], 0xFF
     mov byte [cs:menu_sel], 0
     call draw_all
@@ -1429,6 +1436,27 @@ close_combo_popup:
     int 0x80
     ; Repaint combo header
     call draw_combobox
+    ret
+
+; ============================================================================
+; Brief delay (~220ms) for UI feedback
+; ============================================================================
+delay_short:
+    mov ah, API_GET_TICK
+    int 0x80
+    add ax, 4                   ; 4 ticks ≈ 220ms at 18.2 Hz
+    push ax                     ; Save target tick on stack
+.ds_wait:
+    sti
+    mov ah, API_APP_YIELD
+    int 0x80
+    mov ah, API_GET_TICK
+    int 0x80
+    pop cx                      ; CX = target tick
+    push cx                     ; Keep on stack for next iteration
+    cmp ax, cx
+    jb .ds_wait
+    pop cx                      ; Clean stack
     ret
 
 ; ============================================================================
