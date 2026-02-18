@@ -4819,6 +4819,7 @@ widget_draw_menubar:
     ; Selected: draw filled rect highlight, then inverted text
     push bx
     push di
+    push si                             ; Save string pointer!
     mov dx, [wgt_cursor_pos]
     add dx, 4                           ; Small padding around text
     mov cx, [btn_y]
@@ -4826,6 +4827,7 @@ widget_draw_menubar:
     mov si, [btn_h]
     dec si                              ; Don't cover separator
     call gfx_draw_filled_rect_stub
+    pop si                              ; Restore string pointer
     pop di
     pop bx
     ; Draw inverted (black) text on white rect
