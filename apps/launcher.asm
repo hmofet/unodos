@@ -33,6 +33,7 @@ API_GET_BOOT_DRIVE      equ 43
 API_POINT_OVER_WINDOW   equ 64
 API_GET_TICK            equ 63
 API_DELAY_TICKS         equ 73
+API_GET_TASK_INFO       equ 74
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -94,6 +95,16 @@ entry:
     sti
     mov ah, API_APP_YIELD
     int 0x80
+
+    ; Skip input if a fullscreen app is running (no windows, but other tasks exist)
+    mov ah, API_GET_TASK_INFO
+    int 0x80
+    ; BL=focused_task, CL=running_count
+    cmp bl, 0xFF
+    jne .input_ok                   ; A window has focus — desktop clicks still valid
+    cmp cl, 1
+    ja .main_loop                   ; No windows + other tasks = fullscreen app running
+.input_ok:
 
     ; --- Mouse polling ---
     mov ah, API_MOUSE_GET_STATE
