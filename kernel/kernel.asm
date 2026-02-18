@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 63                      ; Max function count (0-62 valid)
+    cmp ah, 64                      ; Max function count (0-63 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1607,7 +1607,7 @@ load_settings:
     ; Save file handle
     mov [.ls_fh], al
 
-    ; Read 5 bytes
+    ; Read 5 bytes (magic + font + text + bg + win)
     xor ah, ah                          ; AX = file handle
     mov bx, 0x1000
     mov es, bx
@@ -2147,39 +2147,32 @@ plot_pixel_xor:
 ; ============================================================================
 
 CURSOR_WIDTH    equ 8
-CURSOR_HEIGHT   equ 14
 
-; cursor_xor_sprite - Draw/erase 2bpp color cursor via XOR
+; cursor_xor_sprite - Draw/erase cursor at given position via XOR
 ; Input: CX = cursor X, BX = cursor Y (hotspot at top-left)
 ; ES must be 0xB800
 ; Preserves all registers
-; Bitmap: 2 bytes/row, 8 pixels of 2bpp (00=skip, 01=cyan, 10=magenta, 11=white)
+; Color cursor: 2bpp, 14 rows, white outline + cyan fill
 cursor_xor_sprite:
     pusha
-
-    mov bp, CURSOR_HEIGHT           ; Row counter
-    mov si, cursor_bitmap           ; SI = bitmap pointer
+    mov bp, 14                      ; Row counter
+    mov si, cursor_bitmap_color
 
 .row_loop:
-    push cx                         ; Save base X
-    cmp bx, 200                     ; Bounds check Y
+    push cx
+    cmp bx, 200
     jae .skip_row
-
-    ; Load 2-byte row as big-endian 16-bit value
     mov ah, [si]                    ; AH = first byte (pixels 0-3)
     mov al, [si+1]                  ; AL = second byte (pixels 4-7)
-    mov di, 8                       ; 8 pixels per row
-
+    mov di, 8
 .col_loop:
     mov dl, ah
-    shr dl, 6                       ; DL = top 2 bits = pixel color (0-3)
+    shr dl, 6                       ; DL = pixel color (0-3)
     test dl, dl
     jz .skip_pixel
-    cmp cx, 320                     ; Bounds check X
+    cmp cx, 320
     jae .skip_pixel
-
-    ; Inline XOR pixel plot with color DL
-    mov [cs:cursor_color], dl       ; Save color
+    mov [cs:cursor_color], dl
     push ax
     push bx
     push cx
@@ -2192,18 +2185,15 @@ cursor_xor_sprite:
     pop cx
     pop bx
     pop ax
-
 .skip_pixel:
-    shl ax, 2                       ; Next pixel (shift 2 bits left)
-    inc cx                          ; Next X
+    shl ax, 2
+    inc cx
     dec di
     jnz .col_loop
-
 .skip_row:
-    pop cx                          ; Restore base X
-
-    add si, 2                       ; Next bitmap row (2 bytes)
-    inc bx                          ; Next Y
+    pop cx
+    add si, 2
+    inc bx
     dec bp
     jnz .row_loop
 
@@ -2965,13 +2955,13 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x13C0 - ($ - $$) db 0
+times 0x1400 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 63                           ; Number of function slots (0-62)
+    dw 64                           ; Number of function slots (0-63)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -3073,6 +3063,7 @@ kernel_api_table:
     dw widget_draw_progress         ; 60: Draw progress bar
     dw widget_draw_groupbox         ; 61: Draw group box
     dw widget_draw_separator        ; 62: Draw separator line
+    dw get_tick_count               ; 63: Get BIOS tick counter
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -4415,6 +4406,23 @@ theme_get_colors:
     mov al, [text_color]
     mov bl, [desktop_bg_color]
     mov cl, [win_color]
+    clc
+    ret
+
+; ============================================================================
+; get_tick_count - Get BIOS timer tick count (API 63)
+; Input: None
+; Output: AX = tick count (low 16 bits, wraps at 65536, 18.2 Hz)
+;         CF = 0
+; ============================================================================
+get_tick_count:
+    push es
+    push bx
+    mov bx, 0x0040
+    mov es, bx
+    mov ax, [es:0x006C]
+    pop bx
+    pop es
     clc
     ret
 
@@ -11006,7 +11014,7 @@ cursor_locked:      db 0            ; Lock counter (>0 = cursor rendering suppre
 
 ; Cursor bitmap: 8 pixels wide, 10 rows tall
 ; Each byte = 1 row, MSB = leftmost pixel, 1 = draw (XOR white)
-cursor_bitmap:              ; 2bpp: 2 bytes/row, W=white c=cyan .=transparent
+cursor_bitmap_color:        ; 2bpp: 2 bytes/row, 14 rows, W=white c=cyan
     db 0xC0, 0x00               ; W.......
     db 0xF0, 0x00               ; WW......
     db 0xD4, 0x00               ; Wcc.....
