@@ -36,20 +36,19 @@
 ; --- Code Entry (offset 0x50) ---
 
 ; API constants
-API_GFX_FILLED_RECT     equ 2
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
-API_GFX_DRAW_STRING_INV equ 6
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
-API_WIN_GET_CONTENT     equ 25
-API_MOUSE_GET_STATE     equ 28
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 API_SPEAKER_TONE        equ 41
 API_SPEAKER_OFF         equ 42
+API_DRAW_BUTTON         equ 51
+API_HIT_TEST            equ 53
+API_GET_TICK            equ 63
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -257,7 +256,18 @@ poll_events:
     cmp byte [cs:prev_btn], 0
     jne .held                       ; Already held
     mov byte [cs:prev_btn], 1
-    jmp check_btn_click             ; tail call
+    ; Hit test button using widget API
+    mov bx, BTN_X
+    mov cx, BTN_Y
+    mov dx, BTN_W
+    mov si, BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .btn_hit
+    ret
+.btn_hit:
+    jmp toggle_state                ; tail call
 .btn_up:
     mov byte [cs:prev_btn], 0
 .held:
@@ -294,45 +304,6 @@ toggle_state:
     call draw_status
     jmp draw_button                 ; tail call
 
-; ============================================================================
-; Check if mouse click is on the button
-; ============================================================================
-check_btn_click:
-    ; Get absolute mouse position
-    mov ah, API_MOUSE_GET_STATE
-    int 0x80
-    mov [cs:mx], bx
-    mov [cs:my], cx
-
-    ; Get content area (absolute)
-    mov al, [cs:wh]
-    mov ah, API_WIN_GET_CONTENT
-    int 0x80
-    ; BX = content_x, CX = content_y
-
-    ; Relative X
-    mov ax, [cs:mx]
-    sub ax, bx
-    js .no_hit
-    cmp ax, BTN_X
-    jb .no_hit
-    cmp ax, BTN_X + BTN_W
-    jae .no_hit
-
-    ; Relative Y
-    mov ax, [cs:my]
-    sub ax, cx
-    js .no_hit
-    cmp ax, BTN_Y
-    jb .no_hit
-    cmp ax, BTN_Y + BTN_H
-    jae .no_hit
-
-    ; Hit! Toggle state
-    jmp toggle_state                ; tail call
-
-.no_hit:
-    ret
 
 ; ============================================================================
 ; Drawing functions
@@ -400,42 +371,31 @@ draw_status:
     popa
     ret
 
-; Draw play/pause button
+; Draw play/pause button using widget API
 draw_button:
     pusha
-
-    ; Clear button area
-    mov bx, BTN_X
-    mov cx, BTN_Y
-    mov dx, BTN_W
-    mov si, BTN_H
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    ; Draw filled rect (white background)
-    mov bx, BTN_X
-    mov cx, BTN_Y
-    mov dx, BTN_W
-    mov si, BTN_H
-    mov ah, API_GFX_FILLED_RECT
-    int 0x80
 
     ; Pick label
     cmp byte [cs:state], ST_PLAYING
     je .lbl_pause
     cmp byte [cs:state], ST_DONE
     je .lbl_replay
-    mov si, btn_play
-    jmp .draw_lbl
+    mov di, btn_play
+    jmp .draw_btn
 .lbl_pause:
-    mov si, btn_pause
-    jmp .draw_lbl
+    mov di, btn_pause
+    jmp .draw_btn
 .lbl_replay:
-    mov si, btn_replay
-.draw_lbl:
-    mov bx, BTN_X + 6
-    mov cx, BTN_Y + 2
-    mov ah, API_GFX_DRAW_STRING_INV
+    mov di, btn_replay
+.draw_btn:
+    mov ax, cs
+    mov es, ax
+    mov bx, BTN_X
+    mov cx, BTN_Y
+    mov dx, BTN_W
+    mov si, BTN_H
+    xor al, al                      ; Not pressed
+    mov ah, API_DRAW_BUTTON
     int 0x80
 
     popa
@@ -445,16 +405,11 @@ draw_button:
 ; Helpers
 ; ============================================================================
 
-; Read BIOS tick counter
+; Read tick counter via kernel API
 ; Output: AX = tick count (low word)
 read_tick:
-    push ds
-    push bx
-    mov ax, 0x0040
-    mov ds, ax
-    mov ax, [0x006C]
-    pop bx
-    pop ds
+    mov ah, API_GET_TICK
+    int 0x80
     ret
 
 ; ============================================================================
@@ -468,8 +423,6 @@ note_idx:   dw 0
 t0:         dw 0
 prev_btn:   db 0
 quit:       db 0
-mx:         dw 0
-my:         dw 0
 
 msg_title:  db 'Fur Elise', 0
 msg_sub:    db 'L. van Beethoven', 0
