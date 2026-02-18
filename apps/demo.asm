@@ -1,5 +1,5 @@
 ; DEMO.BIN - UI Demo for UnoDOS
-; Showcases all GUI widget types (Build 235)
+; Showcases all GUI widget types (Build 240)
 ;
 ; Build: nasm -f bin -o demo.bin demo.asm
 
@@ -13,7 +13,6 @@
     times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
 
     ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
-    ; Grid/widgets icon: cyan border, magenta detail
     db 0x55, 0x55, 0x55, 0x55      ; Row 0:  cyan top border
     db 0x40, 0x01, 0x40, 0x01      ; Row 1:  cyan frame
     db 0x48, 0xA9, 0x42, 0x81      ; Row 2:  checkbox + text
@@ -36,8 +35,12 @@
 ; --- Code Entry (offset 0x50) ---
 
 ; API constants
+API_GFX_DRAW_PIXEL      equ 0
+API_GFX_FILLED_RECT     equ 2
+API_GFX_DRAW_RECT       equ 3
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
+API_GFX_DRAW_STRING_INV equ 6
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
@@ -57,26 +60,34 @@ API_DRAW_PROGRESS       equ 60
 API_DRAW_GROUPBOX       equ 61
 API_DRAW_SEPARATOR      equ 62
 API_GET_TICK            equ 63
+API_DRAW_COMBOBOX       equ 65
+API_DRAW_MENUBAR        equ 66
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
-; Layout
+; Layout constants
 WIN_X       equ 20
 WIN_Y       equ 5
 WIN_W       equ 280
 WIN_H       equ 185
 
+; Menu bar
+MENU_Y      equ 0
+MENU_W      equ 273
+MENU_COUNT  equ 3
+MENU_H      equ 8                      ; font_height + 2
+
 ; Group box
 GRP_X       equ 4
-GRP_Y       equ 2
+GRP_Y       equ 10
 GRP_W       equ 130
-GRP_H       equ 50
+GRP_H       equ 40
 
-; Radio buttons (inside group box)
+; Radio buttons
 RAD_X       equ 10
-RAD_Y1      equ 14
-RAD_Y2      equ 26
+RAD_Y1      equ 22
+RAD_Y2      equ 30
 
 ; Checkbox
 CHK_X       equ 10
@@ -84,39 +95,68 @@ CHK_Y       equ 38
 
 ; Text field
 TF_LBL_X    equ 4
-TF_Y        equ 58
-TF_X        equ 36
+TF_Y        equ 54
+TF_X        equ 32
 TF_W        equ 100
+
+; Combo box
+CB_LBL_X    equ 4
+CB_Y        equ 66
+CB_X        equ 32
+CB_W        equ 100
+CB_ITEMS    equ 4
 
 ; List items
 LIST_X      equ 142
-LIST_Y      equ 2
-LIST_W      equ 112
-LIST_COUNT  equ 5
+LIST_Y      equ 10
+LIST_W      equ 106
+LIST_VISIBLE equ 6
+LIST_COUNT  equ 12
 
 ; Scrollbar
-SB_X        equ 256
-SB_Y        equ 2
-SB_H        equ 36
+SB_X        equ 250
+SB_Y        equ 10
+SB_H        equ 42
 
 ; Progress bar
-PROG_X      equ 142
-PROG_Y      equ 46
-PROG_W      equ 125
+PROG_X      equ 4
+PROG_LBL_Y  equ 80
+PROG_BAR_Y  equ 88
+PROG_W      equ 265
 
 ; Separator
 SEP_X       equ 4
-SEP_Y       equ 76
+SEP_Y       equ 100
 SEP_W       equ 265
 
 ; Buttons
-BTN_OK_X    equ 168
-BTN_OK_W    equ 50
-BTN_CAN_X   equ 224
-BTN_CAN_W   equ 50
-BTN_Y       equ 82
+BTN_OK_X    equ 170
+BTN_OK_W    equ 46
+BTN_CAN_X   equ 222
+BTN_CAN_W   equ 46
+BTN_Y       equ 106
 BTN_H       equ 14
 
+; Menu dropdown geometry
+; File: X=4, W=36, items=4
+MFILE_X     equ 4
+MFILE_W     equ 36
+MFILE_CNT   equ 4
+; Edit: X=26, W=36, items=3
+MEDIT_X     equ 26
+MEDIT_W     equ 36
+MEDIT_CNT   equ 3
+; Help: X=48, W=36, items=1
+MHELP_X     equ 48
+MHELP_W     equ 36
+MHELP_CNT   equ 1
+
+; Focus states
+FOCUS_TF    equ 0
+FOCUS_LIST  equ 1
+FOCUS_COMBO equ 2
+
+; ============================================================================
 entry:
     pusha
     push ds
@@ -125,7 +165,7 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Use small font (4x6)
+    ; Small font (4x6)
     mov al, 0
     mov ah, API_SET_FONT
     int 0x80
@@ -149,44 +189,104 @@ entry:
 
     call draw_all
 
+; ============================================================================
+; Main event loop
+; ============================================================================
 .main_loop:
     sti
     mov ah, API_APP_YIELD
     int 0x80
 
-    ; Animate progress bar
     call animate_progress
 
-    ; Check events
     mov ah, API_EVENT_GET
     int 0x80
     jc .check_mouse
     cmp al, EVENT_KEY_PRESS
     jne .check_redraw
 
-    ; Key press
+    ; --- Key handling ---
     cmp dl, 27                      ; ESC
-    je .exit_ok
-    cmp dl, 9                       ; Tab - switch focus
+    je .handle_esc
+
+    ; If a popup is open, handle keys for it
+    cmp byte [cs:menu_open], 0xFF
+    jne .menu_keys
+    cmp byte [cs:combo_open], 0
+    jne .combo_keys
+
+    cmp dl, 9                       ; Tab
     je .toggle_focus
-    ; If text field focused, handle typing
-    cmp byte [cs:focus], 0
-    jne .check_list_keys
+
+    ; Route to focused widget
+    cmp byte [cs:focus], FOCUS_TF
+    je .key_textfield
+    cmp byte [cs:focus], FOCUS_LIST
+    je .key_list
+    cmp byte [cs:focus], FOCUS_COMBO
+    je .key_combo_focus
+    jmp .main_loop
+
+.handle_esc:
+    ; If popup open, close it; else exit
+    cmp byte [cs:menu_open], 0xFF
+    jne .close_menu
+    cmp byte [cs:combo_open], 0
+    jne .close_combo
+    jmp .exit_ok
+
+.key_textfield:
     call handle_textfield_key
     jmp .main_loop
 
-.check_list_keys:
-    ; List focused - handle arrow keys
-    cmp dh, 0x48                    ; Up arrow scancode
+.key_list:
+    cmp dh, 0x48                    ; Up arrow
     je .list_up
-    cmp dh, 0x50                    ; Down arrow scancode
+    cmp dh, 0x50                    ; Down arrow
     je .list_down
     jmp .main_loop
 
+.key_combo_focus:
+    ; Enter/Space opens combo dropdown
+    cmp dl, 13
+    je .open_combo
+    cmp dl, 32
+    je .open_combo
+    jmp .main_loop
+
+.menu_keys:
+    cmp dl, 27                      ; ESC closes menu
+    je .close_menu
+    cmp dh, 0x48                    ; Up
+    je .menu_up
+    cmp dh, 0x50                    ; Down
+    je .menu_down
+    cmp dl, 13                      ; Enter
+    je .menu_select
+    jmp .main_loop
+
+.combo_keys:
+    cmp dl, 27
+    je .close_combo
+    cmp dh, 0x48
+    je .combo_up
+    cmp dh, 0x50
+    je .combo_down
+    cmp dl, 13
+    je .combo_select
+    jmp .main_loop
+
+; --- List navigation with scrolling ---
 .list_up:
     cmp byte [cs:list_sel], 0
     je .main_loop
     dec byte [cs:list_sel]
+    ; Auto-scroll up if selection above viewport
+    mov al, [cs:list_sel]
+    cmp al, [cs:scroll_off]
+    jge .list_redraw
+    dec byte [cs:scroll_off]
+.list_redraw:
     call draw_list
     call draw_scrollbar
     jmp .main_loop
@@ -196,22 +296,109 @@ entry:
     cmp al, LIST_COUNT - 1
     jge .main_loop
     inc byte [cs:list_sel]
-    call draw_list
-    call draw_scrollbar
-    jmp .main_loop
+    ; Auto-scroll down if selection below viewport
+    mov al, [cs:list_sel]
+    mov ah, [cs:scroll_off]
+    add ah, LIST_VISIBLE - 1
+    cmp al, ah
+    jle .list_redraw
+    inc byte [cs:scroll_off]
+    jmp .list_redraw
 
 .toggle_focus:
-    xor byte [cs:focus], 1
-    call draw_textfield
+    ; Close any open popup first
+    cmp byte [cs:menu_open], 0xFF
+    jne .close_menu_then_tab
+    cmp byte [cs:combo_open], 0
+    jne .close_combo_then_tab
+.do_toggle:
+    inc byte [cs:focus]
+    cmp byte [cs:focus], 3
+    jb .focus_ok
+    mov byte [cs:focus], 0
+.focus_ok:
+    call draw_textfield_widget
     call draw_list
+    call draw_combobox
     jmp .main_loop
 
+.close_menu_then_tab:
+    call close_menu_popup
+    jmp .do_toggle
+.close_combo_then_tab:
+    call close_combo_popup
+    jmp .do_toggle
+
+; --- Menu dropdown navigation ---
+.menu_up:
+    cmp byte [cs:menu_sel], 0
+    je .main_loop
+    dec byte [cs:menu_sel]
+    call draw_menu_dropdown
+    jmp .main_loop
+
+.menu_down:
+    mov al, [cs:menu_open]
+    call get_menu_count             ; AL = item count
+    dec al
+    cmp [cs:menu_sel], al
+    jge .main_loop
+    inc byte [cs:menu_sel]
+    call draw_menu_dropdown
+    jmp .main_loop
+
+.menu_select:
+    ; Check if File > Exit
+    cmp byte [cs:menu_open], 0     ; File menu?
+    jne .close_menu
+    cmp byte [cs:menu_sel], 3      ; Exit item?
+    je .exit_ok
+    jmp .close_menu
+
+.close_menu:
+    call close_menu_popup
+    jmp .main_loop
+
+; --- Combo dropdown navigation ---
+.combo_up:
+    cmp byte [cs:combo_sel], 0
+    je .main_loop
+    dec byte [cs:combo_sel]
+    call draw_combo_dropdown
+    jmp .main_loop
+
+.combo_down:
+    cmp byte [cs:combo_sel], CB_ITEMS - 1
+    jge .main_loop
+    inc byte [cs:combo_sel]
+    call draw_combo_dropdown
+    jmp .main_loop
+
+.combo_select:
+    ; Accept selection and close
+    call close_combo_popup
+    call draw_combobox
+    jmp .main_loop
+
+.close_combo:
+    call close_combo_popup
+    jmp .main_loop
+
+.open_combo:
+    mov byte [cs:combo_open], 1
+    call draw_combo_dropdown
+    jmp .main_loop
+
+; --- Window redraw ---
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
     call draw_all
     jmp .main_loop
 
+; ============================================================================
+; Mouse click handling
+; ============================================================================
 .check_mouse:
     mov ah, API_MOUSE_STATE
     int 0x80
@@ -220,6 +407,24 @@ entry:
     cmp byte [cs:prev_btn], 0
     jne .main_loop
     mov byte [cs:prev_btn], 1
+
+    ; If menu dropdown is open, check click
+    cmp byte [cs:menu_open], 0xFF
+    jne .click_menu_dropdown
+
+    ; If combo dropdown is open, check click
+    cmp byte [cs:combo_open], 0
+    jne .click_combo_dropdown
+
+    ; Hit test menu bar (full bar area)
+    mov bx, 0
+    mov cx, MENU_Y
+    mov dx, MENU_W
+    mov si, MENU_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .click_menubar
 
     ; Hit test radio buttons
     mov bx, RAD_X
@@ -250,6 +455,16 @@ entry:
     test al, al
     jnz .click_checkbox
 
+    ; Hit test combo box header
+    mov bx, CB_X
+    mov cx, CB_Y
+    mov dx, CB_W
+    mov si, 10
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .click_combobox
+
     ; Hit test OK button
     mov bx, BTN_OK_X
     mov cx, BTN_Y
@@ -270,7 +485,7 @@ entry:
     test al, al
     jnz .exit_ok
 
-    ; Hit test list items
+    ; Hit test list items (viewport area)
     call check_list_click
     jmp .main_loop
 
@@ -278,6 +493,189 @@ entry:
     mov byte [cs:prev_btn], 0
     jmp .main_loop
 
+; --- Menu bar click ---
+.click_menubar:
+    ; Determine which menu item was clicked using hit_test regions
+    ; File region: X=0-22
+    mov bx, 0
+    mov cx, MENU_Y
+    mov dx, 24
+    mov si, MENU_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .open_file_menu
+    ; Edit region: X=22-46
+    mov bx, 22
+    mov cx, MENU_Y
+    mov dx, 24
+    mov si, MENU_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .open_edit_menu
+    ; Help region: X=44-68
+    mov bx, 44
+    mov cx, MENU_Y
+    mov dx, 24
+    mov si, MENU_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .open_help_menu
+    jmp .main_loop
+
+.open_file_menu:
+    mov byte [cs:menu_open], 0
+    mov byte [cs:menu_sel], 0
+    call draw_menubar
+    call draw_menu_dropdown
+    jmp .main_loop
+
+.open_edit_menu:
+    mov byte [cs:menu_open], 1
+    mov byte [cs:menu_sel], 0
+    call draw_menubar
+    call draw_menu_dropdown
+    jmp .main_loop
+
+.open_help_menu:
+    mov byte [cs:menu_open], 2
+    mov byte [cs:menu_sel], 0
+    call draw_menubar
+    call draw_menu_dropdown
+    jmp .main_loop
+
+; --- Menu dropdown click ---
+.click_menu_dropdown:
+    ; Check if click is inside the dropdown area
+    mov al, [cs:menu_open]
+    call get_menu_geometry           ; BX=X, CX=Y, DX=W, SI=H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jz .click_menu_outside
+    ; Inside dropdown - determine which item
+    ; Use simple Y-based calculation: item = (mouseY - dropdown_Y - 1) / 6
+    ; We use hit test per item for accuracy
+    mov al, [cs:menu_open]
+    call get_menu_geometry           ; BX=X, CX=Y (dropdown top)
+    inc cx                          ; Past border
+    mov al, [cs:menu_open]
+    call get_menu_count
+    xor di, di                      ; Item index
+.mdd_item_loop:
+    cmp di, ax
+    jge .close_menu_jmp
+    push ax
+    push cx
+    push di
+    mov dx, 34                      ; Item width
+    mov si, 6                       ; Item height
+    inc bx                          ; Past border
+    mov ah, API_HIT_TEST
+    int 0x80
+    pop di
+    pop cx
+    pop ax
+    test al, al
+    jnz .mdd_item_hit
+    add cx, 6                       ; Next item Y
+    mov al, [cs:menu_open]
+    call get_menu_geometry
+    inc bx
+    inc di
+    jmp .mdd_item_loop
+.mdd_item_hit:
+    mov ax, di
+    mov [cs:menu_sel], al
+    ; Check File > Exit
+    cmp byte [cs:menu_open], 0
+    jne .close_menu_jmp
+    cmp byte [cs:menu_sel], 3
+    je .exit_ok
+.close_menu_jmp:
+    jmp .close_menu
+
+.click_menu_outside:
+    ; Check if click is on menu bar (switching menus)
+    mov bx, 0
+    mov cx, MENU_Y
+    mov dx, MENU_W
+    mov si, MENU_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .switch_menu
+    jmp .close_menu
+
+.switch_menu:
+    ; Close current, determine new menu
+    call close_menu_popup
+    jmp .click_menubar
+
+; --- Combo dropdown click ---
+.click_combobox:
+    ; Toggle combo open/close
+    cmp byte [cs:combo_open], 0
+    jne .close_combo_click
+    mov byte [cs:combo_open], 1
+    call draw_combo_dropdown
+    jmp .main_loop
+.close_combo_click:
+    call close_combo_popup
+    jmp .main_loop
+
+.click_combo_dropdown:
+    ; Check if inside dropdown area
+    mov bx, CB_X
+    mov cx, CB_Y + 10               ; Below combo header
+    mov dx, CB_W
+    mov si, CB_ITEMS * 6 + 2        ; Dropdown height
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jz .close_combo_outside
+    ; Hit inside - find item
+    xor cx, cx
+.cbd_loop:
+    cmp cx, CB_ITEMS
+    jge .close_combo_jmp
+    push cx
+    mov ax, cx
+    mov bx, 6
+    mul bx
+    add ax, CB_Y + 11              ; Dropdown interior Y
+    mov cx, ax
+    mov bx, CB_X + 1
+    mov dx, CB_W - 2
+    mov si, 6
+    mov ah, API_HIT_TEST
+    int 0x80
+    pop cx
+    test al, al
+    jnz .cbd_hit
+    inc cx
+    jmp .cbd_loop
+.cbd_hit:
+    mov [cs:combo_sel], cl
+    call close_combo_popup
+    call draw_combobox
+    jmp .main_loop
+.close_combo_outside:
+    ; Check if on combo header (toggle close)
+    mov bx, CB_X
+    mov cx, CB_Y
+    mov dx, CB_W
+    mov si, 10
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .close_combo_jmp
+.close_combo_jmp:
+    jmp .close_combo
+
+; --- Widget clicks ---
 .click_radio_a:
     mov byte [cs:radio_sel], 0
     call draw_radios
@@ -293,6 +691,9 @@ entry:
     call draw_checkbox
     jmp .main_loop
 
+; ============================================================================
+; Exit
+; ============================================================================
 .exit_ok:
     mov ah, API_WIN_END_DRAW
     int 0x80
@@ -301,7 +702,6 @@ entry:
     int 0x80
 
 .exit_fail:
-    ; Restore font to default (8x8)
     mov al, 1
     mov ah, API_SET_FONT
     int 0x80
@@ -315,13 +715,18 @@ entry:
 ; Draw all UI elements
 ; ============================================================================
 draw_all:
+    call draw_menubar
     call draw_groupbox
     call draw_radios
     call draw_checkbox
-    call draw_textfield
+    call draw_tf_label
+    call draw_textfield_widget
+    call draw_cb_label
+    call draw_combobox
     call draw_list
     call draw_scrollbar
-    call draw_progress
+    call draw_prog_label
+    call draw_prog_bar
     call draw_separator
     call draw_buttons
     ret
@@ -329,6 +734,17 @@ draw_all:
 ; ============================================================================
 ; Individual draw functions
 ; ============================================================================
+
+draw_menubar:
+    mov bx, 0
+    mov cx, MENU_Y
+    mov dx, MENU_W
+    mov si, menu_strings
+    mov di, MENU_COUNT
+    mov al, [cs:menu_open]
+    mov ah, API_DRAW_MENUBAR
+    int 0x80
+    ret
 
 draw_groupbox:
     mov bx, GRP_X
@@ -349,20 +765,19 @@ draw_radios:
     mov si, radio_a_label
     mov al, 0
     cmp byte [cs:radio_sel], 0
-    jne .rad_a_draw
+    jne .rad_a
     mov al, 1
-.rad_a_draw:
+.rad_a:
     mov ah, API_DRAW_RADIO
     int 0x80
-
     mov bx, RAD_X
     mov cx, RAD_Y2
     mov si, radio_b_label
     mov al, 0
     cmp byte [cs:radio_sel], 1
-    jne .rad_b_draw
+    jne .rad_b
     mov al, 1
-.rad_b_draw:
+.rad_b:
     mov ah, API_DRAW_RADIO
     int 0x80
     ret
@@ -376,68 +791,116 @@ draw_checkbox:
     int 0x80
     ret
 
-draw_textfield:
-    ; Label
+draw_tf_label:
     mov bx, TF_LBL_X
-    mov cx, TF_Y
-    add cx, 2                       ; Vertically center label
+    mov cx, TF_Y + 2
     mov si, tf_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Text field
+    ret
+
+draw_textfield_widget:
     mov bx, TF_X
     mov cx, TF_Y
     mov dx, TF_W
     mov si, tf_buffer
-    xor di, di
     mov di, [cs:tf_cursor]
     mov al, 0
-    cmp byte [cs:focus], 0
-    jne .tf_no_focus
-    or al, 1                        ; Focused = show cursor
-.tf_no_focus:
+    cmp byte [cs:focus], FOCUS_TF
+    jne .tf_nf
+    or al, 1
+.tf_nf:
     mov ah, API_DRAW_TEXTFIELD
     int 0x80
     ret
 
-draw_list:
-    ; Draw each list item
-    xor cx, cx                      ; item counter
-.list_loop:
-    cmp cx, LIST_COUNT
-    jge .list_done
-    push cx
-    ; Calculate Y = LIST_Y + item * font_height (6 for 4x6 font)
-    mov ax, cx
-    mov bx, 6                       ; font_height for 4x6
-    mul bx
-    add ax, LIST_Y
-    mov cx, ax                      ; CX = Y
-    mov bx, LIST_X
-    mov dx, LIST_W
+draw_cb_label:
+    mov bx, CB_LBL_X
+    mov cx, CB_Y + 2
+    mov si, cb_label
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    ret
 
-    ; Get string pointer for this item
-    pop ax                          ; item index
+draw_combobox:
+    mov bx, CB_X
+    mov cx, CB_Y
+    mov dx, CB_W
+    ; Get selected combo item text
+    xor ax, ax
+    mov al, [cs:combo_sel]
+    shl ax, 1
+    mov si, ax
+    add si, combo_ptrs
+    mov si, [cs:si]
+    mov al, 0
+    cmp byte [cs:focus], FOCUS_COMBO
+    jne .cb_nf
+    or al, 1
+.cb_nf:
+    mov ah, API_DRAW_COMBOBOX
+    int 0x80
+    ret
+
+draw_list:
+    ; Draw visible items from scroll_off to scroll_off+LIST_VISIBLE-1
+    xor cx, cx                      ; Visible slot index
+.dl_loop:
+    cmp cx, LIST_VISIBLE
+    jge .dl_done
+    push cx
+    ; Actual item index = slot + scroll_off
+    mov al, [cs:scroll_off]
+    xor ah, ah
+    add ax, cx
+    cmp ax, LIST_COUNT
+    jge .dl_blank
+    ; Get item string
     push ax
     mov si, ax
-    shl si, 1                       ; index * 2 for word lookup
+    shl si, 1
     add si, list_ptrs
-    mov si, [cs:si]                 ; SI = string pointer
-
-    ; Check if selected
+    mov si, [cs:si]
     pop ax
+    ; Calculate Y = LIST_Y + slot * 6
     push ax
+    mov ax, cx
+    mov bx, 6
+    mul bx
+    add ax, LIST_Y
+    mov cx, ax
+    pop ax
+    mov bx, LIST_X
+    mov dx, LIST_W
+    ; Check if selected
     cmp al, [cs:list_sel]
     mov al, 0
-    jne .list_draw
-    mov al, 1                       ; Selected flag
-.list_draw:
+    jne .dl_draw
+    cmp byte [cs:focus], FOCUS_LIST
+    jne .dl_draw
+    mov al, 1                       ; Selected + focused
+.dl_draw:
     mov ah, API_DRAW_LISTITEM
     int 0x80
     pop cx
     inc cx
-    jmp .list_loop
-.list_done:
+    jmp .dl_loop
+.dl_blank:
+    ; Empty slot (past end of list) - clear
+    mov ax, cx
+    mov bx, 6
+    mul bx
+    add ax, LIST_Y
+    mov cx, ax
+    mov bx, LIST_X
+    mov dx, LIST_W
+    mov si, 6
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    pop cx
+    inc cx
+    jmp .dl_loop
+.dl_done:
     ret
 
 draw_scrollbar:
@@ -445,26 +908,25 @@ draw_scrollbar:
     mov cx, SB_Y
     mov si, SB_H
     xor dx, dx
-    mov dl, [cs:list_sel]           ; Position = selected item
-    mov di, LIST_COUNT - 1          ; Max range
+    mov dl, [cs:scroll_off]
+    mov di, LIST_COUNT - LIST_VISIBLE
     xor al, al                      ; Vertical
     mov ah, API_DRAW_SCROLLBAR
     int 0x80
     ret
 
-draw_progress:
-    ; Label
+draw_prog_label:
     mov bx, PROG_X
-    mov cx, PROG_Y
+    mov cx, PROG_LBL_Y
     mov si, prog_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Progress bar
+    ret
+
+draw_prog_bar:
     mov bx, PROG_X
-    mov cx, PROG_Y
-    add cx, 8
+    mov cx, PROG_BAR_Y
     mov dx, PROG_W
-    xor si, si
     mov si, [cs:prog_value]
     mov al, 1                       ; Show percentage
     mov ah, API_DRAW_PROGRESS
@@ -475,13 +937,12 @@ draw_separator:
     mov bx, SEP_X
     mov cx, SEP_Y
     mov dx, SEP_W
-    xor al, al                      ; Horizontal
+    xor al, al
     mov ah, API_DRAW_SEPARATOR
     int 0x80
     ret
 
 draw_buttons:
-    ; OK button
     mov bx, BTN_OK_X
     mov cx, BTN_Y
     mov dx, BTN_OK_W
@@ -492,7 +953,6 @@ draw_buttons:
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
-    ; Cancel button
     mov bx, BTN_CAN_X
     mov cx, BTN_Y
     mov dx, BTN_CAN_W
@@ -506,32 +966,30 @@ draw_buttons:
     ret
 
 ; ============================================================================
-; Text field key handling
+; Text field key handling (lag-fixed: only redraws widget, not label)
 ; ============================================================================
 handle_textfield_key:
-    ; DL = ASCII char, DH = scancode
     cmp dl, 8                       ; Backspace
-    je .tf_backspace
+    je .tf_bs
     cmp dl, 32
-    jb .tf_done                     ; Ignore control chars
+    jb .tf_done
     cmp dl, 126
-    ja .tf_done                     ; Ignore extended chars
-    ; Insert character at cursor
+    ja .tf_done
+    ; Insert char
     mov al, [cs:tf_len]
-    cmp al, 20                      ; Max length
+    cmp al, 20
     jge .tf_done
-    ; Append char at cursor position
     xor bx, bx
-    mov bl, al                      ; BL = current length
+    mov bl, al
     mov [cs:tf_buffer + bx], dl
     inc bl
-    mov byte [cs:tf_buffer + bx], 0 ; Null terminate
+    mov byte [cs:tf_buffer + bx], 0
     mov [cs:tf_len], bl
     inc word [cs:tf_cursor]
-    call draw_textfield
+    call draw_textfield_widget      ; Only widget, not label
 .tf_done:
     ret
-.tf_backspace:
+.tf_bs:
     cmp byte [cs:tf_len], 0
     je .tf_done
     dec byte [cs:tf_len]
@@ -542,19 +1000,28 @@ handle_textfield_key:
     je .tf_bs_draw
     dec word [cs:tf_cursor]
 .tf_bs_draw:
-    call draw_textfield
+    call draw_textfield_widget      ; Only widget, not label
     ret
 
 ; ============================================================================
-; List click handling
+; List click handling (with scroll viewport)
 ; ============================================================================
 check_list_click:
+    ; Hit test the entire list viewport area
+    mov bx, LIST_X
+    mov cx, LIST_Y
+    mov dx, LIST_W
+    mov si, LIST_VISIBLE * 6
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jz .lc_done
+    ; Clicked in list - find which visible slot
     xor cx, cx
 .lc_loop:
-    cmp cx, LIST_COUNT
+    cmp cx, LIST_VISIBLE
     jge .lc_done
     push cx
-    ; Y = LIST_Y + item * 6
     mov ax, cx
     mov bx, 6
     mul bx
@@ -562,7 +1029,7 @@ check_list_click:
     mov cx, ax
     mov bx, LIST_X
     mov dx, LIST_W
-    mov si, 6                       ; height = font_height
+    mov si, 6
     mov ah, API_HIT_TEST
     int 0x80
     pop cx
@@ -571,45 +1038,269 @@ check_list_click:
     inc cx
     jmp .lc_loop
 .lc_hit:
-    mov [cs:list_sel], cl
+    ; item = slot + scroll_off
+    mov al, [cs:scroll_off]
+    add al, cl
+    cmp al, LIST_COUNT
+    jge .lc_done
+    mov [cs:list_sel], al
+    mov byte [cs:focus], FOCUS_LIST
     call draw_list
     call draw_scrollbar
+    call draw_textfield_widget      ; Update focus visuals
+    call draw_combobox
 .lc_done:
+    ret
+
+; ============================================================================
+; Menu dropdown helpers
+; ============================================================================
+
+; Get item count for menu AL. Returns count in AX.
+get_menu_count:
+    cmp al, 0
+    je .gmc_file
+    cmp al, 1
+    je .gmc_edit
+    mov ax, MHELP_CNT
+    ret
+.gmc_file:
+    mov ax, MFILE_CNT
+    ret
+.gmc_edit:
+    mov ax, MEDIT_CNT
+    ret
+
+; Get dropdown geometry for menu AL.
+; Returns: BX=X, CX=Y, DX=W, SI=H
+get_menu_geometry:
+    push ax
+    cmp al, 0
+    je .gmg_file
+    cmp al, 1
+    je .gmg_edit
+    mov bx, MHELP_X
+    mov dx, MHELP_W
+    mov ax, MHELP_CNT
+    jmp .gmg_calc
+.gmg_file:
+    mov bx, MFILE_X
+    mov dx, MFILE_W
+    mov ax, MFILE_CNT
+    jmp .gmg_calc
+.gmg_edit:
+    mov bx, MEDIT_X
+    mov dx, MEDIT_W
+    mov ax, MEDIT_CNT
+.gmg_calc:
+    mov cx, MENU_H                  ; Y = below menu bar
+    ; H = 2 + items * 6
+    mov si, 6
+    push dx
+    mul si
+    pop dx
+    add ax, 2
+    mov si, ax                      ; SI = height
+    pop ax
+    ret
+
+; Get items string pointer for menu AL. Returns SI.
+get_menu_items:
+    cmp al, 0
+    je .gmi_file
+    cmp al, 1
+    je .gmi_edit
+    mov si, menu_help_items
+    ret
+.gmi_file:
+    mov si, menu_file_items
+    ret
+.gmi_edit:
+    mov si, menu_edit_items
+    ret
+
+; Draw the currently open menu dropdown
+draw_menu_dropdown:
+    mov al, [cs:menu_open]
+    cmp al, 0xFF
+    je .dmd_ret
+    ; Get geometry
+    call get_menu_geometry           ; BX=X, CX=Y, DX=W, SI=H
+    ; Clear area
+    push bx
+    push cx
+    push dx
+    push si
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ; Draw border
+    push bx
+    push cx
+    push dx
+    push si
+    mov ah, API_GFX_DRAW_RECT
+    int 0x80
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ; Draw items
+    mov al, [cs:menu_open]
+    push bx
+    push cx
+    call get_menu_items             ; SI = items string pointer
+    call get_menu_count             ; AX = count
+    pop cx
+    pop bx
+    inc cx                          ; Past top border
+    inc bx                          ; Past left border
+    sub dx, 2                       ; Interior width
+    xor di, di                      ; Item index
+.dmd_loop:
+    cmp di, ax
+    jge .dmd_ret
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    ; Check if selected
+    mov ax, di
+    cmp al, [cs:menu_sel]
+    mov al, 0
+    jne .dmd_draw
+    mov al, 1
+.dmd_draw:
+    mov ah, API_DRAW_LISTITEM
+    int 0x80
+    ; Advance SI past string null
+    push ds
+    mov ax, cs
+    mov ds, ax
+.dmd_skip:
+    lodsb
+    test al, al
+    jnz .dmd_skip
+    pop ds
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    add cx, 6                       ; Next item Y
+    inc di
+    jmp .dmd_loop
+.dmd_ret:
+    ret
+
+; Close menu popup and repaint
+close_menu_popup:
+    mov byte [cs:menu_open], 0xFF
+    mov byte [cs:menu_sel], 0
+    call draw_all
+    ret
+
+; ============================================================================
+; Combo dropdown helpers
+; ============================================================================
+
+; Draw combo dropdown popup
+draw_combo_dropdown:
+    ; Clear area below combo header
+    mov bx, CB_X
+    mov cx, CB_Y + 10
+    mov dx, CB_W
+    mov si, CB_ITEMS * 6 + 2
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+    ; Draw border
+    mov bx, CB_X
+    mov cx, CB_Y + 10
+    mov dx, CB_W
+    mov si, CB_ITEMS * 6 + 2
+    mov ah, API_GFX_DRAW_RECT
+    int 0x80
+    ; Draw items
+    xor cx, cx
+.dcd_loop:
+    cmp cx, CB_ITEMS
+    jge .dcd_done
+    push cx
+    ; Y = CB_Y + 11 + item * 6
+    mov ax, cx
+    mov bx, 6
+    mul bx
+    add ax, CB_Y + 11
+    mov cx, ax
+    mov bx, CB_X + 1
+    mov dx, CB_W - 2
+    ; Get string
+    pop ax
+    push ax
+    mov si, ax
+    shl si, 1
+    add si, combo_ptrs
+    mov si, [cs:si]
+    ; Selected?
+    pop ax
+    push ax
+    cmp al, [cs:combo_sel]
+    mov al, 0
+    jne .dcd_draw
+    mov al, 1
+.dcd_draw:
+    mov ah, API_DRAW_LISTITEM
+    int 0x80
+    pop cx
+    inc cx
+    jmp .dcd_loop
+.dcd_done:
+    ret
+
+; Close combo popup and repaint affected area
+close_combo_popup:
+    mov byte [cs:combo_open], 0
+    ; Repaint area that was covered by dropdown
+    call draw_prog_label
+    call draw_prog_bar
+    call draw_combobox
     ret
 
 ; ============================================================================
 ; Progress bar animation
 ; ============================================================================
 animate_progress:
-    ; Gate on BIOS tick counter via API for consistent timing
     mov ah, API_GET_TICK
-    int 0x80                        ; AX = tick count (18.2 Hz)
+    int 0x80
     cmp ax, [cs:last_tick]
-    je .anim_done                   ; Same tick = no time passed
+    je .ap_done
     mov [cs:last_tick], ax
     inc word [cs:anim_counter]
-    cmp word [cs:anim_counter], 18  ; ~1 second (18 ticks)
-    jb .anim_done
+    cmp word [cs:anim_counter], 18
+    jb .ap_done
     mov word [cs:anim_counter], 0
-    ; Advance progress value
     mov ax, [cs:prog_value]
     cmp byte [cs:prog_dir], 0
-    jne .anim_dec
+    jne .ap_dec
     inc ax
     cmp ax, 100
-    jbe .anim_set
+    jbe .ap_set
     mov ax, 100
     mov byte [cs:prog_dir], 1
-    jmp .anim_set
-.anim_dec:
+    jmp .ap_set
+.ap_dec:
     dec ax
-    jnz .anim_set
+    jnz .ap_set
     xor ax, ax
     mov byte [cs:prog_dir], 0
-.anim_set:
+.ap_set:
     mov [cs:prog_value], ax
-    call draw_progress
-.anim_done:
+    call draw_prog_bar
+.ap_done:
     ret
 
 ; ============================================================================
@@ -622,16 +1313,43 @@ radio_a_label:  db 'Option A', 0
 radio_b_label:  db 'Option B', 0
 chk_label:      db 'Enable', 0
 tf_label:       db 'Name:', 0
+cb_label:       db 'Style:', 0
 prog_label:     db 'Progress:', 0
 btn_ok_label:   db 'OK', 0
 btn_cancel_label: db 'Cancel', 0
 
-; List item strings
+; Menu bar: consecutive null-terminated strings
+menu_strings:   db 'File', 0, 'Edit', 0, 'Help', 0
+; Menu dropdown items
+menu_file_items: db 'New', 0, 'Open', 0, 'Save', 0, 'Exit', 0
+menu_edit_items: db 'Cut', 0, 'Copy', 0, 'Paste', 0
+menu_help_items: db 'About', 0
+
+; Combo box options
+combo_str_0:    db 'Normal', 0
+combo_str_1:    db 'Bold', 0
+combo_str_2:    db 'Italic', 0
+combo_str_3:    db 'Underline', 0
+
+combo_ptrs:
+    dw combo_str_0
+    dw combo_str_1
+    dw combo_str_2
+    dw combo_str_3
+
+; List items (12)
 list_str_0:     db 'Documents', 0
 list_str_1:     db 'Pictures', 0
 list_str_2:     db 'Music', 0
 list_str_3:     db 'Programs', 0
 list_str_4:     db 'System', 0
+list_str_5:     db 'Videos', 0
+list_str_6:     db 'Desktop', 0
+list_str_7:     db 'Downloads', 0
+list_str_8:     db 'Fonts', 0
+list_str_9:     db 'Network', 0
+list_str_10:    db 'Trash', 0
+list_str_11:    db 'Config', 0
 
 list_ptrs:
     dw list_str_0
@@ -639,18 +1357,30 @@ list_ptrs:
     dw list_str_2
     dw list_str_3
     dw list_str_4
+    dw list_str_5
+    dw list_str_6
+    dw list_str_7
+    dw list_str_8
+    dw list_str_9
+    dw list_str_10
+    dw list_str_11
 
 ; State variables
 win_handle:     db 0
 prev_btn:       db 0
-focus:          db 0                ; 0=textfield, 1=list
-radio_sel:      db 0                ; 0=A, 1=B
-chk_state:      db 0                ; 0=unchecked, 1=checked
-list_sel:       db 0                ; Selected list item (0-4)
-tf_cursor:      dw 0                ; Text field cursor position
-tf_len:         db 0                ; Text field length
-tf_buffer:      times 22 db 0       ; Text field buffer (20 chars + null + spare)
-prog_value:     dw 45               ; Progress bar value (0-100)
-prog_dir:       db 0                ; 0=increasing, 1=decreasing
-anim_counter:   dw 0                ; Animation tick counter
-last_tick:      dw 0                ; Last BIOS tick for timing
+focus:          db 0                ; 0=textfield, 1=list, 2=combo
+radio_sel:      db 0
+chk_state:      db 0
+list_sel:       db 0                ; Selected list item (0-11)
+scroll_off:     db 0                ; List scroll viewport offset
+tf_cursor:      dw 0
+tf_len:         db 0
+tf_buffer:      times 22 db 0       ; 20 chars + null + spare
+combo_sel:      db 0                ; Selected combo item (0-3)
+combo_open:     db 0                ; 0=closed, 1=open
+menu_open:      db 0xFF             ; 0xFF=none, 0=File, 1=Edit, 2=Help
+menu_sel:       db 0                ; Selected item in open menu
+prog_value:     dw 45
+prog_dir:       db 0
+anim_counter:   dw 0
+last_tick:      dw 0
