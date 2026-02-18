@@ -39,16 +39,16 @@ EVENT_KEY_PRESS         equ 1
 
 ; Icon grid constants
 GRID_COLS               equ 4
-GRID_ROWS               equ 2
-MAX_ICONS               equ 8
+GRID_ROWS               equ 3
+MAX_ICONS               equ 12
 COL_WIDTH               equ 80
-ROW_HEIGHT              equ 80
+ROW_HEIGHT              equ 55
 GRID_START_Y            equ 24
 ICON_SIZE               equ 16          ; 16x16 pixels
 ICON_X_OFFSET           equ 32          ; Center 16px icon in 80px column
-ICON_Y_OFFSET           equ 5           ; Top padding within row
+ICON_Y_OFFSET           equ 2           ; Top padding within row
 LABEL_Y_GAP             equ 20          ; Below icon top (16px + 4px gap)
-HITBOX_HEIGHT           equ 40          ; Clickable area height
+HITBOX_HEIGHT           equ 35          ; Clickable area height
 
 ; Double-click threshold
 DOUBLE_CLICK_TICKS      equ 9           ; ~0.5s at 18.2 Hz BIOS timer
