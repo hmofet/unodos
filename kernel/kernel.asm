@@ -5441,8 +5441,33 @@ event_get_stub:
     ; Key available — read it (INT 16h AH=00h)
     xor ah, ah
     int 0x16                        ; AH=scancode, AL=ASCII
+    ; Translate extended keys (AL=0) to special codes matching INT 9 handler
+    test al, al
+    jnz .bios_key_ready             ; Normal ASCII key — use as-is
+    ; Extended key: map scancode (AH) to special key codes
+    cmp ah, 0x48
+    je .bios_arrow_up
+    cmp ah, 0x50
+    je .bios_arrow_down
+    cmp ah, 0x4B
+    je .bios_arrow_left
+    cmp ah, 0x4D
+    je .bios_arrow_right
+    jmp .bios_key_ready             ; Unknown extended key
+.bios_arrow_up:
+    mov al, 128
+    jmp .bios_key_ready
+.bios_arrow_down:
+    mov al, 129
+    jmp .bios_key_ready
+.bios_arrow_left:
+    mov al, 130
+    jmp .bios_key_ready
+.bios_arrow_right:
+    mov al, 131
+.bios_key_ready:
     ; Synthesize a KEY_PRESS event
-    mov dl, al                      ; DL = ASCII char
+    mov dl, al                      ; DL = ASCII char (or special code)
     mov dh, ah                      ; DH = scancode
     mov al, EVENT_KEY_PRESS
     clc                             ; CF=0 = event available
@@ -9427,6 +9452,9 @@ gfx_fill_color:
     push es
     push bp
 
+    ; Save color for slow path
+    mov [.fill_color], al
+
     ; Build the color byte: replicate 2-bit color across all 4 pixels
     ; Color 0 = 0x00, Color 1 = 0x55, Color 2 = 0xAA, Color 3 = 0xFF
     and al, 3
@@ -9451,8 +9479,16 @@ gfx_fill_color:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    ; Check for byte-aligned fast path (BX % 4 == 0 AND DX % 4 == 0)
+    mov ax, bx
+    and ax, 3
+    jnz .gfc_slow
+    mov ax, dx
+    and ax, 3
+    jnz .gfc_slow
+
 .gfc_row:
-    ; Calculate CGA row address
+    ; Fast path: byte-aligned fill with rep stosb
     push cx                         ; Save Y
     push bx                         ; Save X
     push dx                         ; Save width
@@ -9476,17 +9512,10 @@ gfx_fill_color:
     shr ax, 1                       ; AX = X / 4
     add di, ax                      ; DI = start byte in CGA memory
 
-    ; Calculate bytes to fill: (X + width) / 4 - X / 4
-    mov ax, bx
-    add ax, dx                      ; AX = X + width
-    add ax, 3                       ; Round up
-    shr ax, 1
-    shr ax, 1                       ; AX = ceil((X+width)/4)
-    mov cx, bx
+    ; Bytes to fill = width / 4
+    mov cx, dx
     shr cx, 1
-    shr cx, 1                       ; CX = X / 4
-    sub ax, cx                      ; AX = bytes to fill
-    mov cx, ax
+    shr cx, 1
 
     ; Fill bytes
     mov al, [.fill_byte]
@@ -9498,7 +9527,29 @@ gfx_fill_color:
     inc cx                          ; Next Y
     dec bp
     jnz .gfc_row
+    jmp .gfc_cursor_done
 
+.gfc_slow:
+    ; Slow path: pixel-by-pixel for non-aligned rects
+    ; On entry: BX=X, CX=Y, DX=width, BP=height
+    ; plot_pixel_color: CX=X, BX=Y, DL=color (preserves all regs)
+    mov [.save_x], bx
+    mov [.save_w], dx
+    xchg bx, cx                    ; BX=Y, CX=X
+.gfc_srow:
+    mov cx, [.save_x]              ; CX = start X
+    mov si, [.save_w]              ; SI = width counter
+.gfc_scol:
+    mov dl, [.fill_color]
+    call plot_pixel_color
+    inc cx                          ; Next X
+    dec si
+    jnz .gfc_scol
+    inc bx                          ; Next Y
+    dec bp
+    jnz .gfc_srow
+
+.gfc_cursor_done:
     dec byte [cursor_locked]
     call mouse_cursor_show
 
@@ -9513,7 +9564,10 @@ gfx_fill_color:
     pop ax
     ret
 
-.fill_byte: db 0
+.fill_byte:  db 0
+.fill_color: db 0
+.save_x:     dw 0
+.save_w:     dw 0
 
 ; redraw_affected_windows - Redraw windows that overlapped a cleared rectangle
 ; Input: Variables redraw_old_x/y/w/h set by caller
