@@ -293,6 +293,7 @@ def find_apps():
         ('settings.bin', 'SETTINGS.BIN'),
         ('tetris.bin', 'TETRIS.BIN'),
         ('demo.bin', 'DEMO.BIN'),
+        ('apitest.bin', 'APITEST.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
