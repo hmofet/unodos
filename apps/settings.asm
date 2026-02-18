@@ -61,6 +61,8 @@ API_FS_DELETE           equ 47
 API_SET_THEME           equ 54
 API_GET_THEME           equ 55
 API_FILLED_RECT_COLOR   equ 67
+API_GET_RTC_TIME        equ 72
+API_SET_RTC_TIME        equ 81
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -86,6 +88,16 @@ BTN_Y       equ 136                 ; Button row Y
 BTN_DEF_X   equ 116                 ; Defaults button X
 BTN_DEF_W   equ 72                  ; Defaults button width
 
+; Time controls (right column, below word wrap)
+TIME_X      equ 160                 ; Time controls X
+TIME_Y_LBL  equ 108                 ; "Time:" label Y
+TIME_Y_DISP equ 120                 ; HH:MM:SS display Y
+TIME_Y_BTNS equ 134                 ; H+/H-/M+/M- buttons Y
+TIME_Y_SET  equ 148                 ; Set Time button Y
+TIME_BTN_W  equ 24                  ; Small button width
+TIME_BTN_H  equ 12                  ; Small button height
+TIME_BTN_GAP equ 4                  ; Gap between small buttons
+
 entry:
     pusha
     push ds
@@ -100,6 +112,13 @@ entry:
     mov [cs:cur_text_clr], al
     mov [cs:cur_bg_clr], bl
     mov [cs:cur_win_clr], cl
+
+    ; Load current RTC time
+    mov ah, API_GET_RTC_TIME
+    int 0x80
+    mov [cs:cur_hours], ch
+    mov [cs:cur_minutes], cl
+    mov [cs:cur_seconds], dh
 
     ; Create window
     mov bx, WIN_X
@@ -144,6 +163,12 @@ entry:
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
+    ; Refresh RTC time on repaint
+    mov ah, API_GET_RTC_TIME
+    int 0x80
+    mov [cs:cur_hours], ch
+    mov [cs:cur_minutes], cl
+    mov [cs:cur_seconds], dh
     call draw_ui
     jmp .main_loop
 
@@ -229,6 +254,57 @@ entry:
     test al, al
     jnz .defaults
 
+    ; --- Time control hit tests ---
+    ; H+ button
+    mov bx, TIME_X
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .inc_hours
+
+    ; H- button
+    mov bx, TIME_X + TIME_BTN_W + TIME_BTN_GAP
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .dec_hours
+
+    ; M+ button
+    mov bx, TIME_X + (TIME_BTN_W + TIME_BTN_GAP) * 2
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .inc_minutes
+
+    ; M- button
+    mov bx, TIME_X + (TIME_BTN_W + TIME_BTN_GAP) * 3
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .dec_minutes
+
+    ; Set Time button
+    mov bx, TIME_X
+    mov cx, TIME_Y_SET
+    mov dx, 80
+    mov si, 14
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .set_time
+
     jmp .main_loop
 
 .mouse_up:
@@ -271,6 +347,34 @@ entry:
     mov byte [cs:cur_bg_clr], 0
     mov byte [cs:cur_win_clr], 3
     call draw_ui
+    jmp .main_loop
+
+.inc_hours:
+    call bcd_inc_hours
+    call draw_time_section
+    jmp .main_loop
+
+.dec_hours:
+    call bcd_dec_hours
+    call draw_time_section
+    jmp .main_loop
+
+.inc_minutes:
+    call bcd_inc_minutes
+    call draw_time_section
+    jmp .main_loop
+
+.dec_minutes:
+    call bcd_dec_minutes
+    call draw_time_section
+    jmp .main_loop
+
+.set_time:
+    mov ch, [cs:cur_hours]
+    mov cl, [cs:cur_minutes]
+    mov dh, [cs:cur_seconds]
+    mov ah, API_SET_RTC_TIME
+    int 0x80
     jmp .main_loop
 
 .apply_all:
@@ -548,6 +652,9 @@ draw_ui:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
+    ; === Time controls (right column, below word wrap) ===
+    call draw_time_section
+
     pop di
     pop si
     pop dx
@@ -725,6 +832,212 @@ save_settings:
     ret
 
 ; ============================================================================
+; Draw time section (label + display + buttons)
+; ============================================================================
+draw_time_section:
+    pusha
+
+    ; Clear the time display area only (avoid full redraw flicker)
+    mov bx, TIME_X
+    mov cx, TIME_Y_LBL
+    mov dx, 130
+    mov si, 56
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; "Time:" label
+    mov si, lbl_time
+    mov bx, TIME_X
+    mov cx, TIME_Y_LBL
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Format and display HH:MM:SS
+    call format_time_string
+    mov si, time_str
+    mov bx, TIME_X
+    mov cx, TIME_Y_DISP
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw H+/H-/M+/M- buttons using small font
+    xor al, al                      ; Font 0 (4x6)
+    mov ah, API_SET_FONT
+    int 0x80
+
+    mov ax, cs
+    mov es, ax
+
+    ; H+ button
+    mov bx, TIME_X
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov di, lbl_h_up
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; H- button
+    mov ax, cs
+    mov es, ax
+    mov bx, TIME_X + TIME_BTN_W + TIME_BTN_GAP
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov di, lbl_h_dn
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; M+ button
+    mov ax, cs
+    mov es, ax
+    mov bx, TIME_X + (TIME_BTN_W + TIME_BTN_GAP) * 2
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov di, lbl_m_up
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; M- button
+    mov ax, cs
+    mov es, ax
+    mov bx, TIME_X + (TIME_BTN_W + TIME_BTN_GAP) * 3
+    mov cx, TIME_Y_BTNS
+    mov dx, TIME_BTN_W
+    mov si, TIME_BTN_H
+    mov di, lbl_m_dn
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; Restore user's font
+    mov al, [cs:cur_font]
+    mov ah, API_SET_FONT
+    int 0x80
+
+    ; Set Time button (default font)
+    mov ax, cs
+    mov es, ax
+    mov bx, TIME_X
+    mov cx, TIME_Y_SET
+    mov dx, 80
+    mov si, 14
+    mov di, lbl_set_time
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    popa
+    ret
+
+; ============================================================================
+; BCD time helpers
+; ============================================================================
+
+; format_time_string - Format BCD time into "HH:MM:SS" ASCII
+format_time_string:
+    push ax
+    push di
+
+    mov di, time_str
+
+    mov al, [cs:cur_hours]
+    call .bcd_to_ascii
+    mov [cs:di], ah
+    mov [cs:di+1], al
+    mov byte [cs:di+2], ':'
+
+    mov al, [cs:cur_minutes]
+    call .bcd_to_ascii
+    mov [cs:di+3], ah
+    mov [cs:di+4], al
+    mov byte [cs:di+5], ':'
+
+    mov al, [cs:cur_seconds]
+    call .bcd_to_ascii
+    mov [cs:di+6], ah
+    mov [cs:di+7], al
+
+    pop di
+    pop ax
+    ret
+
+; Convert BCD byte to two ASCII digits
+; Input: AL = BCD (e.g. 0x23)
+; Output: AH = tens char, AL = ones char
+.bcd_to_ascii:
+    mov ah, al
+    and al, 0x0F
+    shr ah, 4
+    add al, '0'
+    add ah, '0'
+    ret
+
+; bcd_inc_hours - Increment hours (BCD), wrap 23→00
+bcd_inc_hours:
+    push ax
+    mov al, [cs:cur_hours]
+    add al, 1
+    daa                             ; Decimal adjust after addition
+    cmp al, 0x24
+    jb .bih_ok
+    xor al, al
+.bih_ok:
+    mov [cs:cur_hours], al
+    pop ax
+    ret
+
+; bcd_dec_hours - Decrement hours (BCD), wrap 00→23
+bcd_dec_hours:
+    push ax
+    mov al, [cs:cur_hours]
+    test al, al
+    jnz .bdh_dec
+    mov al, 0x23
+    jmp .bdh_done
+.bdh_dec:
+    sub al, 1
+    das                             ; Decimal adjust after subtraction
+.bdh_done:
+    mov [cs:cur_hours], al
+    pop ax
+    ret
+
+; bcd_inc_minutes - Increment minutes (BCD), wrap 59→00
+bcd_inc_minutes:
+    push ax
+    mov al, [cs:cur_minutes]
+    add al, 1
+    daa
+    cmp al, 0x60
+    jb .bim_ok
+    xor al, al
+.bim_ok:
+    mov [cs:cur_minutes], al
+    pop ax
+    ret
+
+; bcd_dec_minutes - Decrement minutes (BCD), wrap 00→59
+bcd_dec_minutes:
+    push ax
+    mov al, [cs:cur_minutes]
+    test al, al
+    jnz .bdm_dec
+    mov al, 0x59
+    jmp .bdm_done
+.bdm_dec:
+    sub al, 1
+    das
+.bdm_done:
+    mov [cs:cur_minutes], al
+    pop ax
+    ret
+
+; ============================================================================
 ; Strings
 ; ============================================================================
 window_title:       db 'Settings', 0
@@ -746,6 +1059,12 @@ lbl_desktop:        db 'Desk:', 0
 lbl_window:         db 'Win:', 0
 lbl_wrap:           db 'Word Wrap:', 0
 lbl_wrap_text:      db 'This text wraps at the edge.', 0
+lbl_time:           db 'Time:', 0
+lbl_set_time:       db 'Set Time', 0
+lbl_h_up:           db 'H+', 0
+lbl_h_dn:           db 'H-', 0
+lbl_m_up:           db 'M+', 0
+lbl_m_dn:           db 'M-', 0
 ; ============================================================================
 ; Variables
 ; ============================================================================
@@ -763,3 +1082,7 @@ swatch_row:     dw 0                ; Current row in draw_one_swatch
 swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
 cfg_buf:        times 5 db 0        ; Settings buffer (magic + 4 settings bytes)
+cur_hours:      db 0                ; Current hours (BCD)
+cur_minutes:    db 0                ; Current minutes (BCD)
+cur_seconds:    db 0                ; Current seconds (BCD)
+time_str:       db '00:00:00', 0    ; Time display buffer
