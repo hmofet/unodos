@@ -168,6 +168,7 @@ int_80_handler:
     jb .no_translate                ; APIs 53-55: no translation
     cmp ah, 63
     jb .do_translate                ; APIs 56-62: widget APIs
+    jmp .no_translate               ; API 63+: not drawing, skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62: translate coords
 
     ; Translate: BX += content_x, CX += content_y
@@ -3861,6 +3862,7 @@ widget_draw_progress:
     mul dx                          ; DX:AX = value * inner_width
     mov cx, 100
     div cx                          ; AX = fill width in pixels
+    mov [wgt_cursor_pos], ax        ; Save fill width for text clipping
     ; Draw filled portion
     test ax, ax
     jz .prog_no_fill
@@ -3915,6 +3917,7 @@ widget_draw_progress:
     sub bx, dx
     shr bx, 1
     add bx, [btn_x]
+    mov [wgt_text_ptr], bx          ; Save text X for second pass
     ; y = btn_y + (PROGRESS_HEIGHT - font_height) / 2
     xor cx, cx
     mov cl, [draw_font_height]
@@ -3923,7 +3926,58 @@ widget_draw_progress:
     shr ax, 1
     add ax, [btn_y]
     mov cx, ax
-    call gfx_draw_string_stub
+    mov [wgt_scratch], cx           ; Save text Y for second pass
+    ; Save clip state
+    push word [clip_x1]
+    push word [clip_x2]
+    push word [clip_y1]
+    push word [clip_y2]
+    push word [clip_enabled]
+    ; Clip Y to bar interior
+    mov ax, [btn_y]
+    inc ax
+    mov [clip_y1], ax
+    mov ax, [btn_y]
+    add ax, PROGRESS_HEIGHT - 2
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    ; --- Pass 1: inverted (black) text over filled area ---
+    mov ax, [wgt_cursor_pos]        ; fill_width
+    test ax, ax
+    jz .prog_skip_inverted
+    mov dx, [btn_x]
+    inc dx
+    mov [clip_x1], dx               ; Left edge of fill
+    add dx, ax
+    dec dx                          ; Right edge of fill (inclusive)
+    mov [clip_x2], dx
+    mov si, prog_str_buf
+    mov bx, [wgt_text_ptr]
+    mov cx, [wgt_scratch]
+    call gfx_draw_string_inverted   ; Black text on filled area
+.prog_skip_inverted:
+    ; --- Pass 2: normal (white) text over unfilled area ---
+    mov ax, [btn_x]
+    inc ax
+    add ax, [wgt_cursor_pos]        ; AX = right edge of fill + 1
+    mov dx, [btn_x]
+    add dx, [btn_w]
+    sub dx, 2                       ; DX = right edge of bar interior
+    cmp ax, dx
+    ja .prog_skip_normal            ; Fill covers entire bar, no unfilled area
+    mov [clip_x1], ax
+    mov [clip_x2], dx
+    mov si, prog_str_buf
+    mov bx, [wgt_text_ptr]
+    mov cx, [wgt_scratch]
+    call gfx_draw_string_stub       ; White text on unfilled area
+.prog_skip_normal:
+    ; Restore clip state
+    pop word [clip_enabled]
+    pop word [clip_y2]
+    pop word [clip_y1]
+    pop word [clip_x2]
+    pop word [clip_x1]
     ; Restore caller_ds
     mov ax, [btn_saved_cds]
     mov [caller_ds], ax
