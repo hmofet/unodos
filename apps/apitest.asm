@@ -97,7 +97,16 @@ entry:
     jc .exit_fail
     mov [cs:wh], al
 
+.repaint:
     mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
+
+    ; Clear content area
+    mov bx, 0
+    mov cx, 0
+    mov dx, WIN_W - 2
+    mov si, WIN_H - 12
+    mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Header
@@ -439,8 +448,8 @@ entry:
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
-    ; On redraw, just re-run all tests (simplest approach)
-    jmp entry
+    ; Repaint content without recreating window
+    jmp .repaint
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
