@@ -62,6 +62,7 @@ API_DRAW_SEPARATOR      equ 62
 API_GET_TICK            equ 63
 API_DRAW_COMBOBOX       equ 65
 API_DRAW_MENUBAR        equ 66
+API_DELAY_TICKS         equ 73
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -1631,20 +1632,10 @@ close_combo_popup:
 ; Brief delay (~220ms) for UI feedback
 ; ============================================================================
 delay_short:
-    mov ah, API_GET_TICK
-    int 0x80
-    add ax, 4
-    push ax
-.ds_wait:
-    sti
-    mov ah, API_APP_YIELD
-    int 0x80
-    mov ah, API_GET_TICK
-    int 0x80
-    pop cx
     push cx
-    cmp ax, cx
-    jb .ds_wait
+    mov cx, 4                       ; ~220ms (4 ticks at 55ms each)
+    mov ah, API_DELAY_TICKS
+    int 0x80
     pop cx
     ret
 
