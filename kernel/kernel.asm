@@ -7186,6 +7186,111 @@ fat16_read_sector:
 
 .saved_lba: dd 0
 
+; fat16_write_sector - Write a 512-byte sector to FAT16 partition
+; Input: EAX = sector number (relative to partition start)
+;        ES:BX = buffer to write from
+; Output: CF = 0 on success, CF = 1 on error
+fat16_write_sector:
+    push eax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Add partition start offset to get absolute LBA
+    add eax, [fat16_partition_lba]
+    mov [.saved_lba], eax
+
+    ; Build DAP at 0x0000:0x0600 (low memory — USB BIOSes require DAP below 64KB)
+    push es
+    mov cx, es                      ; CX = caller's buffer segment
+    xor si, si
+    mov es, si                      ; ES = 0x0000
+    mov word [es:0x0600], 0x0010    ; Packet size = 16
+    mov word [es:0x0602], 1         ; Write 1 sector
+    mov [es:0x0604], bx             ; Buffer offset
+    mov [es:0x0606], cx             ; Buffer segment (from caller's ES)
+    mov [es:0x0608], eax            ; LBA low 32
+    mov dword [es:0x060C], 0        ; LBA high 32
+    pop es                          ; Restore caller's ES
+
+    ; Try INT 13h extended write (LBA mode) with DS:SI = 0x0000:0x0600
+    mov dl, [fat16_drive]
+    push ds
+    xor si, si
+    mov ds, si                      ; DS = 0x0000
+    mov si, 0x0600                  ; DS:SI = 0x0000:0x0600
+    mov ah, 0x43
+    mov al, 0                      ; No verify after write
+    int 0x13
+    pop ds
+    jnc .ws_success
+
+    ; Extended write failed - try CHS fallback
+    push es
+    push bx
+    mov ah, 0x08
+    mov dl, [fat16_drive]
+    int 0x13
+    pop bx
+    pop es
+    jc .ws_error
+
+    ; DH = max head number, CL[5:0] = max sector, CL[7:6]:CH = max cylinder
+    mov al, cl
+    and al, 0x3F
+    mov [ide_sectors], al
+    inc dh
+    mov [ide_heads], dh
+
+    ; Convert saved LBA to CHS
+    mov eax, [.saved_lba]
+
+    ; Sector = (LBA mod sectors_per_track) + 1
+    push ebx
+    xor edx, edx
+    movzx ebx, byte [ide_sectors]
+    div ebx
+    inc dl
+    mov cl, dl                      ; CL = sector
+
+    ; Head and Cylinder
+    xor edx, edx
+    movzx ebx, byte [ide_heads]
+    div ebx
+    mov dh, dl                      ; DH = head
+    mov ch, al                      ; CH = cylinder low 8 bits
+    shl ah, 6
+    or cl, ah                       ; CL[7:6] = cylinder high 2 bits
+    pop ebx
+
+    ; Perform CHS write
+    mov ah, 0x03
+    mov al, 1
+    mov dl, [fat16_drive]
+    int 0x13
+    jc .ws_error
+
+.ws_success:
+    clc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+.ws_error:
+    stc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+.saved_lba: dd 0
+
 ; fat16_mount - Mount FAT16 partition from hard drive
 ; Input: DL = drive number (0x80 = first HD)
 ; Output: CF = 0 on success, CF = 1 on error
@@ -7608,6 +7713,166 @@ fat16_get_next_cluster:
     pop bx
     ret
 
+; fat16_set_fat_entry - Write a 16-bit value to the FAT16 table
+; Input: AX = cluster number, DX = new 16-bit value
+; Output: CF = 0 on success, CF = 1 on error
+; Writes to both FAT1 and FAT2
+fat16_set_fat_entry:
+    push eax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+
+    mov [cs:.sfe16_value], dx
+    mov [cs:.sfe16_cluster], ax
+
+    ; Calculate FAT sector: cluster / 256 (each sector holds 256 16-bit entries)
+    shr ax, 8                       ; sector_index = cluster / 256
+    movzx eax, ax
+    add eax, [fat16_fat_start]      ; Absolute FAT sector
+
+    ; Ensure FAT sector is cached
+    cmp eax, [fat16_fat_cached_sect]
+    je .sfe16_cached
+
+    ; Load FAT sector into cache
+    mov [fat16_fat_cached_sect], eax
+    mov cx, 0x1000
+    mov es, cx
+    mov bx, fat16_fat_cache
+    call fat16_read_sector
+    jc .sfe16_error
+
+.sfe16_cached:
+    ; Calculate byte offset: (cluster mod 256) * 2
+    mov ax, [cs:.sfe16_cluster]
+    and ax, 0x00FF
+    shl ax, 1                       ; * 2 bytes per entry
+    mov bx, ax
+    mov dx, [cs:.sfe16_value]
+    mov [fat16_fat_cache + bx], dx  ; Write new value
+
+    ; Write modified cache to FAT1
+    mov eax, [fat16_fat_cached_sect]
+    mov cx, 0x1000
+    mov es, cx
+    mov bx, fat16_fat_cache
+    call fat16_write_sector
+    jc .sfe16_error
+
+    ; Write same sector to FAT2 (fat1_start + sectors_per_fat)
+    movzx ecx, word [fat16_bpb_cache + 4]  ; sectors_per_fat
+    add eax, ecx
+    call fat16_write_sector
+    jc .sfe16_error
+
+    clc
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+.sfe16_error:
+    mov dword [fat16_fat_cached_sect], 0xFFFFFFFF  ; Invalidate cache
+    stc
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop eax
+    ret
+
+.sfe16_value:   dw 0
+.sfe16_cluster: dw 0
+
+; fat16_alloc_cluster - Find and allocate a free cluster in FAT16
+; Output: AX = allocated cluster number, CF = 0 on success
+;         CF = 1 on error (AX = error code)
+fat16_alloc_cluster:
+    push bx
+    push cx
+    push dx
+    push es
+
+    ; Scan FAT entries starting from cluster 2
+    ; FAT16 max is 65525 data clusters, but our 64MB image uses far fewer
+    mov cx, 2                       ; Start from cluster 2
+.f16ac_scan:
+    cmp cx, 0xFFF0                  ; Max valid cluster
+    jae .f16ac_full
+
+    ; Calculate which FAT sector holds this cluster
+    mov ax, cx
+    shr ax, 8                       ; sector_index = cluster / 256
+    movzx eax, ax
+    add eax, [fat16_fat_start]
+
+    ; Check if cached
+    cmp eax, [fat16_fat_cached_sect]
+    je .f16ac_cached
+
+    ; Load FAT sector
+    mov [fat16_fat_cached_sect], eax
+    push cx
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat16_fat_cache
+    call fat16_read_sector
+    pop cx
+    jc .f16ac_error
+
+.f16ac_cached:
+    ; Check entry: (cluster mod 256) * 2
+    mov ax, cx
+    and ax, 0x00FF
+    shl ax, 1
+    mov bx, ax
+    cmp word [fat16_fat_cache + bx], 0  ; 0 = free
+    je .f16ac_found
+
+    inc cx
+    jmp .f16ac_scan
+
+.f16ac_found:
+    ; Mark cluster as EOC (0xFFF8)
+    mov ax, cx
+    mov dx, 0xFFF8
+    call fat16_set_fat_entry
+    jc .f16ac_error
+
+    ; Return allocated cluster
+    mov ax, cx
+    clc
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.f16ac_full:
+    mov ax, FS_ERR_DISK_FULL
+    stc
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.f16ac_error:
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; fat16_read - Read from open FAT16 file
 ; Input: AX = file handle
 ;        ES:BX = buffer
@@ -7938,6 +8203,1137 @@ fat16_readdir:
 .sector_off:      dw 0
 .entry_idx:       dw 0
 .current_entry:   dw 0
+
+; ============================================================================
+; FAT16 Write Functions (Build 258)
+; ============================================================================
+
+; fat16_create - Create a new file in FAT16 root directory
+; Input: DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF=0 success, AX = file handle
+;         CF=1 error, AX = error code
+fat16_create:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert filename to 8.3 FAT format (padded with spaces)
+    sub sp, 12                      ; 11 bytes for name + 1 alignment
+    mov di, sp
+    push ss
+    pop es
+
+    ; Initialize with spaces
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Copy name part (up to 8 chars before '.')
+    mov cx, 8
+.f16c_copy_name:
+    lodsb
+    test al, al
+    jz .f16c_name_done
+    cmp al, '.'
+    je .f16c_copy_ext
+    cmp al, 'a'
+    jb .f16c_store_name
+    cmp al, 'z'
+    ja .f16c_store_name
+    sub al, 32
+.f16c_store_name:
+    mov [es:di], al
+    inc di
+    loop .f16c_copy_name
+.f16c_skip_dot:
+    lodsb
+    test al, al
+    jz .f16c_name_done
+    cmp al, '.'
+    jne .f16c_skip_dot
+
+.f16c_copy_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.f16c_copy_ext_loop:
+    lodsb
+    test al, al
+    jz .f16c_name_done
+    cmp al, 'a'
+    jb .f16c_store_ext
+    cmp al, 'z'
+    ja .f16c_store_ext
+    sub al, 32
+.f16c_store_ext:
+    mov [es:di], al
+    inc di
+    loop .f16c_copy_ext_loop
+
+.f16c_name_done:
+    ; Switch DS to kernel segment
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Search root directory for free entry (0x00 or 0xE5)
+    ; root dir sectors = (fat16_root_entries * 32) / 512
+    movzx cx, byte [fat16_root_entries]     ; Low byte (entries / 16 sectors = entries >> 4)
+    mov ax, [fat16_root_entries]
+    shr ax, 4                       ; AX = number of root dir sectors (entries/16)
+    mov cx, ax
+    xor dx, dx                      ; DX = sector index (0-based)
+
+.f16c_search_sector:
+    cmp dx, cx
+    jae .f16c_dir_full
+
+    push cx
+    push dx
+
+    ; Calculate absolute root dir sector
+    movzx eax, dx
+    add eax, [fat16_root_start]
+
+    ; Read sector into fat16_sector_buf
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    jc .f16c_read_error
+
+    ; Search 16 entries in this sector
+    mov cx, 16
+    mov si, fat16_sector_buf
+    xor bx, bx                     ; BX = byte offset within sector
+
+.f16c_check_entry:
+    mov al, [si]
+    test al, al                     ; 0x00 = free
+    jz .f16c_found_free
+    cmp al, 0xE5                    ; Deleted = free
+    je .f16c_found_free
+
+    add si, 32
+    add bx, 32
+    dec cx
+    jnz .f16c_check_entry
+
+    ; Next sector
+    pop dx
+    pop cx
+    inc dx
+    jmp .f16c_search_sector
+
+.f16c_dir_full:
+    add sp, 12
+    mov ax, FS_ERR_DIR_FULL
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_read_error:
+    pop dx
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_found_free:
+    ; Found free entry at fat16_sector_buf + BX
+    mov [cs:.f16c_dir_offset], bx
+    pop dx                          ; DX = sector index (relative to root start)
+    mov [cs:.f16c_dir_sector], dx
+    pop cx                          ; Sector count
+
+    ; Allocate a cluster for the file
+    call fat16_alloc_cluster
+    jc .f16c_alloc_failed
+    mov [cs:.f16c_start_cluster], ax
+
+    ; Build directory entry at fat16_sector_buf + offset
+    push ds
+    pop es                          ; ES = 0x1000
+    mov di, fat16_sector_buf
+    add di, [cs:.f16c_dir_offset]
+
+    ; Copy 8.3 filename from stack
+    push ds
+    push ss
+    pop ds
+    mov si, sp
+    add si, 2                       ; Skip the DS we just pushed
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    ; Set attributes and cluster/size
+    mov byte [es:di], 0x20          ; Attribute = archive at offset +11
+    inc di                          ; DI now at +12
+    ; Clear bytes 12-25
+    mov cx, 14
+    xor al, al
+    rep stosb                       ; DI now at +26
+    ; Write starting cluster at +26
+    mov ax, [cs:.f16c_start_cluster]
+    mov [es:di], ax
+    add di, 2                       ; DI at +28
+    mov word [es:di], 0             ; File size low
+    mov word [es:di + 2], 0         ; File size high
+
+    ; Write modified directory sector back
+    movzx eax, word [cs:.f16c_dir_sector]
+    add eax, [fat16_root_start]
+    mov bx, fat16_sector_buf
+    call fat16_write_sector
+    jc .f16c_write_error
+
+    ; Allocate file handle
+    call alloc_file_handle
+    jc .f16c_no_handles
+
+    ; Initialize file handle entry
+    mov di, ax
+    shl di, 5
+    add di, file_table
+
+    mov byte [di], 1                ; Status = open
+    mov byte [di + 1], 1            ; Mount handle = FAT16
+    mov cx, [cs:.f16c_start_cluster]
+    mov [di + 2], cx                ; Starting cluster
+    mov dword [di + 4], 0           ; File size = 0
+    mov dword [di + 8], 0           ; Position = 0
+    mov cx, [cs:.f16c_dir_sector]
+    mov [di + 18], cx               ; Dir sector (relative index within root dir)
+    mov cx, [cs:.f16c_dir_offset]
+    mov [di + 20], cx               ; Dir entry offset within sector
+    mov cx, [cs:.f16c_start_cluster]
+    mov [di + 22], cx               ; Last cluster (= start, file is empty)
+
+    ; Clean up and return handle in AX
+    add sp, 12
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_alloc_failed:
+    add sp, 12
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_write_error:
+    add sp, 12
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_no_handles:
+    add sp, 12
+    mov ax, FS_ERR_NO_HANDLES
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16c_dir_sector:    dw 0
+.f16c_dir_offset:    dw 0
+.f16c_start_cluster: dw 0
+
+; ============================================================================
+; fat16_write - Write data to an open FAT16 file
+; Input: AX = file handle, ES:BX = data buffer, CX = byte count
+; Output: AX = bytes written, CF=0 success; CF=1 error
+; ============================================================================
+fat16_write:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Validate file handle
+    cmp ax, FILE_MAX_HANDLES
+    jae .f16w_invalid
+
+    ; Get file table entry
+    mov si, ax
+    shl si, 5
+    add si, file_table
+    mov [cs:.f16w_handle_ptr], si
+
+    ; Check if file is open
+    cmp byte [si], 1
+    jne .f16w_invalid
+
+    ; Save write parameters
+    mov [cs:.f16w_buffer_seg], es
+    mov [cs:.f16w_buffer_off], bx
+    mov [cs:.f16w_bytes_left], cx
+    mov word [cs:.f16w_bytes_written], 0
+
+    ; Get current cluster (last_cluster field, offset 22-23)
+    mov ax, [si + 22]
+    mov [cs:.f16w_current_cluster], ax
+
+    ; Get current file size
+    mov ax, [si + 4]
+    mov [cs:.f16w_file_size], ax
+
+    ; Get cluster size in bytes
+    movzx ax, byte [fat16_sects_per_clust]
+    shl ax, 9                       ; * 512
+    mov [cs:.f16w_cluster_size], ax
+
+.f16w_write_loop:
+    mov cx, [cs:.f16w_bytes_left]
+    test cx, cx
+    jz .f16w_done
+
+    ; Calculate position within current cluster
+    ; sector_in_cluster = (file_size % cluster_size) / 512
+    ; byte_in_sector = file_size % 512
+    mov ax, [cs:.f16w_file_size]
+    and ax, 0x01FF                  ; byte offset within sector (0-511)
+    mov [cs:.f16w_sector_offset], ax
+
+    ; Bytes we can write to this sector
+    mov bx, 512
+    sub bx, ax
+    cmp cx, bx
+    jbe .f16w_count_ok
+    mov cx, bx
+.f16w_count_ok:
+    mov [cs:.f16w_chunk_size], cx
+
+    ; Check if we need a new cluster
+    ; Need new cluster when: file_size > 0 AND file_size is cluster-aligned
+    mov ax, [cs:.f16w_file_size]
+    test ax, ax
+    jz .f16w_have_cluster           ; File is empty, use starting cluster
+
+    ; Check if at cluster boundary
+    mov bx, [cs:.f16w_cluster_size]
+    xor dx, dx
+    div bx                          ; DX = file_size % cluster_size
+    test dx, dx
+    jnz .f16w_have_cluster          ; Not at boundary
+
+    ; At cluster boundary - allocate new cluster
+    call fat16_alloc_cluster
+    jc .f16w_write_error
+
+    ; Link previous cluster to new one
+    push ax
+    mov dx, ax                      ; DX = new cluster number
+    mov ax, [cs:.f16w_current_cluster]
+    call fat16_set_fat_entry        ; Set prev -> new
+    pop ax
+    jc .f16w_write_error
+
+    mov [cs:.f16w_current_cluster], ax
+
+.f16w_have_cluster:
+    ; If partial sector, read existing data first
+    cmp word [cs:.f16w_sector_offset], 0
+    je .f16w_clear_buf
+
+    ; Calculate absolute sector for current position
+    mov ax, [cs:.f16w_file_size]
+    mov bx, [cs:.f16w_cluster_size]
+    xor dx, dx
+    div bx                          ; DX = offset within cluster
+    mov ax, dx
+    shr ax, 9                       ; AX = sector within cluster
+
+    ; Absolute sector = data_start + (cluster-2) * sects_per_clust + sector_in_cluster
+    push ax                         ; Save sector_in_cluster
+    movzx eax, word [cs:.f16w_current_cluster]
+    sub eax, 2
+    movzx ebx, byte [fat16_sects_per_clust]
+    imul eax, ebx
+    pop bx                          ; BX = sector_in_cluster
+    movzx ebx, bx
+    add eax, ebx
+    add eax, [fat16_data_start]
+
+    push es
+    push ds
+    pop es                          ; ES = 0x1000
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    pop es
+    jc .f16w_write_error
+    jmp .f16w_do_copy
+
+.f16w_clear_buf:
+    ; Zero out sector buffer for clean write
+    push es
+    push di
+    push cx
+    push ds
+    pop es
+    mov di, fat16_sector_buf
+    mov cx, 256
+    xor ax, ax
+    rep stosw
+    pop cx
+    pop di
+    pop es
+
+.f16w_do_copy:
+    ; Copy data from caller's buffer to fat16_sector_buf
+    push es
+    push ds
+    push si
+    push di
+    push cx
+
+    mov ax, [cs:.f16w_buffer_seg]
+    mov ds, ax
+    mov si, [cs:.f16w_buffer_off]
+
+    mov ax, 0x1000
+    mov es, ax
+    mov di, fat16_sector_buf
+    add di, [cs:.f16w_sector_offset]
+
+    mov cx, [cs:.f16w_chunk_size]
+    rep movsb
+
+    pop cx
+    pop di
+    pop si
+    pop ds
+    pop es
+
+    ; Calculate absolute sector for write
+    mov ax, [cs:.f16w_file_size]
+    mov bx, [cs:.f16w_cluster_size]
+    xor dx, dx
+    div bx                          ; DX = offset within cluster
+    mov ax, dx
+    shr ax, 9                       ; AX = sector within cluster
+
+    push ax
+    movzx eax, word [cs:.f16w_current_cluster]
+    sub eax, 2
+    movzx ebx, byte [fat16_sects_per_clust]
+    imul eax, ebx
+    pop bx
+    movzx ebx, bx
+    add eax, ebx
+    add eax, [fat16_data_start]
+
+    ; Write sector
+    push es
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_write_sector
+    pop es
+    jc .f16w_write_error
+
+    ; Update counters
+    mov cx, [cs:.f16w_chunk_size]
+    add [cs:.f16w_bytes_written], cx
+    sub [cs:.f16w_bytes_left], cx
+    add [cs:.f16w_file_size], cx
+    add [cs:.f16w_buffer_off], cx
+
+    jmp .f16w_write_loop
+
+.f16w_done:
+    ; Update file table entry
+    mov si, [cs:.f16w_handle_ptr]
+    mov ax, [cs:.f16w_file_size]
+    mov [si + 4], ax                ; File size low word
+    mov word [si + 6], 0            ; High word stays 0
+    mov ax, [cs:.f16w_current_cluster]
+    mov [si + 22], ax               ; Update last cluster
+
+    ; Update directory entry on disk
+    movzx eax, word [si + 18]       ; Dir sector (relative index)
+    add eax, [fat16_root_start]     ; Absolute LBA
+
+    push es
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    pop es
+    jc .f16w_write_error
+
+    ; Patch file size in dir entry
+    mov bx, [si + 20]              ; Dir entry offset within sector
+    mov di, fat16_sector_buf
+    add di, bx
+    mov ax, [cs:.f16w_file_size]
+    mov [di + 28], ax              ; File size low word
+    mov word [di + 30], 0          ; File size high word
+
+    ; Write dir sector back
+    movzx eax, word [si + 18]
+    add eax, [fat16_root_start]
+    push es
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_write_sector
+    pop es
+    jc .f16w_write_error
+
+    ; Return bytes written
+    mov ax, [cs:.f16w_bytes_written]
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.f16w_invalid:
+    mov ax, FS_ERR_INVALID_HANDLE
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.f16w_write_error:
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.f16w_handle_ptr:      dw 0
+.f16w_buffer_seg:      dw 0
+.f16w_buffer_off:      dw 0
+.f16w_bytes_left:      dw 0
+.f16w_bytes_written:   dw 0
+.f16w_current_cluster: dw 0
+.f16w_file_size:       dw 0
+.f16w_sector_offset:   dw 0
+.f16w_chunk_size:      dw 0
+.f16w_cluster_size:    dw 0
+
+; ============================================================================
+; fat16_delete - Delete a file from FAT16 root directory
+; Input: DS:SI = pointer to filename (null-terminated, "FILENAME.EXT")
+; Output: CF=0 success, CF=1 error (AX=error code)
+; ============================================================================
+fat16_delete:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert filename to 8.3 FAT format
+    sub sp, 12
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    mov cx, 8
+.f16d_copy_name:
+    lodsb
+    test al, al
+    jz .f16d_name_done
+    cmp al, '.'
+    je .f16d_copy_ext
+    cmp al, 'a'
+    jb .f16d_store_name
+    cmp al, 'z'
+    ja .f16d_store_name
+    sub al, 32
+.f16d_store_name:
+    mov [es:di], al
+    inc di
+    loop .f16d_copy_name
+.f16d_skip_dot:
+    lodsb
+    test al, al
+    jz .f16d_name_done
+    cmp al, '.'
+    jne .f16d_skip_dot
+
+.f16d_copy_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.f16d_copy_ext_loop:
+    lodsb
+    test al, al
+    jz .f16d_name_done
+    cmp al, 'a'
+    jb .f16d_store_ext
+    cmp al, 'z'
+    ja .f16d_store_ext
+    sub al, 32
+.f16d_store_ext:
+    mov [es:di], al
+    inc di
+    loop .f16d_copy_ext_loop
+
+.f16d_name_done:
+    ; Switch to kernel DS
+    mov ax, 0x1000
+    mov ds, ax
+
+    ; Search root directory for the file
+    mov ax, [fat16_root_entries]
+    shr ax, 4                       ; Number of root dir sectors
+    mov cx, ax
+    xor dx, dx                      ; DX = sector index
+
+.f16d_search_sector:
+    cmp dx, cx
+    jae .f16d_not_found
+
+    push cx
+    push dx
+
+    ; Read root dir sector
+    movzx eax, dx
+    add eax, [fat16_root_start]
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    jc .f16d_read_error
+
+    mov cx, 16
+    mov si, fat16_sector_buf
+    xor bx, bx
+
+.f16d_check_entry:
+    mov al, [si]
+    test al, al
+    jz .f16d_not_found_pop          ; End of directory
+    cmp al, 0xE5
+    je .f16d_next_entry
+
+    ; Compare filename
+    push si
+    push di
+    push ds
+    push cx
+    mov di, sp
+    add di, 12                      ; Skip our 4 pushes (8 bytes) + loop pushes (4 bytes) = 12
+    push ss
+    pop es
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, 11
+    repe cmpsb
+    pop cx
+    pop ds
+    pop di
+    pop si
+    je .f16d_found_file
+
+.f16d_next_entry:
+    add si, 32
+    add bx, 32
+    dec cx
+    jnz .f16d_check_entry
+
+    pop dx
+    pop cx
+    inc dx
+    jmp .f16d_search_sector
+
+.f16d_not_found:
+    add sp, 12
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16d_not_found_pop:
+    pop dx
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16d_read_error:
+    pop dx
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16d_found_file:
+    ; SI points to directory entry in fat16_sector_buf
+    ; Get starting cluster before marking as deleted
+    mov ax, [si + 0x1A]
+    mov [cs:.f16d_start_cluster], ax
+
+    ; Mark entry as deleted
+    mov byte [si], 0xE5
+
+    ; Write modified directory sector back
+    ; Sector index is on stack from push dx
+    mov bp, sp
+    mov dx, [ss:bp]                 ; DX = sector index from push dx
+    mov [cs:.f16d_dir_sector], dx
+
+    movzx eax, dx
+    add eax, [fat16_root_start]
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_write_sector
+    jc .f16d_write_error_cleanup
+
+    ; Walk FAT chain and free all clusters
+    mov ax, [cs:.f16d_start_cluster]
+
+.f16d_free_chain:
+    cmp ax, 2
+    jb .f16d_chain_done
+    cmp ax, 0xFFF8
+    jae .f16d_chain_done
+
+    ; Get next cluster before freeing current
+    push ax
+    call fat16_get_next_cluster
+    mov [cs:.f16d_next_cluster], ax
+    jc .f16d_chain_end              ; Error or EOC
+    cmp ax, 0xFFF8
+    jae .f16d_chain_end
+    ; Have valid next cluster
+    pop ax
+    push word [cs:.f16d_next_cluster]
+
+    ; Free current cluster
+    xor dx, dx                      ; 0 = free
+    call fat16_set_fat_entry
+
+    pop ax                          ; AX = next cluster
+    jmp .f16d_free_chain
+
+.f16d_chain_end:
+    ; Free the last cluster
+    pop ax
+    xor dx, dx
+    call fat16_set_fat_entry
+
+.f16d_chain_done:
+    pop dx                          ; Sector index
+    pop cx                          ; Sector count
+    add sp, 12                      ; Filename
+    xor ax, ax
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16d_write_error_cleanup:
+    pop dx
+    pop cx
+    add sp, 12
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16d_dir_sector:    dw 0
+.f16d_start_cluster: dw 0
+.f16d_next_cluster:  dw 0
+
+; ============================================================================
+; fat16_rename - Rename a file in FAT16 root directory
+; Input: DS:SI = old filename (dot format), caller_es:DI = new filename
+; Output: CF=0 success, CF=1 error
+; ============================================================================
+fat16_rename:
+    push es
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Convert OLD filename to 8.3 on stack
+    sub sp, 12
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    mov cx, 8
+.f16r_copy_old_name:
+    lodsb
+    test al, al
+    jz .f16r_old_done
+    cmp al, '.'
+    je .f16r_copy_old_ext
+    cmp al, 'a'
+    jb .f16r_store_old
+    cmp al, 'z'
+    ja .f16r_store_old
+    sub al, 32
+.f16r_store_old:
+    mov [es:di], al
+    inc di
+    loop .f16r_copy_old_name
+.f16r_skip_old_dot:
+    lodsb
+    test al, al
+    jz .f16r_old_done
+    cmp al, '.'
+    jne .f16r_skip_old_dot
+.f16r_copy_old_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.f16r_copy_old_ext_loop:
+    lodsb
+    test al, al
+    jz .f16r_old_done
+    cmp al, 'a'
+    jb .f16r_store_old_ext
+    cmp al, 'z'
+    ja .f16r_store_old_ext
+    sub al, 32
+.f16r_store_old_ext:
+    mov [es:di], al
+    inc di
+    loop .f16r_copy_old_ext_loop
+
+.f16r_old_done:
+    ; Convert NEW filename to 8.3 on stack
+    sub sp, 12
+    mov di, sp
+    push ss
+    pop es
+
+    mov cx, 11
+    mov al, ' '
+    push di
+    rep stosb
+    pop di
+
+    ; Read new name from caller_es:DI_saved
+    push ds
+    mov ds, [cs:caller_es]
+    ; Original DI is saved in push frame
+    ; Stack: [12 new][12 old][BP][DI][SI][DX][CX][BX][ES]
+    mov si, sp
+    add si, 12 + 12 + 2             ; Skip new_name + old_name + BP
+    mov si, [ss:si]                  ; SI = original DI (new filename pointer)
+
+    mov cx, 8
+.f16r_copy_new_name:
+    lodsb
+    test al, al
+    jz .f16r_new_done
+    cmp al, '.'
+    je .f16r_copy_new_ext
+    cmp al, 'a'
+    jb .f16r_store_new
+    cmp al, 'z'
+    ja .f16r_store_new
+    sub al, 32
+.f16r_store_new:
+    mov [es:di], al
+    inc di
+    loop .f16r_copy_new_name
+.f16r_skip_new_dot:
+    lodsb
+    test al, al
+    jz .f16r_new_done
+    cmp al, '.'
+    jne .f16r_skip_new_dot
+.f16r_copy_new_ext:
+    mov di, sp
+    add di, 8
+    mov cx, 3
+.f16r_copy_new_ext_loop:
+    lodsb
+    test al, al
+    jz .f16r_new_done
+    cmp al, 'a'
+    jb .f16r_store_new_ext
+    cmp al, 'z'
+    ja .f16r_store_new_ext
+    sub al, 32
+.f16r_store_new_ext:
+    mov [es:di], al
+    inc di
+    loop .f16r_copy_new_ext_loop
+
+.f16r_new_done:
+    pop ds                          ; Restore kernel DS
+
+    ; Search root directory for old filename
+    mov ax, 0x1000
+    mov ds, ax
+    mov ax, [fat16_root_entries]
+    shr ax, 4
+    mov cx, ax
+    xor dx, dx
+
+.f16r_search_sector:
+    cmp dx, cx
+    jae .f16r_not_found
+
+    push cx
+    push dx
+
+    movzx eax, dx
+    add eax, [fat16_root_start]
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_read_sector
+    jc .f16r_read_error
+
+    mov cx, 16
+    mov si, fat16_sector_buf
+    xor bx, bx
+
+.f16r_check_entry:
+    mov al, [si]
+    test al, al
+    jz .f16r_not_found_pop
+    cmp al, 0xE5
+    je .f16r_next_entry
+
+    ; Compare with old filename (at SP + 12 bytes new + 4 bytes our pushes + 4 bytes loop pushes = +20)
+    push si
+    push di
+    push ds
+    push cx
+    ; Old name is second on stack: [12 new][12 old]
+    ; From current SP: skip our 4 pushes (8) + loop pushes (4) + new name (12) = 24
+    mov di, sp
+    add di, 8 + 4 + 12             ; 8 for our pushes, 4 for loop cx/dx, 12 for new name
+    push ss
+    pop es
+    mov ax, 0x1000
+    mov ds, ax
+    mov cx, 11
+    repe cmpsb
+    pop cx
+    pop ds
+    pop di
+    pop si
+    je .f16r_found
+
+.f16r_next_entry:
+    add si, 32
+    add bx, 32
+    dec cx
+    jnz .f16r_check_entry
+
+    pop dx
+    pop cx
+    inc dx
+    jmp .f16r_search_sector
+
+.f16r_not_found:
+    add sp, 24                      ; Two 12-byte names
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16r_not_found_pop:
+    pop dx
+    pop cx
+    add sp, 24
+    mov ax, FS_ERR_NOT_FOUND
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16r_read_error:
+    pop dx
+    pop cx
+    add sp, 24
+    mov ax, FS_ERR_READ_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16r_found:
+    ; SI points to dir entry. Overwrite first 11 bytes with new name.
+    ; New name is at bottom of stack
+    push ds
+    push ss
+    pop ds
+    ; New name starts at SP + 2 (our push ds)
+    mov di, si                      ; DI = dir entry in fat16_sector_buf
+    mov ax, 0x1000
+    mov es, ax
+    mov si, sp
+    add si, 2                       ; Skip push ds
+    mov cx, 11
+    rep movsb
+    pop ds
+
+    ; Write modified sector back
+    mov bp, sp
+    mov dx, [ss:bp]                 ; DX = sector index from push dx
+    movzx eax, dx
+    add eax, [fat16_root_start]
+    push ds
+    pop es
+    mov bx, fat16_sector_buf
+    call fat16_write_sector
+    jc .f16r_write_error
+
+    pop dx
+    pop cx
+    add sp, 24                      ; Two 12-byte names
+    xor ax, ax
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.f16r_write_error:
+    pop dx
+    pop cx
+    add sp, 24
+    mov ax, FS_ERR_WRITE_ERROR
+    stc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
 
 ; ============================================================================
 ; IDE Direct Access Driver (fallback for INT 13h failures)
@@ -10035,11 +11431,18 @@ fs_write_sector_stub:
 ; Note: Caller's DS:SI is in caller_ds:SI
 fs_create_stub:
     cmp bl, 0
-    jne .fc_not_supported
-    ; Set up DS:SI from caller's segment
+    jne .fc_check_fat16
     push ds
-    mov ds, [cs:caller_ds]          ; DS = caller's data segment
+    mov ds, [cs:caller_ds]
     call fat12_create
+    pop ds
+    ret
+.fc_check_fat16:
+    cmp bl, 1
+    jne .fc_not_supported
+    push ds
+    mov ds, [cs:caller_ds]
+    call fat16_create
     pop ds
     ret
 .fc_not_supported:
@@ -10053,9 +11456,23 @@ fs_create_stub:
 ; Note: Caller's ES:BX is in caller_es:BX
 fs_write_stub:
     xor ah, ah                      ; Clear AH (was function number 46)
+    ; Check file handle's mount_handle to route FAT12 vs FAT16
+    push si
+    mov si, ax
+    shl si, 5
+    add si, file_table
+    cmp byte [si + 1], 1            ; Mount handle 1 = FAT16?
+    pop si
+    je .fsw_fat16
     push es
-    mov es, [cs:caller_es]          ; ES = caller's data segment for buffer
+    mov es, [cs:caller_es]
     call fat12_write
+    pop es
+    ret
+.fsw_fat16:
+    push es
+    mov es, [cs:caller_es]
+    call fat16_write
     pop es
     ret
 
@@ -10065,10 +11482,18 @@ fs_write_stub:
 ; Note: Caller's DS:SI is in caller_ds:SI
 fs_delete_stub:
     cmp bl, 0
-    jne .fd_not_supported
+    jne .fd_check_fat16
     push ds
     mov ds, [cs:caller_ds]
     call fat12_delete
+    pop ds
+    ret
+.fd_check_fat16:
+    cmp bl, 1
+    jne .fd_not_supported
+    push ds
+    mov ds, [cs:caller_ds]
+    call fat16_delete
     pop ds
     ret
 .fd_not_supported:
@@ -11961,13 +13386,20 @@ fs_get_file_size_stub:
 fs_rename_stub:
     cmp bl, 0
     je .frn_fat12
-    ; FAT16 rename not implemented yet
+    cmp bl, 1
+    je .frn_fat16
     stc
     ret
 .frn_fat12:
     push ds
     mov ds, [cs:caller_ds]
     call fat12_rename
+    pop ds
+    ret
+.frn_fat16:
+    push ds
+    mov ds, [cs:caller_ds]
+    call fat16_rename
     pop ds
     ret
 

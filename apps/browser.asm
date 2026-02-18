@@ -119,12 +119,6 @@ entry:
     jc .exit_fail
     mov [cs:mount_handle], bl
 
-    ; Detect read-only (FAT16 = HD, mount_handle=1)
-    cmp bl, 1
-    jne .not_ro
-    mov byte [cs:is_readonly], 1
-.not_ro:
-
     ; Create window
     mov bx, 28
     mov cx, 12
@@ -276,8 +270,6 @@ entry:
     jmp .check_event
 
 .test_buttons:
-    cmp byte [cs:is_readonly], 1
-    je .check_event
     cmp byte [cs:file_count], 0
     je .check_event
 
@@ -790,10 +782,6 @@ draw_bottom:
     je .db_copy
 
     ; --- Normal mode ---
-    ; Draw buttons (if writable)
-    cmp byte [cs:is_readonly], 1
-    je .db_ro_status
-
     mov ax, cs
     mov es, ax
 
@@ -841,15 +829,6 @@ draw_bottom:
     mov bx, 4
     mov cx, ROW2_Y
     mov si, str_error
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    jmp .db_done
-
-.db_ro_status:
-    call draw_file_count
-    mov bx, 4
-    mov cx, ROW2_Y
-    mov si, str_readonly
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     jmp .db_done
@@ -1095,7 +1074,6 @@ word_to_decimal:
 window_title:   db 'File Manager', 0
 win_handle:     db 0
 mount_handle:   db 0
-is_readonly:    db 0
 boot_drive:     db 0
 prev_btn:       db 0
 mode:           db MODE_NORMAL
@@ -1119,7 +1097,6 @@ str_yes:        db 'Yes', 0
 str_no:         db 'No', 0
 str_ok:         db 'OK', 0
 str_ready:      db 'Ready', 0
-str_readonly:   db 'Read only (HD)', 0
 str_error:      db 'Error!', 0
 str_del_prefix: db 'Del ', 0
 str_question:   db '?', 0
