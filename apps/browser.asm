@@ -739,19 +739,20 @@ draw_file_list:
 .dfl_clear_rest:
     ; Clear remaining rows
     push cx
+    ; Compute height FIRST while CL still has the row counter
+    mov al, VISIBLE_ROWS
     xor ch, ch
+    sub al, cl                      ; AL = remaining rows
+    mov ah, ROW_H
+    mul ah
+    mov si, ax                      ; SI = height
+    ; Now compute Y (this clobbers CX)
     mov al, cl
     mov ah, ROW_H
     mul ah
     add ax, LIST_Y
-    mov cx, ax                      ; Y
+    mov cx, ax                      ; CX = Y
     mov bx, 2
-    ; Height = remaining rows * ROW_H
-    mov al, VISIBLE_ROWS
-    sub al, cl
-    mov ah, ROW_H
-    mul ah
-    mov si, ax                      ; Height
     mov dx, LIST_W
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
