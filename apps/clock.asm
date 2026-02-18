@@ -1,5 +1,6 @@
-; CLOCK.BIN - Clock application for UnoDOS
-; Displays RTC time in a draggable window, updates once per second
+; CLOCK.BIN - Analog Clock for UnoDOS
+; Displays analog clock face with hour/minute/second hands
+; and digital time below, in a draggable window. Updates once per second.
 ;
 ; Build: nasm -f bin -o clock.bin clock.asm
 
@@ -35,7 +36,8 @@
 
 ; --- Code Entry (offset 0x50) ---
 
-; API function indices (must match kernel_api_table in kernel.asm)
+; API constants
+API_GFX_DRAW_PIXEL      equ 0
 API_GFX_DRAW_STRING     equ 4
 API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
@@ -43,103 +45,168 @@ API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
-
-; Multitasking
 API_APP_YIELD           equ 34
-
-; RTC
+API_DRAW_LINE           equ 71
 API_GET_RTC_TIME        equ 72
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
-; Entry point - called by kernel via far CALL
+; Clock face layout (content-relative coordinates)
+CENTER_X    equ 54                  ; Face center X (108/2)
+CENTER_Y    equ 42                  ; Face center Y
+SEC_RADIUS  equ 36                  ; Second hand length
+MIN_RADIUS  equ 30                  ; Minute hand length
+HR_RADIUS   equ 20                  ; Hour hand length
+MARK_INNER  equ 34                  ; Hour marker inner radius
+MARK_OUTER  equ 38                  ; Hour marker outer radius
+DIGI_X      equ 22                  ; Digital time X ((108-64)/2)
+DIGI_Y      equ 86                  ; Digital time Y (below face)
+
 entry:
     pusha
     push ds
     push es
 
-    ; Save our code segment
     mov ax, cs
     mov ds, ax
 
-    ; Create clock window at X=100, Y=60, W=110, H=40
-    mov bx, 100                     ; X position
-    mov cx, 60                      ; Y position
-    mov dx, 110                     ; Width (content=108, fits "00:00:00"=64px centered)
-    mov si, 40                      ; Height
+    ; Create clock window: X=105, Y=44, W=110, H=108
+    mov bx, 105
+    mov cx, 44
+    mov dx, 110                     ; Content width = 108
+    mov si, 108                     ; Content height ~ 98
     mov ax, cs
     mov es, ax
-    mov di, window_title            ; Title pointer (ES:DI)
+    mov di, window_title
     mov al, 0x03                    ; WIN_FLAG_TITLE | WIN_FLAG_BORDER
     mov ah, API_WIN_CREATE
     int 0x80
     jc .exit_fail
-    mov [cs:win_handle], al         ; Save handle
+    mov [cs:win_handle], al
 
-    ; Set window drawing context - coordinates now relative to content area
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Initialize last_secs to impossible value to force first draw
-    mov byte [cs:last_secs], 0xFF
+    mov byte [cs:last_secs], 0xFF   ; Force first draw
 
-    ; Main loop - update time only when seconds change
+; ---- Main Loop ----
 .main_loop:
     sti
-    mov ah, API_APP_YIELD           ; Yield to other tasks
+    mov ah, API_APP_YIELD
     int 0x80
 
-    ; Read RTC time using kernel API 72
-    ; Returns: CH=hours (BCD), CL=minutes (BCD), DH=seconds (BCD)
+    ; Read RTC time (CH=hours BCD, CL=minutes BCD, DH=seconds BCD)
     mov ah, API_GET_RTC_TIME
     int 0x80
 
-    ; Only redraw if seconds changed
+    ; Only redraw when seconds change
     cmp dh, [cs:last_secs]
     je .check_event
     mov [cs:last_secs], dh
 
-    ; Save RTC values (before any calls clobber them)
+    ; Save BCD time values
     mov [cs:rtc_hours], ch
     mov [cs:rtc_mins], cl
     mov [cs:rtc_secs], dh
 
-    ; Convert BCD time to ASCII string
-    mov al, [cs:rtc_hours]
-    call .bcd_to_ascii
-    mov [cs:time_str], ah
-    mov [cs:time_str+1], al
+    ; Convert BCD to binary for hand position math
+    mov al, ch
+    call .bcd_to_bin
+    mov [cs:bin_hours], al
 
     mov al, [cs:rtc_mins]
-    call .bcd_to_ascii
-    mov [cs:time_str+3], ah
-    mov [cs:time_str+4], al
+    call .bcd_to_bin
+    mov [cs:bin_mins], al
 
     mov al, [cs:rtc_secs]
-    call .bcd_to_ascii
-    mov [cs:time_str+6], ah
-    mov [cs:time_str+7], al
+    call .bcd_to_bin
+    mov [cs:bin_secs], al
 
-    ; Clear time area (window-relative, centered in 108px content)
-    ; "00:00:00" = 8 chars x 12px advance = 96px wide
-    mov bx, 6
-    mov cx, 8
-    mov dx, 98
-    mov si, 10
+    ; Compute second hand position (0-59)
+    mov al, [cs:bin_secs]
+    mov [cs:sec_pos], al
+
+    ; Compute minute hand position (0-59)
+    mov al, [cs:bin_mins]
+    mov [cs:min_pos], al
+
+    ; Compute hour hand position: (hours%12)*5 + minutes/12
+    mov al, [cs:bin_hours]
+    cmp al, 12
+    jb .hr_ok
+    sub al, 12
+.hr_ok:
+    mov cl, 5
+    mul cl                          ; AL = hours*5 (max 55)
+    mov bl, al                      ; save in BL
+    mov al, [cs:bin_mins]
+    xor ah, ah
+    mov cl, 12
+    div cl                          ; AL = minutes/12 (0-4)
+    add al, bl
+    mov [cs:hr_pos], al
+
+    ; --- Redraw clock face ---
+
+    ; Clear entire content area
+    mov bx, 0
+    mov cx, 0
+    mov dx, 108
+    mov si, 96
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Draw time string (window-relative, centered: (108-96)/2 = 6)
-    mov bx, 6
-    mov cx, 8
+    ; Draw 12 hour markers
+    call .draw_markers
+
+    ; Draw hour hand (white)
+    mov al, [cs:hr_pos]
+    mov bl, HR_RADIUS
+    call .compute_endpoint          ; DX=x2, SI=y2
+    mov bx, CENTER_X
+    mov cx, CENTER_Y
+    mov al, 3                       ; white
+    mov ah, API_DRAW_LINE
+    int 0x80
+
+    ; Draw minute hand (white)
+    mov al, [cs:min_pos]
+    mov bl, MIN_RADIUS
+    call .compute_endpoint
+    mov bx, CENTER_X
+    mov cx, CENTER_Y
+    mov al, 3
+    mov ah, API_DRAW_LINE
+    int 0x80
+
+    ; Draw second hand (cyan)
+    mov al, [cs:sec_pos]
+    mov bl, SEC_RADIUS
+    call .compute_endpoint
+    mov bx, CENTER_X
+    mov cx, CENTER_Y
+    mov al, 1                       ; cyan
+    mov ah, API_DRAW_LINE
+    int 0x80
+
+    ; Draw center dot (white pixel)
+    mov bx, CENTER_X
+    mov cx, CENTER_Y
+    mov al, 3
+    mov ah, API_GFX_DRAW_PIXEL
+    int 0x80
+
+    ; Format and draw digital time "HH:MM:SS"
+    call .format_time
+    mov bx, DIGI_X
+    mov cx, DIGI_Y
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .check_event:
-    ; Check for keypress (non-blocking)
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
@@ -152,14 +219,133 @@ entry:
     jne .no_event
     cmp dl, 27                      ; ESC key?
     je .exit_ok
-
 .no_event:
     jmp .main_loop
 
-; Convert BCD byte in AL to two ASCII digits
-; Input: AL = BCD byte (e.g., 0x23 for 23)
-; Output: AH = tens digit ASCII, AL = ones digit ASCII
-.bcd_to_ascii:
+; ---- Subroutines ----
+
+; compute_endpoint: Convert clock position + radius to screen coordinates
+; Input:  AL = position (0-59), BL = radius (pixels)
+; Output: DX = X coordinate, SI = Y coordinate (content-relative)
+; Preserves: AX, BX, CX
+.compute_endpoint:
+    push ax
+    push bx
+    push cx
+    push di
+
+    ; X = CENTER_X + sin(pos) * radius / 32
+    xor ah, ah
+    mov di, ax                      ; DI = position index
+    mov al, [cs:sin_table + di]     ; signed byte: sin value
+    imul bl                         ; AX = sin * radius (signed)
+    sar ax, 5                       ; /32
+    add ax, CENTER_X
+    mov dx, ax                      ; DX = X result
+
+    ; Y = CENTER_Y - cos(pos) * radius / 32
+    ; cos(pos) = sin((pos + 15) % 60)
+    add di, 15
+    cmp di, 60
+    jb .ce_no_wrap
+    sub di, 60
+.ce_no_wrap:
+    mov al, [cs:sin_table + di]     ; signed byte: cos value
+    imul bl                         ; AX = cos * radius (signed)
+    sar ax, 5                       ; /32
+    neg ax                          ; -cos (screen Y is inverted)
+    add ax, CENTER_Y
+    mov si, ax                      ; SI = Y result
+
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; draw_markers: Draw 12 hour markers around the face
+.draw_markers:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    xor cx, cx                      ; CX = marker index (0-11)
+.marker_loop:
+    ; Position = index * 5 (maps to 0, 5, 10, ... 55)
+    mov ax, cx
+    push cx                         ; save loop counter
+    mov cl, 5
+    mul cl                          ; AL = clock position
+
+    ; Compute inner endpoint
+    mov bl, MARK_INNER
+    call .compute_endpoint          ; DX=inner_x, SI=inner_y
+    mov [cs:temp_x], dx
+    mov [cs:temp_y], si
+
+    ; Compute outer endpoint (AL preserved by compute_endpoint)
+    mov bl, MARK_OUTER
+    call .compute_endpoint          ; DX=outer_x, SI=outer_y
+
+    ; Draw marker line: inner → outer (white)
+    mov bx, [cs:temp_x]
+    mov cx, [cs:temp_y]
+    ; DX, SI = outer point (already set)
+    mov al, 3                       ; white
+    mov ah, API_DRAW_LINE
+    int 0x80
+
+    pop cx                          ; restore loop counter
+    inc cx
+    cmp cx, 12
+    jb .marker_loop
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; bcd_to_bin: Convert BCD byte to binary
+; Input:  AL = BCD value (e.g. 0x23 = 23 decimal)
+; Output: AL = binary value (e.g. 23)
+; Clobbers: AH
+.bcd_to_bin:
+    push cx
+    mov cl, al
+    and cl, 0x0F                    ; CL = ones digit
+    shr al, 4                       ; AL = tens digit
+    mov ah, 10
+    mul ah                          ; AX = tens * 10
+    add al, cl                      ; AL = binary
+    pop cx
+    ret
+
+; format_time: Build "HH:MM:SS" string from BCD values
+.format_time:
+    push ax
+    mov al, [cs:rtc_hours]
+    call .bcd_to_ascii_pair
+    mov [cs:time_str], ah
+    mov [cs:time_str+1], al
+    mov al, [cs:rtc_mins]
+    call .bcd_to_ascii_pair
+    mov [cs:time_str+3], ah
+    mov [cs:time_str+4], al
+    mov al, [cs:rtc_secs]
+    call .bcd_to_ascii_pair
+    mov [cs:time_str+6], ah
+    mov [cs:time_str+7], al
+    pop ax
+    ret
+
+; bcd_to_ascii_pair: Convert BCD byte to two ASCII chars
+; Input:  AL = BCD byte
+; Output: AH = tens digit char, AL = ones digit char
+.bcd_to_ascii_pair:
     mov ah, al
     and al, 0x0F
     shr ah, 4
@@ -170,7 +356,6 @@ entry:
 .exit_ok:
     mov ah, API_WIN_END_DRAW
     int 0x80
-
     mov al, [cs:win_handle]
     mov ah, API_WIN_DESTROY
     int 0x80
@@ -186,11 +371,28 @@ entry:
     popa
     retf
 
-; Data Section
+; ---- Data Section ----
 window_title:   db 'Clock', 0
 win_handle:     db 0
 time_str:       db '00:00:00', 0
 rtc_hours:      db 0
 rtc_mins:       db 0
 rtc_secs:       db 0
-last_secs:      db 0xFF             ; Last displayed seconds (0xFF forces first draw)
+last_secs:      db 0xFF
+bin_hours:      db 0
+bin_mins:       db 0
+bin_secs:       db 0
+sec_pos:        db 0
+min_pos:        db 0
+hr_pos:         db 0
+temp_x:         dw 0
+temp_y:         dw 0
+
+; Sine lookup table: 60 entries (signed bytes, scale factor 32)
+; sin_table[i] = round(sin(i * 6 degrees) * 32) for i = 0..59
+; cos(pos) = sin_table[(pos + 15) % 60]
+sin_table:
+    db   0,  3,  7, 10, 13, 16, 19, 21, 24, 26, 28, 29, 30, 31, 32, 32
+    db  32, 31, 30, 29, 28, 26, 24, 21, 19, 16, 13, 10,  7,  3,  0
+    db  -3, -7,-10,-13,-16,-19,-21,-24,-26,-28,-29,-30,-31,-32,-32
+    db -32,-31,-30,-29,-28,-26,-24,-21,-19,-16,-13,-10, -7, -3
