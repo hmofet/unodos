@@ -76,7 +76,7 @@ entry:
     mov bx, 105
     mov cx, 44
     mov dx, 110                     ; Content width = 108
-    mov si, 108                     ; Content height ~ 98
+    mov si, 120                     ; Content height ~ 110
     mov ax, cs
     mov es, ax
     mov di, window_title

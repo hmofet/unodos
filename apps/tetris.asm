@@ -1,5 +1,5 @@
 ; ============================================================================
-; TETRIS.BIN - Tetris clone for UnoDOS
+; TETRIS.BIN - Dostris clone for UnoDOS
 ; Fullscreen (non-windowed) game with Korobeiniki music and toolkit buttons
 ; ============================================================================
 
@@ -8,7 +8,7 @@
 ; --- BIN Header (80 bytes) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
     db 'UI'                         ; Magic
-    db 'Tetris', 0                  ; App name (12 bytes padded)
+    db 'Dostris', 0                 ; App name (12 bytes padded)
     times (0x04 + 12) - ($ - $$) db 0
 
 ; 16x16 icon bitmap (64 bytes, 2bpp CGA)
@@ -431,8 +431,8 @@ str_paused:     db 'PAUSED', 0
 str_sound:      db 'Sound', 0
 
 ; Title character data for colored rendering
-title_chars:    db 'TETRIS'
-title_clrs:     db 1, 2, 3, 1, 2, 3    ; cyan, magenta, white per letter
+title_chars:    db 'DOSTRIS'
+title_clrs:     db 1, 2, 3, 1, 2, 3, 1 ; cyan, magenta, white per letter
 
 ; ============================================================================
 ; clear_screen - Fill entire screen with black
@@ -481,13 +481,13 @@ draw_static_ui:
     mov ah, API_GFX_DRAW_RECT
     int 0x80
 
-    ; Title "TETRIS" in alternating colors (large font)
+    ; Title "DOSTRIS" in alternating colors (large font)
     mov al, 2                       ; Large font 8x12
     mov ah, API_GFX_SET_FONT
     int 0x80
 
     mov byte [cs:cell_px], 0        ; Letter index
-    mov word [cs:cell_sx], 184      ; X position
+    mov word [cs:cell_sx], 178      ; X position
 .title_color_loop:
     xor bx, bx
     mov bl, [cs:cell_px]
@@ -505,7 +505,7 @@ draw_static_ui:
     int 0x80
     add word [cs:cell_sx], 12       ; Large font advance
     inc byte [cs:cell_px]
-    cmp byte [cs:cell_px], 6
+    cmp byte [cs:cell_px], 7
     jb .title_color_loop
 
     ; Restore white text color
@@ -1383,7 +1383,7 @@ update_scoring:
     je .us_2
     cmp al, 3
     je .us_3
-    ; 4 lines (Tetris!)
+    ; 4 lines (Dostris!)
     mov ax, 1200
     jmp .us_mult
 .us_1:
