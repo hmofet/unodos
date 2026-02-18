@@ -211,6 +211,22 @@ int_80_handler:
 .zclip_ok:
     pop ax
     pop si
+    ; For draw_line (API 71), also translate DX/SI (second endpoint X2,Y2)
+    cmp ah, 71
+    jne .no_translate
+    push di
+    push ax
+    xor ah, ah
+    mov al, [draw_context]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    add dx, [di + WIN_OFF_X]
+    inc dx
+    add si, [di + WIN_OFF_Y]
+    add si, WIN_TITLEBAR_HEIGHT
+    pop ax
+    pop di
     jmp .no_translate
 
 .no_translate:
