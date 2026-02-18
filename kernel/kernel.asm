@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 65                      ; Max function count (0-64 valid)
+    cmp ah, 67                      ; Max function count (0-66 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -168,8 +168,12 @@ int_80_handler:
     jb .no_translate                ; APIs 53-55: no translation
     cmp ah, 63
     jb .do_translate                ; APIs 56-62: widget APIs
-    jmp .no_translate               ; API 63+: not drawing, skip translation
-.do_translate:                      ; APIs 0-6, 50-52, 56-62: translate coords
+    cmp ah, 65
+    jb .no_translate                ; APIs 63-64: not drawing, skip
+    cmp ah, 67
+    jb .do_translate                ; APIs 65-66: combobox, menubar
+    jmp .no_translate               ; API 67+: skip translation
+.do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
 
     ; Translate: BX += content_x, CX += content_y
     push si
@@ -3066,6 +3070,8 @@ kernel_api_table:
     dw widget_draw_separator        ; 62: Draw separator line
     dw get_tick_count               ; 63: Get BIOS tick counter
     dw point_over_window            ; 64: Check if point is over a window
+    dw widget_draw_combobox         ; 65: Draw combo box
+    dw widget_draw_menubar          ; 66: Draw menu bar
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -4186,25 +4192,15 @@ widget_draw_textfield:
     mul word [wgt_cursor_pos]
     add ax, [btn_x]
     add ax, 2
-    ; plot_pixel_white: CX=X, BX=Y
-    mov cx, ax
-    mov bx, [btn_y]
-    add bx, 2
-    xor di, di
+    ; Draw 1px wide filled rect for cursor (much faster than pixel loop)
+    mov bx, ax                         ; BX = cursor X
+    mov cx, [btn_y]
+    add cx, 2                          ; CX = cursor Y
+    mov dx, 1                          ; DX = width (1px)
     xor ax, ax
     mov al, [draw_font_height]
-    mov [wgt_scratch], ax
-.tf_cursor_loop:
-    cmp di, [wgt_scratch]
-    jge .tf_no_cursor
-    push cx
-    push bx
-    call plot_pixel_white
-    pop bx
-    pop cx
-    inc bx
-    inc di
-    jmp .tf_cursor_loop
+    mov si, ax                          ; SI = height
+    call gfx_draw_filled_rect_stub
 .tf_no_cursor:
     ; Restore clip state
     pop word [clip_enabled]
@@ -4534,6 +4530,336 @@ point_over_window:
     pop di
     pop si
     stc
+    ret
+
+; ============================================================================
+; widget_draw_combobox - Draw a dropdown combo box (API 65)
+; Input: BX=X, CX=Y, DX=width, SI=text_ptr (caller_ds), AL=flags
+;        Flags: bit 0=focused, bit 1=open/pressed
+; Height: font_height + 4 (auto)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+COMBO_ARROW_W equ 8
+
+widget_draw_combobox:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [wgt_text_ptr], si
+    ; Height = font_height + 4
+    xor ah, ah
+    mov al, [draw_font_height]
+    add ax, 4
+    mov [btn_h], ax
+    mov ax, 0xB800
+    mov es, ax
+    ; Clear area and draw border
+    mov si, [btn_h]
+    call gfx_clear_area_stub
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    call gfx_draw_rect_stub
+    ; Draw text clipped to field interior (minus arrow area)
+    push word [clip_x1]
+    push word [clip_x2]
+    push word [clip_y1]
+    push word [clip_y2]
+    push word [clip_enabled]
+    mov ax, [btn_x]
+    inc ax
+    mov [clip_x1], ax
+    mov ax, [btn_x]
+    add ax, [btn_w]
+    sub ax, COMBO_ARROW_W + 2
+    mov [clip_x2], ax
+    mov ax, [btn_y]
+    inc ax
+    mov [clip_y1], ax
+    mov ax, [btn_y]
+    add ax, [btn_h]
+    sub ax, 2
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    mov si, [wgt_text_ptr]
+    mov bx, [btn_x]
+    add bx, 2
+    mov cx, [btn_y]
+    add cx, 2
+    call gfx_draw_string_stub
+    ; Restore clip
+    pop word [clip_enabled]
+    pop word [clip_y2]
+    pop word [clip_y1]
+    pop word [clip_x2]
+    pop word [clip_x1]
+    ; Draw arrow button separator line (vertical)
+    mov bx, [btn_x]
+    add bx, [btn_w]
+    sub bx, COMBO_ARROW_W
+    mov cx, [btn_y]
+    inc cx
+    xor ah, ah
+    mov al, [draw_font_height]
+    add al, 2
+    mov di, ax
+.cb_vline:
+    cmp di, 0
+    je .cb_arrow
+    push cx
+    push bx
+    ; plot_pixel_white: CX=X, BX=Y
+    xchg bx, cx
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc cx
+    dec di
+    jmp .cb_vline
+.cb_arrow:
+    ; Draw down-arrow triangle in arrow area
+    ; Arrow center: btn_x + btn_w - COMBO_ARROW_W/2
+    mov ax, [btn_x]
+    add ax, [btn_w]
+    sub ax, COMBO_ARROW_W / 2
+    mov [wgt_scratch], ax           ; Center X
+    mov ax, [btn_y]
+    add ax, 2
+    xor bx, bx
+    mov bl, [draw_font_height]
+    shr bx, 1                      ; Half font height
+    add ax, bx
+    sub ax, 1                      ; Center Y - approx middle
+    mov [wgt_cursor_pos], ax        ; Center Y
+    ; Draw 3-row triangle: row0=1px, row1=3px, row2=5px
+    ; Row 0: center pixel
+    mov cx, [wgt_scratch]
+    mov bx, [wgt_cursor_pos]
+    xchg bx, cx
+    call plot_pixel_white
+    ; Row 1: center-1 to center+1
+    mov bx, [wgt_cursor_pos]
+    inc bx
+    mov cx, [wgt_scratch]
+    dec cx
+    xchg bx, cx
+    call plot_pixel_white
+    mov bx, [wgt_cursor_pos]
+    inc bx
+    mov cx, [wgt_scratch]
+    xchg bx, cx
+    call plot_pixel_white
+    mov bx, [wgt_cursor_pos]
+    inc bx
+    mov cx, [wgt_scratch]
+    inc cx
+    xchg bx, cx
+    call plot_pixel_white
+    ; Row 2: center-2 to center+2
+    mov bx, [wgt_cursor_pos]
+    add bx, 2
+    mov cx, [wgt_scratch]
+    sub cx, 2
+    xchg bx, cx
+    call plot_pixel_white
+    mov cx, [wgt_scratch]
+    dec cx
+    mov bx, [wgt_cursor_pos]
+    add bx, 2
+    xchg bx, cx
+    call plot_pixel_white
+    mov cx, [wgt_scratch]
+    mov bx, [wgt_cursor_pos]
+    add bx, 2
+    xchg bx, cx
+    call plot_pixel_white
+    mov cx, [wgt_scratch]
+    inc cx
+    mov bx, [wgt_cursor_pos]
+    add bx, 2
+    xchg bx, cx
+    call plot_pixel_white
+    mov cx, [wgt_scratch]
+    add cx, 2
+    mov bx, [wgt_cursor_pos]
+    add bx, 2
+    xchg bx, cx
+    call plot_pixel_white
+    ; Done
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; ============================================================================
+; widget_draw_menubar - Draw a horizontal menu bar (API 66)
+; Input: BX=X, CX=Y, DX=bar_width, SI=items_ptr (caller_ds, consecutive
+;        null-terminated strings), DI=item_count, AL=selected_index (0xFF=none)
+; Height: font_height + 2 (auto)
+; Auto-translated by INT 0x80 for draw_context
+; ============================================================================
+MENUBAR_PAD equ 6                       ; Padding between items
+
+widget_draw_menubar:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov [btn_flags], al                 ; Selected index
+    mov [btn_x], bx
+    mov [btn_y], cx
+    mov [btn_w], dx
+    mov [wgt_text_ptr], si              ; Items pointer
+    mov [wgt_scratch], di               ; Item count
+    ; Height = font_height + 2
+    xor ah, ah
+    mov al, [draw_font_height]
+    add ax, 2
+    mov [btn_h], ax
+    mov ax, 0xB800
+    mov es, ax
+    ; Clear bar area (black background)
+    mov si, [btn_h]
+    call gfx_clear_area_stub
+    ; Draw separator line at bottom of bar
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    add cx, [btn_h]
+    dec cx
+    xor di, di                          ; pixel counter
+.mb_sepline:
+    cmp di, [btn_w]
+    jge .mb_sep_done
+    push cx
+    push bx
+    xchg bx, cx                        ; plot_pixel_white: CX=X, BX=Y
+    call plot_pixel_white
+    pop bx
+    pop cx
+    inc bx
+    inc di
+    jmp .mb_sepline
+.mb_sep_done:
+    ; Draw items
+    xor di, di                          ; Item index = 0
+    mov bx, [btn_x]
+    add bx, MENUBAR_PAD
+    mov si, [wgt_text_ptr]
+.mb_loop:
+    cmp di, [wgt_scratch]
+    jge .mb_done
+    ; First: walk string in caller_ds to count chars
+    push ds
+    push si
+    mov ax, [caller_ds]
+    mov ds, ax
+    xor cx, cx
+.mb_count:
+    lodsb
+    test al, al
+    jz .mb_count_done
+    inc cx
+    jmp .mb_count
+.mb_count_done:
+    pop si                              ; Restore SI to string start
+    pop ds
+    ; CX = char count, SI = string start (in caller_ds)
+    ; Compute pixel width
+    push dx
+    xor ax, ax
+    mov al, [draw_font_advance]
+    mul cx
+    mov [wgt_cursor_pos], ax            ; Item pixel width
+    pop dx
+    ; Check if selected
+    mov al, [btn_flags]
+    xor ah, ah
+    cmp ax, di
+    jne .mb_draw_normal
+    ; Selected: draw filled rect highlight, then inverted text
+    push bx
+    push di
+    mov dx, [wgt_cursor_pos]
+    add dx, 4                           ; Small padding around text
+    mov cx, [btn_y]
+    dec bx                              ; Shift rect 1px left for padding
+    mov si, [btn_h]
+    dec si                              ; Don't cover separator
+    call gfx_draw_filled_rect_stub
+    pop di
+    pop bx
+    ; Draw inverted (black) text on white rect
+    push bx
+    push si
+    push di
+    mov cx, [btn_y]
+    inc cx
+    call gfx_draw_string_inverted
+    pop di
+    pop si
+    pop bx
+    jmp .mb_advance
+.mb_draw_normal:
+    ; Normal: draw white text on black background
+    push bx
+    push si
+    push di
+    mov cx, [btn_y]
+    inc cx
+    call gfx_draw_string_stub
+    pop di
+    pop si
+    pop bx
+.mb_advance:
+    ; Walk SI past the string null terminator in caller_ds
+    push ds
+    mov ax, [caller_ds]
+    mov ds, ax
+.mb_skip:
+    lodsb
+    test al, al
+    jnz .mb_skip
+    pop ds
+    ; SI now past null - points to next string
+    ; Advance X
+    add bx, [wgt_cursor_pos]
+    add bx, MENUBAR_PAD
+    inc di
+    jmp .mb_loop
+.mb_done:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
     ret
 
 ; gfx_draw_rect_stub - Draw rectangle outline
