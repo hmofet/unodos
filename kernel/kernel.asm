@@ -3015,7 +3015,7 @@ kernel_api_table:
 
     ; Filesystem API (Foundation 1.6)
     dw fs_mount_stub                ; 13: Mount filesystem
-    dw fs_open_stub                 ; 14: Open file
+    dw fs_open_api                  ; 14: Open file (uses caller_ds)
     dw fs_read_stub                 ; 15: Read from file
     dw fs_close_stub                ; 16: Close file
     dw fs_register_driver_stub      ; 17: Register filesystem driver
@@ -5611,6 +5611,16 @@ fs_mount_stub:
     pop dx
     pop di
     pop si
+    ret
+
+; fs_open_api - API table wrapper for fs_open (API 14)
+; Sets DS from caller_ds so apps can pass filenames from their own segment.
+; Internal kernel callers should use fs_open_stub directly.
+fs_open_api:
+    push ds
+    mov ds, [cs:caller_ds]          ; DS = caller's segment for filename
+    call fs_open_stub
+    pop ds
     ret
 
 ; fs_open_stub - Open a file for reading
