@@ -9988,9 +9988,7 @@ app_yield_stub:
     ; Save draw_context per task
     mov al, [draw_context]
     mov [si + APP_OFF_DRAW_CTX], al
-    ; Save current font per task
-    mov al, [current_font]
-    mov [si + APP_OFF_FONT], al
+    ; Font is global (system setting from SETTINGS.CFG), not saved per task
     ; Save caller_ds/es per task
     mov ax, [caller_ds]
     mov [si + APP_OFF_CALLER_DS], ax
@@ -10030,11 +10028,7 @@ app_yield_stub:
 .restore_no_clip:
     mov byte [clip_enabled], 0
 .restore_clip_done:
-    ; Restore font per task (prevents wrong font in win_draw_stub/app drawing)
-    mov al, [bx + APP_OFF_FONT]
-    push bx
-    call gfx_set_font               ; Loads all font variables from descriptor
-    pop bx
+    ; Font is global (system setting), not restored per task
     ; Restore caller_ds/es
     mov ax, [bx + APP_OFF_CALLER_DS]
     mov [caller_ds], ax

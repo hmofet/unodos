@@ -73,7 +73,7 @@ MODE_COPY               equ 3
 
 ; Layout (content-relative)
 WIN_W                   equ 264
-WIN_H                   equ 156
+WIN_H                   equ 170
 HEADER_Y                equ 1
 SEP1_Y                  equ 10
 LIST_Y                  equ 12

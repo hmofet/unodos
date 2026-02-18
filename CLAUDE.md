@@ -249,18 +249,26 @@ git commit -m "Description (Build XXX)"
 git push
 ```
 
-## FAT12 Write Support (Build 201+)
+## Filesystem Write Support (Build 201+ FAT12, Build 258+ FAT16)
 
-**APIs for writing files to FAT12 floppies**:
+**APIs for writing files (work on both FAT12 and FAT16)**:
 - `fs_write_sector_stub` (API 44) — Write raw sector to disk
 - `fs_create_stub` (API 45) — Create new file (BL=mount handle, SI=filename)
 - `fs_write_stub` (API 46) — Write to open file (AL=handle, ES:BX=data, CX=size)
 - `fs_delete_stub` (API 47) — Delete file (BL=mount handle, SI=filename)
+- `fs_rename_stub` (API 77) — Rename file (BL=mount handle, SI=old, ES:DI=new)
 
 **Mount handle routing**: All filesystem stubs route by mount handle byte (BL):
-- `BL=0` → FAT12 (floppy)
-- `BL=1` → FAT16 (hard drive)
+- `BL=0` → FAT12 (floppy) — `fat12_create`, `fat12_write`, `fat12_delete`, `fat12_rename`
+- `BL=1` → FAT16 (hard drive) — `fat16_create`, `fat16_write`, `fat16_delete`, `fat16_rename`
+- `fs_write_stub` routes by file handle's mount_handle field (offset 1), not BL
 - Always compare BL (byte), never BX (word) — dirty BH causes silent failures.
+
+**FAT16 internals** (Build 258):
+- `fat16_write_sector` — INT 13h AH=43h (LBA write) with AH=03h (CHS) fallback
+- `fat16_set_fat_entry` — 16-bit FAT entries (256 per sector), writes to both FAT copies
+- `fat16_alloc_cluster` — Scans from cluster 2, marks as EOC (0xFFF8)
+- Multi-sector clusters: `fat16_sects_per_clust * 512` bytes per cluster
 
 ## GUI Toolkit (Build 205+)
 
@@ -319,6 +327,6 @@ Without this, IRQ12 can XOR the cursor over drawing pixels between API calls, ca
 
 ---
 
-**Last Updated**: 2026-02-17
-**Current Version**: v3.20.0
-**Current Build**: 232
+**Last Updated**: 2026-02-18
+**Current Version**: v3.21.0
+**Current Build**: 258
