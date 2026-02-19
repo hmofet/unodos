@@ -1385,7 +1385,7 @@ fast_clear_screen:
 ; Data Section
 ; ============================================================================
 
-title_str:      db 'UnoDOS', 0
+title_str:      db 'UnoDOS 3', 0
 splash_name:    db 'UnoDOS 3', 0
 splash_loading: db 'Loading...', 0
 no_apps_msg:    db 'No apps found', 0
