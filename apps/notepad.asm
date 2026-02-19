@@ -317,10 +317,10 @@ entry:
     jne .click_extend_sel
 
     ; Normal click: set cursor, clear selection, start potential drag
+    call clear_selection_silent         ; Clear old selection first
     mov [cs:cursor_pos], ax
-    mov [cs:sel_anchor], ax             ; Anchor for potential drag
+    mov [cs:sel_anchor], ax             ; Then set new anchor for drag
     mov byte [cs:mouse_selecting], 1
-    call clear_selection_silent
     mov byte [cs:undo_saved_for_edit], 0
     mov byte [cs:needs_redraw], 2
     jmp .check_event
