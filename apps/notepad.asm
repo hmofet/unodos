@@ -151,6 +151,12 @@ entry:
 ; Main Loop
 ; ============================================================================
 .main_loop:
+    ; Deferred redraw: process all queued events FIRST, then redraw once
+    cmp byte [cs:needs_redraw], 0
+    je .no_deferred
+    mov byte [cs:needs_redraw], 0
+    call update_after_edit
+.no_deferred:
     sti
     mov ah, API_APP_YIELD
     int 0x80
@@ -180,6 +186,7 @@ entry:
     jne .not_redraw
     call compute_layout             ; Re-measure font on redraw
     call draw_ui
+    mov byte [cs:needs_redraw], 0   ; Clear flag after full redraw
     jmp .main_loop
 .not_redraw:
     cmp al, EVENT_KEY_PRESS
@@ -299,19 +306,19 @@ entry:
     cmp dl, 126
     ja .main_loop
     call buf_insert_char
-    call update_after_edit
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event               ; Drain more events before redrawing
 
 .do_backspace:
     call buf_delete_char
-    call update_after_edit
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_enter:
     mov dl, 0x0A
     call buf_insert_char
-    call update_after_edit
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_tab:
     mov dl, ' '
@@ -319,48 +326,48 @@ entry:
     call buf_insert_char
     call buf_insert_char
     call buf_insert_char
-    call update_after_edit
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_delete:
     call buf_delete_fwd
-    call update_after_edit
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_cursor_up:
     call cursor_up
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_cursor_down:
     call cursor_down
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_cursor_left:
     cmp word [cs:cursor_pos], 0
     je .main_loop
     dec word [cs:cursor_pos]
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_cursor_right:
     mov ax, [cs:cursor_pos]
     cmp ax, [cs:text_len]
     jae .main_loop
     inc word [cs:cursor_pos]
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_home:
     call cursor_home
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 .do_end:
     call cursor_end
-    call update_after_move
-    jmp .main_loop
+    mov byte [cs:needs_redraw], 1
+    jmp .check_event
 
 ; ============================================================================
 ; Dialog Mode (Open/Save filename input)
@@ -1405,6 +1412,7 @@ mount_handle:   db 0
 file_handle:    db 0
 prev_btn:       db 0
 mode:           db MODE_EDIT
+needs_redraw:   db 0                    ; 1 = redraw pending (drain events first)
 
 ; Font metrics (computed at startup)
 font_adv:       db 6                    ; Character advance in pixels
