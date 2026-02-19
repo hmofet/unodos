@@ -2052,7 +2052,7 @@ draw_char:
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
     xor dx, dx
-    mov dl, [draw_font_width]       ; DX = column counter
+    mov dl, [draw_font_width]       ; DX = glyph column counter
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
@@ -2072,8 +2072,33 @@ draw_char:
 .next_pixel:
     shl ah, 1                       ; Next bit
     inc cx                          ; Next X
-    dec dx                          ; Decrement column counter
+    dec dx                          ; Decrement glyph column counter
     jnz .col_loop
+
+    ; Fill gap pixels (advance - width) with background color
+    push dx
+    xor dx, dx
+    mov dl, [draw_font_advance]
+    sub dl, [draw_font_width]
+    jz .no_gap
+    cmp byte [draw_bg_color], 0
+    jne .gap_color
+.gap_black:
+    call plot_pixel_black
+    inc cx
+    dec dl
+    jnz .gap_black
+    jmp .no_gap
+.gap_color:
+    push dx
+    mov dl, [draw_bg_color]
+    call plot_pixel_color
+    pop dx
+    inc cx
+    dec dl
+    jnz .gap_color
+.no_gap:
+    pop dx
 
     inc bx                          ; Next Y
     dec bp                          ; Decrement row counter
@@ -3036,7 +3061,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1480 - ($ - $$) db 0
+times 0x14C0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
