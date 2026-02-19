@@ -371,6 +371,7 @@ entry:
     mov ah, API_GET_KEY_MODIFIERS
     int 0x80
     mov [cs:shift_held], al             ; AL=shift state
+    mov [cs:ctrl_held], ah              ; AH=ctrl state
     pop dx
 
     ; 1. ESC
@@ -440,8 +441,10 @@ entry:
     je .do_pgdn
     jmp .main_loop
 
-    ; 6. Printable (32-126)
+    ; 6. Printable (32-126) — reject if Ctrl held (prevents Ctrl+letter from typing)
 .check_printable:
+    cmp byte [cs:ctrl_held], 0
+    jne .main_loop                      ; Ctrl held → don't insert character
     cmp dl, 32
     jb .main_loop
     cmp dl, 126
@@ -2630,6 +2633,7 @@ sel_end:        dw 0
 sel_col_s:      dw 0                    ; Selection column start on current draw line
 sel_col_e:      dw 0                    ; Selection column end on current draw line
 shift_held:     db 0
+ctrl_held:      db 0
 
 ; Mouse state
 mouse_abs_x:    dw 0
