@@ -737,6 +737,8 @@ entry:
     jmp .check_event
 
 .click_context_menu:
+    ; Update mouse_rel coords to current click position (not stale right-click pos)
+    call mouse_to_content_rel
     ; Check if click is within menu
     mov ax, [cs:mouse_rel_x]
     cmp ax, [cs:menu_x]
