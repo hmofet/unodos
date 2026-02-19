@@ -2008,6 +2008,7 @@ draw_char:
     mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
+    sti                             ; Allow keyboard IRQs between font rows
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
@@ -2850,6 +2851,7 @@ draw_char_inverted:
     mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
+    sti                             ; Allow keyboard IRQs between font rows
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
@@ -5083,6 +5085,7 @@ gfx_clear_area_stub:
     mov si, dx
     shr si, 2                       ; SI = bytes per row (DX / 4)
 .fast_row:
+    sti                             ; Allow keyboard IRQs between clear rows
     push cx                         ; Save Y
     push bx                         ; Save X
     ; Calculate CGA row offset
@@ -5115,6 +5118,7 @@ gfx_clear_area_stub:
 .slow_path:
     ; Pixel-by-pixel fallback for non-aligned areas
 .clear_row:
+    sti                             ; Allow keyboard IRQs between clear rows
     mov di, dx                      ; DI = width counter
     push cx                         ; Save Y
     push bx                         ; Save X
