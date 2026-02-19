@@ -313,7 +313,22 @@ entry:
     cmp dl, 126
     ja .main_loop
     call buf_insert_char
-    jmp .set_line_redraw           ; Line-only redraw for typing speed
+    inc word [cs:cursor_col]        ; Incremental column tracking
+
+    ; Check if typing at end of line (fast path: draw 2 chars only)
+    mov bx, [cs:cursor_pos]
+    cmp bx, [cs:text_len]
+    jae .type_at_eol                ; Past end of buffer = EOL
+    cmp byte [cs:text_buf + bx], 0x0A
+    je .type_at_eol                 ; Next char is newline = EOL
+
+    ; Mid-line insertion: need line redraw (chars shifted right)
+    jmp .set_line_redraw
+
+.type_at_eol:
+    ; Ultra-fast path: draw just the typed char + cursor (2 API calls)
+    call draw_typed_char
+    jmp .check_event               ; Check for more events immediately
 
 .do_backspace:
     call buf_delete_char
@@ -616,8 +631,7 @@ draw_current_line:
     int 0x80
 
 .dcl_no_cursor:
-    ; Update status bar
-    call draw_status
+    ; Skip status bar update for speed (updated on full redraws only)
     popa
     ret
 
@@ -625,11 +639,90 @@ draw_current_line:
     ; Scroll needed — fall back to full redraw
     call ensure_cursor_visible
     call draw_text_area
-    call draw_status
     popa
     ret
 
 .dcl_y: dw 0                         ; Saved Y position for current line
+
+; ============================================================================
+; draw_typed_char - Ultra-fast: draw just the typed char + cursor (2 API calls)
+; Uses cursor_line (unchanged for printable chars) and cursor_col (incremented
+; by caller). No clearing, no line scan, no status bar update.
+; ============================================================================
+draw_typed_char:
+    pusha
+
+    ; Check if cursor is visible (cursor_line within scroll range)
+    mov ax, [cs:cursor_line]
+    cmp ax, [cs:scroll_row]
+    jb .dtc_full
+    mov bx, [cs:scroll_row]
+    add bx, [cs:vis_rows]
+    cmp ax, bx
+    jae .dtc_full
+
+    ; Check cursor_col is visible
+    mov ax, [cs:cursor_col]
+    cmp ax, [cs:vis_cols]
+    jae .dtc_done                    ; Past visible area, char is in buffer
+
+    ; Calculate Y = (cursor_line - scroll_row) * row_h + TEXT_Y
+    mov ax, [cs:cursor_line]
+    sub ax, [cs:scroll_row]
+    movzx dx, byte [cs:row_h]
+    mul dx
+    add ax, TEXT_Y
+    mov [cs:.dtc_y], ax
+
+    ; Draw the typed char at cursor_col - 1 (replaces old inverted cursor)
+    mov ax, [cs:cursor_col]
+    dec ax                           ; Position of the char just typed
+    movzx dx, byte [cs:font_adv]
+    mul dx
+    add ax, TEXT_X
+    mov bx, ax                      ; BX = X
+    mov cx, [cs:.dtc_y]             ; CX = Y
+
+    ; Get the char at cursor_pos - 1 (the one we just inserted)
+    push bx
+    mov bx, [cs:cursor_pos]
+    dec bx
+    mov al, [cs:text_buf + bx]
+    mov [cs:cursor_char_buf], al
+    mov byte [cs:cursor_char_buf + 1], 0
+    pop bx
+    mov si, cursor_char_buf
+    mov ah, API_GFX_DRAW_STRING      ; Normal draw (clears bg under char)
+    int 0x80
+
+    ; Draw cursor at cursor_col (inverted space — we're at end of line)
+    mov ax, [cs:cursor_col]
+    cmp ax, [cs:vis_cols]
+    jae .dtc_done                    ; Cursor past visible area
+    movzx dx, byte [cs:font_adv]
+    mul dx
+    add ax, TEXT_X
+    mov bx, ax
+    mov cx, [cs:.dtc_y]
+    mov byte [cs:cursor_char_buf], ' '
+    mov byte [cs:cursor_char_buf + 1], 0
+    mov si, cursor_char_buf
+    mov ah, API_GFX_DRAW_STRING_INV
+    int 0x80
+
+.dtc_done:
+    popa
+    ret
+
+.dtc_full:
+    ; Scroll needed — full redraw
+    call ensure_cursor_visible
+    call draw_text_area
+    call draw_status
+    popa
+    ret
+
+.dtc_y: dw 0
 
 ; ============================================================================
 ; compute_layout - Measure current font and compute visible cols/rows
