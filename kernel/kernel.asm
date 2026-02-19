@@ -2894,7 +2894,7 @@ draw_char_inverted:
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
     xor dx, dx
-    mov dl, [draw_font_width]       ; DX = column counter
+    mov dl, [draw_font_width]       ; DX = glyph column counter
 
 .col_loop:
     test ah, 0x80                   ; Check leftmost bit
@@ -2906,8 +2906,22 @@ draw_char_inverted:
 .next_pixel:
     shl ah, 1                       ; Next bit
     inc cx                          ; Next X
-    dec dx                          ; Decrement column counter
+    dec dx                          ; Decrement glyph column counter
     jnz .col_loop
+
+    ; Fill gap pixels (advance - width) with inverted background color
+    push dx
+    xor dx, dx
+    mov dl, [draw_font_advance]
+    sub dl, [draw_font_width]
+    jz .no_gap
+.gap_loop:
+    call plot_pixel_white           ; White background in inter-character gap
+    inc cx
+    dec dl
+    jnz .gap_loop
+.no_gap:
+    pop dx
 
     inc bx                          ; Next Y
     dec bp                          ; Decrement row counter

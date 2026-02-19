@@ -1830,7 +1830,7 @@ draw_context_menu:
     mov bx, [cs:menu_x]
     add bx, 4
     mov cx, [cs:.dcm_item_y]
-    mov ah, API_GFX_DRAW_STRING
+    mov ah, API_GFX_DRAW_STRING_INV     ; Black text on white (matches menu bg)
     int 0x80
 
     pop cx
