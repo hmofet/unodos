@@ -69,6 +69,7 @@ API_CLIP_GET_LEN        equ 86
 API_CTX_MENU_OPEN       equ 87
 API_CTX_MENU_CLOSE      equ 88
 API_CTX_MENU_HIT        equ 89
+API_FILE_DIALOG         equ 90
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -328,10 +329,17 @@ entry:
     jmp .check_event
 
 .start_open:
-    mov byte [cs:mode], MODE_OPEN
-    mov byte [cs:input_buf], 0
-    mov byte [cs:input_len], 0
-    call draw_status
+    push cs
+    pop es                              ; ES = app segment
+    mov di, filename_buf                ; Destination for result
+    movzx bx, byte [cs:mount_handle]   ; BL = mount handle
+    mov ah, API_FILE_DIALOG
+    int 0x80
+    jc .check_event                     ; Cancelled — do nothing
+    ; filename_buf now has the selected filename
+    call do_open_file
+    mov byte [cs:mode], MODE_EDIT
+    mov byte [cs:needs_redraw], 2       ; Full redraw
     jmp .check_event
 
 .start_save:
