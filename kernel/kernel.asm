@@ -376,6 +376,11 @@ int_09_handler:
 
 .handle_extended:
     mov byte [kbd_e0_flag], 0       ; Clear flag
+    ; Handle Right Ctrl (E0 + 0x1D make / 0x9D release)
+    cmp al, 0x1D
+    je .ctrl_press
+    cmp al, 0x9D
+    je .ctrl_release
     ; Ignore extended key releases
     test al, 0x80
     jnz .done
