@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 90                      ; Max function count (0-89 valid)
+    cmp ah, 91                      ; Max function count (0-90 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -3297,11 +3297,483 @@ menu_hit:
     ret
 
 ; ============================================================================
+; System File Dialog (Build 274)
+; ============================================================================
+
+; Constants
+FDLG_W          equ 152                 ; Dialog window width
+FDLG_H          equ 126                 ; Dialog window height
+FDLG_X          equ 84                  ; Centered X: (320-152)/2
+FDLG_Y          equ 37                  ; Centered Y: (200-126)/2
+FDLG_VISIBLE    equ 11                  ; Visible items in list
+FDLG_ITEM_H     equ 10                  ; Pixels per list item
+FDLG_MAX_FILES  equ 64                  ; Max files stored
+FDLG_ENTRY_SIZE equ 13                  ; 12 chars "FILENAME.EXT" + null
+FDLG_BUF_SEG    equ 0x9000              ; Scratch segment
+FDLG_BUF_OFF    equ 0x1000              ; Offset in scratch (clipboard uses 0x0000-0x0FFF)
+
+; ============================================================================
+; file_dialog_open - System file open dialog (API 90)
+; Input:  BL = mount handle (0=FAT12, 1=FAT16)
+;         ES:DI = destination buffer for filename (13+ bytes)
+; Output: CF=0 → file selected, filename at ES:DI (null-terminated dot format)
+;         CF=1 → cancelled or error
+; Blocking: creates modal window, runs event loop, returns on select/cancel
+; ============================================================================
+file_dialog_open:
+    ; Save caller state
+    mov ax, [caller_es]
+    mov [fdlg_caller_es], ax            ; Save original app ES
+    mov al, [draw_context]
+    mov [fdlg_save_ctx], al
+    call win_end_draw                   ; Clear caller's draw context
+    mov [fdlg_mount], bl
+    mov [fdlg_result_di], di
+
+    ; Scan directory
+    call fdlg_scan_files
+
+    ; Create dialog window (title in kernel segment)
+    mov word [caller_es], 0x1000
+    mov bx, FDLG_X
+    mov cx, FDLG_Y
+    mov dx, FDLG_W
+    mov si, FDLG_H
+    mov di, fdlg_title
+    mov al, WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    call win_create_stub
+    jc .fdlg_error
+    mov [fdlg_handle], al
+
+    ; Initialize selection state
+    mov word [fdlg_sel], 0
+    mov word [fdlg_scroll], 0
+    mov byte [fdlg_prev_btn], 0
+
+    ; Initial draw
+    call fdlg_draw_full
+
+    ; --- Modal event loop ---
+.fdlg_loop:
+    sti                                 ; Re-enable interrupts
+    hlt                                 ; Wait for next interrupt
+
+    ; Poll events
+    call event_get_stub
+    jc .fdlg_check_mouse               ; No event — check mouse
+
+    ; Dispatch by event type
+    cmp al, EVENT_KEY_PRESS
+    je .fdlg_key
+    cmp al, EVENT_WIN_REDRAW
+    je .fdlg_redraw
+    jmp .fdlg_loop
+
+.fdlg_key:
+    cmp dl, 27                          ; ESC → cancel
+    je .fdlg_cancel
+    cmp dl, 13                          ; Enter → select
+    je .fdlg_select
+    cmp dl, 128                         ; Up arrow (INT 9 unified)
+    je .fdlg_up
+    cmp dl, 129                         ; Down arrow
+    je .fdlg_down
+    ; Fallback scancode check (BIOS INT 16h: DL=0, DH=scancode)
+    test dl, dl
+    jnz .fdlg_loop
+    cmp dh, 0x48                        ; Up scancode
+    je .fdlg_up
+    cmp dh, 0x50                        ; Down scancode
+    je .fdlg_down
+    jmp .fdlg_loop
+
+.fdlg_redraw:
+    cmp dl, [fdlg_handle]              ; Only redraw our dialog
+    jne .fdlg_loop
+    call fdlg_draw_full
+    jmp .fdlg_loop
+
+.fdlg_check_mouse:
+    test byte [mouse_buttons], 1        ; Left button
+    jz .fdlg_mouse_up
+    cmp byte [fdlg_prev_btn], 0
+    jne .fdlg_loop                      ; Button held, not new click
+    mov byte [fdlg_prev_btn], 1
+    jmp .fdlg_click
+.fdlg_mouse_up:
+    mov byte [fdlg_prev_btn], 0
+    jmp .fdlg_loop
+
+    ; --- Navigation ---
+.fdlg_up:
+    cmp word [fdlg_sel], 0
+    je .fdlg_loop
+    dec word [fdlg_sel]
+    call fdlg_scroll_into_view
+    call fdlg_draw_full
+    jmp .fdlg_loop
+
+.fdlg_down:
+    mov ax, [fdlg_sel]
+    inc ax
+    cmp ax, [fdlg_count]
+    jae .fdlg_loop
+    mov [fdlg_sel], ax
+    call fdlg_scroll_into_view
+    call fdlg_draw_full
+    jmp .fdlg_loop
+
+    ; --- Mouse click hit-test ---
+.fdlg_click:
+    ; Get content area origin from window table
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax                              ; +1 border
+    mov si, ax                          ; SI = content_x
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11                          ; +1 border + 10 title
+    mov di, ax                          ; DI = content_y
+
+    ; Check X bounds
+    mov ax, [mouse_x]
+    sub ax, si
+    jb .fdlg_loop
+    cmp ax, FDLG_W - 2
+    jae .fdlg_loop
+
+    ; Check Y bounds and compute item index
+    mov ax, [mouse_y]
+    sub ax, di
+    jb .fdlg_loop
+    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H
+    jae .fdlg_loop
+
+    ; Compute clicked item
+    xor dx, dx
+    mov bx, FDLG_ITEM_H
+    div bx                              ; AX = relative item index
+    add ax, [fdlg_scroll]              ; AX = absolute item index
+    cmp ax, [fdlg_count]
+    jae .fdlg_loop
+
+    ; Click on selected → confirm; else just select
+    cmp ax, [fdlg_sel]
+    je .fdlg_select
+    mov [fdlg_sel], ax
+    call fdlg_draw_full
+    jmp .fdlg_loop
+
+    ; --- Selection ---
+.fdlg_select:
+    cmp word [fdlg_count], 0
+    je .fdlg_loop                       ; No files to select
+
+    ; Copy filename to caller's buffer
+    mov ax, [fdlg_sel]
+    mov bx, FDLG_ENTRY_SIZE
+    mul bx
+    add ax, FDLG_BUF_OFF
+
+    push ds
+    push es
+    mov bx, FDLG_BUF_SEG
+    mov ds, bx
+    mov si, ax                          ; DS:SI = filename in scratch segment
+    mov ax, [cs:fdlg_caller_es]
+    mov es, ax
+    mov di, [cs:fdlg_result_di]
+    mov cx, FDLG_ENTRY_SIZE
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+    ; Cleanup and return success
+    call fdlg_cleanup
+    clc
+    ret
+
+    ; --- Cancel ---
+.fdlg_cancel:
+    call fdlg_cleanup
+    stc
+    ret
+
+    ; --- Error (win_create failed) ---
+.fdlg_error:
+    mov al, [fdlg_save_ctx]
+    mov [draw_context], al
+    cmp al, 0xFF
+    je .fdlg_err_ret
+    call win_begin_draw
+.fdlg_err_ret:
+    ; Restore caller_es
+    mov ax, [fdlg_caller_es]
+    mov [caller_es], ax
+    stc
+    ret
+
+; ============================================================================
+; fdlg_cleanup - Destroy dialog, restore caller state
+; ============================================================================
+fdlg_cleanup:
+    movzx ax, byte [fdlg_handle]
+    call win_destroy_stub
+
+    ; Restore caller's draw context
+    mov al, [fdlg_save_ctx]
+    mov [draw_context], al
+    cmp al, 0xFF
+    je .fcleanup_no_ctx
+    call win_begin_draw
+.fcleanup_no_ctx:
+    ; Restore caller_es
+    mov ax, [fdlg_caller_es]
+    mov [caller_es], ax
+    ret
+
+; ============================================================================
+; fdlg_scan_files - Scan directory, build file list in scratch buffer
+; ============================================================================
+fdlg_scan_files:
+    pusha
+    push es
+
+    mov word [fdlg_count], 0
+    mov ax, FDLG_BUF_SEG
+    mov es, ax                          ; ES = scratch segment for storing filenames
+
+    xor cx, cx                          ; CX = readdir state (0 = start)
+
+.fscan_loop:
+    cmp word [fdlg_count], FDLG_MAX_FILES
+    jae .fscan_done
+
+    ; Read next dir entry into kernel temp buffer
+    push es
+    mov ax, 0x1000
+    mov es, ax
+    mov di, fdlg_dir_entry
+    mov al, [fdlg_mount]
+    call fs_readdir_stub
+    pop es
+    jc .fscan_done                      ; End of directory
+
+    ; Filter: skip deleted entries
+    cmp byte [fdlg_dir_entry], 0xE5
+    je .fscan_loop
+    ; End-of-directory marker
+    cmp byte [fdlg_dir_entry], 0x00
+    je .fscan_done
+    ; Skip volume labels, directories, LFN entries
+    mov al, [fdlg_dir_entry + 11]
+    test al, 0x08                       ; Volume label
+    jnz .fscan_loop
+    test al, 0x10                       ; Directory
+    jnz .fscan_loop
+    cmp al, 0x0F                        ; LFN entry
+    je .fscan_loop
+
+    ; Convert 8.3 FAT name to dot format
+    ; Destination: ES:DI = FDLG_BUF_SEG : (FDLG_BUF_OFF + count * FDLG_ENTRY_SIZE)
+    mov ax, [fdlg_count]
+    push dx
+    mov bx, FDLG_ENTRY_SIZE
+    mul bx
+    pop dx
+    add ax, FDLG_BUF_OFF
+    mov di, ax
+
+    ; Copy base name (8 bytes), strip trailing spaces
+    push cx
+    mov si, fdlg_dir_entry
+    mov cx, 8
+.fscan_name:
+    mov al, [si]
+    cmp al, ' '
+    je .fscan_name_done
+    mov [es:di], al
+    inc di
+    inc si
+    loop .fscan_name
+    jmp .fscan_check_ext
+.fscan_name_done:
+    ; Skip remaining name spaces (SI already points past copied chars)
+    add si, cx                          ; Jump past remaining spaces
+.fscan_check_ext:
+    ; Check if extension is blank
+    cmp byte [fdlg_dir_entry + 8], ' '
+    je .fscan_no_ext
+    ; Add dot and extension
+    mov byte [es:di], '.'
+    inc di
+    mov si, fdlg_dir_entry
+    add si, 8
+    mov cx, 3
+.fscan_ext:
+    mov al, [si]
+    cmp al, ' '
+    je .fscan_ext_done
+    mov [es:di], al
+    inc di
+    inc si
+    loop .fscan_ext
+.fscan_ext_done:
+.fscan_no_ext:
+    mov byte [es:di], 0                 ; Null terminate
+    pop cx
+
+    inc word [fdlg_count]
+    jmp .fscan_loop
+
+.fscan_done:
+    pop es
+    popa
+    ret
+
+; ============================================================================
+; fdlg_draw_full - Redraw entire file list
+; ============================================================================
+fdlg_draw_full:
+    pusha
+
+    ; Calculate content area origin from window table
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax                              ; +1 border
+    mov [fdlg_cx], ax
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11                          ; +1 border + 10 title
+    mov [fdlg_cy], ax
+
+    ; Set draw_context for clipping
+    mov al, [fdlg_handle]
+    call win_begin_draw
+
+    ; Check for empty directory
+    cmp word [fdlg_count], 0
+    je .fdraw_empty
+
+    ; Set caller_ds to scratch segment so widget_draw_listitem reads filenames
+    push word [caller_ds]
+    mov word [caller_ds], FDLG_BUF_SEG
+
+    xor cx, cx                          ; CX = visible index (0 to FDLG_VISIBLE-1)
+.fdraw_item:
+    cmp cx, FDLG_VISIBLE
+    jae .fdraw_items_done
+
+    ; Absolute item index = scroll + visible index
+    mov ax, [fdlg_scroll]
+    add ax, cx
+    cmp ax, [fdlg_count]
+    jae .fdraw_blank                    ; Past end — clear row
+
+    ; SI = filename offset in scratch segment
+    push dx
+    push cx
+    mov bx, FDLG_ENTRY_SIZE
+    mul bx
+    add ax, FDLG_BUF_OFF
+    mov si, ax
+
+    ; Screen Y = content_y + visible_index * FDLG_ITEM_H
+    pop cx                              ; Restore visible index
+    mov ax, cx
+    imul ax, FDLG_ITEM_H
+    add ax, [fdlg_cy]
+    mov di, ax                          ; DI = screen Y (saved)
+
+    ; Screen X = content_x
+    mov bx, [fdlg_cx]
+
+    ; AL flags: bit 0 = selected
+    mov dx, [fdlg_scroll]
+    add dx, cx
+    xor al, al
+    cmp dx, [fdlg_sel]
+    jne .fdraw_not_sel
+    or al, 1
+.fdraw_not_sel:
+    push cx                             ; Save visible index for loop
+    mov cx, di                          ; CX = correct screen Y
+    mov dx, FDLG_W - 4                  ; Width
+    call widget_draw_listitem
+    pop cx                              ; Restore visible index
+    pop dx                              ; Matches push dx at loop start
+
+    inc cx
+    jmp .fdraw_item
+
+.fdraw_blank:
+    ; Clear remaining rows
+    push cx
+    mov ax, cx
+    imul ax, FDLG_ITEM_H
+    add ax, [fdlg_cy]
+    mov cx, ax                          ; Y
+    mov bx, [fdlg_cx]                   ; X
+    mov dx, FDLG_W - 4                  ; Width
+    mov si, FDLG_ITEM_H                 ; Height
+    call gfx_clear_area_stub
+    pop cx
+    inc cx
+    cmp cx, FDLG_VISIBLE
+    jb .fdraw_blank
+
+.fdraw_items_done:
+    pop word [caller_ds]                ; Restore caller_ds
+    jmp .fdraw_done
+
+.fdraw_empty:
+    ; Show "(No files)" message
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000        ; Kernel segment for string
+    mov bx, [fdlg_cx]
+    add bx, 20
+    mov cx, [fdlg_cy]
+    add cx, 40
+    mov si, fdlg_empty
+    call gfx_draw_string_stub
+    pop word [caller_ds]
+
+.fdraw_done:
+    call win_end_draw
+    popa
+    ret
+
+; ============================================================================
+; fdlg_scroll_into_view - Adjust scroll to keep selection visible
+; ============================================================================
+fdlg_scroll_into_view:
+    mov ax, [fdlg_sel]
+    ; If sel < scroll, scroll = sel
+    cmp ax, [fdlg_scroll]
+    jae .fscroll_bottom
+    mov [fdlg_scroll], ax
+    ret
+.fscroll_bottom:
+    ; If sel >= scroll + FDLG_VISIBLE, scroll = sel - FDLG_VISIBLE + 1
+    mov bx, [fdlg_scroll]
+    add bx, FDLG_VISIBLE
+    cmp ax, bx
+    jb .fscroll_ok
+    sub ax, FDLG_VISIBLE
+    inc ax
+    mov [fdlg_scroll], ax
+.fscroll_ok:
+    ret
+
+; ============================================================================
 ; Kernel API Table
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1640 - ($ - $$) db 0
+times 0x1A00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -3452,6 +3924,9 @@ kernel_api_table:
     dw menu_open                    ; 87: Open popup menu (generic)
     dw menu_close                   ; 88: Close popup menu
     dw menu_hit                     ; 89: Hit-test popup menu
+
+    ; File Dialog API (Build 274)
+    dw file_dialog_open             ; 90: System file open dialog
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -14755,6 +15230,24 @@ kmenu_y:            dw 0                    ; Absolute screen Y of menu
 kmenu_w:            db 0                    ; Width in pixels (per-call)
 kmenu_count:        db 0                    ; Number of items (per-call)
 kmenu_str_table:    dw 0                    ; String table offset in caller's segment
+
+; ============================================================================
+; File Dialog State (Build 274)
+; ============================================================================
+fdlg_handle:        db 0                    ; Dialog window handle
+fdlg_count:         dw 0                    ; Number of files found
+fdlg_sel:           dw 0                    ; Selected index
+fdlg_scroll:        dw 0                    ; First visible index (scroll position)
+fdlg_mount:         db 0                    ; Mount handle for readdir
+fdlg_prev_btn:      db 0                    ; Previous left button state (edge detect)
+fdlg_result_di:     dw 0                    ; Caller's DI (destination buffer offset)
+fdlg_save_ctx:      db 0                    ; Saved draw_context from caller
+fdlg_caller_es:     dw 0                    ; Saved caller_es (app's ES segment)
+fdlg_cx:            dw 0                    ; Content area X (drawing temp)
+fdlg_cy:            dw 0                    ; Content area Y (drawing temp)
+fdlg_dir_entry:     times 32 db 0           ; Temp buffer for readdir entries
+fdlg_title:         db 'Open File', 0
+fdlg_empty:         db '(No files)', 0
 
 ; ============================================================================
 ; Padding
