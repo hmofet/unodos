@@ -288,11 +288,10 @@ install_keyboard:
     mov byte [kbd_ctrl_state], 0
     mov byte [kbd_alt_state], 0
 
-    ; Skip custom INT 9 handler on HD/USB boot
-    ; Our handler reads port 0x60 directly which deadlocks through SMI
-    ; on USB-booted systems. BIOS INT 16h will be used instead.
-    cmp byte [boot_drive], 0x80
-    jae .skip_handler
+    ; Install custom INT 9 handler on all boot types.
+    ; This ensures keyboard events go through the event queue with focus filtering,
+    ; preventing the launcher from stealing keystrokes meant for focused apps.
+    ; (The old BIOS INT 16h polling fallback remains but is no longer the primary path.)
 
     ; Save original INT 9h vector
     xor ax, ax
@@ -306,12 +305,6 @@ install_keyboard:
     mov word [es:0x0024], int_09_handler
     mov word [es:0x0026], 0x1000
     mov byte [use_bios_keyboard], 0
-    jmp .done
-
-.skip_handler:
-    mov byte [use_bios_keyboard], 1
-
-.done:
     pop bx
     pop ax
     pop es
@@ -2008,7 +2001,6 @@ draw_char:
     mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
-    sti                             ; Allow keyboard IRQs between font rows
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
@@ -2851,7 +2843,6 @@ draw_char_inverted:
     mov bx, [draw_y]                ; Restore BX = Y
 
 .row_loop:
-    sti                             ; Allow keyboard IRQs between font rows
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
     mov cx, [draw_x]                ; CX = current X
@@ -5085,7 +5076,6 @@ gfx_clear_area_stub:
     mov si, dx
     shr si, 2                       ; SI = bytes per row (DX / 4)
 .fast_row:
-    sti                             ; Allow keyboard IRQs between clear rows
     push cx                         ; Save Y
     push bx                         ; Save X
     ; Calculate CGA row offset
@@ -5118,7 +5108,6 @@ gfx_clear_area_stub:
 .slow_path:
     ; Pixel-by-pixel fallback for non-aligned areas
 .clear_row:
-    sti                             ; Allow keyboard IRQs between clear rows
     mov di, dx                      ; DI = width counter
     push cx                         ; Save Y
     push bx                         ; Save X
@@ -5453,9 +5442,19 @@ event_get_stub:
     jmp .evt_check_next
 
 .no_event:
-    ; On USB boot, poll BIOS keyboard since our INT 9 handler isn't installed
+    ; On HD/USB boot, poll BIOS keyboard since our INT 9 handler isn't installed
     cmp byte [use_bios_keyboard], 1
     jne .no_event_return
+    ; Focus check: only read BIOS keyboard if this task has focus (or no focus set).
+    ; Without this, the launcher steals keystrokes meant for the focused app.
+    push ax
+    mov al, [focused_task]
+    cmp al, 0xFF                    ; No focus set? Any task can read
+    je .bios_focus_ok
+    cmp al, [current_task]
+    jne .bios_focus_fail            ; Not focused — leave key in BIOS buffer
+.bios_focus_ok:
+    pop ax
     ; Check BIOS keyboard buffer (INT 16h AH=01h)
     mov ah, 0x01
     int 0x16
@@ -5498,6 +5497,8 @@ event_get_stub:
     pop bx
     ret
 
+.bios_focus_fail:
+    pop ax
 .no_event_return:
     xor al, al                      ; EVENT_NONE
     xor dx, dx

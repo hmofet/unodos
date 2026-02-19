@@ -868,11 +868,11 @@ draw_text_area:
     ; Clear text area
     mov bx, TEXT_X
     mov cx, TEXT_Y
-    mov dx, TEXT_W
     movzx si, byte [cs:row_h]
     mov ax, [cs:vis_rows]
-    mul si
-    mov si, ax                          ; height = vis_rows * row_h
+    mul si                              ; DX:AX = vis_rows * row_h (clobbers DX!)
+    mov si, ax                          ; SI = height
+    mov dx, TEXT_W                      ; DX = width (set AFTER mul, which clobbers DX)
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
