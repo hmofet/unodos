@@ -73,13 +73,15 @@ MODE_EDIT               equ 0
 MODE_OPEN               equ 1
 MODE_SAVE               equ 2
 MODE_CONTEXT_MENU       equ 3
+MODE_FILE_MENU          equ 4
 
 ; Layout (content-relative, total window 318x198, content 316x186)
 WIN_W                   equ 318
 WIN_H                   equ 198
 CONTENT_W               equ 316
 CONTENT_H               equ 186
-TOOLBAR_Y               equ 0
+MENUBAR_Y               equ 0
+MENUBAR_H               equ 10
 SEP1_Y                  equ 11
 TEXT_X                   equ 2
 TEXT_Y                  equ 13
@@ -89,15 +91,11 @@ SEP2_Y                  equ 170
 STATUS_Y                equ 173
 TITLEBAR_HEIGHT         equ 10
 
-; Button layout
-BTN_OPEN_X              equ 2
-BTN_OPEN_W              equ 40
-BTN_SAVE_X              equ 46
-BTN_SAVE_W              equ 40
-BTN_NEW_X               equ 90
-BTN_NEW_W               equ 36
+; Menu bar layout
+FILE_LABEL_X            equ 4
+FILE_LABEL_W            equ 30
+FNAME_X                 equ 80
 BTN_H                   equ 10
-FNAME_X                 equ 132
 
 ; Dialog button
 BTN_OK_X                equ 260
@@ -107,11 +105,18 @@ BTN_OK_W                equ 30
 TEXT_MAX                 equ 16384      ; 16KB text buffer
 CLIP_MAX                equ 4096       ; 4KB clipboard
 
-; Context menu layout
-MENU_W                  equ 80
+; Menu shared constants
 MENU_ITEM_H             equ 10
-MENU_ITEMS              equ 5
-MENU_H                  equ 50         ; MENU_ITEMS * MENU_ITEM_H
+
+; Context menu
+CTX_MENU_W              equ 80
+CTX_MENU_ITEMS          equ 5
+
+; File menu
+FILE_MENU_X             equ 2
+FILE_MENU_Y             equ 11         ; Below menu bar
+FILE_MENU_W             equ 72
+FILE_MENU_ITEMS         equ 4
 
 ; ============================================================================
 ; Entry Point
@@ -225,7 +230,9 @@ entry:
 
     ; Left click dispatch by mode
     cmp byte [cs:mode], MODE_CONTEXT_MENU
-    je .click_context_menu
+    je .click_menu
+    cmp byte [cs:mode], MODE_FILE_MENU
+    je .click_menu
     cmp byte [cs:mode], MODE_EDIT
     je .click_edit
     jmp .click_dialog
@@ -263,7 +270,9 @@ entry:
     jne .main_loop
     ; DL=ASCII/special, DH=scan code
     cmp byte [cs:mode], MODE_CONTEXT_MENU
-    je .key_context_menu
+    je .key_dismiss_menu
+    cmp byte [cs:mode], MODE_FILE_MENU
+    je .key_dismiss_menu
     cmp byte [cs:mode], MODE_EDIT
     je .key_edit
     jmp .key_dialog
@@ -272,35 +281,15 @@ entry:
 ; Edit Mode Click Handling
 ; ============================================================================
 .click_edit:
-    ; [Open] button
-    mov bx, BTN_OPEN_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_OPEN_W
-    mov si, BTN_H
+    ; File menu label hit-test
+    mov bx, FILE_LABEL_X
+    mov cx, MENUBAR_Y
+    mov dx, FILE_LABEL_W
+    mov si, MENUBAR_H
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
-    jnz .start_open
-
-    ; [Save] button
-    mov bx, BTN_SAVE_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_SAVE_W
-    mov si, BTN_H
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .start_save
-
-    ; [New] button
-    mov bx, BTN_NEW_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_NEW_W
-    mov si, BTN_H
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .do_new
+    jnz .open_file_menu
 
     ; Text area click — position cursor
     call mouse_to_offset
@@ -350,12 +339,6 @@ entry:
     call do_save_file
     call draw_status
     jmp .check_event
-.start_save_as:
-    mov byte [cs:mode], MODE_SAVE
-    mov byte [cs:input_buf], 0
-    mov byte [cs:input_len], 0
-    call draw_status
-    jmp .check_event
 
 .do_new:
     call do_new_file
@@ -383,6 +366,12 @@ entry:
     je .do_select_all
     cmp dl, 3                           ; Ctrl+C = Copy
     je .do_copy_key
+    cmp dl, 14                          ; Ctrl+N = New
+    je .do_new
+    cmp dl, 15                          ; Ctrl+O = Open
+    je .start_open
+    cmp dl, 19                          ; Ctrl+S = Save
+    je .start_save
     cmp dl, 22                          ; Ctrl+V = Paste
     je .do_paste_key
     cmp dl, 24                          ; Ctrl+X = Cut
@@ -705,66 +694,90 @@ entry:
     jmp .check_event
 
 ; ============================================================================
-; Context Menu Mode
+; Menu System (shared by File menu and Context menu)
 ; ============================================================================
 .open_context_menu:
-    ; Compute menu position (content-relative)
     call mouse_to_content_rel
-    jc .check_event                     ; Can't determine position
+    jc .check_event
 
-    ; Clamp so menu stays within content area
+    ; Clamp position within content area
     mov ax, [cs:mouse_rel_x]
     mov bx, CONTENT_W
-    sub bx, MENU_W
+    sub bx, CTX_MENU_W
     cmp ax, bx
-    jbe .menu_x_ok
+    jbe .ctx_x_ok
     mov ax, bx
-.menu_x_ok:
+.ctx_x_ok:
     mov [cs:menu_x], ax
 
+    movzx bx, byte [cs:active_menu_h]
     mov ax, [cs:mouse_rel_y]
+    push bx
     mov bx, CONTENT_H
-    sub bx, MENU_H
+    sub bx, CTX_MENU_ITEMS * MENU_ITEM_H
     cmp ax, bx
-    jbe .menu_y_ok
+    jbe .ctx_y_ok
     mov ax, bx
-.menu_y_ok:
+.ctx_y_ok:
+    pop bx
     mov [cs:menu_y], ax
 
-    mov byte [cs:menu_highlight], 0xFF
+    ; Set active menu state
+    mov word [cs:active_menu_strings], ctx_menu_strings
+    mov byte [cs:active_menu_count], CTX_MENU_ITEMS
+    mov byte [cs:active_menu_w], CTX_MENU_W
     mov byte [cs:mode], MODE_CONTEXT_MENU
-    call draw_context_menu
+    call draw_menu
     jmp .check_event
 
-.click_context_menu:
-    ; Update mouse_rel coords to current click position (not stale right-click pos)
+.open_file_menu:
+    mov word [cs:menu_x], FILE_MENU_X
+    mov word [cs:menu_y], FILE_MENU_Y
+    mov word [cs:active_menu_strings], file_menu_strings
+    mov byte [cs:active_menu_count], FILE_MENU_ITEMS
+    mov byte [cs:active_menu_w], FILE_MENU_W
+    mov byte [cs:mode], MODE_FILE_MENU
+    call draw_menu
+    jmp .check_event
+
+.click_menu:
+    ; Update mouse_rel coords to current click position
     call mouse_to_content_rel
-    ; Check if click is within menu
+
+    ; Check if click is within menu bounds (X)
     mov ax, [cs:mouse_rel_x]
     cmp ax, [cs:menu_x]
     jb .dismiss_menu
     mov bx, [cs:menu_x]
-    add bx, MENU_W
+    movzx cx, byte [cs:active_menu_w]
+    add bx, cx
     cmp ax, bx
     jae .dismiss_menu
 
+    ; Check Y bounds
     mov ax, [cs:mouse_rel_y]
     cmp ax, [cs:menu_y]
     jb .dismiss_menu
     mov bx, [cs:menu_y]
-    add bx, MENU_H
+    movzx cx, byte [cs:active_menu_count]
+    imul cx, MENU_ITEM_H
+    add bx, cx
     cmp ax, bx
     jae .dismiss_menu
 
-    ; Compute which item was clicked
+    ; Compute item index
     sub ax, [cs:menu_y]
     xor dx, dx
     mov bx, MENU_ITEM_H
-    div bx                              ; AX = item index
-    cmp ax, MENU_ITEMS
+    div bx
+    cmp al, [cs:active_menu_count]
     jae .dismiss_menu
 
-    ; Execute menu item
+    ; Dispatch by menu type
+    cmp byte [cs:mode], MODE_FILE_MENU
+    je .file_menu_dispatch
+
+    ; --- Context menu dispatch ---
     mov byte [cs:mode], MODE_EDIT
     cmp al, 0
     je .menu_cut
@@ -776,6 +789,19 @@ entry:
     je .menu_undo
     cmp al, 4
     je .menu_sel_all
+    jmp .dismiss_menu
+
+.file_menu_dispatch:
+    mov byte [cs:mode], MODE_EDIT
+    mov byte [cs:needs_redraw], 2
+    cmp al, 0
+    je .do_new
+    cmp al, 1
+    je .start_open
+    cmp al, 2
+    je .start_save
+    cmp al, 3
+    je .start_save_as
     jmp .dismiss_menu
 
 .menu_cut:
@@ -803,13 +829,20 @@ entry:
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
+.start_save_as:
+    mov byte [cs:mode], MODE_SAVE
+    mov byte [cs:input_buf], 0
+    mov byte [cs:input_len], 0
+    call draw_status
+    jmp .check_event
+
 .dismiss_menu:
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
-.key_context_menu:
-    ; ESC or any key dismisses context menu
+.key_dismiss_menu:
+    ; ESC or any key dismisses any open menu
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:needs_redraw], 2
     jmp .check_event
@@ -1786,13 +1819,19 @@ mouse_to_offset:
 ; Context Menu Drawing
 ; ============================================================================
 
-draw_context_menu:
+; draw_menu - Draw the currently active menu (context or file)
+; Uses: menu_x, menu_y, active_menu_strings, active_menu_count, active_menu_w
+draw_menu:
     pusha
+
+    ; Compute menu height
+    movzx si, byte [cs:active_menu_count]
+    imul si, MENU_ITEM_H
+
     ; White filled rect
     mov bx, [cs:menu_x]
     mov cx, [cs:menu_y]
-    mov dx, MENU_W
-    mov si, MENU_H
+    movzx dx, byte [cs:active_menu_w]
     mov al, 3                           ; White
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -1800,17 +1839,18 @@ draw_context_menu:
     ; Black border
     mov bx, [cs:menu_x]
     mov cx, [cs:menu_y]
-    mov dx, MENU_W
-    mov si, MENU_H
+    movzx dx, byte [cs:active_menu_w]
+    movzx si, byte [cs:active_menu_count]
+    imul si, MENU_ITEM_H
     mov al, 0                           ; Black
     mov ah, API_RECT_COLOR
     int 0x80
 
     ; Draw items
     xor cx, cx                          ; CX = item index
-.dcm_loop:
-    cmp cx, MENU_ITEMS
-    jae .dcm_done
+.dm_loop:
+    cmp cl, [cs:active_menu_count]
+    jae .dm_done
 
     ; Compute item text Y = menu_y + index * MENU_ITEM_H + 2
     mov ax, cx
@@ -1819,29 +1859,30 @@ draw_context_menu:
     add ax, [cs:menu_y]
     add ax, 2
     push cx                             ; Save index
-    mov [cs:.dcm_item_y], ax
+    mov [cs:.dm_item_y], ax
 
-    ; Get string pointer from table
+    ; Get string pointer from active string table
     mov bx, cx
     shl bx, 1
-    mov si, [cs:menu_strings + bx]
+    add bx, [cs:active_menu_strings]
+    mov si, [cs:bx]
 
     ; Text X = menu_x + 4
     mov bx, [cs:menu_x]
     add bx, 4
-    mov cx, [cs:.dcm_item_y]
-    mov ah, API_GFX_DRAW_STRING_INV     ; Black text on white (matches menu bg)
+    mov cx, [cs:.dm_item_y]
+    mov ah, API_GFX_DRAW_STRING_INV     ; Black text on white
     int 0x80
 
     pop cx
     inc cx
-    jmp .dcm_loop
+    jmp .dm_loop
 
-.dcm_done:
+.dm_done:
     popa
     ret
 
-.dcm_item_y: dw 0
+.dm_item_y: dw 0
 
 ; ============================================================================
 ; compute_layout - Measure current font and compute visible cols/rows
@@ -1891,7 +1932,7 @@ draw_ui:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    call draw_toolbar
+    call draw_menubar
 
     ; Separators
     mov bx, 0
@@ -1914,42 +1955,21 @@ draw_ui:
     ret
 
 ; ============================================================================
-; draw_toolbar
+; draw_menubar - Draw menu bar with "File" label and filename
 ; ============================================================================
-draw_toolbar:
+draw_menubar:
     pusha
-    mov ax, cs
-    mov es, ax
 
-    mov bx, BTN_OPEN_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_OPEN_W
-    mov si, BTN_H
-    mov di, str_open
-    xor al, al
-    mov ah, API_DRAW_BUTTON
+    ; "File" label
+    mov bx, FILE_LABEL_X
+    mov cx, MENUBAR_Y + 2
+    mov si, str_file
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, BTN_SAVE_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_SAVE_W
-    mov si, BTN_H
-    mov di, str_save
-    xor al, al
-    mov ah, API_DRAW_BUTTON
-    int 0x80
-
-    mov bx, BTN_NEW_X
-    mov cx, TOOLBAR_Y
-    mov dx, BTN_NEW_W
-    mov si, BTN_H
-    mov di, str_new
-    xor al, al
-    mov ah, API_DRAW_BUTTON
-    int 0x80
-
+    ; Filename display
     mov bx, FNAME_X
-    mov cx, TOOLBAR_Y + 2
+    mov cx, MENUBAR_Y + 2
     cmp byte [cs:filename_buf], 0
     je .no_fname
     mov si, filename_buf
@@ -2656,18 +2676,28 @@ undo_scroll:    dw 0
 undo_valid:     db 0
 undo_saved_for_edit: db 0
 
-; Context menu state
+; Menu state (shared by context menu and file menu)
 menu_x:         dw 0
 menu_y:         dw 0
-menu_highlight: db 0xFF
+active_menu_strings: dw 0               ; Pointer to current menu's string table
+active_menu_count:   db 0               ; Number of items in current menu
+active_menu_w:       db 0               ; Width of current menu (pixels)
+active_menu_h:       db 0               ; Height (computed)
 
 ; Context menu string table
-menu_strings:
+ctx_menu_strings:
     dw str_cut
     dw str_copy
     dw str_paste
     dw str_undo_label
     dw str_sel_all
+
+; File menu string table
+file_menu_strings:
+    dw str_new
+    dw str_open
+    dw str_save
+    dw str_save_as_item
 
 ; Input state (for dialogs)
 input_len:      db 0
@@ -2678,10 +2708,12 @@ str_save:       db 'Save', 0
 str_new:        db 'New', 0
 str_ok:         db 'OK', 0
 str_untitled:   db '(untitled)', 0
+str_file:       db 'File', 0
 str_ln:         db 'Ln', 0
 str_col:        db 'Col', 0
 str_open_file:  db 'Open:', 0
 str_save_as:    db 'Save as:', 0
+str_save_as_item: db 'Save As', 0
 str_opened:     db 'Opened', 0
 str_saved:      db 'Saved', 0
 str_err_open:   db 'Open error', 0
