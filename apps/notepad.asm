@@ -1,6 +1,6 @@
 ; NOTEPAD.BIN - Text Editor for UnoDOS
-; Simple text editor with open, save, and cursor navigation.
-; Build 261
+; Text editor with selection, clipboard, undo, and context menu.
+; Build 267
 ;
 ; Build: nasm -f bin -o notepad.bin notepad.asm
 
@@ -14,7 +14,6 @@
     times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
 
     ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
-    ; Document icon: white page with cyan text lines
     db 0xFF, 0xFC, 0x00, 0x00      ; Row 0:  white top edge
     db 0xC0, 0x0F, 0x00, 0x00      ; Row 1:  white sides + fold
     db 0xC0, 0x03, 0xC0, 0x00      ; Row 2:  fold corner
@@ -59,7 +58,11 @@ API_FS_DELETE           equ 47
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
 API_DRAW_TEXTFIELD      equ 57
+API_FILLED_RECT_COLOR   equ 67
+API_RECT_COLOR          equ 68
 API_DRAW_HLINE          equ 69
+API_WIN_GET_INFO        equ 79
+API_GET_KEY_MODIFIERS   equ 83
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -69,6 +72,7 @@ EVENT_WIN_REDRAW        equ 6
 MODE_EDIT               equ 0
 MODE_OPEN               equ 1
 MODE_SAVE               equ 2
+MODE_CONTEXT_MENU       equ 3
 
 ; Layout (content-relative, total window 318x198, content 316x186)
 WIN_W                   equ 318
@@ -80,9 +84,10 @@ SEP1_Y                  equ 11
 TEXT_X                   equ 2
 TEXT_Y                  equ 13
 TEXT_W                  equ 312
-TEXT_H                  equ 155         ; text area height in pixels
+TEXT_H                  equ 155
 SEP2_Y                  equ 170
 STATUS_Y                equ 173
+TITLEBAR_HEIGHT         equ 10
 
 ; Button layout
 BTN_OPEN_X              equ 2
@@ -98,8 +103,15 @@ FNAME_X                 equ 132
 BTN_OK_X                equ 260
 BTN_OK_W                equ 30
 
-; Buffer
+; Buffer sizes
 TEXT_MAX                 equ 16384      ; 16KB text buffer
+CLIP_MAX                equ 4096       ; 4KB clipboard
+
+; Context menu layout
+MENU_W                  equ 80
+MENU_ITEM_H             equ 10
+MENU_ITEMS              equ 5
+MENU_H                  equ 50         ; MENU_ITEMS * MENU_ITEM_H
 
 ; ============================================================================
 ; Entry Point
@@ -111,6 +123,15 @@ entry:
 
     mov ax, cs
     mov ds, ax
+
+    ; Initialize selection/clipboard/undo state
+    mov word [cs:sel_anchor], 0xFFFF
+    mov word [cs:clip_len], 0
+    mov byte [cs:undo_valid], 0
+    mov byte [cs:undo_saved_for_edit], 0
+    mov byte [cs:mouse_selecting], 0
+    mov byte [cs:prev_right_btn], 0
+    mov byte [cs:shift_held], 0
 
     ; Get boot drive and mount filesystem
     mov ah, API_GET_BOOT_DRIVE
@@ -171,19 +192,61 @@ entry:
     ; --- Mouse ---
     mov ah, API_MOUSE_STATE
     int 0x80
-    test dl, 1
-    jz .mouse_up
+    ; BX=X, CX=Y, DL=buttons
+    mov [cs:mouse_abs_x], bx
+    mov [cs:mouse_abs_y], cx
+    mov [cs:mouse_buttons], dl
+
+    ; --- Mouse drag selection ---
+    cmp byte [cs:mouse_selecting], 0
+    je .no_drag
+    test byte [cs:mouse_buttons], 1     ; Left button still held?
+    jnz .do_drag
+    ; Released: end drag
+    mov byte [cs:mouse_selecting], 0
+    jmp .no_drag
+.do_drag:
+    call mouse_to_offset
+    jc .no_drag
+    cmp ax, [cs:cursor_pos]
+    je .check_event                     ; No movement
+    mov [cs:cursor_pos], ax
+    call update_selection_bounds
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.no_drag:
+
+    ; --- Left click ---
+    test byte [cs:mouse_buttons], 1
+    jz .left_up
     cmp byte [cs:prev_btn], 0
-    jne .check_event
+    jne .check_right_click
     mov byte [cs:prev_btn], 1
 
-    ; Click detected — dispatch by mode
+    ; Left click dispatch by mode
+    cmp byte [cs:mode], MODE_CONTEXT_MENU
+    je .click_context_menu
     cmp byte [cs:mode], MODE_EDIT
     je .click_edit
     jmp .click_dialog
 
-.mouse_up:
+.left_up:
     mov byte [cs:prev_btn], 0
+.check_right_click:
+    ; --- Right click ---
+    test byte [cs:mouse_buttons], 2
+    jz .right_up
+    cmp byte [cs:prev_right_btn], 0
+    jne .check_event
+    mov byte [cs:prev_right_btn], 1
+
+    ; Right-click: open context menu (only in edit mode)
+    cmp byte [cs:mode], MODE_EDIT
+    jne .check_event
+    jmp .open_context_menu
+
+.right_up:
+    mov byte [cs:prev_right_btn], 0
 
 .check_event:
     mov ah, API_EVENT_GET
@@ -191,14 +254,16 @@ entry:
     jc .main_loop
     cmp al, EVENT_WIN_REDRAW
     jne .not_redraw
-    call compute_layout             ; Re-measure font on redraw
+    call compute_layout
     call draw_ui
-    mov byte [cs:needs_redraw], 0   ; Clear flag after full redraw
+    mov byte [cs:needs_redraw], 0
     jmp .main_loop
 .not_redraw:
     cmp al, EVENT_KEY_PRESS
     jne .main_loop
-    ; DL=ASCII, DH=scan code
+    ; DL=ASCII/special, DH=scan code
+    cmp byte [cs:mode], MODE_CONTEXT_MENU
+    je .key_context_menu
     cmp byte [cs:mode], MODE_EDIT
     je .key_edit
     jmp .key_dialog
@@ -237,6 +302,39 @@ entry:
     test al, al
     jnz .do_new
 
+    ; Text area click — position cursor
+    call mouse_to_offset
+    jc .check_event                     ; Outside text area
+
+    ; Check shift for selection extension
+    push ax
+    mov ah, API_GET_KEY_MODIFIERS
+    int 0x80
+    mov [cs:shift_held], al
+    pop ax
+
+    cmp byte [cs:shift_held], 0
+    jne .click_extend_sel
+
+    ; Normal click: set cursor, clear selection, start potential drag
+    mov [cs:cursor_pos], ax
+    mov [cs:sel_anchor], ax             ; Anchor for potential drag
+    mov byte [cs:mouse_selecting], 1
+    call clear_selection_silent
+    mov byte [cs:undo_saved_for_edit], 0
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+.click_extend_sel:
+    ; Shift+click: extend selection from anchor
+    cmp word [cs:sel_anchor], 0xFFFF
+    jne .click_ext_have_anchor
+    mov bx, [cs:cursor_pos]
+    mov [cs:sel_anchor], bx
+.click_ext_have_anchor:
+    mov [cs:cursor_pos], ax
+    call update_selection_bounds
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .start_open:
@@ -247,7 +345,6 @@ entry:
     jmp .check_event
 
 .start_save:
-    ; If we have a filename, save directly
     cmp byte [cs:filename_buf], 0
     je .start_save_as
     call do_save_file
@@ -266,30 +363,63 @@ entry:
     jmp .main_loop
 
 ; ============================================================================
-; Edit Mode Key Handling
+; Edit Mode Key Handling (restructured for unified INT 9)
 ; ============================================================================
 .key_edit:
-    ; ESC - exit
+    ; Get modifier state first
+    push dx
+    mov ah, API_GET_KEY_MODIFIERS
+    int 0x80
+    mov [cs:shift_held], al             ; AL=shift state
+    pop dx
+
+    ; 1. ESC
     cmp dl, 27
     je .exit_ok
 
-    ; Backspace
+    ; 2. Ctrl+shortcuts (DL=1-26 from Ctrl+letter mapping)
+    cmp dl, 1                           ; Ctrl+A = Select All
+    je .do_select_all
+    cmp dl, 3                           ; Ctrl+C = Copy
+    je .do_copy_key
+    cmp dl, 22                          ; Ctrl+V = Paste
+    je .do_paste_key
+    cmp dl, 24                          ; Ctrl+X = Cut
+    je .do_cut_key
+    cmp dl, 26                          ; Ctrl+Z = Undo
+    je .do_undo_key
+
+    ; 3. Control chars
     cmp dl, 8
     je .do_backspace
-
-    ; Enter
     cmp dl, 13
     je .do_enter
-
-    ; Tab - insert spaces
     cmp dl, 9
     je .do_tab
 
-    ; Check scan codes for non-ASCII keys
+    ; 4. Special codes from unified INT 9 (DL=128-136)
+    cmp dl, 128
+    je .do_cursor_up
+    cmp dl, 129
+    je .do_cursor_down
+    cmp dl, 130
+    je .do_cursor_left
+    cmp dl, 131
+    je .do_cursor_right
+    cmp dl, 132
+    je .do_home
+    cmp dl, 133
+    je .do_end
+    cmp dl, 134
+    je .do_delete
+    cmp dl, 135
+    je .do_pgup
+    cmp dl, 136
+    je .do_pgdn
+
+    ; 5. Fallback DH scan codes (BIOS INT 16h path, DL=0)
     test dl, dl
     jnz .check_printable
-
-    ; Arrow keys and special keys (DL=0, DH=scan code)
     cmp dh, 0x48
     je .do_cursor_up
     cmp dh, 0x50
@@ -304,96 +434,379 @@ entry:
     je .do_end
     cmp dh, 0x53
     je .do_delete
+    cmp dh, 0x49
+    je .do_pgup
+    cmp dh, 0x51
+    je .do_pgdn
     jmp .main_loop
 
+    ; 6. Printable (32-126)
 .check_printable:
-    ; Printable char (32-126)
     cmp dl, 32
     jb .main_loop
     cmp dl, 126
     ja .main_loop
-    call buf_insert_char
-    inc word [cs:cursor_col]        ; Incremental column tracking
 
-    ; Check if typing at end of line (fast path: draw 2 chars only)
+    ; If selection active, delete it first (replace selection with typed char)
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .type_no_sel
+    call maybe_save_undo
+    call delete_selection
+    jmp .type_insert
+.type_no_sel:
+    call maybe_save_undo
+.type_insert:
+    call buf_insert_char
+    inc word [cs:cursor_col]
+
+    ; Check if typing at end of line (fast path)
     mov bx, [cs:cursor_pos]
     cmp bx, [cs:text_len]
-    jae .type_at_eol                ; Past end of buffer = EOL
+    jae .type_at_eol
     cmp byte [cs:text_buf + bx], 0x0A
-    je .type_at_eol                 ; Next char is newline = EOL
+    je .type_at_eol
 
-    ; Mid-line insertion: need line redraw (chars shifted right)
+    ; Mid-line insertion: line redraw
     jmp .set_line_redraw
 
 .type_at_eol:
-    ; Ultra-fast path: draw just the typed char + cursor (2 API calls)
     call draw_typed_char
-    jmp .check_event               ; Check for more events immediately
+    jmp .check_event
 
+; --- Edit operations ---
 .do_backspace:
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .bs_no_sel
+    call maybe_save_undo
+    call delete_selection
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.bs_no_sel:
+    cmp word [cs:cursor_pos], 0
+    je .main_loop
+    call maybe_save_undo
     call buf_delete_char
-    mov byte [cs:needs_redraw], 2  ; Full redraw (line structure may change)
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_enter:
+    call maybe_save_undo
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .enter_insert
+    call delete_selection
+.enter_insert:
     mov dl, 0x0A
     call buf_insert_char
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_tab:
+    call maybe_save_undo
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .tab_insert
+    call delete_selection
+.tab_insert:
     mov dl, ' '
     call buf_insert_char
     call buf_insert_char
     call buf_insert_char
     call buf_insert_char
-    jmp .set_line_redraw           ; Line-only redraw
+    jmp .set_line_redraw
 
 .do_delete:
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .del_no_sel
+    call maybe_save_undo
+    call delete_selection
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.del_no_sel:
+    mov ax, [cs:cursor_pos]
+    cmp ax, [cs:text_len]
+    jae .main_loop
+    call maybe_save_undo
     call buf_delete_fwd
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
-.do_cursor_up:
-    call cursor_up
+; --- Ctrl+key operations ---
+.do_select_all:
+    mov word [cs:sel_anchor], 0
+    mov ax, [cs:text_len]
+    mov [cs:cursor_pos], ax
+    call update_selection_bounds
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
-.do_cursor_down:
-    call cursor_down
+.do_copy_key:
+    call do_copy
+    jmp .check_event
+
+.do_cut_key:
+    call do_cut
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
+.do_paste_key:
+    call do_paste
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+.do_undo_key:
+    call do_undo
+    mov byte [cs:undo_saved_for_edit], 0
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+; --- Cursor movement (selection-aware) ---
 .do_cursor_left:
+    cmp byte [cs:shift_held], 0
+    jne .cursor_left_shift
+    ; No shift: collapse selection or move
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .cursor_left_move
+    mov ax, [cs:sel_start]
+    mov [cs:cursor_pos], ax
+    call clear_selection_silent
+    jmp .cursor_moved
+.cursor_left_move:
     cmp word [cs:cursor_pos], 0
     je .main_loop
     dec word [cs:cursor_pos]
-    mov byte [cs:needs_redraw], 2
-    jmp .check_event
+    jmp .cursor_moved
+.cursor_left_shift:
+    call handle_shift_for_move
+    cmp word [cs:cursor_pos], 0
+    je .cursor_moved_sel
+    dec word [cs:cursor_pos]
+    jmp .cursor_moved_sel
 
 .do_cursor_right:
+    cmp byte [cs:shift_held], 0
+    jne .cursor_right_shift
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .cursor_right_move
+    mov ax, [cs:sel_end]
+    mov [cs:cursor_pos], ax
+    call clear_selection_silent
+    jmp .cursor_moved
+.cursor_right_move:
     mov ax, [cs:cursor_pos]
     cmp ax, [cs:text_len]
     jae .main_loop
     inc word [cs:cursor_pos]
-    mov byte [cs:needs_redraw], 2
-    jmp .check_event
+    jmp .cursor_moved
+.cursor_right_shift:
+    call handle_shift_for_move
+    mov ax, [cs:cursor_pos]
+    cmp ax, [cs:text_len]
+    jae .cursor_moved_sel
+    inc word [cs:cursor_pos]
+    jmp .cursor_moved_sel
+
+.do_cursor_up:
+    cmp byte [cs:shift_held], 0
+    jne .cursor_up_shift
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .cursor_up_move
+    mov ax, [cs:sel_start]
+    mov [cs:cursor_pos], ax
+    call clear_selection_silent
+    jmp .cursor_moved
+.cursor_up_move:
+    call cursor_up
+    jmp .cursor_moved
+.cursor_up_shift:
+    call handle_shift_for_move
+    call cursor_up
+    jmp .cursor_moved_sel
+
+.do_cursor_down:
+    cmp byte [cs:shift_held], 0
+    jne .cursor_down_shift
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .cursor_down_move
+    mov ax, [cs:sel_end]
+    mov [cs:cursor_pos], ax
+    call clear_selection_silent
+    jmp .cursor_moved
+.cursor_down_move:
+    call cursor_down
+    jmp .cursor_moved
+.cursor_down_shift:
+    call handle_shift_for_move
+    call cursor_down
+    jmp .cursor_moved_sel
 
 .do_home:
+    cmp byte [cs:shift_held], 0
+    jne .home_shift
+    call clear_selection_silent
     call cursor_home
+    jmp .cursor_moved
+.home_shift:
+    call handle_shift_for_move
+    call cursor_home
+    jmp .cursor_moved_sel
+
+.do_end:
+    cmp byte [cs:shift_held], 0
+    jne .end_shift
+    call clear_selection_silent
+    call cursor_end
+    jmp .cursor_moved
+.end_shift:
+    call handle_shift_for_move
+    call cursor_end
+    jmp .cursor_moved_sel
+
+.do_pgup:
+    cmp byte [cs:shift_held], 0
+    jne .pgup_shift
+    call clear_selection_silent
+    call cursor_pgup
+    jmp .cursor_moved
+.pgup_shift:
+    call handle_shift_for_move
+    call cursor_pgup
+    jmp .cursor_moved_sel
+
+.do_pgdn:
+    cmp byte [cs:shift_held], 0
+    jne .pgdn_shift
+    call clear_selection_silent
+    call cursor_pgdn
+    jmp .cursor_moved
+.pgdn_shift:
+    call handle_shift_for_move
+    call cursor_pgdn
+    jmp .cursor_moved_sel
+
+; Common exit for cursor movement
+.cursor_moved:
+    mov byte [cs:undo_saved_for_edit], 0
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
-.do_end:
-    call cursor_end
+.cursor_moved_sel:
+    call update_selection_bounds
+    mov byte [cs:undo_saved_for_edit], 0
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 ; Helper: set line-only redraw (don't downgrade from full redraw)
 .set_line_redraw:
     cmp byte [cs:needs_redraw], 2
-    jae .check_event               ; Already needs full redraw, don't downgrade
+    jae .check_event
     mov byte [cs:needs_redraw], 1
+    jmp .check_event
+
+; ============================================================================
+; Context Menu Mode
+; ============================================================================
+.open_context_menu:
+    ; Compute menu position (content-relative)
+    call mouse_to_content_rel
+    jc .check_event                     ; Can't determine position
+
+    ; Clamp so menu stays within content area
+    mov ax, [cs:mouse_rel_x]
+    mov bx, CONTENT_W
+    sub bx, MENU_W
+    cmp ax, bx
+    jbe .menu_x_ok
+    mov ax, bx
+.menu_x_ok:
+    mov [cs:menu_x], ax
+
+    mov ax, [cs:mouse_rel_y]
+    mov bx, CONTENT_H
+    sub bx, MENU_H
+    cmp ax, bx
+    jbe .menu_y_ok
+    mov ax, bx
+.menu_y_ok:
+    mov [cs:menu_y], ax
+
+    mov byte [cs:menu_highlight], 0xFF
+    mov byte [cs:mode], MODE_CONTEXT_MENU
+    call draw_context_menu
+    jmp .check_event
+
+.click_context_menu:
+    ; Check if click is within menu
+    mov ax, [cs:mouse_rel_x]
+    cmp ax, [cs:menu_x]
+    jb .dismiss_menu
+    mov bx, [cs:menu_x]
+    add bx, MENU_W
+    cmp ax, bx
+    jae .dismiss_menu
+
+    mov ax, [cs:mouse_rel_y]
+    cmp ax, [cs:menu_y]
+    jb .dismiss_menu
+    mov bx, [cs:menu_y]
+    add bx, MENU_H
+    cmp ax, bx
+    jae .dismiss_menu
+
+    ; Compute which item was clicked
+    sub ax, [cs:menu_y]
+    xor dx, dx
+    mov bx, MENU_ITEM_H
+    div bx                              ; AX = item index
+    cmp ax, MENU_ITEMS
+    jae .dismiss_menu
+
+    ; Execute menu item
+    mov byte [cs:mode], MODE_EDIT
+    cmp al, 0
+    je .menu_cut
+    cmp al, 1
+    je .menu_copy
+    cmp al, 2
+    je .menu_paste
+    cmp al, 3
+    je .menu_undo
+    cmp al, 4
+    je .menu_sel_all
+    jmp .dismiss_menu
+
+.menu_cut:
+    call do_cut
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.menu_copy:
+    call do_copy
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.menu_paste:
+    call do_paste
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.menu_undo:
+    call do_undo
+    mov byte [cs:undo_saved_for_edit], 0
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.menu_sel_all:
+    mov word [cs:sel_anchor], 0
+    mov ax, [cs:text_len]
+    mov [cs:cursor_pos], ax
+    call update_selection_bounds
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+.dismiss_menu:
+    mov byte [cs:mode], MODE_EDIT
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+.key_context_menu:
+    ; ESC or any key dismisses context menu
+    mov byte [cs:mode], MODE_EDIT
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 ; ============================================================================
@@ -524,24 +937,10 @@ update_after_edit:
     ret
 
 ; ============================================================================
-; update_after_move - After cursor move, ensure visible and redraw
-; ============================================================================
-update_after_move:
-    pusha
-    call cursor_to_line_col
-    call ensure_cursor_visible
-    call draw_text_area
-    call draw_status
-    popa
-    ret
-
-; ============================================================================
-; draw_current_line - Fast redraw of only the cursor's line (for typing)
-; Falls back to full redraw if scroll is needed.
+; draw_current_line - Fast redraw of only the cursor's line
 ; ============================================================================
 draw_current_line:
     pusha
-    ; Compute cursor line/col
     call cursor_to_line_col
 
     ; Check if cursor is visible without scrolling
@@ -554,7 +953,7 @@ draw_current_line:
     jae .dcl_full
 
     ; Cursor is visible — compute screen row
-    sub ax, [cs:scroll_row]          ; AX = screen row (0-based)
+    sub ax, [cs:scroll_row]
 
     ; Calculate Y = TEXT_Y + screen_row * row_h
     movzx dx, byte [cs:row_h]
@@ -572,9 +971,9 @@ draw_current_line:
 
     ; Find byte offset for cursor_line
     mov cx, [cs:cursor_line]
-    call find_line_start              ; BX = start of line
+    call find_line_start                ; BX = start of line
 
-    ; Copy line to line_buf (up to vis_cols chars)
+    ; Copy line to line_buf
     mov si, bx
     xor di, di
 .dcl_copy:
@@ -599,6 +998,10 @@ draw_current_line:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; Draw cursor only if no selection
+    cmp word [cs:sel_anchor], 0xFFFF
+    jne .dcl_no_cursor
+
     ; Draw cursor (inverted char at cursor_col)
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
@@ -606,10 +1009,9 @@ draw_current_line:
     movzx dx, byte [cs:font_adv]
     mul dx
     add ax, TEXT_X
-    mov bx, ax                       ; BX = cursor X
+    mov bx, ax
     mov cx, [cs:.dcl_y]
 
-    ; Get char at cursor position
     push bx
     mov bx, [cs:cursor_pos]
     cmp bx, [cs:text_len]
@@ -631,28 +1033,24 @@ draw_current_line:
     int 0x80
 
 .dcl_no_cursor:
-    ; Skip status bar update for speed (updated on full redraws only)
     popa
     ret
 
 .dcl_full:
-    ; Scroll needed — fall back to full redraw
     call ensure_cursor_visible
     call draw_text_area
     popa
     ret
 
-.dcl_y: dw 0                         ; Saved Y position for current line
+.dcl_y: dw 0
 
 ; ============================================================================
 ; draw_typed_char - Ultra-fast: draw just the typed char + cursor (2 API calls)
-; Uses cursor_line (unchanged for printable chars) and cursor_col (incremented
-; by caller). No clearing, no line scan, no status bar update.
 ; ============================================================================
 draw_typed_char:
     pusha
 
-    ; Check if cursor is visible (cursor_line within scroll range)
+    ; Check if cursor is visible
     mov ax, [cs:cursor_line]
     cmp ax, [cs:scroll_row]
     jb .dtc_full
@@ -664,9 +1062,9 @@ draw_typed_char:
     ; Check cursor_col is visible
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
-    jae .dtc_done                    ; Past visible area, char is in buffer
+    jae .dtc_done
 
-    ; Calculate Y = (cursor_line - scroll_row) * row_h + TEXT_Y
+    ; Calculate Y
     mov ax, [cs:cursor_line]
     sub ax, [cs:scroll_row]
     movzx dx, byte [cs:row_h]
@@ -674,16 +1072,15 @@ draw_typed_char:
     add ax, TEXT_Y
     mov [cs:.dtc_y], ax
 
-    ; Draw the typed char at cursor_col - 1 (replaces old inverted cursor)
+    ; Draw the typed char at cursor_col - 1
     mov ax, [cs:cursor_col]
-    dec ax                           ; Position of the char just typed
+    dec ax
     movzx dx, byte [cs:font_adv]
     mul dx
     add ax, TEXT_X
-    mov bx, ax                      ; BX = X
-    mov cx, [cs:.dtc_y]             ; CX = Y
+    mov bx, ax
+    mov cx, [cs:.dtc_y]
 
-    ; Get the char at cursor_pos - 1 (the one we just inserted)
     push bx
     mov bx, [cs:cursor_pos]
     dec bx
@@ -692,13 +1089,13 @@ draw_typed_char:
     mov byte [cs:cursor_char_buf + 1], 0
     pop bx
     mov si, cursor_char_buf
-    mov ah, API_GFX_DRAW_STRING      ; Normal draw (clears bg under char)
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw cursor at cursor_col (inverted space — we're at end of line)
+    ; Draw cursor at cursor_col
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
-    jae .dtc_done                    ; Cursor past visible area
+    jae .dtc_done
     movzx dx, byte [cs:font_adv]
     mul dx
     add ax, TEXT_X
@@ -715,7 +1112,6 @@ draw_typed_char:
     ret
 
 .dtc_full:
-    ; Scroll needed — full redraw
     call ensure_cursor_visible
     call draw_text_area
     call draw_status
@@ -725,39 +1121,750 @@ draw_typed_char:
 .dtc_y: dw 0
 
 ; ============================================================================
+; Selection Helpers
+; ============================================================================
+
+; clear_selection_silent - Clear selection without redraw
+clear_selection_silent:
+    mov word [cs:sel_anchor], 0xFFFF
+    ret
+
+; update_selection_bounds - Compute sel_start/sel_end from anchor and cursor_pos
+update_selection_bounds:
+    push ax
+    push bx
+    mov ax, [cs:sel_anchor]
+    mov bx, [cs:cursor_pos]
+    cmp ax, bx
+    jbe .usb_ordered
+    xchg ax, bx
+.usb_ordered:
+    mov [cs:sel_start], ax
+    mov [cs:sel_end], bx
+    pop bx
+    pop ax
+    ret
+
+; handle_shift_for_move - Set anchor if shift held and no anchor yet
+handle_shift_for_move:
+    cmp word [cs:sel_anchor], 0xFFFF
+    jne .hsfm_done
+    mov ax, [cs:cursor_pos]
+    mov [cs:sel_anchor], ax
+.hsfm_done:
+    ret
+
+; delete_selection - Remove selected text, set cursor to sel_start, clear selection
+delete_selection:
+    pusha
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dsel_done
+
+    call update_selection_bounds
+    mov ax, [cs:sel_start]
+    mov bx, [cs:sel_end]
+    cmp ax, bx
+    je .dsel_clear
+
+    ; Shift text_buf[sel_end..text_len) left to sel_start
+    mov cx, [cs:text_len]
+    sub cx, bx                          ; CX = bytes after sel_end
+    jcxz .dsel_no_shift
+
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, bx                          ; SI = &text_buf[sel_end]
+    mov di, text_buf
+    add di, ax                          ; DI = &text_buf[sel_start]
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+.dsel_no_shift:
+    ; Update text_len
+    mov cx, [cs:sel_end]
+    sub cx, [cs:sel_start]
+    sub [cs:text_len], cx
+
+    ; Cursor to sel_start
+    mov ax, [cs:sel_start]
+    mov [cs:cursor_pos], ax
+
+.dsel_clear:
+    mov word [cs:sel_anchor], 0xFFFF
+
+.dsel_done:
+    popa
+    ret
+
+; ============================================================================
+; Clipboard Operations
+; ============================================================================
+
+; do_copy - Copy selected text to clipboard
+do_copy:
+    pusha
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dcopy_done
+
+    call update_selection_bounds
+    mov cx, [cs:sel_end]
+    sub cx, [cs:sel_start]
+    jcxz .dcopy_done
+
+    cmp cx, CLIP_MAX
+    jbe .dcopy_ok
+    mov cx, CLIP_MAX
+.dcopy_ok:
+    mov [cs:clip_len], cx
+
+    ; Copy text_buf[sel_start..] to clip_buf
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, [cs:sel_start]
+    mov di, clip_buf
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+.dcopy_done:
+    popa
+    ret
+
+; do_cut - Copy selection to clipboard, then delete it
+do_cut:
+    pusha
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dcut_done
+    call save_undo
+    mov byte [cs:undo_saved_for_edit], 1
+    call do_copy
+    call delete_selection
+.dcut_done:
+    popa
+    ret
+
+; do_paste - Insert clipboard at cursor (delete selection first if active)
+do_paste:
+    pusha
+    mov cx, [cs:clip_len]
+    test cx, cx
+    jz .dpaste_done
+
+    ; Check room
+    mov ax, [cs:text_len]
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dpaste_no_sel_check
+    ; Account for selection deletion
+    push bx
+    call update_selection_bounds
+    mov bx, [cs:sel_end]
+    sub bx, [cs:sel_start]
+    sub ax, bx
+    pop bx
+.dpaste_no_sel_check:
+    add ax, cx
+    cmp ax, TEXT_MAX
+    ja .dpaste_done
+
+    call save_undo
+    mov byte [cs:undo_saved_for_edit], 1
+
+    ; Delete selection if active
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dpaste_no_del
+    call delete_selection
+.dpaste_no_del:
+
+    ; Shift text right by clip_len at cursor_pos
+    mov cx, [cs:text_len]
+    sub cx, [cs:cursor_pos]            ; CX = bytes to shift right
+    jcxz .dpaste_no_shift
+
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, [cs:text_len]
+    dec si                              ; SI = &text_buf[text_len-1]
+    mov di, si
+    add di, [cs:clip_len]              ; DI = SI + clip_len
+    std
+    rep movsb
+    cld
+    pop es
+    pop ds
+
+.dpaste_no_shift:
+    ; Copy clip_buf into gap at cursor_pos
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, clip_buf
+    mov di, text_buf
+    add di, [cs:cursor_pos]
+    mov cx, [cs:clip_len]
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+    ; Update text_len and cursor_pos
+    mov ax, [cs:clip_len]
+    add [cs:text_len], ax
+    add [cs:cursor_pos], ax
+
+.dpaste_done:
+    popa
+    ret
+
+; ============================================================================
+; Undo Operations
+; ============================================================================
+
+; maybe_save_undo - Save undo snapshot if not already saved for this edit group
+maybe_save_undo:
+    cmp byte [cs:undo_saved_for_edit], 0
+    jne .msu_done
+    call save_undo
+    mov byte [cs:undo_saved_for_edit], 1
+.msu_done:
+    ret
+
+; save_undo - Snapshot text_buf to undo_buf
+save_undo:
+    pusha
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    mov di, undo_buf
+    mov cx, [cs:text_len]
+    jcxz .su_no_copy
+    cld
+    rep movsb
+.su_no_copy:
+    pop es
+    pop ds
+
+    mov ax, [cs:text_len]
+    mov [cs:undo_len], ax
+    mov ax, [cs:cursor_pos]
+    mov [cs:undo_cursor], ax
+    mov ax, [cs:scroll_row]
+    mov [cs:undo_scroll], ax
+    mov byte [cs:undo_valid], 1
+
+    popa
+    ret
+
+; do_undo - Swap text_buf and undo_buf (toggle undo/redo)
+do_undo:
+    pusha
+    cmp byte [cs:undo_valid], 0
+    je .du_done
+
+    ; Find max length to swap
+    mov cx, [cs:text_len]
+    cmp cx, [cs:undo_len]
+    jae .du_got_max
+    mov cx, [cs:undo_len]
+.du_got_max:
+    jcxz .du_swap_meta
+
+    ; Byte-by-byte swap
+    xor bx, bx
+.du_swap_loop:
+    mov al, [cs:text_buf + bx]
+    mov dl, [cs:undo_buf + bx]
+    mov [cs:text_buf + bx], dl
+    mov [cs:undo_buf + bx], al
+    inc bx
+    dec cx
+    jnz .du_swap_loop
+
+.du_swap_meta:
+    ; Swap text_len / undo_len
+    mov ax, [cs:text_len]
+    mov dx, [cs:undo_len]
+    mov [cs:text_len], dx
+    mov [cs:undo_len], ax
+
+    ; Swap cursor_pos / undo_cursor
+    mov ax, [cs:cursor_pos]
+    mov dx, [cs:undo_cursor]
+    mov [cs:cursor_pos], dx
+    mov [cs:undo_cursor], ax
+
+    ; Swap scroll_row / undo_scroll
+    mov ax, [cs:scroll_row]
+    mov dx, [cs:undo_scroll]
+    mov [cs:scroll_row], dx
+    mov [cs:undo_scroll], ax
+
+    ; Clear selection
+    mov word [cs:sel_anchor], 0xFFFF
+
+.du_done:
+    popa
+    ret
+
+; ============================================================================
+; Cursor Movement Functions
+; ============================================================================
+
+cursor_up:
+    pusha
+    call cursor_to_line_col
+    cmp word [cs:cursor_line], 0
+    je .cu_done
+
+    mov cx, [cs:cursor_line]
+    dec cx
+    call find_line_start
+    push bx
+    call find_line_end
+    pop ax
+    sub bx, ax
+
+    mov dx, [cs:cursor_col]
+    cmp dx, bx
+    jbe .cu_col_ok
+    mov dx, bx
+.cu_col_ok:
+    add ax, dx
+    mov [cs:cursor_pos], ax
+.cu_done:
+    popa
+    ret
+
+cursor_down:
+    pusha
+    call cursor_to_line_col
+
+    mov cx, [cs:cursor_line]
+    inc cx
+    call find_line_start
+    cmp bx, [cs:text_len]
+    ja .cd_done
+
+    push bx
+    call find_line_end
+    pop ax
+    sub bx, ax
+
+    mov dx, [cs:cursor_col]
+    cmp dx, bx
+    jbe .cd_col_ok
+    mov dx, bx
+.cd_col_ok:
+    add ax, dx
+    mov [cs:cursor_pos], ax
+.cd_done:
+    popa
+    ret
+
+cursor_home:
+    pusha
+    call cursor_to_line_col
+    mov cx, [cs:cursor_line]
+    call find_line_start
+    mov [cs:cursor_pos], bx
+    popa
+    ret
+
+cursor_end:
+    pusha
+    call cursor_to_line_col
+    mov cx, [cs:cursor_line]
+    call find_line_start
+    call find_line_end
+    mov [cs:cursor_pos], bx
+    popa
+    ret
+
+cursor_pgup:
+    pusha
+    call cursor_to_line_col
+    mov ax, [cs:cursor_line]
+    mov bx, [cs:vis_rows]
+    cmp ax, bx
+    jae .pgup_sub
+    xor ax, ax
+    jmp .pgup_go
+.pgup_sub:
+    sub ax, bx
+.pgup_go:
+    ; Move to target line, same column
+    mov cx, ax
+    call find_line_start
+    push bx
+    call find_line_end
+    pop ax
+    sub bx, ax
+
+    mov dx, [cs:cursor_col]
+    cmp dx, bx
+    jbe .pgup_col_ok
+    mov dx, bx
+.pgup_col_ok:
+    add ax, dx
+    mov [cs:cursor_pos], ax
+    popa
+    ret
+
+cursor_pgdn:
+    pusha
+    call cursor_to_line_col
+    mov ax, [cs:cursor_line]
+    add ax, [cs:vis_rows]
+
+    ; Move to target line, same column
+    mov cx, ax
+    call find_line_start
+    cmp bx, [cs:text_len]
+    ja .pgdn_clamp
+    push bx
+    call find_line_end
+    pop ax
+    sub bx, ax
+
+    mov dx, [cs:cursor_col]
+    cmp dx, bx
+    jbe .pgdn_col_ok
+    mov dx, bx
+.pgdn_col_ok:
+    add ax, dx
+    mov [cs:cursor_pos], ax
+    popa
+    ret
+
+.pgdn_clamp:
+    ; Past end of text - go to text_len
+    mov ax, [cs:text_len]
+    mov [cs:cursor_pos], ax
+    popa
+    ret
+
+; ============================================================================
+; Buffer Operations
+; ============================================================================
+
+buf_insert_char:
+    pusha
+    mov ax, [cs:text_len]
+    cmp ax, TEXT_MAX
+    jae .bi_done
+
+    mov cx, ax
+    sub cx, [cs:cursor_pos]
+    jcxz .bi_no_shift
+
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, [cs:text_len]
+    dec si
+    mov di, si
+    inc di
+    std
+    rep movsb
+    cld
+    pop es
+    pop ds
+
+.bi_no_shift:
+    mov bx, [cs:cursor_pos]
+    mov [cs:text_buf + bx], dl
+    inc word [cs:text_len]
+    inc word [cs:cursor_pos]
+
+.bi_done:
+    popa
+    ret
+
+buf_delete_char:
+    pusha
+    cmp word [cs:cursor_pos], 0
+    je .bd_done
+
+    mov cx, [cs:text_len]
+    sub cx, [cs:cursor_pos]
+
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, [cs:cursor_pos]
+    mov di, si
+    dec di
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+    dec word [cs:text_len]
+    dec word [cs:cursor_pos]
+
+.bd_done:
+    popa
+    ret
+
+buf_delete_fwd:
+    pusha
+    mov ax, [cs:cursor_pos]
+    cmp ax, [cs:text_len]
+    jae .bf_done
+
+    mov cx, [cs:text_len]
+    dec cx
+    sub cx, [cs:cursor_pos]
+    jcxz .bf_no_shift
+
+    push ds
+    push es
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov si, text_buf
+    add si, [cs:cursor_pos]
+    inc si
+    mov di, si
+    dec di
+    cld
+    rep movsb
+    pop es
+    pop ds
+
+.bf_no_shift:
+    dec word [cs:text_len]
+
+.bf_done:
+    popa
+    ret
+
+; ============================================================================
+; Mouse Helpers
+; ============================================================================
+
+; mouse_to_content_rel - Convert saved mouse coords to content-relative
+; Output: mouse_rel_x, mouse_rel_y set. CF set if can't compute.
+mouse_to_content_rel:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO
+    int 0x80
+    ; BX=win_x, CX=win_y
+
+    mov ax, [cs:mouse_abs_x]
+    sub ax, bx
+    dec ax                              ; -1 for border
+    mov [cs:mouse_rel_x], ax
+
+    mov ax, [cs:mouse_abs_y]
+    sub ax, cx
+    sub ax, TITLEBAR_HEIGHT
+    mov [cs:mouse_rel_y], ax
+
+    clc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mouse_to_offset - Convert saved mouse coords to text buffer offset
+; Output: AX = byte offset, CF set if outside text area
+mouse_to_offset:
+    push bx
+    push cx
+    push dx
+    push si
+
+    call mouse_to_content_rel
+
+    ; Check text area bounds
+    mov ax, [cs:mouse_rel_x]
+    cmp ax, TEXT_X
+    jb .mto_outside
+    cmp ax, TEXT_X + TEXT_W
+    jae .mto_outside
+    mov ax, [cs:mouse_rel_y]
+    cmp ax, TEXT_Y
+    jb .mto_outside
+    cmp ax, TEXT_Y + TEXT_H
+    jae .mto_outside
+
+    ; Compute column
+    mov ax, [cs:mouse_rel_x]
+    sub ax, TEXT_X
+    xor dx, dx
+    movzx bx, byte [cs:font_adv]
+    div bx
+    push ax                             ; Save column
+
+    ; Compute line number
+    mov ax, [cs:mouse_rel_y]
+    sub ax, TEXT_Y
+    xor dx, dx
+    movzx bx, byte [cs:row_h]
+    div bx
+    add ax, [cs:scroll_row]            ; AX = absolute line number
+
+    ; Find byte offset for this line
+    mov cx, ax
+    call find_line_start                ; BX = start of line
+    push bx                             ; Save line start
+    call find_line_end                  ; BX = end of line
+    pop ax                              ; AX = line start
+    sub bx, ax                          ; BX = line length
+
+    ; Column = min(mouse_col, line_length)
+    pop cx                              ; CX = mouse column
+    cmp cx, bx
+    jbe .mto_col_ok
+    mov cx, bx
+.mto_col_ok:
+    add ax, cx                          ; AX = byte offset
+
+    clc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.mto_outside:
+    stc
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
+; Context Menu Drawing
+; ============================================================================
+
+draw_context_menu:
+    pusha
+    ; White filled rect
+    mov bx, [cs:menu_x]
+    mov cx, [cs:menu_y]
+    mov dx, MENU_W
+    mov si, MENU_H
+    mov al, 3                           ; White
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; Black border
+    mov bx, [cs:menu_x]
+    mov cx, [cs:menu_y]
+    mov dx, MENU_W
+    mov si, MENU_H
+    mov al, 0                           ; Black
+    mov ah, API_RECT_COLOR
+    int 0x80
+
+    ; Draw items
+    xor cx, cx                          ; CX = item index
+.dcm_loop:
+    cmp cx, MENU_ITEMS
+    jae .dcm_done
+
+    ; Compute item text Y = menu_y + index * MENU_ITEM_H + 2
+    mov ax, cx
+    mov bx, MENU_ITEM_H
+    mul bx
+    add ax, [cs:menu_y]
+    add ax, 2
+    push cx                             ; Save index
+    mov [cs:.dcm_item_y], ax
+
+    ; Get string pointer from table
+    mov bx, cx
+    shl bx, 1
+    mov si, [cs:menu_strings + bx]
+
+    ; Text X = menu_x + 4
+    mov bx, [cs:menu_x]
+    add bx, 4
+    mov cx, [cs:.dcm_item_y]
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    pop cx
+    inc cx
+    jmp .dcm_loop
+
+.dcm_done:
+    popa
+    ret
+
+.dcm_item_y: dw 0
+
+; ============================================================================
 ; compute_layout - Measure current font and compute visible cols/rows
 ; ============================================================================
 compute_layout:
     pusha
-    ; Measure character advance using text_width of "A"
     mov si, test_char
     mov ah, API_GFX_TEXT_WIDTH
     int 0x80
-    ; DX = advance width of one character
     mov [cs:font_adv], dl
 
-    ; Derive row height from advance
     cmp dl, 8
     jae .large_font
-    ; Small font (advance < 8, likely 6 for font 0)
     mov al, dl
-    inc al                          ; height = advance + 1 gap pixel
+    inc al
     mov [cs:row_h], al
     jmp .calc_grid
 .large_font:
-    ; Larger font (advance >= 8)
     mov al, dl
-    mov [cs:row_h], al              ; row_h = advance (generous spacing)
+    mov [cs:row_h], al
 
 .calc_grid:
-    ; vis_cols = TEXT_W / font_adv
     mov ax, TEXT_W
     xor dx, dx
     movzx bx, byte [cs:font_adv]
     div bx
     mov [cs:vis_cols], ax
 
-    ; vis_rows = TEXT_H / row_h
     mov ax, TEXT_H
     xor dx, dx
     movzx bx, byte [cs:row_h]
@@ -772,7 +1879,6 @@ compute_layout:
 ; ============================================================================
 draw_ui:
     pusha
-    ; Clear entire content area
     mov bx, 0
     mov cx, 0
     mov dx, CONTENT_W
@@ -780,14 +1886,13 @@ draw_ui:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Draw toolbar
     call draw_toolbar
 
     ; Separators
     mov bx, 0
     mov cx, SEP1_Y
     mov dx, CONTENT_W
-    mov al, 3                          ; white
+    mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
     mov bx, 0
@@ -797,24 +1902,20 @@ draw_ui:
     mov ah, API_DRAW_HLINE
     int 0x80
 
-    ; Text area
     call draw_text_area
-
-    ; Status bar
     call draw_status
 
     popa
     ret
 
 ; ============================================================================
-; draw_toolbar - Draw [Open] [Save] [New] buttons and filename
+; draw_toolbar
 ; ============================================================================
 draw_toolbar:
     pusha
     mov ax, cs
     mov es, ax
 
-    ; [Open]
     mov bx, BTN_OPEN_X
     mov cx, TOOLBAR_Y
     mov dx, BTN_OPEN_W
@@ -824,7 +1925,6 @@ draw_toolbar:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    ; [Save]
     mov bx, BTN_SAVE_X
     mov cx, TOOLBAR_Y
     mov dx, BTN_SAVE_W
@@ -834,7 +1934,6 @@ draw_toolbar:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    ; [New]
     mov bx, BTN_NEW_X
     mov cx, TOOLBAR_Y
     mov dx, BTN_NEW_W
@@ -844,7 +1943,6 @@ draw_toolbar:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    ; Filename
     mov bx, FNAME_X
     mov cx, TOOLBAR_Y + 2
     cmp byte [cs:filename_buf], 0
@@ -861,7 +1959,7 @@ draw_toolbar:
     ret
 
 ; ============================================================================
-; draw_text_area - Draw visible text lines and cursor
+; draw_text_area - Draw visible text lines with selection highlighting
 ; ============================================================================
 draw_text_area:
     pusha
@@ -870,122 +1968,239 @@ draw_text_area:
     mov cx, TEXT_Y
     movzx si, byte [cs:row_h]
     mov ax, [cs:vis_rows]
-    mul si                              ; DX:AX = vis_rows * row_h (clobbers DX!)
-    mov si, ax                          ; SI = height
-    mov dx, TEXT_W                      ; DX = width (set AFTER mul, which clobbers DX)
+    mul si
+    mov si, ax
+    mov dx, TEXT_W
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Compute cursor line/col
     call cursor_to_line_col
 
+    ; Pre-compute selection bounds if active
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dta_no_sel_init
+    call update_selection_bounds
+.dta_no_sel_init:
+
     ; Find byte offset for scroll_row
     mov cx, [cs:scroll_row]
     call find_line_start
-    ; BX = offset of first visible line in text_buf
+    ; BX = offset of first visible line
 
     mov word [cs:draw_row], 0
+    mov [cs:line_offset], bx
 
-.row_loop:
+.dta_row_loop:
     mov ax, [cs:draw_row]
     cmp ax, [cs:vis_rows]
-    jae .rows_done
+    jae .dta_rows_done
+    mov bx, [cs:line_offset]
     cmp bx, [cs:text_len]
-    ja .rows_done
+    ja .dta_rows_done
 
-    ; Copy line to line_buf (up to vis_cols chars, stop at newline/EOF)
-    mov si, bx                          ; SI = source offset in text_buf
-    xor di, di                          ; DI = char count
-.copy_char:
+    ; Copy line to line_buf (up to vis_cols chars)
+    mov si, bx
+    xor di, di
+.dta_copy_char:
     cmp di, [cs:vis_cols]
-    jae .line_end
+    jae .dta_line_end
     cmp si, [cs:text_len]
-    jae .line_end
+    jae .dta_line_end
     mov al, [cs:text_buf + si]
     cmp al, 0x0A
-    je .line_end
+    je .dta_line_end
     mov [cs:line_buf + di], al
     inc si
     inc di
-    jmp .copy_char
-.line_end:
-    mov byte [cs:line_buf + di], 0      ; Null-terminate
+    jmp .dta_copy_char
+.dta_line_end:
+    mov byte [cs:line_buf + di], 0
+    mov [cs:line_char_count], di
 
     ; Calculate Y for this row
-    push bx                             ; Save text offset
     mov ax, [cs:draw_row]
     movzx dx, byte [cs:row_h]
     mul dx
     add ax, TEXT_Y
-    mov cx, ax                          ; CX = Y
+    mov [cs:draw_y], ax
 
-    ; Draw line text
+    ; Check if selection overlaps this line
+    cmp word [cs:sel_anchor], 0xFFFF
+    je .dta_draw_normal
+
+    ; Compute selection column range on this line
+    ; sel_col_start = max(0, sel_start - line_offset) clamped to line_char_count
+    mov ax, [cs:sel_start]
+    mov bx, [cs:line_offset]
+    cmp ax, bx
+    jbe .dta_scs_zero
+    sub ax, bx
+    cmp ax, [cs:line_char_count]
+    jbe .dta_scs_ok
+    mov ax, [cs:line_char_count]
+    jmp .dta_scs_ok
+.dta_scs_zero:
+    xor ax, ax
+.dta_scs_ok:
+    mov [cs:sel_col_s], ax
+
+    ; sel_col_end = max(0, sel_end - line_offset) clamped to line_char_count
+    mov ax, [cs:sel_end]
+    mov bx, [cs:line_offset]
+    cmp ax, bx
+    jbe .dta_sce_zero
+    sub ax, bx
+    cmp ax, [cs:line_char_count]
+    jbe .dta_sce_ok
+    mov ax, [cs:line_char_count]
+    jmp .dta_sce_ok
+.dta_sce_zero:
+    xor ax, ax
+.dta_sce_ok:
+    mov [cs:sel_col_e], ax
+
+    ; If no visible selection on this line, draw normally
+    mov ax, [cs:sel_col_s]
+    cmp ax, [cs:sel_col_e]
+    jae .dta_draw_normal
+
+    ; --- Draw line with selection (up to 3 segments) ---
+
+    ; Segment 1: before selection (0..sel_col_s)
+    mov ax, [cs:sel_col_s]
+    test ax, ax
+    jz .dta_seg2
+
+    ; Null-terminate at sel_col_s
+    mov bx, [cs:sel_col_s]
+    mov al, [cs:line_buf + bx]
+    mov [cs:saved_char], al
+    mov byte [cs:line_buf + bx], 0
+
     mov bx, TEXT_X
+    mov cx, [cs:draw_y]
     mov si, line_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Check if cursor is on this line
+    ; Restore
+    mov bx, [cs:sel_col_s]
+    mov al, [cs:saved_char]
+    mov [cs:line_buf + bx], al
+
+.dta_seg2:
+    ; Segment 2: selected text (sel_col_s..sel_col_e)
+    mov bx, [cs:sel_col_e]
+    mov al, [cs:line_buf + bx]
+    mov [cs:saved_char], al
+    mov byte [cs:line_buf + bx], 0
+
+    ; X = TEXT_X + sel_col_s * font_adv
+    mov ax, [cs:sel_col_s]
+    movzx dx, byte [cs:font_adv]
+    mul dx
+    add ax, TEXT_X
+    mov bx, ax
+    mov cx, [cs:draw_y]
+    mov si, line_buf
+    add si, [cs:sel_col_s]
+    mov ah, API_GFX_DRAW_STRING_INV
+    int 0x80
+
+    ; Restore
+    mov bx, [cs:sel_col_e]
+    mov al, [cs:saved_char]
+    mov [cs:line_buf + bx], al
+
+    ; Segment 3: after selection (sel_col_e..end)
+    mov ax, [cs:sel_col_e]
+    cmp ax, [cs:line_char_count]
+    jae .dta_skip_cursor
+
+    ; X = TEXT_X + sel_col_e * font_adv
+    movzx dx, byte [cs:font_adv]
+    mul dx
+    add ax, TEXT_X
+    mov bx, ax
+    mov cx, [cs:draw_y]
+    mov si, line_buf
+    add si, [cs:sel_col_e]
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    jmp .dta_skip_cursor                ; No cursor block when selection active
+
+.dta_draw_normal:
+    ; Draw line text normally
+    mov bx, TEXT_X
+    mov cx, [cs:draw_y]
+    mov si, line_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Check if cursor is on this line (only when no selection)
+    cmp word [cs:sel_anchor], 0xFFFF
+    jne .dta_skip_cursor
+
     mov ax, [cs:draw_row]
     add ax, [cs:scroll_row]
     cmp ax, [cs:cursor_line]
-    jne .no_cursor
+    jne .dta_skip_cursor
 
     ; Draw cursor (inverted char at cursor_col)
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
-    jae .no_cursor                      ; Cursor past visible area
+    jae .dta_skip_cursor
     movzx dx, byte [cs:font_adv]
     mul dx
     add ax, TEXT_X
-    mov bx, ax                          ; BX = cursor X
+    mov bx, ax
 
-    ; Recalculate Y
     mov ax, [cs:draw_row]
     movzx dx, byte [cs:row_h]
     mul dx
     add ax, TEXT_Y
-    mov cx, ax                          ; CX = cursor Y
+    mov cx, ax
 
-    ; Get char at cursor position (or space at end/newline)
     push bx
     mov bx, [cs:cursor_pos]
     cmp bx, [cs:text_len]
-    jae .cursor_space
+    jae .dta_cursor_space
     mov al, [cs:text_buf + bx]
     cmp al, 0x0A
-    je .cursor_space
+    je .dta_cursor_space
     cmp al, 32
-    jb .cursor_space
+    jb .dta_cursor_space
     mov [cs:cursor_char_buf], al
-    jmp .cursor_got
-.cursor_space:
+    jmp .dta_cursor_got
+.dta_cursor_space:
     mov byte [cs:cursor_char_buf], ' '
-.cursor_got:
+.dta_cursor_got:
     mov byte [cs:cursor_char_buf + 1], 0
     pop bx
     mov si, cursor_char_buf
     mov ah, API_GFX_DRAW_STRING_INV
     int 0x80
 
-.no_cursor:
-    pop bx                              ; Restore text offset
-
+.dta_skip_cursor:
     ; Advance past this line in text_buf
-.skip_line:
+    mov bx, [cs:line_offset]
+.dta_skip_line:
     cmp bx, [cs:text_len]
-    jae .advance_row
+    jae .dta_advance_row
     cmp byte [cs:text_buf + bx], 0x0A
-    je .found_nl
+    je .dta_found_nl
     inc bx
-    jmp .skip_line
-.found_nl:
-    inc bx                              ; Past the newline
-.advance_row:
+    jmp .dta_skip_line
+.dta_found_nl:
+    inc bx
+.dta_advance_row:
+    mov [cs:line_offset], bx
     inc word [cs:draw_row]
-    jmp .row_loop
+    jmp .dta_row_loop
 
-.rows_done:
+.dta_rows_done:
     popa
     ret
 
@@ -994,7 +2209,6 @@ draw_text_area:
 ; ============================================================================
 draw_status:
     pusha
-    ; Clear status area
     mov bx, 0
     mov cx, STATUS_Y - 1
     mov dx, CONTENT_W
@@ -1004,11 +2218,9 @@ draw_status:
 
     cmp byte [cs:mode], MODE_EDIT
     je .status_normal
-    ; Dialog mode
     jmp .status_dialog
 
 .status_normal:
-    ; "Ln X Col Y" on the left
     call cursor_to_line_col
 
     mov bx, 4
@@ -1017,7 +2229,6 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Line number (1-based)
     mov ax, [cs:cursor_line]
     inc ax
     mov di, num_buf
@@ -1029,14 +2240,12 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; "Col"
     mov bx, 60
     mov cx, STATUS_Y
     mov si, str_col
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Column number (1-based)
     mov ax, [cs:cursor_col]
     inc ax
     mov di, num_buf
@@ -1052,7 +2261,6 @@ draw_status:
     mov ax, [cs:text_len]
     mov di, num_buf
     call word_to_decimal
-    ; Append " B"
     mov byte [cs:di], ' '
     inc di
     mov byte [cs:di], 'B'
@@ -1072,11 +2280,10 @@ draw_status:
     mov si, status_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov byte [cs:status_msg], 0         ; Clear after showing once
+    mov byte [cs:status_msg], 0
     jmp .status_done
 
 .status_dialog:
-    ; Show filename input prompt
     cmp byte [cs:mode], MODE_OPEN
     je .dialog_open_label
     mov si, str_save_as
@@ -1089,17 +2296,15 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Text field for filename
     mov bx, 70
     mov cx, STATUS_Y
     mov dx, 140
     mov si, input_buf
     movzx di, byte [cs:input_len]
-    mov al, 1                          ; Focused
+    mov al, 1
     mov ah, API_DRAW_TEXTFIELD
     int 0x80
 
-    ; [OK] button
     mov ax, cs
     mov es, ax
     mov bx, BTN_OK_X
@@ -1116,314 +2321,11 @@ draw_status:
     ret
 
 ; ============================================================================
-; buf_insert_char - Insert character DL at cursor_pos
+; File I/O
 ; ============================================================================
-buf_insert_char:
-    pusha
-    mov ax, [cs:text_len]
-    cmp ax, TEXT_MAX
-    jae .bi_done
 
-    ; Shift text_buf[cursor_pos..text_len-1] right by 1 byte
-    mov cx, ax
-    sub cx, [cs:cursor_pos]             ; CX = bytes to shift
-    jcxz .bi_no_shift
-
-    ; Use backward copy: src = text_buf+text_len-1, dst = text_buf+text_len
-    push ds
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
-    mov si, text_buf
-    add si, [cs:text_len]
-    dec si                              ; SI = &text_buf[text_len-1]
-    mov di, si
-    inc di                              ; DI = &text_buf[text_len]
-    std
-    rep movsb
-    cld
-    pop es
-    pop ds
-
-.bi_no_shift:
-    ; Store character
-    mov bx, [cs:cursor_pos]
-    mov [cs:text_buf + bx], dl
-    inc word [cs:text_len]
-    inc word [cs:cursor_pos]
-
-.bi_done:
-    popa
-    ret
-
-; ============================================================================
-; buf_delete_char - Delete character before cursor (backspace)
-; ============================================================================
-buf_delete_char:
-    pusha
-    cmp word [cs:cursor_pos], 0
-    je .bd_done
-
-    ; Shift text_buf[cursor_pos..text_len-1] left by 1 byte
-    mov cx, [cs:text_len]
-    sub cx, [cs:cursor_pos]             ; CX = bytes to shift
-
-    push ds
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
-    mov si, text_buf
-    add si, [cs:cursor_pos]             ; SI = &text_buf[cursor_pos]
-    mov di, si
-    dec di                              ; DI = &text_buf[cursor_pos-1]
-    cld
-    rep movsb
-    pop es
-    pop ds
-
-    dec word [cs:text_len]
-    dec word [cs:cursor_pos]
-
-.bd_done:
-    popa
-    ret
-
-; ============================================================================
-; buf_delete_fwd - Delete character at cursor (delete key)
-; ============================================================================
-buf_delete_fwd:
-    pusha
-    mov ax, [cs:cursor_pos]
-    cmp ax, [cs:text_len]
-    jae .bf_done
-
-    ; Shift text_buf[cursor_pos+1..text_len-1] left by 1 byte
-    mov cx, [cs:text_len]
-    dec cx
-    sub cx, [cs:cursor_pos]             ; CX = bytes to shift
-    jcxz .bf_no_shift
-
-    push ds
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
-    mov si, text_buf
-    add si, [cs:cursor_pos]
-    inc si                              ; SI = &text_buf[cursor_pos+1]
-    mov di, si
-    dec di                              ; DI = &text_buf[cursor_pos]
-    cld
-    rep movsb
-    pop es
-    pop ds
-
-.bf_no_shift:
-    dec word [cs:text_len]
-
-.bf_done:
-    popa
-    ret
-
-; ============================================================================
-; cursor_to_line_col - Compute cursor_line and cursor_col from cursor_pos
-; ============================================================================
-cursor_to_line_col:
-    pusha
-    xor cx, cx                          ; CX = line count
-    xor dx, dx                          ; DX = col count
-    xor bx, bx                          ; BX = index
-.ctl_scan:
-    cmp bx, [cs:cursor_pos]
-    jae .ctl_done
-    cmp byte [cs:text_buf + bx], 0x0A
-    jne .ctl_not_nl
-    inc cx                              ; New line
-    xor dx, dx                          ; Reset column
-    jmp .ctl_next
-.ctl_not_nl:
-    inc dx                              ; Advance column
-.ctl_next:
-    inc bx
-    jmp .ctl_scan
-.ctl_done:
-    mov [cs:cursor_line], cx
-    mov [cs:cursor_col], dx
-    popa
-    ret
-
-; ============================================================================
-; find_line_start - Find byte offset of line N
-; Input: CX = target line (0-based)
-; Output: BX = byte offset (start of that line, or text_len if past end)
-; ============================================================================
-find_line_start:
-    push cx
-    push ax
-    xor bx, bx
-    test cx, cx
-    jz .fls_done                        ; Line 0 starts at 0
-.fls_scan:
-    cmp bx, [cs:text_len]
-    jae .fls_done
-    cmp byte [cs:text_buf + bx], 0x0A
-    jne .fls_next
-    dec cx
-    jz .fls_found
-.fls_next:
-    inc bx
-    jmp .fls_scan
-.fls_found:
-    inc bx                              ; Start past the newline
-.fls_done:
-    pop ax
-    pop cx
-    ret
-
-; ============================================================================
-; find_line_end - Find end of line starting at BX
-; Input: BX = line start offset
-; Output: BX = offset of newline or text_len
-; ============================================================================
-find_line_end:
-    push ax
-.fle_scan:
-    cmp bx, [cs:text_len]
-    jae .fle_done
-    cmp byte [cs:text_buf + bx], 0x0A
-    je .fle_done
-    inc bx
-    jmp .fle_scan
-.fle_done:
-    pop ax
-    ret
-
-; ============================================================================
-; cursor_up - Move cursor up one line
-; ============================================================================
-cursor_up:
-    pusha
-    call cursor_to_line_col
-    cmp word [cs:cursor_line], 0
-    je .cu_done
-
-    ; Find start of previous line
-    mov cx, [cs:cursor_line]
-    dec cx
-    call find_line_start                ; BX = start of previous line
-    push bx                             ; Save prev line start
-    call find_line_end                  ; BX = end of previous line
-    pop ax                              ; AX = prev line start
-    sub bx, ax                          ; BX = prev line length
-
-    ; Position cursor at min(cursor_col, prev_line_len)
-    mov dx, [cs:cursor_col]
-    cmp dx, bx
-    jbe .cu_col_ok
-    mov dx, bx
-.cu_col_ok:
-    add ax, dx
-    mov [cs:cursor_pos], ax
-.cu_done:
-    popa
-    ret
-
-; ============================================================================
-; cursor_down - Move cursor down one line
-; ============================================================================
-cursor_down:
-    pusha
-    call cursor_to_line_col
-
-    ; Find start of next line
-    mov cx, [cs:cursor_line]
-    inc cx
-    call find_line_start                ; BX = start of next line
-    cmp bx, [cs:text_len]
-    ja .cd_done
-
-    push bx                             ; Save next line start
-    call find_line_end                  ; BX = end of next line
-    pop ax                              ; AX = next line start
-    sub bx, ax                          ; BX = next line length
-
-    ; Position cursor at min(cursor_col, next_line_len)
-    mov dx, [cs:cursor_col]
-    cmp dx, bx
-    jbe .cd_col_ok
-    mov dx, bx
-.cd_col_ok:
-    add ax, dx
-    mov [cs:cursor_pos], ax
-.cd_done:
-    popa
-    ret
-
-; ============================================================================
-; cursor_home - Move cursor to start of current line
-; ============================================================================
-cursor_home:
-    pusha
-    call cursor_to_line_col
-    mov cx, [cs:cursor_line]
-    call find_line_start
-    mov [cs:cursor_pos], bx
-    popa
-    ret
-
-; ============================================================================
-; cursor_end - Move cursor to end of current line
-; ============================================================================
-cursor_end:
-    pusha
-    call cursor_to_line_col
-    mov cx, [cs:cursor_line]
-    call find_line_start
-    call find_line_end
-    mov [cs:cursor_pos], bx
-    popa
-    ret
-
-; ============================================================================
-; ensure_cursor_visible - Adjust scroll_row so cursor line is visible
-; ============================================================================
-ensure_cursor_visible:
-    pusha
-    mov ax, [cs:cursor_line]
-
-    ; If cursor above visible area, scroll up
-    cmp ax, [cs:scroll_row]
-    jae .ecv_check_below
-    mov [cs:scroll_row], ax
-    jmp .ecv_done
-
-.ecv_check_below:
-    ; If cursor below visible area, scroll down
-    mov bx, [cs:scroll_row]
-    add bx, [cs:vis_rows]
-    cmp ax, bx
-    jb .ecv_done
-    ; scroll_row = cursor_line - vis_rows + 1
-    mov bx, ax
-    sub bx, [cs:vis_rows]
-    inc bx
-    mov [cs:scroll_row], bx
-
-.ecv_done:
-    popa
-    ret
-
-; ============================================================================
-; do_open_file - Open file from filename_buf into text_buf
-; ============================================================================
 do_open_file:
     pusha
-    ; Open file
     mov si, filename_buf
     movzx bx, byte [cs:mount_handle]
     mov ah, API_FS_OPEN
@@ -1431,7 +2333,6 @@ do_open_file:
     jc .of_fail
     mov [cs:file_handle], al
 
-    ; Read contents
     push cs
     pop es
     mov di, text_buf
@@ -1442,21 +2343,20 @@ do_open_file:
     jc .of_close_fail
     mov [cs:text_len], ax
 
-    ; Close file
     mov al, [cs:file_handle]
     mov ah, API_FS_CLOSE
     int 0x80
 
-    ; Strip CR bytes (0x0D) for clean LF-only
     call strip_cr
 
-    ; Reset cursor
     mov word [cs:cursor_pos], 0
     mov word [cs:scroll_row], 0
     mov word [cs:cursor_line], 0
     mov word [cs:cursor_col], 0
+    mov word [cs:sel_anchor], 0xFFFF
+    mov byte [cs:undo_valid], 0
+    mov byte [cs:undo_saved_for_edit], 0
 
-    ; Set status
     mov si, str_opened
     mov di, status_msg
     call copy_str
@@ -1475,21 +2375,16 @@ do_open_file:
     popa
     ret
 
-; ============================================================================
-; do_save_file - Save text_buf to filename_buf
-; ============================================================================
 do_save_file:
     pusha
     cmp byte [cs:filename_buf], 0
     je .sf_fail
 
-    ; Delete existing file (ignore error if not found)
     mov si, filename_buf
     mov bl, [cs:mount_handle]
     mov ah, API_FS_DELETE
     int 0x80
 
-    ; Create new file
     mov si, filename_buf
     mov bl, [cs:mount_handle]
     mov ah, API_FS_CREATE
@@ -1497,7 +2392,6 @@ do_save_file:
     jc .sf_fail
     mov [cs:file_handle], al
 
-    ; Write contents
     mov ax, cs
     mov es, ax
     mov bx, text_buf
@@ -1506,7 +2400,6 @@ do_save_file:
     mov ah, API_FS_WRITE
     int 0x80
 
-    ; Close
     mov al, [cs:file_handle]
     mov ah, API_FS_CLOSE
     int 0x80
@@ -1525,9 +2418,6 @@ do_save_file:
     popa
     ret
 
-; ============================================================================
-; do_new_file - Clear buffer for new file
-; ============================================================================
 do_new_file:
     pusha
     mov word [cs:text_len], 0
@@ -1538,16 +2428,104 @@ do_new_file:
     mov byte [cs:filename_buf], 0
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:status_msg], 0
+    mov word [cs:sel_anchor], 0xFFFF
+    mov word [cs:clip_len], 0
+    mov byte [cs:undo_valid], 0
+    mov byte [cs:undo_saved_for_edit], 0
     popa
     ret
 
 ; ============================================================================
-; strip_cr - Remove all 0x0D (CR) bytes from text_buf
+; Utility Functions
 ; ============================================================================
+
+cursor_to_line_col:
+    pusha
+    xor cx, cx
+    xor dx, dx
+    xor bx, bx
+.ctl_scan:
+    cmp bx, [cs:cursor_pos]
+    jae .ctl_done
+    cmp byte [cs:text_buf + bx], 0x0A
+    jne .ctl_not_nl
+    inc cx
+    xor dx, dx
+    jmp .ctl_next
+.ctl_not_nl:
+    inc dx
+.ctl_next:
+    inc bx
+    jmp .ctl_scan
+.ctl_done:
+    mov [cs:cursor_line], cx
+    mov [cs:cursor_col], dx
+    popa
+    ret
+
+find_line_start:
+    push cx
+    push ax
+    xor bx, bx
+    test cx, cx
+    jz .fls_done
+.fls_scan:
+    cmp bx, [cs:text_len]
+    jae .fls_done
+    cmp byte [cs:text_buf + bx], 0x0A
+    jne .fls_next
+    dec cx
+    jz .fls_found
+.fls_next:
+    inc bx
+    jmp .fls_scan
+.fls_found:
+    inc bx
+.fls_done:
+    pop ax
+    pop cx
+    ret
+
+find_line_end:
+    push ax
+.fle_scan:
+    cmp bx, [cs:text_len]
+    jae .fle_done
+    cmp byte [cs:text_buf + bx], 0x0A
+    je .fle_done
+    inc bx
+    jmp .fle_scan
+.fle_done:
+    pop ax
+    ret
+
+ensure_cursor_visible:
+    pusha
+    mov ax, [cs:cursor_line]
+
+    cmp ax, [cs:scroll_row]
+    jae .ecv_check_below
+    mov [cs:scroll_row], ax
+    jmp .ecv_done
+
+.ecv_check_below:
+    mov bx, [cs:scroll_row]
+    add bx, [cs:vis_rows]
+    cmp ax, bx
+    jb .ecv_done
+    mov bx, ax
+    sub bx, [cs:vis_rows]
+    inc bx
+    mov [cs:scroll_row], bx
+
+.ecv_done:
+    popa
+    ret
+
 strip_cr:
     pusha
-    xor si, si                          ; SI = read index
-    xor di, di                          ; DI = write index
+    xor si, si
+    xor di, di
 .sc_loop:
     cmp si, [cs:text_len]
     jae .sc_done
@@ -1564,9 +2542,6 @@ strip_cr:
     popa
     ret
 
-; ============================================================================
-; copy_str - Copy CS:SI to CS:DI (null-terminated)
-; ============================================================================
 copy_str:
     push ax
 .cs_loop:
@@ -1581,10 +2556,6 @@ copy_str:
     pop ax
     ret
 
-; ============================================================================
-; word_to_decimal - Convert AX to decimal string at CS:DI
-; Output: DI points past last digit
-; ============================================================================
 word_to_decimal:
     push ax
     push bx
@@ -1628,25 +2599,69 @@ mount_handle:   db 0
 file_handle:    db 0
 prev_btn:       db 0
 mode:           db MODE_EDIT
-needs_redraw:   db 0                    ; 0=none, 1=line-only, 2=full redraw
+needs_redraw:   db 0
 
-; Font metrics (computed at startup)
-font_adv:       db 6                    ; Character advance in pixels
-row_h:          db 7                    ; Row height in pixels
-vis_cols:       dw 52                   ; Visible columns
-vis_rows:       dw 22                   ; Visible rows
+; Font metrics
+font_adv:       db 6
+row_h:          db 7
+vis_cols:       dw 52
+vis_rows:       dw 22
 
 ; Cursor state
-cursor_pos:     dw 0                    ; Byte offset in text_buf
-cursor_line:    dw 0                    ; Current line (0-based)
-cursor_col:     dw 0                    ; Current column (0-based)
-scroll_row:     dw 0                    ; First visible line
+cursor_pos:     dw 0
+cursor_line:    dw 0
+cursor_col:     dw 0
+scroll_row:     dw 0
 
 ; Text buffer state
-text_len:       dw 0                    ; Current text length in bytes
+text_len:       dw 0
 
 ; Drawing scratch
-draw_row:       dw 0                    ; Current row being drawn
+draw_row:       dw 0
+draw_y:         dw 0
+line_offset:    dw 0
+line_char_count: dw 0
+saved_char:     db 0
+
+; Selection state
+sel_anchor:     dw 0xFFFF               ; 0xFFFF = no selection
+sel_start:      dw 0
+sel_end:        dw 0
+sel_col_s:      dw 0                    ; Selection column start on current draw line
+sel_col_e:      dw 0                    ; Selection column end on current draw line
+shift_held:     db 0
+
+; Mouse state
+mouse_abs_x:    dw 0
+mouse_abs_y:    dw 0
+mouse_rel_x:    dw 0
+mouse_rel_y:    dw 0
+mouse_buttons:  db 0
+mouse_selecting: db 0
+prev_right_btn: db 0
+
+; Clipboard state
+clip_len:       dw 0
+
+; Undo state
+undo_len:       dw 0
+undo_cursor:    dw 0
+undo_scroll:    dw 0
+undo_valid:     db 0
+undo_saved_for_edit: db 0
+
+; Context menu state
+menu_x:         dw 0
+menu_y:         dw 0
+menu_highlight: db 0xFF
+
+; Context menu string table
+menu_strings:
+    dw str_cut
+    dw str_copy
+    dw str_paste
+    dw str_undo_label
+    dw str_sel_all
 
 ; Input state (for dialogs)
 input_len:      db 0
@@ -1666,14 +2681,23 @@ str_saved:      db 'Saved', 0
 str_err_open:   db 'Open error', 0
 str_err_save:   db 'Save error', 0
 test_char:      db 'A', 0
+str_cut:        db 'Cut', 0
+str_copy:       db 'Copy', 0
+str_paste:      db 'Paste', 0
+str_undo_label: db 'Undo', 0
+str_sel_all:    db 'Select All', 0
 
-; Buffers
+; Small buffers (in binary)
 status_msg:     times 20 db 0
-input_buf:      times 14 db 0           ; 12 chars + null + pad
+input_buf:      times 14 db 0
 filename_buf:   times 14 db 0
 num_buf:        times 8 db 0
 cursor_char_buf: db ' ', 0
-line_buf:       times 80 db 0           ; Render scratch for one line
+line_buf:       times 80 db 0
 
-; Text buffer (16KB)
-text_buf:       times TEXT_MAX db 0
+; ============================================================================
+; Large Buffer Addresses (runtime only, not in binary)
+; ============================================================================
+clip_buf        equ 0x1800              ; 4KB clipboard buffer
+text_buf        equ 0x2800              ; 16KB text buffer
+undo_buf        equ 0x6800              ; 16KB undo buffer

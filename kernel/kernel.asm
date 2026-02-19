@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 83                      ; Max function count (0-82 valid)
+    cmp ah, 84                      ; Max function count (0-83 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -390,6 +390,16 @@ int_09_handler:
     je .arrow_right
     cmp al, 0x1C                    ; Numpad Enter
     je .numpad_enter
+    cmp al, 0x47                    ; Home
+    je .ext_home
+    cmp al, 0x4F                    ; End
+    je .ext_end
+    cmp al, 0x53                    ; Delete
+    je .ext_delete
+    cmp al, 0x49                    ; Page Up
+    je .ext_pgup
+    cmp al, 0x51                    ; Page Down
+    je .ext_pgdn
     jmp .done                       ; Ignore other extended keys
 
 .arrow_up:
@@ -406,11 +416,43 @@ int_09_handler:
     jmp .store_key
 .numpad_enter:
     mov al, 13                      ; Same as regular Enter
+    jmp .store_key
+.ext_home:
+    mov al, 132
+    jmp .store_key
+.ext_end:
+    mov al, 133
+    jmp .store_key
+.ext_delete:
+    mov al, 134
+    jmp .store_key
+.ext_pgup:
+    mov al, 135
+    jmp .store_key
+.ext_pgdn:
+    mov al, 136
 
 .store_key:
     ; Don't store null characters
     test al, al
     jz .done
+
+    ; Map Ctrl+letter to control codes (ASCII 1-26)
+    cmp byte [kbd_ctrl_state], 0
+    je .no_ctrl_map
+    cmp al, 'a'
+    jb .check_upper_ctrl
+    cmp al, 'z'
+    ja .no_ctrl_map
+    sub al, 96                      ; 'a'(97)->1, 'c'(99)->3, 'v'(118)->22, etc.
+    jmp .no_ctrl_map
+.check_upper_ctrl:
+    cmp al, 'A'
+    jb .no_ctrl_map
+    cmp al, 'Z'
+    ja .no_ctrl_map
+    sub al, 64                      ; 'A'(65)->1, etc.
+.no_ctrl_map:
 
     ; Store in circular buffer (for backward compatibility)
     mov bx, [kbd_buffer_tail]
@@ -2975,7 +3017,7 @@ gfx_text_width:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1400 - ($ - $$) db 0
+times 0x1480 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -3115,6 +3157,7 @@ kernel_api_table:
     dw gfx_scroll_area              ; 80: Scroll rectangular area
     dw set_rtc_time                 ; 81: Set real-time clock
     dw get_screen_info              ; 82: Get screen dimensions/mode
+    dw get_key_modifiers            ; 83: Get keyboard modifier states
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -5474,6 +5517,16 @@ event_get_stub:
     je .bios_arrow_left
     cmp ah, 0x4D
     je .bios_arrow_right
+    cmp ah, 0x47
+    je .bios_home
+    cmp ah, 0x4F
+    je .bios_end
+    cmp ah, 0x53
+    je .bios_delete
+    cmp ah, 0x49
+    je .bios_pgup
+    cmp ah, 0x51
+    je .bios_pgdn
     jmp .bios_key_ready             ; Unknown extended key
 .bios_arrow_up:
     mov al, 128
@@ -5486,6 +5539,21 @@ event_get_stub:
     jmp .bios_key_ready
 .bios_arrow_right:
     mov al, 131
+    jmp .bios_key_ready
+.bios_home:
+    mov al, 132
+    jmp .bios_key_ready
+.bios_end:
+    mov al, 133
+    jmp .bios_key_ready
+.bios_delete:
+    mov al, 134
+    jmp .bios_key_ready
+.bios_pgup:
+    mov al, 135
+    jmp .bios_key_ready
+.bios_pgdn:
+    mov al, 136
 .bios_key_ready:
     ; Synthesize a KEY_PRESS event
     mov dl, al                      ; DL = ASCII char (or special code)
@@ -13258,6 +13326,16 @@ get_screen_info:
     mov cx, 200
     mov al, 4
     mov ah, 4
+    clc
+    ret
+
+; get_key_modifiers - Get keyboard modifier states (API 83)
+; Input: none
+; Output: AL=shift state, AH=ctrl state, DL=alt state, CF=0
+get_key_modifiers:
+    mov al, [kbd_shift_state]
+    mov ah, [kbd_ctrl_state]
+    mov dl, [kbd_alt_state]
     clc
     ret
 
