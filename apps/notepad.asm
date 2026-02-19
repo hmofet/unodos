@@ -63,6 +63,12 @@ API_RECT_COLOR          equ 68
 API_DRAW_HLINE          equ 69
 API_WIN_GET_INFO        equ 79
 API_GET_KEY_MODIFIERS   equ 83
+API_CLIP_COPY           equ 84
+API_CLIP_PASTE          equ 85
+API_CLIP_GET_LEN        equ 86
+API_CTX_MENU_OPEN       equ 87
+API_CTX_MENU_CLOSE      equ 88
+API_CTX_MENU_HIT        equ 89
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -103,12 +109,8 @@ BTN_OK_W                equ 30
 
 ; Buffer sizes
 TEXT_MAX                 equ 16384      ; 16KB text buffer
-CLIP_MAX                equ 4096       ; 4KB clipboard
 
-; Menu shared constants
-MENU_ITEM_H             equ 10
-
-; Context menu
+; Context menu (drawn by kernel menu_open API)
 CTX_MENU_W              equ 80
 CTX_MENU_ITEMS          equ 5
 
@@ -129,9 +131,8 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Initialize selection/clipboard/undo state
+    ; Initialize selection/undo state
     mov word [cs:sel_anchor], 0xFFFF
-    mov word [cs:clip_len], 0
     mov byte [cs:undo_valid], 0
     mov byte [cs:undo_saved_for_edit], 0
     mov byte [cs:mouse_selecting], 0
@@ -230,9 +231,9 @@ entry:
 
     ; Left click dispatch by mode
     cmp byte [cs:mode], MODE_CONTEXT_MENU
-    je .click_menu
+    je .click_context_menu
     cmp byte [cs:mode], MODE_FILE_MENU
-    je .click_menu
+    je .click_file_menu
     cmp byte [cs:mode], MODE_EDIT
     je .click_edit
     jmp .click_dialog
@@ -697,87 +698,49 @@ entry:
 ; Menu System (shared by File menu and Context menu)
 ; ============================================================================
 .open_context_menu:
+    ; Open context menu at mouse position using kernel menu API
     call mouse_to_content_rel
     jc .check_event
-
-    ; Clamp position within content area
-    mov ax, [cs:mouse_rel_x]
-    mov bx, CONTENT_W
-    sub bx, CTX_MENU_W
-    cmp ax, bx
-    jbe .ctx_x_ok
-    mov ax, bx
-.ctx_x_ok:
-    mov [cs:menu_x], ax
-
-    movzx bx, byte [cs:active_menu_h]
-    mov ax, [cs:mouse_rel_y]
-    push bx
-    mov bx, CONTENT_H
-    sub bx, CTX_MENU_ITEMS * MENU_ITEM_H
-    cmp ax, bx
-    jbe .ctx_y_ok
-    mov ax, bx
-.ctx_y_ok:
-    pop bx
-    mov [cs:menu_y], ax
-
-    ; Set active menu state
-    mov word [cs:active_menu_strings], ctx_menu_strings
-    mov byte [cs:active_menu_count], CTX_MENU_ITEMS
-    mov byte [cs:active_menu_w], CTX_MENU_W
+    mov bx, [cs:mouse_rel_x]       ; Content-relative X (auto-translated by kernel)
+    mov cx, [cs:mouse_rel_y]       ; Content-relative Y
+    mov si, ctx_menu_strings
+    mov dl, CTX_MENU_ITEMS
+    mov dh, CTX_MENU_W
     mov byte [cs:mode], MODE_CONTEXT_MENU
-    call draw_menu
+    mov ah, API_CTX_MENU_OPEN       ; Kernel draws the popup menu
+    int 0x80
     jmp .check_event
 
 .open_file_menu:
-    mov word [cs:menu_x], FILE_MENU_X
-    mov word [cs:menu_y], FILE_MENU_Y
-    mov word [cs:active_menu_strings], file_menu_strings
-    mov byte [cs:active_menu_count], FILE_MENU_ITEMS
-    mov byte [cs:active_menu_w], FILE_MENU_W
+    ; Open file menu dropdown using kernel menu API
+    mov bx, FILE_MENU_X            ; Content-relative X
+    mov cx, FILE_MENU_Y            ; Content-relative Y (below menu bar)
+    mov si, file_menu_strings
+    mov dl, FILE_MENU_ITEMS
+    mov dh, FILE_MENU_W
     mov byte [cs:mode], MODE_FILE_MENU
-    call draw_menu
+    mov ah, API_CTX_MENU_OPEN       ; Same kernel API for both menus
+    int 0x80
     jmp .check_event
 
-.click_menu:
-    ; Update mouse_rel coords to current click position
-    call mouse_to_content_rel
-
-    ; Check if click is within menu bounds (X)
-    mov ax, [cs:mouse_rel_x]
-    cmp ax, [cs:menu_x]
-    jb .dismiss_menu
-    mov bx, [cs:menu_x]
-    movzx cx, byte [cs:active_menu_w]
-    add bx, cx
-    cmp ax, bx
-    jae .dismiss_menu
-
-    ; Check Y bounds
-    mov ax, [cs:mouse_rel_y]
-    cmp ax, [cs:menu_y]
-    jb .dismiss_menu
-    mov bx, [cs:menu_y]
-    movzx cx, byte [cs:active_menu_count]
-    imul cx, MENU_ITEM_H
-    add bx, cx
-    cmp ax, bx
-    jae .dismiss_menu
-
-    ; Compute item index
-    sub ax, [cs:menu_y]
-    xor dx, dx
-    mov bx, MENU_ITEM_H
-    div bx
-    cmp al, [cs:active_menu_count]
-    jae .dismiss_menu
+; --- Menu click handler (unified for context menu and file menu) ---
+.click_context_menu:
+.click_file_menu:
+    ; Both menu types use the same kernel menu APIs
+    mov ah, API_CTX_MENU_HIT            ; Hit-test the popup menu
+    int 0x80
+    push ax                             ; Save item index
+    mov ah, API_CTX_MENU_CLOSE          ; Always close menu
+    int 0x80
+    pop ax
+    cmp al, 0xFF
+    je .dismiss_menu                    ; Click outside → dismiss
 
     ; Dispatch by menu type
     cmp byte [cs:mode], MODE_FILE_MENU
     je .file_menu_dispatch
 
-    ; --- Context menu dispatch ---
+    ; --- Context menu dispatch (0=Cut, 1=Copy, 2=Paste, 3=Undo, 4=Select All) ---
     mov byte [cs:mode], MODE_EDIT
     cmp al, 0
     je .menu_cut
@@ -791,6 +754,7 @@ entry:
     je .menu_sel_all
     jmp .dismiss_menu
 
+    ; --- File menu dispatch (0=New, 1=Open, 2=Save, 3=Save As) ---
 .file_menu_dispatch:
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:needs_redraw], 2
@@ -837,12 +801,15 @@ entry:
     jmp .check_event
 
 .dismiss_menu:
+    ; Kernel menu already closed by menu_close above (or wasn't open)
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .key_dismiss_menu:
     ; ESC or any key dismisses any open menu
+    mov ah, API_CTX_MENU_CLOSE          ; Close kernel popup menu
+    int 0x80
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:needs_redraw], 2
     jmp .check_event
@@ -1256,26 +1223,11 @@ do_copy:
     sub cx, [cs:sel_start]
     jcxz .dcopy_done
 
-    cmp cx, CLIP_MAX
-    jbe .dcopy_ok
-    mov cx, CLIP_MAX
-.dcopy_ok:
-    mov [cs:clip_len], cx
-
-    ; Copy text_buf[sel_start..] to clip_buf
-    push ds
-    push es
-    push cs
-    pop ds
-    push cs
-    pop es
+    ; Copy selected text to system clipboard
     mov si, text_buf
     add si, [cs:sel_start]
-    mov di, clip_buf
-    cld
-    rep movsb
-    pop es
-    pop ds
+    mov ah, API_CLIP_COPY               ; SI=source, CX=length
+    int 0x80
 
 .dcopy_done:
     popa
@@ -1294,12 +1246,16 @@ do_cut:
     popa
     ret
 
-; do_paste - Insert clipboard at cursor (delete selection first if active)
+; do_paste - Insert system clipboard at cursor (delete selection first if active)
 do_paste:
     pusha
-    mov cx, [cs:clip_len]
+
+    ; Get clipboard length from kernel
+    mov ah, API_CLIP_GET_LEN
+    int 0x80
     test cx, cx
     jz .dpaste_done
+    mov [cs:paste_len], cx
 
     ; Check room
     mov ax, [cs:text_len]
@@ -1326,7 +1282,7 @@ do_paste:
     call delete_selection
 .dpaste_no_del:
 
-    ; Shift text right by clip_len at cursor_pos
+    ; Shift text right by paste_len at cursor_pos
     mov cx, [cs:text_len]
     sub cx, [cs:cursor_pos]            ; CX = bytes to shift right
     jcxz .dpaste_no_shift
@@ -1341,7 +1297,7 @@ do_paste:
     add si, [cs:text_len]
     dec si                              ; SI = &text_buf[text_len-1]
     mov di, si
-    add di, [cs:clip_len]              ; DI = SI + clip_len
+    add di, [cs:paste_len]             ; DI = SI + paste_len
     std
     rep movsb
     cld
@@ -1349,26 +1305,21 @@ do_paste:
     pop ds
 
 .dpaste_no_shift:
-    ; Copy clip_buf into gap at cursor_pos
-    push ds
+    ; Paste from system clipboard into gap at cursor_pos
     push es
     push cs
-    pop ds
-    push cs
-    pop es
-    mov si, clip_buf
+    pop es                              ; ES = app segment
     mov di, text_buf
     add di, [cs:cursor_pos]
-    mov cx, [cs:clip_len]
-    cld
-    rep movsb
+    mov cx, [cs:paste_len]
+    mov ah, API_CLIP_PASTE              ; ES:DI=dest, CX=max bytes
+    int 0x80
+    ; CX = actual bytes pasted
     pop es
-    pop ds
 
     ; Update text_len and cursor_pos
-    mov ax, [cs:clip_len]
-    add [cs:text_len], ax
-    add [cs:cursor_pos], ax
+    add [cs:text_len], cx
+    add [cs:cursor_pos], cx
 
 .dpaste_done:
     popa
@@ -1819,70 +1770,7 @@ mouse_to_offset:
 ; Context Menu Drawing
 ; ============================================================================
 
-; draw_menu - Draw the currently active menu (context or file)
-; Uses: menu_x, menu_y, active_menu_strings, active_menu_count, active_menu_w
-draw_menu:
-    pusha
-
-    ; Compute menu height
-    movzx si, byte [cs:active_menu_count]
-    imul si, MENU_ITEM_H
-
-    ; White filled rect
-    mov bx, [cs:menu_x]
-    mov cx, [cs:menu_y]
-    movzx dx, byte [cs:active_menu_w]
-    mov al, 3                           ; White
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-
-    ; Black border
-    mov bx, [cs:menu_x]
-    mov cx, [cs:menu_y]
-    movzx dx, byte [cs:active_menu_w]
-    movzx si, byte [cs:active_menu_count]
-    imul si, MENU_ITEM_H
-    mov al, 0                           ; Black
-    mov ah, API_RECT_COLOR
-    int 0x80
-
-    ; Draw items
-    xor cx, cx                          ; CX = item index
-.dm_loop:
-    cmp cl, [cs:active_menu_count]
-    jae .dm_done
-
-    ; Compute item text Y = menu_y + index * MENU_ITEM_H + 2
-    mov ax, cx
-    mov bx, MENU_ITEM_H
-    mul bx
-    add ax, [cs:menu_y]
-    add ax, 2
-    push cx                             ; Save index
-    mov [cs:.dm_item_y], ax
-
-    ; Get string pointer from active string table
-    mov bx, cx
-    shl bx, 1
-    add bx, [cs:active_menu_strings]
-    mov si, [cs:bx]
-
-    ; Text X = menu_x + 4
-    mov bx, [cs:menu_x]
-    add bx, 4
-    mov cx, [cs:.dm_item_y]
-    mov ah, API_GFX_DRAW_STRING_INV     ; Black text on white
-    int 0x80
-
-    pop cx
-    inc cx
-    jmp .dm_loop
-
-.dm_done:
-    popa
-    ret
-
-.dm_item_y: dw 0
+; draw_menu removed — now using kernel menu_open API (Build 273)
 
 ; ============================================================================
 ; compute_layout - Measure current font and compute visible cols/rows
@@ -2454,7 +2342,6 @@ do_new_file:
     mov byte [cs:mode], MODE_EDIT
     mov byte [cs:status_msg], 0
     mov word [cs:sel_anchor], 0xFFFF
-    mov word [cs:clip_len], 0
     mov byte [cs:undo_valid], 0
     mov byte [cs:undo_saved_for_edit], 0
     popa
@@ -2666,8 +2553,8 @@ mouse_buttons:  db 0
 mouse_selecting: db 0
 prev_right_btn: db 0
 
-; Clipboard state
-clip_len:       dw 0
+; Paste temp (system clipboard is kernel-managed)
+paste_len:      dw 0
 
 ; Undo state
 undo_len:       dw 0
@@ -2676,15 +2563,7 @@ undo_scroll:    dw 0
 undo_valid:     db 0
 undo_saved_for_edit: db 0
 
-; Menu state (shared by context menu and file menu)
-menu_x:         dw 0
-menu_y:         dw 0
-active_menu_strings: dw 0               ; Pointer to current menu's string table
-active_menu_count:   db 0               ; Number of items in current menu
-active_menu_w:       db 0               ; Width of current menu (pixels)
-active_menu_h:       db 0               ; Height (computed)
-
-; Context menu string table
+; Context menu string table (5 items: Cut/Copy/Paste/Undo/Select All)
 ctx_menu_strings:
     dw str_cut
     dw str_copy
@@ -2692,7 +2571,7 @@ ctx_menu_strings:
     dw str_undo_label
     dw str_sel_all
 
-; File menu string table
+; File menu string table (4 items: New/Open/Save/Save As)
 file_menu_strings:
     dw str_new
     dw str_open
@@ -2736,6 +2615,6 @@ line_buf:       times 80 db 0
 ; ============================================================================
 ; Large Buffer Addresses (runtime only, not in binary)
 ; ============================================================================
-clip_buf        equ 0x1800              ; 4KB clipboard buffer
+; clip_buf removed — system clipboard is now kernel-managed at SCRATCH_SEGMENT
 text_buf        equ 0x2800              ; 16KB text buffer
 undo_buf        equ 0x6800              ; 16KB undo buffer

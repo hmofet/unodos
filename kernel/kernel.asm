@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 84                      ; Max function count (0-83 valid)
+    cmp ah, 90                      ; Max function count (0-89 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -178,7 +178,11 @@ int_80_handler:
     jb .no_translate                ; APIs 72-79: non-drawing
     cmp ah, 81
     jb .do_translate                ; API 80: gfx_scroll_area
-    jmp .no_translate               ; API 81+: skip translation
+    cmp ah, 87
+    jb .no_translate                ; APIs 81-86: non-drawing
+    cmp ah, 88
+    jb .do_translate                ; API 87: menu_open
+    jmp .no_translate               ; API 88+: skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
 
     ; Translate: BX += content_x, CX += content_y
@@ -3057,11 +3061,247 @@ gfx_text_width:
     ret
 
 ; ============================================================================
+; System Clipboard APIs (Build 273)
+; ============================================================================
+
+; clip_copy - Copy data to system clipboard (API 84)
+; Input: SI = source offset in caller's DS segment, CX = byte count
+; Output: CF=0 success, CF=1 error (CX > CLIP_MAX_SIZE)
+clip_copy:
+    cmp cx, CLIP_MAX_SIZE
+    ja .clip_copy_err
+    push ds
+    push es
+    push si
+    push di
+    push cx
+    mov [cs:clip_data_len], cx
+    mov ds, [cs:caller_ds]          ; Source = caller's segment
+    mov ax, SCRATCH_SEGMENT
+    mov es, ax
+    xor di, di                      ; Dest = 0x9000:0000
+    cld
+    rep movsb
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    clc
+    ret
+.clip_copy_err:
+    stc
+    ret
+
+; clip_paste - Read data from system clipboard (API 85)
+; Input: DI = dest offset in caller's ES segment, CX = max bytes to read
+; Output: CX = actual bytes copied, CF=0 success, CF=1 clipboard empty
+clip_paste:
+    push ds
+    push es
+    push si
+    push di
+    mov ax, [clip_data_len]
+    test ax, ax
+    jz .clip_paste_empty
+    cmp ax, cx
+    jbe .clip_paste_ok
+    mov ax, cx                      ; Clamp to max
+.clip_paste_ok:
+    mov cx, ax
+    push cx
+    mov ax, SCRATCH_SEGMENT
+    mov ds, ax
+    xor si, si                      ; Source = 0x9000:0000
+    mov es, [cs:caller_es]          ; Dest = caller's segment
+    cld
+    rep movsb
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    clc
+    ret
+.clip_paste_empty:
+    xor cx, cx
+    pop di
+    pop si
+    pop es
+    pop ds
+    stc
+    ret
+
+; clip_get_len - Get clipboard content length (API 86)
+; Input: none
+; Output: CX = clipboard length (0 = empty)
+clip_get_len:
+    mov cx, [clip_data_len]
+    clc
+    ret
+
+; ============================================================================
+; Popup Menu APIs (Build 273)
+; ============================================================================
+
+KMENU_ITEM_H        equ 10                  ; Pixels per menu item
+
+; menu_open - Open a popup menu at specified position (API 87)
+; Input: BX=X, CX=Y (auto-translated by draw_context),
+;        SI=string table pointer (in caller's DS), DL=item count, DH=width
+; Output: CF=0 success
+; Note: BX/CX arrive already translated to absolute screen coords by INT 0x80
+menu_open:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+    ; Save menu parameters
+    mov [kmenu_count], dl
+    mov [kmenu_w], dh
+    mov [kmenu_str_table], si       ; String table offset in caller's segment
+
+    ; Clamp X so menu fits on screen
+    movzx ax, dh                    ; AX = menu width
+    mov si, 320
+    sub si, ax                      ; SI = max X
+    cmp bx, si
+    jbe .mo_x_ok
+    mov bx, si
+.mo_x_ok:
+    mov [kmenu_x], bx
+
+    ; Clamp Y so menu fits on screen
+    movzx ax, dl                    ; AX = item count
+    imul ax, KMENU_ITEM_H           ; AX = menu height
+    mov si, 200
+    sub si, ax                      ; SI = max Y
+    cmp cx, si
+    jbe .mo_y_ok
+    mov cx, si
+.mo_y_ok:
+    mov [kmenu_y], cx
+    mov byte [kmenu_active], 1
+
+    ; Save and clear draw_context for absolute screen drawing
+    push word [draw_context]
+    mov byte [draw_context], 0xFF
+
+    ; Compute menu pixel height
+    movzx si, byte [kmenu_count]
+    imul si, KMENU_ITEM_H
+
+    ; Draw white filled rectangle
+    mov bx, [kmenu_x]
+    mov cx, [kmenu_y]
+    movzx dx, byte [kmenu_w]
+    mov al, 3                       ; White
+    call gfx_draw_filled_rect_color
+
+    ; Draw black border
+    mov bx, [kmenu_x]
+    mov cx, [kmenu_y]
+    movzx dx, byte [kmenu_w]
+    movzx si, byte [kmenu_count]
+    imul si, KMENU_ITEM_H
+    mov al, 0                       ; Black
+    call gfx_draw_rect_color
+
+    ; Draw menu items — strings are in caller's segment (caller_ds)
+    xor cx, cx                      ; CX = item index (byte in CL)
+.mo_item_loop:
+    cmp cl, [kmenu_count]
+    jae .mo_items_done
+
+    ; Compute item Y = kmenu_y + index * KMENU_ITEM_H + 2
+    movzx ax, cl
+    imul ax, KMENU_ITEM_H
+    add ax, [kmenu_y]
+    add ax, 2
+    push cx                         ; Save index
+
+    ; Read string pointer from caller's string table
+    movzx bx, cl
+    shl bx, 1
+    add bx, [kmenu_str_table]       ; BX = offset of pointer in caller's segment
+    push ds
+    mov ds, [cs:caller_ds]          ; DS = caller's segment
+    mov si, [bx]                    ; SI = string offset in caller's segment
+    pop ds                          ; DS = kernel segment
+
+    ; Text X = kmenu_x + 4
+    mov bx, [kmenu_x]
+    add bx, 4
+    mov cx, ax                      ; CX = Y position
+    ; caller_ds is already the app's DS — gfx_draw_string_inverted reads from it
+    call gfx_draw_string_inverted
+
+    pop cx
+    inc cl
+    jmp .mo_item_loop
+.mo_items_done:
+    ; Restore draw_context
+    pop word [draw_context]
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    clc
+    ret
+
+; menu_close - Close popup menu and trigger repaint (API 88)
+; Input: none
+; Output: CF=0
+menu_close:
+    cmp byte [kmenu_active], 0
+    je .mc_done
+    mov byte [kmenu_active], 0
+    ; Post WIN_REDRAW for the topmost window so app repaints over menu
+    movzx dx, byte [topmost_handle]
+    cmp dl, 0xFF
+    je .mc_done
+    mov al, EVENT_WIN_REDRAW
+    call post_event
+.mc_done:
+    clc
+    ret
+
+; menu_hit - Hit-test the active popup menu (API 89)
+; Input: none (reads mouse_x, mouse_y internally)
+; Output: AL = item index or 0xFF if outside menu
+menu_hit:
+    cmp byte [kmenu_active], 0
+    je .mh_miss
+    ; Check X bounds
+    mov ax, [mouse_x]
+    cmp ax, [kmenu_x]
+    jb .mh_miss
+    mov bx, [kmenu_x]
+    movzx cx, byte [kmenu_w]
+    add bx, cx
+    cmp ax, bx
+    jae .mh_miss
+    ; Check Y bounds and compute item index
+    mov ax, [mouse_y]
+    sub ax, [kmenu_y]
+    js .mh_miss                     ; Above menu
+    xor dx, dx
+    mov bx, KMENU_ITEM_H
+    div bx                          ; AX = item index
+    cmp al, [kmenu_count]
+    jae .mh_miss
+    ; AL = valid item index
+    clc
+    ret
+.mh_miss:
+    mov al, 0xFF
+    clc
+    ret
+
+; ============================================================================
 ; Kernel API Table
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x14C0 - ($ - $$) db 0
+times 0x1640 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -3202,6 +3442,16 @@ kernel_api_table:
     dw set_rtc_time                 ; 81: Set real-time clock
     dw get_screen_info              ; 82: Get screen dimensions/mode
     dw get_key_modifiers            ; 83: Get keyboard modifier states
+
+    ; Clipboard APIs (Build 273)
+    dw clip_copy                    ; 84: Copy to system clipboard
+    dw clip_paste                   ; 85: Paste from system clipboard
+    dw clip_get_len                 ; 86: Get clipboard length
+
+    ; Popup Menu APIs (Build 273)
+    dw menu_open                    ; 87: Open popup menu (generic)
+    dw menu_close                   ; 88: Close popup menu
+    dw menu_hit                     ; 89: Hit-test popup menu
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -14406,7 +14656,8 @@ APP_ENTRY_SIZE      equ 32
 ; App segment constants
 APP_SEGMENT_SHELL   equ 0x2000              ; Shell/launcher segment (fixed)
 APP_NUM_USER_SEGS   equ 6                   ; Number of dynamic user segments
-SCRATCH_SEGMENT     equ 0x9000              ; Scratch buffer (moved from 0x5000)
+SCRATCH_SEGMENT     equ 0x9000              ; Scratch buffer / system clipboard
+CLIP_MAX_SIZE       equ 4096                ; Max clipboard data size (bytes)
 
 app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
 
@@ -14488,6 +14739,22 @@ WIN_OFF_OWNER       equ 11
 WIN_OFF_TITLE       equ 12
 
 window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
+
+; ============================================================================
+; System Clipboard (Build 273)
+; ============================================================================
+; Data stored at SCRATCH_SEGMENT (0x9000:0x0000), up to CLIP_MAX_SIZE bytes
+clip_data_len:      dw 0                    ; Current clipboard content length
+
+; ============================================================================
+; Popup Menu State (Build 273)
+; ============================================================================
+kmenu_active:       db 0                    ; 1 = popup menu currently shown
+kmenu_x:            dw 0                    ; Absolute screen X of menu
+kmenu_y:            dw 0                    ; Absolute screen Y of menu
+kmenu_w:            db 0                    ; Width in pixels (per-call)
+kmenu_count:        db 0                    ; Number of items (per-call)
+kmenu_str_table:    dw 0                    ; String table offset in caller's segment
 
 ; ============================================================================
 ; Padding
