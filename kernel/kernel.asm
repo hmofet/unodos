@@ -10807,6 +10807,30 @@ draw_desktop_region:
     cmp ax, [redraw_old_y]
     jbe .ddr_skip_icon
 
+    ; Skip icons fully inside topmost window (avoids icon flash on window create)
+    cmp byte [topmost_handle], 0xFF
+    je .ddr_draw_icon
+    mov ax, [si + DESKTOP_ICON_OFF_X]
+    cmp ax, [topmost_win_x]
+    jbe .ddr_draw_icon              ; Icon left of window left edge
+    mov ax, [si + DESKTOP_ICON_OFF_Y]
+    cmp ax, [topmost_win_y]
+    jbe .ddr_draw_icon              ; Icon above window top edge
+    mov ax, [si + DESKTOP_ICON_OFF_X]
+    add ax, 16                      ; Icon right edge
+    mov dx, [topmost_win_x]
+    add dx, [topmost_win_w]
+    cmp ax, dx
+    jae .ddr_draw_icon              ; Icon extends past window right
+    mov ax, [si + DESKTOP_ICON_OFF_Y]
+    add ax, 30                      ; Icon + label bottom edge
+    mov dx, [topmost_win_y]
+    add dx, [topmost_win_h]
+    cmp ax, dx
+    jae .ddr_draw_icon              ; Icon extends past window bottom
+    jmp .ddr_skip_icon              ; Icon fully inside topmost, skip
+
+.ddr_draw_icon:
     ; Icon overlaps affected rect - draw it
     push si
     push bp
