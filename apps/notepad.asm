@@ -154,8 +154,15 @@ entry:
     ; Deferred redraw: process all queued events FIRST, then redraw once
     cmp byte [cs:needs_redraw], 0
     je .no_deferred
+    cmp byte [cs:needs_redraw], 1
+    je .do_line_redraw
+    ; needs_redraw >= 2: full text area redraw
     mov byte [cs:needs_redraw], 0
     call update_after_edit
+    jmp .no_deferred
+.do_line_redraw:
+    mov byte [cs:needs_redraw], 0
+    call draw_current_line
 .no_deferred:
     sti
     mov ah, API_APP_YIELD
@@ -306,18 +313,17 @@ entry:
     cmp dl, 126
     ja .main_loop
     call buf_insert_char
-    mov byte [cs:needs_redraw], 1
-    jmp .check_event               ; Drain more events before redrawing
+    jmp .set_line_redraw           ; Line-only redraw for typing speed
 
 .do_backspace:
     call buf_delete_char
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2  ; Full redraw (line structure may change)
     jmp .check_event
 
 .do_enter:
     mov dl, 0x0A
     call buf_insert_char
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_tab:
@@ -326,29 +332,28 @@ entry:
     call buf_insert_char
     call buf_insert_char
     call buf_insert_char
-    mov byte [cs:needs_redraw], 1
-    jmp .check_event
+    jmp .set_line_redraw           ; Line-only redraw
 
 .do_delete:
     call buf_delete_fwd
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_cursor_up:
     call cursor_up
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_cursor_down:
     call cursor_down
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_cursor_left:
     cmp word [cs:cursor_pos], 0
     je .main_loop
     dec word [cs:cursor_pos]
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_cursor_right:
@@ -356,16 +361,23 @@ entry:
     cmp ax, [cs:text_len]
     jae .main_loop
     inc word [cs:cursor_pos]
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_home:
     call cursor_home
-    mov byte [cs:needs_redraw], 1
+    mov byte [cs:needs_redraw], 2
     jmp .check_event
 
 .do_end:
     call cursor_end
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+
+; Helper: set line-only redraw (don't downgrade from full redraw)
+.set_line_redraw:
+    cmp byte [cs:needs_redraw], 2
+    jae .check_event               ; Already needs full redraw, don't downgrade
     mov byte [cs:needs_redraw], 1
     jmp .check_event
 
@@ -507,6 +519,117 @@ update_after_move:
     call draw_status
     popa
     ret
+
+; ============================================================================
+; draw_current_line - Fast redraw of only the cursor's line (for typing)
+; Falls back to full redraw if scroll is needed.
+; ============================================================================
+draw_current_line:
+    pusha
+    ; Compute cursor line/col
+    call cursor_to_line_col
+
+    ; Check if cursor is visible without scrolling
+    mov ax, [cs:cursor_line]
+    cmp ax, [cs:scroll_row]
+    jb .dcl_full
+    mov bx, [cs:scroll_row]
+    add bx, [cs:vis_rows]
+    cmp ax, bx
+    jae .dcl_full
+
+    ; Cursor is visible — compute screen row
+    sub ax, [cs:scroll_row]          ; AX = screen row (0-based)
+
+    ; Calculate Y = TEXT_Y + screen_row * row_h
+    movzx dx, byte [cs:row_h]
+    mul dx
+    add ax, TEXT_Y
+    mov [cs:.dcl_y], ax
+
+    ; Clear just this line's strip
+    mov bx, TEXT_X
+    mov cx, ax
+    mov dx, TEXT_W
+    movzx si, byte [cs:row_h]
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Find byte offset for cursor_line
+    mov cx, [cs:cursor_line]
+    call find_line_start              ; BX = start of line
+
+    ; Copy line to line_buf (up to vis_cols chars)
+    mov si, bx
+    xor di, di
+.dcl_copy:
+    cmp di, [cs:vis_cols]
+    jae .dcl_line_end
+    cmp si, [cs:text_len]
+    jae .dcl_line_end
+    mov al, [cs:text_buf + si]
+    cmp al, 0x0A
+    je .dcl_line_end
+    mov [cs:line_buf + di], al
+    inc si
+    inc di
+    jmp .dcl_copy
+.dcl_line_end:
+    mov byte [cs:line_buf + di], 0
+
+    ; Draw line text
+    mov bx, TEXT_X
+    mov cx, [cs:.dcl_y]
+    mov si, line_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw cursor (inverted char at cursor_col)
+    mov ax, [cs:cursor_col]
+    cmp ax, [cs:vis_cols]
+    jae .dcl_no_cursor
+    movzx dx, byte [cs:font_adv]
+    mul dx
+    add ax, TEXT_X
+    mov bx, ax                       ; BX = cursor X
+    mov cx, [cs:.dcl_y]
+
+    ; Get char at cursor position
+    push bx
+    mov bx, [cs:cursor_pos]
+    cmp bx, [cs:text_len]
+    jae .dcl_cursor_space
+    mov al, [cs:text_buf + bx]
+    cmp al, 0x0A
+    je .dcl_cursor_space
+    cmp al, 32
+    jb .dcl_cursor_space
+    mov [cs:cursor_char_buf], al
+    jmp .dcl_cursor_got
+.dcl_cursor_space:
+    mov byte [cs:cursor_char_buf], ' '
+.dcl_cursor_got:
+    mov byte [cs:cursor_char_buf + 1], 0
+    pop bx
+    mov si, cursor_char_buf
+    mov ah, API_GFX_DRAW_STRING_INV
+    int 0x80
+
+.dcl_no_cursor:
+    ; Update status bar
+    call draw_status
+    popa
+    ret
+
+.dcl_full:
+    ; Scroll needed — fall back to full redraw
+    call ensure_cursor_visible
+    call draw_text_area
+    call draw_status
+    popa
+    ret
+
+.dcl_y: dw 0                         ; Saved Y position for current line
 
 ; ============================================================================
 ; compute_layout - Measure current font and compute visible cols/rows
@@ -1412,7 +1535,7 @@ mount_handle:   db 0
 file_handle:    db 0
 prev_btn:       db 0
 mode:           db MODE_EDIT
-needs_redraw:   db 0                    ; 1 = redraw pending (drain events first)
+needs_redraw:   db 0                    ; 0=none, 1=line-only, 2=full redraw
 
 ; Font metrics (computed at startup)
 font_adv:       db 6                    ; Character advance in pixels

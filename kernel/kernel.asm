@@ -10448,6 +10448,13 @@ win_create_stub:
     pop ds
     call redraw_affected_windows
 
+    ; Draw the new window's frame on top (redraw_affected_windows skips z=15)
+    push ax
+    mov ax, bp
+    and al, 0x0F
+    call win_draw_stub
+    pop ax
+
     ; Return handle
     mov ax, bp
     clc
@@ -11315,11 +11322,12 @@ win_destroy_stub:
     ; Mark as free BEFORE redrawing (so this window isn't redrawn)
     mov byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
 
+    ; Invalidate topmost cache BEFORE redraw so draw_desktop_region
+    ; doesn't skip icons under the now-destroyed window
+    mov byte [topmost_handle], 0xFF
+
     ; Redraw any windows that were overlapped by this one
     call redraw_affected_windows
-
-    ; Invalidate topmost cache (will be set by win_focus_stub if promoted)
-    mov byte [topmost_handle], 0xFF
 
     ; Promote next highest z-order window to topmost (z=15)
     ; Without this, no window can draw after the topmost is destroyed
