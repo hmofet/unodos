@@ -39,6 +39,7 @@ TETRIS_BIN = build/tetris.bin
 DEMO_BIN = build/demo.bin
 APITEST_BIN = build/apitest.bin
 NOTEPAD_BIN = build/notepad.bin
+SYSINFO_BIN = build/sysinfo.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -134,6 +135,9 @@ $(APITEST_BIN): $(APPS_DIR)/apitest.asm | $(BUILD_DIR)
 $(NOTEPAD_BIN): $(APPS_DIR)/notepad.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
+$(SYSINFO_BIN): $(APPS_DIR)/sysinfo.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
 # Create 360KB floppy image (target platform)
 # Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
@@ -145,14 +149,14 @@ $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Created $@ (360KB)"
 
 # Create 1.44MB floppy image (for modern hardware testing)
-$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN)
+$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN) $(SYSINFO_BIN)
 	@echo "Creating 1.44MB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Adding FAT12 filesystem with apps..."
-	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(DEMO_BIN) DEMO.BIN $(APITEST_BIN) APITEST.BIN $(NOTEPAD_BIN) TEXT.BIN
+	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(DEMO_BIN) DEMO.BIN $(APITEST_BIN) APITEST.BIN $(NOTEPAD_BIN) TEXT.BIN $(SYSINFO_BIN) SYSINFO.BIN
 	@echo "Created $@ (1.44MB)"
 
 floppy144: $(FLOPPY_144)
@@ -206,7 +210,7 @@ build/test-fat12-multi.img: tools/create_multicluster_test.py
 	python3 tools/create_multicluster_test.py $@
 
 # Build all applications
-apps: $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN)
+apps: $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN) $(SYSINFO_BIN)
 	@echo "Built applications:"
 	@echo "  $(CLOCK_BIN) ($$(wc -c < $(CLOCK_BIN)) bytes)"
 	@echo "  $(LAUNCHER_BIN) ($$(wc -c < $(LAUNCHER_BIN)) bytes)"
@@ -219,6 +223,7 @@ apps: $(CLOCK_BIN) $(LAUNCHER_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN)
 	@echo "  $(DEMO_BIN) ($$(wc -c < $(DEMO_BIN)) bytes)"
 	@echo "  $(APITEST_BIN) ($$(wc -c < $(APITEST_BIN)) bytes)"
 	@echo "  $(NOTEPAD_BIN) ($$(wc -c < $(NOTEPAD_BIN)) bytes)"
+	@echo "  $(SYSINFO_BIN) ($$(wc -c < $(SYSINFO_BIN)) bytes)"
 
 # Create app test floppy image (FAT12 with HELLO.BIN)
 build/app-test.img: $(HELLO_BIN)
@@ -249,9 +254,9 @@ test-clock: $(FLOPPY_144) build/clock-app.img check-qemu
 		-display gtk
 
 # Create launcher app floppy image (FAT12 with LAUNCHER.BIN + apps)
-build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN)
+build/launcher-floppy.img: $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(DEMO_BIN) $(APITEST_BIN) $(NOTEPAD_BIN) $(SYSINFO_BIN)
 	@echo "Creating launcher floppy image..."
-	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(DEMO_BIN) DEMO.BIN $(APITEST_BIN) APITEST.BIN $(NOTEPAD_BIN) TEXT.BIN
+	python3 tools/create_app_test.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MOUSE_TEST_BIN) MOUSE.BIN $(MUSIC_BIN) MUSIC.BIN $(MKBOOT_BIN) MKBOOT.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(DEMO_BIN) DEMO.BIN $(APITEST_BIN) APITEST.BIN $(NOTEPAD_BIN) TEXT.BIN $(SYSINFO_BIN) SYSINFO.BIN
 
 # Legacy alias
 build/launcher-app.img: build/launcher-floppy.img

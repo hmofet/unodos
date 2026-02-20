@@ -307,11 +307,87 @@ Set AH = function index, set input registers, call `INT 0x80`, check CF for erro
 | 54 | theme_set_colors | AL=text, BL=background, CL=window (each 0-3) |
 | 55 | theme_get_colors | Returns AL=text, BL=bg, CL=window |
 
-### System (AH=43)
+### Extended Widgets (AH=56-62, 65-66)
 
-| AH | Function | Outputs |
-|----|----------|---------|
-| 43 | get_boot_drive | AL=drive (0x00=floppy, 0x80=HDD) |
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 56 | widget_draw_checkbox | BX=X, CX=Y, DS:SI=label, AL=flags(bit0=checked) | |
+| 57 | widget_draw_textfield | BX=X, CX=Y, DX=W, DS:SI=text, DI=cursor, AL=flags(bit0=focused,bit1=password) | |
+| 58 | widget_draw_scrollbar | BX=X, CX=Y, SI=track_h, DX=pos, DI=max, AL=flags(bit0=horizontal) | |
+| 59 | widget_draw_listitem | BX=X, CX=Y, DX=W, DS:SI=text, AL=flags(bit0=selected,bit1=cursor) | |
+| 60 | widget_draw_progress | BX=X, CX=Y, DX=W, SI=value(0-100), AL=flags(bit0=show%) | |
+| 61 | widget_draw_groupbox | BX=X, CX=Y, DX=W, SI=H, ES:DI=label, AL=flags | |
+| 62 | widget_draw_separator | BX=X, CX=Y, DX=length, AL=flags(bit0=vertical) | |
+| 65 | widget_draw_combobox | BX=X, CX=Y, DX=W, DS:SI=text, AL=flags(bit0=focused,bit1=open) | |
+| 66 | widget_draw_menubar | BX=X, CX=Y, DX=W, DS:SI=items, DI=count, AL=selected(0xFF=none) | |
+
+### Colored Drawing (AH=67-71)
+
+| AH | Function | Inputs |
+|----|----------|--------|
+| 67 | filled_rect_color | BX=X, CX=Y, DX=W, SI=H, AL=color(0-3) |
+| 68 | rect_color | BX=X, CX=Y, DX=W, SI=H, AL=color(0-3) |
+| 69 | hline | BX=X, CX=Y, DX=length, AL=color(0-3) |
+| 70 | vline | BX=X, CX=Y, DX=height, AL=color(0-3) |
+| 71 | line | BX=X1, CX=Y1, DX=X2, SI=Y2, AL=color(0-3) |
+
+### System (AH=43, 63, 72-74, 81-83)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 43 | get_boot_drive | | AL=drive (0x00=floppy, 0x80=HDD) |
+| 63 | get_tick_count | | AX=tick count (18.2 Hz) |
+| 72 | get_rtc_time | | CH=hours, CL=mins, DH=secs (BCD) |
+| 73 | delay_ticks | CX=ticks (1 tick~55ms) | |
+| 74 | get_task_info | | AL=task_id, BL=focused, CL=count |
+| 81 | set_rtc_time | CH=hours, CL=mins, DH=secs (BCD) | |
+| 82 | get_screen_info | | BX=width, CX=height, AL=mode |
+| 83 | get_key_modifiers | | AL=shift, AH=ctrl, DL=alt |
+
+### Filesystem Extended (AH=75-77)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 75 | fs_seek | AL=handle, CX:DX=position | CF |
+| 76 | fs_get_file_size | AL=handle | DX:AX=size, CF |
+| 77 | fs_rename | BL=mount, DS:SI=old, ES:DI=new | CF |
+
+### Window Extended (AH=78-79)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 78 | win_resize | AL=handle, DX=width, SI=height | CF |
+| 79 | win_get_info | AL=handle | BX=X, CX=Y, DX=W, SI=H, CF |
+
+### Scroll (AH=80)
+
+| AH | Function | Inputs |
+|----|----------|--------|
+| 80 | gfx_scroll_area | BX=X, CX=Y, DX=W, SI=H, DI=pixels (positive=up) |
+
+### Clipboard (AH=84-86)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 84 | clip_copy | DS:SI=source, CX=bytes | CF |
+| 85 | clip_paste | ES:DI=dest, CX=max_bytes | CX=actual, CF |
+| 86 | clip_get_len | | CX=length |
+
+### Popup Menu (AH=87-89)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 87 | menu_open | BX=X, CX=Y, DS:SI=strings, DL=count, DH=width | CF |
+| 88 | menu_close | | |
+| 89 | menu_hit | | AL=item index (0xFF=outside) |
+
+### File Dialog (AH=90)
+
+| AH | Function | Inputs | Outputs |
+|----|----------|--------|---------|
+| 90 | file_dialog_open | BL=mount, ES:DI=dest_buf(13+bytes) | CF=0 selected, CF=1 cancelled |
+
+Blocking modal dialog. Creates a file picker window with a scrollable list. Returns when user selects a file or cancels.
 
 ---
 
@@ -425,7 +501,33 @@ int 0x80
 |------|-------|-------|---------|---------------------|-------------------------|
 | Small | 0 | 4x6 | 6px | 53 | 33 rows |
 | Default | 1 | 8x8 | 12px | 26 | 25 rows |
-| Large | 2 | 8x12 | 12px | 26 | 16 rows |
+| Large | 2 | 8x14 | 12px | 26 | 14 rows |
+
+---
+
+## Opening a File with the System Dialog
+
+```asm
+; Show the file picker and load the selected file
+push cs
+pop es                          ; ES = app segment for result buffer
+mov di, filename_buf            ; Destination buffer (13+ bytes)
+movzx bx, byte [cs:mount]      ; BL = mount handle
+mov ah, 90                      ; file_dialog_open
+int 0x80
+jc .cancelled                   ; CF=1 = user pressed ESC/Cancel
+
+; filename_buf now contains e.g. "DATA.TXT\0"
+; Open and read the file:
+mov bx, [cs:mount]
+mov si, filename_buf
+mov ah, 14                      ; fs_open
+int 0x80
+jc .error
+; ... read, close as usual ...
+
+filename_buf: times 13 db 0
+```
 
 ---
 
