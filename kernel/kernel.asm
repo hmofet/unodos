@@ -2062,6 +2062,8 @@ setup_graphics:
 
 ; setup_graphics_post_mode - Clear screen and set palette (after mode already set)
 setup_graphics_post_mode:
+    cmp byte [video_mode], 0x01
+    je .sgpm_vesa
     cmp byte [video_mode], 0x12
     je .sgpm_mode12h
     cmp byte [video_mode], 0x13
@@ -2097,6 +2099,53 @@ setup_graphics_post_mode:
     rep stosw
     pop es
     ; Set up VGA palette (16 standard colors)
+    call setup_vga_palette
+    ret
+
+.sgpm_vesa:
+    ; VESA: clear 307200 bytes (640*480) across banks, set palette
+    push es
+    push dx
+    mov ax, 0xA000
+    mov es, ax
+    ; Clear bank 0 (64KB)
+    xor ax, ax
+    call vesa_set_bank
+    xor di, di
+    xor ax, ax
+    mov cx, 32768                  ; 65536 / 2
+    rep stosw
+    ; Clear bank 1 (64KB)
+    mov ax, 1
+    call vesa_set_bank
+    xor di, di
+    xor ax, ax
+    mov cx, 32768
+    rep stosw
+    ; Clear bank 2 (64KB)
+    mov ax, 2
+    call vesa_set_bank
+    xor di, di
+    xor ax, ax
+    mov cx, 32768
+    rep stosw
+    ; Clear bank 3 (64KB)
+    mov ax, 3
+    call vesa_set_bank
+    xor di, di
+    xor ax, ax
+    mov cx, 32768
+    rep stosw
+    ; Clear bank 4 (remainder: 307200 - 4*65536 = 44928 bytes)
+    mov ax, 4
+    call vesa_set_bank
+    xor di, di
+    xor ax, ax
+    mov cx, 22464                  ; 44928 / 2
+    rep stosw
+    pop dx
+    pop es
+    ; Set VGA palette (same 32-color palette as mode 13h)
     call setup_vga_palette
     ret
 
@@ -2625,6 +2674,149 @@ mode12h_fill_rect:
 .m12_right_mask:  db 0
 
 ; ============================================================================
+; VESA helpers (640x480x256, mode 0x101, banked)
+; ============================================================================
+
+; vesa_set_bank - Switch VESA display bank
+; Input: AX = bank number (in granularity units)
+; Preserves all registers except flags
+vesa_set_bank:
+    cmp ax, [vesa_cur_bank]
+    je .vsb_done
+    mov [vesa_cur_bank], ax
+    push ax
+    push bx
+    push dx
+    mov dx, ax                     ; DX = bank number
+    xor bx, bx                    ; BH=0, BL=0 (window A)
+    mov ax, 0x4F05                 ; VESA set window
+    int 0x10
+    pop dx
+    pop bx
+    pop ax
+.vsb_done:
+    ret
+
+; vesa_plot_pixel - Plot pixel in VESA 640x480x256 banked mode
+; Input: CX=X, BX=Y, DL=color, ES=0xA000
+; Preserves all registers
+vesa_plot_pixel:
+    push ax
+    push bx
+    push di
+    push dx
+
+    ; Linear offset = Y * 640 + X → DX:AX (32-bit)
+    mov ax, bx                     ; AX = Y
+    push dx                        ; Save color
+    mov dx, 640
+    mul dx                          ; DX:AX = Y * 640
+    add ax, cx                     ; Add X
+    adc dx, 0                      ; Propagate carry to high word
+    ; DX = bank (64KB unit), AX = offset within bank
+    ; Need to convert to granularity units: bank = DX * 64 / granularity
+    ; For most cards, granularity = 64KB, so DX is the bank number directly
+    mov di, ax                     ; DI = offset within bank
+    mov ax, dx                     ; AX = high word (bank)
+    pop dx                         ; Restore DL = color
+    push dx                        ; Save DL again
+    call vesa_set_bank
+    pop dx                         ; Restore DL = color
+    mov [es:di], dl
+    pop dx
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; vesa_fill_rect - Fill rectangle in VESA 640x480x256
+; Input: BX=X, CX=Y, DX=width, SI=height, AL=color
+;        ES=0xA000
+; Preserves all registers
+vesa_fill_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov [cs:.vf_color], al
+    mov [cs:.vf_x], bx
+    mov [cs:.vf_w], dx
+    mov bp, si                     ; BP = height counter
+
+.vf_row:
+    ; Calculate linear offset for start of row: Y * 640 + X
+    mov ax, cx                     ; AX = current Y
+    push dx
+    mov dx, 640
+    mul dx                          ; DX:AX = Y * 640
+    pop dx
+    add ax, [cs:.vf_x]
+    adc dx, 0                      ; DX:AX = linear start offset
+
+    ; How many bytes left in current bank from this offset?
+    mov di, ax                     ; DI = offset in bank window
+    push dx                        ; Save bank number
+    push cx                        ; Save Y
+
+    mov ax, dx                     ; AX = bank number
+    call vesa_set_bank
+
+    ; Fill this row: may need to cross a bank boundary
+    mov si, [cs:.vf_w]            ; SI = remaining width
+    mov al, [cs:.vf_color]
+
+    ; Check if row crosses 64K boundary
+    ; Bytes until boundary = 0x10000 - DI
+    push dx
+    mov dx, 0
+    sub dx, di                     ; DX = bytes until boundary (0x10000 - DI)
+    cmp si, dx                     ; width <= remaining?
+    jbe .vf_no_cross
+    ; Row crosses bank boundary
+    mov cx, dx                     ; CX = bytes before boundary
+    rep stosb                      ; Fill first part
+    ; Switch to next bank
+    mov ax, [vesa_cur_bank]
+    inc ax
+    call vesa_set_bank
+    xor di, di                     ; DI = 0 (start of new bank)
+    sub si, dx                     ; SI = remaining bytes
+    mov cx, si
+    mov al, [cs:.vf_color]
+    rep stosb
+    pop dx
+    jmp .vf_row_done
+
+.vf_no_cross:
+    mov cx, si
+    rep stosb
+    pop dx
+
+.vf_row_done:
+    pop cx                         ; Restore Y
+    pop dx                         ; Restore (unused)
+    inc cx                          ; Next row
+    dec bp
+    jnz .vf_row
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.vf_color: db 0
+.vf_x:     dw 0
+.vf_w:     dw 0
+
+; ============================================================================
 ; Welcome Box - White bordered rectangle with text
 ; ============================================================================
 
@@ -2815,6 +3007,8 @@ plot_pixel_white:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x01
+    je .vesa
     cmp byte [video_mode], 0x12
     je .mode12h
     cmp byte [video_mode], 0x13
@@ -2861,6 +3055,12 @@ plot_pixel_white:
     call mode12h_plot_pixel
     pop dx
     ret
+.vesa:
+    push dx
+    mov dl, [draw_fg_color]
+    call vesa_plot_pixel
+    pop dx
+    ret
 
 ; ============================================================================
 ; Plot a black pixel (color 0) - for inverted text on white backgrounds
@@ -2873,6 +3073,8 @@ plot_pixel_black:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x01
+    je .vesa
     cmp byte [video_mode], 0x12
     je .mode12h
     cmp byte [video_mode], 0x13
@@ -2915,6 +3117,12 @@ plot_pixel_black:
     call mode12h_plot_pixel
     pop dx
     ret
+.vesa:
+    push dx
+    xor dl, dl
+    call vesa_plot_pixel
+    pop dx
+    ret
 
 ; ============================================================================
 ; Plot a pixel using XOR with color 3 (white) - for mouse cursor
@@ -2928,6 +3136,8 @@ plot_pixel_xor:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x01
+    je .vesa
     cmp byte [video_mode], 0x12
     je .mode12h
     cmp byte [video_mode], 0x13
@@ -2963,6 +3173,28 @@ plot_pixel_xor:
     ret
 .mode12h:
     jmp mode12h_xor_pixel              ; Tail call (preserves all regs)
+.vesa:
+    ; VESA XOR: compute bank, read-xor-write
+    push ax
+    push bx
+    push di
+    push dx
+    mov ax, bx                     ; AX = Y
+    push dx
+    mov dx, 640
+    mul dx                          ; DX:AX = Y * 640
+    add ax, cx
+    adc dx, 0
+    mov di, ax
+    mov ax, dx
+    pop dx
+    call vesa_set_bank
+    xor byte [es:di], 0xFF
+    pop dx
+    pop di
+    pop bx
+    pop ax
+    ret
 
 ; ============================================================================
 ; Mouse Cursor Sprite (XOR-based)
@@ -2977,6 +3209,8 @@ CURSOR_WIDTH    equ 8
 ; Color cursor: 2bpp, 14 rows, white outline + cyan fill
 cursor_xor_sprite:
     pusha
+    cmp byte [cs:video_mode], 0x01
+    je .mode12h_cursor             ; VESA: share per-pixel XOR cursor path
     cmp byte [cs:video_mode], 0x12
     je .mode12h_cursor
     cmp byte [cs:video_mode], 0x13
@@ -4842,7 +5076,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2100 - ($ - $$) db 0
+times 0x2200 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5207,6 +5441,8 @@ plot_pixel_color:
     jae .ppc_out
     cmp bx, [screen_height]
     jae .ppc_out
+    cmp byte [video_mode], 0x01
+    je .ppc_vesa
     cmp byte [video_mode], 0x12
     je .ppc_mode12h
     cmp byte [video_mode], 0x13
@@ -5252,6 +5488,8 @@ plot_pixel_color:
     ret
 .ppc_mode12h:
     jmp mode12h_plot_pixel             ; Tail call (preserves all regs)
+.ppc_vesa:
+    jmp vesa_plot_pixel                ; Tail call (preserves all regs)
 
 ; ============================================================================
 ; gfx_draw_string_wrap - Draw string with word wrapping (API 50)
@@ -7137,6 +7375,8 @@ gfx_clear_area_stub:
     test si, si
     jz .early_ret
 
+    cmp byte [video_mode], 0x01
+    je .vesa_clear
     cmp byte [video_mode], 0x12
     je .mode12h_clear
     cmp byte [video_mode], 0x13
@@ -7229,6 +7469,22 @@ gfx_clear_area_stub:
     dec byte [cursor_locked]
     call mouse_cursor_show
 .early_ret:
+    ret
+
+.vesa_clear:
+    ; VESA: use vesa_fill_rect with color 0
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    mov ax, 0xA000
+    mov es, ax
+    xor al, al
+    call vesa_fill_rect
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 .mode12h_clear:
@@ -12795,6 +13051,8 @@ gfx_draw_icon_stub:
     mov ax, [video_segment]
     mov es, ax
     ; Check video mode before changing DS
+    cmp byte [video_mode], 0x01
+    je .icon_mode12h             ; VESA: share per-pixel icon path
     cmp byte [video_mode], 0x12
     je .icon_mode12h
     cmp byte [video_mode], 0x13
@@ -13228,6 +13486,10 @@ gfx_fill_color:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    ; VESA fast path: banked fill
+    cmp byte [video_mode], 0x01
+    je .gfc_vesa
+
     ; Mode 12h fast path: planar fill
     cmp byte [video_mode], 0x12
     je .gfc_mode12h
@@ -13307,9 +13569,15 @@ gfx_fill_color:
     jnz .gfc_srow
     jmp .gfc_cursor_done            ; Prevent fall-through to VGA path
 
+.gfc_vesa:
+    ; VESA: banked fill
+    mov si, bp                     ; Restore SI = height for vesa_fill_rect
+    mov al, [.fill_color]
+    call vesa_fill_rect             ; BX=X, CX=Y, DX=W, SI=H, AL=color
+    jmp .gfc_cursor_done
+
 .gfc_mode12h:
     ; Mode 12h: use planar fill helper
-    ; BX=X, CX=Y, DX=width, BP=height (SI was moved to BP earlier)
     mov si, bp                     ; Restore SI = height for mode12h_fill_rect
     mov al, [.fill_color]
     call mode12h_fill_rect          ; BX=X, CX=Y, DX=W, SI=H, AL=color
@@ -15657,6 +15925,8 @@ set_video_mode:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    cmp al, 0x01
+    je .svm_try_vesa
     cmp al, 0x12
     je .svm_try_mode12h
     cmp al, 0x13
@@ -15735,6 +16005,58 @@ set_video_mode:
     mov byte [screen_bpp], 4
     mov word [screen_pitch], 80
     mov byte [widget_style], 1
+    jmp .svm_setup
+
+.svm_try_vesa:
+    ; Query VESA mode 0x101 (640x480x256) info
+    push es
+    push di
+    mov ax, 0x9000
+    mov es, ax
+    xor di, di                     ; ES:DI = 0x9000:0000 (scratch buffer)
+    mov ax, 0x4F01                 ; VESA: Get Mode Info
+    mov cx, 0x0101                 ; Mode 0x101 = 640x480x256
+    int 0x10
+    cmp ax, 0x004F                 ; Success?
+    pop di
+    pop es
+    jne .svm_vesa_fail
+    ; Check mode attributes bit 0 (mode supported)
+    push ds
+    mov ax, 0x9000
+    mov ds, ax
+    test byte [0x0000], 1          ; Mode attributes bit 0
+    pop ds
+    jz .svm_vesa_fail
+    ; Save window granularity (offset 4 in mode info)
+    push ds
+    mov ax, 0x9000
+    mov ds, ax
+    mov ax, [0x0004]               ; Window granularity in KB
+    pop ds
+    mov [vesa_gran], ax
+    ; Set VESA mode 0x101
+    push ax
+    mov ax, 0x4F02
+    mov bx, 0x0101                 ; Mode 0x101
+    int 0x10
+    cmp ax, 0x004F
+    pop ax
+    jne .svm_vesa_fail
+    ; VESA mode set successfully
+    mov byte [video_mode], 0x01    ; Internal marker for VESA
+    mov word [video_segment], 0xA000
+    mov word [screen_width], 640
+    mov word [screen_height], 480
+    mov byte [screen_bpp], 8
+    mov word [screen_pitch], 640
+    mov byte [widget_style], 1
+    mov word [vesa_cur_bank], 0xFFFF  ; Invalidate bank cache
+    jmp .svm_setup
+
+.svm_vesa_fail:
+    ; VESA failed, try Mode 12h
+    jmp .svm_try_mode12h
 
 .svm_setup:
     call setup_graphics_post_mode
@@ -16371,6 +16693,8 @@ gfx_scroll_area:
     mov [cs:.sa_h], si
     mov [cs:.sa_scroll], di
 
+    cmp byte [cs:video_mode], 0x01
+    je .sa_vesa
     cmp byte [cs:video_mode], 0x12
     je .sa_mode12h
     cmp byte [cs:video_mode], 0x13
@@ -16528,6 +16852,111 @@ gfx_scroll_area:
     pop cx
     dec cx
     jnz .sa_clear_all_loop
+
+.sa_vesa:
+    ; VESA scroll: row-by-row copy with bank switching, then clear strip
+    ; For each row: compute 32-bit src/dst offsets, set bank, movsb
+    ; If src and dst are in same bank, direct movsb; otherwise per-byte
+    mov ax, [cs:.sa_h]
+    sub ax, [cs:.sa_scroll]
+    test ax, ax
+    jle .sa_vesa_clear_all
+
+    mov cx, ax                      ; CX = rows to copy
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax
+    add ax, [cs:.sa_scroll]
+    mov [cs:.sa_src_y], ax
+
+.sa_vesa_copy:
+    push cx
+    ; Compute source 32-bit offset: src_y * 640 + x
+    mov ax, [cs:.sa_src_y]
+    mov cx, 640
+    mul cx                          ; DX:AX = src_y * 640
+    add ax, [cs:.sa_x]
+    adc dx, 0
+    mov [cs:.sa_vesa_sbank], dx
+    mov [cs:.sa_vesa_soff], ax
+
+    ; Compute dest 32-bit offset: dst_y * 640 + x
+    mov ax, [cs:.sa_dst_y]
+    mov cx, 640
+    mul cx
+    add ax, [cs:.sa_x]
+    adc dx, 0
+    mov [cs:.sa_vesa_dbank], dx
+    mov [cs:.sa_vesa_doff], ax
+
+    ; Check if src and dst in same bank
+    mov ax, [cs:.sa_vesa_sbank]
+    cmp ax, [cs:.sa_vesa_dbank]
+    jne .sa_vesa_cross
+
+    ; Same bank: set bank and direct movsb
+    call vesa_set_bank
+    mov si, [cs:.sa_vesa_soff]
+    mov di, [cs:.sa_vesa_doff]
+    mov cx, [cs:.sa_w]
+    push ds
+    push es
+    pop ds                          ; DS = ES = 0xA000
+    rep movsb
+    pop ds
+    jmp .sa_vesa_next
+
+.sa_vesa_cross:
+    ; Different banks: per-byte read src, write dst
+    mov cx, [cs:.sa_w]
+    mov si, [cs:.sa_vesa_soff]
+    mov di, [cs:.sa_vesa_doff]
+.sa_vc_byte:
+    ; Set source bank, read byte
+    push ax
+    mov ax, [cs:.sa_vesa_sbank]
+    call vesa_set_bank
+    pop ax
+    mov al, [es:si]
+    ; Set dest bank, write byte
+    push ax
+    mov ax, [cs:.sa_vesa_dbank]
+    call vesa_set_bank
+    pop ax
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jnz .sa_vc_byte
+
+.sa_vesa_next:
+    inc word [cs:.sa_src_y]
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_vesa_copy
+
+    ; Clear exposed strip
+    mov bx, [cs:.sa_x]
+    mov cx, [cs:.sa_dst_y]
+    mov dx, [cs:.sa_w]
+    mov si, [cs:.sa_scroll]
+    xor al, al
+    call vesa_fill_rect
+    jmp .sa_done
+
+.sa_vesa_clear_all:
+    mov bx, [cs:.sa_x]
+    mov cx, [cs:.sa_y]
+    mov dx, [cs:.sa_w]
+    mov si, [cs:.sa_h]
+    xor al, al
+    call vesa_fill_rect
+    jmp .sa_done
+
+.sa_vesa_sbank: dw 0
+.sa_vesa_soff:  dw 0
+.sa_vesa_dbank: dw 0
+.sa_vesa_doff:  dw 0
 
 .sa_mode12h:
     ; Mode 12h scroll: use write mode 1 for copy (latch pass-through)
@@ -16772,6 +17201,8 @@ screen_height:  dw 200                 ; Current screen height in pixels
 screen_bpp:     db 2                   ; Bits per pixel (2=CGA, 4=Mode12h, 8=VGA13h/VESA)
 screen_pitch:   dw 80                  ; Bytes per scanline (80=CGA, 320=VGA13h, 640=VESA)
 widget_style:   db 0                   ; 0=flat (CGA), 1=3D beveled (VGA modes)
+vesa_gran:      dw 64                  ; VESA window granularity in KB
+vesa_cur_bank:  dw 0xFFFF              ; Current VESA bank (0xFFFF = invalid/unset)
 
 ; Color theme variables (Build 208)
 draw_fg_color:  db 3                    ; Current foreground drawing color (0-3 CGA, 0-255 VGA)
