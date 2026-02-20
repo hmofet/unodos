@@ -3304,7 +3304,7 @@ cursor_xor_sprite:
     ret
 
 .mode12h_cursor:
-    ; Mode 12h cursor: use plot_pixel_xor per visible pixel
+    ; Mode 12h/VESA cursor: per-pixel XOR, 2x scaled in 640x480
     mov bp, 14
     mov si, cursor_bitmap_color
 .m12c_row:
@@ -3321,16 +3321,35 @@ cursor_xor_sprite:
     jz .m12c_skip_pix
     cmp cx, [screen_width]
     jae .m12c_skip_pix
-    call plot_pixel_xor             ; CX=X, BX=Y, ES=video seg
+    call plot_pixel_xor             ; Top-left
+    cmp word [screen_width], 640
+    jb .m12c_skip_pix
+    inc cx
+    call plot_pixel_xor             ; Top-right
+    dec cx
+    inc bx
+    call plot_pixel_xor             ; Bottom-left
+    inc cx
+    call plot_pixel_xor             ; Bottom-right
+    dec cx
+    dec bx
 .m12c_skip_pix:
     shl ax, 2
     inc cx
+    cmp word [screen_width], 640
+    jb .m12c_noscale_x
+    inc cx                          ; Extra advance for 2x
+.m12c_noscale_x:
     dec di
     jnz .m12c_col
 .m12c_skip_row:
     pop cx
     add si, 2
     inc bx
+    cmp word [screen_width], 640
+    jb .m12c_noscale_y
+    inc bx                          ; Extra row advance for 2x
+.m12c_noscale_y:
     dec bp
     jnz .m12c_row
     popa
@@ -13150,12 +13169,30 @@ gfx_draw_icon_stub:
     push ax
     mov ax, 0x1000
     mov ds, ax
-    call plot_pixel_color
+    call plot_pixel_color           ; Top-left pixel
+    ; 2x scale: draw 2x2 block (DS=0x1000 here, screen_width is accessible)
+    cmp word [screen_width], 640
+    jb .im12_no_scale_pp
+    inc cx                          ; X+1
+    call plot_pixel_color           ; Top-right pixel
+    dec cx                          ; Restore X
+    inc bx                          ; Y+1
+    call plot_pixel_color           ; Bottom-left pixel
+    inc cx                          ; X+1
+    call plot_pixel_color           ; Bottom-right pixel
+    dec cx
+    dec bx                          ; Restore Y
+.im12_no_scale_pp:
     pop ax
     pop ds
     xchg bx, cx                    ; Restore BX=X, CX=Y
     shl ah, 2
-    inc bx                          ; Next X pixel
+    ; Advance X by 2 if scaling, 1 if not
+    inc bx
+    cmp word [cs:screen_width], 640
+    jb .im12_noadv
+    inc bx                          ; Extra pixel advance for 2x
+.im12_noadv:
     dec di
     jnz .im12_pixel
     pop di
@@ -13164,7 +13201,12 @@ gfx_draw_icon_stub:
     pop dx
     pop bx                          ; Restore original X
     pop cx                          ; Restore Y
-    inc cx                          ; Next row
+    ; Advance Y by 2 if scaling, 1 if not
+    inc cx
+    cmp word [cs:screen_width], 640
+    jb .im12_noyadv
+    inc cx
+.im12_noyadv:
     dec dx
     jnz .im12_row
     jmp .icon_done
