@@ -2691,6 +2691,10 @@ mouse_hittest_titlebar:
     add ax, window_table
     mov di, ax
 
+    ; Skip titlebar check for frameless windows
+    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_TITLE
+    jz .no_hit
+
     mov ax, [di + WIN_OFF_Y]
     add ax, WIN_TITLEBAR_HEIGHT
     cmp dx, ax                      ; mouse_y < window_y + titlebar_height?
@@ -13908,6 +13912,10 @@ win_draw_stub:
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .invalid
 
+    ; Skip drawing for frameless windows (no title, no border)
+    test byte [bx + WIN_OFF_FLAGS], WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    jz .nodraw
+
     mov [.win_ptr], bx
 
     ; Get window dimensions
@@ -14042,6 +14050,7 @@ win_draw_stub:
     call gfx_draw_rect_stub
     pop bx
 
+.nodraw:
     clc
     jmp .done
 
