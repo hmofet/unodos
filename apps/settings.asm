@@ -60,7 +60,9 @@ API_FS_WRITE            equ 46
 API_FS_DELETE           equ 47
 API_SET_THEME           equ 54
 API_GET_THEME           equ 55
+API_GET_TICK            equ 63
 API_FILLED_RECT_COLOR   equ 67
+API_DELAY_TICKS         equ 73
 API_GET_RTC_TIME        equ 72
 API_SET_RTC_TIME        equ 81
 API_GET_SCREEN_INFO     equ 82
@@ -74,7 +76,7 @@ EVENT_WIN_REDRAW        equ 6
 WIN_X       equ 10
 WIN_Y       equ 10
 WIN_W       equ 300
-WIN_H       equ 180
+WIN_H       equ 194
 
 ; Color swatch layout
 SW_SIZE     equ 10                  ; Swatch width/height
@@ -89,9 +91,10 @@ CLR_Y_WIN   equ 110                 ; Window color row Y
 
 ; Display mode section (left column, below colors)
 DISP_Y_LBL  equ 126                ; "Display:" label Y
-DISP_Y_RAD  equ 138                ; CGA/VGA radio buttons Y (side by side)
+DISP_Y_RAD1 equ 138                ; First row: CGA / VGA320
+DISP_Y_RAD2 equ 150                ; Second row: VGA640 / VESA
 
-BTN_Y       equ 152                 ; Button row Y
+BTN_Y       equ 164                 ; Button row Y (moved down for 4 radios)
 BTN_DEF_X   equ 116                 ; Defaults button X
 BTN_DEF_W   equ 72                  ; Defaults button width
 
@@ -267,9 +270,9 @@ entry:
     jnz .defaults
 
     ; --- Display mode radio hit tests ---
-    ; CGA radio
+    ; CGA radio (row 1, left)
     mov bx, 4
-    mov cx, DISP_Y_RAD
+    mov cx, DISP_Y_RAD1
     mov dx, 56
     mov si, 12
     mov ah, API_HIT_TEST
@@ -277,15 +280,35 @@ entry:
     test al, al
     jnz .select_cga
 
-    ; VGA radio
+    ; VGA radio (row 1, right)
     mov bx, 64
-    mov cx, DISP_Y_RAD
+    mov cx, DISP_Y_RAD1
     mov dx, 56
     mov si, 12
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .select_vga
+
+    ; VGA 640 radio (row 2, left)
+    mov bx, 4
+    mov cx, DISP_Y_RAD2
+    mov dx, 56
+    mov si, 12
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .select_640
+
+    ; VESA radio (row 2, right)
+    mov bx, 64
+    mov cx, DISP_Y_RAD2
+    mov dx, 56
+    mov si, 12
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .select_vesa
 
     ; --- Time control hit tests ---
     ; H+ button
@@ -384,6 +407,16 @@ entry:
     call draw_ui
     jmp .main_loop
 
+.select_640:
+    mov byte [cs:cur_video_mode], 0x12
+    call draw_ui
+    jmp .main_loop
+
+.select_vesa:
+    mov byte [cs:cur_video_mode], 0x01
+    call draw_ui
+    jmp .main_loop
+
 .defaults:
     mov byte [cs:cur_font], 1
     mov byte [cs:cur_text_clr], 3
@@ -422,14 +455,12 @@ entry:
     jmp .main_loop
 
 .apply_all:
-    call apply_settings
-    call save_settings
+    call apply_with_revert
     call draw_ui
     jmp .main_loop
 
 .ok_and_close:
-    call apply_settings
-    call save_settings
+    call apply_with_revert
     ; Fall through to exit
 
 .exit_ok:
@@ -522,7 +553,7 @@ draw_ui:
     mov bx, 0
     mov cx, 0
     mov dx, 296
-    mov si, 162
+    mov si, 178
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -669,10 +700,10 @@ draw_ui:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; CGA radio
+    ; CGA radio (row 1, left)
     mov si, lbl_cga
     mov bx, 4
-    mov cx, DISP_Y_RAD
+    mov cx, DISP_Y_RAD1
     xor al, al
     cmp byte [cs:cur_video_mode], 0x04
     jne .rd1
@@ -681,15 +712,39 @@ draw_ui:
     mov ah, API_DRAW_RADIO
     int 0x80
 
-    ; VGA radio
+    ; VGA radio (row 1, right)
     mov si, lbl_vga
     mov bx, 64
-    mov cx, DISP_Y_RAD
+    mov cx, DISP_Y_RAD1
     xor al, al
     cmp byte [cs:cur_video_mode], 0x13
     jne .rd2
     mov al, 1
 .rd2:
+    mov ah, API_DRAW_RADIO
+    int 0x80
+
+    ; VGA 640 radio (row 2, left)
+    mov si, lbl_vga640
+    mov bx, 4
+    mov cx, DISP_Y_RAD2
+    xor al, al
+    cmp byte [cs:cur_video_mode], 0x12
+    jne .rd3
+    mov al, 1
+.rd3:
+    mov ah, API_DRAW_RADIO
+    int 0x80
+
+    ; VESA radio (row 2, right)
+    mov si, lbl_vesa
+    mov bx, 64
+    mov cx, DISP_Y_RAD2
+    xor al, al
+    cmp byte [cs:cur_video_mode], 0x01
+    jne .rd4
+    mov al, 1
+.rd4:
     mov ah, API_DRAW_RADIO
     int 0x80
 
@@ -852,6 +907,202 @@ apply_settings:
 
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
+; Apply settings with revert countdown if video mode changes
+; If mode unchanged, applies immediately and saves.
+; If mode changed, shows 10-second countdown with Keep/Revert buttons.
+; ============================================================================
+apply_with_revert:
+    pusha
+
+    ; Check if video mode is actually changing
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    mov [cs:saved_video_mode], al       ; Save current mode
+    cmp al, [cs:cur_video_mode]
+    jne .awr_mode_changing
+
+    ; No mode change — just apply and save
+    call apply_settings
+    call save_settings
+    popa
+    ret
+
+.awr_mode_changing:
+    ; Mode is changing — apply with countdown
+    call apply_settings                  ; Switches mode + font + colors
+
+    ; Initialize countdown
+    mov byte [cs:revert_countdown], 10
+    mov byte [cs:revert_prev_btn], 0
+    call update_countdown_str
+    call draw_countdown_ui
+
+    mov word [cs:revert_ticks], 0
+
+.awr_poll:
+    sti
+    mov cx, 1                           ; Wait 1 tick (~55ms)
+    mov ah, API_DELAY_TICKS
+    int 0x80
+
+    ; Check for WIN_REDRAW events
+    mov ah, API_EVENT_GET
+    int 0x80
+    jc .awr_check_mouse
+    cmp al, EVENT_WIN_REDRAW
+    jne .awr_check_mouse
+    call draw_countdown_ui
+
+.awr_check_mouse:
+    mov ah, API_MOUSE_STATE
+    int 0x80
+    test dl, 1
+    jz .awr_mouse_up
+    cmp byte [cs:revert_prev_btn], 0
+    jne .awr_tick
+    mov byte [cs:revert_prev_btn], 1
+
+    ; Hit test "Keep" button (at 40, 60, w=60, h=14)
+    mov bx, 40
+    mov cx, 60
+    mov dx, 60
+    mov si, 14
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .awr_keep
+
+    ; Hit test "Revert" button (at 110, 60, w=60, h=14)
+    mov bx, 110
+    mov cx, 60
+    mov dx, 60
+    mov si, 14
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .awr_revert
+    jmp .awr_tick
+
+.awr_mouse_up:
+    mov byte [cs:revert_prev_btn], 0
+
+.awr_tick:
+    inc word [cs:revert_ticks]
+    cmp word [cs:revert_ticks], 18      ; 18 ticks ≈ 1 second
+    jb .awr_poll
+    mov word [cs:revert_ticks], 0
+    dec byte [cs:revert_countdown]
+    jz .awr_revert
+    call update_countdown_str
+    call draw_countdown_ui
+    jmp .awr_poll
+
+.awr_keep:
+    ; User confirmed — save settings to disk
+    call save_settings
+    popa
+    ret
+
+.awr_revert:
+    ; Timer expired or user clicked Revert — restore old mode
+    mov al, [cs:saved_video_mode]
+    mov [cs:cur_video_mode], al
+    mov ah, API_SET_VIDEO_MODE
+    int 0x80
+    ; Re-apply font and colors (mode switch resets draw colors)
+    mov al, [cs:cur_font]
+    mov ah, API_SET_FONT
+    int 0x80
+    mov al, [cs:cur_text_clr]
+    mov bl, [cs:cur_bg_clr]
+    mov cl, [cs:cur_win_clr]
+    mov ah, API_SET_THEME
+    int 0x80
+    popa
+    ret
+
+; ============================================================================
+; Draw the revert countdown UI inside the Settings window
+; ============================================================================
+draw_countdown_ui:
+    pusha
+
+    ; Clear content area
+    mov bx, 0
+    mov cx, 0
+    mov dx, 296
+    mov si, 178
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; "Keep these settings?"
+    mov bx, 20
+    mov cx, 14
+    mov si, lbl_keep_q
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; "Reverting in NN..."
+    mov bx, 20
+    mov cx, 34
+    mov si, lbl_reverting
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw "Keep" button
+    mov ax, cs
+    mov es, ax
+    mov bx, 40
+    mov cx, 60
+    mov dx, 60
+    mov si, 14
+    mov di, lbl_keep_btn
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; Draw "Revert" button
+    mov ax, cs
+    mov es, ax
+    mov bx, 110
+    mov cx, 60
+    mov dx, 60
+    mov si, 14
+    mov di, lbl_revert_btn
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    popa
+    ret
+
+; ============================================================================
+; Update the countdown digit(s) in the reverting string
+; ============================================================================
+update_countdown_str:
+    push ax
+    push bx
+
+    mov al, [cs:revert_countdown]
+    xor ah, ah
+    cmp al, 10
+    jb .ucs_single
+    ; Two digits (10)
+    mov byte [cs:countdown_d10], '1'
+    sub al, 10
+    add al, '0'
+    mov [cs:countdown_d1], al
+    jmp .ucs_done
+.ucs_single:
+    mov byte [cs:countdown_d10], ' '
+    add al, '0'
+    mov [cs:countdown_d1], al
+.ucs_done:
     pop bx
     pop ax
     ret
@@ -1154,6 +1405,15 @@ lbl_m_dn:           db 'M-', 0
 lbl_display:        db 'Display:', 0
 lbl_cga:            db 'CGA', 0
 lbl_vga:            db 'VGA', 0
+lbl_vga640:         db 'VGA640', 0
+lbl_vesa:           db 'SVGA', 0
+lbl_keep_q:         db 'Keep these settings?', 0
+lbl_reverting:      db 'Reverting in '
+countdown_d10:      db '1'
+countdown_d1:       db '0'
+                    db '...', 0
+lbl_keep_btn:       db 'Keep', 0
+lbl_revert_btn:     db 'Revert', 0
 ; ============================================================================
 ; Variables
 ; ============================================================================
@@ -1171,8 +1431,12 @@ swatch_row:     dw 0                ; Current row in draw_one_swatch
 swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
 cfg_buf:        times 6 db 0        ; Settings buffer (magic + 5 settings bytes)
-cur_video_mode: db 0x04             ; Current video mode (0x04=CGA, 0x13=VGA)
+cur_video_mode: db 0x04             ; Current video mode (0x04=CGA, 0x13=VGA, 0x12=Mode12h, 0x01=VESA)
 cfg_mount:      db 0                ; Mount handle for settings save
+saved_video_mode: db 0              ; Previous mode for revert
+revert_countdown: db 10             ; Countdown seconds remaining
+revert_ticks:   dw 0                ; Tick counter within current second
+revert_prev_btn: db 0               ; Mouse button state for countdown
 cur_hours:      db 0                ; Current hours (BCD)
 cur_minutes:    db 0                ; Current minutes (BCD)
 cur_seconds:    db 0                ; Current seconds (BCD)

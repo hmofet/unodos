@@ -1765,68 +1765,24 @@ load_settings:
     jae .ls_done
     call gfx_set_font                  ; AL = font index, sets all metrics
 
-    ; Apply colors — mode-aware masking
+    ; Apply colors (CGA plotter naturally uses low 2 bits, no masking needed)
     mov al, [.ls_buf + 2]
-    cmp byte [video_mode], 0x13
-    je .ls_no_mask1
-    and al, 0x03                        ; CGA: mask to 4 colors
-.ls_no_mask1:
     mov [text_color], al
     mov [draw_fg_color], al
     mov al, [.ls_buf + 3]
-    cmp byte [video_mode], 0x13
-    je .ls_no_mask2
-    and al, 0x03
-.ls_no_mask2:
     mov [desktop_bg_color], al
     mov [draw_bg_color], al
     mov al, [.ls_buf + 4]
-    cmp byte [video_mode], 0x13
-    je .ls_no_mask3
-    and al, 0x03
-.ls_no_mask3:
     mov [win_color], al
 
-    ; Apply video mode if VGA requested (byte 5 of SETTINGS.CFG)
-    ; This is done here (not at early boot) to avoid a double fat16_mount
-    ; which fails on some USB flash drives.
+    ; Apply video mode (byte 5: 0x04=CGA, 0x13=VGA, 0x12=Mode12h, 0x01=VESA)
     mov al, [.ls_buf + 5]
-    cmp al, 0x13
-    jne .ls_done                        ; Not VGA, stay in CGA
-    cmp byte [video_mode], 0x13
-    je .ls_done                         ; Already in VGA
-
-    ; Try VGA mode 13h
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
-    xor ax, ax
-    mov al, 0x13
-    int 0x10
-    ; Verify mode was actually set (some hardware lacks VGA)
-    mov ah, 0x0F
-    int 0x10
-    and al, 0x7F                        ; Mask high bit (some BIOSes set it)
-    cmp al, 0x13
-    je .ls_vga_ok
-    ; VGA failed — fall back to CGA
-    xor ax, ax
-    mov al, 0x04
-    int 0x10
-    dec byte [cursor_locked]
-    call mouse_cursor_show
-    jmp .ls_done
-
-.ls_vga_ok:
-    mov byte [video_mode], 0x13
-    mov word [video_segment], 0xA000
-    call setup_graphics_post_mode
-    ; Reinit draw colors from settings (setup_graphics_post_mode clears screen)
-    mov al, [text_color]
-    mov [draw_fg_color], al
-    mov al, [desktop_bg_color]
-    mov [draw_bg_color], al
-    dec byte [cursor_locked]
-    call mouse_cursor_show
+    cmp al, 0x04
+    je .ls_done                         ; CGA = default at boot, no switch
+    cmp al, [video_mode]
+    je .ls_done                         ; Already in requested mode
+    ; set_video_mode handles all modes with fallback chain
+    call set_video_mode
 
     jmp .ls_done
 
