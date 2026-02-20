@@ -250,7 +250,7 @@ find_images() {
         IMG_VERSIONS[$IMG_COUNT]="$version"
         IMG_BUILDS[$IMG_COUNT]="$build"
         IMG_DESCS[$IMG_COUNT]="$desc"
-        (( IMG_COUNT++ ))
+        IMG_COUNT=$(( IMG_COUNT + 1 ))
     done
 }
 
@@ -286,7 +286,7 @@ find_drives() {
             DRV_TRANS[$DRV_COUNT]="floppy"
             DRV_REMOVABLE[$DRV_COUNT]=1
             DRV_TYPES[$DRV_COUNT]="Floppy"
-            (( DRV_COUNT++ ))
+            DRV_COUNT=$(( DRV_COUNT + 1 ))
         fi
     done
 
@@ -329,7 +329,7 @@ find_drives() {
         DRV_TRANS[$DRV_COUNT]="$tran"
         DRV_REMOVABLE[$DRV_COUNT]="$rm"
         DRV_TYPES[$DRV_COUNT]="Disk"
-        (( DRV_COUNT++ ))
+        DRV_COUNT=$(( DRV_COUNT + 1 ))
     done < <(lsblk -dPo NAME,SIZE,TYPE,TRAN,MODEL,RM 2>/dev/null)
 }
 
@@ -536,13 +536,13 @@ screen_image_select() {
         case "$key" in
             UP)
                 if (( img_sel > 0 )); then
-                    (( img_sel-- ))
+                    img_sel=$(( img_sel - 1 ))
                     render_image_list $img_sel $list_top
                 fi
                 ;;
             DOWN)
                 if (( img_sel < IMG_COUNT - 1 )); then
-                    (( img_sel++ ))
+                    img_sel=$(( img_sel + 1 ))
                     render_image_list $img_sel $list_top
                 fi
                 ;;
@@ -643,13 +643,13 @@ screen_drive_select() {
         case "$key" in
             UP)
                 if (( drv_sel > 0 )); then
-                    (( drv_sel-- ))
+                    drv_sel=$(( drv_sel - 1 ))
                     render_drive_list $drv_sel $list_top "$image_size"
                 fi
                 ;;
             DOWN)
                 if (( drv_sel < DRV_COUNT - 1 )); then
-                    (( drv_sel++ ))
+                    drv_sel=$(( drv_sel + 1 ))
                     render_drive_list $drv_sel $list_top "$image_size"
                 fi
                 ;;
@@ -1122,7 +1122,7 @@ if [[ -n "$ARG_DEVICE" ]]; then
         DRV_REMOVABLE[$DRV_COUNT]=0
         DRV_TYPES[$DRV_COUNT]="Disk"
         SELECTED_DEVICE_IDX=$DRV_COUNT
-        (( DRV_COUNT++ ))
+        DRV_COUNT=$(( DRV_COUNT + 1 ))
     fi
 fi
 
