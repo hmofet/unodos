@@ -1570,13 +1570,6 @@ auto_load_launcher:
     push dx
     push si
 
-    ; Boot diagnostic: 'F' = about to load launcher from filesystem
-    mov bx, 4
-    mov cx, 24
-    mov word [caller_ds], 0x1000
-    mov si, .diag_F
-    call gfx_draw_string_stub
-
     ; Load LAUNCHER.BIN from boot drive
     mov ax, 0x1000
     mov ds, ax
@@ -1586,33 +1579,12 @@ auto_load_launcher:
     call app_load_stub
     jc .fail_load
 
-    ; Boot diagnostic: 'L' = launcher loaded OK
-    mov word [caller_ds], 0x1000
-    mov bx, 20
-    mov cx, 24
-    mov si, .diag_L
-    call gfx_draw_string_stub
-
     ; Load saved settings (font + colors) from SETTINGS.CFG if it exists
     call load_settings
-
-    ; Boot diagnostic: 'S' = settings loaded, starting task
-    mov word [caller_ds], 0x1000
-    mov bx, 36
-    mov cx, 24
-    mov si, .diag_S
-    call gfx_draw_string_stub
 
     ; Start launcher as a cooperative task (non-blocking)
     call app_start_stub
     jc .fail_start
-
-    ; Boot diagnostic: 'R' = about to enter scheduler (run)
-    mov word [caller_ds], 0x1000
-    mov bx, 52
-    mov cx, 24
-    mov si, .diag_R
-    call gfx_draw_string_stub
 
     ; Enter scheduler - switch to the launcher task
     mov byte [current_task], 0xFF   ; Kernel is not a task
@@ -1692,10 +1664,6 @@ auto_load_launcher:
 .err_code_str:  db '?', 0
 .err_start_msg: db 'ERR: app_start failed', 0
 .err_sched_msg: db 'ERR: scheduler failed', 0
-.diag_F: db 'F', 0
-.diag_L: db 'L', 0
-.diag_S: db 'S', 0
-.diag_R: db 'R', 0
 
 ; ============================================================================
 ; Load saved settings from SETTINGS.CFG on boot drive
@@ -12429,6 +12397,10 @@ gfx_fill_color:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    ; VGA fast path: linear framebuffer, 1 byte per pixel
+    cmp byte [video_mode], 0x13
+    je .gfc_vga
+
     ; Check for byte-aligned fast path (BX % 4 == 0 AND DX % 4 == 0)
     mov ax, bx
     and ax, 3
@@ -12498,6 +12470,33 @@ gfx_fill_color:
     inc bx                          ; Next Y
     dec bp
     jnz .gfc_srow
+
+.gfc_vga:
+    ; VGA: linear framebuffer, 1 byte per pixel, rep stosb per row
+    ; BX=X, CX=Y, DX=width, BP=height
+    mov al, [.fill_color]
+.gfc_vga_row:
+    push cx                         ; Save Y
+    push bx                         ; Save X
+    push dx                         ; Save width
+    ; Calculate offset: DI = Y * 320 + X
+    mov ax, cx
+    shl ax, 6                       ; Y * 64
+    mov di, ax
+    mov ax, cx
+    shl ax, 8                       ; Y * 256
+    add di, ax                      ; DI = Y * 320
+    add di, bx                      ; DI = Y * 320 + X
+    mov cx, dx                      ; CX = width (rep count)
+    mov al, [.fill_color]
+    rep stosb                       ; Fill width bytes with color
+    pop dx                          ; Restore width
+    pop bx                          ; Restore X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next Y
+    dec bp
+    jnz .gfc_vga_row
+    jmp .gfc_cursor_done
 
 .gfc_cursor_done:
     dec byte [cursor_locked]
