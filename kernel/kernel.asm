@@ -162,6 +162,8 @@ int_80_handler:
     ; If draw_context is active (valid window handle) and function is a
     ; drawing API (0-6), translate BX/CX from window-relative to absolute
     ; screen coordinates. Apps draw at (0,0) = top-left of content area.
+    ; BX/CX are restored after the API call so apps keep their original coords.
+    mov byte [_did_translate], 0    ; Clear translation flag
     cmp byte [draw_context], 0xFF
     je .no_translate                ; No active context
     cmp byte [draw_context], WIN_MAX_COUNT
@@ -194,6 +196,13 @@ int_80_handler:
     je .do_translate                ; API 94: gfx_draw_sprite
     jmp .no_translate               ; Others: skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
+
+    ; Save original BX/CX so we can restore them after the API call.
+    ; Without this, apps that reuse BX/CX across drawing calls get
+    ; cumulative translation offsets (e.g. Music staff lines drifting).
+    mov [_save_bx], bx
+    mov [_save_cx], cx
+    mov byte [_did_translate], 1
 
     ; Translate: BX += content_x, CX += content_y
     push si
@@ -270,6 +279,14 @@ int80_return_point:
     ; Function returned - preserve CF from function in return FLAGS
     ; Stack: [caller's DS] [IP] [CS] [FLAGS]
     ; IMPORTANT: Do NOT destroy AX - functions return values in AX!
+
+    ; Restore pre-translation BX/CX so apps keep their original coordinates.
+    ; DS is still kernel (0x1000) at this point (caller DS is on stack).
+    cmp byte [_did_translate], 0
+    je .no_coord_restore
+    mov bx, [_save_bx]
+    mov cx, [_save_cx]
+.no_coord_restore:
     pop ds                          ; Restore caller's DS
     ; Stack: [IP] [CS] [FLAGS]
     push bp
@@ -11527,7 +11544,8 @@ app_start_stub:
 
     ; Initialize per-task saved context
     mov byte [bx + APP_OFF_DRAW_CTX], 0xFF  ; No draw context
-    mov byte [bx + APP_OFF_FONT], 1         ; Default font (8x8 medium)
+    mov al, [current_font]
+    mov [bx + APP_OFF_FONT], al              ; Inherit current system font
     mov [bx + APP_OFF_CALLER_DS], cx        ; caller_ds = app seg
     mov [bx + APP_OFF_CALLER_ES], cx        ; caller_es = app seg
 
@@ -15765,6 +15783,9 @@ heap_initialized: dw 0
 syscall_func: dw 0
 caller_ds: dw 0x1000                ; Caller's DS segment (init to kernel for direct calls)
 caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for direct calls)
+_did_translate: db 0                 ; 1 if BX/CX were translated by INT 0x80
+_save_bx: dw 0                      ; Pre-translation BX (caller's original value)
+_save_cx: dw 0                      ; Pre-translation CX (caller's original value)
 
 ; Window drawing context (0xFF = no context / fullscreen, 0-15 = window handle)
 ; When active, drawing APIs (0-6) auto-translate coordinates to window-relative

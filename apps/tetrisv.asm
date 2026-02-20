@@ -36,6 +36,8 @@
 ; ============================================================================
 ; Entry point
 ; ============================================================================
+API_SET_VIDEO_MODE       equ 95
+
 entry:
     pusha
     push ds
@@ -43,6 +45,16 @@ entry:
 
     mov ax, cs
     mov ds, ax
+
+    ; Save current video mode for restore on exit
+    mov ah, 0x0F
+    int 0x10
+    mov [cs:saved_video_mode], al
+
+    ; Switch to VGA mode 13h (320x200, 256 color)
+    mov al, 0x13
+    mov ah, API_SET_VIDEO_MODE
+    int 0x80
 
     ; Save current theme colors for restore on exit
     mov ah, API_THEME_GET_COLORS
@@ -86,6 +98,10 @@ entry:
     jne .no_key_event
 
     ; DL = keycode (arrows: 128-131)
+    ; ESC works in ALL states
+    cmp dl, 27                      ; ESC?
+    je .key_quit
+
     cmp byte [cs:game_state], STATE_PLAYING
     jne .check_pause_key
 
@@ -113,6 +129,10 @@ entry:
     je .unpause_game
     cmp dl, 'P'
     je .unpause_game
+    jmp .no_key_event
+
+.key_quit:
+    mov byte [cs:quit_flag], 1
     jmp .no_key_event
 
 .move_left:
@@ -178,6 +198,11 @@ entry:
     mov bl, [cs:saved_bg_clr]
     mov cl, [cs:saved_win_clr]
     mov ah, API_THEME_SET_COLORS
+    int 0x80
+
+    ; Restore original video mode
+    mov al, [cs:saved_video_mode]
+    mov ah, API_SET_VIDEO_MODE
     int 0x80
 
     pop es
@@ -287,10 +312,11 @@ music_dur:      dw 0
 music_gap:      db 0
 sound_enabled:  db 1
 
-; Saved theme colors (restored on exit)
-saved_text_clr: db 0
-saved_bg_clr:   db 0
-saved_win_clr:  db 0
+; Saved theme colors and video mode (restored on exit)
+saved_text_clr:   db 0
+saved_bg_clr:     db 0
+saved_win_clr:    db 0
+saved_video_mode: db 0x04
 
 ; Temp variables for draw_cell
 cell_sx:        dw 0
@@ -797,12 +823,6 @@ draw_cell:
     mov [cs:cell_sx], ax
 
     ; Calculate screen Y = BOARD_Y + row * CELL_SIZE
-    xor ah, ah
-    mov al, [cs:cell_color]         ; Save color temporarily
-    push ax
-    popa                            ; Restore AX
-    ; Re-get row from stack (pusha saved BH)
-    ; Actually, we need BH which we still have
     mov al, bh
     xor ah, ah
     mov bx, CELL_SIZE
