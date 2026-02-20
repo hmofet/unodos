@@ -51,6 +51,7 @@ API_GET_TASK_INFO       equ 74
 API_GET_SCREEN_INFO     equ 82
 API_WORD_TO_STRING      equ 91
 API_BCD_TO_ASCII        equ 92
+API_GET_FONT_INFO       equ 93
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -58,12 +59,7 @@ EVENT_WIN_REDRAW        equ 6
 
 ; Window params
 WIN_X       equ 75
-WIN_Y       equ 45
 WIN_W       equ 170
-WIN_H       equ 110
-
-; Layout
-ROW_H       equ 10         ; Row height
 
 entry:
     pusha
@@ -91,11 +87,85 @@ entry:
     int 0x12
     mov [mem_kb], ax
 
+    ; --- Compute dynamic layout from font metrics ---
+    mov ah, API_GET_FONT_INFO
+    int 0x80                    ; BH=height, BL=width, CL=advance
+    mov [cs:si_font_h], bh
+    mov [cs:si_font_adv], cl
+
+    ; row_h = font_h + 2
+    movzx ax, bh
+    add ax, 2
+    mov [cs:si_row_h], ax
+
+    ; val_x = 4 + 6*advance + 4 (label column + gap)
+    movzx ax, cl
+    mov bx, 6
+    mul bx
+    add ax, 8
+    mov [cs:si_val_x], ax
+
+    ; Y positions: sequential layout with separator gaps
+    ; r0 = 2 (Version)
+    mov word [cs:si_y0], 2
+
+    ; r1 = 2 + row_h (Build)
+    mov ax, [cs:si_row_h]
+    add ax, 2
+    mov [cs:si_y1], ax
+
+    ; sep1 = 2 + 2*row_h + 2
+    mov ax, [cs:si_row_h]
+    shl ax, 1
+    add ax, 4
+    mov [cs:si_ys1], ax
+
+    ; r2 = sep1 + 4 (Boot)
+    add ax, 4
+    mov [cs:si_y2], ax
+
+    ; r3 = r2 + row_h (Video)
+    add ax, [cs:si_row_h]
+    mov [cs:si_y3], ax
+
+    ; r4 = r3 + row_h (Memory)
+    add ax, [cs:si_row_h]
+    mov [cs:si_y4], ax
+
+    ; r5 = r4 + row_h + 2 (Tasks, extra gap)
+    add ax, [cs:si_row_h]
+    add ax, 2
+    mov [cs:si_y5], ax
+
+    ; sep2 = r5 + row_h + 2
+    add ax, [cs:si_row_h]
+    add ax, 2
+    mov [cs:si_ys2], ax
+
+    ; r6 = sep2 + 4 (Time)
+    add ax, 4
+    mov [cs:si_y6], ax
+
+    ; r7 = r6 + row_h (Ticks)
+    add ax, [cs:si_row_h]
+    mov [cs:si_y7], ax
+
+    ; win_h = r7 + row_h + 6 (bottom margin)
+    add ax, [cs:si_row_h]
+    add ax, 6
+    mov [cs:si_win_h], ax
+
+    ; win_y = (200 - (win_h + 12)) / 2  (12 = titlebar + border)
+    mov bx, 188
+    sub bx, ax
+    shr bx, 1
+    mov [cs:si_win_y], bx
+
     ; --- Create window ---
     mov bx, WIN_X
-    mov cx, WIN_Y
+    mov cx, [cs:si_win_y]
     mov dx, WIN_W
-    mov si, WIN_H
+    mov si, [cs:si_win_h]
     mov ax, cs
     mov es, ax
     mov di, win_title
@@ -179,35 +249,35 @@ draw_static:
 
     ; Row 0: Version
     mov bx, 4
-    mov cx, 2
+    mov cx, [cs:si_y0]
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Row 1: Build
     mov bx, 4
-    mov cx, 12
+    mov cx, [cs:si_y1]
     mov si, str_build
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Separator line (clear a thin strip)
+    ; Separator line 1
     mov bx, 4
-    mov cx, 24
-    mov dx, 160
+    mov cx, [cs:si_ys1]
+    mov dx, WIN_W - 10
     mov si, 1
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Row 2: Boot drive
     mov bx, 4
-    mov cx, 28
+    mov cx, [cs:si_y2]
     mov si, str_boot_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Print drive type
-    mov bx, 64
-    mov cx, 28
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y2]
     test byte [boot_drive], 0x80
     jnz .boot_hd
     mov si, str_floppy
@@ -220,56 +290,47 @@ draw_static:
 
     ; Row 3: Video mode
     mov bx, 4
-    mov cx, 38
+    mov cx, [cs:si_y3]
     mov si, str_video_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Format: WIDTHxHEIGHT
+    ; Format "WIDTHxHEIGHT" into num_buf
     mov dx, [screen_w]
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov bx, 64
-    mov cx, 38
-    mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    ; "x"
-    mov bx, 100
-    mov cx, 38
-    mov si, str_x
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    ; Height
+    mov byte [cs:di], 'x'
+    inc di
     mov dx, [screen_h]
-    mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov bx, 112
-    mov cx, 38
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y3]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Row 4: Memory
     mov bx, 4
-    mov cx, 48
+    mov cx, [cs:si_y4]
     mov si, str_mem_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
+    ; Format "NNN KB" into num_buf
     mov dx, [mem_kb]
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov bx, 64
-    mov cx, 48
+    mov byte [cs:di], ' '
+    inc di
+    mov byte [cs:di], 'K'
+    inc di
+    mov byte [cs:di], 'B'
+    inc di
+    mov byte [cs:di], 0
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y4]
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    ; " KB"
-    mov bx, 100
-    mov cx, 48
-    mov si, str_kb
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -283,56 +344,57 @@ draw_dynamic:
     pusha
 
     ; Row 5: Tasks (clear + redraw)
-    mov bx, 64
-    mov cx, 60
-    mov dx, 80
-    mov si, ROW_H
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y5]
+    mov dx, WIN_W
+    sub dx, [cs:si_val_x]
+    mov si, [cs:si_row_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     mov bx, 4
-    mov cx, 60
+    mov cx, [cs:si_y5]
     mov si, str_tasks_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     mov ah, API_GET_TASK_INFO
     int 0x80
-    ; CL = running task count
+    ; CL = running task count, format "N/7"
     movzx dx, cl
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov bx, 64
-    mov cx, 60
+    mov byte [cs:di], '/'
+    inc di
+    mov byte [cs:di], '7'
+    inc di
+    mov byte [cs:di], 0
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y5]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; "/7"
-    mov bx, 88
-    mov cx, 60
-    mov si, str_slash7
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
 
-    ; Separator
+    ; Separator 2
     mov bx, 4
-    mov cx, 72
-    mov dx, 160
+    mov cx, [cs:si_ys2]
+    mov dx, WIN_W - 10
     mov si, 1
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Row 6: Time (clear + redraw)
-    mov bx, 64
-    mov cx, 76
-    mov dx, 100
-    mov si, ROW_H
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y6]
+    mov dx, WIN_W
+    sub dx, [cs:si_val_x]
+    mov si, [cs:si_row_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     mov bx, 4
-    mov cx, 76
+    mov cx, [cs:si_y6]
     mov si, str_time_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -360,22 +422,23 @@ draw_dynamic:
     mov [time_buf+7], al
     mov byte [time_buf+8], 0    ; Null terminate
 
-    mov bx, 64
-    mov cx, 76
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y6]
     mov si, time_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Row 7: Ticks (clear + redraw)
-    mov bx, 64
-    mov cx, 86
-    mov dx, 100
-    mov si, ROW_H
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y7]
+    mov dx, WIN_W
+    sub dx, [cs:si_val_x]
+    mov si, [cs:si_row_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     mov bx, 4
-    mov cx, 86
+    mov cx, [cs:si_y7]
     mov si, str_ticks_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -386,8 +449,8 @@ draw_dynamic:
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov bx, 64
-    mov cx, 86
+    mov bx, [cs:si_val_x]
+    mov cx, [cs:si_y7]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -407,21 +470,36 @@ screen_w:       dw 0
 screen_h:       dw 0
 mem_kb:         dw 0
 
+; Dynamic layout variables
+si_font_h:      db 8
+si_font_adv:    db 12
+si_row_h:       dw 10
+si_val_x:       dw 80
+si_win_h:       dw 110
+si_win_y:       dw 45
+si_y0:          dw 2        ; Version
+si_y1:          dw 12       ; Build
+si_ys1:         dw 24       ; Separator 1
+si_y2:          dw 28       ; Boot
+si_y3:          dw 38       ; Video
+si_y4:          dw 48       ; Memory
+si_y5:          dw 60       ; Tasks
+si_ys2:         dw 72       ; Separator 2
+si_y6:          dw 76       ; Time
+si_y7:          dw 86       ; Ticks
+
 ; Static labels
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 277', 0
+str_build:      db 'Build 278', 0
 str_boot_label: db 'Boot:', 0
 str_floppy:     db 'Floppy', 0
 str_harddisk:   db 'Hard Disk', 0
 str_video_label: db 'Video:', 0
-str_x:          db 'x', 0
 str_mem_label:  db 'Mem:', 0
-str_kb:         db 'KB', 0
 str_tasks_label: db 'Tasks:', 0
-str_slash7:     db '/7', 0
 str_time_label: db 'Time:', 0
 str_ticks_label: db 'Ticks:', 0
 
 ; Buffers
 time_buf:       times 9 db 0   ; "HH:MM:SS" + null
-num_buf:        times 8 db 0   ; decimal number + null
+num_buf:        times 16 db 0  ; "320x200" or "NNN KB" etc.

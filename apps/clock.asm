@@ -49,6 +49,7 @@ API_APP_YIELD           equ 34
 API_DRAW_LINE           equ 71
 API_GET_RTC_TIME        equ 72
 API_BCD_TO_ASCII        equ 92
+API_GET_FONT_INFO       equ 93
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -62,7 +63,6 @@ MIN_RADIUS  equ 30                  ; Minute hand length
 HR_RADIUS   equ 20                  ; Hour hand length
 MARK_INNER  equ 34                  ; Hour marker inner radius
 MARK_OUTER  equ 38                  ; Hour marker outer radius
-DIGI_X      equ 22                  ; Digital time X ((108-64)/2)
 DIGI_Y      equ 86                  ; Digital time Y (below face)
 
 entry:
@@ -89,6 +89,20 @@ entry:
 
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
+
+    ; Compute digital time X centering: (108 - 8*advance) / 2
+    mov ah, API_GET_FONT_INFO
+    int 0x80                        ; CL = advance
+    movzx ax, cl
+    shl ax, 3                       ; * 8 chars ("HH:MM:SS")
+    mov bx, 108
+    sub bx, ax
+    shr bx, 1
+    cmp bx, 0                       ; Clamp to 0 minimum
+    jge .digi_x_ok
+    xor bx, bx
+.digi_x_ok:
+    mov [cs:digi_x], bx
 
     mov byte [cs:last_secs], 0xFF   ; Force first draw
 
@@ -201,7 +215,7 @@ entry:
 
     ; Format and draw digital time "HH:MM:SS"
     call .format_time
-    mov bx, DIGI_X
+    mov bx, [cs:digi_x]
     mov cx, DIGI_Y
     mov si, time_str
     mov ah, API_GFX_DRAW_STRING
@@ -367,6 +381,7 @@ entry:
 ; ---- Data Section ----
 window_title:   db 'Clock', 0
 win_handle:     db 0
+digi_x:         dw 22               ; Digital time X (computed from font)
 time_str:       db '00:00:00', 0
 rtc_hours:      db 0
 rtc_mins:       db 0

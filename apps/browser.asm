@@ -58,9 +58,11 @@ API_FS_DELETE           equ 47
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
 API_DRAW_LISTITEM       equ 59
+API_DRAW_SCROLLBAR      equ 58
 API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
 API_WORD_TO_STRING      equ 91
+API_GET_FONT_INFO       equ 93
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -75,22 +77,14 @@ MODE_COPY               equ 3
 ; Layout (content-relative)
 WIN_W                   equ 264
 WIN_H                   equ 170
-HEADER_Y                equ 1
-SEP1_Y                  equ 10
-LIST_Y                  equ 12
-ROW_H                   equ 10
-VISIBLE_ROWS            equ 12
-LIST_W                  equ 260
-SEP2_Y                  equ 132
-ROW1_Y                  equ 135
-ROW2_Y                  equ 147
+SCROLLBAR_W             equ 8
+SCROLLBAR_ARROW_H       equ 8
 BTN_DEL_X               equ 4
 BTN_DEL_W               equ 52
 BTN_REN_X               equ 62
 BTN_REN_W               equ 56
 BTN_CPY_X               equ 124
 BTN_CPY_W               equ 44
-BTN_H                   equ 11
 BTN_YES_X               equ 4
 BTN_YES_W               equ 30
 BTN_NO_X                equ 40
@@ -136,6 +130,55 @@ entry:
 
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
+
+    ; Compute dynamic layout from current font
+    mov ah, API_GET_FONT_INFO
+    int 0x80                        ; BH=height, BL=width, CL=advance
+    mov [cs:font_h], bh
+    mov [cs:font_w], bl
+    mov [cs:font_adv], cl
+
+    ; row_h = font_h + 2
+    movzx ax, bh
+    add ax, 2
+    mov [cs:row_h], ax
+
+    ; sep1_y = font_h + 2
+    mov [cs:sep1_y], ax
+
+    ; list_y = sep1_y + 3
+    add ax, 3
+    mov [cs:list_y], ax
+
+    ; btn_h = font_h + 3
+    movzx ax, bh
+    add ax, 3
+    mov [cs:btn_h], ax
+
+    ; vis_rows = (WIN_H - list_y - 4 - 2*btn_h) / row_h
+    mov ax, WIN_H
+    sub ax, [cs:list_y]
+    sub ax, 4
+    mov dx, [cs:btn_h]
+    shl dx, 1
+    sub ax, dx
+    xor dx, dx
+    div word [cs:row_h]
+    mov [cs:vis_rows], ax
+
+    ; sep2_y = list_y + vis_rows * row_h
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
+    mov [cs:sep2_y], ax
+
+    ; row1_y = sep2_y + 3
+    add ax, 3
+    mov [cs:row1_y], ax
+
+    ; row2_y = row1_y + btn_h + 1
+    add ax, [cs:btn_h]
+    inc ax
+    mov [cs:row2_y], ax
 
     ; Scan files and draw UI
     call scan_files
@@ -228,7 +271,7 @@ entry:
     jae .main_loop
     mov [cs:sel_index], al
     sub al, [cs:scroll_top]
-    cmp al, VISIBLE_ROWS
+    cmp al, byte [cs:vis_rows]
     jb .redraw_list
     inc byte [cs:scroll_top]
     jmp .redraw_list
@@ -242,26 +285,84 @@ entry:
     add al, [cs:scroll_top]
     cmp al, [cs:file_count]
     jae .test_buttons
-    ; Row rect: X=2, Y=LIST_Y + CL*ROW_H, W=LIST_W, H=ROW_H
+    ; Row rect: X=2, Y=list_y + CL*row_h, W=list_w, H=row_h
     push cx
     mov bx, 2
     xor ch, ch
-    mov al, cl
-    mov ah, ROW_H
-    mul ah
-    add ax, LIST_Y
+    movzx ax, cl
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
     mov cx, ax
-    mov dx, LIST_W
-    mov si, ROW_H
+    mov dx, [cs:list_w]
+    mov si, [cs:row_h]
     mov ah, API_HIT_TEST
     int 0x80
     pop cx
     test al, al
     jnz .row_clicked
     inc cl
-    cmp cl, VISIBLE_ROWS
+    cmp cl, byte [cs:vis_rows]
     jb .test_row
+
+    ; Test scrollbar arrows
+    mov bx, [cs:list_w]
+    add bx, 2                      ; X = list_w + 2
+    mov cx, [cs:list_y]            ; Y = list_y
+    mov dx, SCROLLBAR_W
+    mov si, SCROLLBAR_ARROW_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .scroll_up_click
+
+    ; Down arrow
+    mov bx, [cs:list_w]
+    add bx, 2
+    mov ax, [cs:vis_rows]
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
+    sub ax, SCROLLBAR_ARROW_H
+    mov cx, ax
+    mov dx, SCROLLBAR_W
+    mov si, SCROLLBAR_ARROW_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .scroll_down_click
+
     jmp .test_buttons
+
+.scroll_up_click:
+    cmp byte [cs:scroll_top], 0
+    je .check_event
+    dec byte [cs:scroll_top]
+    ; Keep sel_index in view
+    mov al, [cs:scroll_top]
+    cmp al, [cs:sel_index]
+    jbe .scroll_redraw
+    mov [cs:sel_index], al
+.scroll_redraw:
+    call draw_file_list
+    jmp .check_event
+
+.scroll_down_click:
+    movzx ax, byte [cs:file_count]
+    sub ax, [cs:vis_rows]
+    jle .check_event                ; No scrolling needed
+    cmp byte [cs:scroll_top], al
+    jae .check_event                ; Already at bottom
+    inc byte [cs:scroll_top]
+    ; Keep sel_index in view
+    movzx ax, byte [cs:scroll_top]
+    add ax, [cs:vis_rows]
+    dec ax                          ; Last visible index
+    cmp al, [cs:sel_index]
+    jae .scroll_redraw
+    mov al, [cs:scroll_top]
+    add al, byte [cs:vis_rows]
+    dec al
+    mov [cs:sel_index], al          ; Clamp to bottom of view
+    jmp .scroll_redraw
 
 .row_clicked:
     mov al, cl
@@ -276,9 +377,9 @@ entry:
 
     ; Delete button
     mov bx, BTN_DEL_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_DEL_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -286,9 +387,9 @@ entry:
 
     ; Rename button
     mov bx, BTN_REN_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_REN_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -296,9 +397,9 @@ entry:
 
     ; Copy button
     mov bx, BTN_CPY_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_CPY_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -346,17 +447,17 @@ entry:
 ; --- Confirm delete click ---
 .click_confirm:
     mov bx, BTN_YES_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_YES_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .do_delete
     mov bx, BTN_NO_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_NO_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -383,9 +484,9 @@ entry:
 ; --- Text input click (rename/copy) ---
 .click_input:
     mov bx, BTN_OK_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_OK_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
@@ -658,26 +759,26 @@ draw_ui:
 
     ; Header
     mov bx, 6
-    mov cx, HEADER_Y
+    mov cx, 1                      ; HEADER_Y (always 1)
     mov si, str_hdr_name
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 190
-    mov cx, HEADER_Y
+    mov cx, 1
     mov si, str_hdr_size
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Separator lines
     mov bx, 2
-    mov cx, SEP1_Y
-    mov dx, 260
+    mov cx, [cs:sep1_y]
+    mov dx, WIN_W - 4
     mov al, 3                      ; white
     mov ah, API_DRAW_HLINE
     int 0x80
     mov bx, 2
-    mov cx, SEP2_Y
-    mov dx, 260
+    mov cx, [cs:sep2_y]
+    mov dx, WIN_W - 4
     mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
@@ -720,44 +821,60 @@ draw_file_list:
     ; Draw listitem: BX=X, CX=Y, DX=W, SI=text, AL=flags
     push ax
     xor ch, ch
-    mov al, cl
-    mov ah, ROW_H
-    mul ah
-    add ax, LIST_Y
+    movzx ax, cl
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
     mov cx, ax
     pop ax
     mov bx, 2
-    mov dx, LIST_W
+    mov dx, [cs:list_w]
     mov si, display_buf
     mov ah, API_DRAW_LISTITEM
     int 0x80
     pop cx
     inc cl
-    cmp cl, VISIBLE_ROWS
+    cmp cl, byte [cs:vis_rows]
     jb .dfl_row
-    jmp .dfl_done
+    jmp .dfl_scrollbar
 
 .dfl_clear_rest:
     ; Clear remaining rows
     push cx
     ; Compute height FIRST while CL still has the row counter
-    mov al, VISIBLE_ROWS
+    mov ax, [cs:vis_rows]
     xor ch, ch
     sub al, cl                      ; AL = remaining rows
-    mov ah, ROW_H
-    mul ah
+    mul word [cs:row_h]
     mov si, ax                      ; SI = height
     ; Now compute Y (this clobbers CX)
-    mov al, cl
-    mov ah, ROW_H
-    mul ah
-    add ax, LIST_Y
+    movzx ax, cl
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
     mov cx, ax                      ; CX = Y
     mov bx, 2
-    mov dx, LIST_W
+    mov dx, [cs:list_w]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
     pop cx
+
+.dfl_scrollbar:
+    ; Draw scrollbar at right edge of list area
+    mov bx, [cs:list_w]
+    add bx, 2                      ; X = list_w + 2
+    mov cx, [cs:list_y]            ; Y = list_y
+    mov ax, [cs:vis_rows]
+    mul word [cs:row_h]
+    mov si, ax                     ; track_height = vis_rows * row_h
+    movzx dx, byte [cs:scroll_top] ; position
+    movzx ax, byte [cs:file_count]
+    sub ax, [cs:vis_rows]
+    jns .dfl_sb_ok
+    xor ax, ax
+.dfl_sb_ok:
+    mov di, ax                     ; max_range = file_count - vis_rows (or 0)
+    mov al, 0                      ; flags: vertical
+    mov ah, API_DRAW_SCROLLBAR
+    int 0x80
 
 .dfl_done:
     popa
@@ -770,9 +887,11 @@ draw_bottom:
     pusha
     ; Clear bottom area
     mov bx, 0
-    mov cx, ROW1_Y - 1
+    mov cx, [cs:row1_y]
+    dec cx                          ; row1_y - 1
     mov dx, WIN_W
-    mov si, WIN_H - ROW1_Y + 2
+    mov si, WIN_H + 2
+    sub si, [cs:row1_y]            ; WIN_H - row1_y + 2
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -788,27 +907,27 @@ draw_bottom:
     mov es, ax
 
     mov bx, BTN_DEL_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_DEL_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_delete
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
 
     mov bx, BTN_REN_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_REN_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_rename
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
 
     mov bx, BTN_CPY_X
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov dx, BTN_CPY_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_copy
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -821,7 +940,7 @@ draw_bottom:
     cmp byte [cs:op_error], 1
     je .db_err_status
     mov bx, 4
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov si, str_ready
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -829,7 +948,7 @@ draw_bottom:
 
 .db_err_status:
     mov bx, 4
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov si, str_error
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -837,23 +956,29 @@ draw_bottom:
 
     ; --- Confirm delete mode ---
 .db_confirm:
-    ; "Delete FILENAME?"
+    ; "Del FILENAME?"
     mov bx, 4
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov si, str_del_prefix
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Draw selected filename after "Del "
     call get_sel_name
-    mov bx, 36
-    mov cx, ROW1_Y
+    ; X = 4 + 4*font_adv ("Del " is 4 chars)
+    movzx bx, byte [cs:font_adv]
+    shl bx, 2                      ; * 4 chars
+    add bx, 4
+    push bx                        ; Save prefix end X
+    mov cx, [cs:row1_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; "?" after name
-    movzx bx, byte [cs:sel_name_len]
-    shl bx, 3                      ; * 8 (char width)
-    add bx, 36
-    mov cx, ROW1_Y
+    ; "?" after name: X = prefix_x + name_len * font_adv
+    movzx ax, byte [cs:sel_name_len]
+    movzx bx, byte [cs:font_adv]
+    mul bx
+    pop bx                         ; prefix end X
+    add bx, ax
+    mov cx, [cs:row1_y]
     mov si, str_question
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -862,17 +987,17 @@ draw_bottom:
     mov ax, cs
     mov es, ax
     mov bx, BTN_YES_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_YES_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_yes
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
     mov bx, BTN_NO_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_NO_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_no
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -882,7 +1007,7 @@ draw_bottom:
     ; --- Rename mode ---
 .db_rename:
     mov bx, 4
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov si, str_new_name
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -893,7 +1018,7 @@ draw_bottom:
     ; --- Copy mode ---
 .db_copy:
     mov bx, 4
-    mov cx, ROW1_Y
+    mov cx, [cs:row1_y]
     mov si, str_copy_to
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -910,15 +1035,17 @@ draw_input_line:
     pusha
     ; Draw input text
     mov bx, 4
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov si, input_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Draw cursor '_' after text
-    movzx bx, byte [cs:input_len]
-    shl bx, 3                      ; * 8
-    add bx, 4
-    mov cx, ROW2_Y
+    movzx ax, byte [cs:input_len]
+    movzx bx, byte [cs:font_adv]
+    mul bx                          ; AX = input_len * font_adv
+    add ax, 4
+    mov bx, ax
+    mov cx, [cs:row2_y]
     mov si, str_cursor
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -926,9 +1053,9 @@ draw_input_line:
     mov ax, cs
     mov es, ax
     mov bx, BTN_OK_X
-    mov cx, ROW2_Y
+    mov cx, [cs:row2_y]
     mov dx, BTN_OK_W
-    mov si, BTN_H
+    mov si, [cs:btn_h]
     mov di, str_ok
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -959,7 +1086,8 @@ draw_file_count:
     jmp .dfc_copy
 .dfc_draw:
     mov bx, 200
-    mov cx, ROW1_Y + 2
+    mov cx, [cs:row1_y]
+    add cx, 2
     mov si, count_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -1052,6 +1180,20 @@ src_handle:     db 0
 dst_handle:     db 0
 input_len:      db 0
 sel_name_len:   db 0
+
+; Dynamic layout variables (computed from font metrics at startup)
+font_h:         db 8                ; Current font height
+font_w:         db 8                ; Current font width
+font_adv:       db 12               ; Current font advance
+row_h:          dw 10               ; font_h + 2
+vis_rows:       dw 12               ; Visible file rows
+list_w:         dw 252              ; WIN_W - 4 - SCROLLBAR_W
+list_y:         dw 13               ; sep1_y + 3
+sep1_y:         dw 10               ; font_h + 2
+sep2_y:         dw 133              ; list_y + vis_rows * row_h
+row1_y:         dw 136              ; sep2_y + 3
+row2_y:         dw 148              ; row1_y + btn_h + 1
+btn_h:          dw 11               ; font_h + 3
 
 ; Strings
 str_hdr_name:   db 'Name', 0
