@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 93                      ; Max function count (0-92 valid)
+    cmp ah, 94                      ; Max function count (0-93 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -3956,6 +3956,18 @@ util_bcd_to_ascii:
     clc
     ret
 
+; gfx_get_current_font_info - Get current font metrics (API 93)
+; Input:  None
+; Output: BH = height, BL = width, CL = advance, AL = font index, CF=0
+; Preserves: DX, SI, DI
+gfx_get_current_font_info:
+    mov bh, [draw_font_height]
+    mov bl, [draw_font_width]
+    mov cl, [draw_font_advance]
+    mov al, [current_font]
+    clc
+    ret
+
 ; ============================================================================
 ; Kernel API Table
 ; ============================================================================
@@ -4119,6 +4131,7 @@ kernel_api_table:
     ; Utility APIs (Build 277)
     dw util_word_to_string          ; 91: Convert word to decimal string
     dw util_bcd_to_ascii            ; 92: Convert BCD byte to ASCII pair
+    dw gfx_get_current_font_info    ; 93: Get current font metrics
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
