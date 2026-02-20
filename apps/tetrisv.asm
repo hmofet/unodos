@@ -840,6 +840,7 @@ draw_cell:
     jz .clear_cell
 
     mov [cs:cell_color], al
+    mov ch, bh                      ; Save row before BX is destroyed
 
     ; Calculate screen X = BOARD_X + col * CELL_SIZE
     xor ah, ah
@@ -850,7 +851,7 @@ draw_cell:
     mov [cs:cell_sx], ax
 
     ; Calculate screen Y = BOARD_Y + row * CELL_SIZE
-    mov al, bh
+    mov al, ch                      ; Use saved row
     xor ah, ah
     mov bx, CELL_SIZE
     mul bx
