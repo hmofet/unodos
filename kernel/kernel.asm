@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 91                      ; Max function count (0-90 valid)
+    cmp ah, 93                      ; Max function count (0-92 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -3302,12 +3302,7 @@ menu_hit:
 
 ; Constants
 FDLG_W          equ 152                 ; Dialog window width
-FDLG_H          equ 140                 ; Dialog window height (list + buttons)
 FDLG_X          equ 84                  ; Centered X: (320-152)/2
-FDLG_Y          equ 30                  ; Centered Y: (200-140)/2
-FDLG_VISIBLE    equ 11                  ; Visible items in list
-FDLG_ITEM_H     equ 10                  ; Pixels per list item
-FDLG_BTN_H      equ 12                  ; Button height
 FDLG_BTN_GAP    equ 2                   ; Gap between list and buttons
 FDLG_MAX_FILES  equ 64                  ; Max files stored
 FDLG_ENTRY_SIZE equ 13                  ; 12 chars "FILENAME.EXT" + null
@@ -3333,15 +3328,51 @@ file_dialog_open:
     mov [fdlg_mount], bl
     mov [fdlg_result_di], di
 
+    ; Compute dynamic layout from current font
+    movzx ax, byte [draw_font_height]
+    add ax, 2
+    mov [fdlg_item_h], ax              ; item_h = font_height + 2
+
+    movzx ax, byte [draw_font_height]
+    add ax, 4
+    mov [fdlg_btn_h], ax               ; btn_h = font_height + 4
+
+    ; Compute max visible items, capped at 11
+    mov ax, 182                        ; 200 - 18 (titlebar + borders + gap + margins)
+    sub ax, [fdlg_btn_h]
+    xor dx, dx
+    div word [fdlg_item_h]
+    cmp ax, 11
+    jbe .fdlg_vis_ok
+    mov ax, 11
+.fdlg_vis_ok:
+    mov [fdlg_vis], ax
+
+    ; list_h = vis * item_h
+    mul word [fdlg_item_h]
+    mov [fdlg_list_h], ax
+
+    ; win_h = 11 (title+top_border) + list_h + 2 (gap) + btn_h + 1 (bottom_border)
+    mov ax, [fdlg_list_h]
+    add ax, 14                         ; 11 + 2 + 1
+    add ax, [fdlg_btn_h]
+    mov [fdlg_h_dyn], ax
+
+    ; Center: y = (200 - win_h) / 2
+    mov bx, 200
+    sub bx, ax
+    shr bx, 1
+    mov [fdlg_y_dyn], bx
+
     ; Scan directory
     call fdlg_scan_files
 
     ; Create dialog window (title in kernel segment)
     mov word [caller_es], 0x1000
     mov bx, FDLG_X
-    mov cx, FDLG_Y
+    mov cx, [fdlg_y_dyn]
     mov dx, FDLG_W
-    mov si, FDLG_H
+    mov si, [fdlg_h_dyn]
     mov di, fdlg_title
     mov al, WIN_FLAG_TITLE | WIN_FLAG_BORDER
     call win_create_stub
@@ -3450,7 +3481,7 @@ file_dialog_open:
     mov ax, [mouse_y]
     sub ax, di
     jb .fdlg_loop
-    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H
+    cmp ax, [fdlg_list_h]
     jae .fdlg_check_buttons             ; Below list → check buttons
 
     ; Check if click is on scrollbar (X >= FDLG_LIST_W relative to content)
@@ -3463,8 +3494,7 @@ file_dialog_open:
 
     ; Compute clicked item
     xor dx, dx
-    mov bx, FDLG_ITEM_H
-    div bx                              ; AX = relative item index
+    div word [fdlg_item_h]             ; AX = relative item index
     add ax, [fdlg_scroll]              ; AX = absolute item index
     cmp ax, [fdlg_count]
     jae .fdlg_loop
@@ -3479,9 +3509,12 @@ file_dialog_open:
     ; --- Button hit-test ---
 .fdlg_check_buttons:
     ; AX = Y relative to content, SI = content_x (still valid)
-    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    mov bx, [fdlg_list_h]
+    add bx, FDLG_BTN_GAP
+    cmp ax, bx
     jb .fdlg_loop                       ; In gap between list and buttons
-    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP + FDLG_BTN_H
+    add bx, [fdlg_btn_h]
+    cmp ax, bx
     jae .fdlg_loop                      ; Below buttons
 
     ; In button row — check X to determine which button
@@ -3507,7 +3540,9 @@ file_dialog_open:
     ; AX = Y relative to content (in list area)
     cmp ax, SCROLLBAR_ARROW_H           ; Top 8px = up arrow
     jb .fdlg_up
-    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H - SCROLLBAR_ARROW_H
+    mov bx, [fdlg_list_h]
+    sub bx, SCROLLBAR_ARROW_H
+    cmp ax, bx
     jae .fdlg_down                      ; Bottom 8px = down arrow
     jmp .fdlg_loop                      ; Track area — ignore
 
@@ -3708,9 +3743,9 @@ fdlg_draw_full:
     push word [caller_ds]
     mov word [caller_ds], FDLG_BUF_SEG
 
-    xor cx, cx                          ; CX = visible index (0 to FDLG_VISIBLE-1)
+    xor cx, cx                          ; CX = visible index
 .fdraw_item:
-    cmp cx, FDLG_VISIBLE
+    cmp cx, [fdlg_vis]
     jae .fdraw_items_done
 
     ; Absolute item index = scroll + visible index
@@ -3727,10 +3762,10 @@ fdlg_draw_full:
     add ax, FDLG_BUF_OFF
     mov si, ax
 
-    ; Screen Y = content_y + visible_index * FDLG_ITEM_H
+    ; Screen Y = content_y + visible_index * item_h
     pop cx                              ; Restore visible index
     mov ax, cx
-    imul ax, FDLG_ITEM_H
+    mul word [fdlg_item_h]
     add ax, [fdlg_cy]
     mov di, ax                          ; DI = screen Y (saved)
 
@@ -3747,7 +3782,7 @@ fdlg_draw_full:
 .fdraw_not_sel:
     push cx                             ; Save visible index for loop
     mov cx, di                          ; CX = correct screen Y
-    mov dx, FDLG_LIST_W                  ; Width (minus scrollbar)
+    mov dx, FDLG_LIST_W                 ; Width (minus scrollbar)
     call widget_draw_listitem
     pop cx                              ; Restore visible index
     pop dx                              ; Matches push dx at loop start
@@ -3759,16 +3794,16 @@ fdlg_draw_full:
     ; Clear remaining rows
     push cx
     mov ax, cx
-    imul ax, FDLG_ITEM_H
+    mul word [fdlg_item_h]
     add ax, [fdlg_cy]
     mov cx, ax                          ; Y
     mov bx, [fdlg_cx]                   ; X
-    mov dx, FDLG_LIST_W                  ; Width (minus scrollbar)
-    mov si, FDLG_ITEM_H                 ; Height
+    mov dx, FDLG_LIST_W                 ; Width (minus scrollbar)
+    mov si, [fdlg_item_h]              ; Height
     call gfx_clear_area_stub
     pop cx
     inc cx
-    cmp cx, FDLG_VISIBLE
+    cmp cx, [fdlg_vis]
     jb .fdraw_blank
 
 .fdraw_items_done:
@@ -3792,11 +3827,11 @@ fdlg_draw_full:
     mov bx, [fdlg_cx]
     add bx, FDLG_LIST_W                ; X = right edge of list
     mov cx, [fdlg_cy]                   ; Y = content top
-    mov si, FDLG_VISIBLE * FDLG_ITEM_H ; Track height = 110
+    mov si, [fdlg_list_h]              ; Track height
     mov dx, [fdlg_scroll]              ; Current scroll position
-    ; Compute max_range = max(0, fdlg_count - FDLG_VISIBLE)
+    ; Compute max_range = max(0, fdlg_count - fdlg_vis)
     mov ax, [fdlg_count]
-    sub ax, FDLG_VISIBLE
+    sub ax, [fdlg_vis]
     jg .fdraw_sb_range
     xor ax, ax
 .fdraw_sb_range:
@@ -3813,9 +3848,10 @@ fdlg_draw_full:
     mov bx, [fdlg_cx]
     add bx, 54                          ; X offset in content area
     mov cx, [fdlg_cy]
-    add cx, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    add cx, [fdlg_list_h]
+    add cx, FDLG_BTN_GAP
     mov dx, 40                          ; Width
-    mov si, FDLG_BTN_H                  ; Height
+    mov si, [fdlg_btn_h]               ; Height
     mov di, fdlg_str_open               ; Label
     xor al, al                          ; Not pressed
     call widget_draw_button
@@ -3824,9 +3860,10 @@ fdlg_draw_full:
     mov bx, [fdlg_cx]
     add bx, 98                          ; X offset in content area
     mov cx, [fdlg_cy]
-    add cx, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    add cx, [fdlg_list_h]
+    add cx, FDLG_BTN_GAP
     mov dx, 52                          ; Width
-    mov si, FDLG_BTN_H                  ; Height
+    mov si, [fdlg_btn_h]               ; Height
     mov di, fdlg_str_cancel             ; Label
     xor al, al                          ; Not pressed
     call widget_draw_button
@@ -3847,15 +3884,76 @@ fdlg_scroll_into_view:
     mov [fdlg_scroll], ax
     ret
 .fscroll_bottom:
-    ; If sel >= scroll + FDLG_VISIBLE, scroll = sel - FDLG_VISIBLE + 1
+    ; If sel >= scroll + fdlg_vis, scroll = sel - fdlg_vis + 1
     mov bx, [fdlg_scroll]
-    add bx, FDLG_VISIBLE
+    add bx, [fdlg_vis]
     cmp ax, bx
     jb .fscroll_ok
-    sub ax, FDLG_VISIBLE
+    sub ax, [fdlg_vis]
     inc ax
     mov [fdlg_scroll], ax
 .fscroll_ok:
+    ret
+
+; ============================================================================
+; Utility API Functions (Build 277)
+; ============================================================================
+
+; util_word_to_string - Convert 16-bit word to decimal string (API 91)
+; Input:  DX = 16-bit value, DI = destination buffer offset (in caller's DS)
+; Output: Null-terminated decimal string at caller_ds:DI, DI advanced past null
+; Preserves: AX, BX, CX, DX
+util_word_to_string:
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [caller_ds]
+    mov es, ax
+    mov ax, dx                  ; Value to convert
+    test ax, ax
+    jnz .wts_nonzero
+    mov byte [es:di], '0'
+    inc di
+    jmp .wts_done
+.wts_nonzero:
+    xor cx, cx                  ; Digit count
+    mov bx, 10
+.wts_div:
+    xor dx, dx
+    div bx                     ; AX/10 → AX=quotient, DX=remainder
+    push dx                    ; Save digit (on stack above saved regs)
+    inc cx
+    test ax, ax
+    jnz .wts_div
+.wts_store:
+    pop ax                     ; Pop digits in reverse (correct order)
+    add al, '0'
+    mov [es:di], al
+    inc di
+    loop .wts_store
+.wts_done:
+    mov byte [es:di], 0        ; Null terminate
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    clc
+    ret
+
+; util_bcd_to_ascii - Convert BCD byte to ASCII digit pair (API 92)
+; Input:  AL = BCD byte (e.g. 0x59)
+; Output: AH = tens digit ASCII ('0'-'9'), AL = ones digit ASCII ('0'-'9')
+; Preserves: all other registers
+util_bcd_to_ascii:
+    mov ah, al
+    and al, 0x0F               ; Low nibble → ones
+    shr ah, 4                  ; High nibble → tens
+    add al, '0'
+    add ah, '0'
+    clc
     ret
 
 ; ============================================================================
@@ -3863,7 +3961,7 @@ fdlg_scroll_into_view:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1A00 - ($ - $$) db 0
+times 0x1B00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -4017,6 +4115,10 @@ kernel_api_table:
 
     ; File Dialog API (Build 274)
     dw file_dialog_open             ; 90: System file open dialog
+
+    ; Utility APIs (Build 277)
+    dw util_word_to_string          ; 91: Convert word to decimal string
+    dw util_bcd_to_ascii            ; 92: Convert BCD byte to ASCII pair
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -15335,6 +15437,12 @@ fdlg_save_ctx:      db 0                    ; Saved draw_context from caller
 fdlg_caller_es:     dw 0                    ; Saved caller_es (app's ES segment)
 fdlg_cx:            dw 0                    ; Content area X (drawing temp)
 fdlg_cy:            dw 0                    ; Content area Y (drawing temp)
+fdlg_item_h:        dw 10                   ; Dynamic: font_height + 2
+fdlg_vis:           dw 11                   ; Dynamic: visible items (capped at 11)
+fdlg_btn_h:         dw 12                   ; Dynamic: font_height + 4
+fdlg_h_dyn:         dw 140                  ; Dynamic: computed window height
+fdlg_y_dyn:         dw 30                   ; Dynamic: computed window Y position
+fdlg_list_h:        dw 110                  ; Dynamic: vis * item_h
 fdlg_dir_entry:     times 32 db 0           ; Temp buffer for readdir entries
 fdlg_title:         db 'Open File', 0
 fdlg_empty:         db '(No files)', 0

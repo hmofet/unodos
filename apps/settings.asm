@@ -63,6 +63,7 @@ API_GET_THEME           equ 55
 API_FILLED_RECT_COLOR   equ 67
 API_GET_RTC_TIME        equ 72
 API_SET_RTC_TIME        equ 81
+API_BCD_TO_ASCII        equ 92
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -946,35 +947,27 @@ format_time_string:
     mov di, time_str
 
     mov al, [cs:cur_hours]
-    call .bcd_to_ascii
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:di], ah
     mov [cs:di+1], al
     mov byte [cs:di+2], ':'
 
     mov al, [cs:cur_minutes]
-    call .bcd_to_ascii
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:di+3], ah
     mov [cs:di+4], al
     mov byte [cs:di+5], ':'
 
     mov al, [cs:cur_seconds]
-    call .bcd_to_ascii
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:di+6], ah
     mov [cs:di+7], al
 
     pop di
     pop ax
-    ret
-
-; Convert BCD byte to two ASCII digits
-; Input: AL = BCD (e.g. 0x23)
-; Output: AH = tens char, AL = ones char
-.bcd_to_ascii:
-    mov ah, al
-    and al, 0x0F
-    shr ah, 4
-    add al, '0'
-    add ah, '0'
     ret
 
 ; bcd_inc_hours - Increment hours (BCD), wrap 23→00

@@ -48,6 +48,7 @@ API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 API_DRAW_LINE           equ 71
 API_GET_RTC_TIME        equ 72
+API_BCD_TO_ASCII        equ 92
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -328,29 +329,21 @@ entry:
 .format_time:
     push ax
     mov al, [cs:rtc_hours]
-    call .bcd_to_ascii_pair
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:time_str], ah
     mov [cs:time_str+1], al
     mov al, [cs:rtc_mins]
-    call .bcd_to_ascii_pair
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:time_str+3], ah
     mov [cs:time_str+4], al
     mov al, [cs:rtc_secs]
-    call .bcd_to_ascii_pair
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
     mov [cs:time_str+6], ah
     mov [cs:time_str+7], al
     pop ax
-    ret
-
-; bcd_to_ascii_pair: Convert BCD byte to two ASCII chars
-; Input:  AL = BCD byte
-; Output: AH = tens digit char, AL = ones digit char
-.bcd_to_ascii_pair:
-    mov ah, al
-    and al, 0x0F
-    shr ah, 4
-    add al, '0'
-    add ah, '0'
     ret
 
 .exit_ok:
