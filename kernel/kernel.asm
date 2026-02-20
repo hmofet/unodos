@@ -3302,11 +3302,13 @@ menu_hit:
 
 ; Constants
 FDLG_W          equ 152                 ; Dialog window width
-FDLG_H          equ 126                 ; Dialog window height
+FDLG_H          equ 140                 ; Dialog window height (list + buttons)
 FDLG_X          equ 84                  ; Centered X: (320-152)/2
-FDLG_Y          equ 37                  ; Centered Y: (200-126)/2
+FDLG_Y          equ 30                  ; Centered Y: (200-140)/2
 FDLG_VISIBLE    equ 11                  ; Visible items in list
 FDLG_ITEM_H     equ 10                  ; Pixels per list item
+FDLG_BTN_H      equ 12                  ; Button height
+FDLG_BTN_GAP    equ 2                   ; Gap between list and buttons
 FDLG_MAX_FILES  equ 64                  ; Max files stored
 FDLG_ENTRY_SIZE equ 13                  ; 12 chars "FILENAME.EXT" + null
 FDLG_BUF_SEG    equ 0x9000              ; Scratch segment
@@ -3448,7 +3450,7 @@ file_dialog_open:
     sub ax, di
     jb .fdlg_loop
     cmp ax, FDLG_VISIBLE * FDLG_ITEM_H
-    jae .fdlg_loop
+    jae .fdlg_check_buttons             ; Below list → check buttons
 
     ; Compute clicked item
     xor dx, dx
@@ -3463,6 +3465,32 @@ file_dialog_open:
     je .fdlg_select
     mov [fdlg_sel], ax
     call fdlg_draw_full
+    jmp .fdlg_loop
+
+    ; --- Button hit-test ---
+.fdlg_check_buttons:
+    ; AX = Y relative to content, SI = content_x (still valid)
+    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    jb .fdlg_loop                       ; In gap between list and buttons
+    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP + FDLG_BTN_H
+    jae .fdlg_loop                      ; Below buttons
+
+    ; In button row — check X to determine which button
+    mov ax, [mouse_x]
+    sub ax, si                          ; AX = X relative to content
+
+    ; Open button: X range [54, 94)
+    cmp ax, 54
+    jb .fdlg_loop
+    cmp ax, 94
+    jb .fdlg_select                     ; Open = confirm selection
+
+    ; Cancel button: X range [98, 150)
+    cmp ax, 98
+    jb .fdlg_loop                       ; In gap between buttons
+    cmp ax, 150
+    jb .fdlg_cancel
+
     jmp .fdlg_loop
 
     ; --- Selection ---
@@ -3742,6 +3770,33 @@ fdlg_draw_full:
     pop word [caller_ds]
 
 .fdraw_done:
+    ; Draw Open and Cancel buttons at bottom
+    push word [caller_es]
+    mov word [caller_es], 0x1000        ; Kernel segment for button labels
+
+    ; Open button (left)
+    mov bx, [fdlg_cx]
+    add bx, 54                          ; X offset in content area
+    mov cx, [fdlg_cy]
+    add cx, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    mov dx, 40                          ; Width
+    mov si, FDLG_BTN_H                  ; Height
+    mov di, fdlg_str_open               ; Label
+    xor al, al                          ; Not pressed
+    call widget_draw_button
+
+    ; Cancel button (right)
+    mov bx, [fdlg_cx]
+    add bx, 98                          ; X offset in content area
+    mov cx, [fdlg_cy]
+    add cx, FDLG_VISIBLE * FDLG_ITEM_H + FDLG_BTN_GAP
+    mov dx, 52                          ; Width
+    mov si, FDLG_BTN_H                  ; Height
+    mov di, fdlg_str_cancel             ; Label
+    xor al, al                          ; Not pressed
+    call widget_draw_button
+
+    pop word [caller_es]
     call win_end_draw
     popa
     ret
@@ -15248,6 +15303,8 @@ fdlg_cy:            dw 0                    ; Content area Y (drawing temp)
 fdlg_dir_entry:     times 32 db 0           ; Temp buffer for readdir entries
 fdlg_title:         db 'Open File', 0
 fdlg_empty:         db '(No files)', 0
+fdlg_str_open:      db 'Open', 0
+fdlg_str_cancel:    db 'Cancel', 0
 
 ; ============================================================================
 ; Padding
