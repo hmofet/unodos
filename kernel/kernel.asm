@@ -44,48 +44,19 @@ entry:
     ; Setting mouse_enabled=0 makes mouse_cursor_show a no-op even if called.
     mov byte [mouse_enabled], 0
 
-    ; Mount filesystem early to read video mode setting from SETTINGS.CFG
-    ; (interrupts still enabled here — needed for INT 13h disk reads)
-    call early_read_video_mode      ; Returns AL = video mode (0x04 or 0x13)
-
     cli
 
-    ; Set video mode based on saved setting (with VGA fallback)
-    cmp al, 0x13
-    je .try_vga
-
-    ; CGA mode 4 (320x200 4-color) — default
+    ; Always start in CGA mode 4 (320x200 4-color)
+    ; VGA mode (if saved in SETTINGS.CFG) is applied later by load_settings,
+    ; AFTER the filesystem is mounted and the launcher is loaded.
+    ; This avoids a double fat16_mount which fails on some USB flash drives
+    ; where INT 10h mode switch disrupts BIOS USB disk emulation state.
     mov byte [video_mode], 0x04
     mov word [video_segment], 0xB800
     xor ax, ax
     mov al, 0x04
     int 0x10
-    jmp .mode_done
 
-.try_vga:
-    ; Attempt VGA mode 13h (320x200 256-color)
-    xor ax, ax
-    mov al, 0x13
-    int 0x10
-    ; Verify mode was actually set (some hardware lacks VGA)
-    mov ah, 0x0F
-    int 0x10
-    and al, 0x7F                    ; Mask high bit (some BIOSes set it)
-    cmp al, 0x13
-    je .vga_ok
-    ; VGA failed — fall back to CGA
-    xor ax, ax
-    mov al, 0x04
-    int 0x10
-    mov byte [video_mode], 0x04
-    mov word [video_segment], 0xB800
-    jmp .mode_done
-
-.vga_ok:
-    mov byte [video_mode], 0x13
-    mov word [video_segment], 0xA000
-
-.mode_done:
     call setup_graphics_post_mode
 
     ; Reset cursor state: even if IRQ12 fired during BIOS calls and set
@@ -1782,6 +1753,47 @@ load_settings:
 .ls_no_mask3:
     mov [win_color], al
 
+    ; Apply video mode if VGA requested (byte 5 of SETTINGS.CFG)
+    ; This is done here (not at early boot) to avoid a double fat16_mount
+    ; which fails on some USB flash drives.
+    mov al, [.ls_buf + 5]
+    cmp al, 0x13
+    jne .ls_done                        ; Not VGA, stay in CGA
+    cmp byte [video_mode], 0x13
+    je .ls_done                         ; Already in VGA
+
+    ; Try VGA mode 13h
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    xor ax, ax
+    mov al, 0x13
+    int 0x10
+    ; Verify mode was actually set (some hardware lacks VGA)
+    mov ah, 0x0F
+    int 0x10
+    and al, 0x7F                        ; Mask high bit (some BIOSes set it)
+    cmp al, 0x13
+    je .ls_vga_ok
+    ; VGA failed — fall back to CGA
+    xor ax, ax
+    mov al, 0x04
+    int 0x10
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    jmp .ls_done
+
+.ls_vga_ok:
+    mov byte [video_mode], 0x13
+    mov word [video_segment], 0xA000
+    call setup_graphics_post_mode
+    ; Reinit draw colors from settings (setup_graphics_post_mode clears screen)
+    mov al, [text_color]
+    mov [draw_fg_color], al
+    mov al, [desktop_bg_color]
+    mov [draw_bg_color], al
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+
     jmp .ls_done
 
 .ls_close:
@@ -1807,109 +1819,6 @@ load_settings:
 .ls_filename: db 'SETTINGS.CFG', 0
 .ls_fh:       db 0
 .ls_buf:      times 6 db 0
-
-; ============================================================================
-; early_read_video_mode - Read video mode byte from SETTINGS.CFG at boot
-; Called before video mode is set, filesystem not yet mounted
-; Input: none (uses boot_drive)
-; Output: AL = video mode (0x04=CGA default, 0x13=VGA)
-; Preserves all other registers
-; ============================================================================
-early_read_video_mode:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-
-    ; Mount filesystem based on boot drive type
-    mov al, [boot_drive]
-    call fs_mount_stub
-    jc .ervm_default                    ; Mount failed, use CGA
-
-    ; BX = mount handle (0=FAT12, 1=FAT16)
-    mov [.ervm_mount], bl
-
-    ; Open SETTINGS.CFG
-    mov si, .ervm_filename
-    cmp byte [.ervm_mount], 1
-    je .ervm_open16
-    call fat12_open
-    jmp .ervm_opened
-.ervm_open16:
-    call fat16_open
-.ervm_opened:
-    jc .ervm_default                    ; File not found, use CGA
-
-    ; Save file handle
-    mov [.ervm_fh], al
-
-    ; Read 6 bytes (magic + font + text + bg + win + video_mode)
-    xor ah, ah                          ; AX = file handle
-    mov bx, 0x1000
-    mov es, bx
-    mov di, .ervm_buf
-    mov cx, 6
-    cmp byte [.ervm_mount], 1
-    je .ervm_read16
-    call fat12_read
-    jmp .ervm_read_done
-.ervm_read16:
-    ; fat16_read uses ES:BX for buffer (not ES:DI)
-    mov bx, .ervm_buf
-    call fat16_read
-.ervm_read_done:
-    jc .ervm_close_default
-
-    ; Close file
-    xor ah, ah
-    mov al, [.ervm_fh]
-    cmp byte [.ervm_mount], 1
-    je .ervm_close16
-    call fat12_close
-    jmp .ervm_check
-.ervm_close16:
-    call fat12_close
-
-.ervm_check:
-    ; Verify magic byte
-    cmp byte [.ervm_buf], 0xA5
-    jne .ervm_default
-
-    ; Byte 5 = video mode (old 5-byte files have 0 here → defaults to CGA)
-    mov al, [.ervm_buf + 5]
-    cmp al, 0x13
-    je .ervm_done
-    ; Not VGA, use CGA default
-    jmp .ervm_default
-
-.ervm_close_default:
-    xor ah, ah
-    mov al, [.ervm_fh]
-    cmp byte [.ervm_mount], 1
-    je .ervm_cd16
-    call fat12_close
-    jmp .ervm_default
-.ervm_cd16:
-    call fat12_close
-
-.ervm_default:
-    mov al, 0x04
-
-.ervm_done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-.ervm_filename: db 'SETTINGS.CFG', 0
-.ervm_fh:       db 0
-.ervm_mount:    db 0
-.ervm_buf:      times 6 db 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
