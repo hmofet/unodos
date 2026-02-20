@@ -70,6 +70,7 @@ API_CTX_MENU_OPEN       equ 87
 API_CTX_MENU_CLOSE      equ 88
 API_CTX_MENU_HIT        equ 89
 API_FILE_DIALOG         equ 90
+API_WORD_TO_STRING      equ 91
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -2150,11 +2151,11 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov ax, [cs:cursor_line]
-    inc ax
+    mov dx, [cs:cursor_line]
+    inc dx
     mov di, num_buf
-    call word_to_decimal
-    mov byte [cs:di], 0
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 22
     mov cx, STATUS_Y
     mov si, num_buf
@@ -2167,11 +2168,11 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov ax, [cs:cursor_col]
-    inc ax
+    mov dx, [cs:cursor_col]
+    inc dx
     mov di, num_buf
-    call word_to_decimal
-    mov byte [cs:di], 0
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 84
     mov cx, STATUS_Y
     mov si, num_buf
@@ -2179,9 +2180,10 @@ draw_status:
     int 0x80
 
     ; Byte count on the right
-    mov ax, [cs:text_len]
+    mov dx, [cs:text_len]
     mov di, num_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov byte [cs:di], ' '
     inc di
     mov byte [cs:di], 'B'
@@ -2473,39 +2475,6 @@ copy_str:
     inc di
     jmp .cs_loop
 .cs_done:
-    pop ax
-    ret
-
-word_to_decimal:
-    push ax
-    push bx
-    push cx
-    push dx
-    test ax, ax
-    jnz .wtd_nz
-    mov byte [cs:di], '0'
-    inc di
-    jmp .wtd_done
-.wtd_nz:
-    xor cx, cx
-    mov bx, 10
-.wtd_div:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    test ax, ax
-    jnz .wtd_div
-.wtd_store:
-    pop ax
-    add al, '0'
-    mov [cs:di], al
-    inc di
-    loop .wtd_store
-.wtd_done:
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 

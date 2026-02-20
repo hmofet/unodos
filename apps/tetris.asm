@@ -211,6 +211,7 @@ API_FILLED_RECT_COLOR    equ 67
 API_DRAW_HLINE           equ 69
 API_DRAW_VLINE           equ 70
 API_DELAY_TICKS          equ 73
+API_WORD_TO_STRING       equ 91
 
 EVENT_KEY_PRESS          equ 1
 
@@ -1933,8 +1934,10 @@ update_score_display:
     int 0x80
 
     ; Draw score value
-    mov ax, [cs:score_lo]
-    call word_to_decimal
+    mov dx, [cs:score_lo]
+    mov di, num_buf
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 240
     mov cx, 26
     mov si, num_buf
@@ -1942,8 +1945,10 @@ update_score_display:
     int 0x80
 
     ; Draw lines value
-    mov ax, [cs:lines]
-    call word_to_decimal
+    mov dx, [cs:lines]
+    mov di, num_buf
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 240
     mov cx, 38
     mov si, num_buf
@@ -1951,57 +1956,16 @@ update_score_display:
     int 0x80
 
     ; Draw level value
-    xor ax, ax
-    mov al, [cs:level]
-    call word_to_decimal
+    movzx dx, byte [cs:level]
+    mov di, num_buf
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 240
     mov cx, 50
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
-    ret
-
-; ============================================================================
-; word_to_decimal - Convert AX to decimal string in num_buf
-; Input: AX = value
-; Output: num_buf filled with null-terminated string
-; ============================================================================
-word_to_decimal:
-    pusha
-
-    mov di, num_buf + 5
-    mov byte [cs:di], 0             ; Null terminator
-    dec di
-
-    mov bx, 10
-    mov cx, 0                       ; Digit count
-.wtd_loop:
-    xor dx, dx
-    div bx                          ; AX = quotient, DX = remainder
-    add dl, '0'
-    mov [cs:di], dl
-    dec di
-    inc cx
-    test ax, ax
-    jnz .wtd_loop
-
-    ; Shift string to start of num_buf
-    inc di                          ; DI points to first digit
-    mov si, num_buf
-    cmp di, si
-    je .wtd_done                    ; Already at start
-.wtd_shift:
-    mov al, [cs:di]
-    mov [cs:si], al
-    test al, al
-    jz .wtd_done
-    inc di
-    inc si
-    jmp .wtd_shift
-
-.wtd_done:
     popa
     ret
 

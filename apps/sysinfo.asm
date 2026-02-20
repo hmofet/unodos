@@ -49,6 +49,8 @@ API_GET_TICK            equ 63
 API_GET_RTC_TIME        equ 72
 API_GET_TASK_INFO       equ 74
 API_GET_SCREEN_INFO     equ 82
+API_WORD_TO_STRING      equ 91
+API_BCD_TO_ASCII        equ 92
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -223,9 +225,10 @@ draw_static:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Format: WIDTHxHEIGHT
-    mov ax, [screen_w]
+    mov dx, [screen_w]
     mov di, num_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 64
     mov cx, 38
     mov si, num_buf
@@ -238,9 +241,10 @@ draw_static:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Height
-    mov ax, [screen_h]
+    mov dx, [screen_h]
     mov di, num_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 112
     mov cx, 38
     mov si, num_buf
@@ -253,9 +257,10 @@ draw_static:
     mov si, str_mem_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov ax, [mem_kb]
+    mov dx, [mem_kb]
     mov di, num_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 64
     mov cx, 48
     mov si, num_buf
@@ -294,9 +299,10 @@ draw_dynamic:
     mov ah, API_GET_TASK_INFO
     int 0x80
     ; CL = running task count
-    mov al, cl
+    movzx dx, cl
     mov di, num_buf
-    call byte_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 64
     mov cx, 60
     mov si, num_buf
@@ -336,17 +342,23 @@ draw_dynamic:
     ; CH=hours(BCD), CL=minutes(BCD), DH=seconds(BCD)
     ; Format: HH:MM:SS
     mov al, ch                  ; Hours
-    mov di, time_buf
-    call bcd_to_ascii
-    mov byte [di], ':'
-    inc di
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [time_buf], ah
+    mov [time_buf+1], al
+    mov byte [time_buf+2], ':'
     mov al, cl                  ; Minutes
-    call bcd_to_ascii
-    mov byte [di], ':'
-    inc di
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [time_buf+3], ah
+    mov [time_buf+4], al
+    mov byte [time_buf+5], ':'
     mov al, dh                  ; Seconds
-    call bcd_to_ascii
-    mov byte [di], 0            ; Null terminate
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [time_buf+6], ah
+    mov [time_buf+7], al
+    mov byte [time_buf+8], 0    ; Null terminate
 
     mov bx, 64
     mov cx, 76
@@ -370,8 +382,10 @@ draw_dynamic:
 
     mov ah, API_GET_TICK
     int 0x80
+    mov dx, ax
     mov di, num_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov bx, 64
     mov cx, 86
     mov si, num_buf
@@ -379,67 +393,6 @@ draw_dynamic:
     int 0x80
 
     popa
-    ret
-
-; ============================================================================
-; Helpers
-; ============================================================================
-
-; bcd_to_ascii - Convert BCD byte to 2 ASCII digits
-; Input: AL=BCD value, DS:DI=destination
-; Output: DI advanced by 2
-bcd_to_ascii:
-    push ax
-    mov ah, al
-    shr al, 4                  ; High nibble
-    add al, '0'
-    mov [di], al
-    inc di
-    mov al, ah
-    and al, 0x0F               ; Low nibble
-    add al, '0'
-    mov [di], al
-    inc di
-    pop ax
-    ret
-
-; word_to_decimal - Convert 16-bit value to decimal string
-; Input: AX=value, DS:DI=destination buffer (6 bytes min)
-; Output: null-terminated decimal string at DI
-word_to_decimal:
-    pusha
-    mov bx, di                 ; Save start
-    mov cx, 0                  ; Digit count
-    mov si, 10
-
-.wtd_loop:
-    xor dx, dx
-    div si                     ; AX = AX/10, DX = remainder
-    push dx                    ; Save digit
-    inc cx
-    test ax, ax
-    jnz .wtd_loop
-
-    ; Pop digits in correct order
-    mov di, bx
-.wtd_pop:
-    pop ax
-    add al, '0'
-    mov [di], al
-    inc di
-    loop .wtd_pop
-    mov byte [di], 0           ; Null terminate
-    popa
-    ret
-
-; byte_to_decimal - Convert 8-bit value to decimal string
-; Input: AL=value, DS:DI=destination buffer
-; Output: null-terminated decimal string at DI
-byte_to_decimal:
-    push ax
-    xor ah, ah
-    call word_to_decimal
-    pop ax
     ret
 
 ; ============================================================================
@@ -456,7 +409,7 @@ mem_kb:         dw 0
 
 ; Static labels
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 276', 0
+str_build:      db 'Build 277', 0
 str_boot_label: db 'Boot:', 0
 str_floppy:     db 'Floppy', 0
 str_harddisk:   db 'Hard Disk', 0

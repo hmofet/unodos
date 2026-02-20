@@ -60,6 +60,7 @@ API_HIT_TEST            equ 53
 API_DRAW_LISTITEM       equ 59
 API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
+API_WORD_TO_STRING      equ 91
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -940,9 +941,10 @@ draw_input_line:
 ; ============================================================================
 draw_file_count:
     pusha
-    movzx ax, byte [cs:file_count]
+    movzx dx, byte [cs:file_count]
     mov di, count_buf
-    call word_to_decimal
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov byte [cs:di], ' '
     inc di
     ; Append "files"
@@ -998,9 +1000,9 @@ format_row:
     jmp .fr_pad_loop
 .fr_size:
     ; Append file size as decimal
-    mov ax, [cs:bx + 13]
-    call word_to_decimal
-    mov byte [cs:di], 0
+    mov dx, [cs:bx + 13]
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     popa
     ret
 
@@ -1027,43 +1029,6 @@ get_sel_name:
     jb .gsn_len
 .gsn_done:
     mov [cs:sel_name_len], al
-    pop bx
-    pop ax
-    ret
-
-; ============================================================================
-; word_to_decimal - Convert AX to decimal string at CS:DI
-; Output: DI points past last digit
-; ============================================================================
-word_to_decimal:
-    push ax
-    push bx
-    push cx
-    push dx
-    test ax, ax
-    jnz .wtd_nz
-    mov byte [cs:di], '0'
-    inc di
-    jmp .wtd_done
-.wtd_nz:
-    xor cx, cx
-    mov bx, 10
-.wtd_div:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    test ax, ax
-    jnz .wtd_div
-.wtd_store:
-    pop ax
-    add al, '0'
-    mov [cs:di], al
-    inc di
-    loop .wtd_store
-.wtd_done:
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret

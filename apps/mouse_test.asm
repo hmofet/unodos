@@ -49,6 +49,7 @@ API_WIN_END_DRAW        equ 32
 ; Multitasking
 API_APP_YIELD           equ 34
 API_GFX_SET_FONT        equ 48
+API_WORD_TO_STRING      equ 91
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -148,12 +149,14 @@ entry:
 
     ; Build position string
     mov di, str_buffer
-    mov ax, [cs:cur_x]
-    call word_to_decimal
+    mov dx, [cs:cur_x]
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov byte [cs:di], ','
     inc di
-    mov ax, [cs:cur_y]
-    call word_to_decimal
+    mov dx, [cs:cur_y]
+    mov ah, API_WORD_TO_STRING
+    int 0x80
     mov byte [cs:di], 0
 
     ; Draw position (window-relative)
@@ -342,47 +345,6 @@ draw_labels:
     int 0x80
 
     popa
-    ret
-
-; ============================================================================
-; word_to_decimal - Convert AX to decimal string at CS:DI
-; ============================================================================
-word_to_decimal:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    test ax, ax
-    jnz .not_zero
-    mov byte [cs:di], '0'
-    inc di
-    jmp .done
-
-.not_zero:
-    mov cx, 0
-    mov bx, 10
-
-.div_loop:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    test ax, ax
-    jnz .div_loop
-
-.store_loop:
-    pop ax
-    add al, '0'
-    mov [cs:di], al
-    inc di
-    loop .store_loop
-
-.done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; ============================================================================
