@@ -282,11 +282,15 @@ int80_return_point:
 
     ; Restore pre-translation BX/CX so apps keep their original coordinates.
     ; DS is still kernel (0x1000) at this point (caller DS is on stack).
+    ; CRITICAL: pushf/popf preserves CF from the API function — the cmp
+    ; below would otherwise clobber it, breaking all CF-based return status.
+    pushf
     cmp byte [_did_translate], 0
     je .no_coord_restore
     mov bx, [_save_bx]
     mov cx, [_save_cx]
 .no_coord_restore:
+    popf
     pop ds                          ; Restore caller's DS
     ; Stack: [IP] [CS] [FLAGS]
     push bp
