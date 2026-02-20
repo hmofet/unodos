@@ -978,15 +978,17 @@ int_74_handler:
     ; AX now has signed 16-bit delta X
     add [mouse_x], ax
 
-    ; Clamp X to 0-319
+    ; Clamp X to 0..screen_width-1
     cmp word [mouse_x], 0x8000      ; Negative (wrapped)?
     jb .x_not_neg
     mov word [mouse_x], 0
     jmp .do_y
 .x_not_neg:
-    cmp word [mouse_x], 319
+    mov ax, [screen_width]
+    dec ax
+    cmp [mouse_x], ax
     jbe .do_y
-    mov word [mouse_x], 319
+    mov [mouse_x], ax
 
 .do_y:
     ; Calculate delta Y (signed, inverted for screen coords)
@@ -1002,15 +1004,17 @@ int_74_handler:
     neg ax                          ; Invert for screen Y (mouse up = screen up)
     add [mouse_y], ax
 
-    ; Clamp Y to 0-199
+    ; Clamp Y to 0..screen_height-1
     cmp word [mouse_y], 0x8000
     jb .y_not_neg
     mov word [mouse_y], 0
     jmp .post_event
 .y_not_neg:
-    cmp word [mouse_y], 199
+    mov ax, [screen_height]
+    dec ax
+    cmp [mouse_y], ax
     jbe .post_event
-    mov word [mouse_y], 199
+    mov [mouse_y], ax
 
 .post_event:
     ; Update drag state machine (sets flags only, no win_move)
@@ -1112,15 +1116,17 @@ mouse_bios_callback:
 .bios_x_pos:
     add [mouse_x], ax
 
-    ; Clamp X to 0-319
+    ; Clamp X to 0..screen_width-1
     cmp word [mouse_x], 0x8000
     jb .bios_x_not_neg
     mov word [mouse_x], 0
     jmp .bios_do_y
 .bios_x_not_neg:
-    cmp word [mouse_x], 319
+    mov ax, [screen_width]
+    dec ax
+    cmp [mouse_x], ax
     jbe .bios_do_y
-    mov word [mouse_x], 319
+    mov [mouse_x], ax
 
 .bios_do_y:
     ; === Y delta: sign-extend CL using status bit 5, then negate ===
@@ -1133,15 +1139,17 @@ mouse_bios_callback:
     neg ax                          ; Invert for screen coords (mouse up = Y--)
     add [mouse_y], ax
 
-    ; Clamp Y to 0-199
+    ; Clamp Y to 0..screen_height-1
     cmp word [mouse_y], 0x8000
     jb .bios_y_not_neg
     mov word [mouse_y], 0
     jmp .bios_post
 .bios_y_not_neg:
-    cmp word [mouse_y], 199
+    mov ax, [screen_height]
+    dec ax
+    cmp [mouse_y], ax
     jbe .bios_post
-    mov word [mouse_y], 199
+    mov [mouse_y], ax
 
 .bios_post:
     call mouse_drag_update
@@ -1182,14 +1190,18 @@ mouse_get_state:
 ; Input: BX = X position, CX = Y position
 ; Output: None
 mouse_set_position:
-    cmp bx, 319
+    mov ax, [screen_width]
+    dec ax
+    cmp bx, ax
     jbe .x_ok
-    mov bx, 319
+    mov bx, ax
 .x_ok:
     mov [mouse_x], bx
-    cmp cx, 199
+    mov ax, [screen_height]
+    dec ax
+    cmp cx, ax
     jbe .y_ok
-    mov cx, 199
+    mov cx, ax
 .y_ok:
     mov [mouse_y], cx
     ret
@@ -1311,8 +1323,9 @@ test_filesystem:
     ; Clear previous display area
     mov bx, 0
     mov cx, 10
-    mov dx, 320
-    mov si, 190
+    mov dx, [screen_width]
+    mov si, [screen_height]
+    sub si, 10
     call gfx_clear_area_stub
 
     ; Display instruction to insert test floppy
@@ -2315,9 +2328,9 @@ cga_pixel_calc:
     ret
 
 plot_pixel_white:
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .out
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .out
     cmp byte [video_mode], 0x13
     je .vga
@@ -2345,17 +2358,16 @@ plot_pixel_white:
     ret
 .vga:
     push ax
+    push dx
     push di
     mov ax, bx
-    shl ax, 6                          ; Y * 64
+    mul word [screen_pitch]            ; AX = Y * pitch (DX:AX, DX ignored for 16-bit)
+    add ax, cx                         ; AX = Y * pitch + X
     mov di, ax
-    mov ax, bx
-    shl ax, 8                          ; Y * 256
-    add di, ax                         ; DI = Y * 320
-    add di, cx                         ; DI = Y * 320 + X
     mov al, [draw_fg_color]
     mov [es:di], al
     pop di
+    pop dx
     pop ax
     ret
 
@@ -2366,9 +2378,9 @@ plot_pixel_white:
 ; ============================================================================
 
 plot_pixel_black:
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .out
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .out
     cmp byte [video_mode], 0x13
     je .vga
@@ -2393,16 +2405,15 @@ plot_pixel_black:
     ret
 .vga:
     push ax
+    push dx
     push di
     mov ax, bx
-    shl ax, 6
+    mul word [screen_pitch]
+    add ax, cx
     mov di, ax
-    mov ax, bx
-    shl ax, 8
-    add di, ax
-    add di, cx
     mov byte [es:di], 0             ; Color 0 = black
     pop di
+    pop dx
     pop ax
     ret
 
@@ -2414,9 +2425,9 @@ plot_pixel_black:
 ; ============================================================================
 
 plot_pixel_xor:
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .out
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .out
     cmp byte [video_mode], 0x13
     je .vga
@@ -2439,14 +2450,13 @@ plot_pixel_xor:
 .vga:
     push ax
     push di
+    push dx
     mov ax, bx
-    shl ax, 6
+    mul word [screen_pitch]
+    add ax, cx
     mov di, ax
-    mov ax, bx
-    shl ax, 8
-    add di, ax
-    add di, cx
     xor byte [es:di], 0xFF         ; Full byte XOR for cursor visibility
+    pop dx
     pop di
     pop ax
     ret
@@ -2471,7 +2481,7 @@ cursor_xor_sprite:
 
 .row_loop:
     push cx
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .skip_row
     mov ah, [si]                    ; AH = first byte (pixels 0-3)
     mov al, [si+1]                  ; AL = second byte (pixels 4-7)
@@ -2481,7 +2491,7 @@ cursor_xor_sprite:
     shr dl, 6                       ; DL = pixel color (0-3)
     test dl, dl
     jz .skip_pixel
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .skip_pixel
     mov [cs:cursor_color], dl
     push ax
@@ -2516,7 +2526,7 @@ cursor_xor_sprite:
     mov si, cursor_bitmap_color
 .vc_row:
     push cx                         ; Save X start
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .vc_skip_row
     mov ah, [si]                    ; Pixels 0-3 (2bpp)
     mov al, [si+1]                  ; Pixels 4-7 (2bpp)
@@ -2526,19 +2536,18 @@ cursor_xor_sprite:
     shr dl, 6                       ; DL = pixel color (0-3)
     test dl, dl
     jz .vc_skip_pix
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .vc_skip_pix
     ; Calculate VGA offset for (CX=X, BX=Y)
     push ax
     push di
+    push dx
     mov ax, bx
-    shl ax, 6
+    mul word [screen_pitch]
+    add ax, cx
     mov di, ax
-    mov ax, bx
-    shl ax, 8
-    add di, ax                      ; DI = Y * 320
-    add di, cx                      ; DI = Y * 320 + X
     xor byte [es:di], 0xFF         ; XOR for cursor visibility
+    pop dx
     pop di
     pop ax
 .vc_skip_pix:
@@ -3425,7 +3434,7 @@ menu_open:
 
     ; Clamp X so menu fits on screen
     movzx ax, dh                    ; AX = menu width
-    mov si, 320
+    mov si, [screen_width]
     sub si, ax                      ; SI = max X
     cmp bx, si
     jbe .mo_x_ok
@@ -3436,7 +3445,7 @@ menu_open:
     ; Clamp Y so menu fits on screen
     movzx ax, dl                    ; AX = item count
     imul ax, KMENU_ITEM_H           ; AX = menu height
-    mov si, 200
+    mov si, [screen_height]
     sub si, ax                      ; SI = max Y
     cmp cx, si
     jbe .mo_y_ok
@@ -3601,7 +3610,8 @@ file_dialog_open:
     mov [fdlg_btn_h], ax               ; btn_h = font_height + 4
 
     ; Compute max visible items, capped at 11
-    mov ax, 182                        ; 200 - 18 (titlebar + borders + gap + margins)
+    mov ax, [screen_height]
+    sub ax, 18                         ; titlebar + borders + gap + margins
     sub ax, [fdlg_btn_h]
     xor dx, dx
     div word [fdlg_item_h]
@@ -3621,8 +3631,8 @@ file_dialog_open:
     add ax, [fdlg_btn_h]
     mov [fdlg_h_dyn], ax
 
-    ; Center: y = (200 - win_h) / 2
-    mov bx, 200
+    ; Center: y = (screen_height - win_h) / 2
+    mov bx, [screen_height]
     sub bx, ax
     shr bx, 1
     mov [fdlg_y_dyn], bx
@@ -3632,7 +3642,9 @@ file_dialog_open:
 
     ; Create dialog window (title in kernel segment)
     mov word [caller_es], 0x1000
-    mov bx, FDLG_X
+    mov bx, [screen_width]
+    sub bx, FDLG_W
+    shr bx, 1                          ; Center X: (screen_width - FDLG_W) / 2
     mov cx, [fdlg_y_dyn]
     mov dx, FDLG_W
     mov si, [fdlg_h_dyn]
@@ -4653,9 +4665,9 @@ gfx_get_font_metrics:
 ; Preserves all registers except flags
 ; ============================================================================
 plot_pixel_color:
-    cmp cx, 320
+    cmp cx, [screen_width]
     jae .ppc_out
-    cmp bx, 200
+    cmp bx, [screen_height]
     jae .ppc_out
     cmp byte [video_mode], 0x13
     je .ppc_vga
@@ -4688,13 +4700,12 @@ plot_pixel_color:
 .ppc_vga:
     push ax
     push di
+    push dx                            ; Save DL (color) before mul clobbers DX
     mov ax, bx
-    shl ax, 6                          ; Y * 64
+    mul word [screen_pitch]            ; AX = Y * pitch
+    add ax, cx                         ; AX = Y * pitch + X
     mov di, ax
-    mov ax, bx
-    shl ax, 8                          ; Y * 256
-    add di, ax                         ; DI = Y * 320
-    add di, cx                         ; DI = Y * 320 + X
+    pop dx                             ; Restore DL (color)
     mov [es:di], dl                    ; Write color byte directly
     pop di
     pop ax
@@ -6519,14 +6530,13 @@ gfx_clear_area_stub:
     ; BX=X, CX=Y, DX=width, SI=height
 .vga_clear_row:
     push cx                         ; Save Y
-    ; DI = Y * 320 + X
+    ; DI = Y * screen_pitch + X
     mov ax, cx
-    shl ax, 6
-    mov di, ax
-    mov ax, cx
-    shl ax, 8
-    add di, ax
-    add di, bx                      ; DI = Y*320 + X
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, bx
+    mov di, ax                      ; DI = Y*pitch + X
     mov cx, dx                      ; CX = width (bytes to clear)
     xor al, al
     rep stosb
@@ -6548,9 +6558,9 @@ gfx_clear_area_stub:
 
 ; Internal helper: Clear pixel at BX=X, CX=Y to background color
 .plot_bg:
-    cmp bx, 320
+    cmp bx, [screen_width]
     jae .bg_out
-    cmp cx, 200
+    cmp cx, [screen_height]
     jae .bg_out
     push ax
     push bx
@@ -11619,8 +11629,10 @@ app_exit_stub:
     jnz .skip_fullscreen_repaint
     mov word [redraw_old_x], 0
     mov word [redraw_old_y], 0
-    mov word [redraw_old_w], 320
-    mov word [redraw_old_h], 200
+    mov ax, [screen_width]
+    mov [redraw_old_w], ax
+    mov ax, [screen_height]
+    mov [redraw_old_h], ax
     call redraw_affected_windows
 .skip_fullscreen_repaint:
 
@@ -12129,14 +12141,13 @@ gfx_draw_icon_stub:
 .iv_row:
     push cx                         ; Save Y
     push bx                         ; Save X
-    ; Calculate VGA offset: Y*320 + X
+    ; Calculate VGA offset: Y*pitch + X
     mov ax, cx
-    shl ax, 6
-    mov di, ax
-    mov ax, cx
-    shl ax, 8
-    add di, ax
-    add di, bx                      ; DI = Y*320 + X
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, bx
+    mov di, ax                      ; DI = Y*pitch + X
     ; Unpack 4 source bytes (16 pixels at 2bpp) to 16 VGA bytes
     push dx                         ; Save row counter
     mov cx, 4                       ; 4 source bytes
@@ -12509,14 +12520,13 @@ gfx_fill_color:
     push cx                         ; Save Y
     push bx                         ; Save X
     push dx                         ; Save width
-    ; Calculate offset: DI = Y * 320 + X
+    ; Calculate offset: DI = Y * pitch + X
     mov ax, cx
-    shl ax, 6                       ; Y * 64
-    mov di, ax
-    mov ax, cx
-    shl ax, 8                       ; Y * 256
-    add di, ax                      ; DI = Y * 320
-    add di, bx                      ; DI = Y * 320 + X
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, bx
+    mov di, ax                      ; DI = Y * pitch + X
     mov cx, dx                      ; CX = width (rep count)
     mov al, [.fill_color]
     rep stosb                       ; Fill width bytes with color
@@ -14215,15 +14225,15 @@ win_move_stub:
     mov [.win_h], ax
 
     ; Clamp new position to keep window on screen
-    mov ax, 320
-    sub ax, [.win_w]                ; AX = max X (320 - width)
+    mov ax, [screen_width]
+    sub ax, [.win_w]                ; AX = max X (screen_width - width)
     js .x_clamp_done                ; Skip if window wider than screen
     cmp [.new_x], ax
     jbe .x_clamp_done
     mov [.new_x], ax
 .x_clamp_done:
-    mov ax, 200
-    sub ax, [.win_h]                ; AX = max Y (200 - height)
+    mov ax, [screen_height]
+    sub ax, [.win_h]                ; AX = max Y (screen_height - height)
     js .y_clamp_done                ; Skip if window taller than screen
     cmp [.new_y], ax
     jbe .y_clamp_done
@@ -14784,8 +14794,8 @@ set_rtc_time:
 ; get_screen_info - Get screen dimensions and mode (API 82)
 ; Output: BX=width, CX=height, AL=mode, AH=colors, CF=0
 get_screen_info:
-    mov bx, 320
-    mov cx, 200
+    mov bx, [screen_width]
+    mov cx, [screen_height]
     mov al, [video_mode]                ; AL = current mode (0x04 or 0x13)
     cmp al, 0x13
     je .gsi_vga
@@ -14818,6 +14828,11 @@ set_video_mode:
     ; Set CGA mode 4
     mov byte [video_mode], 0x04
     mov word [video_segment], 0xB800
+    mov word [screen_width], 320
+    mov word [screen_height], 200
+    mov byte [screen_bpp], 2
+    mov word [screen_pitch], 80
+    mov byte [widget_style], 0
     push ax
     xor ax, ax
     mov al, 0x04
@@ -14843,11 +14858,21 @@ set_video_mode:
     int 0x10
     mov byte [video_mode], 0x04
     mov word [video_segment], 0xB800
+    mov word [screen_width], 320
+    mov word [screen_height], 200
+    mov byte [screen_bpp], 2
+    mov word [screen_pitch], 80
+    mov byte [widget_style], 0
     jmp .svm_setup
 
 .svm_vga_ok:
     mov byte [video_mode], 0x13
     mov word [video_segment], 0xA000
+    mov word [screen_width], 320
+    mov word [screen_height], 200
+    mov byte [screen_bpp], 8
+    mov word [screen_pitch], 320
+    mov byte [widget_style], 1
 
 .svm_setup:
     call setup_graphics_post_mode
@@ -14858,14 +14883,34 @@ set_video_mode:
     mov al, [desktop_bg_color]
     mov [draw_bg_color], al
 
+    ; Update clipping region for new resolution
+    mov ax, [screen_width]
+    dec ax
+    mov [clip_x2], ax
+    mov ax, [screen_height]
+    dec ax
+    mov [clip_y2], ax
+
+    ; Center mouse cursor in new resolution
+    mov ax, [screen_width]
+    shr ax, 1
+    mov [mouse_x], ax
+    mov ax, [screen_height]
+    shr ax, 1
+    mov [mouse_y], ax
+
     ; Force cursor state reset (mode switch clears VRAM)
     mov byte [cursor_visible], 0
 
     ; Trigger full-screen redraw
     mov word [redraw_old_x], 0
     mov word [redraw_old_y], 0
-    mov word [redraw_old_w], 320
-    mov word [redraw_old_h], 200
+    push ax
+    mov ax, [screen_width]
+    mov [redraw_old_w], ax
+    mov ax, [screen_height]
+    mov [redraw_old_h], ax
+    pop ax
     call redraw_affected_windows
 
     dec byte [cursor_locked]
@@ -15635,22 +15680,20 @@ gfx_scroll_area:
 
 .sa_vga_copy:
     push cx
-    ; Source offset: src_y * 320 + x
+    ; Source offset: src_y * pitch + x
     mov ax, [cs:.sa_src_y]
-    shl ax, 6
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, [cs:.sa_x]
     mov si, ax
-    mov ax, [cs:.sa_src_y]
-    shl ax, 8
-    add si, ax
-    add si, [cs:.sa_x]
-    ; Dest offset: dst_y * 320 + x
+    ; Dest offset: dst_y * pitch + x
     mov ax, [cs:.sa_dst_y]
-    shl ax, 6
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, [cs:.sa_x]
     mov di, ax
-    mov ax, [cs:.sa_dst_y]
-    shl ax, 8
-    add di, ax
-    add di, [cs:.sa_x]
     ; Copy width bytes
     mov cx, [cs:.sa_w]
     push ds
@@ -15669,12 +15712,11 @@ gfx_scroll_area:
 .sa_vga_clear:
     push cx
     mov ax, [cs:.sa_dst_y]
-    shl ax, 6
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    add ax, [cs:.sa_x]
     mov di, ax
-    mov ax, [cs:.sa_dst_y]
-    shl ax, 8
-    add di, ax
-    add di, [cs:.sa_x]
     mov cx, [cs:.sa_w]
     xor al, al
     rep stosb
@@ -15756,9 +15798,14 @@ clip_y1:      dw 0                    ; Top (inclusive, absolute)
 clip_x2:      dw 319                  ; Right (inclusive, absolute)
 clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
 
-; Video mode variables (Build 281)
-video_mode:     db 0x04                 ; Current video mode (0x04=CGA, 0x13=VGA)
+; Video mode variables (Build 281, extended Build 291)
+video_mode:     db 0x04                 ; Current video mode (0x04=CGA, 0x12=VGA16, 0x13=VGA256)
 video_segment:  dw 0xB800              ; Video memory segment (0xB800=CGA, 0xA000=VGA)
+screen_width:   dw 320                 ; Current screen width in pixels
+screen_height:  dw 200                 ; Current screen height in pixels
+screen_bpp:     db 2                   ; Bits per pixel (2=CGA, 4=Mode12h, 8=VGA13h/VESA)
+screen_pitch:   dw 80                  ; Bytes per scanline (80=CGA, 320=VGA13h, 640=VESA)
+widget_style:   db 0                   ; 0=flat (CGA), 1=3D beveled (VGA modes)
 
 ; Color theme variables (Build 208)
 draw_fg_color:  db 3                    ; Current foreground drawing color (0-3 CGA, 0-255 VGA)
