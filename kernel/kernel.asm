@@ -2062,6 +2062,8 @@ setup_graphics:
 
 ; setup_graphics_post_mode - Clear screen and set palette (after mode already set)
 setup_graphics_post_mode:
+    cmp byte [video_mode], 0x12
+    je .sgpm_mode12h
     cmp byte [video_mode], 0x13
     je .sgpm_vga
     ; CGA: clear 16KB video memory and set palette
@@ -2096,6 +2098,51 @@ setup_graphics_post_mode:
     pop es
     ; Set up VGA palette (16 standard colors)
     call setup_vga_palette
+    ret
+
+.sgpm_mode12h:
+    ; Mode 12h (640x480x16): clear all 4 planes, set palette
+    push es
+    push dx
+    mov ax, 0xA000
+    mov es, ax
+    ; Enable all planes via Sequencer Map Mask
+    mov dx, 0x3C4
+    mov al, 2                      ; Index 2: Map Mask
+    out dx, al
+    inc dx
+    mov al, 0x0F                   ; All 4 planes
+    out dx, al
+    ; Clear 38400 bytes (640*480/8 = 38400)
+    xor di, di
+    xor ax, ax
+    mov cx, 19200                  ; 38400 / 2
+    rep stosw
+    pop dx
+    pop es
+    ; Set Mode 12h palette via INT 10h
+    call setup_mode12h_palette
+    ret
+
+; setup_mode12h_palette - Set 16 DAC registers for Mode 12h
+setup_mode12h_palette:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    push ds
+    pop es                          ; ES = DS = 0x1000
+    mov ax, 0x1012
+    xor bx, bx                     ; Start at register 0
+    mov cx, 16                      ; 16 registers
+    mov dx, mode12h_palette_data
+    int 0x10
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; setup_vga_palette - Set first 16 DAC registers to standard VGA colors
@@ -2167,6 +2214,415 @@ SYS_TITLE_ACTIVE equ 20
 SYS_TITLE_MID    equ 21
 SYS_TITLE_INACT  equ 22
 SYS_DESKTOP      equ 23
+
+; Mode 12h (640x480x16) color translation table
+; Maps 256 system color indices to 4-bit EGA/VGA attribute values
+; Only first 32 matter (0-15 = standard, 16-31 = system widget colors)
+mode12h_color_map:
+    db  0,  3,  5, 15              ; 0=black, 1=cyan, 2=magenta, 3=white
+    db  4,  1,  2,  7              ; 4=red, 5=blue, 6=green, 7=light gray
+    db  8,  9, 10, 11              ; 8=dark gray, 9=light blue, 10=light green, 11=light cyan
+    db 12, 13, 14,  6              ; 12=light red, 13=light magenta, 14=yellow, 15=brown
+    db  7, 15,  8,  0              ; 16=btn face→7, 17=highlight→15, 18=shadow→8, 19=dk shadow→0
+    db  1,  9,  8,  3              ; 20=title→1, 21=title mid→9, 22=inactive→8, 23=teal→3
+    db  7,  7,  1, 14              ; 24-27: reserved mappings
+    db  2,  4, 11,  8              ; 28-31: reserved mappings
+
+; Mode 12h palette: 16 DAC registers set via INT 10h AX=1012h
+; Matched to approximate the 256-color system palette
+mode12h_palette_data:
+    db  0,  0,  0                   ; 0: Black
+    db  0,  0, 32                   ; 1: Dark Blue (title active)
+    db  0, 42,  0                   ; 2: Green
+    db  0, 42, 42                   ; 3: Cyan / Teal
+    db 42,  0,  0                   ; 4: Red
+    db 42,  0, 42                   ; 5: Magenta
+    db 42, 21,  0                   ; 6: Brown
+    db 48, 48, 48                   ; 7: Light Gray (button face)
+    db 32, 32, 32                   ; 8: Dark Gray (button shadow)
+    db 21, 21, 63                   ; 9: Light Blue (title mid)
+    db 21, 63, 21                   ; 10: Light Green
+    db 21, 63, 63                   ; 11: Light Cyan
+    db 63, 21, 21                   ; 12: Light Red
+    db 63, 21, 63                   ; 13: Light Magenta
+    db 63, 63, 21                   ; 14: Yellow
+    db 63, 63, 63                   ; 15: White (button highlight)
+
+; ============================================================================
+; Mode 12h planar graphics helpers
+; ============================================================================
+
+; mode12h_plot_pixel - Plot single pixel in Mode 12h planar memory
+; Input: CX=X, BX=Y, DL=color (0-255, mapped to 4-bit), ES=0xA000
+; Preserves all registers
+mode12h_plot_pixel:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    ; Map color through translation table
+    push bx
+    movzx bx, dl
+    mov al, [mode12h_color_map + bx]
+    pop bx
+    mov [cs:.m12pp_color], al
+
+    ; Calculate byte offset: Y * 80 + X / 8
+    mov ax, bx                     ; AX = Y
+    push dx
+    mov di, 80
+    mul di                          ; AX = Y * 80
+    pop dx
+    mov di, ax
+    mov ax, cx
+    shr ax, 3                      ; AX = X / 8
+    add di, ax                     ; DI = Y*80 + X/8
+
+    ; Calculate bit mask: 0x80 >> (X & 7)
+    mov ax, cx
+    and al, 7
+    mov cl, al
+    mov ah, 0x80
+    shr ah, cl                     ; AH = bit mask
+
+    ; GC: Set/Reset = color
+    mov dx, 0x3CE
+    xor al, al                     ; Index 0: Set/Reset
+    out dx, al
+    inc dx
+    mov al, [cs:.m12pp_color]
+    out dx, al
+
+    ; GC: Enable Set/Reset = 0x0F
+    dec dx
+    mov al, 1                      ; Index 1
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+
+    ; GC: Bit Mask = pixel mask
+    dec dx
+    mov al, 8                      ; Index 8
+    out dx, al
+    inc dx
+    mov al, ah                     ; Bit mask
+    out dx, al
+
+    ; Read-modify-write
+    mov al, [es:di]                ; Read (loads latches)
+    mov [es:di], al                ; Write (Set/Reset provides color)
+
+    ; Reset: Bit Mask = 0xFF, Enable Set/Reset = 0
+    dec dx
+    mov al, 8
+    out dx, al
+    inc dx
+    mov al, 0xFF
+    out dx, al
+    dec dx
+    mov al, 1
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.m12pp_color: db 0
+
+; mode12h_xor_pixel - XOR a single pixel in Mode 12h
+; Input: CX=X, BX=Y, ES=0xA000
+; Preserves all registers
+mode12h_xor_pixel:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    ; Calculate byte offset: Y * 80 + X / 8
+    mov ax, bx                     ; AX = Y
+    push dx
+    mov di, 80
+    mul di
+    pop dx
+    mov di, ax
+    mov ax, cx
+    shr ax, 3
+    add di, ax                     ; DI = Y*80 + X/8
+
+    ; Bit mask: 0x80 >> (X & 7)
+    mov ax, cx
+    and al, 7
+    mov cl, al
+    mov ah, 0x80
+    shr ah, cl                     ; AH = bit mask
+
+    ; GC: Data Rotate = XOR mode (0x18)
+    mov dx, 0x3CE
+    mov al, 3                      ; Index 3: Data Rotate / Function Select
+    out dx, al
+    inc dx
+    mov al, 0x18                   ; Function = XOR (11b << 3)
+    out dx, al
+
+    ; GC: Set/Reset = 0x0F (all planes)
+    dec dx
+    xor al, al                     ; Index 0
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+
+    ; GC: Enable Set/Reset = 0x0F
+    dec dx
+    mov al, 1
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+
+    ; GC: Bit Mask = pixel mask
+    dec dx
+    mov al, 8
+    out dx, al
+    inc dx
+    mov al, ah
+    out dx, al
+
+    ; Read-modify-write (XOR with all planes)
+    mov al, [es:di]                ; Read (loads latches)
+    mov [es:di], al                ; Write (XOR applied by GC)
+
+    ; Reset GC state
+    dec dx
+    mov al, 8                      ; Bit Mask = 0xFF
+    out dx, al
+    inc dx
+    mov al, 0xFF
+    out dx, al
+    dec dx
+    mov al, 3                      ; Data Rotate = 0 (normal)
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+    dec dx
+    mov al, 1                      ; Enable Set/Reset = 0
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; mode12h_fill_rect - Fill rectangle in Mode 12h planar memory
+; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-255)
+;        ES=0xA000
+; Preserves all registers
+mode12h_fill_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; Map color through translation table
+    push bx
+    movzx bx, al
+    mov al, [mode12h_color_map + bx]
+    pop bx
+    mov [cs:.m12_color], al
+
+    ; Calculate left/right byte positions
+    mov ax, bx                     ; AX = X
+    shr ax, 3                      ; AX = left byte = X/8
+    mov [cs:.m12_left_byte], ax
+    mov ax, bx
+    add ax, dx
+    dec ax                         ; AX = X + W - 1 (rightmost pixel)
+    shr ax, 3                      ; AX = right byte
+    mov [cs:.m12_right_byte], ax
+
+    ; Left mask: pixels from (X%8) to 7
+    mov ax, bx
+    and ax, 7                      ; AX = X % 8
+    mov cl, al
+    mov al, 0xFF
+    shr al, cl                     ; left mask = 0xFF >> (X%8)
+    mov [cs:.m12_left_mask], al
+
+    ; Right mask: pixels from 0 to ((X+W-1)%8)
+    mov ax, bx
+    add ax, dx
+    dec ax                         ; AX = rightmost pixel X
+    and ax, 7
+    mov cl, al
+    mov al, 0xFE                   ; Start with 0xFE
+    shl al, cl                     ; Shift left by bit position
+    not al                         ; Invert: gives mask from bit 7 down to bit pos
+    ; Actually: right mask = 0xFF << (7 - ((X+W-1)%8))
+    mov ax, bx
+    add ax, dx
+    dec ax
+    and ax, 7                      ; AX = (X+W-1) % 8
+    mov cl, 7
+    sub cl, al                     ; CL = 7 - bit_pos
+    mov al, 0xFF
+    shl al, cl                     ; right mask
+    mov [cs:.m12_right_mask], al
+
+    ; Set up GC: Enable Set/Reset = 0x0F (all planes)
+    mov dx, 0x3CE
+    mov al, 1                      ; Index 1: Enable Set/Reset
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+
+    ; GC: Set/Reset value = color
+    dec dx
+    mov al, 0                      ; Index 0: Set/Reset
+    out dx, al
+    inc dx
+    mov al, [cs:.m12_color]
+    out dx, al
+
+    ; GC: Data Rotate = 0 (replace mode)
+    dec dx
+    mov al, 3                      ; Index 3: Data Rotate
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+
+    ; Restore DX = width (we used it for port I/O)
+    ; Actually we saved everything on stack, so DX from stack is width
+    ; But we already used DX for ports. Let's use saved values.
+    mov bp, si                     ; BP = height counter
+
+    ; First row Y offset
+    mov ax, cx                     ; AX = Y (start row)
+
+.m12_row:
+    push ax                        ; Save current Y
+    ; Calculate row base: Y * 80
+    push dx
+    mov di, 80
+    mul di                          ; AX = Y * 80
+    pop dx
+    mov di, ax                     ; DI = row base
+
+    ; Check if left_byte == right_byte (single byte case)
+    mov ax, [cs:.m12_left_byte]
+    cmp ax, [cs:.m12_right_byte]
+    je .m12_single
+
+    ; --- Left partial byte ---
+    add di, ax                     ; DI = row_base + left_byte
+    mov dx, 0x3CE
+    mov al, 8                      ; Index 8: Bit Mask
+    out dx, al
+    inc dx
+    mov al, [cs:.m12_left_mask]
+    out dx, al
+    ; Read-modify-write
+    mov al, [es:di]                ; Read (loads latches)
+    mov [es:di], al                ; Write (Set/Reset provides data)
+    inc di
+
+    ; --- Middle full bytes ---
+    mov cx, [cs:.m12_right_byte]
+    sub cx, [cs:.m12_left_byte]
+    dec cx                         ; CX = middle byte count
+    jle .m12_right                 ; Skip if no middle bytes
+
+    ; Bit Mask = 0xFF (all bits)
+    dec dx
+    mov al, 8
+    out dx, al
+    inc dx
+    mov al, 0xFF
+    out dx, al
+
+    mov al, [cs:.m12_color]        ; Color doesn't matter for Set/Reset, but need a write
+    rep stosb                       ; Write middle bytes (latches loaded by Set/Reset)
+
+.m12_right:
+    ; --- Right partial byte ---
+    mov dx, 0x3CE
+    mov al, 8                      ; Bit Mask
+    out dx, al
+    inc dx
+    mov al, [cs:.m12_right_mask]
+    out dx, al
+    mov al, [es:di]
+    mov [es:di], al
+    jmp .m12_next_row
+
+.m12_single:
+    ; Single byte: mask = left_mask AND right_mask
+    add di, ax                     ; DI = row_base + byte
+    mov al, [cs:.m12_left_mask]
+    and al, [cs:.m12_right_mask]
+    mov dx, 0x3CE
+    push ax                        ; Save combined mask
+    mov al, 8
+    out dx, al
+    inc dx
+    pop ax
+    out dx, al
+    mov al, [es:di]
+    mov [es:di], al
+
+.m12_next_row:
+    pop ax                         ; Restore Y
+    inc ax                         ; Next row
+    dec bp
+    jnz .m12_row
+
+    ; Reset GC state
+    mov dx, 0x3CE
+    mov al, 8                      ; Bit Mask = 0xFF
+    out dx, al
+    inc dx
+    mov al, 0xFF
+    out dx, al
+    dec dx
+    mov al, 1                      ; Enable Set/Reset = 0
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.m12_color:       db 0
+.m12_left_byte:   dw 0
+.m12_right_byte:  dw 0
+.m12_left_mask:   db 0
+.m12_right_mask:  db 0
 
 ; ============================================================================
 ; Welcome Box - White bordered rectangle with text
@@ -2359,6 +2815,8 @@ plot_pixel_white:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x12
+    je .mode12h
     cmp byte [video_mode], 0x13
     je .vga
     push ax
@@ -2397,6 +2855,12 @@ plot_pixel_white:
     pop dx
     pop ax
     ret
+.mode12h:
+    push dx
+    mov dl, [draw_fg_color]
+    call mode12h_plot_pixel
+    pop dx
+    ret
 
 ; ============================================================================
 ; Plot a black pixel (color 0) - for inverted text on white backgrounds
@@ -2409,6 +2873,8 @@ plot_pixel_black:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x12
+    je .mode12h
     cmp byte [video_mode], 0x13
     je .vga
     push ax
@@ -2443,6 +2909,12 @@ plot_pixel_black:
     pop dx
     pop ax
     ret
+.mode12h:
+    push dx
+    xor dl, dl                     ; Color 0 = black
+    call mode12h_plot_pixel
+    pop dx
+    ret
 
 ; ============================================================================
 ; Plot a pixel using XOR with color 3 (white) - for mouse cursor
@@ -2456,6 +2928,8 @@ plot_pixel_xor:
     jae .out
     cmp bx, [screen_height]
     jae .out
+    cmp byte [video_mode], 0x12
+    je .mode12h
     cmp byte [video_mode], 0x13
     je .vga
     push ax
@@ -2487,6 +2961,8 @@ plot_pixel_xor:
     pop di
     pop ax
     ret
+.mode12h:
+    jmp mode12h_xor_pixel              ; Tail call (preserves all regs)
 
 ; ============================================================================
 ; Mouse Cursor Sprite (XOR-based)
@@ -2501,6 +2977,8 @@ CURSOR_WIDTH    equ 8
 ; Color cursor: 2bpp, 14 rows, white outline + cyan fill
 cursor_xor_sprite:
     pusha
+    cmp byte [cs:video_mode], 0x12
+    je .mode12h_cursor
     cmp byte [cs:video_mode], 0x13
     je .vga_cursor
     mov bp, 14                      ; Row counter
@@ -2588,6 +3066,39 @@ cursor_xor_sprite:
     inc bx
     dec bp
     jnz .vc_row
+    popa
+    ret
+
+.mode12h_cursor:
+    ; Mode 12h cursor: use plot_pixel_xor per visible pixel
+    mov bp, 14
+    mov si, cursor_bitmap_color
+.m12c_row:
+    push cx                         ; Save X start
+    cmp bx, [screen_height]
+    jae .m12c_skip_row
+    mov ah, [si]
+    mov al, [si+1]
+    mov di, 8
+.m12c_col:
+    mov dl, ah
+    shr dl, 6
+    test dl, dl
+    jz .m12c_skip_pix
+    cmp cx, [screen_width]
+    jae .m12c_skip_pix
+    call plot_pixel_xor             ; CX=X, BX=Y, ES=video seg
+.m12c_skip_pix:
+    shl ax, 2
+    inc cx
+    dec di
+    jnz .m12c_col
+.m12c_skip_row:
+    pop cx
+    add si, 2
+    inc bx
+    dec bp
+    jnz .m12c_row
     popa
     ret
 
@@ -4331,7 +4842,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1E00 - ($ - $$) db 0
+times 0x2100 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -4696,6 +5207,8 @@ plot_pixel_color:
     jae .ppc_out
     cmp bx, [screen_height]
     jae .ppc_out
+    cmp byte [video_mode], 0x12
+    je .ppc_mode12h
     cmp byte [video_mode], 0x13
     je .ppc_vga
     push ax
@@ -4737,6 +5250,8 @@ plot_pixel_color:
     pop di
     pop ax
     ret
+.ppc_mode12h:
+    jmp mode12h_plot_pixel             ; Tail call (preserves all regs)
 
 ; ============================================================================
 ; gfx_draw_string_wrap - Draw string with word wrapping (API 50)
@@ -6622,6 +7137,8 @@ gfx_clear_area_stub:
     test si, si
     jz .early_ret
 
+    cmp byte [video_mode], 0x12
+    je .mode12h_clear
     cmp byte [video_mode], 0x13
     je .vga_clear
 
@@ -6712,6 +7229,22 @@ gfx_clear_area_stub:
     dec byte [cursor_locked]
     call mouse_cursor_show
 .early_ret:
+    ret
+
+.mode12h_clear:
+    ; Mode 12h: use mode12h_fill_rect with color 0
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    mov ax, 0xA000
+    mov es, ax
+    xor al, al                     ; Color 0 = black
+    call mode12h_fill_rect          ; BX=X, CX=Y, DX=W, SI=H, AL=color
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 .vga_clear:
@@ -12262,6 +12795,8 @@ gfx_draw_icon_stub:
     mov ax, [video_segment]
     mov es, ax
     ; Check video mode before changing DS
+    cmp byte [video_mode], 0x12
+    je .icon_mode12h
     cmp byte [video_mode], 0x13
     je .icon_vga
 
@@ -12318,6 +12853,62 @@ gfx_draw_icon_stub:
     inc cx                          ; Next Y row
     dec dx
     jnz .icon_row
+    jmp .icon_done
+
+.icon_mode12h:
+    ; Mode 12h: unpack 2bpp icon data, write via plot_pixel_color
+    mov ax, [caller_ds]
+    mov ds, ax
+    ; Hide cursor
+    push bx
+    push cx
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    pop ds
+    pop cx
+    pop bx
+    mov dx, 16                      ; 16 rows
+.im12_row:
+    push cx                         ; Save Y
+    push bx                         ; Save X (API: BX=X, CX=Y)
+    ; Unpack 4 source bytes = 16 pixels
+    push dx
+    mov di, 4                       ; 4 bytes per row
+.im12_byte:
+    lodsb                           ; AL = source byte (4 pixels at 2bpp)
+    mov ah, al
+    push di
+    mov di, 4                       ; 4 pixels per byte
+.im12_pixel:
+    mov dl, ah
+    shr dl, 6                       ; DL = 2bpp color
+    ; plot_pixel_color needs CX=X, BX=Y, DL=color, ES=video seg
+    ; Currently: BX=X, CX=Y — need to swap
+    xchg bx, cx                    ; Now CX=X, BX=Y
+    push ds
+    push ax
+    mov ax, 0x1000
+    mov ds, ax
+    call plot_pixel_color
+    pop ax
+    pop ds
+    xchg bx, cx                    ; Restore BX=X, CX=Y
+    shl ah, 2
+    inc bx                          ; Next X pixel
+    dec di
+    jnz .im12_pixel
+    pop di
+    dec di
+    jnz .im12_byte
+    pop dx
+    pop bx                          ; Restore original X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next row
+    dec dx
+    jnz .im12_row
     jmp .icon_done
 
 .icon_vga:
@@ -12637,6 +13228,10 @@ gfx_fill_color:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    ; Mode 12h fast path: planar fill
+    cmp byte [video_mode], 0x12
+    je .gfc_mode12h
+
     ; VGA fast path: linear framebuffer, 1 byte per pixel
     cmp byte [video_mode], 0x13
     je .gfc_vga
@@ -12711,6 +13306,14 @@ gfx_fill_color:
     dec bp
     jnz .gfc_srow
     jmp .gfc_cursor_done            ; Prevent fall-through to VGA path
+
+.gfc_mode12h:
+    ; Mode 12h: use planar fill helper
+    ; BX=X, CX=Y, DX=width, BP=height (SI was moved to BP earlier)
+    mov si, bp                     ; Restore SI = height for mode12h_fill_rect
+    mov al, [.fill_color]
+    call mode12h_fill_rect          ; BX=X, CX=Y, DX=W, SI=H, AL=color
+    jmp .gfc_cursor_done
 
 .gfc_vga:
     ; VGA: linear framebuffer, 1 byte per pixel, rep stosb per row
@@ -15054,6 +15657,8 @@ set_video_mode:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    cmp al, 0x12
+    je .svm_try_mode12h
     cmp al, 0x13
     je .svm_try_vga
 
@@ -15104,6 +15709,31 @@ set_video_mode:
     mov word [screen_height], 200
     mov byte [screen_bpp], 8
     mov word [screen_pitch], 320
+    mov byte [widget_style], 1
+    jmp .svm_setup
+
+.svm_try_mode12h:
+    push ax
+    xor ax, ax
+    mov al, 0x12
+    int 0x10
+    ; Verify mode was set
+    mov ah, 0x0F
+    int 0x10
+    and al, 0x7F
+    cmp al, 0x12
+    pop ax
+    je .svm_mode12h_ok
+    ; Mode 12h failed, fall back to VGA 13h
+    jmp .svm_try_vga
+
+.svm_mode12h_ok:
+    mov byte [video_mode], 0x12
+    mov word [video_segment], 0xA000
+    mov word [screen_width], 640
+    mov word [screen_height], 480
+    mov byte [screen_bpp], 4
+    mov word [screen_pitch], 80
     mov byte [widget_style], 1
 
 .svm_setup:
@@ -15741,6 +16371,8 @@ gfx_scroll_area:
     mov [cs:.sa_h], si
     mov [cs:.sa_scroll], di
 
+    cmp byte [cs:video_mode], 0x12
+    je .sa_mode12h
     cmp byte [cs:video_mode], 0x13
     je .sa_vga
 
@@ -15896,6 +16528,108 @@ gfx_scroll_area:
     pop cx
     dec cx
     jnz .sa_clear_all_loop
+
+.sa_mode12h:
+    ; Mode 12h scroll: use write mode 1 for copy (latch pass-through)
+    ; Pitch = 80 bytes/row, each byte = 8 pixels
+    mov ax, [cs:.sa_h]
+    sub ax, [cs:.sa_scroll]
+    test ax, ax
+    jle .sa_m12_clear_all
+
+    mov cx, ax                      ; CX = rows to copy
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax
+    add ax, [cs:.sa_scroll]
+    mov [cs:.sa_src_y], ax
+
+    ; Calculate byte positions for the region
+    mov ax, [cs:.sa_x]
+    shr ax, 3                      ; Left byte
+    mov [cs:.sa_bpr], ax           ; Temp: left byte offset
+    mov ax, [cs:.sa_x]
+    add ax, [cs:.sa_w]
+    add ax, 7
+    shr ax, 3                      ; Right byte (exclusive)
+    sub ax, [cs:.sa_bpr]           ; Bytes per row
+    mov [cs:.sa_bpr], ax
+
+    ; Set GC to write mode 1 (latches pass through on write)
+    mov dx, 0x3CE
+    mov al, 5                      ; Index 5: Mode register
+    out dx, al
+    inc dx
+    mov al, 1                      ; Write mode 1
+    out dx, al
+
+.sa_m12_copy:
+    push cx
+    ; Source: src_y * 80 + left_byte
+    mov ax, [cs:.sa_src_y]
+    push dx
+    mov di, 80
+    mul di
+    pop dx
+    mov si, ax
+    mov ax, [cs:.sa_x]
+    shr ax, 3
+    add si, ax
+    ; Dest: dst_y * 80 + left_byte
+    mov ax, [cs:.sa_dst_y]
+    push dx
+    mov di, 80
+    mul di
+    pop dx
+    mov di, ax
+    mov ax, [cs:.sa_x]
+    shr ax, 3
+    add di, ax
+    ; Copy bytes (write mode 1: read loads latches, write outputs latches)
+    mov cx, [cs:.sa_bpr]
+    push ds
+    push es
+    pop ds                          ; DS = ES = 0xA000
+    rep movsb
+    pop ds
+    inc word [cs:.sa_src_y]
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_m12_copy
+
+    ; Reset write mode to 0
+    mov dx, 0x3CE
+    mov al, 5
+    out dx, al
+    inc dx
+    xor al, al                     ; Write mode 0
+    out dx, al
+
+    ; Clear exposed strip using mode12h_fill_rect
+    mov bx, [cs:.sa_x]
+    mov cx, [cs:.sa_dst_y]         ; First exposed row
+    mov dx, [cs:.sa_w]
+    mov si, [cs:.sa_scroll]        ; Number of rows to clear
+    xor al, al                     ; Color 0 = black
+    call mode12h_fill_rect
+    jmp .sa_done
+
+.sa_m12_clear_all:
+    ; Reset write mode (safety)
+    mov dx, 0x3CE
+    mov al, 5
+    out dx, al
+    inc dx
+    xor al, al
+    out dx, al
+    ; Clear entire region
+    mov bx, [cs:.sa_x]
+    mov cx, [cs:.sa_y]
+    mov dx, [cs:.sa_w]
+    mov si, [cs:.sa_h]
+    xor al, al
+    call mode12h_fill_rect
+    jmp .sa_done
 
 .sa_vga:
     ; VGA: linear memory, 1 pixel = 1 byte, width in pixels = bytes
