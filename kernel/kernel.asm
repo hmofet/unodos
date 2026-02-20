@@ -116,7 +116,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 94                      ; Max function count (0-93 valid)
+    cmp ah, 95                      ; Max function count (0-94 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -182,7 +182,9 @@ int_80_handler:
     jb .no_translate                ; APIs 81-86: non-drawing
     cmp ah, 88
     jb .do_translate                ; API 87: menu_open
-    jmp .no_translate               ; API 88+: skip translation
+    cmp ah, 94
+    je .do_translate                ; API 94: gfx_draw_sprite
+    jmp .no_translate               ; Others: skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
 
     ; Translate: BX += content_x, CX += content_y
@@ -3968,12 +3970,68 @@ gfx_get_current_font_info:
     clc
     ret
 
+; gfx_draw_sprite - Draw 1-bit transparent sprite (API 94)
+; Input: BX=X, CX=Y, DL=height, DH=width(1-8), AL=color(0-3)
+;        SI=bitmap offset in caller's DS segment
+; Bitmap: 1 byte per row, MSB=leftmost pixel, only set bits draw
+; Output: CF=0 success
+gfx_draw_sprite:
+    pusha
+    push es
+    ; Save params (DS=0x1000 at entry from INT 0x80 dispatch)
+    mov [_spr_color], al
+    mov [_spr_height], dl
+    mov [_spr_width], dh
+    ; Swap to draw convention: BX=Y, CX=X
+    xchg bx, cx
+    ; ES = CGA video segment
+    mov ax, 0xB800
+    mov es, ax
+    ; Cursor protection (DS=0x1000)
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    ; Switch DS to caller_ds for bitmap reading
+    push ds
+    mov ax, [caller_ds]
+    mov ds, ax
+    ; Draw loop
+    movzx bp, byte [cs:_spr_height]
+.spr_row:
+    lodsb                           ; AL = bitmap byte from caller_ds:SI
+    mov ah, al
+    push cx                         ; save base X
+    movzx di, byte [cs:_spr_width]
+.spr_col:
+    test ah, 0x80                   ; check leftmost bit
+    jz .spr_skip
+    push dx
+    mov dl, [cs:_spr_color]
+    call plot_pixel_color           ; CX=X, BX=Y, DL=color, ES=0xB800
+    pop dx
+.spr_skip:
+    shl ah, 1                       ; next bit
+    inc cx                          ; next X
+    dec di
+    jnz .spr_col
+    pop cx                          ; restore base X
+    inc bx                          ; next Y row
+    dec bp
+    jnz .spr_row
+    ; Restore kernel DS, cursor
+    pop ds
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    pop es
+    popa
+    clc
+    ret
+
 ; ============================================================================
 ; Kernel API Table
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1B00 - ($ - $$) db 0
+times 0x1B40 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -4132,6 +4190,9 @@ kernel_api_table:
     dw util_word_to_string          ; 91: Convert word to decimal string
     dw util_bcd_to_ascii            ; 92: Convert BCD byte to ASCII pair
     dw gfx_get_current_font_info    ; 93: Get current font metrics
+
+    ; Sprite API (Build 279)
+    dw gfx_draw_sprite              ; 94: Draw 1-bit transparent sprite
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -15130,6 +15191,11 @@ wgt_cursor_pos: dw 0                    ; Widget cursor position (Build 235)
 ; Word-wrap scratch variables (Build 205)
 wrap_start_x:   dw 0                    ; Starting X for line breaks
 wrap_width:     dw 0                    ; Wrap width in pixels
+
+; Sprite drawing temp vars (Build 279)
+_spr_color:  db 0
+_spr_height: db 0
+_spr_width:  db 0
 
 heap_initialized: dw 0
 
