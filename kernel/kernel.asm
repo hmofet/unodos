@@ -8993,7 +8993,7 @@ fat16_open:
     ; Check if entry is used (first byte != 0 and != 0xE5)
     mov al, [si]
     test al, al                     ; End of directory?
-    jz .not_found
+    jz .search_error                ; Jump to search_error to pop saved eax/ecx first
     cmp al, 0xE5                    ; Deleted entry?
     je .next_entry
 
