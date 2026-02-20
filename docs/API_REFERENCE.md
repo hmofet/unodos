@@ -15,7 +15,7 @@ int 0x80                   ; Call kernel
 
 - `INT 0x80` clears the interrupt flag (IF). Apps must call `STI` to re-enable hardware interrupts (keyboard, mouse) after each system call.
 - The kernel saves the caller's DS and ES segments internally. String pointers passed in DS:SI are read from the app's original DS. Window titles passed in ES:DI are read from the app's original ES.
-- When a drawing context is active (API 31), drawing APIs 0-6 and 50-52 auto-translate BX/CX from window-relative to absolute screen coordinates.
+- When a drawing context is active (API 31), drawing APIs 0-6, 50-52, 56-62, 65-71, 80, and 87 auto-translate BX/CX from window-relative to absolute screen coordinates.
 - Only the topmost window (z-order 15) can draw pixels. Drawing calls from background windows are silently dropped.
 
 ## Color Values
@@ -749,6 +749,467 @@ Get the current color theme.
 | BL | Out | Desktop background color |
 | CL | Out | Window border color |
 
+### API 56: widget_draw_checkbox
+
+Draw a checkbox widget with label.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 56 |
+| BX | In | X position |
+| CX | In | Y position |
+| DS:SI | In | Label string |
+| AL | In | Flags (bit 0 = checked) |
+
+### API 57: widget_draw_textfield
+
+Draw a text input field with optional cursor.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 57 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| DS:SI | In | Text string |
+| DI | In | Cursor position |
+| AL | In | Flags (bit 0 = focused, bit 1 = password mode) |
+
+### API 58: widget_draw_scrollbar
+
+Draw a scrollbar with thumb and arrows.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 58 |
+| BX | In | X position |
+| CX | In | Y position |
+| SI | In | Track height |
+| DX | In | Position |
+| DI | In | Max range |
+| AL | In | Flags (bit 0 = horizontal) |
+
+### API 59: widget_draw_listitem
+
+Draw a list item row with optional selection highlight.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 59 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| DS:SI | In | Text string |
+| AL | In | Flags (bit 0 = selected, bit 1 = cursor marker) |
+
+### API 60: widget_draw_progress
+
+Draw a progress bar (8px fixed height).
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 60 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| SI | In | Value (0-100) |
+| AL | In | Flags (bit 0 = show percentage text) |
+
+### API 61: widget_draw_groupbox
+
+Draw a group box frame with label.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 61 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| SI | In | Height |
+| ES:DI | In | Label string |
+| AL | In | Flags |
+
+### API 62: widget_draw_separator
+
+Draw a separator line.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 62 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Length |
+| AL | In | Flags (bit 0 = vertical, else horizontal) |
+
+---
+
+## System Info (63-64)
+
+### API 63: get_tick_count
+
+Get the BIOS timer tick count (18.2 Hz).
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 63 |
+| AX | Out | Tick count (low 16 bits, wraps at 65536) |
+
+### API 64: point_over_window
+
+Check if a screen point is over any visible window.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 64 |
+| BX | In | X position |
+| CX | In | Y position |
+| AL | Out | Window handle (if hit) |
+| CF | Out | 0 = over window, 1 = not over any window |
+
+---
+
+## Extended Widgets (65-66)
+
+### API 65: widget_draw_combobox
+
+Draw a dropdown combo box.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 65 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| DS:SI | In | Text string |
+| AL | In | Flags (bit 0 = focused, bit 1 = open/pressed) |
+
+### API 66: widget_draw_menubar
+
+Draw a horizontal menu bar.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 66 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Bar width |
+| DS:SI | In | Items (consecutive null-terminated strings) |
+| DI | In | Item count |
+| AL | In | Selected index (0xFF = none) |
+
+---
+
+## Colored Drawing (67-71)
+
+### API 67: gfx_draw_filled_rect_color
+
+Draw a filled rectangle with a specific color.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 67 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| SI | In | Height |
+| AL | In | Color (0-3) |
+
+### API 68: gfx_draw_rect_color
+
+Draw a rectangle outline with a specific color.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 68 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| SI | In | Height |
+| AL | In | Color (0-3) |
+
+### API 69: gfx_draw_hline
+
+Draw a horizontal line with color.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 69 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Length |
+| AL | In | Color (0-3) |
+
+### API 70: gfx_draw_vline
+
+Draw a vertical line with color.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 70 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Height |
+| AL | In | Color (0-3) |
+
+### API 71: gfx_draw_line
+
+Draw a line using Bresenham's algorithm.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 71 |
+| BX | In | X1 |
+| CX | In | Y1 |
+| DX | In | X2 |
+| SI | In | Y2 |
+| AL | In | Color (0-3) |
+
+---
+
+## System APIs (72-74, 81-83)
+
+### API 72: get_rtc_time
+
+Read the real-time clock.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 72 |
+| CH | Out | Hours (BCD) |
+| CL | Out | Minutes (BCD) |
+| DH | Out | Seconds (BCD) |
+
+### API 73: delay_ticks
+
+Delay with cooperative yield to scheduler.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 73 |
+| CX | In | Ticks to wait (1 tick ~ 55ms at 18.2 Hz) |
+
+### API 74: get_task_info
+
+Get current task and focus information.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 74 |
+| AL | Out | Current task ID |
+| BL | Out | Focused task ID |
+| CL | Out | Running task count |
+
+### API 81: set_rtc_time
+
+Set the real-time clock.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 81 |
+| CH | In | Hours (BCD) |
+| CL | In | Minutes (BCD) |
+| DH | In | Seconds (BCD) |
+
+### API 82: get_screen_info
+
+Get screen dimensions and mode.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 82 |
+| BX | Out | Width (320) |
+| CX | Out | Height (200) |
+| AL | Out | Mode (4) |
+| AH | Out | Colors (4) |
+
+### API 83: get_key_modifiers
+
+Get keyboard modifier key states.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 83 |
+| AL | Out | Shift state (1 = pressed) |
+| AH | Out | Ctrl state (1 = pressed) |
+| DL | Out | Alt state (1 = pressed) |
+
+---
+
+## Filesystem (75-77)
+
+### API 75: fs_seek
+
+Seek to a position in an open file.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 75 |
+| AL | In | File handle |
+| CX | In | Position high word |
+| DX | In | Position low word |
+| CF | Out | 0 = success, 1 = error |
+
+### API 76: fs_get_file_size
+
+Get the size of an open file.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 76 |
+| AL | In | File handle |
+| DX | Out | Size high word |
+| AX | Out | Size low word |
+| CF | Out | 0 = success, 1 = error |
+
+### API 77: fs_rename
+
+Rename a file.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 77 |
+| BL | In | Mount handle |
+| DS:SI | In | Old filename |
+| ES:DI | In | New filename |
+| CF | Out | 0 = success, 1 = error |
+
+---
+
+## Window Manager (78-79)
+
+### API 78: win_resize
+
+Resize an existing window.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 78 |
+| AL | In | Window handle |
+| DX | In | New width |
+| SI | In | New height |
+| CF | Out | 0 = success, 1 = error |
+
+### API 79: win_get_info
+
+Query window properties.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 79 |
+| AL | In | Window handle |
+| BX | Out | X position |
+| CX | Out | Y position |
+| DX | Out | Width |
+| SI | Out | Height |
+| DI | Out | Flags (high byte) and state (low byte) |
+| CF | Out | 0 = success, 1 = error |
+
+---
+
+## Scroll (80)
+
+### API 80: gfx_scroll_area
+
+Scroll a rectangular region vertically.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 80 |
+| BX | In | X position |
+| CX | In | Y position |
+| DX | In | Width |
+| SI | In | Height |
+| DI | In | Scroll pixels (positive = scroll up) |
+
+---
+
+## Clipboard (84-86)
+
+### API 84: clip_copy
+
+Copy data to the system clipboard.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 84 |
+| DS:SI | In | Source data (caller's DS segment) |
+| CX | In | Byte count |
+| CF | Out | 0 = success, 1 = too large |
+
+Clipboard capacity is 4KB (0x9000:0x0000-0x0FFF).
+
+### API 85: clip_paste
+
+Read data from the system clipboard.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 85 |
+| ES:DI | In | Destination buffer (caller's ES segment) |
+| CX | In | Max bytes to read |
+| CX | Out | Actual bytes copied |
+| CF | Out | 0 = success, 1 = clipboard empty |
+
+### API 86: clip_get_len
+
+Get the clipboard content length.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 86 |
+| CX | Out | Clipboard length (0 = empty) |
+
+---
+
+## Popup Menu (87-89)
+
+### API 87: menu_open
+
+Open a popup menu at a position.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 87 |
+| BX | In | X position (auto-translated by draw_context) |
+| CX | In | Y position (auto-translated by draw_context) |
+| DS:SI | In | String table (consecutive null-terminated strings) |
+| DL | In | Item count |
+| DH | In | Menu width (pixels) |
+
+### API 88: menu_close
+
+Close the active popup menu and repaint the area underneath.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 88 |
+
+### API 89: menu_hit
+
+Hit-test the active popup menu against the current mouse position.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 89 |
+| AL | Out | Item index (0-based), or 0xFF if mouse is outside the menu |
+
+---
+
+## File Dialog (90)
+
+### API 90: file_dialog_open
+
+Open a blocking modal file picker dialog.
+
+| Register | Direction | Description |
+|----------|-----------|-------------|
+| AH | In | 90 |
+| BL | In | Mount handle (0 = FAT12 floppy, 1 = FAT16 hard drive) |
+| ES:DI | In | Destination buffer for filename (13+ bytes) |
+| CF | Out | 0 = file selected (filename at ES:DI), 1 = cancelled |
+
+Creates a modal dialog window with a scrollable file list. Supports keyboard navigation (Up/Down/Enter/ESC) and mouse (click to select, click again or Open button to confirm, Cancel button to dismiss). The call blocks until the user selects a file or cancels.
+
 ---
 
 ## Quick Reference Table
@@ -811,7 +1272,42 @@ Get the current color theme.
 | 53 | widget_hit_test | GUI Toolkit |
 | 54 | theme_set_colors | Theme |
 | 55 | theme_get_colors | Theme |
+| 56 | widget_draw_checkbox | GUI Toolkit |
+| 57 | widget_draw_textfield | GUI Toolkit |
+| 58 | widget_draw_scrollbar | GUI Toolkit |
+| 59 | widget_draw_listitem | GUI Toolkit |
+| 60 | widget_draw_progress | GUI Toolkit |
+| 61 | widget_draw_groupbox | GUI Toolkit |
+| 62 | widget_draw_separator | GUI Toolkit |
+| 63 | get_tick_count | System |
+| 64 | point_over_window | Window Manager |
+| 65 | widget_draw_combobox | GUI Toolkit |
+| 66 | widget_draw_menubar | GUI Toolkit |
+| 67 | gfx_draw_filled_rect_color | Colored Drawing |
+| 68 | gfx_draw_rect_color | Colored Drawing |
+| 69 | gfx_draw_hline | Colored Drawing |
+| 70 | gfx_draw_vline | Colored Drawing |
+| 71 | gfx_draw_line | Colored Drawing |
+| 72 | get_rtc_time | System |
+| 73 | delay_ticks | System |
+| 74 | get_task_info | System |
+| 75 | fs_seek | Filesystem |
+| 76 | fs_get_file_size | Filesystem |
+| 77 | fs_rename | Filesystem |
+| 78 | win_resize | Window Manager |
+| 79 | win_get_info | Window Manager |
+| 80 | gfx_scroll_area | Graphics |
+| 81 | set_rtc_time | System |
+| 82 | get_screen_info | System |
+| 83 | get_key_modifiers | System |
+| 84 | clip_copy | Clipboard |
+| 85 | clip_paste | Clipboard |
+| 86 | clip_get_len | Clipboard |
+| 87 | menu_open | Popup Menu |
+| 88 | menu_close | Popup Menu |
+| 89 | menu_hit | Popup Menu |
+| 90 | file_dialog_open | File Dialog |
 
 ---
 
-*UnoDOS v3.18.0 - 56 API functions (indices 0-55)*
+*UnoDOS v3.21.0 Build 275 - 91 API functions (indices 0-90)*

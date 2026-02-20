@@ -12,7 +12,7 @@ Address Range          Size    Usage
 0x0000:0x7E00          ~1 KB   FREE (after boot sector)
 0x0800:0x0000          2 KB    Stage2 Bootloader
 0x1000:0x0000          28 KB   Kernel
-  0x1000:0x13A0        ~224 B    API dispatch table (56 functions)
+  0x1000:0x1A00        ~364 B    API dispatch table (91 functions)
 0x1400:0x0000          ~64 KB  Heap (malloc pool)
 0x2000:0x0000          64 KB   Shell/Launcher segment (fixed)
 0x3000:0x0000          64 KB   User app slot 0 (dynamic pool)
@@ -57,15 +57,15 @@ Offset    Content
 ~0x6FFF   End of 28KB kernel (padded)
 ```
 
-### API Table Structure (at 0x1000:0x1100)
+### API Table Structure (at 0x1000:0x1A00)
 
 ```
 Offset  Size  Content
 0x00    2     Magic: 0x4B41 ('KA')
 0x02    2     Version: 0x0100 (1.0)
-0x04    2     Function count: 56
+0x04    2     Function count: 91
 0x06    2     Reserved
-0x08    112   Function pointers (56 × 2 bytes)
+0x08    182   Function pointers (91 × 2 bytes)
 ```
 
 ---
@@ -106,9 +106,9 @@ Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
 
 ### Scratch Buffer (0x9000)
 
-Used for OS-managed content preservation during window drags:
-- Reserved for future use (formerly used for window drag content save/restore)
-- Build 156: Outline drag replaced content save/restore approach
+Shared kernel buffer used for system services:
+- **0x0000-0x0FFF**: System clipboard (4KB, used by clip_copy/clip_paste APIs 84-86)
+- **0x1000+**: File dialog list buffer (used by file_dialog_open API 90)
 - Size: up to 64KB
 - Moved from 0x5000 to 0x9000 in Build 149 to free segment for app pool
 
@@ -123,10 +123,10 @@ Used for OS-managed content preservation during window drags:
 | 0x1400-0x1FFF | 48KB | Heap | Available for malloc |
 | 0x2000-0x2FFF | 64KB | Shell segment | Launcher (fixed) |
 | 0x3000-0x8FFF | 384KB | User app pool | 6 × 64KB segments |
-| 0x9000-0x9FFF | 64KB | Scratch buffer | Reserved (formerly drag content) |
+| 0x9000-0x9FFF | 64KB | Scratch buffer | Clipboard (4KB) + file dialog list |
 
 **Overall:** 7 app segments (1 shell + 6 user) using 448KB of the 640KB address space.
 
 ---
 
-*v3.18.0 Build 207*
+*v3.21.0 Build 275*

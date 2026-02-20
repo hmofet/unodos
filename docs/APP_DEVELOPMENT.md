@@ -537,4 +537,7 @@ To include on the OS floppy, place the .BIN file in the FAT12 filesystem of `bui
 
 ---
 
-*For the complete API register reference, see [API_REFERENCE.md](API_REFERENCE.md).*
+*For the complete API register reference (91 functions, APIs 0-90), see [API_REFERENCE.md](API_REFERENCE.md).*
+*For a concise SDK reference with code patterns, see [UNODOS_APP_SDK.md](UNODOS_APP_SDK.md).*
+
+*v3.21.0 Build 275*
