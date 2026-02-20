@@ -63,7 +63,9 @@ API_GET_THEME           equ 55
 API_FILLED_RECT_COLOR   equ 67
 API_GET_RTC_TIME        equ 72
 API_SET_RTC_TIME        equ 81
+API_GET_SCREEN_INFO     equ 82
 API_BCD_TO_ASCII        equ 92
+API_SET_VIDEO_MODE      equ 95
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -85,7 +87,11 @@ CLR_Y_TEXT  equ 78                  ; Text color row Y
 CLR_Y_BG    equ 94                  ; Desktop bg row Y
 CLR_Y_WIN   equ 110                 ; Window color row Y
 
-BTN_Y       equ 136                 ; Button row Y
+; Display mode section (left column, below colors)
+DISP_Y_LBL  equ 126                ; "Display:" label Y
+DISP_Y_RAD  equ 138                ; CGA/VGA radio buttons Y (side by side)
+
+BTN_Y       equ 152                 ; Button row Y
 BTN_DEF_X   equ 116                 ; Defaults button X
 BTN_DEF_W   equ 72                  ; Defaults button width
 
@@ -113,6 +119,11 @@ entry:
     mov [cs:cur_text_clr], al
     mov [cs:cur_bg_clr], bl
     mov [cs:cur_win_clr], cl
+
+    ; Get current video mode from kernel
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    mov [cs:cur_video_mode], al         ; AL = current mode (0x04 or 0x13)
 
     ; Load current RTC time
     mov ah, API_GET_RTC_TIME
@@ -255,6 +266,27 @@ entry:
     test al, al
     jnz .defaults
 
+    ; --- Display mode radio hit tests ---
+    ; CGA radio
+    mov bx, 4
+    mov cx, DISP_Y_RAD
+    mov dx, 56
+    mov si, 12
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .select_cga
+
+    ; VGA radio
+    mov bx, 64
+    mov cx, DISP_Y_RAD
+    mov dx, 56
+    mov si, 12
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .select_vga
+
     ; --- Time control hit tests ---
     ; H+ button
     mov bx, TIME_X
@@ -342,11 +374,22 @@ entry:
     call draw_ui
     jmp .main_loop
 
+.select_cga:
+    mov byte [cs:cur_video_mode], 0x04
+    call draw_ui
+    jmp .main_loop
+
+.select_vga:
+    mov byte [cs:cur_video_mode], 0x13
+    call draw_ui
+    jmp .main_loop
+
 .defaults:
     mov byte [cs:cur_font], 1
     mov byte [cs:cur_text_clr], 3
     mov byte [cs:cur_bg_clr], 0
     mov byte [cs:cur_win_clr], 3
+    mov byte [cs:cur_video_mode], 0x04
     call draw_ui
     jmp .main_loop
 
@@ -619,6 +662,37 @@ draw_ui:
     mov cx, CLR_Y_WIN
     call draw_swatch_row
 
+    ; === Display mode (left column, below colors) ===
+    mov si, lbl_display
+    mov bx, 4
+    mov cx, DISP_Y_LBL
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; CGA radio
+    mov si, lbl_cga
+    mov bx, 4
+    mov cx, DISP_Y_RAD
+    xor al, al
+    cmp byte [cs:cur_video_mode], 0x04
+    jne .rd1
+    mov al, 1
+.rd1:
+    mov ah, API_DRAW_RADIO
+    int 0x80
+
+    ; VGA radio
+    mov si, lbl_vga
+    mov bx, 64
+    mov cx, DISP_Y_RAD
+    xor al, al
+    cmp byte [cs:cur_video_mode], 0x13
+    jne .rd2
+    mov al, 1
+.rd2:
+    mov ah, API_DRAW_RADIO
+    int 0x80
+
     ; === Buttons ===
     mov ax, cs
     mov es, ax
@@ -753,14 +827,29 @@ apply_settings:
     push bx
     push cx
     push dx
+
+    ; Apply font
     mov al, [cs:cur_font]
     mov ah, API_SET_FONT
     int 0x80
+
+    ; Apply theme colors
     mov al, [cs:cur_text_clr]
     mov bl, [cs:cur_bg_clr]
     mov cl, [cs:cur_win_clr]
     mov ah, API_SET_THEME
     int 0x80
+
+    ; Apply video mode if changed
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    cmp al, [cs:cur_video_mode]
+    je .as_mode_ok
+    mov al, [cs:cur_video_mode]
+    mov ah, API_SET_VIDEO_MODE
+    int 0x80
+.as_mode_ok:
+
     pop dx
     pop cx
     pop bx
@@ -783,22 +872,24 @@ save_settings:
     int 0x80
     mov ah, API_FS_MOUNT
     int 0x80
+    ; BX = mount handle (0=FAT12, 1=FAT16)
+    mov [cs:cfg_mount], bl
 
     ; Delete existing SETTINGS.CFG (ignore error if not found)
     mov si, cfg_filename
-    mov bl, 0
+    mov bl, [cs:cfg_mount]
     mov ah, API_FS_DELETE
     int 0x80
 
     ; Create new SETTINGS.CFG
     mov si, cfg_filename
-    mov bl, 0
+    mov bl, [cs:cfg_mount]
     mov ah, API_FS_CREATE
     int 0x80
     jc .ss_done
     mov [cs:cfg_fh], al
 
-    ; Build 5-byte settings buffer
+    ; Build 6-byte settings buffer
     mov byte [cs:cfg_buf], 0xA5        ; Magic byte
     mov al, [cs:cur_font]
     mov [cs:cfg_buf + 1], al
@@ -808,12 +899,14 @@ save_settings:
     mov [cs:cfg_buf + 3], al
     mov al, [cs:cur_win_clr]
     mov [cs:cfg_buf + 4], al
+    mov al, [cs:cur_video_mode]
+    mov [cs:cfg_buf + 5], al
 
-    ; Write 5 bytes
+    ; Write 6 bytes
     mov ax, cs
     mov es, ax
     mov bx, cfg_buf
-    mov cx, 5
+    mov cx, 6
     mov al, [cs:cfg_fh]
     mov ah, API_FS_WRITE
     int 0x80
@@ -1058,6 +1151,9 @@ lbl_h_up:           db 'H+', 0
 lbl_h_dn:           db 'H-', 0
 lbl_m_up:           db 'M+', 0
 lbl_m_dn:           db 'M-', 0
+lbl_display:        db 'Display:', 0
+lbl_cga:            db 'CGA', 0
+lbl_vga:            db 'VGA', 0
 ; ============================================================================
 ; Variables
 ; ============================================================================
@@ -1074,7 +1170,9 @@ swatch_sx:      dw 0                ; Start X for draw_one_swatch
 swatch_row:     dw 0                ; Current row in draw_one_swatch
 swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
-cfg_buf:        times 5 db 0        ; Settings buffer (magic + 4 settings bytes)
+cfg_buf:        times 6 db 0        ; Settings buffer (magic + 5 settings bytes)
+cur_video_mode: db 0x04             ; Current video mode (0x04=CGA, 0x13=VGA)
+cfg_mount:      db 0                ; Mount handle for settings save
 cur_hours:      db 0                ; Current hours (BCD)
 cur_minutes:    db 0                ; Current minutes (BCD)
 cur_seconds:    db 0                ; Current seconds (BCD)

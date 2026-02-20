@@ -43,12 +43,49 @@ entry:
     ; breaking the XOR invariant and leaving a permanent ghost at (160,100).
     ; Setting mouse_enabled=0 makes mouse_cursor_show a no-op even if called.
     mov byte [mouse_enabled], 0
+
+    ; Mount filesystem early to read video mode setting from SETTINGS.CFG
+    ; (interrupts still enabled here — needed for INT 13h disk reads)
+    call early_read_video_mode      ; Returns AL = video mode (0x04 or 0x13)
+
     cli
 
-    ; Set CGA mode 4 (320x200 4-color)
+    ; Set video mode based on saved setting (with VGA fallback)
+    cmp al, 0x13
+    je .try_vga
+
+    ; CGA mode 4 (320x200 4-color) — default
+    mov byte [video_mode], 0x04
+    mov word [video_segment], 0xB800
     xor ax, ax
     mov al, 0x04
     int 0x10
+    jmp .mode_done
+
+.try_vga:
+    ; Attempt VGA mode 13h (320x200 256-color)
+    xor ax, ax
+    mov al, 0x13
+    int 0x10
+    ; Verify mode was actually set (some hardware lacks VGA)
+    mov ah, 0x0F
+    int 0x10
+    and al, 0x7F                    ; Mask high bit (some BIOSes set it)
+    cmp al, 0x13
+    je .vga_ok
+    ; VGA failed — fall back to CGA
+    xor ax, ax
+    mov al, 0x04
+    int 0x10
+    mov byte [video_mode], 0x04
+    mov word [video_segment], 0xB800
+    jmp .mode_done
+
+.vga_ok:
+    mov byte [video_mode], 0x13
+    mov word [video_segment], 0xA000
+
+.mode_done:
     call setup_graphics_post_mode
 
     ; Reset cursor state: even if IRQ12 fired during BIOS calls and set
@@ -116,7 +153,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 95                      ; Max function count (0-94 valid)
+    cmp ah, 96                      ; Max function count (0-95 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1671,29 +1708,48 @@ load_settings:
     push di
     push es
 
-    ; Open SETTINGS.CFG (DS=0x1000, filesystem already mounted by app_load_stub)
-    mov bx, 0                          ; Mount handle 0 (FAT12)
+    ; Open SETTINGS.CFG (filesystem already mounted by app_load_stub)
+    ; Route by boot drive type (FAT12 for floppy, FAT16 for HD)
     mov si, .ls_filename
+    cmp byte [boot_drive], 0x80
+    jae .ls_open16
     call fat12_open
+    jmp .ls_opened
+.ls_open16:
+    call fat16_open
+.ls_opened:
     jc .ls_done                         ; File not found = use defaults
 
     ; Save file handle
     mov [.ls_fh], al
 
-    ; Read 5 bytes (magic + font + text + bg + win)
+    ; Read 6 bytes (magic + font + text + bg + win + video_mode)
     xor ah, ah                          ; AX = file handle
     mov bx, 0x1000
     mov es, bx
+    mov cx, 6
+    cmp byte [boot_drive], 0x80
+    jae .ls_read16
     mov di, .ls_buf
-    mov cx, 5
     call fat12_read
+    jmp .ls_read_done
+.ls_read16:
+    mov bx, .ls_buf                     ; fat16_read uses ES:BX
+    call fat16_read
+.ls_read_done:
     jc .ls_close
 
     ; Close file first
     xor ah, ah
     mov al, [.ls_fh]
+    cmp byte [boot_drive], 0x80
+    jae .ls_close16
+    call fat12_close
+    jmp .ls_apply
+.ls_close16:
     call fat12_close
 
+.ls_apply:
     ; Verify magic byte
     cmp byte [.ls_buf], 0xA5
     jne .ls_done
@@ -1704,17 +1760,26 @@ load_settings:
     jae .ls_done
     call gfx_set_font                  ; AL = font index, sets all metrics
 
-    ; Apply colors (mask to 0-3)
+    ; Apply colors — mode-aware masking
     mov al, [.ls_buf + 2]
-    and al, 0x03
+    cmp byte [video_mode], 0x13
+    je .ls_no_mask1
+    and al, 0x03                        ; CGA: mask to 4 colors
+.ls_no_mask1:
     mov [text_color], al
     mov [draw_fg_color], al
     mov al, [.ls_buf + 3]
+    cmp byte [video_mode], 0x13
+    je .ls_no_mask2
     and al, 0x03
+.ls_no_mask2:
     mov [desktop_bg_color], al
     mov [draw_bg_color], al
     mov al, [.ls_buf + 4]
+    cmp byte [video_mode], 0x13
+    je .ls_no_mask3
     and al, 0x03
+.ls_no_mask3:
     mov [win_color], al
 
     jmp .ls_done
@@ -1722,6 +1787,11 @@ load_settings:
 .ls_close:
     xor ah, ah
     mov al, [.ls_fh]
+    cmp byte [boot_drive], 0x80
+    jae .ls_close16b
+    call fat12_close
+    jmp .ls_done
+.ls_close16b:
     call fat12_close
 
 .ls_done:
@@ -1736,7 +1806,110 @@ load_settings:
 
 .ls_filename: db 'SETTINGS.CFG', 0
 .ls_fh:       db 0
-.ls_buf:      times 5 db 0
+.ls_buf:      times 6 db 0
+
+; ============================================================================
+; early_read_video_mode - Read video mode byte from SETTINGS.CFG at boot
+; Called before video mode is set, filesystem not yet mounted
+; Input: none (uses boot_drive)
+; Output: AL = video mode (0x04=CGA default, 0x13=VGA)
+; Preserves all other registers
+; ============================================================================
+early_read_video_mode:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    ; Mount filesystem based on boot drive type
+    mov al, [boot_drive]
+    call fs_mount_stub
+    jc .ervm_default                    ; Mount failed, use CGA
+
+    ; BX = mount handle (0=FAT12, 1=FAT16)
+    mov [.ervm_mount], bl
+
+    ; Open SETTINGS.CFG
+    mov si, .ervm_filename
+    cmp byte [.ervm_mount], 1
+    je .ervm_open16
+    call fat12_open
+    jmp .ervm_opened
+.ervm_open16:
+    call fat16_open
+.ervm_opened:
+    jc .ervm_default                    ; File not found, use CGA
+
+    ; Save file handle
+    mov [.ervm_fh], al
+
+    ; Read 6 bytes (magic + font + text + bg + win + video_mode)
+    xor ah, ah                          ; AX = file handle
+    mov bx, 0x1000
+    mov es, bx
+    mov di, .ervm_buf
+    mov cx, 6
+    cmp byte [.ervm_mount], 1
+    je .ervm_read16
+    call fat12_read
+    jmp .ervm_read_done
+.ervm_read16:
+    ; fat16_read uses ES:BX for buffer (not ES:DI)
+    mov bx, .ervm_buf
+    call fat16_read
+.ervm_read_done:
+    jc .ervm_close_default
+
+    ; Close file
+    xor ah, ah
+    mov al, [.ervm_fh]
+    cmp byte [.ervm_mount], 1
+    je .ervm_close16
+    call fat12_close
+    jmp .ervm_check
+.ervm_close16:
+    call fat12_close
+
+.ervm_check:
+    ; Verify magic byte
+    cmp byte [.ervm_buf], 0xA5
+    jne .ervm_default
+
+    ; Byte 5 = video mode (old 5-byte files have 0 here → defaults to CGA)
+    mov al, [.ervm_buf + 5]
+    cmp al, 0x13
+    je .ervm_done
+    ; Not VGA, use CGA default
+    jmp .ervm_default
+
+.ervm_close_default:
+    xor ah, ah
+    mov al, [.ervm_fh]
+    cmp byte [.ervm_mount], 1
+    je .ervm_cd16
+    call fat12_close
+    jmp .ervm_default
+.ervm_cd16:
+    call fat12_close
+
+.ervm_default:
+    mov al, 0x04
+
+.ervm_done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+.ervm_filename: db 'SETTINGS.CFG', 0
+.ervm_fh:       db 0
+.ervm_mount:    db 0
+.ervm_buf:      times 6 db 0
 
 ; ============================================================================
 ; Keyboard Input Demo - Tests Foundation Layer (1.1-1.4)
@@ -1946,8 +2119,11 @@ setup_graphics:
 
 ; setup_graphics_post_mode - Clear screen and set palette (after mode already set)
 setup_graphics_post_mode:
+    cmp byte [video_mode], 0x13
+    je .sgpm_vga
+    ; CGA: clear 16KB video memory and set palette
     push es
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     xor di, di
     xor ax, ax
@@ -1965,6 +2141,62 @@ setup_graphics_post_mode:
     mov bl, 0x01                    ; BL=1 (blue)
     int 0x10
     ret
+.sgpm_vga:
+    ; VGA: clear 64000-byte linear framebuffer
+    push es
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 32000                   ; 64000 bytes / 2
+    rep stosw
+    pop es
+    ; Set up VGA palette (16 standard colors)
+    call setup_vga_palette
+    ret
+
+; setup_vga_palette - Set first 16 DAC registers to standard VGA colors
+setup_vga_palette:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    ; INT 10h AX=1012h: Set block of DAC registers
+    ; BX=start, CX=count, ES:DX → RGB triples (6-bit values)
+    push ds
+    pop es                          ; ES = DS = 0x1000
+    mov ax, 0x1012
+    xor bx, bx                     ; Start at register 0
+    mov cx, 16                      ; 16 registers
+    mov dx, vga_palette_data        ; ES:DX → palette data
+    int 0x10
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; VGA palette data (16 entries × 3 bytes RGB, 6-bit values 0-63)
+; Entries 0-3 match CGA palette 1 (black/cyan/magenta/white) for compatibility
+vga_palette_data:
+    db  0,  0,  0                   ; 0: Black (CGA background)
+    db  0, 42, 42                   ; 1: Cyan (CGA color 1)
+    db 42,  0, 42                   ; 2: Magenta (CGA color 2)
+    db 63, 63, 63                   ; 3: White (CGA color 3)
+    db 42,  0,  0                   ; 4: Red
+    db  0,  0, 42                   ; 5: Blue
+    db  0, 42,  0                   ; 6: Green
+    db 42, 42, 42                   ; 7: Light Gray
+    db 21, 21, 21                   ; 8: Dark Gray
+    db 21, 21, 63                   ; 9: Light Blue
+    db 21, 63, 21                   ; 10: Light Green
+    db 21, 63, 63                   ; 11: Light Cyan
+    db 63, 21, 21                   ; 12: Light Red
+    db 63, 21, 63                   ; 13: Light Magenta
+    db 63, 63, 21                   ; 14: Yellow
+    db 42, 21,  0                   ; 15: Brown
 
 ; ============================================================================
 ; Welcome Box - White bordered rectangle with text
@@ -1974,7 +2206,7 @@ draw_welcome_box:
     push es
 
     ; Set ES to CGA video memory
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
 
     ; Draw top border (y=50, x=60 to x=260)
@@ -2126,7 +2358,7 @@ draw_char:
 ; ============================================================================
 ; cga_pixel_calc - Calculate CGA byte offset and bit shift for a pixel
 ; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
-;        ES must be 0xB800
+;        ES must be video segment
 ; Output: DI = CGA byte offset in video memory
 ;         CL = bit shift for 2-bit pixel within byte
 ; Trashes: AX, BX, DX (caller must save these registers)
@@ -2157,6 +2389,8 @@ plot_pixel_white:
     jae .out
     cmp bx, 200
     jae .out
+    cmp byte [video_mode], 0x13
+    je .vga
     push ax
     push bx
     push cx
@@ -2179,6 +2413,21 @@ plot_pixel_white:
     pop ax
 .out:
     ret
+.vga:
+    push ax
+    push di
+    mov ax, bx
+    shl ax, 6                          ; Y * 64
+    mov di, ax
+    mov ax, bx
+    shl ax, 8                          ; Y * 256
+    add di, ax                         ; DI = Y * 320
+    add di, cx                         ; DI = Y * 320 + X
+    mov al, [draw_fg_color]
+    mov [es:di], al
+    pop di
+    pop ax
+    ret
 
 ; ============================================================================
 ; Plot a black pixel (color 0) - for inverted text on white backgrounds
@@ -2191,6 +2440,8 @@ plot_pixel_black:
     jae .out
     cmp bx, 200
     jae .out
+    cmp byte [video_mode], 0x13
+    je .vga
     push ax
     push bx
     push cx
@@ -2210,11 +2461,25 @@ plot_pixel_black:
     pop ax
 .out:
     ret
+.vga:
+    push ax
+    push di
+    mov ax, bx
+    shl ax, 6
+    mov di, ax
+    mov ax, bx
+    shl ax, 8
+    add di, ax
+    add di, cx
+    mov byte [es:di], 0             ; Color 0 = black
+    pop di
+    pop ax
+    ret
 
 ; ============================================================================
 ; Plot a pixel using XOR with color 3 (white) - for mouse cursor
 ; Input: CX = X coordinate (0-319), BX = Y coordinate (0-199)
-; ES must be 0xB800
+; ES must be video segment
 ; Preserves all registers except flags
 ; ============================================================================
 
@@ -2223,6 +2488,8 @@ plot_pixel_xor:
     jae .out
     cmp bx, 200
     jae .out
+    cmp byte [video_mode], 0x13
+    je .vga
     push ax
     push bx
     push cx
@@ -2239,6 +2506,20 @@ plot_pixel_xor:
     pop ax
 .out:
     ret
+.vga:
+    push ax
+    push di
+    mov ax, bx
+    shl ax, 6
+    mov di, ax
+    mov ax, bx
+    shl ax, 8
+    add di, ax
+    add di, cx
+    xor byte [es:di], 0xFF         ; Full byte XOR for cursor visibility
+    pop di
+    pop ax
+    ret
 
 ; ============================================================================
 ; Mouse Cursor Sprite (XOR-based)
@@ -2248,11 +2529,13 @@ CURSOR_WIDTH    equ 8
 
 ; cursor_xor_sprite - Draw/erase cursor at given position via XOR
 ; Input: CX = cursor X, BX = cursor Y (hotspot at top-left)
-; ES must be 0xB800
+; ES must be video segment
 ; Preserves all registers
 ; Color cursor: 2bpp, 14 rows, white outline + cyan fill
 cursor_xor_sprite:
     pusha
+    cmp byte [cs:video_mode], 0x13
+    je .vga_cursor
     mov bp, 14                      ; Row counter
     mov si, cursor_bitmap_color
 
@@ -2298,6 +2581,50 @@ cursor_xor_sprite:
     popa
     ret
 
+.vga_cursor:
+    mov bp, 14
+    mov si, cursor_bitmap_color
+.vc_row:
+    push cx                         ; Save X start
+    cmp bx, 200
+    jae .vc_skip_row
+    mov ah, [si]                    ; Pixels 0-3 (2bpp)
+    mov al, [si+1]                  ; Pixels 4-7 (2bpp)
+    mov di, 8                       ; 8 pixels per row
+.vc_col:
+    mov dl, ah
+    shr dl, 6                       ; DL = pixel color (0-3)
+    test dl, dl
+    jz .vc_skip_pix
+    cmp cx, 320
+    jae .vc_skip_pix
+    ; Calculate VGA offset for (CX=X, BX=Y)
+    push ax
+    push di
+    mov ax, bx
+    shl ax, 6
+    mov di, ax
+    mov ax, bx
+    shl ax, 8
+    add di, ax                      ; DI = Y * 320
+    add di, cx                      ; DI = Y * 320 + X
+    xor byte [es:di], 0xFF         ; XOR for cursor visibility
+    pop di
+    pop ax
+.vc_skip_pix:
+    shl ax, 2                       ; Next 2bpp pixel
+    inc cx
+    dec di
+    jnz .vc_col
+.vc_skip_row:
+    pop cx                          ; Restore X start
+    add si, 2
+    inc bx
+    dec bp
+    jnz .vc_row
+    popa
+    ret
+
 ; mouse_cursor_hide - Erase cursor if currently visible
 ; Safe to call even if not visible (no-op)
 ; Preserves all registers
@@ -2314,7 +2641,7 @@ mouse_cursor_hide:
     push cx
     push bx
     push ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     mov cx, [cursor_drawn_x]
     mov bx, [cursor_drawn_y]
@@ -2345,7 +2672,7 @@ mouse_cursor_show:
     push cx
     push bx
     push ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     mov cx, [mouse_x]
     mov bx, [mouse_y]
@@ -2580,13 +2907,13 @@ mouse_drag_update:
 ; draw_xor_rect_outline - Draw/erase XOR rectangle outline on screen
 ; Self-inverse: call twice at same position to erase
 ; Input: BX=X, CX=Y, DX=width, SI=height
-; Uses plot_pixel_xor (ES must be 0xB800)
+; Uses plot_pixel_xor (ES must be video segment)
 ; ============================================================================
 draw_xor_rect_outline:
     pusha
     push es
 
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
 
     ; Save parameters
@@ -2980,7 +3307,7 @@ gfx_draw_string_inverted:
     mov word [draw_x], bx
     mov word [draw_y], cx
     mov bp, [caller_ds]             ; BP = caller's segment
-    mov dx, 0xB800
+    mov dx, [video_segment]
     mov es, dx
     mov ds, bp                      ; DS = caller's segment for string access
 .loop:
@@ -3985,7 +4312,7 @@ gfx_draw_sprite:
     ; Swap to draw convention: BX=Y, CX=X
     xchg bx, cx
     ; ES = CGA video segment
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Cursor protection (DS=0x1000)
     call mouse_cursor_hide
@@ -4006,7 +4333,7 @@ gfx_draw_sprite:
     jz .spr_skip
     push dx
     mov dl, [cs:_spr_color]
-    call plot_pixel_color           ; CX=X, BX=Y, DL=color, ES=0xB800
+    call plot_pixel_color           ; CX=X, BX=Y, DL=color, ES=video segment
     pop dx
 .spr_skip:
     shl ah, 1                       ; next bit
@@ -4031,7 +4358,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x1B40 - ($ - $$) db 0
+times 0x1E00 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -4194,6 +4521,9 @@ kernel_api_table:
     ; Sprite API (Build 279)
     dw gfx_draw_sprite              ; 94: Draw 1-bit transparent sprite
 
+    ; Video Mode API (Build 281)
+    dw set_video_mode               ; 95: Switch video mode at runtime
+
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
 ; ============================================================================
@@ -4207,7 +4537,7 @@ gfx_draw_pixel_stub:
     inc byte [cursor_locked]
     push es
     push dx
-    mov dx, 0xB800
+    mov dx, [video_segment]
     mov es, dx
     xchg bx, cx                    ; plot_pixel_color wants CX=X, BX=Y
     mov dl, al                     ; DL = color (0-3)
@@ -4228,7 +4558,7 @@ gfx_draw_char_stub:
     push dx
     mov word [draw_x], bx
     mov word [draw_y], cx
-    mov dx, 0xB800
+    mov dx, [video_segment]
     mov es, dx
     sub al, 32
     mov ah, 0
@@ -4258,7 +4588,7 @@ gfx_draw_string_stub:
     mov word [draw_x], bx
     mov word [draw_y], cx
     mov bp, [caller_ds]             ; BP = caller's segment (0x1000 at boot, app seg via INT 0x80)
-    mov dx, 0xB800
+    mov dx, [video_segment]
     mov es, dx
     mov ds, bp                      ; DS = caller's segment for string access
 .loop:
@@ -4383,8 +4713,9 @@ gfx_get_font_metrics:
     ret
 
 ; ============================================================================
-; plot_pixel_color - Plot pixel with arbitrary CGA color (0-3)
-; Input: CX = X (0-319), BX = Y (0-199), DL = color (0-3), ES = 0xB800
+; plot_pixel_color - Plot pixel with arbitrary color
+; Input: CX = X (0-319), BX = Y (0-199), DL = color (0-3 CGA, 0-255 VGA)
+;        ES = video segment
 ; Preserves all registers except flags
 ; ============================================================================
 plot_pixel_color:
@@ -4392,6 +4723,8 @@ plot_pixel_color:
     jae .ppc_out
     cmp bx, 200
     jae .ppc_out
+    cmp byte [video_mode], 0x13
+    je .ppc_vga
     push ax
     push bx
     push cx
@@ -4418,6 +4751,20 @@ plot_pixel_color:
     pop ax
 .ppc_out:
     ret
+.ppc_vga:
+    push ax
+    push di
+    mov ax, bx
+    shl ax, 6                          ; Y * 64
+    mov di, ax
+    mov ax, bx
+    shl ax, 8                          ; Y * 256
+    add di, ax                         ; DI = Y * 320
+    add di, cx                         ; DI = Y * 320 + X
+    mov [es:di], dl                    ; Write color byte directly
+    pop di
+    pop ax
+    ret
 
 ; ============================================================================
 ; gfx_draw_string_wrap - Draw string with word wrapping (API 50)
@@ -4441,7 +4788,7 @@ gfx_draw_string_wrap:
     mov [wrap_start_x], bx         ; Remember starting X for line breaks
     mov [wrap_width], dx            ; Remember wrap width
     mov bp, [caller_ds]
-    mov dx, 0xB800
+    mov dx, [video_segment]
     mov es, dx
     mov ds, bp                      ; DS = caller's segment
 .wrap_loop:
@@ -4544,7 +4891,7 @@ widget_draw_button:
     mov [btn_w], dx
     mov [btn_h], si
     ; Set up ES for CGA
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Draw white filled rect (button background)
     call gfx_draw_filled_rect_stub
@@ -4663,7 +5010,7 @@ widget_draw_radio:
     mov [btn_flags], al
     mov [btn_x], bx
     mov [btn_y], cx
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Draw radio circle using draw_char (8 rows, 8 cols)
     mov word [draw_x], bx
@@ -4747,7 +5094,7 @@ widget_draw_checkbox:
     mov [btn_flags], al
     mov [btn_x], bx
     mov [btn_y], cx
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Draw checkbox using draw_char (8x8 bitmap)
     mov word [draw_x], bx
@@ -4828,7 +5175,7 @@ widget_draw_separator:
     push dx
     push di
     mov [btn_flags], al
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Swap BX/CX: plot_pixel_white wants CX=X, BX=Y
     xchg bx, cx                    ; Now BX=Y, CX=X
@@ -4885,7 +5232,7 @@ widget_draw_listitem:
     xor ah, ah
     mov al, [draw_font_height]
     mov [btn_h], ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     test byte [btn_flags], 1
     jz .li_normal
@@ -4989,7 +5336,7 @@ widget_draw_progress:
     mov si, 100
 .prog_val_ok:
     mov [wgt_scratch], si           ; Store value (0-100)
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Clear the entire bar area first
     mov si, PROGRESS_HEIGHT
@@ -5163,7 +5510,7 @@ widget_draw_groupbox:
     mov [btn_w], dx
     mov [btn_h], si
     mov [wgt_text_ptr], di          ; Save label pointer
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Border starts font_height/2 below Y, so label sits on the top edge
     xor ax, ax
@@ -5243,7 +5590,7 @@ widget_draw_textfield:
     mov al, [draw_font_height]
     add ax, 4
     mov [btn_h], ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Clear area and draw border
     mov si, [btn_h]
@@ -5392,7 +5739,7 @@ widget_draw_scrollbar:
 .sb_pos_ok:
     mov [btn_h], dx                 ; Position
     mov [wgt_scratch], di           ; Max range
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Clear track area
     mov dx, SCROLLBAR_WIDTH
@@ -5699,7 +6046,7 @@ widget_draw_combobox:
     mov al, [draw_font_height]
     add ax, 4
     mov [btn_h], ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Clear area and draw border
     mov si, [btn_h]
@@ -5877,7 +6224,7 @@ widget_draw_menubar:
     mov al, [draw_font_height]
     add ax, 2
     mov [btn_h], ax
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; Clear bar area (black background)
     mov si, [btn_h]
@@ -6011,7 +6358,7 @@ gfx_draw_rect_stub:
     push ax
     push bp
     push di
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; API: BX=X, CX=Y. plot_pixel_white needs CX=X, BX=Y
     ; Save: BP = X (from BX), AX = Y (from CX)
@@ -6086,7 +6433,7 @@ gfx_draw_filled_rect_stub:
     push ax
     push bp
     push di
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     mov bp, si
     ; Swap BX/CX: API has BX=X,CX=Y but plot_pixel_white needs CX=X,BX=Y
@@ -6127,6 +6474,9 @@ gfx_clear_area_stub:
     test si, si
     jz .early_ret
 
+    cmp byte [video_mode], 0x13
+    je .vga_clear
+
     call mouse_cursor_hide
     inc byte [cursor_locked]
     push es
@@ -6138,7 +6488,7 @@ gfx_clear_area_stub:
     push dx
     push si
 
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     mov bp, si                      ; BP = height counter
 
@@ -6214,6 +6564,49 @@ gfx_clear_area_stub:
     dec byte [cursor_locked]
     call mouse_cursor_show
 .early_ret:
+    ret
+
+.vga_clear:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    push es
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov ax, [video_segment]
+    mov es, ax
+    ; BX=X, CX=Y, DX=width, SI=height
+.vga_clear_row:
+    push cx                         ; Save Y
+    ; DI = Y * 320 + X
+    mov ax, cx
+    shl ax, 6
+    mov di, ax
+    mov ax, cx
+    shl ax, 8
+    add di, ax
+    add di, bx                      ; DI = Y*320 + X
+    mov cx, dx                      ; CX = width (bytes to clear)
+    xor al, al
+    rep stosb
+    pop cx                          ; Restore Y
+    inc cx                          ; Next row
+    dec si
+    jnz .vga_clear_row
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop es
+    dec byte [cursor_locked]
+    call mouse_cursor_show
     ret
 
 ; Internal helper: Clear pixel at BX=X, CX=Y to background color
@@ -11715,13 +12108,16 @@ gfx_draw_icon_stub:
     push es
     push ds
 
+    ; Set up video segment BEFORE changing DS (video_segment is DS-relative)
+    mov ax, [video_segment]
+    mov es, ax
+    ; Check video mode before changing DS
+    cmp byte [video_mode], 0x13
+    je .icon_vga
+
     ; Set up source segment from caller_ds
     mov ax, [caller_ds]
     mov ds, ax
-
-    ; Set up CGA video segment
-    mov ax, 0xB800
-    mov es, ax
 
     ; Hide cursor during draw
     push bx
@@ -11735,7 +12131,7 @@ gfx_draw_icon_stub:
     pop cx
     pop bx
 
-    ; Draw 16 rows, 4 bytes per row
+    ; Draw 16 rows, 4 bytes per row (CGA: 4 bytes = 16 pixels at 2bpp)
     mov dx, 16                      ; Row counter
 
 .icon_row:
@@ -11772,7 +12168,63 @@ gfx_draw_icon_stub:
     inc cx                          ; Next Y row
     dec dx
     jnz .icon_row
+    jmp .icon_done
 
+.icon_vga:
+    ; VGA: unpack 2bpp icon data to 8bpp linear framebuffer
+    mov ax, [caller_ds]
+    mov ds, ax
+
+    ; Hide cursor
+    push bx
+    push cx
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    pop ds
+    pop cx
+    pop bx
+
+    mov dx, 16                      ; 16 rows
+.iv_row:
+    push cx                         ; Save Y
+    push bx                         ; Save X
+    ; Calculate VGA offset: Y*320 + X
+    mov ax, cx
+    shl ax, 6
+    mov di, ax
+    mov ax, cx
+    shl ax, 8
+    add di, ax
+    add di, bx                      ; DI = Y*320 + X
+    ; Unpack 4 source bytes (16 pixels at 2bpp) to 16 VGA bytes
+    push dx                         ; Save row counter
+    mov cx, 4                       ; 4 source bytes
+.iv_byte:
+    lodsb                           ; AL = source byte (4 pixels at 2bpp)
+    push cx
+    mov cx, 4                       ; 4 pixels per byte
+.iv_pixel:
+    push ax
+    shr al, 6                       ; Get top 2 bits = palette index
+    stosb                           ; Write to VGA framebuffer
+    pop ax
+    shl al, 2                       ; Shift to next pixel
+    dec cx
+    jnz .iv_pixel
+    pop cx
+    dec cx
+    jnz .iv_byte
+    pop dx                          ; Restore row counter
+    pop bx                          ; Restore X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next Y row
+    dec dx
+    jnz .iv_row
+
+.icon_done:
     ; Show cursor again
     push ds
     mov ax, 0x1000
@@ -12023,7 +12475,7 @@ gfx_fill_color:
     or al, ah                       ; AL = color byte (4 identical pixels)
     mov [.fill_byte], al
 
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     mov bp, si                      ; BP = height counter
 
@@ -14056,7 +14508,7 @@ gfx_draw_rect_color:
     push bp
     push di
     mov [cs:.drc_color], al
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; API: BX=X, CX=Y. plot_pixel_color needs CX=X, BX=Y, DL=color
     mov bp, bx                      ; BP = X
@@ -14149,7 +14601,7 @@ gfx_draw_hline:
     push dx
     push di
     mov [cs:.hl_color], al
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; plot_pixel_color: CX=X, BX=Y, DL=color
     xchg bx, cx                    ; BX=Y, CX=X
@@ -14188,7 +14640,7 @@ gfx_draw_vline:
     push dx
     push di
     mov [cs:.vl_color], al
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
     ; plot_pixel_color: CX=X, BX=Y, DL=color
     xchg bx, cx                    ; BX=Y, CX=X
@@ -14230,7 +14682,7 @@ gfx_draw_line:
     push bp
 
     mov [cs:.bl_color], al
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
 
     ; Store endpoints: X1=BX, Y1=CX, X2=DX, Y2=SI
@@ -14359,9 +14811,98 @@ set_rtc_time:
 get_screen_info:
     mov bx, 320
     mov cx, 200
-    mov al, 4
-    mov ah, 4
+    mov al, [video_mode]                ; AL = current mode (0x04 or 0x13)
+    cmp al, 0x13
+    je .gsi_vga
+    mov ah, 4                           ; CGA: 4 colors
     clc
+    ret
+.gsi_vga:
+    mov ah, 0                           ; VGA: 256 colors (0 wraps = 256)
+    clc
+    ret
+
+; set_video_mode - Switch video mode at runtime (API 95)
+; Input: AL = video mode (0x04=CGA, 0x13=VGA)
+; Output: AL = actual mode set, CF=0 success
+; Triggers full-screen redraw of desktop + all windows
+set_video_mode:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Hide cursor during mode switch
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+    cmp al, 0x13
+    je .svm_try_vga
+
+    ; Set CGA mode 4
+    mov byte [video_mode], 0x04
+    mov word [video_segment], 0xB800
+    push ax
+    xor ax, ax
+    mov al, 0x04
+    int 0x10
+    pop ax
+    jmp .svm_setup
+
+.svm_try_vga:
+    push ax
+    xor ax, ax
+    mov al, 0x13
+    int 0x10
+    ; Verify mode was set
+    mov ah, 0x0F
+    int 0x10
+    and al, 0x7F
+    cmp al, 0x13
+    pop ax
+    je .svm_vga_ok
+    ; VGA failed, fall back to CGA
+    xor ax, ax
+    mov al, 0x04
+    int 0x10
+    mov byte [video_mode], 0x04
+    mov word [video_segment], 0xB800
+    jmp .svm_setup
+
+.svm_vga_ok:
+    mov byte [video_mode], 0x13
+    mov word [video_segment], 0xA000
+
+.svm_setup:
+    call setup_graphics_post_mode
+
+    ; Reinit draw colors from theme
+    mov al, [text_color]
+    mov [draw_fg_color], al
+    mov al, [desktop_bg_color]
+    mov [draw_bg_color], al
+
+    ; Force cursor state reset (mode switch clears VRAM)
+    mov byte [cursor_visible], 0
+
+    ; Trigger full-screen redraw
+    mov word [redraw_old_x], 0
+    mov word [redraw_old_y], 0
+    mov word [redraw_old_w], 320
+    mov word [redraw_old_h], 200
+    call redraw_affected_windows
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+
+    mov al, [video_mode]
+    clc
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; get_key_modifiers - Get keyboard modifier states (API 83)
@@ -14938,7 +15479,7 @@ gfx_scroll_area:
     push es
     push bp
 
-    mov ax, 0xB800
+    mov ax, [video_segment]
     mov es, ax
 
     ; Save parameters
@@ -14947,6 +15488,9 @@ gfx_scroll_area:
     mov [cs:.sa_w], dx
     mov [cs:.sa_h], si
     mov [cs:.sa_scroll], di
+
+    cmp byte [cs:video_mode], 0x13
+    je .sa_vga
 
     ; Calculate bytes per row for the region
     mov ax, bx
@@ -15020,7 +15564,7 @@ gfx_scroll_area:
     mov cx, [cs:.sa_bpr]
     push ds
     push es
-    pop ds                          ; DS = ES = 0xB800
+    pop ds                          ; DS = ES = video segment
     rep movsb
     pop ds
 
@@ -15101,6 +15645,76 @@ gfx_scroll_area:
     dec cx
     jnz .sa_clear_all_loop
 
+.sa_vga:
+    ; VGA: linear memory, 1 pixel = 1 byte, width in pixels = bytes
+    mov ax, [cs:.sa_h]
+    sub ax, [cs:.sa_scroll]
+    test ax, ax
+    jle .sa_vga_clear_all
+
+    mov cx, ax                      ; CX = rows to copy
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax
+    add ax, [cs:.sa_scroll]
+    mov [cs:.sa_src_y], ax
+
+.sa_vga_copy:
+    push cx
+    ; Source offset: src_y * 320 + x
+    mov ax, [cs:.sa_src_y]
+    shl ax, 6
+    mov si, ax
+    mov ax, [cs:.sa_src_y]
+    shl ax, 8
+    add si, ax
+    add si, [cs:.sa_x]
+    ; Dest offset: dst_y * 320 + x
+    mov ax, [cs:.sa_dst_y]
+    shl ax, 6
+    mov di, ax
+    mov ax, [cs:.sa_dst_y]
+    shl ax, 8
+    add di, ax
+    add di, [cs:.sa_x]
+    ; Copy width bytes
+    mov cx, [cs:.sa_w]
+    push ds
+    push es
+    pop ds                          ; DS = ES = video segment
+    rep movsb
+    pop ds
+    inc word [cs:.sa_src_y]
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_vga_copy
+
+    ; Clear exposed strip at bottom
+    mov cx, [cs:.sa_scroll]
+.sa_vga_clear:
+    push cx
+    mov ax, [cs:.sa_dst_y]
+    shl ax, 6
+    mov di, ax
+    mov ax, [cs:.sa_dst_y]
+    shl ax, 8
+    add di, ax
+    add di, [cs:.sa_x]
+    mov cx, [cs:.sa_w]
+    xor al, al
+    rep stosb
+    inc word [cs:.sa_dst_y]
+    pop cx
+    dec cx
+    jnz .sa_vga_clear
+    jmp .sa_done
+
+.sa_vga_clear_all:
+    mov cx, [cs:.sa_h]
+    mov ax, [cs:.sa_y]
+    mov [cs:.sa_dst_y], ax
+    jmp .sa_vga_clear
+
 .sa_done:
     pop bp
     pop es
@@ -15167,9 +15781,13 @@ clip_y1:      dw 0                    ; Top (inclusive, absolute)
 clip_x2:      dw 319                  ; Right (inclusive, absolute)
 clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
 
+; Video mode variables (Build 281)
+video_mode:     db 0x04                 ; Current video mode (0x04=CGA, 0x13=VGA)
+video_segment:  dw 0xB800              ; Video memory segment (0xB800=CGA, 0xA000=VGA)
+
 ; Color theme variables (Build 208)
-draw_fg_color:  db 3                    ; Current foreground drawing color (0-3)
-draw_bg_color:  db 0                    ; Current background drawing color (0-3)
+draw_fg_color:  db 3                    ; Current foreground drawing color (0-3 CGA, 0-255 VGA)
+draw_bg_color:  db 0                    ; Current background drawing color
 text_color:     db 3                    ; Text/foreground color (default: white)
 win_color:      db 3                    ; Window chrome color (default: white)
 ; desktop_bg_color is at line ~10033
@@ -15532,5 +16150,5 @@ fdlg_str_cancel:    db 'Cancel', 0
 ; Padding
 ; ============================================================================
 
-; Pad to 32KB (64 sectors) - expanded for FS write support (Build 202)
-times 32768 - ($ - $$) db 0
+; Pad to 36KB (72 sectors) - expanded for VGA support (Build 281)
+times 36864 - ($ - $$) db 0
