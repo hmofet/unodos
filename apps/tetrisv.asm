@@ -37,6 +37,8 @@
 ; Entry point
 ; ============================================================================
 API_SET_VIDEO_MODE       equ 95
+API_WIN_CREATE           equ 20
+API_WIN_DESTROY          equ 21
 
 entry:
     pusha
@@ -55,6 +57,21 @@ entry:
     mov al, 0x13
     mov ah, API_SET_VIDEO_MODE
     int 0x80
+
+    ; Create fullscreen frameless window (prevents launcher from redrawing desktop)
+    xor bx, bx                     ; X = 0
+    xor cx, cx                     ; Y = 0
+    mov dx, 320                    ; Width
+    mov si, 200                    ; Height
+    mov ax, cs
+    mov es, ax
+    mov di, fs_win_title           ; Empty title
+    mov al, 0x04                   ; No TITLE (0x01) or BORDER (0x02) flags
+    mov ah, API_WIN_CREATE
+    int 0x80
+    jc .no_fs_win
+    mov [cs:fs_win_handle], al
+.no_fs_win:
 
     ; Save current theme colors for restore on exit
     mov ah, API_THEME_GET_COLORS
@@ -193,6 +210,14 @@ entry:
     mov ah, API_SPEAKER_OFF
     int 0x80
 
+    ; Destroy fullscreen window
+    cmp byte [cs:fs_win_handle], 0xFF
+    je .no_fs_destroy
+    mov al, [cs:fs_win_handle]
+    mov ah, API_WIN_DESTROY
+    int 0x80
+.no_fs_destroy:
+
     ; Restore theme colors
     mov al, [cs:saved_text_clr]
     mov bl, [cs:saved_bg_clr]
@@ -317,6 +342,8 @@ saved_text_clr:   db 0
 saved_bg_clr:     db 0
 saved_win_clr:    db 0
 saved_video_mode: db 0x04
+fs_win_handle: db 0xFF              ; Fullscreen window handle (0xFF = none)
+fs_win_title: db 0                  ; Empty title string
 
 ; Temp variables for draw_cell
 cell_sx:        dw 0
