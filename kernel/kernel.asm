@@ -2111,7 +2111,7 @@ setup_vga_palette:
     pop es                          ; ES = DS = 0x1000
     mov ax, 0x1012
     xor bx, bx                     ; Start at register 0
-    mov cx, 16                      ; 16 registers
+    mov cx, 32                      ; 32 registers (16 standard + 16 system)
     mov dx, vga_palette_data        ; ES:DX → palette data
     int 0x10
     pop es
@@ -2140,6 +2140,33 @@ vga_palette_data:
     db 63, 21, 63                   ; 13: Light Magenta
     db 63, 63, 21                   ; 14: Yellow
     db 42, 21,  0                   ; 15: Brown
+    ; System widget colors (16-31) for 3D UI chrome
+    db 48, 48, 48                   ; 16: Button Face (light gray)
+    db 63, 63, 63                   ; 17: Button Highlight (white)
+    db 32, 32, 32                   ; 18: Button Shadow (dark gray)
+    db 16, 16, 16                   ; 19: Dark Shadow
+    db  0,  0, 32                   ; 20: Active Title (dark blue)
+    db  4, 33, 52                   ; 21: Active Title Mid (medium blue)
+    db 40, 40, 40                   ; 22: Inactive Title (lighter gray)
+    db  0, 32, 32                   ; 23: Desktop Teal
+    db 52, 52, 52                   ; 24: Selection highlight
+    db 56, 56, 56                   ; 25: Light button face
+    db  8, 16, 40                   ; 26: Title gradient step
+    db 63, 63,  0                   ; 27: Bright yellow
+    db  0, 32,  0                   ; 28: Dark green
+    db 32,  0,  0                   ; 29: Dark red
+    db 42, 42, 63                   ; 30: Light blue
+    db  8,  8,  8                   ; 31: Near black
+
+; System palette color constants
+SYS_BTN_FACE     equ 16
+SYS_BTN_HILIGHT  equ 17
+SYS_BTN_SHADOW   equ 18
+SYS_BTN_DKSHADOW equ 19
+SYS_TITLE_ACTIVE equ 20
+SYS_TITLE_MID    equ 21
+SYS_TITLE_INACT  equ 22
+SYS_DESKTOP      equ 23
 
 ; ============================================================================
 ; Welcome Box - White bordered rectangle with text
@@ -4809,6 +4836,98 @@ gfx_draw_string_wrap:
     ret
 
 ; ============================================================================
+; 3D Bevel Helper Functions (used by widgets when widget_style=1)
+; ============================================================================
+
+; draw_raised_bevel - Draw raised 3D bevel edges
+; Input: BX=X, CX=Y, DX=width, SI=height
+; Preserves all registers
+draw_raised_bevel:
+    push ax
+    mov [.rb_x], bx
+    mov [.rb_y], cx
+    mov [.rb_w], dx
+    mov [.rb_h], si
+    ; Top: highlight
+    mov al, SYS_BTN_HILIGHT
+    call gfx_draw_hline
+    ; Left: highlight
+    mov bx, [.rb_x]
+    mov cx, [.rb_y]
+    mov dx, [.rb_h]
+    call gfx_draw_vline
+    ; Bottom: shadow
+    mov bx, [.rb_x]
+    mov cx, [.rb_y]
+    add cx, [.rb_h]
+    dec cx
+    mov dx, [.rb_w]
+    mov al, SYS_BTN_SHADOW
+    call gfx_draw_hline
+    ; Right: shadow
+    mov bx, [.rb_x]
+    add bx, [.rb_w]
+    dec bx
+    mov cx, [.rb_y]
+    mov dx, [.rb_h]
+    call gfx_draw_vline
+    ; Restore registers
+    mov bx, [.rb_x]
+    mov cx, [.rb_y]
+    mov dx, [.rb_w]
+    mov si, [.rb_h]
+    pop ax
+    ret
+.rb_x: dw 0
+.rb_y: dw 0
+.rb_w: dw 0
+.rb_h: dw 0
+
+; draw_sunken_bevel - Draw sunken 3D bevel edges
+; Input: BX=X, CX=Y, DX=width, SI=height
+; Preserves all registers
+draw_sunken_bevel:
+    push ax
+    mov [.sb_x], bx
+    mov [.sb_y], cx
+    mov [.sb_w], dx
+    mov [.sb_h], si
+    ; Top: shadow
+    mov al, SYS_BTN_SHADOW
+    call gfx_draw_hline
+    ; Left: shadow
+    mov bx, [.sb_x]
+    mov cx, [.sb_y]
+    mov dx, [.sb_h]
+    call gfx_draw_vline
+    ; Bottom: highlight
+    mov bx, [.sb_x]
+    mov cx, [.sb_y]
+    add cx, [.sb_h]
+    dec cx
+    mov dx, [.sb_w]
+    mov al, SYS_BTN_HILIGHT
+    call gfx_draw_hline
+    ; Right: highlight
+    mov bx, [.sb_x]
+    add bx, [.sb_w]
+    dec bx
+    mov cx, [.sb_y]
+    mov dx, [.sb_h]
+    call gfx_draw_vline
+    ; Restore registers
+    mov bx, [.sb_x]
+    mov cx, [.sb_y]
+    mov dx, [.sb_w]
+    mov si, [.sb_h]
+    pop ax
+    ret
+.sb_x: dw 0
+.sb_y: dw 0
+.sb_w: dw 0
+.sb_h: dw 0
+
+; ============================================================================
 ; widget_draw_button - Draw a clickable button (API 51)
 ; Input: BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI)
 ;        AL=flags (bit 0: pressed)
@@ -4818,11 +4937,6 @@ widget_draw_button:
     ; BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI), AL=flags
     call mouse_cursor_hide
     inc byte [cursor_locked]
-    ; Use win_color for button chrome
-    push ax
-    mov al, [win_color]
-    mov [draw_fg_color], al
-    pop ax
     push es
     push ax
     push bx
@@ -4835,10 +4949,38 @@ widget_draw_button:
     mov [btn_y], cx
     mov [btn_w], dx
     mov [btn_h], si
-    ; Set up ES for CGA
     mov ax, [video_segment]
     mov es, ax
-    ; Draw white filled rect (button background)
+
+    cmp byte [widget_style], 0
+    je .btn_flat
+
+    ; === 3D BUTTON ===
+    ; Fill with button face color
+    mov al, SYS_BTN_FACE
+    call gfx_draw_filled_rect_color
+    ; Draw bevel
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    test byte [btn_flags], 1
+    jnz .btn_3d_pressed
+    call draw_raised_bevel
+    jmp .btn_3d_fg
+.btn_3d_pressed:
+    call draw_sunken_bevel
+.btn_3d_fg:
+    ; Set black foreground for label text
+    mov byte [draw_fg_color], 0
+    jmp .btn_label
+
+.btn_flat:
+    ; === FLAT BUTTON ===
+    push ax
+    mov al, [win_color]
+    mov [draw_fg_color], al
+    pop ax
     call gfx_draw_filled_rect_stub
     ; Draw border rect
     mov bx, [btn_x]
@@ -4846,7 +4988,7 @@ widget_draw_button:
     mov dx, [btn_w]
     mov si, [btn_h]
     call gfx_draw_rect_stub
-    ; If pressed, draw inset border (1px offset)
+    ; If pressed, draw inset border
     test byte [btn_flags], 1
     jz .btn_label
     mov bx, [btn_x]
@@ -4910,8 +5052,14 @@ widget_draw_button:
     dec ax
     mov [clip_y2], ax
     mov byte [clip_enabled], 1
-    ; Draw inverted text (black on white) - caller_ds now points to label segment
-    call gfx_draw_string_inverted
+    ; Draw label text
+    cmp byte [widget_style], 0
+    je .btn_flat_text
+    call gfx_draw_string_stub          ; 3D: black text (draw_fg_color=0)
+    jmp .btn_text_done
+.btn_flat_text:
+    call gfx_draw_string_inverted      ; Flat: inverted (black on white)
+.btn_text_done:
     ; Restore clip state
     pop word [clip_enabled]
     pop word [clip_y2]
@@ -5283,15 +5431,27 @@ widget_draw_progress:
     mov [wgt_scratch], si           ; Store value (0-100)
     mov ax, [video_segment]
     mov es, ax
-    ; Clear the entire bar area first
+    ; Draw progress bar frame
     mov si, PROGRESS_HEIGHT
-    call gfx_clear_area_stub        ; BX=X, CX=Y, DX=width, SI=height
-    ; Draw outer border
+    cmp byte [widget_style], 0
+    je .prog_flat_frame
+    ; 3D: face fill + sunken bevel
+    mov al, SYS_BTN_FACE
+    call gfx_draw_filled_rect_color
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, PROGRESS_HEIGHT
+    call draw_sunken_bevel
+    jmp .prog_frame_done
+.prog_flat_frame:
+    call gfx_clear_area_stub
     mov bx, [btn_x]
     mov cx, [btn_y]
     mov dx, [btn_w]
     mov si, PROGRESS_HEIGHT
     call gfx_draw_rect_stub
+.prog_frame_done:
     ; Calculate fill width: (value * (width-2)) / 100
     mov ax, [wgt_scratch]           ; AX = value (0-100)
     mov dx, [btn_w]
@@ -5462,14 +5622,20 @@ widget_draw_groupbox:
     mov al, [draw_font_height]
     shr al, 1
     mov [wgt_scratch], ax           ; half_fh
-    ; Draw border rect at (X, Y+half_fh) with (width, height-half_fh)
+    ; Draw border at (X, Y+half_fh) with (width, height-half_fh)
     mov bx, [btn_x]
     mov cx, [btn_y]
     add cx, [wgt_scratch]
     mov dx, [btn_w]
     mov si, [btn_h]
     sub si, [wgt_scratch]
-    call gfx_draw_rect_stub
+    cmp byte [widget_style], 0
+    je .gb_flat_border
+    call draw_sunken_bevel           ; 3D: etched border
+    jmp .gb_border_done
+.gb_flat_border:
+    call gfx_draw_rect_stub          ; Flat: white outline
+.gb_border_done:
     ; Measure label to clear gap behind it
     mov ax, [caller_ds]
     mov [btn_saved_cds], ax
@@ -5539,12 +5705,25 @@ widget_draw_textfield:
     mov es, ax
     ; Clear area and draw border
     mov si, [btn_h]
+    cmp byte [widget_style], 0
+    je .tf_flat_border
+    ; 3D: white interior + sunken bevel
+    mov al, 3                          ; White
+    call gfx_draw_filled_rect_color
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
+    mov si, [btn_h]
+    call draw_sunken_bevel
+    jmp .tf_border_done
+.tf_flat_border:
     call gfx_clear_area_stub
     mov bx, [btn_x]
     mov cx, [btn_y]
     mov dx, [btn_w]
     mov si, [btn_h]
     call gfx_draw_rect_stub
+.tf_border_done:
     ; Set clipping to field interior
     push word [clip_x1]
     push word [clip_x2]
@@ -5686,16 +5865,28 @@ widget_draw_scrollbar:
     mov [wgt_scratch], di           ; Max range
     mov ax, [video_segment]
     mov es, ax
-    ; Clear track area
+    ; Draw track
     mov dx, SCROLLBAR_WIDTH
     mov si, [btn_w]
+    cmp byte [widget_style], 0
+    je .sb_flat_track
+    ; 3D: face fill + sunken bevel
+    mov al, SYS_BTN_FACE
+    call gfx_draw_filled_rect_color
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, SCROLLBAR_WIDTH
+    mov si, [btn_w]
+    call draw_sunken_bevel
+    jmp .sb_track_done
+.sb_flat_track:
     call gfx_clear_area_stub
-    ; Draw track border
     mov bx, [btn_x]
     mov cx, [btn_y]
     mov dx, SCROLLBAR_WIDTH
     mov si, [btn_w]
     call gfx_draw_rect_stub
+.sb_track_done:
     ; Draw up arrow bitmap at top
     mov bx, [btn_x]
     mov word [draw_x], bx
@@ -5764,7 +5955,16 @@ widget_draw_scrollbar:
     inc bx
     mov dx, SCROLLBAR_WIDTH - 2
     mov si, [wgt_cursor_pos]        ; SI = thumb height
+    cmp byte [widget_style], 0
+    je .sb_flat_thumb
+    ; 3D: face fill + raised bevel
+    mov al, SYS_BTN_FACE
+    call gfx_draw_filled_rect_color
+    call draw_raised_bevel
+    jmp .sb_thumb_done
+.sb_flat_thumb:
     call gfx_draw_filled_rect_stub
+.sb_thumb_done:
 .sb_no_thumb:
     pop si
     pop di
@@ -13938,7 +14138,7 @@ win_draw_stub:
     cmp byte [bx + WIN_OFF_ZORDER], 15
     jne .draw_inactive_titlebar
 
-    ; === Active window: filled white title bar with inverted text ===
+    ; === Active window titlebar ===
     push bx
     push cx
     push dx
@@ -13948,14 +14148,21 @@ win_draw_stub:
     mov cx, dx                      ; CX = Y
     mov dx, si                      ; DX = Width
     mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
-    call gfx_draw_filled_rect_stub
+    cmp byte [widget_style], 0
+    je .active_flat_fill
+    mov al, SYS_TITLE_ACTIVE
+    call gfx_draw_filled_rect_color ; 3D: blue titlebar
+    jmp .active_fill_done
+.active_flat_fill:
+    call gfx_draw_filled_rect_stub  ; Flat: white titlebar
+.active_fill_done:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
 
-    ; Draw title text - inverted (black on white)
+    ; Draw title text
     push bx
     push word [caller_ds]
     mov word [caller_ds], 0x1000
@@ -13965,11 +14172,17 @@ win_draw_stub:
     add bx, 4
     mov cx, dx
     add cx, 1
-    call gfx_draw_string_inverted
+    cmp byte [widget_style], 0
+    je .active_flat_text
+    call gfx_draw_string_stub       ; 3D: white text on blue
+    jmp .active_text_done
+.active_flat_text:
+    call gfx_draw_string_inverted   ; Flat: inverted (black on white)
+.active_text_done:
     pop word [caller_ds]
     pop bx
 
-    ; Draw close button [X] - inverted
+    ; Draw close button [X]
     push bx
     push cx
     push dx
@@ -13983,7 +14196,13 @@ win_draw_stub:
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     mov si, close_btn_str
-    call gfx_draw_string_inverted
+    cmp byte [widget_style], 0
+    je .active_flat_close
+    call gfx_draw_string_stub       ; 3D: white text
+    jmp .active_close_done
+.active_flat_close:
+    call gfx_draw_string_inverted   ; Flat: inverted
+.active_close_done:
     pop word [caller_ds]
     pop si
     pop dx
@@ -13992,7 +14211,7 @@ win_draw_stub:
     jmp .draw_border
 
 .draw_inactive_titlebar:
-    ; === Inactive window: clear title bar area, draw title in white ===
+    ; === Inactive window titlebar ===
     push bx
     push cx
     push dx
@@ -14002,7 +14221,14 @@ win_draw_stub:
     mov cx, dx                      ; CX = Y
     mov dx, si                      ; DX = Width
     mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
-    call gfx_clear_area_stub        ; Black title bar background
+    cmp byte [widget_style], 0
+    je .inactive_flat_fill
+    mov al, SYS_TITLE_INACT
+    call gfx_draw_filled_rect_color ; 3D: gray titlebar
+    jmp .inactive_fill_done
+.inactive_flat_fill:
+    call gfx_clear_area_stub        ; Flat: black titlebar
+.inactive_fill_done:
     pop di
     pop si
     pop dx
@@ -14046,7 +14272,7 @@ win_draw_stub:
 
 .draw_border:
 
-    ; Draw border (rectangle outline)
+    ; Draw border
     push bx
     mov bx, [.win_ptr]
     mov cx, [bx + WIN_OFF_X]
@@ -14057,7 +14283,13 @@ win_draw_stub:
     mov cx, dx                      ; CX = Y
     mov dx, si                      ; DX = Width
     mov si, di                      ; SI = Height
-    call gfx_draw_rect_stub
+    cmp byte [widget_style], 0
+    je .flat_border
+    call draw_raised_bevel           ; 3D: highlight/shadow edges
+    jmp .border_done
+.flat_border:
+    call gfx_draw_rect_stub          ; Flat: white outline
+.border_done:
     pop bx
 
 .nodraw:
