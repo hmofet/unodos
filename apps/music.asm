@@ -695,6 +695,7 @@ draw_staff:
     mov bx, ax                      ; BX = X position
     pop ax
     movzx cx, al                    ; CX = Y position
+    sub cx, 2                       ; Center 5px-tall note head on staff line
 
     ; Choose color: current note = magenta(2), others = white(3)
     mov ax, [cs:view_start]

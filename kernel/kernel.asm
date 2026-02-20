@@ -5832,12 +5832,15 @@ widget_hit_test:
 ; Output: CF = 0
 ; ============================================================================
 theme_set_colors:
+    cmp byte [video_mode], 0x13
+    je .tsc_no_mask
     and al, 0x03
+    and bl, 0x03
+    and cl, 0x03
+.tsc_no_mask:
     mov [text_color], al
     mov [draw_fg_color], al
-    and bl, 0x03
     mov [desktop_bg_color], bl
-    and cl, 0x03
     mov [win_color], cl
     clc
     ret
@@ -12470,6 +12473,7 @@ gfx_fill_color:
     inc bx                          ; Next Y
     dec bp
     jnz .gfc_srow
+    jmp .gfc_cursor_done            ; Prevent fall-through to VGA path
 
 .gfc_vga:
     ; VGA: linear framebuffer, 1 byte per pixel, rep stosb per row
