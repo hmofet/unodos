@@ -940,6 +940,28 @@ draw_cell:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
+    ; Redraw grid lines through cleared cell
+    ; Left edge vertical grid line (only if not column 0)
+    mov bx, [cs:cell_sx]
+    cmp bx, BOARD_X
+    je .no_left_grid
+    mov cx, [cs:cell_sy]
+    mov dx, CELL_SIZE
+    mov al, PAL_GRID
+    mov ah, API_DRAW_VLINE
+    int 0x80
+.no_left_grid:
+    ; Top edge horizontal grid line (only if not row 0)
+    mov cx, [cs:cell_sy]
+    cmp cx, BOARD_Y
+    je .no_top_grid
+    mov bx, [cs:cell_sx]
+    mov dx, CELL_SIZE
+    mov al, PAL_GRID
+    mov ah, API_DRAW_HLINE
+    int 0x80
+.no_top_grid:
+
     popa
     ret
 
