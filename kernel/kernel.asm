@@ -1570,6 +1570,13 @@ auto_load_launcher:
     push dx
     push si
 
+    ; Boot diagnostic: 'F' = about to load launcher from filesystem
+    mov bx, 4
+    mov cx, 24
+    mov word [caller_ds], 0x1000
+    mov si, .diag_F
+    call gfx_draw_string_stub
+
     ; Load LAUNCHER.BIN from boot drive
     mov ax, 0x1000
     mov ds, ax
@@ -1579,12 +1586,33 @@ auto_load_launcher:
     call app_load_stub
     jc .fail_load
 
+    ; Boot diagnostic: 'L' = launcher loaded OK
+    mov word [caller_ds], 0x1000
+    mov bx, 20
+    mov cx, 24
+    mov si, .diag_L
+    call gfx_draw_string_stub
+
     ; Load saved settings (font + colors) from SETTINGS.CFG if it exists
     call load_settings
+
+    ; Boot diagnostic: 'S' = settings loaded, starting task
+    mov word [caller_ds], 0x1000
+    mov bx, 36
+    mov cx, 24
+    mov si, .diag_S
+    call gfx_draw_string_stub
 
     ; Start launcher as a cooperative task (non-blocking)
     call app_start_stub
     jc .fail_start
+
+    ; Boot diagnostic: 'R' = about to enter scheduler (run)
+    mov word [caller_ds], 0x1000
+    mov bx, 52
+    mov cx, 24
+    mov si, .diag_R
+    call gfx_draw_string_stub
 
     ; Enter scheduler - switch to the launcher task
     mov byte [current_task], 0xFF   ; Kernel is not a task
@@ -1664,6 +1692,10 @@ auto_load_launcher:
 .err_code_str:  db '?', 0
 .err_start_msg: db 'ERR: app_start failed', 0
 .err_sched_msg: db 'ERR: scheduler failed', 0
+.diag_F: db 'F', 0
+.diag_L: db 'L', 0
+.diag_S: db 'S', 0
+.diag_R: db 'R', 0
 
 ; ============================================================================
 ; Load saved settings from SETTINGS.CFG on boot drive
