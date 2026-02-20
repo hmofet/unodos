@@ -58,8 +58,8 @@ EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
 ; Window params
-WIN_X       equ 75
-WIN_W       equ 170
+WIN_X       equ 55
+WIN_W       equ 210
 
 entry:
     pusha
@@ -150,13 +150,13 @@ entry:
     add ax, [cs:si_row_h]
     mov [cs:si_y7], ax
 
-    ; win_h = r7 + row_h + 6 (bottom margin)
+    ; win_h = r7 + row_h + 18 (bottom margin + titlebar + borders)
     add ax, [cs:si_row_h]
-    add ax, 6
+    add ax, 18
     mov [cs:si_win_h], ax
 
-    ; win_y = (200 - (win_h + 12)) / 2  (12 = titlebar + border)
-    mov bx, 188
+    ; win_y = (200 - win_h) / 2
+    mov bx, 200
     sub bx, ax
     shr bx, 1
     mov [cs:si_win_y], bx
