@@ -158,8 +158,8 @@ Loading kernel................................ OK
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 56 functions (indices 0-55) |
-| Graphics | Pixel, rect, filled rect, char, string, inverted string, clear, text width, icons, word wrap |
+| System Calls | INT 0x80 for API dispatch, 91 functions (indices 0-90) |
+| Graphics | Pixel, rect, filled rect, char, string, inverted string, clear, text width, icons, word wrap, colored drawing, lines, scroll |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
 | PS/2 Mouse | BIOS INT 15h/C2 (primary) + KBC fallback, XOR cursor, title bar drag |
@@ -169,14 +169,17 @@ Loading kernel................................ OK
 | Window Manager | Create, destroy, draw, focus, move, close button, outline drag (16 max) |
 | PC Speaker | PIT Channel 2 tone generation, auto-silence on exit |
 | Drawing Context | Window-relative coordinate translation for drawing APIs |
-| Desktop Icons | 8 registered icon slots, kernel repaints during window operations |
+| Desktop Icons | 12 registered icon slots, kernel repaints during window operations |
 | Multitasking | Cooperative round-robin scheduler, 6 concurrent user apps |
 | Segment Pool | Dynamic segment allocation (0x3000-0x8000) with alloc/free |
-| GUI Toolkit | Button/radio widgets, hit testing, font selection, color themes |
+| GUI Toolkit | Button, radio, checkbox, textfield, scrollbar, listitem, progress, groupbox, separator, combobox, menubar, hit testing, font selection, color themes |
+| Clipboard | System-wide clipboard (4KB at 0x9000:0x0000) with copy/paste/query |
+| Popup Menu | Generic popup menu system (open, close, hit-test) |
+| File Dialog | Blocking modal file open dialog with scrollable list |
 
 ### Window Drawing Context
 
-When an app calls `win_begin_draw` (API 31), a drawing context is activated. All subsequent calls to APIs 0-6 have their BX/CX coordinates automatically translated from window-relative to absolute screen coordinates:
+When an app calls `win_begin_draw` (API 31), a drawing context is activated. All subsequent calls to drawing APIs (0-6, 50-52, 56-62, 65-71, 80, 87) have their BX/CX coordinates automatically translated from window-relative to absolute screen coordinates:
 
 ```
 absolute_x = window_x + 1 (border) + relative_x
@@ -197,7 +200,7 @@ Three bitmap fonts are available (selectable via API 48):
 
 **Font 1: 8x8** (`kernel/font8x8.asm`) - 95 chars, 12px advance, default
 
-**Font 2: 8x12** (`kernel/font8x12.asm`) - 95 chars, 12px advance, large text
+**Font 2: 8x14** (`kernel/font8x14.asm`) - 95 chars, 12px advance, large text
 
 ## CGA Video Memory
 
@@ -280,4 +283,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*v3.18.0 Build 207*
+*v3.21.0 Build 275*

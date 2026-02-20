@@ -3311,6 +3311,7 @@ FDLG_BTN_H      equ 12                  ; Button height
 FDLG_BTN_GAP    equ 2                   ; Gap between list and buttons
 FDLG_MAX_FILES  equ 64                  ; Max files stored
 FDLG_ENTRY_SIZE equ 13                  ; 12 chars "FILENAME.EXT" + null
+FDLG_LIST_W     equ FDLG_W - 4 - SCROLLBAR_WIDTH  ; List width (140) with scrollbar
 FDLG_BUF_SEG    equ 0x9000              ; Scratch segment
 FDLG_BUF_OFF    equ 0x1000              ; Offset in scratch (clipboard uses 0x0000-0x0FFF)
 
@@ -3452,6 +3453,14 @@ file_dialog_open:
     cmp ax, FDLG_VISIBLE * FDLG_ITEM_H
     jae .fdlg_check_buttons             ; Below list → check buttons
 
+    ; Check if click is on scrollbar (X >= FDLG_LIST_W relative to content)
+    push ax                             ; Save Y-relative
+    mov ax, [mouse_x]
+    sub ax, si                          ; Content-relative X
+    cmp ax, FDLG_LIST_W
+    pop ax                              ; Restore Y-relative
+    jae .fdlg_scrollbar_click           ; Click on scrollbar
+
     ; Compute clicked item
     xor dx, dx
     mov bx, FDLG_ITEM_H
@@ -3492,6 +3501,15 @@ file_dialog_open:
     jb .fdlg_cancel
 
     jmp .fdlg_loop
+
+    ; --- Scrollbar click ---
+.fdlg_scrollbar_click:
+    ; AX = Y relative to content (in list area)
+    cmp ax, SCROLLBAR_ARROW_H           ; Top 8px = up arrow
+    jb .fdlg_up
+    cmp ax, FDLG_VISIBLE * FDLG_ITEM_H - SCROLLBAR_ARROW_H
+    jae .fdlg_down                      ; Bottom 8px = down arrow
+    jmp .fdlg_loop                      ; Track area — ignore
 
     ; --- Selection ---
 .fdlg_select:
@@ -3729,7 +3747,7 @@ fdlg_draw_full:
 .fdraw_not_sel:
     push cx                             ; Save visible index for loop
     mov cx, di                          ; CX = correct screen Y
-    mov dx, FDLG_W - 4                  ; Width
+    mov dx, FDLG_LIST_W                  ; Width (minus scrollbar)
     call widget_draw_listitem
     pop cx                              ; Restore visible index
     pop dx                              ; Matches push dx at loop start
@@ -3745,7 +3763,7 @@ fdlg_draw_full:
     add ax, [fdlg_cy]
     mov cx, ax                          ; Y
     mov bx, [fdlg_cx]                   ; X
-    mov dx, FDLG_W - 4                  ; Width
+    mov dx, FDLG_LIST_W                  ; Width (minus scrollbar)
     mov si, FDLG_ITEM_H                 ; Height
     call gfx_clear_area_stub
     pop cx
@@ -3755,7 +3773,7 @@ fdlg_draw_full:
 
 .fdraw_items_done:
     pop word [caller_ds]                ; Restore caller_ds
-    jmp .fdraw_done
+    jmp .fdraw_scrollbar
 
 .fdraw_empty:
     ; Show "(No files)" message
@@ -3768,6 +3786,23 @@ fdlg_draw_full:
     mov si, fdlg_empty
     call gfx_draw_string_stub
     pop word [caller_ds]
+
+.fdraw_scrollbar:
+    ; Draw scrollbar on right side of list
+    mov bx, [fdlg_cx]
+    add bx, FDLG_LIST_W                ; X = right edge of list
+    mov cx, [fdlg_cy]                   ; Y = content top
+    mov si, FDLG_VISIBLE * FDLG_ITEM_H ; Track height = 110
+    mov dx, [fdlg_scroll]              ; Current scroll position
+    ; Compute max_range = max(0, fdlg_count - FDLG_VISIBLE)
+    mov ax, [fdlg_count]
+    sub ax, FDLG_VISIBLE
+    jg .fdraw_sb_range
+    xor ax, ax
+.fdraw_sb_range:
+    mov di, ax                          ; Max range
+    xor al, al                          ; Flags: vertical
+    call widget_draw_scrollbar
 
 .fdraw_done:
     ; Draw Open and Cancel buttons at bottom
