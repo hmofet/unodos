@@ -7528,8 +7528,8 @@ fat12_mount:
     loop .spinup
     pop cx
 
-    ; HARD-CODE BPB values instead of reading sector 62
-    ; Our FAT12 filesystem at sector 62 has known parameters:
+    ; HARD-CODE BPB values instead of reading sector 78
+    ; Our FAT12 filesystem at sector 78 has known parameters:
     ; - 512 bytes per sector
     ; - 1 sector per cluster
     ; - 1 reserved sector
@@ -7545,16 +7545,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 70 + reserved_sectors = 71
-    mov word [fat_start], 71        ; Filesystem at sector 70 + 1 reserved
+    ; fat_start = 78 + reserved_sectors = 79
+    mov word [fat_start], 79        ; Filesystem at sector 78 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 70 + reserved + (num_fats * sectors_per_fat)
-    ; = 70 + 1 + (2 * 9) = 70 + 1 + 18 = 89
+    ; root_dir_start = 78 + reserved + (num_fats * sectors_per_fat)
+    ; = 78 + 1 + (2 * 9) = 78 + 1 + 18 = 97
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 70                      ; Filesystem starts at sector 70
-    mov [root_dir_start], ax        ; = 89
+    add ax, 78                      ; Filesystem starts at sector 78
+    mov [root_dir_start], ax        ; = 97
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -8120,7 +8120,7 @@ fat12_alloc_cluster:
 
     ; Scan FAT entries starting from cluster 2
     ; Total data clusters on 1.44MB floppy with our layout:
-    ; (2880 - 70) total FS sectors = 2810, minus overhead = ~2780 data clusters
+    ; (2880 - 78) total FS sectors = 2802, minus overhead = ~2772 data clusters
     mov cx, 2                       ; Start scanning from cluster 2
 .scan_loop:
     cmp cx, 2847                    ; Max cluster for our floppy (conservative limit)
@@ -15919,9 +15919,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 71                    ; Absolute FAT sector = filesystem_start(70) + reserved(1)
-root_dir_start: dw 89               ; Calculated: 70 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 103             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 79                    ; Absolute FAT sector = filesystem_start(78) + reserved(1)
+root_dir_start: dw 97               ; Calculated: 78 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 111             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
