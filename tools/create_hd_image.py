@@ -292,6 +292,7 @@ def find_apps():
         ('mkboot.bin', 'MKBOOT.BIN'),
         ('settings.bin', 'SETTINGS.BIN'),
         ('tetris.bin', 'TETRIS.BIN'),
+        ('tetrisv.bin', 'TETRISV.BIN'),
         ('demo.bin', 'DEMO.BIN'),
         ('apitest.bin', 'APITEST.BIN'),
         ('notepad.bin', 'TEXT.BIN'),
