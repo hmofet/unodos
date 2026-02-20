@@ -75,11 +75,17 @@ SEP_Y                   equ 22
 STAFF_Y                 equ 26
 STAFF_H                 equ 54
 STATUS_Y                equ 84
-BTN_Y                   equ 96
-BTN_X                   equ 105
-BTN_W                   equ 70
+BTN_ROW_Y               equ 96
 BTN_H                   equ 12
 HELP_Y                  equ 114
+
+; Three buttons: Prev | Play/Pause | Next
+BTNP_X                  equ 10       ; Prev button
+BTNP_W                  equ 60
+BTNC_X                  equ 85       ; Center (play/pause) button
+BTNC_W                  equ 70
+BTNN_X                  equ 170      ; Next button
+BTNN_W                  equ 60
 
 ; Staff visualization
 STAFF_BASE_Y            equ 60      ; Y of bottom staff line (E4)
@@ -324,9 +330,9 @@ poll_events:
     mov al, dl
     jmp switch_song
 .check_arrows:
-    cmp dh, 0x4B                    ; Left arrow scancode
+    cmp dl, 130                     ; Left arrow (special code)
     je .prev_song
-    cmp dh, 0x4D                    ; Right arrow scancode
+    cmp dl, 131                     ; Right arrow (special code)
     je .next_song
     ret
 
@@ -358,18 +364,40 @@ poll_events:
     cmp byte [cs:prev_btn], 0
     jne .held
     mov byte [cs:prev_btn], 1
-    ; Hit test play/pause button
-    mov bx, BTN_X
-    mov cx, BTN_Y
-    mov dx, BTN_W
+    ; Hit test Play/Pause button (center)
+    mov bx, BTNC_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNC_W
     mov si, BTN_H
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
-    jnz .btn_hit
+    jnz .btn_play_hit
+    ; Hit test Prev button
+    mov bx, BTNP_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNP_W
+    mov si, BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .btn_prev_hit
+    ; Hit test Next button
+    mov bx, BTNN_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNN_W
+    mov si, BTN_H
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .btn_next_hit
     ret
-.btn_hit:
+.btn_play_hit:
     jmp toggle_state
+.btn_prev_hit:
+    jmp .prev_song
+.btn_next_hit:
+    jmp .next_song
 .btn_up:
     mov byte [cs:prev_btn], 0
 .held:
@@ -528,28 +556,48 @@ draw_status:
     popa
     ret
 
-; Draw play/pause button
+; Draw all three buttons: Prev | Play/Pause | Next
 draw_button:
     pusha
+    mov ax, cs
+    mov es, ax
 
-    ; Pick label
+    ; --- Prev button ---
+    mov di, btn_prev
+    mov bx, BTNP_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNP_W
+    mov si, BTN_H
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; --- Play/Pause button (center) ---
     cmp byte [cs:state], ST_PLAYING
     je .lbl_pause
     cmp byte [cs:state], ST_DONE
     je .lbl_replay
     mov di, btn_play
-    jmp .draw_btn
+    jmp .draw_center
 .lbl_pause:
     mov di, btn_pause
-    jmp .draw_btn
+    jmp .draw_center
 .lbl_replay:
     mov di, btn_replay
-.draw_btn:
-    mov ax, cs
-    mov es, ax
-    mov bx, BTN_X
-    mov cx, BTN_Y
-    mov dx, BTN_W
+.draw_center:
+    mov bx, BTNC_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNC_W
+    mov si, BTN_H
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+
+    ; --- Next button ---
+    mov di, btn_next
+    mov bx, BTNN_X
+    mov cx, BTN_ROW_Y
+    mov dx, BTNN_W
     mov si, BTN_H
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -740,12 +788,14 @@ str_arrow_r:     db ' >', 0
 msg_playing:     db 'Playing...', 0
 msg_paused:      db 'Paused', 0
 msg_finished:    db 'Song Complete', 0
-msg_help:        db '</>:Song SPC:Play ESC:Exit', 0
+msg_help:        db '1-5:Song  SPC:Play  ESC:Exit', 0
 
 ; Button labels
+btn_prev:   db ' Prev ', 0
 btn_play:   db ' Play ', 0
 btn_pause:  db 'Pause ', 0
 btn_replay: db 'Replay', 0
+btn_next:   db ' Next ', 0
 
 ; Note head bitmap (6 wide x 5 tall, 1 byte per row, MSB first)
 ; .XXXX. / XXXXXX / XXXXXX / XXXXXX / .XXXX.

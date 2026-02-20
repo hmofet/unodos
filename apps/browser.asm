@@ -246,9 +246,9 @@ entry:
 
 ; --- Normal mode keys ---
 .key_normal:
-    cmp dh, 0x48                    ; Up arrow
+    cmp dl, 128                     ; Up arrow (special code)
     je .key_up
-    cmp dh, 0x50                    ; Down arrow
+    cmp dl, 129                     ; Down arrow (special code)
     je .key_down
     jmp .main_loop
 
