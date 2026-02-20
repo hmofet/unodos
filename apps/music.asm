@@ -1,5 +1,5 @@
-; MUSIC.BIN - Fur Elise music player for UnoDOS
-; Full Beethoven's Fur Elise with clickable Play/Pause button
+; MUSIC.BIN - Music player with visual playback for UnoDOS
+; 5 classical songs with scrolling staff notation
 ;
 ; Build: nasm -f bin -o music.bin music.asm
 
@@ -48,7 +48,9 @@ API_SPEAKER_TONE        equ 41
 API_SPEAKER_OFF         equ 42
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
+API_HLINE               equ 69
 API_GET_TICK            equ 63
+API_DRAW_SPRITE         equ 94
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -60,11 +62,31 @@ ST_PLAYING              equ 0
 ST_PAUSED               equ 1
 ST_DONE                 equ 2
 
-; Button position/size (window-relative)
-BTN_X                   equ 69
-BTN_Y                   equ 50
-BTN_W                   equ 60
+; Window
+WIN_X                   equ 20
+WIN_Y                   equ 22
+WIN_W                   equ 280
+WIN_H                   equ 150
+
+; Layout Y positions
+TITLE_Y                 equ 2
+COMP_Y                  equ 12
+SEP_Y                   equ 22
+STAFF_Y                 equ 26
+STAFF_H                 equ 54
+STATUS_Y                equ 84
+BTN_Y                   equ 96
+BTN_X                   equ 105
+BTN_W                   equ 70
 BTN_H                   equ 12
+HELP_Y                  equ 114
+
+; Staff visualization
+STAFF_BASE_Y            equ 60      ; Y of bottom staff line (E4)
+STAFF_LINE_SPACING      equ 8
+NOTES_VISIBLE           equ 21      ; notes shown in viewport
+NOTE_SPACING            equ 12      ; pixels between note centers
+STAFF_LEFT_X            equ 10      ; left margin for notes
 
 ; Note frequencies (Hz) - equal temperament A4=440
 NOTE_REST   equ 0
@@ -75,18 +97,24 @@ NOTE_F4     equ 349
 NOTE_G4     equ 392
 NOTE_GS4    equ 415
 NOTE_A4     equ 440
+NOTE_AS4    equ 466
 NOTE_B4     equ 494
 NOTE_C5     equ 523
 NOTE_D5     equ 587
 NOTE_DS5    equ 622
 NOTE_E5     equ 659
 NOTE_F5     equ 698
+NOTE_G5     equ 784
 
 ; Timing (BIOS ticks, ~55ms each at 18.2 Hz)
 DUR_EIGHTH  equ 3                   ; ~165ms
 DUR_QUARTER equ 6                   ; ~330ms
 DUR_HALF    equ 12                  ; ~660ms
+DUR_DOTQ    equ 9                   ; dotted quarter ~495ms
 DUR_GAP     equ 1                   ; Inter-note gap
+
+; Song count
+NUM_SONGS   equ 5
 
 entry:
     pusha
@@ -97,10 +125,10 @@ entry:
     mov ds, ax
 
     ; Create window
-    mov bx, 60                      ; X
-    mov cx, 45                      ; Y
-    mov dx, 200                     ; Width
-    mov si, 100                     ; Height
+    mov bx, WIN_X
+    mov cx, WIN_Y
+    mov dx, WIN_W
+    mov si, WIN_H
     mov ax, cs
     mov es, ax
     mov di, win_title
@@ -114,10 +142,12 @@ entry:
     int 0x80
 
     ; Init state
-    mov byte [cs:state], ST_PLAYING
+    mov byte [cs:state], ST_PAUSED
     mov word [cs:note_idx], 0
+    mov byte [cs:cur_song], 0
     mov byte [cs:prev_btn], 0
     mov byte [cs:quit], 0
+    call load_song_info
 
     call draw_all
 
@@ -130,15 +160,12 @@ entry:
     jne .idle
 
     ; === Playing: process current note ===
-    mov si, [cs:note_idx]
-    shl si, 2                       ; 4 bytes per entry
-    add si, notes
-
-    mov bx, [cs:si]
+    call get_current_note           ; BX=freq, CX=duration
     cmp bx, 0xFFFF
     je .song_done
 
-    mov cx, [cs:si + 2]             ; CX = duration
+    ; Update visualization before playing
+    call draw_staff
 
     ; Play tone or rest
     test bx, bx
@@ -167,7 +194,7 @@ entry:
     je .exit
 
     cmp byte [cs:state], ST_PAUSED
-    je .main                         ; Paused during wait
+    je .main
 
     ; Check elapsed time
     call read_tick
@@ -196,6 +223,7 @@ entry:
     mov ah, API_SPEAKER_OFF
     int 0x80
     mov byte [cs:state], ST_DONE
+    call draw_staff
     call draw_status
     call draw_button
     jmp .idle
@@ -225,6 +253,46 @@ entry:
     retf
 
 ; ============================================================================
+; Get current note data
+; Output: BX=frequency, CX=duration
+; ============================================================================
+get_current_note:
+    push si
+    mov si, [cs:cur_notes_ptr]
+    mov ax, [cs:note_idx]
+    shl ax, 2                       ; 4 bytes per entry
+    add si, ax
+    mov bx, [cs:si]                 ; freq
+    mov cx, [cs:si + 2]             ; duration
+    pop si
+    ret
+
+; ============================================================================
+; Load song info from song table
+; Uses: cur_song → sets cur_notes_ptr, cur_note_count, cur_title, cur_composer
+; ============================================================================
+load_song_info:
+    push ax
+    push bx
+    push si
+    movzx ax, byte [cs:cur_song]
+    shl ax, 3                       ; 8 bytes per entry
+    add ax, song_table
+    mov si, ax
+    mov bx, [cs:si]                 ; notes pointer
+    mov [cs:cur_notes_ptr], bx
+    mov bx, [cs:si + 2]            ; note count
+    mov [cs:cur_note_count], bx
+    mov bx, [cs:si + 4]            ; title pointer
+    mov [cs:cur_title], bx
+    mov bx, [cs:si + 6]            ; composer pointer
+    mov [cs:cur_composer], bx
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; ============================================================================
 ; Event handler
 ; ============================================================================
 poll_events:
@@ -243,20 +311,54 @@ poll_events:
     je .esc
     cmp dl, ' '                     ; Space = toggle
     je .toggle
+    cmp dl, ','                     ; < prev song
+    je .prev_song
+    cmp dl, '.'                     ; > next song
+    je .next_song
+    ; Number keys 1-5
+    cmp dl, '1'
+    jb .check_arrows
+    cmp dl, '5'
+    ja .check_arrows
+    sub dl, '1'                     ; 0-4
+    mov al, dl
+    jmp switch_song
+.check_arrows:
+    cmp dh, 0x4B                    ; Left arrow scancode
+    je .prev_song
+    cmp dh, 0x4D                    ; Right arrow scancode
+    je .next_song
     ret
+
 .esc:
     mov byte [cs:quit], 1
     ret
 .toggle:
-    jmp toggle_state                ; tail call
+    jmp toggle_state
+.prev_song:
+    mov al, [cs:cur_song]
+    test al, al
+    jz .wrap_last
+    dec al
+    jmp switch_song
+.wrap_last:
+    mov al, NUM_SONGS - 1
+    jmp switch_song
+.next_song:
+    mov al, [cs:cur_song]
+    inc al
+    cmp al, NUM_SONGS
+    jb switch_song
+    xor al, al
+    jmp switch_song
 
 .mouse:
     test dl, 1                      ; Left button?
     jz .btn_up
     cmp byte [cs:prev_btn], 0
-    jne .held                       ; Already held
+    jne .held
     mov byte [cs:prev_btn], 1
-    ; Hit test button using widget API
+    ; Hit test play/pause button
     mov bx, BTN_X
     mov cx, BTN_Y
     mov dx, BTN_W
@@ -267,14 +369,26 @@ poll_events:
     jnz .btn_hit
     ret
 .btn_hit:
-    jmp toggle_state                ; tail call
+    jmp toggle_state
 .btn_up:
     mov byte [cs:prev_btn], 0
 .held:
     ret
 
 .redraw:
-    jmp draw_all                    ; tail call
+    jmp draw_all
+
+; ============================================================================
+; Switch to song AL (0-4)
+; ============================================================================
+switch_song:
+    mov [cs:cur_song], al
+    mov ah, API_SPEAKER_OFF
+    int 0x80
+    mov word [cs:note_idx], 0
+    mov byte [cs:state], ST_PAUSED
+    call load_song_info
+    jmp draw_all
 
 ; ============================================================================
 ; Toggle play/pause state
@@ -282,28 +396,22 @@ poll_events:
 toggle_state:
     cmp byte [cs:state], ST_PLAYING
     je .to_pause
-
     cmp byte [cs:state], ST_DONE
     je .restart
-
     ; Paused → resume
     mov byte [cs:state], ST_PLAYING
     jmp .update
-
 .to_pause:
     mov byte [cs:state], ST_PAUSED
     mov ah, API_SPEAKER_OFF
     int 0x80
     jmp .update
-
 .restart:
     mov word [cs:note_idx], 0
     mov byte [cs:state], ST_PLAYING
-
 .update:
     call draw_status
-    jmp draw_button                 ; tail call
-
+    jmp draw_button
 
 ; ============================================================================
 ; Drawing functions
@@ -313,30 +421,79 @@ toggle_state:
 draw_all:
     pusha
 
-    ; Title
-    mov bx, 40
-    mov cx, 4
-    mov si, msg_title
-    mov ah, API_GFX_DRAW_STRING
+    ; Clear entire content area
+    mov bx, 0
+    mov cx, 0
+    mov dx, WIN_W - 2
+    mov si, WIN_H - 10
+    mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Subtitle
-    mov bx, 12
-    mov cx, 16
-    mov si, msg_sub
-    mov ah, API_GFX_DRAW_STRING
+    ; Song title with arrows
+    call draw_song_title
+
+    ; Separator line
+    mov bx, 0
+    mov cx, SEP_Y
+    mov dx, WIN_W - 4
+    mov al, 3                       ; white
+    mov ah, API_HLINE
     int 0x80
 
     ; Help text
     mov bx, 4
-    mov cx, 74
+    mov cx, HELP_Y
     mov si, msg_help
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     popa
+    call draw_staff
     call draw_status
-    jmp draw_button                 ; tail call
+    jmp draw_button
+
+; Draw song title and composer
+draw_song_title:
+    pusha
+
+    ; Clear title area
+    mov bx, 0
+    mov cx, 0
+    mov dx, WIN_W - 2
+    mov si, 21
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Draw "< " prefix
+    mov bx, 4
+    mov cx, TITLE_Y
+    mov si, str_arrow_l
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw song title
+    mov bx, 28
+    mov cx, TITLE_Y
+    mov si, [cs:cur_title]
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw " >" suffix
+    mov bx, 240
+    mov cx, TITLE_Y
+    mov si, str_arrow_r
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw composer
+    mov bx, 28
+    mov cx, COMP_Y
+    mov si, [cs:cur_composer]
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    popa
+    ret
 
 ; Draw status text
 draw_status:
@@ -344,8 +501,8 @@ draw_status:
 
     ; Clear status area
     mov bx, 0
-    mov cx, 34
-    mov dx, 198
+    mov cx, STATUS_Y
+    mov dx, WIN_W - 2
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
@@ -363,15 +520,15 @@ draw_status:
 .done:
     mov si, msg_finished
 .draw:
-    mov bx, 52
-    mov cx, 35
+    mov bx, 100
+    mov cx, STATUS_Y
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     popa
     ret
 
-; Draw play/pause button using widget API
+; Draw play/pause button
 draw_button:
     pusha
 
@@ -394,7 +551,7 @@ draw_button:
     mov cx, BTN_Y
     mov dx, BTN_W
     mov si, BTN_H
-    xor al, al                      ; Not pressed
+    xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
 
@@ -402,11 +559,156 @@ draw_button:
     ret
 
 ; ============================================================================
+; Staff visualization
+; ============================================================================
+draw_staff:
+    pusha
+
+    ; Clear staff area
+    mov bx, 0
+    mov cx, STAFF_Y
+    mov dx, WIN_W - 4
+    mov si, STAFF_H
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Draw 5 staff lines (E4, G4, B4, D5, F5 from bottom to top)
+    ; E4 = STAFF_BASE_Y, spacing = 8
+    mov cx, STAFF_BASE_Y            ; E4 line (bottom)
+    mov al, 1                       ; cyan
+    mov bx, 4
+    mov dx, WIN_W - 8
+
+    mov ah, API_HLINE               ; E4
+    int 0x80
+    sub cx, STAFF_LINE_SPACING
+    mov ah, API_HLINE               ; G4
+    int 0x80
+    sub cx, STAFF_LINE_SPACING
+    mov ah, API_HLINE               ; B4
+    int 0x80
+    sub cx, STAFF_LINE_SPACING
+    mov ah, API_HLINE               ; D5
+    int 0x80
+    sub cx, STAFF_LINE_SPACING
+    mov ah, API_HLINE               ; F5
+    int 0x80
+
+    ; Calculate view_start = max(0, note_idx - 10)
+    mov ax, [cs:note_idx]
+    sub ax, 10
+    jns .vs_ok
+    xor ax, ax
+.vs_ok:
+    mov [cs:view_start], ax
+
+    ; Draw visible notes
+    ; DI = loop counter (0 to NOTES_VISIBLE-1)
+    xor di, di
+
+.note_loop:
+    cmp di, NOTES_VISIBLE
+    jae .notes_done
+
+    ; note index = view_start + di
+    mov ax, [cs:view_start]
+    add ax, di
+    ; Check if past end of song
+    cmp ax, [cs:cur_note_count]
+    jae .skip_note
+
+    ; Get note frequency
+    push di
+    mov si, [cs:cur_notes_ptr]
+    mov bx, ax                      ; BX = note index
+    push ax
+    shl ax, 2                       ; 4 bytes per entry
+    add si, ax
+    mov bx, [cs:si]                 ; BX = frequency
+    pop ax
+
+    ; Skip rests
+    test bx, bx
+    jz .skip_note_pop
+    cmp bx, 0xFFFF
+    je .skip_note_pop
+
+    ; Look up Y position from frequency
+    call freq_to_y                  ; AL = Y offset from staff area top
+    test al, al
+    jz .skip_note_pop               ; unknown frequency
+
+    ; Calculate note X position
+    push ax
+    mov ax, di
+    mov bx, NOTE_SPACING
+    mul bx                          ; AX = di * NOTE_SPACING
+    add ax, STAFF_LEFT_X
+    mov bx, ax                      ; BX = X position
+    pop ax
+    movzx cx, al                    ; CX = Y position
+
+    ; Choose color: current note = magenta(2), others = white(3)
+    mov ax, [cs:view_start]
+    add ax, di
+    cmp ax, [cs:note_idx]
+    mov al, 3                       ; white (default)
+    jne .draw_note
+    mov al, 2                       ; magenta (current)
+
+.draw_note:
+    ; Draw note head sprite: BX=X, CX=Y, DL=5, DH=6, AL=color, SI=bitmap
+    mov si, note_head_bmp
+    mov dh, 6                       ; width
+    mov dl, 5                       ; height
+    mov ah, API_DRAW_SPRITE
+    int 0x80
+    pop di
+    jmp .next_note
+
+.skip_note_pop:
+    pop di
+.skip_note:
+.next_note:
+    inc di
+    jmp .note_loop
+
+.notes_done:
+    popa
+    ret
+
+; ============================================================================
+; Frequency to Y position lookup
+; Input: BX = frequency (Hz)
+; Output: AL = Y position in content area (0 = unknown)
+; ============================================================================
+freq_to_y:
+    push si
+    push cx
+    mov si, freq_y_table
+.lookup:
+    mov cx, [cs:si]                 ; frequency
+    test cx, cx
+    jz .not_found                   ; end of table
+    cmp bx, cx
+    je .found
+    add si, 4                       ; next entry (freq word + y byte + pad)
+    jmp .lookup
+.found:
+    mov al, [cs:si + 2]             ; Y position
+    pop cx
+    pop si
+    ret
+.not_found:
+    xor al, al
+    pop cx
+    pop si
+    ret
+
+; ============================================================================
 ; Helpers
 ; ============================================================================
 
-; Read tick counter via kernel API
-; Output: AX = tick count (low word)
 read_tick:
     mov ah, API_GET_TICK
     int 0x80
@@ -418,33 +720,104 @@ read_tick:
 
 win_title:  db 'Music', 0
 wh:         db 0
-state:      db 0
+state:      db ST_PAUSED
 note_idx:   dw 0
 t0:         dw 0
 prev_btn:   db 0
 quit:       db 0
+cur_song:   db 0
+view_start: dw 0
 
-msg_title:  db 'Fur Elise', 0
-msg_sub:    db 'L. van Beethoven', 0
-msg_playing: db 'Now Playing...', 0
-msg_paused: db 'Paused', 0
-msg_finished: db 'Song Complete', 0
-msg_help:   db 'SPC/Click  ESC=Exit', 0
+; Current song info (loaded from song_table)
+cur_notes_ptr:   dw 0
+cur_note_count:  dw 0
+cur_title:       dw 0
+cur_composer:    dw 0
 
-; Button labels (6 chars each for uniform width)
+; Strings
+str_arrow_l:     db '< ', 0
+str_arrow_r:     db ' >', 0
+msg_playing:     db 'Playing...', 0
+msg_paused:      db 'Paused', 0
+msg_finished:    db 'Song Complete', 0
+msg_help:        db '</>:Song SPC:Play ESC:Exit', 0
+
+; Button labels
 btn_play:   db ' Play ', 0
 btn_pause:  db 'Pause ', 0
 btn_replay: db 'Replay', 0
 
-; ============================================================================
-; Note Data: (frequency, duration_ticks) pairs
-; Beethoven's Fur Elise, WoO 59 - Complete A-B-A form
-; End marker: 0xFFFF
-; ============================================================================
-notes:
-    ; === A SECTION (first time) ===
+; Note head bitmap (6 wide x 5 tall, 1 byte per row, MSB first)
+; .XXXX. / XXXXXX / XXXXXX / XXXXXX / .XXXX.
+note_head_bmp: db 0x78, 0xFC, 0xFC, 0xFC, 0x78
 
-    ; Phrase 1: Trill → A minor
+; Frequency → Y position table (freq_word, y_byte, pad_byte)
+; Staff positions: E4=60, G4=52, B4=44, D5=36, F5=28 (lines)
+; Spaces/ledger: C4=68, D4=64, F4=56, A4=48, C5=40, E5=32
+; Accidentals: GS4=50, AS4=46, DS5=34
+freq_y_table:
+    dw NOTE_C4
+    db 68, 0                        ; below staff (ledger)
+    dw NOTE_D4
+    db 64, 0                        ; below staff
+    dw NOTE_E4
+    db 60, 0                        ; bottom line
+    dw NOTE_F4
+    db 56, 0                        ; first space
+    dw NOTE_G4
+    db 52, 0                        ; second line
+    dw NOTE_GS4
+    db 50, 0                        ; between G4 and A4
+    dw NOTE_A4
+    db 48, 0                        ; second space
+    dw NOTE_AS4
+    db 46, 0                        ; between A4 and B4
+    dw NOTE_B4
+    db 44, 0                        ; middle line
+    dw NOTE_C5
+    db 40, 0                        ; third space
+    dw NOTE_D5
+    db 36, 0                        ; fourth line
+    dw NOTE_DS5
+    db 34, 0                        ; between D5 and E5
+    dw NOTE_E5
+    db 32, 0                        ; fourth space
+    dw NOTE_F5
+    db 28, 0                        ; top line
+    dw NOTE_G5
+    db 26, 0                        ; above staff
+    dw 0                            ; end marker
+
+; ============================================================================
+; Song table: 5 entries x 8 bytes
+; Format: notes_ptr (word), note_count (word), title_ptr (word), composer_ptr (word)
+; ============================================================================
+song_table:
+    dw notes_furelise,   FURELISE_COUNT,  str_t_furelise,  str_c_beethoven
+    dw notes_ode,        ODE_COUNT,       str_t_ode,       str_c_beethoven
+    dw notes_twinkle,    TWINKLE_COUNT,   str_t_twinkle,   str_c_mozart
+    dw notes_lullaby,    LULLABY_COUNT,   str_t_lullaby,   str_c_brahms
+    dw notes_canon,      CANON_COUNT,     str_t_canon,     str_c_pachelbel
+
+; Song titles
+str_t_furelise:  db 'Fur Elise', 0
+str_t_ode:       db 'Ode to Joy', 0
+str_t_twinkle:   db 'Twinkle Twinkle', 0
+str_t_lullaby:   db "Brahms' Lullaby", 0
+str_t_canon:     db 'Canon in D', 0
+
+; Composers
+str_c_beethoven: db 'L. van Beethoven', 0
+str_c_mozart:    db 'W.A. Mozart', 0
+str_c_brahms:    db 'J. Brahms', 0
+str_c_pachelbel: db 'J. Pachelbel', 0
+
+; ============================================================================
+; Song 1: Fur Elise (Beethoven) - A-B-A form
+; ============================================================================
+notes_furelise:
+    ; === A SECTION (first time) ===
+    ; Phrase 1: Trill -> A minor
     dw NOTE_E5,  DUR_EIGHTH
     dw NOTE_DS5, DUR_EIGHTH
     dw NOTE_E5,  DUR_EIGHTH
@@ -455,14 +828,14 @@ notes:
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_A4,  DUR_QUARTER
 
-    ; Phrase 2: C-E-A → B
+    ; Phrase 2: C-E-A -> B
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_C4,  DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_EIGHTH
     dw NOTE_B4,  DUR_QUARTER
 
-    ; Phrase 3: E-G#-B → C5
+    ; Phrase 3: E-G#-B -> C5
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_GS4, DUR_EIGHTH
@@ -482,14 +855,14 @@ notes:
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_A4,  DUR_QUARTER
 
-    ; Phrase 5: C-E-A → B (same as phrase 2)
+    ; Phrase 5: C-E-A -> B
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_C4,  DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_EIGHTH
     dw NOTE_B4,  DUR_QUARTER
 
-    ; Phrase 6: E-C5-B → A (first ending)
+    ; Phrase 6: E-C5-B -> A (first ending)
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_C5,  DUR_EIGHTH
@@ -497,8 +870,7 @@ notes:
     dw NOTE_A4,  DUR_QUARTER
 
     ; === B SECTION ===
-
-    ; F major arpeggio ascending
+    ; F major arpeggio
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_F4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_EIGHTH
@@ -540,13 +912,11 @@ notes:
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_B4,  DUR_QUARTER
 
-    ; Pickup into A section
+    ; Pickup
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
 
     ; === A SECTION (final) ===
-
-    ; Trill → A minor
     dw NOTE_E5,  DUR_EIGHTH
     dw NOTE_DS5, DUR_EIGHTH
     dw NOTE_E5,  DUR_EIGHTH
@@ -557,21 +927,18 @@ notes:
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_A4,  DUR_QUARTER
 
-    ; C-E-A → B
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_C4,  DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_EIGHTH
     dw NOTE_B4,  DUR_QUARTER
 
-    ; E-G#-B → C5
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_GS4, DUR_EIGHTH
     dw NOTE_B4,  DUR_EIGHTH
     dw NOTE_C5,  DUR_QUARTER
 
-    ; Repeat trill
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_E5,  DUR_EIGHTH
@@ -584,19 +951,306 @@ notes:
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_A4,  DUR_QUARTER
 
-    ; C-E-A → B
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_C4,  DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_EIGHTH
     dw NOTE_B4,  DUR_QUARTER
 
-    ; Final resolution: E-C5-B → A (hold)
+    ; Final resolution
     dw NOTE_REST, DUR_EIGHTH
     dw NOTE_E4,  DUR_EIGHTH
     dw NOTE_C5,  DUR_EIGHTH
     dw NOTE_B4,  DUR_EIGHTH
     dw NOTE_A4,  DUR_HALF
 
-    ; End marker
     dw 0xFFFF, 0
+FURELISE_COUNT equ ($ - notes_furelise - 4) / 4  ; exclude end marker
+
+; ============================================================================
+; Song 2: Ode to Joy (Beethoven, 9th Symphony)
+; ============================================================================
+notes_ode:
+    ; Line 1: E E F G | G F E D
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+
+    ; Line 2: C C D E | E. D D
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_DOTQ
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_D4,  DUR_HALF
+
+    ; Line 3: E E F G | G F E D  (repeat)
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+
+    ; Line 4: C C D E | D. C C
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_DOTQ
+    dw NOTE_C4,  DUR_EIGHTH
+    dw NOTE_C4,  DUR_HALF
+
+    ; Bridge: D D E C | D EF E C | D EF E D | C D G
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+
+    ; Final: E E F G | G F E D | C C D E | D. C C
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_DOTQ
+    dw NOTE_C4,  DUR_EIGHTH
+    dw NOTE_C4,  DUR_HALF
+
+    dw 0xFFFF, 0
+ODE_COUNT equ ($ - notes_ode - 4) / 4
+
+; ============================================================================
+; Song 3: Twinkle Twinkle Little Star
+; ============================================================================
+notes_twinkle:
+    ; Verse 1: C C G G A A G-
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+
+    ; F F E E D D C-
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_HALF
+
+    ; Verse 2: G G F F E E D-
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_HALF
+
+    ; G G F F E E D-
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_HALF
+
+    ; Verse 3 (repeat verse 1): C C G G A A G-
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+
+    ; F F E E D D C-
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_HALF
+
+    dw 0xFFFF, 0
+TWINKLE_COUNT equ ($ - notes_twinkle - 4) / 4
+
+; ============================================================================
+; Song 4: Brahms' Lullaby (Wiegenlied)
+; ============================================================================
+notes_lullaby:
+    ; Phrase 1: E E G. E E G.
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_DOTQ
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_DOTQ
+
+    ; Phrase 2: E G C5 B A A
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+
+    ; Phrase 3: D D B. D D B.
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_B4,  DUR_DOTQ
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_B4,  DUR_DOTQ
+
+    ; Phrase 4: D B D5 C5 A F
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+
+    ; Phrase 5: E C5 C5 A. F A G
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_A4,  DUR_DOTQ
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_HALF
+
+    ; Phrase 6: E C5 C5 B. D5 C5 A F
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_DOTQ
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+
+    ; Ending: E F G A B C5-
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_HALF
+
+    dw 0xFFFF, 0
+LULLABY_COUNT equ ($ - notes_lullaby - 4) / 4
+
+; ============================================================================
+; Song 5: Canon in D (Pachelbel) - melody over the famous progression
+; Transposed to C major for available note range
+; ============================================================================
+notes_canon:
+    ; Main melody (the famous descending theme)
+    ; Phrase 1: C5 B4 A4 G4
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+
+    ; Phrase 2: F4 E4 F4 G4
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+
+    ; Variation 1: eighth note arpeggios
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_E5,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+    dw NOTE_D5,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+
+    ; Variation 2: ascending scale passages
+    dw NOTE_C4,  DUR_EIGHTH
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_EIGHTH
+
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+
+    ; Variation 3: the iconic repeated theme
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+
+    dw NOTE_B4,  DUR_EIGHTH
+    dw NOTE_C5,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_EIGHTH
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_E5,  DUR_QUARTER
+
+    ; Final: descending resolution
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_HALF
+
+    dw 0xFFFF, 0
+CANON_COUNT equ ($ - notes_canon - 4) / 4
