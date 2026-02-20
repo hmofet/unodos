@@ -34,22 +34,37 @@ API_POINT_OVER_WINDOW   equ 64
 API_GET_TICK            equ 63
 API_DELAY_TICKS         equ 73
 API_GET_TASK_INFO       equ 74
+API_GET_SCREEN_INFO     equ 82
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
 
-; Icon grid constants
-GRID_COLS               equ 4
-GRID_ROWS               equ 3
-MAX_ICONS               equ 12
-COL_WIDTH               equ 80
-ROW_HEIGHT              equ 55
-GRID_START_Y            equ 24
-ICON_SIZE               equ 16          ; 16x16 pixels
-ICON_X_OFFSET           equ 32          ; Center 16px icon in 80px column
-ICON_Y_OFFSET           equ 2           ; Top padding within row
-LABEL_Y_GAP             equ 20          ; Below icon top (16px + 4px gap)
-HITBOX_HEIGHT           equ 35          ; Clickable area height
+; Icon grid defaults (320x200)
+GRID_COLS_LO            equ 4
+GRID_ROWS_LO            equ 3
+MAX_ICONS_LO            equ 12
+COL_WIDTH_LO            equ 80
+ROW_HEIGHT_LO           equ 55
+GRID_START_Y_LO         equ 24
+ICON_X_OFFSET_LO        equ 32
+ICON_Y_OFFSET_LO        equ 2
+LABEL_Y_GAP_LO          equ 20
+HITBOX_HEIGHT_LO        equ 35
+
+; Icon grid hi-res (640x480)
+GRID_COLS_HI            equ 8
+GRID_ROWS_HI            equ 5
+MAX_ICONS_HI            equ 40
+COL_WIDTH_HI            equ 80
+ROW_HEIGHT_HI           equ 80
+GRID_START_Y_HI         equ 48
+ICON_X_OFFSET_HI        equ 24          ; Center 32px icon in 80px column
+ICON_Y_OFFSET_HI        equ 2
+LABEL_Y_GAP_HI          equ 40          ; Below 32px icon (32 + 8px gap)
+HITBOX_HEIGHT_HI        equ 50
+
+; Static aliases used by code (set at runtime via setup_layout)
+ICON_SIZE               equ 16          ; Source icon size (always 16x16)
 
 ; Double-click threshold
 DOUBLE_CLICK_TICKS      equ 9           ; ~0.5s at 18.2 Hz BIOS timer
@@ -76,6 +91,9 @@ entry:
     mov byte [cs:prev_buttons], 0
     mov word [cs:last_click_tick], 0
     mov byte [cs:last_click_icon], 0xFF
+
+    ; Detect screen resolution and set layout variables
+    call setup_layout
 
     ; Show splash screen with logo and progress bar
     call show_splash
@@ -177,9 +195,9 @@ entry:
     mov al, [cs:selected_icon]
     cmp al, 0xFF
     je .kb_select_first
-    cmp al, GRID_COLS
+    cmp al, [cs:grid_cols]
     jb .no_event                    ; Already in top row
-    sub al, GRID_COLS
+    sub al, [cs:grid_cols]
     call select_icon
     jmp .no_event
 
@@ -189,7 +207,7 @@ entry:
     mov al, [cs:selected_icon]
     cmp al, 0xFF
     je .kb_select_first
-    add al, GRID_COLS
+    add al, [cs:grid_cols]
     cmp al, [cs:icon_count]
     jae .no_event                   ; Past last icon
     call select_icon
@@ -265,7 +283,7 @@ scan_disk:
 
     ; Clear is_refresh flags
     mov di, is_refresh
-    mov cx, 8
+    mov cx, MAX_ICON_ALLOC
 .clear_refresh:
     mov byte [cs:di], 0
     inc di
@@ -278,7 +296,8 @@ scan_disk:
     jae .scan_done
 
     ; Check if we have room
-    cmp byte [cs:icon_count], MAX_ICONS
+    mov al, [cs:max_icons]
+    cmp [cs:icon_count], al
     jae .scan_done
 
     ; Read next directory entry
@@ -349,7 +368,8 @@ scan_disk:
     ; On floppy boot, add a Refresh icon as the last slot
     test byte [cs:mounted_drive], 0x80
     jnz .scan_really_done             ; Skip on HD boot
-    cmp byte [cs:icon_count], MAX_ICONS
+    mov al, [cs:max_icons]
+    cmp [cs:icon_count], al
     jae .scan_really_done             ; No room
 
     mov al, [cs:icon_count]
@@ -604,25 +624,25 @@ register_icon:
 
     ; Calculate grid position
     xor ah, ah
-    mov bl, GRID_COLS
+    mov bl, [cs:grid_cols]
     div bl                          ; AL = row, AH = col
 
     ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
     push ax
     mov al, ah                      ; AL = col
     xor ah, ah
-    mov bl, COL_WIDTH
+    mov bl, [cs:col_width]
     mul bl                          ; AX = col * 80
-    add ax, ICON_X_OFFSET
+    add ax, [cs:icon_x_offset]
     mov [cs:.ri_x], ax
     pop ax
 
     ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
     xor ah, ah                      ; AL = row
-    mov bl, ROW_HEIGHT
+    mov bl, [cs:row_height]
     mul bl                          ; AX = row * 80
-    add ax, GRID_START_Y
-    add ax, ICON_Y_OFFSET
+    add ax, [cs:grid_start_y]
+    add ax, [cs:icon_y_offset]
     mov [cs:.ri_y], ax
 
     ; Build 76-byte data block: 64B bitmap + 12B name
@@ -770,6 +790,45 @@ draw_background:
     ret
 
 ; ============================================================================
+; setup_layout - Query screen size and set grid layout variables
+; ============================================================================
+setup_layout:
+    pusha
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80                        ; BX=width, CX=height
+    mov [cs:scr_width], bx
+    mov [cs:scr_height], cx
+    cmp bx, 640
+    jb .sl_lo_res
+    ; Hi-res mode (640x480)
+    mov byte [cs:grid_cols], GRID_COLS_HI
+    mov byte [cs:grid_rows], GRID_ROWS_HI
+    mov byte [cs:max_icons], MAX_ICONS_HI
+    mov byte [cs:col_width], COL_WIDTH_HI
+    mov byte [cs:row_height], ROW_HEIGHT_HI
+    mov word [cs:grid_start_y], GRID_START_Y_HI
+    mov word [cs:icon_x_offset], ICON_X_OFFSET_HI
+    mov word [cs:icon_y_offset], ICON_Y_OFFSET_HI
+    mov word [cs:label_y_gap], LABEL_Y_GAP_HI
+    mov word [cs:hitbox_height], HITBOX_HEIGHT_HI
+    jmp .sl_done
+.sl_lo_res:
+    ; Lo-res mode (320x200) — defaults already set
+    mov byte [cs:grid_cols], GRID_COLS_LO
+    mov byte [cs:grid_rows], GRID_ROWS_LO
+    mov byte [cs:max_icons], MAX_ICONS_LO
+    mov byte [cs:col_width], COL_WIDTH_LO
+    mov byte [cs:row_height], ROW_HEIGHT_LO
+    mov word [cs:grid_start_y], GRID_START_Y_LO
+    mov word [cs:icon_x_offset], ICON_X_OFFSET_LO
+    mov word [cs:icon_y_offset], ICON_Y_OFFSET_LO
+    mov word [cs:label_y_gap], LABEL_Y_GAP_LO
+    mov word [cs:hitbox_height], HITBOX_HEIGHT_LO
+.sl_done:
+    popa
+    ret
+
+; ============================================================================
 ; redraw_desktop - Full desktop repaint (background + title + version + icons)
 ; ============================================================================
 redraw_desktop:
@@ -784,16 +843,18 @@ redraw_desktop:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Version at bottom-left
+    ; Version at bottom-left (screen_height - 10)
     mov bx, 4
-    mov cx, 190
+    mov cx, [cs:scr_height]
+    sub cx, 10
     mov si, VERSION_STR
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Build number at bottom-right area
     mov bx, 200
-    mov cx, 190
+    mov cx, [cs:scr_height]
+    sub cx, 10
     mov si, BUILD_NUMBER_STR
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -848,25 +909,25 @@ draw_single_icon:
 
     ; Calculate grid position
     xor ah, ah
-    mov bl, GRID_COLS
+    mov bl, [cs:grid_cols]
     div bl                          ; AL = row, AH = col
 
     ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
     push ax
     mov al, ah
     xor ah, ah
-    mov bl, COL_WIDTH
+    mov bl, [cs:col_width]
     mul bl
-    add ax, ICON_X_OFFSET
+    add ax, [cs:icon_x_offset]
     mov [cs:.dsi_x], ax
     pop ax
 
     ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
     xor ah, ah
-    mov bl, ROW_HEIGHT
+    mov bl, [cs:row_height]
     mul bl
-    add ax, GRID_START_Y
-    add ax, ICON_Y_OFFSET
+    add ax, [cs:grid_start_y]
+    add ax, [cs:icon_y_offset]
     mov [cs:.dsi_y], ax
 
     ; Draw icon bitmap using API 39
@@ -885,7 +946,7 @@ draw_single_icon:
     mov bx, [cs:.dsi_x]
     sub bx, 8                       ; Shift left a bit for longer names
     mov cx, [cs:.dsi_y]
-    add cx, LABEL_Y_GAP            ; Below icon
+    add cx, [cs:label_y_gap]            ; Below icon
     ; Point SI to name
     mov al, [cs:.dsi_slot]
     xor ah, ah
@@ -894,7 +955,7 @@ draw_single_icon:
     add ax, icon_names
     mov si, ax
     mov cx, [cs:.dsi_y]
-    add cx, LABEL_Y_GAP
+    add cx, [cs:label_y_gap]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -924,13 +985,22 @@ draw_highlight:
     push dx
     push si
 
+    ; Icon visual size: 16 at lo-res, 32 at hi-res (2x scaled)
+    mov ax, ICON_SIZE               ; 16
+    cmp word [cs:scr_width], 640
+    jb .dh_size_ok
+    shl ax, 1                       ; 32 at hi-res
+.dh_size_ok:
+    mov [cs:.dh_vis_size], ax
+
     ; Draw a white rectangle border around the icon area
     ; Top line
     mov bx, [cs:draw_single_icon.dsi_x]
     sub bx, 2
     mov cx, [cs:draw_single_icon.dsi_y]
     sub cx, 2
-    mov dx, 20                      ; 16 + 4
+    mov dx, [cs:.dh_vis_size]
+    add dx, 4                       ; icon_vis + 4
     mov si, 1
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
@@ -939,9 +1009,10 @@ draw_highlight:
     mov bx, [cs:draw_single_icon.dsi_x]
     sub bx, 2
     mov cx, [cs:draw_single_icon.dsi_y]
-    add cx, ICON_SIZE
+    add cx, [cs:.dh_vis_size]
     add cx, 1
-    mov dx, 20
+    mov dx, [cs:.dh_vis_size]
+    add dx, 4
     mov si, 1
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
@@ -952,18 +1023,20 @@ draw_highlight:
     mov cx, [cs:draw_single_icon.dsi_y]
     sub cx, 1
     mov dx, 1
-    mov si, 18                      ; 16 + 2
+    mov si, [cs:.dh_vis_size]
+    add si, 2
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
 
     ; Right line
     mov bx, [cs:draw_single_icon.dsi_x]
-    add bx, ICON_SIZE
+    add bx, [cs:.dh_vis_size]
     add bx, 1
     mov cx, [cs:draw_single_icon.dsi_y]
     sub cx, 1
     mov dx, 1
-    mov si, 18
+    mov si, [cs:.dh_vis_size]
+    add si, 2
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
 
@@ -973,6 +1046,7 @@ draw_highlight:
     pop bx
     pop ax
     ret
+.dh_vis_size: dw 16
 
 ; ============================================================================
 ; handle_click - Process a mouse click
@@ -995,35 +1069,39 @@ handle_click:
     mov al, dl
     xor ah, ah
     push dx
-    mov bl, GRID_COLS
+    mov bl, [cs:grid_cols]
     div bl                          ; AL = row, AH = col
 
     ; Hitbox X = col * COL_WIDTH + ICON_X_OFFSET - 4 (centered on icon area)
     push ax
     mov al, ah
     xor ah, ah
-    mov bl, COL_WIDTH
+    mov bl, [cs:col_width]
     mul bl
-    add ax, ICON_X_OFFSET
+    add ax, [cs:icon_x_offset]
     sub ax, 4                       ; Slightly wider than 16px icon
     mov [cs:.hc_hx], ax
     pop ax
 
     ; Hitbox Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
     xor ah, ah
-    mov bl, ROW_HEIGHT
+    mov bl, [cs:row_height]
     mul bl
-    add ax, GRID_START_Y
-    add ax, ICON_Y_OFFSET
+    add ax, [cs:grid_start_y]
+    add ax, [cs:icon_y_offset]
     mov [cs:.hc_hy], ax
     pop dx
 
-    ; Check: hx <= mx < hx + 24 (icon width + padding)
+    ; Check: hx <= mx < hx + hitbox_width (icon + padding)
     mov ax, [cs:.hc_mx]
     cmp ax, [cs:.hc_hx]
     jb .hc_next
     mov bx, [cs:.hc_hx]
     add bx, 24                     ; 16px icon + 4px padding each side
+    cmp word [cs:scr_width], 640
+    jb .hc_width_ok
+    add bx, 16                     ; Extra 16px for 2x icon (total 40)
+.hc_width_ok:
     cmp ax, bx
     jae .hc_next
 
@@ -1032,7 +1110,7 @@ handle_click:
     cmp ax, [cs:.hc_hy]
     jb .hc_next
     mov bx, [cs:.hc_hy]
-    add bx, HITBOX_HEIGHT
+    add bx, [cs:hitbox_height]
     cmp ax, bx
     jae .hc_next
 
@@ -1151,33 +1229,38 @@ clear_icon_area:
     ; Calculate position
     xor ah, ah
     push ax
-    mov bl, GRID_COLS
+    mov bl, [cs:grid_cols]
     div bl
 
     push ax
     mov al, ah
     xor ah, ah
-    mov bl, COL_WIDTH
+    mov bl, [cs:col_width]
     mul bl
-    add ax, ICON_X_OFFSET
+    add ax, [cs:icon_x_offset]
     sub ax, 4
     mov [cs:.cia_x], ax
     pop ax
 
     xor ah, ah
-    mov bl, ROW_HEIGHT
+    mov bl, [cs:row_height]
     mul bl
-    add ax, GRID_START_Y
-    add ax, ICON_Y_OFFSET
+    add ax, [cs:grid_start_y]
+    add ax, [cs:icon_y_offset]
     sub ax, 4
     mov [cs:.cia_y], ax
     pop ax
 
-    ; Clear area
+    ; Clear area — icon visual size + padding
     mov bx, [cs:.cia_x]
     mov cx, [cs:.cia_y]
     mov dx, 24                      ; 16 + 8
     mov si, 24                      ; 16 + 8
+    cmp word [cs:scr_width], 640
+    jb .cia_clear
+    mov dx, 40                      ; 32 + 8 at hi-res
+    mov si, 40
+.cia_clear:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1371,8 +1454,8 @@ fast_clear_screen:
     push si
     xor bx, bx                     ; X = 0
     xor cx, cx                     ; Y = 0
-    mov dx, 320                     ; Width = 320
-    mov si, 200                     ; Height = 200
+    mov dx, [cs:scr_width]          ; Width = screen width
+    mov si, [cs:scr_height]         ; Height = screen height
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
     pop si
@@ -1411,14 +1494,29 @@ last_click_icon: db 0xFF
 ; Floppy polling
 last_poll_tick: dw 0
 
-; Per-app info: 8 slots x 16 bytes (13B filename + 1B drive + 2B reserved)
-app_info:       times (MAX_ICONS * 16) db 0
+; Per-app info: slots x 16 bytes (13B filename + 1B drive + 2B reserved)
+MAX_ICON_ALLOC          equ 40          ; Max icons allocated (for hi-res)
+app_info:       times (MAX_ICON_ALLOC * 16) db 0
 
-; Icon bitmaps: 8 slots x 64 bytes
-icon_bitmaps:   times (MAX_ICONS * 64) db 0
+; Icon bitmaps: slots x 64 bytes
+icon_bitmaps:   times (MAX_ICON_ALLOC * 64) db 0
 
-; Icon names: 8 slots x 12 bytes
-icon_names:     times (MAX_ICONS * 12) db 0
+; Icon names: slots x 12 bytes
+icon_names:     times (MAX_ICON_ALLOC * 12) db 0
+
+; Dynamic layout variables (set by setup_layout at startup)
+grid_cols:      db GRID_COLS_LO
+grid_rows:      db GRID_ROWS_LO
+max_icons:      db MAX_ICONS_LO
+col_width:      db COL_WIDTH_LO
+row_height:     db ROW_HEIGHT_LO
+grid_start_y:   dw GRID_START_Y_LO
+icon_x_offset:  dw ICON_X_OFFSET_LO
+icon_y_offset:  dw ICON_Y_OFFSET_LO
+label_y_gap:    dw LABEL_Y_GAP_LO
+hitbox_height:  dw HITBOX_HEIGHT_LO
+scr_width:      dw 320
+scr_height:     dw 200
 
 ; Buffer for kernel icon registration (76 bytes: 64B bitmap + 12B name)
 register_buffer: times 76 db 0
@@ -1475,7 +1573,7 @@ refresh_icon:
 refresh_name:   db 'Refresh', 0, 0, 0, 0, 0   ; 12 bytes padded
 
 ; Per-slot flag: 0=app, 1=refresh icon
-is_refresh:     times 8 db 0
+is_refresh:     times MAX_ICON_ALLOC db 0
 
 ; App handle for launched app
 app_handle:     dw 0
