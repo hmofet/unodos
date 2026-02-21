@@ -934,20 +934,21 @@ screen_write() {
 
     if (( dd_exit != 0 )); then
         # Read the actual dd error before deleting the file
-        local dd_error=""
+        ((row++))
+        write_at_bold 5 "$row" "ERROR: Write failed! (exit code $dd_exit)" $C_RED
         if [[ -f "$dd_err_file" ]]; then
-            dd_error=$(tail -3 "$dd_err_file" 2>/dev/null | grep -iv "records\|bytes" | head -1 || echo "")
+            # Show last 4 lines of dd stderr (the actual error)
+            local line_num=0
+            while IFS= read -r dd_line && (( line_num < 4 )); do
+                if [[ -n "$dd_line" ]]; then
+                    ((row++))
+                    write_at 5 "$row" "${dd_line:0:70}" $C_YELLOW
+                    ((line_num++))
+                fi
+            done < <(tail -4 "$dd_err_file" 2>/dev/null)
         fi
         rm -f "$dd_err_file"
 
-        ((row++))
-        write_at_bold 5 "$row" "ERROR: Write failed!" $C_RED
-        if [[ -n "$dd_error" ]]; then
-            ((row++))
-            # Truncate long error messages to fit screen
-            dd_error="${dd_error:0:70}"
-            write_at 5 "$row" "$dd_error" $C_YELLOW
-        fi
         ((row++))
         write_at 5 "$row" "Check: sudo access, device not mounted, correct device?" $C_GRAY
         ((row += 2))
