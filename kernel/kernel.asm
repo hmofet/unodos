@@ -13059,7 +13059,7 @@ win_create_stub:
     mov [.save_title], di
     mov [.save_flags], al
 
-    ; Auto-center windows in 640x480 modes if designed for 320x200
+    ; Auto-scale and center windows in 640x480 modes if designed for 320x200
     cmp word [screen_width], 640
     jb .no_autocenter
     ; Check if window fits within 320x200 bounds (designed for small screen)
@@ -13067,6 +13067,20 @@ win_create_stub:
     jae .no_autocenter
     cmp si, 300                      ; Height < 300 → designed for 320x200
     jae .no_autocenter
+    ; Scale dimensions 2x for usability in 640x480
+    shl dx, 1                        ; Width * 2
+    shl si, 1                        ; Height * 2
+    ; Clamp to screen bounds
+    cmp dx, [screen_width]
+    jbe .scale_w_ok
+    mov dx, [screen_width]
+.scale_w_ok:
+    cmp si, [screen_height]
+    jbe .scale_h_ok
+    mov si, [screen_height]
+.scale_h_ok:
+    mov [.save_w], dx
+    mov [.save_h], si
     ; Center horizontally: X = (screen_width - width) / 2
     mov ax, [screen_width]
     sub ax, dx
@@ -13224,6 +13238,25 @@ win_create_stub:
     and al, 0x0F
     call win_draw_stub
     pop ax
+
+    ; Clear content area so desktop background/icons don't show through
+    push ds
+    mov ax, 0x1000
+    mov ds, ax
+    mov bx, [.slot_off]
+    mov ax, [bx + WIN_OFF_X]
+    inc ax                          ; Inside left border
+    push ax                         ; Save content X
+    mov cx, [bx + WIN_OFF_Y]
+    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    mov dx, [bx + WIN_OFF_WIDTH]
+    sub dx, 2                       ; Inside both borders
+    mov si, [bx + WIN_OFF_HEIGHT]
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si                          ; Above bottom border
+    pop bx                          ; BX = content X
+    call gfx_clear_area_stub
+    pop ds
 
     ; Return handle
     mov ax, bp
@@ -13689,6 +13722,19 @@ draw_desktop_region:
     mov [draw_bg_color], al
 
     ; Draw icons that overlap the affected rect (skip far-away icons to prevent corruption)
+    ; Compute icon dimensions based on resolution (2x in 640x480+)
+    mov word [.icon_size], 16       ; Lo-res: 16x16 icon
+    mov word [.icon_bbox_w], 52     ; Lo-res: icon + label right extent
+    mov word [.icon_bbox_h], 30     ; Lo-res: icon height + gap + label
+    mov word [.label_shift], 12     ; Lo-res: label left shift
+    cmp word [screen_width], 640
+    jb .ddr_bounds_ok
+    mov word [.icon_size], 32       ; Hi-res: 32x32 icon (2x scaled)
+    mov word [.icon_bbox_w], 84     ; Hi-res: 32px icon + label right extent
+    mov word [.icon_bbox_h], 50     ; Hi-res: 32px icon + gap + label
+    mov word [.label_shift], 24     ; Hi-res: label left shift (2x)
+.ddr_bounds_ok:
+
     mov si, desktop_icons
     xor bp, bp                      ; Icon counter
 .ddr_icon_loop:
@@ -13700,17 +13746,17 @@ draw_desktop_region:
     jae .ddr_done
 
     ; Bounds check: skip icons whose bounding box doesn't overlap affected rect
-    ; Icon bbox approx: (x-12, y) to (x+52, y+30) includes 16x16 bitmap + label
+    ; Icon bbox: lo-res (x-12, y) to (x+52, y+30), hi-res (x-24, y) to (x+84, y+50)
     ; Test: icon fully right of rect?
     mov ax, [si + DESKTOP_ICON_OFF_X]
     mov dx, [redraw_old_x]
     add dx, [redraw_old_w]
-    add dx, 12                      ; Account for label left shift
+    add dx, [.label_shift]          ; Account for label left shift
     cmp ax, dx
     jae .ddr_skip_icon
     ; Test: icon fully left of rect?
     mov ax, [si + DESKTOP_ICON_OFF_X]
-    add ax, 52                      ; Icon bitmap + label right extent
+    add ax, [.icon_bbox_w]          ; Icon bitmap + label right extent
     cmp ax, [redraw_old_x]
     jbe .ddr_skip_icon
     ; Test: icon fully below rect?
@@ -13721,7 +13767,7 @@ draw_desktop_region:
     jae .ddr_skip_icon
     ; Test: icon fully above rect?
     mov ax, [si + DESKTOP_ICON_OFF_Y]
-    add ax, 30                      ; Icon height + gap + label height
+    add ax, [.icon_bbox_h]          ; Icon height + gap + label height
     cmp ax, [redraw_old_y]
     jbe .ddr_skip_icon
 
@@ -13735,13 +13781,13 @@ draw_desktop_region:
     cmp ax, [topmost_win_y]
     jbe .ddr_draw_icon              ; Icon above window top edge
     mov ax, [si + DESKTOP_ICON_OFF_X]
-    add ax, 16                      ; Icon right edge
+    add ax, [.icon_size]            ; Icon right edge (16 or 32)
     mov dx, [topmost_win_x]
     add dx, [topmost_win_w]
     cmp ax, dx
     jae .ddr_draw_icon              ; Icon extends past window right
     mov ax, [si + DESKTOP_ICON_OFF_Y]
-    add ax, 30                      ; Icon + label bottom edge
+    add ax, [.icon_bbox_h]          ; Icon + label bottom edge
     mov dx, [topmost_win_y]
     add dx, [topmost_win_h]
     cmp ax, dx
@@ -13770,7 +13816,12 @@ draw_desktop_region:
     mov bx, [si + DESKTOP_ICON_OFF_X]
     sub bx, 8                      ; Match launcher's label offset
     mov cx, [si + DESKTOP_ICON_OFF_Y]
-    add cx, 20                      ; 16px icon + 4px gap
+    add cx, 20                      ; 16px icon + 4px gap (lo-res default)
+    cmp word [screen_width], 640
+    jb .ddr_label_y_ok
+    add cx, 20                      ; Hi-res: 32px icon + 8px gap = +40 total
+    sub bx, 8                      ; Hi-res: wider label shift
+.ddr_label_y_ok:
     push si
     add si, DESKTOP_ICON_OFF_NAME
     push word [caller_ds]
@@ -13798,6 +13849,11 @@ draw_desktop_region:
     pop bx
     pop ax
     ret
+
+.icon_size:    dw 16               ; 16 (lo-res) or 32 (hi-res)
+.icon_bbox_w:  dw 52               ; Icon + label bounding box width
+.icon_bbox_h:  dw 30               ; Icon + label bounding box height
+.label_shift:  dw 12               ; Label left shift from icon X
 
 ; gfx_fill_color - Fill a rectangle with a specific CGA color
 ; Input: BX = X, CX = Y, DX = width, SI = height, AL = color (0-3)
