@@ -5351,6 +5351,21 @@ gfx_set_font:
     push bx
     push si
     mov [current_font], al
+    ; Propagate font to ALL active tasks so per-task restore never reverts it
+    push cx
+    push di
+    mov di, app_table
+    mov cx, APP_MAX_COUNT
+.update_all_tasks:
+    cmp byte [di + APP_OFF_STATE], APP_STATE_FREE
+    je .skip_task
+    mov [di + APP_OFF_FONT], al
+.skip_task:
+    add di, APP_ENTRY_SIZE
+    dec cx
+    jnz .update_all_tasks
+    pop di
+    pop cx
     ; Calculate font_table offset: index * FONT_DESC_SIZE
     mov bl, al
     xor bh, bh
@@ -12744,6 +12759,26 @@ win_create_stub:
     mov [.save_h], si
     mov [.save_title], di
     mov [.save_flags], al
+
+    ; Auto-center windows in 640x480 modes if designed for 320x200
+    cmp word [screen_width], 640
+    jb .no_autocenter
+    ; Check if window fits within 320x200 bounds (designed for small screen)
+    cmp dx, 400                      ; Width < 400 → designed for 320x200
+    jae .no_autocenter
+    cmp si, 300                      ; Height < 300 → designed for 320x200
+    jae .no_autocenter
+    ; Center horizontally: X = (screen_width - width) / 2
+    mov ax, [screen_width]
+    sub ax, dx
+    shr ax, 1
+    mov [.save_x], ax
+    ; Center vertically: Y = (screen_height - height) / 2
+    mov ax, [screen_height]
+    sub ax, si
+    shr ax, 1
+    mov [.save_y], ax
+.no_autocenter:
 
     ; Find free window slot
     push ds
