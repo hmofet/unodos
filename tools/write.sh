@@ -331,6 +331,45 @@ find_drives() {
         DRV_TYPES[$DRV_COUNT]="Disk"
         DRV_COUNT=$(( DRV_COUNT + 1 ))
     done < <(lsblk -dPo NAME,SIZE,TYPE,TRAN,MODEL,RM 2>/dev/null)
+
+    # Fallback: scan /dev/sd? for devices lsblk might miss (Crostini USB passthrough)
+    for dev in /dev/sd?; do
+        [[ -b "$dev" ]] || continue
+        local dev_name
+        dev_name=$(basename "$dev")
+
+        # Skip if already found via lsblk
+        local already=0
+        for ((j = 0; j < DRV_COUNT; j++)); do
+            [[ "${DRV_NAMES[$j]}" == "$dev_name" ]] && already=1 && break
+        done
+        (( already )) && continue
+
+        # Skip system devices
+        if is_system_device "$dev_name"; then
+            continue
+        fi
+
+        local size_bytes=0
+        if [[ -f "/sys/block/$dev_name/size" ]]; then
+            size_bytes=$(( $(cat "/sys/block/$dev_name/size") * 512 ))
+        fi
+
+        local model size_str
+        model=$(lsblk -dno MODEL "$dev" 2>/dev/null || echo "")
+        [[ -z "$model" ]] && model="Unknown"
+        size_str=$(lsblk -dno SIZE "$dev" 2>/dev/null || echo "?")
+
+        DRV_NAMES[$DRV_COUNT]="$dev_name"
+        DRV_PATHS[$DRV_COUNT]="$dev"
+        DRV_SIZES[$DRV_COUNT]="$size_str"
+        DRV_SIZE_BYTES[$DRV_COUNT]="$size_bytes"
+        DRV_MODELS[$DRV_COUNT]="$model"
+        DRV_TRANS[$DRV_COUNT]="usb?"
+        DRV_REMOVABLE[$DRV_COUNT]=1
+        DRV_TYPES[$DRV_COUNT]="Disk"
+        DRV_COUNT=$(( DRV_COUNT + 1 ))
+    done
 }
 
 # ─── Render Functions ─────────────────────────────────────────────────────────
@@ -594,7 +633,7 @@ screen_drive_select() {
     write_at 55 "$row" "Step $step_num of $step_total" $C_GRAY
     ((row++))
 
-    local hints="Up/Down = navigate   Enter = next"
+    local hints="Up/Down = navigate   Enter = next   M = type path"
     (( can_go_back )) && hints+="   Bksp = back"
     hints+="   Esc = cancel"
     write_at 3 "$row" "$hints" $C_GRAY
@@ -620,15 +659,36 @@ screen_drive_select() {
     clear_row "$row"
 
     if (( DRV_COUNT == 0 )); then
-        write_at 3 "$row" "No eligible drives found!" $C_RED
+        write_at 3 "$row" "No drives detected automatically." $C_YELLOW
         ((row++))
-        write_at 3 "$row" "(System and boot drives are automatically excluded)" $C_GRAY
+        write_at 3 "$row" "(System and boot drives are excluded)" $C_GRAY
         ((row += 2))
-        write_at 3 "$row" "Connect a floppy, CF card, or USB drive and try again." $C_YELLOW
+        write_at 3 "$row" "ChromeOS: Settings > Linux > USB > enable your drive" $C_CYAN
         ((row += 2))
-        write_at 3 "$row" "Press any key to exit..." $C_GRAY
-        read_key >/dev/null
-        return 1
+        local menu_row=$row
+        write_at 3 "$menu_row" "[M] Enter device path manually    [Esc] Cancel" $C_WHITE
+
+        while true; do
+            local key
+            key=$(read_key)
+            case "$key" in
+                m|M)
+                    if prompt_device_path $((menu_row + 2)); then
+                        return 0
+                    fi
+                    # Failed - clear prompt area, let them try again
+                    clear_rows $((menu_row + 2)) 10
+                    ;;
+                BACKSPACE)
+                    if (( can_go_back )); then
+                        return 2
+                    fi
+                    ;;
+                ESC|q)
+                    return 1
+                    ;;
+            esac
+        done
     fi
 
     local list_top=$row
@@ -665,6 +725,15 @@ screen_drive_select() {
                     SELECTED_DEVICE_IDX=$drv_sel
                     return 0
                 fi
+                ;;
+            m|M)
+                local prompt_row=$((list_top + DRV_COUNT + 4))
+                if prompt_device_path "$prompt_row"; then
+                    return 0
+                fi
+                # Failed - clear prompt area and re-render list
+                clear_rows "$prompt_row" 10
+                render_drive_list $drv_sel $list_top "$image_size"
                 ;;
             BACKSPACE)
                 if (( can_go_back )); then
@@ -838,6 +907,88 @@ extra_confirm() {
                 ;;
         esac
     done
+}
+
+prompt_device_path() {
+    local start_row=$1
+    local row=$start_row
+
+    clear_rows "$row" 8
+    write_at 5 "$row" "Enter device path:" $C_WHITE
+    ((row++))
+    write_at 5 "$row" "(e.g. /dev/sdb, /dev/mmcblk0)" $C_GRAY
+    ((row += 2))
+
+    write_at 5 "$row" "> " $C_CYAN
+    tput cup "$row" 7
+    tput cnorm          # Show cursor
+    stty echo           # Enable echo
+    local path=""
+    read -r path
+    stty -echo          # Disable echo
+    tput civis          # Hide cursor
+
+    # Trim whitespace
+    path="${path#"${path%%[![:space:]]*}"}"
+    path="${path%"${path##*[![:space:]]}"}"
+
+    if [[ -z "$path" ]]; then
+        ((row += 2))
+        write_at 5 "$row" "Cancelled." $C_GRAY
+        sleep 1
+        return 1
+    fi
+
+    if [[ ! -b "$path" ]]; then
+        ((row += 2))
+        write_at 5 "$row" "ERROR: '$path' is not a block device." $C_RED
+        ((row++))
+        write_at 5 "$row" "Check: ls -la $path" $C_GRAY
+        ((row++))
+        write_at 5 "$row" "Press any key..." $C_GRAY
+        read_key >/dev/null
+        return 1
+    fi
+
+    # Safety: check it's not a system device
+    local dev_name
+    dev_name=$(basename "$path")
+    local base_dev="$dev_name"
+    [[ "$base_dev" =~ ^(sd[a-z]+) ]] && base_dev="${BASH_REMATCH[1]}"
+
+    if is_system_device "$base_dev"; then
+        ((row += 2))
+        write_at_bold 5 "$row" "ERROR: This appears to be a system device!" $C_RED
+        ((row++))
+        write_at 5 "$row" "Press any key..." $C_GRAY
+        read_key >/dev/null
+        return 1
+    fi
+
+    # Get device info
+    local size_bytes=0 model="" size_str="?"
+    if [[ -f "/sys/block/$dev_name/size" ]]; then
+        size_bytes=$(( $(cat "/sys/block/$dev_name/size") * 512 ))
+    fi
+    model=$(lsblk -dno MODEL "$path" 2>/dev/null || echo "")
+    [[ -z "$model" ]] && model="(manual)"
+    size_str=$(lsblk -dno SIZE "$path" 2>/dev/null || echo "")
+    [[ -z "$size_str" ]] && size_str=$(format_size "$size_bytes")
+
+    # Add to drive arrays
+    DRV_NAMES[$DRV_COUNT]="$dev_name"
+    DRV_PATHS[$DRV_COUNT]="$path"
+    DRV_SIZES[$DRV_COUNT]="$size_str"
+    DRV_SIZE_BYTES[$DRV_COUNT]="$size_bytes"
+    DRV_MODELS[$DRV_COUNT]="$model"
+    DRV_TRANS[$DRV_COUNT]="manual"
+    DRV_REMOVABLE[$DRV_COUNT]=0
+    DRV_TYPES[$DRV_COUNT]="Disk"
+    SELECTED_DEVICE_IDX=$DRV_COUNT
+    DRV_COUNT=$(( DRV_COUNT + 1 ))
+
+    SELECTED_DEVICE="$path"
+    return 0
 }
 
 screen_write() {
