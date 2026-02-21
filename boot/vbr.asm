@@ -130,7 +130,9 @@ boot_code:
     mov es, ax
     xor bx, bx                      ; ES:BX = 0x0800:0x0000
 
-    ; Read 4 sectors using calculated CHS
+    ; Read 4 sectors using calculated CHS (3 retries)
+    mov byte [retry_count], 3
+.chs_retry:
     mov ah, 0x02                    ; Read sectors
     mov al, 4                       ; 4 sectors (stage2 = 2KB)
     mov ch, [chs_cylinder]          ; Cylinder
@@ -138,7 +140,16 @@ boot_code:
     mov dh, [chs_head]              ; Head
     mov dl, [drive_number]
     int 0x13
-    jc .try_lba                     ; CHS failed, try LBA
+    jnc .chs_check                  ; Read succeeded, check data
+    ; Retry: reset disk first
+    xor ax, ax
+    mov dl, [drive_number]
+    int 0x13
+    dec byte [retry_count]
+    jnz .chs_retry
+    jmp .try_lba                    ; All retries exhausted
+
+.chs_check:
 
     ; Quick check if we got valid data
     cmp word [es:0x0000], 0x5355    ; Check stage2 signature
@@ -146,18 +157,20 @@ boot_code:
 
 .try_lba:
     ; CHS failed or got zeros - try INT 13h extensions
-    ; Build DAP on stack for LBA 64
-    push dword 0                    ; High LBA (0)
-    push dword 64                   ; Low LBA (stage2 at sector 64)
-    push word 0x0800                ; Buffer segment
-    push word 0x0000                ; Buffer offset
-    push word 4                     ; Read 4 sectors
-    push word 0x0010                ; DAP size (16 bytes)
-    mov si, sp
+    ; Check if BIOS supports extensions first
+    mov ah, 0x41
+    mov bx, 0x55AA
+    mov dl, [drive_number]
+    int 0x13
+    jc .disk_error                  ; No LBA support, both methods failed
+    cmp bx, 0xAA55
+    jne .disk_error
+
+    ; Use static DAP (avoids push dword stack issues on some BIOSes)
+    mov si, vbr_dap
     mov ah, 0x42
     mov dl, [drive_number]
     int 0x13
-    add sp, 16                      ; Clean up stack
     jc .disk_error                  ; Both methods failed
 
 .verify_stage2:
@@ -251,6 +264,18 @@ queried_heads:      db 16
 chs_cylinder:       db 0
 chs_head:           db 0
 chs_sector:         db 0
+retry_count:        db 3
+
+; Static Disk Address Packet for INT 13h extended read
+; (avoids push dword on stack which fails on some BIOSes)
+vbr_dap:
+    db 0x10                         ; Packet size (16 bytes)
+    db 0                            ; Reserved
+    dw 4                            ; Number of sectors (stage2 = 4 sectors)
+    dw 0x0000                       ; Buffer offset
+    dw 0x0800                       ; Buffer segment
+    dd 64                           ; LBA low (partition start 63 + 1)
+    dd 0                            ; LBA high
 
 ; ============================================================================
 ; Padding and signature
