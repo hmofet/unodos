@@ -828,8 +828,8 @@ entry:
 ; ============================================================================
 .click_dialog:
     ; [OK] button
-    mov bx, BTN_OK_X
-    mov cx, STATUS_Y
+    mov bx, [cs:btn_ok_x]
+    mov cx, [cs:status_y]
     mov dx, BTN_OK_W
     mov si, BTN_H
     mov ah, API_HIT_TEST
@@ -978,7 +978,7 @@ draw_current_line:
     ; Clear just this line's strip
     mov bx, TEXT_X
     mov cx, ax
-    mov dx, TEXT_W
+    mov dx, [cs:text_w]
     movzx si, byte [cs:row_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
@@ -1720,12 +1720,16 @@ mouse_to_offset:
     mov ax, [cs:mouse_rel_x]
     cmp ax, TEXT_X
     jb .mto_outside
-    cmp ax, TEXT_X + TEXT_W
+    mov bx, [cs:text_w]
+    add bx, TEXT_X
+    cmp ax, bx
     jae .mto_outside
     mov ax, [cs:mouse_rel_y]
     cmp ax, TEXT_Y
     jb .mto_outside
-    cmp ax, TEXT_Y + TEXT_H
+    mov bx, [cs:text_h]
+    add bx, TEXT_Y
+    cmp ax, bx
     jae .mto_outside
 
     ; Compute column
@@ -1786,6 +1790,44 @@ mouse_to_offset:
 ; ============================================================================
 compute_layout:
     pusha
+
+    ; Update runtime layout from actual window dimensions (if window exists)
+    cmp byte [cs:win_handle], 0
+    je .measure_font
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO          ; Returns BX=x, CX=y, DX=width, SI=height
+    int 0x80
+    ; content_w = width - 2 (border)
+    sub dx, 2
+    mov [cs:content_w], dx
+    ; content_h = height - 12 (titlebar 10 + border 2)
+    sub si, 12
+    mov [cs:content_h], si
+    ; text_w = content_w - 4
+    mov ax, dx
+    sub ax, 4
+    mov [cs:text_w], ax
+    ; status_y = content_h - 13
+    mov ax, si
+    sub ax, 13
+    mov [cs:status_y], ax
+    ; sep2_y = status_y - 3
+    sub ax, 3
+    mov [cs:sep2_y], ax
+    ; text_h = sep2_y - TEXT_Y - 2
+    sub ax, TEXT_Y
+    sub ax, 2
+    mov [cs:text_h], ax
+    ; btn_ok_x = content_w - 56
+    mov ax, [cs:content_w]
+    sub ax, 56
+    mov [cs:btn_ok_x], ax
+    ; byte_count_x = content_w - 76
+    mov ax, [cs:content_w]
+    sub ax, 76
+    mov [cs:byte_count_x], ax
+
+.measure_font:
     mov si, test_char
     mov ah, API_GFX_TEXT_WIDTH
     int 0x80
@@ -1802,13 +1844,13 @@ compute_layout:
     mov [cs:row_h], al
 
 .calc_grid:
-    mov ax, TEXT_W
+    mov ax, [cs:text_w]
     xor dx, dx
     movzx bx, byte [cs:font_adv]
     div bx
     mov [cs:vis_cols], ax
 
-    mov ax, TEXT_H
+    mov ax, [cs:text_h]
     xor dx, dx
     movzx bx, byte [cs:row_h]
     div bx
@@ -1824,8 +1866,8 @@ draw_ui:
     pusha
     mov bx, 0
     mov cx, 0
-    mov dx, CONTENT_W
-    mov si, CONTENT_H
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1834,13 +1876,13 @@ draw_ui:
     ; Separators
     mov bx, 0
     mov cx, SEP1_Y
-    mov dx, CONTENT_W
+    mov dx, [cs:content_w]
     mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
     mov bx, 0
-    mov cx, SEP2_Y
-    mov dx, CONTENT_W
+    mov cx, [cs:sep2_y]
+    mov dx, [cs:content_w]
     mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
@@ -1892,7 +1934,7 @@ draw_text_area:
     mov ax, [cs:vis_rows]
     mul si
     mov si, ax
-    mov dx, TEXT_W
+    mov dx, [cs:text_w]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -2132,9 +2174,12 @@ draw_text_area:
 draw_status:
     pusha
     mov bx, 0
-    mov cx, STATUS_Y - 1
-    mov dx, CONTENT_W
-    mov si, CONTENT_H - STATUS_Y + 2
+    mov cx, [cs:status_y]
+    dec cx
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
+    sub si, [cs:status_y]
+    add si, 2
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -2146,7 +2191,7 @@ draw_status:
     call cursor_to_line_col
 
     mov bx, 4
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov si, str_ln
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -2157,13 +2202,13 @@ draw_status:
     mov ah, API_WORD_TO_STRING
     int 0x80
     mov bx, 22
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     mov bx, 60
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov si, str_col
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -2174,7 +2219,7 @@ draw_status:
     mov ah, API_WORD_TO_STRING
     int 0x80
     mov bx, 84
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -2189,8 +2234,8 @@ draw_status:
     mov byte [cs:di], 'B'
     inc di
     mov byte [cs:di], 0
-    mov bx, 240
-    mov cx, STATUS_Y
+    mov bx, [cs:byte_count_x]
+    mov cx, [cs:status_y]
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -2199,7 +2244,7 @@ draw_status:
     cmp byte [cs:status_msg], 0
     je .status_done
     mov bx, 130
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov si, status_msg
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -2215,12 +2260,12 @@ draw_status:
     mov si, str_open_file
 .dialog_draw_label:
     mov bx, 4
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     mov bx, 70
-    mov cx, STATUS_Y
+    mov cx, [cs:status_y]
     mov dx, 140
     mov si, input_buf
     movzx di, byte [cs:input_len]
@@ -2230,8 +2275,8 @@ draw_status:
 
     mov ax, cs
     mov es, ax
-    mov bx, BTN_OK_X
-    mov cx, STATUS_Y
+    mov bx, [cs:btn_ok_x]
+    mov cx, [cs:status_y]
     mov dx, BTN_OK_W
     mov si, BTN_H
     mov di, str_ok
@@ -2495,6 +2540,16 @@ font_adv:       db 6
 row_h:          db 7
 vis_cols:       dw 52
 vis_rows:       dw 22
+
+; Runtime layout (computed from actual window size)
+content_w:      dw 316          ; Default = WIN_W - 2
+content_h:      dw 186          ; Default = WIN_H - TITLEBAR_HEIGHT - 2
+text_w:         dw 312          ; Default = content_w - 4
+text_h:         dw 155          ; Default
+sep2_y:         dw 170          ; Default
+status_y:       dw 173          ; Default
+btn_ok_x:       dw 260          ; Default = content_w - 56
+byte_count_x:   dw 240          ; Default = content_w - 76
 
 ; Cursor state
 cursor_pos:     dw 0

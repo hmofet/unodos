@@ -62,6 +62,7 @@ API_DRAW_SCROLLBAR      equ 58
 API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
 API_WORD_TO_STRING      equ 91
+API_WIN_GET_INFO        equ 79
 API_GET_FONT_INFO       equ 93
 
 ; Event types
@@ -155,8 +156,8 @@ entry:
     add ax, 3
     mov [cs:btn_h], ax
 
-    ; vis_rows = (WIN_H - list_y - 4 - 2*btn_h) / row_h
-    mov ax, WIN_H
+    ; vis_rows = (content_h - list_y - 4 - 2*btn_h) / row_h
+    mov ax, [cs:content_h]
     sub ax, [cs:list_y]
     sub ax, 4
     mov dx, [cs:btn_h]
@@ -220,6 +221,7 @@ entry:
     jc .main_loop
     cmp al, EVENT_WIN_REDRAW
     jne .not_redraw
+    call recompute_layout
     call draw_ui
     jmp .main_loop
 .not_redraw:
@@ -745,6 +747,56 @@ scan_files:
     ret
 
 ; ============================================================================
+; recompute_layout - Update layout from actual window dimensions
+; ============================================================================
+recompute_layout:
+    pusha
+
+    ; Get actual window dimensions
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO          ; Returns BX=x, CX=y, DX=width, SI=height
+    int 0x80
+    ; content_w = width - 4 (border + padding)
+    sub dx, 4
+    mov [cs:content_w], dx
+    ; content_h = height - 14 (titlebar + border)
+    sub si, 14
+    mov [cs:content_h], si
+    ; list_w = content_w - 4 - SCROLLBAR_W
+    mov ax, dx
+    sub ax, 4
+    sub ax, SCROLLBAR_W
+    mov [cs:list_w], ax
+
+    ; Recompute vis_rows from new content_h
+    mov ax, [cs:content_h]
+    sub ax, [cs:list_y]
+    sub ax, 4
+    mov dx, [cs:btn_h]
+    shl dx, 1
+    sub ax, dx
+    xor dx, dx
+    div word [cs:row_h]
+    mov [cs:vis_rows], ax
+
+    ; sep2_y = list_y + vis_rows * row_h
+    mul word [cs:row_h]
+    add ax, [cs:list_y]
+    mov [cs:sep2_y], ax
+
+    ; row1_y = sep2_y + 3
+    add ax, 3
+    mov [cs:row1_y], ax
+
+    ; row2_y = row1_y + btn_h + 1
+    add ax, [cs:btn_h]
+    inc ax
+    mov [cs:row2_y], ax
+
+    popa
+    ret
+
+; ============================================================================
 ; draw_ui - Full UI redraw
 ; ============================================================================
 draw_ui:
@@ -752,8 +804,8 @@ draw_ui:
     ; Clear content area
     mov bx, 0
     mov cx, 0
-    mov dx, WIN_W
-    mov si, WIN_H
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -772,13 +824,15 @@ draw_ui:
     ; Separator lines
     mov bx, 2
     mov cx, [cs:sep1_y]
-    mov dx, WIN_W - 4
+    mov dx, [cs:content_w]
+    sub dx, 4
     mov al, 3                      ; white
     mov ah, API_DRAW_HLINE
     int 0x80
     mov bx, 2
     mov cx, [cs:sep2_y]
-    mov dx, WIN_W - 4
+    mov dx, [cs:content_w]
+    sub dx, 4
     mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
@@ -889,9 +943,10 @@ draw_bottom:
     mov bx, 0
     mov cx, [cs:row1_y]
     dec cx                          ; row1_y - 1
-    mov dx, WIN_W
-    mov si, WIN_H + 2
-    sub si, [cs:row1_y]            ; WIN_H - row1_y + 2
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
+    add si, 2
+    sub si, [cs:row1_y]            ; content_h - row1_y + 2
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1187,13 +1242,15 @@ font_w:         db 8                ; Current font width
 font_adv:       db 12               ; Current font advance
 row_h:          dw 10               ; font_h + 2
 vis_rows:       dw 12               ; Visible file rows
-list_w:         dw 252              ; WIN_W - 4 - SCROLLBAR_W
+list_w:         dw 252              ; content_w - 4 - SCROLLBAR_W
 list_y:         dw 13               ; sep1_y + 3
 sep1_y:         dw 10               ; font_h + 2
 sep2_y:         dw 133              ; list_y + vis_rows * row_h
 row1_y:         dw 136              ; sep2_y + 3
 row2_y:         dw 148              ; row1_y + btn_h + 1
 btn_h:          dw 11               ; font_h + 3
+content_w:      dw 260              ; WIN_W - 4 (border + padding)
+content_h:      dw 156              ; WIN_H - 14 (titlebar + border)
 
 ; Strings
 str_hdr_name:   db 'Name', 0
