@@ -15024,6 +15024,17 @@ win_draw_stub:
     mov si, [bx + WIN_OFF_WIDTH]
     mov di, [bx + WIN_OFF_HEIGHT]
 
+    ; Force font 1 (8x8) for titlebar text — large font (8x12) overflows 10px titlebar
+    mov al, [current_font]
+    mov [.saved_font], al
+    cmp al, 1
+    je .font_ok
+    push ax
+    mov al, 1
+    call gfx_set_font
+    pop ax
+.font_ok:
+
     ; Check if this is the active (topmost) window
     cmp byte [bx + WIN_OFF_ZORDER], 15
     jne .draw_inactive_titlebar
@@ -15176,6 +15187,13 @@ win_draw_stub:
 
 .draw_border:
 
+    ; Restore original font after titlebar text drawing
+    mov al, [.saved_font]
+    cmp al, [current_font]
+    je .font_restored
+    call gfx_set_font
+.font_restored:
+
     ; Draw border
     push bx
     mov bx, [.win_ptr]
@@ -15224,6 +15242,7 @@ win_draw_stub:
     ret
 
 .win_ptr: dw 0
+.saved_font: db 0
 
 ; win_focus_stub - Bring window to front (set z-order to max)
 ; Input:  AX = Window handle
