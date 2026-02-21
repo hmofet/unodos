@@ -67,6 +67,7 @@ API_GET_RTC_TIME        equ 72
 API_SET_RTC_TIME        equ 81
 API_GET_SCREEN_INFO     equ 82
 API_BCD_TO_ASCII        equ 92
+API_WIN_GET_INFO        equ 79
 API_GET_FONT_INFO       equ 93
 API_SET_VIDEO_MODE      equ 95
 
@@ -199,6 +200,14 @@ entry:
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
+    ; Update content dimensions from actual window size
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO
+    int 0x80
+    sub dx, 4
+    mov [cs:content_w], dx
+    sub si, 16
+    mov [cs:content_h], si
     ; Refresh RTC time on repaint
     mov ah, API_GET_RTC_TIME
     int 0x80

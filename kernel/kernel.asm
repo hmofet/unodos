@@ -3474,6 +3474,100 @@ mouse_hittest_titlebar:
     ret
 
 ; ============================================================================
+; Mouse Resize Handle Hit-Test
+; ============================================================================
+
+; mouse_hittest_resize - Test if mouse position hits any window's resize handle
+; Input: mouse_x, mouse_y (global vars)
+; Output: CF=0 hit, AL=window handle; CF=1 no hit
+; Resize handle = bottom-right 10x10 pixel zone of bordered windows
+mouse_hittest_resize:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov cx, [mouse_x]
+    mov dx, [mouse_y]
+
+    ; Find topmost visible window whose resize handle contains the click
+    xor si, si                      ; SI = window index
+    mov di, window_table
+    mov bp, 0xFFFF                  ; BP = best handle (0xFFFF = none)
+    mov bl, 0                       ; BL = best z-order so far
+
+.rht_find:
+    cmp si, WIN_MAX_COUNT
+    jae .rht_found
+
+    cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .rht_next
+
+    ; Skip frameless windows (no resize handle)
+    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_BORDER
+    jz .rht_next
+
+    ; Check if click is in bottom-right 10x10 zone
+    ; corner_x = win_x + win_w - 10
+    mov ax, [di + WIN_OFF_X]
+    add ax, [di + WIN_OFF_WIDTH]
+    sub ax, 10
+    cmp cx, ax                      ; mouse_x >= corner_x?
+    jb .rht_next
+    ; Also check mouse_x < win_x + win_w
+    add ax, 10
+    cmp cx, ax
+    jae .rht_next
+
+    ; corner_y = win_y + win_h - 10
+    mov ax, [di + WIN_OFF_Y]
+    add ax, [di + WIN_OFF_HEIGHT]
+    sub ax, 10
+    cmp dx, ax                      ; mouse_y >= corner_y?
+    jb .rht_next
+    ; Also check mouse_y < win_y + win_h
+    add ax, 10
+    cmp dx, ax
+    jae .rht_next
+
+    ; Hit! Check if higher z-order than current best
+    mov al, [di + WIN_OFF_ZORDER]
+    cmp bp, 0xFFFF
+    je .rht_new_best
+    cmp al, bl
+    jbe .rht_next
+
+.rht_new_best:
+    mov bp, si
+    mov bl, al
+
+.rht_next:
+    add di, WIN_ENTRY_SIZE
+    inc si
+    jmp .rht_find
+
+.rht_found:
+    cmp bp, 0xFFFF
+    je .rht_no_hit
+    mov ax, bp
+    clc
+    jmp .rht_done
+
+.rht_no_hit:
+    stc
+
+.rht_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
 ; Mouse Drag State Machine
 ; ============================================================================
 
@@ -3495,7 +3589,7 @@ mouse_drag_update:
 
     ; === Left button JUST pressed: hit-test title bars ===
     call mouse_hittest_titlebar
-    jc .done                        ; No hit
+    jc .try_resize                  ; No titlebar hit — check resize handle
 
     ; Check if click is on close button (rightmost 12px of title bar)
     push si
@@ -3516,6 +3610,12 @@ mouse_drag_update:
     mov [close_kill_window], al
     mov byte [close_needs_kill], 1
     jmp .done
+
+.try_resize:
+    ; No titlebar hit — check if click is on a resize handle
+    call mouse_hittest_resize
+    jc .done                        ; No resize hit either
+    jmp .start_resize
 
 .start_drag:
     ; Start drag setup
@@ -3547,14 +3647,46 @@ mouse_drag_update:
 
     jmp .done
 
+.start_resize:
+    ; Start resize setup
+    mov [resize_window], al
+    mov byte [drag_needs_focus], 1  ; Bring window to front
+    mov [drag_window], al           ; Focus uses drag_window
+
+    ; Read current window dimensions
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_WIDTH]
+    mov [resize_start_w], ax
+    mov [resize_target_w], ax
+    mov ax, [bx + WIN_OFF_HEIGHT]
+    mov [resize_start_h], ax
+    mov [resize_target_h], ax
+
+    ; Save mouse position at grab start
+    mov ax, [mouse_x]
+    mov [resize_start_mx], ax
+    mov ax, [mouse_y]
+    mov [resize_start_my], ax
+
+    ; Set active LAST
+    mov byte [resize_active], 1
+    jmp .done
+
 .already_held:
     test al, 0x01                   ; Still held?
     jz .button_released
 
+    ; Check if resize is active
+    cmp byte [resize_active], 0
+    jne .resize_held
+
     cmp byte [drag_active], 0
     je .done
 
-    ; Calculate target = mouse - offset
+    ; Calculate drag target = mouse - offset
     mov ax, [mouse_x]
     sub ax, [drag_offset_x]
     cmp ax, 0x8000                  ; Negative wrap?
@@ -3570,10 +3702,54 @@ mouse_drag_update:
     xor ax, ax
 .target_y_ok:
     mov [drag_target_y], ax
+    jmp .done
 
+.resize_held:
+    ; Calculate resize target = start_dim + (mouse - start_mouse)
+    mov ax, [mouse_x]
+    sub ax, [resize_start_mx]
+    add ax, [resize_start_w]
+    ; Clamp minimum width to 60
+    cmp ax, 60
+    jge .resize_w_min_ok
+    mov ax, 60
+.resize_w_min_ok:
+    ; Clamp maximum width to screen_width
+    cmp ax, [screen_width]
+    jbe .resize_w_max_ok
+    mov ax, [screen_width]
+.resize_w_max_ok:
+    mov [resize_target_w], ax
+
+    mov ax, [mouse_y]
+    sub ax, [resize_start_my]
+    add ax, [resize_start_h]
+    ; Clamp minimum height to 40
+    cmp ax, 40
+    jge .resize_h_min_ok
+    mov ax, 40
+.resize_h_min_ok:
+    ; Clamp maximum height to screen_height
+    cmp ax, [screen_height]
+    jbe .resize_h_max_ok
+    mov ax, [screen_height]
+.resize_h_max_ok:
+    mov [resize_target_h], ax
     jmp .done
 
 .button_released:
+    ; If resize was active, set up deferred finish
+    cmp byte [resize_active], 0
+    je .check_drag_release
+    mov ax, [resize_target_w]
+    mov [resize_finish_w], ax
+    mov ax, [resize_target_h]
+    mov [resize_finish_h], ax
+    mov byte [resize_needs_finish], 1
+    mov byte [resize_active], 0
+    jmp .done
+
+.check_drag_release:
     ; If drag was active, set up deferred finish (move window on release)
     cmp byte [drag_active], 0
     je .button_released_done
@@ -3588,6 +3764,7 @@ mouse_drag_update:
 
 .check_release:
     mov byte [drag_active], 0
+    mov byte [resize_active], 0
 
 .done:
     popa
@@ -3805,7 +3982,7 @@ mouse_process_drag:
 .no_close_kill:
     ; --- Phase 3: Handle active drag (draw XOR outline) ---
     cmp byte [drag_active], 0
-    je .check_finish
+    je .check_resize_active
 
     ; Read drag state atomically
     cli
@@ -3867,10 +4044,132 @@ mouse_process_drag:
     call mouse_cursor_show
     jmp .done
 
+.check_resize_active:
+    ; --- Phase 3b: Handle active resize (draw XOR outline with new size) ---
+    cmp byte [resize_active], 0
+    je .check_finish
+
+    ; Read resize state atomically
+    cli
+    mov dx, [resize_target_w]
+    mov si, [resize_target_h]
+    sti
+
+    ; If outline already drawn at this exact size, skip
+    cmp byte [resize_outline_drawn], 0
+    je .need_resize_outline
+    cmp dx, [drag_outline_w]
+    jne .need_resize_outline
+    cmp si, [drag_outline_h]
+    je .done                        ; Same size, nothing to do
+
+.need_resize_outline:
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+    ; Erase old outline if one is drawn
+    cmp byte [resize_outline_drawn], 0
+    je .no_resize_erase
+    push dx
+    push si
+    mov bx, [drag_outline_x]
+    mov cx, [drag_outline_y]
+    mov dx, [drag_outline_w]
+    mov si, [drag_outline_h]
+    call draw_xor_rect_outline
+    pop si
+    pop dx
+
+.no_resize_erase:
+    ; Get window position (stays constant during resize)
+    push dx
+    push si
+    xor ah, ah
+    mov al, [resize_window]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    mov bx, [di + WIN_OFF_X]
+    mov cx, [di + WIN_OFF_Y]
+    mov [drag_outline_x], bx
+    mov [drag_outline_y], cx
+    pop si
+    pop dx
+
+    ; Draw new outline at window position with target size
+    mov [drag_outline_w], dx
+    mov [drag_outline_h], si
+    call draw_xor_rect_outline
+    mov byte [resize_outline_drawn], 1
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    jmp .done
+
+.check_resize_finish:
+    ; --- Phase 4b: Handle resize finish (apply new dimensions) ---
+    cmp byte [resize_needs_finish], 0
+    je .done
+    mov byte [resize_needs_finish], 0
+
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+
+    ; Erase resize outline if one is drawn
+    cmp byte [resize_outline_drawn], 0
+    je .no_resize_final_erase
+    mov bx, [drag_outline_x]
+    mov cx, [drag_outline_y]
+    mov dx, [drag_outline_w]
+    mov si, [drag_outline_h]
+    call draw_xor_rect_outline
+    mov byte [resize_outline_drawn], 0
+
+.no_resize_final_erase:
+    ; Check if size actually changed
+    xor ah, ah
+    mov al, [resize_window]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    mov dx, [resize_finish_w]
+    cmp dx, [di + WIN_OFF_WIDTH]
+    jne .do_resize
+    mov si, [resize_finish_h]
+    cmp si, [di + WIN_OFF_HEIGHT]
+    je .resize_done                 ; Same size, skip
+
+.do_resize:
+    ; Apply resize via win_resize_stub
+    mov dx, [resize_finish_w]
+    mov si, [resize_finish_h]
+    xor ah, ah
+    mov al, [resize_window]
+    push word [clip_enabled]
+    mov byte [clip_enabled], 0
+    call win_resize_stub            ; Redraws frame, posts WIN_REDRAW
+
+    ; Update topmost cache if this is the topmost window
+    xor ah, ah
+    mov al, [resize_window]
+    cmp al, [topmost_handle]
+    jne .resize_not_topmost
+    mov ax, [resize_finish_w]
+    mov [topmost_win_w], ax
+    mov ax, [resize_finish_h]
+    mov [topmost_win_h], ax
+.resize_not_topmost:
+    pop word [clip_enabled]
+
+.resize_done:
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    jmp .done
+
 .check_finish:
     ; --- Phase 4: Handle drag finish (move window to final position) ---
     cmp byte [drag_needs_finish], 0
-    je .done
+    je .check_resize_finish
     mov byte [drag_needs_finish], 0
 
     call mouse_cursor_hide
@@ -5051,7 +5350,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2200 - ($ - $$) db 0
+times 0x2400 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -8492,16 +8791,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 78 + reserved_sectors = 79
-    mov word [fat_start], 79        ; Filesystem at sector 78 + 1 reserved
+    ; fat_start = 80 + reserved_sectors = 81
+    mov word [fat_start], 81        ; Filesystem at sector 80 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 78 + reserved + (num_fats * sectors_per_fat)
-    ; = 78 + 1 + (2 * 9) = 78 + 1 + 18 = 97
+    ; root_dir_start = 80 + reserved + (num_fats * sectors_per_fat)
+    ; = 80 + 1 + (2 * 9) = 80 + 1 + 18 = 99
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 78                      ; Filesystem starts at sector 78
-    mov [root_dir_start], ax        ; = 97
+    add ax, 80                      ; Filesystem starts at sector 80
+    mov [root_dir_start], ax        ; = 99
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -15247,6 +15546,47 @@ win_draw_stub:
 .flat_border:
     call gfx_draw_rect_stub          ; Flat: white outline
 .border_done:
+    ; Draw resize grip (diagonal dots in bottom-right corner)
+    ; plot_pixel_color: CX=X, BX=Y, DL=color
+    push bx
+    mov di, [.win_ptr]
+    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_BORDER
+    jz .no_grip
+    push si
+    push bp
+    mov si, [di + WIN_OFF_X]
+    add si, [di + WIN_OFF_WIDTH]   ; SI = right edge X
+    mov bp, [di + WIN_OFF_Y]
+    add bp, [di + WIN_OFF_HEIGHT]  ; BP = bottom edge Y (as register, not [bp] memory)
+    mov dl, 3                       ; White color
+    ; Dot 1: (right-3, bottom-2)
+    mov cx, si
+    sub cx, 3
+    mov bx, bp
+    sub bx, 2
+    call plot_pixel_color
+    ; Dot 2: (right-5, bottom-4)
+    mov cx, si
+    sub cx, 5
+    mov bx, bp
+    sub bx, 4
+    call plot_pixel_color
+    ; Dot 3: (right-2, bottom-5)
+    mov cx, si
+    sub cx, 2
+    mov bx, bp
+    sub bx, 5
+    call plot_pixel_color
+    ; Dot 4: (right-4, bottom-3)
+    mov cx, si
+    sub cx, 4
+    mov bx, bp
+    sub bx, 3
+    call plot_pixel_color
+    pop bp
+    pop si
+.no_grip:
+    pop bx
     pop bx
 
 .nodraw:
@@ -17406,6 +17746,20 @@ drag_needs_finish:  db 0            ; 1 = drag completed, need to move window
 drag_finish_x:      dw 0            ; Final target X position
 drag_finish_y:      dw 0            ; Final target Y position
 
+; Window resize drag state
+resize_active:      db 0            ; 1 = currently resize-dragging
+resize_window:      db 0            ; Handle of window being resized
+resize_start_w:     dw 0            ; Original width at grab start
+resize_start_h:     dw 0            ; Original height at grab start
+resize_start_mx:    dw 0            ; Mouse X at grab start
+resize_start_my:    dw 0            ; Mouse Y at grab start
+resize_target_w:    dw 0            ; Current target width
+resize_target_h:    dw 0            ; Current target height
+resize_outline_drawn: db 0          ; 1 = XOR outline currently visible
+resize_needs_finish:  db 0          ; 1 = resize completed, apply now
+resize_finish_w:    dw 0            ; Final width
+resize_finish_h:    dw 0            ; Final height
+
 ; Keyboard demo state
 demo_cursor_x: dw 0
 demo_cursor_y: dw 0
@@ -17428,9 +17782,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 79                    ; Absolute FAT sector = filesystem_start(78) + reserved(1)
-root_dir_start: dw 97               ; Calculated: 78 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 111             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 81                    ; Absolute FAT sector = filesystem_start(80) + reserved(1)
+root_dir_start: dw 99               ; Calculated: 80 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 113             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -17659,5 +18013,5 @@ fdlg_str_cancel:    db 'Cancel', 0
 ; Padding
 ; ============================================================================
 
-; Pad to 36KB (72 sectors) - expanded for VGA support (Build 281)
-times 36864 - ($ - $$) db 0
+; Pad to 37KB (74 sectors) - expanded for resize support (Build 301)
+times 37888 - ($ - $$) db 0
