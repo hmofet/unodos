@@ -893,7 +893,7 @@ screen_write() {
     # Write using dd with progress output on stderr
     # dd status=progress writes lines like: "1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.5 s, 2.1 MB/s"
     local dd_err_file="/tmp/dd_err_$$"
-    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" conv=fsync 2>"$dd_err_file" &
+    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" conv=fsync status=progress 2>"$dd_err_file" &
     local dd_pid=$!
 
     local start_time
@@ -931,16 +931,32 @@ screen_write() {
     # Wait for dd to finish and check exit status
     wait $dd_pid
     local dd_exit=$?
-    rm -f "$dd_err_file"
 
     if (( dd_exit != 0 )); then
+        # Read the actual dd error before deleting the file
+        local dd_error=""
+        if [[ -f "$dd_err_file" ]]; then
+            dd_error=$(tail -3 "$dd_err_file" 2>/dev/null | grep -iv "records\|bytes" | head -1 || echo "")
+        fi
+        rm -f "$dd_err_file"
+
         ((row++))
         write_at_bold 5 "$row" "ERROR: Write failed!" $C_RED
+        if [[ -n "$dd_error" ]]; then
+            ((row++))
+            # Truncate long error messages to fit screen
+            dd_error="${dd_error:0:70}"
+            write_at 5 "$row" "$dd_error" $C_YELLOW
+        fi
+        ((row++))
+        write_at 5 "$row" "Check: sudo access, device not mounted, correct device?" $C_GRAY
         ((row += 2))
         write_at 5 "$row" "Press any key to exit..." $C_GRAY
         read_key >/dev/null
         return 1
     fi
+
+    rm -f "$dd_err_file"
 
     # Final progress
     draw_progress_bar "$bar_row" "$bar_x" "$bar_w" 100
