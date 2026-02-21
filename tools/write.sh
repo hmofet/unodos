@@ -10,7 +10,7 @@
 #
 # No arguments = full interactive mode (image selection + drive selection)
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -240,8 +240,8 @@ find_images() {
         local name size version build desc
         name=$(basename "$path")
         size=$(stat -c%s "$path" 2>/dev/null || echo 0)
-        version=$(strings "$path" 2>/dev/null | grep -oP 'UnoDOS v[\d.]+' | head -1 || echo "")
-        build=$(strings "$path" 2>/dev/null | grep -oP 'Build: \d+' | head -1 || echo "")
+        version=$(strings "$path" 2>/dev/null | grep -oE 'UnoDOS v[0-9.]+' | head -1 || echo "")
+        build=$(strings "$path" 2>/dev/null | grep -oE 'Build: [0-9]+' | head -1 || echo "")
         desc=$(get_image_description "$name")
 
         IMG_PATHS[$IMG_COUNT]="$path"
