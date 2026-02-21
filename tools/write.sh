@@ -888,48 +888,12 @@ screen_write() {
     local status_row=$row
     ((row++))
 
-    draw_progress_bar "$bar_row" "$bar_x" "$bar_w" 0
+    write_at 5 "$status_row" "Writing $image_size_mb MB..." $C_GRAY
 
-    # Write using dd with progress output on stderr
-    # dd status=progress writes lines like: "1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.5 s, 2.1 MB/s"
+    # Write using dd (foreground, simple)
+    # Background dd + USR1 monitoring has issues on Crostini/ChromeOS
     local dd_err_file="/tmp/dd_err_$$"
-    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" status=progress 2>"$dd_err_file" &
-    local dd_pid=$!
-
-    local start_time
-    start_time=$(date +%s)
-
-    # Monitor progress by periodically sending USR1 to dd and parsing stderr
-    while kill -0 $dd_pid 2>/dev/null; do
-        sleep 1
-        kill -USR1 $dd_pid 2>/dev/null || true
-        sleep 0.3
-
-        # Parse the last progress line from dd stderr
-        local last_line bytes_written=0
-        last_line=$(tail -1 "$dd_err_file" 2>/dev/null || echo "")
-        if [[ "$last_line" =~ ^([0-9]+)\ bytes ]]; then
-            bytes_written="${BASH_REMATCH[1]}"
-        fi
-
-        if (( bytes_written > 0 && image_size > 0 )); then
-            local percent=$(( (bytes_written * 100) / image_size ))
-            (( percent > 100 )) && percent=100
-            draw_progress_bar "$bar_row" "$bar_x" "$bar_w" "$percent"
-
-            local now elapsed speed mb_done
-            now=$(date +%s)
-            elapsed=$(( now - start_time ))
-            if (( elapsed > 0 )); then
-                speed=$(( bytes_written / 1048576 / elapsed ))
-                mb_done=$(format_size_mb "$bytes_written")
-                write_at 5 "$status_row" "$mb_done / $image_size_mb MB   (${speed} MB/s)     " $C_GRAY
-            fi
-        fi
-    done
-
-    # Wait for dd to finish and check exit status
-    wait $dd_pid
+    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" 2>"$dd_err_file"
     local dd_exit=$?
 
     if (( dd_exit != 0 )); then
@@ -937,7 +901,6 @@ screen_write() {
         ((row++))
         write_at_bold 5 "$row" "ERROR: Write failed! (exit code $dd_exit)" $C_RED
         if [[ -f "$dd_err_file" ]]; then
-            # Show last 4 lines of dd stderr (the actual error)
             local line_num=0
             while IFS= read -r dd_line && (( line_num < 4 )); do
                 if [[ -n "$dd_line" ]]; then
@@ -958,11 +921,9 @@ screen_write() {
     fi
 
     rm -f "$dd_err_file"
-
-    # Flush to disk
     sync
 
-    # Final progress
+    # Show completion
     draw_progress_bar "$bar_row" "$bar_x" "$bar_w" 100
     write_at 5 "$status_row" "$image_size_mb / $image_size_mb MB   Done!              " $C_GRAY
 
