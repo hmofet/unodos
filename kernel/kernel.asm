@@ -5699,8 +5699,9 @@ widget_draw_button:
 .btn_3d_pressed:
     call draw_sunken_bevel
 .btn_3d_fg:
-    ; Set black foreground for label text
+    ; Set black foreground for label text, button face background
     mov byte [draw_fg_color], 0
+    mov byte [draw_bg_color], SYS_BTN_FACE
     jmp .btn_label
 
 .btn_flat:
@@ -5797,9 +5798,10 @@ widget_draw_button:
     ; Restore caller_ds
     mov ax, [btn_saved_cds]
     mov [caller_ds], ax
-    ; Restore text_color as foreground
+    ; Restore text_color as foreground, black background
     mov al, [text_color]
     mov [draw_fg_color], al
+    mov byte [draw_bg_color], 0
     pop di
     pop si
     pop dx
@@ -6474,6 +6476,12 @@ widget_draw_textfield:
     mov [clip_y2], ax
     mov byte [clip_enabled], 1
     ; Draw text at (X+2, Y+2)
+    ; For 3D mode, set text fg=black, bg=white to match white interior
+    cmp byte [widget_style], 0
+    je .tf_colors_done
+    mov byte [draw_fg_color], 0
+    mov byte [draw_bg_color], 3
+.tf_colors_done:
     mov si, [wgt_text_ptr]
     mov bx, [btn_x]
     add bx, 2
@@ -6539,6 +6547,13 @@ widget_draw_textfield:
     mov si, ax                          ; SI = height
     call gfx_draw_filled_rect_stub
 .tf_no_cursor:
+    ; Restore draw colors if 3D mode changed them
+    cmp byte [widget_style], 0
+    je .tf_restore_clip
+    mov al, [text_color]
+    mov [draw_fg_color], al
+    mov byte [draw_bg_color], 0
+.tf_restore_clip:
     ; Restore clip state
     pop word [clip_enabled]
     pop word [clip_y2]
@@ -6630,6 +6645,11 @@ widget_draw_scrollbar:
     mov byte [draw_font_height], 8
     mov byte [draw_font_width], 8
     mov byte [draw_font_advance], 8
+    ; Set bg color to match scrollbar face for 3D mode
+    cmp byte [widget_style], 0
+    je .sb_arrow_draw
+    mov byte [draw_bg_color], SYS_BTN_FACE
+.sb_arrow_draw:
     mov si, scrollbar_up_bitmap
     call draw_char
     ; Draw down arrow bitmap at bottom
@@ -6641,6 +6661,7 @@ widget_draw_scrollbar:
     mov word [draw_y], cx
     mov si, scrollbar_down_bitmap
     call draw_char
+    mov byte [draw_bg_color], 0
     ; Restore font params
     mov al, [btn_saved_fh]
     mov [draw_font_height], al
@@ -15043,7 +15064,9 @@ win_draw_stub:
     add cx, 1
     cmp byte [widget_style], 0
     je .active_flat_text
+    mov byte [draw_bg_color], SYS_TITLE_ACTIVE
     call gfx_draw_string_stub       ; 3D: white text on blue
+    mov byte [draw_bg_color], 0
     jmp .active_text_done
 .active_flat_text:
     call gfx_draw_string_inverted   ; Flat: inverted (black on white)
@@ -15067,7 +15090,9 @@ win_draw_stub:
     mov si, close_btn_str
     cmp byte [widget_style], 0
     je .active_flat_close
+    mov byte [draw_bg_color], SYS_TITLE_ACTIVE
     call gfx_draw_string_stub       ; 3D: white text
+    mov byte [draw_bg_color], 0
     jmp .active_close_done
 .active_flat_close:
     call gfx_draw_string_inverted   ; Flat: inverted
@@ -15104,8 +15129,12 @@ win_draw_stub:
     pop cx
     pop bx
 
-    ; Draw title text - normal white on black
+    ; Draw title text - normal white on black (flat) or white on gray (3D)
     push bx
+    cmp byte [widget_style], 0
+    je .inactive_title_text
+    mov byte [draw_bg_color], SYS_TITLE_INACT
+.inactive_title_text:
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     mov si, bx
@@ -15116,6 +15145,7 @@ win_draw_stub:
     add cx, 1
     call gfx_draw_string_stub
     pop word [caller_ds]
+    mov byte [draw_bg_color], 0
     pop bx
 
     ; Draw close button [X] - normal white
@@ -15123,6 +15153,10 @@ win_draw_stub:
     push cx
     push dx
     push si
+    cmp byte [widget_style], 0
+    je .inactive_close_text
+    mov byte [draw_bg_color], SYS_TITLE_INACT
+.inactive_close_text:
     mov si, [.win_ptr]
     mov bx, [si + WIN_OFF_X]
     add bx, [si + WIN_OFF_WIDTH]
@@ -15134,6 +15168,7 @@ win_draw_stub:
     mov si, close_btn_str
     call gfx_draw_string_stub
     pop word [caller_ds]
+    mov byte [draw_bg_color], 0
     pop si
     pop dx
     pop cx
