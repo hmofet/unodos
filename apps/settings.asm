@@ -128,6 +128,7 @@ entry:
     mov ah, API_GET_SCREEN_INFO
     int 0x80
     mov [cs:cur_video_mode], al         ; AL = current mode (0x04 or 0x13)
+    mov [cs:screen_w], bx              ; BX = screen width
 
     ; Get current font from kernel
     mov ah, API_GET_FONT_INFO
@@ -141,11 +142,25 @@ entry:
     mov [cs:cur_minutes], cl
     mov [cs:cur_seconds], dh
 
-    ; Create window
+    ; Create window — size based on screen resolution
+    cmp word [cs:screen_w], 640
+    jb .small_win
+    ; 640x480: larger centered window
+    mov bx, 100
+    mov cx, 50
+    mov dx, 440
+    mov si, 370
+    mov word [cs:content_w], 436
+    mov word [cs:content_h], 354
+    jmp .do_create_win
+.small_win:
     mov bx, WIN_X
     mov cx, WIN_Y
     mov dx, WIN_W
     mov si, WIN_H
+    mov word [cs:content_w], 296
+    mov word [cs:content_h], 178
+.do_create_win:
     mov ax, cs
     mov es, ax
     mov di, window_title
@@ -555,11 +570,11 @@ draw_ui:
     push si
     push di
 
-    ; Clear content area
+    ; Clear content area (runtime dimensions for multi-resolution)
     mov bx, 0
     mov cx, 0
-    mov dx, 296
-    mov si, 178
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1038,11 +1053,11 @@ apply_with_revert:
 draw_countdown_ui:
     pusha
 
-    ; Clear content area
+    ; Clear content area (runtime dimensions for multi-resolution)
     mov bx, 0
     mov cx, 0
-    mov dx, 296
-    mov si, 178
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1438,6 +1453,9 @@ swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
 cfg_buf:        times 6 db 0        ; Settings buffer (magic + 5 settings bytes)
 cur_video_mode: db 0x04             ; Current video mode (0x04=CGA, 0x13=VGA, 0x12=Mode12h, 0x01=VESA)
+screen_w:       dw 320              ; Screen width from get_screen_info
+content_w:      dw 296              ; Window content area width (WIN_W - 4)
+content_h:      dw 178              ; Window content area height (WIN_H - 16)
 cfg_mount:      db 0                ; Mount handle for settings save
 saved_video_mode: db 0              ; Previous mode for revert
 revert_countdown: db 10             ; Countdown seconds remaining
