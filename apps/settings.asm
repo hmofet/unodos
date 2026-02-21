@@ -67,6 +67,7 @@ API_GET_RTC_TIME        equ 72
 API_SET_RTC_TIME        equ 81
 API_GET_SCREEN_INFO     equ 82
 API_BCD_TO_ASCII        equ 92
+API_GET_FONT_INFO       equ 93
 API_SET_VIDEO_MODE      equ 95
 
 EVENT_KEY_PRESS         equ 1
@@ -127,6 +128,11 @@ entry:
     mov ah, API_GET_SCREEN_INFO
     int 0x80
     mov [cs:cur_video_mode], al         ; AL = current mode (0x04 or 0x13)
+
+    ; Get current font from kernel
+    mov ah, API_GET_FONT_INFO
+    int 0x80
+    mov [cs:cur_font], al               ; AL = current font index (0-2)
 
     ; Load current RTC time
     mov ah, API_GET_RTC_TIME
