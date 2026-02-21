@@ -863,8 +863,8 @@ screen_write() {
     local image_size_mb
     image_size_mb=$(format_size_mb "$image_size")
 
-    # Determine block size
-    local bs="1M"
+    # Determine block size (4K is safe for Crostini/ChromeOS USB passthrough)
+    local bs="4K"
     if [[ "${DRV_TYPES[$SELECTED_DEVICE_IDX]}" == "Floppy" ]]; then
         bs="32K"
     fi
@@ -893,7 +893,7 @@ screen_write() {
     # Write using dd with progress output on stderr
     # dd status=progress writes lines like: "1048576 bytes (1.0 MB, 1.0 MiB) copied, 0.5 s, 2.1 MB/s"
     local dd_err_file="/tmp/dd_err_$$"
-    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" conv=fsync status=progress 2>"$dd_err_file" &
+    dd if="$SELECTED_IMAGE" of="$SELECTED_DEVICE" bs="$bs" status=progress 2>"$dd_err_file" &
     local dd_pid=$!
 
     local start_time
@@ -958,6 +958,9 @@ screen_write() {
     fi
 
     rm -f "$dd_err_file"
+
+    # Flush to disk
+    sync
 
     # Final progress
     draw_progress_bar "$bar_row" "$bar_x" "$bar_w" 100
