@@ -297,6 +297,8 @@ def find_apps():
         ('apitest.bin', 'APITEST.BIN'),
         ('notepad.bin', 'TEXT.BIN'),
         ('sysinfo.bin', 'SYSINFO.BIN'),
+        ('outrun.bin', 'OUTRUN.BIN'),
+        ('outrunv.bin', 'OUTRUNV.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
