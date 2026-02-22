@@ -88,8 +88,8 @@ entry:
     int 0x80
     mov [cs:rng_seed], ax
 
-    ; Set colors for VGA rendering
-    mov al, 0
+    ; Set white text on black background for VGA
+    mov al, 15                      ; text color = white (VGA palette 15)
     mov bl, 0                       ; Black bg
     mov cl, 15                      ; White win
     mov ah, API_THEME_SET_COLORS

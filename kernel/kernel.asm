@@ -7749,23 +7749,116 @@ gfx_clear_area_stub:
     jmp .clear_done
 
 .slow_path:
-    ; Pixel-by-pixel fallback for non-aligned areas
-.clear_row:
+    ; Optimized hybrid CGA clear: partial edge bytes + fast middle rep stosb
+    ; BX=X, DX=width, CX=Y, BP=height, ES=video segment
+    cmp dx, 4
+    jb .pixel_path                  ; Very narrow: pixel-by-pixel is fine
+
+.opt_row:
+    push cx                         ; Save Y
+    push bx                         ; Save start X
+    push dx                         ; Save width
+
+    ; Calculate CGA row base offset
+    mov ax, cx
+    shr ax, 1
+    push bx
+    push dx
+    mov di, 80
+    mul di                          ; AX = (Y/2) * 80
+    pop dx
+    pop bx
+    mov si, ax                      ; SI = row base
+    test cl, 1
+    jz .or_even
+    add si, 0x2000
+.or_even:
+
+    ; --- Leading partial byte (clear X%4..3 in first byte) ---
+    mov ax, bx
+    and ax, 3
+    jz .or_no_lead                  ; X aligned, skip leading
+
+    mov di, bx
+    shr di, 2
+    add di, si                      ; DI = first byte in video mem
+
+    push cx
+    mov cx, 4
+    sub cx, ax                      ; CX = pixels to clear (1-3)
+    sub dx, cx                      ; Reduce remaining width
+    add bx, cx                      ; BX = first aligned X
+    shl cl, 1                       ; CL = bits to clear (2,4,6)
+    mov al, 0xFF
+    shl al, cl                      ; AL = AND mask (keep upper bits)
+    and [es:di], al                 ; Clear lower bits
+    pop cx
+
+.or_no_lead:
+    ; --- Middle full bytes (BX is now 4-aligned) ---
+    mov ax, dx
+    shr ax, 2                       ; AX = full bytes to clear
+    jz .or_no_middle
+
+    mov di, bx
+    shr di, 2
+    add di, si                      ; DI = first full byte offset
+
+    push cx
+    mov cx, ax                      ; CX = byte count
+    xor al, al
+    rep stosb                       ; Clear full bytes
+    pop cx
+
+    ; Advance BX past cleared middle
+    mov ax, dx
+    shr ax, 2
+    shl ax, 2                       ; AX = middle pixels (multiple of 4)
+    add bx, ax
+
+.or_no_middle:
+    ; --- Trailing partial byte (clear pixels 0..trailing-1) ---
+    mov ax, dx
+    and ax, 3                       ; AX = trailing pixels (0-3)
+    jz .or_no_trail
+
+    mov di, bx
+    shr di, 2
+    add di, si                      ; DI = last byte offset
+
+    push cx
+    mov cl, al                      ; CL = trailing pixels (1-3)
+    shl cl, 1                       ; CL = bits to clear (2,4,6)
+    mov al, 0xFF
+    shr al, cl                      ; AL = AND mask (keep lower bits)
+    and [es:di], al
+    pop cx
+
+.or_no_trail:
+    pop dx                          ; Restore width
+    pop bx                          ; Restore start X
+    pop cx                          ; Restore Y
+    inc cx                          ; Next Y
+    dec bp
+    jnz .opt_row
+    jmp .clear_done
+
+.pixel_path:
+    ; Original pixel-by-pixel path for very narrow widths (< 4 pixels)
+.px_row:
     mov di, dx                      ; DI = width counter
     push cx                         ; Save Y
     push bx                         ; Save X
-
-.clear_col:
+.px_col:
     call .plot_bg
     inc bx                          ; Next X
     dec di
-    jnz .clear_col
-
+    jnz .px_col
     pop bx                          ; Restore X
     pop cx                          ; Restore Y
     inc cx                          ; Next Y
     dec bp
-    jnz .clear_row
+    jnz .px_row
 
 .clear_done:
     pop si
@@ -14371,7 +14464,12 @@ win_destroy_stub:
 
     ; If we found a window, focus it and trigger redraw
     cmp byte [.best_handle], 0xFF
-    je .promote_done
+    jne .promote_focus
+    ; No more visible windows — reset focused_task so launcher gets keyboard
+    mov byte [focused_task], 0xFF
+    mov byte [topmost_handle], 0xFF
+    jmp .promote_done
+.promote_focus:
     ; Save and disable clip state - stale clip from calling task can clip title text
     push word [clip_enabled]
     mov byte [clip_enabled], 0
