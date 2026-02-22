@@ -46,15 +46,16 @@ entry:
 
     cli
 
-    ; Always start in CGA mode 4 (320x200 4-color)
-    ; VGA mode (if saved in SETTINGS.CFG) is applied later by load_settings,
-    ; AFTER the filesystem is mounted and the launcher is loaded.
-    ; This avoids a double fat16_mount which fails on some USB flash drives
-    ; where INT 10h mode switch disrupts BIOS USB disk emulation state.
-    mov byte [video_mode], 0x04
-    mov word [video_segment], 0xB800
+    ; TEMP: Start in Mode 12h (640x480x16) for VGA rendering test
+    mov byte [video_mode], 0x12
+    mov word [video_segment], 0xA000
+    mov word [screen_width], 640
+    mov word [screen_height], 480
+    mov byte [screen_bpp], 4
+    mov word [screen_pitch], 80
+    mov byte [widget_style], 1
     xor ax, ax
-    mov al, 0x04
+    mov al, 0x12
     int 0x10
 
     call setup_graphics_post_mode
@@ -2437,6 +2438,12 @@ mode12h_xor_pixel:
 ; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-255)
 ;        ES=0xA000
 ; Preserves all registers
+; mode12h_fill_rect - Fill rectangle in Mode 12h (640x480x16) planar memory
+; Uses Write Mode 0 + Set/Reset + Enable Set/Reset (same technique as
+; mode12h_plot_pixel which is proven to work). Sets up GC registers per-row
+; to ensure compatibility with QEMU VGA emulation.
+; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-255), ES=0xA000
+; Preserves all registers
 mode12h_fill_rect:
     push ax
     push bx
@@ -2455,108 +2462,97 @@ mode12h_fill_rect:
 
     ; Calculate left/right byte positions
     mov ax, bx                     ; AX = X
-    shr ax, 3                      ; AX = left byte = X/8
+    shr ax, 3                      ; AX = X / 8 = left byte
     mov [cs:.m12_left_byte], ax
     mov ax, bx
     add ax, dx
-    dec ax                         ; AX = X + W - 1 (rightmost pixel)
+    dec ax                         ; AX = X + W - 1
     shr ax, 3                      ; AX = right byte
     mov [cs:.m12_right_byte], ax
 
     ; Left mask: pixels from (X%8) to 7
+    push cx                        ; Save Y (CL needed for shifts)
     mov ax, bx
-    and ax, 7                      ; AX = X % 8
-    mov cl, al
-    mov al, 0xFF
-    shr al, cl                     ; left mask = 0xFF >> (X%8)
-    mov [cs:.m12_left_mask], al
-
-    ; Right mask: pixels from 0 to ((X+W-1)%8)
-    mov ax, bx
-    add ax, dx
-    dec ax                         ; AX = rightmost pixel X
     and ax, 7
     mov cl, al
-    mov al, 0xFE                   ; Start with 0xFE
-    shl al, cl                     ; Shift left by bit position
-    not al                         ; Invert: gives mask from bit 7 down to bit pos
-    ; Actually: right mask = 0xFF << (7 - ((X+W-1)%8))
+    mov al, 0xFF
+    shr al, cl
+    mov [cs:.m12_left_mask], al
+
+    ; Right mask: 0xFF << (7 - ((X+W-1)%8))
     mov ax, bx
     add ax, dx
     dec ax
-    and ax, 7                      ; AX = (X+W-1) % 8
+    and ax, 7
     mov cl, 7
-    sub cl, al                     ; CL = 7 - bit_pos
+    sub cl, al
     mov al, 0xFF
-    shl al, cl                     ; right mask
+    shl al, cl
     mov [cs:.m12_right_mask], al
+    pop cx                         ; Restore Y
 
-    ; Set up GC: Enable Set/Reset = 0x0F (all planes)
+    mov bp, si                     ; BP = height counter
+    mov ax, cx                     ; AX = Y (start row)
+
+.m12_row:
+    push ax                        ; Save current Y
+
+    ; === Set up GC registers for this row (per-row setup for QEMU compat) ===
     mov dx, 0x3CE
-    mov al, 1                      ; Index 1: Enable Set/Reset
-    out dx, al
-    inc dx
-    mov al, 0x0F
-    out dx, al
-
-    ; GC: Set/Reset value = color
-    dec dx
-    mov al, 0                      ; Index 0: Set/Reset
+    ; GC index 0: Set/Reset = color
+    xor al, al
     out dx, al
     inc dx
     mov al, [cs:.m12_color]
     out dx, al
-
-    ; GC: Data Rotate = 0 (replace mode)
+    ; GC index 1: Enable Set/Reset = 0x0F (all planes)
     dec dx
-    mov al, 3                      ; Index 3: Data Rotate
+    mov al, 1
+    out dx, al
+    inc dx
+    mov al, 0x0F
+    out dx, al
+    ; GC index 3: Data Rotate = 0 (replace)
+    dec dx
+    mov al, 3
     out dx, al
     inc dx
     xor al, al
     out dx, al
 
-    ; Restore DX = width (we used it for port I/O)
-    ; Actually we saved everything on stack, so DX from stack is width
-    ; But we already used DX for ports. Let's use saved values.
-    mov bp, si                     ; BP = height counter
-
-    ; First row Y offset
-    mov ax, cx                     ; AX = Y (start row)
-
-.m12_row:
-    push ax                        ; Save current Y
-    ; Calculate row base: Y * 80
+    ; Calculate row base: DI = Y * 80
+    pop ax                         ; Get Y back
+    push ax                        ; Re-save it
     push dx
     mov di, 80
-    mul di                          ; AX = Y * 80
+    mul di                          ; DX:AX = Y * 80
     pop dx
     mov di, ax                     ; DI = row base
 
-    ; Check if left_byte == right_byte (single byte case)
+    ; Check single-byte case
     mov ax, [cs:.m12_left_byte]
     cmp ax, [cs:.m12_right_byte]
     je .m12_single
 
     ; --- Left partial byte ---
-    add di, ax                     ; DI = row_base + left_byte
+    add di, ax
     mov dx, 0x3CE
-    mov al, 8                      ; Index 8: Bit Mask
+    mov al, 8                      ; Bit Mask register
     out dx, al
     inc dx
     mov al, [cs:.m12_left_mask]
     out dx, al
-    ; Read-modify-write
     mov al, [es:di]                ; Read (loads latches)
-    mov [es:di], al                ; Write (Set/Reset provides data)
+    mov byte [es:di], 0            ; Write (Set/Reset provides color, value ignored)
     inc di
 
     ; --- Middle full bytes ---
     mov cx, [cs:.m12_right_byte]
     sub cx, [cs:.m12_left_byte]
-    dec cx                         ; CX = middle byte count
-    jle .m12_right                 ; Skip if no middle bytes
+    dec cx
+    jle .m12_right
 
-    ; Bit Mask = 0xFF (all bits)
+    ; Bit Mask = 0xFF
     dec dx
     mov al, 8
     out dx, al
@@ -2564,43 +2560,42 @@ mode12h_fill_rect:
     mov al, 0xFF
     out dx, al
 
-    mov al, [cs:.m12_color]        ; Color doesn't matter for Set/Reset, but need a write
-    rep stosb                       ; Write middle bytes (latches loaded by Set/Reset)
+.m12_mid_loop:
+    mov al, [es:di]                ; Read (loads latches — needed for write mode 0)
+    mov byte [es:di], 0            ; Write (Set/Reset overrides, Bit Mask = all)
+    inc di
+    dec cx
+    jnz .m12_mid_loop
 
 .m12_right:
     ; --- Right partial byte ---
     mov dx, 0x3CE
-    mov al, 8                      ; Bit Mask
+    mov al, 8
     out dx, al
     inc dx
     mov al, [cs:.m12_right_mask]
     out dx, al
-    mov al, [es:di]
-    mov [es:di], al
-    jmp .m12_next_row
+    mov al, [es:di]                ; Read (loads latches)
+    mov byte [es:di], 0            ; Write (Set/Reset provides color)
+    jmp .m12_row_cleanup
 
 .m12_single:
-    ; Single byte: mask = left_mask AND right_mask
-    add di, ax                     ; DI = row_base + byte
+    ; Single byte case
+    add di, ax
     mov al, [cs:.m12_left_mask]
     and al, [cs:.m12_right_mask]
     mov dx, 0x3CE
-    push ax                        ; Save combined mask
+    push ax
     mov al, 8
     out dx, al
     inc dx
     pop ax
     out dx, al
-    mov al, [es:di]
-    mov [es:di], al
+    mov al, [es:di]                ; Read (loads latches)
+    mov byte [es:di], 0            ; Write (Set/Reset provides color)
 
-.m12_next_row:
-    pop ax                         ; Restore Y
-    inc ax                         ; Next row
-    dec bp
-    jnz .m12_row
-
-    ; Reset GC state
+.m12_row_cleanup:
+    ; === Reset GC registers after each row (per-row cleanup) ===
     mov dx, 0x3CE
     mov al, 8                      ; Bit Mask = 0xFF
     out dx, al
@@ -2613,6 +2608,11 @@ mode12h_fill_rect:
     inc dx
     xor al, al
     out dx, al
+
+    pop ax                         ; Restore Y
+    inc ax                         ; Next row
+    dec bp
+    jnz .m12_row
 
     pop bp
     pop di
