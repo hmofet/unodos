@@ -13657,7 +13657,7 @@ gfx_draw_icon_stub:
     ; Calculate VGA offset: Y*pitch + X
     mov ax, cx
     push dx
-    mul word [screen_pitch]
+    mul word [cs:screen_pitch]      ; CS override: DS is caller_ds, not kernel!
     pop dx
     add ax, bx
     mov di, ax                      ; DI = Y*pitch + X
