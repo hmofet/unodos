@@ -46,16 +46,11 @@ entry:
 
     cli
 
-    ; TEMP: Start in Mode 12h (640x480x16) for VGA rendering test
-    mov byte [video_mode], 0x12
-    mov word [video_segment], 0xA000
-    mov word [screen_width], 640
-    mov word [screen_height], 480
-    mov byte [screen_bpp], 4
-    mov word [screen_pitch], 80
-    mov byte [widget_style], 1
+    ; Set CGA mode 4 (320x200x4)
+    mov byte [video_mode], 0x04
+    mov word [video_segment], 0xB800
     xor ax, ax
-    mov al, 0x12
+    mov al, 0x04
     int 0x10
 
     call setup_graphics_post_mode
@@ -2434,15 +2429,9 @@ mode12h_xor_pixel:
     pop ax
     ret
 
-; mode12h_fill_rect - Fill rectangle in Mode 12h planar memory
-; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-255)
-;        ES=0xA000
-; Preserves all registers
 ; mode12h_fill_rect - Fill rectangle in Mode 12h (640x480x16) planar memory
-; Uses Write Mode 0 + Set/Reset + Enable Set/Reset (same technique as
-; mode12h_plot_pixel which is proven to work). Sets up GC registers per-row
-; to ensure compatibility with QEMU VGA emulation.
-; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-255), ES=0xA000
+; Uses Write Mode 0 + Set/Reset (same technique as mode12h_plot_pixel).
+; Input: BX=X, CX=Y, DX=width, SI=height, AL=color (0-31), ES=0xA000
 ; Preserves all registers
 mode12h_fill_rect:
     push ax
@@ -2494,12 +2483,10 @@ mode12h_fill_rect:
     mov bp, si                     ; BP = height counter
     mov ax, cx                     ; AX = Y (start row)
 
-.m12_row:
-    push ax                        ; Save current Y
-
-    ; === Set up GC registers for this row (per-row setup for QEMU compat) ===
+    ; === Set up GC registers ONCE (Write Mode 0 + Set/Reset) ===
     mov dx, 0x3CE
     ; GC index 0: Set/Reset = color
+    push ax
     xor al, al
     out dx, al
     inc dx
@@ -2519,10 +2506,12 @@ mode12h_fill_rect:
     inc dx
     xor al, al
     out dx, al
+    pop ax
+
+.m12_row:
+    push ax                        ; Save current Y
 
     ; Calculate row base: DI = Y * 80
-    pop ax                         ; Get Y back
-    push ax                        ; Re-save it
     push dx
     mov di, 80
     mul di                          ; DX:AX = Y * 80
@@ -2560,12 +2549,8 @@ mode12h_fill_rect:
     mov al, 0xFF
     out dx, al
 
-.m12_mid_loop:
-    mov al, [es:di]                ; Read (loads latches — needed for write mode 0)
-    mov byte [es:di], 0            ; Write (Set/Reset overrides, Bit Mask = all)
-    inc di
-    dec cx
-    jnz .m12_mid_loop
+    xor al, al
+    rep stosb                      ; Write CX bytes (Set/Reset provides color)
 
 .m12_right:
     ; --- Right partial byte ---
@@ -2595,7 +2580,12 @@ mode12h_fill_rect:
     mov byte [es:di], 0            ; Write (Set/Reset provides color)
 
 .m12_row_cleanup:
-    ; === Reset GC registers after each row (per-row cleanup) ===
+    pop ax                         ; Restore Y
+    inc ax                         ; Next row
+    dec bp
+    jnz .m12_row
+
+    ; === Reset GC registers ONCE at end ===
     mov dx, 0x3CE
     mov al, 8                      ; Bit Mask = 0xFF
     out dx, al
@@ -2608,11 +2598,6 @@ mode12h_fill_rect:
     inc dx
     xor al, al
     out dx, al
-
-    pop ax                         ; Restore Y
-    inc ax                         ; Next row
-    dec bp
-    jnz .m12_row
 
     pop bp
     pop di
