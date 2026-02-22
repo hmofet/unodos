@@ -2691,10 +2691,8 @@ vesa_fill_rect:
 .vf_row:
     ; Calculate linear offset for start of row: Y * 640 + X
     mov ax, cx                     ; AX = current Y
-    push dx
     mov dx, 640
     mul dx                          ; DX:AX = Y * 640
-    pop dx
     add ax, [cs:.vf_x]
     adc dx, 0                      ; DX:AX = linear start offset
 
@@ -18052,7 +18050,7 @@ topmost_win_h:      dw 0
 ; ============================================================================
 
 ; Desktop icon constants
-DESKTOP_MAX_ICONS       equ 12
+DESKTOP_MAX_ICONS       equ 16
 DESKTOP_ICON_SIZE       equ 80      ; 2+2+64+12 bytes per entry
 DESKTOP_ICON_OFF_X      equ 0       ; word: X screen position
 DESKTOP_ICON_OFF_Y      equ 2       ; word: Y screen position
