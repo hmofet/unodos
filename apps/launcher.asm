@@ -41,15 +41,15 @@ EVENT_KEY_PRESS         equ 1
 
 ; Icon grid defaults (320x200)
 GRID_COLS_LO            equ 4
-GRID_ROWS_LO            equ 3
-MAX_ICONS_LO            equ 12
+GRID_ROWS_LO            equ 4
+MAX_ICONS_LO            equ 16
 COL_WIDTH_LO            equ 80
-ROW_HEIGHT_LO           equ 55
-GRID_START_Y_LO         equ 24
+ROW_HEIGHT_LO           equ 42
+GRID_START_Y_LO         equ 20
 ICON_X_OFFSET_LO        equ 32
 ICON_Y_OFFSET_LO        equ 2
 LABEL_Y_GAP_LO          equ 20
-HITBOX_HEIGHT_LO        equ 35
+HITBOX_HEIGHT_LO        equ 30
 
 ; Icon grid hi-res (640x480)
 GRID_COLS_HI            equ 8
