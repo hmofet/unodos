@@ -143,25 +143,11 @@ entry:
     mov [cs:cur_minutes], cl
     mov [cs:cur_seconds], dh
 
-    ; Create window — size based on screen resolution
-    cmp word [cs:screen_w], 640
-    jb .small_win
-    ; 640x480: larger centered window
-    mov bx, 100
-    mov cx, 50
-    mov dx, 440
-    mov si, 370
-    mov word [cs:content_w], 436
-    mov word [cs:content_h], 354
-    jmp .do_create_win
-.small_win:
+    ; Create window — kernel auto-scales and centers in 640x480 modes
     mov bx, WIN_X
     mov cx, WIN_Y
     mov dx, WIN_W
     mov si, WIN_H
-    mov word [cs:content_w], 296
-    mov word [cs:content_h], 178
-.do_create_win:
     mov ax, cs
     mov es, ax
     mov di, window_title
@@ -200,14 +186,6 @@ entry:
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
-    ; Update content dimensions from actual window size
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_GET_INFO
-    int 0x80
-    sub dx, 4
-    mov [cs:content_w], dx
-    sub si, 16
-    mov [cs:content_h], si
     ; Refresh RTC time on repaint
     mov ah, API_GET_RTC_TIME
     int 0x80
