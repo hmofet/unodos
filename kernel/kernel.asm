@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 96                      ; Max function count (0-95 valid)
+    cmp ah, 97                      ; Max function count (0-96 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -199,6 +199,7 @@ int_80_handler:
     mov [_save_bx], bx
     mov [_save_cx], cx
     mov byte [_did_translate], 1
+    mov byte [_did_scale], 0
 
     ; Translate: BX += content_x, CX += content_y
     push si
@@ -208,6 +209,14 @@ int_80_handler:
     mov si, ax
     shl si, 5                       ; SI = handle * 32
     add si, window_table
+
+    ; Content scaling: double app coordinates for auto-scaled windows
+    cmp byte [si + WIN_OFF_CONTENT_SCALE], 2
+    jne .no_content_scale
+    shl bx, 1                       ; app_x * 2
+    shl cx, 1                       ; app_y * 2
+    mov byte [_did_scale], 1         ; Flag for DX/SI scaling after zclip
+.no_content_scale:
 
     ; content_x = win_x + 1 (inside left border)
     add bx, [si + WIN_OFF_X]
@@ -230,6 +239,73 @@ int_80_handler:
 .zclip_ok:
     pop ax
     pop si
+
+    ; --- Content dimension scaling for auto-scaled windows ---
+    cmp byte [_did_scale], 0
+    je .no_dim_scale
+
+    ; Save originals for restore after API call
+    mov [_save_dx], dx
+    mov [_save_si], si
+
+    ; Group A: Scale DX (width) AND SI (height)
+    ;   APIs 0-2 (clear/rect/fill), 51 (button), 58 (scrollbar),
+    ;   61 (groupbox), 67-68 (color rect), 80 (scroll area)
+    cmp ah, 3
+    jb .scale_dx_si
+    cmp ah, 51
+    je .scale_dx_si
+    cmp ah, 58
+    je .scale_dx_si
+    cmp ah, 61
+    je .scale_dx_si
+    cmp ah, 67
+    je .scale_dx_si
+    cmp ah, 68
+    je .scale_dx_si
+    cmp ah, 80
+    je .scale_dx_si
+
+    ; Group B: Scale DX only (SI is pointer or non-dimension)
+    ;   APIs 50 (string_wrap), 57 (textfield), 59 (listitem),
+    ;   62 (separator), 65-66 (combobox/menubar), 69-70 (h/vline)
+    cmp ah, 50
+    je .scale_dx_only
+    cmp ah, 57
+    je .scale_dx_only
+    cmp ah, 59
+    je .scale_dx_only
+    cmp ah, 62
+    je .scale_dx_only
+    cmp ah, 65
+    je .scale_dx_only
+    cmp ah, 66
+    je .scale_dx_only
+    cmp ah, 69
+    je .scale_dx_only
+    cmp ah, 70
+    je .scale_dx_only
+
+    ; Group C: Scale DH/DL (packed byte dimensions) - API 94 (sprite)
+    cmp ah, 94
+    je .scale_dh_dl
+
+    ; Default: no DX/SI scaling for this API
+    mov byte [_did_scale], 0         ; Clear flag to skip restore
+    jmp .no_dim_scale
+
+.scale_dx_si:
+    shl dx, 1
+    shl si, 1
+    jmp .no_dim_scale
+.scale_dx_only:
+    shl dx, 1
+    jmp .no_dim_scale
+.scale_dh_dl:
+    shl dh, 1                       ; sprite width * 2
+    shl dl, 1                       ; sprite height * 2
+.no_dim_scale:
+
     ; For draw_line (API 71), also translate DX/SI (second endpoint X2,Y2)
     cmp ah, 71
     jne .no_translate
@@ -240,6 +316,12 @@ int_80_handler:
     mov di, ax
     shl di, 5
     add di, window_table
+    ; Scale second endpoint if content_scale=2
+    cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
+    jne .line_no_scale
+    shl dx, 1                       ; X2 * 2
+    shl si, 1                       ; Y2 * 2
+.line_no_scale:
     add dx, [di + WIN_OFF_X]
     inc dx
     add si, [di + WIN_OFF_Y]
@@ -285,6 +367,10 @@ int80_return_point:
     je .no_coord_restore
     mov bx, [_save_bx]
     mov cx, [_save_cx]
+    cmp byte [_did_scale], 0
+    je .no_coord_restore
+    mov dx, [_save_dx]
+    mov si, [_save_si]
 .no_coord_restore:
     popf
     pop ds                          ; Restore caller's DS
@@ -4683,6 +4769,15 @@ file_dialog_open:
     jc .fdlg_error
     mov [fdlg_handle], al
 
+    ; Force no content scaling — dialog draws via direct call, not INT 0x80
+    push bx
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+    mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
+    pop bx
+
     ; Initialize selection state
     mov word [fdlg_sel], 0
     mov word [fdlg_scroll], 0
@@ -5333,7 +5428,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2400 - ($ - $$) db 0
+times 0x2440 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5498,6 +5593,9 @@ kernel_api_table:
 
     ; Video Mode API (Build 281)
     dw set_video_mode               ; 95: Switch video mode at runtime
+
+    ; Content Scale API (Build 309)
+    dw win_get_content_scale        ; 96: Get content scale for current draw_context
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -7072,6 +7170,14 @@ widget_hit_test:
     mov di, ax
     shl di, 5
     add di, window_table
+    ; Content scaling: double coordinates for auto-scaled windows
+    cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
+    jne .ht_no_scale
+    shl bx, 1                     ; rect_x * 2
+    shl cx, 1                     ; rect_y * 2
+    shl dx, 1                     ; rect_w * 2
+    shl si, 1                     ; rect_h * 2
+.ht_no_scale:
     add bx, [di + WIN_OFF_X]
     inc bx
     add cx, [di + WIN_OFF_Y]
@@ -8867,15 +8973,15 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 80 + reserved_sectors = 81
-    mov word [fat_start], 81        ; Filesystem at sector 80 + 1 reserved
+    ; fat_start = 82 + reserved_sectors = 83
+    mov word [fat_start], 83        ; Filesystem at sector 82 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 80 + reserved + (num_fats * sectors_per_fat)
-    ; = 80 + 1 + (2 * 9) = 80 + 1 + 18 = 99
+    ; root_dir_start = 82 + reserved + (num_fats * sectors_per_fat)
+    ; = 82 + 1 + (2 * 9) = 82 + 1 + 18 = 101
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 80                      ; Filesystem starts at sector 80
+    add ax, 82                      ; Filesystem starts at sector 82
     mov [root_dir_start], ax        ; = 99
 
     ; Calculate data area start sector
@@ -13136,6 +13242,7 @@ win_create_stub:
     mov [.save_flags], al
 
     ; Auto-scale and center windows in 640x480 modes if designed for 320x200
+    mov byte [.save_scale], 1        ; Default: no content scaling
     cmp word [screen_width], 640
     jb .no_autocenter
     ; Check if window fits within 320x200 bounds (designed for small screen)
@@ -13146,6 +13253,7 @@ win_create_stub:
     ; Scale dimensions 2x for usability in 640x480
     shl dx, 1                        ; Width * 2
     shl si, 1                        ; Height * 2
+    mov byte [.save_scale], 2        ; Mark: content coordinates get 2x scaling
     ; Clamp to screen bounds
     cmp dx, [screen_width]
     jbe .scale_w_ok
@@ -13213,6 +13321,8 @@ win_create_stub:
     mov [bx + WIN_OFF_WIDTH], ax
     mov ax, [.save_h]
     mov [bx + WIN_OFF_HEIGHT], ax
+    mov al, [.save_scale]
+    mov [bx + WIN_OFF_CONTENT_SCALE], al
 
     ; Demote all other visible windows' z-order before setting ours to top
     push si
@@ -13356,6 +13466,7 @@ win_create_stub:
 .save_h:     dw 0
 .save_title: dw 0
 .save_flags: db 0
+.save_scale: db 1
 .slot_off:   dw 0
 
 ; ============================================================================
@@ -17231,6 +17342,29 @@ win_get_info_stub:
     stc
     ret
 
+; win_get_content_scale - Get content scale for current draw_context (API 96)
+; Input: None (uses draw_context)
+; Output: AL = content_scale (1=normal, 2=double), CF=0
+win_get_content_scale:
+    cmp byte [draw_context], 0xFF
+    je .gcs_none
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .gcs_none
+    push si
+    xor ah, ah
+    mov al, [draw_context]
+    mov si, ax
+    shl si, 5
+    add si, window_table
+    mov al, [si + WIN_OFF_CONTENT_SCALE]
+    pop si
+    clc
+    ret
+.gcs_none:
+    mov al, 1
+    clc
+    ret
+
 ; gfx_scroll_area - Scroll rectangular region vertically (API 80)
 ; Input: BX=X, CX=Y, DX=W, SI=H, DI=scroll_pixels (positive=up)
 ; Output: none, CF=0
@@ -17807,6 +17941,9 @@ caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for di
 _did_translate: db 0                 ; 1 if BX/CX were translated by INT 0x80
 _save_bx: dw 0                      ; Pre-translation BX (caller's original value)
 _save_cx: dw 0                      ; Pre-translation CX (caller's original value)
+_did_scale: db 0                     ; 1 if DX/SI were scaled by content_scale
+_save_dx: dw 0                      ; Pre-scale DX (caller's original value)
+_save_si: dw 0                      ; Pre-scale SI (caller's original value)
 
 ; Window drawing context (0xFF = no context / fullscreen, 0-15 = window handle)
 ; When active, drawing APIs (0-6) auto-translate coordinates to window-relative
@@ -17919,9 +18056,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 81                    ; Absolute FAT sector = filesystem_start(80) + reserved(1)
-root_dir_start: dw 99               ; Calculated: 80 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 113             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 83                    ; Absolute FAT sector = filesystem_start(82) + reserved(1)
+root_dir_start: dw 101              ; Calculated: 82 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 115             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -18089,7 +18226,8 @@ WIN_TITLEBAR_HEIGHT equ 10
 ;   Offset 10: 1 byte  - Z-order (0=bottom, 15=top)
 ;   Offset 11: 1 byte  - Owner app handle (0xFF=kernel)
 ;   Offset 12: 12 bytes - Title (11 chars + null)
-;   Offset 24: 8 bytes - Reserved
+;   Offset 24: 1 byte  - Content scale (1=normal, 2=double for hi-res auto-scaled)
+;   Offset 25: 7 bytes - Reserved
 
 ; Window entry field offsets
 WIN_OFF_STATE       equ 0
@@ -18101,6 +18239,7 @@ WIN_OFF_HEIGHT      equ 8
 WIN_OFF_ZORDER      equ 10
 WIN_OFF_OWNER       equ 11
 WIN_OFF_TITLE       equ 12
+WIN_OFF_CONTENT_SCALE equ 24
 
 window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
 
@@ -18150,5 +18289,5 @@ fdlg_str_cancel:    db 'Cancel', 0
 ; Padding
 ; ============================================================================
 
-; Pad to 37KB (74 sectors) - expanded for resize support (Build 301)
-times 37888 - ($ - $$) db 0
+; Pad to 38KB (76 sectors) - expanded for content scaling (Build 309)
+times 38912 - ($ - $$) db 0
