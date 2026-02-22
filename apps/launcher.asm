@@ -114,6 +114,21 @@ entry:
     mov ah, API_APP_YIELD
     int 0x80
 
+    ; Detect video mode change: re-layout icons when resolution changes
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    cmp bx, [cs:scr_width]
+    jne .mode_changed
+    cmp cx, [cs:scr_height]
+    je .no_mode_change
+.mode_changed:
+    mov [cs:scr_width], bx
+    mov [cs:scr_height], cx
+    call setup_layout
+    call register_all_icons
+    call redraw_desktop
+.no_mode_change:
+
     ; Skip input if a fullscreen app is running (no windows, but other tasks exist)
     mov ah, API_GET_TASK_INFO
     int 0x80
@@ -707,6 +722,30 @@ register_icon:
 .ri_slot: db 0
 .ri_x:    dw 0
 .ri_y:    dw 0
+
+; ============================================================================
+; register_all_icons - Re-register all icons with kernel at current grid layout
+; Called after mode change to update icon positions for new resolution
+; ============================================================================
+register_all_icons:
+    pusha
+
+    ; Clear all existing kernel icon registrations
+    mov ah, API_DESKTOP_CLEAR
+    int 0x80
+
+    ; Re-register each icon at its new grid position
+    xor cl, cl                          ; CL = slot counter
+.rai_loop:
+    cmp cl, [cs:icon_count]
+    jae .rai_done
+    mov al, cl
+    call register_icon
+    inc cl
+    jmp .rai_loop
+.rai_done:
+    popa
+    ret
 
 ; ============================================================================
 ; show_splash - Display splash screen with logo and progress bar
