@@ -118,6 +118,18 @@ entry:
     mov ah, API_GET_TASK_INFO
     int 0x80
     ; BL=focused_task, CL=running_count
+    ; Detect when all user apps have closed: repaint desktop once
+    cmp cl, 1
+    ja .has_apps
+    cmp byte [cs:had_apps], 0
+    je .no_repaint_needed
+    mov byte [cs:had_apps], 0
+    call redraw_desktop
+    call repaint_all_windows
+    jmp .no_repaint_needed
+.has_apps:
+    mov byte [cs:had_apps], 1
+.no_repaint_needed:
     cmp bl, 0xFF
     jne .input_ok                   ; A window has focus — desktop clicks still valid
     cmp cl, 1
@@ -1485,6 +1497,9 @@ scan_safety:    dw 0
 ; Icon tracking
 icon_count:     db 0
 selected_icon:  db 0xFF
+
+; App state tracking
+had_apps:       db 0                ; 1 if user apps were running (for repaint detection)
 
 ; Mouse state
 prev_buttons:   db 0
