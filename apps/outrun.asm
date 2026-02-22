@@ -55,10 +55,10 @@ entry:
     int 0x80
     mov [cs:rng_seed], ax
 
-    ; Set black background for clean look
-    mov al, 0                       ; text color (unused)
+    ; Set white text on black background for CGA
+    mov al, 3                       ; text color = white
     mov bl, 0                       ; bg = black
-    mov cl, 3                       ; win = white (unused)
+    mov cl, 3                       ; win = white
     mov ah, API_THEME_SET_COLORS
     int 0x80
 
