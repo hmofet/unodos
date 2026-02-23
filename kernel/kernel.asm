@@ -249,10 +249,12 @@ int_80_handler:
     mov [_save_si], si
 
     ; Group A: Scale DX (width) AND SI (height)
-    ;   APIs 0-2 (clear/rect/fill), 51 (button), 58 (scrollbar),
-    ;   61 (groupbox), 67-68 (color rect), 80 (scroll area)
+    ;   APIs 0-2 (pixel/rect/fill), 5 (clear_area), 51 (button),
+    ;   58 (scrollbar), 61 (groupbox), 67-68 (color rect), 80 (scroll area)
     cmp ah, 3
     jb .scale_dx_si
+    cmp ah, 5
+    je .scale_dx_si
     cmp ah, 51
     je .scale_dx_si
     cmp ah, 58
@@ -268,12 +270,15 @@ int_80_handler:
 
     ; Group B: Scale DX only (SI is pointer or non-dimension)
     ;   APIs 50 (string_wrap), 57 (textfield), 59 (listitem),
-    ;   62 (separator), 65-66 (combobox/menubar), 69-70 (h/vline)
+    ;   60 (progress bar), 62 (separator), 65-66 (combobox/menubar),
+    ;   69-70 (h/vline)
     cmp ah, 50
     je .scale_dx_only
     cmp ah, 57
     je .scale_dx_only
     cmp ah, 59
+    je .scale_dx_only
+    cmp ah, 60
     je .scale_dx_only
     cmp ah, 62
     je .scale_dx_only
@@ -290,6 +295,10 @@ int_80_handler:
     cmp ah, 94
     je .scale_dh_dl
 
+    ; Group D: Scale DH only (DL is count, not dimension) - API 87 (menu_open)
+    cmp ah, 87
+    je .scale_dh_only
+
     ; Default: no DX/SI scaling for this API
     mov byte [_did_scale], 0         ; Clear flag to skip restore
     jmp .no_dim_scale
@@ -304,6 +313,9 @@ int_80_handler:
 .scale_dh_dl:
     shl dh, 1                       ; sprite width * 2
     shl dl, 1                       ; sprite height * 2
+    jmp .no_dim_scale
+.scale_dh_only:
+    shl dh, 1                       ; menu width * 2
 .no_dim_scale:
 
     ; For draw_line (API 71), also translate DX/SI (second endpoint X2,Y2)
@@ -2922,11 +2934,10 @@ draw_welcome_box:
 draw_char:
     pusha
 
-    mov bx, [draw_y]                ; BX = current Y
-    xor bp, bp
-    mov bl, [draw_font_height]
+    xor bx, bx
+    mov bl, [draw_font_height]      ; BX = font height (BH zeroed above)
     mov bp, bx                      ; BP = row counter
-    mov bx, [draw_y]                ; Restore BX = Y
+    mov bx, [draw_y]                ; BX = current Y
 
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
@@ -4299,11 +4310,10 @@ mouse_process_drag:
 draw_char_inverted:
     pusha
 
-    mov bx, [draw_y]                ; BX = current Y
-    xor bp, bp
-    mov bl, [draw_font_height]
+    xor bx, bx
+    mov bl, [draw_font_height]      ; BX = font height (BH zeroed above)
     mov bp, bx                      ; BP = row counter
-    mov bx, [draw_y]                ; Restore BX = Y
+    mov bx, [draw_y]                ; BX = current Y
 
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
@@ -5428,7 +5438,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2440 - ($ - $$) db 0
+times 0x2460 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -13250,9 +13260,16 @@ win_create_stub:
     jae .no_autocenter
     cmp si, 300                      ; Height < 300 → designed for 320x200
     jae .no_autocenter
-    ; Scale dimensions 2x for usability in 640x480
-    shl dx, 1                        ; Width * 2
-    shl si, 1                        ; Height * 2
+    ; Scale content area exactly 2x so app coordinates map perfectly.
+    ; Content = (W-2, H-TITLEBAR-1). New W = content*2 + borders.
+    sub dx, 2                        ; content_w = W - left/right borders
+    shl dx, 1                        ; content_w * 2
+    add dx, 2                        ; + borders back
+    sub si, WIN_TITLEBAR_HEIGHT
+    dec si                           ; content_h = H - titlebar - bottom border
+    shl si, 1                        ; content_h * 2
+    add si, WIN_TITLEBAR_HEIGHT
+    inc si                           ; + titlebar + bottom border back
     mov byte [.save_scale], 2        ; Mark: content coordinates get 2x scaling
     ; Clamp to screen bounds
     cmp dx, [screen_width]
