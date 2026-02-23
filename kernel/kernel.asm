@@ -72,7 +72,7 @@ entry:
     mov al, [desktop_bg_color]
     mov [draw_bg_color], al
 
-    ; Display version number (top-left corner)
+    ; Display version number (top-left corner) — CGA boot splash
     mov bx, 4
     mov cx, 4
     mov si, version_string
@@ -291,11 +291,8 @@ int_80_handler:
     cmp ah, 70
     je .scale_dx_only
 
-    ; Group C: Scale DH/DL (packed byte dimensions) - API 94 (sprite)
-    cmp ah, 94
-    je .scale_dh_dl
-
     ; Group D: Scale DH only (DL is count, not dimension) - API 87 (menu_open)
+    ; Note: API 94 (sprite) NOT scaled — bitmap data is fixed-size, can't double DH/DL
     cmp ah, 87
     je .scale_dh_only
 
@@ -309,10 +306,6 @@ int_80_handler:
     jmp .no_dim_scale
 .scale_dx_only:
     shl dx, 1
-    jmp .no_dim_scale
-.scale_dh_dl:
-    shl dh, 1                       ; sprite width * 2
-    shl dl, 1                       ; sprite height * 2
     jmp .no_dim_scale
 .scale_dh_only:
     shl dh, 1                       ; menu width * 2
@@ -1710,6 +1703,22 @@ auto_load_launcher:
     ; Load saved settings (font + colors) from SETTINGS.CFG if it exists
     call load_settings
 
+    ; Redraw splash text (load_settings may have switched video mode, clearing screen)
+    ; Center horizontally based on current screen width
+    mov word [caller_ds], 0x1000
+    mov bx, [screen_width]
+    shr bx, 1
+    sub bx, 60                      ; Approximate center for ~15 char strings
+    mov cx, 4
+    mov si, version_string
+    call gfx_draw_string_stub
+    mov bx, [screen_width]
+    shr bx, 1
+    sub bx, 60
+    mov cx, 14
+    mov si, build_string
+    call gfx_draw_string_stub
+
     ; Start launcher as a cooperative task (non-blocking)
     call app_start_stub
     jc .fail_start
@@ -2768,6 +2777,30 @@ vesa_plot_pixel:
     pop ax
     ret
 
+; vesa_read_pixel - Read one pixel from VESA banked framebuffer
+; Input: CX=X, BX=Y, ES=0xA000
+; Output: AL=color
+; Preserves: BX, CX, DI
+vesa_read_pixel:
+    push bx
+    push di
+    push dx
+    ; Linear offset = Y * 640 + X
+    mov ax, bx                     ; AX = Y
+    mov di, 640
+    mul di                         ; DX:AX = Y * 640
+    add ax, cx
+    adc dx, 0
+    ; DX = bank, AX = offset within bank
+    mov di, ax
+    mov ax, dx
+    call vesa_set_bank
+    mov al, [es:di]                ; Read pixel
+    pop dx
+    pop di
+    pop bx
+    ret
+
 ; vesa_fill_rect - Fill rectangle in VESA 640x480x256
 ; Input: BX=X, CX=Y, DX=width, SI=height, AL=color
 ;        ES=0xA000
@@ -3391,18 +3424,263 @@ cursor_xor_sprite:
     popa
     ret
 
+; ============================================================================
+; Solid White Cursor (VGA/VESA) — save background, draw white, restore
+; ============================================================================
+
+; cursor_save_and_draw_vga - Save background pixels and draw solid white cursor
+; Input: CX=X, BX=Y, ES=0xA000 (VGA linear framebuffer)
+; Uses cursor_save_buf (8 bytes × 14 rows = 112 bytes)
+cursor_save_and_draw_vga:
+    pusha
+    mov di, cursor_save_buf         ; DI = save buffer pointer
+    mov si, cursor_bitmap_color
+    mov bp, 14                      ; 14 rows
+.sdv_row:
+    push cx                         ; Save X start
+    cmp bx, [screen_height]
+    jae .sdv_skip_row
+    ; Get bitmap data for this row
+    mov dh, [si]                    ; Pixels 0-3 (2bpp)
+    mov dl, [si+1]                  ; Pixels 4-7 (2bpp)
+    ; Calculate VRAM row base offset
+    push si
+    mov ax, bx
+    push dx
+    mul word [screen_pitch]         ; AX = Y * pitch
+    pop dx
+    mov si, ax                      ; SI = VRAM row base
+    ; Process 8 pixels
+    push bp
+    mov bp, 8
+.sdv_col:
+    cmp cx, [screen_width]
+    jae .sdv_skip_pix
+    ; Save current pixel from VRAM
+    push si
+    add si, cx
+    mov al, [es:si]                 ; Read VRAM pixel
+    mov [di], al                    ; Save to buffer
+    ; Check bitmap bit — if non-transparent, draw white
+    mov al, dh
+    shr al, 6
+    test al, al
+    jz .sdv_no_draw
+    mov byte [es:si], 0x0F         ; Write white
+.sdv_no_draw:
+    pop si
+.sdv_skip_pix:
+    shl dx, 2                      ; Next bitmap pixel
+    inc cx
+    inc di                          ; Always advance buffer
+    dec bp
+    jnz .sdv_col
+    pop bp
+    pop si                          ; Restore bitmap pointer
+.sdv_skip_row:
+    pop cx                          ; Restore X start
+    add si, 2                       ; Next bitmap row
+    inc bx
+    dec bp
+    jnz .sdv_row
+    popa
+    ret
+
+; cursor_restore_vga - Restore background pixels (erase cursor)
+; Input: CX=X, BX=Y, ES=0xA000
+cursor_restore_vga:
+    pusha
+    mov si, cursor_save_buf         ; SI = saved pixels
+    mov bp, 14
+.rv_row:
+    push cx
+    cmp bx, [screen_height]
+    jae .rv_skip_row
+    ; Calculate VRAM row base
+    mov ax, bx
+    push dx
+    mul word [screen_pitch]
+    pop dx
+    mov di, ax                      ; DI = VRAM row base
+    ; Restore 8 pixels
+    push bp
+    mov bp, 8
+.rv_col:
+    cmp cx, [screen_width]
+    jae .rv_skip_pix
+    push di
+    add di, cx
+    mov al, [si]
+    mov [es:di], al                 ; Write saved pixel to VRAM
+    pop di
+.rv_skip_pix:
+    inc cx
+    inc si
+    dec bp
+    jnz .rv_col
+    pop bp
+    jmp .rv_row_end
+.rv_skip_row:
+    add si, 8                       ; Skip 8 bytes in save buffer
+.rv_row_end:
+    pop cx
+    inc bx
+    dec bp
+    jnz .rv_row
+    popa
+    ret
+
+; cursor_save_and_draw_vesa - Save background and draw 2x-scaled white cursor
+; Input: CX=X, BX=Y, ES=0xA000 (VESA banked framebuffer)
+; Uses cursor_save_buf (16 bytes × 28 rows = 448 bytes)
+cursor_save_and_draw_vesa:
+    pusha
+    mov word [_csr_buf_ptr], cursor_save_buf
+    mov si, cursor_bitmap_color
+    mov bp, 14                      ; 14 bitmap rows
+.sdvs_bmp_row:
+    ; Each bitmap row → 2 screen rows
+    mov ah, [si]
+    mov al, [si+1]
+    mov [_csr_bmp_16], ax           ; Save bitmap for reuse
+    ; Screen row 1 (top half of 2x)
+    push cx
+    cmp bx, [screen_height]
+    jae .sdvs_skip_top
+    call .sdvs_scan_line
+    jmp .sdvs_top_done
+.sdvs_skip_top:
+    add word [_csr_buf_ptr], 16     ; Skip 16 save slots
+.sdvs_top_done:
+    pop cx
+    inc bx
+    ; Screen row 2 (bottom half of 2x)
+    mov ax, [_csr_bmp_16]           ; Reload bitmap (consumed by shift)
+    push cx
+    cmp bx, [screen_height]
+    jae .sdvs_skip_bot
+    call .sdvs_scan_line
+    jmp .sdvs_bot_done
+.sdvs_skip_bot:
+    add word [_csr_buf_ptr], 16
+.sdvs_bot_done:
+    pop cx
+    add si, 2                       ; Next bitmap row
+    inc bx
+    dec bp
+    jnz .sdvs_bmp_row
+    popa
+    ret
+
+; .sdvs_scan_line - Process one screen row: save 16 pixels + draw white
+; Input: AH/AL=bitmap, CX=X, BX=Y, _csr_buf_ptr=buffer pos
+; Modifies: AX (shifted), _csr_buf_ptr (advanced by 16)
+.sdvs_scan_line:
+    push bp
+    push di
+    mov bp, 8                       ; 8 bitmap pixels → 16 screen pixels
+.sdvs_sl_col:
+    ; Extract pixel value before any clobbering
+    mov dl, ah
+    shr dl, 6                       ; DL = pixel value (0=transparent)
+    shl ax, 2                       ; Advance bitmap (do it now, before AX clobbered)
+    push ax                         ; Save shifted bitmap on stack
+    ; --- Left pixel ---
+    cmp cx, [screen_width]
+    jae .sdvs_left_off
+    call vesa_read_pixel            ; AL = bg color, BX/CX preserved
+    mov di, [_csr_buf_ptr]
+    mov [di], al
+    test dl, dl
+    jz .sdvs_left_nodraw
+    push dx
+    mov dl, 0x0F                    ; White
+    call vesa_plot_pixel
+    pop dx
+.sdvs_left_nodraw:
+    inc word [_csr_buf_ptr]
+    inc cx
+    jmp .sdvs_do_right
+.sdvs_left_off:
+    inc word [_csr_buf_ptr]
+    inc cx
+.sdvs_do_right:
+    ; --- Right pixel ---
+    cmp cx, [screen_width]
+    jae .sdvs_right_off
+    call vesa_read_pixel
+    mov di, [_csr_buf_ptr]
+    mov [di], al
+    test dl, dl
+    jz .sdvs_right_nodraw
+    push dx
+    mov dl, 0x0F
+    call vesa_plot_pixel
+    pop dx
+.sdvs_right_nodraw:
+    inc word [_csr_buf_ptr]
+    inc cx
+    jmp .sdvs_sl_next
+.sdvs_right_off:
+    inc word [_csr_buf_ptr]
+    inc cx
+.sdvs_sl_next:
+    pop ax                          ; Restore shifted bitmap
+    dec bp
+    jnz .sdvs_sl_col
+    pop di
+    pop bp
+    ret
+
+; cursor_restore_vesa - Restore background pixels (erase 2x-scaled cursor)
+; Input: CX=X, BX=Y, ES=0xA000
+cursor_restore_vesa:
+    pusha
+    mov si, cursor_save_buf
+    mov word [_csr_buf_ptr], 0      ; Row counter
+.rvs_row:
+    cmp word [_csr_buf_ptr], 28
+    jae .rvs_done
+    push cx
+    cmp bx, [screen_height]
+    jae .rvs_skip_row
+    push bp
+    mov bp, 16                      ; 16 pixels per row
+.rvs_col:
+    cmp cx, [screen_width]
+    jae .rvs_skip_pix
+    mov dl, [si]                    ; Color from save buffer
+    call vesa_plot_pixel            ; BX/CX preserved
+.rvs_skip_pix:
+    inc cx
+    inc si
+    dec bp
+    jnz .rvs_col
+    pop bp
+    jmp .rvs_row_end
+.rvs_skip_row:
+    add si, 16                      ; Skip 16 bytes in save buffer
+.rvs_row_end:
+    pop cx
+    inc bx
+    inc word [_csr_buf_ptr]
+    jmp .rvs_row
+.rvs_done:
+    popa
+    ret
+
 ; mouse_cursor_hide - Erase cursor if currently visible
 ; Safe to call even if not visible (no-op)
 ; Preserves all registers
 ; IMPORTANT: Uses PUSHF/CLI/POPF to prevent IRQ12 from interleaving
-; XOR operations, which would cause cursor ghost artifacts.
+; cursor operations, which would cause cursor ghost artifacts.
 mouse_cursor_hide:
     pushf                           ; Save interrupt state
-    cli                             ; Atomic: check + XOR + flag update
+    cli                             ; Atomic: check + erase + flag update
     cmp byte [cursor_locked], 0
-    jne .skip                       ; Skip if locked (counter > 0)
+    jne .mch_skip                   ; Skip if locked (counter > 0)
     cmp byte [cursor_visible], 0
-    je .skip
+    je .mch_skip
     push es
     push cx
     push bx
@@ -3411,29 +3689,41 @@ mouse_cursor_hide:
     mov es, ax
     mov cx, [cursor_drawn_x]
     mov bx, [cursor_drawn_y]
-    call cursor_xor_sprite          ; XOR erase at old position
+    ; Dispatch: VGA/VESA use save/restore, CGA/Mode12h use XOR
+    cmp byte [video_mode], 0x13
+    je .mch_restore_vga
+    cmp byte [video_mode], 0x01
+    je .mch_restore_vesa
+    call cursor_xor_sprite          ; CGA/Mode12h: XOR erase
+    jmp .mch_done
+.mch_restore_vga:
+    call cursor_restore_vga
+    jmp .mch_done
+.mch_restore_vesa:
+    call cursor_restore_vesa
+.mch_done:
     mov byte [cursor_visible], 0
     pop ax
     pop bx
     pop cx
     pop es
-.skip:
+.mch_skip:
     popf                            ; Restore interrupt state
     ret
 
 ; mouse_cursor_show - Draw cursor at current mouse position
 ; Preserves all registers
 ; IMPORTANT: Uses PUSHF/CLI/POPF to prevent IRQ12 from interleaving
-; XOR operations, which would cause cursor ghost artifacts.
+; cursor operations, which would cause cursor ghost artifacts.
 mouse_cursor_show:
     pushf                           ; Save interrupt state
-    cli                             ; Atomic: check + XOR + flag update
+    cli                             ; Atomic: check + draw + flag update
     cmp byte [cursor_locked], 0
-    jne .skip                       ; Skip if locked (counter > 0)
+    jne .mcs_skip                   ; Skip if locked (counter > 0)
     cmp byte [mouse_enabled], 0
-    je .skip
+    je .mcs_skip
     cmp byte [cursor_visible], 1
-    je .skip                        ; Already drawn, don't XOR again (causes erase!)
+    je .mcs_skip                    ; Already drawn, skip
     push es
     push cx
     push bx
@@ -3444,13 +3734,25 @@ mouse_cursor_show:
     mov bx, [mouse_y]
     mov [cursor_drawn_x], cx
     mov [cursor_drawn_y], bx
-    call cursor_xor_sprite          ; XOR draw at new position
+    ; Dispatch: VGA/VESA use save/restore, CGA/Mode12h use XOR
+    cmp byte [video_mode], 0x13
+    je .mcs_save_draw_vga
+    cmp byte [video_mode], 0x01
+    je .mcs_save_draw_vesa
+    call cursor_xor_sprite          ; CGA/Mode12h: XOR draw
+    jmp .mcs_done
+.mcs_save_draw_vga:
+    call cursor_save_and_draw_vga
+    jmp .mcs_done
+.mcs_save_draw_vesa:
+    call cursor_save_and_draw_vesa
+.mcs_done:
     mov byte [cursor_visible], 1
     pop ax
     pop bx
     pop cx
     pop es
-.skip:
+.mcs_skip:
     popf                            ; Restore interrupt state
     ret
 
@@ -4579,9 +4881,13 @@ menu_open:
     mov [kmenu_y], cx
     mov byte [kmenu_active], 1
 
-    ; Save and clear draw_context for absolute screen drawing
+    ; Save and clear draw_context + clip_enabled for absolute screen drawing
+    ; Without this, gfx_draw_string_inverted clips menu text against stale
+    ; window clip rect from the calling app's WIN_BEGIN_DRAW context.
     push word [draw_context]
+    push word [clip_enabled]
     mov byte [draw_context], 0xFF
+    mov byte [clip_enabled], 0
 
     ; Compute menu pixel height
     movzx si, byte [kmenu_count]
@@ -4636,7 +4942,8 @@ menu_open:
     inc cl
     jmp .mo_item_loop
 .mo_items_done:
-    ; Restore draw_context
+    ; Restore clip_enabled and draw_context
+    pop word [clip_enabled]
     pop word [draw_context]
 
     dec byte [cursor_locked]
@@ -5438,7 +5745,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2460 - ($ - $$) db 0
+times 0x2660 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -8983,16 +9290,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 82 + reserved_sectors = 83
-    mov word [fat_start], 83        ; Filesystem at sector 82 + 1 reserved
+    ; fat_start = 86 + reserved_sectors = 87
+    mov word [fat_start], 87        ; Filesystem at sector 86 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 82 + reserved + (num_fats * sectors_per_fat)
-    ; = 82 + 1 + (2 * 9) = 82 + 1 + 18 = 101
+    ; root_dir_start = 86 + reserved + (num_fats * sectors_per_fat)
+    ; = 86 + 1 + (2 * 9) = 86 + 1 + 18 = 105
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 82                      ; Filesystem starts at sector 82
-    mov [root_dir_start], ax        ; = 99
+    add ax, 86                      ; Filesystem starts at sector 86
+    mov [root_dir_start], ax        ; = 105
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -16767,6 +17074,92 @@ set_video_mode:
     dec ax
     mov [clip_y2], ax
 
+    ; Update content_scale and dimensions for all existing windows
+    push si
+    push cx
+    mov si, window_table
+    mov cx, WIN_MAX_COUNT
+.svm_win_loop:
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .svm_win_next
+    ; Determine if window should be scaled
+    cmp word [screen_width], 640
+    jb .svm_scale_down
+
+    ; --- 640x480: scale UP small windows ---
+    cmp byte [si + WIN_OFF_CONTENT_SCALE], 2
+    je .svm_win_next                ; Already scaled, skip
+    ; Only scale windows designed for 320x200 (width < 400)
+    cmp word [si + WIN_OFF_WIDTH], 400
+    jae .svm_win_next
+    ; Scale content area 2x
+    push dx
+    mov dx, [si + WIN_OFF_WIDTH]
+    sub dx, 2
+    shl dx, 1
+    add dx, 2
+    mov [si + WIN_OFF_WIDTH], dx
+    mov dx, [si + WIN_OFF_HEIGHT]
+    sub dx, WIN_TITLEBAR_HEIGHT
+    dec dx
+    shl dx, 1
+    add dx, WIN_TITLEBAR_HEIGHT
+    inc dx
+    mov [si + WIN_OFF_HEIGHT], dx
+    pop dx
+    mov byte [si + WIN_OFF_CONTENT_SCALE], 2
+    ; Center in new resolution
+    push ax
+    mov ax, [screen_width]
+    sub ax, [si + WIN_OFF_WIDTH]
+    shr ax, 1
+    mov [si + WIN_OFF_X], ax
+    mov ax, [screen_height]
+    sub ax, [si + WIN_OFF_HEIGHT]
+    shr ax, 1
+    mov [si + WIN_OFF_Y], ax
+    pop ax
+    jmp .svm_win_next
+
+.svm_scale_down:
+    ; --- 320x200: scale DOWN scaled windows ---
+    cmp byte [si + WIN_OFF_CONTENT_SCALE], 1
+    je .svm_win_next                ; Already unscaled, skip
+    ; Reverse the auto-scaling
+    push dx
+    mov dx, [si + WIN_OFF_WIDTH]
+    sub dx, 2
+    shr dx, 1
+    add dx, 2
+    mov [si + WIN_OFF_WIDTH], dx
+    mov dx, [si + WIN_OFF_HEIGHT]
+    sub dx, WIN_TITLEBAR_HEIGHT
+    dec dx
+    shr dx, 1
+    add dx, WIN_TITLEBAR_HEIGHT
+    inc dx
+    mov [si + WIN_OFF_HEIGHT], dx
+    pop dx
+    mov byte [si + WIN_OFF_CONTENT_SCALE], 1
+    ; Center in 320x200
+    push ax
+    mov ax, [screen_width]
+    sub ax, [si + WIN_OFF_WIDTH]
+    shr ax, 1
+    mov [si + WIN_OFF_X], ax
+    mov ax, [screen_height]
+    sub ax, [si + WIN_OFF_HEIGHT]
+    shr ax, 1
+    mov [si + WIN_OFF_Y], ax
+    pop ax
+
+.svm_win_next:
+    add si, WIN_ENTRY_SIZE
+    dec cx
+    jnz .svm_win_loop
+    pop cx
+    pop si
+
     ; Center mouse cursor in new resolution
     mov ax, [screen_width]
     shr ax, 1
@@ -17345,6 +17738,20 @@ win_get_info_stub:
     mov cx, [di + WIN_OFF_Y]
     mov dx, [di + WIN_OFF_WIDTH]
     mov si, [di + WIN_OFF_HEIGHT]
+
+    ; Return app-space dimensions for auto-scaled windows.
+    ; Apps think they're in a small window; the kernel scales transparently.
+    ; Reverse the auto-scaling formula to recover original dimensions:
+    ;   phys_w = (orig_w - 2) * 2 + 2  →  orig_w = (phys_w + 2) / 2
+    ;   phys_h = (orig_h - TB - 1) * 2 + TB + 1  →  orig_h = (phys_h + TB + 1) / 2
+    cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
+    jne .wgi_no_scale
+    add dx, 2
+    shr dx, 1
+    add si, WIN_TITLEBAR_HEIGHT + 1
+    shr si, 1
+.wgi_no_scale:
+
     ; Pack flags and state into DI
     mov ah, [di + WIN_OFF_FLAGS]
     mov al, [di + WIN_OFF_STATE]
@@ -18014,6 +18421,12 @@ cursor_bitmap_color:        ; 2bpp: 2 bytes/row, 14 rows, W=white c=cyan
     db 0x00, 0x14               ; .....cc.
 cursor_color:   db 0            ; Scratch for cursor sprite
 
+; Save/restore cursor background buffer (max 16×28=448 bytes for VESA 2x)
+cursor_save_buf:    times 448 db 0
+_csr_bmp_16:        dw 0            ; VESA: current bitmap row (16-bit)
+_csr_buf_ptr:       dw 0            ; VESA: pointer into save buffer
+_csr_row_off:       dw 0            ; VGA: precomputed VRAM row offset
+
 ; Window drag state
 drag_active:        db 0            ; 1 = currently dragging a window
 drag_window:        db 0            ; Window handle being dragged (0-15)
@@ -18073,9 +18486,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 83                    ; Absolute FAT sector = filesystem_start(82) + reserved(1)
-root_dir_start: dw 101              ; Calculated: 82 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 115             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 87                    ; Absolute FAT sector = filesystem_start(86) + reserved(1)
+root_dir_start: dw 105              ; Calculated: 86 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 119             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -18306,5 +18719,5 @@ fdlg_str_cancel:    db 'Cancel', 0
 ; Padding
 ; ============================================================================
 
-; Pad to 38KB (76 sectors) - expanded for content scaling (Build 309)
-times 38912 - ($ - $$) db 0
+; Pad to 40KB (80 sectors) - expanded for cursor save/restore (Build 311)
+times 40960 - ($ - $$) db 0
