@@ -13557,47 +13557,25 @@ win_create_stub:
     mov [.save_title], di
     mov [.save_flags], al
 
-    ; Auto-scale and center windows in 640x480 modes if designed for 320x200
-    mov byte [.save_scale], 1        ; Default: no content scaling
+    ; Auto-center windows in hi-res modes (no content scaling — text can't scale)
+    mov byte [.save_scale], 1        ; Always 1: no content scaling
     cmp word [screen_width], 640
     jb .no_autocenter
-    ; Check if window fits within 320x200 bounds (designed for small screen)
     cmp dx, 400                      ; Width < 400 → designed for 320x200
     jae .no_autocenter
     cmp si, 300                      ; Height < 300 → designed for 320x200
     jae .no_autocenter
-    ; Scale content area exactly 2x so app coordinates map perfectly.
-    ; Content = (W-2, H-TITLEBAR-1). New W = content*2 + borders.
-    sub dx, 2                        ; content_w = W - left/right borders
-    shl dx, 1                        ; content_w * 2
-    add dx, 2                        ; + borders back
-    sub si, WIN_TITLEBAR_HEIGHT
-    dec si                           ; content_h = H - titlebar - bottom border
-    shl si, 1                        ; content_h * 2
-    add si, WIN_TITLEBAR_HEIGHT
-    inc si                           ; + titlebar + bottom border back
-    mov byte [.save_scale], 2        ; Mark: content coordinates get 2x scaling
-    ; Clamp to screen bounds
-    cmp dx, [screen_width]
-    jbe .scale_w_ok
-    mov dx, [screen_width]
-.scale_w_ok:
-    cmp si, [screen_height]
-    jbe .scale_h_ok
-    mov si, [screen_height]
-.scale_h_ok:
-    mov [.save_w], dx
-    mov [.save_h], si
-    ; Center horizontally: X = (screen_width - width) / 2
+    ; Center window at its original size (don't scale dimensions)
+    push ax
     mov ax, [screen_width]
     sub ax, dx
     shr ax, 1
     mov [.save_x], ax
-    ; Center vertically: Y = (screen_height - height) / 2
     mov ax, [screen_height]
     sub ax, si
     shr ax, 1
     mov [.save_y], ax
+    pop ax
 .no_autocenter:
 
     ; Find free window slot
@@ -17073,7 +17051,7 @@ set_video_mode:
     dec ax
     mov [clip_y2], ax
 
-    ; Update content_scale and dimensions for all existing windows
+    ; Recenter all existing windows for the new resolution (no scaling)
     push si
     push cx
     mov si, window_table
@@ -17081,50 +17059,9 @@ set_video_mode:
 .svm_win_loop:
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .svm_win_next
-    ; Determine if window should be scaled
-    cmp word [screen_width], 640
-    jb .svm_scale_down
-
-    ; --- 640x480: scale UP small windows ---
+    ; If window was previously scaled (from older build), reverse it
     cmp byte [si + WIN_OFF_CONTENT_SCALE], 2
-    je .svm_win_next                ; Already scaled, skip
-    ; Only scale windows designed for 320x200 (width < 400)
-    cmp word [si + WIN_OFF_WIDTH], 400
-    jae .svm_win_next
-    ; Scale content area 2x
-    push dx
-    mov dx, [si + WIN_OFF_WIDTH]
-    sub dx, 2
-    shl dx, 1
-    add dx, 2
-    mov [si + WIN_OFF_WIDTH], dx
-    mov dx, [si + WIN_OFF_HEIGHT]
-    sub dx, WIN_TITLEBAR_HEIGHT
-    dec dx
-    shl dx, 1
-    add dx, WIN_TITLEBAR_HEIGHT
-    inc dx
-    mov [si + WIN_OFF_HEIGHT], dx
-    pop dx
-    mov byte [si + WIN_OFF_CONTENT_SCALE], 2
-    ; Center in new resolution
-    push ax
-    mov ax, [screen_width]
-    sub ax, [si + WIN_OFF_WIDTH]
-    shr ax, 1
-    mov [si + WIN_OFF_X], ax
-    mov ax, [screen_height]
-    sub ax, [si + WIN_OFF_HEIGHT]
-    shr ax, 1
-    mov [si + WIN_OFF_Y], ax
-    pop ax
-    jmp .svm_win_next
-
-.svm_scale_down:
-    ; --- 320x200: scale DOWN scaled windows ---
-    cmp byte [si + WIN_OFF_CONTENT_SCALE], 1
-    je .svm_win_next                ; Already unscaled, skip
-    ; Reverse the auto-scaling
+    jne .svm_no_reverse
     push dx
     mov dx, [si + WIN_OFF_WIDTH]
     sub dx, 2
@@ -17140,7 +17077,8 @@ set_video_mode:
     mov [si + WIN_OFF_HEIGHT], dx
     pop dx
     mov byte [si + WIN_OFF_CONTENT_SCALE], 1
-    ; Center in 320x200
+.svm_no_reverse:
+    ; Center window in new resolution
     push ax
     mov ax, [screen_width]
     sub ax, [si + WIN_OFF_WIDTH]
@@ -17151,7 +17089,6 @@ set_video_mode:
     shr ax, 1
     mov [si + WIN_OFF_Y], ax
     pop ax
-
 .svm_win_next:
     add si, WIN_ENTRY_SIZE
     dec cx
