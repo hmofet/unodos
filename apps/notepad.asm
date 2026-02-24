@@ -461,6 +461,18 @@ entry:
     call buf_insert_char
     inc word [cs:cursor_col]
 
+    ; Auto-wrap: if cursor reached end of visible line, insert newline
+    push ax
+    mov ax, [cs:cursor_col]
+    cmp ax, [cs:vis_cols]
+    pop ax
+    jb .type_no_wrap
+    mov dl, 0x0A
+    call buf_insert_char
+    mov byte [cs:needs_redraw], 2
+    jmp .check_event
+.type_no_wrap:
+
     ; Check if typing at end of line (fast path)
     mov bx, [cs:cursor_pos]
     cmp bx, [cs:text_len]
