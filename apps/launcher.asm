@@ -124,6 +124,15 @@ entry:
 .mode_changed:
     mov [cs:scr_width], bx
     mov [cs:scr_height], cx
+    ; Don't repaint desktop if a fullscreen app triggered the mode change
+    push bx
+    push cx
+    mov ah, API_GET_TASK_INFO
+    int 0x80
+    cmp cl, 1                       ; Only launcher running?
+    pop cx
+    pop bx
+    ja .no_mode_change              ; Other tasks running — skip repaint
     call setup_layout
     call register_all_icons
     call redraw_desktop
