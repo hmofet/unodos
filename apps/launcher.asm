@@ -913,16 +913,8 @@ redraw_desktop:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Version at bottom-left (screen_height - 10)
+    ; Build number at bottom-left
     mov bx, 4
-    mov cx, [cs:scr_height]
-    sub cx, 10
-    mov si, VERSION_STR
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Build number at bottom-right area
-    mov bx, 200
     mov cx, [cs:scr_height]
     sub cx, 10
     mov si, BUILD_NUMBER_STR
@@ -1530,8 +1522,8 @@ update_diag:
     add al, '0'
     mov [cs:diag_str + 6], al       ; S:Y
 
-    ; Clear the diag area first (right of build string)
-    mov bx, 270
+    ; Clear the diag area first (after build string at bottom-left)
+    mov bx, 76
     mov cx, [cs:scr_height]
     sub cx, 10
     mov dx, 50
@@ -1540,7 +1532,7 @@ update_diag:
     int 0x80
 
     ; Draw diag string
-    mov bx, 270
+    mov bx, 76
     mov cx, [cs:scr_height]
     sub cx, 10
     mov si, diag_str
