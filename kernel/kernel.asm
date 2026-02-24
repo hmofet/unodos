@@ -223,7 +223,7 @@ int_80_handler:
     inc bx
     ; content_y = win_y + titlebar height (below title bar)
     add cx, [si + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT
+    add cx, [titlebar_height]
 
     ; --- Z-order clipping: only topmost window can draw to screen ---
     ; Background apps keep running but their draws are silently dropped.
@@ -330,7 +330,7 @@ int_80_handler:
     add dx, [di + WIN_OFF_X]
     inc dx
     add si, [di + WIN_OFF_Y]
-    add si, WIN_TITLEBAR_HEIGHT
+    add si, [titlebar_height]
     pop ax
     pop di
     jmp .no_translate
@@ -1329,7 +1329,7 @@ win_begin_draw:
     mov [clip_x1], bx
     ; clip_y1 = win_y + TITLEBAR_HEIGHT
     mov bx, [si + WIN_OFF_Y]
-    add bx, WIN_TITLEBAR_HEIGHT
+    add bx, [titlebar_height]
     mov [clip_y1], bx
     ; clip_x2 = win_x + win_w - 2 (inside right border)
     mov bx, [si + WIN_OFF_X]
@@ -3834,7 +3834,7 @@ mouse_hittest_titlebar:
     jz .no_hit
 
     mov ax, [di + WIN_OFF_Y]
-    add ax, WIN_TITLEBAR_HEIGHT
+    add ax, [titlebar_height]
     cmp dx, ax                      ; mouse_y < window_y + titlebar_height?
     jae .no_hit                     ; Click is in body, not title bar
 
@@ -4277,11 +4277,11 @@ mouse_process_drag:
     mov bx, [si + WIN_OFF_X]
     inc bx                          ; Inside left border
     mov cx, [si + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    add cx, [titlebar_height]     ; Below title bar
     mov dx, [si + WIN_OFF_WIDTH]
     sub dx, 2                       ; Inside both borders
     mov di, [si + WIN_OFF_HEIGHT]
-    sub di, WIN_TITLEBAR_HEIGHT
+    sub di, [titlebar_height]
     dec di                          ; Above bottom border
     mov si, di                      ; SI = height
     call gfx_clear_area_stub
@@ -7497,7 +7497,7 @@ widget_hit_test:
     add bx, [di + WIN_OFF_X]
     inc bx
     add cx, [di + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT
+    add cx, [titlebar_height]
     pop ax
 .ht_abs:
     ; Now BX=abs_x, CX=abs_y, DX=width, SI=height
@@ -13735,11 +13735,11 @@ win_create_stub:
     inc ax                          ; Inside left border
     push ax                         ; Save content X
     mov cx, [bx + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    add cx, [titlebar_height]     ; Below title bar
     mov dx, [bx + WIN_OFF_WIDTH]
     sub dx, 2                       ; Inside both borders
     mov si, [bx + WIN_OFF_HEIGHT]
-    sub si, WIN_TITLEBAR_HEIGHT
+    sub si, [titlebar_height]
     dec si                          ; Above bottom border
     pop bx                          ; BX = content X
     call gfx_clear_area_stub
@@ -14622,7 +14622,7 @@ redraw_affected_windows:
 .raw_cl_ok:
     ; Clip top = max(content_top, rect_top)
     mov cx, [si + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; CX = content top
+    add cx, [titlebar_height]     ; CX = content top
     mov ax, [redraw_old_y]
     cmp ax, cx
     jle .raw_ct_ok
@@ -14721,7 +14721,7 @@ redraw_affected_windows:
     mov bx, ax
 .top_cl_ok:
     mov cx, [si + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT
+    add cx, [titlebar_height]
     mov ax, [redraw_old_y]
     cmp ax, cx
     jle .top_ct_ok
@@ -15907,13 +15907,25 @@ win_draw_stub:
     mov si, [bx + WIN_OFF_WIDTH]
     mov di, [bx + WIN_OFF_HEIGHT]
 
-    ; Force font 1 (8x8) for titlebar text — large font (8x12) overflows 10px titlebar
+    ; Choose titlebar font based on resolution
     mov al, [current_font]
     mov [.saved_font], al
+    cmp word [titlebar_height], 14
+    jae .use_tb_font2
+    ; Lo-res: force font 1 (8x8) — fits in 10px titlebar
     cmp al, 1
     je .font_ok
     push ax
     mov al, 1
+    call gfx_set_font
+    pop ax
+    jmp .font_ok
+.use_tb_font2:
+    ; Hi-res: use font 2 (8x14) — fits in 18px titlebar
+    cmp al, 2
+    je .font_ok
+    push ax
+    mov al, 2
     call gfx_set_font
     pop ax
 .font_ok:
@@ -15931,7 +15943,7 @@ win_draw_stub:
     mov bx, cx                      ; BX = X
     mov cx, dx                      ; CX = Y
     mov dx, si                      ; DX = Width
-    mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
+    mov si, [titlebar_height]     ; SI = Height (10)
     cmp byte [widget_style], 0
     je .active_flat_fill
     mov al, SYS_TITLE_ACTIVE
@@ -16008,7 +16020,7 @@ win_draw_stub:
     mov bx, cx                      ; BX = X
     mov cx, dx                      ; CX = Y
     mov dx, si                      ; DX = Width
-    mov si, WIN_TITLEBAR_HEIGHT     ; SI = Height (10)
+    mov si, [titlebar_height]     ; SI = Height (10)
     cmp byte [widget_style], 0
     je .inactive_flat_fill
     mov al, SYS_TITLE_INACT
@@ -16349,11 +16361,11 @@ win_move_stub:
     mov bx, [.new_x]
     inc bx                          ; Inside left border
     mov cx, [.new_y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    add cx, [titlebar_height]     ; Below title bar
     mov dx, [.win_w]
     sub dx, 2                       ; Inside both borders
     mov si, [.win_h]
-    sub si, WIN_TITLEBAR_HEIGHT
+    sub si, [titlebar_height]
     dec si                          ; Above bottom border
     call gfx_clear_area_stub
 
@@ -16459,11 +16471,11 @@ win_move_stub:
     mov bx, [.new_x]
     inc bx                          ; Inside left border
     mov cx, [.new_y]
-    add cx, WIN_TITLEBAR_HEIGHT     ; Below title bar
+    add cx, [titlebar_height]     ; Below title bar
     mov dx, [.win_w]
     sub dx, 2                       ; Inside both borders
     mov si, [.win_h]
-    sub si, WIN_TITLEBAR_HEIGHT
+    sub si, [titlebar_height]
     dec si                          ; Above bottom border
     call gfx_clear_area_stub
 
@@ -16525,7 +16537,7 @@ win_get_content_stub:
 
     ; Content Y = Window Y + titlebar + 1 (border)
     mov cx, [di + WIN_OFF_Y]
-    add cx, WIN_TITLEBAR_HEIGHT
+    add cx, [titlebar_height]
     inc cx
 
     ; Content Width = Window Width - 2 (borders)
@@ -16534,7 +16546,7 @@ win_get_content_stub:
 
     ; Content Height = Window Height - titlebar - 2 (borders)
     mov si, [di + WIN_OFF_HEIGHT]
-    sub si, WIN_TITLEBAR_HEIGHT
+    sub si, [titlebar_height]
     sub si, 2
 
     clc
@@ -17037,6 +17049,13 @@ set_video_mode:
 .svm_setup:
     call setup_graphics_post_mode
 
+    ; Set dynamic titlebar height based on resolution
+    mov word [titlebar_height], 10
+    cmp word [screen_width], 640
+    jb .svm_tb_done
+    mov word [titlebar_height], 18
+.svm_tb_done:
+
     ; Reinit draw colors from theme
     mov al, [text_color]
     mov [draw_fg_color], al
@@ -17069,10 +17088,10 @@ set_video_mode:
     add dx, 2
     mov [si + WIN_OFF_WIDTH], dx
     mov dx, [si + WIN_OFF_HEIGHT]
-    sub dx, WIN_TITLEBAR_HEIGHT
+    sub dx, [titlebar_height]
     dec dx
     shr dx, 1
-    add dx, WIN_TITLEBAR_HEIGHT
+    add dx, [titlebar_height]
     inc dx
     mov [si + WIN_OFF_HEIGHT], dx
     pop dx
@@ -17684,7 +17703,8 @@ win_get_info_stub:
     jne .wgi_no_scale
     add dx, 2
     shr dx, 1
-    add si, WIN_TITLEBAR_HEIGHT + 1
+    add si, [titlebar_height]
+    inc si
     shr si, 1
 .wgi_no_scale:
 
@@ -18259,6 +18279,7 @@ screen_height:  dw 200                 ; Current screen height in pixels
 screen_bpp:     db 2                   ; Bits per pixel (2=CGA, 4=Mode12h, 8=VGA13h/VESA)
 screen_pitch:   dw 80                  ; Bytes per scanline (80=CGA, 320=VGA13h, 640=VESA)
 widget_style:   db 0                   ; 0=flat (CGA), 1=3D beveled (VGA modes)
+titlebar_height: dw 10                 ; Dynamic titlebar height (10=lo-res, 18=hi-res)
 vesa_gran:      dw 64                  ; VESA window granularity in KB
 vesa_cur_bank:  dw 0xFFFF              ; Current VESA bank (0xFFFF = invalid/unset)
 
