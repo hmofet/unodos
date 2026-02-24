@@ -157,8 +157,6 @@ entry:
 .has_apps:
     mov byte [cs:had_apps], 1
 .no_repaint_needed:
-    ; Always update diagnostic display (debug)
-    call update_diag
     mov bl, [cs:diag_focused]
     mov cl, [cs:diag_tasks]
     cmp bl, 0xFF
