@@ -3072,15 +3072,15 @@ cga_pixel_calc:
     ret
 
 plot_pixel_white:
-    cmp cx, [screen_width]
+    cmp cx, [cs:screen_width]
     jae .out
-    cmp bx, [screen_height]
+    cmp bx, [cs:screen_height]
     jae .out
-    cmp byte [video_mode], 0x01
+    cmp byte [cs:video_mode], 0x01
     je .vesa
-    cmp byte [video_mode], 0x12
+    cmp byte [cs:video_mode], 0x12
     je .mode12h
-    cmp byte [video_mode], 0x13
+    cmp byte [cs:video_mode], 0x13
     je .vga
     push ax
     push bx
@@ -3089,7 +3089,7 @@ plot_pixel_white:
     push dx
     call cga_pixel_calc
     mov al, [es:di]
-    mov ah, [draw_fg_color]
+    mov ah, [cs:draw_fg_color]
     shl ah, cl
     mov bl, 0x03
     shl bl, cl
@@ -3109,10 +3109,10 @@ plot_pixel_white:
     push dx
     push di
     mov ax, bx
-    mul word [screen_pitch]            ; AX = Y * pitch (DX:AX, DX ignored for 16-bit)
+    mul word [cs:screen_pitch]         ; AX = Y * pitch (DX:AX, DX ignored for 16-bit)
     add ax, cx                         ; AX = Y * pitch + X
     mov di, ax
-    mov al, [draw_fg_color]
+    mov al, [cs:draw_fg_color]
     mov [es:di], al
     pop di
     pop dx
@@ -3120,13 +3120,13 @@ plot_pixel_white:
     ret
 .mode12h:
     push dx
-    mov dl, [draw_fg_color]
+    mov dl, [cs:draw_fg_color]
     call mode12h_plot_pixel
     pop dx
     ret
 .vesa:
     push dx
-    mov dl, [draw_fg_color]
+    mov dl, [cs:draw_fg_color]
     call vesa_plot_pixel
     pop dx
     ret
@@ -3138,15 +3138,15 @@ plot_pixel_white:
 ; ============================================================================
 
 plot_pixel_black:
-    cmp cx, [screen_width]
+    cmp cx, [cs:screen_width]
     jae .out
-    cmp bx, [screen_height]
+    cmp bx, [cs:screen_height]
     jae .out
-    cmp byte [video_mode], 0x01
+    cmp byte [cs:video_mode], 0x01
     je .vesa
-    cmp byte [video_mode], 0x12
+    cmp byte [cs:video_mode], 0x12
     je .mode12h
-    cmp byte [video_mode], 0x13
+    cmp byte [cs:video_mode], 0x13
     je .vga
     push ax
     push bx
@@ -3172,7 +3172,7 @@ plot_pixel_black:
     push dx
     push di
     mov ax, bx
-    mul word [screen_pitch]
+    mul word [cs:screen_pitch]
     add ax, cx
     mov di, ax
     mov byte [es:di], 0             ; Color 0 = black
@@ -5698,28 +5698,28 @@ gfx_draw_sprite:
     mov [_spr_width], dh
     ; Swap to draw convention: BX=Y, CX=X
     xchg bx, cx
-    ; ES = CGA video segment
+    ; ES = video segment
     mov ax, [video_segment]
     mov es, ax
     ; Cursor protection (DS=0x1000)
     call mouse_cursor_hide
     inc byte [cursor_locked]
-    ; Switch DS to caller_ds for bitmap reading
-    push ds
-    mov ax, [caller_ds]
-    mov ds, ax
-    ; Draw loop
-    movzx bp, byte [cs:_spr_height]
+    ; Draw loop — DS stays 0x1000, switch to caller_ds only for lodsb
+    movzx bp, byte [_spr_height]
 .spr_row:
+    ; Read bitmap byte from caller's segment (brief DS switch)
+    push ds
+    mov ds, [cs:caller_ds]
     lodsb                           ; AL = bitmap byte from caller_ds:SI
+    pop ds                          ; DS back to 0x1000 for plot_pixel_color
     mov ah, al
     push cx                         ; save base X
-    movzx di, byte [cs:_spr_width]
+    movzx di, byte [_spr_width]
 .spr_col:
     test ah, 0x80                   ; check leftmost bit
     jz .spr_skip
     push dx
-    mov dl, [cs:_spr_color]
+    mov dl, [_spr_color]
     call plot_pixel_color           ; CX=X, BX=Y, DL=color, ES=video segment
     pop dx
 .spr_skip:
@@ -5731,8 +5731,7 @@ gfx_draw_sprite:
     inc bx                          ; next Y row
     dec bp
     jnz .spr_row
-    ; Restore kernel DS, cursor
-    pop ds
+    ; Restore cursor
     dec byte [cursor_locked]
     call mouse_cursor_show
     pop es
@@ -5927,7 +5926,7 @@ gfx_draw_pixel_stub:
     inc byte [cursor_locked]
     push es
     push dx
-    mov dx, [video_segment]
+    mov dx, [cs:video_segment]
     mov es, dx
     xchg bx, cx                    ; plot_pixel_color wants CX=X, BX=Y
     mov dl, al                     ; DL = color (0-3)
@@ -6124,15 +6123,15 @@ gfx_get_font_metrics:
 ; Preserves all registers except flags
 ; ============================================================================
 plot_pixel_color:
-    cmp cx, [screen_width]
+    cmp cx, [cs:screen_width]
     jae .ppc_out
-    cmp bx, [screen_height]
+    cmp bx, [cs:screen_height]
     jae .ppc_out
-    cmp byte [video_mode], 0x01
+    cmp byte [cs:video_mode], 0x01
     je .ppc_vesa
-    cmp byte [video_mode], 0x12
+    cmp byte [cs:video_mode], 0x12
     je .ppc_mode12h
-    cmp byte [video_mode], 0x13
+    cmp byte [cs:video_mode], 0x13
     je .ppc_vga
     push ax
     push bx
@@ -6165,7 +6164,7 @@ plot_pixel_color:
     push di
     push dx                            ; Save DL (color) before mul clobbers DX
     mov ax, bx
-    mul word [screen_pitch]            ; AX = Y * pitch
+    mul word [cs:screen_pitch]         ; AX = Y * pitch
     add ax, cx                         ; AX = Y * pitch + X
     mov di, ax
     pop dx                             ; Restore DL (color)
@@ -8091,11 +8090,11 @@ gfx_clear_area_stub:
     test si, si
     jz .early_ret
 
-    cmp byte [video_mode], 0x01
+    cmp byte [cs:video_mode], 0x01
     je .vesa_clear
-    cmp byte [video_mode], 0x12
+    cmp byte [cs:video_mode], 0x12
     je .mode12h_clear
-    cmp byte [video_mode], 0x13
+    cmp byte [cs:video_mode], 0x13
     je .vga_clear
 
     call mouse_cursor_hide
@@ -8109,7 +8108,7 @@ gfx_clear_area_stub:
     push dx
     push si
 
-    mov ax, [video_segment]
+    mov ax, [cs:video_segment]
     mov es, ax
     mov bp, si                      ; BP = height counter
 
@@ -8323,7 +8322,7 @@ gfx_clear_area_stub:
     push si
     push di
 
-    mov ax, [video_segment]
+    mov ax, [cs:video_segment]
     mov es, ax
     ; BX=X, CX=Y, DX=width, SI=height
 .vga_clear_row:
@@ -8331,7 +8330,7 @@ gfx_clear_area_stub:
     ; DI = Y * screen_pitch + X
     mov ax, cx
     push dx
-    mul word [screen_pitch]
+    mul word [cs:screen_pitch]
     pop dx
     add ax, bx
     mov di, ax                      ; DI = Y*pitch + X
@@ -16769,7 +16768,7 @@ gfx_draw_line:
     push bp
 
     mov [cs:.bl_color], al
-    mov ax, [video_segment]
+    mov ax, [cs:video_segment]
     mov es, ax
 
     ; Store endpoints: X1=BX, Y1=CX, X2=DX, Y2=SI
