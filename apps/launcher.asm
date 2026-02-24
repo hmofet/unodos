@@ -157,11 +157,8 @@ entry:
 .has_apps:
     mov byte [cs:had_apps], 1
 .no_repaint_needed:
-    ; Update diagnostic display when only launcher is running
-    cmp byte [cs:diag_tasks], 1
-    ja .skip_diag
+    ; Always update diagnostic display (debug)
     call update_diag
-.skip_diag:
     mov bl, [cs:diag_focused]
     mov cl, [cs:diag_tasks]
     cmp bl, 0xFF
