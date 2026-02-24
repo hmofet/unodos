@@ -1511,6 +1511,19 @@ update_diag:
     mov ah, API_GET_TASK_INFO
     int 0x80
 
+    ; Only redraw if values changed (avoid drawing overhead / mouse race)
+    mov al, cl
+    add al, '0'
+    cmp al, [cs:diag_str + 2]
+    jne .diag_changed
+    mov al, ch
+    add al, '0'
+    cmp al, [cs:diag_str + 6]
+    jne .diag_changed
+    popa
+    ret                             ; No change — skip drawing
+
+.diag_changed:
     ; Format diag string: "T:X S:Y"
     mov al, cl
     add al, '0'
