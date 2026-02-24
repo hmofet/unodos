@@ -13704,7 +13704,6 @@ win_create_stub:
     mov byte [es:di], 0             ; Null terminate in kernel segment
 
     pop ds                          ; Restore kernel DS
-    pop ds                          ; Balance push ds from line 2941
 
     ; Full z-order repaint of new window area: ensures background windows
     ; overlapping this area have their frames properly drawn (painter's algorithm).
