@@ -1787,6 +1787,20 @@ auto_load_launcher:
     call gfx_draw_string_stub
 
 .failed:
+    ; Show diagnostic info: task count + free segment count
+    mov word [caller_ds], 0x1000
+    call get_task_info              ; CL=running tasks, CH=free segs
+    mov al, cl
+    add al, '0'
+    mov [.diag_buf + 2], al        ; T:X
+    mov al, ch
+    add al, '0'
+    mov [.diag_buf + 6], al        ; S:Y
+    mov bx, 4
+    mov cx, 40
+    mov si, .diag_buf
+    call gfx_draw_string_stub
+
     ; On any error, fall through to keyboard demo
     pop si
     pop dx
@@ -1801,6 +1815,7 @@ auto_load_launcher:
 .err_code_str:  db '?', 0
 .err_start_msg: db 'ERR: app_start failed', 0
 .err_sched_msg: db 'ERR: scheduler failed', 0
+.diag_buf:      db 'T:0 S:0', 0
 
 ; ============================================================================
 ; Load saved settings from SETTINGS.CFG on boot drive
@@ -5750,7 +5765,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2660 - ($ - $$) db 0
+times 0x2680 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -17217,7 +17232,8 @@ delay_ticks:
 
 ; get_task_info - Current task and focus info (API 74)
 ; Input: none
-; Output: AL=current_task_id, BL=focused_task_id, CL=running_task_count, CF=0
+; Output: AL=current_task_id, BL=focused_task_id, CL=running_task_count,
+;         CH=free_segment_count, CF=0
 get_task_info:
     mov al, [current_task]
     mov bl, [focused_task]
@@ -17230,7 +17246,7 @@ get_task_info:
     mov di, app_table
 .gti_loop:
     cmp si, APP_MAX_COUNT
-    jae .gti_done
+    jae .gti_count_segs
     cmp byte [di + APP_OFF_STATE], APP_STATE_FREE
     je .gti_next
     inc cl
@@ -17238,6 +17254,19 @@ get_task_info:
     add di, APP_ENTRY_SIZE
     inc si
     jmp .gti_loop
+.gti_count_segs:
+    ; Count free segments
+    xor ch, ch                      ; CH = free segment count
+    xor si, si
+.gti_seg_loop:
+    cmp si, APP_NUM_USER_SEGS
+    jae .gti_done
+    cmp byte [segment_owner + si], 0xFF
+    jne .gti_seg_next
+    inc ch
+.gti_seg_next:
+    inc si
+    jmp .gti_seg_loop
 .gti_done:
     pop di
     pop si

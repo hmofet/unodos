@@ -141,19 +141,29 @@ entry:
     ; Skip input if a fullscreen app is running (no windows, but other tasks exist)
     mov ah, API_GET_TASK_INFO
     int 0x80
-    ; BL=focused_task, CL=running_count
+    ; BL=focused_task, CL=running_count, CH=free_segments
+    mov [cs:diag_tasks], cl
+    mov [cs:diag_segs], ch
+    mov [cs:diag_focused], bl
     ; Detect when all user apps have closed: repaint desktop once
     cmp cl, 1
     ja .has_apps
     cmp byte [cs:had_apps], 0
     je .no_repaint_needed
     mov byte [cs:had_apps], 0
-    call redraw_desktop
+    call redraw_desktop             ; includes update_diag
     call repaint_all_windows
     jmp .no_repaint_needed
 .has_apps:
     mov byte [cs:had_apps], 1
 .no_repaint_needed:
+    ; Update diagnostic display when only launcher is running
+    cmp byte [cs:diag_tasks], 1
+    ja .skip_diag
+    call update_diag
+.skip_diag:
+    mov bl, [cs:diag_focused]
+    mov cl, [cs:diag_tasks]
     cmp bl, 0xFF
     jne .input_ok                   ; A window has focus — desktop clicks still valid
     cmp cl, 1
@@ -919,6 +929,8 @@ redraw_desktop:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    call update_diag
+
     call draw_all_icons
 
     popa
@@ -1500,6 +1512,45 @@ read_bios_ticks:
     ret
 
 ; ============================================================================
+; update_diag - Query task/segment info and draw diagnostic on screen
+; Shows "T:X S:Y" where X=running tasks, Y=free segments
+; ============================================================================
+update_diag:
+    pusha
+
+    ; Query task info: CL=running_tasks, CH=free_segments
+    mov ah, API_GET_TASK_INFO
+    int 0x80
+
+    ; Format diag string: "T:X S:Y"
+    mov al, cl
+    add al, '0'
+    mov [cs:diag_str + 2], al       ; T:X
+    mov al, ch
+    add al, '0'
+    mov [cs:diag_str + 6], al       ; S:Y
+
+    ; Clear the diag area first (right of build string)
+    mov bx, 270
+    mov cx, [cs:scr_height]
+    sub cx, 10
+    mov dx, 50
+    mov si, 10
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
+
+    ; Draw diag string
+    mov bx, 270
+    mov cx, [cs:scr_height]
+    sub cx, 10
+    mov si, diag_str
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    popa
+    ret
+
+; ============================================================================
 ; fast_clear_screen - Clear entire CGA screen using REP STOSW
 ; Clears both interlace banks (16KB at 0xB800) in microseconds.
 ; Much faster than pixel-by-pixel API_GFX_CLEAR_AREA on real hardware.
@@ -1535,6 +1586,7 @@ no_apps_msg:    db 'No apps found', 0
 load_error_msg: db 'Load err: ', 0
 insert_disk_msg: db 'Insert app disk', 0
 la_errcode:     db 0
+diag_str:       db 'T:0 S:0', 0        ; Tasks / free Segments diagnostic
 
 ; Drive and scan state
 mounted_drive:  db 0
@@ -1548,6 +1600,11 @@ selected_icon:  db 0xFF
 
 ; App state tracking
 had_apps:       db 0                ; 1 if user apps were running (for repaint detection)
+
+; Diagnostic state
+diag_tasks:     db 0
+diag_segs:      db 0
+diag_focused:   db 0
 
 ; Mouse state
 prev_buttons:   db 0
