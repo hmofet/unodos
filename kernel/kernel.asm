@@ -2294,7 +2294,7 @@ vga_palette_data:
     db 63, 21, 21                   ; 12: Light Red
     db 63, 21, 63                   ; 13: Light Magenta
     db 63, 63, 21                   ; 14: Yellow
-    db 42, 21,  0                   ; 15: Brown
+    db 63, 63, 63                   ; 15: Bright White (cursor + VGA standard)
     ; System widget colors (16-31) for 3D UI chrome
     db 48, 48, 48                   ; 16: Button Face (light gray)
     db 63, 63, 63                   ; 17: Button Highlight (white)
@@ -4275,16 +4275,22 @@ mouse_process_drag:
     add si, window_table
 
     mov bx, [si + WIN_OFF_X]
-    inc bx                          ; Inside left border
     mov cx, [si + WIN_OFF_Y]
-    add cx, [titlebar_height]     ; Below title bar
     mov dx, [si + WIN_OFF_WIDTH]
-    sub dx, 2                       ; Inside both borders
     mov di, [si + WIN_OFF_HEIGHT]
+    test byte [si + WIN_OFF_FLAGS], WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    jz .focus_clear_frameless
+    inc bx                          ; Inside left border
+    add cx, [titlebar_height]       ; Below title bar
+    sub dx, 2                       ; Inside both borders
     sub di, [titlebar_height]
     dec di                          ; Above bottom border
+.focus_clear_frameless:
     mov si, di                      ; SI = height
+    test si, si
+    jz .focus_skip_clear
     call gfx_clear_area_stub
+.focus_skip_clear:
 
     ; Post redraw event so the app redraws content
     mov al, EVENT_WIN_REDRAW
@@ -13732,17 +13738,22 @@ win_create_stub:
     mov ds, ax
     mov bx, [.slot_off]
     mov ax, [bx + WIN_OFF_X]
-    inc ax                          ; Inside left border
-    push ax                         ; Save content X
     mov cx, [bx + WIN_OFF_Y]
-    add cx, [titlebar_height]     ; Below title bar
     mov dx, [bx + WIN_OFF_WIDTH]
-    sub dx, 2                       ; Inside both borders
     mov si, [bx + WIN_OFF_HEIGHT]
+    test byte [bx + WIN_OFF_FLAGS], WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    jz .create_clear_frameless
+    inc ax                          ; Inside left border
+    add cx, [titlebar_height]       ; Below title bar
+    sub dx, 2                       ; Inside both borders
     sub si, [titlebar_height]
     dec si                          ; Above bottom border
-    pop bx                          ; BX = content X
+.create_clear_frameless:
+    mov bx, ax                      ; BX = X
+    test si, si
+    jz .create_skip_clear
     call gfx_clear_area_stub
+.create_skip_clear:
     pop ds
 
     ; Return handle
@@ -16361,13 +16372,16 @@ win_move_stub:
     mov bx, [.new_x]
     inc bx                          ; Inside left border
     mov cx, [.new_y]
-    add cx, [titlebar_height]     ; Below title bar
+    add cx, [titlebar_height]       ; Below title bar
     mov dx, [.win_w]
     sub dx, 2                       ; Inside both borders
     mov si, [.win_h]
     sub si, [titlebar_height]
     dec si                          ; Above bottom border
+    test si, si
+    jz .skip_drag_clear1
     call gfx_clear_area_stub
+.skip_drag_clear1:
 
     ; Calculate deltas: dx = new_x - old_x, dy = new_y - old_y
     mov ax, [.new_x]
@@ -16477,7 +16491,10 @@ win_move_stub:
     mov si, [.win_h]
     sub si, [titlebar_height]
     dec si                          ; Above bottom border
+    test si, si
+    jz .skip_drag_clear2
     call gfx_clear_area_stub
+.skip_drag_clear2:
 
     clc
     jmp .done
