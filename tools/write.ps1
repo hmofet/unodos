@@ -488,9 +488,12 @@ try {
                             Write-At 3 $pullRow "Git pull failed!" Red
                         }
                         Start-Sleep -Milliseconds 1500
-                        $imageInfos = $null
-                        $navScreen = "image"
-                        $screenDone = $true
+                        # Relaunch script so it picks up any updated code from git
+                        [Console]::CursorVisible = $origCursorVisible
+                        [Console]::ForegroundColor = $origFG
+                        [Console]::BackgroundColor = $origBG
+                        & "$scriptDir\write.ps1"
+                        exit 0
                     }
                 }
             }
