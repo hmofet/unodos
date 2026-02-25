@@ -1,8 +1,10 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 333: PIC mask diagnostic + force fix.
-; Theory: multi-cluster floppy read (INT 13h) corrupts PIC masks,
-; masking IRQ12 (PS/2 mouse) or IRQ2 (cascade to secondary PIC).
-; Test: force-unmask IRQ12 + send EOI after win_create.
+; Build 334: Direct keyboard port polling diagnostic.
+; Build 333 showed PIC fix didn't help — both KB and mouse dead.
+; This test bypasses INT 0x80 event system entirely.
+; Polls keyboard controller port 0x64/0x60 directly.
+; If ESC exits: keyboard HW works but event chain is broken.
+; If ESC doesn't exit: keyboard controller itself is dead.
 
 [BITS 16]
 [ORG 0x0000]
@@ -35,13 +37,10 @@
 
 ; --- Code Entry (offset 0x50) ---
 
-API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
-
-EVENT_KEY_PRESS         equ 1
 
 ; Macro: write marker N to CGA VRAM row 0
 %macro MARKER 1
@@ -63,13 +62,8 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; ---- Marker 0: entry reached ----
+    ; ---- Marker 0: entry ----
     MARKER 0
-
-    ; ---- Yield before win_create (proves scheduler works) ----
-    mov ah, API_APP_YIELD
-    int 0x80
-    MARKER 1
 
     ; ---- Create window ----
     mov bx, 55
@@ -83,85 +77,74 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    MARKER 2                        ; win_create returned
+    MARKER 1                        ; win_create returned
 
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- Marker 3: before PIC fix ----
-    MARKER 3
-
-    ; ==============================================================
-    ; PIC DIAGNOSTIC + FORCE FIX
-    ; If INT 13h (floppy read during app load) corrupted PIC masks,
-    ; IRQ12 (PS/2 mouse) won't fire. Fix: unmask + EOI.
-    ; ==============================================================
-    cli                             ; Atomic PIC manipulation
-
-    ; Send EOI to secondary PIC (clear any stuck ISR bit)
+    ; ---- PIC fix (from Build 333) ----
+    cli
     mov al, 0x20
-    out 0xA0, al
-
-    ; Send EOI to primary PIC
-    out 0x20, al
-
-    ; Read secondary PIC mask and save to VRAM for diagnostic
+    out 0xA0, al                    ; EOI to secondary PIC
+    out 0x20, al                    ; EOI to primary PIC
     in al, 0xA1
-    push es
-    push bx
-    mov bx, 0xB800
-    mov es, bx
-    mov byte [es:0xA0], al          ; Row 2, byte 0: raw secondary PIC mask
-    pop bx
-    pop es
-
-    ; Force unmask IRQ12 (bit 4) on secondary PIC
-    and al, 0xEF                    ; Clear bit 4
+    and al, 0xEF                    ; Unmask IRQ12
     out 0xA1, al
-
-    ; Read primary PIC mask and save to VRAM
     in al, 0x21
-    push es
-    push bx
-    mov bx, 0xB800
-    mov es, bx
-    mov byte [es:0xA2], al          ; Row 2, byte 1: raw primary PIC mask
-    pop bx
-    pop es
-
-    ; Force unmask IRQ2 (cascade, bit 2) on primary PIC
-    and al, 0xFB                    ; Clear bit 2
+    and al, 0xFB                    ; Unmask IRQ2 cascade
     out 0x21, al
+    sti
 
-    sti                             ; Re-enable interrupts
+    MARKER 2                        ; PIC fix done
 
-    ; ---- Marker 4: PIC fix applied ----
+    ; ---- Reinstall INT 9 vector (in case IVT was corrupted) ----
+    ; The kernel's INT 9 handler is at 0x1000:int_09_handler
+    ; We can't easily get the correct offset from the app, so skip this.
+    ; Instead, we test direct port polling.
+
+    ; ---- Direct keyboard port polling loop ----
+    ; Bypass ALL interrupt/event infrastructure.
+    ; Read keyboard controller status port 0x64 and data port 0x60.
+    MARKER 3                        ; entering poll loop
+
+.poll_loop:
+    sti                             ; Keep interrupts enabled
+
+    ; Check if keyboard output buffer has data
+    in al, 0x64
+    test al, 0x01                   ; Bit 0 = output buffer full
+    jz .no_key
+
+    ; Read scan code
+    in al, 0x60
+
+    ; Skip key releases (bit 7 set)
+    test al, 0x80
+    jnz .no_key
+
+    ; Any key press: write marker 4 (proves keyboard HW works)
     MARKER 4
 
-    ; Brief pause to let mouse IRQs flow
-    mov ah, API_APP_YIELD
-    int 0x80
-    mov ah, API_APP_YIELD
-    int 0x80
+    ; Check for ESC (scan code 0x01)
+    cmp al, 0x01
+    je .got_esc
 
-    ; ---- Marker 5: post-fix yields succeeded ----
+    ; Not ESC — write scan code to VRAM row 2 for diagnostic
+    push es
+    push bx
+    mov bx, 0xB800
+    mov es, bx
+    mov byte [es:0xA0], al          ; Row 2, byte 0: raw scan code
+    pop bx
+    pop es
+    jmp .poll_loop
+
+.no_key:
+    jmp .poll_loop
+
+.got_esc:
+    ; ---- Marker 5: ESC detected via direct port polling ----
     MARKER 5
-
-    ; Main loop — if PIC fix worked, ESC should exit
-.main_loop:
-    sti
-    mov ah, API_APP_YIELD
-    int 0x80
-
-    mov ah, API_EVENT_GET
-    int 0x80
-    jc .main_loop
-
-    cmp al, EVENT_KEY_PRESS
-    jne .main_loop
-    cmp dl, 27
-    je .exit_ok
-    jmp .main_loop
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
