@@ -1,7 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Displays OS version, boot drive, video, memory, tasks, time, ticks
+; Build 325: Bisection test — pre-window APIs + simple window draws + 2-cluster padding
 ;
-; Build: nasm -f bin -o sysinfo.bin sysinfo.asm
+; Tests: Do pre-window API calls (get_boot_drive, get_screen_info, BDA read)
+; break subsequent window drawing? Same 3 draw_strings as working Build 322.
 
 [BITS 16]
 [ORG 0x0000]
@@ -35,7 +36,6 @@
 ; --- Code Entry (offset 0x50) ---
 
 API_GFX_DRAW_STRING     equ 4
-API_GFX_CLEAR_AREA      equ 5
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
@@ -43,18 +43,9 @@ API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 API_GET_BOOT_DRIVE      equ 43
-API_GET_TICK            equ 63
-API_GET_RTC_TIME        equ 72
-API_GET_TASK_INFO       equ 74
 API_GET_SCREEN_INFO     equ 82
-API_WORD_TO_STRING      equ 91
-API_BCD_TO_ASCII        equ 92
 
 EVENT_KEY_PRESS         equ 1
-EVENT_WIN_REDRAW        equ 6
-
-VAL_X       equ 56
-WIN_W       equ 210
 
 entry:
     pusha
@@ -65,7 +56,9 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; --- Phase 1: Gather all data BEFORE creating window ---
+    ; --- Pre-window API calls (same as Build 324) ---
+    ; These are the APIs that Build 322 did NOT have.
+    ; If this build freezes, one of these breaks window drawing.
 
     ; Query boot drive
     mov ah, API_GET_BOOT_DRIVE
@@ -86,10 +79,10 @@ entry:
     pop es
     mov [mem_kb], ax
 
-    ; --- Phase 2: Create window ---
+    ; --- Window creation (identical to Build 322) ---
     mov bx, 55
     mov cx, 43
-    mov dx, WIN_W
+    mov dx, 210
     mov si, 114
     mov ax, cs
     mov es, ax
@@ -100,187 +93,31 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; --- Phase 3: Begin window drawing ---
-    ; Explicitly reload handle (defensive — ensures correct AL)
+    ; Explicitly reload window handle (defensive)
     mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; --- Phase 4: Draw all content inside window ---
-
-    ; Version string
+    ; --- Draw 3 strings (identical to Build 322) ---
     mov bx, 4
-    mov cx, 2
+    mov cx, 4
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Build string
     mov bx, 4
-    mov cx, 12
+    mov cx, 14
     mov si, str_build
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Separator
     mov bx, 4
-    mov cx, 24
-    mov dx, WIN_W - 10
-    mov si, 1
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    ; Boot drive
-    mov bx, 4
-    mov cx, 28
-    mov si, str_boot_label
+    mov cx, 30
+    mov si, str_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, VAL_X
-    mov cx, 28
-    test byte [boot_drive], 0x80
-    jnz .boot_hd
-    mov si, str_floppy
-    jmp .boot_draw
-.boot_hd:
-    mov si, str_harddisk
-.boot_draw:
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Video resolution
-    mov dx, [screen_w]
-    mov di, num_buf
-    mov ah, API_WORD_TO_STRING
-    int 0x80
-    mov byte [cs:di], 'x'
-    inc di
-    mov dx, [screen_h]
-    mov ah, API_WORD_TO_STRING
-    int 0x80
-
-    mov bx, 4
-    mov cx, 38
-    mov si, str_video_label
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov bx, VAL_X
-    mov cx, 38
-    mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Memory
-    mov bx, 4
-    mov cx, 48
-    mov si, str_mem_label
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov dx, [mem_kb]
-    mov di, num_buf
-    mov ah, API_WORD_TO_STRING
-    int 0x80
-    mov byte [cs:di], ' '
-    inc di
-    mov byte [cs:di], 'K'
-    inc di
-    mov byte [cs:di], 'B'
-    inc di
-    mov byte [cs:di], 0
-    mov bx, VAL_X
-    mov cx, 48
-    mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Tasks
-    mov bx, 4
-    mov cx, 60
-    mov si, str_tasks_label
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov ah, API_GET_TASK_INFO
-    int 0x80
-    movzx dx, cl
-    mov di, num_buf
-    mov ah, API_WORD_TO_STRING
-    int 0x80
-    mov byte [cs:di], '/'
-    inc di
-    mov byte [cs:di], '7'
-    inc di
-    mov byte [cs:di], 0
-    mov bx, VAL_X
-    mov cx, 60
-    mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Separator 2
-    mov bx, 4
-    mov cx, 72
-    mov dx, WIN_W - 10
-    mov si, 1
-    mov ah, API_GFX_CLEAR_AREA
-    int 0x80
-
-    ; Time
-    mov bx, 4
-    mov cx, 76
-    mov si, str_time_label
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov ah, API_GET_RTC_TIME
-    int 0x80
-    mov al, ch
-    mov ah, API_BCD_TO_ASCII
-    int 0x80
-    mov [time_buf], ah
-    mov [time_buf+1], al
-    mov byte [time_buf+2], ':'
-    mov al, cl
-    mov ah, API_BCD_TO_ASCII
-    int 0x80
-    mov [time_buf+3], ah
-    mov [time_buf+4], al
-    mov byte [time_buf+5], ':'
-    mov al, dh
-    mov ah, API_BCD_TO_ASCII
-    int 0x80
-    mov [time_buf+6], ah
-    mov [time_buf+7], al
-    mov byte [time_buf+8], 0
-    mov bx, VAL_X
-    mov cx, 76
-    mov si, time_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Ticks
-    mov bx, 4
-    mov cx, 86
-    mov si, str_ticks_label
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov ah, API_GET_TICK
-    int 0x80
-    mov dx, ax
-    mov di, num_buf
-    mov ah, API_WORD_TO_STRING
-    int 0x80
-    mov bx, VAL_X
-    mov cx, 86
-    mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; --- Main loop ---
+    ; --- Main loop (identical to Build 322) ---
 .main_loop:
     sti
     mov ah, API_APP_YIELD
@@ -291,15 +128,9 @@ entry:
     jc .main_loop
 
     cmp al, EVENT_KEY_PRESS
-    jne .check_redraw
+    jne .main_loop
     cmp dl, 27
     je .exit_ok
-    jmp .main_loop
-
-.check_redraw:
-    cmp al, EVENT_WIN_REDRAW
-    jne .main_loop
-    ; TODO: full repaint on redraw event
     jmp .main_loop
 
 .exit_ok:
@@ -327,16 +158,9 @@ screen_h:       dw 0
 mem_kb:         dw 0
 
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 324', 0
-str_boot_label: db 'Boot:', 0
-str_floppy:     db 'Floppy', 0
-str_harddisk:   db 'Hard Disk', 0
-str_video_label: db 'Video:', 0
-str_mem_label:  db 'Mem:', 0
-str_tasks_label: db 'Tasks:', 0
-str_time_label: db 'Time:', 0
-str_ticks_label: db 'Ticks:', 0
+str_build:      db 'Build 325', 0
+str_esc:        db 'Press ESC to close', 0
 
-; Buffers
-time_buf:       times 9 db 0
-num_buf:        times 16 db 0
+; Pad to force 2 FAT12 clusters (> 512 bytes)
+; This tests multi-cluster file reads
+times 600 - ($ - $$) db 0x90
