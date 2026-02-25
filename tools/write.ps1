@@ -339,7 +339,7 @@ function Render-Buttons {
     param([int]$Sel, [int]$Y)
     if ($Sel -eq 0) {
         Write-At 10 $Y "[ YES ]" Black Green
-        Write-At 22 $Y "  No   " Gray
+        Write-At 22 $Y "  No    " Gray
     } else {
         Write-At 10 $Y "  Yes  " Gray
         Write-At 22 $Y "[  NO  ]" Black Red
