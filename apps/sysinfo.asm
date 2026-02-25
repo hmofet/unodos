@@ -83,8 +83,12 @@ entry:
     mov [screen_w], bx
     mov [screen_h], cx
 
-    ; Conventional memory (INT 12h → AX = KB)
-    int 0x12
+    ; Conventional memory (read BDA directly — INT 12h can crash on some BIOSes)
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov ax, [es:0x0013]             ; BDA offset 0x13 = conventional memory in KB
+    pop es
     mov [mem_kb], ax
 
     ; --- Compute dynamic layout from font metrics ---
@@ -490,7 +494,7 @@ si_y7:          dw 86       ; Ticks
 
 ; Static labels
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 278', 0
+str_build:      db 'Build 321', 0
 str_boot_label: db 'Boot:', 0
 str_floppy:     db 'Floppy', 0
 str_harddisk:   db 'Hard Disk', 0
