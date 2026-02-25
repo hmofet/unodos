@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 329: Targeted diagnostic — draw_string WITHOUT context first,
-; then WITH context. Determines if clip/translation causes the freeze.
-; Markers: 0=entry, 1=win_create, 2=draw_string_no_ctx, 3=begin_draw,
-;          4=draw_string_with_ctx, 5=main_loop
+; Build 330: Pinpoint freeze location in gfx_draw_string.
+; Tests: empty string, 1-char string, full string — all without draw context.
+; If empty string works but others don't, issue is in character loop.
+; If empty string freezes, issue is in function setup (mouse_cursor_hide).
 
 [BITS 16]
 [ORG 0x0000]
@@ -36,6 +36,7 @@
 ; --- Code Entry (offset 0x50) ---
 
 API_GFX_DRAW_STRING     equ 4
+API_GFX_SET_PIXEL       equ 0
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
@@ -86,54 +87,51 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- TEST 1: Draw string WITHOUT draw context ----
-    ; draw_context = 0xFF (default), clip_enabled = 0 (no clip)
-    ; Draw at absolute screen coords so text appears on screen
+    ; ---- TEST 1: Draw EMPTY string (just null terminator) ----
+    ; Tests if function setup (mouse_cursor_hide etc.) hangs
     mov bx, 100
-    mov cx, 100
-    mov si, str_version
+    mov cx, 80
+    mov si, str_empty
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 2: after draw_string WITHOUT context ----
+    ; ---- Marker 2: empty string succeeded ----
     MARKER 2
 
-    ; ---- Now enable draw context ----
-    mov al, [cs:wh]
-    mov ah, API_WIN_BEGIN_DRAW
+    ; ---- TEST 2: Draw single character "A" ----
+    ; Tests if first character processing hangs
+    mov bx, 100
+    mov cx, 90
+    mov si, str_one
+    mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 3: after win_begin_draw ----
+    ; ---- Marker 3: single char succeeded ----
     MARKER 3
 
-    ; ---- TEST 2: Draw string WITH draw context (clip enabled) ----
-    ; This is the call that froze in Build 328
-    mov bx, 4
-    mov cx, 4
+    ; ---- TEST 3: Draw 3-char string "Uno" ----
+    ; Tests if loop continuation hangs
+    mov bx, 100
+    mov cx, 100
+    mov si, str_three
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; ---- Marker 4: 3-char string succeeded ----
+    MARKER 4
+
+    ; ---- TEST 4: Draw full string ----
+    ; The original failing case
+    mov bx, 100
+    mov cx, 110
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 4: after draw_string WITH context ----
-    MARKER 4
-
-    ; Draw remaining text
-    mov bx, 4
-    mov cx, 14
-    mov si, str_build
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov bx, 4
-    mov cx, 30
-    mov si, str_esc
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; ---- Marker 5: all draws done, entering main loop ----
+    ; ---- Marker 5: full string succeeded ----
     MARKER 5
 
-    ; Main loop
+    ; Skip to main loop (no win_begin_draw needed for this test)
 .main_loop:
     sti
     mov ah, API_APP_YIELD
@@ -169,8 +167,11 @@ entry:
 win_title:      db 'System Info', 0
 wh:             db 0
 
+str_empty:      db 0                        ; Empty string (just null)
+str_one:        db 'A', 0                   ; Single character
+str_three:      db 'Uno', 0                 ; 3 characters
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 329', 0
+str_build:      db 'Build 330', 0
 str_esc:        db 'Press ESC to close', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
