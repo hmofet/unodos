@@ -1,8 +1,7 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 330: Pinpoint freeze location in gfx_draw_string.
-; Tests: empty string, 1-char string, full string — all without draw context.
-; If empty string works but others don't, issue is in character loop.
-; If empty string freezes, issue is in function setup (mouse_cursor_hide).
+; Build 331: Isolate freeze to specific API.
+; Tests: yield (no drawing), set_pixel (drawing API), draw_string.
+; Determines if freeze is in INT 0x80 dispatch, mouse_cursor_hide, or draw_string.
 
 [BITS 16]
 [ORG 0x0000]
@@ -35,12 +34,11 @@
 
 ; --- Code Entry (offset 0x50) ---
 
+API_GFX_DRAW_PIXEL      equ 0
 API_GFX_DRAW_STRING     equ 4
-API_GFX_SET_PIXEL       equ 0
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
-API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 
@@ -87,51 +85,46 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- TEST 1: Draw EMPTY string (just null terminator) ----
-    ; Tests if function setup (mouse_cursor_hide etc.) hangs
+    ; ---- TEST 1: yield (API 34) ----
+    ; Tests if INT 0x80 dispatch works at all after win_create
+    mov ah, API_APP_YIELD
+    int 0x80
+
+    ; ---- Marker 2: yield succeeded ----
+    MARKER 2
+
+    ; ---- TEST 2: set_pixel (API 0) ----
+    ; Tests drawing API (calls mouse_cursor_hide/show)
+    mov bx, 150                     ; X
+    mov cx, 100                     ; Y
+    mov al, 3                       ; Color = white
+    mov ah, API_GFX_DRAW_PIXEL
+    int 0x80
+
+    ; ---- Marker 3: set_pixel succeeded ----
+    MARKER 3
+
+    ; ---- TEST 3: draw_string (API 4) with empty string ----
     mov bx, 100
     mov cx, 80
     mov si, str_empty
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 2: empty string succeeded ----
-    MARKER 2
-
-    ; ---- TEST 2: Draw single character "A" ----
-    ; Tests if first character processing hangs
-    mov bx, 100
-    mov cx, 90
-    mov si, str_one
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; ---- Marker 3: single char succeeded ----
-    MARKER 3
-
-    ; ---- TEST 3: Draw 3-char string "Uno" ----
-    ; Tests if loop continuation hangs
-    mov bx, 100
-    mov cx, 100
-    mov si, str_three
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; ---- Marker 4: 3-char string succeeded ----
+    ; ---- Marker 4: empty draw_string succeeded ----
     MARKER 4
 
-    ; ---- TEST 4: Draw full string ----
-    ; The original failing case
+    ; ---- TEST 4: draw_string with full string ----
     mov bx, 100
-    mov cx, 110
+    mov cx, 100
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 5: full string succeeded ----
+    ; ---- Marker 5: full draw_string succeeded ----
     MARKER 5
 
-    ; Skip to main loop (no win_begin_draw needed for this test)
+    ; Main loop
 .main_loop:
     sti
     mov ah, API_APP_YIELD
@@ -167,12 +160,9 @@ entry:
 win_title:      db 'System Info', 0
 wh:             db 0
 
-str_empty:      db 0                        ; Empty string (just null)
-str_one:        db 'A', 0                   ; Single character
-str_three:      db 'Uno', 0                 ; 3 characters
+str_empty:      db 0
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 330', 0
-str_esc:        db 'Press ESC to close', 0
+str_build:      db 'Build 331', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
 times 600 - ($ - $$) db 0x90
