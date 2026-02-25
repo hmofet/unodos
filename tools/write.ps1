@@ -411,7 +411,9 @@ try {
     $confirmed = $false
     $imageInfos = $null
 
-    while ($true) {
+    while ($true) {  # Outer loop: allows writing multiple images
+
+    while ($true) {  # Navigation loop
         switch ($navScreen) {
 
             "image" {
@@ -423,7 +425,7 @@ try {
                 Write-At 3 $row "Select image to write:" White
                 Write-At 55 $row "Step 1 of 3" DarkGray
                 $row++
-                Write-At 3 $row "Up/Down = navigate   Enter = next   Esc = cancel" DarkGray
+                Write-At 3 $row "Up/Down = navigate   Enter = next   G = git pull   Esc = exit" DarkGray
                 $row += 2
 
                 if (-not $imageInfos) {
@@ -468,8 +470,27 @@ try {
                     elseif ($key.Key -eq 'Escape') {
                         [Console]::Clear()
                         [Console]::CursorVisible = $origCursorVisible
-                        Write-Host "Operation cancelled."
+                        Write-Host "Exited."
                         exit 0
+                    }
+                    elseif ($key.Key -eq 'G') {
+                        $pullRow = $listTop + $imageInfos.Count + 2
+                        Clear-Row $pullRow
+                        Write-At 3 $pullRow "Running git pull..." Cyan
+                        try {
+                            $gitOutput = & git -C $projectDir pull 2>&1 | Out-String
+                            Clear-Row $pullRow
+                            $pullMsg = $gitOutput.Trim()
+                            if ($pullMsg.Length -gt 70) { $pullMsg = $pullMsg.Substring(0, 70) }
+                            Write-At 3 $pullRow $pullMsg Green
+                        } catch {
+                            Clear-Row $pullRow
+                            Write-At 3 $pullRow "Git pull failed!" Red
+                        }
+                        Start-Sleep -Milliseconds 1500
+                        $imageInfos = $null
+                        $navScreen = "image"
+                        $screenDone = $true
                     }
                 }
             }
@@ -497,7 +518,7 @@ try {
                 Write-At 3 $row "Select target drive:" White
                 Write-At 55 $row "Step $stepNum of $stepTotal" DarkGray
                 $row++
-                $hints = "Up/Down = navigate   Enter = next"
+                $hints = "Up/Down = navigate   Enter = next   R = refresh"
                 if ($canGoBack) { $hints += "   Bksp = back" }
                 $hints += "   Esc = cancel"
                 Write-At 3 $row $hints DarkGray
@@ -563,6 +584,10 @@ try {
                         [Console]::CursorVisible = $origCursorVisible
                         Write-Host "Operation cancelled."
                         exit 0
+                    }
+                    elseif ($key.Key -eq 'R') {
+                        $navScreen = "drive"
+                        $screenDone = $true
                     }
                 }
             }
@@ -968,8 +993,22 @@ try {
         Write-At 5 $row "Windows may ask to format the disk - click Cancel!" Yellow
     }
     $row += 2
-    Write-At 5 $row "Press any key to exit..." DarkGray
-    [Console]::ReadKey($true) | Out-Null
+    Write-At 5 $row "Enter = write another   Esc = exit" DarkGray
+    $loopBack = $false
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq 'Escape') { break }
+        if ($key.Key -eq 'Enter') { $loopBack = $true; break }
+    }
+    if (-not $loopBack) { break }  # Exit outer loop
+
+    # Reset state for next write
+    $selectedImage = $null
+    $selectedTarget = $null
+    $confirmed = $false
+    $imageInfos = $null
+    $navScreen = "image"
+    }  # End outer write loop
 
 } finally {
     [Console]::CursorVisible = $origCursorVisible
