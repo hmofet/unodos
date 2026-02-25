@@ -127,7 +127,7 @@ win_title:      db 'System Info', 0
 wh:             db 0
 
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 326', 0
+str_build:      db 'Build 327', 0
 str_esc:        db 'Press ESC to close', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
