@@ -1,7 +1,6 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 331: Isolate freeze to specific API.
-; Tests: yield (no drawing), set_pixel (drawing API), draw_string.
-; Determines if freeze is in INT 0x80 dispatch, mouse_cursor_hide, or draw_string.
+; Build 332: Test if yield works WITHOUT win_create.
+; If yield works before win_create but not after, win_create corrupts state.
 
 [BITS 16]
 [ORG 0x0000]
@@ -34,8 +33,6 @@
 
 ; --- Code Entry (offset 0x50) ---
 
-API_GFX_DRAW_PIXEL      equ 0
-API_GFX_DRAW_STRING     equ 4
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
@@ -67,7 +64,28 @@ entry:
     ; ---- Marker 0: entry reached ----
     MARKER 0
 
-    ; Create window
+    ; ---- TEST 1: yield BEFORE win_create ----
+    mov ah, API_APP_YIELD
+    int 0x80
+
+    ; ---- Marker 1: yield before win_create succeeded ----
+    MARKER 1
+
+    ; ---- TEST 2: yield again (verify repeatable) ----
+    mov ah, API_APP_YIELD
+    int 0x80
+
+    ; ---- Marker 2: second yield succeeded ----
+    MARKER 2
+
+    ; ---- TEST 3: event_get (different API) ----
+    mov ah, API_EVENT_GET
+    int 0x80
+
+    ; ---- Marker 3: event_get succeeded ----
+    MARKER 3
+
+    ; ---- Now create window ----
     mov bx, 55
     mov cx, 43
     mov dx, 210
@@ -79,49 +97,17 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    ; ---- Marker 1: after win_create ----
-    MARKER 1
+    ; ---- Marker 4: win_create succeeded ----
+    MARKER 4
 
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- TEST 1: yield (API 34) ----
-    ; Tests if INT 0x80 dispatch works at all after win_create
+    ; ---- TEST 4: yield AFTER win_create ----
     mov ah, API_APP_YIELD
     int 0x80
 
-    ; ---- Marker 2: yield succeeded ----
-    MARKER 2
-
-    ; ---- TEST 2: set_pixel (API 0) ----
-    ; Tests drawing API (calls mouse_cursor_hide/show)
-    mov bx, 150                     ; X
-    mov cx, 100                     ; Y
-    mov al, 3                       ; Color = white
-    mov ah, API_GFX_DRAW_PIXEL
-    int 0x80
-
-    ; ---- Marker 3: set_pixel succeeded ----
-    MARKER 3
-
-    ; ---- TEST 3: draw_string (API 4) with empty string ----
-    mov bx, 100
-    mov cx, 80
-    mov si, str_empty
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; ---- Marker 4: empty draw_string succeeded ----
-    MARKER 4
-
-    ; ---- TEST 4: draw_string with full string ----
-    mov bx, 100
-    mov cx, 100
-    mov si, str_version
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; ---- Marker 5: full draw_string succeeded ----
+    ; ---- Marker 5: yield after win_create succeeded ----
     MARKER 5
 
     ; Main loop
@@ -159,10 +145,6 @@ entry:
 
 win_title:      db 'System Info', 0
 wh:             db 0
-
-str_empty:      db 0
-str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 331', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
 times 600 - ($ - $$) db 0x90
