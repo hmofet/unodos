@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 328: Direct CGA VRAM diagnostic markers to pinpoint freeze location.
-; Writes pixels directly to 0xB800 before/after each API call.
-; Each marker = 4 white pixels (0xFF) at row 0, spaced 8px apart.
-; Count visible markers to find last successful operation.
+; Build 329: Targeted diagnostic — draw_string WITHOUT context first,
+; then WITH context. Determines if clip/translation causes the freeze.
+; Markers: 0=entry, 1=win_create, 2=draw_string_no_ctx, 3=begin_draw,
+;          4=draw_string_with_ctx, 5=main_loop
 
 [BITS 16]
 [ORG 0x0000]
@@ -34,7 +34,6 @@
     times 0x50 - ($ - $$) db 0
 
 ; --- Code Entry (offset 0x50) ---
-; Direct VRAM writes bypass INT 0x80 — works even if kernel is stuck
 
 API_GFX_DRAW_STRING     equ 4
 API_EVENT_GET           equ 9
@@ -47,7 +46,6 @@ API_APP_YIELD           equ 34
 EVENT_KEY_PRESS         equ 1
 
 ; Macro: write marker N to CGA VRAM row 0
-; Each marker = 0xFF at byte offset N*2, giving 4 white pixels with gaps
 %macro MARKER 1
     push es
     push bx
@@ -67,7 +65,7 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; ---- Marker 1: entry reached ----
+    ; ---- Marker 0: entry reached ----
     MARKER 0
 
     ; Create window
@@ -82,52 +80,58 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    ; ---- Marker 2: after win_create ----
+    ; ---- Marker 1: after win_create ----
     MARKER 1
 
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- Marker 3: before win_begin_draw ----
+    ; ---- TEST 1: Draw string WITHOUT draw context ----
+    ; draw_context = 0xFF (default), clip_enabled = 0 (no clip)
+    ; Draw at absolute screen coords so text appears on screen
+    mov bx, 100
+    mov cx, 100
+    mov si, str_version
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; ---- Marker 2: after draw_string WITHOUT context ----
     MARKER 2
 
-    ; Begin draw
+    ; ---- Now enable draw context ----
     mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; ---- Marker 4: after win_begin_draw ----
+    ; ---- Marker 3: after win_begin_draw ----
     MARKER 3
 
-    ; Draw string 1
+    ; ---- TEST 2: Draw string WITH draw context (clip enabled) ----
+    ; This is the call that froze in Build 328
     mov bx, 4
     mov cx, 4
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 5: after draw_string 1 ----
+    ; ---- Marker 4: after draw_string WITH context ----
     MARKER 4
 
-    ; Draw string 2
+    ; Draw remaining text
     mov bx, 4
     mov cx, 14
     mov si, str_build
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 6: after draw_string 2 ----
-    MARKER 5
-
-    ; Draw string 3
     mov bx, 4
     mov cx, 30
     mov si, str_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; ---- Marker 7: after draw_string 3, entering main loop ----
-    MARKER 6
+    ; ---- Marker 5: all draws done, entering main loop ----
+    MARKER 5
 
     ; Main loop
 .main_loop:
@@ -166,7 +170,7 @@ win_title:      db 'System Info', 0
 wh:             db 0
 
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 328', 0
+str_build:      db 'Build 329', 0
 str_esc:        db 'Press ESC to close', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
