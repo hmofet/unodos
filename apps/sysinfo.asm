@@ -65,41 +65,18 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; --- Diagnostic: draw progress markers at top of screen ---
-    ; Each marker = letter drawn at increasing X position
-    ; If crash occurs, last visible letter shows where it happened
-
-    ; Marker A: before any API calls
-    mov bx, 0
-    mov cx, 0
-    mov si, str_A
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
+    ; --- Phase 1: Gather all data BEFORE creating window ---
 
     ; Query boot drive
     mov ah, API_GET_BOOT_DRIVE
     int 0x80
     mov [boot_drive], al
 
-    ; Marker B: after get_boot_drive
-    mov bx, 8
-    mov cx, 0
-    mov si, str_B
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     ; Query screen info
     mov ah, API_GET_SCREEN_INFO
     int 0x80
     mov [screen_w], bx
     mov [screen_h], cx
-
-    ; Marker C: after get_screen_info
-    mov bx, 16
-    mov cx, 0
-    mov si, str_C
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
 
     ; Read BDA memory
     push es
@@ -109,14 +86,7 @@ entry:
     pop es
     mov [mem_kb], ax
 
-    ; Marker D: after BDA read
-    mov bx, 24
-    mov cx, 0
-    mov si, str_D
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Create window
+    ; --- Phase 2: Create window ---
     mov bx, 55
     mov cx, 43
     mov dx, WIN_W
@@ -130,40 +100,29 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; Marker E: after win_create
-    ; (draw_context not set yet, so this goes to screen directly)
-    mov bx, 32
-    mov cx, 0
-    mov si, str_E
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Begin draw
+    ; --- Phase 3: Begin window drawing ---
+    ; Explicitly reload handle (defensive — ensures correct AL)
+    mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    ; Marker F: after begin_draw (now inside window context)
-    mov bx, 4
-    mov cx, 2
-    mov si, str_F
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
+    ; --- Phase 4: Draw all content inside window ---
 
-    ; Draw version string
-    mov bx, 12
+    ; Version string
+    mov bx, 4
     mov cx, 2
     mov si, str_version
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Marker G: after first draw_string in window
+    ; Build string
     mov bx, 4
     mov cx, 12
-    mov si, str_G
+    mov si, str_build
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw separator (clear_area)
+    ; Separator
     mov bx, 4
     mov cx, 24
     mov dx, WIN_W - 10
@@ -171,14 +130,7 @@ entry:
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    ; Marker H: after clear_area
-    mov bx, 12
-    mov cx, 12
-    mov si, str_H
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Draw boot drive value
+    ; Boot drive
     mov bx, 4
     mov cx, 28
     mov si, str_boot_label
@@ -197,26 +149,11 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Marker I: after boot drive draw
-    mov bx, 20
-    mov cx, 12
-    mov si, str_I
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Format screen resolution
+    ; Video resolution
     mov dx, [screen_w]
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-
-    ; Marker J: after first word_to_string
-    mov bx, 28
-    mov cx, 12
-    mov si, str_J
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     mov byte [cs:di], 'x'
     inc di
     mov dx, [screen_h]
@@ -235,14 +172,7 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Marker K: after video line
-    mov bx, 36
-    mov cx, 12
-    mov si, str_K
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Memory line
+    ; Memory
     mov bx, 4
     mov cx, 48
     mov si, str_mem_label
@@ -263,13 +193,6 @@ entry:
     mov bx, VAL_X
     mov cx, 48
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Marker L: after memory line
-    mov bx, 44
-    mov cx, 12
-    mov si, str_L
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -294,13 +217,6 @@ entry:
     mov bx, VAL_X
     mov cx, 60
     mov si, num_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Marker M: after tasks
-    mov bx, 52
-    mov cx, 12
-    mov si, str_M
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -345,13 +261,6 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Marker N: after time
-    mov bx, 60
-    mov cx, 12
-    mov si, str_N
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     ; Ticks
     mov bx, 4
     mov cx, 86
@@ -371,14 +280,7 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Marker O: ALL DONE - entering main loop
-    mov bx, 68
-    mov cx, 12
-    mov si, str_O
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; --- Main loop (no periodic refresh for diagnostics) ---
+    ; --- Main loop ---
 .main_loop:
     sti
     mov ah, API_APP_YIELD
@@ -397,7 +299,8 @@ entry:
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
     jne .main_loop
-    jmp .main_loop              ; Skip redraw for now (diag build)
+    ; TODO: full repaint on redraw event
+    jmp .main_loop
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
@@ -423,25 +326,8 @@ screen_w:       dw 0
 screen_h:       dw 0
 mem_kb:         dw 0
 
-; Diagnostic markers (single-char strings)
-str_A:          db 'A', 0
-str_B:          db 'B', 0
-str_C:          db 'C', 0
-str_D:          db 'D', 0
-str_E:          db 'E', 0
-str_F:          db 'F', 0
-str_G:          db 'G', 0
-str_H:          db 'H', 0
-str_I:          db 'I', 0
-str_J:          db 'J', 0
-str_K:          db 'K', 0
-str_L:          db 'L', 0
-str_M:          db 'M', 0
-str_N:          db 'N', 0
-str_O:          db 'O', 0
-
 str_version:    db 'UnoDOS v3.21.0', 0
-str_build:      db 'Build 323', 0
+str_build:      db 'Build 324', 0
 str_boot_label: db 'Boot:', 0
 str_floppy:     db 'Floppy', 0
 str_harddisk:   db 'Hard Disk', 0
