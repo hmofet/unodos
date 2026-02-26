@@ -8746,8 +8746,11 @@ event_get_stub:
 .bios_focus_fail:
     pop ax
 .no_event_return:
-    xor al, al                      ; AL = 0 (no event)
-    xor dx, dx                      ; DX = 0
+    xor al, al                      ; AL = 0 (no event, keeps event_wait working)
+    mov dh, [focused_task]          ; DH = focused task ID
+    mov dl, [current_task]          ; DL = current task ID
+    mov ch, byte [event_queue_head] ; CH = queue head index
+    mov cl, byte [event_queue_tail] ; CL = queue tail index
     stc                             ; CF=1 = no event available
     pop ds
     pop si
