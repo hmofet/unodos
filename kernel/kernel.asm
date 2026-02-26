@@ -8587,51 +8587,6 @@ event_get_stub:
     ; Process any pending window drag (deferred from IRQ12)
     call mouse_process_drag
 
-    ; === BUILD 336 DIAGNOSTIC: write event queue state to CGA VRAM row 8 ===
-    ; Only write when current_task != 0 (skip launcher's calls)
-    cmp byte [current_task], 0
-    je .skip_evt_diag
-    push es
-    push ax
-    push di
-    mov di, 0xB800
-    mov es, di
-    ; Byte at 0x140 (row 8): event_queue_head
-    mov al, byte [event_queue_head]
-    mov byte [es:0x140], al
-    ; Byte at 0x142: event_queue_tail
-    mov al, byte [event_queue_tail]
-    mov byte [es:0x142], al
-    ; Byte at 0x144: focused_task
-    mov al, byte [focused_task]
-    mov byte [es:0x144], al
-    ; Byte at 0x146: current_task
-    mov al, byte [current_task]
-    mov byte [es:0x146], al
-    ; Byte at 0x148: 0xFF if head != tail (queue has events), 0x00 if empty
-    mov al, byte [event_queue_head]
-    cmp al, byte [event_queue_tail]
-    je .evt_diag_empty
-    mov byte [es:0x148], 0xFF       ; WHITE = queue has events
-    jmp .evt_diag_focus
-.evt_diag_empty:
-    mov byte [es:0x148], 0x00       ; BLACK = queue empty
-.evt_diag_focus:
-    ; Byte at 0x14A: 0xFF if focused_task == current_task, 0x00 if mismatch
-    mov al, byte [focused_task]
-    cmp al, byte [current_task]
-    jne .evt_diag_no_focus
-    mov byte [es:0x14A], 0xFF       ; WHITE = focus matches
-    jmp .evt_diag_done
-.evt_diag_no_focus:
-    mov byte [es:0x14A], 0x00       ; BLACK = focus mismatch
-.evt_diag_done:
-    pop di
-    pop ax
-    pop es
-.skip_evt_diag:
-    ; === END DIAGNOSTIC ===
-
 .evt_check_next:
     mov bx, [event_queue_head]
     cmp bx, [event_queue_tail]
@@ -8791,8 +8746,11 @@ event_get_stub:
 .bios_focus_fail:
     pop ax
 .no_event_return:
-    xor al, al                      ; EVENT_NONE
-    xor dx, dx
+    ; Return diagnostic info in registers (Build 336 debug)
+    ; AL = focused_task, DL = queue_head, DH = queue_tail
+    mov al, [focused_task]
+    mov dl, [event_queue_head]
+    mov dh, [event_queue_tail]
     stc                             ; CF=1 = no event available
     pop ds
     pop si
