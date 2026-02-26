@@ -8746,11 +8746,8 @@ event_get_stub:
 .bios_focus_fail:
     pop ax
 .no_event_return:
-    ; Return diagnostic info in registers (Build 336 debug)
-    ; AL = focused_task, DL = queue_head, DH = queue_tail
-    mov al, [focused_task]
-    mov dl, [event_queue_head]
-    mov dh, [event_queue_tail]
+    xor al, al                      ; AL = 0 (no event)
+    xor dx, dx                      ; DX = 0
     stc                             ; CF=1 = no event available
     pop ds
     pop si
