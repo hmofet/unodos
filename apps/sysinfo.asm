@@ -1,9 +1,16 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 335: Mask IRQ1 then poll keyboard port directly.
-; Build 334 showed 5 markers (Enter residual consumed) but no new keys.
-; This proves INT 9 handler (via IRQ1) is STEALING scan codes from
-; our polling loop. Solution: mask IRQ1 so we get the raw scan codes.
-; If ESC works: keyboard HW fine, IRQ1 handler works, event_get broken.
+; Build 336: Kernel event_get diagnostic.
+; Kernel writes queue state to CGA VRAM row 8 when current_task != 0:
+;   Row 8, byte 0 (0x140): event_queue_head
+;   Row 8, byte 2 (0x142): event_queue_tail
+;   Row 8, byte 4 (0x144): focused_task
+;   Row 8, byte 6 (0x146): current_task
+;   Row 8, byte 8 (0x148): 0xFF=queue has events, 0x00=empty
+;   Row 8, byte 10 (0x14A): 0xFF=focus match, 0x00=mismatch
+;
+; App uses normal yield + event_get loop.
+; Also has IRQ1-masked port polling fallback after 5000 iterations.
+; Look at row 8: two white blocks = queue has events + focus match.
 
 [BITS 16]
 [ORG 0x0000]
@@ -36,10 +43,13 @@
 
 ; --- Code Entry (offset 0x50) ---
 
+API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
+
+EVENT_KEY_PRESS         equ 1
 
 ; Macro: write marker N to CGA VRAM row 0
 %macro MARKER 1
@@ -61,10 +71,9 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; ---- Marker 0: entry ----
-    MARKER 0
+    MARKER 0                        ; entry
 
-    ; ---- Create window ----
+    ; Create window
     mov bx, 55
     mov cx, 43
     mov dx, 210
@@ -81,63 +90,78 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- Mask IRQ1 (keyboard) so INT 9 handler doesn't steal scan codes ----
-    ; This lets our direct port polling see the raw keyboard data.
-    cli
-    in al, 0x21
-    or al, 0x02                     ; Set bit 1 = mask IRQ1
-    out 0x21, al
+    MARKER 2                        ; entering main loop
+
+    ; Normal yield + event_get loop (with iteration counter)
+    mov word [iter_count], 0
+
+.main_loop:
     sti
+    mov ah, API_APP_YIELD
+    int 0x80
 
-    MARKER 2                        ; IRQ1 masked
+    mov ah, API_EVENT_GET
+    int 0x80
+    jc .no_event
 
-    ; ---- Drain any residual scan codes ----
-    in al, 0x64
-    test al, 0x01
-    jz .drained
-    in al, 0x60                     ; Read and discard leftover
-.drained:
+    ; Got an event! Write marker 3
+    MARKER 3
 
-    MARKER 3                        ; ready for key polling
+    cmp al, EVENT_KEY_PRESS
+    jne .main_loop
+    cmp dl, 27                      ; ESC?
+    je .exit_ok
+    jmp .main_loop
 
-    ; ---- Direct keyboard port polling (with IRQ1 masked) ----
-.poll_loop:
-    ; Check if keyboard output buffer has data
-    in al, 0x64
-    test al, 0x01                   ; Bit 0 = output buffer full
-    jz .poll_loop                   ; No data, keep polling
+.no_event:
+    ; Increment iteration counter
+    inc word [cs:iter_count]
 
-    ; Read scan code
-    in al, 0x60
-
-    ; Skip key releases (bit 7 set)
-    test al, 0x80
-    jnz .poll_loop
-
-    ; Key press detected!
-    MARKER 4                        ; proves keyboard HW works
-
-    ; Check for ESC (scan code 0x01)
-    cmp al, 0x01
-    je .got_esc
-
-    ; Not ESC — write scan code to VRAM for diagnostic, keep polling
+    ; Write low byte of counter to VRAM row 10 (offset 0x190 = 80*5)
+    ; This proves the loop is spinning
     push es
     push bx
     mov bx, 0xB800
     mov es, bx
-    mov byte [es:0xA0], al          ; Row 2: raw scan code
+    mov al, [cs:iter_count]
+    mov byte [es:0x190], al         ; Row 10, byte 0: counter low byte
+    mov al, [cs:iter_count+1]
+    mov byte [es:0x192], al         ; Row 10, byte 2: counter high byte
     pop bx
     pop es
-    jmp .poll_loop
 
-.got_esc:
-    MARKER 5                        ; ESC detected
+    ; After 5000 iterations with no events, fall through to port polling
+    cmp word [cs:iter_count], 5000
+    jb .main_loop
 
-    ; ---- Unmask IRQ1 before exiting ----
+    ; Timeout! Marker 4 = event_get never delivered an event
+    MARKER 4
+
+    ; Fall back to IRQ1-masked direct port polling (proven to work in Build 335)
     cli
     in al, 0x21
-    and al, 0xFD                    ; Clear bit 1 = unmask IRQ1
+    or al, 0x02                     ; Mask IRQ1
+    out 0x21, al
+    sti
+
+    MARKER 5                        ; fallback polling active
+
+.fallback_loop:
+    in al, 0x64
+    test al, 0x01
+    jz .fallback_loop
+    in al, 0x60
+    test al, 0x80
+    jnz .fallback_loop
+    cmp al, 0x01                    ; ESC?
+    jne .fallback_loop
+
+    MARKER 6                        ; ESC via fallback
+
+    ; Unmask IRQ1
+    cli
+    in al, 0x21
+    and al, 0xFD
     out 0x21, al
     sti
 
@@ -160,6 +184,7 @@ entry:
 
 win_title:      db 'System Info', 0
 wh:             db 0
+iter_count:     dw 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
 times 600 - ($ - $$) db 0x90
