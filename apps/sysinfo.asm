@@ -1,10 +1,12 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 345: BIOS tick counter + FLAGS capture.
-; - Reads BIOS tick counter (0040:006C) before/after event loop.
-;   If delta=0 → PIT timer doesn't fire → IF truly 0.
-; - Captures raw FLAGS after sti and after yield returns.
-;   If bit 9 (0x0200) is clear → IF=0 confirmed at that point.
-; - Includes INT 8+9 hooks from Build 344.
+; Build 346: PIC mask + long iteration test.
+; - Build 345 showed IF=1 at all checkpoints, but BT=0 TH=0.
+;   Theory A: loop too fast (<55ms on fast 286+), no timer tick in window.
+;   Theory B: PIC masks IRQ0 during yield/event_get.
+; - This build: 50000 iterations (should take seconds on any CPU).
+;   Reads PIC mask before loop, OR-accumulates inside loop, reads after.
+;   Also reads BIOS tick counter before/after.
+; - No INT 8/9 hooks (simplify — rely on BIOS tick counter).
 
 [BITS 16]
 [ORG 0x0000]
@@ -65,30 +67,11 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; === Install INT 8 + INT 9 hooks ===
-    cli
-    push es
-    xor ax, ax
-    mov es, ax
-    ; INT 8 (timer)
-    mov ax, [es:0x20]
-    mov [cs:orig_int8_off], ax
-    mov ax, [es:0x22]
-    mov [cs:orig_int8_seg], ax
-    mov word [es:0x20], int8_hook
-    mov [es:0x22], cs
-    ; INT 9 (keyboard)
-    mov ax, [es:0x24]
-    mov [cs:orig_int9_off], ax
-    mov ax, [es:0x26]
-    mov [cs:orig_int9_seg], ax
-    mov word [es:0x24], int9_hook
-    mov [es:0x26], cs
-    pop es
-    sti
-
-    mov word [cs:timer_count], 0
-    mov word [cs:irq1_count], 0
+    ; Read PIC mask at entry (before anything else)
+    in al, 0x21
+    mov [cs:pic_mask_entry], al
+    in al, 0xA1
+    mov [cs:pic_slave_entry], al
 
     ; Create window
     mov bx, 10
@@ -101,7 +84,7 @@ entry:
     mov al, 0x03
     mov ah, API_WIN_CREATE
     int 0x80
-    jc .exit_no_win_unhook
+    jc .exit_no_win
     mov [wh], al
 
     mov al, [cs:wh]
@@ -117,6 +100,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; Read PIC mask after window create (kernel may have modified it)
+    in al, 0x21
+    mov [cs:pic_mask_after_win], al
+
     ; Read BIOS tick counter BEFORE event loop
     push es
     mov ax, 0x0040
@@ -125,52 +112,37 @@ entry:
     mov [cs:bios_tick_start], ax
     pop es
 
-    ; Record hook counts at start
-    mov ax, [cs:timer_count]
-    mov [cs:timer_at_start], ax
-
-    ; Capture FLAGS right after STI (before first yield)
-    sti
-    pushf
-    pop word [cs:flags_after_sti]
-
-    ; Event loop: 500 iterations (shorter for faster results)
+    ; Event loop: 50000 iterations (should take seconds)
     mov word [cs:iter_count], 0
-    mov word [cs:key_count], 0
+    mov byte [cs:pic_mask_or], 0        ; OR-accumulate PIC mask inside loop
 
 .main_loop:
     sti
     mov ah, API_APP_YIELD
     int 0x80
-    ; Capture FLAGS after yield returns (IRET restored them)
-    pushf
-    pop ax
-    or [cs:flags_after_yield], ax   ; Accumulate (OR) across all iterations
-    push ax                         ; Restore FLAGS for subsequent code
-    popf
+
+    ; Read PIC mask inside loop and OR-accumulate
+    in al, 0x21
+    or [cs:pic_mask_or], al
 
     mov ah, API_EVENT_GET
     int 0x80
-    ; Capture FLAGS after event_get returns
-    pushf
-    pop ax
-    or [cs:flags_after_evget], ax
-    ; Check CF from event_get (bit 0 of AX)
-    test ax, 0x0001
-    jnz .no_event                   ; CF=1 → no event
+    jc .no_event
 
-    ; Got an event
-    cmp byte [cs:flags_after_evget], 0  ; (already set, just need al from original)
-    ; Actually we lost AL from event_get! Need to restructure...
-    ; Let me use a different approach for the event check
-    jmp .main_loop                  ; Skip event processing for simplicity
+    ; Got an event — check if ESC
+    cmp al, EVENT_KEY_PRESS
+    jne .main_loop
+    cmp dl, 27
+    je .got_esc
+    jmp .main_loop
 
 .no_event:
     inc word [cs:iter_count]
-    cmp word [cs:iter_count], 500
+    cmp word [cs:iter_count], 50000
     jb .main_loop
 
     ; === TIMEOUT ===
+.show_results:
     mov ax, cs
     mov ds, ax
 
@@ -182,91 +154,133 @@ entry:
     mov [cs:bios_tick_end], ax
     pop es
 
-    ; Timer hook delta
-    mov ax, [cs:timer_count]
-    sub ax, [cs:timer_at_start]
-    mov [cs:timer_delta], ax
+    ; Read PIC mask at end
+    in al, 0x21
+    mov [cs:pic_mask_end], al
 
     ; BIOS tick delta
     mov ax, [cs:bios_tick_end]
     sub ax, [cs:bios_tick_start]
     mov [cs:bios_tick_delta], ax
 
-    ; Row 2: TIMEOUT
+    ; Redraw window with results
+    mov al, [cs:wh]
+    mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
+    mov ax, cs
+    mov ds, ax
+
+    ; Row 1: TIMEOUT or ESC
     mov bx, 4
-    mov cx, 16
+    mov cx, 4
     mov si, lbl_timeout
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 3: BIOS ticks (BT:xxxx)
+    ; Row 2: PIC mask at entry (PE:xx)
+    movzx ax, byte [pic_mask_entry]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 16
+    mov si, lbl_pe
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; PIC slave at entry (PS:xx)
+    movzx ax, byte [pic_slave_entry]
+    call byte_to_hex
+    mov bx, 60
+    mov cx, 16
+    mov si, lbl_ps
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 84
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 3: PIC after win (PW:xx), PIC OR in loop (PO:xx)
+    movzx ax, byte [pic_mask_after_win]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 28
+    mov si, lbl_pw
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [pic_mask_or]
+    call byte_to_hex
+    mov bx, 60
+    mov cx, 28
+    mov si, lbl_po
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 84
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 4: PIC at end (PX:xx)
+    movzx ax, byte [pic_mask_end]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 40
+    mov si, lbl_px
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 5: BIOS tick delta (BT:xxxx)
     mov ax, [bios_tick_delta]
     call word_to_hex
     mov bx, 4
-    mov cx, 28
+    mov cx, 54
     mov si, lbl_bt
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 32
+    mov bx, 28
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 4: Timer hook (TH:xxxx)
-    mov ax, [timer_delta]
-    call word_to_hex
-    mov bx, 80
-    mov cx, 28
-    mov si, lbl_th
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 108
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 5: FLAGS after STI (FS:xxxx) — bit 9 should be set (0x02xx)
-    mov ax, [flags_after_sti]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 42
-    mov si, lbl_fs
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 32
-    mov si, hex_buf
+    ; BT verdict
+    mov bx, 60
+    cmp word [bios_tick_delta], 0
+    je .bt_zero
+    mov si, lbl_ok
+    jmp .bt_draw
+.bt_zero:
+    mov si, lbl_no_tick
+.bt_draw:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 6: FLAGS after yield (FY:xxxx) — accumulated OR
-    mov ax, [flags_after_yield]
+    ; Row 6: Iteration count (IT:xxxx)
+    mov ax, [iter_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 54
-    mov si, lbl_fy
+    mov cx, 66
+    mov si, lbl_it
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 32
+    mov bx, 28
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 7: FLAGS after event_get (FE:xxxx)
-    mov ax, [flags_after_evget]
-    call word_to_hex
-    mov bx, 80
-    mov cx, 54
-    mov si, lbl_fe
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 108
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Fallback exit
-    call restore_hooks
-
+    ; Wait for ESC via fallback polling
+    ; Mask IRQ1 for clean port polling
     cli
     in al, 0x21
     or al, 0x02
@@ -276,10 +290,10 @@ entry:
 .drain_loop:
     in al, 0x64
     test al, 0x01
-    jz .fdrain_done
+    jz .drain_done
     in al, 0x60
     jmp .drain_loop
-.fdrain_done:
+.drain_done:
 
 .fallback_loop:
     in al, 0x64
@@ -291,12 +305,16 @@ entry:
     cmp al, 0x01
     jne .fallback_loop
 
+    ; Unmask IRQ1
     cli
     in al, 0x21
     and al, 0xFD
     out 0x21, al
     sti
     jmp .exit_ok
+
+.got_esc:
+    jmp .show_results
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
@@ -311,43 +329,25 @@ entry:
     popa
     retf
 
-.exit_no_win_unhook:
-    call restore_hooks
-    jmp .exit_no_win
-
-; ============================================================================
-; Interrupt Hooks
-; ============================================================================
-
-int8_hook:
-    inc word [cs:timer_count]
-    jmp far [cs:orig_int8_off]
-
-int9_hook:
-    inc word [cs:irq1_count]
-    jmp far [cs:orig_int9_off]
-
 ; ============================================================================
 ; Subroutines
 ; ============================================================================
 
-restore_hooks:
-    cli
-    push es
+byte_to_hex:
+    ; Input: AL = byte, Output: hex_buf[0..1] + null
     push ax
-    xor ax, ax
-    mov es, ax
-    mov ax, [cs:orig_int8_off]
-    mov [es:0x20], ax
-    mov ax, [cs:orig_int8_seg]
-    mov [es:0x22], ax
-    mov ax, [cs:orig_int9_off]
-    mov [es:0x24], ax
-    mov ax, [cs:orig_int9_seg]
-    mov [es:0x26], ax
+    push cx
+    mov cl, al
+    shr al, 4
+    HEXNIB
+    mov [cs:hex_buf], al
+    mov al, cl
+    and al, 0x0F
+    HEXNIB
+    mov [cs:hex_buf+1], al
+    mov byte [cs:hex_buf+2], 0
+    pop cx
     pop ax
-    pop es
-    sti
     ret
 
 word_to_hex:
@@ -379,38 +379,32 @@ word_to_hex:
 ; Data
 ; ============================================================================
 
-win_title:          db 'FLAGS', 0
+win_title:          db 'PIC', 0
 wh:                 db 0
 iter_count:         dw 0
-key_count:          dw 0
 hex_buf:            db 0, 0, 0, 0, 0
 
-timer_count:        dw 0
-irq1_count:         dw 0
-timer_at_start:     dw 0
-timer_delta:        dw 0
+pic_mask_entry:     db 0
+pic_slave_entry:    db 0
+pic_mask_after_win: db 0
+pic_mask_or:        db 0        ; OR-accumulated PIC mask inside loop
+pic_mask_end:       db 0
 
 bios_tick_start:    dw 0
 bios_tick_end:      dw 0
 bios_tick_delta:    dw 0
 
-flags_after_sti:    dw 0
-flags_after_yield:  dw 0
-flags_after_evget:  dw 0
-
-; MUST be adjacent for jmp far
-orig_int8_off:      dw 0
-orig_int8_seg:      dw 0
-orig_int9_off:      dw 0
-orig_int9_seg:      dw 0
-
 lbl_wait:           db 'Wait...', 0
 lbl_timeout:        db 'TIMEOUT', 0
+lbl_pe:             db 'PE:', 0     ; PIC Entry
+lbl_ps:             db 'PS:', 0     ; PIC Slave
+lbl_pw:             db 'PW:', 0     ; PIC after Win
+lbl_po:             db 'PO:', 0     ; PIC OR in loop
+lbl_px:             db 'PX:', 0     ; PIC at eXit
 lbl_bt:             db 'BT:', 0     ; BIOS Ticks
-lbl_th:             db 'TH:', 0     ; Timer Hook
-lbl_fs:             db 'FS:', 0     ; Flags after Sti
-lbl_fy:             db 'FY:', 0     ; Flags after Yield
-lbl_fe:             db 'FE:', 0     ; Flags after Event_get
+lbl_it:             db 'IT:', 0     ; Iteration count
+lbl_ok:             db 'TICKS!', 0
+lbl_no_tick:        db 'NO TICK', 0
 
 ; Pad to 3 FAT12 clusters (> 1024 bytes)
 times 1536 - ($ - $$) db 0x90
