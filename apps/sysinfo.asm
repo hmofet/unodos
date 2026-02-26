@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 341: Event queue + KBC diagnostic.
-; Reads KBC command byte (port 0x64 cmd 0x20) at entry to check if
-; BIOS INT 13h floppy read disabled keyboard IRQ (bit 0 of cmd byte).
-; Also shows event queue state from kernel diagnostic no_event_return.
+; Build 342: INT 9 fire-count diagnostic.
+; Installs a tiny INT 9 hook that increments a counter then jumps
+; to the original handler. Displays counter at timeout to prove
+; whether IRQ1 actually fires during the event loop.
 
 [BITS 16]
 [ORG 0x0000]
@@ -66,32 +66,23 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; === Read KBC command byte at entry ===
+    ; === Install INT 9 hook ===
     cli
-    ; Drain any pending data
-.drain_kbc:
-    in al, 0x64
-    test al, 0x01
-    jz .drain_kbc_done
-    in al, 0x60
-    jmp .drain_kbc
-.drain_kbc_done:
-    ; Wait for KBC input buffer empty
-.wait_kbc_in:
-    in al, 0x64
-    test al, 0x02
-    jnz .wait_kbc_in
-    ; Send "read command byte" command
-    mov al, 0x20
-    out 0x64, al
-    ; Wait for response
-.wait_kbc_out:
-    in al, 0x64
-    test al, 0x01
-    jz .wait_kbc_out
-    in al, 0x60
-    mov [cs:kbc_cmd_before], al
+    push es
+    xor ax, ax
+    mov es, ax
+    ; Save original INT 9 vector
+    mov ax, [es:0x24]
+    mov [cs:orig_int9_off], ax
+    mov ax, [es:0x26]
+    mov [cs:orig_int9_seg], ax
+    ; Install our hook
+    mov word [es:0x24], int9_hook
+    mov [es:0x26], cs
+    pop es
     sti
+
+    mov word [cs:irq1_count], 0
 
     ; Create window
     mov bx, 10
@@ -105,7 +96,7 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    jc .exit_no_win
+    jc .exit_no_win_unhook
     mov [wh], al
 
     mov al, [cs:wh]
@@ -115,49 +106,20 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Row 1: KBC command byte
-    ; Format: "KBC:xx" — bit 0=kbd IRQ, bit 1=mouse IRQ
-    mov al, [kbc_cmd_before]
-    call byte_to_hex
+    ; Display instructions
     mov bx, 4
     mov cx, 4
-    mov si, lbl_kbc
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 40
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Show bit 0 status (keyboard IRQ enable)
-    test byte [kbc_cmd_before], 0x01
-    jz .kbc_irq_off
-    mov bx, 64
-    mov cx, 4
-    mov si, lbl_irq_on
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    jmp .draw_esc
-.kbc_irq_off:
-    mov bx, 64
-    mov cx, 4
-    mov si, lbl_irq_off
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-.draw_esc:
-    ; Row 2: Press ESC
-    mov bx, 4
-    mov cx, 16
     mov si, lbl_press_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; Record IRQ1 count at loop start
+    mov ax, [cs:irq1_count]
+    mov [cs:irq1_at_start], ax
+
     ; Event loop: 5000 iterations
     mov word [cs:iter_count], 0
     mov word [cs:key_count], 0
-    mov word [cs:mouse_count], 0
-    mov byte [cs:got_diag], 0
 
 .main_loop:
     sti
@@ -169,30 +131,14 @@ entry:
     jc .no_event
 
     cmp al, EVENT_KEY_PRESS
-    jne .check_mouse
+    jne .main_loop
 
     inc word [cs:key_count]
     cmp dl, 27                      ; ESC?
     je .exit_via_events
     jmp .main_loop
 
-.check_mouse:
-    cmp al, EVENT_MOUSE
-    jne .main_loop
-    inc word [cs:mouse_count]
-    jmp .main_loop
-
 .no_event:
-    ; Capture diagnostic on first no_event return
-    cmp byte [cs:got_diag], 0
-    jne .skip_diag
-    mov [cs:diag_focused], dh
-    mov [cs:diag_current], dl
-    mov [cs:diag_head], ch
-    mov [cs:diag_tail], cl
-    mov byte [cs:got_diag], 1
-.skip_diag:
-
     inc word [cs:iter_count]
     cmp word [cs:iter_count], 5000
     jb .main_loop
@@ -201,41 +147,22 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Read KBC command byte AFTER event loop
-    cli
-.drain_kbc2:
-    in al, 0x64
-    test al, 0x01
-    jz .drain_kbc2_done
-    in al, 0x60
-    jmp .drain_kbc2
-.drain_kbc2_done:
-.wait_kbc_in2:
-    in al, 0x64
-    test al, 0x02
-    jnz .wait_kbc_in2
-    mov al, 0x20
-    out 0x64, al
-.wait_kbc_out2:
-    in al, 0x64
-    test al, 0x01
-    jz .wait_kbc_out2
-    in al, 0x60
-    mov [cs:kbc_cmd_after], al
-    sti
+    ; Record IRQ1 count at timeout
+    mov ax, [cs:irq1_count]
+    mov [cs:irq1_at_end], ax
 
-    ; Row 3: TIMEOUT
+    ; Row 2: TIMEOUT
     mov bx, 4
-    mov cx, 28
+    mov cx, 16
     mov si, lbl_timeout
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 4: K:xxxx M:xxxx
+    ; Row 3: K:xxxx (key events via event system)
     mov ax, [key_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 40
+    mov cx, 28
     mov si, lbl_keys
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -244,24 +171,39 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov ax, [mouse_count]
+    ; Row 4: IRQ1 count at start of loop
+    mov ax, [irq1_at_start]
     call word_to_hex
-    mov bx, 72
-    mov cx, 40
-    mov si, lbl_mouse
+    mov bx, 4
+    mov cx, 42
+    mov si, lbl_irq_s
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 92
+    mov bx, 28
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 5: F:xx T:xx H:xx Q:xx
-    mov al, [diag_focused]
-    call byte_to_hex
+    ; Row 5: IRQ1 count at end (timeout)
+    mov ax, [irq1_at_end]
+    call word_to_hex
     mov bx, 4
-    mov cx, 52
-    mov si, lbl_focus
+    mov cx, 54
+    mov si, lbl_irq_e
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 6: Delta (IRQs during event loop)
+    mov ax, [irq1_at_end]
+    sub ax, [irq1_at_start]
+    call word_to_hex
+    mov bx, 4
+    mov cx, 66
+    mov si, lbl_delta
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 24
@@ -269,72 +211,28 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov al, [diag_current]
-    call byte_to_hex
-    mov bx, 56
-    mov cx, 52
-    mov si, lbl_task
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 76
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov al, [diag_head]
-    call byte_to_hex
-    mov bx, 108
-    mov cx, 52
-    mov si, lbl_head
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 128
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov al, [diag_tail]
-    call byte_to_hex
-    mov bx, 156
-    mov cx, 52
-    mov si, lbl_qtail
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 176
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 6: KBC after: "KA:xx"
-    mov al, [kbc_cmd_after]
-    call byte_to_hex
-    mov bx, 4
-    mov cx, 64
-    mov si, lbl_kbc_a
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 32
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Show bit 0 status after
-    test byte [kbc_cmd_after], 0x01
-    jz .kbc_irq_off2
-    mov bx, 56
-    mov cx, 64
-    mov si, lbl_irq_on
+    ; Show "0=NO IRQ!" or count
+    mov ax, [irq1_at_end]
+    sub ax, [irq1_at_start]
+    test ax, ax
+    jnz .irq_ok
+    mov bx, 64
+    mov cx, 66
+    mov si, lbl_no_irq
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     jmp .do_fallback
-.kbc_irq_off2:
-    mov bx, 56
-    mov cx, 64
-    mov si, lbl_irq_off
+.irq_ok:
+    mov bx, 64
+    mov cx, 66
+    mov si, lbl_irqs_ok
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .do_fallback:
+    ; Restore INT 9 before fallback polling
+    call restore_int9
+
     ; Fallback ESC via port polling
     cli
     in al, 0x21
@@ -371,8 +269,22 @@ entry:
     mov ax, cs
     mov ds, ax
     mov bx, 4
-    mov cx, 28
+    mov cx, 16
     mov si, lbl_esc_ok
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show IRQ1 delta on ESC exit too
+    mov ax, [cs:irq1_count]
+    sub ax, [cs:irq1_at_start]
+    call word_to_hex
+    mov bx, 4
+    mov cx, 28
+    mov si, lbl_delta
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 24
+    mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -383,6 +295,9 @@ entry:
     mov ah, API_APP_YIELD
     int 0x80
     loop .pause
+
+    ; Restore INT 9 before exit
+    call restore_int9
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
@@ -397,9 +312,36 @@ entry:
     popa
     retf
 
+.exit_no_win_unhook:
+    call restore_int9
+    jmp .exit_no_win
+
+; ============================================================================
+; INT 9 Hook — runs in interrupt context
+; ============================================================================
+
+int9_hook:
+    inc word [cs:irq1_count]
+    jmp far [cs:orig_int9_off]      ; Chain to original handler
+
 ; ============================================================================
 ; Subroutines
 ; ============================================================================
+
+restore_int9:
+    cli
+    push es
+    push ax
+    xor ax, ax
+    mov es, ax
+    mov ax, [cs:orig_int9_off]
+    mov [es:0x24], ax
+    mov ax, [cs:orig_int9_seg]
+    mov [es:0x26], ax
+    pop ax
+    pop es
+    sti
+    ret
 
 word_to_hex:
     push ax
@@ -454,36 +396,29 @@ byte_to_hex:
 ; Data
 ; ============================================================================
 
-win_title:          db 'Evt Diag', 0
+win_title:          db 'IRQ1 Test', 0
 wh:                 db 0
 iter_count:         dw 0
 key_count:          dw 0
-mouse_count:        dw 0
-got_diag:           db 0
 hex_buf:            db 0, 0, 0, 0, 0
 
-kbc_cmd_before:     db 0
-kbc_cmd_after:      db 0
+irq1_count:         dw 0
+irq1_at_start:      dw 0
+irq1_at_end:        dw 0
 
-; Diagnostic captures
-diag_focused:       db 0
-diag_current:       db 0
-diag_head:          db 0
-diag_tail:          db 0
+; These MUST be adjacent (used by jmp far [cs:orig_int9_off])
+orig_int9_off:      dw 0
+orig_int9_seg:      dw 0
 
-lbl_kbc:            db 'KBC:', 0
-lbl_kbc_a:          db 'KA:', 0
-lbl_irq_on:         db 'IRQ ON', 0
-lbl_irq_off:        db 'IRQ OFF!', 0
 lbl_press_esc:      db 'Press ESC...', 0
 lbl_timeout:        db 'TIMEOUT', 0
 lbl_esc_ok:         db 'ESC OK!', 0
 lbl_keys:           db 'K:', 0
-lbl_mouse:          db 'M:', 0
-lbl_focus:          db 'F:', 0
-lbl_task:           db 'T:', 0
-lbl_head:           db 'H:', 0
-lbl_qtail:          db 'Q:', 0
+lbl_irq_s:         db 'IS:', 0     ; IRQ count at Start
+lbl_irq_e:         db 'IE:', 0     ; IRQ count at End
+lbl_delta:          db 'D:', 0     ; Delta (IRQs during loop)
+lbl_no_irq:         db 'NO IRQ!', 0
+lbl_irqs_ok:        db 'IRQs OK', 0
 
 ; Pad to 3 FAT12 clusters (> 1024 bytes)
 times 1536 - ($ - $$) db 0x90
