@@ -1,16 +1,9 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 336: Kernel event_get diagnostic.
-; Kernel writes queue state to CGA VRAM row 8 when current_task != 0:
-;   Row 8, byte 0 (0x140): event_queue_head
-;   Row 8, byte 2 (0x142): event_queue_tail
-;   Row 8, byte 4 (0x144): focused_task
-;   Row 8, byte 6 (0x146): current_task
-;   Row 8, byte 8 (0x148): 0xFF=queue has events, 0x00=empty
-;   Row 8, byte 10 (0x14A): 0xFF=focus match, 0x00=mismatch
-;
-; App uses normal yield + event_get loop.
-; Also has IRQ1-masked port polling fallback after 5000 iterations.
-; Look at row 8: two white blocks = queue has events + focus match.
+; Build 336: Event delivery diagnostic with readable text output.
+; Kernel event_get returns diagnostic info on no-event:
+;   AL = focused_task, DL = queue_head, DH = queue_tail
+; App displays: "F:x T:y H:a T:b" (Focus, Task, Head, Tail)
+; Then falls back to direct port polling for ESC exit.
 
 [BITS 16]
 [ORG 0x0000]
@@ -43,9 +36,11 @@
 
 ; --- Code Entry (offset 0x50) ---
 
+API_GFX_DRAW_STRING    equ 4
 API_EVENT_GET           equ 9
 API_WIN_CREATE          equ 20
 API_WIN_DESTROY         equ 21
+API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 
@@ -62,6 +57,17 @@ EVENT_KEY_PRESS         equ 1
     pop es
 %endmacro
 
+; Macro: convert nibble in AL (0-15) to hex char in AL
+%macro HEXNIB 0
+    cmp al, 10
+    jb %%digit
+    add al, 'A' - 10
+    jmp %%done
+%%digit:
+    add al, '0'
+%%done:
+%endmacro
+
 entry:
     pusha
     push ds
@@ -74,10 +80,10 @@ entry:
     MARKER 0                        ; entry
 
     ; Create window
-    mov bx, 55
-    mov cx, 43
-    mov dx, 210
-    mov si, 114
+    mov bx, 10
+    mov cx, 30
+    mov dx, 200
+    mov si, 80
     mov ax, cs
     mov es, ax
     mov di, win_title
@@ -85,15 +91,28 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    MARKER 1                        ; win_create returned
+    MARKER 1                        ; win_create
 
     jc .exit_no_win
     mov [wh], al
 
-    MARKER 2                        ; entering main loop
+    ; Begin draw context for text output
+    mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
 
-    ; Normal yield + event_get loop (with iteration counter)
-    mov word [iter_count], 0
+    ; Draw initial label
+    mov bx, 4
+    mov cx, 4
+    mov ax, cs
+    mov ds, ax
+    mov si, lbl_waiting
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    MARKER 2                        ; draw done, entering loop
+
+    ; Try yield + event_get for a limited number of iterations
+    mov word [cs:iter_count], 0
 
 .main_loop:
     sti
@@ -104,47 +123,100 @@ entry:
     int 0x80
     jc .no_event
 
-    ; Got an event! Write marker 3
+    ; Got an event!
     MARKER 3
-
     cmp al, EVENT_KEY_PRESS
     jne .main_loop
-    cmp dl, 27                      ; ESC?
+    cmp dl, 27
     je .exit_ok
     jmp .main_loop
 
 .no_event:
-    ; Increment iteration counter
+    ; AL = focused_task, DL = queue_head, DH = queue_tail (from kernel)
+    ; Save diagnostic values
+    mov [cs:diag_focus], al
+    mov [cs:diag_head], dl
+    mov [cs:diag_tail], dh
+
     inc word [cs:iter_count]
-
-    ; Write low byte of counter to VRAM row 10 (offset 0x190 = 80*5)
-    ; This proves the loop is spinning
-    push es
-    push bx
-    mov bx, 0xB800
-    mov es, bx
-    mov al, [cs:iter_count]
-    mov byte [es:0x190], al         ; Row 10, byte 0: counter low byte
-    mov al, [cs:iter_count+1]
-    mov byte [es:0x192], al         ; Row 10, byte 2: counter high byte
-    pop bx
-    pop es
-
-    ; After 5000 iterations with no events, fall through to port polling
-    cmp word [cs:iter_count], 5000
+    cmp word [cs:iter_count], 200
     jb .main_loop
 
-    ; Timeout! Marker 4 = event_get never delivered an event
-    MARKER 4
+    ; Timeout! Display diagnostic info
+    MARKER 4                        ; timeout
 
-    ; Fall back to IRQ1-masked direct port polling (proven to work in Build 335)
+    ; Draw "F:xx" (focused_task as hex)
+    mov ax, cs
+    mov ds, ax
+
+    mov al, [diag_focus]
+    shr al, 4
+    HEXNIB
+    mov [hex_buf], al
+    mov al, [diag_focus]
+    and al, 0x0F
+    HEXNIB
+    mov [hex_buf+1], al
+    mov byte [hex_buf+2], 0
+
+    mov bx, 4
+    mov cx, 20
+    mov si, lbl_focus
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw "H:xx" (queue head as hex)
+    mov al, [diag_head]
+    shr al, 4
+    HEXNIB
+    mov [hex_buf], al
+    mov al, [diag_head]
+    and al, 0x0F
+    HEXNIB
+    mov [hex_buf+1], al
+
+    mov bx, 4
+    mov cx, 34
+    mov si, lbl_head
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Draw "T:xx" (queue tail as hex)
+    mov al, [diag_tail]
+    shr al, 4
+    HEXNIB
+    mov [hex_buf], al
+    mov al, [diag_tail]
+    and al, 0x0F
+    HEXNIB
+    mov [hex_buf+1], al
+
+    mov bx, 4
+    mov cx, 48
+    mov si, lbl_tail
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    MARKER 5                        ; diag displayed
+
+    ; Fall back to IRQ1-masked port polling for exit
     cli
     in al, 0x21
-    or al, 0x02                     ; Mask IRQ1
+    or al, 0x02
     out 0x21, al
     sti
-
-    MARKER 5                        ; fallback polling active
 
 .fallback_loop:
     in al, 0x64
@@ -153,12 +225,11 @@ entry:
     in al, 0x60
     test al, 0x80
     jnz .fallback_loop
-    cmp al, 0x01                    ; ESC?
+    cmp al, 0x01
     jne .fallback_loop
 
-    MARKER 6                        ; ESC via fallback
+    MARKER 6                        ; ESC
 
-    ; Unmask IRQ1
     cli
     in al, 0x21
     and al, 0xFD
@@ -185,6 +256,15 @@ entry:
 win_title:      db 'System Info', 0
 wh:             db 0
 iter_count:     dw 0
+diag_focus:     db 0
+diag_head:      db 0
+diag_tail:      db 0
+hex_buf:        db 0, 0, 0
+
+lbl_waiting:    db 'Waiting...', 0
+lbl_focus:      db 'F:', 0
+lbl_head:       db 'H:', 0
+lbl_tail:       db 'T:', 0
 
 ; Pad to force 2 FAT12 clusters (> 512 bytes)
 times 600 - ($ - $$) db 0x90
