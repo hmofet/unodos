@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 342: INT 9 fire-count diagnostic.
-; Installs a tiny INT 9 hook that increments a counter then jumps
-; to the original handler. Displays counter at timeout to prove
-; whether IRQ1 actually fires during the event loop.
+; Build 343: PIC ISR (In-Service Register) diagnostic.
+; Reads PIC ISR to check if IRQ1 is stuck in-service (blocking
+; all future keyboard interrupts). Sends multiple EOIs to clear,
+; then re-checks. Also includes INT 9 hook to count IRQs.
 
 [BITS 16]
 [ORG 0x0000]
@@ -44,9 +44,7 @@ API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 
 EVENT_KEY_PRESS         equ 1
-EVENT_MOUSE             equ 3
 
-; Macro: convert nibble in AL (0-15) to hex char in AL
 %macro HEXNIB 0
     cmp al, 10
     jb %%digit
@@ -66,17 +64,51 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; === Install INT 9 hook ===
+    ; === Read PIC ISR BEFORE any EOI ===
     cli
+    mov al, 0x0B
+    out 0x20, al                    ; Read ISR command (master)
+    in al, 0x20                     ; Read master ISR
+    mov [cs:isr_before], al
+
+    mov al, 0x0B
+    out 0xA0, al                    ; Read ISR command (slave)
+    in al, 0xA0
+    mov [cs:isr_slave_before], al
+
+    ; === Send 8 EOIs to master PIC to clear ALL stuck ISR bits ===
+    mov cx, 8
+.eoi_loop:
+    mov al, 0x20
+    out 0x20, al
+    loop .eoi_loop
+    ; Also clear slave
+    mov al, 0x20
+    out 0xA0, al
+
+    ; === Read PIC ISR AFTER EOIs ===
+    mov al, 0x0B
+    out 0x20, al
+    in al, 0x20
+    mov [cs:isr_after], al
+
+    ; === Drain KBC output buffer ===
+.drain_kbc:
+    in al, 0x64
+    test al, 0x01
+    jz .drain_done
+    in al, 0x60
+    jmp .drain_kbc
+.drain_done:
+
+    ; === Install INT 9 hook ===
     push es
     xor ax, ax
     mov es, ax
-    ; Save original INT 9 vector
     mov ax, [es:0x24]
     mov [cs:orig_int9_off], ax
     mov ax, [es:0x26]
     mov [cs:orig_int9_seg], ax
-    ; Install our hook
     mov word [es:0x24], int9_hook
     mov [es:0x26], cs
     pop es
@@ -95,7 +127,6 @@ entry:
     mov al, 0x03
     mov ah, API_WIN_CREATE
     int 0x80
-
     jc .exit_no_win_unhook
     mov [wh], al
 
@@ -106,9 +137,65 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Display instructions
+    ; Row 1: ISR before EOI (master)
+    mov al, [isr_before]
+    call byte_to_hex
     mov bx, 4
     mov cx, 4
+    mov si, lbl_isr_b
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 32
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show if bit 1 (IRQ1) is set
+    test byte [isr_before], 0x02
+    jz .isr_b_ok
+    mov bx, 56
+    mov cx, 4
+    mov si, lbl_stuck
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .show_isr_after
+.isr_b_ok:
+    mov bx, 56
+    mov cx, 4
+    mov si, lbl_clear
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.show_isr_after:
+    ; Row 2: ISR after EOI
+    mov al, [isr_after]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 16
+    mov si, lbl_isr_a
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 32
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 3: Slave ISR
+    mov al, [isr_slave_before]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 28
+    mov si, lbl_isr_sl
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 36
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 4: Press ESC
+    mov bx, 4
+    mov cx, 42
     mov si, lbl_press_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -134,7 +221,7 @@ entry:
     jne .main_loop
 
     inc word [cs:key_count]
-    cmp dl, 27                      ; ESC?
+    cmp dl, 27
     je .exit_via_events
     jmp .main_loop
 
@@ -147,22 +234,31 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Record IRQ1 count at timeout
+    ; IRQ1 delta
     mov ax, [cs:irq1_count]
-    mov [cs:irq1_at_end], ax
+    sub ax, [cs:irq1_at_start]
+    mov [cs:irq1_delta], ax
 
-    ; Row 2: TIMEOUT
+    ; Read ISR at timeout
+    cli
+    mov al, 0x0B
+    out 0x20, al
+    in al, 0x20
+    mov [cs:isr_timeout], al
+    sti
+
+    ; Row 5: TIMEOUT
     mov bx, 4
-    mov cx, 16
+    mov cx, 54
     mov si, lbl_timeout
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 3: K:xxxx (key events via event system)
+    ; Row 6: K:xxxx D:xxxx (key events, IRQ delta)
     mov ax, [key_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 28
+    mov cx, 66
     mov si, lbl_keys
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -171,69 +267,50 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 4: IRQ1 count at start of loop
-    mov ax, [irq1_at_start]
+    mov ax, [irq1_delta]
     call word_to_hex
-    mov bx, 4
-    mov cx, 42
-    mov si, lbl_irq_s
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 5: IRQ1 count at end (timeout)
-    mov ax, [irq1_at_end]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 54
-    mov si, lbl_irq_e
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 6: Delta (IRQs during event loop)
-    mov ax, [irq1_at_end]
-    sub ax, [irq1_at_start]
-    call word_to_hex
-    mov bx, 4
+    mov bx, 72
     mov cx, 66
     mov si, lbl_delta
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 24
+    mov bx, 92
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Show "0=NO IRQ!" or count
-    mov ax, [irq1_at_end]
-    sub ax, [irq1_at_start]
-    test ax, ax
-    jnz .irq_ok
-    mov bx, 64
-    mov cx, 66
-    mov si, lbl_no_irq
+    ; Row 7: ISR at timeout
+    mov al, [isr_timeout]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 78
+    mov si, lbl_isr_t
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 32
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show stuck/clear for timeout ISR
+    test byte [isr_timeout], 0x02
+    jz .isr_t_ok
+    mov bx, 56
+    mov cx, 78
+    mov si, lbl_stuck
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     jmp .do_fallback
-.irq_ok:
-    mov bx, 64
-    mov cx, 66
-    mov si, lbl_irqs_ok
+.isr_t_ok:
+    mov bx, 56
+    mov cx, 78
+    mov si, lbl_clear
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
 .do_fallback:
-    ; Restore INT 9 before fallback polling
     call restore_int9
 
-    ; Fallback ESC via port polling
     cli
     in al, 0x21
     or al, 0x02
@@ -243,10 +320,10 @@ entry:
 .drain_loop:
     in al, 0x64
     test al, 0x01
-    jz .drain_done
+    jz .fdrain_done
     in al, 0x60
     jmp .drain_loop
-.drain_done:
+.fdrain_done:
 
 .fallback_loop:
     in al, 0x64
@@ -268,18 +345,12 @@ entry:
 .exit_via_events:
     mov ax, cs
     mov ds, ax
-    mov bx, 4
-    mov cx, 16
-    mov si, lbl_esc_ok
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
 
-    ; Show IRQ1 delta on ESC exit too
     mov ax, [cs:irq1_count]
     sub ax, [cs:irq1_at_start]
     call word_to_hex
     mov bx, 4
-    mov cx, 28
+    mov cx, 54
     mov si, lbl_delta
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -288,7 +359,12 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Brief pause
+    mov bx, 4
+    mov cx, 66
+    mov si, lbl_esc_ok
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
     mov cx, 50
 .pause:
     sti
@@ -296,7 +372,6 @@ entry:
     int 0x80
     loop .pause
 
-    ; Restore INT 9 before exit
     call restore_int9
 
 .exit_ok:
@@ -317,12 +392,12 @@ entry:
     jmp .exit_no_win
 
 ; ============================================================================
-; INT 9 Hook — runs in interrupt context
+; INT 9 Hook
 ; ============================================================================
 
 int9_hook:
     inc word [cs:irq1_count]
-    jmp far [cs:orig_int9_off]      ; Chain to original handler
+    jmp far [cs:orig_int9_off]
 
 ; ============================================================================
 ; Subroutines
@@ -347,27 +422,22 @@ word_to_hex:
     push ax
     push cx
     mov cx, ax
-
     mov al, ch
     shr al, 4
     HEXNIB
     mov [cs:hex_buf], al
-
     mov al, ch
     and al, 0x0F
     HEXNIB
     mov [cs:hex_buf+1], al
-
     mov al, cl
     shr al, 4
     HEXNIB
     mov [cs:hex_buf+2], al
-
     mov al, cl
     and al, 0x0F
     HEXNIB
     mov [cs:hex_buf+3], al
-
     mov byte [cs:hex_buf+4], 0
     pop cx
     pop ax
@@ -377,16 +447,13 @@ byte_to_hex:
     push ax
     push cx
     mov cl, al
-
     shr al, 4
     HEXNIB
     mov [cs:hex_buf], al
-
     mov al, cl
     and al, 0x0F
     HEXNIB
     mov [cs:hex_buf+1], al
-
     mov byte [cs:hex_buf+2], 0
     pop cx
     pop ax
@@ -396,7 +463,7 @@ byte_to_hex:
 ; Data
 ; ============================================================================
 
-win_title:          db 'IRQ1 Test', 0
+win_title:          db 'PIC ISR', 0
 wh:                 db 0
 iter_count:         dw 0
 key_count:          dw 0
@@ -404,21 +471,28 @@ hex_buf:            db 0, 0, 0, 0, 0
 
 irq1_count:         dw 0
 irq1_at_start:      dw 0
-irq1_at_end:        dw 0
+irq1_delta:         dw 0
 
-; These MUST be adjacent (used by jmp far [cs:orig_int9_off])
+isr_before:         db 0
+isr_after:          db 0
+isr_slave_before:   db 0
+isr_timeout:        db 0
+
+; MUST be adjacent for jmp far
 orig_int9_off:      dw 0
 orig_int9_seg:      dw 0
 
+lbl_isr_b:          db 'IB:', 0     ; ISR Before EOI
+lbl_isr_a:          db 'IA:', 0     ; ISR After EOI
+lbl_isr_sl:         db 'SL:', 0     ; Slave ISR
+lbl_isr_t:          db 'IT:', 0     ; ISR at Timeout
+lbl_stuck:          db 'IRQ1!', 0   ; IRQ1 stuck in-service
+lbl_clear:          db 'ok', 0      ; IRQ1 clear
 lbl_press_esc:      db 'Press ESC...', 0
 lbl_timeout:        db 'TIMEOUT', 0
 lbl_esc_ok:         db 'ESC OK!', 0
 lbl_keys:           db 'K:', 0
-lbl_irq_s:         db 'IS:', 0     ; IRQ count at Start
-lbl_irq_e:         db 'IE:', 0     ; IRQ count at End
-lbl_delta:          db 'D:', 0     ; Delta (IRQs during loop)
-lbl_no_irq:         db 'NO IRQ!', 0
-lbl_irqs_ok:        db 'IRQs OK', 0
+lbl_delta:          db 'D:', 0
 
 ; Pad to 3 FAT12 clusters (> 1024 bytes)
 times 1536 - ($ - $$) db 0x90
