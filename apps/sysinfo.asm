@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 341: Event queue state diagnostic.
-; Kernel no_event_return now returns:
-;   DH=focused_task, DL=current_task, CH=queue_head, CL=queue_tail
-; Displays these to diagnose why K:0000 M:0000.
+; Build 341: Event queue + KBC diagnostic.
+; Reads KBC command byte (port 0x64 cmd 0x20) at entry to check if
+; BIOS INT 13h floppy read disabled keyboard IRQ (bit 0 of cmd byte).
+; Also shows event queue state from kernel diagnostic no_event_return.
 
 [BITS 16]
 [ORG 0x0000]
@@ -66,6 +66,33 @@ entry:
     mov ds, ax
     mov es, ax
 
+    ; === Read KBC command byte at entry ===
+    cli
+    ; Drain any pending data
+.drain_kbc:
+    in al, 0x64
+    test al, 0x01
+    jz .drain_kbc_done
+    in al, 0x60
+    jmp .drain_kbc
+.drain_kbc_done:
+    ; Wait for KBC input buffer empty
+.wait_kbc_in:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_kbc_in
+    ; Send "read command byte" command
+    mov al, 0x20
+    out 0x64, al
+    ; Wait for response
+.wait_kbc_out:
+    in al, 0x64
+    test al, 0x01
+    jz .wait_kbc_out
+    in al, 0x60
+    mov [cs:kbc_cmd_before], al
+    sti
+
     ; Create window
     mov bx, 10
     mov cx, 20
@@ -88,9 +115,40 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Display instructions
+    ; Row 1: KBC command byte
+    ; Format: "KBC:xx" — bit 0=kbd IRQ, bit 1=mouse IRQ
+    mov al, [kbc_cmd_before]
+    call byte_to_hex
     mov bx, 4
     mov cx, 4
+    mov si, lbl_kbc
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 40
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show bit 0 status (keyboard IRQ enable)
+    test byte [kbc_cmd_before], 0x01
+    jz .kbc_irq_off
+    mov bx, 64
+    mov cx, 4
+    mov si, lbl_irq_on
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .draw_esc
+.kbc_irq_off:
+    mov bx, 64
+    mov cx, 4
+    mov si, lbl_irq_off
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.draw_esc:
+    ; Row 2: Press ESC
+    mov bx, 4
+    mov cx, 16
     mov si, lbl_press_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -126,7 +184,6 @@ entry:
 
 .no_event:
     ; Capture diagnostic on first no_event return
-    ; DH=focused_task, DL=current_task, CH=queue_head, CL=queue_tail
     cmp byte [cs:got_diag], 0
     jne .skip_diag
     mov [cs:diag_focused], dh
@@ -144,18 +201,41 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Show TIMEOUT
+    ; Read KBC command byte AFTER event loop
+    cli
+.drain_kbc2:
+    in al, 0x64
+    test al, 0x01
+    jz .drain_kbc2_done
+    in al, 0x60
+    jmp .drain_kbc2
+.drain_kbc2_done:
+.wait_kbc_in2:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_kbc_in2
+    mov al, 0x20
+    out 0x64, al
+.wait_kbc_out2:
+    in al, 0x64
+    test al, 0x01
+    jz .wait_kbc_out2
+    in al, 0x60
+    mov [cs:kbc_cmd_after], al
+    sti
+
+    ; Row 3: TIMEOUT
     mov bx, 4
-    mov cx, 18
+    mov cx, 28
     mov si, lbl_timeout
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; K:xxxx
+    ; Row 4: K:xxxx M:xxxx
     mov ax, [key_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 30
+    mov cx, 40
     mov si, lbl_keys
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -164,11 +244,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; M:xxxx
     mov ax, [mouse_count]
     call word_to_hex
     mov bx, 72
-    mov cx, 30
+    mov cx, 40
     mov si, lbl_mouse
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -177,11 +256,11 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; F:xx (focused_task)
+    ; Row 5: F:xx T:xx H:xx Q:xx
     mov al, [diag_focused]
     call byte_to_hex
     mov bx, 4
-    mov cx, 44
+    mov cx, 52
     mov si, lbl_focus
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -190,11 +269,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; T:xx (current_task = our task)
     mov al, [diag_current]
     call byte_to_hex
     mov bx, 56
-    mov cx, 44
+    mov cx, 52
     mov si, lbl_task
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -203,72 +281,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; H:xx (queue head)
     mov al, [diag_head]
     call byte_to_hex
-    mov bx, 4
-    mov cx, 56
-    mov si, lbl_head
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 24
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Q:xx (queue tail)
-    mov al, [diag_tail]
-    call byte_to_hex
-    mov bx, 56
-    mov cx, 56
-    mov si, lbl_qtail
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 76
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Now do a SECOND capture right before fallback
-    ; to see if queue state changed
-    sti
-    mov ah, API_EVENT_GET
-    int 0x80
-    ; DH/DL/CH/CL have fresh values now
-    mov [cs:diag_focused2], dh
-    mov [cs:diag_current2], dl
-    mov [cs:diag_head2], ch
-    mov [cs:diag_tail2], cl
-
-    ; F2:xx T2:xx H2:xx Q2:xx
-    mov al, [diag_focused2]
-    call byte_to_hex
-    mov bx, 4
-    mov cx, 70
-    mov si, lbl_focus
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 24
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov al, [diag_current2]
-    call byte_to_hex
-    mov bx, 56
-    mov cx, 70
-    mov si, lbl_task
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 76
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov al, [diag_head2]
-    call byte_to_hex
     mov bx, 108
-    mov cx, 70
+    mov cx, 52
     mov si, lbl_head
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -277,10 +293,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov al, [diag_tail2]
+    mov al, [diag_tail]
     call byte_to_hex
     mov bx, 156
-    mov cx, 70
+    mov cx, 52
     mov si, lbl_qtail
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -289,6 +305,36 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; Row 6: KBC after: "KA:xx"
+    mov al, [kbc_cmd_after]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 64
+    mov si, lbl_kbc_a
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 32
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show bit 0 status after
+    test byte [kbc_cmd_after], 0x01
+    jz .kbc_irq_off2
+    mov bx, 56
+    mov cx, 64
+    mov si, lbl_irq_on
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .do_fallback
+.kbc_irq_off2:
+    mov bx, 56
+    mov cx, 64
+    mov si, lbl_irq_off
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.do_fallback:
     ; Fallback ESC via port polling
     cli
     in al, 0x21
@@ -325,7 +371,7 @@ entry:
     mov ax, cs
     mov ds, ax
     mov bx, 4
-    mov cx, 18
+    mov cx, 28
     mov si, lbl_esc_ok
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -416,18 +462,19 @@ mouse_count:        dw 0
 got_diag:           db 0
 hex_buf:            db 0, 0, 0, 0, 0
 
-; First capture (early in event loop)
+kbc_cmd_before:     db 0
+kbc_cmd_after:      db 0
+
+; Diagnostic captures
 diag_focused:       db 0
 diag_current:       db 0
 diag_head:          db 0
 diag_tail:          db 0
 
-; Second capture (at timeout, just before fallback)
-diag_focused2:      db 0
-diag_current2:      db 0
-diag_head2:         db 0
-diag_tail2:         db 0
-
+lbl_kbc:            db 'KBC:', 0
+lbl_kbc_a:          db 'KA:', 0
+lbl_irq_on:         db 'IRQ ON', 0
+lbl_irq_off:        db 'IRQ OFF!', 0
 lbl_press_esc:      db 'Press ESC...', 0
 lbl_timeout:        db 'TIMEOUT', 0
 lbl_esc_ok:         db 'ESC OK!', 0
