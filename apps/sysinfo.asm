@@ -1,9 +1,11 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 336: Event delivery diagnostic with readable text output.
-; Kernel event_get returns diagnostic info on no-event:
-;   AL = focused_task, DL = queue_head, DH = queue_tail
-; App displays: "F:x T:y H:a T:b" (Focus, Task, Head, Tail)
-; Then falls back to direct port polling for ESC exit.
+; Build 337: Screen height corruption diagnostic.
+; Reads screen_height (API 82) at 3 points:
+;   B:xxxx = Before win_create
+;   A:xxxx = After win_create
+;   N:xxxx = Now (at timeout, after 200 yield+event_get loops)
+; Also shows F:xx H:xx T:xx (focus, queue head, queue tail)
+; Falls back to IRQ1-masked port polling for ESC exit.
 
 [BITS 16]
 [ORG 0x0000]
@@ -43,6 +45,7 @@ API_WIN_DESTROY         equ 21
 API_WIN_BEGIN_DRAW      equ 31
 API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
+API_GET_SCREEN_INFO     equ 82
 
 EVENT_KEY_PRESS         equ 1
 
@@ -79,6 +82,11 @@ entry:
 
     MARKER 0                        ; entry
 
+    ; Read screen_height BEFORE win_create (API 82)
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    mov [cs:sh_before], cx          ; CX = screen_height
+
     ; Create window
     mov bx, 10
     mov cx, 30
@@ -91,21 +99,52 @@ entry:
     mov ah, API_WIN_CREATE
     int 0x80
 
-    MARKER 1                        ; win_create
+    MARKER 1                        ; win_create done
 
     jc .exit_no_win
     mov [wh], al
 
-    ; Begin draw context for text output
+    ; Read screen_height AFTER win_create (API 82)
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    mov [cs:sh_after], cx           ; CX = screen_height
+
+    ; Begin draw context
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
     ; Draw initial label
-    mov bx, 4
-    mov cx, 4
     mov ax, cs
     mov ds, ax
+    mov bx, 4
+    mov cx, 4
     mov si, lbl_waiting
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Display "B:xxxx" (screen_height before win_create)
+    mov ax, [cs:sh_before]
+    call word_to_hex
+    mov bx, 4
+    mov cx, 16
+    mov si, lbl_before
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 24
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Display "A:xxxx" (screen_height after win_create)
+    mov ax, [cs:sh_after]
+    call word_to_hex
+    mov bx, 80
+    mov cx, 16
+    mov si, lbl_after
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 100
+    mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -133,7 +172,6 @@ entry:
 
 .no_event:
     ; AL = focused_task, DL = queue_head, DH = queue_tail (from kernel)
-    ; Save diagnostic values
     mov [cs:diag_focus], al
     mov [cs:diag_head], dl
     mov [cs:diag_tail], dh
@@ -142,69 +180,63 @@ entry:
     cmp word [cs:iter_count], 200
     jb .main_loop
 
-    ; Timeout! Display diagnostic info
+    ; Timeout! Read current screen_height
     MARKER 4                        ; timeout
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    mov [cs:sh_now], cx
 
-    ; Draw "F:xx" (focused_task as hex)
     mov ax, cs
     mov ds, ax
 
-    mov al, [diag_focus]
-    shr al, 4
-    HEXNIB
-    mov [hex_buf], al
-    mov al, [diag_focus]
-    and al, 0x0F
-    HEXNIB
-    mov [hex_buf+1], al
-    mov byte [hex_buf+2], 0
-
+    ; Display "N:xxxx" (screen_height now)
+    mov ax, [sh_now]
+    call word_to_hex
     mov bx, 4
-    mov cx, 20
+    mov cx, 28
+    mov si, lbl_now
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov bx, 24
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Display "F:xx" (focused_task as hex byte)
+    mov al, [diag_focus]
+    call byte_to_hex
+    mov bx, 4
+    mov cx, 42
     mov si, lbl_focus
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 28
+    mov bx, 24
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw "H:xx" (queue head as hex)
+    ; Display "H:xx" (queue head)
     mov al, [diag_head]
-    shr al, 4
-    HEXNIB
-    mov [hex_buf], al
-    mov al, [diag_head]
-    and al, 0x0F
-    HEXNIB
-    mov [hex_buf+1], al
-
-    mov bx, 4
-    mov cx, 34
+    call byte_to_hex
+    mov bx, 64
+    mov cx, 42
     mov si, lbl_head
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 28
+    mov bx, 84
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Draw "T:xx" (queue tail as hex)
+    ; Display "T:xx" (queue tail)
     mov al, [diag_tail]
-    shr al, 4
-    HEXNIB
-    mov [hex_buf], al
-    mov al, [diag_tail]
-    and al, 0x0F
-    HEXNIB
-    mov [hex_buf+1], al
-
-    mov bx, 4
-    mov cx, 48
+    call byte_to_hex
+    mov bx, 120
+    mov cx, 42
     mov si, lbl_tail
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 28
+    mov bx, 140
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -217,6 +249,15 @@ entry:
     or al, 0x02
     out 0x21, al
     sti
+
+    ; Drain any residual scancodes
+.drain_loop:
+    in al, 0x64
+    test al, 0x01
+    jz .drain_done
+    in al, 0x60
+    jmp .drain_loop
+.drain_done:
 
 .fallback_loop:
     in al, 0x64
@@ -250,6 +291,61 @@ entry:
     retf
 
 ; ============================================================================
+; Subroutines
+; ============================================================================
+
+; word_to_hex: Convert AX (word) to 4-char hex string at hex_buf
+word_to_hex:
+    push ax
+    push cx
+    mov cx, ax              ; Save value in CX
+
+    mov al, ch              ; High byte, high nibble
+    shr al, 4
+    HEXNIB
+    mov [cs:hex_buf], al
+
+    mov al, ch              ; High byte, low nibble
+    and al, 0x0F
+    HEXNIB
+    mov [cs:hex_buf+1], al
+
+    mov al, cl              ; Low byte, high nibble
+    shr al, 4
+    HEXNIB
+    mov [cs:hex_buf+2], al
+
+    mov al, cl              ; Low byte, low nibble
+    and al, 0x0F
+    HEXNIB
+    mov [cs:hex_buf+3], al
+
+    mov byte [cs:hex_buf+4], 0
+    pop cx
+    pop ax
+    ret
+
+; byte_to_hex: Convert AL (byte) to 2-char hex string at hex_buf
+byte_to_hex:
+    push ax
+    push cx
+    mov cl, al              ; Save value
+
+    shr al, 4               ; High nibble
+    HEXNIB
+    mov [cs:hex_buf], al
+
+    mov al, cl              ; Low nibble
+    and al, 0x0F
+    HEXNIB
+    mov [cs:hex_buf+1], al
+
+    mov byte [cs:hex_buf+2], 0
+    pop cx
+    pop ax
+    ret
+
+; ============================================================================
 ; Data
 ; ============================================================================
 
@@ -259,12 +355,18 @@ iter_count:     dw 0
 diag_focus:     db 0
 diag_head:      db 0
 diag_tail:      db 0
-hex_buf:        db 0, 0, 0
+sh_before:      dw 0
+sh_after:       dw 0
+sh_now:         dw 0
+hex_buf:        db 0, 0, 0, 0, 0
 
 lbl_waiting:    db 'Waiting...', 0
+lbl_before:     db 'B:', 0
+lbl_after:      db 'A:', 0
+lbl_now:        db 'N:', 0
 lbl_focus:      db 'F:', 0
 lbl_head:       db 'H:', 0
 lbl_tail:       db 'T:', 0
 
-; Pad to force 2 FAT12 clusters (> 512 bytes)
-times 600 - ($ - $$) db 0x90
+; Already > 512 bytes (2 FAT12 clusters), pad to 800
+times 800 - ($ - $$) db 0x90
