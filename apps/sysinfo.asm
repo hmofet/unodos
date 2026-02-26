@@ -1,10 +1,9 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 334: Direct keyboard port polling diagnostic.
-; Build 333 showed PIC fix didn't help — both KB and mouse dead.
-; This test bypasses INT 0x80 event system entirely.
-; Polls keyboard controller port 0x64/0x60 directly.
-; If ESC exits: keyboard HW works but event chain is broken.
-; If ESC doesn't exit: keyboard controller itself is dead.
+; Build 335: Mask IRQ1 then poll keyboard port directly.
+; Build 334 showed 5 markers (Enter residual consumed) but no new keys.
+; This proves INT 9 handler (via IRQ1) is STEALING scan codes from
+; our polling loop. Solution: mask IRQ1 so we get the raw scan codes.
+; If ESC works: keyboard HW fine, IRQ1 handler works, event_get broken.
 
 [BITS 16]
 [ORG 0x0000]
@@ -82,69 +81,65 @@ entry:
     jc .exit_no_win
     mov [wh], al
 
-    ; ---- PIC fix (from Build 333) ----
+    ; ---- Mask IRQ1 (keyboard) so INT 9 handler doesn't steal scan codes ----
+    ; This lets our direct port polling see the raw keyboard data.
     cli
-    mov al, 0x20
-    out 0xA0, al                    ; EOI to secondary PIC
-    out 0x20, al                    ; EOI to primary PIC
-    in al, 0xA1
-    and al, 0xEF                    ; Unmask IRQ12
-    out 0xA1, al
     in al, 0x21
-    and al, 0xFB                    ; Unmask IRQ2 cascade
+    or al, 0x02                     ; Set bit 1 = mask IRQ1
     out 0x21, al
     sti
 
-    MARKER 2                        ; PIC fix done
+    MARKER 2                        ; IRQ1 masked
 
-    ; ---- Reinstall INT 9 vector (in case IVT was corrupted) ----
-    ; The kernel's INT 9 handler is at 0x1000:int_09_handler
-    ; We can't easily get the correct offset from the app, so skip this.
-    ; Instead, we test direct port polling.
+    ; ---- Drain any residual scan codes ----
+    in al, 0x64
+    test al, 0x01
+    jz .drained
+    in al, 0x60                     ; Read and discard leftover
+.drained:
 
-    ; ---- Direct keyboard port polling loop ----
-    ; Bypass ALL interrupt/event infrastructure.
-    ; Read keyboard controller status port 0x64 and data port 0x60.
-    MARKER 3                        ; entering poll loop
+    MARKER 3                        ; ready for key polling
 
+    ; ---- Direct keyboard port polling (with IRQ1 masked) ----
 .poll_loop:
-    sti                             ; Keep interrupts enabled
-
     ; Check if keyboard output buffer has data
     in al, 0x64
     test al, 0x01                   ; Bit 0 = output buffer full
-    jz .no_key
+    jz .poll_loop                   ; No data, keep polling
 
     ; Read scan code
     in al, 0x60
 
     ; Skip key releases (bit 7 set)
     test al, 0x80
-    jnz .no_key
+    jnz .poll_loop
 
-    ; Any key press: write marker 4 (proves keyboard HW works)
-    MARKER 4
+    ; Key press detected!
+    MARKER 4                        ; proves keyboard HW works
 
     ; Check for ESC (scan code 0x01)
     cmp al, 0x01
     je .got_esc
 
-    ; Not ESC — write scan code to VRAM row 2 for diagnostic
+    ; Not ESC — write scan code to VRAM for diagnostic, keep polling
     push es
     push bx
     mov bx, 0xB800
     mov es, bx
-    mov byte [es:0xA0], al          ; Row 2, byte 0: raw scan code
+    mov byte [es:0xA0], al          ; Row 2: raw scan code
     pop bx
     pop es
     jmp .poll_loop
 
-.no_key:
-    jmp .poll_loop
-
 .got_esc:
-    ; ---- Marker 5: ESC detected via direct port polling ----
-    MARKER 5
+    MARKER 5                        ; ESC detected
+
+    ; ---- Unmask IRQ1 before exiting ----
+    cli
+    in al, 0x21
+    and al, 0xFD                    ; Clear bit 1 = unmask IRQ1
+    out 0x21, al
+    sti
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
