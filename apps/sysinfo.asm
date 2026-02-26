@@ -1,8 +1,8 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 339: PIC mask diagnostic + force unmask test.
-; Reads PIC masks (ports 0x21, 0xA1) at entry to check if BIOS
-; INT 13h floppy read masked IRQ1 (keyboard) or IRQ12 (mouse).
-; Then force-unmasks all critical IRQs and tests event delivery.
+; Build 340: IVT corruption diagnostic.
+; Reads INT 9 (keyboard), INT 74h (mouse), INT 80h (API) vectors
+; from IVT at 0x0000:xxxx to check if BIOS INT 13h floppy read
+; corrupted them during 2-cluster app load.
 
 [BITS 16]
 [ORG 0x0000]
@@ -79,33 +79,31 @@ entry:
 
     MARKER 0
 
-    ; === Read PIC masks BEFORE anything else ===
-    in al, 0x21                     ; Master PIC mask
-    mov [cs:pic_master], al
-    in al, 0xA1                     ; Slave PIC mask
-    mov [cs:pic_slave], al
+    ; === Read IVT entries BEFORE anything else ===
+    ; IVT is at 0x0000:0000, each entry = 4 bytes (offset:segment)
+    push es
+    xor ax, ax
+    mov es, ax
 
-    ; === Force unmask critical IRQs ===
-    ; Send EOI to both PICs (clear any pending ISR)
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
+    ; INT 9 (keyboard) at IVT offset 0x24 (9 * 4)
+    mov ax, [es:0x24]              ; offset
+    mov [cs:ivt9_off], ax
+    mov ax, [es:0x26]              ; segment
+    mov [cs:ivt9_seg], ax
 
-    ; Unmask IRQ0 (timer), IRQ1 (keyboard), IRQ2 (cascade) on master
-    in al, 0x21
-    and al, 0xF8                    ; Clear bits 0,1,2
-    out 0x21, al
+    ; INT 74h (IRQ12/mouse) at IVT offset 0x1D0 (0x74 * 4)
+    mov ax, [es:0x1D0]            ; offset
+    mov [cs:ivt74_off], ax
+    mov ax, [es:0x1D2]            ; segment
+    mov [cs:ivt74_seg], ax
 
-    ; Unmask IRQ12 (mouse) on slave
-    in al, 0xA1
-    and al, 0xEF                    ; Clear bit 4
-    out 0xA1, al
+    ; INT 80h (API) at IVT offset 0x200 (0x80 * 4)
+    mov ax, [es:0x200]            ; offset
+    mov [cs:ivt80_off], ax
+    mov ax, [es:0x202]            ; segment
+    mov [cs:ivt80_seg], ax
 
-    ; Read PIC masks AFTER unmask
-    in al, 0x21
-    mov [cs:pic_master_after], al
-    in al, 0xA1
-    mov [cs:pic_slave_after], al
+    pop es
 
     ; Create window
     mov bx, 10
@@ -131,61 +129,151 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Display "P:xx" (master PIC mask before)
-    mov al, [pic_master]
-    call byte_to_hex
+    ; === Row 1: INT 9 vector (keyboard) ===
+    ; Format: "I9:SSSS:OOOO" where SSSS=segment, OOOO=offset
     mov bx, 4
     mov cx, 4
-    mov si, lbl_pic_m
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 24
-    mov si, hex_buf
+    mov si, lbl_int9
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Display "S:xx" (slave PIC mask before)
-    mov al, [pic_slave]
-    call byte_to_hex
-    mov bx, 72
+    mov ax, [ivt9_seg]
+    call word_to_hex
+    mov bx, 28
     mov cx, 4
-    mov si, lbl_pic_s
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 92
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Display "p:xx" (master after unmask)
-    mov al, [pic_master_after]
-    call byte_to_hex
+    mov bx, 60
+    mov cx, 4
+    mov si, lbl_colon
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt9_off]
+    call word_to_hex
+    mov bx, 68
+    mov cx, 4
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show OK/BAD for INT 9
+    mov ax, [ivt9_seg]
+    cmp ax, 0x1000
+    jne .int9_bad
+    mov bx, 108
+    mov cx, 4
+    mov si, lbl_ok
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .draw_int74
+.int9_bad:
+    mov bx, 108
+    mov cx, 4
+    mov si, lbl_bad
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.draw_int74:
+    ; === Row 2: INT 74h vector (mouse IRQ12) ===
     mov bx, 4
     mov cx, 16
-    mov si, lbl_pic_m2
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 24
-    mov si, hex_buf
+    mov si, lbl_int74
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Display "s:xx" (slave after unmask)
-    mov al, [pic_slave_after]
-    call byte_to_hex
-    mov bx, 72
+    mov ax, [ivt74_seg]
+    call word_to_hex
+    mov bx, 36
     mov cx, 16
-    mov si, lbl_pic_s2
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 92
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    mov bx, 68
+    mov cx, 16
+    mov si, lbl_colon
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt74_off]
+    call word_to_hex
+    mov bx, 76
+    mov cx, 16
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show OK/BAD for INT 74h
+    mov ax, [ivt74_seg]
+    cmp ax, 0x1000
+    jne .int74_bad
+    mov bx, 116
+    mov cx, 16
+    mov si, lbl_ok
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .draw_int80
+.int74_bad:
+    mov bx, 116
+    mov cx, 16
+    mov si, lbl_bad
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.draw_int80:
+    ; === Row 3: INT 80h vector (API) ===
+    mov bx, 4
+    mov cx, 28
+    mov si, lbl_int80
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt80_seg]
+    call word_to_hex
+    mov bx, 36
+    mov cx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 68
+    mov cx, 28
+    mov si, lbl_colon
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt80_off]
+    call word_to_hex
+    mov bx, 76
+    mov cx, 28
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Show OK/BAD for INT 80h
+    mov ax, [ivt80_seg]
+    cmp ax, 0x1000
+    jne .int80_bad
+    mov bx, 116
+    mov cx, 28
+    mov si, lbl_ok
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    jmp .draw_esc
+.int80_bad:
+    mov bx, 116
+    mov cx, 28
+    mov si, lbl_bad
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+.draw_esc:
     ; Display instructions
     mov bx, 4
-    mov cx, 30
+    mov cx, 42
     mov si, lbl_press_esc
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -225,23 +313,33 @@ entry:
     cmp word [cs:iter_count], 5000
     jb .main_loop
 
-    ; === TIMEOUT ===
+    ; === TIMEOUT - re-read IVT to see if it changed ===
     MARKER 4
+
+    push es
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:0x26]              ; INT 9 segment after loop
+    mov [cs:ivt9_seg_after], ax
+    mov ax, [es:0x24]              ; INT 9 offset after loop
+    mov [cs:ivt9_off_after], ax
+    pop es
 
     mov ax, cs
     mov ds, ax
 
+    ; Show TIMEOUT
     mov bx, 4
-    mov cx, 44
+    mov cx, 56
     mov si, lbl_timeout
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; K:xxxx
+    ; K:xxxx M:xxxx
     mov ax, [key_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 56
+    mov cx, 68
     mov si, lbl_keys
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -250,11 +348,10 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; M:xxxx
     mov ax, [mouse_count]
     call word_to_hex
     mov bx, 72
-    mov cx, 56
+    mov cx, 68
     mov si, lbl_mouse
     mov ah, API_GFX_DRAW_STRING
     int 0x80
@@ -263,9 +360,38 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
+    ; Row: "9A:SSSS:OOOO" (INT 9 vector AFTER event loop)
+    mov bx, 4
+    mov cx, 82
+    mov si, lbl_int9a
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt9_seg_after]
+    call word_to_hex
+    mov bx, 28
+    mov cx, 82
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 60
+    mov cx, 82
+    mov si, lbl_colon
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov ax, [ivt9_off_after]
+    call word_to_hex
+    mov bx, 68
+    mov cx, 82
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
     MARKER 5
 
-    ; Fallback exit
+    ; Fallback ESC via port polling
     cli
     in al, 0x21
     or al, 0x02
@@ -305,34 +431,8 @@ entry:
     mov ax, cs
     mov ds, ax
     mov bx, 4
-    mov cx, 44
-    mov si, lbl_ok
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; K:xxxx
-    mov ax, [key_count]
-    call word_to_hex
-    mov bx, 4
     mov cx, 56
-    mov si, lbl_keys
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 24
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; M:xxxx
-    mov ax, [mouse_count]
-    call word_to_hex
-    mov bx, 72
-    mov cx, 56
-    mov si, lbl_mouse
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 92
-    mov si, hex_buf
+    mov si, lbl_esc_ok
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -391,49 +491,41 @@ word_to_hex:
     pop ax
     ret
 
-byte_to_hex:
-    push ax
-    push cx
-    mov cl, al
-
-    shr al, 4
-    HEXNIB
-    mov [cs:hex_buf], al
-
-    mov al, cl
-    and al, 0x0F
-    HEXNIB
-    mov [cs:hex_buf+1], al
-
-    mov byte [cs:hex_buf+2], 0
-    pop cx
-    pop ax
-    ret
-
 ; ============================================================================
 ; Data
 ; ============================================================================
 
-win_title:          db 'System Info', 0
+win_title:          db 'IVT Check', 0
 wh:                 db 0
 iter_count:         dw 0
 key_count:          dw 0
 mouse_count:        dw 0
-pic_master:         db 0
-pic_slave:          db 0
-pic_master_after:   db 0
-pic_slave_after:    db 0
 hex_buf:            db 0, 0, 0, 0, 0
 
-lbl_pic_m:          db 'P:', 0      ; Master PIC mask (before)
-lbl_pic_s:          db 'S:', 0      ; Slave PIC mask (before)
-lbl_pic_m2:         db 'p:', 0      ; Master PIC mask (after unmask)
-lbl_pic_s2:         db 's:', 0      ; Slave PIC mask (after unmask)
+; IVT vectors read at entry
+ivt9_off:           dw 0
+ivt9_seg:           dw 0
+ivt74_off:          dw 0
+ivt74_seg:          dw 0
+ivt80_off:          dw 0
+ivt80_seg:          dw 0
+
+; IVT vectors read after event loop
+ivt9_off_after:     dw 0
+ivt9_seg_after:     dw 0
+
+lbl_int9:           db 'I9:', 0
+lbl_int74:          db 'I74:', 0
+lbl_int80:          db 'I80:', 0
+lbl_int9a:          db '9A:', 0
+lbl_colon:          db ':', 0
+lbl_ok:             db 'OK', 0
+lbl_bad:            db 'BAD!', 0
 lbl_press_esc:      db 'Press ESC...', 0
 lbl_timeout:        db 'TIMEOUT', 0
-lbl_ok:             db 'ESC OK!', 0
+lbl_esc_ok:         db 'ESC OK!', 0
 lbl_keys:           db 'K:', 0
 lbl_mouse:          db 'M:', 0
 
-; Pad to 2 FAT12 clusters (> 512 bytes)
-times 1024 - ($ - $$) db 0x90
+; Pad to 3 FAT12 clusters (> 1024 bytes)
+times 1536 - ($ - $$) db 0x90
