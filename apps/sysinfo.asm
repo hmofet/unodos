@@ -109,7 +109,8 @@ entry:
     int 0x80
     mov [cs:sh_after], cx           ; CX = screen_height
 
-    ; Begin draw context
+    ; Begin draw context (restore window handle in AL first)
+    mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
