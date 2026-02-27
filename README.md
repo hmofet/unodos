@@ -30,7 +30,7 @@ UnoDOS 3 is a GUI-first operating system designed for vintage PC hardware. Unlik
 - **IBM PS/2 L40** (386SX, B&W display, 1.44MB floppy)
 - **QEMU** (PC/XT emulation mode)
 
-## Current Features (v3.18.0)
+## Current Features (v3.22.0)
 
 - **Boots from floppy disk, hard drive, CF card, or USB flash drive**
 - Three-stage boot architecture (boot sector + stage2 loader + kernel)

@@ -1310,4 +1310,4 @@ Creates a modal dialog window with a scrollable file list. Supports keyboard nav
 
 ---
 
-*UnoDOS v3.21.0 Build 275 - 91 API functions (indices 0-90)*
+*UnoDOS v3.22.0 Build 351 - 96 API functions (indices 0-95)*
