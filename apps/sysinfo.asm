@@ -1,14 +1,6 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 350: KBC output port + mouse vs keyboard data separation.
-; - Build 349: ISR=00 (not stuck), SC=2 but LS=00 (not a keyboard scancode!).
-;   Those 2 bytes are likely mouse data, not keyboard scancodes.
-; - Theory: BIOS INT 13h cleared KBC output port bit 4 (IRQ1 gate),
-;   or sent 0xF5 (disable scanning) to keyboard during disk I/O.
-; - This build:
-;   1) Reads KBC output port (cmd 0xD0) - check bit 4 (IRQ1 enable)
-;   2) Separates mouse data (port 0x64 bit 5=1) from keyboard data (bit 5=0)
-;   3) Sends 0xF4 (enable scanning) to keyboard
-;   4) Checks if keyboard data starts arriving after 0xF4
+; Displays system info: video mode, boot drive, tasks, time, font, uptime.
+; Uses standard APIs only - no direct port I/O.
 
 [BITS 16]
 [ORG 0x0000]
@@ -41,26 +33,25 @@
 ; --- Code Entry (offset 0x50) ---
 
 API_GFX_DRAW_STRING    equ 4
-API_EVENT_GET           equ 9
-API_WIN_CREATE          equ 20
-API_WIN_DESTROY         equ 21
-API_WIN_BEGIN_DRAW      equ 31
-API_WIN_END_DRAW        equ 32
-API_APP_YIELD           equ 34
+API_GFX_CLEAR_AREA     equ 5
+API_EVENT_GET          equ 9
+API_WIN_CREATE         equ 20
+API_WIN_DESTROY        equ 21
+API_WIN_BEGIN_DRAW     equ 31
+API_WIN_END_DRAW       equ 32
+API_APP_YIELD          equ 34
+API_GET_BOOT_DRIVE     equ 43
+API_GET_TICK_COUNT     equ 63
+API_GET_RTC_TIME       equ 72
+API_GET_TASK_INFO      equ 74
+API_GET_SCREEN_INFO    equ 82
+API_BCD_TO_ASCII       equ 92
+API_GET_FONT_INFO      equ 93
 
-EVENT_KEY_PRESS         equ 1
-KBC_CMD                 equ 0x64
-KBC_DATA                equ 0x60
+EVENT_KEY_PRESS        equ 1
+EVENT_WIN_REDRAW       equ 6
 
-%macro HEXNIB 0
-    cmp al, 10
-    jb %%digit
-    add al, 'A' - 10
-    jmp %%done
-%%digit:
-    add al, '0'
-%%done:
-%endmacro
+ROW_HEIGHT             equ 12
 
 entry:
     pusha
@@ -69,477 +60,426 @@ entry:
 
     mov ax, cs
     mov ds, ax
-    mov es, ax
-
-    ; === Read KBC output port (cmd 0xD0) ===
-    ; Drain any pending data first
-.drain_pre:
-    in al, KBC_CMD
-    test al, 0x01
-    jz .drain_pre_done
-    in al, KBC_DATA
-    jmp .drain_pre
-.drain_pre_done:
-
-    call kbc_wait_write
-    mov al, 0xD0                ; Read output port command
-    out KBC_CMD, al
-    call kbc_wait_read
-    in al, KBC_DATA
-    mov [cs:kbc_outport], al    ; Save output port value
-
-    ; === Send 0xF4 (Enable Scanning) to keyboard ===
-    call kbc_wait_write
-    mov al, 0xF4                ; Enable scanning command
-    out KBC_DATA, al            ; Send to keyboard (port 0x60)
-
-    ; Wait for ACK (0xFA) from keyboard
-    mov cx, 5000
-.wait_ack:
-    in al, KBC_CMD
-    test al, 0x01
-    jz .no_ack_yet
-    in al, KBC_DATA
-    cmp al, 0xFA               ; ACK?
-    je .got_ack
-    cmp al, 0xFE               ; Resend? Try again
-    je .send_f4_again
-.no_ack_yet:
-    loop .wait_ack
-    mov byte [cs:f4_result], 'T'  ; Timeout
-    jmp .f4_done
-.send_f4_again:
-    call kbc_wait_write
-    mov al, 0xF4
-    out KBC_DATA, al
-    jmp .wait_ack
-.got_ack:
-    mov byte [cs:f4_result], 'A'  ; ACK received
-.f4_done:
-
-    ; === Read KBC output port AFTER 0xF4 ===
-.drain_pre2:
-    in al, KBC_CMD
-    test al, 0x01
-    jz .drain_pre2_done
-    in al, KBC_DATA
-    jmp .drain_pre2
-.drain_pre2_done:
-
-    call kbc_wait_write
-    mov al, 0xD0
-    out KBC_CMD, al
-    call kbc_wait_read
-    in al, KBC_DATA
-    mov [cs:kbc_outport2], al
-
-    ; === Install INT 9 hook ===
-    cli
-    push es
-    xor ax, ax
-    mov es, ax
-    mov ax, [es:0x24]
-    mov [cs:orig_int9_off], ax
-    mov ax, [es:0x26]
-    mov [cs:orig_int9_seg], ax
-    mov word [es:0x24], int9_hook
-    mov [es:0x26], cs
-    pop es
-    sti
-
-    mov word [cs:irq1_count], 0
 
     ; Create window
-    mov bx, 10
-    mov cx, 20
-    mov dx, 200
-    mov si, 100
+    mov bx, 30
+    mov cx, 30
+    mov dx, 160
+    mov si, 110
     mov ax, cs
     mov es, ax
     mov di, win_title
     mov al, 0x03
     mov ah, API_WIN_CREATE
     int 0x80
-    jc .exit_no_win_unhook
-    mov [wh], al
+    jc .exit_fail
+    mov [cs:win_handle], al
 
-    mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
 
-    mov ax, cs
-    mov ds, ax
-
-    mov bx, 4
-    mov cx, 4
-    mov si, lbl_wait
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Event loop: 50000 iterations
-    mov word [cs:iter_count], 0
-    mov word [cs:evt_count], 0
-    mov word [cs:kb_count], 0       ; Keyboard data (bit5=0)
-    mov word [cs:ms_count], 0       ; Mouse data (bit5=1)
-    mov byte [cs:last_kb_scan], 0
-    mov byte [cs:last_kb_stat], 0
+    call draw_info
 
 .main_loop:
     sti
     mov ah, API_APP_YIELD
     int 0x80
 
-    ; === Manual KBC port poll with mouse/keyboard separation ===
-    in al, KBC_CMD
-    test al, 0x01              ; Output buffer full?
-    jz .no_data
-
-    mov ah, al                 ; Save status in AH
-    in al, KBC_DATA            ; Read the data byte
-
-    test ah, 0x20              ; Bit 5: 1=mouse, 0=keyboard
-    jnz .is_mouse
-
-    ; Keyboard data!
-    mov [cs:last_kb_scan], al
-    mov [cs:last_kb_stat], ah
-    inc word [cs:kb_count]
-    jmp .no_data
-
-.is_mouse:
-    inc word [cs:ms_count]
-
-.no_data:
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
 
-    inc word [cs:evt_count]
-    cmp al, EVENT_KEY_PRESS
-    jne .main_loop
-    cmp dl, 27
-    je .show_results
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    call draw_info
     jmp .main_loop
 
+.not_redraw:
+    cmp al, EVENT_KEY_PRESS
+    jne .no_event
+    cmp dl, 27                 ; ESC
+    je .exit_ok
+
 .no_event:
-    inc word [cs:iter_count]
-    cmp word [cs:iter_count], 50000
-    jb .main_loop
-
-    ; === TIMEOUT - show results ===
-.show_results:
-    mov ax, cs
-    mov ds, ax
-
-    ; Redraw window
-    mov al, [cs:wh]
-    mov ah, API_WIN_BEGIN_DRAW
-    int 0x80
-    mov ax, cs
-    mov ds, ax
-
-    ; Row 1: KBC output port before and after 0xF4
-    movzx ax, byte [kbc_outport]
-    call byte_to_hex
-    mov bx, 4
-    mov cx, 4
-    mov si, lbl_op
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    movzx ax, byte [kbc_outport2]
-    call byte_to_hex
-    mov bx, 72
-    mov cx, 4
-    mov si, lbl_o2
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 96
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; F4 result
-    mov al, [f4_result]
-    mov [cs:hex_buf], al
-    mov byte [cs:hex_buf+1], 0
-    mov bx, 136
-    mov cx, 4
-    mov si, lbl_f4
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 160
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 2: Keyboard data count + last scancode
-    mov ax, [kb_count]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 16
-    mov si, lbl_kb
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    movzx ax, byte [last_kb_scan]
-    call byte_to_hex
-    mov bx, 80
-    mov cx, 16
-    mov si, lbl_ks
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 104
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 3: Mouse data count
-    mov ax, [ms_count]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 28
-    mov si, lbl_ms
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 4: IRQ1 count + event count
-    mov ax, [irq1_count]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 40
-    mov si, lbl_i9
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    mov ax, [evt_count]
-    call word_to_hex
-    mov bx, 80
-    mov cx, 40
-    mov si, lbl_ev
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 104
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 5: Iteration count
-    mov ax, [iter_count]
-    call word_to_hex
-    mov bx, 4
-    mov cx, 52
-    mov si, lbl_it
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 28
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 6: Verdict
-    mov bx, 4
-    mov cx, 66
-    cmp word [kb_count], 0
-    ja .has_kb
-    mov si, lbl_no_kb
-    jmp .verdict_draw
-.has_kb:
-    cmp word [irq1_count], 0
-    ja .all_ok
-    mov si, lbl_kb_no_irq
-    jmp .verdict_draw
-.all_ok:
-    mov si, lbl_ok
-.verdict_draw:
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Restore INT 9
-    call restore_hooks
-
-    ; Wait for ESC via fallback polling
-    cli
-    in al, 0x21
-    or al, 0x02
-    out 0x21, al
-    sti
-
-.drain_loop:
-    in al, 0x64
-    test al, 0x01
-    jz .fdrain_done
-    in al, 0x60
-    jmp .drain_loop
-.fdrain_done:
-
-.fallback_loop:
-    in al, 0x64
-    test al, 0x01
-    jz .fallback_loop
-    in al, 0x60
-    test al, 0x80
-    jnz .fallback_loop
-    cmp al, 0x01
-    jne .fallback_loop
-
-    cli
-    in al, 0x21
-    and al, 0xFD
-    out 0x21, al
-    sti
-    jmp .exit_ok
+    jmp .main_loop
 
 .exit_ok:
     mov ah, API_WIN_END_DRAW
     int 0x80
-    mov al, [cs:wh]
+    mov al, [cs:win_handle]
     mov ah, API_WIN_DESTROY
     int 0x80
+    jmp .exit
 
-.exit_no_win:
+.exit_fail:
+.exit:
     pop es
     pop ds
     popa
     retf
 
-.exit_no_win_unhook:
-    call restore_hooks
-    jmp .exit_no_win
-
 ; ============================================================================
-; Interrupt Hook
+; draw_info - Query APIs and draw all system info
 ; ============================================================================
+draw_info:
+    pusha
+    mov ax, cs
+    mov ds, ax
 
-int9_hook:
-    inc word [cs:irq1_count]
-    jmp far [cs:orig_int9_off]
+    ; Clear content area
+    mov bx, 0
+    mov cx, 0
+    mov dx, 158
+    mov si, 108
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
 
-; ============================================================================
-; Subroutines
-; ============================================================================
+    ; --- Row 0: Title ---
+    mov bx, 4
+    mov cx, 2
+    mov si, str_title
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
 
-kbc_wait_write:
-    in al, KBC_CMD
-    test al, 0x02              ; Input buffer full?
-    jnz kbc_wait_write
+    ; --- Row 1: Video mode + resolution ---
+    mov ah, API_GET_SCREEN_INFO
+    int 0x80
+    ; AL=mode, AH=colors, BX=width, CX=height
+    mov [cs:scr_w], bx
+    mov [cs:scr_h], cx
+    mov [cs:vid_mode], al
+    mov [cs:vid_colors], ah
+
+    ; Format: "Video: XXXxYYY ModeXX"
+    mov bx, 4
+    mov cx, ROW_HEIGHT + 2
+    mov si, str_video
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Width
+    mov ax, [cs:scr_w]
+    call word_to_dec
+    mov bx, 52
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; "x"
+    mov bx, 76
+    mov si, str_x
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Height
+    mov ax, [cs:scr_h]
+    call word_to_dec
+    mov bx, 84
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Mode hex
+    mov bx, 116
+    mov si, str_mode
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [cs:vid_mode]
+    call byte_to_hex
+    mov bx, 140
+    mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 2: Boot drive ---
+    mov ah, API_GET_BOOT_DRIVE
+    int 0x80
+    mov [cs:boot_drv], al
+
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 2 + 2
+    mov si, str_boot
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 52
+    cmp byte [cs:boot_drv], 0x80
+    jae .hd_boot
+    mov si, str_floppy
+    jmp .draw_boot
+.hd_boot:
+    mov si, str_hd
+.draw_boot:
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 3: Tasks ---
+    mov ah, API_GET_TASK_INFO
+    int 0x80
+    ; AL=current, BL=focused, CL=count
+    mov [cs:task_cur], al
+    mov [cs:task_foc], bl
+    mov [cs:task_cnt], cl
+
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 3 + 2
+    mov si, str_tasks
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [cs:task_cnt]
+    call word_to_dec
+    mov bx, 52
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 76
+    mov si, str_running
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 4: Font info ---
+    mov ah, API_GET_FONT_INFO
+    int 0x80
+    ; BH=height, BL=width, CL=advance, AL=index
+    mov [cs:font_idx], al
+    mov [cs:font_w], bl
+    mov [cs:font_h], bh
+
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 4 + 2
+    mov si, str_font
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [cs:font_idx]
+    call word_to_dec
+    mov bx, 44
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; "(WxH)"
+    mov bx, 64
+    mov si, str_lparen
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [cs:font_w]
+    call word_to_dec
+    mov bx, 72
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 88
+    mov si, str_x
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    movzx ax, byte [cs:font_h]
+    call word_to_dec
+    mov bx, 96
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 112
+    mov si, str_rparen
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 5: Time ---
+    mov ah, API_GET_RTC_TIME
+    int 0x80
+    ; CH=hours, CL=mins, DH=secs (all BCD)
+    mov [cs:rtc_h], ch
+    mov [cs:rtc_m], cl
+    mov [cs:rtc_s], dh
+
+    ; Format HH:MM:SS
+    mov al, [cs:rtc_h]
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [cs:time_str], ah
+    mov [cs:time_str+1], al
+
+    mov al, [cs:rtc_m]
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [cs:time_str+3], ah
+    mov [cs:time_str+4], al
+
+    mov al, [cs:rtc_s]
+    mov ah, API_BCD_TO_ASCII
+    int 0x80
+    mov [cs:time_str+6], ah
+    mov [cs:time_str+7], al
+
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 5 + 2
+    mov si, str_time
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 44
+    mov si, time_str
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 6: Uptime in ticks ---
+    mov ah, API_GET_TICK_COUNT
+    int 0x80
+    ; AX = tick count
+    mov [cs:ticks], ax
+
+    ; Convert to seconds: ticks / 18
+    xor dx, dx
+    mov cx, 18
+    div cx                     ; AX = seconds
+    call word_to_dec
+
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 6 + 2
+    mov si, str_uptime
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 60
+    mov si, dec_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    mov bx, 100
+    mov si, str_secs
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; --- Row 7: ESC to close ---
+    mov bx, 4
+    mov cx, ROW_HEIGHT * 7 + 6
+    mov si, str_esc
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    popa
     ret
 
-kbc_wait_read:
-    in al, KBC_CMD
-    test al, 0x01              ; Output buffer has data?
-    jz kbc_wait_read
-    ret
-
-restore_hooks:
-    cli
-    push es
+; ============================================================================
+; word_to_dec - Convert 16-bit unsigned to decimal string (right-aligned)
+; Input: AX = value
+; Output: dec_buf filled with decimal string (null terminated)
+; ============================================================================
+word_to_dec:
     push ax
-    xor ax, ax
-    mov es, ax
-    mov ax, [cs:orig_int9_off]
-    mov [es:0x24], ax
-    mov ax, [cs:orig_int9_seg]
-    mov [es:0x26], ax
+    push bx
+    push cx
+    push dx
+
+    mov cx, 0                  ; digit count
+    mov bx, 10
+
+.div_loop:
+    xor dx, dx
+    div bx                     ; AX = quotient, DX = remainder
+    push dx                    ; save digit
+    inc cx
+    test ax, ax
+    jnz .div_loop
+
+    ; Pop digits into buffer
+    mov bx, 0
+.pop_loop:
+    pop dx
+    add dl, '0'
+    mov [cs:dec_buf + bx], dl
+    inc bx
+    loop .pop_loop
+    mov byte [cs:dec_buf + bx], 0
+
+    pop dx
+    pop cx
+    pop bx
     pop ax
-    pop es
-    sti
     ret
 
+; ============================================================================
+; byte_to_hex - Convert byte to 2-char hex string
+; Input: AL = byte
+; Output: hex_buf filled
+; ============================================================================
 byte_to_hex:
     push ax
     push cx
     mov cl, al
     shr al, 4
-    HEXNIB
+    call .nibble
     mov [cs:hex_buf], al
     mov al, cl
     and al, 0x0F
-    HEXNIB
+    call .nibble
     mov [cs:hex_buf+1], al
     mov byte [cs:hex_buf+2], 0
     pop cx
     pop ax
     ret
-
-word_to_hex:
-    push ax
-    push cx
-    mov cx, ax
-    mov al, ch
-    shr al, 4
-    HEXNIB
-    mov [cs:hex_buf], al
-    mov al, ch
-    and al, 0x0F
-    HEXNIB
-    mov [cs:hex_buf+1], al
-    mov al, cl
-    shr al, 4
-    HEXNIB
-    mov [cs:hex_buf+2], al
-    mov al, cl
-    and al, 0x0F
-    HEXNIB
-    mov [cs:hex_buf+3], al
-    mov byte [cs:hex_buf+4], 0
-    pop cx
-    pop ax
+.nibble:
+    cmp al, 10
+    jb .is_digit
+    add al, 'A' - 10
+    ret
+.is_digit:
+    add al, '0'
     ret
 
 ; ============================================================================
 ; Data
 ; ============================================================================
 
-win_title:          db 'KBC', 0
-wh:                 db 0
-iter_count:         dw 0
-evt_count:          dw 0
-kb_count:           dw 0        ; Keyboard data bytes (port 0x64 bit5=0)
-ms_count:           dw 0        ; Mouse data bytes (port 0x64 bit5=1)
-last_kb_scan:       db 0        ; Last keyboard scancode
-last_kb_stat:       db 0        ; Last port 0x64 status for keyboard
-hex_buf:            db 0, 0, 0, 0, 0
+win_title:      db 'System Info', 0
+win_handle:     db 0
 
-kbc_outport:        db 0        ; KBC output port before 0xF4
-kbc_outport2:       db 0        ; KBC output port after 0xF4
-f4_result:          db 0        ; 'A'=ACK, 'T'=timeout
+; Buffers
+dec_buf:        db '00000', 0
+hex_buf:        db '00', 0
 
-irq1_count:         dw 0
+; Saved values
+scr_w:          dw 0
+scr_h:          dw 0
+vid_mode:       db 0
+vid_colors:     db 0
+boot_drv:       db 0
+task_cur:       db 0
+task_foc:       db 0
+task_cnt:       db 0
+font_idx:       db 0
+font_w:         db 0
+font_h:         db 0
+rtc_h:          db 0
+rtc_m:          db 0
+rtc_s:          db 0
+ticks:          dw 0
+time_str:       db '00:00:00', 0
 
-; MUST be adjacent for jmp far
-orig_int9_off:      dw 0
-orig_int9_seg:      dw 0
-
-lbl_wait:           db 'Press keys...', 0
-lbl_op:             db 'OP:', 0     ; Output port before
-lbl_o2:             db 'OA:', 0     ; Output port after
-lbl_f4:             db 'F4:', 0     ; F4 result (A=ack T=timeout)
-lbl_kb:             db 'KB:', 0     ; Keyboard data count
-lbl_ks:             db 'KS:', 0     ; Last keyboard scancode
-lbl_ms:             db 'MS:', 0     ; Mouse data count
-lbl_i9:             db 'I9:', 0     ; INT 9 count
-lbl_ev:             db 'EV:', 0     ; Event count
-lbl_it:             db 'IT:', 0     ; Iteration count
-lbl_no_kb:          db 'NO KB DATA', 0
-lbl_kb_no_irq:      db 'KB OK NO IRQ', 0
-lbl_ok:             db 'ALL OK', 0
+; Labels
+str_title:      db 'System Info', 0
+str_video:      db 'Video:', 0
+str_x:          db 'x', 0
+str_mode:       db 'M:', 0
+str_boot:       db 'Boot:', 0
+str_floppy:     db 'Floppy', 0
+str_hd:         db 'HD/CF', 0
+str_tasks:      db 'Tasks:', 0
+str_running:    db 'running', 0
+str_font:       db 'Font:', 0
+str_lparen:     db '(', 0
+str_rparen:     db ')', 0
+str_time:       db 'Time:', 0
+str_uptime:     db 'Uptime:', 0
+str_secs:       db 'sec', 0
+str_esc:        db '[ESC] Close', 0
 
 ; Pad to 3 FAT12 clusters (> 1024 bytes)
 times 1536 - ($ - $$) db 0x90
