@@ -283,4 +283,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*v3.21.0 Build 275*
+*v3.22.0 Build 351*

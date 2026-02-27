@@ -17146,6 +17146,22 @@ set_video_mode:
     ; Force cursor state reset (mode switch clears VRAM)
     mov byte [cursor_visible], 0
 
+    ; Clear cursor save buffer to prevent stale restore after mode change
+    push es
+    push di
+    push cx
+    push ax
+    push ds
+    pop es                             ; ES = DS = kernel segment
+    mov di, cursor_save_buf
+    xor ax, ax
+    mov cx, 224                        ; 448 bytes / 2
+    rep stosw
+    pop ax
+    pop cx
+    pop di
+    pop es
+
     ; Trigger full-screen redraw
     mov word [redraw_old_x], 0
     mov word [redraw_old_y], 0

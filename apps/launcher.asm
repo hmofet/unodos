@@ -1,4 +1,4 @@
-; LAUNCHER.BIN - Desktop for UnoDOS v3.14.0
+; LAUNCHER.BIN - Desktop for UnoDOS v3.22.0
 ; Fullscreen desktop with app icons, double-click to launch
 ;
 ; Build: nasm -f bin -o launcher.bin launcher.asm

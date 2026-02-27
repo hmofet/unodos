@@ -944,6 +944,16 @@ apply_with_revert:
     ; Mode is changing — apply with countdown
     call apply_settings                  ; Switches mode + font + colors
 
+    ; Update content dimensions after mode switch (window may have been resized)
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO
+    int 0x80
+    ; DX=width, SI=height returned
+    sub dx, 4                            ; Content = window - borders
+    mov [cs:content_w], dx
+    sub si, 16                           ; Content = window - titlebar - border
+    mov [cs:content_h], si
+
     ; Initialize countdown
     mov byte [cs:revert_countdown], 10
     mov byte [cs:revert_prev_btn], 0
@@ -1031,6 +1041,14 @@ apply_with_revert:
     mov cl, [cs:cur_win_clr]
     mov ah, API_SET_THEME
     int 0x80
+    ; Update content dimensions after reverting mode
+    mov al, [cs:win_handle]
+    mov ah, API_WIN_GET_INFO
+    int 0x80
+    sub dx, 4
+    mov [cs:content_w], dx
+    sub si, 16
+    mov [cs:content_h], si
     popa
     ret
 

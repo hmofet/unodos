@@ -13,7 +13,7 @@
 
 ---
 
-## Completed Features (v3.21.0)
+## Completed Features (v3.22.0)
 
 ### Boot System
 - Three-stage floppy boot: boot.asm -> stage2.asm -> kernel (FAT12)
@@ -290,4 +290,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*v3.21.0 Build 275*
+*v3.22.0 Build 351*
