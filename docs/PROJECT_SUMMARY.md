@@ -51,8 +51,8 @@ The OS runs on the original IBM PC (8088, 4.77 MHz) through 486 systems. It has 
 
 ## Development Process
 
-The project spans 275 builds. A Linux build machine runs NASM and creates floppy/HD images that are committed to git as pre-built binaries — the developer tests on Windows by pulling the repo and writing images to physical media with PowerShell scripts. Every build increments a visible build number on the splash screen for hardware verification.
+The project spans 351 builds. A Linux build machine runs NASM and creates floppy/HD images that are committed to git as pre-built binaries — the developer tests on Windows by pulling the repo and writing images to physical media with PowerShell scripts. Every build increments a visible build number on the splash screen for hardware verification.
 
-## Current State (Build 275, v3.21.0)
+## Current State (Build 351, v3.22.0)
 
 The OS boots, displays a splash screen with progress bar, launches a desktop with application icons, and supports full windowed multitasking with mouse interaction. Twelve applications are included, with Notepad providing a full text editor with clipboard, undo, context menus, and a system file open dialog. Settings persist across reboots. The kernel uses approximately 27KB of its 28KB allocation, with the API table at 91 functions.
