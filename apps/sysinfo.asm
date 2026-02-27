@@ -1,11 +1,14 @@
 ; SYSINFO.BIN - System Information for UnoDOS
-; Build 349: PIC ISR/IRR diagnostic + manual KBC port polling.
-; - Build 348: KBC cmd byte 0x47 (correct), 0xAE no change, IRQ1 still dead.
-; - Build 347: I9=0 (IRQ1 never fires), BK=0, EV=2 (WIN_REDRAW only).
-; - Theory: IRQ1 stuck in PIC ISR (missed EOI). If ISR bit 1 = 1,
-;   IRQ1 is in-service and PIC won't deliver another until EOI sent.
-; - This build: reads PIC ISR+IRR, polls port 0x64 for scancodes,
-;   hooks INT 9 to count IRQ1 fires.
+; Build 350: KBC output port + mouse vs keyboard data separation.
+; - Build 349: ISR=00 (not stuck), SC=2 but LS=00 (not a keyboard scancode!).
+;   Those 2 bytes are likely mouse data, not keyboard scancodes.
+; - Theory: BIOS INT 13h cleared KBC output port bit 4 (IRQ1 gate),
+;   or sent 0xF5 (disable scanning) to keyboard during disk I/O.
+; - This build:
+;   1) Reads KBC output port (cmd 0xD0) - check bit 4 (IRQ1 enable)
+;   2) Separates mouse data (port 0x64 bit 5=1) from keyboard data (bit 5=0)
+;   3) Sends 0xF4 (enable scanning) to keyboard
+;   4) Checks if keyboard data starts arriving after 0xF4
 
 [BITS 16]
 [ORG 0x0000]
@@ -68,38 +71,67 @@ entry:
     mov ds, ax
     mov es, ax
 
-    ; === Read PIC ISR (In-Service Register) ===
-    mov al, 0x0B            ; Read ISR command
-    out 0x20, al
-    in al, 0x20             ; Master PIC ISR
-    mov [cs:pic_isr], al
+    ; === Read KBC output port (cmd 0xD0) ===
+    ; Drain any pending data first
+.drain_pre:
+    in al, KBC_CMD
+    test al, 0x01
+    jz .drain_pre_done
+    in al, KBC_DATA
+    jmp .drain_pre
+.drain_pre_done:
 
-    ; === Read PIC IRR (Interrupt Request Register) ===
-    mov al, 0x0A            ; Read IRR command
-    out 0x20, al
-    in al, 0x20             ; Master PIC IRR
-    mov [cs:pic_irr], al
+    call kbc_wait_write
+    mov al, 0xD0                ; Read output port command
+    out KBC_CMD, al
+    call kbc_wait_read
+    in al, KBC_DATA
+    mov [cs:kbc_outport], al    ; Save output port value
 
-    ; === Read PIC mask ===
-    in al, 0x21
-    mov [cs:pic_mask], al
+    ; === Send 0xF4 (Enable Scanning) to keyboard ===
+    call kbc_wait_write
+    mov al, 0xF4                ; Enable scanning command
+    out KBC_DATA, al            ; Send to keyboard (port 0x60)
 
-    ; === If ISR bit 1 set, send EOI to try to unstick IRQ1 ===
-    test byte [cs:pic_isr], 0x02
-    jz .no_eoi_fix
-    mov al, 0x20            ; Non-specific EOI
-    out 0x20, al
-    ; Read ISR again after EOI
-    mov al, 0x0B
-    out 0x20, al
-    in al, 0x20
-    mov [cs:pic_isr_after], al
-    mov byte [cs:sent_eoi], 1
-    jmp .eoi_done
-.no_eoi_fix:
-    mov byte [cs:pic_isr_after], 0
-    mov byte [cs:sent_eoi], 0
-.eoi_done:
+    ; Wait for ACK (0xFA) from keyboard
+    mov cx, 5000
+.wait_ack:
+    in al, KBC_CMD
+    test al, 0x01
+    jz .no_ack_yet
+    in al, KBC_DATA
+    cmp al, 0xFA               ; ACK?
+    je .got_ack
+    cmp al, 0xFE               ; Resend? Try again
+    je .send_f4_again
+.no_ack_yet:
+    loop .wait_ack
+    mov byte [cs:f4_result], 'T'  ; Timeout
+    jmp .f4_done
+.send_f4_again:
+    call kbc_wait_write
+    mov al, 0xF4
+    out KBC_DATA, al
+    jmp .wait_ack
+.got_ack:
+    mov byte [cs:f4_result], 'A'  ; ACK received
+.f4_done:
+
+    ; === Read KBC output port AFTER 0xF4 ===
+.drain_pre2:
+    in al, KBC_CMD
+    test al, 0x01
+    jz .drain_pre2_done
+    in al, KBC_DATA
+    jmp .drain_pre2
+.drain_pre2_done:
+
+    call kbc_wait_write
+    mov al, 0xD0
+    out KBC_CMD, al
+    call kbc_wait_read
+    in al, KBC_DATA
+    mov [cs:kbc_outport2], al
 
     ; === Install INT 9 hook ===
     cli
@@ -147,28 +179,41 @@ entry:
     ; Event loop: 50000 iterations
     mov word [cs:iter_count], 0
     mov word [cs:evt_count], 0
-    mov word [cs:scan_count], 0
-    mov byte [cs:last_scan], 0
+    mov word [cs:kb_count], 0       ; Keyboard data (bit5=0)
+    mov word [cs:ms_count], 0       ; Mouse data (bit5=1)
+    mov byte [cs:last_kb_scan], 0
+    mov byte [cs:last_kb_stat], 0
 
 .main_loop:
     sti
     mov ah, API_APP_YIELD
     int 0x80
 
-    ; === Manual KBC port poll ===
+    ; === Manual KBC port poll with mouse/keyboard separation ===
     in al, KBC_CMD
-    test al, 0x01              ; Output buffer full? (scancode waiting?)
-    jz .no_scancode
-    in al, KBC_DATA            ; Read the scancode
-    mov [cs:last_scan], al
-    inc word [cs:scan_count]
-.no_scancode:
+    test al, 0x01              ; Output buffer full?
+    jz .no_data
 
+    mov ah, al                 ; Save status in AH
+    in al, KBC_DATA            ; Read the data byte
+
+    test ah, 0x20              ; Bit 5: 1=mouse, 0=keyboard
+    jnz .is_mouse
+
+    ; Keyboard data!
+    mov [cs:last_kb_scan], al
+    mov [cs:last_kb_stat], ah
+    inc word [cs:kb_count]
+    jmp .no_data
+
+.is_mouse:
+    inc word [cs:ms_count]
+
+.no_data:
     mov ah, API_EVENT_GET
     int 0x80
     jc .no_event
 
-    ; Got an event
     inc word [cs:evt_count]
     cmp al, EVENT_KEY_PRESS
     jne .main_loop
@@ -186,12 +231,6 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Read PIC ISR at exit
-    mov al, 0x0B
-    out 0x20, al
-    in al, 0x20
-    mov [cs:pic_isr_exit], al
-
     ; Redraw window
     mov al, [cs:wh]
     mov ah, API_WIN_BEGIN_DRAW
@@ -199,12 +238,12 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Row 1: ISR at entry
-    movzx ax, byte [pic_isr]
+    ; Row 1: KBC output port before and after 0xF4
+    movzx ax, byte [kbc_outport]
     call byte_to_hex
     mov bx, 4
     mov cx, 4
-    mov si, lbl_is
+    mov si, lbl_op
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 28
@@ -212,38 +251,38 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; IRR at entry
-    movzx ax, byte [pic_irr]
+    movzx ax, byte [kbc_outport2]
     call byte_to_hex
-    mov bx, 64
+    mov bx, 72
     mov cx, 4
-    mov si, lbl_ir
+    mov si, lbl_o2
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 88
+    mov bx, 96
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Mask
-    movzx ax, byte [pic_mask]
-    call byte_to_hex
-    mov bx, 128
+    ; F4 result
+    mov al, [f4_result]
+    mov [cs:hex_buf], al
+    mov byte [cs:hex_buf+1], 0
+    mov bx, 136
     mov cx, 4
-    mov si, lbl_pm
+    mov si, lbl_f4
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 152
+    mov bx, 160
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 2: EOI sent? ISR after EOI? ISR at exit?
-    movzx ax, byte [sent_eoi]
-    call byte_to_hex
+    ; Row 2: Keyboard data count + last scancode
+    mov ax, [kb_count]
+    call word_to_hex
     mov bx, 4
     mov cx, 16
-    mov si, lbl_eo
+    mov si, lbl_kb
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 28
@@ -251,36 +290,24 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    movzx ax, byte [pic_isr_after]
+    movzx ax, byte [last_kb_scan]
     call byte_to_hex
-    mov bx, 64
+    mov bx, 80
     mov cx, 16
-    mov si, lbl_ia
+    mov si, lbl_ks
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 88
+    mov bx, 104
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    movzx ax, byte [pic_isr_exit]
-    call byte_to_hex
-    mov bx, 128
-    mov cx, 16
-    mov si, lbl_ix
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 152
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 3: Manual scancode count + last scancode
-    mov ax, [scan_count]
+    ; Row 3: Mouse data count
+    mov ax, [ms_count]
     call word_to_hex
     mov bx, 4
     mov cx, 28
-    mov si, lbl_sc
+    mov si, lbl_ms
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 28
@@ -288,19 +315,7 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    movzx ax, byte [last_scan]
-    call byte_to_hex
-    mov bx, 88
-    mov cx, 28
-    mov si, lbl_ls
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-    mov bx, 112
-    mov si, hex_buf
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 4: IRQ1 count (I9) + event count (EV)
+    ; Row 4: IRQ1 count + event count
     mov ax, [irq1_count]
     call word_to_hex
     mov bx, 4
@@ -315,44 +330,44 @@ entry:
 
     mov ax, [evt_count]
     call word_to_hex
-    mov bx, 88
+    mov bx, 80
     mov cx, 40
     mov si, lbl_ev
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 112
+    mov bx, 104
     mov si, hex_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Row 5: Verdict
-    mov bx, 4
-    mov cx, 54
-    test byte [pic_isr], 0x02
-    jnz .verdict_stuck
-    cmp word [scan_count], 0
-    ja .verdict_sc_ok
-    mov si, lbl_no_sc
-    jmp .verdict_draw
-.verdict_stuck:
-    mov si, lbl_stuck
-    jmp .verdict_draw
-.verdict_sc_ok:
-    mov si, lbl_sc_ok
-.verdict_draw:
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
-    ; Row 6: iteration count
+    ; Row 5: Iteration count
     mov ax, [iter_count]
     call word_to_hex
     mov bx, 4
-    mov cx, 66
+    mov cx, 52
     mov si, lbl_it
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 28
     mov si, hex_buf
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+
+    ; Row 6: Verdict
+    mov bx, 4
+    mov cx, 66
+    cmp word [kb_count], 0
+    ja .has_kb
+    mov si, lbl_no_kb
+    jmp .verdict_draw
+.has_kb:
+    cmp word [irq1_count], 0
+    ja .all_ok
+    mov si, lbl_kb_no_irq
+    jmp .verdict_draw
+.all_ok:
+    mov si, lbl_ok
+.verdict_draw:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
@@ -420,6 +435,18 @@ int9_hook:
 ; Subroutines
 ; ============================================================================
 
+kbc_wait_write:
+    in al, KBC_CMD
+    test al, 0x02              ; Input buffer full?
+    jnz kbc_wait_write
+    ret
+
+kbc_wait_read:
+    in al, KBC_CMD
+    test al, 0x01              ; Output buffer has data?
+    jz kbc_wait_read
+    ret
+
 restore_hooks:
     cli
     push es
@@ -484,16 +511,15 @@ win_title:          db 'KBC', 0
 wh:                 db 0
 iter_count:         dw 0
 evt_count:          dw 0
-scan_count:         dw 0
-last_scan:          db 0
+kb_count:           dw 0        ; Keyboard data bytes (port 0x64 bit5=0)
+ms_count:           dw 0        ; Mouse data bytes (port 0x64 bit5=1)
+last_kb_scan:       db 0        ; Last keyboard scancode
+last_kb_stat:       db 0        ; Last port 0x64 status for keyboard
 hex_buf:            db 0, 0, 0, 0, 0
 
-pic_isr:            db 0        ; PIC ISR at entry
-pic_irr:            db 0        ; PIC IRR at entry
-pic_mask:           db 0        ; PIC mask at entry
-pic_isr_after:      db 0        ; PIC ISR after EOI fix
-pic_isr_exit:       db 0        ; PIC ISR at loop exit
-sent_eoi:           db 0        ; 1 if we sent EOI to fix stuck IRQ1
+kbc_outport:        db 0        ; KBC output port before 0xF4
+kbc_outport2:       db 0        ; KBC output port after 0xF4
+f4_result:          db 0        ; 'A'=ACK, 'T'=timeout
 
 irq1_count:         dw 0
 
@@ -502,20 +528,18 @@ orig_int9_off:      dw 0
 orig_int9_seg:      dw 0
 
 lbl_wait:           db 'Press keys...', 0
-lbl_is:             db 'IS:', 0     ; ISR at entry
-lbl_ir:             db 'IR:', 0     ; IRR at entry
-lbl_pm:             db 'PM:', 0     ; PIC Mask
-lbl_eo:             db 'EO:', 0     ; EOI sent?
-lbl_ia:             db 'IA:', 0     ; ISR after EOI
-lbl_ix:             db 'IX:', 0     ; ISR at exit
-lbl_sc:             db 'SC:', 0     ; Scancode count (manual poll)
-lbl_ls:             db 'LS:', 0     ; Last scancode
+lbl_op:             db 'OP:', 0     ; Output port before
+lbl_o2:             db 'OA:', 0     ; Output port after
+lbl_f4:             db 'F4:', 0     ; F4 result (A=ack T=timeout)
+lbl_kb:             db 'KB:', 0     ; Keyboard data count
+lbl_ks:             db 'KS:', 0     ; Last keyboard scancode
+lbl_ms:             db 'MS:', 0     ; Mouse data count
 lbl_i9:             db 'I9:', 0     ; INT 9 count
 lbl_ev:             db 'EV:', 0     ; Event count
 lbl_it:             db 'IT:', 0     ; Iteration count
-lbl_stuck:          db 'IRQ1 STUCK!', 0
-lbl_no_sc:          db 'NO SCANCODE', 0
-lbl_sc_ok:          db 'SC OK I9 BAD', 0
+lbl_no_kb:          db 'NO KB DATA', 0
+lbl_kb_no_irq:      db 'KB OK NO IRQ', 0
+lbl_ok:             db 'ALL OK', 0
 
 ; Pad to 3 FAT12 clusters (> 1024 bytes)
 times 1536 - ($ - $$) db 0x90
