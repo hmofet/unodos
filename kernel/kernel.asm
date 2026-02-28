@@ -13418,80 +13418,23 @@ task_exit_handler:
 
 ; app_exit_stub - Exit current task (API 36)
 app_exit_stub:
-    ; DEBUG: Write stage markers to top-left of video memory
-    ; Each stage writes a different byte pattern so we can see where crash occurs
+    ; DEBUG: Fill top 2 rows of screen with white to confirm we reached app_exit_stub
     push es
-    mov es, [video_segment]
-    mov byte [es:0], 0xFF          ; Stage 1: entered app_exit_stub
-    pop es
-
-    ; Silence speaker (in case task was playing sound)
-    call speaker_off_stub
-
-    ; Mark current task as FREE
-    mov al, [current_task]
-    cmp al, 0xFF
-    je .exit_no_task
-
-    xor ah, ah
-    mov si, ax
-    shl si, 5
-    add si, app_table
-    mov byte [si + APP_OFF_STATE], APP_STATE_FREE
-
-    ; Free allocated segment back to pool (skip shell segment)
-    mov bx, [si + APP_OFF_CODE_SEG]
-    cmp bx, APP_SEGMENT_SHELL
-    je .skip_free_seg
-    call free_segment
-.skip_free_seg:
-
-    ; Clear draw context BEFORE destroying windows (prevents stale context during redraw)
-    mov byte [draw_context], 0xFF
-    mov byte [clip_enabled], 0
-
-    ; Restore default font BEFORE destroying windows (so title bars render correctly)
-    push ax
-    mov al, 1
-    call gfx_set_font
-    pop ax
-
-    ; DEBUG: Stage 2 - about to destroy windows
-    push es
-    mov es, [video_segment]
-    mov byte [es:2], 0xFF          ; Stage 2: before destroy_task_windows
-    pop es
-
-    ; Destroy all windows owned by this task
-    push ax                         ; Save task handle
-    call destroy_task_windows       ; ZF=1 if no windows destroyed
-    pop ax
-
-    ; DEBUG: Stage 3 - windows destroyed
-    push es
+    push cx
+    push di
     push ax
     mov es, [video_segment]
-    mov byte [es:4], 0xFF          ; Stage 3: after destroy_task_windows
+    xor di, di
+    mov cx, 160                     ; 160 bytes = ~2 rows in CGA or 160 pixels in VGA
+    mov al, 0xFF
+    rep stosb
     pop ax
+    pop di
+    pop cx
     pop es
-
-    ; Only repaint full desktop if no windows were destroyed (windowless/fullscreen app)
-    ; Windowed apps already trigger redraw via win_destroy_stub
-    jnz .skip_fullscreen_repaint
-    mov word [redraw_old_x], 0
-    mov word [redraw_old_y], 0
-    mov ax, [screen_width]
-    mov [redraw_old_w], ax
-    mov ax, [screen_height]
-    mov [redraw_old_h], ax
-    call redraw_affected_windows
-.skip_fullscreen_repaint:
-
-    ; DEBUG: Stage 4 - about to schedule
-    push es
-    mov es, [video_segment]
-    mov byte [es:6], 0xFF          ; Stage 4: before scheduler_next
-    pop es
+    ; DEBUG: Halt here so user can see screen state
+    cli
+    hlt
 
     ; Find next task to run
     mov byte [current_task], 0xFF
@@ -13527,12 +13470,6 @@ app_exit_stub:
     mov ax, [bx + APP_OFF_CALLER_ES]
     mov [caller_es], ax
 
-    ; DEBUG: Stage 5 - about to context switch
-    push es
-    mov es, [video_segment]
-    mov byte [es:8], 0xFF          ; Stage 5: before context switch
-    pop es
-
     cli
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
@@ -13541,11 +13478,6 @@ app_exit_stub:
     ret                             ; Now pops int80_return_point correctly
 
 .exit_no_tasks:
-    ; DEBUG: Stage X - no tasks found!
-    push es
-    mov es, [video_segment]
-    mov byte [es:10], 0xAA         ; Stage X: no tasks, reloading launcher
-    pop es
     ; No tasks left - reload launcher
     call auto_load_launcher
 .exit_no_task:
