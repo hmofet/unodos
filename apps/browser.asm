@@ -63,6 +63,7 @@ API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
 API_WORD_TO_STRING      equ 91
 API_WIN_GET_INFO        equ 79
+API_WIN_GET_CONTENT_SIZE equ 97
 API_GET_FONT_INFO       equ 93
 
 ; Event types
@@ -131,6 +132,18 @@ entry:
 
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
+
+    ; Get actual content dimensions via API 97
+    mov al, 0xFF                    ; Current draw context
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
+    mov [cs:content_w], dx
+    mov [cs:content_h], si
+    ; list_w = content_w - 4 - SCROLLBAR_W
+    mov ax, dx
+    sub ax, 4
+    sub ax, SCROLLBAR_W
+    mov [cs:list_w], ax
 
     ; Compute dynamic layout from current font
     mov ah, API_GET_FONT_INFO
@@ -752,15 +765,11 @@ scan_files:
 recompute_layout:
     pusha
 
-    ; Get actual window dimensions
+    ; Get actual content dimensions via API 97
     mov al, [cs:win_handle]
-    mov ah, API_WIN_GET_INFO          ; Returns BX=x, CX=y, DX=width, SI=height
+    mov ah, API_WIN_GET_CONTENT_SIZE  ; Returns DX=content_w, SI=content_h
     int 0x80
-    ; content_w = width - 4 (border + padding)
-    sub dx, 4
     mov [cs:content_w], dx
-    ; content_h = height - 14 (titlebar + border)
-    sub si, 14
     mov [cs:content_h], si
     ; list_w = content_w - 4 - SCROLLBAR_W
     mov ax, dx
@@ -801,11 +810,12 @@ recompute_layout:
 ; ============================================================================
 draw_ui:
     pusha
-    ; Clear content area
+    ; Clear content area (use API 97 for correct dimensions)
+    mov al, 0xFF                    ; Current draw context
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
     mov bx, 0
     mov cx, 0
-    mov dx, [cs:content_w]
-    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
