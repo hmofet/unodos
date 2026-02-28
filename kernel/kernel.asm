@@ -13607,32 +13607,6 @@ win_create_stub:
     pop ax
 .no_autocenter:
 
-    ; Clamp window to screen bounds (prevent bottom/right edge going off-screen)
-    push ax
-    mov ax, [.save_x]
-    add ax, [.save_w]
-    cmp ax, [screen_width]
-    jbe .wc_x_ok
-    mov ax, [screen_width]
-    sub ax, [.save_w]
-    jns .wc_clamp_x
-    xor ax, ax                      ; W > screen_width: X = 0
-.wc_clamp_x:
-    mov [.save_x], ax
-.wc_x_ok:
-    mov ax, [.save_y]
-    add ax, [.save_h]
-    cmp ax, [screen_height]
-    jbe .wc_y_ok
-    mov ax, [screen_height]
-    sub ax, [.save_h]
-    jns .wc_clamp_y
-    xor ax, ax                      ; H > screen_height: Y = 0
-.wc_clamp_y:
-    mov [.save_y], ax
-.wc_y_ok:
-    pop ax
-
     ; Find free window slot
     push ds
     mov bp, 0x1000

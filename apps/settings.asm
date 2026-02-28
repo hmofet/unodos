@@ -76,7 +76,7 @@ EVENT_WIN_REDRAW        equ 6
 
 ; Layout constants
 WIN_X       equ 10
-WIN_Y       equ 10
+WIN_Y       equ 3
 WIN_W       equ 300
 WIN_H       equ 194
 
