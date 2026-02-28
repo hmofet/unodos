@@ -13418,6 +13418,13 @@ task_exit_handler:
 
 ; app_exit_stub - Exit current task (API 36)
 app_exit_stub:
+    ; DEBUG: Write stage markers to top-left of video memory
+    ; Each stage writes a different byte pattern so we can see where crash occurs
+    push es
+    mov es, [video_segment]
+    mov byte [es:0], 0xFF          ; Stage 1: entered app_exit_stub
+    pop es
+
     ; Silence speaker (in case task was playing sound)
     call speaker_off_stub
 
@@ -13449,10 +13456,24 @@ app_exit_stub:
     call gfx_set_font
     pop ax
 
+    ; DEBUG: Stage 2 - about to destroy windows
+    push es
+    mov es, [video_segment]
+    mov byte [es:2], 0xFF          ; Stage 2: before destroy_task_windows
+    pop es
+
     ; Destroy all windows owned by this task
     push ax                         ; Save task handle
     call destroy_task_windows       ; ZF=1 if no windows destroyed
     pop ax
+
+    ; DEBUG: Stage 3 - windows destroyed
+    push es
+    push ax
+    mov es, [video_segment]
+    mov byte [es:4], 0xFF          ; Stage 3: after destroy_task_windows
+    pop ax
+    pop es
 
     ; Only repaint full desktop if no windows were destroyed (windowless/fullscreen app)
     ; Windowed apps already trigger redraw via win_destroy_stub
@@ -13465,6 +13486,12 @@ app_exit_stub:
     mov [redraw_old_h], ax
     call redraw_affected_windows
 .skip_fullscreen_repaint:
+
+    ; DEBUG: Stage 4 - about to schedule
+    push es
+    mov es, [video_segment]
+    mov byte [es:6], 0xFF          ; Stage 4: before scheduler_next
+    pop es
 
     ; Find next task to run
     mov byte [current_task], 0xFF
@@ -13499,6 +13526,13 @@ app_exit_stub:
     mov [caller_ds], ax
     mov ax, [bx + APP_OFF_CALLER_ES]
     mov [caller_es], ax
+
+    ; DEBUG: Stage 5 - about to context switch
+    push es
+    mov es, [video_segment]
+    mov byte [es:8], 0xFF          ; Stage 5: before context switch
+    pop es
+
     cli
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
@@ -13507,6 +13541,11 @@ app_exit_stub:
     ret                             ; Now pops int80_return_point correctly
 
 .exit_no_tasks:
+    ; DEBUG: Stage X - no tasks found!
+    push es
+    mov es, [video_segment]
+    mov byte [es:10], 0xAA         ; Stage X: no tasks, reloading launcher
+    pop es
     ; No tasks left - reload launcher
     call auto_load_launcher
 .exit_no_task:
