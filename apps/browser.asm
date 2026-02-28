@@ -665,11 +665,6 @@ entry:
 ; Exit
 ; ============================================================================
 .exit_ok:
-    mov ah, API_WIN_END_DRAW
-    int 0x80
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_DESTROY
-    int 0x80
     xor ax, ax
     jmp .exit
 
