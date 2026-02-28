@@ -998,12 +998,6 @@ draw_title:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, 60
-    mov cx, 135
-    mov si, str_inst2
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     mov bx, 70
     mov cx, 160
     mov si, str_press_key
@@ -1132,7 +1126,6 @@ sky_idx:        db 0
 str_title:      db 'OUTRUN VGA', 0
 str_subtitle:   db 'VGA Racing Challenge', 0
 str_inst1:      db 'Arrows: Steer/Speed', 0
-str_inst2:      db 'ESC: Quit', 0
 str_press_key:  db 'Press any key to start', 0
 str_speed:      db 'Speed:', 0
 str_score:      db 'Score:', 0

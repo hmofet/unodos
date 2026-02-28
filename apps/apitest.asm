@@ -426,12 +426,6 @@ entry:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, COL2_X
-    mov cx, 96
-    mov si, msg_esc
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     ; Wait for ESC
 .main_loop:
     sti
@@ -497,4 +491,3 @@ msg_ok79:   db '79:WinInf OK', 0
 msg_fail79: db '79:WinInf FAIL', 0
 
 msg_done:   db 'All tests complete', 0
-msg_esc:    db 'ESC to exit', 0

@@ -83,21 +83,17 @@ entry:
     add ax, 8
     mov [cs:win_w], ax
 
-    ; Height = NUM_ROWS * (char_h + 4) + btn_height + 8
+    ; row_height = char_h + 4
     movzx ax, bh
-    add ax, 4                      ; row_height = char_h + 4
+    add ax, 4
     mov [cs:row_h], ax
+
+    ; Window height = content_needed + 20 (titlebar + border overhead)
+    ; content_needed = NUM_ROWS * row_h + 22 (14 btn + 4 gap + 4 pad)
     mov dx, NUM_ROWS
     mul dx                         ; AX = rows * row_h
-    add ax, 22                     ; 14 btn + 4 gap + 4 bottom pad
+    add ax, 42                     ; 22 content + 20 overhead
     mov [cs:win_h], ax
-
-    ; Button Y = rows * row_h + 4
-    mov ax, [cs:row_h]
-    mov dx, NUM_ROWS
-    mul dx
-    add ax, 4
-    mov [cs:btn_y], ax
 
     ; Create window (centered)
     mov ax, [cs:win_w]
@@ -117,6 +113,15 @@ entry:
 
     mov ah, API_WIN_BEGIN_DRAW
     int 0x80
+
+    ; Get actual content size and compute button position
+    mov al, 0xFF
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
+    mov [cs:content_w], dx
+    ; btn_y = content_h - 14 (btn) - 4 (pad)
+    sub si, 18
+    mov [cs:btn_y], si
 
     call draw_ui
 
@@ -152,8 +157,8 @@ entry:
     jne .main_loop
     mov byte [cs:prev_btn], 1
 
-    ; Hit test OK button (centered)
-    mov ax, [cs:win_w]
+    ; Hit test OK button (centered in content area)
+    mov ax, [cs:content_w]
     sub ax, 40
     shr ax, 1
     mov bx, ax
@@ -326,10 +331,10 @@ draw_ui:
     mov cx, 5
     call draw_row
 
-    ; --- OK button (centered) ---
+    ; --- OK button (centered in content area) ---
     mov ax, cs
     mov es, ax
-    mov ax, [cs:win_w]
+    mov ax, [cs:content_w]
     sub ax, 40
     shr ax, 1
     mov bx, ax
@@ -492,6 +497,7 @@ win_w:          dw 0
 win_h:          dw 0
 row_h:          dw 0
 btn_y:          dw 0
+content_w:      dw 0
 t_scr_w:        dw 0
 t_scr_h:        dw 0
 t_vmode:        db 0
