@@ -4257,6 +4257,24 @@ mouse_process_drag:
     ; Handle deferred focus (bring clicked window to front)
     cmp byte [drag_needs_focus], 0
     je .no_focus
+
+    ; DEBUG HALT A: Focus code about to run - fill 80 bytes white + halt
+    push es
+    push cx
+    push di
+    push ax
+    mov es, [video_segment]
+    xor di, di
+    mov cx, 80
+    mov al, 0xFF
+    rep stosb
+    pop ax
+    pop di
+    pop cx
+    pop es
+    cli
+    hlt
+
     mov byte [drag_needs_focus], 0
     push ax
     push bx
@@ -5767,7 +5785,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2680 - ($ - $$) db 0
+times 0x26A0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -13418,23 +13436,53 @@ task_exit_handler:
 
 ; app_exit_stub - Exit current task (API 36)
 app_exit_stub:
-    ; DEBUG: Fill top 2 rows of screen with white to confirm we reached app_exit_stub
-    push es
-    push cx
-    push di
+    ; Silence speaker (in case task was playing sound)
+    call speaker_off_stub
+
+    ; Mark current task as FREE
+    mov al, [current_task]
+    cmp al, 0xFF
+    je .exit_no_task
+
+    xor ah, ah
+    mov si, ax
+    shl si, 5
+    add si, app_table
+    mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+
+    ; Free allocated segment back to pool (skip shell segment)
+    mov bx, [si + APP_OFF_CODE_SEG]
+    cmp bx, APP_SEGMENT_SHELL
+    je .skip_free_seg
+    call free_segment
+.skip_free_seg:
+
+    ; Clear draw context BEFORE destroying windows (prevents stale context during redraw)
+    mov byte [draw_context], 0xFF
+    mov byte [clip_enabled], 0
+
+    ; Restore default font BEFORE destroying windows (so title bars render correctly)
     push ax
-    mov es, [video_segment]
-    xor di, di
-    mov cx, 160                     ; 160 bytes = ~2 rows in CGA or 160 pixels in VGA
-    mov al, 0xFF
-    rep stosb
+    mov al, 1
+    call gfx_set_font
     pop ax
-    pop di
-    pop cx
-    pop es
-    ; DEBUG: Halt here so user can see screen state
-    cli
-    hlt
+
+    ; Destroy all windows owned by this task
+    push ax                         ; Save task handle
+    call destroy_task_windows       ; ZF=1 if no windows destroyed
+    pop ax
+
+    ; Only repaint full desktop if no windows were destroyed (windowless/fullscreen app)
+    ; Windowed apps already trigger redraw via win_destroy_stub
+    jnz .skip_fullscreen_repaint
+    mov word [redraw_old_x], 0
+    mov word [redraw_old_y], 0
+    mov ax, [screen_width]
+    mov [redraw_old_w], ax
+    mov ax, [screen_height]
+    mov [redraw_old_h], ax
+    call redraw_affected_windows
+.skip_fullscreen_repaint:
 
     ; Find next task to run
     mov byte [current_task], 0xFF
