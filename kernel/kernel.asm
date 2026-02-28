@@ -4087,6 +4087,14 @@ mouse_drag_update:
     jmp .done
 
 .resize_held:
+    ; Get window position for position-aware clamping
+    push bx
+    xor ah, ah
+    mov al, [resize_window]
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+
     ; Calculate resize target = start_dim + (mouse - start_mouse)
     mov ax, [mouse_x]
     sub ax, [resize_start_mx]
@@ -4096,11 +4104,15 @@ mouse_drag_update:
     jge .resize_w_min_ok
     mov ax, 60
 .resize_w_min_ok:
-    ; Clamp maximum width to screen_width
-    cmp ax, [screen_width]
+    ; Clamp maximum width to screen_width - win_x
+    push cx
+    mov cx, [screen_width]
+    sub cx, [bx + WIN_OFF_X]
+    cmp ax, cx
     jbe .resize_w_max_ok
-    mov ax, [screen_width]
+    mov ax, cx
 .resize_w_max_ok:
+    pop cx
     mov [resize_target_w], ax
 
     mov ax, [mouse_y]
@@ -4111,12 +4123,17 @@ mouse_drag_update:
     jge .resize_h_min_ok
     mov ax, 40
 .resize_h_min_ok:
-    ; Clamp maximum height to screen_height
-    cmp ax, [screen_height]
+    ; Clamp maximum height to screen_height - win_y
+    push cx
+    mov cx, [screen_height]
+    sub cx, [bx + WIN_OFF_Y]
+    cmp ax, cx
     jbe .resize_h_max_ok
-    mov ax, [screen_height]
+    mov ax, cx
 .resize_h_max_ok:
+    pop cx
     mov [resize_target_h], ax
+    pop bx
     jmp .done
 
 .button_released:
@@ -5750,7 +5767,7 @@ gfx_draw_sprite:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2660 - ($ - $$) db 0
+times 0x2680 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -13590,6 +13607,32 @@ win_create_stub:
     pop ax
 .no_autocenter:
 
+    ; Clamp window to screen bounds (prevent bottom/right edge going off-screen)
+    push ax
+    mov ax, [.save_x]
+    add ax, [.save_w]
+    cmp ax, [screen_width]
+    jbe .wc_x_ok
+    mov ax, [screen_width]
+    sub ax, [.save_w]
+    jns .wc_clamp_x
+    xor ax, ax                      ; W > screen_width: X = 0
+.wc_clamp_x:
+    mov [.save_x], ax
+.wc_x_ok:
+    mov ax, [.save_y]
+    add ax, [.save_h]
+    cmp ax, [screen_height]
+    jbe .wc_y_ok
+    mov ax, [screen_height]
+    sub ax, [.save_h]
+    jns .wc_clamp_y
+    xor ax, ax                      ; H > screen_height: Y = 0
+.wc_clamp_y:
+    mov [.save_y], ax
+.wc_y_ok:
+    pop ax
+
     ; Find free window slot
     push ds
     mov bp, 0x1000
@@ -17707,6 +17750,28 @@ win_resize_stub:
     push ax
     call draw_desktop_region
     call win_draw_stub              ; Redraw frame with new size
+
+    ; Clear content area so desktop icons don't show through
+    push dx
+    push si
+    mov bx, [di + WIN_OFF_X]
+    mov cx, [di + WIN_OFF_Y]
+    mov dx, [di + WIN_OFF_WIDTH]
+    mov si, [di + WIN_OFF_HEIGHT]
+    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    jz .wrs_clear_frameless
+    inc bx                          ; Inside left border
+    add cx, [titlebar_height]       ; Below title bar
+    sub dx, 2                       ; Inside both borders
+    sub si, [titlebar_height]
+    dec si                          ; Above bottom border
+.wrs_clear_frameless:
+    test si, si
+    jz .wrs_skip_clear
+    call gfx_clear_area_stub
+.wrs_skip_clear:
+    pop si
+    pop dx
     pop ax
 
     ; Post WIN_REDRAW event so app repaints content
