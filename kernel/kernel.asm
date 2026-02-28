@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 97                      ; Max function count (0-96 valid)
+    cmp ah, 98                      ; Max function count (0-97 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -5918,6 +5918,9 @@ kernel_api_table:
 
     ; Content Scale API (Build 309)
     dw win_get_content_scale        ; 96: Get content scale for current draw_context
+
+    ; Window Content Size API (Build 353)
+    dw win_get_content_size         ; 97: Get content area dimensions
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -17675,6 +17678,31 @@ win_resize_stub:
     mov [di + WIN_OFF_WIDTH], dx
     mov [di + WIN_OFF_HEIGHT], si
 
+    ; Update clip rect if this window is the active draw context
+    cmp al, [draw_context]
+    jne .wrs_no_clip_update
+    push bx
+    ; clip_x1 = win_x + 1
+    mov bx, [di + WIN_OFF_X]
+    inc bx
+    mov [clip_x1], bx
+    ; clip_y1 = win_y + titlebar_height
+    mov bx, [di + WIN_OFF_Y]
+    add bx, [titlebar_height]
+    mov [clip_y1], bx
+    ; clip_x2 = win_x + new_width - 2
+    mov bx, [di + WIN_OFF_X]
+    add bx, dx
+    sub bx, 2
+    mov [clip_x2], bx
+    ; clip_y2 = win_y + new_height - 2
+    mov bx, [di + WIN_OFF_Y]
+    add bx, si
+    sub bx, 2
+    mov [clip_y2], bx
+    pop bx
+.wrs_no_clip_update:
+
     ; Redraw the background where old window was, then redraw frame
     push ax
     call draw_desktop_region
@@ -17779,6 +17807,51 @@ win_get_content_scale:
 .gcs_none:
     mov al, 1
     clc
+    ret
+
+; win_get_content_size - Get window content area dimensions (API 97)
+; Input: AL = window handle (0xFF = use current draw_context)
+; Output: DX = content width, SI = content height, CF=0
+;         CF=1 if invalid handle or no draw context
+; Note: Returns app-facing dimensions (accounts for content_scale)
+win_get_content_size:
+    cmp al, 0xFF
+    jne .wgcs_use_handle
+    mov al, [draw_context]
+    cmp al, 0xFF
+    je .wgcs_invalid
+.wgcs_use_handle:
+    cmp al, WIN_MAX_COUNT
+    jae .wgcs_invalid
+    push bx
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+    cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .wgcs_invalid_pop
+    ; content_w = win_w - 4 (1px border each side + 1px padding each side)
+    mov dx, [bx + WIN_OFF_WIDTH]
+    sub dx, 4
+    ; content_h = win_h - titlebar_height - 2 (titlebar + 1px bottom border + 1px padding)
+    mov si, [bx + WIN_OFF_HEIGHT]
+    sub si, [titlebar_height]
+    sub si, 2
+    ; Handle content scaling: return app-facing (logical) dimensions
+    cmp byte [bx + WIN_OFF_CONTENT_SCALE], 2
+    jne .wgcs_no_scale
+    shr dx, 1
+    shr si, 1
+.wgcs_no_scale:
+    pop bx
+    clc
+    ret
+.wgcs_invalid_pop:
+    pop bx
+.wgcs_invalid:
+    xor dx, dx
+    xor si, si
+    stc
     ret
 
 ; gfx_scroll_area - Scroll rectangular region vertically (API 80)
