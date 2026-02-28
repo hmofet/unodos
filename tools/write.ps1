@@ -565,9 +565,30 @@ try {
                     $row += 2
                     Write-At 3 $row "Connect a floppy, CF card, or USB drive and try again." Yellow
                     $row += 2
-                    Write-At 3 $row "Press any key to exit..." DarkGray
-                    [Console]::ReadKey($true) | Out-Null
-                    exit 1
+                    Write-At 3 $row "R = refresh   Esc = exit" DarkGray
+                    if ($canGoBack) {
+                        Write-At 30 $row "   Bksp = back" DarkGray
+                    }
+                    $noDrivesDone = $false
+                    while (-not $noDrivesDone) {
+                        $key = [Console]::ReadKey($true)
+                        if ($key.Key -eq 'R') {
+                            $navScreen = "drive"
+                            $noDrivesDone = $true
+                        }
+                        elseif ($key.Key -eq 'Backspace' -and $canGoBack) {
+                            $navScreen = "image"
+                            $noDrivesDone = $true
+                        }
+                        elseif ($key.Key -eq 'Escape') {
+                            [Console]::Clear()
+                            [Console]::CursorVisible = $origCursorVisible
+                            Write-Host "Exited."
+                            exit 0
+                        }
+                    }
+                    $screenDone = $true
+                    break
                 }
 
                 $listTop = $row
