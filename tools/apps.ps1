@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 # UnoDOS Apps Floppy Writer (legacy wrapper)
 # Now calls write.ps1 with launcher-floppy.img
 # Usage: .\apps.ps1 [DriveLetter]
