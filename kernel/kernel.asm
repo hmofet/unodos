@@ -4258,23 +4258,6 @@ mouse_process_drag:
     cmp byte [drag_needs_focus], 0
     je .no_focus
 
-    ; DEBUG HALT A: Focus code about to run - fill 80 bytes white + halt
-    push es
-    push cx
-    push di
-    push ax
-    mov es, [video_segment]
-    xor di, di
-    mov cx, 80
-    mov al, 0xFF
-    rep stosb
-    pop ax
-    pop di
-    pop cx
-    pop es
-    cli
-    hlt
-
     mov byte [drag_needs_focus], 0
     push ax
     push bx
