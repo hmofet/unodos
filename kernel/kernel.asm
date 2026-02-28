@@ -13439,6 +13439,10 @@ app_exit_stub:
     call free_segment
 .skip_free_seg:
 
+    ; Clear draw context BEFORE destroying windows (prevents stale context during redraw)
+    mov byte [draw_context], 0xFF
+    mov byte [clip_enabled], 0
+
     ; Restore default font BEFORE destroying windows (so title bars render correctly)
     push ax
     mov al, 1

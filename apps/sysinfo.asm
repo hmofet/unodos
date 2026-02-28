@@ -46,6 +46,7 @@ API_DRAW_BUTTON        equ 51
 API_HIT_TEST           equ 53
 API_GET_TICK_COUNT     equ 63
 API_GET_RTC_TIME       equ 72
+API_WIN_GET_CONTENT_SIZE equ 97
 API_GET_TASK_INFO      equ 74
 API_WIN_RESIZE         equ 78
 API_GET_SCREEN_INFO    equ 82
@@ -190,13 +191,12 @@ draw_ui:
     mov ax, cs
     mov ds, ax
 
-    ; Clear content area
+    ; Clear content area (use API 97 for correct dimensions)
+    mov al, 0xFF                    ; Current draw context
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
     mov bx, 0
     mov cx, 0
-    mov dx, [cs:win_w]
-    sub dx, 2
-    mov si, [cs:win_h]
-    sub si, 2
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 

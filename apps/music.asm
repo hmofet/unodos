@@ -51,6 +51,7 @@ API_HIT_TEST            equ 53
 API_HLINE               equ 69
 API_GET_TICK            equ 63
 API_DRAW_SPRITE         equ 94
+API_WIN_GET_CONTENT_SIZE equ 97
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -449,11 +450,12 @@ toggle_state:
 draw_all:
     pusha
 
-    ; Clear entire content area
+    ; Clear entire content area (use API 97 for correct dimensions)
+    mov al, 0xFF                    ; Current draw context
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
     mov bx, 0
     mov cx, 0
-    mov dx, WIN_W - 2
-    mov si, WIN_H - 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 

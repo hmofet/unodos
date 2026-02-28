@@ -57,6 +57,7 @@ API_GET_BOOT_DRIVE      equ 43
 API_FS_WRITE_SECTOR     equ 44
 API_FS_CREATE           equ 45
 API_FS_WRITE            equ 46
+API_WIN_GET_CONTENT_SIZE equ 97
 API_DRAW_STRING_WRAP    equ 50
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
@@ -759,6 +760,15 @@ draw_main_ui:
     push dx
     push si
     push di
+
+    ; Clear content area (use API 97 for correct dimensions)
+    mov al, 0xFF                    ; Current draw context
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80                        ; DX = content_w, SI = content_h
+    mov bx, 0
+    mov cx, 0
+    mov ah, API_GFX_CLEAR_AREA
+    int 0x80
 
     ; Draw title
     mov si, msg_title
