@@ -5,7 +5,7 @@ Create a bootable FAT16 hard drive image for UnoDOS.
 Usage:
   python3 create_hd_image.py output.img
 
-This creates a 64MB hard drive image with:
+This creates a 34MB hard drive image with:
 - MBR with partition table
 - FAT16 partition with UnoDOS boot code
 - Kernel and apps pre-installed
@@ -24,12 +24,12 @@ import sys
 import struct
 import os
 
-# Disk geometry for 64MB image (CHS compatible)
+# Disk geometry for 34MB image (CHS compatible, fits on 64MB CF cards)
 SECTOR_SIZE = 512
 SECTORS_PER_TRACK = 63
 HEADS = 16
-CYLINDERS = 130                    # ~64MB (130 * 16 * 63 * 512 = ~66MB)
-TOTAL_SECTORS = CYLINDERS * HEADS * SECTORS_PER_TRACK  # 131,040 sectors
+CYLINDERS = 69                     # ~34MB (69 * 16 * 63 * 512 = ~34MB)
+TOTAL_SECTORS = CYLINDERS * HEADS * SECTORS_PER_TRACK  # 69,552 sectors
 
 # FAT16 parameters
 RESERVED_SECTORS = 5               # VBR + 4 sectors for stage2_hd
