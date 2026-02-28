@@ -1,8 +1,6 @@
 ; BROWSER.BIN - File Manager for UnoDOS
-; Scrollable file list with selection, delete, rename, and copy operations.
-; Build 257
-;
-; Build: nasm -f bin -o browser.bin browser.asm
+; Clean rewrite using current API conventions.
+; Features: file listing, scrolling, delete, rename, copy.
 
 [BITS 16]
 [ORG 0x0000]
@@ -11,10 +9,9 @@
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
     db 'UI'                         ; Magic bytes
     db 'Files', 0                   ; App name
-    times (0x04 + 12) - ($ - $$) db 0  ; Pad name to 12 bytes
+    times (0x04 + 12) - ($ - $$) db 0
 
-    ; 16x16 icon bitmap (64 bytes, 2bpp CGA format)
-    ; Folder icon: cyan folder with white tab
+    ; 16x16 icon bitmap (64 bytes, 2bpp CGA format) - folder icon
     db 0x0F, 0xFC, 0x00, 0x00      ; Row 0
     db 0x3F, 0xFF, 0x00, 0x00      ; Row 1
     db 0x55, 0x55, 0x55, 0x54      ; Row 2
@@ -32,7 +29,7 @@
     db 0x00, 0x00, 0x00, 0x00      ; Row 14
     db 0x00, 0x00, 0x00, 0x00      ; Row 15
 
-    times 0x50 - ($ - $$) db 0     ; Pad to code entry at offset 0x50
+    times 0x50 - ($ - $$) db 0
 
 ; --- Code Entry (offset 0x50) ---
 
@@ -45,11 +42,9 @@ API_FS_OPEN             equ 14
 API_FS_READ             equ 15
 API_FS_CLOSE            equ 16
 API_WIN_CREATE          equ 20
-API_WIN_DESTROY         equ 21
 API_FS_READDIR          equ 27
 API_MOUSE_STATE         equ 28
 API_WIN_BEGIN_DRAW      equ 31
-API_WIN_END_DRAW        equ 32
 API_APP_YIELD           equ 34
 API_GET_BOOT_DRIVE      equ 43
 API_FS_CREATE           equ 45
@@ -57,14 +52,13 @@ API_FS_WRITE            equ 46
 API_FS_DELETE           equ 47
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
-API_DRAW_LISTITEM       equ 59
 API_DRAW_SCROLLBAR      equ 58
+API_DRAW_LISTITEM       equ 59
 API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
 API_WORD_TO_STRING      equ 91
-API_WIN_GET_INFO        equ 79
-API_WIN_GET_CONTENT_SIZE equ 97
 API_GET_FONT_INFO       equ 93
+API_WIN_GET_CONTENT_SIZE equ 97
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -76,24 +70,8 @@ MODE_CONFIRM_DEL        equ 1
 MODE_RENAME             equ 2
 MODE_COPY               equ 3
 
-; Layout (content-relative)
-WIN_W                   equ 264
-WIN_H                   equ 170
+; Constants
 SCROLLBAR_W             equ 8
-SCROLLBAR_ARROW_H       equ 8
-BTN_DEL_X               equ 4
-BTN_DEL_W               equ 52
-BTN_REN_X               equ 62
-BTN_REN_W               equ 56
-BTN_CPY_X               equ 124
-BTN_CPY_W               equ 44
-BTN_YES_X               equ 4
-BTN_YES_W               equ 30
-BTN_NO_X                equ 40
-BTN_NO_W                equ 26
-BTN_OK_X                equ 200
-BTN_OK_W                equ 30
-
 MAX_FILES               equ 64
 FILE_ENTRY_SIZE         equ 16
 
@@ -108,97 +86,74 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Get boot drive and mount
+    ; Get boot drive and mount filesystem
     mov ah, API_GET_BOOT_DRIVE
     int 0x80
     mov ah, API_FS_MOUNT
     int 0x80
-    jc .exit_fail
-    mov [cs:mount_handle], bl
+    jc .exit
+    mov [mount_handle], bl
 
-    ; Create window
-    mov bx, 28
-    mov cx, 12
-    mov dx, WIN_W
-    mov si, WIN_H
-    mov ax, cs
-    mov es, ax
-    mov di, window_title
-    mov al, 0x03
-    mov ah, API_WIN_CREATE
-    int 0x80
-    jc .exit_fail
-    mov [cs:win_handle], al
-
-    mov ah, API_WIN_BEGIN_DRAW
-    int 0x80
-
-    ; Get actual content dimensions via API 97
-    mov al, 0xFF                    ; Current draw context
-    mov ah, API_WIN_GET_CONTENT_SIZE
-    int 0x80                        ; DX = content_w, SI = content_h
-    jc .use_defaults                ; On error, keep default values
-    test dx, dx
-    jz .use_defaults
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
-    ; list_w = content_w - 4 - SCROLLBAR_W
-    mov ax, dx
-    sub ax, 4
-    sub ax, SCROLLBAR_W
-    mov [cs:list_w], ax
-.use_defaults:
-
-    ; Compute dynamic layout from current font
+    ; Get font metrics for layout
     mov ah, API_GET_FONT_INFO
-    int 0x80                        ; BH=height, BL=width, CL=advance
-    mov [cs:font_h], bh
-    mov [cs:font_w], bl
-    mov [cs:font_adv], cl
+    int 0x80
+    mov [font_h], bh
+    mov [font_adv], cl
+
+    ; Compute window size from font
+    ; Width = 22 * advance + SCROLLBAR_W + 12
+    movzx ax, cl
+    mov dx, 22
+    mul dx
+    add ax, SCROLLBAR_W
+    add ax, 12
+    mov [win_w], ax
 
     ; row_h = font_h + 2
     movzx ax, bh
     add ax, 2
-    mov [cs:row_h], ax
-
-    ; sep1_y = font_h + 2
-    mov [cs:sep1_y], ax
-
-    ; list_y = sep1_y + 3
-    add ax, 3
-    mov [cs:list_y], ax
+    mov [row_h], ax
 
     ; btn_h = font_h + 3
     movzx ax, bh
     add ax, 3
-    mov [cs:btn_h], ax
+    mov [btn_h], ax
 
-    ; vis_rows = (content_h - list_y - 4 - 2*btn_h) / row_h
-    mov ax, [cs:content_h]
-    sub ax, [cs:list_y]
-    sub ax, 4
-    mov dx, [cs:btn_h]
+    ; Window height = 14 (titlebar) + 2 (border) + header row + sep + 10*row_h + sep + 2*btn_h + pad
+    ; Approximate: compute from rows
+    mov ax, [row_h]
+    mov dx, 10                      ; Target 10 visible rows
+    mul dx
+    add ax, 16                      ; Header + seps
+    mov dx, [btn_h]
     shl dx, 1
-    sub ax, dx
-    xor dx, dx
-    div word [cs:row_h]
-    mov [cs:vis_rows], ax
+    add dx, 6                       ; Two button rows + padding
+    add ax, dx
+    add ax, 16                      ; Titlebar + border overhead
+    mov [win_h], ax
 
-    ; sep2_y = list_y + vis_rows * row_h
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
-    mov [cs:sep2_y], ax
+    ; Create window
+    mov bx, 28
+    mov cx, 10
+    mov dx, [win_w]
+    mov si, [win_h]
+    mov ax, cs
+    mov es, ax
+    mov di, window_title
+    mov al, 0x03                    ; Bordered + closeable
+    mov ah, API_WIN_CREATE
+    int 0x80
+    jc .exit
+    mov [win_handle], al
 
-    ; row1_y = sep2_y + 3
-    add ax, 3
-    mov [cs:row1_y], ax
+    ; Begin draw context
+    mov ah, API_WIN_BEGIN_DRAW
+    int 0x80
 
-    ; row2_y = row1_y + btn_h + 1
-    add ax, [cs:btn_h]
-    inc ax
-    mov [cs:row2_y], ax
+    ; Get content size and compute layout
+    call compute_layout
 
-    ; Scan files and draw UI
+    ; Scan files and draw
     call scan_files
     call draw_ui
 
@@ -210,280 +165,270 @@ entry:
     mov ah, API_APP_YIELD
     int 0x80
 
-    ; --- Mouse ---
+    ; Check events first
+    mov ah, API_EVENT_GET
+    int 0x80
+    jc .check_mouse
+
+    cmp al, EVENT_WIN_REDRAW
+    jne .not_redraw
+    call compute_layout
+    call draw_ui
+    jmp .main_loop
+
+.not_redraw:
+    cmp al, EVENT_KEY_PRESS
+    jne .main_loop
+    ; DL=ASCII, DH=scan
+    cmp dl, 27                      ; ESC
+    je .key_esc
+    cmp byte [mode], MODE_NORMAL
+    je .key_normal
+    cmp byte [mode], MODE_CONFIRM_DEL
+    je .key_confirm
+    jmp .key_input
+
+.check_mouse:
     mov ah, API_MOUSE_STATE
     int 0x80
     test dl, 1
     jz .mouse_up
-    cmp byte [cs:prev_btn], 0
-    jne .check_event
-    mov byte [cs:prev_btn], 1
-
-    ; Click detected - dispatch by mode
-    cmp byte [cs:mode], MODE_CONFIRM_DEL
+    cmp byte [prev_btn], 0
+    jne .main_loop
+    mov byte [prev_btn], 1
+    ; Click dispatch by mode
+    cmp byte [mode], MODE_CONFIRM_DEL
     je .click_confirm
-    cmp byte [cs:mode], MODE_RENAME
+    cmp byte [mode], MODE_RENAME
     je .click_input
-    cmp byte [cs:mode], MODE_COPY
+    cmp byte [mode], MODE_COPY
     je .click_input
-    ; MODE_NORMAL: test file rows, then buttons
     jmp .click_normal
 
 .mouse_up:
-    mov byte [cs:prev_btn], 0
-
-.check_event:
-    mov ah, API_EVENT_GET
-    int 0x80
-    jc .main_loop
-    cmp al, EVENT_WIN_REDRAW
-    jne .not_redraw
-    call recompute_layout
-    call draw_ui
+    mov byte [prev_btn], 0
     jmp .main_loop
-.not_redraw:
-    cmp al, EVENT_KEY_PRESS
-    jne .main_loop
-    ; DL=ASCII, DH=scan code
-    cmp dl, 27
-    je .key_esc
-    cmp byte [cs:mode], MODE_NORMAL
-    je .key_normal
-    cmp byte [cs:mode], MODE_CONFIRM_DEL
-    je .key_confirm
-    ; MODE_RENAME or MODE_COPY: text input
-    jmp .key_input
 
-; --- ESC key ---
+; --- ESC ---
 .key_esc:
-    cmp byte [cs:mode], MODE_NORMAL
-    je .exit_ok
-    ; Cancel current mode
-    mov byte [cs:mode], MODE_NORMAL
+    cmp byte [mode], MODE_NORMAL
+    je .exit
+    mov byte [mode], MODE_NORMAL
     call draw_bottom
     jmp .main_loop
 
-; --- Normal mode keys ---
+; --- Normal keys ---
 .key_normal:
-    cmp dl, 128                     ; Up arrow (special code)
+    cmp dl, 128                     ; Up arrow
     je .key_up
-    cmp dl, 129                     ; Down arrow (special code)
+    cmp dl, 129                     ; Down arrow
     je .key_down
     jmp .main_loop
 
 .key_up:
-    cmp byte [cs:sel_index], 0
+    cmp byte [sel_index], 0
     je .main_loop
-    dec byte [cs:sel_index]
-    mov al, [cs:sel_index]
-    cmp al, [cs:scroll_top]
+    dec byte [sel_index]
+    mov al, [sel_index]
+    cmp al, [scroll_top]
     jae .redraw_list
-    dec byte [cs:scroll_top]
+    dec byte [scroll_top]
 .redraw_list:
     call draw_file_list
     jmp .main_loop
 
 .key_down:
-    mov al, [cs:sel_index]
+    mov al, [sel_index]
     inc al
-    cmp al, [cs:file_count]
+    cmp al, [file_count]
     jae .main_loop
-    mov [cs:sel_index], al
-    sub al, [cs:scroll_top]
-    cmp al, byte [cs:vis_rows]
+    mov [sel_index], al
+    sub al, [scroll_top]
+    cmp al, byte [vis_rows]
     jb .redraw_list
-    inc byte [cs:scroll_top]
+    inc byte [scroll_top]
     jmp .redraw_list
 
-; --- Normal mode click ---
+; --- Normal click ---
 .click_normal:
-    ; Hit test each visible row
-    xor cl, cl                      ; CL = row counter
+    ; Test file rows
+    xor cl, cl
 .test_row:
     mov al, cl
-    add al, [cs:scroll_top]
-    cmp al, [cs:file_count]
-    jae .test_buttons
-    ; Row rect: X=2, Y=list_y + CL*row_h, W=list_w, H=row_h
+    add al, [scroll_top]
+    cmp al, [file_count]
+    jae .test_scroll
     push cx
-    mov bx, 2
-    xor ch, ch
+    ; Row rect: X=2, Y=list_y + CL*row_h, W=list_w, H=row_h
     movzx ax, cl
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
+    mul word [row_h]
+    add ax, [list_y]
     mov cx, ax
-    mov dx, [cs:list_w]
-    mov si, [cs:row_h]
+    mov bx, 2
+    mov dx, [list_w]
+    mov si, [row_h]
     mov ah, API_HIT_TEST
     int 0x80
     pop cx
     test al, al
-    jnz .row_clicked
+    jnz .row_hit
     inc cl
-    cmp cl, byte [cs:vis_rows]
+    cmp cl, byte [vis_rows]
     jb .test_row
 
-    ; Test scrollbar arrows
-    mov bx, [cs:list_w]
-    add bx, 2                      ; X = list_w + 2
-    mov cx, [cs:list_y]            ; Y = list_y
+.test_scroll:
+    ; Scroll up arrow
+    mov bx, [list_w]
+    add bx, 2
+    mov cx, [list_y]
     mov dx, SCROLLBAR_W
-    mov si, SCROLLBAR_ARROW_H
+    mov si, 8
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
-    jnz .scroll_up_click
+    jnz .scroll_up
 
-    ; Down arrow
-    mov bx, [cs:list_w]
+    ; Scroll down arrow
+    mov bx, [list_w]
     add bx, 2
-    mov ax, [cs:vis_rows]
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
-    sub ax, SCROLLBAR_ARROW_H
+    mov ax, [vis_rows]
+    mul word [row_h]
+    add ax, [list_y]
+    sub ax, 8
     mov cx, ax
     mov dx, SCROLLBAR_W
-    mov si, SCROLLBAR_ARROW_H
+    mov si, 8
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
-    jnz .scroll_down_click
+    jnz .scroll_down
 
+    ; Test buttons
     jmp .test_buttons
 
-.scroll_up_click:
-    cmp byte [cs:scroll_top], 0
-    je .check_event
-    dec byte [cs:scroll_top]
-    ; Keep sel_index in view
-    mov al, [cs:scroll_top]
-    cmp al, [cs:sel_index]
+.row_hit:
+    mov al, cl
+    add al, [scroll_top]
+    mov [sel_index], al
+    call draw_file_list
+    jmp .main_loop
+
+.scroll_up:
+    cmp byte [scroll_top], 0
+    je .main_loop
+    dec byte [scroll_top]
+    mov al, [scroll_top]
+    cmp al, [sel_index]
     jbe .scroll_redraw
-    mov [cs:sel_index], al
+    mov [sel_index], al
 .scroll_redraw:
     call draw_file_list
-    jmp .check_event
+    jmp .main_loop
 
-.scroll_down_click:
-    movzx ax, byte [cs:file_count]
-    sub ax, [cs:vis_rows]
-    jle .check_event                ; No scrolling needed
-    cmp byte [cs:scroll_top], al
-    jae .check_event                ; Already at bottom
-    inc byte [cs:scroll_top]
-    ; Keep sel_index in view
-    movzx ax, byte [cs:scroll_top]
-    add ax, [cs:vis_rows]
-    dec ax                          ; Last visible index
-    cmp al, [cs:sel_index]
+.scroll_down:
+    movzx ax, byte [file_count]
+    sub ax, [vis_rows]
+    jle .main_loop
+    cmp byte [scroll_top], al
+    jae .main_loop
+    inc byte [scroll_top]
+    movzx ax, byte [scroll_top]
+    add ax, [vis_rows]
+    dec ax
+    cmp al, [sel_index]
     jae .scroll_redraw
-    mov al, [cs:scroll_top]
-    add al, byte [cs:vis_rows]
-    dec al
-    mov [cs:sel_index], al          ; Clamp to bottom of view
+    mov [sel_index], al
     jmp .scroll_redraw
 
-.row_clicked:
-    mov al, cl
-    add al, [cs:scroll_top]
-    mov [cs:sel_index], al
-    call draw_file_list
-    jmp .check_event
-
 .test_buttons:
-    cmp byte [cs:file_count], 0
-    je .check_event
-
-    ; Delete button
-    mov bx, BTN_DEL_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_DEL_W
-    mov si, [cs:btn_h]
+    cmp byte [file_count], 0
+    je .main_loop
+    ; Delete
+    mov bx, 4
+    mov cx, [row1_y]
+    mov dx, 52
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .start_delete
-
-    ; Rename button
-    mov bx, BTN_REN_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_REN_W
-    mov si, [cs:btn_h]
+    ; Rename
+    mov bx, 62
+    mov cx, [row1_y]
+    mov dx, 56
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .start_rename
-
-    ; Copy button
-    mov bx, BTN_CPY_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_CPY_W
-    mov si, [cs:btn_h]
+    ; Copy
+    mov bx, 124
+    mov cx, [row1_y]
+    mov dx, 44
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .start_copy
+    jmp .main_loop
 
-    jmp .check_event
-
-; --- Start Delete ---
+; --- Delete ---
 .start_delete:
-    mov byte [cs:mode], MODE_CONFIRM_DEL
+    mov byte [mode], MODE_CONFIRM_DEL
     call draw_bottom
-    jmp .check_event
+    jmp .main_loop
 
-; --- Start Rename ---
+; --- Rename ---
 .start_rename:
-    mov byte [cs:mode], MODE_RENAME
-    ; Pre-fill input with selected filename
-    call get_sel_name               ; SI = filename ptr
+    mov byte [mode], MODE_RENAME
+    call get_sel_name
     xor cx, cx
     mov di, input_buf
 .sr_copy:
-    mov al, [cs:si]
+    mov al, [si]
     test al, al
     jz .sr_done
-    mov [cs:di], al
+    mov [di], al
     inc si
     inc di
     inc cl
     cmp cl, 12
     jb .sr_copy
 .sr_done:
-    mov byte [cs:di], 0
-    mov [cs:input_len], cl
+    mov byte [di], 0
+    mov [input_len], cl
     call draw_bottom
-    jmp .check_event
+    jmp .main_loop
 
-; --- Start Copy ---
+; --- Copy ---
 .start_copy:
-    mov byte [cs:mode], MODE_COPY
-    mov byte [cs:input_buf], 0
-    mov byte [cs:input_len], 0
+    mov byte [mode], MODE_COPY
+    mov byte [input_buf], 0
+    mov byte [input_len], 0
     call draw_bottom
-    jmp .check_event
+    jmp .main_loop
 
-; --- Confirm delete click ---
+; --- Confirm click ---
 .click_confirm:
-    mov bx, BTN_YES_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_YES_W
-    mov si, [cs:btn_h]
+    mov bx, 4
+    mov cx, [row2_y]
+    mov dx, 30
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .do_delete
-    mov bx, BTN_NO_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_NO_W
-    mov si, [cs:btn_h]
+    mov bx, 40
+    mov cx, [row2_y]
+    mov dx, 26
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .cancel_mode
-    jmp .check_event
+    jmp .main_loop
 
-; --- Confirm delete keys ---
+; --- Confirm keys ---
 .key_confirm:
     cmp dl, 'Y'
     je .do_delete
@@ -496,37 +441,33 @@ entry:
     jmp .main_loop
 
 .cancel_mode:
-    mov byte [cs:mode], MODE_NORMAL
+    mov byte [mode], MODE_NORMAL
     call draw_bottom
     jmp .main_loop
 
-; --- Text input click (rename/copy) ---
+; --- Input click ---
 .click_input:
-    mov bx, BTN_OK_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_OK_W
-    mov si, [cs:btn_h]
+    mov bx, 200
+    mov cx, [row2_y]
+    mov dx, 30
+    mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .submit_input
-    jmp .check_event
+    jmp .main_loop
 
-; --- Text input keys ---
+; --- Input keys ---
 .key_input:
-    ; Backspace
-    cmp dl, 8
-    je .input_backspace
-    ; Enter
-    cmp dl, 13
+    cmp dl, 8                       ; Backspace
+    je .input_bs
+    cmp dl, 13                      ; Enter
     je .submit_input
-    ; Printable char (32-126)
     cmp dl, 32
     jb .main_loop
     cmp dl, 126
     ja .main_loop
-    ; Max 12 chars
-    cmp byte [cs:input_len], 12
+    cmp byte [input_len], 12
     jae .main_loop
     ; Auto-uppercase
     cmp dl, 'a'
@@ -535,142 +476,122 @@ entry:
     ja .input_store
     sub dl, 32
 .input_store:
-    movzx bx, byte [cs:input_len]
-    mov [cs:input_buf + bx], dl
-    inc byte [cs:input_len]
-    movzx bx, byte [cs:input_len]
-    mov byte [cs:input_buf + bx], 0
+    movzx bx, byte [input_len]
+    mov [input_buf + bx], dl
+    inc byte [input_len]
+    movzx bx, byte [input_len]
+    mov byte [input_buf + bx], 0
     call draw_bottom
     jmp .main_loop
 
-.input_backspace:
-    cmp byte [cs:input_len], 0
+.input_bs:
+    cmp byte [input_len], 0
     je .main_loop
-    dec byte [cs:input_len]
-    movzx bx, byte [cs:input_len]
-    mov byte [cs:input_buf + bx], 0
+    dec byte [input_len]
+    movzx bx, byte [input_len]
+    mov byte [input_buf + bx], 0
     call draw_bottom
     jmp .main_loop
 
-; --- Submit input ---
 .submit_input:
-    cmp byte [cs:input_len], 0
+    cmp byte [input_len], 0
     je .main_loop
-    cmp byte [cs:mode], MODE_RENAME
+    cmp byte [mode], MODE_RENAME
     je .do_rename
-    cmp byte [cs:mode], MODE_COPY
+    cmp byte [mode], MODE_COPY
     je .do_copy
     jmp .main_loop
 
 ; ============================================================================
-; Do Delete
+; File Operations
 ; ============================================================================
 .do_delete:
-    call get_sel_name               ; SI = filename
-    mov bl, [cs:mount_handle]
+    call get_sel_name
+    mov bl, [mount_handle]
     mov ah, API_FS_DELETE
     int 0x80
     jc .op_fail
-    ; Rescan and redraw
     call scan_files
-    mov byte [cs:mode], MODE_NORMAL
+    mov byte [mode], MODE_NORMAL
     call draw_ui
     jmp .main_loop
 
-; ============================================================================
-; Do Rename
-; ============================================================================
 .do_rename:
-    call get_sel_name               ; SI = old name
+    call get_sel_name
     mov ax, cs
     mov es, ax
-    mov di, input_buf               ; ES:DI = new name
-    mov bl, [cs:mount_handle]
+    mov di, input_buf
+    mov bl, [mount_handle]
     mov ah, API_FS_RENAME
     int 0x80
     jc .op_fail
     call scan_files
-    mov byte [cs:mode], MODE_NORMAL
+    mov byte [mode], MODE_NORMAL
     call draw_ui
     jmp .main_loop
 
-; ============================================================================
-; Do Copy
-; ============================================================================
 .do_copy:
-    ; Open source file
-    call get_sel_name               ; SI = source filename
-    movzx bx, byte [cs:mount_handle]
+    call get_sel_name
+    movzx bx, byte [mount_handle]
     mov ah, API_FS_OPEN
     int 0x80
     jc .op_fail
-    mov [cs:src_handle], al
+    mov [src_handle], al
 
-    ; Create destination file
     mov si, input_buf
-    mov bl, [cs:mount_handle]
+    mov bl, [mount_handle]
     mov ah, API_FS_CREATE
     int 0x80
     jc .copy_close_src
-    mov [cs:dst_handle], al
+    mov [dst_handle], al
 
-    ; Stream copy loop
 .copy_loop:
-    mov al, [cs:src_handle]
+    mov al, [src_handle]
     mov ah, API_FS_READ
     push cs
     pop es
     mov di, copy_buf
     mov cx, 512
     int 0x80
-    jc .copy_close_both
+    jc .copy_done
     test ax, ax
-    jz .copy_close_both             ; EOF
-    ; Write what we read
-    mov cx, ax                      ; CX = bytes to write
+    jz .copy_done
+    mov cx, ax
     push cx
-    mov al, [cs:dst_handle]
+    mov al, [dst_handle]
     mov ah, API_FS_WRITE
     push cs
     pop es
     mov bx, copy_buf
     int 0x80
     pop cx
-    jc .copy_close_both
+    jc .copy_done
     cmp cx, 512
-    jb .copy_close_both             ; Last chunk (partial read = EOF)
+    jb .copy_done
     jmp .copy_loop
 
-.copy_close_both:
-    mov al, [cs:dst_handle]
+.copy_done:
+    mov al, [dst_handle]
     mov ah, API_FS_CLOSE
     int 0x80
 .copy_close_src:
-    mov al, [cs:src_handle]
+    mov al, [src_handle]
     mov ah, API_FS_CLOSE
     int 0x80
-    ; Rescan
     call scan_files
-    mov byte [cs:mode], MODE_NORMAL
+    mov byte [mode], MODE_NORMAL
     call draw_ui
     jmp .main_loop
 
 .op_fail:
-    mov byte [cs:mode], MODE_NORMAL
-    mov byte [cs:op_error], 1
+    mov byte [mode], MODE_NORMAL
+    mov byte [op_error], 1
     call draw_ui
     jmp .main_loop
 
 ; ============================================================================
-; Exit
+; Exit - let app_exit_stub handle all cleanup
 ; ============================================================================
-.exit_ok:
-    xor ax, ax
-    jmp .exit
-
-.exit_fail:
-    mov ax, 1
-
 .exit:
     pop es
     pop ds
@@ -678,79 +599,132 @@ entry:
     retf
 
 ; ============================================================================
+; compute_layout - Get content size and derive all Y positions
+; ============================================================================
+compute_layout:
+    pusha
+    mov al, 0xFF
+    mov ah, API_WIN_GET_CONTENT_SIZE
+    int 0x80
+    jc .cl_done
+    test dx, dx
+    jz .cl_done
+    mov [content_w], dx
+    mov [content_h], si
+
+    ; list_w = content_w - 4 - SCROLLBAR_W
+    mov ax, dx
+    sub ax, 4
+    sub ax, SCROLLBAR_W
+    mov [list_w], ax
+
+    ; sep1_y = row_h (header height)
+    mov ax, [row_h]
+    mov [sep1_y], ax
+
+    ; list_y = sep1_y + 3
+    add ax, 3
+    mov [list_y], ax
+
+    ; vis_rows = (content_h - list_y - 4 - 2*btn_h) / row_h
+    mov ax, [content_h]
+    sub ax, [list_y]
+    sub ax, 4
+    mov dx, [btn_h]
+    shl dx, 1
+    sub ax, dx
+    xor dx, dx
+    div word [row_h]
+    mov [vis_rows], ax
+
+    ; sep2_y = list_y + vis_rows * row_h
+    mul word [row_h]
+    add ax, [list_y]
+    mov [sep2_y], ax
+
+    ; row1_y = sep2_y + 3
+    add ax, 3
+    mov [row1_y], ax
+
+    ; row2_y = row1_y + btn_h + 1
+    add ax, [btn_h]
+    inc ax
+    mov [row2_y], ax
+
+.cl_done:
+    popa
+    ret
+
+; ============================================================================
 ; scan_files - Read directory into file_table
 ; ============================================================================
 scan_files:
     pusha
     push es
-    mov byte [cs:file_count], 0
-    mov byte [cs:sel_index], 0
-    mov byte [cs:scroll_top], 0
-    mov word [cs:dir_state], 0
+    mov byte [file_count], 0
+    mov byte [sel_index], 0
+    mov byte [scroll_top], 0
+    mov word [dir_state], 0
 
 .sf_loop:
-    cmp byte [cs:file_count], MAX_FILES
+    cmp byte [file_count], MAX_FILES
     jae .sf_done
-    mov al, [cs:mount_handle]
-    mov cx, [cs:dir_state]
+    mov al, [mount_handle]
+    mov cx, [dir_state]
     push cs
     pop es
-    mov di, dir_entry_buf
+    mov di, dir_buf
     mov ah, API_FS_READDIR
     int 0x80
     jc .sf_done
-    mov [cs:dir_state], cx
+    mov [dir_state], cx
 
-    ; Skip volume labels (attr bit 3)
-    test byte [cs:dir_entry_buf + 11], 0x08
+    ; Skip volume labels
+    test byte [dir_buf + 11], 0x08
     jnz .sf_loop
 
-    ; Convert FAT 8.3 to dot format and store in file_table
-    movzx bx, byte [cs:file_count]
-    shl bx, 4                      ; * FILE_ENTRY_SIZE (16)
+    ; Convert FAT 8.3 to dot format in file_table
+    movzx bx, byte [file_count]
+    shl bx, 4
     add bx, file_table
 
-    ; Copy name (8 chars, trim trailing spaces)
-    mov si, dir_entry_buf
-    mov di, bx                      ; DI points into file_table entry
+    mov si, dir_buf
+    mov di, bx
     mov cx, 8
 .sf_name:
-    mov al, [cs:si]
+    mov al, [si]
     cmp al, ' '
-    je .sf_name_end
-    mov [cs:di], al
+    je .sf_dot
+    mov [di], al
     inc si
     inc di
     loop .sf_name
     jmp .sf_dot
-.sf_name_end:
-    ; Skip remaining name spaces
 .sf_dot:
-    ; Check if extension is blank
-    mov al, [cs:dir_entry_buf + 8]
+    mov al, [dir_buf + 8]
     cmp al, ' '
-    je .sf_no_ext
-    mov byte [cs:di], '.'
+    je .sf_noext
+    mov byte [di], '.'
     inc di
-    mov si, dir_entry_buf
+    mov si, dir_buf
     add si, 8
     mov cx, 3
 .sf_ext:
-    mov al, [cs:si]
+    mov al, [si]
     cmp al, ' '
-    je .sf_no_ext
-    mov [cs:di], al
+    je .sf_noext
+    mov [di], al
     inc si
     inc di
     loop .sf_ext
-.sf_no_ext:
-    mov byte [cs:di], 0            ; Null-terminate
+.sf_noext:
+    mov byte [di], 0
 
-    ; Store file size (16-bit, from offset 28 in dir entry)
-    mov ax, [cs:dir_entry_buf + 28]
-    mov [cs:bx + 13], ax
+    ; Store file size (16-bit)
+    mov ax, [dir_buf + 28]
+    mov [bx + 13], ax
 
-    inc byte [cs:file_count]
+    inc byte [file_count]
     jmp .sf_loop
 
 .sf_done:
@@ -759,242 +733,180 @@ scan_files:
     ret
 
 ; ============================================================================
-; recompute_layout - Update layout from actual window dimensions
-; ============================================================================
-recompute_layout:
-    pusha
-
-    ; Get actual content dimensions via API 97
-    mov al, [cs:win_handle]
-    mov ah, API_WIN_GET_CONTENT_SIZE  ; Returns DX=content_w, SI=content_h
-    int 0x80
-    jc .rcl_done                    ; On error, keep current values
-    test dx, dx
-    jz .rcl_done
-    mov [cs:content_w], dx
-    mov [cs:content_h], si
-    ; list_w = content_w - 4 - SCROLLBAR_W
-    mov ax, dx
-    sub ax, 4
-    sub ax, SCROLLBAR_W
-    mov [cs:list_w], ax
-
-    ; Recompute vis_rows from new content_h
-    mov ax, [cs:content_h]
-    sub ax, [cs:list_y]
-    sub ax, 4
-    mov dx, [cs:btn_h]
-    shl dx, 1
-    sub ax, dx
-    xor dx, dx
-    div word [cs:row_h]
-    mov [cs:vis_rows], ax
-
-    ; sep2_y = list_y + vis_rows * row_h
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
-    mov [cs:sep2_y], ax
-
-    ; row1_y = sep2_y + 3
-    add ax, 3
-    mov [cs:row1_y], ax
-
-    ; row2_y = row1_y + btn_h + 1
-    add ax, [cs:btn_h]
-    inc ax
-    mov [cs:row2_y], ax
-
-.rcl_done:
-    popa
-    ret
-
-; ============================================================================
-; draw_ui - Full UI redraw
+; draw_ui - Full redraw
 ; ============================================================================
 draw_ui:
     pusha
-    ; Clear content area
+    ; Clear content
     mov bx, 0
     mov cx, 0
-    mov dx, [cs:content_w]
-    mov si, [cs:content_h]
+    mov dx, [content_w]
+    mov si, [content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
     ; Header
     mov bx, 6
-    mov cx, 1                      ; HEADER_Y (always 1)
-    mov si, str_hdr_name
+    mov cx, 1
+    mov si, str_name
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     mov bx, 190
     mov cx, 1
-    mov si, str_hdr_size
+    mov si, str_size
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; Separator lines
     mov bx, 2
-    mov cx, [cs:sep1_y]
-    mov dx, [cs:content_w]
+    mov cx, [sep1_y]
+    mov dx, [content_w]
     sub dx, 4
-    mov al, 3                      ; white
+    mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
     mov bx, 2
-    mov cx, [cs:sep2_y]
-    mov dx, [cs:content_w]
+    mov cx, [sep2_y]
+    mov dx, [content_w]
     sub dx, 4
     mov al, 3
     mov ah, API_DRAW_HLINE
     int 0x80
 
-    ; File list
     call draw_file_list
-
-    ; Bottom area (buttons + status)
     call draw_bottom
-
-    mov byte [cs:op_error], 0      ; Clear error after redraw
+    mov byte [op_error], 0
     popa
     ret
 
 ; ============================================================================
-; draw_file_list - Draw visible file rows
+; draw_file_list - Visible rows + scrollbar
 ; ============================================================================
 draw_file_list:
     pusha
-    xor cl, cl                      ; CL = visible row index
-.dfl_row:
+    xor cl, cl
+.row:
     mov al, cl
-    add al, [cs:scroll_top]
-    cmp al, [cs:file_count]
-    jae .dfl_clear_rest
+    add al, [scroll_top]
+    cmp al, [file_count]
+    jae .clear_rest
 
-    ; Format row string
     push cx
     movzx bx, al
-    call format_row                 ; display_buf filled
+    call format_row
 
-    ; Determine if selected
-    xor al, al                      ; flags = 0 (normal)
+    ; Selected?
+    xor al, al
     mov ah, cl
-    add ah, [cs:scroll_top]
-    cmp ah, [cs:sel_index]
-    jne .dfl_not_sel
-    mov al, 1                      ; flags = selected
-.dfl_not_sel:
-    ; Draw listitem: BX=X, CX=Y, DX=W, SI=text, AL=flags
+    add ah, [scroll_top]
+    cmp ah, [sel_index]
+    jne .not_sel
+    mov al, 1
+.not_sel:
     push ax
-    xor ch, ch
     movzx ax, cl
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
+    mul word [row_h]
+    add ax, [list_y]
     mov cx, ax
     pop ax
     mov bx, 2
-    mov dx, [cs:list_w]
+    mov dx, [list_w]
     mov si, display_buf
     mov ah, API_DRAW_LISTITEM
     int 0x80
     pop cx
     inc cl
-    cmp cl, byte [cs:vis_rows]
-    jb .dfl_row
-    jmp .dfl_scrollbar
+    cmp cl, byte [vis_rows]
+    jb .row
+    jmp .scrollbar
 
-.dfl_clear_rest:
-    ; Clear remaining rows
+.clear_rest:
     push cx
-    ; Compute height FIRST while CL still has the row counter
-    mov ax, [cs:vis_rows]
+    mov ax, [vis_rows]
     xor ch, ch
-    sub al, cl                      ; AL = remaining rows
-    mul word [cs:row_h]
-    mov si, ax                      ; SI = height
-    ; Now compute Y (this clobbers CX)
+    sub al, cl
+    jbe .skip_clear
+    mul word [row_h]
+    mov si, ax
     movzx ax, cl
-    mul word [cs:row_h]
-    add ax, [cs:list_y]
-    mov cx, ax                      ; CX = Y
+    mul word [row_h]
+    add ax, [list_y]
+    mov cx, ax
     mov bx, 2
-    mov dx, [cs:list_w]
+    mov dx, [list_w]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
+.skip_clear:
     pop cx
 
-.dfl_scrollbar:
-    ; Draw scrollbar at right edge of list area
-    mov bx, [cs:list_w]
-    add bx, 2                      ; X = list_w + 2
-    mov cx, [cs:list_y]            ; Y = list_y
-    mov ax, [cs:vis_rows]
-    mul word [cs:row_h]
-    mov si, ax                     ; track_height = vis_rows * row_h
-    movzx dx, byte [cs:scroll_top] ; position
-    movzx ax, byte [cs:file_count]
-    sub ax, [cs:vis_rows]
-    jns .dfl_sb_ok
+.scrollbar:
+    mov bx, [list_w]
+    add bx, 2
+    mov cx, [list_y]
+    mov ax, [vis_rows]
+    mul word [row_h]
+    mov si, ax
+    movzx dx, byte [scroll_top]
+    movzx ax, byte [file_count]
+    sub ax, [vis_rows]
+    jns .sb_ok
     xor ax, ax
-.dfl_sb_ok:
-    mov di, ax                     ; max_range = file_count - vis_rows (or 0)
-    mov al, 0                      ; flags: vertical
+.sb_ok:
+    mov di, ax
+    mov al, 0
     mov ah, API_DRAW_SCROLLBAR
     int 0x80
-
-.dfl_done:
     popa
     ret
 
 ; ============================================================================
-; draw_bottom - Draw button bar and status line
+; draw_bottom - Button bar / status
 ; ============================================================================
 draw_bottom:
     pusha
     ; Clear bottom area
     mov bx, 0
-    mov cx, [cs:row1_y]
-    dec cx                          ; row1_y - 1
-    mov dx, [cs:content_w]
-    mov si, [cs:content_h]
+    mov cx, [row1_y]
+    dec cx
+    mov dx, [content_w]
+    mov si, [content_h]
     add si, 2
-    sub si, [cs:row1_y]            ; content_h - row1_y + 2
+    sub si, [row1_y]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
-    cmp byte [cs:mode], MODE_CONFIRM_DEL
+    cmp byte [mode], MODE_CONFIRM_DEL
     je .db_confirm
-    cmp byte [cs:mode], MODE_RENAME
+    cmp byte [mode], MODE_RENAME
     je .db_rename
-    cmp byte [cs:mode], MODE_COPY
+    cmp byte [mode], MODE_COPY
     je .db_copy
 
-    ; --- Normal mode ---
+    ; Normal mode buttons
     mov ax, cs
     mov es, ax
-
-    mov bx, BTN_DEL_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_DEL_W
-    mov si, [cs:btn_h]
+    mov bx, 4
+    mov cx, [row1_y]
+    mov dx, 52
+    mov si, [btn_h]
     mov di, str_delete
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    mov bx, BTN_REN_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_REN_W
-    mov si, [cs:btn_h]
+    mov bx, 62
+    mov cx, [row1_y]
+    mov dx, 56
+    mov si, [btn_h]
     mov di, str_rename
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    mov bx, BTN_CPY_X
-    mov cx, [cs:row1_y]
-    mov dx, BTN_CPY_W
-    mov si, [cs:btn_h]
+    mov bx, 124
+    mov cx, [row1_y]
+    mov dx, 44
+    mov si, [btn_h]
     mov di, str_copy
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -1003,90 +915,81 @@ draw_bottom:
     ; File count
     call draw_file_count
 
-    ; Status line
-    cmp byte [cs:op_error], 1
-    je .db_err_status
+    ; Status
+    cmp byte [op_error], 1
+    je .db_err
     mov bx, 4
-    mov cx, [cs:row2_y]
+    mov cx, [row2_y]
     mov si, str_ready
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     jmp .db_done
 
-.db_err_status:
+.db_err:
     mov bx, 4
-    mov cx, [cs:row2_y]
+    mov cx, [row2_y]
     mov si, str_error
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     jmp .db_done
 
-    ; --- Confirm delete mode ---
 .db_confirm:
-    ; "Del FILENAME?"
     mov bx, 4
-    mov cx, [cs:row1_y]
-    mov si, str_del_prefix
+    mov cx, [row1_y]
+    mov si, str_del_pfx
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Draw selected filename after "Del "
     call get_sel_name
-    ; X = 4 + 4*font_adv ("Del " is 4 chars)
-    movzx bx, byte [cs:font_adv]
-    shl bx, 2                      ; * 4 chars
+    movzx bx, byte [font_adv]
+    shl bx, 2
     add bx, 4
-    push bx                        ; Save prefix end X
-    mov cx, [cs:row1_y]
+    push bx
+    mov cx, [row1_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; "?" after name: X = prefix_x + name_len * font_adv
-    movzx ax, byte [cs:sel_name_len]
-    movzx bx, byte [cs:font_adv]
+    movzx ax, byte [sel_name_len]
+    movzx bx, byte [font_adv]
     mul bx
-    pop bx                         ; prefix end X
+    pop bx
     add bx, ax
-    mov cx, [cs:row1_y]
+    mov cx, [row1_y]
     mov si, str_question
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-
-    ; [Yes] [No] buttons
+    ; Yes/No buttons
     mov ax, cs
     mov es, ax
-    mov bx, BTN_YES_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_YES_W
-    mov si, [cs:btn_h]
+    mov bx, 4
+    mov cx, [row2_y]
+    mov dx, 30
+    mov si, [btn_h]
     mov di, str_yes
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
-    mov bx, BTN_NO_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_NO_W
-    mov si, [cs:btn_h]
+    mov bx, 40
+    mov cx, [row2_y]
+    mov dx, 26
+    mov si, [btn_h]
     mov di, str_no
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
     jmp .db_done
 
-    ; --- Rename mode ---
 .db_rename:
     mov bx, 4
-    mov cx, [cs:row1_y]
-    mov si, str_new_name
+    mov cx, [row1_y]
+    mov si, str_newname
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Draw input with cursor
     call draw_input_line
     jmp .db_done
 
-    ; --- Copy mode ---
 .db_copy:
     mov bx, 4
-    mov cx, [cs:row1_y]
-    mov si, str_copy_to
+    mov cx, [row1_y]
+    mov si, str_copyto
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     call draw_input_line
@@ -1096,33 +999,32 @@ draw_bottom:
     ret
 
 ; ============================================================================
-; draw_input_line - Draw text input + cursor + [OK] button at ROW2_Y
+; draw_input_line - Text input + cursor + OK button
 ; ============================================================================
 draw_input_line:
     pusha
-    ; Draw input text
     mov bx, 4
-    mov cx, [cs:row2_y]
+    mov cx, [row2_y]
     mov si, input_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; Draw cursor '_' after text
-    movzx ax, byte [cs:input_len]
-    movzx bx, byte [cs:font_adv]
-    mul bx                          ; AX = input_len * font_adv
+    ; Cursor
+    movzx ax, byte [input_len]
+    movzx bx, byte [font_adv]
+    mul bx
     add ax, 4
     mov bx, ax
-    mov cx, [cs:row2_y]
+    mov cx, [row2_y]
     mov si, str_cursor
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    ; [OK] button
+    ; OK button
     mov ax, cs
     mov es, ax
-    mov bx, BTN_OK_X
-    mov cx, [cs:row2_y]
-    mov dx, BTN_OK_W
-    mov si, [cs:btn_h]
+    mov bx, 200
+    mov cx, [row2_y]
+    mov dx, 30
+    mov si, [btn_h]
     mov di, str_ok
     xor al, al
     mov ah, API_DRAW_BUTTON
@@ -1131,29 +1033,28 @@ draw_input_line:
     ret
 
 ; ============================================================================
-; draw_file_count - Draw "N files" at right side of ROW1_Y
+; draw_file_count - "N files" at right of row1
 ; ============================================================================
 draw_file_count:
     pusha
-    movzx dx, byte [cs:file_count]
+    movzx dx, byte [file_count]
     mov di, count_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
-    mov byte [cs:di], ' '
+    mov byte [di], ' '
     inc di
-    ; Append "files"
     mov si, str_files
-.dfc_copy:
-    mov al, [cs:si]
-    mov [cs:di], al
+.dfc:
+    mov al, [si]
+    mov [di], al
     test al, al
     jz .dfc_draw
     inc si
     inc di
-    jmp .dfc_copy
+    jmp .dfc
 .dfc_draw:
     mov bx, 200
-    mov cx, [cs:row1_y]
+    mov cx, [row1_y]
     add cx, 2
     mov si, count_buf
     mov ah, API_GFX_DRAW_STRING
@@ -1162,80 +1063,71 @@ draw_file_count:
     ret
 
 ; ============================================================================
-; format_row - Format file entry BX (index) into display_buf
-; Input: BX = file index (0-based)
+; format_row - Format file entry BX into display_buf
 ; ============================================================================
 format_row:
     pusha
-    shl bx, 4                      ; * FILE_ENTRY_SIZE
+    shl bx, 4
     add bx, file_table
-
     mov di, display_buf
-    ; Copy filename
     mov si, bx
     mov cx, 13
 .fr_name:
-    mov al, [cs:si]
+    mov al, [si]
     test al, al
     jz .fr_pad
-    mov [cs:di], al
+    mov [di], al
     inc si
     inc di
     loop .fr_name
 .fr_pad:
-    ; Pad to column 22 with spaces
     mov ax, di
     sub ax, display_buf
-.fr_pad_loop:
+.fr_padl:
     cmp ax, 22
     jae .fr_size
-    mov byte [cs:di], ' '
+    mov byte [di], ' '
     inc di
     inc ax
-    jmp .fr_pad_loop
+    jmp .fr_padl
 .fr_size:
-    ; Append file size as decimal
-    mov dx, [cs:bx + 13]
+    mov dx, [bx + 13]
     mov ah, API_WORD_TO_STRING
     int 0x80
     popa
     ret
 
 ; ============================================================================
-; get_sel_name - Get pointer to selected filename in file_table
-; Output: SI = pointer to filename, sel_name_len set
+; get_sel_name - SI = pointer to selected filename, sel_name_len set
 ; ============================================================================
 get_sel_name:
     push ax
     push bx
-    movzx bx, byte [cs:sel_index]
+    movzx bx, byte [sel_index]
     shl bx, 4
     add bx, file_table
     mov si, bx
-    ; Compute length
     xor al, al
     mov bx, si
-.gsn_len:
-    cmp byte [cs:bx], 0
+.gsn:
+    cmp byte [bx], 0
     je .gsn_done
     inc al
     inc bx
     cmp al, 13
-    jb .gsn_len
+    jb .gsn
 .gsn_done:
-    mov [cs:sel_name_len], al
+    mov [sel_name_len], al
     pop bx
     pop ax
     ret
 
 ; ============================================================================
-; Data Section
+; Data
 ; ============================================================================
-
 window_title:   db 'File Manager', 0
 win_handle:     db 0
 mount_handle:   db 0
-boot_drive:     db 0
 prev_btn:       db 0
 mode:           db MODE_NORMAL
 file_count:     db 0
@@ -1248,25 +1140,28 @@ dst_handle:     db 0
 input_len:      db 0
 sel_name_len:   db 0
 
-; Dynamic layout variables (computed from font metrics at startup)
-font_h:         db 8                ; Current font height
-font_w:         db 8                ; Current font width
-font_adv:       db 12               ; Current font advance
-row_h:          dw 10               ; font_h + 2
-vis_rows:       dw 12               ; Visible file rows
-list_w:         dw 252              ; content_w - 4 - SCROLLBAR_W
-list_y:         dw 13               ; sep1_y + 3
-sep1_y:         dw 10               ; font_h + 2
-sep2_y:         dw 133              ; list_y + vis_rows * row_h
-row1_y:         dw 136              ; sep2_y + 3
-row2_y:         dw 148              ; row1_y + btn_h + 1
-btn_h:          dw 11               ; font_h + 3
-content_w:      dw 260              ; WIN_W - 4 (border + padding)
-content_h:      dw 156              ; WIN_H - 14 (titlebar + border)
+; Font metrics
+font_h:         db 8
+font_adv:       db 12
+
+; Layout (computed dynamically)
+win_w:          dw 264
+win_h:          dw 170
+row_h:          dw 10
+btn_h:          dw 11
+vis_rows:       dw 10
+list_w:         dw 248
+list_y:         dw 13
+sep1_y:         dw 10
+sep2_y:         dw 113
+row1_y:         dw 116
+row2_y:         dw 128
+content_w:      dw 260
+content_h:      dw 156
 
 ; Strings
-str_hdr_name:   db 'Name', 0
-str_hdr_size:   db 'Size', 0
+str_name:       db 'Name', 0
+str_size:       db 'Size', 0
 str_delete:     db 'Delete', 0
 str_rename:     db 'Rename', 0
 str_copy:       db 'Copy', 0
@@ -1275,22 +1170,21 @@ str_no:         db 'No', 0
 str_ok:         db 'OK', 0
 str_ready:      db 'Ready', 0
 str_error:      db 'Error!', 0
-str_del_prefix: db 'Del ', 0
+str_del_pfx:    db 'Del ', 0
 str_question:   db '?', 0
-str_new_name:   db 'New name:', 0
-str_copy_to:    db 'Copy to:', 0
+str_newname:    db 'New name:', 0
+str_copyto:     db 'Copy to:', 0
 str_cursor:     db '_', 0
 str_files:      db 'files', 0
 
 ; Buffers
-input_buf:      times 14 db 0      ; 12 chars + null + padding
+input_buf:      times 14 db 0
 display_buf:    times 32 db 0
 count_buf:      times 12 db 0
-dir_entry_buf:  times 32 db 0
+dir_buf:        times 32 db 0
 
-; File table: MAX_FILES entries x FILE_ENTRY_SIZE bytes
-; Each entry: 13 bytes filename + 2 bytes size + 1 byte reserved
+; File table
 file_table:     times (MAX_FILES * FILE_ENTRY_SIZE) db 0
 
-; Copy buffer (512 bytes for streaming)
+; Copy buffer
 copy_buf:       times 512 db 0
