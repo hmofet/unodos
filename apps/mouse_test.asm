@@ -338,12 +338,6 @@ draw_labels:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, 4
-    mov cx, 48
-    mov si, help_msg
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     popa
     ret
 
@@ -365,5 +359,4 @@ str_buffer:     times 24 db 0
 
 label_pos:      db 'Pos: ', 0
 label_buttons:  db 'Buttons:', 0
-help_msg:       db 'ESC to exit', 0
 no_mouse_msg:   db 'No mouse detected', 0

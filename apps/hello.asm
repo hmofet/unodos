@@ -132,12 +132,6 @@ draw_content:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    mov bx, 9
-    mov cx, 22
-    mov si, msg_esc
-    mov ah, API_GFX_DRAW_STRING
-    int 0x80
-
     popa
     ret
 
@@ -145,4 +139,3 @@ draw_content:
 window_title:   db 'Hello', 0
 win_handle:     db 0
 msg_hello:      db 'Hello, World!', 0
-msg_esc:        db 'Press ESC to exit', 0

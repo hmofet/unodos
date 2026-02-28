@@ -489,7 +489,7 @@ draw_song_title:
     ; Clear title area
     mov bx, 0
     mov cx, 0
-    mov dx, WIN_W - 2
+    mov dx, WIN_W - 4
     mov si, 21
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
@@ -532,7 +532,7 @@ draw_status:
     ; Clear status area
     mov bx, 0
     mov cx, STATUS_Y
-    mov dx, WIN_W - 2
+    mov dx, WIN_W - 4
     mov si, 10
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
@@ -791,7 +791,7 @@ str_arrow_r:     db ' >', 0
 msg_playing:     db 'Playing...', 0
 msg_paused:      db 'Paused', 0
 msg_finished:    db 'Song Complete', 0
-msg_help:        db '1-5:Song  SPC:Play  ESC:Exit', 0
+msg_help:        db '1-5:Song  SPC:Play/Pause', 0
 
 ; Button labels
 btn_prev:   db ' Prev ', 0
