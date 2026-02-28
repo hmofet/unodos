@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 # UnoDOS Disk Image Writer - Unified TUI
 # Writes floppy or HD images to any target drive
 #
@@ -12,6 +11,25 @@ param(
     [int]$DiskNumber = -1,
     [switch]$Verify
 )
+
+# ─── Self-Elevate to Administrator ──────────────────────────────────────────
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    # Rebuild the argument list for the elevated process
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    if ($ImagePath)        { $argList += '-ImagePath',   "`"$ImagePath`"" }
+    if ($DriveLetter)      { $argList += '-DriveLetter', $DriveLetter }
+    if ($DiskNumber -ge 0) { $argList += '-DiskNumber',  $DiskNumber }
+    if ($Verify)           { $argList += '-Verify' }
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    } catch {
+        Write-Host "ERROR: Administrator privileges are required to write disk images." -ForegroundColor Red
+        Write-Host "Please right-click PowerShell and select 'Run as Administrator'." -ForegroundColor Yellow
+        exit 1
+    }
+    exit 0
+}
 
 $ErrorActionPreference = "Stop"
 

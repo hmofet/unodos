@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 # UnoDOS Floppy Writer (legacy wrapper)
 # Now calls write.ps1 with floppy defaults
 # Usage: .\floppy.ps1 [DriveLetter] [-Verify]
