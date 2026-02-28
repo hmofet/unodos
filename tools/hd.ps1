@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 # UnoDOS Hard Drive Image Writer (legacy wrapper)
 # Now calls write.ps1 with HD image default
 # Usage: .\hd.ps1 [-ImagePath path]
