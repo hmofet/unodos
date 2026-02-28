@@ -137,6 +137,9 @@ entry:
     mov al, 0xFF                    ; Current draw context
     mov ah, API_WIN_GET_CONTENT_SIZE
     int 0x80                        ; DX = content_w, SI = content_h
+    jc .use_defaults                ; On error, keep default values
+    test dx, dx
+    jz .use_defaults
     mov [cs:content_w], dx
     mov [cs:content_h], si
     ; list_w = content_w - 4 - SCROLLBAR_W
@@ -144,6 +147,7 @@ entry:
     sub ax, 4
     sub ax, SCROLLBAR_W
     mov [cs:list_w], ax
+.use_defaults:
 
     ; Compute dynamic layout from current font
     mov ah, API_GET_FONT_INFO
@@ -769,6 +773,9 @@ recompute_layout:
     mov al, [cs:win_handle]
     mov ah, API_WIN_GET_CONTENT_SIZE  ; Returns DX=content_w, SI=content_h
     int 0x80
+    jc .rcl_done                    ; On error, keep current values
+    test dx, dx
+    jz .rcl_done
     mov [cs:content_w], dx
     mov [cs:content_h], si
     ; list_w = content_w - 4 - SCROLLBAR_W
@@ -802,6 +809,7 @@ recompute_layout:
     inc ax
     mov [cs:row2_y], ax
 
+.rcl_done:
     popa
     ret
 
@@ -810,12 +818,11 @@ recompute_layout:
 ; ============================================================================
 draw_ui:
     pusha
-    ; Clear content area (use API 97 for correct dimensions)
-    mov al, 0xFF                    ; Current draw context
-    mov ah, API_WIN_GET_CONTENT_SIZE
-    int 0x80                        ; DX = content_w, SI = content_h
+    ; Clear content area
     mov bx, 0
     mov cx, 0
+    mov dx, [cs:content_w]
+    mov si, [cs:content_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
