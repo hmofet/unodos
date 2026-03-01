@@ -1,6 +1,6 @@
 ; DEMO.BIN - UI Widget Demo for UnoDOS
-; Showcases GUI widgets. Uses default font.
-; Clean rewrite using current API conventions.
+; Showcases GUI widgets. Single-column layout for CGA readability.
+; Uses default font, dynamic layout from font metrics.
 
 [BITS 16]
 [ORG 0x0000]
@@ -57,8 +57,9 @@ API_GET_FONT_INFO       equ 93
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
 
-; Layout constants (computed at runtime from font metrics)
-LIST_COUNT  equ 8
+LIST_COUNT  equ 6
+LIST_VIS    equ 4
+SCROLLBAR_W equ 8
 
 ; ============================================================================
 ; Entry
@@ -74,99 +75,78 @@ entry:
     ; Get font metrics
     mov ah, API_GET_FONT_INFO
     int 0x80
-    ; BH=height, BL=width, CL=advance
     mov [font_h], bh
     mov [font_adv], cl
 
-    ; row_h = font_h + 2
-    movzx ax, bh
-    add ax, 2
-    mov [row_h], ax
-
-    ; btn_h = font_h + 4
+    ; row_h = font_h + 4
     movzx ax, bh
     add ax, 4
+    mov [row_h], ax
+
+    ; btn_h = font_h + 6
+    movzx ax, bh
+    add ax, 6
     mov [btn_h], ax
 
-    ; grp_h = 3 * row_h + 16 (radios + checkbox + padding)
-    mov ax, [row_h]
-    mov dx, 3
-    mul dx
-    add ax, 16
-    mov [grp_h], ax
-
-    ; list_h = 6 visible items * row_h
-    mov ax, [row_h]
-    mov dx, 6
-    mul dx
-    mov [list_h], ax
-
-    ; Compute column widths from font advance
-    ; Left column: 16 chars wide
+    ; content_w = 20 * advance + 8
     movzx ax, cl
-    mov dx, 16
+    mov dx, 20
     mul dx
-    add ax, 8                       ; Padding
-    mov [left_w], ax
-
-    ; Right column: 12 chars wide
-    movzx ax, cl
-    mov dx, 12
-    mul dx
-    add ax, 8
-    mov [right_w], ax
-
-    ; right_x = left_w + 8
-    mov ax, [left_w]
-    add ax, 8
-    mov [right_x], ax
-
-    ; sb_x = right_x + right_w
-    mov ax, [right_x]
-    add ax, [right_w]
-    mov [sb_x], ax
-
-    ; Total content_w = sb_x + 8 (scrollbar width)
-    mov ax, [sb_x]
     add ax, 8
     mov [content_w], ax
 
-    ; Compute Y positions
-    ; grp_y = 2
+    ; list_w = content_w - SCROLLBAR_W - 8
+    mov dx, ax
+    sub dx, SCROLLBAR_W
+    sub dx, 8
+    mov [list_w], dx
+
+    ; sb_x = 4 + list_w
+    mov ax, dx
+    add ax, 4
+    mov [sb_x], ax
+
+    ; --- Compute Y positions (single column, top to bottom) ---
+    ; Y=2: Group box with radios + checkbox
     mov word [grp_y], 2
 
-    ; Compute radio/checkbox Y inside group box with spacing
+    ; grp_h = 3 * row_h + 12
+    mov ax, [row_h]
+    mov dx, 3
+    mul dx
+    add ax, 12
+    mov [grp_h], ax
+
+    ; Radio/checkbox Y inside group
     mov ax, [grp_y]
     add ax, [row_h]
-    add ax, 4                       ; Below label
+    add ax, 2                       ; Below group label
     mov [rad_y1], ax
     add ax, [row_h]
-    add ax, 2
     mov [rad_y2], ax
     add ax, [row_h]
-    add ax, 2
     mov [chk_y], ax
 
-    ; list_y = grp_y (same top as group box)
+    ; list_y = grp_y + grp_h + 4
     mov ax, [grp_y]
+    add ax, [grp_h]
+    add ax, 4
     mov [list_y], ax
 
-    ; Bottom section starts below the taller column
-    ; bottom_y = max(grp_y + grp_h, list_y + list_h) + 6
-    mov ax, [grp_y]
-    add ax, [grp_h]                 ; AX = grp bottom
-    mov dx, [list_y]
-    add dx, [list_h]                ; DX = list bottom
-    cmp dx, ax
-    jbe .grp_taller
-    mov ax, dx                      ; Use list bottom (taller)
-.grp_taller:
+    ; list_h = LIST_VIS * row_h
+    mov ax, [row_h]
+    mov dx, LIST_VIS
+    mul dx
+    mov [list_h], ax
+
+    ; prog_lbl_y = list_y + list_h + 6
+    mov ax, [list_y]
+    add ax, [list_h]
     add ax, 6
     mov [prog_lbl_y], ax
 
-    ; prog_bar_y = prog_lbl_y + row_h + 2
+    ; prog_bar_y = prog_lbl_y + row_h
     add ax, [row_h]
-    add ax, 2
     mov [prog_bar_y], ax
 
     ; sep_y = prog_bar_y + 14
@@ -177,21 +157,26 @@ entry:
     add ax, 6
     mov [btn_y], ax
 
-    ; Window size = content + borders + titlebar
     ; win_w = content_w + 4
     mov ax, [content_w]
     add ax, 4
     mov [win_w], ax
 
-    ; win_h = btn_y + btn_h + 6 + 14 (titlebar+border)
+    ; win_h = btn_y + btn_h + 6 + 14
     mov ax, [btn_y]
     add ax, [btn_h]
     add ax, 20
     mov [win_h], ax
 
-    ; Create window
-    mov bx, 10
-    mov cx, 5
+    ; Create window centered
+    mov ax, 320
+    sub ax, [win_w]
+    shr ax, 1
+    mov bx, ax                     ; X = centered
+    mov ax, 200
+    sub ax, [win_h]
+    shr ax, 1
+    mov cx, ax                     ; Y = centered
     mov dx, [win_w]
     mov si, [win_h]
     mov ax, cs
@@ -210,8 +195,8 @@ entry:
     mov ah, API_WIN_GET_CONTENT_SIZE
     int 0x80
     jc .skip_content
-    mov [content_w], dx
-    mov [content_h], si
+    mov [real_cw], dx
+    mov [real_ch], si
 .skip_content:
 
     call draw_all
@@ -253,9 +238,10 @@ entry:
     mov byte [prev_btn], 1
 
     ; Radio A
-    mov bx, 10
+    mov bx, 8
     mov cx, [rad_y1]
-    mov dx, 70
+    mov dx, [content_w]
+    sub dx, 16
     mov si, [row_h]
     mov ah, API_HIT_TEST
     int 0x80
@@ -263,9 +249,10 @@ entry:
     jnz .click_rad_a
 
     ; Radio B
-    mov bx, 10
+    mov bx, 8
     mov cx, [rad_y2]
-    mov dx, 70
+    mov dx, [content_w]
+    sub dx, 16
     mov si, [row_h]
     mov ah, API_HIT_TEST
     int 0x80
@@ -273,9 +260,10 @@ entry:
     jnz .click_rad_b
 
     ; Checkbox
-    mov bx, 10
+    mov bx, 8
     mov cx, [chk_y]
-    mov dx, 70
+    mov dx, [content_w]
+    sub dx, 16
     mov si, [row_h]
     mov ah, API_HIT_TEST
     int 0x80
@@ -285,10 +273,10 @@ entry:
     ; List items
     call check_list_click
 
-    ; Scrollbar up
+    ; Scrollbar up half
     mov bx, [sb_x]
     mov cx, [list_y]
-    mov dx, 8
+    mov dx, SCROLLBAR_W
     mov si, [list_h]
     shr si, 1
     mov ah, API_HIT_TEST
@@ -296,23 +284,26 @@ entry:
     test al, al
     jnz .click_sb_up
 
-    ; Scrollbar down
+    ; Scrollbar down half
     mov bx, [sb_x]
     mov cx, [list_y]
     mov ax, [list_h]
     shr ax, 1
     add cx, ax
-    mov dx, 8
+    mov dx, SCROLLBAR_W
     mov si, ax
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jnz .click_sb_down
 
-    ; OK button
-    mov bx, [right_x]
+    ; OK button (centered)
+    mov ax, [content_w]
+    sub ax, 50
+    shr ax, 1
+    mov bx, ax
     mov cx, [btn_y]
-    mov dx, [right_w]
+    mov dx, 50
     mov si, [btn_h]
     mov ah, API_HIT_TEST
     int 0x80
@@ -349,7 +340,7 @@ entry:
 
 .click_sb_down:
     mov al, [scroll_off]
-    cmp al, LIST_COUNT - 6          ; LIST_COUNT - visible
+    cmp al, LIST_COUNT - LIST_VIS
     jge .main_loop
     inc byte [scroll_off]
     call draw_list
@@ -357,7 +348,7 @@ entry:
     jmp .main_loop
 
 ; ============================================================================
-; Exit - let app_exit_stub handle cleanup
+; Exit
 ; ============================================================================
 .exit:
     pop es
@@ -374,8 +365,8 @@ draw_all:
     ; Clear content
     mov bx, 0
     mov cx, 0
-    mov dx, [content_w]
-    mov si, [content_h]
+    mov dx, [real_cw]
+    mov si, [real_ch]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -399,7 +390,9 @@ draw_groupbox:
     pusha
     mov bx, 4
     mov cx, [grp_y]
-    mov dx, [left_w]
+    mov ax, [content_w]
+    sub ax, 8
+    mov dx, ax
     mov si, [grp_h]
     mov ax, cs
     mov es, ax
@@ -412,7 +405,7 @@ draw_groupbox:
 
 draw_radios:
     pusha
-    mov bx, 10
+    mov bx, 12
     mov cx, [rad_y1]
     mov si, rad_a_label
     mov al, 0
@@ -422,7 +415,7 @@ draw_radios:
 .ra:
     mov ah, API_DRAW_RADIO
     int 0x80
-    mov bx, 10
+    mov bx, 12
     mov cx, [rad_y2]
     mov si, rad_b_label
     mov al, 0
@@ -437,7 +430,7 @@ draw_radios:
 
 draw_checkbox:
     pusha
-    mov bx, 10
+    mov bx, 12
     mov cx, [chk_y]
     mov si, chk_label
     mov al, [chk_state]
@@ -448,9 +441,9 @@ draw_checkbox:
 
 draw_list:
     pusha
-    xor cx, cx                      ; Visible row counter
+    xor cx, cx
 .dl_loop:
-    cmp cx, 6                       ; 6 visible rows
+    cmp cx, LIST_VIS
     jge .dl_done
     push cx
     mov al, [scroll_off]
@@ -458,23 +451,20 @@ draw_list:
     add ax, cx
     cmp ax, LIST_COUNT
     jge .dl_blank
-    ; Get string pointer
     push ax
     mov si, ax
     shl si, 1
     add si, list_ptrs
     mov si, [si]
     pop ax
-    ; Y = list_y + cx * row_h
     push ax
     mov ax, cx
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
     pop ax
-    mov bx, [right_x]
-    mov dx, [right_w]
-    ; Selected?
+    mov bx, 4
+    mov dx, [list_w]
     push ax
     cmp al, [list_cursor]
     mov al, 0
@@ -488,13 +478,12 @@ draw_list:
     inc cx
     jmp .dl_loop
 .dl_blank:
-    ; Clear empty row
     mov ax, cx
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
-    mov bx, [right_x]
-    mov dx, [right_w]
+    mov bx, 4
+    mov dx, [list_w]
     mov si, [row_h]
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
@@ -512,7 +501,7 @@ draw_scrollbar:
     mov si, [list_h]
     xor dx, dx
     mov dl, [scroll_off]
-    mov di, LIST_COUNT - 6          ; max_range = total - visible
+    mov di, LIST_COUNT - LIST_VIS
     xor al, al
     mov ah, API_DRAW_SCROLLBAR
     int 0x80
@@ -535,7 +524,7 @@ draw_prog_bar:
     mov cx, [prog_bar_y]
     mov ax, [content_w]
     sub ax, 8
-    mov dx, ax                      ; Width = content_w - 8
+    mov dx, ax
     mov si, [prog_value]
     mov al, 1
     mov ah, API_DRAW_PROGRESS
@@ -560,9 +549,12 @@ draw_ok_btn:
     pusha
     mov ax, cs
     mov es, ax
-    mov bx, [right_x]
+    mov ax, [content_w]
+    sub ax, 50
+    shr ax, 1
+    mov bx, ax
     mov cx, [btn_y]
-    mov dx, [right_w]
+    mov dx, 50
     mov si, [btn_h]
     mov di, s_ok
     xor al, al
@@ -576,28 +568,28 @@ draw_ok_btn:
 ; ============================================================================
 check_list_click:
     pusha
-    mov bx, [right_x]
+    mov bx, 4
     mov cx, [list_y]
-    mov dx, [right_w]
+    mov dx, [list_w]
     mov ax, [row_h]
-    mov si, 6
+    mov si, LIST_VIS
     mul si
-    mov si, ax                      ; height = 6 * row_h
+    mov si, ax
     mov ah, API_HIT_TEST
     int 0x80
     test al, al
     jz .lc_done
     xor cx, cx
 .lc_loop:
-    cmp cx, 6
+    cmp cx, LIST_VIS
     jge .lc_done
     push cx
     mov ax, cx
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
-    mov bx, [right_x]
-    mov dx, [right_w]
+    mov bx, 4
+    mov dx, [list_w]
     mov si, [row_h]
     mov ah, API_HIT_TEST
     int 0x80
@@ -656,9 +648,9 @@ animate_progress:
 ; ============================================================================
 window_title:   db 'UI Demo', 0
 grp_label:      db 'Options', 0
-rad_a_label:    db 'Option A', 0
-rad_b_label:    db 'Option B', 0
-chk_label:      db 'Enable', 0
+rad_a_label:    db 'Alpha', 0
+rad_b_label:    db 'Beta', 0
+chk_label:      db 'Active', 0
 s_progress:     db 'Progress:', 0
 s_ok:           db 'OK', 0
 
@@ -669,12 +661,10 @@ list_str_2:     db 'Music', 0
 list_str_3:     db 'Programs', 0
 list_str_4:     db 'System', 0
 list_str_5:     db 'Videos', 0
-list_str_6:     db 'Desktop', 0
-list_str_7:     db 'Downloads', 0
 
 list_ptrs:
     dw list_str_0, list_str_1, list_str_2, list_str_3
-    dw list_str_4, list_str_5, list_str_6, list_str_7
+    dw list_str_4, list_str_5
 
 ; State
 prev_btn:       db 0
@@ -687,7 +677,7 @@ prog_dir:       db 0
 anim_cnt:       dw 0
 last_tick:      dw 0
 
-; Font metrics (computed at runtime)
+; Font metrics
 font_h:         db 0
 font_adv:       db 0
 
@@ -699,17 +689,16 @@ grp_y:          dw 0
 rad_y1:         dw 0
 rad_y2:         dw 0
 chk_y:          dw 0
-left_w:         dw 0
-right_w:        dw 0
-right_x:        dw 0
-sb_x:           dw 0
 list_y:         dw 0
 list_h:         dw 0
+list_w:         dw 0
+sb_x:           dw 0
 prog_lbl_y:     dw 0
 prog_bar_y:     dw 0
 sep_y:          dw 0
 btn_y:          dw 0
 win_w:          dw 0
 win_h:          dw 0
-content_w:      dw 200
-content_h:      dw 150
+content_w:      dw 168
+real_cw:        dw 168
+real_ch:        dw 150
