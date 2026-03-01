@@ -88,17 +88,16 @@ entry:
     add ax, 4
     mov [btn_h], ax
 
-    ; grp_h = 3 * row_h + 10 (radios + checkbox + padding)
+    ; grp_h = 3 * row_h + 16 (radios + checkbox + padding)
     mov ax, [row_h]
     mov dx, 3
     mul dx
-    add ax, 10
+    add ax, 16
     mov [grp_h], ax
 
-    ; list_item_h = row_h
-    ; list_h = LIST_COUNT * row_h (visible list items)
+    ; list_h = 6 visible items * row_h
     mov ax, [row_h]
-    mov dx, 6                       ; 6 visible items
+    mov dx, 6
     mul dx
     mov [list_h], ax
 
@@ -136,37 +135,46 @@ entry:
     ; grp_y = 2
     mov word [grp_y], 2
 
-    ; Compute radio/checkbox Y from grp_y + row_h + 2 (label offset)
+    ; Compute radio/checkbox Y inside group box with spacing
     mov ax, [grp_y]
     add ax, [row_h]
-    add ax, 2
+    add ax, 4                       ; Below label
     mov [rad_y1], ax
     add ax, [row_h]
+    add ax, 2
     mov [rad_y2], ax
     add ax, [row_h]
+    add ax, 2
     mov [chk_y], ax
 
     ; list_y = grp_y (same top as group box)
     mov ax, [grp_y]
     mov [list_y], ax
 
-    ; Below group box: progress bar, separator, buttons
-    ; prog_lbl_y = grp_y + grp_h + 4
+    ; Bottom section starts below the taller column
+    ; bottom_y = max(grp_y + grp_h, list_y + list_h) + 6
     mov ax, [grp_y]
-    add ax, [grp_h]
-    add ax, 4
+    add ax, [grp_h]                 ; AX = grp bottom
+    mov dx, [list_y]
+    add dx, [list_h]                ; DX = list bottom
+    cmp dx, ax
+    jbe .grp_taller
+    mov ax, dx                      ; Use list bottom (taller)
+.grp_taller:
+    add ax, 6
     mov [prog_lbl_y], ax
 
-    ; prog_bar_y = prog_lbl_y + row_h
+    ; prog_bar_y = prog_lbl_y + row_h + 2
     add ax, [row_h]
+    add ax, 2
     mov [prog_bar_y], ax
 
-    ; sep_y = prog_bar_y + 12
-    add ax, 12
+    ; sep_y = prog_bar_y + 14
+    add ax, 14
     mov [sep_y], ax
 
-    ; btn_y = sep_y + 4
-    add ax, 4
+    ; btn_y = sep_y + 6
+    add ax, 6
     mov [btn_y], ax
 
     ; Window size = content + borders + titlebar
@@ -175,10 +183,10 @@ entry:
     add ax, 4
     mov [win_w], ax
 
-    ; win_h = btn_y + btn_h + 4 + 14 (titlebar+border)
+    ; win_h = btn_y + btn_h + 6 + 14 (titlebar+border)
     mov ax, [btn_y]
     add ax, [btn_h]
-    add ax, 18
+    add ax, 20
     mov [win_h], ax
 
     ; Create window
