@@ -46,6 +46,7 @@ API_DRAW_RADIO          equ 52
 API_HIT_TEST            equ 53
 API_DRAW_CHECKBOX       equ 56
 API_DRAW_SCROLLBAR      equ 58
+API_SCROLLBAR_HIT       equ 99
 API_DRAW_LISTITEM       equ 59
 API_DRAW_PROGRESS       equ 60
 API_DRAW_GROUPBOX       equ 61
@@ -229,6 +230,35 @@ entry:
 
 ; --- Mouse ---
 .check_mouse:
+    ; Always check scrollbar hit (handles drag tracking)
+    mov bx, [sb_x]
+    mov cx, [list_y]
+    mov si, [list_h]
+    xor dx, dx
+    mov dl, [scroll_off]
+    mov di, LIST_COUNT - LIST_VIS
+    mov ah, API_SCROLLBAR_HIT
+    int 0x80
+    jc .no_sb_hit
+    cmp al, 0
+    je .click_sb_up
+    cmp al, 1
+    je .click_sb_down
+    cmp al, 2
+    je .sb_drag
+    cmp al, 3
+    je .click_sb_up                ; Page up = same as up for small lists
+    cmp al, 4
+    je .click_sb_down              ; Page down = same as down for small lists
+    jmp .no_sb_hit
+
+.sb_drag:
+    mov [scroll_off], dl           ; DX = new position from drag
+    call draw_list
+    call draw_scrollbar
+    jmp .main_loop
+
+.no_sb_hit:
     mov ah, API_MOUSE_STATE
     int 0x80
     test dl, 1
@@ -272,30 +302,6 @@ entry:
 
     ; List items
     call check_list_click
-
-    ; Scrollbar up half
-    mov bx, [sb_x]
-    mov cx, [list_y]
-    mov dx, SCROLLBAR_W
-    mov si, [list_h]
-    shr si, 1
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .click_sb_up
-
-    ; Scrollbar down half
-    mov bx, [sb_x]
-    mov cx, [list_y]
-    mov ax, [list_h]
-    shr ax, 1
-    add cx, ax
-    mov dx, SCROLLBAR_W
-    mov si, ax
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .click_sb_down
 
     ; OK button (centered)
     mov ax, [content_w]

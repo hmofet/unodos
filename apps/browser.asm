@@ -53,6 +53,7 @@ API_FS_DELETE           equ 47
 API_DRAW_BUTTON         equ 51
 API_HIT_TEST            equ 53
 API_DRAW_SCROLLBAR      equ 58
+API_SCROLLBAR_HIT       equ 99
 API_DRAW_LISTITEM       equ 59
 API_DRAW_HLINE          equ 69
 API_FS_RENAME           equ 77
@@ -195,6 +196,58 @@ entry:
     jmp .key_input
 
 .check_mouse:
+    ; Always check scrollbar hit (handles drag tracking)
+    cmp byte [mode], MODE_NORMAL
+    jne .sb_skip
+    mov bx, [list_w]
+    add bx, 2
+    mov cx, [list_y]
+    mov ax, [vis_rows]
+    mul word [row_h]
+    mov si, ax                         ; SI = track height
+    movzx dx, byte [scroll_top]
+    movzx ax, byte [file_count]
+    sub ax, [vis_rows]
+    jns .sb_range_ok
+    xor ax, ax
+.sb_range_ok:
+    mov di, ax
+    mov ah, API_SCROLLBAR_HIT
+    int 0x80
+    jc .sb_skip
+    cmp al, 0
+    je .scroll_up
+    cmp al, 1
+    je .scroll_down
+    cmp al, 2
+    je .sb_drag
+    cmp al, 3
+    je .scroll_up
+    cmp al, 4
+    je .scroll_down
+    jmp .sb_skip
+
+.sb_drag:
+    mov [scroll_top], dl
+    ; Keep sel_index in visible range
+    mov al, [sel_index]
+    cmp al, [scroll_top]
+    jae .sb_drag_check_bottom
+    mov al, [scroll_top]
+    mov [sel_index], al
+    jmp .sb_drag_redraw
+.sb_drag_check_bottom:
+    movzx bx, byte [scroll_top]
+    add bx, [vis_rows]
+    dec bx
+    cmp al, bl
+    jbe .sb_drag_redraw
+    mov [sel_index], bl
+.sb_drag_redraw:
+    call draw_file_list
+    jmp .main_loop
+
+.sb_skip:
     mov ah, API_MOUSE_STATE
     int 0x80
     test dl, 1
@@ -283,33 +336,7 @@ entry:
     jb .test_row
 
 .test_scroll:
-    ; Scroll up arrow
-    mov bx, [list_w]
-    add bx, 2
-    mov cx, [list_y]
-    mov dx, SCROLLBAR_W
-    mov si, 8
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .scroll_up
-
-    ; Scroll down arrow
-    mov bx, [list_w]
-    add bx, 2
-    mov ax, [vis_rows]
-    mul word [row_h]
-    add ax, [list_y]
-    sub ax, 8
-    mov cx, ax
-    mov dx, SCROLLBAR_W
-    mov si, 8
-    mov ah, API_HIT_TEST
-    int 0x80
-    test al, al
-    jnz .scroll_down
-
-    ; Test buttons
+    ; Scrollbar handled by API 99 above, just test buttons
     jmp .test_buttons
 
 .row_hit:
