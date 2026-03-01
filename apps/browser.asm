@@ -100,10 +100,16 @@ entry:
     mov [font_h], bh
     mov [font_adv], cl
 
-    ; Compute window size from font
-    ; Width = 22 * advance + SCROLLBAR_W + 12
+    ; size_x = 14 * advance + 6 (column where size values start)
     movzx ax, cl
-    mov dx, 22
+    mov dx, 14
+    mul dx
+    add ax, 6
+    mov [size_x], ax
+
+    ; Width = 20 * advance + SCROLLBAR_W + 12
+    movzx ax, cl
+    mov dx, 20
     mul dx
     add ax, SCROLLBAR_W
     add ax, 12
@@ -447,7 +453,7 @@ entry:
 
 ; --- Input click ---
 .click_input:
-    mov bx, 200
+    mov bx, [size_x]
     mov cx, [row2_y]
     mov dx, 30
     mov si, [btn_h]
@@ -751,7 +757,7 @@ draw_ui:
     mov si, str_name
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    mov bx, 190
+    mov bx, [size_x]
     mov cx, 1
     mov si, str_size
     mov ah, API_GFX_DRAW_STRING
@@ -1021,7 +1027,7 @@ draw_input_line:
     ; OK button
     mov ax, cs
     mov es, ax
-    mov bx, 200
+    mov bx, [size_x]
     mov cx, [row2_y]
     mov dx, 30
     mov si, [btn_h]
@@ -1053,7 +1059,7 @@ draw_file_count:
     inc di
     jmp .dfc
 .dfc_draw:
-    mov bx, 200
+    mov bx, [size_x]
     mov cx, [row1_y]
     add cx, 2
     mov si, count_buf
@@ -1084,7 +1090,7 @@ format_row:
     mov ax, di
     sub ax, display_buf
 .fr_padl:
-    cmp ax, 22
+    cmp ax, 14
     jae .fr_size
     mov byte [di], ' '
     inc di
@@ -1145,6 +1151,7 @@ font_h:         db 8
 font_adv:       db 12
 
 ; Layout (computed dynamically)
+size_x:         dw 174
 win_w:          dw 264
 win_h:          dw 170
 row_h:          dw 10
