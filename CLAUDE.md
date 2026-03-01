@@ -327,6 +327,6 @@ Without this, IRQ12 can XOR the cursor over drawing pixels between API calls, ca
 
 ---
 
-**Last Updated**: 2026-02-27
-**Current Version**: v3.22.0
-**Current Build**: 351
+**Last Updated**: 2026-03-01
+**Current Version**: v3.23.0
+**Current Build**: 369

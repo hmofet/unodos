@@ -70,6 +70,7 @@ API_CTX_MENU_OPEN       equ 87
 API_CTX_MENU_CLOSE      equ 88
 API_CTX_MENU_HIT        equ 89
 API_FILE_DIALOG         equ 90
+API_FILE_SAVE_DIALOG    equ 98
 API_WORD_TO_STRING      equ 91
 
 ; Event types
@@ -815,11 +816,19 @@ entry:
     jmp .check_event
 
 .start_save_as:
-    mov byte [cs:mode], MODE_SAVE
-    mov byte [cs:input_buf], 0
-    mov byte [cs:input_len], 0
-    call draw_status
-    jmp .check_event
+    push cs
+    pop es
+    mov di, filename_buf                ; Destination for result
+    mov si, filename_buf                ; Default = current filename
+    movzx bx, byte [cs:mount_handle]   ; BL = mount handle
+    mov ah, API_FILE_SAVE_DIALOG
+    int 0x80
+    jc .check_event                     ; Cancelled
+    ; filename_buf now has the chosen filename
+    call do_save_file
+    mov byte [cs:mode], MODE_EDIT
+    call draw_ui
+    jmp .main_loop
 
 .dismiss_menu:
     ; Kernel menu already closed by menu_close above (or wasn't open)
@@ -911,14 +920,7 @@ entry:
     jb .ds_copy
 .ds_copied:
     mov byte [cs:di], 0
-    cmp byte [cs:mode], MODE_OPEN
-    je .do_open_submit
-    ; MODE_SAVE
-    call do_save_file
-    mov byte [cs:mode], MODE_EDIT
-    call draw_ui
-    jmp .main_loop
-.do_open_submit:
+    ; Dialog submit only used for MODE_OPEN (MODE_SAVE uses API 98 now)
     call do_open_file
     mov byte [cs:mode], MODE_EDIT
     call draw_ui

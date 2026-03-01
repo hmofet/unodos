@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 98                      ; Max function count (0-97 valid)
+    cmp ah, 100                     ; Max function count (0-99 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -5168,6 +5168,54 @@ file_dialog_open:
     jmp .fdlg_loop
 
 .fdlg_check_mouse:
+    ; Always check scrollbar hit (handles drag tracking)
+    mov al, [fdlg_handle]
+    call win_begin_draw
+    mov bx, FDLG_LIST_W                ; Scrollbar X (window-relative)
+    xor cx, cx                          ; Scrollbar Y (window-relative = 0)
+    mov si, [fdlg_list_h]              ; Track height
+    mov dx, [fdlg_scroll]              ; Current scroll position
+    mov ax, [fdlg_count]
+    sub ax, [fdlg_vis]
+    jg .fdlg_sb_range2
+    xor ax, ax
+.fdlg_sb_range2:
+    mov di, ax                          ; Max range
+    call widget_scrollbar_hit
+    pushf                               ; Save CF
+    call win_end_draw
+    popf
+    jc .fdlg_no_sb_hit
+    cmp al, 0
+    je .fdlg_up
+    cmp al, 1
+    je .fdlg_down
+    cmp al, 2
+    je .fdlg_sb_drag
+    cmp al, 3
+    je .fdlg_up
+    cmp al, 4
+    je .fdlg_down
+    jmp .fdlg_no_sb_hit
+.fdlg_sb_drag:
+    mov [fdlg_scroll], dx              ; DX = new scroll position from drag
+    ; Keep sel in visible range
+    mov ax, [fdlg_sel]
+    cmp ax, dx
+    jae .fdlg_drag_check_bot
+    mov [fdlg_sel], dx
+    jmp .fdlg_drag_redraw
+.fdlg_drag_check_bot:
+    mov bx, dx
+    add bx, [fdlg_vis]
+    dec bx
+    cmp ax, bx
+    jbe .fdlg_drag_redraw
+    mov [fdlg_sel], bx
+.fdlg_drag_redraw:
+    call fdlg_draw_full
+    jmp .fdlg_loop
+.fdlg_no_sb_hit:
     test byte [mouse_buttons], 1        ; Left button
     jz .fdlg_mouse_up
     cmp byte [fdlg_prev_btn], 0
@@ -5275,16 +5323,9 @@ file_dialog_open:
 
     jmp .fdlg_loop
 
-    ; --- Scrollbar click ---
+    ; --- Scrollbar click (handled by widget_scrollbar_hit above) ---
 .fdlg_scrollbar_click:
-    ; AX = Y relative to content (in list area)
-    cmp ax, SCROLLBAR_ARROW_H           ; Top 8px = up arrow
-    jb .fdlg_up
-    mov bx, [fdlg_list_h]
-    sub bx, SCROLLBAR_ARROW_H
-    cmp ax, bx
-    jae .fdlg_down                      ; Bottom 8px = down arrow
-    jmp .fdlg_loop                      ; Track area — ignore
+    jmp .fdlg_loop
 
     ; --- Selection ---
 .fdlg_select:
@@ -5636,6 +5677,907 @@ fdlg_scroll_into_view:
     ret
 
 ; ============================================================================
+; file_dialog_save - System file save dialog (API 98)
+; Input:  BL = mount handle (0=FAT12, 1=FAT16)
+;         ES:DI = destination buffer for filename (13+ bytes)
+;         DS:SI = default filename (null-terminated, or empty string)
+; Output: CF=0 → filename at ES:DI (dot format, null-terminated)
+;         CF=1 → cancelled
+; Blocking: creates modal window, runs event loop, returns on save/cancel
+; ============================================================================
+file_dialog_save:
+    ; Save caller state
+    mov ax, [caller_es]
+    mov [fdlg_caller_es], ax
+    mov al, [draw_context]
+    mov [fdlg_save_ctx], al
+    call win_end_draw
+    mov [fdlg_mount], bl
+    mov [fdlg_result_di], di
+
+    ; Copy default filename from caller's DS:SI to sdlg_input_buf
+    push es
+    push di
+    mov ax, [caller_ds]
+    mov es, ax                              ; ES = caller's segment
+    mov di, sdlg_input_buf                  ; DI = dest pointer in kernel
+    xor cx, cx                              ; CX = length counter
+.sdlg_copy_default:
+    cmp cx, 12
+    jae .sdlg_copy_done
+    mov al, [es:si]
+    test al, al
+    jz .sdlg_copy_done
+    ; Auto-uppercase
+    cmp al, 'a'
+    jb .sdlg_no_upper
+    cmp al, 'z'
+    ja .sdlg_no_upper
+    sub al, 32
+.sdlg_no_upper:
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .sdlg_copy_default
+.sdlg_copy_done:
+    mov byte [di], 0                        ; Null terminate
+    mov [sdlg_input_len], cl
+    pop di
+    pop es
+
+    ; Reset confirmation state
+    mov byte [sdlg_confirming], 0
+
+    ; Compute dynamic layout from current font
+    movzx ax, byte [draw_font_height]
+    add ax, 2
+    mov [fdlg_item_h], ax                  ; item_h = font_height + 2
+
+    movzx ax, byte [draw_font_height]
+    add ax, 4
+    mov [fdlg_btn_h], ax                   ; btn_h = font_height + 4
+
+    ; Textfield row height = font_height + 4 + gap
+    movzx ax, byte [draw_font_height]
+    add ax, 6                              ; tf_h = font_height + 6 (field + gap)
+    mov [sdlg_tf_h], ax
+    mov [sdlg_list_y_off], ax              ; List Y offset = tf_h
+
+    ; Compute max visible items (reduced by textfield)
+    mov ax, [screen_height]
+    sub ax, 18                             ; titlebar + borders + margins
+    sub ax, [fdlg_btn_h]
+    sub ax, [sdlg_tf_h]                   ; Account for textfield row
+    xor dx, dx
+    div word [fdlg_item_h]
+    cmp ax, 8
+    jbe .sdlg_vis_ok
+    mov ax, 8
+.sdlg_vis_ok:
+    cmp ax, 3
+    jae .sdlg_vis_min
+    mov ax, 3                              ; Minimum 3 visible items
+.sdlg_vis_min:
+    mov [fdlg_vis], ax
+
+    ; list_h = vis * item_h
+    mul word [fdlg_item_h]
+    mov [fdlg_list_h], ax
+
+    ; win_h = 11 (title+border) + tf_h + list_h + 2 (gap) + btn_h + 1 (border)
+    mov ax, [sdlg_tf_h]
+    add ax, [fdlg_list_h]
+    add ax, 14                             ; 11 + 2 + 1
+    add ax, [fdlg_btn_h]
+    mov [fdlg_h_dyn], ax
+
+    ; Center: y = (screen_height - win_h) / 2
+    mov bx, [screen_height]
+    sub bx, ax
+    shr bx, 1
+    mov [fdlg_y_dyn], bx
+
+    ; Scan directory
+    call fdlg_scan_files
+
+    ; Create dialog window
+    mov word [caller_es], 0x1000
+    mov bx, [screen_width]
+    sub bx, FDLG_W
+    shr bx, 1
+    mov cx, [fdlg_y_dyn]
+    mov dx, FDLG_W
+    mov si, [fdlg_h_dyn]
+    mov di, sdlg_title
+    mov al, WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    call win_create_stub
+    jc .sdlg_error
+    mov [fdlg_handle], al
+
+    ; Force no content scaling
+    push bx
+    xor ah, ah
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+    mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
+    pop bx
+
+    ; Initialize selection state
+    mov word [fdlg_sel], 0
+    mov word [fdlg_scroll], 0
+    mov byte [fdlg_prev_btn], 0
+
+    ; Initial draw
+    call sdlg_draw_full
+
+    ; --- Modal event loop ---
+.sdlg_loop:
+    sti
+    hlt
+
+    call event_get_stub
+    jc .sdlg_check_mouse
+
+    ; Dispatch by event type
+    cmp al, EVENT_KEY_PRESS
+    je .sdlg_key
+    cmp al, EVENT_WIN_REDRAW
+    je .sdlg_redraw
+    jmp .sdlg_loop
+
+.sdlg_key:
+    ; Check if in overwrite confirmation mode
+    cmp byte [sdlg_confirming], 1
+    je .sdlg_confirm_key
+
+    cmp dl, 27                             ; ESC → cancel
+    je .sdlg_cancel
+    cmp dl, 13                             ; Enter → try save
+    je .sdlg_try_save
+    cmp dl, 8                              ; Backspace → delete char
+    je .sdlg_backspace
+    cmp dl, 128                            ; Up arrow
+    je .sdlg_nav_up
+    cmp dl, 129                            ; Down arrow
+    je .sdlg_nav_down
+    ; Fallback scancode check
+    test dl, dl
+    jnz .sdlg_printable
+    cmp dh, 0x48
+    je .sdlg_nav_up
+    cmp dh, 0x50
+    je .sdlg_nav_down
+    jmp .sdlg_loop
+
+.sdlg_printable:
+    ; Accept printable chars: A-Z, 0-9, '.', '-', '_'
+    movzx ax, byte [sdlg_input_len]
+    cmp ax, 12
+    jae .sdlg_loop                         ; Buffer full
+    ; Auto-uppercase
+    mov al, dl
+    cmp al, 'a'
+    jb .sdlg_check_valid
+    cmp al, 'z'
+    ja .sdlg_check_valid
+    sub al, 32
+.sdlg_check_valid:
+    cmp al, 'A'
+    jb .sdlg_try_digit
+    cmp al, 'Z'
+    jbe .sdlg_append
+.sdlg_try_digit:
+    cmp al, '0'
+    jb .sdlg_try_special
+    cmp al, '9'
+    jbe .sdlg_append
+.sdlg_try_special:
+    cmp al, '.'
+    je .sdlg_append
+    cmp al, '-'
+    je .sdlg_append
+    cmp al, '_'
+    je .sdlg_append
+    jmp .sdlg_loop
+
+.sdlg_append:
+    movzx bx, byte [sdlg_input_len]
+    mov [sdlg_input_buf + bx], al
+    inc byte [sdlg_input_len]
+    movzx bx, byte [sdlg_input_len]
+    mov byte [sdlg_input_buf + bx], 0      ; Null terminate
+    call sdlg_draw_tf
+    jmp .sdlg_loop
+
+.sdlg_backspace:
+    cmp byte [sdlg_input_len], 0
+    je .sdlg_loop
+    dec byte [sdlg_input_len]
+    movzx bx, byte [sdlg_input_len]
+    mov byte [sdlg_input_buf + bx], 0
+    call sdlg_draw_tf
+    jmp .sdlg_loop
+
+.sdlg_nav_up:
+    cmp word [fdlg_sel], 0
+    je .sdlg_loop
+    dec word [fdlg_sel]
+    call fdlg_scroll_into_view
+    call sdlg_draw_full
+    jmp .sdlg_loop
+
+.sdlg_nav_down:
+    mov ax, [fdlg_sel]
+    inc ax
+    cmp ax, [fdlg_count]
+    jae .sdlg_loop
+    mov [fdlg_sel], ax
+    call fdlg_scroll_into_view
+    call sdlg_draw_full
+    jmp .sdlg_loop
+
+.sdlg_redraw:
+    cmp dl, [fdlg_handle]
+    jne .sdlg_loop
+    call sdlg_draw_full
+    jmp .sdlg_loop
+
+.sdlg_check_mouse:
+    ; Check if in overwrite confirmation mode
+    cmp byte [sdlg_confirming], 1
+    je .sdlg_confirm_mouse
+
+    test byte [mouse_buttons], 1
+    jz .sdlg_mouse_up
+    cmp byte [fdlg_prev_btn], 0
+    jne .sdlg_loop
+    mov byte [fdlg_prev_btn], 1
+    jmp .sdlg_click
+.sdlg_mouse_up:
+    mov byte [fdlg_prev_btn], 0
+    jmp .sdlg_loop
+
+.sdlg_click:
+    ; Get content area origin
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax
+    mov si, ax                              ; SI = content_x
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11
+    mov di, ax                              ; DI = content_y
+
+    ; Check X bounds
+    mov ax, [mouse_x]
+    sub ax, si
+    jb .sdlg_loop
+    cmp ax, FDLG_W - 2
+    jae .sdlg_loop
+
+    ; Check Y relative to content
+    mov ax, [mouse_y]
+    sub ax, di
+    jb .sdlg_loop
+
+    ; Is it in the textfield area?
+    cmp ax, [sdlg_tf_h]
+    jb .sdlg_loop                          ; Click on textfield — ignore (typing handles input)
+
+    ; Adjust Y for list offset
+    sub ax, [sdlg_list_y_off]
+    jb .sdlg_loop
+
+    ; Is it in the list area?
+    cmp ax, [fdlg_list_h]
+    jae .sdlg_check_save_buttons
+
+    ; Check scrollbar vs list
+    push ax
+    mov ax, [mouse_x]
+    sub ax, si
+    cmp ax, FDLG_LIST_W
+    pop ax
+    jae .sdlg_scrollbar_click
+
+    ; Compute clicked item
+    xor dx, dx
+    div word [fdlg_item_h]
+    add ax, [fdlg_scroll]
+    cmp ax, [fdlg_count]
+    jae .sdlg_loop
+
+    ; Copy clicked filename to input buffer
+    mov [fdlg_sel], ax
+    push ds
+    push es
+    mov bx, FDLG_ENTRY_SIZE
+    mul bx
+    add ax, FDLG_BUF_OFF
+    mov bx, FDLG_BUF_SEG
+    mov ds, bx
+    mov si, ax                              ; DS:SI = filename in scratch
+    mov bx, 0x1000
+    mov es, bx
+    mov di, sdlg_input_buf                  ; ES:DI = input buffer in kernel
+    xor cx, cx
+.sdlg_copy_click:
+    cmp cx, 12
+    jae .sdlg_copy_click_done
+    lodsb
+    test al, al
+    jz .sdlg_copy_click_done
+    stosb
+    inc cx
+    jmp .sdlg_copy_click
+.sdlg_copy_click_done:
+    mov byte [es:di], 0
+    mov [es:sdlg_input_len], cl
+    pop es
+    pop ds
+    call sdlg_draw_full
+    jmp .sdlg_loop
+
+.sdlg_scrollbar_click:
+    ; AX = Y relative to list area
+    cmp ax, SCROLLBAR_ARROW_H
+    jb .sdlg_nav_up
+    mov bx, [fdlg_list_h]
+    sub bx, SCROLLBAR_ARROW_H
+    cmp ax, bx
+    jae .sdlg_nav_down
+    jmp .sdlg_loop
+
+.sdlg_check_save_buttons:
+    ; AX = Y relative to content (already past list_y_off)
+    ; Recalc: AX = mouse_y - content_y
+    mov ax, [mouse_y]
+    sub ax, di                              ; DI = content_y
+    mov bx, [sdlg_list_y_off]
+    add bx, [fdlg_list_h]
+    add bx, FDLG_BTN_GAP
+    cmp ax, bx
+    jb .sdlg_loop
+    add bx, [fdlg_btn_h]
+    cmp ax, bx
+    jae .sdlg_loop
+
+    ; Button row — check X
+    mov ax, [mouse_x]
+    sub ax, si                              ; AX = X relative to content
+
+    ; Save button: X range [54, 94)
+    cmp ax, 54
+    jb .sdlg_loop
+    cmp ax, 94
+    jb .sdlg_try_save
+
+    ; Cancel button: X range [98, 150)
+    cmp ax, 98
+    jb .sdlg_loop
+    cmp ax, 150
+    jb .sdlg_cancel
+    jmp .sdlg_loop
+
+    ; --- Try save (check if file exists) ---
+.sdlg_try_save:
+    cmp byte [sdlg_input_len], 0
+    je .sdlg_loop                          ; Empty filename
+
+    ; Check if filename exists in file list
+    push ds
+    push es
+    mov ax, FDLG_BUF_SEG
+    mov ds, ax                              ; DS = scratch segment with file list
+    mov cx, [cs:fdlg_count]
+    test cx, cx
+    jz .sdlg_no_match                      ; No files, no conflict
+    mov bx, FDLG_BUF_OFF
+.sdlg_check_exist:
+    push cx
+    push bx
+    mov si, bx                              ; DS:SI = file entry
+    mov di, sdlg_input_buf                  ; CS:DI = input buffer
+    xor cx, cx
+.sdlg_cmp_char:
+    mov al, [si]
+    mov ah, [cs:di]
+    cmp al, ah
+    jne .sdlg_cmp_mismatch
+    test al, al
+    jz .sdlg_cmp_match                     ; Both null = match
+    inc si
+    inc di
+    inc cx
+    cmp cx, 13
+    jb .sdlg_cmp_char
+.sdlg_cmp_match:
+    pop bx
+    pop cx
+    pop es
+    pop ds
+    ; File exists — show overwrite confirmation
+    mov byte [sdlg_confirming], 1
+    call sdlg_draw_confirm
+    jmp .sdlg_loop
+
+.sdlg_cmp_mismatch:
+    pop bx
+    pop cx
+    add bx, FDLG_ENTRY_SIZE
+    loop .sdlg_check_exist
+.sdlg_no_match:
+    pop es
+    pop ds
+    ; No conflict — proceed to save
+    jmp .sdlg_do_save
+
+    ; --- Overwrite confirmation key handling ---
+.sdlg_confirm_key:
+    cmp dl, 27                             ; ESC → back to edit
+    je .sdlg_confirm_no
+    cmp dl, 'y'
+    je .sdlg_confirm_yes
+    cmp dl, 'Y'
+    je .sdlg_confirm_yes
+    cmp dl, 'n'
+    je .sdlg_confirm_no
+    cmp dl, 'N'
+    je .sdlg_confirm_no
+    cmp dl, 13                             ; Enter → yes (overwrite)
+    je .sdlg_confirm_yes
+    jmp .sdlg_loop
+
+    ; --- Overwrite confirmation mouse handling ---
+.sdlg_confirm_mouse:
+    test byte [mouse_buttons], 1
+    jz .sdlg_confirm_mouse_up
+    cmp byte [fdlg_prev_btn], 0
+    jne .sdlg_loop
+    mov byte [fdlg_prev_btn], 1
+    jmp .sdlg_confirm_click
+.sdlg_confirm_mouse_up:
+    mov byte [fdlg_prev_btn], 0
+    jmp .sdlg_loop
+
+.sdlg_confirm_click:
+    ; Get content area origin
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax
+    mov si, ax                              ; SI = content_x
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11
+    mov di, ax                              ; DI = content_y
+
+    ; Check Y in button area (roughly center of window)
+    mov ax, [mouse_y]
+    sub ax, di
+    ; Buttons are at roughly list_y_off + list_h/2 + font_height + 4
+    mov bx, [sdlg_list_y_off]
+    mov cx, [fdlg_list_h]
+    shr cx, 1
+    add bx, cx
+    movzx cx, byte [draw_font_height]
+    add bx, cx
+    add bx, 4
+    cmp ax, bx
+    jb .sdlg_loop
+    add bx, [fdlg_btn_h]
+    cmp ax, bx
+    jae .sdlg_loop
+
+    ; Check X for Yes/No buttons
+    mov ax, [mouse_x]
+    sub ax, si
+    ; Yes button centered around content_w/3
+    cmp ax, 30
+    jb .sdlg_loop
+    cmp ax, 70
+    jb .sdlg_confirm_yes
+    ; No button centered around content_w*2/3
+    cmp ax, 80
+    jb .sdlg_loop
+    cmp ax, 120
+    jb .sdlg_confirm_no
+    jmp .sdlg_loop
+
+.sdlg_confirm_yes:
+    mov byte [sdlg_confirming], 0
+    jmp .sdlg_do_save
+
+.sdlg_confirm_no:
+    mov byte [sdlg_confirming], 0
+    call sdlg_draw_full
+    jmp .sdlg_loop
+
+    ; --- Do save (copy filename to caller buffer) ---
+.sdlg_do_save:
+    push ds
+    push es
+    mov ax, 0x1000
+    mov ds, ax
+    mov si, sdlg_input_buf
+    mov ax, [fdlg_caller_es]
+    mov es, ax
+    mov di, [fdlg_result_di]
+    mov cx, 13
+    cld
+    rep movsb
+    pop es
+    pop ds
+    call fdlg_cleanup
+    clc
+    ret
+
+    ; --- Cancel ---
+.sdlg_cancel:
+    call fdlg_cleanup
+    stc
+    ret
+
+    ; --- Error ---
+.sdlg_error:
+    mov al, [fdlg_save_ctx]
+    mov [draw_context], al
+    cmp al, 0xFF
+    je .sdlg_err_ret
+    call win_begin_draw
+.sdlg_err_ret:
+    mov ax, [fdlg_caller_es]
+    mov [caller_es], ax
+    stc
+    ret
+
+; ============================================================================
+; sdlg_draw_full - Redraw entire save dialog
+; ============================================================================
+sdlg_draw_full:
+    pusha
+
+    ; Calculate content area origin
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax
+    mov [fdlg_cx], ax
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11
+    mov [fdlg_cy], ax
+
+    ; Set draw_context
+    mov al, [fdlg_handle]
+    call win_begin_draw
+
+    ; --- Draw textfield row ---
+    ; "Name:" label
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    mov bx, [fdlg_cx]
+    add bx, 4
+    mov cx, [fdlg_cy]
+    add cx, 2
+    mov si, sdlg_str_name
+    call gfx_draw_string_stub
+
+    ; Textfield at (4 + name_width + 4, 0)
+    ; Approximate "Name:" width = 5 * advance + space
+    movzx ax, byte [draw_font_advance]
+    mov bx, ax
+    shl ax, 2                              ; 4 * advance
+    add ax, bx                             ; 5 * advance
+    add ax, 4                              ; + gap
+    add ax, 4                              ; + left margin
+    add ax, [fdlg_cx]
+    mov bx, ax                             ; BX = textfield X
+    mov cx, [fdlg_cy]                      ; CX = textfield Y
+    ; Width = FDLG_W - 4 - name_offset
+    mov dx, [fdlg_cx]
+    add dx, FDLG_W - 4
+    sub dx, bx                             ; DX = textfield width
+    mov si, sdlg_input_buf
+    movzx di, byte [sdlg_input_len]        ; Cursor at end
+    mov al, 1                              ; Focused
+    call widget_draw_textfield
+
+    pop word [caller_ds]
+
+    ; --- Check if showing overwrite confirmation ---
+    cmp byte [sdlg_confirming], 1
+    je .sdlg_draw_confirm_area
+
+    ; --- Draw file list ---
+    cmp word [fdlg_count], 0
+    je .sdlg_draw_empty
+
+    push word [caller_ds]
+    mov word [caller_ds], FDLG_BUF_SEG
+
+    xor cx, cx
+.sdlg_draw_item:
+    cmp cx, [fdlg_vis]
+    jae .sdlg_items_done
+
+    mov ax, [fdlg_scroll]
+    add ax, cx
+    cmp ax, [fdlg_count]
+    jae .sdlg_draw_blank
+
+    ; SI = filename offset in scratch segment
+    push dx
+    push cx
+    mov bx, FDLG_ENTRY_SIZE
+    mul bx
+    add ax, FDLG_BUF_OFF
+    mov si, ax
+
+    pop cx
+    mov ax, cx
+    mul word [fdlg_item_h]
+    add ax, [sdlg_list_y_off]
+    add ax, [fdlg_cy]
+    mov di, ax
+
+    mov bx, [fdlg_cx]
+
+    mov dx, [fdlg_scroll]
+    add dx, cx
+    xor al, al
+    cmp dx, [fdlg_sel]
+    jne .sdlg_not_sel
+    or al, 1
+.sdlg_not_sel:
+    push cx
+    mov cx, di
+    mov dx, FDLG_LIST_W
+    call widget_draw_listitem
+    pop cx
+    pop dx
+
+    inc cx
+    jmp .sdlg_draw_item
+
+.sdlg_draw_blank:
+    push cx
+    mov ax, cx
+    mul word [fdlg_item_h]
+    add ax, [sdlg_list_y_off]
+    add ax, [fdlg_cy]
+    mov cx, ax
+    mov bx, [fdlg_cx]
+    mov dx, FDLG_LIST_W
+    mov si, [fdlg_item_h]
+    call gfx_clear_area_stub
+    pop cx
+    inc cx
+    cmp cx, [fdlg_vis]
+    jb .sdlg_draw_blank
+
+.sdlg_items_done:
+    pop word [caller_ds]
+    jmp .sdlg_draw_scrollbar
+
+.sdlg_draw_empty:
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+    mov bx, [fdlg_cx]
+    add bx, 20
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    add cx, 20
+    mov si, fdlg_empty
+    call gfx_draw_string_stub
+    pop word [caller_ds]
+
+.sdlg_draw_scrollbar:
+    mov bx, [fdlg_cx]
+    add bx, FDLG_LIST_W
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov si, [fdlg_list_h]
+    mov dx, [fdlg_scroll]
+    mov ax, [fdlg_count]
+    sub ax, [fdlg_vis]
+    jg .sdlg_sb_range
+    xor ax, ax
+.sdlg_sb_range:
+    mov di, ax
+    xor al, al
+    call widget_draw_scrollbar
+
+.sdlg_draw_buttons:
+    push word [caller_es]
+    mov word [caller_es], 0x1000
+
+    ; Save button
+    mov bx, [fdlg_cx]
+    add bx, 54
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    add cx, [fdlg_list_h]
+    add cx, FDLG_BTN_GAP
+    mov dx, 40
+    mov si, [fdlg_btn_h]
+    mov di, sdlg_str_save
+    xor al, al
+    call widget_draw_button
+
+    ; Cancel button
+    mov bx, [fdlg_cx]
+    add bx, 98
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    add cx, [fdlg_list_h]
+    add cx, FDLG_BTN_GAP
+    mov dx, 52
+    mov si, [fdlg_btn_h]
+    mov di, fdlg_str_cancel
+    xor al, al
+    call widget_draw_button
+
+    pop word [caller_es]
+    call win_end_draw
+    popa
+    ret
+
+.sdlg_draw_confirm_area:
+    ; Clear list area and draw overwrite confirmation
+    mov bx, [fdlg_cx]
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov dx, FDLG_W - 2
+    mov si, [fdlg_list_h]
+    call gfx_clear_area_stub
+
+    ; Draw "FILENAME exists" centered
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+
+    ; First draw the filename
+    mov bx, [fdlg_cx]
+    add bx, 10
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov ax, [fdlg_list_h]
+    shr ax, 1
+    sub ax, 12
+    add cx, ax
+    mov si, sdlg_input_buf
+    call gfx_draw_string_stub
+    ; Measure filename width to position " exists" after it
+    mov si, sdlg_input_buf
+    call gfx_text_width
+    mov bx, [fdlg_cx]
+    add bx, 10
+    add bx, dx
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov ax, [fdlg_list_h]
+    shr ax, 1
+    sub ax, 12
+    add cx, ax
+    mov si, sdlg_str_exists
+    call gfx_draw_string_stub
+
+    ; Draw "Overwrite?" centered below
+    mov si, sdlg_str_overwrite
+    call gfx_text_width                     ; DX = text width
+    mov bx, FDLG_W - 2
+    sub bx, dx
+    shr bx, 1
+    add bx, [fdlg_cx]
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov ax, [fdlg_list_h]
+    shr ax, 1
+    add cx, ax
+    mov si, sdlg_str_overwrite
+    call gfx_draw_string_stub
+
+    pop word [caller_ds]
+
+    ; Draw Yes/No buttons
+    push word [caller_es]
+    mov word [caller_es], 0x1000
+
+    ; Yes button
+    mov bx, [fdlg_cx]
+    add bx, 30
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov ax, [fdlg_list_h]
+    shr ax, 1
+    add cx, ax
+    movzx ax, byte [draw_font_height]
+    add ax, 4
+    add cx, ax
+    mov dx, 40
+    mov si, [fdlg_btn_h]
+    mov di, sdlg_str_yes
+    xor al, al
+    call widget_draw_button
+
+    ; No button
+    mov bx, [fdlg_cx]
+    add bx, 80
+    mov cx, [fdlg_cy]
+    add cx, [sdlg_list_y_off]
+    mov ax, [fdlg_list_h]
+    shr ax, 1
+    add cx, ax
+    movzx ax, byte [draw_font_height]
+    add ax, 4
+    add cx, ax
+    mov dx, 40
+    mov si, [fdlg_btn_h]
+    mov di, sdlg_str_no
+    xor al, al
+    call widget_draw_button
+
+    pop word [caller_es]
+    ; Skip Save/Cancel buttons in confirm mode — go straight to end
+    call win_end_draw
+    popa
+    ret
+
+; ============================================================================
+; sdlg_draw_tf - Redraw textfield only (for fast typing feedback)
+; ============================================================================
+sdlg_draw_tf:
+    pusha
+
+    movzx bx, byte [fdlg_handle]
+    shl bx, 5
+    add bx, window_table
+    mov ax, [bx + WIN_OFF_X]
+    inc ax
+    mov [fdlg_cx], ax
+    mov ax, [bx + WIN_OFF_Y]
+    add ax, 11
+    mov [fdlg_cy], ax
+
+    mov al, [fdlg_handle]
+    call win_begin_draw
+
+    push word [caller_ds]
+    mov word [caller_ds], 0x1000
+
+    ; Textfield position = same as in sdlg_draw_full
+    movzx ax, byte [draw_font_advance]
+    mov bx, ax
+    shl ax, 2
+    add ax, bx                             ; 5 * advance
+    add ax, 8                              ; margins
+    add ax, [fdlg_cx]
+    mov bx, ax
+    mov cx, [fdlg_cy]
+    mov dx, [fdlg_cx]
+    add dx, FDLG_W - 4
+    sub dx, bx
+    mov si, sdlg_input_buf
+    movzx di, byte [sdlg_input_len]
+    mov al, 1
+    call widget_draw_textfield
+
+    pop word [caller_ds]
+    call win_end_draw
+    popa
+    ret
+
+; ============================================================================
+; sdlg_draw_confirm - Draw overwrite confirmation overlay
+; ============================================================================
+sdlg_draw_confirm:
+    call sdlg_draw_full
+    ret
+
+; ============================================================================
 ; Utility API Functions (Build 277)
 ; ============================================================================
 
@@ -5764,11 +6706,202 @@ gfx_draw_sprite:
     ret
 
 ; ============================================================================
+; widget_scrollbar_hit - Hit-test scrollbar with drag support (API 99)
+; Input:  BX=scrollbar_x, CX=scrollbar_y (window-relative)
+;         SI=track_height, DX=current_position, DI=max_range
+; Output: CF=0 → interaction detected
+;           AL=0: up arrow clicked
+;           AL=1: down arrow clicked
+;           AL=2: thumb drag, DX=new_position
+;           AL=3: track click above thumb (page up)
+;           AL=4: track click below thumb (page down)
+;         CF=1 → no interaction
+; NOT auto-translated (handles its own translation like widget_hit_test)
+; ============================================================================
+widget_scrollbar_hit:
+    push bx
+    push cx
+    push si
+
+    ; Guard: if window drag/resize active, no scrollbar interaction
+    cmp byte [drag_active], 0
+    jne .sbh_miss
+    cmp byte [resize_active], 0
+    jne .sbh_miss
+
+    ; Save parameters
+    mov [sb_hit_pos], dx
+    mov [sb_hit_max], di
+    mov [sb_hit_track_h], si
+
+    ; Translate BX,CX to absolute coords (same as widget_hit_test)
+    cmp byte [draw_context], 0xFF
+    je .sbh_abs
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .sbh_abs
+    push ax
+    xor ah, ah
+    mov al, [draw_context]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    ; Content scaling
+    cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
+    jne .sbh_no_scale
+    shl bx, 1
+    shl cx, 1
+.sbh_no_scale:
+    add bx, [di + WIN_OFF_X]
+    inc bx
+    add cx, [di + WIN_OFF_Y]
+    add cx, [titlebar_height]
+    pop ax
+.sbh_abs:
+    mov [sb_hit_x], bx
+    mov [sb_hit_y], cx
+
+    ; Compute thumb math: usable, thumb_h, travel
+    mov ax, [sb_hit_track_h]
+    sub ax, SCROLLBAR_ARROW_H * 2       ; usable = track_h - 16
+    cmp ax, SCROLLBAR_MIN_THUMB
+    jl .sbh_miss                         ; Too small for thumb
+    mov cx, ax
+    shr cx, 2                            ; thumb_h = usable / 4
+    cmp cx, SCROLLBAR_MIN_THUMB
+    jge .sbh_thumb_ok
+    mov cx, SCROLLBAR_MIN_THUMB
+.sbh_thumb_ok:
+    mov di, ax
+    sub di, cx                           ; travel = usable - thumb_h
+    mov [sb_hit_travel], di
+    mov [sb_hit_thumb_h], cx
+
+    ; Check if we're in an ongoing drag
+    cmp byte [sb_drag_active], 1
+    je .sbh_dragging
+
+    ; --- Fresh click detection ---
+    test byte [mouse_buttons], 1         ; Left button pressed?
+    jz .sbh_miss
+
+    ; Bounds check: mouse within scrollbar area?
+    mov ax, [mouse_x]
+    sub ax, [sb_hit_x]
+    jb .sbh_miss
+    cmp ax, SCROLLBAR_WIDTH
+    jae .sbh_miss
+
+    ; Check Y bounds
+    mov ax, [mouse_y]
+    sub ax, [sb_hit_y]
+    jb .sbh_miss
+    cmp ax, [sb_hit_track_h]
+    jae .sbh_miss
+
+    ; Which zone?
+    cmp ax, SCROLLBAR_ARROW_H
+    jb .sbh_up_arrow
+    mov bx, [sb_hit_track_h]
+    sub bx, SCROLLBAR_ARROW_H
+    cmp ax, bx
+    jae .sbh_down_arrow
+
+    ; Track area — compute thumb position
+    cmp word [sb_hit_max], 0
+    je .sbh_miss                         ; max_range==0, no scrolling
+    push ax                              ; Save click Y (relative)
+    mov ax, [sb_hit_pos]
+    mul word [sb_hit_travel]             ; DX:AX = pos * travel
+    div word [sb_hit_max]                ; AX = thumb_offset
+    add ax, SCROLLBAR_ARROW_H           ; thumb_top = 8 + offset
+    mov bx, ax                           ; BX = thumb_top
+    add ax, [sb_hit_thumb_h]            ; AX = thumb_bottom
+    pop cx                               ; CX = click Y (relative)
+    cmp cx, bx
+    jb .sbh_page_up
+    cmp cx, ax
+    jae .sbh_page_down
+
+    ; --- Click on thumb: start drag ---
+    mov byte [sb_drag_active], 1
+    mov ax, [mouse_y]
+    mov [sb_drag_anchor_y], ax
+    mov ax, [sb_hit_pos]
+    mov [sb_drag_start_pos], ax
+    mov dx, [sb_hit_pos]                 ; Return current pos
+    mov al, 2
+    jmp .sbh_hit
+
+.sbh_up_arrow:
+    xor al, al                           ; AL=0
+    jmp .sbh_hit
+
+.sbh_down_arrow:
+    mov al, 1
+    jmp .sbh_hit
+
+.sbh_page_up:
+    mov al, 3
+    jmp .sbh_hit
+
+.sbh_page_down:
+    mov al, 4
+    jmp .sbh_hit
+
+    ; --- Ongoing drag ---
+.sbh_dragging:
+    ; Check if mouse button released
+    test byte [mouse_buttons], 1
+    jz .sbh_drag_end
+
+    ; Compute new position from mouse Y delta
+    mov ax, [mouse_y]
+    sub ax, [sb_drag_anchor_y]           ; AX = signed pixel delta
+    ; new_pos = drag_start_pos + delta * max_range / travel
+    cmp word [sb_hit_travel], 0
+    je .sbh_drag_end
+    imul word [sb_hit_max]               ; DX:AX = delta * max_range (signed)
+    idiv word [sb_hit_travel]            ; AX = position delta (signed)
+    add ax, [sb_drag_start_pos]          ; AX = new_pos
+
+    ; Clamp to [0, max_range]
+    test ax, ax
+    jns .sbh_clamp_hi
+    xor ax, ax                           ; Clamp to 0
+    jmp .sbh_drag_ret
+.sbh_clamp_hi:
+    cmp ax, [sb_hit_max]
+    jbe .sbh_drag_ret
+    mov ax, [sb_hit_max]
+.sbh_drag_ret:
+    mov dx, ax                           ; DX = new position
+    mov al, 2
+    jmp .sbh_hit
+
+.sbh_drag_end:
+    mov byte [sb_drag_active], 0
+    ; Fall through to miss
+
+.sbh_miss:
+    pop si
+    pop cx
+    pop bx
+    stc
+    ret
+
+.sbh_hit:
+    pop si
+    pop cx
+    pop bx
+    clc
+    ret
+
+; ============================================================================
 ; Kernel API Table
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x26A0 - ($ - $$) db 0
+times 0x2FE0 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -5939,6 +7072,10 @@ kernel_api_table:
 
     ; Window Content Size API (Build 353)
     dw win_get_content_size         ; 97: Get content area dimensions
+
+    ; File Save Dialog + Scrollbar Hit API (Build 369)
+    dw file_dialog_save             ; 98: System file save dialog
+    dw widget_scrollbar_hit         ; 99: Scrollbar hit-test with drag
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -9319,16 +10456,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 86 + reserved_sectors = 87
-    mov word [fat_start], 87        ; Filesystem at sector 86 + 1 reserved
+    ; fat_start = 94 + reserved_sectors = 95
+    mov word [fat_start], 95        ; Filesystem at sector 94 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 86 + reserved + (num_fats * sectors_per_fat)
-    ; = 86 + 1 + (2 * 9) = 86 + 1 + 18 = 105
+    ; root_dir_start = 94 + reserved + (num_fats * sectors_per_fat)
+    ; = 94 + 1 + (2 * 9) = 94 + 1 + 18 = 113
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 86                      ; Filesystem starts at sector 86
-    mov [root_dir_start], ax        ; = 105
+    add ax, 94                      ; Filesystem starts at sector 94
+    mov [root_dir_start], ax        ; = 113
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -14825,6 +15962,9 @@ win_destroy_stub:
     call mouse_cursor_hide
     inc byte [cursor_locked]
 
+    ; Clear scrollbar drag if active (window being destroyed may own it)
+    mov byte [sb_drag_active], 0
+
     push bx
     push cx
     push dx
@@ -18597,9 +19737,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 87                    ; Absolute FAT sector = filesystem_start(86) + reserved(1)
-root_dir_start: dw 105              ; Calculated: 86 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 119             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 95                    ; Absolute FAT sector = filesystem_start(94) + reserved(1)
+root_dir_start: dw 113              ; Calculated: 94 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 127             ; Calculated: root_dir_start + root_dir_sectors
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -18826,9 +19966,35 @@ fdlg_empty:         db '(No files)', 0
 fdlg_str_open:      db 'Open', 0
 fdlg_str_cancel:    db 'Cancel', 0
 
+; Scrollbar hit/drag state (API 99)
+sb_drag_active:     db 0            ; 1 = dragging thumb
+sb_drag_anchor_y:   dw 0            ; mouse_y at drag start
+sb_drag_start_pos:  dw 0            ; position at drag start
+sb_hit_x:           dw 0            ; absolute scrollbar X
+sb_hit_y:           dw 0            ; absolute scrollbar Y
+sb_hit_track_h:     dw 0            ; track height
+sb_hit_pos:         dw 0            ; current position
+sb_hit_max:         dw 0            ; max range
+sb_hit_travel:      dw 0            ; travel pixels (usable - thumb_h)
+sb_hit_thumb_h:     dw 0            ; computed thumb height
+
+; Save dialog state (API 98)
+sdlg_title:         db 'Save File', 0
+sdlg_str_save:      db 'Save', 0
+sdlg_str_name:      db 'Name:', 0
+sdlg_str_overwrite: db 'Overwrite?', 0
+sdlg_str_yes:       db 'Yes', 0
+sdlg_str_no:        db 'No', 0
+sdlg_str_exists:    db ' exists', 0
+sdlg_input_buf:     times 13 db 0   ; Filename buffer (12 chars + null)
+sdlg_input_len:     db 0            ; Current input length
+sdlg_tf_h:          dw 0            ; Textfield row height
+sdlg_list_y_off:    dw 0            ; Y offset for file list (below textfield)
+sdlg_confirming:    db 0            ; 1 = showing overwrite confirmation
+
 ; ============================================================================
 ; Padding
 ; ============================================================================
 
-; Pad to 40KB (80 sectors) - expanded for cursor save/restore (Build 311)
-times 40960 - ($ - $$) db 0
+; Pad to 44KB (88 sectors) - expanded for file save dialog + scrollbar hit (Build 369)
+times 45056 - ($ - $$) db 0

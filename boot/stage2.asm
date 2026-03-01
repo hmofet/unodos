@@ -11,7 +11,7 @@
 ; ============================================================================
 
 KERNEL_SEGMENT  equ 0x1000          ; Kernel loads at 0x1000:0000 (64KB mark)
-KERNEL_SECTORS  equ 80              ; 40KB kernel (expanded for cursor save/restore - Build 311)
+KERNEL_SECTORS  equ 88              ; 44KB kernel (expanded for save dialog + scrollbar hit - Build 369)
 KERNEL_START    equ 6               ; Kernel starts at sector 6 (after 4-sector stage2 + 1 reserved)
 KERNEL_SIG      equ 0x4B55          ; 'UK' signature for kernel
 
