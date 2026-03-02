@@ -102,7 +102,7 @@ TITLEBAR_HEIGHT         equ 10
 
 ; Menu bar layout
 FILE_LABEL_X            equ 4
-FILE_LABEL_W            equ 30
+FILE_LABEL_W            equ 40
 FNAME_X                 equ 80
 BTN_H                   equ 10
 
@@ -285,10 +285,10 @@ entry:
 ; Edit Mode Click Handling
 ; ============================================================================
 .click_edit:
-    ; File menu label hit-test
-    mov bx, FILE_LABEL_X
+    ; File menu label hit-test (wider hitbox for easier clicking)
+    mov bx, 0
     mov cx, MENUBAR_Y
-    mov dx, FILE_LABEL_W
+    mov dx, FILE_LABEL_X + FILE_LABEL_W
     mov si, MENUBAR_H
     mov ah, API_HIT_TEST
     int 0x80
