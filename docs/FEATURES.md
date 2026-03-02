@@ -140,8 +140,6 @@
 - **MKBOOT.BIN** - Boot floppy creator (floppy-to-floppy copy)
 - **SETTINGS.BIN** - System settings (font, theme colors)
 - **TETRIS.BIN** - Dostris (Tetris clone with Korobeiniki music)
-- **DEMO.BIN** - UI widget showcase demo
-- **APITEST.BIN** - API test suite
 - **HELLO.BIN** - Hello World test application
 
 ---
