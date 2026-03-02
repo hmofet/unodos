@@ -38,6 +38,8 @@ API_GET_SCREEN_INFO     equ 82
 API_CTX_MENU_OPEN       equ 87
 API_CTX_MENU_CLOSE      equ 88
 API_CTX_MENU_HIT        equ 89
+API_FILLED_RECT_COLOR   equ 67
+API_RECT_COLOR          equ 68
 
 ; Launcher modes
 MODE_NORMAL             equ 0
@@ -1290,19 +1292,91 @@ handle_click:
 open_desktop_menu:
     pusha
 
-    ; Patch the lock/unlock string based on current state
+    ; Patch the lock/unlock pointer based on current state
     call patch_lock_string
 
-    ; Open popup menu (no draw_context = absolute coords, no translation)
+    ; Clamp menu position same way kernel does, so we know where it ends up
+    ; X: min(BX, screen_width - menu_width)
+    mov ax, [cs:scr_width]
+    sub ax, CTX_MENU_W
+    cmp bx, ax
+    jbe .odm_x_ok
+    mov bx, ax
+.odm_x_ok:
+    ; Y: min(CX, screen_height - items * 10)
+    mov ax, [cs:scr_height]
+    sub ax, CTX_MENU_ITEMS * 10
+    cmp cx, ax
+    jbe .odm_y_ok
+    mov cx, ax
+.odm_y_ok:
+    mov [cs:menu_pos_x], bx
+    mov [cs:menu_pos_y], cx
+
+    ; Open popup menu
     mov si, ctx_menu_strings
     mov dl, CTX_MENU_ITEMS
     mov dh, CTX_MENU_W
     mov ah, API_CTX_MENU_OPEN
     int 0x80
 
+    ; Draw graphical checkbox on the last menu item (item 4)
+    call draw_menu_checkbox
+
     mov byte [cs:launcher_mode], MODE_CONTEXT_MENU
 
     popa
+    ret
+
+menu_pos_x: dw 0
+menu_pos_y: dw 0
+
+; ============================================================================
+; draw_menu_checkbox - Draw graphical checkbox on the 5th menu item
+; Uses saved menu_pos_x/menu_pos_y to compute position
+; ============================================================================
+draw_menu_checkbox:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Checkbox position: item 4 (0-indexed), each item 10px tall
+    ; X = menu_x + 5, Y = menu_y + 4*10 + 2
+    mov bx, [cs:menu_pos_x]
+    add bx, 5
+    mov cx, [cs:menu_pos_y]
+    add cx, 42                      ; 4*10 + 2
+
+    ; Draw black outline rectangle (7x7)
+    mov dx, 7                       ; Width
+    mov si, 7                       ; Height
+    xor al, al                      ; Color 0 = black
+    mov ah, API_RECT_COLOR
+    int 0x80
+
+    ; If checked (icons_unlocked), draw filled inner square
+    cmp byte [cs:icons_unlocked], 0
+    je .dmc_done
+
+    ; Draw black filled square inside (3x3, inset by 2)
+    mov bx, [cs:menu_pos_x]
+    add bx, 7                       ; 5 + 2
+    mov cx, [cs:menu_pos_y]
+    add cx, 44                      ; 42 + 2
+    mov dx, 3
+    mov si, 3
+    xor al, al                      ; Black
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+.dmc_done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; ============================================================================
@@ -2159,8 +2233,8 @@ str_auto_arrange:   db 'Auto Arrange', 0
 str_sort_az:        db 'Sort A-Z', 0
 str_sort_za:        db 'Sort Z-A', 0
 str_snap_grid:      db 'Snap to Grid', 0
-str_unlock:         db '[ ] Unlocked', 0
-str_lock:           db '[X] Unlocked', 0
+str_unlock:         db '  Unlocked', 0
+str_lock:           db '  Unlocked', 0
 
 ; Context menu / drag state
 launcher_mode:      db 0        ; 0=normal, 1=context_menu, 2=icon_drag
