@@ -8310,9 +8310,6 @@ widget_draw_textfield:
     cmp ax, bx
     jbe .tf_no_scroll
     sub ax, bx                      ; AX = overflow amount
-    xor bx, bx
-    mov bl, [draw_font_advance]
-    add ax, bx                      ; Keep one char margin at right
     mov [wgt_scroll_off], ax
     jmp .tf_scroll_done
 .tf_no_scroll:
