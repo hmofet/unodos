@@ -355,14 +355,15 @@ draw_road:
     mov ah, API_DRAW_HLINE
     int 0x80
 
-    ; Draw road strips from horizon down
-    ; For each strip: compute road width and position from perspective
+    ; Initialize curve accumulator for this frame
+    mov word [cs:curve_accum], 0
 
-    mov word [cs:strip_y], HORIZON_Y + 1
+    ; Draw road strips bottom-to-top (near to far) for curve accumulation
+    mov word [cs:strip_y], 194
 
 .strip_loop:
-    cmp word [cs:strip_y], 195      ; Stop before car area
-    jge .strips_done
+    cmp word [cs:strip_y], HORIZON_Y
+    jle .strips_done
 
     ; Compute Z depth: Z = depth_scale / (strip_y - HORIZON_Y)
     ; depth_scale = 4800 (tuned for good perspective)
@@ -389,11 +390,23 @@ draw_road:
 .width_ok:
     mov [cs:strip_hw], ax
 
-    ; Road center = 160 + curve_offset
-    ; curve_offset = current_curve * Z / 256
-    mov ax, [cs:current_curve]
-    imul word [cs:strip_z]
-    sar ax, 8
+    ; Per-strip curve lookup: which track segment does this strip see?
+    mov ax, [cs:camera_z]
+    add ax, [cs:strip_z]
+    xor dx, dx
+    mov bx, SEGMENT_LENGTH
+    div bx
+    and ax, TRACK_SEGMENTS - 1      ; Modulo (power of 2)
+    shl ax, 1                       ; Word index
+    mov bx, ax
+    mov ax, [cs:track_data + bx]
+
+    ; Accumulate curve offset (builds progressive bend)
+    add [cs:curve_accum], ax
+
+    ; Road center = 160 + (curve_accum >> 6)
+    mov ax, [cs:curve_accum]
+    sar ax, 6
     add ax, 160
     mov [cs:strip_cx], ax
 
@@ -508,7 +521,7 @@ draw_road:
     int 0x80
 
 .next_strip:
-    inc word [cs:strip_y]
+    dec word [cs:strip_y]
     jmp .strip_loop
 
 .strips_done:
@@ -730,13 +743,13 @@ draw_game_over:
 ; ============================================================================
 track_data:
     dw 0, 0, 0, 0                  ; Segments 0-3: straight
-    dw 10, 20, 30, 30              ; Segments 4-7: gentle right
-    dw 20, 10, 0, 0                ; Segments 8-11: straighten
-    dw -15, -30, -40, -40          ; Segments 12-15: left curve
-    dw -30, -15, 0, 0              ; Segments 16-19: straighten
-    dw 0, 0, 5, 15                 ; Segments 20-23: gentle right
-    dw 25, 35, 35, 25              ; Segments 24-27: sharp right
-    dw 10, -10, -25, -15           ; Segments 28-31: S-curve
+    dw 20, 40, 50, 50              ; Segments 4-7: right curve
+    dw 30, 15, 0, 0                ; Segments 8-11: straighten
+    dw -25, -50, -55, -55          ; Segments 12-15: sharp left
+    dw -40, -20, 0, 0              ; Segments 16-19: straighten
+    dw 0, 0, 15, 30                ; Segments 20-23: gentle right
+    dw 45, 55, 55, 45              ; Segments 24-27: sharp right
+    dw 20, -20, -45, -25           ; Segments 28-31: S-curve
 
 ; ============================================================================
 ; Data
@@ -765,6 +778,7 @@ timer_counter:  dw 0                ; Tick counter for timer
 
 ; Current track state
 current_curve:  dw 0                ; Current curve value
+curve_accum:    dw 0                ; Per-frame curve accumulator
 
 ; Rendering scratch
 strip_y:        dw 0
