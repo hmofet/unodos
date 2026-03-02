@@ -8315,6 +8315,10 @@ widget_draw_textfield:
 .tf_no_scroll:
     mov word [wgt_scroll_off], 0
 .tf_scroll_done:
+    ; Restore registers clobbered by scroll computation (mul clobbers DX, BX was used as scratch)
+    mov bx, [btn_x]
+    mov cx, [btn_y]
+    mov dx, [btn_w]
     ; Field height = font_height + 4
     xor ah, ah
     mov al, [draw_font_height]
