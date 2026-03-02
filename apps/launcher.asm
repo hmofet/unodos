@@ -35,6 +35,18 @@ API_GET_TICK            equ 63
 API_DELAY_TICKS         equ 73
 API_GET_TASK_INFO       equ 74
 API_GET_SCREEN_INFO     equ 82
+API_CTX_MENU_OPEN       equ 87
+API_CTX_MENU_CLOSE      equ 88
+API_CTX_MENU_HIT        equ 89
+
+; Launcher modes
+MODE_NORMAL             equ 0
+MODE_CONTEXT_MENU       equ 1
+MODE_ICON_DRAG          equ 2
+
+; Context menu
+CTX_MENU_W              equ 100
+CTX_MENU_ITEMS          equ 5
 
 ; Event types
 EVENT_KEY_PRESS         equ 1
@@ -164,27 +176,90 @@ entry:
     mov ah, API_MOUSE_GET_STATE
     int 0x80
     ; BX=X, CX=Y, DL=buttons
+    mov [cs:ml_mouse_x], bx
+    mov [cs:ml_mouse_y], cx
+    mov [cs:ml_mouse_btn], dl
 
-    ; Check for left button transition (released -> pressed)
-    mov al, dl
+    ; Save previous button state, update current
+    mov al, [cs:prev_buttons]
+    mov [cs:ml_prev_btn], al
+    mov [cs:prev_buttons], dl
+
+    ; --- Mode dispatch ---
+    cmp byte [cs:launcher_mode], MODE_CONTEXT_MENU
+    je .mode_context_menu
+    cmp byte [cs:launcher_mode], MODE_ICON_DRAG
+    je .mode_icon_drag
+
+    ; --- Normal mode: left-click detection ---
+    mov al, [cs:ml_mouse_btn]
     and al, 0x01                    ; Isolate left button
-    mov ah, [cs:prev_buttons]
-    mov [cs:prev_buttons], dl       ; Save current state
+    mov ah, [cs:ml_prev_btn]
     and ah, 0x01
-    ; AH = prev left button, AL = current left button
     cmp al, 1
-    jne .no_click
+    jne .no_left_click
     cmp ah, 0
-    jne .no_click                   ; Not a transition
+    jne .no_left_click              ; Not a rising edge
 
     ; Left button just pressed - check if click is over a window
+    mov bx, [cs:ml_mouse_x]
+    mov cx, [cs:ml_mouse_y]
     mov ah, API_POINT_OVER_WINDOW
-    int 0x80                        ; BX=X, CX=Y preserved
-    jnc .no_click                   ; CF=0 → over a window, skip desktop click
+    int 0x80
+    jnc .no_left_click              ; CF=0 → over a window, skip desktop click
 
+    mov bx, [cs:ml_mouse_x]
+    mov cx, [cs:ml_mouse_y]
     call handle_click               ; BX=mouse X, CX=mouse Y
 
+.no_left_click:
+    ; --- Normal mode: right-click detection ---
+    mov al, [cs:ml_mouse_btn]
+    and al, 0x02                    ; Isolate right button
+    mov ah, [cs:ml_prev_btn]
+    and ah, 0x02
+    cmp al, 2
+    jne .no_right_click
+    cmp ah, 0
+    jne .no_right_click             ; Not a rising edge
+
+    ; Right button just pressed - check if over a window
+    mov bx, [cs:ml_mouse_x]
+    mov cx, [cs:ml_mouse_y]
+    mov ah, API_POINT_OVER_WINDOW
+    int 0x80
+    jnc .no_right_click             ; Over a window — skip
+
+    ; Open desktop context menu
+    mov bx, [cs:ml_mouse_x]
+    mov cx, [cs:ml_mouse_y]
+    call open_desktop_menu
+
+.no_right_click:
 .no_click:
+    jmp .after_mouse
+
+.mode_context_menu:
+    ; In context menu mode: left click → hit-test menu
+    mov al, [cs:ml_mouse_btn]
+    and al, 0x01
+    mov ah, [cs:ml_prev_btn]
+    and ah, 0x01
+    cmp al, 1
+    jne .after_mouse
+    cmp ah, 0
+    jne .after_mouse
+
+    ; Left click while menu open → hit-test
+    call handle_menu_click
+    jmp .after_mouse
+
+.mode_icon_drag:
+    ; In drag mode: track mouse, release → drop icon
+    call handle_icon_drag
+    jmp .after_mouse
+
+.after_mouse:
     ; Floppy swap polling removed — caused constant seeking on real hardware
     ; User clicks Refresh icon to rescan disk instead
 
@@ -194,6 +269,13 @@ entry:
     jc .no_event
     cmp al, EVENT_KEY_PRESS
     jne .no_event
+
+    ; Dismiss context menu on any keypress
+    cmp byte [cs:launcher_mode], MODE_CONTEXT_MENU
+    jne .kb_not_menu
+    call dismiss_context_menu
+    jmp .no_event
+.kb_not_menu:
 
     ; Handle keyboard
     cmp dl, 13                      ; Enter?
@@ -658,28 +740,10 @@ register_icon:
 
     mov [cs:.ri_slot], al
 
-    ; Calculate grid position
-    xor ah, ah
-    mov bl, [cs:grid_cols]
-    div bl                          ; AL = row, AH = col
-
-    ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
-    push ax
-    mov al, ah                      ; AL = col
-    xor ah, ah
-    mov bl, [cs:col_width]
-    mul bl                          ; AX = col * 80
-    add ax, [cs:icon_x_offset]
-    mov [cs:.ri_x], ax
-    pop ax
-
-    ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
-    xor ah, ah                      ; AL = row
-    mov bl, [cs:row_height]
-    mul bl                          ; AX = row * 80
-    add ax, [cs:grid_start_y]
-    add ax, [cs:icon_y_offset]
-    mov [cs:.ri_y], ax
+    ; Get icon position (grid or custom)
+    call get_icon_position          ; AL=slot → BX=X, CX=Y
+    mov [cs:.ri_x], bx
+    mov [cs:.ri_y], cx
 
     ; Build 76-byte data block: 64B bitmap + 12B name
     ; Point SI to bitmap for this slot
@@ -967,28 +1031,10 @@ draw_single_icon:
 
     mov [cs:.dsi_slot], al
 
-    ; Calculate grid position
-    xor ah, ah
-    mov bl, [cs:grid_cols]
-    div bl                          ; AL = row, AH = col
-
-    ; Icon X = col * COL_WIDTH + ICON_X_OFFSET
-    push ax
-    mov al, ah
-    xor ah, ah
-    mov bl, [cs:col_width]
-    mul bl
-    add ax, [cs:icon_x_offset]
-    mov [cs:.dsi_x], ax
-    pop ax
-
-    ; Icon Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
-    xor ah, ah
-    mov bl, [cs:row_height]
-    mul bl
-    add ax, [cs:grid_start_y]
-    add ax, [cs:icon_y_offset]
-    mov [cs:.dsi_y], ax
+    ; Get icon position (grid or custom)
+    call get_icon_position          ; AL=slot → BX=X, CX=Y
+    mov [cs:.dsi_x], bx
+    mov [cs:.dsi_y], cx
 
     ; Draw icon bitmap using API 39
     mov bx, [cs:.dsi_x]
@@ -1125,31 +1171,13 @@ handle_click:
     cmp dl, [cs:icon_count]
     jae .hc_tested
 
-    ; Calculate icon hitbox for slot DL
-    mov al, dl
-    xor ah, ah
+    ; Calculate icon hitbox for slot DL using get_icon_position
     push dx
-    mov bl, [cs:grid_cols]
-    div bl                          ; AL = row, AH = col
-
-    ; Hitbox X = col * COL_WIDTH + ICON_X_OFFSET - 4 (centered on icon area)
-    push ax
-    mov al, ah
-    xor ah, ah
-    mov bl, [cs:col_width]
-    mul bl
-    add ax, [cs:icon_x_offset]
-    sub ax, 4                       ; Slightly wider than 16px icon
-    mov [cs:.hc_hx], ax
-    pop ax
-
-    ; Hitbox Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
-    xor ah, ah
-    mov bl, [cs:row_height]
-    mul bl
-    add ax, [cs:grid_start_y]
-    add ax, [cs:icon_y_offset]
-    mov [cs:.hc_hy], ax
+    mov al, dl
+    call get_icon_position          ; BX=icon_x, CX=icon_y
+    sub bx, 4                       ; Slightly wider than icon
+    mov [cs:.hc_hx], bx
+    mov [cs:.hc_hy], cx
     pop dx
 
     ; Check: hx <= mx < hx + hitbox_width (icon + padding)
@@ -1188,6 +1216,24 @@ handle_click:
     cmp al, 0xFF
     je .hc_deselect
 
+    ; If icons unlocked, start drag instead of select/launch
+    cmp byte [cs:icons_unlocked], 0
+    je .hc_normal_click
+
+    ; Start icon drag
+    mov [cs:drag_icon], al
+    mov byte [cs:launcher_mode], MODE_ICON_DRAG
+    ; Compute drag offset (mouse pos - icon pos)
+    call get_icon_position          ; Returns BX=icon_x, CX=icon_y for slot AL
+    mov ax, [cs:.hc_mx]
+    sub ax, bx
+    mov [cs:drag_off_x], ax
+    mov ax, [cs:.hc_my]
+    sub ax, cx
+    mov [cs:drag_off_y], ax
+    jmp .hc_done
+
+.hc_normal_click:
     ; Check for double-click
     cmp al, [cs:last_click_icon]
     jne .hc_single_click
@@ -1238,6 +1284,477 @@ handle_click:
 .hc_hit: db 0xFF
 
 ; ============================================================================
+; open_desktop_menu - Open right-click context menu on desktop
+; Input: BX = mouse X, CX = mouse Y (screen-absolute)
+; ============================================================================
+open_desktop_menu:
+    pusha
+
+    ; Patch the lock/unlock string based on current state
+    call patch_lock_string
+
+    ; Open popup menu (no draw_context = absolute coords, no translation)
+    mov si, ctx_menu_strings
+    mov dl, CTX_MENU_ITEMS
+    mov dh, CTX_MENU_W
+    mov ah, API_CTX_MENU_OPEN
+    int 0x80
+
+    mov byte [cs:launcher_mode], MODE_CONTEXT_MENU
+
+    popa
+    ret
+
+; ============================================================================
+; handle_menu_click - Hit-test context menu and dispatch action
+; ============================================================================
+handle_menu_click:
+    pusha
+
+    ; Hit-test the menu
+    mov ah, API_CTX_MENU_HIT
+    int 0x80
+    push ax                         ; Save item index
+
+    ; Always close menu
+    mov ah, API_CTX_MENU_CLOSE
+    int 0x80
+
+    pop ax
+    mov byte [cs:launcher_mode], MODE_NORMAL
+
+    ; Dispatch by item index
+    cmp al, 0xFF
+    je .hmc_dismiss                 ; Click outside → just dismiss
+    cmp al, 0
+    je .hmc_auto_arrange
+    cmp al, 1
+    je .hmc_sort_az
+    cmp al, 2
+    je .hmc_sort_za
+    cmp al, 3
+    je .hmc_snap_to_grid
+    cmp al, 4
+    je .hmc_toggle_lock
+    jmp .hmc_dismiss
+
+.hmc_auto_arrange:
+    call do_auto_arrange
+    jmp .hmc_done
+.hmc_sort_az:
+    mov byte [cs:sort_descending], 0
+    call do_sort
+    jmp .hmc_done
+.hmc_sort_za:
+    mov byte [cs:sort_descending], 1
+    call do_sort
+    jmp .hmc_done
+.hmc_snap_to_grid:
+    call do_snap_to_grid
+    jmp .hmc_done
+.hmc_toggle_lock:
+    call do_toggle_lock
+    jmp .hmc_done
+.hmc_dismiss:
+    ; Redraw to clean up menu remnants
+    call redraw_desktop
+    call repaint_all_windows
+.hmc_done:
+    popa
+    ret
+
+; ============================================================================
+; dismiss_context_menu - Close menu and return to normal mode
+; ============================================================================
+dismiss_context_menu:
+    pusha
+    mov ah, API_CTX_MENU_CLOSE
+    int 0x80
+    mov byte [cs:launcher_mode], MODE_NORMAL
+    call redraw_desktop
+    call repaint_all_windows
+    popa
+    ret
+
+; ============================================================================
+; do_auto_arrange - Reset all icons to grid positions
+; ============================================================================
+do_auto_arrange:
+    pusha
+    ; Clear custom positions
+    call clear_icon_positions
+    mov byte [cs:icons_unlocked], 0
+    call register_all_icons
+    call redraw_desktop
+    call repaint_all_windows
+    popa
+    ret
+
+; ============================================================================
+; do_snap_to_grid - Snap icons to their grid positions
+; ============================================================================
+do_snap_to_grid:
+    pusha
+    call clear_icon_positions
+    call register_all_icons
+    call redraw_desktop
+    call repaint_all_windows
+    popa
+    ret
+
+; ============================================================================
+; do_toggle_lock - Toggle icons_unlocked flag
+; ============================================================================
+do_toggle_lock:
+    pusha
+    xor byte [cs:icons_unlocked], 1
+    ; If just locked, snap to grid
+    cmp byte [cs:icons_unlocked], 0
+    jne .dtl_done
+    call clear_icon_positions
+    call register_all_icons
+    call redraw_desktop
+    call repaint_all_windows
+.dtl_done:
+    popa
+    ret
+
+; ============================================================================
+; patch_lock_string - Set lock/unlock pointer in menu string table
+; ============================================================================
+patch_lock_string:
+    push ax
+    mov ax, str_unlock              ; Default: "Unlock Icons"
+    cmp byte [cs:icons_unlocked], 0
+    je .pls_set
+    mov ax, str_lock                ; If unlocked: show "Lock Icons"
+.pls_set:
+    mov [cs:ctx_menu_lock_ptr], ax
+    pop ax
+    ret
+
+; ============================================================================
+; get_icon_position - Get the display position for an icon slot
+; Input: AL = icon slot
+; Output: BX = icon X, CX = icon Y
+; If unlocked and custom position set, returns custom position.
+; Otherwise returns computed grid position.
+; ============================================================================
+get_icon_position:
+    push ax
+    push dx
+    push si
+
+    mov [cs:.gip_slot], al
+
+    ; Check if custom position exists
+    cmp byte [cs:icons_unlocked], 0
+    je .gip_grid
+
+    ; Check icon_positions[slot]
+    xor ah, ah
+    shl ax, 2                       ; * 4
+    add ax, icon_positions
+    mov si, ax
+    mov bx, [cs:si]                 ; X
+    mov cx, [cs:si+2]               ; Y
+    ; If both zero, use grid instead
+    mov ax, bx
+    or ax, cx
+    jnz .gip_done
+
+.gip_grid:
+    ; Compute grid position from slot index
+    mov al, [cs:.gip_slot]
+    xor ah, ah
+    mov bl, [cs:grid_cols]
+    div bl                          ; AL = row, AH = col
+
+    ; X = col * COL_WIDTH + ICON_X_OFFSET
+    push ax
+    mov al, ah
+    xor ah, ah
+    mov bl, [cs:col_width]
+    mul bl
+    add ax, [cs:icon_x_offset]
+    mov bx, ax
+    pop ax
+
+    ; Y = GRID_START_Y + row * ROW_HEIGHT + ICON_Y_OFFSET
+    xor ah, ah
+    mov cl, [cs:row_height]
+    mul cl
+    add ax, [cs:grid_start_y]
+    add ax, [cs:icon_y_offset]
+    mov cx, ax
+
+.gip_done:
+    pop si
+    pop dx
+    pop ax
+    ret
+
+.gip_slot: db 0
+
+; ============================================================================
+; clear_icon_positions - Zero out custom icon positions array
+; ============================================================================
+clear_icon_positions:
+    pusha
+    mov di, icon_positions
+    mov cx, MAX_ICON_ALLOC * 4
+.cip_loop:
+    mov byte [cs:di], 0
+    inc di
+    loop .cip_loop
+    popa
+    ret
+
+; ============================================================================
+; do_sort - Bubble sort icons by name
+; Uses sort_descending: 0=A-Z, 1=Z-A
+; ============================================================================
+do_sort:
+    pusha
+
+    ; Need at least 2 icons to sort
+    mov al, [cs:icon_count]
+    cmp al, 2
+    jb .ds_done
+
+    ; Outer loop: i from 0 to icon_count-2
+    mov byte [cs:.ds_i], 0
+.ds_outer:
+    mov al, [cs:icon_count]
+    dec al                          ; icon_count - 1
+    cmp byte [cs:.ds_i], al
+    jae .ds_sorted
+
+    ; Inner loop: j from 0 to icon_count - i - 2
+    mov byte [cs:.ds_j], 0
+.ds_inner:
+    mov al, [cs:icon_count]
+    dec al
+    sub al, [cs:.ds_i]
+    dec al                          ; icon_count - i - 2
+    cmp byte [cs:.ds_j], al
+    ja .ds_inner_done
+
+    ; Compare icon_names[j] vs icon_names[j+1]
+    mov al, [cs:.ds_j]
+    xor ah, ah
+    mov cl, 12
+    mul cl                          ; AX = j * 12
+    add ax, icon_names
+    mov si, ax                      ; SI = &icon_names[j]
+
+    mov al, [cs:.ds_j]
+    inc al
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov di, ax                      ; DI = &icon_names[j+1]
+
+    ; Byte-by-byte comparison (up to 12 chars)
+    mov cx, 12
+    mov byte [cs:.ds_need_swap], 0
+.ds_cmp_loop:
+    mov al, [cs:si]
+    mov bl, [cs:di]
+    cmp al, bl
+    jne .ds_cmp_diff
+    or al, al                       ; Both null → equal
+    jz .ds_cmp_equal
+    inc si
+    inc di
+    loop .ds_cmp_loop
+    jmp .ds_cmp_equal               ; All 12 bytes equal
+
+.ds_cmp_diff:
+    ; AL = names[j][k], BL = names[j+1][k]
+    ; For A-Z (ascending): swap if AL > BL
+    ; For Z-A (descending): swap if AL < BL
+    cmp byte [cs:sort_descending], 0
+    jne .ds_desc
+    ; Ascending: swap if AL > BL
+    cmp al, bl
+    jbe .ds_cmp_equal
+    mov byte [cs:.ds_need_swap], 1
+    jmp .ds_cmp_equal
+.ds_desc:
+    ; Descending: swap if AL < BL
+    cmp al, bl
+    jae .ds_cmp_equal
+    mov byte [cs:.ds_need_swap], 1
+
+.ds_cmp_equal:
+    cmp byte [cs:.ds_need_swap], 0
+    je .ds_no_swap
+
+    ; Swap all parallel arrays for slots j and j+1
+    mov al, [cs:.ds_j]
+    call swap_icon_slots
+
+.ds_no_swap:
+    inc byte [cs:.ds_j]
+    jmp .ds_inner
+
+.ds_inner_done:
+    inc byte [cs:.ds_i]
+    jmp .ds_outer
+
+.ds_sorted:
+    ; Clear custom positions and re-register
+    call clear_icon_positions
+    call register_all_icons
+    call redraw_desktop
+    call repaint_all_windows
+
+.ds_done:
+    popa
+    ret
+
+.ds_i:          db 0
+.ds_j:          db 0
+.ds_need_swap:  db 0
+
+; ============================================================================
+; swap_icon_slots - Swap all data for icon slot AL and slot AL+1
+; Input: AL = first slot index
+; ============================================================================
+swap_icon_slots:
+    pusha
+
+    mov [cs:.sis_slot], al
+
+    ; 1. Swap app_info (16 bytes per slot)
+    xor ah, ah
+    shl ax, 4                       ; * 16
+    add ax, app_info
+    mov si, ax
+    add ax, 16
+    mov di, ax
+    mov cx, 16
+    call swap_mem
+
+    ; 2. Swap icon_bitmaps (64 bytes per slot)
+    mov al, [cs:.sis_slot]
+    xor ah, ah
+    shl ax, 6                       ; * 64
+    add ax, icon_bitmaps
+    mov si, ax
+    add ax, 64
+    mov di, ax
+    mov cx, 64
+    call swap_mem
+
+    ; 3. Swap icon_names (12 bytes per slot)
+    mov al, [cs:.sis_slot]
+    xor ah, ah
+    mov cl, 12
+    mul cl
+    add ax, icon_names
+    mov si, ax
+    add ax, 12
+    mov di, ax
+    mov cx, 12
+    call swap_mem
+
+    ; 4. Swap is_refresh (1 byte per slot)
+    mov al, [cs:.sis_slot]
+    xor ah, ah
+    add ax, is_refresh
+    mov si, ax
+    inc ax
+    mov di, ax
+    mov cx, 1
+    call swap_mem
+
+    popa
+    ret
+
+.sis_slot: db 0
+
+; ============================================================================
+; swap_mem - XOR-swap CX bytes at CS:SI and CS:DI
+; ============================================================================
+swap_mem:
+    push ax
+    push cx
+    push si
+    push di
+.sm_loop:
+    mov al, [cs:si]
+    xor al, [cs:di]
+    mov [cs:si], al
+    xor [cs:di], al
+    xor al, [cs:di]
+    mov [cs:si], al
+    inc si
+    inc di
+    loop .sm_loop
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; ============================================================================
+; handle_icon_drag - Process icon drag (called each frame while dragging)
+; ============================================================================
+handle_icon_drag:
+    pusha
+
+    ; Check if left button still held
+    mov al, [cs:ml_mouse_btn]
+    test al, 0x01
+    jnz .hid_tracking
+
+    ; Button released → drop icon at current mouse position
+    mov al, [cs:drag_icon]
+    cmp al, 0xFF
+    je .hid_cancel
+
+    ; Calculate new icon position from mouse position
+    xor ah, ah
+    shl ax, 2                       ; * 4 (2 words per slot)
+    add ax, icon_positions
+    mov di, ax
+
+    ; Store mouse position minus drag offset as new icon position
+    mov ax, [cs:ml_mouse_x]
+    sub ax, [cs:drag_off_x]
+    ; Clamp to screen bounds
+    cmp ax, 0
+    jge .hid_x_ok
+    xor ax, ax
+.hid_x_ok:
+    mov [cs:di], ax                 ; icon_positions[slot].x
+    mov ax, [cs:ml_mouse_y]
+    sub ax, [cs:drag_off_y]
+    cmp ax, 0
+    jge .hid_y_ok
+    xor ax, ax
+.hid_y_ok:
+    mov [cs:di+2], ax               ; icon_positions[slot].y
+
+    ; Re-register icon at new position and redraw
+    mov al, [cs:drag_icon]
+    call register_icon
+    call redraw_desktop
+    call repaint_all_windows
+
+.hid_cancel:
+    mov byte [cs:drag_icon], 0xFF
+    mov byte [cs:launcher_mode], MODE_NORMAL
+
+.hid_tracking:
+    ; Still dragging — nothing to draw (teleport approach)
+    popa
+    ret
+
+; ============================================================================
 ; select_icon - Select an icon (highlight it)
 ; Input: AL = icon slot to select
 ; ============================================================================
@@ -1286,30 +1803,12 @@ clear_icon_area:
     push dx
     push si
 
-    ; Calculate position
-    xor ah, ah
-    push ax
-    mov bl, [cs:grid_cols]
-    div bl
-
-    push ax
-    mov al, ah
-    xor ah, ah
-    mov bl, [cs:col_width]
-    mul bl
-    add ax, [cs:icon_x_offset]
-    sub ax, 4
-    mov [cs:.cia_x], ax
-    pop ax
-
-    xor ah, ah
-    mov bl, [cs:row_height]
-    mul bl
-    add ax, [cs:grid_start_y]
-    add ax, [cs:icon_y_offset]
-    sub ax, 4
-    mov [cs:.cia_y], ax
-    pop ax
+    ; Get icon position (grid or custom)
+    call get_icon_position          ; AL=slot → BX=X, CX=Y
+    sub bx, 4
+    sub cx, 4
+    mov [cs:.cia_x], bx
+    mov [cs:.cia_y], cx
 
     ; Clear area — icon visual size + padding
     mov bx, [cs:.cia_x]
@@ -1554,6 +2053,12 @@ prev_buttons:   db 0
 last_click_tick: dw 0
 last_click_icon: db 0xFF
 
+; Mouse temp state (used during main loop processing)
+ml_mouse_x:     dw 0
+ml_mouse_y:     dw 0
+ml_mouse_btn:   db 0
+ml_prev_btn:    db 0
+
 ; Floppy polling
 last_poll_tick: dw 0
 
@@ -1640,6 +2145,36 @@ is_refresh:     times MAX_ICON_ALLOC db 0
 
 ; App handle for launched app
 app_handle:     dw 0
+
+; Desktop context menu string table (pointers to string labels)
+ctx_menu_strings:
+    dw str_auto_arrange
+    dw str_sort_az
+    dw str_sort_za
+    dw str_snap_grid
+ctx_menu_lock_ptr:
+    dw str_unlock                   ; Patched to str_lock when unlocked
+
+str_auto_arrange:   db 'Auto Arrange', 0
+str_sort_az:        db 'Sort A-Z', 0
+str_sort_za:        db 'Sort Z-A', 0
+str_snap_grid:      db 'Snap to Grid', 0
+str_unlock:         db 'Unlock Icons', 0
+str_lock:           db 'Lock Icons', 0
+
+; Context menu / drag state
+launcher_mode:      db 0        ; 0=normal, 1=context_menu, 2=icon_drag
+icons_unlocked:     db 0        ; 0=locked (grid), 1=unlocked (free drag)
+prev_right_btn:     db 0        ; For right-click edge detection
+sort_descending:    db 0        ; 0=A-Z, 1=Z-A
+
+; Drag state
+drag_icon:          db 0xFF     ; Icon slot being dragged
+drag_off_x:         dw 0        ; Offset from icon origin to click point
+drag_off_y:         dw 0
+
+; Per-icon custom positions (X, Y words per slot)
+icon_positions:     times (MAX_ICON_ALLOC * 4) db 0
 
 ; Build info strings (auto-generated from BUILD_NUMBER and VERSION)
 %include "kernel/build_info.inc"
