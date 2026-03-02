@@ -8301,6 +8301,23 @@ widget_draw_textfield:
     mov [btn_w], dx
     mov [wgt_cursor_pos], di
     mov [wgt_text_ptr], si          ; Save text pointer
+    ; Compute horizontal scroll offset to keep cursor visible
+    xor ax, ax
+    mov al, [draw_font_advance]
+    mul word [wgt_cursor_pos]       ; AX = cursor_pos * font_advance
+    mov bx, [btn_w]
+    sub bx, 4                       ; BX = field interior width
+    cmp ax, bx
+    jbe .tf_no_scroll
+    sub ax, bx                      ; AX = overflow amount
+    xor bx, bx
+    mov bl, [draw_font_advance]
+    add ax, bx                      ; Keep one char margin at right
+    mov [wgt_scroll_off], ax
+    jmp .tf_scroll_done
+.tf_no_scroll:
+    mov word [wgt_scroll_off], 0
+.tf_scroll_done:
     ; Field height = font_height + 4
     xor ah, ah
     mov al, [draw_font_height]
@@ -8360,6 +8377,7 @@ widget_draw_textfield:
     mov si, [wgt_text_ptr]
     mov bx, [btn_x]
     add bx, 2
+    sub bx, [wgt_scroll_off]       ; Apply horizontal scroll
     mov cx, [btn_y]
     add cx, 2
     test byte [btn_flags], 2
@@ -8386,6 +8404,7 @@ widget_draw_textfield:
     mov [wgt_scratch], cx
     mov bx, [btn_x]
     add bx, 2
+    sub bx, [wgt_scroll_off]       ; Apply horizontal scroll
     xor di, di
 .tf_draw_dots:
     cmp di, [wgt_scratch]
@@ -8406,10 +8425,11 @@ widget_draw_textfield:
     ; Draw cursor if focused
     test byte [btn_flags], 1
     jz .tf_no_cursor
-    ; Cursor X = btn_x + 2 + cursor_pos * font_advance
+    ; Cursor X = btn_x + 2 + cursor_pos * font_advance - scroll_off
     xor ax, ax
     mov al, [draw_font_advance]
     mul word [wgt_cursor_pos]
+    sub ax, [wgt_scroll_off]        ; Apply horizontal scroll
     add ax, [btn_x]
     add ax, 2
     ; Draw 1px wide filled rect for cursor (much faster than pixel loop)
@@ -19597,6 +19617,7 @@ btn_saved_fa:   db 0                    ; Saved font advance
 wgt_text_ptr:   dw 0                    ; Widget text/label pointer (Build 235)
 wgt_scratch:    dw 0                    ; Widget scratch variable (Build 235)
 wgt_cursor_pos: dw 0                    ; Widget cursor position (Build 235)
+wgt_scroll_off: dw 0                    ; Textfield horizontal scroll offset (Build 370)
 
 ; Word-wrap scratch variables (Build 205)
 wrap_start_x:   dw 0                    ; Starting X for line breaks
