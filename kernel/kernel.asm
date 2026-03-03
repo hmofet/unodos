@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 100                     ; Max function count (0-99 valid)
+    cmp ah, 101                     ; Max function count (0-100 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -7076,6 +7076,7 @@ kernel_api_table:
     ; File Save Dialog + Scrollbar Hit API (Build 369)
     dw file_dialog_save             ; 98: System file save dialog
     dw widget_scrollbar_hit         ; 99: Scrollbar hit-test with drag
+    dw get_video_mode_stub          ; 100: Get current video mode
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -18102,6 +18103,14 @@ get_screen_info:
     ret
 .gsi_vga:
     mov ah, 0                           ; VGA: 256 colors (0 wraps = 256)
+    clc
+    ret
+
+; get_video_mode_stub - Get current video mode (API 100)
+; Input: None
+; Output: AL = current video mode (0x04=CGA, 0x13=VGA, 0x12=EGA, 0x01=SVGA)
+get_video_mode_stub:
+    mov al, [video_mode]
     clc
     ret
 

@@ -149,19 +149,19 @@ entry:
     jmp .no_event
 
 .accelerate:
+    ; UP = turbo boost (car auto-accelerates, UP is extra)
     cmp word [cs:player_speed], MAX_SPEED
     jge .no_event
-    add word [cs:player_speed], 6   ; Faster accel for low-fps hardware
+    add word [cs:player_speed], 4
     cmp word [cs:player_speed], MAX_SPEED
     jle .no_event
     mov word [cs:player_speed], MAX_SPEED
     jmp .no_event
 
 .brake:
+    sub word [cs:player_speed], 8
     cmp word [cs:player_speed], 0
-    jle .no_event
-    sub word [cs:player_speed], 4
-    jns .no_event
+    jge .no_event
     mov word [cs:player_speed], 0
     jmp .no_event
 
@@ -181,15 +181,11 @@ entry:
     je .main_loop                   ; Same tick, skip frame
     mov [cs:last_tick], ax
 
-    ; Apply natural deceleration (every 3rd frame for low-fps playability)
-    inc byte [cs:decel_counter]
-    cmp byte [cs:decel_counter], 3
-    jb .no_decel
-    mov byte [cs:decel_counter], 0
-    cmp word [cs:player_speed], 0
-    je .no_decel
-    dec word [cs:player_speed]
-.no_decel:
+    ; Auto-accelerate (car speeds up on its own)
+    cmp word [cs:player_speed], MAX_SPEED
+    jge .at_max
+    inc word [cs:player_speed]
+.at_max:
 
     ; Advance camera based on speed
     mov ax, [cs:player_speed]
@@ -211,20 +207,6 @@ entry:
     je .game_over_trigger
     dec word [cs:time_left]
 .no_timer_dec:
-
-    ; Compute current curve from track data
-    call update_curve
-
-    ; Apply curve to player position (drift)
-    mov ax, [cs:current_curve]
-    sar ax, 3                       ; Gentle drift
-    movzx bx, byte [cs:player_speed + 1]  ; High byte
-    test bx, bx
-    jz .no_curve_drift
-    imul bx
-    sar ax, 3
-.no_curve_drift:
-    add [cs:player_x], ax
 
     ; Clamp player to road bounds
     cmp word [cs:player_x], 40
@@ -398,16 +380,26 @@ draw_road:
 .width_ok:
     mov [cs:strip_hw], ax
 
-    ; Per-strip curve lookup: which track segment does this strip see?
+    ; Per-strip curve lookup with interpolation for smooth bends
     mov ax, [cs:camera_z]
     add ax, [cs:strip_z]
     xor dx, dx
     mov bx, SEGMENT_LENGTH
-    div bx
-    and ax, TRACK_SEGMENTS - 1      ; Modulo (power of 2)
-    shl ax, 1                       ; Word index
+    div bx                           ; AX = seg index, DX = fraction (0-39)
+    push dx                          ; Save fraction
+    and ax, TRACK_SEGMENTS - 1
+    shl ax, 1                        ; Word offset
     mov bx, ax
-    mov ax, [cs:track_data + bx]
+    mov si, [cs:track_data + bx]     ; SI = curve_a
+    add bx, 2
+    and bx, (TRACK_SEGMENTS * 2) - 1 ; Wrap
+    mov cx, [cs:track_data + bx]     ; CX = curve_b
+    sub cx, si                        ; CX = delta (curve_b - curve_a)
+    pop ax                            ; AX = fraction
+    imul cx                           ; DX:AX = fraction * delta
+    mov cx, SEGMENT_LENGTH
+    idiv cx                           ; AX = interpolated offset
+    add ax, si                        ; AX = smooth curve value
 
     ; Accumulate curve offset (builds progressive bend)
     add [cs:curve_accum], ax
@@ -457,14 +449,14 @@ draw_road:
     mov byte [cs:has_stripe], 1
 
 .draw_strip:
-    ; Draw left grass
+    ; Draw left grass (2px tall strips to halve API calls / reduce flicker)
     mov ax, [cs:road_left]
     cmp ax, 0
     je .skip_left_grass
     mov bx, 0
     mov cx, [cs:strip_y]
     mov dx, [cs:road_left]
-    mov si, 1                       ; 1 pixel high
+    mov si, 2
     mov al, [cs:grass_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -477,7 +469,7 @@ draw_road:
     sub dx, [cs:road_left]
     cmp dx, 0
     jle .skip_road
-    mov si, 1
+    mov si, 2
     mov al, [cs:road_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -491,7 +483,7 @@ draw_road:
     cmp ax, 0
     jle .skip_right_grass
     mov dx, ax
-    mov si, 1
+    mov si, 2
     mov al, [cs:grass_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -523,13 +515,13 @@ draw_road:
     mov ax, 1
 .sw2_ok:
     mov dx, ax
-    mov si, 1
+    mov si, 2
     mov al, 0                       ; Black center stripe
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
 .next_strip:
-    dec word [cs:strip_y]
+    sub word [cs:strip_y], 2
     jmp .strip_loop
 
 .strips_done:
