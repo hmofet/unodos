@@ -1306,13 +1306,20 @@ mouse_is_enabled:
 mouse_set_visible:
     cmp al, 0
     je .msv_hide
-    ; Show: re-enable mouse (if hardware was detected)
+    ; Show: restore mouse_enabled only if we previously hid it
+    cmp byte [mouse_vis_saved], 0
+    je .msv_ret                     ; No prior hide, nothing to restore
     mov byte [mouse_enabled], 1
+    mov byte [mouse_vis_saved], 0
     ret
 .msv_hide:
-    ; Hide: erase cursor from screen, then disable
+    ; Only hide if mouse is currently enabled
+    cmp byte [mouse_enabled], 0
+    je .msv_ret                     ; No mouse, nothing to hide
     call mouse_cursor_hide
     mov byte [mouse_enabled], 0
+    mov byte [mouse_vis_saved], 1   ; Remember we hid it
+.msv_ret:
     ret
 
 ; ============================================================================
@@ -6916,7 +6923,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3000 - ($ - $$) db 0
+times 0x3020 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -19691,6 +19698,7 @@ mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
+mouse_vis_saved:    db 0            ; 1 if mouse_set_visible(0) was called (for safe restore)
 mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, R/S/E=failure
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
 
