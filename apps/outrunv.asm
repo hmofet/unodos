@@ -222,6 +222,30 @@ entry:
     inc word [cs:player_speed]
 .at_max:
 
+    ; Grass penalty: slow down if car is off the road
+    mov ax, [cs:player_x]
+    cmp ax, [cs:road_left_at_car]
+    jl .on_grass
+    cmp ax, [cs:road_right_at_car]
+    jg .on_grass
+    jmp .not_on_grass
+.on_grass:
+    ; Heavy slowdown on grass
+    cmp word [cs:player_speed], 5
+    jle .grass_min
+    sub word [cs:player_speed], 3
+    jmp .not_on_grass
+.grass_min:
+    mov word [cs:player_speed], 2
+.not_on_grass:
+
+    ; Curve drift: road curves push the car sideways
+    ; Without steering input, car drifts off road in curves
+    call update_curve
+    mov ax, [cs:current_curve]
+    sar ax, 3                        ; Drift = curve / 8 pixels per frame
+    sub [cs:player_x], ax            ; Subtract: positive curve = right turn = car drifts left
+
     ; Advance camera
     mov ax, [cs:player_speed]
     shr ax, 1
@@ -610,13 +634,9 @@ draw_road:
     ; Initialize curve accumulator - starts at 0 for smooth progressive curve
     mov word [cs:curve_accum], 0
 
-    ; Compute stop Y = car_y - 2
-    mov ax, [cs:car_y]
+    ; Start from screen bottom, draw upward toward horizon
+    mov ax, [cs:scr_h]
     sub ax, 2
-    mov [cs:stop_y], ax
-
-    ; Start from bottom (near player), draw upward toward horizon
-    dec ax
     mov [cs:strip_y], ax
 
 .strip_loop:
@@ -699,6 +719,16 @@ draw_road:
     mov bx, [cs:scr_w]
 .r_ok:
     mov [cs:road_right], bx
+
+    ; Save road edges at car Y position for grass collision check
+    mov ax, [cs:strip_y]
+    cmp ax, [cs:car_y]
+    jne .not_car_y
+    mov ax, [cs:road_left]
+    mov [cs:road_left_at_car], ax
+    mov ax, [cs:road_right]
+    mov [cs:road_right_at_car], ax
+.not_car_y:
 
     ; Rumble strip width = max(2, strip_hw / 10)
     mov ax, [cs:strip_hw]
@@ -836,16 +866,6 @@ draw_road:
 ; ============================================================================
 draw_car:
     pusha
-
-    ; Clear car area (draw road color underneath)
-    mov bx, 0
-    mov cx, [cs:car_y]
-    sub cx, 2
-    mov dx, [cs:scr_w]
-    mov si, CAR_H + 6
-    mov al, CLR_ROAD_LIGHT
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
 
     ; Car shadow
     mov bx, [cs:player_x]
@@ -1123,6 +1143,8 @@ decel_counter:  db 0                ; Decelerate every 3rd frame
 ; Track
 current_curve:  dw 0
 curve_accum:    dw 0
+road_left_at_car:  dw 0            ; Road edge at car Y for grass check
+road_right_at_car: dw 0
 
 ; Rendering scratch
 strip_y:        dw 0

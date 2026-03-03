@@ -187,6 +187,29 @@ entry:
     inc word [cs:player_speed]
 .at_max:
 
+    ; Grass penalty: slow down if car is off the road
+    mov ax, [cs:player_x]
+    cmp ax, [cs:road_left_at_car]
+    jl .on_grass
+    cmp ax, [cs:road_right_at_car]
+    jg .on_grass
+    jmp .not_on_grass
+.on_grass:
+    ; Heavy slowdown on grass
+    cmp word [cs:player_speed], 5
+    jle .grass_min
+    sub word [cs:player_speed], 3
+    jmp .not_on_grass
+.grass_min:
+    mov word [cs:player_speed], 2
+.not_on_grass:
+
+    ; Curve drift: road curves push the car sideways
+    call update_curve
+    mov ax, [cs:current_curve]
+    sar ax, 3                        ; Drift = curve / 8 pixels per frame
+    sub [cs:player_x], ax            ; Positive curve = right turn = car drifts left
+
     ; Advance camera based on speed
     mov ax, [cs:player_speed]
     shr ax, 1
@@ -349,7 +372,7 @@ draw_road:
     mov word [cs:curve_accum], 0
 
     ; Draw road strips bottom-to-top (near to far) for curve accumulation
-    mov word [cs:strip_y], 194
+    mov word [cs:strip_y], 198
 
 .strip_loop:
     cmp word [cs:strip_y], HORIZON_Y
@@ -426,6 +449,15 @@ draw_road:
     mov bx, 320
 .right_ok:
     mov [cs:road_right], bx
+
+    ; Save road edges at car Y position for grass collision check
+    cmp word [cs:strip_y], CAR_Y
+    jne .not_car_y
+    mov ax, [cs:road_left]
+    mov [cs:road_left_at_car], ax
+    mov ax, [cs:road_right]
+    mov [cs:road_right_at_car], ax
+.not_car_y:
 
     ; Determine segment color (alternating stripes for distance markers)
     ; segment = (camera_z + Z) / 8
@@ -533,15 +565,6 @@ draw_road:
 ; ============================================================================
 draw_car:
     pusha
-
-    ; Clear car area first
-    mov bx, 0
-    mov cx, CAR_Y - 2
-    mov dx, 320
-    mov si, CAR_H + 6
-    mov al, 3                       ; White (road beneath car)
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
 
     ; Car shadow
     mov bx, [cs:player_x]
@@ -790,6 +813,8 @@ decel_counter:  db 0                ; Decelerate every 3rd frame
 ; Current track state
 current_curve:  dw 0                ; Current curve value
 curve_accum:    dw 0                ; Per-frame curve accumulator
+road_left_at_car:  dw 0            ; Road edge at car Y for grass check
+road_right_at_car: dw 0
 
 ; Rendering scratch
 strip_y:        dw 0
