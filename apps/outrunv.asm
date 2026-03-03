@@ -44,9 +44,9 @@ entry:
     mov ax, cs
     mov ds, ax
 
-    ; Save current video mode for restore on exit
-    mov ah, 0x0F
-    int 0x10
+    ; Save current video mode for restore on exit (kernel API, handles SVGA)
+    mov ah, API_GET_VIDEO_MODE
+    int 0x80
     mov [cs:saved_video_mode], al
 
     ; Switch to VGA mode 13h (320x200, 256 color)
@@ -185,19 +185,19 @@ entry:
     jmp .no_event
 
 .accelerate:
+    ; UP = turbo boost (car auto-accelerates, UP is extra)
     cmp word [cs:player_speed], MAX_SPEED
     jge .no_event
-    add word [cs:player_speed], 6   ; Faster accel for low-fps hardware
+    add word [cs:player_speed], 4
     cmp word [cs:player_speed], MAX_SPEED
     jle .no_event
     mov word [cs:player_speed], MAX_SPEED
     jmp .no_event
 
 .brake:
+    sub word [cs:player_speed], 8
     cmp word [cs:player_speed], 0
-    jle .no_event
-    sub word [cs:player_speed], 4
-    jns .no_event
+    jge .no_event
     mov word [cs:player_speed], 0
     jmp .no_event
 
@@ -216,15 +216,11 @@ entry:
     je .main_loop
     mov [cs:last_tick], ax
 
-    ; Apply deceleration (every 3rd frame for low-fps playability)
-    inc byte [cs:decel_counter]
-    cmp byte [cs:decel_counter], 3
-    jb .no_decel
-    mov byte [cs:decel_counter], 0
-    cmp word [cs:player_speed], 0
-    je .no_decel
-    dec word [cs:player_speed]
-.no_decel:
+    ; Auto-accelerate (car speeds up on its own)
+    cmp word [cs:player_speed], MAX_SPEED
+    jge .at_max
+    inc word [cs:player_speed]
+.at_max:
 
     ; Advance camera
     mov ax, [cs:player_speed]
@@ -245,20 +241,6 @@ entry:
     je .game_over_trigger
     dec word [cs:time_left]
 .no_timer_dec:
-
-    ; Update curve
-    call update_curve
-
-    ; Apply curve drift
-    mov ax, [cs:current_curve]
-    sar ax, 3
-    movzx bx, byte [cs:player_speed + 1]
-    test bx, bx
-    jz .no_curve_drift
-    imul bx
-    sar ax, 3
-.no_curve_drift:
-    add [cs:player_x], ax
 
     ; Clamp player
     mov ax, [cs:scr_w]
@@ -303,9 +285,8 @@ entry:
     mov ah, API_THEME_SET_COLORS
     int 0x80
 
-    ; Re-set VGA mode to reset palette (game modified palette entries)
-    ; Don't restore old mode - stay in VGA so desktop renders in VGA
-    mov al, 0x13
+    ; Restore original video mode (handles CGA/VGA/SVGA)
+    mov al, [cs:saved_video_mode]
     mov ah, API_SET_VIDEO_MODE
     int 0x80
 
@@ -330,6 +311,7 @@ API_FILLED_RECT_COLOR   equ 67
 API_DRAW_HLINE          equ 69
 API_WORD_TO_STRING      equ 91
 API_SET_VIDEO_MODE      equ 95
+API_GET_VIDEO_MODE      equ 100
 
 EVENT_KEY_PRESS         equ 1
 
@@ -669,16 +651,26 @@ draw_road:
 .hw_ok:
     mov [cs:strip_hw], ax
 
-    ; Per-strip curve lookup: which track segment does this strip see?
+    ; Per-strip curve lookup with interpolation for smooth bends
     mov ax, [cs:camera_z]
     add ax, [cs:strip_z]
     xor dx, dx
     mov bx, SEGMENT_LENGTH
-    div bx
-    and ax, TRACK_SEGMENTS - 1      ; Modulo (power of 2)
-    shl ax, 1                       ; Word index
+    div bx                           ; AX = seg index, DX = fraction (0-39)
+    push dx                          ; Save fraction
+    and ax, TRACK_SEGMENTS - 1
+    shl ax, 1                        ; Word offset
     mov bx, ax
-    mov ax, [cs:track_data + bx]
+    mov si, [cs:track_data + bx]     ; SI = curve_a
+    add bx, 2
+    and bx, (TRACK_SEGMENTS * 2) - 1 ; Wrap
+    mov cx, [cs:track_data + bx]     ; CX = curve_b
+    sub cx, si                        ; CX = delta (curve_b - curve_a)
+    pop ax                            ; AX = fraction
+    imul cx                           ; DX:AX = fraction * delta
+    mov cx, SEGMENT_LENGTH
+    idiv cx                           ; AX = interpolated offset
+    add ax, si                        ; AX = smooth curve value
 
     ; Accumulate curve offset (builds progressive bend)
     add [cs:curve_accum], ax
@@ -740,14 +732,14 @@ draw_road:
     mov byte [cs:has_stripe], 1
 
 .do_draw:
-    ; Left grass
+    ; Left grass (2px tall strips to halve API calls / reduce flicker)
     mov ax, [cs:road_left]
     cmp ax, 0
     je .skip_lg
     mov bx, 0
     mov cx, [cs:strip_y]
     mov dx, [cs:road_left]
-    mov si, 1
+    mov si, 2
     mov al, [cs:grass_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -757,7 +749,7 @@ draw_road:
     mov bx, [cs:road_left]
     mov cx, [cs:strip_y]
     mov dx, [cs:rumble_w]
-    mov si, 1
+    mov si, 2
     mov al, [cs:rumble_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -772,7 +764,7 @@ draw_road:
     sub dx, [cs:rumble_w]
     cmp dx, 0
     jle .skip_road
-    mov si, 1
+    mov si, 2
     mov al, [cs:road_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -783,7 +775,7 @@ draw_road:
     sub bx, [cs:rumble_w]
     mov cx, [cs:strip_y]
     mov dx, [cs:rumble_w]
-    mov si, 1
+    mov si, 2
     mov al, [cs:rumble_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -795,7 +787,7 @@ draw_road:
     sub dx, [cs:road_right]
     cmp dx, 0
     jle .skip_rg
-    mov si, 1
+    mov si, 2
     mov al, [cs:grass_color]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -826,13 +818,13 @@ draw_road:
     mov ax, 1
 .sw2_ok:
     mov dx, ax
-    mov si, 1
+    mov si, 2
     mov al, CLR_ROAD_MARK
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
 .next_strip:
-    dec word [cs:strip_y]
+    sub word [cs:strip_y], 2
     jmp .strip_loop
 
 .strips_done:
