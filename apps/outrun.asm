@@ -263,10 +263,10 @@ STATE_GAMEOVER          equ 2
 
 MAX_SPEED               equ 60
 HORIZON_Y               equ 80
-ROAD_BASE_W             equ 120     ; Base road half-width at bottom
-CAR_Y                   equ 175     ; Car Y position
-CAR_W                   equ 16
-CAR_H                   equ 10
+ROAD_BASE_W             equ 70      ; Base road half-width at bottom
+CAR_Y                   equ 168     ; Car Y position
+CAR_W                   equ 32
+CAR_H                   equ 20
 TRACK_SEGMENTS          equ 32
 SEGMENT_LENGTH          equ 80      ; Longer segments = longer sustained curves
 
@@ -345,18 +345,27 @@ draw_road:
     mov ah, API_DRAW_HLINE
     int 0x80
 
-    ; Initialize curve accumulator with base offset from current segment
-    ; This makes the near road (foreground) also curve, not just the distance
+    ; Initialize curve accumulator with interpolated base offset
+    ; Uses smooth interpolation to avoid angular artifacts at segment boundaries
     mov ax, [cs:camera_z]
     xor dx, dx
     mov bx, SEGMENT_LENGTH
-    div bx                           ; AX = current seg index, DX = fraction
+    div bx                           ; AX = seg index, DX = fraction
+    push dx                          ; Save fraction for interpolation
     and ax, TRACK_SEGMENTS - 1
     shl ax, 1
     mov bx, ax
-    mov ax, [cs:track_data + bx]     ; Current segment curve value
-    ; Multiply by base factor: curve * 20 gives visible foreground shift
-    imul ax, 20
+    mov si, [cs:track_data + bx]     ; SI = curve_a (current segment)
+    add bx, 2
+    and bx, (TRACK_SEGMENTS * 2) - 1
+    mov cx, [cs:track_data + bx]     ; CX = curve_b (next segment)
+    sub cx, si                        ; CX = delta
+    pop ax                            ; AX = fraction (0 to SEGMENT_LENGTH-1)
+    imul cx                           ; DX:AX = fraction * delta
+    mov cx, SEGMENT_LENGTH
+    idiv cx                           ; AX = interpolated offset
+    add ax, si                        ; AX = smooth curve value at camera_z
+    imul ax, 12                       ; Base offset factor
     mov [cs:curve_accum], ax
 
     ; Draw road strips bottom-to-top (near to far) for curve accumulation
@@ -540,7 +549,7 @@ draw_road:
     ret
 
 ; ============================================================================
-; draw_car - Draw the player's car
+; draw_car - Draw the player's car (32x20)
 ; ============================================================================
 draw_car:
     pusha
@@ -549,8 +558,18 @@ draw_car:
     mov bx, 0
     mov cx, CAR_Y - 2
     mov dx, 320
-    mov si, CAR_H + 4
+    mov si, CAR_H + 6
     mov al, 3                       ; White (road beneath car)
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; Car shadow
+    mov bx, [cs:player_x]
+    sub bx, CAR_W / 2 + 2
+    mov cx, CAR_Y + CAR_H
+    mov dx, CAR_W + 4
+    mov si, 2
+    mov al, 0                       ; Black
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
@@ -566,30 +585,30 @@ draw_car:
 
     ; Car windshield (cyan stripe on top)
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 - 2
+    sub bx, CAR_W / 2 - 4
     mov cx, CAR_Y
-    mov dx, CAR_W - 4
-    mov si, 3
+    mov dx, CAR_W - 8
+    mov si, 5
     mov al, 1                       ; Cyan
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Wheels (black)
+    ; Wheels (black) - 5x5 each
     ; Left wheel
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 - 1
-    mov cx, CAR_Y + CAR_H - 2
-    mov dx, 3
-    mov si, 2
+    sub bx, CAR_W / 2 - 2
+    mov cx, CAR_Y + CAR_H - 5
+    mov dx, 5
+    mov si, 5
     mov al, 0                       ; Black
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
     ; Right wheel
     mov bx, [cs:player_x]
-    add bx, CAR_W / 2 - 4
-    mov cx, CAR_Y + CAR_H - 2
-    mov dx, 3
-    mov si, 2
+    add bx, CAR_W / 2 - 7
+    mov cx, CAR_Y + CAR_H - 5
+    mov dx, 5
+    mov si, 5
     mov al, 0
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
