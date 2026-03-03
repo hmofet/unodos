@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 102                     ; Max function count (0-101 valid)
+    cmp ah, 105                     ; Max function count (0-104 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -190,6 +190,8 @@ int_80_handler:
     jb .do_translate                ; API 87: menu_open
     cmp ah, 94
     je .do_translate                ; API 94: gfx_draw_sprite
+    cmp ah, 102
+    je .do_translate                ; API 102: gfx_draw_sprite_scaled
     jmp .no_translate               ; Others: skip translation
 .do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
 
@@ -267,6 +269,8 @@ int_80_handler:
     je .scale_dx_si
     cmp ah, 80
     je .scale_dx_si
+    cmp ah, 102
+    je .scale_dx_si                 ; API 102: DX=dest_w, SI=dest_h
 
     ; Group B: Scale DX only (SI is pointer or non-dimension)
     ;   APIs 50 (string_wrap), 57 (textfield), 59 (listitem),
@@ -6728,6 +6732,362 @@ gfx_draw_sprite:
     ret
 
 ; ============================================================================
+; read_pixel_internal - Read pixel color at screen position (internal, no cursor protection)
+; Input: CX=X, BX=Y, ES=video segment
+; Output: AL=color value
+; Clobbers: AX, DI (and CL for CGA)
+; ============================================================================
+read_pixel_internal:
+    cmp cx, [cs:screen_width]
+    jae .rpi_oob
+    cmp bx, [cs:screen_height]
+    jae .rpi_oob
+    cmp byte [cs:video_mode], 0x13
+    je .rpi_vga
+    cmp byte [cs:video_mode], 0x04
+    je .rpi_cga
+    ; VESA / Mode12h fallback: return 0
+    xor al, al
+    ret
+.rpi_oob:
+    xor al, al
+    ret
+.rpi_vga:
+    push dx
+    mov ax, bx                          ; AX = Y
+    mul word [cs:screen_pitch]          ; AX = Y * pitch
+    add ax, cx                          ; AX = Y * pitch + X
+    mov di, ax
+    mov al, [es:di]                     ; Read pixel
+    pop dx
+    ret
+.rpi_cga:
+    push bx
+    push cx
+    push dx
+    call cga_pixel_calc                 ; DI = byte offset, CL = bit shift
+    mov al, [es:di]                     ; Read CGA byte
+    shr al, cl                          ; Shift pixel bits to low position
+    and al, 0x03                        ; Mask to 2-bit color
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
+; gfx_read_pixel - Read pixel color at screen position (API 104)
+; Input: BX=X, CX=Y (absolute screen coordinates)
+; Output: AL=color (0-3 CGA, 0-255 VGA), CF=0 success, CF=1 out of bounds
+; ============================================================================
+gfx_read_pixel:
+    ; Note: BX=X, CX=Y from caller; read_pixel_internal expects CX=X, BX=Y
+    xchg bx, cx                         ; Now CX=X, BX=Y
+    cmp cx, [screen_width]
+    jae .grp_oob
+    cmp bx, [screen_height]
+    jae .grp_oob
+    push es
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    mov ax, [video_segment]
+    mov es, ax
+    call read_pixel_internal
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    pop es
+    xchg bx, cx                         ; Restore: BX=X, CX=Y for caller
+    clc
+    ret
+.grp_oob:
+    xchg bx, cx                         ; Restore
+    xor al, al
+    stc
+    ret
+
+; ============================================================================
+; gfx_draw_sprite_scaled - Draw 1-bit sprite scaled to arbitrary size (API 102)
+; Input: BX=dest_x, CX=dest_y, DX=dest_width, SI=dest_height
+;        DI=sprite descriptor ptr in caller's DS segment
+;        AL=color (palette index for set bits, clear bits=transparent)
+; Sprite descriptor: [byte src_w] [byte src_h] [bitmap data...]
+;   Bitmap: ceil(src_w/8) bytes per row, src_h rows, MSB=leftmost
+; Output: CF=0 success
+; ============================================================================
+gfx_draw_sprite_scaled:
+    pusha
+    push es
+    ; Save params
+    mov [_sspr_color], al
+    mov [_sspr_dst_w], dx
+    mov [_sspr_dst_h], si
+    mov [_sspr_dst_x], bx              ; Save dest X (BX will become Y for plot)
+    ; Read src_w and src_h from caller's segment
+    push ds
+    mov ds, [cs:caller_ds]
+    mov al, [di]                        ; src_width
+    mov ah, [di + 1]                    ; src_height
+    pop ds
+    mov [_sspr_src_w], al
+    mov [_sspr_src_h], ah
+    ; Compute bytes_per_row = (src_w + 7) >> 3
+    movzx ax, byte [_sspr_src_w]
+    add ax, 7
+    shr ax, 3
+    mov [_sspr_bpr], ax
+    ; Bitmap base offset in caller segment = DI + 2 (skip header)
+    add di, 2
+    mov [_sspr_base], di
+    ; Validate: if dest_w=0 or dest_h=0 or src_w=0 or src_h=0, skip
+    cmp word [_sspr_dst_w], 0
+    je .sspr_done
+    cmp word [_sspr_dst_h], 0
+    je .sspr_done
+    cmp byte [_sspr_src_w], 0
+    je .sspr_done
+    cmp byte [_sspr_src_h], 0
+    je .sspr_done
+    ; ES = video segment
+    mov ax, [video_segment]
+    mov es, ax
+    ; Cursor protection
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    ; Outer loop: dy = 0 to dest_h-1
+    ; BX = current screen Y (for plot_pixel_color: BX=Y)
+    mov bx, cx                          ; BX = dest_y (screen Y)
+    mov word [_sspr_dy], 0              ; dy counter
+.sspr_row_loop:
+    mov ax, [_sspr_dy]
+    cmp ax, [_sspr_dst_h]
+    jge .sspr_end
+    ; Compute src_row = dy * src_h / dest_h
+    movzx dx, byte [_sspr_src_h]
+    mul dx                              ; DX:AX = dy * src_h (fits 16-bit: max 199*255=50745)
+    div word [_sspr_dst_h]             ; AX = src_row
+    ; Compute row byte offset = src_row * bytes_per_row
+    mul word [_sspr_bpr]               ; AX = src_row * bpr
+    add ax, [_sspr_base]               ; AX = absolute offset in caller seg
+    mov [_sspr_row_off], ax
+    ; Inner loop: dx_ctr = 0 to dest_w-1
+    mov word [_sspr_dx], 0
+.sspr_col_loop:
+    mov ax, [_sspr_dx]
+    cmp ax, [_sspr_dst_w]
+    jge .sspr_col_done
+    ; Compute src_col = dx * src_w / dest_w
+    movzx dx, byte [_sspr_src_w]
+    mul dx                              ; DX:AX = dx_ctr * src_w (can overflow 16-bit)
+    div word [_sspr_dst_w]             ; AX = src_col
+    ; Compute byte index = src_col >> 3
+    mov di, ax
+    shr di, 3                           ; DI = byte index within row
+    add di, [_sspr_row_off]            ; DI = full offset in caller seg
+    ; Compute bit mask: 0x80 >> (src_col & 7)
+    and al, 7                           ; AL = src_col & 7
+    mov ah, 0x80
+    mov cl, al
+    mov al, ah
+    shr al, cl                          ; AL = bit mask
+    ; Read bitmap byte from caller segment
+    push ds
+    mov ds, [cs:caller_ds]
+    test [di], al                       ; Test bit in bitmap byte
+    pop ds
+    jz .sspr_pixel_next
+    ; Pixel is set — draw it
+    mov dl, [_sspr_color]
+    mov cx, [_sspr_dst_x]
+    add cx, [_sspr_dx]                  ; CX = base_x + dx_counter
+    call plot_pixel_color               ; CX=X, BX=Y, DL=color, ES=video
+.sspr_pixel_next:
+    inc word [_sspr_dx]
+    jmp .sspr_col_loop
+.sspr_col_done:
+    inc bx                              ; Next screen Y row
+    inc word [_sspr_dy]
+    jmp .sspr_row_loop
+.sspr_end:
+    ; Restore cursor
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+.sspr_done:
+    pop es
+    popa
+    clc
+    ret
+
+; ============================================================================
+; gfx_blit_rect - Copy rectangular screen region (API 103)
+; Input: BX=dest_x, CX=dest_y, DX=src_x, SI=src_y
+;        DI=(width<<8)|height (packed bytes, max 255 each)
+; Self-translates if draw_context is active (no auto-translate in dispatch)
+; Output: CF=0 success
+; ============================================================================
+gfx_blit_rect:
+    pusha
+    push es
+    push ds
+    ; Unpack DI: width = high byte, height = low byte
+    mov ax, di
+    xor ah, ah                          ; AH was width, clear for height
+    mov [_blit_height], ax
+    mov ax, di
+    shr ax, 8
+    mov [_blit_width], ax
+    ; Validate
+    cmp word [_blit_width], 0
+    je .blit_done
+    cmp word [_blit_height], 0
+    je .blit_done
+    ; Self-translate if draw_context active
+    cmp byte [draw_context], 0xFF
+    je .blit_no_translate
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .blit_no_translate
+    push ax
+    push di
+    xor ah, ah
+    mov al, [draw_context]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    ; Translate dest (BX,CX)
+    add bx, [di + WIN_OFF_X]
+    inc bx
+    add cx, [di + WIN_OFF_Y]
+    add cx, [titlebar_height]
+    ; Translate src (DX,SI)
+    add dx, [di + WIN_OFF_X]
+    inc dx
+    add si, [di + WIN_OFF_Y]
+    add si, [titlebar_height]
+    pop di
+    pop ax
+.blit_no_translate:
+    ; Save coordinates to scratch vars (registers will be reused)
+    mov [_blit_src_x], dx
+    mov [_blit_src_y], si
+    mov [_blit_dst_x], bx
+    mov [_blit_dst_y], cx
+    ; Cursor protection
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    ; Check video mode for fast path
+    cmp byte [video_mode], 0x13
+    je .blit_vga
+    ; --- CGA / fallback: pixel-by-pixel copy ---
+    mov ax, [video_segment]
+    mov es, ax
+    mov word [_blit_row], 0
+.blit_slow_row:
+    mov ax, [_blit_row]
+    cmp ax, [_blit_height]
+    jge .blit_slow_done
+    mov word [_blit_col], 0
+.blit_slow_col:
+    mov ax, [_blit_col]
+    cmp ax, [_blit_width]
+    jge .blit_slow_col_done
+    ; Read pixel from (src_x + col, src_y + row)
+    mov cx, [_blit_src_x]
+    add cx, [_blit_col]                 ; CX = src_x + col
+    mov bx, [_blit_src_y]
+    add bx, [_blit_row]                 ; BX = src_y + row
+    call read_pixel_internal            ; AL = color
+    ; Write pixel to (dest_x + col, dest_y + row)
+    mov dl, al                          ; DL = color
+    mov cx, [_blit_dst_x]
+    add cx, [_blit_col]                 ; CX = dest_x + col
+    mov bx, [_blit_dst_y]
+    add bx, [_blit_row]                 ; BX = dest_y + row
+    call plot_pixel_color               ; CX=X, BX=Y, DL=color, ES=video
+    inc word [_blit_col]
+    jmp .blit_slow_col
+.blit_slow_col_done:
+    inc word [_blit_row]
+    jmp .blit_slow_row
+.blit_slow_done:
+    jmp .blit_finish
+.blit_vga:
+    ; --- VGA 13h fast path: row-by-row rep movsb ---
+    ; Compute linear offsets
+    ; src_off = src_y * 320 + src_x
+    mov ax, [_blit_src_y]
+    mov bx, 320
+    mul bx                              ; AX = src_y * 320
+    add ax, [_blit_src_x]
+    mov [_blit_src_off], ax
+    ; dest_off = dest_y * 320 + dest_x
+    mov ax, [_blit_dst_y]
+    mov bx, 320
+    mul bx                              ; AX = dest_y * 320
+    add ax, [_blit_dst_x]
+    mov [_blit_dst_off], ax
+    ; Determine copy direction
+    cmp ax, [_blit_src_off]
+    ja .blit_vga_reverse
+    ; --- Forward copy (dest <= src, no overlap risk) ---
+    mov ax, [video_segment]
+    mov es, ax
+    mov ds, ax                          ; DS = ES = video segment
+    mov word [cs:_blit_row], 0
+.blit_vga_fwd_row:
+    mov ax, [cs:_blit_row]
+    cmp ax, [cs:_blit_height]
+    jge .blit_vga_fwd_done
+    ; row_off = row * 320
+    mov bx, 320
+    mul bx                              ; AX = row * 320
+    mov si, ax
+    add si, [cs:_blit_src_off]          ; SI = src_off + row*320
+    mov di, ax
+    add di, [cs:_blit_dst_off]          ; DI = dest_off + row*320
+    mov cx, [cs:_blit_width]
+    cld
+    rep movsb
+    inc word [cs:_blit_row]
+    jmp .blit_vga_fwd_row
+.blit_vga_fwd_done:
+    jmp .blit_vga_cleanup
+.blit_vga_reverse:
+    ; --- Reverse copy (dest > src, copy bottom-to-top) ---
+    mov ax, [video_segment]
+    mov es, ax
+    mov ds, ax
+    mov ax, [cs:_blit_height]
+    dec ax
+    mov [cs:_blit_row], ax              ; Start from last row
+.blit_vga_rev_row:
+    cmp word [cs:_blit_row], 0
+    jl .blit_vga_rev_done
+    mov ax, [cs:_blit_row]
+    mov bx, 320
+    mul bx
+    mov si, ax
+    add si, [cs:_blit_src_off]
+    mov di, ax
+    add di, [cs:_blit_dst_off]
+    mov cx, [cs:_blit_width]
+    cld
+    rep movsb
+    dec word [cs:_blit_row]
+    jmp .blit_vga_rev_row
+.blit_vga_rev_done:
+.blit_vga_cleanup:
+    ; Restore DS
+    mov ax, 0x1000
+    mov ds, ax
+.blit_finish:
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+.blit_done:
+    pop ds
+    pop es
+    popa
+    clc
+    ret
+
+; ============================================================================
 ; widget_scrollbar_hit - Hit-test scrollbar with drag support (API 99)
 ; Input:  BX=scrollbar_x, CX=scrollbar_y (window-relative)
 ;         SI=track_height, DX=current_position, DI=max_range
@@ -6923,7 +7283,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3020 - ($ - $$) db 0
+times 0x3320 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -7100,6 +7460,11 @@ kernel_api_table:
     dw widget_scrollbar_hit         ; 99: Scrollbar hit-test with drag
     dw get_video_mode_stub          ; 100: Get current video mode
     dw mouse_set_visible            ; 101: Show/hide mouse cursor
+
+    ; Scaled Graphics APIs (Build 390)
+    dw gfx_draw_sprite_scaled       ; 102: Draw scaled 1-bit sprite
+    dw gfx_blit_rect                ; 103: Copy screen region
+    dw gfx_read_pixel               ; 104: Read pixel color
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -19660,6 +20025,31 @@ wrap_width:     dw 0                    ; Wrap width in pixels
 _spr_color:  db 0
 _spr_height: db 0
 _spr_width:  db 0
+
+; Scaled sprite temp vars (Build 390)
+_sspr_color:    db 0            ; Draw color
+_sspr_src_w:    db 0            ; Source bitmap width (pixels)
+_sspr_src_h:    db 0            ; Source bitmap height (pixels)
+_sspr_bpr:      dw 0            ; Bytes per bitmap row = ceil(src_w/8)
+_sspr_dst_w:    dw 0            ; Destination width
+_sspr_dst_h:    dw 0            ; Destination height
+_sspr_base:     dw 0            ; Bitmap data offset (past header) in caller seg
+_sspr_dst_x:    dw 0            ; Dest base X (screen coords)
+_sspr_row_off:  dw 0            ; Current source row byte offset
+_sspr_dy:       dw 0            ; Current dest row counter
+_sspr_dx:       dw 0            ; Current dest column counter
+
+; Blit rect temp vars (Build 390)
+_blit_width:    dw 0
+_blit_height:   dw 0
+_blit_src_x:    dw 0            ; Source X (saved for row iteration)
+_blit_src_y:    dw 0            ; Source Y
+_blit_dst_x:    dw 0            ; Dest X
+_blit_dst_y:    dw 0            ; Dest Y
+_blit_col:      dw 0            ; Column counter
+_blit_row:      dw 0            ; Row counter
+_blit_src_off:  dw 0            ; VGA source linear offset
+_blit_dst_off:  dw 0            ; VGA dest linear offset
 
 heap_initialized: dw 0
 
