@@ -163,6 +163,9 @@ entry:
     jmp .no_event
 
 .game_key:
+    ; Block steering/accel/brake when crashed
+    cmp byte [cs:crash_timer], 0
+    jne .no_event
     cmp dl, 130                     ; Left
     je .steer_left
     cmp dl, 131                     ; Right
@@ -231,6 +234,14 @@ entry:
     cmp byte [cs:game_state], STATE_PLAYING
     jne .main_loop
 
+    ; Crash recovery: decrement timer, force speed=0
+    cmp byte [cs:crash_timer], 0
+    je .not_crashed
+    dec byte [cs:crash_timer]
+    mov word [cs:player_speed], 0
+    jmp .not_on_grass                ; Skip auto-accel and grass check
+.not_crashed:
+
     ; Auto-accelerate (car speeds up on its own)
     cmp word [cs:player_speed], MAX_SPEED
     jge .at_max
@@ -258,7 +269,7 @@ entry:
     ; Without steering input, car drifts off road in curves
     call update_curve
     mov ax, [cs:current_curve]
-    sar ax, 2                        ; Drift = curve / 4 pixels per frame (strong)
+    sar ax, 3                        ; Drift = curve / 8 pixels per frame (gentle)
     sub [cs:player_x], ax            ; Subtract: positive curve = right turn = car drifts left
 
     ; Advance camera
@@ -266,10 +277,18 @@ entry:
     shr ax, 1
     add [cs:camera_z], ax
 
-    ; Update score
+    ; Update score (only when on road and not crashed)
+    cmp byte [cs:crash_timer], 0
+    jne .skip_score
+    mov ax, [cs:player_x]
+    cmp ax, [cs:road_left_at_car]
+    jl .skip_score
+    cmp ax, [cs:road_right_at_car]
+    jg .skip_score
     mov ax, [cs:player_speed]
     shr ax, 2
     add [cs:score], ax
+.skip_score:
 
     ; Timer
     inc word [cs:timer_counter]
@@ -299,8 +318,10 @@ entry:
 .render_frame:
     call draw_sky
     call draw_road
+    call draw_obstacles
     call draw_car
     call draw_hud
+    call check_obstacle_collision
     jmp .main_loop
 
 .game_over_trigger:
@@ -650,6 +671,7 @@ init_game:
     mov word [cs:timer_counter], 0
     mov byte [cs:decel_counter], 0
     mov word [cs:current_curve], 0
+    mov byte [cs:crash_timer], 0
     mov byte [cs:game_state], STATE_PLAYING
 
     ; Initialize road edges at car Y to prevent false grass detection
@@ -870,6 +892,20 @@ draw_road:
 .r_ok:
     mov [cs:road_right], bx
 
+    ; Store road edges in lookup table for obstacle drawing
+    mov ax, [cs:strip_y]
+    sub ax, [cs:horizon_y]
+    shr ax, 1                        ; Index = (strip_y - horizon_y) / 2
+    cmp ax, 60
+    jae .skip_edge_store
+    shl ax, 1                        ; Word offset
+    mov di, ax
+    mov ax, [cs:road_left]
+    mov [cs:road_edge_left + di], ax
+    mov ax, [cs:road_right]
+    mov [cs:road_edge_right + di], ax
+.skip_edge_store:
+
     ; Save road edges near car Y for grass collision check
     ; Loop goes bottom-to-top; capture while strip_y >= car_y (last capture = closest to car)
     mov ax, [cs:strip_y]
@@ -1013,12 +1049,257 @@ draw_road:
     ret
 
 ; ============================================================================
+; draw_obstacles - Draw roadside trees along the track
+; ============================================================================
+draw_obstacles:
+    pusha
+
+    ; Compute camera position in track (camera_z % TRACK_TOTAL_LEN)
+    mov ax, [cs:camera_z]
+    xor dx, dx
+    mov bx, TRACK_TOTAL_LEN
+    div bx
+    mov [cs:obs_cam_pos], dx
+
+    mov byte [cs:obs_idx], 0
+.obs_loop:
+    cmp byte [cs:obs_idx], NUM_OBSTACLES
+    jge .obs_done
+
+    ; Get relative Z distance for this obstacle
+    xor bh, bh
+    mov bl, [cs:obs_idx]
+    shl bx, 1
+    mov ax, [cs:obstacle_z + bx]
+    sub ax, [cs:obs_cam_pos]
+    jge .obs_pos_ok
+    add ax, TRACK_TOTAL_LEN
+.obs_pos_ok:
+    mov [cs:obs_rel_z], ax
+
+    ; Skip if too close or too far
+    cmp ax, 30
+    jl .obs_next
+    cmp ax, 400
+    jg .obs_next
+
+    ; screen_y = horizon_y + depth_scale / rel_z
+    mov ax, [cs:depth_scale]
+    xor dx, dx
+    mov bx, [cs:obs_rel_z]
+    div bx
+    add ax, [cs:horizon_y]
+    cmp ax, [cs:scr_h]
+    jge .obs_next
+    mov [cs:obs_screen_y], ax
+
+    ; tree_h = 1600 / rel_z (capped at 40, min 2)
+    mov ax, 1600
+    xor dx, dx
+    mov bx, [cs:obs_rel_z]
+    div bx
+    cmp ax, 40
+    jle .vt_h_ok
+    mov ax, 40
+.vt_h_ok:
+    cmp ax, 2
+    jge .vt_h_min
+    mov ax, 2
+.vt_h_min:
+    mov [cs:obs_tree_h], ax
+
+    ; tree_w = 800 / rel_z (capped at 24, min 2)
+    mov ax, 800
+    xor dx, dx
+    mov bx, [cs:obs_rel_z]
+    div bx
+    cmp ax, 24
+    jle .vt_w_ok
+    mov ax, 24
+.vt_w_ok:
+    cmp ax, 2
+    jge .vt_w_min
+    mov ax, 2
+.vt_w_min:
+    mov [cs:obs_tree_w], ax
+
+    ; Look up road edge at screen_y from lookup table
+    mov ax, [cs:obs_screen_y]
+    sub ax, [cs:horizon_y]
+    shr ax, 1                        ; strip index
+    cmp ax, 60
+    jae .obs_next
+    shl ax, 1                        ; word offset
+    mov di, ax
+
+    ; Determine X position based on side (left or right of road)
+    xor bh, bh
+    mov bl, [cs:obs_idx]
+    mov al, [cs:obstacle_side + bx]
+    cmp al, 0
+    je .obs_left
+
+    ; Right side: tree_x = road_edge_right + 4
+    mov bx, [cs:road_edge_right + di]
+    add bx, 4
+    jmp .obs_draw
+
+.obs_left:
+    ; Left side: tree_x = road_edge_left - tree_w - 4
+    mov bx, [cs:road_edge_left + di]
+    sub bx, [cs:obs_tree_w]
+    sub bx, 4
+
+.obs_draw:
+    mov [cs:obs_tree_x], bx
+
+    ; Clamp X to screen
+    cmp bx, 0
+    jl .obs_next
+    mov ax, [cs:scr_w]
+    sub ax, 10
+    cmp bx, ax
+    jg .obs_next
+
+    ; Draw trunk (narrow, bottom half of tree)
+    mov dx, [cs:obs_tree_w]
+    shr dx, 2                        ; trunk_w = tree_w / 4
+    cmp dx, 2
+    jge .vt_tw_ok
+    mov dx, 2
+.vt_tw_ok:
+    mov si, [cs:obs_tree_h]
+    shr si, 1                        ; trunk_h = tree_h / 2
+    cmp si, 1
+    jge .vt_th_ok
+    mov si, 1
+.vt_th_ok:
+    ; trunk X = tree_x + (tree_w - trunk_w) / 2
+    mov bx, [cs:obs_tree_x]
+    mov ax, [cs:obs_tree_w]
+    sub ax, dx
+    shr ax, 1
+    add bx, ax
+    mov cx, [cs:obs_screen_y]
+    sub cx, si                        ; trunk top Y
+    mov al, CLR_CAR_WHEEL             ; Dark trunk
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; Draw canopy (full width, top half of tree)
+    mov bx, [cs:obs_tree_x]
+    mov dx, [cs:obs_tree_w]
+    mov si, [cs:obs_tree_h]
+    shr si, 1                        ; canopy_h = tree_h / 2
+    cmp si, 2
+    jge .vt_ch_ok
+    mov si, 2
+.vt_ch_ok:
+    mov cx, [cs:obs_screen_y]
+    sub cx, [cs:obs_tree_h]          ; canopy top Y
+    mov al, CLR_GRASS_LIGHT           ; Green canopy
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+.obs_next:
+    inc byte [cs:obs_idx]
+    jmp .obs_loop
+
+.obs_done:
+    popa
+    ret
+
+; ============================================================================
+; check_obstacle_collision - Check if car hit a roadside tree
+; ============================================================================
+check_obstacle_collision:
+    pusha
+
+    ; Only check when not already crashed
+    cmp byte [cs:crash_timer], 0
+    jne .col_done
+
+    ; Compute camera position in track
+    mov ax, [cs:camera_z]
+    xor dx, dx
+    mov bx, TRACK_TOTAL_LEN
+    div bx
+    ; DX = camera_z % TRACK_TOTAL_LEN
+
+    xor ch, ch
+    xor cl, cl
+.col_loop:
+    cmp cl, NUM_OBSTACLES
+    jge .col_done
+
+    ; Get relative Z for this obstacle
+    push cx
+    xor bh, bh
+    mov bl, cl
+    shl bx, 1
+    mov ax, [cs:obstacle_z + bx]
+    sub ax, dx
+    jge .col_pos_ok
+    add ax, TRACK_TOTAL_LEN
+.col_pos_ok:
+    ; AX = rel_z; crash zone is rel_z 1-12
+    cmp ax, 12
+    jg .col_next
+
+    ; Obstacle is at the car's position — check X overlap
+    pop cx
+    push cx
+    xor bh, bh
+    mov bl, cl
+    mov al, [cs:obstacle_side + bx]
+    cmp al, 0
+    je .col_left
+
+    ; Right side: crash if player far enough off-road to the right
+    mov ax, [cs:player_x]
+    mov bx, [cs:road_right_at_car]
+    add bx, 5                        ; 5px grace zone
+    cmp ax, bx
+    jle .col_next
+    jmp .col_crash
+
+.col_left:
+    ; Left side: crash if player far enough off-road to the left
+    mov ax, [cs:player_x]
+    mov bx, [cs:road_left_at_car]
+    sub bx, 5
+    cmp ax, bx
+    jge .col_next
+
+.col_crash:
+    mov byte [cs:crash_timer], 36     ; ~2 seconds at 18 ticks/sec
+    mov word [cs:player_speed], 0
+    pop cx
+    jmp .col_done
+
+.col_next:
+    pop cx
+    inc cl
+    jmp .col_loop
+
+.col_done:
+    popa
+    ret
+
+; ============================================================================
 ; draw_car - Draw the player's car with VGA colors (40x24)
 ; ============================================================================
 draw_car:
     pusha
 
-    ; Car shadow
+    ; Skip drawing on odd frames when crashed (flash effect)
+    cmp byte [cs:crash_timer], 0
+    je .draw_car_ok
+    test byte [cs:crash_timer], 1
+    jnz .car_done
+.draw_car_ok:
+
+    ; 1. Shadow (46x3, below car)
     mov bx, [cs:player_x]
     sub bx, CAR_W / 2 + 3
     mov cx, [cs:car_y]
@@ -1029,7 +1310,7 @@ draw_car:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Car body (red)
+    ; 2. Body (40x24, red)
     mov bx, [cs:player_x]
     sub bx, CAR_W / 2
     mov cx, [cs:car_y]
@@ -1039,37 +1320,83 @@ draw_car:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Dark accents on sides (4px wide strips)
+    ; 3. Roof (30x3, dark, centered top)
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2
+    sub bx, 15
     mov cx, [cs:car_y]
-    add cx, 4
-    mov dx, 4
-    mov si, CAR_H - 6
-    mov al, CLR_CAR_DARK
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-    mov bx, [cs:player_x]
-    add bx, CAR_W / 2 - 4
-    mov cx, [cs:car_y]
-    add cx, 4
-    mov dx, 4
-    mov si, CAR_H - 6
+    mov dx, 30
+    mov si, 3
     mov al, CLR_CAR_DARK
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Windshield (blue)
+    ; 4. Rear window (24x5, blue, centered y+3)
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 - 5
+    sub bx, 12
     mov cx, [cs:car_y]
-    mov dx, CAR_W - 10
-    mov si, 6
+    add cx, 3
+    mov dx, 24
+    mov si, 5
     mov al, CLR_CAR_WIND
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Wheels (black) - 6x6 each
+    ; 5. Left side panel (4x18, dark, y+3)
+    mov bx, [cs:player_x]
+    sub bx, CAR_W / 2
+    mov cx, [cs:car_y]
+    add cx, 3
+    mov dx, 4
+    mov si, 18
+    mov al, CLR_CAR_DARK
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; 6. Right side panel (4x18, dark, y+3)
+    mov bx, [cs:player_x]
+    add bx, CAR_W / 2 - 4
+    mov cx, [cs:car_y]
+    add cx, 3
+    mov dx, 4
+    mov si, 18
+    mov al, CLR_CAR_DARK
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; 7. Rear bumper bar (40x3, dark, y+21)
+    mov bx, [cs:player_x]
+    sub bx, CAR_W / 2
+    mov cx, [cs:car_y]
+    add cx, 21
+    mov dx, CAR_W
+    mov si, 3
+    mov al, CLR_CAR_DARK
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; 8. Left taillight (4x2, red on dark bumper)
+    mov bx, [cs:player_x]
+    sub bx, 18
+    mov cx, [cs:car_y]
+    add cx, 21
+    mov dx, 4
+    mov si, 2
+    mov al, CLR_CAR_BODY
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; 9. Right taillight (4x2, red on dark bumper)
+    mov bx, [cs:player_x]
+    add bx, 14
+    mov cx, [cs:car_y]
+    add cx, 21
+    mov dx, 4
+    mov si, 2
+    mov al, CLR_CAR_BODY
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; 10. Left wheel (6x6, black)
     mov bx, [cs:player_x]
     sub bx, CAR_W / 2 - 2
     mov cx, [cs:car_y]
@@ -1079,6 +1406,8 @@ draw_car:
     mov al, CLR_CAR_WHEEL
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
+
+    ; 11. Right wheel (6x6, black)
     mov bx, [cs:player_x]
     add bx, CAR_W / 2 - 8
     mov cx, [cs:car_y]
@@ -1089,6 +1418,7 @@ draw_car:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
+.car_done:
     popa
     ret
 
@@ -1629,13 +1959,13 @@ draw_game_over:
 ; ============================================================================
 track_data:
     dw 0, 0, 0, 0                  ; Segments 0-3: straight
-    dw 5, 15, 25, 35               ; Segments 4-7: gentle entry into right
-    dw 40, 45, 45, 40              ; Segments 8-11: sustained right curve
-    dw 35, 25, 12, 5               ; Segments 12-15: ease out of right
+    dw 0, 0, 0, 0                  ; Segments 4-7: straight
+    dw 5, 15, 25, 30               ; Segments 8-11: gentle right curve
+    dw 30, 25, 15, 5               ; Segments 12-15: ease out right
     dw 0, 0, 0, 0                  ; Segments 16-19: straight
-    dw -5, -15, -25, -35           ; Segments 20-23: gentle entry into left
-    dw -40, -45, -45, -40          ; Segments 24-27: sustained left curve
-    dw -35, -25, -12, 0            ; Segments 28-31: ease out of left
+    dw 0, 0, 0, 0                  ; Segments 20-23: straight
+    dw -5, -15, -25, -30           ; Segments 24-27: gentle left curve
+    dw -30, -25, -15, 0            ; Segments 28-31: ease out left
 
 ; ============================================================================
 ; Data
@@ -1697,6 +2027,28 @@ has_stripe:     db 0
 sky_y:          dw 0
 sky_band_h:     dw 0
 sky_idx:        db 0
+
+; Crash state
+crash_timer:    db 0                ; Countdown: >0 = car is crashed
+
+; Obstacles (roadside trees)
+NUM_OBSTACLES           equ 8
+TRACK_TOTAL_LEN         equ (TRACK_SEGMENTS * SEGMENT_LENGTH) ; 2560
+obstacle_z:     dw 200, 520, 900, 1300, 1600, 1900, 2200, 2480
+obstacle_side:  db 1, 0, 1, 0, 1, 0, 1, 0  ; 0=left, 1=right of road
+
+; Road edge lookup table (60 strips max, indexed by (screen_y - horizon_y) / 2)
+road_edge_left:  times 60 dw 0
+road_edge_right: times 60 dw 0
+
+; Obstacle rendering scratch
+obs_cam_pos:    dw 0
+obs_rel_z:      dw 0
+obs_screen_y:   dw 0
+obs_tree_h:     dw 0
+obs_tree_w:     dw 0
+obs_tree_x:     dw 0
+obs_idx:        db 0
 
 ; Bitmap font for "OUTLAST" title (6 unique letters x 7 rows)
 ; Each byte = 5 columns (bit 4 = leftmost, bit 0 = rightmost)
