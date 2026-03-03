@@ -120,7 +120,7 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Validate function number (0-56 valid)
-    cmp ah, 101                     ; Max function count (0-100 valid)
+    cmp ah, 102                     ; Max function count (0-101 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -1298,6 +1298,21 @@ mouse_set_position:
 ; Output: AL = enabled flag (0=no, 1=yes)
 mouse_is_enabled:
     mov al, [mouse_enabled]
+    ret
+
+; mouse_set_visible - Show or hide mouse cursor (API 101)
+; Input: AL = 0 (hide), 1 (show)
+; Output: None
+mouse_set_visible:
+    cmp al, 0
+    je .msv_hide
+    ; Show: re-enable mouse (if hardware was detected)
+    mov byte [mouse_enabled], 1
+    ret
+.msv_hide:
+    ; Hide: erase cursor from screen, then disable
+    call mouse_cursor_hide
+    mov byte [mouse_enabled], 0
     ret
 
 ; ============================================================================
@@ -6901,7 +6916,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x2FE0 - ($ - $$) db 0
+times 0x3000 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -7077,6 +7092,7 @@ kernel_api_table:
     dw file_dialog_save             ; 98: System file save dialog
     dw widget_scrollbar_hit         ; 99: Scrollbar hit-test with drag
     dw get_video_mode_stub          ; 100: Get current video mode
+    dw mouse_set_visible            ; 101: Show/hide mouse cursor
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)

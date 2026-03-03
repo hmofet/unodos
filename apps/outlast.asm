@@ -62,6 +62,11 @@ entry:
     mov ah, API_THEME_SET_COLORS
     int 0x80
 
+    ; Hide mouse cursor during game
+    mov al, 0
+    mov ah, API_MOUSE_SET_VISIBLE
+    int 0x80
+
     ; Clear screen
     mov bx, 0
     mov cx, 0
@@ -204,19 +209,19 @@ entry:
     jg .on_grass
     jmp .not_on_grass
 .on_grass:
-    ; Heavy slowdown on grass
-    cmp word [cs:player_speed], 5
+    ; Slowdown on grass (gentle)
+    cmp word [cs:player_speed], 8
     jle .grass_min
-    sub word [cs:player_speed], 3
+    dec word [cs:player_speed]
     jmp .not_on_grass
 .grass_min:
-    mov word [cs:player_speed], 2
+    mov word [cs:player_speed], 5
 .not_on_grass:
 
     ; Curve drift: road curves push the car sideways
     call update_curve
     mov ax, [cs:current_curve]
-    sar ax, 3                        ; Drift = curve / 8 pixels per frame
+    sar ax, 2                        ; Drift = curve / 4 pixels per frame (strong)
     sub [cs:player_x], ax            ; Positive curve = right turn = car drifts left
 
     ; Advance camera based on speed
@@ -264,6 +269,11 @@ entry:
 .exit_game:
     call stop_music
 
+    ; Restore mouse cursor before exit
+    mov al, 1
+    mov ah, API_MOUSE_SET_VISIBLE
+    int 0x80
+
     ; Restore theme colors
     mov al, [cs:saved_text_clr]
     mov bl, [cs:saved_bg_clr]
@@ -291,6 +301,7 @@ API_DRAW_HLINE          equ 69
 API_SPEAKER_TONE        equ 41
 API_SPEAKER_OFF         equ 42
 API_WORD_TO_STRING      equ 91
+API_MOUSE_SET_VISIBLE   equ 101
 
 ; Title bitmap font constants
 TITLE_BLK_W             equ 6
@@ -431,8 +442,8 @@ draw_road:
     ; Initialize curve accumulator - starts at 0 for smooth progressive curve
     mov word [cs:curve_accum], 0
 
-    ; Draw road strips bottom-to-top (near to far), stop at car area
-    mov word [cs:strip_y], CAR_Y - 1
+    ; Draw road strips bottom-to-top (near to far, full detail everywhere)
+    mov word [cs:strip_y], 199
 
 .strip_loop:
     cmp word [cs:strip_y], HORIZON_Y
@@ -510,9 +521,10 @@ draw_road:
 .right_ok:
     mov [cs:road_right], bx
 
-    ; Save road edges at car Y position for grass collision check
+    ; Save road edges near car Y for grass collision check
+    ; Loop goes bottom-to-top; capture while strip_y >= CAR_Y (last capture = closest to car)
     cmp word [cs:strip_y], CAR_Y
-    jne .not_car_y
+    jb .not_car_y
     mov ax, [cs:road_left]
     mov [cs:road_left_at_car], ax
     mov ax, [cs:road_right]
@@ -617,43 +629,6 @@ draw_road:
     jmp .strip_loop
 
 .strips_done:
-    ; Draw bottom section (CAR_Y to screen bottom) using saved road edges
-    ; Left grass
-    mov bx, 0
-    mov cx, CAR_Y
-    mov dx, [cs:road_left_at_car]
-    cmp dx, 0
-    je .skip_bot_lg
-    mov si, 200 - CAR_Y
-    mov al, 1                       ; Cyan = grass
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_lg:
-    ; Road surface
-    mov bx, [cs:road_left_at_car]
-    mov cx, CAR_Y
-    mov dx, [cs:road_right_at_car]
-    sub dx, bx
-    cmp dx, 0
-    jle .skip_bot_road
-    mov si, 200 - CAR_Y
-    mov al, 3                       ; White = road
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_road:
-    ; Right grass
-    mov bx, [cs:road_right_at_car]
-    mov cx, CAR_Y
-    mov dx, 320
-    sub dx, bx
-    cmp dx, 0
-    jle .skip_bot_rg
-    mov si, 200 - CAR_Y
-    mov al, 1                       ; Cyan = grass
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_rg:
-
     popa
     ret
 

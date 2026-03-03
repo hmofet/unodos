@@ -54,6 +54,11 @@ entry:
     mov ah, API_SET_VIDEO_MODE
     int 0x80
 
+    ; Hide mouse cursor during game
+    mov al, 0
+    mov ah, API_MOUSE_SET_VISIBLE
+    int 0x80
+
     ; Create fullscreen frameless window
     xor bx, bx
     xor cx, cx
@@ -240,20 +245,20 @@ entry:
     jg .on_grass
     jmp .not_on_grass
 .on_grass:
-    ; Heavy slowdown on grass
-    cmp word [cs:player_speed], 5
+    ; Slowdown on grass (gentle)
+    cmp word [cs:player_speed], 8
     jle .grass_min
-    sub word [cs:player_speed], 3
+    dec word [cs:player_speed]
     jmp .not_on_grass
 .grass_min:
-    mov word [cs:player_speed], 2
+    mov word [cs:player_speed], 5
 .not_on_grass:
 
     ; Curve drift: road curves push the car sideways
     ; Without steering input, car drifts off road in curves
     call update_curve
     mov ax, [cs:current_curve]
-    sar ax, 3                        ; Drift = curve / 8 pixels per frame
+    sar ax, 2                        ; Drift = curve / 4 pixels per frame (strong)
     sub [cs:player_x], ax            ; Subtract: positive curve = right turn = car drifts left
 
     ; Advance camera
@@ -322,6 +327,11 @@ entry:
     mov ah, API_THEME_SET_COLORS
     int 0x80
 
+    ; Restore mouse cursor before exit
+    mov al, 1
+    mov ah, API_MOUSE_SET_VISIBLE
+    int 0x80
+
     ; Restore original video mode (handles CGA/VGA/SVGA)
     mov al, [cs:saved_video_mode]
     mov ah, API_SET_VIDEO_MODE
@@ -351,6 +361,7 @@ API_SPEAKER_TONE        equ 41
 API_SPEAKER_OFF         equ 42
 API_SET_VIDEO_MODE      equ 95
 API_GET_VIDEO_MODE      equ 100
+API_MOUSE_SET_VISIBLE   equ 101
 
 EVENT_KEY_PRESS         equ 1
 
@@ -773,8 +784,8 @@ draw_road:
     ; Initialize curve accumulator - starts at 0 for smooth progressive curve
     mov word [cs:curve_accum], 0
 
-    ; Start from car_y-1, draw upward toward horizon (car area drawn separately)
-    mov ax, [cs:car_y]
+    ; Start from screen bottom, draw upward toward horizon (full detail everywhere)
+    mov ax, [cs:scr_h]
     dec ax
     mov [cs:strip_y], ax
 
@@ -859,10 +870,11 @@ draw_road:
 .r_ok:
     mov [cs:road_right], bx
 
-    ; Save road edges at car Y position for grass collision check
+    ; Save road edges near car Y for grass collision check
+    ; Loop goes bottom-to-top; capture while strip_y >= car_y (last capture = closest to car)
     mov ax, [cs:strip_y]
     cmp ax, [cs:car_y]
-    jne .not_car_y
+    jb .not_car_y
     mov ax, [cs:road_left]
     mov [cs:road_left_at_car], ax
     mov ax, [cs:road_right]
@@ -997,47 +1009,6 @@ draw_road:
     jmp .strip_loop
 
 .strips_done:
-    ; Draw bottom section (car_y to screen bottom) using saved road edges
-    ; This avoids redrawing over the car area every frame (prevents flicker)
-    ; Left grass
-    mov bx, 0
-    mov cx, [cs:car_y]
-    mov dx, [cs:road_left_at_car]
-    cmp dx, 0
-    je .skip_bot_lg
-    mov si, [cs:scr_h]
-    sub si, [cs:car_y]
-    mov al, CLR_GRASS_LIGHT
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_lg:
-    ; Road surface
-    mov bx, [cs:road_left_at_car]
-    mov cx, [cs:car_y]
-    mov dx, [cs:road_right_at_car]
-    sub dx, bx
-    cmp dx, 0
-    jle .skip_bot_road
-    mov si, [cs:scr_h]
-    sub si, [cs:car_y]
-    mov al, CLR_ROAD_LIGHT
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_road:
-    ; Right grass
-    mov bx, [cs:road_right_at_car]
-    mov cx, [cs:car_y]
-    mov dx, [cs:scr_w]
-    sub dx, bx
-    cmp dx, 0
-    jle .skip_bot_rg
-    mov si, [cs:scr_h]
-    sub si, [cs:car_y]
-    mov al, CLR_GRASS_LIGHT
-    mov ah, API_FILLED_RECT_COLOR
-    int 0x80
-.skip_bot_rg:
-
     popa
     ret
 
