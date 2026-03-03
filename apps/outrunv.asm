@@ -522,6 +522,14 @@ init_game:
     mov word [cs:current_curve], 0
     mov byte [cs:game_state], STATE_PLAYING
 
+    ; Initialize road edges at car Y to prevent false grass detection
+    mov ax, [cs:scr_w]
+    shr ax, 1
+    sub ax, 100                      ; Approximate road left
+    mov [cs:road_left_at_car], ax
+    add ax, 200                      ; Approximate road right
+    mov [cs:road_right_at_car], ax
+
     mov ah, API_GET_TICK
     int 0x80
     mov [cs:last_tick], ax
@@ -573,14 +581,15 @@ update_curve:
 draw_sky:
     pusha
 
-    ; Divide horizon into 8 bands
+    ; Divide sky area (below HUD) into 8 bands
     mov ax, [cs:horizon_y]
+    sub ax, 12                       ; Skip HUD area (top 12 pixels)
     xor dx, dx
     mov bx, 8
     div bx
     mov [cs:sky_band_h], ax         ; Height per band
 
-    mov word [cs:sky_y], 0
+    mov word [cs:sky_y], 12          ; Start below HUD
     mov byte [cs:sky_idx], CLR_SKY_TOP
 
 .sky_loop:
@@ -634,9 +643,9 @@ draw_road:
     ; Initialize curve accumulator - starts at 0 for smooth progressive curve
     mov word [cs:curve_accum], 0
 
-    ; Start from screen bottom, draw upward toward horizon
-    mov ax, [cs:scr_h]
-    sub ax, 2
+    ; Start from car_y-1, draw upward toward horizon (car area drawn separately)
+    mov ax, [cs:car_y]
+    dec ax
     mov [cs:strip_y], ax
 
 .strip_loop:
@@ -858,6 +867,47 @@ draw_road:
     jmp .strip_loop
 
 .strips_done:
+    ; Draw bottom section (car_y to screen bottom) using saved road edges
+    ; This avoids redrawing over the car area every frame (prevents flicker)
+    ; Left grass
+    mov bx, 0
+    mov cx, [cs:car_y]
+    mov dx, [cs:road_left_at_car]
+    cmp dx, 0
+    je .skip_bot_lg
+    mov si, [cs:scr_h]
+    sub si, [cs:car_y]
+    mov al, CLR_GRASS_LIGHT
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_lg:
+    ; Road surface
+    mov bx, [cs:road_left_at_car]
+    mov cx, [cs:car_y]
+    mov dx, [cs:road_right_at_car]
+    sub dx, bx
+    cmp dx, 0
+    jle .skip_bot_road
+    mov si, [cs:scr_h]
+    sub si, [cs:car_y]
+    mov al, CLR_ROAD_LIGHT
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_road:
+    ; Right grass
+    mov bx, [cs:road_right_at_car]
+    mov cx, [cs:car_y]
+    mov dx, [cs:scr_w]
+    sub dx, bx
+    cmp dx, 0
+    jle .skip_bot_rg
+    mov si, [cs:scr_h]
+    sub si, [cs:car_y]
+    mov al, CLR_GRASS_LIGHT
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_rg:
+
     popa
     ret
 

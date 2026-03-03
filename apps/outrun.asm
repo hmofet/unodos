@@ -309,6 +309,10 @@ init_game:
     mov word [cs:current_curve], 0
     mov byte [cs:game_state], STATE_PLAYING
 
+    ; Initialize road edges at car Y to prevent false grass detection
+    mov word [cs:road_left_at_car], 60
+    mov word [cs:road_right_at_car], 260
+
     ; Get starting tick
     mov ah, API_GET_TICK
     int 0x80
@@ -351,11 +355,11 @@ update_curve:
 draw_road:
     pusha
 
-    ; Draw sky (top portion)
+    ; Draw sky (below HUD area to horizon)
     mov bx, 0
-    mov cx, 0
+    mov cx, 12                       ; Start below HUD to avoid flicker
     mov dx, 320
-    mov si, HORIZON_Y
+    mov si, HORIZON_Y - 12
     mov al, 0                       ; Black (sky)
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -371,8 +375,8 @@ draw_road:
     ; Initialize curve accumulator - starts at 0 for smooth progressive curve
     mov word [cs:curve_accum], 0
 
-    ; Draw road strips bottom-to-top (near to far) for curve accumulation
-    mov word [cs:strip_y], 198
+    ; Draw road strips bottom-to-top (near to far), stop at car area
+    mov word [cs:strip_y], CAR_Y - 1
 
 .strip_loop:
     cmp word [cs:strip_y], HORIZON_Y
@@ -557,6 +561,43 @@ draw_road:
     jmp .strip_loop
 
 .strips_done:
+    ; Draw bottom section (CAR_Y to screen bottom) using saved road edges
+    ; Left grass
+    mov bx, 0
+    mov cx, CAR_Y
+    mov dx, [cs:road_left_at_car]
+    cmp dx, 0
+    je .skip_bot_lg
+    mov si, 200 - CAR_Y
+    mov al, 1                       ; Cyan = grass
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_lg:
+    ; Road surface
+    mov bx, [cs:road_left_at_car]
+    mov cx, CAR_Y
+    mov dx, [cs:road_right_at_car]
+    sub dx, bx
+    cmp dx, 0
+    jle .skip_bot_road
+    mov si, 200 - CAR_Y
+    mov al, 3                       ; White = road
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_road:
+    ; Right grass
+    mov bx, [cs:road_right_at_car]
+    mov cx, CAR_Y
+    mov dx, 320
+    sub dx, bx
+    cmp dx, 0
+    jle .skip_bot_rg
+    mov si, 200 - CAR_Y
+    mov al, 1                       ; Cyan = grass
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+.skip_bot_rg:
+
     popa
     ret
 
