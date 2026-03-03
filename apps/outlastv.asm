@@ -370,7 +370,7 @@ STATE_PLAYING           equ 1
 STATE_GAMEOVER          equ 2
 
 MAX_SPEED               equ 60
-ROAD_BASE_HW            equ 22      ; Road half-width at screen bottom
+ROAD_BASE_HW            equ 16      ; Road half-width at screen bottom
 CAR_W                   equ 40
 CAR_H                   equ 24
 TRACK_SEGMENTS          equ 32

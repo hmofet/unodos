@@ -342,7 +342,7 @@ STATE_GAMEOVER          equ 2
 
 MAX_SPEED               equ 60
 HORIZON_Y               equ 80
-ROAD_BASE_W             equ 22      ; Base road half-width at bottom
+ROAD_BASE_W             equ 16      ; Base road half-width at bottom
 CAR_Y                   equ 168     ; Car Y position
 CAR_W                   equ 32
 CAR_H                   equ 20
