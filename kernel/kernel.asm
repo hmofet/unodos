@@ -120,9 +120,21 @@ install_int_80:
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
     ; Ensure forward direction for string operations used by API functions.
-    ; Also serves as code alignment — without this byte, a QEMU TCG translation
-    ; cache issue prevents the cooperative scheduler from context-switching.
     cld
+    ; QEMU TCG workaround: without sufficient instruction padding here, the TCG
+    ; translation cache produces incorrect code for the cooperative scheduler's
+    ; context-switch path (Settings app freezes, other apps unaffected). This is
+    ; NOT a real hardware issue — just a QEMU TCG code-generation quirk that is
+    ; sensitive to the handler's code offset. The NOPs ensure correct behavior
+    ; regardless of code changes elsewhere in the kernel.
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
 
     ; Validate function number
     cmp ah, 105                     ; Max function count (0-104 valid)
