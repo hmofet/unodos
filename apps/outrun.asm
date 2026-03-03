@@ -268,7 +268,7 @@ CAR_Y                   equ 175     ; Car Y position
 CAR_W                   equ 16
 CAR_H                   equ 10
 TRACK_SEGMENTS          equ 32
-SEGMENT_LENGTH          equ 40      ; Z-units per segment
+SEGMENT_LENGTH          equ 80      ; Longer segments = longer sustained curves
 
 ; ============================================================================
 ; init_game - Reset game state
@@ -345,8 +345,19 @@ draw_road:
     mov ah, API_DRAW_HLINE
     int 0x80
 
-    ; Initialize curve accumulator for this frame
-    mov word [cs:curve_accum], 0
+    ; Initialize curve accumulator with base offset from current segment
+    ; This makes the near road (foreground) also curve, not just the distance
+    mov ax, [cs:camera_z]
+    xor dx, dx
+    mov bx, SEGMENT_LENGTH
+    div bx                           ; AX = current seg index, DX = fraction
+    and ax, TRACK_SEGMENTS - 1
+    shl ax, 1
+    mov bx, ax
+    mov ax, [cs:track_data + bx]     ; Current segment curve value
+    ; Multiply by base factor: curve * 20 gives visible foreground shift
+    imul ax, 20
+    mov [cs:curve_accum], ax
 
     ; Draw road strips bottom-to-top (near to far) for curve accumulation
     mov word [cs:strip_y], 194
@@ -742,14 +753,14 @@ draw_game_over:
 ; Positive = curve right, negative = curve left
 ; ============================================================================
 track_data:
-    dw 0, 0, 5, 10                 ; Segments 0-3: slight intro right
-    dw 20, 35, 45, 45              ; Segments 4-7: right curve
-    dw 30, 10, -5, -15             ; Segments 8-11: transition left
-    dw -30, -50, -55, -50          ; Segments 12-15: sharp left
-    dw -30, -10, 0, 10             ; Segments 16-19: straighten
-    dw 25, 40, 50, 45              ; Segments 20-23: strong right
-    dw 30, 10, -10, -30            ; Segments 24-27: S-curve entry
-    dw -45, -50, -35, -15          ; Segments 28-31: left curve
+    dw 0, 0, 0, 0                  ; Segments 0-3: straight
+    dw 3, 8, 15, 20                ; Segments 4-7: gentle entry into right
+    dw 25, 28, 30, 30              ; Segments 8-11: sustained right curve
+    dw 28, 22, 12, 5               ; Segments 12-15: ease out of right
+    dw 0, 0, 0, 0                  ; Segments 16-19: straight
+    dw -3, -8, -15, -22            ; Segments 20-23: gentle entry into left
+    dw -28, -30, -30, -28          ; Segments 24-27: sustained left curve
+    dw -20, -12, -5, 0             ; Segments 28-31: ease out of left
 
 ; ============================================================================
 ; Data
