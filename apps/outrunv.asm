@@ -320,9 +320,9 @@ STATE_PLAYING           equ 1
 STATE_GAMEOVER          equ 2
 
 MAX_SPEED               equ 60
-ROAD_BASE_HW            equ 120     ; Road half-width at screen bottom
-CAR_W                   equ 20
-CAR_H                   equ 12
+ROAD_BASE_HW            equ 70      ; Road half-width at screen bottom
+CAR_W                   equ 40
+CAR_H                   equ 24
 TRACK_SEGMENTS          equ 32
 SEGMENT_LENGTH          equ 80      ; Longer segments = longer sustained curves
 
@@ -607,18 +607,27 @@ draw_road:
     mul bx
     mov [cs:depth_scale], ax
 
-    ; Initialize curve accumulator with base offset from current segment
-    ; This makes the near road (foreground) also curve, not just the distance
+    ; Initialize curve accumulator with interpolated base offset
+    ; Uses smooth interpolation to avoid angular artifacts at segment boundaries
     mov ax, [cs:camera_z]
     xor dx, dx
     mov bx, SEGMENT_LENGTH
-    div bx                           ; AX = current seg index, DX = fraction
+    div bx                           ; AX = seg index, DX = fraction
+    push dx                          ; Save fraction for interpolation
     and ax, TRACK_SEGMENTS - 1
     shl ax, 1
     mov bx, ax
-    mov ax, [cs:track_data + bx]     ; Current segment curve value
-    ; Multiply by base factor: curve * 20 gives visible foreground shift
-    imul ax, 20
+    mov si, [cs:track_data + bx]     ; SI = curve_a (current segment)
+    add bx, 2
+    and bx, (TRACK_SEGMENTS * 2) - 1
+    mov cx, [cs:track_data + bx]     ; CX = curve_b (next segment)
+    sub cx, si                        ; CX = delta
+    pop ax                            ; AX = fraction (0 to SEGMENT_LENGTH-1)
+    imul cx                           ; DX:AX = fraction * delta
+    mov cx, SEGMENT_LENGTH
+    idiv cx                           ; AX = interpolated offset
+    add ax, si                        ; AX = smooth curve value at camera_z
+    imul ax, 12                       ; Base offset factor
     mov [cs:curve_accum], ax
 
     ; Compute stop Y = car_y - 2
@@ -843,7 +852,7 @@ draw_road:
     ret
 
 ; ============================================================================
-; draw_car - Draw the player's car with VGA colors
+; draw_car - Draw the player's car with VGA colors (40x24)
 ; ============================================================================
 draw_car:
     pusha
@@ -858,13 +867,13 @@ draw_car:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Car shadow (dark ellipse)
+    ; Car shadow
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 + 2
+    sub bx, CAR_W / 2 + 3
     mov cx, [cs:car_y]
     add cx, CAR_H
-    mov dx, CAR_W + 4
-    mov si, 2
+    mov dx, CAR_W + 6
+    mov si, 3
     mov al, CLR_CAR_WHEEL
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -879,52 +888,52 @@ draw_car:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Dark accents on sides
+    ; Dark accents on sides (4px wide strips)
     mov bx, [cs:player_x]
     sub bx, CAR_W / 2
     mov cx, [cs:car_y]
-    add cx, 2
-    mov dx, 2
-    mov si, CAR_H - 3
+    add cx, 4
+    mov dx, 4
+    mov si, CAR_H - 6
     mov al, CLR_CAR_DARK
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
     mov bx, [cs:player_x]
-    add bx, CAR_W / 2 - 2
+    add bx, CAR_W / 2 - 4
     mov cx, [cs:car_y]
-    add cx, 2
-    mov dx, 2
-    mov si, CAR_H - 3
+    add cx, 4
+    mov dx, 4
+    mov si, CAR_H - 6
     mov al, CLR_CAR_DARK
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
     ; Windshield (blue)
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 - 3
+    sub bx, CAR_W / 2 - 5
     mov cx, [cs:car_y]
-    mov dx, CAR_W - 6
-    mov si, 3
+    mov dx, CAR_W - 10
+    mov si, 6
     mov al, CLR_CAR_WIND
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Wheels (black)
+    ; Wheels (black) - 6x6 each
     mov bx, [cs:player_x]
-    sub bx, CAR_W / 2 - 1
+    sub bx, CAR_W / 2 - 2
     mov cx, [cs:car_y]
-    add cx, CAR_H - 3
-    mov dx, 3
-    mov si, 3
+    add cx, CAR_H - 6
+    mov dx, 6
+    mov si, 6
     mov al, CLR_CAR_WHEEL
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
     mov bx, [cs:player_x]
-    add bx, CAR_W / 2 - 4
+    add bx, CAR_W / 2 - 8
     mov cx, [cs:car_y]
-    add cx, CAR_H - 3
-    mov dx, 3
-    mov si, 3
+    add cx, CAR_H - 6
+    mov dx, 6
+    mov si, 6
     mov al, CLR_CAR_WHEEL
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
@@ -1116,7 +1125,7 @@ last_tick:      dw 0
 
 ; Computed layout
 horizon_y:      dw 80
-car_y:          dw 175
+car_y:          dw 168
 depth_scale:    dw 4800
 stop_y:         dw 193
 
