@@ -151,7 +151,10 @@ entry:
 .accelerate:
     cmp word [cs:player_speed], MAX_SPEED
     jge .no_event
-    add word [cs:player_speed], 2
+    add word [cs:player_speed], 6   ; Faster accel for low-fps hardware
+    cmp word [cs:player_speed], MAX_SPEED
+    jle .no_event
+    mov word [cs:player_speed], MAX_SPEED
     jmp .no_event
 
 .brake:
@@ -178,7 +181,11 @@ entry:
     je .main_loop                   ; Same tick, skip frame
     mov [cs:last_tick], ax
 
-    ; Apply natural deceleration
+    ; Apply natural deceleration (every 3rd frame for low-fps playability)
+    inc byte [cs:decel_counter]
+    cmp byte [cs:decel_counter], 3
+    jb .no_decel
+    mov byte [cs:decel_counter], 0
     cmp word [cs:player_speed], 0
     je .no_decel
     dec word [cs:player_speed]
@@ -293,6 +300,7 @@ init_game:
     mov word [cs:score], 0
     mov word [cs:time_left], 60     ; 60 seconds
     mov word [cs:timer_counter], 0
+    mov byte [cs:decel_counter], 0
     mov word [cs:current_curve], 0
     mov byte [cs:game_state], STATE_PLAYING
 
@@ -775,6 +783,7 @@ camera_z:       dw 0                ; Camera position along track
 score:          dw 0
 time_left:      dw 60               ; Countdown in seconds
 timer_counter:  dw 0                ; Tick counter for timer
+decel_counter:  db 0                ; Decelerate every 3rd frame
 
 ; Current track state
 current_curve:  dw 0                ; Current curve value
