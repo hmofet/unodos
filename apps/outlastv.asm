@@ -1389,14 +1389,14 @@ draw_traffic:
     jge .dt_next
     mov [cs:traf_screen_y], ax
 
-    ; Car size: h = 500 / rel_z, w = 700 / rel_z
-    mov ax, 500
+    ; Car size: h = 1500 / rel_z, w = 2100 / rel_z (3x scale for visibility)
+    mov ax, 1500
     xor dx, dx
     mov bx, [cs:traf_rel_z]
     div bx
-    cmp ax, 30
+    cmp ax, 40
     jle .dt_h_ok
-    mov ax, 30
+    mov ax, 40
 .dt_h_ok:
     cmp ax, 2
     jge .dt_h_min
@@ -1404,13 +1404,13 @@ draw_traffic:
 .dt_h_min:
     mov [cs:traf_car_h], ax
 
-    mov ax, 700
+    mov ax, 2100
     xor dx, dx
     mov bx, [cs:traf_rel_z]
     div bx
-    cmp ax, 30
+    cmp ax, 50
     jle .dt_w_ok
-    mov ax, 30
+    mov ax, 50
 .dt_w_ok:
     cmp ax, 3
     jge .dt_w_min
