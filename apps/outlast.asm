@@ -203,6 +203,14 @@ entry:
     je .not_crashed
     dec byte [cs:crash_timer]
     mov word [cs:player_speed], 0
+    ; When crash ends, center car on road
+    cmp byte [cs:crash_timer], 0
+    jne .still_crashed
+    mov ax, [cs:road_left_at_car]
+    add ax, [cs:road_right_at_car]
+    shr ax, 1
+    mov [cs:player_x], ax
+.still_crashed:
     jmp .not_on_grass                ; Skip auto-accel and grass check
 .not_crashed:
 
@@ -240,6 +248,9 @@ entry:
     shr ax, 1
     add [cs:camera_z], ax
 
+    ; Move traffic cars
+    call update_traffic
+
     ; Update score (only when on road and not crashed)
     cmp byte [cs:crash_timer], 0
     jne .skip_score
@@ -276,9 +287,11 @@ entry:
 .render_frame:
     call draw_road
     call draw_obstacles
+    call draw_traffic
     call draw_car
     call draw_hud
     call check_obstacle_collision
+    call check_traffic_collision
     jmp .main_loop
 
 .game_over_trigger:
@@ -385,6 +398,11 @@ init_game:
     mov byte [cs:decel_counter], 0
     mov word [cs:current_curve], 0
     mov byte [cs:crash_timer], 0
+    ; Reset traffic positions
+    mov word [cs:traffic_z], 400
+    mov word [cs:traffic_z + 2], 1600
+    mov word [cs:traffic_z + 4], 800
+    mov word [cs:traffic_z + 6], 2000
     mov byte [cs:game_state], STATE_PLAYING
 
     ; Initialize road edges at car Y to prevent false grass detection
@@ -901,6 +919,270 @@ check_obstacle_collision:
     jmp .col_loop
 
 .col_done:
+    popa
+    ret
+
+; ============================================================================
+; update_traffic - Move traffic cars along the track (CGA)
+; ============================================================================
+update_traffic:
+    pusha
+    xor cx, cx
+.ut_loop:
+    cmp cl, NUM_TRAFFIC
+    jge .ut_done
+    xor bh, bh
+    mov bl, cl
+    push cx
+    mov al, [cs:traffic_dir + bx]
+    shl bx, 1
+    cmp al, 1
+    je .ut_same
+    ; Oncoming: traffic_z -= TRAFFIC_ONC_SPEED
+    mov ax, [cs:traffic_z + bx]
+    sub ax, TRAFFIC_ONC_SPEED
+    cmp ax, 0
+    jge .ut_store
+    add ax, TRACK_TOTAL_LEN
+    jmp .ut_store
+.ut_same:
+    mov ax, [cs:traffic_z + bx]
+    add ax, TRAFFIC_SAME_SPEED
+    cmp ax, TRACK_TOTAL_LEN
+    jl .ut_store
+    sub ax, TRACK_TOTAL_LEN
+.ut_store:
+    mov [cs:traffic_z + bx], ax
+    pop cx
+    inc cl
+    jmp .ut_loop
+.ut_done:
+    popa
+    ret
+
+; ============================================================================
+; draw_traffic - Draw traffic cars on the road (CGA)
+; ============================================================================
+draw_traffic:
+    pusha
+
+    mov ax, [cs:camera_z]
+    xor dx, dx
+    mov bx, TRACK_TOTAL_LEN
+    div bx
+    mov [cs:traf_cam_pos], dx
+
+    mov byte [cs:traf_idx], 0
+.dt_loop:
+    cmp byte [cs:traf_idx], NUM_TRAFFIC
+    jge .dt_done
+
+    xor bh, bh
+    mov bl, [cs:traf_idx]
+    shl bx, 1
+    mov ax, [cs:traffic_z + bx]
+    sub ax, [cs:traf_cam_pos]
+    jge .dt_pos_ok
+    add ax, TRACK_TOTAL_LEN
+.dt_pos_ok:
+    mov [cs:traf_rel_z], ax
+
+    cmp ax, 20
+    jl .dt_next
+    cmp ax, 400
+    jg .dt_next
+
+    ; screen_y = HORIZON_Y + 4800 / rel_z
+    mov ax, 4800
+    xor dx, dx
+    mov bx, [cs:traf_rel_z]
+    div bx
+    add ax, HORIZON_Y
+    cmp ax, 200
+    jge .dt_next
+    mov [cs:traf_screen_y], ax
+
+    ; Car size
+    mov ax, 500
+    xor dx, dx
+    mov bx, [cs:traf_rel_z]
+    div bx
+    cmp ax, 30
+    jle .dt_h_ok
+    mov ax, 30
+.dt_h_ok:
+    cmp ax, 2
+    jge .dt_h_min
+    mov ax, 2
+.dt_h_min:
+    mov [cs:traf_car_h], ax
+
+    mov ax, 700
+    xor dx, dx
+    mov bx, [cs:traf_rel_z]
+    div bx
+    cmp ax, 30
+    jle .dt_w_ok
+    mov ax, 30
+.dt_w_ok:
+    cmp ax, 3
+    jge .dt_w_min
+    mov ax, 3
+.dt_w_min:
+    mov [cs:traf_car_w], ax
+
+    ; Look up road edges
+    mov ax, [cs:traf_screen_y]
+    sub ax, HORIZON_Y
+    shr ax, 1
+    cmp ax, 60
+    jae .dt_next
+    shl ax, 1
+    mov di, ax
+
+    ; Lane center X
+    mov ax, [cs:road_edge_right + di]
+    sub ax, [cs:road_edge_left + di]
+    shr ax, 2                         ; quarter-width
+
+    xor bh, bh
+    mov bl, [cs:traf_idx]
+    cmp byte [cs:traffic_lane + bx], 0
+    je .dt_left_lane
+
+    ; Right lane
+    mov bx, [cs:road_edge_right + di]
+    sub bx, ax
+    jmp .dt_got_center
+.dt_left_lane:
+    mov bx, [cs:road_edge_left + di]
+    add bx, ax
+.dt_got_center:
+    ; Center car on lane
+    mov ax, [cs:traf_car_w]
+    shr ax, 1
+    sub bx, ax
+    mov [cs:traf_car_x], bx
+
+    cmp bx, 0
+    jl .dt_next
+    cmp bx, 310
+    jg .dt_next
+
+    ; Color: oncoming=white(3), same=cyan(1)
+    xor bh, bh
+    mov bl, [cs:traf_idx]
+    cmp byte [cs:traffic_dir + bx], 1
+    je .dt_same_color
+    mov byte [cs:traf_body_clr], 3    ; White for oncoming
+    jmp .dt_draw_body
+.dt_same_color:
+    mov byte [cs:traf_body_clr], 1    ; Cyan for same direction
+
+.dt_draw_body:
+    mov bx, [cs:traf_car_x]
+    mov cx, [cs:traf_screen_y]
+    sub cx, [cs:traf_car_h]
+    mov dx, [cs:traf_car_w]
+    mov si, [cs:traf_car_h]
+    mov al, [cs:traf_body_clr]
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+    ; Windshield (dark strip)
+    mov bx, [cs:traf_car_x]
+    mov ax, [cs:traf_car_w]
+    shr ax, 2
+    add bx, ax
+    mov cx, [cs:traf_screen_y]
+    sub cx, [cs:traf_car_h]
+    mov dx, [cs:traf_car_w]
+    shr dx, 1
+    mov si, [cs:traf_car_h]
+    shr si, 2
+    cmp si, 1
+    jge .dt_ws_ok
+    mov si, 1
+.dt_ws_ok:
+    mov al, 0                         ; Black windshield (CGA)
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+
+.dt_next:
+    inc byte [cs:traf_idx]
+    jmp .dt_loop
+
+.dt_done:
+    popa
+    ret
+
+traf_body_clr:  db 0
+
+; ============================================================================
+; check_traffic_collision - Check if player hit a traffic car (CGA)
+; ============================================================================
+check_traffic_collision:
+    pusha
+
+    cmp byte [cs:crash_timer], 0
+    jne .tc_done
+
+    mov ax, [cs:camera_z]
+    xor dx, dx
+    mov bx, TRACK_TOTAL_LEN
+    div bx
+
+    xor ch, ch
+    xor cl, cl
+.tc_loop:
+    cmp cl, NUM_TRAFFIC
+    jge .tc_done
+
+    push cx
+    xor bh, bh
+    mov bl, cl
+    shl bx, 1
+    mov ax, [cs:traffic_z + bx]
+    sub ax, dx
+    jge .tc_pos_ok
+    add ax, TRACK_TOTAL_LEN
+.tc_pos_ok:
+    cmp ax, 15
+    jg .tc_next
+
+    pop cx
+    push cx
+    xor bh, bh
+    mov bl, cl
+    mov ax, [cs:road_right_at_car]
+    sub ax, [cs:road_left_at_car]
+    shr ax, 2
+    cmp byte [cs:traffic_lane + bx], 0
+    je .tc_left_lane
+    mov bx, [cs:road_right_at_car]
+    sub bx, ax
+    jmp .tc_check_x
+.tc_left_lane:
+    mov bx, [cs:road_left_at_car]
+    add bx, ax
+.tc_check_x:
+    mov ax, [cs:player_x]
+    sub ax, bx
+    cmp ax, 25
+    jg .tc_next
+    cmp ax, -25
+    jl .tc_next
+    mov byte [cs:crash_timer], 36
+    mov word [cs:player_speed], 0
+    pop cx
+    jmp .tc_done
+
+.tc_next:
+    pop cx
+    inc cl
+    jmp .tc_loop
+
+.tc_done:
     popa
     ret
 
@@ -1482,6 +1764,23 @@ obs_tree_h:     dw 0
 obs_tree_w:     dw 0
 obs_tree_x:     dw 0
 obs_idx:        db 0
+
+; Traffic cars
+NUM_TRAFFIC             equ 4
+TRAFFIC_SAME_SPEED      equ 15      ; Same-direction speed (units/tick)
+TRAFFIC_ONC_SPEED       equ 15      ; Oncoming speed (units/tick)
+traffic_z:      dw 400, 1600, 800, 2000     ; Track positions
+traffic_dir:    db 1, 1, 0, 0               ; 1=same direction, 0=oncoming
+traffic_lane:   db 1, 0, 0, 1               ; 0=left lane, 1=right lane
+
+; Traffic rendering scratch
+traf_cam_pos:   dw 0
+traf_rel_z:     dw 0
+traf_screen_y:  dw 0
+traf_car_h:     dw 0
+traf_car_w:     dw 0
+traf_car_x:     dw 0
+traf_idx:       db 0
 
 ; Bitmap font for "OUTLAST" title (6 unique letters x 7 rows)
 title_font:
