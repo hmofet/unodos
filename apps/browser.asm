@@ -185,7 +185,7 @@ entry:
 
 .not_redraw:
     cmp al, EVENT_KEY_PRESS
-    jne .main_loop
+    jne .check_mouse
     ; DL=ASCII, DH=scan
     cmp dl, 27                      ; ESC
     je .key_esc

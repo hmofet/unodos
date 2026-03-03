@@ -185,7 +185,7 @@ entry:
 
 .check_redraw:
     cmp al, EVENT_WIN_REDRAW
-    jne .main_loop
+    jne .check_mouse                ; EVENT_MOUSE or other → check mouse state
     ; Refresh RTC time on repaint
     mov ah, API_GET_RTC_TIME
     int 0x80
