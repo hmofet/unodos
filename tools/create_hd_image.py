@@ -295,8 +295,8 @@ def find_apps():
         ('tetrisv.bin', 'TETRISV.BIN'),
         ('notepad.bin', 'TEXT.BIN'),
         ('sysinfo.bin', 'SYSINFO.BIN'),
-        ('outrun.bin', 'OUTRUN.BIN'),
-        ('outrunv.bin', 'OUTRUNV.BIN'),
+        ('outlast.bin', 'OUTLAST.BIN'),
+        ('outlastv.bin', 'OUTLASTV.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
