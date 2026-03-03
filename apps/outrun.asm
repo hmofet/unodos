@@ -404,9 +404,9 @@ draw_road:
     ; Accumulate curve offset (builds progressive bend)
     add [cs:curve_accum], ax
 
-    ; Road center = 160 + (curve_accum >> 6)
+    ; Road center = 160 + (curve_accum >> 5)
     mov ax, [cs:curve_accum]
-    sar ax, 6
+    sar ax, 5
     add ax, 160
     mov [cs:strip_cx], ax
 
@@ -742,14 +742,14 @@ draw_game_over:
 ; Positive = curve right, negative = curve left
 ; ============================================================================
 track_data:
-    dw 0, 0, 0, 0                  ; Segments 0-3: straight
-    dw 20, 40, 50, 50              ; Segments 4-7: right curve
-    dw 30, 15, 0, 0                ; Segments 8-11: straighten
-    dw -25, -50, -55, -55          ; Segments 12-15: sharp left
-    dw -40, -20, 0, 0              ; Segments 16-19: straighten
-    dw 0, 0, 15, 30                ; Segments 20-23: gentle right
-    dw 45, 55, 55, 45              ; Segments 24-27: sharp right
-    dw 20, -20, -45, -25           ; Segments 28-31: S-curve
+    dw 0, 0, 5, 10                 ; Segments 0-3: slight intro right
+    dw 20, 35, 45, 45              ; Segments 4-7: right curve
+    dw 30, 10, -5, -15             ; Segments 8-11: transition left
+    dw -30, -50, -55, -50          ; Segments 12-15: sharp left
+    dw -30, -10, 0, 10             ; Segments 16-19: straighten
+    dw 25, 40, 50, 45              ; Segments 20-23: strong right
+    dw 30, 10, -10, -30            ; Segments 24-27: S-curve entry
+    dw -45, -50, -35, -15          ; Segments 28-31: left curve
 
 ; ============================================================================
 ; Data
