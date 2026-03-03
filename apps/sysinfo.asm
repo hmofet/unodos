@@ -141,7 +141,7 @@ entry:
 
 .not_redraw:
     cmp al, EVENT_KEY_PRESS
-    jne .main_loop
+    jne .check_mouse
     cmp dl, 27
     je .exit_ok
     cmp dl, 13
