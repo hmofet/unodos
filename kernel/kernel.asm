@@ -119,7 +119,12 @@ install_int_80:
 ; Output: Function-specific return values, CF=error status
 ; NOTE: AH=0 is gfx_draw_pixel (no longer API discovery)
 int_80_handler:
-    ; Validate function number (0-56 valid)
+    ; Ensure forward direction for string operations used by API functions.
+    ; Also serves as code alignment — without this byte, a QEMU TCG translation
+    ; cache issue prevents the cooperative scheduler from context-switching.
+    cld
+
+    ; Validate function number
     cmp ah, 105                     ; Max function count (0-104 valid)
     jae .invalid_function
 
@@ -14771,7 +14776,13 @@ scheduler_next:
     add bx, app_table
 
     cmp byte [bx + APP_OFF_STATE], APP_STATE_RUNNING
-    je .found
+    jne .not_running
+    ; Skip the current task — yield should find a DIFFERENT task.
+    ; Without this, the scan wraps around and hits the current task
+    ; first, starving all other running tasks.
+    cmp cl, [current_task]
+    jne .found
+.not_running:
 
     inc cl
     and cl, 0x0F                    ; Wrap
@@ -14784,7 +14795,8 @@ scheduler_next:
     ret
 
 .none_found:
-    mov al, 0xFF
+    ; No OTHER running task found — return current task (single-task yield)
+    mov al, [current_task]
     pop cx
     ret
 
@@ -14861,7 +14873,6 @@ app_yield_stub:
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
-
 .same_task:
     popa                            ; Restore all general-purpose registers
     ret                             ; Returns via int80_return_point → pop ds → iret
