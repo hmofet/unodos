@@ -1361,6 +1361,11 @@ mouse_set_visible:
 win_begin_draw:
     cmp al, WIN_MAX_COUNT
     jae .wbd_invalid
+    ; Hide cursor for batch drawing (Build 397: perf fix)
+    ; Keeps cursor hidden until win_end_draw, so per-API cursor
+    ; hide/show in the dispatcher are no-ops (cursor_locked > 0).
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
     mov [draw_context], al
     ; Set up clip rectangle from window content area
     push bx
@@ -1401,6 +1406,12 @@ win_begin_draw:
 win_end_draw:
     mov byte [draw_context], 0xFF
     mov byte [clip_enabled], 0
+    ; Show cursor after batch drawing (Build 397: perf fix)
+    cmp byte [cursor_locked], 0
+    je .wed_done
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+.wed_done:
     ret
 
 ; ============================================================================
@@ -14799,6 +14810,11 @@ app_yield_stub:
     mov [current_task], al
     mov [scheduler_last], al
 
+    ; Reset cursor state before switching tasks (Build 397)
+    ; Previous task may have cursor_locked > 0 from win_begin_draw.
+    mov byte [cursor_locked], 0
+    call mouse_cursor_show
+
     ; Restore draw_context and recalculate clip state.
     ; clip_enabled / clip_x1/x2/y1/y2 are global state NOT saved per-task.
     ; Without this, a task inherits the previous task's clip rect, causing
@@ -14955,6 +14971,9 @@ app_exit_stub:
     ; Clear draw context BEFORE destroying windows (prevents stale context during redraw)
     mov byte [draw_context], 0xFF
     mov byte [clip_enabled], 0
+    ; Reset cursor state (exiting app may have cursor_locked from win_begin_draw)
+    mov byte [cursor_locked], 0
+    call mouse_cursor_show
 
     ; Restore default font BEFORE destroying windows (so title bars render correctly)
     push ax
@@ -16035,6 +16054,29 @@ gfx_fill_color:
 .gfc_vga:
     ; VGA: linear framebuffer, 1 byte per pixel, rep stosb per row
     ; BX=X, CX=Y, DX=width, BP=height
+    ; Bounds clamp (Build 397): prevent writes past screen edge
+    cmp bx, [screen_width]
+    jae .gfc_cursor_done
+    cmp cx, [screen_height]
+    jae .gfc_cursor_done
+    mov ax, bx
+    add ax, dx
+    cmp ax, [screen_width]
+    jbe .gfc_vga_w_ok
+    mov dx, [screen_width]
+    sub dx, bx
+.gfc_vga_w_ok:
+    mov ax, cx
+    add ax, bp
+    cmp ax, [screen_height]
+    jbe .gfc_vga_h_ok
+    mov bp, [screen_height]
+    sub bp, cx
+.gfc_vga_h_ok:
+    test dx, dx
+    jz .gfc_cursor_done
+    test bp, bp
+    jz .gfc_cursor_done
     mov al, [.fill_color]
 .gfc_vga_row:
     push cx                         ; Save Y
