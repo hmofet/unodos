@@ -228,6 +228,8 @@ entry:
     jmp .sb_skip
 
 .sb_drag:
+    cmp dl, [scroll_top]
+    je .main_loop                      ; Same position, skip redraw
     mov [scroll_top], dl
     ; Keep sel_index in visible range
     mov al, [sel_index]
