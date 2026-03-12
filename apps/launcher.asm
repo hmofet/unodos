@@ -2234,7 +2234,7 @@ str_sort_az:        db 'Sort A-Z', 0
 str_sort_za:        db 'Sort Z-A', 0
 str_snap_grid:      db 'Snap to Grid', 0
 str_unlock:         db '  Unlocked', 0
-str_lock:           db '  Unlocked', 0
+str_lock:           db '    Locked', 0
 
 ; Context menu / drag state
 launcher_mode:      db 0        ; 0=normal, 1=context_menu, 2=icon_drag

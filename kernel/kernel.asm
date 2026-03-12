@@ -5170,10 +5170,10 @@ file_dialog_open:
     ; Initial draw
     call fdlg_draw_full
 
-    ; --- Modal event loop ---
+    ; --- Modal event loop (intentionally blocks all other tasks — Windows 3.1-style modal) ---
 .fdlg_loop:
     sti                                 ; Re-enable interrupts
-    hlt                                 ; Wait for next interrupt
+    hlt                                 ; Wait for next interrupt (no yield — modal)
 
     ; Poll events
     call event_get_stub
@@ -5855,7 +5855,7 @@ file_dialog_save:
     ; Initial draw
     call sdlg_draw_full
 
-    ; --- Modal event loop ---
+    ; --- Modal event loop (intentionally blocks all other tasks — Windows 3.1-style modal) ---
 .sdlg_loop:
     sti
     hlt
@@ -6956,7 +6956,7 @@ gfx_blit_rect:
     je .blit_done
     cmp word [_blit_height], 0
     je .blit_done
-    ; Self-translate if draw_context active
+    ; Self-translating: not handled by INT 0x80 dispatcher (API 103 not in translation range)
     cmp byte [draw_context], 0xFF
     je .blit_no_translate
     cmp byte [draw_context], WIN_MAX_COUNT
@@ -7306,7 +7306,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 64                           ; Number of function slots (0-63)
+    dw 105                          ; Number of function slots (0-104)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -18857,8 +18857,8 @@ get_task_info:
 .gti_loop:
     cmp si, APP_MAX_COUNT
     jae .gti_done
-    cmp byte [di + APP_OFF_STATE], APP_STATE_FREE
-    je .gti_next
+    cmp byte [di + APP_OFF_STATE], APP_STATE_RUNNING
+    jne .gti_next
     inc cl
 .gti_next:
     add di, APP_ENTRY_SIZE
@@ -20077,6 +20077,7 @@ _blit_dst_off:  dw 0            ; VGA dest linear offset
 heap_initialized: dw 0
 
 ; System call dispatcher temp (v3.12.0)
+; WARNING: not reentrant — must move to per-task storage before preemptive scheduling
 syscall_func: dw 0
 caller_ds: dw 0x1000                ; Caller's DS segment (init to kernel for direct calls)
 caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for direct calls)
