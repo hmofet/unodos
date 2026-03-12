@@ -157,60 +157,55 @@ int_80_handler:
     push ax
     mov ax, 0x1000
     mov ds, ax
-    ; Set draw foreground color from text theme color
+    pop ax
+
+    ; === Drawing API detection via bitmap (Build 396: A3/A2/A1) ===
+    ; Uses api_drawing_bitmap to determine if this API needs:
+    ;   - Theme color setup (A2)
+    ;   - Cursor protection (A1)
+    ;   - Coordinate translation check (A3)
+    ; Non-drawing APIs (events, filesystem, yield) skip all of this.
+    mov byte [_did_cursor_protect], 0
+    mov byte [_did_translate], 0
+
+    push bx
+    movzx bx, ah
+    bt [api_drawing_bitmap], bx
+    pop bx
+    jnc .no_translate               ; Not a drawing API — skip to dispatch
+
+    ; --- Drawing API: set theme colors (A2 — only for drawing APIs) ---
+    push ax
     mov al, [text_color]
     mov [draw_fg_color], al
-    ; Auto-set draw_bg_color: window context = 0 (black), no context = desktop color
     cmp byte [draw_context], 0xFF
     jne .set_bg_win
     mov al, [desktop_bg_color]
     mov [draw_bg_color], al
-    jmp .set_bg_end
+    jmp .set_bg_done
 .set_bg_win:
     mov byte [draw_bg_color], 0
-.set_bg_end:
+.set_bg_done:
     pop ax
 
-    ; --- Window-relative coordinate translation ---
-    ; If draw_context is active (valid window handle) and function is a
-    ; drawing API (0-6), translate BX/CX from window-relative to absolute
-    ; screen coordinates. Apps draw at (0,0) = top-left of content area.
-    ; BX/CX are restored after the API call so apps keep their original coords.
-    mov byte [_did_translate], 0    ; Clear translation flag
+    ; --- Drawing API: cursor protection (A1 — centralized) ---
+    call mouse_cursor_hide
+    inc byte [cursor_locked]
+    mov byte [_did_cursor_protect], 1
+
+    ; --- Drawing API: coordinate translation check ---
     cmp byte [draw_context], 0xFF
-    je .no_translate                ; No active context
+    je .no_translate                ; No active draw context
     cmp byte [draw_context], WIN_MAX_COUNT
-    jae .no_translate               ; Invalid context, treat as no context
-    cmp ah, 6
-    jbe .do_translate               ; APIs 0-6: drawing functions
-    cmp ah, 50
-    jb .no_translate                ; APIs 7-49: no translation
-    cmp ah, 53
-    jb .do_translate                ; APIs 50-52: translate coords
-    cmp ah, 56
-    jb .no_translate                ; APIs 53-55: no translation
-    cmp ah, 63
-    jb .do_translate                ; APIs 56-62: widget APIs
-    cmp ah, 65
-    jb .no_translate                ; APIs 63-64: not drawing, skip
-    cmp ah, 67
-    jb .do_translate                ; APIs 65-66: combobox, menubar
-    cmp ah, 72
-    jb .do_translate                ; APIs 67-71: colored drawing + line
-    cmp ah, 80
-    jb .no_translate                ; APIs 72-79: non-drawing
-    cmp ah, 81
-    jb .do_translate                ; API 80: gfx_scroll_area
-    cmp ah, 87
-    jb .no_translate                ; APIs 81-86: non-drawing
-    cmp ah, 88
-    jb .do_translate                ; API 87: menu_open
-    cmp ah, 94
-    je .do_translate                ; API 94: gfx_draw_sprite
-    cmp ah, 102
-    je .do_translate                ; API 102: gfx_draw_sprite_scaled
-    jmp .no_translate               ; Others: skip translation
-.do_translate:                      ; APIs 0-6, 50-52, 56-62, 65-66: translate
+    jae .no_translate               ; Invalid context
+
+    push bx
+    movzx bx, ah
+    bt [api_translate_bitmap], bx
+    pop bx
+    jnc .no_translate               ; Not in translation bitmap
+
+.do_translate:
 
     ; Save original BX/CX so we can restore them after the API call.
     ; Without this, apps that reuse BX/CX across drawing calls get
@@ -383,12 +378,21 @@ int80_return_point:
     ; Function returned - preserve CF from function in return FLAGS
     ; Stack: [caller's DS] [IP] [CS] [FLAGS]
     ; IMPORTANT: Do NOT destroy AX - functions return values in AX!
+    ; mouse_cursor_hide/show preserve all registers (push/pop ax,bx,cx,es).
 
-    ; Restore pre-translation BX/CX so apps keep their original coordinates.
-    ; DS is still kernel (0x1000) at this point (caller DS is on stack).
     ; CRITICAL: pushf/popf preserves CF from the API function — the cmp
     ; below would otherwise clobber it, breaking all CF-based return status.
     pushf
+
+    ; --- Cursor unprotect (A1 — centralized, Build 396) ---
+    cmp byte [_did_cursor_protect], 0
+    je .no_cursor_restore
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+.no_cursor_restore:
+
+    ; Restore pre-translation BX/CX so apps keep their original coordinates.
+    ; DS is still kernel (0x1000) at this point (caller DS is on stack).
     cmp byte [_did_translate], 0
     je .no_coord_restore
     mov bx, [_save_bx]
@@ -4918,9 +4922,6 @@ KMENU_ITEM_H        equ 10                  ; Pixels per menu item
 ; Output: CF=0 success
 ; Note: BX/CX arrive already translated to absolute screen coords by INT 0x80
 menu_open:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
-
     ; Save menu parameters
     mov [kmenu_count], dl
     mov [kmenu_w], dh
@@ -5013,8 +5014,6 @@ menu_open:
     pop word [clip_enabled]
     pop word [draw_context]
 
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     clc
     ret
 
@@ -6710,9 +6709,6 @@ gfx_draw_sprite:
     ; ES = video segment
     mov ax, [video_segment]
     mov es, ax
-    ; Cursor protection (DS=0x1000)
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     ; Draw loop — DS stays 0x1000, switch to caller_ds only for lodsb
     movzx bp, byte [_spr_height]
 .spr_row:
@@ -6740,9 +6736,6 @@ gfx_draw_sprite:
     inc bx                          ; next Y row
     dec bp
     jnz .spr_row
-    ; Restore cursor
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     pop es
     popa
     clc
@@ -6804,13 +6797,9 @@ gfx_read_pixel:
     cmp bx, [screen_height]
     jae .grp_oob
     push es
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     mov ax, [video_segment]
     mov es, ax
     call read_pixel_internal
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     pop es
     xchg bx, cx                         ; Restore: BX=X, CX=Y for caller
     clc
@@ -6866,9 +6855,6 @@ gfx_draw_sprite_scaled:
     ; ES = video segment
     mov ax, [video_segment]
     mov es, ax
-    ; Cursor protection
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     ; Outer loop: dy = 0 to dest_h-1
     ; BX = current screen Y (for plot_pixel_color: BX=Y)
     mov bx, cx                          ; BX = dest_y (screen Y)
@@ -6924,9 +6910,6 @@ gfx_draw_sprite_scaled:
     inc word [_sspr_dy]
     jmp .sspr_row_loop
 .sspr_end:
-    ; Restore cursor
-    dec byte [cursor_locked]
-    call mouse_cursor_show
 .sspr_done:
     pop es
     popa
@@ -6986,9 +6969,6 @@ gfx_blit_rect:
     mov [_blit_src_y], si
     mov [_blit_dst_x], bx
     mov [_blit_dst_y], cx
-    ; Cursor protection
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     ; Check video mode for fast path
     cmp byte [video_mode], 0x13
     je .blit_vga
@@ -7095,8 +7075,6 @@ gfx_blit_rect:
     mov ax, 0x1000
     mov ds, ax
 .blit_finish:
-    dec byte [cursor_locked]
-    call mouse_cursor_show
 .blit_done:
     pop ds
     pop es
@@ -7492,8 +7470,6 @@ kernel_api_table:
 ; Output: None
 ; Preserves: All registers
 gfx_draw_pixel_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     push es
     push dx
     mov dx, [cs:video_segment]
@@ -7504,8 +7480,6 @@ gfx_draw_pixel_stub:
     xchg bx, cx                    ; Restore BX=X, CX=Y
     pop dx
     pop es
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     ret
 
 ; gfx_draw_char_stub - Draw character
@@ -7755,8 +7729,6 @@ plot_pixel_color:
 ; ============================================================================
 gfx_draw_string_wrap:
     ; Save all registers we'll modify
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     push es
     push ax
     push dx
@@ -7839,8 +7811,6 @@ gfx_draw_string_wrap:
     pop dx
     pop ax
     pop es
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     clc
     ret
 
@@ -8102,8 +8072,6 @@ widget_draw_button:
 ; ============================================================================
 widget_draw_radio:
     ; BX=X, CX=Y, SI=label (caller_ds), AL=flags (bit 0: selected)
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     push es
     push ax
     push bx
@@ -8154,8 +8122,6 @@ widget_draw_radio:
     pop bx
     pop ax
     pop es
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     clc
     ret
 
@@ -9634,37 +9600,13 @@ gfx_draw_rect_stub:
 
 ; gfx_draw_filled_rect_stub - Draw filled rectangle
 gfx_draw_filled_rect_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
-    push es
+    ; A4 optimization (Build 396): delegate to gfx_fill_color which has fast
+    ; byte-aligned CGA, rep stosb VGA, banked VESA, and planar Mode 12h paths.
+    ; Previous implementation was pixel-by-pixel via plot_pixel_white (~4x slower).
     push ax
-    push bp
-    push di
-    mov ax, [video_segment]
-    mov es, ax
-    mov bp, si
-    ; Swap BX/CX: API has BX=X,CX=Y but plot_pixel_white needs CX=X,BX=Y
-    xchg bx, cx
-.row:
-    mov di, dx
-    push bx                         ; Save Y
-    push cx                         ; Save X
-.col:
-    call plot_pixel_white           ; CX=X, BX=Y
-    inc cx                          ; Next X
-    dec di
-    jnz .col
-    pop cx                          ; Restore X
-    pop bx                          ; Restore Y
-    inc bx                          ; Next Y
-    dec bp
-    jnz .row
-    pop di
-    pop bp
+    mov al, [draw_fg_color]
+    call gfx_fill_color
     pop ax
-    pop es
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     ret
 
 ; gfx_clear_area_stub - Clear rectangular area
@@ -18365,8 +18307,6 @@ gfx_draw_vline:
 ; Input: BX=X1, CX=Y1, DX=X2, SI=Y2, AL=color(0-3)
 ; Output: CF=0
 gfx_draw_line:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     push es
     push ax
     push bx
@@ -18463,8 +18403,6 @@ gfx_draw_line:
     pop bx
     pop ax
     pop es
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     clc
     ret
 
@@ -19485,8 +19423,6 @@ win_get_content_size:
 ; Output: none, CF=0
 ; Note: Operates on CGA byte boundaries for X/W (rounds to 4-pixel groups)
 gfx_scroll_area:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
     push ax
     push bx
     push cx
@@ -19949,8 +19885,6 @@ gfx_scroll_area:
     pop cx
     pop bx
     pop ax
-    dec byte [cursor_locked]
-    call mouse_cursor_show
     clc
     ret
 
@@ -20087,6 +20021,49 @@ _save_cx: dw 0                      ; Pre-translation CX (caller's original valu
 _did_scale: db 0                     ; 1 if DX/SI were scaled by content_scale
 _save_dx: dw 0                      ; Pre-scale DX (caller's original value)
 _save_si: dw 0                      ; Pre-scale SI (caller's original value)
+_did_cursor_protect: db 0            ; 1 if cursor was hidden by INT 0x80 dispatcher
+
+; API bitmap tables for INT 0x80 dispatcher (A3: replaces CMP cascade)
+; Each bit = 1 means the corresponding API needs that feature.
+; Byte N covers APIs N*8..N*8+7, LSB = lowest API number in byte.
+;
+; api_drawing_bitmap: cursor protection + theme color setup
+;   APIs 0-6, 50-52, 56-62, 65-71, 80, 87, 94, 102, 103, 104
+; api_translate_bitmap: BX/CX coordinate translation (subset of drawing)
+;   APIs 0-6, 50-52, 56-62, 65-71, 80, 87, 94, 102
+;   (103/104 self-translate, not in this bitmap)
+;
+api_drawing_bitmap:
+    ;       APIs:  76543210
+    db 0x7F ; 0:   .6543210  APIs 0-6
+    db 0x00 ; 1:
+    db 0x00 ; 2:
+    db 0x00 ; 3:
+    db 0x00 ; 4:
+    db 0x00 ; 5:
+    db 0x1C ; 6:   ..432...  APIs 50-52
+    db 0x7F ; 7:   .6543210  APIs 56-62
+    db 0xFE ; 8:   76543210  APIs 65-71 (bit 0=API64 unused, bits 1-7=APIs 65-71)
+    db 0x00 ; 9:
+    db 0x81 ; 10:  7.......0 APIs 80, 87
+    db 0x40 ; 11:  .6......  API 94
+    db 0xC0 ; 12:  76......  APIs 102, 103
+    db 0x01 ; 13:  .......0  API 104
+api_translate_bitmap:
+    db 0x7F ; 0:   .6543210  APIs 0-6
+    db 0x00 ; 1:
+    db 0x00 ; 2:
+    db 0x00 ; 3:
+    db 0x00 ; 4:
+    db 0x00 ; 5:
+    db 0x1C ; 6:   ..432...  APIs 50-52
+    db 0x7F ; 7:   .6543210  APIs 56-62
+    db 0xFE ; 8:   76543210  APIs 65-71
+    db 0x00 ; 9:
+    db 0x81 ; 10:  7.......0 APIs 80, 87
+    db 0x40 ; 11:  .6......  API 94
+    db 0x40 ; 12:  .6......  API 102 only (103/104 self-translate)
+    db 0x00 ; 13:
 
 ; Window drawing context (0xFF = no context / fullscreen, 0-15 = window handle)
 ; When active, drawing APIs (0-6) auto-translate coordinates to window-relative
