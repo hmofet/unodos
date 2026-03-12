@@ -37,6 +37,7 @@
 ; Entry point
 ; ============================================================================
 API_SET_VIDEO_MODE       equ 95
+API_GET_VIDEO_MODE       equ 100
 API_WIN_CREATE           equ 20
 API_WIN_DESTROY          equ 21
 
@@ -49,8 +50,8 @@ entry:
     mov ds, ax
 
     ; Save current video mode for restore on exit
-    mov ah, 0x0F
-    int 0x10
+    mov ah, API_GET_VIDEO_MODE
+    int 0x80
     mov [cs:saved_video_mode], al
 
     ; Switch to VGA mode 13h (320x200, 256 color)
