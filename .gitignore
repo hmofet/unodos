@@ -20,10 +20,8 @@ kernel/build_info.inc
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
-
 # IDE / editor config
+.claude/
 *.code-workspace
 
 # Session transcripts

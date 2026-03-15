@@ -12,7 +12,7 @@ Address Range          Size    Usage
 0x0000:0x7E00          ~1 KB   FREE (after boot sector)
 0x0800:0x0000          2 KB    Stage2 Bootloader
 0x1000:0x0000          28 KB   Kernel
-  0x1000:0x1A00        ~364 B    API dispatch table (91 functions)
+  0x1000:0x1A00        ~364 B    API dispatch table (105 functions)
 0x1400:0x0000          ~64 KB  Heap (malloc pool)
 0x2000:0x0000          64 KB   Shell/Launcher segment (fixed)
 0x3000:0x0000          64 KB   User app slot 0 (dynamic pool)
@@ -51,7 +51,7 @@ Offset    Content
           - Mouse cursor (XOR sprite, hide/show, drag state)
           - Content preservation (save/restore scratch buffer)
           - Segment pool (alloc_segment, free_segment)
-0x1100    API table (header + 56 function pointers)
+0x1100    API table (header + 105 function pointers)
 ~0x1084   Font data (8x8 + 4x6)
 ~0x1500   Data section (window_table, app_table, segment_pool, variables)
 ~0x6FFF   End of 28KB kernel (padded)
@@ -65,7 +65,7 @@ Offset  Size  Content
 0x02    2     Version: 0x0100 (1.0)
 0x04    2     Function count: 91
 0x06    2     Reserved
-0x08    182   Function pointers (91 × 2 bytes)
+0x08    182   Function pointers (105 × 2 bytes)
 ```
 
 ---
@@ -129,4 +129,4 @@ Shared kernel buffer used for system services:
 
 ---
 
-*v3.22.0 Build 351*
+*v3.23.0 Build 397*

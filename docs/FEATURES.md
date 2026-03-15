@@ -13,7 +13,7 @@
 
 ---
 
-## Completed Features (v3.22.0)
+## Completed Features (v3.23.0)
 
 ### Boot System
 - Three-stage floppy boot: boot.asm -> stage2.asm -> kernel (FAT12)
@@ -34,7 +34,7 @@
 - Scroll area (vertical pixel scrolling)
 
 ### System Call Infrastructure
-- INT 0x80 handler with 91 API functions (indices 0-90)
+- INT 0x80 handler with 105 API functions (indices 0-104)
 - Caller segment preservation for cross-segment string access
 - Window-relative coordinate auto-translation
 - Z-order clipping (only topmost window renders pixels)
@@ -130,21 +130,25 @@
 - SETTINGS.CFG on boot drive (font, colors)
 - Loaded at boot, saved by Settings app
 
-### Applications
+### Applications (14)
 - **LAUNCHER.BIN** - Desktop launcher with 4x3 icon grid
 - **CLOCK.BIN** - Analog clock face + digital time display
 - **BROWSER.BIN** - File manager with delete, rename, copy operations
-- **TEXT.BIN** - Notepad text editor with selection, undo, clipboard, context menu, file dialog
+- **TEXT.BIN** - Notepad text editor with selection, undo, clipboard, context menu, file dialogs
 - **MOUSE.BIN** - Mouse test/demo
-- **MUSIC.BIN** - Fur Elise music player
+- **MUSIC.BIN** - PC speaker music player (5 songs with visual staff)
 - **MKBOOT.BIN** - Boot floppy creator (floppy-to-floppy copy)
-- **SETTINGS.BIN** - System settings (font, theme colors)
-- **TETRIS.BIN** - Dostris (Tetris clone with Korobeiniki music)
+- **SETTINGS.BIN** - System settings (font, theme colors, video mode)
+- **TETRIS.BIN** - Dostris (Tetris clone with Korobeiniki music, CGA)
+- **TETRISV.BIN** - Dostris VGA (256-color version)
+- **OUTLAST.BIN** - Top-down driving game (CGA)
+- **OUTLASTV.BIN** - Driving game (VGA 256-color)
+- **SYSINFO.BIN** - System information display
 - **HELLO.BIN** - Hello World test application
 
 ---
 
-## API Summary (91 Functions)
+## API Summary (105 Functions, showing first 91)
 
 | Index | Function | Description |
 |-------|----------|-------------|
@@ -283,9 +287,8 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 - Networking (no TCP/IP, no modem)
 - Preemptive multitasking (cooperative only)
 - Protected mode (real mode for XT compatibility)
-- High resolution (CGA only)
 - DOS compatibility (different API)
 
 ---
 
-*v3.22.0 Build 351*
+*v3.23.0 Build 397*
