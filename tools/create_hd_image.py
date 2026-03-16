@@ -297,6 +297,7 @@ def find_apps():
         ('sysinfo.bin', 'SYSINFO.BIN'),
         ('outlast.bin', 'OUTLAST.BIN'),
         ('outlastv.bin', 'OUTLASTV.BIN'),
+        ('pacman.bin', 'PACMAN.BIN'),
     ]
 
     for build_name, fat_name in app_mappings:
