@@ -98,6 +98,7 @@ HUD_X                   equ 232
 NUM_GHOSTS              equ 4
 FRIGHT_DURATION         equ 109
 FRIGHT_FLASH            equ 36
+MOVES_PER_TICK          equ 4
 
 ; VGA Palette color indices
 CLR_PAC_SHADOW          equ 16
@@ -312,19 +313,26 @@ entry:
     jmp .main_loop
 
 .tick_playing:
-    inc byte [cs:move_counter]
-    mov al, [cs:move_delay]
-    cmp [cs:move_counter], al
-    jb .tick_animate_only
-    mov byte [cs:move_counter], 0
+    ; Save old positions once before substeps (for erase)
+    call save_old_positions
+    ; Substep loop: N movement steps per tick for arcade speed
+    mov byte [cs:move_steps], MOVES_PER_TICK
+.move_substep:
     call move_pac_man
     call check_dot_eat
     call move_ghosts
     call check_ghost_collision
-.tick_animate_only:
+    dec byte [cs:move_steps]
+    jnz .move_substep
+    ; Draw once per tick (after all substeps)
+    call erase_pac
+    call draw_pac
+    call draw_all_ghosts
+    ; Timers and animation once per tick
     call update_pac_animation
     call update_fright_timer
     call update_mode_timer
+    call update_ghost_release
     call update_power_flash
     call update_sound
     jmp .main_loop
@@ -380,10 +388,6 @@ entry:
     dec word [cs:levelup_timer]
     jnz .main_loop
     inc byte [cs:level]
-    cmp byte [cs:move_delay], 2
-    jbe .no_speed_change
-    dec byte [cs:move_delay]
-.no_speed_change:
     call init_level
     jmp .main_loop
 
@@ -873,7 +877,6 @@ init_level:
 .skip_score_reset:
 
     ; Reset game vars
-    mov byte [cs:move_counter], 0
     mov word [cs:fright_timer], 0
     mov byte [cs:fright_kills], 0
     mov byte [cs:mode_index], 0
@@ -1876,11 +1879,6 @@ move_pac_man:
     cmp byte [cs:pac_alive], 1
     jne .move_done
 
-    mov ax, [cs:pac_x]
-    mov [cs:pac_old_x], ax
-    mov ax, [cs:pac_y]
-    mov [cs:pac_old_y], ax
-
     ; At tile center?
     mov ax, [cs:pac_x]
     and ax, 7
@@ -1908,25 +1906,23 @@ move_pac_man:
     je .m_down
     cmp byte [cs:pac_dir], DIR_LEFT
     je .m_left
-    add word [cs:pac_x], 2
+    add word [cs:pac_x], 1
     cmp word [cs:pac_x], 224
     jb .wrap_done
     mov word [cs:pac_x], 0
     jmp .wrap_done
 .m_up:
-    sub word [cs:pac_y], 2
+    sub word [cs:pac_y], 1
     jmp .wrap_done
 .m_down:
-    add word [cs:pac_y], 2
+    add word [cs:pac_y], 1
     jmp .wrap_done
 .m_left:
-    sub word [cs:pac_x], 2
-    cmp word [cs:pac_x], 0xFFFE
+    sub word [cs:pac_x], 1
+    cmp word [cs:pac_x], 0xFFFF
     jb .wrap_done
-    mov word [cs:pac_x], 216
+    mov word [cs:pac_x], 223
 .wrap_done:
-    call erase_pac
-    call draw_pac
 .move_done:
     popa
     ret
@@ -2091,6 +2087,69 @@ reverse_dir:
        ret
 
 ; ============================================================================
+; save_old_positions - Save entity positions before substeps (for erase)
+; ============================================================================
+save_old_positions:
+    pusha
+    mov ax, [cs:pac_x]
+    mov [cs:pac_old_x], ax
+    mov ax, [cs:pac_y]
+    mov [cs:pac_old_y], ax
+    mov bx, 0
+.sop_loop:
+    cmp bx, NUM_GHOSTS * 2
+    jae .sop_done
+    mov ax, [cs:ghost_x + bx]
+    mov [cs:ghost_old_x + bx], ax
+    mov ax, [cs:ghost_y + bx]
+    mov [cs:ghost_old_y + bx], ax
+    add bx, 2
+    jmp .sop_loop
+.sop_done:
+    popa
+    ret
+
+; ============================================================================
+; update_ghost_release - Release ghosts from house (called once per tick)
+; ============================================================================
+update_ghost_release:
+    pusha
+    mov bl, 1               ; Start at ghost 1 (Blinky=0 already out)
+.ugr_loop:
+    cmp bl, NUM_GHOSTS
+    jae .ugr_done
+    movzx bx, bl
+    cmp byte [cs:ghost_state + bx], GHOST_IN_HOUSE
+    jne .ugr_next
+    ; Decrement release timer
+    shl bx, 1
+    cmp word [cs:ghost_timer + bx], 0
+    je .ugr_release
+    dec word [cs:ghost_timer + bx]
+    shr bx, 1
+    jmp .ugr_next
+.ugr_release:
+    ; Move ghost to gate exit and activate
+    mov word [cs:ghost_x + bx], 112
+    mov word [cs:ghost_y + bx], 80
+    shr bx, 1
+    mov al, [cs:mode_is_chase]
+    cmp al, 0
+    je .ugr_set_scatter
+    mov byte [cs:ghost_state + bx], GHOST_CHASE
+    jmp .ugr_released
+.ugr_set_scatter:
+    mov byte [cs:ghost_state + bx], GHOST_SCATTER
+.ugr_released:
+    mov byte [cs:ghost_dir + bx], DIR_LEFT
+.ugr_next:
+    inc bl
+    jmp .ugr_loop
+.ugr_done:
+    popa
+    ret
+
+; ============================================================================
 ; Ghost movement (4 ghosts)
 ; ============================================================================
 move_ghosts:
@@ -2101,49 +2160,16 @@ move_ghosts:
     cmp bl, NUM_GHOSTS
     jae .mg_done
 
-    ; Save old position
-    shl bx, 1
-    mov ax, [cs:ghost_x + bx]
-    mov [cs:ghost_old_x + bx], ax
-    mov ax, [cs:ghost_y + bx]
-    mov [cs:ghost_old_y + bx], ax
-    shr bx, 1
-
     mov al, [cs:ghost_state + bx]
     cmp al, GHOST_IN_HOUSE
-    je .mg_in_house
-    jmp .mg_do_move
+    je .mg_next                 ; Skip in-house ghosts (release handled separately)
 
-.mg_in_house:
-    shl bx, 1
-    dec word [cs:ghost_timer + bx]
-    cmp word [cs:ghost_timer + bx], 0
-    shr bx, 1
-    ja .mg_next
-    ; Release
-    shl bx, 1
-    mov word [cs:ghost_x + bx], 112
-    mov word [cs:ghost_y + bx], 80
-    shr bx, 1
-    mov al, [cs:mode_is_chase]
-    cmp al, 0
-    je .mg_set_scatter
-    mov byte [cs:ghost_state + bx], GHOST_CHASE
-    jmp .mg_released
-.mg_set_scatter:
-    mov byte [cs:ghost_state + bx], GHOST_SCATTER
-.mg_released:
-    mov byte [cs:ghost_dir + bx], DIR_LEFT
-    jmp .mg_next
-
-.mg_do_move:
     call move_one_ghost
 
 .mg_next:
     inc byte [cs:_mg_i]
     jmp .mg_loop
 .mg_done:
-    call draw_all_ghosts
     popa
     ret
 
@@ -2171,22 +2197,22 @@ move_one_ghost:
     je .g_down
     cmp al, DIR_LEFT
     je .g_left
-    add word [cs:ghost_x + bx], 2
+    add word [cs:ghost_x + bx], 1
     cmp word [cs:ghost_x + bx], 224
     jb .g_moved
     mov word [cs:ghost_x + bx], 0
     jmp .g_moved
 .g_up:
-    sub word [cs:ghost_y + bx], 2
+    sub word [cs:ghost_y + bx], 1
     jmp .g_moved
 .g_down:
-    add word [cs:ghost_y + bx], 2
+    add word [cs:ghost_y + bx], 1
     jmp .g_moved
 .g_left:
-    sub word [cs:ghost_x + bx], 2
-    cmp word [cs:ghost_x + bx], 0xFFFE
+    sub word [cs:ghost_x + bx], 1
+    cmp word [cs:ghost_x + bx], 0xFFFF
     jb .g_moved
-    mov word [cs:ghost_x + bx], 216
+    mov word [cs:ghost_x + bx], 223
 .g_moved:
     popa
     ret
@@ -2836,8 +2862,7 @@ quit_flag:      db 0
 game_state:     db STATE_TITLE
 last_tick:      dw 0
 rng_seed:       dw 0
-move_counter:   db 0
-move_delay:     db 3
+move_steps:     db 0
 
 score:          dw 0
 high_score:     dw 0
