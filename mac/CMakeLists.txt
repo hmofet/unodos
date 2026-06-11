@@ -62,6 +62,11 @@ target_compile_definitions(UnoDOS7OlTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_OUTLAS
 target_compile_options(UnoDOS7OlTest PRIVATE -ffunction-sections)
 set_target_properties(UnoDOS7OlTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
 
+add_application(UnoDOS7PmTest unodos.c)
+target_compile_definitions(UnoDOS7PmTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_PACMAN=1)
+target_compile_options(UnoDOS7PmTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7PmTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
 # Mono build (System 1-6, classic QuickDraw). Target 68000 for the Plus.
 add_application(UnoDOSClassic unodos.c)
 target_compile_definitions(UnoDOSClassic PRIVATE UNO_COLOR=0)
