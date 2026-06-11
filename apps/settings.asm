@@ -72,6 +72,7 @@ API_BCD_TO_ASCII        equ 92
 API_WIN_GET_INFO        equ 79
 API_GET_FONT_INFO       equ 93
 API_SET_VIDEO_MODE      equ 95
+API_SET_PALETTE         equ 105
 
 EVENT_KEY_PRESS         equ 1
 EVENT_WIN_REDRAW        equ 6
@@ -101,6 +102,11 @@ DISP_Y_RAD2 equ 150                ; Second row: VGA640 / VESA
 BTN_Y       equ 164                 ; Button row Y (moved down for 4 radios)
 BTN_DEF_X   equ 116                 ; Defaults button X
 BTN_DEF_W   equ 72                  ; Defaults button width
+
+; Theme preset buttons (right column)
+THM_X0      equ 160                 ; First button X
+THM_Y0      equ 76                  ; First row Y
+THM_BTN_W   equ 28                  ; Button width
 
 ; Time controls (right column, below word wrap)
 TIME_X      equ 160                 ; Time controls X
@@ -248,6 +254,10 @@ entry:
     mov cx, CLR_Y_WIN
     call hit_test_swatch_row
     jnc .set_win_clr
+
+    ; Hit test theme preset buttons (right column)
+    call hit_test_theme_buttons
+    jnc .apply_theme_preset
 
     ; Apply button
     mov bx, 4
@@ -404,6 +414,20 @@ entry:
 
 .set_win_clr:
     mov [cs:cur_win_clr], al
+    call draw_ui
+    jmp .main_loop
+
+.apply_theme_preset:
+    ; AL = preset index 0-7: send its 4 RGB entries to the kernel DAC API
+    push ax
+    mov bl, 12
+    mul bl                          ; AX = index * 12
+    add ax, thm_presets
+    mov si, ax
+    mov ah, API_SET_PALETTE
+    int 0x80
+    pop ax
+    mov [cs:cur_theme_preset], al
     call draw_ui
     jmp .main_loop
 
@@ -652,19 +676,13 @@ draw_ui:
     mov ah, API_SET_FONT
     int 0x80
 
-    ; === Word wrap demo (right column) ===
-    mov si, lbl_wrap
+    ; === Theme presets (right column; VGA palette via API 105) ===
+    mov si, lbl_theme
     mov bx, 160
     mov cx, 64
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-
-    mov si, lbl_wrap_text
-    mov bx, 160
-    mov cx, 78
-    mov dx, 130
-    mov ah, API_DRAW_STRING_WRAP
-    int 0x80
+    call draw_theme_buttons
 
     ; === Color selection (left column, below fonts) ===
     mov si, lbl_colors
@@ -1422,8 +1440,29 @@ lbl_colors:         db 'Colors:', 0
 lbl_text:           db 'Text:', 0
 lbl_desktop:        db 'Desk:', 0
 lbl_window:         db 'Win:', 0
-lbl_wrap:           db 'Word Wrap:', 0
-lbl_wrap_text:      db 'This text wraps at the edge.', 0
+lbl_theme:          db 'Theme (VGA):', 0
+thm_lbl_1:          db '1', 0
+thm_lbl_2:          db '2', 0
+thm_lbl_3:          db '3', 0
+thm_lbl_4:          db '4', 0
+thm_lbl_5:          db '5', 0
+thm_lbl_6:          db '6', 0
+thm_lbl_7:          db '7', 0
+thm_lbl_8:          db '8', 0
+thm_lbl_tab:        dw thm_lbl_1, thm_lbl_2, thm_lbl_3, thm_lbl_4
+                    dw thm_lbl_5, thm_lbl_6, thm_lbl_7, thm_lbl_8
+; 8 presets x 4 colors x RGB (6-bit). Slot roles: desktop, accent,
+; accent2, text. Preset 1 = Classic VGA (the default palette); shared
+; with the Amiga and Mac ports.
+thm_presets:
+    db  0, 0,42,   0,42,42,  42, 0,42,  63,63,63   ; 1 Classic VGA
+    db  0, 0, 0,  21,21,63,  42,42,42,  63,63,63   ; 2 Midnight
+    db  0,21, 0,  21,42,21,  63,63,21,  63,63,63   ; 3 Forest
+    db 21, 0, 0,  63,21,21,  63,42, 0,  63,63,63   ; 4 Sunset
+    db  0, 0,21,   0,34,42,  21,63,63,  63,63,63   ; 5 Ocean
+    db 13,13,17,  34,34,42,  50,50,54,  63,63,63   ; 6 Slate
+    db 21, 0,21,  63,21,63,  21,63,63,  63,63,63   ; 7 Candy
+    db  0, 0, 0,  42,21, 0,  63,42, 0,  63,63,63   ; 8 Amber
 lbl_time:           db 'Time:', 0
 lbl_set_time:       db 'Set Time', 0
 lbl_h_up:           db 'H+', 0
@@ -1443,6 +1482,97 @@ countdown_d1:       db '0'
 lbl_keep_btn:       db 'Keep', 0
 lbl_revert_btn:     db 'Revert', 0
 ; ============================================================================
+; draw_theme_buttons - 8 preset buttons, 2 rows of 4 (right column)
+; ============================================================================
+draw_theme_buttons:
+    PUSHA86
+    push es
+    xor di, di                      ; DI = preset index (0-7)
+.dtb_loop:
+    mov ax, di
+    and ax, 3
+    mov bl, 32
+    mul bl
+    add ax, THM_X0
+    mov bx, ax                      ; X
+    mov ax, di
+    mov cl, 2
+    shr ax, cl
+    mov cl, 14
+    mul cl
+    add ax, THM_Y0
+    mov cx, ax                      ; Y
+    mov dx, THM_BTN_W
+    mov si, 12
+    push di
+    mov ax, di
+    shl ax, 1
+    add ax, thm_lbl_tab
+    push bx
+    mov bx, ax
+    mov ax, [cs:bx]
+    pop bx
+    mov di, ax                      ; DI = label ptr
+    mov ax, cs
+    mov es, ax
+    xor al, al
+    mov ah, API_DRAW_BUTTON
+    int 0x80
+    pop di
+    inc di
+    cmp di, 8
+    jb .dtb_loop
+    pop es
+    POPA86
+    ret
+
+; ============================================================================
+; hit_test_theme_buttons - Output: AL = preset 0-7 + CF=0 on hit; CF=1 miss
+; ============================================================================
+hit_test_theme_buttons:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor di, di
+.htt_loop:
+    mov ax, di
+    and ax, 3
+    mov bl, 32
+    mul bl
+    add ax, THM_X0
+    mov bx, ax
+    mov ax, di
+    mov cl, 2
+    shr ax, cl
+    mov cl, 14
+    mul cl
+    add ax, THM_Y0
+    mov cx, ax
+    mov dx, THM_BTN_W
+    mov si, 12
+    mov ah, API_HIT_TEST
+    int 0x80
+    test al, al
+    jnz .htt_hit
+    inc di
+    cmp di, 8
+    jb .htt_loop
+    stc
+    jmp .htt_done
+.htt_hit:
+    mov ax, di
+    clc
+.htt_done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ============================================================================
 ; Variables
 ; ============================================================================
 win_handle:     db 0
@@ -1460,6 +1590,7 @@ swatch_col:     dw 0                ; Current col in draw_one_swatch
 cfg_fh:         db 0                ; File handle for settings save
 cfg_buf:        times 6 db 0        ; Settings buffer (magic + 5 settings bytes)
 cur_video_mode: db 0x04             ; Current video mode (0x04=CGA, 0x13=VGA, 0x12=Mode12h, 0x01=VESA)
+cur_theme_preset: db 0              ; Last applied palette preset
 screen_w:       dw 320              ; Screen width from get_screen_info
 content_w:      dw 296              ; Window content area width (WIN_W - 4)
 content_h:      dw 178              ; Window content area height (WIN_H - 16)

@@ -154,7 +154,7 @@ int_80_handler:
     nop
 
     ; Validate function number
-    cmp ah, 105                     ; Max function count (0-104 valid)
+    cmp ah, 106                     ; Max function count (0-105 valid)
     jae .invalid_function
 
     ; Save caller's DS and ES to kernel variables (use CS: since DS not yet changed)
@@ -7680,7 +7680,7 @@ kernel_api_table:
     ; Header
     dw 0x4B41                       ; Magic: 'KA' (Kernel API)
     dw 0x0001                       ; Version: 1.0
-    dw 105                          ; Number of function slots (0-104)
+    dw 106                          ; Number of function slots (0-105)
     dw 0                            ; Reserved for future use
 
     ; Function Pointers (Offset from table start)
@@ -7856,6 +7856,9 @@ kernel_api_table:
     dw gfx_draw_sprite_scaled       ; 102: Draw scaled 1-bit sprite
     dw gfx_blit_rect                ; 103: Copy screen region
     dw gfx_read_pixel               ; 104: Read pixel color
+
+    ; Theme Palette API (Build 406)
+    dw theme_set_palette            ; 105: Set 4 UI palette RGB entries (VGA DAC)
 
 ; ============================================================================
 ; gfx_blit_rect - Copy rectangular screen region (API 103)
@@ -20127,6 +20130,65 @@ get_video_mode_stub:
     clc
     ret
 
+; theme_set_palette - API 105: set the 4 UI palette colors
+; Input: SI -> 12 bytes in the caller's segment: 4 x (R,G,B), 6-bit values
+;        (palette slots 0-3: desktop, accent, accent2, text)
+; Applied to the VGA DAC immediately in VGA/VESA modes; stored and applied
+; on the next mode switch when called from CGA mode (CGA palette is fixed).
+theme_set_palette:
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    push ds
+    pop es                          ; ES = kernel segment
+    mov di, theme_palette
+    mov ds, [es:caller_ds]          ; DS = caller segment
+    mov cx, 12
+    cld
+    rep movsb
+    push es
+    pop ds                          ; DS = kernel again
+    call apply_theme_palette
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    clc
+    ret
+
+; apply_theme_palette - program VGA DAC 0-3 from theme_palette
+; No-op in CGA mode 4 (fixed hardware palette).
+apply_theme_palette:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [video_mode], 0x04
+    je .atp_done
+    mov si, theme_palette
+    xor bx, bx
+.atp_loop:
+    mov dh, [si]                    ; R (6-bit)
+    mov ch, [si+1]                  ; G
+    mov cl, [si+2]                  ; B
+    mov ax, 0x1010                  ; BIOS: set one DAC register
+    int 0x10
+    add si, 3
+    inc bx
+    cmp bx, 4
+    jb .atp_loop
+.atp_done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; set_video_mode - Switch video mode at runtime (API 95)
 ; Input: AL = video mode (0x04=CGA, 0x13=VGA)
 ; Output: AL = actual mode set, CF=0 success
@@ -20291,6 +20353,7 @@ set_video_mode:
 
 .svm_setup:
     call setup_graphics_post_mode
+    call apply_theme_palette        ; keep the custom palette across modes
 
     ; Set dynamic titlebar height based on resolution
     mov word [titlebar_height], 10
@@ -21716,6 +21779,7 @@ clip_y2:      dw 199                  ; Bottom (inclusive, absolute)
 
 ; Video mode variables (Build 281, extended Build 291)
 video_mode:     db 0x04                 ; Current video mode (0x04=CGA, 0x12=VGA16, 0x13=VGA256)
+theme_palette:  db 0,0,42, 0,42,42, 42,0,42, 63,63,63  ; 4 x RGB (6-bit), Classic VGA
 video_segment:  dw 0xB800              ; Video memory segment (0xB800=CGA, 0xA000=VGA)
 screen_width:   dw 320                 ; Current screen width in pixels
 screen_height:  dw 200                 ; Current screen height in pixels
