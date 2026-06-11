@@ -12,7 +12,7 @@ Classic-era (128K/512K/Plus/SE/Classic, 68000), Sega Genesis / Mega Drive
 | Target | Feasibility | Fidelity achievable | Relative effort | Recommended? |
 |---|---|---|---|---|
 | **Amiga (OCS, 68000)** | **High** | Full GUI OS, floppy boot, FAT12 disks readable | 1.0× (baseline) | **Yes — first target** |
-| **Mac Classic (68000)** | Medium | Full GUI OS in 1-bit mono at 512×342; floppy I/O is the hard part | ~1.4× | Yes — second target |
+| **Mac Classic (68000)** | **High** (Toolbox-based — decision 2026-06-11) | Full GUI in 1-bit mono at 512×342; boots as the startup app, ROM Toolbox drives disk/input | ~0.5× | Yes — second target |
 | **Sega Genesis** | Low–Medium | Tech-demo GUI; no filesystem, no keyboard; cartridge "apps" | ~1.3× (reduced scope) | Only as a showpiece |
 
 **The one-sentence verdict:** a 68K port is feasible and would be a
@@ -119,32 +119,52 @@ floppy, and graphics hardware that *helps* rather than fights.
   blitter + font pre-shifting); MFM floppy writing (Notepad save, MkBoot)
   is fiddlier than reading.
 
-### 3.2 Macintosh Classic-era (68000 @ 8 MHz, 512×342×1) — MEDIUM
+### 3.2 Macintosh Classic-era (68000 @ 8 MHz, 512×342×1) — HIGH
+### (Toolbox-based port — DECIDED 2026-06-11)
 
-- **Video**: a plain packed 1-bit framebuffer — the *simplest* video
-  target of the three (chunky, like CGA but 1bpp). The UI must be
-  re-themed monochrome (dither patterns for the desktop, inverted-text
-  selection — the widget set already uses inverted text heavily). The
-  larger 512×342 canvas is a bonus (window manager is resolution-
-  independent; the launcher already handles 320/640 widths).
-- **Boot**: classic Macs boot from a floppy's boot blocks without the
-  System file; bare-metal takeover is documented demoscene/dev territory,
-  but less traveled than Amiga. The Toolbox ROM *can* be ignored;
-  interrupts (VIA, SCC) must be retargeted.
-- **Input**: pre-ADB keyboards/mice (128K–Plus) speak a simple serial
-  protocol via the VIA; ADB (SE/Classic) is more work. Mouse is
-  interrupt-driven quadrature via SCC/VIA — fine.
-- **Storage — the hard part**: the IWM/SWIM floppy controller with
-  variable-speed GCR zoned recording is notoriously painful to drive
-  bare-metal (the Sony drive does much in firmware, but timing is strict
-  on 400/800KB GCR media). Two pragmatic options: (a) target the SE/
-  Classic's SuperDrive with **MFM 1.44MB media** — then the existing
-  FAT12-on-1.44MB layout works *unchanged*; (b) keep a thin Toolbox
-  dependency just for disk I/O (boots from a minimal System folder) at
-  the cost of "bare-metal" purity.
-- **Risks**: floppy driver scope creep; 1-bit re-theming touches every
-  widget; 68000 Macs are RAM-tight (512KB on the 512K) but Plus/SE
-  (1–4MB) are comfortable.
+**Strategy change:** instead of a bare-metal takeover, the Mac port
+**leans on the ROM Toolbox deliberately**. The Mac's ROM is not a thin
+BIOS — it is a complete, documented operating substrate (QuickDraw,
+Event Manager, Device/File Manager, Sound, fonts, mouse/keyboard
+drivers), and using it converts the port's three hardest problems
+(floppy hardware, input hardware, pixel pipeline) into library calls:
+
+- **Boot/identity**: UnoDOS ships as the **startup application** on its
+  own System floppy (the `Finder` of its disk is UnoDOS). The machine
+  still "boots into UnoDOS" from the user's point of view; the ROM +
+  a minimal System file replace boot.asm/stage2. No INIT tricks needed.
+- **Video**: one full-screen QuickDraw window (or direct screenBits
+  access after HideMenuBar) at 512×342×1. UnoDOS's HAL maps onto
+  QuickDraw primitives: fill = FillRect with a dither Pattern, blit =
+  CopyBits, glyphs = our own 8×8 font via CopyBits (keeping UnoDOS's
+  look) or direct framebuffer spans — 1-bit chunky is the simplest
+  pixel format of any target. UnoDOS draws its OWN window chrome,
+  widgets, cursor theme; the Mac Window Manager is *not* used (one
+  GrafPort, our WM inside it).
+- **Input**: Event Manager (`GetNextEvent`/`WaitNextEvent`) delivers
+  keyboard and mouse with no hardware work at all — ADB vs. pre-ADB
+  stops mattering. UnoDOS's focus-stamp/press-latch rules apply at
+  translation into its own event queue.
+- **Storage**: File Manager + HFS replace the FAT12 driver outright
+  (PBRead/PBWrite/PBGetFInfo). Apps are 68K code resources/files on the
+  same floppy; the .BIN header (name + 2bpp icon at 0x10) is kept inside
+  the data fork for cross-platform identity, with the icon dithered to
+  1-bit at load. Optional later: mount PC FAT12 floppies via the
+  existing portable FAT12 core on the SuperDrive.
+- **Timer**: TickCount() (60.15 Hz) → boot-relative ticks, exactly the
+  API 63 model.
+- **Hardware floor**: Mac Plus / System 6 (4MB ceiling, 1MB typical) —
+  512K works if the core stays lean; SE/Classic ideal.
+- **Costs of the approach**: ~100–200KB RAM ceded to System; cooperative
+  scheduling must pump GetNextEvent (which UnoDOS's cooperative model
+  already does naturally at its yield points); absolute purists lose
+  "bare-metal" bragging rights. All acceptable.
+- **Effort impact**: the bare-metal estimate was 6–8 weeks dominated by
+  IWM/GCR floppy work; Toolbox-based, the Mac target shrinks to
+  **~3 weeks** (theme pass + HAL-on-Toolbox + packaging), the smallest
+  of the three.
+- **Toolchain**: Retro68 (m68k gcc + MPW interfaces) or THINK C under
+  emulation; Mini vMac / MAME `macplus` for CI.
 
 ### 3.3 Sega Genesis / Mega Drive (68000 @ 7.67 MHz + VDP) — LOW–MEDIUM
 
@@ -249,11 +269,12 @@ Music (Paula audio is a *huge upgrade* — 4-channel PCM vs PC speaker),
 Mouse test. Games (Tetris/Pac-Man/OutLast) get per-platform render
 backends.
 
-**Phase 4 — Mac Classic target (6–8 weeks)**
-1-bit theme pass on the widget set (2 wk); boot blocks + VIA/SCC input +
-vblank (2 wk); floppy: SuperDrive-MFM-first strategy, GCR later if ever
-(2–3 wk); 512×342 layout QA (1 wk).
-Milestone: **self-booting 1.44MB Mac floppy on Plus/SE.**
+**Phase 4 — Mac Classic target, Toolbox-based (~3 weeks)**
+1-bit theme pass on the widget set (1 wk); HAL on QuickDraw/Event
+Manager/File Manager + TickCount, UnoDOS as startup application (1 wk);
+System-floppy packaging + 512×342 layout QA under Mini vMac (1 wk).
+Milestone: **System 6 boot floppy that starts straight into the UnoDOS
+desktop on a Mac Plus.**
 
 **Phase 5 — Genesis demo target (6–8 weeks, optional)**
 Pseudo-framebuffer plane + DMA queue (2 wk); sprite cursor + pad-driven
@@ -269,10 +290,10 @@ Milestone: **demo cartridge ROM running the desktop at 60 Hz.**
 | Phase 1 portable core + harness | 4–6 weeks |
 | Phase 2 Amiga | 4–6 weeks |
 | Phase 3 apps | 3–4 weeks |
-| Phase 4 Mac | 6–8 weeks |
+| Phase 4 Mac (Toolbox-based) | ~3 weeks |
 | Phase 5 Genesis (optional) | 6–8 weeks |
 | **Amiga-only total** | **~3–4 months** |
-| **All three** | **~6–8 months** |
+| **All three** | **~5–6 months** |
 
 ### 4.4 Key design rules to carry over (paid for by the 2026-06 audit)
 
@@ -301,5 +322,6 @@ hardware — survives intact, and its hardware actively improves the product
 (palette, blitter, sprite cursor, Paula audio). Build the portable C core
 on a desktop harness first; it de-risks every subsequent target and gives
 the x86 tree a regression-tested reference spec. Treat the Mac port as a
-fast follow (the 1-bit theme is the only real design work), and the
-Genesis as an optional showpiece once the core exists.
+fast follow — with the Toolbox-based strategy its only real design work
+is the 1-bit theme, since the ROM supplies disk, input, and the pixel
+pipeline — and the Genesis as an optional showpiece once the core exists.
