@@ -104,7 +104,7 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
 ICON_PITCH  equ 64                  ; 5 icons across 320px
-NICONS      equ 8                   ; 5 per row, wraps to a second row
+NICONS      equ 9                   ; 5 per row, wraps to a second row
 
 ; Paula audio channel 0
 AUD0LCH     equ $0A0
@@ -204,6 +204,22 @@ super:
         moveq   #0,d2
         bsr     theme_key           ; Enter = apply
         endc
+        ifd     AUTOTEST_PACMAN
+        ; Pac-Man variant: new game, force play, run 150 real steps.
+        moveq   #8,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     pacman_key
+        lea     vars(pc),a4
+        move.w  #PMS_PLAY,pm_state-vars(a4)
+        move.w  #149,d3
+.atpm:  move.w  d3,-(sp)
+        bsr     pm_step
+        move.w  (sp)+,d3
+        dbra    d3,.atpm
+        endc
         ifd     AUTOTEST_DOSTRIS
         ; Dostris variant: start a game and hard-drop six pieces through
         ; the real key handler. Build: -DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1
@@ -261,6 +277,7 @@ super:
         ifnd    AUTOTEST_THEME
         ifnd    AUTOTEST_DOSTRIS
         ifnd    AUTOTEST_OUTLAST
+        ifnd    AUTOTEST_PACMAN
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -270,6 +287,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
         endc
         endc
@@ -288,6 +306,7 @@ main_loop:
         bsr     gm_tick
         bsr     dostris_tick
         bsr     outlast_tick
+        bsr     pacman_tick
         bsr     app_ticks
         bra     main_loop
 
@@ -326,6 +345,8 @@ handle_events:
         beq     .k_dostris
         cmp.w   #7,d3
         beq     .k_outlast
+        cmp.w   #8,d3
+        beq     .k_pacman
 .k_global:
         cmp.b   #27,d1              ; ESC closes topmost
         bne     .next
@@ -358,6 +379,11 @@ handle_events:
         bra     .k_global
 .k_outlast:
         bsr     outlast_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_pacman:
+        bsr     pacman_key
         tst.w   d0
         beq     .next
         bra     .k_global
@@ -586,8 +612,10 @@ app_ticks:
         bsr     zwin_ptr
         moveq   #0,d0
         move.b  WPROC(a2),d0
+        cmp.w   #6,d0               ; games (6-8) drive their own drawing
+        bge     .skip
         bsr     app_draw_content
-        rts
+.skip:  rts
 
 ; ============================================================================
 ; Desktop
@@ -1011,6 +1039,8 @@ app_draw_content:
         beq     .dostris
         cmp.w   #7,d0
         beq     .outlast
+        cmp.w   #8,d0
+        beq     .pacman
         bsr     music_draw
         bra     .done
 .theme: bsr     theme_draw
@@ -1020,6 +1050,9 @@ app_draw_content:
         bra     .done
 .outlast:
         bsr     outlast_draw
+        bra     .done
+.pacman:
+        bsr     pacman_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -1810,6 +1843,7 @@ ser_puts:
         include "apps_m2.i"
         include "theme.i"
         include "games.i"
+        include "pacman.i"
 
 ; ============================================================================
 ; Data
@@ -1877,6 +1911,7 @@ app_def_tab:
         dc.w    56,30,270,142, str_t_theme-start
         dc.w    8,12,300,182,  str_t_dostris-start
         dc.w    4,12,310,182,  str_t_outlast-start
+        dc.w    4,8,312,190,   str_t_pacman-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -1887,6 +1922,7 @@ icon_tab:
         dc.l    icon_theme
         dc.l    icon_dostris
         dc.l    icon_outlast
+        dc.l    icon_pacman
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -1896,6 +1932,7 @@ name_tab:
         dc.l    name_theme
         dc.l    name_dostris
         dc.l    name_outlast
+        dc.l    name_pacman
 
 ; mouse cursor sprite (UnoDOS-style arrow, 14 rows; POS/CTL rewritten live)
         even
@@ -1991,6 +2028,24 @@ gm_ix:          dc.w    0
 gm_owner:       dc.w    0
 gm_on:          dc.b    0
         even
+pm_state:       dc.w    0
+pm_x:           dc.w    0
+pm_y:           dc.w    0
+pm_dir:         dc.w    1
+pm_nextdir:     dc.w    1
+pm_score:       dc.w    0
+pm_hi:          dc.w    0
+pm_lives:       dc.w    3
+pm_level:       dc.w    1
+pm_dots:        dc.w    0
+pm_mode:        dc.w    0
+pm_modet:       dc.w    0
+pm_fright:      dc.w    0
+pm_kills:       dc.w    0
+pm_tmp:         dc.w    0
+        even
+pm_last:        dc.l    0
+pm_statet:      dc.l    0
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
@@ -2007,5 +2062,10 @@ npbuf:          ds.b    NBUF
 npline:         ds.b    40
 npstat:         ds.b    48
 dt_board:       ds.b    200
+pm_gh:          ds.b    30          ; 3 ghosts x 5 words
+pm_maze:        ds.b    700
+        even
+pm_old:         ds.w    8           ; pac + 3 ghosts old x,y
+        even
 
         end
