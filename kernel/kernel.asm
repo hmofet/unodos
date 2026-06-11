@@ -4,6 +4,11 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT). Any 186+/386+
+                    ; instruction is an assembly error. The FAT16/IDE HD
+                    ; driver region is explicitly bracketed with cpu 386
+                    ; and runtime-gated (see fat16_mount).
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; ============================================================================
 ; Signature and Entry Point
@@ -260,7 +265,7 @@ int_80_handler:
     xor ah, ah
     mov al, [draw_context]
     mov si, ax
-    shl si, 5                       ; SI = handle * 32
+    SHL_N si, 5; SI = handle * 32
     add si, window_table
 
     ; Content scaling: double app coordinates for auto-scaled windows
@@ -373,7 +378,7 @@ int_80_handler:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     ; Scale second endpoint if content_scale=2
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
@@ -405,7 +410,8 @@ int_80_handler:
 
     ; Call the function - it will use near RET
     ; We simulate a CALL by pushing return address then jumping
-    push word int80_return_point
+    ; (push m16 - 8086-legal, unlike push imm16 which is 186+)
+    push word [cs:int80_ret_const]
     jmp word [cs:syscall_func]
 
 .invalid_function:
@@ -1571,7 +1577,7 @@ win_begin_draw:
     push si
     mov bl, al
     xor bh, bh
-    shl bx, 5                      ; BX = handle * 32
+    SHL_N bx, 5; BX = handle * 32
     add bx, window_table
     mov si, bx
     ; clip_x1 = win_x + 1
@@ -2008,7 +2014,7 @@ auto_load_launcher:
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
-    popa                            ; Consume dummy pusha frame (Build 198 added this)
+    POPA86; Consume dummy pusha frame (Build 198 added this)
     pop es                          ; restore initial ES (= app segment)
     ret                             ; Now pops int80_return_point correctly
 
@@ -2630,7 +2636,8 @@ mode12h_plot_pixel:
 
     ; Map color through translation table
     push bx
-    movzx bx, dl
+    mov bl, dl
+    xor bh, bh
     mov al, [mode12h_color_map + bx]
     pop bx
     mov [cs:.m12pp_color], al
@@ -2643,7 +2650,7 @@ mode12h_plot_pixel:
     pop dx
     mov di, ax
     mov ax, cx
-    shr ax, 3                      ; AX = X / 8
+    SHR_N ax, 3; AX = X / 8
     add di, ax                     ; DI = Y*80 + X/8
 
     ; Calculate bit mask: 0x80 >> (X & 7)
@@ -2721,7 +2728,7 @@ mode12h_xor_pixel:
     pop dx
     mov di, ax
     mov ax, cx
-    shr ax, 3
+    SHR_N ax, 3
     add di, ax                     ; DI = Y*80 + X/8
 
     ; Bit mask: 0x80 >> (X & 7)
@@ -2809,19 +2816,20 @@ mode12h_fill_rect:
 
     ; Map color through translation table
     push bx
-    movzx bx, al
+    mov bl, al
+    xor bh, bh
     mov al, [mode12h_color_map + bx]
     pop bx
     mov [cs:.m12_color], al
 
     ; Calculate left/right byte positions
     mov ax, bx                     ; AX = X
-    shr ax, 3                      ; AX = X / 8 = left byte
+    SHR_N ax, 3; AX = X / 8 = left byte
     mov [cs:.m12_left_byte], ax
     mov ax, bx
     add ax, dx
     dec ax                         ; AX = X + W - 1
-    shr ax, 3                      ; AX = right byte
+    SHR_N ax, 3; AX = right byte
     mov [cs:.m12_right_byte], ax
 
     ; Left mask: pixels from (X%8) to 7
@@ -3228,7 +3236,7 @@ draw_welcome_box:
 ; ============================================================================
 
 draw_char:
-    pusha
+    PUSHA86
     jmp draw_char_fastgate          ; CGA row-blit fast path (after API table)
 .pp:                                ; per-pixel fallback (clipping/other modes)
     xor bx, bx
@@ -3333,7 +3341,7 @@ draw_char:
     mov al, [draw_font_advance]
     add [draw_x], ax                ; Advance to next character position
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -3575,7 +3583,7 @@ CURSOR_WIDTH    equ 8
 ; Preserves all registers
 ; Color cursor: 2bpp, 14 rows, white outline + cyan fill
 cursor_xor_sprite:
-    pusha
+    PUSHA86
     cmp byte [cs:video_mode], 0x01
     je .mode12h_cursor             ; VESA: share per-pixel XOR cursor path
     cmp byte [cs:video_mode], 0x12
@@ -3632,7 +3640,7 @@ cursor_xor_sprite:
     mov di, 8
 .col_loop:
     mov dl, ah
-    shr dl, 6                       ; DL = pixel color (0-3)
+    SHR_N dl, 6; DL = pixel color (0-3)
     test dl, dl
     jz .skip_pixel
     cmp cx, [screen_width]
@@ -3651,7 +3659,7 @@ cursor_xor_sprite:
     pop bx
     pop ax
 .skip_pixel:
-    shl ax, 2
+    SHL_N ax, 2
     inc cx
     dec di
     jnz .col_loop
@@ -3662,7 +3670,7 @@ cursor_xor_sprite:
     dec bp
     jnz .row_loop
 
-    popa
+    POPA86
     ret
 
 .vga_cursor:
@@ -3677,7 +3685,7 @@ cursor_xor_sprite:
     mov di, 8                       ; 8 pixels per row
 .vc_col:
     mov dl, ah
-    shr dl, 6                       ; DL = pixel color (0-3)
+    SHR_N dl, 6; DL = pixel color (0-3)
     test dl, dl
     jz .vc_skip_pix
     cmp cx, [screen_width]
@@ -3695,7 +3703,7 @@ cursor_xor_sprite:
     pop di
     pop ax
 .vc_skip_pix:
-    shl ax, 2                       ; Next 2bpp pixel
+    SHL_N ax, 2; Next 2bpp pixel
     inc cx
     dec di
     jnz .vc_col
@@ -3705,7 +3713,7 @@ cursor_xor_sprite:
     inc bx
     dec bp
     jnz .vc_row
-    popa
+    POPA86
     ret
 
 .mode12h_cursor:
@@ -3721,7 +3729,7 @@ cursor_xor_sprite:
     mov di, 8
 .m12c_col:
     mov dl, ah
-    shr dl, 6
+    SHR_N dl, 6
     test dl, dl
     jz .m12c_skip_pix
     cmp cx, [screen_width]
@@ -3739,7 +3747,7 @@ cursor_xor_sprite:
     dec cx
     dec bx
 .m12c_skip_pix:
-    shl ax, 2
+    SHL_N ax, 2
     inc cx
     cmp word [screen_width], 640
     jb .m12c_noscale_x
@@ -3757,7 +3765,7 @@ cursor_xor_sprite:
 .m12c_noscale_y:
     dec bp
     jnz .m12c_row
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -3768,7 +3776,7 @@ cursor_xor_sprite:
 ; Input: CX=X, BX=Y, ES=0xA000 (VGA linear framebuffer)
 ; Uses cursor_save_buf (8 bytes × 14 rows = 112 bytes)
 cursor_save_and_draw_vga:
-    pusha
+    PUSHA86
     mov di, cursor_save_buf         ; DI = save buffer pointer
     mov si, cursor_bitmap_color
     mov bp, 14                      ; 14 rows
@@ -3799,14 +3807,14 @@ cursor_save_and_draw_vga:
     mov [di], al                    ; Save to buffer
     ; Check bitmap bit — if non-transparent, draw white
     mov al, dh
-    shr al, 6
+    SHR_N al, 6
     test al, al
     jz .sdv_no_draw
     mov byte [es:si], 0x0F         ; Write white
 .sdv_no_draw:
     pop si
 .sdv_skip_pix:
-    shl dx, 2                      ; Next bitmap pixel
+    SHL_N dx, 2; Next bitmap pixel
     inc cx
     inc di                          ; Always advance buffer
     dec bp
@@ -3819,13 +3827,13 @@ cursor_save_and_draw_vga:
     inc bx
     dec bp
     jnz .sdv_row
-    popa
+    POPA86
     ret
 
 ; cursor_restore_vga - Restore background pixels (erase cursor)
 ; Input: CX=X, BX=Y, ES=0xA000
 cursor_restore_vga:
-    pusha
+    PUSHA86
     mov si, cursor_save_buf         ; SI = saved pixels
     mov bp, 14
 .rv_row:
@@ -3863,14 +3871,14 @@ cursor_restore_vga:
     inc bx
     dec bp
     jnz .rv_row
-    popa
+    POPA86
     ret
 
 ; cursor_save_and_draw_vesa - Save background and draw 2x-scaled white cursor
 ; Input: CX=X, BX=Y, ES=0xA000 (VESA banked framebuffer)
 ; Uses cursor_save_buf (16 bytes × 28 rows = 448 bytes)
 cursor_save_and_draw_vesa:
-    pusha
+    PUSHA86
     mov word [_csr_buf_ptr], cursor_save_buf
     mov si, cursor_bitmap_color
     mov bp, 14                      ; 14 bitmap rows
@@ -3905,7 +3913,7 @@ cursor_save_and_draw_vesa:
     inc bx
     dec bp
     jnz .sdvs_bmp_row
-    popa
+    POPA86
     ret
 
 ; .sdvs_scan_line - Process one screen row: save 16 pixels + draw white
@@ -3918,8 +3926,8 @@ cursor_save_and_draw_vesa:
 .sdvs_sl_col:
     ; Extract pixel value before any clobbering
     mov dl, ah
-    shr dl, 6                       ; DL = pixel value (0=transparent)
-    shl ax, 2                       ; Advance bitmap (do it now, before AX clobbered)
+    SHR_N dl, 6; DL = pixel value (0=transparent)
+    SHL_N ax, 2; Advance bitmap (do it now, before AX clobbered)
     push ax                         ; Save shifted bitmap on stack
     ; --- Left pixel ---
     cmp cx, [screen_width]
@@ -3971,7 +3979,7 @@ cursor_save_and_draw_vesa:
 ; cursor_restore_vesa - Restore background pixels (erase 2x-scaled cursor)
 ; Input: CX=X, BX=Y, ES=0xA000
 cursor_restore_vesa:
-    pusha
+    PUSHA86
     mov si, cursor_save_buf
     mov word [_csr_buf_ptr], 0      ; Row counter
 .rvs_row:
@@ -4002,7 +4010,7 @@ cursor_restore_vesa:
     inc word [_csr_buf_ptr]
     jmp .rvs_row
 .rvs_done:
-    popa
+    POPA86
     ret
 
 ; mouse_cursor_hide - Erase cursor if currently visible
@@ -4196,7 +4204,7 @@ mouse_hittest_titlebar:
 
     ; Step 2: Check if click is in that window's TITLE BAR specifically
     mov ax, bp
-    shl ax, 5
+    SHL_N ax, 5
     add ax, window_table
     mov di, ax
 
@@ -4337,7 +4345,7 @@ mouse_hittest_resize:
 ; Called from int_74_handler after position update
 ; Sets flags only - never calls win_move_stub (avoids reentrancy)
 mouse_drag_update:
-    pusha
+    PUSHA86
 
     mov al, [mouse_buttons]
     mov ah, [drag_prev_buttons]
@@ -4373,7 +4381,7 @@ mouse_drag_update:
     push si
     xor ah, ah
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     mov bx, [si + WIN_OFF_X]
     add bx, [si + WIN_OFF_WIDTH]
@@ -4422,7 +4430,7 @@ mouse_drag_update:
     ; Calculate grab offset = mouse_pos - window_pos
     xor ah, ah
     mov bx, ax
-    shl bx, 5                      ; BX = handle * 32
+    SHL_N bx, 5; BX = handle * 32
     add bx, window_table
 
     mov ax, [mouse_x]
@@ -4453,7 +4461,7 @@ mouse_drag_update:
     ; Read current window dimensions
     xor ah, ah
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_WIDTH]
     mov [resize_start_w], ax
@@ -4491,7 +4499,7 @@ mouse_drag_update:
     xor ah, ah
     mov al, [drag_window]
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
     mov dx, [bx + WIN_OFF_WIDTH]    ; DX = window width
 
@@ -4540,7 +4548,7 @@ mouse_drag_update:
     xor ah, ah
     mov al, [resize_window]
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
 
     ; Calculate resize target = start_dim + (mouse - start_mouse)
@@ -4614,7 +4622,7 @@ mouse_drag_update:
     mov byte [resize_active], 0
 
 .done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -4624,7 +4632,7 @@ mouse_drag_update:
 ; Uses plot_pixel_xor (ES must be video segment)
 ; ============================================================================
 draw_xor_rect_outline:
-    pusha
+    PUSHA86
     push es
 
     mov ax, [video_segment]
@@ -4687,7 +4695,7 @@ draw_xor_rect_outline:
 
 .skip_sides:
     pop es
-    popa
+    POPA86
     ret
 
 .rx: dw 0
@@ -4723,7 +4731,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     cmp byte [si + WIN_OFF_ZORDER], 15
     je .focus_already_top           ; Already focused, just redraw frame
@@ -4737,7 +4745,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
 
     mov bx, [si + WIN_OFF_X]
@@ -4792,7 +4800,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [close_kill_window]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .close_kill_done            ; Window already gone
@@ -4806,7 +4814,7 @@ mouse_process_drag:
     ; --- Kill a different task ---
     xor ah, ah
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, app_table
     cmp byte [si + APP_OFF_STATE], APP_STATE_RUNNING
     jne .close_kill_done
@@ -4878,7 +4886,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     mov dx, [si + WIN_OFF_WIDTH]
     mov [drag_outline_w], dx
@@ -4940,7 +4948,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [resize_window]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     mov bx, [di + WIN_OFF_X]
     mov cx, [di + WIN_OFF_Y]
@@ -4982,7 +4990,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [resize_window]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     mov dx, [resize_finish_w]
     cmp dx, [di + WIN_OFF_WIDTH]
@@ -5041,7 +5049,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     mov bx, [drag_finish_x]
     cmp bx, [si + WIN_OFF_X]
@@ -5079,7 +5087,7 @@ mouse_process_drag:
 ; ============================================================================
 
 draw_char_inverted:
-    pusha
+    PUSHA86
     jmp draw_char_inv_fastgate      ; CGA row-blit fast path (after API table)
 .pp:                                ; per-pixel fallback (clipping/other modes)
     xor bx, bx
@@ -5157,7 +5165,7 @@ draw_char_inverted:
     mov al, [draw_font_advance]
     add [draw_x], ax                ; Advance to next character position
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -5355,7 +5363,8 @@ menu_open:
     mov [kmenu_str_table], si       ; String table offset in caller's segment
 
     ; Clamp X so menu fits on screen
-    movzx ax, dh                    ; AX = menu width
+    mov al, dh ; AX = menu width
+    xor ah, ah
     mov si, [screen_width]
     sub si, ax                      ; SI = max X
     cmp bx, si
@@ -5365,8 +5374,15 @@ menu_open:
     mov [kmenu_x], bx
 
     ; Clamp Y so menu fits on screen
-    movzx ax, dl                    ; AX = item count
-    imul ax, KMENU_ITEM_H           ; AX = menu height
+    mov al, dl ; AX = item count
+    xor ah, ah
+    push dx                         ; AX = AX * KMENU_ITEM_H (10) - 8086-safe
+    mov dx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, dx                      ; 5x
+    shl ax, 1                       ; 10x
+    pop dx
     mov si, [screen_height]
     sub si, ax                      ; SI = max Y
     cmp cx, si
@@ -5385,22 +5401,44 @@ menu_open:
     mov byte [clip_enabled], 0
 
     ; Compute menu pixel height
-    movzx si, byte [kmenu_count]
-    imul si, KMENU_ITEM_H
+    push ax
+    mov al, [kmenu_count]
+    xor ah, ah
+    mov si, ax
+    pop ax
+    push ax                         ; SI = SI * KMENU_ITEM_H (10) - 8086-safe
+    mov ax, si
+    shl si, 1
+    shl si, 1
+    add si, ax
+    shl si, 1
+    pop ax
 
     ; Draw white filled rectangle
     mov bx, [kmenu_x]
     mov cx, [kmenu_y]
-    movzx dx, byte [kmenu_w]
+    mov dl, [kmenu_w]
+    xor dh, dh
     mov al, 3                       ; White
     call gfx_draw_filled_rect_color
 
     ; Draw black border
     mov bx, [kmenu_x]
     mov cx, [kmenu_y]
-    movzx dx, byte [kmenu_w]
-    movzx si, byte [kmenu_count]
-    imul si, KMENU_ITEM_H
+    mov dl, [kmenu_w]
+    xor dh, dh
+    push ax
+    mov al, [kmenu_count]
+    xor ah, ah
+    mov si, ax
+    pop ax
+    push ax                         ; SI = SI * KMENU_ITEM_H (10) - 8086-safe
+    mov ax, si
+    shl si, 1
+    shl si, 1
+    add si, ax
+    shl si, 1
+    pop ax
     mov al, 0                       ; Black
     call gfx_draw_rect_color
 
@@ -5411,14 +5449,22 @@ menu_open:
     jae .mo_items_done
 
     ; Compute item Y = kmenu_y + index * KMENU_ITEM_H + 2
-    movzx ax, cl
-    imul ax, KMENU_ITEM_H
+    mov al, cl
+    xor ah, ah
+    push dx                         ; AX = AX * KMENU_ITEM_H (10) - 8086-safe
+    mov dx, ax
+    shl ax, 1
+    shl ax, 1
+    add ax, dx
+    shl ax, 1
+    pop dx
     add ax, [kmenu_y]
     add ax, 2
     push cx                         ; Save index
 
     ; Read string pointer from caller's string table
-    movzx bx, cl
+    mov bl, cl
+    xor bh, bh
     shl bx, 1
     add bx, [kmenu_str_table]       ; BX = offset of pointer in caller's segment
     push ds
@@ -5452,7 +5498,8 @@ menu_close:
     je .mc_done
     mov byte [kmenu_active], 0
     ; Post WIN_REDRAW for the topmost window so app repaints over menu
-    movzx dx, byte [topmost_handle]
+    mov dl, [topmost_handle]
+    xor dh, dh
     cmp dl, 0xFF
     je .mc_done
     mov al, EVENT_WIN_REDRAW
@@ -5472,7 +5519,8 @@ menu_hit:
     cmp ax, [kmenu_x]
     jb .mh_miss
     mov bx, [kmenu_x]
-    movzx cx, byte [kmenu_w]
+    mov cl, [kmenu_w]
+    xor ch, ch
     add bx, cx
     cmp ax, bx
     jae .mh_miss
@@ -5526,11 +5574,13 @@ file_dialog_open:
     mov [fdlg_result_di], di
 
     ; Compute dynamic layout from current font
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 2
     mov [fdlg_item_h], ax              ; item_h = font_height + 2
 
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 4
     mov [fdlg_btn_h], ax               ; btn_h = font_height + 4
 
@@ -5583,7 +5633,7 @@ file_dialog_open:
     push bx
     xor ah, ah
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
     mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
     pop bx
@@ -5717,8 +5767,9 @@ file_dialog_open:
     ; --- Mouse click hit-test ---
 .fdlg_click:
     ; Get content area origin from window table
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax                              ; +1 border
@@ -5850,7 +5901,8 @@ file_dialog_open:
 ; fdlg_cleanup - Destroy dialog, restore caller state
 ; ============================================================================
 fdlg_cleanup:
-    movzx ax, byte [fdlg_handle]
+    mov al, [fdlg_handle]
+    xor ah, ah
     call win_destroy_stub
 
     ; Restore caller's draw context
@@ -5869,7 +5921,7 @@ fdlg_cleanup:
 ; fdlg_scan_files - Scan directory, build file list in scratch buffer
 ; ============================================================================
 fdlg_scan_files:
-    pusha
+    PUSHA86
     push es
 
     mov word [fdlg_count], 0
@@ -5961,18 +6013,19 @@ fdlg_scan_files:
 
 .fscan_done:
     pop es
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; fdlg_draw_full - Redraw entire file list
 ; ============================================================================
 fdlg_draw_full:
-    pusha
+    PUSHA86
 
     ; Calculate content area origin from window table
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax                              ; +1 border
@@ -6120,7 +6173,7 @@ fdlg_draw_full:
 
     pop word [caller_es]
     call win_end_draw
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -6199,16 +6252,19 @@ file_dialog_save:
     mov byte [sdlg_confirming], 0
 
     ; Compute dynamic layout from current font
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 2
     mov [fdlg_item_h], ax                  ; item_h = font_height + 2
 
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 4
     mov [fdlg_btn_h], ax                   ; btn_h = font_height + 4
 
     ; Textfield row height = font_height + 4 + gap
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 6                              ; tf_h = font_height + 6 (field + gap)
     mov [sdlg_tf_h], ax
     mov [sdlg_list_y_off], ax              ; List Y offset = tf_h
@@ -6268,7 +6324,7 @@ file_dialog_save:
     push bx
     xor ah, ah
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
     mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
     pop bx
@@ -6322,7 +6378,8 @@ file_dialog_save:
 
 .sdlg_printable:
     ; Accept printable chars: A-Z, 0-9, '.', '-', '_'
-    movzx ax, byte [sdlg_input_len]
+    mov al, [sdlg_input_len]
+    xor ah, ah
     cmp ax, 12
     jae .sdlg_loop                         ; Buffer full
     ; Auto-uppercase
@@ -6352,10 +6409,12 @@ file_dialog_save:
     jmp .sdlg_loop
 
 .sdlg_append:
-    movzx bx, byte [sdlg_input_len]
+    mov bl, [sdlg_input_len]
+    xor bh, bh
     mov [sdlg_input_buf + bx], al
     inc byte [sdlg_input_len]
-    movzx bx, byte [sdlg_input_len]
+    mov bl, [sdlg_input_len]
+    xor bh, bh
     mov byte [sdlg_input_buf + bx], 0      ; Null terminate
     call sdlg_draw_tf
     jmp .sdlg_loop
@@ -6364,7 +6423,8 @@ file_dialog_save:
     cmp byte [sdlg_input_len], 0
     je .sdlg_loop
     dec byte [sdlg_input_len]
-    movzx bx, byte [sdlg_input_len]
+    mov bl, [sdlg_input_len]
+    xor bh, bh
     mov byte [sdlg_input_buf + bx], 0
     call sdlg_draw_tf
     jmp .sdlg_loop
@@ -6410,8 +6470,9 @@ file_dialog_save:
 
 .sdlg_click:
     ; Get content area origin
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax
@@ -6614,8 +6675,9 @@ file_dialog_save:
 
 .sdlg_confirm_click:
     ; Get content area origin
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax
@@ -6632,7 +6694,8 @@ file_dialog_save:
     mov cx, [fdlg_list_h]
     shr cx, 1
     add bx, cx
-    movzx cx, byte [draw_font_height]
+    mov cl, [draw_font_height]
+    xor ch, ch
     add bx, cx
     add bx, 4
     cmp ax, bx
@@ -6707,11 +6770,12 @@ file_dialog_save:
 ; sdlg_draw_full - Redraw entire save dialog
 ; ============================================================================
 sdlg_draw_full:
-    pusha
+    PUSHA86
 
     ; Calculate content area origin
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax
@@ -6737,9 +6801,10 @@ sdlg_draw_full:
 
     ; Textfield at (4 + name_width + 4, 0)
     ; Approximate "Name:" width = 5 * advance + space
-    movzx ax, byte [draw_font_advance]
+    mov al, [draw_font_advance]
+    xor ah, ah
     mov bx, ax
-    shl ax, 2                              ; 4 * advance
+    SHL_N ax, 2; 4 * advance
     add ax, bx                             ; 5 * advance
     add ax, 4                              ; + gap
     add ax, 4                              ; + left margin
@@ -6751,7 +6816,11 @@ sdlg_draw_full:
     add dx, FDLG_W - 4
     sub dx, bx                             ; DX = textfield width
     mov si, sdlg_input_buf
-    movzx di, byte [sdlg_input_len]        ; Cursor at end
+    push ax ; Cursor at end
+    mov al, [sdlg_input_len]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, 1                              ; Focused
     call widget_draw_textfield
 
@@ -6892,7 +6961,7 @@ sdlg_draw_full:
 
     pop word [caller_es]
     call win_end_draw
-    popa
+    POPA86
     ret
 
 .sdlg_draw_confirm_area:
@@ -6963,7 +7032,8 @@ sdlg_draw_full:
     mov ax, [fdlg_list_h]
     shr ax, 1
     add cx, ax
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 4
     add cx, ax
     mov dx, 40
@@ -6980,7 +7050,8 @@ sdlg_draw_full:
     mov ax, [fdlg_list_h]
     shr ax, 1
     add cx, ax
-    movzx ax, byte [draw_font_height]
+    mov al, [draw_font_height]
+    xor ah, ah
     add ax, 4
     add cx, ax
     mov dx, 40
@@ -6992,17 +7063,18 @@ sdlg_draw_full:
     pop word [caller_es]
     ; Skip Save/Cancel buttons in confirm mode — go straight to end
     call win_end_draw
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; sdlg_draw_tf - Redraw textfield only (for fast typing feedback)
 ; ============================================================================
 sdlg_draw_tf:
-    pusha
+    PUSHA86
 
-    movzx bx, byte [fdlg_handle]
-    shl bx, 5
+    mov bl, [fdlg_handle]
+    xor bh, bh
+    SHL_N bx, 5
     add bx, window_table
     mov ax, [bx + WIN_OFF_X]
     inc ax
@@ -7018,9 +7090,10 @@ sdlg_draw_tf:
     mov word [caller_ds], 0x1000
 
     ; Textfield position = same as in sdlg_draw_full
-    movzx ax, byte [draw_font_advance]
+    mov al, [draw_font_advance]
+    xor ah, ah
     mov bx, ax
-    shl ax, 2
+    SHL_N ax, 2
     add ax, bx                             ; 5 * advance
     add ax, 8                              ; margins
     add ax, [fdlg_cx]
@@ -7030,13 +7103,17 @@ sdlg_draw_tf:
     add dx, FDLG_W - 4
     sub dx, bx
     mov si, sdlg_input_buf
-    movzx di, byte [sdlg_input_len]
+    push ax
+    mov al, [sdlg_input_len]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, 1
     call widget_draw_textfield
 
     pop word [caller_ds]
     call win_end_draw
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -7101,7 +7178,7 @@ util_word_to_string:
 util_bcd_to_ascii:
     mov ah, al
     and al, 0x0F               ; Low nibble → ones
-    shr ah, 4                  ; High nibble → tens
+    SHR_N ah, 4; High nibble → tens
     add al, '0'
     add ah, '0'
     clc
@@ -7125,7 +7202,7 @@ gfx_get_current_font_info:
 ; Bitmap: 1 byte per row, MSB=leftmost pixel, only set bits draw
 ; Output: CF=0 success
 gfx_draw_sprite:
-    pusha
+    PUSHA86
     push es
     ; Save params (DS=0x1000 at entry from INT 0x80 dispatch)
     mov [_spr_color], al
@@ -7137,7 +7214,11 @@ gfx_draw_sprite:
     mov ax, [video_segment]
     mov es, ax
     ; Draw loop — DS stays 0x1000, switch to caller_ds only for lodsb
-    movzx bp, byte [_spr_height]
+    push ax
+    mov al, [_spr_height]
+    xor ah, ah
+    mov bp, ax
+    pop ax
 .spr_row:
     ; Read bitmap byte from caller's segment (brief DS switch)
     push ds
@@ -7146,7 +7227,11 @@ gfx_draw_sprite:
     pop ds                          ; DS back to 0x1000 for plot_pixel_color
     mov ah, al
     push cx                         ; save base X
-    movzx di, byte [_spr_width]
+    push ax
+    mov al, [_spr_width]
+    xor ah, ah
+    mov di, ax
+    pop ax
 .spr_col:
     test ah, 0x80                   ; check leftmost bit
     jz .spr_skip
@@ -7164,7 +7249,7 @@ gfx_draw_sprite:
     dec bp
     jnz .spr_row
     pop es
-    popa
+    POPA86
     clc
     ret
 
@@ -7294,7 +7379,7 @@ gfx_read_pixel:
 ; Output: CF=0 success
 ; ============================================================================
 gfx_draw_sprite_scaled:
-    pusha
+    PUSHA86
     push es
     ; Save params
     mov [_sspr_color], al
@@ -7310,9 +7395,10 @@ gfx_draw_sprite_scaled:
     mov [_sspr_src_w], al
     mov [_sspr_src_h], ah
     ; Compute bytes_per_row = (src_w + 7) >> 3
-    movzx ax, byte [_sspr_src_w]
+    mov al, [_sspr_src_w]
+    xor ah, ah
     add ax, 7
-    shr ax, 3
+    SHR_N ax, 3
     mov [_sspr_bpr], ax
     ; Bitmap base offset in caller segment = DI + 2 (skip header)
     add di, 2
@@ -7338,7 +7424,8 @@ gfx_draw_sprite_scaled:
     cmp ax, [_sspr_dst_h]
     jge .sspr_end
     ; Compute src_row = dy * src_h / dest_h
-    movzx dx, byte [_sspr_src_h]
+    mov dl, [_sspr_src_h]
+    xor dh, dh
     mul dx                              ; DX:AX = dy * src_h (fits 16-bit: max 199*255=50745)
     div word [_sspr_dst_h]             ; AX = src_row
     ; Compute row byte offset = src_row * bytes_per_row
@@ -7352,12 +7439,13 @@ gfx_draw_sprite_scaled:
     cmp ax, [_sspr_dst_w]
     jge .sspr_col_done
     ; Compute src_col = dx * src_w / dest_w
-    movzx dx, byte [_sspr_src_w]
+    mov dl, [_sspr_src_w]
+    xor dh, dh
     mul dx                              ; DX:AX = dx_ctr * src_w (can overflow 16-bit)
     div word [_sspr_dst_w]             ; AX = src_col
     ; Compute byte index = src_col >> 3
     mov di, ax
-    shr di, 3                           ; DI = byte index within row
+    SHR_N di, 3; DI = byte index within row
     add di, [_sspr_row_off]            ; DI = full offset in caller seg
     ; Compute bit mask: 0x80 >> (src_col & 7)
     and al, 7                           ; AL = src_col & 7
@@ -7386,7 +7474,7 @@ gfx_draw_sprite_scaled:
 .sspr_end:
 .sspr_done:
     pop es
-    popa
+    POPA86
     clc
     ret
 
@@ -7428,7 +7516,7 @@ widget_scrollbar_hit:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     ; Content scaling
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
@@ -7451,7 +7539,7 @@ widget_scrollbar_hit:
     cmp ax, SCROLLBAR_MIN_THUMB
     jl .sbh_miss                         ; Too small for thumb
     mov cx, ax
-    shr cx, 2                            ; thumb_h = usable / 4
+    SHR_N cx, 2; thumb_h = usable / 4
     cmp cx, SCROLLBAR_MIN_THUMB
     jge .sbh_thumb_ok
     mov cx, SCROLLBAR_MIN_THUMB
@@ -7586,7 +7674,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3500 - ($ - $$) db 0  ; (bumped from 0x3400, Build 404: input-path fixes grew pre-pad code)
+times 0x3800 - ($ - $$) db 0  ; (bumped 0x3400->0x3500->0x3800: Build 404 input fixes + 8088 pass code growth)
 
 kernel_api_table:
     ; Header
@@ -7777,7 +7865,7 @@ kernel_api_table:
 ; Output: CF=0 success
 ; ============================================================================
 gfx_blit_rect:
-    pusha
+    PUSHA86
     push es
     push ds
     ; Unpack DI: width = high byte, height = low byte
@@ -7785,7 +7873,7 @@ gfx_blit_rect:
     xor ah, ah                          ; AH was width, clear for height
     mov [_blit_height], ax
     mov ax, di
-    shr ax, 8
+    SHR_N ax, 8
     mov [_blit_width], ax
     ; Validate
     cmp word [_blit_width], 0
@@ -7802,7 +7890,7 @@ gfx_blit_rect:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     ; Translate dest (BX,CX)
     add bx, [di + WIN_OFF_X]
@@ -7974,7 +8062,7 @@ gfx_blit_rect:
 .blit_done:
     pop ds
     pop es
-    popa
+    POPA86
     clc
     ret
 
@@ -9627,7 +9715,7 @@ widget_draw_scrollbar:
     jl .sb_no_thumb
     ; Thumb height = max(MIN_THUMB, usable/4)
     mov cx, ax
-    shr cx, 2
+    SHR_N cx, 2
     cmp cx, SCROLLBAR_MIN_THUMB
     jge .sb_thumb_ok
     mov cx, SCROLLBAR_MIN_THUMB
@@ -9723,7 +9811,7 @@ widget_hit_test:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
     ; Content scaling: double coordinates for auto-scaled windows
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
@@ -10473,7 +10561,7 @@ gfx_clear_area_stub:
     jz .or_no_lead                  ; X aligned, skip leading
 
     mov di, bx
-    shr di, 2
+    SHR_N di, 2
     add di, si                      ; DI = first byte in video mem
 
     push cx
@@ -10490,11 +10578,11 @@ gfx_clear_area_stub:
 .or_no_lead:
     ; --- Middle full bytes (BX is now 4-aligned) ---
     mov ax, dx
-    shr ax, 2                       ; AX = full bytes to clear
+    SHR_N ax, 2; AX = full bytes to clear
     jz .or_no_middle
 
     mov di, bx
-    shr di, 2
+    SHR_N di, 2
     add di, si                      ; DI = first full byte offset
 
     push cx
@@ -10518,7 +10606,7 @@ gfx_clear_area_stub:
     jz .or_no_trail
 
     mov di, bx
-    shr di, 2
+    SHR_N di, 2
     add di, si                      ; DI = last byte offset
 
     push cx
@@ -11409,7 +11497,7 @@ fs_read_stub:
 
     ; Get file table entry to check mount handle
     mov si, ax
-    shl si, 5                       ; * 32 bytes per entry
+    SHL_N si, 5; * 32 bytes per entry
     add si, file_table
 
     ; Check mount handle (offset 1)
@@ -11525,7 +11613,7 @@ fs_readdir_stub:
     mov ax, bp
     and ax, 0x000F                  ; AX = entry index (0-15)
     mov bx, bp
-    shr bx, 4                       ; BX = sector offset (0-13)
+    SHR_N bx, 4; BX = sector offset (0-13)
 
     ; Save parsed values
     mov [.entry_idx], ax
@@ -11592,7 +11680,7 @@ fs_readdir_stub:
 .scan_entries:
     ; Calculate entry pointer: bpb_buffer + (entry_idx * 32)
     mov ax, [.entry_idx]
-    shl ax, 5                       ; * 32
+    SHL_N ax, 5; * 32
     mov si, ax
     add si, bpb_buffer
 
@@ -11657,7 +11745,7 @@ fs_readdir_stub:
 .encode_state:
     ; CX = (sector_off << 4) | entry_idx
     mov cx, [.sector_off]
-    shl cx, 4
+    SHL_N cx, 4
     or cx, [.entry_idx]
 
     ; Success - clear carry
@@ -11667,7 +11755,7 @@ fs_readdir_stub:
 .skip_entry:
     inc word [.entry_idx]
     mov ax, [.entry_idx]
-    shl ax, 5
+    SHL_N ax, 5
     mov si, ax
     add si, bpb_buffer
     jmp .check_entry
@@ -12044,7 +12132,7 @@ fat12_open:
     ; AX now contains file handle index
     ; Initialize file handle entry
     mov di, ax
-    shl di, 5                       ; DI = handle * 32 (entry size)
+    SHL_N di, 5; DI = handle * 32 (entry size)
     add di, file_table
 
     mov byte [di], 1                ; Status = open
@@ -12211,7 +12299,7 @@ get_next_cluster:
 
 .odd_cluster:
     ; Odd cluster: value = word >> 4
-    shr ax, 4
+    SHR_N ax, 4
 
 .check_end_of_chain:
     ; Check if end of chain (>= 0xFF8)
@@ -12503,7 +12591,7 @@ fat12_alloc_cluster:
     jmp .ac_check_free
 
 .ac_odd:
-    shr ax, 4
+    SHR_N ax, 4
 
 .ac_check_free:
     cmp ax, 0                       ; 0 = free cluster
@@ -12625,12 +12713,12 @@ fat12_set_fat_entry:
     mov al, [si]
     and al, 0x0F                    ; Preserve low nibble
     mov ah, dl
-    shl ah, 4                       ; Shift value low nibble to high
+    SHL_N ah, 4; Shift value low nibble to high
     or al, ah
     mov [si], al
     ; byte[off+1] = (val >> 4)
     mov ax, dx
-    shr ax, 4
+    SHR_N ax, 4
     mov [si + 1], al
 
 .sfe_write_back:
@@ -12692,7 +12780,7 @@ fat12_read:
 
     ; Get file handle entry
     mov si, ax
-    shl si, 5                       ; SI = handle * 32
+    SHL_N si, 5; SI = handle * 32
     add si, file_table
 
     ; Check if file is open
@@ -12980,7 +13068,7 @@ fat12_close:
 
     ; Get file handle entry
     mov si, ax
-    shl si, 5                       ; SI = handle * 32
+    SHL_N si, 5; SI = handle * 32
     add si, file_table
 
     ; Mark as free
@@ -13000,6 +13088,16 @@ fat12_close:
 ; ============================================================================
 ; FAT16/Hard Drive Driver Implementation (v3.13.0)
 ; ============================================================================
+
+; ============================================================================
+; 386+ REGION: FAT16/IDE driver (hard-disk support)
+; ============================================================================
+; This region uses 32-bit registers/operands for LBA and cluster math and
+; is NOT 8086-safe. It is unreachable on a pre-386 CPU: fat16_mount (the
+; only entry into FAT16 state) refuses to mount on a pre-286 FLAGS
+; signature, and the HD boot chain (boot/mbr.asm, boot/stage2_hd.asm) is
+; 386+ by design. Floppy-only 8088 systems never execute this code.
+cpu 386
 
 ; fat16_read_sector - Read a sector from hard drive
 ; Input: EAX = LBA sector number (relative to partition start)
@@ -13085,7 +13183,7 @@ fat16_read_sector:
     div ebx                         ; EAX = cylinder, EDX = head
     mov dh, dl                      ; DH = head
     mov ch, al                      ; CH = cylinder low 8 bits
-    shl ah, 6
+    SHL_N ah, 6
     or cl, ah                       ; CL[7:6] = cylinder high 2 bits
     pop ebx                         ; Restore buffer offset
 
@@ -13196,7 +13294,7 @@ fat16_write_sector:
     div ebx
     mov dh, dl                      ; DH = head
     mov ch, al                      ; CH = cylinder low 8 bits
-    shl ah, 6
+    SHL_N ah, 6
     or cl, ah                       ; CL[7:6] = cylinder high 2 bits
     pop ebx
 
@@ -13238,6 +13336,22 @@ fat16_mount:
     push dx
     push si
     push di
+
+    ; --- Runtime CPU gate (8086-safe instructions only) ---
+    ; The FAT16 driver uses 386 instructions. On an 8086/8088, FLAGS bits
+    ; 12-15 always read back as 1 - detect that and refuse to mount so
+    ; floppy-only XT systems degrade gracefully. (A real 286 passes this
+    ; gate; 286+IDE machines are out of scope for the 8088 target.)
+    pushf
+    pop ax
+    and ax, 0x0FFF                  ; Try to clear FLAGS bits 12-15
+    push ax
+    popf
+    pushf
+    pop ax
+    and ax, 0xF000
+    cmp ax, 0xF000
+    je .cpu_too_old                 ; Bits stuck at 1: 8086/8088
 
     ; Save drive number
     mov [fat16_drive], dl
@@ -13385,6 +13499,18 @@ fat16_mount:
     stc
 
 .done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    ret
+
+.cpu_too_old:
+    ; Pre-286 CPU: FAT16/HD support unavailable (floppy still works)
+    mov ax, FS_ERR_NO_DRIVER
+    stc
     pop di
     pop si
     pop dx
@@ -13626,7 +13752,7 @@ fat16_get_next_cluster:
     ; Calculate FAT sector containing this cluster
     ; Each sector holds 256 cluster entries (512 bytes / 2 bytes per entry)
     mov bx, ax                      ; Save cluster number
-    shr ax, 8                       ; sector_index = cluster / 256
+    SHR_N ax, 8; sector_index = cluster / 256
 
     ; Check if this sector is cached
     movzx eax, ax
@@ -13686,7 +13812,7 @@ fat16_set_fat_entry:
     mov [cs:.sfe16_cluster], ax
 
     ; Calculate FAT sector: cluster / 256 (each sector holds 256 16-bit entries)
-    shr ax, 8                       ; sector_index = cluster / 256
+    SHR_N ax, 8; sector_index = cluster / 256
     movzx eax, ax
     add eax, [fat16_fat_start]      ; Absolute FAT sector
 
@@ -13766,7 +13892,7 @@ fat16_alloc_cluster:
 
     ; Calculate which FAT sector holds this cluster
     mov ax, cx
-    shr ax, 8                       ; sector_index = cluster / 256
+    SHR_N ax, 8; sector_index = cluster / 256
     movzx eax, ax
     add eax, [fat16_fat_start]
 
@@ -13849,7 +13975,7 @@ fat16_read:
 
     ; Get file table entry
     mov si, ax
-    shl si, 5                       ; * 32 bytes per entry
+    SHL_N si, 5; * 32 bytes per entry
     add si, file_table
 
     ; Check if handle is open and is FAT16
@@ -13903,7 +14029,7 @@ fat16_read:
 
     ; Calculate sector within cluster
     mov ax, [.offset_in_cluster]
-    shr ax, 9                       ; sector_in_cluster = offset / 512
+    SHR_N ax, 9; sector_in_cluster = offset / 512
 
     ; Calculate absolute sector
     ; sector = data_start + (cluster - 2) * sects_per_clust + sector_in_cluster
@@ -14074,7 +14200,7 @@ fat16_readdir:
 
     ; Calculate entry offset in sector: entry_idx * 32
     mov bx, [.entry_idx]
-    shl bx, 5                       ; * 32
+    SHL_N bx, 5; * 32
     add bx, fat16_sector_buf        ; BX = pointer to entry
 
     ; Check first byte of entry
@@ -14240,9 +14366,10 @@ fat16_create:
 
     ; Search root directory for free entry (0x00 or 0xE5)
     ; root dir sectors = (fat16_root_entries * 32) / 512
-    movzx cx, byte [fat16_root_entries]     ; Low byte (entries / 16 sectors = entries >> 4)
+    mov cl, [fat16_root_entries] ; Low byte (entries / 16 sectors = entries >> 4)
+    xor ch, ch
     mov ax, [fat16_root_entries]
-    shr ax, 4                       ; AX = number of root dir sectors (entries/16)
+    SHR_N ax, 4; AX = number of root dir sectors (entries/16)
     mov cx, ax
     xor dx, dx                      ; DX = sector index (0-based)
 
@@ -14370,15 +14497,17 @@ fat16_create:
 
     ; Initialize file handle entry
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, file_table
 
     mov byte [di], 1                ; Status = open
     mov byte [di + 1], 1            ; Mount handle = FAT16
     mov cx, [cs:.f16c_start_cluster]
     mov [di + 2], cx                ; Starting cluster
-    mov dword [di + 4], 0           ; File size = 0
-    mov dword [di + 8], 0           ; Position = 0
+    mov word [di + 4], 0            ; File size = 0 (low)
+    mov word [di + 6], 0            ; File size = 0 (high)
+    mov word [di + 8], 0            ; Position = 0 (low)
+    mov word [di + 10], 0           ; Position = 0 (high)
     mov cx, [cs:.f16c_dir_sector]
     mov [di + 18], cx               ; Dir sector (relative index within root dir)
     mov cx, [cs:.f16c_dir_offset]
@@ -14463,7 +14592,7 @@ fat16_write:
 
     ; Get file table entry
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, file_table
     mov [cs:.f16w_handle_ptr], si
 
@@ -14486,8 +14615,9 @@ fat16_write:
     mov [cs:.f16w_file_size], ax
 
     ; Get cluster size in bytes
-    movzx ax, byte [fat16_sects_per_clust]
-    shl ax, 9                       ; * 512
+    mov al, [fat16_sects_per_clust]
+    xor ah, ah
+    SHL_N ax, 9; * 512
     mov [cs:.f16w_cluster_size], ax
 
 .f16w_write_loop:
@@ -14549,7 +14679,7 @@ fat16_write:
     xor dx, dx
     div bx                          ; DX = offset within cluster
     mov ax, dx
-    shr ax, 9                       ; AX = sector within cluster
+    SHR_N ax, 9; AX = sector within cluster
 
     ; Absolute sector = data_start + (cluster-2) * sects_per_clust + sector_in_cluster
     push ax                         ; Save sector_in_cluster
@@ -14618,7 +14748,7 @@ fat16_write:
     xor dx, dx
     div bx                          ; DX = offset within cluster
     mov ax, dx
-    shr ax, 9                       ; AX = sector within cluster
+    SHR_N ax, 9; AX = sector within cluster
 
     push ax
     movzx eax, word [cs:.f16w_current_cluster]
@@ -14806,7 +14936,7 @@ fat16_delete:
 
     ; Search root directory for the file
     mov ax, [fat16_root_entries]
-    shr ax, 4                       ; Number of root dir sectors
+    SHR_N ax, 4; Number of root dir sectors
     mov cx, ax
     xor dx, dx                      ; DX = sector index
 
@@ -15135,7 +15265,7 @@ fat16_rename:
     mov ax, 0x1000
     mov ds, ax
     mov ax, [fat16_root_entries]
-    shr ax, 4
+    SHR_N ax, 4
     mov cx, ax
     xor dx, dx
 
@@ -15333,74 +15463,13 @@ ide_wait_ready:
     pop ax
     ret
 
-; ide_read_sector - Read sector directly via IDE ports
-; Input: EAX = LBA sector number, ES:BX = buffer
-; Output: CF = 0 on success, CF = 1 on error
-ide_read_sector:
-    push eax
-    push bx
-    push cx
-    push dx
+; (dead ide_read_sector removed in the 8088 pass: it was never called,
+;  used 386-only instructions, and wrote to ES:DI while documenting ES:BX)
 
-    ; Wait for drive ready
-    call ide_wait_ready
-    jc .error
-
-    ; Set up LBA address in registers
-    mov dx, IDE_SECT_COUNT
-    mov al, 1                       ; Read 1 sector
-    out dx, al
-
-    mov dx, IDE_SECT_NUM
-    mov eax, [esp + 12]             ; Get LBA from stack
-    out dx, al                      ; LBA bits 0-7
-
-    mov dx, IDE_CYL_LOW
-    shr eax, 8
-    out dx, al                      ; LBA bits 8-15
-
-    mov dx, IDE_CYL_HIGH
-    shr eax, 8
-    out dx, al                      ; LBA bits 16-23
-
-    mov dx, IDE_HEAD
-    shr eax, 8
-    and al, 0x0F                    ; LBA bits 24-27
-    or al, 0xE0                     ; LBA mode, master drive
-    out dx, al
-
-    ; Issue read command
-    mov dx, IDE_CMD
-    mov al, IDE_CMD_READ
-    out dx, al
-
-    ; Wait for data ready
-    call ide_wait_ready
-    jc .error
-
-    ; Check DRQ
-    mov dx, IDE_STATUS
-    in al, dx
-    test al, IDE_STAT_DRQ
-    jz .error
-
-    ; Read 256 words (512 bytes)
-    mov dx, IDE_DATA
-    mov cx, 256
-    rep insw
-
-    clc
-    jmp .done
-
-.error:
-    stc
-
-.done:
-    pop dx
-    pop cx
-    pop bx
-    pop eax
-    ret
+cpu 8086
+; ============================================================================
+; End of 386+ FAT16/IDE region
+; ============================================================================
 
 ; ide_detect - Detect IDE drive presence
 ; Output: CF = 0 if drive found, CF = 1 if not
@@ -15662,7 +15731,7 @@ app_load_stub:
     ; File handle entry is at file_table + handle * 32
     ; Size is at offset 4 (low) and 6 (high)
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, file_table
     mov ax, 0x1000
     mov ds, ax
@@ -15810,7 +15879,7 @@ app_run_stub:
 
     ; Get app entry
     mov bx, ax
-    shl bx, 5                       ; BX = handle * 32
+    SHL_N bx, 5; BX = handle * 32
     add bx, app_table
 
     ; Check if app is loaded
@@ -15829,8 +15898,9 @@ app_run_stub:
 
     ; Set up for far call
     ; We'll push return address and use retf to call the app
+    ; (push m16 - 8086-legal, unlike push imm16 which is 186+)
     push cs
-    push word .app_return
+    push word [cs:.app_ret_const]
 
     ; Push app entry point
     push cx                         ; Segment
@@ -15842,6 +15912,9 @@ app_run_stub:
 .app_return:
     ; App has returned, AX contains return value
     mov bx, ax                      ; Save return value
+    jmp .app_ret_cont
+.app_ret_const: dw .app_return      ; for 8086-safe push m16
+.app_ret_cont:
 
     ; Restore app table offset
     pop si                          ; SI = app table offset
@@ -15926,7 +15999,7 @@ scheduler_next:
     mov al, cl
     xor ah, ah
     mov bx, ax
-    shl bx, 5                      ; BX = slot * 32
+    SHL_N bx, 5; BX = slot * 32
     add bx, app_table
 
     cmp byte [bx + APP_OFF_STATE], APP_STATE_RUNNING
@@ -15962,7 +16035,7 @@ app_yield_stub:
     ; Context switch swaps SS:SP — without this, registers get clobbered
     ; by whatever the other task was doing when it yielded.
     push es                         ; ES not covered by pusha
-    pusha
+    PUSHA86
 
     ; --- Save current task context ---
     mov al, [current_task]
@@ -15971,7 +16044,7 @@ app_yield_stub:
 
     xor ah, ah
     mov si, ax
-    shl si, 5                      ; SI = handle * 32
+    SHL_N si, 5; SI = handle * 32
     add si, app_table
 
     ; Save draw_context per task
@@ -16034,7 +16107,7 @@ app_yield_stub:
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
 .same_task:
-    popa                            ; Restore all general-purpose registers
+    POPA86; Restore all general-purpose registers
     pop es                          ; restore resuming task's ES
     ret                             ; Returns via int80_return_point → pop ds → iret
 
@@ -16058,7 +16131,7 @@ app_start_stub:
 
     ; Get app entry
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, app_table
 
     ; Must be LOADED
@@ -16150,7 +16223,7 @@ app_exit_stub:
 
     xor ah, ah
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, app_table
     mov byte [si + APP_OFF_STATE], APP_STATE_FREE
     call close_task_files           ; AL = exiting task handle
@@ -16230,7 +16303,7 @@ app_exit_stub:
     mov ss, [bx + APP_OFF_STACK_SEG]
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
-    popa                            ; Consume pusha frame from yielded task
+    POPA86; Consume pusha frame from yielded task
     pop es                          ; restore resuming task's ES
     ret                             ; Now pops int80_return_point correctly
 
@@ -16407,7 +16480,7 @@ win_create_stub:
     cmp bp, WIN_MAX_COUNT
     jae .no_slot
     mov bx, bp
-    shl bx, 5                       ; BX = slot * 32
+    SHL_N bx, 5; BX = slot * 32
     add bx, window_table
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .found_slot
@@ -16814,7 +16887,7 @@ gfx_draw_icon_stub:
     mov di, 4                       ; 4 pixels per byte
 .im12_pixel:
     mov dl, ah
-    shr dl, 6                       ; DL = 2bpp color
+    SHR_N dl, 6; DL = 2bpp color
     ; plot_pixel_color needs CX=X, BX=Y, DL=color, ES=video seg
     ; Currently: BX=X, CX=Y — need to swap
     xchg bx, cx                    ; Now CX=X, BX=Y
@@ -16839,7 +16912,7 @@ gfx_draw_icon_stub:
     pop ax
     pop ds
     xchg bx, cx                    ; Restore BX=X, CX=Y
-    shl ah, 2
+    SHL_N ah, 2
     ; Advance X by 2 if scaling, 1 if not
     inc bx
     cmp word [cs:screen_width], 640
@@ -16900,10 +16973,10 @@ gfx_draw_icon_stub:
     mov cx, 4                       ; 4 pixels per byte
 .iv_pixel:
     push ax
-    shr al, 6                       ; Get top 2 bits = palette index
+    SHR_N al, 6; Get top 2 bits = palette index
     stosb                           ; Write to VGA framebuffer
     pop ax
-    shl al, 2                       ; Shift to next pixel
+    SHL_N al, 2; Shift to next pixel
     dec cx
     jnz .iv_pixel
     pop cx
@@ -17200,10 +17273,10 @@ gfx_fill_color:
     ; Color 0 = 0x00, Color 1 = 0x55, Color 2 = 0xAA, Color 3 = 0xFF
     and al, 3
     mov ah, al
-    shl ah, 2
+    SHL_N ah, 2
     or al, ah
     mov ah, al
-    shl ah, 4
+    SHL_N ah, 4
     or al, ah                       ; AL = color byte (4 identical pixels)
     mov [.fill_byte], al
 
@@ -17662,7 +17735,7 @@ redraw_affected_windows:
     xor ax, ax
     mov al, [topmost_handle]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .topmost_done
@@ -17781,7 +17854,7 @@ win_destroy_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
 
     ; Check if window exists
@@ -18024,7 +18097,7 @@ fs_write_stub:
     ; Check file handle's mount_handle to route FAT12 vs FAT16
     push si
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, file_table
     cmp byte [si + 1], 1            ; Mount handle 1 = FAT16?
     pop si
@@ -18295,15 +18368,17 @@ fat12_create:
 
     ; Initialize file handle entry
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, file_table
 
     mov byte [di], 1                ; Status = open
     mov byte [di + 1], 0            ; Mount handle = FAT12
     mov cx, [cs:.fc_start_cluster]
     mov [di + 2], cx                ; Starting cluster
-    mov dword [di + 4], 0           ; File size = 0
-    mov dword [di + 8], 0           ; Position = 0
+    mov word [di + 4], 0            ; File size = 0 (low)
+    mov word [di + 6], 0            ; File size = 0 (high)
+    mov word [di + 8], 0            ; Position = 0 (low)
+    mov word [di + 10], 0           ; Position = 0 (high)
     ; Save dir sector and offset for later size updates
     mov cx, [cs:.fc_dir_sector]
     mov [di + 18], cx               ; Dir sector LBA
@@ -18390,7 +18465,7 @@ fat12_write:
 
     ; Get file table entry
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, file_table
     mov [cs:.fw_handle_ptr], si     ; Save pointer to file table entry
 
@@ -18917,7 +18992,7 @@ win_draw_stub:
     pop ax
 
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
 
     ; Check if window is visible
@@ -19287,7 +19362,7 @@ win_focus_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
@@ -19445,7 +19520,7 @@ win_move_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
@@ -19677,7 +19752,7 @@ win_get_content_stub:
     mov di, 0x1000
     mov ds, di
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
 
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_FREE
@@ -20425,7 +20500,7 @@ fs_seek_stub:
 
     ; Calculate file table entry offset
     mov si, ax
-    shl si, 5                       ; SI = handle * 32
+    SHL_N si, 5; SI = handle * 32
     add si, file_table
 
     ; Check if handle is open
@@ -20470,7 +20545,7 @@ fs_get_file_size_stub:
 
     ; Calculate file table entry offset
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, file_table
 
     ; Check if handle is open
@@ -20800,7 +20875,7 @@ win_resize_stub:
 
     ; Get window entry
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
 
     ; Check if window is visible
@@ -20912,7 +20987,7 @@ win_get_info_stub:
 
     ; Get window entry
     mov di, ax
-    shl di, 5
+    SHL_N di, 5
     add di, window_table
 
     ; Check if entry is used
@@ -20965,7 +21040,7 @@ win_get_content_scale:
     xor ah, ah
     mov al, [draw_context]
     mov si, ax
-    shl si, 5
+    SHL_N si, 5
     add si, window_table
     mov al, [si + WIN_OFF_CONTENT_SCALE]
     pop si
@@ -20993,7 +21068,7 @@ win_get_content_size:
     push bx
     xor ah, ah
     mov bx, ax
-    shl bx, 5
+    SHL_N bx, 5
     add bx, window_table
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .wgcs_invalid_pop
@@ -21380,12 +21455,12 @@ gfx_scroll_area:
 
     ; Calculate byte positions for the region
     mov ax, [cs:.sa_x]
-    shr ax, 3                      ; Left byte
+    SHR_N ax, 3; Left byte
     mov [cs:.sa_bpr], ax           ; Temp: left byte offset
     mov ax, [cs:.sa_x]
     add ax, [cs:.sa_w]
     add ax, 7
-    shr ax, 3                      ; Right byte (exclusive)
+    SHR_N ax, 3; Right byte (exclusive)
     sub ax, [cs:.sa_bpr]           ; Bytes per row
     mov [cs:.sa_bpr], ax
 
@@ -21407,7 +21482,7 @@ gfx_scroll_area:
     pop dx
     mov si, ax
     mov ax, [cs:.sa_x]
-    shr ax, 3
+    SHR_N ax, 3
     add si, ax
     ; Dest: dst_y * 80 + left_byte
     mov ax, [cs:.sa_dst_y]
@@ -21417,7 +21492,7 @@ gfx_scroll_area:
     pop dx
     mov di, ax
     mov ax, [cs:.sa_x]
-    shr ax, 3
+    SHR_N ax, 3
     add di, ax
     ; Copy bytes (write mode 1: read loads latches, write outputs latches)
     mov cx, [cs:.sa_bpr]
@@ -21713,6 +21788,7 @@ heap_initialized: dw 0
 ; System call dispatcher temp (v3.12.0)
 ; WARNING: not reentrant — must move to per-task storage before preemptive scheduling
 syscall_func: dw 0
+int80_ret_const: dw int80_return_point ; for 8086-safe push m16
 caller_ds: dw 0x1000                ; Caller's DS segment (init to kernel for direct calls)
 caller_es: dw 0x1000                ; Caller's ES segment (init to kernel for direct calls)
 _did_translate: db 0                 ; 1 if BX/CX were translated by INT 0x80

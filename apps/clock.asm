@@ -6,6 +6,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -66,7 +68,7 @@ MARK_OUTER  equ 38                  ; Hour marker outer radius
 DIGI_Y      equ 86                  ; Digital time Y (below face)
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -93,8 +95,9 @@ entry:
     ; Compute digital time X centering: (108 - 8*advance) / 2
     mov ah, API_GET_FONT_INFO
     int 0x80                        ; CL = advance
-    movzx ax, cl
-    shl ax, 3                       ; * 8 chars ("HH:MM:SS")
+    mov al, cl
+    xor ah, ah
+    SHL_N ax, 3; * 8 chars ("HH:MM:SS")
     mov bx, 108
     sub bx, ax
     shr bx, 1
@@ -254,7 +257,7 @@ entry:
     mov di, ax                      ; DI = position index
     mov al, [cs:sin_table + di]     ; signed byte: sin value
     imul bl                         ; AX = sin * radius (signed)
-    sar ax, 5                       ; /32
+    SAR_N ax, 5; /32
     add ax, CENTER_X
     mov dx, ax                      ; DX = X result
 
@@ -267,7 +270,7 @@ entry:
 .ce_no_wrap:
     mov al, [cs:sin_table + di]     ; signed byte: cos value
     imul bl                         ; AX = cos * radius (signed)
-    sar ax, 5                       ; /32
+    SAR_N ax, 5; /32
     neg ax                          ; -cos (screen Y is inverted)
     add ax, CENTER_Y
     mov si, ax                      ; SI = Y result
@@ -332,7 +335,7 @@ entry:
     push cx
     mov cl, al
     and cl, 0x0F                    ; CL = ones digit
-    shr al, 4                       ; AL = tens digit
+    SHR_N al, 4; AL = tens digit
     mov ah, 10
     mul ah                          ; AX = tens * 10
     add al, cl                      ; AL = binary
@@ -375,7 +378,7 @@ entry:
 .exit:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ---- Data Section ----

@@ -5,6 +5,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -111,7 +113,7 @@ TIME_BTN_H  equ 12                  ; Small button height
 TIME_BTN_GAP equ 4                  ; Gap between small buttons
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -481,7 +483,7 @@ entry:
 .exit_fail:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
@@ -925,7 +927,7 @@ apply_settings:
 ; If mode changed, shows 10-second countdown with Keep/Revert buttons.
 ; ============================================================================
 apply_with_revert:
-    pusha
+    PUSHA86
 
     ; Check if video mode is actually changing
     mov ah, API_GET_SCREEN_INFO
@@ -937,7 +939,7 @@ apply_with_revert:
     ; No mode change — just apply and save
     call apply_settings
     call save_settings
-    popa
+    POPA86
     ret
 
 .awr_mode_changing:
@@ -1023,7 +1025,7 @@ apply_with_revert:
 .awr_keep:
     ; User confirmed — save settings to disk
     call save_settings
-    popa
+    POPA86
     ret
 
 .awr_revert:
@@ -1049,14 +1051,14 @@ apply_with_revert:
     mov [cs:content_w], dx
     sub si, 16
     mov [cs:content_h], si
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; Draw the revert countdown UI inside the Settings window
 ; ============================================================================
 draw_countdown_ui:
-    pusha
+    PUSHA86
 
     ; Clear content area (runtime dimensions for multi-resolution)
     mov bx, 0
@@ -1104,7 +1106,7 @@ draw_countdown_ui:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1206,7 +1208,7 @@ save_settings:
 ; Draw time section (label + display + buttons)
 ; ============================================================================
 draw_time_section:
-    pusha
+    PUSHA86
 
     ; Clear the time display area only (avoid full redraw flicker)
     mov bx, TIME_X
@@ -1302,7 +1304,7 @@ draw_time_section:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================

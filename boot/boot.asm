@@ -4,6 +4,7 @@
 
 [BITS 16]
 [ORG 0x7C00]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
 
 ; ============================================================================
 ; BPB - BIOS Parameter Block (required for correct floppy geometry)

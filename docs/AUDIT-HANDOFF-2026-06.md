@@ -3,6 +3,16 @@
 **Date:** 2026-06-11 · **State:** v3.25.0, Build 403, branch `master`
 **Audience:** the next development session/agent picking this work up cold.
 
+> **STATUS UPDATE (2026-06-11, v3.26.0 / Build 405): SS5 backlog COMPLETE.**
+> All five items (A: 8088 pass, B: cursor race, C: perf wave, D: medium
+> findings, E: dynamic re-verification) landed and were build- and
+> QEMU-verified. See CHANGELOG [3.26.0] and TODO.md for residual
+> follow-ups (real-8088 hardware validation via 86Box/PCem, draw_char
+> Stage-2 row blit, launcher icon z-violations). The build/test
+> quickstart in SS6 now also works natively on Windows via
+> tools/qemu_test.py (WSL no longer required); note the QEMU 11.x
+> mouse-homing caveat documented in that script.
+
 ---
 
 ## 1. What happened

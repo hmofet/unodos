@@ -218,7 +218,7 @@ When the kernel entry point executes:
 | Disk access | CHS only | LBA + CHS fallback |
 | Drive geometry | Fixed (18/2/80) | Queried from BIOS |
 | Stage2 size | 2KB | 2KB |
-| CPU requirement | 8086 | 386+ (for now) |
+| CPU requirement | 8086/8088 (Build 405+: kernel and all apps assemble under `cpu 8086`) | 386+ (by design; the kernel FAT16/IDE region is runtime-gated) |
 
 ---
 

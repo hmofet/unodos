@@ -5,6 +5,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; ============================================================================
 ; Configuration
@@ -64,7 +66,7 @@ entry:
 ; ============================================================================
 
 load_kernel:
-    pusha
+    PUSHA86
 
     ; Set up for disk read
     mov ax, KERNEL_SEGMENT
@@ -138,7 +140,7 @@ load_kernel:
     dec byte [sectors_left]
     jnz .load_loop
 
-    popa
+    POPA86
     ret
 
 .disk_error:
@@ -217,7 +219,7 @@ print_hex_byte:
     push cx
     mov cl, al                      ; Save value
     ; High nibble
-    shr al, 4
+    SHR_N al, 4
     call .print_nibble
     ; Low nibble
     mov al, cl

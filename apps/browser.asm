@@ -4,6 +4,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -80,7 +82,7 @@ FILE_ENTRY_SIZE         equ 16
 ; Entry Point
 ; ============================================================================
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -102,14 +104,16 @@ entry:
     mov [font_adv], cl
 
     ; size_x = 14 * advance + 6 (column where size values start)
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mov dx, 14
     mul dx
     add ax, 6
     mov [size_x], ax
 
     ; Width = 20 * advance + SCROLLBAR_W + 12
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mov dx, 20
     mul dx
     add ax, SCROLLBAR_W
@@ -117,12 +121,14 @@ entry:
     mov [win_w], ax
 
     ; row_h = font_h + 2
-    movzx ax, bh
+    mov al, bh
+    xor ah, ah
     add ax, 2
     mov [row_h], ax
 
     ; btn_h = font_h + 3
-    movzx ax, bh
+    mov al, bh
+    xor ah, ah
     add ax, 3
     mov [btn_h], ax
 
@@ -205,8 +211,10 @@ entry:
     mov ax, [vis_rows]
     mul word [row_h]
     mov si, ax                         ; SI = track height
-    movzx dx, byte [scroll_top]
-    movzx ax, byte [file_count]
+    mov dl, [scroll_top]
+    xor dh, dh
+    mov al, [file_count]
+    xor ah, ah
     sub ax, [vis_rows]
     jns .sb_range_ok
     xor ax, ax
@@ -239,7 +247,8 @@ entry:
     mov [sel_index], al
     jmp .sb_drag_redraw
 .sb_drag_check_bottom:
-    movzx bx, byte [scroll_top]
+    mov bl, [scroll_top]
+    xor bh, bh
     add bx, [vis_rows]
     dec bx
     cmp al, bl
@@ -321,7 +330,8 @@ entry:
     jae .test_scroll
     push cx
     ; Row rect: X=2, Y=list_y + CL*row_h, W=list_w, H=row_h
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
@@ -361,13 +371,15 @@ entry:
     jmp .main_loop
 
 .scroll_down:
-    movzx ax, byte [file_count]
+    mov al, [file_count]
+    xor ah, ah
     sub ax, [vis_rows]
     jle .main_loop
     cmp byte [scroll_top], al
     jae .main_loop
     inc byte [scroll_top]
-    movzx ax, byte [scroll_top]
+    mov al, [scroll_top]
+    xor ah, ah
     add ax, [vis_rows]
     dec ax
     cmp al, [sel_index]
@@ -511,10 +523,12 @@ entry:
     ja .input_store
     sub dl, 32
 .input_store:
-    movzx bx, byte [input_len]
+    mov bl, [input_len]
+    xor bh, bh
     mov [input_buf + bx], dl
     inc byte [input_len]
-    movzx bx, byte [input_len]
+    mov bl, [input_len]
+    xor bh, bh
     mov byte [input_buf + bx], 0
     call draw_bottom
     jmp .main_loop
@@ -523,7 +537,8 @@ entry:
     cmp byte [input_len], 0
     je .main_loop
     dec byte [input_len]
-    movzx bx, byte [input_len]
+    mov bl, [input_len]
+    xor bh, bh
     mov byte [input_buf + bx], 0
     call draw_bottom
     jmp .main_loop
@@ -567,7 +582,8 @@ entry:
 
 .do_copy:
     call get_sel_name
-    movzx bx, byte [mount_handle]
+    mov bl, [mount_handle]
+    xor bh, bh
     mov ah, API_FS_OPEN
     int 0x80
     jc .op_fail
@@ -630,14 +646,14 @@ entry:
 .exit:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
 ; compute_layout - Get content size and derive all Y positions
 ; ============================================================================
 compute_layout:
-    pusha
+    PUSHA86
     mov al, 0xFF
     mov ah, API_WIN_GET_CONTENT_SIZE
     int 0x80
@@ -687,14 +703,14 @@ compute_layout:
     mov [row2_y], ax
 
 .cl_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; scan_files - Read directory into file_table
 ; ============================================================================
 scan_files:
-    pusha
+    PUSHA86
     push es
     mov byte [file_count], 0
     mov byte [sel_index], 0
@@ -719,8 +735,9 @@ scan_files:
     jnz .sf_loop
 
     ; Convert FAT 8.3 to dot format in file_table
-    movzx bx, byte [file_count]
-    shl bx, 4
+    mov bl, [file_count]
+    xor bh, bh
+    SHL_N bx, 4
     add bx, file_table
 
     mov si, dir_buf
@@ -764,14 +781,14 @@ scan_files:
 
 .sf_done:
     pop es
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_ui - Full redraw
 ; ============================================================================
 draw_ui:
-    pusha
+    PUSHA86
     ; Clear content
     mov bx, 0
     mov cx, 0
@@ -811,14 +828,14 @@ draw_ui:
     call draw_file_list
     call draw_bottom
     mov byte [op_error], 0
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_file_list - Visible rows + scrollbar
 ; ============================================================================
 draw_file_list:
-    pusha
+    PUSHA86
     xor cl, cl
 .row:
     mov al, cl
@@ -827,7 +844,8 @@ draw_file_list:
     jae .clear_rest
 
     push cx
-    movzx bx, al
+    mov bl, al
+    xor bh, bh
     call format_row
 
     ; Selected?
@@ -839,7 +857,8 @@ draw_file_list:
     mov al, 1
 .not_sel:
     push ax
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
@@ -863,7 +882,8 @@ draw_file_list:
     jbe .skip_clear
     mul word [row_h]
     mov si, ax
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mul word [row_h]
     add ax, [list_y]
     mov cx, ax
@@ -881,8 +901,10 @@ draw_file_list:
     mov ax, [vis_rows]
     mul word [row_h]
     mov si, ax
-    movzx dx, byte [scroll_top]
-    movzx ax, byte [file_count]
+    mov dl, [scroll_top]
+    xor dh, dh
+    mov al, [file_count]
+    xor ah, ah
     sub ax, [vis_rows]
     jns .sb_ok
     xor ax, ax
@@ -891,14 +913,14 @@ draw_file_list:
     mov al, 0
     mov ah, API_DRAW_SCROLLBAR
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_bottom - Button bar / status
 ; ============================================================================
 draw_bottom:
-    pusha
+    PUSHA86
     ; Clear bottom area
     mov bx, 0
     mov cx, [row1_y]
@@ -975,15 +997,18 @@ draw_bottom:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     call get_sel_name
-    movzx bx, byte [font_adv]
-    shl bx, 2
+    mov bl, [font_adv]
+    xor bh, bh
+    SHL_N bx, 2
     add bx, 4
     push bx
     mov cx, [row1_y]
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    movzx ax, byte [sel_name_len]
-    movzx bx, byte [font_adv]
+    mov al, [sel_name_len]
+    xor ah, ah
+    mov bl, [font_adv]
+    xor bh, bh
     mul bx
     pop bx
     add bx, ax
@@ -1030,22 +1055,24 @@ draw_bottom:
     call draw_input_line
 
 .db_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_input_line - Text input + cursor + OK button
 ; ============================================================================
 draw_input_line:
-    pusha
+    PUSHA86
     mov bx, 4
     mov cx, [row2_y]
     mov si, input_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Cursor
-    movzx ax, byte [input_len]
-    movzx bx, byte [font_adv]
+    mov al, [input_len]
+    xor ah, ah
+    mov bl, [font_adv]
+    xor bh, bh
     mul bx
     add ax, 4
     mov bx, ax
@@ -1064,15 +1091,16 @@ draw_input_line:
     xor al, al
     mov ah, API_DRAW_BUTTON
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_file_count - "N files" at right of row1
 ; ============================================================================
 draw_file_count:
-    pusha
-    movzx dx, byte [file_count]
+    PUSHA86
+    mov dl, [file_count]
+    xor dh, dh
     mov di, count_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
@@ -1094,15 +1122,15 @@ draw_file_count:
     mov si, count_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; format_row - Format file entry BX into display_buf
 ; ============================================================================
 format_row:
-    pusha
-    shl bx, 4
+    PUSHA86
+    SHL_N bx, 4
     add bx, file_table
     mov di, display_buf
     mov si, bx
@@ -1129,7 +1157,7 @@ format_row:
     mov dx, [bx + 13]
     mov ah, API_WORD_TO_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1138,8 +1166,9 @@ format_row:
 get_sel_name:
     push ax
     push bx
-    movzx bx, byte [sel_index]
-    shl bx, 4
+    mov bl, [sel_index]
+    xor bh, bh
+    SHL_N bx, 4
     add bx, file_table
     mov si, bx
     xor al, al

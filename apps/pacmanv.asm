@@ -5,6 +5,8 @@
 ; ============================================================================
 
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- BIN Header (80 bytes) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -143,7 +145,7 @@ PAL_START_INDEX         equ 16
 ; Entry point
 ; ============================================================================
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
     mov ax, cs
@@ -422,14 +424,14 @@ entry:
 
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
 ; setup_palette - Load custom 64-entry VGA palette via DAC ports
 ; ============================================================================
 setup_palette:
-    pusha
+    PUSHA86
     mov dx, 0x3C8
     mov al, PAL_START_INDEX
     out dx, al
@@ -442,14 +444,14 @@ setup_palette:
     inc si
     dec cx
     jnz .sp_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; show_splash - Splash screen with rainbow title and chase animation
 ; ============================================================================
 show_splash:
-    pusha
+    PUSHA86
     ; Clear screen black
     mov bx, 0
     mov cx, 0
@@ -472,12 +474,14 @@ show_splash:
     ; Rainbow line
     mov byte [cs:_splash_rx], 0
 .rainbow_line:
-    movzx bx, byte [cs:_splash_rx]
+    mov bl, [cs:_splash_rx]
+    xor bh, bh
     mov cx, 82
     mov dx, 4
     mov si, 1
-    movzx ax, byte [cs:_splash_rx]
-    shr al, 4                      ; 0-19 -> color index within 8
+    mov al, [cs:_splash_rx]
+    xor ah, ah
+    SHR_N al, 4; 0-19 -> color index within 8
     and al, 7
     add al, CLR_TITLE_START
     mov ah, API_FILLED_RECT_COLOR
@@ -497,7 +501,7 @@ show_splash:
     mov dx, 4
     mov si, 1
     mov ax, bx
-    shr al, 4
+    SHR_N al, 4
     and al, 7
     add al, CLR_TITLE_START
     mov ah, API_FILLED_RECT_COLOR
@@ -547,7 +551,7 @@ show_splash:
     jnz .splash_loop
 
 .splash_done:
-    popa
+    POPA86
     ret
 
 _splash_rx: db 0
@@ -556,7 +560,7 @@ _splash_rx: db 0
 ; draw_splash_title - Rainbow block-letter "PAC-MAN"
 ; ============================================================================
 draw_splash_title:
-    pusha
+    PUSHA86
     ; Draw each letter as block-art
     ; Letters: P A C - M A N at Y=20, block size 5x4 pixels, letter spacing
     mov word [cs:_spl_x], 42       ; Starting X
@@ -587,7 +591,8 @@ draw_splash_title:
     ; Draw block at (start_x + col*5, 20 + row*5)
     mov bx, [cs:_spl_x]
     add bx, [cs:_spl_cx]
-    movzx cx, byte [cs:_spl_row]
+    mov cl, [cs:_spl_row]
+    xor ch, ch
     mov ax, cx
     mov cl, 5
     mul cl
@@ -598,18 +603,23 @@ draw_splash_title:
     ; Rainbow color based on absolute column position
     mov ax, [cs:_spl_x]
     add ax, [cs:_spl_cx]
-    shr ax, 3
+    SHR_N ax, 3
     and al, 7
     add al, CLR_TITLE_START
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
     ; Reload SI to letter data
-    movzx ax, byte [cs:_spl_letter]
+    mov al, [cs:_spl_letter]
+    xor ah, ah
     mov si, 7
     mul si
     add ax, splash_letters
-    movzx si, byte [cs:_spl_row]
+    push ax
+    mov al, [cs:_spl_row]
+    xor ah, ah
+    mov si, ax
+    pop ax
     add ax, si
     mov si, ax
 
@@ -621,11 +631,16 @@ draw_splash_title:
 
 .spl_col_done:
     ; Advance SI to next row
-    movzx ax, byte [cs:_spl_letter]
+    mov al, [cs:_spl_letter]
+    xor ah, ah
     mov si, 7
     mul si
     add ax, splash_letters
-    movzx si, byte [cs:_spl_row]
+    push ax
+    mov al, [cs:_spl_row]
+    xor ah, ah
+    mov si, ax
+    pop ax
     inc si
     add ax, si
     mov si, ax
@@ -636,7 +651,8 @@ draw_splash_title:
     add word [cs:_spl_x], 34       ; Letter width + gap
     inc byte [cs:_spl_letter]
     ; Set SI to next letter
-    movzx ax, byte [cs:_spl_letter]
+    mov al, [cs:_spl_letter]
+    xor ah, ah
     mov si, 7
     mul si
     add ax, splash_letters
@@ -644,7 +660,7 @@ draw_splash_title:
     jmp .spl_letter_loop
 
 .spl_done:
-    popa
+    POPA86
     ret
 
 _spl_x:      dw 0
@@ -675,7 +691,7 @@ splash_letters:
 ; animate_splash - Move pac-man + ghosts across row 128
 ; ============================================================================
 animate_splash:
-    pusha
+    PUSHA86
     ; Erase old positions
     mov bx, 0
     mov cx, 124
@@ -728,9 +744,10 @@ animate_splash:
 .spl_ghost_loop:
     cmp byte [cs:_spl_gi], 4
     jae .spl_ghost_done
-    movzx bx, byte [cs:_spl_gi]
+    mov bl, [cs:_spl_gi]
+    xor bh, bh
     inc bx
-    shl bx, 4                      ; bx = (gi+1) * 16
+    SHL_N bx, 4; bx = (gi+1) * 16
     mov ax, [cs:splash_anim_x]
     sub ax, bx
     cmp ax, 0
@@ -740,15 +757,20 @@ animate_splash:
     mov dx, 10
     mov si, 10
     ; Ghost color
-    movzx di, byte [cs:_spl_gi]
+    push ax
+    mov al, [cs:_spl_gi]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, [cs:ghost_color_table + di]
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
     ; Eyes
     mov ax, [cs:splash_anim_x]
-    movzx bx, byte [cs:_spl_gi]
+    mov bl, [cs:_spl_gi]
+    xor bh, bh
     inc bx
-    shl bx, 4
+    SHL_N bx, 4
     sub ax, bx
     mov bx, ax
     add bx, 2
@@ -759,9 +781,10 @@ animate_splash:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
     mov ax, [cs:splash_anim_x]
-    movzx bx, byte [cs:_spl_gi]
+    mov bl, [cs:_spl_gi]
+    xor bh, bh
     inc bx
-    shl bx, 4
+    SHL_N bx, 4
     sub ax, bx
     mov bx, ax
     add bx, 6
@@ -782,7 +805,7 @@ animate_splash:
 .spl_reset:
     mov word [cs:splash_anim_x], 0
 .spl_anim_ret:
-    popa
+    POPA86
     ret
 
 _spl_gi: db 0
@@ -791,7 +814,7 @@ _spl_gi: db 0
 ; draw_title_screen - Title/menu screen
 ; ============================================================================
 draw_title_screen:
-    pusha
+    PUSHA86
     ; Clear screen
     mov bx, 0
     mov cx, 0
@@ -831,14 +854,14 @@ draw_title_screen:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; init_level - Start or restart a level
 ; ============================================================================
 init_level:
-    pusha
+    PUSHA86
 
     ; Copy maze template to working data
     mov si, maze_template
@@ -912,14 +935,14 @@ init_level:
     mov word [cs:ready_timer], 36
     mov byte [cs:game_state], STATE_READY
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; reset_positions
 ; ============================================================================
 reset_positions:
-    pusha
+    PUSHA86
 
     ; Pac-Man: tile (14,19) = pixel (112,152)
     mov word [cs:pac_x], 112
@@ -960,20 +983,22 @@ reset_positions:
     mov byte [cs:ghost_state + 3], GHOST_IN_HOUSE
     mov word [cs:ghost_timer + 6], 127
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_maze - VGA beveled maze
 ; ============================================================================
 draw_maze:
-    pusha
+    PUSHA86
     mov byte [cs:_dm_row], 0
 .row_loop:
     mov byte [cs:_dm_col], 0
 .col_loop:
-    movzx bx, byte [cs:_dm_col]
-    movzx cx, byte [cs:_dm_row]
+    mov bl, [cs:_dm_col]
+    xor bh, bh
+    mov cl, [cs:_dm_row]
+    xor ch, ch
     call draw_tile
     inc byte [cs:_dm_col]
     cmp byte [cs:_dm_col], MAZE_COLS
@@ -981,7 +1006,7 @@ draw_maze:
     inc byte [cs:_dm_row]
     cmp byte [cs:_dm_row], MAZE_ROWS
     jb .row_loop
-    popa
+    POPA86
     ret
 
 _dm_row: db 0
@@ -991,7 +1016,7 @@ _dm_col: db 0
 ; draw_tile - Draw single tile at (BX=col, CX=row) with VGA shading
 ; ============================================================================
 draw_tile:
-    pusha
+    PUSHA86
 
     ; Calculate maze offset
     push bx
@@ -1003,8 +1028,8 @@ draw_tile:
     mov di, ax
 
     ; Pixel coords
-    shl bx, 3
-    shl cx, 3
+    SHL_N bx, 3
+    SHL_N cx, 3
 
     mov al, [cs:maze_data + di]
 
@@ -1129,7 +1154,7 @@ draw_tile:
     pop bx
 
 .tile_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1137,7 +1162,7 @@ draw_tile:
 ; Input: BX=pixel_x, CX=pixel_y, DI=maze offset
 ; ============================================================================
 draw_wall_bevel:
-    pusha
+    PUSHA86
 
     ; Top edge: if neighbor above is not wall, draw highlight
     mov ax, di
@@ -1226,14 +1251,14 @@ draw_wall_bevel:
     pop bx
 .bevel_no_right:
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_hud_panel - Navy gradient background for HUD
 ; ============================================================================
 draw_hud_panel:
-    pusha
+    PUSHA86
     ; Fill HUD area with dark navy
     mov bx, 224
     mov cx, 0
@@ -1249,14 +1274,14 @@ draw_hud_panel:
     mov al, CLR_HUD_BORDER
     mov ah, API_DRAW_VLINE
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_hud / draw_score / draw_high_score / draw_lives / draw_level
 ; ============================================================================
 draw_hud:
-    pusha
+    PUSHA86
     mov bx, HUD_X
     mov cx, 8
     mov si, str_score_label
@@ -1271,11 +1296,11 @@ draw_hud:
     call draw_high_score
     call draw_lives
     call draw_level
-    popa
+    POPA86
     ret
 
 draw_score:
-    pusha
+    PUSHA86
     mov bx, HUD_X
     mov cx, 20
     mov dx, 80
@@ -1291,11 +1316,11 @@ draw_score:
     mov si, score_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 draw_high_score:
-    pusha
+    PUSHA86
     mov bx, HUD_X
     mov cx, 52
     mov dx, 80
@@ -1311,11 +1336,11 @@ draw_high_score:
     mov si, score_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 draw_lives:
-    pusha
+    PUSHA86
     mov bx, HUD_X
     mov cx, 76
     mov dx, 80
@@ -1329,7 +1354,8 @@ draw_lives:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
     ; Draw pac-man icons for lives
-    movzx cx, byte [cs:lives]
+    mov cl, [cs:lives]
+    xor ch, ch
     cmp cx, 0
     je .lives_done
     mov bx, HUD_X
@@ -1347,17 +1373,18 @@ draw_lives:
     pop bx
     add bx, 12
     inc byte [cs:_lives_i]
-    movzx ax, byte [cs:_lives_i]
+    mov al, [cs:_lives_i]
+    xor ah, ah
     cmp al, [cs:lives]
     jb .lives_loop
 .lives_done:
-    popa
+    POPA86
     ret
 
 _lives_i: db 0
 
 draw_level:
-    pusha
+    PUSHA86
     mov bx, HUD_X
     mov cx, 110
     mov dx, 80
@@ -1370,7 +1397,8 @@ draw_level:
     mov si, str_level_label
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    movzx ax, byte [cs:level]
+    mov al, [cs:level]
+    xor ah, ah
     mov di, score_buf
     call word_to_decimal
     mov bx, HUD_X + 40
@@ -1378,14 +1406,14 @@ draw_level:
     mov si, score_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; word_to_decimal - Convert AX to decimal string at CS:DI
 ; ============================================================================
 word_to_decimal:
-    pusha
+    PUSHA86
     mov cx, 0
     mov bx, 10
 .div_loop:
@@ -1403,7 +1431,7 @@ word_to_decimal:
     inc si
     loop .pop_loop
     mov byte [cs:si], 0
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1412,7 +1440,7 @@ word_to_decimal:
 
 ; draw_pac - Draw pac-man as composited colored shape
 draw_pac:
-    pusha
+    PUSHA86
     mov bx, [cs:pac_x]
     mov cx, [cs:pac_y]
     ; Body: 7x7 bright yellow
@@ -1460,8 +1488,12 @@ draw_pac:
     jne .pac_mouth_size_ok
     mov dl, 4                       ; Frame 2: large
 .pac_mouth_size_ok:
-    movzx si, dl
-    movzx dx, dl
+    push ax
+    mov al, dl
+    xor ah, ah
+    mov si, ax
+    pop ax
+    xor dh, dh
 
     mov bx, [cs:pac_x]
     mov cx, [cs:pac_y]
@@ -1528,23 +1560,27 @@ draw_pac:
     mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; erase_pac - Erase at old position by redrawing tiles
 erase_pac:
-    pusha
+    PUSHA86
     mov bx, [cs:pac_old_x]
     mov cx, [cs:pac_old_y]
     call erase_entity
-    popa
+    POPA86
     ret
 
 ; draw_ghost_vga - Draw ghost at BX=x, CX=y, ghost index in _dg_i
 draw_ghost_vga:
-    pusha
+    PUSHA86
     ; Determine color
-    movzx di, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, [cs:ghost_state + di]
 
     cmp al, GHOST_EATEN
@@ -1626,7 +1662,11 @@ draw_ghost_vga:
     pop bx
 
     ; Eyes (skip if frightened)
-    movzx di, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov di, ax
+    pop ax
     cmp byte [cs:ghost_state + di], GHOST_FRIGHTENED
     je .dg_fright_face
 
@@ -1656,7 +1696,11 @@ draw_ghost_vga:
     pop cx
     pop bx
     ; Iris: direction-dependent offset
-    movzx di, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, [cs:ghost_dir + di]
     xor dl, dl                      ; dx offset for iris
     cmp al, DIR_LEFT
@@ -1674,7 +1718,8 @@ draw_ghost_vga:
     push bx
     push cx
     add bx, 2
-    movzx ax, dl
+    mov al, dl
+    xor ah, ah
     add bx, ax
     add cx, 4
     mov dx, 1
@@ -1688,14 +1733,19 @@ draw_ghost_vga:
     push bx
     push cx
     add bx, 5
-    movzx di, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, [cs:ghost_dir + di]
     xor dl, dl
     cmp al, DIR_RIGHT
     jne .iris2
     mov dl, 1
 .iris2:
-    movzx ax, dl
+    mov al, dl
+    xor ah, ah
     add bx, ax
     add cx, 4
     mov dx, 1
@@ -1748,40 +1798,49 @@ draw_ghost_vga:
     pop bx
 
 .dg_done:
-    popa
+    POPA86
     ret
 
 _dg_color: db 0
 
 ; draw_entities - Draw all entities
 draw_entities:
-    pusha
+    PUSHA86
     call draw_pac
     call draw_all_ghosts
-    popa
+    POPA86
     ret
 
 ; draw_all_ghosts - Draw all 4 ghosts
 draw_all_ghosts:
-    pusha
+    PUSHA86
     mov byte [cs:_dg_i], 0
 .dg_loop:
     cmp byte [cs:_dg_i], NUM_GHOSTS
     jae .dg_done_all
 
-    movzx bx, byte [cs:_dg_i]
+    mov bl, [cs:_dg_i]
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_IN_HOUSE
     je .dg_next
 
     ; Erase old
-    movzx si, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov si, ax
+    pop ax
     shl si, 1
     mov bx, [cs:ghost_old_x + si]
     mov cx, [cs:ghost_old_y + si]
     call erase_entity
 
     ; Draw new
-    movzx si, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov si, ax
+    pop ax
     shl si, 1
     mov bx, [cs:ghost_x + si]
     mov cx, [cs:ghost_y + si]
@@ -1790,7 +1849,11 @@ draw_all_ghosts:
 
 .dg_next:
     ; Still erase in case ghost just entered house
-    movzx si, byte [cs:_dg_i]
+    push ax
+    mov al, [cs:_dg_i]
+    xor ah, ah
+    mov si, ax
+    pop ax
     shl si, 1
     mov bx, [cs:ghost_old_x + si]
     mov cx, [cs:ghost_old_y + si]
@@ -1800,19 +1863,19 @@ draw_all_ghosts:
     inc byte [cs:_dg_i]
     jmp .dg_loop
 .dg_done_all:
-    popa
+    POPA86
     ret
 
 _dg_i: db 0
 
 ; erase_entity - Redraw tiles under 9x9 entity at BX, CX
 erase_entity:
-    pusha
+    PUSHA86
     mov ax, bx
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_ee_tx], ax
     mov ax, cx
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_ee_ty], ax
 
     ; Up to 2x2 tiles
@@ -1847,7 +1910,7 @@ erase_entity:
     call draw_tile
 
 .ee_done:
-    popa
+    POPA86
     ret
 
 _ee_tx: dw 0
@@ -1857,16 +1920,17 @@ _ee_ty: dw 0
 ; redraw_tiles_at_ready
 ; ============================================================================
 redraw_tiles_at_ready:
-    pusha
+    PUSHA86
     mov byte [cs:_rr_col], 10
 .rr_loop:
-    movzx bx, byte [cs:_rr_col]
+    mov bl, [cs:_rr_col]
+    xor bh, bh
     mov cx, 13
     call draw_tile
     inc byte [cs:_rr_col]
     cmp byte [cs:_rr_col], 17
     jbe .rr_loop
-    popa
+    POPA86
     ret
 
 _rr_col: db 0
@@ -1875,7 +1939,7 @@ _rr_col: db 0
 ; Movement - identical logic to CGA version
 ; ============================================================================
 move_pac_man:
-    pusha
+    PUSHA86
     cmp byte [cs:pac_alive], 1
     jne .move_done
 
@@ -1888,14 +1952,16 @@ move_pac_man:
     jnz .continue_moving
 
     ; Try next dir
-    movzx ax, byte [cs:pac_next_dir]
+    mov al, [cs:pac_next_dir]
+    xor ah, ah
     call pac_can_move_dir
     jc .try_current
     mov al, [cs:pac_next_dir]
     mov [cs:pac_dir], al
     jmp .do_move
 .try_current:
-    movzx ax, byte [cs:pac_dir]
+    mov al, [cs:pac_dir]
+    xor ah, ah
     call pac_can_move_dir
     jc .move_done
 .do_move:
@@ -1924,7 +1990,7 @@ move_pac_man:
     mov word [cs:pac_x], 223
 .wrap_done:
 .move_done:
-    popa
+    POPA86
     ret
 
 pac_can_move_dir:
@@ -1933,8 +1999,8 @@ pac_can_move_dir:
     push dx
     mov bx, [cs:pac_x]
     mov cx, [cs:pac_y]
-    shr bx, 3
-    shr cx, 3
+    SHR_N bx, 3
+    SHR_N cx, 3
     cmp al, DIR_UP
     je .pcd_up
     cmp al, DIR_DOWN
@@ -1992,14 +2058,14 @@ pac_can_move_dir:
 ; Dot eating
 ; ============================================================================
 check_dot_eat:
-    pusha
+    PUSHA86
     mov ax, [cs:pac_x]
     add ax, 3
-    shr ax, 3
+    SHR_N ax, 3
     mov bx, ax
     mov ax, [cs:pac_y]
     add ax, 3
-    shr ax, 3
+    SHR_N ax, 3
     mov dl, MAZE_COLS
     mul dl
     add ax, bx
@@ -2035,7 +2101,8 @@ check_dot_eat:
 .fright_loop:
     cmp cl, NUM_GHOSTS
     jae .fright_done
-    movzx bx, cl
+    mov bl, cl
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_IN_HOUSE
     je .fright_next
     cmp byte [cs:ghost_state + bx], GHOST_EATEN
@@ -2057,7 +2124,7 @@ check_dot_eat:
     call check_level_complete
 
 .eat_done:
-    popa
+    POPA86
     ret
 
 check_level_complete:
@@ -2090,7 +2157,7 @@ reverse_dir:
 ; save_old_positions - Save entity positions before substeps (for erase)
 ; ============================================================================
 save_old_positions:
-    pusha
+    PUSHA86
     mov ax, [cs:pac_x]
     mov [cs:pac_old_x], ax
     mov ax, [cs:pac_y]
@@ -2106,19 +2173,19 @@ save_old_positions:
     add bx, 2
     jmp .sop_loop
 .sop_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; update_ghost_release - Release ghosts from house (called once per tick)
 ; ============================================================================
 update_ghost_release:
-    pusha
+    PUSHA86
     mov bl, 1               ; Start at ghost 1 (Blinky=0 already out)
 .ugr_loop:
     cmp bl, NUM_GHOSTS
     jae .ugr_done
-    movzx bx, bl
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_IN_HOUSE
     jne .ugr_next
     ; Decrement release timer
@@ -2146,17 +2213,18 @@ update_ghost_release:
     inc bl
     jmp .ugr_loop
 .ugr_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; Ghost movement (4 ghosts)
 ; ============================================================================
 move_ghosts:
-    pusha
+    PUSHA86
     mov byte [cs:_mg_i], 0
 .mg_loop:
-    movzx bx, byte [cs:_mg_i]
+    mov bl, [cs:_mg_i]
+    xor bh, bh
     cmp bl, NUM_GHOSTS
     jae .mg_done
 
@@ -2170,13 +2238,13 @@ move_ghosts:
     inc byte [cs:_mg_i]
     jmp .mg_loop
 .mg_done:
-    popa
+    POPA86
     ret
 
 _mg_i: db 0
 
 move_one_ghost:
-    pusha
+    PUSHA86
     shl bx, 1
     mov ax, [cs:ghost_x + bx]
     shr bx, 1
@@ -2214,20 +2282,20 @@ move_one_ghost:
     jb .g_moved
     mov word [cs:ghost_x + bx], 223
 .g_moved:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; ghost_choose_direction - AI for ghost BX
 ; ============================================================================
 ghost_choose_direction:
-    pusha
+    PUSHA86
     shl bx, 1
     mov ax, [cs:ghost_x + bx]
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_gc_tile_x], ax
     mov ax, [cs:ghost_y + bx]
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_gc_tile_y], ax
     shr bx, 1
 
@@ -2283,7 +2351,7 @@ ghost_choose_direction:
     je .gc_c2
     ; Ghost 3 (Clyde): chase if far, scatter if close
     mov ax, [cs:pac_x]
-    shr ax, 3
+    SHR_N ax, 3
     sub ax, [cs:_gc_tile_x]
     test ax, ax
     jns .gc_c3_px
@@ -2291,7 +2359,7 @@ ghost_choose_direction:
 .gc_c3_px:
     mov cx, ax
     mov ax, [cs:pac_y]
-    shr ax, 3
+    SHR_N ax, 3
     sub ax, [cs:_gc_tile_y]
     test ax, ax
     jns .gc_c3_py
@@ -2305,20 +2373,20 @@ ghost_choose_direction:
 .gc_c0:
     ; Blinky: direct chase
     mov ax, [cs:pac_x]
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_gc_target_x], ax
     mov ax, [cs:pac_y]
-    shr ax, 3
+    SHR_N ax, 3
     mov [cs:_gc_target_y], ax
     jmp .gc_find_best
 
 .gc_c1:
     ; Pinky: 4 tiles ahead
     mov ax, [cs:pac_x]
-    shr ax, 3
+    SHR_N ax, 3
     mov cx, ax
     mov ax, [cs:pac_y]
-    shr ax, 3
+    SHR_N ax, 3
     mov dx, ax
     cmp byte [cs:pac_dir], DIR_UP
     je .gc_c1_up
@@ -2341,10 +2409,10 @@ ghost_choose_direction:
 .gc_c2:
     ; Inky: 2*(2 tiles ahead) - Blinky position
     mov ax, [cs:pac_x]
-    shr ax, 3
+    SHR_N ax, 3
     mov cx, ax
     mov ax, [cs:pac_y]
-    shr ax, 3
+    SHR_N ax, 3
     mov dx, ax
     cmp byte [cs:pac_dir], DIR_UP
     je .gc_c2_up
@@ -2364,10 +2432,10 @@ ghost_choose_direction:
     shl cx, 1
     shl dx, 1
     mov ax, [cs:ghost_x]           ; Blinky x (ghost 0)
-    shr ax, 3
+    SHR_N ax, 3
     sub cx, ax
     mov ax, [cs:ghost_y]
-    shr ax, 3
+    SHR_N ax, 3
     sub dx, ax
     mov [cs:_gc_target_x], cx
     mov [cs:_gc_target_y], dx
@@ -2377,7 +2445,8 @@ ghost_choose_direction:
     mov word [cs:_gc_best_dist], 0xFFFF
     mov byte [cs:_gc_best_dir], DIR_UP
     ; Reverse of current direction
-    movzx bx, byte [cs:_mg_i]
+    mov bl, [cs:_mg_i]
+    xor bh, bh
     mov al, [cs:ghost_dir + bx]
     call reverse_dir
     mov [cs:_gc_reverse], al
@@ -2440,7 +2509,8 @@ ghost_choose_direction:
     je .gc_skip_pop
     cmp ah, TILE_GATE
     jne .gc_t_pass
-    movzx bx, byte [cs:_mg_i]
+    mov bl, [cs:_mg_i]
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_EATEN
     jne .gc_skip_pop
 .gc_t_pass:
@@ -2474,10 +2544,11 @@ ghost_choose_direction:
     ret
 
 .gc_apply:
-    movzx bx, byte [cs:_mg_i]
+    mov bl, [cs:_mg_i]
+    xor bh, bh
     mov al, [cs:_gc_best_dir]
     mov [cs:ghost_dir + bx], al
-    popa
+    POPA86
     ret
 
 _gc_tile_x:    dw 0
@@ -2492,12 +2563,13 @@ _gc_reverse:   db 0
 ; Ghost collision
 ; ============================================================================
 check_ghost_collision:
-    pusha
+    PUSHA86
     mov cl, 0
 .col_loop:
     cmp cl, NUM_GHOSTS
     jae .col_done
-    movzx bx, cl
+    mov bl, cl
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_IN_HOUSE
     je .col_next
     cmp byte [cs:ghost_state + bx], GHOST_EATEN
@@ -2537,7 +2609,8 @@ check_ghost_collision:
 .eat_ghost:
     mov byte [cs:ghost_state + bx], GHOST_EATEN
     mov ax, 200
-    movzx cx, byte [cs:fright_kills]
+    mov cl, [cs:fright_kills]
+    xor ch, ch
     cmp cx, 0
     je .score_ok
 .shift_score:
@@ -2565,7 +2638,7 @@ check_ghost_collision:
     mov [cs:high_score], ax
     call draw_high_score
 .no_hi:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -2577,12 +2650,13 @@ update_fright_timer:
     dec word [cs:fright_timer]
     cmp word [cs:fright_timer], 0
     jne .ft_done
-    pusha
+    PUSHA86
     mov cl, 0
 .ft_loop:
     cmp cl, NUM_GHOSTS
     jae .ft_end
-    movzx bx, cl
+    mov bl, cl
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_FRIGHTENED
     jne .ft_next
     mov al, [cs:mode_is_chase]
@@ -2596,7 +2670,7 @@ update_fright_timer:
     inc cl
     jmp .ft_loop
 .ft_end:
-    popa
+    POPA86
 .ft_done:
     ret
 
@@ -2606,10 +2680,11 @@ update_mode_timer:
     dec word [cs:mode_timer]
     cmp word [cs:mode_timer], 0
     jne .mt_done
-    pusha
+    PUSHA86
     inc byte [cs:mode_index]
     xor byte [cs:mode_is_chase], 1
-    movzx bx, byte [cs:mode_index]
+    mov bl, [cs:mode_index]
+    xor bh, bh
     shl bx, 1
     mov ax, [cs:mode_schedule + bx]
     mov [cs:mode_timer], ax
@@ -2617,7 +2692,8 @@ update_mode_timer:
 .mt_rev:
     cmp cl, NUM_GHOSTS
     jae .mt_end
-    movzx bx, cl
+    mov bl, cl
+    xor bh, bh
     cmp byte [cs:ghost_state + bx], GHOST_FRIGHTENED
     je .mt_rnext
     cmp byte [cs:ghost_state + bx], GHOST_EATEN
@@ -2639,7 +2715,7 @@ update_mode_timer:
     inc cl
     jmp .mt_rev
 .mt_end:
-    popa
+    POPA86
 .mt_done:
     ret
 
@@ -2661,7 +2737,7 @@ update_power_flash:
     jb .pf_done
     mov byte [cs:power_flash_tick], 0
     xor byte [cs:power_flash], 1
-    pusha
+    PUSHA86
     mov si, maze_data
     xor cx, cx
 .pf_loop:
@@ -2683,7 +2759,7 @@ update_power_flash:
     inc cx
     jmp .pf_loop
 .pf_end:
-    popa
+    POPA86
 .pf_done:
     ret
 
@@ -2703,37 +2779,40 @@ update_sound:
 .us_chomp:
     test byte [cs:snd_timer], 1
     jz .us_end
-    pusha
+    PUSHA86
     mov bx, 880
     mov ah, API_SPEAKER_TONE
     int 0x80
-    popa
+    POPA86
     jmp .us_end
 .us_power:
-    pusha
-    movzx ax, byte [cs:snd_timer]
+    PUSHA86
+    mov al, [cs:snd_timer]
+    xor ah, ah
     mov bx, 125
     mul bx
     add ax, 400
     mov bx, ax
     mov ah, API_SPEAKER_TONE
     int 0x80
-    popa
+    POPA86
     jmp .us_end
 .us_death:
-    pusha
-    movzx ax, byte [cs:snd_timer]
+    PUSHA86
+    mov al, [cs:snd_timer]
+    xor ah, ah
     mov bx, 25
     mul bx
     add ax, 100
     mov bx, ax
     mov ah, API_SPEAKER_TONE
     int 0x80
-    popa
+    POPA86
     jmp .us_end
 .us_eat:
-    pusha
-    movzx ax, byte [cs:snd_timer]
+    PUSHA86
+    mov al, [cs:snd_timer]
+    xor ah, ah
     neg ax
     add ax, 4
     mov bx, 200
@@ -2742,14 +2821,14 @@ update_sound:
     mov bx, ax
     mov ah, API_SPEAKER_TONE
     int 0x80
-    popa
+    POPA86
 .us_end:
     cmp byte [cs:snd_timer], 0
     jne .us_done
-    pusha
+    PUSHA86
     mov ah, API_SPEAKER_OFF
     int 0x80
-    popa
+    POPA86
 .us_done:
     ret
 

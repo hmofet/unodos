@@ -4,6 +4,8 @@
 ; ============================================================================
 
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- BIN Header (80 bytes) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -36,7 +38,7 @@
 ; Entry point
 ; ============================================================================
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -240,7 +242,7 @@ entry:
     ; Curve drift: road curves push the car sideways
     call update_curve
     mov ax, [cs:current_curve]
-    sar ax, 3                        ; Drift = curve / 8 pixels per frame (gentle)
+    SAR_N ax, 3; Drift = curve / 8 pixels per frame (gentle)
     sub [cs:player_x], ax            ; Positive curve = right turn = car drifts left
 
     ; Advance camera based on speed
@@ -260,7 +262,7 @@ entry:
     cmp ax, [cs:road_right_at_car]
     jg .skip_score
     mov ax, [cs:player_speed]
-    shr ax, 2
+    SHR_N ax, 2
     add [cs:score], ax
 .skip_score:
 
@@ -317,7 +319,7 @@ entry:
 
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
@@ -387,7 +389,7 @@ SEGMENT_LENGTH          equ 80      ; Longer segments = longer sustained curves
 ; init_game - Reset game state
 ; ============================================================================
 init_game:
-    pusha
+    PUSHA86
 
     mov word [cs:player_x], 160
     mov word [cs:player_speed], 0
@@ -423,7 +425,8 @@ init_game:
     int 0x80
 
     ; Start gameplay song (cycles through 3 songs)
-    movzx bx, byte [cs:game_song_idx]
+    mov bl, [cs:game_song_idx]
+    xor bh, bh
     shl bx, 1
     mov si, [cs:song_table + bx]
     call start_song
@@ -433,14 +436,14 @@ init_game:
     mov byte [cs:game_song_idx], 0
 .song_ok:
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; update_curve - Get current curve value from track data
 ; ============================================================================
 update_curve:
-    pusha
+    PUSHA86
 
     ; segment_index = (camera_z / SEGMENT_LENGTH) % TRACK_SEGMENTS
     mov ax, [cs:camera_z]
@@ -453,14 +456,14 @@ update_curve:
     mov ax, [cs:track_data + bx]
     mov [cs:current_curve], ax
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_road - Render the pseudo-3D road view
 ; ============================================================================
 draw_road:
-    pusha
+    PUSHA86
 
     ; Draw sky (below HUD area to horizon)
     mov bx, 0
@@ -502,7 +505,7 @@ draw_road:
 
     ; Road half-width = ROAD_BASE_W * 256 / Z
     mov ax, ROAD_BASE_W
-    shl ax, 8
+    SHL_N ax, 8
     xor dx, dx
     mov bx, [cs:strip_z]
     cmp bx, 1
@@ -540,7 +543,7 @@ draw_road:
 
     ; Road center = 160 + (curve_accum >> 5)
     mov ax, [cs:curve_accum]
-    sar ax, 5
+    SAR_N ax, 5
     add ax, 160
     mov [cs:strip_cx], ax
 
@@ -589,7 +592,7 @@ draw_road:
     ; segment = (camera_z + Z) / 8
     mov ax, [cs:camera_z]
     add ax, [cs:strip_z]
-    shr ax, 3
+    SHR_N ax, 3
     test al, 1
     jnz .odd_segment
 
@@ -652,7 +655,7 @@ draw_road:
     je .next_strip
     ; Center stripe width = max(1, strip_hw / 16)
     mov ax, [cs:strip_hw]
-    shr ax, 4
+    SHR_N ax, 4
     cmp ax, 1
     jge .stripe_w_ok
     mov ax, 1
@@ -667,7 +670,7 @@ draw_road:
 .stripe_ok:
     mov cx, [cs:strip_y]
     mov ax, [cs:strip_hw]
-    shr ax, 4
+    SHR_N ax, 4
     cmp ax, 1
     jge .sw2_ok
     mov ax, 1
@@ -683,14 +686,14 @@ draw_road:
     jmp .strip_loop
 
 .strips_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_obstacles - Draw roadside trees along the track (CGA)
 ; ============================================================================
 draw_obstacles:
-    pusha
+    PUSHA86
 
     ; Compute camera position in track (camera_z % TRACK_TOTAL_LEN)
     mov ax, [cs:camera_z]
@@ -799,7 +802,7 @@ draw_obstacles:
 
     ; Draw trunk (narrow, bottom half)
     mov dx, [cs:obs_tree_w]
-    shr dx, 2                        ; trunk_w = tree_w / 4
+    SHR_N dx, 2; trunk_w = tree_w / 4
     cmp dx, 2
     jge .vt_tw_ok
     mov dx, 2
@@ -842,14 +845,14 @@ draw_obstacles:
     jmp .obs_loop
 
 .obs_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; check_obstacle_collision - Check if car hit a roadside tree (CGA)
 ; ============================================================================
 check_obstacle_collision:
-    pusha
+    PUSHA86
 
     ; Only check when not already crashed
     cmp byte [cs:crash_timer], 0
@@ -919,14 +922,14 @@ check_obstacle_collision:
     jmp .col_loop
 
 .col_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; update_traffic - Move traffic cars along the track (CGA)
 ; ============================================================================
 update_traffic:
-    pusha
+    PUSHA86
     xor cx, cx
 .ut_loop:
     cmp cl, NUM_TRAFFIC
@@ -957,14 +960,14 @@ update_traffic:
     inc cl
     jmp .ut_loop
 .ut_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_traffic - Draw traffic cars on the road (CGA)
 ; ============================================================================
 draw_traffic:
-    pusha
+    PUSHA86
 
     mov ax, [cs:camera_z]
     xor dx, dx
@@ -1043,7 +1046,7 @@ draw_traffic:
     ; Lane center X
     mov ax, [cs:road_edge_right + di]
     sub ax, [cs:road_edge_left + di]
-    shr ax, 2                         ; quarter-width
+    SHR_N ax, 2; quarter-width
 
     xor bh, bh
     mov bl, [cs:traf_idx]
@@ -1092,14 +1095,14 @@ draw_traffic:
     ; Windshield (dark strip)
     mov bx, [cs:traf_car_x]
     mov ax, [cs:traf_car_w]
-    shr ax, 2
+    SHR_N ax, 2
     add bx, ax
     mov cx, [cs:traf_screen_y]
     sub cx, [cs:traf_car_h]
     mov dx, [cs:traf_car_w]
     shr dx, 1
     mov si, [cs:traf_car_h]
-    shr si, 2
+    SHR_N si, 2
     cmp si, 1
     jge .dt_ws_ok
     mov si, 1
@@ -1113,7 +1116,7 @@ draw_traffic:
     jmp .dt_loop
 
 .dt_done:
-    popa
+    POPA86
     ret
 
 traf_body_clr:  db 0
@@ -1122,7 +1125,7 @@ traf_body_clr:  db 0
 ; check_traffic_collision - Check if player hit a traffic car (CGA)
 ; ============================================================================
 check_traffic_collision:
-    pusha
+    PUSHA86
 
     cmp byte [cs:crash_timer], 0
     jne .tc_done
@@ -1156,7 +1159,7 @@ check_traffic_collision:
     mov bl, cl
     mov ax, [cs:road_right_at_car]
     sub ax, [cs:road_left_at_car]
-    shr ax, 2
+    SHR_N ax, 2
     cmp byte [cs:traffic_lane + bx], 0
     je .tc_left_lane
     mov bx, [cs:road_right_at_car]
@@ -1183,14 +1186,14 @@ check_traffic_collision:
     jmp .tc_loop
 
 .tc_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_car - Draw the player's car (32x20)
 ; ============================================================================
 draw_car:
-    pusha
+    PUSHA86
 
     ; Skip drawing on odd frames when crashed (flash effect)
     cmp byte [cs:crash_timer], 0
@@ -1250,14 +1253,14 @@ draw_car:
     int 0x80
 
 .car_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_hud - Draw speed, score, and timer
 ; ============================================================================
 draw_hud:
-    pusha
+    PUSHA86
 
     ; Clear HUD area at top
     mov bx, 0
@@ -1319,14 +1322,14 @@ draw_hud:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_title - Graphical title screen with road, car, bitmap title (CGA)
 ; ============================================================================
 draw_title:
-    pusha
+    PUSHA86
 
     ; === Night sky (black background already cleared) ===
     ; Horizon line (cyan)
@@ -1487,7 +1490,7 @@ draw_title:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1495,7 +1498,7 @@ draw_title:
 ; Input: title_draw_x, title_draw_y, title_draw_clr set before call
 ; ============================================================================
 render_bitmap_title:
-    pusha
+    PUSHA86
 
     mov ax, [cs:title_draw_x]
     mov [cs:title_cur_x], ax
@@ -1509,7 +1512,8 @@ render_bitmap_title:
     push si
 
     ; Get font data offset
-    movzx ax, byte [cs:title_order + si]
+    mov al, [cs:title_order + si]
+    xor ah, ah
     mov bl, TITLE_FONT_ROWS
     mul bl
     mov bp, ax
@@ -1575,7 +1579,7 @@ render_bitmap_title:
     jmp .rt_letter_loop
 
 .rt_all_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1598,7 +1602,7 @@ stop_music:
     ret
 
 play_music_tick:
-    pusha
+    PUSHA86
 
     cmp word [cs:music_ptr], 0
     je .mt_done
@@ -1636,14 +1640,14 @@ play_music_tick:
     dec word [cs:music_ticks]
 
 .mt_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_game_over - Draw game over screen
 ; ============================================================================
 draw_game_over:
-    pusha
+    PUSHA86
 
     ; Semi-transparent overlay (just clear center)
     mov bx, 80
@@ -1683,7 +1687,7 @@ draw_game_over:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================

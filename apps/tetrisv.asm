@@ -5,6 +5,8 @@
 ; ============================================================================
 
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- BIN Header (80 bytes) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -42,7 +44,7 @@ API_WIN_CREATE           equ 20
 API_WIN_DESTROY          equ 21
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -233,7 +235,7 @@ entry:
 
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
@@ -477,7 +479,7 @@ VGA_PAL_COUNT equ 23                ; 23 entries (16 through 38)
 ; setup_piece_palette - Set VGA palette entries for piece colors
 ; ============================================================================
 setup_piece_palette:
-    pusha
+    PUSHA86
     ; Write palette entries 16-38 via I/O port
     mov dx, 0x3C8                   ; DAC write index port
     mov al, 16                      ; Start at palette entry 16
@@ -491,7 +493,7 @@ setup_piece_palette:
     inc si
     dec cx
     jnz .spp_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -796,7 +798,7 @@ draw_static_ui:
 ; draw_grid - Draw subtle grid lines on the board
 ; ============================================================================
 draw_grid:
-    pusha
+    PUSHA86
 
     ; Vertical grid lines
     mov bx, BOARD_X + CELL_SIZE
@@ -826,7 +828,7 @@ draw_grid:
     jmp .dg_hrow
 
 .dg_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -834,7 +836,7 @@ draw_grid:
 ; Input: AL=color (0=empty, or VGA palette base index), BL=col (0-9), BH=row (0-19)
 ; ============================================================================
 draw_cell:
-    pusha
+    PUSHA86
 
     ; If color is 0, just clear the cell
     test al, al
@@ -908,7 +910,7 @@ draw_cell:
     mov ah, API_DRAW_VLINE
     int 0x80
 
-    popa
+    POPA86
     ret
 
 .clear_cell:
@@ -963,7 +965,7 @@ draw_cell:
     int 0x80
 .no_top_grid:
 
-    popa
+    POPA86
     ret
 
 ; Temp for draw_cell
@@ -981,11 +983,11 @@ get_piece_cells:
     push bx
     mov bl, al
     xor bh, bh
-    shl bx, 5                       ; type * 32
+    SHL_N bx, 5; type * 32
     add bx, piece_data
     mov al, ah
     xor ah, ah
-    shl ax, 3                       ; rot * 8
+    SHL_N ax, 3; rot * 8
     add bx, ax
     mov si, bx
     pop bx
@@ -996,7 +998,7 @@ get_piece_cells:
 ; draw_piece - Draw current piece on board
 ; ============================================================================
 draw_piece:
-    pusha
+    PUSHA86
     mov al, [cs:cur_piece]
     mov ah, [cs:cur_rot]
     call get_piece_cells
@@ -1018,14 +1020,14 @@ draw_piece:
     pop cx
     dec cx
     jnz .dp_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; erase_piece - Erase current piece from board
 ; ============================================================================
 erase_piece:
-    pusha
+    PUSHA86
     mov al, [cs:cur_piece]
     mov ah, [cs:cur_rot]
     call get_piece_cells
@@ -1047,7 +1049,7 @@ erase_piece:
     pop cx
     dec cx
     jnz .ep_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1056,7 +1058,7 @@ erase_piece:
 ; Output: CF=1 if collision
 ; ============================================================================
 check_collision:
-    pusha
+    PUSHA86
     mov al, [cs:chk_type]
     mov ah, [cs:chk_rot]
     call get_piece_cells
@@ -1093,12 +1095,12 @@ check_collision:
     pop cx
     dec cx
     jnz .cc_loop
-    popa
+    POPA86
     clc
     ret
 .cc_hit:
     pop cx
-    popa
+    POPA86
     stc
     ret
 
@@ -1221,7 +1223,7 @@ do_hard_drop:
 ; lock_piece - Write piece into board and check lines
 ; ============================================================================
 lock_piece:
-    pusha
+    PUSHA86
     mov al, [cs:cur_piece]
     mov ah, [cs:cur_rot]
     call get_piece_cells
@@ -1273,14 +1275,14 @@ lock_piece:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 .lp_ok:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; check_lines - Find and clear completed lines
 ; ============================================================================
 check_lines:
-    pusha
+    PUSHA86
     mov byte [cs:clear_count], 0
     mov byte [cs:chk_y], BOARD_ROWS - 1
 .cl_row_loop:
@@ -1350,14 +1352,14 @@ check_lines:
     mov [cs:drop_speed], ax
     call update_score_display
 .cl_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; collapse_row - Remove row AL and shift above down
 ; ============================================================================
 collapse_row:
-    pusha
+    PUSHA86
     xor cx, cx
     mov cl, al
 .cr_shift_loop:
@@ -1390,14 +1392,14 @@ collapse_row:
     inc bx
     cmp bx, BOARD_COLS
     jb .cr_zero
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; animate_line_clear - Flash completed rows with white then black
 ; ============================================================================
 animate_line_clear:
-    pusha
+    PUSHA86
     mov byte [cs:flash_count], 3
 .alc_flash:
     ; Flash rows white
@@ -1456,14 +1458,14 @@ animate_line_clear:
     int 0x80
     dec byte [cs:flash_count]
     jnz .alc_flash
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_board - Redraw all board cells from board array
 ; ============================================================================
 draw_board:
-    pusha
+    PUSHA86
     xor bh, bh
 .db_row:
     xor bl, bl
@@ -1490,14 +1492,14 @@ draw_board:
     jb .db_row
     ; Redraw grid on empty cells
     call draw_grid
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; update_scoring - Add points based on lines cleared
 ; ============================================================================
 update_scoring:
-    pusha
+    PUSHA86
     xor ax, ax
     mov al, [cs:clear_count]
     cmp al, 1
@@ -1523,7 +1525,7 @@ update_scoring:
     mul bx
     add [cs:score_lo], ax
     adc [cs:score_hi], dx
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1576,7 +1578,7 @@ random_piece:
 ; draw_next_preview - Draw next piece in preview box
 ; ============================================================================
 draw_next_preview:
-    pusha
+    PUSHA86
     ; Clear preview area
     mov bx, PREVIEW_X
     mov cx, PREVIEW_Y
@@ -1622,7 +1624,7 @@ draw_next_preview:
     pop cx
     dec cx
     jnz .np_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1630,7 +1632,7 @@ draw_next_preview:
 ; Input: AL=VGA palette base index
 ; ============================================================================
 draw_preview_cell:
-    pusha
+    PUSHA86
     mov [cs:cell_color], al
 
     ; 1. Fill with base color
@@ -1681,7 +1683,7 @@ draw_preview_cell:
     mov ah, API_DRAW_VLINE
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1723,7 +1725,7 @@ check_drop_timer:
 ; check_mouse - Handle mouse button clicks
 ; ============================================================================
 check_mouse:
-    pusha
+    PUSHA86
     mov ah, API_MOUSE_GET_STATE
     int 0x80
     test dl, 1
@@ -1827,14 +1829,14 @@ check_mouse:
     mov [cs:music_tick], ax
     jmp .cm_done
 .cm_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; start_new_game - Reset and begin
 ; ============================================================================
 start_new_game:
-    pusha
+    PUSHA86
     mov cx, 200
     mov di, 0
 .sng_clear:
@@ -1887,14 +1889,14 @@ start_new_game:
     mov byte [cs:game_state], STATE_PLAYING
     call read_tick
     mov [cs:last_drop_tick], ax
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; music_update - Non-blocking music state machine
 ; ============================================================================
 music_update:
-    pusha
+    PUSHA86
     call read_tick
     mov bx, ax
     sub bx, [cs:music_tick]
@@ -1913,7 +1915,7 @@ music_update:
     jb .mu_done
     add word [cs:music_idx], 1
     mov si, [cs:music_idx]
-    shl si, 2
+    SHL_N si, 2
     add si, korobeiniki
     mov bx, [cs:si]
     cmp bx, 0xFFFF
@@ -1937,14 +1939,14 @@ music_update:
     mov [cs:music_tick], ax
     mov byte [cs:music_gap], 0
 .mu_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; update_score_display - Redraw score, lines, level values
 ; ============================================================================
 update_score_display:
-    pusha
+    PUSHA86
     mov bx, 240
     mov cx, 26
     mov dx, 60
@@ -1981,7 +1983,8 @@ update_score_display:
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    movzx dx, byte [cs:level]
+    mov dl, [cs:level]
+    xor dh, dh
     mov di, num_buf
     mov ah, API_WORD_TO_STRING
     int 0x80
@@ -1990,7 +1993,7 @@ update_score_display:
     mov si, num_buf
     mov ah, API_GFX_DRAW_STRING
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================

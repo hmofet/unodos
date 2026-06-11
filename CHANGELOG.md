@@ -5,6 +5,108 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.26.0] - 2026-06-11
+
+### 8088/8086 Compatibility + Audit Backlog Complete (Builds 404-405)
+
+This release completes every item from the post-audit backlog
+(docs/AUDIT-HANDOFF-2026-06.md SS5): the OS now genuinely targets the
+Intel 8088/8086 it always advertised, the cursor hide/lock race and the
+interrupted performance wave are finished, all confirmed-but-unfixed
+medium findings are fixed, and the dynamic regression scenarios were
+re-run green against the new build.
+
+### 8088/8086 Support (the OS now runs on a real PC/XT)
+
+- **Kernel, all 16 apps, and the floppy boot chain assemble under
+  `cpu 8086`** - 1,150+ non-8086 instruction sites rewritten
+  (pusha/popa -> PUSHA86/POPA86 macros, movzx -> mov+xor, multi-bit
+  immediate shifts -> repeated/CL shifts, imul-imm -> shift/add,
+  push-imm -> push m16, dword stores -> word pairs). New
+  kernel/cpu8086.inc macros; `cpu 8086` directives make any future
+  regression an assembly error.
+- **FAT16/IDE hard-disk driver is explicitly bracketed `cpu 386` and
+  runtime-gated**: fat16_mount detects a pre-286 CPU via the FLAGS
+  12-15 signature and refuses to mount, so floppy-only 8088 systems
+  degrade gracefully. The HD boot chain (mbr/vbr/stage2_hd) remains
+  386+ by design, as documented.
+- **INT 0x80 dispatcher bitmap tests rewritten 8086-safe** (movzx+bt
+  removed) - previously the FIRST syscall on an 8088 died.
+- Dead ide_read_sector removed (never called; wrote ES:DI while
+  documenting ES:BX; 386-only).
+- README example app and APP_DEVELOPMENT docs updated for 8086-safe
+  register saving.
+- Note: verified instruction-clean by the assembler and behaviorally in
+  QEMU; real-8088 hardware validation still needs 86Box/PCem or a
+  physical XT (QEMU cannot emulate an 8088).
+
+### Performance (completing the audit's interrupted wave 4)
+
+- **cga_pixel_calc MUL eliminated** - the ~120-cycle (on 8088) 16-bit
+  MUL per plotted pixel replaced with a 200-byte row LUT; benefits all
+  CGA text, lines, icons, and sprites.
+- **Mouse cursor sprite fast path** - CGA cursor rows drawn/erased with
+  2-3 byte XORs instead of 8 call/push-pop/address-calc round trips
+  per row.
+- **Floppy multi-sector reads** - fat12_read now reads runs of
+  physically-consecutive clusters with one INT 13h per track chunk
+  (DMA-boundary safe, 3 retries) instead of one call + bounce copy per
+  512-byte cluster: a 20KB app load is ~4 BIOS calls instead of 40
+  (up to a full disk revolution saved per sector on real hardware).
+- fat12_read bounce copy word-widened (rep movsw).
+
+### Fixed - Input & Window Manager
+
+- **Cursor hide/lock race closed** (cursor_protect_begin): IRQ12 could
+  redraw the cursor between mouse_cursor_hide and the cursor_locked
+  increment, leaving XOR droppings / stale save-under rectangles. All
+  36 sites now take the lock atomically.
+- **IRQ12 no longer draws the cursor inside the interrupt handler** -
+  no VRAM walking or VESA INT 0x10 bank switching at IF=0; the ISR sets
+  a dirty flag and the redraw happens in task context (event_get /
+  mouse_get_state), shrinking worst-case interrupt latency from
+  potentially milliseconds to microseconds.
+- **Keystrokes no longer leak across focus changes** - INT 9 stamps the
+  focused task into each key event at PRESS time; stale keys whose
+  target lost focus are discarded, and keys typed during an app launch
+  no longer arrive in the new app. kbd_getchar (API 11) is focus-gated.
+- **Mouse clicks land where they were CLICKED** - the IRQ latches
+  press-time X/Y + a sequence number; API 28 returns them (SI/DI/AH/AL)
+  and the launcher hit-tests the latch, fixing wrong-icon clicks during
+  fast click-and-move and lost press+release pairs between polls.
+- **EVENT_MOUSE posted only on button-state change and focus-routed** -
+  motion no longer floods the queue, and background tasks can no longer
+  steal the focused app's click events (Music lost clicks to the
+  launcher).
+- **Click-to-raise works on the window BODY** (was title-bar only) via
+  a new z-aware hit test.
+- **Window drag clamped** - the close button can no longer be dragged
+  off-screen, and the desktop menu bar row stays visible.
+- **Killing a task closes its file handles** (owner byte + reaper on
+  all three kill paths) - the 16-entry file table can no longer leak to
+  exhaustion, which blocked all app launching until reboot.
+- **app_load validates file size** (0 / >=64KB / >0xFFE0 rejected, and
+  short reads fail) instead of executing truncated or stale images.
+
+### Fixed - Apps & Misc
+
+- SysInfo uptime now measures time since BOOT (API 63 latches the BIOS
+  tick counter at kernel entry) - it previously showed wall-clock
+  derived values like "3054s" seconds after power-on.
+- Notepad status bar (Ln/Col/byte count) updates while typing via a
+  deferred dirty flag (no per-keystroke cost).
+- FAT16 INT 13h extensions probed once at mount (AH=41h) and cached;
+  CHS-only BIOSes skip the wasted AH=42h per sector, and stc before
+  extended calls guards BIOSes that IRET without setting CF.
+- PS/2 KBC fallback no longer pokes 8042 ports on pre-AT machines
+  (BIOS model byte check) - saved ~3s of dead probing per boot on a
+  real XT.
+- Default make target now builds the bootable 1.44MB image (the 360KB
+  image cannot boot: 1.44MB geometry is hardcoded).
+- tools/qemu_test.py: Windows-native headless QEMU driver with
+  position-tracked moveto (the old -2000 homing trick kills pointer
+  motion on QEMU 11.x).
+
 ## [3.25.0] - 2026-06-11
 
 ### Full-System Audit & Stability Overhaul (Build 403)

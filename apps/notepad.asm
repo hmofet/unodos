@@ -6,6 +6,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -127,7 +129,7 @@ FILE_MENU_ITEMS         equ 4
 ; Entry Point
 ; ============================================================================
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -344,7 +346,8 @@ entry:
     push cs
     pop es                              ; ES = app segment
     mov di, filename_buf                ; Destination for result
-    movzx bx, byte [cs:mount_handle]   ; BL = mount handle
+    mov bl, [cs:mount_handle] ; BL = mount handle
+    xor bh, bh
     mov ah, API_FILE_DIALOG
     int 0x80
     jc .check_event                     ; Cancelled — do nothing
@@ -830,7 +833,8 @@ entry:
     pop es
     mov di, filename_buf                ; Destination for result
     mov si, filename_buf                ; Default = current filename
-    movzx bx, byte [cs:mount_handle]   ; BL = mount handle
+    mov bl, [cs:mount_handle] ; BL = mount handle
+    xor bh, bh
     mov ah, API_FILE_SAVE_DIALOG
     int 0x80
     jc .check_event                     ; Cancelled
@@ -894,10 +898,12 @@ entry:
     ja .dialog_store
     sub dl, 32
 .dialog_store:
-    movzx bx, byte [cs:input_len]
+    mov bl, [cs:input_len]
+    xor bh, bh
     mov [cs:input_buf + bx], dl
     inc byte [cs:input_len]
-    movzx bx, byte [cs:input_len]
+    mov bl, [cs:input_len]
+    xor bh, bh
     mov byte [cs:input_buf + bx], 0
     call draw_status
     jmp .main_loop
@@ -906,7 +912,8 @@ entry:
     cmp byte [cs:input_len], 0
     je .main_loop
     dec byte [cs:input_len]
-    movzx bx, byte [cs:input_len]
+    mov bl, [cs:input_len]
+    xor bh, bh
     mov byte [cs:input_buf + bx], 0
     call draw_status
     jmp .main_loop
@@ -959,26 +966,26 @@ entry:
 .exit:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
 ; update_after_edit - After insert/delete, ensure cursor visible and redraw
 ; ============================================================================
 update_after_edit:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     call ensure_cursor_visible
     call draw_text_area
     call draw_status
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_current_line - Fast redraw of only the cursor's line
 ; ============================================================================
 draw_current_line:
-    pusha
+    PUSHA86
     call cursor_to_line_col
 
     ; Check if cursor is visible without scrolling
@@ -994,7 +1001,8 @@ draw_current_line:
     sub ax, [cs:scroll_row]
 
     ; Calculate Y = TEXT_Y + screen_row * row_h
-    movzx dx, byte [cs:row_h]
+    mov dl, [cs:row_h]
+    xor dh, dh
     mul dx
     add ax, TEXT_Y
     mov [cs:.dcl_y], ax
@@ -1003,7 +1011,11 @@ draw_current_line:
     mov bx, TEXT_X
     mov cx, ax
     mov dx, [cs:text_w]
-    movzx si, byte [cs:row_h]
+    push ax
+    mov al, [cs:row_h]
+    xor ah, ah
+    mov si, ax
+    pop ax
     mov ah, API_GFX_CLEAR_AREA
     int 0x80
 
@@ -1044,7 +1056,8 @@ draw_current_line:
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
     jae .dcl_no_cursor
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
@@ -1071,13 +1084,13 @@ draw_current_line:
     int 0x80
 
 .dcl_no_cursor:
-    popa
+    POPA86
     ret
 
 .dcl_full:
     call ensure_cursor_visible
     call draw_text_area
-    popa
+    POPA86
     ret
 
 .dcl_y: dw 0
@@ -1086,7 +1099,7 @@ draw_current_line:
 ; draw_typed_char - Ultra-fast: draw just the typed char + cursor (2 API calls)
 ; ============================================================================
 draw_typed_char:
-    pusha
+    PUSHA86
 
     ; Check if cursor is visible
     mov ax, [cs:cursor_line]
@@ -1105,7 +1118,8 @@ draw_typed_char:
     ; Calculate Y
     mov ax, [cs:cursor_line]
     sub ax, [cs:scroll_row]
-    movzx dx, byte [cs:row_h]
+    mov dl, [cs:row_h]
+    xor dh, dh
     mul dx
     add ax, TEXT_Y
     mov [cs:.dtc_y], ax
@@ -1113,7 +1127,8 @@ draw_typed_char:
     ; Draw the typed char at cursor_col - 1
     mov ax, [cs:cursor_col]
     dec ax
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
@@ -1134,7 +1149,8 @@ draw_typed_char:
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
     jae .dtc_done
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
@@ -1146,14 +1162,14 @@ draw_typed_char:
     int 0x80
 
 .dtc_done:
-    popa
+    POPA86
     ret
 
 .dtc_full:
     call ensure_cursor_visible
     call draw_text_area
     call draw_status
-    popa
+    POPA86
     ret
 
 .dtc_y: dw 0
@@ -1194,7 +1210,7 @@ handle_shift_for_move:
 
 ; delete_selection - Remove selected text, set cursor to sel_start, clear selection
 delete_selection:
-    pusha
+    PUSHA86
     cmp word [cs:sel_anchor], 0xFFFF
     je .dsel_done
 
@@ -1238,7 +1254,7 @@ delete_selection:
     mov word [cs:sel_anchor], 0xFFFF
 
 .dsel_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1247,7 +1263,7 @@ delete_selection:
 
 ; do_copy - Copy selected text to clipboard
 do_copy:
-    pusha
+    PUSHA86
     cmp word [cs:sel_anchor], 0xFFFF
     je .dcopy_done
 
@@ -1263,12 +1279,12 @@ do_copy:
     int 0x80
 
 .dcopy_done:
-    popa
+    POPA86
     ret
 
 ; do_cut - Copy selection to clipboard, then delete it
 do_cut:
-    pusha
+    PUSHA86
     cmp word [cs:sel_anchor], 0xFFFF
     je .dcut_done
     call save_undo
@@ -1276,12 +1292,12 @@ do_cut:
     call do_copy
     call delete_selection
 .dcut_done:
-    popa
+    POPA86
     ret
 
 ; do_paste - Insert system clipboard at cursor (delete selection first if active)
 do_paste:
-    pusha
+    PUSHA86
 
     ; Get clipboard length from kernel
     mov ah, API_CLIP_GET_LEN
@@ -1355,7 +1371,7 @@ do_paste:
     add [cs:cursor_pos], cx
 
 .dpaste_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1373,7 +1389,7 @@ maybe_save_undo:
 
 ; save_undo - Snapshot text_buf to undo_buf
 save_undo:
-    pusha
+    PUSHA86
     push ds
     push es
     push cs
@@ -1398,12 +1414,12 @@ save_undo:
     mov [cs:undo_scroll], ax
     mov byte [cs:undo_valid], 1
 
-    popa
+    POPA86
     ret
 
 ; do_undo - Swap text_buf and undo_buf (toggle undo/redo)
 do_undo:
-    pusha
+    PUSHA86
     cmp byte [cs:undo_valid], 0
     je .du_done
 
@@ -1449,7 +1465,7 @@ do_undo:
     mov word [cs:sel_anchor], 0xFFFF
 
 .du_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1457,7 +1473,7 @@ do_undo:
 ; ============================================================================
 
 cursor_up:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     cmp word [cs:cursor_line], 0
     je .cu_done
@@ -1478,11 +1494,11 @@ cursor_up:
     add ax, dx
     mov [cs:cursor_pos], ax
 .cu_done:
-    popa
+    POPA86
     ret
 
 cursor_down:
-    pusha
+    PUSHA86
     call cursor_to_line_col
 
     mov cx, [cs:cursor_line]
@@ -1504,30 +1520,30 @@ cursor_down:
     add ax, dx
     mov [cs:cursor_pos], ax
 .cd_done:
-    popa
+    POPA86
     ret
 
 cursor_home:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     mov cx, [cs:cursor_line]
     call find_line_start
     mov [cs:cursor_pos], bx
-    popa
+    POPA86
     ret
 
 cursor_end:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     mov cx, [cs:cursor_line]
     call find_line_start
     call find_line_end
     mov [cs:cursor_pos], bx
-    popa
+    POPA86
     ret
 
 cursor_pgup:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     mov ax, [cs:cursor_line]
     mov bx, [cs:vis_rows]
@@ -1553,11 +1569,11 @@ cursor_pgup:
 .pgup_col_ok:
     add ax, dx
     mov [cs:cursor_pos], ax
-    popa
+    POPA86
     ret
 
 cursor_pgdn:
-    pusha
+    PUSHA86
     call cursor_to_line_col
     mov ax, [cs:cursor_line]
     add ax, [cs:vis_rows]
@@ -1579,14 +1595,14 @@ cursor_pgdn:
 .pgdn_col_ok:
     add ax, dx
     mov [cs:cursor_pos], ax
-    popa
+    POPA86
     ret
 
 .pgdn_clamp:
     ; Past end of text - go to text_len
     mov ax, [cs:text_len]
     mov [cs:cursor_pos], ax
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1594,7 +1610,7 @@ cursor_pgdn:
 ; ============================================================================
 
 buf_insert_char:
-    pusha
+    PUSHA86
     mov ax, [cs:text_len]
     cmp ax, TEXT_MAX
     jae .bi_done
@@ -1628,11 +1644,11 @@ buf_insert_char:
     mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bi_done:
-    popa
+    POPA86
     ret
 
 buf_delete_char:
-    pusha
+    PUSHA86
     cmp word [cs:cursor_pos], 0
     je .bd_done
 
@@ -1659,11 +1675,11 @@ buf_delete_char:
     mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bd_done:
-    popa
+    POPA86
     ret
 
 buf_delete_fwd:
-    pusha
+    PUSHA86
     mov ax, [cs:cursor_pos]
     cmp ax, [cs:text_len]
     jae .bf_done
@@ -1694,7 +1710,7 @@ buf_delete_fwd:
     mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bf_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1763,7 +1779,8 @@ mouse_to_offset:
     mov ax, [cs:mouse_rel_x]
     sub ax, TEXT_X
     xor dx, dx
-    movzx bx, byte [cs:font_adv]
+    mov bl, [cs:font_adv]
+    xor bh, bh
     div bx
     push ax                             ; Save column
 
@@ -1771,7 +1788,8 @@ mouse_to_offset:
     mov ax, [cs:mouse_rel_y]
     sub ax, TEXT_Y
     xor dx, dx
-    movzx bx, byte [cs:row_h]
+    mov bl, [cs:row_h]
+    xor bh, bh
     div bx
     add ax, [cs:scroll_row]            ; AX = absolute line number
 
@@ -1816,7 +1834,7 @@ mouse_to_offset:
 ; compute_layout - Measure current font and compute visible cols/rows
 ; ============================================================================
 compute_layout:
-    pusha
+    PUSHA86
 
     ; Update runtime layout from actual window dimensions (if window exists)
     cmp byte [cs:win_handle], 0
@@ -1873,24 +1891,26 @@ compute_layout:
 .calc_grid:
     mov ax, [cs:text_w]
     xor dx, dx
-    movzx bx, byte [cs:font_adv]
+    mov bl, [cs:font_adv]
+    xor bh, bh
     div bx
     mov [cs:vis_cols], ax
 
     mov ax, [cs:text_h]
     xor dx, dx
-    movzx bx, byte [cs:row_h]
+    mov bl, [cs:row_h]
+    xor bh, bh
     div bx
     mov [cs:vis_rows], ax
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_ui - Full UI redraw
 ; ============================================================================
 draw_ui:
-    pusha
+    PUSHA86
     mov bx, 0
     mov cx, 0
     mov dx, [cs:content_w]
@@ -1917,14 +1937,14 @@ draw_ui:
     call draw_text_area
     call draw_status
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_menubar - Draw menu bar with "File" label and filename
 ; ============================================================================
 draw_menubar:
-    pusha
+    PUSHA86
 
     ; "File" label
     mov bx, FILE_LABEL_X
@@ -1946,18 +1966,22 @@ draw_menubar:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_text_area - Draw visible text lines with selection highlighting
 ; ============================================================================
 draw_text_area:
-    pusha
+    PUSHA86
     ; Clear text area
     mov bx, TEXT_X
     mov cx, TEXT_Y
-    movzx si, byte [cs:row_h]
+    push ax
+    mov al, [cs:row_h]
+    xor ah, ah
+    mov si, ax
+    pop ax
     mov ax, [cs:vis_rows]
     mul si
     mov si, ax
@@ -2011,7 +2035,8 @@ draw_text_area:
 
     ; Calculate Y for this row
     mov ax, [cs:draw_row]
-    movzx dx, byte [cs:row_h]
+    mov dl, [cs:row_h]
+    xor dh, dh
     mul dx
     add ax, TEXT_Y
     mov [cs:draw_y], ax
@@ -2089,7 +2114,8 @@ draw_text_area:
 
     ; X = TEXT_X + sel_col_s * font_adv
     mov ax, [cs:sel_col_s]
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
@@ -2110,7 +2136,8 @@ draw_text_area:
     jae .dta_skip_cursor
 
     ; X = TEXT_X + sel_col_e * font_adv
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
@@ -2143,13 +2170,15 @@ draw_text_area:
     mov ax, [cs:cursor_col]
     cmp ax, [cs:vis_cols]
     jae .dta_skip_cursor
-    movzx dx, byte [cs:font_adv]
+    mov dl, [cs:font_adv]
+    xor dh, dh
     mul dx
     add ax, TEXT_X
     mov bx, ax
 
     mov ax, [cs:draw_row]
-    movzx dx, byte [cs:row_h]
+    mov dl, [cs:row_h]
+    xor dh, dh
     mul dx
     add ax, TEXT_Y
     mov cx, ax
@@ -2192,14 +2221,14 @@ draw_text_area:
     jmp .dta_row_loop
 
 .dta_rows_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_status - Draw status bar or dialog
 ; ============================================================================
 draw_status:
-    pusha
+    PUSHA86
     mov bx, 0
     mov cx, [cs:status_y]
     dec cx
@@ -2295,7 +2324,11 @@ draw_status:
     mov cx, [cs:status_y]
     mov dx, 140
     mov si, input_buf
-    movzx di, byte [cs:input_len]
+    push ax
+    mov al, [cs:input_len]
+    xor ah, ah
+    mov di, ax
+    pop ax
     mov al, 1
     mov ah, API_DRAW_TEXTFIELD
     int 0x80
@@ -2312,7 +2345,7 @@ draw_status:
     int 0x80
 
 .status_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -2320,9 +2353,10 @@ draw_status:
 ; ============================================================================
 
 do_open_file:
-    pusha
+    PUSHA86
     mov si, filename_buf
-    movzx bx, byte [cs:mount_handle]
+    mov bl, [cs:mount_handle]
+    xor bh, bh
     mov ah, API_FS_OPEN
     int 0x80
     jc .of_fail
@@ -2356,7 +2390,7 @@ do_open_file:
     mov di, status_msg
     call copy_str
 
-    popa
+    POPA86
     ret
 
 .of_close_fail:
@@ -2367,11 +2401,11 @@ do_open_file:
     mov si, str_err_open
     mov di, status_msg
     call copy_str
-    popa
+    POPA86
     ret
 
 do_save_file:
-    pusha
+    PUSHA86
     cmp byte [cs:filename_buf], 0
     je .sf_fail
 
@@ -2403,18 +2437,18 @@ do_save_file:
     mov di, status_msg
     call copy_str
 
-    popa
+    POPA86
     ret
 
 .sf_fail:
     mov si, str_err_save
     mov di, status_msg
     call copy_str
-    popa
+    POPA86
     ret
 
 do_new_file:
-    pusha
+    PUSHA86
     mov word [cs:text_len], 0
     mov word [cs:cursor_pos], 0
     mov word [cs:scroll_row], 0
@@ -2426,7 +2460,7 @@ do_new_file:
     mov word [cs:sel_anchor], 0xFFFF
     mov byte [cs:undo_valid], 0
     mov byte [cs:undo_saved_for_edit], 0
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -2434,7 +2468,7 @@ do_new_file:
 ; ============================================================================
 
 cursor_to_line_col:
-    pusha
+    PUSHA86
     xor cx, cx
     xor dx, dx
     xor bx, bx
@@ -2454,7 +2488,7 @@ cursor_to_line_col:
 .ctl_done:
     mov [cs:cursor_line], cx
     mov [cs:cursor_col], dx
-    popa
+    POPA86
     ret
 
 find_line_start:
@@ -2494,7 +2528,7 @@ find_line_end:
     ret
 
 ensure_cursor_visible:
-    pusha
+    PUSHA86
     mov ax, [cs:cursor_line]
 
     cmp ax, [cs:scroll_row]
@@ -2513,11 +2547,11 @@ ensure_cursor_visible:
     mov [cs:scroll_row], bx
 
 .ecv_done:
-    popa
+    POPA86
     ret
 
 strip_cr:
-    pusha
+    PUSHA86
     xor si, si
     xor di, di
 .sc_loop:
@@ -2533,7 +2567,7 @@ strip_cr:
     jmp .sc_loop
 .sc_done:
     mov [cs:text_len], di
-    popa
+    POPA86
     ret
 
 copy_str:

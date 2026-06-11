@@ -372,7 +372,15 @@ UnoDOS apps are flat `.BIN` binaries assembled with NASM. Each app runs in its o
 
 ; Code entry (offset 0x50)
 entry:
-    pusha
+    ; Save registers (8086-safe: PUSHA is a 186+ instruction and silently
+    ; executes as JO on an 8088 - see kernel/cpu8086.inc for macros)
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
     push ds
     push es
     mov ax, cs
@@ -413,10 +421,16 @@ entry:
     jne .loop
 
 .exit:
-    xor ax, ax
     pop es
     pop ds
-    popa
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    xor ax, ax
     retf                            ; Return to kernel
 
 title: db 'MyApp', 0

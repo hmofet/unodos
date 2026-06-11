@@ -1,5 +1,9 @@
 # Writing Applications for UnoDOS
 
+> **8086/8088 note (Build 405+):** `PUSHA`/`POPA` are 186+ instructions and
+> corrupt control flow on the 8088 target. Use explicit pushes/pops, or the
+> `PUSHA86`/`POPA86` macros from `kernel/cpu8086.inc`, and assemble your app
+> with `cpu 8086` to catch incompatible instructions at build time.
 This guide explains how to write, build, and run applications for UnoDOS 3.
 
 ## Overview

@@ -1,19 +1,31 @@
 # UnoDOS Roadmap
 
-## Post-Audit Backlog (2026-06 — see docs/AUDIT-HANDOFF-2026-06.md §5)
-- [ ] **8088 compatibility pass** — 1153 non-8086 instruction sites; the OS
-      currently requires a 386+. Tooling ready: tools/to8086.py +
-      kernel/cpu8086.inc. FAT16/IDE + HD boot chain need 16-bit LBA rewrite
-      or runtime 386 gating.
-- [ ] Cursor hide/lock race fix (cursor_protect_begin, ~35 sites — exact
-      patch in docs/audit-2026-06-digest.md lines 1863-1890)
-- [ ] Finish interrupted performance wave (draw_char MUL hoist, stosw fills,
-      floppy multi-sector reads, dispatcher movzx/bt removal)
-- [ ] Confirmed-but-unfixed findings: app_load size validation, file-handle
-      leak on task kill, focus-time key routing, EVENT_MOUSE coordinates,
-      IRQ12 VESA bank switching in ISR, 360KB make target broken, FAT16
-      AH=41h check, SysInfo uptime, Notepad status bar, drag off-screen
-- [ ] Re-run dynamic QEMU regression scenarios against Build 403+
+## Post-Audit Backlog (2026-06) — COMPLETE as of v3.26.0 / Build 405
+All items from docs/AUDIT-HANDOFF-2026-06.md §5 are done:
+- [x] 8088 compatibility pass — kernel + all apps + floppy boot chain
+      assemble under `cpu 8086`; FAT16/IDE region is `cpu 386`-bracketed
+      and runtime-gated in fat16_mount; HD boot chain stays 386+ by design
+- [x] Cursor hide/lock race fix (cursor_protect_begin, 36 sites)
+- [x] Performance wave (cga_pixel_calc row LUT, cursor sprite byte-XOR
+      fast path, floppy multi-sector reads, stosw fills, dispatcher
+      movzx/bt removal)
+- [x] Confirmed-but-unfixed findings (app_load size validation, file-handle
+      reaping on task kill, press-time key/click routing, EVENT_MOUSE
+      edge-only + focus routing, deferred IRQ12 cursor, 360KB make target,
+      FAT16 AH=41h probe, XT KBC gate, SysInfo uptime, Notepad status bar,
+      drag clamping, body click-to-raise)
+- [x] Dynamic QEMU regression scenarios re-run green against Build 405
+
+### Remaining 8088 follow-ups
+- [ ] Real-hardware validation on an 8088 (86Box/PCem or physical XT) —
+      QEMU cannot emulate an 8088; current builds are assembler-verified
+      (`cpu 8086`) and QEMU-behavior-verified only
+- [ ] draw_char CGA row-blit fast path (audit digest "Stage 2", ~10x text
+      speedup on real 8088 hardware; Stage 1 MUL removal is done)
+- [ ] Launcher select_icon draws over open windows (z-order violation,
+      cosmetic — known audit finding, low priority)
+- [ ] Background window content not repainted until raised (single-topmost
+      clipping model; visible when a covered window is exposed by a drag)
 
 ## Kernel / Window Manager
 - [ ] Modal window flag (WIN_FLAG_MODAL) — block focus changes when modal is active
@@ -43,12 +55,15 @@
 - [ ] Long filename support (LFN)
 
 ## Boot / Hardware
-- [ ] 8086-compatible boot for HP 200LX, Sharp PC-3100
+- [ ] 8086-compatible boot for HP 200LX, Sharp PC-3100 (kernel itself is
+      now 8086-clean; needs 720KB media/geometry support — see audit digest
+      ~line 4552 for the design notes)
 
 ## APIs
 - [ ] Multi-byte-wide sprite support (>8px width)
 - [ ] 2bpp color sprite API (like icons but variable size)
-- [ ] Update API_REFERENCE.md for APIs 91-104
+- [ ] Update API_REFERENCE.md for APIs 91-104 (and API 28's new
+      SI/DI/AH/AL press-latch returns, API 63 ticks-since-boot)
 
 ## Documentation
 - [ ] App development tutorial / sample app walkthrough

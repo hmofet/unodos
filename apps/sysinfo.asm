@@ -4,6 +4,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E
@@ -61,7 +63,7 @@ LINE_COLS              equ 22          ; Max chars per line
 VAL_COL                equ 9          ; Value starts at char column 9
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -77,14 +79,16 @@ entry:
 
     ; Compute window dimensions from font
     ; Width = LINE_COLS * advance + 8 (4px padding each side)
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     mov dx, LINE_COLS
     mul dx
     add ax, 8
     mov [cs:win_w], ax
 
     ; row_height = char_h + 4
-    movzx ax, bh
+    mov al, bh
+    xor ah, ah
     add ax, 4
     mov [cs:row_h], ax
 
@@ -185,14 +189,14 @@ entry:
 .exit_fail:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
 ; draw_ui - Build and draw all rows + OK button
 ; ============================================================================
 draw_ui:
-    pusha
+    PUSHA86
     mov ax, cs
     mov ds, ax
 
@@ -251,7 +255,8 @@ draw_ui:
     call line_pad_val
     mov ah, API_GET_TASK_INFO
     int 0x80
-    movzx ax, cl
+    mov al, cl
+    xor ah, ah
     call line_putdec
     mov byte [cs:line_buf + di], ' '
     inc di
@@ -268,11 +273,13 @@ draw_ui:
     call line_pad_val
     mov ah, API_GET_FONT_INFO
     int 0x80
-    movzx ax, bl
+    mov al, bl
+    xor ah, ah
     call line_putdec
     mov byte [cs:line_buf + di], 'x'
     inc di
-    movzx ax, bh
+    mov al, bh
+    xor ah, ah
     call line_putdec
     call line_term
     mov cx, 3
@@ -324,7 +331,8 @@ draw_ui:
     inc di
     mov byte [cs:line_buf + di], ':'
     inc di
-    movzx ax, byte [cs:t_vmode]
+    mov al, [cs:t_vmode]
+    xor ah, ah
     call line_puthex
     pop ax
     call line_term
@@ -346,7 +354,7 @@ draw_ui:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -440,7 +448,7 @@ line_puthex:
     push ax
     push cx
     mov cl, al
-    shr al, 4
+    SHR_N al, 4
     call .hex_nib
     mov [cs:line_buf + di], al
     inc di
@@ -466,7 +474,7 @@ line_putbcd:
     push ax
     push cx
     mov cl, al
-    shr al, 4
+    SHR_N al, 4
     add al, '0'
     mov [cs:line_buf + di], al
     inc di

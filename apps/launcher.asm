@@ -8,6 +8,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; API function indices (must match kernel_api_table in kernel.asm)
 API_GFX_DRAW_RECT       equ 1
@@ -91,7 +93,7 @@ BG_COLOR                equ 1           ; Cyan
 
 ; Entry point - called by kernel via far CALL
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -211,6 +213,9 @@ entry:
     ; landing on the wrong icon during fast click-and-move, and a press+
     ; release that both happen between two polls is no longer lost.
     mov al, [cs:ml_click_seq]
+    mov ah, al
+    sub ah, [cs:last_click_seq]     ; AH = presses since our last poll
+    mov [cs:ml_seq_delta], ah
     cmp al, [cs:last_click_seq]
     je .no_new_press                ; No new button press since last poll
     mov [cs:last_click_seq], al
@@ -232,6 +237,15 @@ entry:
     mov bx, [cs:ml_click_x]
     mov cx, [cs:ml_click_y]
     call handle_click               ; BX=press X, CX=press Y
+    ; If BOTH presses of a fast double-click landed inside one poll
+    ; window (e.g. right after an app exit repaint), the seq counter
+    ; advanced by 2 but we only saw the latest press - deliver the
+    ; second click too so the double-click still registers.
+    cmp byte [cs:ml_seq_delta], 2
+    jb .no_new_press
+    mov bx, [cs:ml_click_x]
+    mov cx, [cs:ml_click_y]
+    call handle_click
     jmp .no_new_press
 
 .right_press:
@@ -387,7 +401,7 @@ entry:
 ; Populates icon data arrays
 ; ============================================================================
 scan_disk:
-    pusha
+    PUSHA86
     push es
 
     ; Query boot drive from kernel
@@ -508,7 +522,7 @@ scan_disk:
 
 .scan_really_done:
     pop es
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -516,7 +530,7 @@ scan_disk:
 ; Input: AL = slot number
 ; ============================================================================
 add_refresh_icon:
-    pusha
+    PUSHA86
 
     mov [cs:.ari_slot], al
 
@@ -528,7 +542,7 @@ add_refresh_icon:
     ; Copy bitmap: icon_bitmaps + slot*64
     mov al, [cs:.ari_slot]
     xor ah, ah
-    shl ax, 6
+    SHL_N ax, 6
     add ax, icon_bitmaps
     mov di, ax
     mov si, refresh_icon
@@ -560,7 +574,7 @@ add_refresh_icon:
     mov al, [cs:.ari_slot]
     call register_icon
 
-    popa
+    POPA86
     ret
 .ari_slot: db 0
 
@@ -576,7 +590,7 @@ store_app_info:
 
     ; Calculate destination: app_info + (slot * 16)
     xor ah, ah
-    shl ax, 4                       ; * 16
+    SHL_N ax, 4; * 16
     add ax, app_info
     mov di, ax
 
@@ -636,7 +650,7 @@ read_bin_header:
 
     ; Get filename pointer: app_info + (slot * 16)
     xor ah, ah
-    shl ax, 4
+    SHL_N ax, 4
     add ax, app_info
     mov si, ax                      ; SI = filename in our segment
 
@@ -662,7 +676,7 @@ read_bin_header:
     ; Has icon header - copy bitmap (64 bytes at offset 0x10)
     mov al, [cs:.rbh_slot]
     xor ah, ah
-    shl ax, 6                       ; * 64
+    SHL_N ax, 6; * 64
     add ax, icon_bitmaps
     mov di, ax
     mov si, header_buffer + 0x10    ; Source: bitmap at offset 0x10
@@ -695,7 +709,7 @@ read_bin_header:
     ; No icon header - use default icon and derive name from FAT filename
     mov al, [cs:.rbh_slot]
     xor ah, ah
-    shl ax, 6                       ; * 64
+    SHL_N ax, 6; * 64
     add ax, icon_bitmaps
     mov di, ax
     mov si, default_icon
@@ -760,7 +774,7 @@ register_icon:
     ; Point SI to bitmap for this slot
     mov al, [cs:.ri_slot]
     xor ah, ah
-    shl ax, 6                       ; * 64
+    SHL_N ax, 6; * 64
     add ax, icon_bitmaps
     mov si, ax                      ; SI = bitmap source
 
@@ -812,7 +826,7 @@ register_icon:
 ; Called after mode change to update icon positions for new resolution
 ; ============================================================================
 register_all_icons:
-    pusha
+    PUSHA86
 
     ; Clear all existing kernel icon registrations
     mov ah, API_DESKTOP_CLEAR
@@ -828,14 +842,14 @@ register_all_icons:
     inc cl
     jmp .rai_loop
 .rai_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; show_splash - Display splash screen with logo and progress bar
 ; ============================================================================
 show_splash:
-    pusha
+    PUSHA86
 
     ; Fast clear CGA screen (direct memory write — instant vs pixel-by-pixel API)
     call fast_clear_screen
@@ -887,7 +901,7 @@ show_splash:
     mov ah, API_GFX_DRAW_RECT
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -895,7 +909,7 @@ show_splash:
 ; Called after icon_count is incremented
 ; ============================================================================
 update_progress:
-    pusha
+    PUSHA86
     ; Fill segment N (0-based): X = 91 + N*17, width=17, height=8
     mov al, [cs:icon_count]
     dec al                          ; Just incremented, use N-1
@@ -909,26 +923,26 @@ update_progress:
     mov si, 8
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_background - Fill screen with background color
 ; ============================================================================
 draw_background:
-    pusha
+    PUSHA86
 
     ; Fast clear CGA screen (direct memory write — instant vs pixel-by-pixel API)
     call fast_clear_screen
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; setup_layout - Query screen size and set grid layout variables
 ; ============================================================================
 setup_layout:
-    pusha
+    PUSHA86
     mov ah, API_GET_SCREEN_INFO
     int 0x80                        ; BX=width, CX=height
     mov [cs:scr_width], bx
@@ -960,14 +974,14 @@ setup_layout:
     mov word [cs:label_y_gap], LABEL_Y_GAP_LO
     mov word [cs:hitbox_height], HITBOX_HEIGHT_LO
 .sl_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; redraw_desktop - Full desktop repaint (background + title + version + icons)
 ; ============================================================================
 redraw_desktop:
-    pusha
+    PUSHA86
 
     call draw_background
 
@@ -996,14 +1010,14 @@ redraw_desktop:
 
     call draw_all_icons
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; draw_all_icons - Draw all discovered icons on the desktop
 ; ============================================================================
 draw_all_icons:
-    pusha
+    PUSHA86
 
     mov byte [cs:.dai_idx], 0
 
@@ -1028,7 +1042,7 @@ draw_all_icons:
     int 0x80
 
 .dai_ret:
-    popa
+    POPA86
     ret
 
 .dai_idx: db 0
@@ -1038,7 +1052,7 @@ draw_all_icons:
 ; Input: AL = icon slot
 ; ============================================================================
 draw_single_icon:
-    pusha
+    PUSHA86
 
     mov [cs:.dsi_slot], al
 
@@ -1053,7 +1067,7 @@ draw_single_icon:
     ; Point SI to bitmap data
     mov al, [cs:.dsi_slot]
     xor ah, ah
-    shl ax, 6                       ; * 64
+    SHL_N ax, 6; * 64
     add ax, icon_bitmaps
     mov si, ax
     mov ah, API_GFX_DRAW_ICON
@@ -1099,7 +1113,7 @@ draw_single_icon:
     call draw_highlight
 
 .dsi_done:
-    popa
+    POPA86
     ret
 
 .dsi_slot: db 0
@@ -1186,7 +1200,7 @@ draw_highlight:
 ; Input: BX = mouse X, CX = mouse Y
 ; ============================================================================
 handle_click:
-    pusha
+    PUSHA86
 
     ; Hit test: which icon was clicked?
     mov [cs:.hc_mx], bx
@@ -1301,7 +1315,7 @@ handle_click:
     call repaint_all_windows
 
 .hc_done:
-    popa
+    POPA86
     ret
 
 .hc_mx: dw 0
@@ -1315,7 +1329,7 @@ handle_click:
 ; Input: BX = mouse X, CX = mouse Y (screen-absolute)
 ; ============================================================================
 open_desktop_menu:
-    pusha
+    PUSHA86
 
     ; Patch the lock/unlock pointer based on current state
     call patch_lock_string
@@ -1350,7 +1364,7 @@ open_desktop_menu:
 
     mov byte [cs:launcher_mode], MODE_CONTEXT_MENU
 
-    popa
+    POPA86
     ret
 
 menu_pos_x: dw 0
@@ -1408,7 +1422,7 @@ draw_menu_checkbox:
 ; handle_menu_click - Hit-test context menu and dispatch action
 ; ============================================================================
 handle_menu_click:
-    pusha
+    PUSHA86
 
     ; Hit-test the menu
     mov ah, API_CTX_MENU_HIT
@@ -1459,53 +1473,53 @@ handle_menu_click:
     call redraw_desktop
     call repaint_all_windows
 .hmc_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; dismiss_context_menu - Close menu and return to normal mode
 ; ============================================================================
 dismiss_context_menu:
-    pusha
+    PUSHA86
     mov ah, API_CTX_MENU_CLOSE
     int 0x80
     mov byte [cs:launcher_mode], MODE_NORMAL
     call redraw_desktop
     call repaint_all_windows
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; do_auto_arrange - Reset all icons to grid positions
 ; ============================================================================
 do_auto_arrange:
-    pusha
+    PUSHA86
     ; Clear custom positions
     call clear_icon_positions
     mov byte [cs:icons_unlocked], 0
     call register_all_icons
     call redraw_desktop
     call repaint_all_windows
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; do_snap_to_grid - Snap icons to their grid positions
 ; ============================================================================
 do_snap_to_grid:
-    pusha
+    PUSHA86
     call clear_icon_positions
     call register_all_icons
     call redraw_desktop
     call repaint_all_windows
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; do_toggle_lock - Toggle icons_unlocked flag
 ; ============================================================================
 do_toggle_lock:
-    pusha
+    PUSHA86
     xor byte [cs:icons_unlocked], 1
     ; If just locked, snap to grid
     cmp byte [cs:icons_unlocked], 0
@@ -1515,7 +1529,7 @@ do_toggle_lock:
     call redraw_desktop
     call repaint_all_windows
 .dtl_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1552,7 +1566,7 @@ get_icon_position:
 
     ; Check icon_positions[slot]
     xor ah, ah
-    shl ax, 2                       ; * 4
+    SHL_N ax, 2; * 4
     add ax, icon_positions
     mov si, ax
     mov bx, [cs:si]                 ; X
@@ -1599,14 +1613,14 @@ get_icon_position:
 ; clear_icon_positions - Zero out custom icon positions array
 ; ============================================================================
 clear_icon_positions:
-    pusha
+    PUSHA86
     mov di, icon_positions
     mov cx, MAX_ICON_ALLOC * 4
 .cip_loop:
     mov byte [cs:di], 0
     inc di
     loop .cip_loop
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1614,7 +1628,7 @@ clear_icon_positions:
 ; Uses sort_descending: 0=A-Z, 1=Z-A
 ; ============================================================================
 do_sort:
-    pusha
+    PUSHA86
 
     ; Need at least 2 icons to sort
     mov al, [cs:icon_count]
@@ -1711,7 +1725,7 @@ do_sort:
     call repaint_all_windows
 
 .ds_done:
-    popa
+    POPA86
     ret
 
 .ds_i:          db 0
@@ -1723,13 +1737,13 @@ do_sort:
 ; Input: AL = first slot index
 ; ============================================================================
 swap_icon_slots:
-    pusha
+    PUSHA86
 
     mov [cs:.sis_slot], al
 
     ; 1. Swap app_info (16 bytes per slot)
     xor ah, ah
-    shl ax, 4                       ; * 16
+    SHL_N ax, 4; * 16
     add ax, app_info
     mov si, ax
     add ax, 16
@@ -1740,7 +1754,7 @@ swap_icon_slots:
     ; 2. Swap icon_bitmaps (64 bytes per slot)
     mov al, [cs:.sis_slot]
     xor ah, ah
-    shl ax, 6                       ; * 64
+    SHL_N ax, 6; * 64
     add ax, icon_bitmaps
     mov si, ax
     add ax, 64
@@ -1770,7 +1784,7 @@ swap_icon_slots:
     mov cx, 1
     call swap_mem
 
-    popa
+    POPA86
     ret
 
 .sis_slot: db 0
@@ -1803,7 +1817,7 @@ swap_mem:
 ; handle_icon_drag - Process icon drag (called each frame while dragging)
 ; ============================================================================
 handle_icon_drag:
-    pusha
+    PUSHA86
 
     ; Check if left button still held
     mov al, [cs:ml_mouse_btn]
@@ -1817,7 +1831,7 @@ handle_icon_drag:
 
     ; Calculate new icon position from mouse position
     xor ah, ah
-    shl ax, 2                       ; * 4 (2 words per slot)
+    SHL_N ax, 2; * 4 (2 words per slot)
     add ax, icon_positions
     mov di, ax
 
@@ -1850,7 +1864,7 @@ handle_icon_drag:
 
 .hid_tracking:
     ; Still dragging — nothing to draw (teleport approach)
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -1937,7 +1951,7 @@ clear_icon_area:
 ; Input: AL = icon slot
 ; ============================================================================
 launch_app:
-    pusha
+    PUSHA86
 
     ; Check if this is the refresh icon
     xor ah, ah
@@ -1955,7 +1969,7 @@ launch_app:
 
 .la_normal_launch:
     ; Get filename for this slot: app_info + (slot * 16)
-    shl ax, 4
+    SHL_N ax, 4
     add ax, app_info
     mov si, ax
 
@@ -2022,7 +2036,7 @@ launch_app:
     call repaint_all_windows
 
 .la_done:
-    popa
+    POPA86
     ret
 
 .la_delay:
@@ -2040,7 +2054,7 @@ launch_app:
 ; Called after a full desktop repaint to prevent desktop from obscuring apps
 ; ============================================================================
 repaint_all_windows:
-    pusha
+    PUSHA86
     mov byte [cs:.raw_idx], 0
 .raw_loop:
     cmp byte [cs:.raw_idx], 16
@@ -2051,7 +2065,7 @@ repaint_all_windows:
     inc byte [cs:.raw_idx]
     jmp .raw_loop
 .raw_done:
-    popa
+    POPA86
     ret
 .raw_idx: db 0
 
@@ -2060,7 +2074,7 @@ repaint_all_windows:
 ; check_floppy_swap - Check if floppy disk was swapped
 ; ============================================================================
 check_floppy_swap:
-    pusha
+    PUSHA86
 
     ; Skip floppy polling if booted from hard drive
     test byte [cs:mounted_drive], 0x80
@@ -2085,7 +2099,7 @@ check_floppy_swap:
     call repaint_all_windows
 
 .cfs_no_change:
-    popa
+    POPA86
     ret
 
 ; ============================================================================
@@ -2161,6 +2175,7 @@ ml_click_y:     dw 0            ; Press-time Y from kernel latch (API 28 DI)
 ml_click_seq:   db 0            ; Press sequence number (API 28 AH)
 ml_click_btn:   db 0            ; Buttons pressed at latch (API 28 AL)
 last_click_seq: db 0            ; Last sequence number we acted on
+ml_seq_delta:   db 0            ; Presses since last poll (catch fast dblclicks)
 ml_prev_btn:    db 0
 
 ; Floppy polling

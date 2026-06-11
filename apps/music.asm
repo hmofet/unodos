@@ -5,6 +5,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -124,7 +126,7 @@ DUR_GAP     equ 1                   ; Inter-note gap
 NUM_SONGS   equ 5
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -256,7 +258,7 @@ entry:
 .exit_fail:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
@@ -267,7 +269,7 @@ get_current_note:
     push si
     mov si, [cs:cur_notes_ptr]
     mov ax, [cs:note_idx]
-    shl ax, 2                       ; 4 bytes per entry
+    SHL_N ax, 2; 4 bytes per entry
     add si, ax
     mov bx, [cs:si]                 ; freq
     mov cx, [cs:si + 2]             ; duration
@@ -282,8 +284,9 @@ load_song_info:
     push ax
     push bx
     push si
-    movzx ax, byte [cs:cur_song]
-    shl ax, 3                       ; 8 bytes per entry
+    mov al, [cs:cur_song]
+    xor ah, ah
+    SHL_N ax, 3; 8 bytes per entry
     add ax, song_table
     mov si, ax
     mov bx, [cs:si]                 ; notes pointer
@@ -448,7 +451,7 @@ toggle_state:
 
 ; Draw entire window content
 draw_all:
-    pusha
+    PUSHA86
 
     ; Clear entire content area (use API 97 for correct dimensions)
     mov al, 0xFF                    ; Current draw context
@@ -477,14 +480,14 @@ draw_all:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     call draw_staff
     call draw_status
     jmp draw_button
 
 ; Draw song title and composer
 draw_song_title:
-    pusha
+    PUSHA86
 
     ; Clear title area
     mov bx, 0
@@ -522,12 +525,12 @@ draw_song_title:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; Draw status text
 draw_status:
-    pusha
+    PUSHA86
 
     ; Clear status area
     mov bx, 0
@@ -555,12 +558,12 @@ draw_status:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; Draw all three buttons: Prev | Play/Pause | Next
 draw_button:
-    pusha
+    PUSHA86
     mov ax, cs
     mov es, ax
 
@@ -605,14 +608,14 @@ draw_button:
     mov ah, API_DRAW_BUTTON
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; ============================================================================
 ; Staff visualization
 ; ============================================================================
 draw_staff:
-    pusha
+    PUSHA86
 
     ; Clear staff area
     mov bx, 0
@@ -672,7 +675,7 @@ draw_staff:
     mov si, [cs:cur_notes_ptr]
     mov bx, ax                      ; BX = note index
     push ax
-    shl ax, 2                       ; 4 bytes per entry
+    SHL_N ax, 2; 4 bytes per entry
     add si, ax
     mov bx, [cs:si]                 ; BX = frequency
     pop ax
@@ -696,7 +699,8 @@ draw_staff:
     add ax, STAFF_LEFT_X
     mov bx, ax                      ; BX = X position
     pop ax
-    movzx cx, al                    ; CX = Y position
+    mov cl, al ; CX = Y position
+    xor ch, ch
     sub cx, 2                       ; Center 5px-tall note head on staff line
 
     ; Choose color: current note = magenta(2), others = white(3)
@@ -725,7 +729,7 @@ draw_staff:
     jmp .note_loop
 
 .notes_done:
-    popa
+    POPA86
     ret
 
 ; ============================================================================

@@ -7,6 +7,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -101,7 +103,7 @@ MAX_APPS                equ 8
 SCRATCH_SEG             equ 0x9000
 
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -584,7 +586,7 @@ entry:
 .exit_fail:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; ============================================================================
@@ -929,8 +931,10 @@ build_fs_bpb:
     mov byte [cs:secbuf + 0], 0xEB
     mov byte [cs:secbuf + 1], 0x3C
     mov byte [cs:secbuf + 2], 0x90
-    mov dword [cs:secbuf + 3], 'UNOD'
-    mov dword [cs:secbuf + 7], 'OS  '
+    mov word [cs:secbuf + 3], 'UN'    ; 8086-safe word pairs (was dword)
+    mov word [cs:secbuf + 5], 'OD'
+    mov word [cs:secbuf + 7], 'OS'
+    mov word [cs:secbuf + 9], '  '
     mov word [cs:secbuf + 11], 512
     mov byte [cs:secbuf + 13], 1
     mov word [cs:secbuf + 14], 1
@@ -942,13 +946,18 @@ build_fs_bpb:
     mov word [cs:secbuf + 24], 18
     mov word [cs:secbuf + 26], 2
     mov byte [cs:secbuf + 38], 0x29
-    mov dword [cs:secbuf + 39], 0x12345678
-    mov dword [cs:secbuf + 43], 'UNOD'
-    mov dword [cs:secbuf + 47], 'OS  '
+    mov word [cs:secbuf + 39], 0x5678 ; 8086-safe word pair (was dword)
+    mov word [cs:secbuf + 41], 0x1234
+    mov word [cs:secbuf + 43], 'UN'
+    mov word [cs:secbuf + 45], 'OD'
+    mov word [cs:secbuf + 47], 'OS'
+    mov word [cs:secbuf + 49], '  '
     mov word [cs:secbuf + 51], '  '
     mov byte [cs:secbuf + 53], ' '
-    mov dword [cs:secbuf + 54], 'FAT1'
-    mov dword [cs:secbuf + 58], '2   '
+    mov word [cs:secbuf + 54], 'FA'
+    mov word [cs:secbuf + 56], 'T1'
+    mov word [cs:secbuf + 58], '2 '
+    mov word [cs:secbuf + 60], '  '
     mov byte [cs:secbuf + 510], 0x55
     mov byte [cs:secbuf + 511], 0xAA
     ret
@@ -962,8 +971,10 @@ build_fat_first:
 
 build_rootdir:
     call clear_secbuf
-    mov dword [cs:secbuf + 0], 'UNOD'
-    mov dword [cs:secbuf + 4], 'OS  '
+    mov word [cs:secbuf + 0], 'UN'
+    mov word [cs:secbuf + 2], 'OD'
+    mov word [cs:secbuf + 4], 'OS'
+    mov word [cs:secbuf + 6], '  '
     mov word [cs:secbuf + 8], '  '
     mov byte [cs:secbuf + 10], ' '
     mov byte [cs:secbuf + 11], 0x08

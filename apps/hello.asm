@@ -5,6 +5,8 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
+%include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
 ; --- Icon Header (80 bytes: 0x00-0x4F) ---
     db 0xEB, 0x4E                   ; JMP short to offset 0x50
@@ -52,7 +54,7 @@ EVENT_WIN_REDRAW        equ 6
 
 ; Entry point - called by kernel via far CALL
 entry:
-    pusha
+    PUSHA86
     push ds
     push es
 
@@ -119,12 +121,12 @@ entry:
 .exit:
     pop es
     pop ds
-    popa
+    POPA86
     retf
 
 ; Draw window content (window-relative coordinates)
 draw_content:
-    pusha
+    PUSHA86
 
     mov bx, 33                      ; X within content area (centered)
     mov cx, 8                       ; Y within content area
@@ -132,7 +134,7 @@ draw_content:
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    popa
+    POPA86
     ret
 
 ; Data Section
