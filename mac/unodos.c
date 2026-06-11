@@ -329,6 +329,9 @@ static void launch_app(short proc)
 static unsigned char gFNames[FMAX][32];     /* Pascal strings */
 static long    gFSizes[FMAX];
 static Boolean gFIsDir[FMAX];
+static long    gFDirIDs[FMAX];              /* dirID per entry (dirs only) */
+static long    gFParID = 0;                 /* parent of the current dir */
+static Boolean gFAtRoot = true;
 static short   gFCount = 0, gFSel = 0, gFTop = 0;
 static short   gFLastRow = -1;
 static long    gFLastTick = 0;
@@ -337,7 +340,30 @@ static void files_refresh(void)
 {
     CInfoPBRec cpb;
     short i;
+    unsigned char scratch[64];
+
+    /* where are we? ioFDirIndex = -1 describes the default dir itself
+       (real dirID + parent). MFS / pre-HFS errors mean "flat" = root. */
+    gFAtRoot = true;
+    gFParID = 0;
+    memset(&cpb, 0, sizeof(cpb));
+    cpb.dirInfo.ioVRefNum = 0;
+    cpb.dirInfo.ioFDirIndex = -1;
+    cpb.dirInfo.ioDrDirID = 0;
+    cpb.dirInfo.ioNamePtr = scratch;
+    if (PBGetCatInfoSync(&cpb) == noErr && cpb.dirInfo.ioDrDirID > 2) {        /* fsRtDirID == 2 */
+        gFAtRoot = false;
+        gFParID = cpb.dirInfo.ioDrParID;
+    }
+
     gFCount = 0;
+    if (!gFAtRoot) {                        /* parent entry */
+        gFNames[0][0] = 2; gFNames[0][1] = '.'; gFNames[0][2] = '.';
+        gFIsDir[0] = true;
+        gFSizes[0] = 0;
+        gFDirIDs[0] = gFParID;
+        gFCount = 1;
+    }
     for (i = 1; gFCount < FMAX; i++) {
         OSErr err;
         memset(&cpb, 0, sizeof(cpb));
@@ -350,14 +376,27 @@ static void files_refresh(void)
         if (cpb.hFileInfo.ioFlAttrib & 0x10) {      /* directory */
             gFIsDir[gFCount] = true;
             gFSizes[gFCount] = 0;
+            gFDirIDs[gFCount] = cpb.dirInfo.ioDrDirID;
         } else {
             gFIsDir[gFCount] = false;
             gFSizes[gFCount] = cpb.hFileInfo.ioFlLgLen;
+            gFDirIDs[gFCount] = 0;
         }
         gFCount++;
     }
     if (gFSel >= gFCount) gFSel = gFCount ? gFCount - 1 : 0;
     if (gFTop > gFSel) gFTop = gFSel;
+}
+
+static void files_enter_dir(long dirID)
+{
+    WDPBRec pb;
+    memset(&pb, 0, sizeof(pb));
+    pb.ioVRefNum = 0;                       /* default volume */
+    pb.ioWDDirID = dirID;
+    if (PBHSetVolSync(&pb) != noErr) return;
+    gFSel = 0; gFTop = 0; gFLastRow = -1;
+    files_refresh();
 }
 
 static void files_draw(UnoWin *w)
@@ -396,14 +435,20 @@ static void files_draw(UnoWin *w)
         if (sel) uno_invert(&row);          /* 1-bit invert is the classic look */
 #endif
     }
-    text_at(x, r.bottom - 6, "Enter/dbl-click: open   R: refresh", C_CYAN, C_BLUE, false);
+    text_at(x, r.bottom - 6, "Enter: open/enter dir   R: refresh", C_CYAN, C_BLUE, false);
 }
 
 static void notepad_load_pascal(const unsigned char *pname);
 
 static void files_open_sel(void)
 {
-    if (gFCount == 0 || gFIsDir[gFSel]) return;
+    if (gFCount == 0) return;
+    if (gFIsDir[gFSel]) {
+        UnoWin *w = find_app_window(APP_FILES);
+        files_enter_dir(gFDirIDs[gFSel]);
+        if (w) draw_window(w);
+        return;
+    }
     notepad_load_pascal(gFNames[gFSel]);
     launch_app(APP_NOTEPAD);
 }
@@ -1107,6 +1152,22 @@ int main(void)
     gSel = 0;
     draw_desktop();
 
+#ifdef UNO_AUTOTEST_FILES
+    /* Files-focused variant: enter the first real subdirectory through the
+       normal open path, so the screenshot shows the subdir listing with the
+       ".." parent entry (proves PBGetCatInfo dirID navigation). */
+    launch_app(APP_FILES);
+    {
+        short i;
+        for (i = 0; i < gFCount; i++) {
+            if (gFIsDir[i] && (gFAtRoot || gFDirIDs[i] != gFParID)) {
+                gFSel = i;
+                files_open_sel();
+                break;
+            }
+        }
+    }
+#endif
 #ifdef UNO_AUTOTEST
     /* Auto-launch the app stack for screenshot verification without
        host->guest input injection. Notepad gets demo text. */

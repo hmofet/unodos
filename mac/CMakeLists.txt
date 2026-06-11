@@ -16,6 +16,24 @@ target_compile_definitions(UnoDOS7 PRIVATE UNO_COLOR=1)
 target_compile_options(UnoDOS7 PRIVATE -ffunction-sections)
 set_target_properties(UnoDOS7 PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
 
+# Autotest variants (launch the app stack at boot for screenshot runs).
+add_application(UnoDOS7Test unodos.c)
+target_compile_definitions(UnoDOS7Test PRIVATE UNO_COLOR=1 UNO_AUTOTEST=1)
+target_compile_options(UnoDOS7Test PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7Test PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOSClassicTest unodos.c)
+target_compile_definitions(UnoDOSClassicTest PRIVATE UNO_COLOR=0 UNO_AUTOTEST=1)
+target_compile_options(UnoDOSClassicTest PRIVATE -ffunction-sections -m68000)
+set_target_properties(UnoDOSClassicTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+# Files-navigation autotest: boots into Files and auto-enters the first
+# subdirectory (verifies dirID navigation + the ".." parent entry).
+add_application(UnoDOS7FTest unodos.c)
+target_compile_definitions(UnoDOS7FTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_FILES=1)
+target_compile_options(UnoDOS7FTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7FTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
 # Mono build (System 1-6, classic QuickDraw). Target 68000 for the Plus.
 add_application(UnoDOSClassic unodos.c)
 target_compile_definitions(UnoDOSClassic PRIVATE UNO_COLOR=0)
