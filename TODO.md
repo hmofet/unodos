@@ -62,6 +62,14 @@ Next steps:
 - [x] Pac-Man on the 68K ports (full maze + 3-ghost AI on both;
       Amiga uses incremental tile rendering; verified WinUAE + Executor)
 
+## Color/Resolution Upgrade (2026-06-11) - DONE
+- [x] Amiga: 5 bitplanes / 32 colors (OCS lowres max); themed UI colors
+      0-3 + fixed extended game palette 4-31; per-plane primitives
+- [x] Mac color targets: true-RGB game art (8-bit QuickDraw), larger
+      playfields (Dostris 16px cells, OutLast 480x300 at 3/2 scale)
+- [ ] Amiga 640-wide OCS hires option (16 colors max; needs WM-wide
+      content scaling per PORT-SPEC)
+
 ## Theming & Splash (2026-06-11) - DONE
 - [x] 8 shared preset palettes on every color-capable platform (x86 VGA
       via new kernel API 105 + Settings buttons; Amiga Theme app via
