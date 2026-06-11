@@ -50,7 +50,7 @@ FLOPPY_144M = 1474560
 
 .PHONY: all clean run debug floppy144 check-deps help apps test-app hd-image run-hd
 
-all: $(FLOPPY_IMG)
+all: $(FLOPPY_144)
 
 # Check for required dependencies
 check-deps:
@@ -150,7 +150,9 @@ $(PACMAN_BIN): $(APPS_DIR)/pacman.asm | $(BUILD_DIR)
 $(PACMANV_BIN): $(APPS_DIR)/pacmanv.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
-# Create 360KB floppy image (target platform)
+# Create 360KB floppy image (RAW LAYOUT ONLY - cannot boot: 1.44MB geometry
+# is hardcoded in stage2/kernel/BPB and no FAT12 filesystem pass is applied;
+# the default/run/debug/test targets all use the 1.44MB image)
 # Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-109 = kernel (104 sectors = 52KB)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Creating 360KB floppy image..."
@@ -175,10 +177,10 @@ floppy144: $(FLOPPY_144)
 
 # Run in QEMU (emulating older hardware)
 # Note: Using -M isapc for proper PC/XT BIOS boot compatibility
-run: $(FLOPPY_IMG) check-qemu
+run: $(FLOPPY_144) check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
-		-drive file=$(FLOPPY_IMG),format=raw,if=floppy \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy \
 		-boot a \
 		-display gtk
 
@@ -191,28 +193,28 @@ run144: $(FLOPPY_144) check-qemu
 		-display gtk
 
 # Debug mode with QEMU monitor
-debug: $(FLOPPY_IMG) check-qemu
+debug: $(FLOPPY_144) check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
-		-drive file=$(FLOPPY_IMG),format=raw,if=floppy \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy \
 		-boot a \
 		-monitor stdio \
 		-d int,cpu_reset
 
 # Test FAT12 filesystem with two drives
-test-fat12: $(FLOPPY_IMG) build/test-fat12.img check-qemu
+test-fat12: $(FLOPPY_144) build/test-fat12.img check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
-		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
 		-drive file=build/test-fat12.img,format=raw,if=floppy,index=1 \
 		-boot a \
 		-display gtk
 
 # Test FAT12 with multi-cluster file (>512 bytes)
-test-fat12-multi: $(FLOPPY_IMG) build/test-fat12-multi.img check-qemu
+test-fat12-multi: $(FLOPPY_144) build/test-fat12-multi.img check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
-		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
 		-drive file=build/test-fat12-multi.img,format=raw,if=floppy,index=1 \
 		-boot a \
 		-display gtk
@@ -242,10 +244,10 @@ build/app-test.img: $(HELLO_BIN)
 	python3 tools/create_app_test.py $@ $(HELLO_BIN)
 
 # Test application loader with QEMU
-test-app: $(FLOPPY_IMG) build/app-test.img check-qemu
+test-app: $(FLOPPY_144) build/app-test.img check-qemu
 	$(QEMU) -M isapc \
 		-m 640K \
-		-drive file=$(FLOPPY_IMG),format=raw,if=floppy,index=0 \
+		-drive file=$(FLOPPY_144),format=raw,if=floppy,index=0 \
 		-drive file=build/app-test.img,format=raw,if=floppy,index=1 \
 		-boot a \
 		-display gtk

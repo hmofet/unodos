@@ -26,6 +26,18 @@ entry:
     pop dx                          ; Restore DL
     mov [boot_drive], dl            ; Save for later use
 
+    ; Latch the BIOS daily tick counter so API 63 reports ticks since
+    ; BOOT, not since midnight (SysInfo showed thousands of seconds of
+    ; "uptime" right after power-on; the value also tracked wall time
+    ; across reboots). Delta consumers (games, music, double-click
+    ; timing) are unaffected by the constant offset.
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    mov ax, [es:0x006C]
+    mov [boot_ticks], ax
+    pop es
+
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
@@ -706,8 +718,8 @@ int_09_handler:
 .skip_buffer:
     ; Post KEY_PRESS event (Foundation 1.5)
     push ax
-    xor dx, dx
-    mov dl, al                      ; DX = ASCII character
+    mov dl, al                      ; DL = ASCII character
+    mov dh, [focused_task]          ; DH = focus owner at PRESS time (0xFF=none)
     mov al, EVENT_KEY_PRESS         ; AL = event type
     call post_event
     pop ax
@@ -769,6 +781,19 @@ kbd_getchar:
     mov ax, 0x1000
     mov ds, ax
 
+    ; Focus gate: when a window has focus, only its owner (or kernel/boot
+    ; context, current_task=0xFF) may consume buffered keys. Stops
+    ; background tasks polling API 11 from stealing the focused app's
+    ; keystrokes (every key is double-stuffed: kbd_buffer + event queue).
+    mov al, [focused_task]
+    cmp al, 0xFF
+    je .focus_ok                    ; Nothing focused: any poller may read
+    cmp al, [current_task]
+    je .focus_ok                    ; Focused task itself
+    cmp byte [current_task], 0xFF
+    je .focus_ok                    ; Kernel/boot context
+    jmp .no_key
+.focus_ok:
     mov bx, [kbd_buffer_head]
     cmp bx, [kbd_buffer_tail]
     je .no_key
@@ -893,6 +918,17 @@ install_mouse:
 
     ; ===== Method 2: Direct KBC port I/O (fallback) =====
 .try_kbc:
+    ; Pre-AT machines have no 8042; on the IBM PC/XT ports 0x60-0x7F all
+    ; decode to the 8255 PPI (0x64 aliases the keyboard latch reading
+    ; 0x00), so the KBC probe below would stall ~3s per kbc_wait_read_long
+    ; on every boot. Check the BIOS model byte at F000:FFFE first.
+    mov ax, 0xF000
+    mov es, ax
+    mov al, [es:0xFFFE]             ; BIOS model byte
+    cmp al, 0xFC                    ; 0xFC = AT (has 8042)
+    ja .skip_kbc                    ; 0xFD/0xFE/0xFF = PCjr/XT/PC: no 8042
+    cmp al, 0xFB                    ; 0xFB = XT model 2: no 8042
+    je .skip_kbc
     ; Save original INT 0x74 (IRQ12) vector
     xor ax, ax
     mov es, ax
@@ -1012,6 +1048,16 @@ install_mouse:
     jmp .no_mouse
 .fail_enable:
     mov byte [mouse_diag], 'E'
+    jmp .no_mouse
+
+.skip_kbc:
+    ; Pre-AT machine: no 8042 to restore, exit directly (do NOT route
+    ; through .no_mouse - it pokes KBC ports and uses saved_kbc_config
+    ; that was never captured)
+    mov byte [mouse_diag], 'X'      ; X = pre-AT machine, no 8042
+    mov byte [mouse_enabled], 0
+    stc
+    jmp .done
 
 .no_mouse:
     ; Restore original KBC config
@@ -1207,8 +1253,8 @@ int_74_handler:
     and al, 0x07
     mov [mouse_buttons], al
 
-    ; Erase cursor before updating position
-    call mouse_cursor_hide
+    ; Cursor erase/redraw deferred to task context (mouse_cursor_sync):
+    ; no VRAM walking or INT 0x10 bank switching inside the ISR.
 
     ; Calculate delta X (signed)
     mov al, [mouse_packet + 1]      ; X movement
@@ -1266,12 +1312,18 @@ int_74_handler:
     ; Update drag state machine (sets flags only, no win_move)
     call mouse_drag_update
 
-    ; Redraw cursor at new position
-    call mouse_cursor_show
+    ; Mark cursor dirty; event_get/mouse_get_state redraw in task context
+    mov byte [cursor_dirty], 1
 
-    ; Post mouse event: DL = buttons
+    ; Post mouse event only on button-state change (motion is pollable via
+    ; API 28; per-packet motion events flooded the queue and were consumed
+    ; by whichever task polled first). DL = buttons.
+    mov al, [mouse_buttons]
+    cmp al, [last_posted_buttons]
+    je .reset_packet
+    mov [last_posted_buttons], al
     xor dx, dx
-    mov dl, [mouse_buttons]
+    mov dl, al
     mov al, EVENT_MOUSE             ; Type = 4
     call post_event
 
@@ -1350,8 +1402,7 @@ mouse_bios_callback:
     test dh, 0xC0
     jnz .bios_cb_done
 
-    ; Hide cursor before updating position
-    call mouse_cursor_hide
+    ; Cursor erase/redraw deferred to task context (mouse_cursor_sync)
 
     ; === X delta: sign-extend BL using status bit 4 ===
     xor ah, ah
@@ -1399,11 +1450,17 @@ mouse_bios_callback:
 
 .bios_post:
     call mouse_drag_update
-    call mouse_cursor_show
 
-    ; Post mouse event
+    ; Mark cursor dirty; redraw happens in task context (mouse_cursor_sync)
+    mov byte [cursor_dirty], 1
+
+    ; Post mouse event only on button-state change (see int_74_handler)
+    mov al, [mouse_buttons]
+    cmp al, [last_posted_buttons]
+    je .bios_cb_done
+    mov [last_posted_buttons], al
     xor dx, dx
-    mov dl, [mouse_buttons]
+    mov dl, al
     mov al, EVENT_MOUSE
     call post_event
 
@@ -1425,11 +1482,20 @@ mouse_bios_callback:
 ;         CX = Y position (0-199)
 ;         DL = buttons (bit0=left, bit1=right, bit2=middle)
 ;         DH = enabled flag (0=no mouse, 1=mouse active)
+;         SI = X position of the most recent button press
+;         DI = Y position of the most recent button press
+;         AH = press sequence number (changes on every new press)
+;         AL = buttons newly pressed at the latch (rising-edge mask)
 mouse_get_state:
+    call mouse_cursor_sync          ; Flush deferred IRQ12 cursor redraw
     mov bx, [mouse_x]
     mov cx, [mouse_y]
     mov dl, [mouse_buttons]
     mov dh, [mouse_enabled]
+    mov si, [click_x]
+    mov di, [click_y]
+    mov ah, [click_seq]
+    mov al, [click_buttons]         ; Buttons that went down at the latch
     ret
 
 ; mouse_set_position - Set mouse cursor position
@@ -4041,6 +4107,26 @@ mouse_cursor_show:
     popf                            ; Restore interrupt state
     ret
 
+; mouse_cursor_sync - Deferred cursor redraw (task context).
+; IRQ12 only sets cursor_dirty; this erases the cursor at its old
+; position (cursor_drawn_x/y) and redraws at current mouse_x/y.
+; The flag is cleared BEFORE drawing so a concurrent IRQ12 update
+; re-marks it (no lost redraws). hide/show are internally cli-safe.
+; Preserves all registers. 8086-safe.
+mouse_cursor_sync:
+    cmp byte [cursor_dirty], 0
+    je .mcy_done
+    cmp byte [cursor_locked], 0     ; Caller holds a draw bracket (e.g. a
+    jne .mcy_done                   ; windowed app's win_begin_draw): hide/
+                                    ; show would no-op and the redraw would
+                                    ; be LOST - keep the flag for a poller
+                                    ; that isn't holding the lock
+    mov byte [cursor_dirty], 0
+    call mouse_cursor_hide
+    call mouse_cursor_show
+.mcy_done:
+    ret
+
 ; ============================================================================
 ; Window Title Bar Hit Testing
 ; ============================================================================
@@ -4257,6 +4343,22 @@ mouse_drag_update:
     mov ah, [drag_prev_buttons]
     mov [drag_prev_buttons], al
 
+    ; Latch press-time coordinates on any newly-pressed button so apps can
+    ; hit-test where the click HAPPENED, not where the cursor has drifted
+    ; to by poll time (exposed via API 28: SI/DI/AH)
+    push ax
+    not ah
+    and ah, al                      ; AH = rising-edge buttons
+    jz .no_click_latch
+    mov [click_buttons], ah
+    mov bx, [mouse_x]
+    mov [click_x], bx
+    mov bx, [mouse_y]
+    mov [click_y], bx
+    inc byte [click_seq]            ; Consumers detect presses by seq change
+.no_click_latch:
+    pop ax
+
     ; Detect left button press (0 -> 1 transition)
     test ah, 0x01                   ; Was left pressed before?
     jnz .already_held
@@ -4362,22 +4464,55 @@ mouse_drag_update:
     cmp byte [drag_active], 0
     je .done
 
-    ; Calculate drag target = mouse - offset
+    ; Calculate drag target = mouse - offset, clamped so the whole
+    ; title bar (incl. the close button) stays reachable and the
+    ; desktop menu bar row is never covered by a parked drag
+    push bx
+    push dx
+    xor ah, ah
+    mov al, [drag_window]
+    mov bx, ax
+    shl bx, 5
+    add bx, window_table
+    mov dx, [bx + WIN_OFF_WIDTH]    ; DX = window width
+
     mov ax, [mouse_x]
     sub ax, [drag_offset_x]
     cmp ax, 0x8000                  ; Negative wrap?
-    jb .target_x_ok
+    jb .target_x_min_ok
     xor ax, ax
+.target_x_min_ok:
+    mov bx, [screen_width]
+    sub bx, dx                      ; BX = max X (right edge on-screen)
+    cmp bx, 0x8000                  ; Window wider than screen (defensive)?
+    jb .target_x_have_max
+    xor bx, bx
+.target_x_have_max:
+    cmp ax, bx
+    jbe .target_x_ok
+    mov ax, bx
 .target_x_ok:
     mov [drag_target_x], ax
 
     mov ax, [mouse_y]
     sub ax, [drag_offset_y]
     cmp ax, 0x8000
-    jb .target_y_ok
+    jb .target_y_min_chk
     xor ax, ax
+.target_y_min_chk:
+    cmp ax, 12                      ; Keep the desktop menu bar row visible
+    jae .target_y_min_ok
+    mov ax, 12
+.target_y_min_ok:
+    mov bx, [screen_height]
+    sub bx, [titlebar_height]       ; BX = max Y (title bar stays grabbable)
+    cmp ax, bx
+    jbe .target_y_ok
+    mov ax, bx
 .target_y_ok:
     mov [drag_target_y], ax
+    pop dx
+    pop bx
     jmp .done
 
 .resize_held:
@@ -4657,6 +4792,7 @@ mouse_process_drag:
     cmp byte [si + APP_OFF_STATE], APP_STATE_RUNNING
     jne .close_kill_done
     mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+    call close_task_files           ; AL = victim task handle
     ; Free segment
     mov bx, [si + APP_OFF_CODE_SEG]
     cmp bx, APP_SEGMENT_SHELL
@@ -7431,7 +7567,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3400 - ($ - $$) db 0
+times 0x3500 - ($ - $$) db 0  ; (bumped from 0x3400, Build 404: input-path fixes grew pre-pad code)
 
 kernel_api_table:
     ; Header
@@ -9659,6 +9795,7 @@ get_tick_count:
     mov ax, [es:0x006C]
     pop bx
     pop es
+    sub ax, [boot_ticks]            ; Ticks since BOOT (wrap-safe for deltas)
     clc
     ret
 
@@ -10770,6 +10907,7 @@ event_get_stub:
 
     ; Process any pending window drag (deferred from IRQ12)
     call mouse_process_drag
+    call mouse_cursor_sync          ; Deferred cursor redraw (from IRQ12)
 
 .evt_check_next:
     mov bx, [event_queue_head]
@@ -10789,22 +10927,42 @@ event_get_stub:
     cmp al, EVENT_CONSUMED
     je .evt_tombstone               ; Consumed mid-queue slot: reclaim/step over
 
-    ; Filter keyboard events: only deliver to focused task
+    ; Route key events by the focus stamp captured at PRESS time (DH).
+    ; Keys typed while task A was focused are never delivered to a task
+    ; that gained focus later (stale keys are lazily discarded).
     cmp al, EVENT_KEY_PRESS
     jne .evt_not_key
-    push ax
-    mov al, [focused_task]
-    cmp al, 0xFF                    ; No window focused? Deliver to current task
-    je .evt_focus_ok
-    cmp al, [current_task]
-    je .evt_focus_ok
-    pop ax
-    jmp .evt_skip                   ; Not ours: step over, do NOT stop the scan
-.evt_focus_ok:
-    pop ax
-    jmp .evt_consume                ; This task has focus (or no focus set), consume and deliver
+    cmp dh, 0xFF                    ; Pressed while nothing focused?
+    jne .evt_key_stamped
+    cmp byte [focused_task], 0xFF   ; Still nothing focused?
+    je .evt_key_deliver             ; Yes: deliver to poller (launcher path)
+    jmp .evt_discard                ; Focus gained since press: stale, drop
+.evt_key_stamped:
+    cmp dh, [focused_task]
+    jne .evt_discard                ; Focus moved since press: stale, drop
+    cmp dh, [current_task]
+    jne .evt_skip                   ; Focused task's key, not us: leave queued
+.evt_key_deliver:
+    xor dh, dh                      ; Restore DH=0 contract for apps
+    jmp .evt_consume                ; Deliver to this task
 
 .evt_not_key:
+    ; Route mouse events to the focused task (edge-only posting keeps the
+    ; rate low, so leaving them queued cannot head-block the ring)
+    cmp al, EVENT_MOUSE
+    jne .evt_not_mouse
+    push ax
+    mov al, [focused_task]
+    cmp al, 0xFF
+    je .evt_mouse_ok                ; No focus: current task may consume
+    cmp al, [current_task]
+    je .evt_mouse_ok
+    pop ax
+    jmp .evt_skip                   ; Leave queued for the focused task
+.evt_mouse_ok:
+    pop ax
+    jmp .evt_consume
+.evt_not_mouse:
     ; Filter: skip WIN_REDRAW events not for current task's window
     cmp al, EVENT_WIN_REDRAW
     jne .evt_consume                ; Other event types: consume and pass through
@@ -11822,6 +11980,10 @@ fat12_open:
     mov [di + 6], dx                ; File size (high)
     mov word [di + 8], 0            ; Current position (low)
     mov word [di + 10], 0           ; Current position (high)
+    push ax
+    mov al, [current_task]
+    mov [di + 24], al               ; Owner task (0xFF = kernel)
+    pop ax
 
     ; Return file handle in AX (already set)
     clc
@@ -11869,6 +12031,30 @@ alloc_file_handle:
 .found:
     clc
     pop si
+    ret
+
+; close_task_files - Free all file handles owned by a dying task.
+; Kill paths (close-button kill, app_exit, app_load .kill_existing) never
+; closed handles; with no reclamation the 16-entry file_table eventually
+; exhausts and every app launch fails until reboot.
+; Input: AL = task handle (0xFF = kernel, never reaped)
+; Preserves: all registers
+close_task_files:
+    push cx
+    push si
+    mov cx, FILE_MAX_HANDLES
+    mov si, file_table
+.ctf_next:
+    cmp byte [si], 1                ; Entry open?
+    jne .ctf_skip
+    cmp [si + 24], al               ; Owned by this task?
+    jne .ctf_skip
+    mov byte [si], 0                ; Mark free (same semantics as fat12_close)
+.ctf_skip:
+    add si, 32                      ; FILE_ENTRY_SIZE
+    loop .ctf_next
+    pop si
+    pop cx
     ret
 
 ; ============================================================================
@@ -12757,7 +12943,11 @@ fat16_read_sector:
     add eax, [fat16_partition_lba]
     mov [.saved_lba], eax           ; Save for CHS fallback
 
-    ; Build DAP at 0x0000:0x0600 (low memory — USB BIOSes require DAP below 64KB)
+    ; No INT 13h extensions (probed at mount): go straight to CHS
+    cmp byte [fat16_has_ext], 0
+    je .chs_fallback
+
+    ; Build DAP at 0x0000:0x0600 (low memory - USB BIOSes require DAP below 64KB)
     push es
     mov cx, es                      ; CX = caller's buffer segment
     xor si, si
@@ -12777,11 +12967,13 @@ fat16_read_sector:
     mov ds, si                      ; DS = 0x0000
     mov si, 0x0600                  ; DS:SI = 0x0000:0x0600
     mov ah, 0x42
+    stc                             ; Old BIOSes may IRET without touching CF
     int 0x13
     pop ds                          ; Restore DS = 0x1000 (pop doesn't affect CF)
     jnc .success
 
     ; Extended read failed - try CHS fallback
+.chs_fallback:
     ; First get drive geometry (INT 0x13/08 destroys ES, so save it)
     push es
     push bx
@@ -12865,7 +13057,11 @@ fat16_write_sector:
     add eax, [fat16_partition_lba]
     mov [.saved_lba], eax
 
-    ; Build DAP at 0x0000:0x0600 (low memory — USB BIOSes require DAP below 64KB)
+    ; No INT 13h extensions (probed at mount): go straight to CHS
+    cmp byte [fat16_has_ext], 0
+    je .ws_chs_fallback
+
+    ; Build DAP at 0x0000:0x0600 (low memory - USB BIOSes require DAP below 64KB)
     push es
     mov cx, es                      ; CX = caller's buffer segment
     xor si, si
@@ -12886,11 +13082,13 @@ fat16_write_sector:
     mov si, 0x0600                  ; DS:SI = 0x0000:0x0600
     mov ah, 0x43
     mov al, 0                      ; No verify after write
+    stc                             ; Old BIOSes may IRET without touching CF
     int 0x13
     pop ds
     jnc .ws_success
 
     ; Extended write failed - try CHS fallback
+.ws_chs_fallback:
     push es
     push bx
     mov ah, 0x08
@@ -12974,6 +13172,23 @@ fat16_mount:
     xor ax, ax
     int 0x13
     jc .read_error
+
+    ; Probe INT 13h extensions once at mount (AH=41h), cache the result.
+    ; Pre-EDD (~pre-1995) BIOSes have no AH=42h/43h; without the probe
+    ; every sector paid a wasted AH=42h round trip, and BIOSes that IRET
+    ; on unknown AH would return CF=0 with a never-read buffer.
+    mov byte [fat16_has_ext], 0
+    mov ah, 0x41
+    mov bx, 0x55AA
+    mov dl, [fat16_drive]
+    int 0x13
+    jc .no_ext
+    cmp bx, 0xAA55
+    jne .no_ext
+    test cl, 1                      ; Bit 0 = fixed-disk access subset (42h-44h)
+    jz .no_ext
+    mov byte [fat16_has_ext], 1
+.no_ext:
 
     ; Read MBR (sector 0)
     mov ax, 0x1000
@@ -13291,6 +13506,10 @@ fat16_open:
     mov [si + 6], cx                ; File size high
     mov dword [si + 8], 0           ; Current position = 0
     mov [si + 12], ax               ; Current cluster = starting cluster
+    push ax
+    mov al, [current_task]
+    mov [si + 24], al               ; Owner task (0xFF = kernel)
+    pop ax
 
     ; Clean up filename and return handle
     add sp, 12
@@ -14092,6 +14311,10 @@ fat16_create:
     mov [di + 20], cx               ; Dir entry offset within sector
     mov cx, [cs:.f16c_start_cluster]
     mov [di + 22], cx               ; Last cluster (= start, file is empty)
+    push ax
+    mov al, [current_task]
+    mov [di + 24], al               ; Owner task (0xFF = kernel)
+    pop ax
 
     ; Clean up and return handle in AX
     add sp, 12
@@ -15182,6 +15405,7 @@ APP_ERR_ALLOC_FAILED    equ 4       ; Memory allocation failed
 APP_ERR_READ_FAILED     equ 5       ; File read failed
 APP_ERR_INVALID_HANDLE  equ 6       ; Invalid app handle
 APP_ERR_NOT_LOADED      equ 7       ; App not loaded
+APP_ERR_BAD_SIZE        equ 8       ; File size 0, >=64KB, or > 0xFFE0
 
 ; alloc_segment - Allocate a free user segment from the pool
 ; Input: AL = task handle (owner)
@@ -15333,6 +15557,7 @@ app_load_stub:
     pop bx
     mov byte [di + APP_OFF_STATE], APP_STATE_FREE
     mov al, cl                      ; AL = task handle for destroy_task_windows
+    call close_task_files           ; Reclaim the squatter's file handles
     call destroy_task_windows
 .kill_next:
     add di, APP_ENTRY_SIZE
@@ -15370,6 +15595,16 @@ app_load_stub:
     mov cx, [bx + 4]                ; CX = file size (low word)
     mov [.file_size], cx
 
+    ; Validate file size: high word must be 0 and 1 <= size <= 0xFFE0
+    ; (app_start_stub builds the initial stack frame at FFE0-FFFE; a
+    ; bigger image would be silently truncated/overwritten and executed)
+    cmp word [bx + 6], 0            ; 32-bit size high word
+    jne .bad_size
+    test cx, cx                     ; Reject zero-length files
+    jz .bad_size
+    cmp cx, 0xFFE0
+    ja .bad_size
+
     mov word [.code_off], 0         ; Always load at offset 0
 
     ; Step 6: Read file into app code segment
@@ -15380,6 +15615,8 @@ app_load_stub:
     mov cx, [.file_size]            ; Bytes to read
     call fs_read_stub
     jc .read_failed
+    cmp ax, [.file_size]            ; AX = bytes actually read
+    jne .read_failed                ; Short read: truncated/corrupt FAT chain
 
     ; Step 7: Close file
     mov ax, [.file_handle]
@@ -15431,10 +15668,16 @@ app_load_stub:
 
 .read_failed:
     ; Close file before returning error
-    push word APP_ERR_READ_FAILED
     mov ax, [.file_handle]
     call fs_close_stub
-    pop ax
+    mov ax, APP_ERR_READ_FAILED
+    jmp .error_free_seg
+
+.bad_size:
+    ; File is empty, >= 64KB, or would overlap the initial stack frame
+    mov ax, [.file_handle]
+    call fs_close_stub
+    mov ax, APP_ERR_BAD_SIZE
     ; Fall through to error_free_seg
 
 .error_free_seg:
@@ -15836,6 +16079,7 @@ app_exit_stub:
     shl si, 5
     add si, app_table
     mov byte [si + APP_OFF_STATE], APP_STATE_FREE
+    call close_task_files           ; AL = exiting task handle
 
     ; Free allocated segment back to pool (skip shell segment)
     mov bx, [si + APP_OFF_CODE_SEG]
@@ -17993,6 +18237,10 @@ fat12_create:
     mov [di + 20], cx               ; Dir entry offset (word)
     mov cx, [cs:.fc_start_cluster]
     mov [di + 22], cx               ; Last cluster (= start, file is empty)
+    push ax
+    mov al, [current_task]
+    mov [di + 24], al               ; Owner task (0xFF = kernel)
+    pop ax
 
     ; Clean up and return handle in AX
     add sp, 12                      ; Clean up filename
@@ -21467,8 +21715,14 @@ mouse_packet_idx:   db 0            ; Current byte in packet (0-2)
 mouse_last_byte_tick: dw 0          ; BIOS tick of last mouse byte (desync guard)
 mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
+boot_ticks:         dw 0            ; BIOS tick counter latched at kernel entry
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
 mouse_enabled:      db 0            ; 1 if mouse detected/enabled
+last_posted_buttons: db 0           ; Buttons at last EVENT_MOUSE post (edge-only posting)
+click_x:            dw 0            ; Mouse X latched at button press (API 28: SI)
+click_y:            dw 0            ; Mouse Y latched at button press (API 28: DI)
+click_buttons:      db 0            ; Rising-edge buttons at latch time
+click_seq:          db 0            ; Press sequence number (API 28: AH)
 mouse_vis_saved:    db 0            ; 1 if mouse_set_visible(0) was called (for safe restore)
 mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, R/S/E=failure
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
@@ -21478,6 +21732,7 @@ cursor_visible:     db 0            ; 1 = cursor currently drawn on screen
 cursor_drawn_x:     dw 0            ; X where cursor was last drawn
 cursor_drawn_y:     dw 0            ; Y where cursor was last drawn
 cursor_locked:      db 0            ; Lock counter (>0 = cursor rendering suppressed)
+cursor_dirty:       db 0            ; 1 = IRQ12 moved mouse, cursor redraw pending
 
 ; Cursor bitmap: 8 pixels wide, 10 rows tall
 ; Each byte = 1 row, MSB = leftmost pixel, 1 = draw (XOR white)
@@ -21602,6 +21857,7 @@ fat_cache_sector: dw 0xFFFF          ; Currently cached FAT sector (0xFFFF = inv
 
 ; FAT16 mount state
 fat16_mounted:          db 0            ; 1 if FAT16 volume mounted
+fat16_has_ext:          db 0            ; 1 if INT 13h extensions (AH=41h probe at mount)
 fat16_drive:            db 0x80         ; Drive number (0x80=first HD)
 fat16_partition_lba:    dd 0            ; Partition start LBA
 fat16_bpb_cache:        times 62 db 0   ; BPB cache (just the important fields)

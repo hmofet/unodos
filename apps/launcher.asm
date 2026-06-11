@@ -185,10 +185,14 @@ entry:
     ; --- Mouse polling ---
     mov ah, API_MOUSE_GET_STATE
     int 0x80
-    ; BX=X, CX=Y, DL=buttons
+    ; BX=X, CX=Y, DL=buttons, SI/DI=press-time X/Y, AH=press seq, AL=press mask
     mov [cs:ml_mouse_x], bx
     mov [cs:ml_mouse_y], cx
     mov [cs:ml_mouse_btn], dl
+    mov [cs:ml_click_x], si
+    mov [cs:ml_click_y], di
+    mov [cs:ml_click_seq], ah
+    mov [cs:ml_click_btn], al
 
     ; Save previous button state, update current
     mov al, [cs:prev_buttons]
@@ -201,51 +205,48 @@ entry:
     cmp byte [cs:launcher_mode], MODE_ICON_DRAG
     je .mode_icon_drag
 
-    ; --- Normal mode: left-click detection ---
-    mov al, [cs:ml_mouse_btn]
-    and al, 0x01                    ; Isolate left button
-    mov ah, [cs:ml_prev_btn]
-    and ah, 0x01
-    cmp al, 1
-    jne .no_left_click
-    cmp ah, 0
-    jne .no_left_click              ; Not a rising edge
+    ; --- Normal mode: click detection via kernel press latch ---
+    ; The kernel latches X/Y at button-press time (IRQ context) and bumps
+    ; a sequence number. Hit-testing the LATCHED coordinates fixes clicks
+    ; landing on the wrong icon during fast click-and-move, and a press+
+    ; release that both happen between two polls is no longer lost.
+    mov al, [cs:ml_click_seq]
+    cmp al, [cs:last_click_seq]
+    je .no_new_press                ; No new button press since last poll
+    mov [cs:last_click_seq], al
+    mov al, [cs:ml_click_btn]
+    test al, 0x01
+    jnz .left_press
+    test al, 0x02
+    jnz .right_press
+    jmp .no_new_press
 
-    ; Left button just pressed - check if click is over a window
-    mov bx, [cs:ml_mouse_x]
-    mov cx, [cs:ml_mouse_y]
+.left_press:
+    ; Check if the press was over a window
+    mov bx, [cs:ml_click_x]
+    mov cx, [cs:ml_click_y]
     mov ah, API_POINT_OVER_WINDOW
     int 0x80
-    jnc .no_left_click              ; CF=0 → over a window, skip desktop click
+    jnc .no_new_press               ; CF=0 -> over a window, skip desktop click
 
-    mov bx, [cs:ml_mouse_x]
-    mov cx, [cs:ml_mouse_y]
-    call handle_click               ; BX=mouse X, CX=mouse Y
+    mov bx, [cs:ml_click_x]
+    mov cx, [cs:ml_click_y]
+    call handle_click               ; BX=press X, CX=press Y
+    jmp .no_new_press
 
-.no_left_click:
-    ; --- Normal mode: right-click detection ---
-    mov al, [cs:ml_mouse_btn]
-    and al, 0x02                    ; Isolate right button
-    mov ah, [cs:ml_prev_btn]
-    and ah, 0x02
-    cmp al, 2
-    jne .no_right_click
-    cmp ah, 0
-    jne .no_right_click             ; Not a rising edge
-
-    ; Right button just pressed - check if over a window
-    mov bx, [cs:ml_mouse_x]
-    mov cx, [cs:ml_mouse_y]
+.right_press:
+    mov bx, [cs:ml_click_x]
+    mov cx, [cs:ml_click_y]
     mov ah, API_POINT_OVER_WINDOW
     int 0x80
-    jnc .no_right_click             ; Over a window — skip
+    jnc .no_new_press               ; Over a window - skip
 
-    ; Open desktop context menu
-    mov bx, [cs:ml_mouse_x]
-    mov cx, [cs:ml_mouse_y]
+    ; Open desktop context menu at the press position
+    mov bx, [cs:ml_click_x]
+    mov cx, [cs:ml_click_y]
     call open_desktop_menu
 
-.no_right_click:
+.no_new_press:
 .no_click:
     jmp .after_mouse
 
@@ -2155,6 +2156,11 @@ last_click_icon: db 0xFF
 ml_mouse_x:     dw 0
 ml_mouse_y:     dw 0
 ml_mouse_btn:   db 0
+ml_click_x:     dw 0            ; Press-time X from kernel latch (API 28 SI)
+ml_click_y:     dw 0            ; Press-time Y from kernel latch (API 28 DI)
+ml_click_seq:   db 0            ; Press sequence number (API 28 AH)
+ml_click_btn:   db 0            ; Buttons pressed at latch (API 28 AL)
+last_click_seq: db 0            ; Last sequence number we acted on
 ml_prev_btn:    db 0
 
 ; Floppy polling
