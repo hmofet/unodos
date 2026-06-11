@@ -59,8 +59,14 @@ Next steps:
 - [ ] Mac: offscreen GWorld double-buffering for flicker-free repaints
 - [ ] Both: audio ear-check on real hardware / sound-enabled emulator
       (sequencers are register-verified; test configs run sound off)
-- [ ] Both: cooperative scheduler over the window/app tables (milestone
-      3 — the single event loop is scaffolding)
+- [x] Amiga: MILESTONE 3 cooperative scheduler (scheduler.i): every
+      window runs its app proc in its own task with a private 2KB
+      stack; task_yield context switch, per-task event mailboxes,
+      keys + frame ticks posted by the kernel task, spawn/kill tied
+      to window create/close. Verified in WinUAE: game gravity and
+      the FAT12 write flow both run through the task machinery.
+- [ ] Mac: milestone 3 scheduler (needs C coroutines; the WM/app
+      tables are ready)
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
 - [ ] Sega Genesis showpiece port (per feasibility report SS3.3 —
       optional, after the portable core exists)
