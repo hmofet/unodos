@@ -134,8 +134,8 @@ static const short kWinRect[NAPPS][4] = {
     {  36,  40, 330, 270 },     /* Files    */
     {  56,  34, 484, 320 },     /* Notepad  */
     {  80,  60, 440, 230 },     /* Music    */
-    {  20,  10, 312, 332 },     /* Dostris  */
-    {  90,  50, 426, 290 },     /* OutLast  */
+    {  20,  10, 330, 388 },     /* Dostris  */
+    {  70,  40, 562, 384 },     /* OutLast  */
     {  70,  30, 404, 262 },     /* Pac-Man  */
     { 150,  56, 430, 300 },     /* Theme    */
 };
@@ -950,6 +950,28 @@ static void app_close(short proc)
 }
 
 /* =========================================================================
+ * True-color helpers - the color targets run 8-bit Color QuickDraw, so the
+ * games use real RGB (nearest of the 256 system colors); the mono target
+ * maps each entry to a 4-color theme slot for the 1-bit look.
+ * ========================================================================= */
+typedef struct { unsigned char r, g, b, mono; } GameRGB;
+
+static void fill_rgb(Rect *q, const GameRGB *c)
+{
+#if UNO_COLOR
+    RGBColor rc;
+    rc.red   = (unsigned short)(c->r << 8);
+    rc.green = (unsigned short)(c->g << 8);
+    rc.blue  = (unsigned short)(c->b << 8);
+    RGBForeColor(&rc);
+    PaintRect(q);
+    RGBForeColor(&kBlack);
+#else
+    uno_fill(q, c->mono);
+#endif
+}
+
+/* =========================================================================
  * Game music - Korobeiniki (Dostris) + Sunset Drive (OutLast), parsed from
  * the x86 sources at port time. Shares the Sound Manager channel with the
  * Music app; muted while the owning game is not topmost.
@@ -998,7 +1020,7 @@ static void gm_tick(void)
  * ========================================================================= */
 #define DT_COLS 10
 #define DT_ROWS 20
-#define DT_CELL 14
+#define DT_CELL 16
 #define DT_BX   10                  /* board origin inside the content area */
 #define DT_BY   8
 
@@ -1013,6 +1035,17 @@ static const signed char kDtShape[7][4][8] = {
   { {2,0,0,1,1,1,2,1}, {0,0,0,1,0,2,1,2}, {0,0,1,0,2,0,0,1}, {0,0,1,0,1,1,1,2} },
 };
 static const short kDtColor[7] = { C_CYAN, C_WHITE, C_MAG, C_CYAN, C_MAG, C_WHITE, C_CYAN };
+/* VGA-variant piece colors (apps/tetrisv.asm look): I cyan, O yellow,
+   T purple, S green, Z red, J blue, L orange */
+static const GameRGB kDtRGB[7] = {
+    {  0, 220, 220, C_CYAN  },      /* I */
+    { 235, 215,   0, C_WHITE },     /* O */
+    { 160,  60, 220, C_MAG   },     /* T */
+    {  40, 200,  60, C_CYAN  },     /* S */
+    { 230,  50,  50, C_MAG   },     /* Z */
+    {  60, 100, 240, C_WHITE },     /* J */
+    { 240, 150,  40, C_CYAN  },     /* L */
+};
 static const long kDtLineScore[5] = { 0, 40, 100, 300, 1200 };
 
 static unsigned char gDtBoard[DT_ROWS][DT_COLS];
@@ -1101,19 +1134,28 @@ static void dt_lock(void)
     for (i = 0; i < 4; i++) {
         short c = gDtCol + sh[i * 2], r = gDtRow + sh[i * 2 + 1];
         if (r >= 0 && r < DT_ROWS && c >= 0 && c < DT_COLS)
-            gDtBoard[r][c] = (unsigned char)(kDtColor[gDtPiece] + 1);
+            gDtBoard[r][c] = (unsigned char)(gDtPiece + 1);
     }
     dt_clear_lines();
     dt_spawn();
 }
 
-static void dt_cell(UnoWin *w, short c, short r, short color)
+static void dt_cell(UnoWin *w, short c, short r, short piece)
 {
     Rect q;
     short x = w->bounds.left + DT_BX + c * DT_CELL;
     short y = w->bounds.top + TBAR_H + DT_BY + r * DT_CELL;
     SetRect(&q, x, y, x + DT_CELL - 1, y + DT_CELL - 1);
-    uno_fill(&q, color);
+    fill_rgb(&q, &kDtRGB[piece]);
+#if UNO_COLOR
+    {   /* bevel highlight for depth */
+        Rect h = q;
+        h.bottom = h.top + 2;
+        RGBForeColor(&kPalette[C_WHITE]);
+        PaintRect(&h);
+        RGBForeColor(&kBlack);
+    }
+#endif
 }
 
 static void dostris_draw(UnoWin *w)
@@ -1135,7 +1177,7 @@ static void dostris_draw(UnoWin *w)
         const signed char *sh = kDtShape[gDtPiece][gDtRot];
         for (i = 0; i < 4; i++) {
             short cc = gDtCol + sh[i * 2], cr = gDtRow + sh[i * 2 + 1];
-            if (cr >= 0) dt_cell(w, cc, cr, kDtColor[gDtPiece]);
+            if (cr >= 0) dt_cell(w, cc, cr, gDtPiece);
         }
     }
 
@@ -1163,7 +1205,7 @@ static void dostris_draw(UnoWin *w)
             short x = px + sh[i * 2] * 10;
             short y = r.top + TBAR_H + 108 + sh[i * 2 + 1] * 10;
             SetRect(&q, x, y, x + 9, y + 9);
-            if (gDtState != 0) uno_fill(&q, kDtColor[gDtNext]);
+            if (gDtState != 0) fill_rgb(&q, &kDtRGB[gDtNext]);
         }
     }
 
@@ -1245,8 +1287,9 @@ static void dostris_tick(void)
  * Same track table, perspective math, traffic and physics; the x86 18.2 Hz
  * tick constants are scaled to 60 Hz where they are time-based.
  * ========================================================================= */
-#define OL_W       320              /* virtual playfield, 1:1 in the window */
+#define OL_W       320              /* virtual playfield; rendered at 3/2 */
 #define OL_H       200
+#define OLS(v)     ((short)(((v) * 3) / 2))
 #define OL_HORIZON 80
 #define OL_SEGLEN  80
 #define OL_NSEG    32
@@ -1279,15 +1322,37 @@ static void ol_new_game(void)
     gm_start(kDrive, N_KDRIVE, APP_OUTLAST);
 }
 
+/* OutLast true-color set (apps/outlastv.asm look); mono slot fallback */
+enum { OC_SKY = 0, OC_HORIZON, OC_GRASS_A, OC_GRASS_B, OC_ROAD, OC_ROAD_B,
+       OC_STRIPE, OC_CAR, OC_CARWIN, OC_WHEEL, OC_TRAF_ON, OC_TRAF_SAME,
+       OC_TRUNK, OC_CANOPY, OC_HUD, OC_NCOLORS };
+static const GameRGB kOlRGB[OC_NCOLORS] = {
+    { 110, 170, 240, C_BLUE  },     /* sky        */
+    { 250, 200, 120, C_CYAN  },     /* horizon haze */
+    {  51, 153,  51, C_CYAN  },     /* grass A (palette-cube safe) */
+    {  30, 120,  40, C_MAG   },     /* grass B    */
+    { 110, 110, 110, C_WHITE },     /* road       */
+    { 100, 100, 100, C_WHITE },     /* road alt   */
+    { 240, 220,  60, C_BLUE  },     /* stripe     */
+    { 220,  40,  40, C_MAG   },     /* player car */
+    { 140, 220, 240, C_CYAN  },     /* windshield */
+    {  25,  25,  25, C_BLUE  },     /* wheels     */
+    { 245, 245, 245, C_WHITE },     /* oncoming   */
+    { 240, 200,  60, C_CYAN  },     /* same-dir   */
+    { 120,  80,  40, C_BLUE  },     /* trunk      */
+    {  30, 140,  45, C_CYAN  },     /* canopy     */
+    {  10,  10,  40, C_BLUE  },     /* HUD bar    */
+};
+
 static void ol_vrect(UnoWin *w, short x0, short y0, short x1, short y1, short col)
 {
     Rect q;
     if (x1 <= x0 || y1 <= y0) return;
     if (x0 < 0) x0 = 0;
     if (x1 > OL_W) x1 = OL_W;
-    SetRect(&q, w->bounds.left + 4 + x0, w->bounds.top + TBAR_H + 2 + y0,
-            w->bounds.left + 4 + x1, w->bounds.top + TBAR_H + 2 + y1);
-    uno_fill(&q, col);
+    SetRect(&q, w->bounds.left + 4 + OLS(x0), w->bounds.top + TBAR_H + 2 + OLS(y0),
+            w->bounds.left + 4 + OLS(x1), w->bounds.top + TBAR_H + 2 + OLS(y1));
+    fill_rgb(&q, &kOlRGB[col]);
 }
 
 static void outlast_draw(UnoWin *w)
@@ -1297,28 +1362,28 @@ static void outlast_draw(UnoWin *w)
     char num[16], hud[48];
 
     if (gOlState == 0) {
-        ol_vrect(w, 0, 0, OL_W, 100, C_BLUE);
-        ol_vrect(w, 0, 100, OL_W, 102, C_CYAN);
-        ol_vrect(w, 0, 102, OL_W, OL_H, C_BLUE);
+        ol_vrect(w, 0, 0, OL_W, 100, OC_SKY);
+        ol_vrect(w, 0, 100, OL_W, 102, OC_HORIZON);
+        ol_vrect(w, 0, 102, OL_W, OL_H, OC_GRASS_A);
         for (y = 0; y < 10; y++) {                  /* converging road bands */
             short t = (short)(102 + y * 10);
             short hw2 = (short)(8 + y * 14);
-            ol_vrect(w, 160 - hw2, t, 160 + hw2, t + 10, C_WHITE);
+            ol_vrect(w, 160 - hw2, t, 160 + hw2, t + 10, OC_ROAD);
         }
-        ol_vrect(w, 140, 150, 180, 176, C_MAG);     /* car silhouette */
-        ol_vrect(w, 146, 154, 174, 162, C_CYAN);
-        ol_vrect(w, 136, 170, 144, 178, C_BLUE);
-        ol_vrect(w, 176, 170, 184, 178, C_BLUE);
-        text_at(w->bounds.left + 4 + 120, w->bounds.top + TBAR_H + 2 + 30,
+        ol_vrect(w, 140, 150, 180, 176, OC_CAR);    /* car silhouette */
+        ol_vrect(w, 146, 154, 174, 162, OC_CARWIN);
+        ol_vrect(w, 136, 170, 144, 178, OC_WHEEL);
+        ol_vrect(w, 176, 170, 184, 178, OC_WHEEL);
+        text_at(w->bounds.left + 4 + OLS(120), w->bounds.top + TBAR_H + 2 + OLS(30),
                 "O U T L A S T", C_WHITE, C_BLUE, false);
-        text_at(w->bounds.left + 4 + 112, w->bounds.top + TBAR_H + 2 + 190,
+        text_at(w->bounds.left + 4 + OLS(112), w->bounds.top + TBAR_H + 2 + OLS(190),
                 "Press N to drive", C_CYAN, C_BLUE, false);
         return;
     }
 
     /* sky */
-    ol_vrect(w, 0, 12, OL_W, OL_HORIZON, C_BLUE);
-    ol_vrect(w, 0, OL_HORIZON, OL_W, OL_HORIZON + 2, C_CYAN);
+    ol_vrect(w, 0, 12, OL_W, OL_HORIZON, OC_SKY);
+    ol_vrect(w, 0, OL_HORIZON, OL_W, OL_HORIZON + 2, OC_HORIZON);
 
     /* road strips, bottom to top */
     for (y = OL_H - 1; y > OL_HORIZON + 1; y -= 2) {
@@ -1331,11 +1396,11 @@ static void outlast_draw(UnoWin *w)
         dx += kOlCurve[seg];
         center = (short)(160 + (dx >> 5));
         l = (short)(center - hw); rgt = (short)(center + hw);
-        ol_vrect(w, 0, y - 2, l, y, (seg & 1) ? C_MAG : C_CYAN);
-        ol_vrect(w, l, y - 2, rgt, y, C_WHITE);
-        ol_vrect(w, rgt, y - 2, OL_W, y, (seg & 1) ? C_MAG : C_CYAN);
+        ol_vrect(w, 0, y - 2, l, y, (seg & 1) ? OC_GRASS_B : OC_GRASS_A);
+        ol_vrect(w, l, y - 2, rgt, y, (seg & 1) ? OC_ROAD_B : OC_ROAD);
+        ol_vrect(w, rgt, y - 2, OL_W, y, (seg & 1) ? OC_GRASS_B : OC_GRASS_A);
         if (seg & 1)                                /* center stripe */
-            ol_vrect(w, center - 2, y - 2, center + 2, y, C_BLUE);
+            ol_vrect(w, center - 2, y - 2, center + 2, y, OC_STRIPE);
         if (y >= OL_H - 4) { gOlRoadL = l; gOlRoadR = rgt; }
         /* trees near this strip */
         {
@@ -1351,8 +1416,8 @@ static void outlast_draw(UnoWin *w)
                     if (th < 2) th = 2; if (th > 40) th = 40;
                     if (tw < 2) tw = 2; if (tw > 24) tw = 24;
                     tx = (t & 1) ? (short)(rgt + 4) : (short)(l - 4 - tw);
-                    ol_vrect(w, (short)(tx + tw / 2 - tw / 8), (short)(y - th / 2), (short)(tx + tw / 2 + tw / 8), y, C_BLUE);
-                    ol_vrect(w, tx, (short)(y - th), (short)(tx + tw), (short)(y - th / 2), C_CYAN);
+                    ol_vrect(w, (short)(tx + tw / 2 - tw / 8), (short)(y - th / 2), (short)(tx + tw / 2 + tw / 8), y, OC_TRUNK);
+                    ol_vrect(w, tx, (short)(y - th), (short)(tx + tw), (short)(y - th / 2), OC_CANOPY);
                 }
             }
         }
@@ -1373,37 +1438,37 @@ static void outlast_draw(UnoWin *w)
                 if (cy > OL_H - 6) cy = OL_H - 6;
                 cx = (short)(160 + (kOlTrafLane[t] ? 30 : -30) * (200 - (short)(rel / 2)) / 200);
                 ol_vrect(w, (short)(cx - cw / 2), (short)(cy - ch2), (short)(cx + cw / 2), cy,
-                         kOlTrafDir[t] ? C_CYAN : C_WHITE);
+                         kOlTrafDir[t] ? OC_TRAF_SAME : OC_TRAF_ON);
                 ol_vrect(w, (short)(cx - cw / 2 + 1), (short)(cy - ch2), (short)(cx + cw / 2 - 1),
-                         (short)(cy - ch2 + (ch2 / 4 ? ch2 / 4 : 1)), C_BLUE);
+                         (short)(cy - ch2 + (ch2 / 4 ? ch2 / 4 : 1)), OC_WHEEL);
             }
         }
     }
 
     /* player car at y=168 */
     if (!(gOlCrash & 4)) {                          /* flash while crashed */
-        ol_vrect(w, gOlX - 14, 168, gOlX + 14, 186, C_MAG);
-        ol_vrect(w, gOlX - 10, 171, gOlX + 10, 177, C_CYAN);
-        ol_vrect(w, gOlX - 16, 182, gOlX - 10, 190, C_BLUE);
-        ol_vrect(w, gOlX + 10, 182, gOlX + 16, 190, C_BLUE);
+        ol_vrect(w, gOlX - 14, 168, gOlX + 14, 186, OC_CAR);
+        ol_vrect(w, gOlX - 10, 171, gOlX + 10, 177, OC_CARWIN);
+        ol_vrect(w, gOlX - 16, 182, gOlX - 10, 190, OC_WHEEL);
+        ol_vrect(w, gOlX + 10, 182, gOlX + 16, 190, OC_WHEEL);
     }
 
     /* HUD */
-    ol_vrect(w, 0, 0, OL_W, 12, C_BLUE);
+    ol_vrect(w, 0, 0, OL_W, 12, OC_HUD);
     strcpy(hud, "Speed ");  fmt_u(gOlSpeed, num); strcat(hud, num);
     strcat(hud, "  Score "); fmt_u(gOlScore, num); strcat(hud, num);
     strcat(hud, "  Time ");  fmt_u(gOlTime, num);  strcat(hud, num);
-    text_at(w->bounds.left + 8, w->bounds.top + TBAR_H + 12, hud,
+    text_at(w->bounds.left + 8, w->bounds.top + TBAR_H + 14, hud,
             C_WHITE, C_BLUE, false);
 
     if (gOlState == 2) {
-        ol_vrect(w, 80, 70, 240, 130, C_BLUE);
-        text_at(w->bounds.left + 4 + 124, w->bounds.top + TBAR_H + 2 + 92,
+        ol_vrect(w, 80, 70, 240, 130, OC_HUD);
+        text_at(w->bounds.left + 4 + OLS(124), w->bounds.top + TBAR_H + 2 + OLS(92),
                 "GAME OVER", C_WHITE, C_BLUE, false);
         strcpy(hud, "Final score "); fmt_u(gOlScore, num); strcat(hud, num);
-        text_at(w->bounds.left + 4 + 104, w->bounds.top + TBAR_H + 2 + 108,
+        text_at(w->bounds.left + 4 + OLS(104), w->bounds.top + TBAR_H + 2 + OLS(108),
                 hud, C_CYAN, C_BLUE, false);
-        text_at(w->bounds.left + 4 + 110, w->bounds.top + TBAR_H + 2 + 122,
+        text_at(w->bounds.left + 4 + OLS(110), w->bounds.top + TBAR_H + 2 + OLS(122),
                 "N: new game", C_CYAN, C_BLUE, false);
     }
 }
@@ -1840,12 +1905,20 @@ static void pacman_draw(UnoWin *w)
         PaintOval(&q);
 #endif
     }
-    /* ghosts */
+    /* ghosts: Blinky red, Pinky pink, Clyde orange; frightened deep blue */
     for (i = 0; i < 3; i++) {
+        static const GameRGB kGhRGB[3] = {
+            { 230, 40, 30, C_MAG }, { 250, 150, 200, C_MAG }, { 245, 160, 50, C_MAG },
+        };
+        static const GameRGB kGhFr  = { 40, 40, 200, C_CYAN };
+        static const GameRGB kGhFl  = { 240, 240, 240, C_WHITE };
         PmGhost *g = &gPmGh[i];
+        const GameRGB *grgb = &kGhRGB[i];
         short col = C_MAG;
-        if (g->state == GH_FRIGHT)
+        if (g->state == GH_FRIGHT) {
+            grgb = (gPmFright < 70 && (gPmFright & 8)) ? &kGhFl : &kGhFr;
             col = (gPmFright < 70 && (gPmFright & 8)) ? C_MAG : C_CYAN;
+        }
         SetRect(&q, w->bounds.left + 4 + g->x,
                 w->bounds.top + TBAR_H + 2 + g->y,
                 w->bounds.left + 4 + g->x + 7,
@@ -1854,7 +1927,8 @@ static void pacman_draw(UnoWin *w)
             InsetRect(&q, 2, 2);
             uno_fill(&q, C_WHITE);
         } else {
-            uno_fill(&q, col);
+            (void)col;
+            fill_rgb(&q, grgb);
             {
                 Rect e = q;
                 e.right = e.left + 2; e.bottom = e.top + 2;
