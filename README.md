@@ -25,7 +25,7 @@ assessment and plan):
 
 | Port | Target hardware | Approach | Status |
 |---|---|---|---|
-| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | Milestone 2.5 — desktop, WM, splash, 10 apps incl. the three games and a music Tracker |
+| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | **Milestone 3** — cooperative multitasking, writable FAT12 disks (DF1, PC-interchangeable), splash, 10 apps incl. the three games and a music Tracker |
 | [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | Milestone 2.5 — desktop, WM, splash, 9 apps incl. the three games |
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2.5 — same set minus the color-only Theme app |
 

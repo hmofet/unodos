@@ -67,7 +67,10 @@ vasmm68k_mot -Fhunkexe -nosym -DAUTOTEST=1 -DAUTOTEST_<X>=1 -o out kernel.asm
 with `<X>` one of `NOTEPAD` (demo text + six up-arrows), `THEME` (applies
 the Sunset preset), `DOSTRIS` (hard-drops six pieces), `OUTLAST` (60
 physics steps), `PACMAN` (150 game steps), `TRACKER` (demo song +
-playback). Plain `-DAUTOTEST=1` launches the Files/Notepad/Music stack.
+playback), `FAT` (mounts DF1 and FAT-chain-reads CHAIN.TXT into
+Notepad), `FATW` (saves the demo text to DF1 and reopens it from disk),
+`MFM` (in-RAM encoder/decoder self-test). Plain `-DAUTOTEST=1` launches
+the Files/Notepad/Music stack.
 
 ## Run
 
@@ -88,13 +91,28 @@ Chip-RAM map: 5 contiguous bitplanes at `$60000`, copper list `$76000`,
 sprite data `$76800`, square-wave + tracker instrument samples
 `$76A00`/`$76B00`, supervisor stack to `$7C000`.
 
-## Known limitations (milestone 2.5)
+## Storage (FAT12 on DF1)
 
-- Storage is the boot ROM-disk (build-time files, RAM-editable); the
-  portable FAT12 core + an MFM track reader are the next milestone, and
-  unlock Notepad/Tracker file save and PC-interchangeable disks.
-- Single cooperative context (the scheduler is scaffolding); real
-  multitasking over the window/app tables is milestone 3.
+`fdd.i` + `fat12.i`: the data drive DF1 holds an 880 KB **FAT12** disk
+(plain ADF-shaped image, built by `mkfat.py`; PC-interchangeable at the
+file level via mtools). Raw MFM track DMA with software sector
+decode/encode, track cache, one-revolution writes, write-protect gate.
+Files mounts it with `m`; Notepad `F1` saves to it; Tracker `s`/`l`
+persists songs. The boot ROM-disk remains as a fallback listing.
+
+## Milestone 3: cooperative multitasking
+
+`scheduler.i`: every open window runs its app proc as a cooperative
+task with a private 2 KB stack. The kernel task pumps input and posts
+keys to the focused window's task mailbox and frame ticks to the
+topmost; `task_wait`/`task_yield` switch full register contexts; window
+create/close spawn/kill the task (ESC stays kernel-side). The app procs
+themselves are unchanged - the generic task body dispatches to them.
+
+## Known limitations (milestone 3)
+
+- FAT12: no delete/rename yet; root-dir only; 16-file listing cap; no
+  write-verify pass; Tracker saves its own format (.MOD export later).
 - Notepad: 2 KB buffer; long lines clip (no horizontal scroll).
 - Tracker: one 32-row pattern, fixed instrument volumes, no effect
   column yet; .MOD import/export needs FAT12.

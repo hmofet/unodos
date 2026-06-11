@@ -5,6 +5,32 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Ports wave 3] - 2026-06-11
+
+### Amiga: real storage + milestone 3
+
+- **FAT12 driver, read + write** (`fdd.i`, `fat12.i`, `mkfat.py`):
+  DF1 trackdisk DMA with Amiga-MFM sector decode and a track cache;
+  full-track MFM encoder (headers, checksums, clock fixup) with
+  one-revolution writes and a write-protect gate; FAT12 mount, root
+  directory, chain reads, cluster alloc/free, dual-FAT flush, file
+  create/overwrite. The 880KB data disk is plain-ADF-shaped (WinUAE
+  serves it directly) and PC-interchangeable at file level via mtools.
+  Files mounts DF1 ('m'); Notepad F1 saves to disk; Tracker s/l
+  persists songs. Hardware notes: writes longer than one revolution
+  wrap and destroy sector 0; the boot loader leaves DF0 selected with
+  its motor on, which corrupts DF1 DMA until the driver quiesces all
+  drives at init.
+- **Milestone 3: cooperative scheduler** (`scheduler.i`): every open
+  window runs its app proc as a task with a private 2KB stack;
+  full-context task_yield, per-task event mailboxes (keys to the
+  focused task, frame ticks to the topmost), spawn/kill tied to window
+  create/close, ESC/close handled kernel-side. No app rewrites - the
+  generic task body dispatches to the existing handlers. Verified:
+  game gravity and the whole FAT12 save/reopen flow run through the
+  task machinery.
+- Mac milestone-3 scheduler remains open (needs C coroutines).
+
 ## [3.27.0] / [Ports wave 2] - 2026-06-11
 
 One day after milestone 2, a parity wave across all three platforms.
