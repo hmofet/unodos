@@ -53,6 +53,16 @@ Next steps:
 - [ ] Sega Genesis showpiece port (per feasibility report SS3.3 —
       optional, after the portable core exists)
 
+## Theming & Splash (2026-06-11) - DONE
+- [x] 8 shared preset palettes on every color-capable platform (x86 VGA
+      via new kernel API 105 + Settings buttons; Amiga Theme app via
+      copper; Mac Theme app via mutable kPalette). Preset 1 = Classic
+      VGA. Custom colors: per-channel RGB editing on Amiga + Mac;
+      element-color mapping (existing) on x86 CGA.
+- [x] Per-platform boot splash stating "UnoDOS 3" with platform art:
+      IBM PC (CRT/unit/keyboard) on x86, striped checkmark on Amiga,
+      happy compact Mac on the Mac targets.
+
 ## Kernel / Window Manager
 - [ ] Modal window flag (WIN_FLAG_MODAL) — block focus changes when modal is active
 - [ ] Window minimize/maximize
