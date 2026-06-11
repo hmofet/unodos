@@ -176,6 +176,7 @@ super:
         move.w  #4,AUD0LEN(a6)      ; 4 words = 8 samples
         bsr     tk_init             ; synthesize the Tracker instrument waves
         bsr     fdd_init            ; quiesce all floppy drives (DF0 incl.)
+        bsr     sched_init          ; milestone 3: cooperative tasks
 
         move.l  #COPLIST,COP1LCH(a6)
         move.w  COPJMP1(a6),d0
@@ -416,12 +417,28 @@ main_loop:
         bsr     handle_events
         bsr     music_tick
         bsr     gm_tick
-        bsr     dostris_tick
-        bsr     outlast_tick
-        bsr     pacman_tick
         bsr     tracker_tick
         bsr     app_ticks
+        bsr     post_ticks          ; frame tick -> the focused app task
+        bsr     task_yield          ; run the app tasks (milestone 3)
         bra     main_loop
+
+; post_ticks - put a tick event in the topmost window's task mailbox
+post_ticks:
+        movem.l d0-d3/a0,-(sp)
+        move.w  zcount(pc),d0
+        beq     .out
+        lea     zlist(pc),a0
+        move.w  zcount(pc),d1
+        subq.w  #1,d1
+        moveq   #0,d0
+        move.b  (a0,d1.w),d0        ; topmost window slot
+        moveq   #2,d1               ; tick
+        moveq   #0,d2
+        moveq   #0,d3
+        bsr     task_post
+.out:   movem.l (sp)+,d0-d3/a0
+        rts
 
 ; ----------------------------------------------------------------------------
 ; handle_events - drain the queue (keyboard navigation)
@@ -436,77 +453,26 @@ handle_events:
         move.w  d1,d2
         lsr.w   #8,d2               ; d2 = raw scancode
         and.w   #$FF,d1             ; d1 = ascii (0 if none)
-        ; focused (topmost) window gets first refusal (PORT-SPEC SS3)
+        ; focused (topmost) window gets first refusal (PORT-SPEC SS3):
+        ; ESC stays kernel-side (it kills the task); everything else is
+        ; posted to the focused window's task mailbox (milestone 3)
         move.w  zcount(pc),d3
         beq     .desktop
-        movem.w d1-d2,-(sp)
-        move.w  zcount(pc),d2
-        subq.w  #1,d2
-        bsr     zwin_ptr            ; a2 = topmost (preserves regs)
-        moveq   #0,d3
-        move.b  WPROC(a2),d3
-        movem.w (sp)+,d1-d2
-        cmp.w   #2,d3
-        beq     .k_files
-        cmp.w   #3,d3
-        beq     .k_notepad
-        cmp.w   #4,d3
-        beq     .k_music
-        cmp.w   #5,d3
-        beq     .k_theme
-        cmp.w   #6,d3
-        beq     .k_dostris
-        cmp.w   #7,d3
-        beq     .k_outlast
-        cmp.w   #8,d3
-        beq     .k_pacman
-        cmp.w   #9,d3
-        beq     .k_tracker
-.k_global:
         cmp.b   #27,d1              ; ESC closes topmost
-        bne     .next
+        bne     .post
         bsr     close_topmost
         bra     .next
-.k_files:
-        bsr     files_key           ; in: d1=ascii d2=raw; out: d0=0 consumed
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_notepad:
-        bsr     notepad_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_music:
-        bsr     music_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_theme:
-        bsr     theme_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_dostris:
-        bsr     dostris_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_outlast:
-        bsr     outlast_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_pacman:
-        bsr     pacman_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
-.k_tracker:
-        bsr     tracker_key
-        tst.w   d0
-        beq     .next
-        bra     .k_global
+.post:  lea     zlist(pc),a0
+        move.w  zcount(pc),d0
+        subq.w  #1,d0
+        moveq   #0,d3
+        move.b  (a0,d0.w),d3        ; topmost window slot
+        move.w  d3,d0
+        move.w  d2,d3               ; raw
+        move.w  d1,d2               ; ascii
+        moveq   #1,d1               ; key event
+        bsr     task_post
+        bra     .next
 .desktop:
         cmp.b   #$4E,d2
         beq     .selright
@@ -945,6 +911,8 @@ win_create:
         move.b  d6,(a0,d1.w)
         addq.w  #1,d1
         move.w  d1,zcount-vars(a4)
+        move.w  d6,d0
+        bsr     task_spawn          ; milestone 3: the app gets a task
         bsr     draw_window         ; topmost: nothing else needs repainting
         rts
 
@@ -1047,6 +1015,14 @@ close_window:
         move.w  d0,d2
         bsr     zwin_ptr
         sf      WSTATE(a2)
+        ; free the app task (slot from the window entry address)
+        movem.l d0/a0,-(sp)
+        lea     wintab(pc),a0
+        move.l  a2,d0
+        sub.l   a0,d0
+        lsr.w   #4,d0
+        bsr     task_kill
+        movem.l (sp)+,d0/a0
         move.w  (sp)+,d0
         lea     vars(pc),a4
         lea     zlist-vars(a4),a0
@@ -1943,6 +1919,7 @@ ser_puts:
         include "tracker.i"
         include "fdd.i"
         include "fat12.i"
+        include "scheduler.i"
 
 ; ============================================================================
 ; Data
@@ -2183,6 +2160,9 @@ fat_fatstart:   dc.w    0
 fat_rootstart:  dc.w    0
 fat_datastart:  dc.w    0
 fat_count:      dc.w    0
+cur_task:       dc.w    0           ; scheduler: running task index
+        even
+task_tab:       ds.b    NTASKS*TSK_SIZE
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 np_fatidx:      dc.w    0           ; FAT root index of the open file
 mus_ix:         dc.w    0
