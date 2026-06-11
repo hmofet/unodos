@@ -6,14 +6,14 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 
 ## Overview
 
-UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a 45KB kernel with 105 system calls, a window manager, two filesystems, cooperative multitasking, and 14 applications, fits on a single 1.44MB floppy disk.
+UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 105 system calls, a window manager, two filesystems, cooperative multitasking, and 16 applications, fits on a single 1.44MB floppy disk.
 
 ### Philosophy
 
 - **GUI-First**: No command line. The system boots directly into a graphical desktop with draggable icons, windows, and mouse support.
 - **Bare Metal**: Runs on raw hardware using only BIOS services. No DOS, no runtime, no dependencies.
 - **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an original IBM PC with 128KB RAM and a CGA card.
-- **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and all 14 applications fit on one floppy disk.
+- **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and all 16 applications fit on one floppy disk.
 
 ## Screenshots
 
@@ -117,8 +117,8 @@ Two filesystem drivers with a unified API that routes by mount handle:
 ### Multitasking
 
 - **Cooperative round-robin scheduler** — apps yield control with `app_yield`, kernel switches to next runnable task
-- **Up to 6 concurrent user apps** plus the launcher shell (7 total)
-- **Dynamic segment allocation** — each app loads into its own 64KB segment from a pool (0x3000-0x8000)
+- **Up to 5 concurrent user apps** plus the launcher shell (6 total)
+- **Dynamic segment allocation** — each app loads into its own 64KB segment from a pool (0x3000-0x7000)
 - **Per-task state** — the kernel saves and restores registers, stack pointer, draw context, font selection, and caller segments on every context switch
 - **Focus-aware input** — only the focused app receives keyboard events; mouse events go to the appropriate window owner
 - **Automatic cleanup** — when an app exits, its windows are destroyed, speaker is silenced, and its segment is freed
@@ -142,7 +142,7 @@ PC speaker tone generation via PIT Channel 2 — specify frequency in Hz. The sp
 
 ### Boot Chain
 
-**Floppy boot**: Boot sector (512 bytes) loads Stage 2 (2KB), which loads the kernel (45KB) with a progress indicator. Each stage verifies a magic signature before transferring control.
+**Floppy boot**: Boot sector (512 bytes) loads Stage 2 (2KB), which loads the kernel (104 sectors / 52KB reserved area) with a progress indicator. Each stage verifies a magic signature before transferring control.
 
 **Hard drive boot**: MBR relocates to 0x0600, reads VBR from the first partition, VBR loads Stage 2, Stage 2 parses the FAT16 BPB and loads KERNEL.BIN from the filesystem. Supports both LBA (INT 13h extensions) and CHS fallback, with diagnostic output showing the read method and root directory LBA.
 
@@ -175,7 +175,7 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 - **Screen blit** — copy a rectangular region of the screen (used for smooth scrolling, animations)
 - **Read pixel** — query the color value at any screen coordinate
 
-## Applications (14 included)
+## Applications (16 included)
 
 | App | Size | Description |
 |-----|------|-------------|
@@ -217,21 +217,20 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 0x0000:0000   IVT + BIOS Data Area           ~1.25 KB
 0x0000:7C00   Boot Sector (temporary)         512 B
 0x0800:0000   Stage 2 Loader                  2 KB
-0x1000:0000   Kernel                          45 KB
-0x1400:0000   Heap (malloc pool)              ~48 KB
+0x1000:0000   Kernel                          52 KB area (104 sectors, may grow to 64 KB)
 0x2000:0000   Shell/Launcher (fixed)          64 KB
 0x3000:0000   User app slot 0 (dynamic)       64 KB
 0x4000:0000   User app slot 1                 64 KB
 0x5000:0000   User app slot 2                 64 KB
 0x6000:0000   User app slot 3                 64 KB
 0x7000:0000   User app slot 4                 64 KB
-0x8000:0000   User app slot 5                 64 KB
+0x8000:0000   Heap (malloc pool)              60 KB
 0x9000:0000   Scratch (clipboard + dialogs)   64 KB
 0xA000:0000   VGA/VESA video memory           64 KB
 0xB800:0000   CGA video memory                16 KB
 ```
 
-Total: 7 app segments (1 shell + 6 user) using 448KB of the 640KB real-mode address space.
+Total: 6 app segments (1 shell + 5 user) using 384KB of the 640KB real-mode address space.
 
 ## Building
 
@@ -308,7 +307,7 @@ sudo dd if=build/unodos-hd.img of=/dev/sdX bs=512
 
 ```
 unodos/
-├── apps/                    # Applications (14 NASM source files)
+├── apps/                    # Applications (16 NASM source files)
 │   ├── launcher.asm         # Desktop launcher / shell
 │   ├── notepad.asm          # Text editor
 │   ├── browser.asm          # File manager
@@ -430,8 +429,8 @@ Assemble with `nasm -f bin -o MYAPP.BIN app.asm`, place in the FAT filesystem, a
 
 ```
 ┌──────────────────────────────────────────────┐
-│               Applications (14)              │
-│   6 concurrent user apps + launcher shell    │
+│               Applications (16)              │
+│   5 concurrent user apps + launcher shell    │
 │   Each in its own 64KB segment (ORG 0x0000)  │
 ├──────────────────────────────────────────────┤
 │           INT 0x80 System Calls              │

@@ -5,11 +5,13 @@ Add FAT12 filesystem to UnoDOS floppy image after the OS sectors.
 The floppy layout is:
   Sector 0: Boot sector
   Sectors 1-4: Stage2
-  Sector 5: Reserved
-  Sectors 6-61: Kernel (28KB = 56 sectors)
-  Sectors 62+: FAT12 filesystem with apps
+  Sectors 5-108: Kernel (104 sectors = 52KB load area)
+  Sector 109: Spare
+  Sectors 110+: FAT12 filesystem with apps
 
-This script writes a FAT12 filesystem starting at sector 62.
+This script writes a FAT12 filesystem starting at sector 110.
+Keep FS_START_SECTOR in sync with boot/stage2.asm KERNEL_SECTORS,
+boot/boot.asm BPB reserved sectors, and apps/mkboot.asm FLOPPY_FS_START.
 """
 
 import sys
@@ -17,8 +19,8 @@ import struct
 import os
 
 SECTOR_SIZE = 512
-OS_SECTORS = 94  # Boot + Stage2 + Reserved + Kernel (expanded Build 369)
-FS_START_SECTOR = 94
+OS_SECTORS = 110  # Boot (1) + Stage2 (4) + Kernel (104) + spare (1)
+FS_START_SECTOR = 110  # sync: boot/boot.asm bpb_rsvd, boot/stage2.asm KERNEL_SECTORS
 
 def format_fat_filename(filename):
     """Convert filename to 8.3 FAT format (11 bytes, space-padded)."""

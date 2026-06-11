@@ -134,7 +134,7 @@ Design tips:
 
 ## Application Lifecycle
 
-1. **Kernel loads** the .BIN file into a free segment (0x3000-0x8000)
+1. **Kernel loads** the .BIN file into a free segment (0x3000-0x7000)
 2. **Far CALL** to `segment:0x0050` - your entry point runs
 3. **App initializes**: save registers, set DS, create window, set drawing context
 4. **Event loop**: poll for events, draw content, handle input
@@ -147,7 +147,7 @@ Design tips:
 
 | Register | Value |
 |----------|-------|
-| CS | Your app's segment (0x3000-0x8000) |
+| CS | Your app's segment (0x3000-0x7000) |
 | DS | Unknown - **you must set it** |
 | ES | Unknown - set as needed |
 | SS:SP | Kernel stack |

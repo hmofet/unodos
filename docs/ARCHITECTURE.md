@@ -8,7 +8,7 @@ UnoDOS uses a three-stage boot architecture:
 
 1. **Stage 1 (Boot Sector)**: 512 bytes, loaded by BIOS from the first sector
 2. **Stage 2 (Loader)**: 2KB, loaded by Stage 1, loads and verifies the kernel
-3. **Kernel**: 28KB, loaded by Stage 2, contains the main operating system
+3. **Kernel**: 44KB, loaded by Stage 2, contains the main operating system
 
 This design separates the bootloader from the OS code, allowing the kernel to grow independently while maintaining a simple, reliable boot process.
 
@@ -49,7 +49,7 @@ Power On
 ┌─────────────────────────────────────────────────────────┐
 │  Stage 2: Loader (boot/stage2.asm)                      │
 │  - Display "Loading kernel" message                     │
-│  - Load kernel from sectors 6-61 (28KB) with progress   │
+│  - Load kernel from sectors 6-93 (44KB) with progress   │
 │  - Verify kernel signature ("UK" at offset 0)           │
 │  - Jump to kernel at 0x1000:0x0002                      │
 └─────────────────────────────────────────────────────────┘
@@ -88,16 +88,15 @@ Linear Address    Segment:Offset    Description
 0x07C00-0x07DFF   0000:7C00-7DFF    Boot Sector (512 bytes)
 0x07E00-0x07FFF   0000:7E00-7FFF    Stack area
 0x08000-0x087FF   0800:0000-07FF    Stage 2 Loader (2KB)
-0x10000-0x16FFF   1000:0000-6FFF    Kernel (28KB)
+0x10000-0x1AFFF   1000:0000-AFFF    Kernel (44KB, may grow to 64KB)
   └─ 0x11060     1000:1060          API table
-0x14000-0x1FFFF   1400:0000+        Heap (malloc pool)
 0x20000-0x2FFFF   2000:0000-FFFF    Shell/Launcher segment (fixed)
 0x30000-0x3FFFF   3000:0000-FFFF    User app slot 0 (dynamic pool)
 0x40000-0x4FFFF   4000:0000-FFFF    User app slot 1
 0x50000-0x5FFFF   5000:0000-FFFF    User app slot 2
 0x60000-0x6FFFF   6000:0000-FFFF    User app slot 3
 0x70000-0x7FFFF   7000:0000-FFFF    User app slot 4
-0x80000-0x8FFFF   8000:0000-FFFF    User app slot 5
+0x80000-0x8EFFF   8000:0000-EFFF    Kernel heap (malloc pool, 60KB)
 0x90000-0x9FFFF   9000:0000-FFFF    Scratch buffer (window drag content)
 0xA0000-0xBFFFF   ----:----         Video memory (EGA/VGA)
 0xB8000-0xBFFFF   B800:0000-7FFF    CGA video memory (used by UnoDOS)
@@ -111,7 +110,7 @@ Sector    Offset      Content                 Size
 ────────────────────────────────────────────────────
 1         0x0000      Boot sector             512 bytes
 2-5       0x0200      Stage 2 Loader          2KB (4 sectors)
-6-61      0x0A00      Kernel                  28KB (56 sectors)
+6-93      0x0A00      Kernel                  44KB (88 sectors)
 62+       0x7A00      FAT12 filesystem        Remaining space
 ```
 
@@ -151,7 +150,7 @@ Loading kernel................................ OK
 ## Kernel
 
 **File**: `kernel/kernel.asm`
-**Size**: 28KB (56 sectors)
+**Size**: 44KB (88 sectors)
 **Load Address**: 0x1000:0x0000 (linear 0x10000 = 64KB mark)
 
 ### Key Subsystems
@@ -170,8 +169,8 @@ Loading kernel................................ OK
 | PC Speaker | PIT Channel 2 tone generation, auto-silence on exit |
 | Drawing Context | Window-relative coordinate translation for drawing APIs |
 | Desktop Icons | 12 registered icon slots, kernel repaints during window operations |
-| Multitasking | Cooperative round-robin scheduler, 6 concurrent user apps |
-| Segment Pool | Dynamic segment allocation (0x3000-0x8000) with alloc/free |
+| Multitasking | Cooperative round-robin scheduler, 5 concurrent user apps |
+| Segment Pool | Dynamic segment allocation (0x3000-0x7000) with alloc/free |
 | GUI Toolkit | Button, radio, checkbox, textfield, scrollbar, listitem, progress, groupbox, separator, combobox, menubar, hit testing, font selection, color themes |
 | Clipboard | System-wide clipboard (4KB at 0x9000:0x0000) with copy/paste/query |
 | Popup Menu | Generic popup menu system (open, close, hit-test) |
@@ -256,11 +255,11 @@ Color palette (Palette 1):
 0x5000:0x0000  User app slot 2
 0x6000:0x0000  User app slot 3
 0x7000:0x0000  User app slot 4
-0x8000:0x0000  User app slot 5
+0x8000:0x0000  Kernel heap (malloc pool, Build 401+)
 0x9000:0x0000  Scratch buffer (window drag content)
 ```
 
-- Up to 6 concurrent user apps, each in its own 64KB segment
+- Up to 5 concurrent user apps, each in its own 64KB segment
 - Segments allocated from pool by `alloc_segment`, freed by `free_segment`
 - Shell at 0x2000 survives while user apps run
 - Apps return via RETF, segment freed on exit

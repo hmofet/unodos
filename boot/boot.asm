@@ -16,7 +16,7 @@
 bpb_oem:        db 'UNODOS  '  ; offset  3: OEM name (8 bytes)
 bpb_bps:        dw 512          ; offset 11: bytes per sector
 bpb_spc:        db 1            ; offset 13: sectors per cluster
-bpb_rsvd:       dw 94           ; offset 14: reserved sectors (OS area, expanded Build 369)
+bpb_rsvd:       dw 110          ; offset 14: reserved sectors (OS area: 1 boot + 4 stage2 + 104 kernel + 1 spare; sync with boot/stage2.asm KERNEL_SECTORS and tools/add_floppy_fs.py FS_START_SECTOR)
 bpb_fats:       db 2            ; offset 16: number of FATs
 bpb_rootent:    dw 224          ; offset 17: root directory entries
 bpb_sectors:    dw 2880         ; offset 19: total sectors (1.44MB)

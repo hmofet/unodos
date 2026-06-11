@@ -41,7 +41,7 @@
 
 ### Memory Management
 - First-fit heap allocator (malloc/free)
-- Heap at segment 0x1400
+- Heap in dedicated segment 0x8000 (60KB)
 
 ### Input
 - INT 09h keyboard driver with scan code translation, modifier tracking
@@ -75,8 +75,8 @@
 
 ### Multitasking
 - Cooperative round-robin scheduler
-- Up to 6 concurrent user apps + launcher
-- Dynamic segment allocation from pool (0x3000-0x8000)
+- Up to 5 concurrent user apps + launcher
+- Dynamic segment allocation from pool (0x3000-0x7000)
 - Automatic segment cleanup on task exit
 - Task info query API
 
@@ -255,10 +255,10 @@ For full register-level details, see [API_REFERENCE.md](API_REFERENCE.md).
 0x0000:0x0400   BIOS Data Area                256 bytes
 0x0000:0x7C00   Boot sector                   512 bytes
 0x0800:0x0000   Stage2 loader                 2 KB
-0x1000:0x0000   Kernel                        28 KB
-0x1400:0x0000   Heap (malloc pool)            ~64 KB
+0x1000:0x0000   Kernel                        44 KB (may grow to 64 KB)
 0x2000:0x0000   Shell/Launcher segment        64 KB (fixed)
-0x3000-0x8000   User app slots 0-5            6 x 64 KB (dynamic)
+0x3000-0x7000   User app slots 0-4            5 x 64 KB (dynamic)
+0x8000:0x0000   Heap (malloc pool)            60 KB
 0x9000:0x0000   Scratch buffer                64 KB
   0x0000-0x0FFF   System clipboard (4KB)
   0x1000+         File dialog list buffer

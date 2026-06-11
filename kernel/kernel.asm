@@ -212,6 +212,8 @@ int_80_handler:
     ; cumulative translation offsets (e.g. Music staff lines drifting).
     mov [_save_bx], bx
     mov [_save_cx], cx
+    mov [_save_dx], dx               ; hoisted: must be valid on z-clip early exit
+    mov [_save_si], si               ; SI still caller's value here (before push si)
     mov byte [_did_translate], 1
     mov byte [_did_scale], 0
 
@@ -258,9 +260,8 @@ int_80_handler:
     cmp byte [_did_scale], 0
     je .no_dim_scale
 
-    ; Save originals for restore after API call
-    mov [_save_dx], dx
-    mov [_save_si], si
+    ; (_save_dx/_save_si are snapshotted in .do_translate so they are
+    ; valid even when the z-clip early exit skips this block)
 
     ; Group A: Scale DX (width) AND SI (height)
     ;   APIs 0-2 (pixel/rect/fill), 5 (clear_area), 51 (button),
@@ -387,6 +388,7 @@ int80_return_point:
     ; --- Cursor unprotect (A1 — centralized, Build 396) ---
     cmp byte [_did_cursor_protect], 0
     je .no_cursor_restore
+    mov byte [_did_cursor_protect], 0   ; consume: one-shot per dispatch
     dec byte [cursor_locked]
     call mouse_cursor_show
 .no_cursor_restore:
@@ -395,10 +397,32 @@ int80_return_point:
     ; DS is still kernel (0x1000) at this point (caller DS is on stack).
     cmp byte [_did_translate], 0
     je .no_coord_restore
+    mov byte [_did_translate], 0        ; consume: one-shot per dispatch
     mov bx, [_save_bx]
+    cmp ah, 50                          ; API 50 returns final Y in CX — don't clobber
+    jne .restore_cx
+    push si                             ; convert absolute Y -> window-relative
+    push ax
+    xor ah, ah
+    mov al, [draw_context]
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    shl si, 1                           ; SI = handle * 32 (8086-safe)
+    add si, window_table
+    sub cx, [si + WIN_OFF_Y]
+    sub cx, [titlebar_height]
+    pop ax
+    pop si
+    jmp .cx_done
+.restore_cx:
     mov cx, [_save_cx]
+.cx_done:
     cmp byte [_did_scale], 0
     je .no_coord_restore
+    mov byte [_did_scale], 0            ; consume: one-shot per dispatch
     mov dx, [_save_dx]
     mov si, [_save_si]
 .no_coord_restore:
@@ -452,6 +476,16 @@ install_keyboard:
     mov word [es:0x0024], int_09_handler
     mov word [es:0x0026], 0x1000
     mov byte [use_bios_keyboard], 0
+
+    ; Seed NumLock state from the BIOS keyboard flag byte (0040:0017 bit 5)
+    ; so machines whose BIOS boots with NumLock on start in the digit state
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x0017]
+    and al, 0x20
+    jz .nl_off
+    mov byte [kbd_numlock_state], 1
+.nl_off:
     pop bx
     pop ax
     pop es
@@ -496,11 +530,37 @@ int_09_handler:
     je .alt_press
     cmp al, 0xB8                    ; Alt release
     je .alt_release
+    cmp al, 0x45                    ; NumLock make code: toggle state
+    je .numlock_toggle
 
     ; Check if it's a key release (bit 7 set)
     test al, 0x80
     jnz .done
 
+    ; Translation tables only cover scancodes 0x00-0x5F; ignore the rest
+    cmp al, 0x60
+    jae .done
+
+    ; XT 83-key / AT 84-key keyboards never send E0; their cursor keys are
+    ; the numpad (bare 0x47-0x53). With NumLock off, map them to the same
+    ; special codes (128-136) as the E0 path.
+    cmp byte [kbd_numlock_state], 0
+    jne .translate                  ; NumLock on: digits via table
+    cmp al, 0x47
+    jb .translate
+    cmp al, 0x53
+    ja .translate
+    cmp al, 0x4A                    ; numpad '-' always types '-'
+    je .translate
+    cmp al, 0x4C                    ; numpad '5': no cursor meaning
+    je .translate
+    cmp al, 0x4E                    ; numpad '+' always types '+'
+    je .translate
+    cmp al, 0x52                    ; Ins: no special code defined
+    je .translate
+    jmp .map_special                ; 0x47/48/49/4B/4D/4F/50/51/53
+
+.translate:
     ; Translate scan code to ASCII
     mov bx, ax                      ; BX = scan code
     xor bh, bh
@@ -532,6 +592,9 @@ int_09_handler:
     test al, 0x80
     jnz .done
     ; Map extended scancodes to special key codes
+    ; (.map_special is also entered with bare numpad scancodes when
+    ;  NumLock is off — XT/84-key cursor navigation)
+.map_special:
     cmp al, 0x48                    ; Up arrow
     je .arrow_up
     cmp al, 0x50                    ; Down arrow
@@ -641,6 +704,10 @@ int_09_handler:
     mov byte [kbd_ctrl_state], 0
     jmp .done
 
+.numlock_toggle:
+    xor byte [kbd_numlock_state], 1
+    jmp .done
+
 .alt_press:
     mov byte [kbd_alt_state], 1
     jmp .done
@@ -649,6 +716,15 @@ int_09_handler:
     mov byte [kbd_alt_state], 0
 
 .done:
+    ; XT (8255 PPI) keyboard acknowledge: pulse port 0x61 bit 7 to clear
+    ; the keyboard shift register and IRQ1 latch. Required on genuine
+    ; PC/XT; harmless on AT (read-modify-write preserves bits 0-6).
+    in al, 0x61
+    mov ah, al
+    or al, 0x80
+    out 0x61, al
+    mov al, ah
+    out 0x61, al
     ; Send EOI to PIC
     mov al, 0x20
     out 0x20, al
@@ -692,7 +768,21 @@ kbd_getchar:
 kbd_wait_key:
     call kbd_getchar
     test al, al
-    jz kbd_wait_key
+    jnz .kw_done
+    push ds
+    push es                         ; pusha in yield doesn't cover segregs
+    push bx
+    mov bx, 0x1000
+    mov ds, bx
+    cmp byte [current_task], 0xFF   ; Kernel/boot context (no task)?
+    je .kw_skip                     ; Yes - plain poll; yield would never return
+    call app_yield_stub             ; Let other tasks run
+.kw_skip:
+    pop bx
+    pop es
+    pop ds
+    jmp kbd_wait_key
+.kw_done:
     ret
 
 ; Clear keyboard buffer and event queue
@@ -1038,6 +1128,21 @@ int_74_handler:
     ; Read mouse byte
     in al, KBC_DATA
 
+    ; Desync guard: bytes within a packet arrive <2ms apart.
+    ; >=2 BIOS ticks (~110ms) since the previous byte means a
+    ; new packet is starting - re-arm framing at index 0.
+    push es
+    mov bx, 0x0040
+    mov es, bx
+    mov bx, [es:0x006C]             ; Current BIOS tick (atomic: IF=0 here)
+    pop es
+    mov cx, bx
+    sub cx, [mouse_last_byte_tick]  ; Elapsed ticks (wrap-safe)
+    mov [mouse_last_byte_tick], bx
+    cmp cx, 2
+    jb .store_byte
+    mov byte [mouse_packet_idx], 0  ; Idle gap - restart framing
+.store_byte:
     ; Store byte in packet buffer
     xor bx, bx
     mov bl, [mouse_packet_idx]
@@ -1051,6 +1156,10 @@ int_74_handler:
     jne .check_complete
     test al, 0x08                   ; Bit 3 = always 1 in first byte
     jz .resync                      ; Not synced, reset
+    mov ah, al                      ; Reject candidates with both overflow
+    and ah, 0xC0                    ; bits set: a real status byte never has
+    cmp ah, 0xC0                    ; XO and YO together, while delta bytes
+    je .resync                      ; from a misframed stream often do
 
 .check_complete:
     ; Check if packet complete (3 bytes)
@@ -1063,15 +1172,15 @@ int_74_handler:
     ; Byte 1: X movement (signed 9-bit with XS)
     ; Byte 2: Y movement (signed 9-bit with YS)
 
-    ; Get buttons (bits 0-2 of byte 0)
-    mov al, [mouse_packet]
-    and al, 0x07
-    mov [mouse_buttons], al
-
-    ; Check for overflow - skip if overflow
+    ; Check for overflow first - discard packet (and don't let a garbage
+    ; status byte inject phantom button states)
     mov al, [mouse_packet]
     test al, 0xC0                   ; XO or YO set?
     jnz .reset_packet
+
+    ; Get buttons (bits 0-2 of byte 0)
+    and al, 0x07
+    mov [mouse_buttons], al
 
     ; Erase cursor before updating position
     call mouse_cursor_hide
@@ -1150,8 +1259,8 @@ int_74_handler:
     jmp .send_eoi
 
 .not_mouse:
-    ; Not mouse data - chain to keyboard or ignore
-    in al, KBC_DATA                 ; Clear the byte
+    ; Not mouse data - leave the byte in the KBC output buffer so it keeps
+    ; IRQ1 asserted and int_09_handler consumes it; just EOI
 
 .send_eoi:
     ; Send EOI to both PICs (slave then master)
@@ -1810,6 +1919,7 @@ auto_load_launcher:
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
     popa                            ; Consume dummy pusha frame (Build 198 added this)
+    pop es                          ; restore initial ES (= app segment)
     ret                             ; Now pops int80_return_point correctly
 
 .fail_load:
@@ -2784,7 +2894,7 @@ mode12h_fill_rect:
 ; ============================================================================
 
 ; vesa_set_bank - Switch VESA display bank
-; Input: AX = bank number (in granularity units)
+; Input: AX = bank number (in 64KB units)
 ; Preserves all registers except flags
 vesa_set_bank:
     cmp ax, [vesa_cur_bank]
@@ -2792,12 +2902,16 @@ vesa_set_bank:
     mov [vesa_cur_bank], ax
     push ax
     push bx
+    push cx
     push dx
-    mov dx, ax                     ; DX = bank number
-    xor bx, bx                    ; BH=0, BL=0 (window A)
+    mov dx, ax                     ; DX = bank in 64KB units
+    mov cl, [vesa_bank_shift]
+    shl dx, cl                     ; convert to granularity units
+    xor bx, bx                    ; BH=0 set window, BL=0 window A
     mov ax, 0x4F05                 ; VESA set window
     int 0x10
     pop dx
+    pop cx
     pop bx
     pop ax
 .vsb_done:
@@ -2902,6 +3016,7 @@ vesa_fill_rect:
     push dx
     mov dx, 0
     sub dx, di                     ; DX = bytes until boundary (0x10000 - DI)
+    jz .vf_no_cross                ; DI=0: full 64KB remains in this bank; row (width <= 0xFFFF) cannot cross
     cmp si, dx                     ; width <= remaining?
     jbe .vf_no_cross
     ; Row crosses bank boundary
@@ -3024,7 +3139,8 @@ draw_welcome_box:
 
 draw_char:
     pusha
-
+    jmp draw_char_fastgate          ; CGA row-blit fast path (after API table)
+.pp:                                ; per-pixel fallback (clipping/other modes)
     xor bx, bx
     mov bl, [draw_font_height]      ; BX = font height (BH zeroed above)
     mov bp, bx                      ; BP = row counter
@@ -3033,11 +3149,29 @@ draw_char:
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
+    ; Row-level Y clip (font byte already consumed by lodsb above)
+    cmp byte [clip_enabled], 0
+    je .y_ok
+    cmp bx, [clip_y1]
+    jb .skip_row
+    cmp bx, [clip_y2]
+    jbe .y_ok
+.skip_row:
+    jmp .row_next
+.y_ok:
     mov cx, [draw_x]                ; CX = current X
     xor dx, dx
     mov dl, [draw_font_width]       ; DX = glyph column counter
 
 .col_loop:
+    ; Pixel-level X clip
+    cmp byte [clip_enabled], 0
+    je .x_ok
+    cmp cx, [clip_x1]
+    jb .next_pixel
+    cmp cx, [clip_x2]
+    ja .next_pixel
+.x_ok:
     test ah, 0x80                   ; Check leftmost bit
     jz .clear_pixel
     call plot_pixel_white           ; "1" bit: foreground color
@@ -3067,26 +3201,44 @@ draw_char:
     cmp byte [draw_bg_color], 0
     jne .gap_color
 .gap_black:
+    cmp byte [clip_enabled], 0
+    je .gb_plot
+    cmp cx, [clip_x1]
+    jb .gb_next
+    cmp cx, [clip_x2]
+    ja .gb_next
+.gb_plot:
     call plot_pixel_black
+.gb_next:
     inc cx
     dec dl
     jnz .gap_black
     jmp .no_gap
 .gap_color:
+    cmp byte [clip_enabled], 0
+    je .gc_plot
+    cmp cx, [clip_x1]
+    jb .gc_next
+    cmp cx, [clip_x2]
+    ja .gc_next
+.gc_plot:
     push dx
     mov dl, [draw_bg_color]
     call plot_pixel_color
     pop dx
+.gc_next:
     inc cx
     dec dl
     jnz .gap_color
 .no_gap:
     pop dx
 
+.row_next:
     inc bx                          ; Next Y
     dec bp                          ; Decrement row counter
-    jnz .row_loop
-
+    jz .advance
+    jmp .row_loop
+.advance:
     xor ax, ax
     mov al, [draw_font_advance]
     add [draw_x], ax                ; Advance to next character position
@@ -3932,7 +4084,9 @@ mouse_hittest_resize:
     mov cx, [mouse_x]
     mov dx, [mouse_y]
 
-    ; Find topmost visible window whose resize handle contains the click
+    ; Step 1: find topmost visible window whose FULL AREA contains click.
+    ; The old single-pass corner scan ignored occlusion: a click inside the
+    ; topmost window's body could start resizing a hidden window underneath.
     xor si, si                      ; SI = window index
     mov di, window_table
     mov bp, 0xFFFF                  ; BP = best handle (0xFFFF = none)
@@ -3945,34 +4099,19 @@ mouse_hittest_resize:
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .rht_next
 
-    ; Skip frameless windows (no resize handle)
-    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_BORDER
-    jz .rht_next
-
-    ; Check if click is in bottom-right 10x10 zone
-    ; corner_x = win_x + win_w - 10
     mov ax, [di + WIN_OFF_X]
-    add ax, [di + WIN_OFF_WIDTH]
-    sub ax, 10
-    cmp cx, ax                      ; mouse_x >= corner_x?
+    cmp cx, ax
     jb .rht_next
-    ; Also check mouse_x < win_x + win_w
-    add ax, 10
+    add ax, [di + WIN_OFF_WIDTH]
     cmp cx, ax
     jae .rht_next
-
-    ; corner_y = win_y + win_h - 10
     mov ax, [di + WIN_OFF_Y]
-    add ax, [di + WIN_OFF_HEIGHT]
-    sub ax, 10
-    cmp dx, ax                      ; mouse_y >= corner_y?
+    cmp dx, ax
     jb .rht_next
-    ; Also check mouse_y < win_y + win_h
-    add ax, 10
+    add ax, [di + WIN_OFF_HEIGHT]
     cmp dx, ax
     jae .rht_next
 
-    ; Hit! Check if higher z-order than current best
     mov al, [di + WIN_OFF_ZORDER]
     cmp bp, 0xFFFF
     je .rht_new_best
@@ -3990,7 +4129,29 @@ mouse_hittest_resize:
 
 .rht_found:
     cmp bp, 0xFFFF
-    je .rht_no_hit
+    je .rht_no_hit                  ; Click not inside any window
+
+    ; Step 2: click must be in THAT window's bottom-right 10x10 corner
+    mov ax, bp
+    push cx
+    mov cl, 5
+    shl ax, cl                      ; AX = index * 32 (8086-safe)
+    pop cx
+    add ax, window_table
+    mov di, ax
+    test byte [di + WIN_OFF_FLAGS], WIN_FLAG_BORDER
+    jz .rht_no_hit                  ; Frameless: no resize handle
+    mov ax, [di + WIN_OFF_X]
+    add ax, [di + WIN_OFF_WIDTH]
+    sub ax, 10
+    cmp cx, ax                      ; mouse_x >= win_x + win_w - 10?
+    jb .rht_no_hit
+    mov ax, [di + WIN_OFF_Y]
+    add ax, [di + WIN_OFF_HEIGHT]
+    sub ax, 10
+    cmp dx, ax                      ; mouse_y >= win_y + win_h - 10?
+    jb .rht_no_hit
+    ; Upper bounds already proven by step 1 (point inside window)
     mov ax, bp
     clc
     jmp .rht_done
@@ -4693,7 +4854,8 @@ mouse_process_drag:
 
 draw_char_inverted:
     pusha
-
+    jmp draw_char_inv_fastgate      ; CGA row-blit fast path (after API table)
+.pp:                                ; per-pixel fallback (clipping/other modes)
     xor bx, bx
     mov bl, [draw_font_height]      ; BX = font height (BH zeroed above)
     mov bp, bx                      ; BP = row counter
@@ -4702,11 +4864,29 @@ draw_char_inverted:
 .row_loop:
     lodsb                           ; Get row bitmap into AL (from DS:SI)
     mov ah, al                      ; AH = bitmap for this row
+    ; Row-level Y clip (font byte already consumed by lodsb above)
+    cmp byte [clip_enabled], 0
+    je .y_ok
+    cmp bx, [clip_y1]
+    jb .skip_row
+    cmp bx, [clip_y2]
+    jbe .y_ok
+.skip_row:
+    jmp .row_next
+.y_ok:
     mov cx, [draw_x]                ; CX = current X
     xor dx, dx
     mov dl, [draw_font_width]       ; DX = glyph column counter
 
 .col_loop:
+    ; Pixel-level X clip
+    cmp byte [clip_enabled], 0
+    je .x_ok
+    cmp cx, [clip_x1]
+    jb .next_pixel
+    cmp cx, [clip_x2]
+    ja .next_pixel
+.x_ok:
     test ah, 0x80                   ; Check leftmost bit
     jz .clear_pixel
     call plot_pixel_black           ; "1" bit: black pixel (inverted)
@@ -4726,17 +4906,27 @@ draw_char_inverted:
     sub dl, [draw_font_width]
     jz .no_gap
 .gap_loop:
+    cmp byte [clip_enabled], 0
+    je .gl_plot
+    cmp cx, [clip_x1]
+    jb .gl_next
+    cmp cx, [clip_x2]
+    ja .gl_next
+.gl_plot:
     call plot_pixel_white           ; White background in inter-character gap
+.gl_next:
     inc cx
     dec dl
     jnz .gap_loop
 .no_gap:
     pop dx
 
+.row_next:
     inc bx                          ; Next Y
     dec bp                          ; Decrement row counter
-    jnz .row_loop
-
+    jz .advance
+    jmp .row_loop
+.advance:
     xor ax, ax
     mov al, [draw_font_advance]
     add [draw_x], ax                ; Advance to next character position
@@ -6767,11 +6957,58 @@ read_pixel_internal:
     je .rpi_vga
     cmp byte [cs:video_mode], 0x04
     je .rpi_cga
-    ; VESA / Mode12h fallback: return 0
+    cmp byte [cs:video_mode], 0x01
+    je .rpi_vesa
+    cmp byte [cs:video_mode], 0x12
+    je .rpi_m12
+    ; Unknown mode: return 0
     xor al, al
     ret
 .rpi_oob:
     xor al, al
+    ret
+.rpi_vesa:
+    jmp vesa_read_pixel                 ; CX=X, BX=Y, ES=0xA000 -> AL
+.rpi_m12:
+    push bx
+    push cx
+    push dx
+    push di
+    ; byte offset = Y*80 + X>>3
+    mov ax, bx
+    mov di, 80
+    mul di                              ; AX = Y*80 (clobbers DX)
+    mov di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1                           ; DI = X/8 (8086: shift by 1 only)
+    add di, ax                          ; DI = byte offset in plane
+    ; CL = 7 - (X & 7) = bit position
+    and cl, 7
+    mov ch, 7
+    sub ch, cl
+    mov cl, ch
+    xor bl, bl                          ; BL = assembled 4-bit color
+    mov bh, 3                           ; plane 3 down to 0 (plane n = color bit n)
+.rpi_m12_plane:
+    mov dx, 0x3CE
+    mov al, 4                           ; GC index 4 = Read Map Select
+    out dx, al
+    inc dx
+    mov al, bh
+    out dx, al                          ; select plane BH
+    mov al, [es:di]
+    shr al, cl
+    and al, 1                           ; isolate pixel bit
+    shl bl, 1
+    or bl, al                           ; accumulate MSB-first (plane3 = bit3)
+    dec bh
+    jns .rpi_m12_plane
+    mov al, bl
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 .rpi_vga:
     push dx
@@ -6922,172 +7159,6 @@ gfx_draw_sprite_scaled:
     jmp .sspr_row_loop
 .sspr_end:
 .sspr_done:
-    pop es
-    popa
-    clc
-    ret
-
-; ============================================================================
-; gfx_blit_rect - Copy rectangular screen region (API 103)
-; Input: BX=dest_x, CX=dest_y, DX=src_x, SI=src_y
-;        DI=(width<<8)|height (packed bytes, max 255 each)
-; Self-translates if draw_context is active (no auto-translate in dispatch)
-; Output: CF=0 success
-; ============================================================================
-gfx_blit_rect:
-    pusha
-    push es
-    push ds
-    ; Unpack DI: width = high byte, height = low byte
-    mov ax, di
-    xor ah, ah                          ; AH was width, clear for height
-    mov [_blit_height], ax
-    mov ax, di
-    shr ax, 8
-    mov [_blit_width], ax
-    ; Validate
-    cmp word [_blit_width], 0
-    je .blit_done
-    cmp word [_blit_height], 0
-    je .blit_done
-    ; Self-translating: not handled by INT 0x80 dispatcher (API 103 not in translation range)
-    cmp byte [draw_context], 0xFF
-    je .blit_no_translate
-    cmp byte [draw_context], WIN_MAX_COUNT
-    jae .blit_no_translate
-    push ax
-    push di
-    xor ah, ah
-    mov al, [draw_context]
-    mov di, ax
-    shl di, 5
-    add di, window_table
-    ; Translate dest (BX,CX)
-    add bx, [di + WIN_OFF_X]
-    inc bx
-    add cx, [di + WIN_OFF_Y]
-    add cx, [titlebar_height]
-    ; Translate src (DX,SI)
-    add dx, [di + WIN_OFF_X]
-    inc dx
-    add si, [di + WIN_OFF_Y]
-    add si, [titlebar_height]
-    pop di
-    pop ax
-.blit_no_translate:
-    ; Save coordinates to scratch vars (registers will be reused)
-    mov [_blit_src_x], dx
-    mov [_blit_src_y], si
-    mov [_blit_dst_x], bx
-    mov [_blit_dst_y], cx
-    ; Check video mode for fast path
-    cmp byte [video_mode], 0x13
-    je .blit_vga
-    ; --- CGA / fallback: pixel-by-pixel copy ---
-    mov ax, [video_segment]
-    mov es, ax
-    mov word [_blit_row], 0
-.blit_slow_row:
-    mov ax, [_blit_row]
-    cmp ax, [_blit_height]
-    jge .blit_slow_done
-    mov word [_blit_col], 0
-.blit_slow_col:
-    mov ax, [_blit_col]
-    cmp ax, [_blit_width]
-    jge .blit_slow_col_done
-    ; Read pixel from (src_x + col, src_y + row)
-    mov cx, [_blit_src_x]
-    add cx, [_blit_col]                 ; CX = src_x + col
-    mov bx, [_blit_src_y]
-    add bx, [_blit_row]                 ; BX = src_y + row
-    call read_pixel_internal            ; AL = color
-    ; Write pixel to (dest_x + col, dest_y + row)
-    mov dl, al                          ; DL = color
-    mov cx, [_blit_dst_x]
-    add cx, [_blit_col]                 ; CX = dest_x + col
-    mov bx, [_blit_dst_y]
-    add bx, [_blit_row]                 ; BX = dest_y + row
-    call plot_pixel_color               ; CX=X, BX=Y, DL=color, ES=video
-    inc word [_blit_col]
-    jmp .blit_slow_col
-.blit_slow_col_done:
-    inc word [_blit_row]
-    jmp .blit_slow_row
-.blit_slow_done:
-    jmp .blit_finish
-.blit_vga:
-    ; --- VGA 13h fast path: row-by-row rep movsb ---
-    ; Compute linear offsets
-    ; src_off = src_y * 320 + src_x
-    mov ax, [_blit_src_y]
-    mov bx, 320
-    mul bx                              ; AX = src_y * 320
-    add ax, [_blit_src_x]
-    mov [_blit_src_off], ax
-    ; dest_off = dest_y * 320 + dest_x
-    mov ax, [_blit_dst_y]
-    mov bx, 320
-    mul bx                              ; AX = dest_y * 320
-    add ax, [_blit_dst_x]
-    mov [_blit_dst_off], ax
-    ; Determine copy direction
-    cmp ax, [_blit_src_off]
-    ja .blit_vga_reverse
-    ; --- Forward copy (dest <= src, no overlap risk) ---
-    mov ax, [video_segment]
-    mov es, ax
-    mov ds, ax                          ; DS = ES = video segment
-    mov word [cs:_blit_row], 0
-.blit_vga_fwd_row:
-    mov ax, [cs:_blit_row]
-    cmp ax, [cs:_blit_height]
-    jge .blit_vga_fwd_done
-    ; row_off = row * 320
-    mov bx, 320
-    mul bx                              ; AX = row * 320
-    mov si, ax
-    add si, [cs:_blit_src_off]          ; SI = src_off + row*320
-    mov di, ax
-    add di, [cs:_blit_dst_off]          ; DI = dest_off + row*320
-    mov cx, [cs:_blit_width]
-    cld
-    rep movsb
-    inc word [cs:_blit_row]
-    jmp .blit_vga_fwd_row
-.blit_vga_fwd_done:
-    jmp .blit_vga_cleanup
-.blit_vga_reverse:
-    ; --- Reverse copy (dest > src, copy bottom-to-top) ---
-    mov ax, [video_segment]
-    mov es, ax
-    mov ds, ax
-    mov ax, [cs:_blit_height]
-    dec ax
-    mov [cs:_blit_row], ax              ; Start from last row
-.blit_vga_rev_row:
-    cmp word [cs:_blit_row], 0
-    jl .blit_vga_rev_done
-    mov ax, [cs:_blit_row]
-    mov bx, 320
-    mul bx
-    mov si, ax
-    add si, [cs:_blit_src_off]
-    mov di, ax
-    add di, [cs:_blit_dst_off]
-    mov cx, [cs:_blit_width]
-    cld
-    rep movsb
-    dec word [cs:_blit_row]
-    jmp .blit_vga_rev_row
-.blit_vga_rev_done:
-.blit_vga_cleanup:
-    ; Restore DS
-    mov ax, 0x1000
-    mov ds, ax
-.blit_finish:
-.blit_done:
-    pop ds
     pop es
     popa
     clc
@@ -7289,7 +7360,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3320 - ($ - $$) db 0
+times 0x3400 - ($ - $$) db 0
 
 kernel_api_table:
     ; Header
@@ -7471,6 +7542,390 @@ kernel_api_table:
     dw gfx_draw_sprite_scaled       ; 102: Draw scaled 1-bit sprite
     dw gfx_blit_rect                ; 103: Copy screen region
     dw gfx_read_pixel               ; 104: Read pixel color
+
+; ============================================================================
+; gfx_blit_rect - Copy rectangular screen region (API 103)
+; Input: BX=dest_x, CX=dest_y, DX=src_x, SI=src_y
+;        DI=(width<<8)|height (packed bytes, max 255 each)
+; Self-translates if draw_context is active (no auto-translate in dispatch)
+; Output: CF=0 success
+; ============================================================================
+gfx_blit_rect:
+    pusha
+    push es
+    push ds
+    ; Unpack DI: width = high byte, height = low byte
+    mov ax, di
+    xor ah, ah                          ; AH was width, clear for height
+    mov [_blit_height], ax
+    mov ax, di
+    shr ax, 8
+    mov [_blit_width], ax
+    ; Validate
+    cmp word [_blit_width], 0
+    je .blit_done
+    cmp word [_blit_height], 0
+    je .blit_done
+    ; Self-translating: not handled by INT 0x80 dispatcher (API 103 not in translation range)
+    cmp byte [draw_context], 0xFF
+    je .blit_no_translate
+    cmp byte [draw_context], WIN_MAX_COUNT
+    jae .blit_no_translate
+    push ax
+    push di
+    xor ah, ah
+    mov al, [draw_context]
+    mov di, ax
+    shl di, 5
+    add di, window_table
+    ; Translate dest (BX,CX)
+    add bx, [di + WIN_OFF_X]
+    inc bx
+    add cx, [di + WIN_OFF_Y]
+    add cx, [titlebar_height]
+    ; Translate src (DX,SI)
+    add dx, [di + WIN_OFF_X]
+    inc dx
+    add si, [di + WIN_OFF_Y]
+    add si, [titlebar_height]
+    pop di
+    pop ax
+.blit_no_translate:
+    ; Save coordinates to scratch vars (registers will be reused)
+    mov [_blit_src_x], dx
+    mov [_blit_src_y], si
+    mov [_blit_dst_x], bx
+    mov [_blit_dst_y], cx
+    ; Check video mode for fast path
+    cmp byte [video_mode], 0x13
+    je .blit_vga
+    ; --- CGA / fallback: pixel-by-pixel copy ---
+    mov ax, [video_segment]
+    mov es, ax
+    ; Overlap-safe direction choice (memmove semantics)
+    mov ax, [_blit_dst_y]
+    cmp ax, [_blit_src_y]
+    ja .blit_slow_rev               ; dst below src: copy bottom-up
+    jb .blit_slow_fwd
+    mov ax, [_blit_dst_x]
+    cmp ax, [_blit_src_x]
+    ja .blit_slow_rev               ; same row, dst right of src: copy right-to-left
+.blit_slow_fwd:
+    mov word [_blit_row], 0
+.blit_slow_row:
+    mov ax, [_blit_row]
+    cmp ax, [_blit_height]
+    jge .blit_slow_done
+    mov word [_blit_col], 0
+.blit_slow_col:
+    mov ax, [_blit_col]
+    cmp ax, [_blit_width]
+    jge .blit_slow_col_done
+    ; Read pixel from (src_x + col, src_y + row)
+    mov cx, [_blit_src_x]
+    add cx, [_blit_col]                 ; CX = src_x + col
+    mov bx, [_blit_src_y]
+    add bx, [_blit_row]                 ; BX = src_y + row
+    call read_pixel_internal            ; AL = color
+    ; Write pixel to (dest_x + col, dest_y + row)
+    mov dl, al                          ; DL = color
+    mov cx, [_blit_dst_x]
+    add cx, [_blit_col]                 ; CX = dest_x + col
+    mov bx, [_blit_dst_y]
+    add bx, [_blit_row]                 ; BX = dest_y + row
+    call plot_pixel_color               ; CX=X, BX=Y, DL=color, ES=video
+    inc word [_blit_col]
+    jmp .blit_slow_col
+.blit_slow_col_done:
+    inc word [_blit_row]
+    jmp .blit_slow_row
+.blit_slow_rev:
+    mov ax, [_blit_height]
+    dec ax
+    mov [_blit_row], ax             ; start at last row
+.blit_rev_row:
+    cmp word [_blit_row], 0
+    jl .blit_slow_done              ; wraps to 0FFFFh after row 0 (h<=255, signed safe)
+    mov ax, [_blit_width]
+    dec ax
+    mov [_blit_col], ax             ; start at last column
+.blit_rev_col:
+    cmp word [_blit_col], 0
+    jl .blit_rev_col_done
+    mov cx, [_blit_src_x]
+    add cx, [_blit_col]
+    mov bx, [_blit_src_y]
+    add bx, [_blit_row]
+    call read_pixel_internal        ; AL = color
+    mov dl, al
+    mov cx, [_blit_dst_x]
+    add cx, [_blit_col]
+    mov bx, [_blit_dst_y]
+    add bx, [_blit_row]
+    call plot_pixel_color
+    dec word [_blit_col]
+    jmp .blit_rev_col
+.blit_rev_col_done:
+    dec word [_blit_row]
+    jmp .blit_rev_row
+.blit_slow_done:
+    jmp .blit_finish
+.blit_vga:
+    ; --- VGA 13h fast path: row-by-row rep movsb ---
+    ; Compute linear offsets
+    ; src_off = src_y * 320 + src_x
+    mov ax, [_blit_src_y]
+    mov bx, 320
+    mul bx                              ; AX = src_y * 320
+    add ax, [_blit_src_x]
+    mov [_blit_src_off], ax
+    ; dest_off = dest_y * 320 + dest_x
+    mov ax, [_blit_dst_y]
+    mov bx, 320
+    mul bx                              ; AX = dest_y * 320
+    add ax, [_blit_dst_x]
+    mov [_blit_dst_off], ax
+    ; Determine copy direction
+    cmp ax, [_blit_src_off]
+    ja .blit_vga_reverse
+    ; --- Forward copy (dest <= src, no overlap risk) ---
+    mov ax, [video_segment]
+    mov es, ax
+    mov ds, ax                          ; DS = ES = video segment
+    mov word [cs:_blit_row], 0
+.blit_vga_fwd_row:
+    mov ax, [cs:_blit_row]
+    cmp ax, [cs:_blit_height]
+    jge .blit_vga_fwd_done
+    ; row_off = row * 320
+    mov bx, 320
+    mul bx                              ; AX = row * 320
+    mov si, ax
+    add si, [cs:_blit_src_off]          ; SI = src_off + row*320
+    mov di, ax
+    add di, [cs:_blit_dst_off]          ; DI = dest_off + row*320
+    mov cx, [cs:_blit_width]
+    cld
+    rep movsb
+    inc word [cs:_blit_row]
+    jmp .blit_vga_fwd_row
+.blit_vga_fwd_done:
+    jmp .blit_vga_cleanup
+.blit_vga_reverse:
+    ; --- Reverse copy (dest > src, copy bottom-to-top) ---
+    mov ax, [video_segment]
+    mov es, ax
+    mov ds, ax
+    mov ax, [cs:_blit_height]
+    dec ax
+    mov [cs:_blit_row], ax              ; Start from last row
+.blit_vga_rev_row:
+    cmp word [cs:_blit_row], 0
+    jl .blit_vga_rev_done
+    mov ax, [cs:_blit_row]
+    mov bx, 320
+    mul bx
+    mov si, ax
+    add si, [cs:_blit_src_off]
+    mov di, ax
+    add di, [cs:_blit_dst_off]
+    mov cx, [cs:_blit_width]
+    add si, cx
+    dec si                          ; SI -> last source byte of row
+    add di, cx
+    dec di                          ; DI -> last dest byte of row
+    std                             ; copy right-to-left (overlap-safe for dst>src)
+    rep movsb
+    cld                             ; restore default direction flag
+    dec word [cs:_blit_row]
+    jmp .blit_vga_rev_row
+.blit_vga_rev_done:
+.blit_vga_cleanup:
+    ; Restore DS
+    mov ax, 0x1000
+    mov ds, ax
+.blit_finish:
+.blit_done:
+    pop ds
+    pop es
+    popa
+    clc
+    ret
+
+; ============================================================================
+; draw_char CGA fast path (placed after the API table for size budget)
+; Composes each glyph row's 2bpp bits in registers and writes each touched
+; VRAM byte exactly once, instead of one plot_pixel_* round trip (bounds
+; check + mode dispatch + cga_pixel_calc MUL + 10 stack ops) per pixel.
+; Entered from draw_char / draw_char_inverted right after PUSHA; exits via
+; draw_char.advance (shared POPA epilogue, advances draw_x).
+; Falls back to the per-pixel path (.pp) for non-CGA modes, glyphs touching
+; the screen edge, or glyphs not fully inside the active clip rect — those
+; keep the exact per-pixel clipping semantics.
+; ============================================================================
+
+; dcf_check - shared eligibility test for the CGA glyph fast path
+; Output: CF=0 -> fast path OK; CF=1 -> caller must use per-pixel path
+; Clobbers: AX, DX (caller has just executed PUSHA)
+dcf_check:
+    cmp byte [video_mode], 0x01
+    je .no
+    cmp byte [video_mode], 0x12
+    je .no
+    cmp byte [video_mode], 0x13
+    je .no
+    ; Whole glyph cell (incl. gap) must be on screen — the per-pixel path
+    ; gets edge clipping from plot_pixel_* bounds checks.
+    xor ax, ax
+    mov al, [draw_font_advance]
+    add ax, [draw_x]
+    jc .no                          ; 16-bit wrap: treat as off-screen
+    cmp ax, [screen_width]
+    ja .no
+    xor ax, ax
+    mov al, [draw_font_height]
+    add ax, [draw_y]
+    jc .no
+    cmp ax, [screen_height]
+    ja .no
+    ; If clipping is active, the cell must lie fully inside the clip rect;
+    ; partially clipped glyphs keep exact per-pixel clip semantics in .pp.
+    cmp byte [clip_enabled], 0
+    je .yes
+    mov ax, [draw_x]
+    cmp ax, [clip_x1]
+    jb .no
+    xor dx, dx
+    mov dl, [draw_font_advance]
+    add ax, dx
+    dec ax                          ; AX = last X of cell (incl. gap fill)
+    cmp ax, [clip_x2]
+    ja .no
+    mov ax, [draw_y]
+    cmp ax, [clip_y1]
+    jb .no
+    mov dl, [draw_font_height]
+    add ax, dx
+    dec ax                          ; AX = last Y of cell
+    cmp ax, [clip_y2]
+    ja .no
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+draw_char_fastgate:
+    call dcf_check
+    jc .pp
+    ; Normal text: "1" bits = draw_fg_color, "0" bits + gap = draw_bg_color
+    mov al, [draw_fg_color]
+    and al, 3
+    mov dl, 0x55
+    mul dl                          ; c*0x55 replicates 2-bit c into 4 slots
+    mov [dc_fgpat], al
+    mov al, [draw_bg_color]
+    and al, 3
+    mov dl, 0x55
+    mul dl
+    mov [dc_bgpat], al
+    jmp draw_char_cga_fast
+.pp:
+    jmp draw_char.pp
+
+draw_char_inv_fastgate:
+    call dcf_check
+    jc .pp
+    ; Inverted text: "1" bits = black (color 0), "0" bits + gap =
+    ; draw_fg_color (mirrors plot_pixel_black / plot_pixel_white usage)
+    mov byte [dc_fgpat], 0
+    mov al, [draw_fg_color]
+    and al, 3
+    mov dl, 0x55
+    mul dl
+    mov [dc_bgpat], al
+    jmp draw_char_cga_fast
+.pp:
+    jmp draw_char_inverted.pp
+
+draw_char_cga_fast:
+    mov cl, 8
+    sub cl, [draw_font_width]
+    mov al, 0xFF
+    shl al, cl
+    mov [dc_gmask], al              ; keep only top draw_font_width glyph bits
+    mov al, [draw_font_height]
+    mov [dc_rows], al
+    mov bx, [draw_y]                ; BX = current Y
+.cf_row:
+    lodsb                           ; glyph row byte from DS:SI (kernel font)
+    and al, [dc_gmask]
+    mov ch, al                      ; CH = glyph bits, MSB = leftmost
+    ; Row base: DI = (Y/2)*80 + X/4 (+0x2000 odd rows) — ONE MUL per row
+    mov ax, bx
+    shr ax, 1
+    mov dx, 80
+    mul dx
+    mov di, ax
+    mov ax, [draw_x]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    test bl, 1
+    jz .cf_even
+    add di, 0x2000
+.cf_even:
+    mov ax, [draw_x]
+    and al, 3
+    mov cl, 3
+    sub cl, al
+    shl cl, 1                       ; CL = bit position of first pixel slot
+    xor dx, dx                      ; DH = accum color bits, DL = accum mask
+    mov al, [draw_font_advance]
+    mov [dc_npix], al               ; pixels incl. gap (gap bits in CH = 0 = bg)
+.cf_pix:
+    mov al, [dc_bgpat]
+    shl ch, 1                       ; CF = leftmost remaining glyph bit
+    jnc .cf_have
+    mov al, [dc_fgpat]
+.cf_have:
+    mov ah, 3
+    shl ah, cl                      ; AH = 2-bit slot mask
+    and al, ah                      ; AL = color bits within slot
+    or dh, al
+    or dl, ah
+    sub cl, 2
+    jnc .cf_next                    ; still inside this VRAM byte
+    mov al, [es:di]                 ; flush: ONE read-modify-write per byte
+    not dl
+    and al, dl
+    or al, dh
+    mov [es:di], al
+    inc di
+    xor dx, dx
+    mov cl, 6
+.cf_next:
+    dec byte [dc_npix]
+    jnz .cf_pix
+    or dl, dl                       ; flush trailing partial byte
+    jz .cf_rowdone
+    mov al, [es:di]
+    not dl
+    and al, dl
+    or al, dh
+    mov [es:di], al
+.cf_rowdone:
+    inc bx
+    dec byte [dc_rows]
+    jnz .cf_row
+    jmp draw_char.advance           ; advance draw_x, POPA, ret
+
+dc_fgpat:  db 0                     ; fg color replicated into all 4 pixel slots
+dc_bgpat:  db 0                     ; bg color replicated
+dc_gmask:  db 0                     ; AND mask for glyph row bits (font width)
+dc_rows:   db 0                     ; glyph rows remaining
+dc_npix:   db 0                     ; pixels remaining in current row
 
 ; ============================================================================
 ; Graphics API Functions (Foundation 1.2)
@@ -9656,6 +10111,27 @@ gfx_clear_area_stub:
     mov es, ax
     mov bp, si                      ; BP = height counter
 
+    ; CGA bounds clamp: reject off-screen origin, clip W/H to screen edge
+    cmp bx, [cs:screen_width]
+    jae .gca_oob
+    cmp cx, [cs:screen_height]
+    jb .gca_in
+.gca_oob:
+    jmp .clear_done
+.gca_in:
+    mov ax, [cs:screen_width]
+    sub ax, bx                      ; AX = max width from X (no 16-bit wrap)
+    cmp dx, ax
+    jbe .gca_w_ok
+    mov dx, ax
+.gca_w_ok:
+    mov ax, [cs:screen_height]
+    sub ax, cx                      ; AX = max height from Y
+    cmp bp, ax
+    jbe .gca_h_ok
+    mov bp, ax
+.gca_h_ok:
+
     ; Check for byte-aligned fast path (BX % 4 == 0 AND DX % 4 == 0)
     mov ax, bx
     and ax, 3
@@ -9664,34 +10140,38 @@ gfx_clear_area_stub:
     and ax, 3
     jnz .slow_path
 
-    ; Fast path: byte-aligned, use rep stosb per row
+    ; Fast path: byte-aligned, rep stosw per row, row base hoisted
     mov si, dx
-    shr si, 2                       ; SI = bytes per row (DX / 4)
-.fast_row:
-    push cx                         ; Save Y
-    push bx                         ; Save X
-    ; Calculate CGA row offset
+    shr si, 1
+    shr si, 1                       ; SI = bytes per row (DX / 4)
+    ; One-time row base: DX = (Y/2)*80 + X/4 (+0x2000 if Y odd)
     mov ax, cx
     shr ax, 1
-    push dx
     mov di, 80
-    mul di
-    pop dx
-    mov di, ax                      ; DI = (Y/2) * 80
-    ; Add X byte offset
+    mul di                          ; the ONLY MUL (DX dead: width copied to SI)
+    mov dx, ax
     mov ax, bx
-    shr ax, 2
-    add di, ax
-    ; Handle interlacing (odd rows at +0x2000)
+    shr ax, 1
+    shr ax, 1
+    add dx, ax                      ; DX = running row base
     test cl, 1
-    jz .fast_even
-    add di, 0x2000
-.fast_even:
+    jz .fast_row
+    add dx, 0x2000
+.fast_row:
+    mov di, dx
+    push cx
     mov cx, si                      ; CX = byte count
-    xor al, al
+    xor ax, ax                      ; AH must be 0 too (stosw)
+    shr cx, 1                       ; CF = odd trailing byte
+    rep stosw
+    adc cx, cx                      ; CX = 0/1 trailing byte
     rep stosb
-    pop bx
     pop cx
+    xor dx, 0x2000                  ; toggle interlace bank
+    test cl, 1
+    jz .fast_next                   ; even->odd: same row pair
+    add dx, 80                      ; odd->even: next row pair
+.fast_next:
     inc cx                          ; Next Y
     dec bp
     jnz .fast_row
@@ -9703,25 +10183,21 @@ gfx_clear_area_stub:
     cmp dx, 4
     jb .pixel_path                  ; Very narrow: pixel-by-pixel is fine
 
-.opt_row:
-    push cx                         ; Save Y
-    push bx                         ; Save start X
-    push dx                         ; Save width
-
-    ; Calculate CGA row base offset
+    ; Row base hoisted: one MUL total, then toggle/advance per row
     mov ax, cx
     shr ax, 1
-    push bx
     push dx
     mov di, 80
     mul di                          ; AX = (Y/2) * 80
     pop dx
-    pop bx
-    mov si, ax                      ; SI = row base
+    mov si, ax                      ; SI = running row base
     test cl, 1
-    jz .or_even
+    jz .opt_row
     add si, 0x2000
-.or_even:
+.opt_row:
+    push cx                         ; Save Y
+    push bx                         ; Save start X
+    push dx                         ; Save width
 
     ; --- Leading partial byte (clear X%4..3 in first byte) ---
     mov ax, bx
@@ -9755,14 +10231,16 @@ gfx_clear_area_stub:
 
     push cx
     mov cx, ax                      ; CX = byte count
-    xor al, al
-    rep stosb                       ; Clear full bytes
+    xor ax, ax                      ; AH must be 0 too (stosw)
+    shr cx, 1                       ; CF = odd trailing byte
+    rep stosw                       ; Clear full bytes, word-wise
+    adc cx, cx                      ; CX = 0/1 trailing byte
+    rep stosb
     pop cx
 
     ; Advance BX past cleared middle
     mov ax, dx
-    shr ax, 2
-    shl ax, 2                       ; AX = middle pixels (multiple of 4)
+    and ax, 0xFFFC                  ; AX = middle pixels (multiple of 4)
     add bx, ax
 
 .or_no_middle:
@@ -9787,9 +10265,16 @@ gfx_clear_area_stub:
     pop dx                          ; Restore width
     pop bx                          ; Restore start X
     pop cx                          ; Restore Y
+    xor si, 0x2000                  ; toggle interlace bank
+    test cl, 1
+    jz .or_next                     ; even->odd: same row pair
+    add si, 80                      ; odd->even: next row pair
+.or_next:
     inc cx                          ; Next Y
     dec bp
-    jnz .opt_row
+    jz .or_done
+    jmp .opt_row
+.or_done:
     jmp .clear_done
 
 .pixel_path:
@@ -9951,42 +10436,55 @@ gfx_clear_area_stub:
 ; ============================================================================
 
 ; Simple memory allocator - First-fit algorithm
-; Heap starts at 0x1400:0x0000, extends to ~0x9FFF (640KB limit)
+; Heap occupies its own dedicated segment, HEAP_SEGMENT (0x8000:0x0000,
+; linear 0x80000), size HEAP_SIZE (60KB). Segment 0x8000 was taken from
+; the user app pool (Build 401): the heap must NOT live below 0x2000:0000
+; because the kernel image at 0x1000:0000 can grow up to 64KB (the old
+; 0x1400 heap overlapped the kernel once it passed 16KB).
 ; Each block has 4-byte header: [size:2][flags:2]
 ;   size = total block size including header
 ;   flags = 0x0000 (free) or 0xFFFF (allocated)
 
-; mem_alloc_stub - Allocate memory
-; Input: AX = Size in bytes
-; Output: AX = Pointer (offset from 0x1400:0000), 0 if failed
+HEAP_SEGMENT    equ 0x8000          ; Dedicated heap segment (linear 0x80000)
+HEAP_SIZE       equ 0xF000          ; Heap size in bytes (60KB)
+
+; mem_alloc_stub - Allocate memory (INT 0x80 API 7)
+; Input: BX = Size in bytes
+; Output: AX = Pointer (offset from HEAP_SEGMENT:0000), 0 if failed
+;         CF = 0 success, 1 out of memory / bad size
 ; Preserves: BX, CX, DX
+; The size travels in BX, NOT AX: in the INT 0x80 convention AH carries
+; the API number, so AX cannot hold a caller parameter (Build 402 fix —
+; previously the size's high byte was always overwritten by the API number).
 mem_alloc_stub:
     push bx
     push si
     push es
 
-    test ax, ax
+    test bx, bx
     jz .fail                        ; Don't allocate 0 bytes
 
     ; Round up to 4-byte boundary, add header
-    add ax, 7                       ; +4 header +3 for rounding
-    and ax, 0xFFFC                  ; Round to 4-byte
-    mov bx, ax                      ; BX = requested size
+    add bx, 7                       ; +4 header +3 for rounding
+    jc .fail                        ; Size overflow (> 0xFFF8)
+    and bx, 0xFFFC                  ; BX = total block size needed
 
     ; Set up heap segment
     push ds
-    mov ax, 0x1400
+    mov ax, HEAP_SEGMENT
     mov ds, ax
     mov es, ax
 
-    ; Initialize heap if needed (first allocation)
-    cmp word [heap_initialized], 0
+    ; Initialize heap if needed (first allocation).
+    ; heap_initialized is kernel data, but DS now points at the heap —
+    ; access the flag through CS (kernel segment 0x1000).
+    cmp word [cs:heap_initialized], 0
     jne .heap_ready
 
     ; Initialize first free block
-    mov word [0], 0xF000            ; Size: ~60KB initially
+    mov word [0], HEAP_SIZE         ; Size: entire heap (60KB)
     mov word [2], 0                 ; Flags: free
-    mov word [heap_initialized], 1
+    mov word [cs:heap_initialized], 1
 
 .heap_ready:
     ; Search for first-fit block
@@ -9995,36 +10493,52 @@ mem_alloc_stub:
 .search:
     mov ax, [si]                    ; AX = block size
     test ax, ax
-    jz .fail_restore                ; End of heap
+    jz .fail_restore                ; End of heap / corrupt header
 
     ; Check if block is free
     cmp word [si+2], 0
     jne .next                       ; Block allocated, skip
 
-    ; Check if large enough
+    ; Check if large enough (unsigned: block sizes ≥ 0x8000 are valid,
+    ; e.g. the initial 0xF000 block — signed jge would reject them)
     cmp ax, bx
-    jge .allocate                   ; Found suitable block
+    jae .allocate                   ; Found suitable block
 
 .next:
     add si, ax                      ; Move to next block
-    cmp si, 0xF000                  ; Check heap limit
+    cmp si, HEAP_SIZE               ; Check heap limit
     jb .search
 
 .fail_restore:
     pop ds
 .fail:
     xor ax, ax                      ; Return NULL
+    stc                             ; CF=1: allocation failed
     jmp .done
 
 .allocate:
+    ; Split: if the remainder can hold a header plus data (>= 8 bytes),
+    ; carve it off as a new free block. Without this the whole found
+    ; block is handed out and one malloc consumes the entire heap.
+    sub ax, bx                      ; AX = remainder size
+    cmp ax, 8
+    jb .no_split
+
+    add si, bx                      ; SI = offset of remainder block
+    mov [si], ax                    ; Remainder block size
+    mov word [si+2], 0              ; Flags: free
+    sub si, bx                      ; Back to the allocated block
+    mov [si], bx                    ; Allocated block shrinks to fit
+
+.no_split:
     ; Mark block as allocated
     mov word [si+2], 0xFFFF
 
     ; Return pointer (skip header)
-    mov ax, si
-    add ax, 4
+    lea ax, [si+4]
 
     pop ds
+    clc                             ; CF=0: success
 
 .done:
     pop es
@@ -10032,30 +10546,78 @@ mem_alloc_stub:
     pop bx
     ret
 
-; mem_free_stub - Free memory
-; Input: AX = Pointer (offset from 0x1400:0000)
-; Output: None
+; mem_free_stub - Free memory (INT 0x80 API 8)
+; Input: BX = Pointer (offset from HEAP_SEGMENT:0000, as returned by API 7)
+; Output: CF = 0 success, 1 invalid pointer (free ignored)
+; Preserves: All registers
+; The pointer travels in BX, NOT AX: in the INT 0x80 convention AH carries
+; the API number, so AX cannot hold a caller parameter (Build 402 fix —
+; previously the pointer's high byte was always overwritten by the API
+; number, marking the wrong block header free).
 mem_free_stub:
     push ax
     push bx
+    push si
     push ds
 
-    test ax, ax
-    jz .done                        ; NULL pointer, ignore
+    ; Nothing can be freed before the first malloc initialized the heap
+    cmp word [cs:heap_initialized], 0
+    je .bad
+
+    ; Validate pointer: must lie past the first header, inside the heap
+    cmp bx, 4
+    jb .bad                         ; NULL or inside a header
+    cmp bx, HEAP_SIZE
+    jae .bad                        ; Outside the heap
 
     ; Set up heap segment
-    mov bx, 0x1400
-    mov ds, bx
+    mov ax, HEAP_SEGMENT
+    mov ds, ax
 
-    ; Get block header
-    sub ax, 4                       ; Point to header
+    sub bx, 4                       ; BX = block header offset
 
-    ; Mark as free
-    mov bx, ax
-    mov word [bx+2], 0              ; Clear allocated flag
+    ; Only allocated blocks may be freed (guards wild and double frees)
+    cmp word [bx+2], 0xFFFF
+    jne .bad
 
-.done:
+    mov word [bx+2], 0              ; Mark free
+
+    ; Coalesce: sweep the whole heap, merging every run of adjacent free
+    ; blocks. A full sweep handles both the forward and backward
+    ; neighbours of the block just freed, so fragmentation cannot
+    ; accumulate across malloc/free cycles.
+    xor bx, bx
+.sweep:
+    mov ax, [bx]                    ; AX = current block size
+    test ax, ax
+    jz .ok                          ; Zero header — stop (corruption guard)
+    cmp word [bx+2], 0
+    jne .advance                    ; Allocated, move on
+
+    mov si, bx
+    add si, ax                      ; SI = next block offset
+    cmp si, HEAP_SIZE
+    jae .ok                         ; Current free block is the last one
+    cmp word [si+2], 0
+    jne .advance                    ; Next block allocated — can't merge
+
+    mov ax, [si]                    ; Merge next block into current,
+    add [bx], ax                    ; then re-examine the same block
+    jmp .sweep
+
+.advance:
+    add bx, ax                      ; AX still = current block size
+    cmp bx, HEAP_SIZE
+    jb .sweep
+
+.ok:
+    clc                             ; CF=0: success
+    jmp .out
+.bad:
+    stc                             ; CF=1: invalid pointer, ignored
+.out:
     pop ds
+    pop si
     pop bx
     pop ax
     ret
@@ -10072,6 +10634,7 @@ EVENT_TIMER         equ 3           ; Future
 EVENT_MOUSE         equ 4
 EVENT_WIN_MOVED     equ 5
 EVENT_WIN_REDRAW    equ 6               ; Window needs content redraw (DX = handle)
+EVENT_CONSUMED      equ 0xFF            ; Tombstone: slot consumed mid-queue
 
 ; Event structure (3 bytes):
 ;   +0: type (byte)
@@ -10084,12 +10647,40 @@ post_event:
     push bx
     push si
     push ds
+    pushf                           ; save caller IF (IRQ ctx = 0, API ctx = 1)
+    cli                             ; atomic tail RMW vs IRQ posts
 
     mov bx, 0x1000
     mov ds, bx
 
-    ; Calculate tail position (events are 3 bytes each)
     mov bx, [event_queue_tail]
+
+    ; Coalesce consecutive EVENT_MOUSE posts: if the newest queued entry
+    ; (tail-1) is EVENT_MOUSE, update its data word in place instead of
+    ; appending. Move-only packets carry no position (apps poll
+    ; mouse_get_state), so this collapses 100Hz packet floods that would
+    ; fill the 31-slot queue and silently discard KEY_PRESS events.
+    ; Identical data = pure duplicate (drop); changed button state is
+    ; appended as a new entry so no press/release edge is ever lost.
+    cmp al, EVENT_MOUSE
+    jne .store
+    cmp bx, [event_queue_head]      ; Queue empty?
+    je .store                       ; Yes - nothing to coalesce with
+    mov si, bx
+    dec si
+    and si, 0x1F                    ; SI = index of newest queued event
+    push bx
+    mov bx, si
+    add si, bx
+    add si, bx                      ; SI = index * 3
+    pop bx
+    cmp byte [event_queue + si], EVENT_MOUSE
+    jne .store
+    cmp dx, [event_queue + si + 1]  ; Identical data (button state)?
+    je .done                        ; Pure duplicate - drop new event
+
+.store:
+    ; Calculate tail position (events are 3 bytes each)
     mov si, bx
     add si, bx                      ; SI = tail * 2
     add si, bx                      ; SI = tail * 3
@@ -10106,6 +10697,7 @@ post_event:
     mov [event_queue_tail], bx
 
 .done:
+    popf                            ; restore caller IF
     pop ds
     pop si
     pop bx
@@ -10127,17 +10719,21 @@ event_get_stub:
 
 .evt_check_next:
     mov bx, [event_queue_head]
+.evt_scan:
     cmp bx, [event_queue_tail]
     je .no_event
 
-    ; Calculate head position (events are 3 bytes each)
+    ; Calculate slot position (events are 3 bytes each)
     mov si, bx
-    add si, bx                      ; SI = head * 2
-    add si, bx                      ; SI = head * 3
+    add si, bx                      ; SI = index * 2
+    add si, bx                      ; SI = index * 3
 
     ; Read event from queue (DO NOT advance head yet)
     mov al, [event_queue + si]      ; type
     mov dx, [event_queue + si + 1]  ; data (word)
+
+    cmp al, EVENT_CONSUMED
+    je .evt_tombstone               ; Consumed mid-queue slot: reclaim/step over
 
     ; Filter keyboard events: only deliver to focused task
     cmp al, EVENT_KEY_PRESS
@@ -10149,7 +10745,7 @@ event_get_stub:
     cmp al, [current_task]
     je .evt_focus_ok
     pop ax
-    jmp .no_event                   ; Not focused - leave event in queue for correct task
+    jmp .evt_skip                   ; Not ours: step over, do NOT stop the scan
 .evt_focus_ok:
     pop ax
     jmp .evt_consume                ; This task has focus (or no focus set), consume and deliver
@@ -10165,22 +10761,50 @@ event_get_stub:
     xor ah, ah
     mov al, dl
     mov si, ax
-    shl si, 5
+    push cx
+    mov cl, 5
+    shl si, cl                      ; SI = handle * 32 (8086-safe)
+    pop cx
     add si, window_table
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .evt_discard_pop            ; Window freed/destroyed: discard stale event
+    ; Occluded window: z-clip (int80 dispatcher) would drop every draw of the
+    ; repaint anyway; focus/promote paths post a fresh WIN_REDRAW at z=15.
+    ; Discard (not leave) so the shared ring never head-blocks on it.
+    cmp byte [si + WIN_OFF_ZORDER], 15
+    jne .evt_discard_pop
     mov al, [si + WIN_OFF_OWNER]
     cmp al, [current_task]
     pop ax
     pop si
     je .evt_consume                 ; Window belongs to current task, consume and return
-    jmp .no_event                   ; Wrong task's window - leave in queue
+    jmp .evt_skip                   ; Other task's window: step over, keep scanning
 
-.evt_consume:
-    ; Now advance head (event confirmed for this task)
+.evt_skip:
+    ; Leave slot intact for its owner, advance scan index only
     inc bx
     and bx, 0x1F                    ; Wrap at 32 events
-    mov [event_queue_head], bx
+    jmp .evt_scan
+
+.evt_tombstone:
+    ; Consumed slot: reclaim if at head, else step over
+    cmp bx, [event_queue_head]
+    jne .evt_skip
+    inc bx
+    and bx, 0x1F
+    mov [event_queue_head], bx      ; Lazy head advance reclaims slot
+    jmp .evt_scan
+
+.evt_consume:
+    ; Deliverable event found at index BX
+    cmp bx, [event_queue_head]
+    jne .evt_mark_mid
+    inc bx
+    and bx, 0x1F                    ; Wrap at 32 events
+    mov [event_queue_head], bx      ; At head: advance directly (fast path)
+    jmp .evt_return
+.evt_mark_mid:
+    mov byte [event_queue + si], EVENT_CONSUMED   ; Mid-queue: tombstone
 
 .evt_return:
     clc                             ; CF=0 = event available
@@ -10194,11 +10818,16 @@ event_get_stub:
     pop si
     ; fall through to evt_discard
 .evt_discard:
-    ; Consume invalid event and try next
+    ; Invalid/stale event: same as consume but loop for next
+    cmp bx, [event_queue_head]
+    jne .evt_discard_mid
     inc bx
     and bx, 0x1F
     mov [event_queue_head], bx
-    jmp .evt_check_next
+    jmp .evt_scan
+.evt_discard_mid:
+    mov byte [event_queue + si], EVENT_CONSUMED
+    jmp .evt_skip
 
 .no_event:
     ; On HD/USB boot, poll BIOS keyboard since our INT 9 handler isn't installed
@@ -10285,10 +10914,6 @@ event_get_stub:
     pop ax
 .no_event_return:
     xor al, al                      ; AL = 0 (no event, keeps event_wait working)
-    mov dh, [focused_task]          ; DH = focused task ID
-    mov dl, [current_task]          ; DL = current task ID
-    mov ch, byte [event_queue_head] ; CH = queue head index
-    mov cl, byte [event_queue_tail] ; CL = queue tail index
     stc                             ; CF=1 = no event available
     pop ds
     pop si
@@ -10301,7 +10926,21 @@ event_get_stub:
 event_wait_stub:
     call event_get_stub
     test al, al
-    jz event_wait_stub              ; Loop if no event
+    jnz .ew_done                    ; Got event - return it
+    push ds
+    push es                         ; pusha in yield doesn't cover segregs
+    push bx
+    mov bx, 0x1000
+    mov ds, bx
+    cmp byte [current_task], 0xFF   ; Kernel/boot context (no task)?
+    je .ew_skip                     ; Yes - plain poll; yield would never return
+    call app_yield_stub             ; Let other tasks run (incl. focused task)
+.ew_skip:
+    pop bx
+    pop es
+    pop ds
+    jmp event_wait_stub
+.ew_done:
     ret
 
 ; ============================================================================
@@ -10819,8 +11458,9 @@ fat12_mount:
     loop .spinup
     pop cx
 
-    ; HARD-CODE BPB values instead of reading sector 78
-    ; Our FAT12 filesystem at sector 78 has known parameters:
+    ; HARD-CODE BPB values instead of reading the FS boot sector
+    ; Our FAT12 filesystem at sector 110 (see boot/stage2.asm layout sync
+    ; comment) has known parameters:
     ; - 512 bytes per sector
     ; - 1 sector per cluster
     ; - 1 reserved sector
@@ -10836,16 +11476,16 @@ fat12_mount:
     mov word [sectors_per_fat], 9
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 94 + reserved_sectors = 95
-    mov word [fat_start], 95        ; Filesystem at sector 94 + 1 reserved
+    ; fat_start = 110 + reserved_sectors = 111
+    mov word [fat_start], 111       ; Filesystem at sector 110 + 1 reserved
 
     ; Calculate root directory start sector
-    ; root_dir_start = 94 + reserved + (num_fats * sectors_per_fat)
-    ; = 94 + 1 + (2 * 9) = 94 + 1 + 18 = 113
+    ; root_dir_start = 110 + reserved + (num_fats * sectors_per_fat)
+    ; = 110 + 1 + (2 * 9) = 110 + 1 + 18 = 129
     mov ax, 1                       ; reserved_sectors
     add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 94                      ; Filesystem starts at sector 94
-    mov [root_dir_start], ax        ; = 113
+    add ax, 110                     ; Filesystem starts at sector 110
+    mov [root_dir_start], ax        ; = 129
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
@@ -11681,6 +12321,18 @@ fat12_read:
     mov cx, bx                      ; CX = min(requested, remaining)
 
 .read_start:
+    test cx, cx                     ; nothing to read (e.g., at EOF)?
+    jnz .have_bytes
+    xor ax, ax                      ; AX = 0 bytes read
+    clc
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.have_bytes:
     ; For simplicity, only support reading from start of file (position = 0)
     ; Multi-cluster reads ARE supported by following FAT chain
     cmp bp, 0
@@ -11801,7 +12453,6 @@ fat12_read:
     ret
 
 .not_supported:
-    pop cx
     mov ax, FS_ERR_READ_ERROR
     stc
     pop bp
@@ -11814,18 +12465,6 @@ fat12_read:
 
 .invalid_handle:
     mov ax, FS_ERR_INVALID_HANDLE
-    stc
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-.read_error:
-    pop cx
-    mov ax, FS_ERR_READ_ERROR
     stc
     pop bp
     pop di
@@ -14772,6 +15411,7 @@ app_yield_stub:
     ; Save all general-purpose registers on the current stack.
     ; Context switch swaps SS:SP — without this, registers get clobbered
     ; by whatever the other task was doing when it yielded.
+    push es                         ; ES not covered by pusha
     pusha
 
     ; --- Save current task context ---
@@ -14845,6 +15485,7 @@ app_yield_stub:
     sti
 .same_task:
     popa                            ; Restore all general-purpose registers
+    pop es                          ; restore resuming task's ES
     ret                             ; Returns via int80_return_point → pop ds → iret
 
 .idle:
@@ -14876,7 +15517,7 @@ app_start_stub:
 
     ; Build initial stack frame in app's segment
     ; When the scheduler first switches to this task, yield_stub does
-    ; popa (restores dummy registers) then ret → int80_return_point
+    ; popa (restores dummy registers), pop es, then ret → int80_return_point
     ; → pop ds → iret into the app.
     ;
     ; Stack layout (growing down from FFFE):
@@ -14887,8 +15528,9 @@ app_start_stub:
     ;   FFF4: app IP (0x0000)                ← for IRET
     ;   FFF2: app DS (= app CS)              ← for pop ds
     ;   FFF0: int80_return_point             ← for yield's ret
-    ;   FFEE-FFE0: pusha frame (8 words)     ← for yield's popa
-    ;   Saved SP = FFE0
+    ;   FFEE: initial ES (= app segment)     ← for yield's pop es
+    ;   FFEC-FFDE: pusha frame (8 words)     ← for yield's popa
+    ;   Saved SP = FFDE
 
     mov cx, [bx + APP_OFF_CODE_SEG] ; CX = app segment
     mov es, cx
@@ -14900,20 +15542,21 @@ app_start_stub:
     mov word [es:0xFFF4], 0x0000            ; IP = entry point
     mov [es:0xFFF2], cx                     ; DS = app segment
     mov word [es:0xFFF0], int80_return_point
+    mov [es:0xFFEE], cx                     ; initial ES = app segment
 
     ; Dummy pusha frame (AX,CX,DX,BX,SP,BP,SI,DI — all zero)
-    mov word [es:0xFFEE], 0                 ; AX
-    mov word [es:0xFFEC], 0                 ; CX
-    mov word [es:0xFFEA], 0                 ; DX
-    mov word [es:0xFFE8], 0                 ; BX
-    mov word [es:0xFFE6], 0                 ; SP (ignored by popa)
-    mov word [es:0xFFE4], 0                 ; BP
-    mov word [es:0xFFE2], 0                 ; SI
-    mov word [es:0xFFE0], 0                 ; DI
+    mov word [es:0xFFEC], 0                 ; AX
+    mov word [es:0xFFEA], 0                 ; CX
+    mov word [es:0xFFE8], 0                 ; DX
+    mov word [es:0xFFE6], 0                 ; BX
+    mov word [es:0xFFE4], 0                 ; SP (ignored by popa)
+    mov word [es:0xFFE2], 0                 ; BP
+    mov word [es:0xFFE0], 0                 ; SI
+    mov word [es:0xFFDE], 0                 ; DI
 
     ; Save initial SS:SP to app_table
     mov [bx + APP_OFF_STACK_SEG], cx        ; SS = app segment
-    mov word [bx + APP_OFF_STACK_PTR], 0xFFE0
+    mov word [bx + APP_OFF_STACK_PTR], 0xFFDE
 
     ; Initialize per-task saved context
     mov byte [bx + APP_OFF_DRAW_CTX], 0xFF  ; No draw context
@@ -15037,6 +15680,7 @@ app_exit_stub:
     mov sp, [bx + APP_OFF_STACK_PTR]
     sti
     popa                            ; Consume pusha frame from yielded task
+    pop es                          ; restore resuming task's ES
     ret                             ; Now pops int80_return_point correctly
 
 .exit_no_tasks:
@@ -15053,6 +15697,16 @@ destroy_task_windows:
     push cx
     push si
 
+    ; Batch mode: win_destroy_stub skips its per-window repaint/promote
+    ; (which used to redraw + focus sibling windows destroyed on the very
+    ; next iteration); we accumulate the union rect and repaint/promote
+    ; exactly once below.
+    mov byte [dtw_batch], 1
+    mov word [.un_x1], 0x7FFF
+    mov word [.un_y1], 0x7FFF
+    mov word [.un_x2], 0
+    mov word [.un_y2], 0
+
     xor bx, bx                     ; BX = destroyed count
     mov si, window_table
     xor cx, cx                      ; CX = window handle counter
@@ -15066,11 +15720,35 @@ destroy_task_windows:
     cmp [si + WIN_OFF_OWNER], al
     jne .dtw_next
 
+    ; Merge window rect into union of destroyed rects
+    push ax
+    mov ax, [si + WIN_OFF_X]
+    cmp ax, [.un_x1]
+    jge .ux1ok
+    mov [.un_x1], ax
+.ux1ok:
+    add ax, [si + WIN_OFF_WIDTH]
+    cmp ax, [.un_x2]
+    jle .ux2ok
+    mov [.un_x2], ax
+.ux2ok:
+    mov ax, [si + WIN_OFF_Y]
+    cmp ax, [.un_y1]
+    jge .uy1ok
+    mov [.un_y1], ax
+.uy1ok:
+    add ax, [si + WIN_OFF_HEIGHT]
+    cmp ax, [.un_y2]
+    jle .uy2ok
+    mov [.un_y2], ax
+.uy2ok:
+    pop ax
+
     ; Destroy this window
     push ax
     push cx
     mov al, cl                      ; AL = window handle
-    call win_destroy_stub
+    call win_destroy_stub           ; batch mode: clears area only, no repaint
     pop cx
     pop ax
     inc bx                          ; Count destroyed windows
@@ -15081,12 +15759,37 @@ destroy_task_windows:
     jmp .dtw_loop
 
 .dtw_done:
-    test bx, bx                    ; ZF=1 if no windows destroyed (POP won't change flags)
+    mov byte [dtw_batch], 0
+    test bx, bx
+    jz .dtw_ret                     ; nothing destroyed: no repaint, ZF=1
+
+    ; One region repaint over the union rect + one focus reassignment
+    push ax
+    mov ax, [.un_x1]
+    mov [redraw_old_x], ax
+    mov ax, [.un_y1]
+    mov [redraw_old_y], ax
+    mov ax, [.un_x2]
+    sub ax, [.un_x1]
+    mov [redraw_old_w], ax
+    mov ax, [.un_y2]
+    sub ax, [.un_y1]
+    mov [redraw_old_h], ax
+    call redraw_affected_windows
+    call win_promote_next
+    pop ax
+    test bx, bx                    ; re-establish ZF for caller (POPs keep flags)
+.dtw_ret:
     pop si
     pop cx
     pop bx
     pop ax
     ret
+
+.un_x1: dw 0
+.un_y1: dw 0
+.un_x2: dw 0
+.un_y2: dw 0
 
 ; ============================================================================
 ; Window Manager API (v3.12.0)
@@ -15346,7 +16049,7 @@ win_create_stub:
 ; ============================================================================
 
 ; desktop_set_icon_stub - Register a desktop icon
-; Input: AL = slot (0-7), BX = X pos, CX = Y pos
+; Input: AL = slot (0 to DESKTOP_MAX_ICONS-1), BX = X pos, CX = Y pos
 ;        SI -> 76 bytes in caller's DS: 64B bitmap + 12B name
 ; Output: CF=0 success, CF=1 invalid slot
 desktop_set_icon_stub:
@@ -15387,6 +16090,7 @@ desktop_set_icon_stub:
     add di, DESKTOP_ICON_OFF_BITMAP ; DI points to bitmap field
     mov cx, 76                      ; 64 bitmap + 12 name
     rep movsb
+    mov byte [es:di-1], 0           ; Force NUL in name[11]; DI is one past the copy, ES = kernel
 
     ; Update icon count (in kernel DS)
     mov ax, 0x1000
@@ -15499,37 +16203,35 @@ gfx_draw_icon_stub:
     ; Draw 16 rows, 4 bytes per row (CGA: 4 bytes = 16 pixels at 2bpp)
     mov dx, 16                      ; Row counter
 
-.icon_row:
-    ; Calculate CGA address for row at (BX, CX)
-    ; Even rows: (CX/2)*80 + BX/4
-    ; Odd rows:  (CX/2)*80 + BX/4 + 0x2000
-    push cx
-    push bx
+    ; Row address hoisted: one MUL total, then toggle/advance per row
+    ; Even rows: (CX/2)*80 + BX/4;  Odd rows: same + 0x2000
     mov ax, cx
     shr ax, 1                       ; AX = Y / 2
     push dx
     mov di, 80
-    mul di                          ; AX = (Y/2) * 80
+    mul di                          ; AX = (Y/2) * 80 — the ONLY MUL
     pop dx
-    mov di, ax                      ; DI = row base
-
+    mov di, ax                      ; DI = running row address
     mov ax, bx
     shr ax, 1
     shr ax, 1                       ; AX = X / 4
-    add di, ax                      ; DI = row base + byte offset
-
-    test cl, 1                      ; Odd row?
-    jz .icon_even
+    add di, ax
+    test cl, 1                      ; Odd start row?
+    jz .icon_row
     add di, 0x2000
-.icon_even:
+.icon_row:
     ; Copy 4 bytes from DS:SI to ES:DI
     movsb
     movsb
     movsb
     movsb
 
-    pop bx
-    pop cx
+    sub di, 4                       ; Back to row start
+    xor di, 0x2000                  ; Toggle interlace bank
+    test cl, 1
+    jz .icon_next                   ; even->odd: same row pair
+    add di, 80                      ; odd->even: next row pair
+.icon_next:
     inc cx                          ; Next Y row
     dec dx
     jnz .icon_row
@@ -15783,13 +16485,13 @@ draw_desktop_region:
     ; Draw icons that overlap the affected rect (skip far-away icons to prevent corruption)
     ; Compute icon dimensions based on resolution (2x in 640x480+)
     mov word [.icon_size], 16       ; Lo-res: 16x16 icon
-    mov word [.icon_bbox_w], 52     ; Lo-res: icon + label right extent
+    mov word [.icon_bbox_w], 80     ; Lo-res: label (x-8) + 11 chars * 8px advance
     mov word [.icon_bbox_h], 30     ; Lo-res: icon height + gap + label
     mov word [.label_shift], 12     ; Lo-res: label left shift
     cmp word [screen_width], 640
     jb .ddr_bounds_ok
     mov word [.icon_size], 32       ; Hi-res: 32x32 icon (2x scaled)
-    mov word [.icon_bbox_w], 84     ; Hi-res: 32px icon + label right extent
+    mov word [.icon_bbox_w], 72     ; Hi-res: label (x-16) + 11 chars * 8px advance
     mov word [.icon_bbox_h], 50     ; Hi-res: 32px icon + gap + label
     mov word [.label_shift], 24     ; Hi-res: label left shift (2x)
 .ddr_bounds_ok:
@@ -15805,7 +16507,7 @@ draw_desktop_region:
     jae .ddr_done
 
     ; Bounds check: skip icons whose bounding box doesn't overlap affected rect
-    ; Icon bbox: lo-res (x-12, y) to (x+52, y+30), hi-res (x-24, y) to (x+84, y+50)
+    ; Icon bbox: lo-res (x-12, y) to (x+80, y+30), hi-res (x-24, y) to (x+72, y+50)
     ; Test: icon fully right of rect?
     mov ax, [si + DESKTOP_ICON_OFF_X]
     mov dx, [redraw_old_x]
@@ -15883,6 +16585,22 @@ draw_desktop_region:
 .ddr_label_y_ok:
     push si
     add si, DESKTOP_ICON_OFF_NAME
+    ; Truncate label to 10 chars + NUL so an 11-char name (8px/char)
+    ; cannot collide with the next 80px icon column
+    mov di, .label_buf
+    mov dx, 10
+.ddr_lbl_copy:
+    mov al, [si]
+    or al, al
+    jz .ddr_lbl_term
+    mov [di], al
+    inc si
+    inc di
+    dec dx
+    jnz .ddr_lbl_copy
+.ddr_lbl_term:
+    mov byte [di], 0
+    mov si, .label_buf
     push word [caller_ds]
     mov word [caller_ds], 0x1000
     call gfx_draw_string_stub
@@ -15910,9 +16628,10 @@ draw_desktop_region:
     ret
 
 .icon_size:    dw 16               ; 16 (lo-res) or 32 (hi-res)
-.icon_bbox_w:  dw 52               ; Icon + label bounding box width
+.icon_bbox_w:  dw 80               ; Icon + label bounding box width
 .icon_bbox_h:  dw 30               ; Icon + label bounding box height
 .label_shift:  dw 12               ; Label left shift from icon X
+.label_buf:    times 11 db 0       ; Truncated label scratch (10 chars + NUL)
 
 ; gfx_fill_color - Fill a rectangle with a specific CGA color
 ; Input: BX = X, CX = Y, DX = width, SI = height, AL = color (0-3)
@@ -15966,54 +16685,175 @@ gfx_fill_color:
     cmp byte [video_mode], 0x13
     je .gfc_vga
 
+    ; CGA bounds clamp: reject off-screen origin, clip W/H to screen edge
+    cmp bx, [screen_width]
+    jae .gfc_cga_oob
+    cmp cx, [screen_height]
+    jb .gfc_cga_in
+.gfc_cga_oob:
+    jmp .gfc_cursor_done
+.gfc_cga_in:
+    mov ax, [screen_width]
+    sub ax, bx                      ; AX = max width from X (no 16-bit wrap)
+    cmp dx, ax
+    jbe .gfc_cga_w_ok
+    mov dx, ax
+.gfc_cga_w_ok:
+    mov ax, [screen_height]
+    sub ax, cx                      ; AX = max height from Y
+    cmp bp, ax
+    jbe .gfc_cga_h_ok
+    mov bp, ax
+.gfc_cga_h_ok:
+
     ; Check for byte-aligned fast path (BX % 4 == 0 AND DX % 4 == 0)
     mov ax, bx
     and ax, 3
-    jnz .gfc_slow
+    jnz .gfc_hybrid
     mov ax, dx
     and ax, 3
-    jnz .gfc_slow
+    jnz .gfc_hybrid
 
-.gfc_row:
-    ; Fast path: byte-aligned fill with rep stosb
-    push cx                         ; Save Y
-    push bx                         ; Save X
-    push dx                         ; Save width
-
-    ; Row base address
+    ; Fast path: byte-aligned fill; row base hoisted out of the loop
+    ; (one MUL total instead of one per row), rep stosw for the bulk
     mov ax, cx
     shr ax, 1
     push dx
     mov di, 80
-    mul di
+    mul di                          ; AX = (Y/2) * 80 — the ONLY MUL
     pop dx
-    mov di, ax                      ; DI = (Y/2) * 80
-
-    test cl, 1
-    jz .gfc_even
-    add di, 0x2000
-.gfc_even:
-    ; Byte offset for X
+    mov si, ax                      ; SI = running row base
     mov ax, bx
     shr ax, 1
     shr ax, 1                       ; AX = X / 4
-    add di, ax                      ; DI = start byte in CGA memory
-
-    ; Bytes to fill = width / 4
-    mov cx, dx
-    shr cx, 1
-    shr cx, 1
-
-    ; Fill bytes
+    add si, ax
+    test cl, 1
+    jz .gfc_base_ok
+    add si, 0x2000                  ; Odd row: +8K interlace bank
+.gfc_base_ok:
+    shr dx, 1
+    shr dx, 1                       ; DX = bytes per row (width / 4)
     mov al, [.fill_byte]
+    mov ah, al                      ; AX = fill pattern word for stosw
+.gfc_row:
+    mov di, si
+    push cx
+    mov cx, dx                      ; CX = byte count
+    shr cx, 1                       ; CF = odd trailing byte
+    rep stosw
+    adc cx, cx                      ; CX = 0/1 trailing byte
     rep stosb
-
-    pop dx                          ; Restore width
-    pop bx                          ; Restore X
-    pop cx                          ; Restore Y
+    pop cx
+    xor si, 0x2000                  ; Toggle interlace bank
+    test cl, 1
+    jz .gfc_next                    ; even->odd: same row pair
+    add si, 80                      ; odd->even: next row pair
+.gfc_next:
     inc cx                          ; Next Y
     dec bp
     jnz .gfc_row
+    jmp .gfc_cursor_done
+
+.gfc_hybrid:
+    ; Hybrid CGA fill: masked lead/trail pixels + rep stosw/stosb middle
+    ; (modeled on gfx_clear_area_stub's hybrid; handles any alignment)
+    cmp dx, 4
+    jae .gfc_hsetup
+    jmp .gfc_slow                   ; Very narrow (<4 px): pixel path is fine
+.gfc_hsetup:
+    ; Row base hoisted: one MUL total, then toggle/advance per row
+    mov ax, cx
+    shr ax, 1
+    push dx
+    mov di, 80
+    mul di                          ; AX = (Y/2) * 80
+    pop dx
+    mov si, ax                      ; SI = running row base
+    test cl, 1
+    jz .gfc_hrow
+    add si, 0x2000
+.gfc_hrow:
+    push cx                         ; Save Y
+    push bx                         ; Save start X
+    push dx                         ; Save width
+    ; --- Leading partial byte ---
+    mov ax, bx
+    and ax, 3
+    jz .gfc_h_no_lead
+    mov di, bx
+    shr di, 1
+    shr di, 1
+    add di, si                      ; DI = first byte in video mem
+    push cx
+    mov cx, 4
+    sub cx, ax                      ; CX = lead pixels to fill (1-3)
+    sub dx, cx                      ; Reduce remaining width
+    add bx, cx                      ; BX = first aligned X
+    shl cl, 1                       ; CL = bits to replace (2,4,6)
+    mov al, 0xFF
+    shl al, cl                      ; AL = keep-mask (pixels left of fill)
+    mov ah, [.fill_byte]
+    and [es:di], al                 ; Clear pixels being filled
+    not al
+    and al, ah                      ; Color bits for filled pixels
+    or [es:di], al
+    pop cx
+.gfc_h_no_lead:
+    ; --- Middle full bytes (BX now 4-aligned) ---
+    mov ax, dx
+    shr ax, 1
+    shr ax, 1                       ; AX = full bytes
+    jz .gfc_h_no_mid
+    mov di, bx
+    shr di, 1
+    shr di, 1
+    add di, si
+    push cx
+    mov cx, ax                      ; CX = byte count
+    mov al, [.fill_byte]
+    mov ah, al
+    shr cx, 1                       ; CF = odd trailing byte
+    rep stosw
+    adc cx, cx
+    rep stosb
+    pop cx
+    mov ax, dx
+    and ax, 0xFFFC                  ; Middle pixels (multiple of 4)
+    add bx, ax
+.gfc_h_no_mid:
+    ; --- Trailing partial byte ---
+    mov ax, dx
+    and ax, 3                       ; AX = trailing pixels (0-3)
+    jz .gfc_h_no_trail
+    mov di, bx
+    shr di, 1
+    shr di, 1
+    add di, si
+    push cx
+    mov cl, al
+    shl cl, 1                       ; CL = bits to replace (2,4,6)
+    mov al, 0xFF
+    shr al, cl                      ; AL = keep-mask (pixels right of fill)
+    mov ah, [.fill_byte]
+    and [es:di], al
+    not al
+    and al, ah
+    or [es:di], al
+    pop cx
+.gfc_h_no_trail:
+    pop dx                          ; Restore width
+    pop bx                          ; Restore start X
+    pop cx                          ; Restore Y
+    xor si, 0x2000                  ; Toggle interlace bank
+    test cl, 1
+    jz .gfc_h_next                  ; even->odd: same row pair
+    add si, 80                      ; odd->even: next row pair
+.gfc_h_next:
+    inc cx                          ; Next Y
+    dec bp
+    jz .gfc_h_done
+    jmp .gfc_hrow
+.gfc_h_done:
     jmp .gfc_cursor_done
 
 .gfc_slow:
@@ -16077,25 +16917,23 @@ gfx_fill_color:
     jz .gfc_cursor_done
     test bp, bp
     jz .gfc_cursor_done
-    mov al, [.fill_color]
-.gfc_vga_row:
-    push cx                         ; Save Y
-    push bx                         ; Save X
-    push dx                         ; Save width
-    ; Calculate offset: DI = Y * pitch + X
+    ; Row start hoisted: one MUL total, then add pitch per row
     mov ax, cx
     push dx
     mul word [screen_pitch]
     pop dx
     add ax, bx
-    mov di, ax                      ; DI = Y * pitch + X
-    mov cx, dx                      ; CX = width (rep count)
+    mov si, ax                      ; SI = running row offset (Y*pitch + X)
     mov al, [.fill_color]
-    rep stosb                       ; Fill width bytes with color
-    pop dx                          ; Restore width
-    pop bx                          ; Restore X
-    pop cx                          ; Restore Y
-    inc cx                          ; Next Y
+    mov ah, al                      ; AX = fill pattern word for stosw
+.gfc_vga_row:
+    mov di, si
+    mov cx, dx                      ; CX = width (rep count)
+    shr cx, 1                       ; CF = odd trailing byte
+    rep stosw                       ; Fill width bytes with color, word-wise
+    adc cx, cx                      ; CX = 0/1 trailing byte
+    rep stosb
+    add si, [screen_pitch]          ; Next row
     dec bp
     jnz .gfc_vga_row
     jmp .gfc_cursor_done
@@ -16371,6 +17209,7 @@ redraw_old_x:   dw 0
 redraw_old_y:   dw 0
 redraw_old_w:   dw 0
 redraw_old_h:   dw 0
+dtw_batch:      db 0                ; 1 = destroy_task_windows batch in progress
 
 ; win_destroy_stub - Destroy a window
 ; Input:  AX = Window handle
@@ -16431,11 +17270,66 @@ win_destroy_stub:
     ; doesn't skip icons under the now-destroyed window
     mov byte [topmost_handle], 0xFF
 
+    ; Close the z-order gap left by the destroyed window: every visible
+    ; window BELOW it moves up one level. Keeps z a dense block ending at
+    ; 15, so the surviving topmost stays z=15 and the promote path's
+    ; win_focus_stub call hits .already_top (no re-demotion).
+    mov al, [bx + WIN_OFF_ZORDER]   ; destroyed window's z (entry not wiped)
+    mov si, window_table
+    mov cx, WIN_MAX_COUNT
+.znorm_loop:
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .znorm_next
+    cmp [si + WIN_OFF_ZORDER], al
+    jae .znorm_next                 ; only windows below the gap move up
+    inc byte [si + WIN_OFF_ZORDER]  ; max result = destroyed z <= 15
+.znorm_next:
+    add si, WIN_ENTRY_SIZE
+    loop .znorm_loop
+
+    cmp byte [dtw_batch], 0
+    jne .batch_skip                 ; batch: destroy_task_windows does one
+                                    ; repaint + promote for all windows
+
     ; Redraw any windows that were overlapped by this one
     call redraw_affected_windows
 
     ; Promote next highest z-order window to topmost (z=15)
     ; Without this, no window can draw after the topmost is destroyed
+    call win_promote_next
+.batch_skip:
+
+    clc
+    jmp .done
+
+.invalid:
+    mov ax, WIN_ERR_INVALID
+    stc
+
+.done:
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+    ret
+
+; win_promote_next - Promote highest-z visible window to topmost (z=15),
+; focus it, redraw its frame, and post EVENT_WIN_REDRAW so the owner
+; repaints. If no visible window remains, resets focused_task and
+; topmost_handle so the launcher gets keyboard input.
+; Preserves: all registers. Requires nothing (sets its own DS).
+win_promote_next:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    mov bx, 0x1000
+    mov ds, bx
     mov si, window_table
     mov cx, WIN_MAX_COUNT
     mov byte [.best_z], 0
@@ -16476,22 +17370,12 @@ win_destroy_stub:
     mov dl, [.best_handle]
     call post_event
 .promote_done:
-
-    clc
-    jmp .done
-
-.invalid:
-    mov ax, WIN_ERR_INVALID
-    stc
-
-.done:
     pop ds
     pop si
     pop dx
     pop cx
     pop bx
-    dec byte [cursor_locked]
-    call mouse_cursor_show
+    pop ax
     ret
 
 .best_z:      db 0
@@ -17555,6 +18439,25 @@ win_draw_stub:
     pop cx
     pop bx
 
+    ; Clip title to titlebar so long titles can't bleed past the frame
+    push word [clip_enabled]
+    push word [clip_x1]
+    push word [clip_y1]
+    push word [clip_x2]
+    push word [clip_y2]
+    push ax
+    mov [clip_x1], cx               ; left = win_x
+    mov ax, cx
+    add ax, si                      ; AX = win_x + width
+    sub ax, 13                      ; last 12px char cell ends at win_x+width-2
+    mov [clip_x2], ax
+    mov [clip_y1], dx               ; top = win_y
+    mov ax, dx
+    add ax, [titlebar_height]
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    pop ax
+
     ; Draw title text
     push bx
     push word [caller_ds]
@@ -17576,6 +18479,14 @@ win_draw_stub:
 .active_text_done:
     pop word [caller_ds]
     pop bx
+
+    ; Restore caller's clip state (apps own their clip rect; the [X] draw
+    ; below must NOT be clipped or it would be skipped entirely)
+    pop word [clip_y2]
+    pop word [clip_x2]
+    pop word [clip_y1]
+    pop word [clip_x1]
+    pop word [clip_enabled]
 
     ; Draw close button [X]
     push bx
@@ -17632,6 +18543,25 @@ win_draw_stub:
     pop cx
     pop bx
 
+    ; Clip title to titlebar so long titles can't bleed past the frame
+    push word [clip_enabled]
+    push word [clip_x1]
+    push word [clip_y1]
+    push word [clip_x2]
+    push word [clip_y2]
+    push ax
+    mov [clip_x1], cx               ; left = win_x
+    mov ax, cx
+    add ax, si                      ; AX = win_x + width
+    sub ax, 13                      ; last 12px char cell ends at win_x+width-2
+    mov [clip_x2], ax
+    mov [clip_y1], dx               ; top = win_y
+    mov ax, dx
+    add ax, [titlebar_height]
+    mov [clip_y2], ax
+    mov byte [clip_enabled], 1
+    pop ax
+
     ; Draw title text - normal white on black (flat) or white on gray (3D)
     push bx
     cmp byte [widget_style], 0
@@ -17650,6 +18580,14 @@ win_draw_stub:
     pop word [caller_ds]
     mov byte [draw_bg_color], 0
     pop bx
+
+    ; Restore caller's clip state (apps own their clip rect; the [X] draw
+    ; below must NOT be clipped or it would be skipped entirely)
+    pop word [clip_y2]
+    pop word [clip_x2]
+    pop word [clip_y1]
+    pop word [clip_x1]
+    pop word [clip_enabled]
 
     ; Draw close button [X] - normal white
     push bx
@@ -17712,6 +18650,11 @@ win_draw_stub:
     jz .no_grip
     push si
     push bp
+    push es                         ; plot_pixel_color writes via ES:DI and
+    mov si, [video_segment]         ; requires ES = video segment (cga_pixel_calc
+    mov es, si                      ; contract). Caller's ES may be kernel/app data
+                                    ; (e.g. win_create's title copy leaves ES=0x1000),
+                                    ; which sent these grip pixels into kernel memory.
     mov si, [di + WIN_OFF_X]
     add si, [di + WIN_OFF_WIDTH]   ; SI = right edge X
     mov bp, [di + WIN_OFF_Y]
@@ -17741,6 +18684,7 @@ win_draw_stub:
     mov bx, bp
     sub bx, 3
     call plot_pixel_color
+    pop es
     pop bp
     pop si
 .no_grip:
@@ -17801,11 +18745,16 @@ win_focus_stub:
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
 
-    ; Already on top? Skip demotion
+    ; Already on top? Skip demotion and repaint
+    mov byte [.raised], 0
     cmp byte [bx + WIN_OFF_ZORDER], 15
     je .already_top
+    mov byte [.raised], 1
 
-    ; Demote all other visible windows' z-order
+    ; Demote only windows ABOVE this one (z > old z); demoting windows
+    ; below it leaked z-levels until everything collided at z=0.
+    push dx
+    mov dl, [bx + WIN_OFF_ZORDER]   ; DL = raised window's old z
     mov si, window_table
     mov cx, WIN_MAX_COUNT
 .demote_loop:
@@ -17813,12 +18762,13 @@ win_focus_stub:
     je .demote_next
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .demote_next
-    cmp byte [si + WIN_OFF_ZORDER], 0
-    je .demote_next
-    dec byte [si + WIN_OFF_ZORDER]
+    cmp [si + WIN_OFF_ZORDER], dl
+    jbe .demote_next                ; z <= old z: leave it alone
+    dec byte [si + WIN_OFF_ZORDER]  ; min result = old z, cannot underflow
 .demote_next:
     add si, WIN_ENTRY_SIZE
     loop .demote_loop
+    pop dx
 
     ; Redraw old topmost window's title bar as inactive
     push ax
@@ -17853,6 +18803,58 @@ win_focus_stub:
     mov [topmost_win_h], si
     pop si
 
+    ; Repaint the newly raised window (frame now draws active: z=15),
+    ; clear its content, and post EVENT_WIN_REDRAW so the owning app
+    ; repaints. Mirrors the mouse_process_drag focus path / win_destroy
+    ; promote path so a bare API 23 call is visually complete.
+    cmp byte [.raised], 0
+    je .no_repaint
+    push ax                         ; preserve handle / caller AX
+    push dx                         ; prologue does not save DX
+
+    call mouse_cursor_hide          ; keep draw+clear atomic vs cursor
+    inc byte [cursor_locked]        ; (gfx_clear VGA/VESA paths don't self-hide)
+
+    ; Stale clip rect from calling task can clip the title text
+    push word [clip_enabled]
+    mov byte [clip_enabled], 0
+    push ax
+    call win_draw_stub              ; AL = handle, active-style frame
+    pop ax
+    pop word [clip_enabled]
+
+    ; Clear content area (inside border / below title bar when framed)
+    mov cx, [bx + WIN_OFF_Y]
+    mov dx, [bx + WIN_OFF_WIDTH]
+    mov si, [bx + WIN_OFF_HEIGHT]
+    test byte [bx + WIN_OFF_FLAGS], WIN_FLAG_TITLE | WIN_FLAG_BORDER
+    push bx                         ; push/mov leave flags intact
+    mov bx, [bx + WIN_OFF_X]
+    jz .clear_ready                 ; frameless: clear full rect
+    inc bx                          ; inside left border
+    add cx, [titlebar_height]       ; below title bar
+    sub dx, 2                       ; inside both borders
+    sub si, [titlebar_height]
+    dec si                          ; above bottom border
+.clear_ready:
+    test si, si
+    jz .skip_clear
+    call gfx_clear_area_stub        ; preserves all registers
+.skip_clear:
+    pop bx                          ; restore window-table pointer
+
+    dec byte [cursor_locked]
+    call mouse_cursor_show
+
+    ; Notify owning app to repaint its content
+    xor dx, dx
+    mov dl, al                      ; DX = window handle (AL intact)
+    mov al, EVENT_WIN_REDRAW
+    call post_event                 ; preserves all
+    pop dx
+    pop ax
+.no_repaint:
+
     clc
     jmp .done
 
@@ -17865,6 +18867,8 @@ win_focus_stub:
     pop cx
     pop bx
     ret
+
+.raised: db 0                       ; 1 = window was raised (not already top)
 
 ; win_move_stub - Move window to new position
 ; Input:  AX = Window handle, BX = New X, CX = New Y
@@ -18608,7 +19612,7 @@ set_video_mode:
     push di
     mov ax, 0x9000
     mov es, ax
-    xor di, di                     ; ES:DI = 0x9000:0000 (scratch buffer)
+    mov di, 0x2000                 ; ES:DI = 0x9000:0x2000 (VESA scratch; clipboard owns 0x0000-0x0FFF, fdlg owns 0x1000-0x133F)
     mov ax, 0x4F01                 ; VESA: Get Mode Info
     mov cx, 0x0101                 ; Mode 0x101 = 640x480x256
     int 0x10
@@ -18620,16 +19624,31 @@ set_video_mode:
     push ds
     mov ax, 0x9000
     mov ds, ax
-    test byte [0x0000], 1          ; Mode attributes bit 0
+    test byte [0x2000], 1          ; Mode attributes bit 0
     pop ds
     jz .svm_vesa_fail
     ; Save window granularity (offset 4 in mode info)
     push ds
     mov ax, 0x9000
     mov ds, ax
-    mov ax, [0x0004]               ; Window granularity in KB
+    mov ax, [0x2004]               ; Window granularity in KB
     pop ds
     mov [vesa_gran], ax
+    ; Compute vesa_bank_shift = log2(64/gran); reject gran that is 0,
+    ; >64, or not a power-of-two divisor of 64
+    test ax, ax
+    jz .svm_vesa_fail
+    xor cx, cx                     ; shift count
+    mov bx, 64
+.svm_gran_loop:
+    cmp bx, ax
+    je .svm_gran_ok
+    jb .svm_vesa_fail              ; gran not a divisor of 64 (or >64)
+    shr bx, 1
+    inc cx
+    jmp .svm_gran_loop
+.svm_gran_ok:
+    mov [vesa_bank_shift], cl
     ; Set VESA mode 0x101
     push ax
     mov ax, 0x4F02
@@ -19287,10 +20306,10 @@ win_resize_stub:
     pop bx
 .wrs_no_clip_update:
 
-    ; Redraw the background where old window was, then redraw frame
+    ; Redraw desktop + overlapped windows where old rect was, then redraw frame
     push ax
-    call draw_desktop_region
-    call win_draw_stub              ; Redraw frame with new size
+    call redraw_affected_windows    ; Repaints desktop region, overlapped frames, posts WIN_REDRAW
+    call win_draw_stub              ; Redraw this window's frame with new size on top
 
     ; Clear content area so desktop icons don't show through
     push dx
@@ -19503,6 +20522,32 @@ gfx_scroll_area:
     sub ax, bp                      ; AX = bytes per row
     mov [cs:.sa_bpr], ax
 
+    ; Inside-region masks for partial edge bytes (CGA 2bpp, leftmost pixel = bits 7:6)
+    push cx
+    mov cx, [cs:.sa_x]
+    and cl, 3
+    shl cl, 1                       ; CL = 2*(X & 3)
+    mov al, 0xFF
+    shr al, cl                      ; 0xFF when aligned
+    mov [cs:.sa_lmask], al
+    mov cx, [cs:.sa_x]
+    add cx, [cs:.sa_w]
+    and cx, 3
+    mov al, 0xFF
+    jz .sa_rmask_done               ; aligned: mask = 0xFF
+    shl cl, 1
+    neg cl
+    add cl, 8                       ; CL = 8 - 2*((X+W) & 3)
+    shl al, cl
+.sa_rmask_done:
+    mov [cs:.sa_rmask], al
+    cmp word [cs:.sa_bpr], 1        ; single-byte region: fold masks
+    jne .sa_masks_done
+    and [cs:.sa_lmask], al
+    mov byte [cs:.sa_rmask], 0xFF
+.sa_masks_done:
+    pop cx
+
     ; Number of rows to copy = H - scroll_pixels
     mov ax, si
     sub ax, di                      ; AX = rows to copy
@@ -19559,12 +20604,29 @@ gfx_scroll_area:
     shr ax, 1
     add di, ax
 
-    ; Copy bytes for this row
+    ; Copy bytes for this row (merge partial edge bytes under mask)
     mov cx, [cs:.sa_bpr]
     push ds
     push es
     pop ds                          ; DS = ES = video segment
+    jcxz .sa_cp_row_done
+    mov al, [cs:.sa_lmask]
+    cmp al, 0xFF
+    je .sa_cp_no_lead
+    call .sa_merge_byte             ; merge first byte under mask
+    dec cx
+    jz .sa_cp_row_done
+.sa_cp_no_lead:
+    mov al, [cs:.sa_rmask]
+    cmp al, 0xFF
+    je .sa_cp_all
+    dec cx                          ; reserve last byte
+    rep movsb                       ; middle full bytes
+    call .sa_merge_byte             ; merge last byte under mask
+    jmp .sa_cp_row_done
+.sa_cp_all:
     rep movsb
+.sa_cp_row_done:
     pop ds
 
     ; Advance Y positions
@@ -19599,9 +20661,7 @@ gfx_scroll_area:
     shr ax, 1
     add di, ax
 
-    mov cx, [cs:.sa_bpr]
-    xor al, al
-    rep stosb
+    call .sa_masked_clear           ; zero inside-region bits only
 
     inc word [cs:.sa_dst_y]
     pop cx
@@ -19635,14 +20695,13 @@ gfx_scroll_area:
     shr ax, 1
     add di, ax
 
-    mov cx, [cs:.sa_bpr]
-    xor al, al
-    rep stosb
+    call .sa_masked_clear           ; zero inside-region bits only
 
     inc word [cs:.sa_dst_y]
     pop cx
     dec cx
     jnz .sa_clear_all_loop
+    jmp .sa_done                    ; CGA clear-all complete; do not fall into VESA path
 
 .sa_vesa:
     ; VESA scroll: row-by-row copy with bank switching, then clear strip
@@ -19683,8 +20742,16 @@ gfx_scroll_area:
     mov ax, [cs:.sa_vesa_sbank]
     cmp ax, [cs:.sa_vesa_dbank]
     jne .sa_vesa_cross
+    ; Fast path only if neither row reaches past the 64KB bank end
+    mov ax, [cs:.sa_vesa_soff]
+    add ax, [cs:.sa_w]
+    jc .sa_vesa_cross               ; src row crosses bank boundary
+    mov ax, [cs:.sa_vesa_doff]
+    add ax, [cs:.sa_w]
+    jc .sa_vesa_cross               ; dst row crosses bank boundary
 
     ; Same bank: set bank and direct movsb
+    mov ax, [cs:.sa_vesa_sbank]
     call vesa_set_bank
     mov si, [cs:.sa_vesa_soff]
     mov di, [cs:.sa_vesa_doff]
@@ -19715,7 +20782,13 @@ gfx_scroll_area:
     pop ax
     mov [es:di], al
     inc si
+    jnz .sa_vc_si_ok
+    inc word [cs:.sa_vesa_sbank]    ; SI wrapped 0xFFFF->0: advance src bank
+.sa_vc_si_ok:
     inc di
+    jnz .sa_vc_di_ok
+    inc word [cs:.sa_vesa_dbank]    ; DI wrapped 0xFFFF->0: advance dst bank
+.sa_vc_di_ok:
     dec cx
     jnz .sa_vc_byte
 
@@ -19930,12 +21003,54 @@ gfx_scroll_area:
     clc
     ret
 
+.sa_merge_byte:                     ; AL=inside mask, DS:SI=src, ES:DI=dst (DS=ES=video)
+    mov ah, [si]
+    and ah, al                      ; inside bits from src row
+    not al
+    and al, [es:di]                 ; outside bits kept from dst row
+    or al, ah
+    mov [es:di], al
+    inc si
+    inc di
+    ret
+
+.sa_masked_clear:                   ; ES:DI = row start byte; zeroes inside-region bits only
+    mov cx, [cs:.sa_bpr]
+    jcxz .sa_mc_done
+    mov al, [cs:.sa_lmask]
+    cmp al, 0xFF
+    je .sa_mc_no_lead
+    not al
+    and [es:di], al                 ; zero inside bits of first byte only
+    inc di
+    dec cx
+    jz .sa_mc_done
+.sa_mc_no_lead:
+    mov al, [cs:.sa_rmask]
+    cmp al, 0xFF
+    je .sa_mc_all
+    dec cx
+    push ax
+    xor al, al
+    rep stosb                       ; middle full bytes
+    pop ax
+    not al
+    and [es:di], al                 ; zero inside bits of last byte
+    ret
+.sa_mc_all:
+    xor al, al
+    rep stosb
+.sa_mc_done:
+    ret
+
 .sa_x:       dw 0
 .sa_y:       dw 0
 .sa_w:       dw 0
 .sa_h:       dw 0
 .sa_scroll:  dw 0
 .sa_bpr:     dw 0
+.sa_lmask:   db 0
+.sa_rmask:   db 0
 .sa_src_y:   dw 0
 .sa_dst_y:   dw 0
 
@@ -19960,7 +21075,7 @@ draw_y: dw 0
 current_font:      db 1              ; 0=4x6, 1=8x8, 2=8x12
 draw_font_height:  db 8              ; Current font height in pixels
 draw_font_width:   db 8              ; Current font glyph width in pixels
-draw_font_advance: db 12             ; Pixels to advance per character
+draw_font_advance: db 8              ; Pixels to advance per character
 draw_font_bpc:     db 8              ; Bytes per character in font data
 draw_font_base:    dw font_8x8       ; Pointer to current font data
 
@@ -19971,7 +21086,7 @@ font_table:
     dw font_4x6                       ; Font 0: small
     db 6, 4, 6, 6                     ; height=6, width=4, advance=6, bpc=6
     dw font_8x8                       ; Font 1: medium (default)
-    db 8, 8, 12, 8                    ; height=8, width=8, advance=12, bpc=8
+    db 8, 8, 8, 8                     ; height=8, width=8, advance=8, bpc=8
     dw font_8x12                      ; Font 2: large
     db 12, 8, 12, 12                  ; height=12, width=8, advance=12, bpc=12
 
@@ -19992,6 +21107,7 @@ screen_pitch:   dw 80                  ; Bytes per scanline (80=CGA, 320=VGA13h,
 widget_style:   db 0                   ; 0=flat (CGA), 1=3D beveled (VGA modes)
 titlebar_height: dw 10                 ; Dynamic titlebar height (10=lo-res, 18=hi-res)
 vesa_gran:      dw 64                  ; VESA window granularity in KB
+vesa_bank_shift: db 0                  ; shl count converting 64KB banks to granularity units (log2(64/gran))
 vesa_cur_bank:  dw 0xFFFF              ; Current VESA bank (0xFFFF = invalid/unset)
 
 ; Color theme variables (Build 208)
@@ -20121,12 +21237,14 @@ kbd_shift_state: db 0
 kbd_ctrl_state: db 0
 kbd_alt_state: db 0
 kbd_e0_flag: db 0
+kbd_numlock_state: db 0             ; 0=off: bare numpad scancodes act as cursor keys (XT/84-key AT)
 
 ; PS/2 Mouse driver state
 old_int74_offset:   dw 0            ; Original IRQ12 vector
 old_int74_segment:  dw 0
 mouse_packet:       times 3 db 0    ; 3-byte packet buffer
 mouse_packet_idx:   db 0            ; Current byte in packet (0-2)
+mouse_last_byte_tick: dw 0          ; BIOS tick of last mouse byte (desync guard)
 mouse_x:            dw 160          ; Current X position (0-319)
 mouse_y:            dw 100          ; Current Y position (0-199)
 mouse_buttons:      db 0            ; Bit 0=left, bit 1=right, bit 2=middle
@@ -20225,9 +21343,9 @@ reserved_sectors: dw 1
 num_fats: db 2
 root_dir_entries: dw 224
 sectors_per_fat: dw 9
-fat_start: dw 95                    ; Absolute FAT sector = filesystem_start(94) + reserved(1)
-root_dir_start: dw 113              ; Calculated: 94 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 127             ; Calculated: root_dir_start + root_dir_sectors
+fat_start: dw 111                   ; Absolute FAT sector = filesystem_start(110) + reserved(1)
+root_dir_start: dw 129              ; Calculated: 110 + reserved + (num_fats * sectors_per_fat)
+data_area_start: dw 143             ; Calculated: root_dir_start + root_dir_sectors (129 + 14)
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -20325,15 +21443,16 @@ APP_ENTRY_SIZE      equ 32
 
 ; App segment constants
 APP_SEGMENT_SHELL   equ 0x2000              ; Shell/launcher segment (fixed)
-APP_NUM_USER_SEGS   equ 6                   ; Number of dynamic user segments
+APP_NUM_USER_SEGS   equ 5                   ; Number of dynamic user segments
 SCRATCH_SEGMENT     equ 0x9000              ; Scratch buffer / system clipboard
 CLIP_MAX_SIZE       equ 4096                ; Max clipboard data size (bytes)
 
 app_table: times (APP_MAX_COUNT * APP_ENTRY_SIZE) db 0
 
-; Dynamic segment allocation pool (6 user segments: 0x3000-0x8000)
-segment_pool:   dw 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000
-segment_owner:  db 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF  ; 0xFF = free
+; Dynamic segment allocation pool (5 user segments: 0x3000-0x7000)
+; 0x8000 is the kernel heap (HEAP_SEGMENT) — removed from the pool in Build 401
+segment_pool:   dw 0x3000, 0x4000, 0x5000, 0x6000, 0x7000
+segment_owner:  db 0xFF, 0xFF, 0xFF, 0xFF, 0xFF  ; 0xFF = free
 
 ; Shell tracking (for auto-return to launcher)
 shell_handle:       dw 0xFFFF               ; Handle of shell app (0xFFFF = none)
@@ -20356,7 +21475,7 @@ topmost_win_h:      dw 0
 ; ============================================================================
 
 ; Desktop icon constants
-DESKTOP_MAX_ICONS       equ 16
+DESKTOP_MAX_ICONS       equ 40      ; Match launcher MAX_ICONS_HI (8x5 hi-res grid)
 DESKTOP_ICON_SIZE       equ 80      ; 2+2+64+12 bytes per entry
 DESKTOP_ICON_OFF_X      equ 0       ; word: X screen position
 DESKTOP_ICON_OFF_Y      equ 2       ; word: Y screen position
@@ -20484,5 +21603,6 @@ sdlg_confirming:    db 0            ; 1 = showing overwrite confirmation
 ; Padding
 ; ============================================================================
 
-; Pad to 44KB (88 sectors) - expanded for file save dialog + scrollbar hit (Build 369)
-times 45056 - ($ - $$) db 0
+; Padded to KERNEL_SECTORS sectors (see boot/stage2.asm); a nasm error here
+; means the kernel outgrew the load area
+times (104*512) - ($ - $$) db 0

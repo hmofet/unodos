@@ -11,16 +11,15 @@ Address Range          Size    Usage
 0x0000:0x7C00          512 B   Boot Sector (loaded by BIOS)
 0x0000:0x7E00          ~1 KB   FREE (after boot sector)
 0x0800:0x0000          2 KB    Stage2 Bootloader
-0x1000:0x0000          28 KB   Kernel
+0x1000:0x0000          44 KB   Kernel (may grow up to 64 KB)
   0x1000:0x1A00        ~364 B    API dispatch table (105 functions)
-0x1400:0x0000          ~64 KB  Heap (malloc pool)
 0x2000:0x0000          64 KB   Shell/Launcher segment (fixed)
 0x3000:0x0000          64 KB   User app slot 0 (dynamic pool)
 0x4000:0x0000          64 KB   User app slot 1
 0x5000:0x0000          64 KB   User app slot 2
 0x6000:0x0000          64 KB   User app slot 3
 0x7000:0x0000          64 KB   User app slot 4
-0x8000:0x0000          64 KB   User app slot 5
+0x8000:0x0000          60 KB   Kernel heap (malloc pool)
 0x9000:0x0000          64 KB   Scratch buffer (window drag content)
 0x9FFF:0xFFFF          -       End of conventional memory
 0xA000:0x0000          64 KB   EGA/VGA graphics memory
@@ -54,7 +53,7 @@ Offset    Content
 0x1100    API table (header + 105 function pointers)
 ~0x1084   Font data (8x8 + 4x6)
 ~0x1500   Data section (window_table, app_table, segment_pool, variables)
-~0x6FFF   End of 28KB kernel (padded)
+~0xAFFF   End of 44KB kernel (padded to 45056 bytes)
 ```
 
 ### API Table Structure (at 0x1000:0x1A00)
@@ -82,10 +81,13 @@ Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
 **Reasons:**
 1. **Clean Segmentation** - Single segment (0x1000) covers entire kernel
 2. **No segment manipulation** - DS, ES, CS all 0x1000 during kernel execution
-3. **Clear heap boundary** - Heap at 0x1400:0000 is 16KB after kernel start
+3. **Room to grow** - Kernel can expand to the full 64KB segment (up to
+   0x2000:0000) without colliding with the heap, which lives in its own
+   dedicated segment at 0x8000 (moved there in Build 401; the old 0x1400
+   heap overlapped the kernel image once the kernel grew past 16KB)
 4. **Future compatibility** - Aligned for potential protected mode transition
 
-### Multi-App Segment Architecture (Build 149+)
+### Multi-App Segment Architecture (Build 149+, pool reduced Build 401)
 
 ```
 0x2000:0x0000  Shell (Launcher) - fixed, persists always
@@ -94,14 +96,14 @@ Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
 0x5000:0x0000  User app slot 2
 0x6000:0x0000  User app slot 3
 0x7000:0x0000  User app slot 4
-0x8000:0x0000  User app slot 5
+0x8000:0x0000  Kernel heap (removed from app pool in Build 401)
 ```
 
 - Shell loads at 0x2000 (fixed), user apps allocated dynamically from pool
-- Up to 6 concurrent user apps, each in its own 64KB segment
+- Up to 5 concurrent user apps, each in its own 64KB segment
 - `alloc_segment(task_handle)` finds free segment, marks owned
 - `free_segment(segment)` returns segment to pool on task exit
-- `segment_pool` (6 words) + `segment_owner` (6 bytes) track allocation state
+- `segment_pool` (5 words) + `segment_owner` (5 bytes) track allocation state
 - Apps use `[ORG 0x0000]` and are loaded at offset 0
 
 ### Scratch Buffer (0x9000)
@@ -118,15 +120,15 @@ Shared kernel buffer used for system services:
 
 | Region | Size | Usage | Notes |
 |--------|------|-------|-------|
-| 0x0500-0x7C00 | 30KB | Unused (TPA) | Available for future use |
-| 0x1000-0x16FF | 28KB | Kernel | In use |
-| 0x1400-0x1FFF | 48KB | Heap | Available for malloc |
+| 0x0500-0x7C00 | 30KB | Kernel stack | SS=0, SP grows down from 0x7C00 |
+| 0x1000-0x1AFF | 44KB | Kernel | May grow up to 64KB (to 0x2000) |
 | 0x2000-0x2FFF | 64KB | Shell segment | Launcher (fixed) |
-| 0x3000-0x8FFF | 384KB | User app pool | 6 × 64KB segments |
+| 0x3000-0x7FFF | 320KB | User app pool | 5 × 64KB segments |
+| 0x8000-0x8EFF | 60KB | Heap | Available for malloc |
 | 0x9000-0x9FFF | 64KB | Scratch buffer | Clipboard (4KB) + file dialog list |
 
-**Overall:** 7 app segments (1 shell + 6 user) using 448KB of the 640KB address space.
+**Overall:** 6 app segments (1 shell + 5 user) using 384KB of the 640KB address space.
 
 ---
 
-*v3.23.0 Build 397*
+*v3.23.0 Build 401*

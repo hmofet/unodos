@@ -98,7 +98,7 @@ $(BUILD_INFO): BUILD_NUMBER VERSION
 	@echo "BUILD_NUMBER_STR: db 'Build: $(shell printf '%03d' $(BUILD_NUMBER))', 0" >> $@
 	@echo "VERSION_STR: db 'UnoDOS v$(shell cat VERSION)', 0" >> $@
 
-# Assemble kernel (28KB)
+# Assemble kernel (padded to 104 sectors = 52KB; see boot/stage2.asm KERNEL_SECTORS)
 # Font files now in kernel directory
 $(KERNEL_BIN): $(KERNEL_DIR)/kernel.asm $(KERNEL_DIR)/font8x8.asm $(KERNEL_DIR)/font4x6.asm $(BUILD_INFO) | $(BUILD_DIR)
 	$(NASM) -f bin -I$(KERNEL_DIR)/ -o $@ $<
@@ -151,7 +151,7 @@ $(PACMANV_BIN): $(APPS_DIR)/pacmanv.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
 # Create 360KB floppy image (target platform)
-# Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-37 = kernel (16KB)
+# Layout: sector 1 = boot, sectors 2-5 = stage2 (2KB), sectors 6-109 = kernel (104 sectors = 52KB)
 $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Creating 360KB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=720 2>/dev/null

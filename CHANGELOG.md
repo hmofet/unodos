@@ -5,6 +5,181 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.25.0] - 2026-06-11
+
+### Full-System Audit & Stability Overhaul (Build 403)
+
+A 116-agent audit (static analysis + adversarial verification + live QEMU
+testing) produced 140 findings (97 confirmed, 25 observed dynamically). This
+release fixes the confirmed critical/high findings across the scheduler,
+window manager, event system, input drivers, graphics, and boot chain. Full
+details: docs/AUDIT-HANDOFF-2026-06.md (handoff summary) and
+docs/audit-2026-06-digest.md (every finding with verified patches).
+
+### Fixed - Crashes & Memory Corruption
+
+- **win_create drew its resize-grip pixels into the KERNEL CODE segment**
+  (ES never set to video memory in win_draw_stub's grip block) — for some
+  window geometries (e.g. 160x100) the four grip dots read-modify-wrote live
+  kernel instructions; apps calling API 22 directly sprayed their own
+  segment. Root cause of "random" crashes and corrupted window handles.
+- **fat12_read popped one word too many** at .not_supported (7 pops for 6
+  pushes) — any FAT12 read at file position != 0 returned through a
+  corrupted stack and jumped to garbage. Also added a zero-byte/EOF fast
+  path so read-until-0 loops terminate.
+- **Kernel load was at 100% capacity with zero growth headroom** — kernel
+  area expanded from 88 to 104 sectors (52KB) across the whole chain
+  (stage2, BPB reserved sectors 94→110, add_floppy_fs.py, mkboot, fat12
+  mount offsets — which were hardcoded, not BPB-derived). The kernel image
+  pad now fails the build if the kernel outgrows the area.
+- **ES was not part of the task context** — clobbered across every
+  yield/context switch; cross-task segment corruption for any app holding
+  ES across a syscall. Saved/restored on all five context paths.
+- **Stale INT 0x80 dispatcher flags survived RETF app exit** — the next
+  task resumed with the dead app's coordinate-translation/cursor-lock
+  state, corrupting its registers. Flags now consumed one-shot.
+- **mkboot wrote a stale filesystem size** (2810 sectors, three layouts
+  old) — now derived from the layout constants.
+
+### Fixed - Window Manager (create/destroy/z-order verified)
+
+- **Z-order values drifted to 0 and collided** — every create/focus demoted
+  all windows but destroy never renormalized, so after ~7 launch/close
+  cycles hit-testing, painting, and promotion disagreed about stacking.
+  Focus now demotes only windows above the raised one; destroy closes the
+  z-gap. Invariant: visible windows hold dense distinct z {16-N..15}.
+- **win_resize repainted only the desktop** — shrinking a window erased
+  any window it overlapped. Now uses redraw_affected_windows like move.
+- **win_focus (API 23) raised windows logically but never repainted** —
+  stale title-bar states, stale pixels on top.
+- **Resize-handle hit-test ignored occlusion** — clicking the body of a
+  topmost window could start resizing a window underneath it.
+- **Z-clipped WIN_REDRAW events left permanent holes** in background
+  windows; **window titles overwrote the [X] close button** (now clipped).
+- destroy_task_windows batches its repaint instead of a full
+  promote/focus/redraw cycle per window.
+
+### Fixed - Input & Events
+
+- **post_event had no interrupt masking** — task-context posts raced
+  IRQ1/IRQ12 posts and silently lost keystrokes/clicks exactly when window
+  activity coincided with typing. Now pushf/cli...popf protected.
+- **Single global event-queue head caused head-of-line blocking** — one
+  task's pending event stalled keyboard/mouse for every task, then the
+  31-slot queue filled and dropped input. event_get now forward-scans with
+  tombstones; consecutive mouse events are coalesced at post time.
+- **event_wait (API 10) / kbd_wait_key (API 12) busy-waited without
+  yielding** — one blocked task froze the whole cooperative system.
+- **Scancode table read out of bounds** for scancodes 0x60-0x7F.
+- **XT (8255 PPI) keyboard acknowledge was missing** — on a real PC/XT the
+  keyboard died after the first keystroke. Port 0x61 bit-7 pulse added.
+- **Arrow/nav keys required E0 scancodes XT keyboards never send** —
+  NumLock-aware routing of bare numpad codes 0x47-0x53 to the special-key
+  map; NumLock toggle tracked, seeded from the BIOS flag byte.
+- **IRQ12 swallowed keyboard bytes** when the KBC AUX bit was clear; mouse
+  packet stream now self-heals after a lost byte (idle re-arm + sync-bit
+  rejection); event_get no longer clobbers CX/DX on the no-event path.
+
+### Fixed - Graphics (visual anomalies)
+
+- **Default 8x8 font had a 12px advance** — all default text 50% wider
+  than intended; primary cause of the boot-visible overlapping desktop
+  icon labels (plus 10-char label truncation in launcher + kernel).
+- **CGA scroll clear-all path fell through into VESA bank-switching code**
+  — garbage fills + undefined INT 10h calls in the default video mode.
+- **VESA scroll corrupted rows straddling 64KB bank boundaries**;
+  vesa_fill_rect skipped a bank when a row started exactly on a boundary;
+  vesa_set_bank now honors the VESA window granularity.
+- **Glyphs bled up to 7px past window borders** — draw_char/draw_char_inverted
+  now enforce the clip rect at row/pixel level (char & wrap APIs included).
+- **gfx_blit_rect copied forward regardless of overlap** (smearing) and
+  produced black fills in VESA/mode-12h (read_pixel unimplemented there).
+- CGA fill/clear fast paths gained screen-bounds clamping; CGA scroll no
+  longer smears up to 3 pixel columns outside non-4-aligned regions.
+- VESA mode queries no longer clobber the system clipboard at 0x9000:0.
+
+### Fixed - Desktop
+
+- Kernel desktop icon table sized for the launcher's 40 icons (was 16) with
+  bounds-checked registration; icon names NUL-terminated; label dirty-rects
+  sized to real label width; icon 0 selected at boot.
+
+### Performance
+
+- gfx_fill_color CGA path: hybrid fill (masked edges + rep stosb middle)
+  replaces per-pixel plotting for misaligned fills — ~10-40x faster window
+  repaints in the default mode (partially applied; see handoff doc).
+- 8px font advance removes the 4-gap-pixel-per-char fill (~33% fewer plots
+  per character system-wide).
+
+### Tooling & Tests
+
+- tools/qemu_test.sh: headless QEMU driver (keyboard/mouse injection +
+  screenshots) used for all regression testing.
+- tools/to8086.py + kernel/cpu8086.inc: mechanical 186+/386+ → 8086
+  instruction rewriter and macro library for the planned 8088 compatibility
+  pass (audit found 1153 non-8086 sites; see handoff doc for the plan).
+
+### Known Remaining Work
+
+See docs/AUDIT-HANDOFF-2026-06.md — notably: the 8088 conversion has NOT
+been applied yet (the OS still requires a 386+ despite the README claim),
+the cursor hide/lock race fix (35 sites) is pending, and several confirmed
+medium findings remain open.
+
+## [3.24.0] - 2026-06-10
+
+### Heap Allocator Overhaul (Builds 401-402)
+
+The kernel heap was unusable since the kernel outgrew 16KB: the heap segment
+(0x1400) overlapped the kernel image (0x1000:0000, now 44KB), so the first
+`malloc` corrupted live kernel code — and three further bugs meant it never
+successfully returned memory anyway. This release relocates the heap and
+makes malloc/free actually work.
+
+### Fixed (Build 401) - Heap Relocation
+
+- **Heap overlapped the kernel image** — heap segment moved from 0x1400
+  (linear 0x14000, inside the 44KB kernel at 0x10000-0x1AFFF) to a dedicated
+  segment 0x8000 (linear 0x80000, 60KB). The kernel can now grow to its full
+  64KB segment without colliding with the heap. New `HEAP_SEGMENT`/`HEAP_SIZE`
+  constants in kernel/kernel.asm replace hardcoded values.
+  - Root cause: v3.6.0 documented moving the heap to 0x1600 when the kernel
+    grew past 16KB, but the code change was never applied; the kernel has
+    since grown to 44KB (88 sectors), deepening the overlap.
+- **First-fit size check used signed comparison** (`jge`) — the initial
+  0xF000-byte (60KB) free block read as negative, so `mem_alloc` always
+  returned NULL (while still corrupting the kernel via heap lazy-init).
+  Changed to unsigned (`jae`).
+- **`heap_initialized` flag read/written through the heap segment** — the
+  flag is kernel data, but DS points at the heap when it is accessed; now
+  uses `cs:` segment overrides.
+
+### Changed (Build 401)
+
+- **User app segment pool reduced from 6 to 5 slots** (0x3000-0x7000);
+  segment 0x8000 is now the kernel heap. Max concurrent user apps: 5 + shell.
+  This was the only conflict-free placement: 0x2000 is the shell, 0x9000 is
+  the scratch/clipboard segment, low memory holds the kernel stack, and any
+  segment below 0x2000 collides with kernel growth.
+
+### Documentation (Build 401)
+
+- Memory maps updated in README.md, docs/MEMORY_LAYOUT.md,
+  docs/ARCHITECTURE.md, docs/FEATURES.md, docs/API_REFERENCE.md,
+  docs/APP_DEVELOPMENT.md
+- Corrected stale kernel size (28KB → 44KB, 56 → 88 sectors, disk layout
+  sectors) in docs/ARCHITECTURE.md, docs/bootloader-architecture.md,
+  docs/boot-debug-messages.md
+
+### Verification
+
+- New QEMU harness in test-artifacts/heap/: a test app (run as LAUNCHER.BIN)
+  exercises INT 0x80 API 7/8, then run_heap_test.sh inspects guest memory via
+  the QEMU monitor — heap block headers at linear 0x80000, and the old heap
+  site 0x14000 compared byte-for-byte against build/kernel.bin to prove the
+  kernel image is no longer modified.
+
 ## [3.19.0] - 2026-02-16
 
 ### Added (Builds 202-212) - FAT12 Write, GUI Toolkit, Settings Persistence

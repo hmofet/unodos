@@ -118,6 +118,14 @@ entry:
     ; Clear splash and draw full desktop
     call redraw_desktop
 
+    ; Select icon 0 at startup so the first arrow keypress moves the
+    ; selection instead of being silently consumed creating it
+    cmp byte [cs:icon_count], 0
+    je .no_first_sel
+    xor al, al
+    call select_icon
+.no_first_sel:
+
     ; Read initial BIOS tick counter for polling
     call read_bios_ticks
     mov [cs:last_poll_tick], ax
@@ -1062,6 +1070,21 @@ draw_single_icon:
     mul cl
     add ax, icon_names
     mov si, ax
+    ; Truncate name to 10 chars + NUL so an 11-char name (8px/char)
+    ; cannot collide with the next 80px grid column
+    mov di, .dsi_name_buf
+    mov cx, 10
+.dsi_trunc:
+    mov al, [cs:si]
+    or al, al
+    jz .dsi_trunc_done
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .dsi_trunc
+.dsi_trunc_done:
+    mov byte [cs:di], 0
+    mov si, .dsi_name_buf
     mov cx, [cs:.dsi_y]
     add cx, [cs:label_y_gap]
     mov ah, API_GFX_DRAW_STRING
@@ -1081,6 +1104,7 @@ draw_single_icon:
 .dsi_slot: db 0
 .dsi_x:    dw 0
 .dsi_y:    dw 0
+.dsi_name_buf: times 11 db 0       ; Truncated label (10 chars + NUL)
 
 ; ============================================================================
 ; draw_highlight - Draw selection rectangle around selected icon

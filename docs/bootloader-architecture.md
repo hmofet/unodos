@@ -25,7 +25,7 @@ Address         Size    Contents
 0x0800:0x0000   2KB     Stage2 loader
 0x0900:0x0000   512B    Sector buffer (Stage2_HD)
 0x0920:0x0000   512B    FAT cache (Stage2_HD)
-0x1000:0x0000   28KB    Kernel
+0x1000:0x0000   44KB    Kernel
 0x2000:0x0000   4KB     Shell/Launcher segment
 0x3000:0x0000   4KB     User application segment
 0xA000:0x0000   64KB    EGA/VGA graphics memory
@@ -43,9 +43,9 @@ Sector  Contents
 ──────────────────────────
 0       Boot sector (512B)
 1-4     Stage2 (2KB)
-5       Reserved
-6-61    Kernel (28KB = 56 sectors)
-62+     FAT12 filesystem data
+5-92    Kernel (44KB = 88 sectors)
+93      Reserved (slack)
+94+     FAT12 filesystem data
 ```
 
 ### Boot Sector (`boot/boot.asm`)
@@ -69,7 +69,7 @@ Sector  Contents
 
 **Responsibilities:**
 1. Display progress dots while loading
-2. Load kernel from sectors 6-61 to 0x1000:0x0000
+2. Load kernel (88 sectors, starting at CHS sector 6) to 0x1000:0x0000
 3. Handle track/head boundaries (18 sectors/track, 2 heads)
 4. Verify kernel signature (0x4B55 "UK")
 5. Pass boot drive in DL
@@ -182,7 +182,7 @@ Both boot paths load the kernel to the same location:
 
 **Load Address:** 0x1000:0x0000 (linear 0x10000)
 **Entry Point:** 0x1000:0x0002 (after 2-byte signature)
-**Maximum Size:** 28KB (56 sectors on floppy, cluster chain on HDD)
+**Maximum Size:** 44KB (88 sectors on floppy, cluster chain on HDD; see KERNEL_SECTORS in boot/stage2.asm)
 
 ### Kernel Signature
 

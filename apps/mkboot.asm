@@ -88,8 +88,8 @@ BTN_WRITE_H     equ 16
 FLOPPY_STAGE2_START     equ 1
 FLOPPY_STAGE2_SECTORS   equ 4
 FLOPPY_KERNEL_START     equ 5
-FLOPPY_KERNEL_SECTORS   equ 88
-FLOPPY_FS_START         equ 94
+FLOPPY_KERNEL_SECTORS   equ 104     ; sync: boot/stage2.asm KERNEL_SECTORS, kernel image pad (104*512 = 53248)
+FLOPPY_FS_START         equ 110     ; sync: boot/boot.asm bpb_rsvd, tools/add_floppy_fs.py FS_START_SECTOR
 
 ; FAT12 filesystem parameters
 FAT12_RESERVED          equ 1
@@ -297,7 +297,7 @@ entry:
     inc word [cs:cur_lba]
     loop .wr_stage2
 
-    ; === Write kernel from memory (64 sectors) ===
+    ; === Write kernel from memory (FLOPPY_KERNEL_SECTORS sectors) ===
     mov si, msg_writing_kernel
     call show_status
 
@@ -323,7 +323,7 @@ entry:
     mov si, msg_writing_fs
     call show_status
 
-    ; BPB at sector 70
+    ; FS boot sector (BPB) at FLOPPY_FS_START
     call build_fs_bpb
     mov ax, cs
     mov es, ax
@@ -936,7 +936,7 @@ build_fs_bpb:
     mov word [cs:secbuf + 14], 1
     mov byte [cs:secbuf + 16], 2
     mov word [cs:secbuf + 17], 224
-    mov word [cs:secbuf + 19], 2810
+    mov word [cs:secbuf + 19], 2880 - FLOPPY_FS_START  ; total sectors in FS area
     mov byte [cs:secbuf + 21], 0xF0
     mov word [cs:secbuf + 22], 9
     mov word [cs:secbuf + 24], 18

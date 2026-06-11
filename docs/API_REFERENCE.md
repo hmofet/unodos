@@ -127,7 +127,7 @@ Allocate a block of memory from the kernel heap.
 |----------|-----------|-------------|
 | AH | In | 7 |
 | AX | In | Size in bytes |
-| AX | Out | Pointer to allocated block (offset in heap segment 0x1400) |
+| AX | Out | Pointer to allocated block (offset in heap segment 0x8000) |
 | CF | Out | 0 = success, 1 = out of memory (AX=0) |
 
 Blocks are rounded up to 4-byte boundaries. Each block has a 4-byte header.
@@ -353,7 +353,7 @@ Load a .BIN file from disk into a memory segment.
 | AX | Out | Loaded segment address |
 | CF | Out | 0 = success, 1 = error |
 
-When DH=0, the kernel auto-allocates a segment from the dynamic pool (0x3000-0x8000).
+When DH=0, the kernel auto-allocates a segment from the dynamic pool (0x3000-0x7000).
 
 ### API 19: app_run
 

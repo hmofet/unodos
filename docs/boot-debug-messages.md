@@ -120,7 +120,7 @@ JB40EB04BKUnoDOS 1234UnoDOS v3.13.0
 5. `Loading stage2...` - VBR loading stage2
 6. `Loading UnoDOS kernel` - Stage2 loading kernel
 7. `R014455` - Root dir at LBA 324, first byte 'U'
-8. `....OK` - 56 sectors loaded, signature verified
+8. `....OK` - 88 sectors loaded, signature verified
 9. `JB40EB04B` - Pre-jump check passed
 10. `K1234` - Kernel init steps completed
 11. `UnoDOS v3.13.0` - Version string

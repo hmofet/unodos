@@ -11,7 +11,10 @@
 ; ============================================================================
 
 KERNEL_SEGMENT  equ 0x1000          ; Kernel loads at 0x1000:0000 (64KB mark)
-KERNEL_SECTORS  equ 88              ; 44KB kernel (expanded for save dialog + scrollbar hit - Build 369)
+KERNEL_SECTORS  equ 104             ; 52KB kernel load area (LBA 5-108)
+                                    ; SYNC: must match kernel/kernel.asm image pad (times 104*512),
+                                    ; boot/boot.asm BPB reserved sectors (110 = 1 boot + 4 stage2 + 104 kernel + 1 spare),
+                                    ; tools/add_floppy_fs.py FS_START_SECTOR (110), apps/mkboot.asm FLOPPY_* layout
 KERNEL_START    equ 6               ; Kernel starts at sector 6 (after 4-sector stage2 + 1 reserved)
 KERNEL_SIG      equ 0x4B55          ; 'UK' signature for kernel
 
