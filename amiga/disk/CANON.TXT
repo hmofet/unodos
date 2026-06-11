@@ -1,0 +1,11 @@
+Canon in D (Pachelbel)
+----------------------
+The Music app plays the same
+arrangement as the x86
+apps/music.asm: the famous
+descending theme, then the
+eighth-note arpeggios, on a
+Paula square wave.
+
+C5 B4 A4 G4 / F4 E4 F4 G4
+then 16 eighths.
