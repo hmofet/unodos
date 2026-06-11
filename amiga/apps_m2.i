@@ -190,6 +190,8 @@ notepad_open_file:
         move.w  #NBUF-1,d1
 .szok:  move.w  d1,np_len-vars(a4)
         clr.w   np_caret-vars(a4)
+        clr.w   np_top-vars(a4)
+        move.w  #-1,np_goal-vars(a4)
         sf      np_dirty-vars(a4)
         lea     npbuf(pc),a1
         move.w  d1,d2
@@ -214,6 +216,8 @@ notepad_set_demo:
         bra     .cp
 .done:  move.w  d1,np_len-vars(a4)
         move.w  d1,np_caret-vars(a4)
+        clr.w   np_top-vars(a4)
+        move.w  #-1,np_goal-vars(a4)
         move.w  #-1,np_file-vars(a4)
         st      np_dirty-vars(a4)
         movem.l (sp)+,d1/a0-a1/a4
@@ -238,6 +242,40 @@ notepad_linecol:
 .nx:    addq.w  #1,d2
         bra     .scan
 .done:  movem.l (sp)+,d2-d3/a0
+        rts
+
+; notepad_seek_linecol - d0 = target line, d2 = goal col
+;   -> d0 = caret index (clamped to line end), or -1 if no such line
+notepad_seek_linecol:
+        movem.l d3-d5/a0,-(sp)
+        lea     npbuf(pc),a0
+        moveq   #0,d3               ; index
+        moveq   #0,d4               ; line
+.fs:    cmp.w   d0,d4
+        beq     .at
+        cmp.w   np_len(pc),d3
+        bge     .nofind
+        cmp.b   #13,(a0,d3.w)
+        bne     .fnc
+        addq.w  #1,d4
+.fnc:   addq.w  #1,d3
+        bra     .fs
+.at:    moveq   #0,d5               ; col
+.adv:   cmp.w   d2,d5
+        bge     .found
+        cmp.w   np_len(pc),d3
+        bge     .found
+        cmp.b   #13,(a0,d3.w)
+        beq     .found
+        addq.w  #1,d3
+        addq.w  #1,d5
+        bra     .adv
+.found: move.w  d3,d0
+        movem.l (sp)+,d3-d5/a0
+        rts
+.nofind:
+        moveq   #-1,d0
+        movem.l (sp)+,d3-d5/a0
         rts
 
 ; notepad_draw - a2 = window
@@ -270,9 +308,40 @@ notepad_draw:
         move.w  WH(a2),d4
         sub.w   #TBAR_H+12,d4
         divu    #10,d4
+        ; vertical scroll: clamp np_top so the caret line stays visible
+        tst.w   d4
+        beq     .noscr
+        bsr     notepad_linecol     ; d0 = caret line
+        move.w  np_top(pc),d1
+        cmp.w   d1,d0
+        bge     .ntop
+        move.w  d0,d1               ; caret above view: scroll up to it
+.ntop:  move.w  d1,d2
+        add.w   d4,d2               ; top + rows
+        cmp.w   d2,d0
+        blt     .nbot
+        move.w  d0,d1               ; caret below view: caret-rows+1
+        sub.w   d4,d1
+        addq.w  #1,d1
+.nbot:  lea     vars(pc),a4
+        move.w  d1,np_top-vars(a4)
+.noscr:
         ; line loop: a0 = scan ptr, d3 = line index
         lea     npbuf(pc),a0
-        moveq   #0,d3               ; line number
+        move.w  np_top(pc),d3       ; first visible line
+        move.w  d3,d2               ; lines to skip
+        moveq   #0,d0
+.sktop: tst.w   d2
+        beq     .skdone
+        cmp.w   np_len(pc),d0
+        bge     .skdone
+        cmp.b   #13,(a0,d0.w)
+        bne     .sknc
+        subq.w  #1,d2
+.sknc:  addq.w  #1,d0
+        bra     .sktop
+.skdone:
+        lea     (a0,d0.w),a0
 .line:  tst.w   d4
         beq     .status
         ; find line end
@@ -417,6 +486,10 @@ notepad_key:
         beq     .left
         cmp.b   #$4E,d2             ; right
         beq     .right
+        cmp.b   #$4C,d2             ; up
+        beq     .up
+        cmp.b   #$4D,d2             ; down
+        beq     .down
         cmp.b   #$50,d2             ; F1 = save
         beq     .save
         cmp.b   #8,d1               ; backspace
@@ -427,18 +500,45 @@ notepad_key:
         bge     .ins
         moveq   #1,d0               ; not consumed (incl. ESC)
         rts
-.left:  move.w  np_caret(pc),d0
+.left:  move.w  #-1,np_goal-vars(a4)
+        move.w  np_caret(pc),d0
         beq     .redraw
         subq.w  #1,d0
         move.w  d0,np_caret-vars(a4)
         bra     .redraw
-.right: move.w  np_caret(pc),d0
+.right: move.w  #-1,np_goal-vars(a4)
+        move.w  np_caret(pc),d0
         cmp.w   np_len(pc),d0
         bge     .redraw
         addq.w  #1,d0
         move.w  d0,np_caret-vars(a4)
         bra     .redraw
-.bs:    move.w  np_caret(pc),d0
+.up:    bsr     notepad_linecol     ; d0=line d1=col
+        tst.w   d0
+        beq     .redraw             ; already on first line
+        move.w  np_goal(pc),d2
+        bpl     .upg                ; keep existing goal column
+        move.w  d1,d2
+        move.w  d2,np_goal-vars(a4)
+.upg:   subq.w  #1,d0
+        bsr     notepad_seek_linecol
+        tst.w   d0
+        bmi     .redraw
+        move.w  d0,np_caret-vars(a4)
+        bra     .redraw
+.down:  bsr     notepad_linecol     ; d0=line d1=col
+        move.w  np_goal(pc),d2
+        bpl     .dng
+        move.w  d1,d2
+        move.w  d2,np_goal-vars(a4)
+.dng:   addq.w  #1,d0
+        bsr     notepad_seek_linecol
+        tst.w   d0
+        bmi     .redraw             ; no next line
+        move.w  d0,np_caret-vars(a4)
+        bra     .redraw
+.bs:    move.w  #-1,np_goal-vars(a4)
+        move.w  np_caret(pc),d0
         beq     .redraw
         ; shift [caret..len) left by one
         lea     npbuf(pc),a0
@@ -463,7 +563,8 @@ notepad_key:
         move.w  d0,np_len-vars(a4)
         st      np_dirty-vars(a4)
         bra     .redraw
-.ins:   move.w  np_len(pc),d0
+.ins:   move.w  #-1,np_goal-vars(a4)
+        move.w  np_len(pc),d0
         cmp.w   #NBUF-1,d0
         bge     .redraw
         ; shift [caret..len) right by one (backwards copy)

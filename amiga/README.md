@@ -101,8 +101,7 @@ bit-identical to the x86 original.
 
 - Storage is the boot ROM-disk (build-time files, RAM-editable); the
   portable FAT12 core + an MFM track reader are the next milestone.
-- Notepad: no up/down line navigation or vertical scroll yet; 2 KB
-  buffer.
+- Notepad: 2 KB buffer; long lines clip (no horizontal scroll).
 - Single cooperative context (the scheduler is scaffolding); real
   multitasking over the window/app tables is milestone 3.
 - The vblank tick runs fast under WinUAE's default pacing for this config

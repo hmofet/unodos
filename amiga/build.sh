@@ -10,7 +10,7 @@ PY="${PY:-python3}"
 
 mkdir -p build
 echo "[1/3] generating data from x86 tree assets..."
-"$PY" mkdata.py gen_data.i
+(cd .. && "$PY" amiga/mkdata.py amiga/gen_data.i)
 
 if [ "$1" = "test" ]; then
     DEF="-DAUTOTEST=1"; EXE=build/UnoDOS68K_test; ADF=build/unodos68k_test.adf
