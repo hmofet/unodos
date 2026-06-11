@@ -87,17 +87,17 @@ static short gTSel = 0, gTSlot = 0;
 #define ICON_PITCH 92
 #define ICON0_X    36
 #define ICON0_Y    44
-#define NAPPS      6
+#define NAPPS      8
 #if UNO_COLOR
-#define NICONS     6                /* Theme icon is color-only */
+#define NICONS     8                /* Theme icon is color-only */
 #else
-#define NICONS     5
+#define NICONS     7
 #endif
 #define MAXWIN     6
 #define DBLCLICK   30
 
 enum { APP_SYSINFO = 0, APP_CLOCK, APP_FILES, APP_NOTEPAD, APP_MUSIC,
-       APP_THEME };
+       APP_DOSTRIS, APP_OUTLAST, APP_THEME };
 
 typedef struct {
     Boolean used;
@@ -124,8 +124,8 @@ static short  gDragDX, gDragDY;
 static Rect   gDragOutline;
 static Boolean gOutlineShown = false;
 
-static const char *kIconNames[NAPPS]  = { "Sys Info", "Clock", "Files", "Notepad", "Music", "Theme" };
-static const char *kWinTitles[NAPPS]  = { "System Info", "Clock", "Files", "Notepad", "Music", "Theme" };
+static const char *kIconNames[NAPPS]  = { "Sys Info", "Clock", "Files", "Notepad", "Music", "Dostris", "OutLast", "Theme" };
+static const char *kWinTitles[NAPPS]  = { "System Info", "Clock", "Files", "Notepad", "Music", "Dostris", "OutLast", "Theme" };
 
 /* default window bounds per app (fits the 512x342 mono screen) */
 static const short kWinRect[NAPPS][4] = {
@@ -134,6 +134,8 @@ static const short kWinRect[NAPPS][4] = {
     {  36,  40, 330, 270 },     /* Files    */
     {  56,  34, 484, 320 },     /* Notepad  */
     {  80,  60, 440, 230 },     /* Music    */
+    {  20,  10, 312, 332 },     /* Dostris  */
+    {  90,  50, 426, 290 },     /* OutLast  */
     { 150,  56, 430, 300 },     /* Theme    */
 };
 
@@ -254,6 +256,12 @@ static void repaint_all(void);
 static void theme_draw(UnoWin *w);
 static Boolean theme_key(char ch, short code);
 #endif
+static void dostris_draw(UnoWin *w);
+static Boolean dostris_key(char ch, short code);
+static void dostris_tick(void);
+static void outlast_draw(UnoWin *w);
+static Boolean outlast_key(char ch, short code);
+static void outlast_tick(void);
 
 /* =========================================================================
  * Window manager (PORT-SPEC SS2)
@@ -893,6 +901,8 @@ static void draw_app_content(short proc, UnoWin *w)
     case APP_FILES:   files_draw(w);   break;
     case APP_NOTEPAD: notepad_draw(w); break;
     case APP_MUSIC:   music_draw(w);   break;
+    case APP_DOSTRIS: dostris_draw(w); break;
+    case APP_OUTLAST: outlast_draw(w); break;
 #if UNO_COLOR
     case APP_THEME:   theme_draw(w);   break;
 #endif
@@ -905,6 +915,8 @@ static Boolean app_key(short proc, char ch, short code, Boolean cmd)
     case APP_FILES:   if (!cmd) return files_key(ch, code); break;
     case APP_NOTEPAD: return notepad_key(ch, code, cmd);
     case APP_MUSIC:   if (!cmd) return music_key(ch, code); break;
+    case APP_DOSTRIS: if (!cmd) return dostris_key(ch, code); break;
+    case APP_OUTLAST: if (!cmd) return outlast_key(ch, code); break;
 #if UNO_COLOR
     case APP_THEME:   if (!cmd) return theme_key(ch, code); break;
 #endif
@@ -929,6 +941,496 @@ static void app_close(short proc)
         music_stop();
         if (gSnd) { SndDisposeChannel(gSnd, true); gSnd = NULL; }
     }
+}
+
+/* =========================================================================
+ * Dostris - falling-blocks game (port of apps/dostris.asm)
+ * Board 10x20, same piece tables / scoring / speed curve as the x86 game.
+ * x86 gravity is in 18.2 Hz ticks; Mac ticks are 60 Hz, so intervals are
+ * scaled by ~3.3 (x86_ticks * 10 / 3).
+ * ========================================================================= */
+#define DT_COLS 10
+#define DT_ROWS 20
+#define DT_CELL 14
+#define DT_BX   10                  /* board origin inside the content area */
+#define DT_BY   8
+
+/* 7 pieces x 4 rotations x 4 cells x (col,row) - from apps/dostris.asm */
+static const signed char kDtShape[7][4][8] = {
+  { {0,1,1,1,2,1,3,1}, {2,0,2,1,2,2,2,3}, {0,2,1,2,2,2,3,2}, {1,0,1,1,1,2,1,3} },
+  { {1,0,2,0,1,1,2,1}, {1,0,2,0,1,1,2,1}, {1,0,2,0,1,1,2,1}, {1,0,2,0,1,1,2,1} },
+  { {1,0,0,1,1,1,2,1}, {0,0,0,1,1,1,0,2}, {0,0,1,0,2,0,1,1}, {1,0,0,1,1,1,1,2} },
+  { {1,0,2,0,0,1,1,1}, {0,0,0,1,1,1,1,2}, {1,0,2,0,0,1,1,1}, {0,0,0,1,1,1,1,2} },
+  { {0,0,1,0,1,1,2,1}, {1,0,0,1,1,1,0,2}, {0,0,1,0,1,1,2,1}, {1,0,0,1,1,1,0,2} },
+  { {0,0,0,1,1,1,2,1}, {0,0,1,0,0,1,0,2}, {0,0,1,0,2,0,2,1}, {1,0,1,1,0,2,1,2} },
+  { {2,0,0,1,1,1,2,1}, {0,0,0,1,0,2,1,2}, {0,0,1,0,2,0,0,1}, {0,0,1,0,1,1,1,2} },
+};
+static const short kDtColor[7] = { C_CYAN, C_WHITE, C_MAG, C_CYAN, C_MAG, C_WHITE, C_CYAN };
+static const long kDtLineScore[5] = { 0, 40, 100, 300, 1200 };
+
+static unsigned char gDtBoard[DT_ROWS][DT_COLS];
+static short gDtState = 0;          /* 0 menu, 1 playing, 2 paused, 3 over */
+static short gDtPiece, gDtRot, gDtCol, gDtRow, gDtNext;
+static long  gDtScore, gDtLines;
+static short gDtLevel;
+static long  gDtLastDrop;
+static unsigned long gDtSeed = 1;
+
+static short dt_rand7(void)
+{
+    gDtSeed = gDtSeed * 1103515245UL + 12345UL;
+    return (short)((gDtSeed >> 16) % 7);
+}
+
+static Boolean dt_fits(short p, short rot, short col, short row)
+{
+    short i;
+    const signed char *sh = kDtShape[p][rot];
+    for (i = 0; i < 4; i++) {
+        short c = col + sh[i * 2], r = row + sh[i * 2 + 1];
+        if (c < 0 || c >= DT_COLS || r >= DT_ROWS) return false;
+        if (r >= 0 && gDtBoard[r][c]) return false;
+    }
+    return true;
+}
+
+static long dt_drop_interval(void)
+{
+    short t = 18 - gDtLevel;        /* x86 ticks (18.2 Hz) */
+    if (t < 2) t = 2;
+    return (long)t * 10 / 3;        /* -> 60 Hz ticks */
+}
+
+static void dt_spawn(void)
+{
+    gDtPiece = gDtNext;
+    gDtNext = dt_rand7();
+    gDtRot = 0; gDtCol = 3; gDtRow = -1;
+    gDtLastDrop = TickCount();
+    if (!dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1))
+        gDtState = 3;               /* game over */
+}
+
+static void dt_new_game(void)
+{
+    memset(gDtBoard, 0, sizeof(gDtBoard));
+    gDtScore = 0; gDtLines = 0; gDtLevel = 1;
+    gDtSeed = (unsigned long)TickCount() | 1;
+    gDtNext = dt_rand7();
+    gDtState = 1;
+    dt_spawn();
+}
+
+static void dt_clear_lines(void)
+{
+    short r, c, n = 0;
+    for (r = 0; r < DT_ROWS; r++) {
+        Boolean full = true;
+        for (c = 0; c < DT_COLS; c++)
+            if (!gDtBoard[r][c]) { full = false; break; }
+        if (full) {
+            short rr;
+            n++;
+            for (rr = r; rr > 0; rr--)
+                memcpy(gDtBoard[rr], gDtBoard[rr - 1], DT_COLS);
+            memset(gDtBoard[0], 0, DT_COLS);
+        }
+    }
+    if (n) {
+        gDtScore += kDtLineScore[n] * (gDtLevel + 1);
+        gDtLines += n;
+        gDtLevel = (short)(gDtLines / 10) + 1;
+        if (gDtLevel > 15) gDtLevel = 15;
+    }
+}
+
+static void dt_lock(void)
+{
+    short i;
+    const signed char *sh = kDtShape[gDtPiece][gDtRot];
+    for (i = 0; i < 4; i++) {
+        short c = gDtCol + sh[i * 2], r = gDtRow + sh[i * 2 + 1];
+        if (r >= 0 && r < DT_ROWS && c >= 0 && c < DT_COLS)
+            gDtBoard[r][c] = (unsigned char)(kDtColor[gDtPiece] + 1);
+    }
+    dt_clear_lines();
+    dt_spawn();
+}
+
+static void dt_cell(UnoWin *w, short c, short r, short color)
+{
+    Rect q;
+    short x = w->bounds.left + DT_BX + c * DT_CELL;
+    short y = w->bounds.top + TBAR_H + DT_BY + r * DT_CELL;
+    SetRect(&q, x, y, x + DT_CELL - 1, y + DT_CELL - 1);
+    uno_fill(&q, color);
+}
+
+static void dostris_draw(UnoWin *w)
+{
+    Rect r = w->bounds, b;
+    short c, rr, i, px;
+    char num[16];
+
+    /* board frame + cells */
+    SetRect(&b, r.left + DT_BX - 2, r.top + TBAR_H + DT_BY - 2,
+            r.left + DT_BX + DT_COLS * DT_CELL + 1,
+            r.top + TBAR_H + DT_BY + DT_ROWS * DT_CELL + 1);
+    uno_box(&b, C_WHITE);
+    for (rr = 0; rr < DT_ROWS; rr++)
+        for (c = 0; c < DT_COLS; c++)
+            if (gDtBoard[rr][c])
+                dt_cell(w, c, rr, gDtBoard[rr][c] - 1);
+    if (gDtState == 1 || gDtState == 2) {
+        const signed char *sh = kDtShape[gDtPiece][gDtRot];
+        for (i = 0; i < 4; i++) {
+            short cc = gDtCol + sh[i * 2], cr = gDtRow + sh[i * 2 + 1];
+            if (cr >= 0) dt_cell(w, cc, cr, kDtColor[gDtPiece]);
+        }
+    }
+
+    /* side panel */
+    px = r.left + DT_BX + DT_COLS * DT_CELL + 14;
+    text_at(px, r.top + TBAR_H + 20, "DOSTRIS", C_MAG, C_BLUE, false);
+    text_at(px, r.top + TBAR_H + 44, "Score", C_CYAN, C_BLUE, false);
+    fmt_u(gDtScore, num);
+    text_at(px + 56, r.top + TBAR_H + 44, num, C_WHITE, C_BLUE, false);
+    text_at(px, r.top + TBAR_H + 60, "Lines", C_CYAN, C_BLUE, false);
+    fmt_u(gDtLines, num);
+    text_at(px + 56, r.top + TBAR_H + 60, num, C_WHITE, C_BLUE, false);
+    text_at(px, r.top + TBAR_H + 76, "Level", C_CYAN, C_BLUE, false);
+    fmt_u(gDtLevel, num);
+    text_at(px + 56, r.top + TBAR_H + 76, num, C_WHITE, C_BLUE, false);
+
+    text_at(px, r.top + TBAR_H + 100, "Next", C_CYAN, C_BLUE, false);
+    SetRect(&b, px - 2, r.top + TBAR_H + 106,
+            px + 4 * 10 + 2, r.top + TBAR_H + 106 + 4 * 10 + 2);
+    uno_box(&b, C_WHITE);
+    {
+        const signed char *sh = kDtShape[gDtNext][0];
+        for (i = 0; i < 4; i++) {
+            Rect q;
+            short x = px + sh[i * 2] * 10;
+            short y = r.top + TBAR_H + 108 + sh[i * 2 + 1] * 10;
+            SetRect(&q, x, y, x + 9, y + 9);
+            if (gDtState != 0) uno_fill(&q, kDtColor[gDtNext]);
+        }
+    }
+
+    text_at(px, r.bottom - 56, "Arrows: move/rot", C_CYAN, C_BLUE, false);
+    text_at(px, r.bottom - 42, "Space: drop", C_CYAN, C_BLUE, false);
+    text_at(px, r.bottom - 28, "P: pause  N: new", C_CYAN, C_BLUE, false);
+    if (gDtState == 0)
+        text_at(px, r.bottom - 12, "N: new game", C_WHITE, C_BLUE, false);
+    else if (gDtState == 2)
+        text_at(px, r.bottom - 12, "PAUSED", C_MAG, C_BLUE, false);
+    else if (gDtState == 3)
+        text_at(px, r.bottom - 12, "GAME OVER", C_MAG, C_BLUE, false);
+}
+
+static void dt_redraw(void)
+{
+    UnoWin *w = find_app_window(APP_DOSTRIS);
+    if (w && gZCount && zwin(gZCount - 1) == w) draw_window(w);
+}
+
+static Boolean dostris_key(char ch, short code)
+{
+    if (ch == 'n' || ch == 'N') { dt_new_game(); dt_redraw(); return true; }
+    if (gDtState != 1) {
+        if (ch == 'p' || ch == 'P') {
+            if (gDtState == 2) { gDtState = 1; gDtLastDrop = TickCount(); dt_redraw(); }
+            return true;
+        }
+        return (ch == ' ');
+    }
+    if (ch == 'p' || ch == 'P') { gDtState = 2; dt_redraw(); return true; }
+    if (code == 0x7B || ch == 0x1C) {                   /* left */
+        if (dt_fits(gDtPiece, gDtRot, gDtCol - 1, gDtRow)) gDtCol--;
+        dt_redraw(); return true;
+    }
+    if (code == 0x7C || ch == 0x1D) {                   /* right */
+        if (dt_fits(gDtPiece, gDtRot, gDtCol + 1, gDtRow)) gDtCol++;
+        dt_redraw(); return true;
+    }
+    if (code == 0x7E || ch == 0x1E) {                   /* up: rotate */
+        short nr = (short)((gDtRot + 1) & 3);
+        if (dt_fits(gDtPiece, nr, gDtCol, gDtRow)) gDtRot = nr;
+        dt_redraw(); return true;
+    }
+    if (code == 0x7D || ch == 0x1F) {                   /* down: soft drop */
+        if (dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1)) {
+            gDtRow++; gDtScore++;
+            gDtLastDrop = TickCount();
+        } else dt_lock();
+        dt_redraw(); return true;
+    }
+    if (ch == ' ') {                                    /* hard drop */
+        while (dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1)) {
+            gDtRow++; gDtScore += 2;
+        }
+        dt_lock();
+        dt_redraw(); return true;
+    }
+    return false;
+}
+
+static void dostris_tick(void)
+{
+    if (gDtState != 1) return;
+    if (!(gZCount && zwin(gZCount - 1)->proc == APP_DOSTRIS)) return;
+    if (TickCount() - gDtLastDrop < dt_drop_interval()) return;
+    gDtLastDrop = TickCount();
+    if (dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1)) gDtRow++;
+    else dt_lock();
+    dt_redraw();
+}
+
+/* =========================================================================
+ * OutLast - pseudo-3D racer (port of apps/outlast.asm)
+ * Same track table, perspective math, traffic and physics; the x86 18.2 Hz
+ * tick constants are scaled to 60 Hz where they are time-based.
+ * ========================================================================= */
+#define OL_W       320              /* virtual playfield, 1:1 in the window */
+#define OL_H       200
+#define OL_HORIZON 80
+#define OL_SEGLEN  80
+#define OL_NSEG    32
+#define OL_TRACKLEN (OL_SEGLEN * OL_NSEG)
+
+static const signed char kOlCurve[OL_NSEG] = {
+    0,0,0,0,0,0,0,0,  5,15,25,30,  30,25,15,5,
+    0,0,0,0,0,0,0,0,  -5,-15,-25,-30,  -30,-25,-15,-5
+};
+static const short kOlTreeZ[8] = { 200, 520, 900, 1300, 1600, 1900, 2200, 2480 };
+
+static short gOlState = 0;          /* 0 title, 1 playing, 2 game over */
+static short gOlX = 160, gOlSpeed = 0;
+static long  gOlZ = 0, gOlScore = 0;
+static short gOlTime = 60, gOlCrash = 0;
+static long  gOlLastStep, gOlLastSec;
+static long  gOlTraffic[4];         /* z along track */
+static const unsigned char kOlTrafDir[4]  = { 1, 1, 0, 0 };  /* 1 = same dir */
+static const unsigned char kOlTrafLane[4] = { 0, 1, 0, 1 };
+static short gOlRoadL = 100, gOlRoadR = 220;   /* road edges at the car row */
+
+static void ol_new_game(void)
+{
+    gOlX = 160; gOlSpeed = 0; gOlZ = 0; gOlScore = 0;
+    gOlTime = 60; gOlCrash = 0;
+    gOlTraffic[0] = 400; gOlTraffic[1] = 1600;
+    gOlTraffic[2] = 800; gOlTraffic[3] = 2000;
+    gOlLastStep = gOlLastSec = TickCount();
+    gOlState = 1;
+}
+
+static void ol_vrect(UnoWin *w, short x0, short y0, short x1, short y1, short col)
+{
+    Rect q;
+    if (x1 <= x0 || y1 <= y0) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 > OL_W) x1 = OL_W;
+    SetRect(&q, w->bounds.left + 4 + x0, w->bounds.top + TBAR_H + 2 + y0,
+            w->bounds.left + 4 + x1, w->bounds.top + TBAR_H + 2 + y1);
+    uno_fill(&q, col);
+}
+
+static void outlast_draw(UnoWin *w)
+{
+    short y;
+    long dx = 0;
+    char num[16], hud[48];
+
+    if (gOlState == 0) {
+        ol_vrect(w, 0, 0, OL_W, 100, C_BLUE);
+        ol_vrect(w, 0, 100, OL_W, 102, C_CYAN);
+        ol_vrect(w, 0, 102, OL_W, OL_H, C_BLUE);
+        for (y = 0; y < 10; y++) {                  /* converging road bands */
+            short t = (short)(102 + y * 10);
+            short hw2 = (short)(8 + y * 14);
+            ol_vrect(w, 160 - hw2, t, 160 + hw2, t + 10, C_WHITE);
+        }
+        ol_vrect(w, 140, 150, 180, 176, C_MAG);     /* car silhouette */
+        ol_vrect(w, 146, 154, 174, 162, C_CYAN);
+        ol_vrect(w, 136, 170, 144, 178, C_BLUE);
+        ol_vrect(w, 176, 170, 184, 178, C_BLUE);
+        text_at(w->bounds.left + 4 + 120, w->bounds.top + TBAR_H + 2 + 30,
+                "O U T L A S T", C_WHITE, C_BLUE, false);
+        text_at(w->bounds.left + 4 + 112, w->bounds.top + TBAR_H + 2 + 190,
+                "Press N to drive", C_CYAN, C_BLUE, false);
+        return;
+    }
+
+    /* sky */
+    ol_vrect(w, 0, 12, OL_W, OL_HORIZON, C_BLUE);
+    ol_vrect(w, 0, OL_HORIZON, OL_W, OL_HORIZON + 2, C_CYAN);
+
+    /* road strips, bottom to top */
+    for (y = OL_H - 1; y > OL_HORIZON + 1; y -= 2) {
+        long z = 4800L / (y - OL_HORIZON);
+        long hw = (16L * 256L) / z;
+        long worldz = gOlZ + z * 4;
+        short seg = (short)((worldz / OL_SEGLEN) & (OL_NSEG - 1));
+        short center;
+        short l, rgt;
+        dx += kOlCurve[seg];
+        center = (short)(160 + (dx >> 5));
+        l = (short)(center - hw); rgt = (short)(center + hw);
+        ol_vrect(w, 0, y - 2, l, y, (seg & 1) ? C_MAG : C_CYAN);
+        ol_vrect(w, l, y - 2, rgt, y, C_WHITE);
+        ol_vrect(w, rgt, y - 2, OL_W, y, (seg & 1) ? C_MAG : C_CYAN);
+        if (seg & 1)                                /* center stripe */
+            ol_vrect(w, center - 2, y - 2, center + 2, y, C_BLUE);
+        if (y >= OL_H - 4) { gOlRoadL = l; gOlRoadR = rgt; }
+        /* trees near this strip */
+        {
+            short t;
+            for (t = 0; t < 8; t++) {
+                long rel = kOlTreeZ[t] - (gOlZ % OL_TRACKLEN);
+                if (rel < 0) rel += OL_TRACKLEN;
+                if (rel < 30 || rel > 400) continue;
+                if (rel >= z * 4 - 8 && rel < z * 4 + 8) {
+                    short th = (short)(1600 / (rel ? rel : 1));
+                    short tw = (short)(800 / (rel ? rel : 1));
+                    short tx;
+                    if (th < 2) th = 2; if (th > 40) th = 40;
+                    if (tw < 2) tw = 2; if (tw > 24) tw = 24;
+                    tx = (t & 1) ? (short)(rgt + 4) : (short)(l - 4 - tw);
+                    ol_vrect(w, (short)(tx + tw / 2 - tw / 8), (short)(y - th / 2), (short)(tx + tw / 2 + tw / 8), y, C_BLUE);
+                    ol_vrect(w, tx, (short)(y - th), (short)(tx + tw), (short)(y - th / 2), C_CYAN);
+                }
+            }
+        }
+    }
+
+    /* traffic */
+    {
+        short t;
+        for (t = 0; t < 4; t++) {
+            long rel = gOlTraffic[t] - (gOlZ % OL_TRACKLEN);
+            if (rel < 0) rel += OL_TRACKLEN;
+            if (rel >= 10 && rel <= 400) {
+                short ch2 = (short)(1500 / rel), cw = (short)(2100 / rel);
+                short cy, cx;
+                if (ch2 < 2) ch2 = 2; if (ch2 > 40) ch2 = 40;
+                if (cw < 3) cw = 3; if (cw > 50) cw = 50;
+                cy = (short)(OL_HORIZON + 4800 / (rel / 4 + 25));
+                if (cy > OL_H - 6) cy = OL_H - 6;
+                cx = (short)(160 + (kOlTrafLane[t] ? 30 : -30) * (200 - (short)(rel / 2)) / 200);
+                ol_vrect(w, (short)(cx - cw / 2), (short)(cy - ch2), (short)(cx + cw / 2), cy,
+                         kOlTrafDir[t] ? C_CYAN : C_WHITE);
+                ol_vrect(w, (short)(cx - cw / 2 + 1), (short)(cy - ch2), (short)(cx + cw / 2 - 1),
+                         (short)(cy - ch2 + (ch2 / 4 ? ch2 / 4 : 1)), C_BLUE);
+            }
+        }
+    }
+
+    /* player car at y=168 */
+    if (!(gOlCrash & 4)) {                          /* flash while crashed */
+        ol_vrect(w, gOlX - 14, 168, gOlX + 14, 186, C_MAG);
+        ol_vrect(w, gOlX - 10, 171, gOlX + 10, 177, C_CYAN);
+        ol_vrect(w, gOlX - 16, 182, gOlX - 10, 190, C_BLUE);
+        ol_vrect(w, gOlX + 10, 182, gOlX + 16, 190, C_BLUE);
+    }
+
+    /* HUD */
+    ol_vrect(w, 0, 0, OL_W, 12, C_BLUE);
+    strcpy(hud, "Speed ");  fmt_u(gOlSpeed, num); strcat(hud, num);
+    strcat(hud, "  Score "); fmt_u(gOlScore, num); strcat(hud, num);
+    strcat(hud, "  Time ");  fmt_u(gOlTime, num);  strcat(hud, num);
+    text_at(w->bounds.left + 8, w->bounds.top + TBAR_H + 12, hud,
+            C_WHITE, C_BLUE, false);
+
+    if (gOlState == 2) {
+        ol_vrect(w, 80, 70, 240, 130, C_BLUE);
+        text_at(w->bounds.left + 4 + 124, w->bounds.top + TBAR_H + 2 + 92,
+                "GAME OVER", C_WHITE, C_BLUE, false);
+        strcpy(hud, "Final score "); fmt_u(gOlScore, num); strcat(hud, num);
+        text_at(w->bounds.left + 4 + 104, w->bounds.top + TBAR_H + 2 + 108,
+                hud, C_CYAN, C_BLUE, false);
+        text_at(w->bounds.left + 4 + 110, w->bounds.top + TBAR_H + 2 + 122,
+                "N: new game", C_CYAN, C_BLUE, false);
+    }
+}
+
+static Boolean outlast_key(char ch, short code)
+{
+    if (ch == 'n' || ch == 'N') {
+        ol_new_game();
+        return true;
+    }
+    if (gOlState != 1 || gOlCrash) return false;
+    if (code == 0x7B || ch == 0x1C) { gOlX -= 9; if (gOlX < 40) gOlX = 40; return true; }
+    if (code == 0x7C || ch == 0x1D) { gOlX += 9; if (gOlX > 280) gOlX = 280; return true; }
+    if (code == 0x7E || ch == 0x1E) { gOlSpeed += 4; if (gOlSpeed > 60) gOlSpeed = 60; return true; }
+    if (code == 0x7D || ch == 0x1F) { gOlSpeed -= 8; if (gOlSpeed < 0) gOlSpeed = 0; return true; }
+    return false;
+}
+
+static void outlast_tick(void)
+{
+    UnoWin *w;
+    long now = TickCount();
+    if (gOlState != 1) return;
+    if (!(gZCount && zwin(gZCount - 1)->proc == APP_OUTLAST)) return;
+    if (now - gOlLastStep < 4) return;              /* ~15 fps */
+    gOlLastStep = now;
+
+    if (gOlCrash) {
+        gOlCrash--;
+        if (!gOlCrash) { gOlX = 160; gOlSpeed = 5; }
+    } else {
+        short seg = (short)((gOlZ / OL_SEGLEN) & (OL_NSEG - 1));
+        if (gOlSpeed < 60) gOlSpeed++;
+        if (gOlX < gOlRoadL || gOlX > gOlRoadR) {   /* grass */
+            gOlSpeed -= 2;
+            if (gOlSpeed < 5) gOlSpeed = 5;
+        }
+        gOlX -= kOlCurve[seg] / 8;                  /* curve drift */
+        if (gOlX < 40) gOlX = 40;
+        if (gOlX > 280) gOlX = 280;
+        gOlZ += gOlSpeed;
+        gOlScore += gOlSpeed >> 2;
+        /* traffic movement + collision */
+        {
+            short t;
+            for (t = 0; t < 4; t++) {
+                if (kOlTrafDir[t]) gOlTraffic[t] += 5;
+                else               gOlTraffic[t] -= 5;
+                if (gOlTraffic[t] < 0) gOlTraffic[t] += OL_TRACKLEN;
+                if (gOlTraffic[t] >= OL_TRACKLEN) gOlTraffic[t] -= OL_TRACKLEN;
+                {
+                    long rel = gOlTraffic[t] - (gOlZ % OL_TRACKLEN);
+                    if (rel < 0) rel += OL_TRACKLEN;
+                    if (rel < 15) {
+                        short cx = (short)(160 + (kOlTrafLane[t] ? 30 : -30));
+                        if (gOlX > cx - 25 && gOlX < cx + 25) gOlCrash = 30;
+                    }
+                }
+            }
+        }
+        /* tree collision: off-road at a tree's z */
+        {
+            short t;
+            for (t = 0; t < 8; t++) {
+                long rel = kOlTreeZ[t] - (gOlZ % OL_TRACKLEN);
+                if (rel < 0) rel += OL_TRACKLEN;
+                if (rel < 12 &&
+                    ((t & 1) ? (gOlX > gOlRoadR - 5) : (gOlX < gOlRoadL + 5)))
+                    gOlCrash = 30;
+            }
+        }
+        if (gOlCrash) gOlSpeed = 0;
+    }
+
+    /* 1-second timer */
+    if (now - gOlLastSec >= 60) {
+        gOlLastSec = now;
+        if (--gOlTime <= 0) { gOlTime = 0; gOlState = 2; }
+    }
+
+    w = find_app_window(APP_OUTLAST);
+    if (w) draw_window(w);
 }
 
 /* =========================================================================
@@ -1070,6 +1572,18 @@ static void draw_icon(short i)
 #endif
             }
         }
+        break;
+    case APP_DOSTRIS:                       /* stacked blocks */
+        SetRect(&g, x, ICON0_Y + 10, x + 8, ICON0_Y + 17);  uno_fill(&g, C_CYAN);
+        SetRect(&g, x + 9, ICON0_Y + 10, x + 17, ICON0_Y + 17); uno_fill(&g, C_MAG);
+        SetRect(&g, x + 5, ICON0_Y + 2, x + 13, ICON0_Y + 9); uno_fill(&g, C_WHITE);
+        break;
+    case APP_OUTLAST:                       /* road to the horizon */
+        SetRect(&g, x, ICON0_Y, x + 18, ICON0_Y + 17);
+        uno_fill(&g, C_CYAN);
+        { Rect rd;
+          SetRect(&rd, x + 7, ICON0_Y, x + 11, ICON0_Y + 17); uno_fill(&rd, C_WHITE);
+          SetRect(&rd, x + 8, ICON0_Y + 12, x + 10, ICON0_Y + 17); uno_fill(&rd, C_MAG); }
         break;
 #if UNO_COLOR
     case APP_THEME:                         /* palette swatches */
@@ -1383,6 +1897,32 @@ int main(void)
     theme_key(0, 0x7D); theme_key(0, 0x7D); theme_key(0, 0x7D);
     theme_key(0x0D, 0);
 #endif
+#ifdef UNO_AUTOTEST_DOSTRIS
+    /* Dostris variant: start a game and hard-drop eight pieces through the
+       real key handler so the screenshot shows a played board. */
+    launch_app(APP_DOSTRIS);
+    dostris_key('n', 0);
+    {
+        short i;
+        for (i = 0; i < 8; i++) {
+            dostris_key(0, 0x7B);           /* nudge left */
+            dostris_key(' ', 0);            /* hard drop */
+        }
+    }
+#endif
+#ifdef UNO_AUTOTEST_OUTLAST
+    /* OutLast variant: start driving and run 80 physics steps so the
+       screenshot shows the road mid-game. */
+    launch_app(APP_OUTLAST);
+    outlast_key('n', 0);
+    {
+        short i;
+        for (i = 0; i < 80; i++) {
+            gOlLastStep = -100;             /* force a step regardless of ticks */
+            outlast_tick();
+        }
+    }
+#endif
 #ifdef UNO_AUTOTEST
     /* Auto-launch the app stack for screenshot verification without
        host->guest input injection. Notepad gets demo text. */
@@ -1425,6 +1965,8 @@ int main(void)
             drag_update(p, StillDown());
         }
         music_tick();
+        dostris_tick();
+        outlast_tick();
         app_secondly();
     }
     return 0;
