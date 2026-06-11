@@ -52,7 +52,9 @@ for name, binfile in [("icon_sysinfo", "build/sysinfo.bin"),
                       ("icon_files",   "build/browser.bin"),
                       ("icon_notepad", "build/notepad.bin"),
                       ("icon_music",   "build/music.bin"),
-                      ("icon_theme",   "build/settings.bin")]:
+                      ("icon_theme",   "build/settings.bin"),
+                      ("icon_dostris", "build/tetris.bin"),
+                      ("icon_outlast", "build/outlast.bin")]:
     if os.path.exists(binfile):
         icons[name] = icon_planar(binfile)
     else:

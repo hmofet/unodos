@@ -104,7 +104,7 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
 ICON_PITCH  equ 64                  ; 5 icons across 320px
-NICONS      equ 6                   ; 5 per row, wraps to a second row
+NICONS      equ 8                   ; 5 per row, wraps to a second row
 
 ; Paula audio channel 0
 AUD0LCH     equ $0A0
@@ -204,6 +204,44 @@ super:
         moveq   #0,d2
         bsr     theme_key           ; Enter = apply
         endc
+        ifd     AUTOTEST_DOSTRIS
+        ; Dostris variant: start a game and hard-drop six pieces through
+        ; the real key handler. Build: -DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1
+        moveq   #6,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     dostris_key
+        moveq   #5,d3
+.atdt:  move.w  d3,-(sp)
+        moveq   #0,d1
+        moveq   #$4F,d2             ; nudge left
+        bsr     dostris_key
+        moveq   #32,d1              ; hard drop
+        moveq   #0,d2
+        bsr     dostris_key
+        move.w  (sp)+,d3
+        dbra    d3,.atdt
+        endc
+        ifd     AUTOTEST_OUTLAST
+        ; OutLast variant: start driving and run 60 forced physics steps.
+        moveq   #7,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     outlast_key
+        move.w  #59,d3
+.atol:  move.w  d3,-(sp)
+        lea     vars(pc),a4
+        move.l  ticks(pc),d0
+        sub.l   #100,d0
+        move.l  d0,ol_last-vars(a4) ; force the step gate open
+        bsr     outlast_tick
+        move.w  (sp)+,d3
+        dbra    d3,.atol
+        endc
         ifd     AUTOTEST_NOTEPAD
         ; Notepad-focused variant: demo text (caret at end) exercises the
         ; vertical-scroll clamp. Build: -DAUTOTEST=1 -DAUTOTEST_NOTEPAD=1
@@ -221,6 +259,8 @@ super:
         dbra    d3,.atnp
         else
         ifnd    AUTOTEST_THEME
+        ifnd    AUTOTEST_DOSTRIS
+        ifnd    AUTOTEST_OUTLAST
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -230,6 +270,8 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
+        endc
         endc
         endc
         endc
@@ -243,6 +285,8 @@ main_loop:
         bsr     handle_drag
         bsr     handle_events
         bsr     music_tick
+        bsr     dostris_tick
+        bsr     outlast_tick
         bsr     app_ticks
         bra     main_loop
 
@@ -277,6 +321,10 @@ handle_events:
         beq     .k_music
         cmp.w   #5,d3
         beq     .k_theme
+        cmp.w   #6,d3
+        beq     .k_dostris
+        cmp.w   #7,d3
+        beq     .k_outlast
 .k_global:
         cmp.b   #27,d1              ; ESC closes topmost
         bne     .next
@@ -299,6 +347,16 @@ handle_events:
         bra     .k_global
 .k_theme:
         bsr     theme_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_dostris:
+        bsr     dostris_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_outlast:
+        bsr     outlast_key
         tst.w   d0
         beq     .next
         bra     .k_global
@@ -947,9 +1005,19 @@ app_draw_content:
         beq     .notepad
         cmp.w   #5,d0
         beq     .theme
+        cmp.w   #6,d0
+        beq     .dostris
+        cmp.w   #7,d0
+        beq     .outlast
         bsr     music_draw
         bra     .done
 .theme: bsr     theme_draw
+        bra     .done
+.dostris:
+        bsr     dostris_draw
+        bra     .done
+.outlast:
+        bsr     outlast_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -1739,6 +1807,7 @@ ser_puts:
 
         include "apps_m2.i"
         include "theme.i"
+        include "games.i"
 
 ; ============================================================================
 ; Data
@@ -1804,6 +1873,8 @@ app_def_tab:
         dc.w    12,14,296,176, str_t_notepad-start
         dc.w    40,42,240,120, str_t_music-start
         dc.w    56,30,270,142, str_t_theme-start
+        dc.w    8,12,300,182,  str_t_dostris-start
+        dc.w    4,12,310,182,  str_t_outlast-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -1812,6 +1883,8 @@ icon_tab:
         dc.l    icon_notepad
         dc.l    icon_music
         dc.l    icon_theme
+        dc.l    icon_dostris
+        dc.l    icon_outlast
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -1819,6 +1892,8 @@ name_tab:
         dc.l    name_notepad
         dc.l    name_music
         dc.l    name_theme
+        dc.l    name_dostris
+        dc.l    name_outlast
 
 ; mouse cursor sprite (UnoDOS-style arrow, 14 rows; POS/CTL rewritten live)
         even
@@ -1879,6 +1954,34 @@ thm_slot:       dc.w    0           ; theme app: custom-edit palette slot
         even
 theme_pal:      dc.w    $000A,$00AA,$0A0A,$0FFF  ; live palette (Classic VGA)
 cop_colptr:     dc.l    0           ; -> COLOR00 reg word in COPLIST
+dt_state:       dc.w    0           ; Dostris: 0 menu 1 play 2 pause 3 over
+dt_piece:       dc.w    0
+dt_rot:         dc.w    0
+dt_col:         dc.w    0
+dt_row:         dc.w    0
+dt_next:        dc.w    0
+dt_score:       dc.w    0
+dt_lines:       dc.w    0
+dt_level:       dc.w    1
+        even
+dt_last:        dc.l    0
+dt_seed:        dc.l    1
+ol_state:       dc.w    0           ; OutLast: 0 title 1 play 2 over
+ol_x:           dc.w    148
+ol_speed:       dc.w    0
+ol_score:       dc.w    0
+ol_time:        dc.w    60
+ol_crash:       dc.w    0
+ol_roadl:       dc.w    100
+ol_roadr:       dc.w    200
+        even
+ol_z:           dc.l    0
+ol_last:        dc.l    0
+ol_lastsec:     dc.l    0
+ol_traf0:       dc.l    400
+ol_traf1:       dc.l    1600
+ol_traf2:       dc.l    800
+ol_traf3:       dc.l    2000
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
@@ -1894,5 +1997,6 @@ clkbuf:         ds.b    12
 npbuf:          ds.b    NBUF
 npline:         ds.b    40
 npstat:         ds.b    48
+dt_board:       ds.b    200
 
         end

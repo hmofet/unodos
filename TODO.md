@@ -53,6 +53,14 @@ Next steps:
 - [ ] Sega Genesis showpiece port (per feasibility report SS3.3 —
       optional, after the portable core exists)
 
+## Game Ports (2026-06-11) - DONE
+- [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as
+      apps/dostris.asm; windowed; verified WinUAE + Executor)
+- [x] OutLast on Amiga + Mac (same track/perspective/traffic/physics as
+      apps/outlast.asm; verified WinUAE + Executor)
+- [ ] Game music on the 68K ports (Korobeiniki / driving songs)
+- [ ] Pac-Man on the 68K ports
+
 ## Theming & Splash (2026-06-11) - DONE
 - [x] 8 shared preset palettes on every color-capable platform (x86 VGA
       via new kernel API 105 + Settings buttons; Amiga Theme app via

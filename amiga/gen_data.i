@@ -93,6 +93,20 @@ icon_theme:
     dc.w $0CC0,$1EE8,$1248,$6006,$6006,$4002,$C003,$C003
     dc.w $C003,$C003,$4002,$6006,$6006,$1248,$1EE8,$0CC0
 
+; icon_dostris: 16x16, 16 words plane0 then 16 words plane1
+icon_dostris:
+    dc.w $0000,$0000,$7FF8,$7FF8,$0780,$0780,$0780,$0780
+    dc.w $0000,$3CF0,$3CF0,$0000,$0000,$0000,$0000,$0000
+    dc.w $0000,$0000,$7FF8,$7FF8,$0780,$0780,$0780,$0780
+    dc.w $0000,$0000,$0000,$0000,$0C38,$0C38,$0000,$0000
+
+; icon_outlast: 16x16, 16 words plane0 then 16 words plane1
+icon_outlast:
+    dc.w $0000,$7FFE,$7FFE,$0FC0,$0FC0,$1FE0,$1FE0,$1FF0
+    dc.w $3FF8,$3FF8,$3FFC,$0000,$0000,$0FC0,$0000,$0000
+    dc.w $0000,$0000,$0000,$0FC0,$0FC0,$0FE0,$0FE0,$1FF0
+    dc.w $1FF8,$3FF8,$3FFC,$0FE0,$0FE0,$0FC0,$0000,$0000
+
 ; Amiga rawkey -> ASCII (US layout, no shift)
 keymap_ascii:
     dc.b $00,$31,$32,$33,$34,$35,$36,$37,$38,$39,$30,$2D,$3D,$00,$00,$00
