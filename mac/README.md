@@ -1,4 +1,4 @@
-# UnoDOS/Mac — classic Mac OS ports (milestone 1)
+# UnoDOS/Mac — classic Mac OS ports (milestone 2)
 
 Two Macintosh ports of the UnoDOS desktop, from **one C codebase**
 (`unodos.c`), built with the [Retro68](https://github.com/autc04/Retro68)
@@ -17,11 +17,27 @@ toolchain and verified running under the ROM-free
 ![mono](build/mono_desktop.png)
 
 Both screenshots are the `test` builds (apps auto-launched) running under
-Executor: the System Info window shows live uptime, correctly stacked over
-the Clock window, with the desktop, icons, and footer behind. The color
-build renders the literal UnoDOS palette (blue desktop, cyan values,
-magenta accent); the mono build is the canonical 1-bit Mac look (gray
-desktop pattern, white windows, black text).
+Executor: **Notepad** topmost with demo text, a visible caret, and the live
+`Ln/Co/bytes` status bar; the **Files** directory listing stacked behind
+(real File Manager contents); **Music** playing Canon in D underneath. The
+color build renders the literal UnoDOS palette; the mono build is the
+canonical 1-bit Mac look.
+
+## Milestone 2 — the app trio
+
+- **Files** — volume directory listing via `PBGetCatInfo` (name + size,
+  `<DIR>` markers), arrow-key/click selection with a themed selection bar,
+  scrolling, `R` refresh. Enter or double-click opens the file in Notepad.
+- **Notepad** — text editor: caret, insert/backspace/return, arrow-key
+  navigation (incl. up/down with column memory), vertical scrolling, and
+  the **live status bar** (`Ln 3  Co 25  67 B *`) that updates on every
+  keystroke — the x86 audit's stale-status fix is law here. `Cmd-S` saves
+  through the File Manager (create/write/flush); files opened from Files
+  keep their name, new text saves as `UNTITLED.TXT`.
+- **Music** — the same Canon in D arrangement as `apps/music.asm`, played
+  on the Sound Manager square-wave synth (`noteSynth`/`noteCmd`), with a
+  staff view, per-note playback highlight, and Space to play/stop. If the
+  Sound Manager is unavailable the app runs visual-only.
 
 ## Strategy
 
@@ -87,12 +103,13 @@ to the theme. `CMakeLists.txt` emits both shipping apps plus `*Test`
 variants (`-DUNO_AUTOTEST`) that auto-launch the apps for screenshot
 verification without host→guest input injection.
 
-## Known limitations (milestone 1)
+## Known limitations (milestone 2)
 
-- Two in-app window procs (SysInfo, Clock); no document apps or the File
-  Manager-backed file browser yet.
 - Single cooperative event loop (the scheduler is scaffolding); the
   WM/app tables already support more.
+- Notepad: no horizontal scroll (long lines clip), 4 KB buffer, no
+  find/replace; Files: flat listing of the default directory (no
+  subdirectory navigation yet).
 - Uses our own full-screen GrafPort and chrome rather than real Mac
   windows — intentional (PORT-SPEC: one GrafPort, our WM), so the look is
   identical across color/mono and matches the other ports.
