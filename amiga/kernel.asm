@@ -207,6 +207,24 @@ super:
         moveq   #0,d2
         bsr     theme_key           ; Enter = apply
         endc
+        ifd     AUTOTEST_FAT
+        ; FAT12 variant: open Files, mount DF1, select CHAIN.TXT (the
+        ; multi-cluster test file) and open it in Notepad.
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'m',d1
+        moveq   #0,d2
+        bsr     files_key
+        moveq   #0,d1
+        move.b  #$4D,d2             ; down x3 -> CHAIN.TXT
+        bsr     files_key
+        bsr     files_key
+        bsr     files_key
+        moveq   #13,d1
+        moveq   #0,d2
+        bsr     files_key           ; Enter: FAT-chain read into Notepad
+        endc
         ifd     AUTOTEST_TRACKER
         ; Tracker variant: open, load the demo song, start playback.
         moveq   #9,d0
@@ -294,6 +312,7 @@ super:
         ifnd    AUTOTEST_OUTLAST
         ifnd    AUTOTEST_PACMAN
         ifnd    AUTOTEST_TRACKER
+        ifnd    AUTOTEST_FAT
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -303,6 +322,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
         endc
         endc
@@ -1846,6 +1866,8 @@ ser_puts:
         include "games.i"
         include "pacman.i"
         include "tracker.i"
+        include "fdd.i"
+        include "fat12.i"
 
 ; ============================================================================
 ; Data
@@ -1875,7 +1897,8 @@ name_files:     dc.b    "Files",0
 name_notepad:   dc.b    "Notepad",0
 name_music:     dc.b    "Music",0
 str_f_hdr:      dc.b    "Name          Size",0
-str_f_foot:     dc.b    "Enter: open in Notepad",0
+str_f_foot:     dc.b    "Enter:open  m:mount DF1 disk",0
+str_f_footf:    dc.b    "FAT12 DF1   Enter:open r:refresh",0
 str_n_save:     dc.b    " F1 save",0
 str_n_ln:       dc.b    "Ln ",0
 str_n_co:       dc.b    " Co ",0
@@ -2069,6 +2092,18 @@ tk_prow:        dc.w    0           ; playback row
 tk_playing:     dc.b    0
         even
 tk_last:        dc.l    0
+fdd_cyl:        dc.w    -1          ; current head cylinder (-1 unknown)
+fdd_ctrack:     dc.w    -1          ; cached track (-1 invalid)
+fat_mounted:    dc.b    0
+files_src:      dc.b    0           ; Files source: 0 ROM-disk, 1 FAT12
+        even
+fat_spc:        dc.w    0
+fat_spf:        dc.w    0
+fat_rootents:   dc.w    0
+fat_fatstart:   dc.w    0
+fat_rootstart:  dc.w    0
+fat_datastart:  dc.w    0
+fat_count:      dc.w    0
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
@@ -2090,6 +2125,8 @@ pm_maze:        ds.b    700
         even
 pm_old:         ds.w    8           ; pac + 3 ghosts old x,y
 tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; tracker pattern (RAM song)
+fat_tab:        ds.b    FAT_MAXFILES*18     ; root-dir cache
+fat_buf:        ds.b    1536                ; whole FAT (3 sectors max)
         even
 
         end

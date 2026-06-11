@@ -61,10 +61,26 @@ files_draw:
         bsr     draw_string
         ; rows
         moveq   #0,d7               ; index
-.row:   cmp.w   romdisk_count(pc),d7
+.row:   move.b  files_src(pc),d0
+        beq     .romcnt
+        cmp.w   fat_count(pc),d7
         bge     .foot
+        bra     .haveidx
+.romcnt:
+        cmp.w   romdisk_count(pc),d7
+        bge     .foot
+.haveidx:
+        move.b  files_src(pc),d0
+        beq     .romsrc
+        move.w  d7,d0
+        mulu    #18,d0
+        lea     fat_tab(pc),a3
+        lea     (a3,d0.w),a3        ; a3 = FAT entry
+        bra     .gotentry
+.romsrc:
         move.w  d7,d0
         bsr     rd_entry            ; a3 = entry
+.gotentry:
         ; row position
         move.w  d5,d1
         add.w   #12,d1
@@ -85,9 +101,22 @@ files_draw:
         bsr     fill_rect
         movem.l (sp)+,d1/a3
 .name:
-        ; name (NUL-padded 12 bytes is already a C string)
-        move.l  a3,a0
-        move.w  d6,d0
+        ; name: ROM-disk entries are NUL-padded C strings; FAT entries are
+        ; space-padded 8.3 - copy 11 chars + NUL into numbuf for those
+        move.b  files_src(pc),d0
+        beq     .nmrom
+        movem.l d1-d2/a1,-(sp)
+        lea     numbuf(pc),a0
+        moveq   #10,d2
+        move.l  a3,a1
+.nmcp:  move.b  (a1)+,(a0)+
+        dbra    d2,.nmcp
+        clr.b   (a0)
+        movem.l (sp)+,d1-d2/a1
+        lea     numbuf(pc),a0
+        bra     .nmgo
+.nmrom: move.l  a3,a0
+.nmgo:  move.w  d6,d0
         movem.l d1/a3,-(sp)
         cmp.w   files_sel(pc),d7
         bne     .fgw
@@ -97,7 +126,15 @@ files_draw:
 .dN:    bsr     draw_string
         movem.l (sp)+,d1/a3
         ; size, right-ish column
-        move.w  12+4(a3),d0         ; size word
+        move.b  files_src(pc),d0
+        beq     .szrom
+        move.l  12(a3),d0           ; FAT size (long); display low word
+        cmp.l   #65535,d0
+        ble     .szok
+        move.l  #65535,d0
+.szok:  bra     .szgo
+.szrom: move.w  12+4(a3),d0         ; ROM-disk size word
+.szgo:
         lea     numbuf(pc),a0
         bsr     fmt_dec
         lea     numbuf(pc),a0
@@ -115,6 +152,10 @@ files_draw:
         bra     .row
 .foot:
         lea     str_f_foot(pc),a0
+        move.b  files_src(pc),d0
+        beq     .footgo
+        lea     str_f_footf(pc),a0
+.footgo:
         move.w  d6,d0
         move.w  WY(a2),d1
         add.w   WH(a2),d1
@@ -133,13 +174,40 @@ files_key:
         cmp.b   #13,d1              ; Enter: open
         beq     .open
         cmp.b   #'r',d1
-        beq     .redraw             ; (romdisk is static; just repaint)
+        beq     .remount            ; refresh (re-mounts when on FAT)
+        cmp.b   #'m',d1
+        beq     .mount              ; mount the DF1 FAT12 data disk
         moveq   #1,d0
         rts
+.mount:
+.remount:
+        move.b  files_src(pc),d0
+        bne     .domount
+        cmp.b   #'m',d1
+        bne     .redraw             ; 'r' on the ROM-disk: just repaint
+.domount:
+        lea     vars(pc),a4
+        bsr     fat_mount
+        tst.w   d0
+        bmi     .mfail
+        bsr     fat_list_root
+        st      files_src-vars(a4)
+        clr.w   files_sel-vars(a4)
+        bra     .redraw
+.mfail: sf      files_src-vars(a4)  ; fall back to the ROM-disk listing
+        clr.w   files_sel-vars(a4)
+        bra     .redraw
 .down:  move.w  files_sel(pc),d0
         addq.w  #1,d0
+        move.b  files_src(pc),d1
+        beq     .cntrom
+        cmp.w   fat_count(pc),d0
+        bge     .redraw
+        bra     .selok
+.cntrom:
         cmp.w   romdisk_count(pc),d0
         bge     .redraw
+.selok:
         lea     vars(pc),a4
         move.w  d0,files_sel-vars(a4)
         bra     .redraw
@@ -150,8 +218,14 @@ files_key:
         move.w  d0,files_sel-vars(a4)
         bra     .redraw
 .open:
+        move.b  files_src(pc),d0
+        bne     .openfat
         move.w  files_sel(pc),d0
         bsr     notepad_open_file
+        bra     .launch
+.openfat:
+        bsr     notepad_open_fat
+.launch:
         moveq   #3,d0
         bsr     launch_app          ; raises + repaints if already open
         bsr     redraw_topmost
@@ -200,6 +274,34 @@ notepad_open_file:
 .cp:    move.b  (a0)+,(a1)+
         dbra    d2,.cp
 .done:  movem.l (sp)+,d0-d2/a0-a1/a3-a4
+        rts
+
+; notepad_open_fat - load the selected FAT12 file into the edit buffer
+notepad_open_fat:
+        movem.l d0-d2/a0-a1/a3-a4,-(sp)
+        move.w  files_sel(pc),d0
+        mulu    #18,d0
+        lea     fat_tab(pc),a3
+        lea     (a3,d0.w),a3
+        lea     vars(pc),a4
+        moveq   #0,d0
+        move.w  16(a3),d0           ; first cluster
+        move.l  12(a3),d1           ; size
+        cmp.l   #NBUF-1,d1
+        ble     .szok
+        move.l  #NBUF-1,d1
+.szok:  lea     npbuf(pc),a1
+        bsr     fat_read_file
+        tst.l   d0
+        bpl     .ok
+        moveq   #0,d0               ; read failed: empty buffer
+.ok:    move.w  d0,np_len-vars(a4)
+        clr.w   np_caret-vars(a4)
+        clr.w   np_top-vars(a4)
+        move.w  #-1,np_goal-vars(a4)
+        move.w  #-2,np_file-vars(a4) ; FAT origin: F1 save disabled (read-only v1)
+        sf      np_dirty-vars(a4)
+        movem.l (sp)+,d0-d2/a0-a1/a3-a4
         rts
 
 ; notepad_set_demo - load demo_text (AUTOTEST)
