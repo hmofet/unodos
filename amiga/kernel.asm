@@ -104,7 +104,7 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
 ICON_PITCH  equ 64                  ; 5 icons across 320px
-NICONS      equ 5
+NICONS      equ 6                   ; 5 per row, wraps to a second row
 
 ; Paula audio channel 0
 AUD0LCH     equ $0A0
@@ -173,11 +173,12 @@ super:
         move.l  #SQRWAVE,AUD0LCH(a6)
         move.w  #4,AUD0LEN(a6)      ; 4 words = 8 samples
 
-        bsr     draw_desktop
-
         move.l  #COPLIST,COP1LCH(a6)
         move.w  COPJMP1(a6),d0
         move.w  #$83A0,DMACON(a6)   ; DMAEN|BPLEN|COPEN|SPREN
+
+        bsr     splash_show         ; "UnoDOS 3" splash (~2s), clears after
+        bsr     draw_desktop
         move.w  #$C028,INTENA(a6)   ; INTEN|VERTB|PORTS
         and.w   #$F8FF,sr           ; allow interrupts (stay supervisor)
 
@@ -187,6 +188,22 @@ super:
         ifd     AUTOTEST
         ; Auto-launch the app stack for screenshot verification without
         ; host input injection. Build: -DAUTOTEST=1
+        ifd     AUTOTEST_THEME
+        ; Theme-app variant: open the picker, select preset 4 (Sunset) and
+        ; apply it through the real key handler. Build: -DAUTOTEST_THEME=1
+        moveq   #5,d0
+        bsr     launch_app
+        moveq   #2,d3
+.atth:  move.w  d3,-(sp)            ; draw_window clobbers d3
+        moveq   #0,d1
+        moveq   #$4D,d2             ; down
+        bsr     theme_key
+        move.w  (sp)+,d3
+        dbra    d3,.atth
+        moveq   #13,d1
+        moveq   #0,d2
+        bsr     theme_key           ; Enter = apply
+        endc
         ifd     AUTOTEST_NOTEPAD
         ; Notepad-focused variant: demo text (caret at end) exercises the
         ; vertical-scroll clamp. Build: -DAUTOTEST=1 -DAUTOTEST_NOTEPAD=1
@@ -203,6 +220,7 @@ super:
         move.w  (sp)+,d3
         dbra    d3,.atnp
         else
+        ifnd    AUTOTEST_THEME
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -212,6 +230,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
         endc
 
@@ -256,6 +275,8 @@ handle_events:
         beq     .k_notepad
         cmp.w   #4,d3
         beq     .k_music
+        cmp.w   #5,d3
+        beq     .k_theme
 .k_global:
         cmp.b   #27,d1              ; ESC closes topmost
         bne     .next
@@ -273,6 +294,11 @@ handle_events:
         bra     .k_global
 .k_music:
         bsr     music_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_theme:
+        bsr     theme_key
         tst.w   d0
         beq     .next
         bra     .k_global
@@ -531,12 +557,26 @@ draw_desktop:
         blt     .icons
         rts
 
+; icon_pos - d0 = icon index -> d0 = x, d1 = y (5 per row, rows 44px apart)
+icon_pos:
+        move.l  d2,-(sp)
+        moveq   #0,d2
+        move.w  d0,d2
+        divu    #5,d2               ; low = row, high = col
+        move.w  d2,d1
+        mulu    #44,d1
+        add.w   #ICON0_Y,d1
+        swap    d2
+        move.w  d2,d0
+        mulu    #ICON_PITCH,d0
+        add.w   #ICON0_X,d0
+        move.l  (sp)+,d2
+        rts
+
 ; draw_icon_cell - d0 = icon index (draws icon, label, selection box)
 draw_icon_cell:
         move.w  d0,d7
-        mulu    #ICON_PITCH,d0
-        add.w   #ICON0_X,d0
-        move.w  #ICON0_Y,d1
+        bsr     icon_pos
         ; clear the cell (selection box area)
         move.w  d0,-(sp)
         move.w  d1,-(sp)
@@ -599,25 +639,34 @@ select_icon:
 
 ; icon_at - d0/d1 = point -> d0 = icon index or -1
 icon_at:
+        movem.l d3-d5,-(sp)
+        move.w  d0,d3               ; px
+        move.w  d1,d4               ; py
         moveq   #0,d7
-.try:   move.w  d7,d2
-        mulu    #ICON_PITCH,d2
-        add.w   #ICON0_X-4,d2
-        cmp.w   d2,d0
+.try:   move.w  d7,d0
+        bsr     icon_pos            ; d0 = x, d1 = y
+        move.w  d0,d5
+        subq.w  #4,d5
+        cmp.w   d5,d3
         blt     .no
-        add.w   #24,d2
-        cmp.w   d2,d0
+        add.w   #24,d5
+        cmp.w   d5,d3
         bge     .no
-        cmp.w   #ICON0_Y-4,d1
+        move.w  d1,d5
+        subq.w  #4,d5
+        cmp.w   d5,d4
         blt     .no
-        cmp.w   #ICON0_Y+28,d1
+        add.w   #32,d5
+        cmp.w   d5,d4
         bge     .no
         move.w  d7,d0
+        movem.l (sp)+,d3-d5
         rts
 .no:    addq.w  #1,d7
         cmp.w   #NICONS,d7
         blt     .try
         moveq   #-1,d0
+        movem.l (sp)+,d3-d5
         rts
 
 ; launch_app - d0 = icon/proc index (re-raises if already open)
@@ -896,7 +945,11 @@ app_draw_content:
         cmp.w   #3,d0
         blt     .files
         beq     .notepad
+        cmp.w   #5,d0
+        beq     .theme
         bsr     music_draw
+        bra     .done
+.theme: bsr     theme_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -1633,14 +1686,19 @@ build_copper:
         move.w  #(PLANE1>>16)&$FFFF,(a0)+
         move.w  #BPL2PTH+2,(a0)+
         move.w  #PLANE1&$FFFF,(a0)+
+        movem.l a1/a4,-(sp)
+        lea     vars(pc),a4
+        move.l  a0,cop_colptr-vars(a4)  ; theme engine patches these words
+        lea     theme_pal(pc),a1
         move.w  #COLOR00,(a0)+
-        move.w  #COL_BLUE,(a0)+
+        move.w  (a1)+,(a0)+
         move.w  #COLOR00+2,(a0)+
-        move.w  #COL_CYAN,(a0)+
+        move.w  (a1)+,(a0)+
         move.w  #COLOR00+4,(a0)+
-        move.w  #COL_MAG,(a0)+
+        move.w  (a1)+,(a0)+
         move.w  #COLOR00+6,(a0)+
-        move.w  #COL_WHITE,(a0)+
+        move.w  (a1)+,(a0)+
+        movem.l (sp)+,a1/a4
         move.w  #COLOR17,(a0)+      ; sprite 0/1 colors: cursor
         move.w  #COL_WHITE,(a0)+
         move.w  #COLOR17+2,(a0)+
@@ -1680,6 +1738,7 @@ ser_puts:
         rts
 
         include "apps_m2.i"
+        include "theme.i"
 
 ; ============================================================================
 ; Data
@@ -1744,6 +1803,7 @@ app_def_tab:
         dc.w    16,24,200,150, str_t_files-start
         dc.w    12,14,296,176, str_t_notepad-start
         dc.w    40,42,240,120, str_t_music-start
+        dc.w    56,30,270,142, str_t_theme-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -1751,12 +1811,14 @@ icon_tab:
         dc.l    icon_files
         dc.l    icon_notepad
         dc.l    icon_music
+        dc.l    icon_theme
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
         dc.l    name_files
         dc.l    name_notepad
         dc.l    name_music
+        dc.l    name_theme
 
 ; mouse cursor sprite (UnoDOS-style arrow, 14 rows; POS/CTL rewritten live)
         even
@@ -1812,6 +1874,11 @@ np_len:         dc.w    0
 np_caret:       dc.w    0
 np_file:        dc.w    -1          ; romdisk index, -1 = untitled
 np_top:         dc.w    0           ; first visible line (vertical scroll)
+thm_sel:        dc.w    0           ; theme app: selected preset row
+thm_slot:       dc.w    0           ; theme app: custom-edit palette slot
+        even
+theme_pal:      dc.w    $000A,$00AA,$0A0A,$0FFF  ; live palette (Classic VGA)
+cop_colptr:     dc.l    0           ; -> COLOR00 reg word in COPLIST
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
