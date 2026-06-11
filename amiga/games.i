@@ -236,6 +236,7 @@ dt_clear_lines:
         move.w  dt_lines(pc),d0
         add.w   d7,d0
         move.w  d0,dt_lines-vars(a4)
+        and.l   #$FFFF,d0
         divu    #10,d0
         addq.w  #1,d0
         cmp.w   #15,d0

@@ -107,6 +107,13 @@ icon_outlast:
     dc.w $0000,$0000,$0000,$0FC0,$0FC0,$0FE0,$0FE0,$1FF0
     dc.w $1FF8,$3FF8,$3FFC,$0FE0,$0FE0,$0FC0,$0000,$0000
 
+; icon_pacman: 16x16, 16 words plane0 then 16 words plane1
+icon_pacman:
+    dc.w $1E78,$3FFC,$7FFE,$7FFE,$FFF0,$FFC0,$FF00,$FF00
+    dc.w $FFC0,$FFF0,$7FFE,$7FFE,$3FFC,$1E78,$0000,$0000
+    dc.w $1E78,$3FFC,$7FFE,$7FFE,$FFF0,$FFC0,$FF00,$FF00
+    dc.w $FFC0,$FFF0,$7FFE,$7FFE,$3FFC,$1E78,$0000,$0000
+
 ; Amiga rawkey -> ASCII (US layout, no shift)
 keymap_ascii:
     dc.b $00,$31,$32,$33,$34,$35,$36,$37,$38,$39,$30,$2D,$3D,$00,$00,$00
