@@ -63,6 +63,13 @@ def ppm_to_png(ppm_path, png_path):
     with open(png_path, "wb") as f:
         f.write(png)
 
+# Tracked guest cursor position. The kernel boots with the cursor at
+# (160,100). NOTE: do NOT use the old "mousemove -2000 -2000" homing trick -
+# on QEMU 11.x the PS/2 layer retains the out-of-range remainder (and/or
+# desyncs SeaBIOS's packet reassembly), leaving the pointer dead. Use
+# "moveto X Y" which tracks position and sends chunked relative deltas.
+cur_x, cur_y = 160, 100
+
 for line in sys.stdin:
     parts = line.split()
     if not parts:
@@ -70,6 +77,17 @@ for line in sys.stdin:
     cmd, rest = parts[0], parts[1:]
     if cmd == "wait":
         time.sleep(float(rest[0]))
+    elif cmd == "moveto":
+        tx, ty = int(rest[0]), int(rest[1])
+        dx, dy = tx - cur_x, ty - cur_y
+        while dx or dy:
+            sx = max(-100, min(100, dx))
+            sy = max(-100, min(100, dy))
+            mon(f"mouse_move {sx} {sy}")
+            time.sleep(0.15)
+            dx -= sx; dy -= sy
+        cur_x, cur_y = tx, ty
+        time.sleep(0.2)
     elif cmd == "key":
         mon("sendkey " + " ".join(rest)); time.sleep(0.3)
     elif cmd == "keys":
@@ -80,6 +98,11 @@ for line in sys.stdin:
             mon("sendkey " + ("spc" if c == " " else c)); time.sleep(0.2)
     elif cmd == "mousemove":
         mon("mouse_move " + " ".join(rest)); time.sleep(0.2)
+        try:
+            cur_x = max(0, min(319, cur_x + int(rest[0])))
+            cur_y = max(0, min(199, cur_y + int(rest[1])))
+        except (ValueError, IndexError):
+            pass
     elif cmd == "click":
         b = rest[0] if rest else "1"
         mon("mouse_button " + b); time.sleep(0.15); mon("mouse_button 0"); time.sleep(0.3)
