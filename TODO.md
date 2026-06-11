@@ -41,7 +41,9 @@ Next steps:
 - [ ] Amiga: blitter fast paths (text row-blit, fills) — the big OCS win
 - [ ] Amiga: TICKS_SEC calibration (vblank pacing runs fast under the
       WinUAE test config) + NTSC detection
-- [ ] Mac: Files subdirectory navigation (PBGetCatInfo ioDrDirID walk)
+- [x] Mac: Files subdirectory navigation (PBGetCatInfo ioDrDirID walk,
+      PBHSetVol current dir, ".." parent entry) — verified under Executor
+      via the UnoDOS7FTest build (enter dir, "..", open file in subdir)
 - [ ] Mac: offscreen GWorld double-buffering for flicker-free repaints
 - [ ] Both: audio ear-check on real hardware / sound-enabled emulator
       (sequencers are register-verified; test configs run sound off)

@@ -108,8 +108,7 @@ verification without host→guest input injection.
 - Single cooperative event loop (the scheduler is scaffolding); the
   WM/app tables already support more.
 - Notepad: no horizontal scroll (long lines clip), 4 KB buffer, no
-  find/replace; Files: flat listing of the default directory (no
-  subdirectory navigation yet).
+  find/replace; Files: 24-entry listing cap.
 - Uses our own full-screen GrafPort and chrome rather than real Mac
   windows — intentional (PORT-SPEC: one GrafPort, our WM), so the look is
   identical across color/mono and matches the other ports.
