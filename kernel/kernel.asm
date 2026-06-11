@@ -168,11 +168,24 @@ int_80_handler:
     mov byte [_did_cursor_protect], 0
     mov byte [_did_translate], 0
 
+    ; 8086-safe bitmap test (was movzx+bt, 386+): AH = function number
     push bx
-    movzx bx, ah
-    bt [api_drawing_bitmap], bx
+    push cx
+    push ax
+    mov al, ah                      ; AL = function number
+    xor ah, ah
+    mov bx, ax
+    mov cl, 3
+    shr bx, cl                      ; BX = byte index
+    mov cl, al
+    and cl, 7                       ; CL = bit index within byte
+    mov al, [api_drawing_bitmap + bx]
+    shr al, cl
+    test al, 1
+    pop ax
+    pop cx
     pop bx
-    jnc .no_translate               ; Not a drawing API — skip to dispatch
+    jz .no_translate                ; Not a drawing API - skip to dispatch
 
     ; --- Drawing API: set theme colors (A2 — only for drawing APIs) ---
     push ax
@@ -198,11 +211,24 @@ int_80_handler:
     cmp byte [draw_context], WIN_MAX_COUNT
     jae .no_translate               ; Invalid context
 
+    ; 8086-safe bitmap test (was movzx+bt, 386+)
     push bx
-    movzx bx, ah
-    bt [api_translate_bitmap], bx
+    push cx
+    push ax
+    mov al, ah                      ; AL = function number
+    xor ah, ah
+    mov bx, ax
+    mov cl, 3
+    shr bx, cl                      ; BX = byte index
+    mov cl, al
+    and cl, 7                       ; CL = bit index within byte
+    mov al, [api_translate_bitmap + bx]
+    shr al, cl
+    test al, 1
+    pop ax
+    pop cx
     pop bx
-    jnc .no_translate               ; Not in translation bitmap
+    jz .no_translate                ; Not in translation bitmap
 
 .do_translate:
 
@@ -3259,11 +3285,9 @@ draw_char:
 ; Trashes: AX, BX, DX (caller must save these registers)
 ; ============================================================================
 cga_pixel_calc:
-    mov ax, bx
-    shr ax, 1                       ; AX = Y / 2
-    mov dx, 80
-    mul dx                          ; AX = (Y/2) * 80
-    mov di, ax
+    mov di, bx
+    and di, 0xFFFE                  ; (Y/2)*2 = byte index into word LUT
+    mov di, [cs:cga_row_table+di]   ; DI = (Y/2)*80 - no MUL (was ~120 cyc on 8088)
     mov ax, cx
     shr ax, 1
     shr ax, 1                       ; AX = X / 4
@@ -3499,6 +3523,44 @@ cursor_xor_sprite:
     push cx
     cmp bx, [screen_height]
     jae .skip_row
+    ; Fast path: when all 8 sprite pixels fit inside the row, XOR the raw
+    ; 2bpp row pattern as 2-3 bytes (bit-identical to per-pixel XOR since
+    ; transparent pixels are 00 and XOR 0 is a no-op). Avoids 8 call/
+    ; push-pop/cga_pixel_calc round trips per row.
+    mov ax, [screen_width]
+    sub ax, 8
+    cmp cx, ax
+    ja .slow_row                    ; Near right edge: per-pixel clipped path
+    mov di, bx
+    and di, 0xFFFE
+    mov di, [cs:cga_row_table+di]   ; DI = (Y/2)*80
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    add di, ax                      ; DI = row base + X/4
+    test bl, 1
+    jz .fr_even
+    add di, 0x2000                  ; Odd scanline: interlace bank
+.fr_even:
+    and cx, 3                       ; CX = X & 3 (start X saved on stack)
+    mov ah, [si]                    ; Pixels 0-3 (leftmost in bits 7-6)
+    mov al, [si+1]                  ; Pixels 4-7
+    xor dh, dh                      ; DH = spill byte when misaligned
+    jcxz .fr_xor
+.fr_shift:                          ; Shift AH:AL:DH right 2 bits, X&3 times
+    shr ax, 1
+    rcr dh, 1
+    shr ax, 1
+    rcr dh, 1
+    loop .fr_shift
+.fr_xor:
+    xor [es:di], ah
+    xor [es:di+1], al
+    test dh, dh
+    jz .skip_row
+    xor [es:di+2], dh
+    jmp .skip_row
+.slow_row:
     mov ah, [si]                    ; AH = first byte (pixels 0-3)
     mov al, [si+1]                  ; AL = second byte (pixels 4-7)
     mov di, 8
@@ -11980,6 +12042,90 @@ floppy_read_sector:
 .frs_retry: db 0
 
 ; ============================================================================
+; floppy_read_sectors - Read CX sectors with one INT 13h per track run
+; Chunks at track ends and 64KB DMA boundaries, 3 retries per chunk.
+; Input: AX = start LBA, CX = sector count (>= 1), ES:BX = buffer
+; Output: CF = 0 on success, BX advanced past the data
+; Clobbers: AX, CX, DX
+; ============================================================================
+floppy_read_sectors:
+    mov [cs:.fms_lba], ax
+    mov [cs:.fms_left], cx
+.fms_chunk:
+    cmp word [cs:.fms_left], 0
+    je .fms_ok
+    mov ax, [cs:.fms_lba]           ; Sectors to end of track = 18 - (lba % 18)
+    xor dx, dx
+    push bx
+    mov bx, 18
+    div bx
+    pop bx
+    mov ax, 18
+    sub ax, dx
+    cmp ax, [cs:.fms_left]
+    jbe .fms_t1
+    mov ax, [cs:.fms_left]
+.fms_t1:
+    mov [cs:.fms_cnt], ax
+    mov ax, es                      ; Whole sectors before the 64KB DMA boundary
+    mov cl, 4
+    shl ax, cl
+    add ax, bx                      ; AX = linear address & 0xFFFF
+    neg ax                          ; AX = bytes to boundary (0 = full 64KB)
+    jz .fms_dma_ok
+    mov cl, 9
+    shr ax, cl
+    jz .fms_fail                    ; <512B headroom: caller must bounce
+    cmp ax, [cs:.fms_cnt]
+    jae .fms_dma_ok
+    mov [cs:.fms_cnt], ax
+.fms_dma_ok:
+    mov byte [cs:.fms_try], 3
+.fms_retry:
+    push bx
+    mov ax, [cs:.fms_lba]           ; LBA -> CHS (1.44MB: 18 SPT, 2 heads)
+    xor dx, dx
+    mov bx, 18
+    div bx
+    inc dx
+    mov cl, dl                      ; CL = sector
+    xor dx, dx
+    mov bx, 2
+    div bx
+    mov ch, al                      ; CH = cylinder
+    mov dh, dl                      ; DH = head
+    pop bx
+    mov ax, [cs:.fms_cnt]           ; AL = sector count (1..18)
+    mov ah, 0x02
+    mov dl, 0x00
+    int 0x13
+    jnc .fms_adv
+    dec byte [cs:.fms_try]
+    jz .fms_fail
+    xor ah, ah
+    mov dl, 0
+    int 0x13
+    jmp .fms_retry
+.fms_adv:
+    mov ax, [cs:.fms_cnt]
+    add [cs:.fms_lba], ax
+    sub [cs:.fms_left], ax
+    mov cl, 9
+    shl ax, cl
+    add bx, ax                      ; Advance buffer (max 18*512 = 9216/chunk)
+    jmp .fms_chunk
+.fms_fail:
+    stc
+    ret
+.fms_ok:
+    clc
+    ret
+.fms_lba:  dw 0
+.fms_left: dw 0
+.fms_cnt:  dw 0
+.fms_try:  db 0
+
+; ============================================================================
 ; floppy_write_sector - Write one sector with retry logic
 ; Input: AX = LBA sector number, ES:BX = buffer to write from
 ; Output: CF = 0 on success, CF = 1 on error
@@ -12342,6 +12488,91 @@ fat12_read:
     test cx, cx
     jz .read_complete_multi
 
+    ; --- Multi-sector fast path -----------------------------------------
+    ; fat12_alloc_cluster is a first-fit ascending scan, so files are
+    ; near-always physically contiguous. Read runs of consecutive
+    ; clusters straight into ES:DI with one INT 13h per track chunk
+    ; instead of one call (plus a bounce copy) per 512-byte cluster.
+    ; The FAT walk costs no I/O (RAM-cached). Falls back to the original
+    ; single-sector bounce path for partial tails (<512 bytes) and
+    ; buffers within 512B of a 64KB DMA boundary.
+    cmp cx, 512
+    jb .single_sector               ; Partial tail: bounce path handles it
+    mov ax, cx
+    push cx
+    mov cl, 9
+    shr ax, cl                      ; AX = max run by bytes (remaining/512)
+    mov dx, es                      ; Cap by DMA headroom: a run must not
+    mov cl, 4                       ; cross a physical 64KB boundary
+    shl dx, cl
+    pop cx
+    add dx, di                      ; DX = linear address & 0xFFFF
+    neg dx                          ; DX = bytes to boundary (0 = full 64KB)
+    jz .run_cap_done
+    push cx
+    mov cl, 9
+    shr dx, cl                      ; DX = whole sectors before boundary
+    pop cx
+    jz .single_sector               ; <512B headroom: bounce is DMA-safe
+    cmp ax, dx
+    jbe .run_cap_done
+    mov ax, dx
+.run_cap_done:
+    mov [cs:.run_max], ax           ; AX >= 1
+    mov word [cs:.run_len], 1
+    mov byte [cs:.run_eoc], 0
+    mov ax, [si + 12]
+    mov [cs:.run_first], ax
+.run_walk:
+    mov dx, ax                      ; DX = current cluster
+    mov ax, [cs:.run_len]
+    cmp ax, [cs:.run_max]
+    jae .run_need_cont              ; Hit cap: still need continuation
+    mov ax, dx
+    call get_next_cluster           ; AX = next cluster (CF=1: end of chain)
+    jc .run_walk_eoc
+    mov bx, dx
+    inc bx
+    cmp ax, bx                      ; Physically consecutive?
+    jne .run_cont_known             ; No: AX is the continuation cluster
+    inc word [cs:.run_len]
+    jmp .run_walk
+.run_need_cont:
+    mov ax, dx
+    call get_next_cluster
+    jnc .run_cont_known
+.run_walk_eoc:
+    mov byte [cs:.run_eoc], 1
+    jmp .run_read
+.run_cont_known:
+    mov [cs:.run_cont], ax
+.run_read:
+    mov ax, [cs:.run_first]         ; Start LBA = (first-2)*spc + data_start
+    sub ax, 2
+    xor bh, bh
+    mov bl, [sectors_per_cluster]
+    mul bx
+    add ax, [data_area_start]
+    mov cx, [cs:.run_len]
+    mov bx, di
+    call floppy_read_sectors        ; Direct to ES:DI, BX advances
+    jc .read_error_multi
+    mov ax, [cs:.run_len]           ; Advance counters by run_len*512
+    push cx
+    mov cl, 9
+    shl ax, cl
+    pop cx
+    add di, ax
+    add [si + 16], ax               ; Total bytes read
+    sub [si + 14], ax               ; Bytes remaining
+    cmp byte [cs:.run_eoc], 0
+    jne .read_complete_multi        ; Chain ended
+    mov ax, [cs:.run_cont]
+    mov [si + 12], ax               ; Continue from first non-consecutive
+    jmp .cluster_loop
+    ; --- End multi-sector fast path --------------------------------------
+
+.single_sector:
     ; Get current cluster
     mov ax, [si + 12]               ; AX = current cluster
 
@@ -12391,7 +12622,11 @@ fat12_read:
     mov si, bpb_buffer
     mov bx, 0x1000
     mov ds, bx
-    rep movsb                       ; Copy and advance DI automatically
+    shr cx, 1                       ; CF = odd-byte flag
+    rep movsw                       ; Word copy (~2x on 8086; MOVS keeps CF)
+    jnc .copy_done
+    movsb                           ; Odd trailing byte
+.copy_done:
 
     pop ds
     mov cx, ax                      ; Restore bytes copied to CX
@@ -12465,6 +12700,12 @@ fat12_read:
     pop cx
     pop bx
     ret
+
+.run_max:   dw 0                    ; Multi-sector run state (fat12_read)
+.run_len:   dw 0
+.run_first: dw 0
+.run_cont:  dw 0
+.run_eoc:   db 0
 
 ; fat12_close - Close a file
 ; Input: AX = file handle
@@ -21240,6 +21481,15 @@ cursor_locked:      db 0            ; Lock counter (>0 = cursor rendering suppre
 
 ; Cursor bitmap: 8 pixels wide, 10 rows tall
 ; Each byte = 1 row, MSB = leftmost pixel, 1 = draw (XOR white)
+; CGA row-base lookup: (Y/2)*80 for Y/2 = 0..99 (200 bytes).
+; Lets cga_pixel_calc avoid a 16-bit MUL per plotted pixel.
+cga_row_table:
+%assign _crty 0
+%rep 100
+    dw _crty*80
+%assign _crty _crty+1
+%endrep
+
 cursor_bitmap_color:        ; 2bpp: 2 bytes/row, 14 rows, W=white c=cyan
     db 0xC0, 0x00               ; W.......
     db 0xF0, 0x00               ; WW......
