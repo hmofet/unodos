@@ -5,6 +5,40 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Ports] - 2026-06-11
+
+Platform ports, developed out-of-band from the x86 versioning (the x86
+tree is unchanged). Spec: docs/PORT-SPEC.md; plan and feasibility:
+docs/M68K-PORT-FEASIBILITY.md.
+
+### Amiga port (amiga/, milestone 1-2)
+- Bare-metal 68000 port for OCS/ECS A500-class machines: self-booting
+  ADF (vasm + exe2adf), supervisor takeover, copper-driven 320x200x4 in
+  the UnoDOS palette, hardware-sprite cursor, CIA keyboard + quadrature
+  mouse into the focus-routed event queue (press-time click latch).
+- Window manager: frames/title bars/close box, z-order with
+  click-to-raise, clamped drag with self-erasing XOR outline.
+- Apps: SysInfo, Clock, Files (boot ROM-disk browser), Notepad (caret
+  editor, live Ln/Co/bytes status bar, F1 save-to-RAM), Music (Canon in
+  D on a Paula square wave with staff view + playback highlight).
+- Storage milestone stand-in: build-time ROM-disk from amiga/disk/
+  (MFM/FAT12 driver is the next milestone).
+- Verified in WinUAE with the built-in AROS ROM (no Kickstart needed).
+
+### Mac ports (mac/, milestone 1-2)
+- Two applications from one C codebase via Retro68: UnoDOS7 (System 7,
+  Color QuickDraw, Mac II+, full UnoDOS palette) and UnoDOSClassic
+  (System 1-6, 1-bit QuickDraw, Mac Plus/SE/Classic, authentic mono
+  theme). Toolbox-based by design: one full-screen GrafPort, UnoDOS's
+  own WM/widgets/theme inside it; ROM supplies screen, events, files,
+  sound, ticks.
+- Apps: SysInfo, Clock, Files (File Manager directory listing), Notepad
+  (caret editor, live status bar, Cmd-S save via the File Manager),
+  Music (Canon in D on the Sound Manager square-wave synth).
+- Verified under the ROM-free Executor emulator (no Mac ROM or System
+  install needed); runs from the .bin on real hardware / Mini vMac /
+  Basilisk II.
+
 ## [3.26.0] - 2026-06-11
 
 ### 8088/8086 Compatibility + Audit Backlog Complete (Builds 404-405)

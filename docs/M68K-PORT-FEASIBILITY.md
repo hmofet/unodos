@@ -11,9 +11,9 @@ Classic-era (128K/512K/Plus/SE/Classic, 68000), Sega Genesis / Mega Drive
 
 | Target | Feasibility | Fidelity achievable | Relative effort | Recommended? |
 |---|---|---|---|---|
-| **Amiga (OCS, 68000)** | **High** | Full GUI OS, floppy boot, FAT12 disks readable | 1.0× (baseline) | **Yes — first target** |
-| **Mac System 1–6 (68000)** | **DONE** (milestone 1, 2026-06-11) | 1-bit mono GUI, Toolbox-based, runs ROM-free under Executor | built | **Shipped** |
-| **Mac System 7 (68020+)** | **DONE** (milestone 1, 2026-06-11) | Full **Color QuickDraw** GUI, UnoDOS palette, runs ROM-free under Executor | built | **Shipped** |
+| **Amiga (OCS, 68000)** | **DONE** (milestone 2, 2026-06-11) | Bare-metal self-booting ADF: desktop, WM, SysInfo/Clock/Files/Notepad/Music | built | **Shipped** (`amiga/`) |
+| **Mac System 1–6 (68000)** | **DONE** (milestone 2, 2026-06-11) | 1-bit mono GUI + Files/Notepad/Music, Toolbox-based, runs ROM-free under Executor | built | **Shipped** (`mac/`) |
+| **Mac System 7 (68020+)** | **DONE** (milestone 2, 2026-06-11) | Full **Color QuickDraw** GUI + Files/Notepad/Music, UnoDOS palette, runs ROM-free under Executor | built | **Shipped** (`mac/`) |
 | **Sega Genesis** | Low–Medium | Tech-demo GUI; no filesystem, no keyboard; cartridge "apps" | ~1.3× (reduced scope) | Only as a showpiece |
 
 **The one-sentence verdict:** a 68K port is feasible and would be a
@@ -84,6 +84,14 @@ What *does* port — and is genuinely valuable:
 
 ## 3. Per-target assessment
 
+> **IMPLEMENTED (milestone 2, 2026-06-11).** `amiga/` contains the
+> bare-metal port: self-booting ADF, copper/bitplane display, sprite
+> cursor, CIA/quadrature input, window manager, and the app set
+> (SysInfo, Clock, Files over a boot ROM-disk, Notepad with live status
+> bar + F1 save, Music on a Paula square wave). Verified in WinUAE with
+> the built-in AROS ROM. Remaining per TODO.md: MFM/FAT12 storage,
+> blitter fast paths, scheduler. The assessment below is preserved.
+
 ### 3.1 Amiga (OCS/ECS, 68000 @ 7.14 MHz) — HIGH feasibility
 
 The Amiga is the natural first 68K home for UnoDOS: a flat-memory 68000
@@ -120,10 +128,11 @@ floppy, and graphics hardware that *helps* rather than fights.
   blitter + font pre-shifting); MFM floppy writing (Notepad save, MkBoot)
   is fiddlier than reading.
 
-> **IMPLEMENTED (milestone 1, 2026-06-11).** Both a System 1–6 mono
+> **IMPLEMENTED (milestone 2, 2026-06-11).** Both a System 1–6 mono
 > build (`UnoDOSClassic`) and a System 7 **color** build (`UnoDOS7`)
 > now exist in `mac/`, from one C codebase, built with Retro68 and
-> verified running under the ROM-free Executor emulator. The user
+> verified running under the ROM-free Executor emulator, now including
+> the Files / Notepad / Music app trio. The user
 > asked for color retained for System-7 hardware *and* the classic
 > mono target, so both ship. See `mac/README.md`. The assessment
 > below (which led to the Toolbox-based strategy) is preserved for
