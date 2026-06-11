@@ -670,7 +670,7 @@ pm_draw_tile:
         move.w  d5,d0
         move.w  d6,d1
         moveq   #0,d2
-        moveq   #0,d4
+        moveq   #30,d4
         bsr     pm_trect            ; black base
         move.w  d6,d0
         mulu    #PM_COLS,d0
@@ -684,7 +684,7 @@ pm_draw_tile:
         move.w  d5,d0
         move.w  d6,d1
         moveq   #1,d2
-        moveq   #1,d4
+        moveq   #9,d4               ; walls: deep blue
         bsr     pm_trect
         bra     .done
 .ndot:  cmp.w   #2,d1
@@ -724,7 +724,7 @@ pm_draw_actors:
         add.w   #TBAR_H+2,d1
         moveq   #6,d2
         moveq   #6,d3
-        moveq   #3,d4
+        moveq   #5,d4               ; pac: yellow
         bsr     fill_rect
         lea     pm_gh(pc),a3
         moveq   #0,d7
@@ -744,16 +744,19 @@ pm_draw_actors:
         bsr     fill_rect
         bra     .gn2
 .gnorm2:
-        moveq   #2,d4
+        move.w  d7,d0
+        lea     pm_ghcol(pc),a0
+        moveq   #0,d4
+        move.b  (a0,d0.w),d4        ; blinky red / pinky pink / clyde orange
         cmp.w   #GH_FRIGHT,GST(a3)
         bne     .gcol2
-        moveq   #1,d4
+        moveq   #29,d4              ; frightened: deep blue
         move.w  pm_fright(pc),d2
         cmp.w   #70,d2
         bge     .gcol2
         btst    #3,d2
         beq     .gcol2
-        moveq   #2,d4
+        moveq   #24,d4              ; end flash: white
 .gcol2: moveq   #6,d2
         moveq   #6,d3
         bsr     fill_rect
@@ -849,7 +852,7 @@ pacman_draw:
         subq.w  #2,d2
         move.w  WH(a2),d3
         sub.w   #TBAR_H+1,d3
-        moveq   #0,d4
+        moveq   #30,d4              ; true black backdrop
         bsr     fill_rect
         move.w  pm_state(pc),d0
         bne     .game
@@ -860,14 +863,16 @@ pacman_draw:
         move.w  WY(a2),d1
         add.w   #TBAR_H+60,d1
         moveq   #3,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         lea     str_pm_new(pc),a0
         move.w  WX(a2),d0
         add.w   #96,d0
         move.w  WY(a2),d1
         add.w   #TBAR_H+100,d1
         moveq   #1,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         bra     .done
 .game:
         ; tiles via the shared tile renderer
@@ -887,25 +892,25 @@ pacman_draw:
         move.w  WY(a2),d5
         add.w   #TBAR_H+6,d5
         lea     str_pm_score(pc),a0
-        bsr     dt_label
+        bsr     pm_label
         add.w   #10,d5
         move.w  pm_score(pc),d0
         bsr     pm_value
         add.w   #14,d5
         lea     str_pm_hi(pc),a0
-        bsr     dt_label
+        bsr     pm_label
         add.w   #10,d5
         move.w  pm_hi(pc),d0
         bsr     pm_value
         add.w   #14,d5
         lea     str_pm_lives(pc),a0
-        bsr     dt_label
+        bsr     pm_label
         add.w   #10,d5
         move.w  pm_lives(pc),d0
         bsr     pm_value
         add.w   #14,d5
         lea     str_pm_level(pc),a0
-        bsr     dt_label
+        bsr     pm_label
         add.w   #10,d5
         move.w  pm_level(pc),d0
         bsr     pm_value
@@ -924,20 +929,33 @@ pacman_draw:
         move.w  WY(a2),d1
         add.w   #TBAR_H+92,d1
         moveq   #3,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
 .done:  movem.l (sp)+,d0-d7/a0-a4
         rts
 
-; pm_value - d0.w at (d6,d5) white (mirrors dt_value but no offset)
+; pm_value - d0.w at (d6,d5), white on the black backdrop
 pm_value:
-        movem.l d0-d2/a0,-(sp)
+        movem.l d0-d3/a0,-(sp)
         lea     npstat(pc),a0
         bsr     fmt_dec
         move.w  d6,d0
         move.w  d5,d1
         moveq   #3,d2
-        bsr     draw_string
-        movem.l (sp)+,d0-d2/a0
+        moveq   #30,d3
+        bsr     draw_string_bg
+        movem.l (sp)+,d0-d3/a0
+        rts
+
+; pm_label - a0=string at (d6,d5), cyan on the black backdrop
+pm_label:
+        movem.l d0-d3/a0,-(sp)
+        move.w  d6,d0
+        move.w  d5,d1
+        moveq   #1,d2
+        moveq   #30,d3
+        bsr     draw_string_bg
+        movem.l (sp)+,d0-d3/a0
         rts
 
 ; pacman_key - d1=ascii d2=raw -> d0=0 consumed / 1 not
@@ -1020,6 +1038,8 @@ pacman_tick:
         rts
 
 ; ---------------------------------------------------------------- data
+pm_ghcol:       dc.b    21,28,10    ; red, pink, orange
+        even
 str_pm_title:   dc.b    "P A C - M A N",0
 str_pm_new:     dc.b    "N: new game",0
 str_pm_score:   dc.b    "SCORE",0

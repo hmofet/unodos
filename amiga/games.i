@@ -688,12 +688,13 @@ outlast_new:
         move.l  d0,ol_last-vars(a4)
         move.l  d0,ol_lastsec-vars(a4)
         move.w  #1,ol_state-vars(a4)
-        movem.l a0-a1,-(sp)
+        movem.l d0-d1/a0-a1,-(sp)
         lea     drive_notes(pc),a0
         move.w  drive_count(pc),d0
         moveq   #7,d1
         bsr     gm_start
-        movem.l (sp)+,a0-a1
+        movem.l (sp)+,d0-d1/a0-a1
+        movem.l (sp)+,d0/a4
         rts
 
 ; ol_rect - playfield rect: d0=x d1=y d2=x2 d3=y2 d4=col, a2=window
@@ -730,13 +731,13 @@ outlast_draw:
         moveq   #0,d1
         move.w  #OL_PLAYW,d2
         move.w  #OL_PLAYH,d3
-        moveq   #0,d4
+        moveq   #30,d4              ; black
         bsr     ol_rect
         moveq   #0,d0
         moveq   #60,d1
         move.w  #OL_PLAYW,d2
         moveq   #62,d3
-        moveq   #1,d4
+        moveq   #12,d4              ; horizon haze
         bsr     ol_rect
         ; converging road bands
         moveq   #0,d7
@@ -761,7 +762,7 @@ outlast_draw:
         move.w  d4,d2
         move.w  d1,d3
         add.w   #9,d3
-        moveq   #3,d4
+        moveq   #15,d4              ; road gray
         bsr     ol_rect
         addq.w  #1,d7
         cmp.w   #9,d7
@@ -771,13 +772,13 @@ outlast_draw:
         move.w  #108,d1
         move.w  #166,d2
         move.w  #132,d3
-        moveq   #2,d4
+        moveq   #21,d4              ; car red
         bsr     ol_rect
         move.w  #136,d0
         move.w  #112,d1
         move.w  #160,d2
         move.w  #120,d3
-        moveq   #1,d4
+        moveq   #22,d4              ; windshield
         bsr     ol_rect
         lea     str_ol_title(pc),a0
         move.w  WX(a2),d0
@@ -785,14 +786,16 @@ outlast_draw:
         move.w  WY(a2),d1
         add.w   #TBAR_H+30,d1
         moveq   #3,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         lea     str_ol_prompt(pc),a0
         move.w  WX(a2),d0
         add.w   #92,d0
         move.w  WY(a2),d1
         add.w   #TBAR_H+150,d1
         moveq   #1,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         bra     .done
 .ingame:
         ; ---- sky + horizon
@@ -800,13 +803,13 @@ outlast_draw:
         moveq   #0,d1
         move.w  #OL_PLAYW,d2
         move.w  #OL_HORIZ,d3
-        moveq   #0,d4
+        moveq   #11,d4              ; sky
         bsr     ol_rect
         moveq   #0,d0
         move.w  #OL_HORIZ,d1
         move.w  #OL_PLAYW,d2
         move.w  #OL_HORIZ+2,d3
-        moveq   #1,d4
+        moveq   #12,d4              ; horizon haze
         bsr     ol_rect
         ; ---- road strips bottom-up; d7 = y, d6 = curve accumulator
         move.w  #OL_PLAYH-2,d7
@@ -838,10 +841,10 @@ outlast_draw:
         divu    d1,d4
         and.l   #$FFFF,d4
         ; grass color by segment parity
-        moveq   #1,d5
+        moveq   #13,d5              ; grass A
         btst    #0,d2
         beq     .gok
-        moveq   #2,d5
+        moveq   #14,d5              ; grass B
 .gok:   movem.w d2/d6,-(sp)
         ; left grass [0, center-hw)
         moveq   #0,d0
@@ -864,7 +867,7 @@ outlast_draw:
         movem.w d3-d5,-(sp)
         move.w  d7,d3
         addq.w  #2,d3
-        moveq   #3,d4
+        moveq   #15,d4              ; road gray
         bsr     ol_rect
         movem.w (sp)+,d3-d5
         ; right grass [center+hw, OL_PLAYW)
@@ -890,7 +893,7 @@ outlast_draw:
         movem.w d3-d4,-(sp)
         move.w  d7,d3
         addq.w  #2,d3
-        moveq   #0,d4
+        moveq   #20,d4              ; stripe yellow
         bsr     ol_rect
         movem.w (sp)+,d3-d4
 .nostripe:
@@ -975,11 +978,11 @@ outlast_draw:
         move.w  d5,d1
         sub.w   d3,d1               ; y1
         move.w  d5,d3
-        ; color: cars 0-1 same dir = cyan, 2-3 oncoming = white
-        moveq   #1,d4
+        ; color: cars 0-1 same dir = yellow, 2-3 oncoming = white
+        moveq   #25,d4
         cmp.w   #2,d7
         blt     .col
-        moveq   #3,d4
+        moveq   #24,d4
 .col:   bsr     ol_rect
 .ntraf: addq.w  #1,d7
         cmp.w   #4,d7
@@ -995,7 +998,7 @@ outlast_draw:
         move.w  d6,d2
         add.w   #13,d2
         move.w  #134,d3
-        moveq   #2,d4
+        moveq   #21,d4              ; car red
         bsr     ol_rect
         move.w  d6,d0
         subq.w  #8,d0
@@ -1003,7 +1006,7 @@ outlast_draw:
         move.w  d6,d2
         addq.w  #8,d2
         move.w  #126,d3
-        moveq   #1,d4
+        moveq   #22,d4              ; windshield
         bsr     ol_rect
         move.w  d6,d0
         sub.w   #15,d0
@@ -1011,7 +1014,7 @@ outlast_draw:
         move.w  d6,d2
         sub.w   #9,d2
         move.w  #137,d3
-        moveq   #0,d4
+        moveq   #23,d4              ; wheel
         bsr     ol_rect
         move.w  d6,d0
         add.w   #9,d0
@@ -1019,7 +1022,7 @@ outlast_draw:
         move.w  d6,d2
         add.w   #15,d2
         move.w  #137,d3
-        moveq   #0,d4
+        moveq   #23,d4              ; wheel
         bsr     ol_rect
 .nocar:
         ; ---- HUD
@@ -1029,7 +1032,7 @@ outlast_draw:
         add.w   #TBAR_H+1,d1
         move.w  #OL_PLAYW,d2
         moveq   #10,d3
-        moveq   #0,d4
+        moveq   #30,d4              ; HUD black
         bsr     fill_rect
         lea     npstat(pc),a0
         lea     str_ol_speed(pc),a1
@@ -1056,7 +1059,8 @@ outlast_draw:
         move.w  WY(a2),d1
         add.w   #TBAR_H+2,d1
         moveq   #3,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         ; ---- game over overlay
         move.w  ol_state(pc),d0
         cmp.w   #2,d0
@@ -1065,7 +1069,7 @@ outlast_draw:
         move.w  #56,d1
         move.w  #226,d2
         move.w  #100,d3
-        moveq   #0,d4
+        moveq   #30,d4              ; overlay black
         bsr     ol_rect
         lea     str_ol_over(pc),a0
         move.w  WX(a2),d0
@@ -1073,14 +1077,16 @@ outlast_draw:
         move.w  WY(a2),d1
         add.w   #TBAR_H+82,d1
         moveq   #3,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
         lea     str_ol_prompt(pc),a0
         move.w  WX(a2),d0
         add.w   #96,d0
         move.w  WY(a2),d1
         add.w   #TBAR_H+98,d1
         moveq   #1,d2
-        bsr     draw_string
+        moveq   #30,d3
+        bsr     draw_string_bg
 .done:  movem.l (sp)+,d0-d7/a0-a4
         rts
 
@@ -1318,7 +1324,7 @@ dt_shapes:
         dc.b    0,0,0,1,1,1,2,1,  0,0,1,0,0,1,0,2,  0,0,1,0,2,0,2,1,  1,0,1,1,0,2,1,2
         dc.b    2,0,0,1,1,1,2,1,  0,0,0,1,0,2,1,2,  0,0,1,0,2,0,0,1,  0,0,1,0,1,1,1,2
 dt_colors:
-        dc.b    1,3,2,1,2,3,1     ; cyan,white,mag,cyan,mag,white,cyan
+        dc.b    4,5,6,7,8,9,10    ; ext palette: I,O,T,S,Z,J,L (VGA look)
         even
 dt_linescore:
         dc.w    0,40,100,300,1200

@@ -62,8 +62,10 @@ CIAA_SDR    equ $BFEC01
 CIAB_ICR    equ $BFDD00
 
 ; fixed chip-RAM layout (all below 512KB)
-PLANE0      equ $70000              ; 8000 bytes
-PLANE1      equ $72000              ; 8000 bytes
+PLANE0      equ $60000              ; 5 contiguous planes x 8000 bytes
+PLANE_SZ    equ 8000
+NPLANES     equ 5                   ; 32 colors (OCS lowres maximum)
+PLANE1      equ PLANE0+PLANE_SZ
 COPLIST     equ $76000
 SPRDAT      equ $76800              ; cursor sprite (must be chip)
 NULLSPR     equ $76900
@@ -1201,19 +1203,17 @@ fmt_u16:
 ; ============================================================================
 
 ; clear_screen - both planes to 0. NOTE: the planes are NOT contiguous
-; (PLANE0+8000 = $71F40, PLANE1 = $72000) - clear each separately or
-; stale memory shows up as a garbage band in the last rows of plane 1.
+; planes are contiguous now: one wipe covers all NPLANES.
 clear_screen:
         movem.l d0-d1/a0,-(sp)
         lea     PLANE0,a0
-        move.w  #(8000/4)-1,d0
+        move.l  #(PLANE_SZ*NPLANES/4)-1,d0
         moveq   #0,d1
 .c0:    move.l  d1,(a0)+
         dbra    d0,.c0
-        lea     PLANE1,a0
-        move.w  #(8000/4)-1,d0
-.c1:    move.l  d1,(a0)+
-        dbra    d0,.c1
+        swap    d0
+        subq.w  #1,d0
+        bpl     .c0
         movem.l (sp)+,d0-d1/a0
         rts
 
@@ -1227,7 +1227,7 @@ plane_row:
         add.l   d5,a1
         rts
 
-; fill_rect - d0=x d1=y d2=w d3=h d4=color(0-3). Preserves all registers.
+; fill_rect - d0=x d1=y d2=w d3=h d4=color(0-31). Preserves all registers.
 fill_rect:
         movem.l d0-d7/a0-a3,-(sp)
         bsr     fill_rect_raw
@@ -1238,17 +1238,20 @@ fill_rect_raw:
         ble     fr_out
         tst.w   d3
         ble     fr_out
+        ; a3 = byte offset of (x,y)
+        move.w  d1,d6
+        mulu    #ROWB,d6
+        move.w  d0,d1
+        lsr.w   #3,d1
+        and.l   #$FFFF,d1
+        add.l   d1,d6
+        move.l  d6,a3
         move.w  d0,d6
         add.w   d2,d6
         subq.w  #1,d6               ; d6 = xend
-        bsr     plane_row
-        move.w  d0,d5
-        lsr.w   #3,d5
-        add.w   d5,a0
-        add.w   d5,a1
         move.w  d6,d2
         lsr.w   #3,d2
-        sub.w   d5,d2               ; d2 = span-1 in bytes
+        sub.w   d1,d2               ; d2 = span-1 in bytes
         ; left mask = $FF >> (x&7)
         moveq   #0,d5
         move.b  #$FF,d5
@@ -1264,72 +1267,48 @@ fill_rect_raw:
         tst.w   d2
         bne     .multi
         and.b   d7,d5               ; single byte: combined mask
-        move.b  d5,d7
-.multi:
-        subq.w  #1,d3               ; dbra row count
-.row:
-        move.l  a0,a2
-        move.l  a1,a3
-        ; left byte
-        btst    #0,d4
-        beq     .l0c
-        or.b    d5,(a2)
-        bra     .l0d
-.l0c:   move.b  d5,d0
-        not.b   d0
-        and.b   d0,(a2)
-.l0d:   btst    #1,d4
-        beq     .l1c
-        or.b    d5,(a3)
-        bra     .l1d
-.l1c:   move.b  d5,d0
-        not.b   d0
-        and.b   d0,(a3)
-.l1d:
-        tst.w   d2
-        beq     .rownext            ; single-byte row
-        move.w  d2,d1
-        subq.w  #1,d1               ; middle bytes = span-1 - 1
-        ble     .rightset
-        subq.w  #1,d1               ; dbra count
-        lea     1(a2),a2
-        lea     1(a3),a3
-.mid:   btst    #0,d4
-        beq     .m0c
-        move.b  #$FF,(a2)+
-        bra     .m0d
-.m0c:   clr.b   (a2)+
-.m0d:   btst    #1,d4
-        beq     .m1c
-        move.b  #$FF,(a3)+
-        bra     .m1d
-.m1c:   clr.b   (a3)+
-.m1d:   dbra    d1,.mid
-        bra     .right
-.rightset:
-        lea     1(a2),a2
-        lea     1(a3),a3
-.right:
-        btst    #0,d4
-        beq     .r0c
-        or.b    d7,(a2)
-        bra     .r0d
-.r0c:   move.b  d7,d0
-        not.b   d0
-        and.b   d0,(a2)
-.r0d:   btst    #1,d4
-        beq     .r1c
-        or.b    d7,(a3)
-        bra     .r1d
-.r1c:   move.b  d7,d0
-        not.b   d0
-        and.b   d0,(a3)
-.r1d:
-.rownext:
-        lea     ROWB(a0),a0
-        lea     ROWB(a1),a1
-        dbra    d3,.row
+.multi: subq.w  #1,d3               ; dbra row count
+        moveq   #NPLANES-1,d0
+.plane: move.w  d0,-(sp)
+        ; d6 = fill byte for this plane
+        moveq   #0,d6
+        btst    d0,d4
+        beq     .fb
+        st      d6
+.fb:    mulu    #PLANE_SZ,d0
+        lea     PLANE0,a0
+        add.l   d0,a0
+        add.l   a3,a0
+        bsr     fr5_plane
+        move.w  (sp)+,d0
+        dbra    d0,.plane
 fr_out: rts
+
+; fr5_plane - one plane: a0=addr d2=span-1 d3=rows-1 d5=lmask d6=fill
+; d7=rmask. Clobbers d0,d1,a1,a2. Merge: b ^= ((b ^ fill) & mask).
+fr5_plane:
+        move.w  d3,d1
+.row:   move.l  a0,a2
+        move.b  (a2),d0
+        eor.b   d6,d0
+        and.b   d5,d0
+        eor.b   d0,(a2)
+        tst.w   d2
+        beq     .next
+        move.b  (a2,d2.w),d0
+        eor.b   d6,d0
+        and.b   d7,d0
+        eor.b   d0,(a2,d2.w)
+        move.w  d2,d0
+        subq.w  #1,d0
+        beq     .next
+        subq.w  #1,d0
+        lea     1(a2),a1
+.mid:   move.b  d6,(a1)+
+        dbra    d0,.mid
+.next:  lea     ROWB(a0),a0
+        dbra    d1,.row
+        rts
 
 ; rect_outline_white - d0=x d1=y d2=w d3=h
 rect_outline_white:
@@ -1476,7 +1455,7 @@ di16_raw:
         rts
 
 ; ----------------------------------------------------------------------------
-; draw_char - d0=x d1=y d2=char d3=fg(0-3) d4=bg(0-3, or -1 = transparent)
+; draw_char - d0=x d1=y d2=char d3=fg(0-31) d4=bg(0-31, or -1 = transparent)
 ; Unaligned: 2-byte RMW per row per plane. Preserves all registers.
 ; ----------------------------------------------------------------------------
 draw_char:
@@ -1490,11 +1469,14 @@ draw_char:
 .hi:    lsl.w   #3,d2
         lea     font8x8(pc),a4
         lea     (a4,d2.w),a4        ; a4 = glyph rows
-        bsr     plane_row           ; a0/a1 (trashes d5)
+        ; a3 = plane-0 address of (x,y)
+        mulu    #ROWB,d1
         move.w  d0,d5
         lsr.w   #3,d5
-        add.w   d5,a0
-        add.w   d5,a1
+        and.l   #$FFFF,d5
+        add.l   d5,d1
+        lea     PLANE0,a3
+        add.l   d1,a3
         move.w  d0,d6
         and.w   #7,d6               ; d6 = shift
         moveq   #7,d7               ; 8 rows
@@ -1505,66 +1487,43 @@ draw_char:
         lsr.w   d6,d2               ; d2 = glyph bits in 16px window
         move.w  #$FF00,d5
         lsr.w   d6,d5               ; d5 = coverage mask
-        ; ---- plane 0 ----
-        moveq   #0,d0
-        btst    #0,d3
-        beq     .g0
-        move.w  d2,d0               ; fg contributes glyph bits
-.g0:    tst.w   d4
-        bmi     .t0                 ; transparent background
-        btst    #0,d4
-        beq     .w0
-        move.w  d5,d1
-        eor.w   d2,d1               ; bg contributes mask&~glyph
-        or.w    d1,d0
-.w0:    move.w  d5,d1               ; clear masked bits, then set value
-        not.w   d1
-        and.b   d1,1(a0)
-        ror.w   #8,d1
-        and.b   d1,(a0)
-        move.w  d0,d1
-        or.b    d1,1(a0)
-        ror.w   #8,d1
-        or.b    d1,(a0)
-        bra     .pl1
-.t0:    move.w  d0,d1
-        or.b    d1,1(a0)
-        ror.w   #8,d1
-        or.b    d1,(a0)
-.pl1:
-        ; ---- plane 1 ----
-        moveq   #0,d2
-        move.b  -1(a4),d2
-        lsl.w   #8,d2
-        lsr.w   d6,d2
-        moveq   #0,d0
-        btst    #1,d3
-        beq     .g1
-        move.w  d2,d0
-.g1:    tst.w   d4
-        bmi     .t1
-        btst    #1,d4
-        beq     .w1
-        move.w  d5,d1
-        eor.w   d2,d1
-        or.w    d1,d0
-.w1:    move.w  d5,d1
-        not.w   d1
-        and.b   d1,1(a1)
-        ror.w   #8,d1
-        and.b   d1,(a1)
-        move.w  d0,d1
-        or.b    d1,1(a1)
-        ror.w   #8,d1
-        or.b    d1,(a1)
-        bra     .nx
-.t1:    move.w  d0,d1
-        or.b    d1,1(a1)
-        ror.w   #8,d1
-        or.b    d1,(a1)
-.nx:
-        lea     ROWB(a0),a0
-        lea     ROWB(a1),a1
+        moveq   #NPLANES-1,d0
+.pl:    move.w  d0,-(sp)
+        ; a0 = this plane's address
+        mulu    #PLANE_SZ,d0
+        move.l  a3,a0
+        add.l   d0,a0
+        ; d1 = value bits for this plane
+        move.w  (sp),d0
+        moveq   #0,d1
+        btst    d0,d3
+        beq     .nofg
+        move.w  d2,d1               ; fg contributes glyph bits
+.nofg:  tst.w   d4
+        bmi     .trans
+        btst    d0,d4
+        beq     .opq
+        move.w  d5,d0
+        eor.w   d2,d0               ; bg contributes mask&~glyph
+        or.w    d0,d1
+.opq:   ; word = (word & ~coverage) | value
+        move.w  d5,d0
+        not.w   d0
+        and.b   d0,1(a0)
+        ror.w   #8,d0
+        and.b   d0,(a0)
+        move.w  d1,d0
+        or.b    d0,1(a0)
+        ror.w   #8,d0
+        or.b    d0,(a0)
+        bra     .pnext
+.trans: move.w  d1,d0               ; transparent: OR fg bits only
+        or.b    d0,1(a0)
+        ror.w   #8,d0
+        or.b    d0,(a0)
+.pnext: move.w  (sp)+,d0
+        dbra    d0,.pl
+        lea     ROWB(a3),a3
         dbra    d7,.row
         movem.l (sp)+,d0-d7/a0-a4
         rts
@@ -1772,7 +1731,7 @@ build_copper:
         move.w  #DDFSTOP,(a0)+
         move.w  #$00D0,(a0)+
         move.w  #BPLCON0,(a0)+
-        move.w  #$2200,(a0)+        ; 2 bitplanes, color
+        move.w  #$5200,(a0)+        ; 5 bitplanes, color (32-color OCS max)
         move.w  #BPLCON1,(a0)+
         move.w  #0,(a0)+
         move.w  #BPLCON2,(a0)+
@@ -1781,14 +1740,22 @@ build_copper:
         move.w  #0,(a0)+
         move.w  #BPL2MOD,(a0)+
         move.w  #0,(a0)+
-        move.w  #BPL1PTH,(a0)+
-        move.w  #(PLANE0>>16)&$FFFF,(a0)+
-        move.w  #BPL1PTH+2,(a0)+
-        move.w  #PLANE0&$FFFF,(a0)+
-        move.w  #BPL2PTH,(a0)+
-        move.w  #(PLANE1>>16)&$FFFF,(a0)+
-        move.w  #BPL2PTH+2,(a0)+
-        move.w  #PLANE1&$FFFF,(a0)+
+        ; 5 bitplane pointers (BPL1PTH = $0E0, 4 bytes per plane)
+        movem.l d2-d3,-(sp)
+        move.w  #BPL1PTH,d2
+        move.l  #PLANE0,d3
+        moveq   #NPLANES-1,d1
+.bplp:  move.w  d2,(a0)+
+        swap    d3
+        move.w  d3,(a0)+            ; high word
+        swap    d3
+        addq.w  #2,d2
+        move.w  d2,(a0)+
+        move.w  d3,(a0)+            ; low word
+        addq.w  #2,d2
+        add.l   #PLANE_SZ,d3
+        dbra    d1,.bplp
+        movem.l (sp)+,d2-d3
         movem.l a1/a4,-(sp)
         lea     vars(pc),a4
         move.l  a0,cop_colptr-vars(a4)  ; theme engine patches these words
@@ -1802,12 +1769,17 @@ build_copper:
         move.w  #COLOR00+6,(a0)+
         move.w  (a1)+,(a0)+
         movem.l (sp)+,a1/a4
-        move.w  #COLOR17,(a0)+      ; sprite 0/1 colors: cursor
-        move.w  #COL_WHITE,(a0)+
-        move.w  #COLOR17+2,(a0)+
-        move.w  #COL_BLUE,(a0)+
-        move.w  #COLOR17+4,(a0)+
-        move.w  #COL_CYAN,(a0)+
+        ; extended palette: COLOR04-COLOR31 (game colors; 17-19 double as
+        ; the cursor sprite colors and are kept cursor-friendly)
+        movem.l d2-d3/a1,-(sp)
+        lea     ext_palette(pc),a1
+        move.w  #COLOR00+8,d2       ; COLOR04
+        moveq   #28-1,d1
+.extp:  move.w  d2,(a0)+
+        move.w  (a1)+,(a0)+
+        addq.w  #2,d2
+        dbra    d1,.extp
+        movem.l (sp)+,d2-d3/a1
         move.w  #SPR0PTH,(a0)+
         move.w  #(SPRDAT>>16)&$FFFF,(a0)+
         move.w  #SPR0PTH+2,(a0)+
@@ -1933,6 +1905,17 @@ name_tab:
         dc.l    name_dostris
         dc.l    name_outlast
         dc.l    name_pacman
+
+; extended palette: playfield colors 4-31 ($0RGB). 4-10 = Dostris pieces
+; (I,O,T,S,Z,J,L), 11-16 = OutLast scenery, 17-19 = cursor sprite colors
+; (shared registers), 20-27 = OutLast/foliage detail, 28-31 = Pac-Man.
+        even
+ext_palette:
+        dc.w    $00DD,$0ED0,$0A3D,$02C4,$0E33,$036E,$0E93   ; 4-10 pieces
+        dc.w    $07AE,$0EC8,$03A3,$0282,$0777,$0666          ; 11-16 scenery
+        dc.w    $0FFF,$000A,$00AA                            ; 17-19 cursor
+        dc.w    $0EE4,$0D22,$09DE,$0111,$0EEE,$0EC4,$0851,$02A2 ; 20-27
+        dc.w    $0F9C,$033C,$0000,$0FB0                      ; 28-31
 
 ; mouse cursor sprite (UnoDOS-style arrow, 14 rows; POS/CTL rewritten live)
         even
