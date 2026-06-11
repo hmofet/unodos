@@ -1,0 +1,3 @@
+build/*
+!build/desktop.png
+!build/unodos68k.adf
