@@ -1,4 +1,4 @@
-# UnoDOS/68K — Amiga port (milestone 1)
+# UnoDOS/68K — Amiga port (milestone 2)
 
 A bare-metal port of the UnoDOS desktop to the Commodore Amiga
 (OCS/ECS, 68000, 512 KB chip RAM), built per `docs/PORT-SPEC.md` and the
@@ -29,13 +29,27 @@ in-kernel apps.
   click-to-raise (title or body), title-bar drag with a self-erasing XOR
   outline and on-screen clamping. Bottom-up repaint = z-clip by paint
   order.
-- **Apps**: SysInfo (live uptime) and Clock (uptime as HH:MM:SS), launched
-  by double-click or arrow-keys + Enter; ESC closes the topmost window.
+- **Apps** (milestone 2 — the x86 core trio + the originals):
+  - **Files** — browses the boot **ROM-disk** (files from `amiga/disk/`
+    baked into the kernel image at build time, editable in RAM until the
+    MFM/FAT12 driver lands): name + size rows, white selection bar,
+    arrow keys, Enter opens the file in Notepad.
+  - **Notepad** — text editor: caret, insert/backspace/return, left/right
+    arrows, and the **live status bar** (`Ln 1 Co 1 245 B`) updated on
+    every keystroke (the x86 audit's stale-status fix is law). F1 saves
+    back to the ROM-disk entry in RAM.
+  - **Music** — Canon in D (the same arrangement as `apps/music.asm`) on
+    a **Paula square wave** (channel 0, PAL periods), with a staff view,
+    a magenta moving playback highlight, Space to play/stop.
+  - SysInfo (live uptime) and Clock (HH:MM:SS), as before.
+  - Launched by double-click or arrow-keys + Enter; ESC closes the
+    topmost window; the focused (topmost) window owns the keyboard.
 - Serial debug markers at 9600-8N1.
 
-The screenshot above is the `test` build (both apps auto-launched at boot)
-showing the window manager correctly stacking SysInfo over Clock with live,
-per-second uptime.
+The screenshot above is the `test` build: Music topmost playing (magenta
+note = sequencer position, verified advancing between captures), Files
+with its selection bar behind, Notepad showing README.TXT with its live
+status bar at the bottom.
 
 ## Build
 
@@ -83,11 +97,12 @@ and app procs are platform-independent in spirit; the Amiga-specific parts
 (`gen_data.i`) is generated, not hand-written, so the fonts and icons stay
 bit-identical to the x86 original.
 
-## Known limitations (milestone 1)
+## Known limitations (milestone 2)
 
-- Two in-kernel apps only; no FAT12/floppy filesystem yet (apps are
-  compiled in, not loaded from disk). The portable FAT12 core + an MFM
-  track reader are the next milestone.
+- Storage is the boot ROM-disk (build-time files, RAM-editable); the
+  portable FAT12 core + an MFM track reader are the next milestone.
+- Notepad: no up/down line navigation or vertical scroll yet; 2 KB
+  buffer.
 - Single cooperative context (the scheduler is scaffolding); real
   multitasking over the window/app tables is milestone 3.
 - The vblank tick runs fast under WinUAE's default pacing for this config

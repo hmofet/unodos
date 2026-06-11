@@ -1,5 +1,5 @@
 ; ============================================================================
-; UnoDOS/68K - Amiga port, milestone 1
+; UnoDOS/68K - Amiga port, milestone 2
 ; ============================================================================
 ; Bare-metal UnoDOS desktop for Amiga OCS/ECS (68000, 512KB chip RAM).
 ; Built as an AmigaDOS hunk executable (vasm -Fhunkexe), packed onto a
@@ -103,8 +103,18 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
-ICON_PITCH  equ 80
-NICONS      equ 2
+ICON_PITCH  equ 64                  ; 5 icons across 320px
+NICONS      equ 5
+
+; Paula audio channel 0
+AUD0LCH     equ $0A0
+AUD0LEN     equ $0A4
+AUD0PER     equ $0A6
+AUD0VOL     equ $0A8
+SQRWAVE     equ $76A00              ; 8-byte square sample (chip RAM)
+
+NBUF        equ 2048                ; notepad buffer
+RD_ENT      equ 20                  ; romdisk entry: 12B name + ptr.l + size.w + cap.w
 
 CURSOR_H    equ 14
 
@@ -156,6 +166,13 @@ super:
         clr.l   (a1)+
         clr.l   (a1)
 
+        ; Paula square-wave sample (4 high, 4 low) into chip RAM
+        lea     SQRWAVE,a0
+        move.l  #$7F7F7F7F,(a0)+
+        move.l  #$81818181,(a0)
+        move.l  #SQRWAVE,AUD0LCH(a6)
+        move.w  #4,AUD0LEN(a6)      ; 4 words = 8 samples
+
         bsr     draw_desktop
 
         move.l  #COPLIST,COP1LCH(a6)
@@ -168,13 +185,17 @@ super:
         bsr     ser_puts
 
         ifd     AUTOTEST
-        ; Auto-launch both apps at boot to exercise the WM + app procs
-        ; without host input injection (WinUAE input is desktop-isolated
-        ; from the build automation). Build: -DAUTOTEST=1
-        moveq   #1,d0               ; Clock
+        ; Auto-launch the app stack for screenshot verification without
+        ; host input injection. Build: -DAUTOTEST=1
+        moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
+        bsr     notepad_open_file
+        moveq   #3,d0               ; Notepad (bottom)
         bsr     launch_app
-        moveq   #0,d0               ; SysInfo (ends up topmost)
+        moveq   #2,d0               ; Files (middle)
         bsr     launch_app
+        moveq   #4,d0               ; Music (topmost, playing)
+        bsr     launch_app
+        bsr     music_start
         endc
 
 ; ============================================================================
@@ -185,6 +206,7 @@ main_loop:
         bsr     handle_clicks
         bsr     handle_drag
         bsr     handle_events
+        bsr     music_tick
         bsr     app_ticks
         bra     main_loop
 
@@ -200,11 +222,48 @@ handle_events:
         bne     .next               ; mouse events: the click latch rules
         move.w  d1,d2
         lsr.w   #8,d2               ; d2 = raw scancode
+        and.w   #$FF,d1             ; d1 = ascii (0 if none)
+        ; focused (topmost) window gets first refusal (PORT-SPEC SS3)
+        move.w  zcount(pc),d3
+        beq     .desktop
+        movem.w d1-d2,-(sp)
+        move.w  zcount(pc),d2
+        subq.w  #1,d2
+        bsr     zwin_ptr            ; a2 = topmost (preserves regs)
+        moveq   #0,d3
+        move.b  WPROC(a2),d3
+        movem.w (sp)+,d1-d2
+        cmp.w   #2,d3
+        beq     .k_files
+        cmp.w   #3,d3
+        beq     .k_notepad
+        cmp.w   #4,d3
+        beq     .k_music
+.k_global:
+        cmp.b   #27,d1              ; ESC closes topmost
+        bne     .next
+        bsr     close_topmost
+        bra     .next
+.k_files:
+        bsr     files_key           ; in: d1=ascii d2=raw; out: d0=0 consumed
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_notepad:
+        bsr     notepad_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_music:
+        bsr     music_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.desktop:
         cmp.b   #$4E,d2
         beq     .selright
         cmp.b   #$4F,d2
         beq     .selleft
-        and.w   #$FF,d1
         cmp.b   #27,d1
         beq     .esc
         cmp.b   #13,d1
@@ -814,12 +873,23 @@ draw_window:
 ; app_draw_content - d0 = proc index, a2 = window
 app_draw_content:
         move.l  a2,-(sp)
-        tst.w   d0
-        beq     .sysinfo
-        bsr     clock_draw
+        cmp.w   #1,d0
+        blt     .sysinfo
+        beq     .clock
+        cmp.w   #3,d0
+        blt     .files
+        beq     .notepad
+        bsr     music_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
+        bra     .done
+.clock: bsr     clock_draw
+        bra     .done
+.files: bsr     files_draw
+        bra     .done
+.notepad:
+        bsr     notepad_draw
 .done:  move.l  (sp)+,a2
         rts
 
@@ -1592,6 +1662,8 @@ ser_puts:
 .done:  movem.l (sp)+,d0/a0/a6
         rts
 
+        include "apps_m2.i"
+
 ; ============================================================================
 ; Data
 ; ============================================================================
@@ -1600,32 +1672,59 @@ str_boot:       dc.b    "UNODOS68K: boot",13,10,0
 str_desktop:    dc.b    "UNODOS68K: desktop up",13,10,0
 str_launch:     dc.b    "UNODOS68K: app launched",13,10,0
 str_menutitle:  dc.b    "UnoDOS 68K",0
-str_version:    dc.b    "UnoDOS/68K v0.1.0",0
-str_build:      dc.b    "Milestone 1",0
+str_version:    dc.b    "UnoDOS/68K v0.2.0",0
+str_build:      dc.b    "Milestone 2",0
 str_x:          dc.b    "X",0
 str_si1:        dc.b    "Video   320x200x4",0
 str_si2:        dc.b    "Machine Amiga OCS",0
 str_si3:        dc.b    "Chip    512 KB",0
 str_si4:        dc.b    "Uptime",0
-str_si5:        dc.b    "UnoDOS/68K  Milestone 1",0
+str_si5:        dc.b    "UnoDOS/68K  Milestone 2",0
 str_uptime:     dc.b    "Uptime",0
 str_t_sysinfo:  dc.b    "System Info",0
 str_t_clock:    dc.b    "Clock",0
+str_t_files:    dc.b    "Files",0
+str_t_notepad:  dc.b    "Notepad",0
+str_t_music:    dc.b    "Music",0
 name_sysinfo:   dc.b    "Sys Info",0
 name_clock:     dc.b    "Clock",0
+name_files:     dc.b    "Files",0
+name_notepad:   dc.b    "Notepad",0
+name_music:     dc.b    "Music",0
+str_f_hdr:      dc.b    "Name          Size",0
+str_f_foot:     dc.b    "Enter: open in Notepad",0
+str_n_save:     dc.b    " F1 save",0
+str_n_ln:       dc.b    "Ln ",0
+str_n_co:       dc.b    " Co ",0
+str_n_b:        dc.b    " B",0
+str_n_dirty:    dc.b    " *",0
+str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
+str_m_play:     dc.b    "Space: play/stop",0
+demo_text:      dc.b    "UnoDOS/68K milestone 2",13
+                dc.b    "The quick brown fox",13
+                dc.b    "jumps over the lazy dog.",0
 
         even
 ; app definitions: x, y, w, h, title offset from 'start'
 app_def_tab:
-        dc.w    24,40,220,90, str_t_sysinfo-start
-        dc.w    90,60,150,70, str_t_clock-start
+        dc.w    24,40,220,90,  str_t_sysinfo-start
+        dc.w    90,60,150,70,  str_t_clock-start
+        dc.w    16,24,200,150, str_t_files-start
+        dc.w    12,14,296,176, str_t_notepad-start
+        dc.w    40,42,240,120, str_t_music-start
 
 icon_tab:
         dc.l    icon_sysinfo
         dc.l    icon_clock
+        dc.l    icon_files
+        dc.l    icon_notepad
+        dc.l    icon_music
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
+        dc.l    name_files
+        dc.l    name_notepad
+        dc.l    name_music
 
 ; mouse cursor sprite (UnoDOS-style arrow, 14 rows; POS/CTL rewritten live)
         even
@@ -1676,11 +1775,23 @@ click_seq:      dc.b    0
 last_seq:       dc.b    0
 drag_active:    dc.b    0
         even
+files_sel:      dc.w    0
+np_len:         dc.w    0
+np_caret:       dc.w    0
+np_file:        dc.w    -1          ; romdisk index, -1 = untitled
+mus_ix:         dc.w    0
+mus_end:        dc.l    0
+np_dirty:       dc.b    0
+mus_playing:    dc.b    0
+        even
 evq:            ds.b    EVQ_SIZE*4
 zlist:          ds.b    MAXWIN
         even
 wintab:         ds.b    MAXWIN*WENT_SIZE
 numbuf:         ds.b    16
 clkbuf:         ds.b    12
+npbuf:          ds.b    NBUF
+npline:         ds.b    40
+npstat:         ds.b    48
 
         end

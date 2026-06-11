@@ -7,10 +7,14 @@
   (offset 0x10, 64 bytes) and converted to 2 separate bitplanes
   (16 words plane0, then 16 words plane1).
 - keymap: Amiga rawkey -> ASCII table (128 bytes, US layout, no shift).
+- romdisk: files from amiga/disk/ baked in as an editable-in-RAM file
+  table (until the MFM/FAT12 driver lands).
+- music: Canon in D note table (same arrangement as apps/music.asm) as
+  Paula periods (PAL) + durations in vblank ticks + staff y-offsets.
 
 Usage: python mkdata.py <out.i>   (run from the repo root)
 """
-import re, sys, os
+import re, sys, os, glob
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "amiga/gen_data.i"
 
@@ -26,7 +30,7 @@ assert len(font) == 95 * 8, f"font rows: {len(font)}"
 def icon_planar(path):
     data = open(path, "rb").read()
     assert data[0] == 0xEB and data[2:4] == b"UI", f"{path}: no UI header"
-    chunky = data[0x10:0x50]            # 16 rows x 4 bytes, 2bpp, MSB pair = leftmost
+    chunky = data[0x10:0x50]
     p0rows, p1rows = [], []
     for r in range(16):
         row = chunky[r*4:(r+1)*4]
@@ -44,7 +48,10 @@ def icon_planar(path):
 
 icons = {}
 for name, binfile in [("icon_sysinfo", "build/sysinfo.bin"),
-                      ("icon_clock", "build/clock.bin")]:
+                      ("icon_clock",   "build/clock.bin"),
+                      ("icon_files",   "build/browser.bin"),
+                      ("icon_notepad", "build/notepad.bin"),
+                      ("icon_music",   "build/music.bin")]:
     if os.path.exists(binfile):
         icons[name] = icon_planar(binfile)
     else:
@@ -65,6 +72,33 @@ keymap[0x45] = 27    # Esc
 keymap[0x41] = 8     # Backspace
 keymap[0x42] = 9     # Tab
 keymap[0x46] = 127   # Del
+
+# ---------------- ROM-disk ----------------
+diskdir = os.path.join(os.path.dirname(OUT) or ".", "disk")
+rdfiles = sorted(glob.glob(os.path.join(diskdir, "*.TXT")))
+romdisk = []
+for f in rdfiles[:8]:
+    data = open(f, "rb").read().replace(b"\r\n", b"\n").replace(b"\n", b"\r")
+    cap = max(1024, (len(data) + 255) & ~255)
+    name = os.path.basename(f).upper()[:12]
+    romdisk.append((name, data, cap))
+
+# ---------------- music: Canon in D ----------------
+F = {"C4":262,"D4":294,"E4":330,"F4":349,"G4":392,"A4":440,"B4":494,
+     "C5":523,"D5":587,"E5":659,"F5":698,"G5":784}
+M = {"C4":60,"D4":62,"E4":64,"F4":65,"G4":67,"A4":69,"B4":71,
+     "C5":72,"D5":74,"E5":76,"F5":77,"G5":79}
+QN, EN = 25, 13                       # quarter/eighth in PAL vblank ticks
+tune = ([("C5",QN),("B4",QN),("A4",QN),("G4",QN),
+         ("F4",QN),("E4",QN),("F4",QN),("G4",QN)]
+        + [(n,EN) for n in ["C5","E5","B4","D5","A4","C5","G4","B4",
+                            "F4","A4","E4","G4","F4","A4","G4","B4"]])
+PAL_CLK = 3546895
+notes = []
+for n, d in tune:
+    period = round(PAL_CLK / (F[n] * 8))          # 8-sample square wave
+    yoff = (M[n] - 60) * 2
+    notes.append((period, d, yoff))
 
 # ---------------- emit ----------------
 def words(vals):
@@ -87,5 +121,28 @@ with open(OUT, "w", newline="\n") as f:
         f.write(f"; {name}: 16x16, 16 words plane0 then 16 words plane1\n")
         f.write(f"{name}:\n" + words(rows) + "\n\n")
     f.write("; Amiga rawkey -> ASCII (US layout, no shift)\n")
-    f.write("keymap_ascii:\n" + bytes_(keymap) + "\n")
-print(f"wrote {OUT}: font 760B, {len(icons)} icons, keymap 128B")
+    f.write("keymap_ascii:\n" + bytes_(keymap) + "\n\n")
+
+    # ROM-disk: entry = 12-byte name, dc.l data, dc.w size, dc.w capacity
+    f.write("; ROM-disk: files baked into the image, editable in RAM\n")
+    f.write(f"romdisk_count: dc.w {len(romdisk)}\n")
+    f.write("romdisk_tab:\n")
+    for i, (name, data, cap) in enumerate(romdisk):
+        nb = name.encode("ascii").ljust(12, b"\x00")
+        f.write("    dc.b " + ",".join(f"${b:02X}" for b in nb) + f"  ; {name}\n")
+        f.write(f"    dc.l rdfile{i}\n    dc.w {len(data)},{cap}\n")
+    f.write("\n")
+    for i, (name, data, cap) in enumerate(romdisk):
+        f.write(f"rdfile{i}:\n" + bytes_(list(data)) + "\n")
+        f.write(f"    ds.b {cap - len(data)}\n")
+    f.write("\n")
+
+    # music table: dc.w period, durTicks, staffYoff; terminated by count
+    f.write("; Canon in D (same arrangement as apps/music.asm), Paula PAL periods\n")
+    f.write(f"mus_count: dc.w {len(notes)}\n")
+    f.write("mus_notes:\n")
+    for p, d, y in notes:
+        f.write(f"    dc.w {p},{d},{y}\n")
+
+print(f"wrote {OUT}: font 760B, {len(icons)} icons, keymap, "
+      f"{len(romdisk)} romdisk files, {len(notes)} notes")
