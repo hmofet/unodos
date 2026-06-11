@@ -1,111 +1,109 @@
-# UnoDOS/68K — Amiga port (milestone 2)
+# UnoDOS/68K — Amiga port (milestone 2.5)
 
-A bare-metal port of the UnoDOS desktop to the Commodore Amiga
-(OCS/ECS, 68000, 512 KB chip RAM), built per `docs/PORT-SPEC.md` and the
-plan in `docs/M68K-PORT-FEASIBILITY.md` (the Amiga was the recommended
-first 68K target). This is **milestone 1**: a self-booting ADF that takes
-over the machine and runs the UnoDOS desktop, window manager, and two
-in-kernel apps.
+A bare-metal Motorola 68000 port of UnoDOS for A500-class Amigas
+(OCS/ECS, 512 KB chip RAM), per the platform contract in
+[`docs/PORT-SPEC.md`](../docs/PORT-SPEC.md). It boots from a
+self-booting ADF, takes over the machine (no Kickstart libraries used at
+runtime), and runs the UnoDOS desktop with in-kernel apps.
 
-![desktop](build/desktop.png)
+## What it does
 
-## What works
+- **Boot splash** — striped Amiga-checkmark art with "UnoDOS 3" rendered
+  at 2× and "for Commodore Amiga" (~2 s, raster-timed).
+- **Display** — 320×200 in **5 bitplanes (32 colors)**, the OCS lowres
+  maximum. Copper-driven: palette entries 0–3 are the themed UI colors,
+  4–31 a fixed extended palette for the games (17–19 double as the
+  hardware-sprite cursor registers). Per-plane software fill/text
+  primitives; hardware-sprite mouse cursor.
+- **Window manager** — frames, title bars, close box, z-order with
+  click-to-raise, clamped XOR-outline drag; the focus-routed,
+  press-time-stamped event model from the spec.
+- **Audio** — 4-channel Paula: square-wave sequencers for the Music app
+  and game music, all four DMA channels in the Tracker.
 
-- Boots from floppy with no Workbench/AmigaDOS: the bootblock LoadSegs the
-  hunk executable, which enters supervisor mode and takes over interrupts,
-  DMA, the display, and input.
-- **320×200, 4 colors**, UnoDOS palette (blue desktop / cyan / magenta /
-  white) via a copper list and 2 bitplanes.
-- **Desktop**: menu-bar title, icon grid with labels (icons converted from
-  the x86 app `.BIN` headers — same artwork), version/build footer.
-- **Hardware-sprite mouse cursor** (the Amiga makes the cursor free — no
-  XOR/save-under needed, so PORT-SPEC's "no drawing in ISRs" rule is
-  trivially satisfied for the pointer).
-- **Input**: quadrature mouse read at vblank; CIA-A keyboard ISR decoding
-  rawkeys to ASCII; both feed the 32-entry focus-routable event queue.
-  Press-time click latch + sequence counter exactly as PORT-SPEC §3
-  prescribes.
-- **Window manager**: frames, title bars, close box, z-order list,
-  click-to-raise (title or body), title-bar drag with a self-erasing XOR
-  outline and on-screen clamping. Bottom-up repaint = z-clip by paint
-  order.
-- **Apps** (milestone 2 — the x86 core trio + the originals):
-  - **Files** — browses the boot **ROM-disk** (files from `amiga/disk/`
-    baked into the kernel image at build time, editable in RAM until the
-    MFM/FAT12 driver lands): name + size rows, white selection bar,
-    arrow keys, Enter opens the file in Notepad.
-  - **Notepad** — text editor: caret, insert/backspace/return, left/right
-    arrows, and the **live status bar** (`Ln 1 Co 1 245 B`) updated on
-    every keystroke (the x86 audit's stale-status fix is law). F1 saves
-    back to the ROM-disk entry in RAM.
-  - **Music** — Canon in D (the same arrangement as `apps/music.asm`) on
-    a **Paula square wave** (channel 0, PAL periods), with a staff view,
-    a magenta moving playback highlight, Space to play/stop.
-  - SysInfo (live uptime) and Clock (HH:MM:SS), as before.
-  - Launched by double-click or arrow-keys + Enter; ESC closes the
-    topmost window; the focused (topmost) window owns the keyboard.
-- Serial debug markers at 9600-8N1.
+## Apps (10 desktop icons, two rows)
 
-The screenshot above is the `test` build: Music topmost playing (magenta
-note = sequencer position, verified advancing between captures), Files
-with its selection bar behind, Notepad showing README.TXT with its live
-status bar at the bottom.
+| App | Notes |
+|---|---|
+| **Sys Info** | machine/uptime panel |
+| **Clock** | live clock |
+| **Files** | ROM-disk browser; Enter opens in Notepad |
+| **Notepad** | caret editor, left/right/up/down with goal-column memory, vertical scroll, live `Ln/Co/bytes` status bar, F1 save (RAM until FAT12) |
+| **Music** | Canon in D on Paula (same arrangement as `apps/music.asm`) |
+| **Theme** | the 8 shared preset palettes + per-channel custom RGB editing of UI colors 0–3, applied live through the copper list |
+| **Dostris** | port of `apps/tetris.asm` — same piece tables/scoring/speed curve, the seven VGA piece colors, Korobeiniki on Paula |
+| **OutLast** | port of `apps/outlast.asm` — same track/perspective/traffic/physics, full-color scenery, Sunset Drive on Paula |
+| **Pac-Man** | port of `apps/pacman.asm` — full 28×25 maze, three-ghost AI (Blinky/Pinky/Clyde), scatter/chase schedule, frightened mode; incremental tile rendering |
+| **Tracker** | write + play 4-channel MOD-style music: ProTracker periods (C-2..B-3), 32-row pattern editor, 4 chip-synthesized instruments (square/saw/triangle/noise), demo song, instant edit preview. Keys: arrows move, q/w note, e instrument, x clear, d demo, Space play/stop |
 
 ## Build
 
-Toolchain (free, Windows/Linux/macOS):
-
-- **vasmm68k_mot** — Motorola-syntax 68k assembler. Easiest source: the
-  `amiga-debug` VS Code extension VSIX bundles `vasmm68k_mot.exe` +
-  `exe2adf.exe` (extract `extension/bin/win32/`), or build vasm from
-  http://sun.hasenbraten.de/vasm/.
-- **exe2adf** — packs a hunk exe into a bootable ADF (bundled as above).
-- **Python 3** — generates `gen_data.i` (fonts, icons, keymap) from the
-  x86 tree. Run `make floppy144` in the repo root first so the app
-  `.BIN`s exist (icons are pulled from their headers).
+Needs `vasmm68k_mot` and `exe2adf` (both shipped inside the
+[amiga-debug VS Code extension](https://github.com/BartmanAbyss/vscode-amiga-debug)
+VSIX), plus Python 3 and a built x86 tree (`make floppy144`) for the
+shared assets:
 
 ```sh
 cd amiga
-./build.sh          # -> build/unodos68k.adf      (interactive)
+./build.sh          # -> build/unodos68k.adf
 ./build.sh test     # -> build/unodos68k_test.adf (auto-launches apps)
 ```
 
-Override tool paths with `VASM=`, `EXE2ADF=`, `PY=` env vars.
+`mkdata.py` regenerates `gen_data.i` from the x86 tree: the 8×8 font and
+app icons byte-identical from the x86 binaries, the Amiga keymap, the
+ROM-disk files, and the music tables (Canon in D plus the game songs,
+parsed straight out of `apps/tetris.asm` / `apps/outlast.asm` and
+converted to Paula periods).
 
-## Run / test
+### Autotest variants
 
-`uae/unodos.uae` is a WinUAE config for an A500-class machine using the
-built-in AROS ROM (no copyrighted Kickstart needed):
+WinUAE blocks host→guest key injection, so verification builds drive the
+real key handlers at boot and the harness screenshots the window:
 
+```sh
+vasmm68k_mot -Fhunkexe -nosym -DAUTOTEST=1 -DAUTOTEST_<X>=1 -o out kernel.asm
 ```
-winuae64.exe -f amiga/uae/unodos.uae
-```
 
-`uae/` also has the host-side test helpers used during development
-(`snapwin.ps1` window capture, `autotest.ps1` boot+capture). Note: live
-host→guest key injection is blocked by Windows desktop isolation in the
-build-automation context, which is why the `test` build auto-launches apps
-to exercise the interactive code paths; on a real desktop the interactive
-build takes mouse and keyboard normally.
+with `<X>` one of `NOTEPAD` (demo text + six up-arrows), `THEME` (applies
+the Sunset preset), `DOSTRIS` (hard-drops six pieces), `OUTLAST` (60
+physics steps), `PACMAN` (150 game steps), `TRACKER` (demo song +
+playback). Plain `-DAUTOTEST=1` launches the Files/Notepad/Music stack.
+
+## Run
+
+WinUAE with the built-in AROS ROM (no Kickstart needed) — config in
+`uae/unodos.uae`; `uae/autotest.ps1` and `uae/snapwin.ps1` drive
+headless screenshot runs.
 
 ## Architecture
 
-`kernel.asm` is one file, organized to mirror the portable-core boundary
-the feasibility plan calls for — the WM, event queue, scheduler scaffolding,
-and app procs are platform-independent in spirit; the Amiga-specific parts
-(copper, bitplane primitives, CIA/sprite ISRs) are the future HAL. Data
-(`gen_data.i`) is generated, not hand-written, so the fonts and icons stay
-bit-identical to the x86 original.
+`kernel.asm` plus includes: `apps_m2.i` (Files/Notepad/Music + shared
+helpers), `theme.i` (theme engine + splash), `games.i` (Dostris,
+OutLast, game-music sequencer), `pacman.i`, `tracker.i`, and the
+generated `gen_data.i`. The event queue, window manager, scheduler
+scaffolding and app procs follow PORT-SPEC; the Amiga-specific layer
+(copper, bitplane primitives, CIA/sprite ISRs, Paula) is the future HAL.
 
-## Known limitations (milestone 2)
+Chip-RAM map: 5 contiguous bitplanes at `$60000`, copper list `$76000`,
+sprite data `$76800`, square-wave + tracker instrument samples
+`$76A00`/`$76B00`, supervisor stack to `$7C000`.
+
+## Known limitations (milestone 2.5)
 
 - Storage is the boot ROM-disk (build-time files, RAM-editable); the
-  portable FAT12 core + an MFM track reader are the next milestone.
-- Notepad: 2 KB buffer; long lines clip (no horizontal scroll).
+  portable FAT12 core + an MFM track reader are the next milestone, and
+  unlock Notepad/Tracker file save and PC-interchangeable disks.
 - Single cooperative context (the scheduler is scaffolding); real
   multitasking over the window/app tables is milestone 3.
-- The vblank tick runs fast under WinUAE's default pacing for this config
-  (uptime advances ~4× wall-clock) — a `TICKS_SEC` calibration item, not a
-  logic bug; the latch/delta/refresh mechanism is correct.
-- Bitplane text uses a general unaligned 2-byte RMW per row; the blitter
-  fast path (the big Amiga win) is a later optimization.
+- Notepad: 2 KB buffer; long lines clip (no horizontal scroll).
+- Tracker: one 32-row pattern, fixed instrument volumes, no effect
+  column yet; .MOD import/export needs FAT12.
+- The vblank tick runs fast under WinUAE's default pacing for this
+  config (uptime advances ~4× wall-clock) — a `TICKS_SEC` calibration
+  item, not a logic bug.
+- Text/fills are CPU RMW (no blitter yet — the big OCS win). Game
+  windows repaint visibly; Pac-Man already uses dirty-tile rendering.
+- 640-wide OCS hires (16 colors max) would need PORT-SPEC content
+  scaling through the WM; lowres 32-color is the current ceiling.
+- Audio is register-verified (test configs run sound off); real-hardware
+  ear-check pending.
