@@ -106,7 +106,7 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
 ICON_PITCH  equ 64                  ; 5 icons across 320px
-NICONS      equ 9                   ; 5 per row, wraps to a second row
+NICONS      equ 10                  ; 5 per row, wraps to a second row
 
 ; Paula audio channel 0
 AUD0LCH     equ $0A0
@@ -174,6 +174,7 @@ super:
         move.l  #$81818181,(a0)
         move.l  #SQRWAVE,AUD0LCH(a6)
         move.w  #4,AUD0LEN(a6)      ; 4 words = 8 samples
+        bsr     tk_init             ; synthesize the Tracker instrument waves
 
         move.l  #COPLIST,COP1LCH(a6)
         move.w  COPJMP1(a6),d0
@@ -205,6 +206,18 @@ super:
         moveq   #13,d1
         moveq   #0,d2
         bsr     theme_key           ; Enter = apply
+        endc
+        ifd     AUTOTEST_TRACKER
+        ; Tracker variant: open, load the demo song, start playback.
+        moveq   #9,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'d',d1
+        moveq   #0,d2
+        bsr     tracker_key
+        moveq   #32,d1              ; space = play
+        moveq   #0,d2
+        bsr     tracker_key
         endc
         ifd     AUTOTEST_PACMAN
         ; Pac-Man variant: new game, force play, run 150 real steps.
@@ -280,6 +293,7 @@ super:
         ifnd    AUTOTEST_DOSTRIS
         ifnd    AUTOTEST_OUTLAST
         ifnd    AUTOTEST_PACMAN
+        ifnd    AUTOTEST_TRACKER
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -289,6 +303,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
         endc
         endc
@@ -309,6 +324,7 @@ main_loop:
         bsr     dostris_tick
         bsr     outlast_tick
         bsr     pacman_tick
+        bsr     tracker_tick
         bsr     app_ticks
         bra     main_loop
 
@@ -349,6 +365,8 @@ handle_events:
         beq     .k_outlast
         cmp.w   #8,d3
         beq     .k_pacman
+        cmp.w   #9,d3
+        beq     .k_tracker
 .k_global:
         cmp.b   #27,d1              ; ESC closes topmost
         bne     .next
@@ -386,6 +404,11 @@ handle_events:
         bra     .k_global
 .k_pacman:
         bsr     pacman_key
+        tst.w   d0
+        beq     .next
+        bra     .k_global
+.k_tracker:
+        bsr     tracker_key
         tst.w   d0
         beq     .next
         bra     .k_global
@@ -924,6 +947,7 @@ raise_window:
 ; close_window - d0 = z index
 close_window:
         bsr     gm_stop             ; close silences audio (PORT-SPEC SS2)
+        bsr     tk_stop
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
@@ -1043,6 +1067,8 @@ app_draw_content:
         beq     .outlast
         cmp.w   #8,d0
         beq     .pacman
+        cmp.w   #9,d0
+        beq     .tracker
         bsr     music_draw
         bra     .done
 .theme: bsr     theme_draw
@@ -1055,6 +1081,9 @@ app_draw_content:
         bra     .done
 .pacman:
         bsr     pacman_draw
+        bra     .done
+.tracker:
+        bsr     tracker_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -1816,6 +1845,7 @@ ser_puts:
         include "theme.i"
         include "games.i"
         include "pacman.i"
+        include "tracker.i"
 
 ; ============================================================================
 ; Data
@@ -1884,6 +1914,7 @@ app_def_tab:
         dc.w    8,12,300,182,  str_t_dostris-start
         dc.w    4,12,310,182,  str_t_outlast-start
         dc.w    4,8,312,190,   str_t_pacman-start
+        dc.w    10,14,300,178, str_t_tracker-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -1895,6 +1926,7 @@ icon_tab:
         dc.l    icon_dostris
         dc.l    icon_outlast
         dc.l    icon_pacman
+        dc.l    icon_tracker
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -1905,6 +1937,7 @@ name_tab:
         dc.l    name_dostris
         dc.l    name_outlast
         dc.l    name_pacman
+        dc.l    name_tracker
 
 ; extended palette: playfield colors 4-31 ($0RGB). 4-10 = Dostris pieces
 ; (I,O,T,S,Z,J,L), 11-16 = OutLast scenery, 17-19 = cursor sprite colors
@@ -2029,6 +2062,13 @@ pm_tmp:         dc.w    0
         even
 pm_last:        dc.l    0
 pm_statet:      dc.l    0
+tk_row:         dc.w    0           ; tracker cursor row
+tk_ch:          dc.w    0           ; tracker cursor channel
+tk_top:         dc.w    0           ; first visible row
+tk_prow:        dc.w    0           ; playback row
+tk_playing:     dc.b    0
+        even
+tk_last:        dc.l    0
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
@@ -2049,6 +2089,7 @@ pm_gh:          ds.b    30          ; 3 ghosts x 5 words
 pm_maze:        ds.b    700
         even
 pm_old:         ds.w    8           ; pac + 3 ghosts old x,y
+tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; tracker pattern (RAM song)
         even
 
         end

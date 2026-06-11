@@ -62,6 +62,13 @@ Next steps:
 - [x] Pac-Man on the 68K ports (full maze + 3-ghost AI on both;
       Amiga uses incremental tile rendering; verified WinUAE + Executor)
 
+## Tracker (2026-06-11) - v1 DONE
+- [x] Amiga Tracker app: write + play 4-channel Paula music (MOD-style
+      ProTracker periods, 32-row pattern editor, 4 chip-synthesized
+      instruments, demo song, edit preview)
+- [ ] Tracker: load/save real .MOD files (needs FAT12), more patterns,
+      volume/effect columns, sample import
+
 ## Color/Resolution Upgrade (2026-06-11) - DONE
 - [x] Amiga: 5 bitplanes / 32 colors (OCS lowres max); themed UI colors
       0-3 + fixed extended game palette 4-31; per-plane primitives
