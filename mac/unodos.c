@@ -59,6 +59,26 @@ static RGBColor kPalette[4] = {
     { 0xFFFF, 0xFFFF, 0xFFFF }
 };
 static RGBColor kBlack = { 0, 0, 0 };
+
+/* 8 preset palettes shared with the other ports. Slot roles: desktop,
+   accent (cyan-role), accent2 (magenta-role), text (white-role).
+   Preset 1 "Classic VGA" is the PC palette. */
+#define NTHEMES 8
+static const char *kThemeNames[NTHEMES] = {
+    "Classic VGA", "Midnight", "Forest", "Sunset",
+    "Ocean", "Slate", "Candy", "Amber"
+};
+static const RGBColor kThemes[NTHEMES][4] = {
+  {{0x0000,0x0000,0xAAAA},{0x0000,0xAAAA,0xAAAA},{0xAAAA,0x0000,0xAAAA},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x0000,0x0000,0x0000},{0x5555,0x5555,0xFFFF},{0xAAAA,0xAAAA,0xAAAA},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x0000,0x5555,0x0000},{0x5555,0xAAAA,0x5555},{0xFFFF,0xFFFF,0x5555},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x5555,0x0000,0x0000},{0xFFFF,0x5555,0x5555},{0xFFFF,0xAAAA,0x0000},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x0000,0x0000,0x5555},{0x0000,0x8888,0xAAAA},{0x5555,0xFFFF,0xFFFF},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x3333,0x3333,0x4444},{0x8888,0x8888,0xAAAA},{0xCCCC,0xCCCC,0xDDDD},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x5555,0x0000,0x5555},{0xFFFF,0x5555,0xFFFF},{0x5555,0xFFFF,0xFFFF},{0xFFFF,0xFFFF,0xFFFF}},
+  {{0x0000,0x0000,0x0000},{0xAAAA,0x5555,0x0000},{0xFFFF,0xAAAA,0x0000},{0xFFFF,0xFFFF,0xFFFF}},
+};
+static short gTSel = 0, gTSlot = 0;
 #endif
 
 /* ---- layout ------------------------------------------------------------- */
@@ -67,11 +87,17 @@ static RGBColor kBlack = { 0, 0, 0 };
 #define ICON_PITCH 92
 #define ICON0_X    36
 #define ICON0_Y    44
+#define NAPPS      6
+#if UNO_COLOR
+#define NICONS     6                /* Theme icon is color-only */
+#else
 #define NICONS     5
+#endif
 #define MAXWIN     6
 #define DBLCLICK   30
 
-enum { APP_SYSINFO = 0, APP_CLOCK, APP_FILES, APP_NOTEPAD, APP_MUSIC };
+enum { APP_SYSINFO = 0, APP_CLOCK, APP_FILES, APP_NOTEPAD, APP_MUSIC,
+       APP_THEME };
 
 typedef struct {
     Boolean used;
@@ -98,16 +124,17 @@ static short  gDragDX, gDragDY;
 static Rect   gDragOutline;
 static Boolean gOutlineShown = false;
 
-static const char *kIconNames[NICONS]  = { "Sys Info", "Clock", "Files", "Notepad", "Music" };
-static const char *kWinTitles[NICONS]  = { "System Info", "Clock", "Files", "Notepad", "Music" };
+static const char *kIconNames[NAPPS]  = { "Sys Info", "Clock", "Files", "Notepad", "Music", "Theme" };
+static const char *kWinTitles[NAPPS]  = { "System Info", "Clock", "Files", "Notepad", "Music", "Theme" };
 
 /* default window bounds per app (fits the 512x342 mono screen) */
-static const short kWinRect[NICONS][4] = {
+static const short kWinRect[NAPPS][4] = {
     {  40,  50, 320, 170 },     /* SysInfo  */
     { 120,  80, 320, 180 },     /* Clock    */
     {  36,  40, 330, 270 },     /* Files    */
     {  56,  34, 484, 320 },     /* Notepad  */
     {  80,  60, 440, 230 },     /* Music    */
+    { 150,  56, 430, 300 },     /* Theme    */
 };
 
 /* =========================================================================
@@ -223,6 +250,10 @@ static void app_opened(short proc);
 static UnoWin *find_app_window(short proc);
 static void launch_app(short proc);
 static void repaint_all(void);
+#if UNO_COLOR
+static void theme_draw(UnoWin *w);
+static Boolean theme_key(char ch, short code);
+#endif
 
 /* =========================================================================
  * Window manager (PORT-SPEC SS2)
@@ -862,6 +893,9 @@ static void draw_app_content(short proc, UnoWin *w)
     case APP_FILES:   files_draw(w);   break;
     case APP_NOTEPAD: notepad_draw(w); break;
     case APP_MUSIC:   music_draw(w);   break;
+#if UNO_COLOR
+    case APP_THEME:   theme_draw(w);   break;
+#endif
     }
 }
 
@@ -871,6 +905,9 @@ static Boolean app_key(short proc, char ch, short code, Boolean cmd)
     case APP_FILES:   if (!cmd) return files_key(ch, code); break;
     case APP_NOTEPAD: return notepad_key(ch, code, cmd);
     case APP_MUSIC:   if (!cmd) return music_key(ch, code); break;
+#if UNO_COLOR
+    case APP_THEME:   if (!cmd) return theme_key(ch, code); break;
+#endif
     }
     return false;
 }
@@ -893,6 +930,83 @@ static void app_close(short proc)
         if (gSnd) { SndDisposeChannel(gSnd, true); gSnd = NULL; }
     }
 }
+
+/* =========================================================================
+ * Theme app (color targets only) - 8 presets + per-channel custom editing
+ * ========================================================================= */
+#if UNO_COLOR
+static void theme_draw(UnoWin *w)
+{
+    Rect r = w->bounds, row;
+    short x = r.left + 10, y0 = r.top + TBAR_H + 6, i;
+    char line[48], num[12];
+
+    for (i = 0; i < NTHEMES; i++) {
+        short ry = y0 + i * 16;
+        Boolean sel = (i == gTSel);
+        SetRect(&row, r.left + 4, ry, r.right - 4, ry + 16);
+        if (sel) uno_fill(&row, C_CYAN);
+        text_at(x, ry + 12, kThemeNames[i], sel ? C_BLUE : C_WHITE,
+                sel ? C_CYAN : C_BLUE, false);
+    }
+    {
+        short cy = y0 + NTHEMES * 16 + 14;
+        const RGBColor *c = &kPalette[gTSlot];
+        strcpy(line, "Custom  Slot ");
+        fmt_u(gTSlot, num); strcat(line, num);
+        strcat(line, "   R/G/B  ");
+        fmt_u(c->red >> 12, num);   strcat(line, num); strcat(line, "/");
+        fmt_u(c->green >> 12, num); strcat(line, num); strcat(line, "/");
+        fmt_u(c->blue >> 12, num);  strcat(line, num);
+        text_at(x, cy, line, C_WHITE, C_BLUE, false);
+        text_at(x, cy + 16, "Enter: apply   r/g/b: tune   </>: slot",
+                C_CYAN, C_BLUE, false);
+    }
+}
+
+static void theme_tune(short chan)
+{
+    RGBColor *c = &kPalette[gTSlot];
+    unsigned short *v = (chan == 0) ? &c->red : (chan == 1) ? &c->green
+                                              : &c->blue;
+    *v = (unsigned short)((((*v >> 12) + 1) & 15) * 0x1111);
+    repaint_all();
+}
+
+static Boolean theme_key(char ch, short code)
+{
+    UnoWin *w = find_app_window(APP_THEME);
+    if (code == 0x7D || ch == 0x1F) {                   /* down */
+        if (gTSel < NTHEMES - 1) gTSel++;
+        if (w) draw_window(w);
+        return true;
+    }
+    if (code == 0x7E || ch == 0x1E) {                   /* up */
+        if (gTSel > 0) gTSel--;
+        if (w) draw_window(w);
+        return true;
+    }
+    if (code == 0x7B || ch == 0x1C) {                   /* left: prev slot */
+        gTSlot = (gTSlot + 3) & 3;
+        if (w) draw_window(w);
+        return true;
+    }
+    if (code == 0x7C || ch == 0x1D) {                   /* right: next slot */
+        gTSlot = (gTSlot + 1) & 3;
+        if (w) draw_window(w);
+        return true;
+    }
+    if (ch == 0x0D || ch == 0x03) {                     /* apply preset */
+        memcpy(kPalette, kThemes[gTSel], sizeof(kPalette));
+        repaint_all();
+        return true;
+    }
+    if (ch == 'r' || ch == 'R') { theme_tune(0); return true; }
+    if (ch == 'g' || ch == 'G') { theme_tune(1); return true; }
+    if (ch == 'b' || ch == 'B') { theme_tune(2); return true; }
+    return false;
+}
+#endif /* UNO_COLOR */
 
 /* =========================================================================
  * Desktop
@@ -957,6 +1071,14 @@ static void draw_icon(short i)
             }
         }
         break;
+#if UNO_COLOR
+    case APP_THEME:                         /* palette swatches */
+        SetRect(&g, x, ICON0_Y, x + 8, ICON0_Y + 8);      uno_fill(&g, C_CYAN);
+        SetRect(&g, x + 9, ICON0_Y, x + 17, ICON0_Y + 8); uno_fill(&g, C_MAG);
+        SetRect(&g, x, ICON0_Y + 9, x + 8, ICON0_Y + 17); uno_fill(&g, C_WHITE);
+        SetRect(&g, x + 9, ICON0_Y + 9, x + 17, ICON0_Y + 17); uno_box(&g, C_WHITE);
+        break;
+#endif
     case APP_MUSIC:                         /* eighth note */
         SetRect(&g, x + 2, ICON0_Y + 11, x + 8, ICON0_Y + 17);
         uno_fill(&g, C_CYAN);
@@ -1116,6 +1238,91 @@ static void app_secondly(void)
 }
 
 /* =========================================================================
+ * Splash - "UnoDOS 3" + a happy compact Mac, ~2s (per-platform splash
+ * identity). Color: white art on the desktop blue; mono: black on white.
+ * ========================================================================= */
+static void splash_ink(short fg)
+{
+#if UNO_COLOR
+    RGBForeColor(&kPalette[fg]);
+#else
+    (void)fg;
+    ForeColor(blackColor);
+#endif
+}
+
+static void splash_show(void)
+{
+    short cx = (short)((gScreen.left + gScreen.right) / 2);
+    short cy = (short)((gScreen.top + gScreen.bottom) / 2) - 40;
+    Rect r;
+    long until;
+    const char *title = "UnoDOS 3";
+    const char *sub = "for Apple Macintosh";
+
+#if UNO_COLOR
+    desktop_bg(&gScreen);
+#else
+    FillRect(&gScreen, &qd.white);
+#endif
+
+    /* compact Mac: case, screen, happy face, floppy slot, foot */
+    splash_ink(C_WHITE);
+    PenSize(2, 2);
+    SetRect(&r, cx - 34, cy - 48, cx + 34, cy + 34);
+    FrameRoundRect(&r, 10, 10);
+    SetRect(&r, cx - 24, cy - 38, cx + 24, cy - 2);
+    FrameRect(&r);
+    PenSize(1, 1);
+    /* eyes */
+    MoveTo(cx - 10, cy - 30); LineTo(cx - 10, cy - 24);
+    MoveTo(cx + 10, cy - 30); LineTo(cx + 10, cy - 24);
+    /* nose */
+    MoveTo(cx, cy - 24); LineTo(cx, cy - 19); LineTo(cx + 3, cy - 19);
+    /* smile */
+    SetRect(&r, cx - 12, cy - 26, cx + 12, cy - 10);
+    FrameArc(&r, 135, 90);
+    /* floppy slot */
+    MoveTo(cx + 6, cy + 14); LineTo(cx + 24, cy + 14);
+    /* foot */
+    SetRect(&r, cx - 26, cy + 34, cx + 26, cy + 42);
+    splash_ink(C_CYAN);
+    PaintRect(&r);
+
+    /* title */
+    TextFont(0);
+    TextFace(bold);
+    TextSize(36);
+    splash_ink(C_WHITE);
+    MoveTo((short)(cx - TextWidth((Ptr)title, 0, (short)strlen(title)) / 2),
+           (short)(cy + 90));
+    DrawText((Ptr)title, 0, (short)strlen(title));
+    TextSize(12);
+    TextFace(0);
+    splash_ink(C_CYAN);
+    MoveTo((short)(cx - TextWidth((Ptr)sub, 0, (short)strlen(sub)) / 2),
+           (short)(cy + 112));
+    DrawText((Ptr)sub, 0, (short)strlen(sub));
+#if UNO_COLOR
+    RGBForeColor(&kBlack);
+#else
+    ForeColor(blackColor);
+#endif
+
+#ifdef UNO_AUTOTEST_SPLASH
+    until = TickCount() + 60000L;       /* long hold for screenshot runs */
+#else
+    until = TickCount() + 120;          /* ~2s */
+#endif
+    /* pump the event loop while holding: the system (and Executor) only
+       flushes the screen and runs SystemTask inside GetNextEvent */
+    while (TickCount() < until) {
+        EventRecord ev;
+        GetNextEvent(everyEvent, &ev);
+    }
+}
+
+/* =========================================================================
  * Boot
  * ========================================================================= */
 static void init_toolbox(void)
@@ -1150,6 +1357,7 @@ int main(void)
 
     gBootTicks = TickCount();
     gSel = 0;
+    splash_show();
     draw_desktop();
 
 #ifdef UNO_AUTOTEST_FILES
@@ -1167,6 +1375,13 @@ int main(void)
             }
         }
     }
+#endif
+#if defined(UNO_AUTOTEST_THEME) && UNO_COLOR
+    /* Theme variant: open the picker, select Sunset, apply through the
+       real key handler. */
+    launch_app(APP_THEME);
+    theme_key(0, 0x7D); theme_key(0, 0x7D); theme_key(0, 0x7D);
+    theme_key(0x0D, 0);
 #endif
 #ifdef UNO_AUTOTEST
     /* Auto-launch the app stack for screenshot verification without

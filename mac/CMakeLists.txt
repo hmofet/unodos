@@ -34,6 +34,23 @@ target_compile_definitions(UnoDOS7FTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_FILES=1
 target_compile_options(UnoDOS7FTest PRIVATE -ffunction-sections)
 set_target_properties(UnoDOS7FTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
 
+# Theme-picker autotest: opens Theme, applies Sunset via the key handler.
+add_application(UnoDOS7ThTest unodos.c)
+target_compile_definitions(UnoDOS7ThTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_THEME=1)
+target_compile_options(UnoDOS7ThTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7ThTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+# Splash autotest: holds the boot splash for 10s so a screenshot can catch it.
+add_application(UnoDOS7SpTest unodos.c)
+target_compile_definitions(UnoDOS7SpTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_SPLASH=1)
+target_compile_options(UnoDOS7SpTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7SpTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOSClassicSpTest unodos.c)
+target_compile_definitions(UnoDOSClassicSpTest PRIVATE UNO_COLOR=0 UNO_AUTOTEST_SPLASH=1)
+target_compile_options(UnoDOSClassicSpTest PRIVATE -ffunction-sections -m68000)
+set_target_properties(UnoDOSClassicSpTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
 # Mono build (System 1-6, classic QuickDraw). Target 68000 for the Plus.
 add_application(UnoDOSClassic unodos.c)
 target_compile_definitions(UnoDOSClassic PRIVATE UNO_COLOR=0)

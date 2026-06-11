@@ -109,6 +109,12 @@ verification without host→guest input injection.
   WM/app tables already support more.
 - Notepad: no horizontal scroll (long lines clip), 4 KB buffer, no
   find/replace; Files: 24-entry listing cap.
+- Theme app (color targets): 8 preset palettes shared with the other
+  ports + per-channel custom editing; mono keeps the authentic 1-bit
+  look. Boot splash (happy Mac + "UnoDOS 3") on both targets.
+- Executor quirk: TickCount() advances much faster than 60 Hz, so the
+  ~2s splash hold races by under Executor; timing is correct on real
+  hardware. UnoDOS7SpTest holds long for screenshot runs.
 - Uses our own full-screen GrafPort and chrome rather than real Mac
   windows — intentional (PORT-SPEC: one GrafPort, our WM), so the look is
   identical across color/mono and matches the other ports.
