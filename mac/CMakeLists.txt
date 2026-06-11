@@ -51,6 +51,17 @@ target_compile_definitions(UnoDOSClassicSpTest PRIVATE UNO_COLOR=0 UNO_AUTOTEST_
 target_compile_options(UnoDOSClassicSpTest PRIVATE -ffunction-sections -m68000)
 set_target_properties(UnoDOSClassicSpTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
 
+# Game autotests: play a few moves at boot for screenshot verification.
+add_application(UnoDOS7DtTest unodos.c)
+target_compile_definitions(UnoDOS7DtTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_DOSTRIS=1)
+target_compile_options(UnoDOS7DtTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7DtTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOS7OlTest unodos.c)
+target_compile_definitions(UnoDOS7OlTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_OUTLAST=1)
+target_compile_options(UnoDOS7OlTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7OlTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
 # Mono build (System 1-6, classic QuickDraw). Target 68000 for the Plus.
 add_application(UnoDOSClassic unodos.c)
 target_compile_definitions(UnoDOSClassic PRIVATE UNO_COLOR=0)
