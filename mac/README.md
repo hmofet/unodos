@@ -1,4 +1,4 @@
-# UnoDOS/Mac — classic Mac OS ports (milestone 2)
+# UnoDOS/Mac — classic Mac OS ports (milestone 2.5)
 
 Two Macintosh ports of the UnoDOS desktop, from **one C codebase**
 (`unodos.c`), built with the [Retro68](https://github.com/autc04/Retro68)
@@ -22,6 +22,34 @@ Executor: **Notepad** topmost with demo text, a visible caret, and the live
 (real File Manager contents); **Music** playing Canon in D underneath. The
 color build renders the literal UnoDOS palette; the mono build is the
 canonical 1-bit Mac look.
+
+## Apps
+
+Nine apps from one codebase (the color-only **Theme** app makes it nine
+on UnoDOS7, eight icons on UnoDOSClassic):
+
+- **Sys Info**, **Clock** — system panels.
+- **Files**, **Notepad**, **Music** — the milestone-2 trio (below).
+- **Theme** (color targets) — the 8 preset palettes shared with the x86
+  and Amiga ports, plus per-channel custom RGB editing of the UI colors.
+- **Dostris** — port of `apps/tetris.asm`: same piece tables, scoring
+  and speed curve; the seven VGA piece colors with bevel highlights at
+  16 px cells; Korobeiniki through the Sound Manager.
+- **OutLast** — port of `apps/outlast.asm`: same track, perspective,
+  traffic and physics; full `outlastv`-style scenery in a 480×300
+  playfield (gameplay math stays in the faithful 320×200 virtual space,
+  rendered at 3/2); Sunset Drive music.
+- **Pac-Man** — port of `apps/pacman.asm`: full 28×25 maze, three-ghost
+  AI (Blinky red, Pinky pink, Clyde orange), scatter/chase schedule,
+  frightened mode with the 200→1600 chain.
+
+A platform-themed splash (a happy compact Mac + "UnoDOS 3") shows on
+boot on both targets.
+
+On the color targets, game art draws in **true RGB** through 8-bit
+Color QuickDraw (`fill_rgb`, nearest of the 256 system colors); each
+color carries a 4-slot fallback so the mono target keeps its authentic
+1-bit look.
 
 ## Milestone 2 — the app trio
 
@@ -100,18 +128,19 @@ II for color — both need a user-supplied Mac ROM and System), copy the
 feasibility plan calls for: the theme layer, window manager, event/desktop
 logic, and app procs are cleanly separated, with `#if UNO_COLOR` confined
 to the theme. `CMakeLists.txt` emits both shipping apps plus `*Test`
-variants (`-DUNO_AUTOTEST`) that auto-launch the apps for screenshot
-verification without host→guest input injection.
+variants that auto-launch the apps for screenshot verification without
+host→guest input injection: `UnoDOS7Test`/`UnoDOSClassicTest` (app
+stack), `UnoDOS7FTest` (Files enters a subdirectory), `UnoDOS7ThTest`
+(applies the Sunset theme), `UnoDOS7SpTest`/`UnoDOSClassicSpTest`
+(long-hold splash), `UnoDOS7DtTest`/`UnoDOS7OlTest`/`UnoDOS7PmTest`
+(the games play real moves at boot).
 
-## Known limitations (milestone 2)
+## Known limitations (milestone 2.5)
 
 - Single cooperative event loop (the scheduler is scaffolding); the
   WM/app tables already support more.
 - Notepad: no horizontal scroll (long lines clip), 4 KB buffer, no
   find/replace; Files: 24-entry listing cap.
-- Theme app (color targets): 8 preset palettes shared with the other
-  ports + per-channel custom editing; mono keeps the authentic 1-bit
-  look. Boot splash (happy Mac + "UnoDOS 3") on both targets.
 - Executor quirk: TickCount() advances much faster than 60 Hz, so the
   ~2s splash hold races by under Executor; timing is correct on real
   hardware. UnoDOS7SpTest holds long for screenshot runs.

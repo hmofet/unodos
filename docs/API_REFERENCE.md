@@ -1311,3 +1311,28 @@ Creates a modal dialog window with a scrollable file list. Supports keyboard nav
 ---
 
 *UnoDOS v3.22.0 Build 351 - 96 API functions (indices 0-95)*
+
+---
+
+> **Note:** APIs 91–104 (scaled sprites, blit, read-pixel, video-mode
+> get, save dialog, scrollbar hit, content size/scale, mouse visibility,
+> BCD helpers) are implemented but not yet written up here — tracked in
+> TODO.md.
+
+### API 105: theme_set_palette
+
+Set the four UI palette colors (Build 406). The values are stored in the
+kernel and programmed into the VGA DAC via INT 10h AX=1010h; they are
+re-applied automatically after every video mode switch. In CGA mode 4
+the hardware palette is fixed, so the values are stored and take effect
+on the next switch to a VGA/VESA mode.
+
+**Input:**
+- `SI` = pointer (caller segment) to 12 bytes: 4 × (R, G, B), 6-bit
+  values (0–63), palette slots 0–3 = desktop, accent, accent2, text
+
+**Output:**
+- `CF` = 0 (always succeeds)
+
+The Settings app's "Theme (VGA)" section uses this API with its eight
+preset palettes; the same presets ship on the Amiga and Mac ports.

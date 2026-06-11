@@ -6,7 +6,7 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 
 ## Overview
 
-UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 105 system calls, a window manager, two filesystems, cooperative multitasking, and 16 applications, fits on a single 1.44MB floppy disk.
+UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 16 applications, fits on a single 1.44MB floppy disk.
 
 ### Philosophy
 
@@ -25,16 +25,21 @@ assessment and plan):
 
 | Port | Target hardware | Approach | Status |
 |---|---|---|---|
-| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes, hardware-sprite cursor, Paula audio | Milestone 2 — desktop, WM, SysInfo, Clock, Files, Notepad, Music |
-| [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: Color QuickDraw, Event/File/Sound Managers, full UnoDOS palette | Milestone 2 — same app set |
-| [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2 — same app set |
+| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | Milestone 2.5 — desktop, WM, splash, 10 apps incl. the three games and a music Tracker |
+| [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | Milestone 2.5 — desktop, WM, splash, 9 apps incl. the three games |
+| [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2.5 — same set minus the color-only Theme app |
 
-All three boot to the UnoDOS desktop with the window manager (z-order,
-drag, click-to-raise), the focus-routed event model, and the app trio:
-**Files** (directory browser), **Notepad** (caret editor with the live
-Ln/Co/bytes status bar), and **Music** (Canon in D — Paula square wave on
-Amiga, Sound Manager square-wave synth on Mac). Verified in WinUAE
-(built-in AROS ROM) and the ROM-free Executor emulator respectively —
+All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
+checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the
+UnoDOS desktop: window manager (z-order, drag, click-to-raise), the
+focus-routed event model, and the shared app set — **Files** (with
+subdirectory navigation on Mac), **Notepad** (caret editor, line
+navigation, live Ln/Co/bytes status bar), **Music** (Canon in D),
+**Theme** (8 shared preset palettes + custom colors on every
+color-capable platform), and the game ports **Dostris**, **OutLast**
+and **Pac-Man** with their music. The Amiga additionally ships
+**Tracker**, a 4-channel Paula pattern editor/player. Verified in
+WinUAE (built-in AROS ROM) and the ROM-free Executor emulator —
 no proprietary ROMs needed to try them.
 
 ## Screenshots

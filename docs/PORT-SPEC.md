@@ -20,6 +20,20 @@ Companion references: `docs/API_REFERENCE.md` (per-call semantics),
   (#0000AA), 1 = cyan (#00AAAA), 2 = magenta (#AA00AA), 3 = white
   (#FFFFFF). Ports with palettes match these RGB values; monochrome ports
   re-theme (white-on-black + dither) but keep metrics.
+- **Palette extension (2026-06-11):** indices 0–3 remain the themed UI
+  colors (see Theming below); ports may extend the palette to their
+  platform maximum for app/game content (x86 VGA: DAC via API 105;
+  Amiga: 5 bitplanes / 32 colors, entries 4–31 fixed game palette,
+  17–19 shared with the cursor sprite; Mac color: direct RGB). UI
+  chrome must keep using the themed indices so theme presets restyle
+  every port identically. Caution: transparent text over a non-zero
+  backdrop ORs color bits — use opaque text on extended-color surfaces.
+- **Theming:** every color-capable port ships the same 8 preset
+  palettes (Classic VGA, Midnight, Forest, Sunset, Ocean, Slate, Candy,
+  Amber) for UI colors 0–3, plus per-channel custom editing where the
+  hardware allows (Theme app on 68K, Settings on x86).
+- **Splash:** boot shows a platform-themed "UnoDOS 3" splash (~2 s
+  minimum hold) with platform-identity artwork before the desktop.
 - Desktop: menu-bar title row (y 0–11 reserved — drag clamp protects it),
   icon grid (80 px column pitch, icons at col·80+32, labels at icon_x−8,
   label width clipped to the cell), version string bottom-left, build

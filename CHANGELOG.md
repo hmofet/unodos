@@ -5,6 +5,65 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.27.0] / [Ports wave 2] - 2026-06-11
+
+One day after milestone 2, a parity wave across all three platforms.
+
+### x86 (Build 406)
+
+- **API 105 `theme_set_palette`**: 4 RGB entries (6-bit) into the VGA
+  DAC via INT 10h AX=1010h; stored kernel-side and re-applied after
+  every video mode switch (CGA mode 4 keeps its fixed palette).
+- **Settings: "Theme (VGA)" section** - 8 preset palettes (Classic VGA,
+  Midnight, Forest, Sunset, Ocean, Slate, Candy, Amber; shared with the
+  68K ports) replacing the word-wrap demo.
+- **Splash**: IBM PC art (CRT + desktop unit + keyboard), "UnoDOS 3" in
+  the 8x14 font, "for IBM PC/XT/AT", ~2s minimum hold; progress
+  segments narrowed so all 16 apps fit the bar.
+
+### Amiga port (milestones 2.1-2.5)
+
+- **32-color display**: 5 bitplanes (OCS lowres maximum), per-plane
+  fill/char primitives, 32-entry copper palette - UI colors 0-3 stay
+  theme-driven, 4-31 carry the extended game palette.
+- **Theme app**: the 8 shared presets + per-channel custom RGB editing,
+  applied live through the copper list.
+- **Boot splash**: striped Amiga checkmark + "UnoDOS 3" at 2x.
+- **Games**: Dostris, OutLast and Pac-Man ported from the x86 originals
+  (same tables/physics/AI; Pac-Man uses incremental tile rendering).
+  Game music: Korobeiniki + Sunset Drive on a Paula sequencer, parsed
+  from the x86 sources by mkdata.
+- **Tracker app**: write and play 4-channel MOD-style music -
+  ProTracker periods, 32-row pattern editor, 4 chip-synthesized
+  instruments, demo song. (.MOD file I/O lands with FAT12.)
+- **Notepad**: up/down line navigation with goal-column memory +
+  vertical scrolling.
+- Desktop grows to 10 icons (two rows); games/tracker drive their own
+  drawing (excluded from the 1 Hz app_ticks repaint).
+
+### Mac ports (milestones 2.1-2.5)
+
+- **True-color games** (color target): real RGB via 8-bit Color
+  QuickDraw - the seven VGA piece colors in Dostris (16px cells),
+  the full OutLast scenery palette in a 480x300 playfield (3/2 render
+  scale over the faithful 320x200 game space), classic ghost
+  identities in Pac-Man. Mono target keeps its 1-bit theme.
+- **Theme app** (color target): the 8 shared presets + custom RGB.
+- **Boot splash**: happy compact Mac + "UnoDOS 3" on both targets.
+- **Games**: Dostris, OutLast, Pac-Man ported (same mechanics as x86);
+  game music through the Sound Manager channel.
+- **Files**: subdirectory navigation (PBGetCatInfo dirID walk,
+  PBHSetVol current dir, ".." parent entry).
+
+### Port-harness notes
+
+- WinUAE/Executor autotest build variants play real moves at boot for
+  screenshot verification (AUTOTEST_DOSTRIS/OUTLAST/PACMAN/TRACKER/
+  THEME/NOTEPAD, UnoDOS7*Test targets).
+- 68000 traps collected: divu needs a masked 32-bit dividend; addq is
+  limited to 1-8; tst.w (pc) and (d16,An,Xn) are 68020+; transparent
+  text over non-zero backdrops composes wrong colors.
+
 ## [Ports] - 2026-06-11
 
 Platform ports, developed out-of-band from the x86 versioning (the x86
