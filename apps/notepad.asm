@@ -194,6 +194,16 @@ entry:
     mov byte [cs:needs_redraw], 0
     call draw_current_line
 .no_deferred:
+    ; Deferred status-bar refresh: the typed-char fast path never called
+    ; draw_status, so Ln/Col/byte count went stale while typing. Flushing
+    ; here keeps the per-keystroke path fast.
+    cmp byte [cs:status_dirty], 0
+    je .no_status_flush
+    cmp byte [cs:mode], MODE_EDIT   ; Status row hosts dialogs in other modes
+    jne .no_status_flush
+    mov byte [cs:status_dirty], 0
+    call draw_status
+.no_status_flush:
     sti
     mov ah, API_APP_YIELD
     int 0x80
@@ -1615,6 +1625,7 @@ buf_insert_char:
     mov [cs:text_buf + bx], dl
     inc word [cs:text_len]
     inc word [cs:cursor_pos]
+    mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bi_done:
     popa
@@ -1645,6 +1656,7 @@ buf_delete_char:
 
     dec word [cs:text_len]
     dec word [cs:cursor_pos]
+    mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bd_done:
     popa
@@ -1679,6 +1691,7 @@ buf_delete_fwd:
 
 .bf_no_shift:
     dec word [cs:text_len]
+    mov byte [cs:status_dirty], 1   ; Refresh Ln/Col/bytes on next idle pass
 
 .bf_done:
     popa
@@ -2546,6 +2559,7 @@ win_handle:     db 0
 mount_handle:   db 0
 file_handle:    db 0
 prev_btn:       db 0
+status_dirty:   db 0
 mode:           db MODE_EDIT
 needs_redraw:   db 0
 
