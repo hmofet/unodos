@@ -299,7 +299,9 @@ notepad_open_fat:
         clr.w   np_caret-vars(a4)
         clr.w   np_top-vars(a4)
         move.w  #-1,np_goal-vars(a4)
-        move.w  #-2,np_file-vars(a4) ; FAT origin: F1 save disabled (read-only v1)
+        move.w  #-2,np_file-vars(a4) ; FAT origin: F1 saves back to disk
+        move.w  files_sel(pc),d0
+        move.w  d0,np_fatidx-vars(a4)
         sf      np_dirty-vars(a4)
         movem.l (sp)+,d0-d2/a0-a1/a3-a4
         rts
@@ -694,7 +696,12 @@ notepad_key:
         bra     .redraw
 .save:
         move.w  np_file(pc),d0
-        bmi     .redraw             ; untitled: RAM only
+        cmp.w   #-2,d0
+        beq     .savefat            ; FAT origin: write back to DF1
+        cmp.w   #-1,d0
+        beq     .saveunt            ; untitled: create UNTITLED.TXT
+        tst.w   d0
+        bmi     .redraw
         bsr     rd_entry            ; a3 = entry
         move.w  np_len(pc),d1
         cmp.w   18(a3),d1           ; capacity
@@ -710,6 +717,26 @@ notepad_key:
         dbra    d2,.svloop
 .savedone:
         sf      np_dirty-vars(a4)
+        bra     .redraw
+.savefat:
+        move.w  np_fatidx(pc),d0
+        mulu    #18,d0
+        lea     fat_tab(pc),a0
+        lea     (a0,d0.w),a0        ; 11-char name
+        bra     .dofat
+.saveunt:
+        move.b  fat_mounted(pc),d0
+        beq     .redraw             ; no data disk: stay RAM-only
+        lea     str_untitled(pc),a0
+.dofat: lea     npbuf(pc),a1
+        moveq   #0,d1
+        move.w  np_len(pc),d1
+        bsr     fat_save_file
+        tst.w   d0
+        bmi     .redraw             ; failed (write-protect / full)
+        sf      np_dirty-vars(a4)
+        ; refresh the listing so the new file shows up
+        bsr     fat_list_root
         bra     .redraw
 .redraw:
         bsr     redraw_topmost
