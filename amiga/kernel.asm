@@ -187,6 +187,22 @@ super:
         ifd     AUTOTEST
         ; Auto-launch the app stack for screenshot verification without
         ; host input injection. Build: -DAUTOTEST=1
+        ifd     AUTOTEST_NOTEPAD
+        ; Notepad-focused variant: demo text (caret at end) exercises the
+        ; vertical-scroll clamp. Build: -DAUTOTEST=1 -DAUTOTEST_NOTEPAD=1
+        bsr     notepad_set_demo
+        moveq   #3,d0               ; Notepad (topmost)
+        bsr     launch_app
+        ; drive six up-arrows through the real key handler: caret should
+        ; land on Ln 12 with the goal column held (status bar proves it)
+        moveq   #5,d3
+.atnp:  move.w  d3,-(sp)            ; draw_window clobbers d3
+        moveq   #0,d1
+        moveq   #$4C,d2
+        bsr     notepad_key
+        move.w  (sp)+,d3
+        dbra    d3,.atnp
+        else
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -196,6 +212,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
 
 ; ============================================================================
@@ -1702,7 +1719,22 @@ str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
 str_m_play:     dc.b    "Space: play/stop",0
 demo_text:      dc.b    "UnoDOS/68K milestone 2",13
                 dc.b    "The quick brown fox",13
-                dc.b    "jumps over the lazy dog.",0
+                dc.b    "jumps over the lazy dog.",13
+                dc.b    "L04 scroll test",13
+                dc.b    "L05 scroll test",13
+                dc.b    "L06 scroll test",13
+                dc.b    "L07 scroll test",13
+                dc.b    "L08 scroll test",13
+                dc.b    "L09 scroll test",13
+                dc.b    "L10 scroll test",13
+                dc.b    "L11 scroll test",13
+                dc.b    "L12 scroll test",13
+                dc.b    "L13 scroll test",13
+                dc.b    "L14 scroll test",13
+                dc.b    "L15 scroll test",13
+                dc.b    "L16 scroll test",13
+                dc.b    "L17 scroll test",13
+                dc.b    "L18 last line",0
 
         even
 ; app definitions: x, y, w, h, title offset from 'start'
@@ -1779,6 +1811,8 @@ files_sel:      dc.w    0
 np_len:         dc.w    0
 np_caret:       dc.w    0
 np_file:        dc.w    -1          ; romdisk index, -1 = untitled
+np_top:         dc.w    0           ; first visible line (vertical scroll)
+np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
 np_dirty:       dc.b    0

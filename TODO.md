@@ -35,7 +35,9 @@ SysInfo, Clock, Files, Notepad, Music. Spec: docs/PORT-SPEC.md.
 Next steps:
 - [ ] Amiga: MFM track reader + portable FAT12 core (replace the boot
       ROM-disk; PC-interchangeable 880KB disks)
-- [ ] Amiga: Notepad up/down line navigation + vertical scroll
+- [x] Amiga: Notepad up/down line navigation (goal-column memory) +
+      vertical scroll (caret-follow clamp) — verified in WinUAE via the
+      AUTOTEST_NOTEPAD build
 - [ ] Amiga: blitter fast paths (text row-blit, fills) — the big OCS win
 - [ ] Amiga: TICKS_SEC calibration (vblank pacing runs fast under the
       WinUAE test config) + NTSC detection
