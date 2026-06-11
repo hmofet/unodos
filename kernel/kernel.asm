@@ -4390,10 +4390,29 @@ mouse_drag_update:
     jmp .done
 
 .try_resize:
-    ; No titlebar hit — check if click is on a resize handle
+    ; No titlebar hit - check if click is on a resize handle
     call mouse_hittest_resize
-    jc .done                        ; No resize hit either
+    jc .try_body                    ; No resize hit either
     jmp .start_resize
+
+.try_body:
+    ; Click-to-raise: a left press on the BODY of a background window
+    ; brings it to front (audit: raise-on-click was title-bar only).
+    ; Topmost hit is z-aware; clicking the already-topmost window does
+    ; nothing here (no repaint churn for normal in-app clicks).
+    push bx
+    push cx
+    mov bx, [mouse_x]
+    mov cx, [mouse_y]
+    call find_window_at_point       ; AL = topmost window at point
+    pop cx
+    pop bx
+    jc .done                        ; Not over any window
+    cmp al, [topmost_handle]
+    je .done                        ; Already on top
+    mov [drag_window], al
+    mov byte [drag_needs_focus], 1  ; process_drag raises + repaints + posts
+    jmp .done                       ; WIN_REDRAW to the owner
 
 .start_drag:
     ; Start drag setup
@@ -9803,6 +9822,61 @@ get_tick_count:
 ; Input: BX = X position, CX = Y position
 ; Output: CF=0 if over a visible window (AL=window handle), CF=1 if not
 ; Preserves: BX, CX
+; find_window_at_point - Z-aware window hit test (kernel internal)
+; Input: BX = X, CX = Y
+; Output: CF=0, AL = handle of the TOPMOST visible window containing the
+;         point; CF=1 if none. Preserves BX, CX. 8086-safe, IRQ-safe.
+find_window_at_point:
+    push si
+    push di
+    push dx
+    mov si, window_table
+    xor di, di                      ; DI = window index
+    mov dx, 0x00FF                  ; DL = best handle (0xFF = none), DH = best z
+.fwp_scan:
+    cmp di, WIN_MAX_COUNT
+    jae .fwp_done
+    cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
+    jne .fwp_next
+    mov ax, [si + WIN_OFF_X]
+    cmp bx, ax
+    jb .fwp_next
+    add ax, [si + WIN_OFF_WIDTH]
+    cmp bx, ax
+    jae .fwp_next
+    mov ax, [si + WIN_OFF_Y]
+    cmp cx, ax
+    jb .fwp_next
+    add ax, [si + WIN_OFF_HEIGHT]
+    cmp cx, ax
+    jae .fwp_next
+    cmp dl, 0xFF                    ; First hit?
+    je .fwp_take
+    cmp [si + WIN_OFF_ZORDER], dh   ; Higher z than current best?
+    jb .fwp_next
+.fwp_take:
+    mov dx, di                      ; DL = handle (DI <= 15)
+    mov dh, [si + WIN_OFF_ZORDER]   ; DH = its z
+.fwp_next:
+    add si, WIN_ENTRY_SIZE
+    inc di
+    jmp .fwp_scan
+.fwp_done:
+    mov al, dl
+    cmp al, 0xFF
+    je .fwp_none
+    pop dx
+    pop di
+    pop si
+    clc
+    ret
+.fwp_none:
+    pop dx
+    pop di
+    pop si
+    stc
+    ret
+
 point_over_window:
     push si
     push di
