@@ -65,7 +65,7 @@ Next steps:
       apps/dostris.asm; windowed; verified WinUAE + Executor)
 - [x] OutLast on Amiga + Mac (same track/perspective/traffic/physics as
       apps/outlast.asm; verified WinUAE + Executor)
-- [ ] Game music on the 68K ports (Korobeiniki / driving songs)
+- [x] Game music on the 68K ports (Korobeiniki + Sunset Drive; Paula + Sound Manager sequencers)
 - [x] Pac-Man on the 68K ports (full maze + 3-ghost AI on both;
       Amiga uses incremental tile rendering; verified WinUAE + Executor)
 
