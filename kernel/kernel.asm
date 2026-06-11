@@ -189,8 +189,7 @@ int_80_handler:
     pop ax
 
     ; --- Drawing API: cursor protection (A1 — centralized) ---
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     mov byte [_did_cursor_protect], 1
 
     ; --- Drawing API: coordinate translation check ---
@@ -1473,8 +1472,7 @@ win_begin_draw:
     ; Hide cursor for batch drawing (Build 397: perf fix)
     ; Keeps cursor hidden until win_end_draw, so per-API cursor
     ; hide/show in the dispatcher are no-ops (cursor_locked > 0).
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     mov [draw_context], al
     ; Set up clip rectangle from window content area
     push bx
@@ -3884,6 +3882,21 @@ cursor_restore_vesa:
 ; Preserves all registers
 ; IMPORTANT: Uses PUSHF/CLI/POPF to prevent IRQ12 from interleaving
 ; cursor operations, which would cause cursor ghost artifacts.
+; cursor_protect_begin - Atomically hide cursor AND take the cursor lock.
+; The hide+inc pair must not be interruptible: with IF=1, IRQ12 can fire
+; between them and the mouse ISR's mouse_cursor_show redraws the cursor
+; while cursor_locked is still 0, leaving a live cursor under the
+; protected draw (stale save-buffer restore / XOR garbage on the next
+; mouse move). Preserves all registers and the caller's IF state.
+; 8086-safe.
+cursor_protect_begin:
+    pushf                           ; Save caller IF
+    cli                             ; Close the hide->lock window
+    call mouse_cursor_hide          ; Inner pushf/cli/popf restores IF=0 here
+    inc byte [cursor_locked]
+    popf                            ; Restore caller IF (also discards INC flags)
+    ret
+
 mouse_cursor_hide:
     pushf                           ; Save interrupt state
     cli                             ; Atomic: check + erase + flag update
@@ -4627,8 +4640,7 @@ mouse_process_drag:
 
 .need_outline:
     ; Hide cursor for clean XOR drawing
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Erase old outline if one is drawn
     cmp byte [drag_outline_drawn], 0
@@ -4689,8 +4701,7 @@ mouse_process_drag:
     je .done                        ; Same size, nothing to do
 
 .need_resize_outline:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Erase old outline if one is drawn
     cmp byte [resize_outline_drawn], 0
@@ -4737,8 +4748,7 @@ mouse_process_drag:
     je .done
     mov byte [resize_needs_finish], 0
 
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Erase resize outline if one is drawn
     cmp byte [resize_outline_drawn], 0
@@ -4797,8 +4807,7 @@ mouse_process_drag:
     je .check_resize_finish
     mov byte [drag_needs_finish], 0
 
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Erase outline if one is drawn
     cmp byte [drag_outline_drawn], 0
@@ -7950,8 +7959,7 @@ gfx_draw_pixel_stub:
 
 ; gfx_draw_char_stub - Draw character
 gfx_draw_char_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push dx
@@ -7976,8 +7984,7 @@ gfx_draw_char_stub:
 ; gfx_draw_string_stub - Draw null-terminated string
 ; Uses caller_ds for string access (supports apps calling through INT 0x80)
 gfx_draw_string_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push dx
@@ -8380,8 +8387,7 @@ draw_sunken_bevel:
 ; ============================================================================
 widget_draw_button:
     ; BX=X, CX=Y, DX=width, SI=height, DI=label (caller_es:DI), AL=flags
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -8618,8 +8624,7 @@ radio_filled_bitmap:
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
 widget_draw_checkbox:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -8702,8 +8707,7 @@ checkbox_checked_bitmap:
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
 widget_draw_separator:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -8750,8 +8754,7 @@ widget_draw_separator:
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
 widget_draw_listitem:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -8853,8 +8856,7 @@ widget_draw_listitem:
 PROGRESS_HEIGHT equ 8
 
 widget_draw_progress:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9043,8 +9045,7 @@ prog_str_buf: db '100%', 0, 0
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
 widget_draw_groupbox:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9124,8 +9125,7 @@ widget_draw_groupbox:
 ; Auto-translated by INT 0x80 for draw_context
 ; ============================================================================
 widget_draw_textfield:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9320,8 +9320,7 @@ SCROLLBAR_ARROW_H equ 8
 SCROLLBAR_MIN_THUMB equ 4
 
 widget_draw_scrollbar:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9666,8 +9665,7 @@ point_over_window:
 COMBO_ARROW_W equ 8
 
 widget_draw_combobox:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9843,8 +9841,7 @@ widget_draw_combobox:
 MENUBAR_PAD equ 6                       ; Padding between items
 
 widget_draw_menubar:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -9991,8 +9988,7 @@ widget_draw_menubar:
 ; gfx_draw_rect_stub - Draw rectangle outline
 ; Input: BX = X, CX = Y, DX = Width, SI = Height
 gfx_draw_rect_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bp
@@ -10096,8 +10092,7 @@ gfx_clear_area_stub:
     cmp byte [cs:video_mode], 0x13
     je .vga_clear
 
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bp
@@ -10310,8 +10305,7 @@ gfx_clear_area_stub:
 
 .vesa_clear:
     ; VESA: use vesa_fill_rect with color 0
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     mov ax, 0xA000
@@ -10326,8 +10320,7 @@ gfx_clear_area_stub:
 
 .mode12h_clear:
     ; Mode 12h: use mode12h_fill_rect with color 0
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     mov ax, 0xA000
@@ -10341,8 +10334,7 @@ gfx_clear_area_stub:
     ret
 
 .vga_clear:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -15807,8 +15799,7 @@ WIN_ERR_INVALID     equ 2
 ; Output: CF = 0 on success, AX = window handle (0-15)
 ;         CF = 1 on error, AX = error code
 win_create_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     push bx
     push cx
@@ -16194,8 +16185,7 @@ gfx_draw_icon_stub:
     push ds
     mov ax, 0x1000
     mov ds, ax
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     pop ds
     pop cx
     pop bx
@@ -16247,8 +16237,7 @@ gfx_draw_icon_stub:
     push ds
     mov ax, 0x1000
     mov ds, ax
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     pop ds
     pop cx
     pop bx
@@ -16327,8 +16316,7 @@ gfx_draw_icon_stub:
     push ds
     mov ax, 0x1000
     mov ds, ax
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     pop ds
     pop cx
     pop bx
@@ -16670,8 +16658,7 @@ gfx_fill_color:
     test bp, bp
     jz .gfc_done
 
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; VESA fast path: banked fill
     cmp byte [video_mode], 0x01
@@ -17215,8 +17202,7 @@ dtw_batch:      db 0                ; 1 = destroy_task_windows batch in progress
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
 win_destroy_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Clear scrollbar drag if active (window being destroyed may own it)
     mov byte [sb_drag_active], 0
@@ -18340,8 +18326,7 @@ fat12_delete:
 ; Input:  AX = Window handle
 ; Output: CF = 0 on success
 win_draw_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     push bx
     push cx
@@ -18812,8 +18797,7 @@ win_focus_stub:
     push ax                         ; preserve handle / caller AX
     push dx                         ; prologue does not save DX
 
-    call mouse_cursor_hide          ; keep draw+clear atomic vs cursor
-    inc byte [cursor_locked]        ; (gfx_clear VGA/VESA paths don't self-hide)
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     ; Stale clip rect from calling task can clip the title text
     push word [clip_enabled]
@@ -18876,8 +18860,7 @@ win_focus_stub:
 ; Algorithm: Draw frame at new position FIRST, then clear only exposed edges.
 ; This avoids the full-window clear that causes "blue screen" on slow hardware.
 win_move_stub:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     push bx
     push cx
@@ -19184,8 +19167,7 @@ gfx_draw_filled_rect_color:
 ; Input: BX=X, CX=Y, DX=W, SI=H, AL=color(0-3)
 ; Output: CF=0
 gfx_draw_rect_color:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bp
@@ -19275,8 +19257,7 @@ gfx_draw_rect_color:
 ; Input: BX=X, CX=Y, DX=length, AL=color(0-3)
 ; Output: CF=0
 gfx_draw_hline:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -19314,8 +19295,7 @@ gfx_draw_hline:
 ; Input: BX=X, CX=Y, DX=height, AL=color(0-3)
 ; Output: CF=0
 gfx_draw_vline:
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
     push es
     push ax
     push bx
@@ -19521,8 +19501,7 @@ set_video_mode:
     push di
 
     ; Hide cursor during mode switch
-    call mouse_cursor_hide
-    inc byte [cursor_locked]
+    call cursor_protect_begin  ; atomic hide+lock (was hide / inc cursor_locked)
 
     cmp al, 0x01
     je .svm_try_vesa
