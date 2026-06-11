@@ -944,6 +944,47 @@ static void app_close(short proc)
 }
 
 /* =========================================================================
+ * Game music - Korobeiniki (Dostris) + Sunset Drive (OutLast), parsed from
+ * the x86 sources at port time. Shares the Sound Manager channel with the
+ * Music app; muted while the owning game is not topmost.
+ * ========================================================================= */
+static const Note kKoro[] = { {76,16},{71,10},{72,10},{74,16},{72,10},{71,10},{69,16},{69,10},{72,10},{76,16},{74,10},{72,10},{71,26},{72,10},{74,16},{76,16},{72,16},{69,16},{69,33},{0,10},{74,26},{77,10},{81,16},{79,10},{77,10},{76,26},{72,10},{76,16},{74,10},{72,10},{71,16},{71,10},{72,10},{74,16},{76,16},{72,16},{69,16},{69,33},{0,10} };
+#define N_KKORO (short)(sizeof(kKoro)/sizeof(kKoro[0]))
+static const Note kDrive[] = { {76,10},{74,10},{72,20},{0,7},{76,10},{74,10},{72,10},{74,10},{76,20},{0,7},{74,10},{72,10},{71,20},{0,7},{74,10},{72,10},{71,10},{72,10},{74,20},{0,7},{72,20},{76,20},{79,20},{76,20},{74,20},{72,20},{71,20},{0,10},{72,20},{74,20},{76,40},{0,20} };
+#define N_KDRIVE (short)(sizeof(kDrive)/sizeof(kDrive[0]))
+static const Note *gGmNotes = NULL;
+static short gGmCount = 0, gGmIx = 0, gGmOwner = -1;
+static long  gGmEnd = 0;
+static Boolean gGmOn = false;
+
+static void gm_start(const Note *notes, short count, short owner)
+{
+    if (!gSnd) music_open_chan();
+    gGmNotes = notes; gGmCount = count; gGmOwner = owner;
+    gGmIx = count - 1;                  /* first tick wraps to note 0 */
+    gGmOn = true;
+    gGmEnd = TickCount();
+}
+
+static void gm_stop(void)
+{
+    gGmOn = false;
+    music_quiet();
+}
+
+static void gm_tick(void)
+{
+    if (!gGmOn || !gGmNotes) return;
+    if (!(gZCount && zwin(gZCount - 1)->proc == gGmOwner)) return;
+    if (TickCount() < gGmEnd) return;
+    gGmIx++;
+    if (gGmIx >= gGmCount) gGmIx = 0;
+    gGmEnd = TickCount() + gGmNotes[gGmIx].dur;
+    if (gGmNotes[gGmIx].midi) music_note_on(gGmNotes[gGmIx].midi, gGmNotes[gGmIx].dur);
+    else music_quiet();
+}
+
+/* =========================================================================
  * Dostris - falling-blocks game (port of apps/dostris.asm)
  * Board 10x20, same piece tables / scoring / speed curve as the x86 game.
  * x86 gravity is in 18.2 Hz ticks; Mac ticks are 60 Hz, so intervals are
@@ -1007,8 +1048,10 @@ static void dt_spawn(void)
     gDtNext = dt_rand7();
     gDtRot = 0; gDtCol = 3; gDtRow = -1;
     gDtLastDrop = TickCount();
-    if (!dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1))
+    if (!dt_fits(gDtPiece, gDtRot, gDtCol, gDtRow + 1)) {
         gDtState = 3;               /* game over */
+        gm_stop();
+    }
 }
 
 static void dt_new_game(void)
@@ -1019,6 +1062,7 @@ static void dt_new_game(void)
     gDtNext = dt_rand7();
     gDtState = 1;
     dt_spawn();
+    gm_start(kKoro, N_KKORO, APP_DOSTRIS);
 }
 
 static void dt_clear_lines(void)
@@ -1139,12 +1183,16 @@ static Boolean dostris_key(char ch, short code)
     if (ch == 'n' || ch == 'N') { dt_new_game(); dt_redraw(); return true; }
     if (gDtState != 1) {
         if (ch == 'p' || ch == 'P') {
-            if (gDtState == 2) { gDtState = 1; gDtLastDrop = TickCount(); dt_redraw(); }
+            if (gDtState == 2) {
+                gDtState = 1; gDtLastDrop = TickCount();
+                gm_start(kKoro, N_KKORO, APP_DOSTRIS);
+                dt_redraw();
+            }
             return true;
         }
         return (ch == ' ');
     }
-    if (ch == 'p' || ch == 'P') { gDtState = 2; dt_redraw(); return true; }
+    if (ch == 'p' || ch == 'P') { gDtState = 2; gm_stop(); dt_redraw(); return true; }
     if (code == 0x7B || ch == 0x1C) {                   /* left */
         if (dt_fits(gDtPiece, gDtRot, gDtCol - 1, gDtRow)) gDtCol--;
         dt_redraw(); return true;
@@ -1222,6 +1270,7 @@ static void ol_new_game(void)
     gOlTraffic[2] = 800; gOlTraffic[3] = 2000;
     gOlLastStep = gOlLastSec = TickCount();
     gOlState = 1;
+    gm_start(kDrive, N_KDRIVE, APP_OUTLAST);
 }
 
 static void ol_vrect(UnoWin *w, short x0, short y0, short x1, short y1, short col)
@@ -1426,7 +1475,7 @@ static void outlast_tick(void)
     /* 1-second timer */
     if (now - gOlLastSec >= 60) {
         gOlLastSec = now;
-        if (--gOlTime <= 0) { gOlTime = 0; gOlState = 2; }
+        if (--gOlTime <= 0) { gOlTime = 0; gOlState = 2; gm_stop(); }
     }
 
     w = find_app_window(APP_OUTLAST);
@@ -1965,6 +2014,7 @@ int main(void)
             drag_update(p, StillDown());
         }
         music_tick();
+        gm_tick();
         dostris_tick();
         outlast_tick();
         app_secondly();

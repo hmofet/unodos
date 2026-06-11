@@ -285,6 +285,7 @@ main_loop:
         bsr     handle_drag
         bsr     handle_events
         bsr     music_tick
+        bsr     gm_tick
         bsr     dostris_tick
         bsr     outlast_tick
         bsr     app_ticks
@@ -892,6 +893,7 @@ raise_window:
 
 ; close_window - d0 = z index
 close_window:
+        bsr     gm_stop             ; close silences audio (PORT-SPEC SS2)
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
@@ -1982,6 +1984,13 @@ ol_traf0:       dc.l    400
 ol_traf1:       dc.l    1600
 ol_traf2:       dc.l    800
 ol_traf3:       dc.l    2000
+gm_notes:       dc.l    0           ; game music: note table ptr
+gm_end:         dc.l    0
+gm_count:       dc.w    0
+gm_ix:          dc.w    0
+gm_owner:       dc.w    0
+gm_on:          dc.b    0
+        even
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 mus_ix:         dc.w    0
 mus_end:        dc.l    0

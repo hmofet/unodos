@@ -103,6 +103,34 @@ for n, d in tune:
     yoff = (M[n] - 60) * 2
     notes.append((period, d, yoff))
 
+
+# ---------------- game songs (parsed from the x86 sources) ----------------
+def parse_song(path, label):
+    src = open(path, encoding="latin-1").read()
+    equs = {m.group(1): int(m.group(2)) for m in
+            re.finditer(r"^(\w+)\s+equ\s+(\d+)", src, re.M)}
+    block = src.split(label + ":", 1)[1]
+    out = []
+    for m in re.finditer(r"dw\s+(\w+),\s*(\w+)", block):
+        f, d = m.group(1), m.group(2)
+        fv = equs.get(f, int(f, 0) if f[0].isdigit() else 0)
+        dv = equs.get(d, int(d, 0) if d[0].isdigit() else 0)
+        if fv == 0xFFFF:
+            break
+        out.append((fv, dv))
+    return out
+
+def song_amiga(song):
+    # (freq Hz, dur 18.2Hz ticks) -> (Paula period or 0, dur PAL ticks)
+    out = []
+    for f, d in song:
+        period = round(PAL_CLK / (f * 8)) if f else 0
+        out.append((period, max(1, round(d * 11 / 4))))
+    return out
+
+koro  = song_amiga(parse_song("apps/tetris.asm", "korobeiniki"))
+drive = song_amiga(parse_song("apps/outlast.asm", "song_game1"))
+
 # ---------------- emit ----------------
 def words(vals):
     out = []
@@ -141,6 +169,13 @@ with open(OUT, "w", newline="\n") as f:
     f.write("\n")
 
     # music table: dc.w period, durTicks, staffYoff; terminated by count
+    f.write("; Korobeiniki + Sunset Drive (game music, Paula)\n")
+    f.write("koro_count: dc.w %d\n" % len(koro))
+    f.write("koro_notes:\n")
+    f.write(words([v for pair in koro for v in pair]) + "\n")
+    f.write("drive_count: dc.w %d\n" % len(drive))
+    f.write("drive_notes:\n")
+    f.write(words([v for pair in drive for v in pair]) + "\n")
     f.write("; Canon in D (same arrangement as apps/music.asm), Paula PAL periods\n")
     f.write(f"mus_count: dc.w {len(notes)}\n")
     f.write("mus_notes:\n")

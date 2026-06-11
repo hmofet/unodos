@@ -5,6 +5,84 @@
 ; 50 Hz PAL vblank where they are time-based (x3 gravity, /~2.75).
 ; ============================================================================
 
+; ------------------------------------------------------- game music (Paula)
+
+; gm_start - a0 = (period,dur) note pairs, d0 = count, d1 = owner proc
+gm_start:
+        movem.l d0-d1/a4,-(sp)
+        lea     vars(pc),a4
+        move.l  a0,gm_notes-vars(a4)
+        move.w  d0,gm_count-vars(a4)
+        move.w  d1,gm_owner-vars(a4)
+        subq.w  #1,d0
+        move.w  d0,gm_ix-vars(a4)   ; first tick wraps to note 0
+        st      gm_on-vars(a4)
+        move.l  ticks(pc),d0
+        move.l  d0,gm_end-vars(a4)
+        movem.l (sp)+,d0-d1/a4
+        rts
+
+; gm_stop - silence and disable the sequencer
+gm_stop:
+        movem.l d0/a4/a6,-(sp)
+        lea     vars(pc),a4
+        sf      gm_on-vars(a4)
+        lea     CUSTOM,a6
+        moveq   #0,d0
+        move.w  d0,AUD0VOL(a6)
+        movem.l (sp)+,d0/a4/a6
+        rts
+
+; gm_tick - advance the game-music sequencer (called from the main loop).
+; Mutes (but keeps position) while the owning game is not topmost.
+gm_tick:
+        movem.l d0-d3/a0/a2/a4/a6,-(sp)
+        move.b  gm_on(pc),d0
+        beq     .out
+        move.w  zcount(pc),d2
+        beq     .mute
+        subq.w  #1,d2
+        bsr     zwin_ptr
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        cmp.w   gm_owner(pc),d0
+        bne     .mute
+        move.l  ticks(pc),d0
+        cmp.l   gm_end(pc),d0
+        blt     .out
+        lea     vars(pc),a4
+        move.w  gm_ix(pc),d1
+        addq.w  #1,d1
+        cmp.w   gm_count(pc),d1
+        blt     .ixok
+        moveq   #0,d1
+.ixok:  move.w  d1,gm_ix-vars(a4)
+        move.l  gm_notes(pc),a0
+        add.w   d1,d1
+        add.w   d1,d1               ; index * 4 bytes
+        lea     (a0,d1.w),a0
+        move.w  (a0)+,d2            ; Paula period (0 = rest)
+        moveq   #0,d3
+        move.w  (a0),d3             ; duration in PAL ticks
+        move.l  ticks(pc),d0
+        add.l   d3,d0
+        move.l  d0,gm_end-vars(a4)
+        lea     CUSTOM,a6
+        tst.w   d2
+        beq     .rest
+        move.w  d2,AUD0PER(a6)
+        move.w  #44,AUD0VOL(a6)
+        move.w  #$8201,DMACON(a6)   ; DMAEN|AUD0EN
+        bra     .out
+.rest:  moveq   #0,d0
+        move.w  d0,AUD0VOL(a6)
+        bra     .out
+.mute:  lea     CUSTOM,a6
+        moveq   #0,d0
+        move.w  d0,AUD0VOL(a6)
+.out:   movem.l (sp)+,d0-d3/a0/a2/a4/a6
+        rts
+
 ; ---------------------------------------------------------------- Dostris
 
 DT_COLS     equ 10
@@ -103,6 +181,7 @@ dt_spawn:
         tst.w   d0
         bne     .ok
         move.w  #3,dt_state-vars(a4) ; game over
+        bsr     gm_stop
 .ok:    movem.l (sp)+,d0-d3
         rts
 
@@ -437,6 +516,10 @@ dostris_new:
         move.w  d0,dt_next-vars(a4)
         move.w  #1,dt_state-vars(a4)
         bsr     dt_spawn
+        lea     koro_notes(pc),a0
+        move.w  koro_count(pc),d0
+        moveq   #6,d1
+        bsr     gm_start
         movem.l (sp)+,d0-d1/a0
         rts
 
@@ -472,9 +555,14 @@ dostris_key:
         move.w  #1,dt_state-vars(a4)
         move.l  ticks(pc),d0
         move.l  d0,dt_last-vars(a4)
+        lea     koro_notes(pc),a0
+        move.w  koro_count(pc),d0
+        moveq   #6,d1
+        bsr     gm_start
         bra     .redraw
 .topause:
         move.w  #2,dt_state-vars(a4)
+        bsr     gm_stop
         bra     .redraw
 .left:  move.w  dt_piece(pc),d0
         move.w  dt_rot(pc),d1
@@ -599,7 +687,12 @@ outlast_new:
         move.l  d0,ol_last-vars(a4)
         move.l  d0,ol_lastsec-vars(a4)
         move.w  #1,ol_state-vars(a4)
-        movem.l (sp)+,d0/a4
+        movem.l a0-a1,-(sp)
+        lea     drive_notes(pc),a0
+        move.w  drive_count(pc),d0
+        moveq   #7,d1
+        bsr     gm_start
+        movem.l (sp)+,a0-a1
         rts
 
 ; ol_rect - playfield rect: d0=x d1=y d2=x2 d3=y2 d4=col, a2=window
@@ -1185,6 +1278,7 @@ outlast_tick:
 .tset:  move.w  d0,ol_time-vars(a4)
         bne     .draw
         move.w  #2,ol_state-vars(a4)
+        bsr     gm_stop
 .draw:  bsr     redraw_topmost
 .out:   movem.l (sp)+,d0-d7/a0/a2/a4
         rts
