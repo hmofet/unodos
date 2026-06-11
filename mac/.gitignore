@@ -1,0 +1,5 @@
+build/*
+!build/color_desktop.png
+!build/mono_desktop.png
+!build/UnoDOS7.bin
+!build/UnoDOSClassic.bin
