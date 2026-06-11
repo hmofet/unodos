@@ -146,3 +146,20 @@ Companion references: `docs/API_REFERENCE.md` (per-call semantics),
 9. Keep the API table address/IDs stable; additions append.
 10. Every queue/table is fixed-size — design the "full" behavior
     explicitly (drop policy, error code) rather than discovering it.
+
+
+---
+
+## Implementations
+
+| Implementation | Location | Notes |
+|---|---|---|
+| x86 (reference) | `kernel/`, `apps/`, `boot/` | v3.26.0+, 8086-clean |
+| Amiga 68000 | `amiga/` | bare-metal; milestone 2 |
+| Mac System 7 (color) | `mac/` (`UnoDOS7`) | Toolbox-based; milestone 2 |
+| Mac System 1–6 (mono) | `mac/` (`UnoDOSClassic`) | Toolbox-based; milestone 2 |
+
+Deviations to reconcile in later milestones: the 68K ports use a single
+cooperative event loop (no scheduler yet), the Amiga stores files on a
+build-time ROM-disk rather than FAT12, and both Notepads cap their edit
+buffers (2–4 KB) below the x86 app's.

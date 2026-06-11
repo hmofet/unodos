@@ -15,6 +15,28 @@ UnoDOS 3 is a GUI-first operating system that boots directly into a windowed des
 - **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an original IBM PC with 128KB RAM and a CGA card.
 - **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and all 16 applications fit on one floppy disk.
 
+## Ports
+
+The x86 assembly OS above is the reference implementation. UnoDOS also
+runs on Motorola 68K platforms, rewritten against the portable contract
+in [docs/PORT-SPEC.md](docs/PORT-SPEC.md) (see
+[docs/M68K-PORT-FEASIBILITY.md](docs/M68K-PORT-FEASIBILITY.md) for the
+assessment and plan):
+
+| Port | Target hardware | Approach | Status |
+|---|---|---|---|
+| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes, hardware-sprite cursor, Paula audio | Milestone 2 — desktop, WM, SysInfo, Clock, Files, Notepad, Music |
+| [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: Color QuickDraw, Event/File/Sound Managers, full UnoDOS palette | Milestone 2 — same app set |
+| [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2 — same app set |
+
+All three boot to the UnoDOS desktop with the window manager (z-order,
+drag, click-to-raise), the focus-routed event model, and the app trio:
+**Files** (directory browser), **Notepad** (caret editor with the live
+Ln/Co/bytes status bar), and **Music** (Canon in D — Paula square wave on
+Amiga, Sound Manager square-wave synth on Mac). Verified in WinUAE
+(built-in AROS ROM) and the ROM-free Executor emulator respectively —
+no proprietary ROMs needed to try them.
+
 ## Screenshots
 
 *Screenshots coming soon — the OS runs in CGA 320x200 (4-color) and VGA 320x200 (256-color) modes.*

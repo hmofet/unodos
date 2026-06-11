@@ -27,6 +27,28 @@ All items from docs/AUDIT-HANDOFF-2026-06.md §5 are done:
 - [ ] Background window content not repainted until raised (single-topmost
       clipping model; visible when a covered window is exposed by a drag)
 
+## Platform Ports (68K) — milestone 2 shipped 2026-06-11
+Done: Amiga (bare-metal, amiga/) + Mac System 7 color + Mac System 1-6
+mono (Toolbox-based, mac/) all boot to the desktop with the WM and run
+SysInfo, Clock, Files, Notepad, Music. Spec: docs/PORT-SPEC.md.
+
+Next steps:
+- [ ] Amiga: MFM track reader + portable FAT12 core (replace the boot
+      ROM-disk; PC-interchangeable 880KB disks)
+- [ ] Amiga: Notepad up/down line navigation + vertical scroll
+- [ ] Amiga: blitter fast paths (text row-blit, fills) — the big OCS win
+- [ ] Amiga: TICKS_SEC calibration (vblank pacing runs fast under the
+      WinUAE test config) + NTSC detection
+- [ ] Mac: Files subdirectory navigation (PBGetCatInfo ioDrDirID walk)
+- [ ] Mac: offscreen GWorld double-buffering for flicker-free repaints
+- [ ] Both: audio ear-check on real hardware / sound-enabled emulator
+      (sequencers are register-verified; test configs run sound off)
+- [ ] Both: cooperative scheduler over the window/app tables (milestone
+      3 — the single event loop is scaffolding)
+- [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
+- [ ] Sega Genesis showpiece port (per feasibility report SS3.3 —
+      optional, after the portable core exists)
+
 ## Kernel / Window Manager
 - [ ] Modal window flag (WIN_FLAG_MODAL) — block focus changes when modal is active
 - [ ] Window minimize/maximize
