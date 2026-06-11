@@ -1,4 +1,4 @@
-# UnoDOS/68K — Amiga port (milestone 2.5)
+# UnoDOS/68K — Amiga port (milestone 3)
 
 A bare-metal Motorola 68000 port of UnoDOS for A500-class Amigas
 (OCS/ECS, 512 KB chip RAM), per the platform contract in
