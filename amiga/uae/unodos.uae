@@ -21,3 +21,6 @@ gfx_linemode=double
 show_leds=false
 win32.start_not_captured=true
 win32.nonotificationicon=true
+floppy1=C:\Users\arin\unodos\amiga\build\unodos-data.adf
+floppy1type=0
+nr_floppies=2

@@ -33,8 +33,15 @@ mono (Toolbox-based, mac/) all boot to the desktop with the WM and run
 SysInfo, Clock, Files, Notepad, Music. Spec: docs/PORT-SPEC.md.
 
 Next steps:
-- [ ] Amiga: MFM track reader + portable FAT12 core (replace the boot
-      ROM-disk; PC-interchangeable 880KB disks)
+- [x] Amiga: MFM track reader + portable FAT12 core, READ path
+      (fdd.i + fat12.i): DF1 trackdisk DMA + Amiga-MFM sector decode
+      with track cache; FAT12 mount/root-dir/chain-walk; Files mounts
+      the DF1 data disk ('m') and opens files in Notepad. mkfat.py
+      builds the 880KB FAT12 data image (PC interchange via mtools).
+      Verified in WinUAE: multi-cluster CHAIN.TXT read end-to-end.
+- [ ] Amiga FAT12 WRITE path: MFM encode + track write + verify, FAT/
+      dir updates - unlocks Notepad F1 save to disk, Tracker .MOD
+      save, file create/delete
 - [x] Amiga: Notepad up/down line navigation (goal-column memory) +
       vertical scroll (caret-follow clamp) — verified in WinUAE via the
       AUTOTEST_NOTEPAD build
