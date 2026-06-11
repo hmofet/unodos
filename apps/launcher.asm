@@ -41,6 +41,7 @@ API_CTX_MENU_OPEN       equ 87
 API_CTX_MENU_CLOSE      equ 88
 API_CTX_MENU_HIT        equ 89
 API_FILLED_RECT_COLOR   equ 67
+API_SET_FONT            equ 48
 API_RECT_COLOR          equ 68
 
 ; Launcher modes
@@ -116,6 +117,15 @@ entry:
 
     ; Mount filesystem and scan for apps (updates progress bar)
     call scan_disk
+
+    ; Hold the splash ~2s so it reads as a splash even on fast boots
+    push ax
+    push cx
+    mov cx, 36
+    mov ah, API_DELAY_TICKS
+    int 0x80
+    pop cx
+    pop ax
 
     ; Clear splash and draw full desktop
     call redraw_desktop
@@ -855,47 +865,109 @@ show_splash:
     call fast_clear_screen
 
     ; Draw "U" logo — 3 filled white rectangles
-    ; Left pillar: (140, 40) w=10, h=36
-    mov bx, 140
+    ; Platform art: a little IBM PC (CRT + desktop unit + keyboard)
+    ; CRT case (white)
+    mov bx, 128
+    mov cx, 30
+    mov dx, 64
+    mov si, 48
+    mov al, 3
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; screen (cyan)
+    mov bx, 134
+    mov cx, 36
+    mov dx, 52
+    mov si, 34
+    mov al, 1
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; prompt accent on screen (magenta)
+    mov bx, 138
     mov cx, 40
-    mov dx, 10
-    mov si, 36
-    mov ah, API_GFX_DRAW_FILLED_RECT
+    mov dx, 12
+    mov si, 4
+    mov al, 2
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; monitor stand (white)
+    mov bx, 152
+    mov cx, 78
+    mov dx, 16
+    mov si, 5
+    mov al, 3
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; desktop unit (white)
+    mov bx, 116
+    mov cx, 86
+    mov dx, 88
+    mov si, 16
+    mov al, 3
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; floppy slot (black)
+    mov bx, 124
+    mov cx, 92
+    mov dx, 30
+    mov si, 3
+    xor al, al
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; power LED (magenta)
+    mov bx, 192
+    mov cx, 92
+    mov dx, 4
+    mov si, 3
+    mov al, 2
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    ; keyboard (white) with a cyan key row
+    mov bx, 122
+    mov cx, 108
+    mov dx, 76
+    mov si, 10
+    mov al, 3
+    mov ah, API_FILLED_RECT_COLOR
+    int 0x80
+    mov bx, 126
+    mov cx, 111
+    mov dx, 68
+    mov si, 4
+    mov al, 1
+    mov ah, API_FILLED_RECT_COLOR
     int 0x80
 
-    ; Right pillar: (170, 40) w=10, h=36
-    mov bx, 170
-    mov cx, 40
-    mov dx, 10
-    mov si, 36
-    mov ah, API_GFX_DRAW_FILLED_RECT
+    ; "UnoDOS 3" centered in the large 8x14 font
+    mov al, 2
+    mov ah, API_SET_FONT
     int 0x80
-
-    ; Bottom bar: (140, 68) w=40, h=8
-    mov bx, 140
-    mov cx, 68
-    mov dx, 40
-    mov si, 8
-    mov ah, API_GFX_DRAW_FILLED_RECT
-    int 0x80
-
-    ; "UnoDOS 3" centered below logo (white text, black bg = transparent on black screen)
-    mov bx, 112
-    mov cx, 90
+    mov bx, 128
+    mov cx, 130
     mov si, splash_name
+    mov ah, API_GFX_DRAW_STRING
+    int 0x80
+    mov al, 1
+    mov ah, API_SET_FONT
+    int 0x80
+
+    ; "for IBM PC/XT/AT" centered
+    mov bx, 96
+    mov cx, 152
+    mov si, splash_platform
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
     ; "Loading..." centered
     mov bx, 100
-    mov cx, 120
+    mov cx, 166
     mov si, splash_loading
     mov ah, API_GFX_DRAW_STRING
     int 0x80
 
-    ; Progress bar outline: (90, 140) w=140, h=10
+    ; Progress bar outline: (90, 180) w=140, h=10
     mov bx, 90
-    mov cx, 140
+    mov cx, 180
     mov dx, 140
     mov si, 10
     mov ah, API_GFX_DRAW_RECT
@@ -914,12 +986,12 @@ update_progress:
     mov al, [cs:icon_count]
     dec al                          ; Just incremented, use N-1
     xor ah, ah
-    mov bl, 17
+    mov bl, 8                       ; 8px per segment: 16 apps fit the bar
     mul bl
     add ax, 91
     mov bx, ax
-    mov cx, 141
-    mov dx, 17
+    mov cx, 181
+    mov dx, 8
     mov si, 8
     mov ah, API_GFX_DRAW_FILLED_RECT
     int 0x80
@@ -2142,6 +2214,7 @@ fast_clear_screen:
 
 title_str:      db 'UnoDOS 3', 0
 splash_name:    db 'UnoDOS 3', 0
+splash_platform: db 'for IBM PC/XT/AT', 0
 splash_loading: db 'Loading...', 0
 no_apps_msg:    db 'No apps found', 0
 load_error_msg: db 'Load err: ', 0
