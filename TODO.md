@@ -39,9 +39,14 @@ Next steps:
       the DF1 data disk ('m') and opens files in Notepad. mkfat.py
       builds the 880KB FAT12 data image (PC interchange via mtools).
       Verified in WinUAE: multi-cluster CHAIN.TXT read end-to-end.
-- [ ] Amiga FAT12 WRITE path: MFM encode + track write + verify, FAT/
-      dir updates - unlocks Notepad F1 save to disk, Tracker .MOD
-      save, file create/delete
+- [x] Amiga FAT12 WRITE path: MFM track encoder (sector headers,
+      checksums, clock-fixup), one-revolution track writes with
+      write-protect gate, track-granular RMW sector writes; FAT
+      alloc/free/flush, root-dir create/overwrite. Notepad F1 saves to
+      DF1 (FAT files + new UNTITLEDTXT), Tracker s/l persists the song.
+      Verified in WinUAE: byte-exact image deltas + on-screen re-read.
+- [ ] FAT12 polish: delete, rename, free-space display, dir-full UX,
+      Tracker .MOD-format export, write-verify pass
 - [x] Amiga: Notepad up/down line navigation (goal-column memory) +
       vertical scroll (caret-follow clamp) — verified in WinUAE via the
       AUTOTEST_NOTEPAD build

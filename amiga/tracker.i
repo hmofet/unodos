@@ -336,10 +336,32 @@ tracker_key:
         beq     .clear
         cmp.b   #'d',d1
         beq     .demo
+        cmp.b   #'s',d1
+        beq     .save
+        cmp.b   #'l',d1
+        beq     .load
         cmp.b   #32,d1
         beq     .playstop
         moveq   #1,d0
         rts
+.save:  move.b  fat_mounted(pc),d0
+        beq     .redraw
+        lea     str_songname(pc),a0
+        lea     tk_pat(pc),a1
+        move.l  #TK_ROWS*TK_CHANS*2,d1
+        bsr     fat_save_file
+        bsr     fat_list_root
+        bra     .redraw
+.load:  move.b  fat_mounted(pc),d0
+        beq     .redraw
+        lea     str_songname(pc),a0
+        bsr     fat_find_file
+        tst.w   d0
+        bmi     .redraw
+        move.l  #TK_ROWS*TK_CHANS*2,d1
+        lea     tk_pat(pc),a1
+        bsr     fat_read_file
+        bra     .redraw
 .up:    move.w  tk_row(pc),d0
         beq     .redraw
         subq.w  #1,d0
@@ -435,7 +457,7 @@ tk_load_demo:
 ; ---------------------------------------------------------------- data
 str_tk_hdr:     dc.b    "Row Chan1  Chan2  Chan3  Chan4",0
 str_tk_mark:    dc.b    "^",0
-str_tk_foot1:   dc.b    "q/w:note e:instr x:clear d:demo",0
+str_tk_foot1:   dc.b    "q/w:note e:inst x:clr d:demo s/l:disk",0
 str_tk_foot2:   dc.b    "Space: play/stop   arrows: move",0
 str_t_tracker:  dc.b    "Tracker",0
 name_tracker:   dc.b    "Tracker",0
@@ -476,4 +498,7 @@ tk_demo:
         dc.b    0,0,   0,0,  0,0,   0,0
         dc.b    0,0,  23,0,  0,0,  20,3    ;        | A#3 |     | hit
         dc.b    0,0,   0,0,  0,0,   0,0
+        even
+
+str_songname:   dc.b    "SONG    UNO"
         even

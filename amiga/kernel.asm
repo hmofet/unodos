@@ -175,6 +175,7 @@ super:
         move.l  #SQRWAVE,AUD0LCH(a6)
         move.w  #4,AUD0LEN(a6)      ; 4 words = 8 samples
         bsr     tk_init             ; synthesize the Tracker instrument waves
+        bsr     fdd_init            ; quiesce all floppy drives (DF0 incl.)
 
         move.l  #COPLIST,COP1LCH(a6)
         move.w  COPJMP1(a6),d0
@@ -206,6 +207,76 @@ super:
         moveq   #13,d1
         moveq   #0,d2
         bsr     theme_key           ; Enter = apply
+        endc
+        ifd     AUTOTEST_MFM
+        ; encoder self-test: pattern -> encode -> decode -> compare (no disk)
+        lea     TRKCACHE,a0
+        move.w  #5632/2-1,d0
+        moveq   #0,d1
+.fill:  move.w  d1,(a0)+
+        add.w   #$1357,d1
+        dbra    d0,.fill
+        moveq   #40,d2
+        bsr     fdd_encode_track
+        ; wipe the cache so decode must really reconstruct it
+        lea     TRKCACHE,a0
+        move.w  #5632/2-1,d0
+.wipe:  clr.w   (a0)+
+        dbra    d0,.wipe
+        moveq   #40,d2
+        bsr     fdd_decode_track
+        tst.w   d0
+        bmi     .mfmbad
+        ; verify the pattern
+        lea     TRKCACHE,a0
+        move.w  #5632/2-1,d0
+        moveq   #0,d1
+.chk:   cmp.w   (a0)+,d1
+        bne     .mfmbad
+        add.w   #$1357,d1
+        dbra    d0,.chk
+        lea     str_mfmok(pc),a0
+        bra     .mfmsay
+.mfmbad:
+        lea     str_mfmbad(pc),a0
+.mfmsay:
+        move.w  #80,d0
+        move.w  #120,d1
+        moveq   #3,d2
+        moveq   #0,d3
+        bsr     draw_string_bg
+        endc
+        ifd     AUTOTEST_FATW
+        ; FAT WRITE variant: mount, put demo text in Notepad, F1-save it
+        ; (creates UNTITLED.TXT on DF1), then reopen it from the listing.
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'m',d1
+        moveq   #0,d2
+        bsr     files_key           ; mount DF1
+        bsr     notepad_set_demo    ; 305 B, np_file = -1 (untitled)
+        moveq   #3,d0
+        bsr     launch_app
+        moveq   #0,d1
+        moveq   #$50,d2             ; F1 = save -> UNTITLED.TXT
+        bsr     notepad_key
+        ; wipe the buffer to prove the reopen really reads the disk
+        lea     vars(pc),a4
+        clr.w   np_len-vars(a4)
+        clr.w   np_caret-vars(a4)
+        ; back to Files: select UNTITLED.TXT (5th entry) and open it
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #$4D,d2             ; down x4
+        bsr     files_key
+        bsr     files_key
+        bsr     files_key
+        bsr     files_key
+        moveq   #13,d1
+        moveq   #0,d2
+        bsr     files_key           ; Enter: read it back from DF1
         endc
         ifd     AUTOTEST_FAT
         ; FAT12 variant: open Files, mount DF1, select CHAIN.TXT (the
@@ -313,6 +384,8 @@ super:
         ifnd    AUTOTEST_PACMAN
         ifnd    AUTOTEST_TRACKER
         ifnd    AUTOTEST_FAT
+        ifnd    AUTOTEST_FATW
+        ifnd    AUTOTEST_MFM
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom)
@@ -322,6 +395,8 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
+        endc
         endc
         endc
         endc
@@ -1904,6 +1979,10 @@ str_n_ln:       dc.b    "Ln ",0
 str_n_co:       dc.b    " Co ",0
 str_n_b:        dc.b    " B",0
 str_n_dirty:    dc.b    " *",0
+str_untitled:   dc.b    "UNTITLEDTXT",0
+str_mfmok:      dc.b    "MFM SELF-TEST: OK",0
+str_mfmbad:     dc.b    "MFM SELF-TEST: BAD",0
+        even
 str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
 str_m_play:     dc.b    "Space: play/stop",0
 demo_text:      dc.b    "UnoDOS/68K milestone 2",13
@@ -2105,6 +2184,7 @@ fat_rootstart:  dc.w    0
 fat_datastart:  dc.w    0
 fat_count:      dc.w    0
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none
+np_fatidx:      dc.w    0           ; FAT root index of the open file
 mus_ix:         dc.w    0
 mus_end:        dc.l    0
 np_dirty:       dc.b    0
