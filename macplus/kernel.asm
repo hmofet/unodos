@@ -97,7 +97,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 5                   ; SysInfo, Clock, Files, Notepad, Demo
+NICONS      equ 6                   ; SysInfo, Clock, Files, Notepad, Demo, Dostris
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -246,6 +246,8 @@ main_loop:
         move.w  ev_head(pc),d0
         cmp.w   ev_tail(pc),d0
         bne     .work
+        bsr     tick_wanted         ; a playing game keeps the loop live
+        bne     .work
         move.l  ticks(pc),d0
         sub.l   last_secs(pc),d0
         cmp.l   #TICKS_SEC,d0
@@ -266,6 +268,7 @@ main_loop:
         bsr     handle_drag
         bsr     handle_events
         bsr     app_ticks
+        bsr     games_tick
         bsr     cur_draw
         bra     main_loop
 
@@ -335,6 +338,8 @@ handle_events:
         beq     .knote
         cmp.w   #4,d0
         beq     .kdiskapp
+        cmp.w   #5,d0
+        beq     .kdostris
         bra     .next
 .kfiles:
         bsr     files_key
@@ -344,6 +349,9 @@ handle_events:
         bra     .next
 .kdiskapp:
         bsr     diskapp_key
+        bra     .next
+.kdostris:
+        bsr     dostris_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -1111,13 +1119,17 @@ app_draw_content:
         beq     .files
         cmp.w   #3,d0
         beq     .notep
-        bsr     diskapp_draw        ; proc 4: disk-loaded app
+        cmp.w   #4,d0
+        beq     .diska
+        bsr     dostris_draw        ; proc 5: Dostris
         bra     .done
 .clock: bsr     clock_draw
         bra     .done
 .files: bsr     files_draw
         bra     .done
 .notep: bsr     notepad_draw
+        bra     .done
+.diska: bsr     diskapp_draw        ; proc 4: disk-loaded app
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -2180,6 +2192,7 @@ ev_get:
         include "fat12.i"
         include "apps.i"
         include "diskapp.i"
+        include "games.i"
 
 ; ============================================================================
 ; Data
@@ -2235,6 +2248,7 @@ app_def_tab:
         dc.w    40,70,260,180,  str_t_files-start
         dc.w    150,50,300,230, str_t_notepad-start
         dc.w    120,90,210,130, str_t_demo-start
+        dc.w    60,30,262,212,  str_t_dostris-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2242,12 +2256,14 @@ icon_tab:
         dc.l    icon_files
         dc.l    icon_notepad
         dc.l    icon_paint
+        dc.l    icon_dostris
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
         dc.l    name_files
         dc.l    name_notepad
         dc.l    name_demo
+        dc.l    name_dostris
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2365,6 +2381,21 @@ fat_mounted:    dc.b    0
 np_dirty:       dc.b    0
 diskapp_loaded: dc.b    0           ; proc 4: DEMO.APP read into APP_LOAD
                 dc.b    0
+        even
+; ---- Dostris (proc 5) game state ----
+dt_seed:        dc.l    0
+dt_last:        dc.l    0
+dt_piece:       dc.w    0
+dt_rot:         dc.w    0
+dt_col:         dc.w    0
+dt_row:         dc.w    0
+dt_state:       dc.w    0           ; 0 menu, 1 playing, 2 paused, 3 over
+dt_score:       dc.w    0
+dt_lines:       dc.w    0
+dt_level:       dc.w    1
+dt_next:        dc.w    0
+        even
+dt_board:       ds.b    DT_COLS*DT_ROWS
         even
 npbuf:          ds.b    NBUF                ; Notepad edit buffer
 npline:         ds.b    40                  ; one rendered line + NUL

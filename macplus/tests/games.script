@@ -1,0 +1,18 @@
+# UnoDOS/MacPlus games regression (M3). Capture after a key so the frame is
+# a completed redraw (the continuous game loop can otherwise be caught mid-paint).
+# Run: ./build.sh && python3 harness.py build/unodos_macplus.dsk shots < tests/games.script
+wait 90
+dblclick 52 96               # open Dostris (icon/proc 5, row 1)
+wait 8
+key n                        # new game: spawn a piece, gravity starts
+wait 6
+key left
+wait 3
+shot g_dostris_play          # board border + falling piece + score panel
+key up                       # rotate
+key right
+wait 3
+key space                    # hard drop -> lands, scores, next spawns
+wait 6
+shot g_dostris_drop
+quit
