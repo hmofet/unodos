@@ -5,6 +5,23 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Window-click fix + Paint polish] - 2026-06-12
+
+- **Click-through bug fixed (Genesis + Amiga)**: `find_window_at`
+  returned window HITS with stale condition flags (the final bounds
+  compare is negative for any hit), so the caller's `bmi` sent every
+  window click to the desktop. Latent since milestone 1 on both
+  bare-metal 68K ports — the AUTOTESTs drive key handlers directly
+  and only ever clicked a desktop icon, so the first real window
+  click happened on physical Genesis hardware. Fixed with an
+  explicit `tst.w d2` at the routine's exit; AUTOTEST_CLICK now also
+  closes a window through its close box as the regression guard.
+- Paint's canvas is now **white** (the MacPaint expectation) on
+  Genesis, Amiga and x86; default pens adjusted to stay visible.
+- Genesis pad-first controls and labels: Files X = delete, Tracker
+  X = clear cell, Paint Y = next tool / X = next pen; footers name
+  pad buttons (bare letters = soft-keyboard taps).
+
 ## [Cross-platform parity wave 2] - 2026-06-12
 
 ### Paint everywhere, Tracker everywhere, Mac multitasking + PC disks

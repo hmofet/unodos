@@ -2,8 +2,8 @@
 
 How the five targets compare, feature by feature. x86 is the reference
 implementation; the 68K ports are rewrites against
-[PORT-SPEC.md](PORT-SPEC.md). Updated 2026-06-12 (x86 v3.26.0 build
-405; Amiga M3; Mac M2.5; Genesis M6).
+[PORT-SPEC.md](PORT-SPEC.md). Updated 2026-06-12 (x86 v3.27.0 build
+406; Amiga M3+; Mac M3; Genesis M6+, real-hardware validated).
 
 ## Platform / kernel
 
@@ -34,7 +34,7 @@ implementation; the 68K ports are rewrites against
 |---|---|---|---|---|---|
 | Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W, rename/copy | FAT12 on DF1 (PC-interchangeable), read + write/create | HFS + **PC FAT12 floppy R/W** | HFS + **PC FAT12 floppy R/W** | USV1 mini-FS in 8KB battery SRAM |
 | Extra media | settings persistence (SETTINGS.CFG) | — | subdirectory navigation | subdirectory navigation | tape/WAV (1-bit AFSK via PSG + comparator); **Sega CD backup RAM** (Mode-1 Sub-CPU + BIOS BURAM, shared Sega directory) |
-| Save UX | system save dialogs | Notepad F1, Tracker s/l | Cmd-S | Cmd-S | Notepad F1 to active volume, Files `v` volume toggle, Tracker s/l + t/y |
+| Save UX | system save dialogs | Notepad F1, Tracker/Paint s/l | Cmd-S (HFS or the PC volume), Files `V` toggle | Cmd-S, Files `V` toggle | Notepad F1 to active volume, Files `v` toggle, Tracker s/l + t/y, Paint t/y |
 | Planned | — | FAT12 delete/rename polish | — | — | SD card over bit-banged SPI (adapter PCB) |
 
 ## Audio
