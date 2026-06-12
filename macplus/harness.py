@@ -121,6 +121,8 @@ class Mac:
         # --- Start Manager
         mu.mem_write(0x824, struct.pack(">I", SCRN))      # ScrnBase
         mu.mem_write(0x108, struct.pack(">I", RAM_SIZE))  # MemTop
+        mu.mem_write(0x2AE, struct.pack(">I", 0x60400))   # ROMBase (fake)
+        mu.mem_write(0x60408, struct.pack(">H", 0x0075))  # ROM version: Plus
         boot = self.disk[:1024]
         assert boot[0:2] == b"\x4c\x4b", "no LK signature on disk"
         mu.mem_write(BOOT_AT, boot)

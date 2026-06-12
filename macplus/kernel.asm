@@ -54,9 +54,17 @@ SCCW_A      equ $BFFFFB
 LM_SCRNBASE equ $824                ; -> top-left of the 1-bit framebuffer
 LM_MEMTOP   equ $108                ; physical RAM top
 
+; geometry: build-variant constants. Plus/SE = 512x342 (default);
+; ./build.sh mac2 overrides for the Mac II class (640x480, 80 B/row).
+        ifnd SCRW
 SCRW        equ 512
+        endc
+        ifnd SCRH
 SCRH        equ 342
+        endc
+        ifnd ROWB
 ROWB        equ 64                  ; bytes per row
+        endc
 
 ; keyboard protocol
 KB_INQUIRY  equ $10                 ; poll for key events (waits ~0.25s)
@@ -102,7 +110,31 @@ start2:
         or.w    #$0700,sr           ; boot blocks ran us in supervisor mode
         lea     STACKTOP,sp
 
-        ; quiet + take over the VIA: SR/CA1 ints only, PB3-5 inputs
+        ; machine detect: ROM version word at ROMBase+8. $75 = Mac Plus
+        ; (M0110 keyboard + SCC quadrature mouse, we own the hardware).
+        ; Anything newer (SE $76, II $78, ...) has an ADB input stack in
+        ; ROM - we chain its interrupt handler and mirror the low-mem
+        ; state it maintains (Ticks/KeyMap/RawMouse/MBState) instead of
+        ; touching the VIA/SCC (whose addresses differ on the II class).
+        lea     vars(pc),a4
+        move.l  $2AE,a0             ; ROMBase
+        move.w  8(a0),d0
+        cmp.w   #$75,d0
+        beq     .plus_hw
+        st      rom_mode-vars(a4)
+.plus_hw:
+
+        ; fault vectors are ours in both modes
+        lea     berr_h(pc),a0
+        move.l  a0,$8.w             ; bus error
+        move.l  a0,$C.w             ; address error
+        lea     ill_h(pc),a0
+        move.l  a0,$10.w            ; illegal instruction
+
+        move.b  rom_mode(pc),d0
+        bne     .rom_input
+
+        ; ---- Mac Plus: take the VIA + SCC over completely
         move.b  #$7F,VIA_IER        ; disable all VIA interrupts
         move.b  #$7F,VIA_IFR        ; clear pending flags
         move.b  VIA_DDRB,d0
@@ -118,11 +150,20 @@ start2:
         move.l  a0,$64.w
         lea     isr_lvl2(pc),a0     ; SCC: mouse quadrature
         move.l  a0,$68.w
-        lea     berr_h(pc),a0
-        move.l  a0,$8.w             ; bus error
-        move.l  a0,$C.w             ; address error
-        lea     ill_h(pc),a0
-        move.l  a0,$10.w            ; illegal instruction
+        bra     .input_done
+
+.rom_input:
+        ; ---- SE and later: keep the ROM's interrupt world alive (ADB),
+        ; run our per-tick mirror first, then fall through to its handler
+        move.l  $64.w,d0
+        move.l  d0,old_lvl1-vars(a4)
+        move.l  $186,d0             ; baseline KeyTime (ignore boot keys)
+        move.l  d0,keytime_l-vars(a4)
+        move.w  #$FFEF,$144         ; SysEvtMask: queue everything but
+                                    ; keyUps (classic everyEvent-keyUp)
+        lea     isr_lvl1_rom(pc),a0
+        move.l  a0,$64.w
+.input_done:
 
         ; screen base from the ROM's low-mem global (varies with RAM size)
         move.l  LM_SCRNBASE,d0
@@ -132,6 +173,9 @@ start2:
         move.l  d0,rawm_last-vars(a4)
 
         ; SCC: enable DCD ext/status interrupts on both channels
+        ; (Plus only - in ROM mode the SCC belongs to the ROM)
+        move.b  rom_mode(pc),d0
+        bne     .noscc
         move.b  SCCR_A,d0           ; sync the pointer state
         bsr     scc_init_ch_a
         bsr     scc_init_ch_b
@@ -147,12 +191,14 @@ start2:
         lsr.b   #3,d0
         and.b   #1,d0
         move.b  d0,scc_yprev-vars(a4)
-
+.noscc:
         bsr     clear_screen        ; desktop gray
         bsr     draw_desktop
 
+        move.b  rom_mode(pc),d0
+        bne     .noier              ; ROM mode: its IER is already live
         move.b  #$86,VIA_IER        ; enable CA1 (bit1) + SR (bit2)
-        and.w   #$F8FF,sr           ; allow interrupts (stay supervisor)
+.noier: and.w   #$F8FF,sr           ; allow interrupts (stay supervisor)
 
         ifd     AUTOTEST
         moveq   #0,d0               ; SysInfo (bottom)
@@ -214,12 +260,44 @@ main_loop:
         bsr     cur_draw
         bra     main_loop
 .work:  bsr     cur_erase
+        bsr     kb_os_poll          ; ROM mode: drain the OS event queue
         bsr     handle_clicks
         bsr     handle_drag
         bsr     handle_events
         bsr     app_ticks
         bsr     cur_draw
         bra     main_loop
+
+; kb_os_poll - ROM-assisted keyboard: the ROM's ADB stack PostEvents
+; key-downs into the OS event queue; _GetOSEvent is the sanctioned
+; consumer (our INT 16h). Translate via the keymaps and feed our queue
+; (interrupts masked: the tick ISR also produces into it).
+kb_os_poll:
+        move.b  rom_mode(pc),d0
+        beq     .out
+        movem.l d0-d7/a0-a1,-(sp)
+        moveq   #3,d7               ; at most 4 events per pass
+.loop:  lea     evtbuf(pc),a0
+        clr.w   (a0)
+        move.w  #$FFFF,d0           ; consume EVERY type (keep queue clean)
+        dc.w    $A031               ; _GetOSEvent
+        lea     evtbuf(pc),a0
+        move.w  (a0),d0             ; what: 0 = null event
+        beq     .done
+        cmp.w   #3,d0               ; keyDown
+        beq     .key
+        cmp.w   #5,d0               ; autoKey
+        bne     .next               ; mouse etc: ours already, discard
+.key:   move.w  4(a0),d0            ; message low word: (key<<8) | char
+        lsr.w   #8,d0
+        and.w   #$7F,d0
+        move.w  sr,-(sp)
+        or.w    #$0700,sr
+        bsr     km_key
+        move.w  (sp)+,sr
+.next:  dbra    d7,.loop
+.done:  movem.l (sp)+,d0-d7/a0-a1
+.out:   rts
 
 ; ----------------------------------------------------------------------------
 ; handle_events - drain the queue (keyboard navigation)
@@ -1799,6 +1877,87 @@ kb_byte:
 .out:   movem.l (sp)+,d0-d3/a0-a1
         rts
 
+; level 1 in ROM-assisted mode (SE and later): the ROM's chained handler
+; runs its ADB/VIA stack and maintains Ticks/KeyMap/RawMouse/MBState in
+; low memory; we mirror those into kernel state, then fall through to it.
+; No VIA/SCC access here - their addresses differ across machines.
+isr_lvl1_rom:
+        movem.l d0-d7/a0-a1,-(sp)
+        lea     vars(pc),a1
+        move.l  $16A,d0             ; low-mem Ticks (ROM-maintained)
+        cmp.l   ticks(pc),d0
+        beq     .chain              ; same tick: nothing to mirror yet
+        move.l  d0,ticks-vars(a1)
+        ; button: MBState ($172): $80 = up, $00 = down
+        moveq   #0,d1
+        tst.b   $172
+        bne     .btn
+        moveq   #1,d1
+.btn:   move.b  mouse_btn(pc),d2
+        move.b  d1,mouse_btn-vars(a1)
+        cmp.b   d2,d1
+        beq     .mouse
+        tst.b   d1
+        beq     .post
+        move.w  mouse_x(pc),d3
+        move.w  d3,click_x-vars(a1)
+        move.w  mouse_y(pc),d3
+        move.w  d3,click_y-vars(a1)
+        addq.b  #1,click_seq-vars(a1)
+.post:  moveq   #0,d2
+        move.b  d1,d2
+        move.w  d2,d1
+        moveq   #EV_MOUSE,d0
+        bsr     ev_post
+.mouse: ; absolute position from RawMouse ($82C: v.w, h.w)
+        move.l  $82C,d3
+        cmp.l   rawm_last(pc),d3
+        beq     .keys
+        move.l  d3,rawm_last-vars(a1)
+        move.w  d3,d0
+        bge     .axp
+        moveq   #0,d0
+.axp:   cmp.w   #SCRW-1,d0
+        ble     .axok
+        move.w  #SCRW-1,d0
+.axok:  move.w  d0,mouse_x-vars(a1)
+        swap    d3
+        move.w  d3,d0
+        bge     .ayp
+        moveq   #0,d0
+.ayp:   cmp.w   #SCRH-1,d0
+        ble     .ayok
+        move.w  #SCRH-1,d0
+.ayok:  move.w  d0,mouse_y-vars(a1)
+.keys:  ; keyboard is consumed in the main loop via _GetOSEvent (the
+        ; ROM's PostEvent runs in the chained handler below)
+.chain: movem.l (sp)+,d0-d7/a0-a1
+        move.l  old_lvl1(pc),-(sp)  ; fall through to the ROM's handler
+        rts                         ; (it acks the VIA and RTEs)
+
+; km_key - d0.w = Mac virtual key code (ADB page included; same space
+; as the M0110A scan codes our keymaps already cover)
+km_key:
+        movem.l d0-d3/a0-a1,-(sp)
+        ifd     AUTOTEST
+        lea     vars(pc),a1
+        move.b  d0,kb_dbg-vars(a1)
+        endc
+        lea     kb_ascii(pc),a0
+        move.b  (a0,d0.w),d3
+        lea     kb_raw(pc),a0
+        moveq   #0,d2
+        move.b  (a0,d0.w),d2
+        lsl.w   #8,d2
+        or.b    d3,d2
+        tst.w   d2                  ; (or.b flags = low byte only)
+        beq     .out
+        move.w  d2,d1
+        moveq   #EV_KEY,d0
+        bsr     ev_post
+.out:   movem.l (sp)+,d0-d3/a0-a1
+        rts
+
 ; level 2: SCC - mouse quadrature (X1 = DCD-A, Y1 = DCD-B)
 isr_lvl2:
         movem.l d0-d3/a0,-(sp)
@@ -1990,8 +2149,13 @@ str_version:    dc.b    "UnoDOS/MacPlus v0.1.0",0
 str_build:      dc.b    "Milestone 1",0
 str_x:          dc.b    "X",0
 str_fault:      dc.b    "FAULT @ ",0
+        ifeq    SCRW-640
+str_si1:        dc.b    "Video   640x480x1",0
+str_si2:        dc.b    "Machine Mac II class",0
+        else
 str_si1:        dc.b    "Video   512x342x1",0
 str_si2:        dc.b    "Machine Mac Plus/SE",0
+        endc
 str_si3:        dc.b    "RAM",0
 str_si4:        dc.b    "Uptime",0
 str_si5:        dc.b    "UnoDOS/MacPlus  Milestone 1",0
@@ -2102,7 +2266,13 @@ zlist:          ds.b    MAXWIN
 wintab:         ds.b    MAXWIN*WENT_SIZE
 numbuf:         ds.b    16
 clkbuf:         ds.b    12
+evtbuf:         ds.b    16          ; OS event record (kb_os_poll)
 cur_save:       ds.b    3*CURSOR_H
+        even
+old_lvl1:       dc.l    0           ; ROM's level-1 handler (chained)
+keytime_l:      dc.l    0           ; last seen KeyTime ($186)
+rom_mode:       dc.b    0           ; 0 = Plus hardware, 1 = ROM-assisted
+                dc.b    0
         even
 
         end
