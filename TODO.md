@@ -259,3 +259,18 @@ Next steps:
       verified intact; Mini vMac renders the same frame correctly). Suspect
       draw_char 2-byte RMW vs injection boundary; purely a harness
       fidelity issue, does not affect real hardware
+
+## Future ports (roadmap only - not started)
+- [ ] Apple II port (6502, 40-col text / hi-res; UnoDOS desktop feasibility
+      study first - PORT-SPEC assumes a pointer + bitmapped screen)
+- [ ] Apple IIGS port (65C816, Super Hi-Res 320/640, ADB mouse/keyboard,
+      Ensoniq audio - closest 8/16-bit fit to the portable core)
+
+## Platform-authentic chrome (2026-06-12 direction)
+- [x] Mac ports: classic Mac / System 7 look (shadows, pinstriped active
+      title, square close box)
+- [ ] Amiga: Workbench-style chrome (blue/orange/white gadget look)
+- [ ] x86 VGA (486): Windows 3.x-style chrome (3D bevels, solid title bar)
+- [ ] x86 CGA (8088): same design language reduced to 4 colors
+- [ ] Genesis: console-flavored chrome (after real-hardware regression risk
+      is weighed - port is hardware-validated as-is)
