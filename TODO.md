@@ -274,3 +274,9 @@ Next steps:
 - [ ] x86 CGA (8088): same design language reduced to 4 colors
 - [ ] Genesis: console-flavored chrome (after real-hardware regression risk
       is weighed - port is hardware-validated as-is)
+- [ ] x86 chrome status (2026-06-12): VGA already ships the Windows-3.x
+      3D widget_style; CGA ships the flat variant - platform-authentic
+      as-is. Follow-ups: (a) qemu_test.py key/click injection didn't land
+      this session (boot+render fine) - re-check the QEMU input workaround;
+      (b) optional VGA window drop shadows need the dirty-rect/move-erase
+      interaction solved first
