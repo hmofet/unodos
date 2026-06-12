@@ -78,7 +78,7 @@ EVENT_WIN_REDRAW        equ 6
 
 PT_W                    equ 224
 PT_H                    equ 120
-PT_BG                   equ 0
+PT_BG                   equ 3
 CAN_X                   equ 30
 CAN_Y                   equ 4
 TOOLS                   equ 10
@@ -1300,7 +1300,7 @@ quit_flag:      db 0
 picker_on:      db 0
 mode_colors:    db 4
 cur_tool:       db 0
-cur_color:      db 3
+cur_color:      db 2
 mountb:         db 0
 fileh:          db 0
 tmp_c:          db 0

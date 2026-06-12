@@ -353,6 +353,8 @@ tracker_key:
         beq     .instr
         cmp.b   #'x',d1
         beq     .clear
+        cmp.b   #8,d1               ; X button (Backspace) = clear cell
+        beq     .clear
         cmp.b   #'d',d1
         beq     .demo
         cmp.b   #'s',d1
@@ -494,7 +496,7 @@ str_tk_ch1:     dc.b    "Ch1",0
 str_tk_ch2:     dc.b    "Ch2",0
 str_tk_ch3:     dc.b    "Ch3",0
 str_tk_ch4:     dc.b    "Nz",0
-str_tk_foot1:   dc.b    "q/w:note e:inst x:clr d:demo",0
+str_tk_foot1:   dc.b    "q/w:note e:inst X:clr d:demo",0
 str_tk_foot2:   dc.b    "Y:play s/l:sram t/y:tape",0
 str_tk_song:    dc.b    "SONG.TRK",0,0,0,0
         even

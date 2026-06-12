@@ -1029,7 +1029,8 @@ find_window_at:
         add.w   WH(a2),d3
         cmp.w   d3,d1
         bge     .next
-.out:   rts
+.out:   tst.w   d2                  ; N must mirror the result: the hit
+        rts                         ; path falls in with stale cmp flags
 .next:  subq.w  #1,d2
         bra     .scan
 
@@ -2204,7 +2205,7 @@ tk_playing:     dc.b    0
         even
 tk_last:        dc.l    0
 pt_tool:        dc.w    0           ; paint: active tool
-pt_pen:         dc.w    3           ; paint: active pen (white)
+pt_pen:         dc.w    2           ; paint: active pen (the bg is white)
 pt_lsz:         dc.w    0           ; paint: stroke size / filled flag
 pt_ldx:         dc.w    0           ; paint: bresenham dx
 pt_err:         dc.w    0           ; paint: bresenham error / scratch
