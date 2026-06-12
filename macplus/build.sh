@@ -12,11 +12,17 @@ mkdir -p build
 echo "[1/4] generating shared data (font/icons) from x86 tree assets..."
 (cd .. && "$PY" amiga/mkdata.py amiga/gen_data.i)
 
-if [ "$1" = "test" ]; then
-    DEF="-DAUTOTEST=1"; KERN=build/kernel_test.bin; DSK=build/unodos_macplus_test.dsk
-else
-    DEF=""; KERN=build/kernel.bin; DSK=build/unodos_macplus.dsk
-fi
+case "$1" in
+  test)
+    DEF="-DAUTOTEST=1"; KERN=build/kernel_test.bin; DSK=build/unodos_macplus_test.dsk ;;
+  mac2)
+    # Mac II class: 640x480 1-bit, 80 bytes/row (ROM-assisted input mode)
+    DEF="-DSCRW=640 -DSCRH=480 -DROWB=80"; KERN=build/kernel_mac2.bin; DSK=build/unodos_mac2.dsk ;;
+  mac2test)
+    DEF="-DAUTOTEST=1 -DSCRW=640 -DSCRH=480 -DROWB=80"; KERN=build/kernel_mac2_test.bin; DSK=build/unodos_mac2_test.dsk ;;
+  *)
+    DEF=""; KERN=build/kernel.bin; DSK=build/unodos_macplus.dsk ;;
+esac
 
 echo "[2/4] assembling boot blocks..."
 "$VASM" -Fbin -m68000 -nosym -o build/boot.bin boot.asm
