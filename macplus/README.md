@@ -1,4 +1,4 @@
-# UnoDOS/MacPlus — standalone OS for compact 68000 Macs (milestone 2)
+# UnoDOS/MacPlus — standalone OS for compact 68000 Macs (milestone 3)
 
 This is the Mac port done the way the other UnoDOS ports are done: **a real
 operating system**, not an application. The Mac ROM bootstraps our boot
@@ -179,10 +179,29 @@ set the monitor to **B&W (1-bit)** until the color milestone.
   input (Plus M0110/SCC vs. SE/II ROM-assisted ADB) and the Mac II 640x480
   geometry variant. System 7-style window chrome (drop shadows, pinstriped
   active title bar, square close box).
-- **M2 (this)**: the UnoDOS floppy filesystem (FAT12, shared layout with
+- **M2**: the UnoDOS floppy filesystem (FAT12, shared layout with
   the x86 port) read **and written** through the .Sony BIOS layer; the
   **Files** and **Notepad** apps; and **disk-loaded app binaries** — the
   launcher reads an app image off the floppy into `$40000` and runs it via
   a position-independent ksys-table ABI, like the x86 launcher reads .BINs.
-- **M3+**: sound (the Plus pulse-width sound buffer), Theme equivalent
-  (dither schemes), Tracker, games, scheduler, Paint — Amiga parity.
+- **M3 (this) — full app parity** with the Amiga/Genesis ports:
+  - **Sound** ([snd.i](snd.i)): the classic Mac pulse-width buffer (370
+    words at MemTop−$300, high byte per word = sample at 22.257 kHz;
+    the low bytes are the .Sony disk PWM and are never touched). Square
+    synth from the shared Paula note periods; machine-gated — Plus gets
+    full VIA control (PB7 enable + volume), the SE is buffer-only (its
+    VIA belongs to the ROM ADB stack), the Mac II class is silent (ASC).
+  - **Games**: Dostris, OutLast, Pac-Man — verbatim logic/tables, 1-bit
+    rendering schemes (dither-density ghost identities, white road on
+    dithered grass, hollow frightened shells).
+  - **Paint**: the MacPaint-style editor with the platform's true gamut —
+    the four dither inks; `PAINT.UNO` round-trips byte-exact to the floppy.
+  - **Music** (square sequencer + staff view) and **Tracker** (shared
+    byte-identical pattern format, leftmost-voice playback like the
+    x86 PC-speaker port, `SONG.UNO` on the floppy).
+  - **Theme**: 1-bit dither schemes through the mutable `pat_tab` —
+    six presets including a full video invert, applied live.
+  - **Cooperative scheduler** ([scheduler.i](scheduler.i)): every window
+    runs its app in a private-2KB-stack task with one-slot mailboxes;
+    keys post with a bounded yield-retry, game physics run as task ticks.
+- **Next**: the 8bpp color milestone for the Mac II class (IIci).
