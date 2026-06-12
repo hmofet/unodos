@@ -260,8 +260,24 @@ Next steps:
 - [ ] M2 real-hardware risk: .Sony _Read/_Write *after* the kernel has
       taken the VIA/SCC is harness- and spec-validated but unproven on
       metal (the boot-time _Read path is). Watch this on the SE/IIci run.
-- [ ] M3+: sound (Plus pulse-width buffer), Theme-as-dither-schemes,
-      Tracker, games, scheduler, Paint — Amiga parity
+### M3: bring macplus up to full app parity (2026-06-12 direction)
+Port the remaining apps from the Amiga/Genesis feature set to the 1-bit
+standalone Mac. Other ports have all of these; macplus has 5 of 11 apps.
+- [ ] Sound foundation: the Mac Plus pulse-width sound buffer (370-word
+      buffer near MemTop, high byte/word = sample; VIA PB7 sound enable).
+      Square-wave synth path the way Paula/PSG/PC-speaker do on the others.
+- [ ] Cooperative scheduler (port amiga/scheduler.i): per-window tasks,
+      private 2KB stacks, one-slot mailboxes, 68K movem context switch.
+- [ ] Music app (square-wave sequencer + staff view; Canon in D demo)
+- [ ] Tracker (32-row pattern editor; byte-identical .TRK format; save to
+      the FAT12 disk via the M2 file path)
+- [ ] Theme app — 1-bit analog: desktop dither-pattern schemes + (once the
+      cross-platform chrome work lands) the window-chrome style picker
+- [ ] Paint (1-bit dither-pattern variant, like the Classic Mac target)
+- [ ] Games: Dostris, OutLast, Pac-Man (same tables/physics/AI as x86,
+      rendered to the 512x342 1-bit framebuffer)
+- [ ] Color milestone (orthogonal): 8bpp framebuffer for the IIci, which
+      then unlocks full-color Theme/Paint/games on that machine
 - [ ] Real-hardware / Mini vMac validation (needs a user-supplied Mac
       Plus ROM dump at macplus/vMac.ROM). Calibration points: mouse
       quadrature polarity (flip eor sense in isr_lvl2 if an axis is
@@ -275,11 +291,41 @@ Next steps:
       draw_char 2-byte RMW vs injection boundary; purely a harness
       fidelity issue, does not affect real hardware
 
-## Future ports (roadmap only - not started)
-- [ ] Apple II port (6502, 40-col text / hi-res; UnoDOS desktop feasibility
-      study first - PORT-SPEC assumes a pointer + bitmapped screen)
-- [ ] Apple IIGS port (65C816, Super Hi-Res 320/640, ADB mouse/keyboard,
-      Ensoniq audio - closest 8/16-bit fit to the portable core)
+## Cross-platform chrome themes (2026-06-12 direction)
+Make the window-decoration LOOK a selectable theme on EVERY platform, not a
+hardcoded per-port style. So an Amiga can wear the Mac System 7 look, a PC
+the Amiga Workbench look, etc. This is a distinct axis from the color-palette
+"Theme" app (slot palettes) - it is the draw_window chrome style.
+- [ ] Define a portable chrome-style id (0=Mac System 7, 1=Amiga Workbench,
+      2=Windows 3.x, 3=Windows XP) + a shared spec in docs/PORT-SPEC.md
+- [ ] Refactor each port's draw_window to branch on the style and implement
+      ALL styles (each port currently hardcodes its own one):
+      kernel/ (x86 VGA+CGA), amiga/, mac/ (hosted), genesis/, macplus/
+- [ ] NEW Windows XP "Luna" style: blue gradient title bar, rounded top
+      corners, the red close button, 3D raised frame (degrades to flat +
+      2-color on CGA/1-bit/Genesis CRAM)
+- [ ] Expose the picker in each port's Theme/Appearance app; persist the
+      choice with the palette/theme settings
+- [ ] Per-platform color degradation table (XP gradient -> dither on 1-bit,
+      4-color on CGA, CRAM ramps on Genesis)
+
+## New ports in progress (2026-06-12 direction)
+- [ ] Apple IIGS port (65C816, Super Hi-Res 320x200x4bpp / 640x200, ADB
+      mouse + keyboard, Ensoniq DOC audio) - closest 8/16-bit fit to the
+      portable core; START HERE of the two (true bitmap + pointer + color).
+      Boot via ProDOS-loaded binary or a bootable disk image; desktop + WM
+      + SysInfo/Clock first (the macplus M1 shape), then storage, then apps.
+- [ ] Apple II port (6502, feasibility study FIRST per PORT-SPEC: 280x192
+      hi-res monochrome-ish, no native pointer - mouse via the AppleMouse
+      card or keyboard-driven cursor; double-hi-res 16-color on //e/IIc).
+      The 6502 + 8KB-ish RAM envelope is the real risk; may land as a
+      cut-down "UnoDOS Lite" (text desktop) rather than full parity.
+
+## Roadmap (not started)
+- [ ] SNES port (65C816 like the IIGS, so the IIGS port paves the way):
+      Mode 1/3 backgrounds for the desktop, OBJ sprite cursor, SPC700 audio,
+      controller-as-pointer + soft keyboard (the Genesis input model), SRAM
+      storage. Start AFTER the Apple II + IIGS ports are complete.
 
 ## Platform-authentic chrome (2026-06-12 direction)
 - [x] Mac ports: classic Mac / System 7 look (shadows, pinstriped active
