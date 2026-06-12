@@ -12,13 +12,7 @@
 
 DOSTRIS_PROC equ 5
 
-; ---- game-music stubs (Plus pulse-width sound is a later M3 item) ----
-gm_start:
-        rts
-gm_stop:
-        rts
-gm_tick:
-        rts
+; (gm_start/gm_stop/gm_tick are the real sequencer in snd.i now)
 
 ; ---- continuous-tick glue -------------------------------------------------
 ; tick_wanted -> d0 != 0 when the topmost window is a game that needs the
