@@ -116,7 +116,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 11                  ; rows: 5 + 5 + Tracker
+NICONS      equ 12                  ; rows: 5 + 5 + Tracker Theme
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -194,6 +194,11 @@ start2:
 
         bsr     snd_init            ; pulse-width sound buffer (machine-gated)
         bsr     sched_init          ; milestone 3: cooperative tasks
+        ; default dither scheme into the mutable pat_tab (Theme rewrites it)
+        lea     pat_default(pc),a0
+        lea     pat_tab(pc),a1
+        move.l  (a0)+,(a1)+
+        move.l  (a0),(a1)
         clr.l   $110                ; StkLowPt: disable the ROM stack
                                     ; sniffer (task stacks live at $3C000)
 
@@ -1166,7 +1171,11 @@ app_draw_content:
         beq     .pnt
         cmp.w   #9,d0
         beq     .mus
-        bsr     tracker_draw        ; proc 10: Tracker
+        cmp.w   #10,d0
+        beq     .trk
+        bsr     theme_draw          ; proc 11: Theme
+        bra     .done
+.trk:   bsr     tracker_draw        ; proc 10: Tracker
         bra     .done
 .mus:   bsr     music_draw          ; proc 9: Music
         bra     .done
@@ -1351,19 +1360,38 @@ fmt_u16:
 ; ============================================================================
 ; UnoDOS logical colors -> row-dither patterns (2 bytes, even/odd rows):
 ;   0 = white, 1 = 25% gray, 2 = 50% gray (the desktop), 3 = black
-pat_tab:
+; pat_tab itself is MUTABLE (in vars) - the Theme app rewrites it; this
+; is the boot default, copied over at startup.
+pat_default:
         dc.b    $00,$00             ; 0: white
         dc.b    $88,$22             ; 1: light gray
         dc.b    $AA,$55             ; 2: medium gray
         dc.b    $FF,$FF             ; 3: black
 
-; clear_screen - desktop gray (50% dither, phase-locked to absolute y)
+; clear_screen - desktop fill from pat_tab color 2 (theme-aware),
+; phase-locked to absolute y
 clear_screen:
-        movem.l d0-d3/a0,-(sp)
+        movem.l d0-d3/a0-a1,-(sp)
         move.l  scrn(pc),a0
+        lea     pat_tab(pc),a1
+        ; d1 = even-row byte x4, d2 = odd-row byte x4
+        moveq   #0,d1
+        move.b  4(a1),d1
+        move.w  d1,d2
+        lsl.w   #8,d1
+        or.w    d2,d1               ; word = bb
+        move.w  d1,d2
+        swap    d1
+        move.w  d2,d1               ; long = bbbb
+        moveq   #0,d2
+        move.b  5(a1),d2
+        move.w  d2,d3
+        lsl.w   #8,d2
+        or.w    d3,d2
+        move.w  d2,d3
+        swap    d2
+        move.w  d3,d2
         move.w  #SCRH/2-1,d0
-        move.l  #$AAAAAAAA,d1
-        move.l  #$55555555,d2
 .rows:  moveq   #ROWB/4-1,d3
 .r0:    move.l  d1,(a0)+
         dbra    d3,.r0
@@ -1371,7 +1399,7 @@ clear_screen:
 .r1:    move.l  d2,(a0)+
         dbra    d3,.r1
         dbra    d0,.rows
-        movem.l (sp)+,d0-d3/a0
+        movem.l (sp)+,d0-d3/a0-a1
         rts
 
 ; fill_rect - d0=x d1=y d2=w d3=h d4=color(0-3). Preserves all registers.
@@ -2253,6 +2281,7 @@ ev_get:
         include "paint.i"
         include "music.i"
         include "tracker.i"
+        include "theme.i"
         include "scheduler.i"
 
 ; ============================================================================
@@ -2315,19 +2344,21 @@ app_def_tab:
         dc.w    95,68,312,192,  str_t_paint-start
         dc.w    140,100,240,120, str_t_music-start
         dc.w    100,80,312,180, str_t_tracker-start
+        dc.w    150,110,210,116, str_t_theme-start
 
 icon_tab:
         dc.l    icon_sysinfo
         dc.l    icon_clock
         dc.l    icon_files
         dc.l    icon_notepad
-        dc.l    icon_theme          ; Demo (placeholder art)
+        dc.l    icon_files          ; Demo (disk-loaded app: disk art)
         dc.l    icon_dostris
         dc.l    icon_pacman
         dc.l    icon_outlast
         dc.l    icon_paint
         dc.l    icon_music
         dc.l    icon_tracker
+        dc.l    icon_theme
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2340,6 +2371,7 @@ name_tab:
         dc.l    name_paint
         dc.l    name_music
         dc.l    name_tracker
+        dc.l    name_theme
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2463,6 +2495,12 @@ tk_playing:     dc.b    0
                 dc.b    0
         even
 tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; the pattern (256 bytes)
+; ---- Theme (proc 11) ----
+        even
+pat_tab:        ds.b    8           ; MUTABLE dither patterns (boot copies
+                                    ; pat_default; Theme presets rewrite)
+th_sel:         dc.w    0           ; selected preset row
+th_cur:         dc.w    0           ; applied preset
 ; ---- scheduler (M3) ----
         even
 cur_task:       dc.w    0           ; running task index (0 = kernel)

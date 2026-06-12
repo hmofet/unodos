@@ -50,4 +50,24 @@ wait 6
 key s                        # save SONG.UNO to the floppy
 wait 40
 shot m3_tracker_saved
+key esc                      # close Tracker
+wait 3
+dblclick 132 144             # open Theme (icon/proc 11, row 2)
+wait 8
+key down
+key down
+key down
+key down
+key down
+key enter                    # apply Inverted: full video invert, live
+wait 12
+shot m3_theme_inverted
+key up
+key up
+key up
+key up
+key up
+key enter                    # back to Classic
+wait 12
+shot m3_theme_restored
 quit
