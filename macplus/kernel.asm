@@ -35,6 +35,25 @@
 KERNBASE    equ $20000
 STACKTOP    equ $78000              ; our stack, below any screen base
 
+; Large kernel buffers live OUTSIDE the image at fixed RAM (the Amiga port
+; does the same with chip-RAM equates). Keeps every vars label within the
+; +/-32KB pc-relative window and the disk image small. NOT load-time
+; zeroed - the boot path memsets [KBSS, KBSS_END). Kernel image must stay
+; under KBSS (mkdisk.py asserts).
+KBSS        equ $30000
+npbuf       equ KBSS                ; $800  Notepad edit buffer (NBUF)
+fat_tab     equ KBSS+$800           ; $120  root-dir cache (16*18)
+fat_buf     equ KBSS+$A00           ; $600  whole FAT (3 sectors)
+FATSECBUF   equ KBSS+$1000          ; $200  FAT sector scratch
+sony_pb     equ KBSS+$1200          ; $40   .Sony ParamBlockRec
+dt_board    equ KBSS+$1300          ; $C8   Dostris board (10*20)
+pm_maze     equ KBSS+$1400          ; $2BC  Pac-Man maze (28*25)
+pm_gh       equ KBSS+$1700          ; $1E   ghost records
+pm_old      equ KBSS+$1720          ; $10   pre-step actor positions
+pt_canvas   equ KBSS+$1800          ; $8C00 Paint ink store (256*140)
+pt_stack    equ KBSS+$A400          ; $7F8  flood-fill stack (510*4)
+KBSS_END    equ KBSS+$AC00
+
 ; VIA1 (registers at base + $200*r)
 VIA_ORB     equ $EFE1FE             ; r0:  port B (PB3 btn, PB4 X2, PB5 Y2)
 VIA_DDRB    equ $EFE5FE             ; r2
@@ -97,7 +116,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 8                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man OutLast
+NICONS      equ 9                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man OutLast Paint
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -165,6 +184,12 @@ start2:
         lea     isr_lvl1_rom(pc),a0
         move.l  a0,$64.w
 .input_done:
+
+        ; out-of-image kernel buffers are NOT load-time zeroed: clear them
+        lea     KBSS,a0
+        move.l  #(KBSS_END-KBSS)/4-1,d0
+.zbss:  clr.l   (a0)+
+        dbra    d0,.zbss            ; (fits a word: 11007 iterations)
 
         ; screen base from the ROM's low-mem global (varies with RAM size)
         move.l  LM_SCRNBASE,d0
@@ -344,6 +369,8 @@ handle_events:
         beq     .kpacman
         cmp.w   #7,d0
         beq     .koutlast
+        cmp.w   #8,d0
+        beq     .kpaint
         bra     .next
 .kfiles:
         bsr     files_key
@@ -362,6 +389,9 @@ handle_events:
         bra     .next
 .koutlast:
         bsr     outlast_key
+        bra     .next
+.kpaint:
+        bsr     paint_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -423,9 +453,16 @@ handle_clicks:
         move.w  zcount(pc),d4
         subq.w  #1,d4
         cmp.w   d4,d3
-        beq     .out                ; topmost body: the app's business (M2+)
+        beq     .appclick
         move.w  d3,d0
         bsr     raise_window
+        rts
+.appclick:
+        cmp.b   #8,WPROC(a2)        ; Paint draws with the mouse
+        bne     .out
+        move.w  click_x(pc),d0
+        move.w  click_y(pc),d1
+        bsr     paint_click
         rts
 .title:
         ; close box = rightmost 12px of the bar
@@ -1135,7 +1172,11 @@ app_draw_content:
         beq     .dost
         cmp.w   #6,d0
         beq     .pacm
-        bsr     outlast_draw        ; proc 7: OutLast
+        cmp.w   #7,d0
+        beq     .outl
+        bsr     paint_draw          ; proc 8: Paint
+        bra     .done
+.outl:  bsr     outlast_draw        ; proc 7: OutLast
         bra     .done
 .dost:  bsr     dostris_draw        ; proc 5: Dostris
         bra     .done
@@ -2212,6 +2253,7 @@ ev_get:
         include "diskapp.i"
         include "games.i"
         include "pacman.i"
+        include "paint.i"
 
 ; ============================================================================
 ; Data
@@ -2270,16 +2312,18 @@ app_def_tab:
         dc.w    60,30,262,212,  str_t_dostris-start
         dc.w    110,60,272,196, str_t_pacman-start
         dc.w    96,72,312,180,  str_t_outlast-start
+        dc.w    95,68,312,192,  str_t_paint-start
 
 icon_tab:
         dc.l    icon_sysinfo
         dc.l    icon_clock
         dc.l    icon_files
         dc.l    icon_notepad
-        dc.l    icon_paint
+        dc.l    icon_theme          ; Demo (placeholder art)
         dc.l    icon_dostris
         dc.l    icon_pacman
         dc.l    icon_outlast
+        dc.l    icon_paint
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2289,6 +2333,7 @@ name_tab:
         dc.l    name_dostris
         dc.l    name_pacman
         dc.l    name_outlast
+        dc.l    name_paint
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2420,8 +2465,7 @@ dt_lines:       dc.w    0
 dt_level:       dc.w    1
 dt_next:        dc.w    0
         even
-dt_board:       ds.b    DT_COLS*DT_ROWS
-        even
+; (dt_board is a KBSS equate)
 ; ---- Pac-Man (proc 6) game state ----
 pm_statet:      dc.l    0
 pm_last:        dc.l    0
@@ -2441,10 +2485,7 @@ pm_kills:       dc.w    0
 pm_dots:        dc.w    0
 pm_tmp:         dc.w    0
         even
-pm_gh:          ds.b    3*GSIZE     ; ghost records (x,y,dir,state,timer)
-pm_old:         ds.b    8*2         ; pre-step actor positions (4 x/y pairs)
-pm_maze:        ds.b    PM_COLS*PM_ROWS
-        even
+; (pm_gh / pm_old / pm_maze are KBSS equates)
 ; ---- OutLast (proc 7) game state ----
 ol_z:           dc.l    0           ; camera world position
 ol_last:        dc.l    0
@@ -2462,13 +2503,25 @@ ol_state:       dc.w    0           ; 0 title, 1 driving, 2 over
 ol_roadl:       dc.w    0           ; road edges at the car strip
 ol_roadr:       dc.w    296
         even
-npbuf:          ds.b    NBUF                ; Notepad edit buffer
+; ---- Paint (proc 8) state ----
+pt_tool:        dc.w    0           ; selected tool (PTT_*)
+pt_pen:         dc.w    3           ; current ink: black (MacPaint default)
+pt_lsz:         dc.w    0           ; line dot size / shape filled flag
+pt_ldx:         dc.w    0           ; Bresenham dx
+pt_err:         dc.w    0           ; Bresenham error / isqrt scratch
+pt_rnd:         dc.w    $ACE1       ; spray LFSR
+pt_px0:         dc.w    0           ; rubber-band anchor
+pt_py0:         dc.w    0
+pt_px1:         dc.w    0           ; rubber-band end
+pt_py1:         dc.w    0
+pt_band:        dc.b    0           ; band currently drawn
+pt_init:        dc.b    0           ; canvas cleared once
+pt_chbuf:       dc.b    0,0         ; tool digit scratch
+; (pt_canvas / pt_stack are KBSS equates)
+        even
 npline:         ds.b    40                  ; one rendered line + NUL
 npstat:         ds.b    48                  ; status row scratch
-fat_tab:        ds.b    FAT_MAXFILES*18     ; root-dir cache (11 name+1 attr+4 size+2 cl)
-fat_buf:        ds.b    1536                ; whole FAT (3 sectors max)
-FATSECBUF:      ds.b    512                 ; one-sector scratch for FAT I/O
-sony_pb:        ds.b    64                  ; .Sony ParamBlockRec
+; (npbuf / fat_tab / fat_buf / FATSECBUF / sony_pb are KBSS equates)
         even
 
         end

@@ -22,6 +22,9 @@ assert boot[0:2] == b"\x4c\x4b", "boot blocks missing 'LK' signature"
 
 ksize = (len(kern) + SECTOR - 1) // SECTOR * SECTOR
 assert 1024 + ksize <= DISK, "kernel too large for an 800K disk"
+# the kernel loads at $20000 and must stay below KBSS ($30000), where the
+# out-of-image buffers live (sync: kernel.asm KBSS)
+assert len(kern) <= 0x10000, f"kernel ({len(kern)}B) would overlap KBSS at +64KB"
 
 at = boot.find(b"KSIZ")
 assert at > 0, "ioReqCount placeholder 'KSIZ' not found in boot blocks"

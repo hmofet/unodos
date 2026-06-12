@@ -1,0 +1,29 @@
+# UnoDOS/MacPlus milestone-3 apps regression: Paint.
+# Drag note: hold the button (wait) before/after moveto so the kernel's
+# synchronous drag loop is entered while the button is down - tool-select
+# repaints take ~30 ticks. A rare 1px clamp spike during long drags is the
+# documented harness lazy-CCR artifact, not a kernel bug.
+# Run: ./build.sh && python3 harness.py build/unodos_macplus.dsk shots < tests/m3.script
+wait 90
+dblclick 292 96              # open Paint (icon/proc 8)
+wait 10
+shot m3_paint_open           # tool grid, 4 ink swatches, white canvas
+key 6                        # tool 6 = filled rect
+wait 30
+moveto 220 100
+btn down
+wait 10
+moveto 260 130
+wait 5
+btn up
+wait 10
+shot m3_paint_frect          # black filled rect on the canvas
+key s                        # save PAINT.UNO to the floppy
+wait 40
+key n                        # clear
+wait 20
+shot m3_paint_cleared
+key l                        # load back from the floppy
+wait 40
+shot m3_paint_loaded         # the rect is back (byte-exact round-trip)
+quit

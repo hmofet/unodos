@@ -101,7 +101,7 @@ dt_fits:
         lsl.w   #3,d0
         lea     dt_shapes(pc),a0
         lea     (a0,d0.w),a0
-        lea     dt_board(pc),a1
+        lea     dt_board,a1
         moveq   #0,d7
 .cell:  move.b  (a0)+,d4
         ext.w   d4
@@ -170,7 +170,7 @@ dt_spawn:
 ; dt_clear_lines - collapse full rows, score them
 dt_clear_lines:
         movem.l d0-d7/a0-a1,-(sp)
-        lea     dt_board(pc),a0
+        lea     dt_board,a0
         moveq   #0,d7
         moveq   #0,d5
 .row:   moveq   #0,d6
@@ -236,7 +236,7 @@ dt_lock:
         lsl.w   #3,d0
         lea     dt_shapes(pc),a0
         lea     (a0,d0.w),a0
-        lea     dt_board(pc),a1
+        lea     dt_board,a1
         lea     dt_colors(pc),a4
         moveq   #0,d5
         move.b  (a4,d6.w),d5
@@ -320,7 +320,7 @@ dostris_draw:
         move.w  #DT_ROWS*DT_CELL+4,d3
         bsr     rect_outline_fg
         ; settled cells
-        lea     dt_board(pc),a3
+        lea     dt_board,a3
         moveq   #0,d6
 .brow:  moveq   #0,d5
 .bcol:  move.w  d6,d0
@@ -483,7 +483,7 @@ dt_value:
 dostris_new:
         movem.l d0-d1/a0,-(sp)
         lea     vars(pc),a4
-        lea     dt_board(pc),a0
+        lea     dt_board,a0
         move.w  #DT_ROWS*DT_COLS-1,d0
 .clr:   clr.b   (a0)+
         dbra    d0,.clr
