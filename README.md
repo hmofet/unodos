@@ -30,6 +30,9 @@ assessment and plan):
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2.5 — same set minus the color-only Theme app |
 | [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop, hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6** — Amiga-port parity: cooperative multitasking, 10 apps incl. the three games, Theme + Tracker, SRAM + tape/WAV + Sega CD backup-RAM storage; first new port headed for real hardware |
 
+A feature-by-feature comparison of all five targets lives in
+[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md).
+
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the
 UnoDOS desktop: window manager (z-order, drag, click-to-raise), the
