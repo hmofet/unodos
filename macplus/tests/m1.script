@@ -1,0 +1,28 @@
+# UnoDOS/MacPlus milestone-1 regression script.
+# Run: ./build.sh test && python3 harness.py build/unodos_macplus_test.dsk shots < tests/m1.script
+wait 90
+shot m1_boot                 # desktop + SysInfo + Clock, cursor at center
+click 160 85                 # title click raises SysInfo (click-through guard)
+wait 5
+shot m1_raised
+moveto 320 165               # drag Clock by its title bar
+btn down
+moveto 120 250
+btn up
+wait 5
+shot m1_dragged
+click 312 85                 # SysInfo close box
+wait 5
+shot m1_closed
+key esc                      # ESC ('`') closes the remaining window
+wait 3
+key right                    # desktop icon nav: select Clock...
+key enter                    # ...and open it (M0110A $79-prefix arrows)
+wait 5
+shot m1_kbd_launch
+key esc
+wait 3
+dblclick 56 48               # double-click launches SysInfo
+wait 5
+shot m1_dblclick
+quit

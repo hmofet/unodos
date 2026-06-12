@@ -5,6 +5,36 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [MacPlus standalone OS, milestone 1] - 2026-06-12
+
+### New port: UnoDOS as a real OS on compact 68000 Macs (macplus/)
+
+The Mac line is now a true operating system, not a Toolbox application.
+Custom boot blocks ('LK'/$4418, position-independent) are bootstrapped by
+the Mac ROM — the exact analog of the BIOS bootstrapping the x86 port —
+and pull the kernel off raw floppy sectors with a single .Sony _Read,
+the only ROM service UnoDOS uses. The kernel owns the machine: own
+stack, own vector table, VIA CA1 tick, M0110/M0110A keyboard driver over
+the VIA shift register (Instant-poll protocol, $79 prefix decoding),
+SCC DCD quadrature mouse driver, 1-bit 512x342 renderer with dither
+"colors", software save-under cursor, and fault screens. Milestone-1
+scope: desktop, icons, full window manager (raise/drag/close/z-order,
+incl. the tst-before-rts click guard), SysInfo + Clock.
+
+Because Mini vMac/MAME need copyrighted Apple ROMs, the port ships a
+ROM-free verification harness (macplus/harness.py): a Unicorn/QEMU 68000
+core where the harness plays the ROM — Start Manager, A-line _Read
+against the disk image, register-level VIA/SCC emulation, PNG
+screenshots, scripted mouse/keyboard. The whole M1 surface is verified
+through real injected input (tests/m1.script). Real-hardware validation
+pending (quadrature polarity + keyboard cadence are the flagged
+calibration points).
+
+Fixed during bring-up: kb_byte dropped key events whose canonical raw
+code had no ASCII (arrows) — `or.b` set flags on the low byte only and
+the following beq bailed; same flags-vs-branch family as the
+find_window_at click-through bug. An explicit tst.w now guards it.
+
 ## [Window-click fix + Paint polish] - 2026-06-12
 
 - **Click-through bug fixed (Genesis + Amiga)**: `find_window_at`

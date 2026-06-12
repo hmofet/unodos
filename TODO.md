@@ -241,3 +241,16 @@ Next steps:
 ## Documentation
 - [ ] App development tutorial / sample app walkthrough
 - [ ] Screenshots for README
+
+## MacPlus standalone OS port (macplus/, after M1 2026-06-12)
+- [ ] M2: UnoDOS floppy filesystem (shared layout with the x86 port) +
+      disk-loaded app binaries via the .Sony BIOS layer; Files/Notepad
+- [ ] M3+: sound (Plus pulse-width buffer), Theme-as-dither-schemes,
+      Tracker, games, scheduler, Paint — Amiga parity
+- [ ] Real-hardware / Mini vMac validation (needs a user-supplied Mac
+      Plus ROM dump at macplus/vMac.ROM). Calibration points: mouse
+      quadrature polarity (flip eor sense in isr_lvl2 if an axis is
+      reversed), keyboard Instant-poll cadence, SCC write-recovery
+      delays (nops may need widening on real silicon)
+- [ ] Harness: SE/Classic variants (screen base differences), bus-error
+      injection to exercise the kernel fault screens

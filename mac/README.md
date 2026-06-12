@@ -1,4 +1,10 @@
-# UnoDOS/Mac — classic Mac OS ports (milestone 3)
+# UnoDOS/Mac — hosted classic Mac OS ports (milestone 3)
+
+> **Note (2026-06-12):** these are the *hosted* Mac variants — UnoDOS
+> running as a Toolbox application on top of classic Mac OS. The Mac
+> port as a **real operating system** (ROM-bootstrapped, own kernel,
+> drivers and API — no Mac OS underneath) lives in
+> [macplus/](../macplus/).
 
 Two Macintosh ports of the UnoDOS desktop, from **one C codebase**
 (`unodos.c`), built with the [Retro68](https://github.com/autc04/Retro68)

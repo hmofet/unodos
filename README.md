@@ -28,10 +28,12 @@ assessment and plan):
 | [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | **Milestone 3+** — cooperative multitasking, writable FAT12 disks (DF1, PC-interchangeable), splash, 11 apps incl. the three games, Tracker and Paint |
 | [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | **Milestone 3** — cooperative multitasking, PC-compatible FAT12 floppies (data volumes), 11 apps incl. the three games, Tracker and Paint |
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | **Milestone 3** — same set minus the color-only Theme app (Paint uses the classic dither patterns) |
+| [**MacPlus (standalone OS)**](macplus/) | Mac Plus / SE / Classic (68000, 1MB) | Bare-metal: own boot blocks (ROM bootstrap = BIOS, like the x86 port), own vectors/drivers — VIA keyboard, SCC quadrature mouse, 1-bit dither renderer, software cursor; ROM-free Unicorn test harness | **Milestone 1** — boot chain, desktop, window manager, SysInfo/Clock; harness-verified, awaits real-hardware/Mini vMac validation |
 | [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
 
-A feature-by-feature comparison of all five targets lives in
-[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md).
+A feature-by-feature comparison of the five mature targets lives in
+[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md); the new standalone
+MacPlus OS port joins it once it reaches app parity.
 
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the
