@@ -106,7 +106,7 @@ DBLCLICK    equ 25                  ; double-click window (0.5s)
 ICON0_X     equ 32                  ; byte-aligned by construction
 ICON0_Y     equ 30
 ICON_PITCH  equ 64                  ; 5 icons across 320px
-NICONS      equ 10                  ; 5 per row, wraps to a second row
+NICONS      equ 11                  ; 5 per row, wraps to a second row
 
 ; Paula audio channel 0
 AUD0LCH     equ $0A0
@@ -193,6 +193,43 @@ super:
         ifd     AUTOTEST
         ; Auto-launch the app stack for screenshot verification without
         ; host input injection. Build: -DAUTOTEST=1
+        ifd     AUTOTEST_PAINT
+        ; Paint variant: open the app and draw a scene through the real
+        ; shape primitives (line/rect/oval/fill all exercise the canvas
+        ; store + run renderer). Build: -DAUTOTEST_PAINT=1
+        moveq   #10,d0
+        bsr     launch_app
+        lea     vars(pc),a4
+        move.w  zcount(pc),d2
+        subq.w  #1,d2
+        bsr     zwin_ptr            ; a2 = the Paint window
+        move.w  #9,pt_pen-vars(a4)  ; red-ish game pen
+        moveq   #30,d0
+        moveq   #24,d1
+        move.w  #120,d2
+        moveq   #90,d3
+        moveq   #1,d4
+        bsr     pt_rect_shape
+        move.w  #5,pt_pen-vars(a4)
+        move.w  #150,d0
+        moveq   #40,d1
+        move.w  #240,d2
+        move.w  #120,d3
+        moveq   #1,d4
+        bsr     pt_oval_shape
+        move.w  #3,pt_pen-vars(a4)
+        moveq   #10,d0
+        move.w  #130,d1
+        move.w  #250,d2
+        moveq   #20,d3
+        moveq   #1,d4
+        bsr     pt_line_seg
+        move.w  #14,pt_pen-vars(a4)
+        move.w  #170,d0
+        moveq   #60,d1
+        bsr     pt_flood            ; fill inside the oval
+        bsr     redraw_topmost
+        endc
         ifd     AUTOTEST_THEME
         ; Theme-app variant: open the picker, select preset 4 (Sunset) and
         ; apply it through the real key handler. Build: -DAUTOTEST_THEME=1
@@ -379,6 +416,7 @@ super:
         move.w  (sp)+,d3
         dbra    d3,.atnp
         else
+        ifnd    AUTOTEST_PAINT
         ifnd    AUTOTEST_THEME
         ifnd    AUTOTEST_DOSTRIS
         ifnd    AUTOTEST_OUTLAST
@@ -396,6 +434,7 @@ super:
         moveq   #4,d0               ; Music (topmost, playing)
         bsr     launch_app
         bsr     music_start
+        endc
         endc
         endc
         endc
@@ -533,9 +572,16 @@ handle_clicks:
         move.w  zcount(pc),d4
         subq.w  #1,d4
         cmp.w   d4,d3
-        beq     .out                ; topmost body: app's business
+        beq     .appclick           ; topmost body: the app's business
         move.w  d3,d0
         bsr     raise_window
+        rts
+.appclick:
+        cmp.b   #10,WPROC(a2)       ; Paint draws with the mouse
+        bne     .out
+        move.w  click_x(pc),d0
+        move.w  click_y(pc),d1
+        bsr     paint_click
         rts
 .title:
         ; close box = rightmost 12px of the bar
@@ -1011,6 +1057,7 @@ raise_window:
 close_window:
         bsr     gm_stop             ; close silences audio (PORT-SPEC SS2)
         bsr     tk_stop
+        bsr     pt_restore_palette  ; Paint may have re-tuned pens 4-31
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
@@ -1140,7 +1187,11 @@ app_draw_content:
         beq     .pacman
         cmp.w   #9,d0
         beq     .tracker
+        cmp.w   #10,d0
+        beq     .paint
         bsr     music_draw
+        bra     .done
+.paint: bsr     paint_draw
         bra     .done
 .theme: bsr     theme_draw
         bra     .done
@@ -1920,6 +1971,7 @@ ser_puts:
         include "fdd.i"
         include "fat12.i"
         include "scheduler.i"
+        include "paint.i"
 
 ; ============================================================================
 ; Data
@@ -1994,6 +2046,7 @@ app_def_tab:
         dc.w    4,12,310,182,  str_t_outlast-start
         dc.w    4,8,312,190,   str_t_pacman-start
         dc.w    10,14,300,178, str_t_tracker-start
+        dc.w    4,10,312,188,  str_t_paint-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2006,6 +2059,7 @@ icon_tab:
         dc.l    icon_outlast
         dc.l    icon_pacman
         dc.l    icon_tracker
+        dc.l    icon_paint
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2017,6 +2071,7 @@ name_tab:
         dc.l    name_outlast
         dc.l    name_pacman
         dc.l    name_tracker
+        dc.l    name_paint
 
 ; extended palette: playfield colors 4-31 ($0RGB). 4-10 = Dostris pieces
 ; (I,O,T,S,Z,J,L), 11-16 = OutLast scenery, 17-19 = cursor sprite colors
@@ -2148,6 +2203,19 @@ tk_prow:        dc.w    0           ; playback row
 tk_playing:     dc.b    0
         even
 tk_last:        dc.l    0
+pt_tool:        dc.w    0           ; paint: active tool
+pt_pen:         dc.w    3           ; paint: active pen (white)
+pt_lsz:         dc.w    0           ; paint: stroke size / filled flag
+pt_ldx:         dc.w    0           ; paint: bresenham dx
+pt_err:         dc.w    0           ; paint: bresenham error / scratch
+pt_px0:         dc.w    0           ; paint: rubber band anchor
+pt_py0:         dc.w    0
+pt_px1:         dc.w    0           ; paint: rubber band end
+pt_py1:         dc.w    0
+pt_rnd:         dc.w    $ACE1       ; paint: spray LFSR
+pt_band:        dc.b    0           ; paint: rubber band shown
+pt_init:        dc.b    0           ; paint: canvas cleared once
+pt_chbuf:       dc.b    0,0         ; paint: tool glyph scratch
 fdd_cyl:        dc.w    -1          ; current head cylinder (-1 unknown)
 fdd_ctrack:     dc.w    -1          ; cached track (-1 invalid)
 fat_mounted:    dc.b    0
@@ -2187,6 +2255,12 @@ pm_old:         ds.w    8           ; pac + 3 ghosts old x,y
 tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; tracker pattern (RAM song)
 fat_tab:        ds.b    FAT_MAXFILES*18     ; root-dir cache
 fat_buf:        ds.b    1536                ; whole FAT (3 sectors max)
+        even
+
+; ---- uninitialized (BSS hunk: allocated by the loader, no file cost)
+        section bss,bss
+pt_canvas:      ds.b    PT_W*PT_H   ; paint canvas backing store
+pt_stack:       ds.b    (PT_STKN+2)*4 ; paint flood-fill stack
         even
 
         end

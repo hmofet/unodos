@@ -192,6 +192,8 @@ app_key_dispatch:
         beq     .pacman
         cmp.w   #9,d0
         beq     .tracker
+        cmp.w   #10,d0
+        beq     .paint
         rts
 .files:   bra     files_key
 .notepad: bra     notepad_key
@@ -201,6 +203,7 @@ app_key_dispatch:
 .outlast: bra     outlast_key
 .pacman:  bra     pacman_key
 .tracker: bra     tracker_key
+.paint:   bra     paint_key
 
 ; app_tick_dispatch - d0 = proc: per-frame work in task context
 app_tick_dispatch:
