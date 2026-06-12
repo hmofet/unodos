@@ -1169,13 +1169,28 @@ draw_window:
         moveq   #0,d4
         bsr     fill_rect
         move.l  (sp),a2
-        ; title bar (white)
+        ; Workbench drag bar: is this window active (= topmost)?
+        moveq   #0,d6
+        move.w  zcount(pc),d2
+        subq.w  #1,d2
+        bmi     .actdone
+        move.l  a2,d5
+        bsr     zwin_ptr            ; a2 = topmost (preserves data regs)
+        move.l  a2,d4
+        move.l  d5,a2
+        sub.l   d5,d4
+        seq     d6                  ; d6 = $FF when we are topmost
+.actdone:
+        ; title bar: blue when active, white when not (WB 1.x look)
         move.w  WX(a2),d0
         move.w  WY(a2),d1
         move.w  WW(a2),d2
         moveq   #TBAR_H,d3
+        moveq   #0,d4
+        tst.b   d6
+        bne     .barf
         moveq   #3,d4
-        bsr     fill_rect
+.barf:  bsr     fill_rect
         move.l  (sp),a2
         ; border
         move.w  WX(a2),d0
@@ -1184,117 +1199,47 @@ draw_window:
         move.w  WH(a2),d3
         bsr     rect_outline_white
         move.l  (sp),a2
-        ; pinstripes (theme pen 0), only when active (= topmost)
-        move.w  zcount(pc),d2
-        subq.w  #1,d2
-        bmi     .inactive
-        move.l  a2,d5
-        bsr     zwin_ptr            ; a2 = topmost (preserves data regs)
-        move.l  a2,d6
-        move.l  d5,a2
-        cmp.l   d5,d6
-        bne     .inactive
-        moveq   #2,d6               ; rows y+2, y+4, y+6, y+8
-.stripe:
-        move.w  WX(a2),d0
-        addq.w  #3,d0
-        move.w  WY(a2),d1
-        add.w   d6,d1
-        move.w  WW(a2),d2
-        subq.w  #6,d2
-        moveq   #1,d3
-        moveq   #0,d4
-        bsr     fill_rect
-        addq.w  #2,d6
-        cmp.w   #TBAR_H-1,d6
-        blt     .stripe
-.inactive:
-        ; close box: white patch + empty square (hit region unchanged)
-        move.w  WX(a2),d0
-        add.w   WW(a2),d0
-        sub.w   #13,d0
-        move.w  WY(a2),d1
-        addq.w  #1,d1
-        moveq   #11,d2
-        moveq   #TBAR_H-2,d3
-        moveq   #3,d4
-        bsr     fill_rect
-        move.l  (sp),a2
-        move.w  WX(a2),d0
-        add.w   WW(a2),d0
-        sub.w   #11,d0
-        move.w  WY(a2),d1
-        addq.w  #2,d1
-        moveq   #7,d2
-        moveq   #7,d3
-        moveq   #1,d4
-        bsr     fill_rect_color0_outline
-        move.l  (sp),a2
-        ; centered title (blue) on a white patch
+        ; title text, left-aligned (white-on-blue active, inverse not)
         move.l  WTITLE(a2),a0
-        bsr     str_len             ; d0 = chars (preserves a0)
-        lsl.w   #3,d0
-        move.w  WW(a2),d1
-        sub.w   d0,d1
-        lsr.w   #1,d1
-        move.w  d0,d2
         move.w  WX(a2),d0
-        add.w   d1,d0
-        move.l  a0,-(sp)
-        subq.w  #4,d0
+        addq.w  #4,d0
         move.w  WY(a2),d1
         addq.w  #1,d1
-        addq.w  #8,d2
-        moveq   #TBAR_H-2,d3
-        moveq   #3,d4
-        bsr     fill_rect
-        move.l  (sp)+,a0
-        addq.w  #4,d0
+        moveq   #3,d2
+        moveq   #0,d3
+        tst.b   d6
+        bne     .ttl
         moveq   #0,d2
         moveq   #3,d3
-        bsr     draw_string_bg
+.ttl:   bsr     draw_string_bg
+        move.l  (sp),a2
+        ; close gadget: white box with an orange center (ext pen 10);
+        ; the hit region stays the rightmost 12px of the bar
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        sub.w   #12,d0
+        move.w  WY(a2),d1
+        addq.w  #2,d1
+        moveq   #9,d2
+        moveq   #TBAR_H-4,d3
+        moveq   #3,d4
+        bsr     fill_rect
+        move.l  (sp),a2
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        sub.w   #9,d0
+        move.w  WY(a2),d1
+        addq.w  #4,d1
+        moveq   #3,d2
+        moveq   #2,d3
+        moveq   #10,d4
+        bsr     fill_rect
         move.l  (sp),a2
         ; content
         moveq   #0,d0
         move.b  WPROC(a2),d0
         bsr     app_draw_content
         move.l  (sp)+,a2
-        rts
-
-; fill_rect_color0_outline - d0=x d1=y d2=w d3=h: 1px outline in pen 0
-fill_rect_color0_outline:
-        movem.w d0-d3,-(sp)
-        moveq   #1,d3
-        moveq   #0,d4
-        bsr     fill_rect
-        movem.w (sp),d0-d3
-        add.w   d3,d1
-        subq.w  #1,d1
-        moveq   #1,d3
-        moveq   #0,d4
-        bsr     fill_rect
-        movem.w (sp),d0-d3
-        moveq   #1,d2
-        moveq   #0,d4
-        bsr     fill_rect
-        movem.w (sp),d0-d3
-        add.w   d2,d0
-        subq.w  #1,d0
-        moveq   #1,d2
-        moveq   #0,d4
-        bsr     fill_rect
-        movem.w (sp)+,d0-d3
-        rts
-
-; str_len - a0 = NUL string -> d0 = length. Preserves a0.
-str_len:
-        move.l  a0,-(sp)
-        moveq   #0,d0
-.scan:  tst.b   (a0)+
-        beq     .done
-        addq.w  #1,d0
-        bra     .scan
-.done:  move.l  (sp)+,a0
         rts
 
 ; ============================================================================
