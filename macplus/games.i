@@ -21,6 +21,8 @@ DOSTRIS_PROC equ 5
 tick_wanted:
         move.b  mus_playing(pc),d0  ; Music plays even when not topmost
         bne     .yes0
+        move.b  tk_playing(pc),d0   ; so does the Tracker
+        bne     .yes0
         move.w  zcount(pc),d0
         beq     .no
         movem.l d2/a2,-(sp)
@@ -59,6 +61,7 @@ tick_wanted:
 games_tick:
         bsr     gm_tick
         bsr     music_tick
+        bsr     tracker_tick
         bsr     dostris_tick
         bsr     pacman_tick
         bsr     outlast_tick

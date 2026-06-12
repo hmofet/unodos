@@ -36,4 +36,18 @@ shot m3_music_playing        # staff + dithered notes, playing note black
 key space                    # stop (buffer silenced)
 wait 6
 shot m3_music_stopped
+key esc                      # close Music
+wait 3
+dblclick 52 144              # open Tracker (icon/proc 10, row 2)
+wait 10
+key d                        # load the shared demo song
+wait 6
+shot m3_tracker              # 12-row editor view, demo pattern, cursor row
+key space                    # play (leftmost-voice on the square channel)
+wait 30
+key space                    # stop
+wait 6
+key s                        # save SONG.UNO to the floppy
+wait 40
+shot m3_tracker_saved
 quit

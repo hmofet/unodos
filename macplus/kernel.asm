@@ -116,7 +116,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 10                  ; + Dostris Pac-Man OutLast Paint Music on row 2
+NICONS      equ 11                  ; rows: 5 + 5 + Tracker
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -376,6 +376,8 @@ handle_events:
         beq     .kpaint
         cmp.w   #9,d0
         beq     .kmusic
+        cmp.w   #10,d0
+        beq     .ktracker
         bra     .next
 .kfiles:
         bsr     files_key
@@ -400,6 +402,9 @@ handle_events:
         bra     .next
 .kmusic:
         bsr     music_key
+        bra     .next
+.ktracker:
+        bsr     tracker_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -955,6 +960,7 @@ raise_window:
 close_window:
         bsr     gm_stop             ; close silences audio (PORT-SPEC SS2)
         bsr     music_stop
+        bsr     tk_stop
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
@@ -1186,7 +1192,11 @@ app_draw_content:
         beq     .outl
         cmp.w   #8,d0
         beq     .pnt
-        bsr     music_draw          ; proc 9: Music
+        cmp.w   #9,d0
+        beq     .mus
+        bsr     tracker_draw        ; proc 10: Tracker
+        bra     .done
+.mus:   bsr     music_draw          ; proc 9: Music
         bra     .done
 .pnt:   bsr     paint_draw          ; proc 8: Paint
         bra     .done
@@ -2270,6 +2280,7 @@ ev_get:
         include "pacman.i"
         include "paint.i"
         include "music.i"
+        include "tracker.i"
 
 ; ============================================================================
 ; Data
@@ -2330,6 +2341,7 @@ app_def_tab:
         dc.w    96,72,312,180,  str_t_outlast-start
         dc.w    95,68,312,192,  str_t_paint-start
         dc.w    140,100,240,120, str_t_music-start
+        dc.w    100,80,312,180, str_t_tracker-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2342,6 +2354,7 @@ icon_tab:
         dc.l    icon_outlast
         dc.l    icon_paint
         dc.l    icon_music
+        dc.l    icon_tracker
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2353,6 +2366,7 @@ name_tab:
         dc.l    name_outlast
         dc.l    name_paint
         dc.l    name_music
+        dc.l    name_tracker
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2465,6 +2479,17 @@ mus_end:        dc.l    0           ; tick the current note ends at
 mus_ix:         dc.w    0
 mus_playing:    dc.b    0
                 dc.b    0
+; ---- Tracker (proc 10) ----
+        even
+tk_last:        dc.l    0
+tk_row:         dc.w    0           ; cursor row
+tk_ch:          dc.w    0           ; cursor channel
+tk_top:         dc.w    0           ; first visible row
+tk_prow:        dc.w    0           ; playback row
+tk_playing:     dc.b    0
+                dc.b    0
+        even
+tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; the pattern (256 bytes)
 
 ; ---- M2: FAT12 + Files/Notepad state (appended; M1 offsets unchanged so
 ; the harness's vars+28 mouse mirror still lines up) ------------------------
