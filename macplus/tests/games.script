@@ -24,4 +24,14 @@ wait 80
 key up                       # steer; dots score 10 each
 wait 30
 shot g_pacman_play           # maze + actors + SCORE > 0
+key esc                      # close Pac-Man
+wait 3
+dblclick 212 96              # open OutLast (icon/proc 7)
+wait 8
+shot g_outlast_title         # black title screen: road bands + car + prompt
+key n                        # drive: auto-accelerate, score accrues
+wait 40
+key left
+wait 20
+shot g_outlast_drive         # road perspective + dither grass + car + HUD
 quit

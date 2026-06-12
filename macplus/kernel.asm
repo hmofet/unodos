@@ -97,7 +97,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 7                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man
+NICONS      equ 8                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man OutLast
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -342,6 +342,8 @@ handle_events:
         beq     .kdostris
         cmp.w   #6,d0
         beq     .kpacman
+        cmp.w   #7,d0
+        beq     .koutlast
         bra     .next
 .kfiles:
         bsr     files_key
@@ -357,6 +359,9 @@ handle_events:
         bra     .next
 .kpacman:
         bsr     pacman_key
+        bra     .next
+.koutlast:
+        bsr     outlast_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -1128,9 +1133,13 @@ app_draw_content:
         beq     .diska
         cmp.w   #5,d0
         beq     .dost
-        bsr     pacman_draw         ; proc 6: Pac-Man
+        cmp.w   #6,d0
+        beq     .pacm
+        bsr     outlast_draw        ; proc 7: OutLast
         bra     .done
 .dost:  bsr     dostris_draw        ; proc 5: Dostris
+        bra     .done
+.pacm:  bsr     pacman_draw         ; proc 6: Pac-Man
         bra     .done
 .clock: bsr     clock_draw
         bra     .done
@@ -2260,6 +2269,7 @@ app_def_tab:
         dc.w    120,90,210,130, str_t_demo-start
         dc.w    60,30,262,212,  str_t_dostris-start
         dc.w    110,60,272,196, str_t_pacman-start
+        dc.w    96,72,312,180,  str_t_outlast-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2269,6 +2279,7 @@ icon_tab:
         dc.l    icon_paint
         dc.l    icon_dostris
         dc.l    icon_pacman
+        dc.l    icon_outlast
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2277,6 +2288,7 @@ name_tab:
         dc.l    name_demo
         dc.l    name_dostris
         dc.l    name_pacman
+        dc.l    name_outlast
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2432,6 +2444,23 @@ pm_tmp:         dc.w    0
 pm_gh:          ds.b    3*GSIZE     ; ghost records (x,y,dir,state,timer)
 pm_old:         ds.b    8*2         ; pre-step actor positions (4 x/y pairs)
 pm_maze:        ds.b    PM_COLS*PM_ROWS
+        even
+; ---- OutLast (proc 7) game state ----
+ol_z:           dc.l    0           ; camera world position
+ol_last:        dc.l    0
+ol_lastsec:     dc.l    0
+ol_traf0:       dc.l    0           ; 4 traffic cars (world z each)
+ol_traf1:       dc.l    0
+ol_traf2:       dc.l    0
+ol_traf3:       dc.l    0
+ol_x:           dc.w    148
+ol_speed:       dc.w    0
+ol_score:       dc.w    0
+ol_time:        dc.w    0
+ol_crash:       dc.w    0
+ol_state:       dc.w    0           ; 0 title, 1 driving, 2 over
+ol_roadl:       dc.w    0           ; road edges at the car strip
+ol_roadr:       dc.w    296
         even
 npbuf:          ds.b    NBUF                ; Notepad edit buffer
 npline:         ds.b    40                  ; one rendered line + NUL
