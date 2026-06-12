@@ -1,4 +1,4 @@
-# UnoDOS/Genesis — port plan (DRAFT, awaiting approval)
+# UnoDOS/Genesis — port plan (approved 2026-06-11; M0+M1 shipped)
 
 Target: Sega Mega Drive / Genesis — 68000 @ 7.67 MHz (same CPU family as
 the Amiga/Mac ports), VDP tile/sprite graphics, 64 KB work RAM, Z80 +
@@ -38,57 +38,74 @@ devices have internal pull-ups, the MD inputs are pulled up too):
 - Fallback: the same driver structure can speak Sik's documented Sega
   keyboard protocol (4-bit bus) later, for XBAND/MegaNet-style hardware.
 
-## Milestone 0 — boot PoC (DONE, pending emulator verification)
+## Milestone 0 — boot PoC (DONE, verified in BlastEm 2026-06-11)
 
-`genesis/boot.asm` (~32 KB ROM, vasm `-Fbin`, the same assembler as the
-Amiga port): valid vector table + Sega header, TMSS handshake, Z80
-quiesce, VDP init (H32, plane A at `$C000`), the shared UnoDOS 8×8 font
-converted to 4bpp tiles by `genesis/mkfont.py`, UnoDOS palette in CRAM,
-and the splash: "UnoDOS 3 / for Sega Genesis - Mega Drive" plus the
-PS/2 wiring banner. Structurally validated (header layout, reset
-vectors); needs an emulator run for visual sign-off.
+Boot PoC: vector table + Sega header, TMSS handshake, Z80 quiesce, VDP
+init, the shared UnoDOS 8×8 font as 4bpp tiles, UnoDOS palette in CRAM,
+splash + PS/2 wiring banner. Superseded by `genesis/kernel.asm` (M1);
+the original `genesis/boot.asm` lives in git history. Bring-up trap
+for the record: the M0 vector table was off by two entries (22 err
+vectors are needed between the reset PC and the spurious-interrupt
+vector) — harmless until M1 enabled interrupts, then the first vblank
+jumped into the error loop.
 
-## Proposed roadmap (for approval)
+## Milestone 1 — desktop, input, Notepad + Music (DONE 2026-06-11)
 
-1. **M0 verification + harness** — pick an emulator (BlastEm: accurate,
-   scriptable, headless-friendly; needs a ~2 MB download) and stand up
-   the screenshot-verification loop used by the other ports.
-2. **M1 — kernel core on VDP**: tile-based implementations of the
-   PORT-SPEC drawing primitives (fill/char/string as name-table +
-   tile writes; the desktop is naturally tile-friendly), vblank tick,
-   event queue, splash → desktop with icons. Mouse cursor as a VDP
-   sprite (hardware sprite, like the Amiga).
-3. **M2 — input**: PS/2 keyboard driver on port 2 (EXT interrupt,
-   scancode set 2 → UnoDOS keymap) and PS/2 mouse on port 1
-   (inhibit/poll); 3/6-button pad as a navigation fallback (d-pad =
-   arrows, A/B/C = Enter/Esc/menu) so the port is usable on stock
-   hardware. Emulator story: BlastEm gamepad for the fallback path;
-   PS/2 verification via a small protocol-injection test build, real
-   hardware for the full loop.
-4. **M3 — the app set**: SysInfo, Clock, Files (ROM-disk first),
-   Notepad, Theme (CRAM palettes — 61 colors on screen, 512 colors,
-   shadow/highlight as a stretch), the WM (windows as tile regions;
-   plane B for the desktop, plane A for the focused window is the
-   natural z-clip analogue of the single-topmost rule).
-5. **M4 — games + sound**: Dostris/OutLast/Pac-Man (tile rendering
+`genesis/kernel.asm` + `softkbd.i` + `ps2.i` + `apps.i`, 64 KB ROM,
+verified in BlastEm 0.6.2 (`genesis/README.md` has the build/test
+matrix and the verified-behavior list):
+
+- **Kernel core on VDP** (was roadmap item 2): cell-based drawing
+  primitives on plane A (40×28 cells, H40), 4 palette lines = the 4 UI
+  attribute schemes from the theme colors, vblank tick + event queue +
+  press-time click latch per PORT-SPEC §3/§6, hardware-sprite cursor,
+  desktop with the real x86 app icons, window manager with drag /
+  raise / close / z-order (windows snap to the 8 px cell grid).
+- **Pad-as-mouse** (roadmap item 3, reshaped per direction): d-pad
+  moves the cursor with held-time acceleration (Z = turbo), A = click,
+  B = soft keyboard, C/Start/X/Y = Enter/Esc/Backspace/Space. Works on
+  3-button pads (no X/Y/Z extras).
+- **Soft keyboard**: kernel overlay on the bottom 6 cell rows — full
+  QWERTY + sticky Shift + F1 + arrows + Esc, hover highlight, posts
+  through the shared event queue with the Amiga-port raw codes.
+- **PS/2 drivers wired** (real-hardware-only): port 2 keyboard on the
+  EXT level-2 interrupt (11-bit frame assembler + scancode set 2
+  decode incl. shift/break/E0), port 1 mouse via host-inhibit with a
+  per-vblank receive window + boot-time `$F4` probe (no ACK → pad
+  mode). The protocol engines are injectable pure routines; the
+  AUTOTEST_PS2 build verifies the full decode path in the emulator.
+- **Apps**: SysInfo, Clock, Notepad (2 KB buffer, caret, line nav with
+  goal column, vertical scroll clamp, status bar), Music (PSG ch-0
+  square-wave sequencer, the shared Canon in D arrangement at 60 Hz,
+  staff view with live note highlight).
+
+Port-specific traps for the next milestones: acknowledge the vblank
+interrupt with a VDP status read (control-port writes must stay single
+`move.l`s so the read can't split one); `lsl.w #7` of a negative cell
+row flips the control word's top bits into a CRAM write — the
+PROBE_GUARD build traps out-of-range cell coordinates and renders the
+caller PC in hex; BlastEm's debugger doesn't engage on piped stdin, so
+on-screen hex forensics is the workable equivalent.
+
+## Remaining roadmap
+
+1. **M2 — games + sound**: Dostris/OutLast/Pac-Man (tile rendering
    fits them perfectly), PSG square-wave sequencer for the shared game
    songs (FM later), Tracker over PSG's 3 tones + noise.
-6. **M5 — storage**: SRAM-backed save slots first (battery-backed
-   cartridge RAM, `$200000` region, trivially supported by emulators
-   and flashcarts), then optionally the Mega-CD/flashcart filesystem
-   question. The portable FAT12 core from the Amiga is reusable if a
-   storage device with sector access exists; otherwise SRAM is the
-   honest Genesis-native answer.
-7. **M6 — scheduler**: port the milestone-3 cooperative scheduler
-   (it's plain 68000; the Amiga `scheduler.i` moves almost verbatim —
-   only the stack arena and tick source change).
+2. **M3 — Theme + Files**: Theme app over CRAM (the 8 shared presets
+   restyle all four palette lines), Files over a ROM-disk.
+3. **M4 — storage**: SRAM-backed saves (battery-backed cartridge RAM
+   at `$200000`, header declaration, emulator + flashcart friendly);
+   unlocks Notepad F1-save.
+4. **M5 — scheduler**: port the Amiga milestone-3 cooperative
+   scheduler (plain 68000; the stack arena and tick source change).
+5. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
+   mouse inhibit/poll timing), TMSS on a model 3, pad feel, PSG
+   balance. This is the first new port headed for physical hardware.
 
-Notes/risks: VDP text is tile-quantized (windows snap to 8px), work RAM
-is 64 KB total (the app model fits, but Notepad/Tracker buffers need
-budgeting), and PS/2-over-gameport ultimately needs real-hardware
-validation (emulators don't model PS/2 devices on the ports — the
-driver will be structured against an injectable bit-stream interface so
-the protocol logic is testable in CI regardless).
+Notes/risks: work RAM is 64 KB total (the app model fits; Notepad runs
+a 2 KB buffer), and PS/2-over-gameport needs the real-hardware pass —
+emulators don't model PS/2 devices on the control ports.
 
 ## Sources
 

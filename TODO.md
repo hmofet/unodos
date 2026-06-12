@@ -68,8 +68,29 @@ Next steps:
 - [ ] Mac: milestone 3 scheduler (needs C coroutines; the WM/app
       tables are ready)
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
-- [ ] Sega Genesis showpiece port (per feasibility report SS3.3 —
-      optional, after the portable core exists)
+
+## Genesis Port (2026-06-11) - MILESTONE 1 DONE
+- [x] M0 boot PoC (TMSS, VDP init, font tiles, splash) — verified in
+      BlastEm
+- [x] M1 kernel: cell-based desktop on plane A (40x28, H40), WM with
+      drag/raise/close/z-order, event queue + click latch, sprite
+      cursor, icons from the x86 .BIN art (genesis/kernel.asm)
+- [x] M1 input: 6-button pad as mouse (d-pad accel + Z turbo, A=click,
+      B=soft kbd, C/Start/X/Y synth keys; 3-button safe) + full soft
+      keyboard overlay (QWERTY, sticky Shift, F1, arrows)
+- [x] M1 PS/2 drivers wired for real hardware: port 2 kbd on the EXT
+      interrupt (set-2 decode), port 1 mouse via host-inhibit vblank
+      windows + boot probe; decode paths emulator-verified via
+      synthetic streams (AUTOTEST_PS2)
+- [x] M1 apps: SysInfo, Clock, Notepad (caret/line-nav/scroll/status),
+      Music (PSG ch0 Canon in D, staff view)
+- [ ] M2: game ports (Dostris/OutLast/Pac-Man) + PSG game music +
+      Tracker over PSG
+- [ ] M3: Theme over CRAM (8 shared presets), Files over a ROM-disk
+- [ ] M4: SRAM storage (unlocks Notepad save)
+- [ ] M5: cooperative scheduler (port amiga/scheduler.i)
+- [ ] Real hardware: PS/2 wiring validation, TMSS on a model 3, pad
+      feel, PSG balance — FIRST new port headed to physical hardware
 
 ## Game Ports (2026-06-11) - DONE
 - [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as

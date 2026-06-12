@@ -5,6 +5,47 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Genesis milestone 1] - 2026-06-11
+
+### Sega Genesis / Mega Drive: desktop, pad-mouse, soft keyboard, PS/2 wiring, Notepad + Music
+
+- **Kernel** (`genesis/kernel.asm`): cell-based UnoDOS desktop on VDP
+  plane A (H40, 40×28 cells; windows snap to the 8 px grid), four
+  palette lines as the four themed UI attribute schemes, hardware-
+  sprite cursor, window manager (drag/raise/close/z-order), 32-entry
+  event queue + press-time click latch per PORT-SPEC §3/§6, app icons
+  converted from the x86 `.BIN` headers. ISRs never touch the VDP
+  except the status-read interrupt acknowledge.
+- **Pad as mouse**: standard 3/6-button pad on port 1 — d-pad moves
+  the cursor with held-time acceleration (Z = turbo), A = click/drag,
+  B = soft keyboard, C = Enter, Start = Esc, X = Backspace, Y = Space.
+- **Soft keyboard** (`genesis/softkbd.i`): kernel overlay (bottom 6
+  cell rows) with full QWERTY, sticky Shift, F1, arrows, Esc; hover
+  highlight; posts through the shared event queue with the Amiga-port
+  raw codes, so the 68K apps stay byte-portable.
+- **PS/2 drivers, wired for real hardware** (`genesis/ps2.i`):
+  keyboard on port 2 (TH = CLK → EXT level-2 interrupt, 11-bit frame
+  assembler, scancode set 2 with shift/break/E0), mouse on port 1
+  (host-inhibit + per-vblank receive windows, boot-time `$F4` probe
+  with pad fallback). Emulators don't model PS/2 on the control
+  ports; the decode engines are injectable and the AUTOTEST_PS2 build
+  verifies them end-to-end in BlastEm ("ps2 ok" typed, cursor moved
+  by a synthetic stream packet).
+- **Apps** (`genesis/apps.i`): SysInfo, Clock, Notepad (2 KB buffer,
+  caret, line navigation with goal column, vertical scroll clamp,
+  status bar), Music (PSG channel-0 square-wave sequencer, the shared
+  Canon in D at 60 Hz, staff view with live note highlight).
+- Verified in BlastEm 0.6.2 via AUTOTEST screenshot builds
+  (composite/notepad/kbd/ps2/click); `genesis/README.md` documents
+  controls, wiring, build matrix, and the real-hardware checklist.
+- Bring-up traps recorded for posterity: the M0 vector table was off
+  by two (the first vblank jumped to the error loop); vblank must be
+  acknowledged with a VDP status read; a negative cell row shifted
+  into a control word flips it into a CRAM write (the PROBE_GUARD
+  build traps this and renders the caller PC on screen); a `movem`
+  restore clobbering the just-found window slot index turned the
+  z-list into a phantom-window CRAM sprayer.
+
 ## [Ports wave 3] - 2026-06-11
 
 ### Amiga: real storage + milestone 3

@@ -1,0 +1,1686 @@
+; ============================================================================
+; UnoDOS/Genesis - milestone 1: desktop, WM, pad-mouse, soft keyboard,
+; PS/2 wiring, Notepad + Music.
+; ============================================================================
+; Bare-metal UnoDOS desktop for Sega Mega Drive / Genesis (68000 @ 7.67MHz,
+; VDP tile graphics, 64KB work RAM). Built with vasm -Fbin into a plain
+; cartridge ROM (TMSS-safe).
+;
+; Display model: H40 (320x224 = 40x28 cells), everything composed on
+; plane A as (palette,tile) cells; the desktop/windows snap to the 8px
+; grid (docs/GENESIS-PORT.md). The mouse cursor is a hardware sprite, so
+; it stays pixel-smooth above the cell world. Palette lines 0-3 encode
+; the four UI attribute schemes (normal/inverted/accent/softkey), all
+; derived from the four UnoDOS theme colors (PORT-SPEC SS1).
+;
+; Input (per docs/GENESIS-PORT.md):
+;   - 6-button pad on port 1 = mouse: d-pad moves the cursor (held-time
+;     acceleration, Z = turbo), A = click, B = soft keyboard, C = Enter,
+;     Start = Esc, X = Backspace, Y = Space. 3-button pads work (no X/Y/Z).
+;   - soft keyboard: kernel overlay on the bottom 6 cell rows; clicking
+;     keys posts through the same event queue as real keyboards, with
+;     the Amiga-port raw codes (arrows $4C-$4F, F1 $50), so the apps
+;     are byte-portable.
+;   - PS/2 keyboard on port 2 (TH=CLK -> EXT level-2 interrupt, D0=DATA)
+;     and PS/2 mouse on port 1 (host-inhibit, vblank poll window). The
+;     protocol engines are injectable pure routines (ps2.i) - verified
+;     by the AUTOTEST_PS2 build; the physical wiring needs real hardware
+;     (emulators don't model PS/2 devices on the control ports).
+;
+; Audit rules carried over (PORT-SPEC SS6): ISRs only update state (no
+; VDP access in interrupt context - the main loop owns the VDP), edge-
+; only mouse events, press-time click latch + sequence counter, topmost-
+; only periodic content refresh.
+; ============================================================================
+
+        mc68000
+
+; ---------------------------------------------------------------- hardware
+VDP_DATA    equ $C00000
+VDP_CTRL    equ $C00004
+PSG         equ $C00011
+Z80_BUSREQ  equ $A11100
+Z80_RESET   equ $A11200
+HW_VERSION  equ $A10001
+TMSS_PORT   equ $A14000
+IO_DATA1    equ $A10003
+IO_DATA2    equ $A10005
+IO_CTRL1    equ $A10009
+IO_CTRL2    equ $A1000B
+
+PLANE_A     equ $C000               ; name table A (64x32 cells)
+SPRTAB      equ $F000               ; sprite attribute table
+
+SCRW        equ 320
+SCRH        equ 224
+SCRW_C      equ 40                  ; cells
+SCRH_C      equ 28
+
+; cell attribute schemes = palette line select in the name table word
+ATTR_NORM   equ $0000               ; PAL0: white on blue
+ATTR_INV    equ $2000               ; PAL1: blue on white
+ATTR_ACC    equ $4000               ; PAL2: cyan on blue
+ATTR_KEY    equ $6000               ; PAL3: blue on cyan
+
+; tiles (gen_data.i blob is loaded at tile 1)
+T_FONT      equ 1                   ; 1..95 = ASCII 32..126
+T_SOLBG     equ 96                  ; solid index 2 (the line's bg color)
+T_SOLFG     equ 97                  ; solid index 1 (the line's fg color)
+T_SOLCY     equ 98                  ; solid cyan
+T_SOLMG     equ 99                  ; solid magenta
+T_EDGEL     equ 100
+T_EDGER     equ 101
+T_EDGEB     equ 102
+T_CORNBL    equ 103
+T_CORNBR    equ 104
+T_HLINE     equ 105
+T_CURSOR    equ 106                 ; 106/107 = 8x16 sprite
+T_ICONS     equ 108                 ; 4 tiles per icon
+
+; events (PORT-SPEC SS3)
+EV_KEY      equ 1
+EV_MOUSE    equ 4
+EVQ_SIZE    equ 32
+
+; window manager (coordinates in CELLS)
+MAXWIN      equ 6
+WENT_SIZE   equ 16
+WSTATE      equ 0
+WPROC       equ 1
+WX          equ 2
+WY          equ 4
+WW          equ 6
+WH          equ 8
+WTITLE      equ 10                  ; title pointer (long)
+
+MENUBAR_C   equ 1                   ; protected desktop rows (cells)
+TICKS_SEC   equ 60                  ; NTSC vblank
+DBLCLICK    equ 30                  ; double-click window (0.5s)
+
+NICONS      equ 4
+NBUF        equ 2048                ; notepad buffer
+
+KBD_TOP     equ 22                  ; soft keyboard panel: rows 22..27
+
+; ---------------------------------------------------------------- variables
+; Work RAM $FF0000-$FFFFFF; vars at $FF8000, addressed as offset(a4) with
+; a4 = VARS (the Amiga port's vars(pc) convention, RAM edition). Offsets
+; are laid out longs/words/bytes so everything stays naturally aligned.
+VARS        equ $FF8000
+
+        rsreset
+v_ticks         rs.l    1
+v_last_secs     rs.l    1
+v_dbl_tick      rs.l    1
+v_drag_win      rs.l    1
+v_mus_end       rs.l    1
+v_mouse_x       rs.w    1           ; pixels
+v_mouse_y       rs.w    1
+v_click_x       rs.w    1           ; press-time latch (pixels)
+v_click_y       rs.w    1
+v_drag_offx     rs.w    1           ; cells
+v_drag_offy     rs.w    1
+v_sel_icon      rs.w    1
+v_dbl_icon      rs.w    1
+v_ev_head       rs.w    1
+v_ev_tail       rs.w    1
+v_zcount        rs.w    1
+v_pad_state     rs.w    1           ; bit0 U 1 D 2 L 3 R 4 A 5 B 6 C 7 St 8 X 9 Y 10 Z 11 Mode
+v_pad_prev      rs.w    1
+v_pad_heldn     rs.w    1           ; frames a d-pad direction is held
+v_np_len        rs.w    1
+v_np_caret      rs.w    1
+v_np_top        rs.w    1
+v_np_goal       rs.w    1
+v_mus_ix        rs.w    1
+v_kb_hover      rs.w    1           ; soft kbd: hovered key index or -1
+v_ps2k_shift    rs.w    1           ; PS/2 kbd 11-bit frame shifter
+v_ps2m_shift    rs.w    1           ; PS/2 mouse frame shifter
+v_mouse_btn     rs.b    1
+v_last_btn      rs.b    1           ; previous button state (edge detect)
+v_click_seq     rs.b    1
+v_last_seq      rs.b    1
+v_drag_active   rs.b    1
+v_kb_vis        rs.b    1           ; soft keyboard visible
+v_kb_shift      rs.b    1           ; soft keyboard sticky shift
+v_kb_toggle     rs.b    1           ; request from vblank (B button)
+v_np_dirty      rs.b    1
+v_mus_playing   rs.b    1
+v_cur_dirty     rs.b    1           ; cursor sprite needs a VDP sync
+v_port1_mode    rs.b    1           ; 0 = pad, 1 = PS/2 mouse
+v_ps2k_bits     rs.b    1
+v_ps2k_break    rs.b    1           ; saw $F0
+v_ps2k_ext      rs.b    1           ; saw $E0
+v_ps2k_shdown   rs.b    1           ; PS/2 shift key held
+v_ps2k_lastt    rs.b    1           ; tick of last clock edge (resync)
+v_ps2m_bits     rs.b    1
+v_ps2m_pktn     rs.b    1
+v_ps2m_pkt      rs.b    4
+        rs.b    1                   ; pad back to even (21 bytes above)
+v_evq           rs.b    EVQ_SIZE*4
+v_zlist         rs.b    MAXWIN
+v_wintab        rs.b    MAXWIN*WENT_SIZE
+v_numbuf        rs.b    16
+v_clkbuf        rs.b    12
+v_npstat        rs.b    48
+v_npline        rs.b    44
+v_npbuf         rs.b    NBUF
+VARS_END        rs.b    0
+
+; ---------------------------------------------------------------- vectors
+        org     0
+        dc.l    $00FFFE00           ; 0: initial SSP
+        dc.l    start               ; 1: reset PC
+        dcb.l   22,err              ; 2-23: exceptions + reserved
+        dc.l    err                 ; 24: spurious interrupt
+        dc.l    err                 ; 25: level 1
+        dc.l    isr_ext             ; 26: level 2 = EXT (PS/2 kbd clock)
+        dc.l    err                 ; 27: level 3
+        dc.l    isr_hbl             ; 28: level 4 = hblank
+        dc.l    err                 ; 29: level 5
+        dc.l    isr_vbl             ; 30: level 6 = vblank
+        dc.l    err                 ; 31: level 7
+        dcb.l   16,err              ; 32-47: traps
+        dcb.l   16,err              ; 48-63: reserved
+
+; ---------------------------------------------------------------- header
+        org     $100
+        dc.b    "SEGA MEGA DRIVE "
+        dc.b    "(C)UNOD 2026.JUN"
+        dc.b    "UNODOS 3                                        "
+        dc.b    "UNODOS 3                                        "
+        dc.b    "GM UNODOS3-01"
+        dc.b    0
+        dc.w    0
+        dc.b    "J6              "                  ; pad + 6-button
+        dc.l    $00000000
+        dc.l    $0000FFFF                           ; 64KB ROM
+        dc.l    $00FF0000
+        dc.l    $00FFFFFF
+        dc.b    "            "
+        dc.b    "            "
+        dc.b    "UnoDOS 3 for Sega Genesis - milestone 1 "
+        dc.b    "JUE             "
+
+; ============================================================================
+        org     $200
+start:
+        move.w  #$2700,sr
+
+        ; TMSS
+        move.b  HW_VERSION,d0
+        and.b   #$0F,d0
+        beq     .notmss
+        move.l  #'SEGA',TMSS_PORT
+.notmss:
+        ; quiet the Z80 (PSG is reachable from the 68K; no Z80 program)
+        move.w  #$0100,Z80_BUSREQ
+        move.w  #$0100,Z80_RESET
+
+        ; silence all four PSG channels
+        lea     PSG,a0
+        move.b  #$9F,(a0)
+        move.b  #$BF,(a0)
+        move.b  #$DF,(a0)
+        move.b  #$FF,(a0)
+
+        ; ---- VDP registers
+        lea     VDP_CTRL,a0
+        move.w  #$8004,(a0)         ; r0: no HL int
+        move.w  #$8164,(a0)         ; r1: display ON, vblank int ON, V28
+        move.w  #$8230,(a0)         ; r2: plane A = $C000
+        move.w  #$8330,(a0)         ; r3: window off
+        move.w  #$8407,(a0)         ; r4: plane B = $E000
+        move.w  #$8578,(a0)         ; r5: sprites = $F000
+        move.w  #$8700,(a0)         ; r7: backdrop = pal0 color 0
+        move.w  #$8A00,(a0)         ; r10: hint counter
+        move.w  #$8B08,(a0)         ; r11: EXT int ON (PS/2 kbd), full scroll
+        move.w  #$8C81,(a0)         ; r12: H40 (320px)
+        move.w  #$8D3F,(a0)         ; r13: hscroll = $FC00
+        move.w  #$8F02,(a0)         ; r15: auto-increment 2
+        move.w  #$9001,(a0)         ; r16: scroll size 64x32
+        move.w  #$9100,(a0)         ; r17
+        move.w  #$9200,(a0)         ; r18
+
+        bsr     load_palette
+
+        ; ---- clear VRAM
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #$40000000,(a0)
+        move.w  #$7FFF,d0
+        moveq   #0,d1
+.clr:   move.w  d1,(a1)
+        dbra    d0,.clr
+
+        ; ---- load the tile blob at tile 1
+        move.l  #$40200000,(a0)     ; VRAM $0020
+        lea     tiles_all(pc),a2
+        move.w  #(NTILES*8)-1,d0
+.tile:  move.l  (a2)+,(a1)
+        dbra    d0,.tile
+
+        ; ---- clear work RAM vars
+        lea     VARS,a0
+        move.w  #((VARS_END+3)/4)-1,d0
+        moveq   #0,d1
+.cv:    move.l  d1,(a0)+
+        dbra    d0,.cv
+
+        lea     VARS,a4
+        move.w  #160,v_mouse_x(a4)
+        move.w  #112,v_mouse_y(a4)
+        move.w  #-1,v_dbl_icon(a4)
+        move.w  #-1,v_kb_hover(a4)
+        move.w  #-1,v_np_goal(a4)
+        st      v_cur_dirty(a4)
+
+        ; ---- sprite 0 = cursor (8x16), link 0 parks the other 79
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((SPRTAB&$3FFF)<<16)|$40000000|((SPRTAB>>14)&3),(a0)
+        move.w  #128+112,(a1)       ; y
+        move.w  #$0100,(a1)         ; size 1x2, link 0
+        move.w  #$8000+T_CURSOR,(a1) ; priority over the planes, pal 0
+        move.w  #128+160,(a1)       ; x
+
+        ; ---- io ports: PS/2 probe on port 1, PS/2 kbd wiring on port 2,
+        ;      pad mode when nothing answers (ps2.i)
+        bsr     ps2_init
+
+        ifd     PROBE_NOINT
+        ; bring-up probe: draw the splash with interrupts off and idle -
+        ; separates "drawing broken" from "interrupt trouble"
+        bsr     splash_draw
+.probe: bra     .probe
+        endc
+
+        ifd     PROBE_WIN
+        ; bring-up probe: desktop + notepad window, then idle (no main
+        ; loop) - separates the static draw path from loop/ISR trouble
+        and.w   #$F8FF,sr
+        bsr     repaint_all
+        bsr     notepad_set_demo
+        moveq   #2,d0
+        bsr     launch_app
+.wprob: bra     .wprob
+        endc
+
+        ifd     PROBE_INT
+        ; bring-up probe: ints on, render the live tick count forever.
+        ; Ticks advancing = the vblank ISR runs and returns cleanly.
+        and.w   #$F8FF,sr
+.iprob: lea     VARS,a4
+        move.l  v_ticks(a4),d0
+        lea     v_numbuf(a4),a0
+        bsr     fmt_dec
+        moveq   #4,d0
+        moveq   #4,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        bra     .iprob
+        endc
+
+        and.w   #$F8FF,sr           ; ints on (vblank ticks start)
+
+        bsr     splash_show
+        bsr     repaint_all
+
+        ifd     AUTOTEST
+        ; Auto-launch for screenshot verification (no input injection).
+        ifd     AUTOTEST_NOTEPAD
+        ; demo text + six up-arrows through the real key handler: caret
+        ; lands on Ln 12 with the goal column held (status bar proves it)
+        bsr     notepad_set_demo
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #5,d3
+.atnp:  move.w  d3,-(sp)
+        moveq   #0,d1
+        moveq   #$4C,d2             ; up
+        bsr     notepad_key
+        move.w  (sp)+,d3
+        dbra    d3,.atnp
+        endc
+        ifd     AUTOTEST_MUSIC
+        moveq   #3,d0
+        bsr     launch_app
+        bsr     music_start
+        endc
+        ifd     AUTOTEST_KBD
+        ; soft-keyboard typing path: open Notepad empty, show the panel,
+        ; click Sh,u, Sh,n, Sh,o through the real hit-test + event queue
+        ; -> "UNO" in the buffer.
+        moveq   #2,d0
+        bsr     launch_app
+        bsr     softkbd_show
+        moveq   #39,d0              ; Sh
+        bsr     kbtest_click
+        moveq   #19,d0              ; u
+        bsr     kbtest_click
+        moveq   #39,d0
+        bsr     kbtest_click
+        moveq   #45,d0              ; n
+        bsr     kbtest_click
+        moveq   #39,d0
+        bsr     kbtest_click
+        moveq   #21,d0              ; o
+        bsr     kbtest_click
+        bsr     handle_events
+        bsr     redraw_topmost
+        endc
+        ifd     AUTOTEST_PS2
+        ; PS/2 decoder verification: clock synthetic set-2 frames through
+        ; the real bit engines (keyboard + mouse), then render the result.
+        moveq   #2,d0
+        bsr     launch_app
+        bsr     ps2_selftest
+        bsr     handle_events
+        bsr     redraw_topmost
+        endc
+        ifd     AUTOTEST_CLICK
+        ; click-latch path: synthesize a double-click on the Music icon
+        ; through the real ISR latch (mouse_buttons) + main-loop consumer
+        ; (handle_clicks -> icon_at -> launch_app). Music opens playing
+        ; nothing; its window on screen proves the chain.
+        lea     VARS,a4
+        move.w  #34*8+8,v_mouse_x(a4)   ; over icon 3 (Music)
+        move.w  #3*8+8,v_mouse_y(a4)
+        moveq   #1,d3
+.atck:  move.w  d3,-(sp)
+        move.b  #1,v_mouse_btn(a4)      ; press
+        bsr     mouse_buttons
+        sf      v_mouse_btn(a4)         ; release
+        bsr     mouse_buttons
+        bsr     handle_clicks
+        move.w  (sp)+,d3
+        dbra    d3,.atck
+        endc
+        ifnd    AUTOTEST_NOTEPAD
+        ifnd    AUTOTEST_MUSIC
+        ifnd    AUTOTEST_KBD
+        ifnd    AUTOTEST_PS2
+        ifnd    AUTOTEST_CLICK
+        ; default composite: notepad with demo text, music on top playing,
+        ; soft keyboard panel up
+        bsr     notepad_set_demo
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #3,d0
+        bsr     launch_app
+        bsr     music_start
+        bsr     softkbd_show
+        endc
+        endc
+        endc
+        endc
+        endc
+        endc
+
+; ============================================================================
+; Main loop - all input decisions and ALL VDP writes live here, never in
+; ISRs (PORT-SPEC SS6 rule 2; the VDP control port is not reentrant).
+; ============================================================================
+main_loop:
+        bsr     kbd_toggle_chk
+        bsr     handle_clicks
+        bsr     handle_drag
+        bsr     handle_events
+        bsr     softkbd_hover
+        bsr     music_tick
+        bsr     app_ticks
+        bsr     cursor_sync
+        bra     main_loop
+
+; kbd_toggle_chk - B button (vblank) requested a soft keyboard toggle
+kbd_toggle_chk:
+        lea     VARS,a4
+        move.b  v_kb_toggle(a4),d0
+        bne     .go
+        rts
+.go:    sf      v_kb_toggle(a4)
+        move.b  v_kb_vis(a4),d0
+        beq     .show
+        bsr     softkbd_hide
+        rts
+.show:  bsr     softkbd_show
+        rts
+
+; ----------------------------------------------------------------------------
+; handle_events - drain the queue: topmost window's proc gets first refusal,
+; ESC stays kernel-side, desktop navigation otherwise
+; ----------------------------------------------------------------------------
+handle_events:
+.next:
+        bsr     ev_get
+        tst.b   d0
+        beq     .done
+        cmp.b   #EV_KEY,d0
+        bne     .next               ; mouse events: the click latch rules
+        move.w  d1,d2
+        lsr.w   #8,d2               ; d2 = raw
+        and.w   #$FF,d1             ; d1 = ascii
+        lea     VARS,a4
+        move.w  v_zcount(a4),d3
+        beq     .desktop
+        cmp.b   #27,d1              ; ESC closes topmost
+        bne     .app
+        bsr     close_topmost
+        bra     .next
+.app:   move.w  v_zcount(a4),d0
+        subq.w  #1,d0
+        lea     v_zlist(a4),a0
+        moveq   #0,d3
+        move.b  (a0,d0.w),d3        ; topmost window slot
+        move.w  d3,d0
+        bsr     win_ptr_raw_d0      ; a2 = window
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        bsr     app_key             ; d1 = ascii, d2 = raw, a2 = window
+        bra     .next
+.desktop:
+        cmp.b   #$4E,d2             ; right
+        beq     .selright
+        cmp.b   #$4F,d2             ; left
+        beq     .selleft
+        cmp.b   #13,d1
+        beq     .launch
+        bra     .next
+.selright:
+        move.w  v_sel_icon(a4),d0
+        addq.w  #1,d0
+        cmp.w   #NICONS,d0
+        blt     .setsel
+        moveq   #0,d0
+        bra     .setsel
+.selleft:
+        move.w  v_sel_icon(a4),d0
+        subq.w  #1,d0
+        bge     .setsel
+        moveq   #NICONS-1,d0
+.setsel:
+        bsr     select_icon
+        bra     .next
+.launch:
+        move.w  v_sel_icon(a4),d0
+        bsr     launch_app
+        bra     .next
+.done:  rts
+
+; app_key - d0 = proc, d1 = ascii, d2 = raw, a2 = window
+app_key:
+        cmp.w   #2,d0
+        beq     notepad_key
+        cmp.w   #3,d0
+        beq     music_key
+        rts                         ; sysinfo/clock: no keys
+
+; ----------------------------------------------------------------------------
+; handle_clicks - consume the ISR press latch (PORT-SPEC SS6 rule 4)
+; ----------------------------------------------------------------------------
+handle_clicks:
+        lea     VARS,a4
+        move.b  v_click_seq(a4),d0
+        cmp.b   v_last_seq(a4),d0
+        bne     .work
+        rts
+.work:
+        move.b  d0,v_last_seq(a4)
+        move.w  v_click_x(a4),d0
+        lsr.w   #3,d0               ; cells
+        move.w  v_click_y(a4),d1
+        lsr.w   #3,d1
+        ; soft keyboard panel claims its rows first
+        move.b  v_kb_vis(a4),d2
+        beq     .windows
+        cmp.w   #KBD_TOP,d1
+        blt     .windows
+        bsr     softkbd_click
+        rts
+.windows:
+        bsr     find_window_at      ; d2 = z index or -1
+        bmi     .desktop
+        move.w  d2,d3
+        bsr     zwin_ptr            ; a2 = window
+        move.w  WY(a2),d4
+        cmp.w   d4,d1
+        beq     .title              ; row 0 of the window = title bar
+        ; body click: raise if not topmost
+        move.w  v_zcount(a4),d4
+        subq.w  #1,d4
+        cmp.w   d4,d3
+        beq     .out                ; topmost body: app's business
+        move.w  d3,d0
+        bsr     raise_window
+        rts
+.title:
+        ; close box = rightmost 2 cells of the bar
+        move.w  WX(a2),d4
+        add.w   WW(a2),d4
+        subq.w  #2,d4
+        cmp.w   d4,d0
+        blt     .dragstart
+        move.w  d3,d0
+        bsr     close_window
+        rts
+.dragstart:
+        move.w  d3,d0
+        bsr     raise_window
+        lea     VARS,a4
+        move.w  v_zcount(a4),d2
+        subq.w  #1,d2
+        bsr     zwin_ptr            ; a2 = now-topmost
+        move.w  v_click_x(a4),d0
+        lsr.w   #3,d0
+        sub.w   WX(a2),d0
+        move.w  d0,v_drag_offx(a4)
+        move.w  v_click_y(a4),d0
+        lsr.w   #3,d0
+        sub.w   WY(a2),d0
+        move.w  d0,v_drag_offy(a4)
+        move.l  a2,v_drag_win(a4)
+        st      v_drag_active(a4)
+        rts
+.desktop:
+        move.w  v_click_x(a4),d0
+        lsr.w   #3,d0
+        move.w  v_click_y(a4),d1
+        lsr.w   #3,d1
+        bsr     icon_at             ; d0 = icon or -1
+        bmi     .deselect
+        move.w  d0,d3
+        move.l  v_ticks(a4),d4
+        cmp.w   v_dbl_icon(a4),d0
+        bne     .single
+        move.l  d4,d5
+        sub.l   v_dbl_tick(a4),d5
+        cmp.l   #DBLCLICK,d5
+        bgt     .single
+        move.w  #-1,v_dbl_icon(a4)
+        move.w  d3,d0
+        bsr     select_icon
+        move.w  d3,d0
+        bsr     launch_app
+        rts
+.single:
+        move.w  d3,v_dbl_icon(a4)
+        move.l  d4,v_dbl_tick(a4)
+        move.w  d3,d0
+        bsr     select_icon
+        rts
+.deselect:
+        move.w  #-1,v_dbl_icon(a4)
+.out:   rts
+
+; ----------------------------------------------------------------------------
+; handle_drag - cell-snapped live drag (tile repaints are cheap)
+; ----------------------------------------------------------------------------
+handle_drag:
+        lea     VARS,a4
+        move.b  v_drag_active(a4),d0
+        bne     .active
+        rts
+.active:
+        move.l  v_drag_win(a4),a2
+        move.b  v_mouse_btn(a4),d2
+        beq     .finish
+        ; target = mouse cell - grab offset, clamped (PORT-SPEC SS2)
+        move.w  v_mouse_x(a4),d0
+        lsr.w   #3,d0
+        sub.w   v_drag_offx(a4),d0
+        move.w  v_mouse_y(a4),d1
+        lsr.w   #3,d1
+        sub.w   v_drag_offy(a4),d1
+        tst.w   d0
+        bge     .xmin
+        moveq   #0,d0
+.xmin:  move.w  #SCRW_C,d2
+        sub.w   WW(a2),d2
+        cmp.w   d2,d0
+        ble     .xok
+        move.w  d2,d0
+.xok:   cmp.w   #MENUBAR_C,d1
+        bge     .ymin
+        move.w  #MENUBAR_C,d1
+.ymin:  move.w  #SCRH_C-1,d2
+        cmp.w   d2,d1
+        ble     .yok
+        move.w  d2,d1
+.yok:
+        cmp.w   WX(a2),d0
+        bne     .move
+        cmp.w   WY(a2),d1
+        bne     .move
+        rts
+.move:  move.w  d0,WX(a2)
+        move.w  d1,WY(a2)
+        bsr     repaint_all
+        rts
+.finish:
+        sf      v_drag_active(a4)
+        rts
+
+; ----------------------------------------------------------------------------
+; app_ticks - once a second, refresh the TOPMOST window's content
+; ----------------------------------------------------------------------------
+app_ticks:
+        lea     VARS,a4
+        move.l  v_ticks(a4),d0
+        move.l  d0,d1
+        sub.l   v_last_secs(a4),d1
+        cmp.l   #TICKS_SEC,d1
+        bge     .go
+        rts
+.go:    move.l  d0,v_last_secs(a4)
+        move.w  v_zcount(a4),d2
+        bne     .have
+        rts
+.have:  subq.w  #1,d2
+        bsr     zwin_ptr
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        bsr     app_draw_content
+        rts
+
+; cursor_sync - flush the sprite position when the ISR moved the mouse
+cursor_sync:
+        lea     VARS,a4
+        move.b  v_cur_dirty(a4),d0
+        bne     .go
+        rts
+.go:    sf      v_cur_dirty(a4)
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((SPRTAB&$3FFF)<<16)|$40000000|((SPRTAB>>14)&3),(a0)
+        move.w  v_mouse_y(a4),d0
+        add.w   #128,d0
+        move.w  d0,(a1)             ; sprite 0 y
+        move.l  #(((SPRTAB+6)&$3FFF)<<16)|$40000000|((SPRTAB>>14)&3),(a0)
+        move.w  v_mouse_x(a4),d0
+        add.w   #128,d0
+        move.w  d0,(a1)             ; sprite 0 x
+        rts
+
+; ============================================================================
+; Desktop
+; ============================================================================
+draw_desktop:
+        ; menu bar: row 0 white with the title in blue
+        moveq   #0,d0
+        moveq   #0,d1
+        moveq   #SCRW_C,d2
+        moveq   #1,d3
+        move.w  #ATTR_INV+T_SOLBG,d4
+        bsr     fill_cells
+        lea     str_menutitle(pc),a0
+        moveq   #1,d0
+        moveq   #0,d1
+        move.w  #ATTR_INV,d4
+        bsr     draw_str
+        ; footers
+        lea     str_version(pc),a0
+        moveq   #0,d0
+        moveq   #SCRH_C-1,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        lea     str_build(pc),a0
+        moveq   #SCRW_C-12,d0
+        moveq   #SCRH_C-1,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        ; icons
+        moveq   #0,d7
+.icons: move.w  d7,d0
+        bsr     draw_icon_cell
+        addq.w  #1,d7
+        cmp.w   #NICONS,d7
+        blt     .icons
+        rts
+
+; icon_pos - d0 = index -> d0 = cell x, d1 = cell y (PORT-SPEC 80px pitch)
+icon_pos:
+        mulu    #10,d0
+        addq.w  #4,d0
+        moveq   #3,d1
+        rts
+
+; draw_icon_cell - d0 = icon index (2x2 icon tiles + label)
+draw_icon_cell:
+        movem.l d0-d7/a0-a1,-(sp)
+        move.w  d0,d7
+        bsr     icon_pos            ; d0 = x, d1 = y
+        move.w  d7,d4
+        lsl.w   #2,d4
+        add.w   #T_ICONS,d4         ; first of 4 tiles (TL TR BL BR)
+        lea     VDP_DATA,a1
+        bsr     cell_addr
+        move.w  d4,(a1)
+        addq.w  #1,d4
+        move.w  d4,(a1)
+        addq.w  #1,d4
+        addq.w  #1,d1
+        bsr     cell_addr
+        move.w  d4,(a1)
+        addq.w  #1,d4
+        move.w  d4,(a1)
+        ; label at (x-1, y+3); selected = inverted (the selection box)
+        move.w  d7,d2
+        lsl.w   #2,d2
+        lea     name_tab(pc),a0
+        move.l  (a0,d2.w),a0
+        subq.w  #1,d0
+        addq.w  #2,d1               ; d1 was y+1 -> y+3
+        move.w  #ATTR_NORM,d4
+        lea     VARS,a4
+        cmp.w   v_sel_icon(a4),d7
+        bne     .lbl
+        move.w  #ATTR_INV,d4
+.lbl:   bsr     draw_str
+        movem.l (sp)+,d0-d7/a0-a1
+        rts
+
+; select_icon - d0 = new selection
+select_icon:
+        movem.l d0/d5-d6/a4,-(sp)
+        move.w  d0,d6
+        lea     VARS,a4
+        move.w  v_sel_icon(a4),d5
+        move.w  d6,v_sel_icon(a4)
+        cmp.w   d5,d6
+        beq     .done
+        move.w  d5,d0
+        bmi     .new
+        bsr     draw_icon_cell
+.new:   move.w  d6,d0
+        bsr     draw_icon_cell
+.done:  movem.l (sp)+,d0/d5-d6/a4
+        rts
+
+; icon_at - d0/d1 = cell point -> d0 = icon index or -1
+icon_at:
+        movem.l d1/d3-d5/d7,-(sp)
+        move.w  d0,d3
+        move.w  d1,d4
+        moveq   #0,d7
+.try:   move.w  d7,d0
+        bsr     icon_pos
+        ; hit box: x-1 .. x+2, y .. y+3 (icon + label row)
+        move.w  d0,d5
+        subq.w  #1,d5
+        cmp.w   d5,d3
+        blt     .no
+        addq.w  #3,d5
+        cmp.w   d5,d3
+        bgt     .no
+        cmp.w   d1,d4
+        blt     .no
+        addq.w  #3,d1
+        cmp.w   d1,d4
+        bgt     .no
+        move.w  d7,d0
+        movem.l (sp)+,d1/d3-d5/d7
+        rts
+.no:    addq.w  #1,d7
+        cmp.w   #NICONS,d7
+        blt     .try
+        moveq   #-1,d0
+        movem.l (sp)+,d1/d3-d5/d7
+        rts
+
+; launch_app - d0 = icon/proc index (re-raises if already open)
+launch_app:
+        movem.l d0-d7/a0-a2,-(sp)
+        move.w  d0,d7
+        moveq   #0,d6
+.scan:  move.w  d6,d0
+        bsr     win_ptr_raw_d0
+        move.b  WSTATE(a2),d0
+        beq     .next
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        cmp.w   d7,d0
+        bne     .next
+        bsr     z_index_of
+        bmi     .next
+        bsr     raise_window
+        movem.l (sp)+,d0-d7/a0-a2
+        rts
+.next:  addq.w  #1,d6
+        cmp.w   #MAXWIN,d6
+        blt     .scan
+        ; create from the app definition table
+        move.w  d7,d0
+        mulu    #10,d0
+        lea     app_def_tab(pc),a0
+        lea     (a0,d0.w),a0
+        move.w  (a0)+,d1            ; x
+        move.w  (a0)+,d2            ; y
+        move.w  (a0)+,d3            ; w
+        move.w  (a0)+,d4            ; h
+        move.w  (a0),d5
+        lea     start(pc),a1
+        add.w   d5,a1               ; title
+        move.w  d7,d0
+        bsr     win_create
+        movem.l (sp)+,d0-d7/a0-a2
+        rts
+
+; ============================================================================
+; Window manager (cell coordinates)
+; ============================================================================
+
+; win_create - d0=proc, d1=x d2=y d3=w d4=h, a1=title
+; (d6 = the found slot index must SURVIVE the restore - save d0-d4/a1
+; only, like the Amiga original; tst.b d(An) is fine on 68000, it's
+; only tst.b (pc) that's 68020+)
+win_create:
+        movem.l d0-d4/a1,-(sp)
+        moveq   #0,d6
+.find:  move.w  d6,d0
+        bsr     win_ptr_raw_d0
+        tst.b   WSTATE(a2)
+        beq     .got
+        addq.w  #1,d6
+        cmp.w   #MAXWIN,d6
+        blt     .find
+        movem.l (sp)+,d0-d4/a1      ; table full: defined no-op
+        rts
+.got:
+        movem.l (sp)+,d0-d4/a1
+        st      WSTATE(a2)
+        move.b  d0,WPROC(a2)
+        move.w  d1,WX(a2)
+        move.w  d2,WY(a2)
+        move.w  d3,WW(a2)
+        move.w  d4,WH(a2)
+        move.l  a1,WTITLE(a2)
+        lea     VARS,a4
+        lea     v_zlist(a4),a0
+        move.w  v_zcount(a4),d1
+        move.b  d6,(a0,d1.w)
+        addq.w  #1,d1
+        move.w  d1,v_zcount(a4)
+        bsr     draw_window         ; topmost: nothing else to repaint
+        ; keep the soft keyboard above newly created windows
+        move.b  v_kb_vis(a4),d0
+        beq     .nokbd
+        bsr     softkbd_draw
+.nokbd: rts
+
+; win_ptr_raw_d0 - d0 = table index -> a2. Preserves d0-d7/a0-a1.
+win_ptr_raw_d0:
+        move.w  d0,-(sp)
+        lsl.w   #4,d0
+        lea     VARS+v_wintab,a2
+        lea     (a2,d0.w),a2
+        move.w  (sp)+,d0
+        rts
+
+; zwin_ptr - d2 = z index -> a2. Preserves all data registers.
+zwin_ptr:
+        movem.l d2/a0,-(sp)
+        lea     VARS+v_zlist,a0
+        and.w   #$FF,d2
+        move.b  (a0,d2.w),d2
+        and.w   #$FF,d2
+        lsl.w   #4,d2
+        lea     VARS+v_wintab,a2
+        lea     (a2,d2.w),a2
+        movem.l (sp)+,d2/a0
+        rts
+
+; z_index_of - a2 = window entry -> d0 = z index or -1
+z_index_of:
+        movem.l d1-d2/a0,-(sp)
+        lea     VARS+v_wintab,a0
+        move.l  a2,d0
+        sub.l   a0,d0
+        lsr.w   #4,d0
+        lea     VARS+v_zlist,a0
+        moveq   #0,d1
+.scan:  cmp.w   VARS+v_zcount,d1
+        bge     .no
+        moveq   #0,d2
+        move.b  (a0,d1.w),d2
+        cmp.w   d0,d2
+        beq     .yes
+        addq.w  #1,d1
+        bra     .scan
+.yes:   move.w  d1,d0
+        movem.l (sp)+,d1-d2/a0
+        rts
+.no:    moveq   #-1,d0
+        movem.l (sp)+,d1-d2/a0
+        rts
+
+; find_window_at - d0/d1 = cell point -> d2 = z index (topmost hit) or -1.
+; Preserves d0/d1.
+find_window_at:
+        move.w  VARS+v_zcount,d2
+        subq.w  #1,d2
+.scan:  tst.w   d2
+        bmi     .out
+        bsr     zwin_ptr
+        cmp.w   WX(a2),d0
+        blt     .next
+        move.w  WX(a2),d3
+        add.w   WW(a2),d3
+        cmp.w   d3,d0
+        bge     .next
+        cmp.w   WY(a2),d1
+        blt     .next
+        move.w  WY(a2),d3
+        add.w   WH(a2),d3
+        cmp.w   d3,d1
+        bge     .next
+.out:   rts
+.next:  subq.w  #1,d2
+        bra     .scan
+
+; raise_window - d0 = z index
+raise_window:
+        move.w  VARS+v_zcount,d1
+        subq.w  #1,d1
+        cmp.w   d1,d0
+        bne     .doit
+        rts                         ; already topmost
+.doit:
+        lea     VARS+v_zlist,a0
+        moveq   #0,d2
+        move.b  (a0,d0.w),d2
+.shift: cmp.w   d1,d0
+        bge     .place
+        move.b  1(a0,d0.w),(a0,d0.w)
+        addq.w  #1,d0
+        bra     .shift
+.place: move.b  d2,(a0,d0.w)
+        bsr     repaint_all
+        rts
+
+; close_window - d0 = z index
+close_window:
+        bsr     music_stop_if       ; close silences audio (PORT-SPEC SS2)
+        move.w  d0,-(sp)
+        move.w  d0,d2
+        bsr     zwin_ptr
+        sf      WSTATE(a2)
+        move.w  (sp)+,d0
+        lea     VARS,a4
+        lea     v_zlist(a4),a0
+        move.w  v_zcount(a4),d1
+        subq.w  #1,d1
+        move.w  d1,v_zcount(a4)
+.shift: cmp.w   d1,d0
+        bge     .done
+        move.b  1(a0,d0.w),(a0,d0.w)
+        addq.w  #1,d0
+        bra     .shift
+.done:  bsr     repaint_all
+        rts
+
+close_topmost:
+        move.w  VARS+v_zcount,d0
+        bne     .have
+        rts
+.have:  subq.w  #1,d0
+        bsr     close_window
+        rts
+
+; music_stop_if - d0 = z index being closed: stop audio if it's Music
+music_stop_if:
+        movem.l d0/d2/a2,-(sp)
+        move.w  d0,d2
+        bsr     zwin_ptr
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        cmp.w   #3,d0
+        bne     .out
+        bsr     music_stop
+.out:   movem.l (sp)+,d0/d2/a2
+        rts
+
+; repaint_all - desktop, windows bottom-up, soft keyboard overlay last
+repaint_all:
+        movem.l d0-d7/a0-a2,-(sp)
+        bsr     clear_screen
+        bsr     draw_desktop
+        moveq   #0,d7
+.wins:  cmp.w   VARS+v_zcount,d7
+        bge     .kbd
+        move.w  d7,d2
+        bsr     zwin_ptr
+        bsr     draw_window
+        addq.w  #1,d7
+        bra     .wins
+.kbd:   move.b  VARS+v_kb_vis,d0
+        beq     .done
+        bsr     softkbd_draw
+.done:  movem.l (sp)+,d0-d7/a0-a2
+        rts
+
+; redraw_topmost - repaint just the topmost window (+ kbd overlay)
+redraw_topmost:
+        movem.l d0/d2/a2,-(sp)
+        move.w  VARS+v_zcount,d2
+        beq     .out
+        subq.w  #1,d2
+        bsr     zwin_ptr
+        bsr     draw_window
+        move.b  VARS+v_kb_vis,d0
+        beq     .out
+        bsr     softkbd_draw
+.out:   movem.l (sp)+,d0/d2/a2
+        rts
+
+; draw_window - a2 = window entry
+draw_window:
+        movem.l d0-d7/a0-a1,-(sp)
+        ; title bar: white row + title + close box
+        move.w  WX(a2),d0
+        move.w  WY(a2),d1
+        move.w  WW(a2),d2
+        moveq   #1,d3
+        move.w  #ATTR_INV+T_SOLBG,d4
+        bsr     fill_cells
+        move.l  WTITLE(a2),a0
+        move.w  WX(a2),d0
+        addq.w  #1,d0
+        move.w  WY(a2),d1
+        move.w  #ATTR_INV,d4
+        bsr     draw_str
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        subq.w  #2,d0
+        move.w  WY(a2),d1
+        moveq   #'X',d2
+        move.w  #ATTR_INV,d4
+        bsr     draw_char
+        ; body fill (rows 1..h-2, inside the side borders)
+        move.w  WX(a2),d0
+        addq.w  #1,d0
+        move.w  WY(a2),d1
+        addq.w  #1,d1
+        move.w  WW(a2),d2
+        subq.w  #2,d2
+        move.w  WH(a2),d3
+        subq.w  #2,d3
+        move.w  #ATTR_NORM+T_SOLBG,d4
+        bsr     fill_cells
+        ; side borders (1px white line tiles)
+        move.w  WY(a2),d1
+        addq.w  #1,d1
+        move.w  WH(a2),d3
+        subq.w  #2,d3
+        move.w  WX(a2),d0
+        moveq   #1,d2
+        move.w  #ATTR_NORM+T_EDGEL,d4
+        bsr     fill_cells
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        subq.w  #1,d0
+        move.w  #ATTR_NORM+T_EDGER,d4
+        bsr     fill_cells
+        ; bottom border
+        move.w  WX(a2),d0
+        move.w  WY(a2),d1
+        add.w   WH(a2),d1
+        subq.w  #1,d1
+        moveq   #1,d2
+        moveq   #1,d3
+        move.w  #ATTR_NORM+T_CORNBL,d4
+        bsr     fill_cells
+        move.w  WX(a2),d0
+        addq.w  #1,d0
+        move.w  WW(a2),d2
+        subq.w  #2,d2
+        move.w  #ATTR_NORM+T_EDGEB,d4
+        bsr     fill_cells
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        subq.w  #1,d0
+        moveq   #1,d2
+        move.w  #ATTR_NORM+T_CORNBR,d4
+        bsr     fill_cells
+        ; content
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        bsr     app_draw_content
+        movem.l (sp)+,d0-d7/a0-a1
+        rts
+
+; app_draw_content - d0 = proc index, a2 = window
+app_draw_content:
+        movem.l d0-d7/a0-a1,-(sp)
+        cmp.w   #1,d0
+        blt     .sysinfo
+        beq     .clock
+        cmp.w   #3,d0
+        blt     .notepad
+        bsr     music_draw
+        bra     .done
+.sysinfo:
+        bsr     sysinfo_draw
+        bra     .done
+.clock: bsr     clock_draw
+        bra     .done
+.notepad:
+        bsr     notepad_draw
+.done:  movem.l (sp)+,d0-d7/a0-a1
+        rts
+
+; ============================================================================
+; Splash (PORT-SPEC SS1: ~2s platform-identity hold)
+; ============================================================================
+splash_show:
+        bsr     splash_draw
+        ; hold ~2s (vblank ticks are live)
+        lea     VARS,a4
+        move.l  v_ticks(a4),d1
+        add.l   #120,d1
+.hold:  move.l  v_ticks(a4),d0
+        cmp.l   d1,d0
+        blt     .hold
+        rts
+
+splash_draw:
+        bsr     clear_screen
+        lea     str_title(pc),a0
+        moveq   #12,d0
+        moveq   #10,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        lea     str_sub(pc),a0
+        moveq   #5,d0
+        moveq   #13,d1
+        move.w  #ATTR_ACC,d4
+        bsr     draw_str
+        lea     str_kbd(pc),a0
+        moveq   #4,d0
+        moveq   #20,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        lea     str_mse(pc),a0
+        moveq   #4,d0
+        moveq   #22,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+        rts
+
+; ============================================================================
+; Cell drawing primitives (VDP plane A, main-loop context only)
+; ============================================================================
+
+; cell_addr - d0 = cx, d1 = cy: point the VDP at the cell (write mode).
+; Preserves all registers. Plane A at $C000: ($C000+off)&$3FFF = off and
+; A15:14 = 3, so control = off<<16 | $40000003.
+cell_addr:
+        ifd     PROBE_GUARD
+        cmp.w   #SCRH_C,d1          ; unsigned: catches negative cy too
+        bhs     cell_bad
+        cmp.w   #SCRW_C,d0
+        bhs     cell_bad
+        endc
+        movem.l d1-d2,-(sp)
+        lsl.w   #7,d1               ; cy * 128 (64 cells x 2 bytes)
+        add.w   d0,d1
+        add.w   d0,d1               ; + cx*2
+        moveq   #0,d2
+        move.w  d1,d2
+        swap    d2
+        or.l    #$40000003,d2
+        move.l  d2,VDP_CTRL
+        movem.l (sp)+,d1-d2
+        rts
+
+; fill_cells - d0=cx d1=cy d2=w d3=h d4=name word. Preserves all.
+fill_cells:
+        movem.l d1/d3/d5/a1,-(sp)
+        tst.w   d2
+        ble     .out
+        tst.w   d3
+        ble     .out
+        lea     VDP_DATA,a1
+        subq.w  #1,d3
+.row:   bsr     cell_addr
+        move.w  d2,d5
+        subq.w  #1,d5
+.cell:  move.w  d4,(a1)
+        dbra    d5,.cell
+        addq.w  #1,d1
+        dbra    d3,.row
+.out:   movem.l (sp)+,d1/d3/d5/a1
+        rts
+
+; draw_str - a0 = NUL string, d0=cx d1=cy, d4 = attr. Preserves all.
+; Clips at the right screen edge; control chars render as space.
+draw_str:
+        movem.l d2-d3/a0-a1,-(sp)
+        bsr     cell_addr
+        lea     VDP_DATA,a1
+        move.w  #SCRW_C,d3
+        sub.w   d0,d3               ; cells available
+.ch:    moveq   #0,d2
+        move.b  (a0)+,d2
+        beq     .done
+        tst.w   d3
+        ble     .done
+        sub.w   #31,d2              ; tile 1 = ASCII 32
+        cmp.w   #1,d2
+        blt     .sp
+        cmp.w   #95,d2
+        ble     .ok
+.sp:    moveq   #1,d2
+.ok:    add.w   d4,d2
+        move.w  d2,(a1)
+        subq.w  #1,d3
+        bra     .ch
+.done:  movem.l (sp)+,d2-d3/a0-a1
+        rts
+
+; draw_char - d0=cx d1=cy d2=char d4=attr. Preserves all.
+draw_char:
+        movem.l d2,-(sp)
+        bsr     cell_addr
+        sub.w   #31,d2
+        cmp.w   #1,d2
+        blt     .sp
+        cmp.w   #95,d2
+        ble     .ok
+.sp:    moveq   #1,d2
+.ok:    add.w   d4,d2
+        move.w  d2,VDP_DATA
+        movem.l (sp)+,d2
+        rts
+
+; clear_screen - plane A to tile 0 (backdrop blue shows through)
+clear_screen:
+        movem.l d0-d4,-(sp)
+        moveq   #0,d0
+        moveq   #0,d1
+        moveq   #SCRW_C,d2
+        moveq   #SCRH_C,d3
+        moveq   #0,d4
+        bsr     fill_cells
+        movem.l (sp)+,d0-d4
+        rts
+
+; load_palette - the four UI attribute schemes from the theme colors
+load_palette:
+        movem.l d0/a1-a2,-(sp)
+        move.l  #$C0000000,VDP_CTRL ; CRAM write, address 0
+        lea     VDP_DATA,a1
+        lea     pal_data(pc),a2
+        move.w  #64-1,d0
+.pal:   move.w  (a2)+,(a1)
+        dbra    d0,.pal
+        movem.l (sp)+,d0/a1-a2
+        rts
+
+; ============================================================================
+; Interrupt handlers - state only, never the VDP (PORT-SPEC SS6 rule 2)
+; ============================================================================
+
+; level 6: vertical blank. Ticks, pad-as-mouse (or the PS/2 mouse receive
+; window), button edges -> click latch + events.
+isr_vbl:
+        movem.l d0-d7/a0-a1/a4,-(sp)
+        move.w  VDP_CTRL,d0         ; status read = interrupt acknowledge
+                                    ; (safe: control writes are single
+                                    ; move.l's, atomic across interrupts)
+        lea     VARS,a4
+        addq.l  #1,v_ticks(a4)
+        move.b  v_port1_mode(a4),d0
+        bne     .ps2mouse
+        bsr     pad_read            ; -> v_pad_state
+        bsr     pad_to_mouse        ; -> position, v_mouse_btn, key events
+        bra     .buttons
+.ps2mouse:
+        bsr     ps2m_window         ; vblank receive window (ps2.i)
+.buttons:
+        bsr     mouse_buttons       ; edge events + press latch
+        st      v_cur_dirty(a4)
+        movem.l (sp)+,d0-d7/a0-a1/a4
+        rte
+
+; mouse_buttons - post edge event + press latch when v_mouse_btn changed
+; (a4 = VARS; ISR context, all registers saved by the caller)
+mouse_buttons:
+        move.b  v_mouse_btn(a4),d1
+        cmp.b   v_last_btn(a4),d1
+        beq     .out
+        move.b  d1,v_last_btn(a4)
+        tst.b   d1
+        beq     .post
+        move.w  v_mouse_x(a4),d3    ; press: latch + sequence count
+        move.w  d3,v_click_x(a4)
+        move.w  v_mouse_y(a4),d3
+        move.w  d3,v_click_y(a4)
+        addq.b  #1,v_click_seq(a4)
+.post:  moveq   #0,d2
+        move.b  d1,d2
+        move.w  d2,d1
+        moveq   #EV_MOUSE,d0
+        bsr     ev_post
+.out:   rts
+
+; level 4: hblank (unused); level 2: EXT = PS/2 keyboard clock edge
+isr_hbl:
+        rte
+isr_ext:
+        movem.l d0-d3/a0-a1/a4,-(sp)
+        move.w  VDP_CTRL,d0         ; status read = interrupt acknowledge
+        lea     VARS,a4
+        bsr     ps2k_edge           ; sample the port-2 lines (ps2.i)
+        movem.l (sp)+,d0-d3/a0-a1/a4
+        rte
+
+err:    move.w  #$8704,VDP_CTRL     ; crash beacon: magenta border
+        bra     err
+
+        ifd     PROBE_GUARD
+; cell_bad - guard tripped: render "<caller-pc> <d0> <d1>" as hex on the
+; bottom row via direct VDP writes (cell_addr can't be trusted), freeze.
+cell_bad:
+        move.l  (sp),d5             ; cell_addr's caller (return address)
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((($C000+27*128)&$3FFF)<<16)|$40000000|3,(a0)
+        moveq   #7,d6               ; 8 nibbles of the caller pc
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)  ; space
+        move.l  d0,d5
+        swap    d5
+        moveq   #3,d6               ; 4 nibbles of d0 (cx)
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)
+        move.l  d1,d5
+        swap    d5
+        moveq   #3,d6               ; 4 nibbles of d1 (cy)
+        bsr     hexout
+.frz:   bra     .frz
+
+; hexout - top (d6+1) nibbles of d5 (pre-swapped so they're in the high
+; end) as inverted hex digits -> the already-addressed VDP data port
+hexout:
+.dig:   rol.l   #4,d5
+        move.w  d5,d7
+        and.w   #$F,d7
+        cmp.w   #10,d7
+        blt     .num
+        add.w   #'A'-'0'-10,d7
+.num:   add.w   #'0'-31,d7          ; font tile for the digit
+        add.w   #ATTR_INV,d7
+        move.w  d7,(a1)
+        dbra    d6,.dig
+        rts
+        endc
+
+; ============================================================================
+; 6-button pad on port 1 -> v_pad_state (active-high)
+;   bit 0 U, 1 D, 2 L, 3 R, 4 A, 5 B, 6 C, 7 Start, 8 X, 9 Y, 10 Z, 11 Mode
+; Standard TH-toggle sequence (Plutiedev); a 3-button pad never reports
+; the all-zero D3-D0 signature, so X/Y/Z just stay released.
+; ============================================================================
+pad_read:
+        lea     IO_DATA1,a0
+        move.b  #$40,(a0)           ; TH=1
+        nop
+        nop
+        move.b  (a0),d0             ; - - C B R L D U (active low)
+        move.b  #$00,(a0)           ; TH=0
+        nop
+        nop
+        move.b  (a0),d1             ; - - St A 0 0 D U
+        move.b  #$40,(a0)
+        nop
+        nop
+        move.b  #$00,(a0)
+        nop
+        nop
+        move.b  #$40,(a0)
+        nop
+        nop
+        move.b  #$00,(a0)           ; 3rd TH low
+        nop
+        nop
+        move.b  (a0),d2             ; St A 0 0 0 0 on a 6-button pad
+        move.b  #$40,(a0)
+        nop
+        nop
+        move.b  (a0),d3             ; C B Mode X Y Z on a 6-button pad
+        move.b  #$00,(a0)
+        nop
+        nop
+        move.b  #$40,(a0)           ; leave TH high (idle)
+        ; ---- build the active-high state word
+        not.b   d0
+        not.b   d1
+        not.b   d3
+        moveq   #0,d4
+        move.b  d0,d4
+        and.w   #$000F,d4           ; R L D U
+        btst    #4,d0               ; B
+        beq     .nb
+        bset    #5,d4
+.nb:    btst    #5,d0               ; C
+        beq     .nc
+        bset    #6,d4
+.nc:    btst    #4,d1               ; A
+        beq     .na
+        bset    #4,d4
+.na:    btst    #5,d1               ; Start
+        beq     .nst
+        bset    #7,d4
+.nst:
+        and.b   #$0F,d2             ; 6-button signature: D3-D0 all low
+        bne     .store
+        btst    #2,d3               ; X
+        beq     .nx
+        bset    #8,d4
+.nx:    btst    #1,d3               ; Y
+        beq     .ny
+        bset    #9,d4
+.ny:    btst    #0,d3               ; Z
+        beq     .nz
+        bset    #10,d4
+.nz:    btst    #3,d3               ; Mode
+        beq     .store
+        bset    #11,d4
+.store: move.w  v_pad_state(a4),d0
+        move.w  d0,v_pad_prev(a4)
+        move.w  d4,v_pad_state(a4)
+        rts
+
+; pad_to_mouse - d-pad moves the cursor (held-frame acceleration, Z =
+; turbo), A = button; B/C/Start/X/Y post synthesized events on press.
+pad_to_mouse:
+        move.w  v_pad_state(a4),d0
+        ; --- velocity from held time
+        move.w  d0,d1
+        and.w   #$000F,d1
+        bne     .held
+        clr.w   v_pad_heldn(a4)
+        bra     .moved
+.held:  move.w  v_pad_heldn(a4),d1
+        addq.w  #1,d1
+        move.w  d1,v_pad_heldn(a4)
+        lsr.w   #3,d1               ; +1 px/frame per 8 frames held
+        addq.w  #1,d1
+        cmp.w   #5,d1
+        ble     .spd
+        moveq   #5,d1
+.spd:   btst    #10,d0              ; Z = turbo
+        beq     .go
+        moveq   #8,d1
+.go:
+        move.w  v_mouse_x(a4),d2
+        move.w  v_mouse_y(a4),d3
+        btst    #0,d0               ; up
+        beq     .nu
+        sub.w   d1,d3
+.nu:    btst    #1,d0               ; down
+        beq     .nd
+        add.w   d1,d3
+.nd:    btst    #2,d0               ; left
+        beq     .nl
+        sub.w   d1,d2
+.nl:    btst    #3,d0               ; right
+        beq     .nr
+        add.w   d1,d2
+.nr:    tst.w   d2
+        bge     .x0
+        moveq   #0,d2
+.x0:    cmp.w   #SCRW-1,d2
+        ble     .x1
+        move.w  #SCRW-1,d2
+.x1:    tst.w   d3
+        bge     .y0
+        moveq   #0,d3
+.y0:    cmp.w   #SCRH-1,d3
+        ble     .y1
+        move.w  #SCRH-1,d3
+.y1:    move.w  d2,v_mouse_x(a4)
+        move.w  d3,v_mouse_y(a4)
+.moved:
+        ; --- A = mouse button (level; edges in mouse_buttons)
+        moveq   #0,d1
+        btst    #4,d0
+        beq     .seta
+        moveq   #1,d1
+.seta:  move.b  d1,v_mouse_btn(a4)
+        ; --- press edges -> synthesized keys / kbd toggle
+        move.w  d0,d2
+        move.w  v_pad_prev(a4),d1
+        not.w   d1
+        and.w   d1,d2               ; d2 = newly pressed
+        btst    #5,d2               ; B = soft keyboard toggle
+        beq     .nkb
+        st      v_kb_toggle(a4)
+.nkb:   btst    #6,d2               ; C = Enter
+        beq     .nent
+        moveq   #EV_KEY,d0
+        move.w  #13,d1
+        bsr     ev_post
+.nent:  btst    #7,d2               ; Start = Esc
+        beq     .nesc
+        moveq   #EV_KEY,d0
+        move.w  #27,d1
+        bsr     ev_post
+.nesc:  btst    #8,d2               ; X = Backspace
+        beq     .nbs
+        moveq   #EV_KEY,d0
+        moveq   #8,d1
+        bsr     ev_post
+.nbs:   btst    #9,d2               ; Y = Space
+        beq     .nsp
+        moveq   #EV_KEY,d0
+        moveq   #32,d1
+        bsr     ev_post
+.nsp:   rts
+
+; ============================================================================
+; Event queue - 32 x 4 bytes; ISR producer, main-loop consumer
+; ============================================================================
+
+; ev_post - d0.b = type, d1.w = data. Preserves d2-d7/a0-a6.
+ev_post:
+        movem.l d2-d3/a0-a1,-(sp)
+        lea     VARS,a1
+        move.w  sr,-(sp)
+        or.w    #$0700,sr
+        move.w  v_ev_tail(a1),d2
+        move.w  d2,d3
+        addq.w  #1,d3
+        and.w   #EVQ_SIZE-1,d3
+        cmp.w   v_ev_head(a1),d3
+        beq     .full               ; drop-when-full (PORT-SPEC SS6 rule 10)
+        lea     v_evq(a1),a0
+        lsl.w   #2,d2
+        move.b  d0,(a0,d2.w)
+        move.w  d1,2(a0,d2.w)
+        move.w  d3,v_ev_tail(a1)
+.full:  move.w  (sp)+,sr
+        movem.l (sp)+,d2-d3/a0-a1
+        rts
+
+; ev_get - d0.b = type (0 if empty), d1.w = data. Trashes d2-d3/a0-a1.
+ev_get:
+        lea     VARS,a1
+        move.w  sr,d2
+        or.w    #$0700,sr
+        move.w  v_ev_head(a1),d0
+        cmp.w   v_ev_tail(a1),d0
+        beq     .empty
+        lea     v_evq(a1),a0
+        move.w  d0,d1
+        lsl.w   #2,d1
+        move.w  d0,d3
+        addq.w  #1,d3
+        and.w   #EVQ_SIZE-1,d3
+        move.w  d3,v_ev_head(a1)
+        moveq   #0,d0
+        move.b  (a0,d1.w),d0
+        move.w  2(a0,d1.w),d1
+        move.w  d2,sr
+        rts
+.empty: move.w  d2,sr
+        moveq   #0,d0
+        rts
+
+        include "softkbd.i"
+        include "ps2.i"
+        include "apps.i"
+
+; ============================================================================
+; Data
+; ============================================================================
+        even
+str_menutitle:  dc.b    "UnoDOS 3",0
+str_version:    dc.b    "UnoDOS/Genesis v0.1.0",0
+str_build:      dc.b    "Milestone 1",0
+str_title:      dc.b    "U n o D O S   3",0
+str_sub:        dc.b    "for Sega Genesis - Mega Drive",0
+str_kbd:        dc.b    "PS/2 kbd: port 2 TH=CLK D0=DAT",0
+str_mse:        dc.b    "PS/2 mse: port 1 TH=CLK D0=DAT",0
+str_t_sysinfo:  dc.b    "System Info",0
+str_t_clock:    dc.b    "Clock",0
+str_t_notepad:  dc.b    "Notepad",0
+str_t_music:    dc.b    "Music",0
+name_sysinfo:   dc.b    "Sys Info",0
+name_clock:     dc.b    "Clock",0
+name_notepad:   dc.b    "Notepad",0
+name_music:     dc.b    "Music",0
+
+        even
+; app definitions: x, y, w, h (cells), title offset from 'start'
+app_def_tab:
+        dc.w    4,4,28,11,  str_t_sysinfo-start
+        dc.w    12,9,18,8,  str_t_clock-start
+        dc.w    1,1,38,20,  str_t_notepad-start
+        dc.w    5,3,30,15,  str_t_music-start
+
+name_tab:
+        dc.l    name_sysinfo
+        dc.l    name_clock
+        dc.l    name_notepad
+        dc.l    name_music
+
+; CRAM: 4 palette lines x 16 colors ($0BGR, 3-bit channels)
+; line 0 NORM: backdrop blue, 1 white, 2 blue, 3 cyan, 4 magenta,
+;              13-15 cursor sprite (cyan, blue, white)
+; line 1 INV:  1 blue, 2 white  (title bars, status, selection)
+; line 2 ACC:  1 cyan, 2 blue   (accents)
+; line 3 KEY:  1 blue, 2 cyan   (soft keyboard)
+        even
+pal_data:
+        dc.w    $0A00,$0EEE,$0A00,$0AA0,$0A0A,0,0,0,0,0,0,0,0,$0AA0,$0A00,$0EEE
+        dc.w    $0A00,$0A00,$0EEE,$0AA0,$0A0A,0,0,0,0,0,0,0,0,0,0,0
+        dc.w    $0A00,$0AA0,$0A00,$0EEE,$0A0A,0,0,0,0,0,0,0,0,0,0,0
+        dc.w    $0A00,$0A00,$0AA0,$0EEE,$0A0A,0,0,0,0,0,0,0,0,0,0,0
+
+        even
+        include "gen_data.i"
+
+; pad the ROM to 64KB
+        org     $FFFF
+        dc.b    0

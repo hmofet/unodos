@@ -1,0 +1,3 @@
+build/*
+!build/unodos.gen
+!build/desktop.png

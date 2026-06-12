@@ -169,11 +169,13 @@ Companion references: `docs/API_REFERENCE.md` (per-call semantics),
 | Implementation | Location | Notes |
 |---|---|---|
 | x86 (reference) | `kernel/`, `apps/`, `boot/` | v3.26.0+, 8086-clean |
-| Amiga 68000 | `amiga/` | bare-metal; milestone 2 |
+| Amiga 68000 | `amiga/` | bare-metal; milestone 3 |
 | Mac System 7 (color) | `mac/` (`UnoDOS7`) | Toolbox-based; milestone 2 |
 | Mac System 1–6 (mono) | `mac/` (`UnoDOSClassic`) | Toolbox-based; milestone 2 |
+| Sega Genesis 68000 | `genesis/` | bare-metal, VDP cell desktop; milestone 1 |
 
-Deviations to reconcile in later milestones: the 68K ports use a single
-cooperative event loop (no scheduler yet), the Amiga stores files on a
-build-time ROM-disk rather than FAT12, and both Notepads cap their edit
-buffers (2–4 KB) below the x86 app's.
+Deviations to reconcile in later milestones: the Mac and Genesis ports
+use a single cooperative event loop (the Amiga has the milestone-3
+scheduler), the Genesis has no storage yet (SRAM saves planned; its
+Notepad F1-save is a no-op) and quantizes windows to 8 px cells, and
+the 68K Notepads cap their edit buffers (2–4 KB) below the x86 app's.
