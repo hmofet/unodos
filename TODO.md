@@ -260,24 +260,31 @@ Next steps:
 - [ ] M2 real-hardware risk: .Sony _Read/_Write *after* the kernel has
       taken the VIA/SCC is harness- and spec-validated but unproven on
       metal (the boot-time _Read path is). Watch this on the SE/IIci run.
-### M3: bring macplus up to full app parity (2026-06-12 direction)
-Port the remaining apps from the Amiga/Genesis feature set to the 1-bit
-standalone Mac. Other ports have all of these; macplus has 5 of 11 apps.
-- [ ] Sound foundation: the Mac Plus pulse-width sound buffer (370-word
-      buffer near MemTop, high byte/word = sample; VIA PB7 sound enable).
-      Square-wave synth path the way Paula/PSG/PC-speaker do on the others.
-- [ ] Cooperative scheduler (port amiga/scheduler.i): per-window tasks,
-      private 2KB stacks, one-slot mailboxes, 68K movem context switch.
-- [ ] Music app (square-wave sequencer + staff view; Canon in D demo)
-- [ ] Tracker (32-row pattern editor; byte-identical .TRK format; save to
-      the FAT12 disk via the M2 file path)
-- [ ] Theme app — 1-bit analog: desktop dither-pattern schemes + (once the
-      cross-platform chrome work lands) the window-chrome style picker
-- [ ] Paint (1-bit dither-pattern variant, like the Classic Mac target)
-- [ ] Games: Dostris, OutLast, Pac-Man (same tables/physics/AI as x86,
-      rendered to the 512x342 1-bit framebuffer)
+### M3: full app parity - COMPLETE 2026-06-12
+macplus now carries the entire shared app roster (11 apps + the
+disk-loaded Demo): SysInfo, Clock, Files, Notepad, Dostris, Pac-Man,
+OutLast, Paint, Music, Tracker, Theme.
+- [x] Sound foundation (snd.i): the Plus pulse-width buffer (370 words at
+      MemTop-$300, high bytes only - low bytes are the .Sony disk PWM),
+      Paula-period square synth, machine-gated (Plus full VIA control /
+      SE buffer-only / II disabled). gm_* sequencer with 50->60Hz tempo.
+- [x] Cooperative scheduler (scheduler.i): per-window tasks, private 2KB
+      stacks at $3C000, one-slot mailboxes with the Genesis bounded key
+      yield-retry; StkLowPt cleared (ROM stack sniffer). task_body
+      re-derives the proc per event (registers are app-clobberable -
+      found via Theme's repaint_all using d7).
+- [x] Music (square sequencer + staff view, background playback)
+- [x] Tracker (byte-identical pattern format; leftmost-voice playback
+      like the x86 PC-speaker port; SONG.UNO on the FAT12 floppy)
+- [x] Theme - 1-bit dither schemes through the now-mutable pat_tab,
+      6 presets incl. full video invert, live whole-screen preview
+- [x] Paint (4-dither-ink variant; PAINT.UNO byte-exact round-trip)
+- [x] Games: Dostris, OutLast, Pac-Man (verbatim tables/AI; 1-bit
+      rendering schemes; gravity/physics through task ticks)
 - [ ] Color milestone (orthogonal): 8bpp framebuffer for the IIci, which
       then unlocks full-color Theme/Paint/games on that machine
+- [ ] M3 real-hardware items: sound ear-check (synthesis is
+      buffer-verified only), SE sound audibility (no VIA writes there)
 - [ ] Real-hardware / Mini vMac validation (needs a user-supplied Mac
       Plus ROM dump at macplus/vMac.ROM). Calibration points: mouse
       quadrature polarity (flip eor sense in isr_lvl2 if an axis is

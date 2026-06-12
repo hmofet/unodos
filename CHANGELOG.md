@@ -5,6 +5,54 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [macplus milestone 3: FULL APP PARITY] - 2026-06-12
+
+The standalone Mac OS now carries the complete shared UnoDOS app roster —
+the same 11 apps as the Amiga, Genesis, hosted-Mac and x86 ports — plus
+sound and the cooperative scheduler. Everything below is harness-verified
+(4 regression scripts); the sound ear-check is a real-hardware item.
+
+### Sound (snd.i)
+The classic Mac pulse-width buffer: 370 words at MemTop−$300 scanned at
+22.257 kHz, high byte per word = sample; the low bytes (the .Sony
+variable-speed disk PWM) are never touched. Square synth converts the
+shared Paula note periods (period/40); gm_* game-music sequencer with
+PAL→60 Hz tempo rescale. Machine-gated: Plus = VIA PB7 + volume control,
+SE = buffer-only, Mac II class = disabled (ASC).
+
+### Games: Dostris (proc 5), Pac-Man (6), OutLast (7)
+Verbatim logic, tables and AI from the Amiga port with deliberate 1-bit
+schemes: Dostris pieces in alternating dithers; Pac-Man ghosts identified
+by body fill density (solid/50%/25%) with hollow-shell frightened mode;
+OutLast's white road over medium/light dither grass parity. Gravity and
+physics run as task ticks; tick_wanted defeats the idle gate only while a
+game (or song) is live.
+
+### Paint (8), Music (9), Tracker (10), Theme (11)
+Paint with the platform's true gamut — the four dither inks — and
+byte-exact PAINT.UNO round-trips; Music plays Canon in D on the square
+voice with background playback; Tracker edits the byte-identical shared
+pattern format with leftmost-voice playback (the x86 PC-speaker model)
+and SONG.UNO persistence; Theme selects dither schemes through the
+now-mutable pat_tab — six presets including a full video invert, applied
+live with a whole-screen repaint as the preview.
+
+### Cooperative scheduler (scheduler.i)
+Port of the Amiga scheduler with the Genesis key yield-retry: task 0 is
+the kernel; every window runs its app proc in a private-2KB-stack task
+(stacks at $3C000, below the disk-app region; StkLowPt cleared so the
+ROM stack sniffer stays quiet in ROM-assisted mode). Keys post to the
+focused task's one-slot mailbox; frame ticks drive the games in task
+context. task_body re-derives the proc per event after a real bug: the
+cached-register approach broke when Theme's repaint_all counted windows
+in the same register.
+
+### Kernel
+Large buffers (Paint canvas, FAT caches, Notepad buffer, game state)
+moved out of the image to fixed-RAM KBSS equates ($30000+), zeroed at
+boot — image ~30 KB and every vars label safely pc-relative. pat_tab is
+mutable (Theme); clear_screen derives the desktop fill from it.
+
 ## [macplus milestone 2: floppy filesystem + Files/Notepad + disk apps] - 2026-06-12
 
 ### macplus: the UnoDOS floppy filesystem (M2)

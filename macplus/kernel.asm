@@ -2289,8 +2289,8 @@ ev_get:
 ; ============================================================================
         even
 str_menutitle:  dc.b    "UnoDOS MacPlus",0
-str_version:    dc.b    "UnoDOS/MacPlus v0.2.0",0
-str_build:      dc.b    "Milestone 2",0
+str_version:    dc.b    "UnoDOS/MacPlus v0.3.0",0
+str_build:      dc.b    "Milestone 3",0
 str_x:          dc.b    "X",0
 str_fault:      dc.b    "FAULT @ ",0
         ifeq    SCRW-640
@@ -2302,7 +2302,7 @@ str_si2:        dc.b    "Machine Mac Plus/SE",0
         endc
 str_si3:        dc.b    "RAM",0
 str_si4:        dc.b    "Uptime",0
-str_si5:        dc.b    "UnoDOS/MacPlus  Milestone 2",0
+str_si5:        dc.b    "UnoDOS/MacPlus  Milestone 3",0
 str_uptime:     dc.b    "Uptime",0
 str_t_sysinfo:  dc.b    "System Info",0
 str_t_clock:    dc.b    "Clock",0
