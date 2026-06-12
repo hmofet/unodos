@@ -97,9 +97,14 @@ class Mac:
         self.dcd_y = 0              # SCC ch B DCD
         self.scc_ptr = {0: 0, 1: 0} # 0 = A, 1 = B (write reg pointer)
         self.kb_queue = []          # response bytes (already wire-encoded)
-        self.kb_events = []         # (delay_slices, kind) pending SR events
+        self.kb_events = []         # (delay_slices, kind, ...) SR events
+        self.kb_attn = False        # data line held low (mode-6 zero)
+        self.kb_cmd = None          # command awaiting end-of-command
+        self.kb_stash = None        # $79-prefix second byte (Instant)
         self.pend1 = False          # level-1 (VIA) interrupt pending
         self.pend2 = False          # level-2 (SCC) interrupt pending
+        self.ctx_stack = []         # saved contexts of injected interrupts
+        self.rte_flag = False       # an injected ISR just finished
         self.fail = None
         self.slices = 0
 
@@ -147,17 +152,24 @@ class Mac:
     def _via_w(self, uc, access, addr, size, value, user):
         r = self._via_reg(addr)
         v = value & 0xFF
-        if r == 10:                 # SR: keyboard command going out
-            self.via_ifr &= ~0x04
-            if (self.via_acr & 0x1C) == 0x1C:       # shift out, ext clock
-                self.kb_cmd = v
-                self.kb_events.append([1, "sent"])  # cmd reaches keyboard
+        if r == 10:                 # SR write (faithful M0110 contract,
+            self.via_ifr &= ~0x04   # mirrors Mini vMac KBRDEMDV/VIAEMDEV)
+            mode = (self.via_acr >> 2) & 7
+            if mode == 6 and v == 0:
+                self.kb_attn = True             # data line pulled low
+            elif mode == 7 and self.kb_attn:
+                self.kb_attn = False
+                self.kb_cmd = v                 # keyboard clocks it in
+                self.kb_events.append([2, "sent"])
         elif r == 11:
             old = self.via_acr
             self.via_acr = v
-            # switching SR to shift-in (011) = listening for the response
-            if (old & 0x1C) != 0x0C and (v & 0x1C) == 0x0C:
-                self.kb_events.append([1, "resp"])
+            # out->in switch floats the data line high: the keyboard
+            # treats that as end-of-command and shifts the response in
+            if (old & 0x1C) != 0x0C and (v & 0x1C) == 0x0C \
+                    and self.kb_cmd is not None:
+                self.kb_events.append([2, "resp", self.kb_cmd])
+                self.kb_cmd = None
         elif r == 13:
             self.via_ifr &= ~(v & 0x7F)
         elif r == 14:
@@ -198,12 +210,16 @@ class Mac:
     # ------------------------------------------------------------ traps
     def _intr(self, uc, intno, user):
         pc = uc.reg_read(UC_M68K_REG_PC)
-        if intno == 0x100:          # RTE: pop our 6-byte frame
-            sp = uc.reg_read(UC_M68K_REG_A7)
-            sr, npc = struct.unpack(">HI", uc.mem_read(sp, 6))
-            uc.reg_write(UC_M68K_REG_A7, sp + 6)
-            uc.reg_write(UC_M68K_REG_SR, sr)
-            uc.reg_write(UC_M68K_REG_PC, npc)
+        if intno == 0x100:          # RTE: end of an injected ISR
+            # Restore happens OUTSIDE emulation (context_restore inside a
+            # hook does not redirect the running translation block the way
+            # reg_write(PC) does). Flag it and stop the slice.
+            if self.ctx_stack:
+                self.rte_flag = True
+                uc.emu_stop()
+                return
+            self.fail = f"RTE with no injected interrupt @ {pc:#x}"
+            uc.emu_stop()
             return
         if intno == 10:             # A-line
             op = struct.unpack(">H", uc.mem_read(pc, 2))[0]
@@ -235,14 +251,27 @@ class Mac:
 
     # ------------------------------------------------------------ irqs
     def _inject(self, level, vector):
+        # Interrupt entry: snapshot the FULL CPU context (lazy flags and
+        # all), then run the ISR; its RTE restores the snapshot. The mask
+        # bits of SR are real (not lazy), so gating on them is safe.
         mu = self.mu
+        # Flag-safe boundary: never interrupt right before a conditional
+        # consumer (Bcc/DBcc/Scc). QEMU's lazy CC state does not reliably
+        # survive a stop/inject/restore cycle landing exactly between a
+        # tst and its branch (found as a 64KB wild fill); stepping the
+        # conditional first lets QEMU evolve the flags internally.
+        for _ in range(8):
+            op = int.from_bytes(mu.mem_read(self.pc, 2), "big")
+            hi = op >> 12
+            if hi == 6 or (hi == 5 and (op & 0xC0) == 0xC0):
+                mu.emu_start(self.pc, 0xFFFFFFFF, count=1)
+                self.pc = mu.reg_read(UC_M68K_REG_PC)
+            else:
+                break
         sr = mu.reg_read(UC_M68K_REG_SR)
         if ((sr >> 8) & 7) >= level:
             return False
-        sp = mu.reg_read(UC_M68K_REG_A7)
-        sp -= 6
-        mu.mem_write(sp, struct.pack(">HI", sr, self.pc))
-        mu.reg_write(UC_M68K_REG_A7, sp)
+        self.ctx_stack.append(mu.context_save())
         mu.reg_write(UC_M68K_REG_SR, (sr & ~0x0700) | 0x2000 | (level << 8))
         handler = struct.unpack(">I", mu.mem_read(vector, 4))[0]
         self.pc = handler
@@ -257,9 +286,22 @@ class Mac:
             ev[0] -= 1
         due = [e for e in self.kb_events if e[0] <= 0]
         self.kb_events = [e for e in self.kb_events if e[0] > 0]
-        for _, kind in due:
-            if kind == "resp":
-                self.via_sr = self.kb_queue.pop(0) if self.kb_queue else 0x7B
+        for ev in due:
+            if ev[1] == "resp":
+                cmd = ev[2]
+                if cmd == 0x14:         # Instant: stashed prefix byte only
+                    b = self.kb_stash if self.kb_stash is not None else 0x7B
+                    self.kb_stash = None
+                elif cmd == 0x10:       # Inquiry: next key event
+                    if self.kb_queue:
+                        b = self.kb_queue.pop(0)
+                        if b == 0x79 and self.kb_queue:
+                            self.kb_stash = self.kb_queue.pop(0)
+                    else:
+                        b = 0x7B
+                else:
+                    b = 0
+                self.via_sr = b
             self.via_ifr |= 0x04
         # raise pending device interrupts (priority: SCC level 2 first)
         if self.via_ifr & self.via_ier & 0x7F:
@@ -273,6 +315,9 @@ class Mac:
         except UcError as e:
             if not self.fail:
                 self.fail = f"{e} @ {self.mu.reg_read(UC_M68K_REG_PC):#x}"
+        if self.rte_flag:           # injected ISR returned: restore the
+            self.rte_flag = False   # interrupted context (flags intact;
+            self.mu.context_restore(self.ctx_stack.pop())  # memory kept)
         self.pc = self.mu.reg_read(UC_M68K_REG_PC)
         if self.fail:
             raise RuntimeError(self.fail)
@@ -298,7 +343,7 @@ class Mac:
     @property
     def mouse(self):
         assert self.vars, "kernel not up yet"
-        return (self.read_w(self.vars + 24), self.read_w(self.vars + 26))
+        return (self.read_w(self.vars + 28), self.read_w(self.vars + 30))
 
     # ------------------------------------------------------------ input
     def kb_send(self, *wire):

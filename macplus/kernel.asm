@@ -59,7 +59,8 @@ SCRH        equ 342
 ROWB        equ 64                  ; bytes per row
 
 ; keyboard protocol
-KB_INSTANT  equ $14
+KB_INQUIRY  equ $10                 ; poll for key events (waits ~0.25s)
+KB_INSTANT  equ $14                 ; fetch the stashed $79-prefix byte
 KB_NULL     equ $7B
 KB_PREFIX   equ $79
 
@@ -127,6 +128,8 @@ start2:
         move.l  LM_SCRNBASE,d0
         lea     vars(pc),a4
         move.l  d0,scrn-vars(a4)
+        move.l  $82C,d0             ; baseline RawMouse (absolute fallback)
+        move.l  d0,rawm_last-vars(a4)
 
         ; SCC: enable DCD ext/status interrupts on both channels
         move.b  SCCR_A,d0           ; sync the pointer state
@@ -164,6 +167,30 @@ start2:
 ; draw, redraw after (the saved under-image stays valid by construction).
 ; ============================================================================
 main_loop:
+        ifd     AUTOTEST
+        ; debug: show the last raw keyboard byte top-right in the menu bar
+        move.b  kb_dbg(pc),d0
+        cmp.b   kb_dbgs(pc),d0
+        beq     .nodbg
+        lea     vars(pc),a4
+        move.b  d0,kb_dbgs-vars(a4)
+        lea     numbuf(pc),a0
+        move.b  d0,d1
+        lsr.b   #4,d1
+        bsr     hexdig
+        move.b  d1,(a0)
+        move.b  d0,d1
+        and.b   #$F,d1
+        bsr     hexdig
+        move.b  d1,1(a0)
+        clr.b   2(a0)
+        move.w  #SCRW-20,d0
+        moveq   #2,d1
+        moveq   #3,d2
+        moveq   #0,d3
+        bsr     draw_string_bg
+.nodbg:
+        endc
         move.b  click_seq(pc),d0
         cmp.b   last_seq(pc),d0
         bne     .work
@@ -981,6 +1008,15 @@ clock_draw:
         bsr     draw_string_bg
         rts
 
+; hexdig - d1.b (0-15) -> ASCII hex digit in d1
+hexdig:
+        and.b   #$F,d1
+        cmp.b   #10,d1
+        blt     .num
+        add.b   #'A'-10-'0',d1
+.num:   add.b   #'0',d1
+        rts
+
 ; put2dig - d0.w (0..99) -> two ASCII digits at (a0)+. Trashes d0/d1.
 put2dig:
         and.l   #$FFFF,d0
@@ -1027,7 +1063,7 @@ pat_tab:
 
 ; clear_screen - desktop gray (50% dither, phase-locked to absolute y)
 clear_screen:
-        movem.l d0-d2/a0,-(sp)
+        movem.l d0-d3/a0,-(sp)
         move.l  scrn(pc),a0
         move.w  #SCRH/2-1,d0
         move.l  #$AAAAAAAA,d1
@@ -1039,7 +1075,7 @@ clear_screen:
 .r1:    move.l  d2,(a0)+
         dbra    d3,.r1
         dbra    d0,.rows
-        movem.l (sp)+,d0-d2/a0
+        movem.l (sp)+,d0-d3/a0
         rts
 
 ; fill_rect - d0=x d1=y d2=w d3=h d4=color(0-3). Preserves all registers.
@@ -1507,6 +1543,30 @@ isr_lvl1:
         moveq   #1,d1
 .btn:   move.b  mouse_btn(pc),d2
         move.b  d1,mouse_btn-vars(a0)
+        ; absolute-mouse fallback: emulators (Mini vMac) inject host mouse
+        ; motion by writing low-mem RawMouse ($82C, Point = v.w,h.w)
+        ; instead of synthesizing quadrature. On real hardware we own the
+        ; SCC vectors so RawMouse goes stale -> this path is inert there.
+        move.l  $82C,d3
+        cmp.l   rawm_last(pc),d3
+        beq     .nabs
+        move.l  d3,rawm_last-vars(a0)
+        move.w  d3,d0               ; h (x)
+        bge     .axp
+        moveq   #0,d0
+.axp:   cmp.w   #SCRW-1,d0
+        ble     .axok
+        move.w  #SCRW-1,d0
+.axok:  move.w  d0,mouse_x-vars(a0)
+        swap    d3
+        move.w  d3,d0               ; v (y)
+        bge     .ayp
+        moveq   #0,d0
+.ayp:   cmp.w   #SCRH-1,d0
+        ble     .ayok
+        move.w  #SCRH-1,d0
+.ayok:  move.w  d0,mouse_y-vars(a0)
+.nabs:
         cmp.b   d2,d1
         beq     .kbd
         tst.b   d1
@@ -1535,10 +1595,22 @@ isr_lvl1:
         move.l  ticks(pc),d1
         move.l  d1,kb_t0-vars(a0)
         move.b  #1,kb_state-vars(a0)
-        move.b  VIA_ACR,d0          ; SR mode 111: shift out, ext clock
+        ; M0110 send: attention first - SR mode 110 (shift out under the
+        ; system clock) with 0 holds the data line low, telling the
+        ; keyboard a command is coming; then load the real command in
+        ; mode 111 (shift out under the keyboard's clock).
+        move.b  VIA_ACR,d0
+        and.b   #%11100011,d0
+        or.b    #%00011000,d0
+        move.b  d0,VIA_ACR
+        move.b  #0,VIA_SR           ; data line low (attention)
         or.b    #%00011100,d0
         move.b  d0,VIA_ACR
-        move.b  #KB_INSTANT,VIA_SR  ; poll: keyboard clocks the byte out
+        moveq   #KB_INQUIRY,d1      ; normal poll: Inquiry
+        move.b  kb_prefix(pc),d0
+        beq     .pcmd
+        moveq   #KB_INSTANT,d1      ; $79 seen: Instant fetches the stash
+.pcmd:  move.b  d1,VIA_SR
 .trysr:
         move.b  VIA_IFR,d0
         btst    #2,d0               ; SR: shift complete
@@ -1572,8 +1644,17 @@ isr_lvl1:
 kb_byte:
         movem.l d0-d3/a0-a1,-(sp)
         lea     vars(pc),a1
+        ifd     AUTOTEST
         cmp.b   #KB_NULL,d1
-        beq     .out
+        beq     .ndbg
+        move.b  d1,kb_dbg-vars(a1)  ; surface non-null wire bytes
+.ndbg:
+        endc
+        cmp.b   #KB_NULL,d1
+        bne     .nn
+        sf      kb_prefix-vars(a1)  ; a null Instant reply = stash lost
+        bra     .out
+.nn:
         cmp.b   #KB_PREFIX,d1
         bne     .key
         st      kb_prefix-vars(a1)
@@ -1838,6 +1919,8 @@ kb_ascii:
         dc.b    '6','7',0,'8','9',0,0,0            ; 58-5F
         dc.b    0,0,'*',0,0,0,'+',0                ; 60-67
         dc.b    '=',0,0,0,0,'/',0,0                ; 68-6F
+        dc.b    0,0,0,0,0,0,0,0                    ; 70-77
+        dc.b    0,0,0,0,0,0,0,0                    ; 78-7F (arrows: raw only)
 
 ; scan -> canonical UnoDOS raw code (what the portable core dispatches on)
 kb_raw:
@@ -1849,12 +1932,15 @@ kb_raw:
         dc.b    0,0,0,0,0,0,0,0                    ; 28-2F
         dc.b    0,0,0,0,0,0,0,0                    ; 30-37
         dc.b    0,0,0,0,0,0,0,0                    ; 38-3F
-        dc.b    0,0,$4E,0,0,0,$4F,$50              ; 40-47 (Clr = F1/save)
-        dc.b    $4D,0,0,0,0,$4C,0,0                ; 48-4F
+        dc.b    0,0,$4E,0,0,0,$4F,$50              ; 40-47 (M0110A arrows;
+        dc.b    $4D,0,0,0,0,$4C,0,0                ; 48-4F  Clr = F1/save)
         dc.b    0,0,0,0,0,0,0,0                    ; 50-57
         dc.b    0,0,0,0,0,0,0,0                    ; 58-5F
         dc.b    0,0,0,0,0,0,0,0                    ; 60-67
         dc.b    0,0,0,0,0,0,0,0                    ; 68-6F
+        dc.b    0,0,0,0,0,0,0,0                    ; 70-77
+        dc.b    0,0,0,$4F,$4E,$4D,$4C,0            ; 78-7F (ADB-style arrows
+                                                   ; as sent by Mini vMac)
 
 ; ---------------------------------------------------------------- variables
         even
@@ -1865,6 +1951,7 @@ dbl_tick:       dc.l    0
 drag_win:       dc.l    0
 scrn:           dc.l    0           ; framebuffer base (low-mem ScrnBase)
 kb_t0:          dc.l    0
+rawm_last:      dc.l    0           ; last seen low-mem RawMouse value
 mouse_x:        dc.w    256
 mouse_y:        dc.w    171
 click_x:        dc.w    0
@@ -1891,6 +1978,8 @@ kb_state:       dc.b    0           ; 0 idle, 1 cmd out, 2 awaiting reply
 kb_prefix:      dc.b    0
 scc_xprev:      dc.b    0
 scc_yprev:      dc.b    0
+kb_dbg:         dc.b    0           ; AUTOTEST: last non-null wire byte
+kb_dbgs:        dc.b    0           ; ...and the last one shown
                 dc.b    0           ; pad: keep word vars even
         even
 evq:            ds.b    EVQ_SIZE*4

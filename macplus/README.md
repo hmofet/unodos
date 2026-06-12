@@ -72,13 +72,28 @@ close box, ESC close, double-click launch, arrow-key icon selection via
 the real M0110A prefix protocol, Enter launch, 1-second topmost-only
 refresh, software cursor save-under across all of it.
 
-**Real-hardware status: not yet validated.** Two known calibration points
-for first hardware/Mini vMac runs: (1) mouse quadrature polarity — if an
-axis moves backwards, flip the `eor`/branch sense in `isr_lvl2`; (2) the
-keyboard Instant-poll cadence (one command per tick) is well within the
-M0110's spec but has only been exercised against the harness model. To
-run in Mini vMac, drop a Mac Plus ROM dump at `macplus/vMac.ROM` and
-point Mini vMac at `build/unodos_macplus.dsk`.
+## Mini vMac validation (real Mac Plus ROM) — PASSED 2026-06-12
+
+With a genuine Plus ROM, the whole M1 surface was exercised live in
+Mini vMac 36.04: ROM Start Manager boot, .Sony kernel load, 4MB RAM
+config (dynamic ScrnBase/MemTop), VIA tick, button, window raise/drag/
+close, and the full keyboard path — Inquiry polling with the mode-6
+"attention" pulse, `$79` prefix + Instant stash fetch, arrows, Enter,
+backquote-as-ESC. Three emulator-vs-spec findings are baked in:
+
+- Mini vMac injects host mouse motion via low-mem `RawMouse` ($82C)
+  instead of quadrature pulses → the tick handler has an absolute-mouse
+  fallback (inert on real hardware, where we own the SCC vectors).
+- Wire bytes carry `scan<<1` with bit 0 = 0 (the "always 1" LSB in some
+  docs is not universal); the decoder masks it out either way.
+- Host arrows arrive as ADB/M0115-style codes $7B-$7E on the prefix
+  page, not the M0110A's $42/$46/$48/$4D — the keymap maps **both**.
+
+**Real-hardware status: pending.** What Mini vMac could NOT exercise:
+(1) the SCC DCD quadrature mouse path (flip the `eor` sense in
+`isr_lvl2` if an axis runs backwards); (2) genuine M0110A arrow codes;
+(3) electrical timing of the VIA keyboard handshake (the `nop` spacing
+in `scc_init_*` and the poll cadence may need widening on real silicon).
 
 ## Milestones
 
