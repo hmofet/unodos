@@ -15,7 +15,7 @@ implementation; the 68K ports are rewrites against
 | Display | CGA 320×200×4 → VESA 640×480×256, runtime-switchable | 320×256, 32 colors (5 bitplanes) | 640×480, 8-bit Color QuickDraw | 512×342, 1-bit | 320×224 VDP tiles, 4×16-color palette lines |
 | Mouse cursor | XOR software sprite | hardware sprite | system cursor | system cursor | hardware sprite |
 | Splash | IBM PC art | striped checkmark | happy compact Mac | happy compact Mac | text title card |
-| Multitasking | cooperative, 5 apps + shell | cooperative, per-window tasks (2KB stacks) | single event loop | single event loop | cooperative, per-window tasks (2KB stacks) |
+| Multitasking | cooperative, 5 apps + shell | cooperative, per-window tasks (2KB stacks) | cooperative, per-window tasks | cooperative, per-window tasks | cooperative, per-window tasks (2KB stacks) |
 | Max windows | 16 (move + resize) | 6 (move) | 6 (move) | 6 (move) | 6 (move) |
 | Widget toolkit / file dialogs / clipboard | full set (15 widgets, open/save dialogs, 4KB clipboard, undo) | — | — | — | — |
 | Public API | 106 syscalls (INT 0x80) | internal | internal | internal | internal |
@@ -32,7 +32,7 @@ implementation; the 68K ports are rewrites against
 
 | | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
 |---|---|---|---|---|---|
-| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W, rename/copy | FAT12 on DF1 (PC-interchangeable), read + write/create | HFS via File Manager | HFS via File Manager | USV1 mini-FS in 8KB battery SRAM |
+| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W, rename/copy | FAT12 on DF1 (PC-interchangeable), read + write/create | HFS + **PC FAT12 floppy R/W** | HFS + **PC FAT12 floppy R/W** | USV1 mini-FS in 8KB battery SRAM |
 | Extra media | settings persistence (SETTINGS.CFG) | — | subdirectory navigation | subdirectory navigation | tape/WAV (1-bit AFSK via PSG + comparator); **Sega CD backup RAM** (Mode-1 Sub-CPU + BIOS BURAM, shared Sega directory) |
 | Save UX | system save dialogs | Notepad F1, Tracker s/l | Cmd-S | Cmd-S | Notepad F1 to active volume, Files `v` volume toggle, Tracker s/l + t/y |
 | Planned | — | FAT12 delete/rename polish | — | — | SD card over bit-banged SPI (adapter PCB) |
@@ -44,7 +44,7 @@ implementation; the 68K ports are rewrites against
 | Hardware | PC speaker (PIT ch 2) | Paula, 4ch sample playback | Sound Manager square synth | Sound Manager square synth | PSG: 3 squares + noise |
 | Music app | 5 classical pieces, staff view | Canon in D | Canon in D | Canon in D | Canon in D |
 | Game music | Korobeiniki, Sunset Drive | both | both | both | both (PSG ch 1) |
-| Tracker (pattern editor) | — | **yes** — 4ch Paula, 4 synth instruments | — | — | **yes** — 3 squares + noise, byte-identical pattern format |
+| Tracker (pattern editor) | **yes** — PC speaker (leftmost voice) | **yes** — 4ch Paula, 4 synth instruments | **yes** — 4 square channels | **yes** | **yes** — 3 squares + noise; pattern format byte-identical everywhere |
 
 ## Applications
 
@@ -56,10 +56,11 @@ implementation; the 68K ports are rewrites against
 | Notepad | ✓ (selection, clipboard, undo, dialogs) | ✓ (caret, line-nav, status bar) | ✓ | ✓ | ✓ |
 | Music | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Theme | ✓ (Settings app + API 105) | ✓ | ✓ | — (1-bit display) | ✓ |
-| Tracker | — | ✓ | — | — | ✓ |
+| Tracker | ✓ (PC spkr, 1 voice) | ✓ | ✓ | ✓ | ✓ |
 | Dostris | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ |
 | OutLast | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ |
 | Pac-Man | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ (hardware-sprite actors) |
+| Paint (MacPaint-style; platform-gamut colors) | ✓ (4 CGA / 256 VGA) | ✓ (4096 via pen tuning) | ✓ (256 8-bit) | ✓ (1-bit + dithers) | ✓ (512 via CRAM tuning) |
 | Settings / MkBoot / Mouse Test / Hello | ✓ | — | — | — | — |
 
 The 8 theme preset palettes (Classic VGA, Midnight, Forest, Sunset,
