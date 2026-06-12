@@ -57,14 +57,13 @@ tick_wanted:
 .yes0:  moveq   #1,d0
         rts
 
-; games_tick - per-pass tick dispatch from the main loop
+; games_tick - kernel-task audio services. The games' own per-frame ticks
+; (dostris/pacman/outlast) run in TASK context now: post_ticks mails the
+; topmost window's task and app_tick_dispatch calls them there (M3).
 games_tick:
         bsr     gm_tick
         bsr     music_tick
         bsr     tracker_tick
-        bsr     dostris_tick
-        bsr     pacman_tick
-        bsr     outlast_tick
         rts
 
 ; ---------------------------------------------------------------- Dostris

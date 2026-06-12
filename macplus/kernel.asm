@@ -193,6 +193,9 @@ start2:
         dbra    d0,.zbss            ; (fits a word: 11007 iterations)
 
         bsr     snd_init            ; pulse-width sound buffer (machine-gated)
+        bsr     sched_init          ; milestone 3: cooperative tasks
+        clr.l   $110                ; StkLowPt: disable the ROM stack
+                                    ; sniffer (task stacks live at $3C000)
 
         ; screen base from the ROM's low-mem global (varies with RAM size)
         move.l  LM_SCRNBASE,d0
@@ -296,7 +299,9 @@ main_loop:
         bsr     handle_drag
         bsr     handle_events
         bsr     app_ticks
-        bsr     games_tick
+        bsr     games_tick          ; kernel-side audio services
+        bsr     post_ticks          ; frame tick -> the focused app task
+        bsr     task_yield          ; run the app tasks (milestone 3)
         bsr     cur_draw
         bra     main_loop
 
@@ -350,61 +355,18 @@ handle_events:
         bne     .focus
         bsr     close_topmost
         bra     .next
-.focus: ; route the key to the topmost window's app handler (d1=ascii d2=raw)
-        move.w  zcount(pc),d3
-        subq.w  #1,d3
-        bmi     .next
-        movem.l d1-d2,-(sp)         ; raw/ascii survive zwin_ptr's d2 input
-        move.w  d3,d2
-        bsr     zwin_ptr            ; a2 = topmost window
-        moveq   #0,d0
-        move.b  WPROC(a2),d0
-        movem.l (sp)+,d1-d2
-        cmp.w   #2,d0
-        beq     .kfiles
-        cmp.w   #3,d0
-        beq     .knote
-        cmp.w   #4,d0
-        beq     .kdiskapp
-        cmp.w   #5,d0
-        beq     .kdostris
-        cmp.w   #6,d0
-        beq     .kpacman
-        cmp.w   #7,d0
-        beq     .koutlast
-        cmp.w   #8,d0
-        beq     .kpaint
-        cmp.w   #9,d0
-        beq     .kmusic
-        cmp.w   #10,d0
-        beq     .ktracker
-        bra     .next
-.kfiles:
-        bsr     files_key
-        bra     .next
-.knote:
-        bsr     notepad_key
-        bra     .next
-.kdiskapp:
-        bsr     diskapp_key
-        bra     .next
-.kdostris:
-        bsr     dostris_key
-        bra     .next
-.kpacman:
-        bsr     pacman_key
-        bra     .next
-.koutlast:
-        bsr     outlast_key
-        bra     .next
-.kpaint:
-        bsr     paint_key
-        bra     .next
-.kmusic:
-        bsr     music_key
-        bra     .next
-.ktracker:
-        bsr     tracker_key
+.focus: ; post the key to the focused (topmost) window's task mailbox
+        ; (PORT-SPEC SS3; ESC stayed kernel-side above - it kills the task)
+        lea     zlist(pc),a0
+        move.w  zcount(pc),d0
+        subq.w  #1,d0
+        moveq   #0,d3
+        move.b  (a0,d0.w),d3        ; topmost window slot
+        move.w  d3,d0
+        move.w  d2,d3               ; raw
+        move.w  d1,d2               ; ascii
+        moveq   #1,d1               ; key event
+        bsr     task_post_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -850,6 +812,8 @@ win_create:
         move.w  d3,WW(a2)
         move.w  d4,WH(a2)
         move.l  a1,WTITLE(a2)
+        move.w  d6,d0
+        bsr     task_spawn          ; milestone 3: the app gets a task
         lea     vars(pc),a4
         lea     zlist-vars(a4),a0
         move.w  zcount(pc),d1
@@ -965,6 +929,14 @@ close_window:
         move.w  d0,d2
         bsr     zwin_ptr
         sf      WSTATE(a2)
+        ; free the app task (slot from the window entry address)
+        movem.l d0/a0,-(sp)
+        lea     wintab(pc),a0
+        move.l  a2,d0
+        sub.l   a0,d0
+        lsr.w   #4,d0
+        bsr     task_kill
+        movem.l (sp)+,d0/a0
         move.w  (sp)+,d0
         lea     vars(pc),a4
         lea     zlist-vars(a4),a0
@@ -2281,6 +2253,7 @@ ev_get:
         include "paint.i"
         include "music.i"
         include "tracker.i"
+        include "scheduler.i"
 
 ; ============================================================================
 ; Data
@@ -2490,6 +2463,10 @@ tk_playing:     dc.b    0
                 dc.b    0
         even
 tk_pat:         ds.b    TK_ROWS*TK_CHANS*2  ; the pattern (256 bytes)
+; ---- scheduler (M3) ----
+        even
+cur_task:       dc.w    0           ; running task index (0 = kernel)
+task_tab:       ds.b    NTASKS*TSK_SIZE
 
 ; ---- M2: FAT12 + Files/Notepad state (appended; M1 offsets unchanged so
 ; the harness's vars+28 mouse mirror still lines up) ------------------------
