@@ -28,7 +28,7 @@ PT_H        equ 96
 PT_TW       equ 20                  ; canvas width in tiles
 PT_TH       equ 12
 PT_TOOLS    equ 10
-PT_BGPEN    equ 15                  ; background = line-3 black
+PT_BGPEN    equ 3                   ; background = line-3 white
 PT_STKN     equ 500                 ; flood stack entries
 T_PTCAN     equ 256                 ; first canvas tile (240 used)
 PTCANVAS    equ $FF0000             ; byte-per-pixel backing store
@@ -505,7 +505,7 @@ pt_clear:
         movem.l d0-d1/a0,-(sp)
         lea     PTCANVAS,a0
         move.l  #(PT_W*PT_H/4)-1,d0
-        move.l  #$0F0F0F0F,d1       ; PT_BGPEN in every byte
+        move.l  #$03030303,d1       ; PT_BGPEN (white) in every byte
 .cl:    move.l  d1,(a0)+
         subq.l  #1,d0
         bpl     .cl
@@ -522,7 +522,7 @@ paint_draw:
         tst.b   v_pt_init(a4)
         bne     .inited
         st      v_pt_init(a4)
-        move.w  #3,v_pt_pen(a4)     ; start on white
+        move.w  #4,v_pt_pen(a4)     ; start on magenta (bg is white)
         bsr     pt_pal_init
         bsr     pt_clear
 .inited:
@@ -838,7 +838,25 @@ pt_drag_shape:
 ; paint_key - d1 = ascii, d2 = raw -> d0 = 0 consumed / 1 not
 paint_key:
         lea     VARS,a4
-        cmp.b   #'1',d1
+        cmp.b   #32,d1              ; Y button (Space) = next tool
+        bne     .nyt
+        move.w  v_pt_tool(a4),d0
+        addq.w  #1,d0
+        cmp.w   #PT_TOOLS,d0
+        blt     .sett
+        moveq   #0,d0
+.sett:  move.w  d0,v_pt_tool(a4)
+        bra     .redraw
+.nyt:   cmp.b   #8,d1               ; X button (Backspace) = next pen
+        bne     .nxp
+        move.w  v_pt_pen(a4),d0
+        addq.w  #1,d0
+        cmp.w   #16,d0
+        blt     .setq
+        moveq   #1,d0
+.setq:  move.w  d0,v_pt_pen(a4)
+        bra     .redraw
+.nxp:   cmp.b   #'1',d1
         blt     .nd
         cmp.b   #'9',d1
         bgt     .nd
@@ -977,6 +995,6 @@ pt_restore_pal:
 ; ---------------------------------------------------------------- data
 str_t_paint:    dc.b    "Paint",0
 name_paint:     dc.b    "Paint",0
-str_pt_foot:    dc.b    "1-0:tool [/]:pen rgb:tune t/y:tape",0
+str_pt_foot:    dc.b    "A:draw Y:tool X:pen B:kbd",0
 str_pt_name:    dc.b    "PAINT.UNO",0,0,0
         even

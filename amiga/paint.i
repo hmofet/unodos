@@ -24,7 +24,7 @@
 PT_W        equ 256
 PT_H        equ 140
 PT_TOOLS    equ 10
-PT_BGPEN    equ 0                   ; canvas background pen
+PT_BGPEN    equ 3                   ; canvas background pen (white)
 PT_STKN     equ 510                 ; flood-fill stack entries
 
 PTT_PENCIL  equ 0

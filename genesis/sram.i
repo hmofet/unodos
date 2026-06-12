@@ -486,6 +486,8 @@ files_key:
         beq     .open
         cmp.b   #'d',d1
         beq     .del
+        cmp.b   #8,d1               ; X button (Backspace) = delete
+        beq     .del
         cmp.b   #'w',d1             ; write Notepad buffer to tape
         beq     .tapew
         cmp.b   #'r',d1             ; read a tape block into Notepad
@@ -583,8 +585,8 @@ np_save_sram:
 str_usv1:       dc.b    "USV1"
 str_f_hdr:      dc.b    "Name          Size  (SRAM)",0
 str_f_hdrb:     dc.b    "Name          Size  (BRAM)",0
-str_f_foot:     dc.b    "C:open  d:del w/r:tape",0
-str_f_footv:    dc.b    "C:open d:del w/r:tp v:vol",0
+str_f_foot:     dc.b    "C:open X:del w/r:tape",0
+str_f_footv:    dc.b    "C:open X:del w/r:tp v:vol",0
 str_f_empty:    dc.b    "no files - F1 in Notepad saves",0
 str_tp_ok:      dc.b    "TAPE OK         ",0
 str_tp_err:     dc.b    "TAPE ERR/NO SIG ",0

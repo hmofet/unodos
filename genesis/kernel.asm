@@ -808,6 +808,17 @@ start:
         bsr     handle_clicks
         move.w  (sp)+,d3
         dbra    d3,.atck
+        ; window-click routing: close the Music window via its close
+        ; box (Music at (5,3,30,15): the box is the title bar's last 2
+        ; cells). Click-through would leave the window open.
+        lea     VARS,a4
+        move.w  #33*8+4,v_mouse_x(a4)
+        move.w  #3*8+4,v_mouse_y(a4)
+        move.b  #1,v_mouse_btn(a4)
+        bsr     mouse_buttons
+        sf      v_mouse_btn(a4)
+        bsr     mouse_buttons
+        bsr     handle_clicks
         endc
         ifnd    AUTOTEST_NOTEPAD
         ifnd    AUTOTEST_MUSIC
@@ -1441,7 +1452,8 @@ find_window_at:
         add.w   WH(a2),d3
         cmp.w   d3,d1
         bge     .next
-.out:   rts
+.out:   tst.w   d2                  ; N must mirror the result: the hit
+        rts                         ; path falls in with stale cmp flags
 .next:  subq.w  #1,d2
         bra     .scan
 
