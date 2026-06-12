@@ -15,4 +15,13 @@ wait 3
 key space                    # hard drop -> lands, scores, next spawns
 wait 6
 shot g_dostris_drop
+key esc                      # close Dostris
+wait 3
+dblclick 136 96              # open Pac-Man (icon/proc 6)
+wait 8
+key n                        # new game -> READY (auto-plays after ~60 ticks)
+wait 80
+key up                       # steer; dots score 10 each
+wait 30
+shot g_pacman_play           # maze + actors + SCORE > 0
 quit
