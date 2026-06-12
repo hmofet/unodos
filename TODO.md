@@ -285,11 +285,15 @@ standalone Mac. Other ports have all of these; macplus has 5 of 11 apps.
       delays (nops may need widening on real silicon)
 - [ ] Harness: SE/Classic variants (screen base differences), bus-error
       injection to exercise the kernel fault screens
-- [ ] macplus harness: rare cosmetic artifact - a 2-char gap can appear in
-      a label drawn while interrupt injection is active (strings + kernel
-      verified intact; Mini vMac renders the same frame correctly). Suspect
-      draw_char 2-byte RMW vs injection boundary; purely a harness
-      fidelity issue, does not affect real hardware
+- [ ] macplus harness: rare (~1/1000 injections) lazy-CCR misevaluation at
+      an interrupt-injection/restore boundary - a conditional branch right
+      at the boundary can misread stale flags. ROOT-CAUSED 2026-06-12 via
+      Paint: polls returned exactly the clamp constants (255/139) when the
+      clamp's ble misfired; widening the pre-step to flag-producing
+      instructions does NOT change the rate (measured), so the fault is in
+      Unicorn's context restore, not the boundary choice. Manifests as
+      1px clamp spikes in long Paint drags and the 2-char label gap.
+      Harness-only; Mini vMac / real hardware unaffected.
 
 ## Cross-platform chrome themes (2026-06-12 direction, AFTER macplus parity)
 Make the window-decoration LOOK a selectable theme on the COLOR platforms,

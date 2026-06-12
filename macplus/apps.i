@@ -99,7 +99,7 @@ files_draw:
         bge     .foot
         move.w  d7,d0
         mulu    #18,d0
-        lea     fat_tab(pc),a3
+        lea     fat_tab,a3
         lea     (a3,d0.w),a3        ; a3 = FAT entry
         ; row y
         move.w  d5,d1
@@ -228,7 +228,7 @@ notepad_open_fat:
         movem.l d0-d2/a0-a1/a3-a4,-(sp)
         move.w  files_sel(pc),d0
         mulu    #18,d0
-        lea     fat_tab(pc),a3
+        lea     fat_tab,a3
         lea     (a3,d0.w),a3
         lea     vars(pc),a4
         moveq   #0,d0
@@ -237,7 +237,7 @@ notepad_open_fat:
         cmp.l   #NBUF-1,d1
         ble     .szok
         move.l  #NBUF-1,d1
-.szok:  lea     npbuf(pc),a1
+.szok:  lea     npbuf,a1
         bsr     fat_read_file
         tst.l   d0
         bpl     .ok
@@ -257,7 +257,7 @@ notepad_set_demo:
         movem.l d1/a0-a1/a4,-(sp)
         lea     vars(pc),a4
         lea     demo_text(pc),a0
-        lea     npbuf(pc),a1
+        lea     npbuf,a1
         moveq   #0,d1
 .cp:    move.b  (a0)+,d0
         beq     .done
@@ -276,7 +276,7 @@ notepad_set_demo:
 ; notepad_linecol - -> d0 = line, d1 = col of caret (0-based)
 notepad_linecol:
         movem.l d2-d3/a0,-(sp)
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         moveq   #0,d0
         moveq   #0,d1
         moveq   #0,d2               ; index
@@ -298,7 +298,7 @@ notepad_linecol:
 ;   -> d0 = caret index (clamped to line end), or -1 if no such line
 notepad_seek_linecol:
         movem.l d3-d5/a0,-(sp)
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         moveq   #0,d3               ; index
         moveq   #0,d4               ; line
 .fs:    cmp.w   d0,d4
@@ -377,7 +377,7 @@ notepad_draw:
         move.w  d1,np_top-vars(a4)
 .noscr:
         ; line loop: a0 = scan ptr, d3 = line index
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         move.w  np_top(pc),d3       ; first visible line
         move.w  d3,d2               ; lines to skip
         moveq   #0,d0
@@ -398,7 +398,7 @@ notepad_draw:
         move.l  a0,a1               ; a1 = line start
         moveq   #0,d2               ; len
 .find:  move.l  a1,d0
-        lea     npbuf(pc),a3
+        lea     npbuf,a3
         sub.l   a3,d0
         add.w   d2,d0               ; absolute index = (a1-npbuf)+d2
         cmp.w   np_len(pc),d0
@@ -451,7 +451,7 @@ notepad_draw:
         ; advance to next line
         lea     1(a1,d2.w),a0       ; skip CR
         move.l  a0,d0
-        lea     npbuf(pc),a3
+        lea     npbuf,a3
         sub.l   a3,d0
         cmp.w   np_len(pc),d0
         bgt     .status
@@ -581,7 +581,7 @@ notepad_key:
         move.w  np_caret(pc),d0
         beq     .redraw
         ; shift [caret..len) left by one
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         move.w  np_caret(pc),d1
         move.w  np_len(pc),d2
         sub.w   d1,d2               ; bytes after caret
@@ -606,7 +606,7 @@ notepad_key:
         cmp.w   #NBUF-1,d0
         bge     .redraw
         ; shift [caret..len) right by one (backwards copy)
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         move.w  np_len(pc),d2
         sub.w   np_caret(pc),d2     ; count
         lea     (a0,d0.w),a1        ; a1 = npbuf+len (one past last)
@@ -619,7 +619,7 @@ notepad_key:
         bra     .insloop
 .insdone:
         move.w  np_caret(pc),d0
-        lea     npbuf(pc),a0
+        lea     npbuf,a0
         move.b  d1,(a0,d0.w)        ; ascii (13 for return)
         addq.w  #1,d0
         move.w  d0,np_caret-vars(a4)
@@ -634,12 +634,12 @@ notepad_key:
         move.w  np_fatidx(pc),d0
         bmi     .saveunt            ; -1 = untitled (demo): UNTITLED.TXT
         mulu    #18,d0
-        lea     fat_tab(pc),a0
+        lea     fat_tab,a0
         lea     (a0,d0.w),a0        ; 11-char name of the open file
         bra     .dofat
 .saveunt:
         lea     str_untitled(pc),a0
-.dofat: lea     npbuf(pc),a1
+.dofat: lea     npbuf,a1
         moveq   #0,d1
         move.w  np_len(pc),d1
         bsr     fat_save_file

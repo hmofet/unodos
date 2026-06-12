@@ -281,6 +281,13 @@ class Mac:
         # survive a stop/inject/restore cycle landing exactly between a
         # tst and its branch (found as a 64KB wild fill); stepping the
         # conditional first lets QEMU evolve the flags internally.
+        # KNOWN RESIDUAL (~1/1000 injections): a branch evaluated right at
+        # an injection/restore boundary can still misread the lazy CCR -
+        # widening the pre-step to flag-producing instructions does NOT
+        # change the rate (measured), so the fault is in the context
+        # restore, not the boundary choice. Manifests as one-pixel clamp
+        # spikes in Paint drags and the rare 2-char gap in drawn labels.
+        # Harness-only; Mini vMac / real hardware are unaffected.
         for _ in range(8):
             op = int.from_bytes(mu.mem_read(self.pc, 2), "big")
             hi = op >> 12

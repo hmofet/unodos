@@ -2,9 +2,9 @@
 ; UnoDOS/68K portable FAT12 core (read + write) over fdd_read_sector.
 ; Little-endian on-disk structures on a big-endian CPU: all multi-byte
 ; fields go through the LE helpers. Verbatim from the Amiga port except the
-; sector scratch (FATSECBUF) and FAT/dir caches are kernel bss labels here
-; instead of fixed chip-RAM addresses - the device layer is sony.i, the
-; ROM .Sony driver reached through _Read/_Write A-traps.
+; sector scratch (FATSECBUF) and FAT/dir caches are out-of-image KBSS
+; equates (see kernel.asm) referenced absolutely - the device layer is
+; sony.i, the ROM .Sony driver reached through _Read/_Write A-traps.
 ;
 ;   fat_mount      -> d0 = 0 ok / -1 (reads the BPB, slurps the FAT)
 ;   fat_list_root  -> fills fat_tab/fat_count (files only, max 16)
@@ -74,7 +74,7 @@ fat_mount:
         ble     .spfok
         moveq   #3,d3                       ; fat_buf holds 3 sectors max
 .spfok: move.w  fat_fatstart(pc),d2
-        lea     fat_buf(pc),a1
+        lea     fat_buf,a1
         subq.w  #1,d3
 .fatl:  move.w  d2,d0
         and.l   #$FFFF,d0
@@ -100,7 +100,7 @@ fat_next_cluster:
         move.w  d0,d2
         lsr.w   #1,d2
         add.w   d2,d0               ; offset = cl + cl/2
-        lea     fat_buf(pc),a0
+        lea     fat_buf,a0
         moveq   #0,d2
         move.b  1(a0,d0.w),d2
         lsl.w   #8,d2
@@ -144,7 +144,7 @@ fat_list_root:
         bge     .done
         ; dest entry
         mulu    #18,d1
-        lea     fat_tab(pc),a2
+        lea     fat_tab,a2
         lea     (a2,d1.w),a2
         moveq   #10,d1              ; copy the 8.3 name
 .nm:    move.b  (a0,d1.w),(a2,d1.w)
@@ -246,7 +246,7 @@ fat_set_entry:
         move.w  d0,d3
         lsr.w   #1,d3
         add.w   d3,d0               ; offset = cl + cl/2
-        lea     fat_buf(pc),a0
+        lea     fat_buf,a0
         btst    #0,d2
         bne     .odd
         ; even: low 8 bits -> [off], high 4 -> low nibble of [off+1]
@@ -340,7 +340,7 @@ fat_flush:
         ble     .n
         moveq   #3,d3
 .n:     subq.w  #1,d3
-        lea     fat_buf(pc),a1
+        lea     fat_buf,a1
 .sec:   move.w  d2,d0
         and.l   #$FFFF,d0
         bsr     fdd_write_sector
@@ -550,7 +550,7 @@ fat_find_file:
         move.w  fat_count(pc),d2
         beq     .nf
         subq.w  #1,d2
-        lea     fat_tab(pc),a1
+        lea     fat_tab,a1
 .e:     moveq   #10,d3
 .c:     move.b  (a1,d3.w),d0
         cmp.b   (a0,d3.w),d0

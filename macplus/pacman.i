@@ -56,7 +56,7 @@ pm_walkable:
         sub.w   #PM_COLS,d0
 .x2:    mulu    #PM_COLS,d1
         add.w   d0,d1
-        lea     pm_maze(pc),a0
+        lea     pm_maze,a0
         moveq   #0,d4
         move.b  (a0,d1.w),d4
         cmp.w   #1,d4
@@ -92,7 +92,7 @@ pm_mode_state:
 pm_load_maze:
         movem.l d0-d2/a0-a1/a4,-(sp)
         lea     pm_maze_tpl(pc),a0
-        lea     pm_maze(pc),a1
+        lea     pm_maze,a1
         moveq   #0,d2
         move.w  #PM_COLS*PM_ROWS-1,d0
 .cp:    move.b  (a0)+,d1
@@ -116,7 +116,7 @@ pm_reset_actors:
         move.w  #19*PM_TILE,pm_y-vars(a4)
         move.w  #1,pm_dir-vars(a4)      ; LEFT
         move.w  #1,pm_nextdir-vars(a4)
-        lea     pm_gh(pc),a0
+        lea     pm_gh,a0
         move.w  #14*PM_TILE,GX(a0)
         move.w  #10*PM_TILE,GY(a0)
         move.w  #1,GDIR(a0)
@@ -162,7 +162,7 @@ pm_steer:
         movem.l d0-d7/a0/a3/a4,-(sp)
         move.w  d7,d0
         mulu    #GSIZE,d0
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         lea     (a3,d0.w),a3
         ; gtx/gty in d5/d6
         move.w  GX(a3),d5
@@ -358,7 +358,7 @@ pm_step:
         move.w  d0,pm_fright-vars(a4)
         bne     .substeps
         ; fright over: frightened ghosts resume the schedule
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         moveq   #2,d7
 .fr:    cmp.w   #GH_FRIGHT,GST(a3)
         bne     .frn
@@ -384,7 +384,7 @@ pm_step:
         bge     .norev
         addq.w  #1,d0
         move.w  d0,pm_mode-vars(a4)
-.norev: lea     pm_gh(pc),a3
+.norev: lea     pm_gh,a3
         moveq   #2,d7
 .mg:    cmp.w   #GH_SCAT,GST(a3)
         beq     .mgset
@@ -426,7 +426,7 @@ pm_step:
         move.w  d3,d0
         mulu    #PM_COLS,d0
         add.w   d2,d0
-        lea     pm_maze(pc),a0
+        lea     pm_maze,a0
         moveq   #0,d1
         move.b  (a0,d0.w),d1
         cmp.w   #2,d1
@@ -447,7 +447,7 @@ pm_step:
         move.w  #200,pm_fright-vars(a4)
         clr.w   pm_kills-vars(a4)
         ; frighten active ghosts + reverse
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         moveq   #2,d7
 .fg:    cmp.w   #GH_SCAT,GST(a3)
         beq     .fgset
@@ -524,7 +524,7 @@ pm_step:
 .pw2:   move.w  d1,pm_x-vars(a4)
         move.w  d0,pm_y-vars(a4)
 .ghosts:
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         moveq   #0,d7
 .gloop: cmp.w   #GH_HOUSE,GST(a3)
         bne     .gactive
@@ -682,7 +682,7 @@ pm_draw_tile:
         move.w  d6,d0
         mulu    #PM_COLS,d0
         add.w   d5,d0
-        lea     pm_maze(pc),a0
+        lea     pm_maze,a0
         moveq   #0,d1
         move.b  (a0,d0.w),d1
         beq     .done
@@ -733,7 +733,7 @@ pm_draw_actors:
         moveq   #6,d3
         moveq   #0,d4               ; pac: solid white
         bsr     fill_rect
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         moveq   #0,d7
 .gdrw2: move.w  GX(a3),d0
         add.w   WX(a2),d0
@@ -802,10 +802,10 @@ pm_draw_actors:
 pm_record_old:
         movem.l d0/a0/a3/a4,-(sp)
         lea     vars(pc),a4
-        lea     pm_old-vars(a4),a0
+        lea     pm_old,a0
         move.w  pm_x(pc),(a0)+
         move.w  pm_y(pc),(a0)+
-        lea     pm_gh(pc),a3
+        lea     pm_gh,a3
         move.w  GX(a3),(a0)+
         move.w  GY(a3),(a0)+
         move.w  GX+GSIZE(a3),(a0)+
@@ -818,7 +818,7 @@ pm_record_old:
 ; pm_refresh - a2 = window: redraw tiles under old actor spots + actors
 pm_refresh:
         movem.l d0-d7/a0-a1,-(sp)
-        lea     pm_old(pc),a1
+        lea     pm_old,a1
         moveq   #0,d7               ; actor index
 .act:   move.w  (a1)+,d5            ; old x
         move.w  (a1)+,d6            ; old y
