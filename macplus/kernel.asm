@@ -97,7 +97,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 6                   ; SysInfo, Clock, Files, Notepad, Demo, Dostris
+NICONS      equ 7                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -340,6 +340,8 @@ handle_events:
         beq     .kdiskapp
         cmp.w   #5,d0
         beq     .kdostris
+        cmp.w   #6,d0
+        beq     .kpacman
         bra     .next
 .kfiles:
         bsr     files_key
@@ -352,6 +354,9 @@ handle_events:
         bra     .next
 .kdostris:
         bsr     dostris_key
+        bra     .next
+.kpacman:
+        bsr     pacman_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -1121,7 +1126,11 @@ app_draw_content:
         beq     .notep
         cmp.w   #4,d0
         beq     .diska
-        bsr     dostris_draw        ; proc 5: Dostris
+        cmp.w   #5,d0
+        beq     .dost
+        bsr     pacman_draw         ; proc 6: Pac-Man
+        bra     .done
+.dost:  bsr     dostris_draw        ; proc 5: Dostris
         bra     .done
 .clock: bsr     clock_draw
         bra     .done
@@ -2193,6 +2202,7 @@ ev_get:
         include "apps.i"
         include "diskapp.i"
         include "games.i"
+        include "pacman.i"
 
 ; ============================================================================
 ; Data
@@ -2249,6 +2259,7 @@ app_def_tab:
         dc.w    150,50,300,230, str_t_notepad-start
         dc.w    120,90,210,130, str_t_demo-start
         dc.w    60,30,262,212,  str_t_dostris-start
+        dc.w    110,60,272,196, str_t_pacman-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2257,6 +2268,7 @@ icon_tab:
         dc.l    icon_notepad
         dc.l    icon_paint
         dc.l    icon_dostris
+        dc.l    icon_pacman
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2264,6 +2276,7 @@ name_tab:
         dc.l    name_notepad
         dc.l    name_demo
         dc.l    name_dostris
+        dc.l    name_pacman
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2396,6 +2409,29 @@ dt_level:       dc.w    1
 dt_next:        dc.w    0
         even
 dt_board:       ds.b    DT_COLS*DT_ROWS
+        even
+; ---- Pac-Man (proc 6) game state ----
+pm_statet:      dc.l    0
+pm_last:        dc.l    0
+pm_x:           dc.w    0
+pm_y:           dc.w    0
+pm_dir:         dc.w    0
+pm_nextdir:     dc.w    0
+pm_score:       dc.w    0
+pm_hi:          dc.w    0
+pm_lives:       dc.w    0
+pm_level:       dc.w    0
+pm_state:       dc.w    0           ; PMS_TITLE/READY/PLAY/OVER
+pm_mode:        dc.w    0
+pm_modet:       dc.w    0
+pm_fright:      dc.w    0
+pm_kills:       dc.w    0
+pm_dots:        dc.w    0
+pm_tmp:         dc.w    0
+        even
+pm_gh:          ds.b    3*GSIZE     ; ghost records (x,y,dir,state,timer)
+pm_old:         ds.b    8*2         ; pre-step actor positions (4 x/y pairs)
+pm_maze:        ds.b    PM_COLS*PM_ROWS
         even
 npbuf:          ds.b    NBUF                ; Notepad edit buffer
 npline:         ds.b    40                  ; one rendered line + NUL

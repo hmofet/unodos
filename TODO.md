@@ -291,23 +291,23 @@ standalone Mac. Other ports have all of these; macplus has 5 of 11 apps.
       draw_char 2-byte RMW vs injection boundary; purely a harness
       fidelity issue, does not affect real hardware
 
-## Cross-platform chrome themes (2026-06-12 direction)
-Make the window-decoration LOOK a selectable theme on EVERY platform, not a
-hardcoded per-port style. So an Amiga can wear the Mac System 7 look, a PC
-the Amiga Workbench look, etc. This is a distinct axis from the color-palette
-"Theme" app (slot palettes) - it is the draw_window chrome style.
+## Cross-platform chrome themes (2026-06-12 direction, AFTER macplus parity)
+Make the window-decoration LOOK a selectable theme on the COLOR platforms,
+not a hardcoded per-port style. So an Amiga can wear the Mac System 7 look,
+a PC the Amiga Workbench look, etc. This is a distinct axis from the
+color-palette "Theme" app (slot palettes) - it is the draw_window chrome
+style. Scope (user 2026-06-12): color platforms only - x86 VGA, Amiga,
+mac/ hosted, Genesis; macplus (1-bit) and x86 CGA keep their native look.
 - [ ] Define a portable chrome-style id (0=Mac System 7, 1=Amiga Workbench,
       2=Windows 3.x, 3=Windows XP) + a shared spec in docs/PORT-SPEC.md
-- [ ] Refactor each port's draw_window to branch on the style and implement
-      ALL styles (each port currently hardcodes its own one):
-      kernel/ (x86 VGA+CGA), amiga/, mac/ (hosted), genesis/, macplus/
+- [ ] Refactor each color port's draw_window to branch on the style and
+      implement ALL styles: kernel/ (x86 VGA), amiga/, mac/ (hosted),
+      genesis/
 - [ ] NEW Windows XP "Luna" style: blue gradient title bar, rounded top
-      corners, the red close button, 3D raised frame (degrades to flat +
-      2-color on CGA/1-bit/Genesis CRAM)
+      corners, the red close button, 3D raised frame (gradient -> CRAM
+      ramp on Genesis, banded gradient on 32-color Amiga)
 - [ ] Expose the picker in each port's Theme/Appearance app; persist the
       choice with the palette/theme settings
-- [ ] Per-platform color degradation table (XP gradient -> dither on 1-bit,
-      4-color on CGA, CRAM ramps on Genesis)
 
 ## New ports in progress (2026-06-12 direction)
 - [ ] Apple IIGS port (65C816, Super Hi-Res 320x200x4bpp / 640x200, ADB

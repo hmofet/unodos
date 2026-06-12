@@ -32,11 +32,19 @@ tick_wanted:
         move.w  d0,d2
         bsr     zwin_ptr
         cmp.b   #DOSTRIS_PROC,WPROC(a2)
-        bne     .no2
+        bne     .pm
         move.w  dt_state(pc),d0
         cmp.w   #1,d0               ; 1 = playing
         bne     .no2
-        moveq   #1,d0
+        bra     .yes
+.pm:    cmp.b   #6,WPROC(a2)        ; PACMAN_PROC (fwd equ: literal)
+        bne     .no2
+        move.w  pm_state(pc),d0
+        cmp.w   #1,d0               ; PMS_READY (auto-starts)
+        beq     .yes
+        cmp.w   #2,d0               ; PMS_PLAY
+        bne     .no2
+.yes:   moveq   #1,d0
         movem.l (sp)+,d2/a2
         rts
 .no2:   movem.l (sp)+,d2/a2
@@ -47,6 +55,7 @@ tick_wanted:
 games_tick:
         bsr     gm_tick
         bsr     dostris_tick
+        bsr     pacman_tick
         rts
 
 ; ---------------------------------------------------------------- Dostris
