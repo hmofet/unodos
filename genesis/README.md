@@ -20,9 +20,19 @@ Y = pause).
 with the USV1 mini-filesystem, a Files app, working Notepad F1-save,
 and tape/WAV storage (KCS 1200-baud AFSK: the PSG writes through the
 headphone jack, a one-comparator adapter reads; `mktape.py` makes the
-PC the tape deck). Full architecture + the Sega CD / SD-card specs:
-[docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md). Verified in
-BlastEm; **this port is headed for real hardware.**
+PC the tape deck). Full architecture + the SD-card spec:
+[docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md).
+**Milestones 3/5/6 (2026-06-12)** — full feature parity with the
+Amiga port: the **Theme app** (the 8 shared preset palettes + 3-bit
+RGB custom editing, applied by rewriting the themed CRAM entries),
+the **Tracker** (the Amiga 32-row/4-channel pattern editor on the
+PSG: three square channels + the noise channel, byte-identical
+pattern format, saves to SRAM and tape), **Sega CD backup RAM**
+(Mode-1 Sub-CPU boot + BIOS `_BURAM` stub behind a mailbox RPC; the
+Files app grows a volume toggle), and the **cooperative scheduler**
+(every window's app proc runs in its own task with a private 2KB
+stack, ported from `amiga/scheduler.i`). Verified in BlastEm;
+**this port is headed for real hardware.**
 
 ## Display model
 
@@ -31,7 +41,8 @@ H40 (320×224 = 40×28 cells). Everything is composed on plane A as
 cursor is a hardware sprite and stays pixel-smooth. The four UI
 attribute schemes (normal / inverted / accent / soft-key) are the four
 VDP palette lines, each derived from the four UnoDOS theme colors —
-a future Theme app restyles the whole port by rewriting CRAM.
+the Theme app restyles the whole port by rewriting the themed CRAM
+entries (the 8 shared presets, or per-channel 3-bit RGB editing).
 
 ## Controls (standard 3/6-button pad, port 1)
 
@@ -100,6 +111,9 @@ Python 3. From this directory:
     ./build.sh pacman     # new game + 150 real AI steps
     ./build.sh sram       # F1-save -> wipe -> reopen from Files
     ./build.sh tape       # synthetic AFSK block through the decoder
+    ./build.sh bram       # Sega CD BRAM round trip (fake transport)
+    ./build.sh theme      # Theme app applies the Forest preset
+    ./build.sh tracker    # Tracker demo song + playback
 
 Tape WAV tooling (the PC is the tape deck):
 
@@ -137,10 +151,21 @@ the caller PC + coordinates rendered in hex on the bottom row.
   Amiga port's raw codes (arrows `$4C-$4F`, F1 `$50`).
 - Variables live at `$FF8000`, addressed `offset(a4)` — the RAM
   edition of the Amiga port's `vars(pc)` convention.
-- Storage: 8KB battery SRAM (USV1 mini-FS, Files app, Notepad F1) and
-  tape/WAV (KCS AFSK via the PSG + a comparator adapter) — see
-  [docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md) for the
-  architecture and the Sega CD / SD-card tier specs.
+- Storage: 8KB battery SRAM (USV1 mini-FS, Files app, Notepad F1),
+  tape/WAV (KCS AFSK via the PSG + a comparator adapter), and Sega CD
+  backup RAM via Mode 1 (`bram.i`: Sub-CPU BIOS boot + `_BURAM` stub,
+  mailbox RPC, Word-RAM staging; the Files app's `v` key cycles the
+  volume when a CD attachment is detected) — see
+  [docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md).
+- Scheduler (`scheduler.i`): cooperative tasks over the window table —
+  task 0 is the kernel (input, drag, audio services); each window's
+  app proc runs in its own task with a private 2KB stack at $FF4000+
+  and a one-slot mailbox (keys + frame ticks). Key posts yield-retry
+  so input bursts survive the single-slot mailbox.
+- The Sega CD probe arms a bus-error recovery: with no attachment,
+  $400000+ reads are open bus on hardware but a 68000 bus error under
+  BlastEm — the `berr` vector unwinds to the no-CD path instead of
+  crashing the boot.
 
 ## Verified (BlastEm 0.6.2)
 
@@ -164,7 +189,20 @@ the caller PC + coordinates rendered in hex on the bottom row.
   all 309 demo bytes
 - tape: a synthetic AFSK block decodes through the real bit engine;
   mktape.py round-trips a 2047-byte file through a 44.1kHz WAV
+- Sega CD BRAM: the same save/wipe/reopen round trip over the
+  injectable RPC transport (name normalization, payload header,
+  volume toggle) — the BIOS-trap path itself needs a CD-capable
+  emulator (Genesis Plus GX / Ares) or real hardware
+- Theme: preset apply recolors the whole desktop live (Forest in the
+  AUTOTEST); the custom editor reads back the right channel values
+- Tracker: the demo song renders in the pattern grid, the cursor and
+  playback rows highlight, and playback drives the PSG through the
+  task machinery
+- scheduler: the soft-keyboard "UNO" burst, the PS/2 stream, and
+  Dostris gravity all run through per-window tasks and mailboxes
 
 Real-hardware checklist: PS/2 keyboard on port 2 (EXT interrupt),
 PS/2 mouse on port 1 (inhibit/poll timing), pad feel (acceleration
-tuning), TMSS on a model 3, PSG volume balance.
+tuning), TMSS on a model 3, PSG volume balance, tape comparator
+thresholds, and the Sega CD Mode-1 path end-to-end (sub BIOS
+decompress + BURAM against a real attachment).

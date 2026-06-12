@@ -35,12 +35,27 @@ TAPE_LONG   equ 73
 
 ; ----------------------------------------------------------------------------
 ; tape_save_buf - write the Notepad buffer (v_np_name, v_npbuf, v_np_len)
-; to the PSG. Interrupts are masked for the duration (~20s for 2KB);
-; the screen freezes - by design.
+; to the PSG. tape_save_blk is the parameterized engine (the Tracker
+; saves its pattern through it). Interrupts are masked for the duration
+; (~20s for 2KB); the screen freezes - by design.
 ; ----------------------------------------------------------------------------
 tape_save_buf:
+        movem.l d0/a0-a1/a4,-(sp)
+        lea     VARS,a4
+        lea     v_np_name(a4),a0
+        lea     v_npbuf(a4),a1
+        move.w  v_np_len(a4),d0
+        bsr     tape_save_blk
+        movem.l (sp)+,d0/a0-a1/a4
+        rts
+
+; tape_save_blk - a0 = 12-byte name, a1 = data, d0.w = length
+tape_save_blk:
         movem.l d0-d7/a0-a1/a4,-(sp)
         lea     VARS,a4
+        move.w  d0,v_tp_len(a4)
+        move.l  a0,v_tp_nmd(a4)
+        move.l  a1,v_tp_dst(a4)
         move.w  sr,-(sp)
         or.w    #$0700,sr
         ; leader: 2400 Hz for ~1.5s
@@ -56,21 +71,21 @@ tape_save_buf:
         move.b  (a0)+,d0
         bsr     tape_tx_byte
         dbra    d7,.mg
-        lea     v_np_name(a4),a0
+        move.l  v_tp_nmd(a4),a0
         moveq   #11,d7
 .nm:    moveq   #0,d0
         move.b  (a0)+,d0
         bsr     tape_tx_byte
         dbra    d7,.nm
-        move.w  v_np_len(a4),d0
+        move.w  v_tp_len(a4),d0
         lsr.w   #8,d0
         bsr     tape_tx_byte
-        move.w  v_np_len(a4),d0
+        move.w  v_tp_len(a4),d0
         bsr     tape_tx_byte
         ; data + checksum
-        lea     v_npbuf(a4),a0
+        move.l  v_tp_dst(a4),a0
         moveq   #0,d6               ; sum
-        move.w  v_np_len(a4),d7
+        move.w  v_tp_len(a4),d7
         bra     .dchk
 .data:  moveq   #0,d0
         move.b  (a0)+,d0
@@ -148,10 +163,36 @@ tape_bitdelay:
 
 ; ----------------------------------------------------------------------------
 ; tape_load_buf - read one block from port 2 D0 into the Notepad buffer.
-; Interrupts masked; bounded (~12s) so a missing signal can't hang the
-; machine. Sets v_tp_msg: 1 = ok, 2 = error/timeout.
+; tape_load_core is the parameterized engine (v_tp_dst/v_tp_nmd/v_tp_max
+; tell the block parser where the data and name land; the Tracker points
+; them at its pattern). Interrupts masked; bounded (~12s) so a missing
+; signal can't hang the machine. Sets v_tp_msg: 1 = ok, 2 = error.
 ; ----------------------------------------------------------------------------
 tape_load_buf:
+        movem.l d0/a0/a4,-(sp)
+        lea     VARS,a4
+        lea     v_npbuf(a4),a0
+        move.l  a0,v_tp_dst(a4)
+        lea     v_np_name(a4),a0
+        move.l  a0,v_tp_nmd(a4)
+        move.w  #NBUF-1,v_tp_max(a4)
+        bsr     tape_load_core
+        move.b  v_tp_done(a4),d0
+        cmp.b   #1,d0
+        bne     .out
+        ; success: finalize the Notepad buffer
+        move.w  v_tp_got(a4),d0
+        move.w  d0,v_np_len(a4)
+        clr.w   v_np_caret(a4)
+        clr.w   v_np_top(a4)
+        move.w  #-1,v_np_goal(a4)
+        sf      v_np_dirty(a4)
+.out:   movem.l (sp)+,d0/a0/a4
+        rts
+
+; tape_load_core - receive one block into (v_tp_dst, max v_tp_max),
+; name into (v_tp_nmd). Callers set the pointers first.
+tape_load_core:
         movem.l d0-d7/a0-a1/a4,-(sp)
         lea     VARS,a4
         move.w  sr,-(sp)
@@ -181,13 +222,6 @@ tape_load_buf:
         beq     .poll
         cmp.b   #1,d0
         bne     .timeout
-        ; success: finalize the Notepad buffer
-        move.w  v_tp_got(a4),d0
-        move.w  d0,v_np_len(a4)
-        clr.w   v_np_caret(a4)
-        clr.w   v_np_top(a4)
-        move.w  #-1,v_np_goal(a4)
-        sf      v_np_dirty(a4)
         move.b  #1,v_tp_msg(a4)
         bra     .out
 .timeout:
@@ -347,7 +381,7 @@ tape_rx_byte:
         cmp.b   (a0,d2.w),d0
         bne     .reset
         bra     .adv
-.name:  lea     v_np_name(a4),a0
+.name:  move.l  v_tp_nmd(a4),a0
         move.b  d0,-4(a0,d2.w)      ; bstate 4..15 -> name 0..11
         bra     .adv
 .len:   cmp.w   #16,d2
@@ -357,10 +391,10 @@ tape_rx_byte:
         bra     .adv
 .lenlo: or.w    d0,v_tp_len(a4)
         move.w  v_tp_len(a4),d0
-        cmp.w   #NBUF-1,d0          ; oversized block: refuse
+        cmp.w   v_tp_max(a4),d0     ; oversized block: refuse
         ble     .adv
         bra     .reset
-.data:  lea     v_npbuf(a4),a0
+.data:  move.l  v_tp_dst(a4),a0
         move.b  d0,(a0,d3.w)
         and.w   #$FF,d0
         add.w   d0,v_tp_sum(a4)
@@ -385,6 +419,11 @@ tape_selftest:
         movem.l d0-d7/a0/a4,-(sp)
         lea     VARS,a4
         bsr     tape_rx_init
+        lea     v_npbuf(a4),a0      ; receive into the Notepad buffer
+        move.l  a0,v_tp_dst(a4)
+        lea     v_np_name(a4),a0
+        move.l  a0,v_tp_nmd(a4)
+        move.w  #NBUF-1,v_tp_max(a4)
         ; leader: 100 shorts
         move.w  #99,d7
 .lead:  move.w  #TAPE_SHORT,d0

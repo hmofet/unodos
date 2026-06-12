@@ -69,7 +69,7 @@ Next steps:
       tables are ready)
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
 
-## Genesis Port (2026-06-11) - MILESTONE 1 DONE
+## Genesis Port (2026-06-12) - MILESTONES 1-6 DONE (Amiga parity)
 - [x] M0 boot PoC (TMSS, VDP init, font tiles, splash) — verified in
       BlastEm
 - [x] M1 kernel: cell-based desktop on plane A (40x28, H40), WM with
@@ -99,16 +99,34 @@ Next steps:
       read path, injectable decoder (AUTOTEST_TAPE), mktape.py
       WAV encode/decode round trip; Files w/r keys. Comparator
       hardware = real-hw checklist.
-- [ ] M3: Theme over CRAM (8 shared presets), Tracker over PSG
-      (3 tones + noise; saves to SRAM/tape)
-- [ ] M5: Sega CD backup RAM via Mode-1 Sub-CPU stub + BIOS BURAM
-      (spec: docs/GENESIS-STORAGE.md)
-- [ ] M6: cooperative scheduler (port amiga/scheduler.i)
+- [x] M3 (2026-06-12): Theme over CRAM (8 shared presets + 3-bit RGB
+      custom editing, themed entries rewritten live) and Tracker over
+      PSG (3 square channels + noise, byte-identical pattern format
+      to the Amiga tracker, demo song, edit preview, s/l to SRAM and
+      t/y to tape) — BlastEm-verified (AUTOTEST_THEME/_TRACKER)
+- [x] M5 (2026-06-12): Sega CD backup RAM via Mode-1 (genesis/bram.i):
+      expansion probe (DISK bit + bus-error recovery — BlastEm raises
+      a bus error on $400000 with no CD), Kosinski sub-BIOS
+      decompress + Sub-CPU boot, ~300-byte SP stub calling the BIOS
+      _BURAM traps, LIST/READ/WRITE/DELETE mailbox RPC with Word-RAM
+      staging, Files volume toggle ('v') + Notepad F1 to the active
+      volume, names normalized 8.3 -> 11 chars with the original name
+      in the payload header. RPC/UI emulator-verified through the
+      injectable fake transport (AUTOTEST_BRAM); the BIOS-trap path
+      itself is a CD-emulator/real-hardware item
+- [x] M6 (2026-06-12): cooperative scheduler (genesis/scheduler.i,
+      port of amiga/scheduler.i): per-window tasks with private 2KB
+      stacks, one-slot mailboxes (keys yield-retry so bursts survive),
+      kernel task 0 pumps input/audio; BlastEm-verified (soft-kbd
+      typing, PS/2, game gravity all through the task machinery)
+- [ ] BRAM follow-ups: verify the Mode-1 BIOS path under Genesis Plus
+      GX / Ares (BlastEm has no CD), listing >8 files (BRMDIR paging),
+      Tracker save-to-BRAM
 - [ ] Deferred: SD card over bit-banged SPI + FAT16 (spec:
       docs/GENESIS-STORAGE.md; lands with the adapter PCB)
 - [ ] Real hardware: PS/2 wiring validation, tape comparator, TMSS on
-      a model 3, pad feel, PSG balance — FIRST new port headed to
-      physical hardware
+      a model 3, pad feel, PSG balance, Sega CD Mode-1 end-to-end —
+      FIRST new port headed to physical hardware
 
 ## Game Ports (2026-06-11) - DONE
 - [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as

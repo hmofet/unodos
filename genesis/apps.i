@@ -732,7 +732,7 @@ str_si1:        dc.b    "Video   320x224 VDP",0
 str_si2:        dc.b    "Machine Sega Genesis - MD",0
 str_si3:        dc.b    "RAM     64 KB",0
 str_si4:        dc.b    "Uptime",0
-str_si5:        dc.b    "UnoDOS/Genesis  Milestone 1",0
+str_si5:        dc.b    "UnoDOS/Genesis  Milestone 6",0
 str_uptime:     dc.b    "Uptime",0
 str_n_ln:       dc.b    "Ln ",0
 str_n_co:       dc.b    " Co ",0
@@ -740,8 +740,8 @@ str_n_b:        dc.b    " B",0
 str_n_dirty:    dc.b    " *",0
 str_n_save:     dc.b    "  F1:save",0
 str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
-str_m_play:     dc.b    "Space: play/stop  (PSG ch0)",0
-demo_text:      dc.b    "UnoDOS/Genesis milestone 1",13
+str_m_play:     dc.b    "Y:play/stop  (PSG ch0)",0
+demo_text:      dc.b    "UnoDOS/Genesis milestone 6",13
                 dc.b    "The quick brown fox",13
                 dc.b    "jumps over the lazy dog.",13
                 dc.b    "L04 scroll test",13

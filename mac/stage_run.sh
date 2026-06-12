@@ -5,7 +5,7 @@ export DISPLAY=:0
 APP="$1"
 BPP="${2:-8}"
 SIZE="${3:-640x480}"
-B=/mnt/c/Users/arin/unodos/mac/build
+B=/mnt/c/Users/arin/Documents/Github/unodos/mac/build
 mkdir -p /root/unotest/.rsrc /root/unotest/.finf
 cp "$B/$APP.APPL" /root/unotest/
 cp "$B/.rsrc/$APP.APPL" /root/unotest/.rsrc/

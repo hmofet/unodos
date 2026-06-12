@@ -118,7 +118,9 @@ for name, binfile in [("sysinfo", "build/sysinfo.bin"),
                       ("dostris", "build/tetris.bin"),
                       ("outlast", "build/outlast.bin"),
                       ("pacman",  "build/pacman.bin"),
-                      ("files",   "build/browser.bin")]:
+                      ("files",   "build/browser.bin"),
+                      ("theme",   "build/settings.bin"),
+                      ("tracker", "build/music.bin")]:
     if not os.path.exists(binfile):
         sys.exit(f"missing {binfile} - run 'make floppy144' first")
     for i, t in enumerate(icon_tiles(binfile)):

@@ -1,5 +1,5 @@
 # snapwin.ps1 - capture a window by process name to PNG
-param([string]$ProcName = "winuae64", [string]$Out = "C:\Users\arin\unodos\amiga\build\shot.png")
+param([string]$ProcName = "winuae64", [string]$Out = "C:\Users\arin\Documents\Github\unodos\amiga\build\shot.png")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;

@@ -28,7 +28,7 @@ assessment and plan):
 | [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | **Milestone 3** — cooperative multitasking, writable FAT12 disks (DF1, PC-interchangeable), splash, 10 apps incl. the three games and a music Tracker |
 | [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | Milestone 2.5 — desktop, WM, splash, 9 apps incl. the three games |
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2.5 — same set minus the color-only Theme app |
-| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop, hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | Milestone 4.5 — desktop, WM, the three games, SRAM saves + tape/WAV storage; first new port headed for real hardware |
+| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop, hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6** — Amiga-port parity: cooperative multitasking, 10 apps incl. the three games, Theme + Tracker, SRAM + tape/WAV + Sega CD backup-RAM storage; first new port headed for real hardware |
 
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the

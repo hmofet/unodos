@@ -365,8 +365,10 @@ sram_save:
         rts
 
 ; ============================================================================
-; Files app (proc 7) - SRAM listing; Enter opens into Notepad, d deletes,
-; w writes the Notepad buffer to tape, r reads a tape block into Notepad
+; Files app (proc 7) - storage listing; Enter/C opens into Notepad, d
+; deletes, w/r = tape, v cycles the volume (SRAM <-> Sega CD BRAM when
+; a CD attachment was detected). All storage access goes through the
+; store_* volume dispatch in bram.i.
 ; ============================================================================
 
 ; files_draw - a2 = window
@@ -384,9 +386,12 @@ files_draw:
         subq.w  #2,d3
         move.w  #ATTR_NORM+T_SOLBG,d4
         bsr     fill_cells
-        ; header
+        ; header (names the active volume)
         lea     str_f_hdr(pc),a0
-        move.w  WX(a2),d6
+        tst.w   v_files_vol(a4)
+        beq     .hdr
+        lea     str_f_hdrb(pc),a0
+.hdr:   move.w  WX(a2),d6
         addq.w  #2,d6
         move.w  WY(a2),d5
         addq.w  #2,d5
@@ -395,7 +400,7 @@ files_draw:
         move.w  #ATTR_ACC,d4
         bsr     draw_str
         ; rows
-        bsr     sram_count
+        bsr     store_count
         move.w  d0,d3
         moveq   #0,d7
 .row:   cmp.w   d3,d7
@@ -421,13 +426,13 @@ files_draw:
         movem.l (sp)+,d1/d3
 .attr:  move.w  d7,d0
         lea     v_numbuf(a4),a0
-        bsr     sram_name
+        bsr     store_name
         move.w  d6,d0
         bsr     draw_str
         ; size
         movem.l d1/d3-d4,-(sp)
         move.w  d7,d0
-        bsr     sram_size
+        bsr     store_size
         lea     v_npstat(a4),a0
         bsr     fmt_dec
         movem.l (sp)+,d1/d3-d4
@@ -445,7 +450,10 @@ files_draw:
         move.w  #ATTR_NORM,d4
         bsr     draw_str
 .help:  lea     str_f_foot(pc),a0
-        move.w  d6,d0
+        move.b  v_bram_pres(a4),d0
+        beq     .ft
+        lea     str_f_footv(pc),a0
+.ft:    move.w  d6,d0
         move.w  WY(a2),d1
         add.w   WH(a2),d1
         subq.w  #2,d1
@@ -482,12 +490,23 @@ files_key:
         beq     .tapew
         cmp.b   #'r',d1             ; read a tape block into Notepad
         beq     .taper
+        cmp.b   #'v',d1             ; cycle the volume (when BRAM exists)
+        beq     .vol
         moveq   #1,d0
         rts
+.vol:   move.b  v_bram_pres(a4),d0
+        beq     .redraw
+        move.w  v_files_vol(a4),d0
+        eor.w   #1,d0
+        move.w  d0,v_files_vol(a4)
+        beq     .vsel
+        bsr     bram_refresh        ; entering the BRAM volume: re-list
+.vsel:  clr.w   v_files_sel(a4)
+        bra     .redraw
 .down:  move.w  v_files_sel(a4),d0
         addq.w  #1,d0
         move.w  d0,-(sp)
-        bsr     sram_count
+        bsr     store_count
         move.w  (sp)+,d1
         cmp.w   d0,d1
         bge     .redraw
@@ -498,17 +517,19 @@ files_key:
         blt     .redraw
         move.w  d0,v_files_sel(a4)
         bra     .redraw
-.open:  bsr     sram_count
+.open:  bsr     store_count
         tst.w   d0
         beq     .redraw
-        ; name -> np_name, data -> npbuf
+        ; name -> np_name (listing name first; a BRAM payload header
+        ; restores the original 8.3 name), data -> npbuf
         move.w  v_files_sel(a4),d0
         lea     v_np_name(a4),a0
-        bsr     sram_name
+        bsr     store_name
         move.w  v_files_sel(a4),d0
+        lea     v_np_name(a4),a0
         lea     v_npbuf(a4),a1
         move.w  #NBUF-1,d2
-        bsr     sram_read
+        bsr     store_open_read
         move.w  d0,v_np_len(a4)
         clr.w   v_np_caret(a4)
         clr.w   v_np_top(a4)
@@ -520,12 +541,12 @@ files_key:
         bsr     redraw_topmost
         moveq   #0,d0
         rts
-.del:   bsr     sram_count
+.del:   bsr     store_count
         tst.w   d0
         beq     .redraw
         move.w  v_files_sel(a4),d0
-        bsr     sram_delete
-        bsr     sram_count
+        bsr     store_delete
+        bsr     store_count
         move.w  d0,d1
         beq     .selz
         subq.w  #1,d1
@@ -544,24 +565,26 @@ files_key:
         moveq   #0,d0
         rts
 
-; np_save_sram - Notepad F1: save the buffer under np_name
+; np_save_sram - Notepad F1: save the buffer under np_name to the
+; active volume (SRAM, or Sega CD BRAM when selected in Files)
 np_save_sram:
         movem.l d0-d1/a0-a1/a4,-(sp)
         lea     VARS,a4
         lea     v_np_name(a4),a0
-        move.l  a0,d0
         lea     v_npbuf(a4),a1
         move.w  v_np_len(a4),d1
-        bsr     sram_save
+        bsr     store_save
         tst.w   d0
-        bmi     .out                ; full: keep the dirty flag
+        bmi     .out                ; full/error: keep the dirty flag
         sf      v_np_dirty(a4)
 .out:   movem.l (sp)+,d0-d1/a0-a1/a4
         rts
 
 str_usv1:       dc.b    "USV1"
 str_f_hdr:      dc.b    "Name          Size  (SRAM)",0
-str_f_foot:     dc.b    "Ent:open d:del w/r:tape",0
+str_f_hdrb:     dc.b    "Name          Size  (BRAM)",0
+str_f_foot:     dc.b    "C:open  d:del w/r:tape",0
+str_f_footv:    dc.b    "C:open d:del w/r:tp v:vol",0
 str_f_empty:    dc.b    "no files - F1 in Notepad saves",0
 str_tp_ok:      dc.b    "TAPE OK         ",0
 str_tp_err:     dc.b    "TAPE ERR/NO SIG ",0
