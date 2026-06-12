@@ -5,6 +5,41 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Genesis milestone 2] - 2026-06-11
+
+### Sega Genesis / Mega Drive: the game ports
+
+- **Dostris + OutLast** (`genesis/games.i`) and **Pac-Man**
+  (`genesis/pacman.i`): the same piece tables, track/curve table,
+  maze, three-ghost AI (Blinky direct / Pinky 4-ahead / Clyde hybrid,
+  scatter-chase schedule, frightened mode with the eat chain), scoring
+  and physics as the x86 originals, rescaled from the donor Amiga
+  ports' 50 Hz to the 60 Hz NTSC vblank.
+- Cell rendering through `gcol`, a 32-entry map from the Amiga
+  extended-palette indexes to (attr | solid-tile) name words on VDP
+  palette lines 2/3 — converted channel-wise (Amiga `$0RGB` vs Genesis
+  `$0BGR`). OutLast re-runs the donor's per-strip road math once per
+  cell row in the same pixel space, so the curve/traffic/collision
+  behavior is identical.
+- **Pac-Man actors are hardware sprites** (1-4, chained after the
+  cursor sprite): pixel-smooth motion over the cell maze with no
+  repaint-under-actor logic at all — only eaten-dot cells redraw.
+  Sprites park off-screen whenever the Pac-Man window isn't topmost.
+- **Game music on PSG channel 1** (`gm_*`): Korobeiniki and Sunset
+  Drive parsed from the x86 sources by `mkdata.py` into PSG tone
+  values + 60 Hz durations; mutes (keeping position) when the owning
+  game loses topmost, stops on close (PORT-SPEC §2).
+- **Game-mode pad**: while a game window is topmost the d-pad posts
+  arrow-key events (press + hold-repeat at ~15 Hz after 12 frames),
+  A = Space, B = soft keyboard, C = Enter, Start = Esc, X = 'n',
+  Y = 'p'. Desktop mouse behavior returns when a non-game window is
+  topmost.
+- Desktop grows to 7 icons in two rows (the game icons pulled from the
+  x86 `.BIN` headers like the rest).
+- Verified in BlastEm via three new AUTOTEST builds (dostris: six
+  hard-drops through the key handler; outlast: 60 forced physics
+  steps; pacman: 150 real AI steps).
+
 ## [Genesis milestone 1] - 2026-06-11
 
 ### Sega Genesis / Mega Drive: desktop, pad-mouse, soft keyboard, PS/2 wiring, Notepad + Music

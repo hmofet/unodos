@@ -10,7 +10,13 @@ portable design as the Amiga and Mac ports (`docs/PORT-SPEC.md`).
 (drag, raise, close, z-order), pad-as-mouse with a hardware-sprite
 cursor, on-screen soft keyboard, PS/2 keyboard/mouse drivers (wired
 for real hardware), Notepad, and the Music test app (PSG Canon in D).
-Verified in BlastEm; **this port is headed for real hardware.**
+**Milestone 2 (2026-06-11):** the game ports — Dostris, OutLast and
+Pac-Man (same tables/physics/AI as the x86 originals; Pac-Man's actors
+are hardware sprites over the cell maze) with the shared game songs on
+PSG channel 1, and a game-mode pad layout (a game topmost flips the
+d-pad to arrow keys with hold-repeat, A = action, X = new game,
+Y = pause). Verified in BlastEm; **this port is headed for real
+hardware.**
 
 ## Display model
 
@@ -39,6 +45,11 @@ The soft keyboard covers the rest: full QWERTY, Shift (sticky), F1,
 arrows, Esc — clicked keys post through the same event queue as a real
 keyboard, with the same raw codes as the Amiga port, so apps are
 byte-portable across the 68K family.
+
+**Game mode:** while a game window is topmost the pad remaps — d-pad =
+arrow keys (press + hold-repeat), A = Space (drop/action), B = soft
+keyboard, C = Enter, Start = Esc (close), X = 'n' (new game),
+Y = 'p' (pause). The cursor parks until a non-game window is topmost.
 
 ## PS/2 keyboard and mouse (real hardware only)
 
@@ -78,6 +89,9 @@ Python 3. From this directory:
     ./build.sh kbd        # soft keyboard clicks type "UNO" into Notepad
     ./build.sh ps2        # synthetic PS/2 streams through the decoders
     ./build.sh click      # double-click launch via the real click latch
+    ./build.sh dostris    # new game + six hard-drops via dostris_key
+    ./build.sh outlast    # driving + 60 forced physics steps
+    ./build.sh pacman     # new game + 150 real AI steps
 
 `mkdata.py` regenerates `gen_data.i` from the shared x86 assets: the
 8×8 font as 4bpp tiles, window chrome tiles, the cursor sprite, the
@@ -124,6 +138,11 @@ the caller PC + coordinates rendered in hex on the bottom row.
 - PS/2 decoders: "ps2 ok" typed via synthetic set-2 frames; a stream
   packet moves the cursor to the exact expected pixel
 - click latch: synthesized double-click launches Music
+- Dostris: hard drops settle, score/lines/level + next preview update
+- OutLast: live road raster (curve, segment-striped grass, traffic),
+  HUD counts speed/score/time down
+- Pac-Man: maze + dots render, all four actor sprites roam, dots eaten
+  raise the score, ghosts leave the house on their timers
 
 Real-hardware checklist: PS/2 keyboard on port 2 (EXT interrupt),
 PS/2 mouse on port 1 (inhibit/poll timing), pad feel (acceleration

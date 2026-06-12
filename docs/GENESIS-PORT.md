@@ -1,4 +1,4 @@
-# UnoDOS/Genesis — port plan (approved 2026-06-11; M0+M1 shipped)
+# UnoDOS/Genesis — port plan (approved 2026-06-11; M0-M2 shipped)
 
 Target: Sega Mega Drive / Genesis — 68000 @ 7.67 MHz (same CPU family as
 the Amiga/Mac ports), VDP tile/sprite graphics, 64 KB work RAM, Z80 +
@@ -87,19 +87,33 @@ PROBE_GUARD build traps out-of-range cell coordinates and renders the
 caller PC in hex; BlastEm's debugger doesn't engage on piped stdin, so
 on-screen hex forensics is the workable equivalent.
 
+## Milestone 2 — the game ports (DONE 2026-06-11)
+
+`genesis/games.i` + `genesis/pacman.i`: Dostris, OutLast and Pac-Man
+with the same piece tables / track table / maze / ghost AI / scoring
+as the x86 originals (donor: the Amiga ports), rescaled 50→60 Hz.
+Rendering is cell-based through `gcol`, a 32-entry map from the
+Amiga's extended-palette indexes to (attr|solid-tile) words on palette
+lines 2/3 — note the channel swap, Amiga `$0RGB` vs Genesis `$0BGR`.
+Pac-Man's actors are hardware sprites (1-4, chained after the cursor),
+so the maze never repaints under them — only eaten-dot cells redraw.
+Game music is the shared Korobeiniki / Sunset Drive on PSG channel 1
+(`gm_*`, mutes when the owning game loses topmost). A game window
+topmost flips the pad into game mode: d-pad = arrows with hold-repeat,
+A = Space, X = 'n', Y = 'p'. Verified in BlastEm via the dostris /
+outlast / pacman AUTOTEST builds.
+
 ## Remaining roadmap
 
-1. **M2 — games + sound**: Dostris/OutLast/Pac-Man (tile rendering
-   fits them perfectly), PSG square-wave sequencer for the shared game
-   songs (FM later), Tracker over PSG's 3 tones + noise.
-2. **M3 — Theme + Files**: Theme app over CRAM (the 8 shared presets
-   restyle all four palette lines), Files over a ROM-disk.
-3. **M4 — storage**: SRAM-backed saves (battery-backed cartridge RAM
+1. **M3 — Theme + Files + Tracker**: Theme app over CRAM (the 8
+   shared presets restyle all four palette lines), Files over a
+   ROM-disk, Tracker over PSG's 3 tones + noise.
+2. **M4 — storage**: SRAM-backed saves (battery-backed cartridge RAM
    at `$200000`, header declaration, emulator + flashcart friendly);
    unlocks Notepad F1-save.
-4. **M5 — scheduler**: port the Amiga milestone-3 cooperative
+3. **M5 — scheduler**: port the Amiga milestone-3 cooperative
    scheduler (plain 68000; the stack arena and tick source change).
-5. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
+4. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
    mouse inhibit/poll timing), TMSS on a model 3, pad feel, PSG
    balance. This is the first new port headed for physical hardware.
 

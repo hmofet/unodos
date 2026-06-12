@@ -75,7 +75,18 @@ T_CORNBL    equ 103
 T_CORNBR    equ 104
 T_HLINE     equ 105
 T_CURSOR    equ 106                 ; 106/107 = 8x16 sprite
-T_ICONS     equ 108                 ; 4 tiles per icon
+T_ICONS     equ 108                 ; 4 tiles per icon (7 icons: 108-135)
+T_GSOL      equ 136                 ; game solids: palette index 5..15
+T_PMWALL    equ 147                 ; Pac-Man maze cell tiles
+T_PMDOT     equ 148
+T_PMPOW     equ 149
+T_PMGATE    equ 150
+T_SPAC      equ 151                 ; actor sprite tiles
+T_SGHR      equ 152
+T_SGHP      equ 153
+T_SGHO      equ 154
+T_SGHF      equ 155
+T_SGHE      equ 156
 
 ; events (PORT-SPEC SS3)
 EV_KEY      equ 1
@@ -97,7 +108,7 @@ MENUBAR_C   equ 1                   ; protected desktop rows (cells)
 TICKS_SEC   equ 60                  ; NTSC vblank
 DBLCLICK    equ 30                  ; double-click window (0.5s)
 
-NICONS      equ 4
+NICONS      equ 7
 NBUF        equ 2048                ; notepad buffer
 
 KBD_TOP     equ 22                  ; soft keyboard panel: rows 22..27
@@ -136,6 +147,56 @@ v_mus_ix        rs.w    1
 v_kb_hover      rs.w    1           ; soft kbd: hovered key index or -1
 v_ps2k_shift    rs.w    1           ; PS/2 kbd 11-bit frame shifter
 v_ps2m_shift    rs.w    1           ; PS/2 mouse frame shifter
+; ---- games (milestone 2)
+v_gm_notes      rs.l    1           ; game music: note table
+v_gm_end        rs.l    1
+v_dt_last       rs.l    1           ; Dostris
+v_dt_seed       rs.l    1
+v_ol_z          rs.l    1           ; OutLast
+v_ol_last       rs.l    1
+v_ol_lastsec    rs.l    1
+v_ol_traf0      rs.l    1
+v_ol_traf1      rs.l    1
+v_ol_traf2      rs.l    1
+v_ol_traf3      rs.l    1
+v_pm_last       rs.l    1           ; Pac-Man
+v_pm_statet     rs.l    1
+v_gm_count      rs.w    1
+v_gm_ix         rs.w    1
+v_gm_owner      rs.w    1
+v_dt_state      rs.w    1           ; 0 menu 1 play 2 pause 3 over
+v_dt_piece      rs.w    1
+v_dt_rot        rs.w    1
+v_dt_col        rs.w    1
+v_dt_row        rs.w    1
+v_dt_next       rs.w    1
+v_dt_score      rs.w    1
+v_dt_lines      rs.w    1
+v_dt_level      rs.w    1
+v_ol_state      rs.w    1           ; 0 title 1 play 2 over
+v_ol_x          rs.w    1
+v_ol_speed      rs.w    1
+v_ol_score      rs.w    1
+v_ol_time       rs.w    1
+v_ol_crash      rs.w    1
+v_ol_roadl      rs.w    1
+v_ol_roadr      rs.w    1
+v_pm_state      rs.w    1
+v_pm_x          rs.w    1
+v_pm_y          rs.w    1
+v_pm_dir        rs.w    1
+v_pm_nextdir    rs.w    1
+v_pm_score      rs.w    1
+v_pm_hi         rs.w    1
+v_pm_lives      rs.w    1
+v_pm_level      rs.w    1
+v_pm_dots       rs.w    1
+v_pm_mode       rs.w    1
+v_pm_modet      rs.w    1
+v_pm_fright     rs.w    1
+v_pm_kills      rs.w    1
+v_pm_tmp        rs.w    1
+v_pad_rptn      rs.w    1           ; game mode: frames d-pad held
 v_mouse_btn     rs.b    1
 v_last_btn      rs.b    1           ; previous button state (edge detect)
 v_click_seq     rs.b    1
@@ -156,7 +217,10 @@ v_ps2k_lastt    rs.b    1           ; tick of last clock edge (resync)
 v_ps2m_bits     rs.b    1
 v_ps2m_pktn     rs.b    1
 v_ps2m_pkt      rs.b    4
-        rs.b    1                   ; pad back to even (21 bytes above)
+v_gm_on         rs.b    1
+v_pm_dirty      rs.b    1           ; a dot was eaten this step
+v_pm_spron      rs.b    1           ; actor sprites currently shown
+        rs.b    0                   ; (byte count above stays even)
 v_evq           rs.b    EVQ_SIZE*4
 v_zlist         rs.b    MAXWIN
 v_wintab        rs.b    MAXWIN*WENT_SIZE
@@ -165,6 +229,9 @@ v_clkbuf        rs.b    12
 v_npstat        rs.b    48
 v_npline        rs.b    44
 v_npbuf         rs.b    NBUF
+v_dt_board      rs.b    200         ; Dostris 10x20
+v_pm_maze       rs.b    700         ; Pac-Man 28x25
+v_pm_gh         rs.b    30          ; 3 ghosts x GSIZE(10)
 VARS_END        rs.b    0
 
 ; ---------------------------------------------------------------- vectors
@@ -275,18 +342,53 @@ start:
         move.w  #-1,v_np_goal(a4)
         st      v_cur_dirty(a4)
 
-        ; ---- sprite 0 = cursor (8x16), link 0 parks the other 79
+        ; ---- sprites: 0 = cursor (8x16), 1-4 = Pac-Man actors (8x8,
+        ; parked off-screen until the game shows them). Chain 0->1->2->
+        ; 3->4->end.
         lea     VDP_CTRL,a0
         lea     VDP_DATA,a1
         move.l  #((SPRTAB&$3FFF)<<16)|$40000000|((SPRTAB>>14)&3),(a0)
-        move.w  #128+112,(a1)       ; y
-        move.w  #$0100,(a1)         ; size 1x2, link 0
-        move.w  #$8000+T_CURSOR,(a1) ; priority over the planes, pal 0
-        move.w  #128+160,(a1)       ; x
+        move.w  #128+112,(a1)       ; cursor y
+        move.w  #$0101,(a1)         ; size 1x2, link 1
+        move.w  #$8000+T_CURSOR,(a1)
+        move.w  #128+160,(a1)       ; cursor x
+        moveq   #1,d2
+.spk:   move.w  #0,(a1)             ; y = 0: off-screen
+        move.w  d2,d1
+        addq.w  #1,d1
+        cmp.w   #5,d1
+        bne     .lnk
+        moveq   #0,d1               ; sprite 4 ends the chain
+.lnk:   move.w  d1,(a1)             ; 8x8 + link
+        move.w  #$C000+T_SPAC,(a1)
+        move.w  #0,(a1)
+        addq.w  #1,d2
+        cmp.w   #5,d2
+        blt     .spk
 
         ; ---- io ports: PS/2 probe on port 1, PS/2 kbd wiring on port 2,
         ;      pad mode when nothing answers (ps2.i)
         bsr     ps2_init
+
+        ifd     PROBE_BOOT
+        ; bring-up probe: stop right after init - a blue screen means
+        ; the boot path is clean, anything else means it sprayed
+.bprob: bra     .bprob
+        endc
+
+        ifd     PROBE_SP1
+        bsr     clear_screen
+.sprob: bra     .sprob
+        endc
+        ifd     PROBE_SP2
+        bsr     clear_screen
+        lea     str_title(pc),a0
+        moveq   #12,d0
+        moveq   #10,d1
+        move.w  #ATTR_NORM,d4
+        bsr     draw_str
+.sprob2: bra    .sprob2
+        endc
 
         ifd     PROBE_NOINT
         ; bring-up probe: draw the splash with interrupts off and idle -
@@ -378,6 +480,61 @@ start:
         bsr     handle_events
         bsr     redraw_topmost
         endc
+        ifd     AUTOTEST_DOSTRIS
+        ; new game + six (nudge-left + hard-drop) through the real key
+        ; handler - settled pieces, score and the next preview show.
+        moveq   #4,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     dostris_key
+        moveq   #5,d3
+.atdt:  move.w  d3,-(sp)
+        moveq   #0,d1
+        moveq   #$4F,d2             ; nudge left
+        bsr     dostris_key
+        moveq   #32,d1
+        moveq   #0,d2
+        bsr     dostris_key         ; hard drop
+        move.w  (sp)+,d3
+        dbra    d3,.atdt
+        endc
+        ifd     AUTOTEST_OUTLAST
+        ; start driving and run 60 forced physics steps
+        moveq   #5,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     outlast_key
+        move.w  #59,d3
+.atol:  move.w  d3,-(sp)
+        lea     VARS,a4
+        move.l  v_ticks(a4),d0
+        sub.l   #100,d0
+        move.l  d0,v_ol_last(a4)    ; force the step gate open
+        bsr     outlast_tick
+        move.w  (sp)+,d3
+        dbra    d3,.atol
+        endc
+        ifd     AUTOTEST_PACMAN
+        ; new game, force play, run 150 real steps
+        moveq   #6,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'n',d1
+        moveq   #0,d2
+        bsr     pacman_key
+        lea     VARS,a4
+        move.w  #PMS_PLAY,v_pm_state(a4)
+        bsr     redraw_topmost
+        move.w  #149,d3
+.atpm:  move.w  d3,-(sp)
+        bsr     pm_step
+        move.w  (sp)+,d3
+        dbra    d3,.atpm
+        endc
         ifd     AUTOTEST_CLICK
         ; click-latch path: synthesize a double-click on the Music icon
         ; through the real ISR latch (mouse_buttons) + main-loop consumer
@@ -401,6 +558,9 @@ start:
         ifnd    AUTOTEST_KBD
         ifnd    AUTOTEST_PS2
         ifnd    AUTOTEST_CLICK
+        ifnd    AUTOTEST_DOSTRIS
+        ifnd    AUTOTEST_OUTLAST
+        ifnd    AUTOTEST_PACMAN
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -410,6 +570,9 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
+        endc
+        endc
         endc
         endc
         endc
@@ -428,8 +591,13 @@ main_loop:
         bsr     handle_events
         bsr     softkbd_hover
         bsr     music_tick
+        bsr     gm_tick
+        bsr     dostris_tick
+        bsr     outlast_tick
+        bsr     pacman_tick
         bsr     app_ticks
         bsr     cursor_sync
+        bsr     pm_sync_sprites
         bra     main_loop
 
 ; kbd_toggle_chk - B button (vblank) requested a soft keyboard toggle
@@ -513,6 +681,12 @@ app_key:
         beq     notepad_key
         cmp.w   #3,d0
         beq     music_key
+        cmp.w   #4,d0
+        beq     dostris_key
+        cmp.w   #5,d0
+        beq     outlast_key
+        cmp.w   #6,d0
+        beq     pacman_key
         rts                         ; sysinfo/clock: no keys
 
 ; ----------------------------------------------------------------------------
@@ -679,8 +853,10 @@ app_ticks:
         bsr     zwin_ptr
         moveq   #0,d0
         move.b  WPROC(a2),d0
+        cmp.w   #4,d0               ; games (4-6) drive their own drawing
+        bge     .skip
         bsr     app_draw_content
-        rts
+.skip:  rts
 
 ; cursor_sync - flush the sprite position when the ISR moved the mouse
 cursor_sync:
@@ -737,11 +913,20 @@ draw_desktop:
         blt     .icons
         rts
 
-; icon_pos - d0 = index -> d0 = cell x, d1 = cell y (PORT-SPEC 80px pitch)
+; icon_pos - d0 = index -> d0 = cell x, d1 = cell y (PORT-SPEC 80px
+; pitch; 4 per row, second row 5 cells down)
 icon_pos:
+        move.l  d2,-(sp)
+        and.l   #$FFFF,d0
+        divu    #4,d0
+        move.w  d0,d1               ; row
+        mulu    #5,d1
+        addq.w  #3,d1
+        swap    d0
+        and.w   #$FFFF,d0           ; col
         mulu    #10,d0
         addq.w  #4,d0
-        moveq   #3,d1
+        move.l  (sp)+,d2
         rts
 
 ; draw_icon_cell - d0 = icon index (2x2 icon tiles + label)
@@ -1026,7 +1211,8 @@ close_topmost:
         bsr     close_window
         rts
 
-; music_stop_if - d0 = z index being closed: stop audio if it's Music
+; music_stop_if - d0 = z index being closed: close silences audio
+; (PORT-SPEC SS2: Music's PSG ch0 or a game's ch1 sequencer)
 music_stop_if:
         movem.l d0/d2/a2,-(sp)
         move.w  d0,d2
@@ -1034,8 +1220,12 @@ music_stop_if:
         moveq   #0,d0
         move.b  WPROC(a2),d0
         cmp.w   #3,d0
-        bne     .out
+        bne     .ngm
         bsr     music_stop
+        bra     .out
+.ngm:   cmp.w   #4,d0
+        blt     .out
+        bsr     gm_stop
 .out:   movem.l (sp)+,d0/d2/a2
         rts
 
@@ -1156,7 +1346,19 @@ app_draw_content:
         beq     .clock
         cmp.w   #3,d0
         blt     .notepad
-        bsr     music_draw
+        beq     .music
+        cmp.w   #5,d0
+        blt     .dostris
+        beq     .outlast
+        bsr     pacman_draw
+        bra     .done
+.music: bsr     music_draw
+        bra     .done
+.dostris:
+        bsr     dostris_draw
+        bra     .done
+.outlast:
+        bsr     outlast_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -1493,7 +1695,22 @@ pad_read:
 
 ; pad_to_mouse - d-pad moves the cursor (held-frame acceleration, Z =
 ; turbo), A = button; B/C/Start/X/Y post synthesized events on press.
+; GAME MODE (a game window topmost): the d-pad posts arrow key events
+; instead (press + hold-repeat), A = Space, X = 'n', Y = 'p'.
 pad_to_mouse:
+        ; game mode?
+        move.w  v_zcount(a4),d1
+        beq     .mouse
+        lea     v_zlist(a4),a0
+        subq.w  #1,d1
+        moveq   #0,d0
+        move.b  (a0,d1.w),d0        ; topmost slot
+        lsl.w   #4,d0
+        lea     VARS+v_wintab,a0
+        move.b  WPROC(a0,d0.w),d0
+        cmp.b   #4,d0
+        bge     pad_game
+.mouse:
         move.w  v_pad_state(a4),d0
         ; --- velocity from held time
         move.w  d0,d1
@@ -1578,6 +1795,104 @@ pad_to_mouse:
         bsr     ev_post
 .nsp:   rts
 
+; pad_game - game-mode pad: d-pad = arrows with hold-repeat (after 12
+; frames, every 4th), A = Space, B = soft kbd, C = Enter, Start = Esc,
+; X = 'n' (new game), Y = 'p' (pause). The cursor stays put; A is not
+; a mouse button here.
+pad_game:
+        sf      v_mouse_btn(a4)
+        move.w  v_pad_state(a4),d0
+        move.w  v_pad_prev(a4),d1
+        not.w   d1
+        and.w   d0,d1               ; d1 = newly pressed
+        ; hold-repeat window for the d-pad
+        move.w  d0,d2
+        and.w   #$000F,d2
+        bne     .held
+        clr.w   v_pad_rptn(a4)
+        bra     .edges
+.held:  move.w  v_pad_rptn(a4),d2
+        addq.w  #1,d2
+        move.w  d2,v_pad_rptn(a4)
+        cmp.w   #12,d2
+        blt     .edges
+        and.w   #3,d2
+        bne     .edges
+        move.w  d0,d2               ; repeat tick: held d-pad dirs fire
+        and.w   #$000F,d2
+        or.w    d2,d1
+.edges:
+        ; d-pad -> arrow raw codes (up $4C, down $4D, left $4F, right $4E)
+        btst    #0,d1
+        beq     .gnu
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #$4C00,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnu:   btst    #1,d1
+        beq     .gnd
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #$4D00,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnd:   btst    #2,d1
+        beq     .gnl
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #$4F00,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnl:   btst    #3,d1
+        beq     .gnr
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #$4E00,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnr:
+        ; buttons (edge-only, already filtered into d1)
+        btst    #4,d1               ; A = Space
+        beq     .gna
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        moveq   #32,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gna:   btst    #5,d1               ; B = soft keyboard
+        beq     .gnb
+        st      v_kb_toggle(a4)
+.gnb:   btst    #6,d1               ; C = Enter
+        beq     .gnc
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #13,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnc:   btst    #7,d1               ; Start = Esc
+        beq     .gns
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #27,d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gns:   btst    #8,d1               ; X = new game
+        beq     .gnx
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #'n',d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gnx:   btst    #9,d1               ; Y = pause
+        beq     .gny
+        move.w  d1,-(sp)
+        moveq   #EV_KEY,d0
+        move.w  #'p',d1
+        bsr     ev_post
+        move.w  (sp)+,d1
+.gny:   rts
+
 ; ============================================================================
 ; Event queue - 32 x 4 bytes; ISR producer, main-loop consumer
 ; ============================================================================
@@ -1630,6 +1945,8 @@ ev_get:
         include "softkbd.i"
         include "ps2.i"
         include "apps.i"
+        include "games.i"
+        include "pacman.i"
 
 ; ============================================================================
 ; Data
@@ -1646,10 +1963,16 @@ str_t_sysinfo:  dc.b    "System Info",0
 str_t_clock:    dc.b    "Clock",0
 str_t_notepad:  dc.b    "Notepad",0
 str_t_music:    dc.b    "Music",0
+str_t_dostris:  dc.b    "Dostris",0
+str_t_outlast:  dc.b    "OutLast",0
+str_t_pacman:   dc.b    "Pac-Man",0
 name_sysinfo:   dc.b    "Sys Info",0
 name_clock:     dc.b    "Clock",0
 name_notepad:   dc.b    "Notepad",0
 name_music:     dc.b    "Music",0
+name_dostris:   dc.b    "Dostris",0
+name_outlast:   dc.b    "OutLast",0
+name_pacman:    dc.b    "Pac-Man",0
 
         even
 ; app definitions: x, y, w, h (cells), title offset from 'start'
@@ -1658,25 +1981,40 @@ app_def_tab:
         dc.w    12,9,18,8,  str_t_clock-start
         dc.w    1,1,38,20,  str_t_notepad-start
         dc.w    5,3,30,15,  str_t_music-start
+        dc.w    6,2,28,25,  str_t_dostris-start
+        dc.w    1,1,38,26,  str_t_outlast-start
+        dc.w    1,1,38,27,  str_t_pacman-start
 
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
         dc.l    name_notepad
         dc.l    name_music
+        dc.l    name_dostris
+        dc.l    name_outlast
+        dc.l    name_pacman
 
 ; CRAM: 4 palette lines x 16 colors ($0BGR, 3-bit channels)
 ; line 0 NORM: backdrop blue, 1 white, 2 blue, 3 cyan, 4 magenta,
 ;              13-15 cursor sprite (cyan, blue, white)
 ; line 1 INV:  1 blue, 2 white  (title bars, status, selection)
-; line 2 ACC:  1 cyan, 2 blue   (accents)
-; line 3 KEY:  1 blue, 2 cyan   (soft keyboard)
+; line 2 ACC:  1 cyan, 2 blue + game colors 5-15 (pieces, actors)
+; line 3 KEY:  1 blue, 2 cyan + game colors 5-15 (OutLast scenery)
+; Game entries (from the Amiga ext_palette, see games.i gcol_tab):
+;   PAL2: 5 I-cyan, 6 O/pac yellow, 7 T purple, 8 S green, 9 Z red,
+;         10 J/wall blue, 11 L/orange, 12 car/blinky red, 13 pink,
+;         14 white, 15 black
+;   PAL3: 5 sky, 6 haze, 7 grass A, 8 grass B, 9 road, 10 stripe,
+;         11 windshield, 12 wheel, 13 fright blue, 14 traffic, 15 black
         even
 pal_data:
         dc.w    $0A00,$0EEE,$0A00,$0AA0,$0A0A,0,0,0,0,0,0,0,0,$0AA0,$0A00,$0EEE
         dc.w    $0A00,$0A00,$0EEE,$0AA0,$0A0A,0,0,0,0,0,0,0,0,0,0,0
-        dc.w    $0A00,$0AA0,$0A00,$0EEE,$0A0A,0,0,0,0,0,0,0,0,0,0,0
-        dc.w    $0A00,$0A00,$0AA0,$0EEE,$0A0A,0,0,0,0,0,0,0,0,0,0,0
+; (game colors converted from the Amiga ext_palette: $0RGB -> $0BGR)
+        dc.w    $0A00,$0AA0,$0A00,$0EEE,$0A0A
+        dc.w    $0DD0,$00DE,$0D3A,$04C2,$033E,$0E63,$039E,$022D,$0C9F,$0EEE,$0000
+        dc.w    $0A00,$0A00,$0AA0,$0EEE,$0A0A
+        dc.w    $0EA7,$08CE,$03A3,$0282,$0777,$04EE,$0ED9,$0111,$0C33,$04CE,$0000
 
         even
         include "gen_data.i"
