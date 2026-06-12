@@ -73,4 +73,4 @@ platform allows.
 | | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
 |---|---|---|---|---|---|
 | Emulator harness | QEMU (scripted scenarios) | WinUAE + AROS ROM (AUTOTEST builds) | Executor (ROM-free) | Executor | BlastEm (15 AUTOTEST builds) |
-| Real hardware | **tested** (8088→486, PS/2 L40, Eee PC) | pending (A500 smoke test) | pending (Mac II-class) | pending (Mac Plus) | pending — first new port headed to hardware (PS/2 wiring, tape comparator, Sega CD Mode-1 are real-hw-only) |
+| Real hardware | **tested** (8088→486, PS/2 L40, Eee PC) | pending (A500 smoke test) | pending (Mac II-class) | pending (Mac Plus) | **tested, works** (2026-06-12); PS/2 wiring, tape comparator and Sega CD Mode-1 adapters still to be exercised |

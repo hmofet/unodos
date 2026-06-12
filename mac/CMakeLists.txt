@@ -35,6 +35,26 @@ target_compile_options(UnoDOS7FTest PRIVATE -ffunction-sections)
 set_target_properties(UnoDOS7FTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
 
 # Theme-picker autotest: opens Theme, applies Sunset via the key handler.
+add_application(UnoDOS7TkTest unodos.c)
+target_compile_definitions(UnoDOS7TkTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_TRACKER=1)
+target_compile_options(UnoDOS7TkTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7TkTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOS7PtTest unodos.c)
+target_compile_definitions(UnoDOS7PtTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_PAINT=1)
+target_compile_options(UnoDOS7PtTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7PtTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOSClassicPtTest unodos.c)
+target_compile_definitions(UnoDOSClassicPtTest PRIVATE UNO_COLOR=0 UNO_AUTOTEST_PAINT=1)
+target_compile_options(UnoDOSClassicPtTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOSClassicPtTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
+add_application(UnoDOS7FatTest unodos.c)
+target_compile_definitions(UnoDOS7FatTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_FAT12=1)
+target_compile_options(UnoDOS7FatTest PRIVATE -ffunction-sections)
+set_target_properties(UnoDOS7FatTest PROPERTIES LINK_FLAGS "-Wl,-gc-sections -Wl,--mac-strip-macsbug")
+
 add_application(UnoDOS7ThTest unodos.c)
 target_compile_definitions(UnoDOS7ThTest PRIVATE UNO_COLOR=1 UNO_AUTOTEST_THEME=1)
 target_compile_options(UnoDOS7ThTest PRIVATE -ffunction-sections)

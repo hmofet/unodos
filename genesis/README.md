@@ -31,8 +31,8 @@ pattern format, saves to SRAM and tape), **Sega CD backup RAM**
 (Mode-1 Sub-CPU boot + BIOS `_BURAM` stub behind a mailbox RPC; the
 Files app grows a volume toggle), and the **cooperative scheduler**
 (every window's app proc runs in its own task with a private 2KB
-stack, ported from `amiga/scheduler.i`). Verified in BlastEm;
-**this port is headed for real hardware.**
+stack, ported from `amiga/scheduler.i`). Verified in BlastEm and **on real hardware (2026-06-12)** — the
+cartridge boots and runs on a physical console.
 
 ## Display model
 
@@ -201,8 +201,7 @@ the caller PC + coordinates rendered in hex on the bottom row.
 - scheduler: the soft-keyboard "UNO" burst, the PS/2 stream, and
   Dostris gravity all run through per-window tasks and mailboxes
 
-Real-hardware checklist: PS/2 keyboard on port 2 (EXT interrupt),
-PS/2 mouse on port 1 (inhibit/poll timing), pad feel (acceleration
-tuning), TMSS on a model 3, PSG volume balance, tape comparator
-thresholds, and the Sega CD Mode-1 path end-to-end (sub BIOS
-decompress + BURAM against a real attachment).
+**Real hardware: validated 2026-06-12 — the port runs on a physical
+console.** Still to exercise (adapter hardware): PS/2 keyboard/mouse
+wiring, the tape comparator, and the Sega CD Mode-1 path end-to-end
+(sub BIOS decompress + BURAM against a real attachment).

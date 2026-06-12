@@ -124,9 +124,10 @@ Next steps:
       Tracker save-to-BRAM
 - [ ] Deferred: SD card over bit-banged SPI + FAT16 (spec:
       docs/GENESIS-STORAGE.md; lands with the adapter PCB)
-- [ ] Real hardware: PS/2 wiring validation, tape comparator, TMSS on
-      a model 3, pad feel, PSG balance, Sega CD Mode-1 end-to-end —
-      FIRST new port headed to physical hardware
+- [x] Real hardware (2026-06-12): the cartridge boots and runs on a
+      physical console — first new port validated on metal
+- [ ] Real-hardware adapters still to exercise: PS/2 wiring, tape
+      comparator, Sega CD Mode-1 end-to-end
 
 ## Game Ports (2026-06-11) - DONE
 - [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as
