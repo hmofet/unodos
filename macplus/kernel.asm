@@ -139,6 +139,7 @@ start2:
         lea     vars(pc),a4
         move.l  $2AE,a0             ; ROMBase
         move.w  8(a0),d0
+        move.b  d0,mach_ver-vars(a4) ; $75 Plus / $76 SE / $78+ II (sound gates)
         cmp.w   #$75,d0
         beq     .plus_hw
         st      rom_mode-vars(a4)
@@ -190,6 +191,8 @@ start2:
         move.l  #(KBSS_END-KBSS)/4-1,d0
 .zbss:  clr.l   (a0)+
         dbra    d0,.zbss            ; (fits a word: 11007 iterations)
+
+        bsr     snd_init            ; pulse-width sound buffer (machine-gated)
 
         ; screen base from the ROM's low-mem global (varies with RAM size)
         move.l  LM_SCRNBASE,d0
@@ -2249,6 +2252,7 @@ ev_get:
         include "../amiga/gen_data.i"
         include "sony.i"
         include "fat12.i"
+        include "snd.i"
         include "apps.i"
         include "diskapp.i"
         include "games.i"
@@ -2429,7 +2433,17 @@ cur_save:       ds.b    3*CURSOR_H
 old_lvl1:       dc.l    0           ; ROM's level-1 handler (chained)
 keytime_l:      dc.l    0           ; last seen KeyTime ($186)
 rom_mode:       dc.b    0           ; 0 = Plus hardware, 1 = ROM-assisted
-                dc.b    0
+mach_ver:       dc.b    0           ; ROM version: $75 Plus $76 SE $78+ II
+; ---- sound (snd.i) ----
+        even
+snd_buf:        dc.l    0           ; MemTop-$300 (370 words, high bytes)
+gm_notes:       dc.l    0           ; game-music note table
+gm_end:         dc.l    0           ; tick the current note ends at
+gm_count:       dc.w    0
+gm_owner:       dc.w    0           ; owning proc (mutes when not topmost)
+gm_ix:          dc.w    0
+snd_ok:         dc.b    0           ; machine has the PWM buffer
+gm_on:          dc.b    0
 
 ; ---- M2: FAT12 + Files/Notepad state (appended; M1 offsets unchanged so
 ; the harness's vars+28 mouse mirror still lines up) ------------------------
