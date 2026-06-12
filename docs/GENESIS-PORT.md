@@ -1,4 +1,4 @@
-# UnoDOS/Genesis — port plan (approved 2026-06-11; M0-M2 shipped)
+# UnoDOS/Genesis — port plan (approved 2026-06-11; M0-M2 + M4/M4.5 shipped)
 
 Target: Sega Mega Drive / Genesis — 68000 @ 7.67 MHz (same CPU family as
 the Amiga/Mac ports), VDP tile/sprite graphics, 64 KB work RAM, Z80 +
@@ -103,19 +103,41 @@ topmost flips the pad into game mode: d-pad = arrows with hold-repeat,
 A = Space, X = 'n', Y = 'p'. Verified in BlastEm via the dostris /
 outlast / pacman AUTOTEST builds.
 
+## Milestones 4 + 4.5 — storage (DONE 2026-06-11)
+
+Full design + tier specs in **docs/GENESIS-STORAGE.md**.
+
+- **M4 SRAM** (`genesis/sram.i`): 8KB battery SRAM (header-declared,
+  odd bytes at `$200001`), USV1 mini-filesystem (8 files, save-by-name
+  overwrite, delete-compaction), the **Files app** (proc 7), and
+  Notepad **F1-save**. Verified in BlastEm (AUTOTEST_SRAM round trip).
+  Traps: index SRAM with `(a0,d0.w)` (a stale high word in a .l index
+  reaches random buses), and write `$A130F1 = 1` once at boot — the
+  per-access on/off dance unmapped SRAM for good under BlastEm.
+- **M4.5 tape/WAV** (`genesis/tape.i` + `genesis/mktape.py`): KCS
+  1200-baud AFSK; the PSG writes (zero hardware — record the
+  headphone jack), a one-comparator adapter on port 2 pin 1 reads.
+  Poll-count timebase (no timer needed). The decoder is injectable
+  and emulator-verified (AUTOTEST_TAPE); mktape.py encodes/decodes
+  WAVs on the PC side (selftest + 2KB WAV round trip pass) so the PC
+  is the tape deck. Files: `w`/`r` keys.
+
 ## Remaining roadmap
 
-1. **M3 — Theme + Files + Tracker**: Theme app over CRAM (the 8
-   shared presets restyle all four palette lines), Files over a
-   ROM-disk, Tracker over PSG's 3 tones + noise.
-2. **M4 — storage**: SRAM-backed saves (battery-backed cartridge RAM
-   at `$200000`, header declaration, emulator + flashcart friendly);
-   unlocks Notepad F1-save.
-3. **M5 — scheduler**: port the Amiga milestone-3 cooperative
+1. **M3 — Theme + Tracker**: Theme app over CRAM (the 8 shared
+   presets restyle all four palette lines), Tracker over PSG's
+   3 tones + noise (saves to SRAM/tape now that storage exists).
+2. **M5 — Sega CD backup RAM**: Mode-1 Sub-CPU stub + BIOS BURAM
+   traps, third Files volume — spec'd in docs/GENESIS-STORAGE.md.
+3. **M6 — scheduler**: port the Amiga milestone-3 cooperative
    scheduler (plain 68000; the stack arena and tick source change).
-4. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
-   mouse inhibit/poll timing), TMSS on a model 3, pad feel, PSG
-   balance. This is the first new port headed for physical hardware.
+4. **Deferred — SD card over bit-banged SPI** (spec'd in
+   docs/GENESIS-STORAGE.md): lands with the real-hardware adapter
+   PCB alongside the PS/2 sockets and tape comparator.
+5. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
+   mouse inhibit/poll timing), tape comparator thresholds, TMSS on a
+   model 3, pad feel, PSG balance. First new port headed for
+   physical hardware.
 
 Notes/risks: work RAM is 64 KB total (the app model fits; Notepad runs
 a 2 KB buffer), and PS/2-over-gameport needs the real-hardware pass —

@@ -90,12 +90,25 @@ Next steps:
       sprites, Korobeiniki/Sunset Drive on PSG ch1, game-mode pad
       (d-pad = arrows w/ hold-repeat, A=Space, X=new, Y=pause);
       verified in BlastEm (dostris/outlast/pacman AUTOTESTs)
-- [ ] M3: Theme over CRAM (8 shared presets), Files over a ROM-disk,
-      Tracker over PSG (3 tones + noise)
-- [ ] M4: SRAM storage (unlocks Notepad save)
-- [ ] M5: cooperative scheduler (port amiga/scheduler.i)
-- [ ] Real hardware: PS/2 wiring validation, TMSS on a model 3, pad
-      feel, PSG balance — FIRST new port headed to physical hardware
+- [x] M4 SRAM storage (2026-06-11): 8KB battery SRAM + USV1 mini-FS
+      (8 files, overwrite-by-name, delete-compaction), Files app,
+      Notepad F1-save; BlastEm-verified round trip. $A130F1 once at
+      boot only (toggling unmaps it in BlastEm).
+- [x] M4.5 tape/WAV storage (2026-06-11): KCS 1200-baud AFSK, PSG
+      write path (record the headphone jack), comparator-on-port-2
+      read path, injectable decoder (AUTOTEST_TAPE), mktape.py
+      WAV encode/decode round trip; Files w/r keys. Comparator
+      hardware = real-hw checklist.
+- [ ] M3: Theme over CRAM (8 shared presets), Tracker over PSG
+      (3 tones + noise; saves to SRAM/tape)
+- [ ] M5: Sega CD backup RAM via Mode-1 Sub-CPU stub + BIOS BURAM
+      (spec: docs/GENESIS-STORAGE.md)
+- [ ] M6: cooperative scheduler (port amiga/scheduler.i)
+- [ ] Deferred: SD card over bit-banged SPI + FAT16 (spec:
+      docs/GENESIS-STORAGE.md; lands with the adapter PCB)
+- [ ] Real hardware: PS/2 wiring validation, tape comparator, TMSS on
+      a model 3, pad feel, PSG balance — FIRST new port headed to
+      physical hardware
 
 ## Game Ports (2026-06-11) - DONE
 - [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as

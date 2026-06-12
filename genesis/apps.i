@@ -174,8 +174,15 @@ notepad_set_demo:
         clr.w   v_np_top(a4)
         move.w  #-1,v_np_goal(a4)
         st      v_np_dirty(a4)
+        lea     str_np_demo(pc),a0
+        lea     v_np_name(a4),a1
+        moveq   #11,d1
+.nmcp:  move.b  (a0)+,(a1)+
+        dbra    d1,.nmcp
         movem.l (sp)+,d0-d1/a0-a1/a4
         rts
+str_np_demo:    dc.b    "DEMO.TXT",0,0,0,0
+        even
 
 ; notepad_linecol - -> d0 = line, d1 = col of the caret (0-based)
 notepad_linecol:
@@ -416,6 +423,8 @@ notepad_draw:
         lea     str_n_dirty(pc),a1
         bsr     str_append
 .nodirty:
+        lea     str_n_save(pc),a1
+        bsr     str_append
         lea     v_npstat(a4),a0
         move.w  WX(a2),d0
         addq.w  #1,d0
@@ -438,8 +447,8 @@ notepad_key:
         beq     .up
         cmp.b   #$4D,d2             ; down
         beq     .down
-        cmp.b   #$50,d2             ; F1: no storage on Genesis yet
-        beq     .redraw
+        cmp.b   #$50,d2             ; F1 = save to SRAM under np_name
+        beq     .save
         cmp.b   #8,d1               ; backspace
         beq     .bs
         cmp.b   #13,d1              ; return inserts CR
@@ -534,6 +543,8 @@ notepad_key:
         addq.w  #1,d0
         move.w  d0,v_np_len(a4)
         st      v_np_dirty(a4)
+        bra     .redraw
+.save:  bsr     np_save_sram        ; clears the dirty flag on success
         bra     .redraw
 .redraw:
         bsr     redraw_topmost
@@ -727,6 +738,7 @@ str_n_ln:       dc.b    "Ln ",0
 str_n_co:       dc.b    " Co ",0
 str_n_b:        dc.b    " B",0
 str_n_dirty:    dc.b    " *",0
+str_n_save:     dc.b    "  F1:save",0
 str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
 str_m_play:     dc.b    "Space: play/stop  (PSG ch0)",0
 demo_text:      dc.b    "UnoDOS/Genesis milestone 1",13

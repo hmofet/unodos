@@ -75,18 +75,18 @@ T_CORNBL    equ 103
 T_CORNBR    equ 104
 T_HLINE     equ 105
 T_CURSOR    equ 106                 ; 106/107 = 8x16 sprite
-T_ICONS     equ 108                 ; 4 tiles per icon (7 icons: 108-135)
-T_GSOL      equ 136                 ; game solids: palette index 5..15
-T_PMWALL    equ 147                 ; Pac-Man maze cell tiles
-T_PMDOT     equ 148
-T_PMPOW     equ 149
-T_PMGATE    equ 150
-T_SPAC      equ 151                 ; actor sprite tiles
-T_SGHR      equ 152
-T_SGHP      equ 153
-T_SGHO      equ 154
-T_SGHF      equ 155
-T_SGHE      equ 156
+T_ICONS     equ 108                 ; 4 tiles per icon (8 icons: 108-139)
+T_GSOL      equ 140                 ; game solids: palette index 5..15
+T_PMWALL    equ 151                 ; Pac-Man maze cell tiles
+T_PMDOT     equ 152
+T_PMPOW     equ 153
+T_PMGATE    equ 154
+T_SPAC      equ 155                 ; actor sprite tiles
+T_SGHR      equ 156
+T_SGHP      equ 157
+T_SGHO      equ 158
+T_SGHF      equ 159
+T_SGHE      equ 160
 
 ; events (PORT-SPEC SS3)
 EV_KEY      equ 1
@@ -108,7 +108,7 @@ MENUBAR_C   equ 1                   ; protected desktop rows (cells)
 TICKS_SEC   equ 60                  ; NTSC vblank
 DBLCLICK    equ 30                  ; double-click window (0.5s)
 
-NICONS      equ 7
+NICONS      equ 8
 NBUF        equ 2048                ; notepad buffer
 
 KBD_TOP     equ 22                  ; soft keyboard panel: rows 22..27
@@ -197,6 +197,13 @@ v_pm_fright     rs.w    1
 v_pm_kills      rs.w    1
 v_pm_tmp        rs.w    1
 v_pad_rptn      rs.w    1           ; game mode: frames d-pad held
+v_files_sel     rs.w    1           ; Files app selection
+v_tp_cnt        rs.w    1           ; tape: leader counter / sum-hi stash
+v_tp_byte       rs.w    1           ; tape: byte assembler
+v_tp_bstate     rs.w    1           ; tape: block parser position
+v_tp_len        rs.w    1           ; tape: payload length
+v_tp_sum        rs.w    1           ; tape: running checksum
+v_tp_got        rs.w    1           ; tape: bytes received on success
 v_mouse_btn     rs.b    1
 v_last_btn      rs.b    1           ; previous button state (edge detect)
 v_click_seq     rs.b    1
@@ -220,7 +227,13 @@ v_ps2m_pkt      rs.b    4
 v_gm_on         rs.b    1
 v_pm_dirty      rs.b    1           ; a dot was eaten this step
 v_pm_spron      rs.b    1           ; actor sprites currently shown
-        rs.b    0                   ; (byte count above stays even)
+v_tp_state      rs.b    1           ; tape: bit state machine
+v_tp_done       rs.b    1           ; tape: 0 running, 1 ok, 2 error
+v_tp_msg        rs.b    1           ; Files status: 0 none, 1 ok, 2 err
+v_tp_bits       rs.b    1           ; tape: bits assembled
+v_tp_need       rs.b    1           ; tape: shorts left in a 1-cell
+v_np_name       rs.b    12          ; current Notepad file name
+        rs.b    1                   ; (byte count above stays even)
 v_evq           rs.b    EVQ_SIZE*4
 v_zlist         rs.b    MAXWIN
 v_wintab        rs.b    MAXWIN*WENT_SIZE
@@ -264,7 +277,9 @@ VARS_END        rs.b    0
         dc.l    $0000FFFF                           ; 64KB ROM
         dc.l    $00FF0000
         dc.l    $00FFFFFF
-        dc.b    "            "
+        dc.b    "RA",$F8,$20                        ; battery SRAM, odd bytes
+        dc.l    $00200001
+        dc.l    $00203FFF                           ; 8KB
         dc.b    "            "
         dc.b    "UnoDOS 3 for Sega Genesis - milestone 1 "
         dc.b    "JUE             "
@@ -341,6 +356,13 @@ start:
         move.w  #-1,v_kb_hover(a4)
         move.w  #-1,v_np_goal(a4)
         st      v_cur_dirty(a4)
+        lea     str_untitled(pc),a0
+        lea     v_np_name(a4),a1
+        moveq   #11,d0
+.npn:   move.b  (a0)+,(a1)+
+        dbra    d0,.npn
+
+        bsr     sram_init           ; format an uninitialized save store
 
         ; ---- sprites: 0 = cursor (8x16), 1-4 = Pac-Man actors (8x8,
         ; parked off-screen until the game shows them). Chain 0->1->2->
@@ -374,6 +396,74 @@ start:
         ; bring-up probe: stop right after init - a blue screen means
         ; the boot path is clean, anything else means it sprayed
 .bprob: bra     .bprob
+        endc
+
+        ifd     PROBE_SRAM
+        ; storage probe: format, then read the magic + count back and
+        ; render them in hex. "55535631 0000" = SRAM works.
+        bsr     clear_screen
+        bsr     sram_on
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((($C000+10*128+8)&$3FFF)<<16)|$40000000|3,(a0)
+        moveq   #0,d5
+        moveq   #0,d0
+        bsr     srd
+        move.b  d1,d5
+        lsl.l   #8,d5
+        moveq   #1,d0
+        bsr     srd
+        move.b  d1,d5
+        lsl.l   #8,d5
+        moveq   #2,d0
+        bsr     srd
+        move.b  d1,d5
+        lsl.l   #8,d5
+        moveq   #3,d0
+        bsr     srd
+        move.b  d1,d5
+        moveq   #7,d6
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)
+        moveq   #4,d0
+        bsr     srd_w
+        moveq   #0,d5
+        move.w  d1,d5
+        swap    d5
+        moveq   #3,d6
+        bsr     hexout
+        ; now the real save path: demo text -> DEMO.TXT, then dump
+        ; count, size(0) and the first data byte ('U' = 55)
+        bsr     notepad_set_demo
+        bsr     np_save_sram
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((($C000+12*128+8)&$3FFF)<<16)|$40000000|3,(a0)
+        bsr     sram_count
+        moveq   #0,d5
+        move.w  d0,d5
+        swap    d5
+        moveq   #3,d6
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)
+        moveq   #0,d0
+        bsr     sram_size
+        moveq   #0,d5
+        move.w  d0,d5
+        swap    d5
+        moveq   #3,d6
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)
+        bsr     sram_on
+        move.w  #SRH_OFF,d0
+        bsr     srd
+        moveq   #0,d5
+        move.b  d1,d5
+        rol.l   #8,d5
+        swap    d5
+        moveq   #1,d6
+        bsr     hexout
+.srp:   bra     .srp
         endc
 
         ifd     PROBE_SP1
@@ -535,6 +625,32 @@ start:
         move.w  (sp)+,d3
         dbra    d3,.atpm
         endc
+        ifd     AUTOTEST_SRAM
+        ; SRAM round trip: demo text saved as DEMO.TXT via the real F1
+        ; path, buffer wiped, then reopened from the Files listing.
+        bsr     notepad_set_demo
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #0,d1
+        moveq   #$50,d2             ; F1 = save to SRAM
+        bsr     notepad_key
+        lea     VARS,a4
+        clr.w   v_np_len(a4)        ; wipe: the reopen must hit SRAM
+        clr.w   v_np_caret(a4)
+        moveq   #7,d0
+        bsr     launch_app          ; Files on top (shows DEMO.TXT)
+        moveq   #13,d1
+        moveq   #0,d2
+        bsr     files_key           ; Enter: open it back into Notepad
+        endc
+        ifd     AUTOTEST_TAPE
+        ; tape decoder: a synthetic AFSK block through tape_feed_half
+        ; lands in Notepad as TAPE.TXT, then Files shows the result.
+        moveq   #2,d0
+        bsr     launch_app
+        bsr     tape_selftest
+        bsr     redraw_topmost
+        endc
         ifd     AUTOTEST_CLICK
         ; click-latch path: synthesize a double-click on the Music icon
         ; through the real ISR latch (mouse_buttons) + main-loop consumer
@@ -561,6 +677,8 @@ start:
         ifnd    AUTOTEST_DOSTRIS
         ifnd    AUTOTEST_OUTLAST
         ifnd    AUTOTEST_PACMAN
+        ifnd    AUTOTEST_SRAM
+        ifnd    AUTOTEST_TAPE
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -570,6 +688,8 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
+        endc
         endc
         endc
         endc
@@ -687,6 +807,8 @@ app_key:
         beq     outlast_key
         cmp.w   #6,d0
         beq     pacman_key
+        cmp.w   #7,d0
+        beq     files_key
         rts                         ; sysinfo/clock: no keys
 
 ; ----------------------------------------------------------------------------
@@ -1350,7 +1472,11 @@ app_draw_content:
         cmp.w   #5,d0
         blt     .dostris
         beq     .outlast
+        cmp.w   #7,d0
+        beq     .files
         bsr     pacman_draw
+        bra     .done
+.files: bsr     files_draw
         bra     .done
 .music: bsr     music_draw
         bra     .done
@@ -1576,8 +1702,37 @@ isr_ext:
         movem.l (sp)+,d0-d3/a0-a1/a4
         rte
 
+; err - exception catcher: magenta border beacon + the first 4 longs of
+; the exception stack frame in hex on the bottom row (for group 1/2
+; exceptions that's SR.w+PC.l first; bus/address errors put the fault
+; address at 2(sp) and the PC at 10(sp)), then freeze.
 err:    move.w  #$8704,VDP_CTRL     ; crash beacon: magenta border
-        bra     err
+        lea     VDP_CTRL,a0
+        lea     VDP_DATA,a1
+        move.l  #((($C000+27*128)&$3FFF)<<16)|$40000000|3,(a0)
+        move.l  sp,a2
+        moveq   #3,d7
+.dump:  move.l  (a2)+,d5
+        moveq   #7,d6
+        bsr     hexout
+        move.w  #(ATTR_INV+1),(a1)  ; space
+        dbra    d7,.dump
+.frz:   bra     .frz
+
+; hexout - top (d6+1) nibbles of d5 (pre-rotated to the high end) as
+; inverted hex digits -> the already-addressed VDP data port
+hexout:
+.dig:   rol.l   #4,d5
+        move.w  d5,d4
+        and.w   #$F,d4
+        cmp.w   #10,d4
+        blt     .num
+        add.w   #'A'-'0'-10,d4
+.num:   add.w   #'0'-31,d4          ; font tile for the digit
+        add.w   #ATTR_INV,d4
+        move.w  d4,(a1)
+        dbra    d6,.dig
+        rts
 
         ifd     PROBE_GUARD
 ; cell_bad - guard tripped: render "<caller-pc> <d0> <d1>" as hex on the
@@ -1586,7 +1741,7 @@ cell_bad:
         move.l  (sp),d5             ; cell_addr's caller (return address)
         lea     VDP_CTRL,a0
         lea     VDP_DATA,a1
-        move.l  #((($C000+27*128)&$3FFF)<<16)|$40000000|3,(a0)
+        move.l  #((($C000+26*128)&$3FFF)<<16)|$40000000|3,(a0)
         moveq   #7,d6               ; 8 nibbles of the caller pc
         bsr     hexout
         move.w  #(ATTR_INV+1),(a1)  ; space
@@ -1600,21 +1755,6 @@ cell_bad:
         moveq   #3,d6               ; 4 nibbles of d1 (cy)
         bsr     hexout
 .frz:   bra     .frz
-
-; hexout - top (d6+1) nibbles of d5 (pre-swapped so they're in the high
-; end) as inverted hex digits -> the already-addressed VDP data port
-hexout:
-.dig:   rol.l   #4,d5
-        move.w  d5,d7
-        and.w   #$F,d7
-        cmp.w   #10,d7
-        blt     .num
-        add.w   #'A'-'0'-10,d7
-.num:   add.w   #'0'-31,d7          ; font tile for the digit
-        add.w   #ATTR_INV,d7
-        move.w  d7,(a1)
-        dbra    d6,.dig
-        rts
         endc
 
 ; ============================================================================
@@ -1709,7 +1849,9 @@ pad_to_mouse:
         lea     VARS+v_wintab,a0
         move.b  WPROC(a0,d0.w),d0
         cmp.b   #4,d0
-        bge     pad_game
+        blt     .mouse
+        cmp.b   #6,d0               ; game procs are 4-6 (Files is 7)
+        ble     pad_game
 .mouse:
         move.w  v_pad_state(a4),d0
         ; --- velocity from held time
@@ -1947,6 +2089,8 @@ ev_get:
         include "apps.i"
         include "games.i"
         include "pacman.i"
+        include "sram.i"
+        include "tape.i"
 
 ; ============================================================================
 ; Data
@@ -1966,6 +2110,9 @@ str_t_music:    dc.b    "Music",0
 str_t_dostris:  dc.b    "Dostris",0
 str_t_outlast:  dc.b    "OutLast",0
 str_t_pacman:   dc.b    "Pac-Man",0
+str_t_files:    dc.b    "Files",0
+name_files:     dc.b    "Files",0
+str_untitled:   dc.b    "UNTITLED.TXT"
 name_sysinfo:   dc.b    "Sys Info",0
 name_clock:     dc.b    "Clock",0
 name_notepad:   dc.b    "Notepad",0
@@ -1984,6 +2131,7 @@ app_def_tab:
         dc.w    6,2,28,25,  str_t_dostris-start
         dc.w    1,1,38,26,  str_t_outlast-start
         dc.w    1,1,38,27,  str_t_pacman-start
+        dc.w    7,4,28,16,  str_t_files-start
 
 name_tab:
         dc.l    name_sysinfo
@@ -1993,6 +2141,7 @@ name_tab:
         dc.l    name_dostris
         dc.l    name_outlast
         dc.l    name_pacman
+        dc.l    name_files
 
 ; CRAM: 4 palette lines x 16 colors ($0BGR, 3-bit channels)
 ; line 0 NORM: backdrop blue, 1 white, 2 blue, 3 cyan, 4 magenta,

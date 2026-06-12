@@ -5,6 +5,41 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Genesis milestones 4 + 4.5] - 2026-06-11
+
+### Sega Genesis / Mega Drive: storage — SRAM saves and tape/WAV
+
+Storage architecture (all four tiers) documented in
+docs/GENESIS-STORAGE.md; Sega CD backup RAM (Mode 1 + BIOS BURAM) and
+SD-over-SPI are spec'd there for later milestones.
+
+- **Cartridge SRAM** (`genesis/sram.i`): 8KB battery-backed, declared
+  in the ROM header ("RA" $F8 $20, odd bytes at $200001), with the
+  USV1 mini-filesystem: 8 directory entries + byte heap,
+  save-by-name overwrite, delete with heap compaction. New **Files
+  app** (proc 7, 8th desktop icon): list/open/delete; **Notepad F1**
+  now saves for real (UNTITLED.TXT for new buffers, the source name
+  for opened ones). Verified in BlastEm: save → wipe → reopen round
+  trip (AUTOTEST_SRAM). Two traps: SRAM indexing must use `(a0,d0.w)`
+  (a stale high word in a `.l` index wanders off-bus), and `$A130F1`
+  is written once at boot — per-access toggling left SRAM unmapped
+  under BlastEm (open-bus $FF reads that cascaded into a wild copy
+  and a stack smash, diagnosed by the new on-screen exception dump).
+- **Tape / WAV over audio** (`genesis/tape.i`): the classic 1-bit
+  tape interface — the console has no ADC, so reads go through a
+  one-comparator adapter (port 2 pin 1) and writes need no hardware
+  at all (the PSG plays KCS 1200-baud AFSK out the headphone jack).
+  Poll-count timebase, ~20s per 2KB. The bit/block decoder is an
+  injectable pure routine, emulator-verified by AUTOTEST_TAPE
+  ("HELLO FROM THE TAPE DECK" decoded through the real state
+  machine). `genesis/mktape.py` is the PC tape deck: file→WAV encode,
+  WAV→file decode (same state machine), selftest; a 2047-byte WAV
+  round trip is byte-exact. Files app: `w` writes the Notepad buffer
+  to tape, `r` loads a block back.
+- `err` now renders the exception stack frame in hex on the bottom
+  row (magenta-border beacon + faulting PC) — on-screen forensics
+  for a platform with no debugger stdin.
+
 ## [Genesis milestone 2] - 2026-06-11
 
 ### Sega Genesis / Mega Drive: the game ports

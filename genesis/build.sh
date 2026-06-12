@@ -30,6 +30,8 @@ case "$1" in
   dostris) FLAGS="-DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1";  OUT=build/unodos_dt.gen ;;
   outlast) FLAGS="-DAUTOTEST=1 -DAUTOTEST_OUTLAST=1";  OUT=build/unodos_ol.gen ;;
   pacman)  FLAGS="-DAUTOTEST=1 -DAUTOTEST_PACMAN=1";   OUT=build/unodos_pm.gen ;;
+  sram)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_SRAM=1";     OUT=build/unodos_sr.gen ;;
+  tape)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_TAPE=1";     OUT=build/unodos_tp.gen ;;
 esac
 
 echo "[2/2] assembling kernel.asm (cpu 68000, flat binary)..."

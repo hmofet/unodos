@@ -15,8 +15,14 @@ Pac-Man (same tables/physics/AI as the x86 originals; Pac-Man's actors
 are hardware sprites over the cell maze) with the shared game songs on
 PSG channel 1, and a game-mode pad layout (a game topmost flips the
 d-pad to arrow keys with hold-repeat, A = action, X = new game,
-Y = pause). Verified in BlastEm; **this port is headed for real
-hardware.**
+Y = pause).
+**Milestones 4/4.5 (2026-06-11):** real storage — 8KB battery SRAM
+with the USV1 mini-filesystem, a Files app, working Notepad F1-save,
+and tape/WAV storage (KCS 1200-baud AFSK: the PSG writes through the
+headphone jack, a one-comparator adapter reads; `mktape.py` makes the
+PC the tape deck). Full architecture + the Sega CD / SD-card specs:
+[docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md). Verified in
+BlastEm; **this port is headed for real hardware.**
 
 ## Display model
 
@@ -92,6 +98,14 @@ Python 3. From this directory:
     ./build.sh dostris    # new game + six hard-drops via dostris_key
     ./build.sh outlast    # driving + 60 forced physics steps
     ./build.sh pacman     # new game + 150 real AI steps
+    ./build.sh sram       # F1-save -> wipe -> reopen from Files
+    ./build.sh tape       # synthetic AFSK block through the decoder
+
+Tape WAV tooling (the PC is the tape deck):
+
+    python mktape.py encode NOTES.TXT notes.wav   # play into the adapter
+    python mktape.py decode recording.wav out.txt # decode a console save
+    python mktape.py selftest
 
 `mkdata.py` regenerates `gen_data.i` from the shared x86 assets: the
 8×8 font as 4bpp tiles, window chrome tiles, the cursor sprite, the
@@ -123,7 +137,10 @@ the caller PC + coordinates rendered in hex on the bottom row.
   Amiga port's raw codes (arrows `$4C-$4F`, F1 `$50`).
 - Variables live at `$FF8000`, addressed `offset(a4)` — the RAM
   edition of the Amiga port's `vars(pc)` convention.
-- No storage yet: Notepad's F1-save is a no-op until M5 (SRAM saves).
+- Storage: 8KB battery SRAM (USV1 mini-FS, Files app, Notepad F1) and
+  tape/WAV (KCS AFSK via the PSG + a comparator adapter) — see
+  [docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md) for the
+  architecture and the Sega CD / SD-card tier specs.
 
 ## Verified (BlastEm 0.6.2)
 
@@ -143,6 +160,10 @@ the caller PC + coordinates rendered in hex on the bottom row.
   HUD counts speed/score/time down
 - Pac-Man: maze + dots render, all four actor sprites roam, dots eaten
   raise the score, ghosts leave the house on their timers
+- SRAM: F1-save → buffer wipe → reopen from the Files listing restores
+  all 309 demo bytes
+- tape: a synthetic AFSK block decodes through the real bit engine;
+  mktape.py round-trips a 2047-byte file through a 44.1kHz WAV
 
 Real-hardware checklist: PS/2 keyboard on port 2 (EXT interrupt),
 PS/2 mouse on port 1 (inhibit/poll timing), pad feel (acceleration
