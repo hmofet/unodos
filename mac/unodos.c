@@ -303,6 +303,22 @@ static short find_window_at(Point p)
 static void draw_window(UnoWin *w)
 {
     Rect r = w->bounds, tb, ct;
+    Boolean active = (gZCount > 0 && zwin(gZCount - 1) == w);
+    /* System 7 chrome: 1px-offset drop shadow right + bottom */
+    { Rect sh = r;
+      sh.left = sh.right; sh.right += 1; sh.top += 2;
+#if UNO_COLOR
+      PaintRect(&sh);
+#else
+      FillRect(&sh, &qd.black);
+#endif
+      sh = r; sh.top = sh.bottom; sh.bottom += 1; sh.left += 2;
+#if UNO_COLOR
+      PaintRect(&sh);
+#else
+      FillRect(&sh, &qd.black);
+#endif
+    }
     ct = r; ct.top += TBAR_H; InsetRect(&ct, 1, 1); uno_fill(&ct, C_BLUE);
     tb = r; tb.bottom = tb.top + TBAR_H; uno_fill(&tb, C_WHITE);
     uno_box(&r, C_WHITE);
@@ -317,8 +333,43 @@ static void draw_window(UnoWin *w)
       RGBForeColor(&kBlack);
 #endif
     }
-    text_at(r.left + 6, r.top + 13, w->title, C_BLUE, C_WHITE, true);
-    text_at(r.right - 14, r.top + 13, "X", C_BLUE, C_WHITE, true);
+    /* pinstripes when active (= topmost), classic System 7 title bar */
+    if (active) {
+        short yy;
+#if UNO_COLOR
+        RGBForeColor(&kPalette[C_BLUE]);
+#else
+        ForeColor(blackColor);
+#endif
+        for (yy = tb.top + 3; yy <= tb.bottom - 4; yy += 3) {
+            MoveTo(tb.left + 4, yy); LineTo(tb.right - 5, yy);
+        }
+#if UNO_COLOR
+        RGBForeColor(&kBlack);
+#endif
+    }
+    /* close box on a white patch (hit region unchanged: right - 14) */
+    { Rect cb;
+      SetRect(&cb, r.right - 22, tb.top + 1, r.right - 2, tb.bottom - 2);
+      uno_fill(&cb, C_WHITE);
+      SetRect(&cb, r.right - 18, r.top + 4, r.right - 7, r.top + 15);
+#if UNO_COLOR
+      RGBForeColor(&kPalette[C_BLUE]); FrameRect(&cb); RGBForeColor(&kBlack);
+#else
+      FrameRect(&cb);
+#endif
+    }
+    /* centered title on a white patch */
+    { short len = 0; const char *p = w->title;
+      while (*p++) len++;
+      { short tw = TextWidth((Ptr)w->title, 0, len);
+        short tx = (short)((r.left + r.right - tw) / 2);
+        Rect tp;
+        SetRect(&tp, tx - 6, tb.top + 1, tx + tw + 6, tb.bottom - 2);
+        uno_fill(&tp, C_WHITE);
+        text_at(tx, r.top + 13, w->title, C_BLUE, C_WHITE, true);
+      }
+    }
     draw_app_content(w->proc, w);
 }
 
@@ -377,7 +428,8 @@ static void launch_app(short proc)
     gZ[gZCount++] = slot;
     task_spawn(slot);               /* the app gets a task (milestone 3) */
     app_opened(proc);
-    draw_window(&gWins[slot]);
+    if (gZCount > 1) repaint_all(); /* the old topmost loses its stripes */
+    else             draw_window(&gWins[slot]);
 }
 
 /* =========================================================================
