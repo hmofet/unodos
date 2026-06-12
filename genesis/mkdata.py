@@ -126,6 +126,32 @@ for name, binfile in [("sysinfo", "build/sysinfo.bin"),
     for i, t in enumerate(icon_tiles(binfile)):
         tiles.append((f"icon {name} {i}", t))
 
+# paint icon: synthesized (no x86 donor yet) - brush over a daub,
+# same 2bpp chunky semantics as the .BIN headers (icmap indexes)
+PAINT_ICON = [
+    "0000000000033000",
+    "0000000000333000",
+    "0000000003330000",
+    "0000000033300000",
+    "0000000333000000",
+    "0000011330000000",
+    "0000111100000000",
+    "0000111000000000",
+    "0001110000000000",
+    "0001100000000000",
+    "0022000022220000",
+    "0222200222222000",
+    "2222222222222200",
+    "2222222222222220",
+    "0222222222222200",
+    "0002222222220000",
+]
+pix = [[icmap[int(c)] for c in row] for row in PAINT_ICON]
+for ty in (0, 8):
+    for tx in (0, 8):
+        tiles.append((f"icon paint {ty//8*2+tx//8}", tile_from_rows(
+            [pix[ty + y][tx:tx + 8] for y in range(8)])))
+
 # ---------------- game tiles ----------------
 # solids for palette indexes 5..15 (game colors live in PAL2/PAL3 5-15)
 for idx in range(5, 16):

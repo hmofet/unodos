@@ -35,6 +35,7 @@ case "$1" in
   bram)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_BRAM=1";     OUT=build/unodos_br.gen ;;
   theme)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_THEME=1";    OUT=build/unodos_th.gen ;;
   tracker) FLAGS="-DAUTOTEST=1 -DAUTOTEST_TRACKER=1";  OUT=build/unodos_tk.gen ;;
+  paint)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_PAINT=1";    OUT=build/unodos_pt.gen ;;
 esac
 
 echo "[2/2] assembling kernel.asm (cpu 68000, flat binary)..."

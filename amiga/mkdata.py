@@ -62,6 +62,40 @@ for name, binfile in [("icon_sysinfo", "build/sysinfo.bin"),
     else:
         sys.exit(f"missing {binfile} - run 'make floppy144' first")
 
+# paint icon: synthesized (no x86 donor) - a brush over a paint daub,
+# 2bpp chunky like the .BIN headers (0 bg, 1 cyan, 2 magenta, 3 white)
+PAINT_ICON = [
+    "0000000000033000",
+    "0000000000333000",
+    "0000000003330000",
+    "0000000033300000",
+    "0000000333000000",
+    "0000011330000000",
+    "0000111100000000",
+    "0000111000000000",
+    "0001110000000000",
+    "0001100000000000",
+    "0022000022220000",
+    "0222200222222000",
+    "2222222222222200",
+    "2222222222222220",
+    "0222222222222200",
+    "0002222222220000",
+]
+def icon_from_text(rows16):
+    p0rows, p1rows = [], []
+    for r in rows16:
+        p0 = p1 = 0
+        for px in range(16):
+            val = int(r[px])
+            bit = 15 - px
+            p0 |= (val & 1) << bit
+            p1 |= ((val >> 1) & 1) << bit
+        p0rows.append(p0)
+        p1rows.append(p1)
+    return p0rows + p1rows
+icons["icon_paint"] = icon_from_text(PAINT_ICON)
+
 # ---------------- keymap ----------------
 keymap = [0] * 128
 def setk(code, ch): keymap[code] = ord(ch)

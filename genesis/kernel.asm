@@ -76,18 +76,18 @@ T_CORNBL    equ 103
 T_CORNBR    equ 104
 T_HLINE     equ 105
 T_CURSOR    equ 106                 ; 106/107 = 8x16 sprite
-T_ICONS     equ 108                 ; 4 tiles per icon (10 icons: 108-147)
-T_GSOL      equ 148                 ; game solids: palette index 5..15
-T_PMWALL    equ 159                 ; Pac-Man maze cell tiles
-T_PMDOT     equ 160
-T_PMPOW     equ 161
-T_PMGATE    equ 162
-T_SPAC      equ 163                 ; actor sprite tiles
-T_SGHR      equ 164
-T_SGHP      equ 165
-T_SGHO      equ 166
-T_SGHF      equ 167
-T_SGHE      equ 168
+T_ICONS     equ 108                 ; 4 tiles per icon (11 icons: 108-151)
+T_GSOL      equ 152                 ; game solids: palette index 5..15
+T_PMWALL    equ 163                 ; Pac-Man maze cell tiles
+T_PMDOT     equ 164
+T_PMPOW     equ 165
+T_PMGATE    equ 166
+T_SPAC      equ 167                 ; actor sprite tiles
+T_SGHR      equ 168
+T_SGHP      equ 169
+T_SGHO      equ 170
+T_SGHF      equ 171
+T_SGHE      equ 172
 
 ; events (PORT-SPEC SS3)
 EV_KEY      equ 1
@@ -109,7 +109,7 @@ MENUBAR_C   equ 1                   ; protected desktop rows (cells)
 TICKS_SEC   equ 60                  ; NTSC vblank
 DBLCLICK    equ 30                  ; double-click window (0.5s)
 
-NICONS      equ 10
+NICONS      equ 11
 NBUF        equ 2048                ; notepad buffer
 
 KBD_TOP     equ 22                  ; soft keyboard panel: rows 22..27
@@ -217,6 +217,17 @@ v_thm_sel       rs.w    1           ; Theme app: selected preset
 v_thm_slot      rs.w    1           ; Theme app: custom-edit slot
 v_theme         rs.w    4           ; active theme colors ($0BGR)
 v_cur_task      rs.w    1           ; scheduler: running task index
+v_pt_tool       rs.w    1           ; paint: active tool
+v_pt_pen        rs.w    1           ; paint: active pen (line-3 index)
+v_pt_lsz        rs.w    1           ; paint: stroke size / filled flag
+v_pt_ldx        rs.w    1           ; paint: bresenham dx
+v_pt_err        rs.w    1           ; paint: bresenham error / scratch
+v_pt_dx0        rs.w    1           ; paint: dirty tile rect
+v_pt_dx1        rs.w    1
+v_pt_dy0        rs.w    1
+v_pt_dy1        rs.w    1
+v_pt_rnd        rs.w    1           ; paint: spray LFSR
+v_ptpal         rs.w    16          ; paint: RAM copy of palette line 3
 v_tk_row        rs.w    1           ; Tracker: cursor row
 v_tk_ch         rs.w    1           ; Tracker: cursor channel
 v_tk_top        rs.w    1           ; Tracker: first visible row
@@ -252,10 +263,11 @@ v_tp_need       rs.b    1           ; tape: shorts left in a 1-cell
 v_brseq         rs.b    1           ; BRAM RPC sequence (skips 0)
 v_bram_pres     rs.b    1           ; BRAM volume available
 v_bram_rt       rs.b    1           ; real Mode-1 transport (INT2 feed)
+v_pt_init       rs.b    1           ; paint: canvas cleared once
 v_tk_playing    rs.b    1           ; Tracker: sequencer running
 v_tk_nzatt      rs.b    1           ; Tracker: noise decay attenuation
 v_brprobe       rs.b    1           ; BRAM probe active (bus-error trap)
-        rs.b    2                   ; (pad)
+        rs.b    1                   ; (pad: byte count above stays even)
 v_np_name       rs.b    12          ; current Notepad file name
         rs.b    1                   ; (byte count above stays even)
 v_evq           rs.b    EVQ_SIZE*4
@@ -270,6 +282,7 @@ v_dt_board      rs.b    200         ; Dostris 10x20
 v_pm_maze       rs.b    700         ; Pac-Man 28x25
 v_pm_gh         rs.b    30          ; 3 ghosts x GSIZE(10)
 v_tasktab       rs.b    (MAXWIN+1)*10 ; scheduler task table
+v_pt_stk        rs.b    (500+2)*4   ; paint: flood-fill stack
 v_tkpat         rs.b    32*4*2      ; Tracker pattern (note,instr cells)
 v_brdir         rs.b    8*16        ; BRAM listing cache (BRMDIR shape)
 v_brwr          rs.b    2176        ; fake-transport Word RAM staging
@@ -721,6 +734,41 @@ start:
         moveq   #0,d2
         bsr     tracker_key
         endc
+        ifd     AUTOTEST_PAINT
+        ; Paint: open the app, draw through the real shape primitives
+        ; (canvas store + tile packer + name table all exercised)
+        moveq   #10,d0
+        bsr     launch_app
+        lea     VARS,a4
+        move.w  #12,v_pt_pen(a4)    ; line-3 wheel gray
+        moveq   #16,d0
+        moveq   #12,d1
+        moveq   #72,d2
+        moveq   #60,d3
+        moveq   #1,d4
+        bsr     pt_rect_shape
+        move.w  #7,v_pt_pen(a4)     ; grass A
+        moveq   #88,d0
+        moveq   #20,d1
+        move.w  #150,d2
+        moveq   #84,d3
+        moveq   #1,d4
+        bsr     pt_oval_shape
+        move.w  #3,v_pt_pen(a4)     ; white
+        moveq   #4,d0
+        moveq   #90,d1
+        move.w  #156,d2
+        moveq   #8,d3
+        moveq   #1,d4
+        bsr     pt_line_seg
+        move.w  #5,v_pt_pen(a4)     ; sky
+        move.w  #110,d0
+        moveq   #50,d1
+        bsr     pt_flood
+        bsr     pt_sync
+
+        bsr     redraw_topmost
+        endc
         ifd     AUTOTEST_BRAM
         ; BRAM round trip over the injectable transport: demo text saved
         ; with F1 while the BRAM volume is active (-> DEMO_TXT in the
@@ -774,6 +822,7 @@ start:
         ifnd    AUTOTEST_BRAM
         ifnd    AUTOTEST_THEME
         ifnd    AUTOTEST_TRACKER
+        ifnd    AUTOTEST_PAINT
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -783,6 +832,7 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
         endc
         endc
         endc
@@ -911,6 +961,8 @@ app_key:
         beq     theme_key
         cmp.w   #9,d0
         beq     tracker_key
+        cmp.w   #10,d0
+        beq     paint_key
         rts                         ; sysinfo/clock: no keys
 
 ; ----------------------------------------------------------------------------
@@ -947,9 +999,14 @@ handle_clicks:
         move.w  v_zcount(a4),d4
         subq.w  #1,d4
         cmp.w   d4,d3
-        beq     .out                ; topmost body: app's business
+        beq     .appclick           ; topmost body: the app's business
         move.w  d3,d0
         bsr     raise_window
+        rts
+.appclick:
+        cmp.b   #10,WPROC(a2)       ; Paint draws with the cursor
+        bne     .out
+        bsr     paint_click         ; d0/d1 = click cell coords
         rts
 .title:
         ; close box = rightmost 2 cells of the bar
@@ -1462,7 +1519,11 @@ music_stop_if:
         bne     .ntk
         bsr     tk_stop
         bra     .out
-.ntk:   cmp.w   #4,d0
+.ntk2:  bsr     pt_restore_pal
+        bra     .out
+.ntk:   cmp.w   #10,d0
+        beq     .ntk2
+        cmp.w   #4,d0
         blt     .out
         cmp.w   #6,d0
         bgt     .out
@@ -1596,6 +1657,10 @@ app_draw_content:
         beq     .files
         cmp.w   #9,d0
         blt     .theme
+        beq     .tracker
+        bsr     paint_draw
+        bra     .done
+.tracker:
         bsr     tracker_draw
         bra     .done
 .theme: bsr     theme_draw
@@ -2238,6 +2303,7 @@ ev_get:
         include "bram.i"
         include "theme.i"
         include "tracker.i"
+        include "paint.i"
         include "scheduler.i"
 
 ; ============================================================================
@@ -2282,6 +2348,7 @@ app_def_tab:
         dc.w    7,4,28,16,  str_t_files-start
         dc.w    8,4,26,16,  str_t_theme-start
         dc.w    1,1,38,19,  str_t_tracker-start
+        dc.w    5,3,28,17,  str_t_paint-start
 
 name_tab:
         dc.l    name_sysinfo
@@ -2294,6 +2361,7 @@ name_tab:
         dc.l    name_files
         dc.l    name_theme
         dc.l    name_tracker
+        dc.l    name_paint
 
 ; CRAM: 4 palette lines x 16 colors ($0BGR, 3-bit channels)
 ; line 0 NORM: backdrop blue, 1 white, 2 blue, 3 cyan, 4 magenta,
