@@ -1298,13 +1298,13 @@ str_dt_score:   dc.b    "Score",0
 str_dt_lines:   dc.b    "Lines",0
 str_dt_level:   dc.b    "Level",0
 str_dt_next:    dc.b    "Next",0
-str_dt_help1:   dc.b    "Arrows: move/rot",0
-str_dt_help2:   dc.b    "Spc:drop P:pause",0
-str_dt_newg:    dc.b    "N: new game",0
+str_dt_help1:   dc.b    "Pad:move/rot",0
+str_dt_help2:   dc.b    "A:drop Y:pause",0
+str_dt_newg:    dc.b    "X:new game",0
 str_dt_paused:  dc.b    "PAUSED",0
 str_dt_over:    dc.b    "GAME OVER",0
 str_ol_title:   dc.b    "O U T L A S T",0
-str_ol_prompt:  dc.b    "N: drive",0
+str_ol_prompt:  dc.b    "X:drive",0
 str_ol_speed:   dc.b    "Speed ",0
 str_ol_score:   dc.b    "  Score ",0
 str_ol_time:    dc.b    "  Time ",0

@@ -122,22 +122,36 @@ Full design + tier specs in **docs/GENESIS-STORAGE.md**.
   WAVs on the PC side (selftest + 2KB WAV round trip pass) so the PC
   is the tape deck. Files: `w`/`r` keys.
 
+## Milestones 3 + 5 + 6 — parity with the Amiga port (DONE 2026-06-12)
+
+- **M3 Theme + Tracker** (`genesis/theme.i`, `genesis/tracker.i`):
+  the 8 shared presets restyle the themed entries of all four CRAM
+  palette lines (game colors stay fixed), with 3-bit per-channel
+  custom editing; the Tracker is the Amiga pattern editor on the PSG
+  (3 squares + noise, byte-identical pattern format, SONG.TRK to
+  SRAM via s/l, tape via t/y). Desktop grows to 10 icons.
+- **M5 Sega CD backup RAM** (`genesis/bram.i`): Mode-1 Sub-CPU boot
+  (Kosinski sub-BIOS decompress + ~300-byte SP stub calling the BIOS
+  _BURAM traps), LIST/READ/WRITE/DELETE mailbox RPC with Word-RAM
+  staging, Files `v` volume toggle, Notepad F1 to the active volume.
+  Implementation notes + emulator traps (the BlastEm $400000 bus
+  error!) in docs/GENESIS-STORAGE.md tier 3.
+- **M6 scheduler** (`genesis/scheduler.i`): the Amiga milestone-3
+  cooperative scheduler — per-window tasks, private 2KB stacks at
+  $FF4000+, one-slot mailboxes; keys post with bounded yield-retry
+  so input bursts survive. All 14 AUTOTEST builds re-verified in
+  BlastEm through the task machinery.
+
 ## Remaining roadmap
 
-1. **M3 — Theme + Tracker**: Theme app over CRAM (the 8 shared
-   presets restyle all four palette lines), Tracker over PSG's
-   3 tones + noise (saves to SRAM/tape now that storage exists).
-2. **M5 — Sega CD backup RAM**: Mode-1 Sub-CPU stub + BIOS BURAM
-   traps, third Files volume — spec'd in docs/GENESIS-STORAGE.md.
-3. **M6 — scheduler**: port the Amiga milestone-3 cooperative
-   scheduler (plain 68000; the stack arena and tick source change).
-4. **Deferred — SD card over bit-banged SPI** (spec'd in
+1. **Deferred — SD card over bit-banged SPI** (spec'd in
    docs/GENESIS-STORAGE.md): lands with the real-hardware adapter
    PCB alongside the PS/2 sockets and tape comparator.
-5. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
+2. **Real hardware**: PS/2 wiring validation (keyboard EXT interrupt,
    mouse inhibit/poll timing), tape comparator thresholds, TMSS on a
-   model 3, pad feel, PSG balance. First new port headed for
-   physical hardware.
+   model 3, pad feel, PSG balance, and the Sega CD Mode-1 path
+   against a real attachment (or Genesis Plus GX / Ares — BlastEm
+   has no CD). First new port headed for physical hardware.
 
 Notes/risks: work RAM is 64 KB total (the app model fits; Notepad runs
 a 2 KB buffer), and PS/2-over-gameport needs the real-hardware pass —

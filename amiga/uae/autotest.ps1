@@ -1,11 +1,11 @@
 # autotest.ps1 - relaunch WinUAE (taking foreground), boot, drive keys, screenshot
-param([string]$OutDir = "C:\Users\arin\unodos\amiga\build")
+param([string]$OutDir = "C:\Users\arin\Documents\Github\unodos\amiga\build")
 $ErrorActionPreference = "Stop"
 $uae = "C:\Users\arin\amiga-tools\winuae\winuae64.exe"
-$cfg = "C:\Users\arin\unodos\amiga\uae\unodos.uae"
-$snap = "C:\Users\arin\unodos\amiga\uae\snapwin.ps1"
+$cfg = "C:\Users\arin\Documents\Github\unodos\amiga\uae\unodos.uae"
+$snap = "C:\Users\arin\Documents\Github\unodos\amiga\uae\snapwin.ps1"
 $py = "C:\Users\arin\AppData\Local\Programs\Python\Python312\python.exe"
-$si = "C:\Users\arin\unodos\amiga\uae\sendinput.py"
+$si = "C:\Users\arin\Documents\Github\unodos\amiga\uae\sendinput.py"
 
 Stop-Process -Name winuae64 -Force -ErrorAction SilentlyContinue
 Start-Sleep 1

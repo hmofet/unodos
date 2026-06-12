@@ -1,6 +1,7 @@
 ; ============================================================================
-; UnoDOS/Genesis - milestone 1: desktop, WM, pad-mouse, soft keyboard,
-; PS/2 wiring, Notepad + Music.
+; UnoDOS/Genesis - milestones 1-6: desktop, WM, pad-mouse, soft keyboard,
+; PS/2 wiring, SysInfo/Clock/Notepad/Music/Files/Theme/Tracker, the three
+; game ports, SRAM + tape + Sega CD BRAM storage, cooperative scheduler.
 ; ============================================================================
 ; Bare-metal UnoDOS desktop for Sega Mega Drive / Genesis (68000 @ 7.67MHz,
 ; VDP tile graphics, 64KB work RAM). Built with vasm -Fbin into a plain
@@ -75,18 +76,18 @@ T_CORNBL    equ 103
 T_CORNBR    equ 104
 T_HLINE     equ 105
 T_CURSOR    equ 106                 ; 106/107 = 8x16 sprite
-T_ICONS     equ 108                 ; 4 tiles per icon (8 icons: 108-139)
-T_GSOL      equ 140                 ; game solids: palette index 5..15
-T_PMWALL    equ 151                 ; Pac-Man maze cell tiles
-T_PMDOT     equ 152
-T_PMPOW     equ 153
-T_PMGATE    equ 154
-T_SPAC      equ 155                 ; actor sprite tiles
-T_SGHR      equ 156
-T_SGHP      equ 157
-T_SGHO      equ 158
-T_SGHF      equ 159
-T_SGHE      equ 160
+T_ICONS     equ 108                 ; 4 tiles per icon (10 icons: 108-147)
+T_GSOL      equ 148                 ; game solids: palette index 5..15
+T_PMWALL    equ 159                 ; Pac-Man maze cell tiles
+T_PMDOT     equ 160
+T_PMPOW     equ 161
+T_PMGATE    equ 162
+T_SPAC      equ 163                 ; actor sprite tiles
+T_SGHR      equ 164
+T_SGHP      equ 165
+T_SGHO      equ 166
+T_SGHF      equ 167
+T_SGHE      equ 168
 
 ; events (PORT-SPEC SS3)
 EV_KEY      equ 1
@@ -108,7 +109,7 @@ MENUBAR_C   equ 1                   ; protected desktop rows (cells)
 TICKS_SEC   equ 60                  ; NTSC vblank
 DBLCLICK    equ 30                  ; double-click window (0.5s)
 
-NICONS      equ 8
+NICONS      equ 10
 NBUF        equ 2048                ; notepad buffer
 
 KBD_TOP     equ 22                  ; soft keyboard panel: rows 22..27
@@ -125,6 +126,10 @@ v_last_secs     rs.l    1
 v_dbl_tick      rs.l    1
 v_drag_win      rs.l    1
 v_mus_end       rs.l    1
+v_tk_last       rs.l    1           ; Tracker: last row-advance tick
+v_tp_dst        rs.l    1           ; tape: receive data pointer
+v_tp_nmd        rs.l    1           ; tape: receive name pointer
+v_brsp          rs.l    1           ; BRAM probe: bus-error unwind SP
 v_mouse_x       rs.w    1           ; pixels
 v_mouse_y       rs.w    1
 v_click_x       rs.w    1           ; press-time latch (pixels)
@@ -204,6 +209,18 @@ v_tp_bstate     rs.w    1           ; tape: block parser position
 v_tp_len        rs.w    1           ; tape: payload length
 v_tp_sum        rs.w    1           ; tape: running checksum
 v_tp_got        rs.w    1           ; tape: bytes received on success
+v_tp_max        rs.w    1           ; tape: receive size cap
+v_files_vol     rs.w    1           ; Files volume: 0 SRAM, 1 CD BRAM
+v_brcount       rs.w    1           ; BRAM listing cache count
+v_brfk_cnt      rs.w    1           ; fake BRAM store file count
+v_thm_sel       rs.w    1           ; Theme app: selected preset
+v_thm_slot      rs.w    1           ; Theme app: custom-edit slot
+v_theme         rs.w    4           ; active theme colors ($0BGR)
+v_cur_task      rs.w    1           ; scheduler: running task index
+v_tk_row        rs.w    1           ; Tracker: cursor row
+v_tk_ch         rs.w    1           ; Tracker: cursor channel
+v_tk_top        rs.w    1           ; Tracker: first visible row
+v_tk_prow       rs.w    1           ; Tracker: playback row
 v_mouse_btn     rs.b    1
 v_last_btn      rs.b    1           ; previous button state (edge detect)
 v_click_seq     rs.b    1
@@ -232,6 +249,13 @@ v_tp_done       rs.b    1           ; tape: 0 running, 1 ok, 2 error
 v_tp_msg        rs.b    1           ; Files status: 0 none, 1 ok, 2 err
 v_tp_bits       rs.b    1           ; tape: bits assembled
 v_tp_need       rs.b    1           ; tape: shorts left in a 1-cell
+v_brseq         rs.b    1           ; BRAM RPC sequence (skips 0)
+v_bram_pres     rs.b    1           ; BRAM volume available
+v_bram_rt       rs.b    1           ; real Mode-1 transport (INT2 feed)
+v_tk_playing    rs.b    1           ; Tracker: sequencer running
+v_tk_nzatt      rs.b    1           ; Tracker: noise decay attenuation
+v_brprobe       rs.b    1           ; BRAM probe active (bus-error trap)
+        rs.b    2                   ; (pad)
 v_np_name       rs.b    12          ; current Notepad file name
         rs.b    1                   ; (byte count above stays even)
 v_evq           rs.b    EVQ_SIZE*4
@@ -245,13 +269,21 @@ v_npbuf         rs.b    NBUF
 v_dt_board      rs.b    200         ; Dostris 10x20
 v_pm_maze       rs.b    700         ; Pac-Man 28x25
 v_pm_gh         rs.b    30          ; 3 ghosts x GSIZE(10)
+v_tasktab       rs.b    (MAXWIN+1)*10 ; scheduler task table
+v_tkpat         rs.b    32*4*2      ; Tracker pattern (note,instr cells)
+v_brdir         rs.b    8*16        ; BRAM listing cache (BRMDIR shape)
+v_brwr          rs.b    2176        ; fake-transport Word RAM staging
+v_brfk_dir      rs.b    8*16        ; fake BRAM store directory
+v_brfk_heap     rs.b    48*64       ; fake BRAM store heap (64B blocks)
 VARS_END        rs.b    0
 
 ; ---------------------------------------------------------------- vectors
         org     0
         dc.l    $00FFFE00           ; 0: initial SSP
         dc.l    start               ; 1: reset PC
-        dcb.l   22,err              ; 2-23: exceptions + reserved
+        dc.l    berr                ; 2: bus error (BRAM probe recovery)
+        dc.l    berr                ; 3: address error
+        dcb.l   20,err              ; 4-23: exceptions + reserved
         dc.l    err                 ; 24: spurious interrupt
         dc.l    err                 ; 25: level 1
         dc.l    isr_ext             ; 26: level 2 = EXT (PS/2 kbd clock)
@@ -281,7 +313,7 @@ VARS_END        rs.b    0
         dc.l    $00200001
         dc.l    $00203FFF                           ; 8KB
         dc.b    "            "
-        dc.b    "UnoDOS 3 for Sega Genesis - milestone 1 "
+        dc.b    "UnoDOS 3 for Sega Genesis - milestone 6 "
         dc.b    "JUE             "
 
 ; ============================================================================
@@ -363,6 +395,9 @@ start:
         dbra    d0,.npn
 
         bsr     sram_init           ; format an uninitialized save store
+        bsr     bram_init           ; Sega CD Mode-1 probe + Sub-CPU boot
+        bsr     theme_init          ; active theme = Classic VGA
+        bsr     sched_init          ; milestone 6: cooperative tasks
 
         ; ---- sprites: 0 = cursor (8x16), 1-4 = Pac-Man actors (8x8,
         ; parked off-screen until the game shows them). Chain 0->1->2->
@@ -651,6 +686,63 @@ start:
         bsr     tape_selftest
         bsr     redraw_topmost
         endc
+        ifd     AUTOTEST_THEME
+        ; Theme: open the app, move the selection to Forest (2 downs),
+        ; apply it - the whole screen recolors (strong visual evidence).
+        moveq   #8,d0
+        bsr     launch_app
+        moveq   #0,d1
+        moveq   #$4D,d2             ; down
+        bsr     theme_key
+        moveq   #0,d1
+        moveq   #$4D,d2
+        bsr     theme_key
+        moveq   #13,d1              ; Enter = apply
+        moveq   #0,d2
+        bsr     theme_key
+        endc
+        ifd     AUTOTEST_TRACKER
+        ; Tracker: demo song loaded, cursor down 5 rows, playback on -
+        ; the pattern grid, cursor bar and advancing play row all show.
+        moveq   #9,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'d',d1
+        moveq   #0,d2
+        bsr     tracker_key
+        moveq   #4,d3
+.attk:  move.w  d3,-(sp)
+        moveq   #0,d1
+        moveq   #$4D,d2             ; down
+        bsr     tracker_key
+        move.w  (sp)+,d3
+        dbra    d3,.attk
+        moveq   #32,d1              ; space = play
+        moveq   #0,d2
+        bsr     tracker_key
+        endc
+        ifd     AUTOTEST_BRAM
+        ; BRAM round trip over the injectable transport: demo text saved
+        ; with F1 while the BRAM volume is active (-> DEMO_TXT in the
+        ; fake store), buffer wiped, Files lists the volume, Enter
+        ; reopens it through the RPC (name restored from the payload).
+        bsr     notepad_set_demo
+        moveq   #2,d0
+        bsr     launch_app
+        lea     VARS,a4
+        move.w  #1,v_files_vol(a4)
+        moveq   #0,d1
+        moveq   #$50,d2             ; F1 = save to the active volume
+        bsr     notepad_key
+        lea     VARS,a4
+        clr.w   v_np_len(a4)        ; wipe: the reopen must hit the store
+        clr.w   v_np_caret(a4)
+        moveq   #7,d0
+        bsr     launch_app          ; Files on top (BRAM volume)
+        moveq   #13,d1
+        moveq   #0,d2
+        bsr     files_key           ; Enter: open it back into Notepad
+        endc
         ifd     AUTOTEST_CLICK
         ; click-latch path: synthesize a double-click on the Music icon
         ; through the real ISR latch (mouse_buttons) + main-loop consumer
@@ -679,6 +771,9 @@ start:
         ifnd    AUTOTEST_PACMAN
         ifnd    AUTOTEST_SRAM
         ifnd    AUTOTEST_TAPE
+        ifnd    AUTOTEST_BRAM
+        ifnd    AUTOTEST_THEME
+        ifnd    AUTOTEST_TRACKER
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -688,6 +783,9 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
+        endc
+        endc
         endc
         endc
         endc
@@ -712,10 +810,10 @@ main_loop:
         bsr     softkbd_hover
         bsr     music_tick
         bsr     gm_tick
-        bsr     dostris_tick
-        bsr     outlast_tick
-        bsr     pacman_tick
+        bsr     tracker_tick
         bsr     app_ticks
+        bsr     post_ticks          ; frame tick -> the focused app task
+        bsr     task_yield          ; run the app tasks (milestone 6)
         bsr     cursor_sync
         bsr     pm_sync_sprites
         bra     main_loop
@@ -761,10 +859,10 @@ handle_events:
         moveq   #0,d3
         move.b  (a0,d0.w),d3        ; topmost window slot
         move.w  d3,d0
-        bsr     win_ptr_raw_d0      ; a2 = window
-        moveq   #0,d0
-        move.b  WPROC(a2),d0
-        bsr     app_key             ; d1 = ascii, d2 = raw, a2 = window
+        move.w  d2,d3               ; raw
+        move.w  d1,d2               ; ascii
+        moveq   #1,d1               ; key event -> the app's task
+        bsr     task_post_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2             ; right
@@ -809,6 +907,10 @@ app_key:
         beq     pacman_key
         cmp.w   #7,d0
         beq     files_key
+        cmp.w   #8,d0
+        beq     theme_key
+        cmp.w   #9,d0
+        beq     tracker_key
         rts                         ; sysinfo/clock: no keys
 
 ; ----------------------------------------------------------------------------
@@ -1207,6 +1309,8 @@ win_create:
         move.b  d6,(a0,d1.w)
         addq.w  #1,d1
         move.w  d1,v_zcount(a4)
+        move.w  d6,d0
+        bsr     task_spawn          ; milestone 6: the app gets a task
         bsr     draw_window         ; topmost: nothing else to repaint
         ; keep the soft keyboard above newly created windows
         move.b  v_kb_vis(a4),d0
@@ -1311,6 +1415,14 @@ close_window:
         move.w  d0,d2
         bsr     zwin_ptr
         sf      WSTATE(a2)
+        ; free the app task (slot from the window entry address)
+        movem.l d0/a0,-(sp)
+        lea     VARS+v_wintab,a0
+        move.l  a2,d0
+        sub.l   a0,d0
+        lsr.w   #4,d0
+        bsr     task_kill
+        movem.l (sp)+,d0/a0
         move.w  (sp)+,d0
         lea     VARS,a4
         lea     v_zlist(a4),a0
@@ -1334,7 +1446,8 @@ close_topmost:
         rts
 
 ; music_stop_if - d0 = z index being closed: close silences audio
-; (PORT-SPEC SS2: Music's PSG ch0 or a game's ch1 sequencer)
+; (PORT-SPEC SS2: Music's PSG ch0, a game's ch1 sequencer, or the
+; Tracker's three tones + noise)
 music_stop_if:
         movem.l d0/d2/a2,-(sp)
         move.w  d0,d2
@@ -1345,8 +1458,14 @@ music_stop_if:
         bne     .ngm
         bsr     music_stop
         bra     .out
-.ngm:   cmp.w   #4,d0
+.ngm:   cmp.w   #9,d0
+        bne     .ntk
+        bsr     tk_stop
+        bra     .out
+.ntk:   cmp.w   #4,d0
         blt     .out
+        cmp.w   #6,d0
+        bgt     .out
         bsr     gm_stop
 .out:   movem.l (sp)+,d0/d2/a2
         rts
@@ -1473,7 +1592,15 @@ app_draw_content:
         blt     .dostris
         beq     .outlast
         cmp.w   #7,d0
+        blt     .pacman
         beq     .files
+        cmp.w   #9,d0
+        blt     .theme
+        bsr     tracker_draw
+        bra     .done
+.theme: bsr     theme_draw
+        bra     .done
+.pacman:
         bsr     pacman_draw
         bra     .done
 .files: bsr     files_draw
@@ -1657,7 +1784,13 @@ isr_vbl:
                                     ; move.l's, atomic across interrupts)
         lea     VARS,a4
         addq.l  #1,v_ticks(a4)
-        move.b  v_port1_mode(a4),d0
+        ; Mode-1 CD attached: the Sub-CPU BIOS needs an INT2 every vblank
+        tst.b   v_bram_rt(a4)
+        beq     .noi2
+        move.w  GA_RESET,d0
+        ori.w   #$0100,d0           ; IFL2
+        move.w  d0,GA_RESET
+.noi2:  move.b  v_port1_mode(a4),d0
         bne     .ps2mouse
         bsr     pad_read            ; -> v_pad_state
         bsr     pad_to_mouse        ; -> position, v_mouse_btn, key events
@@ -1701,6 +1834,17 @@ isr_ext:
         bsr     ps2k_edge           ; sample the port-2 lines (ps2.i)
         movem.l (sp)+,d0-d3/a0-a1/a4
         rte
+
+; berr - bus/address errors: while the Sega CD probe runs (v_brprobe),
+; an unmapped $400000 region read just means "no CD attached" - some
+; emulators raise a bus error there instead of returning open bus.
+; Unwind to the probe's saved stack and resume at brin_out (the no-CD
+; exit). Any other bus error falls through to the crash dump.
+berr:   tst.b   VARS+v_brprobe
+        beq     err
+        sf      VARS+v_brprobe
+        move.l  VARS+v_brsp,sp
+        bra     brin_out
 
 ; err - exception catcher: magenta border beacon + the first 4 longs of
 ; the exception stack frame in hex on the bottom row (for group 1/2
@@ -2091,14 +2235,18 @@ ev_get:
         include "pacman.i"
         include "sram.i"
         include "tape.i"
+        include "bram.i"
+        include "theme.i"
+        include "tracker.i"
+        include "scheduler.i"
 
 ; ============================================================================
 ; Data
 ; ============================================================================
         even
 str_menutitle:  dc.b    "UnoDOS 3",0
-str_version:    dc.b    "UnoDOS/Genesis v0.1.0",0
-str_build:      dc.b    "Milestone 1",0
+str_version:    dc.b    "UnoDOS/Genesis v0.2.0",0
+str_build:      dc.b    "Milestone 6",0
 str_title:      dc.b    "U n o D O S   3",0
 str_sub:        dc.b    "for Sega Genesis - Mega Drive",0
 str_kbd:        dc.b    "PS/2 kbd: port 2 TH=CLK D0=DAT",0
@@ -2132,6 +2280,8 @@ app_def_tab:
         dc.w    1,1,38,26,  str_t_outlast-start
         dc.w    1,1,38,27,  str_t_pacman-start
         dc.w    7,4,28,16,  str_t_files-start
+        dc.w    8,4,26,16,  str_t_theme-start
+        dc.w    1,1,38,19,  str_t_tracker-start
 
 name_tab:
         dc.l    name_sysinfo
@@ -2142,6 +2292,8 @@ name_tab:
         dc.l    name_outlast
         dc.l    name_pacman
         dc.l    name_files
+        dc.l    name_theme
+        dc.l    name_tracker
 
 ; CRAM: 4 palette lines x 16 colors ($0BGR, 3-bit channels)
 ; line 0 NORM: backdrop blue, 1 white, 2 blue, 3 cyan, 4 magenta,

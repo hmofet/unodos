@@ -32,6 +32,9 @@ case "$1" in
   pacman)  FLAGS="-DAUTOTEST=1 -DAUTOTEST_PACMAN=1";   OUT=build/unodos_pm.gen ;;
   sram)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_SRAM=1";     OUT=build/unodos_sr.gen ;;
   tape)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_TAPE=1";     OUT=build/unodos_tp.gen ;;
+  bram)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_BRAM=1";     OUT=build/unodos_br.gen ;;
+  theme)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_THEME=1";    OUT=build/unodos_th.gen ;;
+  tracker) FLAGS="-DAUTOTEST=1 -DAUTOTEST_TRACKER=1";  OUT=build/unodos_tk.gen ;;
 esac
 
 echo "[2/2] assembling kernel.asm (cpu 68000, flat binary)..."

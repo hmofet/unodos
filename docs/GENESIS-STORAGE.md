@@ -10,7 +10,7 @@ ports, in the same passive-adapter spirit as the PS/2 wiring
 |---|---|---|---|
 | 1 | Cartridge SRAM (8KB, battery) | **shipped** (M4) | none — emulators + flashcarts |
 | 2 | Tape / WAV over audio (AFSK) | **shipped** (M4.5) | comparator on port 2 pin 1 (read); none to write |
-| 3 | Sega CD backup RAM (Mode 1) | spec below — next | a Sega/Mega CD attachment |
+| 3 | Sega CD backup RAM (Mode 1) | **shipped** (M5, `genesis/bram.i`) | a Sega/Mega CD attachment |
 | 4 | SD card over bit-banged SPI | spec below — deferred | level-shifted SD breakout on a control port |
 
 ---
@@ -72,7 +72,7 @@ SHORT/LONG decision point sits at ~310µs between nominal 208µs and
 
 ---
 
-## Tier 3 — Sega CD backup RAM (SPEC — next up)
+## Tier 3 — Sega CD backup RAM (IMPLEMENTED, `genesis/bram.i`)
 
 For consoles with a Sega/Mega CD attached, its battery-backed backup
 RAM (8KB internal, up to 512KB on a Backup RAM cartridge) is real,
@@ -124,6 +124,35 @@ CD-capable emulator or real hardware.
 array handshake ordering); BIOS version differences (JP/US/EU model 1
 vs 2 vs CDX) are absorbed by calling through the official trap table
 rather than fixed addresses.
+
+**Implementation notes (M5, shipped 2026-06-12):** as spec'd above,
+with these refinements learned in bring-up:
+
+- The Sub-CPU BIOS is Kosinski-compressed inside the main BIOS ROM;
+  the loader checks the standard candidates ($415800, $416000,
+  $41AD00 WonderMega/LaserActive, $40D500) for the "SEGA"/"WOND"
+  signature at +$6D, clears PRG-RAM bank 0 first (the LaserActive
+  hangs on dirty RAM), and write-protects the decompressed BIOS
+  (byte write to $A12002 — a word write would clobber the bank/DMNA
+  bits at $A12003).
+- **Bus-error recovery around the probe**: with no attachment,
+  $400000+ reads return open bus on real hardware but raise a 68000
+  bus error under BlastEm. The probe records an unwind SP and arms
+  vector 2; a fault during detection resumes at the no-CD exit
+  instead of crashing the boot. The $A10001 DISK bit is checked
+  first but not trusted (not all emulators model it).
+- The RPC sequence byte skips 0 (idle) and the live ack value, so a
+  wrapped counter can never alias the stub's 'R' ready flag.
+- File payloads carry a 14-byte header (original 12-char name +
+  byte length) so round trips restore exact names/lengths; foreign
+  saves fail the header sanity check and open raw. Listings cap at 8
+  entries (one BRMDIR call); paging is a follow-up.
+- The fake transport implements the same four ops over a RAM block
+  store with 64-byte blocks and delete-compaction; AUTOTEST_BRAM
+  drives the full Notepad-F1 → wipe → Files → reopen round trip
+  through it in BlastEm. The `_BURAM` stub follows the documented
+  ABI (megadev's register contracts; BRMWRITE with d1=0 per Tech
+  Bulletin #1) and awaits a CD-capable emulator / real hardware run.
 
 ## Tier 4 — SD card over bit-banged SPI (SPEC — deferred)
 

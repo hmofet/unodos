@@ -982,7 +982,7 @@ pacman_tick:
 ; ---------------------------------------------------------------- data
         even
 str_pm_title:   dc.b    "P A C - M A N",0
-str_pm_new:     dc.b    "N: new game",0
+str_pm_new:     dc.b    "X:new game",0
 str_pm_score:   dc.b    "SCORE",0
 str_pm_hi:      dc.b    "HI",0
 str_pm_lives:   dc.b    "LIVES",0

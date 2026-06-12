@@ -5,6 +5,65 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Genesis milestones 3 + 5 + 6] - 2026-06-12
+
+### Sega Genesis / Mega Drive: full Amiga-port parity (v0.2.0)
+
+- **Theme app** (`genesis/theme.i`, proc 8): the 8 preset palettes
+  shared with every other port, stored pre-converted to Genesis CRAM
+  words ($0RGB → $0BGR, 3-bit channels — preset 1 reproduces the boot
+  palette exactly), applied live by rewriting the themed entries of
+  all four palette lines; r/g/b keys edit the active colors one 3-bit
+  channel at a time, like the Amiga's 4-bit editor scaled to Genesis
+  color depth. Game colors (entries 5-15) stay fixed.
+- **Tracker** (`genesis/tracker.i`, proc 9): the Amiga 32-row ×
+  4-channel pattern editor on the PSG — channels 1-3 are the square
+  tone generators (PSG values = the ProTracker periods scaled by the
+  clock ratio, so pitches match the Amiga within cents), channel 4 is
+  the noise generator (the note picks the rate, hits decay per
+  frame). The pattern format is byte-identical to the Amiga tracker,
+  same demo song; `s`/`l` persist SONG.TRK in cartridge SRAM, `t`/`y`
+  write/read the pattern over the tape interface (`tape.i` grew
+  parameterized `tape_save_blk` / `tape_load_core` engines).
+- **Sega CD backup RAM, Mode 1** (`genesis/bram.i`, milestone 5): the
+  cartridge boots the CD attachment as a peripheral — expansion probe,
+  Kosinski-decompress the Sub-CPU BIOS out of the main BIOS ROM
+  ($415800/$416000/$41AD00/$40D500 candidates), upload a ~300-byte SP
+  stub at $6000, and speak a LIST/READ/WRITE/DELETE RPC over the
+  gate-array mailbox with file data staged through Word RAM. The stub
+  calls the BIOS `_BURAM` traps, so files share the standard Sega
+  directory with every other CD title and the console's own manager.
+  Files app: `v` cycles SRAM ↔ BRAM; Notepad F1 saves to the active
+  volume; UnoDOS 8.3 names normalize to 11-char BRAM names with the
+  original name + byte length in a 14-byte payload header (foreign
+  saves open raw). The transport is injectable per the port's
+  standing rule: AUTOTEST_BRAM verifies the whole protocol + UI stack
+  over a RAM-backed fake in BlastEm; the BIOS-trap path needs a
+  CD-capable emulator or real hardware. Two emulator traps fixed
+  along the way: BlastEm raises a 68000 **bus error** for $400000
+  reads with no CD (real hardware returns open bus) — the probe arms
+  a bus-error recovery vector that unwinds to the no-CD path; and the
+  write-protect register write must be byte-wide to keep the
+  bank/DMNA bits.
+- **Cooperative scheduler** (`genesis/scheduler.i`, milestone 6 =
+  the Amiga milestone 3): every window runs its app proc in its own
+  task with a private 2KB stack ($FF4000 block) and a one-slot
+  mailbox; the kernel task pumps input, drag, audio services and
+  desktop. Keys post with a bounded yield-retry (`task_post_key`) so
+  soft-keyboard and PS/2 bursts survive the single-slot mailbox —
+  verified by the existing kbd/ps2 AUTOTESTs running unchanged
+  through the task machinery, and by Dostris gravity ticking via the
+  mailbox.
+- Desktop grows to 10 icons (Theme reuses the x86 Settings art,
+  Tracker the Music art); game/maze/actor tiles shifted +8.
+- Genesis port version v0.1.0 → v0.2.0 ("Milestone 6"); test harness
+  configs (WinUAE .uae files, autotest/snapwin scripts, Executor
+  stage_run) re-pointed at the repo's current location.
+- Verified in BlastEm 0.6.2: all 14 AUTOTEST builds re-run green
+  (composite, notepad, music, kbd, ps2, click, dostris, outlast,
+  pacman, sram, tape, bram, theme, tracker); Amiga AUTOTEST re-run
+  green in WinUAE; Mac targets rebuilt clean (no source changes).
+
 ## [Genesis milestones 4 + 4.5] - 2026-06-11
 
 ### Sega Genesis / Mega Drive: storage — SRAM saves and tape/WAV
