@@ -11,8 +11,14 @@ renderer. No System file, no Toolbox, no Mac OS on the disk at all.
 Mac OS — remains as the *hosted* variant covering System 7 color machines.
 This port is the OS.)
 
-Target: Mac Plus / SE / Classic class — 68000, 512x342x1 framebuffer,
->= 1MB RAM, M0110/M0110A keyboard.
+Targets: **Mac Plus, SE, Classic** (68000, 512x342x1) and the **Mac II
+class** (IIcx/IIci/etc., 640x480x1). The kernel adapts to the machine at
+boot — see *Machine-adaptive input* below.
+
+| Build | Geometry | Machines |
+|---|---|---|
+| `./build.sh` → `unodos_macplus.dsk` | 512x342, 64 B/row | Plus, SE, Classic |
+| `./build.sh mac2` → `unodos_mac2.dsk` | 640x480, 80 B/row | Mac II class (set the monitor to **B&W / 1-bit**) |
 
 ## Boot chain
 
@@ -41,11 +47,32 @@ Keyboard notes: the M0110 has no Escape key — **`` ` `` (backquote) is
 ESC** (closes the topmost window). Arrows/keypad arrive via the `$79`
 prefix page; `Clr` is reserved as F1/save for later milestones.
 
+## Machine-adaptive input (Plus vs. SE/II)
+
+Only the original Plus has the M0110 keyboard and quadrature mouse on the
+VIA/SCC; the SE and later use ADB, and the Mac II class even relocates the
+VIA. So at boot the kernel reads the ROM version word (`ROMBase+8`):
+
+- **`$75` (Plus)** → the self-owned drivers above: we take the VIA and
+  SCC outright and run our own M0110 + quadrature handlers.
+- **anything newer (SE `$76`, II `$78`, …)** → *ROM-assisted mode*. We
+  **chain** the ROM's level-1 interrupt handler (keeping its ADB stack
+  alive) and never touch the VIA/SCC. Each tick we mirror the low-memory
+  state the ROM maintains: `Ticks` ($16A) for timing, `RawMouse` ($82C)
+  for the pointer, `MBState` ($172) for the button, and the OS event
+  queue for keys (`SysEvtMask` opened at boot, drained with `_GetOSEvent`
+  from the main loop — the Toolbox analog of polling BIOS INT 16h).
+
+The same `unodos_macplus.dsk` therefore boots on Plus **and** SE. The
+Mac II class needs the `mac2` geometry build and a B&W monitor setting.
+
 ## Building
 
 ```sh
-./build.sh          # build/unodos_macplus.dsk      (800K bootable image)
-./build.sh test     # build/unodos_macplus_test.dsk (AUTOTEST: opens both apps)
+./build.sh           # build/unodos_macplus.dsk       (Plus/SE/Classic, 512x342)
+./build.sh test      # build/unodos_macplus_test.dsk  (AUTOTEST: opens both apps)
+./build.sh mac2      # build/unodos_mac2.dsk          (Mac II class, 640x480)
+./build.sh mac2test  # build/unodos_mac2_test.dsk     (AUTOTEST, 640x480)
 ```
 
 Needs vasmm68k_mot (same toolchain as the Amiga/Genesis ports) and
@@ -89,16 +116,36 @@ backquote-as-ESC. Three emulator-vs-spec findings are baked in:
 - Host arrows arrive as ADB/M0115-style codes $7B-$7E on the prefix
   page, not the M0110A's $42/$46/$48/$4D — the keymap maps **both**.
 
-**Real-hardware status: pending.** What Mini vMac could NOT exercise:
-(1) the SCC DCD quadrature mouse path (flip the `eor` sense in
-`isr_lvl2` if an axis runs backwards); (2) genuine M0110A arrow codes;
-(3) electrical timing of the VIA keyboard handshake (the `nop` spacing
-in `scc_init_*` and the poll cadence may need widening on real silicon).
+## Mini vMac II validation (real Mac II ROM) — PASSED 2026-06-12
+
+The `mac2` build was exercised in a self-built Mini vMac **II** variation
+(Macintosh II model) with a genuine IIcx ROM: boot, the 640x480 desktop,
+window drag (RawMouse + MBState), and the full keyboard including ADB
+arrows — i.e. the entire **ROM-assisted** input path the Mac SE also
+uses. Because the SE shares that path, this is strong pre-hardware
+coverage for the SE as well as the II class.
+
+Building the Mini vMac II binary (no prebuilt exists): cross-compiled
+from the upstream source with mingw-w64; the disk-format gate
+(`NonDiskProtect`) was disabled so it mounts our raw images, and it was
+built at 1-bit depth (`-depth 0`) because the II ROM otherwise starts the
+video card at a color depth our 1-bit renderer doesn't match.
+
+**Real-hardware status: pending (user testing on a Mac SE + Mac IIci via
+FloppyEmu).** What the emulators could NOT exercise:
+(1) the Plus-only SCC DCD quadrature mouse path (flip the `eor` sense in
+`isr_lvl2` if an axis runs backwards); (2) genuine M0110A arrow codes on
+a real Plus; (3) electrical timing of the Plus VIA keyboard handshake.
+The SE/II ROM-assisted path has no such Plus-specific risks. On the IIci,
+set the monitor to **B&W (1-bit)** until the color milestone.
 
 ## Milestones
 
 - **M1 (this)**: boot + desktop + window manager + SysInfo/Clock,
-  keyboard/mouse drivers, software cursor, fault screens.
+  keyboard/mouse drivers, software cursor, fault screens. Machine-adaptive
+  input (Plus M0110/SCC vs. SE/II ROM-assisted ADB) and the Mac II 640x480
+  geometry variant. System 7-style window chrome (drop shadows, pinstriped
+  active title bar, square close box).
 - **M2 (next)**: the UnoDOS floppy filesystem (shared layout with the
   x86 port) and **disk-loaded app binaries** — the launcher reads app
   images off the floppy via the .Sony BIOS layer like the x86 launcher

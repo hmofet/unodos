@@ -5,6 +5,40 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Mac SE/II support + platform-authentic chrome] - 2026-06-12
+
+### macplus: machine-adaptive input + Mac II geometry
+
+The standalone Mac OS now runs across the whole compact-Mac span, not just
+the Plus. At boot the kernel reads the ROM version word (`ROMBase+8`) and
+picks its input strategy: Plus (`$75`) keeps the self-owned M0110 keyboard
+and SCC quadrature mouse; **SE and later** switch to *ROM-assisted mode* —
+chain the ROM's level-1 handler (its ADB stack stays alive) and mirror the
+low-memory state it maintains (`Ticks`, `RawMouse`, `MBState`, the OS event
+queue via `SysEvtMask` + `_GetOSEvent`). The Mac II class gets a 640×480
+geometry build (`./build.sh mac2`); the default 512×342 image boots Plus
+**and** SE unchanged. Validated in a self-built Mini vMac II with a real
+IIcx ROM (boot, drag, full ADB keyboard) — the same path the SE will use.
+
+### Platform-authentic window chrome
+
+Each port's chrome now matches its native look:
+
+- **Macs** (standalone + hosted System 7/Classic): System 7 chrome — drop
+  shadows, pinstriped active-only title bar, square close box on a white
+  patch, centered title.
+- **Amiga**: Workbench look — blue drag bar with white left-aligned title
+  when active / white bar when inactive, orange-centered close gadget.
+- **x86**: already platform-authentic — the `widget_style` system renders
+  Windows-3.x 3D bevels on VGA and a flat 4-color variant on CGA/8088.
+
+Shared fix: opening a second window now repaints all windows so the
+previously-active one loses its active-state title styling.
+
+### Roadmap
+
+Apple II and Apple IIGS ports added to the roadmap (TODO.md) — not started.
+
 ## [MacPlus standalone OS, milestone 1] - 2026-06-12
 
 ### New port: UnoDOS as a real OS on compact 68000 Macs (macplus/)
