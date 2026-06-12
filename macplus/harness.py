@@ -124,6 +124,12 @@ class Mac:
         mu.mem_write(0x108, struct.pack(">I", RAM_SIZE))  # MemTop
         mu.mem_write(0x2AE, struct.pack(">I", 0x60400))   # ROMBase (fake)
         mu.mem_write(0x60408, struct.pack(">H", 0x0075))  # ROM version: Plus
+        # BootDrive: deliberately NOT drive 1 - a FloppyEmu on a real SE's
+        # external port boots as drive 2/3, and hardcoding 1 produced a
+        # real-hardware Sad Mac 0F/00000001. Every _Read/_Write below
+        # asserts the kernel echoes this drive number back.
+        self.boot_drive = 2
+        mu.mem_write(0x210, struct.pack(">H", self.boot_drive))
         boot = bytes(self.disk[:1024])
         assert boot[0:2] == b"\x4c\x4b", "no LK signature on disk"
         mu.mem_write(BOOT_AT, boot)
@@ -233,9 +239,12 @@ class Mac:
                 pb = uc.reg_read(UC_M68K_REG_A0)
                 blk = uc.mem_read(pb, 50)
                 refnum = struct.unpack(">h", blk[24:26])[0]
+                vref = struct.unpack(">h", blk[22:24])[0]
                 buf, count = struct.unpack(">II", blk[32:40])
                 off = struct.unpack(">I", blk[46:50])[0]
                 assert refnum == -5, f"_Read on refNum {refnum}"
+                assert vref == self.boot_drive, \
+                    f"_Read on drive {vref}, boot drive is {self.boot_drive}"
                 data = bytes(self.disk[off:off + count])
                 uc.mem_write(buf, data)
                 uc.mem_write(pb + 16, b"\x00\x00")          # ioResult
@@ -249,9 +258,12 @@ class Mac:
                 pb = uc.reg_read(UC_M68K_REG_A0)
                 blk = uc.mem_read(pb, 50)
                 refnum = struct.unpack(">h", blk[24:26])[0]
+                vref = struct.unpack(">h", blk[22:24])[0]
                 buf, count = struct.unpack(">II", blk[32:40])
                 off = struct.unpack(">I", blk[46:50])[0]
                 assert refnum == -5, f"_Write on refNum {refnum}"
+                assert vref == self.boot_drive, \
+                    f"_Write on drive {vref}, boot drive is {self.boot_drive}"
                 self.disk[off:off + count] = uc.mem_read(buf, count)
                 uc.mem_write(pb + 16, b"\x00\x00")          # ioResult
                 uc.mem_write(pb + 40, struct.pack(">I", count))

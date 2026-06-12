@@ -21,7 +21,10 @@
 ; sync with mkfs.py's FS_START_SECTOR.
 FS_START_SECTOR equ 256             ; 256 * 512 = 131072 (128 KB) into the disk
 SONY_REFNUM     equ -5              ; .Sony driver refNum
-SONY_DRIVE      equ 1               ; internal floppy ioVRefNum
+; The drive number comes from low-mem BootDrive ($210) at each call - the
+; boot disk is drive 2/3 when a FloppyEmu sits on the external port (found
+; on the user's real SE as Sad Mac 0F/00000001: the boot read targeted the
+; empty internal drive 1). $210 is ROM-maintained and stays valid.
 
 ; sony_io - shared _Read/_Write plumbing.
 ;   d0 = volume LBA, a1 = buffer, d2 = trap word ($A002 read / $A003 write)
@@ -35,7 +38,10 @@ sony_io:
         addq.l  #4,a0
         dbra    d1,.zero
         lea     sony_pb,a0
-        move.w  #SONY_DRIVE,22(a0)          ; ioVRefNum = drive 1
+        move.w  $210,d1                     ; ioVRefNum = BootDrive
+        bne     .drvok
+        moveq   #1,d1                       ; unset: internal drive 1
+.drvok: move.w  d1,22(a0)
         move.w  #SONY_REFNUM,24(a0)         ; ioRefNum  = .Sony
         move.l  a1,32(a0)                   ; ioBuffer
         move.l  #512,36(a0)                 ; ioReqCount = one sector

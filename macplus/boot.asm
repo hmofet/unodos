@@ -44,13 +44,30 @@ begin:
 ; ---------------------------------------------------------------- boot code
 bootcode:
         lea     param_block(pc),a0
+        ; the boot disk is NOT always drive 1: a FloppyEmu on the SE's
+        ; external port (or the lower bay of a dual-drive SE) enumerates
+        ; as drive 2/3. The Start Manager publishes the real boot drive
+        ; in low-mem BootDrive ($210) before running the boot blocks.
+        move.w  $210,d0
+        bne     .drvok
+        moveq   #1,d0               ; unset: fall back to internal drive 1
+.drvok: move.w  d0,22(a0)           ; ioVRefNum
         dc.w    $A002               ; _Read (PBReadSync): .Sony raw sectors
         tst.w   d0
         bne     fail
+        ; paranoia: the kernel really arrived? ('UDM1' magic at entry+4)
+        cmp.l   #$55444D31,KERNBASE+4
+        bne     badimg
         jmp     KERNBASE            ; hand the machine to UnoDOS
 
+; Distinctive Sad Mac minor codes (shown as 0000000F XXXXXXXX):
+;   $42 = the kernel _Read failed (wrong drive/disk or I/O error)
+;   $43 = read "succeeded" but the kernel magic is missing (short/garbage)
 fail:
-        moveq   #1,d0               ; Sad Mac substitute: SysError 1
+        moveq   #$42,d0
+        dc.w    $A9C9               ; _SysError
+badimg:
+        moveq   #$43,d0
         dc.w    $A9C9               ; _SysError
 
 ; ---------------------------------------------------------------- param block
