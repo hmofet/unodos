@@ -243,8 +243,23 @@ Next steps:
 - [ ] Screenshots for README
 
 ## MacPlus standalone OS port (macplus/, after M1 2026-06-12)
-- [ ] M2: UnoDOS floppy filesystem (shared layout with the x86 port) +
-      disk-loaded app binaries via the .Sony BIOS layer; Files/Notepad
+- [x] M2 (2026-06-12): UnoDOS floppy filesystem (FAT12, shared layout with
+      the x86 port) read + written through the .Sony BIOS layer
+      (sony.i over _Read/_Write A-traps + the portable fat12.i core from
+      the Amiga port); Files + Notepad apps (in-kernel procs, key routing
+      via the topmost window's WPROC); disk-loaded app binaries — the
+      launcher reads DEMO.APP off the floppy into $40000 and runs it as a
+      windowed app through a position-independent ksys-table ABI
+      (diskapp.i + demo_app.asm), like the x86 launcher loads .BINs.
+      Harness extended to emulate _Write; verified end-to-end in
+      tests/m2.script (list/open/edit/save/persist + disk-app load+keys).
+- [ ] M2 follow-ups: Files should launch *.APP entries directly (a real
+      multi-app launcher rather than the single fixed Demo icon); FAT12
+      delete/rename; free-space display; a proper Demo icon (reuses
+      icon_paint today)
+- [ ] M2 real-hardware risk: .Sony _Read/_Write *after* the kernel has
+      taken the VIA/SCC is harness- and spec-validated but unproven on
+      metal (the boot-time _Read path is). Watch this on the SE/IIci run.
 - [ ] M3+: sound (Plus pulse-width buffer), Theme-as-dither-schemes,
       Tracker, games, scheduler, Paint — Amiga parity
 - [ ] Real-hardware / Mini vMac validation (needs a user-supplied Mac

@@ -55,7 +55,8 @@ SCANS = {
     ',':0x2B,'.':0x2F,'/':0x2C,
     'enter':0x24,'space':0x31,'esc':0x32,'tab':0x30,'backspace':0x33,
 }
-ARROWS = {'up':0x0D,'down':0x08,'left':0x06,'right':0x02}   # keypad page
+ARROWS = {'up':0x0D,'down':0x08,'left':0x06,'right':0x02,    # keypad page
+          'clr':0x07}                                        # Clr = F1/save ($50)
 
 
 def png_gray(path, w, h, getpix):
@@ -73,7 +74,7 @@ def png_gray(path, w, h, getpix):
 
 class Mac:
     def __init__(self, disk_path, artdir, trace=False):
-        self.disk = open(disk_path, "rb").read()
+        self.disk = bytearray(open(disk_path, "rb").read())
         self.artdir = artdir
         self.trace = trace
         os.makedirs(artdir, exist_ok=True)
@@ -123,7 +124,7 @@ class Mac:
         mu.mem_write(0x108, struct.pack(">I", RAM_SIZE))  # MemTop
         mu.mem_write(0x2AE, struct.pack(">I", 0x60400))   # ROMBase (fake)
         mu.mem_write(0x60408, struct.pack(">H", 0x0075))  # ROM version: Plus
-        boot = self.disk[:1024]
+        boot = bytes(self.disk[:1024])
         assert boot[0:2] == b"\x4c\x4b", "no LK signature on disk"
         mu.mem_write(BOOT_AT, boot)
         mu.reg_write(UC_M68K_REG_A7, BOOT_AT - 0x1000)
@@ -235,7 +236,7 @@ class Mac:
                 buf, count = struct.unpack(">II", blk[32:40])
                 off = struct.unpack(">I", blk[46:50])[0]
                 assert refnum == -5, f"_Read on refNum {refnum}"
-                data = self.disk[off:off + count]
+                data = bytes(self.disk[off:off + count])
                 uc.mem_write(buf, data)
                 uc.mem_write(pb + 16, b"\x00\x00")          # ioResult
                 uc.mem_write(pb + 40, struct.pack(">I", len(data)))
@@ -243,6 +244,21 @@ class Mac:
                 uc.reg_write(UC_M68K_REG_PC, pc + 2)
                 if self.trace:
                     print(f"[rom] _Read {count} bytes @{off} -> {buf:#x}")
+                return
+            if op == 0xA003:        # _Write on the .Sony driver
+                pb = uc.reg_read(UC_M68K_REG_A0)
+                blk = uc.mem_read(pb, 50)
+                refnum = struct.unpack(">h", blk[24:26])[0]
+                buf, count = struct.unpack(">II", blk[32:40])
+                off = struct.unpack(">I", blk[46:50])[0]
+                assert refnum == -5, f"_Write on refNum {refnum}"
+                self.disk[off:off + count] = uc.mem_read(buf, count)
+                uc.mem_write(pb + 16, b"\x00\x00")          # ioResult
+                uc.mem_write(pb + 40, struct.pack(">I", count))
+                uc.reg_write(UC_M68K_REG_D0, 0)
+                uc.reg_write(UC_M68K_REG_PC, pc + 2)
+                if self.trace:
+                    print(f"[rom] _Write {count} bytes {buf:#x} -> @{off}")
                 return
             if op == 0xA9C9:        # _SysError
                 self.fail = f"SysError d0={uc.reg_read(UC_M68K_REG_D0):#x}"

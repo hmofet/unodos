@@ -1,0 +1,36 @@
+# UnoDOS/MacPlus milestone-2 regression: FAT12 floppy + Files + Notepad.
+# Run: ./build.sh && python3 harness.py build/unodos_macplus.dsk shots < tests/m2.script
+wait 90
+shot m2_desktop              # 4 icons: Sys Info, Clock, Files, Notepad
+dblclick 212 48              # open Files -> lazy-mounts the FAT12 volume
+wait 12
+shot m2_files                # root dir: HELLO/README/CHAIN .TXT + sizes
+key down                     # selection moves to README.TXT
+wait 4
+shot m2_files_sel
+key enter                    # open the selected file in Notepad
+wait 12
+shot m2_notepad              # README.TXT text + status "Ln/Co/B Clr save"
+key z                        # edit: insert two chars at the caret
+key z
+wait 4
+shot m2_edited               # "zz" prepended, status shows the dirty '*'
+key clr                      # Clr = F1 = save back to the floppy (_Write)
+wait 16
+shot m2_saved                # '*' cleared after a successful save
+key esc                      # close Notepad -> Files is topmost again
+wait 4
+key enter                    # re-open README, re-read fresh from disk
+wait 12
+shot m2_reopened             # "zz" persisted: the write round-tripped
+key esc                      # close Notepad
+wait 3
+dblclick 372 48              # launch Demo: read DEMO.APP off the floppy to $40000
+wait 14
+shot m2_diskapp              # the disk binary draws via the ksys service table
+key space                    # its key handler bumps an in-image counter...
+key space
+key space
+wait 6
+shot m2_diskapp_stars        # ...kernel redraws: three stars
+quit

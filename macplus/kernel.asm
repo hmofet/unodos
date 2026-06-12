@@ -97,7 +97,8 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 2                   ; milestone 1: SysInfo, Clock
+NICONS      equ 5                   ; SysInfo, Clock, Files, Notepad, Demo
+NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
 
@@ -318,7 +319,31 @@ handle_events:
         bne     .focus
         bsr     close_topmost
         bra     .next
-.focus: ; milestone 1: no app key handlers yet (SysInfo/Clock are static)
+.focus: ; route the key to the topmost window's app handler (d1=ascii d2=raw)
+        move.w  zcount(pc),d3
+        subq.w  #1,d3
+        bmi     .next
+        movem.l d1-d2,-(sp)         ; raw/ascii survive zwin_ptr's d2 input
+        move.w  d3,d2
+        bsr     zwin_ptr            ; a2 = topmost window
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        movem.l (sp)+,d1-d2
+        cmp.w   #2,d0
+        beq     .kfiles
+        cmp.w   #3,d0
+        beq     .knote
+        cmp.w   #4,d0
+        beq     .kdiskapp
+        bra     .next
+.kfiles:
+        bsr     files_key
+        bra     .next
+.knote:
+        bsr     notepad_key
+        bra     .next
+.kdiskapp:
+        bsr     diskapp_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -1080,7 +1105,19 @@ app_draw_content:
         move.l  a2,-(sp)
         tst.w   d0
         beq     .sysinfo
-        bsr     clock_draw
+        cmp.w   #1,d0
+        beq     .clock
+        cmp.w   #2,d0
+        beq     .files
+        cmp.w   #3,d0
+        beq     .notep
+        bsr     diskapp_draw        ; proc 4: disk-loaded app
+        bra     .done
+.clock: bsr     clock_draw
+        bra     .done
+.files: bsr     files_draw
+        bra     .done
+.notep: bsr     notepad_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -2139,14 +2176,18 @@ ev_get:
         rts
 
         include "../amiga/gen_data.i"
+        include "sony.i"
+        include "fat12.i"
+        include "apps.i"
+        include "diskapp.i"
 
 ; ============================================================================
 ; Data
 ; ============================================================================
         even
 str_menutitle:  dc.b    "UnoDOS MacPlus",0
-str_version:    dc.b    "UnoDOS/MacPlus v0.1.0",0
-str_build:      dc.b    "Milestone 1",0
+str_version:    dc.b    "UnoDOS/MacPlus v0.2.0",0
+str_build:      dc.b    "Milestone 2",0
 str_x:          dc.b    "X",0
 str_fault:      dc.b    "FAULT @ ",0
         ifeq    SCRW-640
@@ -2158,25 +2199,55 @@ str_si2:        dc.b    "Machine Mac Plus/SE",0
         endc
 str_si3:        dc.b    "RAM",0
 str_si4:        dc.b    "Uptime",0
-str_si5:        dc.b    "UnoDOS/MacPlus  Milestone 1",0
+str_si5:        dc.b    "UnoDOS/MacPlus  Milestone 2",0
 str_uptime:     dc.b    "Uptime",0
 str_t_sysinfo:  dc.b    "System Info",0
 str_t_clock:    dc.b    "Clock",0
+str_t_files:    dc.b    "Files",0
+str_t_notepad:  dc.b    "Notepad",0
+str_t_demo:     dc.b    "Demo",0
 name_sysinfo:   dc.b    "Sys Info",0
 name_clock:     dc.b    "Clock",0
+name_files:     dc.b    "Files",0
+name_notepad:   dc.b    "Notepad",0
+name_demo:      dc.b    "Demo",0
+str_app_missing: dc.b   "DEMO.APP not on disk",0
+
+; ---- Files / Notepad strings (M2)
+str_f_hdr:      dc.b    "Name          Size",0
+str_f_foot:     dc.b    "Enter:open  r:refresh",0
+str_f_none:     dc.b    "(no files on disk)",0
+str_n_save:     dc.b    " Clr save",0
+str_n_ln:       dc.b    "Ln ",0
+str_n_co:       dc.b    " Co ",0
+str_n_b:        dc.b    " B",0
+str_n_dirty:    dc.b    " *",0
+str_untitled:   dc.b    "UNTITLEDTXT",0
+demo_text:      dc.b    "UnoDOS/MacPlus Notepad.",13
+                dc.b    "Edit, then Clr saves to",13
+                dc.b    "the floppy as UNTITLED.TXT.",13,0
 
         even
 ; app definitions: x, y, w, h, title offset from 'start'
 app_def_tab:
         dc.w    80,80,240,90,   str_t_sysinfo-start
         dc.w    260,160,150,70, str_t_clock-start
+        dc.w    40,70,260,180,  str_t_files-start
+        dc.w    150,50,300,230, str_t_notepad-start
+        dc.w    120,90,210,130, str_t_demo-start
 
 icon_tab:
         dc.l    icon_sysinfo
         dc.l    icon_clock
+        dc.l    icon_files
+        dc.l    icon_notepad
+        dc.l    icon_paint
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
+        dc.l    name_files
+        dc.l    name_notepad
+        dc.l    name_demo
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2273,6 +2344,35 @@ old_lvl1:       dc.l    0           ; ROM's level-1 handler (chained)
 keytime_l:      dc.l    0           ; last seen KeyTime ($186)
 rom_mode:       dc.b    0           ; 0 = Plus hardware, 1 = ROM-assisted
                 dc.b    0
+
+; ---- M2: FAT12 + Files/Notepad state (appended; M1 offsets unchanged so
+; the harness's vars+28 mouse mirror still lines up) ------------------------
+        even
+fat_spc:        dc.w    0
+fat_spf:        dc.w    0
+fat_rootents:   dc.w    0
+fat_fatstart:   dc.w    0
+fat_rootstart:  dc.w    0
+fat_datastart:  dc.w    0
+fat_count:      dc.w    0
+files_sel:      dc.w    0
+np_len:         dc.w    0
+np_caret:       dc.w    0
+np_top:         dc.w    0           ; first visible line (vertical scroll)
+np_goal:        dc.w    -1          ; up/down goal column, -1 = none
+np_fatidx:      dc.w    -1          ; FAT root index of the open file, -1 untitled
+fat_mounted:    dc.b    0
+np_dirty:       dc.b    0
+diskapp_loaded: dc.b    0           ; proc 4: DEMO.APP read into APP_LOAD
+                dc.b    0
+        even
+npbuf:          ds.b    NBUF                ; Notepad edit buffer
+npline:         ds.b    40                  ; one rendered line + NUL
+npstat:         ds.b    48                  ; status row scratch
+fat_tab:        ds.b    FAT_MAXFILES*18     ; root-dir cache (11 name+1 attr+4 size+2 cl)
+fat_buf:        ds.b    1536                ; whole FAT (3 sectors max)
+FATSECBUF:      ds.b    512                 ; one-sector scratch for FAT I/O
+sony_pb:        ds.b    64                  ; .Sony ParamBlockRec
         even
 
         end

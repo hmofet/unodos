@@ -5,6 +5,48 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [macplus milestone 2: floppy filesystem + Files/Notepad + disk apps] - 2026-06-12
+
+### macplus: the UnoDOS floppy filesystem (M2)
+
+The standalone Mac OS gains storage. Past the kernel image, the 800K boot
+floppy now carries a plain **FAT12 volume** (at sector 256) — the same
+on-disk layout the x86 reference port uses, so the disk is PC-readable.
+The kernel reads *and writes* it through the ROM .Sony driver via the same
+`_Read`/`_Write` A-traps the boot blocks use (`sony.i`, a flat 512-byte
+logical-sector device), driving the portable 68K FAT12 core (`fat12.i`)
+shared with the Amiga port.
+
+- **Files** (proc 2) lists the root directory — arrows select, Enter opens
+  a file in Notepad, `r` re-mounts/refreshes. The volume is lazily mounted
+  the first time the window paints.
+- **Notepad** (proc 3) views and edits text with caret/line navigation and
+  vertical scroll; **Clr** (the M0110A keypad clear, raw `$50`) saves the
+  buffer back to the floppy via `fat_save_file` (a real `_Write`). Verified
+  round-trip: edit → save → close → reopen reads the change back from disk.
+- App keys now route to the topmost window's handler (`WPROC`), wired into
+  the main loop's event drain.
+
+### macplus: disk-loaded app binaries
+
+The launcher can run an app *image* read off the floppy, exactly as the x86
+launcher loads `.BIN`s. `DEMO.APP` is a standalone, position-independent
+68K binary on the FAT12 volume; the kernel reads it into `$40000` and calls
+its entry for each window event (`d0=0` draw / `d0=1` key), handing it
+`a5` = a **ksys service table** (`draw_string`, `fill_rect`,
+`fat_find_file`/`fat_read_file`, `get_ticks`, …) so the app holds no
+absolute kernel addresses. `diskapp.i` is the loader + ABI glue,
+`demo_app.asm` the sample app.
+
+### macplus: harness + build
+
+The ROM-free Unicorn harness now emulates `_Write` ($A003) as well as
+`_Read`, so the entire filesystem path runs without an Apple ROM;
+`tests/m2.script` is the M2 regression (mount, list, open, edit, save,
+persist, then load the disk app and drive its key handler). `mkfs.py`
+writes the FAT12 volume (the `disk/*.TXT` content plus the assembled
+`DEMO.APP`) into the image after `mkdisk.py` packs the boot blocks + kernel.
+
 ## [Mac SE/II support + platform-authentic chrome] - 2026-06-12
 
 ### macplus: machine-adaptive input + Mac II geometry

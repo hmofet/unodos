@@ -1,4 +1,4 @@
-# UnoDOS/MacPlus — standalone OS for compact 68000 Macs (milestone 1)
+# UnoDOS/MacPlus — standalone OS for compact 68000 Macs (milestone 2)
 
 This is the Mac port done the way the other UnoDOS ports are done: **a real
 operating system**, not an application. The Mac ROM bootstraps our boot
@@ -31,6 +31,28 @@ boot — see *Machine-adaptive input* below.
    services" — the only ROM facility UnoDOS uses, and only for disk I/O.
 3. [kernel.asm](kernel.asm) masks interrupts, installs its own vectors,
    takes the VIA and SCC, and never returns.
+
+## Filesystem & apps (milestone 2)
+
+Past the kernel image, the boot floppy carries a plain **FAT12 volume**
+(starting at sector 256), the same on-disk layout the x86 UnoDOS port
+uses — so the disk is readable on a PC (`mtools`, `tools/dump_fat12.py`).
+The kernel reads and writes it through the ROM .Sony driver via the same
+`_Read`/`_Write` A-traps the boot blocks use ([sony.i](sony.i)), with a
+portable 68K FAT12 core ([fat12.i](fat12.i), shared with the Amiga port).
+
+- **Files** lists the root directory; arrows select, Enter opens a file
+  in Notepad, `r` refreshes.
+- **Notepad** views/edits text; typing edits, arrows + Backspace navigate,
+  and **Clr** (the M0110A keypad clear, raw `$50`) saves back to the
+  floppy (`fat_save_file`, a real `_Write`).
+- **Disk-loaded apps**: the launcher reads an app *image* off the floppy
+  into `$40000` and runs it — exactly as the x86 launcher loads `.BIN`s.
+  The app ([demo_app.asm](demo_app.asm) → `DEMO.APP`) is position-
+  independent 68K code the kernel calls with `d0=0` (draw) / `d0=1` (key),
+  handing it `a5` = a **ksys service table** (draw_string, fill_rect,
+  fat_find_file/read_file, get_ticks, …) so it holds no absolute kernel
+  addresses. [diskapp.i](diskapp.i) is the loader + ABI glue.
 
 ## Hardware layer (everything else is the portable UnoDOS core)
 
@@ -77,7 +99,8 @@ Mac II class needs the `mac2` geometry build and a B&W monitor setting.
 
 Needs vasmm68k_mot (same toolchain as the Amiga/Genesis ports) and
 Python 3. `mkdisk.py` packs boot blocks + kernel and patches the boot
-block's `ioReqCount` with the real kernel size.
+block's `ioReqCount` with the real kernel size; `mkfs.py` then writes the
+FAT12 volume (the `disk/*.TXT` content plus the assembled `DEMO.APP`).
 
 ## Testing without an Apple ROM
 
@@ -91,13 +114,23 @@ scripted input (`pip install unicorn`):
 ```sh
 ./build.sh test
 python3 harness.py build/unodos_macplus_test.dsk shots < tests/m1.script
+./build.sh            # the plain image carries the FAT12 volume + DEMO.APP
+python3 harness.py build/unodos_macplus.dsk shots < tests/m2.script
 ```
+
+The harness plays the .Sony driver for **both** `_Read` and `_Write`
+against the disk image, so the whole filesystem path is exercised ROM-free.
 
 Verified in the harness (milestone 1): boot chain end-to-end, desktop +
 icons, window raise on title/body click, title-bar drag with XOR outline,
 close box, ESC close, double-click launch, arrow-key icon selection via
 the real M0110A prefix protocol, Enter launch, 1-second topmost-only
 refresh, software cursor save-under across all of it.
+
+Verified in the harness (milestone 2, `tests/m2.script`): mount the FAT12
+volume, list the root directory, open a file in Notepad, edit it, save it
+back to the floppy (`_Write`), close + reopen and confirm the edit
+persisted, then load `DEMO.APP` off the floppy and drive its key handler.
 
 ## Mini vMac validation (real Mac Plus ROM) — PASSED 2026-06-12
 
@@ -146,9 +179,10 @@ set the monitor to **B&W (1-bit)** until the color milestone.
   input (Plus M0110/SCC vs. SE/II ROM-assisted ADB) and the Mac II 640x480
   geometry variant. System 7-style window chrome (drop shadows, pinstriped
   active title bar, square close box).
-- **M2 (next)**: the UnoDOS floppy filesystem (shared layout with the
-  x86 port) and **disk-loaded app binaries** — the launcher reads app
-  images off the floppy via the .Sony BIOS layer like the x86 launcher
-  reads .BINs; Files/Notepad land here.
+- **M2 (this)**: the UnoDOS floppy filesystem (FAT12, shared layout with
+  the x86 port) read **and written** through the .Sony BIOS layer; the
+  **Files** and **Notepad** apps; and **disk-loaded app binaries** — the
+  launcher reads an app image off the floppy into `$40000` and runs it via
+  a position-independent ksys-table ABI, like the x86 launcher reads .BINs.
 - **M3+**: sound (the Plus pulse-width sound buffer), Theme equivalent
   (dither schemes), Tracker, games, scheduler, Paint — Amiga parity.
