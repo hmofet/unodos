@@ -1,4 +1,4 @@
-# UnoDOS/Mac — classic Mac OS ports (milestone 2.5)
+# UnoDOS/Mac — classic Mac OS ports (milestone 3)
 
 Two Macintosh ports of the UnoDOS desktop, from **one C codebase**
 (`unodos.c`), built with the [Retro68](https://github.com/autc04/Retro68)
@@ -25,8 +25,8 @@ canonical 1-bit Mac look.
 
 ## Apps
 
-Nine apps from one codebase (the color-only **Theme** app makes it nine
-on UnoDOS7, eight icons on UnoDOSClassic):
+Eleven apps from one codebase (the color-only **Theme** app makes it
+eleven on UnoDOS7, ten icons on UnoDOSClassic):
 
 - **Sys Info**, **Clock** — system panels.
 - **Files**, **Notepad**, **Music** — the milestone-2 trio (below).
@@ -42,6 +42,16 @@ on UnoDOS7, eight icons on UnoDOSClassic):
 - **Pac-Man** — port of `apps/pacman.asm`: full 28×25 maze, three-ghost
   AI (Blinky red, Pinky pink, Clyde orange), scatter/chase schedule,
   frightened mode with the 200→1600 chain.
+- **Tracker** — the shared 32-row × 4-channel pattern editor
+  (byte-identical SONG.TRK format) on up to four Sound Manager
+  square-wave channels; the noise column plays a low thump. s/l save
+  and load through the File Manager.
+- **Paint** — the MacPaint-style editor: tool palette (pencil, brush,
+  eraser, line, rect, filled rect, oval, filled oval, flood fill,
+  spray), drag drawing with rubber-band shapes, white canvas with a
+  byte-per-pixel backing store. Color selector: the full 8-bit gamut
+  (a 256-swatch picker) on UnoDOS7; authentic 1-bit dither patterns
+  on UnoDOSClassic. PAINT.UNO save/load.
 
 A platform-themed splash (a happy compact Mac + "UnoDOS 3") shows on
 boot on both targets.
@@ -66,6 +76,35 @@ color carries a 4-slot fallback so the mono target keeps its authentic
   on the Sound Manager square-wave synth (`noteSynth`/`noteCmd`), with a
   staff view, per-note playback highlight, and Space to play/stop. If the
   Sound Manager is unavailable the app runs visual-only.
+
+## Milestone 3 — multitasking + PC floppies (2026-06-12)
+
+- **Cooperative scheduler**: every window's app proc runs in its own
+  task with a private heap stack and a one-slot event mailbox — the
+  same model as the Amiga/Genesis schedulers. The context switch is
+  ~6 lines of 68K asm (callee-saved `movem` + SP swap); `StkLowPt`
+  is cleared so the classic stack sniffer accepts the task stacks
+  (the Thread Manager's own convention). Keys post with a bounded
+  yield-retry so typing bursts survive the single mailbox slot.
+- **PC-compatible floppies (FAT12 read/write)**: a portable FAT12
+  core in C over an injectable 512-byte block device. The Files app
+  cycles volumes with `V` (HFS ↔ PC disk); opening a FAT file loads
+  it into Notepad and Cmd-S writes it back to the volume it came
+  from. The real device is raw `.Sony` driver sector access; under
+  Executor (no floppy emulation) a RAM-backed FAT12 image stands in
+  so the whole stack stays emulator-testable. PC interchange is
+  verified by `mac/test_fat12.py`, which compiles the same core
+  host-side, writes an image through it, and re-reads it with an
+  independent FAT12 parser byte-for-byte.
+
+**Booting vs. reading PC disks**: the Mac targets are Toolbox
+*applications*, not a bootable OS — the machine boots classic Mac OS
+from an HFS volume (Macs cannot boot from FAT media at all), and
+UnoDOS launches as an app. PC floppies are **data volumes only**,
+mounted from inside the running app via Files → `V`. Hardware note:
+only SuperDrive (FDHD) machines can physically read 1.44 MB MFM PC
+disks; the 800K GCR-only drives in the Mac Plus and early SE cannot,
+regardless of software.
 
 ## Strategy
 
@@ -135,12 +174,18 @@ stack), `UnoDOS7FTest` (Files enters a subdirectory), `UnoDOS7ThTest`
 (long-hold splash), `UnoDOS7DtTest`/`UnoDOS7OlTest`/`UnoDOS7PmTest`
 (the games play real moves at boot).
 
-## Known limitations (milestone 2.5)
+## Known limitations (milestone 3)
 
-- Single cooperative event loop (the scheduler is scaffolding); the
-  WM/app tables already support more.
 - Notepad: no horizontal scroll (long lines clip), 4 KB buffer, no
-  find/replace; Files: 24-entry listing cap.
+  find/replace; Files: 24-entry listing cap (16 on the PC volume).
+- The FAT12 `.Sony` raw-sector path is real-hardware-only (Executor
+  has no floppy); the RAM-image fallback covers the logic in CI.
+- Tracker polyphony depends on the Sound Manager mixing multiple
+  square-wave channels (System 6.0.7+/real hardware; Executor may
+  voice fewer).
+- The milestone-3 features are build- and host-test-verified; an
+  Executor visual pass is pending (no automated capture path in the
+  current rig — a Windows-native Executor would fix that).
 - Executor quirk: TickCount() advances much faster than 60 Hz, so the
   ~2s splash hold races by under Executor; timing is correct on real
   hardware. UnoDOS7SpTest holds long for screenshot runs.

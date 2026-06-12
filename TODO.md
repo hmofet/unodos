@@ -97,7 +97,14 @@ Next steps:
       leftmost-voice playback, shared SONG.TRK format - QEMU-verified
       with the demo song playing) and apps/paint.asm (QEMU-verified:
       drag strokes, filled shapes, spray, CGA all-colors picker)
+- [x] Window click routing fix (2026-06-12): find_window_at returned
+      hits with stale flags on Genesis AND Amiga - every window click
+      fell through to the desktop (found on real Genesis hardware;
+      AUTOTEST_CLICK now guards it by closing a window's close box)
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
+- [ ] Mac: Executor visual pass for the milestone-3 features (blocked
+      on a capture path; a Windows-native Executor build would let the
+      automated rig drive it like BlastEm/WinUAE)
 
 ## Genesis Port (2026-06-12) - MILESTONES 1-6 DONE (Amiga parity)
 - [x] M0 boot PoC (TMSS, VDP init, font tiles, splash) — verified in

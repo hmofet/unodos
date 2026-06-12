@@ -6,14 +6,14 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 
 ## Overview
 
-UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 16 applications, fits on a single 1.44MB floppy disk.
+UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 18 applications, fits on a single 1.44MB floppy disk.
 
 ### Philosophy
 
 - **GUI-First**: No command line. The system boots directly into a graphical desktop with draggable icons, windows, and mouse support.
 - **Bare Metal**: Runs on raw hardware using only BIOS services. No DOS, no runtime, no dependencies.
 - **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an original IBM PC with 128KB RAM and a CGA card.
-- **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and all 16 applications fit on one floppy disk.
+- **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and the application set fit on one floppy disk.
 
 ## Ports
 
@@ -25,10 +25,10 @@ assessment and plan):
 
 | Port | Target hardware | Approach | Status |
 |---|---|---|---|
-| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | **Milestone 3** — cooperative multitasking, writable FAT12 disks (DF1, PC-interchangeable), splash, 10 apps incl. the three games and a music Tracker |
-| [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | Milestone 2.5 — desktop, WM, splash, 9 apps incl. the three games |
-| [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | Milestone 2.5 — same set minus the color-only Theme app |
-| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop, hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6** — Amiga-port parity: cooperative multitasking, 10 apps incl. the three games, Theme + Tracker, SRAM + tape/WAV + Sega CD backup-RAM storage; **runs on real hardware** |
+| [**Amiga**](amiga/) | A500-class, OCS/ECS, 68000, 512KB | Bare-metal: self-booting ADF, copper/bitplanes (32 colors), hardware-sprite cursor, 4-channel Paula audio | **Milestone 3+** — cooperative multitasking, writable FAT12 disks (DF1, PC-interchangeable), splash, 11 apps incl. the three games, Tracker and Paint |
+| [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | **Milestone 3** — cooperative multitasking, PC-compatible FAT12 floppies (data volumes), 11 apps incl. the three games, Tracker and Paint |
+| [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | **Milestone 3** — same set minus the color-only Theme app (Paint uses the classic dither patterns) |
+| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
 
 A feature-by-feature comparison of all five targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md).
@@ -40,11 +40,13 @@ focus-routed event model, and the shared app set — **Files** (with
 subdirectory navigation on Mac), **Notepad** (caret editor, line
 navigation, live Ln/Co/bytes status bar), **Music** (Canon in D),
 **Theme** (8 shared preset palettes + custom colors on every
-color-capable platform), and the game ports **Dostris**, **OutLast**
-and **Pac-Man** with their music. The Amiga additionally ships
-**Tracker**, a 4-channel Paula pattern editor/player. Verified in
-WinUAE (built-in AROS ROM) and the ROM-free Executor emulator —
-no proprietary ROMs needed to try them.
+color-capable platform), **Tracker** (the 32x4 pattern editor with a
+byte-identical song format on every platform), **Paint** (the
+MacPaint-style editor whose color selector reaches each platform's
+full gamut), and the game ports **Dostris**, **OutLast** and
+**Pac-Man** with their music. Verified in WinUAE (built-in AROS ROM)
+and the ROM-free Executor emulator — no proprietary ROMs needed to
+try them.
 
 ## Screenshots
 
@@ -206,7 +208,7 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 - **Screen blit** — copy a rectangular region of the screen (used for smooth scrolling, animations)
 - **Read pixel** — query the color value at any screen coordinate
 
-## Applications (16 included)
+## Applications (18 in the tree)
 
 | App | Size | Description |
 |-----|------|-------------|
@@ -222,7 +224,11 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 | **Settings** | 34KB | System configuration — font selector with preview, color theme picker (text/background/window, 4 swatches each), video mode selector (CGA/VGA/Mode12h/VESA), RTC time adjustment, defaults button, persists to SETTINGS.CFG |
 | **MkBoot** | 24KB | Boot floppy creator — reads OS and apps from the boot drive, prompts for a blank floppy, writes a complete bootable UnoDOS floppy (boot sector + stage2 + kernel + FAT12 filesystem + all apps) |
 | **SysInfo** | 11KB | System information — displays UnoDOS version, current video mode and resolution, number of running tasks and open windows, real-time clock, available memory, boot drive info |
-| **Mouse Test** | 8KB | Mouse diagnostic — shows real-time cursor position and button states, useful for verifying PS/2/USB mouse support on hardware |
+| **Pac-Man** | 30KB | Arcade port (CGA) — full 28x25 maze, three-ghost AI with scatter/chase schedule, frightened mode with the 200-1600 chain |
+| **Pac-Man VGA** | 31KB | Same gameplay in VGA mode 13h |
+| **Tracker** | 2KB | Pattern music editor — 32 rows x 4 channels, the SONG.TRK format shared byte-for-byte with the Amiga/Mac/Genesis ports; PC-speaker playback voices the leftmost channel |
+| **Paint** | 31KB | MacPaint-style bitmap editor — pencil/brush/eraser/line/rect/oval/fill/spray, drag drawing, color picker covering the active mode's full palette (4 CGA / 256 VGA) |
+| **Mouse Test** | 8KB | Mouse diagnostic — shows real-time cursor position and button states, useful for verifying PS/2/USB mouse support on hardware (not on the default floppy) |
 | **Hello** | 3KB | Minimal windowed app — creates a window, draws "Hello, UnoDOS!", waits for ESC. Serves as a template for new app development |
 
 ## Target Hardware

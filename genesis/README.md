@@ -31,7 +31,16 @@ pattern format, saves to SRAM and tape), **Sega CD backup RAM**
 (Mode-1 Sub-CPU boot + BIOS `_BURAM` stub behind a mailbox RPC; the
 Files app grows a volume toggle), and the **cooperative scheduler**
 (every window's app proc runs in its own task with a private 2KB
-stack, ported from `amiga/scheduler.i`). Verified in BlastEm and **on real hardware (2026-06-12)** — the
+stack, ported from `amiga/scheduler.i`).
+**Paint (2026-06-12)**: the MacPaint-style editor on a canvas of 240
+unique VDP tiles (the Genesis has no bitmap mode) with a
+byte-per-pixel backing store in the spare $FF0000 RAM bank — pencil,
+brush, eraser, line, rect, filled rect, oval, filled oval, flood
+fill, spray; white canvas; the pen strip holds palette line 3 and
+r/g/b tune the selected entry live in CRAM, reaching **all 512
+Genesis colors**. Canvas saves to tape ('t'/'y'). Pad-first
+controls: A = draw, Y = next tool, X = next pen, B = soft keyboard.
+Verified in BlastEm and **on real hardware (2026-06-12)** — the
 cartridge boots and runs on a physical console.
 
 ## Display model
@@ -62,6 +71,11 @@ The soft keyboard covers the rest: full QWERTY, Shift (sticky), F1,
 arrows, Esc — clicked keys post through the same event queue as a real
 keyboard, with the same raw codes as the Amiga port, so apps are
 byte-portable across the 68K family.
+
+**In-app pad keys** (the apps map the synthesized X/Y keys): Files
+X = delete, Tracker X = clear cell, Paint Y = next tool / X = next
+pen. Footer labels name pad buttons; bare letters (q/w, r/g/b, s/l…)
+are soft-keyboard taps — press B to open it.
 
 **Game mode:** while a game window is topmost the pad remaps — d-pad =
 arrow keys (press + hold-repeat), A = Space (drop/action), B = soft
@@ -114,6 +128,7 @@ Python 3. From this directory:
     ./build.sh bram       # Sega CD BRAM round trip (fake transport)
     ./build.sh theme      # Theme app applies the Forest preset
     ./build.sh tracker    # Tracker demo song + playback
+    ./build.sh paint      # Paint scene via the real shape primitives
 
 Tape WAV tooling (the PC is the tape deck):
 
@@ -200,6 +215,12 @@ the caller PC + coordinates rendered in hex on the bottom row.
   task machinery
 - scheduler: the soft-keyboard "UNO" burst, the PS/2 stream, and
   Dostris gravity all run through per-window tasks and mailboxes
+- Paint: rect/oval/line/flood through the real primitives on the
+  unique-tile canvas, white background, pad footers
+- window click routing: the AUTOTEST closes a window via its close
+  box (regression guard for the milestone-1 click-through bug found
+  on real hardware: find_window_at returned hits with stale flags,
+  so every window click fell through to the desktop)
 
 **Real hardware: validated 2026-06-12 — the port runs on a physical
 console.** Still to exercise (adapter hardware): PS/2 keyboard/mouse

@@ -21,7 +21,7 @@ runtime), and runs the UnoDOS desktop with in-kernel apps.
 - **Audio** — 4-channel Paula: square-wave sequencers for the Music app
   and game music, all four DMA channels in the Tracker.
 
-## Apps (10 desktop icons, two rows)
+## Apps (11 desktop icons, two rows)
 
 | App | Notes |
 |---|---|
@@ -35,6 +35,7 @@ runtime), and runs the UnoDOS desktop with in-kernel apps.
 | **OutLast** | port of `apps/outlast.asm` — same track/perspective/traffic/physics, full-color scenery, Sunset Drive on Paula |
 | **Pac-Man** | port of `apps/pacman.asm` — full 28×25 maze, three-ghost AI (Blinky/Pinky/Clyde), scatter/chase schedule, frightened mode; incremental tile rendering |
 | **Tracker** | write + play 4-channel MOD-style music: ProTracker periods (C-2..B-3), 32-row pattern editor, 4 chip-synthesized instruments (square/saw/triangle/noise), demo song, instant edit preview. Keys: arrows move, q/w note, e instrument, x clear, d demo, Space play/stop |
+| **Paint** | MacPaint-style editor: pencil/brush/eraser/line/rect/filled rect/oval/filled oval/flood fill/spray, white canvas, rubber-band shape preview. The pen strip shows all 32 hardware pens; r/g/b tune the selected pen's 12-bit channels live through the copper, so **all 4096 OCS colors** are reachable (UI pens 0–3 locked; the game palette restores on close). s/l saves PAINT.UNO to the DF1 FAT12 disk |
 
 ## Build
 
@@ -125,3 +126,5 @@ themselves are unchanged - the generic task body dispatches to them.
   scaling through the WM; lowres 32-color is the current ceiling.
 - Audio is register-verified (test configs run sound off); real-hardware
   ear-check pending.
+- Paint: shapes preview as a bounding-band; the flood-fill work stack
+  caps at ~500 spans (very intricate regions may fill partially).
