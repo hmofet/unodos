@@ -685,7 +685,13 @@ win_create:
         move.b  d6,(a0,d1.w)
         addq.w  #1,d1
         move.w  d1,zcount-vars(a4)
-        bsr     draw_window
+        ; a second-or-later window deactivates the previous topmost
+        ; (its title stripes must go), so repaint everything then
+        cmp.w   #1,d1
+        beq     .first
+        bsr     repaint_all
+        rts
+.first: bsr     draw_window
         rts
 
 ; win_ptr_raw - d2 = table index -> a2. Preserves d0-d7/a0-a1.
