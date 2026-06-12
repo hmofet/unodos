@@ -114,11 +114,47 @@ def icon_tiles(path):
 for name, binfile in [("sysinfo", "build/sysinfo.bin"),
                       ("clock",   "build/clock.bin"),
                       ("notepad", "build/notepad.bin"),
-                      ("music",   "build/music.bin")]:
+                      ("music",   "build/music.bin"),
+                      ("dostris", "build/tetris.bin"),
+                      ("outlast", "build/outlast.bin"),
+                      ("pacman",  "build/pacman.bin")]:
     if not os.path.exists(binfile):
         sys.exit(f"missing {binfile} - run 'make floppy144' first")
     for i, t in enumerate(icon_tiles(binfile)):
         tiles.append((f"icon {name} {i}", t))
+
+# ---------------- game tiles ----------------
+# solids for palette indexes 5..15 (game colors live in PAL2/PAL3 5-15)
+for idx in range(5, 16):
+    tiles.append((f"solid {idx}", tile_from_rows([[idx] * 8] * 8)))
+
+# Pac-Man maze cell tiles (PAL2: 10 = wall blue, 14 = white, 15 = black,
+# 4 = magenta is NOT in PAL2 - gate uses 13 pink)
+def pm_tile(fn):
+    return tile_from_rows([[fn(x, y) for x in range(8)] for y in range(8)])
+
+tiles.append(("pm wall", pm_tile(
+    lambda x, y: 10 if 0 < x < 7 and 0 < y < 7 else 15)))
+tiles.append(("pm dot", pm_tile(
+    lambda x, y: 14 if 3 <= x <= 4 and 3 <= y <= 4 else 15)))
+tiles.append(("pm power", pm_tile(
+    lambda x, y: 14 if 2 <= x <= 5 and 2 <= y <= 5 else 15)))
+tiles.append(("pm gate", pm_tile(
+    lambda x, y: 13 if 3 <= y <= 4 else 15)))
+
+# actor sprite tiles: pac (yellow 6), ghosts (body color + white eyes),
+# frightened (PAL3: 13 = fright blue, 15 = black eyes), eaten (white core)
+tiles.append(("spr pac", pm_tile(
+    lambda x, y: 6 if 1 <= x <= 6 and 1 <= y <= 6 else 0)))
+def ghost(body, eye):
+    return pm_tile(lambda x, y: eye if y == 2 and x in (2, 5)
+                   else (body if 1 <= x <= 6 and 1 <= y <= 6 else 0))
+tiles.append(("spr ghost red", ghost(12, 14)))
+tiles.append(("spr ghost pink", ghost(13, 14)))
+tiles.append(("spr ghost orange", ghost(11, 14)))
+tiles.append(("spr ghost fright", ghost(13, 15)))
+tiles.append(("spr ghost eaten", pm_tile(
+    lambda x, y: 14 if 3 <= x <= 5 and 3 <= y <= 5 else 0)))
 
 # ---------------- music: Canon in D (PSG, NTSC) ----------------
 F = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "A4": 440,
@@ -132,6 +168,30 @@ tune = ([("C5", QN), ("B4", QN), ("A4", QN), ("G4", QN),
                              "F4", "A4", "E4", "G4", "F4", "A4", "G4", "B4"]])
 PSG_CLK = 3579545
 notes = [(round(PSG_CLK / (32 * F[n])), d, (M[n] - 60) * 2) for n, d in tune]
+
+# ---------------- game songs (parsed from the x86 sources) ----------------
+def parse_song(path, label):
+    src = open(path, encoding="latin-1").read()
+    equs = {m.group(1): int(m.group(2)) for m in
+            re.finditer(r"^(\w+)\s+equ\s+(\d+)", src, re.M)}
+    block = src.split(label + ":", 1)[1]
+    out = []
+    for m in re.finditer(r"dw\s+(\w+),\s*(\w+)", block):
+        f, d = m.group(1), m.group(2)
+        fv = equs.get(f, int(f, 0) if f[0].isdigit() else 0)
+        dv = equs.get(d, int(d, 0) if d[0].isdigit() else 0)
+        if fv == 0xFFFF:
+            break
+        out.append((fv, dv))
+    return out
+
+def song_psg(song):
+    # (freq Hz, dur 18.2Hz ticks) -> (PSG tone value or 0, dur 60Hz ticks)
+    return [(round(PSG_CLK / (32 * f)) if f else 0,
+             max(1, round(d * 33 / 10))) for f, d in song]
+
+koro = song_psg(parse_song("apps/tetris.asm", "korobeiniki"))
+drive = song_psg(parse_song("apps/outlast.asm", "song_game1"))
 
 # ---------------- PS/2 scancode set 2 -> ASCII ----------------
 s2 = {}
@@ -181,6 +241,15 @@ with open(OUT, "w", newline="\n") as f:
     f.write("mus_notes:\n")
     for p, d, y in notes:
         f.write(f"    dc.w {p},{d},{y}\n")
+    f.write("\n; game songs: (PSG tone value or 0, 60Hz ticks) pairs\n")
+    f.write(f"koro_count: dc.w {len(koro)}\n")
+    f.write("koro_notes:\n")
+    for p, d in koro:
+        f.write(f"    dc.w {p},{d}\n")
+    f.write(f"drive_count: dc.w {len(drive)}\n")
+    f.write("drive_notes:\n")
+    for p, d in drive:
+        f.write(f"    dc.w {p},{d}\n")
     f.write("\n; PS/2 scancode set 2 -> ASCII (US layout)\n")
     f.write("ps2map:\n" + bytes_(ps2map) + "\n")
     f.write("ps2map_sh:\n" + bytes_(ps2map_sh) + "\n")

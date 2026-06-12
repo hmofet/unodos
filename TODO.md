@@ -84,9 +84,14 @@ Next steps:
       synthetic streams (AUTOTEST_PS2)
 - [x] M1 apps: SysInfo, Clock, Notepad (caret/line-nav/scroll/status),
       Music (PSG ch0 Canon in D, staff view)
-- [ ] M2: game ports (Dostris/OutLast/Pac-Man) + PSG game music +
-      Tracker over PSG
-- [ ] M3: Theme over CRAM (8 shared presets), Files over a ROM-disk
+- [x] M2 game ports (2026-06-11): Dostris + OutLast + Pac-Man, same
+      tables/physics/AI as x86, cell rendering via the gcol map
+      (Amiga $0RGB -> Genesis $0BGR!), Pac-Man actors as hardware
+      sprites, Korobeiniki/Sunset Drive on PSG ch1, game-mode pad
+      (d-pad = arrows w/ hold-repeat, A=Space, X=new, Y=pause);
+      verified in BlastEm (dostris/outlast/pacman AUTOTESTs)
+- [ ] M3: Theme over CRAM (8 shared presets), Files over a ROM-disk,
+      Tracker over PSG (3 tones + noise)
 - [ ] M4: SRAM storage (unlocks Notepad save)
 - [ ] M5: cooperative scheduler (port amiga/scheduler.i)
 - [ ] Real hardware: PS/2 wiring validation, TMSS on a model 3, pad
