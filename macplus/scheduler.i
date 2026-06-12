@@ -101,22 +101,26 @@ task_spawn:
         movem.l (sp)+,d0-d2/a0-a2
         rts
 
-; task_body - generic app task: wait for events, dispatch to the proc
+; task_body - generic app task: wait for events, dispatch to the proc.
+; The proc index is RE-DERIVED from the window table every event - app
+; handlers are free to clobber any register (found the hard way: Theme's
+; apply runs repaint_all, whose window loop counts in d7, which used to
+; be this task's cached proc - every later key then went to proc 1).
 task_body:
-        ; identify my proc from my window slot
+.loop:  bsr     task_wait           ; -> d0 = type, d1 = ascii, d2 = raw
+        move.w  d0,d4               ; event type aside
+        movem.l d1-d2,-(sp)         ; key args survive the proc lookup
         move.w  cur_task(pc),d2
         subq.w  #1,d2               ; window slot
         bsr     win_ptr_raw         ; a2 = window entry
-        moveq   #0,d7
-        move.b  WPROC(a2),d7
-.loop:  bsr     task_wait           ; -> d0 = type, d1 = ascii, d2 = raw
-        cmp.w   #1,d0
+        movem.l (sp)+,d1-d2
+        moveq   #0,d0
+        move.b  WPROC(a2),d0
+        cmp.w   #1,d4
         bne     .tick
-        move.w  d7,d0
         bsr     app_key_dispatch
         bra     .loop
-.tick:  move.w  d7,d0
-        bsr     app_tick_dispatch
+.tick:  bsr     app_tick_dispatch
         bra     .loop
 
 ; task_wait - block (yielding) until this task's mailbox has an event
@@ -240,7 +244,10 @@ app_key_dispatch:
         beq     .music
         cmp.w   #10,d0
         beq     .tracker
+        cmp.w   #11,d0
+        beq     .theme
         rts
+.theme:   bra     theme_key
 .files:   bra     files_key
 .notepad: bra     notepad_key
 .diskapp: bra     diskapp_key
