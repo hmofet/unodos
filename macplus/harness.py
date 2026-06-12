@@ -211,12 +211,15 @@ class Mac:
     def _intr(self, uc, intno, user):
         pc = uc.reg_read(UC_M68K_REG_PC)
         if intno == 0x100:          # RTE: end of an injected ISR
-            # Restore happens OUTSIDE emulation (context_restore inside a
-            # hook does not redirect the running translation block the way
-            # reg_write(PC) does). Flag it and stop the slice.
+            # Restore the saved context in-hook, then force the PC
+            # redirect with an explicit reg_write (context_restore alone
+            # does not retarget the running translation block; a PC write
+            # does). Keeping the slice alive matters: stopping the slice
+            # at every RTE starved the main thread to ~1/3 throughput
+            # once the keyboard moved to two interrupts per tick.
             if self.ctx_stack:
-                self.rte_flag = True
-                uc.emu_stop()
+                uc.context_restore(self.ctx_stack.pop())
+                uc.reg_write(UC_M68K_REG_PC, uc.reg_read(UC_M68K_REG_PC))
                 return
             self.fail = f"RTE with no injected interrupt @ {pc:#x}"
             uc.emu_stop()
