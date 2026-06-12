@@ -5,6 +5,37 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Cross-platform parity wave 2] - 2026-06-12
+
+### Paint everywhere, Tracker everywhere, Mac multitasking + PC disks
+
+- **Paint on all five targets** - the MacPaint-style editor (tool
+  palette, drag-to-draw canvas with byte-per-pixel backing store,
+  pencil/brush/eraser/line/rect/filled-rect/oval/filled-oval/flood
+  fill/spray) with a per-platform "all the colors" selector: 256
+  8-bit colors (Mac 7), authentic 1-bit dither patterns (Mac
+  Classic), all 4096 OCS colors via live copper pen tuning (Amiga),
+  all 512 colors via CRAM tuning (Genesis), and the active mode's
+  full palette incl. a 256-color VGA picker (x86). One shared
+  Bresenham/scanline-oval/flood design; a real e2-reuse Bresenham
+  bug was caught by the Genesis AUTOTEST and fixed on every port.
+- **Tracker on x86 + Mac** - every platform now has the 32x4 pattern
+  editor with the byte-identical SONG.TRK format (PC speaker plays
+  the leftmost voice; the Mac drives up to four Sound Manager square
+  channels). QEMU-verified playback on x86.
+- **Mac cooperative multitasking** (milestone 3): per-window tasks
+  with a 68K asm context switch, heap stacks, one-slot mailboxes -
+  both Mac targets, same semantics as the Amiga/Genesis schedulers.
+- **Mac PC-compatible floppy**: FAT12 read/write core over an
+  injectable block device (.Sony raw sectors on real SuperDrives; a
+  RAM image under Executor); Files gains an HFS <-> PC disk volume
+  toggle and Notepad round-trips files. The core's output image was
+  verified byte-for-byte with an independent FAT12 parser.
+- Genesis port validated on real hardware (2026-06-12).
+- Known issue filed: the x86 launcher's 16-icon table includes its
+  own Refresh slot, so only 15 apps fit; MOUSE.BIN/MKBOOT.BIN left
+  off the default floppy as the workaround (still build from source).
+
 ## [Genesis milestones 3 + 5 + 6] - 2026-06-12
 
 ### Sega Genesis / Mega Drive: full Amiga-port parity (v0.2.0)

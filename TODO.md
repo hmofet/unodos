@@ -16,6 +16,16 @@ All items from docs/AUDIT-HANDOFF-2026-06.md §5 are done:
       drag clamping, body click-to-raise)
 - [x] Dynamic QEMU regression scenarios re-run green against Build 405
 
+### Known issue (2026-06-12): root-dir entries past 16 break app launch
+The low-res launcher has 16 icon slots (MAX_ICONS_LO) and the LAST one
+is its own Refresh icon - so only 15 apps fit. App #16+ collides with
+the refresh slot: blank icon, launch becomes a disk rescan (or fails).
+Repro: add a 16th .BIN to the floppy144 list and Enter-launch the last
+icons. Fix direction: exclude the refresh slot from MAX_ICONS_LO math
+or page the icon grid. Workaround shipped: MOUSE.BIN and MKBOOT.BIN
+(diagnostic/utility) left off the default image so Tracker + Paint fit
+in the 15-app envelope; both still build via 'make apps'.
+
 ### Remaining 8088 follow-ups
 - [ ] Real-hardware validation on an 8088 (86Box/PCem or physical XT) —
       QEMU cannot emulate an 8088; current builds are assembler-verified
@@ -65,8 +75,28 @@ Next steps:
       keys + frame ticks posted by the kernel task, spawn/kill tied
       to window create/close. Verified in WinUAE: game gravity and
       the FAT12 write flow both run through the task machinery.
-- [ ] Mac: milestone 3 scheduler (needs C coroutines; the WM/app
-      tables are ready)
+- [x] Mac: milestone 3 scheduler (2026-06-12): per-window cooperative
+      tasks in unodos.c - 68K asm context switch (movem + SP swap),
+      heap stacks, one-slot mailboxes with key yield-retry, StkLowPt
+      cleared per the Thread Manager convention; both targets
+- [x] Mac Tracker (2026-06-12): the 32x4 pattern editor on up to four
+      Sound Manager square channels, byte-identical pattern format,
+      SONG.TRK via the File Manager
+- [x] Mac PC floppy (2026-06-12): FAT12 R/W core in C over an
+      injectable block device (.Sony raw driver on SuperDrives; RAM
+      image under Executor); Files 'v' volume toggle, Notepad
+      round-trip; PC-interchange verified byte-for-byte by an
+      independent parser (mac/test_fat12.py)
+- [x] Paint on ALL FIVE targets (2026-06-12): the MacPaint-style
+      editor (pencil/brush/eraser/line/rect/frect/oval/foval/flood/
+      spray) with platform-gamut color selectors - 256 8-bit colors
+      on Mac 7, 1-bit dither patterns on Classic, 4096 via copper
+      pens on Amiga, 512 via CRAM line-3 tuning on Genesis, full
+      mode palette on x86 incl. the 256-color VGA picker
+- [x] x86 Tracker + Paint (2026-06-12): apps/tracker.asm (PC speaker,
+      leftmost-voice playback, shared SONG.TRK format - QEMU-verified
+      with the demo song playing) and apps/paint.asm (QEMU-verified:
+      drag strokes, filled shapes, spray, CGA all-colors picker)
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
 
 ## Genesis Port (2026-06-12) - MILESTONES 1-6 DONE (Amiga parity)
