@@ -260,6 +260,14 @@ Next steps:
 - [ ] M2 real-hardware risk: .Sony _Read/_Write *after* the kernel has
       taken the VIA/SCC is harness- and spec-validated but unproven on
       metal (the boot-time _Read path is). Watch this on the SE/IIci run.
+- [x] REAL-HW FIX (2026-06-12, first SE run): Sad Mac 0F/00000001 - the
+      boot block + sony.i hardcoded drive 1; a FloppyEmu on the external
+      port boots as drive 2/3. Both layers now honor BootDrive ($210);
+      distinctive fail codes ($42 read failed / $43 kernel magic missing);
+      harness boots from drive 2 and asserts the drive number end-to-end.
+      Sad Mac decode for future runs: 0F/xx = SysError xx during boot;
+      0F/0001 from a current build = a REAL bus error (our codes are
+      $42/$43).
 ### M3: full app parity - COMPLETE 2026-06-12
 macplus now carries the entire shared app roster (11 apps + the
 disk-loaded Demo): SysInfo, Clock, Files, Notepad, Dostris, Pac-Man,
