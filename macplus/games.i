@@ -19,6 +19,8 @@ DOSTRIS_PROC equ 5
 ; main loop to keep running (so gravity advances without input). Keeps the
 ; idle optimisation intact for everything else.
 tick_wanted:
+        move.b  mus_playing(pc),d0  ; Music plays even when not topmost
+        bne     .yes0
         move.w  zcount(pc),d0
         beq     .no
         movem.l d2/a2,-(sp)
@@ -50,10 +52,13 @@ tick_wanted:
 .no2:   movem.l (sp)+,d2/a2
 .no:    moveq   #0,d0
         rts
+.yes0:  moveq   #1,d0
+        rts
 
 ; games_tick - per-pass tick dispatch from the main loop
 games_tick:
         bsr     gm_tick
+        bsr     music_tick
         bsr     dostris_tick
         bsr     pacman_tick
         bsr     outlast_tick

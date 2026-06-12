@@ -26,4 +26,14 @@ shot m3_paint_cleared
 key l                        # load back from the floppy
 wait 40
 shot m3_paint_loaded         # the rect is back (byte-exact round-trip)
+key esc                      # close Paint
+wait 3
+dblclick 372 96              # open Music (icon/proc 9)
+wait 8
+key space                    # play Canon in D (square voice)
+wait 60
+shot m3_music_playing        # staff + dithered notes, playing note black
+key space                    # stop (buffer silenced)
+wait 6
+shot m3_music_stopped
 quit

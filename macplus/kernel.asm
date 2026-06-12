@@ -116,7 +116,7 @@ DBLCLICK    equ 30                  ; double-click window (0.5s)
 ICON0_X     equ 48
 ICON0_Y     equ 40
 ICON_PITCH  equ 80
-NICONS      equ 9                   ; SysInfo Clock Files Notepad Demo Dostris Pac-Man OutLast Paint
+NICONS      equ 10                  ; + Dostris Pac-Man OutLast Paint Music on row 2
 NBUF        equ 2048                ; Notepad edit buffer
 
 CURSOR_H    equ 14
@@ -374,6 +374,8 @@ handle_events:
         beq     .koutlast
         cmp.w   #8,d0
         beq     .kpaint
+        cmp.w   #9,d0
+        beq     .kmusic
         bra     .next
 .kfiles:
         bsr     files_key
@@ -395,6 +397,9 @@ handle_events:
         bra     .next
 .kpaint:
         bsr     paint_key
+        bra     .next
+.kmusic:
+        bsr     music_key
         bra     .next
 .desktop:
         cmp.b   #$4E,d2
@@ -948,6 +953,8 @@ raise_window:
 
 ; close_window - d0 = z index
 close_window:
+        bsr     gm_stop             ; close silences audio (PORT-SPEC SS2)
+        bsr     music_stop
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
@@ -1177,7 +1184,11 @@ app_draw_content:
         beq     .pacm
         cmp.w   #7,d0
         beq     .outl
-        bsr     paint_draw          ; proc 8: Paint
+        cmp.w   #8,d0
+        beq     .pnt
+        bsr     music_draw          ; proc 9: Music
+        bra     .done
+.pnt:   bsr     paint_draw          ; proc 8: Paint
         bra     .done
 .outl:  bsr     outlast_draw        ; proc 7: OutLast
         bra     .done
@@ -2258,6 +2269,7 @@ ev_get:
         include "games.i"
         include "pacman.i"
         include "paint.i"
+        include "music.i"
 
 ; ============================================================================
 ; Data
@@ -2317,6 +2329,7 @@ app_def_tab:
         dc.w    110,60,272,196, str_t_pacman-start
         dc.w    96,72,312,180,  str_t_outlast-start
         dc.w    95,68,312,192,  str_t_paint-start
+        dc.w    140,100,240,120, str_t_music-start
 
 icon_tab:
         dc.l    icon_sysinfo
@@ -2328,6 +2341,7 @@ icon_tab:
         dc.l    icon_pacman
         dc.l    icon_outlast
         dc.l    icon_paint
+        dc.l    icon_music
 name_tab:
         dc.l    name_sysinfo
         dc.l    name_clock
@@ -2338,6 +2352,7 @@ name_tab:
         dc.l    name_pacman
         dc.l    name_outlast
         dc.l    name_paint
+        dc.l    name_music
 
 ; ---------------------------------------------------------------- keymaps
 ; M0110/M0110A scan code (post-prefix page at $40) -> ASCII, unshifted US.
@@ -2444,6 +2459,12 @@ gm_owner:       dc.w    0           ; owning proc (mutes when not topmost)
 gm_ix:          dc.w    0
 snd_ok:         dc.b    0           ; machine has the PWM buffer
 gm_on:          dc.b    0
+; ---- Music app (proc 9) ----
+        even
+mus_end:        dc.l    0           ; tick the current note ends at
+mus_ix:         dc.w    0
+mus_playing:    dc.b    0
+                dc.b    0
 
 ; ---- M2: FAT12 + Files/Notepad state (appended; M1 offsets unchanged so
 ; the harness's vars+28 mouse mirror still lines up) ------------------------
