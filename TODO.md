@@ -254,3 +254,8 @@ Next steps:
       delays (nops may need widening on real silicon)
 - [ ] Harness: SE/Classic variants (screen base differences), bus-error
       injection to exercise the kernel fault screens
+- [ ] macplus harness: rare cosmetic artifact - a 2-char gap can appear in
+      a label drawn while interrupt injection is active (strings + kernel
+      verified intact; Mini vMac renders the same frame correctly). Suspect
+      draw_char 2-byte RMW vs injection boundary; purely a harness
+      fidelity issue, does not affect real hardware

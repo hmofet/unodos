@@ -959,7 +959,13 @@ win_create:
         move.w  d1,zcount-vars(a4)
         move.w  d6,d0
         bsr     task_spawn          ; milestone 3: the app gets a task
-        bsr     draw_window         ; topmost: nothing else needs repainting
+        ; a second-or-later window deactivates the previous topmost
+        ; (its title stripes must go), so repaint everything then
+        cmp.w   #1,zcount-vars(a4)
+        beq     .first
+        bsr     repaint_all
+        rts
+.first: bsr     draw_window
         rts
 
 ; win_ptr_raw - d2 = table index -> a2. Preserves d0-d7/a0-a1.
@@ -1107,10 +1113,51 @@ repaint_all:
         bra     .wins
 .done:  rts
 
-; draw_window - a2 = window entry (frame + title + close + content)
+; draw_window - a2 = window entry. System 7-style chrome: dark drop
+; shadow (pen 23), white title bar with theme-color pinstripes when
+; active (topmost), centered title, square close box (hit region
+; unchanged: rightmost 12px).
 draw_window:
         move.l  a2,-(sp)
-        ; content background (blue)
+        ; drop shadow: right edge (clipped to the screen)
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        cmp.w   #SCRW,d0
+        bge     .nrsh
+        move.w  WY(a2),d1
+        addq.w  #1,d1
+        move.w  WH(a2),d3
+        move.w  d1,d4
+        add.w   d3,d4
+        cmp.w   #SCRH,d4
+        ble     .rshok
+        move.w  #SCRH,d3
+        sub.w   d1,d3
+        ble     .nrsh
+.rshok: moveq   #1,d2
+        moveq   #23,d4
+        bsr     fill_rect
+        move.l  (sp),a2
+.nrsh:  ; drop shadow: bottom edge
+        move.w  WY(a2),d1
+        add.w   WH(a2),d1
+        cmp.w   #SCRH,d1
+        bge     .nbsh
+        move.w  WX(a2),d0
+        addq.w  #1,d0
+        move.w  WW(a2),d2
+        move.w  d0,d4
+        add.w   d2,d4
+        cmp.w   #SCRW,d4
+        ble     .bshok
+        move.w  #SCRW,d2
+        sub.w   d0,d2
+        ble     .nbsh
+.bshok: moveq   #1,d3
+        moveq   #23,d4
+        bsr     fill_rect
+        move.l  (sp),a2
+.nbsh:  ; content background (blue)
         move.w  WX(a2),d0
         addq.w  #1,d0
         move.w  WY(a2),d1
@@ -1137,23 +1184,72 @@ draw_window:
         move.w  WH(a2),d3
         bsr     rect_outline_white
         move.l  (sp),a2
-        ; title text (blue on white)
-        move.l  WTITLE(a2),a0
+        ; pinstripes (theme pen 0), only when active (= topmost)
+        move.w  zcount(pc),d2
+        subq.w  #1,d2
+        bmi     .inactive
+        move.l  a2,d5
+        bsr     zwin_ptr            ; a2 = topmost (preserves data regs)
+        move.l  a2,d6
+        move.l  d5,a2
+        cmp.l   d5,d6
+        bne     .inactive
+        moveq   #2,d6               ; rows y+2, y+4, y+6, y+8
+.stripe:
         move.w  WX(a2),d0
-        addq.w  #4,d0
+        addq.w  #3,d0
         move.w  WY(a2),d1
-        addq.w  #1,d1
-        moveq   #0,d2
-        moveq   #3,d3
-        bsr     draw_string_bg
-        move.l  (sp),a2
-        ; close glyph
-        lea     str_x(pc),a0
+        add.w   d6,d1
+        move.w  WW(a2),d2
+        subq.w  #6,d2
+        moveq   #1,d3
+        moveq   #0,d4
+        bsr     fill_rect
+        addq.w  #2,d6
+        cmp.w   #TBAR_H-1,d6
+        blt     .stripe
+.inactive:
+        ; close box: white patch + empty square (hit region unchanged)
         move.w  WX(a2),d0
         add.w   WW(a2),d0
-        sub.w   #10,d0
+        sub.w   #13,d0
         move.w  WY(a2),d1
         addq.w  #1,d1
+        moveq   #11,d2
+        moveq   #TBAR_H-2,d3
+        moveq   #3,d4
+        bsr     fill_rect
+        move.l  (sp),a2
+        move.w  WX(a2),d0
+        add.w   WW(a2),d0
+        sub.w   #11,d0
+        move.w  WY(a2),d1
+        addq.w  #2,d1
+        moveq   #7,d2
+        moveq   #7,d3
+        moveq   #1,d4
+        bsr     fill_rect_color0_outline
+        move.l  (sp),a2
+        ; centered title (blue) on a white patch
+        move.l  WTITLE(a2),a0
+        bsr     str_len             ; d0 = chars (preserves a0)
+        lsl.w   #3,d0
+        move.w  WW(a2),d1
+        sub.w   d0,d1
+        lsr.w   #1,d1
+        move.w  d0,d2
+        move.w  WX(a2),d0
+        add.w   d1,d0
+        move.l  a0,-(sp)
+        subq.w  #4,d0
+        move.w  WY(a2),d1
+        addq.w  #1,d1
+        addq.w  #8,d2
+        moveq   #TBAR_H-2,d3
+        moveq   #3,d4
+        bsr     fill_rect
+        move.l  (sp)+,a0
+        addq.w  #4,d0
         moveq   #0,d2
         moveq   #3,d3
         bsr     draw_string_bg
@@ -1163,6 +1259,42 @@ draw_window:
         move.b  WPROC(a2),d0
         bsr     app_draw_content
         move.l  (sp)+,a2
+        rts
+
+; fill_rect_color0_outline - d0=x d1=y d2=w d3=h: 1px outline in pen 0
+fill_rect_color0_outline:
+        movem.w d0-d3,-(sp)
+        moveq   #1,d3
+        moveq   #0,d4
+        bsr     fill_rect
+        movem.w (sp),d0-d3
+        add.w   d3,d1
+        subq.w  #1,d1
+        moveq   #1,d3
+        moveq   #0,d4
+        bsr     fill_rect
+        movem.w (sp),d0-d3
+        moveq   #1,d2
+        moveq   #0,d4
+        bsr     fill_rect
+        movem.w (sp),d0-d3
+        add.w   d2,d0
+        subq.w  #1,d0
+        moveq   #1,d2
+        moveq   #0,d4
+        bsr     fill_rect
+        movem.w (sp)+,d0-d3
+        rts
+
+; str_len - a0 = NUL string -> d0 = length. Preserves a0.
+str_len:
+        move.l  a0,-(sp)
+        moveq   #0,d0
+.scan:  tst.b   (a0)+
+        beq     .done
+        addq.w  #1,d0
+        bra     .scan
+.done:  move.l  (sp)+,a0
         rts
 
 ; ============================================================================
