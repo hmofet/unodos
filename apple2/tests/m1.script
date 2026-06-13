@@ -1,0 +1,13 @@
+# UnoDOS/AppleII milestone-1 regression.
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m1.script
+wait 60
+shot m1_boot          # desktop + menu bar + SysInfo + Clock (AUTOTEST)
+key right             # move icon selection
+shot m1_select
+key return            # launch selected app
+wait 5
+shot m1_launch
+key esc               # close topmost
+wait 30               # let the soft clock advance
+shot m1_clock         # Clock shows a later time than m1_boot
+quit

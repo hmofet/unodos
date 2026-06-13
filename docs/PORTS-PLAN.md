@@ -49,12 +49,12 @@ cycle-honest Disk II emulation is what proves the RWTS before metal).
 Real hardware: the user's FloppyEmu does Disk II emulation.
 
 **Milestones.**
-- M1 (this milestone, partially built): boot chain + RWTS-read, hi-res
-  desktop + menu bar, window manager (open/raise/close, keyboard-driven),
-  SysInfo (machine detect via $FBB3/$FBC0) + Clock (calibrated soft tick —
-  no timer hardware), 7-px shared font, harness + tests/m1.script.
-  DONE so far: toolchain, mkfont.py, boot.s (boot0 + GCR RWTS + loader).
-  TODO: kernel.s, mkdsk.py, harness.py, build.sh, tests, README.
+- M1 (DONE): boot chain + RWTS-read, hi-res desktop + menu bar, window
+  manager (open/raise/close, keyboard-driven), SysInfo (machine detect via
+  $FBB3/$FBC0) + Clock (calibrated soft tick — no timer hardware), 7-px
+  shared font, ROM-free py65 harness + tests/m1.script (4 screenshots,
+  verified). TICK_INSTRS=5000 / KEY_INSTRS=30000 calibration documented in
+  apple2/README.md. Real-hardware (AppleWin/FloppyEmu) pass still pending.
 - M2: RWTS write path; a track/sector mini-FS (USV1-style catalog — FAT12
   doesn't fit GCR sector space sensibly); Files + Notepad; paddle/joystick
   pointer option; speaker beeps.
@@ -165,9 +165,23 @@ or USB stick.
 
 ---
 
+## Implementation handoffs (build-level companions to this plan)
+
+Each port has a Sonnet-ready handoff capturing the contracts, file-by-
+file work, reference map and risks. Read the relevant one before
+touching code; update it (and this plan) when a milestone closes.
+
+- Apple II: [../apple2/HANDOFF.md](../apple2/HANDOFF.md) (M1 done),
+  [HANDOFF-M2.md](../apple2/HANDOFF-M2.md),
+  [HANDOFF-M3.md](../apple2/HANDOFF-M3.md)
+- Apple IIGS: [../iigs/HANDOFF.md](../iigs/HANDOFF.md) (M0–M3 phased)
+- SNES: [../snes/HANDOFF.md](../snes/HANDOFF.md) (M0–M3 phased)
+- PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M3 phased)
+
 ## Sequencing & checkpoints
 
-1. **Apple II M1** — finish in flight (kernel/harness/disk packer remain).
+1. **Apple II M1** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
+   pass still pending.
 2. **Chrome themes** (queued directive) — natural slot while Apple II
    real-hw feedback is pending; touches only existing color ports.
 3. **Apple II M2-M3** interleaved with **IIGS M0-M1**.

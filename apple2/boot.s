@@ -35,7 +35,7 @@ zpSecMaskH equ $F4                  ; (hi) sectors of this track still wanted
 zpDst    equ $F6                    ; current page base (hi byte) of track dst
 zpPtr    equ $F8                    ; data pointer (2)
 zpTmp    equ $FA
-zpSec    equ $FB                    ; physical sector from the address field
+zpSec    equ $F5                    ; physical sector from the address field
 zpTrkRd  equ $FC                    ; track from the address field
 zpRetry  equ $FD
 
