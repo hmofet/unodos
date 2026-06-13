@@ -328,23 +328,33 @@ mac/ hosted, Genesis; macplus (1-bit) and x86 CGA keep their native look.
 - [ ] Expose the picker in each port's Theme/Appearance app; persist the
       choice with the palette/theme settings
 
-## New ports in progress (2026-06-12 direction)
-- [ ] Apple IIGS port (65C816, Super Hi-Res 320x200x4bpp / 640x200, ADB
-      mouse + keyboard, Ensoniq DOC audio) - closest 8/16-bit fit to the
-      portable core; START HERE of the two (true bitmap + pointer + color).
-      Boot via ProDOS-loaded binary or a bootable disk image; desktop + WM
-      + SysInfo/Clock first (the macplus M1 shape), then storage, then apps.
-- [ ] Apple II port (6502, feasibility study FIRST per PORT-SPEC: 280x192
-      hi-res monochrome-ish, no native pointer - mouse via the AppleMouse
-      card or keyboard-driven cursor; double-hi-res 16-color on //e/IIc).
-      The 6502 + 8KB-ish RAM envelope is the real risk; may land as a
-      cut-down "UnoDOS Lite" (text desktop) rather than full parity.
-
-## Roadmap (not started)
-- [ ] SNES port (65C816 like the IIGS, so the IIGS port paves the way):
-      Mode 1/3 backgrounds for the desktop, OBJ sprite cursor, SPC700 audio,
-      controller-as-pointer + soft keyboard (the Genesis input model), SRAM
-      storage. Start AFTER the Apple II + IIGS ports are complete.
+## New ports program (2026-06-12; full plan: docs/PORTS-PLAN.md)
+Order: Apple II -> (chrome themes) -> Apple IIGS -> SNES -> PS2. Each
+milestone ships with a scripted regression rig + screenshots, macplus-style.
+- [ ] Apple II (IN PROGRESS): 6502/dasm/py65; Disk II boot via T0S0
+      autoload + own GCR read-RWTS; 280x192 hi-res 1-bit; keyboard-driven
+      "UnoDOS Lite" desktop. M1 done so far: toolchain, mkfont.py, boot.s
+      (boot0 + 6-and-2 RWTS + multi-track loader). Remaining M1: kernel.s,
+      mkdsk.py, harness.py (py65), build.sh, tests/m1.script, README.
+      Validation: py65 harness -> AppleWin (proves RWTS) -> FloppyEmu.
+      M2: RWTS write + USV1-style FS + Files/Notepad + paddle pointer.
+      M3: Dostris/Pac-Man/Paint/Tracker(blocking speaker)/Theme-dithers;
+      OutLast feasibility-gated at 1MHz.
+- [ ] Apple IIGS: 65C816/ca65; firmware block boot (the macplus model:
+      SmartPort = the .Sony equivalent); SHR 320x200x16 desktop; ADB
+      firmware-state input; FAT12 in the 800K block space; Ensoniq
+      wavetable Music/Tracker. Harness decision at M0 (py65816 vs GSplus
+      scripting). FloppyEmu covers real-hw media.
+- [ ] SNES: 65816 toolchain shared with IIGS; the GENESIS architecture
+      re-expressed (tile desktop, sprite cursor, pad-as-pointer + soft
+      keyboard, SNES Mouse, SRAM USV1 FS); SPC700 uploaded audio driver
+      is the hardest novel piece. Rig: Mesen2 (the BlastEm role).
+- [ ] PS2 via FreeMcBoot: PS2SDK ELF launched by FMCB; port the PORTABLE
+      C CORE from mac/unodos.c over a gsKit/pad/mc/audsrv platform layer;
+      pad-as-pointer + soft keyboard always, USB kbd/mouse when present;
+      memory-card file storage. Rig: PCSX2 boots ELFs directly.
+      Open Qs: SNES flashcart + Mouse on hand? PS2 USB kbd? MC vs USB
+      storage primary? Apple II target machine (II+/IIe/IIc)?
 
 ## Platform-authentic chrome (2026-06-12 direction)
 - [x] Mac ports: classic Mac / System 7 look (shadows, pinstriped active
