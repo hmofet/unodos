@@ -53,6 +53,24 @@ zpSS        equ $23
 clkbuf      equ $24   ; (9) "HH:MM:SS",0
 zpTens      equ $2D
 
+; ---- zero page ($3B-$4D: Files/Notepad apps; fs.i owns $2E-$3A) ----
+zpDVlo   equ $3B   ; (2) draw_dec16 working value
+zpDVhi   equ $3C
+zpDDig   equ $3D   ; draw_dec16 current digit
+zpDLead  equ $3E   ; draw_dec16 leading-zero-suppress flag
+zpNPtr   equ $3F   ; (2) notepad_draw: pointer into NOTEBUF
+zpNRem   equ $41   ; (2) notepad_draw: bytes remaining in scan
+zpNTot   equ $43   ; (2) notepad_draw pass1: total line count (1-based)
+zpNFCol  equ $45   ; (2) notepad_draw pass1: final (cursor) column, 0-based
+zpNSkip  equ $47   ; (2) notepad_draw: lines to skip (tail scroll)
+zpNVis   equ $49   ; notepad_draw pass2: current line visible flag
+zpNLine  equ $4A   ; (2) notepad_draw pass2: current line number (0-based)
+zpNCol   equ $4C   ; notepad_draw pass2: current screen column (capped 40)
+zpNRow   equ $4D   ; notepad_draw pass2: current screen row
+
+zpBeepHalf equ $4E ; beep: half-period delay constant
+zpBeepN    equ $4F ; beep: remaining $C030 toggles
+
 ; ---- screen layout constants ----
 SCRCOLS         equ 40
 SCRROWS         equ 24
@@ -82,11 +100,24 @@ LABELY          equ 168
 LABELROW        equ 21
 ICON0_X         equ 2     ; SysInfo icon
 ICON1_X         equ 14    ; Clock icon
+ICON2_X         equ 26    ; Files icon
+
+; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
+; (as draw_desktop), rows1-22 = content, row23 = status/help line.
+APP_CONTENT_Y   equ 8     ; pixel row of content row1
+APP_CONTENT_H   equ 176   ; 22 rows * 8px
+APP_VIEW_ROWS   equ 22
+APP_STATUS_Y    equ 184   ; pixel row of row23
+NOTE_MAXLEN     equ 2048  ; notepad text buffer cap
 
 ; TICKS_PER_SEC: main-loop passes per soft-clock second. Calibrated with
 ; harness.py's TICK_INSTRS so `wait N` advances clock_secs predictably
 ; (HANDOFF SS6b) - see harness.py for the paired constant and the math.
 TICKS_PER_SEC   equ 1000
+
+; KBSS: kernel buffers (RWTS decode tables, FS/file buffers) live above the
+; assembled image - mkdsk.py asserts the image fits below this.
+KBSS            equ $6000
 
         org $4000
 
@@ -108,9 +139,14 @@ start2:
         sta zlist+1
         sta focus
 
+        jsr rwts_init
+        jsr fs_init
+
         jsr draw_desktop
 
         ifconst AUTOTEST
+        jsr rwts_selftest
+        jsr fs_selftest
         lda #0
         jsr open_or_raise       ; open SysInfo
         lda #1
@@ -149,17 +185,30 @@ ml_check:
         bne ml_cdraw
         inc clock_secs+1
 ml_cdraw:
+        lda app_mode            ; Files/Notepad cover the desktop - don't
+        bne mainloop            ; let the clock redraw clobber them
         lda win_state+1
         beq mainloop
         jsr draw_clock_content
         jmp mainloop
 
-; handle_key - A = key code from $C000 (bit7 set). ESC always closes the
-; topmost window (kernel-side). Otherwise: if the desktop has focus,
-; left/right move sel_icon and Return launches/raises the selected app;
-; if a window has focus, other keys are routed to it (no-op for M1 apps).
+; handle_key - A = key code from $C000 (bit7 set). When a Files/Notepad app
+; is active (app_mode != 0), keys are routed there entirely. Otherwise: ESC
+; closes the topmost window; if the desktop has focus, left/right move
+; sel_icon (3 icons: SysInfo/Clock/Files, wrapping) and Return
+; launches/raises the selected app; if a window has focus, other keys are
+; routed to it (no-op for M1 apps).
 handle_key:
         sta zpTmp
+        lda app_mode
+        beq hk_desktop
+        cmp #1
+        bne hk_notepad
+        jmp files_key
+hk_notepad:
+        jmp notepad_key
+hk_desktop:
+        lda zpTmp
         cmp #$9B                ; ESC
         bne hk_notesc
         jsr close_topmost
@@ -172,17 +221,37 @@ hk_notesc:
         cmp #$8D                ; Return
         beq hk_return
         cmp #$95                ; right
-        beq hk_move
+        beq hk_right
         cmp #$88                ; left (== backspace on a II+)
-        beq hk_move
+        beq hk_left
         jmp hk_done
-hk_move:
-        lda sel_icon            ; only 2 icons: left/right both toggle
-        eor #1
+hk_left:
+        lda sel_icon
+        bne hkl_dec
+        lda #2
         sta sel_icon
+        jmp hk_redraw
+hkl_dec:
+        dec sel_icon
+        jmp hk_redraw
+hk_right:
+        lda sel_icon
+        cmp #2
+        bne hkr_inc
+        lda #0
+        sta sel_icon
+        jmp hk_redraw
+hkr_inc:
+        inc sel_icon
+hk_redraw:
         jsr draw_icons
         rts
 hk_return:
+        lda sel_icon
+        cmp #2
+        bne hk_ret_win
+        jmp files_open
+hk_ret_win:
         lda sel_icon
         jsr open_or_raise
         lda sel_icon
@@ -648,6 +717,36 @@ fmt2_done:
         rts
 
 ; ============================================================================
+; speaker - blocking tone generator (HANDOFF-M2 SS5)
+; ============================================================================
+
+; beep - A = half-period delay constant, X = number of $C030 toggles (2 per
+; full cycle). Blocking: each toggle is followed by a busy-wait of ~(5*A+1)
+; cycles, so frequency ~= 1MHz / (2*(5*A+~10)) and duration ~= toggles *
+; that half-period. Clobbers A/X/Y/zpBeepHalf/zpBeepN.
+beep:
+        sta zpBeepHalf
+        stx zpBeepN
+bp_toggle:
+        lda $C030               ; toggle the speaker
+        ldx zpBeepHalf
+bp_delay:
+        dex
+        bne bp_delay
+        dec zpBeepN
+        bne bp_toggle
+        rts
+
+; beep_click - ~1kHz, ~100ms: app launch, save complete, FULL/error.
+BEEP_CLICK_HALF  equ 99
+BEEP_CLICK_COUNT equ 200
+
+beep_click:
+        lda #BEEP_CLICK_HALF
+        ldx #BEEP_CLICK_COUNT
+        jmp beep
+
+; ============================================================================
 ; desktop chrome - menu bar, dithered background, icon grid
 ; ============================================================================
 
@@ -689,7 +788,7 @@ draw_desktop:
         jsr dither_rect
         rts
 
-; draw_icons - redraw both desktop icons, highlighting sel_icon.
+; draw_icons - redraw all desktop icons, highlighting sel_icon.
 draw_icons:
         lda #ICON0_X
         sta zpFX
@@ -721,6 +820,22 @@ di0_go:
 di1_sel:
         lda #1
 di1_go:
+        jsr draw_icon
+
+        lda #ICON2_X
+        sta zpFX
+        lda #<msg_files
+        sta zpPtr
+        lda #>msg_files
+        sta zpPtr+1
+        lda sel_icon
+        cmp #2
+        beq di2_sel
+        lda #0
+        jmp di2_go
+di2_sel:
+        lda #1
+di2_go:
         jsr draw_icon
         rts
 
@@ -927,7 +1042,8 @@ dr_done:
         rts
 
 ; draw_char - A=char code (32-126), position zpCol/zpRow, EOR mask zpInv.
-; clobbers zpTmp, zpFontPtr, zpRowLoPtr/Hi, zpDst, A/X/Y.
+; clobbers zpTmp, zpFontPtr, zpRowLoPtr/Hi, zpDst, A; preserves X/Y (so
+; callers may use X/Y as their own per-character loop counters).
 draw_char:
         sec
         sbc #32
@@ -970,6 +1086,10 @@ dc_nc:
         adc #0
         sta zpRowHiPtr+1
 
+        tya
+        pha
+        txa
+        pha
         ldx #0
 dc_loop:
         txa
@@ -988,6 +1108,10 @@ dc_loop:
         inx
         cpx #8
         bne dc_loop
+        pla
+        tax
+        pla
+        tay
         rts
 
 ; draw_string - zpPtr = null-terminated string, position zpCol/zpRow,
@@ -1006,12 +1130,387 @@ ds_loop:
 ds_done:
         rts
 
+; draw_name12 - zpFSPtr = pointer to a 12-byte NUL-padded name field; draws
+; all 12 bytes at zpCol/zpRow (zpInv mode), NUL shown as space (so columns
+; stay aligned in a listing). Advances zpCol by 12.
+draw_name12:
+        ldy #0
+dn12_loop:
+        lda (zpFSPtr),y
+        bne dn12_ch
+        lda #$20
+dn12_ch:
+        jsr draw_char
+        inc zpCol
+        iny
+        cpy #12
+        bne dn12_loop
+        rts
+
+; draw_name12_title - zpFSPtr = pointer to a 12-byte NUL-padded name field;
+; draws up to 12 chars, stopping at the first NUL (no trailing padding).
+; Advances zpCol accordingly.
+draw_name12_title:
+        ldy #0
+dnt_loop:
+        lda (zpFSPtr),y
+        beq dnt_done
+        jsr draw_char
+        inc zpCol
+        iny
+        cpy #12
+        bne dnt_loop
+dnt_done:
+        rts
+
+; draw_dec16 - zpFSSize (2-byte LE, 0..65535) -> decimal digits at
+; zpCol/zpRow (zpInv mode), no leading zeros ("0" for zero). Advances
+; zpCol by the number of digits printed. Clobbers zpFSSize/zpDV*/zpDDig/
+; zpDLead/A; preserves X/Y (X is used internally as the digit-place index,
+; saved/restored via the stack).
+dec16_lo: dc.b <10000,<1000,<100,<10,<1
+dec16_hi: dc.b >10000,>1000,>100,>10,>1
+
+draw_dec16:
+        txa
+        pha
+        lda zpFSSize
+        sta zpDVlo
+        lda zpFSSize+1
+        sta zpDVhi
+        lda #0
+        sta zpDLead
+        ldx #0
+dd16_digit:
+        lda #0
+        sta zpDDig
+dd16_sub:
+        lda zpDVhi
+        cmp dec16_hi,x
+        bcc dd16_done
+        bne dd16_doit
+        lda zpDVlo
+        cmp dec16_lo,x
+        bcc dd16_done
+dd16_doit:
+        lda zpDVlo
+        sec
+        sbc dec16_lo,x
+        sta zpDVlo
+        lda zpDVhi
+        sbc dec16_hi,x
+        sta zpDVhi
+        inc zpDDig
+        jmp dd16_sub
+dd16_done:
+        lda zpDDig
+        bne dd16_print
+        lda zpDLead
+        bne dd16_print
+        cpx #4
+        beq dd16_print
+        jmp dd16_next
+dd16_print:
+        lda #1
+        sta zpDLead
+        lda zpDDig
+        clc
+        adc #$30
+        jsr draw_char
+        inc zpCol
+dd16_next:
+        inx
+        cpx #5
+        bne dd16_digit
+        pla
+        tax
+        rts
+
+        ifconst AUTOTEST
+; ---------------------------------------------------------------- rwts_selftest
+; rwts_selftest - M2 SS1 proof gate: read track RWTS_TTRACK logical sector
+; RWTS_TSEC into SECBUF, XOR every byte with $FF, write the result back,
+; re-read into SECBUF2, and compare. Draws "RWTS PASS"/"RWTS FAIL" on the
+; title bar (row 0, right of "UnoDOS"). RWTS_TTRACK/TSEC now sit inside the
+; kernel's own image (the kernel has grown past track 1 since M1, when track
+; 2 was scratch) - the XORed pattern is written back to SECBUF and restored
+; to disk afterward (pass or fail) so a --writeback image isn't corrupted.
+RWTS_TTRACK equ 2
+RWTS_TSEC   equ 3
+
+rwts_selftest:
+        lda #RWTS_TTRACK
+        sta zpTrkWant
+        lda #<SECBUF
+        sta zpBuf
+        lda #>SECBUF
+        sta zpBuf+1
+        lda #RWTS_TSEC
+        jsr rwts_read
+
+        ldy #0
+rst_xor:
+        lda SECBUF,y
+        eor #$FF
+        sta SECBUF,y
+        iny
+        bne rst_xor
+
+        lda #RWTS_TTRACK
+        sta zpTrkWant
+        lda #<SECBUF
+        sta zpBuf
+        lda #>SECBUF
+        sta zpBuf+1
+        lda #RWTS_TSEC
+        jsr rwts_write
+
+        lda #RWTS_TTRACK
+        sta zpTrkWant
+        lda #<SECBUF2
+        sta zpBuf
+        lda #>SECBUF2
+        sta zpBuf+1
+        lda #RWTS_TSEC
+        jsr rwts_read
+
+        ldy #0
+rst_cmp:
+        lda SECBUF,y
+        cmp SECBUF2,y
+        bne rst_fail
+        iny
+        bne rst_cmp
+
+        lda #<msg_rwts_pass
+        sta zpPtr
+        lda #>msg_rwts_pass
+        sta zpPtr+1
+        jmp rst_restore
+rst_fail:
+        lda #<msg_rwts_fail
+        sta zpPtr
+        lda #>msg_rwts_fail
+        sta zpPtr+1
+
+; ---- restore the test sector to its pre-test contents (SECBUF is still the
+; XORed pattern; XOR it back to the original and write it out) ----
+rst_restore:
+        ldy #0
+rst_unxor:
+        lda SECBUF,y
+        eor #$FF
+        sta SECBUF,y
+        iny
+        bne rst_unxor
+
+        lda #RWTS_TTRACK
+        sta zpTrkWant
+        lda #<SECBUF
+        sta zpBuf
+        lda #>SECBUF
+        sta zpBuf+1
+        lda #RWTS_TSEC
+        jsr rwts_write
+
+        lda #22
+        sta zpCol
+        lda #0
+        sta zpRow
+        lda #0
+        sta zpInv
+        jmp draw_string
+
+; ---------------------------------------------------------------- fs_selftest
+; fs_selftest - M2 SS2 proof gate: exercise fs_find/fs_read/fs_save/
+; fs_delete (incl. heap compaction + directory-slot removal) against the
+; mkfs-seeded catalog. Draws "FS PASS"/"FS FAIL" on the title bar (row 0,
+; col 32). zpTmp ($05, free pre-mainloop) holds the file count across calls.
+; fst_fail is far enough from these checks that direct beq/bne fst_fail
+; would be out-of-range branches; "bcc/bcs/beq/bne *+5 / jmp fst_fail" is
+; the standard dasm short-branch-around-a-jmp idiom (the 2-byte branch
+; skips the 3-byte jmp).
+fs_selftest:
+; ---- 1. find + read the seeded README.TXT (2 sectors) ----
+        lda #<fst_name_readme
+        sta zpFSName
+        lda #>fst_name_readme
+        sta zpFSName+1
+        jsr fs_find
+        cmp #$FF
+        bne *+5
+        jmp fst_fail
+        pha                     ; save dir index - <SECBUF=0 would clobber A
+        lda #<SECBUF
+        sta zpFSDat
+        lda #>SECBUF
+        sta zpFSDat+1
+        pla
+        jsr fs_read
+        lda zpFSSize
+        cmp #<361
+        beq *+5
+        jmp fst_fail
+        lda zpFSSize+1
+        cmp #>361
+        beq *+5
+        jmp fst_fail
+        lda SECBUF
+        cmp #$55                ; 'U'
+        beq *+5
+        jmp fst_fail
+
+; ---- 2. save two small test files ----
+        lda CATBUF+FSC_COUNT
+        sta zpTmp               ; count before (2: HELLO.TXT, README.TXT)
+
+        lda #<fst_name_t1
+        sta zpFSName
+        lda #>fst_name_t1
+        sta zpFSName+1
+        lda #<fst_data1
+        sta zpFSDat
+        lda #>fst_data1
+        sta zpFSDat+1
+        lda #16
+        sta zpFSSize
+        lda #0
+        sta zpFSSize+1
+        jsr fs_save
+        cmp #0
+        beq *+5
+        jmp fst_fail
+
+        lda #<fst_name_t2
+        sta zpFSName
+        lda #>fst_name_t2
+        sta zpFSName+1
+        lda #<fst_data2
+        sta zpFSDat
+        lda #>fst_data2
+        sta zpFSDat+1
+        lda #16
+        sta zpFSSize
+        lda #0
+        sta zpFSSize+1
+        jsr fs_save
+        cmp #0
+        beq *+5
+        jmp fst_fail
+
+        lda CATBUF+FSC_COUNT
+        sec
+        sbc zpTmp
+        cmp #2
+        beq *+5
+        jmp fst_fail
+
+; ---- 3. delete the first test file (not last) -> forces heap compaction ----
+        lda #<fst_name_t1
+        sta zpFSName
+        lda #>fst_name_t1
+        sta zpFSName+1
+        jsr fs_find
+        cmp #$FF
+        bne *+5
+        jmp fst_fail
+        jsr fs_delete
+
+        lda #<fst_name_t1
+        sta zpFSName
+        lda #>fst_name_t1
+        sta zpFSName+1
+        jsr fs_find
+        cmp #$FF
+        beq *+5                 ; FST1 must be gone
+        jmp fst_fail
+
+; ---- 4. the second test file must have survived with its data intact ----
+        lda #<fst_name_t2
+        sta zpFSName
+        lda #>fst_name_t2
+        sta zpFSName+1
+        jsr fs_find
+        cmp #$FF
+        bne *+5
+        jmp fst_fail
+        pha                     ; save dir index - <SECBUF=0 would clobber A
+        lda #<SECBUF
+        sta zpFSDat
+        lda #>SECBUF
+        sta zpFSDat+1
+        pla
+        jsr fs_read
+        ldy #0
+fst_cmp2:
+        lda SECBUF,y
+        cmp fst_data2,y
+        beq *+5
+        jmp fst_fail
+        iny
+        cpy #16
+        bne fst_cmp2
+
+; ---- 5. clean up FST2 too; the catalog must return to its original state ----
+        lda #<fst_name_t2
+        sta zpFSName
+        lda #>fst_name_t2
+        sta zpFSName+1
+        jsr fs_find
+        cmp #$FF
+        bne *+5
+        jmp fst_fail
+        jsr fs_delete
+        lda CATBUF+FSC_COUNT
+        cmp zpTmp
+        beq *+5
+        jmp fst_fail
+
+        lda #<msg_fs_pass
+        sta zpPtr
+        lda #>msg_fs_pass
+        sta zpPtr+1
+        jmp fst_draw
+fst_fail:
+        lda #<msg_fs_fail
+        sta zpPtr
+        lda #>msg_fs_fail
+        sta zpPtr+1
+fst_draw:
+        lda #32
+        sta zpCol
+        lda #0
+        sta zpRow
+        lda #0
+        sta zpInv
+        jmp draw_string
+
+fst_name_readme: dc.b "README.TXT",0,0
+fst_name_t1:     dc.b "FSTEST1.TXT",0
+fst_name_t2:     dc.b "FSTEST2.TXT",0
+fst_data1:       dc.b "FSTEST1 PAYLOAD!"
+fst_data2:       dc.b "FSTEST2 PAYLOAD!"
+        endif
+
 ; ============================================================================
 ; strings
 ; ============================================================================
 msg_title:        dc.b "UnoDOS",0
 msg_sysinfo:      dc.b "SysInfo",0
 msg_clock:        dc.b "Clock",0
+msg_files:        dc.b "Files",0
+msg_files_title:  dc.b "Files",0
+msg_notepad_title: dc.b "Notepad: ",0
+msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
+msg_files_empty:  dc.b "(no files)",0
+msg_confirm1:     dc.b "Delete ",0
+msg_confirm2:     dc.b "? (Y/N)",0
+msg_note_help:    dc.b "  ^S=Save  ESC=Back",0
+msg_ln:           dc.b "Ln:",0
+msg_col:          dc.b "  Col:",0
+msg_bytes:        dc.b "  Bytes:",0
+msg_full:         dc.b "  FULL",0
+msg_saved:        dc.b "  SAVED",0
 msg_cpu:          dc.b "CPU: 6502 @ 1MHz",0
 msg_ram:          dc.b "RAM: 64K",0
 msg_mach_ii:      dc.b "Apple II",0
@@ -1021,6 +1520,13 @@ msg_mach_iie_enh: dc.b "Apple IIe Enh.",0
 msg_mach_iic:     dc.b "Apple IIc",0
 msg_mach_iiefam:  dc.b "Apple IIe family",0
 msg_mach_unk:     dc.b "Apple ?",0
+
+        ifconst AUTOTEST
+msg_rwts_pass:    dc.b "RWTS PASS",0
+msg_rwts_fail:    dc.b "RWTS FAIL",0
+msg_fs_pass:      dc.b "FS PASS",0
+msg_fs_fail:      dc.b "FS FAIL",0
+        endif
 
 ; ============================================================================
 ; hi-res row address tables (lo/hi bytes of the column-0 address for
@@ -1055,15 +1561,30 @@ rowhi:
 
         include "build/font7.s"
 
+        include "rwts.i"
+        include "fs.i"
+        include "files.i"
+        include "notepad.i"
+
 ; ============================================================================
 ; vars - kernel variable block (UDM1 discovery header points here)
 ; ============================================================================
 vars:
 frame_ctr:   dc.w 0       ; vars+0  main-loop pass counter (mod TICKS_PER_SEC)
-sel_icon:    dc.b 0       ; vars+2  desktop icon selection (0=SysInfo,1=Clock)
+sel_icon:    dc.b 0       ; vars+2  desktop icon selection (0=SysInfo,1=Clock,2=Files)
 zcount:      dc.b 0       ; vars+3  number of open windows
 clock_secs:  dc.w 0       ; vars+4  soft-clock seconds since boot
 top_win:     dc.b 0       ; vars+6  zlist[0] mirror ($FF = none)
 focus:       dc.b 0       ; vars+7  $FF = desktop, else focused window id
 win_state:   dc.b 0,0     ; vars+8  per-window open(1)/closed(0)
 zlist:       dc.b 0,0     ; vars+10 z-order, [0]=topmost, $FF=empty
+
+; ---- Files/Notepad app state ----
+app_mode:    dc.b 0       ; 0=desktop, 1=Files, 2=Notepad
+files_sel:   dc.b 0       ; selected directory index in Files
+files_confirm: dc.b 0     ; 0=normal, 1=awaiting delete y/n
+note_idx:    dc.b 0       ; directory index Notepad was opened from
+note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
+note_len:    dc.w 0       ; current buffer length (bytes)
+note_dirty:  dc.b 0       ; 1 if unsaved changes
+note_flash:  dc.b 0       ; status line: 0=help, 1=SAVED, 2=FULL

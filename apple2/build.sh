@@ -28,4 +28,7 @@ echo "[3/4] assembling boot.s and kernel.s..."
 
 echo "[4/4] packing the 35-track DOS-order disk image..."
 "$PY" mkdsk.py build/boot.bin build/kernel.bin "$DSK"
+
+echo "[5/5] formatting the mini-FS and seeding disk/*.TXT..."
+"$PY" mkfs.py "$DSK"
 echo "done: $DSK"

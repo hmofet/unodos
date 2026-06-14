@@ -1,4 +1,4 @@
-# UnoDOS/AppleII — standalone OS for the 6502 Apple II (milestone 1)
+# UnoDOS/AppleII — standalone OS for the 6502 Apple II (milestone 2)
 
 Like the other bare-metal UnoDOS ports, this is **a real operating
 system**, not a DOS 3.3 application. The Disk II boot ROM autoloads our
@@ -56,11 +56,118 @@ ESC closes the topmost window. Icon selection (left/right arrow) is shown
 by inverting the icon's label band (EOR `$7F`); Return opens or raises
 the selected app's window.
 
+## M2: kernel RWTS (read + write), mini-FS, Files + Notepad, beeps
+
+M2 gives the kernel its own RWTS (boot.s's RWTS lived in the now-reclaimed
+`$0800-$17FF` boot image), a track/sector mini-FS, and two apps that use
+it. The AUTOTEST desktop now shows `RWTS PASS  FS PASS` in the menu bar
+(both self-tests run at boot, before the desktop draws) and a third icon,
+**Files**.
+
+### Kernel RWTS ([rwts.i](rwts.i))
+
+`rwts_read`/`rwts_write` operate on one logical 256-byte sector at a time
+(`zpTrkWant` = track, `A` = logical sector 0-15, `zpBuf`/`zpBuf+1` = buffer
+pointer). The read side is boot.s's `seek`/`readsec` ported essentially
+unchanged (hunt `D5 AA 96`, 4-and-4 address field, match track/sector, hunt
+`D5 AA AD`, 6-and-2 denibble). The write side is new: hunt the target
+sector's address field in read mode, switch to write mode (`$C08F`, Q7 on),
+emit 5 self-sync `$FF` nibbles + `D5 AA AD` + 343 6-and-2 data nibbles
+(`rwts_buildrdbuf2` + `WRTAB`, the mathematical inverse of the read-side
+`DECTAB`/`FLIP2` decode) + `DE AA EB`, then back to read mode (`$C08E`, Q7
+off — this is also where the harness commits the captured write). `$F1`
+(`zpTrkCur`) stays the harness's track-select ABI per HANDOFF.md SS6, unmoved.
+
+**Write timing is unproven until AppleWin.** The harness validates the
+*logical* write protocol only (`DiskII._commit_write` denibblizes the
+captured nibble stream and drops it straight into the `.dsk` image — it
+does not model nibble cell timing). On real hardware every nibble must
+land ~32 cycles apart and the 5 self-sync nibbles use an extended ~40-cycle
+bit cell; `rwts_write` is not yet cycle-counted for that. Before metal:
+boot `unodos_apple2.dsk` in AppleWin (cycle-honest Disk II), edit+save a
+file in Notepad, quit and re-open — if the edit didn't stick, the write
+loop's timing is the first thing to fix.
+
+A boot-time AUTOTEST self-check (`rwts_selftest`, kernel.s) reads track 2
+sector 3, XORs a fixed pattern into the buffer, writes it back, re-reads
+and compares, then **XOR-restores the original bytes and writes them back
+again** before reporting PASS/FAIL — so the round-trip test is non-
+destructive to the disk image.
+
+### Mini-FS — "USV1" sector-heap catalog ([fs.i](fs.i), [mkfs.py](mkfs.py))
+
+Same design as [genesis/sram.i](../genesis/sram.i)'s byte-heap, ported to a
+sector heap (FAT12 doesn't fit GCR sector space sensibly):
+
+- **FS region:** tracks 20-34 (`FS_TRACK=20`, `FS_TRACKS=15`,
+  `FS_SECTORS=240` 256-byte sectors). `mkdsk.py` asserts
+  `1 + KTRACKS <= FS_TRACK` — the kernel has tracks 1-19 (~76 KB) to grow
+  into through M3 before it would collide with the FS.
+- **Catalog = rel sector 0**, cached in RAM at `CATBUF` ($6400) and flushed
+  on every mutation:
+  - `0..3` magic `"USV1"` (written by `mkfs.py`, not re-validated at boot)
+  - `4` file count (0..`FS_MAXFILES`=15)
+  - `5` next-free-sector (rel index; heap grows upward from 1)
+  - `6..15` reserved (0)
+  - `16..255` 15 directory entries x 16 bytes: `name[12]` (NUL-padded),
+    `size` (word, **little-endian** — interchange media, unlike Genesis's
+    BE SRAM), `start` (word LE, rel sector; high byte always 0 since
+    `FS_SECTORS=240 < 256`).
+- A rel sector `r` maps to `(track, logical) = (FS_TRACK + (r>>4), r&$0F)`
+  — `FS_SECTORS=240` is a multiple of 16, so this is exact (no remainder
+  sector spanning two tracks).
+- Files are contiguous runs of rel sectors in the heap (1..239); the last
+  sector of a file may have trailing garbage past its byte size.
+  `fs_delete` compacts the heap (shifts later files' sectors down by the
+  freed count, fixes every entry's `start`, drops the directory slot,
+  flushes). `fs_save` overwrites by **delete-then-append** — same
+  semantics as Genesis, so an edited file moves to the end of the
+  directory listing (visible in `m2_persist_files`: HELLO.TXT, originally
+  first, is last after being edited+saved).
+- API surface matches Genesis: `fs_find`/`fs_read`/`fs_save`/`fs_delete`
+  + `fs_entry_ptr`/`fs_size`/`fs_start` for listing — Files/Notepad call
+  these directly.
+
+`mkfs.py` formats the catalog and seeds `disk/*.TXT` (currently
+`README.TXT` and `HELLO.TXT`) at image-build time; the kernel only ever
+reads/writes the catalog it finds (`fs_init` loads it, never reformats).
+
+### Files + Notepad ([files.i](files.i), [notepad.i](notepad.i))
+
+- **Files**: lists the catalog (name + size, right-justified). Left/right
+  moves the selection, Return opens the selected file in Notepad, ESC
+  returns to the desktop. (`d`-delete and `r`-rescan from HANDOFF-M2 SS3
+  are not yet wired up — only open is needed for M2's read/write/persist
+  loop.)
+- **Notepad**: 2 KB text buffer (`NOTEBUF`, $6500-$6CFF). Typing inserts at
+  the cursor, `$88` (left-arrow/backspace) deletes the previous char,
+  Return inserts a newline, ESC closes. **Ctrl-S saves** (`$93` —
+  Ctrl-letters arrive as codes < `$20 | $80` on every Apple II keyboard).
+  Status line shows `Ln:n Col:n Bytes:n`, redrawn on every edit; a `SAVED`
+  flash confirms `fs_save` completed. Hard line breaks only (no word wrap).
+
+### Speaker beeps ([kernel.s](kernel.s) `beep`/`beep_click`)
+
+`$C030` is a read-toggled cone; `beep` is a cycle-timed toggle loop
+(half-period + count parameters — blocking, the honest Apple II reality).
+`beep_click` (~1 kHz, ~100 ms: `BEEP_CLICK_HALF=99`, `BEEP_CLICK_COUNT=200`)
+fires on app launch (Files, Notepad) and Notepad save-complete/buffer-full.
+The harness counts `$C030` accesses; `tests/m2.script` asserts the count is
+nonzero after the edit+save sequence.
+
+### Paddle/joystick pointer
+
+**Not implemented in M2** (HANDOFF-M2 SS4 flags this as optional, "do not
+block M2 on it"). Files/Notepad are fully keyboard-driven (left/right +
+Return + ESC + Ctrl-S), so M2 ships without `$C070`/`$C064`/`$C065` paddle
+polling or a pointer mode.
+
 ## Building
 
 ```sh
 ./build.sh        # build/unodos_apple2.dsk       (plain boot)
-./build.sh test   # build/unodos_apple2_test.dsk  (AUTOTEST: opens SysInfo + Clock)
+./build.sh test   # build/unodos_apple2_test.dsk  (AUTOTEST: opens SysInfo + Clock,
+                  #                                 runs RWTS + FS self-tests)
 ```
 
 Needs `dasm` (6502 cross-assembler, `DASM` env var or
@@ -68,7 +175,8 @@ Needs `dasm` (6502 cross-assembler, `DASM` env var or
 the shared font (`amiga/mkdata.py`'s output) to the hi-res 7px convention;
 `mkdsk.py` packs `boot.bin` + `kernel.bin` into a 35-track DOS-order
 140 KB `.dsk`, patching boot.s's `KTRACKS` placeholder to match the
-kernel's size (currently 1 track).
+kernel's size (currently 2 tracks); `mkfs.py` then formats the mini-FS
+catalog (tracks 20-34) and seeds `disk/*.TXT`.
 
 ## Testing without real hardware
 
@@ -90,6 +198,32 @@ AUTOTEST desktop (SysInfo + Clock open), toggle icon selection, launch
 the selected app, close it, and let the soft clock advance — 4
 screenshots (`m1_boot`, `m1_select`, `m1_launch`, `m1_clock`).
 
+[tests/m2.script](tests/m2.script) drives the M2 surface: boot (now
+showing `RWTS PASS  FS PASS` and the Files icon), open Files (lists
+`HELLO.TXT` 87 / `README.TXT` 361), open `HELLO.TXT` in Notepad, type
+`hello` (status goes `Bytes:87` -> `Bytes:92`), Ctrl-S to save (asserts
+the speaker beep counter > 0) — 5 screenshots (`m2_desktop`, `m2_files`,
+`m2_notepad`, `m2_edited`, `m2_saved`). Run with `--writeback` to persist
+the edit to a new `.dsk`:
+
+```sh
+python3 harness.py build/unodos_apple2_test.dsk shots \
+  --writeback build/unodos_apple2_test_written.dsk < tests/m2.script
+```
+
+[tests/m2_persist.script](tests/m2_persist.script) then re-boots from
+`build/unodos_apple2_test_written.dsk` and verifies the mutation survived
+the power cycle: Files now lists `HELLO.TXT` at 92 bytes (delete-then-
+append moved it to the end of the directory, after `README.TXT`), and
+opening it in Notepad shows the edited content ending `...HELLO` with
+`Ln:5 Col:6 Bytes:92` — 2 screenshots (`m2_persist_files`,
+`m2_persist_notepad`):
+
+```sh
+python3 harness.py build/unodos_apple2_test_written.dsk shots \
+  < tests/m2_persist.script
+```
+
 Two harness calibration constants matter for reproducibility:
 - `TICK_INSTRS` (5000): 6502 instruction-steps per `wait` tick, tuned so
   `wait 60` clears AUTOTEST setup with the soft clock at ~2s.
@@ -103,6 +237,14 @@ autoload -> RWTS -> `$4000`), hi-res desktop + menu bar, SysInfo (machine
 ID via `$FBB3`/`$FBC0`, CPU, RAM) and Clock (soft-tick `HH:MM:SS`) windows,
 arrow-key icon-selection highlighting, Return open/raise, ESC close, and
 the soft clock advancing across `wait`s.
+
+Verified in the harness (milestone 2): boot-time RWTS + FS self-tests
+(`RWTS PASS  FS PASS`), Files listing the mini-FS catalog, opening a file
+in Notepad, editing it, Ctrl-S writing the new content + updated catalog
+back to the `.dsk` via the GCR write path (speaker beep on launch/save),
+and — across a simulated power cycle (`--writeback` + re-boot) — the
+edited content, new size, and reordered catalog entry all persisting
+correctly.
 
 ## Real-hardware path (AppleWin -> FloppyEmu)
 
@@ -119,12 +261,13 @@ the soft clock advancing across `wait`s.
 
 ## Milestones
 
-- **M1 (this)**: boot chain (ROM autoload + GCR RWTS-read), hi-res
+- **M1**: boot chain (ROM autoload + GCR RWTS-read), hi-res
   desktop + menu bar, keyboard-driven window manager, SysInfo + Clock
   (soft tick), shared 7px font, ROM-free harness + `tests/m1.script`.
-- **M2**: RWTS write path, a track/sector mini-FS, Files + Notepad,
-  optional paddle/joystick pointer, speaker beeps. See
-  [HANDOFF-M2.md](HANDOFF-M2.md).
+- **M2 (this)**: RWTS write path, a track/sector mini-FS ("USV1" catalog),
+  Files + Notepad, speaker beeps, `tests/m2.script` +
+  `tests/m2_persist.script`. Paddle/joystick pointer (optional per the
+  handoff) not implemented. See [HANDOFF-M2.md](HANDOFF-M2.md).
 - **M3**: scaled apps (Dostris, Pac-Man), Paint, Music/Tracker as
   blocking speaker playback, OutLast feasibility at 1 MHz, Theme dither
   schemes, and an honest evaluation of a cooperative scheduler on the

@@ -1,0 +1,1 @@
+UnoDOS/AppleII - Milestone 2This text lives in the USV1 mini-FS ontracks 20-34 of the boot floppy, read bythe kernel's own RWTS (rwts.i).Files lists the catalog. Left/Right movethe selection, Return opens a file inNotepad, d deletes, r rescans.In Notepad: type to edit, Left isbackspace, Return is newline, Ctrl-Ssaves, Esc closes.(c) 2026 UnoDOS

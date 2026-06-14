@@ -55,9 +55,17 @@ Real hardware: the user's FloppyEmu does Disk II emulation.
   shared font, ROM-free py65 harness + tests/m1.script (4 screenshots,
   verified). TICK_INSTRS=5000 / KEY_INSTRS=30000 calibration documented in
   apple2/README.md. Real-hardware (AppleWin/FloppyEmu) pass still pending.
-- M2: RWTS write path; a track/sector mini-FS (USV1-style catalog — FAT12
-  doesn't fit GCR sector space sensibly); Files + Notepad; paddle/joystick
-  pointer option; speaker beeps.
+- M2 (DONE): RWTS write path (rwts.i, GCR 6-and-2 encoder); a track/sector
+  mini-FS (USV1-style catalog on tracks 20-34, FS_SECTORS=240 — FAT12
+  doesn't fit GCR sector space sensibly); Files + Notepad (Ctrl-S save);
+  speaker beeps (beep_click on launch/save). Paddle/joystick pointer
+  option not implemented (flagged optional in HANDOFF-M2). ROM-free harness
+  extended with a write path + `--writeback`; tests/m2.script (5
+  screenshots, RWTS+FS self-test asserts PASS, beep counter > 0) and
+  tests/m2_persist.script (2 screenshots, verifies an edit survives a
+  simulated power cycle via `--writeback` + re-boot) both verified.
+  Real-hardware write-timing pass (AppleWin) still pending — see
+  apple2/README.md's RWTS write-timing caveat.
 - M3: scaled apps — Dostris and Pac-Man (feasible), Paint (hi-res,
   keyboard/paddle), Tracker as blocking speaker playback (timed square
   waves monopolize the CPU — authentic Apple II reality), Music likewise;
@@ -180,11 +188,11 @@ touching code; update it (and this plan) when a milestone closes.
 
 ## Sequencing & checkpoints
 
-1. **Apple II M1** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
+1. **Apple II M1-M2** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
    pass still pending.
 2. **Chrome themes** (queued directive) — natural slot while Apple II
    real-hw feedback is pending; touches only existing color ports.
-3. **Apple II M2-M3** interleaved with **IIGS M0-M1**.
+3. **Apple II M3** interleaved with **IIGS M0-M1**.
 4. **IIGS M2-M3**, then **SNES M0-M3** (toolchain shared).
 5. **PS2 M0-M3** (independent toolchain; can start anytime if priorities
    shift — nothing upstream feeds it except the C core, which is done).

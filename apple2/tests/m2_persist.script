@@ -1,0 +1,25 @@
+# UnoDOS/AppleII milestone-2 persistence regression: reboot from the disk
+# image written by tests/m2.script (after HELLO.TXT was edited and saved)
+# and verify the mini-FS mutation survived a power cycle: Files lists
+# HELLO.TXT at 92 bytes (was 87; fs_save's delete-then-append reorders the
+# catalog so HELLO.TXT is now last), and opening it in Notepad shows the
+# edited content with "...HELLO" appended and "Bytes:92".
+#
+# Run (after tests/m2.script has produced the writeback image):
+#   python3 harness.py build/unodos_apple2_test_written.dsk shots \
+#     < tests/m2_persist.script
+#
+# Wait values calibrated via run_until_mainloop the same way as m2.script:
+# open Files ~89.5K, files_next (select HELLO.TXT, now index 1) ~49.1K,
+# open Notepad (load the 92B HELLO.TXT from its new heap location) ~132.4K.
+wait 600
+key right                # sel_icon: Clock -> Files
+key return               # launch Files (beep_click)
+wait 13                  # files_open+beep_click+files_draw (~89.5K total)
+shot m2_persist_files    # README.TXT 361 / HELLO.TXT 92 (HELLO now last)
+key right                # files_next -> select HELLO.TXT (index 1)
+wait 5                   # (~49.1K total)
+key return               # open HELLO.TXT (92B) in Notepad (beep_click)
+wait 22                  # notepad_load (fs_read) + beep_click + notepad_draw (~132.4K total)
+shot m2_persist_notepad  # title "Notepad: HELLO.TXT", content ends "...HELLO", "Ln:5 ... Bytes:92"
+quit

@@ -1,7 +1,11 @@
 # UnoDOS/AppleII milestone-1 regression.
 # Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m1.script
-wait 60
-shot m1_boot          # desktop + menu bar + SysInfo + Clock (AUTOTEST)
+# wait 600 (not 60): M2 added rwts_selftest (RWTS round-trip proof gate) to
+# the AUTOTEST boot path, ahead of icon/window setup - it costs ~1.2M extra
+# steps (seek + 2 reads + 1 write of a real sector). The bump is a one-time
+# startup offset; later relative waits are unchanged.
+wait 600
+shot m1_boot          # desktop + menu bar + SysInfo + Clock + "RWTS PASS" (AUTOTEST)
 key right             # move icon selection
 shot m1_select
 key return            # launch selected app

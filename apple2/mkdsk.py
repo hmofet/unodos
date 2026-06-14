@@ -19,6 +19,9 @@ DISK = TRACK * TRACKS    # 143360 bytes, 140K
 KBSS = 0x6000
 KERNLOAD = 0x4000
 
+# mini-FS region (fs.i): tracks FS_TRACK..34 - keep in sync with fs.i
+FS_TRACK = 20
+
 boot_p, kern_p, out_p = sys.argv[1:4]
 boot = bytearray(open(boot_p, "rb").read())
 kern = open(kern_p, "rb").read()
@@ -31,6 +34,8 @@ assert KERNLOAD + len(kern) <= KBSS, \
 
 ktracks = (len(kern) + TRACK - 1) // TRACK
 assert 1 + ktracks <= TRACKS, f"kernel needs {ktracks} tracks, only {TRACKS-1} available"
+assert 1 + ktracks <= FS_TRACK, \
+    f"kernel ({ktracks} track(s)) would overlap the FS region at track {FS_TRACK}"
 
 # patch the unique "CMP #$4B" (C9 4B) -> "CMP #(KTRACKS+1)"
 at = boot.find(b"\xC9\x4B")

@@ -18,7 +18,9 @@ MPU:
     job per docs/PORTS-PLAN.md; cycle/phase-accurate stepper timing is
     AppleWin's job before real hardware.
   - Keyboard: $C000 (data, bit7 = key-waiting) / $C010 (clear strobe).
-  - Speaker $C030: no-op read.
+  - Speaker $C030: read toggles the (unmodeled) speaker cone; the harness
+    just counts accesses (Apple2.beep_count) so tests can assert a beep
+    happened (kernel.s's `beep` blocks on a cycle-timed toggle loop).
   - SysInfo seed bytes: $FBB3/$FBC0 (harness-advertised "ROM" ID, since
     there is no ROM in a ROM-free harness - kernel.s may only READ these).
   - Framebuffer: hi-res page 1 ($2000-$3FFF), de-interleaved 280x192 -> PNG.
@@ -29,6 +31,7 @@ Script on stdin (one command per line, # comments):
   key K             press+release a key (letters, digits, return, esc,
                     space, left, right, up, down, tab, backspace)
   keys STRING       press each character of STRING in turn
+  assert beep>0     fail unless the speaker ($C030) has toggled at least once
   quit              finish
 
 Usage: harness.py <disk.dsk> <artdir> [--trace] < script
@@ -161,23 +164,39 @@ def nibblize_addr(track, sector, volume=0xFE):
     return out
 
 
-def nibblize_track(track, data4096):
-    """4096-byte track image (16 logical 256-byte sectors) -> GCR nibble
-    stream, physical sectors 0..15 in stream order. Physical sector P
-    carries logical sector SKEW[P] (DOS 3.3 soft interleave, boot.s)."""
+def build_track(track, data4096):
+    """4096-byte track image (16 logical 256-byte sectors) -> (stream,
+    addr_chk_pos). stream is the GCR nibble stream, physical sectors 0..15
+    in stream order; physical sector P carries logical sector SKEW[P] (DOS
+    3.3 soft interleave, boot.s). addr_chk_pos maps a stream position (the
+    index of an address field's 'DE' epilogue byte, i.e. where DiskII.pos
+    sits right after rwts_rd44 x4 reads vol/track/sector/checksum) to that
+    sector's physical number P - the kernel-side write path (rwts_write)
+    reads $C08F (enter write mode) at exactly that position, so this is how
+    the harness learns which physical sector a write capture targets
+    (HANDOFF-M2 SS1)."""
     assert len(data4096) == 4096
     stream = []
+    addr_chk_pos = {}
     for phys in range(16):
         logical = SKEW[phys]
         payload = data4096[logical * 256:(logical + 1) * 256]
         stream += [0xFF] * 10
-        stream += nibblize_addr(track, phys)
+        addr = nibblize_addr(track, phys)
+        stream += addr[:11]                # D5 AA 96 + 8 4-and-4 bytes
+        addr_chk_pos[len(stream)] = phys   # position of the 'DE' epilogue byte
+        stream += addr[11:]                # DE AA EB
         stream += [0xFF] * 6
         stream += [0xD5, 0xAA, 0xAD]
         stream += nibblize_data(payload)
         stream += [0xDE, 0xAA, 0xEB]
     stream += [0xFF] * 16
-    return stream
+    return stream, addr_chk_pos
+
+
+def nibblize_track(track, data4096):
+    """Stream only (no write-path index) - used by selftest's round trip."""
+    return build_track(track, data4096)[0]
 
 
 def denibblize_track(stream):
@@ -240,6 +259,34 @@ def selftest():
         back = denibblize_track(stream)
         assert back == data, f"track {track} round trip mismatch"
     print("[selftest] OK")
+    selftest_write()
+
+
+def selftest_write():
+    """HANDOFF-M2 SS1: before the kernel encoder exists, unit-test the
+    harness write path by replaying a synthetic capture (nibblize_data
+    output framed with sync/prologue/epilogue bytes, as rwts_write emits
+    it) through DiskII's enter/write/exit handlers, and assert the payload
+    lands in the in-memory image at the right (track, logical sector)."""
+    print("[selftest] write-path capture/commit round trip...")
+    image = bytearray(35 * 4096)
+    track = 5
+    disk = DiskII(image, {0xF1: track})
+    for phys in (0, 3, 15):
+        disk._ensure_track(track)          # (re)build from the current image
+        pos = next(p for p, ph in disk.addr_chk_pos.items() if ph == phys)
+        disk.pos = pos
+        disk.enter_write_mode(0)
+        payload = bytes((phys * 17 + i * 3 + 7) & 0xFF for i in range(256))
+        capture = [0xFF] * 5 + [0xD5, 0xAA, 0xAD] + nibblize_data(payload) + [0xDE, 0xAA, 0xEB]
+        for b in capture:
+            disk.write_nibble(0, b)
+        disk.exit_write_mode(0)
+        logical = SKEW[phys]
+        off = track * 4096 + logical * 256
+        assert bytes(image[off:off + 256]) == payload, f"write commit mismatch (phys {phys})"
+        assert track not in disk.track_cache, "track cache not invalidated"
+    print("[selftest] OK")
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +320,19 @@ for _c in "abcdefghijklmnopqrstuvwxyz":
 
 
 class DiskII:
+    """Read AND write side of the Disk II data latch (HANDOFF-M2 SS1).
+
+    Read path unchanged from M1: $C08C+slot*16 serves the next GCR nibble
+    of the current track's stream (current track read from zero page $F1 -
+    the zpTrkCur ABI). Write path: rwts_write reads $C08F+slot*16 ("Q7 on")
+    to enter write mode - at that instant DiskII.pos is the addr_chk_pos
+    recorded by build_track for whichever physical sector's address field
+    was just hunted, so that's the write target. Nibbles written to
+    $C08D+slot*16 while in write mode are captured; reading $C08E+slot*16
+    ("Q7 off") commits the capture: find D5 AA AD, denibblize 342 nibbles,
+    store the 256-byte payload into self.image at (track, SKEW[phys]) and
+    invalidate that track's cached stream so subsequent reads see it."""
+
     def __init__(self, image, mem, slot=SLOT):
         self.image = image
         self.mem = mem
@@ -280,20 +340,64 @@ class DiskII:
         self.cur_track = -1
         self.pos = 0
         self.stream = None
+        self.addr_chk_pos = {}
+        self.write_mode = False
+        self.write_phys = None
+        self.capture = []
 
-    def read_data(self, addr):
-        track = self.mem[0xF1]              # zpTrkCur
+    def _ensure_track(self, track):
         if track != self.cur_track:
             self.cur_track = track
             if track not in self.track_cache:
                 off = track * 4096
-                data = self.image[off:off + 4096]
-                self.track_cache[track] = nibblize_track(track, data)
-            self.stream = self.track_cache[track]
+                data = bytes(self.image[off:off + 4096])
+                self.track_cache[track] = build_track(track, data)
+            self.stream, self.addr_chk_pos = self.track_cache[track]
             self.pos = 0
+
+    def read_data(self, addr):
+        track = self.mem[0xF1]              # zpTrkCur
+        self._ensure_track(track)
         b = self.stream[self.pos]
         self.pos = (self.pos + 1) % len(self.stream)
         return b
+
+    def enter_write_mode(self, addr):
+        self.write_mode = True
+        self.write_phys = self.addr_chk_pos.get(self.pos)
+        self.capture = []
+        return 0
+
+    def write_nibble(self, addr, value):
+        if self.write_mode:
+            self.capture.append(value)
+        return None
+
+    def exit_write_mode(self, addr):
+        if self.write_mode and self.capture:
+            self._commit_write(self.cur_track, self.write_phys, self.capture)
+        self.write_mode = False
+        self.capture = []
+        return 0
+
+    def _commit_write(self, track, phys, capture):
+        if phys is None:
+            return
+        for i in range(len(capture) - 2):
+            if capture[i] == 0xD5 and capture[i + 1] == 0xAA and capture[i + 2] == 0xAD:
+                start = i + 3
+                break
+        else:
+            return
+        if start + 342 > len(capture):
+            return
+        payload = denibblize_data(capture[start:start + 342])
+        logical = SKEW[phys]
+        off = track * 4096 + logical * 256
+        self.image[off:off + 256] = payload
+        self.track_cache.pop(track, None)
+        if self.cur_track == track:
+            self.cur_track = -1            # force a rebuild from self.image
 
 
 class Keyboard:
@@ -317,7 +421,7 @@ class Keyboard:
 
 class Apple2:
     def __init__(self, disk_path, artdir, trace=False):
-        self.disk = open(disk_path, "rb").read()
+        self.disk = bytearray(open(disk_path, "rb").read())
         assert len(self.disk) == 35 * 4096, \
             f"expected a 140K (35-track) image, got {len(self.disk)} bytes"
         self.artdir = artdir
@@ -327,12 +431,19 @@ class Apple2:
         self.mem = ObservableMemory()
         self.disk2 = DiskII(self.disk, self.mem)
         self.kbd = Keyboard()
-        data_addr = 0xC08C + SLOT * 16       # $C0EC
+        data_addr = 0xC08C + SLOT * 16       # $C0EC - read: next nibble
+        wrmode_addr = 0xC08F + SLOT * 16     # $C0EF - read: Q7 on (enter write mode)
+        rdmode_addr = 0xC08E + SLOT * 16     # $C0EE - read: Q7 off (exit write mode)
+        nibout_addr = 0xC08D + SLOT * 16     # $C0ED - write: nibble out
         self.mem.subscribe_to_read([data_addr], self.disk2.read_data)
+        self.mem.subscribe_to_read([wrmode_addr], self.disk2.enter_write_mode)
+        self.mem.subscribe_to_read([rdmode_addr], self.disk2.exit_write_mode)
+        self.mem.subscribe_to_write([nibout_addr], self.disk2.write_nibble)
         self.mem.subscribe_to_read([0xC000], self.kbd.read_data)
         self.mem.subscribe_to_read([0xC010], self.kbd.read_clear)
         self.mem.subscribe_to_write([0xC010], self.kbd.write_clear)
-        self.mem.subscribe_to_read([0xC030], lambda a: 0)
+        self.beep_count = 0
+        self.mem.subscribe_to_read([0xC030], self._read_speaker)
 
         # SysInfo machine-ID seed bytes (no ROM in a ROM-free harness;
         # kernel.s may only READ these, per HANDOFF.md SS6/SS9). $FBB3=$EA
@@ -349,6 +460,10 @@ class Apple2:
         self.vars = None
         self.steps = 0
         self.fail = None
+
+    def _read_speaker(self, addr):
+        self.beep_count += 1
+        return 0
 
     def step(self, n=1):
         for _ in range(n):
@@ -384,6 +499,8 @@ class Apple2:
     # ------------------------------------------------------------ input
     def key(self, name):
         code = KEYS.get(name)
+        if code is None and name.startswith("ctrl-") and len(name) == 6:
+            code = 0x80 | (ord(name[5].upper()) & 0x1F)
         if code is None:
             raise SystemExit(f"unknown key: {name}")
         self.kbd.press(code)
@@ -414,8 +531,14 @@ def main():
     if "--selftest" in sys.argv:
         selftest()
         return
-    args = [a for a in sys.argv[1:] if a != "--trace"]
-    trace = "--trace" in sys.argv
+    argv = sys.argv[1:]
+    trace = "--trace" in argv
+    writeback = None
+    if "--writeback" in argv:
+        i = argv.index("--writeback")
+        writeback = argv[i + 1]
+        del argv[i:i + 2]
+    args = [a for a in argv if a != "--trace"]
     disk, artdir = args[0], args[1]
     a2 = Apple2(disk, artdir, trace)
     for line in sys.stdin:
@@ -431,11 +554,21 @@ def main():
             a2.key(rest[0])
         elif cmd == "keys":
             a2.keys(rest[0])
+        elif cmd == "assert":
+            if rest[0] == "beep>0":
+                assert a2.beep_count > 0, "expected at least one $C030 toggle"
+                print(f"[assert] beep>0 OK ({a2.beep_count} toggles)")
+            else:
+                raise SystemExit(f"unknown assert: {rest[0]}")
         elif cmd == "quit":
             break
         else:
             raise SystemExit(f"unknown command: {cmd}")
     print(f"[harness] done ({a2.steps} steps)")
+    if writeback:
+        with open(writeback, "wb") as f:
+            f.write(a2.disk)
+        print(f"[harness] wrote {writeback}")
 
 
 if __name__ == "__main__":
