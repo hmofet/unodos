@@ -80,6 +80,11 @@ zpPB     equ $79   ; (2) PAINTBUF cell pointer
 zpPBT    equ $7B   ; (2) pt_render_cell/pt_ptr col/row scratch
 zpPBInk  equ $7D   ; pt_apply: resolved ink pattern
 
+; ---- zero page ($7E-$80: OutLast band-centre math, see outlast.i) ----
+zpTmp2   equ $7E
+zpTmp3   equ $7F
+zpTmp4   equ $80
+
 ; ---- zero page ($50-$60: Dostris, see dostris.i) ----
 zpDosMask  equ $50 ; (2) current/test piece+rotation 4x4 bitmask, lo/hi
 zpDosBit   equ $52 ; mask bit index 0-15 during cell iteration
@@ -154,7 +159,7 @@ ICONCOL0_X      equ 1
 ICONCOL1_X      equ 11
 ICONCOL2_X      equ 21
 ICONCOL3_X      equ 31
-NICONS          equ 9     ; populated icon slots (M3: 3 rows x 4 cols, 9 used)
+NICONS          equ 10    ; populated icon slots (M3: 3 rows x 4 cols)
 
 ; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
 ; (as draw_desktop), rows1-22 = content, row23 = status/help line.
@@ -251,8 +256,14 @@ ml_dos:
 ml_pac:
         lda app_mode            ; Pac-Man: one actor step per soft-clock
         cmp #5                  ; second (pacman_tick handles game-over)
-        bne ml_cdraw
+        bne ml_ol
         jsr pacman_tick
+        jmp mainloop
+ml_ol:
+        lda app_mode            ; OutLast: scroll the road one step per
+        cmp #9                  ; soft-clock second
+        bne ml_cdraw
+        jsr ol_tick
         jmp mainloop
 ml_cdraw:
         lda app_mode            ; Files/Notepad/Theme cover the desktop -
@@ -287,7 +298,9 @@ handle_key:
         beq hk_music
         cmp #7
         beq hk_tracker
-        jmp paint_key
+        cmp #8
+        beq hk_paint
+        jmp outlast_key
 hk_files:
         jmp files_key
 hk_notepad:
@@ -302,6 +315,8 @@ hk_music:
         jmp music_key
 hk_tracker:
         jmp tracker_key
+hk_paint:
+        jmp paint_key
 hk_desktop:
         lda zpTmp
         cmp #$9B                ; ESC
@@ -311,7 +326,9 @@ hk_desktop:
 hk_notesc:
         lda focus
         cmp #$FF
-        bne hk_done             ; window focused: no app key handling at M1
+        beq hk_deskfocus        ; desktop focus -> handle icon nav
+        rts                     ; window focused: no app key handling at M1
+hk_deskfocus:
         lda zpTmp
         cmp #$8D                ; Return
         beq hk_return
@@ -368,8 +385,12 @@ hk_ret_7:
         jmp tracker_open
 hk_ret_8:
         cmp #8
-        bne hk_ret_win
+        bne hk_ret_9
         jmp paint_open
+hk_ret_9:
+        cmp #9
+        bne hk_ret_win
+        jmp outlast_open
 hk_ret_win:
         lda sel_icon
         jsr open_or_raise
@@ -988,11 +1009,11 @@ di_inv:
 ; Music/Paint icons fill row 2's remaining slots).
 ; 3 rows x 4 cols: SysInfo/Clock/Files/Theme (row0), Dostris/Pac-Man/Music/
 ; Tracker (row1), Paint (row2.col0).
-icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X
-icon_y_tab:  dc.b ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y
-icon_lr_tab: dc.b LABELROW0,LABELROW0,LABELROW0,LABELROW0,LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker,<msg_paint
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker,>msg_paint
+icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X
+icon_y_tab:  dc.b ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y,ICONROW2_Y
+icon_lr_tab: dc.b LABELROW0,LABELROW0,LABELROW0,LABELROW0,LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2,LABELROW2
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker,<msg_paint,<msg_outlast
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker,>msg_paint,>msg_outlast
 
 ; ============================================================================
 ; renderer primitives (all byte-column / 7-px aligned)
@@ -1623,6 +1644,7 @@ msg_pacman:       dc.b "Pac-Man",0
 msg_music:        dc.b "Music",0
 msg_tracker:      dc.b "Tracker",0
 msg_paint:        dc.b "Paint",0
+msg_outlast:      dc.b "OutLast",0
 msg_files_title:  dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
@@ -1695,6 +1717,7 @@ rowhi:
         include "music.i"
         include "tracker.i"
         include "paint.i"
+        include "outlast.i"
         include "build/notes7.s"
 
 ; ============================================================================
@@ -1787,3 +1810,16 @@ pt_ry0:      dc.b 0
 pt_ry1:      dc.b 0
 pt_rx:       dc.b 0       ; fillrect: col iterator
 pt_ry:       dc.b 0       ; fillrect: row iterator
+
+; ---- OutLast state (feasibility prototype, see outlast.i) ----
+ol_carx:     dc.b 0       ; car byte-column
+ol_scroll:   dc.b 0       ; road scroll phase
+ol_dist:     dc.w 0       ; distance travelled
+ol_crash:    dc.b 0       ; 1 = off road
+ol_b:        dc.b 0       ; ol_draw: band loop index
+ol_band:     dc.b 0       ; ol_draw_band: current band
+ol_bandy:    dc.b 0       ; ol_draw_band: band pixel y
+ol_bc:       dc.b 0       ; band road centre
+ol_bhw:      dc.b 0       ; band road half-width
+ol_bl:       dc.b 0       ; band road left col
+ol_br:       dc.b 0       ; band road right col

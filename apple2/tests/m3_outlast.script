@@ -1,0 +1,34 @@
+# UnoDOS/AppleII milestone-3 OutLast feasibility prototype: the pseudo-3D
+# road racer at half-vertical-resolution (HANDOFF-M3 SS2, feasibility-gated).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_outlast.script
+#
+# Measured frame cost: one full road frame (28 bands grass+road+edges, car,
+# HUD) is ~75k instructions ~= 0.24s ~= ~4 fps at 1 MHz - just under the
+# 5 fps bar, but steering redraws immediately on each keypress (responsive).
+# The verdict (README + PORTS-PLAN): SHIPS as a marginal prototype; a
+# dirty-band repaint is the path past 5 fps.  ol_tick scrolls one step per
+# soft-clock second; a full road redraw takes ~16 harness ticks.
+wait 600
+key right             # Clock->Files
+key right             # Files->Theme
+key right             # Theme->Dostris
+key right             # Dostris->Pac-Man
+key right             # Pac-Man->Music
+key right             # Music->Tracker
+key right             # Tracker->Paint
+key right             # Paint->OutLast (row2 col1)
+shot m3_outlast_select # OutLast icon highlighted
+key return            # outlast_open: draw the road
+wait 18
+shot m3_outlast_road   # pseudo-3D road: grass shoulders, curve, car, Dist:0
+wait 24
+shot m3_outlast_scroll # road scrolled (stripes moved, Dist advanced)
+key left              # steer the car left
+key left
+key left
+wait 18
+shot m3_outlast_steer  # car moved left; may run onto the grass (OFF ROAD!)
+key esc               # back to the desktop
+wait 24
+shot m3_outlast_desktop
+quit
