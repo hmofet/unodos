@@ -1,0 +1,15 @@
+# UnoDOS/AppleII milestone-3 scheduler feasibility prototype (HANDOFF-M3 SS6).
+# Build: ./build.sh sched   (assembles with -DSCHED_PROTO=1)
+# Run:   python3 harness.py build/unodos_sched.dsk shots < tests/m3_sched.script
+#
+# Proves option 1 (stack partitioning): two tasks each own a slice of page 1,
+# task_yield saves/loads S, a canary at each slice floor catches overflow.
+# Expected result on screen: "STACK-PARTITION OK - canaries intact",
+# switches:40, t0 depth:2 - i.e. 40 cooperative context switches completed,
+# both canaries intact, the kernel's draw_string->draw_char chain fitting the
+# slice with room to spare. The shipping kernel keeps option 3 (poll-and-
+# dispatch) because the full-screen single-app model needs no live scheduler;
+# this proto is the evidence option 1 WOULD work if it ever did.
+wait 200
+shot m3_sched_proto
+quit

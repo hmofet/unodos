@@ -19,6 +19,8 @@ echo "[2/4] converting the shared font to the hi-res 7px convention..."
 case "$1" in
   test)
     DEF="-DAUTOTEST=1"; DSK=build/unodos_apple2_test.dsk ;;
+  sched)
+    DEF="-DSCHED_PROTO=1"; DSK=build/unodos_sched.dsk ;;   # scheduler proto
   *)
     DEF=""; DSK=build/unodos_apple2.dsk ;;
 esac

@@ -192,6 +192,9 @@ start:
 
 ; ---------------------------------------------------------------- entry
 start2:
+        ifconst SCHED_PROTO
+        jmp sched_proto         ; -DSCHED_PROTO=1: run the scheduler proto
+        endif
         bit $C050               ; graphics mode (TXTCLR)
         bit $C057               ; hi-res (HIRES)
         bit $C054               ; page 1 (LOWSCR)
@@ -1718,6 +1721,7 @@ rowhi:
         include "tracker.i"
         include "paint.i"
         include "outlast.i"
+        include "scheduler.i"
         include "build/notes7.s"
 
 ; ============================================================================
@@ -1823,3 +1827,11 @@ ol_bc:       dc.b 0       ; band road centre
 ol_bhw:      dc.b 0       ; band road half-width
 ol_bl:       dc.b 0       ; band road left col
 ol_br:       dc.b 0       ; band road right col
+
+; ---- scheduler feasibility prototype (SCHED_PROTO builds, see scheduler.i) ----
+sch_cur:     dc.b 0       ; current task index
+sch_s:       dc.b 0,0     ; saved stack pointer per task
+sch_switches: dc.b 0      ; cooperative switches done
+sch_count0:  dc.b 0       ; task0 iterations
+sch_count1:  dc.b 0       ; task1 iterations
+sch_mindepth: dc.b 0      ; lowest S seen (deepest stack use)
