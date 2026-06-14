@@ -118,6 +118,7 @@ ICON0_Y     equ 40
 ICON_PITCH  equ 80
 NICONS      equ 12                  ; rows: 5 + 5 + Tracker Theme
 NBUF        equ 2048                ; Notepad edit buffer
+OSEVT_N     equ 20                  ; OS event records we feed the ROM (22B ea)
 
 CURSOR_H    equ 14
 
@@ -182,6 +183,43 @@ start2:
         move.l  d0,keytime_l-vars(a4)
         move.w  #$FFEF,$144         ; SysEvtMask: queue everything but
                                     ; keyUps (classic everyEvent-keyUp)
+        ; ---- THE fault: initialise the OS Event Manager. On a System-less
+        ; SE boot the event queue is uninitialised: EventQueue.qHead ($14C)
+        ; holds garbage ($FFFFFFFF), so the ROM's GetOSEvent walks it and
+        ; address-errors at ROM $403F72 - `move.w 6(a1),d1` with a1=qHead,
+        ; access = $FFFFFFFF+6 = $00000005 (odd). [real-HW finding #2,
+        ; CONFIRMED by disassembling B2E362A8 - Mac SE.ROM.] We call
+        ; _GetOSEvent every main-loop pass, and the chained ADB handler
+        ; PostEvents keys/mouse into this same queue, so we hand the ROM a
+        ; real buffer. SE ROM PostEvent ($403EE6): records are 22 bytes from
+        ; SysEvtBuf ($146); a record is FREE when its evtQWhat (offset 6) =
+        ; $FFFF; EvtBufCnt ($154) = (records - 1). Build the free pool, then
+        ; empty the queue. (Interrupts stay masked here, so the ADB can't
+        ; PostEvent into a half-built buffer.)
+        lea     osevt_buf(pc),a0
+        move.l  a0,$146            ; SysEvtBuf -> our buffer
+        move.w  #OSEVT_N-1,d1
+.evfree: move.w #$FFFF,6(a0)       ; mark record free (evtQWhat = $FFFF)
+        lea     22(a0),a0
+        dbra    d1,.evfree
+        move.w  #OSEVT_N-1,$154    ; EvtBufCnt
+        clr.w   $14A               ; EventQueue.qFlags
+        clr.l   $14C               ; EventQueue.qHead (was the $FFFFFFFF garbage)
+        clr.l   $150               ; EventQueue.qTail
+        ; --- preventive ROM-VBL hardening (NOT the $403F72 fault; these run
+        ; in the chained handler which only fires AFTER the first GetOSEvent,
+        ; so they were never reached before the fix - keep them so the VBL
+        ; can't fault once GetOSEvent stops crashing). (1) The VBL cursor
+        ; task erases via CrsrAddr ($888); we own the cursor, so disable the
+        ; ROM's: its entry is `tst.b CrsrNew($8CE); beq rts`, and CrsrNew only
+        ; goes nonzero via `move.b CrsrCouple($8CF),CrsrNew`.
+        sf      $8CF                ; CrsrCouple = 0 (decouple cursor/mouse)
+        sf      $8CE                ; CrsrNew    = 0 (VBL cursor task no-ops)
+        ; (2) The VBL stack sniffer derefs ApplZone ($2AA) (`cmpa.l (a1),a7`);
+        ; point it at a zero long so the check always passes. We never use the
+        ; ROM Memory Manager, so a fake empty zone is inert elsewhere.
+        lea     applzone_stub(pc),a0
+        move.l  a0,$2AA            ; ApplZone -> {bkLim = 0}
         lea     isr_lvl1_rom(pc),a0
         move.l  a0,$64.w
 .input_done:
@@ -237,6 +275,22 @@ start2:
         move.b  #$86,VIA_IER        ; enable CA1 (bit1) + SR (bit2)
 .noier: and.w   #$F8FF,sr           ; allow interrupts (stay supervisor)
 
+        ; ROM-assisted mode: restart ADB. The SE polls ADB by self-chaining -
+        ; each transaction's completion ISR (vector $21A) issues the next
+        ; poll. Our boot masks interrupts for a long stretch (BSS clear,
+        ; desktop paint), so an in-flight transaction's VIA shift-register
+        ; interrupt is lost, the completion never fires, and the autopoll
+        ; chain dies for good - keyboard AND mouse go silent even though our
+        ; chained $64 handler is ready to service them. _ADBReInit resets the
+        ; bus, re-registers devices and restarts autopoll. It waits on the
+        ; completion ISR, so it must run AFTER interrupts are enabled and our
+        ; handler is installed (both true here). Plus mode owns the hardware
+        ; and never uses ADB, so gate it on rom_mode.
+        move.b  rom_mode(pc),d0
+        beq     .noadb
+        dc.w    $A07B               ; _ADBReInit
+.noadb:
+
         ifd     AUTOTEST
         moveq   #0,d0               ; SysInfo (bottom)
         bsr     launch_app
@@ -282,6 +336,11 @@ main_loop:
         move.w  ev_head(pc),d0
         cmp.w   ev_tail(pc),d0
         bne     .work
+        move.b  rom_mode(pc),d0     ; ROM-assisted: the ADB posts keys into
+        beq     .noromq             ; the ROM's EventQueue; drain promptly
+        tst.l   $14C                ; instead of waiting for the 1-sec tick
+        bne     .work
+.noromq:
         bsr     tick_wanted         ; a playing game keeps the loop live
         bne     .work
         move.l  ticks(pc),d0
@@ -2041,26 +2100,35 @@ isr_lvl1_rom:
         move.w  d2,d1
         moveq   #EV_MOUSE,d0
         bsr     ev_post
-.mouse: ; absolute position from RawMouse ($82C: v.w, h.w)
-        move.l  $82C,d3
+.mouse: ; The SE ADB mouse handler ($403A54) accumulates deltas into MTemp
+        ; ($828: v.w=Y, $82A: h.w=X) and sets CrsrNew=CrsrCouple; the ROM
+        ; VBL cursor task is what would copy MTemp->RawMouse and CLAMP it,
+        ; but we disable that task (CrsrCouple=0, so we can paint our own
+        ; cursor), so RawMouse ($82C) never updates. Read MTemp directly,
+        ; clamp it, and write the clamp BACK to MTemp - otherwise the raw
+        ; deltas accumulate unbounded and the cursor sticks at the edges.
+        move.l  $828,d3
         cmp.l   rawm_last(pc),d3
         beq     .keys
-        move.l  d3,rawm_last-vars(a1)
-        move.w  d3,d0
+        move.w  d3,d0               ; low word = h = X
         bge     .axp
         moveq   #0,d0
 .axp:   cmp.w   #SCRW-1,d0
         ble     .axok
         move.w  #SCRW-1,d0
 .axok:  move.w  d0,mouse_x-vars(a1)
+        move.w  d0,$82A            ; write clamped X back to MTemp.h
         swap    d3
-        move.w  d3,d0
+        move.w  d3,d0               ; high word = v = Y
         bge     .ayp
         moveq   #0,d0
 .ayp:   cmp.w   #SCRH-1,d0
         ble     .ayok
         move.w  #SCRH-1,d0
 .ayok:  move.w  d0,mouse_y-vars(a1)
+        move.w  d0,$828            ; write clamped Y back to MTemp.v
+        move.l  $828,d3            ; remember the clamped composite so the
+        move.l  d3,rawm_last-vars(a1) ; next real delta is detected
 .keys:  ; keyboard is consumed in the main loop via _GetOSEvent (the
         ; ROM's PostEvent runs in the chained handler below)
 .chain: movem.l (sp)+,d0-d7/a0-a1
@@ -2184,45 +2252,142 @@ scc_init_ch_b:
 ; ============================================================================
 ; Fault handlers - black screen, white PC dump, halt
 ; ============================================================================
+; Full crash dump. berr_h = bus ($8) + address ($C) errors (68000 group-0
+; frame: SSW@+0, access addr@+2, opcode IR@+6, SR@+8, PC@+10). ill_h =
+; group-2 frame (SR@+0, PC@+2). We snapshot EVERY register at entry, then
+; paint PC / access / SSW / IR plus a D0-D7/A0-A7 dump - enough to read the
+; faulting instruction and find which register held the bad pointer without
+; needing the ROM in hand. SSW bit 4 = R/W (1=read, 0=write).
 berr_h:
-        move.l  10(sp),d6           ; bus/address error frame: PC at +10
-        bra     fault_show
-ill_h:
-        move.l  2(sp),d6            ; group-2 frame: PC at +2
-fault_show:
-        or.w    #$0700,sr
+        movem.l d0-d7/a0-a7,fault_regs   ; capture state before we touch it
+        st      fault_grp0
         moveq   #0,d0
+        move.w  (sp),d0
+        move.l  d0,fault_ssw
+        move.l  2(sp),d0
+        move.l  d0,fault_acc
+        moveq   #0,d0
+        move.w  6(sp),d0
+        move.l  d0,fault_ir
+        move.l  10(sp),d0
+        move.l  d0,fault_pc
+        bra     fault_dump
+ill_h:
+        movem.l d0-d7/a0-a7,fault_regs
+        sf      fault_grp0
+        moveq   #0,d0
+        move.w  (sp),d0
+        move.l  d0,fault_ssw
+        clr.l   fault_acc
+        clr.l   fault_ir
+        move.l  2(sp),d0
+        move.l  d0,fault_pc
+
+fault_dump:
+        or.w    #$0700,sr
+        moveq   #0,d0               ; black screen
         moveq   #0,d1
         move.w  #SCRW,d2
         move.w  #SCRH,d3
         moveq   #3,d4
         bsr     fill_rect
+        ; row 0: FAULT @ <pc>
         lea     str_fault(pc),a0
-        moveq   #16,d0
-        moveq   #16,d1
+        moveq   #8,d4
+        moveq   #4,d5
+        bsr     fputs
+        move.l  fault_pc(pc),d6
+        move.w  #8+8*8,d4
+        bsr     fputval
+        ; row 1: ACCESS <addr>
+        lea     str_access(pc),a0
+        moveq   #8,d4
+        moveq   #16,d5
+        bsr     fputs
+        move.l  fault_acc(pc),d6
+        move.w  #8+8*8,d4
+        bsr     fputval
+        ; row 2: SSW <ssw>   IR <opcode>
+        lea     str_ssw(pc),a0
+        moveq   #8,d4
+        moveq   #28,d5
+        bsr     fputs
+        move.l  fault_ssw(pc),d6
+        move.w  #8+4*8,d4
+        bsr     fputval
+        lea     str_ir(pc),a0
+        move.w  #8+14*8,d4
+        bsr     fputs
+        move.l  fault_ir(pc),d6
+        move.w  #8+17*8,d4
+        bsr     fputval
+        ; rows 3..18: D0-D7, A0-A7 (one per line)
+        clr.w   fault_i
+.rloop: move.w  fault_i(pc),d7
+        cmp.w   #16,d7
+        bge     .halt
+        move.w  d7,d5              ; y = 44 + i*12
+        mulu    #12,d5
+        add.w   #44,d5
+        lea     lblbuf(pc),a0      ; label "Dn"/"An"
+        move.b  #'D',d0
+        cmp.w   #8,d7
+        blt     .isd
+        move.b  #'A',d0
+.isd:   move.b  d0,(a0)+
+        move.b  d7,d1
+        and.b   #7,d1
+        add.b   #'0',d1
+        move.b  d1,(a0)+
+        clr.b   (a0)
+        lea     lblbuf(pc),a0
+        moveq   #8,d4
+        bsr     fputs
+        move.w  fault_i(pc),d7     ; value = fault_regs[i]
+        lsl.w   #2,d7
+        lea     fault_regs(pc),a0
+        move.l  (a0,d7.w),d6
+        move.w  #8+3*8,d4
+        bsr     fputval
+        move.w  fault_i(pc),d7
+        addq.w  #1,d7
+        move.w  d7,fault_i
+        bra     .rloop
+.halt:  bra     .halt
+
+; fputs - draw NUL string a0 at (d4=x, d5=y), white-on-black. Keeps d4/d5/d6.
+fputs:
+        move.w  d4,d0
+        move.w  d5,d1
         moveq   #0,d2
         moveq   #3,d3
         bsr     draw_string_bg
-        ; hex PC
+        rts
+
+; fputval - draw d6.l as 8 hex at (d4=x, d5=y). Keeps d4/d5/d6.
+fputval:
+        move.l  d6,d0
+        bsr     fault_hex
+        lea     numbuf(pc),a0
+        bsr     fputs
+        rts
+
+; fault_hex - d0.l value -> 8 ASCII hex digits at numbuf, NUL-terminated.
+; Trashes d0/d1/d2/a0 only (leaves d4/d5/d6 for the caller).
+fault_hex:
         lea     numbuf(pc),a0
         moveq   #7,d2
-.dig:   rol.l   #4,d6
-        move.b  d6,d0
-        and.b   #$F,d0
-        cmp.b   #10,d0
+.dig:   rol.l   #4,d0
+        move.b  d0,d1
+        and.b   #$F,d1
+        cmp.b   #10,d1
         blt     .num
-        add.b   #'A'-10-'0',d0
-.num:   add.b   #'0',d0
-        move.b  d0,(a0)+
+        add.b   #'A'-10-'0',d1
+.num:   add.b   #'0',d1
+        move.b  d1,(a0)+
         dbra    d2,.dig
         clr.b   (a0)
-        lea     numbuf(pc),a0
-        move.w  #16+8*8,d0
-        moveq   #16,d1
-        moveq   #0,d2
-        moveq   #3,d3
-        bsr     draw_string_bg
-.halt:  bra     .halt
+        rts
 
 ; ============================================================================
 ; Event queue - 32 x 4 bytes; ISR producer, main-loop consumer
@@ -2293,6 +2458,9 @@ str_version:    dc.b    "UnoDOS/MacPlus v0.3.0",0
 str_build:      dc.b    "Milestone 3",0
 str_x:          dc.b    "X",0
 str_fault:      dc.b    "FAULT @ ",0
+str_access:     dc.b    "ACCESS  ",0
+str_ssw:        dc.b    "SSW ",0
+str_ir:         dc.b    "IR ",0
         ifeq    SCRW-640
 str_si1:        dc.b    "Video   640x480x1",0
 str_si2:        dc.b    "Machine Mac II class",0
@@ -2464,6 +2632,22 @@ clkbuf:         ds.b    12
 evtbuf:         ds.b    16          ; OS event record (kb_os_poll)
 cur_save:       ds.b    3*CURSOR_H
         even
+applzone_stub:  dc.l    0           ; fake empty heap zone: bkLim=0 so the
+                                    ; ROM stack sniffer (ApplZone deref in the
+                                    ; chained VBL handler) always passes
+osevt_buf:      ds.b    OSEVT_N*22  ; OS event-record pool handed to the ROM
+                                    ; via SysEvtBuf ($146); see .rom_input
+; crash-dump scratch (fault handler)
+fault_regs:     ds.l    16          ; D0-D7, A0-A7 snapshot at fault entry
+fault_pc:       dc.l    0
+fault_acc:      dc.l    0
+fault_ir:       dc.l    0
+fault_ssw:      dc.l    0
+fault_i:        dc.w    0
+fault_grp0:     dc.b    0
+                even
+lblbuf:         ds.b    4
+                even
 old_lvl1:       dc.l    0           ; ROM's level-1 handler (chained)
 keytime_l:      dc.l    0           ; last seen KeyTime ($186)
 rom_mode:       dc.b    0           ; 0 = Plus hardware, 1 = ROM-assisted
