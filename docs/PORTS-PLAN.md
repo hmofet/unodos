@@ -66,13 +66,26 @@ Real hardware: the user's FloppyEmu does Disk II emulation.
   simulated power cycle via `--writeback` + re-boot) both verified.
   Real-hardware write-timing pass (AppleWin) still pending — see
   apple2/README.md's RWTS write-timing caveat.
-- M3: scaled apps — Dostris and Pac-Man (feasible), Paint (hi-res,
-  keyboard/paddle), Tracker as blocking speaker playback (timed square
-  waves monopolize the CPU — authentic Apple II reality), Music likewise;
-  OutLast feasibility re-checked at 1 MHz (may stay off the roster, like
-  Genesis skips FAT12). Theme = hi-res dither schemes (the macplus model).
-  Scheduler: cooperative per-window tasks are feasible on 6502 (software
-  stacks are the constraint — evaluate honestly at M3).
+- M3 (DONE): the scaled app roster on a 10-icon / 3-row desktop. Theme
+  (theme.i, 6 dither presets over a mutable pat_tab), Dostris (dostris.i),
+  Pac-Man (pacman.i — the 1 MHz adaptation: 13x13 maze, two Manhattan-steer
+  ghosts, tile-stepped 7px actors), Music (music.i — Canon in D, blocking
+  square-wave staff player) and Tracker (tracker.i — shared 32x4 pattern
+  format, single-voice leftmost-channel playback, SONG.UNO save/load), Paint
+  (paint.i — MacPaint-style on 32x34 byte-aligned fat-pixel cells, four
+  dither inks, keyboard cursor, PAINT.UNO save/load). Note tables via
+  mknotes.py → build/notes7.s. tests/m3.script + per-app scripts (sound apps
+  assert beep>0; Tracker/Paint assert FS round trips), all harness-verified.
+  **OutLast feasibility — SHIPS marginal:** the cheapest honest variant
+  (28-band half-vertical-res road raster) measured ~75k instr/frame ≈ ~4 fps
+  at 1 MHz — just under the 5 fps bar but with responsive steering; ships as
+  a playable prototype, dirty-band repaint identified as the >5 fps path
+  (outlast.i). **Scheduler — option 1 PROVEN, ships option 3:** the
+  stack-partitioning prototype (scheduler.i, ./build.sh sched) ran 40
+  cooperative context switches with both slice canaries intact, so option 1
+  is feasible; but the shipping kernel keeps option 3 (poll-and-dispatch)
+  because the full-screen single-app model needs no live scheduler. Real-hw
+  (AppleWin/FloppyEmu) pass still pending, as for M1/M2.
 - Real-hw validation: AppleWin first (boot + RWTS + input), then FloppyEmu
   on a real machine. AppleMouse II card support = stretch/backlog.
 
@@ -188,11 +201,11 @@ touching code; update it (and this plan) when a milestone closes.
 
 ## Sequencing & checkpoints
 
-1. **Apple II M1-M2** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
+1. **Apple II M1-M3** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
    pass still pending.
 2. **Chrome themes** (queued directive) — natural slot while Apple II
    real-hw feedback is pending; touches only existing color ports.
-3. **Apple II M3** interleaved with **IIGS M0-M1**.
+3. **IIGS M0-M1** next (Apple II M3 complete).
 4. **IIGS M2-M3**, then **SNES M0-M3** (toolchain shared).
 5. **PS2 M0-M3** (independent toolchain; can start anytime if priorities
    shift — nothing upstream feeds it except the C core, which is done).

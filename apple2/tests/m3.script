@@ -1,0 +1,65 @@
+# UnoDOS/AppleII milestone-3 round trip: open every new app, drive a key or
+# two, screenshot each (HANDOFF-M3 SS7). Detailed per-app regressions live in
+# tests/m3_<app>.script; this is the all-in-one smoke test.
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3.script
+#
+# Boot leaves the cursor on the Clock icon (index 1). Each app is reached by
+# stepping the selection right, opening it (Return), then Esc back to the
+# desktop. NOTE: a `wait` always separates an action key from the following
+# Esc - the app's redraw must finish before Esc is polled, or the close is
+# lost and the whole sequence drifts.
+wait 600
+# --- Theme (icon 3) ---
+key right
+key right
+key return            # open Theme
+wait 24
+shot m3_all_theme
+key esc
+wait 24
+# --- Dostris (icon 4) ---
+key right
+key return
+wait 28
+key space             # hard drop
+wait 20
+shot m3_all_dostris
+key esc
+wait 24
+# --- Pac-Man (icon 5) ---
+key right
+key return
+wait 24
+shot m3_all_pacman
+key esc
+wait 24
+# --- Music (icon 6) ---
+key right
+key return
+wait 24
+shot m3_all_music
+key esc
+wait 24
+# --- Tracker (icon 7) ---
+key right
+key return
+wait 24
+shot m3_all_tracker
+key esc
+wait 24
+# --- Paint (icon 8) ---
+key right
+key return
+wait 46
+shot m3_all_paint
+key esc
+wait 32
+# --- OutLast (icon 9) ---
+key right
+key return
+wait 20
+shot m3_all_outlast
+key esc
+wait 24
+shot m3_all_desktop   # back to the 3-row desktop
+quit
