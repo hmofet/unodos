@@ -5,6 +5,61 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [macplus: validated on real Mac SE hardware] - 2026-06-13
+
+**The standalone Mac OS now boots and runs on a real Mac SE** (via
+FloppyEmu) — boot chain, desktop, and the ROM-assisted ADB input path all
+live on hardware. Getting there meant fixing two faults the emulators never
+surfaced; they boot through a far more initialised low-memory environment
+than a bare ROM-assisted boot. Same `unodos_macplus.dsk` boots Plus and SE.
+
+### Fixed: `FAULT @ 00403F72` / `ACCESS 00000005` on the SE
+The first `_GetOSEvent` of each main-loop pass walked the ROM's
+`EventQueue` ($14A), which is uninitialised on a System-less boot —
+`qHead` held garbage `$FFFFFFFF`, so the ROM's queue scan computed
+`$FFFFFFFF + 6 = $00000005` (odd) and address-errored inside ROM. We now
+initialise the OS Event Manager in the ROM-assisted boot path: point
+`SysEvtBuf` ($146) at a 20-record event pool (22 B each, free-marked with
+`evtQWhat = $FFFF`), set `EvtBufCnt` ($154), and clear `EventQueue` to
+empty. Buffer layout read directly from the SE ROM's `PostEvent`, so the
+ADB also posts keys/mouse into it. Root-caused by disassembling the SE ROM
+at the fault PC and verified against it in Unicorn (`qHead = 0` takes the
+empty-queue branch and never reaches the faulting load).
+
+### Fixed: ADB input dead on the SE (mouse + keyboard)
+With the desktop up, ADB was silent. Two causes: (1) autopoll self-chains
+through each transaction's completion interrupt, and our long
+interrupt-masked boot breaks the chain — fixed by calling `_ADBReInit`
+($A07B) once interrupts are enabled. (2) The mouse was read from
+`RawMouse` ($82C), but the SE ADB mouse handler accumulates deltas into
+`MTemp` ($828) and leaves the `MTemp → RawMouse` copy to the VBL cursor
+task, which we disable to paint our own cursor — fixed by reading `MTemp`
+directly with our own clamp + write-back. Keyboard latency also tightened:
+the idle loop drains the ROM `EventQueue` ($14C) immediately rather than on
+the once-per-second refresh. SE input low-mem map: button = `MBState`
+($172), mouse = `MTemp` ($828), keys = `EventQueue` ($14A) via
+`_GetOSEvent`.
+
+### Preventive ROM-VBL hardening (ships alongside)
+The chained ROM level-1 handler's per-tick work assumes System-level init.
+Pre-empted so it can't fault once `_GetOSEvent` stops crashing and the VBL
+actually runs: the ROM cursor task is disabled (`CrsrCouple`/`CrsrNew` at
+$8CF/$8CE = 0 — we paint our own cursor) and the stack-into-heap sniffer is
+satisfied by pointing `ApplZone` ($2AA) at a zeroed fake zone.
+
+### Crash-dump fault screen
+Bus/address/illegal faults now paint a full dump — PC, faulting access
+address, SSW (bit 4 = read/write), the opcode word (IR), and all
+D0-D7/A0-A7 — instead of just the PC. This is what made finding #2
+diagnosable from hardware alone.
+
+### Fixed earlier: Sad Mac `0F/00000001` at boot (BootDrive)
+The boot block and `sony.i` hardcoded `ioVRefNum = 1`, but FloppyEmu on
+the SE's external port enumerates as drive 2/3, so the read hit the empty
+internal drive. Now honors low-mem `BootDrive` ($210) in both layers, and
+the read-fail paths raise distinctive Sad Mac minors ($42 = kernel read
+failed, $43 = `UDM1` magic missing) instead of the ambiguous `1`.
+
 ## [macplus milestone 3: FULL APP PARITY] - 2026-06-12
 
 The standalone Mac OS now carries the complete shared UnoDOS app roster —
