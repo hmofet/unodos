@@ -5,6 +5,53 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [ps2: milestone 0 — software-FB foundation + EE ELF builds] - 2026-06-14
+
+First milestone of the **Sony PS2 port** (`ps2/`), strategy = port the
+portable C core (`mac/unodos.c`) by swapping the platform layer.
+
+- Software framebuffer (`fb.c`/`fb.h`): 640×448×32 in EE RAM + drawing
+  primitives (fill/frame/invert-XOR/8×8 text/scaled text) over the 4-colour
+  PORT-SPEC gamut — the layer the whole port draws through; the GS is reduced
+  to a per-vsync textured-quad blit.
+- Shared font → C array (`mkfont_c.py`); hello-GS splash (`uno_splash.c`).
+- **Host shim** (`host_main.c` + `tools/ppm2png.py`): builds the FB code with
+  a host compiler (WSL gcc) and renders `shots/m0_splash.png` — the splash is
+  verified on the PC, and the EE target shares the FB/splash code verbatim.
+- EE target (`main.c`: gsKit GS init + FB→GS blit + DualShock 2 via SIO2MAN/
+  PADMAN). **Builds** to `build/unodos-ps2.elf` (real MIPS R5900 ELF) with the
+  prebuilt ps2dev v2.0.0 toolchain under WSL. Runtime UNVERIFIED — PCSX2 needs
+  a 4 MB PS2 BIOS and only PS1 BIOSes were on hand. M1 (the C-core desktop) is
+  unblocked and host-shim-iterable.
+
+## [apple2: milestone 3 — full app roster + feasibility verdicts] - 2026-06-14
+
+The **Apple II port** (`apple2/`) reaches M3: a 10-icon desktop on the 1 MHz
+6502, all harness-verified.
+
+- New apps: **Theme** (6 dither presets over a mutable `pat_tab`), **Dostris**
+  (10×20 puzzle), **Pac-Man** (the 1 MHz adaptation — 13×13 maze, two
+  Manhattan-steer ghosts, tile-stepped 7px actors), **Music** (Canon in D on
+  the `$C030` speaker, blocking square-wave staff player), **Tracker** (shared
+  32×4 pattern format, single-voice playback, SONG.UNO save/load), **Paint**
+  (32×34 fat-pixel cells, four dither inks, PAINT.UNO save/load).
+- **OutLast** feasibility: ships as a ~4 fps prototype (28-band half-res road
+  raster — measured, just under the 5 fps bar but steering-responsive).
+- **Scheduler** verdict: stack-partitioning proven (40 cooperative switches,
+  canaries intact), but the shipping kernel keeps poll-and-dispatch.
+- `tests/m3.script` + 7 per-app scripts + scheduler proto, all green.
+  Real-hw (AppleWin/FloppyEmu) pass still pending.
+
+## [macplus: real Mac SE audio fix] - 2026-06-14
+
+Sound was silent on the real SE: `snd.i` wrote the PWM buffer but never
+enabled the hardware there and set "volume" on the wrong VIA port (PB0-2 are
+the RTC lines; volume is Port A 0-2, enable is Port B bit 7). Added
+`snd_hw_on` — interrupt-masked, ORs PA0-2 = 7 and ANDs PB7 = 0 once at boot,
+never touching PA4 (overlay) or PB3-5/SR (ADB), so the SE input path is
+undisturbed. Harness-verified (square wave reaches the buffer, PB7=0,
+volume=7); needs a hardware ear-check on the SE.
+
 ## [macplus: validated on real Mac SE hardware] - 2026-06-13
 
 **The standalone Mac OS now boots and runs on a real Mac SE** (via

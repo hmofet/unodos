@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     gs->Height = FB_H;
     gs->PSM = GS_PSM_CT32;
     gs->PSMZ = GS_PSMZ_16S;
-    gs->Interlace = GS_INTERLACE;
+    gs->Interlace = GS_INTERLACED;
     gs->Field = GS_FIELD;
     gs->DoubleBuffering = GS_SETTING_ON;
     gs->ZBuffering = GS_SETTING_OFF;
@@ -105,8 +105,10 @@ int main(int argc, char **argv)
             if (btn.ljoy_v < 0x60) cy -= (0x60 - btn.ljoy_v) / 12;
             if (btn.ljoy_v > 0xA0) cy += (btn.ljoy_v - 0xA0) / 12;
 
-            if (cx < 0) cx = 0; if (cx > FB_W - 1) cx = FB_W - 1;
-            if (cy < 0) cy = 0; if (cy > FB_H - 1) cy = FB_H - 1;
+            if (cx < 0) cx = 0;
+            if (cx > FB_W - 1) cx = FB_W - 1;
+            if (cy < 0) cy = 0;
+            if (cy > FB_H - 1) cy = FB_H - 1;
 
             if (pressed & PAD_START) break;     /* Start = quit (Esc role) */
         }

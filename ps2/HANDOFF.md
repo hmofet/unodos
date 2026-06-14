@@ -19,6 +19,36 @@ decision and §3's rig; the apps come along nearly free.
 
 ---
 
+## M0 STATUS (2026-06-14)
+
+**Done + committed:** the software-framebuffer platform layer (`fb.c`/`fb.h`
+— 640×448×32 + fill/frame/invert/text/scaled-text over the 4-colour gamut),
+the shared font as a C array (`mkfont_c.py` → `build/font_data.h`), the
+hello-GS splash (`uno_splash.c`), and the host shim (`host_main.c` +
+`tools/ppm2png.py`). The **§2 design is confirmed** (software FB, GS as a
+blitter). The splash is **rendered + screenshotted on the PC** via
+`./build.sh host` (WSL gcc) — `shots/m0_splash.png`.
+
+**Toolchain installed, EE ELF builds:** prebuilt ps2dev v2.0.0 under WSL at
+`~/ps2dev/ps2dev` (Docker was unavailable on this machine; the prebuilt
+release is the recipe — see README). `./build.sh ee` links a real MIPS R5900
+ELF (`build/unodos-ps2.elf`, gsKit/libpad). The §1 audit is effectively done
+(see §1 note below).
+
+**Blocked:** running the ELF. PCSX2 needs a **4 MB PS2 BIOS**; the BIOS folder
+provided held only **512 KB PS1 BIOSes** (PS1 ≠ PS2). So `main.c`'s GS/pad
+runtime is unverified — needs a PS2 BIOS dump (e.g. scph39001 ≈ 4 MB) + PCSX2,
+or FMCB hardware. The §3 PCSX2 rig recipe is therefore still unverified.
+
+**Next: M1** — bring `unodos.c` up on the host shim first (no PS2 hardware
+needed). §1 audit result: the drawing surface is ~25 QuickDraw calls
+(SetRect/RGBForeColor/PaintRect/FrameRect/MoveTo/LineTo/DrawText/InvertRect/
+PaintOval/InsetRect/PtInRect/…), plus TickCount, GetNextEvent/GetMouse/
+StillDown, and File/Sound (defer to M2/M3). Plan: a small Mac-compat shim
+(types + those calls) over `fb.*`, so `unodos.c` compiles nearly verbatim.
+
+---
+
 ## 1. What `mac/unodos.c` actually is (read before planning)
 
 One ~3600-line C file. It is **not** a formally separated platform
