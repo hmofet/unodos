@@ -63,7 +63,7 @@ portable 68K FAT12 core ([fat12.i](fat12.i), shared with the Amiga port).
 | Keyboard | M0110/M0110A over the VIA shift register: `Instant` ($14) poll per tick; response `(scan<<1)\|1`, bit 7 = key-up, `$79` keypad/arrow prefix, `$7B` null. Scan codes are translated to the canonical UnoDOS raw codes ($4C-$4F arrows etc.) |
 | Tick | VIA CA1 vblank interrupt, 60.15 Hz |
 | Cursor | Software arrow with save-under; erased around any main-loop pass that draws (ISRs never draw) |
-| Faults | Bus/address/illegal vectors → black screen + PC dump |
+| Faults | Bus/address/illegal vectors → black screen + full crash dump (PC, faulting access address, SSW, opcode IR, and all D0-D7/A0-A7) |
 
 Keyboard notes: the M0110 has no Escape key — **`` ` `` (backquote) is
 ESC** (closes the topmost window). Arrows/keypad arrive via the `$79`
@@ -80,10 +80,37 @@ VIA. So at boot the kernel reads the ROM version word (`ROMBase+8`):
 - **anything newer (SE `$76`, II `$78`, …)** → *ROM-assisted mode*. We
   **chain** the ROM's level-1 interrupt handler (keeping its ADB stack
   alive) and never touch the VIA/SCC. Each tick we mirror the low-memory
-  state the ROM maintains: `Ticks` ($16A) for timing, `RawMouse` ($82C)
-  for the pointer, `MBState` ($172) for the button, and the OS event
-  queue for keys (`SysEvtMask` opened at boot, drained with `_GetOSEvent`
-  from the main loop — the Toolbox analog of polling BIOS INT 16h).
+  state the ROM maintains: `Ticks` ($16A) for timing, `MBState` ($172) for
+  the button, **`MTemp` ($828)** for the pointer, and the OS event queue
+  for keys (`SysEvtMask` opened at boot, drained with `_GetOSEvent` from the
+  main loop — the Toolbox analog of polling BIOS INT 16h).
+
+  The mouse source is `MTemp`, **not** `RawMouse` ($82C): the ADB mouse
+  handler accumulates deltas into `MTemp` and leaves it to the ROM's VBL
+  cursor task to copy `MTemp → RawMouse` and clamp it — but we disable that
+  task (we paint our own cursor), so we read `MTemp` directly and clamp it
+  ourselves, writing the clamp back so deltas don't accumulate unbounded.
+
+Because we boot without a System file, ROM-assisted mode must also stand
+up the low-memory state the System normally would before any of those ROM
+services are safe to call:
+
+- **OS Event Manager** — the ROM's `_GetOSEvent` / `PostEvent` walk
+  `EventQueue` ($14A), which is uninitialised at our boot (`qHead` is
+  garbage). We hand the ROM a real event pool: `SysEvtBuf` ($146) points at
+  a 20-record buffer (22 bytes each, `EvtBufCnt` at $154), every record
+  marked free (`evtQWhat` = $FFFF), and the queue cleared to empty. Without
+  this, the very first `_GetOSEvent` dereferences the garbage head and the
+  ROM address-errors (the real-hardware fault below).
+- **ADB restart** — autopoll self-chains through each transaction's
+  completion interrupt, and our long interrupt-masked boot can break that
+  chain, leaving ADB silent. We call `_ADBReInit` ($A07B) once interrupts
+  are live to reset the bus, re-register devices and restart autopoll.
+- **ROM VBL hardening** — the chained handler's per-tick work assumes more
+  init than we do, so we pre-empt it: the cursor task is disabled
+  (`CrsrCouple`/`CrsrNew` at $8CF/$8CE = 0; we paint our own cursor) and the
+  stack-into-heap sniffer is satisfied by pointing `ApplZone` ($2AA) at a
+  zeroed fake zone (we never use the ROM Memory Manager).
 
 The same `unodos_macplus.dsk` therefore boots on Plus **and** SE. The
 Mac II class needs the `mac2` geometry build and a B&W monitor setting.
@@ -164,13 +191,49 @@ from the upstream source with mingw-w64; the disk-format gate
 built at 1-bit depth (`-depth 0`) because the II ROM otherwise starts the
 video card at a color depth our 1-bit renderer doesn't match.
 
-**Real-hardware status: pending (user testing on a Mac SE + Mac IIci via
-FloppyEmu).** What the emulators could NOT exercise:
-(1) the Plus-only SCC DCD quadrature mouse path (flip the `eor` sense in
-`isr_lvl2` if an axis runs backwards); (2) genuine M0110A arrow codes on
-a real Plus; (3) electrical timing of the Plus VIA keyboard handshake.
-The SE/II ROM-assisted path has no such Plus-specific risks. On the IIci,
-set the monitor to **B&W (1-bit)** until the color milestone.
+## Real-hardware validation (Mac SE + FloppyEmu) — PASSED 2026-06-13
+
+Validated on a real Mac SE booting `unodos_macplus.dsk` from a FloppyEmu:
+boot chain, desktop, and the full ROM-assisted ADB input path — moving the
+mouse, clicking and double-clicking icons, and keyboard navigation — all
+live on hardware. Getting there took fixing several issues the emulators
+could never surface, since they boot through a far more initialised
+low-memory environment than a bare FloppyEmu boot.
+
+- **Finding #1 — Sad Mac `0F/00000001` at boot.** The boot block and
+  `sony.i` hardcoded `ioVRefNum = 1`, but FloppyEmu on the SE's external
+  port enumerates as drive 2/3, so the read hit the empty internal drive.
+  Fixed by honoring low-mem `BootDrive` ($210) in both layers; the read-fail
+  paths now raise distinctive Sad Mac minors ($42 = kernel read failed,
+  $43 = `UDM1` magic missing) instead of the ambiguous `1`.
+- **Finding #2 — `FAULT @ 00403F72 / ACCESS 00000005`.** The first
+  `_GetOSEvent` walked an uninitialised `EventQueue` (`qHead = $FFFFFFFF`);
+  `$FFFFFFFF + 6` = `$00000005` (odd) → address error inside the ROM.
+  Fixed by initialising the OS Event Manager at boot (see *Machine-adaptive
+  input* above). Root-caused by disassembling the SE ROM at the fault PC and
+  confirmed in Unicorn: with `qHead = 0` the ROM takes the empty-queue
+  branch and never reaches the faulting load. The black-screen crash dump
+  (PC / access / SSW / opcode / registers) is what made it diagnosable from
+  hardware alone.
+- **Finding #3 — ADB silent.** With the desktop up, neither mouse nor
+  keyboard responded. SE ADB autopoll self-chains through each transaction's
+  completion interrupt; our long interrupt-masked boot breaks the chain.
+  Fixed by calling `_ADBReInit` ($A07B) after interrupts are enabled.
+- **Finding #4 — mouse dead while keyboard worked.** An on-screen state
+  overlay showed our handler running and the keyboard posting events, but
+  `RawMouse` frozen. The SE ADB mouse handler accumulates deltas into
+  `MTemp` ($828) and relies on the VBL cursor task (which we disable) to
+  forward them to `RawMouse`. Fixed by reading `MTemp` directly with our own
+  clamp/write-back (see *Machine-adaptive input*). Also tightened keyboard
+  latency: the idle loop now drains the ROM `EventQueue` ($14C) immediately
+  instead of waiting for the once-per-second refresh.
+
+Still untested on real hardware (no Plus-specific risk on the SE/II
+ROM-assisted path): (1) the Plus-only SCC DCD quadrature mouse — flip the
+`eor` sense in `isr_lvl2` if an axis runs backwards; (2) genuine M0110A
+arrow codes on a real Plus; (3) electrical timing of the Plus VIA keyboard
+handshake. On a real IIci, set the monitor to **B&W (1-bit)** until the
+color milestone.
 
 ## Milestones
 
