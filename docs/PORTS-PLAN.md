@@ -173,8 +173,16 @@ existing screenshot automation. Real hardware: PS2 + FMCB card; ELF on MC
 or USB stick.
 
 **Milestones.**
-- M0: PS2SDK builds a hello-GS ELF that runs in PCSX2; decide gsKit vs
-  raw GIF; module loading (sio2man/padman/mcman) proven.
+- M0 (FOUNDATION DONE, EE pending toolchain): the software-framebuffer
+  platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/invert/text over the
+  4-colour gamut), the shared font as a C array (`mkfont_c.py`), and the
+  hello-GS splash (`uno_splash.c`) all built + **screenshotted on the PC via
+  the host shim** (`./build.sh host`, WSL gcc) — the verified inner loop the
+  EE target shares verbatim. Design decided: software FB, GS as a blitter
+  (gsKit), so gsKit-vs-raw-GIF is low-stakes. The EE ELF (`main.c`: GS blit +
+  DualShock 2) is written but UNVERIFIED — this dev machine has no Docker/
+  ee-gcc/PCSX2/PS2 BIOS. Remaining M0-on-metal (user-owned PS2/BIOS): install
+  PS2SDK, build the ELF, verify the PCSX2 launch+screenshot recipe + pad.
 - M1: framebuffer desktop + WM + pad-as-pointer + soft keyboard +
   SysInfo/Clock — mostly the C core with a new platform layer.
 - M2: memory-card storage (file API — trivial next to GCR floppies),
