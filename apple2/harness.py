@@ -312,6 +312,7 @@ def png_gray(path, w, h, getpix):
 KEYS = {
     'return': 0x8D, 'esc': 0x9B, 'space': 0xA0, 'backspace': 0x88,
     'left': 0x88, 'right': 0x95, 'up': 0x8B, 'down': 0x8A, 'tab': 0x89,
+    'openbracket': 0xDB, 'closebracket': 0xDD,
 }
 for _c in "0123456789":
     KEYS[_c] = 0x80 | ord(_c)

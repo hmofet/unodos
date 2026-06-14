@@ -75,6 +75,11 @@ zpBeepN    equ $4F ; beep: remaining $C030 toggles
 zpNoteHalf equ $76 ; note_play: half-period inner-delay constant
 zpNoteDur  equ $77 ; (2) note_play: remaining $C030 toggles (16-bit)
 
+; ---- zero page ($79-$7D: Paint, see paint.i) ----
+zpPB     equ $79   ; (2) PAINTBUF cell pointer
+zpPBT    equ $7B   ; (2) pt_render_cell/pt_ptr col/row scratch
+zpPBInk  equ $7D   ; pt_apply: resolved ink pattern
+
 ; ---- zero page ($50-$60: Dostris, see dostris.i) ----
 zpDosMask  equ $50 ; (2) current/test piece+rotation 4x4 bitmask, lo/hi
 zpDosBit   equ $52 ; mask bit index 0-15 during cell iteration
@@ -139,15 +144,17 @@ CK_CONTENT_H    equ (CK_H-9)
 ; the label sits on the middle char-row of each slot.
 ICONW           equ 9
 ICONH           equ 24
+ICONROW0_Y      equ 120
 ICONROW1_Y      equ 144
 ICONROW2_Y      equ 168
+LABELROW0       equ 16
 LABELROW1       equ 19
 LABELROW2       equ 22
 ICONCOL0_X      equ 1
 ICONCOL1_X      equ 11
 ICONCOL2_X      equ 21
 ICONCOL3_X      equ 31
-NICONS          equ 8     ; populated icon slots so far (grows through M3)
+NICONS          equ 9     ; populated icon slots (M3: 3 rows x 4 cols, 9 used)
 
 ; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
 ; (as draw_desktop), rows1-22 = content, row23 = status/help line.
@@ -278,7 +285,9 @@ handle_key:
         beq hk_pacman
         cmp #6
         beq hk_music
-        jmp tracker_key
+        cmp #7
+        beq hk_tracker
+        jmp paint_key
 hk_files:
         jmp files_key
 hk_notepad:
@@ -291,6 +300,8 @@ hk_pacman:
         jmp pacman_key
 hk_music:
         jmp music_key
+hk_tracker:
+        jmp tracker_key
 hk_desktop:
         lda zpTmp
         cmp #$9B                ; ESC
@@ -353,8 +364,12 @@ hk_ret_6:
         jmp music_open
 hk_ret_7:
         cmp #7
-        bne hk_ret_win
+        bne hk_ret_8
         jmp tracker_open
+hk_ret_8:
+        cmp #8
+        bne hk_ret_win
+        jmp paint_open
 hk_ret_win:
         lda sel_icon
         jsr open_or_raise
@@ -971,11 +986,13 @@ di_inv:
 
 ; icon slot tables (NICONS entries; M3 grows these as Dostris/Pac-Man/
 ; Music/Paint icons fill row 2's remaining slots).
-icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X
-icon_y_tab:  dc.b ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y,ICONROW2_Y,ICONROW2_Y,ICONROW2_Y
-icon_lr_tab: dc.b LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2,LABELROW2,LABELROW2,LABELROW2
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker
+; 3 rows x 4 cols: SysInfo/Clock/Files/Theme (row0), Dostris/Pac-Man/Music/
+; Tracker (row1), Paint (row2.col0).
+icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X
+icon_y_tab:  dc.b ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW0_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y
+icon_lr_tab: dc.b LABELROW0,LABELROW0,LABELROW0,LABELROW0,LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker,<msg_paint
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker,>msg_paint
 
 ; ============================================================================
 ; renderer primitives (all byte-column / 7-px aligned)
@@ -1605,6 +1622,7 @@ msg_dostris:      dc.b "Dostris",0
 msg_pacman:       dc.b "Pac-Man",0
 msg_music:        dc.b "Music",0
 msg_tracker:      dc.b "Tracker",0
+msg_paint:        dc.b "Paint",0
 msg_files_title:  dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
@@ -1676,6 +1694,7 @@ rowhi:
         include "pacman.i"
         include "music.i"
         include "tracker.i"
+        include "paint.i"
         include "build/notes7.s"
 
 ; ============================================================================
@@ -1748,3 +1767,23 @@ tk_vis:      dc.b 0       ; tracker draw: visible-row index 0-11
 tk_cur:      dc.b 0       ; tracker draw/play: absolute row being processed
 tk_ch:       dc.b 0       ; tracker draw/play: channel loop index
 tk_cellbuf:  dc.b 0,0,0,0,0,0   ; tracker: formatted "C-2:0" cell text
+
+; ---- Paint state (canvas itself is PAINTBUF in BSS, see paint.i) ----
+pt_cx:       dc.b 0       ; cursor cell column 0-31
+pt_cy:       dc.b 0       ; cursor cell row 0-33
+pt_tool:     dc.b 0       ; 0=pencil 1=rect 2=frect 3=fill
+pt_ink:      dc.b 3       ; current ink index 0-3
+pt_anchor:   dc.b 0       ; rect/frect: 1 if an anchor is set
+pt_ax:       dc.b 0       ; anchor cell column
+pt_ay:       dc.b 0       ; anchor cell row
+pt_outline:  dc.b 0       ; fillrect: 1=border only
+pt_target:   dc.b 0       ; flood fill: pattern being replaced
+pt_sp:       dc.b 0       ; flood fill: stack pointer
+pt_px:       dc.b 0       ; paint draw/flood: working column
+pt_py:       dc.b 0       ; paint draw/flood: working row
+pt_rx0:      dc.b 0       ; fillrect: normalised bounds
+pt_rx1:      dc.b 0
+pt_ry0:      dc.b 0
+pt_ry1:      dc.b 0
+pt_rx:       dc.b 0       ; fillrect: col iterator
+pt_ry:       dc.b 0       ; fillrect: row iterator

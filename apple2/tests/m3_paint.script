@@ -1,0 +1,64 @@
+# UnoDOS/AppleII milestone-3 Paint regression: MacPaint-style editor on a
+# 32x34 grid of byte-aligned fat-pixel cells, keyboard cursor, four dither
+# inks, pencil/rect/frect/flood-fill, PAINT.UNO save/load (HANDOFF-M3 SS3).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_paint.script
+#
+# The full canvas redraw (1088 cells) takes ~30 harness ticks, so open/clear/
+# load waits clear that; single-cell edits (pencil/rect/fill) are cheap.
+wait 600
+key right             # Clock->Files
+key right             # Files->Theme
+key right             # Theme->Dostris
+key right             # Dostris->Pac-Man
+key right             # Pac-Man->Music
+key right             # Music->Tracker
+key right             # Tracker->Paint (row2 col0)
+shot m3_paint_select  # Paint icon highlighted
+key return            # paint_open: white canvas, pencil/black
+wait 44
+shot m3_paint_open     # blank white canvas, "Tool:Pencil  Ink:Black"
+# --- pencil a short black stroke ---
+key space             # black dot
+key right
+key space
+key right
+key space
+wait 6
+shot m3_paint_pencil   # three black cells + cursor
+# --- a filled grey rectangle ---
+key openbracket       # ink Black -> Grey
+key i                 # tool Frect
+key space             # set the anchor
+key down
+key down
+key down
+key down
+key down
+key right
+key right
+key right
+key right
+key right
+key right
+key right
+key space             # draw the filled grey rectangle
+wait 6
+shot m3_paint_rect     # solid grey block on the canvas
+# --- flood fill the rectangle black ---
+key closebracket      # ink Grey -> Black
+key f                 # tool Fill
+key space             # flood the grey block (bounded) with black
+wait 6
+shot m3_paint_fill     # the block is now black
+# --- save / clear / load round trip ---
+key s                 # save PAINT.UNO
+key n                 # clear the canvas to white
+wait 80
+shot m3_paint_clear    # blank white canvas again
+key l                 # load PAINT.UNO
+wait 80
+shot m3_paint_load     # the artwork is restored (FS round trip)
+key esc               # back to the desktop
+wait 30
+shot m3_paint_desktop  # desktop restored (3-row icon grid incl. Paint)
+quit
