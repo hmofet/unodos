@@ -1,0 +1,29 @@
+# UnoDOS/AppleII milestone-3 Music regression: Canon in D on the 1-bit
+# $C030 speaker (HANDOFF-M3 SS4 - blocking square-wave playback).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_music.script
+#
+# note_play monopolises the CPU per note (the desktop freezes while a tone
+# sounds, like real Apple II music). Return starts playback and a cursor
+# advances note-by-note; ESC is polled at note boundaries to abort. The
+# `assert beep>0` confirms the speaker toggled (the harness counts $C030
+# reads).
+wait 600
+key right             # sel_icon Clock->Files
+key right             # Files->Theme
+key right             # Theme->Dostris
+key right             # Dostris->Pac-Man
+key right             # Pac-Man->Music (row2 col2)
+shot m3_music_select  # Music icon highlighted
+key return            # music_open: draw the staff
+wait 22
+shot m3_music_staff   # the 24-note Canon in D contour on a 5-line staff
+key return            # music_play: blocking playback begins
+wait 60
+assert beep>0         # the speaker toggled (>0 $C030 reads)
+shot m3_music_playing # cursor advanced over the staff mid-tune
+key esc               # request abort (consumed at the next note boundary)
+wait 40
+key esc               # idle ESC: back to the desktop
+wait 22
+shot m3_music_desktop  # desktop restored
+quit

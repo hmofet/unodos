@@ -14,6 +14,7 @@ echo "[1/4] generating shared data (font/icons) from x86 tree assets..."
 
 echo "[2/4] converting the shared font to the hi-res 7px convention..."
 "$PY" mkfont.py
+"$PY" mknotes.py
 
 case "$1" in
   test)

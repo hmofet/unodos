@@ -71,6 +71,10 @@ zpNRow   equ $4D   ; notepad_draw pass2: current screen row
 zpBeepHalf equ $4E ; beep: half-period delay constant
 zpBeepN    equ $4F ; beep: remaining $C030 toggles
 
+; ---- zero page ($76-$78: Music/Tracker note_play, see music.i) ----
+zpNoteHalf equ $76 ; note_play: half-period inner-delay constant
+zpNoteDur  equ $77 ; (2) note_play: remaining $C030 toggles (16-bit)
+
 ; ---- zero page ($50-$60: Dostris, see dostris.i) ----
 zpDosMask  equ $50 ; (2) current/test piece+rotation 4x4 bitmask, lo/hi
 zpDosBit   equ $52 ; mask bit index 0-15 during cell iteration
@@ -143,7 +147,7 @@ ICONCOL0_X      equ 1
 ICONCOL1_X      equ 11
 ICONCOL2_X      equ 21
 ICONCOL3_X      equ 31
-NICONS          equ 6     ; populated icon slots so far (grows through M3)
+NICONS          equ 8     ; populated icon slots so far (grows through M3)
 
 ; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
 ; (as draw_desktop), rows1-22 = content, row23 = status/help line.
@@ -270,7 +274,11 @@ handle_key:
         beq hk_theme
         cmp #4
         beq hk_dostris
-        jmp pacman_key
+        cmp #5
+        beq hk_pacman
+        cmp #6
+        beq hk_music
+        jmp tracker_key
 hk_files:
         jmp files_key
 hk_notepad:
@@ -279,6 +287,10 @@ hk_theme:
         jmp theme_key
 hk_dostris:
         jmp dostris_key
+hk_pacman:
+        jmp pacman_key
+hk_music:
+        jmp music_key
 hk_desktop:
         lda zpTmp
         cmp #$9B                ; ESC
@@ -333,8 +345,16 @@ hk_ret_4:
         jmp dostris_open
 hk_ret_5:
         cmp #5
-        bne hk_ret_win
+        bne hk_ret_6
         jmp pacman_open
+hk_ret_6:
+        cmp #6
+        bne hk_ret_7
+        jmp music_open
+hk_ret_7:
+        cmp #7
+        bne hk_ret_win
+        jmp tracker_open
 hk_ret_win:
         lda sel_icon
         jsr open_or_raise
@@ -951,11 +971,11 @@ di_inv:
 
 ; icon slot tables (NICONS entries; M3 grows these as Dostris/Pac-Man/
 ; Music/Paint icons fill row 2's remaining slots).
-icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X
-icon_y_tab:  dc.b ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y,ICONROW2_Y
-icon_lr_tab: dc.b LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2,LABELROW2
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman
+icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X
+icon_y_tab:  dc.b ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y,ICONROW2_Y,ICONROW2_Y,ICONROW2_Y
+icon_lr_tab: dc.b LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2,LABELROW2,LABELROW2,LABELROW2
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker
 
 ; ============================================================================
 ; renderer primitives (all byte-column / 7-px aligned)
@@ -1583,6 +1603,8 @@ msg_files:        dc.b "Files",0
 msg_theme:        dc.b "Theme",0
 msg_dostris:      dc.b "Dostris",0
 msg_pacman:       dc.b "Pac-Man",0
+msg_music:        dc.b "Music",0
+msg_tracker:      dc.b "Tracker",0
 msg_files_title:  dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
@@ -1652,6 +1674,9 @@ rowhi:
         include "theme.i"
         include "dostris.i"
         include "pacman.i"
+        include "music.i"
+        include "tracker.i"
+        include "build/notes7.s"
 
 ; ============================================================================
 ; vars - kernel variable block (UDM1 discovery header points here)
@@ -1713,3 +1738,13 @@ pm_modet:    dc.b 0       ; seconds in the current scatter/chase phase
 pm_subtick:  dc.b 0       ; half-speed toggle (frightened ghosts)
 pm_stepctr:  dc.b 0       ; soft-seconds since the last game step
 pm_rng:      dc.b 1       ; LCG seed (must stay nonzero)
+
+; ---- Music/Tracker state (note table is mus_notes in build/notes7.s) ----
+mus_idx:     dc.b 0       ; music: current note index during draw/playback
+tk_row:      dc.b 0       ; tracker: cursor row 0-31
+tk_chan:     dc.b 0       ; tracker: cursor channel 0-3
+tk_top:      dc.b 0       ; tracker: first visible row (scroll)
+tk_vis:      dc.b 0       ; tracker draw: visible-row index 0-11
+tk_cur:      dc.b 0       ; tracker draw/play: absolute row being processed
+tk_ch:       dc.b 0       ; tracker draw/play: channel loop index
+tk_cellbuf:  dc.b 0,0,0,0,0,0   ; tracker: formatted "C-2:0" cell text

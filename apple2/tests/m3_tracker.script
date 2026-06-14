@@ -1,0 +1,41 @@
+# UnoDOS/AppleII milestone-3 Tracker regression: 32-row / 4-channel pattern
+# editor, single-voice (leftmost-channel) playback, SONG.UNO save/load on the
+# mini-FS (HANDOFF-M3 SS4).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_tracker.script
+wait 600
+key right             # Clock->Files
+key right             # Files->Theme
+key right             # Theme->Dostris
+key right             # Dostris->Pac-Man
+key right             # Pac-Man->Music
+key right             # Music->Tracker (row2 col3)
+shot m3_tracker_select # Tracker icon highlighted
+key return            # tracker_open: load the demo song, draw the grid
+wait 22
+shot m3_tracker_grid   # demo pattern: channel-0 melody + channel-1 bass
+# --- edit + save/clear/load round trip ---
+key down              # cursor row 0->1
+key down              # ->2
+key right             # channel 0->1
+key right             # ->2 (an empty cell)
+key w                 # set it to C-2 (note up from empty)
+wait 24
+shot m3_tracker_edit   # row2/channel2 now holds C-2:0
+key s                 # save SONG.UNO
+key x                 # clear the cell again
+wait 24
+shot m3_tracker_clear  # row2/channel2 back to ---:-
+key l                 # load SONG.UNO
+wait 24
+shot m3_tracker_load   # the saved C-2:0 is restored (FS round trip)
+# --- playback ---
+key space             # play the pattern (blocking, single-voice)
+wait 50
+assert beep>0         # the speaker toggled
+shot m3_tracker_play   # status line shows the current Play row
+key esc               # abort playback (next row boundary)
+wait 30
+key esc               # idle ESC: back to the desktop
+wait 22
+shot m3_tracker_desktop
+quit
