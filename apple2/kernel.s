@@ -71,6 +71,42 @@ zpNRow   equ $4D   ; notepad_draw pass2: current screen row
 zpBeepHalf equ $4E ; beep: half-period delay constant
 zpBeepN    equ $4F ; beep: remaining $C030 toggles
 
+; ---- zero page ($50-$60: Dostris, see dostris.i) ----
+zpDosMask  equ $50 ; (2) current/test piece+rotation 4x4 bitmask, lo/hi
+zpDosBit   equ $52 ; mask bit index 0-15 during cell iteration
+zpDosBX    equ $53 ; board column for the cell at zpDosBit
+zpDosBY    equ $54 ; board row for the cell at zpDosBit
+zpDosTX    equ $55 ; piece X under test (move/rotate/spawn checks)
+zpDosTY    equ $56 ; piece Y under test
+zpDosIdx   equ $58 ; board byte index (zpDosBY*10+zpDosBX)
+zpDosT1    equ $59 ; mul10/shift scratch
+zpDosT2    equ $5A ; mul10/shift scratch
+zpDosFull  equ $5B ; clear_lines: rows cleared this lock (0-4)
+zpDosRow   equ $5C ; clear_lines: row loop index
+zpDosSrc   equ $5D ; (2) shift_down: source row pointer
+zpDosDst   equ $5F ; (2) shift_down/newgame: dest row / clear pointer
+
+; ---- zero page ($61-$75: Pac-Man, see pacman.i) ----
+zpPMCol    equ $61 ; working maze column (0-12)
+zpPMRow    equ $62 ; working maze row (0-12)
+zpPMIdx    equ $63 ; maze index = row*13+col
+zpPMNCol   equ $64 ; pm_step_walkable: candidate column
+zpPMNRow   equ $65 ; pm_step_walkable: candidate row
+zpPMT1     equ $66 ; mul13 scratch (pm_calc_idx/pm_step_walkable)
+zpPMT2     equ $67 ; abs-value scratch (pm_try_dir/pm_manhattan_to_pac)
+zpPMBestD  equ $68 ; pm_steer: best distance found so far
+zpPMBestDir equ $69 ; pm_steer: best direction found so far ($FF=none)
+zpPMTCol   equ $6A ; pm_steer: target column
+zpPMTRow   equ $6B ; pm_steer: target row
+zpPMDir    equ $6C ; pm_steer: direction loop counter 0-3
+zpPMGI     equ $6D ; pm_steer: ghost index (0/1), saved across X-clobbering calls
+zpPMDir2   equ $6E ; pm_try_dir: direction under test, saved across pm_step_walkable
+zpPMRevDir equ $6F ; pm_steer: reverse of the ghost's current direction
+zpPMOldPC  equ $70 ; pacman_tick: pac column before this tick's move
+zpPMOldPR  equ $71 ; pacman_tick: pac row before this tick's move
+zpPMOldGC  equ $72 ; (2) pacman_tick: ghost columns before this tick's move
+zpPMOldGR  equ $74 ; (2) pacman_tick: ghost rows before this tick's move
+
 ; ---- screen layout constants ----
 SCRCOLS         equ 40
 SCRROWS         equ 24
@@ -93,14 +129,21 @@ CK_CONTENT_Y    equ (CK_Y+8)
 CK_CONTENT_W    equ (CK_W-2)
 CK_CONTENT_H    equ (CK_H-9)
 
-ICONW           equ 10    ; icon grid
-ICONH           equ 40
-ICONY           equ 152
-LABELY          equ 168
-LABELROW        equ 21
-ICON0_X         equ 2     ; SysInfo icon
-ICON1_X         equ 14    ; Clock icon
-ICON2_X         equ 26    ; Files icon
+; icon grid - 2 rows x 4 cols (8 slots; M3 adds Theme/Dostris/Pac-Man/
+; Music/Paint to M1/M2's SysInfo/Clock/Files). Each slot is ICONW
+; byte-cols x ICONH px; row1 frame top = ICONROW1_Y, row2 = ICONROW2_Y;
+; the label sits on the middle char-row of each slot.
+ICONW           equ 9
+ICONH           equ 24
+ICONROW1_Y      equ 144
+ICONROW2_Y      equ 168
+LABELROW1       equ 19
+LABELROW2       equ 22
+ICONCOL0_X      equ 1
+ICONCOL1_X      equ 11
+ICONCOL2_X      equ 21
+ICONCOL3_X      equ 31
+NICONS          equ 6     ; populated icon slots so far (grows through M3)
 
 ; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
 ; (as draw_desktop), rows1-22 = content, row23 = status/help line.
@@ -116,8 +159,12 @@ NOTE_MAXLEN     equ 2048  ; notepad text buffer cap
 TICKS_PER_SEC   equ 1000
 
 ; KBSS: kernel buffers (RWTS decode tables, FS/file buffers) live above the
-; assembled image - mkdsk.py asserts the image fits below this.
-KBSS            equ $6000
+; assembled image - mkdsk.py asserts the image fits below this. Raised from
+; $6000 to $9000 for M3 (5 new apps): gives code $4000-$8FFF (20KB) and
+; leaves $9D00-$BFFF free (after NOTEBUF ends at KBSS+$CFF) for new M3 BSS
+; tables (Dostris board, Pac-Man maze, Music/Tracker data, Paint buffer,
+; pat_tab).
+KBSS            equ $9000
 
         org $4000
 
@@ -182,31 +229,56 @@ ml_check:
         sta frame_ctr
         sta frame_ctr+1
         inc clock_secs
-        bne ml_cdraw
+        bne ml_dos
         inc clock_secs+1
+ml_dos:
+        lda app_mode            ; Dostris gravity: one soft-drop step per
+        cmp #4                  ; soft-clock second (dostris_tick handles
+        bne ml_pac              ; pause/game-over and the level-based rate)
+        jsr dostris_tick
+        jmp mainloop
+ml_pac:
+        lda app_mode            ; Pac-Man: one actor step per soft-clock
+        cmp #5                  ; second (pacman_tick handles game-over)
+        bne ml_cdraw
+        jsr pacman_tick
+        jmp mainloop
 ml_cdraw:
-        lda app_mode            ; Files/Notepad cover the desktop - don't
-        bne mainloop            ; let the clock redraw clobber them
+        lda app_mode            ; Files/Notepad/Theme cover the desktop -
+        bne mainloop            ; don't let the clock redraw clobber them
         lda win_state+1
         beq mainloop
         jsr draw_clock_content
         jmp mainloop
 
-; handle_key - A = key code from $C000 (bit7 set). When a Files/Notepad app
-; is active (app_mode != 0), keys are routed there entirely. Otherwise: ESC
-; closes the topmost window; if the desktop has focus, left/right move
-; sel_icon (3 icons: SysInfo/Clock/Files, wrapping) and Return
-; launches/raises the selected app; if a window has focus, other keys are
-; routed to it (no-op for M1 apps).
+; handle_key - A = key code from $C000 (bit7 set). When a full-screen app is
+; active (app_mode != 0: 1=Files, 2=Notepad, 3=Theme, 4=Dostris), keys are
+; routed there entirely. Otherwise: ESC closes the topmost window; if the
+; desktop has focus, left/right move sel_icon (NICONS icons, wrapping) and
+; Return launches/raises the selected app (Files, Theme and Dostris are
+; full-screen apps opened directly; SysInfo/Clock open as windows); if a
+; window has focus, other keys are routed to it (no-op for M1 apps).
 handle_key:
         sta zpTmp
         lda app_mode
         beq hk_desktop
         cmp #1
-        bne hk_notepad
+        beq hk_files
+        cmp #2
+        beq hk_notepad
+        cmp #3
+        beq hk_theme
+        cmp #4
+        beq hk_dostris
+        jmp pacman_key
+hk_files:
         jmp files_key
 hk_notepad:
         jmp notepad_key
+hk_theme:
+        jmp theme_key
+hk_dostris:
+        jmp dostris_key
 hk_desktop:
         lda zpTmp
         cmp #$9B                ; ESC
@@ -228,7 +300,7 @@ hk_notesc:
 hk_left:
         lda sel_icon
         bne hkl_dec
-        lda #2
+        lda #(NICONS-1)
         sta sel_icon
         jmp hk_redraw
 hkl_dec:
@@ -236,7 +308,7 @@ hkl_dec:
         jmp hk_redraw
 hk_right:
         lda sel_icon
-        cmp #2
+        cmp #(NICONS-1)
         bne hkr_inc
         lda #0
         sta sel_icon
@@ -249,8 +321,20 @@ hk_redraw:
 hk_return:
         lda sel_icon
         cmp #2
-        bne hk_ret_win
+        bne hk_ret_3
         jmp files_open
+hk_ret_3:
+        cmp #3
+        bne hk_ret_4
+        jmp theme_open
+hk_ret_4:
+        cmp #4
+        bne hk_ret_5
+        jmp dostris_open
+hk_ret_5:
+        cmp #5
+        bne hk_ret_win
+        jmp pacman_open
 hk_ret_win:
         lda sel_icon
         jsr open_or_raise
@@ -433,10 +517,10 @@ draw_win:
         sta zpFH
         lda zpWF
         beq dw_unfoc
-        lda #$7F
+        lda pat_tab+2
         jmp dw_pat
 dw_unfoc:
-        lda #$00
+        lda pat_tab+3
 dw_pat:
         sta zpFPat
         jsr fill_rows
@@ -472,7 +556,7 @@ dw_inv:
         sta zpFW
         lda #1
         sta zpFH
-        lda #$7F
+        lda pat_tab+2
         sta zpFPat
         jsr fill_rows
 dw_done:
@@ -788,62 +872,39 @@ draw_desktop:
         jsr dither_rect
         rts
 
-; draw_icons - redraw all desktop icons, highlighting sel_icon.
+; draw_icons - redraw all desktop icons, highlighting sel_icon. Table-driven
+; over NICONS slots (icon_x_tab/icon_y_tab/icon_lr_tab/icon_lbl_lo/hi); X =
+; slot index is passed through to draw_icon, which indexes icon_y_tab and
+; icon_lr_tab itself (frame_rect/fill_rows/draw_string don't touch X).
 draw_icons:
-        lda #ICON0_X
+        ldx #0
+di_loop:
+        lda icon_x_tab,x
         sta zpFX
-        lda #<msg_sysinfo
+        lda icon_lbl_lo,x
         sta zpPtr
-        lda #>msg_sysinfo
+        lda icon_lbl_hi,x
         sta zpPtr+1
-        lda sel_icon
-        cmp #0
-        beq di0_sel
+        cpx sel_icon
+        beq di_sel
         lda #0
-        jmp di0_go
-di0_sel:
+        jmp di_go
+di_sel:
         lda #1
-di0_go:
+di_go:
         jsr draw_icon
-
-        lda #ICON1_X
-        sta zpFX
-        lda #<msg_clock
-        sta zpPtr
-        lda #>msg_clock
-        sta zpPtr+1
-        lda sel_icon
-        cmp #1
-        beq di1_sel
-        lda #0
-        jmp di1_go
-di1_sel:
-        lda #1
-di1_go:
-        jsr draw_icon
-
-        lda #ICON2_X
-        sta zpFX
-        lda #<msg_files
-        sta zpPtr
-        lda #>msg_files
-        sta zpPtr+1
-        lda sel_icon
-        cmp #2
-        beq di2_sel
-        lda #0
-        jmp di2_go
-di2_sel:
-        lda #1
-di2_go:
-        jsr draw_icon
+        inx
+        cpx #NICONS
+        bne di_loop
         rts
 
-; draw_icon - zpFX = box x, zpPtr = label, A = 1 if selected (inverted
-; label band) else 0.
+; draw_icon - X = icon slot index, zpFX = box x, zpPtr = label, A = 1 if
+; selected (inverted label band) else 0. Icon y / label row come from
+; icon_y_tab/icon_lr_tab,X. Label fill/invert use the themeable accent
+; (pat_tab+2 selected / pat_tab+3 unselected - see theme.i).
 draw_icon:
         sta zpTmp
-        lda #ICONY
+        lda icon_y_tab,x
         sta zpFY
         lda #ICONW
         sta zpFW
@@ -855,7 +916,9 @@ draw_icon:
         clc
         adc #1
         sta zpFX
-        lda #LABELY
+        lda icon_y_tab,x
+        clc
+        adc #8
         sta zpFY
         lda #(ICONW-2)
         sta zpFW
@@ -863,17 +926,17 @@ draw_icon:
         sta zpFH
         lda zpTmp
         beq di_pat0
-        lda #$7F
+        lda pat_tab+2
         jmp di_pat
 di_pat0:
-        lda #$00
+        lda pat_tab+3
 di_pat:
         sta zpFPat
         jsr fill_rows
 
         lda zpFX
         sta zpCol
-        lda #LABELROW
+        lda icon_lr_tab,x
         sta zpRow
         lda zpTmp
         beq di_inv0
@@ -885,6 +948,14 @@ di_inv:
         sta zpInv
         jsr draw_string
         rts
+
+; icon slot tables (NICONS entries; M3 grows these as Dostris/Pac-Man/
+; Music/Paint icons fill row 2's remaining slots).
+icon_x_tab:  dc.b ICONCOL0_X,ICONCOL1_X,ICONCOL2_X,ICONCOL3_X,ICONCOL0_X,ICONCOL1_X
+icon_y_tab:  dc.b ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW1_Y,ICONROW2_Y,ICONROW2_Y
+icon_lr_tab: dc.b LABELROW1,LABELROW1,LABELROW1,LABELROW1,LABELROW2,LABELROW2
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman
 
 ; ============================================================================
 ; renderer primitives (all byte-column / 7-px aligned)
@@ -942,7 +1013,7 @@ fr_done:
         rts
 
 ; frame_rect - draw a 1px border around zpFX,zpFY,zpFW,zpFH (pixel rows /
-; byte columns) using pattern $7F (all 7 pixels set).
+; byte columns) using the themeable accent pattern (pat_tab+2).
 frame_rect:
         lda zpFX
         sta zpFX0
@@ -952,7 +1023,7 @@ frame_rect:
         sta zpFW0
         lda zpFH
         sta zpFH0
-        lda #$7F
+        lda pat_tab+2
         sta zpFPat
 
         lda zpFX0
@@ -1002,8 +1073,8 @@ frame_rect:
         sta zpFH
         rts
 
-; dither_rect - fill zpFX,zpFY,zpFW,zpFH with a checkerboard ($55/$2A
-; alternating by pixel row - the macplus pat_tab 50% dither, byte form).
+; dither_rect - fill zpFX,zpFY,zpFW,zpFH with the themeable desktop dither
+; (pat_tab+0 on even pixel rows, pat_tab+1 on odd - see theme.i pat_tab).
 dither_rect:
         lda zpFY
         sta zpI
@@ -1025,10 +1096,10 @@ dr_row:
         lda zpI
         and #1
         beq dr_even
-        lda #$2A
+        lda pat_tab+1
         jmp dr_go
 dr_even:
-        lda #$55
+        lda pat_tab+0
 dr_go:
         ldy #0
 dr_col:
@@ -1493,12 +1564,25 @@ fst_data2:       dc.b "FSTEST2 PAYLOAD!"
         endif
 
 ; ============================================================================
+; pat_tab - mutable renderer fill patterns (M3 Theme, see theme.i). Read by
+; dither_rect/frame_rect/draw_win/draw_icon; rewritten live by theme_apply.
+;   [0] dither even-row   [1] dither odd-row
+;   [2] accent ("on": borders, focused titles, selected icon labels)
+;   [3] background ("off": unfocused titles, unselected icon labels)
+; Initial values = the Classic preset (th_presets index 0, theme.i).
+; ============================================================================
+pat_tab:          dc.b $55,$2A,$7F,$00
+
+; ============================================================================
 ; strings
 ; ============================================================================
 msg_title:        dc.b "UnoDOS",0
 msg_sysinfo:      dc.b "SysInfo",0
 msg_clock:        dc.b "Clock",0
 msg_files:        dc.b "Files",0
+msg_theme:        dc.b "Theme",0
+msg_dostris:      dc.b "Dostris",0
+msg_pacman:       dc.b "Pac-Man",0
 msg_files_title:  dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
@@ -1565,6 +1649,9 @@ rowhi:
         include "fs.i"
         include "files.i"
         include "notepad.i"
+        include "theme.i"
+        include "dostris.i"
+        include "pacman.i"
 
 ; ============================================================================
 ; vars - kernel variable block (UDM1 discovery header points here)
@@ -1579,8 +1666,8 @@ focus:       dc.b 0       ; vars+7  $FF = desktop, else focused window id
 win_state:   dc.b 0,0     ; vars+8  per-window open(1)/closed(0)
 zlist:       dc.b 0,0     ; vars+10 z-order, [0]=topmost, $FF=empty
 
-; ---- Files/Notepad app state ----
-app_mode:    dc.b 0       ; 0=desktop, 1=Files, 2=Notepad
+; ---- Files/Notepad/Theme app state ----
+app_mode:    dc.b 0       ; 0=desktop, 1=Files, 2=Notepad, 3=Theme
 files_sel:   dc.b 0       ; selected directory index in Files
 files_confirm: dc.b 0     ; 0=normal, 1=awaiting delete y/n
 note_idx:    dc.b 0       ; directory index Notepad was opened from
@@ -1588,3 +1675,41 @@ note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
 note_len:    dc.w 0       ; current buffer length (bytes)
 note_dirty:  dc.b 0       ; 1 if unsaved changes
 note_flash:  dc.b 0       ; status line: 0=help, 1=SAVED, 2=FULL
+th_sel:      dc.b 0       ; Theme: highlighted preset (cursor)
+th_cur:      dc.b 0       ; Theme: currently-applied preset (matches pat_tab)
+
+; ---- Dostris state (board itself is DOSBOARD in BSS, see dostris.i) ----
+dos_piece:   dc.b 0       ; current piece type 0-6 (I,O,T,S,Z,J,L)
+dos_rot:     dc.b 0       ; current rotation 0-3
+dos_px:      dc.b 0       ; current piece origin column (4x4 box, 0-9)
+dos_py:      dc.b 0       ; current piece origin row (4x4 box, 0-19)
+dos_next:    dc.b 0       ; next piece type 0-6
+dos_score:   dc.w 0       ; score
+dos_lines:   dc.b 0       ; total lines cleared
+dos_level:   dc.b 0       ; level = dos_lines/4
+dos_dctr:    dc.b 0       ; gravity tick counter (soft-clock seconds)
+dos_paused:  dc.b 0       ; 1 = paused
+dos_over:    dc.b 0       ; 1 = game over
+dos_rng:     dc.b 1       ; LCG seed (must stay nonzero)
+dos_justlock: dc.b 0      ; softdrop set: 1 if this call locked+respawned
+
+; ---- Pac-Man state (maze itself is PMMAZE in BSS, see pacman.i) ----
+pac_col:     dc.b 0       ; pac tile column 0-12
+pac_row:     dc.b 0       ; pac tile row 0-12
+pac_dir:     dc.b 1       ; current direction 0=up,1=left,2=down,3=right
+pac_nextdir: dc.b 1       ; queued turn (applied at the next open tile)
+gh_col:      dc.b 0,0     ; ghost tile columns
+gh_row:      dc.b 0,0     ; ghost tile rows
+gh_dir:      dc.b 0,0     ; ghost directions
+gh_mode:     dc.b 0,0     ; 0=normal,1=frightened,2=eaten
+pm_score:    dc.w 0
+pm_lives:    dc.b 3
+pm_level:    dc.b 1
+pm_dots:     dc.w 0       ; remaining dots+power pellets
+pm_state:    dc.b 0       ; 0=playing, 1=game over
+pm_fright:   dc.b 0       ; frightened seconds remaining
+pm_mode:     dc.b 0       ; 0=scatter, 1=chase
+pm_modet:    dc.b 0       ; seconds in the current scatter/chase phase
+pm_subtick:  dc.b 0       ; half-speed toggle (frightened ghosts)
+pm_stepctr:  dc.b 0       ; soft-seconds since the last game step
+pm_rng:      dc.b 1       ; LCG seed (must stay nonzero)

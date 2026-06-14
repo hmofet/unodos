@@ -67,8 +67,8 @@ FSE_START    equ 14
 FSE_LEN      equ 16
 
 ; ---- BSS (above KBSS; see rwts.i for DECTAB/RDBUF2/SECBUF/SECBUF2) ----
-CATBUF  equ KBSS+$400   ; $6400-$64FF: cached catalog sector (rel sector 0)
-NOTEBUF equ KBSS+$500   ; $6500-$6CFF: Notepad text buffer (2048 bytes)
+CATBUF  equ KBSS+$400   ; $9400-$94FF: cached catalog sector (rel sector 0)
+NOTEBUF equ KBSS+$500   ; $9500-$9CFF: Notepad text buffer (2048 bytes)
 
 ; ---------------------------------------------------------------- fs_init
 ; fs_init - call once at boot (after rwts_init): load the catalog into CATBUF.

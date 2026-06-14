@@ -1,0 +1,27 @@
+# UnoDOS/AppleII milestone-3 Theme regression: dither-scheme picker (pat_tab).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_theme.script
+#
+# Wait values follow the m2.script convention (key already runs KEY_INSTRS=
+# 30000; wait N adds N*TICK_INSTRS=5000). theme_open/theme_draw redraw the
+# full content area (~23 rows), comparable to files_open's ~89.6K total, so
+# wait 15 (105K) covers it with margin; theme_apply additionally repaints the
+# desktop + both windows + icons, so wait 20 (130K).
+wait 600
+key right             # sel_icon: Clock -> Files
+key right             # sel_icon: Files -> Theme
+shot m3_theme_select  # Theme icon highlighted (4th icon, row 1)
+key return            # theme_open: full-screen preset list, Classic selected+applied
+wait 15
+shot m3_theme_open    # "Theme" title, 6 presets, Classic row inverted + "* applied"
+key right             # th_sel: Classic -> Light dots
+key right             # th_sel: Light dots -> Dense dots
+key right             # th_sel: Dense dots -> Stripes
+wait 15
+shot m3_theme_cycle   # selection bar on "Stripes"; "* applied" still on Classic
+key return            # theme_apply: pat_tab = Stripes preset, live repaint
+wait 20
+shot m3_theme_applied # selection bar + "* applied" both on "Stripes" row
+key esc               # theme_close: back to desktop with Stripes pat_tab applied
+wait 20
+shot m3_theme_desktop # desktop dither now horizontal stripes (pat_tab live)
+quit

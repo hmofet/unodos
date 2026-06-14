@@ -30,10 +30,11 @@ zpRI      equ $F9   ; loop index
 zpTrkRd  equ $FD   ; track read from the address field (validation)
 
 ; ---- BSS (above KBSS, not part of the assembled image - see kernel.s) ----
-DECTAB   equ KBSS        ; $6000-$60FF: 256-byte 6-and-2 decode table
-RDBUF2   equ KBSS+$100   ; $6100-$6155: 86-byte "twos" buffer
-SECBUF   equ KBSS+$200   ; $6200-$62FF: general-purpose sector I/O buffer
-SECBUF2  equ KBSS+$300   ; $6300-$63FF: second buffer (AUTOTEST compare)
+; KBSS = $9000 (M3); offsets below are unchanged, addresses just shift up.
+DECTAB   equ KBSS        ; $9000-$90FF: 256-byte 6-and-2 decode table
+RDBUF2   equ KBSS+$100   ; $9100-$9155: 86-byte "twos" buffer
+SECBUF   equ KBSS+$200   ; $9200-$92FF: general-purpose sector I/O buffer
+SECBUF2  equ KBSS+$300   ; $9300-$93FF: second buffer (AUTOTEST compare)
 
 ; ---------------------------------------------------------------- rwts_init
 ; rwts_init - build DECTAB[WRTAB[y]] = y for y=0..63 (boot.s's bdt loop).

@@ -1,0 +1,34 @@
+# UnoDOS/AppleII milestone-3 Pac-Man regression: 13x13 tile-stepped maze
+# with two Manhattan-steer ghosts (HANDOFF-M3 SS2).
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_pacman.script
+#
+# pacman_tick advances the game once every PM_STEP_DIV (3) soft-clock
+# seconds (~1 tile per 12 harness ticks); a full board redraw (169 tiles)
+# takes ~18 harness ticks, so the open/new waits clear that. The run stays
+# in the opening scatter phase: the two ghosts flee to the top corners while
+# pac - spawning bottom-centre, facing left - runs along the bottom row,
+# eats the bottom-left power pellet (frightening the ghosts), then is steered
+# back to the right. Pac never leaves the bottom row, so it survives the run
+# (steering pac up into the interior would walk it into the ghosts).
+wait 600
+key right             # sel_icon Clock->Files
+key right             # Files->Theme
+key right             # Theme->Dostris (row2 col0)
+key right             # Dostris->Pac-Man (row2 col1)
+shot m3_pacman_select # Pac-Man icon highlighted
+key return            # pacman_open: new game + full board/HUD redraw
+wait 22
+shot m3_pacman_open    # fresh maze: pac bottom-centre, ghosts by the house, Score 0
+wait 24
+shot m3_pacman_fright  # pac ate dots + the bottom-left power pellet (Score 90);
+                       # both ghosts frightened (scared faces) up top
+key right             # reverse pac back along the bottom row
+wait 16
+shot m3_pacman_steer   # pac now heading right; score climbing as it re-eats east dots
+key n                 # new game: board reload, score/lives reset
+wait 22
+shot m3_pacman_new     # fresh maze again, Score 0 Lives 3
+key esc               # back to the desktop
+wait 22
+shot m3_pacman_desktop # desktop restored (icons/windows intact)
+quit

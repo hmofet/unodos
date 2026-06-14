@@ -16,7 +16,8 @@ TRACKS = 35
 DISK = TRACK * TRACKS    # 143360 bytes, 140K
 
 # kernel buffers (BSS) start here - the kernel image must stay below it
-KBSS = 0x6000
+# (raised from 0x6000 for M3 to give the kernel a 20KB code budget)
+KBSS = 0x9000
 KERNLOAD = 0x4000
 
 # mini-FS region (fs.i): tracks FS_TRACK..34 - keep in sync with fs.i

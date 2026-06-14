@@ -1,0 +1,42 @@
+# UnoDOS/AppleII milestone-3 Dostris regression: falling-block puzzle game.
+# Run: ./build.sh test && python3 harness.py build/unodos_apple2_test.dsk shots < tests/m3_dostris.script
+#
+# Dostris's gravity hook (ml_dos) fires a piece softdrop on most mainloop
+# passes once the per-row drop counter rolls over. Each softdrop does
+# erase-piece / inc dos_py / redraw-piece as two separate steps from the
+# harness's step-counting perspective, so an arbitrary `wait N` after a key
+# can land mid-softdrop and produce a "torn" frame (piece erased but not yet
+# redrawn). The wait values below were found empirically (greedy search over
+# the fixed dos_rng=1 seed) to land on clean, fully-redrawn frames - they are
+# not simply "big enough margin" values like the M2 scripts use.
+#
+# Fixed dos_rng=1 seed: newgame spawns piece=L (dos_piece=6), next=S (=3).
+wait 600
+key right             # sel_icon: Clock -> Files
+key right             # sel_icon: Files -> Theme
+key right             # sel_icon: Theme -> Dostris (row2, col0)
+shot m3_dostris_select # Dostris icon highlighted (5th icon, row 2)
+key return            # dostris_open: newgame + full board/HUD redraw
+wait 28
+shot m3_dostris_open   # L piece falling (px=3,py=1), HUD Score:0 Lines:0 Level:0 Next:S
+key right             # dk_right: move piece one column right
+shot m3_dostris_right  # piece shifted right (px=4,py=2)
+key left              # dk_left: move back toward start column
+key left              # dk_left: one column left of start
+shot m3_dostris_left   # piece left of its spawn column (px=2,py=4)
+key up                # dk_rotate: rotate clockwise (no wall-kick)
+wait 1
+shot m3_dostris_rotate # piece rotation changed (rot=2)
+key space             # dk_harddrop: drop to floor, lock, score, spawn next, full redraw
+wait 19
+shot m3_dostris_dropped # locked L cells on board, new piece spawned, HUD Score:1 Next:T
+key p                 # dk_pause: pause
+shot m3_dostris_paused  # HUD status row shows PAUSED
+key p                 # dk_pause: resume
+key n                 # dk_new: new game (board clear, HUD reset)
+wait 20
+shot m3_dostris_newgame # board cleared, Score:0 Lines:0 Level:0 restored, L piece falling again
+key esc               # dostris_close: back to desktop
+wait 20
+shot m3_dostris_desktop # desktop restored (icons/windows intact)
+quit
