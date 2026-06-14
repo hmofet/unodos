@@ -31,20 +31,25 @@ unpacked under WSL at `~/ps2dev/ps2dev`; `./build.sh ee` regenerates the
 font and links `build/unodos-ps2.elf` (a real MIPS R5900 / N32 executable).
 Docker was unavailable, so the prebuilt release replaced the ps2dev image.
 
-**What still can't happen here: running it.** PCSX2 requires a 4 MB PS2 BIOS
-and the BIOS folder provided (`C:\Users\arin\Downloads\Sony BIOS`) holds only
-**512 KB PlayStation *1* BIOSes** (scph1001/5501/7502 — PS1 console models),
-which PCSX2 rejects. So `main.c`'s **runtime behaviour on GS/pad is
-UNVERIFIED** — to test it you need a 4 MB PS2 BIOS dump (e.g. `scph39001` ≈
-4 MB) plus PCSX2, or real hardware via FMCB.
+**Running it: VERIFIED on the emulated GS.** PCSX2 **v2.6.3** + a **4 MB PS2
+BIOS** (`ps2-0200a-20040614.bin`, NTSC-US) boots `build/unodos-ps2.elf` and
+renders the M0 splash through the real GS pipeline — `shots/m0_pcsx2.png`,
+captured by `tools/run_pcsx2.ps1`. So `main.c`'s GS/pad runtime path (gsKit
+init, 640×448 FB→GS blit, primitives, font) is now hardware-path-verified, not
+just host-shim-verified. (The 4 MB PS2 BIOS was the missing piece — the earlier
+`Sony BIOS` folder held only **512 KB PlayStation *1* BIOSes**, which PCSX2
+rejects.) **Rig gotcha:** PCSX2 v2.x validates `[UI] SettingsVersion` and pops a
+*"Settings failed to load / incorrect version"* modal — which silently blocks
+the boot — unless `PCSX2.ini` carries `SettingsVersion = 1`; `run_pcsx2.ps1`
+writes a known-good ini when that key is missing. Real hardware (FMCB) is still
+the remaining frontier.
 
-What *is* fully verified is the handoff's **host shim** (HANDOFF §3, "the
+Also fully verified is the handoff's **host shim** (HANDOFF §3, "the
 family's fastest inner loop"): the software-FB code (`fb.c` + `uno_splash.c`)
 builds with WSL gcc 13 and renders to a PNG (`./build.sh host` →
 `shots/m0_splash.png`). The EE target shares `fb.c` + `uno_splash.c`
 *verbatim*, so everything the host shim proves — font, palette, every
-drawing primitive, the whole splash — carries to the PS2 unchanged; only the
-present-the-frame (GS) + input (pad) layers are EE-only and unrun.
+drawing primitive, the whole splash — also carries to the PS2 unchanged.
 
 ## Building
 
@@ -53,9 +58,24 @@ present-the-frame (GS) + input (pad) layers are EE-only and unrun.
 # uno_splash.c + host_main.c, renders shots/m0_splash.png
 ./build.sh host          # optional: ./build.sh host <cursor_x> <cursor_y>
 
-# PS2 ELF (BUILDS; runtime unverified - no PS2 BIOS) -> build/unodos-ps2.elf
+# PS2 ELF (BUILDS + RUNS on emulated GS) -> build/unodos-ps2.elf
 ./build.sh ee            # PS2DEV defaults to ~/ps2dev/ps2dev; override to relocate
 ```
+
+### Running it (PCSX2, VERIFIED)
+
+From Windows, boot the ELF in PCSX2 and screenshot the GS output:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ps2\tools\run_pcsx2.ps1
+# -> ps2\shots\m0_pcsx2.png  (the splash on the real GS pipeline)
+```
+
+Prereqs: PCSX2 **v2.6.3** portable + a **4 MB PS2 BIOS** in `pcsx2\bios\`. The
+script self-heals `PCSX2.ini` (writes `[UI] SettingsVersion = 1` if missing —
+without it PCSX2 v2.x rejects the config and blocks the boot) and launches
+`pcsx2-qt.exe -fullscreen -fastboot -elf <elf>`. **512 KB BIOSes are PS1, not
+PS2** — PCSX2 rejects them.
 
 ### Installing the toolchain (what this machine did)
 
@@ -84,8 +104,8 @@ shim's PPM dump to PNG with only the stdlib.
 - **EE target** (`main.c`): GS init (640×448 NTSC interlaced, double
   buffered), FB→GS textured-sprite blit per vsync, DualShock 2 read via
   SIO2MAN+PADMAN moving the cursor. **Builds** to `build/unodos-ps2.elf`
-  with the installed toolchain (gsKit/libpad linked); runtime unverified
-  pending a PS2 BIOS.
+  with the installed toolchain (gsKit/libpad linked) and **runs on the
+  emulated GS** in PCSX2 (`shots/m0_pcsx2.png`); real-hardware run pending.
 
 ### Pad-as-pointer (M1 button map, stubbed in M0)
 
@@ -105,17 +125,18 @@ shim's PPM dump to PNG with only the stdlib.
 | `fb.c` / `fb.h` | software framebuffer + drawing primitives (shared host+EE) |
 | `uno_splash.c` | the M0 splash, drawn through `fb.*` (shared host+EE) |
 | `host_main.c` | host shim: render → PPM (host-only) |
-| `main.c` | EE target: GS blit + DualShock 2 (builds; runtime unverified, no BIOS) |
+| `main.c` | EE target: GS blit + DualShock 2 (builds + runs on emulated GS) |
 | `mkfont_c.py` | shared font → `build/font_data.h` |
 | `tools/ppm2png.py` | PPM → PNG (stdlib only) |
+| `tools/run_pcsx2.ps1` | boot the ELF in PCSX2 + screenshot the GS → `shots/m0_pcsx2.png` |
 | `Makefile` / `build.sh` | EE (PS2SDK) / host build |
 
 ## Next
 
-- **Run M0 (blocked on a PS2 BIOS):** the ELF builds; running it needs a
-  4 MB PS2 BIOS dump for PCSX2 (the provided folder had PS1 BIOSes only) or
-  real hardware via FMCB. Then verify the PCSX2 batch-launch + screenshot
-  recipe (HANDOFF §3) and confirm the splash on GS + the DualShock 2 cursor.
+- **Run M0 — DONE on the emulated GS** (`shots/m0_pcsx2.png`, via
+  `tools/run_pcsx2.ps1`). Remaining: confirm the **DualShock 2 cursor** moves
+  (the splash is static, so the pad path is still un-exercised) and run on
+  **real hardware** via FMCB.
 - **M1 — the desktop:** copy `mac/unodos.c` → `ps2/unodos.c` and route its
   platform layer onto `fb.*`. The audit (HANDOFF §1) is done: the drawing is
   ~25 QuickDraw calls (rects / pen / text / ovals via the 6 `uno_*` wrappers

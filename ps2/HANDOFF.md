@@ -35,10 +35,20 @@ release is the recipe — see README). `./build.sh ee` links a real MIPS R5900
 ELF (`build/unodos-ps2.elf`, gsKit/libpad). The §1 audit is effectively done
 (see §1 note below).
 
-**Blocked:** running the ELF. PCSX2 needs a **4 MB PS2 BIOS**; the BIOS folder
-provided held only **512 KB PS1 BIOSes** (PS1 ≠ PS2). So `main.c`'s GS/pad
-runtime is unverified — needs a PS2 BIOS dump (e.g. scph39001 ≈ 4 MB) + PCSX2,
-or FMCB hardware. The §3 PCSX2 rig recipe is therefore still unverified.
+**Verified on emulated GS (2026-06-14):** the EE ELF boots in **PCSX2 v2.6.3**
+(portable) with a **4 MB PS2 BIOS** (`ps2-0200a-20040614.bin`, NTSC-US) and the
+M0 splash renders through the real GS pipeline — `shots/m0_pcsx2.png`. So
+`main.c`'s GS/pad runtime (gsKit init, 640×448 framebuffer → GS, primitives,
+font) is now hardware-path-verified, not just host-shim-verified. The §3 rig
+recipe below is the working recipe.
+
+**Gotcha that blocked it:** PCSX2 v2.x validates `[UI] SettingsVersion` in
+`PCSX2.ini` against a build constant and pops a *"Settings failed to load, or
+are the incorrect version — reset to defaults?"* modal (which blocks the boot)
+when it's absent or wrong. A hand-authored ini **must** include
+`SettingsVersion = 1`. `run_pcsx2.ps1` now writes a known-good ini if that key
+is missing, so the rig self-heals. (Earlier blocker — the BIOS folder held only
+512 KB PS1 BIOSes — was resolved by supplying the 4 MB PS2 BIOS.)
 
 **Next: M1** — bring `unodos.c` up on the host shim first (no PS2 hardware
 needed). §1 audit result: the drawing surface is ~25 QuickDraw calls
@@ -115,11 +125,27 @@ available, embed PS2SDK IRX binaries in the ELF otherwise):
 `SIO2MAN` + `PADMAN` (pad, M0), `MCMAN` + `MCSERV` (memory card,
 M2), `USBD` + `ps2kbd` (USB keyboard, M2), `audsrv` (sound, M3).
 
-## 3. The rig (decide recipe at M0)
+## 3. The rig (VERIFIED at M0, 2026-06-14)
 
 PCSX2 boots ELFs directly — no FMCB needed in the emulator — but
-**needs a PS2 BIOS dump** (the user owns a PS2; flag this as a
+**needs a 4 MB PS2 BIOS dump** (the user owns a PS2; flag this as a
 prerequisite when starting M0, like the IIGS ROM note).
+
+**Working recipe (this machine):**
+- PCSX2 **v2.6.3 portable** at `C:\Users\arin\ps2-tools\pcsx2\`
+  (`portable.ini` marker present so it reads `inis/` next to the exe).
+- BIOS `bios/ps2-0200a-20040614.bin` (4 MB, NTSC-US). The 512 KB files
+  in the old dump were **PS1** BIOSes and are useless here.
+- `inis/PCSX2.ini` must contain `[UI] SettingsVersion = 1` or PCSX2
+  pops a *"Settings failed to load / incorrect version"* modal that
+  silently blocks the boot. `tools/run_pcsx2.ps1` writes a known-good
+  ini when that key is missing.
+- CLI: `pcsx2-qt.exe -fullscreen -fastboot -elf <abs-path-to-elf>`.
+  `-batch -nogui` was a dead end — it produced only a ~400×80 status
+  window with no GS surface to capture.
+- Capture: `CopyFromScreen` of the GS window client area (PrintWindow
+  lies for GPU renderers — the macplus snapscreen lesson). Wrapper is
+  `tools/run_pcsx2.ps1`; golden is `shots/m0_pcsx2.png`.
 
 Scripted-input automation in PCSX2 is impractical; use the **Genesis
 AUTOTEST pattern** instead: `build.sh <feature>` variants compile in

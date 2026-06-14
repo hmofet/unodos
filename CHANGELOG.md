@@ -20,9 +20,12 @@ portable C core (`mac/unodos.c`) by swapping the platform layer.
   verified on the PC, and the EE target shares the FB/splash code verbatim.
 - EE target (`main.c`: gsKit GS init + FB→GS blit + DualShock 2 via SIO2MAN/
   PADMAN). **Builds** to `build/unodos-ps2.elf` (real MIPS R5900 ELF) with the
-  prebuilt ps2dev v2.0.0 toolchain under WSL. Runtime UNVERIFIED — PCSX2 needs
-  a 4 MB PS2 BIOS and only PS1 BIOSes were on hand. M1 (the C-core desktop) is
-  unblocked and host-shim-iterable.
+  prebuilt ps2dev v2.0.0 toolchain under WSL, and **runs on the emulated GS**:
+  PCSX2 v2.6.3 + a 4 MB PS2 BIOS boots the ELF and renders the splash through
+  the real GS pipeline (`shots/m0_pcsx2.png`, captured by `tools/run_pcsx2.ps1`).
+  Rig gotcha: PCSX2 v2.x needs `[UI] SettingsVersion = 1` in `PCSX2.ini` or it
+  refuses the config and blocks the boot. M1 (the C-core desktop) is unblocked
+  and host-shim-iterable.
 
 ## [apple2: milestone 3 — full app roster + feasibility verdicts] - 2026-06-14
 
