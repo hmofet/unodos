@@ -30,10 +30,14 @@ assessment and plan):
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | **Milestone 3** — same set minus the color-only Theme app (Paint uses the classic dither patterns) |
 | [**MacPlus (standalone OS)**](macplus/) | Mac Plus / SE / Classic (68000) + Mac II class (640×480) | Bare-metal: own boot blocks (ROM bootstrap = BIOS, like the x86 port), own vectors/drivers, 1-bit dither renderer, software cursor; **machine-adaptive input** (Plus M0110/SCC quadrature vs. SE/II ROM-assisted ADB); ROM-free Unicorn harness | **Milestone 3** — full app parity (11 apps incl. the three games, Paint, Music, Tracker, Theme), FAT12 filesystem + disk-loaded apps, sound, cooperative scheduler, on top of the M1 desktop/window-manager (System 7 chrome); validated in Mini vMac (real Plus ROM) + Mini vMac II (real IIcx ROM) **and on a real Mac SE (FloppyEmu)** (see [macplus/README](macplus/README.md)) |
 | [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
+| [**Apple II**](apple2/) | Apple ][+ / //e (6502 @ 1MHz, 48–64KB), hi-res 280×192 (1-bit, 7px/byte) | Bare-metal: Disk II ROM autoload → own GCR 6-and-2 RWTS (read+write), hi-res software renderer, keyboard window manager, 1-bit `$C030` speaker | **Milestone 3** — desktop + 10 apps (Theme, Dostris, Pac-Man, Music, Tracker, Paint + SysInfo/Clock/Files/Notepad), mini-FS, blocking square-wave audio, OutLast (~4fps prototype) + cooperative-scheduler verdict; ROM-free py65 harness-verified, real-hw (AppleWin/FloppyEmu) pending |
+| [**Sony PS2**](ps2/) | PlayStation 2 (MIPS R5900 EE, 32MB, Graphics Synthesizer), FreeMcBoot ELF | Port the portable C core ([mac/unodos.c](mac/unodos.c)) over a software 640×448×32 framebuffer blitted to GS each vsync; DualShock 2 + soft keyboard | **Milestone 0** — software-FB platform layer + shared font + hello-GS splash (host-shim-verified on PC); EE ELF builds with the ps2dev toolchain (runtime pending a PS2 BIOS) |
 
-A feature-by-feature comparison of the five mature targets lives in
-[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md); the new standalone
-MacPlus OS port joins it once it reaches app parity.
+A feature-by-feature comparison of the mature targets lives in
+[docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
+(Apple II ✓, Apple IIGS, SNES, Sony PS2) is tracked in
+[docs/PORTS-PLAN.md](docs/PORTS-PLAN.md); the standalone MacPlus OS port
+joins the matrix at app parity.
 
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the

@@ -6,6 +6,9 @@
 EE_BIN  = build/unodos-ps2.elf
 EE_OBJS = build/main.o build/fb.o build/uno_splash.o
 
+GSKIT ?= $(PS2DEV)/gsKit
+EE_INCS   += -I$(GSKIT)/include
+EE_LDFLAGS += -L$(GSKIT)/lib
 EE_LIBS  = -lgskit -ldmakit -lpad -lpacket -lgraph -ldraw -ldma -lkernel
 EE_CFLAGS += -O2 -Wall -Wno-unused-value
 

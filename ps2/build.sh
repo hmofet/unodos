@@ -21,7 +21,15 @@ echo "[1/2] exporting the shared font to a C array..."
 case "$1" in
   ee)
     echo "[2/2] building the PS2 ELF (PS2SDK)..."
-    : "${PS2SDK:?set PS2SDK to your PS2SDK install (or run in the ps2dev image)}"
+    # default to the prebuilt ps2dev toolchain layout (this machine: WSL,
+    # ~/ps2dev/ps2dev from the ps2dev v2.0.0 release). Override PS2DEV to point
+    # elsewhere.
+    : "${PS2DEV:=$HOME/ps2dev/ps2dev}"
+    export PS2DEV
+    export PS2SDK="${PS2SDK:-$PS2DEV/ps2sdk}"
+    export GSKIT="${GSKIT:-$PS2DEV/gsKit}"
+    export PATH="$PS2DEV/bin:$PS2DEV/ee/bin:$PS2DEV/iop/bin:$PS2SDK/bin:$PATH"
+    make clean >/dev/null 2>&1 || true
     make
     echo "done: build/unodos-ps2.elf" ;;
   *)

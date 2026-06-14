@@ -173,16 +173,19 @@ existing screenshot automation. Real hardware: PS2 + FMCB card; ELF on MC
 or USB stick.
 
 **Milestones.**
-- M0 (FOUNDATION DONE, EE pending toolchain): the software-framebuffer
-  platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/invert/text over the
-  4-colour gamut), the shared font as a C array (`mkfont_c.py`), and the
-  hello-GS splash (`uno_splash.c`) all built + **screenshotted on the PC via
-  the host shim** (`./build.sh host`, WSL gcc) — the verified inner loop the
-  EE target shares verbatim. Design decided: software FB, GS as a blitter
-  (gsKit), so gsKit-vs-raw-GIF is low-stakes. The EE ELF (`main.c`: GS blit +
-  DualShock 2) is written but UNVERIFIED — this dev machine has no Docker/
-  ee-gcc/PCSX2/PS2 BIOS. Remaining M0-on-metal (user-owned PS2/BIOS): install
-  PS2SDK, build the ELF, verify the PCSX2 launch+screenshot recipe + pad.
+- M0 (FOUNDATION DONE + EE ELF BUILDS; runtime pending a BIOS): the
+  software-framebuffer platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/
+  invert/text over the 4-colour gamut), the shared font as a C array
+  (`mkfont_c.py`), and the hello-GS splash (`uno_splash.c`) all built +
+  **screenshotted on the PC via the host shim** (`./build.sh host`, WSL gcc)
+  — the verified inner loop the EE target shares verbatim. Design decided:
+  software FB, GS as a blitter (gsKit), so gsKit-vs-raw-GIF is low-stakes.
+  **Toolchain installed** (prebuilt ps2dev v2.0.0 under WSL; Docker was
+  unavailable) and `./build.sh ee` links a real MIPS R5900 ELF
+  (`build/unodos-ps2.elf`, gsKit/libpad). RUNTIME still UNVERIFIED: PCSX2
+  needs a 4 MB PS2 BIOS and only PS1 BIOSes (512 KB) were on hand — so
+  GS/pad behaviour awaits a PS2 BIOS dump or FMCB hardware. M1 (the C-core
+  desktop) is now unblocked and host-shim-iterable.
 - M1: framebuffer desktop + WM + pad-as-pointer + soft keyboard +
   SysInfo/Clock — mostly the C core with a new platform layer.
 - M2: memory-card storage (file API — trivial next to GCR floppies),
