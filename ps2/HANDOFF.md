@@ -50,12 +50,37 @@ when it's absent or wrong. A hand-authored ini **must** include
 is missing, so the rig self-heals. (Earlier blocker — the BIOS folder held only
 512 KB PS1 BIOSes — was resolved by supplying the 4 MB PS2 BIOS.)
 
-**Next: M1** — bring `unodos.c` up on the host shim first (no PS2 hardware
-needed). §1 audit result: the drawing surface is ~25 QuickDraw calls
-(SetRect/RGBForeColor/PaintRect/FrameRect/MoveTo/LineTo/DrawText/InvertRect/
-PaintOval/InsetRect/PtInRect/…), plus TickCount, GetNextEvent/GetMouse/
-StillDown, and File/Sound (defer to M2/M3). Plan: a small Mac-compat shim
-(types + those calls) over `fb.*`, so `unodos.c` compiles nearly verbatim.
+---
+
+## M1 STATUS (2026-06-14) — DONE, host + emulated GS
+
+`mac/unodos.c` (4139 lines) is ported and **runs**: the whole desktop / window
+manager / all 11 apps render, verified on the host shim (`shots/m1_*.png`) and
+on the emulated PS2 GS in PCSX2 (`shots/m1_pcsx2_pacman.png`).
+
+**How:** the Mac-compat shim (`mac_compat.h/.c` + `mac_io.c`) re-implements the
+~40 Toolbox calls the core uses over `fb.*` — one full-screen GrafPort,
+QuickDraw rect/oval/line/text + pen/colour/mode state, an event queue, TickCount
+(a deterministic call-clock), NewPtr, the File Manager (over a directory tree),
+and a square-wave Snd channel model. `ps2/unodos.c` is `mac/unodos.c` copied; the
+only edits are (1) the dozen Toolbox includes → one `#include "mac_compat.h"`,
+(2) Pascal literals `"\pNAME"` → octal-length C strings (gcc has no `\p`), and
+(3) the 68K coroutine scheduler (`ctx_switch` asm) guarded under `__m68k__`,
+replaced off-68K by a **kernel-driven poll-and-dispatch scheduler** (the Apple II
+model — identical app semantics, no context switch). Two front ends drive it:
+`host_desktop.c` (WSL gcc → PPM, the fast inner loop) and `ee_platform.c` (real
+EE: GS-present each vsync + DualShock 2 → key events), selected by
+`-DUNO_HOST` / `-DUNO_EE`. Build: `./build.sh desktop [FEATURE]` (host),
+`./build.sh ee [FEATURE]` (EE), `tools/render_all.sh` (every host variant).
+
+**M2/M3 came along through the shim:** File Manager (HFS-style catalog listing)
++ the FAT12 RAM-disk write→read round-trip into Notepad work on the host;
+Theme (32-bit colour) and the cooperative scheduler work. **Remaining EE-only
+pieces** (flagged, not blockers): the File Manager's EE backend is a graceful
+"empty volume" until wired to the **memory card** (`mc0:` via fileXio — the
+`mac_io.c` `#else` branch); **audsrv** audio is a silent stub (can't be
+screenshot-verified — needs a hardware ear-check); USB keyboard (`ps2kbd`); and
+the on-metal FMCB run + DualShock 2 navigation check.
 
 ---
 

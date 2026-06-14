@@ -1,4 +1,4 @@
-# UnoDOS/PS2 — Sony PlayStation 2 port (milestone 0)
+# UnoDOS/PS2 — Sony PlayStation 2 port (milestone 1)
 
 UnoDOS/PS2 is a FreeMcBoot-launched ELF with full hardware access —
 "firmware-hosted bare-metal," the richest target in the family. The
@@ -7,6 +7,16 @@ strategy ([HANDOFF.md](HANDOFF.md), [../docs/PORTS-PLAN.md](../docs/PORTS-PLAN.m
 complete UnoDOS (11 apps, window manager, event model, cooperative
 scheduler, device-abstracted FAT12) — by swapping the platform layer, not
 rewriting.
+
+**Status: M1 done.** The whole desktop / window manager / all 11 apps run —
+verified both on the host shim (`build.sh desktop`, `shots/m1_*.png`) and on
+the **emulated PS2 GS** in PCSX2 (`shots/m1_pcsx2_pacman.png`). The port is
+[../mac/unodos.c](../mac/unodos.c) copied to [unodos.c](unodos.c) over a
+**Mac-compat shim** ([mac_compat.h](mac_compat.h)/[mac_compat.c](mac_compat.c) +
+[mac_io.c](mac_io.c)) that re-implements the ~40 Toolbox calls it uses over
+`fb.*`. M2 (File Manager + a FAT12 RAM-disk round-trip) and M3 Theme (32-bit
+colour) come along through the shim. Remaining: EE audio (audsrv) and a
+memory-card file backend — see [Next](#next).
 
 ## Platform design: software framebuffer, GS as a blitter
 
@@ -54,12 +64,22 @@ drawing primitive, the whole splash — also carries to the PS2 unchanged.
 ## Building
 
 ```sh
-# host splash (VERIFIED) - run in WSL: regenerates the font, compiles fb.c +
-# uno_splash.c + host_main.c, renders shots/m0_splash.png
-./build.sh host          # optional: ./build.sh host <cursor_x> <cursor_y>
+# --- M1: the full desktop --------------------------------------------------
+# host desktop (VERIFIED) - the whole UnoDOS over the Mac-compat shim, via WSL
+# gcc, rendered to shots/m1_<tag>.png. FEATURE bakes in a UNO_AUTOTEST_* app so
+# the screenshot is self-driving (PACMAN/PAINT/THEME/DOSTRIS/TRACKER/FILES/
+# OUTLAST/FAT12, or "stack" for Music+Files+Notepad; empty = the bare desktop).
+./build.sh desktop                 # -> shots/m1_desktop.png
+./build.sh desktop PACMAN          # -> shots/m1_pacman.png
+bash tools/render_all.sh           # build + render every variant at once
 
-# PS2 ELF (BUILDS + RUNS on emulated GS) -> build/unodos-ps2.elf
-./build.sh ee            # PS2DEV defaults to ~/ps2dev/ps2dev; override to relocate
+# PS2 desktop ELF (BUILDS + RUNS on emulated GS) -> build/unodos-ps2.elf
+./build.sh ee                      # interactive desktop (DualShock 2 driven)
+./build.sh ee PACMAN               # self-driving screenshot variant
+./build.sh ee-splash               # the M0 hello-GS splash ELF (reference)
+
+# --- M0: the splash (reference) --------------------------------------------
+./build.sh host          # host splash -> shots/m0_splash.png
 ```
 
 ### Running it (PCSX2, VERIFIED)
@@ -107,51 +127,65 @@ shim's PPM dump to PNG with only the stdlib.
   with the installed toolchain (gsKit/libpad linked) and **runs on the
   emulated GS** in PCSX2 (`shots/m0_pcsx2.png`); real-hardware run pending.
 
-### Pad-as-pointer (M1 button map, stubbed in M0)
+## M1 — the desktop (this milestone)
+
+`mac/unodos.c` (4139 lines — the complete UnoDOS) runs on the PS2 through the
+**Mac-compat shim**, host-verified and confirmed on the emulated GS.
+
+- **Shim** (`mac_compat.*`, `mac_io.c`): one implicit full-screen GrafPort over
+  `fb.*`; QuickDraw rect/oval/line/text, pen + colour + transfer-mode state, a
+  platform-fed event queue, `TickCount`, `NewPtr`; File Manager over a directory
+  tree; a square-wave `Snd*` channel model.
+- **`unodos.c`**: the core, copied verbatim apart from the include block, the
+  Pascal-literal → octal-length-byte fix, and the scheduler guard (68K coroutine
+  `ctx_switch` under `__m68k__`; a portable kernel-driven scheduler elsewhere).
+- **Verified:** desktop + all 11 apps (Sys Info, Clock, Files, Notepad, Music,
+  Dostris, OutLast, Pac-Man, Tracker, Paint, Theme/32-bit colour) + the FAT12
+  RAM-disk write→read round-trip into Notepad — `shots/m1_*.png` on the host,
+  `shots/m1_pcsx2_pacman.png` on the emulated PS2 GS.
+
+### Pad-as-pointer (EE button map — `ee_platform.c`)
 
 | Input | Role |
 |---|---|
-| D-pad / left analog stick | move the cursor |
-| Cross | click / drag |
-| Circle | Enter |
-| Triangle | soft keyboard |
-| Start | Esc |
-| L/R shoulders | turbo cursor |
+| D-pad | arrow keys — desktop icon nav / in-app movement |
+| Cross / Circle | Return — launch icon / confirm |
+| Start | Esc — close focused window |
+| left stick / Triangle (soft kbd) | reserved (M2) |
 
 ## Files
 
 | File | Role |
 |---|---|
 | `fb.c` / `fb.h` | software framebuffer + drawing primitives (shared host+EE) |
-| `uno_splash.c` | the M0 splash, drawn through `fb.*` (shared host+EE) |
-| `host_main.c` | host shim: render → PPM (host-only) |
-| `main.c` | EE target: GS blit + DualShock 2 (builds + runs on emulated GS) |
+| `mac_compat.h` / `.c` | **Mac Toolbox shim** — QuickDraw/events/memory over `fb.*` |
+| `mac_io.c` | File Manager (directory tree) + Sound channel model |
+| `unodos.c` | the portable UnoDOS core (copied from `mac/unodos.c`) |
+| `host_desktop.c` | host shim: run the desktop, dump `fb` → PPM (host-only) |
+| `ee_platform.c` | EE target: GS present + DualShock 2 → events |
+| `uno_splash.c` / `main.c` | the M0 splash + its standalone EE target (reference) |
 | `mkfont_c.py` | shared font → `build/font_data.h` |
 | `tools/ppm2png.py` | PPM → PNG (stdlib only) |
-| `tools/run_pcsx2.ps1` | boot the ELF in PCSX2 + screenshot the GS → `shots/m0_pcsx2.png` |
+| `tools/render_all.sh` | build + render every host AUTOTEST variant |
+| `tools/run_pcsx2.ps1` | boot an ELF in PCSX2 + screenshot the GS |
 | `Makefile` / `build.sh` | EE (PS2SDK) / host build |
 
 ## Next
 
-- **Run M0 — DONE on the emulated GS** (`shots/m0_pcsx2.png`, via
-  `tools/run_pcsx2.ps1`). Remaining: confirm the **DualShock 2 cursor** moves
-  (the splash is static, so the pad path is still un-exercised) and run on
-  **real hardware** via FMCB.
-- **M1 — the desktop:** copy `mac/unodos.c` → `ps2/unodos.c` and route its
-  platform layer onto `fb.*`. The audit (HANDOFF §1) is done: the drawing is
-  ~25 QuickDraw calls (rects / pen / text / ovals via the 6 `uno_*` wrappers
-  + scattered QD), plus `TickCount`, a couple of event calls, and File/Sound
-  (deferrable to M2/M3). The plan is a small Mac-compat shim over `fb.*`
-  (current-port colour/pen/text state, `PaintRect`/`FrameRect`/`MoveTo`/
-  `LineTo`/`DrawText`/`InvertRect`/`PaintOval` → fb primitives) so `unodos.c`
-  compiles nearly verbatim, driven by the **host shim** on the PC — no PS2
-  hardware needed to bring up the desktop + apps; only the GS/pad/MC/audsrv
-  glue waits on a BIOS or metal.
-- **M2** memory-card FAT12 + USB keyboard + Files/Notepad; **M3** audsrv
-  sound + Theme (true 32-bit colour) + the cooperative scheduler.
+- **M2 storage on the EE** — back the File Manager with the **PS2 memory card**
+  (`mc0:` via fileXio) instead of the host directory tree, so Files/Notepad
+  persist on hardware. The host path and the FAT12 RAM volume already work;
+  this is the EE backend (`mac_io.c`, the `#else` branch). USB keyboard
+  (`ps2kbd`) for real typing is the other M2 piece.
+- **M3 audio on the EE** — drive **audsrv** from `SndDoImmediate`
+  (`mac_io.c`'s square-wave model is silent today). Theme (32-bit colour) and
+  the cooperative scheduler already came along through the shim. Audio can't be
+  screenshot-verified — it needs a hardware/audio ear-check, like the MacPlus
+  SE audio.
+- **Real hardware** — run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
+  uLaunchELF from USB) and confirm the DualShock 2 navigation on metal. The
+  PCSX2-vs-metal watch list: interlace flicker (the 512×448 fallback in
+  `fb.h`), memory-card timing, pad pressure quirks.
 
-## Real hardware
-
-FreeMcBoot launches `BOOT.ELF` from the memory card (or uLaunchELF from a
-USB stick). The PCSX2-vs-metal watch list: interlace flicker (the 512×448
-resolution fallback in `fb.h`), memory-card timing, pad pressure quirks.
+  FreeMcBoot launches `BOOT.ELF` from the memory card (or uLaunchELF from a USB
+  stick); name `build/unodos-ps2.elf` accordingly when installing.

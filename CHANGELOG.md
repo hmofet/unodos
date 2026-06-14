@@ -5,6 +5,40 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [ps2: milestone 1 — the desktop arrives (C core + Mac-compat shim)] - 2026-06-14
+
+The portable C core (`mac/unodos.c`, 4139 lines — 11 apps + window manager +
+event model + scheduler + FAT12) now runs on the PS2 by **swapping the platform
+layer**, not rewriting (HANDOFF §1 strategy).
+
+- **Mac-compat shim** (`mac_compat.h`/`.c`): the ~40 Mac Toolbox calls the core
+  uses, re-implemented over the software framebuffer `fb.*` — one implicit
+  full-screen GrafPort, QuickDraw rect/oval/line/text (Bresenham `LineTo`, 8×8
+  `DrawText` at the pen baseline, `PaintOval`), pen + fore/back colour +
+  transfer-mode state, a platform-fed event queue, a deterministic `TickCount`
+  call-clock, and `NewPtr`/`DisposePtr`.
+- **File Manager + Sound** (`mac_io.c`): `FSOpen/Read/Write/Create/Delete` +
+  `PBGetCatInfo` over a real directory tree (the M2 storage backend), and a
+  square-wave `Snd*` channel model (silent on host; audsrv on EE is the
+  remaining M3 piece).
+- **`ps2/unodos.c`**: the core, copied from `mac/unodos.c`. Divergences: the
+  dozen Toolbox headers collapse to one `#include "mac_compat.h"`; Pascal
+  literals (`"\pNAME"`) become octal-length C strings (gcc has no `\p`); the
+  68K coroutine scheduler (`ctx_switch` asm) is guarded under `__m68k__` with a
+  portable **kernel-driven (poll-and-dispatch) scheduler** for PS2/host — the
+  Apple II model, identical app semantics.
+- **Two front ends, both verified.** `host_desktop.c` builds the whole desktop
+  with WSL gcc → PPM (the fast inner loop); `./build.sh desktop [FEATURE]`
+  renders `shots/m1_*.png` — desktop + all 11 apps + the FAT12 write/read
+  round-trip into Notepad all confirmed. `ee_platform.c` is the real EE target:
+  GS-presents `fb` each vsync and maps the DualShock 2 to UnoDOS key events;
+  `./build.sh ee [FEATURE]` links a real R5900 ELF and the desktop + Pac-Man
+  render on the emulated GS in PCSX2 (`shots/m1_pcsx2_pacman.png`).
+
+So **M1** (desktop/WM/apps) is verified on the host *and* the emulated PS2;
+**M2** (File Manager + FAT12) and **M3 Theme** (32-bit colour) come along
+through the shim. Remaining: EE audio (audsrv) and a memory-card file backend.
+
 ## [ps2: milestone 0 — software-FB foundation + EE ELF builds] - 2026-06-14
 
 First milestone of the **Sony PS2 port** (`ps2/`), strategy = port the
