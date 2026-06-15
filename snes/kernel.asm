@@ -160,6 +160,9 @@ v_ol_traf   = VARS+$1D6     ; 4 words
 ; ---- sound (proc M3): SPC700 mailbox ----
 v_snd_ok    = VARS+$1E0     ; 1 once the SPC driver acked
 v_snd_tok   = VARS+$1E2     ; mailbox token (host increments per command)
+v_mus_playing = VARS+$1E4   ; Music app (proc 3): sequencer running
+v_mus_ix    = VARS+$1E6     ; current note index
+v_mus_end   = VARS+$1E8     ; v_frame deadline for the current note
 v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
 ; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
 ;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
@@ -209,7 +212,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 7
+NICONS   = 8
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -352,6 +355,7 @@ MainLoop:
         jsr handle_events
         jsr softkbd_hover
         jsr game_tick
+        jsr music_tick
         jsr app_ticks
         bra MainLoop
 .endproc
@@ -1351,6 +1355,8 @@ MainLoop:
         beq @clock
         cmp #2
         beq @notepad
+        cmp #3
+        beq @music
         cmp #4
         beq @dostris
         cmp #5
@@ -1368,6 +1374,9 @@ MainLoop:
         rts
 @notepad:
         jsr notepad_draw
+        rts
+@music:
+        jsr music_draw
         rts
 @dostris:
         jsr dostris_draw
@@ -2315,8 +2324,9 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #0
-        jsr launch_app          ; SysInfo (shows the SPC700 self-test result)
+        lda #3
+        jsr launch_app          ; Music
+        jsr music_start         ; start playing Canon in D on SPC700 voice 0
         lda #0
         jsr select_icon
         rts
@@ -2376,6 +2386,7 @@ icon_tab:
         .word 12, 25            ; 4 Dostris
         .word 22, 25            ; 5 OutLast
         .word 2, 27             ; 6 Pac-Man
+        .word 12, 27            ; 7 Music
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2384,16 +2395,17 @@ icon_names:
         .word name_dostris
         .word name_outlast
         .word name_pacman
+        .word name_music
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4, 5, 6
+        .word 0, 1, 2, 7, 4, 5, 6, 3
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
         .word 4, 3, 24, 11, str_t_sysinfo    ; 0
         .word 10, 9, 14, 8, str_t_clock      ; 1
         .word 1, 1, 30, 22, str_t_notepad    ; 2 Notepad
-        .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)
+        .word 5, 4, 22, 12, str_t_music      ; 3 Music
         .word 1, 1, 30, 24, str_t_dostris    ; 4 Dostris
         .word 1, 1, 30, 24, str_t_outlast    ; 5 OutLast
         .word 1, 0, 30, 28, str_t_pacman     ; 6 Pac-Man (full screen)

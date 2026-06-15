@@ -431,12 +431,207 @@
         rts
 .endproc
 
+; ============================================================================
+; Music (proc 3) - a square-wave sequencer playing Canon in D on SPC700 DSP
+; voice 0 (the SNES analogue of the Genesis PSG channel-0 Music app). The
+; note table is MIDI offsets into note_pitch + per-note durations (frames).
+; ============================================================================
+
+MUS_VOICE = 0
+
+; music_note - A = note index into mus_song; key voice 0 on at its pitch,
+; set v_mus_end = v_frame + its duration.
+.proc music_note
+.a16
+.i16
+        asl a                   ; *2 (word entries: offset, duration interleaved)
+        asl a                   ; song entry = 2 words = 4 bytes
+        tax
+        lda mus_song,x          ; note-pitch index (or $FFFF = rest)
+        cmp #$FFFF
+        beq @rest
+        pha
+        lda #MUS_VOICE
+        sta A0
+        pla
+        jsr spc_note_idx        ; A1 = pitch
+        jsr spc_note_on
+        bra @dur
+@rest:  lda #MUS_VOICE
+        sta A0
+        jsr spc_note_off
+@dur:   lda mus_song+2,x        ; duration (frames)
+        clc
+        adc v_frame
+        sta v_mus_end
+        rts
+.endproc
+
+; music_start
+.proc music_start
+.a16
+.i16
+        lda #1
+        sta v_mus_playing
+        stz v_mus_ix
+        lda #0
+        jsr music_note
+        rts
+.endproc
+
+; music_stop
+.proc music_stop
+.a16
+.i16
+        stz v_mus_playing
+        lda #MUS_VOICE
+        sta A0
+        jsr spc_note_off
+        rts
+.endproc
+
+; music_tick - main-loop sequencer advance; refresh only if Music is topmost
+.proc music_tick
+.a16
+.i16
+        lda v_mus_playing
+        bne :+
+        rts
+:       lda v_frame
+        sec
+        sbc v_mus_end
+        bmi @out                ; current note still sounding
+        lda v_mus_ix
+        inc a
+        cmp #MUS_COUNT
+        bcc @ixok
+        lda #0                  ; loop the song
+@ixok:  sta v_mus_ix
+        jsr music_note
+        ; visual refresh only when Music (proc 3) is topmost
+        lda v_zcount
+        beq @out
+        dec a
+        jsr zent_x
+        sep #$20
+.a8
+        lda v_wintab+WPROC,x
+        rep #$20
+        and #$00FF
+        cmp #3
+        bne @out
+        jsr redraw_topmost
+@out:   rts
+.endproc
+
+; music_key - A1 = event data; space toggles playback
+.proc music_key
+.a16
+.i16
+        lda A1
+        and #$00FF
+        cmp #' '
+        bne @out
+        lda v_mus_playing
+        bne @stop
+        jsr music_start
+        bra @rd
+@stop:  jsr music_stop
+@rd:    jsr redraw_topmost
+@out:   rts
+.endproc
+
+; music_draw - S2 = window offset: title, a note ribbon (current note accent),
+; and the play/stop state.
+.proc music_draw
+.a16
+.i16
+        ; title
+        lda #.loword(str_m_title)
+        sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        lda v_wintab+WY,x
+        inc a
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        ; note ribbon: one cell per song note, current note in accent colour
+        stz LC0                 ; note index
+@n:     lda LC0
+        cmp #MUS_COUNT
+        bcs @state
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #2
+        clc
+        adc LC0
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #4
+        sta A1
+        lda #1
+        sta A2
+        sta A3
+        lda LC0
+        cmp v_mus_ix
+        bne @dim
+        lda #(ATTR_ACC+T_GSOL+1) ; current note: yellow
+        bra @put
+@dim:   lda #(ATTR_ACC+T_GSOL+5) ; others: blue
+@put:   sta A4
+        jsr fill_cells
+        inc LC0
+        bra @n
+@state: ; "Playing"/"Stopped" + hint
+        lda v_mus_playing
+        bne @pl
+        lda #.loword(str_m_stop)
+        bra @st
+@pl:    lda #.loword(str_m_play)
+@st:    sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #6
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        lda #.loword(str_m_hint)
+        sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc v_wintab+WH,x
+        sec
+        sbc #2
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        rts
+.endproc
+
 ; app_key - A = proc, A1 = event data: dispatch keys to the topmost app
 .proc app_key
 .a16
 .i16
         cmp #2
         beq @np
+        cmp #3
+        beq @mus
         cmp #4
         beq @dt
         cmp #5
@@ -447,6 +642,8 @@
         beq @files
         rts
 @np:    jsr notepad_key
+        rts
+@mus:   jsr music_key
         rts
 @dt:    jsr dostris_key
         rts
@@ -468,3 +665,17 @@ str_demo_name: .byte "DEMO.TXT", 0, 0, 0, 0
 str_f_hdr:     .byte "Name          Size", 0
 str_f_foot:    .byte "Enter:open  X:del", 0
 demo_text:     .byte "UnoDOS SNES Notepad.", 13, "Type, F1 saves to SRAM.", 0
+
+str_t_music:   .byte "Music", 0
+name_music:    .byte "Music", 0
+str_m_title:   .byte "Canon in D", 0
+str_m_play:    .byte "Playing  (space)", 0
+str_m_stop:    .byte "Stopped  (space)", 0
+str_m_hint:    .byte "Voice 0 / SPC700", 0
+
+; Canon in D melody: pairs of (note_pitch index = MIDI-36, duration frames).
+; $FFFF = rest. The famous descending line + an answering phrase, looped.
+MUS_COUNT = 16
+mus_song:
+        .word 42,28,  40,28,  38,28,  37,28,  35,28,  33,28,  35,28,  37,28
+        .word 38,28,  37,28,  35,28,  33,28,  31,28,  30,28,  31,28,  28,40
