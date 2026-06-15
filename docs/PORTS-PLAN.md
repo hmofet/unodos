@@ -150,8 +150,12 @@ re-expressed in 65816 (toolchain already standing from the IIGS).
   build (synthetic joypad in the NMI), the Genesis fallback pattern, since
   Mesen's CLI does not autoload Lua. Verified in Mesen2 (PAD:0000
   interactive, PAD:C0A0 AUTOTEST). See snes/README.md.
-- M1: tile desktop + WM + sprite cursor + pad-as-pointer + soft keyboard
-  (Genesis input model verbatim) + SNES Mouse support + SysInfo/Clock.
+- M1 (LOGIC DONE): tile desktop + WM (z-order/drag/chrome) + OAM cursor +
+  pad-as-pointer + 32-cell soft keyboard + SysInfo/Clock (live 60 Hz clock),
+  verified in Mesen2 (VRAM byte-correct by CPU read-back). SNES Mouse
+  detection deferred to M2 backlog. Open: a headless-rig software-renderer
+  artifact drops BG palette bits below ~scanline 160 (bottom-row colours);
+  VRAM proven correct, so it's a capture-rig issue, not the ROM.
 - M2: SRAM storage (USV1 port) + Files/Notepad; games (Dostris/Pac-Man/
   OutLast — the PPU makes these EASIER than Genesis).
 - M3: SPC700 driver (uploaded engine + mailbox protocol — the hardest

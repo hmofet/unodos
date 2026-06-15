@@ -5,6 +5,46 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [snes: milestone 1 — tile desktop, window manager, apps, soft keyboard] - 2026-06-14
+
+The SNES port grows a real desktop. The Genesis M1 surface
+(genesis/kernel.asm + softkbd.i) is re-expressed in 65816 on the SNES
+shadow+DMA architecture: a cell renderer over the WRAM tilemap shadow, a
+window manager, a hardware-sprite cursor, pad-as-pointer + a soft keyboard,
+and the SysInfo + Clock apps.
+
+- **kernel.asm** (~1.5k lines): cell primitives (`fill_cells` / `draw_str`
+  / `draw_char`) writing the tilemap shadow with four UI palette schemes
+  (NORM/INV/ACC/KEY as Mode-1 palette lines 0-3); the window manager
+  (z-order list, raise/close, title-bar drag with cell snapping, close box,
+  window chrome); `launch_app` + an app-definition table; the event queue;
+  pad-as-pointer input (d-pad accel cursor, A=click/drag, B=soft keyboard,
+  Y=Enter, X=Backspace, Start=Esc, Select=Space, L/R=turbo) decoded from the
+  auto-joypad word; the cursor as two OAM sprites flushed each vblank.
+- **softkbd.inc**: the soft keyboard re-laid-out for 32 cells (Genesis is
+  40) - layout table, hit-test, sticky shift, hover highlight, posts EV_KEY
+  with the Amiga/Genesis raw codes.
+- **SysInfo** (CPU/RAM/region/input) + **Clock** (a real 60 Hz NMI tick →
+  HH:MM:SS), refreshed once a second.
+- **NMI** runs on its own direct page ($0100) so its input/flush scratch
+  never collides with the main loop's ($0000).
+- **Verified in Mesen2** (build/m1.png): desktop + menu bar + two overlapping
+  windows (correct z-order, chrome, white/cyan palettes) + a live advancing
+  clock; VRAM proven byte-correct via CPU read-back.
+
+Three traps fixed along the way (all in kernel.asm / HANDOFF.md): calling
+the 16-bit cell routines with an 8-bit accumulator (garbage tiles); outer
+loop counters clobbered by the draw routines they call (use the dedicated
+LC0/LC1 slots); `FlushOAM` invoked with the wrong A width in the NMI.
+
+**Known caveat (rig, not ROM):** under this headless/RDP host only Mesen's
+*software* renderer is screen-capturable, and it drops the BG palette bits
+to 0 for screen rows below ~scanline 160 (the soft-keyboard panel's bottom
+rows render blue instead of cyan). The tilemap VRAM is proven byte-identical
+at the top and bottom of the screen, so this is a renderer/rig artifact, not
+a ROM bug - a reference (hardware-renderer) capture isn't obtainable in this
+environment. Documented in snes/README.md.
+
 ## [snes: milestone 0 — LoROM skeleton boots to the splash] - 2026-06-14
 
 The SNES port opens: a 65816 LoROM cartridge boots in Mesen2 to the

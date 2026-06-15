@@ -1,4 +1,4 @@
-# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (milestone 0)
+# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (milestone 1)
 
 Like the other bare-metal UnoDOS ports, this is **a real operating
 system**, not a game running on someone else's OS. The console powers on,
@@ -16,16 +16,52 @@ shares. See [HANDOFF.md](HANDOFF.md) for the full M0–M3 plan.
 ## Status
 
 **M0 — DONE.** A LoROM `.sfc` boots in Mesen2 to the "UnoDOS 3" tile
-splash and reacts to the joypad (the live controller word is rendered as
-`PAD:xxxx`). This proves the whole foundation end to end: cartridge header
-+ vectors, native-mode bring-up, the shared font as SNES tiles, the
-palette, the **shadow + DMA** render architecture, the vblank NMI, and
-auto-joypad input.
+splash and reacts to the joypad. Foundation end to end: cartridge header +
+vectors, native-mode bring-up, the shared font as SNES tiles, the palette,
+the **shadow + DMA** render architecture, the vblank NMI, auto-joypad input.
 
 ![M0 splash](build/desktop.png)
 
-M1–M3 (desktop/WM/cursor/soft-keyboard, SRAM + apps + games, SPC700 audio
-+ scheduler) are still ahead — see [HANDOFF.md](HANDOFF.md).
+**M1 — logic complete (one rig caveat, below).** A tile desktop with a
+window manager, a hardware-sprite cursor, pad-as-pointer + a soft keyboard,
+and the SysInfo + Clock apps. The Genesis M1 surface re-expressed in 65816
+on the shadow+DMA model. Verified in Mesen2: menu bar, two overlapping
+windows (correct z-order, chrome, palettes), and a live advancing clock.
+
+![M1 desktop](build/m1.png)
+
+- **Cell renderer** — `fill_cells`/`draw_str`/`draw_char` write the tilemap
+  shadow; four UI attribute schemes = Mode-1 palette lines 0-3
+  (NORM/INV/ACC/KEY), so the same font + solid tiles serve every scheme.
+- **Window manager** — z-order list, raise/close, title-bar drag (cell
+  snapping, clamped), close box, window chrome (edges + corners).
+- **Input** — pad-as-pointer from the auto-joypad word: d-pad moves the
+  cursor (held-time acceleration, L/R = turbo), A = click/drag, B = soft
+  keyboard, Y = Enter, X = Backspace, Start = Esc, Select = Space. Press
+  edges are latched in the NMI; the main loop posts them as `EV_KEY`s with
+  the Amiga/Genesis raw codes, so app key handlers stay byte-portable.
+- **Soft keyboard** — `softkbd.inc`, re-laid-out for 32 cells (Genesis is
+  40): layout table, hit-test, sticky shift, hover highlight.
+- **Cursor** — two 8x8 OAM sprites (the shared arrow), positioned from the
+  mouse in the NMI and DMA'd to OAM each vblank.
+- **Apps** — SysInfo (CPU/RAM/region/input) and Clock (a real 60 Hz NMI
+  tick → HH:MM:SS), the topmost window refreshed once a second.
+- **NMI direct page** — the vblank handler runs on direct page `$0100` so
+  its scratch never collides with the main loop's (`$0000`).
+
+> **Rig caveat (not a ROM bug).** On this headless/RDP host, only Mesen's
+> *software* renderer is screen-capturable (the GPU surface comes back black
+> through `PrintWindow`). That software renderer drops the BG palette bits to
+> 0 for screen rows below ~scanline 160, so the soft-keyboard panel's bottom
+> rows render blue instead of cyan in the screenshots. The tilemap VRAM is
+> proven **byte-identical** at the top and bottom of the screen (verified by
+> reading VRAM back from the CPU), so the ROM data is correct — this is a
+> renderer/rig artifact. A reference hardware-renderer capture is not
+> obtainable in this environment; resolving it (a non-headless session, or a
+> framebuffer dump) is the open verification item.
+
+M2–M3 (SRAM + Files/Notepad + games, SPC700 audio + Tracker/Music + Theme +
+scheduler) are still ahead — see [HANDOFF.md](HANDOFF.md).
 
 ## The envelope (and its deviations)
 
