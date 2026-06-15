@@ -42,3 +42,6 @@ build/xt/
 iigs/build/
 iigs/gen_data.inc
 iigs/__pycache__/
+
+# FAT16 HD image (32MB, regeneratable via make hd-image)
+build/unodos-hd.img

@@ -6,10 +6,13 @@
 ; region. This prevents the VBR load (to 0x7C00) from overwriting MBR
 ; variables, error strings, and the halt loop.
 ;
-; NOTE: This version requires 386+ CPU (uses EAX, movzx, etc.)
+; 8086/8088-clean: the partition LBA is handled as 16-bit word pairs, the
+; INT 13h AH=42h (LBA) path needs no 32-bit math, and the CHS fallback converts
+; a full 32-bit LBA via two 16-bit DIVs (exact for all 32-bit LBAs).
 
 [BITS 16]
 [ORG 0x0600]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
 
 start:
     ; BIOS loads MBR at 0x7C00 - set up segments
@@ -63,9 +66,12 @@ relocated:
     ; Save partition entry pointer (for VBR, some need it in SI)
     mov [partition_entry], si
 
-    ; Get partition start LBA (offset 8 in partition entry)
-    mov eax, [si + 8]
-    mov [dap_lba], eax              ; Store in static DAP
+    ; Get partition start LBA (offset 8 in partition entry) as 16-bit words.
+    ; The DAP high dword stays 0 (initialized), covering the LBA28/32 range.
+    mov ax, [si + 8]
+    mov [dap_lba], ax
+    mov ax, [si + 10]
+    mov [dap_lba + 2], ax
 
     ; Check if INT 13h extensions are supported (AH=41h)
     mov ah, 0x41
@@ -107,22 +113,37 @@ relocated:
     jz .disk_error                  ; Invalid (wrapped from 0xFF)
     mov [bios_heads], dh
 
-    ; Convert partition LBA to CHS using BIOS-reported geometry
-    ; (partition table CHS may not match BIOS translation for CF cards)
-    mov eax, [dap_lba]
-    xor edx, edx
-    movzx ebx, byte [bios_spt]
-    div ebx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
-    inc dl                          ; Sector (1-based)
-    mov cl, dl                      ; CL[5:0] = sector
+    ; Convert the 32-bit partition LBA to CHS using BIOS-reported geometry.
+    ; 8086: a 32-bit / 16-bit division is done as two chained 16-bit DIVs
+    ; (high word first, remainder carried into the low word).
+    ; --- LBA / SPT -> quotient (32-bit in chs_tmp) + remainder (sector) ---
+    xor bx, bx
+    mov bl, [bios_spt]              ; BX = sectors per track
+    mov ax, [dap_lba + 2]          ; high word
+    xor dx, dx
+    div bx                          ; AX = hi/SPT, DX = hi%SPT
+    mov [chs_tmp + 2], ax          ; quotient high
+    mov ax, [dap_lba]              ; low word (DX = carry-in remainder)
+    div bx                          ; AX = lo quotient, DX = LBA mod SPT
+    mov [chs_tmp], ax              ; quotient low
+    inc dx                          ; sector = remainder + 1
+    mov cl, dl                      ; CL[5:0] = sector (<=63)
 
-    xor edx, edx
-    movzx ebx, byte [bios_heads]
-    div ebx                         ; EAX = cylinder, EDX = head
+    ; --- quotient / heads -> cylinder (AX) + head (DX) ---
+    xor bx, bx
+    mov bl, [bios_heads]           ; BX = number of heads
+    mov ax, [chs_tmp + 2]          ; quotient high
+    xor dx, dx
+    div bx                          ; AX = qhi/heads, DX = qhi%heads
+    mov ax, [chs_tmp]              ; quotient low (DX = carry-in)
+    div bx                          ; AX = cylinder, DX = head
     mov dh, dl                      ; DH = head
-    mov ch, al                      ; CH = cylinder low
-    shl ah, 6
-    or cl, ah                       ; CL[7:6] = cylinder high bits
+    mov ch, al                      ; CH = cylinder low 8 bits
+    mov al, ah                      ; AL = cylinder high byte
+    and al, 0x03                    ; keep bits 8-9 of the cylinder
+    ror al, 1
+    ror al, 1                       ; bits 0-1 -> bits 6-7 (== shl al,6 here)
+    or cl, al                       ; CL[7:6] = cylinder high bits
 
     ; Read VBR (1 sector) to 0x7C00
     mov ah, 0x02
@@ -188,6 +209,7 @@ boot_drive:      db 0
 partition_entry: dw 0
 bios_spt:        db 63              ; Default, overwritten by INT 13h/08h
 bios_heads:      db 16              ; Default, overwritten by INT 13h/08h
+chs_tmp:         dd 0              ; 32-bit quotient between the two CHS divisions
 
 ; Static Disk Address Packet for INT 13h extended read
 ; (avoids push dword which can be problematic on some BIOSes)
