@@ -175,6 +175,7 @@ Companion references: `docs/API_REFERENCE.md` (per-call semantics),
 | Sega Genesis 68000 | `genesis/` | bare-metal, VDP cell desktop; milestone 1 |
 | Sony PS2 (R5900) | `ps2/` | portable C core over a software FB → GS; milestone 2 |
 | Sega Dreamcast (SH-4) | `dreamcast/` | portable C core over a software FB → DC framebuffer (KallistiOS); milestone 1, host-verified |
+| Apple IIGS (65C816) | `iigs/` | bare-metal Super Hi-Res; full app parity (M0–M3), ROM-free Python-65816 harness |
 
 Deviations to reconcile in later milestones: the Mac and Genesis ports
 use a single cooperative event loop (the Amiga has the milestone-3

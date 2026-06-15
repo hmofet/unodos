@@ -1,4 +1,4 @@
-# UnoDOS new-ports program: Apple II, Apple IIGS, SNES, Sony PS2
+# UnoDOS new-ports program: Apple II, Apple IIGS, SNES, Sony PS2, Sega Dreamcast
 
 Direction (2026-06-12): bring UnoDOS to four new platforms, in this order.
 The order is chosen so each port feeds the next: the Apple II establishes
@@ -89,7 +89,25 @@ Real hardware: the user's FloppyEmu does Disk II emulation.
 - Real-hw validation: AppleWin first (boot + RWTS + input), then FloppyEmu
   on a real machine. AppleMouse II card support = stretch/backlog.
 
-## 2. Apple IIGS
+## 2. Apple IIGS — ✅ FULL APP PARITY (M0–M3, 2026-06-15, build 420)
+
+**Shipped.** All four milestones done and verified headlessly: the SHR
+desktop + window manager, ADB mouse/keyboard + save-under software cursor,
+FAT12-over-SmartPort with persistent Files/Notepad, and **all 11 apps** —
+Theme (4096-colour), Music + Tracker (Ensoniq DOC), Dostris, Pac-Man,
+OutLast, Paint, plus SysInfo/Clock/Files/Notepad — over a cooperative
+tick-scheduler. **The M0 harness wildcard was resolved by writing a
+from-scratch Python 65C816 core** (`iigs/cpu65816.py`, self-testing) +
+ROM-free firmware shim (`iigs/harness.py`: block-0 autoload, ProDOS driver
+via a WDM trap, `$C0xx`/DOC register model, SHR→PNG); no IIGS ROM or
+emulator needed, fully CI-able. 9 regression suites green. The 65816
+toolchain it stands up is reused by the SNES port. Detail + the reusable
+app pattern + traps in [../iigs/HANDOFF.md](../iigs/HANDOFF.md).
+**Remaining:** real-hardware validation (GSplus/KEGS/MAME by hand, then
+FloppyEmu SmartPort 3.5″) + audio-by-ear (DOC sound isn't harness-
+reproducible; the oscillator-programming path is asserted via the DOC
+register log).
+
 
 **Envelope.** 65C816 @ 2.8 MHz, 256 KB-8 MB RAM, Super Hi-Res 320x200
 with 16 colors/scanline from 4096 (or 640x200), ADB keyboard + mouse with
@@ -277,6 +295,47 @@ open GLaBIOS — ROM-free, the house rule. See [PORT-8088.md](PORT-8088.md) and
 
 ---
 
+## 6. Sega Dreamcast (KallistiOS) — DONE, at parity (emulator-verified)
+
+**Envelope.** Hitachi SH-4 @ 200 MHz, 16 MB RAM, PowerVR2 GPU, AICA
+(ARM7) sound, VMU memory cards, maple bus (controller / keyboard /
+mouse). KallistiOS (KOS) is a mature open SDK with newlib + a POSIX VFS;
+homebrew boots from a self-made GD-ROM image (`.cdi`/`.gdi`). Like the PS2,
+practically "firmware-hosted bare-metal".
+
+**Strategy: reuse the PS2 port almost verbatim.** Same `mac/unodos.c`
+core over the same Mac-compat shim (`mac_compat.*`, `mac_io.c`) and the
+same software framebuffer (`fb.*`); only the present + input + storage
+layers are swapped. The DC layer is one file, `dreamcast/dc_main.c`:
+a 640×480 RGB565 framebuffer copied to `vram_s` each vblank (PVR idle —
+"FB as the blitter"), maple input, and an AICA square-wave synth via
+`snd_sfx`. Native 640×480 (vs the PS2's 640×448) since the core derives
+geometry from `gScreen`.
+
+**Toolchain & rigs.** KOS toolchain built from source under WSL
+(`utils/kos-chain` → `sh-elf-gcc 15.2.0` + newlib + libkos); `build.sh
+dc`/`cdi` link the SH-4 ELF and wrap it with **mkdcdisc**. Validation rig:
+**Flycast** under Xvfb + Mesa llvmpipe (no GPU, REIOS HLE BIOS — no Sega
+ROM), with the existing host-shim inner loop. Rig gotchas (see
+`../dreamcast/README.md`): Flycast needs a real disc format (not a bare
+`.iso`), `rend.EmulateFramebuffer=yes`, and `rend.vsync=no` (Xvfb's 0 Hz
+otherwise gates frame swaps → black).
+
+**Milestones — all DONE, emulator-verified** (see
+[../dreamcast/HANDOFF.md](../dreamcast/HANDOFF.md)):
+- M0/M1: software-FB splash + the full desktop / WM / all 11 apps, host-shim
+  verified (`m1_*.png`) and **booted in Flycast at 640×480/60 fps**
+  (`dc_*.png` — desktop, Pac-Man, Dostris, Tracker, Paint, Theme, Files,
+  OutLast, the Music/Files/Notepad stack).
+- M2 storage: VMU (`/vmu/a1`) via the KOS VFS with a flush-on-close buffer;
+  the Notepad save→reload round-trip is captured in-emulator (`dc_vmu.png`).
+- M3: 32-bit Theme + cooperative scheduler through the shim; **AICA audio**
+  (looping square-wave `snd_sfx` pitched per MIDI note) for Music / Tracker /
+  Dostris — boots with audio live, the sound an ear-check like the other ports.
+- Real hardware (CD-R / dc-tool) is the only remaining step.
+
+---
+
 ## Implementation handoffs (build-level companions to this plan)
 
 Each port has a Sonnet-ready handoff capturing the contracts, file-by-
@@ -290,11 +349,16 @@ touching code; update it (and this plan) when a milestone closes.
 - SNES: [../snes/HANDOFF.md](../snes/HANDOFF.md) (M0–M3 phased)
 - PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M3 done + verified in PCSX2;
   Theme/scheduler/USB/audio all in — real-hardware function check pending)
+- Dreamcast: [../dreamcast/HANDOFF.md](../dreamcast/HANDOFF.md) (at parity, booted
+  in Flycast; VMU + AICA in — real-hardware run + audio ear-check pending)
 
 ## Sequencing & checkpoints
 
 1. **Apple II M1-M3** — DONE (harness-verified); AppleWin/FloppyEmu real-hw
-   pass still pending.
+   pass still pending. Real-hw images now built: `mkwoz.py` emits `.woz`
+   (WOZ 2.0, self-describing 5.25"/16-sector, bit-exact vs the `.dsk`) +
+   `.nib` for FloppyEmu. NB FloppyEmu must run in **5.25" mode** — a 140 KB
+   UnoDOS image is rejected by its 3.5"/Smartport (800 KB ProDOS) modes.
 2. **Chrome themes** (queued directive) — natural slot while Apple II
    real-hw feedback is pending; touches only existing color ports.
 3. **IIGS M0-M1** next (Apple II M3 complete).
@@ -311,5 +375,7 @@ screenshots + commit + README/TODO updates — same bar as macplus.
   SNES Mouse?
 - PS2: USB keyboard/mouse available? Memory card vs USB stick as the
   primary storage story?
-- Apple II: which machine will FloppyEmu target (II+/IIe/IIc)? IIe makes
-  up/down arrows + 80-col/aux memory available; II+ is the floor.
+- Apple II: target machine is the **IIc** (confirmed). On the IIc a 5.25"
+  FloppyEmu is the external drive (slot 6, drive 2) and the IIc auto-boots
+  drive 1, so the open item is the exact per-ROM drive-2 boot procedure for
+  UnoDOS — TBD on metal.
