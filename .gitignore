@@ -31,3 +31,6 @@ SESSION_SUMMARY.md
 # Audit/test artifacts (2026-06)
 test-artifacts/
 build/unodos.img
+
+# SNES intermediate objects
+snes/build/*.o
