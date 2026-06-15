@@ -25,121 +25,9 @@
 
         processor 6502
 
-; ---- zero page (we SEI and never call KERNAL, so $02-$8F is ours; $00/$01
-;      are the 6510 banking port - never touch as scratch) ----
-zpPtr       equ $02   ; (2) string/data pointer
-zpFontPtr   equ $04   ; (2) glyph pointer
-zpDst       equ $06   ; (2) bitmap dest pointer
-zpScrPtr    equ $08   ; (2) screen-RAM (colour) pointer
-zpCol       equ $0A   ; draw cell column 0-39
-zpRow       equ $0B   ; draw cell row 0-24
-zpInv       equ $0C   ; draw_char EOR mask ($00 normal, $FF inverted)
-zpFCol      equ $0D   ; current cell colour (fg<<4 | bg)
-zpTmp       equ $0E
-zpTmp2      equ $0F
-zpI         equ $10
-zpJ         equ $11
-zpFX        equ $12   ; fill_rows: cell column
-zpFY        equ $13   ; fill_rows: pixel row 0-199
-zpFW        equ $14   ; fill_rows: width in cells
-zpFH        equ $15   ; fill_rows: height in pixel rows
-zpFPat      equ $16   ; fill_rows: bitmap byte
-zpCX        equ $17   ; color_fill: cell column
-zpCY        equ $18   ; color_fill: cell row
-zpCW        equ $19   ; color_fill: width in cells
-zpCH        equ $1A   ; color_fill: height in cell rows
-zpWX        equ $1B   ; draw_win: window cell rect
-zpWY        equ $1C
-zpWW        equ $1D
-zpWH        equ $1E
-zpWF        equ $1F   ; draw_win: focused flag 0/1
-zpSIdx      equ $20   ; draw_string index
-clkbuf      equ $21   ; (9) "HH:MM:SS",0
-zpHH        equ $2A
-zpMM        equ $2B
-zpSS        equ $2C
-zpKey       equ $2D   ; decoded key this scan (0 = none)
-zpShift     equ $2E   ; nonzero if shift held
-zpRasLo     equ $30   ; detect_video: max raster low byte seen
-zpRasHi     equ $31   ; detect_video: max raster bit8 seen
-zpCnt       equ $32   ; (2) detect_video loop counter
-; slots the fill_rows/color_fill primitives never touch, for values that must
-; survive a call to them (they clobber zpTmp/zpTmp2/zpI/zpJ/zpDst/zpScrPtr):
-zpSlot      equ $35   ; draw_icons: icon loop index
-zpWtop      equ $36   ; win_outline: window top pixel row
-zpSel       equ $37   ; draw_icon: selected flag
-zpIconX     equ $38   ; draw_icon: icon's base column (win_outline mutates zpFX)
-zpCharY     equ $39   ; draw_char: saved caller Y (draw_name12 uses Y as index)
-zpIconY     equ $3A   ; draw_icon: icon box top cell row
-
-; ---- logical key codes (scan_keyboard -> zpKey, handle_key dispatch) ----
-K_RET    equ $0D
-K_ESC    equ $1B      ; RUN/STOP
-K_LEFT   equ $11      ; CRSR<> + shift
-K_RIGHT  equ $12      ; CRSR<>
-K_UP     equ $13      ; CRSR^v + shift
-K_DOWN   equ $14      ; CRSR^v
-K_SPACE  equ $20
-K_BS     equ $08      ; DEL/INST (backspace)
-K_SAVE   equ $06      ; F1 (Notepad save)
-
-; ---- colour bytes (fg<<4 | bg); see palette in harness.py ----
-COL_DESK     equ $E6   ; light-blue dither on blue
-COL_MENU     equ $0F   ; black on light-grey
-COL_WIN      equ $01   ; black on white (window content)
-COL_TITLE_F  equ $16   ; white on blue (focused title)
-COL_TITLE_U  equ $0F   ; black on light-grey (unfocused title)
-COL_ICON     equ $01   ; black on white (icon box)
-COL_ICON_SEL equ $16   ; white on blue (selected icon label)
-BORDERCOL    equ $06   ; VIC border = blue
-
-; ---- screen layout (40 cell cols x 25 cell rows) ----
-SCRCOLS  equ 40
-SCRROWS  equ 25
-
-SI_X     equ 2        ; SysInfo window (cells)
-SI_Y     equ 2
-SI_W     equ 26
-SI_H     equ 8
-CK_X     equ 2        ; Clock window (cells)
-CK_Y     equ 11
-CK_W     equ 14
-CK_H     equ 5
-
-; icon grid: up to 10 icons in 4 columns x 3 rows. Each box is ICONW cells
-; wide x ICONH cells tall, label on the box's bottom row. Per-icon position
-; comes from icon_x_tab / icon_y_tab so the grid can grow app by app.
-ICONW    equ 9        ; icon box width in cells (inner label width = ICONW-2 = 7)
-ICONH    equ 2
-NICONS   equ 6        ; populated icon slots (grows as M3 apps are added)
-
-; full-screen app layout (app_mode != 0): row0 = title + separator, rows1-22
-; content, row23 = status/help line.
-APP_CONTENT_Y  equ 8     ; pixel row of content row 1
-APP_CONTENT_H  equ 176   ; 22 rows * 8px
-APP_VIEW_ROWS  equ 22
-
-; ---- C64 I/O ----
-VIC_D011 equ $D011
-VIC_D012 equ $D012
-VIC_D016 equ $D016
-VIC_D018 equ $D018
-VIC_D020 equ $D020
-VIC_D021 equ $D021
-SID_BASE equ $D400
-CIA1_PRA equ $DC00    ; keyboard column select (output)
-CIA1_PRB equ $DC01    ; keyboard row read (input)
-CIA1_DDRA equ $DC02
-CIA1_DDRB equ $DC03
-CIA1_TOD10 equ $DC08  ; TOD tenths (reading releases the latch)
-CIA1_TODSEC equ $DC09
-CIA1_TODMIN equ $DC0A
-CIA1_TODHR  equ $DC0B  ; reading latches the time
-CIA2_PRA  equ $DD00   ; VIC bank select (bits 0-1)
-CIA2_DDRA equ $DD02
-
-BITMAP   equ $6000
-SCREEN   equ $4000
+; shared system equates (zero page, key codes, colours, layout, I/O, the
+; disk-app loader ABI) - also included by every disk-loaded app.
+        include "sys.inc"
 
 ; ============================================================================
         org $0801
@@ -239,9 +127,12 @@ game_tick:
         jmp dostris_tick
 gt_5:
         cmp #5
-        bne gt_done
+        bne gt_10
         jmp music_tick
-        ;== M3-GAMES-TICK ==
+gt_10:
+        cmp #APP_MODE           ; disk-loaded app
+        bne gt_done
+        jmp APP_TICK
 gt_done:
         rts
 
@@ -440,9 +331,12 @@ hk_ret4:
         jmp dostris_open
 hk_ret5:
         cmp #5
-        bne hk_ret_win
+        bne hk_ret_load
         jmp music_open
-        ;== M3-GAMES-RETURN ==   (extended as games are added)
+hk_ret_load:
+        cmp #6                  ; icons 6..9 are disk-loaded apps (id = icon)
+        bcc hk_ret_win
+        jmp launch_app          ; A = sel_icon = app id
 hk_ret_win:
         jsr sid_click
         lda sel_icon
@@ -459,11 +353,40 @@ app_key:
         jmp dostris_key
 ak_5:
         cmp #5
-        bne ak_done
+        bne ak_10
         jmp music_key
-        ;== M3-GAMES-KEY ==      (extended as games are added)
+ak_10:
+        cmp #APP_MODE           ; disk-loaded app
+        bne ak_done
+        jmp APP_KEY             ; app_key entry (key is in zpTmp)
 ak_done:
         rts
+
+; ============================================================================
+; disk-app loader - read a separately-assembled app binary into APP_BASE and
+; run it. Large M3 apps (Pac-Man, Tracker, Paint, OutLast) ship as their own
+; binaries on the disk rather than bloating the kernel, exactly as the mature
+; UnoDOS ports load apps from disk. See sys.inc for the app ABI.
+; ============================================================================
+
+; launch_app - A = app id. The loader (LOAD_PORT, harness/IEC-backed) copies
+; that app's bytes to APP_BASE; we set app_mode and call its init entry.
+launch_app:
+        sta LOAD_PORT           ; loader: copy app[A] -> APP_BASE
+        jsr sid_click
+        lda #APP_MODE
+        sta app_mode
+        jmp APP_BASE            ; app_init (draws itself; returns to mainloop)
+
+; return_to_desktop - an app calls this (or the kernel uses it) to leave a
+; full-screen app: clear app_mode and repaint the desktop + windows + icons.
+return_to_desktop:
+        lda #0
+        sta app_mode
+        jsr draw_desktop
+        jsr draw_sysinfo_win
+        jsr draw_clock_win
+        jmp draw_icons
 
 ; ============================================================================
 ; window manager - 2 fixed windows (SysInfo=0, Clock=1), z-order in zlist
@@ -1347,7 +1270,6 @@ dr_done:
 ; Bitmap byte addr = rowbase[zpRow*8] + zpCol*8; the 8 glyph rows are the 8
 ; consecutive bytes from there. Also stamps the cell colour.
 draw_char:
-        sty zpCharY             ; preserve caller's Y (draw_name12 uses it as index)
         sec
         sbc #32
         sta zpTmp
@@ -1366,6 +1288,13 @@ draw_char:
         lda zpFontPtr+1
         adc #>font8
         sta zpFontPtr+1
+        ; fall into blit_cell with zpFontPtr = glyph
+
+; blit_cell - blit the 8-byte sprite at zpFontPtr into cell zpCol/zpRow
+; (EOR zpInv), stamping colour zpFCol. Preserves caller X/Y. Apps point
+; zpFontPtr at a sprite and set zpInv=0. draw_char falls in here.
+blit_cell:
+        sty zpCharY             ; preserve caller's Y (draw_name12 uses it as index)
         ; dest = rowbase[zpRow*8] + zpCol*8
         lda zpRow
         asl

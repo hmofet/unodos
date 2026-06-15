@@ -34,10 +34,7 @@ zpDVlo   equ $40   ; draw_dec16 working value lo
 zpDVhi   equ $41
 zpDDig   equ $42   ; draw_dec16 current digit
 zpDLead  equ $43   ; draw_dec16 leading-zero-suppress flag
-zpFSPtr  equ $44   ; (2) pointer to a directory entry / 12-byte name field
-zpFSName equ $46   ; (2) pointer to a 12-byte name (find/save input)
-zpFSSize equ $48   ; (2) byte size - fs_size output / fs_read,fs_save in/out
-zpFSDat  equ $4A   ; (2) caller data pointer (read dest / save source)
+; zpFSPtr/Name/Size/Dat ($44-$4B) are in sys.inc (shared with disk-loaded apps)
 zpFSSrc  equ $4C   ; (2) fs_memcpy source
 zpFSDst  equ $4E   ; (2) fs_memcpy dest
 zpFSLen  equ $50   ; (2) fs_memcpy length

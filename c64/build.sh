@@ -20,10 +20,22 @@ case "$1" in
     DEF=""; PRG=build/unodos_c64.prg; D64=build/unodos_c64.d64 ;;
 esac
 
-echo "[2/4] assembling kernel.s..."
-"$DASM" kernel.s -f3 $DEF -obuild/kernel.bin -lbuild/kernel.lst
+echo "[2/5] assembling kernel.s..."
+"$DASM" kernel.s -f3 $DEF -obuild/kernel.bin -lbuild/kernel.lst -sbuild/kernel.sym
 
-echo "[3/4] packing .prg + .d64..."
+echo "[3/5] exporting the kernel API for disk-loaded apps..."
+"$PY" mkapi.py build/kernel.sym build/kernel_api.inc
+
+echo "[4/5] assembling disk-loaded apps (org \$5000)..."
+for app in pacman:6 tracker:7 paint:8 outlast:9; do
+  name="${app%%:*}"; id="${app##*:}"
+  if [ -f "$name.s" ]; then
+    "$DASM" "$name.s" -f3 $DEF -obuild/app$id.bin -lbuild/$name.lst
+    echo "  $name.s -> build/app$id.bin (app id $id)"
+  fi
+done
+
+echo "[5/5] packing .prg + .d64..."
 "$PY" mkprg.py build/kernel.bin "$PRG" "$D64"
 
-echo "[4/4] done: $PRG (+ .d64)"
+echo "done: $PRG (+ .d64) + disk apps"

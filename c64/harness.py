@@ -165,6 +165,8 @@ class C64:
             self.mem.write(0xC000, list(data))
 
         # --- I/O intercepts ---
+        self.app_dir = os.path.dirname(os.path.abspath(prg_path))
+        self.mem.subscribe_to_write([0xDE00], self._load_app)
         self.mem.subscribe_to_write([0xDC00], self.kbd.write_pra)
         self.mem.subscribe_to_read([0xDC01], self.kbd.read_prb)
         self.mem.subscribe_to_read([0xD011], self._read_d011)
@@ -223,6 +225,21 @@ class C64:
         src = self.tod_latched or self._now_bcd()
         self.tod_latched = None                 # reading tenths releases the latch
         return src[3]
+
+    # ---- disk-app loader (LOAD_PORT = $DE00) ----
+    # The kernel writes an app id here; we copy build/app<id>.bin (a raw binary
+    # assembled at $5000) into RAM at $5000 - the harness/IEC-backed analogue of
+    # loading the app's PRG off the 1541.
+    def _load_app(self, addr, value):
+        path = os.path.join(self.app_dir, "app%d.bin" % value)
+        if os.path.exists(path):
+            data = open(path, "rb").read()
+            self.mem.write(0x5000, list(data))
+            if self.trace:
+                print("[loader] app %d <- %s (%d bytes)" % (value, path, len(data)))
+        elif self.trace:
+            print("[loader] app %d: %s not found" % (value, path))
+        return None
 
     # ---- SID ----
     def _write_sid(self, addr, value):

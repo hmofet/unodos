@@ -1,0 +1,7 @@
+wait 70
+keys right right right right right
+key return
+shot m3_pacman
+wait 3
+shot m3_pacman_play
+quit
