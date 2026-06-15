@@ -5,10 +5,10 @@
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | CPU | Intel 8088 @ 4.77 MHz | 8086/80286+ |
-| RAM | 128 KB | 256 KB+ |
+| RAM | 256 KB (desktop + one app) | 640 KB (full multitasking) |
 | Display | CGA (320x200, 4-color) | CGA/EGA/VGA |
 | Storage | 360KB floppy | 1.44MB floppy, HDD, CF card, USB |
-| Input | PC/XT keyboard | PS/2 mouse (optional) |
+| Input | PC/XT keyboard + Microsoft serial mouse | PS/2 mouse (optional) |
 | Audio | PC speaker (optional) | |
 
 ---

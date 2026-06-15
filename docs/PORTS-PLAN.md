@@ -193,8 +193,9 @@ existing screenshot automation. Real hardware: PS2 + FMCB card; ELF on MC
 or USB stick.
 
 **Milestones.** (M0–M2 DONE + verified on the emulated PS2 in PCSX2 as of
-2026-06-14; see [../ps2/HANDOFF.md](../ps2/HANDOFF.md) and the ps2 CHANGELOG
-entries. Only EE audio (audsrv), a USB keyboard, and a real-hardware run remain.)
+2026-06-14; USB keyboard + mouse added 2026-06-15; see
+[../ps2/HANDOFF.md](../ps2/HANDOFF.md) and the ps2 CHANGELOG entries. Only EE
+audio (audsrv) and a real-hardware run remain.)
 - M0 (DONE — splash on the emulated GS): the
   software-framebuffer platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/
   invert/text over the 4-colour gamut), the shared font as a C array
@@ -212,10 +213,16 @@ entries. Only EE audio (audsrv), a USB keyboard, and a real-hardware run remain.
   to `ps2/unodos.c` over a Mac-compat shim (`mac_compat.*`/`mac_io.c`) — full
   desktop + WM + all 11 apps + pad-as-pointer, the host shim being the fast
   inner loop and the EE target (`ee_platform.c`) GS-presenting each vsync.
-- M2 (DONE — memory-card storage): the EE File Manager persists Files/Notepad
-  to the **PS2 memory card** via libmc, verified to survive a power cycle in
-  PCSX2. (Trivial next to GCR floppies, as predicted.) USB keyboard/mouse
-  modules still to wire.
+- M2 (DONE — memory-card storage + USB input): the EE File Manager persists
+  Files/Notepad to the **PS2 memory card** via libmc, verified to survive a
+  power cycle in PCSX2. (Trivial next to GCR floppies, as predicted.) **USB
+  keyboard + mouse DONE** (`ps2/ee_usb.c`): the `usbd`/`ps2kbd`/`ps2mouse` IRX
+  are embedded into the ELF via `bin2c` and loaded with `SifExecModuleBuffer`;
+  keyboard in RAW HID mode (full US keymap incl. arrows/modifiers), mouse in ABS
+  mode with a GS-overlay cursor — both feed the same shim event queue as the
+  pad. Device init runs on a background EE thread so a USB-less boot (e.g. PCSX2,
+  which has no USB HLE) still reaches the desktop; boot verified in PCSX2, the
+  USB function itself is hardware-only to confirm.
 - M3 (Theme + scheduler DONE; audio pending): full 32-bit-colour Theme and the
   cooperative scheduler come along through the shim. audsrv Music/Tracker audio
   is the one remaining piece — it can't be screenshot-verified, so it awaits a

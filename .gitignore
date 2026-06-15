@@ -34,3 +34,6 @@ build/unodos.img
 
 # SNES intermediate objects
 snes/build/*.o
+
+# 8088 port: scratch harness screenshots (canonical shots live in tools/xt/shots/)
+build/xt/

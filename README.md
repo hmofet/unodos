@@ -12,7 +12,7 @@ UnoDOS 3 is a GUI-first operating system that boots directly into a windowed des
 
 - **GUI-First**: No command line. The system boots directly into a graphical desktop with draggable icons, windows, and mouse support.
 - **Bare Metal**: Runs on raw hardware using only BIOS services. No DOS, no runtime, no dependencies.
-- **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an original IBM PC with 128KB RAM and a CGA card.
+- **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an IBM PC/XT-class machine with a CGA card. (Verified on a cycle-accurate 8088: 256KB boots the desktop; 640KB enables the full 5-app multitasking envelope. The kernel itself loads in 128KB but the launcher does not fit below 192KB — see [docs/PORT-8088.md](docs/PORT-8088.md).)
 - **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and the application set fit on one floppy disk.
 
 ## Ports
@@ -31,13 +31,19 @@ assessment and plan):
 | [**MacPlus (standalone OS)**](macplus/) | Mac Plus / SE / Classic (68000) + Mac II class (640×480) | Bare-metal: own boot blocks (ROM bootstrap = BIOS, like the x86 port), own vectors/drivers, 1-bit dither renderer, software cursor; **machine-adaptive input** (Plus M0110/SCC quadrature vs. SE/II ROM-assisted ADB); ROM-free Unicorn harness | **Milestone 3** — full app parity (11 apps incl. the three games, Paint, Music, Tracker, Theme), FAT12 filesystem + disk-loaded apps, sound, cooperative scheduler, on top of the M1 desktop/window-manager (System 7 chrome); validated in Mini vMac (real Plus ROM) + Mini vMac II (real IIcx ROM) **and on a real Mac SE (FloppyEmu)** (see [macplus/README](macplus/README.md)) |
 | [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
 | [**Apple II**](apple2/) | Apple ][+ / //e (6502 @ 1MHz, 48–64KB), hi-res 280×192 (1-bit, 7px/byte) | Bare-metal: Disk II ROM autoload → own GCR 6-and-2 RWTS (read+write), hi-res software renderer, keyboard window manager, 1-bit `$C030` speaker | **Milestone 3** — desktop + 10 apps (Theme, Dostris, Pac-Man, Music, Tracker, Paint + SysInfo/Clock/Files/Notepad), mini-FS, blocking square-wave audio, OutLast (~4fps prototype) + cooperative-scheduler verdict; ROM-free py65 harness-verified, real-hw (AppleWin/FloppyEmu) pending |
-| [**Sony PS2**](ps2/) | PlayStation 2 (MIPS R5900 EE, 32MB, Graphics Synthesizer), FreeMcBoot ELF | Port the portable C core ([mac/unodos.c](mac/unodos.c)) over a software 640×448×32 framebuffer blitted to GS each vsync; DualShock 2 + soft keyboard | **Milestone 2** — the full desktop / WM / all 11 apps (+ FAT12 round-trip, 32-bit Theme) run via the Mac-compat shim over the software FB, verified on the host shim and the **emulated PS2 GS** in PCSX2 (`ps2/shots/m1_pcsx2_pacman.png`); **memory-card storage** persists Files/Notepad across boots via libmc (`ps2/shots/m2_pcsx2_*.png`). Remaining: EE audio (audsrv), USB keyboard, real hardware |
+| [**Sony PS2**](ps2/) | PlayStation 2 (MIPS R5900 EE, 32MB, Graphics Synthesizer), FreeMcBoot ELF | Port the portable C core ([mac/unodos.c](mac/unodos.c)) over a software 640×448×32 framebuffer blitted to GS each vsync; DualShock 2 + soft keyboard | **Milestone 2** — the full desktop / WM / all 11 apps (+ FAT12 round-trip, 32-bit Theme) run via the Mac-compat shim over the software FB, verified on the host shim and the **emulated PS2 GS** in PCSX2 (`ps2/shots/m1_pcsx2_pacman.png`); **memory-card storage** persists Files/Notepad across boots via libmc (`ps2/shots/m2_pcsx2_*.png`); **USB keyboard + mouse** (embedded `usbd`/`ps2kbd`/`ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor) — boot verified in PCSX2 (`ps2/shots/m3_usb_boot.png`), function is hardware-only. Remaining: EE audio (audsrv), real hardware |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
 (Apple II ✓, Sony PS2 ✓, Apple IIGS, SNES) is tracked in
 [docs/PORTS-PLAN.md](docs/PORTS-PLAN.md); the standalone MacPlus OS port
 joins the matrix at app parity.
+
+The x86 reference build above has now been **validated on a genuine Intel 8088
+/ IBM PC-XT** for the first time — it had only ever run on QEMU (a 486-class
+CPU). UnoDOS boots end-to-end on a cycle-accurate emulated XT (8088 @ 4.77 MHz,
+CGA): boot chain → kernel → CGA desktop → keyboard-launched apps. See
+[docs/PORT-8088.md](docs/PORT-8088.md) and [tools/xt/](tools/xt/).
 
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the
@@ -172,8 +178,12 @@ Two filesystem drivers with a unified API that routes by mount handle:
 **Mouse:**
 - Primary: BIOS INT 15h/C2 services (works with USB mice via BIOS legacy emulation)
 - Fallback: Direct KBC port I/O with IRQ12 for BIOSes without INT 15h/C2 support
+- **IBM PC/XT: Microsoft serial mouse on COM1** (IRQ4) — a real XT has no PS/2
+  port; on a pre-AT machine the kernel programs the COM1 UART (1200/7N1),
+  detects the mouse via its `'M'` identifier, and decodes the 3-byte protocol
+  in an IRQ4 handler (verified on a cycle-accurate 8088 — see [docs/PORT-8088.md](docs/PORT-8088.md))
 - XOR sprite cursor (8x8) with automatic hide/show during drawing
-- Boot-time auto-detection with diagnostic letter: B (BIOS), K (KBC), E (no mouse)
+- Boot-time auto-detection with diagnostic letter: B (BIOS), K (KBC), C (COM serial), E (no mouse)
 
 ### Audio
 
@@ -242,10 +252,10 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | CPU | Intel 8088 @ 4.77 MHz | 80286+ |
-| RAM | 128 KB | 256 KB+ |
+| RAM | 256 KB (desktop + one app) | 640 KB (full 5-app multitasking) |
 | Display | CGA | VGA |
 | Storage | 3.5" 1.44MB floppy | Hard drive / CF card |
-| Input | PC/XT keyboard | + PS/2 mouse |
+| Input | PC/XT keyboard + Microsoft serial mouse | + PS/2 mouse |
 | Audio | PC speaker (optional) | |
 
 ### Tested Hardware

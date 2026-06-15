@@ -5,6 +5,33 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8088 port M1/M2 — Microsoft serial mouse on COM1 + RAM floor] - 2026-06-14 (Build 409)
+
+Building on M0, the XT now has a working pointer and an honest RAM spec.
+
+- **Microsoft serial mouse on COM1 (the XT pointing device).** A real IBM PC/XT
+  has no PS/2 port, so UnoDOS's AT-class mouse paths (INT 15h/C2, KBC/IRQ12)
+  never engaged — the cursor was static. New kernel code:
+  - `install_serial_mouse` — programs the COM1 UART (1200 baud, 7N1), power-
+    cycles the mouse via DTR/RTS, probes for the `'M'` identifier, then arms
+    IRQ4 (INT 0x0C) and unmasks it on the PIC. On a pre-AT machine
+    `install_mouse` now falls through from `.skip_kbc` to this probe instead of
+    giving up (`mouse_diag='C'`).
+  - `int_0C_handler` — the IRQ4 ISR: decodes the 3-byte Microsoft packet
+    (sync-bit framing, signed 8-bit X/Y deltas, L/R buttons) into the shared
+    `mouse_x/y` + `mouse_buttons`, reusing the existing deferred-cursor
+    (`cursor_dirty`) and button-change event model from the PS/2 handlers.
+  - Verified end-to-end on the cycle-accurate XT (MartyPC, host mouse captured,
+    relative motion injected): the cursor tracks both axes with correct
+    direction and a **double-click launches Settings** (`tools/xt/shots/
+    m2_mouse_*.png`).
+- **RAM floor corrected.** The 128K machine (`unodos_xt_128k`) boots the kernel
+  but cannot load the launcher (it lives at segment `0x2000` = linear 128–192K),
+  so the desktop never appears. The README/FEATURES "128 KB minimum" claim was
+  false; corrected to **256 KB (desktop + one app) / 640 KB (full 5-app
+  multitasking)**. See `docs/PORT-8088.md`.
+- The kernel mid-file API-table pad was bumped 0x3800→0x3C00 for the new code.
+
 ## [8088 port M0 — UnoDOS boots on a cycle-accurate IBM PC/XT (8088)] - 2026-06-14
 
 The x86 reference build already *is* the 8088 target, but for its whole life it

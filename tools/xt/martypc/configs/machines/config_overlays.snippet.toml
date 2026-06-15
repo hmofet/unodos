@@ -1,0 +1,14 @@
+# Append this overlay to MartyPC's configs/machines/config_overlays.toml.
+# The stock overlays only define 360K/720K drives; UnoDOS boots a 1.44MB image,
+# so the XT rig needs a 1.44M drive.
+
+[[overlay]]
+name = "pcxt_2_1440k_floppies"
+    # Floppy disk controller (UnoDOS 8088 port rig — boots the 1.44MB image)
+    [overlay.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[overlay.fdc.drive]]
+        type  = "1.44m"
+        [[overlay.fdc.drive]]
+        type  = "1.44m"
