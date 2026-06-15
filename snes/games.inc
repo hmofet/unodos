@@ -1513,6 +1513,1274 @@ OL_HORIZ = 3
 @out:   rts
 .endproc
 
+; ----------------------------------------------------------------------------
+; Pac-Man (proc 6) - ported from genesis/pacman.i. The x86 ghost AI is intact
+; (Blinky direct, Pinky 4-ahead, Clyde hybrid, scatter/chase schedule,
+; frightened eat-chain). DEVIATION from Genesis: actors are CELL-GRID tiles
+; (the BG shadow tilemap), not pixel-smooth hardware sprites - one tile per
+; step, collisions by tile equality, mode/fright timers measured in steps.
+; The 28x25 maze + a 1-row HUD fill the 30x28 window (the Genesis 8-col side
+; panel won't fit the 32-cell screen). Flagged in HANDOFF.
+; ----------------------------------------------------------------------------
+PM_COLS = 28
+PM_ROWS = 25
+PM_STEP_FRAMES = 7
+FRIGHT_STEPS   = 28
+GX = 0
+GY = 2
+GDIR = 4
+GST = 6
+GTMR = 8
+GOX = 10
+GOY = 12
+GSIZE = 14
+PMS_TITLE = 0
+PMS_READY = 1
+PMS_PLAY  = 2
+PMS_OVER  = 4
+GH_HOUSE  = 0
+GH_SCAT   = 1
+GH_CHASE  = 2
+GH_FRIGHT = 3
+GH_EATEN  = 4
+
+; pm_walkable: A0=tx A1=ty A2=ghost? A3=eaten? -> A=1 ok / 0 blocked.
+; Wraps A0 into [0,PM_COLS) (tunnel). Clobbers X.
+.proc pm_walkable
+.a16
+.i16
+        lda A1
+        bmi @no
+        cmp #PM_ROWS
+        bcs @no
+        lda A0
+        bpl @x1
+        clc
+        adc #PM_COLS
+        sta A0
+@x1:    lda A0
+        cmp #PM_COLS
+        bcc @x2
+        sec
+        sbc #PM_COLS
+        sta A0
+@x2:    lda A1
+        asl a
+        tax
+        lda pm_rowoff,x
+        clc
+        adc A0
+        tax
+        sep #$20
+.a8
+        lda v_pm_maze,x
+        rep #$20
+.a16
+        and #$00FF
+        cmp #1
+        beq @no                 ; wall
+        cmp #4
+        beq @gate               ; house body
+        cmp #5
+        beq @gate               ; gate
+        lda #1
+        rts
+@gate:  lda A2
+        beq @no                 ; only ghosts pass the gate...
+        lda A3
+        beq @no                 ; ...and only when eaten (returning home)
+        lda #1
+        rts
+@no:    lda #0
+        rts
+.endproc
+
+; pm_mode_state -> A = GH_SCAT or GH_CHASE by v_pm_mode parity
+.proc pm_mode_state
+.a16
+.i16
+        lda v_pm_mode
+        and #1
+        bne @chase
+        lda #GH_SCAT
+        rts
+@chase: lda #GH_CHASE
+        rts
+.endproc
+
+; pm_load_maze - copy template to v_pm_maze, count dots+pellets
+.proc pm_load_maze
+.a16
+.i16
+        lda #.loword(pm_maze_tpl)
+        sta P0
+        stz v_pm_dots
+        ldy #$0000
+@cp:    sep #$20
+.a8
+        lda (P0),y
+        sta v_pm_maze,y
+        cmp #2
+        beq @dot
+        cmp #3
+        beq @dot
+        bra @nx
+@dot:   inc v_pm_dots           ; <256 dots: low-byte inc is safe
+@nx:    rep #$20
+.a16
+        iny
+        cpy #(PM_COLS*PM_ROWS)
+        bne @cp
+        rts
+.endproc
+
+; pm_reset_actors - pac + 3 ghosts to start tiles; old=current
+.proc pm_reset_actors
+.a16
+.i16
+        lda #14
+        sta v_pm_px
+        sta v_pm_opx
+        lda #19
+        sta v_pm_py
+        sta v_pm_opy
+        lda #1
+        sta v_pm_dir
+        sta v_pm_ndir
+        ; blinky (0): (14,10) LEFT SCAT, out now
+        lda #14
+        sta v_pm_gh+GX
+        sta v_pm_gh+GOX
+        lda #10
+        sta v_pm_gh+GY
+        sta v_pm_gh+GOY
+        lda #1
+        sta v_pm_gh+GDIR
+        lda #GH_SCAT
+        sta v_pm_gh+GST
+        stz v_pm_gh+GTMR
+        ; pinky (1): (13,12) UP HOUSE tmr 8
+        lda #13
+        sta v_pm_gh+GSIZE+GX
+        sta v_pm_gh+GSIZE+GOX
+        lda #12
+        sta v_pm_gh+GSIZE+GY
+        sta v_pm_gh+GSIZE+GOY
+        stz v_pm_gh+GSIZE+GDIR
+        lda #GH_HOUSE
+        sta v_pm_gh+GSIZE+GST
+        lda #8
+        sta v_pm_gh+GSIZE+GTMR
+        ; clyde (2): (15,12) UP HOUSE tmr 20
+        lda #15
+        sta v_pm_gh+GSIZE*2+GX
+        sta v_pm_gh+GSIZE*2+GOX
+        lda #12
+        sta v_pm_gh+GSIZE*2+GY
+        sta v_pm_gh+GSIZE*2+GOY
+        stz v_pm_gh+GSIZE*2+GDIR
+        lda #GH_HOUSE
+        sta v_pm_gh+GSIZE*2+GST
+        lda #20
+        sta v_pm_gh+GSIZE*2+GTMR
+        stz v_pm_fright
+        stz v_pm_kills
+        stz v_pm_half
+        rts
+.endproc
+
+; pm_new_game
+.proc pm_new_game
+.a16
+.i16
+        stz v_pm_score
+        lda #3
+        sta v_pm_lives
+        lda #1
+        sta v_pm_level
+        stz v_pm_mode
+        stz v_pm_modet
+        jsr pm_load_maze
+        jsr pm_reset_actors
+        lda #PMS_READY
+        sta v_pm_state
+        lda v_frame
+        clc
+        adc #60
+        sta v_pm_statet
+        lda v_frame
+        sta v_pm_last
+        rts
+.endproc
+
+; pm_steer - A = ghost index. Picks GDIR at the current tile (the x86 AI).
+; Scratch: S0/S1 gtx/gty, S2/S3 target, S4 best dir, S5 index, S6 dir/scratch,
+; S7 reverse, v_pm_tmp best-dist, P1 ghost base. Clobbers all of S0-S7.
+.proc pm_steer
+.a16
+.i16
+        sta S5                  ; index
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GX
+        lda (P1),y
+        sta S0                  ; gtx
+        ldy #GY
+        lda (P1),y
+        sta S1                  ; gty
+        ldy #GST
+        lda (P1),y
+        cmp #GH_FRIGHT
+        bne @target
+        jmp @rand
+@target:
+        ldy #GST
+        lda (P1),y
+        cmp #GH_EATEN
+        bne @noteaten
+        lda #14
+        sta S2
+        lda #10
+        sta S3
+        jmp @pick
+@noteaten:
+        ldy #GST
+        lda (P1),y
+        cmp #GH_CHASE
+        beq @chase
+        ; scatter: per-ghost corner
+        lda S5
+        asl a
+        tax
+        lda pm_cornx,x
+        sta S2
+        lda pm_corny,x
+        sta S3
+        jmp @pick
+@chase:
+        lda v_pm_px
+        sta S2                  ; default (blinky) = pac
+        lda v_pm_py
+        sta S3
+        lda S5
+        beq @pick               ; blinky
+        cmp #1
+        beq @pinky
+        ; clyde: manhattan(gh,pac) <= 8 ? corner2 : pac
+        lda S0
+        sec
+        sbc v_pm_px
+        bpl @cx
+        eor #$FFFF
+        inc a
+@cx:    sta S6
+        lda S1
+        sec
+        sbc v_pm_py
+        bpl @cy
+        eor #$FFFF
+        inc a
+@cy:    clc
+        adc S6
+        cmp #9
+        bcs @pick               ; >8 -> chase pac
+        lda #1
+        sta S2
+        lda #23
+        sta S3
+        jmp @pick
+@pinky:
+        lda v_pm_dir
+        asl a
+        tax
+        lda pm_dx,x
+        asl a
+        asl a                   ; *4 (signed ok in 16-bit)
+        clc
+        adc v_pm_px
+        sta S2
+        lda v_pm_dir
+        asl a
+        tax
+        lda pm_dy,x
+        asl a
+        asl a
+        clc
+        adc v_pm_py
+        sta S3
+        jmp @pick
+@pick:
+        lda #$FFFF
+        sta v_pm_tmp            ; best dist
+        sta S4                  ; best dir = -1
+        ldy #GDIR
+        lda (P1),y
+        eor #2
+        sta S7                  ; reverse (excluded)
+        stz S6                  ; dir d=0
+@try:   lda S6
+        cmp S7
+        beq @skip
+        lda S6
+        asl a
+        tax
+        lda pm_dx,x
+        clc
+        adc S0
+        sta A0
+        lda S6
+        asl a
+        tax
+        lda pm_dy,x
+        clc
+        adc S1
+        sta A1
+        lda #1
+        sta A2
+        ldy #GST
+        lda (P1),y
+        cmp #GH_EATEN
+        bne @we0
+        lda #1
+        bra @we1
+@we0:   lda #0
+@we1:   sta A3
+        jsr pm_walkable
+        cmp #0
+        beq @skip
+        ; manhattan(wrapped nx in A0, ny in A1) to target S2/S3
+        lda A0
+        sec
+        sbc S2
+        bpl @ax
+        eor #$FFFF
+        inc a
+@ax:    sta A5
+        lda A1
+        sec
+        sbc S3
+        bpl @ay
+        eor #$FFFF
+        inc a
+@ay:    clc
+        adc A5
+        cmp v_pm_tmp
+        bcs @skip               ; >= best -> keep earlier
+        sta v_pm_tmp
+        lda S6
+        sta S4
+@skip:  inc S6
+        lda S6
+        cmp #4
+        bcc @try
+        lda S4
+        bmi @out                ; none found: keep current dir
+        ldy #GDIR
+        lda S4
+        sta (P1),y
+@out:   rts
+@rand:  ; frightened: random non-reverse walkable dir
+        lda #8
+        sta v_pm_tmp            ; tries
+@rtry:  jsr dt_rand7
+        and #3
+        sta S4                  ; candidate dir (survives dt_rand7/div16)
+        ldy #GDIR
+        lda (P1),y
+        eor #2
+        cmp S4
+        beq @rnext
+        lda S4
+        asl a
+        tax
+        lda pm_dx,x
+        ldy #GX
+        clc
+        adc (P1),y
+        sta A0
+        lda S4
+        asl a
+        tax
+        lda pm_dy,x
+        ldy #GY
+        clc
+        adc (P1),y
+        sta A1
+        lda #1
+        sta A2
+        stz A3
+        jsr pm_walkable
+        cmp #0
+        beq @rnext
+        ldy #GDIR
+        lda S4
+        sta (P1),y
+        rts
+@rnext: dec v_pm_tmp
+        bne @rtry
+        rts
+.endproc
+
+; pm_kill - pac dies; lose a life / game over
+.proc pm_kill
+.a16
+.i16
+        dec v_pm_lives
+        lda v_pm_lives
+        beq @over
+        bmi @over
+        jsr pm_reset_actors
+        lda #PMS_READY
+        sta v_pm_state
+        lda v_frame
+        clc
+        adc #60
+        sta v_pm_statet
+        rts
+@over:  lda #PMS_OVER
+        sta v_pm_state
+        lda v_pm_score
+        cmp v_pm_hi
+        bcc @out
+        sta v_pm_hi
+@out:   rts
+.endproc
+
+; pm_step - advance one game step (tile-grid)
+.proc pm_step
+.a16
+.i16
+        ; remember old tiles (pac + ghosts) for incremental restore
+        lda v_pm_px
+        sta v_pm_opx
+        lda v_pm_py
+        sta v_pm_opy
+        stz LC1
+@rec:   lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GX
+        lda (P1),y
+        ldy #GOX
+        sta (P1),y
+        ldy #GY
+        lda (P1),y
+        ldy #GOY
+        sta (P1),y
+        inc LC1
+        lda LC1
+        cmp #3
+        bcc @rec
+        ; --- fright countdown / mode schedule
+        lda v_pm_fright
+        beq @mode
+        dec a
+        sta v_pm_fright
+        beq :+
+        jmp @pac
+:       stz LC1                 ; fright ended -> resume schedule
+@fre:   lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GST
+        lda (P1),y
+        cmp #GH_FRIGHT
+        bne @fren
+        jsr pm_mode_state
+        ldy #GST
+        sta (P1),y
+@fren:  inc LC1
+        lda LC1
+        cmp #3
+        bcc @fre
+        jmp @pac
+@mode:  inc v_pm_modet
+        lda v_pm_mode
+        cmp #8
+        bcc @mok
+        lda #7
+@mok:   asl a
+        tax
+        lda v_pm_modet
+        cmp pm_modedur,x
+        bcs :+
+        jmp @pac                ; modet < dur -> stay
+:
+        stz v_pm_modet
+        lda v_pm_mode
+        cmp #7
+        bcs @norev
+        inc a
+        sta v_pm_mode
+@norev: stz LC1
+@mg:    lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GST
+        lda (P1),y
+        cmp #GH_SCAT
+        beq @mgset
+        cmp #GH_CHASE
+        bne @mgn
+@mgset: jsr pm_mode_state
+        ldy #GST
+        sta (P1),y
+        ldy #GDIR
+        lda (P1),y
+        eor #2
+        sta (P1),y
+@mgn:   inc LC1
+        lda LC1
+        cmp #3
+        bcc @mg
+@pac:
+        ; eat dot/pellet at pac's current tile
+        lda v_pm_py
+        asl a
+        tax
+        lda pm_rowoff,x
+        clc
+        adc v_pm_px
+        tax
+        sep #$20
+.a8
+        lda v_pm_maze,x
+        rep #$20
+        and #$00FF
+        cmp #2
+        bne @npd
+        sep #$20
+.a8
+        stz v_pm_maze,x
+        rep #$20
+        lda v_pm_score
+        clc
+        adc #10
+        sta v_pm_score
+        dec v_pm_dots
+        lda #1
+        sta v_pm_dirty
+        jmp @eaten
+@npd:   cmp #3
+        bne @eaten
+        sep #$20
+.a8
+        stz v_pm_maze,x
+        rep #$20
+        lda v_pm_score
+        clc
+        adc #50
+        sta v_pm_score
+        dec v_pm_dots
+        lda #1
+        sta v_pm_dirty
+        lda #FRIGHT_STEPS
+        sta v_pm_fright
+        stz v_pm_kills
+        stz LC1
+@fg:    lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GST
+        lda (P1),y
+        cmp #GH_SCAT
+        beq @fgset
+        cmp #GH_CHASE
+        bne @fgn
+@fgset: lda #GH_FRIGHT
+        ldy #GST
+        sta (P1),y
+        ldy #GDIR
+        lda (P1),y
+        eor #2
+        sta (P1),y
+@fgn:   inc LC1
+        lda LC1
+        cmp #3
+        bcc @fg
+@eaten:
+        lda v_pm_dots
+        bne @turn
+        ; level clear
+        inc v_pm_level
+        jsr pm_load_maze
+        jsr pm_reset_actors
+        lda #PMS_READY
+        sta v_pm_state
+        lda v_frame
+        clc
+        adc #60
+        sta v_pm_statet
+        jmp @done
+@turn:  ; queued turn then current dir
+        lda v_pm_ndir
+        asl a
+        tax
+        lda pm_dx,x
+        clc
+        adc v_pm_px
+        sta A0
+        lda v_pm_ndir
+        asl a
+        tax
+        lda pm_dy,x
+        clc
+        adc v_pm_py
+        sta A1
+        stz A2
+        stz A3
+        jsr pm_walkable
+        cmp #0
+        beq @keepdir
+        lda v_pm_ndir
+        sta v_pm_dir
+@keepdir:
+        lda v_pm_dir
+        asl a
+        tax
+        lda pm_dx,x
+        clc
+        adc v_pm_px
+        sta A0
+        lda v_pm_dir
+        asl a
+        tax
+        lda pm_dy,x
+        clc
+        adc v_pm_py
+        sta A1
+        stz A2
+        stz A3
+        jsr pm_walkable
+        cmp #0
+        beq @ghosts             ; blocked: pac waits
+        lda A0                  ; wrapped nx (tunnel)
+        sta v_pm_px
+        lda A1
+        sta v_pm_py
+@ghosts:
+        lda v_pm_half
+        eor #1
+        sta v_pm_half
+        stz LC1
+@gl:    lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GST
+        lda (P1),y
+        cmp #GH_HOUSE
+        bne @gactive
+        ldy #GTMR               ; in house: count down release
+        lda (P1),y
+        dec a
+        sta (P1),y
+        beq @release
+        jmp @gnext
+@release:
+        lda #14
+        ldy #GX
+        sta (P1),y
+        lda #10
+        ldy #GY
+        sta (P1),y
+        lda #1
+        ldy #GDIR
+        sta (P1),y
+        jsr pm_mode_state
+        ldy #GST
+        sta (P1),y
+        jmp @gnext
+@gactive:
+        ldy #GST                ; eaten ghost arriving home resumes
+        lda (P1),y
+        cmp #GH_EATEN
+        bne @gsteer
+        ldy #GX
+        lda (P1),y
+        cmp #14
+        bne @gsteer
+        ldy #GY
+        lda (P1),y
+        cmp #10
+        bne @gsteer
+        jsr pm_mode_state
+        ldy #GST
+        sta (P1),y
+@gsteer:
+        ldy #GST                ; frightened ghosts move half speed
+        lda (P1),y
+        cmp #GH_FRIGHT
+        bne @gfull
+        lda v_pm_half
+        beq @gcoll
+@gfull:
+        lda LC1
+        jsr pm_steer
+        lda LC1                 ; pm_steer used P1 - restore
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GDIR
+        lda (P1),y
+        asl a
+        tax
+        lda pm_dx,x
+        ldy #GX
+        clc
+        adc (P1),y
+        sta A0
+        ldy #GDIR
+        lda (P1),y
+        asl a
+        tax
+        lda pm_dy,x
+        ldy #GY
+        clc
+        adc (P1),y
+        sta A1
+        lda #1
+        sta A2
+        ldy #GST
+        lda (P1),y
+        cmp #GH_EATEN
+        bne @gwe
+        lda #1
+        bra @gwe2
+@gwe:   lda #0
+@gwe2:  sta A3
+        jsr pm_walkable
+        cmp #0
+        beq @gcoll
+        lda A0
+        ldy #GX
+        sta (P1),y
+        lda A1
+        ldy #GY
+        sta (P1),y
+@gcoll:
+        ldy #GX                 ; collision = same tile as pac
+        lda (P1),y
+        cmp v_pm_px
+        beq @gcy
+        jmp @gnext
+@gcy:   ldy #GY
+        lda (P1),y
+        cmp v_pm_py
+        beq @hit
+        jmp @gnext
+@hit:   ldy #GST
+        lda (P1),y
+        cmp #GH_FRIGHT
+        bne @notfr
+        lda #GH_EATEN           ; eat the ghost
+        ldy #GST
+        sta (P1),y
+        lda #200
+        ldx v_pm_kills
+        beq @scno
+@scsh:  asl a
+        dex
+        bne @scsh
+@scno:  clc
+        adc v_pm_score
+        sta v_pm_score
+        lda v_pm_kills
+        cmp #3
+        bcs @gnext
+        inc v_pm_kills
+        jmp @gnext
+@notfr: ldy #GST
+        lda (P1),y
+        cmp #GH_EATEN
+        beq @gnext
+        jsr pm_kill
+        jmp @done
+@gnext: inc LC1
+        lda LC1
+        cmp #3
+        bcs @done
+        jmp @gl
+@done:  rts
+.endproc
+
+; pm_cell_attr: A = maze value -> A = cell name word (ACC palette)
+.proc pm_cell_attr
+.a16
+.i16
+        cmp #1
+        beq @wall
+        cmp #2
+        beq @dot
+        cmp #3
+        beq @pow
+        cmp #5
+        beq @gate
+        lda #(ATTR_ACC+T_GSOL+11)   ; 0/4 empty/house: black
+        rts
+@wall:  lda #(ATTR_ACC+T_GSOL+5)    ; idx9 blue wall
+        rts
+@dot:   lda #(ATTR_ACC+T_PMDOT)
+        rts
+@pow:   lda #(ATTR_ACC+T_PMPOW)
+        rts
+@gate:  lda #(ATTR_ACC+T_PMGATE)
+        rts
+.endproc
+
+; pm_putcell: A0=maze col A1=maze row A4=name -> draw one cell (S2=window)
+.proc pm_putcell
+.a16
+.i16
+        ldx S2
+        lda A0
+        clc
+        adc v_wintab+WX,x
+        inc a
+        sta A0
+        lda A1
+        clc
+        adc v_wintab+WY,x
+        inc a
+        sta A1
+        lda #1
+        sta A2
+        sta A3
+        jsr fill_cells
+        rts
+.endproc
+
+; pm_draw_mcell: A0=maze col A1=maze row -> draw the maze cell there
+.proc pm_draw_mcell
+.a16
+.i16
+        lda A1
+        asl a
+        tax
+        lda pm_rowoff,x
+        clc
+        adc A0
+        tax
+        sep #$20
+.a8
+        lda v_pm_maze,x
+        rep #$20
+        and #$00FF
+        jsr pm_cell_attr
+        sta A4
+        jsr pm_putcell
+        rts
+.endproc
+
+; pm_draw_actors - 3 ghosts then pac (pac drawn last/on top)
+.proc pm_draw_actors
+.a16
+.i16
+        stz LC1
+@g:     lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GX
+        lda (P1),y
+        sta A0
+        ldy #GY
+        lda (P1),y
+        sta A1
+        ldy #GST
+        lda (P1),y
+        cmp #GH_EATEN
+        bne @nfe
+        lda #(ATTR_ACC+T_PMGHE)
+        bra @put
+@nfe:   cmp #GH_FRIGHT
+        bne @body
+        lda #(ATTR_ACC+T_PMGHF)
+        bra @put
+@body:  lda LC1
+        clc
+        adc #T_PMGHO
+        ora #ATTR_ACC
+@put:   sta A4
+        jsr pm_putcell
+        inc LC1
+        lda LC1
+        cmp #3
+        bcc @g
+        lda v_pm_px
+        sta A0
+        lda v_pm_py
+        sta A1
+        lda #(ATTR_ACC+T_PAC)
+        sta A4
+        jsr pm_putcell
+        rts
+.endproc
+
+; pm_fill_field - black content fill (title screen)
+.proc pm_fill_field
+.a16
+.i16
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        lda v_wintab+WY,x
+        inc a
+        sta A1
+        lda v_wintab+WW,x
+        sec
+        sbc #2
+        sta A2
+        lda v_wintab+WH,x
+        sec
+        sbc #2
+        sta A3
+        lda #(ATTR_ACC+T_GSOL+11)
+        sta A4
+        jsr fill_cells
+        rts
+.endproc
+
+; pm_hud - one-row status line at the window's bottom content row
+.proc pm_hud
+.a16
+.i16
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        sta S4                  ; base col
+        lda v_wintab+WY,x
+        clc
+        adc v_wintab+WH,x
+        sec
+        sbc #2
+        sta A1
+        sta S3                  ; HUD row
+        lda v_wintab+WW,x
+        sec
+        sbc #2
+        sta A2
+        lda #1
+        sta A3
+        lda #(ATTR_ACC+T_GSOL+11)
+        sta A4
+        jsr fill_cells
+        ; SC <score>
+        lda #.loword(str_pm_sc)
+        sta P0
+        lda S4
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda v_pm_score
+        sta S0
+        jsr fmt_dec
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S4
+        clc
+        adc #3
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; HI <hi>
+        lda #.loword(str_pm_hi2)
+        sta P0
+        lda S4
+        clc
+        adc #10
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda v_pm_hi
+        sta S0
+        jsr fmt_dec
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S4
+        clc
+        adc #13
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; L <level>
+        lda #.loword(str_pm_lvl)
+        sta P0
+        lda S4
+        clc
+        adc #20
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda v_pm_level
+        sta S0
+        jsr fmt_dec
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S4
+        clc
+        adc #22
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; x <lives>
+        lda #.loword(str_pm_x)
+        sta P0
+        lda S4
+        clc
+        adc #25
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda v_pm_lives
+        sta S0
+        jsr fmt_dec
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S4
+        clc
+        adc #26
+        sta A0
+        lda S3
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        rts
+.endproc
+
+; pacman_draw - S2 = window offset
+.proc pacman_draw
+.a16
+.i16
+        lda v_pm_state
+        bne @game
+        jsr pm_fill_field
+        lda #.loword(str_pm_title)
+        sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #11
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #11
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda #.loword(str_pm_new)
+        sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #10
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #14
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        rts
+@game:  stz LC1                 ; maze
+@row:   stz LC0
+@col:   lda LC0
+        sta A0
+        lda LC1
+        sta A1
+        jsr pm_draw_mcell
+        inc LC0
+        lda LC0
+        cmp #PM_COLS
+        bcc @col
+        inc LC1
+        lda LC1
+        cmp #PM_ROWS
+        bcc @row
+        jsr pm_draw_actors
+        jsr pm_hud
+        lda v_pm_state
+        cmp #PMS_READY
+        beq @rdy
+        cmp #PMS_OVER
+        beq @ovr
+        rts
+@rdy:   lda #.loword(str_pm_ready)
+        bra @ov
+@ovr:   lda #.loword(str_pm_over)
+@ov:    sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #11
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #13
+        sta A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+        rts
+.endproc
+
+; pm_redraw_actors - incremental: restore old cells, redraw actors + HUD
+.proc pm_redraw_actors
+.a16
+.i16
+        lda v_pm_opx
+        sta A0
+        lda v_pm_opy
+        sta A1
+        jsr pm_draw_mcell
+        stz LC1
+@r:     lda LC1
+        asl a
+        tax
+        lda pm_ghbase,x
+        sta P1
+        ldy #GOX
+        lda (P1),y
+        sta A0
+        ldy #GOY
+        lda (P1),y
+        sta A1
+        jsr pm_draw_mcell
+        inc LC1
+        lda LC1
+        cmp #3
+        bcc @r
+        jsr pm_draw_actors
+        jsr pm_hud
+        rts
+.endproc
+
+; pacman_key - A1 = event data (raw<<8 | ascii)
+.proc pacman_key
+.a16
+.i16
+        lda A1
+        and #$00FF
+        sta S0
+        lda A1
+        xba
+        and #$00FF
+        sta S1
+        lda S0
+        cmp #'n'
+        beq @new
+        lda v_pm_state
+        cmp #PMS_PLAY
+        beq @dirs
+        cmp #PMS_READY
+        beq @dirs
+        rts
+@dirs:  lda S1
+        cmp #$4C
+        beq @up
+        cmp #$4D
+        beq @down
+        cmp #$4F
+        beq @left
+        cmp #$4E
+        beq @right
+        rts
+@new:   jsr pm_new_game
+        jsr redraw_topmost
+        rts
+@up:    stz v_pm_ndir
+        rts
+@left:  lda #1
+        sta v_pm_ndir
+        rts
+@down:  lda #2
+        sta v_pm_ndir
+        rts
+@right: lda #3
+        sta v_pm_ndir
+        rts
+.endproc
+
+; pacman_tick - throttle, step, redraw
+.proc pacman_tick
+.a16
+.i16
+        lda v_pm_state
+        cmp #PMS_READY
+        beq @chk
+        cmp #PMS_PLAY
+        beq @chk
+        rts
+@chk:   lda v_pm_state
+        cmp #PMS_READY
+        bne @play
+        lda v_frame
+        sec
+        sbc v_pm_statet
+        bmi @out                ; frame < deadline
+        lda #PMS_PLAY
+        sta v_pm_state
+        jsr redraw_topmost
+@play:  lda v_frame
+        sec
+        sbc v_pm_last
+        cmp #PM_STEP_FRAMES
+        bcc @out
+        lda v_frame
+        sta v_pm_last
+        jsr pm_step
+        lda v_pm_state
+        cmp #PMS_PLAY
+        beq @inc
+        jsr redraw_topmost      ; ready/over/level: full repaint
+        rts
+@inc:   lda v_zcount
+        dec a
+        jsr zent_x
+        stx S2
+        jsr pm_redraw_actors
+@out:   rts
+.endproc
+
 ; game_tick - main-loop dispatch to the topmost game's tick
 .proc game_tick
 .a16
@@ -1533,8 +2801,12 @@ OL_HORIZ = 3
         jsr dostris_tick
         rts
 @notdt: cmp #5
-        bne @out
+        bne @notol
         jsr outlast_tick
+        rts
+@notol: cmp #6
+        bne @out
+        jsr pacman_tick
 @out:   rts
 .endproc
 
@@ -1565,6 +2837,56 @@ str_dt_level:  .byte "Level:", 0
 str_dt_newg:   .byte "X:new game", 0
 str_dt_paused: .byte "PAUSED", 0
 str_dt_over:   .byte "GAME OVER", 0
+str_t_pacman:  .byte "Pac-Man", 0
+name_pacman:   .byte "Pac-Man", 0
+str_pm_title:  .byte "PAC-MAN", 0
+str_pm_new:    .byte "X: new game", 0
+str_pm_ready:  .byte "READY!", 0
+str_pm_over:   .byte "GAME OVER", 0
+str_pm_sc:     .byte "SC", 0
+str_pm_hi2:    .byte "HI", 0
+str_pm_lvl:    .byte "L", 0
+str_pm_x:      .byte "x", 0
+
+; Pac-Man direction tables (UP, LEFT, DOWN, RIGHT) and AI parameters
+pm_dx:      .word 0, $FFFF, 0, 1
+pm_dy:      .word $FFFF, 0, 1, 0
+pm_cornx:   .word 26, 1, 1
+pm_corny:   .word 1, 1, 23
+pm_modedur: .word 18, 50, 18, 50, 12, 50, 12, 32000
+pm_ghbase:  .word v_pm_gh, v_pm_gh+GSIZE, v_pm_gh+GSIZE*2
+; row*PM_COLS for fast maze indexing (rows 0..24)
+pm_rowoff:
+        .word 0,28,56,84,112,140,168,196,224,252,280,308,336
+        .word 364,392,420,448,476,504,532,560,588,616,644,672
+
+; maze template: 0 empty, 1 wall, 2 dot, 3 power, 4 house, 5 gate (28x25)
+pm_maze_tpl:
+ .byte 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+ .byte 1,3,2,2,2,2,2,2,2,2,2,2,2,1,1,2,2,2,2,2,2,2,2,2,2,2,3,1
+ .byte 1,2,1,1,1,2,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,2,1,1,1,2,1
+ .byte 1,2,1,1,1,2,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,2,1,1,1,2,1
+ .byte 1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1
+ .byte 1,2,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,2,1,2,1,1,1,2,1
+ .byte 1,2,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,2,1
+ .byte 1,1,1,1,1,2,1,1,1,1,0,1,0,0,0,0,1,0,1,1,1,1,2,1,1,1,1,1
+ .byte 0,0,0,0,1,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,1,0,0,0,0
+ .byte 0,0,0,0,1,2,1,0,1,1,1,1,5,0,0,5,1,1,1,1,0,1,2,1,0,0,0,0
+ .byte 1,1,1,1,1,2,1,0,1,4,4,4,4,4,4,4,4,4,4,1,0,1,2,1,1,1,1,1
+ .byte 0,0,0,0,0,2,0,0,1,4,4,4,4,4,4,4,4,4,4,1,0,0,2,0,0,0,0,0
+ .byte 0,0,0,0,1,2,1,0,1,4,4,4,4,4,4,4,4,4,4,1,0,1,2,1,0,0,0,0
+ .byte 0,0,0,0,1,2,1,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1,2,1,0,0,0,0
+ .byte 1,1,1,1,1,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,1,1,1,1,1
+ .byte 1,2,2,2,2,2,2,2,2,2,2,1,2,2,2,2,1,2,2,2,2,2,2,2,2,2,2,1
+ .byte 1,2,1,1,1,2,1,1,1,1,2,1,2,1,1,2,1,2,1,1,1,1,2,1,1,1,2,1
+ .byte 1,3,2,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,3,1
+ .byte 1,1,2,1,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,2,1,2,1,1,2,1,1
+ .byte 1,2,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,2,1
+ .byte 1,2,1,1,1,1,1,1,1,1,2,1,2,1,1,2,1,2,1,1,1,1,1,1,1,1,2,1
+ .byte 1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1
+ .byte 1,2,1,1,1,2,1,1,1,1,1,1,2,1,1,2,1,1,1,1,1,1,2,1,1,1,2,1
+ .byte 1,2,2,2,2,2,2,2,2,2,2,2,2,1,1,2,2,2,2,2,2,2,2,2,2,2,2,1
+ .byte 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 
 dt_shapes:
         .byte 0,1,1,1,2,1,3,1, 2,0,2,1,2,2,2,3, 0,2,1,2,2,2,3,2, 1,0,1,1,1,2,1,3

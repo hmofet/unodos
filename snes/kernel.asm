@@ -157,7 +157,33 @@ v_ol_lastsec = VARS+$1D0
 v_ol_roadl  = VARS+$1D2
 v_ol_roadr  = VARS+$1D4
 v_ol_traf   = VARS+$1D6     ; 4 words
-v_dt_board  = $0C00         ; 10x20 = 200 bytes
+v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
+; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
+;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
+;      the 2 KB Notepad buffer at $0400-$0BFF and the tilemap shadow at $1000.
+v_pm_state  = $0CC8         ; 0 title 1 ready 2 play 4 over
+v_pm_score  = $0CCA
+v_pm_hi     = $0CCC
+v_pm_lives  = $0CCE
+v_pm_level  = $0CD0
+v_pm_mode   = $0CD2         ; scatter/chase schedule index
+v_pm_modet  = $0CD4         ; steps in the current mode
+v_pm_dots   = $0CD6
+v_pm_fright = $0CD8         ; frightened countdown (steps)
+v_pm_kills  = $0CDA         ; fright eat-chain index
+v_pm_px     = $0CDC         ; pac tile col
+v_pm_py     = $0CDE         ; pac tile row
+v_pm_dir    = $0CE0
+v_pm_ndir   = $0CE2         ; queued turn
+v_pm_opx    = $0CE4         ; pac old tile (for incremental restore)
+v_pm_opy    = $0CE6
+v_pm_statet = $0CE8         ; ready->play frame deadline
+v_pm_last   = $0CEA         ; step throttle (v_frame)
+v_pm_dirty  = $0CEC
+v_pm_half   = $0CEE         ; step parity (fright ghosts move half speed)
+v_pm_tmp    = $0CF0         ; pm_steer best-distance scratch
+v_pm_gh     = $0CF8         ; 3 ghosts x GSIZE(14): gx,gy,gdir,gst,gtmr,ogx,ogy
+v_pm_maze   = $0D22         ; 28x25 = 700 bytes ($0D22-$0FE5, below TMAP $1000)
 
 ; ---- constants ----
 SCRW_C  = 32
@@ -180,7 +206,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 6
+NICONS   = 7
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -359,6 +385,7 @@ MainLoop:
         inx
         cpx #$0200
         bne @v
+        stz v_pm_hi             ; Pac-Man hi-score persists 0 until first game
         ldx #$0000
 @t:     sta TMAP,x
         inx
@@ -1324,6 +1351,8 @@ MainLoop:
         beq @dostris
         cmp #5
         beq @outlast
+        cmp #6
+        beq @pacman
         cmp #7
         beq @files
         rts
@@ -1341,6 +1370,9 @@ MainLoop:
         rts
 @outlast:
         jsr outlast_draw
+        rts
+@pacman:
+        jsr pacman_draw
         rts
 @files:
         jsr files_draw
@@ -2262,9 +2294,9 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #5
-        jsr launch_app          ; OutLast
-        jsr outlast_new
+        lda #6
+        jsr launch_app          ; Pac-Man
+        jsr pm_new_game
         lda #0
         jsr select_icon
         rts
@@ -2314,12 +2346,13 @@ str_uptime:    .byte "Uptime:", 0
 
 ; icon table: x cell, y cell (2 words per icon)
 icon_tab:
-        .word 2, 24             ; 0 Sys Info
-        .word 12, 24            ; 1 Clock
-        .word 22, 24            ; 2 Notepad
-        .word 2, 26            ; 3 Files
-        .word 12, 26            ; 4 Dostris
-        .word 22, 26            ; 5 OutLast
+        .word 2, 23             ; 0 Sys Info
+        .word 12, 23            ; 1 Clock
+        .word 22, 23            ; 2 Notepad
+        .word 2, 25             ; 3 Files
+        .word 12, 25            ; 4 Dostris
+        .word 22, 25            ; 5 OutLast
+        .word 2, 27             ; 6 Pac-Man
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2327,9 +2360,10 @@ icon_names:
         .word name_files
         .word name_dostris
         .word name_outlast
+        .word name_pacman
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4, 5
+        .word 0, 1, 2, 7, 4, 5, 6
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2339,7 +2373,7 @@ app_def_tab:
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)
         .word 1, 1, 30, 24, str_t_dostris    ; 4 Dostris
         .word 1, 1, 30, 24, str_t_outlast    ; 5 OutLast
-        .word 0, 0, 0, 0,   str_t_sysinfo    ; 6 (unused)
+        .word 1, 0, 30, 28, str_t_pacman     ; 6 Pac-Man (full screen)
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
 
 ; ============================================================================

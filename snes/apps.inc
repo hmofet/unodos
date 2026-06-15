@@ -441,6 +441,8 @@
         beq @dt
         cmp #5
         beq @ol
+        cmp #6
+        beq @pm
         cmp #7
         beq @files
         rts
@@ -449,6 +451,8 @@
 @dt:    jsr dostris_key
         rts
 @ol:    jsr outlast_key
+        rts
+@pm:    jsr pacman_key
         rts
 @files: jsr files_key
         rts

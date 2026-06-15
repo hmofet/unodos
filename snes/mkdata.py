@@ -89,6 +89,90 @@ for k in range(12):
     bg.append((f"gsol idx{4 + k}", tile4bpp([[4 + k] * 8 for _ in range(8)])))
 assert len(bg) == 114, len(bg)
 
+# ---------------- Pac-Man shaped tiles (drawn on the ACC palette line) -------
+# Bitmaps are 8 rows of 8 chars; sym maps a char -> palette index. The black
+# field is idx 15, pac/ghost colours come from the ACC game indices (4..13).
+def shape(rows, sym):
+    return tile4bpp([[sym[c] for c in row] for row in rows])
+
+PAC_ROWS = [           # wedge opening to the right, yellow (idx 5) on black
+    "..YYYY..",
+    ".YYYYYY.",
+    "YYYYY...",
+    "YYYY....",
+    "YYYY....",
+    "YYYYY...",
+    ".YYYYYY.",
+    "..YYYY..",
+]
+GHOST_ROWS = [         # rounded body + two white eyes + wavy skirt
+    "..BBBB..",
+    ".BBBBBB.",
+    "BBBBBBBB",
+    "BWWBBWWB",
+    "BWWBBWWB",
+    "BBBBBBBB",
+    "BBBBBBBB",
+    "B.B.B.B.",
+]
+EYES_ROWS = [          # eaten ghost: floating eyes only
+    "........",
+    ".WW..WW.",
+    ".WW..WW.",
+    ".WW..WW.",
+    "........",
+    "........",
+    "........",
+    "........",
+]
+DOT_ROWS = [
+    "........",
+    "........",
+    "........",
+    "...WW...",
+    "...WW...",
+    "........",
+    "........",
+    "........",
+]
+POW_ROWS = [
+    "........",
+    "..WWWW..",
+    ".WWWWWW.",
+    ".WWWWWW.",
+    ".WWWWWW.",
+    ".WWWWWW.",
+    "..WWWW..",
+    "........",
+]
+GATE_ROWS = [
+    "........",
+    "........",
+    "........",
+    "PPPPPPPP",
+    "PPPPPPPP",
+    "........",
+    "........",
+    "........",
+]
+
+T_PMDOT = len(bg)
+bg.append(("pm dot", shape(DOT_ROWS, {"W": 13, ".": 15})))
+T_PMPOW = len(bg)
+bg.append(("pm power", shape(POW_ROWS, {"W": 13, ".": 15})))
+T_PMGATE = len(bg)
+bg.append(("pm gate", shape(GATE_ROWS, {"P": 11, ".": 15})))
+T_PAC = len(bg)
+bg.append(("pm pac", shape(PAC_ROWS, {"Y": 5, ".": 15})))
+T_PMGHO = len(bg)                       # +0 red +1 pink +2 orange +3 cyan
+for body in (8, 11, 10, 4):
+    bg.append((f"pm ghost {body}", shape(GHOST_ROWS, {"B": body, "W": 13, ".": 15})))
+T_PMGHF = len(bg)                       # frightened (blue body, white eyes)
+bg.append(("pm ghost fright", shape(GHOST_ROWS, {"B": 12, "W": 13, ".": 15})))
+T_PMGHE = len(bg)                       # eaten (eyes only)
+bg.append(("pm ghost eaten", shape(EYES_ROWS, {"W": 13, ".": 15})))
+assert len(bg) == 124, len(bg)
+
 # ---------------- cursor sprite (shared UnoDOS arrow, 8x16) ----------------
 # (planeA, planeB) per row from the Amiga sprite; combo A|B<<1 -> sprite
 # palette index: 1 white (outline), 2 blue (fill), 3 cyan.
@@ -185,7 +269,14 @@ with open(OUT, "w", newline="\n") as f:
     f.write(f"T_EDGEB   = {T_EDGEB}\n")
     f.write(f"T_CORNBL  = {T_CORNBL}\n")
     f.write(f"T_CORNBR  = {T_CORNBR}\n")
-    f.write(f"T_GSOL    = {T_GSOL}\n\n")
+    f.write(f"T_GSOL    = {T_GSOL}\n")
+    f.write(f"T_PMDOT   = {T_PMDOT}\n")
+    f.write(f"T_PMPOW   = {T_PMPOW}\n")
+    f.write(f"T_PMGATE  = {T_PMGATE}\n")
+    f.write(f"T_PAC     = {T_PAC}\n")
+    f.write(f"T_PMGHO   = {T_PMGHO}\n")
+    f.write(f"T_PMGHF   = {T_PMGHF}\n")
+    f.write(f"T_PMGHE   = {T_PMGHE}\n\n")
     f.write("; BG 4bpp tile blob -> BG1 char base (VRAM word $1000)\n")
     f.write("tiles_bg:\n")
     for comment, data in bg:
