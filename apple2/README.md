@@ -136,9 +136,8 @@ reads/writes the catalog it finds (`fs_init` loads it, never reformats).
 
 - **Files**: lists the catalog (name + size, right-justified). Left/right
   moves the selection, Return opens the selected file in Notepad, ESC
-  returns to the desktop. (`d`-delete and `r`-rescan from HANDOFF-M2 SS3
-  are not yet wired up — only open is needed for M2's read/write/persist
-  loop.)
+  returns to the desktop. (`d`-delete and `r`-rescan are not yet wired up
+  — only open is needed for M2's read/write/persist loop.)
 - **Notepad**: 2 KB text buffer (`NOTEBUF`, $6500-$6CFF). Typing inserts at
   the cursor, `$88` (left-arrow/backspace) deletes the previous char,
   Return inserts a newline, ESC closes. **Ctrl-S saves** (`$93` —
@@ -157,8 +156,8 @@ nonzero after the edit+save sequence.
 
 ### Paddle/joystick pointer
 
-**Not implemented in M2** (HANDOFF-M2 SS4 flags this as optional, "do not
-block M2 on it"). Files/Notepad are fully keyboard-driven (left/right +
+**Not implemented in M2** (flagged optional — "do not block M2 on it").
+Files/Notepad are fully keyboard-driven (left/right +
 Return + ESC + Ctrl-S), so M2 ships without `$C070`/`$C064`/`$C065` paddle
 polling or a pointer mode.
 
@@ -367,12 +366,12 @@ correctly.
   (soft tick), shared 7px font, ROM-free harness + `tests/m1.script`.
 - **M2 (this)**: RWTS write path, a track/sector mini-FS ("USV1" catalog),
   Files + Notepad, speaker beeps, `tests/m2.script` +
-  `tests/m2_persist.script`. Paddle/joystick pointer (optional per the
-  handoff) not implemented. See [HANDOFF-M2.md](HANDOFF-M2.md).
+  `tests/m2_persist.script`. Paddle/joystick pointer (optional) not
+  implemented.
 - **M3 (this)**: the scaled app roster — Theme, Dostris, Pac-Man, Music
   and Tracker (blocking single-voice speaker), Paint (save/load
   PAINT.UNO), plus the two feasibility verdicts: OutLast ships marginal
   (~4 fps, measured), and the cooperative scheduler is proven feasible
   (stack-partitioning prototype) but the shipping kernel keeps
   poll-and-dispatch. 10-icon 3-row desktop. `tests/m3.script` +
-  per-app + `tests/m3_sched.script`. See [HANDOFF-M3.md](HANDOFF-M3.md).
+  per-app + `tests/m3_sched.script`.

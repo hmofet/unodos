@@ -21,7 +21,7 @@ with the USV1 mini-filesystem, a Files app, working Notepad F1-save,
 and tape/WAV storage (KCS 1200-baud AFSK: the PSG writes through the
 headphone jack, a one-comparator adapter reads; `mktape.py` makes the
 PC the tape deck). Full architecture + the SD-card spec:
-[docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md).
+[docs/STORAGE.md](../docs/STORAGE.md).
 **Milestones 3/5/6 (2026-06-12)** — full feature parity with the
 Amiga port: the **Theme app** (the 8 shared preset palettes + 3-bit
 RGB custom editing, applied by rewriting the themed CRAM entries),
@@ -84,29 +84,52 @@ Y = 'p' (pause). The cursor parks until a non-game window is topmost.
 
 ## PS/2 keyboard and mouse (real hardware only)
 
-Per `docs/GENESIS-PORT.md`, PS/2 devices wire directly to the control
-ports (passive adapter — the console supplies 5 V):
+The Genesis has no keyboard, so PS/2 devices wire **directly to the two
+control ports**, bit-banged by the 68000. The I/O controller exposes
+every port pin (D0–D3, TL, TR, TH) as programmable I/O via the
+`$A10003/05` data and `$A10009/0B` control registers, and **port 2's TH
+line can raise the level-2 EXT interrupt** — which is the basis of the
+community-precedent wiring (see Sources). The adapter is passive (PS/2
+devices have internal pull-ups, the MD inputs are pulled up too, and the
+console supplies 5 V):
 
-| DE-9 pin | MD signal | PS/2 signal |
-|---|---|---|
-| 1 | D0 ("Up") | DATA |
-| 5 | +5V | +5V |
-| 7 | TH | CLOCK |
-| 8 | GND | GND |
+| DE-9 pin | MD signal | PS/2 signal | Notes |
+|---|---|---|---|
+| 1 | D0 ("Up") | DATA | bidirectional — host commands drive low / float high via the CTRL register (open-collector emulation) |
+| 5 | +5V | +5V | the port supplies power |
+| 7 | TH | CLOCK | port 2 raises EXT/HL interrupt on transition; port 1 is polled |
+| 8 | GND | GND | |
 
 - **Port 2 = keyboard**: TH raises the level-2 EXT interrupt on every
-  clock edge; the handler assembles 11-bit frames and decodes scancode
-  set 2 (shift, break and E0-extended codes handled).
-- **Port 1 = mouse**: polled with PS/2 host-inhibit — CLK is held low
-  except for a per-vblank receive window; 3-byte stream packets
-  assemble across windows and decimate to the frame rate. At boot the
-  kernel probes port 1 with `$F4` (enable reporting); if no ACK comes
-  back it falls back to pad mode, so stock hardware just works.
+  clock edge; the handler assembles 11-bit frames (start, 8 data,
+  parity, stop) and decodes scancode set 2 (shift, break and E0-extended
+  codes handled), feeding the UnoDOS event queue with the PORT-SPEC focus
+  stamp.
+- **Port 1 = mouse**: TH on port 1 cannot interrupt, so the driver uses
+  PS/2 host-inhibit — CLK is held low except for a per-vblank receive
+  window; 3-byte stream packets assemble across windows and decimate
+  cleanly from the mouse's 40–100 samples/s to the 50/60 Hz desktop. At
+  boot the kernel probes port 1 with `$F4` (enable reporting); if no ACK
+  comes back it falls back to pad mode, so stock hardware just works.
+- **Fallback path**: the same driver structure can speak Sik's documented
+  Sega/XBAND keyboard protocol (4-bit bus, port 2 + TH/TR handshake)
+  later, for XBAND/MegaNet-style hardware.
 
 Emulators do not model PS/2 devices on the control ports. The protocol
 engines are injectable pure routines, so `./build.sh ps2` verifies the
 whole decode path (bits → frames → scancodes/packets → events → apps)
 in BlastEm; the physical wiring itself is a real-hardware test.
+
+**Sources for the control-port wiring:**
+
+- SpritesMind, "Megadrive/Genesis clone with a keyboard?" — HardWareMan
+  on attaching a standard PS/2 keyboard via port 2 + the EXT interrupt
+  (gendev.spritesmind.net/forum/viewtopic.php?t=525).
+- SpritesMind, "XBAND, Mega Net 2, and Mega Drive Keyboards" — Sik's
+  notes on the official keyboard protocol (port 2, TH/TR handshake,
+  4-bit bus) (gendev.spritesmind.net/forum/viewtopic.php?t=2556).
+- ConsoleMods wiki, Genesis connector pinouts (DE-9: 5 = +5V, 8 = GND,
+  7 = TH/select) (consolemods.org/wiki/Genesis:Connector_Pinouts).
 
 ## Build
 
@@ -171,7 +194,7 @@ the caller PC + coordinates rendered in hex on the bottom row.
   backup RAM via Mode 1 (`bram.i`: Sub-CPU BIOS boot + `_BURAM` stub,
   mailbox RPC, Word-RAM staging; the Files app's `v` key cycles the
   volume when a CD attachment is detected) — see
-  [docs/GENESIS-STORAGE.md](../docs/GENESIS-STORAGE.md).
+  [docs/STORAGE.md](../docs/STORAGE.md).
 - Scheduler (`scheduler.i`): cooperative tasks over the window table —
   task 0 is the kernel (input, drag, audio services); each window's
   app proc runs in its own task with a private 2KB stack at $FF4000+

@@ -8,7 +8,7 @@ UnoDOS uses a three-stage boot architecture:
 
 1. **Stage 1 (Boot Sector)**: 512 bytes, loaded by BIOS from the first sector
 2. **Stage 2 (Loader)**: 2KB, loaded by Stage 1, loads and verifies the kernel
-3. **Kernel**: 44KB, loaded by Stage 2, contains the main operating system
+3. **Kernel**: 52KB (104-sector reserved area), loaded by Stage 2, contains the main operating system
 
 This design separates the bootloader from the OS code, allowing the kernel to grow independently while maintaining a simple, reliable boot process.
 
@@ -49,7 +49,7 @@ Power On
 ┌─────────────────────────────────────────────────────────┐
 │  Stage 2: Loader (boot/stage2.asm)                      │
 │  - Display "Loading kernel" message                     │
-│  - Load kernel from sectors 6-93 (44KB) with progress   │
+│  - Load kernel from sectors 6-109 (52KB) with progress  │
 │  - Verify kernel signature ("UK" at offset 0)           │
 │  - Jump to kernel at 0x1000:0x0002                      │
 └─────────────────────────────────────────────────────────┘
@@ -88,8 +88,8 @@ Linear Address    Segment:Offset    Description
 0x07C00-0x07DFF   0000:7C00-7DFF    Boot Sector (512 bytes)
 0x07E00-0x07FFF   0000:7E00-7FFF    Stack area
 0x08000-0x087FF   0800:0000-07FF    Stage 2 Loader (2KB)
-0x10000-0x1AFFF   1000:0000-AFFF    Kernel (44KB, may grow to 64KB)
-  └─ 0x11060     1000:1060          API table
+0x10000-0x1CFFF   1000:0000-CFFF    Kernel (52KB area, may grow to 64KB)
+  └─ 0x13C00     1000:3C00          API table
 0x20000-0x2FFFF   2000:0000-FFFF    Shell/Launcher segment (fixed)
 0x30000-0x3FFFF   3000:0000-FFFF    User app slot 0 (dynamic pool)
 0x40000-0x4FFFF   4000:0000-FFFF    User app slot 1
@@ -110,8 +110,8 @@ Sector    Offset      Content                 Size
 ────────────────────────────────────────────────────
 1         0x0000      Boot sector             512 bytes
 2-5       0x0200      Stage 2 Loader          2KB (4 sectors)
-6-93      0x0A00      Kernel                  44KB (88 sectors)
-62+       0x7A00      FAT12 filesystem        Remaining space
+6-109     0x0A00      Kernel                  52KB (104 sectors)
+110+      0xDC00      FAT12 filesystem        Remaining space
 ```
 
 ## Stage 1: Boot Sector
@@ -150,14 +150,14 @@ Loading kernel................................ OK
 ## Kernel
 
 **File**: `kernel/kernel.asm`
-**Size**: 44KB (88 sectors)
+**Size**: 52KB (104-sector reserved area; `build/kernel.bin` ≈ 52KB)
 **Load Address**: 0x1000:0x0000 (linear 0x10000 = 64KB mark)
 
 ### Key Subsystems
 
 | Subsystem | Description |
 |-----------|-------------|
-| System Calls | INT 0x80 for API dispatch, 105 functions (indices 0-104) |
+| System Calls | INT 0x80 for API dispatch, 106 functions (indices 0-105) |
 | Graphics | Pixel, rect, filled rect, char, string, inverted string, clear, text width, icons, word wrap, colored drawing, lines, scroll |
 | Memory | malloc/free with first-fit allocation |
 | Keyboard | INT 09h handler, scan code translation, 16-byte buffer |
@@ -265,9 +265,32 @@ Color palette (Palette 1):
 - Apps return via RETF, segment freed on exit
 - Apps use `[ORG 0x0000]` and are loaded at offset 0 in their segment
 
+### Why the kernel sits at the 64KB boundary
+
+```
+Segment:Offset = 0x1000:0x0000
+Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
+```
+
+1. **Clean segmentation** — a single segment (0x1000) covers the entire
+   kernel; DS, ES and CS are all 0x1000 during kernel execution, so no
+   segment manipulation is needed for kernel-internal addressing.
+2. **Room to grow** — the kernel can expand toward the full 64KB segment
+   (up to 0x2000:0000) without colliding with the heap, which lives in
+   its own dedicated segment at 0x8000 (moved there in Build 401; the old
+   0x1400 heap overlapped the kernel image once the kernel grew past
+   16KB).
+3. **Future compatibility** — aligned for a potential protected-mode
+   transition.
+
+The scratch buffer at 0x9000 holds the system clipboard (4KB at
+0x9000:0x0000, used by the clip copy/paste APIs) and the file-dialog list
+buffer above it; it was moved from 0x5000 to 0x9000 in Build 149 to free a
+segment for the app pool.
+
 ## BIN File Icon Headers (v3.14.0)
 
-Applications can embed a 16x16 icon in an 80-byte header. See `docs/FEATURES.md` for the full specification.
+Applications can embed a 16x16 icon in an 80-byte header. See the [App Development Guide](APP_DEVELOPMENT.md) for the full app format.
 
 ```
 Offset  Content
@@ -282,4 +305,4 @@ Detection: `byte[0]==0xEB && byte[2]=='U' && byte[3]=='I'`
 
 ---
 
-*v3.23.0 Build 397*
+*v3.32.0 Build 425*
