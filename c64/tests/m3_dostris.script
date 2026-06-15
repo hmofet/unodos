@@ -1,0 +1,12 @@
+wait 70
+shot m3_desktop        # 5-icon grid desktop
+key right
+key right
+key right              # Clock->Files->Theme->Dostris (icon 4)
+key return             # open Dostris
+shot m3_dostris        # board + falling piece + HUD
+key left
+key left               # move piece left
+wait 25                # let gravity drop the piece
+shot m3_dostris_play
+quit

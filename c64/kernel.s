@@ -70,6 +70,7 @@ zpWtop      equ $36   ; win_outline: window top pixel row
 zpSel       equ $37   ; draw_icon: selected flag
 zpIconX     equ $38   ; draw_icon: icon's base column (win_outline mutates zpFX)
 zpCharY     equ $39   ; draw_char: saved caller Y (draw_name12 uses Y as index)
+zpIconY     equ $3A   ; draw_icon: icon box top cell row
 
 ; ---- logical key codes (scan_keyboard -> zpKey, handle_key dispatch) ----
 K_RET    equ $0D
@@ -105,15 +106,12 @@ CK_Y     equ 11
 CK_W     equ 14
 CK_H     equ 5
 
-ICONW    equ 9        ; icon box: cells (inner label width = ICONW-2 = 7)
-ICONH    equ 3
-ICON_Y   equ 20       ; icon box top cell row
-ICONLBL  equ 22       ; icon label cell row (bottom of the box)
-ICON0_X  equ 2
-ICON1_X  equ 12
-ICON2_X  equ 22
-ICON3_X  equ 31
-NICONS   equ 4
+; icon grid: up to 10 icons in 4 columns x 3 rows. Each box is ICONW cells
+; wide x ICONH cells tall, label on the box's bottom row. Per-icon position
+; comes from icon_x_tab / icon_y_tab so the grid can grow app by app.
+ICONW    equ 9        ; icon box width in cells (inner label width = ICONW-2 = 7)
+ICONH    equ 2
+NICONS   equ 5        ; populated icon slots (grows as M3 apps are added)
 
 ; full-screen app layout (app_mode != 0): row0 = title + separator, rows1-22
 ; content, row23 = status/help line.
@@ -229,7 +227,19 @@ mainloop:
         jsr handle_key
 ml_clk:
         jsr update_clock
+        jsr game_tick
         jmp mainloop
+
+; game_tick - advance the active animating game (each manages its own rate via
+; a counter). No-op for static apps. Extended as games are added.
+game_tick:
+        lda app_mode
+        cmp #4
+        bne gt_done
+        jmp dostris_tick
+        ;== M3-GAMES-TICK ==
+gt_done:
+        rts
 
 ; update_clock - if a second has ticked, the Clock window is open and no
 ; full-screen app covers the desktop, redraw HH:MM:SS.
@@ -418,8 +428,12 @@ hk_return:
         jmp files_open          ; Files icon -> full-screen app
 hk_ret3:
         cmp #3
-        bne hk_ret_win
+        bne hk_ret4
         jmp theme_open
+hk_ret4:
+        cmp #4
+        bne hk_ret_win
+        jmp dostris_open
         ;== M3-GAMES-RETURN ==   (extended as games are added)
 hk_ret_win:
         jsr sid_click
@@ -431,7 +445,12 @@ hk_ret_win:
 
 ; app_key - route a key into the active M3 game/app (app_mode >= 4).
 app_key:
+        lda app_mode
+        cmp #4
+        bne ak_done
+        jmp dostris_key
         ;== M3-GAMES-KEY ==      (extended as games are added)
+ak_done:
         rts
 
 ; ============================================================================
@@ -1035,8 +1054,9 @@ draw_icons:
 di_loop:
         stx zpSlot              ; preserve slot index (draw_icon clobbers zpTmp*)
         lda icon_x_tab,x
-        sta zpCX
         sta zpFX
+        lda icon_y_tab,x
+        sta zpIconY
         lda icon_lbl_lo,x
         sta zpPtr
         lda icon_lbl_hi,x
@@ -1055,13 +1075,16 @@ di_go:
         bne di_loop
         rts
 
-; draw_icon - zpCX/zpFX = icon cell column, zpPtr = label, A = 1 if selected.
+; draw_icon - zpFX = icon cell column, zpIconY = box top cell row, zpPtr =
+; label, A = 1 if selected. Label sits on the box's bottom row (zpIconY+ICONH-1).
 draw_icon:
         sta zpSel               ; selected flag (survives fill primitives)
         lda zpFX
         sta zpIconX             ; stable icon column (win_outline clobbers zpFX)
         ; box colour (whole icon) + clear bitmap + outline
-        lda #ICON_Y
+        lda zpFX
+        sta zpCX
+        lda zpIconY
         sta zpCY
         lda #ICONW
         sta zpCW
@@ -1072,7 +1095,7 @@ draw_icon:
         jsr color_fill
         lda zpFX
         sta zpWX                ; reuse win_outline via zpW*
-        lda #ICON_Y
+        lda zpIconY
         sta zpWY
         lda #ICONW
         sta zpWW
@@ -1080,7 +1103,7 @@ draw_icon:
         sta zpWH
         lda zpFX
         sta zpFX
-        lda #ICON_Y
+        lda zpIconY
         jsr cy_to_py
         sta zpFY
         lda #ICONW
@@ -1091,12 +1114,17 @@ draw_icon:
         sta zpFPat
         jsr fill_rows
         jsr win_outline
+        ; label row = box bottom
+        lda zpIconY
+        clc
+        adc #(ICONH-1)
+        sta zpTmp2              ; label cell row (survives below; primitives use zpTmp not zpTmp2? color_fill uses X only)
         ; label band colour (selected = white-on-blue)
         lda zpIconX
         clc
         adc #1
         sta zpCX
-        lda #ICONLBL
+        lda zpTmp2
         sta zpCY
         lda #(ICONW-2)
         sta zpCW
@@ -1116,16 +1144,20 @@ di_lbl_go:
         clc
         adc #1
         sta zpCol
-        lda #ICONLBL
+        lda zpIconY
+        clc
+        adc #(ICONH-1)
         sta zpRow
         lda #0
         sta zpInv
         jsr draw_string
         rts
 
-icon_x_tab:  dc.b ICON0_X,ICON1_X,ICON2_X,ICON3_X
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme
+; icon grid tables (10 slots: 4 cols x 3 rows). Only NICONS are drawn.
+icon_x_tab:  dc.b 1,11,21,31, 1,11,21,31, 1,11
+icon_y_tab:  dc.b 16,16,16,16, 19,19,19,19, 22,22
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker,<msg_paint,<msg_outlast
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker,>msg_paint,>msg_outlast
 
 ; ============================================================================
 ; renderer primitives
@@ -1507,6 +1539,12 @@ msg_vid_ntsc:  dc.b "Video: NTSC VIC-II 6567",0
 msg_sid:       dc.b "Sound: SID 6581",0
 msg_files:     dc.b "Files",0
 msg_theme:     dc.b "Theme",0
+msg_dostris:   dc.b "Dostris",0
+msg_pacman:    dc.b "Pac-Man",0
+msg_music:     dc.b "Music",0
+msg_tracker:   dc.b "Tracker",0
+msg_paint:     dc.b "Paint",0
+msg_outlast:   dc.b "OutLast",0
 msg_files_title: dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:  dc.b "RET=Open  D=Del  R=Rescan  STOP=Back",0
@@ -1527,6 +1565,7 @@ msg_saved:       dc.b "  SAVED",0
         include "files.i"
         include "notepad.i"
         include "theme.i"
+        include "dostris.i"
 
 ; ============================================================================
 ; generated tables (VIC bitmap address tables + the shared 8x8 font)
@@ -1562,3 +1601,18 @@ theme_desk:   dc.b COL_DESK    ; desktop dither colour (fg<<4|bg)
 theme_border: dc.b BORDERCOL   ; VIC border colour
 th_sel:       dc.b 0           ; Theme: cursor
 th_cur:       dc.b 0           ; Theme: applied preset
+
+; ---- Dostris state (board itself is DOSBOARD in BSS) ----
+dos_piece:   dc.b 0
+dos_rot:     dc.b 0
+dos_px:      dc.b 0
+dos_py:      dc.b 0
+dos_next:    dc.b 0
+dos_score:   dc.w 0
+dos_lines:   dc.b 0
+dos_level:   dc.b 0
+dos_dctr:    dc.b 0
+dos_paused:  dc.b 0
+dos_over:    dc.b 0
+dos_rng:     dc.b 1           ; LCG seed (must stay nonzero)
+dos_justlock: dc.b 0
