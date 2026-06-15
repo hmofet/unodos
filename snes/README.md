@@ -50,8 +50,21 @@ full cyan soft keyboard.
 - **NMI direct page** — the vblank handler runs on direct page `$0100` so
   its scratch never collides with the main loop's (`$0000`).
 
-M2–M3 (SRAM + Files/Notepad + games, SPC700 audio + Tracker/Music + Theme +
-scheduler) are still ahead — see [HANDOFF.md](HANDOFF.md).
+**M2 — storage core done (games remaining).** The USV1 SRAM mini-FS
+([sram.inc](sram.inc)) plus Notepad + Files ([apps.inc](apps.inc)). 8 KB of
+LoROM cartridge SRAM at `$70:0000` (byte-addressable — none of the Genesis
+odd-lane `*2`); init/save/read/find/delete with heap compaction. Notepad is
+an append-style editor (type via soft keyboard / pad, F1 saves to SRAM);
+Files lists the directory, opens into Notepad, deletes. The desktop now has
+four icons (SysInfo/Clock/Notepad/Files).
+
+![M2 storage](build/m2.png)
+
+Verified in Mesen2: the scene seeds a 44-byte note, saves DEMO.TXT, and the
+Files window lists it at the right size — the save → directory → listing
+round-trip. (Deviation: append-style Notepad, not full caret nav yet.) The
+M2 games (Dostris/Pac-Man/OutLast) and all of M3 (SPC700 audio + Tracker/
+Music + Theme + scheduler) remain — see [HANDOFF.md](HANDOFF.md).
 
 ## The envelope (and its deviations)
 

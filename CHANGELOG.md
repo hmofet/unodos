@@ -5,6 +5,68 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8088 port M0 — UnoDOS boots on a cycle-accurate IBM PC/XT (8088)] - 2026-06-14
+
+The x86 reference build already *is* the 8088 target, but for its whole life it
+was only ever **run** on QEMU — a 486-class CPU that silently hides every real
+8088 / IBM PC-XT behaviour. The 2026-06 audit's `cpu 8086` pass was only ever
+assembler-verified. M0 stands up the missing "real emulator" tier and proves
+the build on genuine 8088 silicon.
+
+- **Rig** (`tools/xt/`): MartyPC 0.4.1 (cycle-accurate 8088, validated against
+  real hardware) booting the open **GLaBIOS** — ROM-free, the same house rule
+  as the macplus/Genesis/SNES ports. Machine `unodos_xt` = IBM 5160 (XT), 8088
+  @ 4.77 MHz, 640K, CGA, 1.44M floppies, MS serial mouse on COM1. Capture via
+  MartyPC's own framebuffer screenshot (`shot_xt.ps1`) — clean under RDP, no
+  GPU-window-grab-is-black trap.
+- **Result:** the primary `build/unodos-144.img` boots **end-to-end on the
+  emulated XT** — boot sector → "Reset disk / Load stage2 / Loading kernel…" →
+  the 104-sector kernel → the CGA "UnoDOS 3" splash → the 4-colour desktop →
+  Enter launches **SysInfo** ("Boot: Floppy", "Tasks: 2 running"). The INT 0x80
+  dispatcher, launcher, window manager and cooperative scheduler — all flagged
+  186+/386+ by the audit — run correctly on real 8088 silicon, and the
+  **keyboard works through the XT 8255 PPI path**. Shots in `tools/xt/shots/`.
+- **Findings** (feed M1/M2): the README "128 KB minimum" is wrong — the launcher
+  at `0x2000` needs RAM through ~192K and the full feature set (heap `0x8000`,
+  clipboard/dialogs `0x9000`) needs 640K; the desktop + one app fit in 256K.
+  The serial mouse is undriven (cursor static — UnoDOS's mouse paths are AT-only
+  INT 15h/C2 + KBC). Boot to desktop takes ~30 s at real 4.77 MHz (the M3
+  `draw_char` fast-path target). See `docs/PORT-8088.md`.
+- No OS source changed in M0 (rig + validation + docs only), so the build number
+  is unchanged.
+
+## [snes: milestone 2 (storage core) — SRAM USV1 mini-FS + Notepad + Files] - 2026-06-15
+
+M2's storage core: the battery SRAM filesystem and its two apps.
+
+- **sram.inc** - the USV1 mini-FS on 8 KB of LoROM cartridge SRAM
+  (byte-addressable at `$70:0000` - none of the Genesis odd-lane `*2` dance;
+  little-endian words via 16-bit long-indexed loads). init/format,
+  find/save/read/delete/count/name/size, heap compaction on delete. Header
+  now declares it (cart type `$02`, SRAM size byte `$FFD8` = 3 = 8 KB).
+- **apps.inc** - Notepad (proc 2): an append-style editor (soft keyboard /
+  pad keys append to a 2 KB buffer, Backspace deletes, Enter = newline, F1
+  saves under the current name to SRAM), shown as wrapped lines + a status
+  bar. Files (proc 7): lists the SRAM directory with sizes, opens a file
+  into Notepad (Enter), deletes (X/Backspace), arrows move the selection.
+- Wired into the M1 WM: 4 desktop icons (SysInfo/Clock/Notepad/Files) via an
+  icon->proc table, `app_draw_content` + `app_key` dispatch, and key routing
+  from `handle_events` to the topmost app.
+- **Verified in Mesen2** (build/m2.png): the AUTOTEST scene seeds Notepad
+  (44-byte demo), saves DEMO.TXT to SRAM, and the Files window lists it at
+  the right size - the full save -> directory -> listing round-trip. The
+  interactive build boots clean.
+
+Trap fixed: a ca65 width-tracking leak - `@format:` was reached at runtime in
+8-bit A (via `bne` from the magic check), but the preceding match path's
+`.a16` directive made ca65 assemble `lda #'U'` as a 2-byte immediate, so the
+trailing `$00` ran as BRK and sprayed WRAM. A label reached in a different A
+width than the assembler assumes needs an explicit `.a8`/`.a16` at the label.
+
+Deviation: the Notepad is append-style (no full caret/line nav yet) - the
+storage round-trip is what M2 proves. The M2 games (Dostris / Pac-Man /
+OutLast) are the remaining M2 work.
+
 ## [snes: milestone 1 — tile desktop, window manager, apps, soft keyboard] - 2026-06-14
 
 The SNES port grows a real desktop. The Genesis M1 surface

@@ -158,8 +158,11 @@ re-expressed in 65816 (toolchain already standing from the IIGS).
   F12 screenshot — the GPU surface is black through PrintWindow on this
   headless host, and the software-renderer grab had a bottom-row palette
   artifact.)
-- M2: SRAM storage (USV1 port) + Files/Notepad; games (Dostris/Pac-Man/
-  OutLast — the PPU makes these EASIER than Genesis).
+- M2 (STORAGE CORE DONE): USV1 SRAM mini-FS at $70:0000 (byte-addressable) +
+  Notepad (append editor, F1 save) + Files (list/open/delete), 4 desktop
+  icons; verified in Mesen2 (save -> directory -> listing round-trip).
+  Remaining M2: the games (Dostris/Pac-Man/OutLast — the PPU makes these
+  EASIER than Genesis) + Notepad full caret nav.
 - M3: SPC700 driver (uploaded engine + mailbox protocol — the hardest
   novel piece on this port) for Music/Tracker/game audio; Theme over
   CGRAM palettes; scheduler.
@@ -218,6 +221,37 @@ entries. Only EE audio (audsrv), a USB keyboard, and a real-hardware run remain.
   is the one remaining piece — it can't be screenshot-verified, so it awaits a
   hardware ear-check. (Scheduler decision: kept cooperative, not EE threads.)
 - Real hardware: FMCB memory card; document the BOOT.ELF install path.
+
+---
+
+## 5. IBM PC/XT 8088 (native build — hardware-fidelity, in progress)
+
+Not a CPU rewrite: the x86 reference build already *is* the 8088 target. This
+is the **real-hardware-fidelity milestone** for the native build — proving and
+fixing UnoDOS on a genuine Intel 8088 / IBM PC-XT, following the same
+real-emulator → real-hardware method. The 2026-06 audit's `cpu 8086` pass made
+the floppy boot chain + kernel + apps 8086-clean, but it was only ever *run* on
+QEMU (a 486-class CPU that hides all 8088/XT-specific behaviour).
+
+**Rig.** MartyPC (cycle-accurate 8088, validated against real silicon) booting
+open GLaBIOS — ROM-free, the house rule. See [PORT-8088.md](PORT-8088.md) and
+[../tools/xt/README.md](../tools/xt/README.md).
+
+**Milestones.**
+- M0 (DONE 2026-06-14): the cycle-accurate XT rig + the primary
+  `build/unodos-144.img` booting end-to-end on an emulated IBM PC/XT (8088 @
+  4.77MHz, CGA) — boot chain → 104-sector kernel load → CGA desktop →
+  keyboard-launched SysInfo (window manager + cooperative scheduler running on
+  real 8088 silicon). First run outside a 486-class QEMU. Findings: the README
+  "128KB minimum" is wrong (the launcher at 0x2000 alone needs ~192K; the full
+  feature set with heap/clipboard at 0x8000/0x9000 needs 640K); the serial
+  mouse is undriven (cursor static — AT-only INT 15h/C2 + KBC paths).
+- M1: CGA-only reality, XT 8255 PPI keyboard ack verification, the RAM floor,
+  PIT/timing; exercise the keyboard-driven WM + the full CGA app set.
+- M2: serial mouse on COM1, real INT 13h floppy timing/retry, CGA snow; VGA
+  apps documented as out-of-envelope on a CGA 5150/5160 (a real deviation).
+- M3: the draw_char CGA row-blit fast path (~10× text at 4.77MHz), then a
+  physical IBM PC/XT.
 
 ---
 

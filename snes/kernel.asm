@@ -123,6 +123,13 @@ v_clkbuf    = VARS+$70
 v_zlist     = VARS+$80
 v_wintab    = VARS+$90
 v_evq       = VARS+$100
+; ---- M2 storage state ----
+v_np_len    = VARS+$180
+v_np_dirty  = VARS+$182
+v_files_sel = VARS+$184
+v_np_name   = VARS+$186     ; 13 bytes (12 name + NUL)
+v_npbuf     = $0400         ; 2 KB Notepad buffer ($0400-$0BFF)
+NBUF        = 2048
 
 ; ---- constants ----
 SCRW_C  = 32
@@ -145,7 +152,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 2
+NICONS   = 4
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -238,6 +245,11 @@ PAD_DPAD = $0F00
         sta v_kb_hover
         ; SNES mouse not detected at boot (probe is M1 backlog -> pad)
         stz v_mouse_present
+        ; default Notepad name; format SRAM if uninitialised
+        lda #.loword(str_demo_name)
+        sta P0
+        jsr np_setname
+        jsr sram_init
 
         ; build the desktop into the shadow (16-bit), flush once (8-bit)
         rep #$30
@@ -1277,12 +1289,22 @@ MainLoop:
         beq @sysinfo
         cmp #1
         beq @clock
+        cmp #2
+        beq @notepad
+        cmp #7
+        beq @files
         rts
 @sysinfo:
         jsr sysinfo_draw
         rts
 @clock:
         jsr clock_draw
+        rts
+@notepad:
+        jsr notepad_draw
+        rts
+@files:
+        jsr files_draw
         rts
 .endproc
 
@@ -1707,8 +1729,9 @@ MainLoop:
 .i16
 @next:  jsr ev_get
         cmp #0
-        beq @done
-        cmp #EV_KEY
+        bne @hk
+        rts
+@hk:    cmp #EV_KEY
         bne @next
         lda A1
         and #$00FF
@@ -1717,8 +1740,20 @@ MainLoop:
         beq @desktop
         lda S0
         cmp #27
-        bne @next
+        bne @app
         jsr close_topmost
+        bra @next
+@app:   ; route the key to the topmost window's app handler
+        lda v_zcount
+        dec a
+        jsr zent_x
+        sep #$20
+.a8
+        lda v_wintab+WPROC,x
+        rep #$20
+.a16
+        and #$00FF
+        jsr app_key
         bra @next
 @desktop:
         lda A1
@@ -1746,13 +1781,16 @@ MainLoop:
 @lwrap: lda #(NICONS-1)
 @setsel:
         jsr select_icon
-        bra @next
+        jmp @next
 @launch:
         lda v_sel_icon
         cmp #$FFFF
-        beq @next
+        beq @done
+        asl a
+        tax
+        lda icon_procs,x
         jsr launch_app
-        bra @next
+        jmp @next
 @done:  rts
 .endproc
 
@@ -1855,6 +1893,9 @@ MainLoop:
         lda S3
         jsr select_icon
         lda S3
+        asl a
+        tax
+        lda icon_procs,x
         jsr launch_app
         rts
 @single:
@@ -2165,15 +2206,16 @@ MainLoop:
 .endproc
 
 .ifdef AUTOTEST
-; AutotestSetup - build a screenshot scene: two windows + soft keyboard
+; AutotestSetup - M2 scene: seed Notepad, save DEMO.TXT to SRAM, open Files
 .proc AutotestSetup
 .a16
 .i16
-        lda #0
-        jsr launch_app          ; SysInfo
-        lda #1
-        jsr launch_app          ; Clock
-        jsr softkbd_show
+        jsr notepad_set_demo
+        jsr np_save             ; persist DEMO.TXT to SRAM
+        lda #2
+        jsr launch_app          ; Notepad
+        lda #7
+        jsr launch_app          ; Files (lists the saved file)
         lda #0
         jsr select_icon
         rts
@@ -2200,6 +2242,8 @@ MainLoop:
 .endif
 
 .include "softkbd.inc"
+.include "sram.inc"
+.include "apps.inc"
 
 ; ============================================================================
 ; Data
@@ -2220,16 +2264,29 @@ str_uptime:    .byte "Uptime:", 0
 
 ; icon table: x cell, y cell (2 words per icon)
 icon_tab:
-        .word 2, 25             ; 0 Sys Info
-        .word 14, 25            ; 1 Clock
+        .word 2, 24             ; 0 Sys Info
+        .word 12, 24            ; 1 Clock
+        .word 2, 26             ; 2 Notepad
+        .word 12, 26            ; 3 Files
 icon_names:
         .word name_sysinfo
         .word name_clock
+        .word name_notepad
+        .word name_files
+; icon index -> app proc number
+icon_procs:
+        .word 0, 1, 2, 7
 
-; app definitions: x, y, w, h (cells), title pointer (5 words per app)
+; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
-        .word 4, 4, 24, 9,  str_t_sysinfo
-        .word 10, 9, 14, 8, str_t_clock
+        .word 4, 4, 24, 9,  str_t_sysinfo    ; 0
+        .word 10, 9, 14, 8, str_t_clock      ; 1
+        .word 1, 1, 30, 22, str_t_notepad    ; 2 Notepad
+        .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)
+        .word 0, 0, 0, 0,   str_t_sysinfo    ; 4 (unused)
+        .word 0, 0, 0, 0,   str_t_sysinfo    ; 5 (unused)
+        .word 0, 0, 0, 0,   str_t_sysinfo    ; 6 (unused)
+        .word 3, 3, 26, 18, str_t_files      ; 7 Files
 
 ; ============================================================================
 ; Cartridge header + vectors
@@ -2237,9 +2294,9 @@ app_def_tab:
 .segment "SNESHEADER"
         .byte "UNODOS 3 - SNES PORT "
         .byte $20               ; LoROM, slow
-        .byte $00               ; ROM only (SRAM at M2)
+        .byte $02               ; ROM + RAM + battery
         .byte $05               ; 32 KB
-        .byte $00               ; no SRAM
+        .byte $03               ; 8 KB SRAM (2^3 KB)
         .byte $01               ; NTSC
         .byte $00, $00
         .byte $00, $00          ; checksum (patched)

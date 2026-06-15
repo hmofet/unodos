@@ -203,7 +203,25 @@ The Genesis M1 surface on the §2 architecture:
   drag, close, soft-kbd typing into a probe field, mouse-mode shot,
   clock advance.
 
-## 5. M2 — SRAM storage (USV1) + Files/Notepad + games
+## 5. M2 — SRAM storage (USV1) + Files/Notepad + games  ◐ STORAGE CORE DONE
+
+**Storage core closed** (`sram.inc` + `apps.inc`): USV1 mini-FS on 8 KB
+LoROM SRAM at `$70:0000` (byte-addressable, little-endian words via
+`lda f:$700000,x` — no Genesis odd-lane dance); init/save/read/find/delete +
+heap compaction. Notepad (append editor, F1 → SRAM) + Files (list/open/
+delete), 4 desktop icons via an icon→proc table, app-key routing in
+`handle_events`. Header declares SRAM (type `$02`, size byte 3). Verified in
+Mesen2 (`build/m2.png`): save → directory → listing round-trip. **Remaining
+M2:** the games (Dostris/Pac-Man/OutLast) from `genesis/games.i`/`pacman.i`;
+Notepad full caret/line nav (the append editor is a documented deviation).
+
+Trap: a ca65 A-width-tracking leak crashed `sram_init` — a label reached at
+runtime in 8-bit A but assembled as 16-bit (a preceding branch's `.a16`
+leaked), so `lda #imm` over-read and the spilled byte ran as BRK. Put an
+explicit `.a8`/`.a16` at any label reached in a different width than the
+fall-through assumes. (Same family as the M1 width traps.)
+
+The original plan notes follow.
 
 - **USV1 port:** `genesis/sram.i` nearly verbatim — same format
   (magic "USV1", count, heap top, 8×16-byte dir entries, compacting
