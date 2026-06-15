@@ -35,7 +35,7 @@ assessment and plan):
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
-(Apple II ✓, Apple IIGS, SNES, Sony PS2) is tracked in
+(Apple II ✓, Sony PS2 ✓, Apple IIGS, SNES) is tracked in
 [docs/PORTS-PLAN.md](docs/PORTS-PLAN.md); the standalone MacPlus OS port
 joins the matrix at app parity.
 

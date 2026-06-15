@@ -172,8 +172,10 @@ directly (no FMCB needed in the emulator) = the validation rig, with the
 existing screenshot automation. Real hardware: PS2 + FMCB card; ELF on MC
 or USB stick.
 
-**Milestones.**
-- M0 (FOUNDATION DONE + EE ELF BUILDS; runtime pending a BIOS): the
+**Milestones.** (M0–M2 DONE + verified on the emulated PS2 in PCSX2 as of
+2026-06-14; see [../ps2/HANDOFF.md](../ps2/HANDOFF.md) and the ps2 CHANGELOG
+entries. Only EE audio (audsrv), a USB keyboard, and a real-hardware run remain.)
+- M0 (DONE — splash on the emulated GS): the
   software-framebuffer platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/
   invert/text over the 4-colour gamut), the shared font as a C array
   (`mkfont_c.py`), and the hello-GS splash (`uno_splash.c`) all built +
@@ -182,17 +184,22 @@ or USB stick.
   software FB, GS as a blitter (gsKit), so gsKit-vs-raw-GIF is low-stakes.
   **Toolchain installed** (prebuilt ps2dev v2.0.0 under WSL; Docker was
   unavailable) and `./build.sh ee` links a real MIPS R5900 ELF
-  (`build/unodos-ps2.elf`, gsKit/libpad). RUNTIME still UNVERIFIED: PCSX2
-  needs a 4 MB PS2 BIOS and only PS1 BIOSes (512 KB) were on hand — so
-  GS/pad behaviour awaits a PS2 BIOS dump or FMCB hardware. M1 (the C-core
-  desktop) is now unblocked and host-shim-iterable.
-- M1: framebuffer desktop + WM + pad-as-pointer + soft keyboard +
-  SysInfo/Clock — mostly the C core with a new platform layer.
-- M2: memory-card storage (file API — trivial next to GCR floppies),
-  USB keyboard/mouse modules, Files/Notepad, disk(card)-loaded apps.
-- M3: parity — full-color everything, audsrv Music/Tracker, Theme with
-  true 32-bit color, scheduler (or real threads — the EE kernel has them;
-  decide whether authenticity or capability wins).
+  (`build/unodos-ps2.elf`, gsKit/libpad). The EE ELF now **runs on the
+  emulated GS** (PCSX2 v2.6.3 + a 4 MB PS2 BIOS; the earlier 512 KB dumps were
+  PS1 BIOSes). Rig: `ps2/tools/run_pcsx2.ps1` (note the `SettingsVersion=1`
+  ini gotcha).
+- M1 (DONE — desktop on host + emulated GS): the C core `mac/unodos.c` ported
+  to `ps2/unodos.c` over a Mac-compat shim (`mac_compat.*`/`mac_io.c`) — full
+  desktop + WM + all 11 apps + pad-as-pointer, the host shim being the fast
+  inner loop and the EE target (`ee_platform.c`) GS-presenting each vsync.
+- M2 (DONE — memory-card storage): the EE File Manager persists Files/Notepad
+  to the **PS2 memory card** via libmc, verified to survive a power cycle in
+  PCSX2. (Trivial next to GCR floppies, as predicted.) USB keyboard/mouse
+  modules still to wire.
+- M3 (Theme + scheduler DONE; audio pending): full 32-bit-colour Theme and the
+  cooperative scheduler come along through the shim. audsrv Music/Tracker audio
+  is the one remaining piece — it can't be screenshot-verified, so it awaits a
+  hardware ear-check. (Scheduler decision: kept cooperative, not EE threads.)
 - Real hardware: FMCB memory card; document the BOOT.ELF install path.
 
 ---
@@ -208,7 +215,8 @@ touching code; update it (and this plan) when a milestone closes.
   [HANDOFF-M3.md](../apple2/HANDOFF-M3.md)
 - Apple IIGS: [../iigs/HANDOFF.md](../iigs/HANDOFF.md) (M0–M3 phased)
 - SNES: [../snes/HANDOFF.md](../snes/HANDOFF.md) (M0–M3 phased)
-- PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M3 phased)
+- PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M2 done + verified in PCSX2;
+  M3 Theme/scheduler done, audsrv audio pending)
 
 ## Sequencing & checkpoints
 
