@@ -1,14 +1,22 @@
 # uno3d — a portable 3D graphics library for UnoDOS
 
+> **Full guide:** [docs/UNO3D.md](../docs/UNO3D.md) — overview, complete API
+> reference, and a walkthrough of how to write a game with Uno3D. This file is
+> the quick reference + file list.
+
 uno3d lets a 3D application be **written once** and run on any UnoDOS target,
 using real 3D hardware where it exists and a software rasteriser where it
 doesn't. The same application code (`uno3d_demo.c`) runs unchanged on:
 
 | Backend | Hardware | File | Status |
 |---|---|---|---|
-| `soft` | none — CPU rasteriser into the framebuffer | `uno3d_soft.c` | ✅ verified on host + PC/DOS |
+| `soft` | none — CPU rasteriser into the framebuffer | `uno3d_soft.c` | ✅ verified on host |
 | `ps2-gs` | PlayStation 2 Graphics Synthesizer (gsKit) | `uno3d_ps2.c` | ✅ verified in PCSX2 @ 60 fps |
 | `dc-pvr` | Dreamcast PowerVR2 (KallistiOS) | `uno3d_dc.c` | ✅ verified in Flycast (PVR hardware) |
+
+The bare-metal **UnoDOS-x86** OS runs its own native 3D app
+([`apps/runner3d.asm`](../apps/runner3d.asm)) over the kernel API rather than this
+C library — see [docs/UNO3D.md §8](../docs/UNO3D.md#8-unodos-x86--a-native-app-not-the-c-library).
 
 ## The game: UnoDOS Runner
 

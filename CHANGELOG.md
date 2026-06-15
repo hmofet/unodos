@@ -5,6 +5,30 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Uno3D — portable 3D library + a 3D game across platforms] - 2026-06-15
+
+UnoDOS gains hardware-accelerated 3D and a write-once 3D library.
+
+- **Uno3D library** (`uno3d/`): a portable 3D graphics API with a swappable
+  per-platform rasteriser backend (a `u3d_backend` vtable). The portable
+  front-end does matrix math, transform, projection, back-face culling and
+  near-plane clipping; backends just clear/rasterise/flush/present. Backends:
+  `soft` (CPU rasteriser into the framebuffer — universal), `ps2-gs` (PS2
+  Graphics Synthesizer via gsKit — real hardware 3D), `dc-pvr` (Dreamcast
+  PowerVR2 via KallistiOS). Designed so a new platform is one new file.
+- **A 3D game, "UnoDOS Runner"** (`uno3d/uno3d_game.c`): an obstacle-dodger
+  written once against the Uno3D API + an abstract input struct; the same logic
+  runs on the host (software), the PS2 (GS hardware, 60 fps in PCSX2) and the
+  Dreamcast (PVR hardware, in Flycast).
+- **Native UnoDOS 3D app** (`apps/runner3d.asm`, `RUN3D.BIN`): the bare-metal
+  x86 OS can't run the C library, so its version of the game is a native NASM
+  app that draws the same 3D corridor through the kernel's `INT 0x80` graphics
+  API (VGA mode 13h, fixed-point perspective, filled-rect painter's order, 8088-
+  compatible). Ships in the floppy image; the desktop launcher auto-discovers it.
+- **Docs:** new [docs/UNO3D.md](docs/UNO3D.md) — overview, full API reference,
+  and a guide to writing games with Uno3D; cross-linked from the root README and
+  APP_DEVELOPMENT.
+
 ## [Apple IIGS port — FULL APP PARITY: OutLast + cooperative scheduler] - 2026-06-15 (Build 420)
 
 The IIGS port reaches **complete app parity** - all 11 UnoDOS apps plus the

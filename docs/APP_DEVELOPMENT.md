@@ -541,6 +541,23 @@ To include on the OS floppy, place the .BIN file in the FAT12 filesystem of `bui
 
 ---
 
+## 3D graphics
+
+UnoDOS has a 3D corridor game, **`apps/runner3d.asm`** (`RUN3D.BIN`), written
+purely against this API. It switches to VGA mode 13h (`API_SET_VIDEO_MODE`),
+projects 3D points with fixed-point perspective (`sx = cx + x*FOCAL/z`), and —
+because the camera never rotates, so every screen-facing wall projects to an
+axis-aligned rectangle — draws the whole solid 3D scene with
+`gfx_draw_filled_rect_color` in painter's order (far→near). No FPU, no direct
+framebuffer access; it assembles for the 8088 and runs on any UnoDOS machine.
+
+It is the bare-metal counterpart to the portable **Uno3D** C library (which
+serves the PS2/Dreamcast/host ports). For the full 3D story — the library, its
+API, how to write a 3D game, and how this native app fits in — see
+**[UNO3D.md](UNO3D.md)**.
+
+---
+
 *For the complete API register reference (105 functions, APIs 0-104), see [API_REFERENCE.md](API_REFERENCE.md).*
 
 *v3.23.0 Build 397*

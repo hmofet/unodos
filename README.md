@@ -42,6 +42,18 @@ joins the matrix at app parity. The Dreamcast port reuses the PS2 port's
 portable-C-core approach almost verbatim — same core, same Mac-compat shim,
 swapped present (KallistiOS framebuffer) and input (maple) layers.
 
+### 3D graphics — Uno3D
+
+UnoDOS has its own portable 3D graphics library, **Uno3D** ([uno3d/](uno3d/),
+guide in [docs/UNO3D.md](docs/UNO3D.md)): a write-once 3D API with a swappable
+per-platform rasteriser backend. The same 3D game ("UnoDOS Runner") runs on the
+**software** rasteriser (any port), the **PlayStation 2 Graphics Synthesizer**,
+and the **Dreamcast PowerVR2** — the two consoles using real hardware
+acceleration at 60 fps. The bare-metal x86 OS gets its own native 3D app
+([apps/runner3d.asm](apps/runner3d.asm)) that draws through the kernel's `INT
+0x80` graphics API. The backend interface is built for more targets (PS3, a
+GPU-equipped PC, GameCube, Xbox).
+
 The x86 reference build above now runs at **full feature parity on a genuine
 Intel 8088 / IBM PC-XT** — for years it had only ever run on QEMU (a 486-class
 CPU that hides all real 8088 behaviour). Verified on a cycle-accurate emulated
