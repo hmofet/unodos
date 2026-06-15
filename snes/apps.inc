@@ -437,10 +437,14 @@
 .i16
         cmp #2
         beq @np
+        cmp #4
+        beq @dt
         cmp #7
         beq @files
         rts
 @np:    jsr notepad_key
+        rts
+@dt:    jsr dostris_key
         rts
 @files: jsr files_key
         rts

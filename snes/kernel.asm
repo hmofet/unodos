@@ -167,7 +167,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 4
+NICONS   = 5
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -308,6 +308,7 @@ MainLoop:
         jsr handle_drag
         jsr handle_events
         jsr softkbd_hover
+        jsr game_tick
         jsr app_ticks
         bra MainLoop
 .endproc
@@ -1306,6 +1307,8 @@ MainLoop:
         beq @clock
         cmp #2
         beq @notepad
+        cmp #4
+        beq @dostris
         cmp #7
         beq @files
         rts
@@ -1317,6 +1320,9 @@ MainLoop:
         rts
 @notepad:
         jsr notepad_draw
+        rts
+@dostris:
+        jsr dostris_draw
         rts
 @files:
         jsr files_draw
@@ -1601,17 +1607,18 @@ MainLoop:
 ; ============================================================================
 
 ; ev_post: A0 = type (low byte), A1 = data word
+; uses S6/S7 internally so callers' edge bits in S0 survive across a post
 .proc ev_post
 .a16
 .i16
         lda v_ev_tail
-        sta S0
+        sta S6
         inc a
         and #(EVQ_SIZE-1)
-        sta S1
+        sta S7
         cmp v_ev_head
         beq @full               ; drop-when-full
-        lda S0
+        lda S6
         asl a
         asl a
         tax
@@ -1623,7 +1630,7 @@ MainLoop:
 .a16
         lda A1
         sta v_evq+2,x
-        lda S1
+        lda S7
         sta v_ev_tail
 @full:  rts
 .endproc
@@ -1635,23 +1642,23 @@ MainLoop:
         lda v_ev_head
         cmp v_ev_tail
         beq @empty
-        sta S0
+        sta S6
         asl a
         asl a
         tax
         sep #$20
 .a8
         lda v_evq,x
-        sta S1
+        sta S7
         rep #$20
 .a16
         lda v_evq+2,x
         sta A1
-        lda S0
+        lda S6
         inc a
         and #(EVQ_SIZE-1)
         sta v_ev_head
-        lda S1
+        lda S7
         and #$00FF
         rts
 @empty: lda #0
@@ -1683,6 +1690,12 @@ MainLoop:
 .a16
         lda S0
         beq @done
+        jsr is_game_topmost
+        bcc @desktop
+        jsr pad_game_events
+        rts
+@desktop:
+        lda S0
         bit #PAD_B
         beq @nb
         lda #1
@@ -2080,6 +2093,10 @@ MainLoop:
 .proc pad_to_mouse
 .a16
 .i16
+        jsr is_game_topmost     ; game window topmost -> game-mode input
+        bcc @mouse
+        jmp pad_game
+@mouse:
         lda v_pad
         sta S0
         and #PAD_DPAD
@@ -2227,10 +2244,9 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #2
-        jsr launch_app          ; Notepad
-        lda #7
-        jsr launch_app          ; Files (lists the saved file)
+        lda #4
+        jsr launch_app          ; Dostris
+        jsr dostris_new         ; start a game (board + falling piece)
         lda #0
         jsr select_icon
         rts
@@ -2259,6 +2275,7 @@ MainLoop:
 .include "softkbd.inc"
 .include "sram.inc"
 .include "apps.inc"
+.include "games.inc"
 
 ; ============================================================================
 ; Data
@@ -2281,16 +2298,18 @@ str_uptime:    .byte "Uptime:", 0
 icon_tab:
         .word 2, 24             ; 0 Sys Info
         .word 12, 24            ; 1 Clock
-        .word 2, 26             ; 2 Notepad
-        .word 12, 26            ; 3 Files
+        .word 22, 24            ; 2 Notepad
+        .word 2, 26            ; 3 Files
+        .word 12, 26            ; 4 Dostris
 icon_names:
         .word name_sysinfo
         .word name_clock
         .word name_notepad
         .word name_files
+        .word name_dostris
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7
+        .word 0, 1, 2, 7, 4
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2298,7 +2317,7 @@ app_def_tab:
         .word 10, 9, 14, 8, str_t_clock      ; 1
         .word 1, 1, 30, 22, str_t_notepad    ; 2 Notepad
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)
-        .word 0, 0, 0, 0,   str_t_sysinfo    ; 4 (unused)
+        .word 1, 1, 30, 24, str_t_dostris    ; 4 Dostris
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 5 (unused)
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 6 (unused)
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
