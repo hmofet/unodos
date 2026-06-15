@@ -5,6 +5,61 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [snes: milestone 2 complete — Dostris, OutLast, Pac-Man] - 2026-06-15
+
+M2's three shared games join the storage core, closing M2. All in
+`snes/games.inc`, cell-rendered on the shadow+DMA model, verified in Mesen2
+via the F12 framebuffer rig.
+
+- **Dostris** (proc 4) — the Genesis piece tables, scoring and physics; the
+  game-mode pad remap (d-pad with hold-repeat, A = hard drop, X = new,
+  Y = pause) and a Score/Lines/Level panel.
+- **OutLast** (proc 5) — a linear-perspective scrolling racer: converging
+  grass/road/stripe bands (half-width = `row − HORIZ`, divide-free), a
+  steerable car, and a Spd/Time HUD. DEVIATION from Genesis: no per-row 1/z
+  raster, road curve, or oncoming traffic — the 65816 has no fast software
+  16/16 divide.
+- **Pac-Man** (proc 6) — the full x86 ghost AI (Blinky direct, Pinky
+  4-ahead, Clyde hybrid, scatter/chase schedule, frightened eat-chain)
+  intact, recast to tile coordinates. DEVIATION: actors are CELL-GRID BG
+  tiles (new shaped pac/ghost/dot/pellet/gate tiles in `mkdata.py`), not
+  pixel-smooth OAM sprites — one tile per step, collisions by tile equality.
+  The 28×25 maze + a 1-row HUD fill the 30×28 window. Seventh desktop icon.
+
+Trap fixed: the Pac-Man state block first overlapped the 2 KB Notepad buffer
+at `$0400-$0BFF` (`notepad_set_demo` seeded `$534F` into the hi-score);
+repacked into free WRAM at `$0CC8-$0FE5`, above the Dostris board and below
+the tilemap shadow.
+
+## [ps2: EE audio — square-wave synth on the SPU2 via audsrv] - 2026-06-15
+
+The PS2 Sound Manager is no longer a silent stub — Music's Canon in D and the
+Tracker patterns now play through the SPU2. New file `ps2/ee_audio.c`; the PS2
+port reaches feature parity with the mature targets (only a real-hardware run
+remains).
+
+- **audsrv-backed square-wave synth.** `SndDoImmediate` (mac_io.c, EE branch)
+  routes `noteCmd`/`quietCmd` to an 8-voice phase-accumulator square-wave synth
+  (MIDI→Hz table, ~3500 amplitude/voice) mixed to 16-bit / 22050 Hz / stereo and
+  streamed to the SPU2 via **audsrv**. `audsrv.irx` is embedded with `bin2c`;
+  **LIBSD** (its SPU2 driver) is loaded from `rom0`.
+- **Frame-paced, non-blocking.** `uno_audio_pump` runs once per frame from
+  `uno_ee_present` and only writes `audsrv_available()` bytes, so it never stalls
+  the loop and stays single-threaded on the SIF bus with the USB poll.
+- **Boot safety + a unified I/O thread.** `audsrv_init` spins on SIF RPC until the
+  IOP audio server answers — which never happens under PCSX2's fastboot HLE, so
+  on the main thread it black-screened the boot (exactly like the USB
+  `PS2KbdInit`/`PS2MouseInit` binds). Both bring-ups now run on one **low-priority
+  I/O thread** (`io_init_thread`) holding a shared **SIF lock**; the per-frame
+  audio pump and USB poll probe that lock non-blocking and skip a frame rather
+  than race it. The desktop boots and runs at 60 fps regardless; each device
+  comes alive the instant its driver registers. The USB init was refactored from
+  its own thread (added earlier today) into this shared one.
+- **Verified:** full desktop boots in PCSX2 at FPS 60 with audsrv + all three USB
+  modules loaded and the I/O thread running (`ps2/shots/m3_audio_boot.png`). The
+  audio output itself is hardware-only to verify — PCSX2 can't drive
+  SPU2-via-audsrv under fastboot, the same ear-check ceiling as the other ports.
+
 ## [Apple IIGS port — M0: 65C816 native boot + Super Hi-Res splash] - 2026-06-15 (Build 411)
 
 First milestone of the **Apple IIGS** port (`iigs/`): a native 65C816 / Super
@@ -58,7 +113,7 @@ The x86 reference build now runs at **full feature parity on a genuine Intel
   via its GUI menu) + a physical IBM PC/XT pass — the same hardware-blocked
   final step as every other port. See `docs/PORT-8088.md`.
 
-## [dreamcast: new port — M1 desktop + VMU storage] - 2026-06-15
+## [dreamcast: new port — M1 desktop + VMU storage, ELF compiles] - 2026-06-15 (Build 412)
 
 A new port: **UnoDOS on the Sega Dreamcast** (Hitachi SH-4 / PowerVR2, via
 KallistiOS). It reuses the PS2 port's portable-C-core strategy almost verbatim —
@@ -85,9 +140,19 @@ swaps only the present and input layers. New directory `dreamcast/`.
   flash). The HOST stdio backend stays byte-identical to PS2's.
 - **Verified on the host shim** at 640×480: splash, desktop, window manager and
   all 11 apps render to PNGs (`dreamcast/shots/m1_*.png`) via WSL gcc — the exact
-  code the DC ELF compiles. The KallistiOS ELF target is **written but
-  UNVERIFIED** (no `sh-elf-gcc` / DC emulator on the dev machine, the same state
-  the PS2 EE target shipped in before ps2dev). M3 audio (AICA) is stubbed.
+  code the DC ELF compiles.
+- **The DC ELF compiles + links clean against KallistiOS.** The toolchain was
+  built from source under WSL (`utils/kos-chain` → `Makefile.dreamcast.cfg` →
+  `sh-elf-gcc 15.2.0` + binutils + newlib + `libkallisti.a`); `build.sh dc` links
+  `build/unodos-dc.elf` (a real SH-4 ELF, entry `0x8c010000`) and `build.sh iso`
+  packages `build/unodos-dc.iso` (a bootable selfboot image: scrambled
+  `1ST_READ.BIN` + a homebrew `IP.BIN`, wrapped by `genisoimage`). Only benign
+  warnings. **Not yet observed booting** — no DC emulator (Flycast/lxdream/
+  redream) on the dev machine. M3 audio (AICA) is stubbed.
+- Toolchain gotcha recorded: the KOS toolchain builder moved from `utils/dc-chain`
+  (removed) to `utils/kos-chain`; the stock `environ.sh.sample` hard-codes
+  `KOS_BASE=/opt/toolchains/dc/kos`, so a checkout elsewhere needs `KOS_BASE` /
+  `KOS_ARCH=dreamcast` set or libkos can't find `environ_base.sh`.
 - New files: `dreamcast/{unodos.c, fb.c, fb.h, mac_compat.c, mac_compat.h,
   mac_io.c, dc_main.c, uno_splash.c, host_main.c, host_desktop.c, Makefile,
   build.sh, mkfont_c.py, README.md, HANDOFF.md}`.

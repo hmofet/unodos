@@ -203,23 +203,53 @@ The Genesis M1 surface on the §2 architecture:
   drag, close, soft-kbd typing into a probe field, mouse-mode shot,
   clock advance.
 
-## 5. M2 — SRAM storage (USV1) + Files/Notepad + games  ◐ STORAGE CORE DONE
+## 5. M2 — SRAM storage (USV1) + Files/Notepad + games  ✅ DONE
 
-**Storage core closed** (`sram.inc` + `apps.inc`): USV1 mini-FS on 8 KB
-LoROM SRAM at `$70:0000` (byte-addressable, little-endian words via
-`lda f:$700000,x` — no Genesis odd-lane dance); init/save/read/find/delete +
-heap compaction. Notepad (append editor, F1 → SRAM) + Files (list/open/
-delete), 4 desktop icons via an icon→proc table, app-key routing in
-`handle_events`. Header declares SRAM (type `$02`, size byte 3). Verified in
-Mesen2 (`build/m2.png`): save → directory → listing round-trip. **Remaining
-M2:** the games (Dostris/Pac-Man/OutLast) from `genesis/games.i`/`pacman.i`;
-Notepad full caret/line nav (the append editor is a documented deviation).
+**Storage core** (`sram.inc` + `apps.inc`): USV1 mini-FS on 8 KB LoROM SRAM
+at `$70:0000` (byte-addressable, little-endian words via `lda f:$700000,x` —
+no Genesis odd-lane dance); init/save/read/find/delete + heap compaction.
+Notepad (append editor, F1 → SRAM) + Files (list/open/delete). Header
+declares SRAM (type `$02`, size byte 3). Verified in Mesen2 (`build/m2.png`):
+save → directory → listing round-trip.
 
-Trap: a ca65 A-width-tracking leak crashed `sram_init` — a label reached at
-runtime in 8-bit A but assembled as 16-bit (a preceding branch's `.a16`
-leaked), so `lda #imm` over-read and the spilled byte ran as BRK. Put an
-explicit `.a8`/`.a16` at any label reached in a different width than the
-fall-through assumes. (Same family as the M1 width traps.)
+**Games** (`games.inc`), all three verified (`build/dostris.png`,
+`outlast.png`, `pacman.png`); seven desktop icons via an icon→proc table,
+app-key routing through `app_key`:
+- **Dostris** (proc 4) — Genesis piece tables/scoring/physics, cell render.
+- **OutLast** (proc 5) — linear-perspective road (divide-free converging
+  bands). DEVIATION: no per-row 1/z raster, curve, or oncoming traffic —
+  the 65816 has no fast software 16/16 divide. (HDMA on BG scroll/colour, as
+  the plan suggested, would restore the true raster — left for a polish pass.)
+- **Pac-Man** (proc 6) — the full x86 ghost AI (Blinky/Pinky/Clyde,
+  scatter/chase schedule, frightened eat-chain) intact, recast to tile
+  coordinates. DEVIATION: actors are CELL-GRID BG tiles (shaped pac/ghost/
+  dot/pellet tiles in `mkdata.py`), not pixel-smooth OAM sprites — one tile
+  per step, collisions by tile equality, mode/fright timers in steps. The
+  28×25 maze + a compact 1-row HUD fill the 30×28 window (the Genesis 8-col
+  side panel won't fit the 32-cell screen). The OAM-sprite route the plan
+  suggested is viable but the cell-grid keeps the whole game on the existing
+  shadow+DMA model — a clean fit, left as the shipped form.
+
+DEVIATION (carried from M2): Notepad is an append editor, not full caret/line
+nav — the storage round-trip is what M2 proves.
+
+Traps that bit M2 (don't repeat in M3):
+- A ca65 A-width-tracking leak crashed `sram_init` — a label reached at
+  runtime in 8-bit A but assembled as 16-bit (a preceding branch's `.a16`
+  leaked), so `lda #imm` over-read and the spilled byte ran as BRK. Put an
+  explicit `.a8`/`.a16` at any label reached in a different width than the
+  fall-through assumes. (Same family as the M1 width traps.)
+- WRAM map collision: Pac-Man state first landed at `$0400`, on top of the
+  2 KB Notepad buffer `v_npbuf` ($0400–$0BFF) — `notepad_set_demo` seeded
+  "OS S" ($534F) into the hi-score. The free WRAM below the tilemap shadow
+  is tight: `$0400–$0BFF` npbuf, `$0C00–$0CC7` Dostris board, then only
+  `$0CC8–$0FFF` (824 B) free before `TMAP=$1000`. Pac-Man packs scalars +
+  ghosts + the 700-byte maze into `$0CC8–$0FE5`. Audit the map before
+  adding M3 state — the scheduler's per-task stacks and the SPC upload
+  buffer both want bank-0 room.
+- Long-proc branch ranges: `pm_step`/`pm_steer` overflow the 65816
+  ±127 `bcc/beq` range; convert the cross-block ones to `jmp` (or
+  `bCC :+ / jmp / :`). Same fix used across the Dostris long procs.
 
 The original plan notes follow.
 
