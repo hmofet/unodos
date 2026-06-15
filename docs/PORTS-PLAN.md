@@ -158,11 +158,14 @@ re-expressed in 65816 (toolchain already standing from the IIGS).
   F12 screenshot — the GPU surface is black through PrintWindow on this
   headless host, and the software-renderer grab had a bottom-row palette
   artifact.)
-- M2 (STORAGE CORE DONE): USV1 SRAM mini-FS at $70:0000 (byte-addressable) +
-  Notepad (append editor, F1 save) + Files (list/open/delete), 4 desktop
-  icons; verified in Mesen2 (save -> directory -> listing round-trip).
-  Remaining M2: the games (Dostris/Pac-Man/OutLast — the PPU makes these
-  EASIER than Genesis) + Notepad full caret nav.
+- M2 (DONE): USV1 SRAM mini-FS at $70:0000 (byte-addressable) + Notepad
+  (append editor, F1 save) + Files (list/open/delete) + all three shared
+  games (Dostris, OutLast, Pac-Man), 7 desktop icons; each verified in
+  Mesen2 (save -> directory -> listing round-trip; each game rendering and
+  running). Deviations (in HANDOFF): OutLast uses a linear-perspective road
+  (no 16/16 divide on the 65816); Pac-Man uses cell-grid BG-tile actors
+  (the full ghost AI intact) rather than OAM sprites; Notepad is an append
+  editor. Backlog: Notepad caret nav, OutLast HDMA raster, SNES-Mouse detect.
 - M3: SPC700 driver (uploaded engine + mailbox protocol — the hardest
   novel piece on this port) for Music/Tracker/game audio; Theme over
   CGRAM palettes; scheduler.
@@ -193,9 +196,10 @@ existing screenshot automation. Real hardware: PS2 + FMCB card; ELF on MC
 or USB stick.
 
 **Milestones.** (M0–M2 DONE + verified on the emulated PS2 in PCSX2 as of
-2026-06-14; USB keyboard + mouse added 2026-06-15; see
-[../ps2/HANDOFF.md](../ps2/HANDOFF.md) and the ps2 CHANGELOG entries. Only EE
-audio (audsrv) and a real-hardware run remain.)
+2026-06-14; USB keyboard + mouse and SPU2 audio added 2026-06-15; see
+[../ps2/HANDOFF.md](../ps2/HANDOFF.md) and the ps2 CHANGELOG entries. All
+features are in — only a real-hardware run + the USB/audio function check
+remain, which need a physical PS2.)
 - M0 (DONE — splash on the emulated GS): the
   software-framebuffer platform layer (`ps2/fb.c` — 640×448×32 + fill/frame/
   invert/text over the 4-colour gamut), the shared font as a C array
@@ -223,10 +227,14 @@ audio (audsrv) and a real-hardware run remain.)
   pad. Device init runs on a background EE thread so a USB-less boot (e.g. PCSX2,
   which has no USB HLE) still reaches the desktop; boot verified in PCSX2, the
   USB function itself is hardware-only to confirm.
-- M3 (Theme + scheduler DONE; audio pending): full 32-bit-colour Theme and the
-  cooperative scheduler come along through the shim. audsrv Music/Tracker audio
-  is the one remaining piece — it can't be screenshot-verified, so it awaits a
-  hardware ear-check. (Scheduler decision: kept cooperative, not EE threads.)
+- M3 (DONE): full 32-bit-colour Theme + the cooperative scheduler come along
+  through the shim (scheduler kept cooperative, not EE threads); **SPU2 audio via
+  audsrv** (`ps2/ee_audio.c`) realises the Sound Manager square-wave channels —
+  `audsrv.irx` embedded with `bin2c`, `rom0:LIBSD` for the SPU2, an 8-voice
+  phase-accumulator synth pumped per-frame from `SndDoImmediate`. Bring-up shares
+  the USB I/O thread + SIF lock (the audsrv RPC init hangs under PCSX2 fastboot
+  just like the HID inits). The sound itself awaits a hardware ear-check; boot is
+  verified at 60 fps in PCSX2 with audsrv + USB loaded.
 - Real hardware: FMCB memory card; document the BOOT.ELF install path.
 
 ---
@@ -273,8 +281,8 @@ touching code; update it (and this plan) when a milestone closes.
   [HANDOFF-M3.md](../apple2/HANDOFF-M3.md)
 - Apple IIGS: [../iigs/HANDOFF.md](../iigs/HANDOFF.md) (M0–M3 phased)
 - SNES: [../snes/HANDOFF.md](../snes/HANDOFF.md) (M0–M3 phased)
-- PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M2 done + verified in PCSX2;
-  M3 Theme/scheduler done, audsrv audio pending)
+- PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M3 done + verified in PCSX2;
+  Theme/scheduler/USB/audio all in — real-hardware function check pending)
 
 ## Sequencing & checkpoints
 

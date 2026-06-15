@@ -1,4 +1,4 @@
-# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (milestone 1)
+# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (M0–M2 done)
 
 Like the other bare-metal UnoDOS ports, this is **a real operating
 system**, not a game running on someone else's OS. The console powers on,
@@ -50,21 +50,31 @@ full cyan soft keyboard.
 - **NMI direct page** — the vblank handler runs on direct page `$0100` so
   its scratch never collides with the main loop's (`$0000`).
 
-**M2 — storage core done (games remaining).** The USV1 SRAM mini-FS
-([sram.inc](sram.inc)) plus Notepad + Files ([apps.inc](apps.inc)). 8 KB of
-LoROM cartridge SRAM at `$70:0000` (byte-addressable — none of the Genesis
-odd-lane `*2`); init/save/read/find/delete with heap compaction. Notepad is
-an append-style editor (type via soft keyboard / pad, F1 saves to SRAM);
-Files lists the directory, opens into Notepad, deletes. The desktop now has
-four icons (SysInfo/Clock/Notepad/Files).
+**M2 — DONE.** The USV1 SRAM mini-FS ([sram.inc](sram.inc)) + Notepad +
+Files ([apps.inc](apps.inc)), and all three shared games
+([games.inc](games.inc)). 8 KB of LoROM cartridge SRAM at `$70:0000`
+(byte-addressable — none of the Genesis odd-lane `*2`); init/save/read/
+find/delete with heap compaction. Notepad is an append-style editor (type
+via soft keyboard / pad, F1 saves to SRAM); Files lists the directory,
+opens into Notepad, deletes. The desktop now has seven icons.
 
 ![M2 storage](build/m2.png)
+![M2 Pac-Man](build/pacman.png)
 
-Verified in Mesen2: the scene seeds a 44-byte note, saves DEMO.TXT, and the
-Files window lists it at the right size — the save → directory → listing
-round-trip. (Deviation: append-style Notepad, not full caret nav yet.) The
-M2 games (Dostris/Pac-Man/OutLast) and all of M3 (SPC700 audio + Tracker/
-Music + Theme + scheduler) remain — see [HANDOFF.md](HANDOFF.md).
+- **Dostris** (proc 4) — the Genesis piece tables/scoring/physics, cell
+  rendering, game-mode pad input.
+- **OutLast** (proc 5) — a linear-perspective scrolling racer (divide-free
+  converging road; the full 1/z raster is the documented deviation — the
+  65816 has no fast software 16/16 divide).
+- **Pac-Man** (proc 6) — the full x86 ghost AI (Blinky/Pinky/Clyde,
+  scatter/chase schedule, frightened eat-chain) on a **cell-grid** of
+  shaped BG tiles (deviation: tile-grid actors, not pixel-smooth hardware
+  sprites). The 28×25 maze + a compact 1-row HUD fill the 30×28 window.
+
+Verified in Mesen2 (F12 framebuffer rig): the storage round-trip
+(seed → DEMO.TXT save → Files listing), and each game rendering and
+running. All deviations flagged in [HANDOFF.md](HANDOFF.md). Remaining:
+all of M3 (SPC700 audio + Tracker/Music + Theme + scheduler).
 
 ## The envelope (and its deviations)
 
