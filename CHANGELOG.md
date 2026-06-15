@@ -5,6 +5,15 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — Paint (mouse-driven Super Hi-Res colour canvas)] - 2026-06-15 (Build 417)
+
+`iigs/paint.i` (proc 6): a 36x18 fat-pixel canvas, an 8-colour ink palette,
+drag-to-paint (`paint_tick` paints the cell under the cursor while the button is
+held over the canvas), number keys 1-8 pick the ink, C clears
+(`iigs/shots/m3_paint.png`). `tests/paint.py` -> `PAINT PASS`. The held click
+that launches Paint is suppressed until released so it doesn't draw a stray cell.
+Remaining for full parity: Pac-Man, OutLast, Tracker, scheduler.
+
 ## [Apple IIGS port — Dostris (colour Tetris on Super Hi-Res)] - 2026-06-15 (Build 416)
 
 First colour game on the IIGS port: `iigs/dostris.i` (proc 5) — a 10x18 well of
