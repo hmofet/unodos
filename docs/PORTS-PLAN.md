@@ -123,7 +123,7 @@ rig. Real hardware: FloppyEmu supports SmartPort/800K for the IIGS.
 - M3: parity — full-color games/Paint/Theme (16-color palettes!), Ensoniq
   audio engine (Music/Tracker map to real wavetable voices), scheduler.
 
-## 3. SNES
+## 3. SNES (in progress)
 
 **Envelope.** 65C816 @ 3.58 MHz (same CPU as IIGS), 128 KB WRAM, tile/
 sprite PPU (Mode 1: two 16-color BG layers + sprites), SPC700 audio
@@ -137,8 +137,19 @@ genesis/kernel.asm, scheduler.i, and the USV1 FS are the direct templates,
 re-expressed in 65816 (toolchain already standing from the IIGS).
 
 **Milestones.**
-- M0: ca65 LoROM skeleton boots in Mesen2 (the BlastEm-role emulator —
-  Lua scripting + screenshots for the automated rig) — splash + joypad.
+- M0 (DONE): ca65 LoROM skeleton boots in Mesen2 to the "UnoDOS 3" tile
+  splash (shared 8x8 font → SNES 4bpp planar tiles + BGR555 palette via
+  snes/mkdata.py) and reacts to the joypad — auto-joypad read in the NMI,
+  rendered live as `PAD:xxxx`. The shadow+DMA architecture (HANDOFF SS2) is
+  in from line one: the main loop writes a WRAM tilemap shadow, the vblank
+  NMI DMAs it to VRAM and samples input. Build = cc65 (snes/build.sh →
+  LoROM .sfc, checksum-patched). Rig: Mesen2 forced to its **software
+  renderer** (PrintWindow can't grab the GPU surface on this headless
+  desktop — the Genesis "software-under-RDP" lesson) + PrintWindow capture
+  (snes/run_mesen.ps1); input verified by the **AUTOTEST** self-injecting
+  build (synthetic joypad in the NMI), the Genesis fallback pattern, since
+  Mesen's CLI does not autoload Lua. Verified in Mesen2 (PAD:0000
+  interactive, PAD:C0A0 AUTOTEST). See snes/README.md.
 - M1: tile desktop + WM + sprite cursor + pad-as-pointer + soft keyboard
   (Genesis input model verbatim) + SNES Mouse support + SysInfo/Clock.
 - M2: SRAM storage (USV1 port) + Files/Notepad; games (Dostris/Pac-Man/

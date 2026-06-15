@@ -84,7 +84,30 @@ PORT-SPEC §6 rule 2 still holds in spirit: game/app *logic* never
 runs in the ISR; the NMI only transfers prepared bytes and samples
 input.
 
-## 3. M0 — LoROM skeleton boots in Mesen2
+## 3. M0 — LoROM skeleton boots in Mesen2  ✅ DONE
+
+**Closed.** `build.sh` → `unodos.sfc` boots in Mesen2 to the "UnoDOS 3"
+splash and renders the live joypad as `PAD:xxxx`; the shadow+DMA
+architecture and the vblank NMI are in place; `mkdata.py` emits 4bpp
+planar tiles + a BGR555 palette from the shared font. See
+[README.md](README.md) for the full M0 writeup. Decisions that landed and
+bind later milestones:
+
+- **Rig = software renderer + PrintWindow + AUTOTEST.** Mesen's CLI does
+  NOT autoload Lua, and `PrintWindow` returns black for its GPU surface on
+  this headless desktop — so `setup_mesen.ps1` forces
+  `Video.UseSoftwareRenderer`, and input is checked by AUTOTEST
+  self-injection (the Genesis fallback), not Lua memory asserts. The
+  `"UDM1"` magic at `$7E:0100` is in place if Lua asserts become viable.
+- **ca65 `.define` foot-gun.** A parameterised `.define CELL(col,row)
+  (((row)*COLS+(col))*2)` mis-evaluates to `row*COLS + col*2` (the outer
+  grouping is dropped → half row stride). Use inline arithmetic inside a
+  real `.macro` instead (`row*64 + col*2`). This bit the M0 splash; don't
+  reintroduce it in the M1 cell renderer.
+- **Scroll registers are write-twice.** The bulk PPU-register clear leaves
+  the BG scroll latches nonzero; `Reset` zeroes `$210D/$210E` explicitly.
+
+The original pre-implementation plan is kept below for context.
 
 **Goal:** `build.sh` → `unodos.sfc` that boots in Mesen2 to a splash
 (tiles + palette, "UnoDOS 3" text from the shared font) and reacts to

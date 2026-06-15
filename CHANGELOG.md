@@ -5,6 +5,37 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [snes: milestone 0 — LoROM skeleton boots to the splash] - 2026-06-14
+
+The SNES port opens: a 65816 LoROM cartridge boots in Mesen2 to the
+"UnoDOS 3" tile splash and reacts to the joypad. This is the Genesis port's
+twin, re-expressed in 65816 (HANDOFF.md), and it stands up the shared cc65
+toolchain (ca65/ld65) and the foundation every later milestone hangs off.
+
+- **`kernel.asm`** — native-mode bring-up (`clc/xce`, `rep #$38`), forced-
+  blank PPU init, DMA upload of the tile blob + palette, Mode 1 / BG1, and
+  the **shadow + DMA** render architecture (HANDOFF §2): the main loop
+  writes a WRAM tilemap shadow at `$7E:1000`, the **vblank NMI** DMAs it to
+  VRAM, acks, waits out the auto-joypad read, and latches `JOY1` — no
+  app/WM logic in the ISR (PORT-SPEC §6 rule 2). The live controller word
+  renders as `PAD:xxxx`.
+- **`mkdata.py`** — the shared `kernel/font8x8.asm` → SNES **4bpp planar**
+  tiles (32 B/tile) + a **BGR555** palette (entries 0–4 = the UnoDOS UI
+  colours). 256×224 ⇒ **32×28 cells**, the documented narrower-by-8 metric
+  vs. Genesis's 40×28.
+- **`build.sh` / `lorom.cfg`** — cc65 build to a checksum-patched 32 KB
+  LoROM `.sfc`, with an `AUTOTEST` variant that self-injects a synthetic
+  joypad value in the NMI.
+- **Rig** (`setup_mesen.ps1` / `run_mesen.ps1`) — Mesen2 forced to its
+  software renderer (PrintWindow can't grab the GPU surface on this
+  headless desktop) + window capture; input verified by the AUTOTEST build
+  (the Genesis fallback), since Mesen's CLI doesn't autoload Lua.
+- **Verified in Mesen2:** `build/desktop.png` (interactive, `PAD:0000`) and
+  `build/autotest.png` (`PAD:C0A0`, `* AUTOTEST *`) — the read → shadow →
+  DMA → display pipeline end to end. Two traps recorded in HANDOFF.md for
+  M1: ca65's parameterised-`.define` half-stride evaluation, and the
+  write-twice BG scroll registers.
+
 ## [ps2: milestone 2 — memory-card storage on the EE] - 2026-06-14
 
 The EE File Manager now persists to the **PS2 memory card** via libmc, so
