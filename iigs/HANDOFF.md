@@ -1,6 +1,41 @@
 # Apple IIGS port — implementation handoff
 
-## M3 — IN PROGRESS (2026-06-15, build 415): the two signature features
+## FULL APP PARITY — SHIPPED (2026-06-15, build 420)
+
+All 11 UnoDOS apps + the cooperative scheduler are implemented and verified
+headlessly. App files (each `proc N`, dispatched from `kernel.s`): Files
+(`apps.i`, 7) + Notepad (2), Theme (`theme.i`, 3), Music (`snd.i`, 4) +
+Tracker (`tracker.i`, 8), Dostris (`dostris.i`, 5), Paint (`paint.i`, 6),
+Pac-Man (`pacman.i`, 9), OutLast (`outlast.i`, 10), plus SysInfo (0) + Clock
+(1) in `kernel.s`.  Nine regression suites (`tests/m1..m3`, `dostris`,
+`paint`, `tracker`, `pacman`, `outlast`, `scheduler`) + `cpu65816.py`
+self-test all green.
+
+**The app pattern (reuse for any new app):** an `.i` file with `proc_draw`
+(S2 = window entry offset) + optional `proc_key` (S0 = ascii) + optional
+`proc_tick` (per frame, scans the window table for its own `proc` and acts;
+only the topmost redraws but all advance — this IS the cooperative
+scheduler) + `proc_start` (called from the `win_create` hook on open).  Wire
+five spots in `kernel.s`: `.include`, `app_draw_content` dispatch,
+`app_key` dispatch, the main-loop `*_tick` call, the `win_create` start
+hook, and the `icon_tab/icon_names/icon_procs/app_def_tab/NICONS` data.
+Shared helpers: `fill_cells`/`draw_str`/`draw_char`/`fillcell` (1 cell of a
+colour), `fmt_dec`, `redraw_topmost`.  Game state lives in `VARS` above the
+FS dir-list (>$440) and in dedicated bank-0 buffers ($8000+, $9A00+).
+
+**Game traps banked:** a per-row/index helper that `sta`s into a caller's
+live temp corrupts it (Dostris `row_base_idx` → `DT1/DT2`; gave it private
+`DTR0/DTR1`).  `f:label,x` already adds the label base — index with the
+OFFSET only (Theme black-screen).  `STZ` has no long mode.  Many-case key
+dispatch overflows ±127 branches — `bne :+/jmp`.  Mouse apps (Paint) must
+suppress the held launch-click until release.
+
+**REMAINING (hardware-blocked tail, the cross-port norm):** real-hardware
+validation — by-hand in GSplus/KEGS/MAME (needs the user's IIGS ROM), then
+FloppyEmu in SmartPort 3.5″ mode — and audio-by-ear (DOC sound is not
+harness-reproducible; the control path is asserted via the DOC register log).
+
+## M3 — SHIPPED (2026-06-15, build 415): the two signature features
 
 The two most IIGS-distinctive capabilities are done and verified; the colour
 games + scheduler remain (below).  `tests/m3.py` → `M3 PASS`.
