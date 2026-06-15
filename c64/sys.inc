@@ -113,7 +113,7 @@ CK_W     equ 14
 CK_H     equ 5
 ICONW    equ 9
 ICONH    equ 2
-NICONS   equ 9        ; built icon slots (bumped as loadable apps are added)
+NICONS   equ 10       ; built icon slots (bumped as loadable apps are added)
 APP_CONTENT_Y  equ 8
 APP_CONTENT_H  equ 176
 APP_VIEW_ROWS  equ 22
