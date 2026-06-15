@@ -30,6 +30,7 @@ public class WinShot {
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c);
+ [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int hh,uint f);
  public struct RECT{public int Left,Top,Right,Bottom;}
 }
 "@
@@ -52,6 +53,9 @@ Start-Sleep -Seconds $Seconds
 $p = Get-Process Mesen | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 $h = $p.MainWindowHandle
 [WinShot]::ShowWindow($h, 9) | Out-Null
+# size the window so the FULL 256x224 frame is visible (the default window
+# crops the bottom rows at ~2x) - 540x560 fits the whole frame at ~2x.
+[WinShot]::SetWindowPos($h, [IntPtr]::Zero, 30, 10, 540, 560, 0x0040) | Out-Null
 [WinShot]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 700
 $r = New-Object WinShot+RECT
