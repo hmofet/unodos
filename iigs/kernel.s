@@ -169,7 +169,7 @@ ATTR_KEY  = 3
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS    = 6
+NICONS    = 7
 EVQ_SIZE  = 32
 EV_KEY    = 1
 EV_MOUSE  = 4
@@ -241,6 +241,7 @@ MainLoop:
         jsr handle_events
         jsr app_ticks
         jsr music_tick
+        jsr game_tick
         jsr draw_cursor
         bra MainLoop
 
@@ -801,6 +802,11 @@ win_create:
         jsr music_start        ; a new Music window begins playing
 @notmusic:
         lda S3
+        cmp #5
+        bne @notgame
+        jsr dostris_start      ; a new Dostris window starts a game
+@notgame:
+        lda S3
         cmp #2
         bne @nohook
         lda v_np_loaded
@@ -1124,6 +1130,8 @@ app_draw_content:
         beq @theme
         cmp #4
         beq @music
+        cmp #5
+        beq @dostris
         cmp #7
         beq @files
         rts
@@ -1133,6 +1141,8 @@ app_draw_content:
         jmp theme_draw
 @music:
         jmp music_draw
+@dostris:
+        jmp dostris_draw
 @files:
         jmp files_draw
 @sysinfo:
@@ -1893,6 +1903,8 @@ app_key:
         beq @notepad
         cmp #3
         beq @theme
+        cmp #5
+        beq @dostris
         cmp #7
         beq @files
         rts
@@ -1900,32 +1912,37 @@ app_key:
         jmp notepad_key
 @theme:
         jmp theme_key
+@dostris:
+        jmp dostris_key
 @files:
         jmp files_key
 
 ; ---- M2 storage (FAT12 over SmartPort) + Files/Notepad apps ----
 .include "fs.i"
 .include "apps.i"
-; ---- M3 colour theming + Ensoniq DOC audio ----
+; ---- M3 colour theming + Ensoniq DOC audio + colour games ----
 .include "theme.i"
 .include "snd.i"
+.include "dostris.i"
 
 ; ============================================================================
 .segment "RODATA"
 str_menutitle: .byte "UnoDOS 3", 0
-str_version:   .byte "UnoDOS 3.29  IIGS  Build 415", 0
+str_version:   .byte "UnoDOS 3.29  IIGS  Build 416", 0
 str_t_sysinfo: .byte "System Info", 0
 str_t_clock:   .byte "Clock", 0
 str_t_notepad: .byte "Notepad", 0
 str_t_files:   .byte "Files", 0
 str_t_theme:   .byte "Theme", 0
 str_t_music:   .byte "Music", 0
+str_t_dostris: .byte "Dostris", 0
 name_sysinfo:  .byte "Sys Info", 0
 name_clock:    .byte "Clock", 0
 name_notepad:  .byte "Notepad", 0
 name_files:    .byte "Files", 0
 name_theme:    .byte "Theme", 0
 name_music:    .byte "Music", 0
+name_dostris:  .byte "Dostris", 0
 str_si1:       .byte "UnoDOS 3 / Apple IIGS", 0
 str_si2:       .byte "CPU: 65C816 2.8 MHz", 0
 str_si3:       .byte "Video: Super Hi-Res", 0
@@ -1946,6 +1963,7 @@ icon_tab:
         .word 4, 8
         .word 16, 8
         .word 26, 8
+        .word 4, 12
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -1953,8 +1971,9 @@ icon_names:
         .word name_files
         .word name_theme
         .word name_music
+        .word name_dostris
 icon_procs:
-        .word 0, 1, 2, 7, 3, 4
+        .word 0, 1, 2, 7, 3, 4, 5
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app)
 app_def_tab:
@@ -1963,6 +1982,6 @@ app_def_tab:
         .word 2, 2, 36, 21, str_t_notepad     ; 2 Notepad
         .word 6, 5, 28, 12, str_t_theme       ; 3 Theme
         .word 10, 7, 22, 10, str_t_music      ; 4 Music
-        .word 0, 0, 0, 0, str_t_sysinfo       ; 5 (unused)
+        .word 7, 2, 26, 21, str_t_dostris     ; 5 Dostris
         .word 0, 0, 0, 0, str_t_sysinfo       ; 6 (unused)
         .word 4, 3, 22, 18, str_t_files       ; 7 Files

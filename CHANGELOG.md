@@ -5,6 +5,16 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — Dostris (colour Tetris on Super Hi-Res)] - 2026-06-15 (Build 416)
+
+First colour game on the IIGS port: `iigs/dostris.i` (proc 5) — a 10x18 well of
+8x8 SHR cells, 7 tetrominoes x 4 rotations, per-frame gravity (`game_tick`),
+keyboard controls (arrows + space hard-drop), line clear + scoring, all in the
+16-colour SHR game palette (`iigs/shots/m3_dostris.png`). `tests/dostris.py` ->
+`DOSTRIS PASS` (move/rotate/drop/gravity/line-clear). Bug banked: a board
+row-index helper aliased a caller's live temps (`DT1/DT2`) — gave it private
+scratch. Remaining for full parity: Pac-Man, OutLast, Paint, Tracker, scheduler.
+
 ## [snes: milestone 3 complete — SPC700 audio + Music/Theme/Tracker/Paint + scheduler] - 2026-06-15
 
 M3 closes the SNES port (M0–M3 done). The centrepiece is the SPC700 audio
