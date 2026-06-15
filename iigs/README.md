@@ -13,8 +13,8 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 | M0 | Toolchain, ProDOS block-boot, SHR splash, ROM-free harness | ✅ shipped |
 | M1 | SHR desktop + window manager + ADB mouse/keyboard + SysInfo/Clock | ✅ shipped |
 | M2 | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped |
-| **M3** | Theme + Ensoniq DOC (Music) + Dostris + Paint + Tracker | ✅ shipped (build 418) |
-| M3+ | Remaining colour games (Pac-Man/OutLast) + scheduler | in progress |
+| **M3** | Theme + DOC (Music/Tracker) + Dostris + Paint + Pac-Man | ✅ shipped (build 419) |
+| M3+ | OutLast (pseudo-3D racer) + scheduler | in progress |
 
 ![M1 Super Hi-Res desktop](shots/m1_desktop.png)
 ![M2 Files + Notepad](shots/m2_notepad.png)
@@ -22,6 +22,7 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 ![Dostris — colour Tetris on SHR](shots/m3_dostris.png)
 ![Paint — mouse-driven SHR canvas](shots/m3_paint.png)
 ![Tracker — 4-voice DOC sequencer](shots/m3_tracker.png)
+![Pac-Man — maze chase on SHR](shots/m3_pacman.png)
 
 ## What M3 delivers
 

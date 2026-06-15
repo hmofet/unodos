@@ -5,6 +5,16 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — Pac-Man (maze chase on Super Hi-Res)] - 2026-06-15 (Build 419)
+
+`iigs/pacman.i` (proc 9): a 13x11 maze of 8x8 cells, tile-stepped pac (arrow
+keys, queued turns) eating dots for score, two ghosts that greedily chase
+(non-reversing legal move minimising Manhattan distance, at half speed),
+collision = caught, all dots = win - classic blue maze / grey dots / black
+corridors (`iigs/shots/m3_pacman.png`). `tests/pacman.py` -> `PACMAN PASS`
+(launch / eat dots / ghost chase / collision). Remaining for full parity:
+OutLast (pseudo-3D racer) + scheduler.
+
 ## [Apple IIGS port — Tracker (4-voice DOC pattern sequencer)] - 2026-06-15 (Build 418)
 
 `iigs/tracker.i` (proc 8): a 16-step x 4-channel pattern grid edited with the
