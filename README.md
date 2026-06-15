@@ -6,7 +6,7 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 
 ## Overview
 
-UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 18 applications, fits on a single 1.44MB floppy disk.
+UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 19 applications, fits on a single 1.44MB floppy disk.
 
 ### Philosophy
 
@@ -29,12 +29,13 @@ assessment and plan):
 | [**Mac System 7**](mac/) | Mac II / LC / Quadra (68020+) | Toolbox-based: 8-bit Color QuickDraw (true-RGB game art), Event/File/Sound Managers | **Milestone 3** — cooperative multitasking, PC-compatible FAT12 floppies (data volumes), 11 apps incl. the three games, Tracker and Paint |
 | [**Mac System 1–6**](mac/) | Mac Plus / SE / Classic (68000) | Toolbox-based: classic 1-bit QuickDraw, authentic mono theme | **Milestone 3** — same set minus the color-only Theme app (Paint uses the classic dither patterns) |
 | [**MacPlus (standalone OS)**](macplus/) | Mac Plus / SE / Classic (68000) + Mac II class (640×480) | Bare-metal: own boot blocks (ROM bootstrap = BIOS, like the x86 port), own vectors/drivers, 1-bit dither renderer, software cursor; **machine-adaptive input** (Plus M0110/SCC quadrature vs. SE/II ROM-assisted ADB); ROM-free Unicorn harness | **Milestone 3** — full app parity (11 apps incl. the three games, Paint, Music, Tracker, Theme), FAT12 filesystem + disk-loaded apps, sound, cooperative scheduler, on top of the M1 desktop/window-manager (System 7 chrome); validated in Mini vMac (real Plus ROM) + Mini vMac II (real IIcx ROM) **and on a real Mac SE (FloppyEmu)** (see [macplus/README](macplus/README.md)) |
-| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
+| [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **boots and runs on real hardware** (desktop + apps via flashcart, validated 2026-06-12; the PS/2, tape-comparator and Sega CD Mode-1 adapter paths are not yet exercised on metal) |
 | [**Apple II**](apple2/) | Apple ][+ / //e (6502 @ 1MHz, 48–64KB), hi-res 280×192 (1-bit, 7px/byte) | Bare-metal: Disk II ROM autoload → own GCR 6-and-2 RWTS (read+write), hi-res software renderer, keyboard window manager, 1-bit `$C030` speaker | **Milestone 3** — desktop + 10 apps (Theme, Dostris, Pac-Man, Music, Tracker, Paint + SysInfo/Clock/Files/Notepad), mini-FS, blocking square-wave audio, OutLast (~4fps prototype) + cooperative-scheduler verdict; ROM-free py65 harness-verified, real-hw (AppleWin/FloppyEmu) pending |
 | [**Sony PS2**](ps2/) | PlayStation 2 (MIPS R5900 EE, 32MB, Graphics Synthesizer), FreeMcBoot ELF | Port the portable C core ([mac/unodos.c](mac/unodos.c)) over a software 640×448×32 framebuffer blitted to GS each vsync; DualShock 2 + USB keyboard/mouse | **Milestone 3** — the full desktop / WM / all 11 apps (+ FAT12 round-trip, 32-bit Theme) run via the Mac-compat shim over the software FB, verified on the host shim and the **emulated PS2 GS** in PCSX2 (`ps2/shots/m1_pcsx2_pacman.png`); **memory-card storage** persists Files/Notepad across boots via libmc (`ps2/shots/m2_pcsx2_*.png`); **USB keyboard + mouse** (embedded `usbd`/`ps2kbd`/`ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor) and **SPU2 audio via audsrv** (embedded `audsrv.irx`, square-wave synth) — boot verified at 60 fps in PCSX2 with all of it loaded (`ps2/shots/m3_audio_boot.png`), USB/audio function is hardware-only. Remaining: real hardware |
 | [**Sega Dreamcast**](dreamcast/) | Dreamcast (Hitachi SH-4, 16MB, PowerVR2), KallistiOS `.cdi` | Port the same portable C core over a software **640×480×32** framebuffer copied to the DC framebuffer (`vram_s`) as RGB565 each vblank; maple controller + keyboard + mouse, VMU storage, AICA square-wave audio | **At parity — emulator-verified.** The full desktop / WM / all 11 apps (+ 32-bit Theme), **VMU** save/load, and **AICA** audio all run via the Mac-compat shim at native 640×480. Built clean against KallistiOS (`sh-elf-gcc 15.2.0`, from source) into a real SH-4 ELF + bootable `.cdi` (mkdcdisc) and **verified booting at 60 fps in Flycast** — desktop, every app, and the VMU Notepad save→reload round-trip captured (`dreamcast/shots/dc_*.png`). Also host-shim-verified (`dreamcast/shots/m1_*.png`). Remaining: real hardware (incl. the audio ear-check) |
 | [**Super Nintendo**](snes/) | SNES / Super Famicom (65816 @ 3.58MHz, 128KB WRAM, PPU + SPC700), LoROM cartridge | Bare-metal cartridge: the Genesis port's twin in 65816 on a **shadow + DMA** model (main loop writes a WRAM tilemap shadow, the vblank NMI DMAs it to VRAM), pad-as-pointer + soft keyboard, battery-SRAM mini-FS, **SPC700 audio** (an uploaded driver built by a tiny Python SPC700 assembler) | **Milestones M0–M3 done — emulator-verified.** Tile desktop / WM / cursor / soft keyboard, USV1 SRAM + Notepad/Files, the three games (Dostris, OutLast, Pac-Man), and the M3 set — **Music**, **Theme** (palette shadow → NMI CGRAM flush), **Tracker** (4 DSP voices), **Paint** (a per-pixel **canvas of unique tiles**), and a cooperative **tick-model scheduler** (the 65816 bank-0 stack constraint rules out per-task stacks — a documented verdict). The SPC700 driver is verified by its mailbox ack ("Audio: SPC700 OK"). Every milestone is captured via Mesen2's F12 framebuffer (`snes/build/m*.png`). Deviations + backlog in [snes/HANDOFF.md](snes/HANDOFF.md). Remaining: real hardware + the audio ear-check |
 | [**Apple IIGS**](iigs/) | Apple IIGS (65C816 @ 2.8MHz, 256KB–8MB), Super Hi-Res 320×200 (16 of 4096 colors), Ensoniq 5503 DOC, ADB, SmartPort 3.5″ | Bare-metal: ProDOS/SmartPort block-boot → native 65816, a 4bpp **Super Hi-Res** software renderer (kernel state in fast bank 0, the bank-`$E1` framebuffer reached via 24-bit pointers + long stores so DBR never moves), ADB mouse + keyboard, save-under software cursor, FAT12 over the firmware block driver, **Ensoniq DOC** audio | **Full app parity — harness-verified.** SHR desktop / WM / cursor, FAT12 (Files/Notepad, persistent across reboot), all 11 apps incl. the three games, **4096-colour Theme** (one palette poke recolours the whole desktop), **Ensoniq DOC** Music + 4-voice **Tracker**, and a cooperative tick-scheduler. Built and driven entirely by a **from-scratch Python 65C816 core** + ROM-free harness (no IIGS ROM or emulator needed) — 9 regression suites green (`iigs/shots/m3_*.png`). Remaining: real hardware (GSplus/KEGS/MAME by hand, then FloppyEmu SmartPort) + the audio ear-check. See [iigs/HANDOFF.md](iigs/HANDOFF.md) |
+| [**Commodore 64**](c64/) | C64 (6510 @ ~1MHz, 64KB), VIC-II hi-res bitmap 320×200 (per-cell colour), SID, CIA | Bare-metal PRG (BASIC stub `SYS 2061` → takes over): banks the VIC into a **hi-res bitmap with per-cell colour from screen RAM** (so the desktop is genuinely 16-colour, not 1-bit), own renderer / window manager, **CIA #1 keyboard-matrix** scanner, **CIA Time-of-Day** clock (a real hardware clock), SID blip, **PAL/NTSC auto-detect** from the raster counter. No KERNAL calls (SEI + poll) | **Milestone 1 — harness-verified.** Colour desktop / menu bar / window manager (SysInfo + Clock, z-order + focus + blue focused titles), SysInfo (PAL/NTSC + machine/CPU/RAM/VIC/SID), live CIA-TOD Clock, keyboard icon nav, SID launch blip. Built with `dasm` into a `.prg` + bootable `.d64`; driven by a **ROM-free py65 harness** that models the VIC raster, CIA matrix + TOD and SID and renders the bitmap to colour PNG (`c64/shots/m1_*.png`). Remaining: M2 (1541 storage, Files/Notepad), M3 (app roster), real hardware (VICE → SD2IEC). See [c64/HANDOFF.md](c64/HANDOFF.md) |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
@@ -105,7 +106,7 @@ All drawing APIs, widgets, and applications work across all four modes. Higher r
 
 ### Kernel & System Calls
 
-The kernel provides 105 API functions accessed via `INT 0x80` with the function index in AH. The API covers:
+The kernel provides 106 API functions accessed via `INT 0x80` with the function index in AH. The API covers:
 
 - **Graphics** (APIs 0-6, 67-71, 80, 94, 102-104): Pixel, rectangle, filled rectangle, character, string, inverted string, clear area, colored drawing, horizontal/vertical/Bresenham lines, scroll area, 1-bit sprite drawing, scaled sprite (nearest-neighbor), screen blit (region copy), pixel read
 - **Fonts** (APIs 33, 48-49, 93): Three built-in bitmap fonts (4x6 small, 8x8 default, 8x14 large) with runtime selection, text width measurement, and font metrics query
@@ -248,7 +249,7 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 - **Screen blit** — copy a rectangular region of the screen (used for smooth scrolling, animations)
 - **Read pixel** — query the color value at any screen coordinate
 
-## Applications (18 in the tree)
+## Applications (19 in the tree)
 
 | App | Size | Description |
 |-----|------|-------------|
@@ -266,10 +267,11 @@ Three built-in bitmap fonts, selectable per-app at runtime:
 | **SysInfo** | 11KB | System information — displays UnoDOS version, current video mode and resolution, number of running tasks and open windows, real-time clock, available memory, boot drive info |
 | **Pac-Man** | 30KB | Arcade port (CGA) — full 28x25 maze, three-ghost AI with scatter/chase schedule, frightened mode with the 200-1600 chain |
 | **Pac-Man VGA** | 31KB | Same gameplay in VGA mode 13h |
-| **Tracker** | 2KB | Pattern music editor — 32 rows x 4 channels, the SONG.TRK format shared byte-for-byte with the Amiga/Mac/Genesis ports; PC-speaker playback voices the leftmost channel |
+| **Tracker** | 2KB | Pattern music editor — 32 rows x 4 channels, the SONG.TRK pattern layout shared byte-for-byte with the Amiga/Mac/Genesis ports (the on-disk filename is `SONG.TRK` here, `SONG.UNO` on Amiga/Apple II); PC-speaker playback voices the leftmost channel |
 | **Paint** | 31KB | MacPaint-style bitmap editor — pencil/brush/eraser/line/rect/oval/fill/spray, drag drawing, color picker covering the active mode's full palette (4 CGA / 256 VGA) |
 | **Mouse Test** | 8KB | Mouse diagnostic — shows real-time cursor position and button states, useful for verifying PS/2/USB mouse support on hardware (not on the default floppy) |
 | **Hello** | 3KB | Minimal windowed app — creates a window, draws "Hello, UnoDOS!", waits for ESC. Serves as a template for new app development |
+| **Runner3D** | 2KB | Native 3D demo ("UnoDOS Runner") — draws a solid 3D corridor through the kernel's `INT 0x80` graphics API in painter's order (no FPU, no framebuffer poking); the x86 counterpart to the [Uno3D](docs/UNO3D.md) library's PS2/Dreamcast hardware backends |
 
 ## Target Hardware
 
@@ -384,7 +386,7 @@ sudo dd if=build/unodos-hd.img of=/dev/sdX bs=512
 
 ```
 unodos/
-├── apps/                    # Applications (16 NASM source files)
+├── apps/                    # Applications (19 NASM source files)
 │   ├── launcher.asm         # Desktop launcher / shell
 │   ├── notepad.asm          # Text editor
 │   ├── browser.asm          # File manager
@@ -392,12 +394,17 @@ unodos/
 │   ├── tetrisv.asm          # Dostris VGA
 │   ├── outlast.asm          # OutLast driving game (CGA)
 │   ├── outlastv.asm         # OutLast VGA
+│   ├── pacman.asm           # Pac-Man (CGA)
+│   ├── pacmanv.asm          # Pac-Man VGA
 │   ├── clock.asm            # Clock
 │   ├── music.asm            # Music player
+│   ├── tracker.asm          # Pattern music editor
+│   ├── paint.asm            # MacPaint-style bitmap editor
 │   ├── settings.asm         # System settings
 │   ├── mkboot.asm           # Boot floppy creator
 │   ├── sysinfo.asm          # System info
 │   ├── mouse_test.asm       # Mouse diagnostic
+│   ├── runner3d.asm         # Native 3D demo (INT 0x80 graphics)
 │   └── hello.asm            # Hello World
 ├── boot/                    # Boot chain
 │   ├── boot.asm             # Floppy boot sector (512 bytes)
@@ -414,7 +421,7 @@ unodos/
 ├── docs/                    # Technical documentation
 ├── tools/                   # Build and deployment scripts
 ├── Makefile
-├── CHANGELOG.md             # Version history (397 builds)
+├── CHANGELOG.md             # Version history (420 builds)
 ├── CONTRIBUTING.md          # Contribution guidelines
 ├── LICENSE                  # CC BY-NC 4.0
 └── TODO.md                  # Roadmap
@@ -429,7 +436,7 @@ unodos/
 - **[Memory Layout](docs/MEMORY_LAYOUT.md)** — Physical memory map, kernel layout, segment pool architecture
 - **[Boot Debug Messages](docs/boot-debug-messages.md)** — Diagnostic output reference for hardware troubleshooting
 - **[Bootloader Architecture](docs/bootloader-architecture.md)** — Floppy and HD boot chain details
-- **[Changelog](CHANGELOG.md)** — Full version history spanning 397 builds
+- **[Changelog](CHANGELOG.md)** — Full version history spanning 420 builds
 
 ## Writing Your Own App
 
@@ -520,12 +527,12 @@ Assemble with `nasm -f bin -o MYAPP.BIN app.asm`, place in the FAT filesystem, a
 
 ```
 ┌──────────────────────────────────────────────┐
-│               Applications (16)              │
+│              Applications (19)               │
 │   5 concurrent user apps + launcher shell    │
 │   Each in its own 64KB segment (ORG 0x0000)  │
 ├──────────────────────────────────────────────┤
 │           INT 0x80 System Calls              │
-│   105 API functions, bitmap-based dispatch   │
+│   106 API functions, bitmap-based dispatch   │
 │   Auto-translate coords, cursor protection   │
 ├──────────────────────────────────────────────┤
 │                  Kernel                      │
@@ -561,9 +568,9 @@ Assemble with `nasm -f bin -o MYAPP.BIN app.asm`, place in the FAT filesystem, a
 
 ## Version History
 
-See [CHANGELOG.md](CHANGELOG.md) for the full history spanning 397 builds.
+See [CHANGELOG.md](CHANGELOG.md) for the full history spanning 420 builds.
 
-Current version: **v3.23.0** (Build 397)
+Current version: **v3.31.0** (Build 420)
 
 ## License
 

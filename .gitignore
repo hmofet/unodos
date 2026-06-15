@@ -45,3 +45,7 @@ iigs/__pycache__/
 
 # FAT16 HD image (32MB, regeneratable via make hd-image)
 build/unodos-hd.img
+
+# C64 port: build artifacts (regeneratable; c64/shots/ are committed evidence)
+c64/build/
+c64/__pycache__/

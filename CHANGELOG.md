@@ -5,6 +5,35 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Commodore 64 port — milestone 1] - 2026-06-15
+
+A new bare-metal target joins the family: the **Commodore 64** (6510), in
+`c64/`. Unlike the 1-bit Apple II port it leans into the C64's actual hardware.
+
+- **Colour hi-res desktop.** Banks the VIC-II into a 320×200 hi-res bitmap
+  (VIC bank 1, bitmap `$6000`, screen RAM `$4000`) with **two colours per 8×8
+  cell from screen RAM** — a genuinely 16-colour desktop, menu bar, windows
+  (blue focused / grey unfocused title bars) and blue-highlight icons, not a
+  monochrome one. The shared 8×8 font drops in byte-for-byte (bit-7-left matches
+  the C64 bitmap).
+- **A real hardware clock.** The Clock app reads the **CIA #1 Time-of-Day**
+  registers (BCD) with the chip's hours-latch / tenths-release behaviour — an
+  actual clock, not the Apple II's calibrated soft tick.
+- **PAL/NTSC auto-detection** from the raster counter (`$D012` + `$D011` bit 8),
+  reporting the right CPU clock and VIC-II part (6569 vs 6567).
+- **Window manager + keyboard + SID.** Z-order WM (SysInfo + Clock, open/raise/
+  close/focus); a **CIA #1 keyboard-matrix** scanner (CRSR nav with SHIFT,
+  RETURN, RUN/STOP) with edge detection; a SID launch blip. No KERNAL calls
+  (SEI + poll), so it doesn't depend on a KERNAL revision.
+- **Toolchain + harness.** `dasm` assembles `kernel.s` (`org $0801`); `mkprg.py`
+  emits a `.prg` and a real 1541 `.d64` (BAM + directory + interleaved chain).
+  A **ROM-free py65 harness** models the VIC raster, CIA matrix + TOD and SID,
+  and renders the bitmap + per-cell colour to RGB PNG — `tests/m1.script`
+  (+ `m1_ntsc.script`) verify boot, PAL/NTSC, WM, the live clock and the blip
+  (`c64/shots/m1_*.png`). Remaining: M2 (1541 storage, Files/Notepad), M3 (app
+  roster on the three SID voices), real hardware (VICE → SD2IEC). See
+  [c64/HANDOFF.md](c64/HANDOFF.md).
+
 ## [Uno3D — portable 3D library + a 3D game across platforms] - 2026-06-15
 
 UnoDOS gains hardware-accelerated 3D and a write-once 3D library.

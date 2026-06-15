@@ -1,0 +1,14 @@
+# UnoDOS/C64 milestone 1 smoke test (AUTOTEST build: SysInfo + Clock open)
+wait 60
+shot m1_boot          # desktop, menu bar, SysInfo + Clock windows, 2 icons
+assert pal            # kernel auto-detected PAL from the raster counter
+key left              # move icon selection (Clock -> SysInfo)
+shot m1_select
+key return            # raise/open the selected window (SysInfo), with a beep
+assert beep>0
+shot m1_launch
+key esc               # RUN/STOP closes the topmost window
+shot m1_close
+wait 90               # let the CIA Time-of-Day clock advance
+shot m1_clock
+quit

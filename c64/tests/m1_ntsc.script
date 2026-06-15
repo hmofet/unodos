@@ -1,0 +1,5 @@
+# UnoDOS/C64 milestone 1 NTSC detection check
+wait 60
+assert ntsc
+shot m1_ntsc
+quit
