@@ -5,6 +5,27 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — FULL APP PARITY: OutLast + cooperative scheduler] - 2026-06-15 (Build 420)
+
+The IIGS port reaches **complete app parity** - all 11 UnoDOS apps plus the
+cooperative scheduler, every one implemented and verified headlessly.
+
+- **OutLast (`iigs/outlast.i`, proc 10):** a pseudo-3D road racer - a
+  perspective road raster (per-row half-width bands narrowing to the horizon)
+  with an animated dashed centre line, a swaying curve, a steerable car, and a
+  distance score, in 16-colour SHR (`iigs/shots/m3_outlast.png`).
+  `tests/outlast.py` -> `OUTLAST PASS`.
+- **Scheduler (verified):** UnoDOS/IIGS multitasks cooperatively - every app's
+  per-frame tick scans the window table for its own window and advances it, so
+  multiple app windows run concurrently each frame (the "cooperative-by-ticks"
+  model the Apple II / SNES ports concluded on). `tests/scheduler.py` opens
+  Dostris + Pac-Man together and confirms both advance -> `SCHEDULER PASS`.
+- **The full app set:** SysInfo, Clock, Files, Notepad, Theme, Music, Tracker,
+  Dostris, Pac-Man, OutLast, Paint. Nine headless regression suites + the CPU
+  self-test all green. Remaining: real-hardware validation (GSplus/KEGS/MAME by
+  hand, then FloppyEmu SmartPort) and audio-by-ear (DOC sound isn't harness-
+  reproducible) - the cross-port hardware-blocked tail.
+
 ## [Apple IIGS port — Pac-Man (maze chase on Super Hi-Res)] - 2026-06-15 (Build 419)
 
 `iigs/pacman.i` (proc 9): a 13x11 maze of 8x8 cells, tile-stepped pac (arrow

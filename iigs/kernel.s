@@ -169,7 +169,7 @@ ATTR_KEY  = 3
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS    = 10
+NICONS    = 11
 EVQ_SIZE  = 32
 EV_KEY    = 1
 EV_MOUSE  = 4
@@ -245,6 +245,7 @@ MainLoop:
         jsr paint_tick
         jsr tracker_tick
         jsr pacman_tick
+        jsr outlast_tick
         jsr draw_cursor
         bra MainLoop
 
@@ -825,6 +826,11 @@ win_create:
         jsr pacman_start       ; a new Pac-Man window starts a fresh maze
 @notpm:
         lda S3
+        cmp #10
+        bne @notol
+        jsr outlast_start      ; a new OutLast window starts a fresh drive
+@notol:
+        lda S3
         cmp #2
         bne @nohook
         lda v_np_loaded
@@ -1156,6 +1162,8 @@ app_draw_content:
         beq @tracker
         cmp #9
         beq @pacman
+        cmp #10
+        beq @outlast
         cmp #7
         beq @files
         rts
@@ -1173,6 +1181,8 @@ app_draw_content:
         jmp tracker_draw
 @pacman:
         jmp pacman_draw
+@outlast:
+        jmp outlast_draw
 @files:
         jmp files_draw
 @sysinfo:
@@ -1941,6 +1951,8 @@ app_key:
         beq @tracker
         cmp #9
         beq @pacman
+        cmp #10
+        beq @outlast
         cmp #7
         beq @files
         rts
@@ -1956,6 +1968,8 @@ app_key:
         jmp tracker_key
 @pacman:
         jmp pacman_key
+@outlast:
+        jmp outlast_key
 @files:
         jmp files_key
 
@@ -1969,11 +1983,12 @@ app_key:
 .include "paint.i"
 .include "tracker.i"
 .include "pacman.i"
+.include "outlast.i"
 
 ; ============================================================================
 .segment "RODATA"
 str_menutitle: .byte "UnoDOS 3", 0
-str_version:   .byte "UnoDOS 3.29  IIGS  Build 419", 0
+str_version:   .byte "UnoDOS 3.29  IIGS  Build 420", 0
 str_t_sysinfo: .byte "System Info", 0
 str_t_clock:   .byte "Clock", 0
 str_t_notepad: .byte "Notepad", 0
@@ -1984,6 +1999,7 @@ str_t_dostris: .byte "Dostris", 0
 str_t_paint:   .byte "Paint", 0
 str_t_tracker: .byte "Tracker", 0
 str_t_pacman:  .byte "Pac-Man", 0
+str_t_outlast: .byte "OutLast", 0
 name_sysinfo:  .byte "Sys Info", 0
 name_clock:    .byte "Clock", 0
 name_notepad:  .byte "Notepad", 0
@@ -1994,6 +2010,7 @@ name_dostris:  .byte "Dostris", 0
 name_paint:    .byte "Paint", 0
 name_tracker:  .byte "Tracker", 0
 name_pacman:   .byte "Pac-Man", 0
+name_outlast:  .byte "OutLast", 0
 str_si1:       .byte "UnoDOS 3 / Apple IIGS", 0
 str_si2:       .byte "CPU: 65C816 2.8 MHz", 0
 str_si3:       .byte "Video: Super Hi-Res", 0
@@ -2018,6 +2035,7 @@ icon_tab:
         .word 16, 12
         .word 26, 12
         .word 4, 16
+        .word 16, 16
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2029,8 +2047,9 @@ icon_names:
         .word name_paint
         .word name_tracker
         .word name_pacman
+        .word name_outlast
 icon_procs:
-        .word 0, 1, 2, 7, 3, 4, 5, 6, 8, 9
+        .word 0, 1, 2, 7, 3, 4, 5, 6, 8, 9, 10
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app)
 app_def_tab:
@@ -2044,3 +2063,4 @@ app_def_tab:
         .word 4, 3, 22, 18, str_t_files       ; 7 Files
         .word 8, 2, 24, 21, str_t_tracker     ; 8 Tracker
         .word 6, 3, 26, 17, str_t_pacman      ; 9 Pac-Man
+        .word 2, 2, 38, 22, str_t_outlast     ; 10 OutLast

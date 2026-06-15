@@ -13,8 +13,11 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 | M0 | Toolchain, ProDOS block-boot, SHR splash, ROM-free harness | ✅ shipped |
 | M1 | SHR desktop + window manager + ADB mouse/keyboard + SysInfo/Clock | ✅ shipped |
 | M2 | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped |
-| **M3** | Theme + DOC (Music/Tracker) + Dostris + Paint + Pac-Man | ✅ shipped (build 419) |
-| M3+ | OutLast (pseudo-3D racer) + scheduler | in progress |
+| **M3** | Full app parity: Theme + DOC (Music/Tracker) + Dostris/Pac-Man/OutLast/Paint + scheduler | ✅ shipped (build 420) |
+
+**All 11 apps and the cooperative scheduler are implemented and verified** —
+SysInfo, Clock, Files, Notepad, Theme, Music, Tracker, Dostris, Pac-Man,
+OutLast, and Paint.
 
 ![M1 Super Hi-Res desktop](shots/m1_desktop.png)
 ![M2 Files + Notepad](shots/m2_notepad.png)
@@ -23,6 +26,7 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 ![Paint — mouse-driven SHR canvas](shots/m3_paint.png)
 ![Tracker — 4-voice DOC sequencer](shots/m3_tracker.png)
 ![Pac-Man — maze chase on SHR](shots/m3_pacman.png)
+![OutLast — pseudo-3D road racer](shots/m3_outlast.png)
 
 ## What M3 delivers
 
@@ -83,7 +87,13 @@ packs the 800 KB ProDOS image, and renders the desktop through the harness.
 python cpu65816.py        # CPU core self-test  -> SELFTEST OK
 python tests/m1.py        # M1 regression       -> M1 PASS
 python tests/m2.py        # M2 regression       -> M2 PASS
-python tests/m3.py        # M3 regression       -> M3 PASS
+python tests/m3.py        # Theme + Ensoniq DOC -> M3 PASS
+python tests/dostris.py   # Dostris             -> DOSTRIS PASS
+python tests/paint.py     # Paint               -> PAINT PASS
+python tests/tracker.py   # Tracker             -> TRACKER PASS
+python tests/pacman.py    # Pac-Man             -> PACMAN PASS
+python tests/outlast.py   # OutLast             -> OUTLAST PASS
+python tests/scheduler.py # cooperative sched   -> SCHEDULER PASS
 ```
 
 ## Running it for real
@@ -102,13 +112,14 @@ python tests/m3.py        # M3 regression       -> M3 PASS
 | `kernel.s` | the kernel — SHR desktop, window manager, input, apps |
 | `fs.i` | FAT12 storage over SmartPort (`blk_io` + the FAT12 core) |
 | `apps.i` | the Files + Notepad apps |
-| `theme.i` | the Theme app + the 8 palette presets |
-| `snd.i` | the Ensoniq DOC sound engine + the Music app |
+| `theme.i` / `snd.i` | Theme presets / Ensoniq DOC engine + Music |
+| `dostris.i` / `pacman.i` / `outlast.i` | the colour games |
+| `paint.i` / `tracker.i` | Paint canvas / 4-voice Tracker |
 | `mkdata.py` → `gen_data.inc` | shared 8×8 font + SHR UI palette |
 | `mkdsk.py` / `mkfs.py` | pack the 800 KB ProDOS image / write its FAT12 volume |
 | `boot.cfg` / `kernel.cfg` | ld65 link configs |
 | `cpu65816.py` | the 65C816 interpreter (reusable; self-testing) |
 | `harness.py` | ROM-free firmware shim + script runner + SHR→PNG renderer |
-| `tests/m1.py`, `tests/m2.py`, `tests/m3.py` | headless regressions |
+| `tests/*.py` | headless regressions (one per milestone + app) |
 
 See `HANDOFF.md` for the verified boot contract and the M1–M3 plan.
