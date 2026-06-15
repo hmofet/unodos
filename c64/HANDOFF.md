@@ -1,3 +1,36 @@
+# UnoDOS/C64 — handoff (M1–M3, full parity)
+
+> **Status: M1–M3 done, full 11-app parity, harness-verified.** This file's
+> body below documents M1; the M2/M3 additions are summarised here.
+>
+> **M2** — full keyboard (`keymap` table in kernel.s), `app_mode` dispatch, the
+> USV1 byte-heap mini-FS ([fs.i](fs.i)) in a harness-persisted RAM region
+> (`$C000-$CFFF`; the SRAM model — a 1541/IEC driver is the real-hw follow-up),
+> and Files ([files.i](files.i)) + Notepad ([notepad.i](notepad.i)).
+>
+> **M3** — Theme/Dostris/Music inline ([theme.i](theme.i)/[dostris.i](dostris.i)/
+> [music.i](music.i)); Pac-Man/Tracker/Paint/OutLast as **disk-loaded apps**
+> ([pacman.s](pacman.s)/[tracker.s](tracker.s)/[paint.s](paint.s)/
+> [outlast.s](outlast.s)).
+>
+> **Disk-app loader** (the key M3 architecture): apps are separate binaries at
+> `$5000` linked to the kernel only by `build/kernel_api.inc` (addresses
+> `mkapi.py` pulls from the dasm symbol dump). App ABI in [sys.inc](sys.inc):
+> first three words are JMPs (init/key/tick); `launch_app` writes the app id to
+> `LOAD_PORT` (`$DE00`, harness-backed; IEC on metal) → loader copies the app to
+> `$5000` → `app_mode = 10` → `jsr $5000`. `handle_key`/`game_tick` dispatch
+> `app_mode 10` to the app's key/tick entries; the app calls `return_to_desktop`
+> to exit. The app's persistent state lives in its loaded image (reset on each
+> launch); scratch uses `zpApp0..F` ($67-$76), which the kernel API never
+> touches. `blit_cell` (draw_char refactored to fall into it) blits arbitrary
+> 8-byte sprites — apps point `zpFontPtr` at a sprite. **Watch:** any value held
+> across a `fill_rows`/`color_fill` must avoid X (their column counter) — the
+> same trap as M1 (it bit the Files listing loop, the Music staff loop, the
+> Dostris highlight). **Scheduler verdict:** kept cooperative — one app resident
+> at `$5000`, nothing to schedule (see README).
+>
+> ---
+
 # UnoDOS/C64 — milestone 1 handoff
 
 This is the working note for the next person (or the next session) on the C64

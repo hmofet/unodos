@@ -5,6 +5,38 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Commodore 64 port — M2 + M3: full 11-app parity] - 2026-06-15
+
+The C64 port reaches **full app parity** with the Apple II roster, and gains the
+disk-loaded-app architecture the mature ports use.
+
+- **M2 — storage + text apps.** Full CIA keyboard-matrix decode (a `keymap`
+  table for letters/digits/symbols + DEL/F1/RUN-STOP), an `app_mode` dispatch,
+  a **USV1 byte-heap mini-FS** (`fs.i`) in a harness-persisted RAM region, and
+  **Files + Notepad** — edits survive a power cycle (`tests/m2_persist.script`).
+  The C64 has no NVRAM, so the FS region is persisted like the SRAM-backed
+  Genesis/SNES ports; a 1541/IEC driver is the real-hardware follow-up.
+- **M3 — the full roster.** **Theme** (re-tints the whole desktop — trivial on
+  the per-cell-colour VIC), **Dostris** (colour tetrominoes), and **Music** (Ode
+  to Joy on the SID — a real synth, no 1-bit busy-loop) ship inline; **Pac-Man**,
+  **Tracker** (3 SID voices), **Paint** (16-colour canvas) and **OutLast**
+  (colour-band pseudo-3D racer) ship as **disk-loaded apps**.
+- **Disk-loaded apps.** Larger apps are separate binaries assembled at `$5000`,
+  loaded on demand and linked to the kernel only by the API addresses
+  `mkapi.py` extracts from the dasm symbol dump into `build/kernel_api.inc`.
+  An app's first three words are JMPs (init/key/tick); launching writes the app
+  id to `$DE00` (harness/IEC-backed loader) → the loader copies the app to
+  `$5000` → the kernel runs it. This keeps the kernel lean and is authentic to
+  the C64 (apps load from the 1541).
+- **Scheduler verdict.** Like every 6502-family port, the one-stack-page 6510
+  keeps the cooperative poll-and-dispatch loop; the one-app-resident-at-`$5000`
+  model means there is nothing to schedule concurrently (the Apple II port's
+  prototype already proved stack-partitioning is *feasible* if ever needed).
+
+11 apps total — SysInfo, Clock, Files, Notepad, Theme, Dostris, Music, Pac-Man,
+Tracker, Paint, OutLast — each with a `tests/*.script` regression
+(`c64/shots/*.png`). See [c64/HANDOFF.md](c64/HANDOFF.md).
+
 ## [Commodore 64 port — milestone 1] - 2026-06-15
 
 A new bare-metal target joins the family: the **Commodore 64** (6510), in

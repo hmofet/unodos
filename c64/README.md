@@ -1,4 +1,4 @@
-# UnoDOS/C64 — standalone OS for the Commodore 64 (milestone 1)
+# UnoDOS/C64 — standalone OS for the Commodore 64 (milestones 1–3)
 
 Like the other bare-metal UnoDOS ports, this is **a real operating system**,
 not a BASIC program that paints a screen. A C64 powers on into BASIC; you
@@ -185,15 +185,75 @@ types into it and saves (asserting `count=2` and a SID blip);
 `--storage` file and confirms the edited size + content survived
 (`shots/m2_*.png`).
 
+## M3: the full app roster + disk-loaded apps
+
+M3 fills the desktop out to **11 apps** — parity with the Apple II roster — and
+adds the architecture the mature UnoDOS ports use for their larger apps:
+**loading them from disk** rather than baking them into the kernel.
+
+### Inline apps (in the kernel)
+
+| App | What | C64 character |
+|---|---|---|
+| **Theme** ([theme.i](theme.i)) | desktop colour-scheme picker, 6 presets with live swatches | a preset is a (desktop colour, VIC border) pair; applying it re-tints the whole dithered desktop — trivial and striking on the per-cell-colour VIC |
+| **Dostris** ([dostris.i](dostris.i)) | 10×20 falling-block game, well + HUD, 7 tetrominoes × 4 rotations, soft-drop gravity, line clears, levels | the board stores piece+1 per cell so each block draws in its **tetromino colour** (the Apple II port is black/white) |
+| **Music** ([music.i](music.i)) | plays Ode to Joy on the SID, a 5-line staff shows the phrase, current note highlighted | the **SID is a real synth** — set a voice's frequency + gate and it sounds while the OS keeps running (no busy-loop freeze like the 1-bit speaker) |
+
+### Disk-loaded apps
+
+The larger apps are **separate binaries** assembled at `$5000`
+([pacman.s](pacman.s), [tracker.s](tracker.s), [paint.s](paint.s),
+[outlast.s](outlast.s)), loaded on demand and linked to the kernel only by the
+API addresses in `build/kernel_api.inc`. This keeps the kernel lean and is
+authentic to the C64 (programs load from the 1541).
+
+- **The app ABI** ([sys.inc](sys.inc)): an app's first three words are JMPs —
+  `init` / `key` / `tick`. Launching writes the app id to `LOAD_PORT` (`$DE00`);
+  the loader copies the app's bytes to `APP_BASE` (`$5000`); the kernel sets
+  `app_mode = 10` and `jsr`s the init entry. While active, `handle_key` jumps to
+  the app's key entry (key in `zpTmp`) and `game_tick` to its tick entry. The
+  app calls `return_to_desktop` to exit.
+- **The kernel API** ([mkapi.py](mkapi.py)): the build dumps the kernel's
+  symbols (`dasm -s`), and `mkapi.py` extracts the entry points an app may call
+  (`draw_string`, `fill_rows`, `color_fill`, `blit_cell`, `app_clear`,
+  `draw_dec16`, `sid_click`, the `fs_*` family, `return_to_desktop`) into
+  `build/kernel_api.inc`. So an app `jsr draw_string` reaches the kernel by
+  address — the app is linked against the kernel at build time.
+- **The loader** is harness-backed here (a write to `$DE00`, the C64 I/O-1
+  expansion slot, copies `build/app<id>.bin` to `$5000`). On real hardware this
+  maps to an **IEC/1541 LOAD** — the same real-hardware follow-up as the M2 FS.
+
+| App | What | C64 character |
+|---|---|---|
+| **Pac-Man** ([pacman.s](pacman.s)) | 13×13 pillar maze, dots + power pellets, two chasing ghosts, eat-all-to-win / ghost-on-tile = game over | colour maze (blue walls, white dots, **yellow Pac-Man, red + pink ghosts**); greedy-Manhattan chase — the documented simplification of the arcade scatter/frightened AI |
+| **Tracker** ([tracker.s](tracker.s)) | 16-row × 3-channel pattern sequencer, demo pattern, CRSR + letter-key note entry | plays all **three SID voices at once** (the Apple II/x86 Trackers voice one channel on the 1-bit speaker) |
+| **Paint** ([paint.s](paint.s)) | 32×16 cell canvas, boxed cursor, +/- ink, fill, S/L save/load `PAINT.UNO` | true **16-colour** paint — the canvas byte *is* the cell colour (the Apple II Paint is 1-bit dither) |
+| **OutLast** ([outlast.s](outlast.s)) | pseudo-3D road racer — 20 perspective bands, scrolling curve, steerable car, off-road = crash | drawn as **colour cell bands** (grass / road / striped edges), two `color_fill`s per band — far cheaper than the Apple II's ~4fps per-pixel raster, so it runs smoothly |
+
+The 10-icon desktop is a 4×3 grid. Each M3 app has its own regression
+(`tests/m3_*.script`); the two sound apps assert the SID was written.
+
+### Scheduler verdict
+
+Like every 6502-family port, the 6510 has **one 256-byte hardware stack**
+(`$0100`), so a preemptive multitasker would need stack partitioning. The
+shipping kernel keeps the **cooperative poll-and-dispatch** main loop, and the
+disk-loaded-app model reinforces it: exactly **one app is resident at `$5000`
+at a time**, so there is nothing to schedule concurrently. As on the Apple II,
+this is the deliberate verdict, not a missing feature — the Apple II port's
+stack-partitioning prototype already proved option 1 is *feasible*; the C64,
+with the same one-app-at-a-time model, has even less reason to adopt it.
+
 ## Milestones
 
 - **M1:** boot chain (BASIC stub → VIC bitmap takeover), colour hi-res desktop +
   menu bar, keyboard-driven window manager (SysInfo + Clock), PAL/NTSC
   detection, CIA Time-of-Day clock, CIA keyboard-matrix scanner, SID blip,
   shared 8×8 font, ROM-free py65 harness + `tests/m1.script`.
-- **M2 (this):** full keyboard decode, `app_mode` framework, the USV1 byte-heap
-  mini-FS, Files + Notepad, persistence across a power cycle. See
-  [HANDOFF.md](HANDOFF.md).
-- **M3 (planned):** the scaled app roster (Theme — trivially colourful on the
-  VIC, Dostris, Pac-Man, Music + Tracker on the three SID voices, Paint) and
-  the OutLast / scheduler feasibility verdicts, as on the other ports.
+- **M2:** full keyboard decode, `app_mode` framework, the USV1 byte-heap
+  mini-FS, Files + Notepad, persistence across a power cycle.
+- **M3 (this):** the full 11-app roster — Theme / Dostris / Music inline, and
+  Pac-Man / Tracker / Paint / OutLast as **disk-loaded apps** through a stable
+  kernel API — plus the scheduler verdict. See [HANDOFF.md](HANDOFF.md).
+- **Remaining (real hardware):** VICE first, then the 1541/IEC drivers that back
+  the M2 FS and the M3 app loader on metal, then SD2IEC.
