@@ -26,25 +26,22 @@ or page the icon grid. Workaround shipped: MOUSE.BIN and MKBOOT.BIN
 (diagnostic/utility) left off the default image so Tracker + Paint fit
 in the 15-app envelope; both still build via 'make apps'.
 
-### Remaining 8088 follow-ups
-- [~] Real-hardware validation on an 8088 — **M0/M1/M2 DONE on a cycle-accurate
-      emulator** (MartyPC + open GLaBIOS, ROM-free). The primary
-      `build/unodos-144.img` boots end-to-end on an emulated IBM PC/XT
-      (8088 @ 4.77MHz, CGA): boot chain → kernel load → CGA desktop →
-      keyboard-launched SysInfo (WM + scheduler running). See
-      docs/PORT-8088.md + tools/xt/. **Physical-XT pass still pending.**
-- [x] Serial mouse support (Microsoft mouse on COM1, IRQ4) — install_serial_mouse
-      + int_0C_handler; verified in MartyPC (cursor tracks both axes, double-click
-      launches Settings). Build 409. (Was the old "Serial mouse support" item.)
-- [x] RAM-floor reality: corrected the false "128KB min" — 128K boots the kernel
-      but not the launcher (0x2000=128-192K); 256K=desktop+1 app, 640K=full.
-      Fixed README.md + docs/FEATURES.md.
-- [ ] M1 finish: sweep the CGA app set (Files/Notepad/Paint/Dostris/Pac-Man) +
-      keyboard-driven WM on the emulated XT; confirm XT 8255 keyboard ack form.
-- [ ] M2 finish: real INT 13h floppy timing/retry; CGA snow; document VGA apps
-      as out-of-envelope on a CGA 5150/5160.
-- [ ] draw_char CGA row-blit fast path (audit digest "Stage 2", ~10x text
-      speedup on real 8088 hardware; Stage 1 MUL removal is done)
+### 8088 port — FEATURE PARITY ACHIEVED on a cycle-accurate IBM PC/XT (Build 410)
+MartyPC + open GLaBIOS (ROM-free). See docs/PORT-8088.md + tools/xt/.
+- [x] Boot + CGA desktop + WM + cooperative scheduler on the emulated 8088
+- [x] Keyboard via the XT 8255 PPI path
+- [x] Serial mouse (Microsoft, COM1/IRQ4) — install_serial_mouse + int_0C_handler;
+      motion (both axes), buttons, double-click launch verified
+- [x] CGA app sweep: SysInfo, Settings, Files, Paint, Clock, Notepad, Music,
+      Tracker, Pac-Man all render on the XT
+- [x] Storage: FAT12 read (Files/loads) + write (Notepad save) verified
+- [x] draw_char CGA row-blit fast path — ALREADY IMPLEMENTED (draw_char_cga_fast,
+      active via dcf_check in CGA mode); the old "Stage 2" TODO was stale
+- [x] RAM-floor reality: corrected the false "128KB min" → 256K desktop / 640K full
+- [x] VGA apps documented out-of-envelope on a CGA 5150/5160 (deviation, w/ shot)
+- [ ] **Physical IBM PC/XT pass** (real INT 13h write timing, cross-boot floppy
+      persistence) — hardware-blocked, the final real-hardware step (as every port)
+- [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77MHz
 - [ ] Launcher select_icon draws over open windows (z-order violation,
       cosmetic — known audit finding, low priority)
 - [ ] Background window content not repainted until raised (single-topmost

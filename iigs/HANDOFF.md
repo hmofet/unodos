@@ -1,4 +1,60 @@
-# Apple IIGS port — implementation handoff (for Claude Sonnet)
+# Apple IIGS port — implementation handoff
+
+## M0 — SHIPPED (2026-06-15, build 411)
+
+`./build.sh` produces `build/unodos_iigs.po` (800 KB ProDOS-order image)
+that boots through the firmware block driver to a **Super Hi-Res splash**
+(`shots/m0.png`): blue desktop, grey menu bar "UnoDOS 3 / Apple IIGS",
+and a framed cyan window with a deep-blue title bar — all in 16-colour
+SHR, rendered by a 4bpp text engine that expands the shared 8×8 font.
+
+**Harness verdict (the M0 wildcard, resolved): path 1 — a from-scratch
+Python 65816 core.** No usable `py65816` exists and MAME/a IIGS ROM are
+not available here, so `cpu65816.py` is a new functionally-correct (not
+cycle-accurate) 65C816 interpreter: native + emulation modes, M/X width
+tracking, the full addressing-mode/opcode set, MVN/MVP, and a **WDM trap**
+the harness uses to play firmware. It self-tests (`python cpu65816.py` →
+`SELFTEST OK`). `harness.py` is the ROM-free rig built on it — block-0
+autoload, the ProDOS block driver (read **and** write, `--writeback` for
+M2), the `$C0xx` soft-switch page, and SHR→PNG. This is fully CI-able with
+zero ROM dependency, same as `apple2/harness.py`. GSplus/KEGS/MAME remain
+the by-hand validation rigs (they need the user's ROM); real hardware is
+FloppyEmu in SmartPort mode.
+
+**Boot facts VERIFIED in the harness (§2b confirmed):**
+- block 0 → `$00:0800`, sig byte `$01`, enter `$0801` in **emulation
+  mode**, `X = slot<<4` (we boot slot 5, the 3.5" SmartPort).
+- ProDOS driver entry = `$Cn00 + [$CnFF]`; call ABI `$42`=cmd (1=read,
+  2=write), `$43`=unit, `$44/45`=buffer (bank 0), `$46/47`=block; carry
+  set = error. `boot.s` drives exactly this, so it runs against real
+  firmware and the harness WDM stub identically.
+- **NEWVIDEO `$C029` = `$C1`** enables SHR (bit7) — confirmed; the
+  harness asserts bit7 before rendering.
+- Kernel **load address `$00:2000`**, runs native with 16-bit X/Y +
+  8-bit A, **DBR=`$E1`** while drawing; SHR layout exactly as §1 states
+  (pixels `$E1:2000`, SCB `$E1:9D00`, palette `$E1:9E00`, 160 B/row,
+  high-nibble = left pixel, `$0RGB` little-endian).
+
+**Files:** `cpu65816.py` (CPU), `harness.py` (rig + PNG), `boot.s`
+(block-0 stage), `kernel.s` (M0 kernel), `mkdata.py`→`gen_data.inc`
+(font + palette), `mkdsk.py` (image packer), `boot.cfg`/`kernel.cfg`
+(ld65), `build.sh`, `tests/m0.py` (regression: `M0 PASS`). Toolchain:
+cc65 `ca65 --cpu 65816` + `ld65` at `C:\Users\arin\snes-tools\bin`
+(shared with the SNES port). **Gotcha banked here:** a `.include` of
+generated data BEFORE the first `.segment` lands the data at the CODE
+origin `$2000`, so the boot `jmp $2000` hits font bytes — keep emitted
+data in an explicit `.segment "RODATA"`. Long branches in the glyph
+loop overflow ±127 (4 macro expansions): use `beq +/jmp`.
+
+**Next: M1** — SHR desktop + WM + ADB mouse/keyboard + SysInfo/Clock
+(see §3). The renderer (`fill_band`, `draw_char`, `draw_string`,
+`set_color`, `set_pos`, `calc_gp`) and `calc_gp`'s y*160 are the M1
+primitives; add `$C000/$C010` keyboard polling and the mouse path to
+the harness, plus a `wait/shot/key/mouse` script runner over `Harness`.
+
+---
+
+# Original plan (M0–M3)
 
 Audience: the engineer building the UnoDOS/IIGS port, milestone by
 milestone (M0–M3). Authoritative direction:

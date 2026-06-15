@@ -105,20 +105,21 @@ static int hid_translate(u8 hid, int shift, char *ch, short *code)
     return 0;
 }
 
-/* The device init (PS2KbdInit / PS2MouseInit) spins inside the library until
-   each IOP driver's RPC server registers. On real hardware that is immediate;
-   on an emulator with no USB HLE it never registers and the call never returns.
-   So it runs on its own EE thread, a notch below the main loop's priority: the
-   desktop boots and stays responsive regardless, and USB comes alive the moment
-   the drivers do. The thread only touches SIF while the main loop is blocked on
-   vsync (lower priority), so it never races the main loop's pad/present path;
-   steady-state USB polling stays on the main thread (uno_usb_poll), so all SIF
-   traffic is single-threaded once init has finished. */
-static char g_usb_stack[16 * 1024] __attribute__((aligned(16)));
-
-static void usb_init_thread(void *arg)
+/* Bring the USB stack up. Called from the I/O-init thread (ee_platform.c) while
+   it holds the SIF lock, NOT the main thread: PS2KbdInit / PS2MouseInit spin
+   inside the library until each IOP driver's RPC server registers, which never
+   happens on an emulator with no USB HLE, so they must not block the boot.
+   On real hardware they return promptly and kbd/mouse come alive. */
+void uno_usb_bringup(void)
 {
-    (void)arg;
+    int ret;
+
+    /* USB host + the two HID class drivers, straight from the embedded images.
+       usbd must come first; the kbd/mouse drivers bind to it on load. */
+    SifExecModuleBuffer(usbd_irx,     size_usbd_irx,     0, NULL, &ret);
+    SifExecModuleBuffer(ps2kbd_irx,   size_ps2kbd_irx,   0, NULL, &ret);
+    SifExecModuleBuffer(ps2mouse_irx, size_ps2mouse_irx, 0, NULL, &ret);
+
     if (PS2KbdInit() >= 0) {
         PS2KbdSetReadmode(PS2KBD_READMODE_RAW);     /* we own the keymap */
         PS2KbdSetBlockingMode(PS2KBD_NONBLOCKING);  /* never stall the frame */
@@ -130,35 +131,6 @@ static void usb_init_thread(void *arg)
         PS2MouseSetPosition(g_mx, g_my);
         g_mouse_ok = 1;
     }
-    ExitDeleteThread();
-}
-
-void uno_usb_init(void)
-{
-    int ret, tid, prio;
-    ee_thread_t th;
-    ee_thread_status_t self;
-
-    /* USB host + the two HID class drivers, straight from the embedded images.
-       usbd must come first; the kbd/mouse drivers bind to it on load. These
-       buffer loads return promptly, so they stay on the main thread. */
-    SifExecModuleBuffer(usbd_irx,     size_usbd_irx,     0, NULL, &ret);
-    SifExecModuleBuffer(ps2kbd_irx,   size_ps2kbd_irx,   0, NULL, &ret);
-    SifExecModuleBuffer(ps2mouse_irx, size_ps2mouse_irx, 0, NULL, &ret);
-
-    prio = 0x50;
-    if (ReferThreadStatus(GetThreadId(), &self) >= 0)
-        prio = self.current_priority + 8;       /* just below the main loop */
-    if (prio > 126) prio = 126;
-
-    memset(&th, 0, sizeof(th));
-    th.func = (void *)usb_init_thread;
-    th.stack = g_usb_stack;
-    th.stack_size = sizeof(g_usb_stack);
-    th.gp_reg = &_gp;
-    th.initial_priority = prio;
-    tid = CreateThread(&th);
-    if (tid >= 0) StartThread(tid, NULL);
 }
 
 static void poll_kbd(void)
@@ -212,8 +184,14 @@ static void poll_mouse(void)
 
 void uno_usb_poll(void)
 {
+    if (!g_kbd_ok && !g_mouse_ok) return;
+    /* kbd/mouse reads are SIF RPC; take the shared bus lock so we never overlap
+       the audio pump or a still-running USB init. Non-blocking: skip the frame
+       if the bus is busy (e.g. init still binding). */
+    if (!uno_sif_lock_try()) return;
     if (g_kbd_ok)   poll_kbd();
     if (g_mouse_ok) poll_mouse();
+    uno_sif_unlock();
 }
 
 /* Pointer for the GS overlay (ee_platform.c). Returns 1 (visible) once a mouse

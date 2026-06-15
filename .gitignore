@@ -37,3 +37,8 @@ snes/build/*.o
 
 # 8088 port: scratch harness screenshots (canonical shots live in tools/xt/shots/)
 build/xt/
+
+# IIGS port: build artifacts (regeneratable; iigs/shots/ are committed evidence)
+iigs/build/
+iigs/gen_data.inc
+iigs/__pycache__/

@@ -173,6 +173,8 @@ Companion references: `docs/API_REFERENCE.md` (per-call semantics),
 | Mac System 7 (color) | `mac/` (`UnoDOS7`) | Toolbox-based; milestone 2 |
 | Mac System 1–6 (mono) | `mac/` (`UnoDOSClassic`) | Toolbox-based; milestone 2 |
 | Sega Genesis 68000 | `genesis/` | bare-metal, VDP cell desktop; milestone 1 |
+| Sony PS2 (R5900) | `ps2/` | portable C core over a software FB → GS; milestone 2 |
+| Sega Dreamcast (SH-4) | `dreamcast/` | portable C core over a software FB → DC framebuffer (KallistiOS); milestone 1, host-verified |
 
 Deviations to reconcile in later milestones: the Mac and Genesis ports
 use a single cooperative event loop (the Amiga has the milestone-3

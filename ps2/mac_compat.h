@@ -268,8 +268,16 @@ void uno_host_present(void);    /* host shim (host_desktop.c) */
 void uno_ee_init(void);         /* EE platform (ee_platform.c) */
 void uno_ee_poll(void);
 void uno_ee_present(void);
-void uno_usb_init(void);        /* USB keyboard + mouse (ee_usb.c) */
+void uno_usb_bringup(void);     /* USB keyboard + mouse - run on the io thread */
 void uno_usb_poll(void);
 int  uno_usb_cursor(short *x, short *y);  /* 1 = pointer visible */
+void uno_audio_bringup(void);   /* audsrv square-wave synth - run on the io thread */
+void uno_audio_note(int chan, short midi, long half_ms);
+void uno_audio_quiet(int chan);
+void uno_audio_pump(void);
+void uno_sif_init(void);        /* SIF bus lock, shared by audio + USB (ee_platform.c) */
+void uno_sif_lock(void);
+void uno_sif_unlock(void);
+int  uno_sif_lock_try(void);    /* non-blocking; 1 = acquired */
 
 #endif /* UNO_MAC_COMPAT_H */

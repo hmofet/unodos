@@ -103,22 +103,37 @@ co-exist with the DualShock 2 (all feed the same shim event queue), and all
 steady-state input polling stays on the main thread, so SIF traffic is
 single-threaded.
 
-> **Boot gotcha (cost a verify cycle):** `PS2KbdInit`/`PS2MouseInit` spin inside
-> libkbd/libmouse until each IOP driver's RPC server registers. On real hardware
-> that's immediate, but **PCSX2 has no USB HLE so it never registers and the
-> calls never return** — which black-screens the boot (they ran before the
-> splash). Fix: run the device init on a **dedicated EE thread one priority notch
-> below the main loop** (`usb_init_thread`). The desktop boots and stays
-> responsive regardless; USB comes alive the instant the drivers do. The module
-> *loads* themselves are fine in PCSX2 (the desktop renders with loads-only) —
-> only the RPC binds hang. Verified: full desktop boots in PCSX2 with all three
-> modules loaded + the init thread running (`shots/m3_usb_boot.png`). The
-> keyboard/mouse *function* is hardware-blocked (PCSX2 can't inject USB HID).
+**EE audio DONE (`ee_audio.c`).** The Sound Manager square-wave channels are now
+real: `SndDoImmediate` (mac_io.c, EE branch) routes `noteCmd`/`quietCmd` to a
+synth that mixes up to 8 phase-accumulator square voices (MIDI->Hz table, ~3500
+amp/voice) and streams 16-bit/22050 Hz/stereo PCM to the **SPU2 via audsrv**.
+`audsrv.irx` is embedded with `bin2c`; **LIBSD** (its SPU2 driver) comes from
+`rom0`. The mixer is pumped once per frame from `uno_ee_present` -> `uno_audio_pump`,
+which tops up only `audsrv_available()` bytes so it never blocks the frame loop.
 
-**Remaining EE-only pieces** (flagged, not blockers): **audsrv** audio is a
-silent stub (can't be screenshot-verified — needs a hardware ear-check); the
-on-metal FMCB run + DualShock 2 navigation check + a real USB keyboard/mouse
-function check.
+> **Boot gotcha (cost two verify cycles):** the RPC-based device inits —
+> `PS2KbdInit`/`PS2MouseInit` (libkbd/libmouse) **and `audsrv_init`** — each spin
+> until their IOP server answers. On real hardware that's immediate, but **PCSX2's
+> fastboot HLE never brings those servers up, so the calls never return** — which
+> black-screens the boot (they ran before the splash). The *module loads*
+> (`SifExecModuleBuffer`) are fine; only the RPC binds hang. Fix: one **low-prio
+> EE I/O thread** (`io_init_thread`, ee_platform.c) does all of it —
+> `uno_usb_bringup()` then `uno_audio_bringup()` — holding a shared **SIF lock**
+> for the whole bring-up. The per-frame audio pump + USB poll probe that lock
+> *non-blocking* (`uno_sif_lock_try`) and skip a frame if it's held, so they never
+> race the bring-up and the main thread never blocks. If a call hangs forever the
+> thread just parks holding the lock; the desktop boots and runs at 60 fps
+> regardless, just without that device. (One semaphore serialises ALL EE SIF RPC,
+> since audsrv (pump) and the HID drivers (poll) both use the bus.)
+>
+> Verified: full desktop boots in PCSX2 at FPS 60 with audsrv + all three USB
+> modules loaded and the I/O thread running (`shots/m3_audio_boot.png`). The
+> audio output and the keyboard/mouse *function* are hardware-blocked — PCSX2
+> can't drive SPU2-via-audsrv under fastboot nor inject USB HID.
+
+**Remaining EE-only pieces** (flagged, not blockers, all hardware-only to
+verify): the on-metal FMCB run + DualShock 2 navigation check + a real USB
+keyboard/mouse function check + an audio ear-check.
 
 ---
 

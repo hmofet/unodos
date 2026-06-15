@@ -286,6 +286,18 @@ OSErr SndDisposeChannel(SndChannelPtr chan, Boolean quiet)
 }
 OSErr SndDoImmediate(SndChannelPtr chan, const SndCommand *cmd)
 {
-    (void)chan; (void)cmd;                   /* host: silent. EE M3: audsrv. */
+#ifdef UNO_EE
+    /* EE: realise the square-wave channel on the SPU2 via audsrv (ee_audio.c).
+       noteCmd = play a note (param1 half-ms duration, param2 MIDI note);
+       quietCmd/flushCmd = silence the channel. */
+    if (chan && cmd) {
+        if (cmd->cmd == noteCmd)
+            uno_audio_note(chan->id, (short)cmd->param2, cmd->param1);
+        else if (cmd->cmd == quietCmd || cmd->cmd == flushCmd)
+            uno_audio_quiet(chan->id);
+    }
+#else
+    (void)chan; (void)cmd;                   /* host: silent. */
+#endif
     return noErr;
 }

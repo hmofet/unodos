@@ -1,0 +1,8 @@
+build/
+*.o
+*.elf
+*.cdi
+*.ppm
+uno_disk/
+tools/kos_build.log
+shots/*.ppm

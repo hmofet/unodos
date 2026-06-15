@@ -32,18 +32,26 @@ assessment and plan):
 | [**Sega Genesis**](genesis/) | Mega Drive / Genesis (68000, 64KB) | Bare-metal cartridge ROM: VDP tile-cell desktop (Paint runs on unique tiles), hardware-sprite cursor + game actors, pad-as-mouse + soft keyboard, PS/2 on the control ports, PSG audio | **Milestone 6+** — 11 apps incl. the three games, Theme, Tracker and Paint, SRAM + tape/WAV + Sega CD backup-RAM storage, cooperative multitasking; **runs on real hardware** |
 | [**Apple II**](apple2/) | Apple ][+ / //e (6502 @ 1MHz, 48–64KB), hi-res 280×192 (1-bit, 7px/byte) | Bare-metal: Disk II ROM autoload → own GCR 6-and-2 RWTS (read+write), hi-res software renderer, keyboard window manager, 1-bit `$C030` speaker | **Milestone 3** — desktop + 10 apps (Theme, Dostris, Pac-Man, Music, Tracker, Paint + SysInfo/Clock/Files/Notepad), mini-FS, blocking square-wave audio, OutLast (~4fps prototype) + cooperative-scheduler verdict; ROM-free py65 harness-verified, real-hw (AppleWin/FloppyEmu) pending |
 | [**Sony PS2**](ps2/) | PlayStation 2 (MIPS R5900 EE, 32MB, Graphics Synthesizer), FreeMcBoot ELF | Port the portable C core ([mac/unodos.c](mac/unodos.c)) over a software 640×448×32 framebuffer blitted to GS each vsync; DualShock 2 + soft keyboard | **Milestone 2** — the full desktop / WM / all 11 apps (+ FAT12 round-trip, 32-bit Theme) run via the Mac-compat shim over the software FB, verified on the host shim and the **emulated PS2 GS** in PCSX2 (`ps2/shots/m1_pcsx2_pacman.png`); **memory-card storage** persists Files/Notepad across boots via libmc (`ps2/shots/m2_pcsx2_*.png`); **USB keyboard + mouse** (embedded `usbd`/`ps2kbd`/`ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor) — boot verified in PCSX2 (`ps2/shots/m3_usb_boot.png`), function is hardware-only. Remaining: EE audio (audsrv), real hardware |
+| [**Sega Dreamcast**](dreamcast/) | Dreamcast (Hitachi SH-4, 16MB, PowerVR2), KallistiOS `.cdi` | Port the same portable C core over a software **640×480×32** framebuffer copied to the DC framebuffer (`vram_s`) as RGB565 each vblank; maple controller + keyboard + mouse, VMU storage | **Milestone 1 (M2 storage)** — the full desktop / WM / all 11 apps (+ 32-bit Theme) render through the Mac-compat shim at native 640×480, **verified on the host shim** (`dreamcast/shots/m1_*.png`); the KallistiOS platform layer ([dreamcast/dc_main.c](dreamcast/dc_main.c)) — present + maple input + **VMU** save/load — is written but **UNVERIFIED** (no `sh-elf-gcc` / DC emulator on the dev machine, as the PS2 EE target shipped before ps2dev). Remaining: build with KOS + emulator run, AICA audio, real hardware |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
-(Apple II ✓, Sony PS2 ✓, Apple IIGS, SNES) is tracked in
+(Apple II ✓, Sony PS2 ✓, Sega Dreamcast ✓, Apple IIGS, SNES) is tracked in
 [docs/PORTS-PLAN.md](docs/PORTS-PLAN.md); the standalone MacPlus OS port
-joins the matrix at app parity.
+joins the matrix at app parity. The Dreamcast port reuses the PS2 port's
+portable-C-core approach almost verbatim — same core, same Mac-compat shim,
+swapped present (KallistiOS framebuffer) and input (maple) layers.
 
-The x86 reference build above has now been **validated on a genuine Intel 8088
-/ IBM PC-XT** for the first time — it had only ever run on QEMU (a 486-class
-CPU). UnoDOS boots end-to-end on a cycle-accurate emulated XT (8088 @ 4.77 MHz,
-CGA): boot chain → kernel → CGA desktop → keyboard-launched apps. See
-[docs/PORT-8088.md](docs/PORT-8088.md) and [tools/xt/](tools/xt/).
+The x86 reference build above now runs at **full feature parity on a genuine
+Intel 8088 / IBM PC-XT** — for years it had only ever run on QEMU (a 486-class
+CPU that hides all real 8088 behaviour). Verified on a cycle-accurate emulated
+XT (8088 @ 4.77 MHz, CGA, ROM-free GLaBIOS): boot chain → kernel → CGA desktop
+→ window manager + cooperative scheduler → the CGA app set (SysInfo, Settings,
+Files, Paint, Clock, Notepad, Music, Tracker, Pac-Man) → FAT12 read/write →
+keyboard (XT 8255 PPI) and a **Microsoft serial mouse on COM1** (a real XT has
+no PS/2 port). VGA apps are out-of-envelope on a CGA machine, and a physical-XT
+pass is the final hardware step. See [docs/PORT-8088.md](docs/PORT-8088.md) and
+[tools/xt/](tools/xt/).
 
 All ports boot through a platform-themed **"UnoDOS 3" splash** (striped
 checkmark on Amiga, happy compact Mac, IBM PC art on x86) into the

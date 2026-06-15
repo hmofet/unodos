@@ -5,6 +5,93 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — M0: 65C816 native boot + Super Hi-Res splash] - 2026-06-15 (Build 411)
+
+First milestone of the **Apple IIGS** port (`iigs/`): a native 65C816 / Super
+Hi-Res reimagining of UnoDOS that uses the IIGS hardware the plain Apple II
+lacks. `./build.sh` produces `iigs/build/unodos_iigs.po`, an 800 KB ProDOS-order
+disk that boots to a 16-colour SHR splash (`iigs/shots/m0.png`).
+
+- **Boot chain (verified):** ProDOS block firmware loads block 0 to `$0800` and
+  enters at `$0801` in 6502 emulation mode; the boot stage finds the slot's
+  ProDOS block driver (`$Cn00+[$CnFF]`), reads the kernel from blocks 1..K to
+  `$00:2000`, switches to native 16-bit mode (`clc/xce`, `rep #$30`), and jumps
+  in. No GCR — the SmartPort firmware is the disk driver (the ".Sony equivalent").
+- **Super Hi-Res, in colour:** `NEWVIDEO ($C029)=$C1` enables SHR; the kernel
+  paints a desktop, menu bar, and a framed window with a 4bpp text engine that
+  expands the shared UnoDOS 8×8 font (320×200, 160 B/row, high-nibble = left px,
+  `$0RGB` palette at `$E1:9E00`).
+- **ROM-free harness (the M0 wildcard, resolved):** no usable `py65816` exists
+  and no IIGS ROM/MAME is on hand, so `iigs/cpu65816.py` is a new
+  functionally-correct 65C816 interpreter (native+emulation, M/X widths, full
+  opcode/addressing set, MVN/MVP, WDM trap; self-tests). `iigs/harness.py` plays
+  the firmware around it — block autoload, the ProDOS driver (read + write,
+  `--writeback`), the `$C0xx` soft-switch page — and renders SHR → PNG. CI-able
+  with zero ROM dependency. GSplus/KEGS/MAME stay the by-hand rigs; real hardware
+  is FloppyEmu in SmartPort mode.
+- **Toolchain:** cc65 `ca65 --cpu 65816` + `ld65` (shared with the SNES port).
+  Regression `iigs/tests/m0.py` → `M0 PASS`. Next: M1 (desktop + WM + ADB
+  mouse/keyboard + SysInfo/Clock).
+
+## [8088 port — feature parity on a cycle-accurate IBM PC/XT] - 2026-06-15 (Build 410)
+
+The x86 reference build now runs at **full feature parity on a genuine Intel
+8088**, verified in MartyPC (cycle-accurate, open GLaBIOS). Closing out M0–M3.
+
+- **App sweep (M1):** SysInfo, Settings, Files, Paint, Clock, Notepad, Music,
+  Tracker and Pac-Man all launch and render on the emulated XT through the
+  keyboard-driven launcher (`tools/xt/shots/m2_*.png`).
+- **Storage (M2):** FAT12 **read** (kernel/app loads, Files directory listing)
+  and **write** (Notepad save → "XTTEST", title confirms the write) both verified
+  on the 8088.
+- **Sound:** the PC-speaker apps (Music "Für Elise", Tracker pattern editor) run
+  — audio itself isn't screenshot-verifiable, the standard cross-port caveat.
+- **Performance (M3):** the `draw_char` CGA row-blit fast path
+  (`draw_char_cga_fast` — one MUL/row, one RMW/VRAM-byte) was already in place and
+  is active in CGA mode; all XT text renders through it. The earlier TODO entry
+  was stale.
+- **Documented deviations (real envelope, not fake parity):** VGA apps (mode 13h/
+  12h: Dostris/OutLast/Pac-Man VGA) are out-of-envelope on a CGA 5150/5160
+  (`m2_vga_out_of_envelope.png`); minimum RAM is 256K (desktop) / 640K (full);
+  full-screen game pixel-fill is slow at 4.77 MHz (inherent, like the Apple II at
+  1 MHz). **Remaining:** cross-boot floppy persistence (MartyPC writes back only
+  via its GUI menu) + a physical IBM PC/XT pass — the same hardware-blocked
+  final step as every other port. See `docs/PORT-8088.md`.
+
+## [dreamcast: new port — M1 desktop + VMU storage] - 2026-06-15
+
+A new port: **UnoDOS on the Sega Dreamcast** (Hitachi SH-4 / PowerVR2, via
+KallistiOS). It reuses the PS2 port's portable-C-core strategy almost verbatim —
+the same [mac/unodos.c](mac/unodos.c) core over the same Mac-compat shim — and
+swaps only the present and input layers. New directory `dreamcast/`.
+
+- **Software framebuffer at native 640×480.** All drawing is the shared
+  `fb.c`/`fb.h` primitives (identical to PS2 bar the resolution); the core
+  derives geometry from `gScreen`, so the desktop fills the Dreamcast's native
+  640×480 with no letterboxing (vs the PS2's 640×448). Each vblank
+  `dreamcast/dc_main.c` converts the ARGB8888 buffer to **RGB565** and copies it
+  into the DC framebuffer (`vram_s`), then overlays the arrow cursor — the
+  PowerVR2 is left idle ("FB as the blitter," the PS2 GS design).
+- **Mac-compat shim shared.** `dreamcast/mac_compat.c`/`.h` are identical to the
+  PS2 port; `dreamcast/unodos.c` is the core + `#ifdef UNO_DC` hooks
+  (`uno_dc_init`/`poll`/`present`) mirroring the EE hooks.
+- **Maple input** (`dc_main.c`): controller d-pad → arrow keys, A/Start →
+  Return/Esc, the analog stick + a Dreamcast mouse → the pointer (trigger/left
+  button clicks), a Dreamcast keyboard → typed text — all posted into the shim's
+  event queue so the core's normal `GetNextEvent` loop consumes them.
+- **M2 VMU storage** (`mac_io.c` DC branch): Files/Notepad/Tracker/Paint persist
+  to the VMU (`/vmu/a1`) via the KOS VFS, using a flush-on-close RAM buffer per
+  handle (whole-file save/load — matches UnoDOS's app model and the VMU's block
+  flash). The HOST stdio backend stays byte-identical to PS2's.
+- **Verified on the host shim** at 640×480: splash, desktop, window manager and
+  all 11 apps render to PNGs (`dreamcast/shots/m1_*.png`) via WSL gcc — the exact
+  code the DC ELF compiles. The KallistiOS ELF target is **written but
+  UNVERIFIED** (no `sh-elf-gcc` / DC emulator on the dev machine, the same state
+  the PS2 EE target shipped in before ps2dev). M3 audio (AICA) is stubbed.
+- New files: `dreamcast/{unodos.c, fb.c, fb.h, mac_compat.c, mac_compat.h,
+  mac_io.c, dc_main.c, uno_splash.c, host_main.c, host_desktop.c, Makefile,
+  build.sh, mkfont_c.py, README.md, HANDOFF.md}`.
+
 ## [ps2: USB keyboard + mouse] - 2026-06-15
 
 The PS2 desktop now takes input from a real USB keyboard and mouse, alongside

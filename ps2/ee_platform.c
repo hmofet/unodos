@@ -38,6 +38,66 @@ static GSTEXTURE g_tex;
 static char g_padbuf[256] __attribute__((aligned(64)));
 static u16  g_prev = 0xFFFF;          /* previous pad button word (0 = pressed) */
 
+/* ---- SIF serialization -------------------------------------------------
+ * audsrv (audio pump) and the USB drivers (init thread + per-frame poll) both
+ * use the SIF RPC bus, which is NOT safe to drive from two threads at once. A
+ * single binary semaphore makes them mutually exclusive. The USB init thread
+ * may hold it forever on an emulator with no USB HLE (PS2KbdInit never returns),
+ * so the per-frame users probe with a non-blocking try and simply skip a frame
+ * rather than deadlock. */
+static int g_sif_sema = -1;
+
+void uno_sif_init(void)
+{
+    ee_sema_t s;
+    s.init_count = 1; s.max_count = 1; s.attr = 0; s.option = 0;
+    g_sif_sema = CreateSema(&s);
+}
+void uno_sif_lock(void)     { if (g_sif_sema >= 0) WaitSema(g_sif_sema); }
+void uno_sif_unlock(void)   { if (g_sif_sema >= 0) SignalSema(g_sif_sema); }
+int  uno_sif_lock_try(void) { return g_sif_sema < 0 ? 1 : (PollSema(g_sif_sema) >= 0); }
+
+/* ---- I/O bring-up thread -----------------------------------------------
+ * audsrv + the USB HID drivers init via SIF RPC calls that spin until their IOP
+ * servers answer. On real hardware that's near-instant; on an emulator without
+ * the matching HLE they never return. Running them on the MAIN thread therefore
+ * black-screens the boot (it happens before the splash). Instead one low-prio
+ * thread does all of it, holding the SIF lock for the whole bring-up so the
+ * per-frame audio pump / USB poll (which probe the lock non-blocking) never race
+ * it. If a call hangs forever the thread simply parks holding the lock - the
+ * desktop boots and runs regardless, just without that device. */
+static char g_io_stack[16 * 1024] __attribute__((aligned(16)));
+
+static void io_init_thread(void *arg)
+{
+    (void)arg;
+    uno_sif_lock();
+    uno_usb_bringup();        /* USB keyboard + mouse (ee_usb.c) */
+    uno_audio_bringup();      /* audsrv square-wave synth (ee_audio.c) */
+    uno_sif_unlock();
+    ExitDeleteThread();
+}
+
+static void start_io_init(void)
+{
+    ee_thread_t th;
+    ee_thread_status_t self;
+    int tid, prio = 0x50;
+
+    if (ReferThreadStatus(GetThreadId(), &self) >= 0)
+        prio = self.current_priority + 8;       /* a notch below the main loop */
+    if (prio > 126) prio = 126;
+
+    memset(&th, 0, sizeof(th));
+    th.func = (void *)io_init_thread;
+    th.stack = g_io_stack;
+    th.stack_size = sizeof(g_io_stack);
+    th.gp_reg = &_gp;
+    th.initial_priority = prio;
+    tid = CreateThread(&th);
+    if (tid >= 0) StartThread(tid, NULL);
+}
+
 static void load_modules(void)
 {
     SifInitRpc(0);
@@ -102,7 +162,9 @@ void uno_ee_init(void)
     mc_bringup();                 /* memory card -> mc0: for the File Manager */
     padInit(0);
     padPortOpen(0, 0, g_padbuf);
-    uno_usb_init();               /* USB keyboard + mouse (ee_usb.c) */
+
+    uno_sif_init();               /* SIF bus lock shared by audio + USB */
+    start_io_init();              /* bring up USB + audsrv off the main thread */
 }
 
 static int pad_ready(int port, int slot)
@@ -169,4 +231,5 @@ void uno_ee_present(void)
     gsKit_queue_exec(g_gs);
     gsKit_sync_flip(g_gs);
     gsKit_TexManager_nextFrame(g_gs);
+    uno_audio_pump();             /* top up the audsrv ring (ee_audio.c) */
 }

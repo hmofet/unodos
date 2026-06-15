@@ -169,17 +169,32 @@ ELF** (`bin2c`), so no external module files are needed.
 > background EE thread so a USB-less boot (e.g. PCSX2) still reaches the desktop
 > — see HANDOFF for the boot gotcha.
 
+### Audio (`ee_audio.c`)
+
+The Sound Manager is realised as an actual square-wave synth on the SPU2 via
+**audsrv** (`audsrv.irx` embedded with `bin2c`; **LIBSD** from `rom0`). Music's
+Canon in D and the Tracker patterns play: `SndDoImmediate`'s `noteCmd`/`quietCmd`
+drive up to 8 phase-accumulator voices (MIDI→Hz), mixed to 16-bit / 22050 Hz /
+stereo and pumped once per frame (non-blocking — only the free ring space is
+filled).
+
+> Like USB, audsrv inits over SIF RPC that PCSX2's fastboot HLE never answers, so
+> audio bring-up shares the same background I/O thread + SIF lock and the boot is
+> unaffected. The **sound itself is hardware-only to verify** (no SPU2-via-audsrv
+> under the emulator's fastboot).
+
 ## Files
 
 | File | Role |
 |---|---|
 | `fb.c` / `fb.h` | software framebuffer + drawing primitives (shared host+EE) |
 | `mac_compat.h` / `.c` | **Mac Toolbox shim** — QuickDraw/events/memory over `fb.*` |
-| `mac_io.c` | File Manager (directory tree) + Sound channel model |
+| `mac_io.c` | File Manager (directory tree) + Sound Manager (routes to `ee_audio.c` on EE) |
 | `unodos.c` | the portable UnoDOS core (copied from `mac/unodos.c`) |
 | `host_desktop.c` | host shim: run the desktop, dump `fb` → PPM (host-only) |
-| `ee_platform.c` | EE target: GS present (+ cursor overlay) + DualShock 2 → events |
+| `ee_platform.c` | EE target: GS present (+ cursor overlay) + DualShock 2 → events; SIF lock + I/O-init thread |
 | `ee_usb.c` | EE target: USB keyboard + mouse (embedded `usbd`/`ps2kbd`/`ps2mouse`) → events |
+| `ee_audio.c` | EE target: square-wave synth → SPU2 via audsrv (embedded `audsrv.irx`) |
 | `uno_splash.c` / `main.c` | the M0 splash + its standalone EE target (reference) |
 | `mkfont_c.py` | shared font → `build/font_data.h` |
 | `tools/ppm2png.py` | PPM → PNG (stdlib only) |
@@ -199,18 +214,18 @@ loads it back on a fresh no-save boot). `ee_platform.c` brings up MCMAN/MCSERV +
 
 ## Next
 
-- **M3 audio on the EE** — drive **audsrv** from `SndDoImmediate`
-  (`mac_io.c`'s square-wave model is silent today). Theme (32-bit colour) and
-  the cooperative scheduler already came along through the shim. Audio can't be
-  screenshot-verified — it needs a hardware/audio ear-check, like the MacPlus
-  SE audio.
+- **EE audio** — DONE (`ee_audio.c`): a square-wave synth on the SPU2 via
+  **audsrv** (embedded `audsrv.irx` + `rom0:LIBSD`), pumped per-frame from
+  `SndDoImmediate`. Theme (32-bit colour) and the cooperative scheduler already
+  came along through the shim. The sound itself is hardware-only to verify (no
+  SPU2-via-audsrv under PCSX2 fastboot) — an ear-check like the MacPlus SE audio.
 - **USB keyboard + mouse** — DONE (`ee_usb.c`): embedded `usbd`/`ps2kbd`/
   `ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor overlay. Function is
-  hardware-only to verify (PCSX2 has no USB HID); boot is proven (the init runs
-  on a background thread so a USB-less boot still reaches the desktop).
+  hardware-only to verify (PCSX2 has no USB HID); boot is proven (init runs on a
+  background I/O thread so a USB-less boot still reaches the desktop).
 - **Real hardware** — run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
-  uLaunchELF from USB) and confirm DualShock 2 navigation **and the USB
-  keyboard/mouse** on metal. The
+  uLaunchELF from USB) and confirm DualShock 2 navigation, **the USB
+  keyboard/mouse, and audio** on metal. The
   PCSX2-vs-metal watch list: interlace flicker (the 512×448 fallback in
   `fb.h`), memory-card timing, pad pressure quirks.
 
