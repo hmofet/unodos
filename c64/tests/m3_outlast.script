@@ -1,0 +1,10 @@
+wait 70
+keys right right right right right right right right   # to OutLast icon (9)
+key return
+shot m3_outlast
+key left
+wait 4
+key right
+wait 4
+shot m3_outlast_play
+quit
