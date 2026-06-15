@@ -152,7 +152,22 @@ shim's PPM dump to PNG with only the stdlib.
 | D-pad | arrow keys — desktop icon nav / in-app movement |
 | Cross / Circle | Return — launch icon / confirm |
 | Start | Esc — close focused window |
-| left stick / Triangle (soft kbd) | reserved (M2) |
+
+### USB keyboard + mouse (`ee_usb.c`)
+
+A USB keyboard and mouse work alongside the pad — both feed the same event
+queue. The IOP drivers (`usbd` + `ps2kbd` + `ps2mouse`) are **embedded into the
+ELF** (`bin2c`), so no external module files are needed.
+
+| Input | Role |
+|---|---|
+| USB keyboard | real typing into Notepad etc. — RAW HID, full US keymap, arrows/Return/Esc/Backspace/Tab + shifted symbols; Ctrl/Win = Command |
+| USB mouse | absolute pointer (clamped to screen) — left button = click/drag; a small arrow cursor is drawn as a GS overlay |
+
+> The keyboard/mouse **function** can't be exercised in PCSX2 (no USB HID
+> injection), so it's verified on real hardware only. The device init runs on a
+> background EE thread so a USB-less boot (e.g. PCSX2) still reaches the desktop
+> — see HANDOFF for the boot gotcha.
 
 ## Files
 
@@ -163,7 +178,8 @@ shim's PPM dump to PNG with only the stdlib.
 | `mac_io.c` | File Manager (directory tree) + Sound channel model |
 | `unodos.c` | the portable UnoDOS core (copied from `mac/unodos.c`) |
 | `host_desktop.c` | host shim: run the desktop, dump `fb` → PPM (host-only) |
-| `ee_platform.c` | EE target: GS present + DualShock 2 → events |
+| `ee_platform.c` | EE target: GS present (+ cursor overlay) + DualShock 2 → events |
+| `ee_usb.c` | EE target: USB keyboard + mouse (embedded `usbd`/`ps2kbd`/`ps2mouse`) → events |
 | `uno_splash.c` / `main.c` | the M0 splash + its standalone EE target (reference) |
 | `mkfont_c.py` | shared font → `build/font_data.h` |
 | `tools/ppm2png.py` | PPM → PNG (stdlib only) |
@@ -188,10 +204,13 @@ loads it back on a fresh no-save boot). `ee_platform.c` brings up MCMAN/MCSERV +
   the cooperative scheduler already came along through the shim. Audio can't be
   screenshot-verified — it needs a hardware/audio ear-check, like the MacPlus
   SE audio.
-- **USB keyboard** (`ps2kbd`) for real typing (the pad soft-keyboard is the
-  fallback).
+- **USB keyboard + mouse** — DONE (`ee_usb.c`): embedded `usbd`/`ps2kbd`/
+  `ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor overlay. Function is
+  hardware-only to verify (PCSX2 has no USB HID); boot is proven (the init runs
+  on a background thread so a USB-less boot still reaches the desktop).
 - **Real hardware** — run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
-  uLaunchELF from USB) and confirm the DualShock 2 navigation on metal. The
+  uLaunchELF from USB) and confirm DualShock 2 navigation **and the USB
+  keyboard/mouse** on metal. The
   PCSX2-vs-metal watch list: interlace flicker (the 512×448 fallback in
   `fb.h`), memory-card timing, pad pressure quirks.
 

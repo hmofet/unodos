@@ -268,5 +268,8 @@ void uno_host_present(void);    /* host shim (host_desktop.c) */
 void uno_ee_init(void);         /* EE platform (ee_platform.c) */
 void uno_ee_poll(void);
 void uno_ee_present(void);
+void uno_usb_init(void);        /* USB keyboard + mouse (ee_usb.c) */
+void uno_usb_poll(void);
+int  uno_usb_cursor(short *x, short *y);  /* 1 = pointer visible */
 
 #endif /* UNO_MAC_COMPAT_H */

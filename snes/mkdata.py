@@ -81,6 +81,14 @@ T_BLANK, T_FONT, T_SOLBG = 0, 1, 96
 T_EDGEL, T_EDGER, T_EDGEB, T_CORNBL, T_CORNBR = 97, 98, 99, 100, 101
 assert len(bg) == 102, len(bg)
 
+# game-colour solid tiles: T_GSOL+k = solid tile of palette index (4+k),
+# for k = 0..11 (palette indices 4..15). Drawn on palette line 2 or 3 they
+# show that line's game colours (Dostris pieces, Pac-Man, OutLast scenery).
+T_GSOL = 102
+for k in range(12):
+    bg.append((f"gsol idx{4 + k}", tile4bpp([[4 + k] * 8 for _ in range(8)])))
+assert len(bg) == 114, len(bg)
+
 # ---------------- cursor sprite (shared UnoDOS arrow, 8x16) ----------------
 # (planeA, planeB) per row from the Amiga sprite; combo A|B<<1 -> sprite
 # palette index: 1 white (outline), 2 blue (fill), 3 cyan.
@@ -111,14 +119,47 @@ CYAN = (0x00, 0xA8, 0xA8)
 MAG = (0xA8, 0x00, 0xA8)
 BLACK = (0, 0, 0)
 
-def palette(c0, c1, c2, c3, c4):
-    return [bgr555(*c) for c in (c0, c1, c2, c3, c4)] + [0] * 11
+# game colours at palette indices 4..15 (T_GSOL tiles index into these)
+GAME2 = [  # palette line 2 (ACC): Dostris pieces + Pac-Man actors
+    (0x00, 0xC8, 0xE0),  # 4  I cyan
+    (0xF0, 0xE0, 0x00),  # 5  O / pac yellow
+    (0xB0, 0x40, 0xF0),  # 6  T purple
+    (0x10, 0xC0, 0x20),  # 7  S green
+    (0xE0, 0x20, 0x20),  # 8  Z / blinky red
+    (0x30, 0x50, 0xF0),  # 9  J / wall blue
+    (0xF0, 0x90, 0x10),  # 10 L / clyde orange
+    (0xF0, 0x80, 0xC0),  # 11 pinky pink
+    (0x40, 0x80, 0xF0),  # 12 fright blue
+    (0xFF, 0xFF, 0xFF),  # 13 white (dots/eyes)
+    (0xA0, 0xA0, 0xA0),  # 14 grey
+    (0x00, 0x00, 0x00),  # 15 black
+]
+GAME3 = [  # palette line 3 (KEY): OutLast scenery
+    (0x60, 0xA0, 0xF0),  # 4  sky
+    (0xC0, 0xD0, 0xF0),  # 5  haze
+    (0x10, 0x80, 0x10),  # 6  grass A
+    (0x18, 0xA0, 0x18),  # 7  grass B
+    (0x80, 0x80, 0x80),  # 8  road grey
+    (0xF0, 0xE0, 0x40),  # 9  stripe yellow
+    (0xC0, 0xC0, 0xC0),  # 10 windshield
+    (0x20, 0x20, 0x20),  # 11 wheel
+    (0xE0, 0x30, 0x30),  # 12 car red
+    (0xF0, 0xC0, 0x20),  # 13 traffic
+    (0xFF, 0xFF, 0xFF),  # 14 white
+    (0x00, 0x00, 0x00),  # 15 black
+]
 
-# four UI schemes: index1 = fg, index2 = bg
-pal_bg = (palette(BLUE, WHITE, BLUE, CYAN, MAG)    # 0 NORM white-on-blue
-          + palette(BLUE, BLUE, WHITE, CYAN, MAG)  # 1 INV  blue-on-white
-          + palette(BLUE, CYAN, BLUE, WHITE, MAG)  # 2 ACC  cyan-on-blue
-          + palette(BLUE, BLUE, CYAN, WHITE, MAG)) # 3 KEY  blue-on-cyan
+def palette(c0, c1, c2, c3, c4, game=None):
+    base = [bgr555(*c) for c in (c0, c1, c2, c3, c4)]
+    if game:
+        return base + [bgr555(*c) for c in game[1:]]  # idx 0-4 + game idx 5..15
+    return base + [0] * 11
+
+# four UI schemes: index1 = fg, index2 = bg; lines 2/3 carry game colours 4-15
+pal_bg = (palette(BLUE, WHITE, BLUE, CYAN, MAG)                      # 0 NORM
+          + palette(BLUE, BLUE, WHITE, CYAN, MAG)                    # 1 INV
+          + palette(BLUE, CYAN, BLUE, WHITE, GAME2[0], game=GAME2)   # 2 ACC + game
+          + palette(BLUE, BLUE, CYAN, WHITE, GAME3[0], game=GAME3))  # 3 KEY + game
 
 pal_spr = [0, bgr555(*WHITE), bgr555(*BLUE), bgr555(*CYAN)] + [0] * 12
 
@@ -143,7 +184,8 @@ with open(OUT, "w", newline="\n") as f:
     f.write(f"T_EDGER   = {T_EDGER}\n")
     f.write(f"T_EDGEB   = {T_EDGEB}\n")
     f.write(f"T_CORNBL  = {T_CORNBL}\n")
-    f.write(f"T_CORNBR  = {T_CORNBR}\n\n")
+    f.write(f"T_CORNBR  = {T_CORNBR}\n")
+    f.write(f"T_GSOL    = {T_GSOL}\n\n")
     f.write("; BG 4bpp tile blob -> BG1 char base (VRAM word $1000)\n")
     f.write("tiles_bg:\n")
     for comment, data in bg:

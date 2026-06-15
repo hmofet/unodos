@@ -89,9 +89,36 @@ makes a directory-like entry that returns 0 bytes; only `mcOpen` with
 save-files with the dir attribute, so PBGetCatInfo treats non-zero size as the
 file signal.
 
+**USB keyboard + mouse DONE (`ee_usb.c`).** The three IOP drivers (`usbd`,
+`ps2kbd`, `ps2mouse`) are embedded into the ELF via `bin2c` (Makefile rules ->
+`build/*_irx.c`) and loaded with `SifExecModuleBuffer`, so a FreeMcBoot launch
+needs no external module files. Keyboard runs in **RAW** mode (`ee_usb.c`
+`hid_translate` owns a full US HID-usage -> UnoDOS keymap incl. arrows, Return/
+Esc/Backspace/Tab and shifted symbols; Ctrl/GUI -> the Mac Command modifier);
+mouse runs in **ABS** mode clamped to the framebuffer, fed through
+`uno_set_mouse` + `mouseDown/Up` edges. A small arrow **cursor** is drawn as a
+GS overlay in `uno_ee_present` (two `gsKit_prim_triangle`s on top of the blitted
+fb), so unodos.c's software-fb XOR/incremental drawing is never touched. Both
+co-exist with the DualShock 2 (all feed the same shim event queue), and all
+steady-state input polling stays on the main thread, so SIF traffic is
+single-threaded.
+
+> **Boot gotcha (cost a verify cycle):** `PS2KbdInit`/`PS2MouseInit` spin inside
+> libkbd/libmouse until each IOP driver's RPC server registers. On real hardware
+> that's immediate, but **PCSX2 has no USB HLE so it never registers and the
+> calls never return** — which black-screens the boot (they ran before the
+> splash). Fix: run the device init on a **dedicated EE thread one priority notch
+> below the main loop** (`usb_init_thread`). The desktop boots and stays
+> responsive regardless; USB comes alive the instant the drivers do. The module
+> *loads* themselves are fine in PCSX2 (the desktop renders with loads-only) —
+> only the RPC binds hang. Verified: full desktop boots in PCSX2 with all three
+> modules loaded + the init thread running (`shots/m3_usb_boot.png`). The
+> keyboard/mouse *function* is hardware-blocked (PCSX2 can't inject USB HID).
+
 **Remaining EE-only pieces** (flagged, not blockers): **audsrv** audio is a
-silent stub (can't be screenshot-verified — needs a hardware ear-check); USB
-keyboard (`ps2kbd`); and the on-metal FMCB run + DualShock 2 navigation check.
+silent stub (can't be screenshot-verified — needs a hardware ear-check); the
+on-metal FMCB run + DualShock 2 navigation check + a real USB keyboard/mouse
+function check.
 
 ---
 

@@ -130,6 +130,21 @@ v_files_sel = VARS+$184
 v_np_name   = VARS+$186     ; 13 bytes (12 name + NUL)
 v_npbuf     = $0400         ; 2 KB Notepad buffer ($0400-$0BFF)
 NBUF        = 2048
+; ---- game state (Dostris/Pac-Man/OutLast) ----
+v_dt_state  = VARS+$1A0     ; 0 menu 1 play 2 pause 3 over
+v_dt_piece  = VARS+$1A2
+v_dt_rot    = VARS+$1A4
+v_dt_col    = VARS+$1A6
+v_dt_row    = VARS+$1A8
+v_dt_next   = VARS+$1AA
+v_dt_score  = VARS+$1AC
+v_dt_lines  = VARS+$1AE
+v_dt_level  = VARS+$1B0
+v_dt_seedl  = VARS+$1B2
+v_dt_seedh  = VARS+$1B4
+v_dt_last   = VARS+$1B6
+v_pad_rptn  = VARS+$1B8
+v_dt_board  = $0C00         ; 10x20 = 200 bytes
 
 ; ---- constants ----
 SCRW_C  = 32

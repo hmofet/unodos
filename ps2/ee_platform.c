@@ -102,6 +102,7 @@ void uno_ee_init(void)
     mc_bringup();                 /* memory card -> mc0: for the File Manager */
     padInit(0);
     padPortOpen(0, 0, g_padbuf);
+    uno_usb_init();               /* USB keyboard + mouse (ee_usb.c) */
 }
 
 static int pad_ready(int port, int slot)
@@ -137,6 +138,24 @@ void uno_ee_poll(void)
     if (edge & PAD_CIRCLE) post_key(0x24, 0x0D);
     /* Start -> Esc (close focused window) */
     if (edge & PAD_START)  post_key(0x35, 0x1B);
+
+    uno_usb_poll();                       /* USB keyboard + mouse (ee_usb.c) */
+}
+
+/* Arrow cursor for the USB mouse, drawn as a GS overlay AFTER the fb sprite so
+   the software framebuffer (and unodos.c's XOR/incremental drawing) is never
+   touched. A black triangle outline with a white triangle on top - the classic
+   pointer, tip at the hot-spot. */
+static void draw_cursor(void)
+{
+    short x, y;
+    float fx, fy;
+    if (!uno_usb_cursor(&x, &y)) return;
+    fx = (float)x; fy = (float)y;
+    gsKit_prim_triangle(g_gs, fx - 1, fy - 1, fx - 1, fy + 15, fx + 11, fy + 9,
+        3, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));   /* outline */
+    gsKit_prim_triangle(g_gs, fx, fy, fx, fy + 12, fx + 8, fy + 8,
+        3, GS_SETREG_RGBAQ(0xFF, 0xFF, 0xFF, 0x80, 0x00));   /* fill */
 }
 
 void uno_ee_present(void)
@@ -146,6 +165,7 @@ void uno_ee_present(void)
         0.0f, 0.0f, 0.0f, 0.0f,
         (float)FB_W, (float)FB_H, (float)FB_W, (float)FB_H,
         2, GS_SETREG_RGBAQ(0x80, 0x80, 0x80, 0x80, 0x00));
+    draw_cursor();                /* USB mouse pointer overlay (if any) */
     gsKit_queue_exec(g_gs);
     gsKit_sync_flip(g_gs);
     gsKit_TexManager_nextFrame(g_gs);
