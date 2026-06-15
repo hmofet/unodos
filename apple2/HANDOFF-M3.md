@@ -170,3 +170,20 @@ finding into README/PORTS-PLAN with the measured depth numbers.
   scheduler verdicts inline), then the real-hardware pass: AppleWin
   full m1+m2+m3 scripts by hand, then FloppyEmu on metal (plan §1,
   "Real-hw validation").
+
+## FloppyEmu / real-hardware imaging (added post-M3)
+
+`mkwoz.py <in.dsk> <base>` emits `<base>.woz` (WOZ 2.0) + `.nib` and is
+wired into `build.sh` as the last step. The disk is plain standard
+6-and-2 GCR (std prologues, DOS 3.3 skew — same tables as harness.py), so
+the `.dsk` is itself valid; `.woz` is just the most robust on metal (INFO
+declares 5.25"/16-sector/4 µs, gaps are real 10-bit self-sync, verified
+bit-exact round-trip vs the `.dsk` via the harness denibblizer for all 35
+tracks).
+
+**FloppyEmu mode matters.** UnoDOS is a 140 KB *5.25"* disk → FloppyEmu
+must be in `5.25 disk` mode; its 3.5"/Smartport modes are 800 KB ProDOS
+and reject the image ("not supported"). On an **Apple IIc**, 5.25"
+FloppyEmu = external port = slot 6 **drive 2** (internal = drive 1); the
+IIc auto-boots drive 1, so booting from the FloppyEmu likely needs a
+manual drive-2 boot — exact per-ROM procedure still TBD on metal.

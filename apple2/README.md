@@ -250,7 +250,10 @@ the shared font (`amiga/mkdata.py`'s output) to the hi-res 7px convention;
 `mkdsk.py` packs `boot.bin` + `kernel.bin` into a 35-track DOS-order
 140 KB `.dsk`, patching boot.s's `KTRACKS` placeholder to match the
 kernel's size (currently 2 tracks); `mkfs.py` then formats the mini-FS
-catalog (tracks 20-34) and seeds `disk/*.TXT`.
+catalog (tracks 20-34) and seeds `disk/*.TXT`. Finally `mkwoz.py` emits a
+`.woz` (WOZ 2.0) and a `.nib` next to the `.dsk` for real hardware (see the
+real-hardware section) — same standard 6-and-2 GCR, just packaged for
+FloppyEmu.
 
 ## Testing without real hardware
 
@@ -331,7 +334,25 @@ correctly.
    clone ROM on real hardware) only honors a 1-sector autoload, `boot0`
    needs to replicate the ROM's read loop itself — see HANDOFF.md §3.1.
 3. **FloppyEmu on real Apple II+ (or compatible) hardware**, once AppleWin
-   passes.
+   passes. Use the **`.woz`** the build emits (`build/unodos_apple2.woz`) —
+   it is BMOW's own format, self-describing (the INFO chunk declares disk
+   type 5.25", 16-sector boot, 4 µs bit timing) and carries real
+   self-sync, so picky/old firmware and timing-sensitive machines accept it
+   where a bare `.dsk` can be re-nibblized differently. `build/unodos_apple2.nib`
+   is a raw-nibble fallback. Both are verified bit-exact against the `.dsk`
+   (`python3 mkwoz.py ...` round-trips through the harness denibblizer).
+
+   **UnoDOS is a 140 KB *5.25"* disk — FloppyEmu MUST be in `5.25 disk`
+   mode.** Its 3.5"/Smartport modes emulate an 800 KB ProDOS drive and
+   cannot run this OS (it is not ProDOS and not 800 KB); feeding a 140 KB
+   image to a FloppyEmu set to 3.5" yields "disk image not supported".
+
+   **Apple IIc note.** In 5.25" mode FloppyEmu attaches to the IIc's
+   external disk port and presents as slot 6, **drive 2** (the internal
+   drive is drive 1). The IIc auto-boots drive 1 on power-up and does not
+   reliably fall through to the external drive, so booting UnoDOS from the
+   FloppyEmu on a IIc may need a manual drive-2 boot — exact per-ROM
+   procedure still to be confirmed on metal.
 
 ## Milestones
 
