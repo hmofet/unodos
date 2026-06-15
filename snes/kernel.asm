@@ -178,6 +178,16 @@ v_tk_top    = $19AC         ; scroll: first visible row
 v_tk_playing = $19AE
 v_tk_prow   = $19B0         ; current playback row
 v_tk_last   = $19B2         ; v_frame at the last row step
+; ---- Paint (proc 10): per-pixel unique-tile canvas ----
+v_pt_pen    = $19B4         ; pen colour index (4-15)
+v_pt_x      = $19B6         ; cursor canvas x (pixels)
+v_pt_y      = $19B8         ; cursor canvas y
+v_pt_qh     = $19BA         ; dirty-tile queue head
+v_pt_qt     = $19BC         ; dirty-tile queue tail
+; canvas planar-tile shadow, dirty-dedup flags, and dirty queue in bank $7F:
+PT_CANV     = $7F0000       ; 240 planar 4bpp tiles (240*32 = 7680 bytes)
+PT_INQ      = $7F2000       ; per-tile "already queued" flag (240 bytes)
+PT_QUE      = $7F2100       ; ring of dirty tile indices (256 words)
 v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
 ; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
 ;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
@@ -227,7 +237,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 10
+NICONS   = 11
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -235,6 +245,7 @@ KBD_TOP  = 22
 VRAM_MAP = $0000
 VRAM_CHR = $1000
 VRAM_OBJ = $4000
+T_PTCAN  = NBGTILES         ; first Paint canvas tile (after the BG tile blob)
 
 ; SNES joypad bit masks (16-bit word from $4218)
 PAD_B    = $8000
@@ -328,6 +339,7 @@ PAD_DPAD = $0F00
         jsr sound_init          ; M3: upload + self-test the SPC700 driver
         jsr theme_init          ; M3: active theme = Classic VGA (boot palette)
         jsr tracker_init        ; M3: clear pattern state + load the demo song
+        jsr pt_init             ; M3: white canvas -> VRAM (forced-blank DMA)
 
         ; build the desktop into the shadow (16-bit), flush once (8-bit)
         rep #$30
@@ -374,6 +386,7 @@ MainLoop:
         jsr game_tick
         jsr music_tick
         jsr tracker_tick
+        jsr paint_tick
         jsr app_ticks
         bra MainLoop
 .endproc
@@ -1423,6 +1436,8 @@ MainLoop:
         beq @theme
         cmp #9
         beq @tracker
+        cmp #10
+        beq @paint
         rts
 @sysinfo:
         jsr sysinfo_draw
@@ -1453,6 +1468,9 @@ MainLoop:
         rts
 @tracker:
         jsr tracker_draw
+        rts
+@paint:
+        jsr paint_draw
         rts
 .endproc
 
@@ -2224,7 +2242,8 @@ MainLoop:
         beq @nopal
         stz v_pal_dirty
         jsr FlushPalette
-@nopal: rep #$30
+@nopal: jsr pt_flush            ; DMA dirty Paint canvas tiles (no-op if none)
+        rep #$30
 .a16
 .i16
         pld
@@ -2392,14 +2411,49 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #9
-        jsr launch_app          ; Tracker
+        lda #10
+        jsr launch_app          ; Paint
+        ; paint a test pattern so the canvas shows content in the screenshot
+        stz LC0
+@diag:  lda LC0                 ; diagonal line (x = y)
+        sta A0
+        sta A1
+        lda #8                  ; red
+        sta A2
+        jsr pt_setpx
+        lda #95                 ; anti-diagonal (x = 95 - y)
+        sec
+        sbc LC0
+        sta A0
+        lda LC0
+        sta A1
+        lda #4                  ; cyan
+        sta A2
+        jsr pt_setpx
+        inc LC0
+        lda LC0
+        cmp #96
+        bcc @diag
+        ; a filled box 40..100 x 24..64 in yellow (pen 5)
+        lda #24
+        sta LC1
+@brow:  lda #40
+        sta LC0
+@bcol:  lda LC0
+        sta A0
+        lda LC1
+        sta A1
         lda #5
-        sta v_tk_row            ; move the cursor into view
-        lda #1
-        sta v_tk_chan
-        lda #1
-        sta v_tk_playing        ; show playback running
+        sta A2
+        jsr pt_setpx
+        inc LC0
+        lda LC0
+        cmp #100
+        bcc @bcol
+        inc LC1
+        lda LC1
+        cmp #64
+        bcc @brow
         lda #0
         jsr select_icon
         rts
@@ -2432,6 +2486,7 @@ MainLoop:
 .include "games.inc"
 .include "theme.inc"
 .include "tracker.inc"
+.include "paint.inc"
 
 ; ============================================================================
 ; Data
@@ -2464,6 +2519,7 @@ icon_tab:
         .word 25, 25            ; 7 Music
         .word 1, 27             ; 8 Theme
         .word 9, 27             ; 9 Tracker
+        .word 17, 27            ; 10 Paint
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2475,9 +2531,10 @@ icon_names:
         .word name_music
         .word name_theme
         .word name_tracker
+        .word name_paint
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4, 5, 6, 3, 8, 9
+        .word 0, 1, 2, 7, 4, 5, 6, 3, 8, 9, 10
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2491,6 +2548,7 @@ app_def_tab:
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
         .word 4, 2, 24, 16, str_t_theme      ; 8 Theme
         .word 1, 1, 30, 20, str_t_tracker    ; 9 Tracker
+        .word 4, 2, 23, 17, str_t_paint      ; 10 Paint (20x12 canvas)
 
 ; ============================================================================
 ; Cartridge header + vectors

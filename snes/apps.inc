@@ -644,6 +644,8 @@ MUS_VOICE = 0
         beq @theme
         cmp #9
         beq @trk
+        cmp #10
+        beq @pnt
         rts
 @np:    jsr notepad_key
         rts
@@ -660,6 +662,8 @@ MUS_VOICE = 0
 @theme: jsr theme_key
         rts
 @trk:   jsr tracker_key
+        rts
+@pnt:   jsr paint_key
         rts
 .endproc
 
