@@ -5,6 +5,15 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — Tracker (4-voice DOC pattern sequencer)] - 2026-06-15 (Build 418)
+
+`iigs/tracker.i` (proc 8): a 16-step x 4-channel pattern grid edited with the
+arrows + number keys, P toggles playback, and `tracker_tick` plays each step's
+four channels on DOC oscillators 0-3 - real polyphony on the IIGS
+(`iigs/shots/m3_tracker.png`). `tests/tracker.py` -> `TRACKER PASS` (edit /
+cursor / 4-voice DOC playback verified via the harness DOC log). Remaining for
+full parity: Pac-Man, OutLast, scheduler.
+
 ## [Apple IIGS port — Paint (mouse-driven Super Hi-Res colour canvas)] - 2026-06-15 (Build 417)
 
 `iigs/paint.i` (proc 6): a 36x18 fat-pixel canvas, an 8-colour ink palette,
