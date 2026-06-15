@@ -38,6 +38,14 @@ PTT_FOVAL   equ 7
 PTT_FILL    equ 8
 PTT_SPRAY   equ 9
 
+; The Paint app body MOVED to the disk-loaded PAINT.APP (paint_app.asm): all
+; geometry / pixel / shape / flood / input / drag code, plus pt_clear / pt_save
+; / pt_load / paint_opened. Only pt_restore_palette stays kernel-resident -
+; close_window calls it to undo Paint's live pen re-tuning. The canvas + the
+; flood stack stay in the kernel BSS (pt_canvas / pt_stack) and are published to
+; the app via APIVEC; cop_colptr / ext_palette are exported kernel data. The
+; moved bodies are kept here only behind KEEP_INKERNEL_PAINT (off).
+        ifd     KEEP_INKERNEL_PAINT
 ; ---------------------------------------------------------------- geometry
 ; pt_origin - a2 = window -> d0/d1 = canvas screen origin
 pt_origin:
@@ -994,7 +1002,10 @@ pt_pen_color_ptr:
         lea     2(a0,d0.w),a0
         rts
 
-; pt_restore_palette - closing Paint: put the game palette back
+        endc                        ; KEEP_INKERNEL_PAINT
+
+; pt_restore_palette - closing Paint: put the game palette back (kernel-resident
+; so close_window can always call it, even when Paint is disk-loaded).
 pt_restore_palette:
         movem.l d0-d1/a0-a1,-(sp)
         move.l  cop_colptr(pc),a0
@@ -1007,6 +1018,7 @@ pt_restore_palette:
         movem.l (sp)+,d0-d1/a0-a1
         rts
 
+        ifd     KEEP_INKERNEL_PAINT
 ; pt_clear - canvas to the background pen
 pt_clear:
         movem.l d0-d1/a0,-(sp)
@@ -1060,9 +1072,15 @@ paint_opened:
 .out:   movem.l (sp)+,d0/a0/a4
         rts
 
+        endc                        ; KEEP_INKERNEL_PAINT
+
 ; ---------------------------------------------------------------- data
+; Only the window-title strings stay in the kernel; the footer hint + file name
+; moved into PAINT.APP.
 str_t_paint:    dc.b    "Paint",0
 name_paint:     dc.b    "Paint",0
+        ifd     KEEP_INKERNEL_PAINT
 str_pt_foot:    dc.b    "1-0:tool [/]:pen r/g/b:tune n:new s/l:disk",0
 str_pt_name:    dc.b    "PAINT   UNO"
         even
+        endc                        ; KEEP_INKERNEL_PAINT

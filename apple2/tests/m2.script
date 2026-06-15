@@ -12,8 +12,8 @@
 wait 600
 shot m2_desktop          # desktop: SysInfo/Clock windows open, Files icon present
 key right                # sel_icon: Clock -> Files (~9.6K instrs, within KEY_INSTRS)
-key return               # launch Files (beep_click: app launch)
-wait 13                  # files_open+beep_click+files_draw (~89.6K total)
+key return               # launch Files (disk-load: RWTS read into APP_BASE)
+wait 200                 # head seek + multi-sector RWTS read + files_draw
 shot m2_files            # HELLO.TXT/README.TXT listed with sizes, HELLO.TXT selected
 key return               # open HELLO.TXT (87B) in Notepad (beep_click: app launch)
 wait 24                  # notepad_load (fs_read) + beep_click + notepad_draw (~140.4K total)

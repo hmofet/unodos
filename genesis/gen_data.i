@@ -176,9 +176,45 @@ tiles_all:
     dc.l $00000000,$0DDDDDD0,$0DFDDFD0,$0DDDDDD0,$0DDDDDD0,$0DDDDDD0,$0DDDDDD0,$00000000   ; spr ghost fright
     dc.l $00000000,$00000000,$00000000,$000EEE00,$000EEE00,$000EEE00,$00000000,$00000000   ; spr ghost eaten
 
-; Canon in D: PSG tone value (NTSC), 60Hz ticks, staff y-off
-mus_count: dc.w 24
-mus_notes:
+; Music library: each note = (PSG tone value NTSC, 60Hz ticks, staff y-off).
+; mus_songtab entry = notes_ptr.l, count.w, title_ptr.l (10 bytes).
+MUS_NSONGS equ 8
+mus_songtab:
+    dc.l mus_s0_notes
+    dc.w 24
+    dc.l mus_t0
+    dc.l mus_s1_notes
+    dc.w 15
+    dc.l mus_t1
+    dc.l mus_s2_notes
+    dc.w 14
+    dc.l mus_t2
+    dc.l mus_s3_notes
+    dc.w 19
+    dc.l mus_t3
+    dc.l mus_s4_notes
+    dc.w 25
+    dc.l mus_t4
+    dc.l mus_s5_notes
+    dc.w 21
+    dc.l mus_t5
+    dc.l mus_s6_notes
+    dc.w 26
+    dc.l mus_t6
+    dc.l mus_s7_notes
+    dc.w 15
+    dc.l mus_t7
+    even
+mus_t0: dc.b "Canon in D  (Pachelbel)",0
+mus_t1: dc.b "Ode to Joy  (Beethoven)",0
+mus_t2: dc.b "Twinkle Twinkle  (Mozart)",0
+mus_t3: dc.b "Greensleeves  (Trad.)",0
+mus_t4: dc.b "Jingle Bells  (Pierpont)",0
+mus_t5: dc.b "When the Saints  (Trad.)",0
+mus_t6: dc.b "Mary Had a Little Lamb",0
+mus_t7: dc.b "Amazing Grace  (Trad.)",0
+    even
+mus_s0_notes:
     dc.w 214,30,24
     dc.w 226,30,22
     dc.w 254,30,18
@@ -203,6 +239,148 @@ mus_notes:
     dc.w 254,16,18
     dc.w 285,16,14
     dc.w 226,16,22
+mus_s1_notes:
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 321,30,10
+    dc.w 285,30,14
+    dc.w 285,30,14
+    dc.w 321,30,10
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 427,30,0
+    dc.w 427,30,0
+    dc.w 380,30,4
+    dc.w 339,30,8
+    dc.w 339,45,8
+    dc.w 380,16,4
+    dc.w 380,60,4
+mus_s2_notes:
+    dc.w 427,30,0
+    dc.w 427,30,0
+    dc.w 285,30,14
+    dc.w 285,30,14
+    dc.w 254,30,18
+    dc.w 254,30,18
+    dc.w 285,60,14
+    dc.w 321,30,10
+    dc.w 321,30,10
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 380,30,4
+    dc.w 427,60,0
+mus_s3_notes:
+    dc.w 254,30,18
+    dc.w 214,30,24
+    dc.w 191,30,28
+    dc.w 170,45,32
+    dc.w 160,16,34
+    dc.w 170,30,32
+    dc.w 191,30,28
+    dc.w 226,30,22
+    dc.w 285,45,14
+    dc.w 254,16,18
+    dc.w 226,30,22
+    dc.w 214,30,24
+    dc.w 254,30,18
+    dc.w 254,45,18
+    dc.w 270,16,16
+    dc.w 254,30,18
+    dc.w 226,60,22
+    dc.w 270,30,16
+    dc.w 339,60,8
+mus_s4_notes:
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,60,8
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,60,8
+    dc.w 339,30,8
+    dc.w 285,30,14
+    dc.w 427,45,0
+    dc.w 380,16,4
+    dc.w 339,60,8
+    dc.w 321,30,10
+    dc.w 321,30,10
+    dc.w 321,45,10
+    dc.w 321,16,10
+    dc.w 321,30,10
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,16,8
+    dc.w 339,16,8
+    dc.w 285,30,14
+    dc.w 285,30,14
+    dc.w 321,30,10
+    dc.w 380,30,4
+    dc.w 427,60,0
+mus_s5_notes:
+    dc.w 427,30,0
+    dc.w 339,30,8
+    dc.w 321,30,10
+    dc.w 285,60,14
+    dc.w 427,30,0
+    dc.w 339,30,8
+    dc.w 321,30,10
+    dc.w 285,60,14
+    dc.w 427,30,0
+    dc.w 339,30,8
+    dc.w 321,30,10
+    dc.w 285,30,14
+    dc.w 339,30,8
+    dc.w 427,30,0
+    dc.w 339,30,8
+    dc.w 380,60,4
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 427,30,0
+    dc.w 285,60,14
+mus_s6_notes:
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 427,30,0
+    dc.w 380,30,4
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,60,8
+    dc.w 380,30,4
+    dc.w 380,30,4
+    dc.w 380,60,4
+    dc.w 339,30,8
+    dc.w 285,30,14
+    dc.w 285,60,14
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 427,30,0
+    dc.w 380,30,4
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 380,30,4
+    dc.w 339,30,8
+    dc.w 380,30,4
+    dc.w 427,60,0
+mus_s7_notes:
+    dc.w 285,30,14
+    dc.w 214,60,24
+    dc.w 170,30,32
+    dc.w 214,30,24
+    dc.w 170,60,32
+    dc.w 191,30,28
+    dc.w 214,60,24
+    dc.w 254,30,18
+    dc.w 285,60,14
+    dc.w 214,30,24
+    dc.w 170,60,32
+    dc.w 191,30,28
+    dc.w 214,30,24
+    dc.w 254,30,18
+    dc.w 285,60,14
 
 ; game songs: (PSG tone value or 0, 60Hz ticks) pairs
 koro_count: dc.w 39

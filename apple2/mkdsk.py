@@ -7,9 +7,15 @@ zero-padded to a whole number of tracks. The 'ktpatch' placeholder
 (CMP #$4B at boot.s) is patched with KTRACKS+1 so boot0's track loop
 stops after loading exactly the kernel's tracks.
 
-Usage: mkdsk.py <boot.bin> <kernel.bin> <out.dsk>
+Disk-loaded apps: after the kernel, each app binary is written track-aligned
+at its logical offset (track*4096 + sector*256), per build/app_placement.txt
+(written by applayout.py). The kernel loader reads them back with rwts_read
+(logical sectors), so they round-trip exactly like the kernel image and the
+mini-FS region.
+
+Usage: mkdsk.py <boot.bin> <kernel.bin> <out.dsk> [app_placement.txt]
 """
-import sys, struct
+import sys, struct, os
 
 TRACK = 4096            # 16 sectors * 256 bytes
 TRACKS = 35
@@ -49,6 +55,25 @@ boot[at + 1] = patch
 img = bytearray(DISK)
 img[0:TRACK] = boot
 img[TRACK:TRACK + len(kern)] = kern
+
+# ---- place the disk-loaded app binaries (track-aligned, logical order) ----
+napps = 0
+if len(sys.argv) > 4:
+    place_p = sys.argv[4]
+    for line in open(place_p):
+        line = line.strip()
+        if not line:
+            continue
+        app_id, track, nsec, binp = line.split(maxsplit=3)
+        track, nsec = int(track), int(nsec)
+        data = open(binp, "rb").read()
+        off = track * TRACK
+        assert off + len(data) <= DISK, f"app {binp} overflows the image"
+        assert track + (nsec + 15)//16 <= FS_TRACK, \
+            f"app {binp} (track {track}) overlaps the FS region at {FS_TRACK}"
+        img[off:off + len(data)] = data
+        napps += 1
+
 open(out_p, "wb").write(img)
 print(f"{out_p}: kernel {len(kern)} bytes ({ktracks} track(s)), "
-      f"KTRACKS+1={patch}, image {DISK} bytes ({TRACKS} tracks)")
+      f"KTRACKS+1={patch}, {napps} disk app(s), image {DISK} bytes ({TRACKS} tracks)")

@@ -8,12 +8,16 @@ Usage: mkapi.py <kernel.sym> <out.inc>
 """
 import sys, re
 
-# the routines a disk-loaded app may call (kept stable across kernel builds)
+# the routines a disk-loaded app may call (kept stable across kernel builds).
+# Also exports a few kernel DATA addresses apps read/write: is_pal (SysInfo),
+# theme_desk/theme_border (Theme writes these; draw_desktop reads them).
 API = [
     "draw_char", "draw_string", "draw_name12", "draw_name12_title", "draw_dec16",
     "fill_rows", "color_fill", "dither_rect", "win_outline", "app_clear",
     "clear_bitmap", "blit_cell", "sid_click", "return_to_desktop",
-    "fs_find", "fs_read", "fs_save", "fs_entry_ptr",
+    "fs_init", "fs_find", "fs_read", "fs_save", "fs_delete", "fs_entry_ptr",
+    "read_tod",
+    "is_pal", "theme_desk", "theme_border",
 ]
 
 

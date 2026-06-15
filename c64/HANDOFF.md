@@ -8,10 +8,11 @@
 > (`$C000-$CFFF`; the SRAM model — a 1541/IEC driver is the real-hw follow-up),
 > and Files ([files.i](files.i)) + Notepad ([notepad.i](notepad.i)).
 >
-> **M3** — Theme/Dostris/Music inline ([theme.i](theme.i)/[dostris.i](dostris.i)/
-> [music.i](music.i)); Pac-Man/Tracker/Paint/OutLast as **disk-loaded apps**
-> ([pacman.s](pacman.s)/[tracker.s](tracker.s)/[paint.s](paint.s)/
-> [outlast.s](outlast.s)).
+> **M3** — the full roster. **All apps are now disk-loaded** — Theme, Dostris,
+> Music, Pac-Man, Tracker, Paint and OutLast are each a separate binary on the
+> `.d64`, loaded to `$5000` on demand; the kernel contains no app code (`.prg`
+> 8603 → 3775 bytes, ~56% smaller). (Theme/Dostris/Music were inline in an
+> earlier revision — they are disk-loaded now too.)
 >
 > **Disk-app loader** (the key M3 architecture): apps are separate binaries at
 > `$5000` linked to the kernel only by `build/kernel_api.inc` (addresses

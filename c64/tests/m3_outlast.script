@@ -1,5 +1,5 @@
 wait 70
-keys right right right right right right right right   # to OutLast icon (9)
+keys right right right right right right right right right   # to OutLast icon (9)
 key return
 shot m3_outlast
 key left

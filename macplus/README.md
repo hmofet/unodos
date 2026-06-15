@@ -46,13 +46,38 @@ portable 68K FAT12 core ([fat12.i](fat12.i), shared with the Amiga port).
 - **Notepad** views/edits text; typing edits, arrows + Backspace navigate,
   and **Clr** (the M0110A keypad clear, raw `$50`) saves back to the
   floppy (`fat_save_file`, a real `_Write`).
-- **Disk-loaded apps**: the launcher reads an app *image* off the floppy
-  into `$40000` and runs it — exactly as the x86 launcher loads `.BIN`s.
-  The app ([demo_app.asm](demo_app.asm) → `DEMO.APP`) is position-
-  independent 68K code the kernel calls with `d0=0` (draw) / `d0=1` (key),
-  handing it `a5` = a **ksys service table** (draw_string, fill_rect,
-  fat_find_file/read_file, get_ticks, …) so it holds no absolute kernel
-  addresses. [diskapp.i](diskapp.i) is the loader + ABI glue.
+## Disk-loaded apps — the kernel contains NO app code
+
+Every windowed app except **SysInfo** and **Clock** (tiny, no filesystem use)
+lives on the floppy's FAT12 volume as a separate `.APP` binary and is loaded at
+runtime. The kernel image holds the window manager, 1-bit renderer, input
+drivers, FAT12/`.Sony` storage, the audio sequencers, the cooperative
+scheduler, and the loader — but no app UI.
+
+- **Per-app resident slots.** Each app has a fixed 16 KB load region in free
+  RAM (`$40000 + slot*0x4000`, below the stack). An app stays resident once
+  loaded, so several apps can be open at once — the windowed multitasking UX is
+  preserved. Files+Notepad ship as one `FILES.APP` (Files opens a file *into*
+  Notepad, so they are coupled) serving procs 2 and 3 from one slot.
+- **ABI** (mirrors the C64 port). An app is a raw 68K binary assembled at its
+  slot org whose first four longs are a vector table: `draw / key / tick /
+  click`. The window manager dispatches each window's events through the loaded
+  app's vectors ([diskapp.i](diskapp.i): `app_disp_draw/key/tick/click` →
+  `app_ensure` loads the slot on demand → `jsr (vector)`).
+- **Linked by address.** Apps reference kernel routines and variables by
+  *absolute address* via the generated [`build/kernel_api.inc`](build) — there
+  is no `a5` service table. [mkapi.py](mkapi.py) extracts the addresses from the
+  kernel's vasm symbol listing; [mkapp.py](mkapp.py) rewrites each app's
+  kernel-symbol `(pc)` refs to absolute and promotes kernel `bsr/bra` to
+  `jsr/jmp` (a PC-relative branch can't reach the kernel from a slot). Static
+  equates (memory map, window record, key codes) come from
+  [sysequ.i](sysequ.i). The build runs kernel → API table → each `.APP` →
+  FAT12 pack in one pass, so apps never link against a stale table.
+- **Apps:** `FILES.APP` (Files+Notepad), `DOSTRIS.APP`, `PACMAN.APP`,
+  `OUTLAST.APP`, `PAINT.APP`, `MUSIC.APP`, `TRACKER.APP`, `THEME.APP`, and a
+  sample `DEMO.APP`. The audio sequencers (game music, Music, Tracker playback)
+  stay kernel-side ([appsvc.i](appsvc.i)) so a song keeps playing while its
+  window is not topmost; the app holds only the draw/key UI.
 
 ## Hardware layer (everything else is the portable UnoDOS core)
 
@@ -127,7 +152,7 @@ Mac II class needs the `mac2` geometry build and a B&W monitor setting.
 Needs vasmm68k_mot (same toolchain as the Amiga/Genesis ports) and
 Python 3. `mkdisk.py` packs boot blocks + kernel and patches the boot
 block's `ioReqCount` with the real kernel size; `mkfs.py` then writes the
-FAT12 volume (the `disk/*.TXT` content plus the assembled `DEMO.APP`).
+FAT12 volume (the `disk/*.TXT` content plus every assembled `*.APP`).
 
 ## Testing without an Apple ROM
 
@@ -141,8 +166,9 @@ scripted input (`pip install unicorn`):
 ```sh
 ./build.sh test
 python3 harness.py build/unodos_macplus_test.dsk shots < tests/m1.script
-./build.sh            # the plain image carries the FAT12 volume + DEMO.APP
+./build.sh            # the plain image carries the FAT12 volume + every *.APP
 python3 harness.py build/unodos_macplus.dsk shots < tests/m2.script
+python3 harness.py build/unodos_macplus.dsk shots < tests/disk_full.script  # all disk apps
 ```
 
 The harness plays the .Sony driver for **both** `_Read` and `_Write`
@@ -158,6 +184,13 @@ Verified in the harness (milestone 2, `tests/m2.script`): mount the FAT12
 volume, list the root directory, open a file in Notepad, edit it, save it
 back to the floppy (`_Write`), close + reopen and confirm the edit
 persisted, then load `DEMO.APP` off the floppy and drive its key handler.
+
+Verified in the harness (disk-loaded apps, `tests/disk_full.script`): each
+app loads from its FAT12 `.APP` into its resident slot and renders — Files
+lists the directory (including the `.APP`s themselves), Notepad opens a file
+from Files, Dostris/Pac-Man/OutLast play, Music/Tracker show their UI, Theme
+applies a dither scheme to the whole desktop, Paint draws. Multiple apps stay
+resident at once (`tests/residency.script`).
 
 ## Mini vMac validation (real Mac Plus ROM) — PASSED 2026-06-12
 

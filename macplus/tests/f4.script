@@ -1,0 +1,9 @@
+wait 90
+dblclick 208 48
+wait 24
+peek 241ac
+peek 2419e
+peek 241a0
+key down
+wait 12
+peek 241a0

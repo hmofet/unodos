@@ -92,6 +92,35 @@ Chip-RAM map: 5 contiguous bitplanes at `$60000`, copper list `$76000`,
 sprite data `$76800`, square-wave + tracker instrument samples
 `$76A00`/`$76B00`, supervisor stack to `$7C000`.
 
+## Disk-loaded apps (FAT12 on DF1)
+
+Four apps — **Files, Theme, Dostris, Pac-Man** — are no longer assembled
+into the kernel. They are separate raw binaries (`*_app.asm`, built
+`-Fbin` at a fixed slot) that the kernel reads off the DF1 FAT12 disk at
+runtime (via the existing `fat_read_file`) into per-window slot regions
+at `$50000`, then dispatches each window's draw/key/tick through the
+app's 4-entry JMP table (`open/draw/key/tick`). Several app windows can
+be open at once — the windowed multitasking UX is preserved; a window's
+app code is loaded when it opens (load-on-open).
+
+Because the kernel is a hunk executable that AmigaDOS relocates to an
+unknown address (on the AROS rig, into bogomem ~`$C39xxx`), apps cannot
+link to absolute kernel addresses. Instead the kernel publishes a
+fixed-address **API vector table** (`APIVEC` at `$77000`, filled at boot
+by `apivec_init`) holding the runtime addresses of every exported
+routine and shared data block; apps call/read through it by ordinal
+(`KCALL`/`KDATA` macros in `sysabi.i`). `mkapi.py` reads the kernel
+listing to (a) verify every exported symbol exists and (b) emit
+`build/kernel_api.inc` with `VO_<field>` offsets for the shared `vars`
+block, so the apps can never drift out of sync with the kernel. The
+remaining apps (SysInfo, Clock, Notepad, Music, OutLast, Tracker, Paint)
+are still in-kernel; converting them is the same mechanical pass.
+
+The `.APP` binaries are written onto the DF1 FAT12 disk by `mkfat.py`
+(binary mode) and appear in the Files listing alongside the data files.
+Verify with `./build.sh test <APP>` and the two-floppy
+`uae/unodos_diskapp.uae` config (DF0 = kernel ADF, DF1 = data disk).
+
 ## Storage (FAT12 on DF1)
 
 `fdd.i` + `fat12.i`: the data drive DF1 holds an 880 KB **FAT12** disk

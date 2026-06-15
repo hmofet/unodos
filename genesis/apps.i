@@ -568,13 +568,28 @@ psg_tone:
         movem.l (sp)+,d0-d1
         rts
 
+; mus_load_song - cache the active song's notes ptr / count / title from
+; mus_songtab[v_mus_song] into VARS. in: a4=VARS. clobbers d0/a0.
+mus_load_song:
+        movem.l d0/a0,-(sp)
+        move.w  v_mus_song(a4),d0
+        mulu    #10,d0              ; 10-byte entries: notes.l, count.w, title.l
+        lea     mus_songtab(pc),a0
+        add.l   d0,a0
+        move.l  (a0),v_mus_base(a4)
+        move.w  4(a0),v_mus_cnt(a4)
+        move.l  6(a0),v_mus_title(a4)
+        movem.l (sp)+,d0/a0
+        rts
+
 ; music_start
 music_start:
         movem.l d0-d1/a0/a4,-(sp)
         lea     VARS,a4
         clr.w   v_mus_ix(a4)
         st      v_mus_playing(a4)
-        lea     mus_notes(pc),a0
+        bsr     mus_load_song
+        move.l  v_mus_base(a4),a0
         move.w  (a0),d1             ; first tone
         bsr     psg_tone
         move.b  #$92,PSG            ; ch0 volume on (2 of 15 attenuation)
@@ -606,13 +621,13 @@ music_tick:
         blt     .out
         move.w  v_mus_ix(a4),d1
         addq.w  #1,d1
-        cmp.w   mus_count(pc),d1
+        cmp.w   v_mus_cnt(a4),d1
         blt     .ixok
         moveq   #0,d1               ; loop
 .ixok:  move.w  d1,v_mus_ix(a4)
         move.w  d1,d2
         mulu    #6,d2
-        lea     mus_notes(pc),a0
+        move.l  v_mus_base(a4),a0
         add.w   d2,a0
         move.w  (a0),d1
         bsr     psg_tone
@@ -637,7 +652,38 @@ music_tick:
 music_key:
         cmp.b   #' ',d1
         beq     .toggle
+        cmp.b   #',',d1
+        beq     .prev
+        cmp.b   #'<',d1
+        beq     .prev
+        cmp.b   #'.',d1
+        beq     .next
+        cmp.b   #'>',d1
+        beq     .next
         moveq   #1,d0
+        rts
+.prev:  lea     VARS,a4
+        move.w  v_mus_song(a4),d0
+        bne     .pdec
+        move.w  #MUS_NSONGS,d0
+.pdec:  subq.w  #1,d0
+        move.w  d0,v_mus_song(a4)
+        bra     .reload
+.next:  lea     VARS,a4
+        move.w  v_mus_song(a4),d0
+        addq.w  #1,d0
+        cmp.w   #MUS_NSONGS,d0
+        blt     .nset
+        moveq   #0,d0
+.nset:  move.w  d0,v_mus_song(a4)
+.reload:
+        bsr     mus_load_song
+        clr.w   v_mus_ix(a4)
+        tst.b   v_mus_playing(a4)
+        beq     .rd
+        bsr     music_start             ; restart playback on the new song
+.rd:    bsr     redraw_topmost
+        moveq   #0,d0
         rts
 .toggle:
         move.b  VARS+v_mus_playing,d0
@@ -645,7 +691,7 @@ music_key:
         bsr     music_stop
         bra     .rd
 .play:  bsr     music_start
-.rd:    bsr     redraw_topmost
+.rd2:   bsr     redraw_topmost
         moveq   #0,d0
         rts
 
@@ -653,6 +699,10 @@ music_key:
 music_draw:
         movem.l d0-d7/a0/a4,-(sp)
         lea     VARS,a4
+        tst.l   v_mus_base(a4)      ; first draw before any play? load song 0
+        bne     .ready
+        bsr     mus_load_song
+.ready:
         ; clear content
         move.w  WX(a2),d0
         addq.w  #1,d0
@@ -664,8 +714,8 @@ music_draw:
         subq.w  #3,d3
         move.w  #ATTR_NORM+T_SOLBG,d4
         bsr     fill_cells
-        ; title
-        lea     str_m_title(pc),a0
+        ; title (from the active song)
+        move.l  v_mus_title(a4),a0
         move.w  WX(a2),d0
         addq.w  #2,d0
         move.w  WY(a2),d1
@@ -684,19 +734,19 @@ music_draw:
         bsr     fill_cells
         ; notes: solid blocks on the staff, the playing one in magenta
         moveq   #0,d7
-.note:  cmp.w   mus_count(pc),d7
+.note:  cmp.w   v_mus_cnt(a4),d7
         bge     .foot
         ; x = wx + 2 + i*(ww-5)/count
         move.w  WW(a2),d0
         subq.w  #5,d0
         mulu    d7,d0
-        divu    mus_count(pc),d0
+        divu    v_mus_cnt(a4),d0
         add.w   WX(a2),d0
         addq.w  #2,d0
         ; y = wy + 8 - yoff/8
         move.w  d7,d2
         mulu    #6,d2
-        lea     mus_notes(pc),a0
+        move.l  v_mus_base(a4),a0
         add.w   d2,a0
         move.w  4(a0),d1            ; staff y offset (pixels)
         lsr.w   #3,d1
@@ -739,8 +789,7 @@ str_n_co:       dc.b    " Co ",0
 str_n_b:        dc.b    " B",0
 str_n_dirty:    dc.b    " *",0
 str_n_save:     dc.b    "  F1:save",0
-str_m_title:    dc.b    "Canon in D  (Pachelbel)",0
-str_m_play:     dc.b    "Y:play/stop  (PSG ch0)",0
+str_m_play:     dc.b    "Y:play  ,/.:song  (PSG)",0
 demo_text:      dc.b    "UnoDOS/Genesis milestone 6",13
                 dc.b    "The quick brown fox",13
                 dc.b    "jumps over the lazy dog.",13

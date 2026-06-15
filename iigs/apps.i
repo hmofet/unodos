@@ -8,7 +8,7 @@
 ; fat_save_file.  Both render with the kernel's cell primitives.
 ; ============================================================================
 
-v_np_loaded = VARS+$30E       ; 1 = Files preloaded NBUF before launching Notepad
+; v_np_loaded lives in sys.inc (shared with the kernel boot-time defaults).
 
 ; draw_nchars: P0 = ptr (bank 0), A2 = count, A0 = cx, A1 = cy, A4 = attr.
 .a16

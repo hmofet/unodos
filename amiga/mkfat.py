@@ -95,7 +95,13 @@ def put_file(name, data):
     print(f"  {fname.decode()} {len(data)} bytes, cluster {first}")
 
 for f in files:
-    data = open(f, "rb").read().replace(b"\r\n", b"\n").replace(b"\n", b"\r")
+    raw = open(f, "rb").read()
+    # binary payloads (disk-loaded app images) go on verbatim; only text
+    # files get the host->Amiga newline conversion.
+    if f.lower().endswith((".app", ".bin")):
+        data = raw
+    else:
+        data = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r")
     put_file(os.path.basename(f), data)
 
 # a longer test file to exercise multi-cluster FAT chains

@@ -185,18 +185,57 @@ tiles.append(("spr ghost fright", ghost(13, 15)))
 tiles.append(("spr ghost eaten", pm_tile(
     lambda x, y: 14 if 3 <= x <= 5 and 3 <= y <= 5 else 0)))
 
-# ---------------- music: Canon in D (PSG, NTSC) ----------------
-F = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "A4": 440,
-     "B4": 494, "C5": 523, "D5": 587, "E5": 659, "F5": 698, "G5": 784}
-M = {"C4": 60, "D4": 62, "E4": 64, "F4": 65, "G4": 67, "A4": 69, "B4": 71,
-     "C5": 72, "D5": 74, "E5": 76, "F5": 77, "G5": 79}
-QN, EN = 30, 16                       # quarter/eighth in 60Hz ticks
-tune = ([("C5", QN), ("B4", QN), ("A4", QN), ("G4", QN),
-         ("F4", QN), ("E4", QN), ("F4", QN), ("G4", QN)]
-        + [(n, EN) for n in ["C5", "E5", "B4", "D5", "A4", "C5", "G4", "B4",
-                             "F4", "A4", "E4", "G4", "F4", "A4", "G4", "B4"]])
+# ---------------- music: multi-song library (PSG, NTSC) ----------------
+F = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "GS4": 415,
+     "A4": 440, "B4": 494, "C5": 523, "D5": 587, "E5": 659, "F5": 698, "G5": 784}
+M = {"C4": 60, "D4": 62, "E4": 64, "F4": 65, "G4": 67, "GS4": 68, "A4": 69,
+     "B4": 71, "C5": 72, "D5": 74, "E5": 76, "F5": 77, "G5": 79}
+QN, EN, HN, DQ = 30, 16, 60, 45       # quarter/eighth/half/dotted-quarter, 60Hz ticks
+SONGS = [
+    ("Canon in D  (Pachelbel)",
+     [("C5", QN), ("B4", QN), ("A4", QN), ("G4", QN),
+      ("F4", QN), ("E4", QN), ("F4", QN), ("G4", QN)]
+     + [(n, EN) for n in ["C5", "E5", "B4", "D5", "A4", "C5", "G4", "B4",
+                          "F4", "A4", "E4", "G4", "F4", "A4", "G4", "B4"]]),
+    ("Ode to Joy  (Beethoven)",
+     [("E4", QN), ("E4", QN), ("F4", QN), ("G4", QN), ("G4", QN), ("F4", QN),
+      ("E4", QN), ("D4", QN), ("C4", QN), ("C4", QN), ("D4", QN), ("E4", QN),
+      ("E4", DQ), ("D4", EN), ("D4", HN)]),
+    ("Twinkle Twinkle  (Mozart)",
+     [("C4", QN), ("C4", QN), ("G4", QN), ("G4", QN), ("A4", QN), ("A4", QN),
+      ("G4", HN), ("F4", QN), ("F4", QN), ("E4", QN), ("E4", QN), ("D4", QN),
+      ("D4", QN), ("C4", HN)]),
+    ("Greensleeves  (Trad.)",
+     [("A4", QN), ("C5", QN), ("D5", QN), ("E5", DQ), ("F5", EN), ("E5", QN),
+      ("D5", QN), ("B4", QN), ("G4", DQ), ("A4", EN), ("B4", QN), ("C5", QN),
+      ("A4", QN), ("A4", DQ), ("GS4", EN), ("A4", QN), ("B4", HN), ("GS4", QN),
+      ("E4", HN)]),
+    ("Jingle Bells  (Pierpont)",
+     [("E4", QN), ("E4", QN), ("E4", HN), ("E4", QN), ("E4", QN), ("E4", HN),
+      ("E4", QN), ("G4", QN), ("C4", DQ), ("D4", EN), ("E4", HN), ("F4", QN),
+      ("F4", QN), ("F4", DQ), ("F4", EN), ("F4", QN), ("E4", QN), ("E4", QN),
+      ("E4", EN), ("E4", EN), ("G4", QN), ("G4", QN), ("F4", QN), ("D4", QN),
+      ("C4", HN)]),
+    ("When the Saints  (Trad.)",
+     [("C4", QN), ("E4", QN), ("F4", QN), ("G4", HN), ("C4", QN), ("E4", QN),
+      ("F4", QN), ("G4", HN), ("C4", QN), ("E4", QN), ("F4", QN), ("G4", QN),
+      ("E4", QN), ("C4", QN), ("E4", QN), ("D4", HN), ("E4", QN), ("E4", QN),
+      ("D4", QN), ("C4", QN), ("G4", HN)]),
+    ("Mary Had a Little Lamb",
+     [("E4", QN), ("D4", QN), ("C4", QN), ("D4", QN), ("E4", QN), ("E4", QN),
+      ("E4", HN), ("D4", QN), ("D4", QN), ("D4", HN), ("E4", QN), ("G4", QN),
+      ("G4", HN), ("E4", QN), ("D4", QN), ("C4", QN), ("D4", QN), ("E4", QN),
+      ("E4", QN), ("E4", QN), ("E4", QN), ("D4", QN), ("D4", QN), ("E4", QN),
+      ("D4", QN), ("C4", HN)]),
+    ("Amazing Grace  (Trad.)",
+     [("G4", QN), ("C5", HN), ("E5", QN), ("C5", QN), ("E5", HN), ("D5", QN),
+      ("C5", HN), ("A4", QN), ("G4", HN), ("C5", QN), ("E5", HN), ("D5", QN),
+      ("C5", QN), ("A4", QN), ("G4", HN)]),
+]
 PSG_CLK = 3579545
-notes = [(round(PSG_CLK / (32 * F[n])), d, (M[n] - 60) * 2) for n, d in tune]
+def psg_song(tune):
+    return [(round(PSG_CLK / (32 * F[n])), d, (M[n] - 60) * 2) for n, d in tune]
+mus_songs = [(title, psg_song(tune)) for title, tune in SONGS]
 
 # ---------------- game songs (parsed from the x86 sources) ----------------
 def parse_song(path, label):
@@ -265,11 +304,20 @@ with open(OUT, "w", newline="\n") as f:
     for comment, longs in tiles:
         f.write("    dc.l " + ",".join(f"${v:08X}" for v in longs)
                 + f"   ; {comment}\n")
-    f.write("\n; Canon in D: PSG tone value (NTSC), 60Hz ticks, staff y-off\n")
-    f.write(f"mus_count: dc.w {len(notes)}\n")
-    f.write("mus_notes:\n")
-    for p, d, y in notes:
-        f.write(f"    dc.w {p},{d},{y}\n")
+    f.write("\n; Music library: each note = (PSG tone value NTSC, 60Hz ticks, staff y-off).\n")
+    f.write("; mus_songtab entry = notes_ptr.l, count.w, title_ptr.l (10 bytes).\n")
+    f.write(f"MUS_NSONGS equ {len(mus_songs)}\n")
+    f.write("mus_songtab:\n")
+    for i, (title, song) in enumerate(mus_songs):
+        f.write(f"    dc.l mus_s{i}_notes\n    dc.w {len(song)}\n    dc.l mus_t{i}\n")
+    f.write("    even\n")
+    for i, (title, song) in enumerate(mus_songs):
+        f.write(f'mus_t{i}: dc.b "{title}",0\n')
+    f.write("    even\n")
+    for i, (title, song) in enumerate(mus_songs):
+        f.write(f"mus_s{i}_notes:\n")
+        for p, d, y in song:
+            f.write(f"    dc.w {p},{d},{y}\n")
     f.write("\n; game songs: (PSG tone value or 0, 60Hz ticks) pairs\n")
     f.write(f"koro_count: dc.w {len(koro)}\n")
     f.write("koro_notes:\n")
@@ -283,4 +331,4 @@ with open(OUT, "w", newline="\n") as f:
     f.write("ps2map:\n" + bytes_(ps2map) + "\n")
     f.write("ps2map_sh:\n" + bytes_(ps2map_sh) + "\n")
 
-print(f"wrote {OUT}: {len(tiles)} tiles, {len(notes)} notes, ps2 keymaps")
+print(f"wrote {OUT}: {len(tiles)} tiles, {len(mus_songs)} songs, ps2 keymaps")

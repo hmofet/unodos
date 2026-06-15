@@ -1,0 +1,11 @@
+wait 90
+dblclick 208 48
+wait 20
+key down
+wait 10
+key down
+wait 10
+shot files_sel3
+key enter
+wait 24
+shot files_np

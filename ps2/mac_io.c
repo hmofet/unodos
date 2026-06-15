@@ -128,7 +128,7 @@ OSErr PBGetCatInfoSync(CInfoPBPtr pb)
         lastIdx++;
         if (lastIdx == want) break;
     }
-    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 64);
+    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 32);  /* gFNames[] is 32B */
     {
         char path[128]; struct stat st;
         disk_path(de->d_name, path, sizeof path);
@@ -224,7 +224,7 @@ OSErr PBGetCatInfoSync(CInfoPBPtr pb)
         if (++idx != want) continue;
         for (j = 0; j < 32 && e[j]; j++) nm[j] = (char)e[j];
         nm[j] = 0;
-        if (pb->dirInfo.ioNamePtr) c2p(nm, pb->dirInfo.ioNamePtr, 64);
+        if (pb->dirInfo.ioNamePtr) c2p(nm, pb->dirInfo.ioNamePtr, 32);  /* gFNames[] is 32B */
         /* PCSX2/mcman tags our flat save-files with the directory attribute
            (0x8427) even though open() created writable files - so a non-zero
            file size is the reliable "this is a file" signal here. */

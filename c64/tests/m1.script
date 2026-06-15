@@ -1,14 +1,20 @@
-# UnoDOS/C64 milestone 1 smoke test (AUTOTEST build: SysInfo + Clock open)
+# UnoDOS/C64 milestone 1 smoke test (AUTOTEST: launcher starts on SysInfo icon).
+# Full-screen one-app-at-a-time model: the desktop is a pure icon-grid launcher;
+# SysInfo and Clock are now disk-loaded apps (app0 / app1) like every other.
 wait 60
-shot m1_boot          # desktop, menu bar, SysInfo + Clock windows, 2 icons
+shot m1_boot          # launcher desktop: menu bar, dithered bg, 10 icons
 assert pal            # kernel auto-detected PAL from the raster counter
-key left              # move icon selection (Clock -> SysInfo)
+key right             # move icon selection (SysInfo -> Clock)
 shot m1_select
-key return            # raise/open the selected window (SysInfo), with a beep
+key left              # back to SysInfo (icon 0)
+key return            # launch SysInfo (app0) from disk, with a beep
 assert beep>0
-shot m1_launch
-key esc               # RUN/STOP closes the topmost window
-shot m1_close
-wait 90               # let the CIA Time-of-Day clock advance
-shot m1_clock
+shot m1_launch        # full-screen SysInfo
+key esc               # RUN/STOP returns to the launcher
+shot m1_close         # back at the icon grid
+key right             # select Clock (icon 1)
+key return            # launch Clock (app1) from disk
+shot m1_clock_boot    # full-screen Clock 12:00:0x
+wait 90               # let the CIA Time-of-Day clock advance (tick redraws)
+shot m1_clock         # Clock seconds advanced
 quit

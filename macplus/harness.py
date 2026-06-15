@@ -474,6 +474,10 @@ def main():
             mac.click(int(rest[0]), int(rest[1]))
         elif cmd == "key":
             mac.key(rest[0])
+        elif cmd == "peek":
+            a = int(rest[0], 16)
+            v = struct.unpack(">H", bytes(mac.mu.mem_read(a, 2)))[0]
+            print(f"[peek] {a:#x} = {v} ({v:#x})")
         elif cmd == "quit":
             break
         else:

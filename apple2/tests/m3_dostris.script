@@ -17,7 +17,7 @@ key right             # sel_icon: Files -> Theme
 key right             # sel_icon: Theme -> Dostris (row2, col0)
 shot m3_dostris_select # Dostris icon highlighted (5th icon, row 2)
 key return            # dostris_open: newgame + full board/HUD redraw
-wait 28
+wait 200   # disk-load: head seek + RWTS read
 shot m3_dostris_open   # L piece falling (px=3,py=1), HUD Score:0 Lines:0 Level:0 Next:S
 key right             # dk_right: move piece one column right
 shot m3_dostris_right  # piece shifted right (px=4,py=2)

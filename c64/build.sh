@@ -1,7 +1,7 @@
 #!/bin/sh
 # UnoDOS/C64 build: assemble the 6510 kernel and pack it into a .prg + .d64.
 # Requires dasm (6502/6510 cross-assembler) and python3 (py65 for harness.py).
-# Usage: ./build.sh [test]   ("test" auto-opens SysInfo + Clock at boot)
+# Usage: ./build.sh [test]   ("test" = -DAUTOTEST=1: launcher auto-selects an icon)
 set -e
 cd "$(dirname "$0")"
 
@@ -27,7 +27,7 @@ echo "[3/5] exporting the kernel API for disk-loaded apps..."
 "$PY" mkapi.py build/kernel.sym build/kernel_api.inc
 
 echo "[4/5] assembling disk-loaded apps (org \$5000)..."
-for app in pacman:6 tracker:7 paint:8 outlast:9; do
+for app in sysinfo:0 clock:1 files:2 theme:3 dostris:4 music:5 pacman:6 tracker:7 paint:8 outlast:9; do
   name="${app%%:*}"; id="${app##*:}"
   if [ -f "$name.s" ]; then
     "$DASM" "$name.s" -f3 $DEF -obuild/app$id.bin -lbuild/$name.lst

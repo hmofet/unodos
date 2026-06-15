@@ -1,0 +1,50 @@
+# UnoDOS/AppleII disk-loaded-app regression. Proves the launcher desktop
+# renders and that each app is LOADED FROM DISK (RWTS read into APP_BASE) and
+# runs full-screen, then ESC returns to the launcher.
+#
+# Run: ./build.sh test &&
+#      python3 harness.py build/unodos_apple2_test.dsk shots < tests/diskapp.script
+#
+# Boot leaves the cursor on the Clock icon (index 1). The selection PERSISTS
+# across return-to-desktop, so each app is reached by one `right` from the
+# previous one. Launching does a real head-seek + multi-sector RWTS read
+# (~350k+ CPU instructions), so a big `wait` follows every launch Return.
+wait 600
+shot da_desktop          # the launcher (icon grid + SysInfo/Clock windows)
+
+# --- Files (icon 2): disk-loaded catalog browser over the mini-FS ---
+key right                # Clock(1) -> Files(2)
+key return               # load + run Files
+wait 200
+shot da_files
+key esc                  # sel_icon stays 2
+wait 60
+
+# --- Theme (icon 3) ---
+key right                # 2 -> 3
+key return
+wait 200
+shot da_theme
+key esc
+wait 60
+
+# --- Dostris (icon 4) ---
+key right                # 3 -> 4
+key return
+wait 200
+key space                # hard drop a piece
+wait 24
+shot da_dostris
+key esc
+wait 60
+
+# --- Pac-Man (icon 5) ---
+key right                # 4 -> 5
+key return
+wait 200
+shot da_pacman
+key esc
+wait 60
+
+shot da_back_desktop     # back at the launcher
+quit

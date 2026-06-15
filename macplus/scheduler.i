@@ -224,49 +224,21 @@ post_ticks:
 .out:   movem.l (sp)+,d0-d3/a0
         rts
 
-; app_key_dispatch - d0 = proc, d1 = ascii, d2 = raw
+; app_key_dispatch - d0 = proc, d1 = ascii, d2 = raw. Every app proc is a
+; disk-loaded .APP now; route the key through its loaded key vector.
 app_key_dispatch:
         cmp.w   #2,d0
-        beq     .files
-        cmp.w   #3,d0
-        beq     .notepad
-        cmp.w   #4,d0
-        beq     .diskapp
-        cmp.w   #5,d0
-        beq     .dostris
-        cmp.w   #6,d0
-        beq     .pacman
-        cmp.w   #7,d0
-        beq     .outlast
-        cmp.w   #8,d0
-        beq     .paint
-        cmp.w   #9,d0
-        beq     .music
-        cmp.w   #10,d0
-        beq     .tracker
-        cmp.w   #11,d0
-        beq     .theme
+        blt     .none               ; procs 0/1 (SysInfo/Clock) take no keys
+        bra     app_disp_key        ; -> d0 = 0 consumed / 1 not
+.none:  moveq   #1,d0
         rts
-.theme:   bra     theme_key
-.files:   bra     files_key
-.notepad: bra     notepad_key
-.diskapp: bra     diskapp_key
-.dostris: bra     dostris_key
-.pacman:  bra     pacman_key
-.outlast: bra     outlast_key
-.paint:   bra     paint_key
-.music:   bra     music_key
-.tracker: bra     tracker_key
 
-; app_tick_dispatch - d0 = proc: per-frame work in task context
+; app_tick_dispatch - d0 = proc: per-frame work in task context. The games
+; (Dostris/Pac-Man/OutLast) want per-frame ticks; route them to the loaded
+; tick vector. Other procs' tick vectors just rts, so dispatching them all is
+; harmless and keeps the kernel free of per-proc knowledge.
 app_tick_dispatch:
-        cmp.w   #5,d0
-        beq     .dostris
-        cmp.w   #6,d0
-        beq     .pacman
-        cmp.w   #7,d0
-        beq     .outlast
-        rts
-.dostris: bra     dostris_tick
-.pacman:  bra     pacman_tick
-.outlast: bra     outlast_tick
+        cmp.w   #2,d0
+        blt     .none
+        bra     app_disp_tick
+.none:  rts

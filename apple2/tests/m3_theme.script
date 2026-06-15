@@ -11,7 +11,7 @@ key right             # sel_icon: Clock -> Files
 key right             # sel_icon: Files -> Theme
 shot m3_theme_select  # Theme icon highlighted (4th icon, row 1)
 key return            # theme_open: full-screen preset list, Classic selected+applied
-wait 15
+wait 200   # disk-load: head seek + RWTS read
 shot m3_theme_open    # "Theme" title, 6 presets, Classic row inverted + "* applied"
 key right             # th_sel: Classic -> Light dots
 key right             # th_sel: Light dots -> Dense dots

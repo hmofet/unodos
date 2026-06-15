@@ -19,168 +19,8 @@
 
         processor 6502
 
-; ---- zero page (post-boot, all of $00-$EF is free) ----
-zpPtr       equ $00   ; (2) generic string/data pointer
-zpCol       equ $02   ; draw column, byte 0-39
-zpRow       equ $03   ; draw char-row, 0-23
-zpInv       equ $04   ; draw_char EOR mask ($00 normal, $7F inverted)
-zpTmp       equ $05
-zpFontPtr   equ $06   ; (2)
-zpRowLoPtr  equ $08   ; (2)
-zpRowHiPtr  equ $0A   ; (2)
-zpDst       equ $0C   ; (2)
-zpSIdx      equ $0E
-zpFX        equ $0F   ; fill_rows/frame_rect/dither_rect params
-zpFY        equ $10
-zpFW        equ $11
-zpFH        equ $12
-zpFPat      equ $13
-zpI         equ $14
-zpJ         equ $15
-zpFX0       equ $16   ; frame_rect: saved original params
-zpFY0       equ $17
-zpFW0       equ $18
-zpFH0       equ $19
-zpWX        equ $1A   ; draw_win params
-zpWY        equ $1B
-zpWW        equ $1C
-zpWH        equ $1D
-zpWF        equ $1E   ; focused flag (0/1)
-zpSecs      equ $1F   ; (2) clock_format scratch
-zpHH        equ $21
-zpMM        equ $22
-zpSS        equ $23
-clkbuf      equ $24   ; (9) "HH:MM:SS",0
-zpTens      equ $2D
+        include "sys.inc"
 
-; ---- zero page ($3B-$4D: Files/Notepad apps; fs.i owns $2E-$3A) ----
-zpDVlo   equ $3B   ; (2) draw_dec16 working value
-zpDVhi   equ $3C
-zpDDig   equ $3D   ; draw_dec16 current digit
-zpDLead  equ $3E   ; draw_dec16 leading-zero-suppress flag
-zpNPtr   equ $3F   ; (2) notepad_draw: pointer into NOTEBUF
-zpNRem   equ $41   ; (2) notepad_draw: bytes remaining in scan
-zpNTot   equ $43   ; (2) notepad_draw pass1: total line count (1-based)
-zpNFCol  equ $45   ; (2) notepad_draw pass1: final (cursor) column, 0-based
-zpNSkip  equ $47   ; (2) notepad_draw: lines to skip (tail scroll)
-zpNVis   equ $49   ; notepad_draw pass2: current line visible flag
-zpNLine  equ $4A   ; (2) notepad_draw pass2: current line number (0-based)
-zpNCol   equ $4C   ; notepad_draw pass2: current screen column (capped 40)
-zpNRow   equ $4D   ; notepad_draw pass2: current screen row
-
-zpBeepHalf equ $4E ; beep: half-period delay constant
-zpBeepN    equ $4F ; beep: remaining $C030 toggles
-
-; ---- zero page ($76-$78: Music/Tracker note_play, see music.i) ----
-zpNoteHalf equ $76 ; note_play: half-period inner-delay constant
-zpNoteDur  equ $77 ; (2) note_play: remaining $C030 toggles (16-bit)
-
-; ---- zero page ($79-$7D: Paint, see paint.i) ----
-zpPB     equ $79   ; (2) PAINTBUF cell pointer
-zpPBT    equ $7B   ; (2) pt_render_cell/pt_ptr col/row scratch
-zpPBInk  equ $7D   ; pt_apply: resolved ink pattern
-
-; ---- zero page ($7E-$80: OutLast band-centre math, see outlast.i) ----
-zpTmp2   equ $7E
-zpTmp3   equ $7F
-zpTmp4   equ $80
-
-; ---- zero page ($50-$60: Dostris, see dostris.i) ----
-zpDosMask  equ $50 ; (2) current/test piece+rotation 4x4 bitmask, lo/hi
-zpDosBit   equ $52 ; mask bit index 0-15 during cell iteration
-zpDosBX    equ $53 ; board column for the cell at zpDosBit
-zpDosBY    equ $54 ; board row for the cell at zpDosBit
-zpDosTX    equ $55 ; piece X under test (move/rotate/spawn checks)
-zpDosTY    equ $56 ; piece Y under test
-zpDosIdx   equ $58 ; board byte index (zpDosBY*10+zpDosBX)
-zpDosT1    equ $59 ; mul10/shift scratch
-zpDosT2    equ $5A ; mul10/shift scratch
-zpDosFull  equ $5B ; clear_lines: rows cleared this lock (0-4)
-zpDosRow   equ $5C ; clear_lines: row loop index
-zpDosSrc   equ $5D ; (2) shift_down: source row pointer
-zpDosDst   equ $5F ; (2) shift_down/newgame: dest row / clear pointer
-
-; ---- zero page ($61-$75: Pac-Man, see pacman.i) ----
-zpPMCol    equ $61 ; working maze column (0-12)
-zpPMRow    equ $62 ; working maze row (0-12)
-zpPMIdx    equ $63 ; maze index = row*13+col
-zpPMNCol   equ $64 ; pm_step_walkable: candidate column
-zpPMNRow   equ $65 ; pm_step_walkable: candidate row
-zpPMT1     equ $66 ; mul13 scratch (pm_calc_idx/pm_step_walkable)
-zpPMT2     equ $67 ; abs-value scratch (pm_try_dir/pm_manhattan_to_pac)
-zpPMBestD  equ $68 ; pm_steer: best distance found so far
-zpPMBestDir equ $69 ; pm_steer: best direction found so far ($FF=none)
-zpPMTCol   equ $6A ; pm_steer: target column
-zpPMTRow   equ $6B ; pm_steer: target row
-zpPMDir    equ $6C ; pm_steer: direction loop counter 0-3
-zpPMGI     equ $6D ; pm_steer: ghost index (0/1), saved across X-clobbering calls
-zpPMDir2   equ $6E ; pm_try_dir: direction under test, saved across pm_step_walkable
-zpPMRevDir equ $6F ; pm_steer: reverse of the ghost's current direction
-zpPMOldPC  equ $70 ; pacman_tick: pac column before this tick's move
-zpPMOldPR  equ $71 ; pacman_tick: pac row before this tick's move
-zpPMOldGC  equ $72 ; (2) pacman_tick: ghost columns before this tick's move
-zpPMOldGR  equ $74 ; (2) pacman_tick: ghost rows before this tick's move
-
-; ---- screen layout constants ----
-SCRCOLS         equ 40
-SCRROWS         equ 24
-
-SI_X            equ 1     ; SysInfo window
-SI_Y            equ 8
-SI_W            equ 30
-SI_H            equ 64
-SI_CONTENT_X    equ (SI_X+1)
-SI_CONTENT_Y    equ (SI_Y+8)
-SI_CONTENT_W    equ (SI_W-2)
-SI_CONTENT_H    equ (SI_H-9)
-
-CK_X            equ 1     ; Clock window
-CK_Y            equ 72
-CK_W            equ 20
-CK_H            equ 40
-CK_CONTENT_X    equ (CK_X+1)
-CK_CONTENT_Y    equ (CK_Y+8)
-CK_CONTENT_W    equ (CK_W-2)
-CK_CONTENT_H    equ (CK_H-9)
-
-; icon grid - 2 rows x 4 cols (8 slots; M3 adds Theme/Dostris/Pac-Man/
-; Music/Paint to M1/M2's SysInfo/Clock/Files). Each slot is ICONW
-; byte-cols x ICONH px; row1 frame top = ICONROW1_Y, row2 = ICONROW2_Y;
-; the label sits on the middle char-row of each slot.
-ICONW           equ 9
-ICONH           equ 24
-ICONROW0_Y      equ 120
-ICONROW1_Y      equ 144
-ICONROW2_Y      equ 168
-LABELROW0       equ 16
-LABELROW1       equ 19
-LABELROW2       equ 22
-ICONCOL0_X      equ 1
-ICONCOL1_X      equ 11
-ICONCOL2_X      equ 21
-ICONCOL3_X      equ 31
-NICONS          equ 10    ; populated icon slots (M3: 3 rows x 4 cols)
-
-; Files/Notepad - full-screen apps (app_mode != 0): row0 = title + separator
-; (as draw_desktop), rows1-22 = content, row23 = status/help line.
-APP_CONTENT_Y   equ 8     ; pixel row of content row1
-APP_CONTENT_H   equ 176   ; 22 rows * 8px
-APP_VIEW_ROWS   equ 22
-APP_STATUS_Y    equ 184   ; pixel row of row23
-NOTE_MAXLEN     equ 2048  ; notepad text buffer cap
-
-; TICKS_PER_SEC: main-loop passes per soft-clock second. Calibrated with
-; harness.py's TICK_INSTRS so `wait N` advances clock_secs predictably
-; (HANDOFF SS6b) - see harness.py for the paired constant and the math.
-TICKS_PER_SEC   equ 1000
-
-; KBSS: kernel buffers (RWTS decode tables, FS/file buffers) live above the
-; assembled image - mkdsk.py asserts the image fits below this. Raised from
-; $6000 to $9000 for M3 (5 new apps): gives code $4000-$8FFF (20KB) and
-; leaves $9D00-$BFFF free (after NOTEBUF ends at KBSS+$CFF) for new M3 BSS
-; tables (Dostris board, Pac-Man maze, Music/Tracker data, Paint buffer,
-; pat_tab).
-KBSS            equ $9000
 
         org $4000
 
@@ -248,29 +88,17 @@ ml_check:
         sta frame_ctr
         sta frame_ctr+1
         inc clock_secs
-        bne ml_dos
+        bne ml_app
         inc clock_secs+1
-ml_dos:
-        lda app_mode            ; Dostris gravity: one soft-drop step per
-        cmp #4                  ; soft-clock second (dostris_tick handles
-        bne ml_pac              ; pause/game-over and the level-based rate)
-        jsr dostris_tick
-        jmp mainloop
-ml_pac:
-        lda app_mode            ; Pac-Man: one actor step per soft-clock
-        cmp #5                  ; second (pacman_tick handles game-over)
-        bne ml_ol
-        jsr pacman_tick
-        jmp mainloop
-ml_ol:
-        lda app_mode            ; OutLast: scroll the road one step per
-        cmp #9                  ; soft-clock second
-        bne ml_cdraw
-        jsr ol_tick
+ml_app:
+        lda app_mode            ; a disk-loaded app is resident: give it one
+        cmp #APP_MODE           ; tick per soft-clock second (the app itself
+        bne ml_cdraw            ; rate-limits / handles game-over). A static
+        jsr APP_TICK            ; app's tick is just rts.
         jmp mainloop
 ml_cdraw:
-        lda app_mode            ; Files/Notepad/Theme cover the desktop -
-        bne mainloop            ; don't let the clock redraw clobber them
+        lda app_mode            ; an app covers the desktop - don't let the
+        bne mainloop            ; clock redraw clobber it
         lda win_state+1
         beq mainloop
         jsr draw_clock_content
@@ -286,40 +114,9 @@ ml_cdraw:
 handle_key:
         sta zpTmp
         lda app_mode
-        beq hk_desktop
-        cmp #1
-        beq hk_files
-        cmp #2
-        beq hk_notepad
-        cmp #3
-        beq hk_theme
-        cmp #4
-        beq hk_dostris
-        cmp #5
-        beq hk_pacman
-        cmp #6
-        beq hk_music
-        cmp #7
-        beq hk_tracker
-        cmp #8
-        beq hk_paint
-        jmp outlast_key
-hk_files:
-        jmp files_key
-hk_notepad:
-        jmp notepad_key
-hk_theme:
-        jmp theme_key
-hk_dostris:
-        jmp dostris_key
-hk_pacman:
-        jmp pacman_key
-hk_music:
-        jmp music_key
-hk_tracker:
-        jmp tracker_key
-hk_paint:
-        jmp paint_key
+        cmp #APP_MODE
+        bne hk_desktop
+        jmp APP_KEY             ; disk-loaded app key entry (key in zpTmp)
 hk_desktop:
         lda zpTmp
         cmp #$9B                ; ESC
@@ -330,7 +127,7 @@ hk_notesc:
         lda focus
         cmp #$FF
         beq hk_deskfocus        ; desktop focus -> handle icon nav
-        rts                     ; window focused: no app key handling at M1
+        rts                     ; window focused: no app key handling
 hk_deskfocus:
         lda zpTmp
         cmp #$8D                ; Return
@@ -362,45 +159,90 @@ hk_redraw:
         jsr draw_icons
         rts
 hk_return:
-        lda sel_icon
-        cmp #2
-        bne hk_ret_3
-        jmp files_open
-hk_ret_3:
-        cmp #3
-        bne hk_ret_4
-        jmp theme_open
-hk_ret_4:
-        cmp #4
-        bne hk_ret_5
-        jmp dostris_open
-hk_ret_5:
-        cmp #5
-        bne hk_ret_6
-        jmp pacman_open
-hk_ret_6:
-        cmp #6
-        bne hk_ret_7
-        jmp music_open
-hk_ret_7:
-        cmp #7
-        bne hk_ret_8
-        jmp tracker_open
-hk_ret_8:
-        cmp #8
-        bne hk_ret_9
-        jmp paint_open
-hk_ret_9:
-        cmp #9
-        bne hk_ret_win
-        jmp outlast_open
-hk_ret_win:
-        lda sel_icon
+        lda sel_icon            ; icon 0/1 = SysInfo/Clock kernel windows;
+        cmp #APPID_FILES        ; ids 2..9 = disk-loaded apps
+        bcs hk_launch
+        lda sel_icon            ; SysInfo / Clock: open as a kernel window
         jsr open_or_raise
         lda sel_icon
         sta focus
+        rts
+hk_launch:
+        lda sel_icon            ; A = app id -> load + run
+        jmp launch_app
 hk_done:
         rts
+
+; ============================================================================
+; disk-app loader - read a separately-assembled app binary off the disk into
+; APP_BASE and run it. The apps (theme/dostris/pacman/.../files) ship as their
+; own raw binaries on dedicated tracks rather than being compiled into the
+; kernel, exactly as the mature UnoDOS ports load apps from disk. See sys.inc
+; for the app ABI and mkdsk.py for the on-disk app placement.
+; ============================================================================
+
+; launch_app - A = app id (2..NICONS-1). load_app reads the app's sectors into
+; APP_BASE via real RWTS; we set app_mode and JSR the app's init entry.
+launch_app:
+        jsr load_app            ; A = app id -> copy app -> APP_BASE
+        jsr beep_click          ; app launch blip
+        lda #APP_MODE
+        sta app_mode
+        jmp APP_INIT            ; app init draws itself; returns to mainloop
+
+; load_app - A = app id. Look up the app's (start track, sector count) and read
+; that many sectors into APP_BASE using the kernel RWTS (the same GCR read path
+; boot.s uses), so this works on real hardware with no harness hook. The app
+; region is page-aligned at APP_BASE; rwts_read fills 256 bytes per call.
+load_app:
+        tax                     ; X = app id (index into the tables)
+        lda app_track,x
+        sta zpTrkWant
+        lda app_secs,x
+        sta zpFSCnt             ; reuse zpFSCnt as the sector counter
+        lda #>APP_BASE
+        sta zpBuf+1
+        lda #<APP_BASE
+        sta zpBuf
+        lda #0
+        sta la_sec              ; logical sector 0..15 within the current track
+la_loop:
+        lda zpFSCnt
+        beq la_done
+        lda la_sec
+        jsr rwts_read           ; read logical sector la_sec of zpTrkWant
+        inc zpBuf+1             ; advance dest by one page (256 bytes)
+        dec zpFSCnt
+        beq la_done
+        inc la_sec
+        lda la_sec
+        cmp #16                 ; next track after 16 logical sectors
+        bne la_loop
+        lda #0
+        sta la_sec
+        inc zpTrkWant
+        jmp la_loop
+la_done:
+        rts
+
+; return_to_desktop - an app calls this to leave: clear app_mode and repaint
+; the launcher (desktop + windows + icons).
+return_to_desktop:
+        lda #0
+        sta app_mode
+        jsr draw_desktop
+        jsr draw_sysinfo_win
+        jsr draw_clock_win
+        jmp draw_icons
+
+; app_track / app_secs - per-app-id (icon index) start track and sector count
+; on the disk. Ids 0/1 (SysInfo/Clock) have no binary. The tables come from
+; build/app_layout.inc, generated by build.sh once every app binary's size is
+; known (a fixed NICONS-byte table either way, so the kernel size is identical
+; across the two assembly passes). See build.sh / mkdsk.py.
+        include "build/app_layout.inc"
+
+la_sec:  dc.b 0                 ; loader: logical sector within the current track
 
 ; ============================================================================
 ; window manager - 2 fixed-position windows (SysInfo=0, Clock=1), z-order
@@ -888,6 +730,34 @@ beep_click:
         lda #BEEP_CLICK_HALF
         ldx #BEEP_CLICK_COUNT
         jmp beep
+
+; ---------------------------------------------------------------- note_play
+; note_play - blocking square wave on $C030 (shared by the Music and Tracker
+; disk apps; kept in the kernel and exported via kernel_api.inc). zpNoteHalf =
+; inner delay constant (half-period), zpNoteDur/+1 = toggle count (16-bit).
+; Each toggle is followed by a ~(5*zpNoteHalf) cycle wait; loop overhead is the
+; NP_OVERHEAD baked into mknotes.py. Clobbers A/X.
+note_play:
+        lda zpNoteDur
+        ora zpNoteDur+1
+        beq np_done             ; zero-length guard
+np_toggle:
+        lda $C030               ; toggle the speaker
+        ldx zpNoteHalf
+np_delay:
+        dex
+        bne np_delay
+        lda zpNoteDur           ; dec the 16-bit toggle counter
+        sec
+        sbc #1
+        sta zpNoteDur
+        lda zpNoteDur+1
+        sbc #0
+        sta zpNoteDur+1
+        ora zpNoteDur
+        bne np_toggle
+np_done:
+        rts
 
 ; ============================================================================
 ; desktop chrome - menu bar, dithered background, icon grid
@@ -1648,18 +1518,6 @@ msg_music:        dc.b "Music",0
 msg_tracker:      dc.b "Tracker",0
 msg_paint:        dc.b "Paint",0
 msg_outlast:      dc.b "OutLast",0
-msg_files_title:  dc.b "Files",0
-msg_notepad_title: dc.b "Notepad: ",0
-msg_files_help:   dc.b "RET=Open  D=Delete  R=Rescan  ESC=Back",0
-msg_files_empty:  dc.b "(no files)",0
-msg_confirm1:     dc.b "Delete ",0
-msg_confirm2:     dc.b "? (Y/N)",0
-msg_note_help:    dc.b "  ^S=Save  ESC=Back",0
-msg_ln:           dc.b "Ln:",0
-msg_col:          dc.b "  Col:",0
-msg_bytes:        dc.b "  Bytes:",0
-msg_full:         dc.b "  FULL",0
-msg_saved:        dc.b "  SAVED",0
 msg_cpu:          dc.b "CPU: 6502 @ 1MHz",0
 msg_ram:          dc.b "RAM: 64K",0
 msg_mach_ii:      dc.b "Apple II",0
@@ -1712,15 +1570,6 @@ rowhi:
 
         include "rwts.i"
         include "fs.i"
-        include "files.i"
-        include "notepad.i"
-        include "theme.i"
-        include "dostris.i"
-        include "pacman.i"
-        include "music.i"
-        include "tracker.i"
-        include "paint.i"
-        include "outlast.i"
         include "scheduler.i"
         include "build/notes7.s"
 
@@ -1737,96 +1586,8 @@ focus:       dc.b 0       ; vars+7  $FF = desktop, else focused window id
 win_state:   dc.b 0,0     ; vars+8  per-window open(1)/closed(0)
 zlist:       dc.b 0,0     ; vars+10 z-order, [0]=topmost, $FF=empty
 
-; ---- Files/Notepad/Theme app state ----
-app_mode:    dc.b 0       ; 0=desktop, 1=Files, 2=Notepad, 3=Theme
-files_sel:   dc.b 0       ; selected directory index in Files
-files_confirm: dc.b 0     ; 0=normal, 1=awaiting delete y/n
-note_idx:    dc.b 0       ; directory index Notepad was opened from
-note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
-note_len:    dc.w 0       ; current buffer length (bytes)
-note_dirty:  dc.b 0       ; 1 if unsaved changes
-note_flash:  dc.b 0       ; status line: 0=help, 1=SAVED, 2=FULL
-th_sel:      dc.b 0       ; Theme: highlighted preset (cursor)
-th_cur:      dc.b 0       ; Theme: currently-applied preset (matches pat_tab)
-
-; ---- Dostris state (board itself is DOSBOARD in BSS, see dostris.i) ----
-dos_piece:   dc.b 0       ; current piece type 0-6 (I,O,T,S,Z,J,L)
-dos_rot:     dc.b 0       ; current rotation 0-3
-dos_px:      dc.b 0       ; current piece origin column (4x4 box, 0-9)
-dos_py:      dc.b 0       ; current piece origin row (4x4 box, 0-19)
-dos_next:    dc.b 0       ; next piece type 0-6
-dos_score:   dc.w 0       ; score
-dos_lines:   dc.b 0       ; total lines cleared
-dos_level:   dc.b 0       ; level = dos_lines/4
-dos_dctr:    dc.b 0       ; gravity tick counter (soft-clock seconds)
-dos_paused:  dc.b 0       ; 1 = paused
-dos_over:    dc.b 0       ; 1 = game over
-dos_rng:     dc.b 1       ; LCG seed (must stay nonzero)
-dos_justlock: dc.b 0      ; softdrop set: 1 if this call locked+respawned
-
-; ---- Pac-Man state (maze itself is PMMAZE in BSS, see pacman.i) ----
-pac_col:     dc.b 0       ; pac tile column 0-12
-pac_row:     dc.b 0       ; pac tile row 0-12
-pac_dir:     dc.b 1       ; current direction 0=up,1=left,2=down,3=right
-pac_nextdir: dc.b 1       ; queued turn (applied at the next open tile)
-gh_col:      dc.b 0,0     ; ghost tile columns
-gh_row:      dc.b 0,0     ; ghost tile rows
-gh_dir:      dc.b 0,0     ; ghost directions
-gh_mode:     dc.b 0,0     ; 0=normal,1=frightened,2=eaten
-pm_score:    dc.w 0
-pm_lives:    dc.b 3
-pm_level:    dc.b 1
-pm_dots:     dc.w 0       ; remaining dots+power pellets
-pm_state:    dc.b 0       ; 0=playing, 1=game over
-pm_fright:   dc.b 0       ; frightened seconds remaining
-pm_mode:     dc.b 0       ; 0=scatter, 1=chase
-pm_modet:    dc.b 0       ; seconds in the current scatter/chase phase
-pm_subtick:  dc.b 0       ; half-speed toggle (frightened ghosts)
-pm_stepctr:  dc.b 0       ; soft-seconds since the last game step
-pm_rng:      dc.b 1       ; LCG seed (must stay nonzero)
-
-; ---- Music/Tracker state (note table is mus_notes in build/notes7.s) ----
-mus_idx:     dc.b 0       ; music: current note index during draw/playback
-tk_row:      dc.b 0       ; tracker: cursor row 0-31
-tk_chan:     dc.b 0       ; tracker: cursor channel 0-3
-tk_top:      dc.b 0       ; tracker: first visible row (scroll)
-tk_vis:      dc.b 0       ; tracker draw: visible-row index 0-11
-tk_cur:      dc.b 0       ; tracker draw/play: absolute row being processed
-tk_ch:       dc.b 0       ; tracker draw/play: channel loop index
-tk_cellbuf:  dc.b 0,0,0,0,0,0   ; tracker: formatted "C-2:0" cell text
-
-; ---- Paint state (canvas itself is PAINTBUF in BSS, see paint.i) ----
-pt_cx:       dc.b 0       ; cursor cell column 0-31
-pt_cy:       dc.b 0       ; cursor cell row 0-33
-pt_tool:     dc.b 0       ; 0=pencil 1=rect 2=frect 3=fill
-pt_ink:      dc.b 3       ; current ink index 0-3
-pt_anchor:   dc.b 0       ; rect/frect: 1 if an anchor is set
-pt_ax:       dc.b 0       ; anchor cell column
-pt_ay:       dc.b 0       ; anchor cell row
-pt_outline:  dc.b 0       ; fillrect: 1=border only
-pt_target:   dc.b 0       ; flood fill: pattern being replaced
-pt_sp:       dc.b 0       ; flood fill: stack pointer
-pt_px:       dc.b 0       ; paint draw/flood: working column
-pt_py:       dc.b 0       ; paint draw/flood: working row
-pt_rx0:      dc.b 0       ; fillrect: normalised bounds
-pt_rx1:      dc.b 0
-pt_ry0:      dc.b 0
-pt_ry1:      dc.b 0
-pt_rx:       dc.b 0       ; fillrect: col iterator
-pt_ry:       dc.b 0       ; fillrect: row iterator
-
-; ---- OutLast state (feasibility prototype, see outlast.i) ----
-ol_carx:     dc.b 0       ; car byte-column
-ol_scroll:   dc.b 0       ; road scroll phase
-ol_dist:     dc.w 0       ; distance travelled
-ol_crash:    dc.b 0       ; 1 = off road
-ol_b:        dc.b 0       ; ol_draw: band loop index
-ol_band:     dc.b 0       ; ol_draw_band: current band
-ol_bandy:    dc.b 0       ; ol_draw_band: band pixel y
-ol_bc:       dc.b 0       ; band road centre
-ol_bhw:      dc.b 0       ; band road half-width
-ol_bl:       dc.b 0       ; band road left col
-ol_br:       dc.b 0       ; band road right col
+; ---- app dispatch state ----
+app_mode:    dc.b 0       ; 0 = launcher, APP_MODE = a disk app is resident
 
 ; ---- scheduler feasibility prototype (SCHED_PROTO builds, see scheduler.i) ----
 sch_cur:     dc.b 0       ; current task index

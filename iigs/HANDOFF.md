@@ -1,5 +1,60 @@
 # Apple IIGS port — implementation handoff
 
+## DISK-LOADED APPS — SHIPPED (2026-06-15)
+
+The apps no longer compile into the kernel: every interactive app is a
+SEPARATE binary read at runtime from the FAT12 volume into its own fixed
+bank-0 region, and the window manager dispatches each window's draw/key/tick/
+start through that app's loaded JMP vector table.  True multi-app residency
+(not load-on-focus): several apps stay resident at once and all tick every
+frame — the cooperative scheduler is preserved (scheduler.py PASS: Dostris +
+Pac-Man resident concurrently, both advancing).  Kernel shrank 11636 -> **6328
+bytes** (5.3 KB of app code left the kernel).
+
+**The ABI (the deferred "diskapp" contract, C64-flavoured but one region per
+app):** each app is a raw binary at a fixed `.org` (sys.inc `SLOT_*`) whose
+first bytes are a JMP vector table — `jmp draw`(+0, S2=window offset) /
+`jmp key`(+3, S0=ascii) / `jmp tick`(+6, per-frame, scans wintab for its own
+proc) / `jmp start`(+9, win_create open hook).  The kernel exports its API
+entry points (`mkapi.py` reads the ld65 `-Ln` label dump -> `build/
+kernel_api.inc`); each app `.include`s `sys.inc` + `kernel_api.inc` and links
+to the kernel purely by address.  The loader (`ensure_loaded` in kernel.s)
+reads `<NAME>.APP` off the volume via `fat_load_named` (scans the on-disk root
+dir, then `fat_read_file`) the first time a proc launches, marks its binary
+resident (`v_app_res[binid]`), and the WM dispatches through `app_vec_tab`.
+
+**Layout:** 8 binaries in the `$4000..$7FFF` arena, 2 KB slots each (FILESNP
+$4000 [Files proc 7 + Notepad proc 2, two vector tables, one region], THEME
+$4800, MUSIC $5000, DOSTRIS $5800, PAINT $6000, TRACKER $6800, PACMAN $7000,
+OUTLAST $7800).  Sizes 370-1399 B; all fit with headroom and all resident at
+once.  `.APP` files are hidden from the Files browser (`fat_list_root` skips
+the "APP" extension) so the document listing stays clean and m2's 3-entry
+expectation holds; the loader reads the directory directly, so hiding them
+from v_dir_list doesn't hurt loading.
+
+**Kept in the kernel** (shared infra, exported via the API): the SHR renderer
++ cell primitives (`draw_str/draw_char/fill_cells/fill_band/fillcell`, the
+last moved here from dostris.i), `fmt_dec/div16/put2dig/putchar`, the WM hooks
+apps drive (`redraw_topmost/repaint_all/ent_x/zent_x/launch_app/
+return_to_desktop`), the **Ensoniq DOC engine** (`doc_init/snd_note/snd_off`,
+moved here from snd.i — Music/Tracker call it), FAT12 storage (fs.i), and
+**SysInfo (proc 0) + Clock (proc 1)** as built-in static info windows (no
+disk binary; `app_vec_tab` entry 0 ⇒ kernel-drawn).
+
+**Files:** new — `sys.inc` (shared equates), `mkapi.py`, `filesnp.s/theme.s/
+music.s/dostris.s/paint.s/tracker.s/pacman.s/outlast.s` (app wrappers).
+Modified — `kernel.s` (loader + vector dispatch + DOC engine + fillcell;
+equates now from sys.inc), `fs.i` (.APP filter, equates from sys.inc),
+`*.i` (state equates moved to sys.inc; fillcell/DOC removed), `build.sh`
+(assemble kernel -> export API -> assemble each app at its org -> pack as
+`.APP`).  The harness needs NO change — apps load through real `fat_read_file`
+over the block driver it already serves.  Verify: all 9 suites PASS;
+`shots/diskapps_multi.png` shows two disk-loaded windows stacked + ticking;
+runtime probe confirms the slot bytes are byte-identical to the on-disk
+`.APP` (empty before launch).  Trap banked: inserting the `.APP` filter into
+`fat_list_root` pushed its branches past ±127 — use `bne :+/jmp` (the IIGS
+long-branch idiom).
+
 ## FULL APP PARITY — SHIPPED (2026-06-15, build 420)
 
 All 11 UnoDOS apps + the cooperative scheduler are implemented and verified

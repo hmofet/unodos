@@ -112,6 +112,11 @@ entry:
     ; Draw initial mouse cursor (if mouse was detected)
     call mouse_cursor_show
 
+%ifdef FAT12_STRADDLE_TEST
+    call fat12_straddle_test        ; FAT12 sector-boundary regression test
+    jmp halt_loop                   ; hold on the PASS/FAIL screen
+%endif
+
     ; Auto-load launcher from boot disk
     call auto_load_launcher
 
@@ -656,6 +661,18 @@ int_09_handler:
     ; Translation tables only cover scancodes 0x00-0x5F; ignore the rest
     cmp al, 0x60
     jae .done
+
+    ; Ctrl+Alt+B toggles the CGA byte-aligned fast paths at runtime, for an
+    ; A/B visual compare on real hardware. Swallowed (not queued) when it fires.
+    cmp al, 0x30                    ; 'B' make code
+    jne .not_cga_toggle
+    cmp byte [kbd_ctrl_state], 0
+    je .not_cga_toggle
+    cmp byte [kbd_alt_state], 0
+    je .not_cga_toggle
+    xor byte [cga_fast_paths], 1
+    jmp .done
+.not_cga_toggle:
 
     ; XT 83-key / AT 84-key keyboards never send E0; their cursor keys are
     ; the numpad (bare 0x47-0x53). With NumLock off, map them to the same
@@ -3517,76 +3534,6 @@ vesa_fill_rect:
 .vf_color: db 0
 .vf_x:     dw 0
 .vf_w:     dw 0
-
-; ============================================================================
-; Welcome Box - White bordered rectangle with text
-; ============================================================================
-
-draw_welcome_box:
-    push es
-
-    ; Set ES to CGA video memory
-    mov ax, [video_segment]
-    mov es, ax
-
-    ; Draw top border (y=50, x=60 to x=260)
-    mov bx, 50                      ; Y coordinate
-    mov cx, 60                      ; Start X
-.top_border:
-    call plot_pixel_white
-    inc cx
-    cmp cx, 260
-    jl .top_border
-
-    ; Draw bottom border (y=150)
-    mov bx, 150
-    mov cx, 60
-.bottom_border:
-    call plot_pixel_white
-    inc cx
-    cmp cx, 260
-    jl .bottom_border
-
-    ; Draw left border (x=60, y=50 to y=150)
-    mov cx, 60
-    mov bx, 50
-.left_border:
-    call plot_pixel_white
-    inc bx
-    cmp bx, 150
-    jle .left_border
-
-    ; Draw right border (x=259, y=50 to y=150)
-    mov cx, 259
-    mov bx, 50
-.right_border:
-    call plot_pixel_white
-    inc bx
-    cmp bx, 150
-    jle .right_border
-
-    ; Render "WELCOME TO UNODOS 3!" message using strings
-    mov bx, 70
-    mov cx, 85
-    mov si, .msg1
-    call gfx_draw_string_stub
-
-    mov bx, 70
-    mov cx, 100
-    mov si, .msg2
-    call gfx_draw_string_stub
-
-    mov bx, 70
-    mov cx, 115
-    mov si, .msg3
-    call gfx_draw_string_stub
-
-    pop es
-    ret
-
-.msg1: db 'WELCOME', 0
-.msg2: db 'TO', 0
-.msg3: db 'UNODOS 3!', 0
 
 ; ============================================================================
 ; Draw 8x8 character
@@ -7574,12 +7521,30 @@ gfx_draw_sprite:
     ; ES = video segment
     mov ax, [video_segment]
     mov es, ax
-    ; Draw loop — DS stays 0x1000, switch to caller_ds only for lodsb
-    push ax
+    ; --- CGA byte-aligned fast path (toggle ON + CGA mode + fully on-screen) ---
+    ; Produces byte-identical VRAM to the per-pixel path below, but hoists the
+    ; row base once per row and writes each pixel inline (no plot_pixel_color
+    ; call = no per-pixel bounds check / mode dispatch / stack churn).
+    cmp byte [cga_fast_paths], 0
+    je .spr_pp
+    cmp byte [video_mode], 0x04         ; CGA mode 4 only
+    jne .spr_pp
+    mov al, [_spr_width]
+    xor ah, ah
+    add ax, cx                          ; AX = base_X + width
+    cmp ax, [screen_width]
+    ja .spr_pp                          ; sprite crosses right edge -> per-pixel (clip)
+    mov al, [_spr_height]
+    xor ah, ah
+    add ax, bx                          ; AX = base_Y + height
+    cmp ax, [screen_height]
+    ja .spr_pp                          ; crosses bottom edge -> per-pixel (clip)
+    jmp .spr_fast
+.spr_pp:
+    ; per-pixel entry: BP = row counter (the fast path uses its own counter)
     mov al, [_spr_height]
     xor ah, ah
     mov bp, ax
-    pop ax
 .spr_row:
     ; Read bitmap byte from caller's segment (brief DS switch)
     push ds
@@ -7609,6 +7574,70 @@ gfx_draw_sprite:
     inc bx                          ; next Y row
     dec bp
     jnz .spr_row
+    pop es
+    POPA86
+    clc
+    ret
+
+; CGA byte-aligned sprite fast path (entered from the eligibility gate above).
+; Equivalent to the per-pixel loop but hoists the row base once per row and
+; writes pixels inline; the eligibility gate guarantees CGA mode + fully on
+; screen, so no per-pixel bounds check is needed. Same 2bpp RMW math as
+; plot_pixel_color, so VRAM output is byte-identical to the reference path.
+.spr_fast:
+    mov [_spr_y], bx                ; BX = base Y
+    mov [_spr_x0], cx               ; CX = base X
+    mov al, [_spr_height]
+    mov [_spr_rows], al
+.spf_row:
+    mov bx, [_spr_y]
+    mov di, bx
+    and di, 0xFFFE
+    mov di, [cs:cga_row_table+di]   ; DI = (Y/2)*80
+    test bl, 1
+    jz .spf_even
+    add di, 0x2000                  ; odd scanline: +8K interlace bank
+.spf_even:
+    mov [_spr_rowbase], di
+    push ds                         ; one source byte per row (matches reference)
+    mov ds, [cs:caller_ds]
+    lodsb
+    pop ds
+    mov ah, al                      ; AH = row bits, MSB first
+    mov cx, [_spr_x0]               ; CX = current X
+    mov bl, [_spr_width]
+    xor bh, bh                      ; BX = column counter
+.spf_col:
+    test ah, 0x80
+    jz .spf_skip
+    mov di, cx
+    SHR_N di, 2                     ; DI = X / 4
+    add di, [_spr_rowbase]          ; DI = VRAM byte offset
+    mov dx, cx
+    and dl, 3
+    mov dh, 3
+    sub dh, dl
+    add dh, dh                      ; DH = (3 - (X & 3)) * 2  = bit shift
+    push cx
+    mov cl, dh
+    mov al, [_spr_color]
+    shl al, cl                      ; AL = color << shift
+    mov dl, 0x03
+    shl dl, cl                      ; DL = 0x03 << shift
+    pop cx
+    not dl                          ; DL = clear mask
+    mov dh, [es:di]
+    and dh, dl
+    or dh, al
+    mov [es:di], dh
+.spf_skip:
+    shl ah, 1                       ; next bit
+    inc cx                          ; next X
+    dec bx
+    jnz .spf_col
+    inc word [_spr_y]               ; next row
+    dec byte [_spr_rows]
+    jnz .spf_row
     pop es
     POPA86
     clc
@@ -8280,6 +8309,20 @@ gfx_blit_rect:
     ; --- CGA / fallback: pixel-by-pixel copy ---
     mov ax, [video_segment]
     mov es, ax
+    ; CGA byte-aligned fast path: toggle ON + CGA mode 4 + src_x, dst_x and
+    ; width all 4-pixel (whole-byte) aligned -> copy whole VRAM bytes per row
+    ; instead of per-pixel read+plot. Any other case keeps the per-pixel path.
+    cmp byte [cga_fast_paths], 0
+    je .blit_cga_check_done
+    cmp byte [video_mode], 0x04
+    jne .blit_cga_check_done
+    mov ax, [_blit_src_x]
+    or ax, [_blit_dst_x]
+    or ax, [_blit_width]
+    test ax, 3                      ; any of the three not 4-aligned?
+    jnz .blit_cga_check_done
+    jmp .blit_cga_fast
+.blit_cga_check_done:
     ; Overlap-safe direction choice (memmove semantics)
     mov ax, [_blit_dst_y]
     cmp ax, [_blit_src_y]
@@ -8422,6 +8465,122 @@ gfx_blit_rect:
     ; Restore DS
     mov ax, 0x1000
     mov ds, ax
+    jmp .blit_finish
+; --- CGA byte-aligned blit fast path (src_x/dst_x/width all 4-aligned) -------
+; Copies whole VRAM bytes (width/4 per row) instead of per-pixel read+plot,
+; computing each row's CGA byte base once. Direction is overlap-safe
+; (memmove): top-down/bottom-up rows for vertical moves, and right-to-left
+; bytes for a same-row rightward move. Output is byte-identical to the
+; per-pixel path for aligned regions.
+.blit_cga_fast:
+    mov ax, [video_segment]
+    mov ds, ax                          ; DS = ES = video for movs
+    mov ax, [_blit_width]
+    SHR_N ax, 2
+    mov [_blit_col], ax                 ; _blit_col = bytes per row
+    mov ax, [_blit_dst_y]
+    cmp ax, [_blit_src_y]
+    jb .bcf_fwd                         ; dst above src: top-down rows
+    ja .bcf_rev                         ; dst below src: bottom-up rows
+    mov ax, [_blit_dst_x]
+    cmp ax, [_blit_src_x]
+    ja .bcf_same_rev                    ; same row, dst right of src
+.bcf_fwd:
+    mov word [_blit_row], 0
+.bcf_fwd_loop:
+    mov ax, [_blit_row]
+    cmp ax, [_blit_height]
+    jae .bcf_done
+    mov bx, [_blit_src_y]
+    add bx, ax
+    call .blit_rowbase                  ; DI = src row base
+    mov si, di
+    mov ax, [_blit_src_x]
+    SHR_N ax, 2
+    add si, ax                          ; SI = src byte offset
+    mov ax, [_blit_row]
+    mov bx, [_blit_dst_y]
+    add bx, ax
+    call .blit_rowbase                  ; DI = dst row base
+    mov ax, [_blit_dst_x]
+    SHR_N ax, 2
+    add di, ax                          ; DI = dst byte offset
+    mov cx, [_blit_col]
+    cld
+    rep movsb
+    inc word [_blit_row]
+    jmp .bcf_fwd_loop
+.bcf_rev:
+    mov ax, [_blit_height]
+    dec ax
+    mov [_blit_row], ax                 ; start at last row
+.bcf_rev_loop:
+    cmp word [_blit_row], 0
+    jl .bcf_done                        ; h<=255: 0xFFFF after row 0, signed-safe
+    mov ax, [_blit_row]
+    mov bx, [_blit_src_y]
+    add bx, ax
+    call .blit_rowbase
+    mov si, di
+    mov ax, [_blit_src_x]
+    SHR_N ax, 2
+    add si, ax
+    mov ax, [_blit_row]
+    mov bx, [_blit_dst_y]
+    add bx, ax
+    call .blit_rowbase
+    mov ax, [_blit_dst_x]
+    SHR_N ax, 2
+    add di, ax
+    mov cx, [_blit_col]
+    cld
+    rep movsb                           ; rows differ -> no within-row overlap
+    dec word [_blit_row]
+    jmp .bcf_rev_loop
+.bcf_same_rev:
+    mov word [_blit_row], 0
+.bcf_sr_loop:
+    mov ax, [_blit_row]
+    cmp ax, [_blit_height]
+    jae .bcf_done
+    mov bx, [_blit_src_y]
+    add bx, ax
+    call .blit_rowbase
+    mov si, di
+    mov ax, [_blit_src_x]
+    SHR_N ax, 2
+    add si, ax
+    mov ax, [_blit_row]
+    mov bx, [_blit_dst_y]
+    add bx, ax
+    call .blit_rowbase
+    mov ax, [_blit_dst_x]
+    SHR_N ax, 2
+    add di, ax
+    mov cx, [_blit_col]
+    add si, cx
+    dec si                              ; SI -> last src byte
+    add di, cx
+    dec di                              ; DI -> last dst byte
+    std
+    rep movsb
+    cld
+    inc word [_blit_row]
+    jmp .bcf_sr_loop
+.bcf_done:
+    mov ax, 0x1000
+    mov ds, ax
+    jmp .blit_finish
+.blit_rowbase:                          ; in: BX=Y ; out: DI=CGA row byte base ; preserves BX
+    push bx
+    and bx, 0xFFFE
+    mov di, [cs:cga_row_table+bx]
+    pop bx
+    test bl, 1
+    jz .blit_rb_even
+    add di, 0x2000
+.blit_rb_even:
+    ret
 .blit_finish:
 .blit_done:
     pop ds
@@ -12622,26 +12781,16 @@ get_next_cluster:
     mov di, dx                      ; DI = byte offset within sector
     add ax, [fat_start]             ; AX = absolute FAT sector number
 
-    ; Check if this FAT sector is already cached
+    ; Check if this FAT sector pair is already cached
     cmp ax, [fat_cache_sector]
     je .sector_cached
 
-    ; Load FAT sector into cache with retry
-    mov [fat_cache_sector], ax      ; Update cached sector number
-
-    push ax
-    mov bx, 0x1000
-    mov es, bx
-    mov bx, fat_cache
-
-    ; AX = absolute FAT sector number
-    call floppy_read_sector         ; Read with retry (preserves AX)
-    pop ax
-
+    ; Load the sector pair [S, S+1] (handles the offset-511 straddle)
+    call load_fat_pair
     jc .read_error
 
 .sector_cached:
-    ; Read 2 bytes from FAT cache at offset DI
+    ; Read 2 bytes from FAT cache at offset DI (valid at DI=511: byte 512 = S+1[0])
     push ds
     mov ax, 0x1000
     mov ds, ax
@@ -12885,6 +13034,49 @@ floppy_write_sector:
 .fws_retry: db 0
 
 ; ============================================================================
+; load_fat_pair - Cache the FAT sector pair [S, S+1] in the 1024-byte fat_cache
+; so a 12-bit entry whose low byte sits at offset 511 (straddling the sector
+; boundary) is fully resident and can be read/written as a whole word. S+1 is
+; fetched only while it is still inside the FAT; past the FAT the high half is
+; unused (no reachable cluster's entry straddles past the last FAT sector).
+; Input:  AX = base FAT sector S (absolute LBA)
+; Output: fat_cache_sector = S; CF=1 on read error
+; Clobbers: CX, DX (BX/ES/AX restored)
+; ============================================================================
+load_fat_pair:
+    push ax
+    push bx
+    push es
+    mov [fat_cache_sector], ax
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache
+    call floppy_read_sector             ; S -> fat_cache[0..511] (preserves AX, ES, BX)
+    jc .lfp_err
+    inc ax                              ; S+1
+    push dx
+    mov dx, [fat_start]
+    add dx, [sectors_per_fat]           ; first sector past FAT1
+    cmp ax, dx
+    pop dx
+    jae .lfp_ok                         ; S+1 beyond FAT: leave the (unused) high half
+    mov bx, fat_cache + 512
+    call floppy_read_sector             ; S+1 -> fat_cache[512..1023]
+    jc .lfp_err
+.lfp_ok:
+    pop es
+    pop bx
+    pop ax
+    clc
+    ret
+.lfp_err:
+    pop es
+    pop bx
+    pop ax
+    stc
+    ret
+
+; ============================================================================
 ; fat12_alloc_cluster - Find and allocate a free cluster in FAT12
 ; Input: None
 ; Output: AX = allocated cluster number, CF=0 success
@@ -12923,24 +13115,18 @@ fat12_alloc_cluster:
     mov di, dx                      ; DI = byte offset within sector
     add ax, [fat_start]             ; AX = absolute FAT sector number
 
-    ; Check if this FAT sector is cached
+    ; Check if this FAT sector pair is cached
     cmp ax, [fat_cache_sector]
     je .ac_cached
 
-    ; Load FAT sector into cache
-    mov [fat_cache_sector], ax
+    ; Load the sector pair [S, S+1] (handles the offset-511 straddle)
     push cx
-    push ax
-    mov bx, 0x1000
-    mov es, bx
-    mov bx, fat_cache
-    call floppy_read_sector
-    pop ax
+    call load_fat_pair
     pop cx
     jc .alloc_error
 
 .ac_cached:
-    ; Read 2 bytes from FAT cache at offset DI
+    ; Read 2 bytes from FAT cache at offset DI (valid at DI=511: byte 512 = S+1[0])
     mov si, fat_cache
     add si, di
     mov ax, [si]                    ; AX = 2 bytes from FAT
@@ -13032,21 +13218,16 @@ fat12_set_fat_entry:
     ; Calculate absolute FAT sector
     add ax, [fat_start]             ; AX = absolute FAT1 sector
 
-    ; Ensure FAT sector is cached
+    ; Ensure the FAT sector pair is cached
     cmp ax, [fat_cache_sector]
     je .sfe_cached
 
-    mov [fat_cache_sector], ax
-    push ax
-    mov bx, 0x1000
-    mov es, bx
-    mov bx, fat_cache
-    call floppy_read_sector
-    pop ax
+    call load_fat_pair              ; load [S, S+1] (handles the offset-511 straddle)
     jc .sfe_error
 
 .sfe_cached:
-    ; Modify the entry in fat_cache
+    ; Modify the entry in fat_cache. At DI=511 the high byte lands in fat_cache[512]
+    ; (= S+1[0]); the straddle flush below writes S+1 back to disk.
     mov si, fat_cache
     add si, di                      ; SI = pointer to entry bytes
 
@@ -13101,6 +13282,28 @@ fat12_set_fat_entry:
     call floppy_write_sector
     jc .sfe_error
 
+    ; Straddle flush: when DI=511 the entry's high byte was written into
+    ; fat_cache[512] (= sector S+1's byte 0), so flush S+1 to both FAT copies.
+    cmp di, 511
+    jne .sfe_done
+    mov ax, [cs:.sfe_sector_off]
+    inc ax                          ; S+1 offset within FAT
+    cmp ax, [sectors_per_fat]
+    jae .sfe_done                   ; S+1 beyond FAT (unreachable for valid clusters)
+    add ax, [fat_start]             ; FAT1 sector S+1
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, fat_cache + 512
+    call floppy_write_sector
+    jc .sfe_error
+    mov ax, [cs:.sfe_sector_off]
+    inc ax
+    add ax, [fat_start]
+    add ax, [sectors_per_fat]       ; FAT2 sector S+1
+    call floppy_write_sector
+    jc .sfe_error
+
+.sfe_done:
     clc
     pop es
     pop bp
@@ -13119,6 +13322,98 @@ fat12_set_fat_entry:
 .sfe_value:      dw 0
 .sfe_fat_offset: dw 0
 .sfe_sector_off: dw 0
+
+; ============================================================================
+; fat12_straddle_test (built only under -DFAT12_STRADDLE_TEST)
+; Round-trips every FAT12 entry whose 12-bit value straddles a 512-byte sector
+; boundary (in-sector offset 511) and its neighbours, proving the boundary
+; read/write is correct AND that writing a straddling entry leaves the adjacent
+; entries intact. Writes C-1 and C+1 first, then C, then reads all three back.
+; Renders PASS/FAIL; the caller halts on the result. -snapshot keeps the FAT
+; scribbles out of the real image.
+; ============================================================================
+%ifdef FAT12_STRADDLE_TEST
+fat12_straddle_test:
+    PUSHA86
+    mov al, 0
+    xor ah, ah
+    call fs_mount_stub              ; sets fat_start / sectors_per_fat
+    jc .fst_fail
+    mov word [cs:.fst_idx], 0
+.fst_loop:
+    mov si, .fst_clusters
+    add si, [cs:.fst_idx]
+    mov cx, [cs:si]
+    or cx, cx
+    jz .fst_pass                    ; 0 terminator -> all clusters passed
+    mov [cs:.fst_curC], cx
+    mov ax, cx                      ; write C-1 = C-1
+    dec ax
+    mov dx, ax
+    call fat12_set_fat_entry
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]          ; write C+1 = C+1
+    mov ax, cx
+    inc ax
+    mov dx, ax
+    call fat12_set_fat_entry
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]          ; write C = C last (straddle write)
+    mov ax, cx
+    mov dx, cx
+    call fat12_set_fat_entry
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]          ; verify C-1 unchanged
+    mov ax, cx
+    dec ax
+    call get_next_cluster
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]
+    mov bx, cx
+    dec bx
+    cmp ax, bx
+    jne .fst_fail
+    mov cx, [cs:.fst_curC]          ; verify C (the straddling entry)
+    mov ax, cx
+    call get_next_cluster
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]
+    cmp ax, cx
+    jne .fst_fail
+    mov cx, [cs:.fst_curC]          ; verify C+1 unchanged
+    mov ax, cx
+    inc ax
+    call get_next_cluster
+    jc .fst_fail
+    mov cx, [cs:.fst_curC]
+    mov bx, cx
+    inc bx
+    cmp ax, bx
+    jne .fst_fail
+    add word [cs:.fst_idx], 2
+    jmp .fst_loop
+.fst_pass:
+    mov bx, 10
+    mov cx, 10
+    mov si, .fst_msg_pass
+    call gfx_draw_string_stub
+    POPA86
+    ret
+.fst_fail:
+    mov bx, 10
+    mov cx, 10
+    mov si, .fst_msg_fail
+    call gfx_draw_string_stub
+    POPA86
+    ret
+.fst_idx:   dw 0
+.fst_curC:  dw 0
+; the only clusters whose 12-bit entry sits at in-sector offset 511 on a
+; 1.44MB FAT12 floppy (odd c == 341 mod 1024; even c == 682 mod 1024)
+.fst_clusters: dw 341, 682, 1365, 1706, 2389, 2730, 0
+.fst_msg_pass: db 'FAT12 STRADDLE TEST: PASS', 0
+.fst_msg_fail: db 'FAT12 STRADDLE TEST: FAIL', 0
+%endif
 
 ; ============================================================================
 ; fat12_read - Read data from file
@@ -22181,6 +22476,11 @@ wrap_width:     dw 0                    ; Wrap width in pixels
 _spr_color:  db 0
 _spr_height: db 0
 _spr_width:  db 0
+; CGA sprite fast-path scratch (Build 421)
+_spr_y:      dw 0            ; current row Y
+_spr_x0:     dw 0            ; base X
+_spr_rowbase: dw 0           ; current row VRAM byte base
+_spr_rows:   db 0            ; remaining rows
 
 ; Scaled sprite temp vars (Build 390)
 _sspr_color:    db 0            ; Draw color
@@ -22206,6 +22506,15 @@ _blit_col:      dw 0            ; Column counter
 _blit_row:      dw 0            ; Row counter
 _blit_src_off:  dw 0            ; VGA source linear offset
 _blit_dst_off:  dw 0            ; VGA dest linear offset
+
+; CGA byte-aligned fast paths toggle (Build 421). The per-pixel reference path
+; is kept alongside the fast path so a visual A/B compare is possible on real
+; hardware (CGA snow / timing only show on metal). Default ON; flip live with
+; Ctrl+Alt+B, or assemble with -DCGA_FAST_DEFAULT=0 for an all-reference image.
+%ifndef CGA_FAST_DEFAULT
+  %define CGA_FAST_DEFAULT 1
+%endif
+cga_fast_paths: db CGA_FAST_DEFAULT
 
 heap_initialized: dw 0
 
@@ -22424,8 +22733,10 @@ fs_read_buffer: times 1024 db 0
 
 ; FAT cache (for cluster chain following)
 ; Stores one sector of FAT at a time
-fat_cache: times 512 db 0
-fat_cache_sector: dw 0xFFFF          ; Currently cached FAT sector (0xFFFF = invalid)
+fat_cache: times 1024 db 0           ; TWO FAT sectors [S, S+1]: a 12-bit entry whose
+                                     ; low byte sits at offset 511 straddles into S+1, so
+                                     ; the pair must be resident to read/write it as a word
+fat_cache_sector: dw 0xFFFF          ; Base sector S of the cached pair (0xFFFF = invalid)
 
 ; ============================================================================
 ; FAT16/Hard Drive Driver Data (v3.13.0)

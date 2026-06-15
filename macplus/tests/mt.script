@@ -1,0 +1,12 @@
+wait 90
+dblclick 372 96
+wait 12
+shot dmusic_open
+key space
+wait 50
+shot dmusic_playing
+key space
+wait 6
+dblclick 136 144
+wait 12
+shot dtheme_after_music

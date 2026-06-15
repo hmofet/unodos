@@ -8,22 +8,10 @@
 ; bank-0 buffer; state is in VARS above the FS dir list.
 ; ============================================================================
 
-DTBOARD     = $9A00           ; 10*18 = 180 bytes (bank 0, after SECBUF)
+; DTBOARD + v_dt_* live in sys.inc (shared with the kernel window table).
 BW          = 10
 BH          = 18
 DROP_FRAMES = 24              ; gravity period
-
-; ---- Dostris state (VARS, above v_dir_list which ends at $440) ----
-v_dt_state  = VARS+$440       ; 0 play, 1 over
-v_dt_piece  = VARS+$442
-v_dt_next   = VARS+$444
-v_dt_rot    = VARS+$446
-v_dt_x      = VARS+$448
-v_dt_y      = VARS+$44A
-v_dt_score  = VARS+$44C
-v_dt_lines  = VARS+$44E
-v_dt_seed   = VARS+$450
-v_dt_drop   = VARS+$452
 
 ; ---- Dostris zp scratch (above the FS temps at $54-$66) ----
 DT0 = $68
@@ -488,34 +476,7 @@ dostris_key:
         jsr redraw_topmost
         rts
 
-; fillcell: A0=cx A1=cy A2=colour index -> fill one 8x8 cell.
-.a16
-.i16
-fillcell:
-        lda A0
-        asl a
-        asl a
-        sta PX
-        lda A1
-        asl a
-        asl a
-        asl a
-        sta PY
-        lda #4
-        sta PW
-        lda #8
-        sta PH
-        lda A2
-        and #$000F
-        sta pxtmp
-        asl a
-        asl a
-        asl a
-        asl a
-        ora pxtmp
-        sta PB
-        jsr fill_band
-        rts
+; (fillcell moved to the kernel as a shared primitive; see kernel_api.inc)
 
 ; dostris_draw: S2 = window offset.
 .a16

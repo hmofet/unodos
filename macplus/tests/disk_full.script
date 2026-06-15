@@ -1,0 +1,54 @@
+wait 90
+dblclick 208 48
+wait 22
+shot d_files
+key down
+wait 6
+key enter
+wait 24
+shot d_notepad
+key esc
+wait 4
+dblclick 56 96
+wait 14
+key n
+wait 20
+shot d_dostris
+key esc
+wait 4
+dblclick 136 96
+wait 16
+key n
+wait 24
+shot d_pacman
+key esc
+wait 4
+dblclick 216 96
+wait 14
+key n
+wait 30
+shot d_outlast
+key esc
+wait 4
+dblclick 372 96
+wait 12
+key space
+wait 40
+shot d_music
+key space
+key esc
+wait 4
+dblclick 48 144
+wait 14
+key d
+wait 8
+shot d_tracker
+key esc
+wait 4
+dblclick 128 144
+wait 12
+key down
+key down
+key enter
+wait 16
+shot d_theme

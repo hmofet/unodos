@@ -1,0 +1,319 @@
+; ============================================================================
+; UnoDOS/Apple IIGS shared system equates - included by kernel.s AND by every
+; disk-loaded app (theme.s, dostris.s, ...). Defines the zero-page pseudo-
+; register layout, the kernel-state (VARS) layout, the window-table format,
+; SHR/attribute constants, the FS buffers, and the disk-app loader ABI so an
+; app assembled SEPARATELY agrees with the kernel.  Kernel routine entry
+; points come from the generated build/kernel_api.inc (addresses extracted
+; from the ld65 label dump by mkapi.py).
+; ============================================================================
+
+; ----------------------------------------------------------- SHR layout (bank E1)
+SHR_PIX  = $2000
+SHR_SCB  = $9D00
+SHR_PAL  = $9E00
+SHR_BANK = $E1
+SHRPIXL  = $E12000
+SHRSCBL  = $E19D00
+SHRPALL  = $E19E00
+ROWBYTES = 160
+NPIX     = 32000
+
+; ----------------------------------------------------------- soft switches / regs
+NEWVIDEO = $00C029
+KBD      = $00C000
+KBDSTRB  = $00C010
+VBL      = $00C019
+MOUSEDLT = $00C024
+MOUSESTA = $00C027
+
+; ---- Ensoniq DOC sound GLU (the engine lives in the kernel; apps call the
+;      exported snd_note/snd_off via kernel_api.inc) ----
+SNDCTL  = $00C03C
+SNDDATA = $00C03D
+SNDADRL = $00C03E
+SNDADRH = $00C03F
+
+; ----------------------------------------------------------- pseudo-registers (zp)
+P0  = $00
+A0  = $02
+A1  = $04
+A2  = $06
+A3  = $08
+A4  = $0A
+A5  = $0C
+A6  = $0E
+P1  = $10
+S0  = $12
+S1  = $14
+S2  = $16
+S3  = $18
+S4  = $1A
+S5  = $1C
+S6  = $1E
+S7  = $20
+DVQ = $22
+LC0 = $24
+LC1 = $26
+; ---- SHR primitive scratch ($30+) ----
+GP      = $30            ; 24-bit SHR pointer ($30 lo,$31 hi,$32 bank=$E1)
+GIDX    = $34
+fbits   = $36
+pxtmp   = $37
+rowc16  = $38
+cur_fg  = $3A
+cur_bg  = $3B
+cur_fgh = $3C
+cur_bgh = $3D
+kbtmp   = $3E
+STRP    = $40            ; 24-bit string ptr ($40 lo,$41 hi,$42 bank=0)
+mtmp    = $44            ; 24-bit SHR pointer ($44 lo,$45 hi,$46 bank=$E1)
+mtmp2   = $48
+PX      = $4A            ; fill_band params (pixel byte coords, words)
+PY      = $4C
+PW      = $4E
+PH      = $50
+PB      = $52
+
+; ---- FS scratch (zp, used by fs.i in the kernel; apps keep clear of it) ----
+F0 = $54
+F1 = $56
+F2 = $58
+F3 = $5A
+F4 = $5C
+F5 = $5E
+F6 = $60
+DPTR = $62
+BLK0 = $64
+BLK1 = $66
+
+; ---- zero page free for disk-loaded apps ($68-$8F).  The kernel API routines
+;      never touch these (only the pseudo-regs / FS temps above).  Game/app
+;      private scratch lives here; transient (never held across another app's
+;      tick), so apps may overlap the same slots harmlessly. ----
+zpApp0 = $68
+zpApp1 = $6A
+zpApp2 = $6C
+zpApp3 = $6E
+zpApp4 = $70
+zpApp5 = $72
+zpApp6 = $74
+zpApp7 = $76
+zpApp8 = $78
+zpApp9 = $7A
+zpAppA = $7C
+zpAppB = $7E
+
+; ----------------------------------------------------------- kernel state (abs)
+VARS = $1000
+v_magic     = VARS+$00
+v_frame     = VARS+$04
+v_secs      = VARS+$06
+v_last_secs = VARS+$08
+v_mouse_x   = VARS+$0A
+v_mouse_y   = VARS+$0C
+v_mouse_btn = VARS+$0E
+v_last_btn  = VARS+$10
+v_click_x   = VARS+$12
+v_click_y   = VARS+$14
+v_click_seq = VARS+$16
+v_last_seq  = VARS+$18
+v_drag_active = VARS+$1A
+v_drag_win  = VARS+$1C
+v_drag_offx = VARS+$1E
+v_drag_offy = VARS+$20
+v_zcount    = VARS+$22
+v_sel_icon  = VARS+$24
+v_dbl_icon  = VARS+$26
+v_dbl_frame = VARS+$28
+v_ev_head   = VARS+$2C
+v_ev_tail   = VARS+$2E
+v_cur_saved = VARS+$30
+v_cur_gp    = VARS+$32
+v_frac      = VARS+$34
+v_numbuf    = VARS+$40            ; 16 bytes (fmt_dec / put2dig output)
+v_clkbuf    = VARS+$50            ; 16 bytes
+v_zlist     = VARS+$60            ; MAXWIN bytes
+v_wintab    = VARS+$70            ; MAXWIN * 16 bytes
+v_evq       = VARS+$100           ; EVQ_SIZE * 4 bytes
+v_curbuf    = VARS+$200           ; cursor save-under
+
+; ---- resident disk-app loader state (VARS) ----
+v_app_res   = VARS+$2A0           ; NAPPS bytes: 1 = that app id is resident
+                                  ;   ($2A0..$2AF, room for 16 ids)
+; The tick dispatcher's loop counter + indirect-call pointer MUST live in
+; abs VARS, NOT in the zp pseudo-regs: a resident app's per-frame tick calls
+; redraw_topmost -> app draw, which clobbers LC0/LC1/S*/A* etc.  These two
+; survive that because app draw never touches arbitrary VARS.
+v_tickidx   = VARS+$2B4           ; dispatch_app_ticks loop index
+v_vecptr    = VARS+$2B6           ; indirect-call target (jmp (v_vecptr))
+
+; ----------------------------------------------------------- WM constants
+SCRW_C  = 40
+SCRH_C  = 25
+MAXWIN  = 6
+WENT_SIZE = 16
+WSTATE  = 0
+WPROC   = 1
+WX      = 2
+WY      = 4
+WW      = 6
+WH      = 8
+WTITLE  = 10
+ATTR_NORM = 0
+ATTR_INV  = 1
+ATTR_ACC  = 2
+ATTR_KEY  = 3
+MENUBAR_C = 1
+TICKS_SEC = 60
+DBLCLICK  = 30
+NICONS    = 11
+EVQ_SIZE  = 32
+EV_KEY    = 1
+EV_MOUSE  = 4
+
+; ============================================================================
+; FS / app shared bank-0 buffers and app-private state.  These addresses are
+; agreed between the kernel (fs.i) and the apps; they sit above the kernel
+; code image and the app code regions, below the $C000 I/O page.
+; ============================================================================
+
+; ---- FAT12 geometry (sync with mkfs.py) ----
+FS_START_BLOCK = 256
+BPS        = 512
+SPC        = 2
+NFATS      = 2
+SPF        = 3
+FAT_START  = 1
+ROOT_START = 7
+ROOT_SECS  = 7
+DATA_START = 14
+FAT_BYTES  = SPF * BPS
+
+; ---- FS bank-0 buffers ----
+DIRSEC = $9000                ; 512B directory/sector scratch
+FATBUF = $9200                ; 1536B cached FAT
+SECBUF = $9800                ; 512B sector buffer (save path)
+NBUF   = $A000                ; 4 KB Notepad text buffer
+NBUFSZ = 4096
+
+; ---- FS state (VARS) ----
+v_fs_dircount = VARS+$300
+v_fs_sel      = VARS+$302
+v_np_len      = VARS+$306
+v_np_dirty    = VARS+$308
+v_np_caret    = VARS+$30A
+v_np_clus     = VARS+$30C
+v_np_loaded   = VARS+$30E
+v_np_name     = VARS+$310     ; 11-byte FAT name (+ pad)
+v_dir_list    = VARS+$340     ; 16 x 16 bytes
+DIRENT_SZ = 16
+; ---- save-path scratch (VARS) ----
+v_sv_data     = VARS+$320
+v_sv_len      = VARS+$322
+v_sv_lba      = VARS+$324
+v_sv_off      = VARS+$326
+v_sv_freelba  = VARS+$328
+v_sv_freeoff  = VARS+$32A
+v_sv_first    = VARS+$32C
+
+; ---- app-private bank-0 buffers (above the app code regions, below FS bufs) ----
+PMMAZE   = $8000              ; Pac-Man maze (143 bytes)
+DTBOARD  = $9A00              ; Dostris well (180 bytes)
+PAINTBUF = $9C00              ; Paint canvas (648 bytes)
+TRKPAT   = $9F00              ; Tracker pattern (64 bytes)
+
+; ---- app-private VARS state (above the FS dir list which ends at ~$440) ----
+v_theme     = VARS+$330
+v_mus_play  = VARS+$332
+v_mus_idx   = VARS+$334
+v_mus_timer = VARS+$336
+
+v_dt_state  = VARS+$440
+v_dt_piece  = VARS+$442
+v_dt_next   = VARS+$444
+v_dt_rot    = VARS+$446
+v_dt_x      = VARS+$448
+v_dt_y      = VARS+$44A
+v_dt_score  = VARS+$44C
+v_dt_lines  = VARS+$44E
+v_dt_seed   = VARS+$450
+v_dt_drop   = VARS+$452
+
+v_paint_ink      = VARS+$454
+v_paint_suppress = VARS+$456
+
+v_trk_step  = VARS+$458
+v_trk_chan  = VARS+$45A
+v_trk_play  = VARS+$45C
+v_trk_pos   = VARS+$45E
+v_trk_timer = VARS+$460
+
+v_pm_state = VARS+$464
+v_pm_px    = VARS+$466
+v_pm_py    = VARS+$468
+v_pm_dir   = VARS+$46A
+v_pm_ndir  = VARS+$46C
+v_pm_score = VARS+$46E
+v_pm_dots  = VARS+$470
+v_pm_last  = VARS+$472
+v_pm_half  = VARS+$474
+v_pm_g0x   = VARS+$476
+v_pm_g0y   = VARS+$478
+v_pm_g0d   = VARS+$47A
+v_pm_g1x   = VARS+$47C
+v_pm_g1y   = VARS+$47E
+v_pm_g1d   = VARS+$480
+
+v_ol_state  = VARS+$484
+v_ol_carx   = VARS+$486
+v_ol_dist   = VARS+$488
+v_ol_scroll = VARS+$48A
+v_ol_phase  = VARS+$48C
+
+; ============================================================================
+; Disk-app loader ABI.
+;
+; Each disk-loaded app is a raw binary assembled at a fixed per-app ORG (one
+; region per resident app, so several apps stay resident at once and the WM
+; dispatches each window through its own loaded code).  The binary begins with
+; a JMP vector table - the app ABI, identical in spirit to the C64 one but with
+; one fixed region per app rather than a single shared $5000:
+;
+;   APP_ORG+0  : jmp <draw>    ; S2 = window entry byte offset
+;   APP_ORG+3  : jmp <key>     ; S0 = ascii
+;   APP_ORG+6  : jmp <tick>    ; per-frame (scans wintab for its own proc; rts)
+;   APP_ORG+9  : jmp <start>   ; called from the win_create open hook
+;
+; The Files/Notepad binary serves TWO procs (Notepad=2, Files=7) from one
+; region: Notepad's vectors at APP_ORG+0, Files' vectors at APP_ORG+12.
+;
+; The kernel loader reads <NAME>.APP off the FAT12 volume (real fat_read_file
+; over the SmartPort block driver) into the app's region the first time the
+; proc is launched, marks it resident, then dispatches draw/key/tick/start
+; through APP_ORG + (vector*3).  Apps call return_to_desktop / close-on-ESC
+; (the WM handles ESC) to exit; the region stays resident.
+; ============================================================================
+VEC_DRAW  = 0
+VEC_KEY   = 3
+VEC_TICK  = 6
+VEC_START = 9
+VEC_SIZE  = 12                ; one 4-vector table = 12 bytes
+
+; ---- per-app load regions (bank 0, packed contiguously above the kernel) ----
+; Total app code is small (~6 KB); the slots below are sized with headroom and
+; verified to fit by build.sh.  $4000..$7FFF is the code-slot arena (kernel
+; code ends well under $4000; PMMAZE app BSS begins at $8000).
+APP_ARENA   = $4000
+SLOT_FILESNP = $4000          ; Files + Notepad (procs 2 & 7)
+SLOT_THEME   = $4800          ; Theme   (proc 3)
+SLOT_MUSIC   = $5000          ; Music   (proc 4)
+SLOT_DOSTRIS = $5800          ; Dostris (proc 5)
+SLOT_PAINT   = $6000          ; Paint   (proc 6)
+SLOT_TRACKER = $6800          ; Tracker (proc 8)
+SLOT_PACMAN  = $7000          ; Pac-Man (proc 9)
+SLOT_OUTLAST = $7800          ; OutLast (proc 10)
+SLOT_END     = $8000
+
+; Files' vector table sits VEC_SIZE into the Files/Notepad region.
+FILES_VEC = SLOT_FILESNP + VEC_SIZE

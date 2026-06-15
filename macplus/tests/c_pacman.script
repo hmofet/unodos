@@ -1,0 +1,6 @@
+wait 90
+dblclick 136 96
+wait 16
+key n
+wait 30
+shot clean_pacman

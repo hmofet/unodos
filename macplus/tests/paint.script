@@ -1,0 +1,14 @@
+wait 90
+dblclick 288 96
+wait 16
+shot p_open
+key 6
+wait 20
+moveto 220 110
+btn down
+wait 10
+moveto 260 140
+wait 6
+btn up
+wait 12
+shot p_rect

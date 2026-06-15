@@ -17,7 +17,7 @@ key right             # Theme->Dostris (row2 col0)
 key right             # Dostris->Pac-Man (row2 col1)
 shot m3_pacman_select # Pac-Man icon highlighted
 key return            # pacman_open: new game + full board/HUD redraw
-wait 22
+wait 200   # disk-load: head seek + RWTS read
 shot m3_pacman_open    # fresh maze: pac bottom-centre, ghosts by the house, Score 0
 wait 24
 shot m3_pacman_fright  # pac ate dots + the bottom-left power pellet (Score 90);

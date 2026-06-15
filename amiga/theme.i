@@ -19,6 +19,11 @@ apply_theme:
         movem.l (sp)+,a0-a1
         rts
 
+; theme_draw / theme_key MOVED to the disk-loaded app theme_app.asm.
+; apply_theme (above) and the splash routines (below) stay in the kernel:
+; apply_theme is exported to the Theme app via APIVEC, and the splash runs at
+; boot. The app bodies are kept here only behind KEEP_INKERNEL_THEME (off).
+        ifd     KEEP_INKERNEL_THEME
 ; theme_draw - a2 = window
 theme_draw:
         movem.l d0-d7/a0-a4,-(sp)
@@ -205,6 +210,7 @@ theme_key:
         bsr     redraw_topmost
         moveq   #0,d0
         rts
+        endc                        ; KEEP_INKERNEL_THEME
 
 ; ============================================================================
 ; Boot splash: striped Amiga checkmark + "UnoDOS 3" at 2x, ~2s hold

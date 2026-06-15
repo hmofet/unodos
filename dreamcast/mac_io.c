@@ -135,7 +135,7 @@ OSErr PBGetCatInfoSync(CInfoPBPtr pb)
         lastIdx++;
         if (lastIdx == want) break;
     }
-    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 64);
+    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 32);  /* gFNames[] is 32B */
     {
         char path[128]; struct stat st;
         disk_path(de->d_name, path, sizeof path);
@@ -309,7 +309,7 @@ OSErr PBGetCatInfoSync(CInfoPBPtr pb)
         lastIdx++;
         if (lastIdx == want) break;
     }
-    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 64);
+    if (pb->dirInfo.ioNamePtr) c2p(de->d_name, pb->dirInfo.ioNamePtr, 32);  /* gFNames[] is 32B */
     /* VMU files are flat (no subdirs); size is not always reported by readdir,
        so default to a file with unknown length (0). The Files app shows the
        name, which is what matters for open/load. */

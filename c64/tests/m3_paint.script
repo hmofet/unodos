@@ -1,5 +1,5 @@
 wait 70
-keys right right right right right right right   # to Paint icon (8)
+keys right right right right right right right right   # to Paint icon (8)
 key return
 shot m3_paint
 key +

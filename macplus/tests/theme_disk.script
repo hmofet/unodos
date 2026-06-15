@@ -1,0 +1,4 @@
+wait 90
+dblclick 136 144
+wait 14
+shot dtheme_open

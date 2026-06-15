@@ -13,14 +13,14 @@ wait 600
 key right
 key right
 key return            # open Theme
-wait 24
+wait 200
 shot m3_all_theme
 key esc
 wait 24
 # --- Dostris (icon 4) ---
 key right
 key return
-wait 28
+wait 200
 key space             # hard drop
 wait 20
 shot m3_all_dostris
@@ -29,35 +29,35 @@ wait 24
 # --- Pac-Man (icon 5) ---
 key right
 key return
-wait 24
+wait 200
 shot m3_all_pacman
 key esc
 wait 24
 # --- Music (icon 6) ---
 key right
 key return
-wait 24
+wait 200
 shot m3_all_music
 key esc
 wait 24
 # --- Tracker (icon 7) ---
 key right
 key return
-wait 24
+wait 200
 shot m3_all_tracker
 key esc
 wait 24
 # --- Paint (icon 8) ---
 key right
 key return
-wait 46
+wait 200
 shot m3_all_paint
 key esc
 wait 32
 # --- OutLast (icon 9) ---
 key right
 key return
-wait 20
+wait 200
 shot m3_all_outlast
 key esc
 wait 24

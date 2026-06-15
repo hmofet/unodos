@@ -497,11 +497,15 @@ handle_clicks:
         bsr     raise_window
         rts
 .appclick:
-        cmp.b   #8,WPROC(a2)        ; Paint draws with the mouse
-        bne     .out
+        ; content click on the topmost window: hand it to the app's click
+        ; vector (Paint draws with the mouse; other apps' click vectors rts).
+        moveq   #0,d3
+        move.b  WPROC(a2),d3
+        cmp.w   #2,d3              ; procs 0/1 have no disk app
+        blt     .out
         move.w  click_x(pc),d0
         move.w  click_y(pc),d1
-        bsr     paint_click
+        bsr     app_disp_click
         rts
 .title:
         ; close box = rightmost 12px of the bar
@@ -1207,52 +1211,18 @@ str_len:
 ; Apps (in-kernel window procs, milestone 1)
 ; ============================================================================
 
-; app_draw_content - d0 = proc index, a2 = window
+; app_draw_content - d0 = proc index, a2 = window. SysInfo (0) and Clock (1)
+; are in-kernel; every other proc is a disk-loaded .APP dispatched through its
+; loaded draw vector (app_disp_draw loads it on demand into its slot).
 app_draw_content:
         move.l  a2,-(sp)
         tst.w   d0
         beq     .sysinfo
         cmp.w   #1,d0
         beq     .clock
-        cmp.w   #2,d0
-        beq     .files
-        cmp.w   #3,d0
-        beq     .notep
-        cmp.w   #4,d0
-        beq     .diska
-        cmp.w   #5,d0
-        beq     .dost
-        cmp.w   #6,d0
-        beq     .pacm
-        cmp.w   #7,d0
-        beq     .outl
-        cmp.w   #8,d0
-        beq     .pnt
-        cmp.w   #9,d0
-        beq     .mus
-        cmp.w   #10,d0
-        beq     .trk
-        bsr     theme_draw          ; proc 11: Theme
-        bra     .done
-.trk:   bsr     tracker_draw        ; proc 10: Tracker
-        bra     .done
-.mus:   bsr     music_draw          ; proc 9: Music
-        bra     .done
-.pnt:   bsr     paint_draw          ; proc 8: Paint
-        bra     .done
-.outl:  bsr     outlast_draw        ; proc 7: OutLast
-        bra     .done
-.dost:  bsr     dostris_draw        ; proc 5: Dostris
-        bra     .done
-.pacm:  bsr     pacman_draw         ; proc 6: Pac-Man
+        bsr     app_disp_draw       ; procs 2..11: disk-loaded apps
         bra     .done
 .clock: bsr     clock_draw
-        bra     .done
-.files: bsr     files_draw
-        bra     .done
-.notep: bsr     notepad_draw
-        bra     .done
-.diska: bsr     diskapp_draw        ; proc 4: disk-loaded app
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
@@ -2439,14 +2409,8 @@ ev_get:
         include "sony.i"
         include "fat12.i"
         include "snd.i"
-        include "apps.i"
-        include "diskapp.i"
-        include "games.i"
-        include "pacman.i"
-        include "paint.i"
-        include "music.i"
-        include "tracker.i"
-        include "theme.i"
+        include "appsvc.i"          ; kernel-resident app services + audio seq.
+        include "diskapp.i"         ; disk-loaded app loader + WM dispatch
         include "scheduler.i"
 
 ; ============================================================================
@@ -2482,21 +2446,24 @@ name_clock:     dc.b    "Clock",0
 name_files:     dc.b    "Files",0
 name_notepad:   dc.b    "Notepad",0
 name_demo:      dc.b    "Demo",0
-str_app_missing: dc.b   "DEMO.APP not on disk",0
-
-; ---- Files / Notepad strings (M2)
-str_f_hdr:      dc.b    "Name          Size",0
-str_f_foot:     dc.b    "Enter:open  r:refresh",0
-str_f_none:     dc.b    "(no files on disk)",0
-str_n_save:     dc.b    " Clr save",0
-str_n_ln:       dc.b    "Ln ",0
-str_n_co:       dc.b    " Co ",0
-str_n_b:        dc.b    " B",0
-str_n_dirty:    dc.b    " *",0
-str_untitled:   dc.b    "UNTITLEDTXT",0
-demo_text:      dc.b    "UnoDOS/MacPlus Notepad.",13
-                dc.b    "Edit, then Clr saves to",13
-                dc.b    "the floppy as UNTITLED.TXT.",13,0
+; titles + icon labels for the disk-loaded apps (the kernel sets the window
+; title and draws the icon label; the app code itself is on the floppy).
+str_t_dostris:  dc.b    "Dostris",0
+str_t_pacman:   dc.b    "Pac-Man",0
+str_t_outlast:  dc.b    "OutLast",0
+str_t_paint:    dc.b    "Paint",0
+str_t_music:    dc.b    "Music",0
+str_t_tracker:  dc.b    "Tracker",0
+str_t_theme:    dc.b    "Theme",0
+name_dostris:   dc.b    "Dostris",0
+name_pacman:    dc.b    "Pac-Man",0
+name_outlast:   dc.b    "OutLast",0
+name_paint:     dc.b    "Paint",0
+name_music:     dc.b    "Music",0
+name_tracker:   dc.b    "Tracker",0
+name_theme:     dc.b    "Theme",0
+str_app_missing: dc.b   "app not on disk",0
+; (Files/Notepad UI strings moved into FILES.APP; only titles/labels stay here)
 
         even
 ; app definitions: x, y, w, h, title offset from 'start'
@@ -2708,8 +2675,7 @@ np_goal:        dc.w    -1          ; up/down goal column, -1 = none
 np_fatidx:      dc.w    -1          ; FAT root index of the open file, -1 untitled
 fat_mounted:    dc.b    0
 np_dirty:       dc.b    0
-diskapp_loaded: dc.b    0           ; proc 4: DEMO.APP read into APP_LOAD
-                dc.b    0
+app_resident_bits: dc.w 0           ; bit s = SLOT s's .APP is loaded resident
         even
 ; ---- Dostris (proc 5) game state ----
 dt_seed:        dc.l    0

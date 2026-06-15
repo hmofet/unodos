@@ -1,0 +1,15 @@
+wait 90
+dblclick 136 96
+wait 14
+shot dpacman_open
+key n
+wait 30
+shot dpacman_play
+key esc
+wait 4
+dblclick 216 96
+wait 14
+shot doutlast_open
+key n
+wait 40
+shot doutlast_play

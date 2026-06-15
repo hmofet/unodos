@@ -167,18 +167,67 @@ On **real hardware** or a ROM-based emulator (Mini vMac for mono, Basilisk
 II for color — both need a user-supplied Mac ROM and System), copy the
 `.bin` over and it runs as a normal application.
 
-## Architecture
+## Architecture — apps load from storage at runtime
 
-`unodos.c` is one file, structured along the portable-core boundary the
-feasibility plan calls for: the theme layer, window manager, event/desktop
-logic, and app procs are cleanly separated, with `#if UNO_COLOR` confined
-to the theme. `CMakeLists.txt` emits both shipping apps plus `*Test`
-variants that auto-launch the apps for screenshot verification without
-host→guest input injection: `UnoDOS7Test`/`UnoDOSClassicTest` (app
-stack), `UnoDOS7FTest` (Files enters a subdirectory), `UnoDOS7ThTest`
-(applies the Sunset theme), `UnoDOS7SpTest`/`UnoDOSClassicSpTest`
-(long-hold splash), `UnoDOS7DtTest`/`UnoDOS7OlTest`/`UnoDOS7PmTest`
-(the games play real moves at boot).
+The kernel is **app-free**.  `unodos.c` contains the theme layer, window
+manager, event/desktop logic, renderer, FAT12, audio and the *generic*,
+pointer-based loader (`app_loader.c`) — and **zero app UI code**.  Each of
+the 11 apps (`apps/<name>.c`, shared verbatim with the PS2/DC ports) is
+compiled into a **separate, position-independent flat code resource**
+(`-Wl,--mac-flat`, linker entry `uno_app_main_entry`) and stored in the
+application's resource fork as a private **`'Uapp'` code resource**
+(ids 1000–1010).  Nothing app-specific is linked into the kernel binary.
+
+At runtime the platform hook `uno_load_module(proc)` in `mac_modload.c`
+brings an app in **on demand** through the Resource Manager:
+
+```c
+Handle h = GetResource('Uapp', 1000 + proc);   /* read from storage   */
+MoveHHi(h); HLock(h);                            /* pin it in the heap  */
+UnoAppEntry entry = (UnoAppEntry) *h;            /* the flat blob       */
+const AppInterface *ai = entry(&gKApi);          /* app self-relocates, */
+                                                 /* stashes the kernel  */
+                                                 /* API, returns vtable */
+```
+
+The flat blob's entry stub calls `RETRO68_RELOCATE()` (libretro) to fix up
+its own globals before it touches anything — it is loaded at an address
+unknown at link time.  It then receives the `KernelApi` callback table,
+stashes it, and returns its `AppInterface` (a vtable of
+draw/key/click/tick/opened/closed); the window manager dispatches purely
+through those pointers, with **no `switch(proc)` on app identity** anywhere
+in the kernel.  Toolbox calls inside an app are inline A-traps (no linkage
+needed); the small libc tail (`strcpy`/`memcpy`/…) is statically linked
+into each blob.
+
+This is genuine runtime code loading: `nm` on either shipping kernel object
+(`UnoDOS7`/`UnoDOSClassic`) shows **zero app draw symbols** and only an
+undefined reference to `uno_load_module`, and the `.APPL` resource fork
+holds exactly 11 `'Uapp'` resources (verify with the resource-map dump in
+`build.sh` output, or `DeRez`).  A `'Uapp'` type (not `'CODE'`) is used so
+the Segment Loader never auto-loads them — they are demand-loaded code
+resources owned by the kernel.
+
+`CMakeLists.txt` builds the 11 app blobs per colour/mono variant
+(`uno_build_app_resources`), generates the Rez `.r` that `$$read`s each
+freshly-linked blob into a `'Uapp'` resource, and links the app-free
+kernel (`uno_app_target`).  It also emits `*Test` variants that
+auto-launch apps for screenshot verification without host→guest input
+injection: `UnoDOS7Test`/`UnoDOSClassicTest` (Music+Files+Notepad),
+`UnoDOS7FTest` (Files), `UnoDOS7ThTest` (Theme),
+`UnoDOS7SpTest`/`UnoDOSClassicSpTest` (long-hold splash),
+`UnoDOS7DtTest`/`UnoDOS7OlTest`/`UnoDOS7PmTest` (the games at boot).
+
+### Executor capture (headless WSL)
+
+`shots/runshot.sh <APP> <name>` stages an `.APPL` under a native path
+(Executor SIGABRTs walking `/mnt/c`), runs it under Executor on the WSLg
+`:0` display, grabs the `executor` content window with `import`, and the
+caller crops it `640x480+0+0` to the Mac screen.  Captures under `shots/`:
+`mac_native_desktop.png` (11-icon desktop) and the loaded-from-resource
+apps `mac_native_pacman.png`, `mac_native_dostris.png`,
+`mac_native_files.png`, `mac_native_apps.png` (Notepad+Music+Files),
+`mac_native_theme.png`.
 
 ## Known limitations (milestone 3)
 
@@ -189,9 +238,13 @@ stack), `UnoDOS7FTest` (Files enters a subdirectory), `UnoDOS7ThTest`
 - Tracker polyphony depends on the Sound Manager mixing multiple
   square-wave channels (System 6.0.7+/real hardware; Executor may
   voice fewer).
-- The milestone-3 features are build- and host-test-verified; an
-  Executor visual pass is pending (no automated capture path in the
-  current rig — a Windows-native Executor would fix that).
+- Native runtime app-loading is Executor-verified: the desktop and the
+  apps (Pac-Man, Dostris, Files, Notepad/Music, Theme) were captured
+  loading from their `'Uapp'` code resources at runtime (`shots/`).  The
+  capture rig runs Executor on the WSLg `:0` display and grabs the
+  `executor` content window (the Qt build does not expose a 640×480 X11
+  window, and bare-Xvfb root capture is black, so window-level grab on
+  `:0` is the path — see `shots/runshot.sh`).
 - Executor quirk: TickCount() advances much faster than 60 Hz, so the
   ~2s splash hold races by under Executor; timing is correct on real
   hardware. UnoDOS7SpTest holds long for screenshot runs.

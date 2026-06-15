@@ -19,7 +19,7 @@ key right             # Tracker->Paint
 key right             # Paint->OutLast (row2 col1)
 shot m3_outlast_select # OutLast icon highlighted
 key return            # outlast_open: draw the road
-wait 18
+wait 200   # disk-load: head seek + RWTS read
 shot m3_outlast_road   # pseudo-3D road: grass shoulders, curve, car, Dist:0
 wait 24
 shot m3_outlast_scroll # road scrolled (stripes moved, Dist advanced)

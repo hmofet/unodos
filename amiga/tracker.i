@@ -18,6 +18,9 @@ TK_VIEW     equ 12                  ; visible rows
 TK_WAVELEN  equ 32                  ; bytes per instrument wave
 TKWAVES     equ $76B00              ; 4 x 32 bytes, chip RAM
 
+; ProTracker periods + name tables now live in TRACKER.APP (only the guarded
+; in-kernel bodies referenced them). Kept here behind the same guard.
+        ifd     KEEP_INKERNEL_TRACKER
 ; ProTracker periods, C-2..B-3 (notes 1..24)
 tk_periods:
         dc.w    428,404,381,360,339,320,302,285,269,254,240,226
@@ -27,6 +30,7 @@ tk_notenames:                       ; 2 chars per semitone
 tk_instname:
         dc.b    "SQ","SW","TR","NZ"
         even
+        endc                        ; KEEP_INKERNEL_TRACKER
 
 ; tk_init - synthesize the 4 instrument waves into chip RAM (boot)
 tk_init:
@@ -68,6 +72,13 @@ tk_init:
         movem.l (sp)+,d0-d3/a0
         rts
 
+; tk_cell / tk_trigger_row / tracker_tick / tk_fmt_cell / tracker_draw /
+; tracker_key / tk_curcell / tk_load_demo MOVED to the disk-loaded TRACKER.APP
+; (tracker_app.asm). tk_init (wave synthesis at boot), tk_silence and tk_stop
+; stay kernel-resident: tk_stop is exported to the app via APIVEC and is also
+; called by close_window. tk_pat (the pattern) lives in the kernel vars block.
+; The moved bodies are kept here only behind KEEP_INKERNEL_TRACKER (off).
+        ifd     KEEP_INKERNEL_TRACKER
 ; tk_cell - d0=row d1=chan -> a0 = cell ptr (2 bytes: note, instr)
 tk_cell:
         movem.l d0-d1,-(sp)
@@ -78,6 +89,7 @@ tk_cell:
         lea     (a0,d0.w),a0
         movem.l (sp)+,d0-d1
         rts
+        endc                        ; KEEP_INKERNEL_TRACKER
 
 ; tk_silence - all four channels off
 tk_silence:
@@ -100,6 +112,7 @@ tk_stop:
         movem.l (sp)+,a4
         rts
 
+        ifd     KEEP_INKERNEL_TRACKER
 ; tk_trigger_row - d0 = row: fire the notes of one row on Paula
 tk_trigger_row:
         movem.l d0-d5/a0/a3/a6,-(sp)
@@ -454,15 +467,22 @@ tk_load_demo:
         movem.l (sp)+,d0/a0-a1
         rts
 
+        endc                        ; KEEP_INKERNEL_TRACKER
+
 ; ---------------------------------------------------------------- data
+; Only the window-title strings stay in the kernel (name_tab / app_def_tab);
+; the rest of Tracker's strings + demo song moved into TRACKER.APP.
+        ifd     KEEP_INKERNEL_TRACKER
 str_tk_hdr:     dc.b    "Row Chan1  Chan2  Chan3  Chan4",0
 str_tk_mark:    dc.b    "^",0
 str_tk_foot1:   dc.b    "q/w:note e:inst x:clr d:demo s/l:disk",0
 str_tk_foot2:   dc.b    "Space: play/stop   arrows: move",0
+        endc
 str_t_tracker:  dc.b    "Tracker",0
 name_tracker:   dc.b    "Tracker",0
 
         even
+        ifd     KEEP_INKERNEL_TRACKER
 ; demo song: 32 rows x 4 channels x (note, instr). Notes: 1=C-2 .. 24=B-3.
 ; ch1 saw bass, ch2 square arp, ch3 triangle melody, ch4 noise hits.
 tk_demo:
@@ -502,3 +522,4 @@ tk_demo:
 
 str_songname:   dc.b    "SONG    UNO"
         even
+        endc                        ; KEEP_INKERNEL_TRACKER

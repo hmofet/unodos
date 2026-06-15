@@ -172,10 +172,16 @@ here's the number" is the deliverable.
 
 The kernel now spans 4 tracks; M3 BSS tables live above the M2 buffers
 (`DOSBOARD $9D00`, `PMMAZE $9E00`, `TKPAT $9F00`, `PAINTBUF $A000`). New
-zero-page lives at `$50-$80`. Full-screen apps are dispatched by `app_mode`
-(3=Theme … 9=OutLast); the games and OutLast advance off the M1 soft tick
-(`ml_dos`/`ml_pac`/`ml_ol`), so harness `wait N` drives deterministic
-frames.
+zero-page lives at `$50-$80`. **The apps now load from disk** — the 8 app
+binaries (`files_notepad`, `theme`, `dostris`, `pacman`, `music`, `tracker`,
+`paint`, `outlast`) are read off the disk through the GCR RWTS into a fixed
+full-screen `$6000` region and run one at a time; the kernel holds no app code
+(kernel 14669 → 5194 bytes). SysInfo + Clock remain small kernel-drawn launcher
+windows (not separate apps). The full-screen app is still dispatched by
+`app_mode` (3=Theme … 9=OutLast) once loaded; the games and OutLast advance off
+the M1 soft tick (`ml_dos`/`ml_pac`/`ml_ol`), so harness `wait N` drives
+deterministic frames. The RWTS load path is the real one (works on hardware,
+no harness hook).
 
 ### The apps and their honest deviations
 

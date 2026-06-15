@@ -46,6 +46,10 @@ rd_entry:
 ; Files app (proc 2)
 ; ============================================================================
 
+; Files is now the DISK-LOADED app files_app.asm; files_draw/files_key live
+; behind KEEP_INKERNEL_FILES (off). rd_entry + notepad_open_* (kernel) are
+; exported to the Files app via APIVEC.
+        ifd     KEEP_INKERNEL_FILES
 ; files_draw - a2 = window
 files_draw:
         movem.l d0-d7/a0-a3,-(sp)
@@ -235,6 +239,7 @@ files_key:
         bsr     redraw_topmost
         moveq   #0,d0
         rts
+        endc                        ; KEEP_INKERNEL_FILES
 
 ; redraw_topmost - repaint just the topmost window (frame + content)
 redraw_topmost:
@@ -327,6 +332,12 @@ notepad_set_demo:
         movem.l (sp)+,d1/a0-a1/a4
         rts
 
+; notepad_linecol / notepad_seek_linecol / notepad_draw / notepad_key MOVED
+; to the disk-loaded NOTEPAD.APP (notepad_app.asm). notepad_open_file/_fat
+; (above) and notepad_set_demo stay kernel-resident: the first two are exported
+; to the Files app via APIVEC; set_demo seeds the AUTOTEST buffer. The bodies
+; are kept here only behind KEEP_INKERNEL_NOTEPAD (off).
+        ifd     KEEP_INKERNEL_NOTEPAD
 ; notepad_linecol - -> d0 = line, d1 = col of caret (0-based)
 notepad_linecol:
         movem.l d2-d3/a0,-(sp)
@@ -742,11 +753,15 @@ notepad_key:
         bsr     redraw_topmost
         moveq   #0,d0
         rts
+        endc                        ; KEEP_INKERNEL_NOTEPAD
 
 ; ============================================================================
 ; Music app (proc 4) - Paula square wave sequencer
+; MOVED to the disk-loaded MUSIC.APP (music_app.asm); mus_notes/mus_count are
+; exported to it via APIVEC. The bodies are kept here only behind
+; KEEP_INKERNEL_MUSIC (off).
 ; ============================================================================
-
+        ifd     KEEP_INKERNEL_MUSIC
 ; music_start
 music_start:
         movem.l d0-d1/a0/a4/a6,-(sp)
@@ -917,3 +932,4 @@ music_draw:
         bsr     draw_string
         movem.l (sp)+,d0-d7/a0-a3
         rts
+        endc                        ; KEEP_INKERNEL_MUSIC

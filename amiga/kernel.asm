@@ -26,6 +26,8 @@
 
         mc68000
 
+        include "sysabi.i"          ; disk-loaded-app ABI (APIVEC, slots, macros)
+
 ; ---------------------------------------------------------------- constants
 CUSTOM      equ $DFF000
 VPOSR       equ $004
@@ -71,8 +73,7 @@ SPRDAT      equ $76800              ; cursor sprite (must be chip)
 NULLSPR     equ $76900
 STACKTOP    equ $7C000
 
-SCRW        equ 320
-SCRH        equ 200
+; SCRW/SCRH now come from sysabi.i (shared with the disk-loaded apps)
 ROWB        equ 40                  ; bytes per row per plane
 
 ; UnoDOS palette (PORT-SPEC SS1)
@@ -86,18 +87,8 @@ EV_KEY      equ 1
 EV_MOUSE    equ 4
 EVQ_SIZE    equ 32                  ; entries of 4 bytes (type.b,pad.b,data.w)
 
-; window manager
-MAXWIN      equ 6
-WENT_SIZE   equ 16
-WSTATE      equ 0                   ; 0=free 1=visible
-WPROC       equ 1                   ; app proc index
-WX          equ 2
-WY          equ 4
-WW          equ 6
-WH          equ 8
-WTITLE      equ 10                  ; title pointer (long)
-
-TBAR_H      equ 10
+; window manager (MAXWIN/WENT_SIZE/WSTATE/WPROC/WX/WY/WW/WH/WTITLE/TBAR_H
+; now come from sysabi.i so the disk-loaded apps share them)
 MENUBAR_H   equ 12                  ; protected desktop rows (drag clamp)
 
 TICKS_SEC   equ 50                  ; PAL vblank (forced in unodos.uae)
@@ -177,6 +168,7 @@ super:
         bsr     tk_init             ; synthesize the Tracker instrument waves
         bsr     fdd_init            ; quiesce all floppy drives (DF0 incl.)
         bsr     sched_init          ; milestone 3: cooperative tasks
+        bsr     apivec_init         ; publish the disk-loaded-app API vectors
 
         move.l  #COPLIST,COP1LCH(a6)
         move.w  COPJMP1(a6),d0
@@ -190,61 +182,51 @@ super:
         lea     str_desktop(pc),a0
         bsr     ser_puts
 
+        ifd     DBG_BASE
+        ; -DDBG_BASE=1 prints the relocated kernel base (hex) at top-left, to
+        ; confirm the app slot region ($50000+) does not overlap the kernel.
+        ; (On the AROS test rig the kernel relocates into bogomem ~$C39xxx, so
+        ; chip RAM below the bitplanes is free for the app slots.)
+        lea     npstat(pc),a0
+        lea     start(pc),a1
+        move.l  a1,d0
+        bsr     hex8_to_str
+        lea     npstat(pc),a0
+        moveq   #8,d0
+        moveq   #18,d1
+        moveq   #3,d2
+        bsr     draw_string
+        endc
+
         ifd     AUTOTEST
         ; Auto-launch the app stack for screenshot verification without
         ; host input injection. Build: -DAUTOTEST=1
         ifd     AUTOTEST_PAINT
-        ; Paint variant: open the app and draw a scene through the real
-        ; shape primitives (line/rect/oval/fill all exercise the canvas
-        ; store + run renderer). Build: -DAUTOTEST_PAINT=1
+        ; Paint variant: open the app (loaded from DF1). The PAINT.APP image,
+        ; assembled with -DAUTOTEST_PAINT=1, draws a demo scene through its own
+        ; shape primitives in paint_open (the kernel has no mouse to inject), so
+        ; this just launches it and lets it self-render. Build: -DAUTOTEST_PAINT=1
         moveq   #10,d0
         bsr     launch_app
-        lea     vars(pc),a4
-        move.w  zcount(pc),d2
-        subq.w  #1,d2
-        bsr     zwin_ptr            ; a2 = the Paint window
-        move.w  #9,pt_pen-vars(a4)  ; red-ish game pen
-        moveq   #30,d0
-        moveq   #24,d1
-        move.w  #120,d2
-        moveq   #90,d3
-        moveq   #1,d4
-        bsr     pt_rect_shape
-        move.w  #5,pt_pen-vars(a4)
-        move.w  #150,d0
-        moveq   #40,d1
-        move.w  #240,d2
-        move.w  #120,d3
-        moveq   #1,d4
-        bsr     pt_oval_shape
-        move.w  #3,pt_pen-vars(a4)
-        moveq   #10,d0
-        move.w  #130,d1
-        move.w  #250,d2
-        moveq   #20,d3
-        moveq   #1,d4
-        bsr     pt_line_seg
-        move.w  #14,pt_pen-vars(a4)
-        move.w  #170,d0
-        moveq   #60,d1
-        bsr     pt_flood            ; fill inside the oval
         bsr     redraw_topmost
         endc
         ifd     AUTOTEST_THEME
-        ; Theme-app variant: open the picker, select preset 4 (Sunset) and
-        ; apply it through the real key handler. Build: -DAUTOTEST_THEME=1
+        ; Theme-app variant: open the picker (loaded from DF1), select preset
+        ; 4 (Sunset) and apply it through the loaded app's key vector.
         moveq   #5,d0
         bsr     launch_app
+        ifnd    DBG_NOKEY
         moveq   #2,d3
 .atth:  move.w  d3,-(sp)            ; draw_window clobbers d3
         moveq   #0,d1
         moveq   #$4D,d2             ; down
-        bsr     theme_key
+        bsr     at_app_key
         move.w  (sp)+,d3
         dbra    d3,.atth
         moveq   #13,d1
         moveq   #0,d2
-        bsr     theme_key           ; Enter = apply
+        bsr     at_app_key          ; Enter = apply
+        endc
         endc
         ifd     AUTOTEST_MFM
         ; encoder self-test: pattern -> encode -> decode -> compare (no disk)
@@ -292,13 +274,13 @@ super:
         moveq   #0,d1
         move.b  #'m',d1
         moveq   #0,d2
-        bsr     files_key           ; mount DF1
+        bsr     at_app_key          ; mount DF1 (Files is disk-loaded)
         bsr     notepad_set_demo    ; 305 B, np_file = -1 (untitled)
         moveq   #3,d0
-        bsr     launch_app
+        bsr     launch_app          ; Notepad (disk-loaded), topmost
         moveq   #0,d1
         moveq   #$50,d2             ; F1 = save -> UNTITLED.TXT
-        bsr     notepad_key
+        bsr     at_app_key
         ; wipe the buffer to prove the reopen really reads the disk
         lea     vars(pc),a4
         clr.w   np_len-vars(a4)
@@ -308,13 +290,13 @@ super:
         bsr     launch_app
         moveq   #0,d1
         move.b  #$4D,d2             ; down x4
-        bsr     files_key
-        bsr     files_key
-        bsr     files_key
-        bsr     files_key
+        bsr     at_app_key
+        bsr     at_app_key
+        bsr     at_app_key
+        bsr     at_app_key
         moveq   #13,d1
         moveq   #0,d2
-        bsr     files_key           ; Enter: read it back from DF1
+        bsr     at_app_key          ; Enter: read it back from DF1
         endc
         ifd     AUTOTEST_FAT
         ; FAT12 variant: open Files, mount DF1, select CHAIN.TXT (the
@@ -324,79 +306,99 @@ super:
         moveq   #0,d1
         move.b  #'m',d1
         moveq   #0,d2
-        bsr     files_key
+        bsr     at_app_key
         moveq   #0,d1
         move.b  #$4D,d2             ; down x3 -> CHAIN.TXT
-        bsr     files_key
-        bsr     files_key
-        bsr     files_key
+        bsr     at_app_key
+        bsr     at_app_key
+        bsr     at_app_key
         moveq   #13,d1
         moveq   #0,d2
-        bsr     files_key           ; Enter: FAT-chain read into Notepad
+        bsr     at_app_key          ; Enter: FAT-chain read into Notepad
+        endc
+        ifd     AUTOTEST_FILES
+        ; Files (disk-loaded): open the app, then 'm' mounts the DF1 FAT12
+        ; disk and lists it (proves Files itself loaded off DF1 AND can browse
+        ; the disk it was loaded from).
+        moveq   #2,d0
+        bsr     launch_app
+        moveq   #0,d1
+        move.b  #'m',d1
+        moveq   #0,d2
+        bsr     at_app_key
+        moveq   #0,d1
+        move.b  #$4D,d2             ; down a couple of entries
+        bsr     at_app_key
+        bsr     at_app_key
         endc
         ifd     AUTOTEST_TRACKER
         ; Tracker variant: open, load the demo song, start playback.
-        moveq   #9,d0
+        moveq   #9,d0               ; Tracker (disk-loaded)
         bsr     launch_app
         moveq   #0,d1
         move.b  #'d',d1
         moveq   #0,d2
-        bsr     tracker_key
+        bsr     at_app_key          ; 'd' = load demo song
         moveq   #32,d1              ; space = play
         moveq   #0,d2
-        bsr     tracker_key
+        bsr     at_app_key
         endc
         ifd     AUTOTEST_PACMAN
-        ; Pac-Man variant: new game, force play, run 150 real steps.
+        ; Pac-Man (disk-loaded): new game (loads the maze), force PLAY, then
+        ; run game ticks through the loaded app's tick vector. pm_state lives
+        ; in the kernel vars, so the kernel can flip it to PLAY; pm_last is set
+        ; stale each pass so the app's 2-tick gravity gate fires every tick.
         moveq   #8,d0
         bsr     launch_app
         moveq   #0,d1
         move.b  #'n',d1
         moveq   #0,d2
-        bsr     pacman_key
+        bsr     at_app_key          ; new game -> READY, maze loaded
         lea     vars(pc),a4
-        move.w  #PMS_PLAY,pm_state-vars(a4)
+        move.w  #2,pm_state-vars(a4)  ; PMS_PLAY
         move.w  #149,d3
 .atpm:  move.w  d3,-(sp)
-        bsr     pm_step
+        lea     vars(pc),a4
+        move.l  #-100,pm_last-vars(a4)  ; force the 2-tick gravity gate open
+        bsr     at_app_tick
         move.w  (sp)+,d3
         dbra    d3,.atpm
         endc
         ifd     AUTOTEST_DOSTRIS
-        ; Dostris variant: start a game and hard-drop six pieces through
-        ; the real key handler. Build: -DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1
+        ; Dostris (disk-loaded): start a game and hard-drop six pieces through
+        ; the loaded app's key vector. Build: -DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1
         moveq   #6,d0
         bsr     launch_app
         moveq   #0,d1
         move.b  #'n',d1
         moveq   #0,d2
-        bsr     dostris_key
+        bsr     at_app_key
         moveq   #5,d3
 .atdt:  move.w  d3,-(sp)
         moveq   #0,d1
         moveq   #$4F,d2             ; nudge left
-        bsr     dostris_key
+        bsr     at_app_key
         moveq   #32,d1              ; hard drop
         moveq   #0,d2
-        bsr     dostris_key
+        bsr     at_app_key
         move.w  (sp)+,d3
         dbra    d3,.atdt
         endc
         ifd     AUTOTEST_OUTLAST
         ; OutLast variant: start driving and run 60 forced physics steps.
-        moveq   #7,d0
+        moveq   #7,d0               ; OutLast (disk-loaded)
         bsr     launch_app
         moveq   #0,d1
         move.b  #'n',d1
         moveq   #0,d2
-        bsr     outlast_key
+        bsr     at_app_key          ; new game -> driving, music on
         move.w  #59,d3
 .atol:  move.w  d3,-(sp)
         lea     vars(pc),a4
         move.l  ticks(pc),d0
         sub.l   #100,d0
         move.l  d0,ol_last-vars(a4) ; force the step gate open
-        bsr     outlast_tick
+        bsr     at_app_tick         ; physics step via the loaded app's tick
         move.w  (sp)+,d3
         dbra    d3,.atol
         endc
@@ -404,15 +406,15 @@ super:
         ; Notepad-focused variant: demo text (caret at end) exercises the
         ; vertical-scroll clamp. Build: -DAUTOTEST=1 -DAUTOTEST_NOTEPAD=1
         bsr     notepad_set_demo
-        moveq   #3,d0               ; Notepad (topmost)
+        moveq   #3,d0               ; Notepad (topmost, disk-loaded)
         bsr     launch_app
-        ; drive six up-arrows through the real key handler: caret should
+        ; drive six up-arrows through the loaded app's key vector: caret should
         ; land on Ln 12 with the goal column held (status bar proves it)
         moveq   #5,d3
 .atnp:  move.w  d3,-(sp)            ; draw_window clobbers d3
         moveq   #0,d1
         moveq   #$4C,d2
-        bsr     notepad_key
+        bsr     at_app_key
         move.w  (sp)+,d3
         dbra    d3,.atnp
         else
@@ -425,15 +427,19 @@ super:
         ifnd    AUTOTEST_FAT
         ifnd    AUTOTEST_FATW
         ifnd    AUTOTEST_MFM
+        ifnd    AUTOTEST_FILES
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
-        moveq   #3,d0               ; Notepad (bottom)
+        moveq   #3,d0               ; Notepad (bottom, disk-loaded)
         bsr     launch_app
         moveq   #2,d0               ; Files (middle)
         bsr     launch_app
-        moveq   #4,d0               ; Music (topmost, playing)
+        moveq   #4,d0               ; Music (topmost, disk-loaded)
         bsr     launch_app
-        bsr     music_start
+        moveq   #' ',d1             ; space = play/stop, through MUSIC.APP
+        moveq   #0,d2
+        bsr     at_app_key
+        endc
         endc
         endc
         endc
@@ -454,9 +460,7 @@ main_loop:
         bsr     handle_clicks
         bsr     handle_drag
         bsr     handle_events
-        bsr     music_tick
-        bsr     gm_tick
-        bsr     tracker_tick
+        bsr     gm_tick             ; game music (Dostris/Pac-Man/OutLast)
         bsr     app_ticks
         bsr     post_ticks          ; frame tick -> the focused app task
         bsr     task_yield          ; run the app tasks (milestone 3)
@@ -577,11 +581,12 @@ handle_clicks:
         bsr     raise_window
         rts
 .appclick:
-        cmp.b   #10,WPROC(a2)       ; Paint draws with the mouse
-        bne     .out
+        ; body click on the topmost window: hand it to the app's click vector
+        ; (disk-loaded apps that draw with the mouse, i.e. Paint, run their
+        ; synchronous drag loop there; every other app just returns).
         move.w  click_x(pc),d0
         move.w  click_y(pc),d1
-        bsr     paint_click
+        bsr     dispatch_app_click
         rts
 .title:
         ; close box = rightmost 12px of the bar
@@ -959,6 +964,20 @@ win_create:
         move.w  d1,zcount-vars(a4)
         move.w  d6,d0
         bsr     task_spawn          ; milestone 3: the app gets a task
+        ; disk-loaded apps: read the app binary off DF1 into this window's
+        ; slot region and run its app_open (d0 = proc, d1 = window slot)
+        move.b  WPROC(a2),d0
+        and.w   #$FF,d0
+        move.w  d6,d1
+        bsr     load_app            ; d0 = 0 loaded, -1 not-a-disk-app / failed
+        ; record load success per window slot so the dispatch shims never jump
+        ; into an unloaded slot (e.g. when DF1 is absent or the file is missing)
+        lea     app_loaded(pc),a0
+        moveq   #0,d1
+        tst.l   d0
+        bne     .ldset
+        moveq   #1,d1
+.ldset: move.b  d1,(a0,d6.w)
         ; a second-or-later window deactivates the previous topmost
         ; (its title stripes must go), so repaint everything then
         cmp.w   #1,zcount-vars(a4)
@@ -1249,51 +1268,20 @@ draw_window:
 ; app_draw_content - d0 = proc index, a2 = window
 app_draw_content:
         move.l  a2,-(sp)
-        cmp.w   #1,d0
-        blt     .sysinfo
-        beq     .clock
-        cmp.w   #3,d0
-        blt     .files
-        beq     .notepad
-        cmp.w   #5,d0
-        beq     .theme
-        cmp.w   #6,d0
-        beq     .dostris
-        cmp.w   #7,d0
-        beq     .outlast
-        cmp.w   #8,d0
-        beq     .pacman
-        cmp.w   #9,d0
-        beq     .tracker
-        cmp.w   #10,d0
-        beq     .paint
-        bsr     music_draw
-        bra     .done
-.paint: bsr     paint_draw
-        bra     .done
-.theme: bsr     theme_draw
-        bra     .done
-.dostris:
-        bsr     dostris_draw
-        bra     .done
-.outlast:
-        bsr     outlast_draw
-        bra     .done
-.pacman:
-        bsr     pacman_draw
-        bra     .done
-.tracker:
-        bsr     tracker_draw
+        ; disk-loaded apps route to their slot's draw vector
+        bsr     is_disk_app         ; d1 = 1 if disk app (preserves d0)
+        beq     .notdisk
+        bsr     dispatch_app_draw
+        move.l  (sp)+,a2
+        rts
+.notdisk:
+        ; only the two static apps remain in-kernel (SysInfo proc 0, Clock 1)
+        tst.w   d0
+        beq     .sysinfo
+        bsr     clock_draw
         bra     .done
 .sysinfo:
         bsr     sysinfo_draw
-        bra     .done
-.clock: bsr     clock_draw
-        bra     .done
-.files: bsr     files_draw
-        bra     .done
-.notepad:
-        bsr     notepad_draw
 .done:  move.l  (sp)+,a2
         rts
 
@@ -2026,6 +2014,46 @@ build_copper:
         move.w  #$FFFE,(a0)+
         rts
 
+; hex8_to_str - d0 = long, a0 = dest -> 8 hex digits + NUL at a0
+hex8_to_str:
+        movem.l d0-d2/a0,-(sp)
+        moveq   #7,d2
+.n:     rol.l   #4,d0
+        move.w  d0,d1
+        and.w   #15,d1
+        cmp.w   #10,d1
+        blt     .dec
+        add.w   #'A'-10,d1
+        bra     .put
+.dec:   add.w   #'0',d1
+.put:   move.b  d1,(a0)+
+        dbra    d2,.n
+        clr.b   (a0)
+        movem.l (sp)+,d0-d2/a0
+        rts
+
+; ser_puthex_l - d0 = long -> 8 hex digits on serial
+ser_puthex_l:
+        movem.l d0-d3/a6,-(sp)
+        lea     CUSTOM,a6
+        moveq   #7,d2               ; 8 nibbles
+.nib:   rol.l   #4,d0
+        move.w  d0,d3
+        and.w   #15,d3
+        cmp.w   #10,d3
+        blt     .dec
+        add.w   #'A'-10,d3
+        bra     .emit
+.dec:   add.w   #'0',d3
+.emit:
+.w:     btst    #5,SERDATR(a6)
+        beq     .w
+        or.w    #$0100,d3
+        move.w  d3,SERDAT(a6)
+        dbra    d2,.nib
+        movem.l (sp)+,d0-d3/a6
+        rts
+
 ; ser_puts - a0 = NUL string -> built-in serial, polled (9600-8N1)
 ser_puts:
         movem.l d0/a0/a6,-(sp)
@@ -2050,6 +2078,7 @@ ser_puts:
         include "fat12.i"
         include "scheduler.i"
         include "paint.i"
+        include "loader.i"
 
 ; ============================================================================
 ; Data
@@ -2307,6 +2336,7 @@ fat_rootstart:  dc.w    0
 fat_datastart:  dc.w    0
 fat_count:      dc.w    0
 cur_task:       dc.w    0           ; scheduler: running task index
+app_loaded:     ds.b    MAXWIN      ; per window-slot: 1 if a disk app is loaded
         even
 task_tab:       ds.b    NTASKS*TSK_SIZE
 np_goal:        dc.w    -1          ; up/down goal column, -1 = none

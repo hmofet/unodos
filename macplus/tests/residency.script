@@ -1,0 +1,12 @@
+wait 90
+dblclick 372 96
+wait 12
+key space
+wait 8
+dblclick 56 96
+wait 12
+key n
+wait 16
+dblclick 128 144
+wait 14
+shot residency_three

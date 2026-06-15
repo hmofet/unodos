@@ -6,12 +6,9 @@
 ; Reuses dostris.i's fillcell.  Canvas buffer is a 648-byte bank-0 region.
 ; ============================================================================
 
-PAINTBUF = $9C00              ; 36*18 = 648 bytes (bank 0)
+; PAINTBUF + v_paint_* live in sys.inc.
 PW_CELLS = 36
 PH_CELLS = 18
-
-v_paint_ink     = VARS+$454
-v_paint_suppress = VARS+$456   ; 1 = ignore the held launch-click until release
 
 ; Paint zp scratch (transient; overlaps Dostris DT* harmlessly - never held
 ; across the other tick).

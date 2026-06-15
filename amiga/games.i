@@ -84,12 +84,16 @@ gm_tick:
         rts
 
 ; ---------------------------------------------------------------- Dostris
+; Dostris is now the DISK-LOADED app dostris_app.asm; its code lives behind
+; KEEP_INKERNEL_DOSTRIS (off). DT_* constants stay (the vars layout / other
+; refs); gm_* (above) and OutLast (below) remain kernel-resident.
 
 DT_COLS     equ 10
 DT_ROWS     equ 20
 DT_CELL     equ 8
 
-; dt_rand7 -> d0.w = 0..6 (LCG on dt_seed)
+; dt_rand7 -> d0.w = 0..6 (LCG on dt_seed). KEPT in the kernel: Pac-Man (still
+; in-kernel) shares this RNG. The Dostris app carries its own copy.
 dt_rand7:
         movem.l d1-d2,-(sp)
         move.l  dt_seed(pc),d1
@@ -111,6 +115,7 @@ dt_rand7:
         movem.l (sp)+,d1-d2
         rts
 
+        ifd     KEEP_INKERNEL_DOSTRIS
 ; dt_fits - d0=piece d1=rot d2=col d3=row -> d0=1 fits / 0 collides
 dt_fits:
         movem.l d1-d7/a0-a1,-(sp)
@@ -661,6 +666,7 @@ dostris_tick:
         bsr     redraw_topmost
 .out:   movem.l (sp)+,d0-d2/a2/a4
         rts
+        endc                        ; KEEP_INKERNEL_DOSTRIS
 
 ; ---------------------------------------------------------------- OutLast
 
@@ -670,6 +676,12 @@ OL_PLAYH    equ 150
 OL_SEGLEN   equ 80
 OL_TRACK    equ 2560
 
+; outlast_new / ol_rect / outlast_draw / outlast_key / outlast_tick MOVED to
+; the disk-loaded OUTLAST.APP (outlast_app.asm). drive_notes/drive_count are
+; exported to it via APIVEC; gm_start/gm_stop are exported kernel routines.
+; The bodies are kept here only behind KEEP_INKERNEL_OUTLAST (off). OL_*
+; constants stay (vars layout / data sizing).
+        ifd     KEEP_INKERNEL_OUTLAST
 ; outlast_new
 outlast_new:
         movem.l d0/a4,-(sp)
@@ -1289,9 +1301,13 @@ outlast_tick:
 .draw:  bsr     redraw_topmost
 .out:   movem.l (sp)+,d0-d7/a0/a2/a4
         rts
+        endc                        ; KEEP_INKERNEL_OUTLAST
 
 ; ---------------------------------------------------------------- data
-
+; The Dostris/OutLast UI strings + shape/curve tables now live in their disk
+; apps; only the window-title strings (referenced by app_def_tab / name_tab)
+; stay in the kernel. The rest are guarded out.
+        ifd     KEEP_INKERNEL_DOSTRIS
 str_dt_title:   dc.b    "DOSTRIS",0
 str_dt_score:   dc.b    "Score",0
 str_dt_lines:   dc.b    "Lines",0
@@ -1302,18 +1318,22 @@ str_dt_help2:   dc.b    "Spc:drop P:pause",0
 str_dt_newg:    dc.b    "N: new game",0
 str_dt_paused:  dc.b    "PAUSED",0
 str_dt_over:    dc.b    "GAME OVER",0
+        endc
 str_t_dostris:  dc.b    "Dostris",0
 name_dostris:   dc.b    "Dostris",0
+        ifd     KEEP_INKERNEL_OUTLAST
 str_ol_title:   dc.b    "O U T L A S T",0
 str_ol_prompt:  dc.b    "N: drive",0
 str_ol_speed:   dc.b    "Speed ",0
 str_ol_score:   dc.b    "  Score ",0
 str_ol_time:    dc.b    "  Time ",0
 str_ol_over:    dc.b    "GAME OVER",0
+        endc
 str_t_outlast:  dc.b    "OutLast",0
 name_outlast:   dc.b    "OutLast",0
 
         even
+        ifd     KEEP_INKERNEL_DOSTRIS
 ; 7 pieces x 4 rotations x 4 cells x (col,row) - from apps/dostris.asm
 dt_shapes:
         dc.b    0,1,1,1,2,1,3,1,  2,0,2,1,2,2,2,3,  0,2,1,2,2,2,3,2,  1,0,1,1,1,2,1,3
@@ -1328,7 +1348,9 @@ dt_colors:
         even
 dt_linescore:
         dc.w    0,40,100,300,1200
+        endc
 
+        ifd     KEEP_INKERNEL_OUTLAST
 ; OutLast 32-segment curve table (signed, from apps/outlast.asm)
 ol_curve:
         dc.b    0,0,0,0,0,0,0,0
@@ -1336,3 +1358,4 @@ ol_curve:
         dc.b    0,0,0,0,0,0,0,0
         dc.b    -5,-15,-25,-30, -25,-15,-5,0
         even
+        endc

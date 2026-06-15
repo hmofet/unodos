@@ -14,55 +14,8 @@
 ; straddle a sector.  Little-endian on-disk fields read natively (no swap).
 ; ============================================================================
 
-; ---- volume geometry (sync with mkfs.py) ----
-FS_START_BLOCK = 256          ; disk block of FAT12 volume sector 0
-BPS        = 512
-SPC        = 2                ; sectors/cluster
-NFATS      = 2
-SPF        = 3                ; sectors/FAT
-FAT_START  = 1                ; volume sector of FAT #1
-ROOT_START = 7                ; volume sector of root directory
-ROOT_SECS  = 7
-DATA_START = 14               ; volume sector of cluster 2
-FAT_BYTES  = SPF * BPS        ; 1536
-
-; ---- bank-0 buffers (above kernel code, below $C000 I/O) ----
-DIRSEC = $9000                ; 512B directory/sector scratch
-SECBUF = $9800                ; 512B general sector buffer (save path)
-FATBUF = $9200                ; 1536B cached FAT
-NBUF   = $A000                ; 4 KB Notepad text buffer
-NBUFSZ = 4096
-
-; ---- FS state (VARS region; clear_state clears through $0500) ----
-v_fs_dircount = VARS+$300
-v_fs_sel      = VARS+$302
-v_np_len      = VARS+$306
-v_np_dirty    = VARS+$308
-v_np_caret    = VARS+$30A
-v_np_clus     = VARS+$30C     ; first cluster of the open file (0 = new)
-v_np_name     = VARS+$310     ; 11-byte FAT name (+ pad)
-v_dir_list    = VARS+$340     ; 16 entries x 16 bytes: name(11) pad cluster(2) size(2)
-DIRENT_SZ = 16
-; ---- save-path scratch (VARS) ----
-v_sv_data     = VARS+$320
-v_sv_len      = VARS+$322
-v_sv_lba      = VARS+$324
-v_sv_off      = VARS+$326
-v_sv_freelba  = VARS+$328
-v_sv_freeoff  = VARS+$32A
-v_sv_first    = VARS+$32C
-
-; ---- FS scratch (zp, clear of pseudo-regs and SHR scratch) ----
-F0 = $54
-F1 = $56
-F2 = $58
-F3 = $5A
-F4 = $5C
-F5 = $5E
-F6 = $60
-DPTR = $62                    ; 16-bit dest pointer (bank 0)
-BLK0 = $64                    ; blk_io private temps (must NOT alias F0/F1,
-BLK1 = $66                    ;   which callers keep live across blk_io)
+; ---- volume geometry, bank-0 buffers, FS state and zp scratch are all defined
+;      once in sys.inc (PORT-SPEC SS6 rule 8) and shared with the disk apps. ----
 
 ; ============================================================================
 ; blk_io: A2 = volume LBA, P0 = bank-0 buffer ptr, A3 = cmd (1 read / 2 write)
@@ -244,19 +197,41 @@ fat_list_root:
         tax
         lda DIRSEC,x
         and #$00FF
-        beq @done              ; $00 first byte = end of directory
-        cmp #$00E5
-        beq @next              ; deleted
-        ; attribute byte (offset 11)
+        bne :+                 ; $00 first byte = end of directory
+        jmp @done
+:       cmp #$00E5
+        bne :+                 ; deleted
+        jmp @next
+:       ; attribute byte (offset 11)
         lda DIRSEC+11,x
         and #$00FF
         sta F0                 ; attr
         and #$000F
         cmp #$000F
-        beq @next              ; LFN
-        lda F0
+        bne :+                 ; LFN
+        jmp @next
+:       lda F0
         and #$0008
-        bne @next              ; volume label
+        beq :+                 ; volume label
+        jmp @next
+:
+        ; hide .APP system binaries (disk-loaded apps) from the Files browser:
+        ; skip entries whose 8.3 extension is "APP".
+        ldx F6
+        sep #$20
+        lda DIRSEC+8,x
+        cmp #'A'
+        bne @notapp
+        lda DIRSEC+9,x
+        cmp #'P'
+        bne @notapp
+        lda DIRSEC+10,x
+        cmp #'P'
+        bne @notapp
+        rep #$20
+        jmp @next              ; it's a *.APP -> hidden
+@notapp:
+        rep #$20
         lda v_fs_dircount
         cmp #16
         bcs @done
@@ -292,8 +267,9 @@ fat_list_root:
 @next:  inc F5
         lda F5
         cmp #16
-        bcc @ent
-        inc F3
+        bcs :+
+        jmp @ent
+:       inc F3
         inc F4
         lda F4
         cmp #ROOT_SECS

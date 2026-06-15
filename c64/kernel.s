@@ -4,8 +4,15 @@
 ; A standalone operating system for the bare Commodore 64 (6510). Loaded as a
 ; PRG at $0801 with a one-line BASIC stub (SYS 2061); from `start` on, UnoDOS
 ; owns the machine - it banks the VIC-II into a hi-res bitmap, runs its own
-; renderer / window manager / desktop, scans the keyboard matrix itself, and
-; never returns to BASIC. There is no KERNAL call anywhere (we SEI and poll).
+; renderer / full-screen launcher, scans the keyboard matrix itself, and never
+; returns to BASIC. There is no KERNAL call anywhere (we SEI and poll).
+;
+; Full-screen, one-app-at-a-time model (like the Apple II port): the boot
+; desktop is a PURE LAUNCHER (icon grid). There are no resident windows. Every
+; app - SysInfo, Clock, Files+Notepad, Theme, Dostris, Music, and the M3 games -
+; is a separate disk-loaded binary at $5000 (sysinfo.s .. outlast.s); the kernel
+; keeps only the launcher, draw primitives, keyboard, clock (read_tod), SID, the
+; USV1 filesystem (fs.i) and the loader. Apps link by address (kernel_api.inc).
 ;
 ; Unlike the 1-bit Apple II port, the C64 has COLOUR: standard hi-res bitmap
 ; gives two colours per 8x8 cell from screen RAM (upper nibble = "1"/fg pixel,
@@ -82,20 +89,11 @@ init:
         jsr fs_init             ; load/format the USV1 mini-FS
         jsr clear_bitmap
 
-        lda #$FF
-        sta zlist
-        sta zlist+1
-        sta focus               ; $FF = desktop focus
-
         jsr draw_desktop
 
         ifconst AUTOTEST
         lda #0
-        jsr open_or_raise       ; open SysInfo
-        lda #1
-        jsr open_or_raise       ; open Clock (topmost / focused)
-        lda #1
-        sta sel_icon
+        sta sel_icon            ; launcher starts on SysInfo (icon 0)
         endif
 
         jsr draw_icons
@@ -114,42 +112,17 @@ mainloop:
         beq ml_clk              ; transitioned to 0 (release) - no event
         jsr handle_key
 ml_clk:
-        jsr update_clock
         jsr game_tick
         jmp mainloop
 
-; game_tick - advance the active animating game (each manages its own rate via
-; a counter). No-op for static apps. Extended as games are added.
+; game_tick - per-frame work for the active disk-loaded app (it manages its own
+; rate). No-op when at the launcher (no app loaded).
 game_tick:
         lda app_mode
-        cmp #4
-        bne gt_5
-        jmp dostris_tick
-gt_5:
-        cmp #5
-        bne gt_10
-        jmp music_tick
-gt_10:
         cmp #APP_MODE           ; disk-loaded app
         bne gt_done
         jmp APP_TICK
 gt_done:
-        rts
-
-; update_clock - if a second has ticked, the Clock window is open and no
-; full-screen app covers the desktop, redraw HH:MM:SS.
-update_clock:
-        jsr read_tod
-        lda zpSS
-        cmp last_sec
-        beq uc_done
-        sta last_sec
-        lda app_mode
-        bne uc_done
-        lda win_state+1
-        beq uc_done
-        jsr draw_clock_content
-uc_done:
         rts
 
 ; ============================================================================
@@ -255,37 +228,18 @@ keymap:
         dc.b $00,$2A,$3B,$00,$00,$3D,$00,$2F   ; col6: PND * ; HOME RSHIFT = UP /
         dc.b $31,$00,$00,$32,$20,$00,$51,$1B   ; col7: 1 <- CTRL 2 SPACE C= Q STOP
 
-; handle_key - A = decoded key (nonzero). When a full-screen app is active
-; (app_mode != 0: 1=Files, 2=Notepad) keys route there; otherwise ESC closes the
-; topmost window, and with desktop focus left/right move the icon selection and
-; Return launches the selected app (Files is full-screen; SysInfo/Clock windows).
+; handle_key - A = decoded key (nonzero). When a disk-loaded app is active
+; (app_mode == APP_MODE) the key routes to the app's key entry (key in zpTmp).
+; Otherwise we are at the launcher: left/right move the icon selection and
+; RETURN launches the selected app (icon N loads app N). There is no window
+; manager any more - the launcher is a pure icon grid.
 handle_key:
         sta zpTmp
         lda app_mode
-        beq hk_desktop
-        cmp #1
-        beq hk_files
-        cmp #2
-        beq hk_notepad
-        cmp #3
-        beq hk_theme
-        jmp app_key             ; M3 games / apps (app_mode >= 4)
-hk_files:
-        jmp files_key
-hk_notepad:
-        jmp notepad_key
-hk_theme:
-        jmp theme_key
-hk_desktop:
-        lda zpTmp
-        cmp #K_ESC
-        bne hk_notesc
-        jsr close_topmost
-        rts
-hk_notesc:
-        lda focus
-        cmp #$FF
-        bne hk_done             ; a window is focused: no app keys at M1
+        cmp #APP_MODE
+        bne hk_launcher
+        jmp APP_KEY             ; disk-loaded app key entry
+hk_launcher:
         lda zpTmp
         cmp #K_RIGHT
         beq hk_right
@@ -317,50 +271,8 @@ hk_redraw:
 hk_done:
         rts
 hk_return:
-        lda sel_icon
-        cmp #2
-        bne hk_ret3
-        jmp files_open          ; Files icon -> full-screen app
-hk_ret3:
-        cmp #3
-        bne hk_ret4
-        jmp theme_open
-hk_ret4:
-        cmp #4
-        bne hk_ret5
-        jmp dostris_open
-hk_ret5:
-        cmp #5
-        bne hk_ret_load
-        jmp music_open
-hk_ret_load:
-        cmp #6                  ; icons 6..9 are disk-loaded apps (id = icon)
-        bcc hk_ret_win
-        jmp launch_app          ; A = sel_icon = app id
-hk_ret_win:
-        jsr sid_click
-        lda sel_icon
-        jsr open_or_raise
-        lda sel_icon
-        sta focus
-        rts
-
-; app_key - route a key into the active M3 game/app (app_mode >= 4).
-app_key:
-        lda app_mode
-        cmp #4
-        bne ak_5
-        jmp dostris_key
-ak_5:
-        cmp #5
-        bne ak_10
-        jmp music_key
-ak_10:
-        cmp #APP_MODE           ; disk-loaded app
-        bne ak_done
-        jmp APP_KEY             ; app_key entry (key is in zpTmp)
-ak_done:
-        rts
+        lda sel_icon            ; icon N -> app id N
+        jmp launch_app
 
 ; ============================================================================
 ; disk-app loader - read a separately-assembled app binary into APP_BASE and
@@ -378,206 +290,17 @@ launch_app:
         sta app_mode
         jmp APP_BASE            ; app_init (draws itself; returns to mainloop)
 
-; return_to_desktop - an app calls this (or the kernel uses it) to leave a
-; full-screen app: clear app_mode and repaint the desktop + windows + icons.
+; return_to_desktop - an app calls this to leave: clear app_mode and repaint the
+; launcher (dithered desktop + icon grid). No windows in the full-screen model.
 return_to_desktop:
         lda #0
         sta app_mode
         jsr draw_desktop
-        jsr draw_sysinfo_win
-        jsr draw_clock_win
         jmp draw_icons
 
 ; ============================================================================
-; window manager - 2 fixed windows (SysInfo=0, Clock=1), z-order in zlist
-; ([0]=topmost/focused, $FF=empty). Mirrors the Apple II port.
+; (window manager removed - the desktop is a pure full-screen launcher)
 ; ============================================================================
-
-; open_or_raise - A = window id; open at front, or raise if not topmost.
-open_or_raise:
-        sta zpTmp
-        tay
-        lda win_state,y
-        bne oor_raise
-        lda #1
-        sta win_state,y
-        lda zlist
-        sta zlist+1
-        lda zpTmp
-        sta zlist
-        jmp oor_redraw
-oor_raise:
-        lda zlist
-        cmp zpTmp
-        beq oor_done
-        sta zlist+1
-        lda zpTmp
-        sta zlist
-oor_redraw:
-        jsr draw_sysinfo_win
-        jsr draw_clock_win
-oor_done:
-        rts
-
-; close_topmost - close zlist[0]; new top becomes focused, else desktop focus.
-close_topmost:
-        lda zlist
-        cmp #$FF
-        beq ct_done
-        tay
-        lda #0
-        sta win_state,y
-        lda zlist+1
-        sta zlist
-        lda #$FF
-        sta zlist+1
-        jsr draw_sysinfo_win
-        jsr draw_clock_win
-        lda zlist
-        sta focus               ; $FF if none left -> desktop focus
-ct_done:
-        rts
-
-; draw_sysinfo_win - dither behind it if closed, else frame+title+content.
-draw_sysinfo_win:
-        lda win_state
-        bne dsiw_open
-        lda #SI_X
-        sta zpCX
-        lda #SI_Y
-        sta zpCY
-        lda #SI_W
-        sta zpCW
-        lda #SI_H
-        sta zpCH
-        jsr restore_desktop
-        rts
-dsiw_open:
-        lda zlist
-        cmp #0
-        beq dsiw_f
-        lda #0
-        jmp dsiw_go
-dsiw_f:
-        lda #1
-dsiw_go:
-        sta zpWF
-        lda #SI_X
-        sta zpWX
-        lda #SI_Y
-        sta zpWY
-        lda #SI_W
-        sta zpWW
-        lda #SI_H
-        sta zpWH
-        lda #<msg_sysinfo
-        sta zpPtr
-        lda #>msg_sysinfo
-        sta zpPtr+1
-        jsr draw_win
-        jsr draw_sysinfo_content
-        rts
-
-; draw_clock_win - same for window 1.
-draw_clock_win:
-        lda win_state+1
-        bne dckw_open
-        lda #CK_X
-        sta zpCX
-        lda #CK_Y
-        sta zpCY
-        lda #CK_W
-        sta zpCW
-        lda #CK_H
-        sta zpCH
-        jsr restore_desktop
-        rts
-dckw_open:
-        lda zlist
-        cmp #1
-        beq dckw_f
-        lda #0
-        jmp dckw_go
-dckw_f:
-        lda #1
-dckw_go:
-        sta zpWF
-        lda #CK_X
-        sta zpWX
-        lda #CK_Y
-        sta zpWY
-        lda #CK_W
-        sta zpWW
-        lda #CK_H
-        sta zpWH
-        lda #<msg_clock
-        sta zpPtr
-        lda #>msg_clock
-        sta zpPtr+1
-        jsr draw_win
-        jsr draw_clock_content
-        rts
-
-; draw_win - colour the window cells, clear its bitmap, draw a 1px outline,
-; then the title bar (focused = white-on-blue, unfocused = black-on-grey).
-; Inputs: zpWX/zpWY/zpWW/zpWH (cells), zpWF (focus), zpPtr (title).
-draw_win:
-        ; content colour over the whole window
-        lda zpWX
-        sta zpCX
-        lda zpWY
-        sta zpCY
-        lda zpWW
-        sta zpCW
-        lda zpWH
-        sta zpCH
-        lda #COL_WIN
-        sta zpFCol
-        jsr color_fill
-        ; clear bitmap area (background pixels)
-        lda zpWX
-        sta zpFX
-        lda zpWY
-        jsr cy_to_py            ; A = zpWY*8
-        sta zpFY
-        lda zpWW
-        sta zpFW
-        lda zpWH
-        jsr cy_to_py            ; A = zpWH*8
-        sta zpFH
-        lda #$00
-        sta zpFPat
-        jsr fill_rows
-        jsr win_outline
-        ; title bar colour
-        lda zpWX
-        sta zpCX
-        lda zpWY
-        sta zpCY
-        lda zpWW
-        sta zpCW
-        lda #1
-        sta zpCH
-        lda zpWF
-        beq dw_unf
-        lda #COL_TITLE_F
-        jmp dw_tcol
-dw_unf:
-        lda #COL_TITLE_U
-dw_tcol:
-        sta zpFCol
-        jsr color_fill
-        ; title text
-        lda zpWX
-        clc
-        adc #1
-        sta zpCol
-        lda zpWY
-        sta zpRow
-        lda #0
-        sta zpInv
-        jsr draw_string
-        rts
 
 ; win_outline - 1px border around the window bitmap rect: top + bottom full
 ; rows, left + right single-pixel columns ($80 = leftmost, $01 = rightmost).
@@ -632,108 +355,11 @@ win_outline:
         jsr fill_rows
         rts
 
-; restore_desktop - re-dither + recolour a cell rect after a window closes.
-; Inputs: zpCX/zpCY/zpCW/zpCH (cells).
-restore_desktop:
-        lda theme_desk
-        sta zpFCol
-        jsr color_fill
-        lda zpCX
-        sta zpFX
-        lda zpCY
-        jsr cy_to_py
-        sta zpFY
-        lda zpCW
-        sta zpFW
-        lda zpCH
-        jsr cy_to_py
-        sta zpFH
-        jsr dither_rect
-        rts
-
 ; cy_to_py - A = cell count -> A = pixel count (A*8). Caller keeps A<32.
 cy_to_py:
         asl
         asl
         asl
-        rts
-
-; ============================================================================
-; SysInfo app
-; ============================================================================
-draw_sysinfo_content:
-        ; line 0: machine name
-        lda #(SI_X+1)
-        sta zpCol
-        lda #(SI_Y+2)
-        sta zpRow
-        lda #0
-        sta zpInv
-        lda #COL_WIN
-        sta zpFCol
-        lda #<msg_mach
-        sta zpPtr
-        lda #>msg_mach
-        sta zpPtr+1
-        jsr draw_string
-        ; line 1: CPU + clock (PAL/NTSC)
-        lda #(SI_X+1)
-        sta zpCol
-        lda #(SI_Y+3)
-        sta zpRow
-        lda is_pal
-        beq sic_cpu_ntsc
-        lda #<msg_cpu_pal
-        sta zpPtr
-        lda #>msg_cpu_pal
-        sta zpPtr+1
-        jmp sic_cpu_go
-sic_cpu_ntsc:
-        lda #<msg_cpu_ntsc
-        sta zpPtr
-        lda #>msg_cpu_ntsc
-        sta zpPtr+1
-sic_cpu_go:
-        jsr draw_string
-        ; line 2: RAM
-        lda #(SI_X+1)
-        sta zpCol
-        lda #(SI_Y+4)
-        sta zpRow
-        lda #<msg_ram
-        sta zpPtr
-        lda #>msg_ram
-        sta zpPtr+1
-        jsr draw_string
-        ; line 3: video chip
-        lda #(SI_X+1)
-        sta zpCol
-        lda #(SI_Y+5)
-        sta zpRow
-        lda is_pal
-        beq sic_vid_ntsc
-        lda #<msg_vid_pal
-        sta zpPtr
-        lda #>msg_vid_pal
-        sta zpPtr+1
-        jmp sic_vid_go
-sic_vid_ntsc:
-        lda #<msg_vid_ntsc
-        sta zpPtr
-        lda #>msg_vid_ntsc
-        sta zpPtr+1
-sic_vid_go:
-        jsr draw_string
-        ; line 4: SID
-        lda #(SI_X+1)
-        sta zpCol
-        lda #(SI_Y+6)
-        sta zpRow
-        lda #<msg_sid
-        sta zpPtr
-        lda #>msg_sid
-        sta zpPtr+1
-        jsr draw_string
         rts
 
 ; ============================================================================
@@ -754,58 +380,6 @@ read_tod:
         lda CIA1_TOD10          ; release the latch
         rts
 
-draw_clock_content:
-        jsr read_tod
-        ; format BCD -> "HH:MM:SS",0
-        lda zpHH
-        ldy #0
-        jsr fmt_bcd
-        lda #$3A                ; ':'
-        sta clkbuf+2
-        lda zpMM
-        ldy #3
-        jsr fmt_bcd
-        lda #$3A
-        sta clkbuf+5
-        lda zpSS
-        ldy #6
-        jsr fmt_bcd
-        lda #0
-        sta clkbuf+8
-        ; draw it
-        lda #(CK_X+3)
-        sta zpCol
-        lda #(CK_Y+2)
-        sta zpRow
-        lda #0
-        sta zpInv
-        lda #COL_WIN
-        sta zpFCol
-        lda #<clkbuf
-        sta zpPtr
-        lda #>clkbuf
-        sta zpPtr+1
-        jsr draw_string
-        rts
-
-; fmt_bcd - A = BCD byte, Y = offset; write 2 ASCII digits to clkbuf+Y.
-fmt_bcd:
-        pha
-        lsr
-        lsr
-        lsr
-        lsr
-        clc
-        adc #$30
-        sta clkbuf,y
-        pla
-        and #$0F
-        clc
-        adc #$30
-        iny
-        sta clkbuf,y
-        dey
-        rts
 
 ; build_rom_tod - if the TOD seconds read back as 0 (clock never started),
 ; seed it to 12:00:00 so the Clock shows a sensible time. Writing the hours
@@ -1470,16 +1044,11 @@ dd_next:
 ; ============================================================================
 ; strings
 ; ============================================================================
+; menu-bar title + the 10 icon labels (the only strings the kernel still needs;
+; each app owns its own UI strings in its disk binary).
 msg_title:     dc.b "UnoDOS/C64",0
 msg_sysinfo:   dc.b "SysInfo",0
 msg_clock:     dc.b "Clock",0
-msg_mach:      dc.b "Commodore 64",0
-msg_cpu_pal:   dc.b "CPU: 6510 @ 0.985MHz",0
-msg_cpu_ntsc:  dc.b "CPU: 6510 @ 1.023MHz",0
-msg_ram:       dc.b "RAM: 64K",0
-msg_vid_pal:   dc.b "Video: PAL VIC-II 6569",0
-msg_vid_ntsc:  dc.b "Video: NTSC VIC-II 6567",0
-msg_sid:       dc.b "Sound: SID 6581",0
 msg_files:     dc.b "Files",0
 msg_theme:     dc.b "Theme",0
 msg_dostris:   dc.b "Dostris",0
@@ -1488,28 +1057,13 @@ msg_music:     dc.b "Music",0
 msg_tracker:   dc.b "Tracker",0
 msg_paint:     dc.b "Paint",0
 msg_outlast:   dc.b "OutLast",0
-msg_files_title: dc.b "Files",0
-msg_notepad_title: dc.b "Notepad: ",0
-msg_files_help:  dc.b "RET=Open  D=Del  R=Rescan  STOP=Back",0
-msg_files_empty: dc.b "(no files)",0
-msg_confirm1:    dc.b "Delete ",0
-msg_confirm2:    dc.b "? (Y/N)",0
-msg_note_help:   dc.b "  F1=Save  STOP=Back",0
-msg_ln:          dc.b "Ln:",0
-msg_col:         dc.b "  Col:",0
-msg_bytes:       dc.b "  Bytes:",0
-msg_full:        dc.b "  FULL",0
-msg_saved:       dc.b "  SAVED",0
 
 ; ============================================================================
-; apps + filesystem (milestone 2)
+; filesystem (the USV1 mini-FS stays in the kernel; apps reach it via the API).
+; All apps - SysInfo, Clock, Files+Notepad, Theme, Dostris, Music, and the
+; M3 games - are now separate disk-loaded binaries (sysinfo.s .. outlast.s).
 ; ============================================================================
         include "fs.i"
-        include "files.i"
-        include "notepad.i"
-        include "theme.i"
-        include "dostris.i"
-        include "music.i"
 
 ; ============================================================================
 ; generated tables (VIC bitmap address tables + the shared 8x8 font)
@@ -1520,48 +1074,18 @@ msg_saved:       dc.b "  SAVED",0
 ; ============================================================================
 ; vars - kernel variable block (UDC1 discovery header points here)
 ; ============================================================================
+; The launcher/kernel keeps only a handful of vars now. is_pal stays at vars+4
+; (the harness reads it for `assert pal`/`ntsc`); the two reserved bytes hold
+; that offset stable. All per-app state lives in each app's disk binary.
 vars:
-sel_icon:   dc.b 0       ; vars+0  desktop icon selection (0=SysInfo,1=Clock)
-focus:      dc.b 0       ; vars+1  $FF = desktop, else focused window id
-last_key:   dc.b 0       ; vars+2  edge-detection: previous scan's key
-last_sec:   dc.b $FF     ; vars+3  last displayed clock second (BCD)
+sel_icon:   dc.b 0       ; vars+0  launcher icon selection (0..NICONS-1)
+last_key:   dc.b 0       ; vars+1  edge-detection: previous scan's key
+_resv:      dc.b 0,0     ; vars+2  reserved (keeps is_pal at vars+4)
 is_pal:     dc.b 0       ; vars+4  1 = PAL detected, 0 = NTSC
-app_mode:   dc.b 0       ; vars+5  0=desktop, 1=Files, 2=Notepad
-win_state:  dc.b 0,0     ; vars+6  per-window open(1)/closed(0)
-zlist:      dc.b 0,0     ; vars+8  z-order, [0]=topmost, $FF=empty
-key_matrix: dc.b 0,0,0,0,0,0,0,0   ; vars+10  scan_keyboard: 8-column matrix snapshot
+app_mode:   dc.b 0       ; vars+5  0 = launcher, APP_MODE = a disk app is loaded
+key_matrix: dc.b 0,0,0,0,0,0,0,0   ; vars+6  scan_keyboard: 8-column matrix snapshot
 
-; ---- Files / Notepad app state ----
-files_sel:   dc.b 0      ; selected directory index in Files
-files_confirm: dc.b 0    ; 0=normal, 1=awaiting delete y/n
-note_idx:    dc.b 0      ; directory index Notepad was opened from
-note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
-note_len:    dc.w 0      ; current buffer length (bytes)
-note_dirty:  dc.b 0      ; 1 if unsaved changes
-note_flash:  dc.b 0      ; status line: 0=help, 1=SAVED, 2=FULL
-
-; ---- Theme app state + live desktop colours (read by draw_desktop) ----
+; ---- live desktop colours (Theme app writes these via the API; draw_desktop
+;      reads them) ----
 theme_desk:   dc.b COL_DESK    ; desktop dither colour (fg<<4|bg)
 theme_border: dc.b BORDERCOL   ; VIC border colour
-th_sel:       dc.b 0           ; Theme: cursor
-th_cur:       dc.b 0           ; Theme: applied preset
-
-; ---- Dostris state (board itself is DOSBOARD in BSS) ----
-dos_piece:   dc.b 0
-dos_rot:     dc.b 0
-dos_px:      dc.b 0
-dos_py:      dc.b 0
-dos_next:    dc.b 0
-dos_score:   dc.w 0
-dos_lines:   dc.b 0
-dos_level:   dc.b 0
-dos_dctr:    dc.b 0
-dos_paused:  dc.b 0
-dos_over:    dc.b 0
-dos_rng:     dc.b 1           ; LCG seed (must stay nonzero)
-dos_justlock: dc.b 0
-
-; ---- Music state ----
-mus_idx:     dc.b 0           ; current note index in the tune
-mus_ctr:     dc.b 0           ; pass counter for note duration
-mus_playing: dc.b 0           ; 1 while the tune is sounding

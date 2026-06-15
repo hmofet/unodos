@@ -27,10 +27,22 @@
 .p816
 .smart +
 
+.include "sys.inc"
+
 .segment "RODATA"
 .include "gen_data.inc"
 .segment "CODE"
 
+; ---- exported kernel API (addresses harvested by mkapi.py for disk apps) ----
+.export set_attr, calc_gp_px, render_glyph
+.export draw_str, draw_char, fill_band, fill_cells, fillcell
+.export fmt_dec, div16, put2dig, putchar
+.export redraw_topmost, repaint_all, ent_x, zent_x, launch_app
+.export return_to_desktop
+.export snd_note, snd_off
+.export fat_read_file, fat_save_file, fat_list_root
+
+.if 0
 ; ----------------------------------------------------------- soft switches / regs
 ; The soft-switch page lives in bank $00; accessed with explicit long (f:)
 ; addressing so it is correct regardless of DBR.
@@ -96,6 +108,7 @@ PY      = $4C
 PW      = $4E
 PH      = $50
 PB      = $52
+.endif  ; end of equates block now provided by sys.inc
 
 ; PIXBYTE: build a 4bpp pixel byte (two pixels) from fbits mask bits. (a8)
 .macro PIXBYTE mh, ml
@@ -116,6 +129,7 @@ lo0:    lda cur_bg
 lodone: ora pxtmp
 .endmacro
 
+.if 0
 ; ----------------------------------------------------------- kernel state (abs)
 VARS = $1000
 v_magic     = VARS+$00
@@ -173,6 +187,7 @@ NICONS    = 11
 EVQ_SIZE  = 32
 EV_KEY    = 1
 EV_MOUSE  = 4
+.endif  ; end of state/constants block now provided by sys.inc
 
 ; ============================================================================
 .segment "CODE"
@@ -222,7 +237,7 @@ start:
         ; mount the FAT12 volume and prime the directory + Notepad defaults
         jsr fat_mount
         jsr fat_list_root
-        jsr notepad_new
+        jsr kern_notepad_defaults
         jsr doc_init           ; bring up the Ensoniq DOC
 
         jsr repaint_all
@@ -240,12 +255,7 @@ MainLoop:
         jsr handle_drag
         jsr handle_events
         jsr app_ticks
-        jsr music_tick
-        jsr game_tick
-        jsr paint_tick
-        jsr tracker_tick
-        jsr pacman_tick
-        jsr outlast_tick
+        jsr dispatch_app_ticks   ; per-frame tick of every resident disk app
         jsr draw_cursor
         bra MainLoop
 
@@ -549,6 +559,184 @@ draw_char:
         jsr render_glyph
         rts
 
+; fillcell: A0=cx A1=cy A2=colour index -> fill one 8x8 cell with a solid 4bpp
+; colour byte (both nibbles = the index).  A kernel primitive (the colour apps
+; - Dostris/Paint/Pac-Man/OutLast - all paint through it). Exported for apps.
+.a16
+.i16
+fillcell:
+        lda A0
+        asl a
+        asl a
+        sta PX
+        lda A1
+        asl a
+        asl a
+        asl a
+        sta PY
+        lda #4
+        sta PW
+        lda #8
+        sta PH
+        lda A2
+        and #$000F
+        sta pxtmp
+        asl a
+        asl a
+        asl a
+        asl a
+        ora pxtmp
+        sta PB
+        jsr fill_band
+        rts
+
+; ============================================================================
+; Ensoniq 5503 DOC sound engine (kernel-resident infra, like the SHR renderer).
+; The Music/Tracker disk apps call the exported snd_note/snd_off; doc_init runs
+; at boot.  Sound GLU: $C03E/$C03F=DOC address, $C03C=control (bit5 reg/RAM,
+; bit6 autoinc), $C03D=data.  Per-osc register bases below.
+; ============================================================================
+DOC_FREQL = $00
+DOC_FREQH = $20
+DOC_VOL   = $40
+DOC_WTPTR = $80
+DOC_CTRL  = $A0
+DOC_WTSZ  = $C0
+DOC_OSCEN = $E1
+
+; doc_write: A2 low = DOC register, A3 low = value.
+.a16
+.i16
+doc_write:
+        sep #$20
+        lda A2
+        sta f:SNDADRL
+        lda #0
+        sta f:SNDADRH
+        lda #$00
+        sta f:SNDCTL
+        lda A3
+        sta f:SNDDATA
+        rep #$20
+        rts
+
+; doc_load_wave: write a 256-byte sawtooth into DOC RAM at $0000.
+.a16
+.i16
+doc_load_wave:
+        sep #$20
+        rep #$10
+        lda #0
+        sta f:SNDADRL
+        lda #0
+        sta f:SNDADRH
+        lda #$60
+        sta f:SNDCTL
+        ldx #0
+@w:     txa
+        ora #$01
+        sta f:SNDDATA
+        inx
+        cpx #256
+        bcc @w
+        rep #$30
+        rts
+
+; doc_init: halt all 32 oscillators, set the osc-enable scan, load wave.
+.a16
+.i16
+doc_init:
+        ldx #0
+@halt:  txa
+        clc
+        adc #DOC_CTRL
+        sta A2
+        lda #$01
+        sta A3
+        phx
+        jsr doc_write
+        plx
+        inx
+        cpx #32
+        bcc @halt
+        lda #DOC_OSCEN
+        sta A2
+        lda #(8*2)
+        sta A3
+        jsr doc_write
+        jsr doc_load_wave
+        rts
+
+; snd_note: A0 = oscillator, A1 = DOC frequency word. Programs + starts it.
+.a16
+.i16
+snd_note:
+        sep #$20
+        lda A0
+        sta A2
+        lda A1
+        sta A3
+        rep #$20
+        jsr doc_write
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_FREQH
+        sta A2
+        lda A1+1
+        sta A3
+        rep #$20
+        jsr doc_write
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_VOL
+        sta A2
+        lda #$C0
+        sta A3
+        rep #$20
+        jsr doc_write
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_WTPTR
+        sta A2
+        stz A3
+        rep #$20
+        jsr doc_write
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_WTSZ
+        sta A2
+        stz A3
+        rep #$20
+        jsr doc_write
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_CTRL
+        sta A2
+        stz A3
+        rep #$20
+        jsr doc_write
+        rts
+
+; snd_off: A0 = oscillator -> halt it.
+.a16
+.i16
+snd_off:
+        sep #$20
+        lda A0
+        clc
+        adc #DOC_CTRL
+        sta A2
+        lda #$01
+        sta A3
+        rep #$20
+        jsr doc_write
+        rts
+
 ; clear_screen: desktop blue (index 0). (a16)
 .a16
 .i16
@@ -704,10 +892,211 @@ zent_x:
         tax
         rts
 
+; ============================================================================
+; Disk-app loader (the deferred "diskapp" ABI).  Each app proc maps to a FAT12
+; file (<NAME>.APP) and a fixed bank-0 load region (one region per resident
+; app, so several stay resident at once - see sys.inc).  ensure_loaded reads
+; the binary in the first time the proc is launched; the WM then dispatches
+; draw/key/tick/start through the app's loaded JMP vector table.  SysInfo
+; (proc 0) + Clock (proc 1) have no disk binary (app_vec_tab entry 0) and stay
+; kernel-resident as static desktop info windows.
+; ============================================================================
+
+; v_loadproc: stash so ensure_loaded never relies on S2/S3 (launch_app's). (zp-free VAR)
+v_loadproc = VARS+$2B0
+v_loadbin  = VARS+$2B2
+
+; ensure_loaded: A = proc.  If the proc has a disk binary that isn't resident,
+; locate <NAME>.APP in the (already-mounted) root dir and read it into the
+; proc's load region, then mark its binary resident.  Clobbers A0-A4/F*/DPTR/P0.
+.a16
+.i16
+ensure_loaded:
+        and #$00FF
+        sta v_loadproc
+        asl a
+        tax
+        lda f:app_vec_tab,x
+        beq @done                ; built-in proc (SysInfo/Clock): nothing to load
+        ldx v_loadproc
+        sep #$20
+        lda f:app_resid_tab,x    ; binary id
+        rep #$20
+        and #$00FF
+        sta v_loadbin
+        tax
+        sep #$20
+        lda v_app_res,x
+        rep #$20
+        and #$00FF
+        bne @done                ; already resident
+        ; name pointer + load address for this proc
+        lda v_loadproc
+        asl a
+        tax
+        lda f:app_name_tab,x
+        sta P1                   ; name ptr (bank 0)
+        lda f:app_load_tab,x
+        sta DPTR                 ; load dest
+        jsr fat_load_named
+        ldx v_loadbin
+        sep #$20
+        lda #1
+        sta v_app_res,x          ; mark this binary resident
+        rep #$20
+@done:  rts
+
+; fat_load_named: P1 = 11-byte FAT name ptr, DPTR = dest.  Scans the on-disk
+; root directory (NOT the user-facing v_dir_list, which hides .APP system
+; files) for the name, then fat_read_file (first cluster + size) into DPTR.
+; No-op if not found (the slot keeps whatever it had).  Uses DIRSEC; the
+; cluster/size of the match go to A0/F2 for fat_read_file.
+.a16
+.i16
+fat_load_named:
+        lda #ROOT_START
+        sta F3                   ; volume LBA
+        stz F4                   ; sectors scanned
+@sec:   lda F3
+        sta A2
+        lda #.loword(DIRSEC)
+        sta P0
+        lda #1
+        sta A3
+        jsr blk_io
+        stz F5                   ; entry 0..15 within sector
+@ent:   lda F5
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a                    ; *32
+        sta F6                   ; entry offset in DIRSEC
+        tax
+        lda DIRSEC,x
+        and #$00FF
+        beq @nf                  ; $00 = end of directory
+        cmp #$00E5
+        beq @nextent             ; deleted
+        ; compare the 11 name bytes
+        ldx F6
+        ldy #0
+        sep #$20
+@cmp:   lda DIRSEC,x
+        cmp (P1),y
+        bne @cmpno
+        inx
+        iny
+        cpy #11
+        bcc @cmp
+        rep #$20
+        ; match: first cluster (entoff+26), size low (entoff+28)
+        ldx F6
+        lda DIRSEC+26,x
+        sta A0
+        lda DIRSEC+28,x
+        sta F2
+        lda DPTR
+        sta P0
+        jsr fat_read_file
+        rts
+@cmpno: rep #$20
+@nextent:
+        inc F5
+        lda F5
+        cmp #16
+        bcc @ent
+        inc F3
+        inc F4
+        lda F4
+        cmp #ROOT_SECS
+        bcc @sec
+@nf:    rts
+
+; return_to_desktop: an app calls this to close its own (topmost) window and
+; return to the desktop.  The app code stays resident.
+.a16
+.i16
+return_to_desktop:
+        jsr close_topmost
+        rts
+
+; dispatch_app_ticks: per-frame, call the TICK vector of every resident disk
+; app (each app's tick scans the window table for its own proc - this IS the
+; cooperative scheduler; multiple resident apps all advance each frame).  Loop
+; state is in abs VARS, not zp, because a resident app's tick redraws (which
+; clobbers the zp pseudo-regs).
+.a16
+.i16
+dispatch_app_ticks:
+        stz v_tickidx            ; binary id 0..NAPPS-1
+@loop:  lda v_tickidx
+        cmp #NAPPS
+        bcs @done
+        tax
+        sep #$20
+        lda v_app_res,x
+        rep #$20
+        and #$00FF
+        beq @next
+        ; tick vector = app_bin_base[binid] + VEC_TICK
+        lda v_tickidx
+        asl a
+        tax
+        lda f:app_bin_base,x
+        clc
+        adc #VEC_TICK
+        sta v_vecptr
+        jsr call_vec
+@next:  inc v_tickidx
+        bra @loop
+@done:  rts
+
+; call_vec: indirect-call trampoline.  v_vecptr = target address; the tail-jump
+; runs the app vector, which RTSes to call_vec's caller.  Used to dispatch into
+; a loaded app's JMP vector table without self-modifying code.
+.a16
+.i16
+call_vec:
+        jmp (v_vecptr)
+
+; app_vec_base: A = proc -> A = the proc's loaded 4-vector table base (0 if a
+; built-in proc with no disk binary).
+.a16
+.i16
+app_vec_base:
+        and #$00FF
+        asl a
+        tax
+        lda f:app_vec_tab,x
+        rts
+
+; kern_notepad_defaults: seed Notepad's shared state at boot (the buffer is
+; empty; the default 8.3 name).  The Notepad disk app owns the per-open logic,
+; but the buffer state lives in shared VARS so it survives before first load.
+.a16
+.i16
+kern_notepad_defaults:
+        stz v_np_len
+        stz v_np_dirty
+        stz v_np_loaded
+        ldx #0
+        sep #$20
+@cn:    lda f:kern_note_defname,x
+        sta v_np_name,x
+        inx
+        cpx #11
+        bcc @cn
+        rep #$20
+        rts
+kern_note_defname: .byte "NOTE    TXT"
+
 .a16
 .i16
 launch_app:
         sta S3
+        jsr ensure_loaded        ; A = proc; read its disk binary if not resident
+        lda S3
         stz S2
 @scan:  lda S2
         jsr ent_x
@@ -798,46 +1187,17 @@ win_create:
         rep #$20
         plx
         inc v_zcount
-        ; fresh-Notepad hook: a new proc-2 window starts empty unless Files
-        ; preloaded NBUF (v_np_loaded).
+        ; per-app open hook: call the loaded app's START vector (the app inits
+        ; its own state - new game / fresh pattern / Music begins playing / a
+        ; fresh-or-preloaded Notepad buffer).  Built-ins (SysInfo/Clock) skip.
         lda S3
-        cmp #4
-        bne @notmusic
-        jsr music_start        ; a new Music window begins playing
-@notmusic:
-        lda S3
-        cmp #5
-        bne @notgame
-        jsr dostris_start      ; a new Dostris window starts a game
-@notgame:
-        lda S3
-        cmp #6
-        bne @notpaint
-        jsr paint_start        ; a new Paint window starts a blank canvas
-@notpaint:
-        lda S3
-        cmp #8
-        bne @nottrk
-        jsr tracker_start      ; a new Tracker window starts a fresh pattern
-@nottrk:
-        lda S3
-        cmp #9
-        bne @notpm
-        jsr pacman_start       ; a new Pac-Man window starts a fresh maze
-@notpm:
-        lda S3
-        cmp #10
-        bne @notol
-        jsr outlast_start      ; a new OutLast window starts a fresh drive
-@notol:
-        lda S3
-        cmp #2
-        bne @nohook
-        lda v_np_loaded
-        bne @nohook
-        jsr notepad_new
+        jsr app_vec_base
+        beq @nohook
+        clc
+        adc #VEC_START
+        sta v_vecptr
+        jsr call_vec           ; app START RTSes back here
 @nohook:
-        stz v_np_loaded
         jsr repaint_all
         rts
 
@@ -1140,7 +1500,8 @@ draw_frame_px:
         jsr fill_band
         rts
 
-; app_draw_content: A = proc index, S2 = entry offset
+; app_draw_content: A = proc index, S2 = entry offset.  Built-ins (SysInfo/
+; Clock) draw in-kernel; disk apps dispatch through their loaded DRAW vector.
 .a16
 .i16
 app_draw_content:
@@ -1148,43 +1509,14 @@ app_draw_content:
         beq @sysinfo
         cmp #1
         beq @clock
-        cmp #2
-        beq @notepad
-        cmp #3
-        beq @theme
-        cmp #4
-        beq @music
-        cmp #5
-        beq @dostris
-        cmp #6
-        beq @paint
-        cmp #8
-        beq @tracker
-        cmp #9
-        beq @pacman
-        cmp #10
-        beq @outlast
-        cmp #7
-        beq @files
-        rts
-@notepad:
-        jmp notepad_draw
-@theme:
-        jmp theme_draw
-@music:
-        jmp music_draw
-@dostris:
-        jmp dostris_draw
-@paint:
-        jmp paint_draw
-@tracker:
-        jmp tracker_draw
-@pacman:
-        jmp pacman_draw
-@outlast:
-        jmp outlast_draw
-@files:
-        jmp files_draw
+        ; disk app: vector base + VEC_DRAW
+        jsr app_vec_base
+        beq @none
+        clc
+        adc #VEC_DRAW
+        sta v_vecptr
+        jmp (v_vecptr)           ; app DRAW RTSes to draw_window's caller
+@none:  rts
 @sysinfo:
         jmp sysinfo_draw
 @clock:
@@ -1935,55 +2267,88 @@ erase_cursor:
         bne @row
         rts
 
-; app_key: A = proc index, S0 = ascii. Dispatch to the app's key handler.
+; app_key: A = proc index, S0 = ascii.  Dispatch to the focused app's loaded
+; KEY vector (SysInfo/Clock have no key handler).
 .a16
 .i16
 app_key:
-        cmp #2
-        beq @notepad
-        cmp #3
-        beq @theme
-        cmp #5
-        beq @dostris
-        cmp #6
-        beq @paint
-        cmp #8
-        beq @tracker
-        cmp #9
-        beq @pacman
-        cmp #10
-        beq @outlast
-        cmp #7
-        beq @files
-        rts
-@notepad:
-        jmp notepad_key
-@theme:
-        jmp theme_key
-@dostris:
-        jmp dostris_key
-@paint:
-        jmp paint_key
-@tracker:
-        jmp tracker_key
-@pacman:
-        jmp pacman_key
-@outlast:
-        jmp outlast_key
-@files:
-        jmp files_key
+        jsr app_vec_base
+        beq @none
+        clc
+        adc #VEC_KEY
+        sta v_vecptr
+        jmp (v_vecptr)
+@none:  rts
 
-; ---- M2 storage (FAT12 over SmartPort) + Files/Notepad apps ----
+; ---- M2 storage (FAT12 over SmartPort) stays in the kernel.  Files/Notepad
+;      and all M3 apps are now disk-loaded binaries (see *.s + build.sh). ----
 .include "fs.i"
-.include "apps.i"
-; ---- M3 colour theming + Ensoniq DOC audio + colour games ----
-.include "theme.i"
-.include "snd.i"
-.include "dostris.i"
-.include "paint.i"
-.include "tracker.i"
-.include "pacman.i"
-.include "outlast.i"
+
+; ============================================================================
+; Disk-app loader data tables.  Indexed by proc (0..10) except app_bin_base
+; which is indexed by binary id (0..NAPPS-1).  SysInfo(0)/Clock(1) are built
+; in (vector base 0).  Files(7) shares the Notepad(2) binary + region; its
+; vector table sits VEC_SIZE into that region (FILES_VEC).
+; ============================================================================
+NAPPS = 8                        ; distinct disk binaries
+
+.segment "RODATA"
+; proc -> loaded 4-vector table base (0 = built-in)
+app_vec_tab:
+        .word 0, 0
+        .word SLOT_FILESNP       ; 2 Notepad
+        .word SLOT_THEME         ; 3
+        .word SLOT_MUSIC         ; 4
+        .word SLOT_DOSTRIS       ; 5
+        .word SLOT_PAINT         ; 6
+        .word FILES_VEC          ; 7 Files (2nd table in the filesnp region)
+        .word SLOT_TRACKER       ; 8
+        .word SLOT_PACMAN        ; 9
+        .word SLOT_OUTLAST       ; 10
+; proc -> load region base (where the binary is read)
+app_load_tab:
+        .word 0, 0
+        .word SLOT_FILESNP, SLOT_THEME, SLOT_MUSIC, SLOT_DOSTRIS, SLOT_PAINT
+        .word SLOT_FILESNP       ; 7 Files: same binary/region as Notepad
+        .word SLOT_TRACKER, SLOT_PACMAN, SLOT_OUTLAST
+; proc -> FAT name pointer (the .APP file to read)
+app_name_tab:
+        .word 0, 0
+        .word fn_filesnp, fn_theme, fn_music, fn_dostris, fn_paint
+        .word fn_filesnp         ; 7 Files: shares the filesnp binary
+        .word fn_tracker, fn_pacman, fn_outlast
+; proc -> binary id (procs sharing a binary share the residency flag)
+app_resid_tab:
+        .byte 0, 0
+        .byte 0                  ; 2 Notepad -> binary 0 (filesnp)
+        .byte 1                  ; 3 Theme
+        .byte 2                  ; 4 Music
+        .byte 3                  ; 5 Dostris
+        .byte 4                  ; 6 Paint
+        .byte 0                  ; 7 Files  -> binary 0 (filesnp)
+        .byte 5                  ; 8 Tracker
+        .byte 6                  ; 9 Pac-Man
+        .byte 7                  ; 10 OutLast
+; binary id -> load region base (for the per-frame tick dispatch)
+app_bin_base:
+        .word SLOT_FILESNP       ; 0 filesnp
+        .word SLOT_THEME         ; 1
+        .word SLOT_MUSIC         ; 2
+        .word SLOT_DOSTRIS       ; 3
+        .word SLOT_PAINT         ; 4
+        .word SLOT_TRACKER       ; 5
+        .word SLOT_PACMAN        ; 6
+        .word SLOT_OUTLAST       ; 7
+
+; 11-byte FAT names (8.3, space-padded) of the app binaries on the FAT12 volume
+fn_filesnp: .byte "FILESNP APP"
+fn_theme:   .byte "THEME   APP"
+fn_music:   .byte "MUSIC   APP"
+fn_dostris: .byte "DOSTRIS APP"
+fn_paint:   .byte "PAINT   APP"
+fn_tracker: .byte "TRACKER APP"
+fn_pacman:  .byte "PACMAN  APP"
+fn_outlast: .byte "OUTLAST APP"
 
 ; ============================================================================
 .segment "RODATA"

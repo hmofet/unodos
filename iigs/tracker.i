@@ -7,16 +7,10 @@
 ; 0..3 - the IIGS finally gives UnoDOS real polyphony.  Reuses snd_note/snd_off.
 ; ============================================================================
 
-TRKPAT = $9F00                ; 16*4 = 64 bytes (bank 0)
+; TRKPAT + v_trk_* live in sys.inc.
 TRK_STEPS = 16
 TRK_CHANS = 4
 TRK_FRAMES = 12               ; frames per step
-
-v_trk_step  = VARS+$458       ; cursor step 0..15
-v_trk_chan  = VARS+$45A       ; cursor channel 0..3
-v_trk_play  = VARS+$45C
-v_trk_pos   = VARS+$45E       ; playback step
-v_trk_timer = VARS+$460
 
 ; tracker_start: clear the pattern + cursor.
 .a16

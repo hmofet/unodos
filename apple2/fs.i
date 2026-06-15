@@ -33,19 +33,9 @@
 ; never reformats).
 ; ============================================================================
 
-; ---- zero page ($2E-$3A: free post-renderer range; kernel.s owns $00-$2D,
-; rwts.i owns $F0-$FD) ----
-zpFSPtr  equ $2E   ; (2) pointer to a CATBUF directory entry (or its fields)
-zpFSName equ $30   ; (2) pointer to a 12-byte name (find/save input)
-zpFSRel  equ $32   ; relative sector index, 0..FS_SECTORS-1
-zpFSCnt  equ $33   ; sector-count loop counter (read/write-sectors)
-zpFSSize equ $34   ; (2) byte size (LE) - fs_size output / fs_save input
-zpFSIdx  equ $36   ; directory index scratch (fs_delete)
-zpFSDat  equ $37   ; (2) caller data pointer for read/write-sectors loops
-zpFSTmp  equ $39   ; scratch (fs_save's N sectors-needed / fs_delete's victim start)
-zpFSTmp2 equ $3A   ; scratch (logical sector addr for fs_read/write_sectors loops
-                   ; and the delete-shift loop - must NOT alias zpFSTmp, which
-                   ; fs_save needs to survive its fs_write_sectors call)
+; ---- zero page: the zpFS* slots + CATBUF/NOTEBUF + FSE_SIZE now live in
+;      sys.inc (shared with disk-loaded apps); kernel.s includes sys.inc
+;      before this file. The FS-internal layout constants stay here. ----
 zpFSEnt  equ zpFSRel ; (2) alias of zpFSRel/zpFSCnt, reused as a source-entry
                    ; pointer by fs_delete's fsdd_loop (directory-shift copy) -
                    ; safe because fsd_fix is zpFSCnt's last reader before this,
@@ -59,16 +49,10 @@ FS_TRACKS   equ 35-FS_TRACK    ; 15
 FS_SECTORS  equ FS_TRACKS*16   ; 240
 FS_MAXFILES equ 15
 
-FSC_COUNT    equ 4
-FSC_NEXTFREE equ 5
-FSC_DIR      equ 16
-FSE_SIZE     equ 12
+; FSC_COUNT/FSC_NEXTFREE/FSC_DIR/FSE_SIZE now live in sys.inc (shared with the
+; disk apps). FS-internal entry offsets:
 FSE_START    equ 14
 FSE_LEN      equ 16
-
-; ---- BSS (above KBSS; see rwts.i for DECTAB/RDBUF2/SECBUF/SECBUF2) ----
-CATBUF  equ KBSS+$400   ; $9400-$94FF: cached catalog sector (rel sector 0)
-NOTEBUF equ KBSS+$500   ; $9500-$9CFF: Notepad text buffer (2048 bytes)
 
 ; ---------------------------------------------------------------- fs_init
 ; fs_init - call once at boot (after rwts_init): load the catalog into CATBUF.

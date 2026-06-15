@@ -15,7 +15,7 @@ key right             # Music->Tracker
 key right             # Tracker->Paint (row2 col0)
 shot m3_paint_select  # Paint icon highlighted
 key return            # paint_open: white canvas, pencil/black
-wait 44
+wait 200   # disk-load: head seek + RWTS read
 shot m3_paint_open     # blank white canvas, "Tool:Pencil  Ink:Black"
 # --- pencil a short black stroke ---
 key space             # black dot

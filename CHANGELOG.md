@@ -5,6 +5,72 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Cross-platform migration — apps now LOAD FROM STORAGE] - 2026-06-15 (Build 425)
+
+Every UnoDOS port that has storage now **loads its apps from disk at runtime as
+separate binaries**, instead of compiling them into a "giant kernel with apps
+built in." The kernels shrink dramatically; the apps become real on-disk files
+linked to the kernel only by an extracted API table — the pattern the x86
+reference port has always used (kernel API #18 loads apps from disk; even the
+launcher is a disk file) and that the C64 port pioneered with
+`mkapi.py`/`kernel_api.inc`, now generalised across the family.
+
+Two architecture models were used per platform:
+
+- **Full-screen, one-app-at-a-time** (RAM-tight 8-bit ports): C64, Apple II.
+- **Windowed multitasking**, apps loaded from disk into per-app regions and
+  dispatched through their loaded vectors: IIGS, MacPlus, Amiga, and the shared
+  Mac/PS2/Dreamcast C core.
+
+Per port:
+
+- **C64** — full-screen model. **All** apps are now separate binaries on the
+  `.d64`, loaded to `$5000` through the `$DE00` loader port; the kernel contains
+  **no app code**. 10 app binaries — SysInfo(0), Clock(1), Files+Notepad(2,
+  bundled), Theme(3), Dostris(4), Music(5), Pac-Man(6), Tracker(7), Paint(8),
+  OutLast(9). Kernel `.prg` **8603 → 3775 bytes (~56% smaller)**. 11/11 harness
+  regression scripts pass. (Supersedes the earlier C64 entry, which had Theme,
+  Dostris and Music shipping inline — they are disk-loaded now too.)
+- **Apple II** — full-screen model. 8 app binaries loaded from disk via the GCR
+  RWTS into a fixed `$6000` region (`files_notepad`, `theme`, `dostris`,
+  `pacman`, `music`, `tracker`, `paint`, `outlast`). SysInfo + Clock remain
+  small kernel-drawn launcher windows (not separate apps). Kernel **14669 →
+  5194 bytes**. 12/12 regression scripts pass. Real RWTS load path (works on
+  hardware, no harness hook).
+- **Apple IIGS** — windowed multitasking preserved. 8 `.APP` binaries read at
+  runtime from the FAT12/SmartPort volume into per-app bank-0 slots; multiple
+  apps stay resident (3 verified ticking concurrently) and the WM dispatches
+  each window through the app's loaded JMP vectors. SysInfo/Clock stay
+  kernel-resident. Kernel **11636 → 6335 bytes**. 9/9 regression suites pass.
+- **MacPlus** — windowed multitasking, multi-resident. 9 `.APP` binaries on the
+  FAT12 (.Sony) disk, loaded into 16 KB slots on demand. SysInfo/Clock and the
+  audio sequencers stay kernel-side by design. Kernel **30932 → 16774 bytes
+  (−46%)**. ROM-free Unicorn harness regressions pass.
+- **Amiga** — windowed, load-on-open. 9 `.APP` binaries on the DF1 FAT12 disk,
+  loaded into per-window `$50000` slots; the kernel publishes a fixed API vector
+  table at `$77000` that apps call by ordinal. SysInfo/Clock stay
+  kernel-resident. Kernel hunk-exe **30620 → 22872 bytes (−25%)**. Verified
+  booting in WinUAE (AROS ROM) — the Files app, itself loaded from disk, lists
+  the `.APP` files on DF1.
+- **Mac System 7 / PS2 / Dreamcast** — shared portable C core. The real
+  `unodos.c` (all three copies) was refactored to be **app-free** (e.g. PS2
+  4295 → 1605 lines); the compile-time `switch(proc)` dispatch became a runtime
+  function-pointer `AppInterface` table fed by a generic loader, and all 11 apps
+  are now separate loadable modules. **Host-verified:** the app-free core
+  `dlopen`s all 11 modules from storage and renders them as a multi-window
+  desktop, and `nm` confirms zero app symbols in the core. Native targets are
+  **build-wired** to load modules from their real storage — Mac:
+  FAT12/CODE-resource; PS2: `mc0:/UnoDOS/Apps/`; Dreamcast: `/cd/UNODOS/APPS/`
+  (ISO9660) — and host-shim-verified; **on-device/emulator verification
+  (Retro68+Executor / PCSX2 / Flycast) is in progress / pending.** No native
+  emulator verification is claimed yet.
+- **SNES and Genesis are deliberately left built-in:** cartridge ROM is the
+  correct delivery medium — there is no removable or writable code storage, and
+  (on the SNES) no audio-input path, so loading apps from storage has nothing to
+  load from.
+
+VERSION → **3.32.0425**, BUILD_NUMBER → **425**.
+
 ## [Commodore 64 port — M2 + M3: full 11-app parity] - 2026-06-15
 
 The C64 port reaches **full app parity** with the Apple II roster, and gains the
@@ -17,11 +83,12 @@ disk-loaded-app architecture the mature ports use.
   The C64 has no NVRAM, so the FS region is persisted like the SRAM-backed
   Genesis/SNES ports; a 1541/IEC driver is the real-hardware follow-up.
 - **M3 — the full roster.** **Theme** (re-tints the whole desktop — trivial on
-  the per-cell-colour VIC), **Dostris** (colour tetrominoes), and **Music** (Ode
-  to Joy on the SID — a real synth, no 1-bit busy-loop) ship inline; **Pac-Man**,
-  **Tracker** (3 SID voices), **Paint** (16-colour canvas) and **OutLast**
-  (colour-band pseudo-3D racer) ship as **disk-loaded apps**.
-- **Disk-loaded apps.** Larger apps are separate binaries assembled at `$5000`,
+  the per-cell-colour VIC), **Dostris** (colour tetrominoes), **Music** (Ode to
+  Joy on the SID — a real synth, no 1-bit busy-loop), **Pac-Man**, **Tracker**
+  (3 SID voices), **Paint** (16-colour canvas) and **OutLast** (colour-band
+  pseudo-3D racer) — **all ship as disk-loaded apps** (see the 2026-06-15
+  cross-platform migration entry above; the kernel contains no app code).
+- **Disk-loaded apps.** Every app is a separate binary assembled at `$5000`,
   loaded on demand and linked to the kernel only by the API addresses
   `mkapi.py` extracts from the dasm symbol dump into `build/kernel_api.inc`.
   An app's first three words are JMPs (init/key/tick); launching writes the app

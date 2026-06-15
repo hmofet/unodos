@@ -26,6 +26,11 @@ GH_CHASE    equ 2
 GH_FRIGHT   equ 3
 GH_EATEN    equ 4
 
+; Pac-Man is now the DISK-LOADED app pacman_app.asm; its code + tables live
+; behind KEEP_INKERNEL_PACMAN (off). pm_maze_tpl (template), str_t_pacman and
+; name_pacman stay in the kernel: the template is exported via APIVEC, the two
+; strings are referenced by the desktop's app_def_tab / name_tab.
+        ifd     KEEP_INKERNEL_PACMAN
 ; pm_dxy tables (UP,LEFT,DOWN,RIGHT)
 pm_dx:  dc.w    0,-1,0,1
 pm_dy:  dc.w    -1,0,1,0
@@ -1037,7 +1042,10 @@ pacman_tick:
 .out:   movem.l (sp)+,d0-d2/a2/a4
         rts
 
+        endc                        ; KEEP_INKERNEL_PACMAN
+
 ; ---------------------------------------------------------------- data
+        ifd     KEEP_INKERNEL_PACMAN
 pm_ghcol:       dc.b    21,28,10    ; red, pink, orange
         even
 str_pm_title:   dc.b    "P A C - M A N",0
@@ -1048,6 +1056,7 @@ str_pm_lives:   dc.b    "LIVES",0
 str_pm_level:   dc.b    "LEVEL",0
 str_pm_ready:   dc.b    "READY!",0
 str_pm_over:    dc.b    "GAME OVER",0
+        endc
 str_t_pacman:   dc.b    "Pac-Man",0
 name_pacman:    dc.b    "Pac-Man",0
 

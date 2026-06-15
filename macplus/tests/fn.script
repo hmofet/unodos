@@ -1,0 +1,8 @@
+wait 90
+dblclick 208 48
+wait 16
+key down
+wait 4
+key enter
+wait 20
+shot fn_open

@@ -8,26 +8,10 @@
 ; persist; actors are tracked as tile coordinates and drawn over the maze.
 ; ============================================================================
 
-PMMAZE = $8000                ; 13*11 = 143 bytes (bank 0, above kernel code)
+; PMMAZE + v_pm_* live in sys.inc.
 MZW = 13
 MZH = 11
 PM_STEP = 8                   ; frames per pac step
-
-v_pm_state = VARS+$464        ; 0 play, 1 dead, 2 win
-v_pm_px    = VARS+$466
-v_pm_py    = VARS+$468
-v_pm_dir   = VARS+$46A
-v_pm_ndir  = VARS+$46C
-v_pm_score = VARS+$46E
-v_pm_dots  = VARS+$470
-v_pm_last  = VARS+$472
-v_pm_half  = VARS+$474
-v_pm_g0x   = VARS+$476
-v_pm_g0y   = VARS+$478
-v_pm_g0d   = VARS+$47A
-v_pm_g1x   = VARS+$47C
-v_pm_g1y   = VARS+$47E
-v_pm_g1d   = VARS+$480
 
 PM0 = $68                     ; transient scratch (shared w/ other tick temps)
 PM1 = $6A

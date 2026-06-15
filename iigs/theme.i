@@ -6,7 +6,7 @@
 ; theme switch needs only a palette poke - no repaint.
 ; ============================================================================
 
-v_theme = VARS+$330           ; current preset index
+; v_theme lives in sys.inc
 
 .a16
 .i16

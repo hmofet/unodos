@@ -123,7 +123,7 @@ DUR_DOTQ    equ 9                   ; dotted quarter ~495ms
 DUR_GAP     equ 1                   ; Inter-note gap
 
 ; Song count
-NUM_SONGS   equ 5
+NUM_SONGS   equ 10
 
 entry:
     PUSHA86
@@ -325,12 +325,12 @@ poll_events:
     je .prev_song
     cmp dl, '.'                     ; > next song
     je .next_song
-    ; Number keys 1-5
+    ; Number keys 1-9 (songs 0-8; the 10th via >/Next)
     cmp dl, '1'
     jb .check_arrows
-    cmp dl, '5'
+    cmp dl, '9'
     ja .check_arrows
-    sub dl, '1'                     ; 0-4
+    sub dl, '1'                     ; 0-8
     mov al, dl
     jmp switch_song
 .check_arrows:
@@ -795,7 +795,7 @@ str_arrow_r:     db ' >', 0
 msg_playing:     db 'Playing...', 0
 msg_paused:      db 'Paused', 0
 msg_finished:    db 'Song Complete', 0
-msg_help:        db '1-5:Song  SPC:Play/Pause', 0
+msg_help:        db '1-9:Song  SPC:Play/Pause', 0
 
 ; Button labels
 btn_prev:   db ' Prev ', 0
@@ -855,6 +855,11 @@ song_table:
     dw notes_twinkle,    TWINKLE_COUNT,   str_t_twinkle,   str_c_mozart
     dw notes_lullaby,    LULLABY_COUNT,   str_t_lullaby,   str_c_brahms
     dw notes_canon,      CANON_COUNT,     str_t_canon,     str_c_pachelbel
+    dw notes_greensleeves, GREENSLEEVES_COUNT, str_t_greensleeves, str_c_trad
+    dw notes_jingle,     JINGLE_COUNT,    str_t_jingle,    str_c_pierpont
+    dw notes_saints,     SAINTS_COUNT,    str_t_saints,    str_c_trad
+    dw notes_mary,       MARY_COUNT,      str_t_mary,      str_c_trad
+    dw notes_amazing,    AMAZING_COUNT,   str_t_amazing,   str_c_trad
 
 ; Song titles
 str_t_furelise:  db 'Fur Elise', 0
@@ -862,12 +867,19 @@ str_t_ode:       db 'Ode to Joy', 0
 str_t_twinkle:   db 'Twinkle Twinkle', 0
 str_t_lullaby:   db "Brahms' Lullaby", 0
 str_t_canon:     db 'Canon in D', 0
+str_t_greensleeves: db 'Greensleeves', 0
+str_t_jingle:    db 'Jingle Bells', 0
+str_t_saints:    db 'When the Saints', 0
+str_t_mary:      db 'Mary Had a Little Lamb', 0
+str_t_amazing:   db 'Amazing Grace', 0
 
 ; Composers
 str_c_beethoven: db 'L. van Beethoven', 0
 str_c_mozart:    db 'W.A. Mozart', 0
 str_c_brahms:    db 'J. Brahms', 0
 str_c_pachelbel: db 'J. Pachelbel', 0
+str_c_trad:      db 'Traditional', 0
+str_c_pierpont:  db 'J. Pierpont', 0
 
 ; ============================================================================
 ; Song 1: Fur Elise (Beethoven) - A-B-A form
@@ -1311,3 +1323,144 @@ notes_canon:
 
     dw 0xFFFF, 0
 CANON_COUNT equ ($ - notes_canon - 4) / 4
+
+; ============================================================================
+; Song 6: Greensleeves (Traditional) - A minor
+; ============================================================================
+notes_greensleeves:
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_E5,  DUR_DOTQ
+    dw NOTE_F5,  DUR_EIGHTH
+    dw NOTE_E5,  DUR_QUARTER
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_DOTQ
+    dw NOTE_A4,  DUR_EIGHTH
+    dw NOTE_B4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_A4,  DUR_DOTQ
+    dw NOTE_GS4, DUR_EIGHTH
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_B4,  DUR_HALF
+    dw NOTE_GS4, DUR_QUARTER
+    dw NOTE_E4,  DUR_HALF
+    dw 0xFFFF, 0
+GREENSLEEVES_COUNT equ ($ - notes_greensleeves - 4) / 4
+
+; ============================================================================
+; Song 7: Jingle Bells (J. Pierpont) - chorus
+; ============================================================================
+notes_jingle:
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_HALF
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_HALF
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_DOTQ
+    dw NOTE_D4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_HALF
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_DOTQ
+    dw NOTE_F4,  DUR_EIGHTH
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_E4,  DUR_EIGHTH
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_HALF
+    dw 0xFFFF, 0
+JINGLE_COUNT equ ($ - notes_jingle - 4) / 4
+
+; ============================================================================
+; Song 8: When the Saints Go Marching In (Traditional)
+; ============================================================================
+notes_saints:
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_F4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_HALF
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw 0xFFFF, 0
+SAINTS_COUNT equ ($ - notes_saints - 4) / 4
+
+; ============================================================================
+; Song 9: Mary Had a Little Lamb (Traditional)
+; ============================================================================
+notes_mary:
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_HALF
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_HALF
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_E4,  DUR_QUARTER
+    dw NOTE_D4,  DUR_QUARTER
+    dw NOTE_C4,  DUR_HALF
+    dw 0xFFFF, 0
+MARY_COUNT equ ($ - notes_mary - 4) / 4
+
+; ============================================================================
+; Song 10: Amazing Grace (Traditional)
+; ============================================================================
+notes_amazing:
+    dw NOTE_G4,  DUR_QUARTER
+    dw NOTE_C5,  DUR_HALF
+    dw NOTE_E5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_E5,  DUR_HALF
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_HALF
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_E5,  DUR_HALF
+    dw NOTE_D5,  DUR_QUARTER
+    dw NOTE_C5,  DUR_QUARTER
+    dw NOTE_A4,  DUR_QUARTER
+    dw NOTE_G4,  DUR_HALF
+    dw 0xFFFF, 0
+AMAZING_COUNT equ ($ - notes_amazing - 4) / 4

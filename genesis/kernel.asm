@@ -149,6 +149,10 @@ v_np_caret      rs.w    1
 v_np_top        rs.w    1
 v_np_goal       rs.w    1
 v_mus_ix        rs.w    1
+v_mus_song      rs.w    1           ; current song index into mus_songtab
+v_mus_base      rs.l    1           ; active song: notes base ptr (cached)
+v_mus_cnt       rs.w    1           ; active song: note count (cached)
+v_mus_title     rs.l    1           ; active song: title string ptr (cached)
 v_kb_hover      rs.w    1           ; soft kbd: hovered key index or -1
 v_ps2k_shift    rs.w    1           ; PS/2 kbd 11-bit frame shifter
 v_ps2m_shift    rs.w    1           ; PS/2 mouse frame shifter

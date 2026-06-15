@@ -1,0 +1,7 @@
+wait 90
+dblclick 56 96
+wait 12
+shot ddostris_open
+key n
+wait 30
+shot ddostris_play

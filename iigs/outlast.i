@@ -14,11 +14,7 @@ OL_SKY = 4                    ; sky rows
 OL_ROADH = (OLH - OL_SKY)     ; 16 road rows
 OL_CX = (OLW / 2)             ; road centre column (17)
 
-v_ol_state  = VARS+$484
-v_ol_carx   = VARS+$486       ; car offset from centre (signed)
-v_ol_dist   = VARS+$488
-v_ol_scroll = VARS+$48A
-v_ol_phase  = VARS+$48C       ; curve animation phase
+; v_ol_* live in sys.inc.
 
 OL0 = $68
 OL1 = $6A

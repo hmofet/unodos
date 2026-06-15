@@ -1,0 +1,22 @@
+wait 90
+dblclick 208 48
+wait 16
+shot dall_files
+key enter
+wait 16
+shot dall_notepad
+key esc
+wait 4
+dblclick 56 96
+wait 12
+shot dall_dostris
+key esc
+wait 3
+dblclick 136 96
+wait 14
+shot dall_pacman
+key esc
+wait 3
+dblclick 128 144
+wait 12
+shot dall_theme

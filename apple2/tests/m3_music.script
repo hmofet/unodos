@@ -15,7 +15,7 @@ key right             # Dostris->Pac-Man
 key right             # Pac-Man->Music (row2 col2)
 shot m3_music_select  # Music icon highlighted
 key return            # music_open: draw the staff
-wait 22
+wait 200   # disk-load: head seek + RWTS read
 shot m3_music_staff   # the 24-note Canon in D contour on a 5-line staff
 key return            # music_play: blocking playback begins
 wait 60

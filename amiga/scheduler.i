@@ -176,44 +176,35 @@ sched_ntasks:
 
 ; app_key_dispatch - d0 = proc, d1 = ascii, d2 = raw
 app_key_dispatch:
-        cmp.w   #2,d0
-        beq     .files
-        cmp.w   #3,d0
-        beq     .notepad
-        cmp.w   #4,d0
-        beq     .music
-        cmp.w   #5,d0
-        beq     .theme
-        cmp.w   #6,d0
-        beq     .dostris
-        cmp.w   #7,d0
-        beq     .outlast
-        cmp.w   #8,d0
-        beq     .pacman
-        cmp.w   #9,d0
-        beq     .tracker
-        cmp.w   #10,d0
-        beq     .paint
+        ; disk-loaded apps route to their slot's key vector. a2 = the running
+        ; task's window (cur_task-1 = window slot). d1/d2 must survive.
+        and.w   #$FF,d0
+        lea     disk_app_tab(pc),a0
+        tst.b   (a0,d0.w)
+        beq     .notdisk
+        ; disk app: a2 = window for the running task, then call slot key vector
+        movem.l d1/d2,-(sp)         ; ascii, raw
+        move.w  cur_task(pc),d2
+        subq.w  #1,d2               ; window slot
+        bsr     win_ptr_raw         ; a2 (preserves d-regs)
+        movem.l (sp)+,d1/d2         ; restore ascii, raw
+        bsr     dispatch_app_key
         rts
-.files:   bra     files_key
-.notepad: bra     notepad_key
-.music:   bra     music_key
-.theme:   bra     theme_key
-.dostris: bra     dostris_key
-.outlast: bra     outlast_key
-.pacman:  bra     pacman_key
-.tracker: bra     tracker_key
-.paint:   bra     paint_key
+.notdisk:
+        ; every interactive app is now disk-loaded; SysInfo/Clock are static
+        ; (no key handler). Nothing to dispatch.
+        rts
 
 ; app_tick_dispatch - d0 = proc: per-frame work in task context
 app_tick_dispatch:
-        cmp.w   #6,d0
-        beq     .dostris
-        cmp.w   #7,d0
-        beq     .outlast
-        cmp.w   #8,d0
-        beq     .pacman
+        and.w   #$FF,d0
+        lea     disk_app_tab(pc),a0
+        tst.b   (a0,d0.w)
+        beq     .ndtick
+        move.w  cur_task(pc),d2
+        subq.w  #1,d2
+        bsr     win_ptr_raw         ; a2 = window for the running task
+        bsr     dispatch_app_tick
         rts
-.dostris: bra     dostris_tick
-.outlast: bra     outlast_tick
-.pacman:  bra     pacman_tick
+.ndtick:
+        rts

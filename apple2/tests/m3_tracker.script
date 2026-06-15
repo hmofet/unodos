@@ -11,7 +11,7 @@ key right             # Pac-Man->Music
 key right             # Music->Tracker (row2 col3)
 shot m3_tracker_select # Tracker icon highlighted
 key return            # tracker_open: load the demo song, draw the grid
-wait 22
+wait 200   # disk-load: head seek + RWTS read
 shot m3_tracker_grid   # demo pattern: channel-0 melody + channel-1 bass
 # --- edit + save/clear/load round trip ---
 key down              # cursor row 0->1

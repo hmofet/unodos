@@ -15,7 +15,7 @@
 wait 600
 key right                # sel_icon: Clock -> Files
 key return               # launch Files (beep_click)
-wait 13                  # files_open+beep_click+files_draw (~89.5K total)
+wait 200                 # disk-load: head seek + RWTS read + files_draw
 shot m2_persist_files    # README.TXT 361 / HELLO.TXT 92 (HELLO now last)
 key right                # files_next -> select HELLO.TXT (index 1)
 wait 5                   # (~49.1K total)
