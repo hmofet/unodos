@@ -13,41 +13,47 @@ framebuffer [fb.*](fb.h) are shared, byte-for-byte, with the PS2 port; only
 `uno_dc_init()` / `uno_dc_poll()` / `uno_dc_present()` (in [dc_main.c](dc_main.c)),
 mirroring the PS2's `uno_ee_*`.
 
-## §2 — What's done (M1 + M2)
+## §2 — What's done (at parity, emulator-verified)
 
-- **Host shim VERIFIED** at 640×480: splash, the full desktop, the window
-  manager, and every app render to PNGs (`shots/m0_splash.png`,
-  `shots/m1_desktop.png`, `m1_pacman.png`, `m1_paint.png`, `m1_theme.png`,
-  `m1_files.png`). Same code the DC ELF compiles.
-- **DC platform layer written** ([dc_main.c](dc_main.c)): 640×480 RGB565
-  framebuffer present (fb → `vram_s` each vblank + cursor overlay); maple input
-  (controller d-pad→arrows, A/Start→Return/Esc, analog stick + DC mouse →
-  pointer, DC keyboard → text).
-- **M2 VMU storage** ([mac_io.c](mac_io.c) DC branch): flush-on-close RAM-buffer
-  backend over `/vmu/a1` (whole-file save/load matches UnoDOS's app model and the
-  VMU's block flash); `opendir`/`readdir` for the Files listing.
-- **Build system**: [Makefile](Makefile) (KOS) + [build.sh](build.sh)
-  (`host`/`desktop`/`dc`/`cdi`).
+- **Runs in Flycast** at native 640×480 / 60 fps, booted from `build/unodos-dc.cdi`
+  via REIOS (HLE BIOS, no Sega BIOS file). Captured `shots/dc_*.png`: desktop +
+  all 11 icons, Pac-Man, Dostris, Tracker, Paint, Theme, Files, OutLast, the
+  Music+Files+Notepad stack.
+- **VMU storage verified in-emulator**: the MCSAVE autotest types into Notepad,
+  saves to `/vmu/a1`, clears, and reads back — the reloaded text appears
+  (`shots/dc_vmu.png`). So Create/FSWrite/FSOpen/FSRead over the KOS `/vmu` VFS
+  round-trip.
+- **AICA audio wired** ([dc_main.c](dc_main.c) `uno_dc_snd_note/quiet`,
+  [mac_io.c](mac_io.c) Sound Manager): a looping square-wave sample via `snd_sfx`,
+  pitched per MIDI note; Music/Tracker/Dostris drive it. The build boots with
+  audio live (`shots/dc_audio_boot.png`); the sound itself is an ear-check.
+- **DC platform layer** ([dc_main.c](dc_main.c)): 640×480 RGB565 framebuffer
+  present (fb → `vram_s` each vblank + cursor overlay); maple input (controller
+  d-pad→arrows, A/Start→Return/Esc, analog stick + DC mouse → pointer, DC
+  keyboard → text).
+- **Build**: `sh-elf-gcc 15.2.0` + libkos built from source (`utils/kos-chain`);
+  `build.sh dc` → ELF (SH-4, entry `0x8c010000`), `build.sh cdi` → `.cdi`
+  (mkdcdisc), `build.sh iso` → selfboot ISO fallback. Host shim also verified
+  (`shots/m1_*.png`).
+- **Emulator rig**: [tools/emu_run.sh](tools/emu_run.sh) +
+  [tools/capture_apps.sh](tools/capture_apps.sh) (Flycast under Xvfb + llvmpipe).
 
-## §3 — What's NOT verified
+## §3 — Remaining / caveats
 
-[dc_main.c](dc_main.c) has **not been compiled or run** — no `sh-elf-gcc` /
-KallistiOS / DC emulator on the dev machine (the PS2 port shipped its EE target
-the same way before ps2dev arrived). Risks to check first when KOS is available:
-
-- **kbd_queue_pop xlat semantics** — confirm printables come back as ASCII and
-  specials don't collide; wire keyboard arrow keys if desired.
-- **`/vmu/a1` VFS** — confirm `fopen("wb")` + `opendir`/`readdir` behave; a brand
-  new VMU may need a format/free-block check. Watch the 128 KB / block limits.
-- **Tearing** — the present copies during vblank but the 600 KB copy may overrun
-  it; if so, double-buffer or move to a PVR-textured-quad present.
+- **Real hardware** is the only unverified frontier (CD-R or dc-tool/BBA),
+  including the audio ear-check. Everything emulator-verifiable is done.
+- **Emulator rig flags that were load-bearing** (see README gotchas): Flycast
+  needs `rend.EmulateFramebuffer = yes` (we draw straight to VRAM) AND
+  `rend.vsync = no` (Xvfb reports 0 Hz, which otherwise gates frame swaps → black).
+  A real Dreamcast / GPU display has neither issue.
+- **Keyboard arrows** route through the controller d-pad today; a DC keyboard
+  handles text entry but not its own arrow keys yet.
 - **`main(void)` vs KOS `main(argc,argv)`** — KOS calls `main(argc,argv)`; the
-  core's `main(void)` ignores the args (works on SH4, as it did on the EE).
+  core's `main(void)` ignores the args (works on SH4, confirmed by the run).
 
 ## §4 — Next
 
-1. Build with KallistiOS (`./build.sh dc`), fix compile issues, boot the `.cdi`
-   in Flycast/lxdream/redream, capture `shots/m1_dc_*.png`.
-2. M3 audio: wire the Sound Manager shim to the AICA via KOS `snd_*`.
-3. Real hardware (CD-R or dc-tool/BBA).
-4. Optional: PVR-textured-quad present; keyboard arrow routing.
+1. Real hardware: burn `build/unodos-dc.cdi` to CD-R (or dc-tool/BBA), confirm
+   boot + the audio ear-check.
+2. Optional: PVR-textured-quad present (HW scaling; sidesteps the FB-emulation
+   path in emulators); keyboard arrow routing.

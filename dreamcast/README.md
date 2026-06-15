@@ -1,4 +1,4 @@
-# UnoDOS/Dreamcast — Sega Dreamcast port (milestone 1, M2 storage)
+# UnoDOS/Dreamcast — Sega Dreamcast port (at parity, emulator-verified)
 
 UnoDOS/Dreamcast is a KallistiOS program that boots straight into the UnoDOS
 desktop. It follows the same strategy as the [PS2 port](../ps2/README.md)
@@ -7,10 +7,16 @@ desktop. It follows the same strategy as the [PS2 port](../ps2/README.md)
 manager, focus-routed event model, cooperative scheduler, device-abstracted
 FAT12) — by swapping the platform layer, not rewriting.
 
-**Status: M1 host-verified; the DC target is written but UNVERIFIED on a
-Dreamcast.** The whole desktop / window manager / all 11 apps render through the
-**host shim** at the Dreamcast's native **640×480** (`build.sh desktop`,
-`shots/m1_*.png`). The port is [../mac/unodos.c](../mac/unodos.c) copied to
+**Status: at parity, verified in the Flycast emulator.** The DC ELF compiles
+and links clean against KallistiOS (`sh-elf-gcc` 15.2.0), packages into a
+bootable `.cdi`, and **boots and runs in Flycast** at native **640×480 / 60 fps**:
+the desktop, window manager, and all 11 apps render on the emulated PowerVR
+(`shots/dc_*.png`), **VMU storage round-trips** (Notepad saves to `/vmu/a1` and
+reads back — `shots/dc_vmu.png`), and **AICA audio is wired** (square-wave
+synth; the build boots with it live — actual sound is an ear-check, as on the
+PS2/Amiga/etc. ports). The same code also renders through the **host shim** at
+640×480 (`build.sh desktop`, `shots/m1_*.png`) — the family's fastest inner
+loop. The port is [../mac/unodos.c](../mac/unodos.c) copied to
 [unodos.c](unodos.c) over the same **Mac-compat shim**
 ([mac_compat.h](mac_compat.h)/[mac_compat.c](mac_compat.c) + [mac_io.c](mac_io.c))
 the PS2 port uses, re-implementing the ~40 Toolbox calls the core needs over the
@@ -79,24 +85,55 @@ The HOST build of [mac_io.c](mac_io.c) keeps the PS2 port's stdio-over-`uno_disk
 backend **byte-identical**, so the PC inner loop round-trips files exactly the
 same way.
 
-## Audio (M3, stubbed)
+## Audio (M3, AICA)
 
-The Sound Manager shim ([mac_io.c](mac_io.c)) is a square-wave channel model that
-links and runs but is currently silent; wiring it to the **AICA** via KOS's sound
-API (`snd_stream` / a square-wave generator) is the M3 task. Music and Tracker
-already link and run.
+The Sound Manager shim ([mac_io.c](mac_io.c)) drives the **AICA** through KOS's
+sound API. A one-period 8-bit square wave is uploaded once via `snd_sfx`; each
+voice loops it, and the core's `noteCmd` (MIDI note in `param2`) sets the
+playback frequency (`hz × period`) on the matching AICA channel via
+`snd_sfx_play_ex` — `quietCmd` stops it (`dc_main.c`, `uno_dc_snd_note/quiet`).
+Music (1 voice), Tracker (4 voices) and Dostris all use this path. The build
+boots with audio live in Flycast; verifying the *sound* itself is an ear-check
+on hardware/emulator-audio, the same ceiling every other UnoDOS port documents.
 
-## Toolchain status on this dev machine
+## Screenshots (Flycast, emulated PowerVR @ 640×480/60fps)
 
-**No Dreamcast toolchain or emulator is installed here** (same starting point the
-PS2 port had before ps2dev was unpacked). The host shim — the family's fastest
-inner loop — needs only WSL `gcc` + `python3`, both present, and is fully
-verified. The DC ELF needs **KallistiOS** (`sh-elf-gcc` + `libkos`); building it
-is a one-time source build of the cross-compiler (see below). [dc_main.c](dc_main.c)
-is therefore written and reviewed but **not yet compiled or run** — exactly the
-state the PS2 `main.c`/`ee_platform.c` shipped in before the toolchain arrived.
-Everything it shares with the host shim ([fb.c](fb.c), [mac_compat.c](mac_compat.c),
-[mac_io.c](mac_io.c), [unodos.c](unodos.c)) **is** verified on the PC.
+`dc_*.png` in [shots/](shots) are captured from the running emulator (not the
+host shim): `dc_desktop` (the desktop + all 11 icons), `dc_pacman`, `dc_dostris`,
+`dc_tracker`, `dc_paint`, `dc_theme`, `dc_files`, `dc_outlast`, `dc_stack`
+(Music+Files+Notepad), and `dc_vmu` (the VMU save→reload round-trip — the
+reloaded text proves `/vmu/a1` write+read). The `m1_*.png` are the matching host
+shim renders.
+
+## Toolchain + emulator rig on this dev machine
+
+**KallistiOS built from source; the ELF runs in Flycast.** The toolchain came
+from `KallistiOS/utils/kos-chain` → `Makefile.dreamcast.cfg` → `make` (→
+`sh-elf-gcc 15.2.0` + binutils + newlib at `/opt/toolchains/dc`), then `make` in
+`$KOS_BASE` for `libkallisti.a`. `./build.sh dc` links `build/unodos-dc.elf` (a
+real SH-4 ELF, entry `0x8c010000`); `./build.sh cdi` wraps it with **mkdcdisc**
+into `build/unodos-dc.cdi` (`-N` keeps it ~3 MB instead of the padded ~700 MB);
+`./build.sh iso` is the no-mkdcdisc fallback (objcopy → scramble → makeip →
+genisoimage).
+
+The `.cdi` boots in **Flycast** (AppImage) under **Xvfb + Mesa llvmpipe** (no
+GPU needed), driven by [tools/emu_run.sh](tools/emu_run.sh) /
+[tools/capture_apps.sh](tools/capture_apps.sh). REIOS (HLE BIOS) runs it — no
+Sega BIOS file required.
+
+> **Rig gotchas (cost real time):** (1) Flycast needs a real disc format —
+> `.cdi`/`.gdi`/`.chd`, **not** a bare `.iso` ("Unknown disk format"); use
+> mkdcdisc. (2) UnoDOS draws straight to the DC framebuffer, so Flycast needs
+> **`rend.EmulateFramebuffer = yes`**. (3) Under Xvfb the monitor reports **0 Hz**,
+> and Flycast gates game-frame buffer swaps on vsync — so game frames never
+> appear (black) until **`rend.vsync = no`** is set (its ImGui menu renders
+> regardless, which masks the problem). With both set, the framebuffer displays.
+
+> Toolchain gotcha: the KOS toolchain builder moved from `utils/dc-chain` (gone)
+> to **`utils/kos-chain`**. Also, the stock `environ.sh.sample` hard-codes
+> `KOS_BASE=/opt/toolchains/dc/kos`; if your checkout lives elsewhere
+> (e.g. `~/KallistiOS`), set `KOS_BASE`/`KOS_ARCH=dreamcast` to match or libkos
+> fails to find `environ_base.sh`.
 
 ## Building
 
@@ -112,10 +149,11 @@ Everything it shares with the host shim ([fb.c](fb.c), [mac_compat.c](mac_compat
 ./build.sh desktop                 # -> shots/m1_desktop.png
 ./build.sh desktop PACMAN          # -> shots/m1_pacman.png
 
-# --- the Dreamcast ELF (needs KallistiOS; UNVERIFIED here) ------------------
+# --- the Dreamcast ELF + bootable image (needs KallistiOS; COMPILES clean) --
 ./build.sh dc                      # -> build/unodos-dc.elf   (interactive desktop)
 ./build.sh dc PACMAN               # self-driving screenshot variant
-./build.sh cdi                     # + build/unodos-dc.cdi    (bootable CD image)
+./build.sh cdi                     # + build/unodos-dc.cdi    (bootable, via mkdcdisc)
+./build.sh iso                     # + build/unodos-dc.iso    (no-mkdcdisc fallback)
 ```
 
 `build.sh` first runs `../amiga/mkdata.py` + [mkfont_c.py](mkfont_c.py) to emit
@@ -140,10 +178,18 @@ Then `source <KOS>/environ.sh` and run `./build.sh dc`. `build.sh dc` also tries
 to source `environ.sh` from `/opt/toolchains/dc/kos`, `~/KallistiOS`, or `~/dc/kos`
 if `$KOS_BASE` is unset.
 
-### Running it (once built)
+### Running it
 
-Boot `build/unodos-dc.cdi` in an emulator — **Flycast**, **lxdream**, or
-**redream** — or burn it to CD-R for real hardware. `make run` uses `$KOS_LOADER`
+Boot `build/unodos-dc.cdi` in **Flycast**/**lxdream**/**redream**, or burn it to
+CD-R for real hardware. Headless capture (what this repo's `shots/dc_*.png` use):
+
+```sh
+tools/emu_run.sh build/unodos-dc.cdi shots/dc_desktop.png 16   # boot + screenshot
+tools/capture_apps.sh                                          # all app variants
+```
+
+`emu_run.sh` runs Flycast under Xvfb + Mesa llvmpipe with `rend.EmulateFramebuffer`
+and `rend.vsync=no` set (see the rig gotchas above). `make run` uses `$KOS_LOADER`
 (dc-tool over the coder's-cable / BBA) if you have one.
 
 ## Files
@@ -153,18 +199,19 @@ Boot `build/unodos-dc.cdi` in an emulator — **Flycast**, **lxdream**, or
 | [unodos.c](unodos.c) | the portable UnoDOS core (+ `#ifdef UNO_DC` hooks) | copied from `mac/unodos.c` (= ps2/unodos.c + DC hooks) |
 | [fb.c](fb.c)/[fb.h](fb.h) | software framebuffer + primitives (640×480) | ps2 (resolution differs) |
 | [mac_compat.c](mac_compat.c)/[.h](mac_compat.h) | Mac Toolbox → fb.* shim | identical to ps2 |
-| [mac_io.c](mac_io.c) | File Manager (HOST stdio / **DC VMU**) + Sound stub | HOST branch identical to ps2 |
-| [dc_main.c](dc_main.c) | **KallistiOS** video present + maple input | DC-only |
+| [mac_io.c](mac_io.c) | File Manager (HOST stdio / **DC VMU**) + Sound Manager | HOST branch identical to ps2 |
+| [dc_main.c](dc_main.c) | **KallistiOS** video present + maple input + AICA synth | DC-only |
 | [uno_splash.c](uno_splash.c) | M0 hello-PVR splash (reference) | adapted from ps2 |
 | [host_main.c](host_main.c)/[host_desktop.c](host_desktop.c) | host-shim present → PPM | identical to ps2 |
 | [Makefile](Makefile)/[build.sh](build.sh) | KOS build + host inner loop | DC-specific |
 
 ## Next
 
-- **AICA audio** (M3): wire the Sound Manager shim to KOS's sound API.
-- **Real run**: build with KallistiOS, boot the `.cdi` in Flycast/lxdream/redream,
-  capture the desktop + apps; then real hardware (CD-R or dc-tool).
+- **Real hardware**: burn `build/unodos-dc.cdi` to CD-R (or dc-tool/BBA) and run
+  on a real Dreamcast — the final step (and the audio ear-check). Everything
+  emulator-verifiable is done.
 - **PVR present** (optional): a textured-quad present for hardware-accelerated
-  scaling/vsync — purely below [fb.c](fb.c).
-- **Keyboard arrows**: route the Dreamcast keyboard's own arrow keys (M1 uses the
-  controller d-pad).
+  scaling — purely below [fb.c](fb.c); also sidesteps the framebuffer-emulation
+  path in emulators.
+- **Keyboard arrows**: route a Dreamcast keyboard's own arrow keys (today they go
+  through the controller d-pad; keyboard handles text entry).

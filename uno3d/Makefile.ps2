@@ -1,0 +1,23 @@
+# uno3d PS2 demo - the spinning cube on the GS (hardware 3D), via PS2SDK + gsKit.
+# Driven by ./build.sh ps2 (which sets PS2DEV/PS2SDK/GSKIT). Output:
+#   build/uno3d-cube-ps2.elf   - the demo, GS-rasterised, runnable in PCSX2/FMCB.
+
+EE_BIN  = build/uno3d-cube-ps2.elf
+EE_OBJS = build/uno3d.o build/uno3d_ps2.o build/uno3d_demo.o build/uno3d_ps2_main.o
+
+GSKIT ?= $(PS2DEV)/gsKit
+EE_INCS    += -I. -I$(GSKIT)/include
+EE_LDFLAGS += -L$(GSKIT)/lib
+EE_LIBS  = -lgskit -ldmakit -lpad -lpacket -lgraph -ldraw -ldma -lkernel -lm
+EE_CFLAGS += -O2 -Wall -DUNO3D_PS2
+
+all: $(EE_BIN)
+
+clean:
+	rm -f build/*.o $(EE_BIN)
+
+build/%.o: %.c
+	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
+
+include $(PS2SDK)/samples/Makefile.pref
+include $(PS2SDK)/samples/Makefile.eeglobal

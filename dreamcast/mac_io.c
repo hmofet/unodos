@@ -348,10 +348,20 @@ OSErr PBWriteSync(ParmBlkPtr pb)
 }
 
 /* ===========================================================================
- * Sound Manager (M3 stub - links + runs; audio is silent until AICA wired)
+ * Sound Manager (M3): square-wave channels.
+ *   HOST build: silent (links + runs).
+ *   DC build:   drives the AICA via the uno_dc_snd_* hooks in dc_main.c - the
+ *               core's noteCmd (param2 = MIDI note) becomes a looping
+ *               square-wave voice on the matching AICA channel; quietCmd stops
+ *               it. Music / Tracker (4 voices) / Dostris all use this path.
  * ======================================================================== */
 static SndChannel gChans[8];
 static int gChanUsed[8];
+
+#ifdef UNO_DC
+void uno_dc_snd_note(int chan, int midi, int amp);  /* dc_main.c */
+void uno_dc_snd_quiet(int chan);
+#endif
 
 OSErr SndNewChannel(SndChannelPtr *chan, short synth, long init, void *proc)
 {
@@ -362,11 +372,25 @@ OSErr SndNewChannel(SndChannelPtr *chan, short synth, long init, void *proc)
 OSErr SndDisposeChannel(SndChannelPtr chan, Boolean quiet)
 {
     (void)quiet;
-    if (chan && chan->id >= 0 && chan->id < 8) gChanUsed[chan->id] = 0;
+    if (chan && chan->id >= 0 && chan->id < 8) {
+#ifdef UNO_DC
+        uno_dc_snd_quiet(chan->id);
+#endif
+        gChanUsed[chan->id] = 0;
+    }
     return noErr;
 }
 OSErr SndDoImmediate(SndChannelPtr chan, const SndCommand *cmd)
 {
-    (void)chan; (void)cmd;                   /* host: silent. DC M3: AICA. */
+#ifdef UNO_DC
+    if (chan && cmd) {
+        if (cmd->cmd == noteCmd || cmd->cmd == freqCmd)
+            uno_dc_snd_note(chan->id, (int)cmd->param2, 200);   /* param2 = MIDI note */
+        else if (cmd->cmd == quietCmd || cmd->cmd == flushCmd)
+            uno_dc_snd_quiet(chan->id);
+    }
+#else
+    (void)chan; (void)cmd;                   /* host: silent */
+#endif
     return noErr;
 }

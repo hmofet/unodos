@@ -1,0 +1,24 @@
+# uno3d Dreamcast demo - the spinning cube on the PowerVR2 (hardware 3D), via
+# KallistiOS. Needs the KOS environment sourced (build.sh dc does this). Output:
+#   build/uno3d-cube-dc.elf   - the demo, PVR-rasterised (Flycast/lxdream/redream)
+
+TARGET = build/uno3d-cube-dc.elf
+OBJS   = build/uno3d.o build/uno3d_dc.o build/uno3d_demo.o build/uno3d_dc_main.o
+
+all: rm-elf $(TARGET)
+
+include $(KOS_BASE)/Makefile.rules
+
+UNO3D_CFLAGS = -O2 -Wall -I. -DUNO3D_DC
+
+rm-elf:
+	-rm -f $(TARGET)
+
+$(TARGET): $(OBJS)
+	kos-cc -o $(TARGET) $(OBJS) -lm $(KOS_LIBS)
+
+build/%.o: %.c
+	kos-cc $(UNO3D_CFLAGS) -c $< -o $@
+
+clean: rm-elf
+	-rm -f build/*.o

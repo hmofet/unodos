@@ -15,8 +15,11 @@
 #                       Needs the KOS environment ($KOS_BASE) - sources
 #                       $KOS_BASE/../environ.sh if KOS_BASE is unset. UNVERIFIED
 #                       here (no sh-elf-gcc / DC emulator on the dev machine).
+#   ./build.sh iso [FEATURE]
+#                       dc + a bootable selfboot CD image (build/unodos-dc.iso)
+#                       via the KOS tools + genisoimage.
 #   ./build.sh cdi [FEATURE]
-#                       dc + a bootable CD image (build/unodos-dc.cdi) via mkdcdisc.
+#                       iso, converted to .cdi if cdi4dc/mkdcdisc is present.
 #
 # All targets regenerate build/font_data.h from the shared font first.
 set -e
@@ -44,7 +47,7 @@ case "$1" in
     UNO_OUT="shots/m1_$TAG.ppm" ./build/host_desktop
     "$PY" tools/ppm2png.py "shots/m1_$TAG.ppm" "shots/m1_$TAG.png"
     echo "done: shots/m1_$TAG.png" ;;
-  dc|cdi)
+  dc|cdi|iso)
     echo "[2/2] building the Dreamcast ELF (KallistiOS)..."
     # source the KOS environment if not already present
     if [ -z "$KOS_BASE" ]; then
@@ -61,13 +64,11 @@ case "$1" in
     EXTRA_DEF=""
     [ -n "$2" ] && EXTRA_DEF="-DUNO_AUTOTEST_$2"
     make clean >/dev/null 2>&1 || true
-    if [ "$1" = "cdi" ]; then
-        make cdi EXTRA_DEF="$EXTRA_DEF"
-        echo "done: build/unodos-dc.cdi ${2:+(AUTOTEST_$2)}"
-    else
-        make EXTRA_DEF="$EXTRA_DEF"
-        echo "done: build/unodos-dc.elf ${2:+(AUTOTEST_$2)}"
-    fi ;;
+    case "$1" in
+      cdi) make cdi EXTRA_DEF="$EXTRA_DEF"; echo "done: build/unodos-dc.cdi (or .iso) ${2:+(AUTOTEST_$2)}" ;;
+      iso) make iso EXTRA_DEF="$EXTRA_DEF"; echo "done: build/unodos-dc.iso ${2:+(AUTOTEST_$2)}" ;;
+      *)   make EXTRA_DEF="$EXTRA_DEF";     echo "done: build/unodos-dc.elf ${2:+(AUTOTEST_$2)}" ;;
+    esac ;;
   *)
     echo "[2/2] building + running the host splash..."
     CC="${CC:-gcc}"

@@ -35,6 +35,9 @@
 #include <dc/maple/keyboard.h>
 #include <dc/maple/mouse.h>
 #include <dc/video.h>
+#include <dc/sound/sound.h>
+#include <dc/sound/sfxmgr.h>
+#include <math.h>
 #include <string.h>
 
 #include "fb.h"
@@ -57,11 +60,59 @@ static inline uint16 to565(fb_px p)
     return (uint16)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
+/* ---- AICA square-wave synth (M3) --------------------------------------- *
+ * One 8-bit signed square-wave period (SQ_PERIOD samples) is uploaded to the
+ * AICA once; each voice loops it. Output pitch = playback rate / SQ_PERIOD, so
+ * a note's frequency is set via the play-data freq field = hz * SQ_PERIOD. The
+ * core replaces the note on a channel by re-playing (AICA restarts the voice);
+ * quietCmd stops it. Mirrors the square-wave model the other ports use. */
+#define SQ_PERIOD 32
+static sfxhnd_t g_sq = 0;
+static int      g_snd_ready = 0;
+
+static void snd_bringup(void)
+{
+    static char wave[SQ_PERIOD];
+    int i;
+    if (g_snd_ready) return;
+    snd_init();
+    for (i = 0; i < SQ_PERIOD; i++) wave[i] = (i < SQ_PERIOD / 2) ? 100 : -100;
+    /* 8-bit mono; the nominal rate is overridden per-note by the freq field */
+    g_sq = snd_sfx_load_raw_buf(wave, SQ_PERIOD, 44100, 8, 1);
+    g_snd_ready = 1;
+}
+
+static int midi_hz(int midi)
+{
+    /* equal temperament, A4 (MIDI 69) = 440 Hz */
+    return (int)(440.0 * pow(2.0, (midi - 69) / 12.0) + 0.5);
+}
+
+void uno_dc_snd_note(int chan, int midi, int amp)
+{
+    sfx_play_data_t d;
+    if (!g_snd_ready || !g_sq || midi <= 0) return;
+    memset(&d, 0, sizeof d);
+    d.chn = chan;                 /* fixed AICA channel per Sound Manager id */
+    d.idx = g_sq;
+    d.vol = (amp > 255) ? 255 : (amp < 0 ? 0 : amp);
+    d.pan = 128;                  /* centre */
+    d.loop = 1;
+    d.freq = midi_hz(midi) * SQ_PERIOD;
+    snd_sfx_play_ex(&d);
+}
+
+void uno_dc_snd_quiet(int chan)
+{
+    if (g_snd_ready) snd_sfx_stop(chan);
+}
+
 void uno_dc_init(void)
 {
     /* 640x480, 16bpp RGB565. KOS auto-selects VGA vs NTSC/PAL by the cable. */
     vid_set_mode(DM_640x480, PM_RGB565);
     vid_empty();
+    snd_bringup();                /* AICA up for Music / Tracker / Dostris */
 }
 
 /* post a keyDown into the shim queue: message = (keycode<<8)|charcode, exactly

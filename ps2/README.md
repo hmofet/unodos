@@ -1,4 +1,4 @@
-# UnoDOS/PS2 — Sony PlayStation 2 port (milestone 2)
+# UnoDOS/PS2 — Sony PlayStation 2 port (milestone 3)
 
 UnoDOS/PS2 is a FreeMcBoot-launched ELF with full hardware access —
 "firmware-hosted bare-metal," the richest target in the family. The
@@ -8,16 +8,19 @@ complete UnoDOS (11 apps, window manager, event model, cooperative
 scheduler, device-abstracted FAT12) — by swapping the platform layer, not
 rewriting.
 
-**Status: M1 + M2 done.** The whole desktop / window manager / all 11 apps run —
-verified both on the host shim (`build.sh desktop`, `shots/m1_*.png`) and on
-the **emulated PS2 GS** in PCSX2 (`shots/m1_pcsx2_pacman.png`). The port is
+**Status: M1 + M2 + M3 features done.** The whole desktop / window manager / all
+11 apps run — verified both on the host shim (`build.sh desktop`, `shots/m1_*.png`)
+and on the **emulated PS2 GS** in PCSX2 (`shots/m1_pcsx2_pacman.png`). The port is
 [../mac/unodos.c](../mac/unodos.c) copied to [unodos.c](unodos.c) over a
 **Mac-compat shim** ([mac_compat.h](mac_compat.h)/[mac_compat.c](mac_compat.c) +
 [mac_io.c](mac_io.c)) that re-implements the ~40 Toolbox calls it uses over
 `fb.*`. **M2 storage** persists Files/Notepad to the **PS2 memory card** via
-libmc — verified to survive a power cycle in PCSX2 (`shots/m2_pcsx2_*.png`) —
-and M3 Theme (32-bit colour) comes along through the shim. Remaining: EE audio
-(audsrv), a USB keyboard, and a real-hardware run — see [Next](#next).
+libmc — verified to survive a power cycle in PCSX2 (`shots/m2_pcsx2_*.png`). **M3**
+brings Theme (32-bit colour) + the scheduler through the shim, **USB keyboard +
+mouse** ([ee_usb.c](ee_usb.c)) and **SPU2 audio via audsrv** ([ee_audio.c](ee_audio.c)).
+Boot verified at 60 fps in PCSX2 with all of it loaded (`shots/m3_audio_boot.png`);
+the USB/audio *function* and a real-hardware run are the only things left — see
+[Next](#next).
 
 ## Platform design: software framebuffer, GS as a blitter
 

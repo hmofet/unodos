@@ -45,6 +45,7 @@ PACMAN_BIN = build/pacman.bin
 PACMANV_BIN = build/pacmanv.bin
 TRACKER_BIN = build/tracker.bin
 PAINT_BIN = build/paint.bin
+RUNNER3D_BIN = build/runner3d.bin
 
 # Floppy sizes
 FLOPPY_360K = 368640
@@ -158,6 +159,9 @@ $(PACMAN_BIN): $(APPS_DIR)/pacman.asm | $(BUILD_DIR)
 $(PACMANV_BIN): $(APPS_DIR)/pacmanv.asm | $(BUILD_DIR)
 	$(NASM) -f bin -o $@ $<
 
+$(RUNNER3D_BIN): $(APPS_DIR)/runner3d.asm | $(BUILD_DIR)
+	$(NASM) -f bin -o $@ $<
+
 # Create 360KB floppy image (RAW LAYOUT ONLY - cannot boot: 1.44MB geometry
 # is hardcoded in stage2/kernel/BPB and no FAT12 filesystem pass is applied;
 # the default/run/debug/test targets all use the 1.44MB image)
@@ -171,14 +175,14 @@ $(FLOPPY_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	@echo "Created $@ (360KB)"
 
 # Create 1.44MB floppy image (for modern hardware testing)
-$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(TETRISV_BIN) $(NOTEPAD_BIN) $(SYSINFO_BIN) $(OUTLAST_BIN) $(OUTLASTV_BIN) $(PACMAN_BIN) $(PACMANV_BIN) $(TRACKER_BIN) $(PAINT_BIN)
+$(FLOPPY_144): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LAUNCHER_BIN) $(CLOCK_BIN) $(BROWSER_BIN) $(MOUSE_TEST_BIN) $(MUSIC_BIN) $(MKBOOT_BIN) $(SETTINGS_BIN) $(TETRIS_BIN) $(TETRISV_BIN) $(NOTEPAD_BIN) $(SYSINFO_BIN) $(OUTLAST_BIN) $(OUTLASTV_BIN) $(PACMAN_BIN) $(PACMANV_BIN) $(TRACKER_BIN) $(PAINT_BIN) $(RUNNER3D_BIN)
 	@echo "Creating 1.44MB floppy image..."
 	dd if=/dev/zero of=$@ bs=512 count=2880 2>/dev/null
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc 2>/dev/null
 	dd if=$(STAGE2_BIN) of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=5 conv=notrunc 2>/dev/null
 	@echo "Adding FAT12 filesystem with apps..."
-	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(SYSINFO_BIN) SYSINFO.BIN $(TRACKER_BIN) TRACKER.BIN $(PAINT_BIN) PAINT.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MUSIC_BIN) MUSIC.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(TETRISV_BIN) TETRISV.BIN $(NOTEPAD_BIN) TEXT.BIN $(OUTLAST_BIN) OUTLAST.BIN $(OUTLASTV_BIN) OUTLASTV.BIN $(PACMAN_BIN) PACMAN.BIN $(PACMANV_BIN) PACMANV.BIN
+	python3 tools/add_floppy_fs.py $@ $(LAUNCHER_BIN) LAUNCHER.BIN $(RUNNER3D_BIN) RUN3D.BIN $(SYSINFO_BIN) SYSINFO.BIN $(TRACKER_BIN) TRACKER.BIN $(PAINT_BIN) PAINT.BIN $(CLOCK_BIN) CLOCK.BIN $(BROWSER_BIN) BROWSER.BIN $(MUSIC_BIN) MUSIC.BIN $(SETTINGS_BIN) SETTINGS.BIN $(TETRIS_BIN) TETRIS.BIN $(TETRISV_BIN) TETRISV.BIN $(NOTEPAD_BIN) TEXT.BIN $(OUTLAST_BIN) OUTLAST.BIN $(OUTLASTV_BIN) OUTLASTV.BIN $(PACMAN_BIN) PACMAN.BIN $(PACMANV_BIN) PACMANV.BIN
 	@echo "Created $@ (1.44MB)"
 
 floppy144: $(FLOPPY_144)

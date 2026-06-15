@@ -2,7 +2,15 @@ build/
 *.o
 *.elf
 *.cdi
+*.iso
 *.ppm
+*.bin
 uno_disk/
-tools/kos_build.log
 shots/*.ppm
+# emulator rig: keep the scripts (emu_run.sh, capture_apps.sh), drop logs + temp probes
+tools/*.log
+tools/emu_out.txt
+tools/fbtest.*
+tools/pvrtest.*
+tools/raw.*
+tools/emu_run_interp.sh
