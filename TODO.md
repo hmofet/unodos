@@ -365,7 +365,7 @@ milestone ships with a scripted regression rig + screenshots, macplus-style.
       M2: RWTS write + USV1-style FS + Files/Notepad + paddle pointer.
       M3: Dostris/Pac-Man/Paint/Tracker(blocking speaker)/Theme-dithers;
       OutLast feasibility-gated at 1MHz.
-- [ ] Apple IIGS: 65C816/ca65; firmware block boot (the macplus model:
+- [x] Apple IIGS (FULL PARITY, build 420): 65C816/ca65; firmware block boot (the macplus model:
       SmartPort = the .Sony equivalent); SHR 320x200x16 desktop; ADB
       firmware-state input; FAT12 in the 800K block space; Ensoniq
       wavetable Music/Tracker. Harness decision at M0 (py65816 vs GSplus
