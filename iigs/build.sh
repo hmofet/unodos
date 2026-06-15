@@ -31,7 +31,7 @@ echo "[3/5] assembling kernel..."
 echo "[4/5] packing the 800K ProDOS image..."
 "$PY" mkdsk.py build/boot.bin build/kernel.bin build/unodos_iigs.po
 
-echo "[5/5] rendering the SHR splash via the harness..."
-"$PY" harness.py build/unodos_iigs.po build/m0.png
+echo "[5/5] rendering the desktop via the harness..."
+"$PY" harness.py build/unodos_iigs.po build/m1.png --frames 4
 
-echo "done: build/unodos_iigs.po + build/m0.png"
+echo "done: build/unodos_iigs.po + build/m1.png"
