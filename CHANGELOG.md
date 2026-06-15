@@ -5,6 +5,39 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [ps2: USB keyboard + mouse] - 2026-06-15
+
+The PS2 desktop now takes input from a real USB keyboard and mouse, alongside
+the DualShock 2 — both feed the same Mac-compat event queue. New file
+`ps2/ee_usb.c`.
+
+- **Self-contained drivers.** The three IOP modules (`usbd`, `ps2kbd`,
+  `ps2mouse`) are embedded into the ELF via `bin2c` (Makefile rules →
+  `build/*_irx.c`) and loaded with `SifExecModuleBuffer`, so a FreeMcBoot launch
+  needs no external module files. Links `-lkbd -lmouse`.
+- **Keyboard** runs in RAW (USB-HID-usage) mode; `hid_translate` owns a full US
+  keymap — letters, digits, shifted symbols, arrows, Return/Esc/Backspace/Tab/
+  Space — and maps Ctrl/Win to the Mac Command modifier. Events post into the
+  shim queue, so the core's normal `GetNextEvent` loop consumes them (real
+  typing into Notepad).
+- **Mouse** runs in ABS mode clamped to the framebuffer, fed through
+  `uno_set_mouse` + `mouseDown`/`mouseUp` edges, so clicks and drags work via
+  the core's existing `GetMouse`/`StillDown` path. A small arrow **cursor** is
+  drawn as a GS overlay in `uno_ee_present` (two `gsKit_prim_triangle`s on top
+  of the blitted framebuffer), leaving unodos.c's software-FB XOR/incremental
+  drawing untouched.
+- **Boot safety.** `PS2KbdInit`/`PS2MouseInit` spin inside libkbd/libmouse until
+  each IOP driver's RPC server registers — immediate on real hardware, but
+  PCSX2 has no USB HLE so they never return, which black-screened the boot
+  (they ran before the splash). Fixed by running the device init on a dedicated
+  EE thread one priority notch below the main loop: the desktop boots and stays
+  responsive regardless, and USB engages the instant the drivers register.
+  Steady-state polling stays on the main thread, so SIF traffic is
+  single-threaded.
+- **Verified:** the full desktop boots in PCSX2 with all three modules loaded +
+  the init thread running (`ps2/shots/m3_usb_boot.png`). The keyboard/mouse
+  *function* is hardware-only — PCSX2 can't inject USB HID input.
+
 ## [8088 port M1/M2 — Microsoft serial mouse on COM1 + RAM floor] - 2026-06-14 (Build 409)
 
 Building on M0, the XT now has a working pointer and an honest RAM spec.
