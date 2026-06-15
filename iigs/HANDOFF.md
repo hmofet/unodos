@@ -1,5 +1,40 @@
 # Apple IIGS port — implementation handoff
 
+## M3 — IN PROGRESS (2026-06-15, build 415): the two signature features
+
+The two most IIGS-distinctive capabilities are done and verified; the colour
+games + scheduler remain (below).  `tests/m3.py` → `M3 PASS`.
+
+- **Theme (`theme.i`, proc 3) — 4096-colour SHR:** the 8 shared UI presets
+  (Classic/Midnight/Forest/Sunset/Ocean/Slate/Candy/Amber) live-rewrite SHR
+  palette line 0 (`$E1:9E00`).  Because SHR looks up the palette per pixel at
+  scan-out, one palette poke recolours the *entire* desktop instantly — no
+  repaint of pixels needed.  `shots/m3_theme.png` shows the whole UI in Sunset.
+  (Trap banked: `f:label,x` already adds the base — load X with the *offset*
+  only, not `label+offset`, or you double-address into zeros.)
+- **Ensoniq DOC audio (`snd.i`, Music = proc 4):** the marquee IIGS sound
+  chip (32 oscillators, 64 KB sound RAM) via the sound GLU — `$C03E/$C03F`
+  address, `$C03C` control (bit5 reg/RAM, bit6 autoinc), `$C03D` data.
+  `doc_init` halts all oscillators, sets the osc-enable scan, and loads a
+  256-byte wavetable into DOC RAM; `snd_note`/`snd_off` program/halt an
+  oscillator (freq lo/hi, volume, wavetable ptr, size, control=free-run);
+  Music sequences a melody on oscillator 0 with a per-frame `music_tick`.
+  Audio is NOT harness-verifiable (no DOC synthesis — sound never is across
+  these ports), but the harness logs every GLU register write, so `tests/m3.py`
+  asserts osc-0 is programmed with the melody's frequency words.  `STZ` has no
+  long mode — use `lda #0/sta f:`.
+
+**M3 REMAINING (to full parity):** the colour apps — Dostris, Pac-Man,
+OutLast, Paint — and Music's sibling **Tracker**, plus the **scheduler**.
+These are straight 16-colour SHR ports of the shared logic (`snes/games.inc`,
+`macplus/pacman.i`/`paint.i`/`tracker.i` are templates); the renderer
+primitives (`fill_cells`/`draw_char`/the cell grid), the per-frame app-tick
+hook (`music_tick` is the pattern — add `game_tick`), the event/key routing,
+and the DOC engine are all in place, so each is an additive app file + a
+dispatch/icon/app_def entry (procs 5/6 are free; extend `MAXWIN` past 6 if
+many windows must coexist).  Scheduler: port `macplus/scheduler.i` semantics
+(the apple2 verdict was option-3 poll-and-dispatch for a single-app model).
+
 ## M2 — SHIPPED (2026-06-15, build 414)
 
 FAT12 storage over the SmartPort/ProDOS block driver, with Files + Notepad

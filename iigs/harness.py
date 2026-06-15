@@ -53,6 +53,12 @@ class Harness:
         self.vbl = 0              # $C019 toggles each read
         self.frame = 0            # WDM #$02 frame count
         self._frame_flag = False
+        # Ensoniq DOC model (control path only; no audio synthesis)
+        self.doc_regs = bytearray(256)
+        self.doc_ram = bytearray(65536)
+        self.doc_addr = 0
+        self.doc_ctl = 0
+        self.doc_writes = []      # log of (register, value) writes
         self.cpu = CPU65816(read_hook=self._read, write_hook=self._write,
                             wdm_hook=self._wdm)
         self._install_firmware()
@@ -110,6 +116,20 @@ class Harness:
         off = addr & 0xFFFF
         if off == 0xC029:
             self.newvideo = val
+        elif off == 0xC03E:                # DOC address low
+            self.doc_addr = (self.doc_addr & 0xFF00) | val
+        elif off == 0xC03F:                # DOC address high
+            self.doc_addr = (self.doc_addr & 0x00FF) | (val << 8)
+        elif off == 0xC03C:                # DOC control (access mode)
+            self.doc_ctl = val
+        elif off == 0xC03D:                # DOC data
+            if self.doc_ctl & 0x20:        # RAM access
+                self.doc_ram[self.doc_addr & 0xFFFF] = val
+            else:                          # register access
+                self.doc_regs[self.doc_addr & 0xFF] = val
+                self.doc_writes.append((self.doc_addr & 0xFF, val))
+            if self.doc_ctl & 0x40:        # autoincrement
+                self.doc_addr = (self.doc_addr + 1) & 0xFFFF
         # all soft-switch writes are swallowed (state we don't model is a no-op)
         return True
 

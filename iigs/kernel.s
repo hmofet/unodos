@@ -1,8 +1,9 @@
 ; ============================================================================
-; UnoDOS/Apple IIGS kernel (through milestone 2): Super Hi-Res desktop,
-; window manager, ADB mouse + keyboard, software cursor, SysInfo + Clock,
-; and FAT12 storage over SmartPort (Files + Notepad).  Storage core is in
-; fs.i (blk_io + FAT12); the Files/Notepad apps are in apps.i.
+; UnoDOS/Apple IIGS kernel: Super Hi-Res desktop, window manager, ADB mouse
+; + keyboard, software cursor, SysInfo + Clock, FAT12 storage over SmartPort
+; (Files + Notepad), 4096-colour Theme presets, and Ensoniq DOC audio (Music).
+; Storage in fs.i (blk_io + FAT12); Files/Notepad in apps.i; palette presets
+; in theme.i; the DOC sound engine + Music in snd.i.
 ;
 ; The proven SNES M1 (snes/kernel.asm) WM / event / app logic re-expressed
 ; on the IIGS linear SHR framebuffer: a cell grid of 8x8 px = 40x25 cells on
@@ -168,7 +169,7 @@ ATTR_KEY  = 3
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS    = 4
+NICONS    = 6
 EVQ_SIZE  = 32
 EV_KEY    = 1
 EV_MOUSE  = 4
@@ -222,6 +223,7 @@ start:
         jsr fat_mount
         jsr fat_list_root
         jsr notepad_new
+        jsr doc_init           ; bring up the Ensoniq DOC
 
         jsr repaint_all
         jsr draw_cursor
@@ -238,6 +240,7 @@ MainLoop:
         jsr handle_drag
         jsr handle_events
         jsr app_ticks
+        jsr music_tick
         jsr draw_cursor
         bra MainLoop
 
@@ -793,6 +796,11 @@ win_create:
         ; fresh-Notepad hook: a new proc-2 window starts empty unless Files
         ; preloaded NBUF (v_np_loaded).
         lda S3
+        cmp #4
+        bne @notmusic
+        jsr music_start        ; a new Music window begins playing
+@notmusic:
+        lda S3
         cmp #2
         bne @nohook
         lda v_np_loaded
@@ -1112,11 +1120,19 @@ app_draw_content:
         beq @clock
         cmp #2
         beq @notepad
+        cmp #3
+        beq @theme
+        cmp #4
+        beq @music
         cmp #7
         beq @files
         rts
 @notepad:
         jmp notepad_draw
+@theme:
+        jmp theme_draw
+@music:
+        jmp music_draw
 @files:
         jmp files_draw
 @sysinfo:
@@ -1875,30 +1891,41 @@ erase_cursor:
 app_key:
         cmp #2
         beq @notepad
+        cmp #3
+        beq @theme
         cmp #7
         beq @files
         rts
 @notepad:
         jmp notepad_key
+@theme:
+        jmp theme_key
 @files:
         jmp files_key
 
 ; ---- M2 storage (FAT12 over SmartPort) + Files/Notepad apps ----
 .include "fs.i"
 .include "apps.i"
+; ---- M3 colour theming + Ensoniq DOC audio ----
+.include "theme.i"
+.include "snd.i"
 
 ; ============================================================================
 .segment "RODATA"
 str_menutitle: .byte "UnoDOS 3", 0
-str_version:   .byte "UnoDOS 3.29  IIGS  Build 414", 0
+str_version:   .byte "UnoDOS 3.29  IIGS  Build 415", 0
 str_t_sysinfo: .byte "System Info", 0
 str_t_clock:   .byte "Clock", 0
 str_t_notepad: .byte "Notepad", 0
 str_t_files:   .byte "Files", 0
+str_t_theme:   .byte "Theme", 0
+str_t_music:   .byte "Music", 0
 name_sysinfo:  .byte "Sys Info", 0
 name_clock:    .byte "Clock", 0
 name_notepad:  .byte "Notepad", 0
 name_files:    .byte "Files", 0
+name_theme:    .byte "Theme", 0
+name_music:    .byte "Music", 0
 str_si1:       .byte "UnoDOS 3 / Apple IIGS", 0
 str_si2:       .byte "CPU: 65C816 2.8 MHz", 0
 str_si3:       .byte "Video: Super Hi-Res", 0
@@ -1917,21 +1944,25 @@ icon_tab:
         .word 16, 4
         .word 26, 4
         .word 4, 8
+        .word 16, 8
+        .word 26, 8
 icon_names:
         .word name_sysinfo
         .word name_clock
         .word name_notepad
         .word name_files
+        .word name_theme
+        .word name_music
 icon_procs:
-        .word 0, 1, 2, 7
+        .word 0, 1, 2, 7, 3, 4
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app)
 app_def_tab:
         .word 4, 4, 30, 12, str_t_sysinfo     ; 0 SysInfo
         .word 12, 8, 16, 9, str_t_clock       ; 1 Clock
         .word 2, 2, 36, 21, str_t_notepad     ; 2 Notepad
-        .word 0, 0, 0, 0, str_t_sysinfo       ; 3 (unused)
-        .word 0, 0, 0, 0, str_t_sysinfo       ; 4 (unused)
+        .word 6, 5, 28, 12, str_t_theme       ; 3 Theme
+        .word 10, 7, 22, 10, str_t_music      ; 4 Music
         .word 0, 0, 0, 0, str_t_sysinfo       ; 5 (unused)
         .word 0, 0, 0, 0, str_t_sysinfo       ; 6 (unused)
         .word 4, 3, 22, 18, str_t_files       ; 7 Files

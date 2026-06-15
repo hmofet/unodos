@@ -12,11 +12,25 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 |-----------|-------|-------|
 | M0 | Toolchain, ProDOS block-boot, SHR splash, ROM-free harness | ✅ shipped |
 | M1 | SHR desktop + window manager + ADB mouse/keyboard + SysInfo/Clock | ✅ shipped |
-| **M2** | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped (build 414) |
-| M3 | Parity: colour apps + Ensoniq DOC audio + scheduler | planned |
+| M2 | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped |
+| **M3** | 4096-colour Theme + Ensoniq DOC audio (Music) | ✅ shipped (build 415) |
+| M3+ | Colour games (Dostris/Pac-Man/OutLast/Paint) + Tracker + scheduler | planned |
 
 ![M1 Super Hi-Res desktop](shots/m1_desktop.png)
 ![M2 Files + Notepad](shots/m2_notepad.png)
+![M3 Theme — the whole desktop recoloured](shots/m3_theme.png)
+
+## What M3 delivers
+
+* **4096-colour theming.** The Theme app cycles the 8 shared UI presets,
+  each a single write to SHR palette line 0 that recolours the *entire*
+  desktop instantly — the Super Hi-Res palette is looked up per pixel at
+  scan-out, so no pixels are redrawn.
+* **Ensoniq DOC audio.** The marquee IIGS sound chip — 32 oscillators and
+  64 KB of dedicated sound RAM — driven through the sound GLU. Music loads a
+  wavetable into DOC RAM and sequences a melody on an oscillator. (Sound
+  isn't reproducible in the ROM-free harness, but every DOC register write
+  is logged and asserted.)
 
 ## What M2 delivers
 
@@ -65,6 +79,7 @@ packs the 800 KB ProDOS image, and renders the desktop through the harness.
 python cpu65816.py        # CPU core self-test  -> SELFTEST OK
 python tests/m1.py        # M1 regression       -> M1 PASS
 python tests/m2.py        # M2 regression       -> M2 PASS
+python tests/m3.py        # M3 regression       -> M3 PASS
 ```
 
 ## Running it for real
@@ -83,11 +98,13 @@ python tests/m2.py        # M2 regression       -> M2 PASS
 | `kernel.s` | the kernel — SHR desktop, window manager, input, apps |
 | `fs.i` | FAT12 storage over SmartPort (`blk_io` + the FAT12 core) |
 | `apps.i` | the Files + Notepad apps |
+| `theme.i` | the Theme app + the 8 palette presets |
+| `snd.i` | the Ensoniq DOC sound engine + the Music app |
 | `mkdata.py` → `gen_data.inc` | shared 8×8 font + SHR UI palette |
 | `mkdsk.py` / `mkfs.py` | pack the 800 KB ProDOS image / write its FAT12 volume |
 | `boot.cfg` / `kernel.cfg` | ld65 link configs |
 | `cpu65816.py` | the 65C816 interpreter (reusable; self-testing) |
 | `harness.py` | ROM-free firmware shim + script runner + SHR→PNG renderer |
-| `tests/m1.py`, `tests/m2.py` | headless regressions |
+| `tests/m1.py`, `tests/m2.py`, `tests/m3.py` | headless regressions |
 
 See `HANDOFF.md` for the verified boot contract and the M1–M3 plan.

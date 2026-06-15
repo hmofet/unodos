@@ -5,6 +5,25 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — M3: 4096-colour Theme + Ensoniq DOC audio] - 2026-06-15 (Build 415)
+
+The two most IIGS-distinctive hardware features land.
+
+- **4096-colour Theme (`iigs/theme.i`):** the 8 shared UI presets live-rewrite
+  SHR palette line 0 (`$E1:9E00`); because Super Hi-Res looks up the palette per
+  pixel at scan-out, one palette poke recolours the entire desktop instantly
+  with no pixel redraw (`iigs/shots/m3_theme.png`).
+- **Ensoniq DOC audio (`iigs/snd.i`):** the marquee IIGS sound chip — 32
+  oscillators, 64 KB dedicated sound RAM — driven through the sound GLU
+  (`$C03C`–`$C03F`). `doc_init` halts the oscillators and loads a wavetable into
+  DOC RAM; the Music app sequences a melody on oscillator 0 with a per-frame
+  tick. Audio isn't reproducible in the ROM-free harness (no DOC synthesis), but
+  every GLU register write is logged and asserted, so the oscillator-programming
+  path is verified. `tests/m3.py` → `M3 PASS`.
+- Remaining for full parity: the colour games (Dostris/Pac-Man/OutLast/Paint) +
+  Tracker + scheduler — additive app files over the now-complete renderer,
+  input, storage and audio foundations.
+
 ## [Apple IIGS port — M2: FAT12 storage over SmartPort + Files/Notepad] - 2026-06-15 (Build 414)
 
 The IIGS port gains persistent storage: a real FAT12 volume on the 800 KB disk,
