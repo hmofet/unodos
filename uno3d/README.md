@@ -155,6 +155,6 @@ hardware.
 | `host_demo.c` / `host_game.c` | host glue (software backend → PPM/PNG) |
 | `uno3d_ps2_main.c` / `uno3d_ps2_game.c` | PS2 glue (GS + DualShock 2) |
 | `uno3d_dc_main.c` / `uno3d_dc_game.c` | Dreamcast glue (PVR + maple) |
-| `uno3d_pc_game.c` / `pc/fb.h` | PC 386+ DOS glue (software + VGA mode 13h + arrow keys) |
-| `Makefile.ps2` / `Makefile.dc` / `Makefile.dos` / `build.sh` | builds |
-| `tools/dc_run.sh` / `tools/dos_run.sh` | headless Flycast / DOSBox capture rigs |
+| `../apps/runner3d.asm` | native x86 UnoDOS version (talks to the kernel via `INT 0x80`; not part of the C library) |
+| `Makefile.ps2` / `Makefile.dc` / `build.sh` | builds |
+| `tools/dc_run.sh` | headless Flycast capture rig |

@@ -1,5 +1,40 @@
 # UnoDOS Roadmap
 
+## Planned major features (2026-06-15)
+
+### Music Player app — hardware-scaled, plays files (full design: docs/MUSIC-PLAYER-PLAN.md)
+A new app (alongside the built-in-tune **Music** app) that plays music **files**,
+routed to the best sound hardware on each platform and scaled down gracefully.
+- [ ] Formats: **WAV/AU** (PCM, every platform), **MIDI/SMF** (synth-capable HW),
+      **MP3** (PS2 / Dreamcast only — integrate a fixed-point decoder), and
+      **console-native** formats (Amiga **MOD**, Genesis **VGM**, SNES **SPC**,
+      C64 **SID**, PS2 **VAG**, DC **ADX**).
+- [ ] PC sound cards: **AdLib OPL2/OPL3** (FM), **SoundBlaster** (DSP + DMA PCM),
+      **GUS** (wavetable). Probe order SB → GUS → AdLib → PC-speaker fallback.
+      Aureal / AC97 / PCI cards are out of envelope for a real-mode 8088 target.
+- [ ] Native chips elsewhere: Paula (Amiga), SPC700 (SNES), Ensoniq DOC (IIGS),
+      SID (C64), PSG **+ the currently-unused YM2612 FM** (Genesis), SPU2 (PS2),
+      AICA (DC). 1-bit PWM fallback on speaker-only platforms.
+- [ ] Architecture: portable core (probe → decoder → sink) + per-device
+      **audio-sink vtable** with `caps` (PCM/FM/wavetable/MP3); the core only
+      offers formats the sink can play. Mirrors the Uno3D backend pattern.
+- [ ] **Prereq — Music multi-song parity:** finish the remaining built-in
+      Music apps (Amiga, MacPlus, Apple II, SNES, IIGS, C64). Done + verified:
+      x86 (10 songs), Mac 7 / Mac 1-6 / PS2 / Dreamcast (8, shared C core),
+      Genesis (8, PSG). Reference impl: the Genesis port; pattern in the plan doc.
+
+### GUI widget overhaul — ALL widgets, ALL ports
+Complete overhaul of the widget toolkit used across **every** port — not just the
+Music app's prev/next arrows.
+- [ ] Replace ad-hoc text-char controls (e.g. the `<` / `>` song chevrons, text
+      footers) with proper reusable widget primitives.
+- [ ] A shared, consistent widget model (buttons, arrow/stepper controls, lists,
+      scrollbars, etc.) adapted to each platform's renderer: x86, the C-core ports
+      (Mac / PS2 / Dreamcast), and the bare-metal asm ports (Amiga, MacPlus,
+      Genesis, Apple II, SNES, IIGS, C64).
+- [ ] Unify look + behaviour so widgets are authored once per concept and themed
+      per platform, rather than re-implemented ad hoc per app.
+
 ## Post-Audit Backlog (2026-06) — COMPLETE as of v3.26.0 / Build 405
 All items from docs/AUDIT-HANDOFF-2026-06.md §5 are done:
 - [x] 8088 compatibility pass — kernel + all apps + floppy boot chain

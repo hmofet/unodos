@@ -1,77 +1,124 @@
 # UnoDOS feature matrix
 
-How the five targets compare, feature by feature. x86 is the reference
-implementation; the 68K ports are rewrites against
-[PORT-SPEC.md](PORT-SPEC.md). Updated 2026-06-12 (x86 v3.27.0 build
-406; Amiga M3+; Mac M3; Genesis M6+, real-hardware validated).
+How the targets compare, feature by feature. x86 is the reference
+implementation; every other target is a port — the 68K/6502/65816 ports
+are native rewrites against [PORT-SPEC.md](PORT-SPEC.md), and the PS2 /
+Dreamcast ports reuse the portable C core ([../mac/unodos.c](../mac/unodos.c))
+over a Mac-compat shim. Updated 2026-06-15 (x86 v3.31.0 build 420; the
+new-ports program — Apple II, IIGS, SNES, PS2, Dreamcast — and the
+standalone MacPlus OS are all at app parity).
+
+Column key: **x86** = IBM PC reference (incl. the 8088 hardware-fidelity
+build), **Amg** = Amiga, **M7** = Mac System 7 (hosted Toolbox), **M1-6** =
+Mac System 1–6 (hosted Toolbox), **MacP** = MacPlus standalone OS
+(bare-metal), **Gen** = Sega Genesis, **A2** = Apple II, **IIGS** = Apple
+IIGS, **SNES** = Super Nintendo, **PS2** = Sony PlayStation 2, **DC** =
+Sega Dreamcast.
+
+## Maturity & verification
+
+| Port | Status | Harness / emulator | Real hardware |
+|---|---|---|---|
+| **x86 PC** | reference, feature-complete | QEMU (scripted scenarios) | ✅ tested (8088→486, PS/2 L40, Eee PC) |
+| **x86 8088/XT** | M0–M2 done, M3 mostly | MartyPC + GLaBIOS (cycle-accurate 8088) | ⏳ physical XT pending |
+| **Amiga** | M3+ | WinUAE + AROS ROM (AUTOTEST builds) | ⏳ A500 smoke test pending |
+| **Mac System 7** | M3 | Executor (ROM-free) | ⏳ Mac II-class pending |
+| **Mac System 1–6** | M3 (minus color Theme) | Executor | ⏳ Mac Plus pending |
+| **MacPlus (OS)** | M3, full app parity | Unicorn harness + Mini vMac / vMac II | ✅ real Mac SE (FloppyEmu) |
+| **Sega Genesis** | M6+ | BlastEm (15 AUTOTEST builds) | ⚠️ boots on flashcart (2026-06-12); PS/2 / tape / Sega CD adapters not yet exercised |
+| **Apple II** | M1–M3 done | py65 ROM-free harness; `.woz`/`.nib` built | ⏳ AppleWin/FloppyEmu (IIc) pending |
+| **Apple IIGS** | M0–M3, full parity | from-scratch py65816 core, 9 suites green | ⏳ GSplus/KEGS/MAME + audio-ear pending |
+| **Super Nintendo** | M0–M3 done | Mesen2 F12 captures | ⏳ flashcart + audio-ear pending |
+| **Sony PS2** | M0–M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
+| **Sega Dreamcast** | at parity | Flycast @60fps + VMU round-trip | ⏳ CD-R / dc-tool + audio-ear pending |
+
+All retro/console ports flag **audio as an "ear-check"** pending real
+hardware: the control path (SPC700 mailbox ack, Ensoniq DOC register log,
+AICA/SPU2 synth) is asserted, but the actual sound output is verified on
+metal, not in the harness.
 
 ## Platform / kernel
 
-| | **x86 PC** | **Amiga** | **Mac System 7** | **Mac System 1–6** | **Sega Genesis** |
-|---|---|---|---|---|---|
-| Target hardware | IBM PC/XT+, 8088+, 128KB | A500-class, 68000, 512KB | Mac II/LC/Quadra, 68020+ | Mac Plus/SE/Classic, 68000 | Mega Drive/Genesis, 68000, 64KB |
-| Approach | bare metal, BIOS only | bare metal, custom chips | Toolbox application | Toolbox application | bare metal, cartridge ROM |
-| Boot medium | 1.44MB floppy / HD / CF / USB | self-booting ADF | .APPL / 800K dsk | .APPL / 800K dsk | 64KB cartridge ROM (TMSS-safe) |
-| Display | CGA 320×200×4 → VESA 640×480×256, runtime-switchable | 320×256, 32 colors (5 bitplanes) | 640×480, 8-bit Color QuickDraw | 512×342, 1-bit | 320×224 VDP tiles, 4×16-color palette lines |
-| Mouse cursor | XOR software sprite | hardware sprite | system cursor | system cursor | hardware sprite |
-| Splash | IBM PC art | striped checkmark | happy compact Mac | happy compact Mac | text title card |
-| Multitasking | cooperative, 5 apps + shell | cooperative, per-window tasks (2KB stacks) | cooperative, per-window tasks | cooperative, per-window tasks | cooperative, per-window tasks (2KB stacks) |
-| Max windows | 16 (move + resize) | 6 (move) | 6 (move) | 6 (move) | 6 (move) |
-| Widget toolkit / file dialogs / clipboard | full set (15 widgets, open/save dialogs, 4KB clipboard, undo) | — | — | — | — |
-| Public API | 106 syscalls (INT 0x80) | internal | internal | internal | internal |
+| | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Approach | bare metal, BIOS only | bare metal, custom chips | Toolbox app | Toolbox app | bare metal | bare-metal cartridge | bare metal | bare metal | bare-metal cartridge | C core + shim | C core + shim |
+| Boot medium | floppy / HD / CF / USB | self-booting ADF | .APPL / 800K dsk | .APPL / 800K dsk | own boot blocks | 64KB cart ROM | Disk II GCR | ProDOS/SmartPort block | LoROM cart | FreeMcBoot ELF | KallistiOS `.cdi` |
+| Display | CGA 320×200×4 → VESA 640×480×256 | 320×256, 32 colors | 640×480, 8-bit | 512×342, 1-bit | 1-bit (Plus/SE/II) | 320×224 VDP tiles | 280×192, 1-bit | SHR 320×200, 16/4096 | tiles, BGR555 | 640×448×32 (sw FB) | 640×480×32 (sw FB) |
+| Mouse cursor | XOR sw sprite | HW sprite | system | system | sw save-under | HW sprite | (keyboard-driven) | sw save-under | OAM sprite | GS overlay | sw |
+| Multitasking | cooperative, 5 apps + shell | cooperative, per-task 2KB stacks | cooperative, per-window | cooperative, per-window | cooperative, 2KB stacks | cooperative, 2KB stacks | poll-and-dispatch¹ | cooperative tick | cooperative tick² | cooperative (shim) | cooperative (shim) |
+| Max windows | 16 (move + resize) | 6 (move) | 6 (move) | 6 (move) | WM (move) | 6 (move) | WM (kbd) | WM | WM | WM | WM |
+| Widgets / dialogs / clipboard | full set (15 widgets, open/save dialogs, 4KB clipboard, undo) | core | core | core | core | core | core | core | core | full set (via core) | full set (via core) |
+| Public API | 106 syscalls (INT 0x80) | internal | internal | internal | internal | internal | internal | internal | internal | internal (C) | internal (C) |
+
+¹ Apple II ships poll-and-dispatch; a per-task cooperative scheduler was
+prototyped and proven (`scheduler.i`, `-DSCHED_PROTO=1`) but the
+full-screen single-app model doesn't need a live scheduler.
+² SNES is cooperative-by-ticks — a documented verdict: the 65816 bank-0
+stack constraint leaves no room for per-task stacks, so every app's
+`*_tick` runs from the main loop.
 
 ## Input
 
-| | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
-|---|---|---|---|---|---|
-| Keyboard | PC/XT (custom INT 09h) | native | Toolbox events | Toolbox events | on-screen soft keyboard + PS/2 on port 2 (real-hw wiring) |
-| Mouse | PS/2 / USB-legacy / KBC | native | Toolbox | Toolbox | 3/6-button pad-as-mouse (accel + turbo) + PS/2 on port 1 |
-| Game-mode controls | n/a | n/a | n/a | n/a | pad remaps to arrows/action when a game is topmost |
+| | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Keyboard | PC/XT (custom INT 09h) | native | Toolbox | Toolbox | M0110 / ADB (machine-adaptive) | soft kbd + PS/2 on port 2 | native | ADB (firmware) | soft kbd | pad + USB HID | maple |
+| Mouse | PS/2 / USB-legacy / KBC / COM1 serial (XT) | native | Toolbox | Toolbox | M0110/SCC quadrature / ADB | pad-as-mouse + PS/2 on port 1 | (keyboard nav) | ADB (firmware) | pad-as-pointer (+ SNES Mouse backlog) | pad + USB | maple |
+| Game-mode controls | n/a | n/a | n/a | n/a | n/a | pad remaps to arrows/action when a game is topmost | keyboard | n/a | pad | pad / USB | maple |
 
 ## Storage
 
-| | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
-|---|---|---|---|---|---|
-| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W, rename/copy | FAT12 on DF1 (PC-interchangeable), read + write/create | HFS + **PC FAT12 floppy R/W** | HFS + **PC FAT12 floppy R/W** | USV1 mini-FS in 8KB battery SRAM |
-| Extra media | settings persistence (SETTINGS.CFG) | — | subdirectory navigation | subdirectory navigation | tape/WAV (1-bit AFSK via PSG + comparator); **Sega CD backup RAM** (Mode-1 Sub-CPU + BIOS BURAM, shared Sega directory) |
-| Save UX | system save dialogs | Notepad F1, Tracker/Paint s/l | Cmd-S (HFS or the PC volume), Files `V` toggle | Cmd-S, Files `V` toggle | Notepad F1 to active volume, Files `v` toggle, Tracker s/l + t/y, Paint t/y |
-| Planned | — | FAT12 delete/rename polish | — | — | SD card over bit-banged SPI (adapter PCB) |
+| | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W | FAT12 on DF1 (PC-interchangeable) | HFS + PC FAT12 floppy R/W | HFS + PC FAT12 floppy R/W | FAT12 + disk-loaded apps | USV1 mini-FS in 8KB battery SRAM | mini-FS (track/sector, GCR — FAT12 doesn't fit) | FAT12 over SmartPort blocks (persistent) | USV1 SRAM mini-FS | memory card (libmc) | VMU (KOS VFS) |
+| Extra media | SETTINGS.CFG persistence | — | subdir nav | subdir nav | — | tape/WAV (1-bit AFSK via PSG); Sega CD backup RAM (Mode-1) | — | — | — | — | flush-on-close buffer |
 
 ## Audio
 
-| | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
-|---|---|---|---|---|---|
-| Hardware | PC speaker (PIT ch 2) | Paula, 4ch sample playback | Sound Manager square synth | Sound Manager square synth | PSG: 3 squares + noise |
-| Music app | 5 classical pieces, staff view | Canon in D | Canon in D | Canon in D | Canon in D |
-| Game music | Korobeiniki, Sunset Drive | both | both | both | both (PSG ch 1) |
-| Tracker (pattern editor) | **yes** — PC speaker (leftmost voice) | **yes** — 4ch Paula, 4 synth instruments | **yes** — 4 square channels | **yes** | **yes** — 3 squares + noise; pattern format byte-identical everywhere |
+| | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Hardware | PC speaker (PIT ch 2) | Paula, 4ch samples | Sound Manager | Sound Manager | sound | PSG: 3 squares + noise | 1-bit `$C030` click | Ensoniq DOC (32-osc wavetable) | SPC700 (uploaded driver) | SPU2 (audsrv)³ | AICA (`snd_sfx`)³ |
+| Music app | 5 classical, staff view | Canon in D | Canon in D | Canon in D | Canon in D | Canon in D | Canon in D | ✓ DOC | ✓ (voice 0) | ✓ | ✓ |
+| Tracker | ✓ (PC spkr, 1 voice) | ✓ (4ch Paula) | ✓ (4 square) | ✓ | ✓ | ✓ (3 squares + noise) | ✓ (1 voice) | ✓ (4-voice DOC) | ✓ (4 DSP voices) | ✓ | ✓ |
+
+³ Coded and loaded; PS2 SPU2 / DC AICA output is the hardware ear-check
+(PCSX2 has no USB HLE and audsrv RPC hangs under fastboot; Flycast boots
+with audio live).
 
 ## Applications
 
-| App | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
-|---|---|---|---|---|---|
-| SysInfo | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Clock | ✓ (analog + RTC) | ✓ (uptime) | ✓ (uptime) | ✓ (uptime) | ✓ (uptime) |
-| Files | ✓ (columns, copy, rename) | ✓ | ✓ (subdirs) | ✓ (subdirs) | ✓ (multi-volume) |
-| Notepad | ✓ (selection, clipboard, undo, dialogs) | ✓ (caret, line-nav, status bar) | ✓ | ✓ | ✓ |
-| Music | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Theme | ✓ (Settings app + API 105) | ✓ | ✓ | — (1-bit display) | ✓ |
-| Tracker | ✓ (PC spkr, 1 voice) | ✓ | ✓ | ✓ | ✓ |
-| Dostris | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ |
-| OutLast | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ |
-| Pac-Man | ✓ (+ VGA variant) | ✓ | ✓ | ✓ | ✓ (hardware-sprite actors) |
-| Paint (MacPaint-style; platform-gamut colors) | ✓ (4 CGA / 256 VGA) | ✓ (4096 via pen tuning) | ✓ (256 8-bit) | ✓ (1-bit + dithers) | ✓ (512 via CRAM tuning) |
-| Settings / MkBoot / Mouse Test / Hello | ✓ | — | — | — | — |
+`✓` = present; `—` = N/A for the platform.
+
+| App | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SysInfo | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Clock | ✓ (analog + RTC) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (60 Hz) | ✓ | ✓ |
+| Files | ✓ (columns, copy, rename) | ✓ | ✓ (subdirs) | ✓ (subdirs) | ✓ | ✓ (multi-volume) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Notepad | ✓ (selection, clipboard, undo) | ✓ (caret, status bar) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (append) | ✓ | ✓ |
+| Music | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Theme | ✓ (8 presets) | ✓ (4096) | ✓ (256) | — (1-bit) | ✓ (1-bit dither schemes) | ✓ (512) | ✓ (dither) | ✓ (4096) | ✓ (CGRAM) | ✓ (32-bit) | ✓ (32-bit) |
+| Tracker | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Dostris | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| OutLast | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠️ ~4fps proto | ✓ | ✓ (linear road) | ✓ | ✓ |
+| Pac-Man | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ (HW-sprite actors) | ✓ (1MHz adaptation) | ✓ | ✓ (BG-tile actors) | ✓ | ✓ |
+| Paint | ✓ (4 CGA / 256 VGA) | ✓ (4096) | ✓ (256) | ✓ (1-bit + dithers) | ✓ (1-bit) | ✓ (512) | ✓ (dither) | ✓ (4096) | ✓ (pencil, fixed palette) | ✓ (32-bit) | ✓ (32-bit) |
+| Settings / MkBoot / Mouse Test / Hello / Runner3D | ✓ | — | — | — | — | — | — | — | — | — | — |
 
 The 8 theme preset palettes (Classic VGA, Midnight, Forest, Sunset,
 Ocean, Slate, Candy, Amber) are shared across every color-capable
 platform; the Dostris/OutLast/Pac-Man ports share the x86 originals'
 piece tables, track/physics and ghost AI byte-for-byte where the
-platform allows.
+platform allows. The Tracker pattern (32×4) is byte-identical on every
+platform, though the on-disk filename varies (`SONG.TRK` on x86/Mac/
+Genesis; `SONG.UNO` on Amiga/Apple II).
 
-## Verification & hardware status
+## 3D — Uno3D
 
-| | **x86 PC** | **Amiga** | **Mac 7** | **Mac 1–6** | **Genesis** |
-|---|---|---|---|---|---|
-| Emulator harness | QEMU (scripted scenarios) | WinUAE + AROS ROM (AUTOTEST builds) | Executor (ROM-free) | Executor | BlastEm (15 AUTOTEST builds) |
-| Real hardware | **tested** (8088→486, PS/2 L40, Eee PC) | pending (A500 smoke test) | pending (Mac II-class) | pending (Mac Plus) | **tested, works** (2026-06-12); PS/2 wiring, tape comparator and Sega CD Mode-1 adapters still to be exercised |
+A separate write-once 3D library ([../uno3d/](../uno3d/),
+[UNO3D.md](UNO3D.md)) with a swappable per-platform rasteriser backend.
+Three backends ship: **soft** (CPU → framebuffer, universal), **ps2-gs**
+(GS hardware via gsKit, 60 fps in PCSX2), **dc-pvr** (PowerVR2 via KOS,
+verified in Flycast). The x86 OS gets its own native 3D app
+([../apps/runner3d.asm](../apps/runner3d.asm)) that draws through the
+kernel's `INT 0x80` graphics API instead of the C library. Backend slots
+for PS3 / PC / GameCube / Xbox are planned (comments only, not yet
+implemented).

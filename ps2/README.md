@@ -209,8 +209,9 @@ filled).
 
 The EE File Manager persists to the **PS2 memory card** via libmc, so
 Files/Notepad save and load on hardware and across boots — verified in PCSX2
-(`shots/m2_pcsx2_mcsave.png` writes + reloads byte-for-byte; `m2_pcsx2_mcload.png`
-loads it back on a fresh no-save boot). `ee_platform.c` brings up MCMAN/MCSERV +
+(`shots/m2_pcsx2_mcsave.png` shows the saved data reloaded byte-for-byte after a
+write; the load-on-fresh-boot path runs the same `mcGetDir`/`mcRead` code).
+`ee_platform.c` brings up MCMAN/MCSERV +
 `mcInit` + `/UnoDOS`; `mac_io.c`'s EE branch uses `mcOpen`(`sceMcFileCreateFile`)/
 `mcRead`/`mcWrite`/`mcClose`/`mcDelete` + `mcGetDir`. (The host build keeps the
 `uno_disk/` directory backend; the FAT12 RAM volume also works on both.)
