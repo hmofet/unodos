@@ -45,9 +45,15 @@ MartyPC + open GLaBIOS (ROM-free). See docs/PORT-8088.md + tools/xt/.
       routing. Verified in MartyPC's XT-IDE rig (XT-IDE Universal BIOS detects the
       CF, GLaBIOS boots C:, desktop + SysInfo "Boot: HD/CF" + Files read).
       tools/xt/make_cf_vhd.py + unodos_xt_xtide machine. shots/cf_*.png
-- [ ] **FAT16-on-8088 (follow-up to the FAT12 CF):** rewrite the 386-only HD boot
-      chain (mbr/vbr/stage2_hd) + the kernel FAT16 driver to 8086 (CHS + 16-bit
-      sector math, cap ~32MB) so a standard, DOS-interchangeable FAT16 CF boots
+- [~] **FAT16-on-8088 (DOS-interchangeable CF):** make the 386-only HD path 8086.
+      - [x] Stage 1: boot chain (mbr/vbr/stage2_hd) 8086-clean — 32-bit LBA via
+            word pairs, AH=42h + two-16-bit-DIV CHS. VERIFIED: a DOS-style FAT16
+            CF boots through MBR→VBR→stage2_hd to the kernel splash on the 8088
+            (tools/xt/make_fat16_vhd.py, create_hd_image.py @ 615/4/26).
+      - [ ] Stage 2/3: convert the kernel FAT16 driver (~104 sites across
+            read_sector/write_sector/mount/open/get_next_cluster/set_fat_entry/
+            alloc_cluster/read/readdir/create/write/delete/rename) to 8086 +
+            remove the pre-286 mount gate → desktop + apps + save from a FAT16 CF
 - [ ] **Physical IBM PC/XT pass** (real INT 13h write timing, cross-boot floppy
       persistence) — hardware-blocked, the final real-hardware step (as every port)
 - [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77MHz

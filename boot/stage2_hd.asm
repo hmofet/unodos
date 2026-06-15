@@ -2,7 +2,8 @@
 ; Loaded by VBR at 0x0800:0x0000
 ; Loads KERNEL.BIN from FAT16 filesystem
 ;
-; NOTE: This version requires 386+ CPU (uses EAX, EBX, ECX, EDX, movzx, etc.)
+; 8086/8088-clean: all 32-bit LBAs are held as 16-bit word pairs, products use
+; MUL, and the CHS fallback divides a 32-bit LBA via two chained 16-bit DIVs.
 ;
 ; Memory layout during boot:
 ;   0x0600:0x0000 - Relocated MBR
@@ -14,6 +15,7 @@
 
 [BITS 16]
 [ORG 0x0000]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
 
 ; Signature (checked by VBR)
 signature:
@@ -56,34 +58,45 @@ entry:
     mov al, [es:0x7C00 + 0x0D]
     mov [sects_per_cluster], al
 
-    ; Hidden sectors (partition start LBA)
-    mov eax, [es:0x7C00 + 0x1C]
-    mov [partition_lba], eax
+    ; Hidden sectors (partition start LBA) — 32-bit as words
+    mov ax, [es:0x7C00 + 0x1C]
+    mov [partition_lba], ax
+    mov ax, [es:0x7C00 + 0x1E]
+    mov [partition_lba + 2], ax
 
     ; Restore ES to stage2 segment
     mov ax, 0x0800
     mov es, ax
 
-    ; Calculate FAT start sector
-    ; fat_start = hidden_sectors + reserved_sectors
-    movzx eax, word [reserved_sects]
-    add eax, [partition_lba]
-    mov [fat_start_lba], eax
+    ; All LBAs are 32-bit, held as word pairs (low at +0, high at +2).
+    ; fat_start = partition_lba + reserved_sectors
+    mov ax, [reserved_sects]
+    xor dx, dx
+    add ax, [partition_lba]
+    adc dx, [partition_lba + 2]
+    mov [fat_start_lba], ax
+    mov [fat_start_lba + 2], dx
 
-    ; Calculate root directory start sector
     ; root_start = fat_start + (num_fats * sectors_per_fat)
-    movzx eax, byte [num_fats]
-    movzx ebx, word [sects_per_fat]
-    imul eax, ebx
-    add eax, [fat_start_lba]
-    mov [root_start_lba], eax
+    mov al, [num_fats]
+    xor ah, ah
+    mov bx, [sects_per_fat]
+    mul bx                           ; DX:AX = num_fats * sects_per_fat (32-bit)
+    add ax, [fat_start_lba]
+    adc dx, [fat_start_lba + 2]
+    mov [root_start_lba], ax
+    mov [root_start_lba + 2], dx
 
-    ; Calculate data area start sector
-    ; data_start = root_start + (root_entries * 32 / 512)
-    movzx ebx, word [root_entries]
-    shr ebx, 4                      ; Divide by 16 (32/512 = 1/16)
-    add eax, ebx
-    mov [data_start_lba], eax
+    ; data_start = root_start + (root_entries * 32 / 512) = root_start + ents/16
+    mov bx, [root_entries]
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1                        ; BX = root directory sectors
+    add ax, bx                       ; AX:DX still = root_start
+    adc dx, 0
+    mov [data_start_lba], ax
+    mov [data_start_lba + 2], dx
 
     ; ── Probe BIOS capabilities (BPB already saved) ─────────────────────
 
@@ -151,23 +164,27 @@ entry:
 
     ; ── Search root directory for KERNEL.BIN ──────────────────────────────
 
-    mov eax, [root_start_lba]
-    movzx ecx, word [root_entries]
-    shr ecx, 4                      ; Root directory sectors
+    mov ax, [root_start_lba]
+    mov dx, [root_start_lba + 2]
+    mov [cur_lba], ax
+    mov [cur_lba + 2], dx
+    mov cx, [root_entries]
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1                        ; CX = root directory sectors
+    mov [root_sects_left], cx
 
 .search_root:
-    push ecx
-    push eax
-
-    ; Read root directory sector
+    ; Read root directory sector (LBA in DX:AX)
+    mov ax, [cur_lba]
+    mov dx, [cur_lba + 2]
     call read_sector_lba
     jc near .disk_error
 
     ; Progress dot for each root dir sector
-    push ax
     mov al, '.'
     call print_char
-    pop ax
 
     ; Search 16 entries in this sector
     mov si, sector_buffer
@@ -197,22 +214,21 @@ entry:
     add si, 32
     loop .search_entry
 
-    ; Next sector
-    pop eax
-    pop ecx
-    inc eax
-    loop .search_root
+    ; Next root directory sector (32-bit LBA increment)
+    add word [cur_lba], 1
+    adc word [cur_lba + 2], 0
+    dec word [root_sects_left]
+    jnz .search_root
     jmp .not_found
 
 .found_kernel:
-    ; Clean up stack
-    add sp, 8                       ; Pop saved eax and ecx
-
     ; Get starting cluster (offset 26) and file size (offset 28)
     mov ax, [si + 26]
     mov [kernel_cluster], ax
-    mov eax, [si + 28]
-    mov [kernel_size], eax
+    mov ax, [si + 28]
+    mov [kernel_size], ax
+    mov ax, [si + 30]
+    mov [kernel_size + 2], ax
 
     ; Print dot to show progress
     mov al, '.'
@@ -231,22 +247,27 @@ entry:
     cmp word [kernel_cluster], 0
     je .kernel_loaded
 
-    ; Calculate sector for this cluster
-    ; sector = data_start + (cluster - 2) * sects_per_cluster
-    movzx eax, word [kernel_cluster]
-    sub eax, 2
-    movzx ebx, byte [sects_per_cluster]
-    imul eax, ebx
-    add eax, [data_start_lba]
+    ; cluster LBA = data_start + (cluster - 2) * sects_per_cluster
+    mov ax, [kernel_cluster]
+    sub ax, 2
+    mov bl, [sects_per_cluster]
+    xor bh, bh
+    mul bx                           ; DX:AX = (cluster-2) * spc (32-bit)
+    add ax, [data_start_lba]
+    adc dx, [data_start_lba + 2]
+    mov [cur_lba], ax
+    mov [cur_lba + 2], dx
 
     ; Read all sectors in cluster
-    movzx cx, byte [sects_per_cluster]
+    mov cl, [sects_per_cluster]
+    xor ch, ch                       ; CX = sectors in this cluster
 
 .read_cluster_sector:
     push cx
-    push eax
 
-    ; Read sector to ES:DI
+    ; Read sector (LBA in DX:AX) to ES:DI
+    mov ax, [cur_lba]
+    mov dx, [cur_lba + 2]
     call read_sector_to_esdi
     jc near .disk_error
 
@@ -263,9 +284,10 @@ entry:
     mov al, '.'
     call print_char
 
-    pop eax
+    ; Advance LBA (32-bit)
+    add word [cur_lba], 1
+    adc word [cur_lba + 2], 0
     pop cx
-    inc eax
     loop .read_cluster_sector
 
     ; Get next cluster from FAT
@@ -339,25 +361,26 @@ read_sector_lba:
 ; BIOSes) and pre-queried BIOS geometry for CHS fallback.
 ; ============================================================================
 
+; Input: DX:AX = LBA (DX high, AX low), ES:BX = buffer.
 read_sector_to_esbx:
-    push eax
+    push ax
+    push bx
     push cx
     push dx
 
-    ; Fill static DAP with current read parameters
+    ; Fill static DAP with current read parameters (LBA as two words;
+    ; dap_lba+4/+6 stay 0 from initialization, covering the LBA28/32 range).
     mov [dap_buf_off], bx
     mov [dap_buf_seg], es
-    mov [dap_lba], eax
-    mov dword [dap_lba + 4], 0
+    mov [dap_lba], ax
+    mov [dap_lba + 2], dx
 
     ; Try LBA if BIOS supports extensions
     cmp byte [lba_supported], 0
     je .chs_read
 
-    ; CRITICAL: Use DS=0 for INT 13h AH=42h DAP pointer.
-    ; MBR and VBR both use DS=0 and work. Some BIOSes have bugs
-    ; reading the DAP from non-zero segments (e.g. CF-to-IDE on
-    ; Omnibook 600C). Convert DAP address to linear for DS=0.
+    ; CRITICAL: Use DS=0 for INT 13h AH=42h DAP pointer (some BIOSes read the
+    ; DAP only from segment 0). Convert DAP address to linear for DS=0.
     mov dl, [boot_drive]            ; Load before switching DS
     push ds
     push si
@@ -374,25 +397,34 @@ read_sector_to_esbx:
     ; LBA failed - fall through to CHS
 
 .chs_read:
-    ; Convert LBA to CHS using pre-queried BIOS geometry
-    ; CRITICAL: Use EBX for divisor (not ECX!) to avoid clobbering CL
-    ; which holds the sector number between the two divisions.
-    push ebx
-    mov eax, [dap_lba]
-    xor edx, edx
-    movzx ebx, byte [bios_spt]
-    div ebx                         ; EAX = LBA / SPT, EDX = LBA mod SPT
-    inc dl                          ; Sector (1-based)
+    ; Convert the 32-bit LBA to CHS (two chained 16-bit DIVs). BX is the
+    ; divisor; CL holds the sector between the divisions.
+    xor bx, bx
+    mov bl, [bios_spt]
+    mov ax, [dap_lba + 2]           ; high word
+    xor dx, dx
+    div bx                          ; AX = hi/SPT, DX = hi%SPT
+    mov [chs_q_hi], ax
+    mov ax, [dap_lba]               ; low word (DX = carry-in)
+    div bx                          ; AX = lo quotient, DX = LBA mod SPT
+    mov [chs_q_lo], ax
+    inc dx                          ; sector = remainder + 1
     mov cl, dl                      ; CL[5:0] = sector
 
-    xor edx, edx
-    movzx ebx, byte [bios_heads]
-    div ebx                         ; EAX = cylinder, EDX = head
+    xor bx, bx
+    mov bl, [bios_heads]
+    mov ax, [chs_q_hi]
+    xor dx, dx
+    div bx                          ; AX = qhi/heads, DX = qhi%heads
+    mov ax, [chs_q_lo]              ; DX = carry-in
+    div bx                          ; AX = cylinder, DX = head
     mov dh, dl                      ; DH = head
-    mov ch, al                      ; CH = cylinder low
-    shl ah, 6
-    or cl, ah                       ; CL[7:6] = cylinder high
-    pop ebx
+    mov ch, al                      ; CH = cylinder low 8 bits
+    mov al, ah                      ; AL = cylinder high byte
+    and al, 0x03
+    ror al, 1
+    ror al, 1                       ; bits 0-1 -> bits 6-7 (== shl al,6 here)
+    or cl, al                       ; CL[7:6] = cylinder high
 
     mov ah, 0x02                    ; Read sectors
     mov al, 1
@@ -412,7 +444,8 @@ read_sector_to_esbx:
 .read_done:
     pop dx
     pop cx
-    pop eax
+    pop bx
+    pop ax
     ret
 
 ; ============================================================================
@@ -444,22 +477,27 @@ get_next_cluster:
     ; FAT sector = cluster / 256
     ; Offset in sector = (cluster mod 256) * 2
 
-    mov bx, ax                      ; Save cluster
-    shr ax, 8                       ; Sector index within FAT
-    movzx eax, ax
-    add eax, [fat_start_lba]
+    mov bx, ax                      ; BX = cluster
+    mov al, ah                      ; AL = cluster >> 8 (FAT sector index 0..255)
+    xor ah, ah                      ; AX = FAT sector index
+    add ax, [fat_start_lba]
+    mov dx, 0
+    adc dx, [fat_start_lba + 2]     ; DX:AX = FAT sector LBA (32-bit)
 
-    ; Check if this FAT sector is cached
-    cmp eax, [cached_fat_sector]
+    ; Check if this FAT sector is cached (32-bit compare)
+    cmp ax, [cached_fat_sector]
+    jne .load_fat
+    cmp dx, [cached_fat_sector + 2]
     je .use_cache
 
-    ; Load FAT sector
-    mov [cached_fat_sector], eax
+.load_fat:
+    mov [cached_fat_sector], ax
+    mov [cached_fat_sector + 2], dx
     push bx
     mov bx, 0x0800
     mov es, bx
     mov bx, fat_cache
-    call read_sector_to_esbx
+    call read_sector_to_esbx        ; LBA in DX:AX
     pop bx
     jc .fat_error
 
@@ -525,7 +563,10 @@ print_hex_byte:
     push bx
     push cx
     mov cl, al
-    shr al, 4
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
     call .nibble
     mov al, cl
     and al, 0x0F
@@ -583,6 +624,10 @@ data_start_lba:     dd 0
 kernel_cluster:     dw 0
 kernel_size:        dd 0
 cached_fat_sector:  dd 0xFFFFFFFF
+cur_lba:            dd 0            ; current 32-bit LBA for the read loops
+root_sects_left:    dw 0            ; remaining root directory sectors to scan
+chs_q_hi:           dw 0            ; CHS division: quotient high word
+chs_q_lo:           dw 0            ; CHS division: quotient low word
 
 ; Static Disk Address Packet for INT 13h extended read
 ; (avoids push dword on stack which fails on some BIOSes)
@@ -607,13 +652,13 @@ not_found_msg:      db 13, 10, 'KERNEL.BIN not found!', 13, 10, 0
 invalid_kernel_msg: db 13, 10, 'Invalid kernel!', 13, 10, 0
 
 ; ============================================================================
-; Buffers (must be within first segment for easy access)
+; Pad the loaded image to exactly 4 sectors (2KB).
 ; ============================================================================
-
-; Align to 512 bytes for sector buffer
-align 512
-sector_buffer:      times 512 db 0
-fat_cache:          times 512 db 0
-
-; Pad to ensure total stage2 fits in 4 sectors (2KB)
 times 2048 - ($ - $$) db 0
+
+; ============================================================================
+; Scratch buffers — placed in RAM immediately after the loaded image (within
+; the 0x0800 segment) so they are NOT stored in the 4-sector stage2 binary.
+; ============================================================================
+sector_buffer       equ 2048            ; 0x0800:0x0800
+fat_cache           equ 2048 + 512      ; 0x0800:0x0A00

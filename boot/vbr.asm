@@ -3,8 +3,9 @@
 ; Loaded by MBR at 0x0000:0x7C00
 ; Loads stage2_hd from reserved sectors, jumps to it
 ;
-; NOTE: This version requires 386+ CPU (uses EAX, push dword).
-; TODO: Create 8086-compatible version for HP 200LX, Sharp PC-3100, etc.
+; 8086/8088-clean: CHS math is 16-bit and the LBA path uses a static DAP.
+; Assumes the partition starts at LBA 63 (stage2 at absolute LBA 64), which the
+; image creation tool guarantees.
 ;
 ; VBR Layout:
 ;   0x000-0x002: Jump instruction
@@ -16,6 +17,7 @@
 
 [BITS 16]
 [ORG 0x7C00]
+cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
 
 ; Jump instruction (must be at offset 0)
     jmp short boot_code
@@ -227,7 +229,10 @@ print_hex_byte:
     push ax
     push bx
     mov bx, ax
-    shr al, 4                       ; High nibble
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1                       ; High nibble (8086: four 1-bit shifts)
     call .print_nibble
     mov al, bl
     and al, 0x0F                    ; Low nibble

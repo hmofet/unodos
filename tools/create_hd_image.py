@@ -24,12 +24,14 @@ import sys
 import struct
 import os
 
-# Disk geometry for 34MB image (CHS compatible, fits on 64MB CF cards)
+# Disk geometry — matches the CHS drive type MartyPC's XT-IDE accepts
+# (615/4/26 = 63,960 sectors ~= 31.2MB), so the image can be wrapped in a VHD
+# the emulated XT-IDE controller will mount. Real XT-IDE accepts this too.
 SECTOR_SIZE = 512
-SECTORS_PER_TRACK = 63
-HEADS = 16
-CYLINDERS = 69                     # ~34MB (69 * 16 * 63 * 512 = ~34MB)
-TOTAL_SECTORS = CYLINDERS * HEADS * SECTORS_PER_TRACK  # 69,552 sectors
+SECTORS_PER_TRACK = 26
+HEADS = 4
+CYLINDERS = 615                    # 615 * 4 * 26 * 512 = ~31.2MB
+TOTAL_SECTORS = CYLINDERS * HEADS * SECTORS_PER_TRACK  # 63,960 sectors
 
 # FAT16 parameters
 RESERVED_SECTORS = 5               # VBR + 4 sectors for stage2_hd
