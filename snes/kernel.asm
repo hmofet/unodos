@@ -383,11 +383,7 @@ MainLoop:
         jsr handle_drag
         jsr handle_events
         jsr softkbd_hover
-        jsr game_tick
-        jsr music_tick
-        jsr tracker_tick
-        jsr paint_tick
-        jsr app_ticks
+        jsr sched_run           ; cooperative round: every app's per-frame tick
         bra MainLoop
 .endproc
 
@@ -2487,6 +2483,7 @@ MainLoop:
 .include "theme.inc"
 .include "tracker.inc"
 .include "paint.inc"
+.include "sched.inc"
 
 ; ============================================================================
 ; Data
