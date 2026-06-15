@@ -51,6 +51,13 @@ boot:                              ; $0801: firmware entry, E-mode, X=slot<<4
         sta entry
         lda drvptr+1
         sta entry+1                ; entry = $Cn00 + offset
+        ; --- stash the driver entry + unit for the kernel's runtime blk_io ---
+        ; (bank-0 $0300-$0302 survives the kernel's VARS clear at $1000+)
+        lda entry
+        sta $0300
+        lda entry+1
+        sta $0301
+        stx $0302                  ; unit = slot<<4
         ; --- set up the ProDOS READ for block 1 -> $2000 ---
         stx unit                   ; unit = slot<<4 (drive 1, bit7=0)
         lda #1

@@ -11,11 +11,22 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M0 | Toolchain, ProDOS block-boot, SHR splash, ROM-free harness | ✅ shipped |
-| **M1** | SHR desktop + window manager + ADB mouse/keyboard + SysInfo/Clock | ✅ shipped (build 412) |
-| M2 | Storage: SmartPort block I/O + FAT12 + Files/Notepad + disk apps | planned |
+| M1 | SHR desktop + window manager + ADB mouse/keyboard + SysInfo/Clock | ✅ shipped |
+| **M2** | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped (build 414) |
 | M3 | Parity: colour apps + Ensoniq DOC audio + scheduler | planned |
 
 ![M1 Super Hi-Res desktop](shots/m1_desktop.png)
+![M2 Files + Notepad](shots/m2_notepad.png)
+
+## What M2 delivers
+
+* **FAT12 over SmartPort.** A real, PC-interchangeable FAT12 volume on the
+  800 KB disk, read and written through the slot firmware's ProDOS block
+  driver (called in 6502 emulation mode from the native kernel).
+* **Files + Notepad.** Files lists the root directory; opening a file loads
+  it into Notepad (single- and multi-cluster reads). Notepad edits the text
+  and **Ctrl-S writes it back to disk** — verified to persist across a full
+  reboot of the disk image.
 
 ## What M1 delivers
 
@@ -53,6 +64,7 @@ packs the 800 KB ProDOS image, and renders the desktop through the harness.
 ```sh
 python cpu65816.py        # CPU core self-test  -> SELFTEST OK
 python tests/m1.py        # M1 regression       -> M1 PASS
+python tests/m2.py        # M2 regression       -> M2 PASS
 ```
 
 ## Running it for real
@@ -69,11 +81,13 @@ python tests/m1.py        # M1 regression       -> M1 PASS
 |------|------|
 | `boot.s` | block-0 ProDOS boot stage (loads the kernel, goes native, jumps) |
 | `kernel.s` | the kernel — SHR desktop, window manager, input, apps |
+| `fs.i` | FAT12 storage over SmartPort (`blk_io` + the FAT12 core) |
+| `apps.i` | the Files + Notepad apps |
 | `mkdata.py` → `gen_data.inc` | shared 8×8 font + SHR UI palette |
-| `mkdsk.py` | pack the 800 KB ProDOS image (patches the block count into boot) |
+| `mkdsk.py` / `mkfs.py` | pack the 800 KB ProDOS image / write its FAT12 volume |
 | `boot.cfg` / `kernel.cfg` | ld65 link configs |
 | `cpu65816.py` | the 65C816 interpreter (reusable; self-testing) |
 | `harness.py` | ROM-free firmware shim + script runner + SHR→PNG renderer |
-| `tests/m1.py` | headless M1 regression (desktop, WM, input, apps) |
+| `tests/m1.py`, `tests/m2.py` | headless regressions |
 
 See `HANDOFF.md` for the verified boot contract and the M1–M3 plan.

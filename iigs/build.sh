@@ -28,10 +28,13 @@ echo "[3/5] assembling kernel..."
 "$CA65" --cpu 65816 $FLAGS -o build/kernel.o kernel.s
 "$LD65" -C kernel.cfg -o build/kernel.bin build/kernel.o
 
-echo "[4/5] packing the 800K ProDOS image..."
+echo "[4/6] packing the 800K ProDOS image..."
 "$PY" mkdsk.py build/boot.bin build/kernel.bin build/unodos_iigs.po
 
-echo "[5/5] rendering the desktop via the harness..."
+echo "[5/6] writing the FAT12 volume (SmartPort storage)..."
+"$PY" mkfs.py build/unodos_iigs.po disk/WELCOME.TXT disk/ABOUT.TXT
+
+echo "[6/6] rendering the desktop via the harness..."
 "$PY" harness.py build/unodos_iigs.po build/m1.png --frames 4
 
 echo "done: build/unodos_iigs.po + build/m1.png"

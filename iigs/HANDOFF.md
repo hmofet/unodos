@@ -1,5 +1,44 @@
 # Apple IIGS port — implementation handoff
 
+## M2 — SHIPPED (2026-06-15, build 414)
+
+FAT12 storage over the SmartPort/ProDOS block driver, with Files + Notepad
+and real persistence.  `tests/m2.py` → `M2 PASS` (`shots/m2_files.png`,
+`m2_notepad.png`, `m2_persist.png`).
+
+- **blk_io (`fs.i`):** calls the slot firmware's ProDOS block driver (entry
+  + unit stashed by `boot.s` at `$0300-$0302`) in **6502 emulation mode** —
+  `sec/xce` around the call, capture the result carry, `clc/xce` back to
+  native.  Works against real firmware and the harness WDM stub identically.
+  Read **and** write (cmd 1/2).
+- **FAT12 (`fs.i`), root-dir scope:** `fat_mount` caches the whole 3-sector
+  FAT into FATBUF (12-bit entries never straddle a sector); `fat_list_root`,
+  `fat_read_file` (single + multi-cluster, verified past the 1 KB cluster
+  boundary with CHAIN.TXT), and a full write path — `fat_alloc_chain`,
+  `fat_free_chain`, `fat_set_entry`, `fat_flush` (both FAT copies), and
+  `fat_save_file` (overwrite-by-name or first free dir slot).  Geometry is
+  fixed and synced with `mkfs.py` (PORT-SPEC §6 rule 8): 512 B sectors,
+  1 KB clusters, 1 reserved, 2×3 FAT, 112 root entries.  Little-endian
+  on-disk fields read natively (no swap, unlike the 68K port).
+- **Apps (`apps.i`):** Files lists the root dir and opens the selected file
+  into Notepad; Notepad is an append editor over a 4 KB bank-0 buffer
+  (printable + CR append, backspace, **Ctrl-S → `fat_save_file`**).
+- **`mkfs.py`** (reused from macplus, IIGS volume label) appends the FAT12
+  volume at disk block 256; **`mkdsk.py`** reserves it.  The harness ProDOS
+  driver already does WRITE + `--writeback`; persistence is verified by
+  reboot-and-reread.
+
+**THE bug banked:** `blk_io` first used `F0/F1` as scratch, but the FAT
+walkers keep the *current cluster* in `F0` across `blk_io` calls — so
+multi-cluster reads/saves corrupted the chain and looped (single-cluster
+ops escaped it). `blk_io` now uses private `BLK0/BLK1`. Audit every helper
+that holds state across a `blk_io`/`jsr` for scratch aliasing (the apple2
+`fs.i` zero-page collision class, restated on the 65816).
+
+**M2 remaining (deferred):** disk-loaded apps (the macplus `diskapp.i` ABI)
+— the storage primitives are all in place to add it; not needed for the
+Files/Notepad surface.
+
 ## M1 — SHIPPED (2026-06-15, build 412)
 
 The SNES M1 surface re-expressed on SHR: a colour desktop (menu bar, icon
