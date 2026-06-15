@@ -75,12 +75,23 @@ EE: GS-present each vsync + DualShock 2 → key events), selected by
 
 **M2/M3 came along through the shim:** File Manager (HFS-style catalog listing)
 + the FAT12 RAM-disk write→read round-trip into Notepad work on the host;
-Theme (32-bit colour) and the cooperative scheduler work. **Remaining EE-only
-pieces** (flagged, not blockers): the File Manager's EE backend is a graceful
-"empty volume" until wired to the **memory card** (`mc0:` via fileXio — the
-`mac_io.c` `#else` branch); **audsrv** audio is a silent stub (can't be
-screenshot-verified — needs a hardware ear-check); USB keyboard (`ps2kbd`); and
-the on-metal FMCB run + DualShock 2 navigation check.
+Theme (32-bit colour) and the cooperative scheduler work.
+
+**M2 storage is DONE on the EE too (2026-06-14, commit dfbf66f):** the EE File
+Manager persists to the **PS2 memory card** via libmc — `ee_platform.c` loads
+MCMAN/MCSERV + mcInit + makes `/UnoDOS`, and `mac_io.c`'s EE branch uses
+`mcOpen`(`sceMcFileCreateFile`)/`mcRead`/`mcWrite`/`mcClose`/`mcDelete` +
+`mcGetDir`. Verified in PCSX2: a Notepad doc writes to the card, reloads
+byte-for-byte, and loads back on a separate no-save boot (persistence across
+power cycles). Gotcha: the PS2 MC is NOT a POSIX FS — newlib `open(O_CREAT)`
+makes a directory-like entry that returns 0 bytes; only `mcOpen` with
+`sceMcFileCreateFile` makes a real save-file. PCSX2/mcman also tags flat
+save-files with the dir attribute, so PBGetCatInfo treats non-zero size as the
+file signal.
+
+**Remaining EE-only pieces** (flagged, not blockers): **audsrv** audio is a
+silent stub (can't be screenshot-verified — needs a hardware ear-check); USB
+keyboard (`ps2kbd`); and the on-metal FMCB run + DualShock 2 navigation check.
 
 ---
 

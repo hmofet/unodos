@@ -170,18 +170,25 @@ shim's PPM dump to PNG with only the stdlib.
 | `tools/run_pcsx2.ps1` | boot an ELF in PCSX2 + screenshot the GS |
 | `Makefile` / `build.sh` | EE (PS2SDK) / host build |
 
+## M2 — memory-card storage (done on the EE)
+
+The EE File Manager persists to the **PS2 memory card** via libmc, so
+Files/Notepad save and load on hardware and across boots — verified in PCSX2
+(`shots/m2_pcsx2_mcsave.png` writes + reloads byte-for-byte; `m2_pcsx2_mcload.png`
+loads it back on a fresh no-save boot). `ee_platform.c` brings up MCMAN/MCSERV +
+`mcInit` + `/UnoDOS`; `mac_io.c`'s EE branch uses `mcOpen`(`sceMcFileCreateFile`)/
+`mcRead`/`mcWrite`/`mcClose`/`mcDelete` + `mcGetDir`. (The host build keeps the
+`uno_disk/` directory backend; the FAT12 RAM volume also works on both.)
+
 ## Next
 
-- **M2 storage on the EE** — back the File Manager with the **PS2 memory card**
-  (`mc0:` via fileXio) instead of the host directory tree, so Files/Notepad
-  persist on hardware. The host path and the FAT12 RAM volume already work;
-  this is the EE backend (`mac_io.c`, the `#else` branch). USB keyboard
-  (`ps2kbd`) for real typing is the other M2 piece.
 - **M3 audio on the EE** — drive **audsrv** from `SndDoImmediate`
   (`mac_io.c`'s square-wave model is silent today). Theme (32-bit colour) and
   the cooperative scheduler already came along through the shim. Audio can't be
   screenshot-verified — it needs a hardware/audio ear-check, like the MacPlus
   SE audio.
+- **USB keyboard** (`ps2kbd`) for real typing (the pad soft-keyboard is the
+  fallback).
 - **Real hardware** — run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
   uLaunchELF from USB) and confirm the DualShock 2 navigation on metal. The
   PCSX2-vs-metal watch list: interlace flicker (the 512×448 fallback in
