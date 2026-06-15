@@ -111,7 +111,7 @@ CK_H     equ 5
 ; comes from icon_x_tab / icon_y_tab so the grid can grow app by app.
 ICONW    equ 9        ; icon box width in cells (inner label width = ICONW-2 = 7)
 ICONH    equ 2
-NICONS   equ 5        ; populated icon slots (grows as M3 apps are added)
+NICONS   equ 6        ; populated icon slots (grows as M3 apps are added)
 
 ; full-screen app layout (app_mode != 0): row0 = title + separator, rows1-22
 ; content, row23 = status/help line.
@@ -235,8 +235,12 @@ ml_clk:
 game_tick:
         lda app_mode
         cmp #4
-        bne gt_done
+        bne gt_5
         jmp dostris_tick
+gt_5:
+        cmp #5
+        bne gt_done
+        jmp music_tick
         ;== M3-GAMES-TICK ==
 gt_done:
         rts
@@ -432,8 +436,12 @@ hk_ret3:
         jmp theme_open
 hk_ret4:
         cmp #4
-        bne hk_ret_win
+        bne hk_ret5
         jmp dostris_open
+hk_ret5:
+        cmp #5
+        bne hk_ret_win
+        jmp music_open
         ;== M3-GAMES-RETURN ==   (extended as games are added)
 hk_ret_win:
         jsr sid_click
@@ -447,8 +455,12 @@ hk_ret_win:
 app_key:
         lda app_mode
         cmp #4
-        bne ak_done
+        bne ak_5
         jmp dostris_key
+ak_5:
+        cmp #5
+        bne ak_done
+        jmp music_key
         ;== M3-GAMES-KEY ==      (extended as games are added)
 ak_done:
         rts
@@ -1156,8 +1168,10 @@ di_lbl_go:
 ; icon grid tables (10 slots: 4 cols x 3 rows). Only NICONS are drawn.
 icon_x_tab:  dc.b 1,11,21,31, 1,11,21,31, 1,11
 icon_y_tab:  dc.b 16,16,16,16, 19,19,19,19, 22,22
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_pacman,<msg_music,<msg_tracker,<msg_paint,<msg_outlast
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_pacman,>msg_music,>msg_tracker,>msg_paint,>msg_outlast
+; icon index == app_mode for the M3 apps: 4=Dostris 5=Music 6=Pac-Man
+; 7=Tracker 8=Paint 9=OutLast
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme,<msg_dostris,<msg_music,<msg_pacman,<msg_tracker,<msg_paint,<msg_outlast
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme,>msg_dostris,>msg_music,>msg_pacman,>msg_tracker,>msg_paint,>msg_outlast
 
 ; ============================================================================
 ; renderer primitives
@@ -1566,6 +1580,7 @@ msg_saved:       dc.b "  SAVED",0
         include "notepad.i"
         include "theme.i"
         include "dostris.i"
+        include "music.i"
 
 ; ============================================================================
 ; generated tables (VIC bitmap address tables + the shared 8x8 font)
@@ -1616,3 +1631,8 @@ dos_paused:  dc.b 0
 dos_over:    dc.b 0
 dos_rng:     dc.b 1           ; LCG seed (must stay nonzero)
 dos_justlock: dc.b 0
+
+; ---- Music state ----
+mus_idx:     dc.b 0           ; current note index in the tune
+mus_ctr:     dc.b 0           ; pass counter for note duration
+mus_playing: dc.b 0           ; 1 while the tune is sounding
