@@ -4117,6 +4117,35 @@ int main(void)
     files_key('r', 0);
     files_key(0x0D, 0);                         /* Enter: open into Notepad */
 #endif
+#ifdef UNO_AUTOTEST_MCSAVE
+    /* PS2 memory-card round trip (EE): type into Notepad, save through the
+       File Manager (writes mc0:/UnoDOS/UNTITLED.TXT), then open Files so the
+       listing shows the saved file - proves the mc0: backend write + catalog
+       in one run; re-running a list-only build proves it persisted. */
+    launch_app(APP_FILES);          /* lists mc0:/UnoDOS */
+    launch_app(APP_NOTEPAD);        /* topmost - shows the reloaded text */
+    {
+        const char *demo = "Saved to the PS2 memory card\rby UnoDOS Files + Notepad.";
+        gNLen = (short)strlen(demo);
+        memcpy(gNBuf, demo, gNLen);
+        gNCaret = gNLen;
+        gNDirty = true;
+    }
+    notepad_save();                 /* write bytes to the memory card */
+    { short i; for (i = 0; i < (short)sizeof gNBuf; i++) gNBuf[i] = 0; }
+    gNLen = 0; gNCaret = 0;
+    notepad_load_pascal(gNFile);    /* read them back FROM the card */
+    { UnoWin *w = find_app_window(APP_NOTEPAD); if (w) draw_window(w); }
+#endif
+#ifdef UNO_AUTOTEST_MCLOAD
+    /* Persistence check: NO save this run - just open Files (lists the card)
+       and load UNTITLED.TXT into Notepad. If its text appears, the file
+       written by a previous UNO_AUTOTEST_MCSAVE run survived the power cycle. */
+    launch_app(APP_FILES);
+    launch_app(APP_NOTEPAD);
+    notepad_load_pascal(gNFile);    /* gNFile defaults to "\014UNTITLED.TXT" */
+    { UnoWin *w = find_app_window(APP_NOTEPAD); if (w) draw_window(w); }
+#endif
 #ifdef UNO_AUTOTEST
     /* Auto-launch the app stack for screenshot verification without
        host->guest input injection. Notepad gets demo text. */
