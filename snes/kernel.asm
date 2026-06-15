@@ -163,6 +163,12 @@ v_snd_tok   = VARS+$1E2     ; mailbox token (host increments per command)
 v_mus_playing = VARS+$1E4   ; Music app (proc 3): sequencer running
 v_mus_ix    = VARS+$1E6     ; current note index
 v_mus_end   = VARS+$1E8     ; v_frame deadline for the current note
+; ---- Theme (proc 8): 4 active role colours + palette shadow ----
+v_pal_dirty = VARS+$1EA     ; NMI flushes v_pal -> CGRAM when set
+v_theme     = VARS+$1EC     ; active colours: desktop, accent, accent2, text
+v_thm_sel   = VARS+$1F4     ; highlighted preset row
+v_thm_slot  = VARS+$1F6     ; custom-edit role slot 0-3
+v_pal       = $1800         ; 64-word BG palette shadow ($1800-$187F)
 v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
 ; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
 ;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
@@ -212,7 +218,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 8
+NICONS   = 9
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -311,6 +317,7 @@ PAD_DPAD = $0F00
         jsr np_setname
         jsr sram_init
         jsr sound_init          ; M3: upload + self-test the SPC700 driver
+        jsr theme_init          ; M3: active theme = Classic VGA (boot palette)
 
         ; build the desktop into the shadow (16-bit), flush once (8-bit)
         rep #$30
@@ -501,6 +508,42 @@ MainLoop:
         sep #$20
 .a8
         lda #^pal_spr
+        sta A1B0
+        lda #$01
+        sta MDMAEN
+        ; seed the BG palette shadow from pal_bg (Theme edits + NMI flushes it)
+        rep #$30
+.a16
+.i16
+        ldx #$0000
+@cp:    lda f:pal_bg,x
+        sta v_pal,x
+        inx
+        inx
+        cpx #128
+        bne @cp
+        sep #$20
+.a8
+        rts
+.endproc
+
+; FlushPalette - DMA the 64-word BG palette shadow to CGRAM 0 (vblank/NMI).
+.proc FlushPalette
+.a8
+        stz CGADD
+        lda #$00
+        sta DMAP0
+        lda #<CGDATA
+        sta BBAD0
+        rep #$20
+.a16
+        ldx #.loword(v_pal)
+        stx A1T0L
+        ldx #128
+        stx DAS0L
+        sep #$20
+.a8
+        lda #WRAM_BANK
         sta A1B0
         lda #$01
         sta MDMAEN
@@ -1365,6 +1408,8 @@ MainLoop:
         beq @pacman
         cmp #7
         beq @files
+        cmp #8
+        beq @theme
         rts
 @sysinfo:
         jsr sysinfo_draw
@@ -1389,6 +1434,9 @@ MainLoop:
         rts
 @files:
         jsr files_draw
+        rts
+@theme:
+        jsr theme_draw
         rts
 .endproc
 
@@ -2156,7 +2204,11 @@ MainLoop:
         beq @nodma
         stz v_dirty
         jsr FlushTilemap
-@nodma: rep #$30
+@nodma: lda v_pal_dirty
+        beq @nopal
+        stz v_pal_dirty
+        jsr FlushPalette
+@nopal: rep #$30
 .a16
 .i16
         pld
@@ -2324,9 +2376,12 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #3
-        jsr launch_app          ; Music
-        jsr music_start         ; start playing Canon in D on SPC700 voice 0
+        lda #8
+        jsr launch_app          ; Theme
+        lda #4
+        sta v_thm_sel
+        lda #4
+        jsr theme_apply_preset  ; apply "Ocean" to prove the CGRAM recolor
         lda #0
         jsr select_icon
         rts
@@ -2357,6 +2412,7 @@ MainLoop:
 .include "sound.inc"
 .include "apps.inc"
 .include "games.inc"
+.include "theme.inc"
 
 ; ============================================================================
 ; Data
@@ -2387,6 +2443,7 @@ icon_tab:
         .word 22, 25            ; 5 OutLast
         .word 2, 27             ; 6 Pac-Man
         .word 12, 27            ; 7 Music
+        .word 22, 27            ; 8 Theme
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2396,9 +2453,10 @@ icon_names:
         .word name_outlast
         .word name_pacman
         .word name_music
+        .word name_theme
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4, 5, 6, 3
+        .word 0, 1, 2, 7, 4, 5, 6, 3, 8
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2410,6 +2468,7 @@ app_def_tab:
         .word 1, 1, 30, 24, str_t_outlast    ; 5 OutLast
         .word 1, 0, 30, 28, str_t_pacman     ; 6 Pac-Man (full screen)
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
+        .word 4, 2, 24, 16, str_t_theme      ; 8 Theme
 
 ; ============================================================================
 ; Cartridge header + vectors
