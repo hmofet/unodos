@@ -169,6 +169,15 @@ v_theme     = VARS+$1EC     ; active colours: desktop, accent, accent2, text
 v_thm_sel   = VARS+$1F4     ; highlighted preset row
 v_thm_slot  = VARS+$1F6     ; custom-edit role slot 0-3
 v_pal       = $1800         ; 64-word BG palette shadow ($1800-$187F)
+; ---- Tracker (proc 9): 256-byte pattern + row scratch + cursor/playback ----
+v_tkpat     = $1880         ; 32 rows x 4 chans x (note,instr) = 256 bytes
+v_tkbuf     = $1980         ; row-string scratch (40 bytes)
+v_tk_row    = $19A8
+v_tk_chan   = $19AA
+v_tk_top    = $19AC         ; scroll: first visible row
+v_tk_playing = $19AE
+v_tk_prow   = $19B0         ; current playback row
+v_tk_last   = $19B2         ; v_frame at the last row step
 v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
 ; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
 ;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
@@ -218,7 +227,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 9
+NICONS   = 10
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -318,6 +327,7 @@ PAD_DPAD = $0F00
         jsr sram_init
         jsr sound_init          ; M3: upload + self-test the SPC700 driver
         jsr theme_init          ; M3: active theme = Classic VGA (boot palette)
+        jsr tracker_init        ; M3: clear pattern state + load the demo song
 
         ; build the desktop into the shadow (16-bit), flush once (8-bit)
         rep #$30
@@ -363,6 +373,7 @@ MainLoop:
         jsr softkbd_hover
         jsr game_tick
         jsr music_tick
+        jsr tracker_tick
         jsr app_ticks
         bra MainLoop
 .endproc
@@ -1410,6 +1421,8 @@ MainLoop:
         beq @files
         cmp #8
         beq @theme
+        cmp #9
+        beq @tracker
         rts
 @sysinfo:
         jsr sysinfo_draw
@@ -1437,6 +1450,9 @@ MainLoop:
         rts
 @theme:
         jsr theme_draw
+        rts
+@tracker:
+        jsr tracker_draw
         rts
 .endproc
 
@@ -2376,12 +2392,14 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #8
-        jsr launch_app          ; Theme
-        lda #4
-        sta v_thm_sel
-        lda #4
-        jsr theme_apply_preset  ; apply "Ocean" to prove the CGRAM recolor
+        lda #9
+        jsr launch_app          ; Tracker
+        lda #5
+        sta v_tk_row            ; move the cursor into view
+        lda #1
+        sta v_tk_chan
+        lda #1
+        sta v_tk_playing        ; show playback running
         lda #0
         jsr select_icon
         rts
@@ -2413,6 +2431,7 @@ MainLoop:
 .include "apps.inc"
 .include "games.inc"
 .include "theme.inc"
+.include "tracker.inc"
 
 ; ============================================================================
 ; Data
@@ -2435,15 +2454,16 @@ str_uptime:    .byte "Uptime:", 0
 
 ; icon table: x cell, y cell (2 words per icon)
 icon_tab:
-        .word 2, 23             ; 0 Sys Info
-        .word 12, 23            ; 1 Clock
-        .word 22, 23            ; 2 Notepad
-        .word 2, 25             ; 3 Files
-        .word 12, 25            ; 4 Dostris
-        .word 22, 25            ; 5 OutLast
-        .word 2, 27             ; 6 Pac-Man
-        .word 12, 27            ; 7 Music
-        .word 22, 27            ; 8 Theme
+        .word 1, 23             ; 0 Sys Info
+        .word 9, 23             ; 1 Clock
+        .word 17, 23            ; 2 Notepad
+        .word 25, 23            ; 3 Files
+        .word 1, 25             ; 4 Dostris
+        .word 9, 25             ; 5 OutLast
+        .word 17, 25            ; 6 Pac-Man
+        .word 25, 25            ; 7 Music
+        .word 1, 27             ; 8 Theme
+        .word 9, 27             ; 9 Tracker
 icon_names:
         .word name_sysinfo
         .word name_clock
@@ -2454,9 +2474,10 @@ icon_names:
         .word name_pacman
         .word name_music
         .word name_theme
+        .word name_tracker
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4, 5, 6, 3, 8
+        .word 0, 1, 2, 7, 4, 5, 6, 3, 8, 9
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2469,6 +2490,7 @@ app_def_tab:
         .word 1, 0, 30, 28, str_t_pacman     ; 6 Pac-Man (full screen)
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
         .word 4, 2, 24, 16, str_t_theme      ; 8 Theme
+        .word 1, 1, 30, 20, str_t_tracker    ; 9 Tracker
 
 ; ============================================================================
 ; Cartridge header + vectors

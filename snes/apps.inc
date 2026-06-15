@@ -642,6 +642,8 @@ MUS_VOICE = 0
         beq @files
         cmp #8
         beq @theme
+        cmp #9
+        beq @trk
         rts
 @np:    jsr notepad_key
         rts
@@ -656,6 +658,8 @@ MUS_VOICE = 0
 @files: jsr files_key
         rts
 @theme: jsr theme_key
+        rts
+@trk:   jsr tracker_key
         rts
 .endproc
 
