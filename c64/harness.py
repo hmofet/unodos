@@ -45,8 +45,8 @@ from py65.memory import ObservableMemory
 # leading `wait` in the script absorbs it. STEPS_PER_SEC ties the CIA TOD clock
 # to CPU steps so `wait` advances HH:MM:SS predictably.
 TICK_INSTRS = 7000      # boot (full-screen dither + window draws) ~ 360k steps
-KEY_INSTRS = 60000
-STEPS_PER_SEC = 30000
+KEY_INSTRS = 220000     # a full-screen app redraw clears the 8KB bitmap (~120k steps)
+STEPS_PER_SEC = 90000
 STEPS_PER_TENTH = STEPS_PER_SEC // 10
 
 # C64 16-colour palette (Pepto), RGB.
@@ -71,6 +71,24 @@ KEYS = {
     'down':   [(0, 7)],   # CRSR ^v
     'up':     [(0, 7), (1, 7)],  # CRSR ^v + L-SHIFT
     'space':  [(7, 4)],
+    'save':   [(0, 4)],   # F1
+    'del':    [(0, 0)],   # INST/DEL (backspace)
+    'backspace': [(0, 0)],
+}
+
+# Printable characters -> matrix position (col, row), mirroring the kernel's
+# keymap so `type "..."` and single-char `key` work. Letters are lowercase here
+# but the kernel decodes them to uppercase ASCII.
+CHARS = {
+    'a': (1, 2), 'b': (3, 4), 'c': (2, 4), 'd': (2, 2), 'e': (1, 6), 'f': (2, 5),
+    'g': (3, 2), 'h': (3, 5), 'i': (4, 1), 'j': (4, 2), 'k': (4, 5), 'l': (5, 2),
+    'm': (4, 4), 'n': (4, 7), 'o': (4, 6), 'p': (5, 1), 'q': (7, 6), 'r': (2, 1),
+    's': (1, 5), 't': (2, 6), 'u': (3, 6), 'v': (3, 7), 'w': (1, 1), 'x': (2, 7),
+    'y': (3, 1), 'z': (1, 4),
+    '0': (4, 3), '1': (7, 0), '2': (7, 3), '3': (1, 0), '4': (1, 3), '5': (2, 0),
+    '6': (2, 3), '7': (3, 0), '8': (3, 3), '9': (4, 0),
+    '+': (5, 0), '-': (5, 3), '.': (5, 4), ':': (5, 5), '@': (5, 6), ',': (5, 7),
+    '*': (6, 1), ';': (6, 2), '=': (6, 5), '/': (6, 7), ' ': (7, 4),
 }
 
 
@@ -114,10 +132,11 @@ class Keyboard:
 
 
 class C64:
-    def __init__(self, prg_path, artdir, trace=False, ntsc=False):
+    def __init__(self, prg_path, artdir, trace=False, ntsc=False, storage=None):
         self.artdir = artdir
         self.trace = trace
         self.raster_lines = 263 if ntsc else 312
+        self.storage = storage          # sidecar file for the persisted FS region
         os.makedirs(artdir, exist_ok=True)
 
         self.mem = ObservableMemory()
@@ -136,6 +155,14 @@ class C64:
         assert load == 0x0801, "expected a $0801 PRG, got $%04X" % load
         self.mem.write(load, list(body))
         self.prg_end = load + len(body)
+
+        # Persisted FS region ($C000-$CFFF): a battery-backed store the kernel's
+        # fs_init keeps if it already holds a "USV1" catalog (else it formats +
+        # seeds). Preload it from the sidecar so a "power cycle" (a second run
+        # sharing --storage) survives; saved back on exit.
+        if storage and os.path.exists(storage):
+            data = open(storage, "rb").read()[:0x1000]
+            self.mem.write(0xC000, list(data))
 
         # --- I/O intercepts ---
         self.mem.subscribe_to_write([0xDC00], self.kbd.write_pra)
@@ -232,12 +259,20 @@ class C64:
 
     # ---- input ----
     def key(self, name):
-        if name not in KEYS:
+        if name in KEYS:
+            pos = KEYS[name]
+        elif len(name) == 1 and name.lower() in CHARS:
+            pos = [CHARS[name.lower()]]
+        else:
             raise SystemExit("unknown key: %s" % name)
-        self.kbd.pressed = set(KEYS[name])
+        self.kbd.pressed = set(pos)
         self.step(KEY_INSTRS)
         self.kbd.pressed = set()
         self.step(KEY_INSTRS // 4)              # let the release register
+
+    def type_str(self, s):
+        for ch in s:
+            self.key(ch)
 
     # ---- output ----
     def shot(self, name):
@@ -265,9 +300,14 @@ def main():
     argv = sys.argv[1:]
     trace = "--trace" in argv
     ntsc = "--ntsc" in argv
+    storage = None
+    if "--storage" in argv:
+        i = argv.index("--storage")
+        storage = argv[i + 1]
+        del argv[i:i + 2]
     args = [a for a in argv if not a.startswith("--")]
     prog, artdir = args[0], args[1]
-    c = C64(prog, artdir, trace, ntsc)
+    c = C64(prog, artdir, trace, ntsc, storage)
     for line in sys.stdin:
         line = line.split("#")[0].strip()
         if not line:
@@ -283,6 +323,9 @@ def main():
         elif cmd == "keys":
             for k in rest:
                 c.key(k)
+        elif cmd == "type":
+            # type the rest of the line verbatim (preserve spaces)
+            c.type_str(line[len("type"):].strip())
         elif cmd == "assert":
             what = rest[0]
             if what == "beep>0":
@@ -294,12 +337,21 @@ def main():
             elif what == "ntsc":
                 assert c.var(4) == 0, "expected is_pal==0, got %d" % c.var(4)
                 print("[assert] ntsc OK")
+            elif what.startswith("count="):
+                n = int(what.split("=")[1])
+                got = c.mem[0xC004]
+                assert got == n, "expected FS file count %d, got %d" % (n, got)
+                print("[assert] count=%d OK" % n)
             else:
                 raise SystemExit("unknown assert: %s" % what)
         elif cmd == "quit":
             break
         else:
             raise SystemExit("unknown command: %s" % cmd)
+    if c.storage:
+        with open(c.storage, "wb") as f:
+            f.write(bytes(c.mem[0xC000:0xD000]))
+        print("[harness] saved FS -> %s" % c.storage)
     print("[harness] done (%d steps)" % c.steps)
 
 

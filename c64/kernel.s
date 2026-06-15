@@ -69,6 +69,7 @@ zpSlot      equ $35   ; draw_icons: icon loop index
 zpWtop      equ $36   ; win_outline: window top pixel row
 zpSel       equ $37   ; draw_icon: selected flag
 zpIconX     equ $38   ; draw_icon: icon's base column (win_outline mutates zpFX)
+zpCharY     equ $39   ; draw_char: saved caller Y (draw_name12 uses Y as index)
 
 ; ---- logical key codes (scan_keyboard -> zpKey, handle_key dispatch) ----
 K_RET    equ $0D
@@ -78,6 +79,8 @@ K_RIGHT  equ $12      ; CRSR<>
 K_UP     equ $13      ; CRSR^v + shift
 K_DOWN   equ $14      ; CRSR^v
 K_SPACE  equ $20
+K_BS     equ $08      ; DEL/INST (backspace)
+K_SAVE   equ $06      ; F1 (Notepad save)
 
 ; ---- colour bytes (fg<<4 | bg); see palette in harness.py ----
 COL_DESK     equ $E6   ; light-blue dither on blue
@@ -108,7 +111,14 @@ ICON_Y   equ 20       ; icon box top cell row
 ICONLBL  equ 22       ; icon label cell row (bottom of the box)
 ICON0_X  equ 3
 ICON1_X  equ 14
-NICONS   equ 2
+ICON2_X  equ 25
+NICONS   equ 3
+
+; full-screen app layout (app_mode != 0): row0 = title + separator, rows1-22
+; content, row23 = status/help line.
+APP_CONTENT_Y  equ 8     ; pixel row of content row 1
+APP_CONTENT_H  equ 176   ; 22 rows * 8px
+APP_VIEW_ROWS  equ 22
 
 ; ---- C64 I/O ----
 VIC_D011 equ $D011
@@ -182,6 +192,7 @@ init:
 
         jsr build_rom_tod       ; seed the TOD clock if it isn't running
         jsr detect_video        ; PAL/NTSC -> is_pal
+        jsr fs_init             ; load/format the USV1 mini-FS
         jsr clear_bitmap
 
         lda #$FF
@@ -248,78 +259,111 @@ read_col:
         rts
 colmask: dc.b $FE,$FD,$FB,$F7,$EF,$DF,$BF,$7F
 
+; scan_keyboard - scan all 8 columns into key_matrix, derive shift, and map the
+; first pressed key (column- then row-order) through `keymap` into zpKey (0 if
+; none). Cursor keys produce their unshifted code; with SHIFT held, CRSR<> ->
+; left, CRSR^v -> up. keymap codes of 0 (shift/ctrl/unused keys) are skipped.
 scan_keyboard:
+        ldx #0
+sk_scan:
+        lda colmask,x
+        sta CIA1_PRA
+        lda CIA1_PRB
+        eor #$FF
+        sta key_matrix,x
+        inx
+        cpx #8
+        bne sk_scan
         ; shift = LSHIFT (col1,row7) OR RSHIFT (col6,row4)
-        ldx #1
-        jsr read_col
+        lda key_matrix+1
         and #$80
         sta zpShift
-        ldx #6
-        jsr read_col
+        lda key_matrix+6
         and #$10
         ora zpShift
         sta zpShift
-
+        ; find first pressed key with a nonzero keymap code
         lda #0
         sta zpKey
-        ldx #0                  ; column 0: DEL/RET/CRSR<>/.../CRSR^v
-        jsr read_col
-        sta zpTmp               ; col0 rows
-        and #$02                ; RETURN (row1)
-        beq sk_noret
-        lda #K_RET
+        ldx #0                  ; column
+sk_col:
+        lda key_matrix,x
+        beq sk_colnext
+        ldy #0                  ; row
+sk_row:
+        lsr                     ; bit0 (row Y) -> carry
+        bcc sk_rownext
+        sta zpTmp               ; remaining row bits
+        sty zpTmp2              ; row index
+        txa
+        asl
+        asl
+        asl
+        clc
+        adc zpTmp2              ; idx = col*8 + row
+        tay
+        lda keymap,y
+        beq sk_restore          ; code 0 -> ignore this key, keep scanning
         sta zpKey
-        rts
-sk_noret:
-        ldx #7                  ; column 7: STOP/SPACE/...
-        jsr read_col
-        sta zpTmp2              ; col7 rows
-        and #$80                ; RUN/STOP (row7)
-        beq sk_nostop
-        lda #K_ESC
-        sta zpKey
-        rts
-sk_nostop:
+        jmp sk_found
+sk_restore:
+        ldy zpTmp2
         lda zpTmp
-        and #$04                ; CRSR<> (col0,row2)
-        beq sk_noh
+sk_rownext:
+        iny
+        cpy #8
+        bne sk_row
+sk_colnext:
+        inx
+        cpx #8
+        bne sk_col
+        rts                     ; nothing pressed (zpKey = 0)
+sk_found:
+        lda zpKey
+        cmp #K_RIGHT
+        bne sk_chkdn
         lda zpShift
-        bne sk_left
-        lda #K_RIGHT
-        sta zpKey
-        rts
-sk_left:
+        beq sk_kdone
         lda #K_LEFT
         sta zpKey
         rts
-sk_noh:
-        lda zpTmp
-        and #$80                ; CRSR^v (col0,row7)
-        beq sk_nov
+sk_chkdn:
+        cmp #K_DOWN
+        bne sk_kdone
         lda zpShift
-        bne sk_up
-        lda #K_DOWN
-        sta zpKey
-        rts
-sk_up:
+        beq sk_kdone
         lda #K_UP
         sta zpKey
-        rts
-sk_nov:
-        lda zpTmp2
-        and #$10                ; SPACE (col7,row4)
-        beq sk_done
-        lda #K_SPACE
-        sta zpKey
-sk_done:
+sk_kdone:
         rts
 
-; handle_key - A = decoded key (nonzero). M1: ESC closes the topmost window;
-; with desktop focus, left/right move the icon selection (wrapping) and Return
-; launches the selected window app. (M2 will route keys into full-screen apps
-; via app_mode, as the Apple II port does.)
+; keymap - matrix index (col*8 + row) -> key code; 0 = ignore (shift/ctrl/
+; function/graphic keys). Letters map to uppercase ASCII; F1 = save ($06).
+keymap:
+        dc.b $08,$0D,$12,$00,$06,$00,$00,$14   ; col0: DEL RET CRSR<> F7 F1 F3 F5 CRSR^v
+        dc.b $33,$57,$41,$34,$5A,$53,$45,$00   ; col1: 3 W A 4 Z S E LSHIFT
+        dc.b $35,$52,$44,$36,$43,$46,$54,$58   ; col2: 5 R D 6 C F T X
+        dc.b $37,$59,$47,$38,$42,$48,$55,$56   ; col3: 7 Y G 8 B H U V
+        dc.b $39,$49,$4A,$30,$4D,$4B,$4F,$4E   ; col4: 9 I J 0 M K O N
+        dc.b $2B,$50,$4C,$2D,$2E,$3A,$40,$2C   ; col5: + P L - . : @ ,
+        dc.b $00,$2A,$3B,$00,$00,$3D,$00,$2F   ; col6: PND * ; HOME RSHIFT = UP /
+        dc.b $31,$00,$00,$32,$20,$00,$51,$1B   ; col7: 1 <- CTRL 2 SPACE C= Q STOP
+
+; handle_key - A = decoded key (nonzero). When a full-screen app is active
+; (app_mode != 0: 1=Files, 2=Notepad) keys route there; otherwise ESC closes the
+; topmost window, and with desktop focus left/right move the icon selection and
+; Return launches the selected app (Files is full-screen; SysInfo/Clock windows).
 handle_key:
         sta zpTmp
+        lda app_mode
+        beq hk_desktop
+        cmp #1
+        bne hk_a2
+        jmp files_key
+hk_a2:
+        jmp notepad_key
+hk_desktop:
+        lda zpTmp
         cmp #K_ESC
         bne hk_notesc
         jsr close_topmost
@@ -359,6 +403,11 @@ hk_redraw:
 hk_done:
         rts
 hk_return:
+        lda sel_icon
+        cmp #2
+        bne hk_ret_win
+        jmp files_open          ; Files icon -> full-screen app
+hk_ret_win:
         jsr sid_click
         lda sel_icon
         jsr open_or_raise
@@ -1053,9 +1102,9 @@ di_lbl_go:
         jsr draw_string
         rts
 
-icon_x_tab:  dc.b ICON0_X,ICON1_X
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock
+icon_x_tab:  dc.b ICON0_X,ICON1_X,ICON2_X
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files
 
 ; ============================================================================
 ; renderer primitives
@@ -1231,6 +1280,7 @@ dr_done:
 ; Bitmap byte addr = rowbase[zpRow*8] + zpCol*8; the 8 glyph rows are the 8
 ; consecutive bytes from there. Also stamps the cell colour.
 draw_char:
+        sty zpCharY             ; preserve caller's Y (draw_name12 uses it as index)
         sec
         sbc #32
         sta zpTmp
@@ -1294,6 +1344,7 @@ dc_loop:
         ldy zpCol
         lda zpFCol
         sta (zpScrPtr),y
+        ldy zpCharY             ; restore caller's Y
         rts
 
 ; draw_string - zpPtr = NUL-terminated text at cell zpCol/zpRow (zpInv,zpFCol),
@@ -1313,6 +1364,114 @@ ds_done:
         rts
 
 ; ============================================================================
+; M2 text helpers (used by Files / Notepad) - all stamp cell colour zpFCol.
+; ============================================================================
+
+; app_clear - blank the bitmap and paint the whole screen COL_WIN (black-on-
+; white), leaving zpFCol = COL_WIN so a full-screen app's draws inherit it.
+app_clear:
+        jsr clear_bitmap
+        lda #0
+        sta zpCX
+        sta zpCY
+        lda #SCRCOLS
+        sta zpCW
+        lda #SCRROWS
+        sta zpCH
+        lda #COL_WIN
+        sta zpFCol
+        jmp color_fill
+
+; draw_name12 - zpFSPtr = 12-byte NUL-padded name; draw all 12 (NUL shown as
+; space, columns stay aligned), advancing zpCol by 12.
+draw_name12:
+        ldy #0
+dn12_loop:
+        lda (zpFSPtr),y
+        bne dn12_ch
+        lda #$20
+dn12_ch:
+        jsr draw_char
+        inc zpCol
+        iny
+        cpy #12
+        bne dn12_loop
+        rts
+
+; draw_name12_title - like draw_name12 but stops at the first NUL (no padding).
+draw_name12_title:
+        ldy #0
+dnt_loop:
+        lda (zpFSPtr),y
+        beq dnt_done
+        jsr draw_char
+        inc zpCol
+        iny
+        cpy #12
+        bne dnt_loop
+dnt_done:
+        rts
+
+; draw_dec16 - zpFSSize (word) -> decimal at zpCol/zpRow, no leading zeros
+; ("0" for zero). Advances zpCol. Preserves X (saved on the stack).
+dec16_lo: dc.b <10000,<1000,<100,<10,<1
+dec16_hi: dc.b >10000,>1000,>100,>10,>1
+draw_dec16:
+        txa
+        pha
+        lda zpFSSize
+        sta zpDVlo
+        lda zpFSSize+1
+        sta zpDVhi
+        lda #0
+        sta zpDLead
+        ldx #0
+dd_digit:
+        lda #0
+        sta zpDDig
+dd_sub:
+        lda zpDVhi
+        cmp dec16_hi,x
+        bcc dd_done
+        bne dd_doit
+        lda zpDVlo
+        cmp dec16_lo,x
+        bcc dd_done
+dd_doit:
+        lda zpDVlo
+        sec
+        sbc dec16_lo,x
+        sta zpDVlo
+        lda zpDVhi
+        sbc dec16_hi,x
+        sta zpDVhi
+        inc zpDDig
+        jmp dd_sub
+dd_done:
+        lda zpDDig
+        bne dd_print
+        lda zpDLead
+        bne dd_print
+        cpx #4
+        beq dd_print
+        jmp dd_next
+dd_print:
+        lda #1
+        sta zpDLead
+        lda zpDDig
+        clc
+        adc #$30
+        jsr draw_char
+        inc zpCol
+dd_next:
+        inx
+        cpx #5
+        bne dd_digit
+        pla
+        tax
+        rts
+
+; ============================================================================
 ; strings
 ; ============================================================================
 msg_title:     dc.b "UnoDOS/C64",0
@@ -1325,6 +1484,26 @@ msg_ram:       dc.b "RAM: 64K",0
 msg_vid_pal:   dc.b "Video: PAL VIC-II 6569",0
 msg_vid_ntsc:  dc.b "Video: NTSC VIC-II 6567",0
 msg_sid:       dc.b "Sound: SID 6581",0
+msg_files:     dc.b "Files",0
+msg_files_title: dc.b "Files",0
+msg_notepad_title: dc.b "Notepad: ",0
+msg_files_help:  dc.b "RET=Open  D=Del  R=Rescan  STOP=Back",0
+msg_files_empty: dc.b "(no files)",0
+msg_confirm1:    dc.b "Delete ",0
+msg_confirm2:    dc.b "? (Y/N)",0
+msg_note_help:   dc.b "  F1=Save  STOP=Back",0
+msg_ln:          dc.b "Ln:",0
+msg_col:         dc.b "  Col:",0
+msg_bytes:       dc.b "  Bytes:",0
+msg_full:        dc.b "  FULL",0
+msg_saved:       dc.b "  SAVED",0
+
+; ============================================================================
+; apps + filesystem (milestone 2)
+; ============================================================================
+        include "fs.i"
+        include "files.i"
+        include "notepad.i"
 
 ; ============================================================================
 ; generated tables (VIC bitmap address tables + the shared 8x8 font)
@@ -1341,6 +1520,16 @@ focus:      dc.b 0       ; vars+1  $FF = desktop, else focused window id
 last_key:   dc.b 0       ; vars+2  edge-detection: previous scan's key
 last_sec:   dc.b $FF     ; vars+3  last displayed clock second (BCD)
 is_pal:     dc.b 0       ; vars+4  1 = PAL detected, 0 = NTSC
-app_mode:   dc.b 0       ; vars+5  0 = desktop (M2 adds full-screen apps)
+app_mode:   dc.b 0       ; vars+5  0=desktop, 1=Files, 2=Notepad
 win_state:  dc.b 0,0     ; vars+6  per-window open(1)/closed(0)
 zlist:      dc.b 0,0     ; vars+8  z-order, [0]=topmost, $FF=empty
+key_matrix: dc.b 0,0,0,0,0,0,0,0   ; vars+10  scan_keyboard: 8-column matrix snapshot
+
+; ---- Files / Notepad app state ----
+files_sel:   dc.b 0      ; selected directory index in Files
+files_confirm: dc.b 0    ; 0=normal, 1=awaiting delete y/n
+note_idx:    dc.b 0      ; directory index Notepad was opened from
+note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
+note_len:    dc.w 0      ; current buffer length (bytes)
+note_dirty:  dc.b 0      ; 1 if unsaved changes
+note_flash:  dc.b 0      ; status line: 0=help, 1=SAVED, 2=FULL

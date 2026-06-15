@@ -147,14 +147,53 @@ machine with `SEI` + polling and makes **no KERNAL calls**, so it does not
 depend on a particular KERNAL revision — but it does assume the standard CIA #1
 keyboard wiring and a running TOD (it seeds 12:00:00 if the clock reads zero).
 
+## M2: full keyboard, the USV1 mini-FS, Files + Notepad
+
+M2 adds the full CIA keyboard-matrix decode (letters/digits/symbols via a
+`keymap` table, plus DEL, F1 and RUN/STOP), an `app_mode` dispatch for
+full-screen apps, a **byte-heap mini-FS** ([fs.i](fs.i)) and two apps that use
+it ([files.i](files.i), [notepad.i](notepad.i)) — ported from the Apple II port
+with C64 key codes and 8-bit (`$FF`) inversion for the selection highlight.
+
+- **USV1 byte-heap FS.** A 4 KB region (`$C000-$CFFF`) holds the "USV1" catalog
+  (magic, file count, heap-used, 15 × 16-byte directory entries) followed by a
+  contiguous data heap. `fs_save` overwrites by delete-then-append; `fs_delete`
+  compacts the heap and drops the slot. `fs_init` formats + seeds README.TXT /
+  HELLO.TXT only when the magic is absent, so a persisted store survives. **The
+  C64 has no NVRAM** — M2 keeps the FS in a RAM region the harness persists (the
+  SRAM-backed model the Genesis/SNES ports use). On real hardware this maps to a
+  1541 disk file via an IEC driver; **that driver is M2's remaining
+  real-hardware work.**
+- **Files** lists name + size, CRSR moves the selection, RETURN opens the file
+  in Notepad, D deletes (with a Y/N confirm), R rescans, RUN/STOP returns to the
+  desktop.
+- **Notepad** is a 2 KB append-at-cursor editor: printable keys insert, RETURN
+  inserts a line break, DEL backspaces, **F1 saves** via `fs_save`, RUN/STOP
+  returns to Files. The status line shows `Ln / Col / Bytes` and a SAVED flash.
+
+```sh
+./build.sh test
+# edit + save HELLO.TXT, persisting the FS region to a sidecar
+python3 harness.py build/unodos_c64_test.prg shots --storage build/fs.sav < tests/m2.script
+# re-boot from the same store: the edit survived the power cycle
+python3 harness.py build/unodos_c64_test.prg shots --storage build/fs.sav < tests/m2_persist.script
+```
+
+[tests/m2.script](tests/m2.script) seeds + lists the catalog, opens HELLO.TXT,
+types into it and saves (asserting `count=2` and a SID blip);
+[tests/m2_persist.script](tests/m2_persist.script) re-boots from the persisted
+`--storage` file and confirms the edited size + content survived
+(`shots/m2_*.png`).
+
 ## Milestones
 
-- **M1 (this):** boot chain (BASIC stub → VIC bitmap takeover), colour hi-res
-  desktop + menu bar, keyboard-driven window manager (SysInfo + Clock),
-  PAL/NTSC detection, CIA Time-of-Day clock, CIA keyboard-matrix scanner, SID
-  blip, shared 8×8 font, ROM-free py65 harness + `tests/m1.script`.
-- **M2 (planned):** a 1541 storage path (IEC or a `.d64` block driver), a
-  mini-FS, Files + Notepad, letter/digit keyboard decode.
+- **M1:** boot chain (BASIC stub → VIC bitmap takeover), colour hi-res desktop +
+  menu bar, keyboard-driven window manager (SysInfo + Clock), PAL/NTSC
+  detection, CIA Time-of-Day clock, CIA keyboard-matrix scanner, SID blip,
+  shared 8×8 font, ROM-free py65 harness + `tests/m1.script`.
+- **M2 (this):** full keyboard decode, `app_mode` framework, the USV1 byte-heap
+  mini-FS, Files + Notepad, persistence across a power cycle. See
+  [HANDOFF.md](HANDOFF.md).
 - **M3 (planned):** the scaled app roster (Theme — trivially colourful on the
   VIC, Dostris, Pac-Man, Music + Tracker on the three SID voices, Paint) and
   the OutLast / scheduler feasibility verdicts, as on the other ports.

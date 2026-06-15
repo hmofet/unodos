@@ -1,0 +1,10 @@
+# Re-boot from the persisted FS (same --storage file): the HELLO.TXT edit must
+# have survived the power cycle.
+wait 70
+key right              # Clock -> Files
+key return             # open Files
+shot m2_persist_files  # HELLO.TXT now larger, moved to the end (delete+append)
+key right              # select HELLO.TXT
+key return             # open in Notepad
+shot m2_persist_notepad  # edited content ends with HI
+quit
