@@ -370,10 +370,14 @@ milestone ships with a scripted regression rig + screenshots, macplus-style.
       firmware-state input; FAT12 in the 800K block space; Ensoniq
       wavetable Music/Tracker. Harness decision at M0 (py65816 vs GSplus
       scripting). FloppyEmu covers real-hw media.
-- [ ] SNES: 65816 toolchain shared with IIGS; the GENESIS architecture
-      re-expressed (tile desktop, sprite cursor, pad-as-pointer + soft
-      keyboard, SNES Mouse, SRAM USV1 FS); SPC700 uploaded audio driver
-      is the hardest novel piece. Rig: Mesen2 (the BlastEm role).
+- [x] SNES: M0–M3 DONE (emulator-verified). 65816 toolchain shared with
+      IIGS; the GENESIS architecture re-expressed on a shadow+DMA model
+      (tile desktop, sprite cursor, pad-as-pointer + soft keyboard, SRAM
+      USV1 FS, the three games, Music/Theme/Tracker/Paint, tick scheduler).
+      The SPC700 audio driver (built by a Python SPC700 assembler, IPL
+      upload + mailbox) was the hardest novel piece — verified by ack.
+      Rig: Mesen2 F12 framebuffer. Remaining: real hardware (flashcart +
+      SNES Mouse) + audio ear-check; backlog in snes/HANDOFF.md.
 - [ ] PS2 via FreeMcBoot: PS2SDK ELF launched by FMCB; port the PORTABLE
       C CORE from mac/unodos.c over a gsKit/pad/mc/audsrv platform layer;
       pad-as-pointer + soft keyboard always, USB kbd/mouse when present;
