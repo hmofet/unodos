@@ -1,0 +1,12 @@
+wait 70
+key right
+key right              # sel_icon: Clock->Files->Theme (icon 3)
+key return             # open Theme
+shot m3_theme
+key down
+key down               # move cursor to Grape
+key return             # apply
+shot m3_theme_applied
+key esc                # back to desktop (now re-themed)
+shot m3_theme_desktop
+quit

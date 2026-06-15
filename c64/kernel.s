@@ -109,10 +109,11 @@ ICONW    equ 9        ; icon box: cells (inner label width = ICONW-2 = 7)
 ICONH    equ 3
 ICON_Y   equ 20       ; icon box top cell row
 ICONLBL  equ 22       ; icon label cell row (bottom of the box)
-ICON0_X  equ 3
-ICON1_X  equ 14
-ICON2_X  equ 25
-NICONS   equ 3
+ICON0_X  equ 2
+ICON1_X  equ 12
+ICON2_X  equ 22
+ICON3_X  equ 31
+NICONS   equ 4
 
 ; full-screen app layout (app_mode != 0): row0 = title + separator, rows1-22
 ; content, row23 = status/help line.
@@ -358,10 +359,18 @@ handle_key:
         lda app_mode
         beq hk_desktop
         cmp #1
-        bne hk_a2
+        beq hk_files
+        cmp #2
+        beq hk_notepad
+        cmp #3
+        beq hk_theme
+        jmp app_key             ; M3 games / apps (app_mode >= 4)
+hk_files:
         jmp files_key
-hk_a2:
+hk_notepad:
         jmp notepad_key
+hk_theme:
+        jmp theme_key
 hk_desktop:
         lda zpTmp
         cmp #K_ESC
@@ -405,14 +414,24 @@ hk_done:
 hk_return:
         lda sel_icon
         cmp #2
-        bne hk_ret_win
+        bne hk_ret3
         jmp files_open          ; Files icon -> full-screen app
+hk_ret3:
+        cmp #3
+        bne hk_ret_win
+        jmp theme_open
+        ;== M3-GAMES-RETURN ==   (extended as games are added)
 hk_ret_win:
         jsr sid_click
         lda sel_icon
         jsr open_or_raise
         lda sel_icon
         sta focus
+        rts
+
+; app_key - route a key into the active M3 game/app (app_mode >= 4).
+app_key:
+        ;== M3-GAMES-KEY ==      (extended as games are added)
         rts
 
 ; ============================================================================
@@ -662,7 +681,7 @@ win_outline:
 ; restore_desktop - re-dither + recolour a cell rect after a window closes.
 ; Inputs: zpCX/zpCY/zpCW/zpCH (cells).
 restore_desktop:
-        lda #COL_DESK
+        lda theme_desk
         sta zpFCol
         jsr color_fill
         lda zpCX
@@ -994,7 +1013,7 @@ draw_desktop:
         sta zpCW
         lda #(SCRROWS-1)
         sta zpCH
-        lda #COL_DESK
+        lda theme_desk          ; themeable desktop colour
         sta zpFCol
         jsr color_fill
         lda #0
@@ -1006,6 +1025,8 @@ draw_desktop:
         lda #192
         sta zpFH
         jsr dither_rect
+        lda theme_border        ; themeable VIC border
+        sta VIC_D020
         rts
 
 ; draw_icons - redraw both desktop icons, highlighting sel_icon.
@@ -1102,9 +1123,9 @@ di_lbl_go:
         jsr draw_string
         rts
 
-icon_x_tab:  dc.b ICON0_X,ICON1_X,ICON2_X
-icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files
-icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files
+icon_x_tab:  dc.b ICON0_X,ICON1_X,ICON2_X,ICON3_X
+icon_lbl_lo: dc.b <msg_sysinfo,<msg_clock,<msg_files,<msg_theme
+icon_lbl_hi: dc.b >msg_sysinfo,>msg_clock,>msg_files,>msg_theme
 
 ; ============================================================================
 ; renderer primitives
@@ -1485,6 +1506,7 @@ msg_vid_pal:   dc.b "Video: PAL VIC-II 6569",0
 msg_vid_ntsc:  dc.b "Video: NTSC VIC-II 6567",0
 msg_sid:       dc.b "Sound: SID 6581",0
 msg_files:     dc.b "Files",0
+msg_theme:     dc.b "Theme",0
 msg_files_title: dc.b "Files",0
 msg_notepad_title: dc.b "Notepad: ",0
 msg_files_help:  dc.b "RET=Open  D=Del  R=Rescan  STOP=Back",0
@@ -1504,6 +1526,7 @@ msg_saved:       dc.b "  SAVED",0
         include "fs.i"
         include "files.i"
         include "notepad.i"
+        include "theme.i"
 
 ; ============================================================================
 ; generated tables (VIC bitmap address tables + the shared 8x8 font)
@@ -1533,3 +1556,9 @@ note_name:   dc.b 0,0,0,0,0,0,0,0,0,0,0,0   ; (12) file being edited
 note_len:    dc.w 0      ; current buffer length (bytes)
 note_dirty:  dc.b 0      ; 1 if unsaved changes
 note_flash:  dc.b 0      ; status line: 0=help, 1=SAVED, 2=FULL
+
+; ---- Theme app state + live desktop colours (read by draw_desktop) ----
+theme_desk:   dc.b COL_DESK    ; desktop dither colour (fg<<4|bg)
+theme_border: dc.b BORDERCOL   ; VIC border colour
+th_sel:       dc.b 0           ; Theme: cursor
+th_cur:       dc.b 0           ; Theme: applied preset
