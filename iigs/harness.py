@@ -45,6 +45,14 @@ class Harness:
         self.writeback = writeback
         self.newvideo = 0x00
         self.kbd = 0x00            # $C000 keyboard data (bit7 = key ready)
+        # ADB mouse model: a FIFO of signed (dx,dy) delta bytes + a button bit.
+        self.mouse_fifo = bytearray()
+        self.mouse_btn = 0
+        self.cmd_x = 160          # harness-tracked commanded cursor position
+        self.cmd_y = 100
+        self.vbl = 0              # $C019 toggles each read
+        self.frame = 0            # WDM #$02 frame count
+        self._frame_flag = False
         self.cpu = CPU65816(read_hook=self._read, write_hook=self._write,
                             wdm_hook=self._wdm)
         self._install_firmware()
@@ -83,8 +91,15 @@ class Harness:
         if off == 0xC010:                 # keyboard strobe clear
             self.kbd &= 0x7F
             return 0x00
-        if off == 0xC019:                 # VBL status (bit7) - seed "in vbl"
-            return 0x80
+        if off == 0xC019:                 # VBL status (bit7) - toggle per read
+            self.vbl ^= 0x80
+            return self.vbl
+        if off == 0xC024:                 # ADB mouse delta FIFO (signed byte)
+            if self.mouse_fifo:
+                return self.mouse_fifo.pop(0)
+            return 0x00
+        if off == 0xC027:                 # KMSTATUS: bit7=movement, bit0=button
+            return (0x80 if self.mouse_fifo else 0x00) | (self.mouse_btn & 1)
         if off == 0xC029:                 # NEWVIDEO read-back
             return self.newvideo
         return 0x00                       # other soft switches read 0
@@ -100,6 +115,10 @@ class Harness:
 
     # ------------------------------------------------------- ProDOS driver
     def _wdm(self, cpu, imm):
+        if imm == 0x02:                    # main-loop frame marker
+            self.frame += 1
+            self._frame_flag = True
+            return
         if imm != 0x01:
             return
         m = cpu.mem
@@ -135,10 +154,91 @@ class Harness:
 
     # --------------------------------------------------------------- run
     def run(self, max_steps=4_000_000):
+        """Run to a STP halt (M0-style splash)."""
         n = self.cpu.run(max_steps=max_steps)
         if self.writeback:
             open(self.writeback, "wb").write(self.image)
         return n
+
+    def boot(self, max_steps=4_000_000):
+        """Run until the first main-loop frame marker (desktop is up)."""
+        self._run_to_frame(max_steps)
+
+    def _run_to_frame(self, max_steps=4_000_000):
+        self._frame_flag = False
+        n = 0
+        cpu = self.cpu
+        while not self._frame_flag and not cpu.halted and n < max_steps:
+            cpu.step()
+            n += 1
+        return n
+
+    def frames(self, count=1):
+        """Advance `count` full main-loop iterations."""
+        for _ in range(count):
+            self._run_to_frame()      # consume the pending marker
+            self._run_to_frame()      # run one full body to the next marker
+
+    # ------------------------------------------------------- input scripting
+    def key(self, ascii_code):
+        """Inject one keypress and let the kernel consume + process it."""
+        self.kbd = (ascii_code & 0x7F) | 0x80
+        self.frames(1)
+
+    def _push_delta(self, dx, dy):
+        for v in (dx, dy):
+            self.mouse_fifo.append(v & 0xFF)
+
+    def move_to(self, x, y):
+        """Walk the cursor to (x,y) via signed-byte deltas, then settle."""
+        x = max(0, min(319, x))
+        y = max(0, min(199, y))
+        while self.cmd_x != x or self.cmd_y != y:
+            dx = max(-120, min(120, x - self.cmd_x))
+            dy = max(-120, min(120, y - self.cmd_y))
+            self.cmd_x += dx
+            self.cmd_y += dy
+            self._push_delta(dx, dy)
+        self.frames(1)
+
+    def click(self, x=None, y=None):
+        if x is not None:
+            self.move_to(x, y)
+        self.mouse_btn = 1
+        self.frames(1)
+        self.mouse_btn = 0
+        self.frames(1)
+
+    def run_script(self, path):
+        """Run a wait/shot/key/move/click text script (parity with apple2).
+
+        Relative `shot` paths resolve against the current working directory.
+        """
+        for raw in open(path):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            op = parts[0]
+            if op == "boot":
+                self.boot()
+            elif op in ("wait", "frames"):
+                self.frames(int(parts[1]))
+            elif op == "key":
+                self.key(int(parts[1], 0))
+            elif op == "move":
+                self.move_to(int(parts[1]), int(parts[2]))
+            elif op == "click":
+                if len(parts) >= 3:
+                    self.click(int(parts[1]), int(parts[2]))
+                else:
+                    self.click()
+            elif op == "shot":
+                self.render_png(parts[1])
+            else:
+                raise ValueError(f"unknown script op: {op}")
+        if self.writeback:
+            open(self.writeback, "wb").write(self.image)
 
     # ------------------------------------------------------- SHR -> PNG
     def render_png(self, out_path, scale=2):
@@ -193,13 +293,26 @@ def _write_png(path, rgb_rows, w, h, scale=1):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: harness.py <image.po> <out.png> [--writeback out.po]")
+        print("usage: harness.py <image.po> <out.png|script.script> "
+              "[--writeback out.po] [--frames N]")
         return 1
     image, out = sys.argv[1], sys.argv[2]
     wb = None
     if "--writeback" in sys.argv:
         wb = sys.argv[sys.argv.index("--writeback") + 1]
     h = Harness(image, writeback=wb)
+
+    if out.endswith(".script"):           # M1+ script: boot, drive, shot(s)
+        h.boot()
+        h.run_script(out)
+        return 0
+    if "--frames" in sys.argv:            # M1+ boot-and-shot
+        n = int(sys.argv[sys.argv.index("--frames") + 1])
+        h.boot()
+        h.frames(n)
+        h.render_png(out)
+        return 0
+    # M0 default: run the splash to its STP halt
     h.run()
     if not h.cpu.halted:
         sys.stderr.write("warning: CPU did not halt (no STP reached)\n")

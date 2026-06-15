@@ -1,70 +1,100 @@
 ; ============================================================================
-; UnoDOS/Apple IIGS - milestone 0 kernel: enable Super Hi-Res and paint the
-; UnoDOS splash (color desktop + a framed window + text), proving the
-; toolchain, the ProDOS block-boot chain, and the SHR 4bpp renderer.
+; UnoDOS/Apple IIGS - milestone 1 kernel: Super Hi-Res desktop, window
+; manager, ADB mouse + keyboard, software cursor, SysInfo + Clock.
 ;
-; Entry: boot.s JMPs here at $00:2000 already in NATIVE mode with 16-bit
-; A/X/Y, PBR=DBR=0.  "Kernel-normal" register convention for the draw code:
-; D=0, 8-bit A (M=1), 16-bit X/Y (X=0), DBR=$E1 (the SHR bank) while drawing.
+; The proven SNES M1 (snes/kernel.asm) WM / event / app logic re-expressed
+; on the IIGS linear SHR framebuffer: a cell grid of 8x8 px = 40x25 cells on
+; 320x200, windows in cell coordinates, a REAL pointer from a polled ADB
+; mouse (no joypad-as-pointer), and a save-under software cursor (no hardware
+; sprite on SHR).  Rendering writes directly to bank $E1 (no shadow/flush).
 ;
-; Super Hi-Res framebuffer (bank $E1):
-;   $2000-$9CFF  32000 bytes pixel data: 200 rows x 160 bytes,
-;                4bpp / 2px per byte, HIGH nibble = LEFT pixel.
-;   $9D00-$9DC7  200 scanline control bytes (palette select + mode)
-;   $9E00-$9FFF  16 palette lines x 16 colors x 2 bytes ($0RGB little-endian)
-; NEWVIDEO ($C029) bit7 enables SHR; we write $C1.
+; Frame model: the main loop free-runs; a `wdm #$02` at the top of each
+; iteration is the harness frame marker (a 2-byte NOP on real silicon).  The
+; clock ticks off v_frame (60 frames = 1 s; a true $C019 vblank gate is the
+; hardware-pass refinement).
+;
+; Register convention ("kernel-normal"): native, D=0, DBR=$00, 16-bit A AND
+; X/Y (rep #$30) in the WM/app/main-loop code; the low-level SHR byte writers
+; flip to 8-bit A internally and return 16-bit.  Kernel state and all tables
+; live in fast bank-0 RAM (DBR=0); the SHR framebuffer in bank $E1 is reached
+; via the 24-bit pointers GP/mtmp and long-indexed (f:SHR*) stores, so DBR
+; never moves.  Soft switches (bank 0) are read/written with long (f:) too.
 ; ============================================================================
 
 .p816
 .smart +
 
-; Font + palette data go in RODATA (NOT at the CODE origin $2000, where the
-; boot stage jumps to start:).  RODATA links after CODE, still in bank 0.
 .segment "RODATA"
 .include "gen_data.inc"
 .segment "CODE"
 
-; ----------------------------------------------------------- soft switches
-NEWVIDEO = $C029
+; ----------------------------------------------------------- soft switches / regs
+; The soft-switch page lives in bank $00; accessed with explicit long (f:)
+; addressing so it is correct regardless of DBR.
+NEWVIDEO = $00C029
+KBD      = $00C000        ; keyboard data (bit7 = key ready)
+KBDSTRB  = $00C010        ; clear keyboard strobe
+VBL      = $00C019        ; vertical blank status (bit7)
+MOUSEDLT = $00C024        ; harness ADB delta FIFO (signed dx, then dy)
+MOUSESTA = $00C027        ; bit7 = movement pending, bit0 = button state
 
 ; ----------------------------------------------------------- SHR layout (bank E1)
-SHR_PIX  = $2000
+; Kernel-normal DBR=$00 (state/tables in fast bank-0 RAM); the SHR framebuffer
+; in bank $E1 is reached via 24-bit pointers ([GP]/[mtmp], bank byte=$E1) and
+; long-indexed (f:SHR*) stores, so DBR never has to move.
+SHR_PIX  = $2000          ; 16-bit offset within bank $E1
 SHR_SCB  = $9D00
 SHR_PAL  = $9E00
 SHR_BANK = $E1
+SHRPIXL  = $E12000        ; full long addresses for f: indexed stores
+SHRSCBL  = $E19D00
+SHRPALL  = $E19E00
 ROWBYTES = 160
-NPIX     = 32000          ; 200 * 160
+NPIX     = 32000
 
-; ----------------------------------------------------------- zero page scratch
-GP      = $10             ; 16-bit SHR dest offset (within bank $E1)
-GIDX    = $12             ; 16-bit font index
-STRP    = $1C             ; 24-bit string pointer ($1C lo,$1D hi,$1E bank)
-fbits   = $14             ; current font row bits
-pxtmp   = $15             ; pixel-byte build temp
-rowc    = $16             ; glyph row / band row counter
-cur_fg  = $17             ; foreground palette index (0..15)
-cur_bg  = $18             ; background palette index
-cur_fgh = $19             ; fg << 4
-cur_bgh = $1A             ; bg << 4
-mtmp    = $20             ; 16-bit math temp
-mtmp2   = $22
-; rectangle / position parameters (16-bit words; high byte 0)
-PX      = $30             ; xbyte
-PY      = $32             ; yrow
-PW      = $34             ; width in bytes
-PH      = $36             ; height in rows
-PB      = $38             ; fill byte value
+; ----------------------------------------------------------- pseudo-registers (zp)
+; Layout mirrors the SNES port so the ported WM/app code reads identically.
+P0  = $00
+A0  = $02
+A1  = $04
+A2  = $06
+A3  = $08
+A4  = $0A
+A5  = $0C
+A6  = $0E
+P1  = $10
+S0  = $12
+S1  = $14
+S2  = $16
+S3  = $18
+S4  = $1A
+S5  = $1C
+S6  = $1E
+S7  = $20
+DVQ = $22
+LC0 = $24
+LC1 = $26
+; ---- SHR primitive scratch ($30+, clear of the pseudo-regs) ----
+GP      = $30            ; 24-bit SHR pointer ($30 lo,$31 hi,$32 bank=$E1)
+GIDX    = $34            ; 16-bit font index
+fbits   = $36
+pxtmp    = $37
+rowc16  = $38           ; 16-bit row counter
+cur_fg  = $3A
+cur_bg  = $3B
+cur_fgh = $3C
+cur_bgh = $3D
+kbtmp   = $3E
+STRP    = $40            ; 24-bit string ptr ($40 lo,$41 hi,$42 bank=0)
+mtmp    = $44            ; 24-bit SHR pointer ($44 lo,$45 hi,$46 bank=$E1)
+mtmp2   = $48           ; 16-bit math temp
+PX      = $4A            ; fill_band params (pixel byte coords, words)
+PY      = $4C
+PW      = $4E
+PH      = $50
+PB      = $52
 
-; SETSTR: point STRP (24-bit, bank 0) at a NUL-terminated string label.
-.macro SETSTR lbl
-        lda #<lbl
-        sta STRP
-        lda #>lbl
-        sta STRP+1
-        stz STRP+2
-.endmacro
-
-; pixel-byte builder: A := (cur_*h | cur_*) per the two mask bits of fbits.
+; PIXBYTE: build a 4bpp pixel byte (two pixels) from fbits mask bits. (a8)
 .macro PIXBYTE mh, ml
 .local hi0, hidone, lo0, lodone
         lda fbits
@@ -83,288 +113,295 @@ lo0:    lda cur_bg
 lodone: ora pxtmp
 .endmacro
 
+; ----------------------------------------------------------- kernel state (abs)
+VARS = $1000
+v_magic     = VARS+$00
+v_frame     = VARS+$04
+v_secs      = VARS+$06
+v_last_secs = VARS+$08
+v_mouse_x   = VARS+$0A
+v_mouse_y   = VARS+$0C
+v_mouse_btn = VARS+$0E
+v_last_btn  = VARS+$10
+v_click_x   = VARS+$12
+v_click_y   = VARS+$14
+v_click_seq = VARS+$16
+v_last_seq  = VARS+$18
+v_drag_active = VARS+$1A
+v_drag_win  = VARS+$1C
+v_drag_offx = VARS+$1E
+v_drag_offy = VARS+$20
+v_zcount    = VARS+$22
+v_sel_icon  = VARS+$24
+v_dbl_icon  = VARS+$26
+v_dbl_frame = VARS+$28
+v_ev_head   = VARS+$2C
+v_ev_tail   = VARS+$2E
+v_cur_saved = VARS+$30
+v_cur_gp    = VARS+$32
+v_frac      = VARS+$34            ; sub-second frame accumulator
+v_numbuf    = VARS+$40            ; 16 bytes
+v_clkbuf    = VARS+$50            ; 16 bytes
+v_zlist     = VARS+$60            ; MAXWIN bytes
+v_wintab    = VARS+$70            ; MAXWIN * 16 bytes
+v_evq       = VARS+$100           ; EVQ_SIZE * 4 bytes
+v_curbuf    = VARS+$200           ; cursor save-under (14 rows * 4 bytes)
+
+; ----------------------------------------------------------- constants
+SCRW_C  = 40
+SCRH_C  = 25
+MAXWIN  = 6
+WENT_SIZE = 16
+WSTATE  = 0
+WPROC   = 1
+WX      = 2
+WY      = 4
+WW      = 6
+WH      = 8
+WTITLE  = 10
+ATTR_NORM = 0
+ATTR_INV  = 1
+ATTR_ACC  = 2
+ATTR_KEY  = 3
+MENUBAR_C = 1
+TICKS_SEC = 60
+DBLCLICK  = 30
+NICONS    = 2
+EVQ_SIZE  = 32
+EV_KEY    = 1
+EV_MOUSE  = 4
+
+; ============================================================================
 .segment "CODE"
 start:
         clc
-        xce                    ; ensure native (boot already did; belt+braces)
-        rep #$30               ; 16-bit A/X/Y
+        xce
+        rep #$30
         ldx #$01FF
-        txs                    ; stack in page 1
+        txs
         lda #0
-        tcd                    ; direct page = 0
+        tcd
 
-        ; ---- enable Super Hi-Res ----
-        sep #$20               ; 8-bit A
-        lda #$C1               ; SHR on (bit7) + linear
-        sta NEWVIDEO
-
-        ; ---- DBR = $E1 so absolute stores hit the SHR bank ----
+        sep #$20
+        lda #$C1
+        sta f:NEWVIDEO            ; enable SHR
+        phk
+        plb                    ; DBR = $00 (kernel-normal: bank-0 state/tables)
+        ; preset the bank byte of the two SHR pointers to $E1 (constant)
         lda #SHR_BANK
-        pha
-        plb
-        rep #$10               ; kernel-normal: 8-bit A, 16-bit X/Y
+        sta GP+2
+        sta mtmp+2
+        rep #$30
 
-        ; ---- clear 200 scanline control bytes -> palette 0, 320 mode ----
+        jsr clear_state
+        ; UDM1 magic
+        sep #$20
+        lda #'U'
+        sta v_magic+0
+        lda #'D'
+        sta v_magic+1
+        lda #'M'
+        sta v_magic+2
+        lda #'1'
+        sta v_magic+3
+        rep #$30
+
+        jsr init_scb_pal
+        ; initial cursor centre, no selection
+        lda #160
+        sta v_mouse_x
+        lda #100
+        sta v_mouse_y
+        lda #$FFFF
+        sta v_sel_icon
+        sta v_dbl_icon
+
+        jsr repaint_all
+        jsr draw_cursor
+
+; ----------------------------------------------------------------- main loop
+MainLoop:
+        rep #$30
+        .byte $42, $02         ; WDM #$02 - frame marker for the harness (NOP on hardware)
+        jsr erase_cursor
+        jsr tick
+        jsr poll_keyboard
+        jsr poll_mouse
+        jsr handle_clicks
+        jsr handle_drag
+        jsr handle_events
+        jsr app_ticks
+        jsr draw_cursor
+        bra MainLoop
+
+; ============================================================================
+; clear_state: zero VARS and clear the SCB/palette setup later. (enter a16)
+; ============================================================================
+.a16
+.i16
+clear_state:
+        lda #$0000
+        ldx #$0000
+@v:     sta VARS,x
+        inx
+        inx
+        cpx #$0300
+        bne @v
+        rts
+
+; init_scb_pal: 200 SCBs -> palette 0/320 mode, copy palette line 0.
+.a16
+.i16
+init_scb_pal:
+        sep #$20
         ldx #0
         lda #$00
-clr_scb:
-        sta SHR_SCB,x
+@scb:   sta f:SHRSCBL,x
         inx
         cpx #200
-        bcc clr_scb
-
-        ; ---- copy palette line 0 from the kernel image (bank 0) ----
+        bcc @scb
         ldx #0
-cp_pal:
-        lda f:pal_main,x       ; bank-0 source (long addressing)
-        sta SHR_PAL,x          ; DBR=$E1 destination
+@pal:   lda f:pal_main,x
+        sta f:SHRPALL,x
         inx
         cpx #32
-        bcc cp_pal
+        bcc @pal
+        rep #$30
+        rts
 
-        ; ---- desktop: fill all 32000 pixel bytes with index 0 (blue) ----
-        lda #$00
-        sta PB
-        jsr fill_screen
-
-        ; ================= menu bar: rows 0..9, light grey (5) =================
-        jsr p_clear
-        lda #ROWBYTES
-        sta PW
-        lda #10
-        sta PH
-        lda #$55               ; two index-5 pixels
-        sta PB
-        jsr fill_band
-        ; title text: blue (0) on grey (5)
+; ============================================================================
+; tick: advance frame + second counters (60 frames per second)
+; ============================================================================
+.a16
+.i16
+tick:
+        inc v_frame
+        lda v_frac
+        inc a
+        cmp #TICKS_SEC
+        bcc @nos
         lda #0
-        ldx #5
-        jsr set_color
-        lda #2                 ; xbyte
-        ldx #1                 ; yrow
-        jsr set_pos
-        SETSTR menu_title
-        jsr draw_string
-
-        ; ============== centre window panel: frame + body + titlebar ==========
-        ; black backing rect
-        jsr p_clear
-        lda #30
-        sta PX
-        lda #40
-        sta PY
-        lda #100
-        sta PW
-        lda #120
-        sta PH
-        lda #$44               ; black (4)
-        sta PB
-        jsr fill_band
-        ; cyan body inset 1 byte / 2 rows
-        lda #31
-        sta PX
-        lda #42
-        sta PY
-        lda #98
-        sta PW
-        lda #116
-        sta PH
-        lda #$22               ; cyan (2)
-        sta PB
-        jsr fill_band
-        ; deep-blue title bar (rows 42..53)
-        lda #31
-        sta PX
-        lda #42
-        sta PY
-        lda #98
-        sta PW
-        lda #12
-        sta PH
-        lda #$66               ; deep blue (6)
-        sta PB
-        jsr fill_band
-
-        ; panel title: white (1) on deep blue (6)
-        lda #1
-        ldx #6
-        jsr set_color
-        lda #34
-        ldx #44                ; yrow inside the panel title bar (42..53)
-        jsr set_pos
-        SETSTR panel_title
-        jsr draw_string
-
-        ; body lines: white (1) on cyan (2)
-        lda #1
-        ldx #2
-        jsr set_color
-        lda #34
-        ldx #60                ; body lines inside the cyan panel body
-        jsr set_pos
-        SETSTR line1
-        jsr draw_string
-        lda #34
-        ldx #74
-        jsr set_pos
-        SETSTR line2
-        jsr draw_string
-        lda #34
-        ldx #88
-        jsr set_pos
-        SETSTR line3
-        jsr draw_string
-        lda #34
-        ldx #102
-        jsr set_pos
-        SETSTR line4
-        jsr draw_string
-
-done:
-        stp                    ; CPU halts; Mega II keeps the SHR image on screen
-
-; ============================================================================
-; fill_screen: fill all NPIX pixel bytes with PB (replicated into a word).
-; ============================================================================
-fill_screen:
-        rep #$20
-        lda PB
-        and #$00FF
-        sta mtmp
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        ora mtmp               ; word = byteval:byteval
-        ldx #0
-fs_loop:
-        sta SHR_PIX,x
-        inx
-        inx
-        cpx #NPIX
-        bcc fs_loop
-        sep #$20
+        inc v_secs
+@nos:   sta v_frac
         rts
 
 ; ============================================================================
-; fill_band: fill PW-byte x PH-row rectangle at (PX,PY) with PB. DBR=$E1.
+; SHR primitives
 ; ============================================================================
-fill_band:
-        jsr calc_gp            ; GP = SHR offset of (PX,PY)
-        lda PH                 ; low byte (PH <= 200)
-        sta rowc
-fb_row:
-        ldy #0
-fb_col:
-        lda PB
-        sta (GP),y
-        iny
-        cpy PW
-        bcc fb_col
-        rep #$20               ; GP += ROWBYTES
-        lda GP
-        clc
-        adc #ROWBYTES
-        sta GP
-        sep #$20
-        dec rowc
-        bne fb_row
-        rts
 
-; ============================================================================
-; calc_gp: GP = SHR_PIX + PY*160 + PX   (16-bit math; restores 8-bit A)
-; ============================================================================
-calc_gp:
-        rep #$20
+; calc_gp_px: GP = SHR_PIX + PY*160 + PX  (PX byte, PY row; 16-bit)
+.a16
+.i16
+calc_gp_px:
         lda PY
-        asl a                  ; *2
-        asl a                  ; *4
-        asl a                  ; *8
-        asl a                  ; *16
-        asl a                  ; *32
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
         sta mtmp2              ; PY*32
-        asl a                  ; *64
-        asl a                  ; *128
+        asl a
+        asl a
         clc
-        adc mtmp2              ; *160
+        adc mtmp2             ; *160
         clc
         adc #SHR_PIX
         clc
         adc PX
         sta GP
-        sep #$20
         rts
 
-; ============================================================================
-; p_clear: zero the 16-bit rectangle parameter words (PX..PH). (8-bit A)
-; ============================================================================
-p_clear:
+; fill_band: fill PW(bytes) x PH(rows) at (PX,PY) with PB. (enter/exit a16)
+.a16
+.i16
+fill_band:
+        jsr calc_gp_px
+        lda PH
+        sta rowc16
+@row:   ldy #0
+        sep #$20
+        lda PB
+@col:   sta [GP],y
+        iny
+        cpy PW
+        bcc @col
         rep #$20
-        stz PX
-        stz PY
-        stz PW
-        stz PH
-        sep #$20
+        lda GP
+        clc
+        adc #ROWBYTES
+        sta GP
+        dec rowc16
+        bne @row
         rts
 
-; ============================================================================
-; set_color: A = fg index, X = bg index. Builds cur_fg/bg and <<4 forms.
-; ============================================================================
-set_color:
+; fill_screen: fill all NPIX bytes with PB (replicated word). (a16)
+.a16
+.i16
+fill_screen:
+        lda PB
+        and #$00FF
+        sta mtmp2
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        ora mtmp2
+        ldx #0
+@l:     sta f:SHRPIXL,x
+        inx
+        inx
+        cpx #NPIX
+        bcc @l
+        rts
+
+; set_attr: A = attr index (0..3) -> cur_fg/bg (+ <<4 forms). (a16)
+.a16
+.i16
+set_attr:
+        and #$00FF
+        tax
+        sep #$20
+        lda f:attr_fg,x
         sta cur_fg
-        txa
-        sta cur_bg
-        lda cur_fg
         asl a
         asl a
         asl a
         asl a
         sta cur_fgh
-        lda cur_bg
+        lda f:attr_bg,x
+        sta cur_bg
         asl a
         asl a
         asl a
         asl a
         sta cur_bgh
+        rep #$20
         rts
 
-; ============================================================================
-; set_pos: A = xbyte, X = yrow.  Sets PX/PY and computes GP.
-; ============================================================================
-set_pos:
-        rep #$20
-        and #$00FF
-        sta PX
-        sep #$20
-        rep #$20
-        txa
-        and #$00FF
-        sta PY
-        sep #$20
-        jsr calc_gp
-        rts
-
-; ============================================================================
-; draw_char: A = ASCII char.  Renders the 8x8 glyph at GP (4bpp), then
-; advances GP by one glyph width (4 bytes / 8 px). 8-bit A, 16-bit X/Y.
-; ============================================================================
-draw_char:
-        rep #$20
+; render_glyph: A = char (low byte), GP set, cur_* set. Draws 8x8 4bpp,
+; advances GP by 4 (one glyph). (enter/exit a16, i16)
+.a16
+.i16
+render_glyph:
         and #$00FF
         sec
         sbc #FONT_FIRST
-        asl a
+        bcc @blank
+        cmp #FONT_GLYPHS
+        bcc @ok
+@blank: lda #0
+@ok:    asl a
         asl a
         asl a                  ; *8
         sta GIDX
         sep #$20
         lda #8
-        sta rowc
-dc_row:
+        sta rowc16
+rg_row:
         ldx GIDX
         lda f:font_data,x
         sta fbits
@@ -373,27 +410,26 @@ dc_row:
         sep #$20
         ldy #0
         PIXBYTE $80, $40
-        sta (GP),y
+        sta [GP],y
         iny
         PIXBYTE $20, $10
-        sta (GP),y
+        sta [GP],y
         iny
         PIXBYTE $08, $04
-        sta (GP),y
+        sta [GP],y
         iny
         PIXBYTE $02, $01
-        sta (GP),y
-        rep #$20               ; GP += ROWBYTES (next scanline)
+        sta [GP],y
+        rep #$20
         lda GP
         clc
         adc #ROWBYTES
         sta GP
         sep #$20
-        dec rowc
-        beq dc_done
-        jmp dc_row
-dc_done:
-        ; rewind GP to row 0 and advance one glyph width
+        dec rowc16
+        beq rg_done
+        jmp rg_row
+rg_done:
         rep #$20
         lda GP
         sec
@@ -401,30 +437,1436 @@ dc_done:
         clc
         adc #4
         sta GP
-        sep #$20
         rts
 
 ; ============================================================================
-; draw_string: STRP -> NUL-terminated string (bank 0). Renders at GP.
+; Cell-level primitives (cell = 8x8 px). Signatures mirror the SNES port.
 ; ============================================================================
-draw_string:
-        ldy #0
-ds_loop:
+
+; fill_cells: A0=cx A1=cy A2=ncols A3=nrows A4=attr. (a16)
+.a16
+.i16
+fill_cells:
+        lda A0
+        asl a
+        asl a
+        sta PX                 ; cx*4 bytes
+        lda A1
+        asl a
+        asl a
+        asl a
+        sta PY                 ; cy*8 rows
+        lda A2
+        asl a
+        asl a
+        sta PW                 ; ncols*4 bytes
+        lda A3
+        asl a
+        asl a
+        asl a
+        sta PH                 ; nrows*8 rows
+        lda A4
+        and #$00FF
+        tax
+        sep #$20
+        lda f:attr_bg,x
+        sta pxtmp
+        asl a
+        asl a
+        asl a
+        asl a
+        ora pxtmp              ; bg*$11
+        sta PB
+        rep #$20
+        jsr fill_band
+        rts
+
+; draw_str: P0=ptr (bank0) A0=cx A1=cy A4=attr. (a16)
+.a16
+.i16
+draw_str:
+        lda A4
+        jsr set_attr
+        lda A0
+        asl a
+        asl a
+        sta PX
+        lda A1
+        asl a
+        asl a
+        asl a
+        sta PY
+        jsr calc_gp_px
+        lda P0
+        sta STRP
+        sep #$20
+        stz STRP+2
+        rep #$20
+        stz S7                 ; string index (preserved across render_glyph)
+@ch:    ldy S7
+        sep #$20
         lda [STRP],y
-        beq ds_done
-        phy
+        rep #$20
+        and #$00FF
+        beq @done
+        jsr render_glyph
+        inc S7
+        bra @ch
+@done:  rts
+
+; draw_char: A0=cx A1=cy A2=char A4=attr. (a16)
+.a16
+.i16
+draw_char:
+        lda A4
+        jsr set_attr
+        lda A0
+        asl a
+        asl a
+        sta PX
+        lda A1
+        asl a
+        asl a
+        asl a
+        sta PY
+        jsr calc_gp_px
+        lda A2
+        jsr render_glyph
+        rts
+
+; clear_screen: desktop blue (index 0). (a16)
+.a16
+.i16
+clear_screen:
+        stz PB
+        jsr fill_screen
+        rts
+
+; ============================================================================
+; Desktop
+; ============================================================================
+.a16
+.i16
+draw_desktop:
+        ; menu bar row 0: white (INV), title in blue
+        stz A0
+        stz A1
+        lda #SCRW_C
+        sta A2
+        lda #1
+        sta A3
+        lda #ATTR_INV
+        sta A4
+        jsr fill_cells
+        lda #.loword(str_menutitle)
+        sta P0
+        lda #1
+        sta A0
+        stz A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+        ; version / build line at the bottom-left
+        lda #.loword(str_version)
+        sta P0
+        stz A0
+        lda #(SCRH_C-1)
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; icons
+        stz LC0
+@icon:  lda LC0
+        jsr draw_icon
+        inc LC0
+        lda LC0
+        cmp #NICONS
+        bne @icon
+        rts
+
+; draw_icon: A = icon index (label, inverted when selected). (a16)
+.a16
+.i16
+draw_icon:
+        and #$00FF
+        sta S4
+        asl a
+        asl a
+        tax
+        lda f:icon_tab,x
+        sta A0
+        lda f:icon_tab+2,x
+        sta A1
+        lda S4
+        asl a
+        tax
+        lda f:icon_names,x
+        sta P0
+        lda #ATTR_NORM
+        sta A4
+        ldx v_sel_icon
+        cpx S4
+        bne @attr
+        lda #ATTR_INV
+        sta A4
+@attr:  jsr draw_str
+        rts
+
+; icon_at: A0=cx A1=cy -> A = icon index or $FFFF. (a16)
+.a16
+.i16
+icon_at:
+        stz S2
+@scan:  lda S2
+        asl a
+        asl a
+        tax
+        lda f:icon_tab,x
+        sta S0
+        lda f:icon_tab+2,x
+        cmp A1
+        bne @next
+        lda A0
+        sec
+        sbc S0
+        bcc @next
+        cmp #9
+        bcs @next
+        lda S2
+        rts
+@next:  inc S2
+        lda S2
+        cmp #NICONS
+        bne @scan
+        lda #$FFFF
+        rts
+
+; select_icon: A = icon index. Redraw old (unselected) + new (selected). (a16)
+.a16
+.i16
+select_icon:
+        sta S7
+        lda v_sel_icon
+        sta S6
+        lda S7
+        sta v_sel_icon
+        lda S6
+        cmp #$FFFF
+        beq @new
+        jsr draw_icon
+@new:   lda S7
+        jsr draw_icon
+        rts
+
+; ============================================================================
+; Window manager (cell coordinates) - ported from snes/kernel.asm
+; ============================================================================
+.a16
+.i16
+ent_x:
+        and #$00FF
+        asl a
+        asl a
+        asl a
+        asl a
+        tax
+        rts
+
+.a16
+.i16
+zent_x:
+        and #$00FF
+        tax
+        sep #$20
+        lda v_zlist,x
+        rep #$20
+        and #$00FF
+        asl a
+        asl a
+        asl a
+        asl a
+        tax
+        rts
+
+.a16
+.i16
+launch_app:
+        sta S3
+        stz S2
+@scan:  lda S2
+        jsr ent_x
+        sep #$20
+        lda v_wintab+WSTATE,x
+        beq @next
+        lda v_wintab+WPROC,x
+        cmp S3
+        bne @next
+        rep #$20
+        lda S2
+        jsr z_index_of
+        cmp #$FFFF
+        beq @next16
+        jsr raise_window
+        rts
+@next:  rep #$20
+@next16:
+        inc S2
+        lda S2
+        cmp #MAXWIN
+        bne @scan
+        lda S3
+        jsr win_create
+        rts
+
+.a16
+.i16
+win_create:
+        sta S3
+        stz S2
+@find:  lda S2
+        jsr ent_x
+        sep #$20
+        lda v_wintab+WSTATE,x
+        rep #$20
+        beq @got
+        inc S2
+        lda S2
+        cmp #MAXWIN
+        bne @find
+        rts
+@got:   ; def offset = proc*10 -> X (long index; 65816 long-indexed is X-only)
+        lda S3
+        asl a                  ; *2
+        sta S0
+        asl a
+        asl a                  ; *8
+        clc
+        adc S0                 ; *10
+        tax
+        ; read the 5 geometry/title words into temps via long,x
+        lda f:app_def_tab+0,x
+        sta S4
+        lda f:app_def_tab+2,x
+        sta S5
+        lda f:app_def_tab+4,x
+        sta S6
+        lda f:app_def_tab+6,x
+        sta S7
+        lda f:app_def_tab+8,x
+        sta A6
+        ; now X = entry offset, store the new window
+        lda S2
+        jsr ent_x
+        sep #$20
+        lda #$01
+        sta v_wintab+WSTATE,x
+        lda S3
+        sta v_wintab+WPROC,x
+        rep #$20
+        lda S4
+        sta v_wintab+WX,x
+        lda S5
+        sta v_wintab+WY,x
+        lda S6
+        sta v_wintab+WW,x
+        lda S7
+        sta v_wintab+WH,x
+        lda A6
+        sta v_wintab+WTITLE,x
+        lda v_zcount
+        phx
+        tax
+        lda S2
+        sep #$20
+        sta v_zlist,x
+        rep #$20
+        plx
+        inc v_zcount
+        jsr repaint_all
+        rts
+
+.a16
+.i16
+z_index_of:
+        and #$00FF
+        sta S0
+        stz S1
+@scan:  lda S1
+        cmp v_zcount
+        bcs @no
+        lda S1
+        tax
+        sep #$20
+        lda v_zlist,x
+        rep #$20
+        and #$00FF
+        cmp S0
+        beq @yes
+        inc S1
+        bra @scan
+@yes:   lda S1
+        rts
+@no:    lda #$FFFF
+        rts
+
+.a16
+.i16
+find_window_at:
+        lda v_zcount
+        beq @no
+        dec a
+        sta S2
+@scan:  lda S2
+        bmi @no
+        jsr zent_x
+        lda A0
+        cmp v_wintab+WX,x
+        bcc @next
+        lda v_wintab+WX,x
+        clc
+        adc v_wintab+WW,x
+        dec a
+        cmp A0
+        bcc @next
+        lda A1
+        cmp v_wintab+WY,x
+        bcc @next
+        lda v_wintab+WY,x
+        clc
+        adc v_wintab+WH,x
+        dec a
+        cmp A1
+        bcc @next
+        lda S2
+        rts
+@next:  dec S2
+        bra @scan
+@no:    lda #$FFFF
+        rts
+
+.a16
+.i16
+raise_window:
+        sta S0
+        lda v_zcount
+        dec a
+        cmp S0
+        beq @done
+        lda S0
+        tax
+        sep #$20
+        lda v_zlist,x
+        sta S1
+        rep #$20
+@shift: lda S0
+        cmp v_zcount
+        bcs @place
+        inc a
+        cmp v_zcount
+        bcs @place
+        ldx S0
+        sep #$20
+        lda v_zlist+1,x
+        sta v_zlist,x
+        rep #$20
+        inc S0
+        bra @shift
+@place: ldx S0
+        sep #$20
+        lda S1
+        sta v_zlist,x
+        rep #$20
+        jsr repaint_all
+@done:  rts
+
+.a16
+.i16
+close_window:
+        sta S0
+        jsr zent_x
+        sep #$20
+        stz v_wintab+WSTATE,x
+        rep #$20
+        lda v_zcount
+        dec a
+        sta v_zcount
+@shift: lda S0
+        cmp v_zcount
+        bcs @done
+        ldx S0
+        sep #$20
+        lda v_zlist+1,x
+        sta v_zlist,x
+        rep #$20
+        inc S0
+        bra @shift
+@done:  jsr repaint_all
+        rts
+
+.a16
+.i16
+close_topmost:
+        lda v_zcount
+        beq @out
+        dec a
+        jsr close_window
+@out:   rts
+
+.a16
+.i16
+repaint_all:
+        jsr clear_screen
+        jsr draw_desktop
+        stz LC1
+@wins:  lda LC1
+        cmp v_zcount
+        bcs @done
+        jsr zent_x
+        jsr draw_window
+        inc LC1
+        bra @wins
+@done:  rts
+
+.a16
+.i16
+redraw_topmost:
+        lda v_zcount
+        beq @out
+        dec a
+        jsr zent_x
+        jsr draw_window
+@out:   rts
+
+; draw_window: X = entry byte offset
+.a16
+.i16
+draw_window:
+        stx S2
+        ; body NORM (blue) whole window
+        ldx S2
+        lda v_wintab+WX,x
+        sta A0
+        lda v_wintab+WY,x
+        sta A1
+        lda v_wintab+WW,x
+        sta A2
+        lda v_wintab+WH,x
+        sta A3
+        lda #ATTR_NORM
+        sta A4
+        jsr fill_cells
+        ; title bar INV (white) 1 cell
+        ldx S2
+        lda v_wintab+WX,x
+        sta A0
+        lda v_wintab+WY,x
+        sta A1
+        lda v_wintab+WW,x
+        sta A2
+        lda #1
+        sta A3
+        lda #ATTR_INV
+        sta A4
+        jsr fill_cells
+        jsr draw_frame_px
+        ; title text INV
+        ldx S2
+        lda v_wintab+WTITLE,x
+        sta P0
+        lda v_wintab+WX,x
+        sta A0
+        lda v_wintab+WY,x
+        sta A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+        ; close 'X' INV at top-right
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc v_wintab+WW,x
+        sec
+        sbc #2
+        sta A0
+        lda v_wintab+WY,x
+        sta A1
+        lda #'X'
+        sta A2
+        lda #ATTR_INV
+        sta A4
         jsr draw_char
-        ply
+        ; content
+        ldx S2
+        sep #$20
+        lda v_wintab+WPROC,x
+        rep #$20
+        and #$00FF
+        jsr app_draw_content
+        rts
+
+; draw_frame_px: thin white outline of the window (S2 = entry offset).
+.a16
+.i16
+draw_frame_px:
+        ; top
+        ldx S2
+        lda v_wintab+WX,x
+        asl a
+        asl a
+        sta PX
+        lda v_wintab+WY,x
+        asl a
+        asl a
+        asl a
+        sta PY
+        lda v_wintab+WW,x
+        asl a
+        asl a
+        sta PW
+        lda #1
+        sta PH
+        lda #$11
+        sta PB
+        jsr fill_band
+        ; bottom
+        ldx S2
+        lda v_wintab+WY,x
+        clc
+        adc v_wintab+WH,x
+        asl a
+        asl a
+        asl a
+        dec a
+        sta PY
+        lda #1
+        sta PH
+        jsr fill_band
+        ; left
+        ldx S2
+        lda v_wintab+WX,x
+        asl a
+        asl a
+        sta PX
+        lda v_wintab+WY,x
+        asl a
+        asl a
+        asl a
+        sta PY
+        lda #1
+        sta PW
+        lda v_wintab+WH,x
+        asl a
+        asl a
+        asl a
+        sta PH
+        jsr fill_band
+        ; right
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc v_wintab+WW,x
+        asl a
+        asl a
+        dec a
+        sta PX
+        lda v_wintab+WY,x
+        asl a
+        asl a
+        asl a
+        sta PY
+        lda #1
+        sta PW
+        lda v_wintab+WH,x
+        asl a
+        asl a
+        asl a
+        sta PH
+        jsr fill_band
+        rts
+
+; app_draw_content: A = proc index, S2 = entry offset
+.a16
+.i16
+app_draw_content:
+        cmp #0
+        beq @sysinfo
+        cmp #1
+        beq @clock
+        rts
+@sysinfo:
+        jmp sysinfo_draw
+@clock:
+        jmp clock_draw
+
+; ============================================================================
+; SysInfo (proc 0) + Clock (proc 1)
+; ============================================================================
+.a16
+.i16
+sysinfo_draw:
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #2
+        sta S3                 ; left col
+        lda v_wintab+WY,x
+        clc
+        adc #2
+        sta A6                 ; top row
+        lda #.loword(str_si1)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        lda #.loword(str_si2)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        inc a
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        lda #.loword(str_si3)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        clc
+        adc #2
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        lda #.loword(str_si4)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        clc
+        adc #3
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        lda #.loword(str_si5)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        clc
+        adc #4
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; uptime (accent)
+        lda v_secs
+        sta S0
+        jsr fmt_dec
+        lda #.loword(str_uptime)
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        clc
+        adc #6
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S3
+        clc
+        adc #8
+        sta A0
+        lda A6
+        clc
+        adc #6
+        sta A1
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        rts
+
+.a16
+.i16
+clock_draw:
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #2
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #2
+        sta A1
+        lda #.loword(str_uptime)
+        sta P0
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
+        ; HH:MM:SS into v_clkbuf
+        lda #.loword(v_clkbuf)
+        sta P1
+        lda v_secs
+        sta S0
+        lda #60
+        sta S1
+        jsr div16              ; A = total minutes, S0 = seconds
+        sta S7
+        lda S0
+        sta A5                 ; seconds
+        lda S7
+        sta S0
+        lda #60
+        sta S1
+        jsr div16              ; A = hours, S0 = minutes
+        sta A6
+        lda S0
+        sta A3
+        lda A6
+        jsr put2dig
+        lda #':'
+        jsr putchar
+        lda A3
+        jsr put2dig
+        lda #':'
+        jsr putchar
+        lda A5
+        jsr put2dig
+        sep #$20
+        lda #0
+        sta (P1)
+        rep #$20
+        ; centred accent time
+        ldx S2
+        lda v_wintab+WW,x
+        lsr a
+        clc
+        adc v_wintab+WX,x
+        sec
+        sbc #4
+        sta A0
+        lda v_wintab+WH,x
+        lsr a
+        clc
+        adc v_wintab+WY,x
+        sta A1
+        lda #.loword(v_clkbuf)
+        sta P0
+        lda #ATTR_ACC
+        sta A4
+        jsr draw_str
+        rts
+
+; ============================================================================
+; Number formatting
+; ============================================================================
+.a16
+.i16
+div16:
+        stz DVQ
+@loop:  lda S0
+        cmp S1
+        bcc @done
+        sec
+        sbc S1
+        sta S0
+        inc DVQ
+        bra @loop
+@done:  lda DVQ
+        rts
+
+.a16
+.i16
+put2dig:
+        sta S0
+        lda #10
+        sta S1
+        jsr div16
+        clc
+        adc #'0'
+        pha
+        lda S0
+        clc
+        adc #'0'
+        sta S4
+        pla
+        jsr putchar
+        lda S4
+        jsr putchar
+        rts
+
+.a16
+.i16
+putchar:
+        sep #$20
+        sta (P1)
+        rep #$20
+        inc P1
+        rts
+
+.a16
+.i16
+fmt_dec:
+        stz S5
+@gen:   lda #10
+        sta S1
+        jsr div16
+        sta S6
+        lda S0
+        clc
+        adc #'0'
+        pha
+        inc S5
+        lda S6
+        sta S0
+        bne @gen
+        lda #.loword(v_numbuf)
+        sta P1
+@pop:   pla
+        jsr putchar
+        dec S5
+        bne @pop
+        sep #$20
+        lda #0
+        sta (P1)
+        rep #$20
+        rts
+
+; ============================================================================
+; Event queue
+; ============================================================================
+.a16
+.i16
+ev_post:
+        lda v_ev_tail
+        sta S6
+        inc a
+        and #(EVQ_SIZE-1)
+        sta S7
+        cmp v_ev_head
+        beq @full
+        lda S6
+        asl a
+        asl a
+        tax
+        sep #$20
+        lda A0
+        sta v_evq,x
+        rep #$20
+        lda A1
+        sta v_evq+2,x
+        lda S7
+        sta v_ev_tail
+@full:  rts
+
+.a16
+.i16
+ev_get:
+        lda v_ev_head
+        cmp v_ev_tail
+        beq @empty
+        sta S6
+        asl a
+        asl a
+        tax
+        sep #$20
+        lda v_evq,x
+        sta S7
+        rep #$20
+        lda v_evq+2,x
+        sta A1
+        lda S6
+        inc a
+        and #(EVQ_SIZE-1)
+        sta v_ev_head
+        lda S7
+        and #$00FF
+        rts
+@empty: lda #0
+        rts
+
+; ============================================================================
+; Input
+; ============================================================================
+
+; poll_keyboard: $C000 latch -> EV_KEY (ascii in A1 low). (a16)
+.a16
+.i16
+poll_keyboard:
+        sep #$20
+        lda f:KBD
+        bpl @none
+        and #$7F
+        sta kbtmp
+        lda f:KBDSTRB            ; clear strobe
+        rep #$20
+        lda kbtmp
+        and #$00FF
+        sta A1
+        lda #EV_KEY
+        sta A0
+        jsr ev_post
+        rts
+@none:  rep #$20
+        rts
+
+; poll_mouse: drain the ADB delta FIFO into v_mouse_x/y; latch press. (a16)
+.a16
+.i16
+poll_mouse:
+@loop:  sep #$20
+        lda f:MOUSESTA
+        bpl @btn               ; bit7 clear: no movement pending
+        rep #$20
+        ; dx
+        sep #$20
+        lda f:MOUSEDLT
+        rep #$20
+        and #$00FF
+        cmp #$0080
+        bcc @dxp
+        ora #$FF00
+@dxp:   clc
+        adc v_mouse_x
+        bpl @dxnn
+        lda #0
+@dxnn:  cmp #320
+        bcc @dxok
+        lda #319
+@dxok:  sta v_mouse_x
+        ; dy
+        sep #$20
+        lda f:MOUSEDLT
+        rep #$20
+        and #$00FF
+        cmp #$0080
+        bcc @dyp
+        ora #$FF00
+@dyp:   clc
+        adc v_mouse_y
+        bpl @dynn
+        lda #0
+@dynn:  cmp #200
+        bcc @dyok
+        lda #199
+@dyok:  sta v_mouse_y
+        bra @loop
+@btn:   rep #$20
+        sep #$20
+        lda f:MOUSESTA
+        and #$01
+        rep #$20
+        and #$00FF
+        sta v_mouse_btn
+        cmp v_last_btn
+        beq @done
+        sta v_last_btn
+        cmp #1
+        bne @done
+        ; press edge: latch position + sequence
+        lda v_mouse_x
+        sta v_click_x
+        lda v_mouse_y
+        sta v_click_y
+        inc v_click_seq
+@done:  rts
+
+; handle_clicks: consume the press latch (PORT-SPEC rule 4). (a16)
+.a16
+.i16
+handle_clicks:
+        lda v_click_seq
+        cmp v_last_seq
+        bne @work
+        rts
+@work:  sta v_last_seq
+        lda v_click_x
+        lsr a
+        lsr a
+        lsr a
+        sta A0                 ; cell x
+        lda v_click_y
+        lsr a
+        lsr a
+        lsr a
+        sta A1                 ; cell y
+        jsr find_window_at
+        cmp #$FFFF
+        beq @desktop
+        sta S3
+        jsr zent_x
+        lda A1
+        cmp v_wintab+WY,x
+        beq @title
+        ; body click: raise if not topmost
+        lda v_zcount
+        dec a
+        cmp S3
+        bne :+
+        rts
+:       lda S3
+        jsr raise_window
+        rts
+@title: lda v_wintab+WX,x
+        clc
+        adc v_wintab+WW,x
+        sec
+        sbc #2
+        cmp A0
+        bcc @close
+        beq @close
+        ; drag start
+        lda S3
+        jsr raise_window
+        lda v_zcount
+        dec a
+        jsr zent_x
+        lda A0
+        sec
+        sbc v_wintab+WX,x
+        sta v_drag_offx
+        lda A1
+        sec
+        sbc v_wintab+WY,x
+        sta v_drag_offy
+        stx v_drag_win
+        lda #1
+        sta v_drag_active
+        rts
+@close: lda S3
+        jsr close_window
+        rts
+@desktop:
+        jsr icon_at
+        cmp #$FFFF
+        beq @desel
+        sta S3
+        lda v_dbl_icon
+        cmp S3
+        bne @single
+        lda v_frame
+        sec
+        sbc v_dbl_frame
+        cmp #DBLCLICK
+        bcs @single
+        lda #$FFFF
+        sta v_dbl_icon
+        lda S3
+        jsr select_icon
+        lda S3
+        asl a
+        tax
+        lda f:icon_procs,x
+        jsr launch_app
+        rts
+@single:
+        lda S3
+        sta v_dbl_icon
+        lda v_frame
+        sta v_dbl_frame
+        lda S3
+        jsr select_icon
+        rts
+@desel: lda #$FFFF
+        sta v_dbl_icon
+        rts
+
+; handle_drag: live cell-snapped drag while button held. (a16)
+.a16
+.i16
+handle_drag:
+        lda v_drag_active
+        bne @active
+        rts
+@active:
+        lda v_mouse_btn
+        bne @held
+        stz v_drag_active
+        rts
+@held:  ldx v_drag_win
+        lda v_mouse_x
+        lsr a
+        lsr a
+        lsr a
+        sec
+        sbc v_drag_offx
+        bpl @xpos
+        lda #0
+@xpos:  sta A0
+        lda #SCRW_C
+        sec
+        sbc v_wintab+WW,x
+        cmp A0
+        bcs @xok
+        sta A0
+@xok:   lda v_mouse_y
+        lsr a
+        lsr a
+        lsr a
+        sec
+        sbc v_drag_offy
+        sta A1
+        lda A1
+        cmp #MENUBAR_C
+        bcs @ymin
+        lda #MENUBAR_C
+        sta A1
+@ymin:  lda #(SCRH_C-1)
+        cmp A1
+        bcs @yok
+        sta A1
+@yok:   ldx v_drag_win
+        lda A0
+        cmp v_wintab+WX,x
+        bne @move
+        lda A1
+        cmp v_wintab+WY,x
+        beq @done
+@move:  ldx v_drag_win
+        lda A0
+        sta v_wintab+WX,x
+        lda A1
+        sta v_wintab+WY,x
+        jsr repaint_all
+@done:  rts
+
+; handle_events: drain the queue. ESC closes topmost; else route by focus. (a16)
+.a16
+.i16
+handle_events:
+@next:  jsr ev_get
+        cmp #0
+        bne @hk
+        rts
+@hk:    cmp #EV_KEY
+        bne @next
+        lda A1
+        and #$00FF
+        sta S0                 ; ascii
+        lda v_zcount
+        beq @desktop
+        lda S0
+        cmp #$1B
+        bne @app
+        jsr close_topmost
+        bra @next
+@app:   ; (apps have no key handlers yet in M1)
+        bra @next
+@desktop:
+        lda S0
+        cmp #$15               ; right arrow
+        beq @right
+        cmp #$08               ; left arrow
+        beq @left
+        cmp #$0D               ; return
+        beq @launch
+        bra @next
+@right: lda v_sel_icon
+        cmp #$FFFF
+        beq @selz
+        inc a
+        cmp #NICONS
+        bcc @setsel
+@selz:  lda #0
+        bra @setsel
+@left:  lda v_sel_icon
+        cmp #$FFFF
+        beq @lwrap
+        dec a
+        bpl @setsel
+@lwrap: lda #(NICONS-1)
+@setsel:
+        jsr select_icon
+        jmp @next
+@launch:
+        lda v_sel_icon
+        cmp #$FFFF
+        beq @ldone
+        asl a
+        tax
+        lda f:icon_procs,x
+        jsr launch_app
+@ldone: jmp @next
+
+; app_ticks: refresh topmost once a second (clock/uptime). (a16)
+.a16
+.i16
+app_ticks:
+        lda v_secs
+        cmp v_last_secs
+        beq @out
+        sta v_last_secs
+        lda v_zcount
+        beq @out
+        jsr redraw_topmost
+@out:   rts
+
+; ============================================================================
+; Software cursor (save-under). 8x14 arrow, white over the desktop.
+; ============================================================================
+.a16
+.i16
+draw_cursor:
+        lda v_mouse_x
+        lsr a
+        cmp #157
+        bcc @xc
+        lda #156
+@xc:    sta S0                 ; xbyte
+        lda v_mouse_y
+        cmp #186
+        bcc @yc
+        lda #185
+@yc:    sta S1                 ; ytop
+        lda S0
+        sta PX
+        lda S1
+        sta PY
+        jsr calc_gp_px
+        lda GP
+        sta v_cur_gp
+        sta mtmp               ; running addr
+        ; save 14 rows x 4 bytes
+        ldx #0
+        lda #14
+        sta rowc16
+@srow:  ldy #0
+        sep #$20
+@scol:  lda [mtmp],y
+        sta v_curbuf,x
+        inx
         iny
-        bra ds_loop
-ds_done:
+        cpy #4
+        bcc @scol
+        rep #$20
+        lda mtmp
+        clc
+        adc #ROWBYTES
+        sta mtmp
+        dec rowc16
+        bne @srow
+        ; draw arrow mask white
+        lda v_cur_gp
+        sta mtmp
+        stz S2                 ; row r
+@drow:  ldx S2
+        sep #$20
+        lda f:cursor_mask,x
+        sta fbits
+        rep #$20
+        stz S3                 ; col c
+@dcol:  ldx S3
+        sep #$20
+        lda f:bitmask_tab,x
+        and fbits
+        beq @dnext
+        ; set pixel white at (mtmp + c>>1), nibble per parity
+        rep #$20
+        lda S3
+        lsr a
+        tay                    ; byte offset within row
+        sep #$20
+        lda [mtmp],y
+        pha
+        lda S3
+        and #1
+        bne @lo
+        pla
+        and #$0F
+        ora #$10
+        bra @wr
+@lo:    pla
+        and #$F0
+        ora #$01
+@wr:    sta [mtmp],y
+        rep #$20
+@dnext: rep #$20
+        inc S3
+        lda S3
+        cmp #8
+        bcc @dcol
+        lda mtmp
+        clc
+        adc #ROWBYTES
+        sta mtmp
+        inc S2
+        lda S2
+        cmp #14
+        bcc @drow
+        lda #1
+        sta v_cur_saved
+        rts
+
+.a16
+.i16
+erase_cursor:
+        lda v_cur_saved
+        bne @go
+        rts
+@go:    stz v_cur_saved
+        lda v_cur_gp
+        sta mtmp
+        ldx #0
+        lda #14
+        sta rowc16
+@row:   ldy #0
+        sep #$20
+@col:   lda v_curbuf,x
+        sta [mtmp],y
+        inx
+        iny
+        cpy #4
+        bcc @col
+        rep #$20
+        lda mtmp
+        clc
+        adc #ROWBYTES
+        sta mtmp
+        dec rowc16
+        bne @row
         rts
 
 ; ============================================================================
 .segment "RODATA"
-menu_title:  .byte "UnoDOS 3   Apple IIGS", 0
-panel_title: .byte "Welcome to UnoDOS", 0
-line1:       .byte "Super Hi-Res desktop", 0
-line2:       .byte "65C816 native mode", 0
-line3:       .byte "Milestone 0 - boot OK", 0
-line4:       .byte "Build 411", 0
+str_menutitle: .byte "UnoDOS 3", 0
+str_version:   .byte "UnoDOS 3.29  IIGS  Build 412", 0
+str_t_sysinfo: .byte "System Info", 0
+str_t_clock:   .byte "Clock", 0
+name_sysinfo:  .byte "Sys Info", 0
+name_clock:    .byte "Clock", 0
+str_si1:       .byte "UnoDOS 3 / Apple IIGS", 0
+str_si2:       .byte "CPU: 65C816 2.8 MHz", 0
+str_si3:       .byte "Video: Super Hi-Res", 0
+str_si4:       .byte "RAM: 1 MB+", 0
+str_si5:       .byte "Input: ADB mouse+kbd", 0
+str_uptime:    .byte "Uptime:", 0
+
+attr_fg: .byte 1, 0, 2, 1
+attr_bg: .byte 0, 1, 0, 6
+bitmask_tab: .byte $80,$40,$20,$10,$08,$04,$02,$01
+cursor_mask: .byte $80,$C0,$E0,$F0,$F8,$FC,$FE,$FF,$FC,$D8,$8C,$0C,$06,$06
+
+; icon table: x cell, y cell (2 words per icon)
+icon_tab:
+        .word 4, 4
+        .word 16, 4
+icon_names:
+        .word name_sysinfo
+        .word name_clock
+icon_procs:
+        .word 0, 1
+
+; app definitions: x, y, w, h (cells), title pointer (5 words per app)
+app_def_tab:
+        .word 4, 4, 30, 12, str_t_sysinfo     ; 0 SysInfo
+        .word 12, 8, 16, 9, str_t_clock       ; 1 Clock

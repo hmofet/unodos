@@ -1,0 +1,18 @@
+# UnoDOS/IIGS M1 demo script (harness.py run_script).
+#   python harness.py build/unodos_iigs.po tests/m1.script
+# boot to the desktop, open SysInfo by keyboard, open Clock by mouse,
+# let the clock advance, and capture each step.
+boot
+wait 2
+shot build/s_desktop.png
+key 0x15            # right arrow -> select Sys Info
+key 0x0D           # return -> launch
+wait 3
+shot build/s_sysinfo.png
+key 0x1B           # esc -> close
+wait 2
+move 132 36        # over the Clock icon
+click
+click              # double-click -> launch Clock
+wait 200
+shot build/s_clock.png

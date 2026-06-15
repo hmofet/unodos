@@ -1,5 +1,43 @@
 # Apple IIGS port — implementation handoff
 
+## M1 — SHIPPED (2026-06-15, build 412)
+
+The SNES M1 surface re-expressed on SHR: a colour desktop (menu bar, icon
+grid, version line), the full PORT-SPEC §2 window manager (16-slot table,
+z-order raise-on-click, title-bar drag, close box) on an 8×8 **cell grid**
+(40×25), a polled **ADB mouse** driving a **save-under software cursor**
+(no hardware sprite on SHR), the `$C000/$C010` keyboard into the event
+queue, and **SysInfo + Clock** (live `HH:MM:SS`).  `tests/m1.py` → `M1
+PASS` (`shots/m1_desktop.png`, `m1_sysinfo.png`, `m1_clock.png`).
+
+**Key architectural decision (corrected from a first cut):** kernel-normal
+**DBR=$00**, so all state (`VARS` at `$00:1000`) and tables sit in *fast*
+bank-0 RAM; the SHR framebuffer in bank `$E1` is reached only through the
+24-bit pointers `GP`/`mtmp` (`[GP],y` stores, bank byte preset to `$E1`)
+and long-indexed `f:SHRPIXL,x` stores.  The first cut left DBR=$E1 and put
+all WM state in slow Mega-II RAM — self-consistent but a real hardware
+speed regression; the pointer approach keeps the WM fast.
+
+**Harness M1 additions:** a `wdm #$02` at the top of the main loop is the
+deterministic **frame marker** (a 2-byte NOP on real silicon); the harness
+steps frame-by-frame (`boot`/`frames`), injects keys (`$C000`), and feeds a
+signed-delta **ADB mouse FIFO** (`$C024` data, `$C027` status: bit7 pending,
+bit0 button) with `move_to`/`click`.  A text **script runner** (`run_script`:
+`boot/wait/key/move/click/shot`) mirrors the apple2 rig.  Clock ticks off
+`v_frame` (60 frames/s; a true `$C019` vblank gate is the hardware-pass
+refinement — noted, not yet wired).
+
+**Cell model:** windows/icons use 8×8-px cell coordinates; `fill_cells`,
+`draw_str`, `draw_char` convert to SHR pixel-byte coords (cx*4 bytes, cy*8
+rows) and call `fill_band`/`render_glyph`.  Attributes map to (fg,bg) pairs
+(`attr_fg/attr_bg`): NORM white-on-blue, INV blue-on-white (title bars/menu),
+ACC cyan-on-blue, KEY white-on-deepblue.
+
+**Next: M2** — `smartport.i` (blk_read/write reusing the boot ProDOS driver
+entry), FAT12 (reuse `macplus/mkfs.py` + a 65816 fat12 core), Files +
+Notepad, disk-loaded app ABI.  The harness ProDOS driver already does
+WRITE + `--writeback`.
+
 ## M0 — SHIPPED (2026-06-15, build 411)
 
 `./build.sh` produces `build/unodos_iigs.po` (800 KB ProDOS-order image)
