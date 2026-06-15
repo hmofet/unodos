@@ -157,6 +157,9 @@ v_ol_lastsec = VARS+$1D0
 v_ol_roadl  = VARS+$1D2
 v_ol_roadr  = VARS+$1D4
 v_ol_traf   = VARS+$1D6     ; 4 words
+; ---- sound (proc M3): SPC700 mailbox ----
+v_snd_ok    = VARS+$1E0     ; 1 once the SPC driver acked
+v_snd_tok   = VARS+$1E2     ; mailbox token (host increments per command)
 v_dt_board  = $0C00         ; 10x20 = 200 bytes ($0C00-$0CC7)
 ; ---- Pac-Man (proc 6), tile-grid port - actor coords are MAZE TILES, not px.
 ;      Packed into free WRAM above the Dostris board ($0CC8-$0FE5), clear of
@@ -304,6 +307,7 @@ PAD_DPAD = $0F00
         sta P0
         jsr np_setname
         jsr sram_init
+        jsr sound_init          ; M3: upload + self-test the SPC700 driver
 
         ; build the desktop into the shadow (16-bit), flush once (8-bit)
         rep #$30
@@ -1454,6 +1458,23 @@ MainLoop:
         lda #ATTR_NORM
         sta A4
         jsr draw_str
+        ; audio (SPC700 driver acked?)
+        lda v_snd_ok
+        bne @sndok
+        lda #.loword(str_si_snd_no)
+        bra @sndstr
+@sndok: lda #.loword(str_si_snd_ok)
+@sndstr:
+        sta P0
+        lda S3
+        sta A0
+        lda A6
+        clc
+        adc #5
+        sta A1
+        lda #ATTR_NORM
+        sta A4
+        jsr draw_str
         ; uptime seconds (accent)
         lda v_secs
         sta S0
@@ -2294,9 +2315,8 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #6
-        jsr launch_app          ; Pac-Man
-        jsr pm_new_game
+        lda #0
+        jsr launch_app          ; SysInfo (shows the SPC700 self-test result)
         lda #0
         jsr select_icon
         rts
@@ -2324,6 +2344,7 @@ MainLoop:
 
 .include "softkbd.inc"
 .include "sram.inc"
+.include "sound.inc"
 .include "apps.inc"
 .include "games.inc"
 
@@ -2342,6 +2363,8 @@ str_si3:       .byte "WRAM: 128 KB", 0
 str_si4:       .byte "Region: NTSC", 0
 str_si_mouse:  .byte "Input: SNES Mouse", 0
 str_si_nomouse: .byte "Input: joypad", 0
+str_si_snd_ok: .byte "Audio: SPC700 OK", 0
+str_si_snd_no: .byte "Audio: none", 0
 str_uptime:    .byte "Uptime:", 0
 
 ; icon table: x cell, y cell (2 words per icon)
@@ -2367,7 +2390,7 @@ icon_procs:
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
-        .word 4, 4, 24, 9,  str_t_sysinfo    ; 0
+        .word 4, 3, 24, 11, str_t_sysinfo    ; 0
         .word 10, 9, 14, 8, str_t_clock      ; 1
         .word 1, 1, 30, 22, str_t_notepad    ; 2 Notepad
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)

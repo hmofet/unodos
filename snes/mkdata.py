@@ -24,6 +24,10 @@ MSB = leftmost.
 Usage: python snes/mkdata.py   (from the repo root)
 """
 import re
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import spc700
 
 OUT = "snes/gen_data.inc"
 
@@ -290,5 +294,19 @@ with open(OUT, "w", newline="\n") as f:
     f.write("\n; cursor sprite palette (BGR555)\n")
     f.write("pal_spr:\n" + words(pal_spr) + "\n")
 
+    # ---- SPC700 audio driver image + note-pitch table ----
+    spc_img, spc_addr, spc_entry = spc700.build_spc_image()
+    pitches = spc700.note_pitches()
+    f.write("\n; SPC700 driver image: uploaded to APU RAM via the IPL handshake\n")
+    f.write(f"SPC_IMAGE_ADDR = ${spc_addr:04X}\n")
+    f.write(f"SPC_IMAGE_LEN  = {len(spc_img)}\n")
+    f.write(f"SPC_ENTRY      = ${spc_entry:04X}\n")
+    f.write(f"PM_NOTE_BASE   = 36\n")          # first MIDI note in the table
+    f.write(f"PM_NOTE_COUNT  = {len(pitches)}\n")
+    f.write("spc_image:\n" + byte_rows(spc_img) + "\n")
+    f.write("\n; DSP PITCH per MIDI note 36..96 (16-sample BRR: P = f*2.048)\n")
+    f.write("note_pitch:\n" + words(pitches) + "\n")
+
 print(f"wrote {OUT}: {len(bg)} BG tiles, {len(spr)} sprite tiles, "
-      f"{len(pal_bg)} BG + {len(pal_spr)} sprite palette entries")
+      f"{len(pal_bg)} BG + {len(pal_spr)} sprite palette entries, "
+      f"SPC image {len(spc_img)}B")
