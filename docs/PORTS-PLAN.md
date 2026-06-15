@@ -59,7 +59,7 @@ Real hardware: the user's FloppyEmu does Disk II emulation.
   mini-FS (USV1-style catalog on tracks 20-34, FS_SECTORS=240 — FAT12
   doesn't fit GCR sector space sensibly); Files + Notepad (Ctrl-S save);
   speaker beeps (beep_click on launch/save). Paddle/joystick pointer
-  option not implemented (flagged optional in HANDOFF-M2). ROM-free harness
+  option not implemented (flagged optional). ROM-free harness
   extended with a write path + `--writeback`; tests/m2.script (5
   screenshots, RWTS+FS self-test asserts PASS, beep counter > 0) and
   tests/m2_persist.script (2 screenshots, verifies an edit survives a
@@ -342,9 +342,9 @@ Each port has a Sonnet-ready handoff capturing the contracts, file-by-
 file work, reference map and risks. Read the relevant one before
 touching code; update it (and this plan) when a milestone closes.
 
-- Apple II: [../apple2/HANDOFF.md](../apple2/HANDOFF.md) (M1 done),
-  [HANDOFF-M2.md](../apple2/HANDOFF-M2.md),
-  [HANDOFF-M3.md](../apple2/HANDOFF-M3.md)
+- Apple II: [../apple2/HANDOFF.md](../apple2/HANDOFF.md) (boot/harness/trap
+  reference, M1–M3; per-milestone outcomes in
+  [../apple2/README.md](../apple2/README.md))
 - Apple IIGS: [../iigs/HANDOFF.md](../iigs/HANDOFF.md) (M0–M3 phased)
 - SNES: [../snes/HANDOFF.md](../snes/HANDOFF.md) (M0–M3 phased)
 - PS2: [../ps2/HANDOFF.md](../ps2/HANDOFF.md) (M0–M3 done + verified in PCSX2;

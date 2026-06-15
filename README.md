@@ -15,13 +15,18 @@ UnoDOS 3 is a GUI-first operating system that boots directly into a windowed des
 - **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an IBM PC/XT-class machine with a CGA card. (Verified on a cycle-accurate 8088: 256KB boots the desktop; 640KB enables the full 5-app multitasking envelope. The kernel itself loads in 128KB but the launcher does not fit below 192KB — see [docs/PORT-8088.md](docs/PORT-8088.md).)
 - **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and the application set fit on one floppy disk.
 
+### Non-Goals
+
+- Networking (no TCP/IP, no modem)
+- Preemptive multitasking (cooperative only)
+- Protected mode (real mode for XT compatibility)
+- DOS compatibility (different API)
+
 ## Ports
 
 The x86 assembly OS above is the reference implementation. UnoDOS also
 runs on Motorola 68K platforms, rewritten against the portable contract
-in [docs/PORT-SPEC.md](docs/PORT-SPEC.md) (see
-[docs/M68K-PORT-FEASIBILITY.md](docs/M68K-PORT-FEASIBILITY.md) for the
-assessment and plan):
+in [docs/PORT-SPEC.md](docs/PORT-SPEC.md):
 
 | Port | Target hardware | Approach | Status |
 |---|---|---|---|
@@ -75,6 +80,25 @@ acceleration at 60 fps. The bare-metal x86 OS gets its own native 3D app
 ([apps/runner3d.asm](apps/runner3d.asm)) that draws through the kernel's `INT
 0x80` graphics API. The backend interface is built for more targets (PS3, a
 GPU-equipped PC, GameCube, Xbox).
+
+### Cross-platform UI toolkit — unoui
+
+The C-based ports share a portable widget toolkit, **unoui** ([unoui/](unoui/),
+guide in [docs/UNOUI.md](docs/UNOUI.md)) — the same write-once / swappable-vtable
+idea as Uno3D, applied to look-and-feel. An app builds a window's widget tree
+**once** (buttons, checkboxes, tabs, menu bar, slider, spinner, dropdown, list,
+single- and multi-line text editors, scrollbars, …); a swappable **theme**
+restyles all of it — colours you can change *and* graphics you can override —
+and it is depth-aware (1/4/8/full-bit via ordered dither). Eight themes ship,
+from the unified UnoDOS look to native reproductions of Mac OS 7, a 1-bit Mac
+Plus, Windows 3.1, Amiga Workbench, the C64, the Apple II, and NeXTSTEP. All
+interaction (window drag with z-order, focus/Tab, scrollbar and slider thumbs,
+menus, multi-line text editing) is a pure function of an abstract event stream,
+so a port writes only a tiny adapter mapping its native mouse/keyboard to
+`unoui_event` plus the framebuffer present. Host-verified into a theme contact
+sheet and a scripted-input storyboard. This is the C-side analogue of the
+kernel-native asm widget set documented under **GUI Toolkit** below — see
+[docs/UNOUI.md §8](docs/UNOUI.md#8-relationship-to-the-kernel-native-widgets).
 
 The x86 reference build above now runs at **full feature parity on a genuine
 Intel 8088 / IBM PC-XT** — for years it had only ever run on QEMU (a 486-class
@@ -432,7 +456,7 @@ unodos/
 │   ├── vbr.asm              # Hard drive VBR
 │   └── stage2_hd.asm        # HD stage 2 loader
 ├── kernel/
-│   ├── kernel.asm           # Main OS kernel (45KB compiled)
+│   ├── kernel.asm           # Main OS kernel (~52KB compiled)
 │   ├── font4x6.asm          # 4x6 small font
 │   ├── font8x8.asm          # 8x8 default font
 │   └── font8x12.asm         # 8x14 large font
@@ -449,10 +473,10 @@ unodos/
 ## Documentation
 
 - **[App Development Guide](docs/APP_DEVELOPMENT.md)** — How to write applications for UnoDOS (with complete working example)
-- **[API Reference](docs/API_REFERENCE.md)** — Complete system call reference (105 functions with register-level detail)
-- **[Architecture](docs/ARCHITECTURE.md)** — Boot process, memory map, segment architecture, CGA video format
-- **[Features](docs/FEATURES.md)** — Detailed feature list and API summary table
-- **[Memory Layout](docs/MEMORY_LAYOUT.md)** — Physical memory map, kernel layout, segment pool architecture
+- **[API Reference](docs/API_REFERENCE.md)** — Complete system call reference (106 functions with register-level detail)
+- **[Architecture](docs/ARCHITECTURE.md)** — Boot process, physical memory map, kernel layout, segment pool architecture, CGA video format
+- **[Feature Matrix](docs/FEATURE-MATRIX.md)** — Cross-port feature comparison across every target
+- **[Storage](docs/STORAGE.md)** — Per-platform filesystem and persistence architecture
 - **[Boot Debug Messages](docs/boot-debug-messages.md)** — Diagnostic output reference for hardware troubleshooting
 - **[Bootloader Architecture](docs/bootloader-architecture.md)** — Floppy and HD boot chain details
 - **[Changelog](CHANGELOG.md)** — Full version history spanning 425 builds

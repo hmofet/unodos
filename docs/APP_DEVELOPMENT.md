@@ -558,6 +558,6 @@ API, how to write a 3D game, and how this native app fits in — see
 
 ---
 
-*For the complete API register reference (105 functions, APIs 0-104), see [API_REFERENCE.md](API_REFERENCE.md).*
+*For the complete API register reference (106 functions, APIs 0-105), see [API_REFERENCE.md](API_REFERENCE.md).*
 
-*v3.23.0 Build 397*
+*v3.32.0 Build 425*

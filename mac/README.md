@@ -114,8 +114,8 @@ regardless of software.
 
 ## Strategy
 
-Per `docs/PORT-SPEC.md` and the Toolbox-based plan in
-`docs/M68K-PORT-FEASIBILITY.md`: UnoDOS owns **one full-screen GrafPort**
+Per `docs/PORT-SPEC.md`, the Toolbox-based approach: UnoDOS owns **one
+full-screen GrafPort**
 and runs its **own** window manager, widgets, and theme inside it. The ROM
 Toolbox supplies the screen, the Event Manager (mouse + keyboard, already
 press-time stamped — PORT-SPEC §3 for free), QuickDraw / Color QuickDraw

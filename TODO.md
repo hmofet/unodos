@@ -36,7 +36,7 @@ Music app's prev/next arrows.
       per platform, rather than re-implemented ad hoc per app.
 
 ## Post-Audit Backlog (2026-06) — COMPLETE as of v3.26.0 / Build 405
-All items from docs/AUDIT-HANDOFF-2026-06.md §5 are done:
+All items from the June 2026 audit backlog are done:
 - [x] 8088 compatibility pass — kernel + all apps + floppy boot chain
       assemble under `cpu 8086`; FAT16/IDE region is `cpu 386`-bracketed
       and runtime-gated in fat16_mount; HD boot chain stays 386+ by design
@@ -220,7 +220,7 @@ Next steps:
       GX / Ares (BlastEm has no CD), listing >8 files (BRMDIR paging),
       Tracker save-to-BRAM
 - [ ] Deferred: SD card over bit-banged SPI + FAT16 (spec:
-      docs/GENESIS-STORAGE.md; lands with the adapter PCB)
+      docs/STORAGE.md tier 4; lands with the adapter PCB)
 - [x] Real hardware (2026-06-12): the cartridge boots and runs on a
       physical console — first new port validated on metal
 - [ ] Real-hardware adapters still to exercise: PS/2 wiring, tape

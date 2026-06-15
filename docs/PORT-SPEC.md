@@ -1,14 +1,13 @@
 # UnoDOS Port Specification
 
 **Purpose:** the platform-independent contract a UnoDOS port must honor.
-Extracted from the x86 reference implementation (v3.26.0, Build 405) per
-docs/M68K-PORT-FEASIBILITY.md Phase 0. Where this file and the x86 source
-disagree, the source wins — report the discrepancy and update this file.
+Extracted from the x86 reference implementation. Where this file and the
+x86 source disagree, the source wins — report the discrepancy and update
+this file.
 
-Companion references: `docs/API_REFERENCE.md` (per-call semantics),
-`docs/ARCHITECTURE.md`, `docs/MEMORY_LAYOUT.md` (x86-specific),
-`docs/AUDIT-HANDOFF-2026-06.md` + `docs/audit-2026-06-digest.md`
-(invariants and their rationale).
+Companion references: `docs/API_REFERENCE.md` (per-call semantics) and
+`docs/ARCHITECTURE.md` (x86 boot process, memory map, and segment
+architecture).
 
 ---
 

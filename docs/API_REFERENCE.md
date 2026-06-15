@@ -1307,17 +1307,34 @@ Creates a modal dialog window with a scrollable file list. Supports keyboard nav
 | 88 | menu_close | Popup Menu |
 | 89 | menu_hit | Popup Menu |
 | 90 | file_dialog_open | File Dialog |
+| 91 | util_word_to_string | Util / String |
+| 92 | util_bcd_to_ascii | Util / String |
+| 93 | gfx_get_current_font_info | Fonts |
+| 94 | gfx_draw_sprite | Graphics |
+| 95 | set_video_mode | System |
+| 96 | win_get_content_scale | Window Manager |
+| 97 | win_get_content_size | Window Manager |
+| 98 | file_dialog_save | File Dialog |
+| 99 | widget_scrollbar_hit | Widgets |
+| 100 | get_video_mode | System |
+| 101 | mouse_set_visible | Input |
+| 102 | gfx_draw_sprite_scaled | Graphics |
+| 103 | gfx_blit_rect | Graphics |
+| 104 | gfx_read_pixel | Graphics |
+| 105 | theme_set_palette | Themes |
 
 ---
 
-*UnoDOS v3.22.0 Build 351 - 96 API functions (indices 0-95)*
+*UnoDOS v3.32.0 Build 425 — 106 API functions (indices 0-105)*
 
 ---
 
-> **Note:** APIs 91–104 (scaled sprites, blit, read-pixel, video-mode
-> get, save dialog, scrollbar hit, content size/scale, mouse visibility,
-> BCD helpers) are implemented but not yet written up here — tracked in
-> TODO.md.
+> **Note:** APIs 91–104 (BCD/string helpers, font metrics, sprite draw,
+> video-mode switch/get, content scale/size, save dialog, scrollbar
+> hit-test, mouse visibility, scaled sprite, blit, read-pixel) are listed
+> in the Quick Reference Table above with their kernel entry points;
+> their full register-level write-ups are still pending (tracked in
+> TODO.md). API 105 is documented below.
 
 ### API 105: theme_set_palette
 
