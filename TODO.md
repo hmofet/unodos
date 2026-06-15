@@ -27,9 +27,22 @@ or page the icon grid. Workaround shipped: MOUSE.BIN and MKBOOT.BIN
 in the 15-app envelope; both still build via 'make apps'.
 
 ### Remaining 8088 follow-ups
-- [ ] Real-hardware validation on an 8088 (86Box/PCem or physical XT) —
-      QEMU cannot emulate an 8088; current builds are assembler-verified
-      (`cpu 8086`) and QEMU-behavior-verified only
+- [~] Real-hardware validation on an 8088 — **M0/M1/M2 DONE on a cycle-accurate
+      emulator** (MartyPC + open GLaBIOS, ROM-free). The primary
+      `build/unodos-144.img` boots end-to-end on an emulated IBM PC/XT
+      (8088 @ 4.77MHz, CGA): boot chain → kernel load → CGA desktop →
+      keyboard-launched SysInfo (WM + scheduler running). See
+      docs/PORT-8088.md + tools/xt/. **Physical-XT pass still pending.**
+- [x] Serial mouse support (Microsoft mouse on COM1, IRQ4) — install_serial_mouse
+      + int_0C_handler; verified in MartyPC (cursor tracks both axes, double-click
+      launches Settings). Build 409. (Was the old "Serial mouse support" item.)
+- [x] RAM-floor reality: corrected the false "128KB min" — 128K boots the kernel
+      but not the launcher (0x2000=128-192K); 256K=desktop+1 app, 640K=full.
+      Fixed README.md + docs/FEATURES.md.
+- [ ] M1 finish: sweep the CGA app set (Files/Notepad/Paint/Dostris/Pac-Man) +
+      keyboard-driven WM on the emulated XT; confirm XT 8255 keyboard ack form.
+- [ ] M2 finish: real INT 13h floppy timing/retry; CGA snow; document VGA apps
+      as out-of-envelope on a CGA 5150/5160.
 - [ ] draw_char CGA row-blit fast path (audit digest "Stage 2", ~10x text
       speedup on real 8088 hardware; Stage 1 MUL removal is done)
 - [ ] Launcher select_icon draws over open windows (z-order violation,
@@ -204,7 +217,7 @@ Next steps:
 - [ ] Modal window flag (WIN_FLAG_MODAL) — block focus changes when modal is active
 - [ ] Window minimize/maximize
 - [ ] Preemptive multitasking / threading
-- [ ] Serial mouse support
+- [x] Serial mouse support (Microsoft mouse on COM1 / IRQ4 — see 8088 M2, Build 409)
 - [ ] Animated sprite support (multi-frame sprite API)
 
 ## New Apps

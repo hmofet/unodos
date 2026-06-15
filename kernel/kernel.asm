@@ -884,6 +884,18 @@ MOUSE_CMD_ENABLE    equ 0xF4        ; Enable data reporting
 MOUSE_CMD_DISABLE   equ 0xF5        ; Disable data reporting
 MOUSE_CMD_DEFAULTS  equ 0xF6        ; Set defaults
 
+; ---------------------------------------------------------------------------
+; COM1 8250/16450 UART - Microsoft serial mouse (the IBM PC/XT pointing
+; device: a real XT has no PS/2 port). 1200 baud, 7 data bits, 1 stop, no
+; parity; IRQ4 -> INT 0x0C. See install_serial_mouse / int_0C_handler.
+; ---------------------------------------------------------------------------
+COM1_RBR            equ 0x3F8       ; Receive buffer (DLAB=0) / divisor low (DLAB=1)
+COM1_IER            equ 0x3F9       ; Interrupt enable (DLAB=0) / divisor high (DLAB=1)
+COM1_IIR            equ 0x3FA       ; Interrupt ID (read)
+COM1_LCR            equ 0x3FB       ; Line control (bit7 = DLAB)
+COM1_MCR            equ 0x3FC       ; Modem control (DTR/RTS/OUT2)
+COM1_LSR            equ 0x3FD       ; Line status (bit0 = data ready)
+
 ; install_mouse - Initialize PS/2 mouse
 ; Tries BIOS INT 15h/C2 services first (works with USB legacy emulation),
 ; falls back to direct KBC port I/O for native PS/2 / QEMU.
@@ -1057,10 +1069,13 @@ install_mouse:
     jmp .no_mouse
 
 .skip_kbc:
-    ; Pre-AT machine: no 8042 to restore, exit directly (do NOT route
-    ; through .no_mouse - it pokes KBC ports and uses saved_kbc_config
-    ; that was never captured)
-    mov byte [mouse_diag], 'X'      ; X = pre-AT machine, no 8042
+    ; Pre-AT machine (IBM PC/XT): no 8042. Try a Microsoft serial mouse on
+    ; COM1 - the period-correct XT pointing device. (Do NOT route through
+    ; .no_mouse: it pokes KBC ports and uses saved_kbc_config that was never
+    ; captured here.)
+    call install_serial_mouse       ; CF=0 if a serial mouse answered on COM1
+    jnc .init_success               ; sets mouse_diag='C' on success
+    mov byte [mouse_diag], 'X'      ; X = pre-AT machine, no mouse found
     mov byte [mouse_enabled], 0
     stc
     jmp .done
@@ -1481,6 +1496,272 @@ mouse_bios_callback:
     pop ax
     pop bp
     retf                            ; Far return to BIOS IRQ handler
+
+; ===========================================================================
+; Microsoft serial mouse on COM1 (IBM PC/XT pointing device)
+; ===========================================================================
+; install_serial_mouse - Detect & initialize a Microsoft serial mouse on COM1.
+; A real XT has no PS/2 port, so this is the period-correct pointer. The UART
+; is set to 1200 baud / 7 data bits / 1 stop / no parity and the mouse drives
+; IRQ4 (INT 0x0C). On DTR assertion a Microsoft mouse powers up and transmits
+; an 'M' (0x4D) identifier - used here as the presence test.
+; Output: CF=0 + IRQ4 handler armed + mouse_diag='C' on success;
+;         CF=1 with DTR/RTS left low if no mouse answered.
+install_serial_mouse:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+
+    ; --- Program the UART: 1200 baud, 7 data bits, 1 stop, no parity ---
+    mov dx, COM1_LCR
+    mov al, 0x80                     ; DLAB=1 (expose divisor latch)
+    out dx, al
+    mov dx, COM1_RBR                 ; divisor low
+    mov al, 0x60                     ; 115200 / 1200 = 96
+    out dx, al
+    mov dx, COM1_IER                 ; divisor high
+    xor al, al
+    out dx, al
+    mov dx, COM1_LCR
+    mov al, 0x02                     ; DLAB=0, 7 data bits, 1 stop, no parity
+    out dx, al
+    mov dx, COM1_IER                 ; mask UART interrupts during probe
+    xor al, al
+    out dx, al
+    mov dx, COM1_RBR                 ; drain a stale byte if any
+    in al, dx
+
+    ; --- Power-cycle the mouse: drop DTR/RTS, settle, then raise them ---
+    mov dx, COM1_MCR
+    xor al, al                       ; DTR=0 RTS=0 OUT2=0
+    out dx, al
+    mov cx, 2                        ; ~2 BIOS ticks (~110ms) settle
+    call serial_tick_delay
+    mov dx, COM1_MCR
+    mov al, 0x0B                     ; DTR=1 RTS=1 OUT2=1 (OUT2 gates IRQ4)
+    out dx, al
+
+    ; --- Wait up to ~4 ticks for the 'M' identifier (raw fallback guards a
+    ;     frozen BIOS timer) ---
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    sti
+    mov bx, [es:0x006C]              ; start tick
+    mov cx, 0xFFFF                   ; raw fallback counter
+.sm_wait:
+    mov dx, COM1_LSR
+    in al, dx
+    test al, 0x01                    ; data ready?
+    jnz .sm_gotbyte
+    mov ax, [es:0x006C]
+    sub ax, bx
+    cmp ax, 4                        ; ~220ms tick timeout
+    jae .sm_timeout
+    loop .sm_wait
+.sm_timeout:
+    pop es
+    jmp .sm_fail
+.sm_gotbyte:
+    pop es
+    mov dx, COM1_RBR
+    in al, dx
+    and al, 0x7F
+    cmp al, 'M'                      ; Microsoft mouse identifier
+    jne .sm_fail
+
+    ; --- Mouse present: arm IRQ4 (INT 0x0C) ---
+    cli
+    xor ax, ax
+    mov es, ax
+    mov word [es:0x0C*4], int_0C_handler
+    mov word [es:0x0C*4 + 2], 0x1000
+    mov byte [smouse_idx], 0
+    mov dx, COM1_RBR                 ; drain any trailing ID bytes
+    in al, dx
+    mov dx, COM1_IER                 ; enable received-data-available interrupt
+    mov al, 0x01
+    out dx, al
+    in al, 0x21                      ; unmask IRQ4 on the master PIC (bit 4)
+    and al, 0xEF
+    out 0x21, al
+    sti
+    mov byte [mouse_diag], 'C'       ; C = COM serial mouse
+    clc
+    jmp .sm_done
+
+.sm_fail:
+    mov dx, COM1_MCR                 ; drop DTR/RTS so a real mouse stays quiet
+    xor al, al
+    out dx, al
+    stc
+
+.sm_done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; serial_tick_delay - busy-wait CX BIOS timer ticks (~55ms each), with a raw
+; fallback so it cannot hang if the BIOS timer is not advancing. IF enabled.
+; Clobbers AX. Preserves CX semantics for the caller? No - clobbers nothing
+; the caller relies on except it consumes its own copies.
+serial_tick_delay:
+    push bx
+    push cx
+    push dx
+    push es
+    mov ax, 0x0040
+    mov es, ax
+    sti
+    mov bx, [es:0x006C]
+    mov dx, 0xFFFF                   ; raw fallback
+.std_wait:
+    mov ax, [es:0x006C]
+    sub ax, bx
+    cmp ax, cx
+    jae .std_done
+    dec dx
+    jnz .std_wait
+.std_done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; INT 0x0C - IRQ4 COM1 Microsoft serial-mouse handler.
+; 3-byte packets, 7 data bits each (top bit masked):
+;   byte0: 1 LB RB Y7 Y6 X7 X6   (bit6 = sync/first byte)
+;   byte1: 0 X5 X4 X3 X2 X1 X0
+;   byte2: 0 Y5 Y4 Y3 Y2 Y1 Y0
+; dX = signed8( (byte0 & 0x03)<<6 | byte1 & 0x3F )
+; dY = signed8( (byte0 & 0x0C)<<4 | byte2 & 0x3F )   (+Y = toward user = down)
+int_0C_handler:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ds
+    push es
+    push si
+    push di
+    push bp
+    mov ax, 0x1000
+    mov ds, ax
+
+    mov dx, COM1_LSR
+    in al, dx
+    test al, 0x01                    ; data ready?
+    jz .c_eoi                        ; spurious (e.g. line-status) - just EOI
+    mov dx, COM1_RBR
+    in al, dx
+    and al, 0x7F                     ; 7-bit data
+
+    test al, 0x40                    ; sync bit => first byte of a packet
+    jz .c_not_first
+    mov [smouse_pkt], al
+    mov byte [smouse_idx], 1
+    jmp .c_eoi
+.c_not_first:
+    mov bl, [smouse_idx]
+    cmp bl, 1
+    je .c_second
+    cmp bl, 2
+    je .c_third
+    jmp .c_eoi                       ; not synced yet - wait for a sync byte
+.c_second:
+    mov [smouse_pkt + 1], al
+    mov byte [smouse_idx], 2
+    jmp .c_eoi
+.c_third:
+    mov [smouse_pkt + 2], al
+    mov byte [smouse_idx], 0
+
+    ; --- buttons: byte0 bit5=Left -> bit0, bit4=Right -> bit1 ---
+    mov al, [smouse_pkt]
+    xor bl, bl
+    test al, 0x20
+    jz .c_no_l
+    or bl, 0x01
+.c_no_l:
+    test al, 0x10
+    jz .c_no_r
+    or bl, 0x02
+.c_no_r:
+    mov [mouse_buttons], bl
+
+    ; --- X delta ---
+    mov al, [smouse_pkt]
+    and al, 0x03
+    mov cl, 6
+    shl al, cl                       ; X7,X6 -> bits 7,6
+    mov ah, al
+    mov al, [smouse_pkt + 1]
+    and al, 0x3F
+    or al, ah
+    cbw                              ; sign-extend AL -> AX
+    add [mouse_x], ax
+    cmp word [mouse_x], 0x8000       ; wrapped negative?
+    jb .c_x_pos
+    mov word [mouse_x], 0
+    jmp .c_do_y
+.c_x_pos:
+    mov ax, [screen_width]
+    dec ax
+    cmp [mouse_x], ax
+    jbe .c_do_y
+    mov [mouse_x], ax
+.c_do_y:
+    mov al, [smouse_pkt]
+    and al, 0x0C
+    mov cl, 4
+    shl al, cl                       ; Y7,Y6 -> bits 7,6
+    mov ah, al
+    mov al, [smouse_pkt + 2]
+    and al, 0x3F
+    or al, ah
+    cbw
+    add [mouse_y], ax                ; serial +Y is downward => no negate
+    cmp word [mouse_y], 0x8000
+    jb .c_y_pos
+    mov word [mouse_y], 0
+    jmp .c_post
+.c_y_pos:
+    mov ax, [screen_height]
+    dec ax
+    cmp [mouse_y], ax
+    jbe .c_post
+    mov [mouse_y], ax
+.c_post:
+    call mouse_drag_update
+    mov byte [cursor_dirty], 1
+    mov al, [mouse_buttons]
+    cmp al, [last_posted_buttons]
+    je .c_eoi
+    mov [last_posted_buttons], al
+    xor dx, dx
+    mov dl, al
+    mov al, EVENT_MOUSE
+    call post_event
+
+.c_eoi:
+    mov al, 0x20
+    out 0x20, al                     ; EOI to master PIC (IRQ4)
+    pop bp
+    pop di
+    pop si
+    pop es
+    pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
 
 ; mouse_get_state - Get current mouse state
 ; Input: None
@@ -7674,7 +7955,7 @@ widget_scrollbar_hit:
 ; ============================================================================
 
 ; Pad to API table alignment
-times 0x3800 - ($ - $$) db 0  ; (bumped 0x3400->0x3500->0x3800: Build 404 input fixes + 8088 pass code growth)
+times 0x3C00 - ($ - $$) db 0  ; (bumped 0x3400->0x3500->0x3800->0x3C00: +serial mouse / 8088 port code growth)
 
 kernel_api_table:
     ; Header
@@ -21938,8 +22219,10 @@ click_y:            dw 0            ; Mouse Y latched at button press (API 28: D
 click_buttons:      db 0            ; Rising-edge buttons at latch time
 click_seq:          db 0            ; Press sequence number (API 28: AH)
 mouse_vis_saved:    db 0            ; 1 if mouse_set_visible(0) was called (for safe restore)
-mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, R/S/E=failure
+mouse_diag:         db '?'          ; Diagnostic: B=BIOS, K=KBC, C=COM serial, R/S/E/X=none
 saved_kbc_config:   db 0            ; Original 8042 config (restored on mouse init failure)
+smouse_pkt:         times 3 db 0    ; Serial-mouse 3-byte packet buffer (COM1)
+smouse_idx:         db 0            ; Serial-mouse framing index (0=await sync,1,2)
 
 ; Mouse cursor state
 cursor_visible:     db 0            ; 1 = cursor currently drawn on screen

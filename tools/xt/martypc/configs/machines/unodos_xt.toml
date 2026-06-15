@@ -1,0 +1,73 @@
+# unodos_xt.toml
+# UnoDOS 3 "8088 port" validation rig for MartyPC.
+#
+# A cycle-accurate IBM PC/XT (Intel 8088 @ 4.77 MHz) with a CGA card and a
+# 1.44MB floppy drive so it can boot the project's primary build/unodos-144.img.
+# This is the "real emulator" tier for the 8088 port (QEMU emulates a 486-class
+# CPU and hides every genuine 8088/XT behaviour).
+#
+# Variants:
+#   unodos_xt        - 640K XT, CGA, 1.44M floppies, MS serial mouse (default rig)
+#   unodos_xt_256k   - 256K IBM 5150-class, to probe the real RAM floor (M1)
+
+[[machine]]
+name = "unodos_xt"
+type = "Ibm5160"
+rom_set = "auto"
+speaker = true
+overlays = [
+    "pcxt_2_1440k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "game_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000   # 640K
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+[[machine]]
+name = "unodos_xt_256k"
+type = "Ibm5150v256K"
+rom_set = "auto"
+speaker = true
+overlays = [
+    "pcxt_2_1440k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x40000   # 256K — RAM-floor probe
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+[[machine]]
+name = "unodos_xt_128k"
+type = "Ibm5150v64K"
+rom_set = "auto"
+speaker = true
+overlays = [
+    "pcxt_2_1440k_floppies",
+    "us_modelf_keyboard",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000   # 128K — the README's claimed minimum
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
