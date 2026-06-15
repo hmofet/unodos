@@ -273,7 +273,42 @@ The original plan notes follow.
   round trip (Mesen2 persists `.srm`; the rig can also memory-assert
   the USV1 magic), per-game scripted steps.
 
-## 6. M3 — SPC700 audio + Tracker/Music + Theme + scheduler
+## 6. M3 — SPC700 audio + Tracker/Music + Theme + scheduler  ✅ DONE
+
+**Shipped.** SPC700 audio core (`spc700.py` Python SPC700 assembler + driver
++ square-wave BRR + note-pitch table; `sound.inc` IPL upload + mailbox,
+verified by ack — SysInfo "Audio: SPC700 OK"). Music (proc 3, voice 0).
+Theme (proc 8, 8 presets + BGR555 editor; palette-shadow `v_pal` $1800 +
+NMI `FlushPalette`, since CGRAM is write-only outside vblank). Tracker
+(proc 9, 32×4 pattern on voices 0–3, SONG.TRK in SRAM). Paint (proc 10, the
+per-pixel **unique-tile canvas**: pixels painted into a planar-tile shadow in
+bank $7F, dirty tiles DMA'd by the NMI at ≤24/frame). 11 desktop icons.
+
+DEVIATIONS (M3): SPC driver is square-wave only (no real instruments yet);
+the Tracker's 4th channel is a tone not noise; Paint is pencil-only with a
+fixed line-3 palette and no tape I/O; the scheduler is tick-based, not
+context-switched (the bank-0 verdict below). Backlog: game-music gm_* hooks,
+DSP noise/instruments, Paint tools + live colour, the SNES-Mouse probe.
+
+**Scheduler verdict (bank-0 constraint).** Per-task private stacks are
+infeasible — the 65816 stack lives in bank 0, whose low 8 KB is full here
+(DP×2, VARS, 2 KB Notepad buffer, Dostris+Pac-Man, tilemap shadow,
+palette/Tracker/Paint vars, OAM shadow, stack → ~736 B free, short of one
+1 KB stack). So `sched.inc`'s `sched_run` schedules COOPERATIVELY BY TICKS:
+every app's `*_tick` runs from the main loop each frame. Same behaviour
+(Music/Tracker play under any window, the Clock advances, games step, Paint
+flushes) without a context switch; the apps are already tick functions.
+Parallels the Apple II port's verdict.
+
+Traps that bit M3 (don't repeat): the ca65 width trap returns (a `rep #$20`
+in a timeout path re-tracks A as 16-bit, so the next branch-target label's
+`lda #imm` assembles 16-bit but runs 8-bit → BRK/black screen — `.a8` at the
+label; bit `spc_upload`). `lda f:long,Y` / `sta f:long,Y` are illegal — long
+indexed is X-only (bit the Paint dirty ring). `STZ` has no long-addressing
+mode — use `LDA #0 / STA f:...,x` for bank-$7F clears. `fmt_dec` clobbers
+S0/S1/S5/S6 — carry live draw state in S2/S3/S4/S7 or on the stack.
+
+### original M3 plan notes
 
 - **SPC700 driver (the hardest novel piece in this port):**
   - *Toolchain decision first:* ca65 does NOT assemble SPC700.
