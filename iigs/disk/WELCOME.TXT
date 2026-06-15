@@ -1,0 +1,6 @@
+Welcome to UnoDOS 3 on the Apple IIGS!
+
+This text file lives in a real FAT12 volume on
+the 800K ProDOS disk, read through the SmartPort
+block firmware. Open it in Notepad, edit it, and
+press Ctrl-S to save it back to disk.

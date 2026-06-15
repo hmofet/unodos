@@ -5,6 +5,55 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — M2: FAT12 storage over SmartPort + Files/Notepad] - 2026-06-15 (Build 414)
+
+The IIGS port gains persistent storage: a real FAT12 volume on the 800 KB disk,
+read and written through the SmartPort/ProDOS block firmware.
+
+- **blk_io + FAT12 core (`iigs/fs.i`):** the kernel calls the slot firmware's
+  ProDOS block driver (entry + unit stashed by `boot.s`) in 6502 emulation mode
+  (`sec/xce` … `clc/xce`), then mounts a FAT12 volume — `fat_mount` (caches the
+  3-sector FAT), `fat_list_root`, `fat_read_file` (single + multi-cluster), and
+  a full write path (`fat_alloc_chain`/`fat_free_chain`/`fat_set_entry`/
+  `fat_flush`/`fat_save_file`). Geometry is fixed and synced once with
+  `mkfs.py`; little-endian fields read natively.
+- **Files + Notepad (`iigs/apps.i`):** Files lists the root directory and opens
+  the selected file into Notepad; Notepad is an append editor whose **Ctrl-S
+  writes the buffer back to disk** — verified to persist across a full reboot of
+  the image (`tests/m2.py` → `M2 PASS`, with `--writeback`).
+- **Disk tooling:** `iigs/mkfs.py` writes the FAT12 volume at block 256;
+  `mkdsk.py` reserves it. Bug banked: `blk_io` must not alias the FAT walkers'
+  cluster temp (`F0`) — multi-cluster ops looped until it used private scratch.
+  Next: M3 (colour apps + Ensoniq DOC audio + scheduler). Disk-loaded apps
+  deferred.
+
+## [dreamcast: emulator-verified at parity — runs in Flycast + AICA audio] - 2026-06-15 (Build 413)
+
+The Dreamcast port now **runs**, not just compiles: it boots in the **Flycast**
+emulator at native 640×480 / 60 fps and reaches feature parity with the family.
+
+- **Booted + captured in Flycast** (REIOS HLE BIOS, no Sega BIOS file): the
+  desktop + all 11 app icons, Pac-Man, Dostris, Tracker, Paint, Theme, Files,
+  OutLast, and the Music+Files+Notepad stack — `dreamcast/shots/dc_*.png`, grabbed
+  from the emulated PowerVR (not the host shim).
+- **VMU storage verified in-emulator**: the Notepad save→clear→reload autotest
+  writes to `/vmu/a1` and reads the bytes back; the restored text proves the KOS
+  `/vmu` VFS round-trip (`dreamcast/shots/dc_vmu.png`).
+- **AICA audio wired** (`dc_main.c` `uno_dc_snd_note/quiet` + the `mac_io.c` Sound
+  Manager): a looping square-wave `snd_sfx` sample pitched per MIDI note, one AICA
+  channel per Sound Manager voice; Music / Tracker (4 voices) / Dostris drive it.
+  The build boots with audio live; the sound itself is an ear-check (hardware),
+  the same ceiling the other ports document.
+- **Bootable `.cdi`** via **mkdcdisc** (`build.sh cdi`); `build.sh iso` is the
+  no-mkdcdisc fallback (objcopy → scramble → makeip → genisoimage).
+- **Toolchain + emulator built from source** under WSL: `sh-elf-gcc 15.2.0` +
+  libkos (`utils/kos-chain`), and Flycast under Xvfb + Mesa llvmpipe. Rig gotchas
+  recorded in `dreamcast/README.md`: Flycast needs a real disc format (not a bare
+  `.iso`), `rend.EmulateFramebuffer = yes` (UnoDOS draws straight to VRAM), and
+  `rend.vsync = no` (Xvfb's 0 Hz refresh otherwise gates frame swaps → black).
+- New: `dreamcast/dc_main.c` AICA synth + `dreamcast/tools/{emu_run.sh,
+  capture_apps.sh}`. Remaining: real hardware (incl. the audio ear-check).
+
 ## [Apple IIGS port — M1: Super Hi-Res desktop + window manager] - 2026-06-15 (Build 412)
 
 The IIGS port boots past the splash into a real, mouse-driven colour desktop

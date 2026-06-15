@@ -1,0 +1,5 @@
+UnoDOS 3 - Apple IIGS port
+
+65C816 native mode, Super Hi-Res graphics, a real
+window manager, ADB mouse and keyboard, and now a
+FAT12 filesystem over SmartPort block I/O.

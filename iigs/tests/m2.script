@@ -1,0 +1,22 @@
+# UnoDOS/IIGS M2 demo script (harness.py run_script, use with --writeback).
+#   python harness.py build/unodos_iigs.po tests/m2.script --writeback build/wb.po
+# open Files, open WELCOME.TXT in Notepad, append text, save it back to disk.
+boot
+wait 2
+move 36 68          # the Files desktop icon
+click
+click               # double-click -> open Files
+wait 3
+shot build/s_files.png
+key 0x0D            # open the selected file (WELCOME.TXT) in Notepad
+wait 4
+shot build/s_notepad.png
+key 0x20           # type " IIGS!"
+key 0x49
+key 0x49
+key 0x47
+key 0x53
+key 0x21
+key 0x13           # Ctrl-S -> save to disk (persisted via --writeback)
+wait 6
+shot build/s_saved.png
