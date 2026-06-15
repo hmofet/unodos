@@ -1,0 +1,9 @@
+wait 70
+keys right right right right right right    # to Tracker icon (7)
+key return                                  # launch app7.bin
+shot m3_tracker
+key space                                   # play (3 SID voices)
+assert beep>0
+wait 6
+shot m3_tracker_play
+quit
