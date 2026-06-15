@@ -27,6 +27,7 @@
 #include <gsKit.h>
 #include <dmaKit.h>
 #include <gsToolkit.h>
+#include <libmc.h>
 #include <string.h>
 
 #include "fb.h"
@@ -40,8 +41,32 @@ static u16  g_prev = 0xFFFF;          /* previous pad button word (0 = pressed) 
 static void load_modules(void)
 {
     SifInitRpc(0);
-    SifLoadModule("rom0:SIO2MAN", 0, NULL);
-    SifLoadModule("rom0:PADMAN", 0, NULL);
+    SifLoadModule("rom0:SIO2MAN", 0, NULL);   /* pad + memory-card transport */
+    SifLoadModule("rom0:PADMAN", 0, NULL);    /* DualShock 2 */
+    SifLoadModule("rom0:MCMAN", 0, NULL);     /* memory-card manager (M2 store) */
+    SifLoadModule("rom0:MCSERV", 0, NULL);    /* memory-card file server */
+}
+
+/* Bring up the memory card so mc0: file ops (mac_io.c EE backend) work. The
+   first mcGetInfo also reports whether the card is formatted; an unformatted
+   card (a brand-new PCSX2 Mcd) is formatted once so Files/Notepad can persist. */
+static void mc_bringup(void)
+{
+    int ret = 0;
+    mcInit(MC_TYPE_MC);
+    /* Probe by making /UnoDOS. MCMAN reports mcGetInfo's format flag
+       unreliably, so we trust the mkdir result instead: sceMcResNoFormat (-2)
+       means the card is raw -> format once, then re-make the dir. Any other
+       result (created, or "already exists") leaves an existing card UNTOUCHED,
+       so saves persist across boots. */
+    mcMkDir(0, 0, "/UnoDOS");
+    mcSync(0, NULL, &ret);
+    if (ret == -2) {                          /* sceMcResNoFormat */
+        mcFormat(0, 0);
+        mcSync(0, NULL, &ret);
+        mcMkDir(0, 0, "/UnoDOS");
+        mcSync(0, NULL, &ret);
+    }
 }
 
 void uno_ee_init(void)
@@ -74,6 +99,7 @@ void uno_ee_init(void)
         GSKIT_ALLOC_USERBUFFER);
 
     load_modules();
+    mc_bringup();                 /* memory card -> mc0: for the File Manager */
     padInit(0);
     padPortOpen(0, 0, g_padbuf);
 }

@@ -19,7 +19,7 @@ SPLASH_OBJS = build/main.o build/fb.o build/uno_splash.o
 GSKIT ?= $(PS2DEV)/gsKit
 EE_INCS   += -I$(GSKIT)/include
 EE_LDFLAGS += -L$(GSKIT)/lib
-EE_LIBS  = -lgskit -ldmakit -lpad -lpacket -lgraph -ldraw -ldma -lkernel
+EE_LIBS  = -lgskit -ldmakit -lpad -lmc -lpacket -lgraph -ldraw -ldma -lkernel
 # the desktop core is the colour port driven by the EE platform hooks; pass
 # EXTRA_DEF=-DUNO_AUTOTEST_PACMAN (etc.) for a baked-in screenshot variant.
 EE_CFLAGS += -O2 -Wall -Wno-unused-value -Wno-multichar -DUNO_COLOR=1 -DUNO_EE $(EXTRA_DEF)
