@@ -439,12 +439,16 @@
         beq @np
         cmp #4
         beq @dt
+        cmp #5
+        beq @ol
         cmp #7
         beq @files
         rts
 @np:    jsr notepad_key
         rts
 @dt:    jsr dostris_key
+        rts
+@ol:    jsr outlast_key
         rts
 @files: jsr files_key
         rts

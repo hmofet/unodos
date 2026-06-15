@@ -144,6 +144,19 @@ v_dt_seedl  = VARS+$1B2
 v_dt_seedh  = VARS+$1B4
 v_dt_last   = VARS+$1B6
 v_pad_rptn  = VARS+$1B8
+; ---- OutLast (proc 5), all 16-bit; z/traffic kept mod OL_TRACK ----
+v_ol_x      = VARS+$1C0
+v_ol_speed  = VARS+$1C2
+v_ol_z      = VARS+$1C4
+v_ol_score  = VARS+$1C6
+v_ol_time   = VARS+$1C8
+v_ol_crash  = VARS+$1CA
+v_ol_state  = VARS+$1CC
+v_ol_last   = VARS+$1CE
+v_ol_lastsec = VARS+$1D0
+v_ol_roadl  = VARS+$1D2
+v_ol_roadr  = VARS+$1D4
+v_ol_traf   = VARS+$1D6     ; 4 words
 v_dt_board  = $0C00         ; 10x20 = 200 bytes
 
 ; ---- constants ----
@@ -167,7 +180,7 @@ ATTR_KEY  = $0C00
 MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
-NICONS   = 5
+NICONS   = 6
 EVQ_SIZE = 32
 EV_KEY   = 1
 EV_MOUSE = 4
@@ -1309,6 +1322,8 @@ MainLoop:
         beq @notepad
         cmp #4
         beq @dostris
+        cmp #5
+        beq @outlast
         cmp #7
         beq @files
         rts
@@ -1323,6 +1338,9 @@ MainLoop:
         rts
 @dostris:
         jsr dostris_draw
+        rts
+@outlast:
+        jsr outlast_draw
         rts
 @files:
         jsr files_draw
@@ -2244,9 +2262,9 @@ MainLoop:
 .i16
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
-        lda #4
-        jsr launch_app          ; Dostris
-        jsr dostris_new         ; start a game (board + falling piece)
+        lda #5
+        jsr launch_app          ; OutLast
+        jsr outlast_new
         lda #0
         jsr select_icon
         rts
@@ -2301,15 +2319,17 @@ icon_tab:
         .word 22, 24            ; 2 Notepad
         .word 2, 26            ; 3 Files
         .word 12, 26            ; 4 Dostris
+        .word 22, 26            ; 5 OutLast
 icon_names:
         .word name_sysinfo
         .word name_clock
         .word name_notepad
         .word name_files
         .word name_dostris
+        .word name_outlast
 ; icon index -> app proc number
 icon_procs:
-        .word 0, 1, 2, 7, 4
+        .word 0, 1, 2, 7, 4, 5
 
 ; app definitions: x, y, w, h (cells), title pointer (5 words per app), procs 0-7
 app_def_tab:
@@ -2318,7 +2338,7 @@ app_def_tab:
         .word 1, 1, 30, 22, str_t_notepad    ; 2 Notepad
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 3 (unused)
         .word 1, 1, 30, 24, str_t_dostris    ; 4 Dostris
-        .word 0, 0, 0, 0,   str_t_sysinfo    ; 5 (unused)
+        .word 1, 1, 30, 24, str_t_outlast    ; 5 OutLast
         .word 0, 0, 0, 0,   str_t_sysinfo    ; 6 (unused)
         .word 3, 3, 26, 18, str_t_files      ; 7 Files
 

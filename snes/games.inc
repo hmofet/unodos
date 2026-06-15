@@ -1055,6 +1055,464 @@ DT_ROWS = 20
 @out:   rts
 .endproc
 
+; ----------------------------------------------------------------------------
+; OutLast (proc 5) - a recognizable port: a linear-perspective scrolling road
+; (converging bands, the same trick the Genesis title screen uses - divide-
+; free), steerable car, speed/score/time HUD, countdown. DEVIATION from the
+; Genesis version: no per-row 1/z raster, road curve, or oncoming traffic
+; (the SNES has no fast software 16/16 divide; flagged in HANDOFF).
+; ----------------------------------------------------------------------------
+OL_FCOLS = 28
+OL_FROWS = 20
+OL_HORIZ = 3
+
+; ol_fillrow: A0=cx0 A1=row A2=cx1(excl) A4=donor, S2=window. Clips [0,FCOLS).
+.proc ol_fillrow
+.a16
+.i16
+        lda A0
+        bpl @c0
+        stz A0
+@c0:    lda A2
+        cmp #(OL_FCOLS+1)
+        bcc @c1
+        lda #OL_FCOLS
+        sta A2
+@c1:    lda A2
+        cmp A0
+        bcc @skip
+        beq @skip
+        sec
+        sbc A0                  ; w
+        sta S3
+        ldx S2
+        lda A0
+        clc
+        adc v_wintab+WX,x
+        inc a
+        sta A0
+        lda A1
+        clc
+        adc v_wintab+WY,x
+        clc
+        adc #2
+        sta A1
+        lda S3
+        sta A2
+        lda #1
+        sta A3
+        jsr gfill
+@skip:  rts
+.endproc
+
+; outlast_new
+.proc outlast_new
+.a16
+.i16
+        lda #112
+        sta v_ol_x
+        stz v_ol_speed
+        stz v_ol_z
+        stz v_ol_score
+        lda #60
+        sta v_ol_time
+        stz v_ol_crash
+        lda #1
+        sta v_ol_state
+        lda v_frame
+        sta v_ol_last
+        sta v_ol_lastsec
+        rts
+.endproc
+
+; ol_band - draw one road band: A1=row, half cells in A2tmp. Helper inline below.
+
+; outlast_draw - S2 = window offset
+.proc outlast_draw
+.a16
+.i16
+        ; HUD bar (content row +1, white)
+        ldx S2
+        lda v_wintab+WX,x
+        inc a
+        sta A0
+        lda v_wintab+WY,x
+        inc a
+        sta A1
+        lda v_wintab+WW,x
+        sec
+        sbc #2
+        sta A2
+        lda #1
+        sta A3
+        lda #(ATTR_INV+T_SOLBG)
+        sta A4
+        jsr fill_cells
+        ; sky rows 0..HORIZ-1, haze row HORIZ
+        stz LC1                 ; row
+@sky:   lda LC1
+        cmp #OL_HORIZ
+        bcs @haze
+        stz A0
+        lda LC1
+        sta A1
+        lda #OL_FCOLS
+        sta A2
+        lda #11                 ; sky donor
+        sta A4
+        jsr ol_fillrow
+        inc LC1
+        bra @sky
+@haze:  stz A0
+        lda #OL_HORIZ
+        sta A1
+        lda #OL_FCOLS
+        sta A2
+        lda #12
+        sta A4
+        jsr ol_fillrow
+        ; road bands rows HORIZ+1 .. FROWS-1; half grows with the row
+        lda #(OL_HORIZ+1)
+        sta LC1
+@band:  lda LC1
+        cmp #OL_FROWS
+        bcc :+
+        jmp @car
+:
+        ; half cells = (row - HORIZ)
+        lda LC1
+        sec
+        sbc #OL_HORIZ
+        sta S5                  ; half
+        ; centre cell = 18 (148px / 8)
+        ; left grass [0, 18-half) grass-A/B by (row+z) parity
+        lda LC1
+        clc
+        adc v_ol_z
+        and #1
+        bne @gB
+        lda #13
+        bra @gset
+@gB:    lda #14
+@gset:  sta S6                  ; grass donor
+        ; left grass
+        stz A0
+        lda LC1
+        sta A1
+        lda #14
+        sec
+        sbc S5
+        sta A2                  ; lc
+        lda S6
+        sta A4
+        jsr ol_fillrow
+        ; road [lc, rc)
+        lda #14
+        sec
+        sbc S5
+        sta A0                  ; lc
+        lda #14
+        clc
+        adc S5
+        inc a
+        sta A2                  ; rc
+        lda LC1
+        sta A1
+        lda #15                 ; road grey
+        sta A4
+        jsr ol_fillrow
+        ; right grass [rc, FCOLS)
+        lda #14
+        clc
+        adc S5
+        inc a
+        sta A0
+        lda #OL_FCOLS
+        sta A2
+        lda LC1
+        sta A1
+        lda S6
+        sta A4
+        jsr ol_fillrow
+        ; centre stripe on alternating (row+z) rows
+        lda LC1
+        clc
+        adc v_ol_z
+        and #1
+        beq @nostripe
+        lda #14
+        sta A0
+        lda #19
+        sta A2
+        lda LC1
+        sta A1
+        lda #20                 ; stripe
+        sta A4
+        jsr ol_fillrow
+@nostripe:
+        inc LC1
+        jmp @band
+@car:   ; player car at v_ol_x (hidden while crash-flashing)
+        lda v_ol_crash
+        and #4
+        bne @overlay
+        lda v_ol_x
+        lsr a
+        lsr a
+        lsr a
+        sta S5                  ; car centre cell
+        ; body rows 19-20
+        lda S5
+        dec a
+        sta A0
+        lda #19
+        sta A1
+        lda S5
+        clc
+        adc #2
+        sta A2
+        lda #21                 ; car red
+        sta A4
+        jsr ol_fillrow
+        lda S5
+        dec a
+        sta A0
+        lda #20
+        sta A1
+        lda S5
+        clc
+        adc #2
+        sta A2
+        lda #21
+        sta A4
+        jsr ol_fillrow
+        ; windshield row 19
+        lda S5
+        sta A0
+        lda #19
+        sta A1
+        lda S5
+        inc a
+        sta A2
+        lda #22
+        sta A4
+        jsr ol_fillrow
+@overlay:
+        lda v_ol_state
+        cmp #2
+        bne @hud
+        lda #.loword(str_ol_over)
+        sta P0
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #14
+        sta A0
+        lda v_wintab+WY,x
+        clc
+        adc #11
+        sta A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+@hud:   ; HUD text: Spd/Score/Time
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #2
+        sta S6
+        lda v_wintab+WY,x
+        inc a
+        sta S7
+        lda #.loword(str_ol_spd)
+        sta P0
+        lda v_ol_speed
+        jsr dt_labelval2
+        lda #.loword(str_ol_time)
+        sta P0
+        lda v_ol_time
+        jsr dt_labelval2b
+        rts
+.endproc
+
+; dt_labelval2 - like dt_labelval but draws label@(S6,S7), value@(S6+5,S7)
+.proc dt_labelval2
+.a16
+.i16
+        pha
+        lda S6
+        sta A0
+        lda S7
+        sta A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+        pla
+        sta S0
+        lda S6
+        pha
+        lda S7
+        pha
+        jsr fmt_dec
+        pla
+        sta S7
+        pla
+        sta S6
+        lda #.loword(v_numbuf)
+        sta P0
+        lda S6
+        clc
+        adc #5
+        sta A0
+        lda S7
+        sta A1
+        lda #ATTR_INV
+        sta A4
+        jsr draw_str
+        rts
+.endproc
+
+; dt_labelval2b - second HUD field, advancing S6 by 14 first
+.proc dt_labelval2b
+.a16
+.i16
+        pha
+        lda S6
+        clc
+        adc #14
+        sta S6
+        pla
+        jsr dt_labelval2
+        rts
+.endproc
+
+; outlast_key - A1 = event data
+.proc outlast_key
+.a16
+.i16
+        lda A1
+        and #$00FF
+        sta S0
+        lda A1
+        xba
+        and #$00FF
+        sta S1
+        lda S0
+        cmp #'n'
+        beq @new
+        lda v_ol_state
+        cmp #1
+        bne @rd
+        lda v_ol_crash
+        bne @rd
+        lda S1
+        cmp #$4F
+        beq @left
+        cmp #$4E
+        beq @right
+        cmp #$4C
+        beq @accel
+        cmp #$4D
+        beq @brake
+        rts
+@new:   jsr outlast_new
+        jmp @rd
+@left:  lda v_ol_x
+        sec
+        sbc #8
+        cmp #20
+        bcs @lset
+        lda #20
+@lset:  sta v_ol_x
+        jmp @rd
+@right: lda v_ol_x
+        clc
+        adc #8
+        cmp #(208+1)
+        bcc @rset
+        lda #208
+@rset:  sta v_ol_x
+        jmp @rd
+@accel: lda v_ol_speed
+        clc
+        adc #4
+        cmp #(60+1)
+        bcc @aset
+        lda #60
+@aset:  sta v_ol_speed
+        jmp @rd
+@brake: lda v_ol_speed
+        sec
+        sbc #8
+        bcs @bset
+        lda #0
+@bset:  sta v_ol_speed
+@rd:    jsr redraw_topmost
+        rts
+.endproc
+
+; outlast_tick - physics + countdown (topmost + playing)
+.proc outlast_tick
+.a16
+.i16
+        lda v_ol_state
+        cmp #1
+        bne @out
+        lda v_frame
+        sec
+        sbc v_ol_last
+        cmp #10
+        bcc @out
+        lda v_frame
+        sta v_ol_last
+        ; crashed countdown
+        lda v_ol_crash
+        beq @alive
+        dec a
+        sta v_ol_crash
+        bne @timer
+        lda #112
+        sta v_ol_x
+        lda #5
+        sta v_ol_speed
+        bra @timer
+@alive: ; auto-accelerate
+        lda v_ol_speed
+        cmp #60
+        bcs @spdok
+        inc v_ol_speed
+@spdok: ; advance camera (scrolls the road) + score
+        lda v_ol_z
+        clc
+        adc v_ol_speed
+        and #$003F              ; cheap scroll counter
+        sta v_ol_z
+        lda v_ol_speed
+        lsr a
+        lsr a
+        clc
+        adc v_ol_score
+        sta v_ol_score
+@timer: ; one-second countdown (every 6 ticks here -> ~ once/sec at 10-tick step)
+        lda v_frame
+        sec
+        sbc v_ol_lastsec
+        cmp #60
+        bcc @draw
+        lda v_frame
+        sta v_ol_lastsec
+        lda v_ol_time
+        beq @over
+        dec v_ol_time
+        bne @draw
+@over:  lda v_ol_time
+        bne @draw
+        lda #2
+        sta v_ol_state
+@draw:  jsr redraw_topmost
+@out:   rts
+.endproc
+
 ; game_tick - main-loop dispatch to the topmost game's tick
 .proc game_tick
 .a16
@@ -1071,8 +1529,12 @@ DT_ROWS = 20
 .a16
         and #$00FF
         cmp #4
-        bne @out
+        bne @notdt
         jsr dostris_tick
+        rts
+@notdt: cmp #5
+        bne @out
+        jsr outlast_tick
 @out:   rts
 .endproc
 
@@ -1091,6 +1553,11 @@ DT_ROWS = 20
 .segment "RODATA"
 str_t_dostris: .byte "Dostris", 0
 name_dostris:  .byte "Dostris", 0
+str_t_outlast: .byte "OutLast", 0
+name_outlast:  .byte "OutLast", 0
+str_ol_over:   .byte "GAME OVER - n:new", 0
+str_ol_spd:    .byte "Spd:", 0
+str_ol_time:   .byte "Time:", 0
 str_dt_title:  .byte "DOSTRIS", 0
 str_dt_score:  .byte "Score:", 0
 str_dt_lines:  .byte "Lines:", 0
