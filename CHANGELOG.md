@@ -5,6 +5,24 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [ps2: milestone 2 — memory-card storage on the EE] - 2026-06-14
+
+The EE File Manager now persists to the **PS2 memory card** via libmc, so
+Files/Notepad save and load on real hardware and across boots.
+
+- `ee_platform.c` loads `rom0:MCMAN/MCSERV`, runs `mcInit`, and brings up
+  `/UnoDOS` (formatting the card only when `mcMkDir` reports `sceMcResNoFormat`,
+  so an already-written card is never wiped).
+- `mac_io.c` (EE branch) uses the libmc file API — `mcOpen` with
+  `sceMcFileCreateFile`, `mcRead`/`mcWrite`/`mcClose`/`mcDelete`, `mcGetDir` for
+  the catalog. (The PS2 MC isn't a POSIX FS — `open(O_CREAT)` makes a non-
+  round-tripping directory entry; `mcOpen` makes a real save-file.)
+- **Verified in PCSX2** (`shots/m2_pcsx2_*.png`): a 55-byte Notepad doc writes
+  to the card, reloads byte-for-byte after the buffer is wiped, and — in a
+  separate no-save run after a force-kill — loads back from the card, proving
+  persistence across power cycles. The host build keeps the `uno_disk/`
+  directory backend; both share the same File Manager code path.
+
 ## [ps2: milestone 1 — the desktop arrives (C core + Mac-compat shim)] - 2026-06-14
 
 The portable C core (`mac/unodos.c`, 4139 lines — 11 apps + window manager +
@@ -37,7 +55,8 @@ layer**, not rewriting (HANDOFF §1 strategy).
 
 So **M1** (desktop/WM/apps) is verified on the host *and* the emulated PS2;
 **M2** (File Manager + FAT12) and **M3 Theme** (32-bit colour) come along
-through the shim. Remaining: EE audio (audsrv) and a memory-card file backend.
+through the shim. (Memory-card storage landed in M2 below; remaining: EE audio
+via audsrv, and a USB keyboard.)
 
 ## [ps2: milestone 0 — software-FB foundation + EE ELF builds] - 2026-06-14
 
