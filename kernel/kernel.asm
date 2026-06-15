@@ -43,6 +43,11 @@ entry:
     mov [boot_ticks], ax
     pop es
 
+    ; Probe the boot device geometry + filesystem (floppy vs FAT12 superfloppy
+    ; CF on an XT-IDE adapter vs real FAT16 HD). Sets disk_spt/disk_heads and
+    ; boot_fs16; falls back to the 1.44MB floppy defaults on any anomaly.
+    call probe_boot_disk
+
     ; Install INT 0x80 handler for system calls
     call install_int_80
 
@@ -129,6 +134,74 @@ install_int_80:
     mov word [es:0x0202], 0x1000
     pop es
     ret
+
+; ============================================================================
+; probe_boot_disk - Detect boot device geometry + filesystem (called once at
+; init, DS=ES=0x1000). Sets disk_spt / disk_heads (INT 13h/08h) and boot_fs16.
+; Everything falls back to the 1.44MB floppy defaults on any anomaly, so the
+; floppy boot path is never disturbed. Enables booting a FAT12 "superfloppy"
+; CompactFlash card on an XT-IDE adapter (drive 0x80, the CF's own geometry).
+; ============================================================================
+probe_boot_disk:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    push si
+    push di
+    sti                             ; ensure BIOS disk services have interrupts
+
+    ; Default filesystem by drive class (overridden below if it is our layout)
+    mov byte [boot_fs16], 0         ; floppy default = FAT12
+    cmp byte [boot_drive], 0x80
+    jb .pbd_geo
+    mov byte [boot_fs16], 1         ; HD/CF default = FAT16 (real hard disk)
+
+.pbd_geo:
+    ; INT 13h/08h - drive parameters. CL[5:0]=max sector (=SPT), DH=max head.
+    mov ah, 0x08
+    mov dl, [boot_drive]
+    int 0x13
+    jc .pbd_detect                  ; query failed: keep geometry defaults
+    mov al, cl
+    and al, 0x3F                    ; AL = sectors per track
+    cmp al, 1
+    jb .pbd_detect                  ; bogus SPT: keep defaults
+    xor ah, ah
+    mov [disk_spt], ax
+    mov al, dh
+    xor ah, ah
+    inc ax                          ; heads = max head + 1
+    mov [disk_heads], ax
+
+.pbd_detect:
+    ; Read sector 0. If the OEM field (offset 3) is 'UNODOS' this is our
+    ; reserved-sector layout (floppy OR FAT12 superfloppy CF) -> force FAT12.
+    xor ax, ax                      ; LBA 0
+    mov bx, 0x1000
+    mov es, bx
+    mov bx, bpb_buffer
+    call floppy_read_sector         ; uses disk_spt/disk_heads/boot_drive
+    jc .pbd_done                    ; read failed: keep current boot_fs16
+    cld
+    mov si, bpb_buffer + 3          ; DS:SI = OEM field (DS=0x1000)
+    mov di, .pbd_oem                ; ES:DI = 'UNODOS' (ES=0x1000)
+    mov cx, 6
+    repe cmpsb
+    jne .pbd_done                   ; not our layout: keep boot_fs16
+    mov byte [boot_fs16], 0         ; FAT12 superfloppy confirmed
+
+.pbd_done:
+    pop di
+    pop si
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.pbd_oem: db 'UNODOS'
 
 ; INT 0x80 Handler - System Call Dispatcher
 ; Input: AH = function number (0 = discovery, 1-24 = API function)
@@ -1914,6 +1987,13 @@ build_string   equ BUILD_NUMBER_STR
 ; Boot configuration
 boot_drive:         db 0                ; Boot drive number (0x00=floppy, 0x80=HDD)
 use_bios_keyboard:  db 0                ; 1=use INT 16h (USB boot), 0=custom INT 9
+; Boot-device geometry + filesystem, probed once at init (probe_boot_disk).
+; Defaults are the 1.44MB floppy so the floppy path is byte-identical if the
+; probe is skipped/fails. A FAT12 "superfloppy" CF on an XT-IDE adapter is the
+; same on-disk layout on drive 0x80 with the CF's own CHS geometry.
+disk_spt:           dw 18               ; Sectors per track of the boot device
+disk_heads:         dw 2                ; Heads of the boot device
+boot_fs16:          db 0                ; 0=boot volume is FAT12, 1=FAT16 (real HD)
 
 ; ============================================================================
 ; BIOS Print String (for early boot before our handlers are installed)
@@ -2364,8 +2444,8 @@ load_settings:
     ; Open SETTINGS.CFG (filesystem already mounted by app_load_stub)
     ; Route by boot drive type (FAT12 for floppy, FAT16 for HD)
     mov si, .ls_filename
-    cmp byte [boot_drive], 0x80
-    jae .ls_open16
+    cmp byte [boot_fs16], 0
+    jne .ls_open16
     call fat12_open
     jmp .ls_opened
 .ls_open16:
@@ -2381,8 +2461,8 @@ load_settings:
     mov bx, 0x1000
     mov es, bx
     mov cx, 6
-    cmp byte [boot_drive], 0x80
-    jae .ls_read16
+    cmp byte [boot_fs16], 0
+    jne .ls_read16
     mov di, .ls_buf
     call fat12_read
     jmp .ls_read_done
@@ -2395,8 +2475,8 @@ load_settings:
     ; Close file first
     xor ah, ah
     mov al, [.ls_fh]
-    cmp byte [boot_drive], 0x80
-    jae .ls_close16
+    cmp byte [boot_fs16], 0
+    jne .ls_close16
     call fat12_close
     jmp .ls_apply
 .ls_close16:
@@ -2437,8 +2517,8 @@ load_settings:
 .ls_close:
     xor ah, ah
     mov al, [.ls_fh]
-    cmp byte [boot_drive], 0x80
-    jae .ls_close16b
+    cmp byte [boot_fs16], 0
+    jne .ls_close16b
     call fat12_close
     jmp .ls_done
 .ls_close16b:
@@ -11659,34 +11739,33 @@ fs_mount_stub:
     push di
     push dx
 
-    ; Check if this is a hard drive (0x80+)
+    ; Route by filesystem, not just drive class: a floppy (A:) and a FAT12
+    ; "superfloppy" CompactFlash on an XT-IDE adapter both use FAT12; only a
+    ; real FAT16 hard disk (boot_fs16=1) uses FAT16. boot_fs16 is set once at
+    ; init by probe_boot_disk.
     test al, 0x80
-    jnz .try_fat16
+    jz .mount_fat12                 ; floppy drive -> FAT12
+    cmp byte [boot_fs16], 0
+    je .mount_fat12                 ; FAT12 superfloppy CF -> FAT12
 
-    ; Floppy drive - use FAT12
-    cmp al, 0
-    jne .unsupported
-
-    ; Try to mount FAT12
-    call fat12_mount
+.try_fat16:
+    ; Real FAT16 hard drive
+    mov dl, al                      ; Drive number in DL
+    call fat16_mount
     jc .error
-
-    ; Success - return mount handle 0 (FAT12)
-    xor bx, bx
+    mov bx, 1                       ; mount handle 1 (FAT16)
     clc
     pop dx
     pop di
     pop si
     ret
 
-.try_fat16:
-    ; Hard drive - use FAT16
-    mov dl, al                      ; Drive number in DL
-    call fat16_mount
+.mount_fat12:
+    call fat12_mount
     jc .error
 
-    ; Success - return mount handle 1 (FAT16)
-    mov bx, 1
+    ; Success - return mount handle 0 (FAT12)
+    xor bx, bx
     clc
     pop dx
     pop di
@@ -11915,18 +11994,18 @@ fs_readdir_stub:
     ; LBA to CHS conversion (same pattern as fat12_open)
     push ax                         ; Save LBA
     xor dx, dx
-    mov bx, 18                      ; sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    mov bx, [disk_spt]              ; sectors per track (boot device geometry)
+    div bx                          ; AX = LBA / SPT, DX = LBA % SPT
     inc dx                          ; DX = sector (1-based)
     mov cl, dl                      ; CL = sector number
 
     xor dx, dx
-    mov bx, 2                       ; num heads
+    mov bx, [disk_heads]            ; num heads (boot device geometry)
     div bx                          ; AX = cylinder, DX = head
     mov ch, al                      ; CH = cylinder
     mov dh, dl                      ; DH = head
 
-    ; Read sector to bpb_buffer (with retry for real floppy drives)
+    ; Read sector to bpb_buffer (with retry for real drives)
     push es
     push di
     mov [.save_ch], ch              ; Save CHS for retry
@@ -11941,14 +12020,14 @@ fs_readdir_stub:
     mov cl, [.save_cl]
     mov dh, [.save_dh]
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dl, 0                       ; DL = drive A:
+    mov dl, [boot_drive]           ; boot drive (0x00 floppy / 0x80 CF on XT-IDE)
     int 0x13
     jnc .read_ok_dir
     ; Reset drive and retry
     dec byte [.retry]
     jz .retry_failed
     xor ah, ah
-    mov dl, 0
+    mov dl, [boot_drive]
     int 0x13
     jmp .retry_read
 .retry_failed:
@@ -12641,25 +12720,25 @@ floppy_read_sector:
     mov ax, [cs:.frs_lba]
     xor dx, dx
     push bx                         ; Save buffer pointer
-    mov bx, 18                      ; Sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    mov bx, [disk_spt]              ; Sectors per track (boot device geometry)
+    div bx                          ; AX = LBA / SPT, DX = LBA % SPT
     inc dx                          ; DX = sector (1-based)
     mov cl, dl                      ; CL = sector
     xor dx, dx
-    mov bx, 2                       ; Number of heads
+    mov bx, [disk_heads]            ; Number of heads (boot device geometry)
     div bx                          ; AX = cylinder, DX = head
     mov ch, al                      ; CH = cylinder
     mov dh, dl                      ; DH = head
     pop bx                          ; Restore buffer pointer
     mov ax, 0x0201                  ; AH=02 (read), AL=01 (1 sector)
-    mov dl, 0x00                    ; Drive A:
+    mov dl, [boot_drive]            ; Boot drive (0x00 floppy / 0x80 CF on XT-IDE)
     int 0x13
     jnc .frs_ok
     ; Reset drive and retry
     dec byte [cs:.frs_retry]
     jz .frs_fail
     xor ah, ah
-    mov dl, 0
+    mov dl, [boot_drive]
     int 0x13
     jmp .frs_loop
 .frs_fail:
@@ -12686,13 +12765,13 @@ floppy_read_sectors:
 .fms_chunk:
     cmp word [cs:.fms_left], 0
     je .fms_ok
-    mov ax, [cs:.fms_lba]           ; Sectors to end of track = 18 - (lba % 18)
+    mov ax, [cs:.fms_lba]           ; Sectors to end of track = SPT - (lba % SPT)
     xor dx, dx
     push bx
-    mov bx, 18
+    mov bx, [disk_spt]
     div bx
     pop bx
-    mov ax, 18
+    mov ax, [disk_spt]
     sub ax, dx
     cmp ax, [cs:.fms_left]
     jbe .fms_t1
@@ -12715,27 +12794,27 @@ floppy_read_sectors:
     mov byte [cs:.fms_try], 3
 .fms_retry:
     push bx
-    mov ax, [cs:.fms_lba]           ; LBA -> CHS (1.44MB: 18 SPT, 2 heads)
+    mov ax, [cs:.fms_lba]           ; LBA -> CHS (boot device geometry)
     xor dx, dx
-    mov bx, 18
+    mov bx, [disk_spt]
     div bx
     inc dx
     mov cl, dl                      ; CL = sector
     xor dx, dx
-    mov bx, 2
+    mov bx, [disk_heads]
     div bx
     mov ch, al                      ; CH = cylinder
     mov dh, dl                      ; DH = head
     pop bx
-    mov ax, [cs:.fms_cnt]           ; AL = sector count (1..18)
+    mov ax, [cs:.fms_cnt]           ; AL = sector count (1..SPT)
     mov ah, 0x02
-    mov dl, 0x00
+    mov dl, [boot_drive]
     int 0x13
     jnc .fms_adv
     dec byte [cs:.fms_try]
     jz .fms_fail
     xor ah, ah
-    mov dl, 0
+    mov dl, [boot_drive]
     int 0x13
     jmp .fms_retry
 .fms_adv:
@@ -12773,25 +12852,25 @@ floppy_write_sector:
     mov ax, [cs:.fws_lba]
     xor dx, dx
     push bx                         ; Save buffer pointer
-    mov bx, 18                      ; Sectors per track (1.44MB floppy)
-    div bx                          ; AX = LBA / 18, DX = LBA % 18
+    mov bx, [disk_spt]              ; Sectors per track (boot device geometry)
+    div bx                          ; AX = LBA / SPT, DX = LBA % SPT
     inc dx                          ; DX = sector (1-based)
     mov cl, dl                      ; CL = sector
     xor dx, dx
-    mov bx, 2                       ; Number of heads
+    mov bx, [disk_heads]            ; Number of heads (boot device geometry)
     div bx                          ; AX = cylinder, DX = head
     mov ch, al                      ; CH = cylinder
     mov dh, dl                      ; DH = head
     pop bx                          ; Restore buffer pointer
     mov ax, 0x0301                  ; AH=03 (write), AL=01 (1 sector)
-    mov dl, 0x00                    ; Drive A:
+    mov dl, [boot_drive]            ; Boot drive (0x00 floppy / 0x80 CF on XT-IDE)
     int 0x13
     jnc .fws_ok
     ; Reset drive and retry
     dec byte [cs:.fws_retry]
     jz .fws_fail
     xor ah, ah
-    mov dl, 0
+    mov dl, [boot_drive]
     int 0x13
     jmp .fws_loop
 .fws_fail:

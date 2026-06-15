@@ -39,6 +39,15 @@ MartyPC + open GLaBIOS (ROM-free). See docs/PORT-8088.md + tools/xt/.
       active via dcf_check in CGA mode); the old "Stage 2" TODO was stale
 - [x] RAM-floor reality: corrected the false "128KB min" → 256K desktop / 640K full
 - [x] VGA apps documented out-of-envelope on a CGA 5150/5160 (deviation, w/ shot)
+- [x] **Boot off a CompactFlash card on an XT-IDE adapter** — FAT12 "superfloppy"
+      CF (reserved-sector layout + FAT12) on drive 0x80; geometry-aware stage2 +
+      probe_boot_disk (INT 13h/08h) + parameterized FAT12 driver + boot_fs16
+      routing. Verified in MartyPC's XT-IDE rig (XT-IDE Universal BIOS detects the
+      CF, GLaBIOS boots C:, desktop + SysInfo "Boot: HD/CF" + Files read).
+      tools/xt/make_cf_vhd.py + unodos_xt_xtide machine. shots/cf_*.png
+- [ ] **FAT16-on-8088 (follow-up to the FAT12 CF):** rewrite the 386-only HD boot
+      chain (mbr/vbr/stage2_hd) + the kernel FAT16 driver to 8086 (CHS + 16-bit
+      sector math, cap ~32MB) so a standard, DOS-interchangeable FAT16 CF boots
 - [ ] **Physical IBM PC/XT pass** (real INT 13h write timing, cross-boot floppy
       persistence) — hardware-blocked, the final real-hardware step (as every port)
 - [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77MHz

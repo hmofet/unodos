@@ -54,6 +54,36 @@ overlays = [
     clock_mode = "Dynamic"
 
 [[machine]]
+name = "unodos_xt_xtide"
+type = "Ibm5160"
+rom_set = "auto"
+speaker = true
+overlays = [
+    "pcxt_2_1440k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "game_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000   # 640K
+    conventional.wait_states = 0
+
+    # XT-IDE hard disk controller with a bootable FAT12 "superfloppy" CF.
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "unodos-cf.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+[[machine]]
 name = "unodos_xt_128k"
 type = "Ibm5150v64K"
 rom_set = "auto"

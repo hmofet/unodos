@@ -35,6 +35,29 @@ entry:
     ; Save boot drive (passed from boot sector in DL)
     mov [boot_drive], dl
 
+    ; Probe the boot device geometry (INT 13h/08h). Works for the 1.44MB floppy
+    ; AND a CompactFlash card on an XT-IDE adapter (drive 0x80) whose CHS
+    ; geometry differs from a floppy. Falls back to the 1.44MB defaults (18/2)
+    ; on any anomaly so the floppy path is unchanged.
+    push es
+    push di
+    push bx
+    mov ah, 0x08
+    mov dl, [boot_drive]
+    int 0x13
+    jc .geo_default
+    mov al, cl
+    and al, 0x3F                    ; AL = sectors per track
+    cmp al, 1
+    jb .geo_default
+    mov [s2_spt], al
+    inc dh
+    mov [s2_heads], dh             ; heads = max head + 1
+.geo_default:
+    pop bx
+    pop di
+    pop es
+
     ; Print loading message
     mov si, msg_loading
     call print_string
@@ -121,15 +144,17 @@ load_kernel:
     xor bx, bx
 .no_segment_wrap:
 
-    ; Advance to next sector
+    ; Advance to next sector (boot device geometry, probed via INT 13h/08h)
     inc byte [current_sector]
-    cmp byte [current_sector], 19   ; Sectors 1-18 per track
-    jb .sector_ok
+    mov al, [s2_spt]
+    cmp byte [current_sector], al   ; valid sectors are 1..SPT
+    jbe .sector_ok
 
     ; Move to next head
     mov byte [current_sector], 1
     inc byte [current_head]
-    cmp byte [current_head], 2      ; 2 heads
+    mov al, [s2_heads]
+    cmp byte [current_head], al     ; valid heads are 0..heads-1
     jb .sector_ok
 
     ; Move to next cylinder
@@ -252,6 +277,8 @@ current_sector: db 0
 current_head:   db 0
 current_cyl:    db 0
 retry_count:    db 0
+s2_spt:         db 18           ; boot device sectors/track (default 1.44MB floppy)
+s2_heads:       db 2            ; boot device heads (default 1.44MB floppy)
 
 msg_loading:    db 'Loading kernel', 0
 msg_done:       db ' OK', 0x0D, 0x0A, 0

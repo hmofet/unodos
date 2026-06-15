@@ -58,6 +58,31 @@ On a real 4.77 MHz 8088 with BIOS INT 13h floppy timing, loading the 104-sector
 kernel and painting the CGA desktop genuinely takes ~30 s — that is the M3
 performance target (the `draw_char` CGA row-blit fast path), not a rig bug.
 
+## Booting a CompactFlash card on an XT-IDE adapter
+
+`make_cf_vhd.py` builds a bootable **FAT12 "superfloppy" CF** (a VHD for
+MartyPC's XT-IDE controller) by overlaying `build/unodos-144.img` onto the front
+of a copy of MartyPC's `default_xtide.vhd` (which supplies a valid VHD footer +
+XT-IDE CHS geometry). Only the first 1.44MB is used; see
+[docs/PORT-8088.md](../../docs/PORT-8088.md).
+
+```powershell
+# 1. Build the floppy image, then the CF VHD (lands in xt-tools/media/hdds/)
+make floppy144
+python tools\xt\make_cf_vhd.py
+
+# 2. Point MartyPC's auto-mounted VHD at it (one-time): in xt-tools/martypc.toml
+#    set  [[emulator.media.vhd]] filename = "unodos-cf.vhd"
+
+# 3. Boot the XT-IDE machine (no floppy mounted), then press C at the GLaBIOS
+#    menu to boot the hard disk (the CF):
+martypc.exe --machine-config-name unodos_xt_xtide --auto-poweron --no_sound
+```
+
+The `unodos_xt_xtide` machine (in `configs/machines/unodos_xt.toml`) is the
+640K XT with an `XtIde` HDC. The XT-IDE Universal BIOS detects the CF, GLaBIOS
+boots C:, and UnoDOS comes up reading apps from the CF's FAT12.
+
 ## Status
 
 See [docs/PORT-8088.md](../../docs/PORT-8088.md) for the milestone plan and

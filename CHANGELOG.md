@@ -5,6 +5,59 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Apple IIGS port — M1: Super Hi-Res desktop + window manager] - 2026-06-15 (Build 412)
+
+The IIGS port boots past the splash into a real, mouse-driven colour desktop
+(`iigs/shots/m1_desktop.png`).
+
+- **SHR desktop + window manager:** menu bar, icon grid, version line, and the
+  full PORT-SPEC §2 WM — a 16-slot window table (6 live), z-order with
+  raise-on-click, title-bar drag, and a close box — ported from the proven SNES
+  expression onto an 8×8 cell grid (40×25 on 320×200), all in 16-colour Super
+  Hi-Res via a 4bpp text/rect engine over the shared 8×8 font.
+- **Real pointer + keyboard:** a polled ADB mouse drives a save-under software
+  cursor (no hardware sprite on SHR); the `$C000`/`$C010` keyboard latch feeds
+  the event queue. Icons launch by double-click or arrow-keys + Return; ESC
+  closes the topmost window.
+- **SysInfo + Clock:** machine identity and a live `HH:MM:SS` uptime clock.
+- **Fast bank-0 state:** kernel-normal DBR=$00, so all WM state and tables live
+  in fast bank-0 RAM; the bank-$E1 SHR framebuffer is reached via 24-bit
+  pointers and long-indexed stores (DBR never moves) — avoiding a Mega-II-RAM
+  speed regression.
+- **Harness:** a `wdm #$02` frame marker (a NOP on real silicon) lets the
+  ROM-free rig step frame-by-frame, inject keys, and feed a signed-delta ADB
+  mouse FIFO (`$C024`/`$C027`); a `boot/wait/key/move/click/shot` script runner
+  mirrors the apple2 rig. Regression `iigs/tests/m1.py` → `M1 PASS`. Next: M2
+  (SmartPort + FAT12 + Files/Notepad).
+
+## [8088 port — boot off a CompactFlash card on an XT-IDE adapter] - 2026-06-15
+
+UnoDOS now boots and runs from a CF card on an XT-IDE controller on a real 8088.
+The hard-disk path (mbr/vbr/stage2_hd + the kernel FAT16 driver) is 386-only by
+design, so this ships a **FAT12 "superfloppy" CF** that reuses the 8086-clean
+FAT12 stack; full FAT16-on-8088 is a tracked follow-up.
+
+- **Geometry-aware disk I/O.** `boot/stage2.asm` and the new kernel
+  `probe_boot_disk` query the boot device's CHS geometry via INT 13h AH=08h
+  (`disk_spt`/`disk_heads`), and the FAT12 read/write helpers
+  (`floppy_read_sector(s)`, `floppy_write_sector`, `fs_readdir_stub`) were
+  parameterized to use `[boot_drive]` + that geometry instead of the hardcoded
+  drive 0 / 18 SPT / 2 heads. All defaults equal the old floppy constants, so
+  the floppy boot path is byte-identical (regression-verified).
+- **Filesystem routing by detection, not drive class.** `probe_boot_disk` reads
+  LBA 0 and, if the OEM field is `'UNODOS'`, sets `boot_fs16=0` (FAT12); a real
+  FAT16 HD stays `boot_fs16=1`. `fs_mount_stub` + the `load_settings` paths now
+  route by `boot_fs16`, so a FAT12 CF on drive 0x80 mounts as FAT12.
+- **Tooling/rig:** `tools/xt/make_cf_vhd.py` builds the bootable CF VHD (the
+  1.44MB image overlaid on the front of a CF-sized VHD), and the
+  `unodos_xt_xtide` MartyPC machine adds an XtIde HDC.
+- **Verified** on the cycle-accurate 8088 XT-IDE rig: XT-IDE Universal BIOS
+  detects the CF, GLaBIOS boots C:, UnoDOS reaches the desktop, SysInfo reports
+  "Boot: HD/CF", and Files lists the CF's FAT12 directory (`tools/xt/shots/cf_*.png`).
+- Deviations: usable space capped at the 1.44MB FS image; not interchangeable
+  with a DOS-formatted CF; host write-back via MartyPC's GUI menu. See
+  `docs/PORT-8088.md`.
+
 ## [snes: milestone 2 complete — Dostris, OutLast, Pac-Man] - 2026-06-15
 
 M2's three shared games join the storage core, closing M2. All in
