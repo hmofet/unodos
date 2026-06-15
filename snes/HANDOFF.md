@@ -143,14 +143,15 @@ rig proven.
 **Exit:** splash + joypad reaction, scripted screenshot lands, recipe
 documented, commit.
 
-## 4. M1 — tile desktop + WM + cursor + pad/mouse + soft keyboard + SysInfo/Clock  ✅ LOGIC DONE
+## 4. M1 — tile desktop + WM + cursor + pad/mouse + soft keyboard + SysInfo/Clock  ✅ DONE
 
-**Closed (logic).** kernel.asm + softkbd.inc implement the cell renderer
-(four UI palette schemes), the window manager (z-order, raise/close, drag,
-chrome), pad-as-pointer + the 32-cell soft keyboard, the OAM cursor, and
-SysInfo + Clock. Verified in Mesen2 (`build/m1.png`): desktop, two
-overlapping windows with correct palettes/chrome/z-order, live clock; VRAM
-proven byte-correct by CPU read-back. See [README.md](README.md).
+**Closed.** kernel.asm + softkbd.inc implement the cell renderer (four UI
+palette schemes), the window manager (z-order, raise/close, drag, chrome),
+pad-as-pointer + the 32-cell soft keyboard, the OAM cursor, and SysInfo +
+Clock. Verified in Mesen2 (`build/m1.png`, the F12 framebuffer screenshot):
+desktop, two overlapping windows with correct palettes/chrome/z-order, a
+live clock, and the full cyan soft keyboard; VRAM also proven byte-correct
+by CPU read-back. See [README.md](README.md).
 
 Traps that bit M1 (don't repeat in M2/M3):
 - The cell routines are `.a16`/`.i16` — call them with A **and** X/Y 16-bit
@@ -160,12 +161,14 @@ Traps that bit M1 (don't repeat in M2/M3):
 - `FlushOAM`/`FlushTilemap` expect 8-bit A; the NMI must `sep #$20` before
   calling them. Both also force 16-bit index for the DMA size register.
 
-**Open verification item (rig, not ROM):** the headless host only lets us
-capture Mesen's *software* renderer, which drops BG palette bits to 0 below
-~scanline 160 (soft-keyboard bottom rows render blue not cyan). VRAM is
-proven byte-identical top vs bottom, so it's a renderer artifact — but a
-clean reference capture needs a non-headless session or a framebuffer dump.
-Resolve this before leaning on bottom-screen screenshots in M2/M3.
+**The capture rig (now solved — use it for M2/M3).** On this headless/RDP
+host the GPU surface is black through `PrintWindow`. DON'T force Mesen's
+software renderer to grab the window — its display blit drops BG palette
+bits below ~scanline 160 (cost me a long detour; the VRAM was always
+correct). Instead `run_mesen.ps1` triggers **F12 = TakeScreenshot** (Mesen
+keycode 101) to dump the accurate PPU framebuffer to
+`Documents/Mesen2/Screenshots`, with focus forced via `AttachThreadInput`.
+That is the reference render.
 
 The notes below are the original pre-implementation plan.
 

@@ -1,12 +1,14 @@
-# setup_mesen.ps1 - one-time Mesen2 prep for the headless screenshot rig.
+# setup_mesen.ps1 - one-time Mesen2 prep for the screenshot rig.
 #
-# 1. Mesen shows a first-run "Configuration" dialog that blocks ROM display.
-#    We dismiss it by invoking its CONFIRM button via UI Automation
-#    (DPI-independent; synthesized clicks miss it on a scaled/RDP desktop).
-# 2. Mesen draws the SNES picture on a GPU surface; PrintWindow returns it
-#    black under a headless/RDP session. We force the software renderer so
-#    the viewport is capturable (the Genesis "SDL_RENDER_DRIVER=software
-#    under RDP" lesson, Mesen edition).
+# Mesen shows a first-run "Configuration" dialog that blocks ROM display.
+# We dismiss it by invoking its CONFIRM button via UI Automation
+# (DPI-independent; synthesized clicks miss it on a scaled/RDP desktop).
+#
+# NOTE: capture uses Mesen's own F12 screenshot (run_mesen.ps1), which dumps
+# the accurate PPU framebuffer to disk - so the *display* renderer is
+# irrelevant and the accurate hardware renderer is left on. (Earlier this rig
+# forced the software renderer for PrintWindow grabs; that display blit drops
+# BG palette bits below ~scanline 160, so we no longer use it.)
 #
 # Run once after installing Mesen. Safe to re-run.
 param([string]$Mesen = "C:\Users\arin\snes-tools\mesen\Mesen.exe")
@@ -39,14 +41,13 @@ Start-Sleep -Seconds 2
 Get-Process Mesen -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 800
 
-# force the software renderer in settings.json
+# leave the accurate hardware renderer on (F12 screenshots are renderer-
+# independent); just make sure the buggy software display path is OFF.
 $cfg = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Mesen2\settings.json'
 if (-not (Test-Path $cfg)) { throw "settings.json not found at $cfg - did Mesen launch?" }
-$raw = Get-Content $cfg -Raw
-$j = $raw | ConvertFrom-Json
-$j.Video.UseSoftwareRenderer = $true
-# preserve the UTF-8 BOM Mesen writes
+$j = (Get-Content $cfg -Raw) | ConvertFrom-Json
+$j.Video.UseSoftwareRenderer = $false
 $json = $j | ConvertTo-Json -Depth 40
 [System.IO.File]::WriteAllText($cfg, $json, (New-Object System.Text.UTF8Encoding($true)))
-Write-Output "UseSoftwareRenderer = true"
+Write-Output "UseSoftwareRenderer = false (F12 framebuffer screenshots used for capture)"
 Write-Output "Mesen ready for the screenshot rig."

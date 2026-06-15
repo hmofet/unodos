@@ -22,11 +22,12 @@ the **shadow + DMA** render architecture, the vblank NMI, auto-joypad input.
 
 ![M0 splash](build/desktop.png)
 
-**M1 — logic complete (one rig caveat, below).** A tile desktop with a
-window manager, a hardware-sprite cursor, pad-as-pointer + a soft keyboard,
-and the SysInfo + Clock apps. The Genesis M1 surface re-expressed in 65816
-on the shadow+DMA model. Verified in Mesen2: menu bar, two overlapping
-windows (correct z-order, chrome, palettes), and a live advancing clock.
+**M1 — DONE.** A tile desktop with a window manager, a hardware-sprite
+cursor, pad-as-pointer + a soft keyboard, and the SysInfo + Clock apps. The
+Genesis M1 surface re-expressed in 65816 on the shadow+DMA model. Verified
+in Mesen2 (the F12 framebuffer screenshot, below): menu bar, two overlapping
+windows (correct z-order, chrome, palettes), a live advancing clock, and the
+full cyan soft keyboard.
 
 ![M1 desktop](build/m1.png)
 
@@ -48,17 +49,6 @@ windows (correct z-order, chrome, palettes), and a live advancing clock.
   tick → HH:MM:SS), the topmost window refreshed once a second.
 - **NMI direct page** — the vblank handler runs on direct page `$0100` so
   its scratch never collides with the main loop's (`$0000`).
-
-> **Rig caveat (not a ROM bug).** On this headless/RDP host, only Mesen's
-> *software* renderer is screen-capturable (the GPU surface comes back black
-> through `PrintWindow`). That software renderer drops the BG palette bits to
-> 0 for screen rows below ~scanline 160, so the soft-keyboard panel's bottom
-> rows render blue instead of cyan in the screenshots. The tilemap VRAM is
-> proven **byte-identical** at the top and bottom of the screen (verified by
-> reading VRAM back from the CPU), so the ROM data is correct — this is a
-> renderer/rig artifact. A reference hardware-renderer capture is not
-> obtainable in this environment; resolving it (a non-headless session, or a
-> framebuffer dump) is the open verification item.
 
 M2–M3 (SRAM + Files/Notepad + games, SPC700 audio + Tracker/Music + Theme +
 scheduler) are still ahead — see [HANDOFF.md](HANDOFF.md).
@@ -161,33 +151,36 @@ accents.
 ## Test rig
 
 Mesen2 (`C:\Users\arin\snes-tools\mesen\Mesen.exe`) is the regression
-emulator (the BlastEm role). Two one-time/￼per-run scripts drive it:
+emulator (the BlastEm role).
 
 ```powershell
-./setup_mesen.ps1                       # ONCE: dismiss first-run dialog +
-                                        #       force the software renderer
-./run_mesen.ps1 -Rom build\unodos_test.sfc -Out build\autotest.png
+./setup_mesen.ps1                       # ONCE: dismiss the first-run dialog
+./run_mesen.ps1 -Rom build\unodos_test.sfc -Out build\m1.png
 ```
 
-Two hard-won rig facts, both documented in the scripts:
+The capture method is the **hard-won** part of this rig:
 
-1. **Software renderer is mandatory here.** Mesen draws the SNES picture on
-   a GPU surface that `PrintWindow` returns *black* on this headless/RDP
-   desktop (and `CopyFromScreen` fails outright). `setup_mesen.ps1` sets
-   `Video.UseSoftwareRenderer = true` in `settings.json` so the viewport is
-   capturable — the Mesen edition of the Genesis "software-under-RDP"
-   lesson.
+1. **Capture via Mesen's own F12 screenshot, not a window grab.** On this
+   headless/RDP host the emulator's GPU surface comes back *black* through
+   `PrintWindow`, and `CopyFromScreen` fails outright. Forcing Mesen's
+   *software* renderer makes the window grabbable, but that display blit has
+   an artifact (it drops BG palette bits to 0 below ~scanline 160). The fix:
+   `run_mesen.ps1` triggers **F12 = TakeScreenshot** (Mesen keycode 101),
+   which writes the **accurate PPU framebuffer** to
+   `Documents/Mesen2/Screenshots/<rom>_NNN.png`, independent of the display
+   path. Focus is forced with `AttachThreadInput` (a plain
+   `SetForegroundWindow` loses the foreground race and the keystroke is
+   dropped). This is the reference render — proven byte-correct against CPU
+   VRAM read-back.
 2. **Input is verified by AUTOTEST, not host keystrokes.** Mesen's CLI does
-   not autoload a Lua script, and its key bindings are internal scancodes
-   that are unreliable to inject under a background-focus desktop. So the
-   `test` build self-injects a synthetic joypad value in the NMI (`PAD`
-   flips `0000 → C0A0` after ~1.5 s) — the Genesis AUTOTEST fallback. The
-   interactive build shows `PAD:0000` at rest and tracks the real
-   controller; together they prove the read → shadow → DMA → display path.
+   not autoload a Lua script and its key IDs are awkward to inject, so the
+   `test` build self-injects synthetic input in the NMI (the Genesis AUTOTEST
+   fallback): M0 flips `PAD 0000 → C0A0`; M1 drives the cursor and stages the
+   desktop scene (SysInfo + Clock + soft keyboard). The interactive build
+   tracks the real controller.
 
-The vars block carries the magic `"UDM1"` at `$7E:0100` (WRAM offset
-`$0100`) as the discovery handle for future Mesen-Lua memory asserts,
-should the script path become viable.
+The vars block carries the magic `"UDM1"` at `$7E:0100` as a discovery
+handle for memory asserts.
 
 ### Captured M0 evidence
 

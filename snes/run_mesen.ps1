@@ -1,19 +1,25 @@
-# run_mesen.ps1 - the UnoDOS/SNES scripted regression rig (the Genesis
-# snapretry.ps1 role, retargeted to Mesen2).
+# run_mesen.ps1 - the UnoDOS/SNES scripted regression rig (Mesen2).
 #
-# Launches Mesen2 on a ROM, lets it run a fixed number of seconds, captures
-# the window with PrintWindow, and (optionally) closes the emulator. Mesen
-# renders the SNES picture on a GPU surface that PrintWindow returns black
-# under a headless/RDP desktop - so the rig REQUIRES Mesen's software
-# renderer. setup_mesen.ps1 flips that flag once; this script asserts it.
+# Launches Mesen2 on a ROM, lets it run, then triggers Mesen's own
+# TakeScreenshot (F12) to dump the ACCURATE PPU framebuffer to disk and
+# copies it to -Out. This is the reference render: it is the emulation
+# core's output, independent of the display path.
+#
+# Why F12 and not a window grab: on a headless/RDP host the emulator's GPU
+# surface comes back black through PrintWindow, and forcing Mesen's software
+# renderer (which IS grabbable) introduces a display-blit artifact (it drops
+# BG palette bits below ~scanline 160). Mesen's F12 screenshot sidesteps both
+# - it writes the framebuffer the PPU produced. Verified byte-correct.
+#
+# Focus is forced with AttachThreadInput (plain SetForegroundWindow loses the
+# foreground race from a background process, so the F12 keystroke is dropped).
 #
 # Usage:
-#   ./run_mesen.ps1 -Rom build\unodos_test.sfc -Out build\m0_test.png
+#   ./run_mesen.ps1 -Rom build\unodos_test.sfc -Out build\m1.png
 #   ./run_mesen.ps1 -Rom build\unodos.sfc -Out shot.png -Seconds 6 -KeepOpen
 #
-# Input is verified by the AUTOTEST builds (synthetic joypad in the NMI),
-# not by injecting host keystrokes - Mesen's key IDs are internal scancodes
-# and headless focus is unreliable. This mirrors the Genesis AUTOTEST path.
+# Input is exercised by the AUTOTEST builds (synthetic joypad in the NMI),
+# not by injecting host keystrokes - mirrors the Genesis AUTOTEST path.
 param(
     [Parameter(Mandatory=$true)][string]$Rom,
     [string]$Out = "build\shot.png",
@@ -22,29 +28,25 @@ param(
     [switch]$KeepOpen
 )
 $ErrorActionPreference = "Stop"
-Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;using System.Runtime.InteropServices;
-public class WinShot {
- [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
- [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
+public class MesenRig {
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+ [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a,uint b,bool c);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c);
- [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int hh,uint f);
- public struct RECT{public int Left,Top,Right,Bottom;}
+ [DllImport("user32.dll")] public static extern void keybd_event(byte vk,byte sc,uint f,IntPtr e);
 }
 "@
 
-# assert the software renderer (PrintWindow can't grab the GPU surface here)
-$cfg = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Mesen2\settings.json'
-if (Test-Path $cfg) {
-    $j = Get-Content $cfg -Raw | ConvertFrom-Json
-    if (-not $j.Video.UseSoftwareRenderer) {
-        Write-Warning "Mesen UseSoftwareRenderer is OFF - run setup_mesen.ps1 first or the capture will be black."
-    }
-}
+$RomFull  = (Resolve-Path $Rom).Path
+$RomName  = [System.IO.Path]::GetFileNameWithoutExtension($RomFull)
+$ShotDir  = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Mesen2\Screenshots'
+if (Test-Path $ShotDir) { Get-ChildItem "$ShotDir\$RomName*.png" -ErrorAction SilentlyContinue | Remove-Item -Force }
 
-$RomFull = (Resolve-Path $Rom).Path
 Get-Process Mesen -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 800
 Start-Process -FilePath $Mesen -ArgumentList $RomFull
@@ -52,24 +54,33 @@ Start-Sleep -Seconds $Seconds
 
 $p = Get-Process Mesen | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 $h = $p.MainWindowHandle
-[WinShot]::ShowWindow($h, 9) | Out-Null
-# size the window so the FULL 256x224 frame is visible (the default window
-# crops the bottom rows at ~2x) - 540x560 fits the whole frame at ~2x.
-[WinShot]::SetWindowPos($h, [IntPtr]::Zero, 30, 10, 540, 560, 0x0040) | Out-Null
-[WinShot]::SetForegroundWindow($h) | Out-Null
-Start-Sleep -Milliseconds 700
-$r = New-Object WinShot+RECT
-[WinShot]::GetWindowRect($h, [ref]$r) | Out-Null
-$w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
-$bmp = New-Object System.Drawing.Bitmap($w, $hh)
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$dc = $g.GetHdc()
-[WinShot]::PrintWindow($h, $dc, 2) | Out-Null
-$g.ReleaseHdc($dc); $g.Dispose()
-$bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
-$bmp.Dispose()
-Write-Output "saved $Out ($w x $hh)"
+# force foreground so the F12 keystroke is delivered
+$fg = [MesenRig]::GetForegroundWindow()
+$dummy = [uint32]0
+$fgT = [MesenRig]::GetWindowThreadProcessId($fg, [ref]$dummy)
+$tgtT = [MesenRig]::GetWindowThreadProcessId($h, [ref]$dummy)
+$myT = [MesenRig]::GetCurrentThreadId()
+[MesenRig]::ShowWindow($h, 9) | Out-Null
+[MesenRig]::AttachThreadInput($myT, $tgtT, $true) | Out-Null
+[MesenRig]::AttachThreadInput($myT, $fgT, $true) | Out-Null
+[MesenRig]::BringWindowToTop($h) | Out-Null
+[MesenRig]::SetForegroundWindow($h) | Out-Null
+[MesenRig]::AttachThreadInput($myT, $tgtT, $false) | Out-Null
+[MesenRig]::AttachThreadInput($myT, $fgT, $false) | Out-Null
+Start-Sleep -Milliseconds 500
+# F12 = TakeScreenshot (Mesen keycode 101)
+[MesenRig]::keybd_event(0x7B, 0, 0, [IntPtr]::Zero)
+Start-Sleep -Milliseconds 100
+[MesenRig]::keybd_event(0x7B, 0, 2, [IntPtr]::Zero)
+Start-Sleep -Milliseconds 900
 
-if (-not $KeepOpen) {
-    Get-Process Mesen -ErrorAction SilentlyContinue | Stop-Process -Force
+$shot = Get-ChildItem "$ShotDir\$RomName*.png" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime | Select-Object -Last 1
+if ($shot) {
+    Copy-Item $shot.FullName $Out -Force
+    Write-Output "saved $Out (from $($shot.Name))"
+} else {
+    Write-Warning "no screenshot produced - check Mesen window focus / F12 binding"
 }
+
+if (-not $KeepOpen) { Get-Process Mesen -ErrorAction SilentlyContinue | Stop-Process -Force }

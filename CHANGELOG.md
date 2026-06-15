@@ -37,13 +37,13 @@ the 16-bit cell routines with an 8-bit accumulator (garbage tiles); outer
 loop counters clobbered by the draw routines they call (use the dedicated
 LC0/LC1 slots); `FlushOAM` invoked with the wrong A width in the NMI.
 
-**Known caveat (rig, not ROM):** under this headless/RDP host only Mesen's
-*software* renderer is screen-capturable, and it drops the BG palette bits
-to 0 for screen rows below ~scanline 160 (the soft-keyboard panel's bottom
-rows render blue instead of cyan). The tilemap VRAM is proven byte-identical
-at the top and bottom of the screen, so this is a renderer/rig artifact, not
-a ROM bug - a reference (hardware-renderer) capture isn't obtainable in this
-environment. Documented in snes/README.md.
+Capture rig solved: the GPU surface is black through PrintWindow on this
+headless host, and forcing Mesen's software renderer (to grab the window)
+adds a display-blit artifact that drops BG palette bits below ~scanline 160.
+The rig now triggers Mesen's own **F12 = TakeScreenshot** to dump the
+accurate PPU framebuffer to disk (focus forced via AttachThreadInput) - the
+reference render. `build/m1.png` shows the full desktop including the cyan
+soft keyboard, exactly correct.
 
 ## [snes: milestone 0 — LoROM skeleton boots to the splash] - 2026-06-14
 
