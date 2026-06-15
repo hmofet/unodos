@@ -1,0 +1,17 @@
+# UnoDOS/C64 M2: Files + Notepad over the USV1 mini-FS (edits + saves; the FS
+# region is persisted via --storage so m2_persist.script can verify the reboot)
+wait 70
+shot m2_desktop        # desktop now has a Files icon
+assert count=2         # README.TXT + HELLO.TXT seeded on first boot
+key right              # Clock -> Files icon
+key return             # open Files (full-screen list)
+shot m2_files          # README.TXT 156 / HELLO.TXT ...
+key right              # select HELLO.TXT (entry 1)
+key return             # open it in Notepad
+shot m2_notepad        # "Hello from the C64!"
+type HI                # append two chars
+shot m2_edited         # Bytes count grew
+key save               # F1 -> fs_save
+shot m2_saved          # SAVED flash
+assert beep>0
+quit
