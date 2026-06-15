@@ -1,4 +1,4 @@
-# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (M0–M2 done)
+# UnoDOS/SNES — standalone OS for the 65816 Super Nintendo (M0–M3 done)
 
 Like the other bare-metal UnoDOS ports, this is **a real operating
 system**, not a game running on someone else's OS. The console powers on,
@@ -73,8 +73,39 @@ opens into Notepad, deletes. The desktop now has seven icons.
 
 Verified in Mesen2 (F12 framebuffer rig): the storage round-trip
 (seed → DEMO.TXT save → Files listing), and each game rendering and
-running. All deviations flagged in [HANDOFF.md](HANDOFF.md). Remaining:
-all of M3 (SPC700 audio + Tracker/Music + Theme + scheduler).
+running. All deviations flagged in [HANDOFF.md](HANDOFF.md).
+
+**M3 — DONE.** SPC700 audio + Music, Theme, Tracker, Paint, and the
+cooperative scheduler.
+
+![M3 Paint](build/m3_paint.png)
+
+- **SPC700 audio core** ([spc700.py](spc700.py) + [sound.inc](sound.inc)) —
+  ca65 can't target the SPC700, so a tiny Python SPC700 assembler builds the
+  driver (a mailbox loop + DSP register writes) + a square-wave BRR sample +
+  a MIDI→DSP-pitch table. `spc_upload` does the IPL handshake on the APU
+  ports and jumps the driver; `spc_note_on/off` drive a mailbox (token
+  round-trip). Verified by ack — SysInfo shows "Audio: SPC700 OK". Tone-by-
+  ear is the hardware pass.
+- **Music** (proc 3) — Canon in D on DSP voice 0.
+- **Theme** (proc 8) — 8 presets + a BGR555 RGB editor; recolours a palette
+  shadow flushed to CGRAM by the NMI (CGRAM is write-only outside vblank).
+- **Tracker** (proc 9) — a 32×4 pattern sequencer on DSP voices 0–3, SRAM
+  save/load (SONG.TRK).
+- **Paint** (proc 10) — a per-pixel **canvas of unique tiles** (the SNES has
+  no bitmap mode): pixels are painted into a planar-tile shadow and dirty
+  tiles are DMA'd to VRAM by the NMI (a bounded per-frame budget).
+- **Scheduler** ([sched.inc](sched.inc)) — cooperative *by ticks*: the 65816
+  stack must live in bank 0, whose low 8 KB is full here (~736 B free), so
+  the Genesis per-task-stack model can't fit. Every app exposes a `*_tick`
+  the main loop runs each frame — same behaviour, no context switch. A
+  documented verdict.
+
+Deviations (in [HANDOFF.md](HANDOFF.md)): OutLast's linear road, Pac-Man's
+cell-grid actors, Notepad's append editor, the Tracker's tone-only 4th
+channel, Paint's pencil-only/fixed-palette toolset, the tick-model scheduler.
+Backlog: game-music hooks, Notepad caret nav, Paint tools + live colour, the
+SNES-Mouse probe.
 
 ## The envelope (and its deviations)
 

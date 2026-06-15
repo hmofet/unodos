@@ -5,6 +5,38 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [snes: milestone 3 complete — SPC700 audio + Music/Theme/Tracker/Paint + scheduler] - 2026-06-15
+
+M3 closes the SNES port (M0–M3 done). The centrepiece is the SPC700 audio
+driver; on top of it land the four M3 apps and the cooperative scheduler.
+
+- **SPC700 audio core** (`spc700.py`, `sound.inc`) — ca65 can't target the
+  SPC700, so a tiny two-pass Python SPC700 assembler builds the driver (a
+  mailbox poll loop + DSP register writes), a square-wave BRR sample, and a
+  MIDI→DSP-pitch table, emitted into gen_data.inc. The 65816 side does the
+  IPL handshake upload on $2140–$2143, jumps the driver, and talks to it over
+  a token-acked mailbox; every wait is timeout-bounded. Verified by ack
+  ("Audio: SPC700 OK"); tone-by-ear is the hardware pass.
+- **Music** (proc 3) — Canon in D on DSP voice 0.
+- **Theme** (proc 8) — 8 presets + a BGR555 RGB editor. CGRAM is write-only
+  outside vblank, so apply_theme edits a WRAM palette shadow and the NMI DMAs
+  it to CGRAM (FlushPalette).
+- **Tracker** (proc 9) — a 32×4 pattern sequencer on DSP voices 0–3, with
+  SONG.TRK save/load via the USV1 SRAM.
+- **Paint** (proc 10) — a per-pixel **canvas of unique tiles** (no bitmap
+  mode on the SNES): pixels are painted into a planar-tile shadow in bank
+  $7F and dirty tiles are DMA'd to VRAM by the NMI at ≤24/frame.
+- **Scheduler** (`sched.inc`) — cooperative *by ticks*. The 65816 stack must
+  live in bank 0, whose low 8 KB is full here (~736 B free), so the Genesis
+  per-task-stack model can't fit; sched_run runs every app's *_tick from the
+  main loop instead — same behaviour, no context switch. A documented verdict.
+
+Deviations (HANDOFF): square-wave-only audio, the Tracker's tone-not-noise
+4th channel, Paint's pencil-only/fixed-palette toolset, the tick-model
+scheduler. Recurring traps fixed: the ca65 width trap (`.a8` at branch-target
+labels after a `rep`), long-indexing is X-only (the dirty ring), STZ has no
+long mode (bank-$7F clears use LDA #0/STA).
+
 ## [Apple IIGS port — M3: 4096-colour Theme + Ensoniq DOC audio] - 2026-06-15 (Build 415)
 
 The two most IIGS-distinctive hardware features land.

@@ -166,11 +166,18 @@ re-expressed in 65816 (toolchain already standing from the IIGS).
   (no 16/16 divide on the 65816); Pac-Man uses cell-grid BG-tile actors
   (the full ghost AI intact) rather than OAM sprites; Notepad is an append
   editor. Backlog: Notepad caret nav, OutLast HDMA raster, SNES-Mouse detect.
-- M3: SPC700 driver (uploaded engine + mailbox protocol — the hardest
-  novel piece on this port) for Music/Tracker/game audio; Theme over
-  CGRAM palettes; scheduler.
+- M3 (DONE): SPC700 driver (a Python SPC700 assembler builds the uploaded
+  engine + mailbox; IPL upload verified by ack) for Music (voice 0) and the
+  Tracker (4 voices); Theme over CGRAM (palette shadow + NMI flush, since
+  CGRAM is vblank-only); Paint as a per-pixel unique-tile canvas (dirty
+  tiles DMA'd by the NMI). Scheduler = cooperative-by-ticks (verdict: the
+  65816 bank-0 stack constraint leaves no room for per-task stacks; every
+  app's *_tick runs from the main loop). Deviations in HANDOFF: square-wave-
+  only audio, Tracker tone-not-noise 4th channel, Paint pencil-only/fixed
+  palette, tick-model scheduler. Backlog: game-music hooks, DSP instruments,
+  Paint tools + live colour, SNES-Mouse probe.
 - Real hardware: flashcart (confirm which one the user owns), SNES Mouse
-  if available.
+  if available; audio-by-ear pass.
 
 ## 4. Sony PS2 (FreeMcBoot)
 
