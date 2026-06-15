@@ -1,0 +1,11 @@
+wait 70
+key right
+key right
+key right
+key right              # Clock->Files->Theme->Dostris->Music (icon 5)
+key return             # open Music (starts playing on SID)
+shot m3_music
+assert beep>0          # SID voice 1 written
+wait 8                 # let a few notes advance
+shot m3_music_play
+quit
