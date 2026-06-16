@@ -17,3 +17,9 @@ port virtualboy   profile=single_app caps=[STEREO,DIRNAV]
 port dc_server    profile=single_app caps=[HEADLESS,NET,SMP]
     requires: fs?
     surfaces: (none — HEADLESS)
+port c64          profile=single_app caps=[RTC,DIRNAV]
+    requires: fs?
+    surface primary  320x200 role=PRIMARY
+port apple2       profile=single_app caps=[DIRNAV]
+    requires: fs?
+    surface primary  280x192 role=PRIMARY

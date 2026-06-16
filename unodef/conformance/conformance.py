@@ -317,6 +317,13 @@ def check_profiles(d):
         if pf == "minimal":
             record(9, "port %s (minimal) requires no WM" % name, "wm" not in req, str(req))
             record(9, "port %s (minimal) has no POINTER cap" % name, "POINTER" not in caps, str(caps))
+        if pf == "single_app":
+            # single_app ports run one app at a time and require no multi-window
+            # WM — which is WHY the 6502 ports legitimately carry no window-entry
+            # struct for a [world.*] to source. Assert that's honest, not faked.
+            pdef = prof.get(pf, {})
+            record(9, "port %s (single_app) is one-app, requires no WM" % name,
+                   pdef.get("one_app") is True and "wm" not in req, str(req))
         if "HEADLESS" in caps:
             record(9, "port %s (HEADLESS) declares zero surfaces" % name,
                    not p.get("surface"), str(p.get("surface")))

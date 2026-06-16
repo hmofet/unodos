@@ -1350,6 +1350,33 @@ role = "STEREO_R"
 profile = "single_app"
 capabilities = ["HEADLESS","NET","SMP"]
 
+# The 6502 ports are `single_app` by design (CONTRACT-ARCH §9): one disk-loaded
+# app resident at a time, no multi-window manager and no event queue (keyboard is
+# polled synchronously) — which is WHY they carry no window-entry struct / EV_*
+# constants for a [world.*] to source. Declaring the profile makes that honest and
+# generated (the profile manifest + conformance assert "no WM required"), instead
+# of faking a windowed ABI they don't ship. They DO have a filesystem (the USV1
+# mini-FS, not FAT12) and a colour/mono framebuffer surface.
+[port.c64]
+profile = "single_app"
+capabilities = ["RTC","DIRNAV"]   # CIA TOD clock; keyboard directional nav (no mouse)
+[[port.c64.surface]]
+id = "primary"
+w = 320
+h = 200
+depth = 2
+role = "PRIMARY"
+
+[port.apple2]
+profile = "single_app"
+capabilities = ["DIRNAV"]         # keyboard nav; soft clock (no RTC hardware), no mouse at M1
+[[port.apple2.surface]]
+id = "primary"
+w = 280
+h = 192
+depth = 1
+role = "PRIMARY"
+
 
 # =============================================================================
 # UnoDOS 3.1 ABI (CONTRACT-ARCH §11, Phase 12) — the versioned clean break.
@@ -1666,3 +1693,32 @@ note = "event type: key"
 sym = "EV_MOUSE"
 val = 4
 note = "event type: mouse"
+
+
+[world.c64]
+description = "Commodore 64 6510 bare-metal; dasm; single-app launcher, 320x200 VIC colour bitmap (40x25 cells)"
+cpu = "6502"
+emit = "c64/sys_gen.inc"
+note = "single_app port: NO window-entry struct / event queue (see [port.c64]). The genuine Contract overlap is the cell screen geometry; symbol names are the port's own (SCRCOLS/SCRROWS)."
+[[world.c64.equate]]
+sym = "SCRCOLS"
+val = 40
+note = "screen width in cells (320px / 8)"
+[[world.c64.equate]]
+sym = "SCRROWS"
+val = 25
+note = "screen height in cells (200px / 8)"
+
+[world.apple2]
+description = "Apple II 6502 bare-metal; dasm; single-app launcher, 280x192 hi-res (40x24 cells)"
+cpu = "6502"
+emit = "apple2/sys_gen.inc"
+note = "single_app port: NO window-entry struct / event queue (see [port.apple2]). The genuine Contract overlap is the cell screen geometry; symbol names are the port's own (SCRCOLS/SCRROWS)."
+[[world.apple2.equate]]
+sym = "SCRCOLS"
+val = 40
+note = "screen width in cells (280px / 7)"
+[[world.apple2.equate]]
+sym = "SCRROWS"
+val = 24
+note = "screen height in cells (192px / 8)"
