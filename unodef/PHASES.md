@@ -12,7 +12,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 3 | `unofs` worked example | ✅ host-proven — reads the real floppy byte-identical; write/reap round-trip |
 | 4 | Asm consumption | ✅ host-proven — **Amiga 68K byte-identical** via `[world.amiga]` equates |
 | 5 | Hybrid policy pilot | ◐ partial — `unofs_core` compiles freestanding-strict (portable); vbcc+trackdisk+WinUAE blocked |
-| 6 | `uno2d` tall vtable | — |
+| 6 | `uno2d` tall vtable | ✅ host-proven — accel backend **pixel-identical** to the software floor; renders PPM |
 | 7 | Concurrency floor + host SMP/TSan | — |
 | 8 | Display + profiles + directional | — |
 | 9 | `unosound` | — |
