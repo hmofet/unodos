@@ -222,9 +222,8 @@ set FILENAME=TEST.TXT REM Must be 8.3 format, uppercase
 
 ## References
 
-- UnoDOS Documentation: `docs/OMNIBOOK_TEST_PROCEDURE.md`
-- Omnibook Fixes: `docs/OMNIBOOK_TEST_FIXES.md`
-- FAT12 Implementation: `docs/FAT12_IMPLEMENTATION_SUMMARY.md`
+- Storage / filesystem architecture: [`docs/STORAGE.md`](../docs/STORAGE.md)
+- Bootloader & boot chain: [`docs/bootloader-architecture.md`](../docs/bootloader-architecture.md)
 
 ---
 

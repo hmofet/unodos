@@ -383,7 +383,7 @@ Three fonts are available. The default is font 1 (8x8).
 | Font | Size | Advance | Chars per 320px line |
 |------|------|---------|---------------------|
 | 0 | 4x6 | 6px | 53 |
-| 1 | 8x8 | 12px | 26 |
+| 1 | 8x8 | 8px | 40 |
 | 2 | 8x12 | 12px | 26 |
 
 ## GUI Widgets
@@ -521,7 +521,7 @@ To include on the OS floppy, place the .BIN file in the FAT12 filesystem of `bui
 | Max windows | 16 |
 | Max concurrent apps | 6 (+ launcher) |
 | App segment size | 64 KB |
-| Default font | 8x8, 12px advance |
+| Default font | 8x8, 8px advance |
 | Title bar height | 10 px |
 | Window border | 1 px |
 

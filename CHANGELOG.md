@@ -5,6 +5,42 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unoui — cross-platform UI toolkit (write-once widgets, themes, portable input)] - 2026-06-15
+
+A new portable C widget toolkit, **unoui** ([unoui/](unoui/), guide in
+[docs/UNOUI.md](docs/UNOUI.md)), for the C-based ports and the host — the
+look-and-feel analogue of [Uno3D](docs/UNO3D.md): a portable core over the
+shared `fb.h` software framebuffer plus a swappable vtable. An app builds a
+window's widget tree **once**; a **theme** restyles all of it.
+
+- **Write once, theme many.** A theme is a `unoui_palette` (semantic colour
+  roles), `unoui_metrics` (sizes + target colour depth) and a `unoui_draw`
+  vtable of chrome painters with per-painter NULL-fallback to the portable
+  defaults — so a theme can change *colours*, *graphics*, or both. Depth-aware
+  via `ui_shade` ordered dither, so write-once chrome renders correctly from
+  1-bit to truecolour.
+- **Eight themes** ship and are host-verified by rendering the *same* window
+  under each into a contact sheet (`unoui/build/themes.png`): the unified
+  `theme_unodos`, plus native reproductions — Mac OS 7, a 1-bit Mac Plus,
+  Windows 3.1, Amiga Workbench, Commodore 64, Apple II (green mono), NeXTSTEP.
+- **~20 widgets:** window/menu-bar/tabs, label, button, checkbox, radio,
+  editable single-line field and **multi-line text area** (caret, selection,
+  scrolling), progress bar, vertical + horizontal scrollbars, slider, numeric
+  spinner, dropdown/combo, list box, group box, separator, desktop icon.
+- **Portable input** ([unoui_input.c](unoui/unoui_input.c)) — all behaviour is a
+  pure function of an abstract `unoui_event` stream: window drag with z-order,
+  focus + Tab traversal, scrollbar/slider thumb drag, menus and dropdown popups,
+  and full multi-line text editing (caret, mouse caret-placement + drag-select,
+  Shift-arrow selection, Home/End, Backspace/Delete). A port writes only a small
+  adapter mapping native mouse/keyboard to `unoui_event` plus the `fb` present.
+  Verified by driving the write-once app with a *scripted* event stream into a
+  14-frame storyboard (`unoui/build/storyboard.png`), whose last frames re-skin
+  the identical live state under other themes — proving input and theming
+  compose. Builds clean under `-Wall`/`-Wextra`; reuses `ps2/fb.c` + the shared
+  8×8 font, exactly as the Uno3D host target does. Not yet wired into the port
+  glue `main()`s (each needs its ~20-line event adapter); it is the C-port
+  toolkit plus host proof.
+
 ## [Cross-platform migration — apps now LOAD FROM STORAGE] - 2026-06-15 (Build 425)
 
 Every UnoDOS port that has storage now **loads its apps from disk at runtime as
