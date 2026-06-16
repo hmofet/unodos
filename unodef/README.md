@@ -9,12 +9,16 @@ demoted from "the definition" to **first consumer + conformance oracle**.
 
 ## unogen — emitting the per-world surfaces
 
-[`unogen.py`](unogen.py) reads `unodef.toml` and emits the contract surface for the
-first 5 worlds (the CPU families covering every shipped port) into [`gen/`](gen/):
-x86/NASM, C core, 68000/vasm, 6502/dasm, 65816/ca65. Run `python unodef/unogen.py
---check` to emit and assert the x86 output matches `kernel.asm`'s literals (the
-trust anchor). See [`gen/README.md`](gen/README.md). It emits only the *shape* of
-the boundary (CONTRACT-ARCH §3.2) — never syscall bodies or CPU logic.
+[`unogen.py`](unogen.py) reads `unodef.toml` and emits the contract surface into
+[`gen/`](gen/) for 6 worlds (the CPU families covering every shipped + planned
+port): x86/NASM, C core, 68000/vasm, 6502/dasm, 65816/ca65, Z80/sjasmplus. Per
+world it emits constants/offsets/enums (`unodef.*`); for worlds with a declared
+`[callgate.binding.*]` it also emits call-gate **app stubs** (`unosys.*`, x86 +
+m68k); plus a world-neutral `manifest.json` for conformance/docs. Run `python
+unodef/unogen.py --check` to emit and assert the x86 output matches `kernel.asm`'s
+literals (the trust anchor). See [`gen/README.md`](gen/README.md). It emits only
+the *shape* of the boundary (CONTRACT-ARCH §3.2) — never syscall bodies or CPU
+logic.
 
 ## Status: Phase 0 (authoring)
 
