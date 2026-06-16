@@ -71,3 +71,5 @@ build/job_coop
 build/job_smp
 build/unobus_test
 build/unobus_test.exe
+build/unonet_test
+build/unonet_test.exe

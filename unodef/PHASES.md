@@ -19,7 +19,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 10 | SMP + OFFLOAD pilots (Saturn/PS3) | ◐ host-proven — OFFLOAD job floor/accel equivalence (COOP+SMP); real SH2/SPU hardware blocked (de-risked by Phase 7) |
 | 11 | Drivers & buses | ◐ host-proven — enumerate→bind→register + registry-bound block read + FDS detect-pin scale-down; real PCI/USB hardware blocked |
 | 12 | Ship 3.1 ABI | ◐ host-proven (additive) — categorized ordinal map (collision-free), .UNO v2 header generates w/ passing static-asserts; port re-issue is the future tail |
-| 13 | New targets + Z80 + networking | — |
+| 13 | New targets + Z80 + networking | ◐ host-proven — Z80 equates generated; nic loopback round-trip + HEADLESS+NET server compose; console SDK backends blocked |
 
 ## Toolchains reachable here
 - **nasm** (`~/AppData/Local/bin/NASM`) — x86 ✅
