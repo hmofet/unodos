@@ -219,17 +219,10 @@ v_pm_maze   = $0D22         ; 28x25 = 700 bytes ($0D22-$0FE5, below TMAP $1000)
 ; ---- constants ----
 SCRW_C  = 32
 SCRH_C  = 28
-SCRW    = 256
-SCRH    = 224
-MAXWIN  = 6
-WENT_SIZE = 16
-WSTATE  = 0
-WPROC   = 1
-WX      = 2
-WY      = 4
-WW      = 6
-WH      = 8
-WTITLE  = 10
+; window-entry + screen/event metrics — Contract-owned (CONTRACT-ARCH §13), generated
+; by unogen from unodef/unodef.toml ([world.snes]); byte-identical to the old block.
+; Provides SCRW SCRH MAXWIN WENT_SIZE WSTATE WPROC WX WY WW WH WTITLE EVQ_SIZE EV_KEY EV_MOUSE.
+.include "../unodef/gen/snes/sys_gen.inc"
 ATTR_NORM = $0000
 ATTR_INV  = $0400
 ATTR_ACC  = $0800
@@ -238,9 +231,6 @@ MENUBAR_C = 1
 TICKS_SEC = 60
 DBLCLICK  = 30
 NICONS   = 11
-EVQ_SIZE = 32
-EV_KEY   = 1
-EV_MOUSE = 4
 KBD_TOP  = 22
 VRAM_MAP = $0000
 VRAM_CHR = $1000

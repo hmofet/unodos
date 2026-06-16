@@ -1390,3 +1390,62 @@ boot_sectors   = 1
 stage2_sectors = 4
 kernel_sectors = 104
 spare_sectors  = 1     # boot + stage2 + kernel + spare == fat12.fs_start_sector (110)
+
+
+[world.snes]
+description = "SNES 65816 bare-metal; ca65/cc65; compact 16B window entry, 256x224"
+cpu = "65816"
+emit = "snes/sys_gen.inc"
+note = "window entry 16B (x86 base 32B); 256x224 screen; symbol names are the port's own"
+[[world.snes.equate]]
+sym = "SCRW"
+val = 256
+note = "screen width"
+[[world.snes.equate]]
+sym = "SCRH"
+val = 224
+note = "screen height"
+[[world.snes.equate]]
+sym = "MAXWIN"
+val = 6
+note = "window table size"
+[[world.snes.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base 32)"
+[[world.snes.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.snes.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.snes.equate]]
+sym = "WX"
+val = 2
+[[world.snes.equate]]
+sym = "WY"
+val = 4
+[[world.snes.equate]]
+sym = "WW"
+val = 6
+[[world.snes.equate]]
+sym = "WH"
+val = 8
+[[world.snes.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title"
+[[world.snes.equate]]
+sym = "EVQ_SIZE"
+val = 32
+note = "event queue depth"
+[[world.snes.equate]]
+sym = "EV_KEY"
+val = 1
+note = "event type: key"
+[[world.snes.equate]]
+sym = "EV_MOUSE"
+val = 4
+note = "event type: mouse"

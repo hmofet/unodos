@@ -419,7 +419,7 @@ def render_world_equates(d, world):
     from [world.<name>]. Phase 4 'describe what ships' — values are the port's, so
     generation is byte-identical to the hand-maintained block it replaces."""
     w = d["world"][world]
-    dia = {"m68k": VASM}.get(w.get("cpu"), VASM)
+    dia = {"m68k": VASM, "65816": CA65, "6502": DASM, "z80": Z80}.get(w.get("cpu"), VASM)
     out = ["; " + BANNER[0], "; " + BANNER[1],
            "; world: %s — %s" % (world, w.get("description", "")), ""]
     if w.get("note"):
