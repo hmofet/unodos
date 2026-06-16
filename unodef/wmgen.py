@@ -92,6 +92,11 @@ def layout_aos(model, plat):
     ealign = min(max(e["width"] for e in ents), cap_align)
     if off % ealign:
         off += ealign - (off % ealign)           # pad entry to its alignment
+    if plat.get("pad_pow2"):                      # power-of-two stride for shift-indexing
+        p = 1
+        while p < off:
+            p <<= 1
+        off = p
     return ordered, ents, off                    # off == entry_size
 
 
@@ -191,6 +196,34 @@ def emit_vasm(model, name, plat):
           "            move.b (a0,d0.w),d1",
           "            endm", ""]
     return "\n".join(L), cols, zcol, total
+
+
+# ---------------------------------------------------------------------------
+# 65816 / ca65 world, AoS layout: emit WIN_ENTRY_SIZE + a win_index_to_x macro
+# (window slot index -> X = byte offset, via `shift` x `asl a` + `tax`). The
+# 65816 ports index the AoS table by a byte offset in X; this single-sources the
+# stride the kernel hand-wrote at ent_x / zent_x. Used to wire SNES + IIGS.
+# ---------------------------------------------------------------------------
+def emit_ca65_aos(model, name, plat):
+    ordered, ents, esz = layout_aos(model, plat)
+    shift = (esz.bit_length() - 1) if (esz & (esz - 1)) == 0 else None
+    if shift is None:
+        raise ValueError("entry size %d is not a power of two — no shift form" % esz)
+    L = ["; " + BANNER.replace("\n", "\n; "),
+         "; platform: %s — %s, %d-bit, %s coords (max %d), capacity %d, layout=AOS"
+         % (name, plat["cpu"], plat["word_bits"], plat["coord_space"],
+            plat["coord_max"], plat["capacity"]),
+         "%-22s = %d" % ("WIN_ENTRY_SIZE", esz), "",
+         "; field offsets DERIVED from the logical model (match the port's [world.%s]):" % name]
+    for e in ents:
+        L.append(";   %-12s @%-2d u%-2d %s" % (e["name"], e["off"], e["width"] * 8, e["tier"]))
+    L += ["",
+          "; win_index_to_x: A = window slot index -> X = byte offset (index * %d)." % esz,
+          "; Single-sources the stride (%d x asl) the kernel hand-wrote at ent_x/zent_x." % shift,
+          ".macro win_index_to_x"]
+    L += ["    asl a"] * shift
+    L += ["    tax", ".endmacro"]
+    return "\n".join(L) + "\n", ents, None, esz * plat["capacity"]
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +387,9 @@ def main():
         elif dialect == "vasm":
             text, cols, zcol, total = emit_vasm(model, name, plat)
             write(name, "window.i", text)
+        elif dialect == "ca65":
+            text, cols, zcol, total = emit_ca65_aos(model, name, plat)
+            write(name, "window.inc", text)
         else:
             print("  skip %s (dialect %s not in this prototype)" % (name, dialect))
             continue

@@ -25,20 +25,45 @@ accessors.** This is the tall-vtable / "describe what ships" principle applied t
 | amiga | vasm (68000) | SoA | px u16    | 6  | 102 B  | u16 columns **double the index** (68000 has no scaled index); u8 don't |
 | host  | C (x86_64)   | SoA | px u16    | 64 | 1344 B | contiguous columns → SIMD-composite friendly |
 | x86   | C (16-bit)   | AoS | px u16    | 16 | 224 B  | fixed-offset struct — proves AoS is just a layout knob |
-| macplus | vasm (68000) | AoS | px u16  | 6  | 96 B   | reproduces the shipped 16 B entry — **wired into the real port** |
+| macplus | vasm (68000) | AoS | px u16  | 6  | 96 B   | reproduces the shipped 16 B entry — **wired** |
+| amiga | vasm (68000) | AoS | px u16  | 6  | 96 B   | **wired** (`wintab(pc)`) |
+| genesis | vasm (68000) | AoS | px u16 | 6  | 96 B   | **wired** (`VARS+v_wintab`) |
+| snes  | ca65 (65816) | AoS | px u16  | 6  | 96 B   | **wired** (index→X `asl`×4) |
+| iigs  | ca65 (65816) | AoS | px u16  | 6  | 96 B   | **wired** (index→X `asl`×4) |
+| amd64 | C (x86_64)   | SoA | px u16  | 256| 5376 B | the 64-bit-C/SoA realization (see below) |
 
-## Wired into a shipped port (byte-identical)
-`macplus/kernel.asm` now sources its window entry-ADDRESSING from this model.
-The MacPlus AoS layout (`ptr32`, word-aligned) reproduces the shipped 16-byte
-entry exactly — `state@0 owner@1 x@2 y@4 w@6 h@8 title@10`, `WIN_ENTRY_SIZE=16`
-— i.e. the compact 16 B port layout **is** the greenfield model in AoS form (the
-x86 32 B legacy is the outlier, because it inlines the title). wmgen emits a
-`win_entry_ptr` macro (slot index → entry pointer, `lsl #4`/`lea wintab(pc)`),
-and the kernel's two hand-written addressing sites (`win_ptr_raw`, `zwin_ptr`)
-now invoke it. The macro expands to the same instructions, so the rebuild is
-**byte-identical** (`kernel.bin` + `.dsk` unchanged), proving the generated
-boundary drives a real shipped port with zero regression. (Field offsets already
-came from `[world.macplus]`; the addressing was the last hand-written piece.)
+## Wired into ALL five windowing ports (byte-identical)
+Every shipped port that has a window table now sources its window ADDRESSING from
+this model. The compact 16 B port layout **is** the greenfield model in AoS form
+(`state@0 owner@1 x@2 y@4 w@6 h@8 title@10`, `WIN_ENTRY_SIZE=16`); the x86 32 B
+legacy is the outlier because it inlines the title. wmgen emits a per-port macro
+that expands to the kernel's existing instructions, so every rebuild is
+byte-identical:
+
+| port | dialect | generated macro | hand-written sites replaced | result |
+|---|---|---|---|---|
+| macplus | vasm | `win_entry_ptr` (`lsl #4`/`lea wintab(pc)`) | `win_ptr_raw`, `zwin_ptr` | byte-identical |
+| amiga | vasm | `win_entry_ptr` (`lsl #4`/`lea wintab(pc)`) | `win_ptr_raw`, `zwin_ptr` | byte-identical |
+| genesis | vasm | `win_entry_ptr` (`lsl #4`/`lea VARS+v_wintab`) | `zwin_ptr` | byte-identical |
+| snes | ca65 | `win_index_to_x` (`asl`×4 + `tax`) | `ent_x`, `zent_x` | byte-identical |
+| iigs | ca65 | `win_index_to_x` (`asl`×4 + `tax`) | `ent_x`, `zent_x` | byte-identical |
+
+Field offsets already came from each port's `[world.*]`; the index→address
+arithmetic was the last hand-written piece, so each port's whole window boundary
+is now Contract-generated. The two 68000 base-addressing modes (PC-relative vs
+absolute `VARS+`) and the 65816 shift-index form are all just descriptor fields.
+
+## AMD64 — is it "just an expansion of x86"?
+Mostly yes, with one correction: AMD64's window realization is the **64-bit-C SoA**
+shape (`[wmodel.platform.amd64]` = `host` with a bigger capacity) — it expands the
+**host/C** pattern, **not** the 16-bit-real-mode `x86` pattern (which is AoS-16,
+`ptr16`, `INT 0x80`). Same logical model, same C dialect, only the descriptor
+changes — nothing new to design at the window layer; the generated header compiles
+and runs like `host`. The genuinely new work for a *full* AMD64 port is the L1
+**mechanism** (long mode, 64-bit call ABI, paging, GOP framebuffer, drivers), which
+is orthogonal to the contract. The one new *window* surface AMD64 invites is an
+**optional SIMD-composite accel** override — and that is the tall-vtable's opt-in
+high-altitude part, sitting behind these same accessors, not a floor requirement.
 
 ## Verified (host-first, nothing faked)
 - **C / SoA (host):** compiles; the write-once `win_hit`/`win_reap` policy runs

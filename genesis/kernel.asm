@@ -58,6 +58,10 @@ SPRTAB      equ $F000               ; sprite attribute table
 ; hand-maintained equates this include replaced (SCRW/SCRH here; EV_*/EVQ_SIZE
 ; and MAXWIN/WENT_SIZE/W* below).
             include "../unodef/gen/genesis/sysabi_gen.i"
+; Greenfield window model (WMODEL.md): window entry-addressing derived from the
+; logical [wmodel] by wmgen for [wmodel.platform.genesis] — win_entry_ptr (slot
+; -> a2). Byte-identical to the inline lsl/lea/lea it replaces at zwin_ptr.
+            include "../unodef/gen/wm/genesis/window.i"
 SCRW_C      equ 40                  ; cells (port-specific: SCRW/8)
 SCRH_C      equ 28
 
@@ -1397,9 +1401,7 @@ zwin_ptr:
         and.w   #$FF,d2
         move.b  (a0,d2.w),d2
         and.w   #$FF,d2
-        lsl.w   #4,d2
-        lea     VARS+v_wintab,a2
-        lea     (a2,d2.w),a2
+        win_entry_ptr                   ; generated: d2 slot -> a2 (stride from Contract)
         movem.l (sp)+,d2/a0
         rts
 

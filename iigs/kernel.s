@@ -28,6 +28,10 @@
 .smart +
 
 .include "sys.inc"
+; Greenfield window model (WMODEL.md): window index->byte-offset stride derived
+; from the logical [wmodel] by wmgen for [wmodel.platform.iigs] — win_index_to_x
+; (A=slot -> X=index*16). Byte-identical to the asl x4 + tax at ent_x / zent_x.
+.include "../unodef/gen/wm/iigs/window.inc"
 
 .segment "RODATA"
 .include "gen_data.inc"
@@ -869,11 +873,7 @@ select_icon:
 .i16
 ent_x:
         and #$00FF
-        asl a
-        asl a
-        asl a
-        asl a
-        tax
+        win_index_to_x          ; generated: A=slot -> X=index*16 (stride from Contract)
         rts
 
 .a16
@@ -885,11 +885,7 @@ zent_x:
         lda v_zlist,x
         rep #$20
         and #$00FF
-        asl a
-        asl a
-        asl a
-        asl a
-        tax
+        win_index_to_x          ; generated: A=slot -> X=index*16 (stride from Contract)
         rts
 
 ; ============================================================================

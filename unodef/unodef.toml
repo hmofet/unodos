@@ -1813,16 +1813,31 @@ coord_max   = 1920         # >= 256 -> coord columns are u16
 capacity    = 64
 layout      = "soa"        # columnar: contiguous columns are SIMD-composite friendly
 
-[wmodel.platform.amiga]
+[wmodel.platform.amiga]   # WIRED to amiga/kernel.asm (AoS, matches shipped 16B entry)
 cpu         = "m68k"
 dialect     = "vasm"
 word_bits   = 16
 ptr_bits    = 32
 coord_space = "pixels"
-coord_max   = 320          # >= 256 -> coord columns are u16 (exercises 68000 index-doubling)
+coord_max   = 320
 capacity    = 6
-layout      = "soa"
-storage     = 0x78000      # illustrative chip-RAM column block
+layout      = "aos"
+max_align   = 2
+entry_base  = "wintab"
+pc_relative = true
+
+[wmodel.platform.genesis]  # WIRED to genesis/kernel.asm (base is absolute VARS+v_wintab)
+cpu         = "m68k"
+dialect     = "vasm"
+word_bits   = 16
+ptr_bits    = 32
+coord_space = "pixels"
+coord_max   = 320
+capacity    = 6
+layout      = "aos"
+max_align   = 2
+entry_base  = "VARS+v_wintab"
+pc_relative = false
 
 [wmodel.platform.x86]
 cpu         = "x86"
@@ -1846,3 +1861,42 @@ layout      = "aos"        # reproduce the shipped 16-byte AoS entry (lsl #4 str
 max_align   = 2            # 68000 only needs word alignment, even for longs
 entry_base  = "wintab"     # the kernel's window-table label
 pc_relative = true         # lea wintab(pc),a2
+
+[wmodel.platform.snes]    # WIRED to snes/kernel.asm (ca65; index->X via asl shift)
+cpu         = "65816"
+dialect     = "ca65"
+word_bits   = 16
+ptr_bits    = 16          # bank-0 near pointer (title)
+coord_space = "pixels"
+coord_max   = 256
+capacity    = 6
+layout      = "aos"
+max_align   = 1           # 65816 has no alignment requirement
+pad_pow2    = true        # 16-byte stride so index*16 = 4x asl
+
+[wmodel.platform.iigs]    # WIRED to iigs/kernel.s (ca65; same index->X form)
+cpu         = "65816"
+dialect     = "ca65"
+word_bits   = 16
+ptr_bits    = 16
+coord_space = "pixels"
+coord_max   = 256
+capacity    = 6
+layout      = "aos"
+max_align   = 1
+pad_pow2    = true
+
+# AMD64: NOT a new design — it's the host/64-bit-C SoA realization with a bigger
+# capacity. Same logical model, same C dialect; only the descriptor differs. (A
+# full AMD64 OS port's NEW work is the L1 mechanism — long mode, 64-bit call ABI,
+# paging, GOP framebuffer — not the window model. The only new window surface AMD64
+# invites is an OPTIONAL SIMD-composite accel behind these same accessors.)
+[wmodel.platform.amd64]
+cpu         = "x86_64"
+dialect     = "c"
+word_bits   = 64
+ptr_bits    = 64           # native 64-bit handle/pointer
+coord_space = "pixels"
+coord_max   = 7680         # 8K-class display -> u16 coords (a single display fits in u16)
+capacity    = 256          # modern: hundreds of windows
+layout      = "soa"        # contiguous columns -> SIMD-composite friendly

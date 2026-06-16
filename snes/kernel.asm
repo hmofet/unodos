@@ -223,6 +223,11 @@ SCRH_C  = 28
 ; by unogen from unodef/unodef.toml ([world.snes]); byte-identical to the old block.
 ; Provides SCRW SCRH MAXWIN WENT_SIZE WSTATE WPROC WX WY WW WH WTITLE EVQ_SIZE EV_KEY EV_MOUSE.
 .include "../unodef/gen/snes/sys_gen.inc"
+; Greenfield window model (WMODEL.md): the window index->byte-offset stride is
+; derived from the logical [wmodel] by wmgen for [wmodel.platform.snes] — provides
+; win_index_to_x (A=slot -> X=index*16). Byte-identical to the asl x4 + tax the
+; kernel hand-wrote at ent_x / zent_x.
+.include "../unodef/gen/wm/snes/window.inc"
 ATTR_NORM = $0000
 ATTR_INV  = $0400
 ATTR_ACC  = $0800
@@ -906,11 +911,7 @@ MainLoop:
 .a16
 .i16
         and #$00FF
-        asl a
-        asl a
-        asl a
-        asl a
-        tax
+        win_index_to_x          ; generated: A=slot -> X=index*16 (stride from Contract)
         rts
 .endproc
 
@@ -926,11 +927,7 @@ MainLoop:
         rep #$20
 .a16
         and #$00FF
-        asl a
-        asl a
-        asl a
-        asl a
-        tax
+        win_index_to_x          ; generated: A=slot -> X=index*16 (stride from Contract)
         rts
 .endproc
 

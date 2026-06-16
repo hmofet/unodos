@@ -27,6 +27,11 @@
         mc68000
 
         include "sysabi.i"          ; disk-loaded-app ABI (APIVEC, slots, macros)
+; Greenfield window model (WMODEL.md): window entry-addressing derived from the
+; logical [wmodel] by wmgen for [wmodel.platform.amiga] — provides win_entry_ptr
+; (slot index -> a2; stride+base single-sourced). Byte-identical to the inline
+; lsl/lea/lea it replaces at win_ptr_raw / zwin_ptr.
+        include "../unodef/gen/wm/amiga/window.i"
 
 ; ---------------------------------------------------------------- constants
 CUSTOM      equ $DFF000
@@ -990,9 +995,7 @@ win_create:
 ; win_ptr_raw - d2 = table index -> a2. Preserves d0-d7/a0-a1.
 win_ptr_raw:
         move.w  d2,-(sp)
-        lsl.w   #4,d2               ; * WENT_SIZE
-        lea     wintab(pc),a2
-        lea     (a2,d2.w),a2
+        win_entry_ptr                   ; generated: d2 slot -> a2 (stride from Contract)
         move.w  (sp)+,d2
         rts
 
@@ -1004,9 +1007,7 @@ zwin_ptr:
         and.w   #$FF,d2
         move.b  (a0,d2.w),d2       ; d2 = table slot for this z index
         and.w   #$FF,d2
-        lsl.w   #4,d2              ; * WENT_SIZE
-        lea     wintab(pc),a2
-        lea     (a2,d2.w),a2
+        win_entry_ptr                   ; generated: d2 slot -> a2 (stride from Contract)
         movem.l (sp)+,d2/a0
         rts
 
