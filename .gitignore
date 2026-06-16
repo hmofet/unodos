@@ -59,3 +59,7 @@ c64/__pycache__/
 build/uno2d_test
 build/uno2d_test.exe
 build/*.ppm
+build/sched_coop
+build/sched_smp
+build/sched_race
+build/*.tsan
