@@ -201,3 +201,24 @@ Clock — the WM works. **All six windowing ports** now consume the wmodel for
 window addressing. Real-hardware boot guide: `docs/RUN-X86-REAL-HARDWARE.md`
 (image: `build/unodos-144.img`). The window-entry *layout* still uses the shipping
 `[struct] win_entry` (32 B); the greenfield clean layout is the future 3.1 break.
+
+## x86 3.1 clean layout — SHIPPED + QEMU-verified
+The x86 reference port now ships the **clean 16B window entry** (the real 3.1
+break), done in two QEMU-verified increments:
+1. **Pointer titles** — the inline `char[12]` title moved to a kernel title pool;
+   the entry holds a near pointer (`win_title_pool` + handle*16). Removes the
+   11-char limit and the 12 bytes that bloated the entry.
+2. **Compaction 32B → 16B** — the Contract `[struct] win_entry` became the clean
+   layout (`state@0 owner@1 x@2 y@4 w@6 h@8 title@10 zorder@12 flags@13 cscale@14`).
+   `kernel.asm` needed **no code edits** (symbolic `WIN_OFF_*` + the `win_entry_addr`
+   stride macro flip with the Contract); `window_table` shrank 512B → 256B.
+
+z-order stays an **in-entry rank byte** — a valid per-platform realization of the
+z relation (the entry pads to 16B for the `shl 4` stride regardless, so a side-list
+buys no size and adds risk; the compact ports use the side-list realization).
+
+Verified: trust anchor OK (updated expected values), conformance 52/52, C
+`_Static_assert(sizeof==16)`, unofs compiles, all 5 other asm ports byte-identical;
+QEMU full WM (open/close/reopen/drag/z-order, 3 distinct pointer-titles). This is
+the first port shipping the 3.1 clean window layout. Real-hw guide:
+`docs/RUN-X86-REAL-HARDWARE.md`.
