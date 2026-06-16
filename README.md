@@ -4,6 +4,14 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 
 ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-blue)
 
+> **Two lines.** This repo now carries both:
+> - **UnoDOS 3 Legacy** — the shipped, real-code-validated OS and its many ports
+>   (branch `unodos-3-legacy`, tag `legacy-pre-3.1`). Stable, known-good.
+> - **UnoDOS 3.1** — the forward, contract-driven redesign (branch `master`): one
+>   machine-readable Contract (`unodef/`) every world is generated from or checked
+>   against. See **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for
+>   status, the design, and next directions.
+
 ## Overview
 
 UnoDOS 3 is a GUI-first operating system that boots directly into a windowed desktop environment. It runs on bare metal x86 hardware with no DOS dependency — just BIOS services and an Intel 8088 or later processor. The entire OS, including a ~46KB kernel (loaded from a 104-sector / 52KB reserved area) with 106 system calls, a window manager, two filesystems, cooperative multitasking, and 19 applications, fits on a single 1.44MB floppy disk.
