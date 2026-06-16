@@ -34,7 +34,7 @@ unodef/                 the Contract (Layer 0) + tooling
                         per-world [world.*] variants, abi31 scheme, .UNO v2 header)
   unogen.py             emits 6 worlds (x86/C/68k/6502/65816/z80) + app stubs +
                         profile manifest + 3.1 ordinal map; `--check` = trust anchor
-  conformance/          PORT-SPEC §6 made executable (39/39, with bug-discrimination)
+  conformance/          PORT-SPEC §6 made executable (43/43, with bug-discrimination)
   gen/                  GENERATED per-world surfaces (do not edit)
   PHASES.md             the live phase-by-phase status ledger
 unofs/                  storage policy over a `block` service (FAT12)         [§12]
@@ -48,20 +48,25 @@ unonet/                 nic service + HEADLESS server composition             [�
 Wired into shipped code (sourcing constants from the Contract, byte-identical):
 `kernel/kernel.asm`, `boot/boot.asm`, `boot/stage2.asm`, `tools/add_floppy_fs.py`,
 `tools/create_app_test.py`, `amiga/sysabi.i`, `snes/kernel.asm`,
-`genesis/kernel.asm`, `macplus/kernel.asm` + `macplus/sysequ.i`, `iigs/sys.inc`.
-(Five asm ports now, across two dialects: vasm 68K = amiga/genesis/macplus,
-ca65 65816 = snes/iigs. IIGS also single-sources its divergent FAT12 geometry +
-16-byte directory entry.)
+`genesis/kernel.asm`, `macplus/kernel.asm` + `macplus/sysequ.i`, `iigs/sys.inc`,
+`c64/sys.inc`, `apple2/sys.inc`.
+(All seven reachable-toolchain asm ports now, across three dialects: vasm 68K =
+amiga/genesis/macplus, ca65 65816 = snes/iigs, dasm 6502 = c64/apple2. IIGS also
+single-sources its divergent FAT12 geometry + 16-byte directory entry. The 6502
+ports are `single_app` — no window-entry struct / event queue by design — so they
+source only the genuine overlap, the cell screen geometry; their no-WM shape is
+Contract-declared via `[port.c64]`/`[port.apple2]` + conformance-checked.)
 
 ## Verification (host-first, all green together)
 
 ```
 python unodef/unogen.py --check            # regenerate all worlds + x86 trust anchor
-python unodef/conformance/conformance.py   # 39/39 PORT-SPEC §6 vectors
+python unodef/conformance/conformance.py   # 43/43 PORT-SPEC §6 vectors
 # byte-identical rebuilds (constants now come FROM the contract):
 nasm  → kernel.bin, boot.bin, stage2.bin   (x86, three sites)
 vasm  → amiga + genesis + macplus kernels  (68K, three ports)
 ca65+ld65 → snes .sfc + iigs .po           (65816, two ports)
+dasm  → c64 .prg/.d64 + apple2 .dsk        (6502, two ports — single_app)
 # host C subsystems:
 sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh
 sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh   # TSan needs `setarch -R`
@@ -74,8 +79,9 @@ vasm, ca65) + the C header (`_Static_assert`s).
 ## Phase status (full detail in `unodef/PHASES.md`)
 
 - **Fully host-proven (8):** 0 UNODEF · 1 unogen + x86 byte-identical · 2 conformance
-  · 3 unofs · 4 asm consumption (**5 ports**: Amiga + Genesis + MacPlus via vasm,
-  SNES + IIGS via ca65) · 6 uno2d · 7 concurrency/SMP/TSan · 9 unosound.
+  · 3 unofs · 4 asm consumption (**all 7 asm ports**: Amiga + Genesis + MacPlus via
+  vasm, SNES + IIGS via ca65, C64 + Apple II via dasm) · 6 uno2d · 7 concurrency/SMP/
+  TSan · 9 unosound.
 - **Host core + hardware/SDK-blocked tail (5):** 5 hybrid policy (needs vbcc/WinUAE)
   · 8 display/profiles (NES/GB emulator) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
   drivers/buses (PCI/USB) · 12 ship 3.1 ABI (port re-issue) · 13 new targets +
@@ -100,11 +106,17 @@ or keep x86's 32) is **not yet decided** — that decision gates the real migrat
 
 ## Next directions (prioritized, for the new session)
 
-1. ~~**Broaden asm consumption** to the remaining reachable ports with a clean equate
-   seam: Genesis + MacPlus (vasm), IIGS (ca65).~~ **DONE** — all three wired,
-   byte-identical (incl. their disk apps + packed images); IIGS also sources its own
-   FAT12 geometry. Remaining: the **6502 ports (C64/Apple II)** still need a deeper
-   refactor (no clean equate block) — the last reachable-toolchain asm consumption tail.
+1. ~~**Broaden asm consumption** to the remaining reachable ports: Genesis + MacPlus
+   (vasm), IIGS (ca65), C64 + Apple II (dasm).~~ **DONE** — all wired, byte-identical
+   (incl. disk apps + packed images); IIGS also sources its own FAT12 geometry. The
+   6502 ports turned out NOT to need the feared "deeper refactor": investigation showed
+   they're architecturally `single_app` (no window-entry struct, no event queue — one
+   disk-loaded app at a time), so forcing a windowed window-entry ABI on them would FAKE
+   an ABI they don't ship. Instead they source the genuine overlap (cell screen geometry)
+   byte-identically, and their no-WM shape is now Contract-declared (`[port.c64]`/
+   `[port.apple2]`, profile=single_app) + conformance-checked (rule 9). **All 7 reachable
+   asm toolchains now consume the Contract.** The only un-consumed asm tail left is the
+   blocked-toolchain ports (need vbcc / console SDKs) — see #3.
 2. **Decide the canonical 3.1 ABI** (the open decision above), then pilot Phase 12
    end-to-end on **one** port: migrate it to the 3.1 layout/ordinals, re-verify on
    its emulator, keep a dual-build window. This is the real start of the migration.
