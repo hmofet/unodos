@@ -164,3 +164,29 @@ Notes:
   framebuffer/driver bring-up. The contract/window layer ports for free; that's
   the leverage. Architectures expressible the same way but omitted for brevity:
   PA-RISC, IA-64 (Itanium), VAX, S/390 — all just descriptors.
+
+## SoA vs AoS, measured in a port (SNES / 65816)
+Assembled a representative "read window x/y/w/h" routine both ways (ca65 → bin):
+
+| form | index→access scaling | assembled | cycles* |
+|---|---|---|---|
+| AoS (shipped) | `index*16` = 4×`asl a` | **29 B** | **55** |
+| SoA (uniform u16 cols) | `index*2` = 1×`asl a` | **26 B** | **49** |
+
+\* 65816, 16-bit M: `and #imm` 3, `asl a` 2, `tax` 2, `lda abs,x` 5, `sta dp` 4, `rts` 6.
+
+The *only* difference is the index-scaling: SoA eliminates 3 of the 4 shifts →
+**−3 bytes, −6 cycles (~11%) per window access**. The field reads (`lda …,x`) are
+identical in both. Runtime correctness of the SoA variant is **emulator-blocked**
+here (behavior-changing), so this is a static size+cycle measurement, not a run.
+
+**Honest verdict — and it validates the derived-layout design.** On these micros
+the SoA win is *small*: the tables are tiny (6 windows), the AoS stride is already
+a cheap power-of-two shift, and per-field reads don't change. SoA's real payoff is
+elsewhere — free indexing when the stride *isn't* a power of two, SIMD column
+processing on big machines (composite every window's `x` at once), and cache
+density when touching one field across many windows — none of which a 6-window
+8/16-bit table exercises. So the right call is exactly what the model already does:
+**keep AoS for the micro ports (it's optimal there) and use SoA as the floor for
+the C/big-machine targets where its ceiling matters.** Each platform gets its
+optimal layout from one logical model — which is the whole point.
