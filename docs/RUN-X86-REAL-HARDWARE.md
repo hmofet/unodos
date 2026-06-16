@@ -56,7 +56,15 @@ the titlebar **X** or the **OK** button closes it.
   macro) — the same model that drives the other five windowing ports. Wiring it was
   proven byte-identical (`e433e02b…`), so this image is the known-good behavior,
   now generated from the single source.
-- The window-entry **layout** still uses the Contract's shipping `[struct] win_entry`
-  (32 B). Adopting the greenfield *clean* layout (pointer titles, etc.) is the future
-  3.1 clean-break and is intentionally NOT in this image (it would be behavior-changing
-  and can't be runtime-verified without hardware).
+- The window-entry **layout** is now the **UnoDOS 3.1 clean layout**: the Contract's
+  `[struct] win_entry` is the compact **16 B** entry (down from 32 B) — `owner` joins
+  the hot prefix, the **title is a pointer** into a kernel title pool (no more 12-byte
+  inline buffer or 11-char limit), and `content_scale`/`flags` move to the tail.
+  z-order stays an in-entry rank byte (a valid per-platform realization of the z
+  relation). `kernel.asm` needed **no code edits** — it consumes the offsets and the
+  `win_entry_addr` stride macro symbolically, so regenerating the Contract flipped the
+  whole layout. This is behavior-changing vs the legacy 32 B entry, and is **QEMU-
+  verified** (boot, open/close/reopen windows, drag, z-order, three distinct titles).
+  This is the first port shipping the 3.1 clean window layout — the very thing to
+  exercise on real hardware. (`file_handle`/directory entries stay 32 B; only the
+  window entry changed.)
