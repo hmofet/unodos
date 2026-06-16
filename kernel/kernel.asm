@@ -4191,6 +4191,121 @@ cursor_restore_vga:
     POPA86
     ret
 
+; cursor_save_and_draw_cga - CGA (mode 0x04) SAVE-UNDER cursor: save the 2bpp
+; pixels under the cursor, then draw the sprite opaquely. Replaces the old XOR
+; cursor, which shimmered/flickered over content (XOR inverts the background, so
+; the cursor's appearance depended on what was under it). Mirrors the VGA path,
+; per-pixel via cga_pixel_calc. Input: CX=X, BX=Y, ES=video seg. Uses
+; cursor_save_buf (8*14 = 112 bytes; one saved 2bpp value per pixel).
+cursor_save_and_draw_cga:
+    PUSHA86
+    mov [cs:_cga_csr_x0], cx
+    mov [cs:_cga_csr_y], bx
+    mov word [cs:_cga_csr_bp], cursor_save_buf
+    mov si, cursor_bitmap_color
+    mov word [cs:_cga_csr_row], 14
+.sdc_row:
+    mov ax, [cs:_cga_csr_y]
+    cmp ax, [cs:screen_height]
+    jae .sdc_row_off
+    mov ax, [si]                    ; AH = px0-3, AL = px4-7 (2bpp, MSB-first)
+    mov [cs:_cga_csr_spr], ax
+    mov ax, [cs:_cga_csr_x0]
+    mov [cs:_cga_csr_x], ax
+    mov word [cs:_cga_csr_col], 8
+.sdc_col:
+    mov cx, [cs:_cga_csr_x]
+    cmp cx, [cs:screen_width]
+    jae .sdc_adv                    ; off-screen pixel: skip (buffer stays aligned)
+    mov bx, [cs:_cga_csr_y]
+    call cga_pixel_calc             ; DI = byte off, CL = shift; trashes AX,BX,DX
+    mov [cs:_cga_csr_di], di
+    mov ch, 0
+    mov [cs:_cga_csr_sh], cx        ; remember the 2-bit shift
+    mov al, [es:di]                 ; save the current background pixel
+    shr al, cl
+    and al, 3
+    mov bx, [cs:_cga_csr_bp]
+    mov [bx], al
+    mov ax, [cs:_cga_csr_spr]       ; current sprite pixel = AH >> 6
+    mov al, ah
+    SHR_N al, 6
+    and al, 3
+    jz .sdc_adv                     ; transparent: leave the background showing
+    mov dl, al                      ; DL = sprite color (1-3)
+    mov di, [cs:_cga_csr_di]
+    mov cx, [cs:_cga_csr_sh]        ; CL = shift
+    mov ah, 3
+    shl ah, cl
+    not ah
+    and [es:di], ah                 ; clear the pixel's 2 bits
+    mov ah, dl
+    shl ah, cl
+    or [es:di], ah                  ; set the sprite color
+.sdc_adv:
+    inc word [cs:_cga_csr_bp]
+    inc word [cs:_cga_csr_x]
+    mov ax, [cs:_cga_csr_spr]
+    SHL_N ax, 2                     ; advance to the next sprite pixel (into AH top)
+    mov [cs:_cga_csr_spr], ax
+    dec word [cs:_cga_csr_col]
+    jnz .sdc_col
+    jmp .sdc_row_next
+.sdc_row_off:
+    add word [cs:_cga_csr_bp], 8    ; off-screen row: keep the buffer aligned
+.sdc_row_next:
+    add si, 2
+    inc word [cs:_cga_csr_y]
+    dec word [cs:_cga_csr_row]
+    jnz .sdc_row
+    POPA86
+    ret
+
+; cursor_restore_cga - erase the CGA save-under cursor (write the saved pixels
+; back). Input: CX=X, BX=Y, ES=video seg. Mirrors cursor_save_and_draw_cga.
+cursor_restore_cga:
+    PUSHA86
+    mov [cs:_cga_csr_x0], cx
+    mov [cs:_cga_csr_y], bx
+    mov word [cs:_cga_csr_bp], cursor_save_buf
+    mov word [cs:_cga_csr_row], 14
+.rsc_row:
+    mov ax, [cs:_cga_csr_y]
+    cmp ax, [cs:screen_height]
+    jae .rsc_row_off
+    mov ax, [cs:_cga_csr_x0]
+    mov [cs:_cga_csr_x], ax
+    mov word [cs:_cga_csr_col], 8
+.rsc_col:
+    mov cx, [cs:_cga_csr_x]
+    cmp cx, [cs:screen_width]
+    jae .rsc_adv
+    mov bx, [cs:_cga_csr_y]
+    call cga_pixel_calc             ; DI, CL
+    mov bx, [cs:_cga_csr_bp]
+    mov dl, [bx]                    ; saved 2bpp value
+    mov ah, 3
+    shl ah, cl
+    not ah
+    and [es:di], ah                 ; clear the 2 bits
+    mov ah, dl
+    shl ah, cl
+    or [es:di], ah                  ; restore the saved pixel
+.rsc_adv:
+    inc word [cs:_cga_csr_bp]
+    inc word [cs:_cga_csr_x]
+    dec word [cs:_cga_csr_col]
+    jnz .rsc_col
+    jmp .rsc_row_next
+.rsc_row_off:
+    add word [cs:_cga_csr_bp], 8
+.rsc_row_next:
+    inc word [cs:_cga_csr_y]
+    dec word [cs:_cga_csr_row]
+    jnz .rsc_row
+    POPA86
+    ret
+
 ; cursor_save_and_draw_vesa - Save background and draw 2x-scaled white cursor
 ; Input: CX=X, BX=Y, ES=0xA000 (VESA banked framebuffer)
 ; Uses cursor_save_buf (16 bytes × 28 rows = 448 bytes)
@@ -4370,7 +4485,12 @@ mouse_cursor_hide:
     je .mch_restore_vga
     cmp byte [video_mode], 0x01
     je .mch_restore_vesa
-    call cursor_xor_sprite          ; CGA/Mode12h: XOR erase
+    cmp byte [video_mode], 0x04
+    jne .mch_xor_erase
+    call cursor_restore_cga         ; CGA: restore save-under background
+    jmp .mch_done
+.mch_xor_erase:
+    call cursor_xor_sprite          ; Mode12h: XOR erase
     jmp .mch_done
 .mch_restore_vga:
     call cursor_restore_vga
@@ -4415,7 +4535,12 @@ mouse_cursor_show:
     je .mcs_save_draw_vga
     cmp byte [video_mode], 0x01
     je .mcs_save_draw_vesa
-    call cursor_xor_sprite          ; CGA/Mode12h: XOR draw
+    cmp byte [video_mode], 0x04
+    jne .mcs_xor_draw
+    call cursor_save_and_draw_cga   ; CGA: opaque save-under cursor (no flicker)
+    jmp .mcs_done
+.mcs_xor_draw:
+    call cursor_xor_sprite          ; Mode12h: XOR draw
     jmp .mcs_done
 .mcs_save_draw_vga:
     call cursor_save_and_draw_vga
@@ -22616,6 +22741,16 @@ cursor_save_buf:    times 448 db 0
 _csr_bmp_16:        dw 0            ; VESA: current bitmap row (16-bit)
 _csr_buf_ptr:       dw 0            ; VESA: pointer into save buffer
 _csr_row_off:       dw 0            ; VGA: precomputed VRAM row offset
+; CGA save-under cursor scratch (replaces the old XOR cursor — kills flicker)
+_cga_csr_x0:        dw 0            ; row-start X
+_cga_csr_x:         dw 0            ; current pixel X
+_cga_csr_y:         dw 0            ; current pixel Y
+_cga_csr_bp:        dw 0            ; pointer into cursor_save_buf
+_cga_csr_spr:       dw 0            ; this row's 2bpp sprite bits (AH:AL)
+_cga_csr_row:       dw 0            ; rows remaining
+_cga_csr_col:       dw 0            ; pixels remaining in row
+_cga_csr_di:        dw 0            ; saved CGA byte offset for the current pixel
+_cga_csr_sh:        dw 0            ; saved 2-bit shift for the current pixel
 
 ; Window drag state
 drag_active:        db 0            ; 1 = currently dragging a window
