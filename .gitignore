@@ -55,6 +55,9 @@ build/unodos-hd.img
 c64/build/
 c64/__pycache__/
 
+# Python bytecode cache, any port/tool dir (regeneratable)
+__pycache__/
+
 # uno2d / uno3d host artifacts
 build/uno2d_test
 build/uno2d_test.exe
