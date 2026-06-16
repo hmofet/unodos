@@ -63,3 +63,6 @@ build/sched_coop
 build/sched_smp
 build/sched_race
 build/*.tsan
+build/unosound_test
+build/unosound_test.exe
+build/*.wav
