@@ -77,17 +77,21 @@ def layout_aos(model, plat):
     fields = model["window"]["field"]
     ordered = [f for f in fields if f.get("tier") == "hot"] + \
               [f for f in fields if f.get("tier") != "hot"]
+    # alignment is per-platform: x86/C aligns to the field width; 68000 only needs
+    # WORD (2-byte) alignment even for longs, so max_align caps it.
+    cap_align = plat.get("max_align", 8)
     off, ents = 0, []
     for f in ordered:
         w = col_width(f, plat)
-        if w > 1 and off % w:
-            off += w - (off % w)                 # natural alignment
+        a = min(w, cap_align)
+        if a > 1 and off % a:
+            off += a - (off % a)
         ents.append(dict(name=f["name"], kind=f["kind"], tier=f.get("tier", "hot"),
                          width=w, off=off))
         off += w
-    maxw = max(e["width"] for e in ents)
-    if off % maxw:
-        off += maxw - (off % maxw)               # pad entry to its alignment
+    ealign = min(max(e["width"] for e in ents), cap_align)
+    if off % ealign:
+        off += ealign - (off % ealign)           # pad entry to its alignment
     return ordered, ents, off                    # off == entry_size
 
 
@@ -142,6 +146,8 @@ def emit_c_aos(model, name, plat):
 # accessor difference the generator handles, invisible to portable policy.
 # ---------------------------------------------------------------------------
 def emit_vasm(model, name, plat):
+    if plat.get("layout") == "aos":
+        return emit_vasm_aos(model, name, plat)
     ordered, cols, zcol, total = layout(model, plat)
     cap = plat["capacity"]
     L = ["; " + BANNER.replace("\n", "\n; "),
@@ -185,6 +191,38 @@ def emit_vasm(model, name, plat):
           "            move.b (a0,d0.w),d1",
           "            endm", ""]
     return "\n".join(L), cols, zcol, total
+
+
+# ---------------------------------------------------------------------------
+# 68000 / vasm world, AoS layout: emit WIN_ENTRY_SIZE + a win_entry_ptr macro
+# (slot index -> entry pointer) that single-sources the index->address arithmetic
+# a 68000 port hand-writes. Used to wire a REAL shipped port byte-identically.
+# ---------------------------------------------------------------------------
+def emit_vasm_aos(model, name, plat):
+    ordered, ents, esz = layout_aos(model, plat)
+    shift = (esz.bit_length() - 1) if (esz & (esz - 1)) == 0 else None
+    base = plat.get("entry_base", "wintab")
+    pcrel = "(pc)" if plat.get("pc_relative") else ""
+    L = ["; " + BANNER.replace("\n", "\n; "),
+         "; platform: %s — %s, %d-bit, %s coords (max %d), capacity %d, layout=AOS"
+         % (name, plat["cpu"], plat["word_bits"], plat["coord_space"],
+            plat["coord_max"], plat["capacity"]),
+         "%-22s equ %d" % ("WIN_ENTRY_SIZE", esz), "",
+         "; field offsets DERIVED from the logical model (match the port's [world.%s]):" % name]
+    for e in ents:
+        L.append(";   %-12s @%-2d u%-2d %s" % (e["name"], e["off"], e["width"] * 8, e["tier"]))
+    if shift is None:
+        raise ValueError("entry size %d is not a power of two — no shift form" % esz)
+    L += ["",
+          "; win_entry_ptr: d2.w = slot index -> a2 = entry pointer (AoS, stride %d)." % esz,
+          "; Single-sources the stride (lsl #%d) + base (%s%s) the kernel hand-wrote" % (shift, base, pcrel),
+          "; at win_ptr_raw / zwin_ptr.  Expands to the SAME instructions -> byte-identical.",
+          "win_entry_ptr macro",
+          "            lsl.w #%d,d2" % shift,
+          "            lea %s%s,a2" % (base, pcrel),
+          "            lea (a2,d2.w),a2",
+          "            endm"]
+    return "\n".join(L) + "\n", ents, None, esz * plat["capacity"]
 
 
 # ---------------------------------------------------------------------------

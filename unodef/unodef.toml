@@ -1833,3 +1833,16 @@ coord_space = "pixels"
 coord_max   = 320
 capacity    = 16
 layout      = "aos"        # fixed-offset entry — show AoS is just a layout knob
+
+[wmodel.platform.macplus]
+cpu         = "m68k"
+dialect     = "vasm"
+word_bits   = 16
+ptr_bits    = 32           # 68000 near pointer (title is a long)
+coord_space = "pixels"
+coord_max   = 512          # Mac Plus/SE screen width -> u16 coords
+capacity    = 6
+layout      = "aos"        # reproduce the shipped 16-byte AoS entry (lsl #4 stride)
+max_align   = 2            # 68000 only needs word alignment, even for longs
+entry_base  = "wintab"     # the kernel's window-table label
+pc_relative = true         # lea wintab(pc),a2

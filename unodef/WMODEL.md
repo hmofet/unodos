@@ -25,6 +25,20 @@ accessors.** This is the tall-vtable / "describe what ships" principle applied t
 | amiga | vasm (68000) | SoA | px u16    | 6  | 102 B  | u16 columns **double the index** (68000 has no scaled index); u8 don't |
 | host  | C (x86_64)   | SoA | px u16    | 64 | 1344 B | contiguous columns → SIMD-composite friendly |
 | x86   | C (16-bit)   | AoS | px u16    | 16 | 224 B  | fixed-offset struct — proves AoS is just a layout knob |
+| macplus | vasm (68000) | AoS | px u16  | 6  | 96 B   | reproduces the shipped 16 B entry — **wired into the real port** |
+
+## Wired into a shipped port (byte-identical)
+`macplus/kernel.asm` now sources its window entry-ADDRESSING from this model.
+The MacPlus AoS layout (`ptr32`, word-aligned) reproduces the shipped 16-byte
+entry exactly — `state@0 owner@1 x@2 y@4 w@6 h@8 title@10`, `WIN_ENTRY_SIZE=16`
+— i.e. the compact 16 B port layout **is** the greenfield model in AoS form (the
+x86 32 B legacy is the outlier, because it inlines the title). wmgen emits a
+`win_entry_ptr` macro (slot index → entry pointer, `lsl #4`/`lea wintab(pc)`),
+and the kernel's two hand-written addressing sites (`win_ptr_raw`, `zwin_ptr`)
+now invoke it. The macro expands to the same instructions, so the rebuild is
+**byte-identical** (`kernel.bin` + `.dsk` unchanged), proving the generated
+boundary drives a real shipped port with zero regression. (Field offsets already
+came from `[world.macplus]`; the addressing was the last hand-written piece.)
 
 ## Verified (host-first, nothing faked)
 - **C / SoA (host):** compiles; the write-once `win_hit`/`win_reap` policy runs
