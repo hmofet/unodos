@@ -36,19 +36,16 @@
 #include <kos/exports.h>
 #include <kos/nmmgr.h>
 #include <kos/dbglog.h>
-#include <kos/dbgio.h>
+#include <kos/cache.h>
 #include <arch/types.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#ifdef UNO_DC_LOADDBG
-#include <dirent.h>
-#endif
 
 #ifdef UNO_DC_LOADDBG
 /* on-screen diagnostic: draw a status line at the bottom of the framebuffer so
-   the Flycast screenshot itself reports the load outcome (serial capture is
-   unreliable headless).  Disabled in normal builds. */
+   the load outcome shows up in a headless Flycast screenshot (serial capture is
+   unreliable headless).  Off in normal builds (-DUNO_DC_LOADDBG to enable). */
 static void load_dbg(const char *msg)
 {
     fb_fill_rect(0, FB_H - 12, FB_W, 12, FB_RGB(0,0,0));
@@ -157,35 +154,6 @@ UnoAppEntry uno_load_module(short proc)
 
     gPendingEntry = NULL;
 
-#ifdef UNO_DC_LOADDBG
-    {   /* probe: list /cd/UNODOS/APPS and try several name spellings */
-        char m[120]; int y = FB_H - 48; const char *try_paths[4];
-        char p1[64], p2[64], p3[64];
-        DIR *d; struct dirent *de; int k = 0;
-        fb_fill_rect(0, FB_H - 56, FB_W, 56, FB_RGB(0,0,0));
-        snprintf(p1,sizeof p1,"/cd/UNODOS/APPS/APP%02d.KLF",(int)proc);
-        snprintf(p2,sizeof p2,"/cd/UNODOS/APPS/APP%02d.KLF;1",(int)proc);
-        snprintf(p3,sizeof p3,"/cd/unodos/apps/app%02d.klf",(int)proc);
-        try_paths[0]=p1; try_paths[1]=p2; try_paths[2]=p3; try_paths[3]=0;
-        for (k=0; try_paths[k]; k++) {
-            FILE *pf = fopen(try_paths[k],"rb");
-            if (pf){ unsigned char h[4]={0}; fread(h,1,4,pf); fclose(pf);
-                snprintf(m,sizeof m,"OPEN OK: %s hdr=%02x%02x%02x%02x",
-                         try_paths[k],h[0],h[1],h[2],h[3]); }
-            else snprintf(m,sizeof m,"open FAIL e=%d: %s",errno,try_paths[k]);
-            fb_text(2,y,m,FB_RGB(0xFF,0xFF,0x40),-1); y += 9;
-        }
-        d = opendir("/cd/UNODOS/APPS");
-        if (d){ char ls[120]="ls APPS:"; int o=8;
-            while((de=readdir(d))){ int l=strlen(de->d_name);
-                if(o+l+1<(int)sizeof ls){ ls[o++]=' ';
-                    memcpy(ls+o,de->d_name,l); o+=l; ls[o]=0; } }
-            closedir(d); fb_text(2,y,ls,FB_RGB(0x40,0xFF,0xFF),-1); }
-        else { snprintf(m,sizeof m,"opendir /cd/UNODOS/APPS FAIL e=%d",errno);
-            fb_text(2,y,m,FB_RGB(0xFF,0x80,0x80),-1); }
-    }
-#endif
-
     /* GENUINE load + relocate from the CD ISO9660 filesystem.  KOS reads the
        .KLF off /cd, allocates a fresh image, applies SH relocations, resolves
        undefined symbols via export_lookup (kernel table + our gUnoSymtab), then
@@ -193,7 +161,8 @@ UnoAppEntry uno_load_module(short proc)
     errno = 0;
     lib = library_open(libname, path);
     if (!lib) {
-        char m[80]; snprintf(m,sizeof m,"library_open('%s') FAIL errno=%d",path,errno);
+        char m[80];
+        snprintf(m, sizeof m, "library_open('%s') FAIL errno=%d", path, errno);
         load_dbg(m);
         dbglog(DBG_ERROR, "uno_load_module(%d): %s\n", (int)proc, m);
         return NULL;
@@ -206,21 +175,20 @@ UnoAppEntry uno_load_module(short proc)
         return NULL;
     }
 
-#ifdef UNO_DC_LOADHALT
-    {   /* prove library_open returned (lib_open already ran inside it) BEFORE
-           we dare call the entry - isolates load vs entry-execution crash */
-        char m[96]; const AppInterface *ai;
-        fb_clear(FB_RGB(0,0,0x60));
-        fb_big_text(20,40,"library_open RETURNED",FB_RGB(0xFF,0xFF,0x40),-1,3);
-        snprintf(m,sizeof m,"lib@%p entry@%p",(void*)lib,(void*)gPendingEntry);
-        fb_big_text(20,90,m,FB_RGB(0xFF,0xFF,0xFF),-1,2);
-        uno_dc_present(); uno_dc_present();
-        ai = gPendingEntry(0);                 /* now run the relocated entry */
-        fb_big_text(20,130,"entry() RETURNED",FB_RGB(0x80,0xFF,0x80),-1,3);
-        snprintf(m,sizeof m,"ai@%p draw@%p title=%s",(void*)ai,
-                 ai?(void*)ai->draw:0, (ai&&ai->win_title)?ai->win_title:"?");
-        fb_big_text(20,180,m,FB_RGB(0x80,0xFF,0xFF),-1,2);
-        for(;;) uno_dc_present();
+    /* Cache coherency for the just-relocated image: elf_load only icache-syncs;
+       force the relocated bytes (written through the operand cache) back to RAM
+       and invalidate stale I-cache lines so the freshly-loaded code is executed
+       as written.  Important for self-loaded code under cache-accurate cores. */
+    if (lib->image.data && lib->image.size) {
+        dcache_purge_range((uintptr_t)lib->image.data, lib->image.size);
+        icache_inval_range((uintptr_t)lib->image.data, lib->image.size);
+    }
+
+#ifdef UNO_DC_LOADDBG
+    {   char m[80];
+        snprintf(m, sizeof m, "LOADED+RELOCATED %s from CD  entry@%p",
+                 path, (void *)gPendingEntry);
+        load_dbg(m);
     }
 #endif
     dbglog(DBG_INFO, "uno_load_module(%d): loaded+relocated '%s' from CD; "
