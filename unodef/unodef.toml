@@ -48,13 +48,13 @@ ordinals = [0,1,2,3,4,5,6, 50,51,52, 56,57,58,59,60,61,62, 65,66,67,68,69,70,71,
 
 # =============================================================================
 # SYSCALLS  (the call gate, per call).  ordinal = current shipping flat number.
-#   verified=true  -> args/ret transcribed + cross-checked (kernel + API_REFERENCE)
-#   verified=false -> name/ordinal/category/brief verified from kernel_api_table;
-#                     args/ret pending transcription from docs/API_REFERENCE.md
-# args/ret entries are "REG: meaning". `err` describes the CF=1 case.
+#   verified=true -> register signature transcribed + cross-checked. ALL 106 are
+#   verified: ords 91-100/102/104 (which API_REFERENCE leaves "pending") came from
+#   their kernel.asm handler-header comments (the authority). Phase 1 re-checks vs
+#   the live dispatch. args/ret entries are "REG: meaning"; `err` = the CF=1 case.
 # =============================================================================
 
-# ---- Graphics (0-6) ---------------------------------------------------------
+# ---- Graphics (0-6) --------------------------------------------------------
 [[syscall]]
 ordinal=0
 name="gfx_draw_pixel"
@@ -108,10 +108,10 @@ ordinal=6
 name="gfx_draw_string_inverted"
 category="gfx"
 verified=true
-brief="Draw string inverted (black on white) — title bars"
+brief="Draw string inverted (black on white) - title bars"
 args=["BX: x", "CX: y", "DS:SI: ptr to NUL-terminated string"]
 
-# ---- Memory (7-8) -----------------------------------------------------------
+# ---- Memory (7-8) ----------------------------------------------------------
 [[syscall]]
 ordinal=7
 name="mem_alloc"
@@ -120,7 +120,7 @@ verified=true
 brief="Allocate from kernel heap (4-byte aligned, 4-byte block header)"
 args=["AX: size in bytes"]
 ret=["AX: ptr (offset in heap segment 0x8000), 0 on OOM"]
-err="CF=1, AX=0 — out of memory"
+err="CF=1, AX=0 - out of memory"
 
 [[syscall]]
 ordinal=8
@@ -130,15 +130,15 @@ verified=true
 brief="Free a block from mem_alloc"
 args=["AX: ptr returned by mem_alloc"]
 
-# ---- Events (9-10) ----------------------------------------------------------
+# ---- Events (9-10) ---------------------------------------------------------
 [[syscall]]
 ordinal=9
 name="event_get"
 category="event"
 verified=true
 brief="Non-blocking event dequeue"
-ret=["AL: event type (see enum event_type)", "DL: data low", "DH: data high"]
-err="CF=1 — queue empty"
+ret=["AL: event type (enum event_type)", "DL: data low", "DH: data high"]
+err="CF=1 - queue empty"
 
 [[syscall]]
 ordinal=10
@@ -148,7 +148,7 @@ verified=true
 brief="Blocking event wait (loops internally until available)"
 ret=["AL: event type", "DL: data low", "DH: data high"]
 
-# ---- Keyboard (11-12, DEPRECATED — use 9/10) --------------------------------
+# ---- Keyboard (11-12, DEPRECATED -> use 9/10) ------------------------------
 [[syscall]]
 ordinal=11
 name="kbd_getchar"
@@ -156,6 +156,7 @@ category="event"
 verified=true
 deprecated=true
 brief="Non-blocking key read (deprecated; use event_get)"
+ret=["AL: ASCII char, 0 if none"]
 
 [[syscall]]
 ordinal=12
@@ -164,8 +165,9 @@ category="event"
 verified=true
 deprecated=true
 brief="Blocking key wait (deprecated; use event_wait)"
+ret=["AL: ASCII char"]
 
-# ---- Filesystem (13-17, 27, 40, 44-47, 75-77) -------------------------------
+# ---- Filesystem (13-17) ----------------------------------------------------
 [[syscall]]
 ordinal=13
 name="fs_mount"
@@ -213,13 +215,14 @@ verified=true
 reserved=true
 brief="Register a filesystem driver (reserved; not used by apps)"
 
+# ---- App loading (18-19) ---------------------------------------------------
 [[syscall]]
 ordinal=18
 name="app_load"
 category="system"
 verified=true
 brief="Load a .BIN into a memory segment"
-args=["BX: mount handle", "AL: drive (0=boot)", "DH: target seg hint (0=auto from pool 0x3000-0x7000, 0x20=shell)", "DS:SI: filename"]
+args=["BX: mount handle", "AL: drive (0=boot)", "DH: target seg hint (0=auto pool 0x3000-0x7000, 0x20=shell)", "DS:SI: filename"]
 ret=["AX: loaded segment"]
 err="CF=1"
 
@@ -233,16 +236,16 @@ args=["AX: app segment"]
 ret=["AX: exit code"]
 err="CF reflects status"
 
-# ---- Window Manager (20-27) -------------------------------------------------
+# ---- Window manager (20-26) ------------------------------------------------
 [[syscall]]
 ordinal=20
 name="win_create"
 category="window"
 verified=true
 brief="Create a window (becomes topmost + focused)"
-args=["BX: x", "CX: y", "DX: width", "SI: height", "ES:DI: title (NUL-term, max 11 chars)", "AL: flags (see enum win_flags; 0x03=title+border)"]
+args=["BX: x", "CX: y", "DX: width", "SI: height", "ES:DI: title (NUL-term, max 11)", "AL: flags (enum win_flags; 0x03=title+border)"]
 ret=["AL: window handle (0-15)"]
-err="CF=1 — no free slots"
+err="CF=1 - no free slots"
 
 [[syscall]]
 ordinal=21
@@ -276,22 +279,27 @@ name="win_move"
 category="window"
 verified=true
 brief="Move a window to a new position"
-args=["AL: window handle", "BX: x", "CX: y"]
+args=["AL: window handle", "BX: new x", "CX: new y"]
+err="CF=1"
 
 [[syscall]]
 ordinal=25
 name="win_get_content"
 category="window"
-verified=false
-brief="Get content-area bounds of a window"
+verified=true
+brief="Get content-area bounds (inside border + title bar)"
+args=["AL: window handle"]
+ret=["BX: content x", "CX: content y", "DX: content width", "SI: content height"]
 
 [[syscall]]
 ordinal=26
 name="register_shell"
 category="system"
-verified=false
-brief="Register app as shell (auto-return target)"
+verified=true
+brief="Register current app as the system shell (auto-return on app exit)"
+args=["AX: app segment"]
 
+# ---- Filesystem (27) -------------------------------------------------------
 [[syscall]]
 ordinal=27
 name="fs_readdir"
@@ -300,97 +308,109 @@ verified=true
 brief="Read next directory entry"
 args=["BX: mount handle", "AX: dir handle"]
 ret=["ES:DI: ptr to 32-byte FAT dir entry (struct dirent)"]
-err="CF=1 — end of directory"
+err="CF=1 - end of directory"
 
-# ---- Mouse (28-30) ----------------------------------------------------------
+# ---- Mouse (28-30) ---------------------------------------------------------
 [[syscall]]
 ordinal=28
 name="mouse_get_state"
 category="event"
-verified=false
-brief="Get live x/y/buttons PLUS the press-time latch (PORT-SPEC §3)"
+verified=true
+brief="Get live mouse position + button state (PORT-SPEC #3: also a press-time latch)"
+ret=["BX: x (0-319)", "CX: y (0-199)", "AL: buttons (b0=L, b1=R, b2=M)"]
 
 [[syscall]]
 ordinal=29
 name="mouse_set_position"
 category="event"
-verified=false
-brief="Set mouse position"
+verified=true
+brief="Set the mouse cursor position"
+args=["BX: x", "CX: y"]
 
 [[syscall]]
 ordinal=30
 name="mouse_is_enabled"
 category="event"
-verified=false
-brief="Check whether a mouse is available"
+verified=true
+brief="Check whether a mouse was detected at boot"
+ret=["AL: 1=available, 0=none"]
 
-# ---- Draw context / text measure (31-33) ------------------------------------
+# ---- Draw context (31-32) --------------------------------------------------
 [[syscall]]
 ordinal=31
 name="win_begin_draw"
 category="window"
-verified=false
-brief="Set draw context to a window (AL=handle); enables auto-translate"
+verified=true
+brief="Activate draw context (window-relative coords + clip); enables auto-translate"
+args=["AL: window handle"]
+err="CF=1 - invalid handle"
 
 [[syscall]]
 ordinal=32
 name="win_end_draw"
 category="window"
-verified=false
-brief="Clear draw context (back to fullscreen mode)"
+verified=true
+brief="Clear draw context (back to fullscreen absolute coords)"
 
+# ---- Text measurement (33) -------------------------------------------------
 [[syscall]]
 ordinal=33
 name="gfx_text_width"
 category="text"
-verified=false
+verified=true
 brief="Measure a string's pixel width in the current font"
+args=["DS:SI: ptr to NUL-terminated string"]
+ret=["DX: width in pixels"]
 
-# ---- Cooperative tasking (34-36) --------------------------------------------
+# ---- Cooperative tasking (34-36) -------------------------------------------
 [[syscall]]
 ordinal=34
 name="app_yield"
 category="sched"
-verified=false
-brief="Yield CPU to next task (the cooperative-floor switch point)"
+verified=true
+brief="Yield CPU to the cooperative scheduler (the COOP-floor switch point)"
 
 [[syscall]]
 ordinal=35
 name="app_start"
 category="sched"
-verified=false
-brief="Start a task (non-blocking)"
+verified=true
+brief="Start a loaded app as a concurrent task (non-blocking)"
+args=["AX: app segment"]
 
 [[syscall]]
 ordinal=36
 name="app_exit"
 category="sched"
-verified=false
-brief="Exit current task (kill path: reap handles + windows)"
+verified=true
+brief="Exit the current task (kill path: reap handles + windows, silence audio)"
 
-# ---- Desktop icons (37-39) --------------------------------------------------
+# ---- Desktop icons (37-39) -------------------------------------------------
 [[syscall]]
 ordinal=37
 name="desktop_set_icon"
 category="window"
-verified=false
+verified=true
 brief="Register a desktop icon"
+args=["AL: slot (0-7)", "BX: x", "CX: y", "DS:SI: icon name", "ES:DI: bitmap (64B, 16x16 2bpp)"]
+err="CF=0 success"
 
 [[syscall]]
 ordinal=38
 name="desktop_clear_icons"
 category="window"
-verified=false
-brief="Clear all desktop icons"
+verified=true
+brief="Clear all 8 desktop icon slots"
 
 [[syscall]]
 ordinal=39
 name="gfx_draw_icon"
 category="gfx"
-verified=false
+verified=true
 brief="Draw a 16x16 icon bitmap"
+args=["BX: x (div by 4)", "CX: y", "ES:DI: bitmap (64B, 2bpp CGA)"]
 
-# ---- fs_read_header (40) ----------------------------------------------------
+# ---- Filesystem (40) -------------------------------------------------------
 [[syscall]]
 ordinal=40
 name="fs_read_header"
@@ -401,13 +421,13 @@ args=["BX: mount handle", "DS:SI: filename", "ES:DI: dest buffer", "CX: bytes to
 ret=["AX: bytes read"]
 err="CF=1"
 
-# ---- PC speaker (41-42) -----------------------------------------------------
+# ---- PC speaker (41-42) ----------------------------------------------------
 [[syscall]]
 ordinal=41
 name="speaker_tone"
 category="audio"
 verified=true
-brief="Play a tone"
+brief="Play a continuous tone on the PC speaker"
 args=["BX: frequency Hz (0=off)"]
 
 [[syscall]]
@@ -415,24 +435,25 @@ ordinal=42
 name="speaker_off"
 category="audio"
 verified=true
-brief="Silence the speaker"
+brief="Silence the speaker (auto-silenced on task exit)"
 
+# ---- System (43) -----------------------------------------------------------
 [[syscall]]
 ordinal=43
 name="get_boot_drive"
 category="system"
 verified=true
-brief="Get boot drive number"
-ret=["AL: drive number"]
+brief="Get the BIOS boot drive number"
+ret=["AL: drive (0x00=floppy A:, 0x80=first HDD)"]
 
-# ---- Filesystem write (44-47) -----------------------------------------------
+# ---- Filesystem write (44-47) ----------------------------------------------
 [[syscall]]
 ordinal=44
 name="fs_write_sector"
 category="fs"
 verified=true
 brief="Write a raw 512-byte sector"
-args=["BX: mount handle", "CX:DX: LBA sector", "ES:DI: source buffer (512 bytes)"]
+args=["BX: mount handle", "CX:DX: LBA sector", "ES:DI: source buffer (512B)"]
 err="CF=1"
 
 [[syscall]]
@@ -463,428 +484,520 @@ brief="Delete a file"
 args=["BX: mount handle", "DS:SI: filename"]
 err="CF=1, AX=fs_errno"
 
-# ---- GUI toolkit / fonts (48-66) — args pending transcription ---------------
+# ---- Fonts (48-49) ---------------------------------------------------------
 [[syscall]]
 ordinal=48
 name="gfx_set_font"
 category="text"
-verified=false
-brief="Set current font (AL=index into font_table: 0=4x6, 1=8x8, 2=8x12)"
+verified=true
+brief="Select the active font (0=4x6, 1=8x8 default, 2=8x12)"
+args=["AL: font index"]
+err="CF=1 - invalid index"
 
 [[syscall]]
 ordinal=49
 name="gfx_get_font_metrics"
 category="text"
-verified=false
-brief="Get font metrics for a font index (AL=index)"
+verified=true
+brief="Get metrics for a font index"
+args=["AL: font index"]
+ret=["BL: width", "BH: height", "CL: advance"]
+err="CF=1 - invalid index"
 
+# ---- GUI toolkit (50-66) ---------------------------------------------------
 [[syscall]]
 ordinal=50
 name="gfx_draw_string_wrap"
 category="text"
-verified=false
-brief="Draw a string with word wrap"
+verified=true
+brief="Draw a string with automatic word wrap"
+args=["BX: x", "CX: y", "DX: wrap width", "DS:SI: string"]
+ret=["CX: final y after wrapped text"]
 
 [[syscall]]
 ordinal=51
 name="widget_draw_button"
 category="ui"
-verified=false
-brief="Draw a button"
+verified=true
+brief="Draw a button (filled white rect + border + centered text)"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "ES:DI: label", "AL: flags (b0=pressed)"]
 
 [[syscall]]
 ordinal=52
 name="widget_draw_radio"
 category="ui"
-verified=false
+verified=true
 brief="Draw a radio button"
+args=["BX: x", "CX: y", "AL: state (0=unchecked,1=checked)"]
 
 [[syscall]]
 ordinal=53
 name="widget_hit_test"
 category="ui"
-verified=false
-brief="Hit-test a rectangle"
+verified=true
+brief="Test whether a point is inside a rect (auto-translated in draw ctx)"
+args=["BX: rect x", "CX: rect y", "DX: width", "SI: height"]
+ret=["AL: 1=hit, 0=miss"]
 
 [[syscall]]
 ordinal=54
 name="theme_set_colors"
 category="ui"
-verified=false
-brief="Set theme colors (UI indices 0-3)"
+verified=true
+brief="Set the global UI color theme (indices 0-3)"
+args=["AL: text color", "BL: desktop bg color", "CL: window border color"]
 
 [[syscall]]
 ordinal=55
 name="theme_get_colors"
 category="ui"
-verified=false
-brief="Get theme colors"
+verified=true
+brief="Get the current UI color theme"
+ret=["AL: text color", "BL: desktop bg color", "CL: window border color"]
 
 [[syscall]]
 ordinal=56
 name="widget_draw_checkbox"
 category="ui"
-verified=false
-brief="Draw a checkbox"
+verified=true
+brief="Draw a checkbox with label"
+args=["BX: x", "CX: y", "DS:SI: label", "AL: flags (b0=checked)"]
 
 [[syscall]]
 ordinal=57
 name="widget_draw_textfield"
 category="ui"
-verified=false
-brief="Draw a text input field"
+verified=true
+brief="Draw a text input field with optional cursor"
+args=["BX: x", "CX: y", "DX: width", "DS:SI: text", "DI: cursor position", "AL: flags (b0=focused, b1=password)"]
 
 [[syscall]]
 ordinal=58
 name="widget_draw_scrollbar"
 category="ui"
-verified=false
-brief="Draw a scrollbar"
+verified=true
+brief="Draw a scrollbar with thumb + arrows"
+args=["BX: x", "CX: y", "SI: track height", "DX: position", "DI: max range", "AL: flags (b0=horizontal)"]
 
 [[syscall]]
 ordinal=59
 name="widget_draw_listitem"
 category="ui"
-verified=false
-brief="Draw a list item"
+verified=true
+brief="Draw a list-item row with optional highlight"
+args=["BX: x", "CX: y", "DX: width", "DS:SI: text", "AL: flags (b0=selected, b1=cursor)"]
 
 [[syscall]]
 ordinal=60
 name="widget_draw_progress"
 category="ui"
-verified=false
-brief="Draw a progress bar"
+verified=true
+brief="Draw a progress bar (8px fixed height)"
+args=["BX: x", "CX: y", "DX: width", "SI: value (0-100)", "AL: flags (b0=show %)"]
 
 [[syscall]]
 ordinal=61
 name="widget_draw_groupbox"
 category="ui"
-verified=false
-brief="Draw a group box"
+verified=true
+brief="Draw a group-box frame with label"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "ES:DI: label", "AL: flags"]
 
 [[syscall]]
 ordinal=62
 name="widget_draw_separator"
 category="ui"
-verified=false
+verified=true
 brief="Draw a separator line"
+args=["BX: x", "CX: y", "DX: length", "AL: flags (b0=vertical else horizontal)"]
 
 [[syscall]]
 ordinal=63
 name="get_tick_count"
 category="system"
-verified=false
-brief="Get the BIOS tick counter (monotonic since boot; x86 18.2 Hz)"
+verified=true
+brief="Get the BIOS timer tick count (18.2 Hz; monotonic, wraps at 65536)"
+ret=["AX: tick count (low 16 bits)"]
 
 [[syscall]]
 ordinal=64
 name="point_over_window"
 category="window"
-verified=false
-brief="Check whether a point is over a window (z-aware)"
+verified=true
+brief="Check whether a screen point is over any visible window (z-aware)"
+args=["BX: x", "CX: y"]
+ret=["AL: window handle if hit"]
+err="CF=1 - not over any window"
 
 [[syscall]]
 ordinal=65
 name="widget_draw_combobox"
 category="ui"
-verified=false
-brief="Draw a combo box"
+verified=true
+brief="Draw a dropdown combo box"
+args=["BX: x", "CX: y", "DX: width", "DS:SI: text", "AL: flags (b0=focused, b1=open)"]
 
 [[syscall]]
 ordinal=66
 name="widget_draw_menubar"
 category="ui"
-verified=false
-brief="Draw a menu bar"
+verified=true
+brief="Draw a horizontal menu bar"
+args=["BX: x", "CX: y", "DX: bar width", "DS:SI: items (consecutive NUL-term strings)", "DI: item count", "AL: selected index (0xFF=none)"]
 
-# ---- Colored drawing (67-71) ------------------------------------------------
+# ---- Colored drawing (67-71) -----------------------------------------------
 [[syscall]]
 ordinal=67
 name="gfx_draw_filled_rect_color"
 category="gfx"
-verified=false
-brief="Draw a filled rect in a given color"
+verified=true
+brief="Draw a filled rect in a specific color"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "AL: color (0-3)"]
 
 [[syscall]]
 ordinal=68
 name="gfx_draw_rect_color"
 category="gfx"
-verified=false
-brief="Draw a rect outline in a given color"
+verified=true
+brief="Draw a rect outline in a specific color"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "AL: color (0-3)"]
 
 [[syscall]]
 ordinal=69
 name="gfx_draw_hline"
 category="gfx"
-verified=false
-brief="Draw a horizontal line"
+verified=true
+brief="Draw a horizontal line with color"
+args=["BX: x", "CX: y", "DX: length", "AL: color (0-3)"]
 
 [[syscall]]
 ordinal=70
 name="gfx_draw_vline"
 category="gfx"
-verified=false
-brief="Draw a vertical line"
+verified=true
+brief="Draw a vertical line with color"
+args=["BX: x", "CX: y", "DX: height", "AL: color (0-3)"]
 
 [[syscall]]
 ordinal=71
 name="gfx_draw_line"
 category="gfx"
-verified=false
+verified=true
 brief="Draw a line (Bresenham)"
+args=["BX: x1", "CX: y1", "DX: x2", "SI: y2", "AL: color (0-3)"]
 
-# ---- System (72-74) ---------------------------------------------------------
+# ---- System (72-74) --------------------------------------------------------
 [[syscall]]
 ordinal=72
 name="get_rtc_time"
 category="system"
-verified=false
+verified=true
 brief="Read the real-time clock"
+ret=["CH: hours (BCD)", "CL: minutes (BCD)", "DH: seconds (BCD)"]
 
 [[syscall]]
 ordinal=73
 name="delay_ticks"
 category="sched"
-verified=false
-brief="Delay N ticks, yielding"
+verified=true
+brief="Delay with cooperative yield (1 tick ~ 55ms at 18.2 Hz)"
+args=["CX: ticks to wait"]
 
 [[syscall]]
 ordinal=74
 name="get_task_info"
 category="sched"
-verified=false
-brief="Get task info"
+verified=true
+brief="Get current task / focus / task-count info"
+ret=["AL: current task id", "BL: focused task id", "CL: running task count"]
 
-# ---- Filesystem (75-77) -----------------------------------------------------
+# ---- Filesystem (75-77) ----------------------------------------------------
 [[syscall]]
 ordinal=75
 name="fs_seek"
 category="fs"
-verified=false
-brief="Seek file position"
+verified=true
+brief="Seek to a position in an open file"
+args=["AL: file handle", "CX: position high word", "DX: position low word"]
+err="CF=1"
 
 [[syscall]]
 ordinal=76
 name="fs_get_file_size"
 category="fs"
-verified=false
-brief="Get file size"
+verified=true
+brief="Get the size of an open file"
+args=["AL: file handle"]
+ret=["DX: size high word", "AX: size low word"]
+err="CF=1"
 
 [[syscall]]
 ordinal=77
 name="fs_rename"
 category="fs"
-verified=false
+verified=true
 brief="Rename a file"
+args=["BL: mount handle", "DS:SI: old filename", "ES:DI: new filename"]
+err="CF=1"
 
-# ---- Window (78-79) ---------------------------------------------------------
+# ---- Window (78-79) --------------------------------------------------------
 [[syscall]]
 ordinal=78
 name="win_resize"
 category="window"
-verified=false
-brief="Resize a window"
+verified=true
+brief="Resize an existing window"
+args=["AL: window handle", "DX: new width", "SI: new height"]
+err="CF=1"
 
 [[syscall]]
 ordinal=79
 name="win_get_info"
 category="window"
-verified=false
-brief="Get window info"
+verified=true
+brief="Query window properties"
+args=["AL: window handle"]
+ret=["BX: x", "CX: y", "DX: width", "SI: height", "DI: flags(hi)|state(lo)"]
+err="CF=1"
 
-# ---- Scroll / system / input (80-83) ----------------------------------------
+# ---- Scroll (80) -----------------------------------------------------------
 [[syscall]]
 ordinal=80
 name="gfx_scroll_area"
 category="gfx"
-verified=false
-brief="Scroll a rectangular area"
+verified=true
+brief="Scroll a rectangular region vertically"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "DI: scroll pixels (positive=up)"]
 
+# ---- System (81-83) --------------------------------------------------------
 [[syscall]]
 ordinal=81
 name="set_rtc_time"
 category="system"
-verified=false
+verified=true
 brief="Set the real-time clock"
+args=["CH: hours (BCD)", "CL: minutes (BCD)", "DH: seconds (BCD)"]
 
 [[syscall]]
 ordinal=82
 name="get_screen_info"
 category="system"
-verified=false
-brief="Get screen dimensions / mode"
+verified=true
+brief="Get screen dimensions and mode"
+ret=["BX: width (320)", "CX: height (200)", "AL: mode (4)", "AH: colors (4)"]
 
 [[syscall]]
 ordinal=83
 name="get_key_modifiers"
 category="event"
-verified=false
-brief="Get keyboard modifier states"
+verified=true
+brief="Get keyboard modifier-key states"
+ret=["AL: shift (1=down)", "AH: ctrl (1=down)", "DL: alt (1=down)"]
 
-# ---- Clipboard (84-86) ------------------------------------------------------
+# ---- Clipboard (84-86) -----------------------------------------------------
 [[syscall]]
 ordinal=84
 name="clip_copy"
 category="system"
-verified=false
-brief="Copy to system clipboard"
+verified=true
+brief="Copy data to the system clipboard (capacity 4KB)"
+args=["DS:SI: source data", "CX: byte count"]
+err="CF=1 - too large"
 
 [[syscall]]
 ordinal=85
 name="clip_paste"
 category="system"
-verified=false
-brief="Paste from system clipboard"
+verified=true
+brief="Read data from the system clipboard"
+args=["ES:DI: dest buffer", "CX: max bytes"]
+ret=["CX: actual bytes copied"]
+err="CF=1 - empty"
 
 [[syscall]]
 ordinal=86
 name="clip_get_len"
 category="system"
-verified=false
+verified=true
 brief="Get clipboard content length"
+ret=["CX: length (0=empty)"]
 
-# ---- Popup menus (87-89) ----------------------------------------------------
+# ---- Popup menu (87-89) ----------------------------------------------------
 [[syscall]]
 ordinal=87
 name="menu_open"
 category="ui"
-verified=false
-brief="Open a popup menu (generic)"
+verified=true
+brief="Open a popup menu at a position (auto-translated in draw ctx)"
+args=["BX: x", "CX: y", "DS:SI: string table (consecutive NUL-term)", "DL: item count", "DH: menu width"]
 
 [[syscall]]
 ordinal=88
 name="menu_close"
 category="ui"
-verified=false
-brief="Close a popup menu"
+verified=true
+brief="Close the active popup menu and repaint underneath"
 
 [[syscall]]
 ordinal=89
 name="menu_hit"
 category="ui"
-verified=false
-brief="Hit-test a popup menu"
+verified=true
+brief="Hit-test the active popup against current mouse position"
+ret=["AL: item index, or 0xFF if outside"]
 
-# ---- File dialog / utility / sprites (90-94) --------------------------------
+# ---- Dialogs / util / sprite (90-94) ---------------------------------------
 [[syscall]]
 ordinal=90
 name="file_dialog_open"
 category="ui"
-verified=false
-brief="System file-open dialog"
+verified=true
+brief="Open a blocking modal file-open dialog"
+args=["BL: mount handle (0=FAT12,1=FAT16)", "ES:DI: dest buffer for filename (13+ bytes)"]
+err="CF=1 - cancelled"
 
 [[syscall]]
 ordinal=91
 name="util_word_to_string"
 category="system"
-verified=false
-brief="Convert a word to a decimal string"
+verified=true
+brief="Convert a 16-bit word to a decimal string (preserves AX/BX/CX/DX)"
+args=["DX: value", "DI: dest buffer offset (caller's DS)"]
+ret=["caller_ds:DI: NUL-term decimal string, DI advanced past NUL"]
 
 [[syscall]]
 ordinal=92
 name="util_bcd_to_ascii"
 category="system"
-verified=false
-brief="Convert a BCD byte to an ASCII pair"
+verified=true
+brief="Convert a BCD byte to an ASCII digit pair (preserves other regs)"
+args=["AL: BCD byte (e.g. 0x59)"]
+ret=["AH: tens digit ASCII", "AL: ones digit ASCII"]
 
 [[syscall]]
 ordinal=93
 name="gfx_get_current_font_info"
 category="text"
-verified=false
-brief="Get current font metrics"
+verified=true
+brief="Get current font metrics (preserves DX/SI/DI)"
+ret=["BH: height", "BL: width", "CL: advance", "AL: font index"]
+err="CF=0"
 
 [[syscall]]
 ordinal=94
 name="gfx_draw_sprite"
 category="gfx"
-verified=false
-brief="Draw a 1-bit transparent sprite"
+verified=true
+brief="Draw a 1-bit transparent sprite (only set bits draw)"
+args=["BX: x", "CX: y", "DL: height", "DH: width (1-8)", "AL: color (0-3)", "SI: bitmap offset (caller's DS; 1 byte/row, MSB=leftmost)"]
+err="CF=0 success"
 
-# ---- Video / window scale (95-97) -------------------------------------------
+# ---- Video / window scale (95-97) ------------------------------------------
 [[syscall]]
 ordinal=95
 name="set_video_mode"
 category="system"
-verified=false
-brief="Switch video mode at runtime (0x04 CGA / 0x12 VGA16 / 0x13 VGA256)"
+verified=true
+brief="Switch video mode at runtime (triggers full desktop redraw)"
+args=["AL: mode (0x04=CGA, 0x13=VGA)"]
+ret=["AL: actual mode set"]
+err="CF=0 success"
 
 [[syscall]]
 ordinal=96
 name="win_get_content_scale"
 category="window"
-verified=false
+verified=true
 brief="Get content scale for the current draw context"
+ret=["AL: content_scale (1=normal,2=double)"]
+err="CF=0"
 
 [[syscall]]
 ordinal=97
 name="win_get_content_size"
 category="window"
-verified=false
-brief="Get content-area dimensions"
+verified=true
+brief="Get window content-area dimensions (accounts for content_scale)"
+args=["AL: window handle (0xFF=use draw_context)"]
+ret=["DX: content width", "SI: content height"]
+err="CF=1 - invalid handle or no draw context"
 
-# ---- Save dialog / scrollbar / video (98-101) -------------------------------
+# ---- Dialog / scrollbar / video (98-100) -----------------------------------
 [[syscall]]
 ordinal=98
 name="file_dialog_save"
 category="ui"
-verified=false
-brief="System file-save dialog"
+verified=true
+brief="Blocking modal file-save dialog"
+args=["BL: mount handle (0=FAT12,1=FAT16)", "ES:DI: dest buffer (13+ bytes)", "DS:SI: default filename (or empty)"]
+ret=["ES:DI: filename (dot format, NUL-term)"]
+err="CF=1 - cancelled"
 
 [[syscall]]
 ordinal=99
 name="widget_scrollbar_hit"
 category="ui"
-verified=false
-brief="Scrollbar hit-test with drag"
+verified=true
+brief="Scrollbar hit-test with drag (window-relative)"
+args=["BX: scrollbar x", "CX: scrollbar y", "SI: track height", "DX: current position", "DI: max range"]
+ret=["AL: 0=up,1=down,2=thumb-drag(DX=new pos),3=page-up,4=page-down"]
+err="CF=1 - no interaction"
 
 [[syscall]]
 ordinal=100
 name="get_video_mode"
 category="system"
-verified=false
-brief="Get current video mode"
+verified=true
+brief="Get the current video mode"
+ret=["AL: mode (0x04=CGA,0x13=VGA,0x12=EGA,0x01=SVGA)", "AH: colors"]
 
+# ---- Input (101) -----------------------------------------------------------
 [[syscall]]
 ordinal=101
 name="mouse_set_visible"
 category="event"
-verified=false
+verified=true
 brief="Show/hide the mouse cursor"
+args=["AL: 1=show, 0=hide"]
 
-# ---- Scaled graphics (102-104) ----------------------------------------------
+# ---- Scaled graphics / blit / read (102-104) -------------------------------
 [[syscall]]
 ordinal=102
 name="gfx_draw_sprite_scaled"
 category="gfx"
-verified=false
-brief="Draw a scaled 1-bit sprite"
+verified=true
+brief="Draw a 1-bit sprite scaled to arbitrary size (clear bits transparent)"
+args=["BX: dest_x", "CX: dest_y", "DX: dest_width", "SI: dest_height", "DI: sprite descriptor ptr (caller's DS)", "AL: color"]
+err="CF=0 success"
 
 [[syscall]]
 ordinal=103
 name="gfx_blit_rect"
 category="gfx"
 verified=true
-brief="Copy a screen region (memmove semantics; self-translates if draw ctx active)"
+brief="Copy a screen region (memmove semantics; self-translates in draw ctx)"
 args=["BX: dest_x", "CX: dest_y", "DX: src_x", "SI: src_y", "DI: (width<<8)|height (max 255 each)"]
-err="CF=0 on success"
+err="CF=0 success"
 
 [[syscall]]
 ordinal=104
 name="gfx_read_pixel"
 category="gfx"
-verified=false
-brief="Read a pixel's color"
+verified=true
+brief="Read a pixel's color at an absolute screen position"
+args=["BX: x", "CX: y"]
+ret=["AL: color (0-3 CGA, 0-255 VGA)"]
+err="CF=1 - out of bounds"
 
-# ---- Theme palette (105) ----------------------------------------------------
+# ---- Theme palette (105) ---------------------------------------------------
 [[syscall]]
 ordinal=105
 name="theme_set_palette"
 category="ui"
 verified=true
-brief="Set the 4 UI palette RGB entries (VGA DAC)"
-note="Build 406. Sets the 4x 6-bit RGB triples backing UI indices 0-3 (see const.palette)."
-
+brief="Set the 4 UI palette RGB entries (stored; programmed to VGA DAC, re-applied after mode switch)"
+args=["SI: ptr (caller seg) to 12 bytes: 4x(R,G,B) 6-bit (0-63), slots=desktop,accent,accent2,text"]
+err="CF=0 (always succeeds)"
 
 # =============================================================================
 # STRUCTS.  Field syntax: "name : type @offset [le|be]"  (default endian = le).
@@ -1110,6 +1223,6 @@ capabilities = ["POINTER", "RTC"]   # PC speaker audio; no SMP/PREEMPT/NET in th
 # =============================================================================
 [discrepancies]
 syscall_count = "PORT-SPEC §4 / ARCHITECTURE say '105 functions'; kernel_api_table is 106 slots (ordinals 0..105 inclusive). Resolved: callgate.count = 106 = len(syscall). The '105' was an off-by-one (last ordinal vs count)."
-font_advance  = "ARCHITECTURE.md says advance '12 px'; PORT-SPEC §1 and kernel (draw_font_advance db 8, font_table font 1) say 8. Resolved: const.font default(1).advance = 8. The 12-px advance was a bug."
+font_advance  = "ARCHITECTURE.md ('12 px') AND API_REFERENCE.md (API 48 font table: font 1 8x8 advance=12px) both carry the bug; PORT-SPEC §1 and the kernel (draw_font_advance db 8, font_table font 1 = advance 8) are correct. Resolved: const.font default(1).advance = 8 (source wins). Two docs drifted, not one."
 handle_owner  = "kernel.asm file_table data-section comment says 'bytes 12-31 reserved'; the code writes/reads owner at byte 24 and PORT-SPEC §5 pins owner @24. Resolved: struct file_handle.owner @24; the comment is stale drift."
 fat12_geometry = "FAT12 geometry was hand-duplicated in 5 places (kernel mount routine, kernel data defaults, boot/boot.asm BPB, boot/stage2.asm layout, tools/add_floppy_fs.py + tools/create_app_test.py). Resolved: const.fat12 is the single block; Phase 1 regenerates all consumers."

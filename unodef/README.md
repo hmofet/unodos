@@ -67,8 +67,10 @@ Each struct field is a single string:
   target**, not what ships today; each syscall carries a `category` so Phase 12 can
   re-map without re-deriving groupings.
 - **`verified`** on each syscall: `true` = register signature transcribed and
-  cross-checked against source/API_REFERENCE; `false` = name/ordinal/category/brief
-  verified from `kernel_api_table`, full `args`/`ret` still to transcribe from
-  `docs/API_REFERENCE.md`. Phase 1 conformance flips these all to `true`.
+  cross-checked against source/API_REFERENCE. **All 106 are now `verified=true`**
+  (the 12 calls API_REFERENCE leaves as "reg-level write-up pending" — ords
+  91–100, 102, 104 — were transcribed from their `kernel.asm` handler-header
+  comments, which is the authority anyway). Phase 1 conformance re-checks them
+  against the live dispatch.
 - See `[discrepancies]` in `unodef.toml` for the doc contradictions this file
   resolves (105-vs-106, font 12-vs-8, the stale handle-comment, geometry ×5).
