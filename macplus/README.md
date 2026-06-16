@@ -265,8 +265,8 @@ Still untested on real hardware (no Plus-specific risk on the SE/II
 ROM-assisted path): (1) the Plus-only SCC DCD quadrature mouse — flip the
 `eor` sense in `isr_lvl2` if an axis runs backwards; (2) genuine M0110A
 arrow codes on a real Plus; (3) electrical timing of the Plus VIA keyboard
-handshake. On a real IIci, set the monitor to **B&W (1-bit)** until the
-color milestone.
+handshake. On a real IIci, set the monitor to **B&W (1-bit)** — this port
+renders 1-bit on every supported machine.
 
 ## Milestones
 

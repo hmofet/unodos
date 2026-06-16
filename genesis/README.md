@@ -20,8 +20,8 @@ Y = pause).
 with the USV1 mini-filesystem, a Files app, working Notepad F1-save,
 and tape/WAV storage (KCS 1200-baud AFSK: the PSG writes through the
 headphone jack, a one-comparator adapter reads; `mktape.py` makes the
-PC the tape deck). Full architecture + the SD-card spec:
-[docs/STORAGE.md](../docs/STORAGE.md).
+PC the tape deck). Full storage architecture (SRAM, tape, Sega CD BRAM,
+and the deferred SD-card spec): [docs/STORAGE.md](../docs/STORAGE.md).
 **Milestones 3/5/6 (2026-06-12)** — full feature parity with the
 Amiga port: the **Theme app** (the 8 shared preset palettes + 3-bit
 RGB custom editing, applied by rewriting the themed CRAM entries),

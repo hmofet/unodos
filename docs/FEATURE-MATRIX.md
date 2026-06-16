@@ -122,3 +122,21 @@ verified in Flycast). The x86 OS gets its own native 3D app
 kernel's `INT 0x80` graphics API instead of the C library. Backend slots
 for PS3 / PC / GameCube / Xbox are planned (comments only, not yet
 implemented).
+
+## UI toolkit — unoui
+
+A separate write-once widget toolkit ([../unoui/](../unoui/),
+[UNOUI.md](UNOUI.md)) for the C-based ports + host — the look-and-feel
+analogue of Uno3D: a portable core over `fb.h` plus a swappable **theme**
+vtable (palette + metrics + chrome painters, per-painter NULL-fallback).
+~20 widgets including menu bar, tabs, slider, spinner, dropdown, and a
+multi-line text editor; depth-aware (1/4/8/full-bit via `ui_shade`
+ordered dither). Eight themes ship (unodos, macos7, macplus [1-bit],
+win31, amiga, c64, apple2, next), host-verified into `themes.png`.
+Interaction is a pure function of an abstract `unoui_event` stream
+(drag + z-order, focus/Tab, scrollbar/slider thumbs, menus, multi-line
+text editing), so a port writes only a small event adapter + `fb`
+present; verified into the scripted `storyboard.png`. Distinct from the
+kernel-native asm widget set (the "Widgets / dialogs / clipboard" row
+above): unoui is the C-side library, not compiled into the asm kernel.
+Not yet wired into the port glue `main()`s.
