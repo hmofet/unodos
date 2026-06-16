@@ -54,3 +54,8 @@ build/unodos-hd.img
 # C64 port: build artifacts (regeneratable; c64/shots/ are committed evidence)
 c64/build/
 c64/__pycache__/
+
+# uno2d / uno3d host artifacts
+build/uno2d_test
+build/uno2d_test.exe
+build/*.ppm
