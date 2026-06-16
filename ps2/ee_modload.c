@@ -94,17 +94,18 @@ static void mc_populate_card(void)
     if (gCardPopulated) return;
     gCardPopulated = 1;
 
-    /* ensure the Apps subdir exists (ee_platform.c already made /UnoDOS) */
+    /* ensure the Apps subdir exists (ee_platform.c already made /UnoDOS).
+       A non-zero result usually just means "already there" from a prior boot. */
     mcMkDir(0, 0, UNO_APPS_DIR);
     r = -99; mcSync(0, NULL, &r);
-    printf("[modload] mkdir %s -> %d\n", UNO_APPS_DIR, r);
 
     for (i = 0; i < APP_NAPPS; i++) {
         char path[64];
         int fd, off = 0;
         snprintf(path, sizeof(path), UNO_APPS_DIR "/app%02d.uno", i);
 
-        /* present already? (readable open succeeds) -> keep the card's copy */
+        /* present already? (readable open succeeds) -> keep the card's copy,
+           so the modules persist across power cycles (written once). */
         mcOpen(0, 0, path, sceMcFileAttrReadable);
         fd = -1; mcSync(0, NULL, &fd);
         if (fd >= 0) { mcClose(fd); mcSync(0, NULL, &r); continue; }
@@ -113,7 +114,7 @@ static void mc_populate_card(void)
         mcOpen(0, 0, path, sceMcFileCreateFile | sceMcFileAttrReadable |
                            sceMcFileAttrWriteable);
         fd = -1; mcSync(0, NULL, &fd);
-        if (fd < 0) { printf("[modload] create %s -> fd %d\n", path, fd); continue; }
+        if (fd < 0) continue;
         while (off < gUnoModImages[i].len) {
             int chunk = (int)(gUnoModImages[i].len - off);
             int put;
@@ -123,7 +124,8 @@ static void mc_populate_card(void)
             off += put;
         }
         mcClose(fd); mcSync(0, NULL, &r);
-        printf("[modload] wrote %s (%ld bytes)\n", path, (long)off);
+        printf("[modload] wrote %s (%ld bytes) to the memory card\n",
+               path, (long)off);
     }
 }
 #endif
