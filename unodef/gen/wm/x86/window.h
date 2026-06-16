@@ -42,15 +42,28 @@ static inline void      win_set_flags      (int i, uint8_t   v){ wtab[i].flags=v
 static inline uint8_t   win_get_render_hint(int i){ return wtab[i].render_hint; }
 static inline void      win_set_render_hint(int i, uint8_t   v){ wtab[i].render_hint=v; }
 static inline uint8_t win_z_at(int rank){ return wz_list[rank]; }
+static inline void    win_z_set(int rank, uint8_t handle){ wz_list[rank]=handle; }
 
-/* --- the SAME write-once L2 policy as the SoA world (layout-independent) --- */
+/* --- the SAME write-once policy as the SoA world (layout-independent) --- */
+/* --- portable L2 policy: WRITE-ONCE, via accessors only (full field access). */
 static inline int win_hit(int i, uint16_t px, uint16_t py){
     return px >= win_get_x(i) && px < win_get_x(i) + win_get_w(i)
         && py >= win_get_y(i) && py < win_get_y(i) + win_get_h(i);
 }
-static inline void win_reap(uint8_t dead_owner){
-    for (int i = 0; i < WIN_CAP; i++)
-        if (win_get_state(i) && win_get_owner(i) == dead_owner)
-            win_set_state(i, 0);
+static inline void win_move  (int i, uint16_t nx, uint16_t ny){ win_set_x(i,nx); win_set_y(i,ny); }
+static inline void win_resize(int i, uint16_t nw, uint16_t nh){ win_set_w(i,nw); win_set_h(i,nh); }
+static inline void win_reap(uint8_t dead){
+    for (int i=0;i<WIN_CAP;i++) if (win_get_state(i) && win_get_owner(i)==dead) win_set_state(i,0);
+}
+/* z-order raise: promote handle to rank 0 (top), shifting the rest down. */
+static inline void win_raise(int handle, int nlive){
+    int r; for (r=0;r<nlive;r++) if (win_z_at(r)==handle) break;
+    for (; r>0; r--) win_z_set(r, win_z_at(r-1));
+    win_z_set(0, (uint8_t)handle);
+}
+/* topmost live window containing (px,py): walk the z-list top->bottom. */
+static inline int win_topmost_at(int nlive, uint16_t px, uint16_t py){
+    for (int r=0;r<nlive;r++){ int h=win_z_at(r); if (win_get_state(h) && win_hit(h,px,py)) return h; }
+    return -1;
 }
 

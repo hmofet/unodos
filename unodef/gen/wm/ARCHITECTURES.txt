@@ -1,0 +1,22 @@
+UnoDOS window model — per-architecture derived layouts (one logical model).
+
+platform  cpu      lay dialect wrd ptr end coords  cap  table  
+---------------------------------------------------------------
+c64       6502     soa dasm     8  16  le cells     6    66B  wired/built
+host      x86_64   soa c       64  64  le pixels   64  1344B  wired/built
+amiga     m68k     aos vasm    16  32  be pixels    6    96B  wired/built
+genesis   m68k     aos vasm    16  32  be pixels    6    96B  wired/built
+x86       x86      aos c       16  16  le pixels   16   224B  wired/built
+macplus   m68k     aos vasm    16  32  be pixels    6    96B  wired/built
+snes      65816    aos ca65    16  16  le pixels    6    96B  wired/built
+iigs      65816    aos ca65    16  16  le pixels    6    96B  wired/built
+amd64     x86_64   soa c       64  64  le pixels  256  5376B  wired/built
+arm       arm      soa c       32  32  le pixels   64  1088B  (spec)
+arm64     aarch64  soa c       64  64  le pixels  256  5376B  (spec)
+sparc     sparc    soa c       32  32  be pixels   64  1088B  (spec)
+alpha     alpha    soa c       64  64  le pixels  256  5376B  (spec)
+mips      mips     soa c       32  32  be pixels   64  1088B  (spec)
+ppc       powerpc  soa c       32  32  be pixels   64  1088B  (spec)
+riscv     riscv64  soa c       64  64  le pixels  256  5376B  (spec)
+sh4       sh4      soa c       32  32  le pixels   64  1088B  (spec)
+

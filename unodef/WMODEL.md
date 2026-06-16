@@ -113,3 +113,54 @@ No struct to re-litigate; the layout falls out of the descriptor.
   `window_storage.c`.
 - AoS-on-asm (stride-multiply) is intentionally not emitted — SoA is the floor;
   AoS is the C-side demo of the layout knob.
+
+## Full field access (every dialect) + write-once policy
+The boundary is now complete, not just addressing:
+- **C worlds** emit inline `win_get_*`/`win_set_*` for every field + the z-relation,
+  and a **write-once L2 policy library** — `win_hit`, `win_move`, `win_resize`,
+  `win_raise` (z-order promote), `win_topmost_at` (z-walk hit-test), `win_reap`.
+  Identical source on every C platform; compiles and runs (host SoA verified).
+- **asm worlds** (vasm/ca65) emit `WIN_<FIELD>` offset equates + `win_ld_*`/`win_st_*`
+  (68000) and `win_lda_*`/`win_sta_*` (65816) convenience macros, alongside the
+  addressing macro. They assemble. (The wired ports keep offset-direct access for
+  fused ops like `cmp.w WX(a2),d0` — wrapping those in get/set macros would be
+  worse; the offset *is* the natural asm accessor, and it's already Contract-sourced.)
+
+## Architecture spec — 40 years of micros, one logical model
+`gen/wm/ARCHITECTURES.txt` lists the derived layout for every platform. The model
+is unchanged across all of them; only the **descriptor** differs (word/ptr width,
+endianness, capacity, layout). Adding an architecture is a descriptor (+ a dialect
+only if it needs a new assembler).
+
+| platform | cpu | era / examples | bits | ptr | endian | layout | window table |
+|---|---|---|---|---|---|---|---|
+| c64 | 6502 | 1982 home micro | 8 | 16 | le | SoA | 66 B |
+| z80/8088 | z80/x86 | CP/M, PC/XT | 8/16 | 16 | le | (single_app / AoS) | — |
+| x86 | x86 | 16-bit real mode (shipping) | 16 | 16 | le | AoS | 224 B |
+| 68000 | m68k | Amiga, Genesis, Mac Plus | 16/32 | 32 | **be** | AoS | 96 B |
+| 65816 | 65816 | SNES, Apple IIGS | 16 | 16 | le | AoS | 96 B |
+| arm | arm | Newton, PDAs, GBA-class | 32 | 32 | le | SoA | 1088 B |
+| sh4 | SuperH | Dreamcast, set-top | 32 | 32 | le | SoA | 1088 B |
+| mips | mips | SGI, PS1/PS2/PSP, N64 | 32 | 32 | **be** | SoA | 1088 B |
+| ppc | PowerPC | Power Mac, GameCube/Wii, X360 | 32 | 32 | **be** | SoA | 1088 B |
+| sparc | SPARC v8 | Sun workstations | 32 | 32 | **be** | SoA | 1088 B |
+| alpha | Alpha | DEC 21064+ | 64 | 64 | le | SoA | 5376 B |
+| riscv | RISC-V | rv64 | 64 | 64 | le | SoA | 5376 B |
+| arm64 | AArch64 | phones, Apple silicon, servers | 64 | 64 | le | SoA | 5376 B |
+| amd64 | x86_64 | modern PC | 64 | 64 | le | SoA | 5376 B |
+
+Notes:
+- **Endianness** is the only dimension the survey adds, and it does **not** change
+  the generated *access* code: in-memory field access is native (the accessor is
+  generated for the platform's order). The `.UNO` container / on-disk format stays
+  **little-endian** (`contract.endian`), and big-endian ports byte-swap at *that*
+  boundary only (the §1 "BE ports accessor-wrap at the boundary" rule). Portable
+  policy never sees endianness.
+- The 64-bit RISC targets (alpha/riscv/arm64/amd64) derive an identical layout —
+  that *is* the point: they're one descriptor each over the proven C/SoA path, so
+  emitting separate headers would be redundant (hence `spec_only`).
+- **What's actually new per architecture is the L1 *mechanism*, not the window
+  model**: a real port still needs its boot/mode-setup, call-gate, MMU/cache, and
+  framebuffer/driver bring-up. The contract/window layer ports for free; that's
+  the leverage. Architectures expressible the same way but omitted for brevity:
+  PA-RISC, IA-64 (Itanium), VAX, S/390 — all just descriptors.
