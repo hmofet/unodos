@@ -421,6 +421,31 @@ def render_world_equates(d, world):
         out.append(line)
     return "\n".join(out) + "\n"
 
+def abi31_map(d):
+    """Compute the 3.1 categorized ordinal for each syscall (CONTRACT-ARCH §11):
+    new = band_base[category] + index-within-category. Collision-free by construction
+    as long as no category exceeds band_width."""
+    cfg = d["abi31"]; band = cfg["band_width"]; order = cfg["category_order"]
+    base = {c: i * band for i, c in enumerate(order)}
+    by_cat = {}
+    out = {}
+    for s in sorted(d["syscall"], key=lambda x: x["ordinal"]):
+        c = s["category"]
+        idx = by_cat.get(c, 0); by_cat[c] = idx + 1
+        out[s["ordinal"]] = (base[c] + idx, c, s["name"], idx < band)
+    return out, by_cat
+
+def render_abi31(d):
+    m, counts = abi31_map(d)
+    out = ["UnoDOS 3.1 categorized ordinal map (generated; §11). flat -> 3.1.", ""]
+    for flat in sorted(m):
+        new, cat, name, ok = m[flat]
+        out.append("  %3d  %-26s %-7s -> 0x%02X%s" % (flat, name, cat, new, "" if ok else "  !! BAND OVERFLOW"))
+    out.append("")
+    for c, n in counts.items():
+        out.append("  category %-7s count=%d (band=%d)" % (c, n, d["abi31"]["band_width"]))
+    return "\n".join(out) + "\n"
+
 def render_profiles(d):
     """Per-port profile/capability/display manifest (CONTRACT-ARCH §9): what each
     port must provide. Makes 'this machine can't window' generated and honest."""
@@ -460,6 +485,7 @@ def main():
         base = os.path.basename(emit)
         _write(os.path.join(GEN, wname, base), render_world_equates(d, wname))
     _write(os.path.join(GEN, "profiles.txt"), render_profiles(d))
+    _write(os.path.join(GEN, "abi31_ordinals.txt"), render_abi31(d))
     if "--check" in sys.argv:
         print("checking x86 trust anchor...")
         if not check(d):

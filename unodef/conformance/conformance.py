@@ -67,6 +67,26 @@ def check_rule10_struct(d):
            d["enum"]["event_type"].get("CONSUMED") == 0xFF,
            "CONSUMED=%s" % d["enum"]["event_type"].get("CONSUMED"))
 
+def check_abi31(d):
+    # Phase 12: the 3.1 categorized ordinal map must be collision-free and every
+    # category must fit its band (else 3.1 must widen it before shipping).
+    cfg = d.get("abi31")
+    if not cfg:
+        return
+    band = cfg["band_width"]; order = cfg["category_order"]
+    base = {c: i * band for i, c in enumerate(order)}
+    seen = {}; coll = 0; overflow = []
+    bycat = {}
+    for s in sorted(d["syscall"], key=lambda x: x["ordinal"]):
+        c = s["category"]; idx = bycat.get(c, 0); bycat[c] = idx + 1
+        if idx >= band: overflow.append(c)
+        new = base[c] + idx
+        if new in seen: coll += 1
+        seen[new] = s["name"]
+    record(12, "3.1 categorized ordinals collision-free", coll == 0, "%d collisions" % coll)
+    record(12, "every category fits its 3.1 band", not overflow, "overflow: %s" % set(overflow))
+    record(12, "uno_header_v2 (.UNO v2) defined", any(s["name"] == "uno_header_v2" for s in d["struct"]), "")
+
 def check_rule8_geometry(d):
     # "Centralize disk geometry." Contract holds ONE fat12 block; the generated x86
     # surface must equal kernel.asm's literals (the Phase-1 trust anchor, re-run here).
@@ -312,6 +332,7 @@ def main():
     check_rule9_appendonly(d)
     check_rule10_struct(d)
     check_rule8_geometry(d)
+    check_abi31(d)
     print("=== B. BEHAVIORAL (§6 policy invariants, model + vectors + discrimination) ===")
     run_zorder(); run_events(); run_queue(); run_mouse(); run_reaping(); run_dfocus()
     print("=== C. PROFILES (audit-tax §9: scaling is generated and honest) ===")

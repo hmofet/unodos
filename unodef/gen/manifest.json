@@ -594,6 +594,20 @@
         "name@4",
         "icon@16"
       ]
+    },
+    "uno_header_v2": {
+      "size": 96,
+      "fields": [
+        "magic@0",
+        "abi_major@4",
+        "abi_minor@5",
+        "arch@6",
+        "profile@7",
+        "caps@8",
+        "name@12",
+        "reserved@28",
+        "icon@32"
+      ]
     }
   },
   "const": {

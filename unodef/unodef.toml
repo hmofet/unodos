@@ -1349,3 +1349,34 @@ role = "STEREO_R"
 [port.dc_server]
 profile = "single_app"
 capabilities = ["HEADLESS","NET","SMP"]
+
+
+# =============================================================================
+# UnoDOS 3.1 ABI (CONTRACT-ARCH §11, Phase 12) — the versioned clean break.
+# ADDITIVE: the current flat ordinals (0..105) still ship; this defines the 3.1
+# CATEGORIZED ordinal scheme + the .UNO v2 container. Re-issue is port-by-port
+# with a dual-build window — no shipped port changes here. (font fix already in
+# const.font; every multi-byte field stays little-endian.)
+# =============================================================================
+[abi31]
+band_width = 32                # each category gets a 32-ordinal band (>= max count)
+# §11 order; net/device are reserved for Phase 13.
+category_order = ["gfx","text","window","event","fs","sched","ui","audio","system","net","device"]
+
+# .UNO container v2 — explicit abi_version + arch tag (loader rejects mismatched
+# binaries) + declared profile/caps; the "first byte = x86 JMP" trick is demoted.
+[[struct]]
+name = "uno_header_v2"
+size = 96
+fields = [
+  "magic     : bytes[4] @0",    # 'U' 'N' 'O' '2'
+  "abi_major : u8       @4",
+  "abi_minor : u8       @5",
+  "arch      : u8       @6",    # arch tag: 0=x86 1=m68k 2=6502 3=65816 4=z80 5=arm 6=ppc 7=sh 8=mips ...
+  "profile   : u8       @7",    # 0=windowed 1=single_app 2=minimal
+  "caps      : u32      @8",    # capability bitmask (LE)
+  "name      : char[16] @12",
+  "reserved  : bytes[4] @28",
+  "icon      : bytes[64]@32",   # 16x16 @ 2bpp, as in v1
+]
+# code entry at offset 96 (= size).
