@@ -22,5 +22,13 @@ $CC $F -DUNO_SMP -DUNO_RACE -fsanitize=thread -O1 unosched/uno_sync.c unosched/u
 $R ./build/sched_race >/dev/null 2>build/sched_race.tsan || true
 if grep -q "data race" build/sched_race.tsan; then echo "[PASS] DISCRIMINATION: TSan caught the unguarded race"; else echo "[FAIL] TSan did not catch the race"; fail=1; fi
 
+
+# OFFLOAD job model (Phase 10): floor/accel equivalence under COOP and SMP.
+$CC $F unosched/uno_sync.c unosched/uno_job_test.c -o build/job_coop
+JC=$(./build/job_coop); echo "$JC" | grep -q "ALL PASS" || { echo "[FAIL] job COOP"; fail=1; }
+$CC $F -DUNO_SMP unosched/uno_sync.c unosched/uno_job_test.c -lpthread -o build/job_smp
+JS=$($R ./build/job_smp); echo "$JS" | grep -q "ALL PASS" || { echo "[FAIL] job SMP"; fail=1; }
+echo "[$([ $fail -eq 0 ] && echo PASS || echo FAIL)] OFFLOAD job: accel==portable on COOP and SMP"
+
 echo ""; [ $fail -eq 0 ] && echo "ALL PASS — COOP result == SMP result == expected; guarded clean; race caught" || echo "FAILURES"
 exit $fail

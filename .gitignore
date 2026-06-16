@@ -66,3 +66,6 @@ build/*.tsan
 build/unosound_test
 build/unosound_test.exe
 build/*.wav
+build/job_test
+build/job_coop
+build/job_smp

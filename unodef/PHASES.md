@@ -16,7 +16,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 7 | Concurrency floor + host SMP/TSan | ✅ host-proven — COOP==SMP==expected; guarded **TSan-clean**; race **caught** (`setarch -R`) |
 | 8 | Display + profiles + directional | ◐ host-proven — multi-surface + profile/cap manifest generated | 8 | Display + profiles + directional | — | honest; directional-focus in conformance (35/35); NES/GB emulator validation blocked |
 | 9 | `unosound` | ✅ host-proven — voice/score floor synths A440 (±3%), melody to WAV; chiptune accel (SID/Paula) blocked |
-| 10 | SMP + OFFLOAD pilots (Saturn/PS3) | — |
+| 10 | SMP + OFFLOAD pilots (Saturn/PS3) | ◐ host-proven — OFFLOAD job floor/accel equivalence (COOP+SMP); real SH2/SPU hardware blocked (de-risked by Phase 7) |
 | 11 | Drivers & buses | — |
 | 12 | Ship 3.1 ABI | — |
 | 13 | New targets + Z80 + networking | — |
