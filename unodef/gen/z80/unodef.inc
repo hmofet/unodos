@@ -117,18 +117,18 @@ SYS_THEME_SET_PALETTE      EQU 105           ; Set the 4 UI palette RGB entries 
 
 ; ---- Window table (struct win_entry) -----------------------------
 WIN_MAX_COUNT              EQU 16            ; fixed window table size
-WIN_ENTRY_SIZE             EQU 32
+WIN_ENTRY_SIZE             EQU 16
 WIN_OFF_STATE              EQU 0             ; u8
-WIN_OFF_FLAGS              EQU 1             ; u8
+WIN_OFF_OWNER              EQU 1             ; u8
 WIN_OFF_X                  EQU 2             ; u16
 WIN_OFF_Y                  EQU 4             ; u16
 WIN_OFF_WIDTH              EQU 6             ; u16
 WIN_OFF_HEIGHT             EQU 8             ; u16
-WIN_OFF_ZORDER             EQU 10            ; u8
-WIN_OFF_OWNER              EQU 11            ; u8
-WIN_OFF_TITLE              EQU 12            ; char
-WIN_OFF_CONTENT_SCALE      EQU 24            ; u8
-WIN_OFF_RESERVED           EQU 25            ; bytes
+WIN_OFF_TITLE              EQU 10            ; u16
+WIN_OFF_ZORDER             EQU 12            ; u8
+WIN_OFF_FLAGS              EQU 13            ; u8
+WIN_OFF_CONTENT_SCALE      EQU 14            ; u8
+WIN_OFF_RESERVED           EQU 15            ; bytes
 
 ; ---- Event record (struct event) ---------------------------------
 EVENT_ENTRY_SIZE           EQU 3             ; type:u8 + data:u16

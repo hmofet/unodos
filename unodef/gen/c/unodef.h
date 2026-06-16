@@ -120,18 +120,18 @@
 
 /* ---- Window table (struct win_entry) ---- */
 #define WIN_MAX_COUNT                16        /* fixed window table size */
-#define WIN_ENTRY_SIZE               32
+#define WIN_ENTRY_SIZE               16
 #define WIN_OFF_STATE                0         /* u8 */
-#define WIN_OFF_FLAGS                1         /* u8 */
+#define WIN_OFF_OWNER                1         /* u8 */
 #define WIN_OFF_X                    2         /* u16 */
 #define WIN_OFF_Y                    4         /* u16 */
 #define WIN_OFF_WIDTH                6         /* u16 */
 #define WIN_OFF_HEIGHT               8         /* u16 */
-#define WIN_OFF_ZORDER               10        /* u8 */
-#define WIN_OFF_OWNER                11        /* u8 */
-#define WIN_OFF_TITLE                12        /* char */
-#define WIN_OFF_CONTENT_SCALE        24        /* u8 */
-#define WIN_OFF_RESERVED             25        /* bytes */
+#define WIN_OFF_TITLE                10        /* u16 */
+#define WIN_OFF_ZORDER               12        /* u8 */
+#define WIN_OFF_FLAGS                13        /* u8 */
+#define WIN_OFF_CONTENT_SCALE        14        /* u8 */
+#define WIN_OFF_RESERVED             15        /* bytes */
 
 /* ---- Event record (struct event) ---- */
 #define EVENT_ENTRY_SIZE             3         /* type:u8 + data:u16 */
@@ -270,28 +270,28 @@
 
 typedef struct UNO_PACKED {
     uint8_t state;
-    uint8_t flags;
+    uint8_t owner;
     uint16_t x;
     uint16_t y;
     uint16_t width;
     uint16_t height;
+    uint16_t title;
     uint8_t zorder;
-    uint8_t owner;
-    char title[12];
+    uint8_t flags;
     uint8_t content_scale;
-    uint8_t _pad0[7];
+    uint8_t _pad0[1];
 } win_entry_t;
-_Static_assert(sizeof(win_entry_t) == 32, "win_entry size");
+_Static_assert(sizeof(win_entry_t) == 16, "win_entry size");
 _Static_assert(offsetof(win_entry_t, state) == 0, "win_entry.state");
-_Static_assert(offsetof(win_entry_t, flags) == 1, "win_entry.flags");
+_Static_assert(offsetof(win_entry_t, owner) == 1, "win_entry.owner");
 _Static_assert(offsetof(win_entry_t, x) == 2, "win_entry.x");
 _Static_assert(offsetof(win_entry_t, y) == 4, "win_entry.y");
 _Static_assert(offsetof(win_entry_t, width) == 6, "win_entry.width");
 _Static_assert(offsetof(win_entry_t, height) == 8, "win_entry.height");
-_Static_assert(offsetof(win_entry_t, zorder) == 10, "win_entry.zorder");
-_Static_assert(offsetof(win_entry_t, owner) == 11, "win_entry.owner");
-_Static_assert(offsetof(win_entry_t, title) == 12, "win_entry.title");
-_Static_assert(offsetof(win_entry_t, content_scale) == 24, "win_entry.content_scale");
+_Static_assert(offsetof(win_entry_t, title) == 10, "win_entry.title");
+_Static_assert(offsetof(win_entry_t, zorder) == 12, "win_entry.zorder");
+_Static_assert(offsetof(win_entry_t, flags) == 13, "win_entry.flags");
+_Static_assert(offsetof(win_entry_t, content_scale) == 14, "win_entry.content_scale");
 
 typedef struct UNO_PACKED {
     uint8_t type;
