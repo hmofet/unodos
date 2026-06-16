@@ -1,0 +1,1115 @@
+# =============================================================================
+# UNODEF — the UnoDOS Contract (Layer 0).  See ./README.md and docs/CONTRACT-ARCH.md.
+#
+# Phase 0: encodes WHAT ALREADY SHIPS on x86 (kernel/kernel.asm), no behavior
+# change. Source of truth, in priority order:
+#   kernel/kernel.asm  >  docs/PORT-SPEC.md  >  docs/API_REFERENCE.md
+# "Where this file and the x86 source disagree, the source wins" (PORT-SPEC §1) —
+# until Phase 1, when x86 is generated FROM this file and the rule inverts.
+# =============================================================================
+
+[contract]
+name      = "UnoDOS"
+# The name stays "UnoDOS 3" (uno·dos·tres). abi_target is the versioned 3.1 break.
+abi_target = { major = 3, minor = 1 }
+# What x86 ships TODAY (kernel_api_table header: magic 'KA', version 1.0):
+abi_current = { api_magic = 0x4B41, api_version = 0x0001, slots = 106 }
+endian    = "le"          # all multi-byte on-disk/in-mem fields; BE ports accessor-wrap at the boundary
+source    = { kernel = "kernel/kernel.asm", spec = "docs/PORT-SPEC.md", api = "docs/API_REFERENCE.md" }
+
+
+# =============================================================================
+# CALL GATE  (L3/L2 boundary).  Shape is per-world; numbering+semantics live here.
+# =============================================================================
+[callgate]
+count = 106               # the "105 vs 106" contradiction, resolved: 106 slots, ordinals 0..105.
+                          # PORT-SPEC/ARCHITECTURE say "105 functions"; the table is 106 (0..105
+                          # inclusive). len(syscalls) is now the only count. See [discrepancies].
+
+[callgate.binding.x86]
+gate     = "INT 0x80"
+selector = "AH"           # function number in AH
+args     = ["AL", "BX", "CX", "DX", "SI", "DI", "DS:SI", "ES:DI"]
+error    = "CF set, code in AX"
+notes    = "INT 0x80 clears IF; app must STI after each call. Kernel saves caller DS/ES; string args read from caller's original DS:SI / ES:DI."
+
+[callgate.binding.m68k]
+gate     = "TRAP #0"
+selector = "D0 high byte"   # (or D7 — fix at port time and document; PORT-SPEC §4)
+args     = ["D1", "D2", "D3", "D4", "A0", "A1"]
+error    = "CCR carry, code in D0"
+
+# Draw-context auto-translation (API 31): when a draw context is active, the
+# dispatcher translates BX/CX window-relative -> absolute for this ordinal set.
+# (API_REFERENCE preamble; API 103 self-translates, NOT in this dispatcher set.)
+[callgate.autotranslate]
+ordinals = [0,1,2,3,4,5,6, 50,51,52, 56,57,58,59,60,61,62, 65,66,67,68,69,70,71, 80, 87]
+
+
+# =============================================================================
+# SYSCALLS  (the call gate, per call).  ordinal = current shipping flat number.
+#   verified=true  -> args/ret transcribed + cross-checked (kernel + API_REFERENCE)
+#   verified=false -> name/ordinal/category/brief verified from kernel_api_table;
+#                     args/ret pending transcription from docs/API_REFERENCE.md
+# args/ret entries are "REG: meaning". `err` describes the CF=1 case.
+# =============================================================================
+
+# ---- Graphics (0-6) ---------------------------------------------------------
+[[syscall]]
+ordinal=0
+name="gfx_draw_pixel"
+category="gfx"
+verified=true
+brief="Draw a single pixel"
+args=["BX: x (0-319)", "CX: y (0-199)", "AL: color (0-3)"]
+
+[[syscall]]
+ordinal=1
+name="gfx_draw_rect"
+category="gfx"
+verified=true
+brief="Draw rectangle outline (white)"
+args=["BX: x", "CX: y", "DX: width", "SI: height"]
+
+[[syscall]]
+ordinal=2
+name="gfx_draw_filled_rect"
+category="gfx"
+verified=true
+brief="Draw filled rectangle (white)"
+args=["BX: x", "CX: y", "DX: width", "SI: height"]
+
+[[syscall]]
+ordinal=3
+name="gfx_draw_char"
+category="gfx"
+verified=true
+brief="Draw one character in the current font"
+args=["BX: x", "CX: y", "AL: ASCII (32-126)"]
+
+[[syscall]]
+ordinal=4
+name="gfx_draw_string"
+category="gfx"
+verified=true
+brief="Draw NUL-terminated string (current fg color)"
+args=["BX: x", "CX: y", "DS:SI: ptr to NUL-terminated string"]
+
+[[syscall]]
+ordinal=5
+name="gfx_clear_area"
+category="gfx"
+verified=true
+brief="Clear a rectangular area to black"
+args=["BX: x", "CX: y", "DX: width", "SI: height"]
+
+[[syscall]]
+ordinal=6
+name="gfx_draw_string_inverted"
+category="gfx"
+verified=true
+brief="Draw string inverted (black on white) — title bars"
+args=["BX: x", "CX: y", "DS:SI: ptr to NUL-terminated string"]
+
+# ---- Memory (7-8) -----------------------------------------------------------
+[[syscall]]
+ordinal=7
+name="mem_alloc"
+category="system"
+verified=true
+brief="Allocate from kernel heap (4-byte aligned, 4-byte block header)"
+args=["AX: size in bytes"]
+ret=["AX: ptr (offset in heap segment 0x8000), 0 on OOM"]
+err="CF=1, AX=0 — out of memory"
+
+[[syscall]]
+ordinal=8
+name="mem_free"
+category="system"
+verified=true
+brief="Free a block from mem_alloc"
+args=["AX: ptr returned by mem_alloc"]
+
+# ---- Events (9-10) ----------------------------------------------------------
+[[syscall]]
+ordinal=9
+name="event_get"
+category="event"
+verified=true
+brief="Non-blocking event dequeue"
+ret=["AL: event type (see enum event_type)", "DL: data low", "DH: data high"]
+err="CF=1 — queue empty"
+
+[[syscall]]
+ordinal=10
+name="event_wait"
+category="event"
+verified=true
+brief="Blocking event wait (loops internally until available)"
+ret=["AL: event type", "DL: data low", "DH: data high"]
+
+# ---- Keyboard (11-12, DEPRECATED — use 9/10) --------------------------------
+[[syscall]]
+ordinal=11
+name="kbd_getchar"
+category="event"
+verified=true
+deprecated=true
+brief="Non-blocking key read (deprecated; use event_get)"
+
+[[syscall]]
+ordinal=12
+name="kbd_wait_key"
+category="event"
+verified=true
+deprecated=true
+brief="Blocking key wait (deprecated; use event_wait)"
+
+# ---- Filesystem (13-17, 27, 40, 44-47, 75-77) -------------------------------
+[[syscall]]
+ordinal=13
+name="fs_mount"
+category="fs"
+verified=true
+brief="Mount a filesystem from a drive"
+args=["AL: drive (0x00=floppy A:, 0x80=first HDD)"]
+ret=["BX: mount handle (0=FAT12, 1=FAT16)"]
+err="CF=1, AX=fs_errno"
+
+[[syscall]]
+ordinal=14
+name="fs_open"
+category="fs"
+verified=true
+brief="Open a file by name"
+args=["BX: mount handle", "DS:SI: filename, dot format e.g. CLOCK.BIN"]
+ret=["AX: file handle (0-15)"]
+err="CF=1, AX=fs_errno"
+
+[[syscall]]
+ordinal=15
+name="fs_read"
+category="fs"
+verified=true
+brief="Read bytes from an open file"
+args=["AX: file handle", "BX: bytes to read", "ES:DI: dest buffer"]
+ret=["AX: bytes actually read"]
+err="CF=1, AX=fs_errno"
+
+[[syscall]]
+ordinal=16
+name="fs_close"
+category="fs"
+verified=true
+brief="Close a file handle"
+args=["AX: file handle"]
+err="CF=1"
+
+[[syscall]]
+ordinal=17
+name="fs_register_driver"
+category="fs"
+verified=true
+reserved=true
+brief="Register a filesystem driver (reserved; not used by apps)"
+
+[[syscall]]
+ordinal=18
+name="app_load"
+category="system"
+verified=true
+brief="Load a .BIN into a memory segment"
+args=["BX: mount handle", "AL: drive (0=boot)", "DH: target seg hint (0=auto from pool 0x3000-0x7000, 0x20=shell)", "DS:SI: filename"]
+ret=["AX: loaded segment"]
+err="CF=1"
+
+[[syscall]]
+ordinal=19
+name="app_run"
+category="system"
+verified=true
+brief="Execute a loaded app (blocking far call to seg:0x0050)"
+args=["AX: app segment"]
+ret=["AX: exit code"]
+err="CF reflects status"
+
+# ---- Window Manager (20-27) -------------------------------------------------
+[[syscall]]
+ordinal=20
+name="win_create"
+category="window"
+verified=true
+brief="Create a window (becomes topmost + focused)"
+args=["BX: x", "CX: y", "DX: width", "SI: height", "ES:DI: title (NUL-term, max 11 chars)", "AL: flags (see enum win_flags; 0x03=title+border)"]
+ret=["AL: window handle (0-15)"]
+err="CF=1 — no free slots"
+
+[[syscall]]
+ordinal=21
+name="win_destroy"
+category="window"
+verified=true
+brief="Destroy a window, free its slot"
+args=["AL: window handle"]
+err="CF=1"
+
+[[syscall]]
+ordinal=22
+name="win_draw"
+category="window"
+verified=true
+brief="Redraw a window's frame and title bar"
+args=["AL: window handle"]
+
+[[syscall]]
+ordinal=23
+name="win_focus"
+category="window"
+verified=true
+brief="Raise a window to topmost (z=15)"
+args=["AL: window handle"]
+err="CF=1"
+
+[[syscall]]
+ordinal=24
+name="win_move"
+category="window"
+verified=true
+brief="Move a window to a new position"
+args=["AL: window handle", "BX: x", "CX: y"]
+
+[[syscall]]
+ordinal=25
+name="win_get_content"
+category="window"
+verified=false
+brief="Get content-area bounds of a window"
+
+[[syscall]]
+ordinal=26
+name="register_shell"
+category="system"
+verified=false
+brief="Register app as shell (auto-return target)"
+
+[[syscall]]
+ordinal=27
+name="fs_readdir"
+category="fs"
+verified=true
+brief="Read next directory entry"
+args=["BX: mount handle", "AX: dir handle"]
+ret=["ES:DI: ptr to 32-byte FAT dir entry (struct dirent)"]
+err="CF=1 — end of directory"
+
+# ---- Mouse (28-30) ----------------------------------------------------------
+[[syscall]]
+ordinal=28
+name="mouse_get_state"
+category="event"
+verified=false
+brief="Get live x/y/buttons PLUS the press-time latch (PORT-SPEC §3)"
+
+[[syscall]]
+ordinal=29
+name="mouse_set_position"
+category="event"
+verified=false
+brief="Set mouse position"
+
+[[syscall]]
+ordinal=30
+name="mouse_is_enabled"
+category="event"
+verified=false
+brief="Check whether a mouse is available"
+
+# ---- Draw context / text measure (31-33) ------------------------------------
+[[syscall]]
+ordinal=31
+name="win_begin_draw"
+category="window"
+verified=false
+brief="Set draw context to a window (AL=handle); enables auto-translate"
+
+[[syscall]]
+ordinal=32
+name="win_end_draw"
+category="window"
+verified=false
+brief="Clear draw context (back to fullscreen mode)"
+
+[[syscall]]
+ordinal=33
+name="gfx_text_width"
+category="text"
+verified=false
+brief="Measure a string's pixel width in the current font"
+
+# ---- Cooperative tasking (34-36) --------------------------------------------
+[[syscall]]
+ordinal=34
+name="app_yield"
+category="sched"
+verified=false
+brief="Yield CPU to next task (the cooperative-floor switch point)"
+
+[[syscall]]
+ordinal=35
+name="app_start"
+category="sched"
+verified=false
+brief="Start a task (non-blocking)"
+
+[[syscall]]
+ordinal=36
+name="app_exit"
+category="sched"
+verified=false
+brief="Exit current task (kill path: reap handles + windows)"
+
+# ---- Desktop icons (37-39) --------------------------------------------------
+[[syscall]]
+ordinal=37
+name="desktop_set_icon"
+category="window"
+verified=false
+brief="Register a desktop icon"
+
+[[syscall]]
+ordinal=38
+name="desktop_clear_icons"
+category="window"
+verified=false
+brief="Clear all desktop icons"
+
+[[syscall]]
+ordinal=39
+name="gfx_draw_icon"
+category="gfx"
+verified=false
+brief="Draw a 16x16 icon bitmap"
+
+# ---- fs_read_header (40) ----------------------------------------------------
+[[syscall]]
+ordinal=40
+name="fs_read_header"
+category="fs"
+verified=true
+brief="Read first N bytes of a file (open/read/close wrapper)"
+args=["BX: mount handle", "DS:SI: filename", "ES:DI: dest buffer", "CX: bytes to read"]
+ret=["AX: bytes read"]
+err="CF=1"
+
+# ---- PC speaker (41-42) -----------------------------------------------------
+[[syscall]]
+ordinal=41
+name="speaker_tone"
+category="audio"
+verified=true
+brief="Play a tone"
+args=["BX: frequency Hz (0=off)"]
+
+[[syscall]]
+ordinal=42
+name="speaker_off"
+category="audio"
+verified=true
+brief="Silence the speaker"
+
+[[syscall]]
+ordinal=43
+name="get_boot_drive"
+category="system"
+verified=true
+brief="Get boot drive number"
+ret=["AL: drive number"]
+
+# ---- Filesystem write (44-47) -----------------------------------------------
+[[syscall]]
+ordinal=44
+name="fs_write_sector"
+category="fs"
+verified=true
+brief="Write a raw 512-byte sector"
+args=["BX: mount handle", "CX:DX: LBA sector", "ES:DI: source buffer (512 bytes)"]
+err="CF=1"
+
+[[syscall]]
+ordinal=45
+name="fs_create"
+category="fs"
+verified=true
+brief="Create a new file"
+args=["BX: mount handle", "DS:SI: filename"]
+ret=["AX: file handle"]
+err="CF=1, AX=fs_errno"
+
+[[syscall]]
+ordinal=46
+name="fs_write"
+category="fs"
+verified=true
+brief="Write bytes to an open file"
+args=["AX: file handle", "BX: bytes to write", "DS:SI: source buffer"]
+err="CF=1, AX=fs_errno"
+
+[[syscall]]
+ordinal=47
+name="fs_delete"
+category="fs"
+verified=true
+brief="Delete a file"
+args=["BX: mount handle", "DS:SI: filename"]
+err="CF=1, AX=fs_errno"
+
+# ---- GUI toolkit / fonts (48-66) — args pending transcription ---------------
+[[syscall]]
+ordinal=48
+name="gfx_set_font"
+category="text"
+verified=false
+brief="Set current font (AL=index into font_table: 0=4x6, 1=8x8, 2=8x12)"
+
+[[syscall]]
+ordinal=49
+name="gfx_get_font_metrics"
+category="text"
+verified=false
+brief="Get font metrics for a font index (AL=index)"
+
+[[syscall]]
+ordinal=50
+name="gfx_draw_string_wrap"
+category="text"
+verified=false
+brief="Draw a string with word wrap"
+
+[[syscall]]
+ordinal=51
+name="widget_draw_button"
+category="ui"
+verified=false
+brief="Draw a button"
+
+[[syscall]]
+ordinal=52
+name="widget_draw_radio"
+category="ui"
+verified=false
+brief="Draw a radio button"
+
+[[syscall]]
+ordinal=53
+name="widget_hit_test"
+category="ui"
+verified=false
+brief="Hit-test a rectangle"
+
+[[syscall]]
+ordinal=54
+name="theme_set_colors"
+category="ui"
+verified=false
+brief="Set theme colors (UI indices 0-3)"
+
+[[syscall]]
+ordinal=55
+name="theme_get_colors"
+category="ui"
+verified=false
+brief="Get theme colors"
+
+[[syscall]]
+ordinal=56
+name="widget_draw_checkbox"
+category="ui"
+verified=false
+brief="Draw a checkbox"
+
+[[syscall]]
+ordinal=57
+name="widget_draw_textfield"
+category="ui"
+verified=false
+brief="Draw a text input field"
+
+[[syscall]]
+ordinal=58
+name="widget_draw_scrollbar"
+category="ui"
+verified=false
+brief="Draw a scrollbar"
+
+[[syscall]]
+ordinal=59
+name="widget_draw_listitem"
+category="ui"
+verified=false
+brief="Draw a list item"
+
+[[syscall]]
+ordinal=60
+name="widget_draw_progress"
+category="ui"
+verified=false
+brief="Draw a progress bar"
+
+[[syscall]]
+ordinal=61
+name="widget_draw_groupbox"
+category="ui"
+verified=false
+brief="Draw a group box"
+
+[[syscall]]
+ordinal=62
+name="widget_draw_separator"
+category="ui"
+verified=false
+brief="Draw a separator line"
+
+[[syscall]]
+ordinal=63
+name="get_tick_count"
+category="system"
+verified=false
+brief="Get the BIOS tick counter (monotonic since boot; x86 18.2 Hz)"
+
+[[syscall]]
+ordinal=64
+name="point_over_window"
+category="window"
+verified=false
+brief="Check whether a point is over a window (z-aware)"
+
+[[syscall]]
+ordinal=65
+name="widget_draw_combobox"
+category="ui"
+verified=false
+brief="Draw a combo box"
+
+[[syscall]]
+ordinal=66
+name="widget_draw_menubar"
+category="ui"
+verified=false
+brief="Draw a menu bar"
+
+# ---- Colored drawing (67-71) ------------------------------------------------
+[[syscall]]
+ordinal=67
+name="gfx_draw_filled_rect_color"
+category="gfx"
+verified=false
+brief="Draw a filled rect in a given color"
+
+[[syscall]]
+ordinal=68
+name="gfx_draw_rect_color"
+category="gfx"
+verified=false
+brief="Draw a rect outline in a given color"
+
+[[syscall]]
+ordinal=69
+name="gfx_draw_hline"
+category="gfx"
+verified=false
+brief="Draw a horizontal line"
+
+[[syscall]]
+ordinal=70
+name="gfx_draw_vline"
+category="gfx"
+verified=false
+brief="Draw a vertical line"
+
+[[syscall]]
+ordinal=71
+name="gfx_draw_line"
+category="gfx"
+verified=false
+brief="Draw a line (Bresenham)"
+
+# ---- System (72-74) ---------------------------------------------------------
+[[syscall]]
+ordinal=72
+name="get_rtc_time"
+category="system"
+verified=false
+brief="Read the real-time clock"
+
+[[syscall]]
+ordinal=73
+name="delay_ticks"
+category="sched"
+verified=false
+brief="Delay N ticks, yielding"
+
+[[syscall]]
+ordinal=74
+name="get_task_info"
+category="sched"
+verified=false
+brief="Get task info"
+
+# ---- Filesystem (75-77) -----------------------------------------------------
+[[syscall]]
+ordinal=75
+name="fs_seek"
+category="fs"
+verified=false
+brief="Seek file position"
+
+[[syscall]]
+ordinal=76
+name="fs_get_file_size"
+category="fs"
+verified=false
+brief="Get file size"
+
+[[syscall]]
+ordinal=77
+name="fs_rename"
+category="fs"
+verified=false
+brief="Rename a file"
+
+# ---- Window (78-79) ---------------------------------------------------------
+[[syscall]]
+ordinal=78
+name="win_resize"
+category="window"
+verified=false
+brief="Resize a window"
+
+[[syscall]]
+ordinal=79
+name="win_get_info"
+category="window"
+verified=false
+brief="Get window info"
+
+# ---- Scroll / system / input (80-83) ----------------------------------------
+[[syscall]]
+ordinal=80
+name="gfx_scroll_area"
+category="gfx"
+verified=false
+brief="Scroll a rectangular area"
+
+[[syscall]]
+ordinal=81
+name="set_rtc_time"
+category="system"
+verified=false
+brief="Set the real-time clock"
+
+[[syscall]]
+ordinal=82
+name="get_screen_info"
+category="system"
+verified=false
+brief="Get screen dimensions / mode"
+
+[[syscall]]
+ordinal=83
+name="get_key_modifiers"
+category="event"
+verified=false
+brief="Get keyboard modifier states"
+
+# ---- Clipboard (84-86) ------------------------------------------------------
+[[syscall]]
+ordinal=84
+name="clip_copy"
+category="system"
+verified=false
+brief="Copy to system clipboard"
+
+[[syscall]]
+ordinal=85
+name="clip_paste"
+category="system"
+verified=false
+brief="Paste from system clipboard"
+
+[[syscall]]
+ordinal=86
+name="clip_get_len"
+category="system"
+verified=false
+brief="Get clipboard content length"
+
+# ---- Popup menus (87-89) ----------------------------------------------------
+[[syscall]]
+ordinal=87
+name="menu_open"
+category="ui"
+verified=false
+brief="Open a popup menu (generic)"
+
+[[syscall]]
+ordinal=88
+name="menu_close"
+category="ui"
+verified=false
+brief="Close a popup menu"
+
+[[syscall]]
+ordinal=89
+name="menu_hit"
+category="ui"
+verified=false
+brief="Hit-test a popup menu"
+
+# ---- File dialog / utility / sprites (90-94) --------------------------------
+[[syscall]]
+ordinal=90
+name="file_dialog_open"
+category="ui"
+verified=false
+brief="System file-open dialog"
+
+[[syscall]]
+ordinal=91
+name="util_word_to_string"
+category="system"
+verified=false
+brief="Convert a word to a decimal string"
+
+[[syscall]]
+ordinal=92
+name="util_bcd_to_ascii"
+category="system"
+verified=false
+brief="Convert a BCD byte to an ASCII pair"
+
+[[syscall]]
+ordinal=93
+name="gfx_get_current_font_info"
+category="text"
+verified=false
+brief="Get current font metrics"
+
+[[syscall]]
+ordinal=94
+name="gfx_draw_sprite"
+category="gfx"
+verified=false
+brief="Draw a 1-bit transparent sprite"
+
+# ---- Video / window scale (95-97) -------------------------------------------
+[[syscall]]
+ordinal=95
+name="set_video_mode"
+category="system"
+verified=false
+brief="Switch video mode at runtime (0x04 CGA / 0x12 VGA16 / 0x13 VGA256)"
+
+[[syscall]]
+ordinal=96
+name="win_get_content_scale"
+category="window"
+verified=false
+brief="Get content scale for the current draw context"
+
+[[syscall]]
+ordinal=97
+name="win_get_content_size"
+category="window"
+verified=false
+brief="Get content-area dimensions"
+
+# ---- Save dialog / scrollbar / video (98-101) -------------------------------
+[[syscall]]
+ordinal=98
+name="file_dialog_save"
+category="ui"
+verified=false
+brief="System file-save dialog"
+
+[[syscall]]
+ordinal=99
+name="widget_scrollbar_hit"
+category="ui"
+verified=false
+brief="Scrollbar hit-test with drag"
+
+[[syscall]]
+ordinal=100
+name="get_video_mode"
+category="system"
+verified=false
+brief="Get current video mode"
+
+[[syscall]]
+ordinal=101
+name="mouse_set_visible"
+category="event"
+verified=false
+brief="Show/hide the mouse cursor"
+
+# ---- Scaled graphics (102-104) ----------------------------------------------
+[[syscall]]
+ordinal=102
+name="gfx_draw_sprite_scaled"
+category="gfx"
+verified=false
+brief="Draw a scaled 1-bit sprite"
+
+[[syscall]]
+ordinal=103
+name="gfx_blit_rect"
+category="gfx"
+verified=true
+brief="Copy a screen region (memmove semantics; self-translates if draw ctx active)"
+args=["BX: dest_x", "CX: dest_y", "DX: src_x", "SI: src_y", "DI: (width<<8)|height (max 255 each)"]
+err="CF=0 on success"
+
+[[syscall]]
+ordinal=104
+name="gfx_read_pixel"
+category="gfx"
+verified=false
+brief="Read a pixel's color"
+
+# ---- Theme palette (105) ----------------------------------------------------
+[[syscall]]
+ordinal=105
+name="theme_set_palette"
+category="ui"
+verified=true
+brief="Set the 4 UI palette RGB entries (VGA DAC)"
+note="Build 406. Sets the 4x 6-bit RGB triples backing UI indices 0-3 (see const.palette)."
+
+
+# =============================================================================
+# STRUCTS.  Field syntax: "name : type @offset [le|be]"  (default endian = le).
+# Offsets are byte-exact and ARE the contract.
+# =============================================================================
+
+# Window-table entry. kernel.asm: WIN_ENTRY_SIZE=32, WIN_MAX_COUNT=16, WIN_OFF_*.
+[[struct]]
+name = "win_entry"
+size = 32
+count = 16                # fixed table of 16 windows (window_table)
+fields = [
+  "state         : u8      @0",   # enum win_state
+  "flags         : u8      @1",   # enum win_flags
+  "x             : u16     @2",
+  "y             : u16     @4",
+  "width         : u16     @6",
+  "height        : u16     @8",
+  "zorder        : u8      @10",  # 0=bottom .. 15=top
+  "owner         : u8      @11",  # owning task handle; 0xFF = kernel
+  "title         : char[12]@12",  # 11 chars + NUL
+  "content_scale : u8      @24",  # 1=normal, 2=double (hi-res auto-scale)
+  "reserved      : bytes[7]@25",
+]
+
+# Event record. kernel.asm: event_queue = 32 entries * 3 bytes, head/tail indices.
+[[struct]]
+name = "event"
+size = 3
+count = 32                # single global queue; forward-scan delivery w/ tombstones
+fields = [
+  "type : u8  @0",   # enum event_type
+  "data : u16 @1",   # meaning depends on type (e.g. KEY_PRESS: lo=ASCII, hi=scan/focus-stamp)
+]
+
+# File-handle table entry. kernel.asm: FILE_ENTRY_SIZE=32, FILE_MAX_HANDLES=16.
+# NOTE: the in-source data-section comment says "bytes 12-31 reserved", but the
+# CODE writes owner at byte 24 (lines ~12669/14369/15177/19049) and PORT-SPEC §5
+# pins owner @24. The comment is drift; this struct encodes the CODE. See [discrepancies].
+[[struct]]
+name = "file_handle"
+size = 32
+count = 16
+fields = [
+  "status         : u8     @0",   # 0=free, 1=open
+  "mount          : u8     @1",   # mount handle
+  "start_cluster  : u16    @2",
+  "size           : u32    @4",   # file size (di+4 lo, di+6 hi)
+  "position       : u32    @8",   # current position
+  "owner          : u8     @24",  # owning task; 0xFF = kernel; owner-based reaping mandatory
+  "reserved_a     : bytes[12]@12",
+  "reserved_b     : bytes[7] @25",
+]
+
+# FAT12 on-disk directory entry (standard FAT 8.3). Offsets confirmed in kernel
+# read path: attr @0x0B (12528), start cluster @0x1A (12630), size @0x1C (12631/12632).
+[[struct]]
+name = "dirent"
+size = 32
+fields = [
+  "name          : char[11]@0",    # 8.3, space-padded, no dot. 0xE5=deleted, 0x00=free, 0x0F attr=LFN
+  "attr          : u8      @11",
+  "reserved      : bytes[10]@12",  # NT res, ctime, adate, (FAT12: cluster-hi unused) ...
+  "wtime         : u16     @22",
+  "wdate         : u16     @24",
+  "start_cluster : u16     @26",   # 0x1A
+  "size          : u32     @28",   # 0x1C
+]
+
+# .BIN application container header (port-independent). PORT-SPEC §4. Multi-byte
+# fields stay LE for disk interchange even on BE ports. The 3.1 ".UNO v2" break
+# adds explicit abi_version + arch tag (CONTRACT-ARCH §11) — not yet shipped here.
+[[struct]]
+name = "bin_header"
+size = 80                          # code entry at 0x50
+fields = [
+  "magic : bytes[4] @0",           # 0xEB ?? 'U' 'I' — first byte doubles as x86 JMP
+  "name  : char[12] @4",           # 0x04: NUL-padded display name
+  "icon  : bytes[64]@16",          # 0x10: 16x16 @ 2bpp packed chunky, row-major, leftmost px in 2 MSBs
+]
+# entry: code begins at offset 0x50 (= size); app_run far-calls seg:0x0050.
+
+
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
+# FAT12 geometry — the "FIVE places" (PORT-SPEC §5), unified to ONE block.
+# Currently duplicated by hand in: kernel/kernel.asm (mount routine + data
+# defaults), boot/boot.asm (BPB), boot/stage2.asm (KERNEL_SECTORS layout),
+# tools/add_floppy_fs.py, tools/create_app_test.py. Phase 1 regenerates them all.
+# Values are for the x86 1.44 MB floppy. The UnoDOS filesystem starts at sector
+# 110 (OS area: 1 boot + 4 stage2 + 104 kernel + 1 spare); derived sectors are
+# ABSOLUTE (include the +110 base).
+[const.fat12]
+bytes_per_sector   = 512
+sectors_per_cluster = 1
+reserved_sectors   = 1            # within the filesystem
+num_fats           = 2
+root_dir_entries   = 224
+sectors_per_fat    = 9
+fs_start_sector    = 110          # OS area size; FS base offset
+# Derived (encoded for the byte-identical anchor; Phase 1 will also emit the formulas):
+fat_start          = 111          # = fs_start + reserved
+root_dir_start     = 129          # = fs_start + reserved + num_fats*sectors_per_fat
+root_dir_sectors   = 14           # = root_dir_entries*32 / bytes_per_sector
+data_area_start    = 143          # = root_dir_start + root_dir_sectors
+fat_cache_pair     = true         # cache holds sectors [S, S+1]: a 12-bit entry can straddle 511->S+1
+
+# Font metrics. kernel.asm font_table: FONT_COUNT=3, FONT_DESC_SIZE=6 bytes/entry
+# (ptr, height, width, advance, bpc). Default current_font=1. The font-advance
+# bug is FIXED IN THE CONTRACT: default advance = 8 (not 12). See [discrepancies].
+[const.font]
+count   = 3
+default = 1                        # 8x8 medium
+[[const.font.table]]
+index=0
+name="font_4x6"
+width=4
+height=6
+advance=6
+bpc=6
+role="small"
+[[const.font.table]]
+index=1
+name="font_8x8"
+width=8
+height=8
+advance=8
+bpc=8
+role="medium/default"
+[[const.font.table]]
+index=2
+name="font_8x12"
+width=8
+height=12
+advance=12
+bpc=12
+role="large"
+
+# Default UI palette (indices 0-3). PORT-SPEC §1. Two representations both ship:
+# 24-bit RGB (the canonical themed colors) and the x86 6-bit VGA DAC triples
+# (kernel theme_palette default, "Classic VGA"). Ports match the rgb24 values.
+[const.palette]
+rgb24      = [0x0000AA, 0x00AAAA, 0xAA00AA, 0xFFFFFF]   # blue desktop, cyan, magenta, white
+vga6bit    = [[0,0,42], [0,42,42], [42,0,42], [63,63,63]]
+roles      = ["desktop/bg", "accent1", "accent2", "fg/white"]
+
+# Screen + desktop metrics (x86 default mode). kernel.asm defaults.
+[const.screen]
+default_mode   = 0x04              # CGA mode 4
+width          = 320
+height         = 200
+titlebar_height = 10               # 10 lo-res, 18 hi-res (dynamic)
+desktop_reserved_rows = 12         # y 0-11 is the menu/title row (drag clamp)
+icon_column_pitch = 80
+cursor          = { w = 8, h = 14, kind = "arrow" }
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+[enum.event_type]
+NONE        = 0
+KEY_PRESS   = 1
+KEY_RELEASE = 2          # reserved (future)
+TIMER       = 3          # reserved (future)
+MOUSE       = 4          # data low = button mask
+WIN_MOVED   = 5
+WIN_REDRAW  = 6          # data low = window handle
+CONSUMED    = 0xFF       # tombstone: slot consumed mid-queue
+
+[enum.win_state]
+FREE    = 0
+VISIBLE = 1
+HIDDEN  = 2
+
+[enum.win_flags]            # bitmask
+TITLE   = 0x01
+BORDER  = 0x02
+# bit2 (0x04) = FRAMELESS_FULLSCREEN per PORT-SPEC §2; kernel implements the
+# frameless path but has no named equate yet. Encoded as the contract bit.
+FRAMELESS_FULLSCREEN = 0x04
+
+# Filesystem error codes (returned in AX on CF=1). API_REFERENCE.
+[enum.fs_errno]
+OK            = 0
+NOT_FOUND     = 1
+NO_DRIVER     = 2
+READ_ERROR    = 3
+INVALID_HANDLE = 4
+NO_HANDLES    = 5
+END_OF_DIR    = 6
+WRITE_ERROR   = 7
+DISK_FULL     = 8
+DIR_FULL      = 9
+
+
+# =============================================================================
+# PROFILES & CAPABILITIES (CONTRACT-ARCH §9).  x86 reference declares `windowed`.
+# Encoded minimally in Phase 0; the §9 matrix is filled across §13 in later phases.
+# =============================================================================
+[profile.windowed]
+requires = ["wm", "mouse_or_dirnav", "fs"]
+[profile.single_app]
+requires = ["fs?"]
+one_app  = true
+[profile.minimal]
+requires = []
+one_app  = true
+no_fs_ok = true
+dirnav   = true
+
+[port.x86]
+profile      = "windowed"
+capabilities = ["POINTER", "RTC"]   # PC speaker audio; no SMP/PREEMPT/NET in the shipping kernel
+
+
+# =============================================================================
+# DISCREPANCY LEDGER — the contradictions this contract resolves (the whole point).
+# CONTRACT-ARCH §1. Each is now single-sourced above; Phase 1 proves byte-identical.
+# =============================================================================
+[discrepancies]
+syscall_count = "PORT-SPEC §4 / ARCHITECTURE say '105 functions'; kernel_api_table is 106 slots (ordinals 0..105 inclusive). Resolved: callgate.count = 106 = len(syscall). The '105' was an off-by-one (last ordinal vs count)."
+font_advance  = "ARCHITECTURE.md says advance '12 px'; PORT-SPEC §1 and kernel (draw_font_advance db 8, font_table font 1) say 8. Resolved: const.font default(1).advance = 8. The 12-px advance was a bug."
+handle_owner  = "kernel.asm file_table data-section comment says 'bytes 12-31 reserved'; the code writes/reads owner at byte 24 and PORT-SPEC §5 pins owner @24. Resolved: struct file_handle.owner @24; the comment is stale drift."
+fat12_geometry = "FAT12 geometry was hand-duplicated in 5 places (kernel mount routine, kernel data defaults, boot/boot.asm BPB, boot/stage2.asm layout, tools/add_floppy_fs.py + tools/create_app_test.py). Resolved: const.fat12 is the single block; Phase 1 regenerates all consumers."
