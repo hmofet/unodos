@@ -10,7 +10,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 1 | unogen MVP + trust anchor | ✅ host-proven — x86 kernel **byte-identical**; FAT12 "five places" (kernel+boot+stage2+2 tools) all single-sourced |
 | 2 | Executable conformance | ✅ host-proven — `conformance.py` 29/29, discrimination vs historical bugs |
 | 3 | `unofs` worked example | ✅ host-proven — reads the real floppy byte-identical; write/reap round-trip |
-| 4 | Asm consumption | ✅ host-proven — **Amiga 68K (vasm)** + **SNES 65816 (ca65)** byte-identical via per-world equates; 6502/dasm ports lack a clean equate seam (deeper refactor, deferred) |
+| 4 | Asm consumption | ✅ host-proven — **5 asm ports** byte-identical via per-world equates: **vasm 68K** = Amiga + Genesis + MacPlus, **ca65 65816** = SNES + IIGS (IIGS also sources its divergent FAT12 geom + 16B dir entry from the Contract). Proof scope incl. the disk-loaded apps + packed images (IIGS kernel+8 apps+.po, MacPlus kernel+boot+9 apps+.dsk). 6502/dasm ports (C64/Apple II) lack a clean equate seam (deeper refactor, deferred) |
 | 5 | Hybrid policy pilot | ◐ partial — `unofs_core` compiles freestanding-strict (portable); vbcc+trackdisk+WinUAE blocked |
 | 6 | `uno2d` tall vtable | ✅ host-proven — accel backend **pixel-identical** to the software floor; renders PPM |
 | 7 | Concurrency floor + host SMP/TSan | ✅ host-proven — COOP==SMP==expected; guarded **TSan-clean**; race **caught** (`setarch -R`) |
@@ -48,6 +48,7 @@ python unodef/unogen.py --check          # regenerate all worlds + x86 trust anc
 python unodef/conformance/conformance.py # 38/38 PORT-SPEC §6 vectors
 nasm -f bin -Ikernel/ -o k.bin kernel/kernel.asm           # x86 kernel byte-identical
 (cd amiga && vasmm68k_mot -Fhunkexe -nosym -opt-allbra -o a.exe kernel.asm)  # Amiga byte-identical
+sh genesis/build.sh ; sh macplus/build.sh ; sh iigs/build.sh  # Genesis/MacPlus(vasm)+IIGS(ca65) byte-identical
 sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh   # host C subsystems
 sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh # (unosched needs setarch -R for TSan)
 ```

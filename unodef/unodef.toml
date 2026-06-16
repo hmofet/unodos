@@ -1449,3 +1449,220 @@ note = "event type: key"
 sym = "EV_MOUSE"
 val = 4
 note = "event type: mouse"
+
+
+[world.genesis]
+description = "Sega Genesis/Mega Drive 68000 bare-metal; vasm; compact 16B window entry, 320x224"
+cpu = "m68k"
+emit = "genesis/sysabi_gen.i"
+note = "window entry 16B (x86 base 32B); 320x224 (NTSC); symbol names are the port's own"
+[[world.genesis.equate]]
+sym = "SCRW"
+val = 320
+note = "screen width (pixels)"
+[[world.genesis.equate]]
+sym = "SCRH"
+val = 224
+note = "screen height (pixels, NTSC)"
+[[world.genesis.equate]]
+sym = "MAXWIN"
+val = 6
+note = "window table size"
+[[world.genesis.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base 32)"
+[[world.genesis.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.genesis.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.genesis.equate]]
+sym = "WX"
+val = 2
+[[world.genesis.equate]]
+sym = "WY"
+val = 4
+[[world.genesis.equate]]
+sym = "WW"
+val = 6
+[[world.genesis.equate]]
+sym = "WH"
+val = 8
+[[world.genesis.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title pointer (long)"
+[[world.genesis.equate]]
+sym = "EVQ_SIZE"
+val = 32
+note = "event queue depth"
+[[world.genesis.equate]]
+sym = "EV_KEY"
+val = 1
+note = "event type: key"
+[[world.genesis.equate]]
+sym = "EV_MOUSE"
+val = 4
+note = "event type: mouse"
+
+
+[world.iigs]
+description = "Apple IIGS 65816 bare-metal; ca65/ld65 (cc65); 16B window entry, 40x25 cells, ProDOS 800K"
+cpu = "65816"
+emit = "iigs/sys_gen.inc"
+note = "window entry 16B (x86 base 32B); screen in 8x8 cells (40x25); IIGS has its OWN FAT12 geometry (volume @ block 256, 2-sector/1KB clusters, 3-sector FAT) and a compact 16B dir entry — describe-what-ships, not the x86 floppy layout"
+[[world.iigs.equate]]
+sym = "SCRW_C"
+val = 40
+note = "screen width in cells (320px / 8)"
+[[world.iigs.equate]]
+sym = "SCRH_C"
+val = 25
+note = "screen height in cells (200px / 8)"
+[[world.iigs.equate]]
+sym = "MAXWIN"
+val = 6
+note = "window table size"
+[[world.iigs.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base 32)"
+[[world.iigs.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.iigs.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.iigs.equate]]
+sym = "WX"
+val = 2
+[[world.iigs.equate]]
+sym = "WY"
+val = 4
+[[world.iigs.equate]]
+sym = "WW"
+val = 6
+[[world.iigs.equate]]
+sym = "WH"
+val = 8
+[[world.iigs.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title pointer"
+[[world.iigs.equate]]
+sym = "EVQ_SIZE"
+val = 32
+note = "event queue depth"
+[[world.iigs.equate]]
+sym = "EV_KEY"
+val = 1
+note = "event type: key"
+[[world.iigs.equate]]
+sym = "EV_MOUSE"
+val = 4
+note = "event type: mouse"
+[[world.iigs.equate]]
+sym = "FS_START_BLOCK"
+val = 256
+note = "FAT12 volume start block (IIGS-specific; x86 floppy starts at sector 110)"
+[[world.iigs.equate]]
+sym = "BPS"
+val = 512
+note = "bytes per sector"
+[[world.iigs.equate]]
+sym = "SPC"
+val = 2
+note = "sectors per cluster (1 KB clusters; x86 uses 1)"
+[[world.iigs.equate]]
+sym = "NFATS"
+val = 2
+note = "number of FATs"
+[[world.iigs.equate]]
+sym = "SPF"
+val = 3
+note = "sectors per FAT (IIGS geometry)"
+[[world.iigs.equate]]
+sym = "FAT_START"
+val = 1
+note = "first FAT sector (relative to volume start)"
+[[world.iigs.equate]]
+sym = "ROOT_START"
+val = 7
+note = "root dir sector (relative)"
+[[world.iigs.equate]]
+sym = "ROOT_SECS"
+val = 7
+note = "root dir size in sectors (112 entries)"
+[[world.iigs.equate]]
+sym = "DATA_START"
+val = 14
+note = "first data sector (relative)"
+[[world.iigs.equate]]
+sym = "DIRENT_SZ"
+val = 16
+note = "compact 16B directory entry (IIGS/SNES; x86 dirent is 32B)"
+
+
+[world.macplus]
+description = "Macintosh Plus/SE bare-metal 68000; vasm; compact 16B window entry, mono framebuffer"
+cpu = "m68k"
+emit = "macplus/sysabi_gen.i"
+note = "window entry 16B (x86 base 32B); shared by kernel.asm AND every disk app (sysequ.i). Screen dims stay port-side (build-variant ifnd guards for the Mac II class)."
+[[world.macplus.equate]]
+sym = "MAXWIN"
+val = 6
+note = "window table size"
+[[world.macplus.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base 32)"
+[[world.macplus.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.macplus.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.macplus.equate]]
+sym = "WX"
+val = 2
+[[world.macplus.equate]]
+sym = "WY"
+val = 4
+[[world.macplus.equate]]
+sym = "WW"
+val = 6
+[[world.macplus.equate]]
+sym = "WH"
+val = 8
+[[world.macplus.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title"
+[[world.macplus.equate]]
+sym = "TBAR_H"
+val = 10
+note = "titlebar height (pixels)"
+[[world.macplus.equate]]
+sym = "MENUBAR_H"
+val = 12
+note = "menubar height (pixels)"
+[[world.macplus.equate]]
+sym = "EVQ_SIZE"
+val = 32
+note = "event queue depth"
+[[world.macplus.equate]]
+sym = "EV_KEY"
+val = 1
+note = "event type: key"
+[[world.macplus.equate]]
+sym = "EV_MOUSE"
+val = 4
+note = "event type: mouse"

@@ -47,7 +47,11 @@ unonet/                 nic service + HEADLESS server composition             [�
 
 Wired into shipped code (sourcing constants from the Contract, byte-identical):
 `kernel/kernel.asm`, `boot/boot.asm`, `boot/stage2.asm`, `tools/add_floppy_fs.py`,
-`tools/create_app_test.py`, `amiga/sysabi.i`, `snes/kernel.asm`.
+`tools/create_app_test.py`, `amiga/sysabi.i`, `snes/kernel.asm`,
+`genesis/kernel.asm`, `macplus/kernel.asm` + `macplus/sysequ.i`, `iigs/sys.inc`.
+(Five asm ports now, across two dialects: vasm 68K = amiga/genesis/macplus,
+ca65 65816 = snes/iigs. IIGS also single-sources its divergent FAT12 geometry +
+16-byte directory entry.)
 
 ## Verification (host-first, all green together)
 
@@ -56,8 +60,8 @@ python unodef/unogen.py --check            # regenerate all worlds + x86 trust a
 python unodef/conformance/conformance.py   # 39/39 PORT-SPEC §6 vectors
 # byte-identical rebuilds (constants now come FROM the contract):
 nasm  → kernel.bin, boot.bin, stage2.bin   (x86, three sites)
-vasm  → amiga kernel                       (68K)
-ca65+ld65 → snes .sfc                       (65816)
+vasm  → amiga + genesis + macplus kernels  (68K, three ports)
+ca65+ld65 → snes .sfc + iigs .po           (65816, two ports)
 # host C subsystems:
 sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh
 sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh   # TSan needs `setarch -R`
@@ -70,8 +74,8 @@ vasm, ca65) + the C header (`_Static_assert`s).
 ## Phase status (full detail in `unodef/PHASES.md`)
 
 - **Fully host-proven (8):** 0 UNODEF · 1 unogen + x86 byte-identical · 2 conformance
-  · 3 unofs · 4 asm consumption (Amiga + SNES) · 6 uno2d · 7 concurrency/SMP/TSan
-  · 9 unosound.
+  · 3 unofs · 4 asm consumption (**5 ports**: Amiga + Genesis + MacPlus via vasm,
+  SNES + IIGS via ca65) · 6 uno2d · 7 concurrency/SMP/TSan · 9 unosound.
 - **Host core + hardware/SDK-blocked tail (5):** 5 hybrid policy (needs vbcc/WinUAE)
   · 8 display/profiles (NES/GB emulator) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
   drivers/buses (PCI/USB) · 12 ship 3.1 ABI (port re-issue) · 13 new targets +
@@ -96,9 +100,11 @@ or keep x86's 32) is **not yet decided** — that decision gates the real migrat
 
 ## Next directions (prioritized, for the new session)
 
-1. **Broaden asm consumption** to the remaining reachable ports with a clean equate
-   seam: Genesis + MacPlus (vasm), IIGS (ca65). Same proven pattern → byte-identical.
-   The 6502 ports (C64/Apple II) need a deeper refactor (no clean equate block).
+1. ~~**Broaden asm consumption** to the remaining reachable ports with a clean equate
+   seam: Genesis + MacPlus (vasm), IIGS (ca65).~~ **DONE** — all three wired,
+   byte-identical (incl. their disk apps + packed images); IIGS also sources its own
+   FAT12 geometry. Remaining: the **6502 ports (C64/Apple II)** still need a deeper
+   refactor (no clean equate block) — the last reachable-toolchain asm consumption tail.
 2. **Decide the canonical 3.1 ABI** (the open decision above), then pilot Phase 12
    end-to-end on **one** port: migrate it to the 3.1 layout/ordinals, re-verify on
    its emulator, keep a dual-build window. This is the real start of the migration.
