@@ -13,7 +13,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 4 | Asm consumption | ✅ host-proven — **Amiga 68K byte-identical** via `[world.amiga]` equates |
 | 5 | Hybrid policy pilot | ◐ partial — `unofs_core` compiles freestanding-strict (portable); vbcc+trackdisk+WinUAE blocked |
 | 6 | `uno2d` tall vtable | ✅ host-proven — accel backend **pixel-identical** to the software floor; renders PPM |
-| 7 | Concurrency floor + host SMP/TSan | — |
+| 7 | Concurrency floor + host SMP/TSan | ✅ host-proven — COOP==SMP==expected; guarded **TSan-clean**; race **caught** (`setarch -R`) |
 | 8 | Display + profiles + directional | — |
 | 9 | `unosound` | — |
 | 10 | SMP + OFFLOAD pilots (Saturn/PS3) | — |
