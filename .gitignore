@@ -3,6 +3,11 @@ build/*.o
 apps/launcher
 kernel/kernel
 
+# unofs host worked-example artifacts (regeneratable via unofs/build.sh)
+build/unofs_test
+build/unofs_test.exe
+build/unofs_scratch.img
+
 # Auto-generated files
 kernel/build_info.inc
 
