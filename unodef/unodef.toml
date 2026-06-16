@@ -1226,3 +1226,61 @@ syscall_count = "PORT-SPEC §4 / ARCHITECTURE say '105 functions'; kernel_api_ta
 font_advance  = "ARCHITECTURE.md ('12 px') AND API_REFERENCE.md (API 48 font table: font 1 8x8 advance=12px) both carry the bug; PORT-SPEC §1 and the kernel (draw_font_advance db 8, font_table font 1 = advance 8) are correct. Resolved: const.font default(1).advance = 8 (source wins). Two docs drifted, not one."
 handle_owner  = "kernel.asm file_table data-section comment says 'bytes 12-31 reserved'; the code writes/reads owner at byte 24 and PORT-SPEC §5 pins owner @24. Resolved: struct file_handle.owner @24; the comment is stale drift."
 fat12_geometry = "FAT12 geometry was hand-duplicated in 5 places (kernel mount routine, kernel data defaults, boot/boot.asm BPB, boot/stage2.asm layout, tools/add_floppy_fs.py + tools/create_app_test.py). Resolved: const.fat12 is the single block; Phase 1 regenerates all consumers."
+
+
+# =============================================================================
+# WORLDS — per-port ABI variants. The ports diverge from x86 (CONTRACT-ARCH §13):
+# constrained machines use a COMPACT 16-byte window entry, fewer windows, and
+# their own symbol names. Phase 4 brings the Amiga's hand-maintained window-entry
+# + UI-metrics block under the Contract so it can no longer drift; unogen emits
+# unodef/gen/amiga/sysabi_gen.i and amiga/sysabi.i includes it. (This is the
+# "describe what ships" multi-world model — byte-identical to the current port.)
+# =============================================================================
+[world.amiga]
+description = "Amiga 68000 bare-metal; vasm; compact 16B window entry, 6 windows"
+cpu = "m68k"
+emit = "amiga/sysabi_gen.i"
+note = "window entry is 16B here (PORT-SPEC base is 32B); symbol names are the port's own"
+
+[[world.amiga.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.amiga.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.amiga.equate]]
+sym = "WX"
+val = 2
+[[world.amiga.equate]]
+sym = "WY"
+val = 4
+[[world.amiga.equate]]
+sym = "WW"
+val = 6
+[[world.amiga.equate]]
+sym = "WH"
+val = 8
+[[world.amiga.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title field"
+[[world.amiga.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base = 32)"
+[[world.amiga.equate]]
+sym = "MAXWIN"
+val = 6
+note = "window table size (x86 base = 16)"
+[[world.amiga.equate]]
+sym = "TBAR_H"
+val = 10
+note = "titlebar height (shared with base)"
+[[world.amiga.equate]]
+sym = "SCRW"
+val = 320
+[[world.amiga.equate]]
+sym = "SCRH"
+val = 200
