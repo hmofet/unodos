@@ -1,0 +1,650 @@
+{
+  "contract": {
+    "major": 3,
+    "minor": 1
+  },
+  "callgate": {
+    "count": 106
+  },
+  "syscalls": [
+    {
+      "ordinal": 0,
+      "name": "gfx_draw_pixel",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 1,
+      "name": "gfx_draw_rect",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 2,
+      "name": "gfx_draw_filled_rect",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 3,
+      "name": "gfx_draw_char",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 4,
+      "name": "gfx_draw_string",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 5,
+      "name": "gfx_clear_area",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 6,
+      "name": "gfx_draw_string_inverted",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 7,
+      "name": "mem_alloc",
+      "category": "system"
+    },
+    {
+      "ordinal": 8,
+      "name": "mem_free",
+      "category": "system"
+    },
+    {
+      "ordinal": 9,
+      "name": "event_get",
+      "category": "event"
+    },
+    {
+      "ordinal": 10,
+      "name": "event_wait",
+      "category": "event"
+    },
+    {
+      "ordinal": 11,
+      "name": "kbd_getchar",
+      "category": "event"
+    },
+    {
+      "ordinal": 12,
+      "name": "kbd_wait_key",
+      "category": "event"
+    },
+    {
+      "ordinal": 13,
+      "name": "fs_mount",
+      "category": "fs"
+    },
+    {
+      "ordinal": 14,
+      "name": "fs_open",
+      "category": "fs"
+    },
+    {
+      "ordinal": 15,
+      "name": "fs_read",
+      "category": "fs"
+    },
+    {
+      "ordinal": 16,
+      "name": "fs_close",
+      "category": "fs"
+    },
+    {
+      "ordinal": 17,
+      "name": "fs_register_driver",
+      "category": "fs"
+    },
+    {
+      "ordinal": 18,
+      "name": "app_load",
+      "category": "system"
+    },
+    {
+      "ordinal": 19,
+      "name": "app_run",
+      "category": "system"
+    },
+    {
+      "ordinal": 20,
+      "name": "win_create",
+      "category": "window"
+    },
+    {
+      "ordinal": 21,
+      "name": "win_destroy",
+      "category": "window"
+    },
+    {
+      "ordinal": 22,
+      "name": "win_draw",
+      "category": "window"
+    },
+    {
+      "ordinal": 23,
+      "name": "win_focus",
+      "category": "window"
+    },
+    {
+      "ordinal": 24,
+      "name": "win_move",
+      "category": "window"
+    },
+    {
+      "ordinal": 25,
+      "name": "win_get_content",
+      "category": "window"
+    },
+    {
+      "ordinal": 26,
+      "name": "register_shell",
+      "category": "system"
+    },
+    {
+      "ordinal": 27,
+      "name": "fs_readdir",
+      "category": "fs"
+    },
+    {
+      "ordinal": 28,
+      "name": "mouse_get_state",
+      "category": "event"
+    },
+    {
+      "ordinal": 29,
+      "name": "mouse_set_position",
+      "category": "event"
+    },
+    {
+      "ordinal": 30,
+      "name": "mouse_is_enabled",
+      "category": "event"
+    },
+    {
+      "ordinal": 31,
+      "name": "win_begin_draw",
+      "category": "window"
+    },
+    {
+      "ordinal": 32,
+      "name": "win_end_draw",
+      "category": "window"
+    },
+    {
+      "ordinal": 33,
+      "name": "gfx_text_width",
+      "category": "text"
+    },
+    {
+      "ordinal": 34,
+      "name": "app_yield",
+      "category": "sched"
+    },
+    {
+      "ordinal": 35,
+      "name": "app_start",
+      "category": "sched"
+    },
+    {
+      "ordinal": 36,
+      "name": "app_exit",
+      "category": "sched"
+    },
+    {
+      "ordinal": 37,
+      "name": "desktop_set_icon",
+      "category": "window"
+    },
+    {
+      "ordinal": 38,
+      "name": "desktop_clear_icons",
+      "category": "window"
+    },
+    {
+      "ordinal": 39,
+      "name": "gfx_draw_icon",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 40,
+      "name": "fs_read_header",
+      "category": "fs"
+    },
+    {
+      "ordinal": 41,
+      "name": "speaker_tone",
+      "category": "audio"
+    },
+    {
+      "ordinal": 42,
+      "name": "speaker_off",
+      "category": "audio"
+    },
+    {
+      "ordinal": 43,
+      "name": "get_boot_drive",
+      "category": "system"
+    },
+    {
+      "ordinal": 44,
+      "name": "fs_write_sector",
+      "category": "fs"
+    },
+    {
+      "ordinal": 45,
+      "name": "fs_create",
+      "category": "fs"
+    },
+    {
+      "ordinal": 46,
+      "name": "fs_write",
+      "category": "fs"
+    },
+    {
+      "ordinal": 47,
+      "name": "fs_delete",
+      "category": "fs"
+    },
+    {
+      "ordinal": 48,
+      "name": "gfx_set_font",
+      "category": "text"
+    },
+    {
+      "ordinal": 49,
+      "name": "gfx_get_font_metrics",
+      "category": "text"
+    },
+    {
+      "ordinal": 50,
+      "name": "gfx_draw_string_wrap",
+      "category": "text"
+    },
+    {
+      "ordinal": 51,
+      "name": "widget_draw_button",
+      "category": "ui"
+    },
+    {
+      "ordinal": 52,
+      "name": "widget_draw_radio",
+      "category": "ui"
+    },
+    {
+      "ordinal": 53,
+      "name": "widget_hit_test",
+      "category": "ui"
+    },
+    {
+      "ordinal": 54,
+      "name": "theme_set_colors",
+      "category": "ui"
+    },
+    {
+      "ordinal": 55,
+      "name": "theme_get_colors",
+      "category": "ui"
+    },
+    {
+      "ordinal": 56,
+      "name": "widget_draw_checkbox",
+      "category": "ui"
+    },
+    {
+      "ordinal": 57,
+      "name": "widget_draw_textfield",
+      "category": "ui"
+    },
+    {
+      "ordinal": 58,
+      "name": "widget_draw_scrollbar",
+      "category": "ui"
+    },
+    {
+      "ordinal": 59,
+      "name": "widget_draw_listitem",
+      "category": "ui"
+    },
+    {
+      "ordinal": 60,
+      "name": "widget_draw_progress",
+      "category": "ui"
+    },
+    {
+      "ordinal": 61,
+      "name": "widget_draw_groupbox",
+      "category": "ui"
+    },
+    {
+      "ordinal": 62,
+      "name": "widget_draw_separator",
+      "category": "ui"
+    },
+    {
+      "ordinal": 63,
+      "name": "get_tick_count",
+      "category": "system"
+    },
+    {
+      "ordinal": 64,
+      "name": "point_over_window",
+      "category": "window"
+    },
+    {
+      "ordinal": 65,
+      "name": "widget_draw_combobox",
+      "category": "ui"
+    },
+    {
+      "ordinal": 66,
+      "name": "widget_draw_menubar",
+      "category": "ui"
+    },
+    {
+      "ordinal": 67,
+      "name": "gfx_draw_filled_rect_color",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 68,
+      "name": "gfx_draw_rect_color",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 69,
+      "name": "gfx_draw_hline",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 70,
+      "name": "gfx_draw_vline",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 71,
+      "name": "gfx_draw_line",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 72,
+      "name": "get_rtc_time",
+      "category": "system"
+    },
+    {
+      "ordinal": 73,
+      "name": "delay_ticks",
+      "category": "sched"
+    },
+    {
+      "ordinal": 74,
+      "name": "get_task_info",
+      "category": "sched"
+    },
+    {
+      "ordinal": 75,
+      "name": "fs_seek",
+      "category": "fs"
+    },
+    {
+      "ordinal": 76,
+      "name": "fs_get_file_size",
+      "category": "fs"
+    },
+    {
+      "ordinal": 77,
+      "name": "fs_rename",
+      "category": "fs"
+    },
+    {
+      "ordinal": 78,
+      "name": "win_resize",
+      "category": "window"
+    },
+    {
+      "ordinal": 79,
+      "name": "win_get_info",
+      "category": "window"
+    },
+    {
+      "ordinal": 80,
+      "name": "gfx_scroll_area",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 81,
+      "name": "set_rtc_time",
+      "category": "system"
+    },
+    {
+      "ordinal": 82,
+      "name": "get_screen_info",
+      "category": "system"
+    },
+    {
+      "ordinal": 83,
+      "name": "get_key_modifiers",
+      "category": "event"
+    },
+    {
+      "ordinal": 84,
+      "name": "clip_copy",
+      "category": "system"
+    },
+    {
+      "ordinal": 85,
+      "name": "clip_paste",
+      "category": "system"
+    },
+    {
+      "ordinal": 86,
+      "name": "clip_get_len",
+      "category": "system"
+    },
+    {
+      "ordinal": 87,
+      "name": "menu_open",
+      "category": "ui"
+    },
+    {
+      "ordinal": 88,
+      "name": "menu_close",
+      "category": "ui"
+    },
+    {
+      "ordinal": 89,
+      "name": "menu_hit",
+      "category": "ui"
+    },
+    {
+      "ordinal": 90,
+      "name": "file_dialog_open",
+      "category": "ui"
+    },
+    {
+      "ordinal": 91,
+      "name": "util_word_to_string",
+      "category": "system"
+    },
+    {
+      "ordinal": 92,
+      "name": "util_bcd_to_ascii",
+      "category": "system"
+    },
+    {
+      "ordinal": 93,
+      "name": "gfx_get_current_font_info",
+      "category": "text"
+    },
+    {
+      "ordinal": 94,
+      "name": "gfx_draw_sprite",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 95,
+      "name": "set_video_mode",
+      "category": "system"
+    },
+    {
+      "ordinal": 96,
+      "name": "win_get_content_scale",
+      "category": "window"
+    },
+    {
+      "ordinal": 97,
+      "name": "win_get_content_size",
+      "category": "window"
+    },
+    {
+      "ordinal": 98,
+      "name": "file_dialog_save",
+      "category": "ui"
+    },
+    {
+      "ordinal": 99,
+      "name": "widget_scrollbar_hit",
+      "category": "ui"
+    },
+    {
+      "ordinal": 100,
+      "name": "get_video_mode",
+      "category": "system"
+    },
+    {
+      "ordinal": 101,
+      "name": "mouse_set_visible",
+      "category": "event"
+    },
+    {
+      "ordinal": 102,
+      "name": "gfx_draw_sprite_scaled",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 103,
+      "name": "gfx_blit_rect",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 104,
+      "name": "gfx_read_pixel",
+      "category": "gfx"
+    },
+    {
+      "ordinal": 105,
+      "name": "theme_set_palette",
+      "category": "ui"
+    }
+  ],
+  "structs": {
+    "win_entry": {
+      "size": 32,
+      "fields": [
+        "state@0",
+        "flags@1",
+        "x@2",
+        "y@4",
+        "width@6",
+        "height@8",
+        "zorder@10",
+        "owner@11",
+        "title@12",
+        "content_scale@24",
+        "reserved@25"
+      ]
+    },
+    "event": {
+      "size": 3,
+      "fields": [
+        "type@0",
+        "data@1"
+      ]
+    },
+    "file_handle": {
+      "size": 32,
+      "fields": [
+        "status@0",
+        "mount@1",
+        "start_cluster@2",
+        "size@4",
+        "position@8",
+        "owner@24",
+        "reserved_a@12",
+        "reserved_b@25"
+      ]
+    },
+    "dirent": {
+      "size": 32,
+      "fields": [
+        "name@0",
+        "attr@11",
+        "reserved@12",
+        "wtime@22",
+        "wdate@24",
+        "start_cluster@26",
+        "size@28"
+      ]
+    },
+    "bin_header": {
+      "size": 80,
+      "fields": [
+        "magic@0",
+        "name@4",
+        "icon@16"
+      ]
+    }
+  },
+  "const": {
+    "fat12": {
+      "bytes_per_sector": 512,
+      "sectors_per_cluster": 1,
+      "reserved_sectors": 1,
+      "num_fats": 2,
+      "root_dir_entries": 224,
+      "sectors_per_fat": 9,
+      "fs_start_sector": 110,
+      "fat_start": 111,
+      "root_dir_start": 129,
+      "root_dir_sectors": 14,
+      "data_area_start": 143,
+      "fat_cache_pair": true
+    },
+    "font_default_advance": 8
+  },
+  "enums": {
+    "event_type": {
+      "NONE": 0,
+      "KEY_PRESS": 1,
+      "KEY_RELEASE": 2,
+      "TIMER": 3,
+      "MOUSE": 4,
+      "WIN_MOVED": 5,
+      "WIN_REDRAW": 6,
+      "CONSUMED": 255
+    },
+    "win_state": {
+      "FREE": 0,
+      "VISIBLE": 1,
+      "HIDDEN": 2
+    },
+    "win_flags": {
+      "TITLE": 1,
+      "BORDER": 2,
+      "FRAMELESS_FULLSCREEN": 4
+    },
+    "fs_errno": {
+      "OK": 0,
+      "NOT_FOUND": 1,
+      "NO_DRIVER": 2,
+      "READ_ERROR": 3,
+      "INVALID_HANDLE": 4,
+      "NO_HANDLES": 5,
+      "END_OF_DIR": 6,
+      "WRITE_ERROR": 7,
+      "DISK_FULL": 8,
+      "DIR_FULL": 9
+    }
+  }
+}

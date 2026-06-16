@@ -9,7 +9,7 @@ python unodef/unogen.py            # emit all worlds
 python unodef/unogen.py --check    # emit + assert x86 == kernel.asm literals (trust anchor)
 ```
 
-## The first 5 worlds (the CPU families that cover every shipped port)
+## Worlds (the CPU families that cover every shipped + planned port)
 
 | Dir | World | Dialect | Equate syntax | Consumers |
 |---|---|---|---|---|
@@ -18,6 +18,20 @@ python unodef/unogen.py --check    # emit + assert x86 == kernel.asm literals (t
 | `m68k/`  | 68000    | vasm      | `NAME equ V` | amiga, genesis, macplus |
 | `6502/`  | 6502     | dasm      | `NAME EQU V` | apple2, c64 |
 | `65816/` | 65816    | ca65/cc65 | `NAME = V`   | snes, iigs |
+| `z80/`   | Z80      | sjasmplus | `NAME EQU V` | sms, game boy (§13's one new asm family; planned) |
+
+## Output kinds
+
+- **`<world>/unodef.*`** — constants/offsets/enums (every world).
+- **`<world>/unosys.*`** — call-gate **app stubs**: a macro per syscall that sets the
+  selector and invokes the gate. Generated **only** for worlds whose call binding is
+  declared in `[callgate.binding.*]` of the Contract — currently **x86** (`INT 0x80`,
+  AH) and **m68k** (`TRAP #0`, D0.hi). For 6502/65816/Z80, unogen prints a note and
+  skips: their call ABI isn't in the Contract yet, and fabricating one would defeat
+  the single-source rule. Declare the binding to generate them.
+- **`manifest.json`** — a world-neutral, machine-readable snapshot of the whole
+  surface (ordinals, struct offsets, FAT12 geom, font advance, enums) for the
+  conformance suite and doc-regen (§3.2 last row).
 
 Each file carries the **same** symbols — syscall ordinals (`SYS_*`), struct
 offsets/sizes (`WIN_OFF_*`, `FILE_OFF_*`, `EVENT_*`, `DIRENT_OFF_*`, `BIN_OFF_*`),
