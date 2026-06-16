@@ -41,3 +41,21 @@ gcc -std=c11 -ffreestanding -fno-builtin -Os -Wall -Wextra -Werror \
 Clean, ~2.7 KB of code, with no host dependencies beyond `string.h` + an allocator
 a port supplies (the kernel's `mem_alloc`). Remaining tail: vbcc compile, link the
 hand-asm trackdisk `block` backend, verify on WinUAE.
+
+## Reproduce the full verification sweep
+```
+python unodef/unogen.py --check          # regenerate all worlds + x86 trust anchor
+python unodef/conformance/conformance.py # 38/38 PORT-SPEC §6 vectors
+nasm -f bin -Ikernel/ -o k.bin kernel/kernel.asm           # x86 kernel byte-identical
+(cd amiga && vasmm68k_mot -Fhunkexe -nosym -opt-allbra -o a.exe kernel.asm)  # Amiga byte-identical
+sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh   # host C subsystems
+sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh # (unosched needs setarch -R for TSan)
+```
+
+## Tally
+- **Fully host-proven (8):** 0,1,2,3,4,6,7,9 — including two byte-identical kernel
+  rebuilds (x86, Amiga) and the SMP+TSan oracle.
+- **Host-proven core + hardware/SDK-blocked tail (5):** 5 (vbcc/WinUAE), 8 (NES/GB
+  emulator), 10 (Saturn-SH2/PS3-SPU), 11 (PCI/USB), 12 (port re-issue), 13 (console
+  SDK backends, real NICs). Each ships a working host model/generator + a documented
+  blocked step — nothing faked.
