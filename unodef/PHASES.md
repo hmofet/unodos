@@ -7,7 +7,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | Phase | What | Status |
 |---|---|---|
 | 0 | Author UNODEF | ✅ host-proven — `unodef/unodef.toml` parses; 106 syscalls, structs, enums |
-| 1 | unogen MVP + trust anchor | ✅ host-proven — x86 kernel **byte-identical** after sourcing the contract |
+| 1 | unogen MVP + trust anchor | ✅ host-proven — x86 kernel **byte-identical**; FAT12 "five places" (kernel+boot+stage2+2 tools) all single-sourced |
 | 2 | Executable conformance | ✅ host-proven — `conformance.py` 29/29, discrimination vs historical bugs |
 | 3 | `unofs` worked example | ✅ host-proven — reads the real floppy byte-identical; write/reap round-trip |
 | 4 | Asm consumption | ✅ host-proven — **Amiga 68K byte-identical** via `[world.amiga]` equates |

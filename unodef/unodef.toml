@@ -1380,3 +1380,13 @@ fields = [
   "icon      : bytes[64]@32",   # 16x16 @ 2bpp, as in v1
 ]
 # code entry at offset 96 (= size).
+
+
+# Boot/OS-area layout (x86 floppy): the composition that sums to fs_start_sector.
+# Single-sources the "110" shared by boot/boot.asm (BPB reserved), boot/stage2.asm
+# (KERNEL_SECTORS), and tools/add_floppy_fs.py — the last of the FAT12 "five places".
+[const.boot_layout]
+boot_sectors   = 1
+stage2_sectors = 4
+kernel_sectors = 104
+spare_sectors  = 1     # boot + stage2 + kernel + spare == fat12.fs_start_sector (110)

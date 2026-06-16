@@ -47,14 +47,18 @@ def create_fat12_floppy(output_path, files):
         })
         print(f"App: '{fat_filename.strip()}' - {len(app_data)} bytes")
 
-    # FAT12 parameters for 1.44MB floppy
-    SECTOR_SIZE = 512
-    SECTORS_PER_CLUSTER = 1
-    RESERVED_SECTORS = 1
-    NUM_FATS = 2
-    ROOT_ENTRIES = 224
+    # FAT12 parameters from the Contract (CONTRACT-ARCH §12, single source of truth)
+    import tomllib
+    _here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(_here, "..", "unodef", "unodef.toml"), "rb") as _f:
+        _F = tomllib.load(_f)["const"]["fat12"]
+    SECTOR_SIZE = _F["bytes_per_sector"]
+    SECTORS_PER_CLUSTER = _F["sectors_per_cluster"]
+    RESERVED_SECTORS = _F["reserved_sectors"]
+    NUM_FATS = _F["num_fats"]
+    ROOT_ENTRIES = _F["root_dir_entries"]
     TOTAL_SECTORS = 2880
-    SECTORS_PER_FAT = 9
+    SECTORS_PER_FAT = _F["sectors_per_fat"]
 
     # Calculate data start
     ROOT_DIR_SECTORS = (ROOT_ENTRIES * 32 + SECTOR_SIZE - 1) // SECTOR_SIZE

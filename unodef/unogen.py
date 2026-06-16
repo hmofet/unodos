@@ -152,6 +152,16 @@ def build_rows(d):
         ("FAT12_DATA_AREA_START",    fat["data_area_start"],    False, "absolute"),
     ]))
 
+    # Boot / OS-area layout (single-sources the "110" across boot + tools)
+    if "boot_layout" in d["const"]:
+        bl = d["const"]["boot_layout"]
+        G.append(("Boot / OS-area layout (sums to FAT12_FS_START_SECTOR)", [
+            ("BOOT_BOOT_SECTORS",   bl["boot_sectors"],   False, ""),
+            ("BOOT_STAGE2_SECTORS", bl["stage2_sectors"], False, ""),
+            ("BOOT_KERNEL_SECTORS", bl["kernel_sectors"], False, "kernel load area"),
+            ("BOOT_SPARE_SECTORS",  bl["spare_sectors"],  False, "boot+stage2+kernel+spare == fs_start"),
+        ]))
+
     # Font metrics — the advance=8 fix lives here
     frows = [
         ("FONT_COUNT",           font["count"],   False, ""),

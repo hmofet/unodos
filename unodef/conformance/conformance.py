@@ -91,6 +91,13 @@ def check_rule8_geometry(d):
     # "Centralize disk geometry." Contract holds ONE fat12 block; the generated x86
     # surface must equal kernel.asm's literals (the Phase-1 trust anchor, re-run here).
     record(8, "single fat12 geometry block in Contract", "fat12" in d["const"], "")
+    # the OS-area layout must sum to fs_start_sector (the "110" single-sourced across
+    # boot.asm + stage2.asm + the image tools — the FAT12 "five places", now one).
+    bl = d["const"].get("boot_layout")
+    if bl:
+        s = bl["boot_sectors"] + bl["stage2_sectors"] + bl["kernel_sectors"] + bl["spare_sectors"]
+        record(8, "boot_layout sums to fs_start_sector (five-places unified)",
+               s == d["const"]["fat12"]["fs_start_sector"], "sum=%d" % s)
     inc = os.path.join(UNODEF, "gen", "x86", "unodef.inc")
     ker = os.path.join(ROOT, "kernel", "kernel.asm")
     def equ(path):

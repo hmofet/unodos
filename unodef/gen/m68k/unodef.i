@@ -174,6 +174,12 @@ FAT12_ROOT_DIR_START       equ 129           ; absolute
 FAT12_ROOT_DIR_SECTORS     equ 14
 FAT12_DATA_AREA_START      equ 143           ; absolute
 
+; ---- Boot / OS-area layout (sums to FAT12_FS_START_SECTOR) -------
+BOOT_BOOT_SECTORS          equ 1
+BOOT_STAGE2_SECTORS        equ 4
+BOOT_KERNEL_SECTORS        equ 104           ; kernel load area
+BOOT_SPARE_SECTORS         equ 1             ; boot+stage2+kernel+spare == fs_start
+
 ; ---- Font metrics ------------------------------------------------
 FONT_COUNT                 equ 3
 FONT_DESC_SIZE             equ 6             ; bytes per font_table entry

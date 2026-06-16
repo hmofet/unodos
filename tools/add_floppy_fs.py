@@ -18,9 +18,18 @@ import sys
 import struct
 import os
 
-SECTOR_SIZE = 512
-OS_SECTORS = 110  # Boot (1) + Stage2 (4) + Kernel (104) + spare (1)
-FS_START_SECTOR = 110  # sync: boot/boot.asm bpb_rsvd, boot/stage2.asm KERNEL_SECTORS
+def _load_fat12():
+    """FAT12 geometry from the single source of truth — the Contract (CONTRACT-ARCH
+    §12). Was hand-duplicated here; now read from unodef/unodef.toml so it can't drift."""
+    import tomllib
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "..", "unodef", "unodef.toml"), "rb") as f:
+        return tomllib.load(f)["const"]["fat12"]
+
+_F = _load_fat12()
+SECTOR_SIZE = _F["bytes_per_sector"]
+OS_SECTORS = _F["fs_start_sector"]      # Boot (1) + Stage2 (4) + Kernel (104) + spare (1)
+FS_START_SECTOR = _F["fs_start_sector"]  # Contract const.fat12.fs_start_sector
 
 def format_fat_filename(filename):
     """Convert filename to 8.3 FAT format (11 bytes, space-padded)."""
@@ -43,12 +52,12 @@ def add_fat12_filesystem(image_path, files):
     print(f"OS area: sectors 0-{OS_SECTORS-1}")
     print(f"Filesystem: sectors {FS_START_SECTOR}-{total_sectors-1} ({fs_sectors} sectors)")
 
-    # FAT12 parameters for the filesystem area
-    SECTORS_PER_CLUSTER = 1
-    RESERVED_SECTORS = 1  # Boot sector (within filesystem)
-    NUM_FATS = 2
-    ROOT_ENTRIES = 224
-    SECTORS_PER_FAT = 9
+    # FAT12 parameters for the filesystem area — from the Contract (single source)
+    SECTORS_PER_CLUSTER = _F["sectors_per_cluster"]
+    RESERVED_SECTORS = _F["reserved_sectors"]  # within filesystem
+    NUM_FATS = _F["num_fats"]
+    ROOT_ENTRIES = _F["root_dir_entries"]
+    SECTORS_PER_FAT = _F["sectors_per_fat"]
 
     # Calculate offsets within filesystem
     ROOT_DIR_SECTORS = (ROOT_ENTRIES * 32 + SECTOR_SIZE - 1) // SECTOR_SIZE

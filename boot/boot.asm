@@ -6,6 +6,10 @@
 [ORG 0x7C00]
 cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
 
+; FAT12 geometry from the Contract (CONTRACT-ARCH §12) — was one of the "five
+; places" this was hand-duplicated. Equates only (no bytes emitted).
+%include "unodef/gen/x86/unodef.inc"
+
 ; ============================================================================
 ; BPB - BIOS Parameter Block (required for correct floppy geometry)
 ; Many BIOSes read sectors/track and heads from here for INT 0x13
@@ -15,14 +19,14 @@ cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT)
     nop                     ; 1-byte NOP  (offset 2)
 
 bpb_oem:        db 'UNODOS  '  ; offset  3: OEM name (8 bytes)
-bpb_bps:        dw 512          ; offset 11: bytes per sector
-bpb_spc:        db 1            ; offset 13: sectors per cluster
-bpb_rsvd:       dw 110          ; offset 14: reserved sectors (OS area: 1 boot + 4 stage2 + 104 kernel + 1 spare; sync with boot/stage2.asm KERNEL_SECTORS and tools/add_floppy_fs.py FS_START_SECTOR)
-bpb_fats:       db 2            ; offset 16: number of FATs
-bpb_rootent:    dw 224          ; offset 17: root directory entries
-bpb_sectors:    dw 2880         ; offset 19: total sectors (1.44MB)
+bpb_bps:        dw FAT12_BYTES_PER_SECTOR     ; offset 11: bytes per sector
+bpb_spc:        db FAT12_SECTORS_PER_CLUSTER  ; offset 13: sectors per cluster
+bpb_rsvd:       dw FAT12_FS_START_SECTOR      ; offset 14: reserved sectors (OS area = fs_start; Contract const.boot_layout)
+bpb_fats:       db FAT12_NUM_FATS             ; offset 16: number of FATs
+bpb_rootent:    dw FAT12_ROOT_DIR_ENTRIES     ; offset 17: root directory entries
+bpb_sectors:    dw 2880         ; offset 19: total sectors (1.44MB media)
 bpb_media:      db 0xF0         ; offset 21: media descriptor (1.44MB floppy)
-bpb_fpf:        dw 9            ; offset 22: sectors per FAT
+bpb_fpf:        dw FAT12_SECTORS_PER_FAT      ; offset 22: sectors per FAT
 bpb_spt:        dw 18           ; offset 24: sectors per track
 bpb_heads:      dw 2            ; offset 26: number of heads
 bpb_hidden:     dd 0            ; offset 28: hidden sectors

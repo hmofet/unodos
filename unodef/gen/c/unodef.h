@@ -177,6 +177,12 @@
 #define FAT12_ROOT_DIR_SECTORS       14
 #define FAT12_DATA_AREA_START        143       /* absolute */
 
+/* ---- Boot / OS-area layout (sums to FAT12_FS_START_SECTOR) ---- */
+#define BOOT_BOOT_SECTORS            1
+#define BOOT_STAGE2_SECTORS          4
+#define BOOT_KERNEL_SECTORS          104       /* kernel load area */
+#define BOOT_SPARE_SECTORS           1         /* boot+stage2+kernel+spare == fs_start */
+
 /* ---- Font metrics ---- */
 #define FONT_COUNT                   3
 #define FONT_DESC_SIZE               6         /* bytes per font_table entry */
