@@ -1722,3 +1722,114 @@ note = "screen width in cells (280px / 7)"
 sym = "SCRROWS"
 val = 24
 note = "screen height in cells (192px / 8)"
+
+
+# =============================================================================
+# GREENFIELD WINDOW MODEL — Phase 12 prototype (CONTRACT-ARCH §11 redux).
+# A LOGICAL model: named fields + kinds + tier + relations + invariants.
+# Carries NO byte offsets and NO size: the physical layout (column widths,
+# SoA storage, capacity) is DERIVED per platform by wmgen.py from the field
+# KINDS + [wmodel.platform.*] + the port's surface. This is the tall-vtable
+# pattern applied to DATA — one logical contract, an optimal per-platform
+# realization, reached only through generated zero-cost accessors. Identity is
+# a small-integer HANDLE, never a pointer. (Supersedes the fixed-offset
+# [struct] win_entry, which stays for the legacy/3.0 ABI.)
+# =============================================================================
+[wmodel.window]
+identity = "handle"            # win 0..capacity-1
+
+[[wmodel.window.field]]
+name = "state"
+kind = "enum"                  # small unsigned (win_state)
+tier = "hot"
+[[wmodel.window.field]]
+name = "owner"
+kind = "task"                  # task handle; small unsigned (0xFF = kernel)
+tier = "hot"
+[[wmodel.window.field]]
+name = "x"
+kind = "coord"                 # column width DERIVED from the platform coord space
+tier = "hot"
+[[wmodel.window.field]]
+name = "y"
+kind = "coord"
+tier = "hot"
+[[wmodel.window.field]]
+name = "w"
+kind = "coord"
+tier = "hot"
+[[wmodel.window.field]]
+name = "h"
+kind = "coord"
+tier = "hot"
+[[wmodel.window.field]]
+name = "title"
+kind = "strhandle"             # handle/pointer to a string; width = ptr per platform
+tier = "cold"
+[[wmodel.window.field]]
+name = "flags"
+kind = "bitset8"
+tier = "cold"
+[[wmodel.window.field]]
+name = "render_hint"
+kind = "enum"                  # 0=normal 1=double (hi-res autoscale); replaces content_scale
+tier = "cold"
+
+# z-order is a RELATIONSHIP, not a per-window field: a separate ordered list of
+# handles (top..bottom), length = capacity. Pulling it out of the entry kills the
+# "keep N zorder bytes consistent" hazard the old in-entry zorder byte carried.
+[wmodel.window.relation.zorder]
+kind = "total_order"
+of   = "handle"
+
+# Invariants portable L2 policy relies on — verified by host conformance models
+# against the LOGICAL behaviour, independent of any platform's physical layout.
+[wmodel.window.invariant]
+rules = [
+  "owner-readable: win_get_owner(i) defined for every live window",
+  "reap: closing a dead task frees exactly its owned windows",
+  "zorder-total: the z-list is a permutation of the live handles",
+]
+
+# ---- platform descriptors: physical layout is derived from these -------------
+[wmodel.platform.c64]
+cpu         = "6502"
+dialect     = "dasm"
+word_bits   = 8
+ptr_bits    = 16
+coord_space = "cells"      # desktop addresses windows in 8x8 cells
+coord_max   = 40           # < 256  -> coord columns are u8
+capacity    = 6
+layout      = "soa"        # columnar: free indexing on 6502 (no stride multiply)
+storage     = 0xC000       # illustrative base for the column block
+
+[wmodel.platform.host]
+cpu         = "x86_64"
+dialect     = "c"
+word_bits   = 64
+ptr_bits    = 64
+coord_space = "pixels"
+coord_max   = 1920         # >= 256 -> coord columns are u16
+capacity    = 64
+layout      = "soa"        # columnar: contiguous columns are SIMD-composite friendly
+
+[wmodel.platform.amiga]
+cpu         = "m68k"
+dialect     = "vasm"
+word_bits   = 16
+ptr_bits    = 32
+coord_space = "pixels"
+coord_max   = 320          # >= 256 -> coord columns are u16 (exercises 68000 index-doubling)
+capacity    = 6
+layout      = "soa"
+storage     = 0x78000      # illustrative chip-RAM column block
+
+[wmodel.platform.x86]
+cpu         = "x86"
+dialect     = "c"
+word_bits   = 16
+ptr_bits    = 16           # real-mode: title handle is a 16-bit near pointer
+coord_space = "pixels"
+coord_max   = 320
+capacity    = 16
+layout      = "aos"        # fixed-offset entry — show AoS is just a layout knob

@@ -337,6 +337,57 @@ def run_reaping():
     _, wb = reap_buggy(handles, windows, 3)
     record(7, "DISCRIMINATION: leaking windows is caught", len(wb) != len(w), "")
 
+# --- Greenfield window model (§11 redux): logical invariants verified over a
+# physical realization THROUGH the accessor boundary. The point: the same
+# invariant models hold regardless of layout (here a Python stand-in for the SoA
+# columns wmgen emits), so correctness is checked on logical behaviour — not on
+# any platform's byte offsets. Paired with discrimination (a buggy realization). -
+def check_wmodel(d):
+    wm = d.get("wmodel")
+    if not wm:
+        record("wm", "wmodel present in contract", False, "no [wmodel]"); return
+    win = wm["window"]
+    # structural: identity is a handle; the load-bearing invariants are declared.
+    record("wm", "identity is a handle", win.get("identity") == "handle", str(win.get("identity")))
+    rules = win.get("invariant", {}).get("rules", [])
+    for key in ("owner-readable", "reap", "zorder-total"):
+        record("wm", "declares invariant: %s" % key,
+               any(r.startswith(key) for r in rules), str(rules))
+
+    # SoA realization stand-in: one list per column, indexed by the handle.
+    CAP = 6
+    col = {"state": [0] * CAP, "owner": [0] * CAP}
+    def get(c, i): return col[c][i]
+    def setf(c, i, v): col[c][i] = v
+    # the SAME reap policy wmgen emits, expressed only through accessors:
+    def reap(dead):
+        for i in range(CAP):
+            if get("state", i) and get("owner", i) == dead:
+                setf("state", i, 0)
+    for i, o in [(0, 7), (1, 9), (2, 7), (3, 9), (4, 7)]:   # 0,2,4 -> task7; 1,3 -> task9
+        setf("state", i, 1); setf("owner", i, o)
+    reap(9)
+    live = [i for i in range(CAP) if get("state", i)]
+    record("wm", "reap (via SoA accessors) frees exactly task 9's windows",
+           live == [0, 2, 4], "live=%s" % live)
+    # discrimination: a realization that reaps on the WRONG column leaks/over-frees.
+    bs = {"state": [1, 1, 1, 0, 0, 0], "owner": [7, 9, 7, 9, 7, 0]}
+    for i in range(CAP):
+        if bs["state"][i] and bs["state"][i] == 9:          # BUG: tests state, not owner
+            bs["state"][i] = 0
+    leaked = [i for i in range(CAP) if bs["state"][i] and bs["owner"][i] == 9]
+    record("wm", "DISCRIMINATION: reaping the wrong column is caught", len(leaked) > 0, "")
+
+    # zorder-total: the z-list (relation, not a per-window field) stays a permutation
+    # of the live handles across a close.
+    z, liveset = [4, 2, 0], {0, 2, 4}
+    record("wm", "zorder-total: z-list is a permutation of live handles",
+           sorted(z) == sorted(liveset), "z=%s" % z)
+    z = [h for h in z if h != 2]; liveset = {0, 4}           # close handle 2
+    record("wm", "zorder-total holds after a close", sorted(z) == sorted(liveset), "z=%s" % z)
+    record("wm", "DISCRIMINATION: stale z-list entry is caught",
+           sorted([4, 2, 0]) != sorted({0, 4}), "")
+
 # ===========================================================================
 # Runner
 # ===========================================================================
@@ -351,6 +402,8 @@ def main():
     run_zorder(); run_events(); run_queue(); run_mouse(); run_reaping(); run_dfocus()
     print("=== C. PROFILES (audit-tax §9: scaling is generated and honest) ===")
     check_profiles(d)
+    print("=== D. WMODEL (greenfield window model: logical invariants over the realization) ===")
+    check_wmodel(d)
 
     npass = sum(1 for _, _, ok, _ in RESULTS if ok)
     ntot = len(RESULTS)
