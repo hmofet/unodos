@@ -117,18 +117,18 @@ SYS_THEME_SET_PALETTE      = 105             ; Set the 4 UI palette RGB entries 
 
 ; ---- Window table (struct win_entry) -----------------------------
 WIN_MAX_COUNT              = 16              ; fixed window table size
-WIN_ENTRY_SIZE             = 32
+WIN_ENTRY_SIZE             = 16
 WIN_OFF_STATE              = 0               ; u8
-WIN_OFF_FLAGS              = 1               ; u8
+WIN_OFF_OWNER              = 1               ; u8
 WIN_OFF_X                  = 2               ; u16
 WIN_OFF_Y                  = 4               ; u16
 WIN_OFF_WIDTH              = 6               ; u16
 WIN_OFF_HEIGHT             = 8               ; u16
-WIN_OFF_ZORDER             = 10              ; u8
-WIN_OFF_OWNER              = 11              ; u8
-WIN_OFF_TITLE              = 12              ; char
-WIN_OFF_CONTENT_SCALE      = 24              ; u8
-WIN_OFF_RESERVED           = 25              ; bytes
+WIN_OFF_TITLE              = 10              ; u16
+WIN_OFF_ZORDER             = 12              ; u8
+WIN_OFF_FLAGS              = 13              ; u8
+WIN_OFF_CONTENT_SCALE      = 14              ; u8
+WIN_OFF_RESERVED           = 15              ; bytes
 
 ; ---- Event record (struct event) ---------------------------------
 EVENT_ENTRY_SIZE           = 3               ; type:u8 + data:u16

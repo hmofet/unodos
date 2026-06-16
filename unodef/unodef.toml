@@ -1004,23 +1004,29 @@ err="CF=0 (always succeeds)"
 # Offsets are byte-exact and ARE the contract.
 # =============================================================================
 
-# Window-table entry. kernel.asm: WIN_ENTRY_SIZE=32, WIN_MAX_COUNT=16, WIN_OFF_*.
+# Window-table entry — UnoDOS 3.1 CLEAN LAYOUT (Phase 12, x86 pilot). The legacy
+# 32B entry (inline char[12] title, owner@11, flags@1, zorder@10, content_scale@24)
+# is replaced by the compact 16B greenfield layout: owner joins the hot prefix at
+# @1, the title becomes a near POINTER (@10) into a kernel title pool instead of a
+# 12-byte inline buffer (the change that halves the entry), and z-order stays as an
+# in-entry rank byte (a valid per-platform realization of the z-order RELATION).
+# kernel.asm consumes WIN_OFF_* symbolically, so this is a regenerate-only change.
 [[struct]]
 name = "win_entry"
-size = 32
+size = 16
 count = 16                # fixed table of 16 windows (window_table)
 fields = [
-  "state         : u8      @0",   # enum win_state
-  "flags         : u8      @1",   # enum win_flags
-  "x             : u16     @2",
-  "y             : u16     @4",
-  "width         : u16     @6",
-  "height        : u16     @8",
-  "zorder        : u8      @10",  # 0=bottom .. 15=top
-  "owner         : u8      @11",  # owning task handle; 0xFF = kernel
-  "title         : char[12]@12",  # 11 chars + NUL
-  "content_scale : u8      @24",  # 1=normal, 2=double (hi-res auto-scale)
-  "reserved      : bytes[7]@25",
+  "state         : u8  @0",    # enum win_state
+  "owner         : u8  @1",    # owning task handle; 0xFF = kernel (was @11)
+  "x             : u16 @2",
+  "y             : u16 @4",
+  "width         : u16 @6",
+  "height        : u16 @8",
+  "title         : u16 @10",   # near pointer into the title pool (was inline char[12])
+  "zorder        : u8  @12",   # 0=bottom .. 15=top (in-entry realization of the z-relation)
+  "flags         : u8  @13",   # enum win_flags (was @1)
+  "content_scale : u8  @14",   # 1=normal, 2=double (hi-res auto-scale) (was @24)
+  "reserved      : bytes[1]@15",
 ]
 
 # Event record. kernel.asm: event_queue = 32 entries * 3 bytes, head/tail indices.
@@ -2019,7 +2025,7 @@ coord_space = "pixels"
 coord_max = 320
 capacity = 16
 layout = "aos"
-entry_size = 32            # shipping x86 win_entry is 32B (stride = shl 5)
+entry_size = 16            # 3.1 clean win_entry is 16B (stride = shl 4)
 entry_base = "window_table"
 shift_macro = "SHL_N"
 spec_only = false

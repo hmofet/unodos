@@ -540,19 +540,19 @@
   ],
   "structs": {
     "win_entry": {
-      "size": 32,
+      "size": 16,
       "fields": [
         "state@0",
-        "flags@1",
+        "owner@1",
         "x@2",
         "y@4",
         "width@6",
         "height@8",
-        "zorder@10",
-        "owner@11",
-        "title@12",
-        "content_scale@24",
-        "reserved@25"
+        "title@10",
+        "zorder@12",
+        "flags@13",
+        "content_scale@14",
+        "reserved@15"
       ]
     },
     "event": {
