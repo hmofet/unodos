@@ -255,6 +255,45 @@ def reap_ref(handles, windows, dead_task):
     return h, w
 def reap_buggy(handles, windows, dead_task):
     return [x for x in handles if x["owner"] != dead_task], windows  # BUG: leaks windows
+# --- Phase 8 / §8: directional focus (pointer-less d-pad traversal) ----------
+# unoui's Tab-traversal generalized: RIGHT/DOWN -> next focusable, LEFT/UP -> prev,
+# CLAMPED at the ends (no wrap). A = activate current, B = cancel (-1). The bug:
+# wrapping at the ends, which makes "down" at the bottom jump to the top.
+def dfocus_ref(i, n, key):
+    if key in ("RIGHT", "DOWN"): return i + 1 if i + 1 < n else n - 1
+    if key in ("LEFT", "UP"):    return i - 1 if i - 1 >= 0 else 0
+    return i
+def dfocus_buggy(i, n, key):
+    if key in ("RIGHT", "DOWN"): return (i + 1) % n     # BUG: wraps
+    if key in ("LEFT", "UP"):    return (i - 1) % n
+    return i
+def run_dfocus():
+    n = 4
+    # walk to the bottom then press DOWN again — must stay clamped at n-1
+    i = 0
+    for k in ["DOWN","DOWN","DOWN","DOWN"]: i = dfocus_ref(i, n, k)
+    record(8, "directional focus clamps at last (no wrap)", i == n - 1, "i=%d" % i)
+    i2 = 0
+    for k in ["DOWN","DOWN","DOWN","DOWN"]: i2 = dfocus_buggy(i2, n, k)
+    record(8, "DISCRIMINATION: wrapping focus is caught", i2 != n - 1, "buggy i=%d" % i2)
+    # clamp at top
+    j = 0; j = dfocus_ref(j, n, "UP")
+    record(8, "directional focus clamps at first", j == 0, "j=%d" % j)
+
+# --- Phase 8 / §9: profile honesty (minimal ports can't claim a WM/pointer) ---
+def check_profiles(d):
+    prof = d.get("profile", {})
+    for name, p in d.get("port", {}).items():
+        pf = p.get("profile")
+        req = prof.get(pf, {}).get("requires", [])
+        caps = p.get("capabilities", [])
+        if pf == "minimal":
+            record(9, "port %s (minimal) requires no WM" % name, "wm" not in req, str(req))
+            record(9, "port %s (minimal) has no POINTER cap" % name, "POINTER" not in caps, str(caps))
+        if "HEADLESS" in caps:
+            record(9, "port %s (HEADLESS) declares zero surfaces" % name,
+                   not p.get("surface"), str(p.get("surface")))
+
 def run_reaping():
     handles = [{"id": 0, "owner": 3}, {"id": 1, "owner": 5}, {"id": 2, "owner": 3}]
     windows = [{"id": 0, "owner": 3}, {"id": 1, "owner": 3}, {"id": 2, "owner": 5}]
@@ -274,7 +313,9 @@ def main():
     check_rule10_struct(d)
     check_rule8_geometry(d)
     print("=== B. BEHAVIORAL (§6 policy invariants, model + vectors + discrimination) ===")
-    run_zorder(); run_events(); run_queue(); run_mouse(); run_reaping()
+    run_zorder(); run_events(); run_queue(); run_mouse(); run_reaping(); run_dfocus()
+    print("=== C. PROFILES (audit-tax §9: scaling is generated and honest) ===")
+    check_profiles(d)
 
     npass = sum(1 for _, _, ok, _ in RESULTS if ok)
     ntot = len(RESULTS)

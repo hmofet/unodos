@@ -1284,3 +1284,68 @@ val = 320
 [[world.amiga.equate]]
 sym = "SCRH"
 val = 200
+
+
+# =============================================================================
+# CAPABILITIES, PROFILES & MULTI-SURFACE DISPLAY (CONTRACT-ARCH §8/§9, Phase 8).
+# A port declares one profile + a set of capabilities + its display surfaces;
+# unogen emits the manifest of what the port must provide, making "this machine
+# can't window" generated and honest. (Profiles defined above: windowed/single_app/
+# minimal.) Capabilities cut across profiles.
+# =============================================================================
+[capability]
+all = ["SMP","PREEMPT","OFFLOAD","NET","RTC","HEADLESS","TOUCH","POINTER","STEREO","DIRNAV"]
+
+[[port.x86.surface]]
+id = "primary"
+w = 320
+h = 200
+depth = 2
+role = "PRIMARY"
+
+# Scale-down example: a 2 KB NES is `minimal` — one app, no WM, directional input.
+[port.nes]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 2048
+[[port.nes.surface]]
+id = "primary"
+w = 256
+h = 240
+depth = 2
+role = "PRIMARY"
+
+# Dual-screen example: DS is `windowed` with two surfaces + touch.
+[port.ds]
+profile = "windowed"
+capabilities = ["TOUCH","SMP"]
+[[port.ds.surface]]
+id = "top"
+w = 256
+h = 192
+role = "PRIMARY"
+[[port.ds.surface]]
+id = "bottom"
+w = 256
+h = 192
+role = "SECONDARY"
+
+# Stereo example: Virtual Boy is `single_app` with two eye views (red mono).
+[port.virtualboy]
+profile = "single_app"
+capabilities = ["STEREO","DIRNAV"]
+[[port.virtualboy.surface]]
+id = "left"
+w = 384
+h = 224
+role = "STEREO_L"
+[[port.virtualboy.surface]]
+id = "right"
+w = 384
+h = 224
+role = "STEREO_R"
+
+# Server example: a Dreamcast HEADLESS build — zero display surfaces.
+[port.dc_server]
+profile = "single_app"
+capabilities = ["HEADLESS","NET","SMP"]
