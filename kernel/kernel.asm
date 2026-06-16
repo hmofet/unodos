@@ -17199,8 +17199,14 @@ win_create_stub:
     ; Copy title (up to 11 chars)
     ; App passes title as ES:DI. caller_es has the app's ES segment.
     ; DS = 0x1000 (kernel), we read from caller_es:saved_title, write to kernel
-    mov di, bx
-    add di, WIN_OFF_TITLE           ; DI = dest offset in window_table
+    ; clean-layout title: store a near pointer into the title pool (handle*16)
+    ; in the entry, and copy the string into that pool slot.
+    xor ax, ax
+    mov al, [topmost_handle]        ; this window's handle (just set to top above)
+    SHL_N ax, 4                     ; AX = handle * 16 = pool slot offset
+    add ax, win_title_pool
+    mov [bx + WIN_OFF_TITLE], ax    ; entry.title = pointer into the pool
+    mov di, ax                      ; DI = pool dest (DS=0x1000)
     mov si, [.save_title]           ; SI = title offset from caller's DI
     mov ax, 0x1000
     mov es, ax                      ; ES = 0x1000 for writing to kernel
@@ -19711,8 +19717,7 @@ win_draw_stub:
     push bx
     push word [caller_ds]
     mov word [caller_ds], 0x1000
-    mov si, bx
-    add si, WIN_OFF_TITLE
+    mov si, [bx + WIN_OFF_TITLE]    ; SI = title pointer (clean-layout: title is a ptr)
     mov bx, cx
     add bx, 4
     mov cx, dx
@@ -19819,8 +19824,7 @@ win_draw_stub:
 .inactive_title_text:
     push word [caller_ds]
     mov word [caller_ds], 0x1000
-    mov si, bx
-    add si, WIN_OFF_TITLE
+    mov si, [bx + WIN_OFF_TITLE]    ; SI = title pointer (clean-layout: title is a ptr)
     mov bx, cx
     add bx, 4
     mov cx, dx
@@ -22845,6 +22849,13 @@ WIN_TITLEBAR_HEIGHT equ 10
 ; unodef/gen/x86/unodef.inc (struct win_entry)
 
 window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
+
+; Greenfield clean-layout title storage: titles live here (16-byte slot per
+; window handle), and the entry's WIN_OFF_TITLE field holds a near POINTER into
+; this pool instead of an inline char[12]. This frees the entry to shrink to the
+; compact 16B layout. The pool is in the kernel segment (0x1000) so win_draw can
+; read it without the app's segment, exactly as the old inline buffer was.
+win_title_pool: times (WIN_MAX_COUNT * 16) db 0
 
 ; ============================================================================
 ; System Clipboard (Build 273)
