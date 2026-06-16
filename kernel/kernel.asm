@@ -10,6 +10,12 @@ cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT). Any 186+/386+
                     ; and runtime-gated (see fat16_mount).
 %include "kernel/cpu8086.inc"  ; 8086-safe instruction macros
 
+; Contract (Layer 0): syscall ordinals, struct offsets/sizes, FAT12 geometry,
+; font metrics, palette, and enums — GENERATED from unodef/unodef.toml by unogen.
+; The equate blocks and FAT12 literals below that these symbols replace were
+; hand-maintained; they are now single-sourced here (CONTRACT-ARCH §3.2, Phase 1).
+%include "unodef/gen/x86/unodef.inc"
+
 ; ============================================================================
 ; Signature and Entry Point
 ; ============================================================================
@@ -11502,15 +11508,7 @@ mem_free_stub:
 ; Event System (Foundation 1.5)
 ; ============================================================================
 
-; Event Types
-EVENT_NONE          equ 0
-EVENT_KEY_PRESS     equ 1
-EVENT_KEY_RELEASE   equ 2           ; Future
-EVENT_TIMER         equ 3           ; Future
-EVENT_MOUSE         equ 4
-EVENT_WIN_MOVED     equ 5
-EVENT_WIN_REDRAW    equ 6               ; Window needs content redraw (DX = handle)
-EVENT_CONSUMED      equ 0xFF            ; Tombstone: slot consumed mid-queue
+; Event Types — EVENT_* now sourced from unodef/gen/x86/unodef.inc (enum event_type)
 
 ; Event structure (3 bytes):
 ;   +0: type (byte)
@@ -11844,17 +11842,9 @@ event_wait_stub:
 ; Filesystem Abstraction Layer (Foundation 1.6)
 ; ============================================================================
 
-; Filesystem error codes
+; Filesystem error codes — FS_ERR_* now sourced from unodef/gen/x86/unodef.inc
+; (enum fs_errno). FS_OK is the kernel-local alias for FS_ERR_OK (== 0).
 FS_OK                   equ 0
-FS_ERR_NOT_FOUND        equ 1
-FS_ERR_NO_DRIVER        equ 2
-FS_ERR_READ_ERROR       equ 3
-FS_ERR_INVALID_HANDLE   equ 4
-FS_ERR_NO_HANDLES       equ 5
-FS_ERR_END_OF_DIR       equ 6
-FS_ERR_WRITE_ERROR      equ 7
-FS_ERR_DISK_FULL        equ 8
-FS_ERR_DIR_FULL         equ 9
 
 ; Filesystem type constants
 FS_TYPE_FAT12           equ 1
@@ -12364,30 +12354,33 @@ fat12_mount:
     ; - 224 root directory entries
     ; - 9 sectors per FAT
 
-    mov word [bytes_per_sector], 512
-    mov byte [sectors_per_cluster], 1
-    mov word [reserved_sectors], 1
-    mov byte [num_fats], 2
-    mov word [root_dir_entries], 224
-    mov word [sectors_per_fat], 9
+    ; FAT12 geometry from the Contract (unodef/gen/x86/unodef.inc) — was one of
+    ; the "five places" these constants were hand-duplicated.
+    mov word [bytes_per_sector], FAT12_BYTES_PER_SECTOR
+    mov byte [sectors_per_cluster], FAT12_SECTORS_PER_CLUSTER
+    mov word [reserved_sectors], FAT12_RESERVED_SECTORS
+    mov byte [num_fats], FAT12_NUM_FATS
+    mov word [root_dir_entries], FAT12_ROOT_DIR_ENTRIES
+    mov word [sectors_per_fat], FAT12_SECTORS_PER_FAT
 
     ; Calculate FAT start sector (absolute)
-    ; fat_start = 110 + reserved_sectors = 111
-    mov word [fat_start], 111       ; Filesystem at sector 110 + 1 reserved
+    ; fat_start = fs_start + reserved_sectors = 111
+    mov word [fat_start], FAT12_FAT_START
 
     ; Calculate root directory start sector
-    ; root_dir_start = 110 + reserved + (num_fats * sectors_per_fat)
-    ; = 110 + 1 + (2 * 9) = 110 + 1 + 18 = 129
-    mov ax, 1                       ; reserved_sectors
-    add ax, 18                      ; num_fats * sectors_per_fat
-    add ax, 110                     ; Filesystem starts at sector 110
+    ; root_dir_start = fs_start + reserved + (num_fats * sectors_per_fat) = 129
+    ; (kept as an instruction sequence so the emitted code is byte-identical;
+    ;  each immediate is now a Contract symbol NASM folds to the same value)
+    mov ax, FAT12_RESERVED_SECTORS              ; = 1
+    add ax, FAT12_NUM_FATS*FAT12_SECTORS_PER_FAT ; = 18
+    add ax, FAT12_FS_START_SECTOR               ; = 110
     mov [root_dir_start], ax        ; = 129
 
     ; Calculate data area start sector
     ; data_start = root_dir_start + root_dir_sectors
-    ; root_dir_sectors = (root_dir_entries * 32) / bytes_per_sector
+    ; root_dir_sectors = (root_dir_entries * DIRENT_SIZE) / bytes_per_sector
     mov ax, [root_dir_entries]
-    mov cx, 32
+    mov cx, DIRENT_SIZE
     mul cx                          ; AX = root_dir_entries * 32
     mov cx, [bytes_per_sector]
     xor dx, dx
@@ -22415,8 +22408,7 @@ draw_font_bpc:     db 8              ; Bytes per character in font data
 draw_font_base:    dw font_8x8       ; Pointer to current font data
 
 ; Font descriptor table: 6 bytes per entry (pointer, height, width, advance, bpc)
-FONT_DESC_SIZE     equ 6
-FONT_COUNT         equ 3
+; FONT_DESC_SIZE / FONT_COUNT now sourced from unodef/gen/x86/unodef.inc
 font_table:
     dw font_4x6                       ; Font 0: small
     db 6, 4, 6, 6                     ; height=6, width=4, advance=6, bpc=6
@@ -22706,15 +22698,16 @@ event_queue_tail: dw 0
 ; Filesystem state (Foundation 1.6)
 ; BPB (BIOS Parameter Block) cache
 bpb_buffer: times 512 db 0          ; Boot sector buffer
-bytes_per_sector: dw 512
-sectors_per_cluster: db 1
-reserved_sectors: dw 1
-num_fats: db 2
-root_dir_entries: dw 224
-sectors_per_fat: dw 9
-fat_start: dw 111                   ; Absolute FAT sector = filesystem_start(110) + reserved(1)
-root_dir_start: dw 129              ; Calculated: 110 + reserved + (num_fats * sectors_per_fat)
-data_area_start: dw 143             ; Calculated: root_dir_start + root_dir_sectors (129 + 14)
+; FAT12 BPB cache defaults — initialized from the Contract (unodef/gen/x86/unodef.inc).
+bytes_per_sector: dw FAT12_BYTES_PER_SECTOR
+sectors_per_cluster: db FAT12_SECTORS_PER_CLUSTER
+reserved_sectors: dw FAT12_RESERVED_SECTORS
+num_fats: db FAT12_NUM_FATS
+root_dir_entries: dw FAT12_ROOT_DIR_ENTRIES
+sectors_per_fat: dw FAT12_SECTORS_PER_FAT
+fat_start: dw FAT12_FAT_START              ; Absolute FAT sector = fs_start(110) + reserved(1)
+root_dir_start: dw FAT12_ROOT_DIR_START    ; = fs_start + reserved + num_fats*sectors_per_fat
+data_area_start: dw FAT12_DATA_AREA_START  ; = root_dir_start + root_dir_sectors (129 + 14)
 
 ; File handle table (16 entries, 32 bytes each)
 ; Entry format:
@@ -22723,9 +22716,8 @@ data_area_start: dw 143             ; Calculated: root_dir_start + root_dir_sect
 ;   Bytes 2-3: Starting cluster
 ;   Bytes 4-7: File size (32-bit)
 ;   Bytes 8-11: Current position (32-bit)
-;   Bytes 12-31: Reserved
-FILE_MAX_HANDLES    equ 16
-FILE_ENTRY_SIZE     equ 32
+;   Bytes 12-31: Reserved (owner task at byte 24 — see struct file_handle)
+; FILE_MAX_HANDLES / FILE_ENTRY_SIZE now sourced from unodef/gen/x86/unodef.inc
 file_table: times (FILE_MAX_HANDLES * FILE_ENTRY_SIZE) db 0
 
 ; Read buffer for filesystem test (1024 bytes for multi-cluster testing)
@@ -22862,18 +22854,10 @@ desktop_bg_color:   db 0            ; CGA palette color 0 (black)
 ; Window Manager Data (v3.12.0)
 ; ============================================================================
 
-; Window states
-WIN_STATE_FREE      equ 0
-WIN_STATE_VISIBLE   equ 1
-WIN_STATE_HIDDEN    equ 2
-
-; Window flags
-WIN_FLAG_TITLE      equ 0x01
-WIN_FLAG_BORDER     equ 0x02
-
-; Window structure constants
-WIN_MAX_COUNT       equ 16
-WIN_ENTRY_SIZE      equ 32
+; Window states (WIN_STATE_*), flags (WIN_FLAG_*), WIN_MAX_COUNT and
+; WIN_ENTRY_SIZE now sourced from unodef/gen/x86/unodef.inc (struct win_entry +
+; enums win_state/win_flags). WIN_TITLEBAR_HEIGHT is kernel-local (not in the
+; Contract's struct surface).
 WIN_TITLEBAR_HEIGHT equ 10
 
 ; Window entry structure (32 bytes):
@@ -22889,17 +22873,8 @@ WIN_TITLEBAR_HEIGHT equ 10
 ;   Offset 24: 1 byte  - Content scale (1=normal, 2=double for hi-res auto-scaled)
 ;   Offset 25: 7 bytes - Reserved
 
-; Window entry field offsets
-WIN_OFF_STATE       equ 0
-WIN_OFF_FLAGS       equ 1
-WIN_OFF_X           equ 2
-WIN_OFF_Y           equ 4
-WIN_OFF_WIDTH       equ 6
-WIN_OFF_HEIGHT      equ 8
-WIN_OFF_ZORDER      equ 10
-WIN_OFF_OWNER       equ 11
-WIN_OFF_TITLE       equ 12
-WIN_OFF_CONTENT_SCALE equ 24
+; Window entry field offsets (WIN_OFF_*) now sourced from
+; unodef/gen/x86/unodef.inc (struct win_entry)
 
 window_table: times (WIN_MAX_COUNT * WIN_ENTRY_SIZE) db 0
 

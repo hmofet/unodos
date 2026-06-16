@@ -49,7 +49,15 @@ context-switch code, or CPU logic. Those stay hand-written per world.
 
 `--check` asserts that 22 generated x86 constants (the struct sizes, the
 five-places FAT12 geometry, the font advance, the slot count) equal the literals
-currently hand-written in `kernel/kernel.asm`. This is the Phase-1 guarantee in
-miniature: the generator reproduces the known-good values before anything depends
-on it. Full byte-identical x86 rebuild is the next step (swap the hand-written
-equate blocks for `%include "unodef/gen/x86/unodef.inc"`).
+currently hand-written in `kernel/kernel.asm`.
+
+**Byte-identical rebuild — DONE (Phase 1 anchor proven).** `kernel/kernel.asm` now
+`%include`s `unodef/gen/x86/unodef.inc`; its hand-written `EVENT_*`, `FS_ERR_*`,
+`WIN_*`, `FILE_*`, `FONT_*` equate blocks and its two FAT12 literal sites (mount
+routine + BPB-cache defaults) are sourced from the Contract. Rebuilt with
+`nasm -f bin -Ikernel/` (build_info.inc held constant), the kernel hashes
+**identically** to the pre-change binary (SHA256 `04b9709a…`). The generator is
+the source of truth, validated against the known-good build. (The FAT12 immediates
+become Contract symbols/expressions of equal value so NASM folds them to the same
+bytes — no instruction restructuring.) Remaining "five places": `boot/boot.asm`,
+`boot/stage2.asm`, `tools/add_floppy_fs.py`, `tools/create_app_test.py`.
