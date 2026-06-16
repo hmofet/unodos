@@ -1,0 +1,118 @@
+UnoDOS 3.1 categorized ordinal map (generated; §11). flat -> 3.1.
+
+    0  gfx_draw_pixel             gfx     -> 0x00
+    1  gfx_draw_rect              gfx     -> 0x01
+    2  gfx_draw_filled_rect       gfx     -> 0x02
+    3  gfx_draw_char              gfx     -> 0x03
+    4  gfx_draw_string            gfx     -> 0x04
+    5  gfx_clear_area             gfx     -> 0x05
+    6  gfx_draw_string_inverted   gfx     -> 0x06
+    7  mem_alloc                  system  -> 0x100
+    8  mem_free                   system  -> 0x101
+    9  event_get                  event   -> 0x60
+   10  event_wait                 event   -> 0x61
+   11  kbd_getchar                event   -> 0x62
+   12  kbd_wait_key               event   -> 0x63
+   13  fs_mount                   fs      -> 0x80
+   14  fs_open                    fs      -> 0x81
+   15  fs_read                    fs      -> 0x82
+   16  fs_close                   fs      -> 0x83
+   17  fs_register_driver         fs      -> 0x84
+   18  app_load                   system  -> 0x102
+   19  app_run                    system  -> 0x103
+   20  win_create                 window  -> 0x40
+   21  win_destroy                window  -> 0x41
+   22  win_draw                   window  -> 0x42
+   23  win_focus                  window  -> 0x43
+   24  win_move                   window  -> 0x44
+   25  win_get_content            window  -> 0x45
+   26  register_shell             system  -> 0x104
+   27  fs_readdir                 fs      -> 0x85
+   28  mouse_get_state            event   -> 0x64
+   29  mouse_set_position         event   -> 0x65
+   30  mouse_is_enabled           event   -> 0x66
+   31  win_begin_draw             window  -> 0x46
+   32  win_end_draw               window  -> 0x47
+   33  gfx_text_width             text    -> 0x20
+   34  app_yield                  sched   -> 0xA0
+   35  app_start                  sched   -> 0xA1
+   36  app_exit                   sched   -> 0xA2
+   37  desktop_set_icon           window  -> 0x48
+   38  desktop_clear_icons        window  -> 0x49
+   39  gfx_draw_icon              gfx     -> 0x07
+   40  fs_read_header             fs      -> 0x86
+   41  speaker_tone               audio   -> 0xE0
+   42  speaker_off                audio   -> 0xE1
+   43  get_boot_drive             system  -> 0x105
+   44  fs_write_sector            fs      -> 0x87
+   45  fs_create                  fs      -> 0x88
+   46  fs_write                   fs      -> 0x89
+   47  fs_delete                  fs      -> 0x8A
+   48  gfx_set_font               text    -> 0x21
+   49  gfx_get_font_metrics       text    -> 0x22
+   50  gfx_draw_string_wrap       text    -> 0x23
+   51  widget_draw_button         ui      -> 0xC0
+   52  widget_draw_radio          ui      -> 0xC1
+   53  widget_hit_test            ui      -> 0xC2
+   54  theme_set_colors           ui      -> 0xC3
+   55  theme_get_colors           ui      -> 0xC4
+   56  widget_draw_checkbox       ui      -> 0xC5
+   57  widget_draw_textfield      ui      -> 0xC6
+   58  widget_draw_scrollbar      ui      -> 0xC7
+   59  widget_draw_listitem       ui      -> 0xC8
+   60  widget_draw_progress       ui      -> 0xC9
+   61  widget_draw_groupbox       ui      -> 0xCA
+   62  widget_draw_separator      ui      -> 0xCB
+   63  get_tick_count             system  -> 0x106
+   64  point_over_window          window  -> 0x4A
+   65  widget_draw_combobox       ui      -> 0xCC
+   66  widget_draw_menubar        ui      -> 0xCD
+   67  gfx_draw_filled_rect_color gfx     -> 0x08
+   68  gfx_draw_rect_color        gfx     -> 0x09
+   69  gfx_draw_hline             gfx     -> 0x0A
+   70  gfx_draw_vline             gfx     -> 0x0B
+   71  gfx_draw_line              gfx     -> 0x0C
+   72  get_rtc_time               system  -> 0x107
+   73  delay_ticks                sched   -> 0xA3
+   74  get_task_info              sched   -> 0xA4
+   75  fs_seek                    fs      -> 0x8B
+   76  fs_get_file_size           fs      -> 0x8C
+   77  fs_rename                  fs      -> 0x8D
+   78  win_resize                 window  -> 0x4B
+   79  win_get_info               window  -> 0x4C
+   80  gfx_scroll_area            gfx     -> 0x0D
+   81  set_rtc_time               system  -> 0x108
+   82  get_screen_info            system  -> 0x109
+   83  get_key_modifiers          event   -> 0x67
+   84  clip_copy                  system  -> 0x10A
+   85  clip_paste                 system  -> 0x10B
+   86  clip_get_len               system  -> 0x10C
+   87  menu_open                  ui      -> 0xCE
+   88  menu_close                 ui      -> 0xCF
+   89  menu_hit                   ui      -> 0xD0
+   90  file_dialog_open           ui      -> 0xD1
+   91  util_word_to_string        system  -> 0x10D
+   92  util_bcd_to_ascii          system  -> 0x10E
+   93  gfx_get_current_font_info  text    -> 0x24
+   94  gfx_draw_sprite            gfx     -> 0x0E
+   95  set_video_mode             system  -> 0x10F
+   96  win_get_content_scale      window  -> 0x4D
+   97  win_get_content_size       window  -> 0x4E
+   98  file_dialog_save           ui      -> 0xD2
+   99  widget_scrollbar_hit       ui      -> 0xD3
+  100  get_video_mode             system  -> 0x110
+  101  mouse_set_visible          event   -> 0x68
+  102  gfx_draw_sprite_scaled     gfx     -> 0x0F
+  103  gfx_blit_rect              gfx     -> 0x10
+  104  gfx_read_pixel             gfx     -> 0x11
+  105  theme_set_palette          ui      -> 0xD4
+
+  category gfx     count=18 (band=32)
+  category system  count=17 (band=32)
+  category event   count=9 (band=32)
+  category fs      count=14 (band=32)
+  category window  count=15 (band=32)
+  category text    count=5 (band=32)
+  category sched   count=5 (band=32)
+  category audio   count=2 (band=32)
+  category ui      count=21 (band=32)

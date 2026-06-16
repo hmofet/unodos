@@ -340,6 +340,27 @@ _Static_assert(offsetof(bin_header_t, magic) == 0, "bin_header.magic");
 _Static_assert(offsetof(bin_header_t, name) == 4, "bin_header.name");
 _Static_assert(offsetof(bin_header_t, icon) == 16, "bin_header.icon");
 
+typedef struct UNO_PACKED {
+    uint8_t magic[4];
+    uint8_t abi_major;
+    uint8_t abi_minor;
+    uint8_t arch;
+    uint8_t profile;
+    uint32_t caps;
+    char name[16];
+    uint8_t _pad0[4];
+    uint8_t icon[64];
+} uno_header_v2_t;
+_Static_assert(sizeof(uno_header_v2_t) == 96, "uno_header_v2 size");
+_Static_assert(offsetof(uno_header_v2_t, magic) == 0, "uno_header_v2.magic");
+_Static_assert(offsetof(uno_header_v2_t, abi_major) == 4, "uno_header_v2.abi_major");
+_Static_assert(offsetof(uno_header_v2_t, abi_minor) == 5, "uno_header_v2.abi_minor");
+_Static_assert(offsetof(uno_header_v2_t, arch) == 6, "uno_header_v2.arch");
+_Static_assert(offsetof(uno_header_v2_t, profile) == 7, "uno_header_v2.profile");
+_Static_assert(offsetof(uno_header_v2_t, caps) == 8, "uno_header_v2.caps");
+_Static_assert(offsetof(uno_header_v2_t, name) == 12, "uno_header_v2.name");
+_Static_assert(offsetof(uno_header_v2_t, icon) == 32, "uno_header_v2.icon");
+
 /* ---- const tables ---- */
 typedef struct { uint8_t width, height, advance, bpc; } uno_font_desc_t;
 static const uno_font_desc_t uno_font_table[3] = {
