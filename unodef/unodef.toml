@@ -1825,6 +1825,7 @@ layout      = "aos"
 max_align   = 2
 entry_base  = "wintab"
 pc_relative = true
+endian      = "be"
 
 [wmodel.platform.genesis]  # WIRED to genesis/kernel.asm (base is absolute VARS+v_wintab)
 cpu         = "m68k"
@@ -1838,6 +1839,7 @@ layout      = "aos"
 max_align   = 2
 entry_base  = "VARS+v_wintab"
 pc_relative = false
+endian      = "be"
 
 [wmodel.platform.x86]
 cpu         = "x86"
@@ -1861,6 +1863,7 @@ layout      = "aos"        # reproduce the shipped 16-byte AoS entry (lsl #4 str
 max_align   = 2            # 68000 only needs word alignment, even for longs
 entry_base  = "wintab"     # the kernel's window-table label
 pc_relative = true         # lea wintab(pc),a2
+endian      = "be"         # 68000 is big-endian
 
 [wmodel.platform.snes]    # WIRED to snes/kernel.asm (ca65; index->X via asl shift)
 cpu         = "65816"
@@ -1900,3 +1903,108 @@ coord_space = "pixels"
 coord_max   = 7680         # 8K-class display -> u16 coords (a single display fits in u16)
 capacity    = 256          # modern: hundreds of windows
 layout      = "soa"        # contiguous columns -> SIMD-composite friendly
+
+# =============================================================================
+# ARCHITECTURE SURVEY (spec_only): 40 years of micros, ONE logical window model.
+# Descriptor-only specs - codegen is the proven C/SoA path (see host/amd64), so
+# we don't emit redundant near-identical headers; wmgen lists their derived
+# layouts in gen/wm/ARCHITECTURES.txt. ENDIANNESS: in-memory access is native
+# (the accessor is generated for the platform's order); the .UNO/on-disk format
+# stays LE (contract.endian) and big-endian ports byte-swap at THAT boundary
+# only - portable policy never sees endianness.
+# =============================================================================
+[wmodel.platform.arm]      # ARMv4-v7 (Newton, PDAs, GBA-class, early phones)
+cpu = "arm"
+dialect = "c"
+word_bits = 32
+ptr_bits = 32
+endian = "le"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 64
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.arm64]    # AArch64 (modern phones, Apple silicon, servers)
+cpu = "aarch64"
+dialect = "c"
+word_bits = 64
+ptr_bits = 64
+endian = "le"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 256
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.sparc]    # SPARC v8 (Sun workstations) - big-endian
+cpu = "sparc"
+dialect = "c"
+word_bits = 32
+ptr_bits = 32
+endian = "be"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 64
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.alpha]    # DEC Alpha (21064+) - 64-bit little-endian
+cpu = "alpha"
+dialect = "c"
+word_bits = 64
+ptr_bits = 64
+endian = "le"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 256
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.mips]     # MIPS (SGI, PS1/PS2/PSP, N64) - bi-endian; BE shown
+cpu = "mips"
+dialect = "c"
+word_bits = 32
+ptr_bits = 32
+endian = "be"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 64
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.ppc]      # PowerPC (Power Mac, GameCube/Wii, Xbox360) - big-endian
+cpu = "powerpc"
+dialect = "c"
+word_bits = 32
+ptr_bits = 32
+endian = "be"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 64
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.riscv]    # RISC-V rv64 - little-endian
+cpu = "riscv64"
+dialect = "c"
+word_bits = 64
+ptr_bits = 64
+endian = "le"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 256
+layout = "soa"
+spec_only = true
+
+[wmodel.platform.sh4]      # SuperH SH-4 (Dreamcast, set-top) - little-endian
+cpu = "sh4"
+dialect = "c"
+word_bits = 32
+ptr_bits = 32
+endian = "le"
+coord_space = "pixels"
+coord_max = 7680
+capacity = 64
+layout = "soa"
+spec_only = true

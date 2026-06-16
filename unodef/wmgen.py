@@ -70,6 +70,35 @@ def layout(model, plat):
     return ordered, cols, zcol, total
 
 
+def c_policy(plat):
+    """The portable L2 window policy — WRITE-ONCE, touches data ONLY through the
+    generated accessors, so it is identical source on every C-capable platform
+    (host/amd64/x86/arm64/…). This is the payoff of full field access."""
+    cc = CTYPE[col_width({'kind': 'coord'}, plat)]
+    return [
+        "/* --- portable L2 policy: WRITE-ONCE, via accessors only (full field access). */",
+        "static inline int win_hit(int i, %s px, %s py){" % (cc, cc),
+        "    return px >= win_get_x(i) && px < win_get_x(i) + win_get_w(i)",
+        "        && py >= win_get_y(i) && py < win_get_y(i) + win_get_h(i);",
+        "}",
+        "static inline void win_move  (int i, %s nx, %s ny){ win_set_x(i,nx); win_set_y(i,ny); }" % (cc, cc),
+        "static inline void win_resize(int i, %s nw, %s nh){ win_set_w(i,nw); win_set_h(i,nh); }" % (cc, cc),
+        "static inline void win_reap(uint8_t dead){",
+        "    for (int i=0;i<WIN_CAP;i++) if (win_get_state(i) && win_get_owner(i)==dead) win_set_state(i,0);",
+        "}",
+        "/* z-order raise: promote handle to rank 0 (top), shifting the rest down. */",
+        "static inline void win_raise(int handle, int nlive){",
+        "    int r; for (r=0;r<nlive;r++) if (win_z_at(r)==handle) break;",
+        "    for (; r>0; r--) win_z_set(r, win_z_at(r-1));",
+        "    win_z_set(0, (uint8_t)handle);",
+        "}",
+        "/* topmost live window containing (px,py): walk the z-list top->bottom. */",
+        "static inline int win_topmost_at(int nlive, %s px, %s py){" % (cc, cc),
+        "    for (int r=0;r<nlive;r++){ int h=win_z_at(r); if (win_get_state(h) && win_hit(h,px,py)) return h; }",
+        "    return -1;",
+        "}", ""]
+
+
 def layout_aos(model, plat):
     """AoS variant: pack all fields into ONE entry with natural alignment; the
     table is capacity entries. Proves 'fixed-offset' is just a layout strategy —
@@ -127,18 +156,10 @@ def emit_c_aos(model, name, plat):
         cty, g = CTYPE[e["width"]], e["name"]
         L.append("static inline %-9s win_get_%-11s(int i){ return wtab[i].%s; }" % (cty, g, g))
         L.append("static inline void      win_set_%-11s(int i, %-9s v){ wtab[i].%s=v; }" % (g, cty, g))
-    cc = CTYPE[col_width({'kind': 'coord'}, plat)]
     L += ["static inline uint8_t win_z_at(int rank){ return wz_list[rank]; }",
-          "", "/* --- the SAME write-once L2 policy as the SoA world (layout-independent) --- */",
-          "static inline int win_hit(int i, %s px, %s py){" % (cc, cc),
-          "    return px >= win_get_x(i) && px < win_get_x(i) + win_get_w(i)",
-          "        && py >= win_get_y(i) && py < win_get_y(i) + win_get_h(i);",
-          "}",
-          "static inline void win_reap(uint8_t dead_owner){",
-          "    for (int i = 0; i < WIN_CAP; i++)",
-          "        if (win_get_state(i) && win_get_owner(i) == dead_owner)",
-          "            win_set_state(i, 0);",
-          "}", ""]
+          "static inline void    win_z_set(int rank, uint8_t handle){ wz_list[rank]=handle; }",
+          "", "/* --- the SAME write-once policy as the SoA world (layout-independent) --- */"]
+    L += c_policy(plat)
     emit_c_aos.storage = ('/* %s */\n#include "window.h"\n\n'
                           "win_entry_t wtab[WIN_CAP];\nuint8_t wz_list[WIN_CAP];\n"
                           % BANNER.replace("\n", "\n   "))
@@ -213,6 +234,7 @@ def emit_ca65_aos(model, name, plat):
          "; platform: %s — %s, %d-bit, %s coords (max %d), capacity %d, layout=AOS"
          % (name, plat["cpu"], plat["word_bits"], plat["coord_space"],
             plat["coord_max"], plat["capacity"]),
+         "%-22s = %d" % ("WIN_CAP", plat["capacity"]),
          "%-22s = %d" % ("WIN_ENTRY_SIZE", esz), "",
          "; field offsets DERIVED from the logical model (match the port's [world.%s]):" % name]
     for e in ents:
@@ -223,6 +245,15 @@ def emit_ca65_aos(model, name, plat):
           ".macro win_index_to_x"]
     L += ["    asl a"] * shift
     L += ["    tax", ".endmacro"]
+    # full field access: offsets + lda/sta convenience macros (X = entry byte offset).
+    base = plat.get("entry_base", "v_wintab")
+    L += ["", "; --- full field access: offsets + lda/sta macros (X = entry byte offset) ---"]
+    for e in ents:
+        L.append("%-22s = %d" % ("WIN_" + e["name"].upper(), e["off"]))
+    for e in ents:
+        nm = e["name"]
+        L += [".macro win_lda_%s" % nm, "    lda %s+WIN_%s,x" % (base, nm.upper()), ".endmacro",
+              ".macro win_sta_%s" % nm, "    sta %s+WIN_%s,x" % (base, nm.upper()), ".endmacro"]
     return "\n".join(L) + "\n", ents, None, esz * plat["capacity"]
 
 
@@ -240,6 +271,7 @@ def emit_vasm_aos(model, name, plat):
          "; platform: %s — %s, %d-bit, %s coords (max %d), capacity %d, layout=AOS"
          % (name, plat["cpu"], plat["word_bits"], plat["coord_space"],
             plat["coord_max"], plat["capacity"]),
+         "%-22s equ %d" % ("WIN_CAP", plat["capacity"]),
          "%-22s equ %d" % ("WIN_ENTRY_SIZE", esz), "",
          "; field offsets DERIVED from the logical model (match the port's [world.%s]):" % name]
     for e in ents:
@@ -255,6 +287,15 @@ def emit_vasm_aos(model, name, plat):
           "            lea %s%s,a2" % (base, pcrel),
           "            lea (a2,d2.w),a2",
           "            endm"]
+    # full field access: offsets + get/set convenience macros (entry ptr in an An).
+    sfx = {1: "b", 2: "w", 4: "l"}
+    L += ["", "; --- full field access: offsets + get/set macros (\\1 = entry An, \\2 = data Dn) ---"]
+    for e in ents:
+        L.append("%-22s equ %d" % ("WIN_" + e["name"].upper(), e["off"]))
+    for e in ents:
+        nm, s = e["name"], sfx[e["width"]]
+        L += ["win_ld_%s macro" % nm, "            move.%s WIN_%s(\\1),\\2" % (s, nm.upper()), "            endm",
+              "win_st_%s macro" % nm, "            move.%s \\2,WIN_%s(\\1)" % (s, nm.upper()), "            endm"]
     return "\n".join(L) + "\n", ents, None, esz * plat["capacity"]
 
 
@@ -297,20 +338,8 @@ def emit_c(model, name, plat):
     L += ["", "/* z-order relation accessors */",
           "static inline uint8_t win_z_at(int rank){ return wz_list[rank]; }",
           "static inline void    win_z_set(int rank, uint8_t handle){ wz_list[rank]=handle; }",
-          "",
-          "/* --- portable L2 policy: WRITE-ONCE, touches data only via accessors --- */",
-          "/* hit-test (z-top first); identical source on every C-capable platform. */",
-          "static inline int win_hit(int i, %s px, %s py){"
-          % (CTYPE[col_width({'kind':'coord'}, plat)], CTYPE[col_width({'kind':'coord'}, plat)]),
-          "    return px >= win_get_x(i) && px < win_get_x(i) + win_get_w(i)",
-          "        && py >= win_get_y(i) && py < win_get_y(i) + win_get_h(i);",
-          "}",
-          "/* reap: free exactly the windows a dead task owned (invariant: reap). */",
-          "static inline void win_reap(uint8_t dead_owner){",
-          "    for (int i = 0; i < WIN_CAP; i++)",
-          "        if (win_get_state(i) && win_get_owner(i) == dead_owner)",
-          "            win_set_state(i, 0);",
-          "}", ""]
+          ""]
+    L += c_policy(plat)
     return "\n".join(L), cols, zcol, total
 
 
@@ -372,32 +401,43 @@ def main():
 
     for name, plat in plats.items():
         dialect, lay = plat["dialect"], plat.get("layout", "soa")
-        if dialect == "c" and lay == "aos":
-            text, ents, esz = emit_c_aos(model, name, plat)
-            write(name, "window.h", text)
-            write(name, "window_storage.c", emit_c_aos.storage)
-            cols, total = ents, esz * plat["capacity"]
-        elif dialect == "c":
-            text, cols, zcol, total = emit_c(model, name, plat)
-            write(name, "window.h", text)
-            write(name, "window_storage.c", emit_c.storage)
-        elif dialect == "dasm":
-            text, cols, zcol, total = emit_dasm(model, name, plat)
-            write(name, "window.inc", text)
-        elif dialect == "vasm":
-            text, cols, zcol, total = emit_vasm(model, name, plat)
-            write(name, "window.i", text)
-        elif dialect == "ca65":
-            text, cols, zcol, total = emit_ca65_aos(model, name, plat)
-            write(name, "window.inc", text)
+        spec = plat.get("spec_only", False)
+        # Compute the derived layout numbers for EVERY platform (the spec table);
+        # emit dialect files only for non-spec platforms (avoids redundant near-
+        # identical C headers for the architecture survey).
+        if lay == "aos":
+            cols, total = layout_aos(model, plat)[1], layout_aos(model, plat)[2] * plat["capacity"]
         else:
-            print("  skip %s (dialect %s not in this prototype)" % (name, dialect))
-            continue
-        widths = " ".join("%s:u%d" % (c["name"], c["width"] * 8) for c in cols)
-        summary.append((name, lay, plat["coord_space"], plat["capacity"], total, widths))
-    print("\n  derived layouts (same logical model, different physical shape):")
-    for n, lay, cs, cap, total, widths in summary:
-        print("    %-6s %-3s coords=%-6s cap=%-3d table=%4d B   %s" % (n, lay, cs, cap, total, widths))
+            cols, total = layout(model, plat)[1], layout(model, plat)[3]
+        if not spec:
+            if dialect == "c" and lay == "aos":
+                text, _, esz = emit_c_aos(model, name, plat)
+                write(name, "window.h", text); write(name, "window_storage.c", emit_c_aos.storage)
+            elif dialect == "c":
+                text = emit_c(model, name, plat)[0]
+                write(name, "window.h", text); write(name, "window_storage.c", emit_c.storage)
+            elif dialect == "dasm":
+                write(name, "window.inc", emit_dasm(model, name, plat)[0])
+            elif dialect == "vasm":
+                write(name, "window.i", emit_vasm(model, name, plat)[0])
+            elif dialect == "ca65":
+                write(name, "window.inc", emit_ca65_aos(model, name, plat)[0])
+            else:
+                print("  skip %s (dialect %s not in this prototype)" % (name, dialect)); continue
+        summary.append((name, plat.get("cpu", "?"), lay, dialect, plat.get("word_bits", 0),
+                        plat.get("ptr_bits", 0), plat.get("endian", "le"),
+                        plat["coord_space"], plat["capacity"], total, spec))
+
+    # Consolidated architecture spec — one artifact for the whole survey.
+    hdr = "%-9s %-8s %-3s %-6s %3s %3s %3s %-6s %4s %6s  %s" % (
+        "platform", "cpu", "lay", "dialect", "wrd", "ptr", "end", "coords", "cap", "table", "")
+    lines = [hdr, "-" * len(hdr)]
+    for n, cpu, lay, dia, wb, pb, en, cs, cap, total, spec in summary:
+        lines.append("%-9s %-8s %-3s %-6s %3d %3d %3s %-6s %4d %5dB  %s" %
+                     (n, cpu, lay, dia, wb, pb, en, cs, cap, total, "(spec)" if spec else "wired/built"))
+    write("", "ARCHITECTURES.txt", "UnoDOS window model — per-architecture derived layouts (one logical model).\n\n"
+          + "\n".join(lines) + "\n")
+    print("\n" + "\n".join(lines))
 
 
 if __name__ == "__main__":
