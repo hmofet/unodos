@@ -7,6 +7,10 @@
 *.py text eol=lf
 *.asm text eol=lf
 
+# Generated contract surfaces (unogen emits LF); pin so regeneration on a
+# Windows checkout with autocrlf=true doesn't churn their line endings.
+unodef/gen/** text eol=lf
+
 # Windows scripts keep Windows endings
 *.ps1 text eol=crlf
 *.bat text eol=crlf
