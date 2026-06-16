@@ -190,3 +190,14 @@ density when touching one field across many windows — none of which a 6-window
 **keep AoS for the micro ports (it's optimal there) and use SoA as the floor for
 the C/big-machine targets where its ceiling matters.** Each platform gets its
 optimal layout from one logical model — which is the whole point.
+
+## x86 wired + QEMU-verified + real-hardware image
+The x86 reference port now also sources its window **index→address arithmetic**
+from the wmodel (`[wmodel.platform.x86nasm]` → `win_entry_addr` macro; 38 inline
+`SHL_N reg,5 + add reg,window_table` sites replaced). Proven **byte-identical**
+(HEAD vs working with the same build_info.inc → `e433e02b…`). **QEMU-verified**
+(`qemu-system-i386`): boots to the desktop, opens the Sys Info window, launches
+Clock — the WM works. **All six windowing ports** now consume the wmodel for
+window addressing. Real-hardware boot guide: `docs/RUN-X86-REAL-HARDWARE.md`
+(image: `build/unodos-144.img`). The window-entry *layout* still uses the shipping
+`[struct] win_entry` (32 B); the greenfield clean layout is the future 3.1 break.
