@@ -258,6 +258,35 @@ def emit_ca65_aos(model, name, plat):
 
 
 # ---------------------------------------------------------------------------
+# x86 / NASM world, AoS layout: emit a win_entry_addr macro (handle reg -> entry
+# address) single-sourcing the stride + base the kernel hand-wrote. Uses an
+# explicit entry_size override (the shipping x86 win_entry is 32B). The kernel's
+# field offsets keep coming from the Contract's [struct] win_entry; this wires the
+# index->address arithmetic, matching the other 5 ports. NASM %macro takes the
+# handle register as its argument.
+# ---------------------------------------------------------------------------
+def emit_nasm_aos(model, name, plat):
+    ents, esz = layout_aos(model, plat)[1], plat.get("entry_size", layout_aos(model, plat)[2])
+    shift = (esz.bit_length() - 1) if (esz & (esz - 1)) == 0 else None
+    if shift is None:
+        raise ValueError("entry size %d is not a power of two" % esz)
+    base = plat.get("entry_base", "window_table")
+    shmac = plat.get("shift_macro", "SHL_N")
+    L = ["; " + BANNER.replace("\n", "\n; "),
+         "; platform: %s — %s, %d-bit, %s coords (max %d), capacity %d, layout=AOS, entry=%dB"
+         % (name, plat["cpu"], plat["word_bits"], plat["coord_space"],
+            plat["coord_max"], plat["capacity"], esz), "",
+         "; win_entry_addr <reg>: reg = window handle -> reg = entry address.",
+         "; Single-sources the stride (%s <reg>,%d = *%d) + base (%s) the kernel hand-wrote."
+         % (shmac, shift, esz, base),
+         "%macro win_entry_addr 1",
+         "    %s %%1, %d" % (shmac, shift),
+         "    add %%1, %s" % base,
+         "%endmacro"]
+    return "\n".join(L) + "\n", ents, None, esz * plat["capacity"]
+
+
+# ---------------------------------------------------------------------------
 # 68000 / vasm world, AoS layout: emit WIN_ENTRY_SIZE + a win_entry_ptr macro
 # (slot index -> entry pointer) that single-sources the index->address arithmetic
 # a 68000 port hand-writes. Used to wire a REAL shipped port byte-identically.
@@ -422,6 +451,8 @@ def main():
                 write(name, "window.i", emit_vasm(model, name, plat)[0])
             elif dialect == "ca65":
                 write(name, "window.inc", emit_ca65_aos(model, name, plat)[0])
+            elif dialect == "nasm":
+                write(name, "window.inc", emit_nasm_aos(model, name, plat)[0])
             else:
                 print("  skip %s (dialect %s not in this prototype)" % (name, dialect)); continue
         summary.append((name, plat.get("cpu", "?"), lay, dialect, plat.get("word_bits", 0),

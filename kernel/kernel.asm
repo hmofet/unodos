@@ -15,6 +15,12 @@ cpu 8086            ; Target CPU: Intel 8088/8086 (PC/XT). Any 186+/386+
 ; The equate blocks and FAT12 literals below that these symbols replace were
 ; hand-maintained; they are now single-sourced here (CONTRACT-ARCH §3.2, Phase 1).
 %include "unodef/gen/x86/unodef.inc"
+; Greenfield window model (WMODEL.md): window index->address arithmetic derived
+; from the logical [wmodel] by wmgen for [wmodel.platform.x86nasm] — provides the
+; win_entry_addr macro (handle reg -> entry addr; SHL_N reg,5 + add window_table).
+; Byte-identical to the inline arithmetic it replaces. Field offsets continue from
+; the Contract's [struct] win_entry above.
+%include "unodef/gen/wm/x86nasm/window.inc"
 
 ; ============================================================================
 ; Signature and Entry Point
@@ -349,8 +355,7 @@ int_80_handler:
     xor ah, ah
     mov al, [draw_context]
     mov si, ax
-    SHL_N si, 5; SI = handle * 32
-    add si, window_table
+    win_entry_addr si
 
     ; Content scaling: double app coordinates for auto-scaled windows
     cmp byte [si + WIN_OFF_CONTENT_SCALE], 2
@@ -462,8 +467,7 @@ int_80_handler:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     ; Scale second endpoint if content_scale=2
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
     jne .line_no_scale
@@ -1954,8 +1958,7 @@ win_begin_draw:
     push si
     mov bl, al
     xor bh, bh
-    SHL_N bx, 5; BX = handle * 32
-    add bx, window_table
+    win_entry_addr bx
     mov si, bx
     ; clip_x1 = win_x + 1
     mov bx, [si + WIN_OFF_X]
@@ -4518,8 +4521,7 @@ mouse_hittest_titlebar:
 
     ; Step 2: Check if click is in that window's TITLE BAR specifically
     mov ax, bp
-    SHL_N ax, 5
-    add ax, window_table
+    win_entry_addr ax
     mov di, ax
 
     ; Skip titlebar check for frameless windows
@@ -4695,8 +4697,7 @@ mouse_drag_update:
     push si
     xor ah, ah
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     mov bx, [si + WIN_OFF_X]
     add bx, [si + WIN_OFF_WIDTH]
     sub bx, 12                      ; BX = left edge of close button zone
@@ -4744,8 +4745,7 @@ mouse_drag_update:
     ; Calculate grab offset = mouse_pos - window_pos
     xor ah, ah
     mov bx, ax
-    SHL_N bx, 5; BX = handle * 32
-    add bx, window_table
+    win_entry_addr bx
 
     mov ax, [mouse_x]
     sub ax, [bx + WIN_OFF_X]
@@ -4775,8 +4775,7 @@ mouse_drag_update:
     ; Read current window dimensions
     xor ah, ah
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_WIDTH]
     mov [resize_start_w], ax
     mov [resize_target_w], ax
@@ -4813,8 +4812,7 @@ mouse_drag_update:
     xor ah, ah
     mov al, [drag_window]
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov dx, [bx + WIN_OFF_WIDTH]    ; DX = window width
 
     mov ax, [mouse_x]
@@ -4862,8 +4860,7 @@ mouse_drag_update:
     xor ah, ah
     mov al, [resize_window]
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
 
     ; Calculate resize target = start_dim + (mouse - start_mouse)
     mov ax, [mouse_x]
@@ -5045,8 +5042,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     cmp byte [si + WIN_OFF_ZORDER], 15
     je .focus_already_top           ; Already focused, just redraw frame
 
@@ -5059,8 +5055,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
 
     mov bx, [si + WIN_OFF_X]
     mov cx, [si + WIN_OFF_Y]
@@ -5114,8 +5109,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [close_kill_window]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .close_kill_done            ; Window already gone
     mov al, [si + WIN_OFF_OWNER]
@@ -5200,8 +5194,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     mov dx, [si + WIN_OFF_WIDTH]
     mov [drag_outline_w], dx
     mov si, [si + WIN_OFF_HEIGHT]
@@ -5262,8 +5255,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [resize_window]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     mov bx, [di + WIN_OFF_X]
     mov cx, [di + WIN_OFF_Y]
     mov [drag_outline_x], bx
@@ -5304,8 +5296,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [resize_window]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     mov dx, [resize_finish_w]
     cmp dx, [di + WIN_OFF_WIDTH]
     jne .do_resize
@@ -5363,8 +5354,7 @@ mouse_process_drag:
     xor ah, ah
     mov al, [drag_window]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     mov bx, [drag_finish_x]
     cmp bx, [si + WIN_OFF_X]
     jne .do_final_move
@@ -5947,8 +5937,7 @@ file_dialog_open:
     push bx
     xor ah, ah
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
     pop bx
 
@@ -6083,8 +6072,7 @@ file_dialog_open:
     ; Get content area origin from window table
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax                              ; +1 border
     mov si, ax                          ; SI = content_x
@@ -6339,8 +6327,7 @@ fdlg_draw_full:
     ; Calculate content area origin from window table
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax                              ; +1 border
     mov [fdlg_cx], ax
@@ -6638,8 +6625,7 @@ file_dialog_save:
     push bx
     xor ah, ah
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov byte [bx + WIN_OFF_CONTENT_SCALE], 1
     pop bx
 
@@ -6786,8 +6772,7 @@ file_dialog_save:
     ; Get content area origin
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax
     mov si, ax                              ; SI = content_x
@@ -6991,8 +6976,7 @@ file_dialog_save:
     ; Get content area origin
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax
     mov si, ax                              ; SI = content_x
@@ -7089,8 +7073,7 @@ sdlg_draw_full:
     ; Calculate content area origin
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax
     mov [fdlg_cx], ax
@@ -7388,8 +7371,7 @@ sdlg_draw_tf:
 
     mov bl, [fdlg_handle]
     xor bh, bh
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     mov ax, [bx + WIN_OFF_X]
     inc ax
     mov [fdlg_cx], ax
@@ -7912,8 +7894,7 @@ widget_scrollbar_hit:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     ; Content scaling
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
     jne .sbh_no_scale
@@ -8289,8 +8270,7 @@ gfx_blit_rect:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     ; Translate dest (BX,CX)
     add bx, [di + WIN_OFF_X]
     inc bx
@@ -10340,8 +10320,7 @@ widget_hit_test:
     xor ah, ah
     mov al, [draw_context]
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
     ; Content scaling: double coordinates for auto-scaled windows
     cmp byte [di + WIN_OFF_CONTENT_SCALE], 2
     jne .ht_no_scale
@@ -17131,8 +17110,7 @@ win_create_stub:
     cmp bp, WIN_MAX_COUNT
     jae .no_slot
     mov bx, bp
-    SHL_N bx, 5; BX = slot * 32
-    add bx, window_table
+    win_entry_addr bx
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .found_slot
     inc bp
@@ -18386,8 +18364,7 @@ redraw_affected_windows:
     xor ax, ax
     mov al, [topmost_handle]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     cmp byte [si + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .topmost_done
 
@@ -18505,8 +18482,7 @@ win_destroy_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
 
     ; Check if window exists
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
@@ -19643,8 +19619,7 @@ win_draw_stub:
     pop ax
 
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
 
     ; Check if window is visible
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
@@ -20013,8 +19988,7 @@ win_focus_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
@@ -20171,8 +20145,7 @@ win_move_stub:
     mov bx, 0x1000
     mov ds, bx
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
 
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
@@ -20403,8 +20376,7 @@ win_get_content_stub:
     mov di, 0x1000
     mov ds, di
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
 
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_FREE
     je .invalid
@@ -21586,8 +21558,7 @@ win_resize_stub:
 
     ; Get window entry
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
 
     ; Check if window is visible
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_VISIBLE
@@ -21698,8 +21669,7 @@ win_get_info_stub:
 
     ; Get window entry
     mov di, ax
-    SHL_N di, 5
-    add di, window_table
+    win_entry_addr di
 
     ; Check if entry is used
     cmp byte [di + WIN_OFF_STATE], WIN_STATE_FREE
@@ -21751,8 +21721,7 @@ win_get_content_scale:
     xor ah, ah
     mov al, [draw_context]
     mov si, ax
-    SHL_N si, 5
-    add si, window_table
+    win_entry_addr si
     mov al, [si + WIN_OFF_CONTENT_SCALE]
     pop si
     clc
@@ -21779,8 +21748,7 @@ win_get_content_size:
     push bx
     xor ah, ah
     mov bx, ax
-    SHL_N bx, 5
-    add bx, window_table
+    win_entry_addr bx
     cmp byte [bx + WIN_OFF_STATE], WIN_STATE_VISIBLE
     jne .wgcs_invalid_pop
     ; content_w = win_w - 4 (1px border each side + 1px padding each side)

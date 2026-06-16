@@ -19,4 +19,5 @@ mips      mips     soa c       32  32  be pixels   64  1088B  (spec)
 ppc       powerpc  soa c       32  32  be pixels   64  1088B  (spec)
 riscv     riscv64  soa c       64  64  le pixels  256  5376B  (spec)
 sh4       sh4      soa c       32  32  le pixels   64  1088B  (spec)
+x86nasm   x86      aos nasm    16  16  le pixels   16   224B  wired/built
 

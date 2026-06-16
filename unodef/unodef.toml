@@ -2008,3 +2008,18 @@ coord_max = 7680
 capacity = 64
 layout = "soa"
 spec_only = true
+
+[wmodel.platform.x86nasm]  # WIRED to kernel/kernel.asm (window index->address arithmetic)
+cpu = "x86"
+dialect = "nasm"
+word_bits = 16
+ptr_bits = 16
+endian = "le"
+coord_space = "pixels"
+coord_max = 320
+capacity = 16
+layout = "aos"
+entry_size = 32            # shipping x86 win_entry is 32B (stride = shl 5)
+entry_base = "window_table"
+shift_macro = "SHL_N"
+spec_only = false
