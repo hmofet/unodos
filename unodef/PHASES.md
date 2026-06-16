@@ -10,7 +10,7 @@ environment. **Blocked** = needs a toolchain/emulator/hardware not reachable her
 | 1 | unogen MVP + trust anchor | ✅ host-proven — x86 kernel **byte-identical**; FAT12 "five places" (kernel+boot+stage2+2 tools) all single-sourced |
 | 2 | Executable conformance | ✅ host-proven — `conformance.py` 29/29, discrimination vs historical bugs |
 | 3 | `unofs` worked example | ✅ host-proven — reads the real floppy byte-identical; write/reap round-trip |
-| 4 | Asm consumption | ✅ host-proven — **Amiga 68K byte-identical** via `[world.amiga]` equates |
+| 4 | Asm consumption | ✅ host-proven — **Amiga 68K (vasm)** + **SNES 65816 (ca65)** byte-identical via per-world equates; 6502/dasm ports lack a clean equate seam (deeper refactor, deferred) |
 | 5 | Hybrid policy pilot | ◐ partial — `unofs_core` compiles freestanding-strict (portable); vbcc+trackdisk+WinUAE blocked |
 | 6 | `uno2d` tall vtable | ✅ host-proven — accel backend **pixel-identical** to the software floor; renders PPM |
 | 7 | Concurrency floor + host SMP/TSan | ✅ host-proven — COOP==SMP==expected; guarded **TSan-clean**; race **caught** (`setarch -R`) |
