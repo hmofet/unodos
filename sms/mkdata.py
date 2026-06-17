@@ -144,6 +144,13 @@ CURSOR_BASE = len(tiles)
 tiles.append(("cursor top",    planar(arows[:8])))
 tiles.append(("cursor bottom", planar(arows[8:])))
 
+# ---------------- game block solids (for Dostris) -------------------------------
+# Extra solid tiles for palette indices the UI solids don't already cover.
+GAME_SOLID_BASE = len(tiles)
+GAME_SOLID_IDX = [8, 9, 7, 10]   # green, yellow, red, orange
+for idx in GAME_SOLID_IDX:
+    tiles.append((f"solid idx{idx}", planar([[idx] * 8] * 8)))
+
 # ---------------- palette (CRAM bg entries 0..15) --------------------------------
 # SMS colour = %00BBGGRR; 2 bits per channel (0..3).
 def rgb(r, g, b):
@@ -156,7 +163,41 @@ PALETTE = [
     rgb(2, 0, 2),   # 4 magenta (accent2)
     rgb(0, 0, 0),   # 5 black
     rgb(1, 1, 1),   # 6 dark gray
-] + [0] * 9
+    rgb(3, 0, 0),   # 7 red    (game)
+    rgb(0, 3, 0),   # 8 green  (game)
+    rgb(3, 3, 0),   # 9 yellow (game)
+    rgb(3, 1, 0),   # 10 orange (game)
+] + [0] * 5
+
+# ---------------- Dostris tetromino tables --------------------------------------
+# Each piece = 4 rotations, each a 4x4 grid (bit15 = row0/col0, scanning L->R,
+# T->B). Emitted as 28 words. Each piece also carries a board-cell tile.
+PIECES = {
+    "I": ["....", "####", "....", "...."],
+    "O": [".##.", ".##.", "....", "...."],
+    "T": [".#..", "###.", "....", "...."],
+    "S": [".##.", "##..", "....", "...."],
+    "Z": ["##..", ".##.", "....", "...."],
+    "J": ["#...", "###.", "....", "...."],
+    "L": ["..#.", "###.", "....", "...."],
+}
+def rot90(grid):
+    # rotate a 4x4 grid clockwise
+    return ["".join(grid[3 - c][r] for c in range(4)) for r in range(4)]
+def mask(grid):
+    m = 0
+    for r in range(4):
+        for c in range(4):
+            if grid[r][c] == "#":
+                m |= 1 << (15 - (r * 4 + c))
+    return m
+piece_order = ["I", "O", "T", "S", "Z", "J", "L"]
+piece_masks = []      # 7*4 words
+for p in piece_order:
+    g = PIECES[p]
+    for _ in range(4):
+        piece_masks.append(mask(g))
+        g = rot90(g)
 
 # ---------------- emit ------------------------------------------------------------
 def tilebytes(b):
@@ -187,13 +228,30 @@ with open(OUT, "w", newline="\n") as f:
     f.write(f"T_CORNBR      EQU {FRAME_BASE+4}\n")
     f.write(f"T_ICONS       EQU {ICON_BASE}  ; 4 tiles per icon\n")
     f.write(f"NICONS        EQU {NICONS}\n")
-    f.write(f"T_CURSOR      EQU {CURSOR_BASE}  ; 8x16 sprite (sprite pattern base $0000)\n\n")
+    f.write(f"T_CURSOR      EQU {CURSOR_BASE}  ; 8x16 sprite (sprite pattern base $0000)\n")
+    # game block solids: GAME_SOLID_BASE+0..3 = idx 8(green),9(yellow),7(red),10(orange)
+    T_SGREEN  = GAME_SOLID_BASE
+    T_SYELLOW = GAME_SOLID_BASE + 1
+    T_SRED    = GAME_SOLID_BASE + 2
+    T_SORANGE = GAME_SOLID_BASE + 3
+    f.write(f"T_SGREEN      EQU {T_SGREEN}\n")
+    f.write(f"T_SYELLOW     EQU {T_SYELLOW}\n")
+    f.write(f"T_SRED        EQU {T_SRED}\n")
+    f.write(f"T_SORANGE     EQU {T_SORANGE}\n\n")
     f.write("; 4bpp planar tile blob, uploaded contiguously to VRAM tile 0\n")
     f.write("tiles_all:\n")
     for comment, b in tiles:
         f.write(f"    ; tile - {comment}\n{tilebytes(b)}\n")
     f.write("\n; CRAM background palette (16 entries; also copied to the sprite palette)\n")
     f.write("palette:\n    db " + ",".join(f"${v:02X}" for v in PALETTE) + "\n")
+    # Dostris tables: I O T S Z J L
+    piece_tiles = [T_SOLC, T_SYELLOW, T_SOLM, T_SGREEN, T_SRED, T_SOLW, T_SORANGE]
+    f.write("\n; Dostris: 7 pieces x 4 rotations, each a 4x4 bitmask (bit15=row0col0)\n")
+    f.write("piece_masks:\n")
+    for i, p in enumerate(piece_order):
+        f.write("    dw " + ",".join(f"${piece_masks[i*4+r]:04X}" for r in range(4))
+                + f"   ; {p}\n")
+    f.write("piece_tiles:\n    db " + ",".join(str(t) for t in piece_tiles) + "\n")
 
 print(f"wrote {OUT}: {len(tiles)} tiles ({len(tiles)*32} bytes), {NICONS} icons, "
-      f"cursor@{CURSOR_BASE}")
+      f"cursor@{CURSOR_BASE}, game solids@{GAME_SOLID_BASE}")
