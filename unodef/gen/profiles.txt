@@ -9,6 +9,9 @@ port nes          profile=minimal    caps=[DIRNAV]
 port gb           profile=minimal    caps=[DIRNAV]
     requires: (none)
     surface primary  160x144 role=PRIMARY
+port gg           profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  160x144 role=PRIMARY
 port ds           profile=windowed   caps=[TOUCH,SMP]
     requires: wm, mouse_or_dirnav, fs
     surface top      256x192 role=PRIMARY

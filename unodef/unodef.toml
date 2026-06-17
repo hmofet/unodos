@@ -1332,6 +1332,17 @@ h = 144
 depth = 2
 role = "PRIMARY"
 
+[port.gg]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 8192
+[[port.gg.surface]]
+id = "primary"
+w = 160
+h = 144
+depth = 4
+role = "PRIMARY"
+
 # Dual-screen example: DS is `windowed` with two surfaces + touch.
 [port.ds]
 profile = "windowed"
@@ -1783,6 +1794,20 @@ sym = "SCRCOLS"
 val = 20
 note = "visible tile map width (160px / 8)"
 [[world.gb.equate]]
+sym = "SCRROWS"
+val = 18
+note = "visible tile map height (144px / 8)"
+
+[world.gg]
+description = "Sega Game Gear (Z80 + 315-5124 VDP) bare-metal; sjasmplus; MINIMAL profile, 160x144 visible LCD (centre 20x18 of the 32x28 Mode-4 map)"
+cpu = "z80"
+emit = "gg/sys_gen.inc"
+note = "fourth fresh contract-driven port: SMS silicon (Z80 + VDP, reuses gen/z80/ like the SMS port) but the GB's 160x144 minimal layout — the LCD shows only the centre 20x18 of the 256x192 frame, so it is MINIMAL not windowed. The genuine Contract overlap is the visible tile geometry; symbol names are the port's own (SCRCOLS/SCRROWS)."
+[[world.gg.equate]]
+sym = "SCRCOLS"
+val = 20
+note = "visible tile map width (160px / 8)"
+[[world.gg.equate]]
 sym = "SCRROWS"
 val = 18
 note = "visible tile map height (144px / 8)"
