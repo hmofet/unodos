@@ -1,6 +1,7 @@
 build/*
 !build/unodos.gb
 !build/desktop.png
+!build/dmg.png
 !build/nav.png
 !build/app.png
 !build/clock.png

@@ -18,7 +18,9 @@ drives the *same* `$FF00` joypad path, nothing faked (`build/*.png`):
   shared 8×8 font + the x86 icon donors (and 8×8 mini-icons) baked into the ROM and
   uploaded to VRAM, the inverted **"UnoDOS 3"** title bar + the labelled mini-icon
   list (SysInfo · Clock · Notepad · Music · Files · Theme · Tracker · Dostris ·
-  OutLast · Pac-Man · Paint).
+  OutLast · Pac-Man · Paint). The same ROM is verified in **both** modes — colour on
+  GBC (`build/desktop.png`) and 4-grey on DMG (`build/dmg.png`, Mesen forced to the
+  original Game Boy model).
 - **M2 — directional navigation** (`build/nav.png`): the joypad on `$FF00` (select
   d-pad / buttons, read the low nibble), a vblank-interrupt per-frame loop, an
   Up/Down SELECTION highlight (the selected item's label inverts), **A** launches the
