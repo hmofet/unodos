@@ -16,7 +16,8 @@ which family a platform is in:
   x86 PC, x86 8088/XT.
 - **Native asm per-CPU — bare-metal reimplementations** (each its own assembly,
   sharing no code): Amiga, MacPlus-OS, Genesis, Apple II, C64 (6510),
-  SNES (65816), IIGS (65816).
+  SNES (65816), IIGS (65816), SMS (Z80), NES (6502/2A03). *(SMS and NES are the
+  two ports built fresh on the 3.1 Contract — see below.)*
 - **Portable C core — shared `unodos.c`** (one ~52 KB core + a thin per-platform
   backend): Mac System 7, Mac System 1–6, PS2, Dreamcast.
 
@@ -37,6 +38,13 @@ which family a platform is in:
 | **Super Nintendo** | 65816 @3.58 / 128 KB | 65816 asm, bare-metal LoROM, shadow+DMA | WRAM tilemap shadow → VRAM DMA (NMI) | **built into ROM** → in-ROM table | Battery SRAM mini-FS | M0–M3; Mesen2 |
 | **Apple IIGS** | 65C816 @2.8 / 256 KB–8 MB | 65816 asm, bare-metal ProDOS/SmartPort boot | 4 bpp Super Hi-Res SW | 8 `.APP` from FAT12/SmartPort → bank-0 slots, **JMP vectors**, multi-resident; **windowed** | FAT12 over SmartPort | M0–M3; py65816 |
 | **Commodore 64** | 6510 @1 MHz / 64 KB | 6510 asm, bare-metal PRG (`SYS 2061`) | VIC-II hi-res bitmap, per-cell color | disk-loaded to `$5000` via `$DE00`, **`mkapi.py` addresses**; **full-screen, one-at-a-time** | USV1 byte-heap on `.d64` | M1–M3; py65 |
+| **Sega Master System** *(3.1-fresh)* | Z80 @3.58 / 8 KB | Z80 asm, bare-metal cartridge, sjasmplus | VDP Mode-4 tile nametable, HW-sprite cursor | **built into ROM** → in-ROM table; **windowed** | *(none — cart ROM)* | M1–M3 + game + audio; BlastEm |
+| **Nintendo NES** *(3.1-fresh)* | 6502/2A03 @1.79 / **2 KB** | 6502 asm, bare-metal iNES NROM, dasm | PPU tile nametable, patterns in CHR-ROM | **built into ROM** → directional launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1 launcher; Mesen2 |
+
+The last two rows are the **3.1-fresh** ports — written from scratch against the
+Contract (`unodef/`), not migrated. SMS adds a fourth bare-metal asm CPU family
+(Z80) reusing `gen/z80/`; NES is the Contract's `minimal`-profile flagship (2 KB)
+reusing the 6502 `gen/6502/` world.
 
 Two orthogonal axes cut across the families and explain most of the remaining
 variation:
