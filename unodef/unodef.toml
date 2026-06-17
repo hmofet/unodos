@@ -1343,6 +1343,28 @@ h = 144
 depth = 4
 role = "PRIMARY"
 
+[port.gba]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 262144
+[[port.gba.surface]]
+id = "primary"
+w = 240
+h = 160
+depth = 16
+role = "PRIMARY"
+
+[port.pce]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 8192
+[[port.pce.surface]]
+id = "primary"
+w = 256
+h = 224
+depth = 4
+role = "PRIMARY"
+
 # Dual-screen example: DS is `windowed` with two surfaces + touch.
 [port.ds]
 profile = "windowed"
@@ -1811,6 +1833,42 @@ note = "visible tile map width (160px / 8)"
 sym = "SCRROWS"
 val = 18
 note = "visible tile map height (144px / 8)"
+
+[world.gba]
+description = "Nintendo Game Boy Advance (ARM7TDMI) bare-metal; GNU as; MINIMAL profile, 240x160 Mode-3 16bpp framebuffer (software-composited cells)"
+cpu = "arm"
+emit = "gba/sys_gen.inc"
+note = "fifth fresh contract-driven port + the FIRST ARM (32-bit RISC) world. The GBA hardware exceeds the minimal profile, but this is a MINIMAL UnoDOS instance (one full-screen app, directional nav) drawn into a flat Mode-3 framebuffer. Geometry is the genuine Contract overlap; pixel + cell dims are the port's own."
+[[world.gba.equate]]
+sym = "SCRW"
+val = 240
+note = "framebuffer width (px)"
+[[world.gba.equate]]
+sym = "SCRH"
+val = 160
+note = "framebuffer height (px)"
+[[world.gba.equate]]
+sym = "SCRCOLS"
+val = 30
+note = "text columns (240px / 8)"
+[[world.gba.equate]]
+sym = "SCRROWS"
+val = 20
+note = "text rows (160px / 8)"
+
+[world.pce]
+description = "NEC PC Engine / TurboGrafx-16 (HuC6280 + HuC6270 VDC) bare-metal; ca65; MINIMAL profile, 256x224 (32x28 BAT cells)"
+cpu = "huc6280"
+emit = "pce/sys_gen.inc"
+note = "sixth fresh contract-driven port + the FIRST HuC6280 world (a 65C02 superset; ca65 --cpu huc6280). MINIMAL: one full-screen app, directional nav, drawn on the VDC background map. Geometry is the genuine Contract overlap; symbol names are the port's own."
+[[world.pce.equate]]
+sym = "SCRCOLS"
+val = 32
+note = "BAT width in tiles (256px / 8)"
+[[world.pce.equate]]
+sym = "SCRROWS"
+val = 28
+note = "visible height in tiles (224px / 8)"
 
 
 [world.sms]

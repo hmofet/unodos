@@ -1,0 +1,9 @@
+build/*
+!build/unodos.gba
+!build/desktop.png
+!build/nav.png
+!build/app.png
+!build/clock.png
+!build/dostris.png
+!build/theme.png
+!build/music.png
