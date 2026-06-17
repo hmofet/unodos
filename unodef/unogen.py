@@ -425,7 +425,7 @@ def render_world_equates(d, world):
     generation is byte-identical to the hand-maintained block it replaces."""
     w = d["world"][world]
     dia = {"m68k": VASM, "65816": CA65, "6502": DASM, "z80": Z80, "gbz80": GBZ80,
-           "arm": GAS, "huc6280": CA65}.get(w.get("cpu"), VASM)
+           "arm": GAS, "huc6280": CA65, "v30mz": NASM}.get(w.get("cpu"), VASM)
     out = [dia.c(BANNER[0]), dia.c(BANNER[1]),
            dia.c("world: %s — %s" % (world, w.get("description", ""))), ""]
     if w.get("note"):

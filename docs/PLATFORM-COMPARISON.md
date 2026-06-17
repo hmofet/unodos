@@ -17,8 +17,9 @@ which family a platform is in:
 - **Native asm per-CPU — bare-metal reimplementations** (each its own assembly,
   sharing no code): Amiga, MacPlus-OS, Genesis, Apple II, C64 (6510),
   SNES (65816), IIGS (65816), SMS (Z80), NES (6502/2A03), Game Boy (Sharp SM83),
-  Game Gear (Z80). *(SMS, NES, Game Boy, and Game Gear are the four ports built fresh
-  on the 3.1 Contract — see below.)*
+  Game Gear (Z80), Game Boy Advance (ARM7TDMI), VIC-20 (6502), WonderSwan (V30MZ).
+  *(SMS, NES, Game Boy, Game Gear, GBA, VIC-20, and WonderSwan are the seven ports
+  built fresh on the 3.1 Contract — see below.)*
 - **Portable C core — shared `unodos.c`** (one ~52 KB core + a thin per-platform
   backend): Mac System 7, Mac System 1–6, PS2, Dreamcast.
 
@@ -43,13 +44,22 @@ which family a platform is in:
 | **Nintendo NES** *(3.1-fresh)* | 6502/2A03 @1.79 / **2 KB** | 6502 asm, bare-metal iNES NROM, dasm | PPU tile nametable, patterns in CHR-ROM | **built into ROM** → directional launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Mesen2 |
 | **Game Boy / Color** *(3.1-fresh)* | Sharp SM83 @4.19 / **8 KB** | SM83 asm, bare-metal 32K ROM, **rgbds** | BG tile map, tiles uploaded to VRAM; DMG greys / GBC palette | **built into ROM** → vertical-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Mesen2/GBC |
 | **Sega Game Gear** *(3.1-fresh)* | Z80 @3.58 / **8 KB** | Z80 asm, bare-metal 32K ROM, **sjasmplus** | 315-5124 VDP (SMS silicon), centre 160×144 visible; 12-bit CRAM | **built into ROM** → vertical-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + PSG; Mesen2/GG |
+| **Game Boy Advance** *(3.1-fresh)* | ARM7TDMI @16.78 / 256 KB+32 KB | ARM asm, bare-metal 0x08000000 ROM, **GNU as** | Mode-3 16bpp SW framebuffer (no HW tiles); palette-index font/icons | **built into ROM** → vertical-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Unicorn ARM |
+| **Commodore VIC-20** *(3.1-fresh)* | 6502 @1.02 / **+8 KB** | 6502 asm, bare-metal `.prg` (`SYS`), **dasm** | VIC 22×23 char matrix, custom charset at `$3000`, per-cell colour | **built into ROM** → character-cell list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + VIC tone; py65 |
+| **Bandai WonderSwan** *(3.1-fresh)* | NEC V30MZ @3.07 / **16 KB** | x86 asm, bare-metal 64K ROM (reset vector), **nasm** | SCR1 32×32 tilemap, 8×8 2bpp tiles at `0x2000`, 224×144 mono; palette→shade-pool | **built into ROM** → tile-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + PSG; Unicorn x86 |
 
-The last four rows are the **3.1-fresh** ports — written from scratch against the
+The last seven rows are the **3.1-fresh** ports — written from scratch against the
 Contract (`unodef/`), not migrated. SMS adds a bare-metal Z80 port reusing `gen/z80/`;
 NES is the `minimal`-profile flagship reusing `gen/6502/`; Game Boy is the **first
 Sharp-SM83 (`gbz80`) world** — a genuinely new generator dialect (rgbds) — and runs one
 ROM in both greyscale (DMG) and colour (GBC); Game Gear is `minimal` on SMS silicon,
-reusing the SMS's `gen/z80/` world and code with the GB's 20×18 layout.
+reusing the SMS's `gen/z80/` world and code with the GB's 20×18 layout; **GBA** is the
+**first ARM world** (a new `arm`/GNU-as dialect) drawing a software Mode-3 framebuffer;
+**VIC-20** reuses the `gen/6502/` + dasm path as a character-cell launcher; and
+**WonderSwan** is the **first x86 handheld** (NEC V30MZ ≈ 80186, nasm) on a hardware
+tile engine. The three newest are each verified on a **ROM-free instruction-level
+harness** — Unicorn ARM7TDMI (GBA), py65 (VIC-20), Unicorn x86 (WonderSwan) — running
+the real ROM where a focus-independent emulator capture is impractical under RDP.
 
 Two orthogonal axes cut across the families and explain most of the remaining
 variation:

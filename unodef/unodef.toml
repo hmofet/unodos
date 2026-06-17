@@ -1376,6 +1376,23 @@ h = 184
 depth = 4
 role = "PRIMARY"
 
+# Bandai WonderSwan — the FIRST x86 (NEC V30MZ / 80186) handheld world. The V30MZ
+# is the same instruction family as the kernel's reference x86, so the Contract's
+# x86 surface (gen/x86/) is the genuine overlap; only the geometry equates are the
+# port's own. MINIMAL (CONTRACT-ARCH §9): one full-screen app, directional nav via
+# the d-pad. 16 KB internal RAM holds tile patterns + the 32x32 tilemap; the LCD is
+# 224x144 mono (16 greys), so the visible window is the top-left 28x18 tiles.
+[port.ws]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 16384
+[[port.ws.surface]]
+id = "primary"
+w = 224
+h = 144
+depth = 4
+role = "PRIMARY"
+
 # Dual-screen example: DS is `windowed` with two surfaces + touch.
 [port.ds]
 profile = "windowed"
@@ -1894,6 +1911,20 @@ note = "VIC character columns"
 sym = "SCRROWS"
 val = 23
 note = "VIC character rows"
+
+[world.ws]
+description = "Bandai WonderSwan (NEC V30MZ / 80186) bare-metal; nasm; MINIMAL profile, 224x144 mono LCD (visible 28x18 of the 32x32 tilemap)"
+cpu = "v30mz"
+emit = "ws/sys_gen.inc"
+note = "eighth fresh contract-driven port + the FIRST x86 handheld world. The V30MZ is an 80186-class x86, the same family as the reference kernel, so gen/x86/ is the genuine Contract overlap; only the visible tile geometry is the port's own (SCRCOLS/SCRROWS). MINIMAL (CONTRACT-ARCH §9): one full-screen app, d-pad directional nav, drawn into the 32x32 SCR1 tilemap."
+[[world.ws.equate]]
+sym = "SCRCOLS"
+val = 28
+note = "visible tile columns (224px / 8)"
+[[world.ws.equate]]
+sym = "SCRROWS"
+val = 18
+note = "visible tile rows (144px / 8)"
 
 
 [world.sms]
