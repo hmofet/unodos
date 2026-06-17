@@ -39,9 +39,9 @@ Sega Dreamcast.
 | **Commodore VIC-20** *(3.1-fresh)* | M1–M3 + Dostris + VIC audio (`minimal`, 22×23 char cells) | py65 ROM-free harness (AUTOTEST scripted-joystick) | ⏳ real VIC-20 / VICE pending |
 | **Bandai WonderSwan** *(3.1-fresh)* | M1–M3 + Dostris + sound channel (`minimal`, 224×144 mono tiles) | Unicorn x86/V30MZ core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real WonderSwan + audio-ear pending |
 | **NEC PC Engine** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 256×224 4bpp tiles) | py65+HuC6280 core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real PC Engine + audio-ear pending |
-| **Raspberry Pi** *(3.1-fresh)* | M1–M3 + Dostris + PWM audio (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (ROM-free harness emulating the mailbox + system timer, AUTOTEST scripted-pad) | ⏳ real Pi + USB-HID input + audio-ear pending |
-| **PinePhone** *(3.1-fresh)* | M1–M3 + Dostris (`minimal`, 480×640 portrait 32bpp DE2 FB; audio UI-only) | Unicorn AArch64 core (ROM-free harness; DE2 sink + `cntpct_el0` pacing, AUTOTEST scripted-pad) | ⏳ real PinePhone + touch input + AC200 audio pending |
-| **PowerPC Mac** *(3.1-fresh)* | M1–M3 + Dostris (`minimal`, 640×480 32bpp Open-Firmware FB; audio UI-only) | Unicorn PPC32 big-endian core (ROM-free harness; OF client-interface emulated, AUTOTEST scripted-pad) | ⏳ real PowerPC Mac + ADB input + audio pending |
+| **Raspberry Pi** *(3.1-fresh)* | M1–M3 + Dostris + PWM audio + **PL011 UART input** (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (ROM-free harness emulating the mailbox + system timer + PL011 RX; AUTOTEST + live serial input) | ⏳ real Pi (USB-HID + audio-ear) pending |
+| **PinePhone** *(3.1-fresh)* | M1–M3 + Dostris + **A64 UART input** (`minimal`, 480×640 portrait 32bpp DE2 FB; audio UI-only) | Unicorn AArch64 core (ROM-free harness; DE2 sink + `cntpct_el0` + 16550 RX; AUTOTEST + live serial input) | ⏳ real PinePhone (touch + AC200 audio) pending |
+| **PowerPC Mac** *(3.1-fresh)* | M1–M3 + Dostris + **Open-Firmware keyboard input** (`minimal`, 640×480 32bpp OF FB; audio UI-only) | Unicorn PPC32 big-endian core (ROM-free harness; OF client interface incl. `read`; AUTOTEST + live console input) | ⏳ real Mac (native ADB + audio) pending |
 
 The last eleven are built **fresh on the 3.1 contract-driven architecture** (not
 legacy ports): SMS is a windowed Z80 port; NES is the `minimal`-profile 6502

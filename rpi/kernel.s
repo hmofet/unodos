@@ -30,6 +30,8 @@
 // ---- BCM2837 (Pi 3) peripheral block ---------------------------------------
 .equ PERIPH,        0x3F000000
 .equ SYS_TIMER_CLO, 0x3F003004           // free-running 1MHz counter (low 32)
+.equ UART0_DR,      0x3F201000           // PL011 data register
+.equ UART0_FR,      0x3F201018           // PL011 flag register (bit4 = RXFE)
 .equ MBOX_READ,     0x3F00B880
 .equ MBOX_STATUS,   0x3F00B898
 .equ MBOX_WRITE,    0x3F00B8A0
@@ -251,16 +253,84 @@ wv1:
     b.lo  wv1
     ret
 
-// read_keys: no built-in HID in the minimal profile; keep the pad clear. AUTOTEST
-// builds replace this with the scripted pad (auto_input).
+// read_keys: real input via the PL011 UART serial console (GPIO14/15). Each received
+// byte is one keypress; WASD = d-pad, Enter/Space = A, Backspace/DEL = B. Held state
+// lasts one frame, so nav reads edges and Dostris reads a per-press step. AUTOTEST
+// builds replace this with the scripted pad (auto_input). Leaf.
 read_keys:
 .ifdef AUTOTEST
     b     auto_input
 .endif
+    ldr   x0, =v_pad                      // v_padp = v_pad
+    ldr   w1, [x0]
+    ldr   x2, =v_padp
+    str   w1, [x2]
+    ldr   x3, =UART0_FR
+    ldr   w4, [x3]
+    tst   w4, #0x10                       // RXFE: receive FIFO empty?
+    b.ne  rk_none
+    ldr   x3, =UART0_DR
+    ldr   w4, [x3]
+    and   w4, w4, #0xFF
+    mov   w5, #0
+    cmp   w4, #'w'
+    b.eq  rk_u
+    cmp   w4, #'W'
+    b.eq  rk_u
+    cmp   w4, #'s'
+    b.eq  rk_d
+    cmp   w4, #'S'
+    b.eq  rk_d
+    cmp   w4, #'a'
+    b.eq  rk_l
+    cmp   w4, #'A'
+    b.eq  rk_l
+    cmp   w4, #'d'
+    b.eq  rk_r
+    cmp   w4, #'D'
+    b.eq  rk_r
+    cmp   w4, #0x0D                        // Enter
+    b.eq  rk_a
+    cmp   w4, #' '
+    b.eq  rk_a
+    cmp   w4, #0x08                        // Backspace
+    b.eq  rk_b
+    cmp   w4, #0x7F                        // DEL
+    b.eq  rk_b
+    b     rk_store
+rk_u:
+    mov   w5, #PAD_U
+    b     rk_store
+rk_d:
+    mov   w5, #PAD_D
+    b     rk_store
+rk_l:
+    mov   w5, #PAD_L
+    b     rk_store
+rk_r:
+    mov   w5, #PAD_R
+    b     rk_store
+rk_a:
+    mov   w5, #PAD_A
+    b     rk_store
+rk_b:
+    mov   w5, #PAD_B
+rk_store:
+    ldr   x0, =v_pad
+    str   w5, [x0]
+    b     rk_edge
+rk_none:
     ldr   x0, =v_pad
     str   wzr, [x0]
+rk_edge:
+    ldr   x0, =v_pad
+    ldr   w1, [x0]
+    ldr   x2, =v_padp
+    ldr   w2, [x2]
+    mvn   w2, w2
+    and   w1, w1, w2                       // edges = new & ~prev
     ldr   x0, =v_pade
-    str   wzr, [x0]
+    str   w1, [x0]
     ret
 
 // ============================================================================

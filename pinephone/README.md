@@ -35,10 +35,13 @@ AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is fak
   Files, **Theme** (cycles the 32-bit palette), **Music** (UI + note timeline), and
   **Dostris** — the falling-blocks game in a centred portrait well.
 
-> **Real-hardware input + audio.** The minimal profile ships no touch / power-button
-> driver and does not bring up the AC200 audio codec (a large I2S/AIF effort, unlike
-> the Pi's simple PWM jack); both are future drivers. The milestones are driven by
-> the AUTOTEST scripted pad. Everything emulator-verifiable is verified.
+> **Real input + audio.** The interactive (non-AUTOTEST) build reads a real
+> **A64 UART0 serial console** (16550, on the headphone jack): `WASD` = d-pad,
+> `Enter`/`Space` = A, `Backspace` = B. The harness emulates the 16550 RX, so this
+> path is verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png` —
+> navigation + app launch from injected serial input). The capacitive touch panel is
+> a heavier future driver. The AC200 audio codec (a large I2S/AIF effort, unlike the
+> Pi's simple PWM jack) is also future. Everything emulator-verifiable is verified.
 
 ## Hardware brought up
 
@@ -50,7 +53,7 @@ AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is fak
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word |
 | Timing | ARM generic timer `cntpct_el0` (24 MHz) via `mrs`; `wait_vblank` busy-waits one `FRAME_TICKS` (~60 Hz) |
 | Audio | UI/timeline only; the AC200 codec path is a future driver |
-| Input | AUTOTEST scripted pad (touch / power-button driver = future) |
+| Input | **A64 UART0** serial console (`0x01C28000`, 16550); poll `LSR.DR`, read `RBR`; WASD+Enter+Backspace → pad (touch panel = future) |
 | RAM | DRAM at `0x40000000`: payload `0x40080000`, stack `→0x40200000`, vars `0x40300000`, fb info `0x40320000`, framebuffer `0x40400000` |
 | Boot | flat AArch64 payload at `0x40080000` (the U-Boot `kernel_addr_r`); `_start` parks cores, sets SP, programs DE2 |
 

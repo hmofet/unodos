@@ -36,9 +36,14 @@ pad plays out) and renders the framebuffer to a PNG. Nothing is faked
   Files, **Theme** (cycles the 32-bit palette), **Music** (UI + note timeline), and
   **Dostris** — the falling-blocks game with a 16px-cell well.
 
-> **Real-hardware input + audio.** The minimal profile ships no ADB driver and does
-> not bring up the Mac sound hardware; both are future drivers. The milestones are
-> driven by the AUTOTEST scripted pad. Everything emulator-verifiable is verified.
+> **Real input + audio.** The interactive (non-AUTOTEST) build reads the keyboard
+> through **Open Firmware** — `read(stdin, …)` on the `/chosen` `stdin` instance
+> (reusing the OF client interface): `WASD` = d-pad, `Enter`/`Space` = A,
+> `Backspace` = B. The harness emulates the OF `read` service, so this path is
+> verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png` — navigation +
+> app launch from injected console input). A native ADB-over-CUDA driver is a future
+> refinement. The Mac sound hardware is also a future driver. Everything
+> emulator-verifiable is verified.
 
 ## Hardware / firmware brought up
 
@@ -50,7 +55,7 @@ pad plays out) and renders the framebuffer to a PNG. Nothing is faked
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word (big-endian `FF RR GG BB`) |
 | Timing | `wait_vblank` is a calibrated `bdnz` spin loop (~one frame); the PowerPC Time Base would pace this on real hardware |
 | Audio | UI/timeline only; the Mac sound path is a future driver |
-| Input | AUTOTEST scripted pad (ADB driver = future) |
+| Input | **Open Firmware `read`** on `/chosen` stdin (the OF console keyboard); WASD+Enter+Backspace → pad (native ADB-over-CUDA = future) |
 | RAM | payload `0x00100000`, stack `→0x00300000`, vars `0x00400000`, OF-entry + fb info `0x00420000`, CI buffer `0x00430000` |
 
 ## Build & run

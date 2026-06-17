@@ -70,8 +70,10 @@
 .equ of_entry,  FBINFO+0
 .equ fb_base,   FBINFO+4
 .equ fb_pitch,  FBINFO+8
+.equ of_stdin,  FBINFO+12         # OF console input instance handle
 .equ ci_buf,    0x00430000        # OF client-interface argument array
 .equ gp_buf,    0x00430100        # OF getprop receive buffer
+.equ key_buf,   0x00430110        # OF read() receive byte
 .equ PPC_FB,    0x01000000        # fallback FB (overwritten by OF screen address)
 
 .equ v_pad,    VARS+0
@@ -238,9 +240,44 @@ fb_init:
     bl    of_getprop
     LWZA  r3, gp_buf
     STWA  r3, fb_pitch, r4
+    # console input: chosen = finddevice("/chosen"); stdin = getprop(chosen,"stdin")
+    LA    r3, s_chosen
+    bl    of_finddevice
+    mr    r14, r3
+    mr    r3, r14
+    LA    r4, s_stdin
+    LA    r5, gp_buf
+    li    r6, 4
+    bl    of_getprop
+    LWZA  r3, gp_buf
+    STWA  r3, of_stdin, r4
     lwz   r14, 8(r1)
     lwz   r0, 36(r1)
     addi  r1, r1, 32
+    mtlr  r0
+    blr
+
+# of_read: r3 = ihandle, r4 = buf, r5 = len -> r3 = actual length read
+of_read:
+    mflr  r0
+    stwu  r1, -16(r1)
+    stw   r0, 20(r1)
+    LA    r7, ci_buf
+    LA    r8, s_read
+    stw   r8, 0(r7)
+    li    r8, 3
+    stw   r8, 4(r7)                       # nargs
+    li    r8, 1
+    stw   r8, 8(r7)                       # nrets
+    stw   r3, 12(r7)                      # ihandle
+    stw   r4, 16(r7)                      # buf
+    stw   r5, 20(r7)                      # len
+    mr    r3, r7
+    bl    of_call
+    LA    r3, ci_buf
+    lwz   r3, 24(r3)                      # ret0 = actual length
+    lwz   r0, 20(r1)
+    addi  r1, r1, 16
     mtlr  r0
     blr
 
@@ -254,13 +291,82 @@ wv1:
     bdnz  wv1
     blr
 
+# read_keys: real input via Open Firmware read() on the console stdin. Each byte is
+# one keypress; WASD = d-pad, Enter/Space = A, Backspace/DEL = B. AUTOTEST builds
+# replace this with the scripted pad (auto_input).
 read_keys:
 .ifdef AUTOTEST
     b     auto_input
 .endif
-    li    r3, 0
-    STWA  r3, v_pad, r4
-    STWA  r3, v_pade, r4
+    mflr  r0
+    stwu  r1, -16(r1)
+    stw   r0, 20(r1)
+    LWZA  r3, v_pad                       # v_padp = v_pad
+    STWA  r3, v_padp, r4
+    LWZA  r3, of_stdin
+    LA    r4, key_buf
+    li    r5, 1
+    bl    of_read
+    cmpwi r3, 1
+    bne   rk_none
+    LA    r3, key_buf
+    lbz   r4, 0(r3)
+    li    r5, 0
+    cmpwi r4, 'w'
+    beq   rk_u
+    cmpwi r4, 'W'
+    beq   rk_u
+    cmpwi r4, 's'
+    beq   rk_d
+    cmpwi r4, 'S'
+    beq   rk_d
+    cmpwi r4, 'a'
+    beq   rk_l
+    cmpwi r4, 'A'
+    beq   rk_l
+    cmpwi r4, 'd'
+    beq   rk_r
+    cmpwi r4, 'D'
+    beq   rk_r
+    cmpwi r4, 0x0D
+    beq   rk_a
+    cmpwi r4, ' '
+    beq   rk_a
+    cmpwi r4, 0x08
+    beq   rk_b
+    cmpwi r4, 0x7F
+    beq   rk_b
+    b     rk_store
+rk_u:
+    li    r5, PAD_U
+    b     rk_store
+rk_d:
+    li    r5, PAD_D
+    b     rk_store
+rk_l:
+    li    r5, PAD_L
+    b     rk_store
+rk_r:
+    li    r5, PAD_R
+    b     rk_store
+rk_a:
+    li    r5, PAD_A
+    b     rk_store
+rk_b:
+    li    r5, PAD_B
+    b     rk_store
+rk_none:
+    li    r5, 0
+rk_store:
+    STWA  r5, v_pad, r6
+    LWZA  r3, v_pad
+    LWZA  r4, v_padp
+    not   r4, r4
+    and   r3, r3, r4                      # edges = new & ~prev
+    STWA  r3, v_pade, r6
+    lwz   r0, 20(r1)
+    addi  r1, r1, 16
+    mtlr  r0
     blr
 
 # ============================================================================

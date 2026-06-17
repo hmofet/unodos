@@ -27,6 +27,47 @@ DRAM_SZ  = 0x01000000           # 16 MB covers kernel + stack + vars + framebuff
 PINE_FB  = 0x40400000
 DE2_BASE = 0x01000000           # display engine register block (sunk to RAM)
 DE2_SZ   = 0x00200000
+UART_PAGE = 0x01C28000          # A64 UART0 (16550, input) — emulated
+OFF_UART_RBR = 0x01C28000 - UART_PAGE   # 0x00
+OFF_UART_LSR = 0x01C28014 - UART_PAGE   # 0x14
+
+state = {"keys": b"", "kidx": 0, "kcool": 0}
+
+KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
+          "\r": b"\r", "\n": b"\r", " ": b" ", "<": b"\x08"}
+
+
+def parse_keys(argv):
+    rest, seq = [], b""
+    for a in argv:
+        if a.startswith("--keys="):
+            for ch in a[len("--keys="):]:
+                seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        else:
+            rest.append(a)
+    return seq, rest
+
+
+def uart_read(uc, offset, size, ud):
+    if offset == OFF_UART_LSR:
+        if state["kcool"] > 0:
+            state["kcool"] -= 1
+            return 0x60                    # THRE|TEMT, data-ready (bit0) clear
+        if state["kidx"] < len(state["keys"]):
+            return 0x61                    # data ready (bit0 set)
+        return 0x60
+    if offset == OFF_UART_RBR:
+        if state["kidx"] < len(state["keys"]):
+            b = state["keys"][state["kidx"]]
+            state["kidx"] += 1
+            state["kcool"] = 4
+            return b
+        return 0
+    return 0
+
+
+def uart_write(uc, offset, size, value, ud):
+    pass
 
 
 def write_png(path, w, h, rgb):
@@ -45,13 +86,16 @@ def write_png(path, w, h, rgb):
 
 
 def main():
-    rom_path, out_path = sys.argv[1], sys.argv[2]
-    budget = int(float(sys.argv[3]) * 1_000_000) if len(sys.argv) > 3 else 160_000_000
+    keys, argv = parse_keys(sys.argv)
+    rom_path, out_path = argv[1], argv[2]
+    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 160_000_000
+    state["keys"] = keys
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     uc.mem_map(DRAM, DRAM_SZ, UC_PROT_ALL)
     uc.mem_map(DE2_BASE, DE2_SZ, UC_PROT_ALL)
+    uc.mmio_map(UART_PAGE, 0x1000, uart_read, None, uart_write, None)
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x40200000)
 

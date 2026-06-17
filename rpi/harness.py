@@ -30,10 +30,15 @@ RAM_BASE = 0x80000
 RAM_SIZE = 0x400000           # kernel + stack + vars + mailbox buffer + fbinfo
 FB_PA    = 0x08000000
 FB_SIZE  = (W * H * 4 + 0xFFFF) & ~0xFFFF
-PERI_SINK_BASE = 0x3F100000   # GPIO/PWM/clock writes land here (ignored)
-PERI_SINK_SIZE = 0x00200000
+PERI_SINK_A_BASE = 0x3F100000  # clock + GPIO writes land here (ignored)
+PERI_SINK_A_SIZE = 0x00101000  # [0x3F100000, 0x3F201000)
+UART_PAGE  = 0x3F201000        # PL011 (input) — emulated
+PERI_SINK_B_BASE = 0x3F202000  # PWM writes land here (ignored)
+PERI_SINK_B_SIZE = 0x000FE000  # [0x3F202000, 0x3F300000)
 TIMER_PAGE = 0x3F003000
 MBOX_PAGE  = 0x3F00B000
+OFF_UART_DR = 0x3F201000 - UART_PAGE   # 0x00
+OFF_UART_FR = 0x3F201018 - UART_PAGE   # 0x18
 
 MBOX_READ_OFF   = 0x880 - 0x000   # within MBOX_PAGE (0x3F00B000) -> 0xB880-0xB000
 # offsets within MBOX_PAGE (page base 0x3F00B000)
@@ -42,7 +47,31 @@ OFF_STATUS = 0x3F00B898 - MBOX_PAGE
 OFF_WRITE  = 0x3F00B8A0 - MBOX_PAGE
 OFF_CLO    = 0x3F003004 - TIMER_PAGE
 
-state = {"pending_read": 0, "clock": 0}
+state = {"pending_read": 0, "clock": 0, "keys": b"", "kidx": 0, "kcool": 0}
+
+
+def uart_read(uc, offset, size, ud):
+    """Emulate the PL011 RX so a scripted key sequence reaches the real driver.
+    A key is presented for one poll, then a few empty polls (so edges register)."""
+    if offset == OFF_UART_FR:
+        if state["kcool"] > 0:
+            state["kcool"] -= 1
+            return 0x10                    # RXFE set: empty
+        if state["kidx"] < len(state["keys"]):
+            return 0                       # a byte is due (RXFE clear)
+        return 0x10
+    if offset == OFF_UART_DR:
+        if state["kidx"] < len(state["keys"]):
+            b = state["keys"][state["kidx"]]
+            state["kidx"] += 1
+            state["kcool"] = 4             # empty frames before the next key
+            return b
+        return 0
+    return 0
+
+
+def uart_write(uc, offset, size, value, ud):
+    pass
 
 
 def write_png(path, w, h, rgb):
@@ -116,15 +145,37 @@ def timer_write(uc, offset, size, value, ud):
     pass
 
 
+KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
+          "\r": b"\r", "\n": b"\r", " ": b" ", "<": b"\x08"}
+
+
+def parse_keys(argv):
+    """Pull an optional --keys=SEQ out of argv; SEQ chars are injected as serial
+    input (w/a/s/d = d-pad, \\r or '\\n' = A/Enter, '<' = B/Backspace)."""
+    rest = []
+    seq = b""
+    for a in argv:
+        if a.startswith("--keys="):
+            for ch in a[len("--keys="):]:
+                seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        else:
+            rest.append(a)
+    return seq, rest
+
+
 def main():
-    rom_path, out_path = sys.argv[1], sys.argv[2]
-    budget = int(float(sys.argv[3]) * 1_000_000) if len(sys.argv) > 3 else 60_000_000
+    keys, argv = parse_keys(sys.argv)
+    rom_path, out_path = argv[1], argv[2]
+    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 60_000_000
+    state["keys"] = keys
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     uc.mem_map(RAM_BASE, RAM_SIZE, UC_PROT_ALL)
     uc.mem_map(FB_PA, FB_SIZE, UC_PROT_ALL)
-    uc.mem_map(PERI_SINK_BASE, PERI_SINK_SIZE, UC_PROT_ALL)
+    uc.mem_map(PERI_SINK_A_BASE, PERI_SINK_A_SIZE, UC_PROT_ALL)
+    uc.mem_map(PERI_SINK_B_BASE, PERI_SINK_B_SIZE, UC_PROT_ALL)
+    uc.mmio_map(UART_PAGE, 0x1000, uart_read, None, uart_write, None)
     uc.mmio_map(TIMER_PAGE, 0x1000, timer_read, None, timer_write, None)
     uc.mmio_map(MBOX_PAGE, 0x1000, mbox_read, None, mbox_write, None)
     uc.mem_write(LOAD, data)

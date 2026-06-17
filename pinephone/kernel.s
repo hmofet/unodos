@@ -40,6 +40,9 @@
 .equ OVL_PITCH,  0x0110300C      // UI overlay layer0 pitch (bytes/row)
 .equ OVL_TOPADD, 0x01103010      // UI overlay layer0 top framebuffer address
 .equ OVL_SIZE,   0x01103088      // UI overlay window size
+// A64 UART0 (16550-compatible) — the serial console (on the headphone jack)
+.equ UART0_RBR,  0x01C28000      // receive buffer register
+.equ UART0_LSR,  0x01C28014      // line status register (bit0 = data ready)
 
 // ---- fixed DRAM layout (A64 DRAM starts at 0x40000000) ---------------------
 .equ STACK_TOP, 0x40200000
@@ -206,14 +209,83 @@ wv1:
     b.lo  wv1
     ret
 
+// read_keys: real input via the A64 UART0 serial console (16550). Each received
+// byte is one keypress; WASD = d-pad, Enter/Space = A, Backspace/DEL = B. AUTOTEST
+// builds replace this with the scripted pad (auto_input). Leaf.
 read_keys:
 .ifdef AUTOTEST
     b     auto_input
 .endif
+    ldr   x0, =v_pad                      // v_padp = v_pad
+    ldr   w1, [x0]
+    ldr   x2, =v_padp
+    str   w1, [x2]
+    ldr   x3, =UART0_LSR
+    ldr   w4, [x3]
+    tst   w4, #0x01                       // data ready?
+    b.eq  rk_none
+    ldr   x3, =UART0_RBR
+    ldr   w4, [x3]
+    and   w4, w4, #0xFF
+    mov   w5, #0
+    cmp   w4, #'w'
+    b.eq  rk_u
+    cmp   w4, #'W'
+    b.eq  rk_u
+    cmp   w4, #'s'
+    b.eq  rk_d
+    cmp   w4, #'S'
+    b.eq  rk_d
+    cmp   w4, #'a'
+    b.eq  rk_l
+    cmp   w4, #'A'
+    b.eq  rk_l
+    cmp   w4, #'d'
+    b.eq  rk_r
+    cmp   w4, #'D'
+    b.eq  rk_r
+    cmp   w4, #0x0D
+    b.eq  rk_a
+    cmp   w4, #' '
+    b.eq  rk_a
+    cmp   w4, #0x08
+    b.eq  rk_b
+    cmp   w4, #0x7F
+    b.eq  rk_b
+    b     rk_store
+rk_u:
+    mov   w5, #PAD_U
+    b     rk_store
+rk_d:
+    mov   w5, #PAD_D
+    b     rk_store
+rk_l:
+    mov   w5, #PAD_L
+    b     rk_store
+rk_r:
+    mov   w5, #PAD_R
+    b     rk_store
+rk_a:
+    mov   w5, #PAD_A
+    b     rk_store
+rk_b:
+    mov   w5, #PAD_B
+rk_store:
+    ldr   x0, =v_pad
+    str   w5, [x0]
+    b     rk_edge
+rk_none:
     ldr   x0, =v_pad
     str   wzr, [x0]
+rk_edge:
+    ldr   x0, =v_pad
+    ldr   w1, [x0]
+    ldr   x2, =v_padp
+    ldr   w2, [x2]
+    mvn   w2, w2
+    and   w1, w1, w2
     ldr   x0, =v_pade
-    str   wzr, [x0]
+    str   w1, [x0]
     ret
 
 // ============================================================================

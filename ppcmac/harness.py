@@ -29,6 +29,22 @@ RAM_SIZE = 0x02000000           # 32 MB covers low mem + kernel + stack + vars +
 FB_PA    = 0x01000000
 OF_ENTRY = 0x00000100           # the OF client-interface trampoline (a single blr)
 
+state = {"keys": b"", "kidx": 0, "kcool": 0}
+
+KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
+          "\r": b"\r", "\n": b"\r", " ": b" ", "<": b"\x08"}
+
+
+def parse_keys(argv):
+    rest, seq = [], b""
+    for a in argv:
+        if a.startswith("--keys="):
+            for ch in a[len("--keys="):]:
+                seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        else:
+            rest.append(a)
+    return seq, rest
+
 
 def write_png(path, w, h, rgb):
     raw = bytearray()
@@ -76,15 +92,30 @@ def of_service(uc):
         prop = cstr(uc, be32(uc, arr + 16))
         buf = be32(uc, arr + 20)
         val = {"address": FB_PA, "frame-buffer-adr": FB_PA, "linebytes": PITCH,
-               "width": W, "height": H, "depth": 32, "stdout": 0x22222222}.get(prop, 0)
+               "width": W, "height": H, "depth": 32,
+               "stdout": 0x22222222, "stdin": 0x33333333}.get(prop, 0)
         uc.mem_write(buf, struct.pack(">I", val))
         wr(rets_off, 4)                       # property length returned
+    elif name == "read":
+        buf = be32(uc, arr + 16)              # read(ihandle, buf, len)
+        if state["kcool"] > 0:
+            state["kcool"] -= 1
+            wr(rets_off, 0)                   # nothing ready this poll
+        elif state["kidx"] < len(state["keys"]):
+            uc.mem_write(buf, bytes([state["keys"][state["kidx"]]]))
+            state["kidx"] += 1
+            state["kcool"] = 4
+            wr(rets_off, 1)                   # one byte delivered
+        else:
+            wr(rets_off, 0)
     uc.reg_write(UC_PPC_REG_3, 0)             # catch-result: success
 
 
 def main():
-    rom_path, out_path = sys.argv[1], sys.argv[2]
-    budget = int(float(sys.argv[3]) * 1_000_000) if len(sys.argv) > 3 else 120_000_000
+    keys, argv = parse_keys(sys.argv)
+    rom_path, out_path = argv[1], argv[2]
+    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 120_000_000
+    state["keys"] = keys
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_PPC, UC_MODE_PPC32 | UC_MODE_BIG_ENDIAN)

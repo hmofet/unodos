@@ -461,9 +461,12 @@ auto_script:
 # Open Firmware client-interface service + device/property names
 s_finddevice: .asciz "finddevice"
 s_getprop:    .asciz "getprop"
+s_read:       .asciz "read"
 s_screen:     .asciz "screen"
+s_chosen:     .asciz "/chosen"
 s_address:    .asciz "address"
 s_linebytes:  .asciz "linebytes"
+s_stdin:      .asciz "stdin"
 .align 2
 icon_lbl:
     .long l_sysinfo, l_clock, l_notepad, l_music, l_files, l_theme

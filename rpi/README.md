@@ -41,12 +41,14 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
   falling-blocks game with a 16px-cell well. Tracker / OutLast / Pac-Man / Paint
   open framed placeholders.
 
-> **Real-hardware input + audio.** The minimal profile ships no USB-HID driver, so
-> on real hardware the launcher is static until a future input driver lands; the
-> milestones are driven by the AUTOTEST scripted pad, exactly like every other
-> port. The Music app's PWM tone path is wired for the 3.5 mm jack but is
-> hardware-only / by-ear (no audio in the harness). Everything emulator-verifiable
-> is verified.
+> **Real input + audio.** The interactive (non-AUTOTEST) build reads a real
+> **PL011 UART serial console** (GPIO14/15): `WASD` = d-pad, `Enter`/`Space` = A,
+> `Backspace` = B — so the launcher is fully drivable from a serial terminal. The
+> harness emulates the PL011 RX, so this path is verified end-to-end too
+> (`shots/live_nav.png`, `shots/live_notepad.png` — navigation + app launch from
+> injected serial input). USB-HID keyboard is a heavier future driver. The Music
+> app's PWM tone path is wired for the 3.5 mm jack but is hardware-only / by-ear
+> (no audio in the harness). Everything emulator-verifiable is verified.
 
 ## Hardware brought up (from scratch)
 
@@ -58,7 +60,7 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word |
 | Timing | BCM system timer low word `0x3F003004` (1 MHz); `wait_vblank` = busy-wait one `FRAME_US` (~60 Hz) |
 | Audio | PWM0/1 in mark/space mode on the headphone jack: square wave at `PWM_CLK / RNG1`, `DAT1 = RNG1/2` (clock manager `0x3F1010A0`, PWM `0x3F20C000`) |
-| Input | AUTOTEST scripted pad (USB-HID driver = future) |
+| Input | **PL011 UART** serial console (`0x3F201000`); poll `FR.RXFE`, read `DR`; WASD+Enter+Backspace → pad (USB-HID = future) |
 | RAM | fixed layout: stack `→0x200000`, vars `0x300000`, mailbox buffer `0x310000`, fb base/pitch `0x320000` |
 | Boot | `kernel8.img` flat at `0x80000` (the `arm_64bit=1` entry); `_start` parks cores, sets SP, brings up the FB |
 
