@@ -18,6 +18,9 @@ port gba          profile=minimal    caps=[DIRNAV]
 port pce          profile=minimal    caps=[DIRNAV]
     requires: (none)
     surface primary  256x224 role=PRIMARY
+port vic20        profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  176x184 role=PRIMARY
 port ds           profile=windowed   caps=[TOUCH,SMP]
     requires: wm, mouse_or_dirnav, fs
     surface top      256x192 role=PRIMARY
