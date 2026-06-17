@@ -1,0 +1,9 @@
+build/*
+!build/unodos.ws
+!build/desktop.png
+!build/nav.png
+!build/app.png
+!build/clock.png
+!build/theme.png
+!build/music.png
+!build/dostris.png

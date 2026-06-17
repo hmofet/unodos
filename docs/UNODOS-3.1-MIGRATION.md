@@ -75,6 +75,12 @@ gb/     Game Boy / Color (Sharp SM83, rgbds) -- M1 list launcher + M2 directiona
                                                  + M3 apps + Dostris + APU; DMG+GBC colour
 gg/     Sega Game Gear (Z80, sjasmplus)      -- SMS silicon + the GB minimal layout;
                                                  M1-M3 + Dostris + PSG; 12-bit colour
+gba/    Game Boy Advance (ARM7TDMI, GNU as)  -- FIRST ARM world; Mode-3 framebuffer;
+                                                 M1-M3 + Dostris + APU; Unicorn-verified
+vic20/  Commodore VIC-20 (6502, dasm)        -- 22x23 char-cell list launcher;
+                                                 M1-M3 + Dostris + VIC tone; py65-verified
+ws/     Bandai WonderSwan (NEC V30MZ, nasm)  -- FIRST x86 handheld; SCR1 tile launcher;
+                                                 M1-M3 + Dostris + PSG; Unicorn-verified
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -111,9 +117,40 @@ gg/     Sega Game Gear (Z80, sjasmplus)      -- SMS silicon + the GB minimal lay
   one hardware delta vs. the SMS is 12-bit CRAM colour. M1–M3 + Dostris (full colour)
   + PSG, Mesen2/GG-verified (`gg/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
 
-Together they exercise both ends of `unogen`'s reach: a **window-profile** Z80 port
-(reusing the existing dialect) and a **minimal-profile** 6502 port (reusing the
-6502 dialect) — neither needed a new generator dialect.
+- **Game Boy Advance** is the **first ARM world** — a genuinely new unogen dialect
+  (`arm`/GNU as, `.equ NAME, val`), consuming `[world.gba]`. The GBA hardware exceeds
+  the minimal profile, but this is a `minimal` UnoDOS instance drawn into a flat
+  **Mode-3 framebuffer** (240×160, 16bpp) with no hardware tiles — an 8×8 font + 16×16
+  icons plotted pixel-by-pixel, each pixel's palette index in a 16-entry IWRAM table
+  (Theme swaps the table). M1 launcher (4-col icon grid); M2 `REG_KEYINPUT` + a
+  VCOUNT-polled loop + a d-pad highlight; M3 apps + Dostris on the square channel.
+  mGBA's deferred-GL display won't grab under RDP, so it is verified on a **Unicorn
+  ARM7TDMI** core running the real ROM (`gba/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
+- **VIC-20** reuses `gen/6502/` + dasm (like the NES) as a `minimal` **character-cell**
+  launcher: the VIC 22×23 matrix at `$1E00` + colour RAM `$9600` + a custom charset at
+  `$3000`, with an inverted charset for the title bar + selection. M1 mini-icon list;
+  M2 the joystick on `$9111`/`$9120` + a raster-synced (`$9004`) loop + Up/Down highlight;
+  M3 apps (live Clock, Theme-cycles-`$900F`-bg, Music on the VIC oscillator) + Dostris in
+  colour. Verified on a **py65** ROM-free 6502 core
+  (`vic20/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
+- **WonderSwan** is the **first x86 handheld**: its NEC V30MZ is an 80186-class CPU — the
+  same family as the reference kernel — so it is built with **nasm** (16-bit real mode)
+  and consumes the Contract's x86 surface + `[world.ws]`. A `minimal` **hardware-tile**
+  launcher: 8×8 2bpp planar tiles in the 16 KB internal RAM (`0x2000`) + a 32×32 SCR1
+  tilemap (`0x0800`), 224×144 mono LCD; tile colour resolves per-tile-palette → mono
+  shade pool (ports `0x1C-0x1F`), so Theme recolours everything by rewriting the pool.
+  M1 launcher (inverted title bar + 11-icon list); M2 the keypad on port `0xB5`
+  (group-select) + a line-counter (`0x03`) loop + Up/Down highlight; M3 apps (live Clock,
+  Theme-cycles-the-pool, Music on sound channel 1) + Dostris with a tile well. Verified on
+  a **Unicorn x86/V30MZ** core that maps the ROM flush to `0xFFFFF` so the reset vector
+  `0xFFFF0` runs the genuine JMP-FAR boot path
+  (`ws/build/{desktop,nav,app,clock,theme,music,dostris}.png`).
+
+Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
+**minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), and **x86** — three
+of them (GBA, VIC-20, WonderSwan) verified on a **ROM-free instruction-level harness**
+(Unicorn ARM / py65 / Unicorn x86) running the real ROM, the pattern for any target whose
+emulator can't be captured headlessly under RDP.
 
 ## Verification (host-first, all green together)
 
@@ -223,13 +260,24 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    reusing `gen/z80/` + the SMS hardware bring-up / 4bpp tiles / PSG / Dostris, but the
    GB's `minimal` 160×144 layout (drawn at a (6,3) offset; 12-bit CRAM the one delta).
    Mesen2/GG-verified. See [../gg/README.md](../gg/README.md).
-7. **More fresh ports / the next CPU family.** VIC-20 (6502, `minimal`) reuses the dasm
-   path; PC Engine (HuC6280) and WonderSwan (V30MZ ≈ x86) are Mesen2-supported; ARM
-   (GBA, devkitARM) would add the next genuinely new ISA once that SDK is installed.
-8. **Generalize the greenfield model to the next subsystem** — the event record
+7. ~~**NEW PORT: Game Boy Advance (ARM7TDMI).**~~ **M1–M3 + game + audio DONE** — the
+   FIRST ARM world (a new `arm`/GNU-as dialect), a `minimal` Mode-3 software framebuffer.
+   mGBA won't grab under RDP, so it is verified on a **Unicorn ARM7TDMI** core running the
+   real ROM. See [../gba/README.md](../gba/README.md). NEXT on GBA: real hw + audio-ear.
+8. ~~**NEW PORT: Commodore VIC-20 (6502).**~~ **M1–M3 + game + audio DONE** — reuses the
+   `gen/6502/` + dasm path as a 22×23 character-cell list launcher; **py65**-verified. See
+   [../vic20/README.md](../vic20/README.md). NEXT on VIC-20: real hw / VICE.
+9. ~~**NEW PORT: Bandai WonderSwan (NEC V30MZ).**~~ **M1–M3 + game + audio DONE** — the
+   FIRST x86 handheld (V30MZ ≈ 80186, nasm, the Contract's x86 surface), a hardware-tile
+   launcher. Verified on a **Unicorn x86** core that runs the genuine reset-vector boot
+   path. See [../ws/README.md](../ws/README.md). NEXT on WonderSwan: real hw + audio-ear.
+10. **More fresh ports / the next CPU family.** PC Engine (HuC6280) is Mesen2-supported and
+    has a WIP foundation (`pce/`); the next genuinely new ISA (e.g. a deeper ARM/RISC-V or
+    PowerPC target) follows once its SDK is installed.
+11. **Generalize the greenfield model to the next subsystem** — the event record
    (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
    bring them under the logical-model + derived-layout treatment (host-verifiable).
-9. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
+12. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
    `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
    backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
    vectors.

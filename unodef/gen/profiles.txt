@@ -21,6 +21,9 @@ port pce          profile=minimal    caps=[DIRNAV]
 port vic20        profile=minimal    caps=[DIRNAV]
     requires: (none)
     surface primary  176x184 role=PRIMARY
+port ws           profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  224x144 role=PRIMARY
 port ds           profile=windowed   caps=[TOUCH,SMP]
     requires: wm, mouse_or_dirnav, fs
     surface top      256x192 role=PRIMARY
