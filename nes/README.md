@@ -8,9 +8,13 @@ across. It reuses the already-proven **dasm** 6502 toolchain (shared with the C6
 and Apple II ports) and the Contract's `gen/6502/` world; the screen geometry comes
 from `[world.nes]` via unogen (`gen/nes/sys_gen.inc`).
 
-## Status — M1 · M2 · M3 all shipped ✅
+## Status — M1 · M2 · M3 all shipped ✅ — **validated on real hardware** 🎮
 
-Emulator-verified in Mesen2 (the `build/*.png` shots, via AUTOTEST scripted-pad
+**Validated on a real AV Famicom** (HVC-101): the desktop boots, the `$4016`
+controller drives navigation, and the 2A03 APU audio plays — confirmed on physical
+silicon. This is the **first of the fresh-3.1 ports to run on real hardware**.
+
+Also emulator-verified in Mesen2 (the `build/*.png` shots, via AUTOTEST scripted-pad
 builds — the ROM drives the *same* `$4016` input path, nothing faked):
 
 - **M1 — launcher** (`build/desktop.png`): 6502 + PPU bring-up from scratch, the

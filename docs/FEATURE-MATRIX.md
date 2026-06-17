@@ -32,7 +32,7 @@ Sega Dreamcast.
 | **Sony PS2** | M0–M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
 | **Sega Dreamcast** | at parity | Flycast @60fps + VMU round-trip | ⏳ CD-R / dc-tool + audio-ear pending |
 | **Sega Master System** *(3.1-fresh)* | M1–M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
-| **Nintendo NES** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal` profile) | Mesen2 (software-render grab, AUTOTEST scripted-pad) | ⏳ real NES pending |
+| **Nintendo NES** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal` profile) | Mesen2 (software-render grab, AUTOTEST scripted-pad) | ✅ **real AV Famicom** — 2A03 APU audio + `$4016` controller input confirmed |
 | **Game Boy / Color** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal`, DMG+GBC colour) | Mesen2/GBC (software-render grab, AUTOTEST scripted-pad) | ⏳ real DMG/GBC pending |
 | **Sega Game Gear** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 12-bit colour) | Mesen2/GG (software-render grab, AUTOTEST scripted-pad) | ⏳ real GG pending |
 | **Game Boy Advance** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal`, Mode-3 framebuffer) | Unicorn ARM7TDMI core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real GBA + audio-ear pending |

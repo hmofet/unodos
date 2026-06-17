@@ -109,7 +109,9 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   (SysInfo, live Clock, Notepad, Files, Theme-cycles-palette, Music on the 2A03 APU)
   + a from-scratch **Dostris** (the SMS falling-blocks algorithm ported to 6502). A
   PPU-free NMI + main-loop vblank partials keep updates flicker-free. Verified in
-  Mesen2 (`nes/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
+  Mesen2 (`nes/build/{desktop,nav,app,clock,dostris,theme,music}.png`) **and validated
+  on a real AV Famicom** (HVC-101) — the 2A03 APU audio and the `$4016` controller both
+  work on hardware. This is the **first fresh-3.1 port to run on physical silicon**.
 - **Game Boy / Color** is the **first Sharp-SM83 (`gbz80`) world** — a genuinely new
   unogen dialect (rgbds, `DEF NAME EQU value`), consuming `gen/gbz80/` + `[world.gb]`.
   Also `minimal` profile (8 KB RAM, no WM), but the launcher is a **vertical list**
