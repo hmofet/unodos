@@ -42,8 +42,11 @@ pad plays out) and renders the framebuffer to a PNG. Nothing is faked
 > `Backspace` = B. The harness emulates the OF `read` service, so this path is
 > verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png` — navigation +
 > app launch from injected console input). A native ADB-over-CUDA driver is a future
-> refinement. The Mac sound hardware is also a future driver. Everything
-> emulator-verifiable is verified.
+> refinement. The Music app **synthesises square-wave PCM in software** (a phase
+> accumulator) and feeds the samples to the codec data port; the harness captures
+> those writes as the actual audio stream and confirms it plays "Ode to Joy"
+> (`shots/music.wav`). The codec + DBDMA bring-up (to reach the real output) is
+> best-effort / by-ear; the PCM synthesis is verified.
 
 ## Hardware / firmware brought up
 
@@ -54,7 +57,7 @@ pad plays out) and renders the framebuffer to a PNG. Nothing is faked
 | Display | OF `finddevice "screen"` → `getprop "address"` (framebuffer base) + `getprop "linebytes"` (pitch); 640×480 32bpp XRGB linear surface |
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word (big-endian `FF RR GG BB`) |
 | Timing | `wait_vblank` is a calibrated `bdnz` spin loop (~one frame); the PowerPC Time Base would pace this on real hardware |
-| Audio | UI/timeline only; the Mac sound path is a future driver |
+| Audio | **software square-wave PCM** -> the codec data port (`0x80800000`); harness captures the samples to a WAV ("Ode to Joy"). Codec/DBDMA delivery = best-effort/by-ear |
 | Input | **Open Firmware `read`** on `/chosen` stdin (the OF console keyboard); WASD+Enter+Backspace → pad (native ADB-over-CUDA = future) |
 | RAM | payload `0x00100000`, stack `→0x00300000`, vars `0x00400000`, OF-entry + fb info `0x00420000`, CI buffer `0x00430000` |
 

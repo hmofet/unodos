@@ -47,8 +47,10 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
 > harness emulates the PL011 RX, so this path is verified end-to-end too
 > (`shots/live_nav.png`, `shots/live_notepad.png` — navigation + app launch from
 > injected serial input). USB-HID keyboard is a heavier future driver. The Music
-> app's PWM tone path is wired for the 3.5 mm jack but is hardware-only / by-ear
-> (no audio in the harness). Everything emulator-verifiable is verified.
+> app drives the **PWM headphone jack in mark/space mode** (a real, audible
+> square-wave tone on Pi 3); the harness reconstructs that output from the PWM
+> register writes to a **WAV** and confirms the note sequence is "Ode to Joy"
+> (`shots/music.wav`). Everything emulator-verifiable is verified.
 
 ## Hardware brought up (from scratch)
 
@@ -59,7 +61,7 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
 | FB setup | mailbox property channel (`0x3F00B880/98/A0`, ch 8): set phys/virt size + depth 32 + RGB order, allocate buffer, get pitch; GPU bus addr → ARM physical via `& 0x3FFFFFFF` |
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word |
 | Timing | BCM system timer low word `0x3F003004` (1 MHz); `wait_vblank` = busy-wait one `FRAME_US` (~60 Hz) |
-| Audio | PWM0/1 in mark/space mode on the headphone jack: square wave at `PWM_CLK / RNG1`, `DAT1 = RNG1/2` (clock manager `0x3F1010A0`, PWM `0x3F20C000`) |
+| Audio | **PWM0/1 mark/space** on the headphone jack: square wave at `PWM_CLK / RNG1`, `DAT1 = RNG1/2` (clock `0x3F1010A0`, PWM `0x3F20C000`). Harness reconstructs it to a WAV (note sequence = "Ode to Joy") |
 | Input | **PL011 UART** serial console (`0x3F201000`); poll `FR.RXFE`, read `DR`; WASD+Enter+Backspace → pad (USB-HID = future) |
 | RAM | fixed layout: stack `→0x200000`, vars `0x300000`, mailbox buffer `0x310000`, fb base/pitch `0x320000` |
 | Boot | `kernel8.img` flat at `0x80000` (the `arm_64bit=1` entry); `_start` parks cores, sets SP, brings up the FB |

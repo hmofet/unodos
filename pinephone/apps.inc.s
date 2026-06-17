@@ -262,11 +262,13 @@ draw_theme_status:
     ldp   x29, x30, [sp], #16
     ret
 
-// ---- Music (UI + timing; the audio codec is a future driver) ---------------
-// The PinePhone's audio path is the AC200/AC100 codec over I2S/AIF — a large
-// bring-up out of the minimal profile's envelope (unlike the Pi's simple PWM
-// jack). So the Music app keeps the full note timeline + the verified UI (note
-// number + progress bar); driving the codec is left as a future driver.
+// ---- Music (square-wave PCM tone synthesis -> I2S TX FIFO) -----------------
+// The kernel synthesises a square wave for the current note in software (a phase
+// accumulator) and feeds the PCM samples to the A64 I2S0 TX FIFO each frame. The
+// harness captures those FIFO writes as the actual audio stream (-> WAV). On real
+// hardware the I2S clock + the AC200/AC100 codec still need bringing up (a large
+// I2S/AIF effort, unlike the Pi's simple PWM jack) — that delivery is best-effort /
+// by-ear; the PCM synthesis itself is what the harness verifies.
 music_init:
     stp   x29, x30, [sp, #-16]!
     ldr   x0, =m_idx
@@ -283,21 +285,56 @@ music_init:
 music_silence:
     ldr   x0, =m_play
     str   wzr, [x0]
+    ldr   x0, =m_freq
+    str   wzr, [x0]
     ret
 music_load:
     ldr   x0, =m_idx
     ldr   w0, [x0]
     ldr   x1, =music_song
     add   x1, x1, w0, uxtw #2
+    ldrh  w2, [x1]                        // note frequency (Hz)
+    ldr   x0, =m_freq
+    str   w2, [x0]
+    ldr   x0, =m_phase                    // restart the phase for a clean tone
+    str   wzr, [x0]
     ldrb  w3, [x1, #2]                    // duration (frames)
     ldr   x0, =m_timer
     str   w3, [x0]
+    ret
+// music_gen: synthesise one frame of square-wave PCM for the current note. Leaf.
+music_gen:
+    ldr   x0, =m_freq
+    ldr   w1, [x0]
+    cbz   w1, mg_done                     // rest -> no samples
+    ldr   x0, =m_phase
+    ldr   w2, [x0]
+    ldr   x3, =I2S_TXFIFO
+    mov   w4, #AUD_PERF
+    mov   w6, #AUD_RATE
+    mov   w8, #AUD_AMP
+    neg   w9, w8
+mg_loop:
+    cmp   w2, #(AUD_RATE/2)
+    csel  w5, w8, w9, lo                  // first half +amp, second half -amp
+    strh  w5, [x3]
+    add   w2, w2, w1
+    cmp   w2, w6
+    b.lo  mg_nowrap
+    sub   w2, w2, w6
+mg_nowrap:
+    subs  w4, w4, #1
+    b.ne  mg_loop
+    ldr   x0, =m_phase
+    str   w2, [x0]
+mg_done:
     ret
 music_tick:
     stp   x29, x30, [sp, #-16]!
     ldr   x0, =m_play
     ldr   w0, [x0]
     cbz   w0, mt_done
+    bl    music_gen
     ldr   x3, =m_timer
     ldr   w0, [x3]
     sub   w0, w0, #1
@@ -521,7 +558,7 @@ c_music:
     .word 16, 96, m_mu1
     .word 16, 130, m_mu2
     .word 0xFFFFFFFF
-m_mu0: .asciz "Music player (UI)"
+m_mu0: .asciz "Music player (square)"
 m_mu1: .asciz "Ode to Joy"
 m_mu2: .asciz "Note:"
 .align 2

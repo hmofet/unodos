@@ -43,6 +43,11 @@
 // A64 UART0 (16550-compatible) — the serial console (on the headphone jack)
 .equ UART0_RBR,  0x01C28000      // receive buffer register
 .equ UART0_LSR,  0x01C28014      // line status register (bit0 = data ready)
+// A64 I2S/PCM0 — TX FIFO for the audio codec PCM stream
+.equ I2S_TXFIFO, 0x01C22020      // I2S0 TX data FIFO
+.equ AUD_RATE,   8000            // PCM sample rate
+.equ AUD_PERF,   133             // samples per ~60 Hz frame (8000/60)
+.equ AUD_AMP,    6000            // square-wave amplitude
 
 // ---- fixed DRAM layout (A64 DRAM starts at 0x40000000) ---------------------
 .equ STACK_TOP, 0x40200000
@@ -117,6 +122,8 @@
 .equ a_tmr,    VARS+164
 .equ a_pad,    VARS+168
 .equ a_gpause, VARS+172
+.equ m_phase,  VARS+176          // PCM square-wave phase accumulator
+.equ m_freq,   VARS+180          // current note frequency (Hz)
 .equ palette,  VARS+0x200        // 16 XRGB words
 .equ clk_str,  VARS+0x240        // 9 bytes
 .equ numstr,   VARS+0x250        // 6 bytes

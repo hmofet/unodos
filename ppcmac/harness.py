@@ -17,7 +17,7 @@ like every other fresh port — this verifies headlessly on a from-scratch core:
 
 Usage: python ppcmac/harness.py <unodos.bin> <out.png> [instr_millions]
 """
-import sys, struct, zlib
+import sys, struct, zlib, math
 from unicorn import Uc, UC_ARCH_PPC, UC_MODE_PPC32, UC_MODE_BIG_ENDIAN, UC_PROT_ALL, UC_HOOK_CODE, UC_HOOK_MEM_UNMAPPED
 from unicorn.ppc_const import UC_PPC_REG_3, UC_PPC_REG_5, UC_PPC_REG_PC
 
@@ -28,22 +28,82 @@ RAM_BASE = 0x00000000
 RAM_SIZE = 0x02000000           # 32 MB covers low mem + kernel + stack + vars + FB
 FB_PA    = 0x01000000
 OF_ENTRY = 0x00000100           # the OF client-interface trampoline (a single blr)
+SOUND_PAGE = 0x80800000         # codec PCM data port (16-bit BE samples) — emulated
+WAV_RATE = 8000
+MAX_SAMPLES = WAV_RATE * 8
 
-state = {"keys": b"", "kidx": 0, "kcool": 0}
+state = {"keys": b"", "kidx": 0, "kcool": 0, "pcm": []}
 
 KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
           "\r": b"\r", "\n": b"\r", " ": b" ", "<": b"\x08"}
 
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def note_name(freq):
+    if freq <= 0:
+        return "rest"
+    midi = round(69 + 12 * math.log2(freq / 440.0))
+    return "%s%d" % (NOTE_NAMES[midi % 12], midi // 12 - 1)
+
+
+def sound_read(uc, offset, size, ud):
+    return 0
+
+
+def sound_write(uc, offset, size, value, ud):
+    if offset == 0 and len(state["pcm"]) < MAX_SAMPLES:
+        s = value & 0xFFFF                # the kernel `sth`s big-endian; sign-extend
+        if s >= 0x8000:
+            s -= 0x10000
+        state["pcm"].append(s)
+
+
+def write_wav(path, samples):
+    pcm = b"".join(struct.pack("<h", max(-32767, min(32767, int(s)))) for s in samples)
+    with open(path, "wb") as f:
+        f.write(b"RIFF"); f.write(struct.pack("<I", 36 + len(pcm))); f.write(b"WAVE")
+        f.write(b"fmt "); f.write(struct.pack("<IHHIIHH", 16, 1, 1, WAV_RATE,
+                                              WAV_RATE * 2, 2, 16))
+        f.write(b"data"); f.write(struct.pack("<I", len(pcm))); f.write(pcm)
+
+
+def analyze_pcm(samples, path):
+    if not samples:
+        print("  (no audio captured)")
+        return []
+    write_wav(path, samples)
+    win = WAV_RATE // 20
+    per_win = []
+    for i in range(0, len(samples) - win, win):
+        seg = samples[i:i + win]
+        crossings = sum(1 for j in range(1, len(seg))
+                        if (seg[j - 1] < 0) != (seg[j] < 0))
+        per_win.append(note_name(crossings * WAV_RATE / (2 * win)))
+    runs, i = [], 0
+    while i < len(per_win):
+        j = i
+        while j < len(per_win) and per_win[j] == per_win[i]:
+            j += 1
+        runs.append((per_win[i], j - i))
+        i = j
+    notes = [nm for nm, n in runs if n >= 2]
+    print("  audio: %.1fs PCM -> %s" % (len(samples) / WAV_RATE, path))
+    print("  tune:  " + " ".join(notes[:40]))
+    return notes
+
 
 def parse_keys(argv):
-    rest, seq = [], b""
+    rest, seq, wav = [], b"", None
     for a in argv:
         if a.startswith("--keys="):
             for ch in a[len("--keys="):]:
                 seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        elif a.startswith("--audio="):
+            wav = a[len("--audio="):]
         else:
             rest.append(a)
-    return seq, rest
+    return seq, wav, rest
 
 
 def write_png(path, w, h, rgb):
@@ -112,7 +172,7 @@ def of_service(uc):
 
 
 def main():
-    keys, argv = parse_keys(sys.argv)
+    keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
     budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 120_000_000
     state["keys"] = keys
@@ -120,6 +180,7 @@ def main():
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_PPC, UC_MODE_PPC32 | UC_MODE_BIG_ENDIAN)
     uc.mem_map(RAM_BASE, RAM_SIZE, UC_PROT_ALL)
+    uc.mmio_map(SOUND_PAGE, 0x1000, sound_read, None, sound_write, None)
     uc.mem_write(LOAD, data)
     uc.mem_write(OF_ENTRY, struct.pack(">I", 0x4E800020))   # blr
     uc.reg_write(UC_PPC_REG_5, OF_ENTRY)                    # OF client entry in r5
@@ -153,6 +214,8 @@ def main():
         rgb[i*3+2] = fb[i*4+3]   # B
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if wav:
+        analyze_pcm(state["pcm"], wav)
 
 
 if __name__ == "__main__":

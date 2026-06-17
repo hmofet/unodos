@@ -18,9 +18,9 @@ images drive the pad themselves; the harness only services MMIO and runs the bud
 
 Usage: python rpi/harness.py <kernel8.img> <out.png> [instr_millions]
 """
-import sys, struct, zlib
+import sys, struct, zlib, math
 from unicorn import (Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_PROT_ALL,
-                     UC_HOOK_MEM_UNMAPPED)
+                     UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE)
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_PC
 
 W, H = 640, 480
@@ -47,7 +47,77 @@ OFF_STATUS = 0x3F00B898 - MBOX_PAGE
 OFF_WRITE  = 0x3F00B8A0 - MBOX_PAGE
 OFF_CLO    = 0x3F003004 - TIMER_PAGE
 
-state = {"pending_read": 0, "clock": 0, "keys": b"", "kidx": 0, "kcool": 0}
+PWM_CTL    = 0x3F20C000        # PWEN1|MSEN1 (0x81) enables the M/S square wave
+PWM_RNG1   = 0x3F20C010        # period; output freq = PWM_CLK / RNG1
+PWM_CLK_HZ = 9600000           # 19.2 MHz oscillator / DIVI=2 (matches the kernel)
+WAV_RATE   = 8000              # WAV sample rate for the reconstruction
+FPS        = 60
+
+state = {"pending_read": 0, "clock": 0, "keys": b"", "kidx": 0, "kcool": 0,
+         "clo_reads": 0, "audio": []}     # audio: list of (frame, "freq"|"off", value)
+
+
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def note_name(freq):
+    if freq <= 0:
+        return "rest"
+    midi = round(69 + 12 * math.log2(freq / 440.0))
+    return "%s%d" % (NOTE_NAMES[midi % 12], midi // 12 - 1)
+
+
+MAX_AUDIO_EVENTS = 48                  # ~one pass of the 30-note tune (then it loops)
+
+
+def audio_write_hook(uc, access, address, size, value, ud):
+    if len(state["audio"]) >= MAX_AUDIO_EVENTS:
+        return
+    frame = state["clo_reads"] // 2
+    if address == PWM_RNG1 and value > 0:
+        state["audio"].append((frame, "freq", PWM_CLK_HZ / value))
+    elif address == PWM_CTL and (value & 0x1) == 0:
+        state["audio"].append((frame, "off", 0))
+
+
+def write_wav(path, samples):
+    pcm = b"".join(struct.pack("<h", max(-32767, min(32767, int(s)))) for s in samples)
+    with open(path, "wb") as f:
+        f.write(b"RIFF"); f.write(struct.pack("<I", 36 + len(pcm))); f.write(b"WAVE")
+        f.write(b"fmt "); f.write(struct.pack("<IHHIIHH", 16, 1, 1, WAV_RATE,
+                                              WAV_RATE * 2, 2, 16))
+        f.write(b"data"); f.write(struct.pack("<I", len(pcm))); f.write(pcm)
+
+
+def reconstruct_audio(path):
+    """Turn the captured PWM-register timeline into a square-wave WAV and a note list.
+    Each note spans from its RNG1 write to the next event; freq = PWM_CLK / RNG1."""
+    ev = state["audio"]
+    if not ev:
+        print("  (no audio captured)")
+        return []
+    end_frame = ev[-1][0] + 16
+    segs = []
+    for i, (frame, kind, val) in enumerate(ev):
+        nxt = ev[i + 1][0] if i + 1 < len(ev) else end_frame
+        dur_s = max(0.0, (nxt - frame) / FPS)
+        segs.append((val if kind == "freq" else 0.0, dur_s))
+    samples = []
+    phase = 0.0
+    for freq, dur_s in segs:
+        n = int(dur_s * WAV_RATE)
+        if freq <= 0:
+            samples.extend([0] * n)
+            continue
+        step = freq / WAV_RATE
+        for _ in range(n):
+            phase = (phase + step) % 1.0
+            samples.append(7000 if phase < 0.5 else -7000)
+    write_wav(path, samples)
+    notes = [(f, note_name(f), round(d, 2)) for f, d in segs if f > 0]
+    print("  audio: %d notes, %.1fs -> %s" % (len(notes), len(samples) / WAV_RATE, path))
+    print("  tune:  " + " ".join(n for _, n, _ in notes))
+    return notes
 
 
 def uart_read(uc, offset, size, ud):
@@ -136,6 +206,7 @@ def mbox_write(uc, offset, size, value, ud):
 
 def timer_read(uc, offset, size, ud):
     if offset == OFF_CLO:
+        state["clo_reads"] += 1            # ~2 CLO reads per wait_vblank -> per frame
         state["clock"] = (state["clock"] + 20000) & 0xFFFFFFFF
         return state["clock"]
     return 0
@@ -150,21 +221,22 @@ KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
 
 
 def parse_keys(argv):
-    """Pull an optional --keys=SEQ out of argv; SEQ chars are injected as serial
-    input (w/a/s/d = d-pad, \\r or '\\n' = A/Enter, '<' = B/Backspace)."""
-    rest = []
-    seq = b""
+    """Pull --keys=SEQ (serial input injection) and --audio=PATH (reconstruct the
+    PWM tone to a WAV) out of argv."""
+    rest, seq, wav = [], b"", None
     for a in argv:
         if a.startswith("--keys="):
             for ch in a[len("--keys="):]:
                 seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        elif a.startswith("--audio="):
+            wav = a[len("--audio="):]
         else:
             rest.append(a)
-    return seq, rest
+    return seq, wav, rest
 
 
 def main():
-    keys, argv = parse_keys(sys.argv)
+    keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
     budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 60_000_000
     state["keys"] = keys
@@ -186,6 +258,8 @@ def main():
               % (address, size, uc.reg_read(UC_ARM64_REG_PC)))
         return False
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
+    if wav:
+        uc.hook_add(UC_HOOK_MEM_WRITE, audio_write_hook, None, PWM_CTL, PWM_RNG1 + 4)
 
     CHUNK = 2_000_000
     pc = LOAD
@@ -208,6 +282,8 @@ def main():
         rgb[i*3+2] = w & 0xFF
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if wav:
+        reconstruct_audio(wav)
 
 
 if __name__ == "__main__":

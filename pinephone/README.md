@@ -40,8 +40,11 @@ AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is fak
 > `Enter`/`Space` = A, `Backspace` = B. The harness emulates the 16550 RX, so this
 > path is verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png` —
 > navigation + app launch from injected serial input). The capacitive touch panel is
-> a heavier future driver. The AC200 audio codec (a large I2S/AIF effort, unlike the
-> Pi's simple PWM jack) is also future. Everything emulator-verifiable is verified.
+> a heavier future driver. The Music app **synthesises square-wave PCM in software**
+> (a phase accumulator) and feeds the samples to the A64 **I2S0 TX FIFO**; the harness
+> captures those writes as the actual audio stream and confirms it plays "Ode to Joy"
+> (`shots/music.wav`). The I2S clock + AC200/AC100 codec bring-up (to reach the real
+> speaker) is best-effort / by-ear; the PCM synthesis is verified.
 
 ## Hardware brought up
 
@@ -52,7 +55,7 @@ AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is fak
 | Surface | 480×640 **portrait**, 32bpp XRGB8888 linear framebuffer in DRAM at `0x40400000` |
 | Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word |
 | Timing | ARM generic timer `cntpct_el0` (24 MHz) via `mrs`; `wait_vblank` busy-waits one `FRAME_TICKS` (~60 Hz) |
-| Audio | UI/timeline only; the AC200 codec path is a future driver |
+| Audio | **software square-wave PCM** -> A64 **I2S0 TX FIFO** (`0x01C22020`); harness captures the samples to a WAV ("Ode to Joy"). Codec/I2S clock delivery to the speaker = best-effort/by-ear |
 | Input | **A64 UART0** serial console (`0x01C28000`, 16550); poll `LSR.DR`, read `RBR`; WASD+Enter+Backspace → pad (touch panel = future) |
 | RAM | DRAM at `0x40000000`: payload `0x40080000`, stack `→0x40200000`, vars `0x40300000`, fb info `0x40320000`, framebuffer `0x40400000` |
 | Boot | flat AArch64 payload at `0x40080000` (the U-Boot `kernel_addr_r`); `_start` parks cores, sets SP, programs DE2 |

@@ -55,6 +55,12 @@
 
 .equ FRAME_SPIN, 0x00010000      # busy-loop iterations per frame (~60 Hz on real HW)
 
+# Audio: software square-wave PCM -> the Mac codec data port (best-effort on HW)
+.equ SOUND_FIFO, 0x80800000      # codec PCM data port (16-bit samples)
+.equ AUD_RATE,   8000            # PCM sample rate
+.equ AUD_PERF,   133             # samples per ~60 Hz frame
+.equ AUD_AMP,    6000            # square-wave amplitude
+
 # Dostris geometry (board cells; 16px cells)
 .equ BW, 10
 .equ BH, 14
@@ -120,6 +126,8 @@
 .equ a_tmr,    VARS+164
 .equ a_pad,    VARS+168
 .equ a_gpause, VARS+172
+.equ m_phase,  VARS+176           # PCM square-wave phase accumulator
+.equ m_freq,   VARS+180           # current note frequency (Hz)
 .equ palette,  VARS+0x200         # 16 XRGB words
 .equ clk_str,  VARS+0x240         # 9 bytes
 .equ numstr,   VARS+0x250         # 6 bytes
