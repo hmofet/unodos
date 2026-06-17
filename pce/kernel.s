@@ -23,6 +23,7 @@
 VDC_AR   = $2000          ; VDC address/status
 VDC_DL   = $2002          ; VDC data low
 VDC_DH   = $2003          ; VDC data high
+VCE_CTRL = $2400          ; VCE control: dot clock + B/W (must be set on real HW)
 VCE_CTA  = $2402          ; VCE colour-table address
 VCE_CTW  = $2404          ; VCE colour-table data
 PSG_AR   = $2800
@@ -166,6 +167,12 @@ main:
 ; VDC / VCE helpers
 ; ============================================================================
 vdc_init:
+    ; VCE control: 5.37 MHz dot clock (256-wide), colour. A HuCard booted via a
+    ; flash cart has NO System Card to set this up, so the VCE state is undefined at
+    ; reset — without this write the display is black on real PC Engine hardware
+    ; (the harness models the palette but not the VCE control register, so it passed
+    ; in emulation). Matches the VDC's 256-wide HDR ($1F => 32 tiles).
+    stz VCE_CTRL
     ldx #0
 @l: lda vdc_regs,x
     sta VDC_AR
