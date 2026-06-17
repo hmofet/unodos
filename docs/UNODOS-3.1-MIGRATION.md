@@ -89,6 +89,9 @@ rpi/    Raspberry Pi (ARM Cortex-A, GNU as)  -- FIRST AArch64 (64-bit) world; Vi
 pinephone/ PinePhone (Allwinner A64, GNU as)  -- reuses the rpi AArch64 core; DE2 mixer UI
                                                  layer, portrait 480x640; M1-M3 + Dostris;
                                                  Unicorn-AArch64-verified
+ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) world; boots
+                                                 over Open Firmware (client interface);
+                                                 M1-M3 + Dostris; Unicorn-PPC-verified
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -185,6 +188,19 @@ pinephone/ PinePhone (Allwinner A64, GNU as)  -- reuses the rpi AArch64 core; DE
   UI) + Dostris. Verified on a **Unicorn AArch64** core (DRAM + a DE2 RAM sink; the generic
   timer advances on its own) rendering the DE2 framebuffer
   (`pinephone/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
+- **PowerPC Mac** is the **first PowerPC (big-endian) world** — a brand-new ISA needing
+  a new `ppc`/GNU-as dialect (`#` line comments) and a from-scratch harness, consuming
+  `[world.ppcmac]`. It is also the first port to boot over **Open Firmware** (no Mac OS):
+  OF enters `_start` with the IEEE-1275 client-interface entry in r5, and the kernel makes
+  OF client calls — `finddevice "screen"`, then `getprop "address"` + `"linebytes"` — to
+  obtain a 640×480 32bpp linear framebuffer, then draws into it directly (big-endian, so a
+  `stw` of `0xFFRRGGBB` lands as `FF RR GG BB`). M1 launcher; M2 d-pad highlight; M3 apps
+  (live Clock, Theme, Music UI) + Dostris. Verified on a **Unicorn PPC32 big-endian** core
+  that emulates the OF client interface (r5 → a `blr` trampoline; a code hook services
+  `finddevice`/`getprop`) and renders the framebuffer
+  (`ppcmac/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
+  The one bring-up trap: in PowerPC load/store addressing, `r0` in the base position means
+  *literal 0*, so the address-load macros must never target `r0`.
 
 Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
 **minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), **x86**, and the
