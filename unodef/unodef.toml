@@ -1383,6 +1383,24 @@ h = 192
 depth = 1
 role = "PRIMARY"
 
+# Sega Master System — the FIRST port built fresh on the contract-driven +
+# greenfield-window architecture (CONTRACT-ARCH §13). True Z80, so it consumes the
+# existing gen/z80/ world (sjasmplus) directly. A resident OS image with a windowed
+# tile desktop (like its tile-VDP cousins Genesis/SNES, hence single_app rather than
+# the §9 default `minimal` for an 8 KB machine — "describe what ships"). The standard
+# control pad has no mouse, so input is a d-pad-driven cursor (DIRNAV); the VDP gives
+# a 16-colour 256x192 Mode-4 surface.
+[port.sms]
+profile = "single_app"
+capabilities = ["DIRNAV"]
+ram_bytes = 8192
+[[port.sms.surface]]
+id = "primary"
+w = 256
+h = 192
+depth = 4
+role = "PRIMARY"
+
 
 # =============================================================================
 # UnoDOS 3.1 ABI (CONTRACT-ARCH §11, Phase 12) — the versioned clean break.
@@ -1728,6 +1746,73 @@ note = "screen width in cells (280px / 7)"
 sym = "SCRROWS"
 val = 24
 note = "screen height in cells (192px / 8)"
+
+
+[world.sms]
+description = "Sega Master System Z80 bare-metal; sjasmplus; compact 16B window entry, 256x192 (Mode 4, 32x24 cells)"
+cpu = "z80"
+emit = "sms/sys_gen.inc"
+note = "first fresh contract-driven port; window entry 16B (x86 base 32B); 256x192 VDP Mode 4; symbol names are the port's own"
+[[world.sms.equate]]
+sym = "SCRW"
+val = 256
+note = "screen width (pixels)"
+[[world.sms.equate]]
+sym = "SCRH"
+val = 192
+note = "screen height (pixels)"
+[[world.sms.equate]]
+sym = "SCRCOLS"
+val = 32
+note = "screen width in cells (256px / 8)"
+[[world.sms.equate]]
+sym = "SCRROWS"
+val = 24
+note = "screen height in cells (192px / 8)"
+[[world.sms.equate]]
+sym = "MAXWIN"
+val = 4
+note = "window table size (8KB RAM budget)"
+[[world.sms.equate]]
+sym = "WENT_SIZE"
+val = 16
+note = "compact entry size (x86 base 32)"
+[[world.sms.equate]]
+sym = "WSTATE"
+val = 0
+note = "win_entry: state"
+[[world.sms.equate]]
+sym = "WPROC"
+val = 1
+note = "win_entry: owner proc"
+[[world.sms.equate]]
+sym = "WX"
+val = 2
+[[world.sms.equate]]
+sym = "WY"
+val = 4
+[[world.sms.equate]]
+sym = "WW"
+val = 6
+[[world.sms.equate]]
+sym = "WH"
+val = 8
+[[world.sms.equate]]
+sym = "WTITLE"
+val = 10
+note = "win_entry: title pointer (word)"
+[[world.sms.equate]]
+sym = "EVQ_SIZE"
+val = 16
+note = "event queue depth"
+[[world.sms.equate]]
+sym = "EV_KEY"
+val = 1
+note = "event type: key"
+[[world.sms.equate]]
+sym = "EV_MOUSE"
+val = 4
+note = "event type: mouse"
 
 
 # =============================================================================
