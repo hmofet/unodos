@@ -86,6 +86,9 @@ pce/    NEC PC Engine (HuC6280, ca65)        -- FIRST HuC6280 world; VDC tile la
 rpi/    Raspberry Pi (ARM Cortex-A, GNU as)  -- FIRST AArch64 (64-bit) world; VideoCore
                                                  mailbox framebuffer; M1-M3 + Dostris + PWM;
                                                  Unicorn-AArch64-verified
+pinephone/ PinePhone (Allwinner A64, GNU as)  -- reuses the rpi AArch64 core; DE2 mixer UI
+                                                 layer, portrait 480x640; M1-M3 + Dostris;
+                                                 Unicorn-AArch64-verified
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -172,6 +175,16 @@ rpi/    Raspberry Pi (ARM Cortex-A, GNU as)  -- FIRST AArch64 (64-bit) world; Vi
   Dostris. A real Pi renders to an HDMI surface no headless grab can read, so it is verified
   on a **Unicorn AArch64** core that emulates the mailbox + system-timer MMIO and renders the
   firmware-allocated framebuffer (`rpi/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
+- **PinePhone** is the **second AArch64 world** — it reuses the Pi's AArch64 core (same GAS
+  dialect, primitives, Dostris + app logic), retargeted to the **Allwinner A64** SoC and a
+  **portrait** 480×640 panel, consuming `[world.pinephone]`. The A64 has no GPU mailbox, so
+  (assuming the SPL/U-Boot stage brought up DRAM + the TCON0/MIPI-DSI panel clocks, as the Pi
+  assumes the VideoCore firmware) the kernel programs the **Display Engine 2.0 mixer UI layer**
+  to scan out an XRGB8888 framebuffer at `0x40400000`; frames pace off the **ARM generic timer**
+  (`cntpct_el0`, no MMIO). M1 launcher; M2 d-pad highlight; M3 apps (live Clock, Theme, Music
+  UI) + Dostris. Verified on a **Unicorn AArch64** core (DRAM + a DE2 RAM sink; the generic
+  timer advances on its own) rendering the DE2 framebuffer
+  (`pinephone/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
 
 Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
 **minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), **x86**, and the

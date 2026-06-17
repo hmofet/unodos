@@ -18,9 +18,9 @@ which family a platform is in:
   sharing no code): Amiga, MacPlus-OS, Genesis, Apple II, C64 (6510),
   SNES (65816), IIGS (65816), SMS (Z80), NES (6502/2A03), Game Boy (Sharp SM83),
   Game Gear (Z80), Game Boy Advance (ARM7TDMI), VIC-20 (6502), WonderSwan (V30MZ),
-  PC Engine (HuC6280), Raspberry Pi (ARM Cortex-A / AArch64). *(SMS, NES, Game Boy,
-  Game Gear, GBA, VIC-20, WonderSwan, PC Engine, and Raspberry Pi are the nine ports
-  built fresh on the 3.1 Contract — see below.)*
+  PC Engine (HuC6280), Raspberry Pi + PinePhone (ARM Cortex-A / AArch64). *(SMS, NES,
+  Game Boy, Game Gear, GBA, VIC-20, WonderSwan, PC Engine, Raspberry Pi, and PinePhone
+  are the ten ports built fresh on the 3.1 Contract — see below.)*
 - **Portable C core — shared `unodos.c`** (one ~52 KB core + a thin per-platform
   backend): Mac System 7, Mac System 1–6, PS2, Dreamcast.
 
@@ -50,8 +50,9 @@ which family a platform is in:
 | **Bandai WonderSwan** *(3.1-fresh)* | NEC V30MZ @3.07 / **16 KB** | x86 asm, bare-metal 64K ROM (reset vector), **nasm** | SCR1 32×32 tilemap, 8×8 2bpp tiles at `0x2000`, 224×144 mono; palette→shade-pool | **built into ROM** → tile-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + PSG; Unicorn x86 |
 | **NEC PC Engine** *(3.1-fresh)* | HuC6280 @7.16 / **8 KB** | 65C02-superset asm, bare-metal HuCard ROM, **ca65 `--cpu huc6280`** | HuC6270 VDC 32×32 BAT, 8×8 4bpp tiles at VRAM `$1000`, 256×224; 9-bit VCE palette | **built into ROM** → 4-col icon-grid launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + PSG; py65+HuC6280 |
 | **Raspberry Pi** *(3.1-fresh)* | ARM Cortex-A / **AArch64** @1GHz+ / 1 GB+ | AArch64 asm, bare-metal `kernel8.img` @`0x80000`, **GNU as** | VideoCore **mailbox framebuffer** 640×480 32bpp XRGB (no HW tiles); palette-index font/icons | **built into image** → 4-col icon-grid launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + PWM; Unicorn AArch64 |
+| **PinePhone** *(3.1-fresh)* | Allwinner A64 / 4× A53 **AArch64** / 2–3 GB | AArch64 asm, bare-metal payload @`0x40080000`, **GNU as** | **DE2 mixer UI layer** scanout, 480×640 **portrait** 32bpp DRAM FB; palette-index font/icons | **built into image** → 4-col icon-grid launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris (audio UI-only); Unicorn AArch64 |
 
-The last nine rows are the **3.1-fresh** ports — written from scratch against the
+The last ten rows are the **3.1-fresh** ports — written from scratch against the
 Contract (`unodef/`), not migrated. SMS adds a bare-metal Z80 port reusing `gen/z80/`;
 NES is the `minimal`-profile flagship reusing `gen/6502/`; Game Boy is the **first
 Sharp-SM83 (`gbz80`) world** — a genuinely new generator dialect (rgbds) — and runs one
@@ -61,13 +62,15 @@ reusing the SMS's `gen/z80/` world and code with the GB's 20×18 layout; **GBA**
 **VIC-20** reuses the `gen/6502/` + dasm path as a character-cell launcher; and
 **WonderSwan** is the **first x86 handheld** (NEC V30MZ ≈ 80186, nasm) on a hardware
 tile engine; **PC Engine** is the **first HuC6280 world** (65C02 superset,
-`ca65 --cpu huc6280`) on the HuC6270 VDC; and **Raspberry Pi** is the **first
+`ca65 --cpu huc6280`) on the HuC6270 VDC; **Raspberry Pi** is the **first
 AArch64 (64-bit) world** (`aarch64`/GNU-as) drawing a software framebuffer the
-VideoCore firmware allocates over the mailbox. The five newest are each verified on
+VideoCore firmware allocates over the mailbox; and **PinePhone** reuses that AArch64
+core on the Allwinner A64, programming the DE2 mixer UI layer to scan out a portrait
+framebuffer and pacing off the ARM generic timer. The six newest are each verified on
 a **ROM-free instruction-level harness** — Unicorn ARM7TDMI (GBA), py65 (VIC-20),
-Unicorn x86 (WonderSwan), py65+HuC6280 (PC Engine), Unicorn AArch64 (Raspberry Pi,
-emulating the mailbox + system-timer MMIO) — running the real ROM where a
-focus-independent emulator capture is impractical under RDP.
+Unicorn x86 (WonderSwan), py65+HuC6280 (PC Engine), Unicorn AArch64 (Raspberry Pi +
+PinePhone) — running the real ROM where a focus-independent emulator capture is
+impractical under RDP.
 
 Two orthogonal axes cut across the families and explain most of the remaining
 variation:
