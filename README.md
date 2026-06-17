@@ -12,17 +12,18 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 >   against. All 7 reachable asm ports + x86 consume it byte-identically; the **3.1
 >   window ABI** (a greenfield logical window model → per-platform derived layout,
 >   `unodef/WMODEL.md`) is shipped on x86 (clean 16 B entry), validated on real
->   hardware + a cycle-accurate 8088. **Ten ports** were then built **fresh on the
+>   hardware + a cycle-accurate 8088. **Eleven ports** were then built **fresh on the
 >   3.1 architecture** (not migrated): **Sega Master System** (Z80), **Nintendo NES**
 >   (6502), **Game Boy / Color** (Sharp SM83 — a new `gbz80`/rgbds dialect), **Sega
 >   Game Gear** (Z80), **Game Boy Advance** (ARM7TDMI — the first ARM world), **VIC-20**
 >   (6502), **Bandai WonderSwan** (NEC V30MZ — the first x86 handheld), **NEC PC
 >   Engine** (HuC6280), **Raspberry Pi** (ARM Cortex-A — the first **AArch64 /
->   64-bit** world, on the VideoCore mailbox framebuffer), and **PinePhone** (Allwinner
->   A64 — the AArch64 core retargeted to the DE2 display engine, in portrait) — each
->   M1–M3 with a Dostris game + audio. The six newest are
->   verified on **ROM-free instruction-level harnesses** (Unicorn ARM / py65 / Unicorn
->   x86 / py65+HuC6280 / Unicorn AArch64) where an emulator can't be captured headlessly under RDP. See
+>   64-bit** world, on the VideoCore mailbox framebuffer), **PinePhone** (Allwinner
+>   A64 — the AArch64 core retargeted to the DE2 display engine, in portrait), and
+>   **PowerPC Mac** (32-bit PowerPC — the first **big-endian PowerPC** world, booting
+>   over **Open Firmware**) — each M1–M3 with a Dostris game + audio. The seven newest
+>   are verified on **ROM-free instruction-level harnesses** (Unicorn ARM / py65 / Unicorn
+>   x86 / py65+HuC6280 / Unicorn AArch64 / Unicorn PPC) where an emulator can't be captured headlessly under RDP. See
 >   **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for status, the
 >   design, and next directions.
 
@@ -85,6 +86,7 @@ the emulator can't be captured headlessly under RDP.
 | [**NEC PC Engine**](pce/) | PC Engine / TG-16 (HuC6280 @ 7.16MHz, **8KB**) | Bare-metal HuCard: HuC6270 VDC 32×32 BAT, 8×8 4bpp tiles, 256×224, 9-bit VCE palette, 8-MPR MMU. **First HuC6280 world** — `ca65 --cpu huc6280`. `minimal`, icon grid. | **M1–M3 + game + audio — py65+HuC6280-verified.** Joypad nav, apps incl. live Clock + Theme-VCE-palette + Music (PC Engine PSG) + **Dostris** in colour. See [pce/README.md](pce/README.md) |
 | [**Raspberry Pi**](rpi/) | Pi 3/4 (ARM Cortex-A, **AArch64**, 1GB+) | Bare-metal `kernel8.img` @ `0x80000`: a firmware-allocated **VideoCore mailbox framebuffer** (640×480 32bpp XRGB, no HW tiles). **First AArch64 / 64-bit world** — `aarch64`/GNU-as. `minimal`, 4-col icon grid. | **M1–M3 + game + audio — Unicorn-AArch64-verified.** System-timer-paced nav, apps incl. live Clock + Theme-palette + Music (PWM jack) + **Dostris**. See [rpi/README.md](rpi/README.md) |
 | [**PinePhone**](pinephone/) | PinePhone (Allwinner A64, 4× A53, **AArch64**) | Bare-metal payload @ `0x40080000`: programs the **DE2 mixer UI layer** to scan out a 480×640 **portrait** 32bpp DRAM framebuffer. Reuses the Pi AArch64 core; `cntpct_el0` pacing. `minimal`, 4-col grid. | **M1–M3 + game + audio — Unicorn-AArch64-verified.** d-pad nav, apps incl. live Clock + Theme-palette + Music (UI) + **Dostris**. See [pinephone/README.md](pinephone/README.md) |
+| [**PowerPC Mac**](ppcmac/) | G3/G4-class (32-bit **PowerPC**, big-endian) | **Open Firmware** client program: OF enters with the CI in r5; `finddevice "screen"` + `getprop` give a 640×480 32bpp framebuffer. **First PowerPC world** — new `ppc`/GNU-as dialect. `minimal`, 4-col grid. | **M1–M3 + game + audio — Unicorn-PPC-verified** (OF client interface emulated). d-pad nav, apps incl. live Clock + Theme-palette + Music (UI) + **Dostris**. See [ppcmac/README.md](ppcmac/README.md) |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program

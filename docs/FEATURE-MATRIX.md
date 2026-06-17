@@ -41,8 +41,9 @@ Sega Dreamcast.
 | **NEC PC Engine** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 256×224 4bpp tiles) | py65+HuC6280 core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real PC Engine + audio-ear pending |
 | **Raspberry Pi** *(3.1-fresh)* | M1–M3 + Dostris + PWM audio (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (ROM-free harness emulating the mailbox + system timer, AUTOTEST scripted-pad) | ⏳ real Pi + USB-HID input + audio-ear pending |
 | **PinePhone** *(3.1-fresh)* | M1–M3 + Dostris (`minimal`, 480×640 portrait 32bpp DE2 FB; audio UI-only) | Unicorn AArch64 core (ROM-free harness; DE2 sink + `cntpct_el0` pacing, AUTOTEST scripted-pad) | ⏳ real PinePhone + touch input + AC200 audio pending |
+| **PowerPC Mac** *(3.1-fresh)* | M1–M3 + Dostris (`minimal`, 640×480 32bpp Open-Firmware FB; audio UI-only) | Unicorn PPC32 big-endian core (ROM-free harness; OF client-interface emulated, AUTOTEST scripted-pad) | ⏳ real PowerPC Mac + ADB input + audio pending |
 
-The last ten are built **fresh on the 3.1 contract-driven architecture** (not
+The last eleven are built **fresh on the 3.1 contract-driven architecture** (not
 legacy ports): SMS is a windowed Z80 port; NES is the `minimal`-profile 6502
 launcher; Game Boy is the `minimal`-profile SM83 port — the first to add a *new*
 generator dialect (`gbz80`/rgbds); Game Gear is `minimal` on SMS silicon, reusing
@@ -53,18 +54,21 @@ world (a new `arm`/GNU-as dialect), drawing a software Mode-3 framebuffer;
 hardware-tile launcher; **PC Engine** is the first **HuC6280** world (a 65C02
 superset, `ca65 --cpu huc6280`), a VDC tile launcher; **Raspberry Pi** is the
 first **AArch64 / 64-bit** world (`aarch64`/GNU-as), drawing a software framebuffer
-the VideoCore firmware allocates over the mailbox; and **PinePhone** reuses that
+the VideoCore firmware allocates over the mailbox; **PinePhone** reuses that
 AArch64 core on the Allwinner A64, programming the DE2 mixer UI layer to scan out a
-portrait framebuffer. The six newest are each
+portrait framebuffer; and **PowerPC Mac** is the first big-endian **PowerPC** world
+(a new `ppc`/GNU-as dialect), the first to boot over **Open Firmware** — it makes OF
+client calls to get its framebuffer. The seven newest are each
 verified on a **ROM-free instruction-level harness** (Unicorn ARM / py65 / Unicorn
-x86 / py65+HuC6280 / Unicorn AArch64) where a focus-independent emulator capture is
-impractical. They are not yet in the per-feature grids below (which cover the mature
-legacy targets); see [../sms/README.md](../sms/README.md),
+x86 / py65+HuC6280 / Unicorn AArch64 / Unicorn PPC) where a focus-independent emulator
+capture is impractical. They are not yet in the per-feature grids below (which cover
+the mature legacy targets); see [../sms/README.md](../sms/README.md),
 [../nes/README.md](../nes/README.md), [../gb/README.md](../gb/README.md),
 [../gg/README.md](../gg/README.md), [../gba/README.md](../gba/README.md),
 [../vic20/README.md](../vic20/README.md), [../ws/README.md](../ws/README.md),
-[../pce/README.md](../pce/README.md), [../rpi/README.md](../rpi/README.md), and
-[../pinephone/README.md](../pinephone/README.md).
+[../pce/README.md](../pce/README.md), [../rpi/README.md](../rpi/README.md),
+[../pinephone/README.md](../pinephone/README.md), and
+[../ppcmac/README.md](../ppcmac/README.md).
 
 All retro/console ports flag **audio as an "ear-check"** pending real
 hardware: the control path (SPC700 mailbox ack, Ensoniq DOC register log,
