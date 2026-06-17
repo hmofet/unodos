@@ -1,3 +1,4 @@
 build/*
 !build/unodos.sms
 !build/desktop.png
+!build/wm.png

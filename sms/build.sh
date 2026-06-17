@@ -1,6 +1,7 @@
 #!/bin/sh
 # UnoDOS / Sega Master System build (Z80, sjasmplus).
-# Usage: ./build.sh           -> build/unodos.sms
+# Usage: ./build.sh            -> build/unodos.sms       (interactive)
+#        ./build.sh test       -> build/unodos_test.sms  (AUTOTEST: scripted pad)
 set -e
 cd "$(dirname "$0")"
 
@@ -11,6 +12,12 @@ mkdir -p build
 echo "[1/2] generating tiles + palette from the shared assets..."
 (cd .. && "$PY" sms/mkdata.py)
 
+FLAGS=""
+OUT=build/unodos.sms
+case "$1" in
+  test) FLAGS="-DAUTOTEST=1"; OUT=build/unodos_test.sms ;;
+esac
+
 echo "[2/2] assembling kernel.asm (Z80, raw 32KB ROM)..."
-"$SJASM" --raw=build/unodos.sms kernel.asm
-echo "done: sms/build/unodos.sms ($(wc -c < build/unodos.sms) bytes)"
+"$SJASM" $FLAGS --raw="$OUT" kernel.asm
+echo "done: sms/$OUT ($(wc -c < "$OUT") bytes)"
