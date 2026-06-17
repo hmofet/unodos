@@ -15,6 +15,14 @@ shares. See [HANDOFF.md](HANDOFF.md) for the full M0–M3 plan.
 
 ## Status
 
+> **Real hardware — conditional pass (clone) 🟡.** Boots on a **SupaBoy Hyperbeach**
+> (a portable SNES clone) via an **FXPak Pro** flash cart running the official sd2snes
+> firmware: the OS comes up and is **navigable**, but two issues show on the clone —
+> the desktop **icons render as text labels only** (no icon tiles) and there is **no
+> audio**. Because the SupaBoy is not authentic SNES silicon, this is a **conditional
+> pass**; verification on a **real SNES is pending**. The two things to re-check on
+> genuine hardware are the icon-tile upload (shadow→VRAM DMA path) and the SPC700 audio.
+
 **M0 — DONE.** A LoROM `.sfc` boots in Mesen2 to the "UnoDOS 3" tile
 splash and reacts to the joypad. Foundation end to end: cartridge header +
 vectors, native-mode bring-up, the shared font as SNES tiles, the palette,
