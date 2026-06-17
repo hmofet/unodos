@@ -81,6 +81,8 @@ vic20/  Commodore VIC-20 (6502, dasm)        -- 22x23 char-cell list launcher;
                                                  M1-M3 + Dostris + VIC tone; py65-verified
 ws/     Bandai WonderSwan (NEC V30MZ, nasm)  -- FIRST x86 handheld; SCR1 tile launcher;
                                                  M1-M3 + Dostris + PSG; Unicorn-verified
+pce/    NEC PC Engine (HuC6280, ca65)        -- FIRST HuC6280 world; VDC tile launcher;
+                                                 M1-M3 + Dostris + PSG; py65+HuC6280-verified
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -145,12 +147,22 @@ ws/     Bandai WonderSwan (NEC V30MZ, nasm)  -- FIRST x86 handheld; SCR1 tile la
   a **Unicorn x86/V30MZ** core that maps the ROM flush to `0xFFFFF` so the reset vector
   `0xFFFF0` runs the genuine JMP-FAR boot path
   (`ws/build/{desktop,nav,app,clock,theme,music,dostris}.png`).
+- **PC Engine** is the **first HuC6280 world** (a 65C02 superset; `ca65 --cpu huc6280`),
+  consuming `[world.pce]`. `minimal`: 256×224 = 32×28 BAT cells, so it reuses the NES's
+  4-column icon-grid launcher + shared 6502 app/Dostris logic with the HuC6270 VDC as the
+  draw layer (8×8 4bpp tiles to VRAM `$1000`; BAT entry `$0100+N`; 16-colour VCE palette,
+  9-bit `GGGBBBRRR`, recoloured by Theme). The HuC6280 MMU maps the logical space via 8 MPR
+  banks. M1 launcher; M2 joypad on `$3000` + a VDC-vblank loop + a directional highlight; M3
+  apps (live Clock, Theme-cycles-VCE-palette, Music on the PSG) + Dostris. Mesen renders the
+  PCE through a GPU surface a GDI grab reads as black, so it is verified on a **ROM-free
+  HuC6280 harness** (py65 65C02 + the TAM/CSH opcodes + the MMU + a VDC/VCE model)
+  (`pce/build/{desktop,nav,app,clock,theme,music,dostris}.png`).
 
 Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
-**minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), and **x86** — three
-of them (GBA, VIC-20, WonderSwan) verified on a **ROM-free instruction-level harness**
-(Unicorn ARM / py65 / Unicorn x86) running the real ROM, the pattern for any target whose
-emulator can't be captured headlessly under RDP.
+**minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), **x86**, and the
+**HuC6280** — four of them (GBA, VIC-20, WonderSwan, PC Engine) verified on a **ROM-free
+instruction-level harness** (Unicorn ARM / py65 / Unicorn x86 / py65+HuC6280) running the
+real ROM, the pattern for any target whose emulator can't be captured headlessly under RDP.
 
 ## Verification (host-first, all green together)
 
@@ -271,13 +283,17 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    FIRST x86 handheld (V30MZ ≈ 80186, nasm, the Contract's x86 surface), a hardware-tile
    launcher. Verified on a **Unicorn x86** core that runs the genuine reset-vector boot
    path. See [../ws/README.md](../ws/README.md). NEXT on WonderSwan: real hw + audio-ear.
-10. **More fresh ports / the next CPU family.** PC Engine (HuC6280) is Mesen2-supported and
-    has a WIP foundation (`pce/`); the next genuinely new ISA (e.g. a deeper ARM/RISC-V or
-    PowerPC target) follows once its SDK is installed.
-11. **Generalize the greenfield model to the next subsystem** — the event record
+10. ~~**NEW PORT: NEC PC Engine (HuC6280).**~~ **M1–M3 + game + audio DONE** — the FIRST
+    HuC6280 world (65C02 superset, `ca65 --cpu huc6280`), a VDC tile launcher. Mesen's GPU
+    surface won't grab under RDP, so it is verified on a **ROM-free HuC6280 harness** (py65 +
+    the TAM/CSH opcodes + the MMU + a VDC/VCE model). See [../pce/README.md](../pce/README.md).
+    NEXT on PCE: real hw + audio-ear.
+11. **More fresh ports / the next CPU family.** The next genuinely new ISA (e.g. a deeper
+    ARM/RISC-V or PowerPC target) follows once its SDK is installed.
+12. **Generalize the greenfield model to the next subsystem** — the event record
    (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
    bring them under the logical-model + derived-layout treatment (host-verifiable).
-12. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
+13. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
    `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
    backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
    vectors.
