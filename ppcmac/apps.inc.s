@@ -285,7 +285,11 @@ draw_theme_status:
     mtlr  r0
     blr
 
-# ---- Music (UI + timing; the Mac sound path is a future driver) ------------
+# ---- Music (square-wave PCM tone synthesis -> the Mac codec data port) -----
+# The kernel synthesises a square wave for the current note in software (a phase
+# accumulator) and feeds PCM samples to the codec data port each frame. The harness
+# captures those writes as the actual audio stream (-> WAV). On real hardware the
+# codec + DBDMA bring-up is best-effort / by-ear; the PCM synthesis is verified.
 music_init:
     mflr  r0
     stwu  r1, -16(r1)
@@ -304,14 +308,47 @@ music_init:
 music_silence:
     li    r3, 0
     STWA  r3, m_play, r4
+    li    r3, 0
+    STWA  r3, m_freq, r4
     blr
 music_load:
     LWZA  r3, m_idx
     slwi  r3, r3, 2
     LA    r4, music_song
     add   r4, r4, r3
+    lhz   r5, 0(r4)                       # note frequency (Hz)
+    STWA  r5, m_freq, r6
+    li    r5, 0
+    STWA  r5, m_phase, r6                 # restart the phase for a clean tone
     lbz   r3, 2(r4)                       # duration (frames)
     STWA  r3, m_timer, r4
+    blr
+# music_gen: synthesise one frame of square-wave PCM for the current note. Leaf.
+music_gen:
+    LWZA  r3, m_freq
+    cmpwi r3, 0
+    beq   mg_done                        # rest -> no samples
+    LWZA  r4, m_phase
+    LA    r5, SOUND_FIFO
+    li    r6, AUD_PERF
+mg_loop:
+    cmpwi r4, (AUD_RATE/2)
+    blt   mg_hi
+    li    r7, -AUD_AMP                    # second half -amp
+    b     mg_w
+mg_hi:
+    li    r7, AUD_AMP                     # first half +amp
+mg_w:
+    sth   r7, 0(r5)                       # write 16-bit sample to the codec port
+    add   r4, r4, r3                      # phase += freq
+    cmpwi r4, AUD_RATE
+    blt   mg_now
+    subi  r4, r4, AUD_RATE
+mg_now:
+    subic. r6, r6, 1
+    bne   mg_loop
+    STWA  r4, m_phase, r5
+mg_done:
     blr
 music_tick:
     mflr  r0
@@ -320,6 +357,7 @@ music_tick:
     LWZA  r3, m_play
     cmpwi r3, 0
     beq   mt_done
+    bl    music_gen
     LWZA  r3, m_timer
     subi  r3, r3, 1
     STWA  r3, m_timer, r4
@@ -546,7 +584,7 @@ c_music:
     .long 16, 96, m_mu1
     .long 16, 130, m_mu2
     .long 0xFFFFFFFF
-m_mu0: .asciz "Music player (UI)"
+m_mu0: .asciz "Music player (square)"
 m_mu1: .asciz "Ode to Joy"
 m_mu2: .asciz "Note:"
 .align 2

@@ -16,7 +16,7 @@ harness just:
 
 Usage: python pinephone/harness.py <unodos.bin> <out.png> [instr_millions]
 """
-import sys, struct, zlib
+import sys, struct, zlib, math
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_PROT_ALL, UC_HOOK_MEM_UNMAPPED
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_PC
 
@@ -30,22 +30,86 @@ DE2_SZ   = 0x00200000
 UART_PAGE = 0x01C28000          # A64 UART0 (16550, input) — emulated
 OFF_UART_RBR = 0x01C28000 - UART_PAGE   # 0x00
 OFF_UART_LSR = 0x01C28014 - UART_PAGE   # 0x14
+I2S_PAGE  = 0x01C22000          # A64 I2S0 (audio TX FIFO) — emulated
+OFF_I2S_TXFIFO = 0x01C22020 - I2S_PAGE  # 0x20
+WAV_RATE  = 8000
+MAX_SAMPLES = WAV_RATE * 8       # cap the capture at 8 s (the tune then loops)
 
-state = {"keys": b"", "kidx": 0, "kcool": 0}
+state = {"keys": b"", "kidx": 0, "kcool": 0, "pcm": []}
+
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def note_name(freq):
+    if freq <= 0:
+        return "rest"
+    midi = round(69 + 12 * math.log2(freq / 440.0))
+    return "%s%d" % (NOTE_NAMES[midi % 12], midi // 12 - 1)
+
+
+def i2s_read(uc, offset, size, ud):
+    return 0
+
+
+def i2s_write(uc, offset, size, value, ud):
+    if offset == OFF_I2S_TXFIFO and len(state["pcm"]) < MAX_SAMPLES:
+        s = value & 0xFFFF
+        if s >= 0x8000:
+            s -= 0x10000                 # sign-extend the 16-bit sample
+        state["pcm"].append(s)
+
+
+def write_wav(path, samples):
+    pcm = b"".join(struct.pack("<h", max(-32767, min(32767, int(s)))) for s in samples)
+    with open(path, "wb") as f:
+        f.write(b"RIFF"); f.write(struct.pack("<I", 36 + len(pcm))); f.write(b"WAVE")
+        f.write(b"fmt "); f.write(struct.pack("<IHHIIHH", 16, 1, 1, WAV_RATE,
+                                              WAV_RATE * 2, 2, 16))
+        f.write(b"data"); f.write(struct.pack("<I", len(pcm))); f.write(pcm)
+
+
+def analyze_pcm(samples, path):
+    """Capture proof: write the PCM to WAV and recover the note sequence from the
+    actual samples (windowed zero-crossing rate -> frequency -> nearest note)."""
+    if not samples:
+        print("  (no audio captured)")
+        return []
+    write_wav(path, samples)
+    win = WAV_RATE // 20                  # 50 ms windows
+    per_win = []
+    for i in range(0, len(samples) - win, win):
+        seg = samples[i:i + win]
+        crossings = sum(1 for j in range(1, len(seg))
+                        if (seg[j - 1] < 0) != (seg[j] < 0))
+        per_win.append(note_name(crossings * WAV_RATE / (2 * win)))
+    # collapse to runs and drop 1-window boundary blips (each real note holds many)
+    runs, i = [], 0
+    while i < len(per_win):
+        j = i
+        while j < len(per_win) and per_win[j] == per_win[i]:
+            j += 1
+        runs.append((per_win[i], j - i))
+        i = j
+    notes = [nm for nm, n in runs if n >= 2]
+    print("  audio: %.1fs PCM -> %s" % (len(samples) / WAV_RATE, path))
+    print("  tune:  " + " ".join(notes[:40]))
+    return notes
 
 KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
           "\r": b"\r", "\n": b"\r", " ": b" ", "<": b"\x08"}
 
 
 def parse_keys(argv):
-    rest, seq = [], b""
+    rest, seq, wav = [], b"", None
     for a in argv:
         if a.startswith("--keys="):
             for ch in a[len("--keys="):]:
                 seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        elif a.startswith("--audio="):
+            wav = a[len("--audio="):]
         else:
             rest.append(a)
-    return seq, rest
+    return seq, wav, rest
 
 
 def uart_read(uc, offset, size, ud):
@@ -86,7 +150,7 @@ def write_png(path, w, h, rgb):
 
 
 def main():
-    keys, argv = parse_keys(sys.argv)
+    keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
     budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 160_000_000
     state["keys"] = keys
@@ -96,6 +160,7 @@ def main():
     uc.mem_map(DRAM, DRAM_SZ, UC_PROT_ALL)
     uc.mem_map(DE2_BASE, DE2_SZ, UC_PROT_ALL)
     uc.mmio_map(UART_PAGE, 0x1000, uart_read, None, uart_write, None)
+    uc.mmio_map(I2S_PAGE, 0x1000, i2s_read, None, i2s_write, None)
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x40200000)
 
@@ -126,6 +191,8 @@ def main():
         rgb[i*3+2] = w & 0xFF
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if wav:
+        analyze_pcm(state["pcm"], wav)
 
 
 if __name__ == "__main__":
