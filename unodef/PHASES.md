@@ -54,11 +54,24 @@ sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh   # host C subsyste
 sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh # (unosched needs setarch -R for TSan)
 ```
 
+## Greenfield window model + Phase 12 pilot (the 3.1 ABI, shipped on x86)
+The 3.1 window-ABI decision landed as a **greenfield window model** (`WMODEL.md`,
+`wmgen.py`, `[wmodel]`): one logical model → per-platform DERIVED physical layout
+(SoA floor / AoS / widths / capacity) reached via generated zero-cost accessors,
+proven across 9 platforms (`gen/wm/ARCHITECTURES.txt`) + a 40-yr arch survey, wired
+into all 6 windowing ports' addressing (byte-identical). **Phase 12 piloted + shipped
+on x86:** `[struct] win_entry` is now the clean 16 B layout (pointer title into a
+kernel pool + compact fields); kernel needed no code edits (symbolic offsets + the
+`win_entry_addr` stride macro). **QEMU + real-hardware (user's laptop) + cycle-
+accurate-8088 (MartyPC) verified.** Shipped with a CGA save-under cursor fix. The
+other windowing ports already run the compact 16 B layout.
+
 ## Tally
 - **Fully host-proven (8):** 0,1,2,3,4,6,7,9 — including byte-identical rebuilds of
   **all 8 reachable-toolchain ports** (x86 + the 7 asm ports across nasm/vasm/ca65/dasm)
   and the SMP+TSan oracle.
-- **Host-proven core + hardware/SDK-blocked tail (5):** 5 (vbcc/WinUAE), 8 (NES/GB
-  emulator), 10 (Saturn-SH2/PS3-SPU), 11 (PCI/USB), 12 (port re-issue), 13 (console
-  SDK backends, real NICs). Each ships a working host model/generator + a documented
-  blocked step — nothing faked.
+- **Phase 12 (ship 3.1 ABI): SHIPPED on x86** — clean 16 B window layout, real-hardware
+  + cycle-accurate-8088 validated (see above).
+- **Host-proven core + hardware/SDK-blocked tail (4):** 5 (vbcc/WinUAE), 8 (NES/GB
+  emulator), 10 (Saturn-SH2/PS3-SPU), 11 (PCI/USB), 13 (console SDK backends, real
+  NICs). Each ships a working host model/generator + a documented blocked step.

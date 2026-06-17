@@ -9,8 +9,12 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 >   (branch `unodos-3-legacy`, tag `legacy-pre-3.1`). Stable, known-good.
 > - **UnoDOS 3.1** — the forward, contract-driven redesign (branch `master`): one
 >   machine-readable Contract (`unodef/`) every world is generated from or checked
->   against. See **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for
->   status, the design, and next directions.
+>   against. All 7 reachable asm ports + x86 consume it byte-identically; the **3.1
+>   window ABI** (a greenfield logical window model → per-platform derived layout,
+>   `unodef/WMODEL.md`) is shipped on x86 (clean 16 B entry), validated on real
+>   hardware + a cycle-accurate 8088. See
+>   **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for status, the
+>   design, and next directions (the **Sega Master System** Z80 port is the lead).
 
 ## Overview
 

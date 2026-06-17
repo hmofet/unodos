@@ -34,8 +34,12 @@ unodef/                 the Contract (Layer 0) + tooling
                         per-world [world.*] variants, abi31 scheme, .UNO v2 header)
   unogen.py             emits 6 worlds (x86/C/68k/6502/65816/z80) + app stubs +
                         profile manifest + 3.1 ordinal map; `--check` = trust anchor
-  conformance/          PORT-SPEC §6 made executable (43/43, with bug-discrimination)
-  gen/                  GENERATED per-world surfaces (do not edit)
+  wmgen.py              GREENFIELD window model: derives a per-platform physical
+                        window layout (SoA/AoS, widths, accessors) from the logical
+                        [wmodel] — the 3.1 window ABI engine. -> gen/wm/<platform>/
+  WMODEL.md             the window-model RFC + verification + 40-yr arch survey
+  conformance/          PORT-SPEC §6 made executable (52/52, with bug-discrimination)
+  gen/                  GENERATED per-world surfaces (do not edit); gen/wm/ = windows
   PHASES.md             the live phase-by-phase status ledger
 unofs/                  storage policy over a `block` service (FAT12)         [§12]
 uno2d/                  the tall 2D Primitive Vtable (floor + accel)          [§5/§6]
@@ -82,20 +86,35 @@ vasm, ca65) + the C header (`_Static_assert`s).
   · 3 unofs · 4 asm consumption (**all 7 asm ports**: Amiga + Genesis + MacPlus via
   vasm, SNES + IIGS via ca65, C64 + Apple II via dasm) · 6 uno2d · 7 concurrency/SMP/
   TSan · 9 unosound.
-- **Host core + hardware/SDK-blocked tail (5):** 5 hybrid policy (needs vbcc/WinUAE)
+- **Host core + hardware/SDK-blocked tail (4):** 5 hybrid policy (needs vbcc/WinUAE)
   · 8 display/profiles (NES/GB emulator) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
-  drivers/buses (PCI/USB) · 12 ship 3.1 ABI (port re-issue) · 13 new targets +
-  networking (console SDKs).
+  drivers/buses (PCI/USB) · 13 new targets + networking (console SDKs).
+- **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86** — the greenfield window
+  model + the clean 16 B `win_entry`, QEMU + real-hardware + cycle-accurate-8088
+  validated. The other windowing ports already run the compact 16 B layout. (Event
+  record + file_handle remain candidates for the same logical-model treatment.)
 
-## The one strategic open decision
+## The 3.1 window ABI — DECIDED + piloted (was the one open decision)
 
-The non-x86 ports ship **genuinely divergent ABIs** (16-byte window entries vs 32,
-4-byte events vs 3, their own syscall ordinals). The forward line handles this with
-the **multi-world contract** (`[world.*]` — "describe what ships", each port
-generates its own values byte-identically). **Unifying all ports onto one 3.1 ABI
-is Phase 12's deliberate future work** (a dual-build re-issue, port by port). The
-canonical 3.1 layout (e.g. adopt the compact 16-byte window 6/8 ports already use,
-or keep x86's 32) is **not yet decided** — that decision gates the real migration.
+The ports shipped genuinely divergent window ABIs (x86's 32-byte entry vs the
+compact 16-byte entry the others use). The resolution was **neither "32 nor 16"**:
+a **greenfield window model** (`unodef/WMODEL.md`, `unodef/wmgen.py`, `[wmodel]`) —
+one *logical* model (named fields + kinds + tier + relations + invariants, **no
+offsets**) from which the *physical* layout is **derived per platform** (SoA floor /
+AoS / field widths / capacity) and reached only through generated **zero-cost
+accessors** keyed by an integer handle. The tall-vtable / "describe what ships"
+principle applied to data. Verified across **9 platforms** (`gen/wm/ARCHITECTURES.txt`),
+wired into all 6 windowing ports' addressing (byte-identical), with a 40-year
+architecture survey (ARM/AArch64/SPARC/Alpha/MIPS/PPC/RISC-V/SH).
+
+**Phase 12 piloted on x86 and shipped:** the Contract's `win_entry` is now the
+**clean 16-byte layout** (pointer title into a kernel pool + compact fields; the
+inline `char[12]` is gone). The kernel needed *no code edits* (it consumes
+`WIN_OFF_*`/`WIN_ENTRY_SIZE` symbolically + the `win_entry_addr` stride macro), so
+the 32→16 B break was a regenerate-only Contract change. **QEMU-verified, validated
+on the user's real x86 laptop, and on a cycle-accurate 8088 (MartyPC).** A CGA
+save-under cursor fix shipped alongside. The other ports already use the compact
+16 B layout, so x86 was the only outlier to migrate.
 
 ## Toolchains (this environment)
 
@@ -117,22 +136,43 @@ or keep x86's 32) is **not yet decided** — that decision gates the real migrat
    `[port.apple2]`, profile=single_app) + conformance-checked (rule 9). **All 7 reachable
    asm toolchains now consume the Contract.** The only un-consumed asm tail left is the
    blocked-toolchain ports (need vbcc / console SDKs) — see #3.
-2. **Decide the canonical 3.1 ABI** (the open decision above), then pilot Phase 12
-   end-to-end on **one** port: migrate it to the 3.1 layout/ordinals, re-verify on
-   its emulator, keep a dual-build window. This is the real start of the migration.
-3. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5
-   (compile `unofs_core` for Amiga, link hand-asm trackdisk, WinUAE); a console SDK
-   for a C-world backend of uno2d/unosound.
-4. **Retarget `unoui` onto `uno2d`** (Phase 6 tail) and add the **Amiga blitter**
-   backend as the first hardware-accel proof of the tall vtable.
-5. **Add rule-4 conformance vectors** (press-time latch + sequence-counter) to round
-   out PORT-SPEC §6 coverage.
+2. ~~**Decide the canonical 3.1 ABI**, then pilot Phase 12 end-to-end on one port.~~
+   **DONE** — greenfield window model decided; x86 piloted the clean 16 B layout,
+   QEMU + real-hardware + cycle-accurate-8088 (MartyPC) validated. See "The 3.1
+   window ABI — DECIDED" above.
+3. **NEW PORT: Sega Master System (Z80).** The first port built *fresh* on the full
+   contract-driven + greenfield-window architecture. SMS uses a **true Z80**, so it
+   consumes the existing `gen/z80/` world (sjasmplus) directly — toolchain installed
+   (`C:\Users\arin\z80-tools\sjasmplus-1.23.1.win\sjasmplus.exe`, verified against
+   `gen/z80/unodef.inc`). Needs: an SMS emulator for verification, and from-scratch
+   bring-up (Z80 init, Sega VDP 256×192 tilemap/sprites, mapper, controller) like the
+   genesis/snes ports. (Game Boy is a *separate* CPU — Sharp LR35902 — needs rgbds +
+   a new `gbz80` dialect; not the Z80 world.)
+4. **Generalize the greenfield model to the next subsystem** — the event record
+   (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
+   bring them under the logical-model + derived-layout treatment (host-verifiable).
+5. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
+   `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
+   backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
+   vectors.
+
+### Screenshots / verification on this machine (RDP-aware)
+GUI focus + SendKeys capture fails over RDP. Use a tool's control channel (QEMU
+monitor `screendump` — `tools/qemu_test.py`) or the focus-independent helper
+`%USERPROFILE%\.claude\tools\cc-capture.ps1` (`-Out f.png [-Window <substr>]`). See
+`~/.claude/CLAUDE.md` (loads in every session). MartyPC (cycle-accurate 8088,
+`xt-tools/`, harness `tools/xt/shot_xt.ps1`) needs a windowed launch +
+ShowWindow-restore, then cc-capture (not its Ctrl+F5). QEMU at
+`C:\Program Files\qemu\qemu-system-i386.exe`.
 
 ## Resume checklist
 
 ```
 git checkout master
-python unodef/unogen.py --check && python unodef/conformance/conformance.py
-cat unodef/PHASES.md          # current ledger
-# pick a "Next directions" item above and go.
+python unodef/unogen.py --check && python unodef/conformance/conformance.py  # trust anchor + 52/52
+python unodef/wmgen.py        # regenerate the greenfield window layouts (gen/wm/)
+cat unodef/PHASES.md ; cat unodef/WMODEL.md ; cat unodef/gen/wm/ARCHITECTURES.txt
+# x86 bootable image (clean 16B layout + CGA cursor fix), QEMU-verified:
+PATH=~/AppData/Local/bin/NASM:$PATH make floppy144   # -> build/unodos-144.img
+# pick a "Next directions" item above and go. (SMS port is the lead.)
 ```
