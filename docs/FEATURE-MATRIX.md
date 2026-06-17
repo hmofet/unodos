@@ -34,14 +34,16 @@ Sega Dreamcast.
 | **Sega Master System** *(3.1-fresh)* | M1–M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
 | **Nintendo NES** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal` profile) | Mesen2 (software-render grab, AUTOTEST scripted-pad) | ⏳ real NES pending |
 | **Game Boy / Color** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal`, DMG+GBC colour) | Mesen2/GBC (software-render grab, AUTOTEST scripted-pad) | ⏳ real DMG/GBC pending |
+| **Sega Game Gear** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 12-bit colour) | Mesen2/GG (software-render grab, AUTOTEST scripted-pad) | ⏳ real GG pending |
 
-The last three are built **fresh on the 3.1 contract-driven architecture** (not
+The last four are built **fresh on the 3.1 contract-driven architecture** (not
 legacy ports): SMS is a windowed Z80 port, NES is the `minimal`-profile 6502
-launcher, and Game Boy is the `minimal`-profile SM83 port — the first to add a *new*
-generator dialect (`gbz80`/rgbds), while SMS/NES reuse the existing `gen/z80/` and
-`gen/6502/` worlds. They are not yet in the per-feature grids below (which cover the
-mature legacy targets); see [../sms/README.md](../sms/README.md),
-[../nes/README.md](../nes/README.md), and [../gb/README.md](../gb/README.md).
+launcher, Game Boy is the `minimal`-profile SM83 port — the first to add a *new*
+generator dialect (`gbz80`/rgbds) — and Game Gear is `minimal` on SMS silicon,
+reusing `gen/z80/` and the SMS code with the GB's 20×18 layout. They are not yet in
+the per-feature grids below (which cover the mature legacy targets); see
+[../sms/README.md](../sms/README.md), [../nes/README.md](../nes/README.md),
+[../gb/README.md](../gb/README.md), and [../gg/README.md](../gg/README.md).
 
 All retro/console ports flag **audio as an "ear-check"** pending real
 hardware: the control path (SPC700 mailbox ack, Ensoniq DOC register log,
