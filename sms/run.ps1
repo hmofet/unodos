@@ -13,7 +13,8 @@ $romPath = Join-Path $here $Rom
 $outPath = Join-Path $here $Out
 
 Get-Process blastem -ErrorAction SilentlyContinue | Stop-Process -Force
-$env:SDL_RENDER_DRIVER = "software"
+$env:SDL_RENDER_DRIVER = "software"   # so PrintWindow can read the client area over RDP
+$env:SDL_AUDIODRIVER = "dummy"        # RDP often has no audio endpoint; avoids a fatal dialog
 Start-Process -FilePath $blastem -ArgumentList "`"$romPath`""
 Start-Sleep -Seconds 4
 
