@@ -389,6 +389,8 @@ app_draw_content:
     jp z, files_draw
     cp 5
     jp z, theme_draw
+    cp 7
+    jp z, dostris_draw
     jp generic_draw
 
 sysinfo_draw:
@@ -662,6 +664,8 @@ ai_run:
     ld (v_pad_edge), a
     ret
 ai_hold:
+    ld a, 1
+    ld (v_gpause), a                ; script done: freeze game gravity for a stable shot
     ld a, (v_pad)
     ld (v_pad_prev), a
     xor a
@@ -670,10 +674,11 @@ ai_hold:
     ld (v_pad_edge), a
     ret
 
+B1 EQU PAD_B1
+  IFNDEF AUTOTEST_DOSTRIS
 ; Open Clock, SysInfo, Theme (in an order that keeps each icon clickable),
 ; cycle the Theme palette, then drag the Theme window by its title bar — one
 ; screenshot that exercises launch + z-order + live content + theme + drag.
-B1 EQU PAD_B1
 auto_script:
     db 5, 76, 28, 0                ; settle on the Clock icon
     db 2, 76, 28, B1               ; click -> launch Clock (top-right)
@@ -692,7 +697,8 @@ auto_script:
     db 4, 52,150, 0                ; release (drop)
     db 40, 52,150, 0               ; settle for the capture
     db 0, 0, 0, 0                  ; end -> idle
-  ENDIF
+  ENDIF ; AUTOTEST_DOSTRIS
+  ENDIF ; AUTOTEST
 
 ; ============================================================================
 ; Data: strings, the desktop icon labels, the app-window definition table.

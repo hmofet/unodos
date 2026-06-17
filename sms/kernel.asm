@@ -89,7 +89,30 @@ ai_pad      EQU $C02D               ; AUTOTEST: pad value for the current step
 th_dig      EQU $C02E               ; theme: preset digit string (2 bytes)
 event_q     EQU $C030               ; EVQ_SIZE*3 = 48 bytes
 zlist       EQU $C060               ; MAXWIN bytes (top..bottom is index 0..zcount-1)
-wintab      EQU $C064               ; MAXWIN*WENT_SIZE = 64 bytes
+wintab      EQU $C064               ; MAXWIN*WENT_SIZE = 64 bytes ($C064-$C0A3)
+
+; ---- Dostris game state ($C0A4+) ----
+BW          EQU 10                  ; board width (cells)
+BH          EQU 12                  ; board height (cells)
+FALLRATE    EQU 30                  ; frames per gravity step (~0.5s)
+g_board     EQU $C0A4               ; BW*BH = 120 bytes (0=empty, else tile)
+g_type      EQU $C120
+g_rot       EQU $C121
+g_px        EQU $C122
+g_py        EQU $C123
+g_state     EQU $C124               ; 0=playing, 1=game over
+g_fall      EQU $C125
+g_lines     EQU $C126
+g_seed      EQU $C127               ; word: RNG state
+g_tx        EQU $C129               ; piece_collide trial origin
+g_ty        EQU $C12A
+g_tmp       EQU $C12B
+g_savedrot  EQU $C12C
+g_row       EQU $C12D
+g_locktile  EQU $C12E
+g_pietile   EQU $C12F
+g_numstr    EQU $C130               ; 4 bytes
+v_gpause    EQU $C134               ; AUTOTEST: freeze gravity after the script ends
 
 ; ---------------------------------------------------------------- reset
 ; Canonical SMS startup: jp over the RST / interrupt vectors (sjasmplus --raw
@@ -162,9 +185,17 @@ boot:
 main_loop:
     halt                            ; sleep until the VBlank ISR
     call read_input
+    call topmost_proc               ; -> A = proc of topmost window ($FF = none)
+    cp 7                            ; Dostris focused -> the game owns the d-pad
+    jr z, ml_game
     call move_cursor
     call dispatch
+    jr ml_tick
+ml_game:
+    call dostris_input
+ml_tick:
     call app_ticks
+    call dostris_gravity            ; no-op unless a Dostris window is playing
     call maybe_redraw
     call cursor_to_sat
     jr main_loop
@@ -931,6 +962,10 @@ wc_got:
     ld a, (v_zcount)
     inc a
     ld (v_zcount), a
+    ; per-app launch init hook
+    ld a, (la_proc)
+    cp 7
+    call z, dostris_init            ; fresh game on (re)create
     ld a, 1
     ld (v_dirty), a
     ret
@@ -938,6 +973,7 @@ wc_got:
 
 ; ---------------------------------------------------------------- includes
     include "wm_render.inc"         ; rendering, M3 apps, AUTOTEST script + data
+    include "dostris.inc"           ; the Dostris (falling-blocks) game
     include "gen_data.inc"          ; tiles_all, palette, NTILES, T_*, NICONS
 
 ; ---------------------------------------------------------------- ROM header

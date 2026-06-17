@@ -15,7 +15,8 @@ echo "[1/2] generating tiles + palette from the shared assets..."
 FLAGS=""
 OUT=build/unodos.sms
 case "$1" in
-  test) FLAGS="-DAUTOTEST=1"; OUT=build/unodos_test.sms ;;
+  test)    FLAGS="-DAUTOTEST=1";                       OUT=build/unodos_test.sms ;;
+  dostris) FLAGS="-DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1";  OUT=build/unodos_dt.sms ;;
 esac
 
 echo "[2/2] assembling kernel.asm (Z80, raw 32KB ROM)..."
