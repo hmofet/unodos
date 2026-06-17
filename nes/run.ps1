@@ -29,13 +29,11 @@ if ($wasHardware) { ($raw -replace '"UseSoftwareRenderer": false','"UseSoftwareR
 try {
   Start-Process -FilePath $Mesen -ArgumentList "`"$romPath`""
   Start-Sleep -Seconds $Seconds
-  # enlarge the window so all 240 scanlines are visible, then grab it
-  Add-Type @"
-using System;using System.Runtime.InteropServices;
-public class NesWin { [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h,int x,int y,int w,int hh,bool r); }
-"@
-  # Mesen sizes its own window to the 2x frame; don't resize (resizing triggers
-  # a fit-to-window rescale that clips a column). Just grab the natural window.
+  # Mesen sizes its own window to its chosen (3x) scale and renders top-left
+  # anchored; on this 1280x720 host the right/bottom of the frame sits past the
+  # window edge, so the grab shows the top-left ~21x17 cells. Apps + the Dostris
+  # board are laid out in that region so the capture proves them. (A capture
+  # cosmetic, not a render defect — the PPU composes the full 256x240.)
   & powershell -ExecutionPolicy Bypass -File $capture -Out $outPath -Window Mesen
 } finally {
   if ($wasHardware) {

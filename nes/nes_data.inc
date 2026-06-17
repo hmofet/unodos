@@ -4,5 +4,83 @@ T_FONTINV   EQU 96  ; inverted font (blue on white) - title bar
 T_WHITE     EQU 191  ; white block (title-bar bg)
 T_ICONS     EQU 192  ; 4 tiles per icon
 NICONS      EQU 11
+T_SOLW      EQU 236  ; solid white block
+T_SOLC      EQU 237  ; solid cyan block
+T_SOLM      EQU 238  ; solid magenta block
 palette:
     dc.b $11,$30,$2C,$24
+
+; Dostris: 7 pieces x 4 rotations, each a 4x4 bitmask (bit15=row0col0)
+piece_masks:
+    dc.w $0F00,$2222,$00F0,$4444   ; I
+    dc.w $6600,$0330,$0066,$0CC0   ; O
+    dc.w $4E00,$2320,$0072,$04C4   ; T
+    dc.w $6C00,$2310,$0036,$08C4   ; S
+    dc.w $C600,$1320,$0063,$04C8   ; Z
+    dc.w $8E00,$3220,$0071,$044C   ; J
+    dc.w $2E00,$2230,$0074,$0C44   ; L
+piece_tiles:
+    dc.b 237,238,236,237,238,236,237
+
+MUSIC_COUNT EQU 30
+music_song:
+    dc.w $0152
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $0140
+    dc.b 26
+    dc.w $011C
+    dc.b 26
+    dc.w $011C
+    dc.b 26
+    dc.w $0140
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $017B
+    dc.b 26
+    dc.w $01AA
+    dc.b 26
+    dc.w $01AA
+    dc.b 26
+    dc.w $017B
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $0152
+    dc.b 52
+    dc.w $017B
+    dc.b 26
+    dc.w $017B
+    dc.b 52
+    dc.w $0152
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $0140
+    dc.b 26
+    dc.w $011C
+    dc.b 26
+    dc.w $011C
+    dc.b 26
+    dc.w $0140
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $017B
+    dc.b 26
+    dc.w $01AA
+    dc.b 26
+    dc.w $01AA
+    dc.b 26
+    dc.w $017B
+    dc.b 26
+    dc.w $0152
+    dc.b 26
+    dc.w $017B
+    dc.b 52
+    dc.w $01AA
+    dc.b 26
+    dc.w $01AA
+    dc.b 52
