@@ -12,10 +12,14 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 >   against. All 7 reachable asm ports + x86 consume it byte-identically; the **3.1
 >   window ABI** (a greenfield logical window model → per-platform derived layout,
 >   `unodef/WMODEL.md`) is shipped on x86 (clean 16 B entry), validated on real
->   hardware + a cycle-accurate 8088. Two ports were then built **fresh on the 3.1
->   architecture** (not migrated): the **Sega Master System** (Z80 — desktop, window
->   manager, apps, a Dostris game, PSG audio) and the **Nintendo NES** (6502 — the
->   `minimal`-profile full-screen launcher). See
+>   hardware + a cycle-accurate 8088. **Eight ports** were then built **fresh on the
+>   3.1 architecture** (not migrated): **Sega Master System** (Z80), **Nintendo NES**
+>   (6502), **Game Boy / Color** (Sharp SM83 — a new `gbz80`/rgbds dialect), **Sega
+>   Game Gear** (Z80), **Game Boy Advance** (ARM7TDMI — the first ARM world), **VIC-20**
+>   (6502), **Bandai WonderSwan** (NEC V30MZ — the first x86 handheld), and **NEC PC
+>   Engine** (HuC6280) — each M1–M3 with a Dostris game + audio. The four newest are
+>   verified on **ROM-free instruction-level harnesses** (Unicorn ARM / py65 / Unicorn
+>   x86 / py65+HuC6280) where an emulator can't be captured headlessly under RDP. See
 >   **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for status, the
 >   design, and next directions.
 
@@ -59,14 +63,23 @@ in [docs/PORT-SPEC.md](docs/PORT-SPEC.md):
 
 ### Built fresh on the 3.1 contract-driven architecture
 
-These two are *not* legacy ports migrated to the Contract — they were written from
-scratch against `unodef/` (the Contract generates their screen geometry, window/event
-layout, and enums), proving a new target costs a small generated surface.
+These **eight** are *not* legacy ports migrated to the Contract — they were written
+from scratch against `unodef/` (the Contract generates their screen geometry,
+window/event layout, and enums), proving a new target costs a small generated
+surface. All are M1–M3 with a **Dostris** game + audio. The four newest are verified
+on **ROM-free instruction-level harnesses** (running the real ROM on a CPU core) where
+the emulator can't be captured headlessly under RDP.
 
 | Port | Target hardware | Approach | Status |
 |---|---|---|---|
-| [**Sega Master System**](sms/) | SMS (Z80 @ 3.58MHz, VDP 315-5124, 8KB RAM) | Bare-metal cartridge: VDP Mode-4 tile desktop, hardware-sprite cursor, Sega mapper, control pad, SN76489 PSG. Consumes `gen/z80/` + `[world.sms]` (sjasmplus) | **M1–M3 + game + audio — BlastEm-verified.** Desktop + a tile **window manager** (sprite cursor, Contract event queue, create/draw/raise/**drag**/close, z-order), apps (SysInfo, live Clock, Notepad, Files, Theme-recolours-CRAM-live, Music), a playable **Dostris** (Tetris), and **PSG audio**. Proven via AUTOTEST scripted-pad builds (`sms/build/{desktop,wm,dostris,music}.png`). See [sms/README.md](sms/README.md) |
-| [**Nintendo NES**](nes/) | NES (6502/2A03 @ 1.79MHz, PPU 2C02, **2KB RAM**) | Bare-metal iNES NROM-256: PPU tile launcher with patterns in CHR-ROM, one bg palette. The Contract's **`minimal` profile** — no WM, directional nav. Consumes `gen/6502/` + `[world.nes]` (dasm, shared with C64/Apple II) | **M1 — Mesen2-verified.** Boots to a full-screen launcher (inverted "UnoDOS 3" title bar + 11 labelled icons baked into CHR-ROM). Next: M2 directional-focus nav + `$4016` controller, M3 full-screen apps. See [nes/README.md](nes/README.md) |
+| [**Sega Master System**](sms/) | SMS (Z80 @ 3.58MHz, VDP 315-5124, 8KB RAM) | Bare-metal cartridge: VDP Mode-4 tile desktop, hardware-sprite cursor, Sega mapper, control pad, SN76489 PSG. Consumes `gen/z80/` + `[world.sms]` (sjasmplus) | **M1–M3 + game + audio — BlastEm-verified.** Desktop + a tile **window manager** (sprite cursor, Contract event queue, create/draw/raise/**drag**/close, z-order), apps (SysInfo, live Clock, Notepad, Files, Theme-recolours-CRAM-live, Music), a playable **Dostris**, and **PSG audio**. See [sms/README.md](sms/README.md) |
+| [**Nintendo NES**](nes/) | NES (6502/2A03 @ 1.79MHz, PPU 2C02, **2KB RAM**) | Bare-metal iNES NROM-256: PPU tile launcher, patterns in CHR-ROM. The Contract's **`minimal` profile** — no WM, directional nav. Consumes `gen/6502/` + `[world.nes]` (dasm) | **M1–M3 + game + audio — Mesen2-verified.** Full-screen launcher, `$4016` pad nav + selection highlight, apps (SysInfo, live Clock, Notepad, Files, Theme-palette, Music on the 2A03 APU) + **Dostris**. See [nes/README.md](nes/README.md) |
+| [**Game Boy / Color**](gb/) | Game Boy / Color (Sharp SM83 @ 4.19MHz, **8KB**) | Bare-metal 32K ROM: BG tile map, DMG greys / GBC palette. **First `gbz80` world** — a new rgbds dialect. `minimal`, vertical-list launcher. | **M1–M3 + game + audio — Mesen2/GBC-verified.** `$FF00` joypad nav, apps incl. live Clock + Theme-BG-palette + Music on the GB APU + **Dostris**; one ROM = DMG greyscale / GBC colour. See [gb/README.md](gb/README.md) |
+| [**Sega Game Gear**](gg/) | Game Gear (Z80 @ 3.58MHz, 315-5124 VDP, **8KB**) | Bare-metal 32K ROM: SMS silicon (reuses `gen/z80/` + the SMS bring-up) with the GB's centre-160×144 `minimal` layout; 12-bit CRAM. | **M1–M3 + game + audio — Mesen2/GG-verified.** Mini-icon list, `$DC` pad nav, apps + **Dostris** in full colour + PSG. See [gg/README.md](gg/README.md) |
+| [**Game Boy Advance**](gba/) | GBA (ARM7TDMI @ 16.78MHz, 256KB+32KB) | Bare-metal `0x08000000` ROM: a software **Mode-3 framebuffer** (no HW tiles). **First ARM world** — a new `arm`/GNU-as dialect. `minimal`, icon grid. | **M1–M3 + game + audio — Unicorn-ARM-verified.** `REG_KEYINPUT` nav, apps incl. live Clock + Theme-palette + Music (square channel) + **Dostris**. See [gba/README.md](gba/README.md) |
+| [**Commodore VIC-20**](vic20/) | VIC-20 (6502 @ 1.02MHz, +8K expansion) | Bare-metal `.prg`: the VIC 22×23 character matrix + custom charset, per-cell colour. `minimal`, character-cell list. Consumes `gen/6502/` (dasm). | **M1–M3 + game + audio — py65-verified.** Joystick nav, apps incl. live Clock + Theme-bg + Music (VIC oscillator) + **Dostris** in colour. See [vic20/README.md](vic20/README.md) |
+| [**Bandai WonderSwan**](ws/) | WonderSwan (NEC V30MZ @ 3.07MHz, **16KB**) | Bare-metal 64K ROM (reset vector → JMP FAR): an SCR1 32×32 tilemap, 8×8 2bpp tiles, 224×144 mono. **First x86 handheld** — nasm, the Contract's x86 surface. `minimal`. | **M1–M3 + game + audio — Unicorn-x86-verified.** Keypad nav, apps incl. live Clock + Theme-shade-pool + Music (sound channel 1) + **Dostris**. See [ws/README.md](ws/README.md) |
+| [**NEC PC Engine**](pce/) | PC Engine / TG-16 (HuC6280 @ 7.16MHz, **8KB**) | Bare-metal HuCard: HuC6270 VDC 32×32 BAT, 8×8 4bpp tiles, 256×224, 9-bit VCE palette, 8-MPR MMU. **First HuC6280 world** — `ca65 --cpu huc6280`. `minimal`, icon grid. | **M1–M3 + game + audio — py65+HuC6280-verified.** Joypad nav, apps incl. live Clock + Theme-VCE-palette + Music (PC Engine PSG) + **Dostris** in colour. See [pce/README.md](pce/README.md) |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program
