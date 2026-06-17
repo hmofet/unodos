@@ -385,6 +385,8 @@ app_draw_content:
     jp z, clock_draw
     cp 2
     jp z, notepad_draw
+    cp 3
+    jp z, music_draw
     cp 4
     jp z, files_draw
     cp 5
@@ -676,6 +678,7 @@ ai_hold:
 
 B1 EQU PAD_B1
   IFNDEF AUTOTEST_DOSTRIS
+  IFNDEF AUTOTEST_MUSIC
 ; Open Clock, SysInfo, Theme (in an order that keeps each icon clickable),
 ; cycle the Theme palette, then drag the Theme window by its title bar — one
 ; screenshot that exercises launch + z-order + live content + theme + drag.
@@ -697,6 +700,7 @@ auto_script:
     db 4, 52,150, 0                ; release (drop)
     db 40, 52,150, 0               ; settle for the capture
     db 0, 0, 0, 0                  ; end -> idle
+  ENDIF ; AUTOTEST_MUSIC
   ENDIF ; AUTOTEST_DOSTRIS
   ENDIF ; AUTOTEST
 

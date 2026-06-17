@@ -114,6 +114,11 @@ g_pietile   EQU $C12F
 g_numstr    EQU $C130               ; 4 bytes
 v_gpause    EQU $C134               ; AUTOTEST: freeze gravity after the script ends
 
+; ---- Music (PSG) state ----
+m_idx       EQU $C135               ; current note
+m_timer     EQU $C136               ; frames left on the current note
+m_play      EQU $C137               ; non-zero while playing
+
 ; ---------------------------------------------------------------- reset
 ; Canonical SMS startup: jp over the RST / interrupt vectors (sjasmplus --raw
 ; does not pad ORG jumps, so we never ORG forward — DEFS fills the gaps).
@@ -196,6 +201,7 @@ ml_game:
 ml_tick:
     call app_ticks
     call dostris_gravity            ; no-op unless a Dostris window is playing
+    call music_tick                 ; no-op unless a Music window is open
     call maybe_redraw
     call cursor_to_sat
     jr main_loop
@@ -966,6 +972,9 @@ wc_got:
     ld a, (la_proc)
     cp 7
     call z, dostris_init            ; fresh game on (re)create
+    ld a, (la_proc)
+    cp 3
+    call z, music_init              ; start the tune
     ld a, 1
     ld (v_dirty), a
     ret
@@ -974,6 +983,7 @@ wc_got:
 ; ---------------------------------------------------------------- includes
     include "wm_render.inc"         ; rendering, M3 apps, AUTOTEST script + data
     include "dostris.inc"           ; the Dostris (falling-blocks) game
+    include "music.inc"             ; PSG audio + the Music app
     include "gen_data.inc"          ; tiles_all, palette, NTILES, T_*, NICONS
 
 ; ---------------------------------------------------------------- ROM header

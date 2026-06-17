@@ -199,6 +199,23 @@ for p in piece_order:
         piece_masks.append(mask(g))
         g = rot90(g)
 
+# ---------------- Music: a PSG tune (SN76489, same chip family as Genesis) -------
+# Each note -> (10-bit tone period, duration in 60Hz frames). The SMS PSG clock
+# is 3.579545 MHz (NTSC); period = clk / (32 * freq).
+PSG_CLK = 3579545
+NOTE_HZ = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "A4": 440,
+           "B4": 494, "C5": 523, "D5": 587}
+Q, H = 26, 52        # quarter / half note, in frames (~tempo)
+TUNE = [  # Ode to Joy (Beethoven)
+    ("E4", Q), ("E4", Q), ("F4", Q), ("G4", Q), ("G4", Q), ("F4", Q),
+    ("E4", Q), ("D4", Q), ("C4", Q), ("C4", Q), ("D4", Q), ("E4", Q),
+    ("E4", H), ("D4", Q), ("D4", H),
+    ("E4", Q), ("E4", Q), ("F4", Q), ("G4", Q), ("G4", Q), ("F4", Q),
+    ("E4", Q), ("D4", Q), ("C4", Q), ("C4", Q), ("D4", Q), ("E4", Q),
+    ("D4", H), ("C4", Q), ("C4", H),
+]
+music_song = [(round(PSG_CLK / (32 * NOTE_HZ[n])), d) for n, d in TUNE]
+
 # ---------------- emit ------------------------------------------------------------
 def tilebytes(b):
     return "\n".join("    db " + ",".join(f"${v:02X}" for v in b[i:i+16])
@@ -252,6 +269,11 @@ with open(OUT, "w", newline="\n") as f:
         f.write("    dw " + ",".join(f"${piece_masks[i*4+r]:04X}" for r in range(4))
                 + f"   ; {p}\n")
     f.write("piece_tiles:\n    db " + ",".join(str(t) for t in piece_tiles) + "\n")
+    # Music: per note -> dw period, db frames (3 bytes each)
+    f.write(f"\nMUSIC_COUNT   EQU {len(music_song)}\n")
+    f.write("music_song:\n")
+    for period, frames in music_song:
+        f.write(f"    dw ${period:04X}\n    db {frames}\n")
 
 print(f"wrote {OUT}: {len(tiles)} tiles ({len(tiles)*32} bytes), {NICONS} icons, "
-      f"cursor@{CURSOR_BASE}, game solids@{GAME_SOLID_BASE}")
+      f"cursor@{CURSOR_BASE}, game solids@{GAME_SOLID_BASE}, {len(music_song)} notes")

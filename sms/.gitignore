@@ -3,3 +3,4 @@ build/*
 !build/desktop.png
 !build/wm.png
 !build/dostris.png
+!build/music.png

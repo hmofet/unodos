@@ -17,6 +17,7 @@ OUT=build/unodos.sms
 case "$1" in
   test)    FLAGS="-DAUTOTEST=1";                       OUT=build/unodos_test.sms ;;
   dostris) FLAGS="-DAUTOTEST=1 -DAUTOTEST_DOSTRIS=1";  OUT=build/unodos_dt.sms ;;
+  music)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_MUSIC=1";    OUT=build/unodos_mu.sms ;;
 esac
 
 echo "[2/2] assembling kernel.asm (Z80, raw 32KB ROM)..."

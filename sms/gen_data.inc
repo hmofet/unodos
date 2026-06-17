@@ -787,3 +787,66 @@ piece_masks:
     dw $2E00,$2230,$0074,$0C44   ; L
 piece_tiles:
     db 192,247,193,246,248,191,249
+
+MUSIC_COUNT   EQU 30
+music_song:
+    dw $0153
+    db 26
+    dw $0153
+    db 26
+    dw $0141
+    db 26
+    dw $011D
+    db 26
+    dw $011D
+    db 26
+    dw $0141
+    db 26
+    dw $0153
+    db 26
+    dw $017C
+    db 26
+    dw $01AB
+    db 26
+    dw $01AB
+    db 26
+    dw $017C
+    db 26
+    dw $0153
+    db 26
+    dw $0153
+    db 52
+    dw $017C
+    db 26
+    dw $017C
+    db 52
+    dw $0153
+    db 26
+    dw $0153
+    db 26
+    dw $0141
+    db 26
+    dw $011D
+    db 26
+    dw $011D
+    db 26
+    dw $0141
+    db 26
+    dw $0153
+    db 26
+    dw $017C
+    db 26
+    dw $01AB
+    db 26
+    dw $01AB
+    db 26
+    dw $017C
+    db 26
+    dw $0153
+    db 26
+    dw $017C
+    db 52
+    dw $01AB
+    db 26
+    dw $01AB
+    db 52
