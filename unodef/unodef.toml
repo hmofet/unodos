@@ -1365,6 +1365,17 @@ h = 224
 depth = 4
 role = "PRIMARY"
 
+[port.vic20]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 8192
+[[port.vic20.surface]]
+id = "primary"
+w = 176
+h = 184
+depth = 4
+role = "PRIMARY"
+
 # Dual-screen example: DS is `windowed` with two surfaces + touch.
 [port.ds]
 profile = "windowed"
@@ -1869,6 +1880,20 @@ note = "BAT width in tiles (256px / 8)"
 sym = "SCRROWS"
 val = 28
 note = "visible height in tiles (224px / 8)"
+
+[world.vic20]
+description = "Commodore VIC-20 (MOS 6502 + VIC 6560/6561) bare-metal; dasm; MINIMAL profile, 22x23 character display (176x184)"
+cpu = "6502"
+emit = "vic20/sys_gen.inc"
+note = "seventh fresh contract-driven port (6502 again, like the NES, reusing gen/6502/ + dasm). MINIMAL: a character-cell list launcher, directional nav. The genuine Contract overlap is the cell geometry; symbol names are the port's own (SCRCOLS/SCRROWS)."
+[[world.vic20.equate]]
+sym = "SCRCOLS"
+val = 22
+note = "VIC character columns"
+[[world.vic20.equate]]
+sym = "SCRROWS"
+val = 23
+note = "VIC character rows"
 
 
 [world.sms]
