@@ -61,6 +61,33 @@ ports are `single_app` — no window-entry struct / event queue by design — so
 source only the genuine overlap, the cell screen geometry; their no-WM shape is
 Contract-declared via `[port.c64]`/`[port.apple2]` + conformance-checked.)
 
+### New ports built FRESH on the 3.1 architecture
+Two ports were then built from scratch on the contract-driven + greenfield-window
+architecture (not migrated from legacy) — the proof that a new target costs a
+small, generated surface:
+
+```
+sms/    Sega Master System (Z80, sjasmplus)  -- M1 desktop + M2 WM + M3 apps
+                                                 + Dostris game + PSG audio
+nes/    Nintendo NES (6502/2A03, dasm)        -- M1 full-screen launcher
+```
+
+- **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
+  a VBlank cooperative loop, a hardware-sprite cursor, the Contract event queue,
+  a tile window manager (create/draw/raise/**drag**/close, z-order), apps (SysInfo,
+  live Clock, Notepad, Files, Theme-cycles-CRAM-live, Music), a playable **Dostris**
+  (Tetris), and **SN76489 PSG** audio. Verified in BlastEm via AUTOTEST scripted-pad
+  builds (`sms/build/{desktop,wm,dostris,music}.png`).
+- **NES** is the Contract's **`minimal` profile** flagship (2 KB RAM, no WM,
+  directional nav — the other end of the profile spectrum). It consumes `gen/6502/`
+  + `[world.nes]` (256×240 PPU), reusing the dasm toolchain; M1 boots to a
+  full-screen launcher (inverted title bar + 11 labelled icons) baked into CHR-ROM.
+  Verified in Mesen2 (`nes/build/desktop.png`).
+
+Together they exercise both ends of `unogen`'s reach: a **window-profile** Z80 port
+(reusing the existing dialect) and a **minimal-profile** 6502 port (reusing the
+6502 dialect) — neither needed a new generator dialect.
+
 ## Verification (host-first, all green together)
 
 ```
@@ -87,8 +114,10 @@ vasm, ca65) + the C header (`_Static_assert`s).
   vasm, SNES + IIGS via ca65, C64 + Apple II via dasm) · 6 uno2d · 7 concurrency/SMP/
   TSan · 9 unosound.
 - **Host core + hardware/SDK-blocked tail (4):** 5 hybrid policy (needs vbcc/WinUAE)
-  · 8 display/profiles (NES/GB emulator) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
-  drivers/buses (PCI/USB) · 13 new targets + networking (console SDKs).
+  · 8 display/profiles (now also *emulator-proven*: the SMS `single_app` desktop +
+  the NES `minimal` launcher, see below) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
+  drivers/buses (PCI/USB) · 13 new targets + networking — **two fresh ports landed**
+  (SMS Z80 M1–M3 + game + audio, NES 6502 M1), console SDK backends still blocked.
 - **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86** — the greenfield window
   model + the clean 16 B `win_entry`, QEMU + real-hardware + cycle-accurate-8088
   validated. The other windowing ports already run the compact 16 B layout. (Event
@@ -140,18 +169,27 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    **DONE** — greenfield window model decided; x86 piloted the clean 16 B layout,
    QEMU + real-hardware + cycle-accurate-8088 (MartyPC) validated. See "The 3.1
    window ABI — DECIDED" above.
-3. **NEW PORT: Sega Master System (Z80).** The first port built *fresh* on the full
-   contract-driven + greenfield-window architecture. SMS uses a **true Z80**, so it
-   consumes the existing `gen/z80/` world (sjasmplus) directly — toolchain installed
-   (`C:\Users\arin\z80-tools\sjasmplus-1.23.1.win\sjasmplus.exe`, verified against
-   `gen/z80/unodef.inc`). Needs: an SMS emulator for verification, and from-scratch
-   bring-up (Z80 init, Sega VDP 256×192 tilemap/sprites, mapper, controller) like the
-   genesis/snes ports. (Game Boy is a *separate* CPU — Sharp LR35902 — needs rgbds +
-   a new `gbz80` dialect; not the Z80 world.)
-4. **Generalize the greenfield model to the next subsystem** — the event record
+3. ~~**NEW PORT: Sega Master System (Z80).**~~ **DONE** — the first port built fresh
+   on the contract-driven + greenfield-window architecture. Consumes `gen/z80/` +
+   `[world.sms]` via sjasmplus. **M1** desktop, **M2** window manager (sprite cursor,
+   Contract event queue, create/draw/raise/drag/close, z-order) + d-pad input, **M3**
+   apps (SysInfo, live Clock, Notepad, Files, Theme, Music) + a playable **Dostris**
+   game + **PSG audio** — all BlastEm-verified via AUTOTEST scripted-pad builds. See
+   [../sms/README.md](../sms/README.md). (Game Boy is a *separate* CPU — Sharp
+   LR35902 — needs rgbds + a new `gbz80` dialect; deferred until that toolchain is in.)
+4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1 DONE** — the Contract's `minimal`
+   profile flagship (2 KB RAM, no WM, directional nav). Consumes `gen/6502/` +
+   `[world.nes]` via dasm; M1 boots to a full-screen launcher (title + 11 icons in
+   CHR-ROM), Mesen2-verified. See [../nes/README.md](../nes/README.md). NEXT on NES:
+   M2 directional-focus nav + the `$4016` controller, then M3 full-screen apps.
+5. **More fresh ports / the next CPU family.** Game Gear (≈SMS hardware, reuses the
+   sms/ code) for a quick win; **Game Boy** (LR35902) once rgbds is installed — it
+   adds the only genuinely new `unogen` dialect (`gbz80`). VIC-20 (6502, `minimal`)
+   reuses the dasm path.
+6. **Generalize the greenfield model to the next subsystem** — the event record
    (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
    bring them under the logical-model + derived-layout treatment (host-verifiable).
-5. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
+7. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
    `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
    backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
    vectors.
@@ -174,5 +212,8 @@ python unodef/wmgen.py        # regenerate the greenfield window layouts (gen/wm
 cat unodef/PHASES.md ; cat unodef/WMODEL.md ; cat unodef/gen/wm/ARCHITECTURES.txt
 # x86 bootable image (clean 16B layout + CGA cursor fix), QEMU-verified:
 PATH=~/AppData/Local/bin/NASM:$PATH make floppy144   # -> build/unodos-144.img
-# pick a "Next directions" item above and go. (SMS port is the lead.)
+# build/run the fresh ports:
+sh sms/build.sh && powershell -File sms/run.ps1   # SMS (M1-M3 + game + audio), BlastEm
+sh nes/build.sh && powershell -File nes/run.ps1   # NES (M1 launcher), Mesen2
+# pick a "Next directions" item above and go. (NES M2/M3, or the next CPU family.)
 ```

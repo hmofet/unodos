@@ -31,6 +31,15 @@ Sega Dreamcast.
 | **Super Nintendo** | M0–M3 done | Mesen2 F12 captures | ⏳ flashcart + audio-ear pending |
 | **Sony PS2** | M0–M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
 | **Sega Dreamcast** | at parity | Flycast @60fps + VMU round-trip | ⏳ CD-R / dc-tool + audio-ear pending |
+| **Sega Master System** *(3.1-fresh)* | M1–M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
+| **Nintendo NES** *(3.1-fresh)* | M1 launcher (`minimal` profile) | Mesen2 (software-render grab) | ⏳ real NES + M2/M3 pending |
+
+The last two are built **fresh on the 3.1 contract-driven architecture** (not
+legacy ports): SMS is a windowed Z80 port, NES is the `minimal`-profile 6502
+launcher. They reuse the existing `gen/z80/` and `gen/6502/` worlds — no new
+generator dialect. They are not yet in the per-feature grids below (which cover the
+mature legacy targets); see [../sms/README.md](../sms/README.md) and
+[../nes/README.md](../nes/README.md).
 
 All retro/console ports flag **audio as an "ear-check"** pending real
 hardware: the control path (SPC700 mailbox ack, Ensoniq DOC register log,
