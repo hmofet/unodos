@@ -1,0 +1,3 @@
+build/*
+!build/unodos.nes
+!build/desktop.png

@@ -1748,6 +1748,21 @@ val = 24
 note = "screen height in cells (192px / 8)"
 
 
+[world.nes]
+description = "Nintendo Entertainment System 6502/2A03 bare-metal; dasm; MINIMAL profile, 256x240 PPU (32x30 tile nametable)"
+cpu = "6502"
+emit = "nes/sys_gen.inc"
+note = "minimal port (CONTRACT-ARCH §9): 2KB RAM, NO window-entry struct / event queue / mouse — one full-screen launcher with directional nav. The genuine Contract overlap is the tile screen geometry; symbol names are the port's own (SCRCOLS/SCRROWS)."
+[[world.nes.equate]]
+sym = "SCRCOLS"
+val = 32
+note = "nametable width in tiles (256px / 8)"
+[[world.nes.equate]]
+sym = "SCRROWS"
+val = 30
+note = "nametable height in tiles (240px / 8)"
+
+
 [world.sms]
 description = "Sega Master System Z80 bare-metal; sjasmplus; compact 16B window entry, 256x192 (Mode 4, 32x24 cells)"
 cpu = "z80"
