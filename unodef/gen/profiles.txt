@@ -23,3 +23,6 @@ port c64          profile=single_app caps=[RTC,DIRNAV]
 port apple2       profile=single_app caps=[DIRNAV]
     requires: fs?
     surface primary  280x192 role=PRIMARY
+port sms          profile=single_app caps=[DIRNAV]
+    requires: fs?
+    surface primary  256x192 role=PRIMARY
