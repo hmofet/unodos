@@ -28,7 +28,7 @@ Sega Dreamcast.
 | **Sega Genesis** | M6+ | BlastEm (15 AUTOTEST builds) | ⚠️ boots on flashcart (2026-06-12); PS/2 / tape / Sega CD adapters not yet exercised |
 | **Apple II** | M1–M3 done | py65 ROM-free harness; `.woz`/`.nib` built | ⏳ AppleWin/FloppyEmu (IIc) pending |
 | **Apple IIGS** | M0–M3, full parity | from-scratch py65816 core, 9 suites green | ⏳ GSplus/KEGS/MAME + audio-ear pending |
-| **Super Nintendo** | M0–M3 done | Mesen2 F12 captures | ⏳ flashcart + audio-ear pending |
+| **Super Nintendo** | M0–M3 done | Mesen2 F12 captures | 🟡 conditional pass on a SupaBoy clone (FXPak Pro): boots + navigable, but icons text-only & no audio; authentic SNES pending |
 | **Sony PS2** | M0–M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
 | **Sega Dreamcast** | at parity | Flycast @60fps + VMU round-trip | ⏳ CD-R / dc-tool + audio-ear pending |
 | **Sega Master System** *(3.1-fresh)* | M1–M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
