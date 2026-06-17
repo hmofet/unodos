@@ -39,7 +39,7 @@ which family a platform is in:
 | **Apple IIGS** | 65C816 @2.8 / 256 KB–8 MB | 65816 asm, bare-metal ProDOS/SmartPort boot | 4 bpp Super Hi-Res SW | 8 `.APP` from FAT12/SmartPort → bank-0 slots, **JMP vectors**, multi-resident; **windowed** | FAT12 over SmartPort | M0–M3; py65816 |
 | **Commodore 64** | 6510 @1 MHz / 64 KB | 6510 asm, bare-metal PRG (`SYS 2061`) | VIC-II hi-res bitmap, per-cell color | disk-loaded to `$5000` via `$DE00`, **`mkapi.py` addresses**; **full-screen, one-at-a-time** | USV1 byte-heap on `.d64` | M1–M3; py65 |
 | **Sega Master System** *(3.1-fresh)* | Z80 @3.58 / 8 KB | Z80 asm, bare-metal cartridge, sjasmplus | VDP Mode-4 tile nametable, HW-sprite cursor | **built into ROM** → in-ROM table; **windowed** | *(none — cart ROM)* | M1–M3 + game + audio; BlastEm |
-| **Nintendo NES** *(3.1-fresh)* | 6502/2A03 @1.79 / **2 KB** | 6502 asm, bare-metal iNES NROM, dasm | PPU tile nametable, patterns in CHR-ROM | **built into ROM** → directional launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1 launcher; Mesen2 |
+| **Nintendo NES** *(3.1-fresh)* | 6502/2A03 @1.79 / **2 KB** | 6502 asm, bare-metal iNES NROM, dasm | PPU tile nametable, patterns in CHR-ROM | **built into ROM** → directional launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Mesen2 |
 
 The last two rows are the **3.1-fresh** ports — written from scratch against the
 Contract (`unodef/`), not migrated. SMS adds a fourth bare-metal asm CPU family

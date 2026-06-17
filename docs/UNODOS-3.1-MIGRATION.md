@@ -69,7 +69,8 @@ small, generated surface:
 ```
 sms/    Sega Master System (Z80, sjasmplus)  -- M1 desktop + M2 WM + M3 apps
                                                  + Dostris game + PSG audio
-nes/    Nintendo NES (6502/2A03, dasm)        -- M1 full-screen launcher
+nes/    Nintendo NES (6502/2A03, dasm)        -- M1 launcher + M2 directional nav
+                                                 + M3 apps + Dostris game + APU audio
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -80,9 +81,14 @@ nes/    Nintendo NES (6502/2A03, dasm)        -- M1 full-screen launcher
   builds (`sms/build/{desktop,wm,dostris,music}.png`).
 - **NES** is the Contract's **`minimal` profile** flagship (2 KB RAM, no WM,
   directional nav — the other end of the profile spectrum). It consumes `gen/6502/`
-  + `[world.nes]` (256×240 PPU), reusing the dasm toolchain; M1 boots to a
-  full-screen launcher (inverted title bar + 11 labelled icons) baked into CHR-ROM.
-  Verified in Mesen2 (`nes/build/desktop.png`).
+  + `[world.nes]` (256×240 PPU), reusing the dasm toolchain. **M1** launcher
+  (inverted title bar + 11 icons in CHR-ROM); **M2** the standard pad on `$4016` +
+  a vblank-NMI loop + a directional selection highlight (A launches full-screen, B
+  returns — the §8 pointer-less model, *not* a WM); **M3** full-screen apps
+  (SysInfo, live Clock, Notepad, Files, Theme-cycles-palette, Music on the 2A03 APU)
+  + a from-scratch **Dostris** (the SMS falling-blocks algorithm ported to 6502). A
+  PPU-free NMI + main-loop vblank partials keep updates flicker-free. Verified in
+  Mesen2 (`nes/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
 
 Together they exercise both ends of `unogen`'s reach: a **window-profile** Z80 port
 (reusing the existing dialect) and a **minimal-profile** 6502 port (reusing the
@@ -114,10 +120,10 @@ vasm, ca65) + the C header (`_Static_assert`s).
   vasm, SNES + IIGS via ca65, C64 + Apple II via dasm) · 6 uno2d · 7 concurrency/SMP/
   TSan · 9 unosound.
 - **Host core + hardware/SDK-blocked tail (4):** 5 hybrid policy (needs vbcc/WinUAE)
-  · 8 display/profiles (now also *emulator-proven*: the SMS `single_app` desktop +
-  the NES `minimal` launcher, see below) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
+  · 8 display/profiles (now also *emulator-proven*: the SMS windowed desktop +
+  the NES `minimal` directional-nav launcher + apps, see below) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
   drivers/buses (PCI/USB) · 13 new targets + networking — **two fresh ports landed**
-  (SMS Z80 M1–M3 + game + audio, NES 6502 M1), console SDK backends still blocked.
+  (SMS Z80 + NES 6502, both M1–M3 + game + audio), console SDK backends still blocked.
 - **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86** — the greenfield window
   model + the clean 16 B `win_entry`, QEMU + real-hardware + cycle-accurate-8088
   validated. The other windowing ports already run the compact 16 B layout. (Event
@@ -177,11 +183,13 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    game + **PSG audio** — all BlastEm-verified via AUTOTEST scripted-pad builds. See
    [../sms/README.md](../sms/README.md). (Game Boy is a *separate* CPU — Sharp
    LR35902 — needs rgbds + a new `gbz80` dialect; deferred until that toolchain is in.)
-4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1 DONE** — the Contract's `minimal`
-   profile flagship (2 KB RAM, no WM, directional nav). Consumes `gen/6502/` +
-   `[world.nes]` via dasm; M1 boots to a full-screen launcher (title + 11 icons in
-   CHR-ROM), Mesen2-verified. See [../nes/README.md](../nes/README.md). NEXT on NES:
-   M2 directional-focus nav + the `$4016` controller, then M3 full-screen apps.
+4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1–M3 + game + audio DONE** — the
+   Contract's `minimal` profile flagship (2 KB RAM, no WM, directional nav). Consumes
+   `gen/6502/` + `[world.nes]` via dasm. M1 launcher; M2 `$4016` pad + a vblank-NMI
+   loop + a directional selection highlight (A launches full-screen, B returns); M3
+   full-screen apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the 2A03
+   APU) + a from-scratch **Dostris**. Mesen2-verified via AUTOTEST scripted-pad
+   builds. See [../nes/README.md](../nes/README.md). NEXT on NES: real hardware.
 5. **More fresh ports / the next CPU family.** Game Gear (≈SMS hardware, reuses the
    sms/ code) for a quick win; **Game Boy** (LR35902) once rgbds is installed — it
    adds the only genuinely new `unogen` dialect (`gbz80`). VIC-20 (6502, `minimal`)
@@ -214,6 +222,6 @@ cat unodef/PHASES.md ; cat unodef/WMODEL.md ; cat unodef/gen/wm/ARCHITECTURES.tx
 PATH=~/AppData/Local/bin/NASM:$PATH make floppy144   # -> build/unodos-144.img
 # build/run the fresh ports:
 sh sms/build.sh && powershell -File sms/run.ps1   # SMS (M1-M3 + game + audio), BlastEm
-sh nes/build.sh && powershell -File nes/run.ps1   # NES (M1 launcher), Mesen2
-# pick a "Next directions" item above and go. (NES M2/M3, or the next CPU family.)
+sh nes/build.sh && powershell -File nes/run.ps1   # NES (M1-M3 + game + audio), Mesen2
+# pick a "Next directions" item above and go. (the next CPU family, or NES real hw.)
 ```
