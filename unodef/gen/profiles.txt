@@ -44,3 +44,12 @@ port apple2       profile=single_app caps=[DIRNAV]
 port sms          profile=single_app caps=[DIRNAV]
     requires: fs?
     surface primary  256x192 role=PRIMARY
+port rpi          profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  640x480 role=PRIMARY
+port pinephone    profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  480x640 role=PRIMARY
+port ppcmac       profile=minimal    caps=[DIRNAV]
+    requires: (none)
+    surface primary  640x480 role=PRIMARY

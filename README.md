@@ -12,14 +12,16 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 >   against. All 7 reachable asm ports + x86 consume it byte-identically; the **3.1
 >   window ABI** (a greenfield logical window model → per-platform derived layout,
 >   `unodef/WMODEL.md`) is shipped on x86 (clean 16 B entry), validated on real
->   hardware + a cycle-accurate 8088. **Eight ports** were then built **fresh on the
+>   hardware + a cycle-accurate 8088. **Nine ports** were then built **fresh on the
 >   3.1 architecture** (not migrated): **Sega Master System** (Z80), **Nintendo NES**
 >   (6502), **Game Boy / Color** (Sharp SM83 — a new `gbz80`/rgbds dialect), **Sega
 >   Game Gear** (Z80), **Game Boy Advance** (ARM7TDMI — the first ARM world), **VIC-20**
->   (6502), **Bandai WonderSwan** (NEC V30MZ — the first x86 handheld), and **NEC PC
->   Engine** (HuC6280) — each M1–M3 with a Dostris game + audio. The four newest are
+>   (6502), **Bandai WonderSwan** (NEC V30MZ — the first x86 handheld), **NEC PC
+>   Engine** (HuC6280), and **Raspberry Pi** (ARM Cortex-A — the first **AArch64 /
+>   64-bit** world, on the VideoCore mailbox framebuffer) — each M1–M3 with a Dostris
+>   game + audio. The five newest are
 >   verified on **ROM-free instruction-level harnesses** (Unicorn ARM / py65 / Unicorn
->   x86 / py65+HuC6280) where an emulator can't be captured headlessly under RDP. See
+>   x86 / py65+HuC6280 / Unicorn AArch64) where an emulator can't be captured headlessly under RDP. See
 >   **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for status, the
 >   design, and next directions.
 
@@ -80,6 +82,7 @@ the emulator can't be captured headlessly under RDP.
 | [**Commodore VIC-20**](vic20/) | VIC-20 (6502 @ 1.02MHz, +8K expansion) | Bare-metal `.prg`: the VIC 22×23 character matrix + custom charset, per-cell colour. `minimal`, character-cell list. Consumes `gen/6502/` (dasm). | **M1–M3 + game + audio — py65-verified.** Joystick nav, apps incl. live Clock + Theme-bg + Music (VIC oscillator) + **Dostris** in colour. See [vic20/README.md](vic20/README.md) |
 | [**Bandai WonderSwan**](ws/) | WonderSwan (NEC V30MZ @ 3.07MHz, **16KB**) | Bare-metal 64K ROM (reset vector → JMP FAR): an SCR1 32×32 tilemap, 8×8 2bpp tiles, 224×144 mono. **First x86 handheld** — nasm, the Contract's x86 surface. `minimal`. | **M1–M3 + game + audio — Unicorn-x86-verified.** Keypad nav, apps incl. live Clock + Theme-shade-pool + Music (sound channel 1) + **Dostris**. See [ws/README.md](ws/README.md) |
 | [**NEC PC Engine**](pce/) | PC Engine / TG-16 (HuC6280 @ 7.16MHz, **8KB**) | Bare-metal HuCard: HuC6270 VDC 32×32 BAT, 8×8 4bpp tiles, 256×224, 9-bit VCE palette, 8-MPR MMU. **First HuC6280 world** — `ca65 --cpu huc6280`. `minimal`, icon grid. | **M1–M3 + game + audio — py65+HuC6280-verified.** Joypad nav, apps incl. live Clock + Theme-VCE-palette + Music (PC Engine PSG) + **Dostris** in colour. See [pce/README.md](pce/README.md) |
+| [**Raspberry Pi**](rpi/) | Pi 3/4 (ARM Cortex-A, **AArch64**, 1GB+) | Bare-metal `kernel8.img` @ `0x80000`: a firmware-allocated **VideoCore mailbox framebuffer** (640×480 32bpp XRGB, no HW tiles). **First AArch64 / 64-bit world** — `aarch64`/GNU-as. `minimal`, 4-col icon grid. | **M1–M3 + game + audio — Unicorn-AArch64-verified.** System-timer-paced nav, apps incl. live Clock + Theme-palette + Music (PWM jack) + **Dostris**. See [rpi/README.md](rpi/README.md) |
 
 A feature-by-feature comparison of the mature targets lives in
 [docs/FEATURE-MATRIX.md](docs/FEATURE-MATRIX.md). The new-ports program

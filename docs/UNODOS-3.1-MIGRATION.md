@@ -83,6 +83,9 @@ ws/     Bandai WonderSwan (NEC V30MZ, nasm)  -- FIRST x86 handheld; SCR1 tile la
                                                  M1-M3 + Dostris + PSG; Unicorn-verified
 pce/    NEC PC Engine (HuC6280, ca65)        -- FIRST HuC6280 world; VDC tile launcher;
                                                  M1-M3 + Dostris + PSG; py65+HuC6280-verified
+rpi/    Raspberry Pi (ARM Cortex-A, GNU as)  -- FIRST AArch64 (64-bit) world; VideoCore
+                                                 mailbox framebuffer; M1-M3 + Dostris + PWM;
+                                                 Unicorn-AArch64-verified
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -157,6 +160,18 @@ pce/    NEC PC Engine (HuC6280, ca65)        -- FIRST HuC6280 world; VDC tile la
   PCE through a GPU surface a GDI grab reads as black, so it is verified on a **ROM-free
   HuC6280 harness** (py65 65C02 + the TAM/CSH opcodes + the MMU + a VDC/VCE model)
   (`pce/build/{desktop,nav,app,clock,theme,music,dostris}.png`).
+- **Raspberry Pi** is the **first AArch64 (64-bit) world** — the same `aarch64`/GNU-as
+  (GAS) dialect, but a genuinely new register width over the GBA's 32-bit ARM7TDMI (no
+  conditional execution → `csel`, `stp`/`ldp` frames, 64-bit FB pointers), consuming
+  `[world.rpi]`. `minimal`: there is no fixed framebuffer, so at boot the kernel asks the
+  **VideoCore firmware over the mailbox property channel** (`0x3F00B880`) for a 640×480
+  32bpp XRGB surface and plots an 8×8 font + 16×16 icons pixel-by-pixel (palette-index, so
+  Theme recolours by swapping the table); frames are paced off the **BCM system timer**.
+  M1 launcher (4-col icon grid); M2 a timer-paced loop + a d-pad highlight (A launches, B
+  returns); M3 apps (live Clock, Theme-cycles-palette, Music on the PWM headphone jack) +
+  Dostris. A real Pi renders to an HDMI surface no headless grab can read, so it is verified
+  on a **Unicorn AArch64** core that emulates the mailbox + system-timer MMIO and renders the
+  firmware-allocated framebuffer (`rpi/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
 
 Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
 **minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), **x86**, and the

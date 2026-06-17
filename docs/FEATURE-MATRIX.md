@@ -39,8 +39,9 @@ Sega Dreamcast.
 | **Commodore VIC-20** *(3.1-fresh)* | M1–M3 + Dostris + VIC audio (`minimal`, 22×23 char cells) | py65 ROM-free harness (AUTOTEST scripted-joystick) | ⏳ real VIC-20 / VICE pending |
 | **Bandai WonderSwan** *(3.1-fresh)* | M1–M3 + Dostris + sound channel (`minimal`, 224×144 mono tiles) | Unicorn x86/V30MZ core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real WonderSwan + audio-ear pending |
 | **NEC PC Engine** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 256×224 4bpp tiles) | py65+HuC6280 core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real PC Engine + audio-ear pending |
+| **Raspberry Pi** *(3.1-fresh)* | M1–M3 + Dostris + PWM audio (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (ROM-free harness emulating the mailbox + system timer, AUTOTEST scripted-pad) | ⏳ real Pi + USB-HID input + audio-ear pending |
 
-The last eight are built **fresh on the 3.1 contract-driven architecture** (not
+The last nine are built **fresh on the 3.1 contract-driven architecture** (not
 legacy ports): SMS is a windowed Z80 port; NES is the `minimal`-profile 6502
 launcher; Game Boy is the `minimal`-profile SM83 port — the first to add a *new*
 generator dialect (`gbz80`/rgbds); Game Gear is `minimal` on SMS silicon, reusing
@@ -48,15 +49,18 @@ generator dialect (`gbz80`/rgbds); Game Gear is `minimal` on SMS silicon, reusin
 world (a new `arm`/GNU-as dialect), drawing a software Mode-3 framebuffer;
 **VIC-20** reuses the `gen/6502/` + dasm path as a 22×23 character-cell launcher;
 **WonderSwan** is the first **x86 handheld** (NEC V30MZ ≈ 80186, nasm), a
-hardware-tile launcher; and **PC Engine** is the first **HuC6280** world (a 65C02
-superset, `ca65 --cpu huc6280`), a VDC tile launcher. The four newest are each
+hardware-tile launcher; **PC Engine** is the first **HuC6280** world (a 65C02
+superset, `ca65 --cpu huc6280`), a VDC tile launcher; and **Raspberry Pi** is the
+first **AArch64 / 64-bit** world (`aarch64`/GNU-as), drawing a software framebuffer
+the VideoCore firmware allocates over the mailbox. The five newest are each
 verified on a **ROM-free instruction-level harness** (Unicorn ARM / py65 / Unicorn
-x86 / py65+HuC6280) where a focus-independent emulator capture is impractical. They
-are not yet in the per-feature grids below (which cover the mature legacy targets);
-see [../sms/README.md](../sms/README.md), [../nes/README.md](../nes/README.md),
-[../gb/README.md](../gb/README.md), [../gg/README.md](../gg/README.md),
-[../gba/README.md](../gba/README.md), [../vic20/README.md](../vic20/README.md),
-[../ws/README.md](../ws/README.md), and [../pce/README.md](../pce/README.md).
+x86 / py65+HuC6280 / Unicorn AArch64) where a focus-independent emulator capture is
+impractical. They are not yet in the per-feature grids below (which cover the mature
+legacy targets); see [../sms/README.md](../sms/README.md),
+[../nes/README.md](../nes/README.md), [../gb/README.md](../gb/README.md),
+[../gg/README.md](../gg/README.md), [../gba/README.md](../gba/README.md),
+[../vic20/README.md](../vic20/README.md), [../ws/README.md](../ws/README.md),
+[../pce/README.md](../pce/README.md), and [../rpi/README.md](../rpi/README.md).
 
 All retro/console ports flag **audio as an "ear-check"** pending real
 hardware: the control path (SPC700 mailbox ack, Ensoniq DOC register log,

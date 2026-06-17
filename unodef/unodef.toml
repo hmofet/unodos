@@ -1473,6 +1473,43 @@ h = 192
 depth = 4
 role = "PRIMARY"
 
+# Raspberry Pi — FIRST AArch64 (64-bit) world. Firmware mailbox framebuffer, flat
+# 640x480 32bpp. MINIMAL: one full-screen app, directional nav (AUTOTEST-driven).
+[port.rpi]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 1048576
+[[port.rpi.surface]]
+id = "primary"
+w = 640
+h = 480
+depth = 32
+role = "PRIMARY"
+
+# PinePhone — AArch64 (Allwinner A64), portrait 480x640 32bpp framebuffer.
+[port.pinephone]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 1048576
+[[port.pinephone.surface]]
+id = "primary"
+w = 480
+h = 640
+depth = 32
+role = "PRIMARY"
+
+# PowerPC Mac — FIRST PowerPC world. Open Firmware boot, OF linear framebuffer.
+[port.ppcmac]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 1048576
+[[port.ppcmac.surface]]
+id = "primary"
+w = 640
+h = 480
+depth = 32
+role = "PRIMARY"
+
 
 # =============================================================================
 # UnoDOS 3.1 ABI (CONTRACT-ARCH §11, Phase 12) — the versioned clean break.
@@ -1992,6 +2029,76 @@ note = "event type: key"
 sym = "EV_MOUSE"
 val = 4
 note = "event type: mouse"
+
+
+# --- 9th fresh port: Raspberry Pi (AArch64) — the FIRST 64-bit world ----------
+[world.rpi]
+description = "Raspberry Pi (ARM Cortex-A / AArch64) bare-metal; GNU as (aarch64-linux-gnu); MINIMAL profile, 640x480x32 VideoCore mailbox framebuffer"
+cpu = "aarch64"
+emit = "rpi/sys_gen.inc"
+note = "ninth fresh contract-driven port + the FIRST AArch64 (64-bit) world. A genuine new register width over the GBA's 32-bit ARM7TDMI; same GNU-as/GAS dialect. MINIMAL (CONTRACT-ARCH §9): one full-screen app, directional nav. The firmware-allocated framebuffer (mailbox property channel) is a flat 640x480 32bpp XRGB surface; geometry is the genuine Contract overlap, pixel/cell dims the port's own."
+[[world.rpi.equate]]
+sym = "SCRW"
+val = 640
+note = "framebuffer width (px)"
+[[world.rpi.equate]]
+sym = "SCRH"
+val = 480
+note = "framebuffer height (px)"
+[[world.rpi.equate]]
+sym = "SCRCOLS"
+val = 80
+note = "text columns (640px / 8)"
+[[world.rpi.equate]]
+sym = "SCRROWS"
+val = 60
+note = "text rows (480px / 8)"
+
+# --- 10th fresh port: PinePhone (AArch64, Allwinner A64) ----------------------
+[world.pinephone]
+description = "PinePhone (Allwinner A64 / ARM Cortex-A53 AArch64) bare-metal; GNU as; MINIMAL profile, 480x640x32 portrait framebuffer"
+cpu = "aarch64"
+emit = "pinephone/sys_gen.inc"
+note = "tenth fresh contract-driven port; reuses the rpi AArch64 core + GAS dialect, retargeted to the Allwinner A64 SoC and a portrait phone panel. MINIMAL (CONTRACT-ARCH §9): one full-screen app, directional nav. Geometry is the genuine Contract overlap; the portrait orientation + pixel dims are the port's own."
+[[world.pinephone.equate]]
+sym = "SCRW"
+val = 480
+note = "framebuffer width (px, portrait)"
+[[world.pinephone.equate]]
+sym = "SCRH"
+val = 640
+note = "framebuffer height (px, portrait)"
+[[world.pinephone.equate]]
+sym = "SCRCOLS"
+val = 60
+note = "text columns (480px / 8)"
+[[world.pinephone.equate]]
+sym = "SCRROWS"
+val = 80
+note = "text rows (640px / 8)"
+
+# --- 11th fresh port: PowerPC Mac (Open Firmware) — the FIRST PowerPC world ----
+[world.ppcmac]
+description = "PowerPC Macintosh (G3/G4-class, 32-bit PowerPC) bare-metal over Open Firmware; GNU as (powerpc-linux-gnu); MINIMAL profile, 640x480x32 OF-allocated framebuffer"
+cpu = "ppc"
+emit = "ppcmac/sys_gen.inc"
+note = "eleventh fresh contract-driven port + the FIRST PowerPC (big-endian RISC) world — a brand-new ISA needing a new GAS-PPC dialect and a from-scratch harness. Booted via Open Firmware (no Mac OS), drawing into the OF-provided linear framebuffer. MINIMAL (CONTRACT-ARCH §9): one full-screen app, directional nav. Geometry is the genuine Contract overlap; pixel/cell dims are the port's own."
+[[world.ppcmac.equate]]
+sym = "SCRW"
+val = 640
+note = "framebuffer width (px)"
+[[world.ppcmac.equate]]
+sym = "SCRH"
+val = 480
+note = "framebuffer height (px)"
+[[world.ppcmac.equate]]
+sym = "SCRCOLS"
+val = 80
+note = "text columns (640px / 8)"
+[[world.ppcmac.equate]]
+sym = "SCRROWS"
+val = 60
+note = "text rows (480px / 8)"
 
 
 # =============================================================================
