@@ -72,6 +72,61 @@ Toolchain: `aarch64-linux-gnu-{as,ld,objcopy}` (binutils 2.42, via WSL) + `pytho
 with `unicorn` 2.x. On real hardware: load `unodos.bin` at `0x40080000` from
 U-Boot (`go 0x40080000`) after the panel is up.
 
+## Self-booting microSD (`mksd.sh`)
+
+`unodos.bin` is a flat payload — it assumes DRAM and the DSI panel are already up and
+just wants to run at `0x40080000`. To make a card that boots straight into UnoDOS on a
+bare PinePhone, we add the rest of the boot chain:
+
+```
+BROM → SPL (8 KB offset) → U-Boot (brings up DRAM + DSI panel)
+     → distro_bootcmd scans the card → runs boot.scr
+     → fatload unodos.bin @0x40080000 → go
+```
+
+`mksd.sh` (run **on a Linux box** — it needs `parted`/`mkfs.vfat`/`losetup`/`mkimage`,
+and `sudo` + a card reader to write; this is not a WSL script like `build.sh`) builds
+mainline **U-Boot + ARM Trusted Firmware** for the A64 and assembles the image:
+
+```sh
+sh pinephone/build.sh              # first make build/unodos.bin
+sh pinephone/mksd.sh fw            # build U-Boot + ATF  -> build/u-boot-sunxi-with-spl.bin
+sh pinephone/mksd.sh image         # assemble bootable    -> build/pinephone-unodos.img
+sh pinephone/mksd.sh write /dev/sdX   # dd onto a card (guards: removable/USB only)
+# or in one go:  sh pinephone/mksd.sh all /dev/sdX
+```
+
+What it does, and why each piece:
+
+- **Toolchain**: auto-fetches a userspace `aarch64` *nolibc* gcc from kernel.org
+  crosstool (no `apt`/`sudo`); set `CROSS=` to use your own. `swig`+`pyelftools`
+  (U-Boot host tools) go in a venv to dodge PEP-668.
+- **ATF**: `PLAT=sun50i_a64 bl31` → the secure monitor U-Boot loads.
+- **U-Boot**: `pinephone_defconfig` (which resolves `CONFIG_VIDEO/PANEL/BACKLIGHT=y` —
+  it lights the XBD599 DSI panel, the whole reason we use it). Two tweaks: disable the
+  `mkeficapsule` host tool (wants gnutls headers, unneeded) and **enable `CMD_CACHE`**
+  (needed by `boot.scr`, below). The `u-boot-sunxi-with-spl.bin` SPL+FIT is written at
+  the 8 KB offset; the `eGON.BT0` SPL magic lands at byte 8196 and it ends well before
+  the 1 MiB partition start.
+- **Card layout**: MBR, one FAT32 partition (label `UNODOS`, 1 MiB→end) holding
+  `unodos.bin` + `boot.scr`; SPL/U-Boot occupy the 8 KB–1 MiB gap.
+- **`boot.cmd`** (compiled to `boot.scr` by `mkimage`): `fatload`s the payload and
+  jumps to it. This U-Boot uses `distro_bootcmd`, which scans each device for
+  `boot.scr` at the FAT root and runs it with `${devtype}/${devnum}/${distro_bootpart}`
+  pre-set.
+
+### The cache-coherency caveat (the one real-hardware unknown)
+
+U-Boot's `go` does **not** flush or disable caches (unlike `booti`). The payload then
+runs with U-Boot's MMU + caches still on, never re-enables or flushes them, and the
+DE2 engine scans the framebuffer out of DRAM via DMA — so cached FB writes could read
+back as stale DRAM (garbage on the panel). `boot.cmd` therefore runs
+`dcache flush; dcache off; icache off` right before `go`, so the payload runs
+cache-coherent. This is the one thing the harness can't exercise (it has no caches and
+no U-Boot); if a first boot shows a black/garbled screen, this handoff is the prime
+suspect. A UART0 console on the headphone jack (115200 8N1) shows the U-Boot log and
+pinpoints where it stops.
+
 ## Contract
 
 Screen geometry comes from **unogen** (`[world.pinephone]` →
