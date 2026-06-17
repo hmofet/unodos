@@ -71,6 +71,8 @@ sms/    Sega Master System (Z80, sjasmplus)  -- M1 desktop + M2 WM + M3 apps
                                                  + Dostris game + PSG audio
 nes/    Nintendo NES (6502/2A03, dasm)        -- M1 launcher + M2 directional nav
                                                  + M3 apps + Dostris game + APU audio
+gb/     Game Boy / Color (Sharp SM83, rgbds) -- M1 list launcher + M2 directional nav
+                                                 + M3 apps + Dostris + APU; DMG+GBC colour
 ```
 
 - **SMS** consumes `gen/z80/` + `[world.sms]` (16 B window entry, 256×192 Mode 4):
@@ -89,6 +91,16 @@ nes/    Nintendo NES (6502/2A03, dasm)        -- M1 launcher + M2 directional na
   + a from-scratch **Dostris** (the SMS falling-blocks algorithm ported to 6502). A
   PPU-free NMI + main-loop vblank partials keep updates flicker-free. Verified in
   Mesen2 (`nes/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
+- **Game Boy / Color** is the **first Sharp-SM83 (`gbz80`) world** — a genuinely new
+  unogen dialect (rgbds, `DEF NAME EQU value`), consuming `gen/gbz80/` + `[world.gb]`.
+  Also `minimal` profile (8 KB RAM, no WM), but the launcher is a **vertical list**
+  with 8×8 mini-icons (the 160×144 LCD suits a list, not a grid — the same Contract,
+  a port-chosen layout). M1 launcher; M2 the joypad on `$FF00` + a vblank-interrupt
+  loop + an Up/Down selection highlight (A launches full-screen, B returns); M3 apps
+  (SysInfo, live Clock, Notepad, Files, Theme-cycles-BG-palette, Music on the GB APU)
+  + a from-scratch **Dostris** (the algorithm ported to SM83). One ROM = greyscale on
+  DMG (BGP) / colour on GBC (BG palette RAM), detected at boot. Verified in Mesen2/GBC
+  (`gb/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
 
 Together they exercise both ends of `unogen`'s reach: a **window-profile** Z80 port
 (reusing the existing dialect) and a **minimal-profile** 6502 port (reusing the
@@ -122,8 +134,9 @@ vasm, ca65) + the C header (`_Static_assert`s).
 - **Host core + hardware/SDK-blocked tail (4):** 5 hybrid policy (needs vbcc/WinUAE)
   · 8 display/profiles (now also *emulator-proven*: the SMS windowed desktop +
   the NES `minimal` directional-nav launcher + apps, see below) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
-  drivers/buses (PCI/USB) · 13 new targets + networking — **two fresh ports landed**
-  (SMS Z80 + NES 6502, both M1–M3 + game + audio), console SDK backends still blocked.
+  drivers/buses (PCI/USB) · 13 new targets + networking — **three fresh ports landed**
+  (SMS Z80, NES 6502, Game Boy SM83 — all M1–M3 + game + audio), console SDK backends
+  still blocked.
 - **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86** — the greenfield window
   model + the clean 16 B `win_entry`, QEMU + real-hardware + cycle-accurate-8088
   validated. The other windowing ports already run the compact 16 B layout. (Event
@@ -190,14 +203,20 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    full-screen apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the 2A03
    APU) + a from-scratch **Dostris**. Mesen2-verified via AUTOTEST scripted-pad
    builds. See [../nes/README.md](../nes/README.md). NEXT on NES: real hardware.
-5. **More fresh ports / the next CPU family.** Game Gear (≈SMS hardware, reuses the
-   sms/ code) for a quick win; **Game Boy** (LR35902) once rgbds is installed — it
-   adds the only genuinely new `unogen` dialect (`gbz80`). VIC-20 (6502, `minimal`)
-   reuses the dasm path.
-6. **Generalize the greenfield model to the next subsystem** — the event record
+5. ~~**NEW PORT: Game Boy / Game Boy Color (Sharp SM83).**~~ **M1–M3 + game + audio
+   DONE** — the FIRST `gbz80` world (a genuinely new unogen dialect, rgbds). `minimal`
+   profile with a **vertical-list** launcher (the 160×144 LCD suits a list). M1
+   launcher; M2 `$FF00` joypad + a vblank-interrupt loop + an Up/Down highlight; M3
+   apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the GB APU) + a
+   from-scratch **Dostris**. One ROM = greyscale on DMG / colour on GBC. Mesen2/GBC-
+   verified via AUTOTEST. See [../gb/README.md](../gb/README.md). NEXT on GB: real hw.
+6. **More fresh ports / the next CPU family.** Game Gear (≈SMS hardware, reuses the
+   sms/ code) for a quick win; VIC-20 (6502, `minimal`) reuses the dasm path; ARM
+   (GBA, devkitARM) would add the next genuinely new ISA once that SDK is installed.
+7. **Generalize the greenfield model to the next subsystem** — the event record
    (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
    bring them under the logical-model + derived-layout treatment (host-verifiable).
-7. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
+8. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
    `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
    backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
    vectors.
@@ -223,5 +242,6 @@ PATH=~/AppData/Local/bin/NASM:$PATH make floppy144   # -> build/unodos-144.img
 # build/run the fresh ports:
 sh sms/build.sh && powershell -File sms/run.ps1   # SMS (M1-M3 + game + audio), BlastEm
 sh nes/build.sh && powershell -File nes/run.ps1   # NES (M1-M3 + game + audio), Mesen2
-# pick a "Next directions" item above and go. (the next CPU family, or NES real hw.)
+sh gb/build.sh  && powershell -File gb/run.ps1    # Game Boy (M1-M3 + game + audio), Mesen2/GBC
+# pick a "Next directions" item above and go. (the next CPU family, or real hw.)
 ```

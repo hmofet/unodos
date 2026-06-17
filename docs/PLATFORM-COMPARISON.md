@@ -16,8 +16,8 @@ which family a platform is in:
   x86 PC, x86 8088/XT.
 - **Native asm per-CPU — bare-metal reimplementations** (each its own assembly,
   sharing no code): Amiga, MacPlus-OS, Genesis, Apple II, C64 (6510),
-  SNES (65816), IIGS (65816), SMS (Z80), NES (6502/2A03). *(SMS and NES are the
-  two ports built fresh on the 3.1 Contract — see below.)*
+  SNES (65816), IIGS (65816), SMS (Z80), NES (6502/2A03), Game Boy (Sharp SM83).
+  *(SMS, NES, and Game Boy are the three ports built fresh on the 3.1 Contract — see below.)*
 - **Portable C core — shared `unodos.c`** (one ~52 KB core + a thin per-platform
   backend): Mac System 7, Mac System 1–6, PS2, Dreamcast.
 
@@ -40,11 +40,13 @@ which family a platform is in:
 | **Commodore 64** | 6510 @1 MHz / 64 KB | 6510 asm, bare-metal PRG (`SYS 2061`) | VIC-II hi-res bitmap, per-cell color | disk-loaded to `$5000` via `$DE00`, **`mkapi.py` addresses**; **full-screen, one-at-a-time** | USV1 byte-heap on `.d64` | M1–M3; py65 |
 | **Sega Master System** *(3.1-fresh)* | Z80 @3.58 / 8 KB | Z80 asm, bare-metal cartridge, sjasmplus | VDP Mode-4 tile nametable, HW-sprite cursor | **built into ROM** → in-ROM table; **windowed** | *(none — cart ROM)* | M1–M3 + game + audio; BlastEm |
 | **Nintendo NES** *(3.1-fresh)* | 6502/2A03 @1.79 / **2 KB** | 6502 asm, bare-metal iNES NROM, dasm | PPU tile nametable, patterns in CHR-ROM | **built into ROM** → directional launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Mesen2 |
+| **Game Boy / Color** *(3.1-fresh)* | Sharp SM83 @4.19 / **8 KB** | SM83 asm, bare-metal 32K ROM, **rgbds** | BG tile map, tiles uploaded to VRAM; DMG greys / GBC palette | **built into ROM** → vertical-list launcher; **`minimal`: full-screen, one-at-a-time** | *(none yet)* | M1–M3 + Dostris + APU; Mesen2/GBC |
 
-The last two rows are the **3.1-fresh** ports — written from scratch against the
-Contract (`unodef/`), not migrated. SMS adds a fourth bare-metal asm CPU family
-(Z80) reusing `gen/z80/`; NES is the Contract's `minimal`-profile flagship (2 KB)
-reusing the 6502 `gen/6502/` world.
+The last three rows are the **3.1-fresh** ports — written from scratch against the
+Contract (`unodef/`), not migrated. SMS adds a bare-metal Z80 port reusing `gen/z80/`;
+NES is the `minimal`-profile flagship reusing `gen/6502/`; Game Boy is the **first
+Sharp-SM83 (`gbz80`) world** — a genuinely new generator dialect (rgbds) — and the
+first port to run one ROM in both greyscale (DMG) and colour (GBC).
 
 Two orthogonal axes cut across the families and explain most of the remaining
 variation:
