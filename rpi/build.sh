@@ -25,6 +25,13 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/kernel8_theme.img ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/kernel8_music.img ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/kernel8_dt.img ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/kernel8_paint.img ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/kernel8_pm.img ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/kernel8_ol.img ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/kernel8_tk.img ;;
+  fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/kernel8_fs.img ;;
+  fs2)     DEFS="--defsym AUTOTEST=1 --defsym AT_FS2=1";     OUT=build/kernel8_fs2.img ;;
+  fsview)  DEFS="--defsym AUTOTEST=1 --defsym AT_FSVIEW=1";  OUT=build/kernel8_fsv.img ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."
