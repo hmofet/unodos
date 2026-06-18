@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """ROM-free NEC PC Engine test harness (HuC6280 core over py65 + a VDC model).
 
+  ###########################################################################
+  ## SUPERSEDED by Mednafen for this port (see C:\\Users\\arin\\mednafen-dl). ##
+  ###########################################################################
+  This py65-based core CANNOT model the real HuC6280, which hard-maps the zero
+  page to logical $2000 and the stack to $2100. py65's 6502 core hardwires those
+  to $0000/$0100 and the relocation lives in the CPU's addressing-mode logic, not
+  the memory bus, so a py65 memory model can't intercept it (zp `lda $00` and
+  absolute `lda $0000` both arrive as mem[0x0000] — indistinguishable). That is
+  precisely the bug that rendered fine here but black-screened on real hardware:
+  the kernel now maps RAM at MPR1 ($2000) and I/O at MPR0 ($0000), and forces the
+  VDC ($0000-$0003) accesses to absolute with `a:` so ca65 doesn't fold them to
+  zero page. None of that is observable on this core. The port is now verified on
+  Mednafen (gold-standard, real-hardware-accurate) via savestate + F9 framebuffer
+  snaps; this file is kept only as a record of the VDC/VCE decode + BAT-render path.
+
+
 Mesen renders the PCE through a GPU surface a GDI/PrintWindow grab reads as black,
 and its F12 capture is focus-flaky over RDP — so, exactly like the C64/Apple II/
 VIC-20 ports run on a py65 6502 core and the GBA/WonderSwan ports on Unicorn, this
@@ -17,7 +33,7 @@ speed) plus the HuC6280 MMU. It:
     auto-increments — and the HuC6280 VCE colour table ($2402/$2404), and answers
     the VDC status read with the vblank bit set so `wait_vbl` advances,
   * then decodes the BAT (32x28 of 4bpp planar tiles from VRAM, each cell's CG
-    pattern at (entry&0xFFF)<<4, colour through the 9-bit VCE palette GGGBBBRRR) to
+    pattern at (entry&0xFFF)<<4, colour through the 9-bit VCE palette GGGRRRBBB) to
     a 256x224 PNG.
 
 The AUTOTEST ROMs drive the pad through the same input path; nothing is faked.
@@ -123,9 +139,9 @@ def patch_huc6280(mpu):
     mpu.instruct[0x54] = op_nop1            # CSL
 
 
-def vce_rgb(v):
-    r = (v & 7) * 255 // 7
-    b = ((v >> 3) & 7) * 255 // 7
+def vce_rgb(v):                       # 9-bit VCE colour, GGG RRR BBB (real HuC6260 order)
+    b = (v & 7) * 255 // 7
+    r = ((v >> 3) & 7) * 255 // 7
     g = ((v >> 6) & 7) * 255 // 7
     return r, g, b
 

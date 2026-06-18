@@ -7,9 +7,13 @@
 ; launcher and 6502 app/Dostris logic, swapping the draw layer to the VDC.
 ; MINIMAL profile (CONTRACT-ARCH §9): one full-screen app, directional nav.
 ;
-; Memory: MPR0=$F8 (8KB RAM at $0000 -> zero page + stack + work), MPR1=$FF
-; (hardware I/O at $2000 -> VDC $2000, VCE $2400, PSG $2800, joypad $3000),
-; MPR7=$00 (ROM bank 0 at $E000 -> entry + vectors), MPR2-6 = ROM banks 1-5.
+; Memory: the HuC6280 hard-maps the zero page to logical $2000 and the stack to
+; $2100, so the 8 KB work RAM (bank $F8) MUST live at MPR1 ($2000-$3FFF) and the
+; hardware I/O page (bank $FF) at MPR0 ($0000-$1FFF -> VDC $0000, VCE $0400, PSG
+; $0800, joypad $1000). MPR7=$00 (ROM bank 0 at $E000 -> entry + vectors), MPR2-6 =
+; ROM banks 1-5. (The original port had RAM and I/O swapped, which only "worked"
+; under the py65 harness whose 6502 core keeps zp/stack at $0000/$0100; on real
+; HuC6280 silicon every jsr/rts and zero-page access hit I/O -> the black screen.)
 ; The VDC BAT is at VRAM $0000; tiles are uploaded to VRAM $1000 (CG index $100),
 ; so a BAT entry for tile N is ($01<<8)|N  (palette 0). One 16-colour VCE palette.
 ;
@@ -20,20 +24,36 @@
 .setcpu "huc6280"
 .include "../unodef/gen/pce/sys_gen.inc"       ; SCRCOLS / SCRROWS (the genuine Contract overlap)
 
-VDC_AR   = $2000          ; VDC address/status
-VDC_DL   = $2002          ; VDC data low
-VDC_DH   = $2003          ; VDC data high
-VCE_CTRL = $2400          ; VCE control: dot clock + B/W (must be set on real HW)
-VCE_CTA  = $2402          ; VCE colour-table address
-VCE_CTW  = $2404          ; VCE colour-table data
-PSG_AR   = $2800
-PSG_FL   = $2802
-PSG_FH   = $2803
-PSG_CR   = $2804
-PSG_BAL  = $2805
-PSG_WAV  = $2806
-PSG_MAIN = $2801
-JOY      = $3000
+; The HuC6280 places the zero page at logical $2000 and the stack at $2100, so the
+; work RAM (bank $F8) MUST be mapped at MPR1 ($2000-$3FFF) for the stack and zero-page
+; variables to work. The hardware I/O page (bank $FF) therefore lives at MPR0
+; ($0000-$1FFF): VDC $0000, VCE $0400, PSG $0800, joypad $1000. (The original port put
+; I/O at $2000 and RAM at $0000, which only "worked" under the py65 harness — its 6502
+; core keeps the stack at $0000; on real HuC6280 silicon every jsr/rts hit I/O, which
+; is the black screen.)
+; The VDC sits at the very start of the I/O page ($0000-$0003). Because those
+; addresses are < $100, ca65 would fold `sta VDC_AR` to a ZERO-PAGE store — and the
+; HuC6280 hard-maps zero page to logical $2000 (MPR1 = work RAM), so the write would
+; silently hit RAM instead of the VDC and VRAM never gets populated (black screen,
+; while the VCE/PSG at $0400+ still work because they assemble as absolute). Every
+; VDC access therefore uses the `a:` prefix to force absolute addressing.
+VDC_AR   = $0000          ; VDC address/status   (access via `a:VDC_AR`)
+VDC_DL   = $0002          ; VDC data low         (access via `a:VDC_DL`)
+VDC_DH   = $0003          ; VDC data high        (access via `a:VDC_DH`)
+VCE_CTRL = $0400          ; VCE control: dot clock + B/W (must be set on real HW)
+VCE_CTA  = $0402          ; VCE colour-table address
+VCE_CTW  = $0404          ; VCE colour-table data
+PSG_AR   = $0800
+PSG_FL   = $0802
+PSG_FH   = $0803
+PSG_CR   = $0804
+PSG_BAL  = $0805
+PSG_WAV  = $0806
+PSG_MAIN = $0801
+JOY      = $1000
+TIMER_CTRL  = $0C01        ; HuC6280 timer control
+IRQ_DISABLE = $1402        ; interrupt disable register
+TIMER_ACK   = $1403        ; timer IRQ acknowledge
 
 ; joypad bits (active-high after we invert): d-pad + buttons
 PAD_U    = $10
@@ -110,7 +130,7 @@ g_by     = $46
 g_n      = $47
 numstr   = $50           ; 4
 clk_str  = $54           ; 9
-g_board  = $0400         ; BW*BH = 120 (work RAM)
+g_board  = $2400         ; BW*BH = 120, in the MPR1 work-RAM window ($2000-$3FFF)
 
 ; ============================================================================
 ; boot — must live in bank 0 ($E000), the only bank mapped at reset
@@ -120,10 +140,10 @@ start:
     sei
     csh
     cld
-    lda #$F8
-    tam #$01                ; MPR0 = RAM
     lda #$FF
-    tam #$02                ; MPR1 = I/O ($2000)
+    tam #$01                ; MPR0 = I/O page     ($0000-$1FFF: VDC/VCE/PSG/joypad)
+    lda #$F8
+    tam #$02                ; MPR1 = work RAM     ($2000-$3FFF: zero page + stack)
     lda #$01
     tam #$04                ; MPR2 = ROM bank 1 ($4000)
     lda #$02
@@ -135,23 +155,52 @@ start:
     lda #$05
     tam #$40                ; MPR6 = ROM bank 5 ($C000)
     ldx #$FF
+    txs                     ; stack now lives in work RAM (MPR1)
+    ; No System Card on a flash cart: the VDC control reg + interrupt controller are
+    ; undefined at reset, so a stray vblank/timer IRQ can re-vector to `start` during
+    ; the long boot and the tile upload never finishes (black screen). Disable them.
+    lda #5
+    sta a:VDC_AR
+    stz a:VDC_DL
+    stz a:VDC_DH              ; VDC CR = 0 (display + all VDC IRQs off)
+    lda a:VDC_AR              ; read status -> ack any pending vblank
+    lda #$07
+    sta IRQ_DISABLE         ; mask IRQ2 / IRQ1 / timer
+    stz TIMER_CTRL          ; stop the timer
+    lda TIMER_ACK           ; ack pending timer IRQ
+    ; Clear the 8 KB work RAM at $2000-$3FFF (real hardware powers up with garbage;
+    ; the py65 harness zero-filled it, masking uninitialised-variable reads).
+    stz $00
+    lda #$20
+    sta $01                 ; ptr = $2000 (start of work RAM)
+    ldx #$20                ; 32 pages = 8 KB
+    ldy #0
+@clr:
+    lda #0
+    sta ($00),y
+    iny
+    bne @clr
+    inc $01
+    dex
+    bne @clr
+    ldx #$FF
     txs
     jmp boot_main           ; into the main bank ($4000+, now mapped)
 
 .segment "CODE"
 boot_main:
-    jsr vdc_init
-    jsr load_palette
-    jsr load_tiles
-    jsr clear_bat
-    lda #0
+    lda #0                  ; init all state BEFORE load_palette (it reads v_theme)
     sta v_inapp
     sta v_sel
     sta v_selp
     sta v_theme
     sta v_dirty
+    jsr vdc_init            ; VCE + VDC control regs only — display NOT yet generating
+    jsr load_palette        ; load VRAM/VCE while the picture is off (writes are safe)
+    jsr load_tiles
+    jsr clear_bat
     jsr draw_launcher
-    jsr display_on
+    jsr display_on          ; program timing + enable BG -> picture starts here
 main:
     jsr wait_vbl
     jsr render_partials
@@ -167,56 +216,72 @@ main:
 ; VDC / VCE helpers
 ; ============================================================================
 vdc_init:
-    ; VCE control: 5.37 MHz dot clock (256-wide), colour. A HuCard booted via a
-    ; flash cart has NO System Card to set this up, so the VCE state is undefined at
-    ; reset — without this write the display is black on real PC Engine hardware
-    ; (the harness models the palette but not the VCE control register, so it passed
-    ; in emulation). Matches the VDC's 256-wide HDR ($1F => 32 tiles).
+    ; VCE control: 5.37 MHz dot clock (256-wide), colour. A HuCard booted via a flash
+    ; cart has NO System Card, so the VCE state is undefined at reset — without this
+    ; the display is black on real hardware. Then program ONLY the VDC control regs
+    ; (CR=0, memory width, scroll); the horizontal/vertical TIMING regs are deferred
+    ; to display_on so the VDC produces no active picture during the VRAM/VCE load.
     stz VCE_CTRL
     ldx #0
-@l: lda vdc_regs,x
-    sta VDC_AR
+@l: lda vdc_ctrl_regs,x
+    sta a:VDC_AR
     inx
-    lda vdc_regs,x
-    sta VDC_DL
+    lda vdc_ctrl_regs,x
+    sta a:VDC_DL
     inx
-    lda vdc_regs,x
-    sta VDC_DH
+    lda vdc_ctrl_regs,x
+    sta a:VDC_DH
     inx
-    cpx #(vdc_regs_end - vdc_regs)
+    cpx #(vdc_ctrl_end - vdc_ctrl_regs)
     bne @l
     rts
-vdc_regs:
-    .byte 5,  $00,$00       ; CR off
+vdc_ctrl_regs:
+    .byte 5,  $00,$00       ; CR off (display + IRQs disabled)
     .byte 9,  $00,$00       ; MWR 32x32
+    .byte 7,  $00,$00       ; BXR
+    .byte 8,  $00,$00       ; BYR
+vdc_ctrl_end:
+
+; display_on: now that VRAM/VCE are loaded, program the timing registers (this starts
+; the active picture) and enable the background.
+display_on:
+    ldx #0
+@l: lda vdc_timing_regs,x
+    sta a:VDC_AR
+    inx
+    lda vdc_timing_regs,x
+    sta a:VDC_DL
+    inx
+    lda vdc_timing_regs,x
+    sta a:VDC_DH
+    inx
+    cpx #(vdc_timing_end - vdc_timing_regs)
+    bne @l
+    lda #5
+    sta a:VDC_AR
+    lda #$88                ; CR: background enable ($80) + vblank-status ($08).
+    sta a:VDC_DL              ; Bit 3 makes the status vblank bit set so wait_vbl works;
+    lda #$00                ; interrupts stay masked (sei), so the IRQ never fires.
+    sta a:VDC_DH
+    rts
+vdc_timing_regs:
     .byte $0A,$02,$02       ; HSR
     .byte $0B,$1F,$03       ; HDR (256 wide)
     .byte $0C,$02,$0F       ; VPR
     .byte $0D,$DF,$00       ; VDW (224)
     .byte $0E,$03,$00       ; VCR
-    .byte 7,  $00,$00       ; BXR
-    .byte 8,  $00,$00       ; BYR
-vdc_regs_end:
-
-display_on:
-    lda #5
-    sta VDC_AR
-    lda #$80                ; CR: background enable
-    sta VDC_DL
-    lda #$00
-    sta VDC_DH
-    rts
+vdc_timing_end:
 display_off:
     lda #5
-    sta VDC_AR
+    sta a:VDC_AR
     lda #$00
-    sta VDC_DL
-    sta VDC_DH
+    sta a:VDC_DL
+    sta a:VDC_DH
     rts
 
 ; wait_vbl: poll the VDC status vblank bit
 wait_vbl:
-@w: lda VDC_AR              ; read status
+@w: lda a:VDC_AR              ; read status
     and #$20
     beq @w
     rts
@@ -256,13 +321,13 @@ load_tiles:
     lda #>tiles_all
     sta ptr+1
     lda #0
-    sta VDC_AR             ; MAWR
+    sta a:VDC_AR             ; MAWR
     lda #$00
-    sta VDC_DL
+    sta a:VDC_DL
     lda #$10
-    sta VDC_DH             ; MAWR = $1000
+    sta a:VDC_DH             ; MAWR = $1000
     lda #2
-    sta VDC_AR            ; select VWR
+    sta a:VDC_AR            ; select VWR
     ; NTILES*32 bytes = NTILES*16 words. Loop a 16-bit counter.
     lda #<(NTILES*16)
     sta g_n
@@ -270,10 +335,10 @@ load_tiles:
     sta g_tmp
     ldy #0
 @l: lda (ptr),y
-    sta VDC_DL
+    sta a:VDC_DL
     iny
     lda (ptr),y
-    sta VDC_DH
+    sta a:VDC_DH
     iny
     bne @nc
     inc ptr+1
@@ -291,18 +356,18 @@ load_tiles:
 ; clear_bat: fill the 32x32 BAT with tile 0 (blank)
 clear_bat:
     lda #0
-    sta VDC_AR
+    sta a:VDC_AR
     lda #$00
-    sta VDC_DL
-    sta VDC_DH            ; MAWR = $0000
+    sta a:VDC_DL
+    sta a:VDC_DH            ; MAWR = $0000
     lda #2
-    sta VDC_AR
+    sta a:VDC_AR
     ldx #0
     ldy #4                ; 4*256 = 1024 entries
 @l: lda #$00
-    sta VDC_DL
+    sta a:VDC_DL
     lda #$01
-    sta VDC_DH            ; entry = $0100 (tile 0, palette 0)
+    sta a:VDC_DH            ; entry = $0100 (tile 0, palette 0)
     inx
     bne @l
     dey
@@ -333,20 +398,20 @@ vdc_cell:
     adc #0
     sta addrhi
     lda #0
-    sta VDC_AR
+    sta a:VDC_AR
     lda addrlo
-    sta VDC_DL
+    sta a:VDC_DL
     lda addrhi
-    sta VDC_DH            ; MAWR
+    sta a:VDC_DH            ; MAWR
     lda #2
-    sta VDC_AR           ; VWR
+    sta a:VDC_AR           ; VWR
     rts
 
 ; putcell: A = tile number -> write BAT entry (palette 0), MAWR auto-increments
 putcell:
-    sta VDC_DL
+    sta a:VDC_DL
     lda #$01
-    sta VDC_DH
+    sta a:VDC_DH
     rts
 
 ; puts: ptr=string, col/row, tmp=tile base

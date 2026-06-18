@@ -115,9 +115,11 @@ TUNE=[("E4",Q),("E4",Q),("F4",Q),("G4",Q),("G4",Q),("F4",Q),("E4",Q),("D4",Q),("
       ("F4",Q),("E4",Q),("D4",Q),("C4",Q),("C4",Q),("D4",Q),("E4",Q),("D4",H),("C4",Q),("C4",H)]
 music_song=[(round(PSG_CLK/(32*NOTE_HZ[n]))&0xFFF,d) for n,d in TUNE]
 
-# VCE palette: 9-bit colour, GGG BBB RRR layout (G high, B mid, R low — verified
-# empirically in Mesen). 16-colour palette 0.
-def vce(r,g,b): return (g<<6)|(b<<3)|r      # r,g,b in 0..7
+# VCE palette: 9-bit colour, GGG RRR BBB layout (G bits 8-6, R bits 5-3, B bits 2-0)
+# — the real HuC6260 order, verified empirically on Mednafen (gold-standard PCE
+# emulator): writing colour0=$0007 rendered BLUE and colour1=$01C0 rendered GREEN,
+# so the low field is blue, the high field green. 16-colour palette 0.
+def vce(r,g,b): return (g<<6)|(r<<3)|b      # r,g,b in 0..7
 #       0 blue        1 white     2 cyan     3 magenta  4 blk 5 green   6 yellow  7 red     8 orange
 PAL=[vce(1,2,6), vce(7,7,7), vce(0,7,7), vce(7,0,7), 0, vce(0,7,0), vce(7,7,0), vce(7,0,0), vce(7,4,0)]
 PAL+=[0]*(16-len(PAL))
