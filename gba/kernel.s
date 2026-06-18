@@ -50,6 +50,39 @@
 .equ BORG_Y, 24
 .equ FALLRATE, 30
 
+@ Paint geometry (240x160)
+.equ PCW, 24
+.equ PCH, 18
+.equ PCELL, 6
+.equ PCO_X, 4
+.equ PCO_Y, 16
+.equ NSWATCH, 8
+.equ PSW_W, 14
+.equ PSW_Y, (PCO_Y + PCH*PCELL + 4)
+@ Pac-Man geometry
+.equ PM_COLS, 28
+.equ PM_ROWS, 25
+.equ PM_CELL, 5
+.equ PMO_X, 4
+.equ PMO_Y, 16
+.equ GSIZE, 20
+.equ FRIGHT_STEPS, 45
+.equ PM_STEPFRAMES, 4
+@ OutLast geometry
+.equ OL_BANDS, 20
+.equ OL_COLW, 6
+.equ OL_BH, 7
+.equ OLO_Y, 14
+.equ OL_RATE, 4
+@ Tracker geometry
+.equ NT_ROWS, 16
+.equ NT_CH, 4
+.equ TK_STEPF, 12
+.equ TKO_X, 20
+.equ TKO_Y, 16
+.equ TK_RH, 8
+.equ TK_CW, 44
+
 @ ---- IWRAM variables (fixed addresses) -------------------------------------
 .equ VARS,     0x03000000
 .equ v_pad,    VARS+0
@@ -104,6 +137,44 @@
 .equ numstr,   0x03000250      @ 6 bytes
 .equ g_board,  0x03000260      @ BW*BH = 120 bytes
 
+.equ p_cx,     VARS+188
+.equ p_cy,     VARS+192
+.equ p_col,    VARS+196
+.equ pm_x,     VARS+200
+.equ pm_y,     VARS+204
+.equ pm_dir,   VARS+208
+.equ pm_ndir,  VARS+212
+.equ pm_score, VARS+216
+.equ pm_lives, VARS+220
+.equ pm_level, VARS+224
+.equ pm_dots,  VARS+228
+.equ pm_mode,  VARS+232
+.equ pm_modet, VARS+236
+.equ pm_fr,    VARS+240
+.equ pm_kills, VARS+244
+.equ pm_st,    VARS+248
+.equ pm_sc,    VARS+252
+.equ pm_tgx,   VARS+256
+.equ pm_tgy,   VARS+260
+.equ pm_ft,    VARS+264
+.equ pm_gh,    VARS+268
+.equ ol_carx,  VARS+328
+.equ ol_scroll,VARS+332
+.equ ol_dist,  VARS+336
+.equ ol_over,  VARS+340
+.equ ol_ctr,   VARS+344
+.equ tk_crow,  VARS+348
+.equ tk_cch,   VARS+352
+.equ tk_prow,  VARS+356
+.equ tk_ptmr,  VARS+360
+.equ fl_sel,   VARS+364
+.equ fl_view,  VARS+368
+.equ np_saved, VARS+372
+.equ pcanvas,  VARS+0x400
+.equ pm_maze,  VARS+0x800
+.equ tk_pat,   VARS+0xC00
+.equ fbuf,     VARS+0x1000
+
 .section .text
 .arm
 .global _start
@@ -124,6 +195,7 @@ mclr:
     str r1, [r0], #4
     subs r2, r2, #1
     bne mclr
+    bl fs_init
     bl draw_launcher
 mainloop:
     bl wait_vblank
@@ -475,6 +547,30 @@ up_disp:
     bleq theme_input
     cmp r0, #7
     bleq dostris_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #9
+    bleq pacman_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #8
+    bleq outlast_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #10
+    bleq paint_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #6
+    bleq tracker_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #4
+    bleq files_update
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #2
+    bleq notepad_update
     pop {pc}
 clock_noop:
     bx lr
@@ -574,6 +670,30 @@ enter_app:
     ldr r0, [r0]
     cmp r0, #3
     bleq music_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #9
+    bleq pacman_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #8
+    bleq outlast_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #10
+    bleq paint_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #6
+    bleq tracker_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #4
+    bleq files_init
+    ldr r0, =v_app
+    ldr r0, [r0]
+    cmp r0, #2
+    bleq notepad_init
     ldr r0, =v_dirty
     mov r1, #1
     str r1, [r0]
@@ -674,3 +794,8 @@ fr_app:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "pacman.inc.s"
+    .include "outlast.inc.s"
+    .include "paint.inc.s"
+    .include "tracker.inc.s"
+    .include "fs.inc.s"

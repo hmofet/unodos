@@ -152,7 +152,11 @@ def write_png(path, w, h, rgb):
 def main():
     keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
-    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 160_000_000
+    storage, tail = None, []
+    for a in argv[3:]:
+        if a.startswith("--storage="): storage = a.split("=",1)[1]
+        else: tail.append(a)
+    budget = int(float(tail[0]) * 1_000_000) if tail else 160_000_000
     state["keys"] = keys
 
     data = open(rom_path, "rb").read()
@@ -163,6 +167,10 @@ def main():
     uc.mmio_map(I2S_PAGE, 0x1000, i2s_read, None, i2s_write, None)
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x40200000)
+    import os
+    FS_PA, FS_SIZE = 0x40302000, 0x1000
+    if storage and os.path.exists(storage):
+        with open(storage,"rb") as f: uc.mem_write(FS_PA, f.read()[:FS_SIZE])
 
     def on_unmapped(uc, access, address, size, value, ud):
         print("  !! unmapped access @ 0x%X (size %d) pc=0x%X"
@@ -191,6 +199,9 @@ def main():
         rgb[i*3+2] = w & 0xFF
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if storage:
+        with open(storage,"wb") as f: f.write(bytes(uc.mem_read(FS_PA, FS_SIZE)))
+        print("flushed FS -> %s" % storage)
     if wav:
         analyze_pcm(state["pcm"], wav)
 

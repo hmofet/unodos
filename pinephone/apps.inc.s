@@ -75,6 +75,14 @@ draw_app:
     b.eq  app_theme
     cmp   w0, #7
     b.eq  app_dostris
+    cmp   w0, #9
+    b.eq  app_pacman
+    cmp   w0, #8
+    b.eq  app_outlast
+    cmp   w0, #6
+    b.eq  app_tracker
+    cmp   w0, #10
+    b.eq  app_paint
     b     app_generic
 app_sysinfo:
     ldr   x2, =t_sysinfo
@@ -84,17 +92,11 @@ app_sysinfo:
     ldp   x29, x30, [sp], #16
     ret
 app_notepad:
-    ldr   x2, =t_notepad
-    bl    draw_chrome
-    ldr   x0, =c_notepad
-    bl    draw_content
+    bl    notepad_draw
     ldp   x29, x30, [sp], #16
     ret
 app_files:
-    ldr   x2, =t_files
-    bl    draw_chrome
-    ldr   x0, =c_files
-    bl    draw_content
+    bl    files_draw
     ldp   x29, x30, [sp], #16
     ret
 app_generic:
@@ -471,6 +473,78 @@ auto_script:
     .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
     .byte 2,PAD_L,2,0, 6,PAD_D, 2,0, 0,0
 .endif
+.ifdef AT_PAINT
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0
+    .byte 2,PAD_A, 6,0
+    .byte 2,PAD_A,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0
+    .byte 2,PAD_U,2,0
+    .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0
+    .byte 2,PAD_A,2,0
+    .byte 2,PAD_D,2,0
+    .byte 2,PAD_A,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0
+    .byte 2,PAD_D,2,0, 2,PAD_A,2,0
+    .byte 0,0
+.endif
+.ifdef AT_PACMAN
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0
+    .byte 2,PAD_R,2,0
+    .byte 2,PAD_A, 40,0
+    .byte 2,PAD_U, 40,0
+    .byte 2,PAD_L, 40,0
+    .byte 2,PAD_D, 40,0
+    .byte 2,PAD_R, 40,0
+    .byte 0,0
+.endif
+.ifdef AT_OUTLAST
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0
+    .byte 2,PAD_A, 30,0
+    .byte 2,PAD_L,4,0, 2,PAD_L,4,0, 30,0
+    .byte 2,PAD_R,4,0, 2,PAD_R,4,0, 30,0
+    .byte 0,0
+.endif
+.ifdef AT_TRACKER
+    .byte 6,0
+    .byte 2,PAD_D,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0
+    .byte 2,PAD_A, 40,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0
+    .byte 2,PAD_R,2,0
+    .byte 2,PAD_A,2,0, 2,PAD_A,2,0, 2,PAD_A,2,0
+    .byte 30,0
+    .byte 0,0
+.endif
+.ifdef AT_FS
+    .byte 6,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0
+    .byte 2,PAD_A, 6,0
+    .byte 2,PAD_A, 6,0
+    .byte 2,PAD_B, 6,0
+    .byte 2,PAD_L,2,0, 2,PAD_L,2,0
+    .byte 2,PAD_D,2,0
+    .byte 2,PAD_A, 12,0
+    .byte 0,0
+.endif
+.ifdef AT_FS2
+    .byte 6,0
+    .byte 2,PAD_D,2,0
+    .byte 2,PAD_A, 12,0
+    .byte 0,0
+.endif
+.ifdef AT_FSVIEW
+    .byte 6,0
+    .byte 2,PAD_D,2,0
+    .byte 2,PAD_A, 6,0
+    .byte 2,PAD_A, 12,0
+    .byte 0,0
+.endif
 .align 3
 .section .text
 .endif
@@ -503,6 +577,10 @@ t_music:   .asciz "Music"
 t_files:   .asciz "Files"
 t_theme:   .asciz "Theme"
 t_dostris: .asciz "Dostris"
+t_paint:   .asciz "Paint"
+t_pacman:  .asciz "Pac-Man"
+t_outlast: .asciz "OutLast"
+t_tracker: .asciz "Tracker"
 .align 2
 c_sysinfo:
     .word 16, 48, m_si0

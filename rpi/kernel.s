@@ -27,23 +27,29 @@
 .include "../unodef/gen/rpi/sys_gen.inc"     // SCRW/SCRH/SCRCOLS/SCRROWS
 .include "build/gfxequ.inc"                   // NICONS/NTHEMES/MUSIC_COUNT
 
-// ---- BCM2837 (Pi 3) peripheral block ---------------------------------------
+// ---- BCM peripheral block --------------------------------------------------
+// PERIPH defaults to the BCM2837 (Pi 3) base, so the default build stays
+// byte-identical to the harness-verified kernel. A Pi 4 (BCM2711) build
+// overrides only the base: aarch64-linux-gnu-as --defsym PERIPH=0xFE000000.
+// Every peripheral offset below is identical across Pi 3 and Pi 4.
+.ifndef PERIPH
 .equ PERIPH,        0x3F000000
-.equ SYS_TIMER_CLO, 0x3F003004           // free-running 1MHz counter (low 32)
-.equ UART0_DR,      0x3F201000           // PL011 data register
-.equ UART0_FR,      0x3F201018           // PL011 flag register (bit4 = RXFE)
-.equ MBOX_READ,     0x3F00B880
-.equ MBOX_STATUS,   0x3F00B898
-.equ MBOX_WRITE,    0x3F00B8A0
+.endif
+.equ SYS_TIMER_CLO, PERIPH + 0x003004    // free-running 1MHz counter (low 32)
+.equ UART0_DR,      PERIPH + 0x201000    // PL011 data register
+.equ UART0_FR,      PERIPH + 0x201018    // PL011 flag register (bit4 = RXFE)
+.equ MBOX_READ,     PERIPH + 0x00B880
+.equ MBOX_STATUS,   PERIPH + 0x00B898
+.equ MBOX_WRITE,    PERIPH + 0x00B8A0
 .equ MBOX_FULL,     0x80000000
 .equ MBOX_EMPTY,    0x40000000
 .equ MBOX_CH_PROP,  8
 // PWM headphone-jack tone path (real hardware; the harness sinks these writes)
-.equ CM_PWMCTL,     0x3F1010A0
-.equ CM_PWMDIV,     0x3F1010A4
-.equ PWM_CTL,       0x3F20C000
-.equ PWM_RNG1,      0x3F20C010
-.equ PWM_DAT1,      0x3F20C014
+.equ CM_PWMCTL,     PERIPH + 0x1010A0
+.equ CM_PWMDIV,     PERIPH + 0x1010A4
+.equ PWM_CTL,       PERIPH + 0x20C000
+.equ PWM_RNG1,      PERIPH + 0x20C010
+.equ PWM_DAT1,      PERIPH + 0x20C014
 
 .equ FRAME_US,      16667                 // ~60 Hz frame period (microseconds)
 
@@ -64,6 +70,42 @@
 .equ BORG_X, 224
 .equ BORG_Y, 64
 .equ FALLRATE, 30
+
+// Paint geometry (cursor-driven cell canvas + a palette row one 'up' away)
+.equ PCW, 36                              // canvas columns
+.equ PCH, 24                              // canvas rows
+.equ PCELL, 12                            // cell pixels
+.equ PCO_X, 16                            // canvas origin x
+.equ PCO_Y, 24                            // canvas origin y
+.equ NSWATCH, 8                           // palette swatches
+.equ PSW_W, 26                            // swatch pitch
+.equ PSW_Y, (PCO_Y + PCH*PCELL + 10)      // swatch row y
+
+// Pac-Man geometry (28x25 maze, tile-stepped, one 16px cell per maze tile)
+.equ PM_COLS, 28
+.equ PM_ROWS, 25
+.equ PM_CELL, 16
+.equ PMO_X, 16
+.equ PMO_Y, 24
+.equ GSIZE, 20                            // ghost struct: GX,GY,GDIR,GST,GTMR (words)
+.equ FRIGHT_STEPS, 45
+.equ PM_STEPFRAMES, 4                     // game step every N frames
+
+// OutLast geometry (pseudo-3D road: 20 perspective bands over 40 logical cols)
+.equ OL_BANDS, 20
+.equ OL_COLW, 16                          // pixels per logical column (640/40)
+.equ OL_BH, 22                            // band pixel height
+.equ OLO_Y, 24                            // road top y
+.equ OL_RATE, 4                           // frames per scroll step
+
+// Tracker geometry (pattern grid: 16 rows x 4 channels, auto-plays leftmost voice)
+.equ NT_ROWS, 16
+.equ NT_CH, 4
+.equ TK_STEPF, 12                         // frames per playback step
+.equ TKO_X, 60
+.equ TKO_Y, 44
+.equ TK_RH, 22
+.equ TK_CW, 80
 
 // ---- fixed RAM layout ------------------------------------------------------
 .equ STACK_TOP, 0x00200000
@@ -117,10 +159,47 @@
 .equ a_tmr,    VARS+164
 .equ a_pad,    VARS+168
 .equ a_gpause, VARS+172
+.equ p_cx,     VARS+176                   // Paint cursor cell x
+.equ p_cy,     VARS+180                   // Paint cursor cell y (==PCH => palette row)
+.equ p_col,    VARS+184                   // Paint current colour index
+.equ pm_x,     VARS+188                   // Pac-Man: pac tile x
+.equ pm_y,     VARS+192                   // pac tile y
+.equ pm_dir,   VARS+196                   // pac direction (0U 1L 2D 3R)
+.equ pm_ndir,  VARS+200                   // pac queued direction
+.equ pm_score, VARS+204
+.equ pm_lives, VARS+208
+.equ pm_level, VARS+212
+.equ pm_dots,  VARS+216                   // remaining dots
+.equ pm_mode,  VARS+220                   // scatter/chase schedule index
+.equ pm_modet, VARS+224                   // mode step timer
+.equ pm_fr,    VARS+228                   // fright timer (steps)
+.equ pm_kills, VARS+232                   // ghosts eaten this fright
+.equ pm_st,    VARS+236                   // 0 play / 1 over
+.equ pm_sc,    VARS+240                   // step counter (parity)
+.equ pm_tgx,   VARS+244                   // ghost target tile (steer)
+.equ pm_tgy,   VARS+248
+.equ pm_ft,    VARS+252                   // frame timer for step pacing
+.equ pm_gh,    VARS+256                   // 3 ghosts * GSIZE bytes (ends VARS+316)
+.equ ol_carx,  VARS+316                   // OutLast: car column (0..39)
+.equ ol_scroll,VARS+320                   // road scroll position
+.equ ol_dist,  VARS+324                   // distance (score)
+.equ ol_over,  VARS+328                   // crashed flag
+.equ ol_ctr,   VARS+332                   // frames-until-scroll counter
+.equ tk_crow,  VARS+336                   // Tracker: cursor row
+.equ tk_cch,   VARS+340                   // cursor channel
+.equ tk_prow,  VARS+344                   // playing row
+.equ tk_ptmr,  VARS+348                   // playback step timer
+.equ fl_sel,   VARS+352                   // Files: selected file
+.equ fl_view,  VARS+356                   // Files: 0 list / 1 viewing
+.equ np_saved, VARS+360                   // Notepad: save-feedback flag
 .equ palette,  VARS+0x200                 // 16 XRGB words
 .equ clk_str,  VARS+0x240                 // 9 bytes
 .equ numstr,   VARS+0x250                 // 6 bytes
 .equ g_board,  VARS+0x260                 // BW*BH bytes
+.equ pcanvas,  VARS+0x400                 // PCW*PCH Paint canvas (cleared by paint_init)
+.equ pm_maze,  VARS+0x800                 // PM_COLS*PM_ROWS mutable maze (copied at new game)
+.equ tk_pat,   VARS+0xC00                 // NT_ROWS*NT_CH tracker pattern (cleared at init)
+.equ fbuf,     VARS+0x1000                // 4 KB file-view scratch buffer
 
 .section .text
 .global _start
@@ -143,6 +222,7 @@ mclr:
     subs  w2, w2, #1
     b.ne  mclr
     bl    fb_init                         // ask the GPU for a framebuffer
+    bl    fs_init                         // load/format the USV1 disk
     bl    draw_launcher
 mainloop:
     bl    wait_vblank
@@ -641,8 +721,44 @@ up_d2:
     ldr   x0, =v_app
     ldr   w0, [x0]
     cmp   w0, #7
-    b.ne  up_d3
+    b.ne  up_dp
     bl    dostris_update
+up_dp:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #10
+    b.ne  up_pm
+    bl    paint_update
+up_pm:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #9
+    b.ne  up_ol
+    bl    pacman_update
+up_ol:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #8
+    b.ne  up_tk
+    bl    outlast_update
+up_tk:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #6
+    b.ne  up_fl
+    bl    tracker_update
+up_fl:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #4
+    b.ne  up_np
+    bl    files_update
+up_np:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #2
+    b.ne  up_d3
+    bl    notepad_update
 up_d3:
     ldp   x29, x30, [sp], #16
     ret
@@ -754,8 +870,44 @@ ea1:
     ldr   x0, =v_app
     ldr   w0, [x0]
     cmp   w0, #3
-    b.ne  ea2
+    b.ne  ea_pt
     bl    music_init
+ea_pt:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #10
+    b.ne  ea_pm
+    bl    paint_init
+ea_pm:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #9
+    b.ne  ea_ol
+    bl    pacman_init
+ea_ol:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #8
+    b.ne  ea_tk
+    bl    outlast_init
+ea_tk:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #6
+    b.ne  ea_fl
+    bl    tracker_init
+ea_fl:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #4
+    b.ne  ea_np
+    bl    files_init
+ea_np:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #2
+    b.ne  ea2
+    bl    notepad_init
 ea2:
     ldr   x0, =v_dirty
     mov   w1, #1
@@ -852,3 +1004,8 @@ fr_app2:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "paint.inc.s"
+    .include "pacman.inc.s"
+    .include "outlast.inc.s"
+    .include "tracker.inc.s"
+    .include "fs.inc.s"
