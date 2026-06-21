@@ -32,6 +32,12 @@ case "$1" in
   fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
   fs2)     DEFS="--defsym AUTOTEST=1 --defsym AT_FS2=1";     OUT=build/unodos_fs2.bin ;;
   fsview)  DEFS="--defsym AUTOTEST=1 --defsym AT_FSVIEW=1";  OUT=build/unodos_fsv.bin ;;
+  post)    DEFS="--defsym POST=1";                          OUT=build/unodos_post.bin ;;
+  led)     DEFS="--defsym LEDTEST=1";                        OUT=build/unodos_led.bin ;;
+  paneldbg) DEFS="--defsym PANELDBG=1";                      OUT=build/unodos_paneldbg.bin ;;
+  panelpost) DEFS="--defsym PANELDBG=1 --defsym POST=1";     OUT=build/unodos_panelpost.bin ;;
+  pboot)    DEFS="--defsym PBOOT=1";                         OUT=build/unodos_pboot.bin ;;
+  pbootdbg) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1";     OUT=build/unodos_pbootdbg.bin ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."
