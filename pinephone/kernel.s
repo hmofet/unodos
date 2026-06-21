@@ -30,21 +30,37 @@
 
 // ---- Allwinner A64 display engine 2.0 (mixer 0) ----------------------------
 .equ GLB_CTL,    0x01100000      // mixer0 global control (enable)
+.equ GLB_DBUF,   0x01100008      // mixer0 double-buffer commit
 .equ GLB_SIZE,   0x0110000C      // mixer0 output size
-.equ BLD_FILL,   0x01101000      // blender pipe fill-colour control
+.equ BLD_FILL,   0x01101000      // blender pipe enable / fill-colour control
+.equ BLD_FILLCOL,0x01101004      // blender pipe0 fill colour (ARGB)
 .equ BLD_CH_ISZ, 0x01101008      // blender ch0 input size
+.equ BLD_CH_OFF, 0x0110100C      // blender ch0 input offset
+.equ BLD_RTCTL,  0x01101080      // blender routing control
+.equ BLD_BKCOL,  0x01101088      // blender background colour
 .equ BLD_SIZE,   0x0110108C      // blender output size
+.equ BLD_MODE,   0x01101090      // blender ch0 blend mode
 .equ OVL_ATTR,   0x01103000      // UI overlay layer0 attribute control
 .equ OVL_MBSIZE, 0x01103004      // UI overlay layer0 memory-block size
 .equ OVL_COORD,  0x01103008      // UI overlay layer0 coordinate
 .equ OVL_PITCH,  0x0110300C      // UI overlay layer0 pitch (bytes/row)
 .equ OVL_TOPADD, 0x01103010      // UI overlay layer0 top framebuffer address
 .equ OVL_SIZE,   0x01103088      // UI overlay window size
+// DE2 top-level clock/reset (DE base 0x01000000). The CCU enables the DE *bus* clock,
+// but the Display Engine gates+resets its sub-blocks internally: MIXER0 (0x01100000)
+// registers are inaccessible (writes dropped, read back 0) until these are enabled.
+.equ DE_SCLK_GATE, 0x01000000    // special (pixel) clock gate; bit0 = mixer0 (core0)
+.equ DE_HCLK_GATE, 0x01000004    // AHB (bus) clock gate;        bit0 = mixer0 (core0)
+.equ DE_AHB_RESET, 0x01000008    // module reset de-assert;      bit0 = mixer0 (core0)
+.equ DE_TCON_MUX,  0x01000010    // mixer->TCON routing; bit0=0 routes mixer0 -> TCON0
 // A64 UART0 (16550-compatible) — the serial console (on the headphone jack)
 .equ UART0_RBR,  0x01C28000      // receive buffer register
 .equ UART0_LSR,  0x01C28014      // line status register (bit0 = data ready)
 // A64 I2S/PCM0 — TX FIFO for the audio codec PCM stream
 .equ I2S_TXFIFO, 0x01C22020      // I2S0 TX data FIFO
+// A64 PIO (port D) — the green status LED is on PD18 (GPIO114; SPL lights it)
+.equ PD_CFG2,    0x01C20874      // PD config reg, pins 16-23 (PD18 = bits [11:8])
+.equ PD_DAT,     0x01C2087C      // PD data reg (PD18 = bit 18)
 .equ AUD_RATE,   8000            // PCM sample rate
 .equ AUD_PERF,   133             // samples per ~60 Hz frame (8000/60)
 .equ AUD_AMP,    6000            // square-wave amplitude
@@ -57,6 +73,14 @@
 .equ fb_pitch,  FBINFO+8         // 4 bytes
 .equ PINE_FB,   0x40400000       // the XRGB8888 framebuffer in DRAM
 .equ PINE_PITCH, (SCRW*4)        // 480 * 4 = 1920 bytes/row
+// The XBD599 panel is natively 720x1440. The DE2 mixer global/blender output and
+// TCON0 are programmed to that native size; our 480x640 portrait content is a UI
+// overlay LAYER positioned at the panel's top-left (the rest stays the blender's
+// black background). PANEL_SZ / LAYER_SZ encode ((H-1)<<16)|(W-1) for each.
+.equ PANEL_W,   720
+.equ PANEL_H,   1440
+.equ PANEL_SZ,  (((PANEL_H-1)<<16)|(PANEL_W-1))   // 0x059F02CF
+.equ LAYER_SZ,  (((SCRH-1)<<16)|(SCRW-1))          // 0x027F01DF
 
 // pad bits (active-high) — same layout as the Pi/GBA so AUTOTEST scripts match
 .equ PAD_A,   0x01
@@ -203,7 +227,24 @@
 
 .section .text
 .global _start
+// ARM64 Linux Image header (64 bytes). Lets a kernel-style loader (e.g. megi's p-boot,
+// which lights the DSI panel itself and hands off a live framebuffer) load + enter us as
+// an "arm64 kernel". code0 = a branch over the header to the real entry, so this is
+// transparent to U-Boot `go` and the Unicorn harness (both jump to 0x40080000 = code0).
+// text_offset 0x80000 -> p-boot's LINUX_IMAGE_PA(0x40000000)+0x80000 = 0x40080000 = our
+// link address (so the non-PIC absolute code lands correctly). magic 0x644d5241 = "ARM\x64".
 _start:
+    b     _entry                           // code0
+    .word 0                                // code1
+    .quad 0x00080000                       // text_offset
+    .quad 0x00400000                       // image_size (advisory)
+    .quad 0                                // flags
+    .quad 0                                // res2
+    .quad 0                                // res3
+    .quad 0                                // res4
+    .word 0x644d5241                       // magic "ARM\x64"
+    .word 0                                // res5 (PE COFF offset)
+_entry:
     mrs   x0, mpidr_el1                   // park secondary cores
     and   x0, x0, #0xFF
     cbz   x0, core0
@@ -213,15 +254,128 @@ hang:
 core0:
     ldr   x0, =STACK_TOP
     mov   sp, x0
+    // --- make the payload self-sufficient on cache state -------------------
+    // U-Boot's `go` leaves its caches enabled and boot.cmd's `dcache off` is
+    // unverified on real silicon. The DE2 engine scans the framebuffer out of DRAM
+    // by DMA, so a stale cached FB line shows as garbage. Disable the D/I-caches
+    // here ourselves (EL-aware: the A64 hands off in EL2 after ATF, but handle EL1
+    // too). We deliberately KEEP the MMU on (U-Boot's tables): with the MMU off,
+    // AArch64 forces all data accesses to Device-nGnRnE (strict alignment + slow),
+    // which could fault on an unaligned access the harness can't model. With C=0 +
+    // MMU on, DRAM stays Normal (unaligned-tolerant) but uncached -> coherent FB.
+    // (boot.cmd's `dcache flush` already cleaned any dirty lines before `go`.)
+    mov   x2, #0x1004                     // bits 2 (C/D$) | 12 (I/I$); leave M (MMU) set
+    mrs   x0, CurrentEL
+    lsr   x0, x0, #2
+    and   x0, x0, #3
+    cmp   x0, #2
+    b.lt  cache_el1
+    mrs   x1, sctlr_el2
+    bic   x1, x1, x2
+    msr   sctlr_el2, x1
+    b     cache_done
+cache_el1:
+    mrs   x1, sctlr_el1
+    bic   x1, x1, x2
+    msr   sctlr_el1, x1
+cache_done:
+    dsb   sy
+    isb
+.ifdef PANELDBG
+    // Debug: route CPU exceptions to our own vector (a fast LED flutter that never
+    // returns) instead of U-Boot's handler (which resets -> reboot loop). So a fault
+    // in panel_init shows as "stage blinks up to N, then fast flutter" — pinning the
+    // crashing block — instead of an ambiguous repeating reboot.
+    ldr   x0, =dbg_vectors
+    mrs   x1, CurrentEL
+    lsr   x1, x1, #2
+    and   x1, x1, #3
+    cmp   x1, #2
+    b.lt  vbar_el1
+    msr   vbar_el2, x0
+    b     vbar_done
+vbar_el1:
+    msr   vbar_el1, x0
+vbar_done:
+    isb
+.endif
+.ifdef LEDTEST
+    // No-serial / no-display output channel test: blink the PinePhone status LED
+    // (green, PD18 = GPIO114, the same LED the SPL lights). A steady blink proves
+    // the payload runs and that we can drive the LED for staged progress beacons.
+    bl    led_init
+ledtest_loop:
+    mov   w0, #1
+    bl    led_set
+    bl    led_halfsec
+    mov   w0, #0
+    bl    led_set
+    bl    led_halfsec
+    b     ledtest_loop
+.endif
     ldr   x0, =VARS                       // clear the variable block
     mov   w2, #256
 mclr:
     str   wzr, [x0], #4
     subs  w2, w2, #1
     b.ne  mclr
-    bl    fb_init                         // bring up the DE2 UI layer
+.ifndef PBOOT
+    bl    panel_init                      // FULL DSI panel bring-up (clocks, PMIC,
+                                          // DSI host, D-PHY, ST7703, TCON0, backlight).
+                                          // SKIPPED under PBOOT: a kernel-loader bootloader
+                                          // (p-boot) already lit the panel + set up the FB.
+.endif
+.ifdef PANELDBG
+    mov   w0, #2                          // GREEN (post): entering fb_init
+    bl    led_stage
+.endif
+    bl    fb_init                         // point the DE2 UI layer at our framebuffer
+.ifdef PANELDBG
+    ldr   x0, =s_de2
+    ldr   x1, =GLB_CTL
+    ldr   w1, [x1]
+    bl    print_reg                       // DE2 mixer global control
+    ldr   x0, =s_ovl
+    ldr   x1, =OVL_TOPADD
+    ldr   w1, [x1]
+    bl    print_reg                       // UI overlay framebuffer address
+.endif
+    mov   w0, #160                        // let the DE2 pipeline + panel settle before
+    bl    delay_ms                        // first content (NuttX waits 160ms here)
+.ifdef PANELDBG
+    mov   w0, #1                          // RED (post): entering fs_init
+    bl    led_stage
+.endif
+.ifdef POST
+    // On-screen POST beacon: with no serial console the panel is our only output.
+    // Each stage paints a distinct solid colour; a freeze leaves the last-reached
+    // stage's colour on screen. (Bonus: pure R/G/B also reveals an R<->B channel
+    // swap — if "red" shows as blue, the firmware delivers BGR.)
+    mov   w0, #0xFF                       // RED  0x00FF0000 -> fb_init returned, FB writable
+    lsl   w0, w0, #16
+    bl    post_fill
+    bl    post_delay
+.endif
     bl    fs_init                         // load/format the USV1 disk
+.ifdef PANELDBG
+    mov   w0, #4                          // BLUE (post): entering draw_launcher
+    bl    led_stage
+.endif
+.ifdef POST
+    mov   w0, #0xFF00                     // GREEN 0x0000FF00 -> fs_init returned
+    bl    post_fill
+    bl    post_delay
+    mov   w0, #0xFF                       // BLUE  0x000000FF -> about to draw launcher
+    bl    post_fill
+    bl    post_delay
+.endif
     bl    draw_launcher
+.ifdef PANELDBG
+    ldr   x0, =s_done
+    bl    uart_puts                       // reached the main loop, no fault
+    mov   w0, #6                          // CYAN held (visual backup)
+    bl    led_rgb
+.endif
 mainloop:
     bl    wait_vblank
     bl    render_partials
@@ -237,38 +391,141 @@ mainloop:
 // ============================================================================
 // framebuffer bring-up (Allwinner A64 Display Engine 2.0, mixer 0 UI layer)
 // ============================================================================
-// Assumes the SPL/U-Boot stage already initialised DRAM and the panel clock path
-// (TCON0 + MIPI-DSI), exactly as the Pi relies on the VideoCore firmware for HDMI.
-// We program the mixer to scan out our XRGB8888 framebuffer at PINE_FB.
+// panel_init (panel.inc.s) has already lit the XBD599 panel and is clocking it at
+// its native 720x1440 via TCON0. Here we program the DE2 mixer: the global output
+// and blender are panel-sized, and our 480x640 portrait framebuffer is the UI
+// overlay LAYER at the top-left (COORD 0). The rest of the panel shows the blender's
+// black background. The drawing primitives are pitch-relative, so all M1-M3 content
+// renders unchanged into the 480-wide buffer.
 fb_init:
-    ldr   x0, =GLB_CTL
+.ifdef PBOOT
+    // p-boot already lit the panel and left a live framebuffer scanning out via DE2.
+    // ADOPT it: read the overlay address + pitch the DE2 is currently scanning and draw
+    // straight into THAT buffer; do NOT reprogram DE2 (our own scanout bring-up is the
+    // part that doesn't work yet). The primitives are pitch-relative, so our 480x640
+    // content lands at the top-left of p-boot's (panel-native) framebuffer. Fall back to
+    // our fixed FB if the overlay reads 0 (p-boot used a different layer) — at least no
+    // null deref.
+    ldr   x0, =OVL_TOPADD
+    ldr   w1, [x0]
+    cbnz  w1, pb_pitch
+    ldr   w1, =PINE_FB
+pb_pitch:
+    ldr   x2, =fb_base
+    str   x1, [x2]
+    ldr   x0, =OVL_PITCH
+    ldr   w1, [x0]
+    cbnz  w1, pb_store
+    ldr   w1, =PINE_PITCH
+pb_store:
+    ldr   x2, =fb_pitch
+    str   w1, [x2]
+    ret
+.endif
+    // Bring the DE2 block itself out of gate/reset before touching MIXER0. clk_init has
+    // enabled the DE *bus* clock at the CCU, but the Display Engine has its own internal
+    // clock gates + per-module reset; without these the MIXER0 writes below are dropped
+    // and read back 0 on hardware (the Unicorn harness masks this — it maps DE2 as RAM).
+    ldr   x0, =DE_SCLK_GATE               // pixel clock gate, mixer0
     mov   w1, #1
-    str   w1, [x0]                        // mixer enable
-    ldr   w1, =(((SCRH-1)<<16)|(SCRW-1))
-    ldr   x0, =GLB_SIZE
     str   w1, [x0]
+    ldr   x0, =DE_HCLK_GATE               // AHB bus clock gate, mixer0
+    mov   w1, #1
+    str   w1, [x0]
+    ldr   x0, =DE_AHB_RESET               // de-assert mixer0 module reset
+    mov   w1, #1
+    str   w1, [x0]
+    // Zero the entire MIXER0 register block (0x6000 bytes). The reset state of some
+    // mixer registers is non-zero/indeterminate; NuttX a64_de_init clears it before
+    // any config. (Harness-safe: DE2 region is a RAM sink there.)
+    ldr   x0, =0x01100000
+    add   x2, x0, #0x6000
+fbclr:
+    str   wzr, [x0], #4
+    cmp   x0, x2
+    b.lo  fbclr
+    // Disable every DE2 enhancement / scaler block — if any powers up live it sits in
+    // the datapath between the UI layer and TCON0 and blanks the output (NuttX disables
+    // all of these in a64_de_init). Addresses = MIXER0 + block offset.
+    ldr   x0, =0x01120000                 // VS_CTRL    (video scaler)
+    str   wzr, [x0]
+    ldr   x0, =0x01130000                 // UNDOC 0x130000
+    str   wzr, [x0]
+    ldr   x0, =0x01140000                 // UIS_CTRL1  (UI scaler 1)
+    str   wzr, [x0]
+    ldr   x0, =0x01150000                 // UIS_CTRL2  (UI scaler 2)
+    str   wzr, [x0]
+    ldr   x0, =0x011A0000                 // FCE
+    str   wzr, [x0]
+    ldr   x0, =0x011A2000                 // BWS
+    str   wzr, [x0]
+    ldr   x0, =0x011A4000                 // LTI
+    str   wzr, [x0]
+    ldr   x0, =0x011A6000                 // PEAKING
+    str   wzr, [x0]
+    ldr   x0, =0x011A8000                 // ASE
+    str   wzr, [x0]
+    ldr   x0, =0x011AA000                 // FCC
+    str   wzr, [x0]
+    ldr   x0, =0x011B0000                 // DRC
+    str   wzr, [x0]
+    ldr   x0, =DE_TCON_MUX                // route mixer0 -> TCON0 (clear bit0)
+    str   wzr, [x0]
+    dsb   sy
+    ldr   x0, =GLB_CTL                    // mixer enable
+    mov   w1, #1
+    str   w1, [x0]
+    ldr   x0, =GLB_SIZE                   // global output = panel native size
+    ldr   w1, =PANEL_SZ
+    str   w1, [x0]
+    // blender: pipe 0 over a black background, panel-sized output, layer-sized input
+    ldr   x0, =BLD_FILL                   // enable ONLY pipe 0 (P0_EN bit8 | P0_FCEN bit0).
+    ldr   w1, =0x00000101                 // was 0x701 = enable pipes 0,1,2 -> phantom pipes
+    str   w1, [x0]                        // 1,2 (no layer) composited black OVER our layer.
+    ldr   x0, =BLD_FILLCOL                // pipe 0 fill colour = opaque black
+    ldr   w1, =0xFF000000
+    str   w1, [x0]
+    ldr   x0, =BLD_RTCTL                  // route pipe 0 <- channel 1 (our UI overlay).
+    ldr   w1, =0x00000001                 // was 0x321 = the 3-channel route (pipes 0,1,2 <-
+    str   w1, [x0]                        // channels 1,2,3); we only have channel 1.
     ldr   x0, =BLD_SIZE
+    ldr   w1, =PANEL_SZ
+    str   w1, [x0]
+    ldr   x0, =BLD_BKCOL
+    ldr   w1, =0xFF000000                 // opaque black backdrop
+                                          // (was briefly 0xFFFF0000 = RED as a scanout
+                                          // diagnostic on 2026-06-19: stayed black on HW ->
+                                          // DE2 is not scanning out; see PINEPHONE-BRINGUP §8)
     str   w1, [x0]
     ldr   x0, =BLD_CH_ISZ
+    ldr   w1, =LAYER_SZ                   // channel 0 input = our 480x640 layer
     str   w1, [x0]
-    ldr   x0, =BLD_FILL
-    mov   w2, #1
-    str   w2, [x0]                        // pipe 0 enable
+    ldr   x0, =BLD_CH_OFF
+    str   wzr, [x0]
+    ldr   x0, =BLD_MODE
+    ldr   w1, =0x03010301                 // SRC over DST
+    str   w1, [x0]
+    // UI overlay layer 0 (XRGB8888) -> our framebuffer, top-left
     ldr   x0, =OVL_ATTR
-    ldr   w2, =0xFF000405                 // glob-alpha=FF, fmt=XRGB8888(4<<8), LAY_EN
-    str   w2, [x0]
+    ldr   w1, =0xFF000405                 // glob-alpha=FF, fmt=XRGB8888(4<<8), LAY_EN
+    str   w1, [x0]
     ldr   x0, =OVL_MBSIZE
+    ldr   w1, =LAYER_SZ
     str   w1, [x0]
     ldr   x0, =OVL_SIZE
+    ldr   w1, =LAYER_SZ
     str   w1, [x0]
     ldr   x0, =OVL_COORD
     str   wzr, [x0]
     ldr   x0, =OVL_PITCH
-    ldr   w2, =PINE_PITCH
-    str   w2, [x0]
+    ldr   w1, =PINE_PITCH
+    str   w1, [x0]
     ldr   x0, =OVL_TOPADD
-    ldr   w2, =PINE_FB
-    str   w2, [x0]
+    ldr   w1, =PINE_FB
+    str   w1, [x0]
+    ldr   x0, =GLB_DBUF                   // commit the double-buffered registers
+    mov   w1, #1
+    str   w1, [x0]
     // record the framebuffer for the primitives
     ldr   x0, =fb_base
     ldr   x1, =PINE_FB
@@ -276,6 +533,7 @@ fb_init:
     ldr   x0, =fb_pitch
     ldr   w1, =PINE_PITCH
     str   w1, [x0]
+    dsb   sy
     ret
 
 // wait_vblank: pace one frame off the ARM generic timer (cntpct_el0, 24 MHz)
@@ -288,6 +546,60 @@ wv1:
     cmp   x0, x1
     b.lo  wv1
     ret
+
+.ifdef POST
+// post_fill: w0 = raw XRGB colour; fill the top-left SCRW x SCRH block of the
+// (adopted) framebuffer directly — palette-independent, so it works at the very
+// first boot stages before load_palette has run. Leaf.
+post_fill:
+    ldr   x4, =fb_base
+    ldr   x4, [x4]
+    ldr   x5, =fb_pitch
+    ldr   w5, [x5]
+    mov   w6, #SCRH
+pf_row:
+    mov   x7, x4
+    mov   w8, #SCRW
+pf_col:
+    str   w0, [x7], #4
+    subs  w8, w8, #1
+    b.ne  pf_col
+    add   x4, x4, w5, uxtw
+    subs  w6, w6, #1
+    b.ne  pf_row
+    // Flush the filled FB out of any data cache to DRAM (PoC) so the DE2 DMA reads our
+    // pixels, not stale DRAM. If caches are (unexpectedly) still on, THIS is what makes
+    // the POST colour appear -> proves the dark screen was cache coherency, not the
+    // display path. dc cvac is a no-op when the cache is already off (harmless).
+    ldr   x4, =fb_base
+    ldr   x4, [x4]
+    ldr   x5, =fb_pitch
+    ldr   w5, [x5]
+    mov   w6, #SCRH
+    mul   w5, w5, w6                       // total FB bytes = pitch * SCRH
+    add   x5, x4, x5
+pf_flush:
+    dc    cvac, x4
+    add   x4, x4, #64
+    cmp   x4, x5
+    b.lo  pf_flush
+    dsb   sy
+    ret
+
+// post_delay: spin ~0.5 s off the generic timer so each beacon colour is visible.
+post_delay:
+    mrs   x0, cntpct_el0
+    ldr   x1, =12000000                   // ~0.5 s at 24 MHz
+    add   x1, x0, x1
+pd1:
+    mrs   x0, cntpct_el0
+    cmp   x0, x1
+    b.lo  pd1
+    ret
+.endif
+
+// (PD18 status-LED helpers — led_init / led_set / led_halfsec — live in
+// panel.inc.s now, shared by the LEDTEST loop above and the PANELDBG stage beacon.)
 
 // read_keys: real input via the A64 UART0 serial console (16550). Each received
 // byte is one keypress; WASD = d-pad, Enter/Space = A, Backspace/DEL = B. AUTOTEST
@@ -941,6 +1253,7 @@ fr_app2:
     ldp   x29, x30, [sp], #16
     ret
 
+    .include "panel.inc.s"
     .include "apps.inc.s"
     .include "dostris.inc.s"
     .include "paint.inc.s"
