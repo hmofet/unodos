@@ -406,20 +406,37 @@ fb_init:
     // content lands at the top-left of p-boot's (panel-native) framebuffer. Fall back to
     // our fixed FB if the overlay reads 0 (p-boot used a different layer) — at least no
     // null deref.
-    ldr   x0, =OVL_TOPADD
-    ldr   w1, [x0]
-    cbnz  w1, pb_pitch
-    ldr   w1, =PINE_FB
-pb_pitch:
+    ldr   x0, =OVL_TOPADD                 // p-boot's live FB base (32-bit phys)
+    ldr   w3, [x0]
+    cbnz  w3, pb_haveb
+    ldr   w3, =PINE_FB
+pb_haveb:
+    ldr   x0, =OVL_PITCH                  // p-boot's FB pitch (bytes/row)
+    ldr   w4, [x0]
+    cbnz  w4, pb_havep
+    mov   w4, #PINE_PITCH
+pb_havep:
+    // p-boot's FB is the panel-native 720x1440; our content is SCRW x SCRH (480x640).
+    // Clear the whole FB to black (wipes p-boot's splashscreen), then offset fb_base so
+    // our content is CENTERED instead of crammed in the top-left corner.
+    mov   x7, x3                          // x7 = FB base
+    mov   w8, #1440                       // panel height
+    umull x8, w8, w4                      // total bytes = 1440 * pitch
+    add   x8, x7, x8                      // end address
+pb_clr:
+    str   wzr, [x7], #4
+    cmp   x7, x8
+    b.lo  pb_clr
+    dsb   sy
+    mov   w5, #((1440-SCRH)/2)            // vertical centering offset (rows) = 400
+    umull x6, w5, w4                      // * pitch
+    add   x3, x3, x6
+    mov   w5, #(((720-SCRW)/2)*4)         // horizontal centering offset (bytes) = 480
+    add   x3, x3, x5
     ldr   x2, =fb_base
-    str   x1, [x2]
-    ldr   x0, =OVL_PITCH
-    ldr   w1, [x0]
-    cbnz  w1, pb_store
-    ldr   w1, =PINE_PITCH
-pb_store:
+    str   x3, [x2]
     ldr   x2, =fb_pitch
-    str   w1, [x2]
+    str   w4, [x2]
     ret
 .endif
     // Bring the DE2 block itself out of gate/reset before touching MIXER0. clk_init has

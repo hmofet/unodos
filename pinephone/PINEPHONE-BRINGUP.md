@@ -363,9 +363,12 @@ itself and hands off a live framebuffer) do the panel bring-up, with UnoDOS adop
 - **New build flags:** `PBOOT` (skip `panel_init`; `fb_init` instead **adopts** p-boot's framebuffer
   — reads DE2 `OVL_TOPADD`/`OVL_PITCH`, draws there, does NOT reprogram DE2) and `pbootdbg`
   (`PBOOT`+`PANELDBG`). `build.sh pboot` / `build.sh pbootdbg`.
-- **Result on HW:** p-boot lights the panel; the **UnoDOS launcher renders** — small, top-left,
-  because our 480×640 content is drawn pitch-relative into p-boot's **native 720×1440** FB. Trace:
+- **Result on HW:** p-boot lights the panel; the **UnoDOS launcher renders**. Trace:
   `DE2_OVL_TOPADD=0x48000000` (p-boot's FB = what we adopted), `GLB_CTL=1`, `[unodos] mainloop`.
+- **Centering:** the adopt path clears the whole 720×1440 FB to black (wiping p-boot's splashscreen)
+  and offsets `fb_base` so the 480×640 content sits **centered** (offset 120×400 px), not top-left.
+  Aspect mismatch (UnoDOS 3:4 vs panel 1:2) means it's centered-on-black, not full-screen; scaling
+  to fill (1.5× width / letterbox, or stretch) is a documented future option, deferred.
 
 **p-boot card recipe (all on devbuntu, `~/pboot/`):** prebuilt pieces from
 `github.com/davidwed/p-boot` `dist/` (`p-boot.bin` = 32 KiB GUI build *with display support*,
