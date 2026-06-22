@@ -386,6 +386,157 @@ card **replaced** the U-Boot card on the SD Transcend (the U-Boot card is rebuil
 `mksd.sh`). Reassess next: center/scale the 480×640 in the 720×1440 FB; confirm UART input/nav;
 ship a clean `unodos_pboot.bin`; and eventually return to fix the native DSI video path.
 
+### 2026-06-20 (cont.) — p-boot register cross-check COMPLETE; 3 environmental fixes + TCON0-scan diagnostic staged [code-only, awaiting HW]
+
+Returned to the native DSI video wall (§8 above). Did the §8-candidate-#2 work fully — a
+**register-by-register cross-check of megi's p-boot `display.c`** (davidwed/p-boot, the SAME
+bootloader that lit *this exact phone* on 2026-06-20, so it is ground-truth for our hardware,
+not just a paper reference). Read its real source (not a paraphrase) and hand-decoded the
+bitfields. **Result: our bring-up matches p-boot on every register that matters:**
+- **`tcon0_init`** — DCLK (MIPI_PLL/6), CTL (enable|IF_8080), `timing_active`=720×1440, ECC_FIFO_EN,
+  CPU_IF (MODE_DSI|TRI_FIFO_FLUSH|TRI_FIFO_EN|TRI_EN = our `0x10010005`), TRI0/TRI1/TRI2,
+  SAFE_PERIOD(NUM=3000,MODE=3 = our `0x0BB80003`), io_tristate `0xe0000000`, final
+  `TCON_ENABLE` (GCTL bit31) — **identical**.
+- **DE2 blender/UI layer** (p-boot does this in `display_commit`, we in `fb_init`) — route=`0x1`,
+  fcolor_ctl=`0x101`, pipe0 fcolor=`0xff000000`, bld_mode=`0x03010301`, UI attr=`0xFF000405`,
+  layer size/pitch/coord, `GLB_DBUFFER` commit — **identical**. DE-clock bring-up (gate/rst/bus/sel
+  at DE base 0x01000000, mixer0→TCON0 mux) — **identical**.
+- **`dsi_start`** — HSC `JUMP_SEL`=`0x00000F02`, then clear `LANE_CEN` (INST_FUNC0 bit4), 1 ms,
+  HSD `JUMP_SEL`=`0x63F07006` — **identical** (decoded p-boot's `DSI_INST_ID_*` bitfields by hand;
+  they equal our literals exactly).
+
+So our registers are now faithful to **TWO** independent known-good A64 implementations (NuttX
+*and* p-boot). That hardens the conclusion: **the wall is environmental** — state the U-Boot `go`
+handoff leaves that a cold BROM boot (NuttX/p-boot) does not. Three concrete divergences from the
+cold-boot path were found and fixed (all in the **non-debug** bring-up, harness-verified — the
+default build still renders the launcher byte-clean, 4922-B PNG):
+1. **Full RESET CYCLE of DE/TCON0/DSI** (`clk_init`): we previously only *de-asserted* the CCU
+   resets; now we **assert then de-assert** (BUS_SOFT_RST1 bit12=DE, bit3=TCON0; BUS_SOFT_RST0
+   bit1=DSI) so each block starts from its cold default regardless of what U-Boot left. Plus a
+   reset *cycle* of the DE-internal mixer0 reset (`0x01000008`) in `fb_init`.
+2. **DE clock DIVIDER explicitly cleared** (`clk_init`, DE_CLK_REG `CCU+0x104` bits[3:0]): a
+   non-zero divider left by U-Boot would slow the DE clock below the pixel rate and starve TCON0.
+   Cold boot leaves it 0 (/1); we now force that. (Both p-boot and NuttX leave it 0 implicitly.)
+3. **SRAM_CTRL1 RMW** (`clk_init`): changed the SRAM-C→DE mapping from a whole-register zero to a
+   **clear-bit24-only** RMW (matching p-boot/NuttX) so it can't disturb other SRAM-C masters.
+
+**Diagnostic added** (§8 candidate #1, PANELDBG, the decisive split): after `[unodos] mainloop`,
+sample **`TCON0_GINT0`** (`0x01C0C004`) six times ~50 ms apart over UART (and re-print GCTL).
+**Changing across samples ⇒ TCON0 IS scanning** (stall is downstream: DSI video xfer or panel);
+**static ⇒ TCON0's frame trigger never fires** (stall is TCON0). This is the next read to take.
+
+**Staged, AWAITING HARDWARE:** `build.sh paneldbg` rebuilt (30184 B) and scp'd to
+`devbuntu:~/pine-uboot/unodos_paneldbg.bin` (md5 `1d78fd44…`). **The SD is still the p-boot card
+from the previous entry** — to test the native path it must become a **U-Boot card** again (so our
+`panel_init` actually runs; under p-boot it's skipped). Recipe when the card is in the devbuntu
+SD-Transcend reader (confirm first): (a) `blockdev --setrw /dev/sdX` then `dd if=~/pine-uboot/
+pine-fresh.img of=/dev/sdX bs=4M conv=fsync` (restores SPL+U-Boot+ATF+boot.scr+FAT — the
+write-blocker re-arms RO, so `--setrw` immediately before); (b) `bash ~/pine-uboot/flash-paneldbg.sh`
+(swaps the freshly-staged payload into the FAT at offset 1 MiB); (c) card → phone; (d) serial:
+`sudo stty -F /dev/ttyUSB0 115200 cs8 raw -echo; sudo timeout 120 cat /dev/ttyUSB0 >/tmp/log` in
+the background, THEN power-cycle. Expect in the trace: PLL locks, `[st7703] ok`, the
+`dcs_read_dbg` RXCTL/RXDAT (panel alive), `DSI_BASIC_CTL0=00030001`, `DE2_GLB_CTL=1`,
+`DE2_OVL_TOPADD=40400000`, then the new `TCON0_GCTL` + six `TCON0_GINT0` samples — read whether
+GINT0 moves. If the reset-cycle/divider fixes lit the panel, the launcher appears; else GINT0
+tells us which side of TCON0 to chase next.
+
+### 2026-06-21 — TCON0 confirmed scanning; FULL register dump = every write STUCK; not a value bug [HW]
+
+Ran the staged paneldbg on HW. Reset-cycle + DE-divider fixes did **not** light it (still backlit-
+black; the RED `BLD_BK_COLOR` diagnostic never showed). But the diagnostics were decisive:
+- **TCON0 IS scanning continuously.** GINT0 sampled with a clear-between-reads: `0x0A00 → (clear)
+  → 0x800 → 0x800 …` — bit 11 (the frame-done latch, = p-boot's `display_frame_done`) **re-sets
+  every ~50 ms**. So TCON0 is triggering a new frame transfer continuously; it is **not** the stall.
+  `DSI_BASIC_CTL0=0x00030001` steady (video INSTRU_EN running). `DE2_GLB_STATUS=0x10` (static).
+- **D-PHY analog cross-checked vs p-boot** (the last un-compared block): `dphy_enable`'s ANA3 LDOR/C/D
+  → VTTC/VTTD → DIV, ANA2 CK_CPU, ANA1 VTTMODE, ANA2 P2S_CPU — same registers/bits/order as our
+  `dphy_init`. So **every** DE2/TCON0/DSI/D-PHY/CCU register now matches p-boot, not just NuttX.
+- **FULL on-HW register READBACK dump** (`dump_regs`/`dump_tbl`, 35 registers): **every single one
+  reads back exactly what we wrote** — TCON0 (GCTL=80000000, CTL=81000000, DCLK=80000006, BASIC0=
+  02cf059f, CPU_IF=10010005, TRI0=002f02cf, TRI2=1bc2000a, SAFE_PERIOD=0bb80003), DSI (BASIC_CTL0=
+  00030001, CTL1=00005bc7, SIZE0/1, JUMP_SEL=63f07006, TCON_DRQ=10000007, PIXEL_PH=1308703e), DE2
+  (GLB_CTL=1, GLB_SIZE=059f02cf, BLD_FILL=101, **BLD_BKCOL=ffff0000=RED**, OVL_ATTR=ff000405,
+  OVL_TOPADD=40400000), DE clocks (gates/reset/TCON_MUX=0), CCU (DE_CLK=81000000, TCON0_CLK=
+  80000000, DSI_DPHY_CLK=00008203). Only "differences" are HW status bits: TCON0 TRI1 high half =
+  `0x00C9` (a read-only current-block counter — itself further proof TCON0 is scanning) and DSI_CTL
+  reads `0x01010001` (status bits above our enable). **Conclusion: this is NOT a dropped/wrong write
+  — the silicon faithfully holds our entire config, RED backdrop included, yet emits black.** The
+  whole "register value is wrong / didn't stick" hypothesis class is eliminated.
+
+**Where the pixels are lost is now binary:** either DE2 is configured-but-not-clocking-pixels-out,
+or the DSI **HS data lanes** aren't physically transmitting (LP works — panel answered a DCS read —
+but HS is a separate analog path). **Next decisive test (staged):** `all_pixels_on` (DCS **0x23**)
+appended to the ST7703 init in `mkdata.py` — drives every panel pixel white from the panel's OWN
+logic. Panel→WHITE = DSI HS video timing reaches the panel + panel works ⇒ the black is the pixel
+DATA (DE2 output); panel→BLACK = no video signal reaching the panel (DSI HS / D-PHY). (REMOVE the
+`([0x23],20)` diagnostic from mkdata.py after.) Build staged (`unodos_paneldbg.bin` md5 c5287a71).
+
+**WORKFLOW BREAKTHROUGH — shuffle-free + card-free hardware iteration:**
+- **XMODEM-into-RAM:** our U-Boot has `CONFIG_CMD_LOADB=y` (→ `loadx`/`loady`). A hand-rolled
+  pyserial XMODEM-CRC sender (`/tmp/xload.py`, `/tmp/iload.py` on devbuntu) drives `loadx 0x40080000`,
+  streams the 30 KB payload, then `dcache flush; dcache off; icache off; go 0x40080000`. The payload
+  runs straight from RAM — **no card write, no card removal**. `iload.py` also auto-interrupts the 2 s
+  autoboot ("Hit any key" → spam space → `=>`), so one command + one power-cycle = load+run+capture.
+- **U-Boot `ums` rebuilt but NOT working yet:** rebuilt U-Boot with `USB_MUSB_SUNXI`/`USB_MUSB_GADGET`/
+  `USB_FUNCTION_MASS_STORAGE`/`CMD_USB_MASS_STORAGE` (installed to the card's 8 KiB SPL region via
+  `dd seek=8`, MBR+FAT preserved). `ums 0 mmc 0` is recognised but the gadget controller fails:
+  `Controller uninitialized / g_dnl_register failed, error -6`. Needs more sunxi-MUSB-gadget config
+  (try `CONFIG_DM_USB_GADGET=y` + `USB_MUSB_PIO_ONLY`). Moot for now — XMODEM-into-RAM is simpler and
+  works, so `ums` is deprioritised. (Serial is dialout-group accessible on devbuntu → no sudo needed
+  for capture; only the card-FAT flash path needs sudo.)
+- **Bare-metal power-cycle:** a SHORT power press does nothing (our payload has no power-button
+  handler) — must **long-press ~12 s** (AXP803 PMIC hardware force-off) then short-press to boot.
+- **Serial gotcha:** the headphone-jack TRRS plug is fragile; it dropped mid-session (0 bytes even
+  though the FTDI still enumerated). Reseat the plug if serial goes silent after working.
+
+### 2026-06-21 (cont.) — THREE real panel-DCS transcription bugs found + fixed; still black; full p-boot parity reached [HW]
+
+The §8-candidate-#2 cross-check finally went all the way: a **byte-for-byte diff of our ENTIRE
+ST7703 panel-init DCS sequence against p-boot's `dsi_panel_init_seq`** (decoded from its TX-FIFO
+words; script `cmp_st7703.py`). The doc's old "byte-perfect vs pinephone_lcd.c" claim was **wrong in
+THREE places** — all "missing 0x00" transcription errors that shifted every following parameter:
+- **SETMIPI** (0xBA): had **29** bytes, should be **28** (8 zeros between 0x20 and 0x44, not 7).
+- **SETGIP1** (0xE9): had **60** bytes, should be **64** (4 trailing 0x00 missing).
+- **SETGIP2** (0xEA): had **60** bytes, should be **62** (2 0x00 missing).
+SETMIPI configures the panel's MIPI/DSI interface; SETGIP1/2 configure its gate-driver (row-scan)
+timing — exactly the commands whose corruption yields "display-ON but black." All three FIXED in
+`mkdata.py`; `cmp_st7703.py` now reports **ALL 20 commands MATCH p-boot**. Also re-derived and
+checked the **DSI video-timing block** (0xB0–0xEC, BASIC_SIZE0/1, BASIC_CTL1) by computing p-boot's
+values from the panel constants (HFP=30/HSYNC=28/HBP=30, VFP=18/VSA=10/VBP=17, clk=72MHz, 4-lane,
+non-burst): hsa=74, hbp=84, hfp=74, hblk=2330, vblk=0, video-start-delay=1468 — **all match our
+hardcoded table**. And p-boot's `display_board_init` PMIC+reset == our `pmic_init` exactly.
+
+**RESULT: still backlit-black.** After fixing all 3 DCS bugs, on HW: panel still **alive + display-ON**
+(dcs_read RXDAT=…1c, all 20 commands send), TCON0 still scanning, DSI running — but no image, and the
+RED `BLD_BK_COLOR` diagnostic still never shows. Also tried (still black): **per-frame `GLB_DBUFFER`
+commit** in the mainloop — the hypothesis that the DE2 mixer's double-buffered config never latched
+into the active set (the register dump reads the SHADOW, not the active scanout config, so "registers
+correct" doesn't prove the latch). No change.
+
+**STATE: we have reached byte-for-byte parity with p-boot across EVERYTHING comparable** — all
+DE2/TCON0/DSI/D-PHY/CCU registers (verified stuck via on-HW readback), the full ST7703 DCS sequence,
+the DSI video timing, the PMIC rails, and the reset sequence — yet p-boot lights this exact panel and
+we don't. The remaining difference is therefore something source/register comparison **cannot** see:
+a runtime timing/sequencing nuance, the DE2-produce-vs-DSI-HS-transmit split (still not definitively
+resolved — `all_pixels_on`/0x23 stayed black but the ST7703 may not honor it in video mode), or
+something p-boot establishes in its **cold BROM-up boot** (DRAM/clock cascade) that the U-Boot handoff
+leaves subtly different (U-Boot video already RULED OUT — disabling `CONFIG_VIDEO_DE2` changed nothing).
+
+**THE definitive next step:** get **p-boot's ACTUAL RUNTIME register dump** and diff against ours.
+p-boot has `dump_de2_registers()` / `dump_dsi_registers()` (commented out in `display_init`). Rebuild
+p-boot from source (github.com/davidwed/p-boot — we only have the prebuilt `dist/` binary on devbuntu)
+with those enabled, boot it (it lights the panel), capture its working DE2/TCON/DSI state over serial,
+and compare value-by-value. Any difference is the bug — this is the one thing that reveals a divergence
+our source-level comparison can't. (Lower-value alternates: try p-boot's exact `udelay` microsecond
+timings instead of our `delay_ms`; or instrument a DE2-output-vs-DSI-HS splitter.)
+
+**The 3 DCS fixes are real corrections** (matched p-boot AND Linux canonical) and worth keeping even
+though they didn't light the panel. NEW TOOLING this session (all on devbuntu): no-video U-Boot
+(`CONFIG_VIDEO` disabled, installed on the SD via `dd seek=8`); **XMODEM-into-RAM serial loader**
+(`/tmp/iload.py` — interrupt 2 s autoboot, `loadx 0x40080000`, stream payload, `dcache off; go`) for
+shuffle-free iteration; `cmp_st7703.py` (panel-DCS differ) at `C:\Users\arin\cmp_st7703.py`;
+`pboot_display.c` saved at `C:\Users\arin\pboot_display.c` for reference.
+
 ---
 
 ## 9. References
