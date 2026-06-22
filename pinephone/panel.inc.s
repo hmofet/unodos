@@ -294,6 +294,8 @@ s_plde:  .asciz "PLL_DE"
 s_plv0:  .asciz "PLL_VIDEO0"
 s_plmi:  .asciz "PLL_MIPI"
 s_tcon:  .asciz "TCON0_GCTL"
+s_gint:  .asciz "TCON0_GINT0"
+s_glbst: .asciz "DE2_GLB_STATUS"
 s_dsi0:  .asciz "DSI_BASIC_CTL0"
 s_de2:   .asciz "DE2_GLB_CTL"
 s_ovl:   .asciz "DE2_OVL_TOPADD"
@@ -483,9 +485,24 @@ pi_sctl_pr:
 // ============================================================================
 clk_init:
     stp   x29, x30, [sp, #-16]!
-    ldr   x0, =SRAM_CTRL1                 // map SRAM C1 -> Display Engine
-    str   wzr, [x0]
-    dsb   sy
+    // ENVIRONMENTAL FIX (2026-06-20): we run as a U-Boot `go` payload, not from cold
+    // like NuttX/p-boot. Our register sequence is byte-faithful to BOTH (verified), yet
+    // the DE2->TCON0->DSI video path produces no pixels — so the difference must be the
+    // STARTING state U-Boot left these blocks in. Force them cold-clean: ASSERT (clear)
+    // their CCU resets here, then the de-assert sequence below brings them up from a
+    // known-reset state. (Display blocks; U-Boot has no DSI/DE/TCON driver, so safe to
+    // reset-cycle — nothing else uses them.)
+    ldr   x0, =CCU+0x2C4                  // BUS_SOFT_RST1: assert DE(bit12) + TCON0(bit3)
+    mov   w1, #0x1008
+    bl    mmio_clrbits
+    ldr   x0, =CCU+0x2C0                  // BUS_SOFT_RST0: assert MIPI-DSI(bit1)
+    mov   w1, #0x2
+    bl    mmio_clrbits
+    mov   w0, #1
+    bl    delay_ms
+    ldr   x0, =SRAM_CTRL1                 // map SRAM C1 -> Display Engine: clear ONLY bit24
+    mov   w1, #0x01000000                 // (SRAM-C -> DE), as p-boot/NuttX do via RMW —
+    bl    mmio_clrbits                     // zeroing the whole reg could disturb other SRAM.
     // PLL_DE = 288 MHz, poll lock (bit 28)
     ldr   x0, =CCU+0x48
     ldr   w1, =0x81001701
@@ -499,12 +516,14 @@ cdk_lock:
     subs  w2, w2, #1
     b.ne  cdk_lock
 cdk_locked:
-    // DE clock: source = PLL_DE, special-clock gating on (mask 0x83000000)
+    // DE clock: source = PLL_DE, special-clock gating on. Clear the DIVIDER (bits[3:0])
+    // too: post-U-Boot it may be non-zero, which would divide the DE clock below the
+    // pixel rate and starve TCON0 -> blank/garbage scanout. Cold boot leaves it 0 (/1).
     ldr   x0, =CCU+0x104
     ldr   w1, [x0]
-    ldr   w2, =0x83000000
+    ldr   w2, =0x8300000F                 // clear gate(31), src-sel(25:24), div(3:0)
     bic   w1, w1, w2
-    ldr   w2, =0x81000000
+    ldr   w2, =0x81000000                 // gate on, src=PLL_DE, div=0 (/1)
     orr   w1, w1, w2
     str   w1, [x0]
     dsb   sy
@@ -794,6 +813,49 @@ drd_done:
     bl    print_reg
     ldp   x29, x30, [sp], #16
     ret
+
+// dump_regs: x0 -> table of .word MMIO addresses (terminated by 0). Prints "addr=value"
+// for each over UART. We verified our register WRITES match p-boot/NuttX byte-for-byte,
+// but NOT that they STUCK on real silicon — a write to an under-clocked/gated block is
+// silently dropped and reads back wrong (we already hit this once: DE2 GLB_CTL read 0
+// until the DE internal gates were enabled). This dumps the actual on-HW readbacks of the
+// whole DE2/TCON0/DSI/CCU set so any value != what-we-wrote pinpoints a dropped write.
+dump_regs:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    mov   x19, x0
+dmr_l:
+    ldr   w20, [x19], #4                    // next address (0 terminates)
+    cbz   w20, dmr_done
+    mov   w0, w20                            // print the address
+    bl    uart_hex
+    mov   w0, #'='
+    bl    uart_putc
+    ldr   w1, [x20]                          // read the register
+    mov   w0, w1
+    bl    uart_hex
+    mov   w0, #0x0D
+    bl    uart_putc
+    mov   w0, #0x0A
+    bl    uart_putc
+    b     dmr_l
+dmr_done:
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+.align 2
+dump_tbl:
+    .word 0x01C0C000, 0x01C0C004, 0x01C0C040, 0x01C0C044   // TCON0 GCTL/GINT0/CTL/DCLK
+    .word 0x01C0C048, 0x01C0C060, 0x01C0C08C, 0x01C0C0F8   // BASIC0/CPU_IF/IO_TRI/ECC_FIFO
+    .word 0x01C0C160, 0x01C0C164, 0x01C0C168, 0x01C0C1F0   // TRI0/TRI1/TRI2/SAFE_PERIOD
+    .word 0x01CA0000, 0x01CA0010, 0x01CA0014, 0x01CA0018   // DSI CTL/BASIC_CTL0/CTL1/SIZE0
+    .word 0x01CA001C, 0x01CA0048, 0x01CA007C, 0x01CA0090   // SIZE1/INST_JUMP_SEL/TCON_DRQ/PIXEL_PH
+    .word 0x01000000, 0x01000004, 0x01000008, 0x01000010   // DE SCLK_GATE/HCLK_GATE/AHB_RESET/TCON_MUX
+    .word 0x01100000, 0x0110000C, 0x01101000, 0x01101080   // DE2 GLB_CTL/GLB_SIZE/BLD_FILL/BLD_RTCTL
+    .word 0x01101088, 0x0110108C, 0x01103000, 0x01103010   // BLD_BKCOL/BLD_SIZE/OVL_ATTR/OVL_TOPADD
+    .word 0x01C20104, 0x01C20118, 0x01C20168               // CCU DE_CLK/TCON0_CLK/DSI_DPHY_CLK
+    .word 0
 .endif
 
 // st7703_init: walk the precomputed dsi_init_seq blob, sending each DCS packet.

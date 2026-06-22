@@ -373,11 +373,66 @@ mclr:
 .ifdef PANELDBG
     ldr   x0, =s_done
     bl    uart_puts                       // reached the main loop, no fault
+    // FULL register readback dump: did our writes actually STICK on hardware? Each value is
+    // compared offline against p-boot's known-good; any mismatch = a silently-dropped write.
+    ldr   x0, =dump_tbl
+    bl    dump_regs
+    // Is TCON0 actually SCANNING? Sample GINT0 (its IRQ/status flags) repeatedly ~50ms
+    // apart. If the value CHANGES across samples, TCON0 IS triggering frames -> the stall
+    // is downstream (DSI video transfer or the panel). If it stays STATIC, TCON0's frame
+    // trigger never fires -> the stall is TCON0 itself. (PINEPHONE-BRINGUP §8 candidate #1
+    // — the decisive split.) Also re-print GCTL to confirm TCON0 is still enabled.
+    ldr   x0, =s_tcon
+    ldr   x1, =TCON0+0x00
+    ldr   w1, [x1]
+    bl    print_reg                       // TCON0 GCTL (bit31 = enabled)
+    mov   w19, #3
+tcon_scan:
+    // GINT0 BIT(11) = TCON0 frame-done latch (p-boot's display_frame_done). We READ it,
+    // then CLEAR it (write 0): if it RE-SETS on the next sample, TCON0 is triggering a
+    // NEW frame every ~50ms = continuously scanning (stall is downstream: DSI HS xfer or
+    // panel). If it stays 0 after the first clear, TCON0 fired ONCE then stopped (the
+    // SAFE_PERIOD auto-retrigger isn't re-firing = a TCON0-side stall).
+    ldr   x1, =TCON0+0x04
+    ldr   w20, [x1]
+    ldr   x0, =s_gint
+    mov   w1, w20
+    bl    print_reg
+    ldr   x1, =TCON0+0x04                  // clear the frame-done latch
+    str   wzr, [x1]
+    dsb   sy
+    // DE2 GLB_STATUS bits[1:0] = is mixer0 actually producing output? (p-boot polls this.)
+    ldr   x1, =0x01100004
+    ldr   w1, [x1]
+    ldr   x0, =s_glbst
+    bl    print_reg
+    // DSI_BASIC_CTL0 bit0 (INSTRU_EN) = is the DSI video instruction loop still running?
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    ldr   x0, =s_dsi0
+    bl    print_reg
+    mov   w0, #50
+    bl    delay_ms
+    subs  w19, w19, #1
+    b.ne  tcon_scan
     mov   w0, #6                          // CYAN held (visual backup)
     bl    led_rgb
 .endif
 mainloop:
     bl    wait_vblank
+.ifndef PBOOT
+    // Re-commit the DE2 double-buffered registers EVERY frame. The mixer's blender/layer/
+    // backdrop config is double-buffered: writes land in a shadow set and only become the
+    // ACTIVE scanout config when GLB_DBUFFER latches at vsync. fb_init writes it once; if
+    // that single latch didn't take (e.g. no vsync yet, or a timing race with the just-
+    // -enabled mixer), the ACTIVE config stays cleared = black, even though every register
+    // READS BACK correct (the readback is the shadow, not the active set). A real compositor
+    // commits per frame; doing so here is both correct and robust against a missed latch.
+    ldr   x0, =GLB_DBUF
+    mov   w1, #1
+    str   w1, [x0]
+    dsb   sy
+.endif
     bl    render_partials
     bl    read_keys
     bl    clock_advance
@@ -449,9 +504,20 @@ pb_clr:
     ldr   x0, =DE_HCLK_GATE               // AHB bus clock gate, mixer0
     mov   w1, #1
     str   w1, [x0]
+    // CYCLE the mixer0 internal reset (assert -> brief settle -> de-assert) rather than
+    // only de-asserting: forces the DE sub-block to its cold-boot default in case the
+    // U-Boot handoff left it half-initialised. Inline busy-delay keeps fb_init a leaf.
+    ldr   x0, =DE_AHB_RESET
+    str   wzr, [x0]                       // assert mixer0 module reset
+    dsb   sy
+    mov   w1, #0x40000
+fbrst_d:
+    subs  w1, w1, #1
+    b.ne  fbrst_d
     ldr   x0, =DE_AHB_RESET               // de-assert mixer0 module reset
     mov   w1, #1
     str   w1, [x0]
+    dsb   sy
     // Zero the entire MIXER0 register block (0x6000 bytes). The reset state of some
     // mixer registers is non-zero/indeterminate; NuttX a64_de_init clears it before
     // any config. (Harness-safe: DE2 region is a RAM sink there.)
@@ -509,10 +575,16 @@ fbclr:
     ldr   w1, =PANEL_SZ
     str   w1, [x0]
     ldr   x0, =BLD_BKCOL
-    ldr   w1, =0xFF000000                 // opaque black backdrop
-                                          // (was briefly 0xFFFF0000 = RED as a scanout
-                                          // diagnostic on 2026-06-19: stayed black on HW ->
-                                          // DE2 is not scanning out; see PINEPHONE-BRINGUP §8)
+.ifdef PANELDBG
+    ldr   w1, =0xFFFF0000                 // RED backdrop (DECISIVE scanout test): the DE2
+                                          // blender emits this regardless of any layer. RED on
+                                          // the panel => the DE2->TCON0->DSI video path WORKS
+                                          // (only our layer config is then suspect); still black
+                                          // => path dead downstream of TCON0 (confirmed scanning
+                                          // 2026-06-21). Re-run with reset-cycle/divider fixes.
+.else
+    ldr   w1, =0xFF000000                 // opaque black backdrop (production)
+.endif
     str   w1, [x0]
     ldr   x0, =BLD_CH_ISZ
     ldr   w1, =LAYER_SZ                   // channel 0 input = our 480x640 layer
