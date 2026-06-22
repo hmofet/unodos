@@ -580,6 +580,17 @@ Lower-value: dump the few non-canonical sub-registers not yet sampled.
 scripts (`~/pboot/build-pboot-card.sh`, `~/pine-uboot/make-native-card.sh`) now temporarily disable
 `/etc/udev/rules.d/99-usb-storage-readonly.rules` with a trap that guarantees restore + re-arm.
 
+**Confirmed by a second, fuller sweep (`dump_all`).** Added `dump_range` (walks a whole contiguous config
+block, catching even unnamed/reserved sub-registers) and swept each block end-to-end — DE-top, DE2 global +
+blender (`0x1000–0x10A0`, all pipes) + UI overlay, the full DSI host (`0x00–0xEC`), the full D-PHY
+(`0x00–0x60`) — plus a curated TCON0+CCU list. Re-captured both cards (`pboot-regs2.log` / `native-regs2.log`,
+~183 regs each): **168 match.** The only *additional* diffs the wider sweep found are DE2 blender **pipe 1**
+(`FCOLOR 0x1101014` / `INSIZE 0x1101018` / `COORD 0x110101c` / `MODE 0x1101094`) — p-boot composites its GUI
+with **two planes**, we use one — but **pipe 1 is disabled in both** (`PIPE_CTL 0x1101000 = 0x101`, bit 9
+clear), so it's inert; our single UI layer routes channel 1 → pipe 0, which is byte-identical. Everything else
+is the same FB-geometry / RED-diagnostic / volatile / MSGBOX / MMC1 set. **Net: zero display-relevant register
+difference across the entire sweep — the register hypothesis is exhaustively closed.**
+
 ---
 
 ## 9. References

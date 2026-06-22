@@ -335,8 +335,7 @@ mclr:
     // is the bug). UART0 is already up: p-boot's own serial console left it running.
     ldr   x0, =s_pbref
     bl    uart_puts
-    ldr   x0, =dump_tbl
-    bl    dump_regs
+    bl    dump_all
 .endif
 .endif
 .ifdef PANELDBG
@@ -389,8 +388,7 @@ mclr:
     bl    uart_puts                       // reached the main loop, no fault
     // FULL register readback dump: did our writes actually STICK on hardware? Each value is
     // compared offline against p-boot's known-good; any mismatch = a silently-dropped write.
-    ldr   x0, =dump_tbl
-    bl    dump_regs
+    bl    dump_all
     // Is TCON0 actually SCANNING? Sample GINT0 (its IRQ/status flags) repeatedly ~50ms
     // apart. If the value CHANGES across samples, TCON0 IS triggering frames -> the stall
     // is downstream (DSI video transfer or the panel). If it stays STATIC, TCON0's frame

@@ -845,116 +845,103 @@ dmr_done:
     ldp   x29, x30, [sp], #16
     ret
 
+// dump_range: x0 = base MMIO addr, w1 = WORD count. Prints "addr=value" for each word.
+// Used to sweep a whole contiguous CONFIG block so we catch even registers we don't know to
+// name (reserved/undocumented offsets) — the caller must keep the range clear of any FIFO /
+// data / RX port that has read side effects.
+dump_range:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    mov   x19, x0
+    mov   w20, w1
+drng_l:
+    cbz   w20, drng_done
+    mov   w0, w19                            // address (low 32 bits; all < 0x02000000)
+    bl    uart_hex
+    mov   w0, #'='
+    bl    uart_putc
+    ldr   w1, [x19]
+    mov   w0, w1
+    bl    uart_hex
+    mov   w0, #0x0D
+    bl    uart_putc
+    mov   w0, #0x0A
+    bl    uart_putc
+    add   x19, x19, #4
+    sub   w20, w20, #1
+    b     drng_l
+drng_done:
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dump_all: the COMPLETE display-register snapshot. Sweeps each block's full config range
+// (so an unsampled sub-register can't hide a divergence) then dumps the curated TCON0 + CCU
+// lists (which contain CPU-IF data ports we must NOT blind-sweep). All ranges stop before any
+// FIFO/data port: DSI ends at 0xEC (0x200 CMD_CTL / 0x240 RX / 0x300 TX excluded); the DE2,
+// D-PHY and DE-top blocks have no read-side-effect registers in the swept ranges.
+dump_all:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =0x01000000                    // DE top: gates/reset/mux
+    mov   w1, #4
+    bl    dump_range
+    ldr   x0, =0x01100000                    // DE2 MIXER0 global (GLB_CTL..0x1C)
+    mov   w1, #8
+    bl    dump_range
+    ldr   x0, =0x01101000                    // DE2 blender (0x1000..0x10A0, all pipes)
+    mov   w1, #41
+    bl    dump_range
+    ldr   x0, =0x01103000                    // DE2 UI overlay ch1 (0x3000..0x3040)
+    mov   w1, #17
+    bl    dump_range
+    ldr   x0, =0x01CA0000                    // MIPI-DSI host, FULL config range 0x00..0xEC
+    mov   w1, #60
+    bl    dump_range
+    ldr   x0, =0x01CA1000                    // MIPI D-PHY, full 0x00..0x60
+    mov   w1, #25
+    bl    dump_range
+    ldr   x0, =dump_tbl                       // TCON0 (CPU-IF-data-port-safe) + CCU, curated
+    bl    dump_regs
+    ldp   x29, x30, [sp], #16
+    ret
+
 .align 2
-// Comprehensive, FIFO-SAFE register sweep. dump_regs prints "addr=value", so the offline
-// diff aligns by address regardless of order. The set is curated (not a blind range walk)
-// to avoid reading any FIFO / data / RX port that has read side effects (DSI 0x200 CMD_CTL,
-// 0x240 RX, 0x300 TX; TCON0 CPU-IF read data). Covers every block that could hold the
-// invisible divergence: CCU PLLs/dividers/resets, the full DSI video-mode TIMING block
-// (computed-but-never-dumped-from-p-boot), the D-PHY analog lanes, and the DE2 blender/overlay.
+// Curated TCON0 + CCU table for dump_all (dump_range sweeps DSI/DPHY/DE2/DE-top contiguously;
+// these two blocks contain CPU-IF data ports / a sparse clock map we must NOT blind-sweep).
+// dump_regs prints "addr=value"; the offline diff aligns by address.
 dump_tbl:
-    // --- CCU clock tree (0x01C20000): PLL values, the DE clock DIVIDER, bus gates + resets.
-    //     The prime "environmental" suspects — a cold BROM boot (p-boot) sets these from
-    //     scratch; the U-Boot `go` handoff may leave a divider/gate/reset subtly different. ---
-    .word 0x01C20010   // PLL_VIDEO0_CTRL
-    .word 0x01C20040   // PLL_MIPI_CTRL   (the DSI/panel pixel clock source)
-    .word 0x01C20048   // PLL_DE_CTRL
-    .word 0x01C20064   // BUS_CLK_GATE1   (DE/TCON0/DSI AHB gates)
-    .word 0x01C20104   // DE_CLK_REG      (source sel [26:24] + divider [3:0])
-    .word 0x01C20118   // TCON0_CLK_REG
-    .word 0x01C20168   // DSI_DPHY_CLK_REG
-    .word 0x01C202C0   // BUS_SOFT_RST0   (DSI = bit1)
-    .word 0x01C202C4   // BUS_SOFT_RST1   (DE = bit12, TCON0 = bit3)
-    // --- DE top (0x01000000): internal gates/reset + mixer0->TCON0 mux ---
-    .word 0x01000000   // DE_SCLK_GATE
-    .word 0x01000004   // DE_HCLK_GATE
-    .word 0x01000008   // DE_AHB_RESET
-    .word 0x01000010   // DE2TCON_MUX
-    // --- DE2 MIXER0 global (0x01100000) ---
-    .word 0x01100000   // GLB_CTL    (mixer enable)
-    .word 0x01100004   // GLB_STATUS
-    .word 0x01100008   // GLB_DBUFFER (double-buffer commit)
-    .word 0x0110000C   // GLB_SIZE
-    // --- DE2 blender (0x01101000): pipe enable, route, background, output, blend mode ---
-    .word 0x01101000   // BLD_FILL_COLOR_CTL
-    .word 0x01101004   // BLD_FILL_COLOR (pipe0)
-    .word 0x01101008   // BLD_CH_ISIZE0
-    .word 0x0110100C   // BLD_CH_OFFSET0
-    .word 0x01101080   // BLD_CH_RTCTL  (pipe<-channel route)
-    .word 0x01101084   // BLD_PREMUL_CTL
-    .word 0x01101088   // BLD_BK_COLOR  (backdrop; left RED as a diagnostic)
-    .word 0x0110108C   // BLD_OUTPUT_SIZE
-    .word 0x01101090   // BLD_MODE0     (blend equation, pipe0)
-    // --- DE2 UI overlay, channel 1 (0x01103000): our layer ---
-    .word 0x01103000   // OVL_UI_ATTR_CTL
-    .word 0x01103004   // OVL_UI_MBSIZE (layer size)
-    .word 0x01103008   // OVL_UI_COORD
-    .word 0x0110300C   // OVL_UI_PITCH
-    .word 0x01103010   // OVL_UI_TOP_LADDR (framebuffer base)
-    .word 0x01103088   // OVL_UI_SIZE   (overlay window size)
-    // --- TCON0 (0x01C0C000): timing master (known-safe config regs only) ---
+    // --- TCON0 (0x01C0C000): timing master. Curated to skip the CPU-IF read-data ports
+    //     (0x64/0x68/0x6C), which would trigger a CPU-IF read transaction. ---
     .word 0x01C0C000   // GCTL  (bit31 enable)
     .word 0x01C0C004   // GINT0 (frame/vblank status)
+    .word 0x01C0C008   // GINT1
     .word 0x01C0C040   // CTL   (bit31 enable | IF select)
     .word 0x01C0C044   // DCLK  (clock divider)
     .word 0x01C0C048   // BASIC0 (active size)
     .word 0x01C0C060   // CPU_IF (8080 mode / TRI)
+    .word 0x01C0C088   // IO_POL
     .word 0x01C0C08C   // IO_TRI (tristate)
+    .word 0x01C0C0F4   // TCON1 IO_TRI (parked)
     .word 0x01C0C0F8   // ECC_FIFO
     .word 0x01C0C160   // TRI0
     .word 0x01C0C164   // TRI1 (high half = live block counter)
     .word 0x01C0C168   // TRI2
     .word 0x01C0C1F0   // SAFE_PERIOD
-    // --- MIPI-DSI host (0x01CA0000): instruction engine + the FULL video-mode timing block
-    //     (0xB0-0xE4) we computed but never read back from p-boot. Stop before 0x200
-    //     (CMD_CTL / RX / TX FIFO — reading those pops data). ---
-    .word 0x01CA0000   // CTL
-    .word 0x01CA0010   // BASIC_CTL0 (bit0 INSTRU_EN)
-    .word 0x01CA0014   // BASIC_CTL1
-    .word 0x01CA0018   // BASIC_SIZE0
-    .word 0x01CA001C   // BASIC_SIZE1
-    .word 0x01CA0020   // INST_FUNC0
-    .word 0x01CA0024   // INST_FUNC1
-    .word 0x01CA0028   // INST_FUNC2
-    .word 0x01CA002C   // INST_FUNC3
-    .word 0x01CA0030   // INST_FUNC4
-    .word 0x01CA0034   // INST_FUNC5
-    .word 0x01CA0048   // INST_JUMP_SEL
-    .word 0x01CA0060   // TRANS_START
-    .word 0x01CA0078   // TRANS_ZERO
-    .word 0x01CA007C   // TCON_DRQ
-    .word 0x01CA0080   // PIXEL_CTL0
-    .word 0x01CA0090   // PIXEL_PH
-    .word 0x01CA0098   // PIXEL_PF0
-    .word 0x01CA009C   // PIXEL_PF1
-    .word 0x01CA00B0   // SYNC_HSS
-    .word 0x01CA00B4   // SYNC_HSE
-    .word 0x01CA00B8   // SYNC_VSS
-    .word 0x01CA00BC   // SYNC_VSE
-    .word 0x01CA00C0   // BLK_HSA0
-    .word 0x01CA00C4   // BLK_HSA1
-    .word 0x01CA00C8   // BLK_HBP0
-    .word 0x01CA00CC   // BLK_HBP1
-    .word 0x01CA00D0   // BLK_HFP0
-    .word 0x01CA00D4   // BLK_HFP1
-    .word 0x01CA00D8   // BLK_HBLK0
-    .word 0x01CA00DC   // BLK_HBLK1
-    .word 0x01CA00E0   // BLK_VBLK0
-    .word 0x01CA00E4   // BLK_VBLK1
-    // --- MIPI D-PHY (0x01CA1000): never dumped from p-boot before — the HS-lane analog path
-    //     (LP works since the panel answered a DCS read; HS is the separate suspect). ---
-    .word 0x01CA1000   // DPHY_GCTL
-    .word 0x01CA1004   // DPHY_TX_CTL
-    .word 0x01CA1008   // DPHY_TX_TIME0
-    .word 0x01CA100C   // DPHY_TX_TIME1
-    .word 0x01CA1010   // DPHY_TX_TIME2
-    .word 0x01CA1014   // DPHY_TX_TIME3
-    .word 0x01CA1018   // DPHY_TX_TIME4
-    .word 0x01CA104C   // DPHY_ANA0
-    .word 0x01CA1050   // DPHY_ANA1
-    .word 0x01CA1054   // DPHY_ANA2
-    .word 0x01CA1058   // DPHY_ANA3
-    .word 0x01CA105C   // DPHY_ANA4
+    // --- CCU clock tree (0x01C20000): PLLs, the DE divider, bus gates (REG0 has the DSI gate
+    //     at bit1) + resets. The prime "environmental" suspects. ---
+    .word 0x01C20010   // PLL_VIDEO0_CTRL
+    .word 0x01C20028   // PLL_PERIPH0_CTRL
+    .word 0x01C20040   // PLL_MIPI_CTRL   (the DSI/panel pixel clock source)
+    .word 0x01C20048   // PLL_DE_CTRL
+    .word 0x01C20060   // BUS_CLK_GATE0   (MIPI-DSI = bit1)
+    .word 0x01C20064   // BUS_CLK_GATE1   (TCON0=bit3 / DE=bit12)
+    .word 0x01C20104   // DE_CLK_REG      (source sel [26:24] + divider [3:0])
+    .word 0x01C20118   // TCON0_CLK_REG
+    .word 0x01C2015C   // MBUS_CLK_REG
+    .word 0x01C20168   // DSI_DPHY_CLK_REG
+    .word 0x01C202C0   // BUS_SOFT_RST0   (MIPI-DSI = bit1)
+    .word 0x01C202C4   // BUS_SOFT_RST1   (TCON0=bit3 / DE=bit12)
+    .word 0x01C202C8   // BUS_SOFT_RST2
     .word 0
 .endif
 
