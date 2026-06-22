@@ -325,6 +325,20 @@ mclr:
                                           // SKIPPED under PBOOT: a kernel-loader bootloader
                                           // (p-boot) already lit the panel + set up the FB.
 .endif
+.ifdef PBOOT
+.ifdef PANELDBG
+    // p-boot has ALREADY lit the panel; the DE2/TCON0/DSI/D-PHY it programmed are live and
+    // scanning out its splashscreen. Dump them NOW, BEFORE fb_init touches anything, to
+    // capture p-boot's pristine WORKING configuration. This is the value-by-value reference
+    // to diff against our native panel_init dump (PINEPHONE-BRINGUP §8: the decisive
+    // comparison that source/register-source matching cannot make — any differing register
+    // is the bug). UART0 is already up: p-boot's own serial console left it running.
+    ldr   x0, =s_pbref
+    bl    uart_puts
+    ldr   x0, =dump_tbl
+    bl    dump_regs
+.endif
+.endif
 .ifdef PANELDBG
     mov   w0, #2                          // GREEN (post): entering fb_init
     bl    led_stage

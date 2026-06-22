@@ -300,6 +300,7 @@ s_dsi0:  .asciz "DSI_BASIC_CTL0"
 s_de2:   .asciz "DE2_GLB_CTL"
 s_ovl:   .asciz "DE2_OVL_TOPADD"
 s_done:  .asciz "[unodos] mainloop\r\n"
+s_pbref: .asciz "\r\n[pboot-ref] live DE2/TCON0/DSI/DPHY/CCU as left by p-boot:\r\n"
 s_pmic:  .asciz "[pmic] ok\r\n"
 s_dsih:  .asciz "[dsi_host] ok\r\n"
 s_dphy:  .asciz "[dphy] ok\r\n"
@@ -845,16 +846,115 @@ dmr_done:
     ret
 
 .align 2
+// Comprehensive, FIFO-SAFE register sweep. dump_regs prints "addr=value", so the offline
+// diff aligns by address regardless of order. The set is curated (not a blind range walk)
+// to avoid reading any FIFO / data / RX port that has read side effects (DSI 0x200 CMD_CTL,
+// 0x240 RX, 0x300 TX; TCON0 CPU-IF read data). Covers every block that could hold the
+// invisible divergence: CCU PLLs/dividers/resets, the full DSI video-mode TIMING block
+// (computed-but-never-dumped-from-p-boot), the D-PHY analog lanes, and the DE2 blender/overlay.
 dump_tbl:
-    .word 0x01C0C000, 0x01C0C004, 0x01C0C040, 0x01C0C044   // TCON0 GCTL/GINT0/CTL/DCLK
-    .word 0x01C0C048, 0x01C0C060, 0x01C0C08C, 0x01C0C0F8   // BASIC0/CPU_IF/IO_TRI/ECC_FIFO
-    .word 0x01C0C160, 0x01C0C164, 0x01C0C168, 0x01C0C1F0   // TRI0/TRI1/TRI2/SAFE_PERIOD
-    .word 0x01CA0000, 0x01CA0010, 0x01CA0014, 0x01CA0018   // DSI CTL/BASIC_CTL0/CTL1/SIZE0
-    .word 0x01CA001C, 0x01CA0048, 0x01CA007C, 0x01CA0090   // SIZE1/INST_JUMP_SEL/TCON_DRQ/PIXEL_PH
-    .word 0x01000000, 0x01000004, 0x01000008, 0x01000010   // DE SCLK_GATE/HCLK_GATE/AHB_RESET/TCON_MUX
-    .word 0x01100000, 0x0110000C, 0x01101000, 0x01101080   // DE2 GLB_CTL/GLB_SIZE/BLD_FILL/BLD_RTCTL
-    .word 0x01101088, 0x0110108C, 0x01103000, 0x01103010   // BLD_BKCOL/BLD_SIZE/OVL_ATTR/OVL_TOPADD
-    .word 0x01C20104, 0x01C20118, 0x01C20168               // CCU DE_CLK/TCON0_CLK/DSI_DPHY_CLK
+    // --- CCU clock tree (0x01C20000): PLL values, the DE clock DIVIDER, bus gates + resets.
+    //     The prime "environmental" suspects — a cold BROM boot (p-boot) sets these from
+    //     scratch; the U-Boot `go` handoff may leave a divider/gate/reset subtly different. ---
+    .word 0x01C20010   // PLL_VIDEO0_CTRL
+    .word 0x01C20040   // PLL_MIPI_CTRL   (the DSI/panel pixel clock source)
+    .word 0x01C20048   // PLL_DE_CTRL
+    .word 0x01C20064   // BUS_CLK_GATE1   (DE/TCON0/DSI AHB gates)
+    .word 0x01C20104   // DE_CLK_REG      (source sel [26:24] + divider [3:0])
+    .word 0x01C20118   // TCON0_CLK_REG
+    .word 0x01C20168   // DSI_DPHY_CLK_REG
+    .word 0x01C202C0   // BUS_SOFT_RST0   (DSI = bit1)
+    .word 0x01C202C4   // BUS_SOFT_RST1   (DE = bit12, TCON0 = bit3)
+    // --- DE top (0x01000000): internal gates/reset + mixer0->TCON0 mux ---
+    .word 0x01000000   // DE_SCLK_GATE
+    .word 0x01000004   // DE_HCLK_GATE
+    .word 0x01000008   // DE_AHB_RESET
+    .word 0x01000010   // DE2TCON_MUX
+    // --- DE2 MIXER0 global (0x01100000) ---
+    .word 0x01100000   // GLB_CTL    (mixer enable)
+    .word 0x01100004   // GLB_STATUS
+    .word 0x01100008   // GLB_DBUFFER (double-buffer commit)
+    .word 0x0110000C   // GLB_SIZE
+    // --- DE2 blender (0x01101000): pipe enable, route, background, output, blend mode ---
+    .word 0x01101000   // BLD_FILL_COLOR_CTL
+    .word 0x01101004   // BLD_FILL_COLOR (pipe0)
+    .word 0x01101008   // BLD_CH_ISIZE0
+    .word 0x0110100C   // BLD_CH_OFFSET0
+    .word 0x01101080   // BLD_CH_RTCTL  (pipe<-channel route)
+    .word 0x01101084   // BLD_PREMUL_CTL
+    .word 0x01101088   // BLD_BK_COLOR  (backdrop; left RED as a diagnostic)
+    .word 0x0110108C   // BLD_OUTPUT_SIZE
+    .word 0x01101090   // BLD_MODE0     (blend equation, pipe0)
+    // --- DE2 UI overlay, channel 1 (0x01103000): our layer ---
+    .word 0x01103000   // OVL_UI_ATTR_CTL
+    .word 0x01103004   // OVL_UI_MBSIZE (layer size)
+    .word 0x01103008   // OVL_UI_COORD
+    .word 0x0110300C   // OVL_UI_PITCH
+    .word 0x01103010   // OVL_UI_TOP_LADDR (framebuffer base)
+    .word 0x01103088   // OVL_UI_SIZE   (overlay window size)
+    // --- TCON0 (0x01C0C000): timing master (known-safe config regs only) ---
+    .word 0x01C0C000   // GCTL  (bit31 enable)
+    .word 0x01C0C004   // GINT0 (frame/vblank status)
+    .word 0x01C0C040   // CTL   (bit31 enable | IF select)
+    .word 0x01C0C044   // DCLK  (clock divider)
+    .word 0x01C0C048   // BASIC0 (active size)
+    .word 0x01C0C060   // CPU_IF (8080 mode / TRI)
+    .word 0x01C0C08C   // IO_TRI (tristate)
+    .word 0x01C0C0F8   // ECC_FIFO
+    .word 0x01C0C160   // TRI0
+    .word 0x01C0C164   // TRI1 (high half = live block counter)
+    .word 0x01C0C168   // TRI2
+    .word 0x01C0C1F0   // SAFE_PERIOD
+    // --- MIPI-DSI host (0x01CA0000): instruction engine + the FULL video-mode timing block
+    //     (0xB0-0xE4) we computed but never read back from p-boot. Stop before 0x200
+    //     (CMD_CTL / RX / TX FIFO — reading those pops data). ---
+    .word 0x01CA0000   // CTL
+    .word 0x01CA0010   // BASIC_CTL0 (bit0 INSTRU_EN)
+    .word 0x01CA0014   // BASIC_CTL1
+    .word 0x01CA0018   // BASIC_SIZE0
+    .word 0x01CA001C   // BASIC_SIZE1
+    .word 0x01CA0020   // INST_FUNC0
+    .word 0x01CA0024   // INST_FUNC1
+    .word 0x01CA0028   // INST_FUNC2
+    .word 0x01CA002C   // INST_FUNC3
+    .word 0x01CA0030   // INST_FUNC4
+    .word 0x01CA0034   // INST_FUNC5
+    .word 0x01CA0048   // INST_JUMP_SEL
+    .word 0x01CA0060   // TRANS_START
+    .word 0x01CA0078   // TRANS_ZERO
+    .word 0x01CA007C   // TCON_DRQ
+    .word 0x01CA0080   // PIXEL_CTL0
+    .word 0x01CA0090   // PIXEL_PH
+    .word 0x01CA0098   // PIXEL_PF0
+    .word 0x01CA009C   // PIXEL_PF1
+    .word 0x01CA00B0   // SYNC_HSS
+    .word 0x01CA00B4   // SYNC_HSE
+    .word 0x01CA00B8   // SYNC_VSS
+    .word 0x01CA00BC   // SYNC_VSE
+    .word 0x01CA00C0   // BLK_HSA0
+    .word 0x01CA00C4   // BLK_HSA1
+    .word 0x01CA00C8   // BLK_HBP0
+    .word 0x01CA00CC   // BLK_HBP1
+    .word 0x01CA00D0   // BLK_HFP0
+    .word 0x01CA00D4   // BLK_HFP1
+    .word 0x01CA00D8   // BLK_HBLK0
+    .word 0x01CA00DC   // BLK_HBLK1
+    .word 0x01CA00E0   // BLK_VBLK0
+    .word 0x01CA00E4   // BLK_VBLK1
+    // --- MIPI D-PHY (0x01CA1000): never dumped from p-boot before — the HS-lane analog path
+    //     (LP works since the panel answered a DCS read; HS is the separate suspect). ---
+    .word 0x01CA1000   // DPHY_GCTL
+    .word 0x01CA1004   // DPHY_TX_CTL
+    .word 0x01CA1008   // DPHY_TX_TIME0
+    .word 0x01CA100C   // DPHY_TX_TIME1
+    .word 0x01CA1010   // DPHY_TX_TIME2
+    .word 0x01CA1014   // DPHY_TX_TIME3
+    .word 0x01CA1018   // DPHY_TX_TIME4
+    .word 0x01CA104C   // DPHY_ANA0
+    .word 0x01CA1050   // DPHY_ANA1
+    .word 0x01CA1054   // DPHY_ANA2
+    .word 0x01CA1058   // DPHY_ANA3
+    .word 0x01CA105C   // DPHY_ANA4
     .word 0
 .endif
 
