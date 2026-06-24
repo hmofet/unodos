@@ -591,6 +591,133 @@ clear), so it's inert; our single UI layer routes channel 1 → pipe 0, which is
 is the same FB-geometry / RED-diagnostic / volatile / MSGBOX / MMC1 set. **Net: zero display-relevant register
 difference across the entire sweep — the register hypothesis is exhaustively closed.**
 
+### 2026-06-22 (cont.) — bring-up REORDERED to p-boot's exact `display_init()` operation order [code-only, awaiting HW]
+
+With the register *values* proven byte-identical to working p-boot, the only residual a snapshot cannot
+capture is the **runtime bring-up ORDER**. p-boot's `display_init()` (ground truth, `src/display.c`, mirror at
+`C:\Users\arin\pboot_display.c`) brings each block's clocks up **immediately before using that block**:
+
+```
+tcon0_init()    : PLL_VIDEO0 → PLL_MIPI(LDO→udelay(100)→full) → TCON0 src clk → LCD0 gate/reset → TCON0 regs
+dsi_init_fast() : DSI bus gate/reset → DSI host regs → display_board_init(reset-low+PMIC+15ms)
+                  → dphy_enable(CCU_MIPI_DSI_CLK first → D-PHY regs) → reset-high+15ms → panel DCS → HSC→1ms→HSD
+de2_init()      : SRAM-C→DE → PLL_DE → DE clock → DE gate/reset → clear mixer → enable mixer   (LAST)
+display_commit(): blender + UI layer + dbuff=1                                                  (per frame)
+```
+
+We had **front-loaded every clock** in one `clk_init` (plus an assert→deassert reset-cycle p-boot never does),
+then run the blocks. Same end-state registers, different bring-up order. **Refactored to match p-boot exactly:**
+`clk_init` is split into four per-block helpers — `tcon0_clk_init`, `dsi_bus_clk_on`, `dphy_clk_on`, `de_clk_init`
+— each called at the p-boot-equivalent point in `panel_init` (so PLL_DE/DE clock now come up **last**, after the
+DSI is in HS video mode, right before `fb_init`'s mixer config, exactly as `de2_init` runs after `sun6i_dsi_start(HSD)`).
+Register **values are unchanged** (the snapshot-verified set); only *when* each clock comes up changed, and resets
+are now **deassert-only** (the assert-cycle — our old "environmental" guess, which never lit it — is dropped, so
+this is a clean test of *exact p-boot order*). All status polls (PLL_DE lock @`0x48`, RSB, DSI INSTRU_EN) keep the
+same addresses, so the harness is unaffected. **Regression green: default + paneldbg both render the byte-identical
+4922-B launcher PNG end-to-end (no fault/hang).** Built `unodos_paneldbg.bin` (30704 B, md5 `07f0d035…`) → staged
+`devbuntu:~/pine-uboot/unodos_paneldbg.bin`. **NEXT (needs user + phone):** native U-Boot card
+(`~/pine-uboot/make-native-card.sh`), serial bg-cat, power-cycle; read whether the panel now lights. If still
+backlit-black, "exact p-boot order" is disproven too → next wedge is a **DE2-output-vs-DSI-HS-transmit splitter**
+(does the DE2 mixer emit pixels at all, vs do the HS lanes carry them) or the handful of un-sampled sub-registers.
+
+**HW RESULT (2026-06-22): STILL BACKLIT-BLACK. "Exact p-boot order" is DISPROVEN.** Native card, full serial
+trace: LED beacon walked all stages clean; `SCTLR=30c50830` (MMU/caches off); **all three PLLs locked**
+(`PLL_VIDEO0=91006207`, `PLL_MIPI=90c0071a`, and crucially `PLL_DE=91001701` — locks fine even brought up LAST);
+`[dsi_host]/[pmic]/[dphy]/[st7703] ok`; panel ALIVE+display-ON (`RXCTL=02060003` RX_FLAG set, `RXDAT=…011c`
+power-mode 0x1c); `DSI_BASIC_CTL0=00030001` (HS video); `DE2_GLB_CTL=1`, `OVL_TOPADD=40400000`; `TCON0_GINT0`
+`a00→800→800` (bit11 re-sets = TCON0 scanning); `[unodos] mainloop`, no fault. **Identical end-state to every prior
+run — the reorder changed nothing.** So with register VALUES *and* operation ORDER *and* the DCS init seq all
+byte-identical to the p-boot that lights this exact panel, and the panel proven alive, the residual is provably
+NOT in the DE2/TCON0/DSI/DPHY/CCU register+sequence space at all.
+
+**KEY REFRAME (important): ST7703/XBD599 is a VIDEO-MODE panel with NO GRAM** — it has no framebuffer of its own and
+displays the incoming MIPI video stream in real time. So "display-ON + backlit-black" means **no valid RED video is
+arriving at the panel's MIPI input** (this also explains why the earlier `all_pixels_on` 0x23 test stayed black:
+with no GRAM there's nothing to "turn on"; the panel only ever shows the live stream). The RED blender backdrop is
+generated *inside* the DE2 pipe (no DRAM/MBUS fetch needed), so its absence rules OUT a framebuffer-DMA/MBUS cause
+and narrows the wall to: **DE2 mixer not emitting pixels at all, OR the DSI HS lane/D-PHY analog not transmitting
+them** (LP works — panel answered a DCS read — but HS is a separate analog path).
+
+**NEXT — the DIFFERENTIAL PERTURBATION test (genuinely new; supersedes static register diffing).** Static
+comparison is exhausted. Use p-boot's *live working* display as the reference substrate and perturb ONE block at a
+time with OUR code: boot under PBOOT (p-boot lights the panel), then re-run exactly one of our blocks on top and see
+if the screen goes black. First + highest-value instance: **PBOOT + re-run our native `fb_init` DE2 programming**
+(GLB/blender/RED-backdrop/UI-layer/dbuff) on top of p-boot's known-good TCON0/DSI/DPHY/clocks. If the panel goes
+black → OUR DE2 mixer config is the bug. If it shows RED / our launcher → our DE2 config is CORRECT and the bug is
+in our TCON0/DSI/DPHY/clock bring-up (p-boot's versions work; ours are subtly wrong in a way registers don't show —
+a clock at the wrong *rate* despite the right register bits, or an analog enable that doesn't actually engage).
+That one cycle bisects the entire suspect space. Code NOT committed (`panel.inc.s` clock refactor + `panel_init`
+reorder, `kernel.s` comment, this entry).
+
+**HW RESULT (2026-06-22): ✅ DE2 EXONERATED — the differential test worked.** `build.sh de2test`
+(PBOOT+PANELDBG+DE2TEST; `fb_init` wraps the adopt path in `.ifndef DE2TEST` so it falls through to native DE2 over
+p-boot's live pipe). On HW: p-boot lit the panel → our payload → **a white rectangle top-left, then the UnoDOS
+launcher rendered.** Trace corroborates: our overlay is live (`01103000=ff000405` ATTR, `01103004=027f01df` =
+480×640, `01103010=40400000` = **our** FB, not p-boot's `0x48000000`) scanning out through p-boot's TCON0
+(`GINT0 a00→800`) and DSI (`BASIC_CTL0=00030001`). **So our native DE2 mixer config is CORRECT when fed p-boot's
+known-good TCON0/DSI/D-PHY/clocks.** The native-only black is therefore **upstream of DE2**: our `panel_init`
+{clocks, TCON0, DSI-host, D-PHY, dsi_start} (ST7703/panel already exonerated — it answers DCS and is alive). Leading
+theory: a wrong clock *rate* despite identical register bits, or a D-PHY HS analog enable that doesn't actually
+engage (LP works, HS is a separate analog path).
+
+**NEXT (staged, awaiting HW): `build.sh pbootnative` (PBOOT+PANELDBG+DE2TEST+NATIVEPANEL).** Re-runs our FULL native
+`panel_init` on top of p-boot's warm state, then native DE2. The big fork: **launcher shows** → our `panel_init`
+code is functionally correct and the native-cold failure is **environmental** (U-Boot's clock/DRAM cascade vs
+p-boot's SPL) → pivot to comparing the *non-display* clock tree, stop perturbing `panel.inc.s`; **black** → our
+`panel_init` actively breaks a working pipe → bisect its blocks (clocks → +TCON0 → +DSI/D-PHY). Tooling gotcha hit +
+recorded: `build-pboot-card.sh`'s per-write `blockdev --setrw` **races** udev re-arming RO after the `sfdisk`
+re-partition (`p-boot-conf` → "Operation not permitted"); robust fix = `sudo mv` the `99-usb-storage-readonly.rules`
+aside + `udevadm control --reload` for the whole card build, then restore (the dd-only `make-native-card.sh` path
+doesn't trip it).
+
+**HW RESULT (2026-06-23): `pbootnative` = BLACK, then `pbootdsi` = BLACK → bug PINNED to our DSI link bring-up.**
+`pbootnative` (re-run full `panel_init` on p-boot's warm state) went black → the bug is in our `panel_init` *code*,
+not the environment (this also rules out PLL_PERIPH0/MBUS/DRAM — they were in p-boot's live state and our bring-up
+still failed). Then `build.sh pbootdsi` (PBOOT+PANELDBG+DE2TEST+NATIVEPANEL+DSIONLY → kernel.s calls the new
+`panel_dsi_only`, which re-inits ONLY the DSI link — `dsi_host_init` + `dphy_init` + panel reset/DCS + `dsi_start` —
+on top of p-boot's clocks AND TCON0) ALSO went black. Trace: panel STILL answers DCS after our re-init
+(`RXCTL=02060003`, `RXDAT=…011c` = display-ON), `DSI_BASIC_CTL0=00030001` (HS), p-boot's `TCON0 GINT0 a00→800` still
+scanning — yet black. **The discriminator is exact:** `de2test` (p-boot's DSI + our DE2) = launcher; `pbootdsi`
+(OUR DSI + our DE2) = black; the ONLY delta is our DSI link re-init. **So the bug is in our DSI-host / D-PHY /
+dsi_start — the HS video path.** LP signalling works (panel replies DCS); HS video delivers no pixels = a classic
+HS-transmit failure. Registers in those routines are all verified byte-identical to p-boot, so it is a *runtime /
+analog* difference, not a value. (Caveat: re-running `dphy_init` on p-boot's already-powered D-PHY could be partly a
+re-power artifact — `dphy_tbl` writes `ANA2=0x2`, clearing CK_CPU/P2S_CPU, then rebuilds — but cold-native is also
+black and the DSI link is the consistent discriminator, so it remains the strong lead.)
+
+**NEXT (next session):** cleanest sub-bisect — re-run **only `dsi_start`** (the HS handoff: JUMP_SEL HSC `0x00000F02`
+→ clear `INST_FUNC0` LANE_CEN bit4 → 1 ms → JUMP_SEL HSD `0x63F07006`) on p-boot's fully-working DSI; this is
+low-artifact (no panel reset, no D-PHY re-power). Black → our `dsi_start` HS handoff is the bug; survives → it's
+`dsi_host_init` or `dphy_init`. Then scrutinize the HS **clock-lane continuous mode** (D-PHY `TX_CTL` HS_TX_CLK_CONT
+bit28 + `dsi_start`'s LANE_CEN clear) — the HS-clock-lane control is the likeliest runtime culprit. Bisection tooling
+left in tree: `build.sh {de2test,pbootnative,pbootdsi}`, flags DE2TEST/NATIVEPANEL/DSIONLY in `kernel.s`,
+`panel_dsi_only` in `panel.inc.s`. All code still uncommitted on `parity-push-fresh-ports`.
+
+**HW RESULTS (2026-06-23) — full bisection of the DSI link → bug is our PANEL RESET + `st7703_init`, NOT dphy.**
+Sub-tests (each: re-run only the named block(s) on p-boot's live pipe, with native DE2):
+
+| build | block(s) re-run by us | screen |
+|---|---|---|
+| `de2test` | DE2 | launcher ✓ |
+| `pbootdsistart` | `dsi_start` | launcher ✓ |
+| `pbootdsihost` | `dsi_host_init` + `dsi_start` | launcher ✓ |
+| `pbootnodphy` | `dsi_host` + **panel reset + `st7703_init`** + `dsi_start` (p-boot's D-PHY) | **black** |
+| `pbootdsi` | full DSI link incl dphy | black |
+
+The clean pair `pbootdsihost` (lit) vs `pbootnodphy` (black) differ by **exactly `panel_reset_low/high` + `st7703_init`**.
+So **our panel reset + ST7703 DCS init is the bug** — `dphy_init` is exonerated (removing it didn't help). The earlier
+"panel is alive/exonerated" reasoning was wrong: the panel *answers* DCS (`RXDAT=…011c`, display-ON) even after our
+re-init, but the XBD599 is **video-mode (no GRAM)**, so a subtly-wrong SETMIPI / SETGIP gate-driver / interface config
+leaves it display-ON yet black. This also explains native cold boot, which *must* reset+init the panel itself.
+
+**NEXT (next session) — re-scrutinize the panel init with fresh eyes** (data was "byte-verified" before, so look past the
+bytes): (1) exact **reset pulse** timing/width vs p-boot (`PD23` low → 15 ms → [dphy] → high → 15 ms → DCS); (2) **delay
+placement** — the post-SLPOUT 120 ms and any per-command waits, relative to p-boot's `panel_dcs_seq_initlist` (21 entries
+= 20 DCS + 1 sleep); (3) **`dcs_send` framing/mode** for the LONG packets (SETGIP1 = 64 B, SETGIP2 = 62 B, SETGAMMA);
+(4) any command/order difference. Can't cheaply split reset-vs-st7703 on HW (reset-alone leaves the panel blank).
+Bisection flags now also DSISTARTONLY/DSIHOSTONLY/NODPHY (`panel_{dsistart,dsihost,nodphy}_only`). Default regression
+still byte-identical 4922-B. ~7 HW cycles done; all diagnostic code uncommitted.
+
 ---
 
 ## 9. References

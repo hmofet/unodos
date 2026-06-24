@@ -8,7 +8,9 @@
 // screen stays dark. This file is that bring-up, distilled register-for-register
 // from Apache NuttX's PinePhone port (lupyuen) + the Linux sun50i-a64 drivers:
 //
-//   clk_init      CCU PLLs/gates  (PLL_DE, PLL_VIDEO0, PLL_MIPI, DE/TCON0/DSI/DPHY)
+//   {tcon0,dsi,dphy,de}_clk  CCU PLLs/gates, brought up per-block in p-boot order
+//                 (PLL_VIDEO0/PLL_MIPI before TCON0; DSI bus before host; MIPI clk
+//                  before D-PHY; PLL_DE/DE clock last, before the mixer)
 //   rsb_init      Reduced Serial Bus driver (to reach the AXP803 PMIC)
 //   pmic_init     AXP803 rails — DLDO2 = MIPI-DSI power, DLDO1/GPIO0LDO
 //   dsi_host_init MIPI-DSI host controller (0x01CA0000)
@@ -397,17 +399,15 @@ pi_sctl_pr:
     ldr   x0, =s_sctlr
     bl    print_reg
 .endif
-    mov   w0, #4                          // BLUE: clocks
+    // ===== p-boot display_init() order — see clk_init note above =====
+    // tcon0_init FIRST (timing master), with its clocks (PLL_VIDEO0/PLL_MIPI/TCON0 src)
+    // brought up immediately before, exactly as p-boot's tcon0_init does internally.
+    mov   w0, #4                          // BLUE: clocks + TCON0
     bl    led_stage
-    bl    clk_init                        // CCU PLLs / gates / resets
+    bl    tcon0_clk_init                  // PLL_VIDEO0, PLL_MIPI, TCON0 source clock
+    bl    tcon0_init                      // TCON0 timing registers
 .ifdef PANELDBG
-    // Read back the 3 PLL control regs over serial (bit28 = lock). PLL_MIPI is the
-    // DSI/panel clock — if bit28 is clear there, that's the dark-panel smoking gun.
-    ldr   x0, =s_plde
-    ldr   x1, =CCU+0x48
-    ldr   w1, [x1]
-    bl    print_reg
-    ldr   x0, =s_plv0
+    ldr   x0, =s_plv0                     // PLL readbacks (bit28 = lock) — now AFTER their setup
     ldr   x1, =CCU+0x10
     ldr   w1, [x1]
     bl    print_reg
@@ -415,39 +415,42 @@ pi_sctl_pr:
     ldr   x1, =CCU+0x40
     ldr   w1, [x1]
     bl    print_reg
-.endif
-    bl    tcon0_init                      // TCON0 FIRST, before the DSI block (p-boot /
-                                          // NuttX order: TCON0 is the timing master that
-                                          // drives the DSI link — must be up before dsi_start)
-.ifdef PANELDBG
     ldr   x0, =s_tcon
     ldr   x1, =TCON0+0x00
     ldr   w1, [x1]
     bl    print_reg                       // TCON0 GCTL (bit31 = enabled)
 .endif
-    mov   w0, #1                          // RED: RSB/PMIC
+    // dsi_init: gate the DSI bus clock, THEN the DSI host register table (p-boot order:
+    // dsi_run_init_seq(dsi_init_seq) runs before display_board_init / dphy).
+    mov   w0, #2                          // GREEN: DSI host
     bl    led_stage
-    bl    rsb_init                        // reach the PMIC
-    bl    pmic_init                       // DLDO2 = MIPI power, etc.
-.ifdef PANELDBG
-    ldr   x0, =s_pmic
-    bl    uart_puts
-.endif
-    mov   w0, #2                          // GREEN: DSI host + D-PHY
-    bl    led_stage
-    bl    panel_reset_low                 // ST7703 reset asserted (PD23 low)
-    mov   w0, #15
-    bl    delay_ms
-    bl    dsi_host_init                   // MIPI-DSI controller
+    bl    dsi_bus_clk_on                  // MIPI-DSI bus gate/reset (just before host regs)
+    bl    dsi_host_init                   // MIPI-DSI controller register table
 .ifdef PANELDBG
     ldr   x0, =s_dsih
     bl    uart_puts
 .endif
-    bl    dphy_init                       // MIPI D-PHY + analog LDOs
+    // display_board_init: assert panel reset LOW, power the PMIC rails, settle 15ms —
+    // in p-boot this comes AFTER the DSI host regs and BEFORE dphy_enable.
+    mov   w0, #1                          // RED: PMIC + reset
+    bl    led_stage
+    bl    panel_reset_low                 // ST7703 reset asserted (PD23 low)
+    bl    rsb_init                        // reach the PMIC
+    bl    pmic_init                       // DLDO1/GPIO0LDO 3.3V, DLDO2 1.8V = MIPI power
+    mov   w0, #15                         // p-boot udelay(15000) power-settle
+    bl    delay_ms
+.ifdef PANELDBG
+    ldr   x0, =s_pmic
+    bl    uart_puts
+.endif
+    // dphy_enable: its first act is CCU_MIPI_DSI_CLK, then the D-PHY registers/analog.
+    bl    dphy_clk_on                     // DSI D-PHY clock (p-boot dphy_enable's first write)
+    bl    dphy_init                       // MIPI D-PHY + analog LDO sequence
 .ifdef PANELDBG
     ldr   x0, =s_dphy
     bl    uart_puts
 .endif
+    // deassert panel reset, 15ms, then the ST7703 DCS init stream.
     mov   w0, #3                          // YELLOW: ST7703 panel init
     bl    led_stage
 .ifdef PANELDBG
@@ -468,7 +471,9 @@ pi_sctl_pr:
     bl    dcs_read_dbg                     // probe: is the panel alive / answering DSI?
                                           // (LP read of power-mode, BEFORE the HS switch)
 .endif
-    mov   w0, #5                          // MAGENTA: DSI HS start + backlight
+    // HS video start, THEN de2_init's clocks (p-boot brings PLL_DE/DE clock up LAST,
+    // after sun6i_dsi_start(HSD), right before the mixer). fb_init does the mixer config.
+    mov   w0, #5                          // MAGENTA: DSI HS start + DE clocks + backlight
     bl    led_stage
     bl    dsi_start                       // bus -> high-speed video mode
 .ifdef PANELDBG
@@ -477,35 +482,273 @@ pi_sctl_pr:
     ldr   w1, [x1]
     bl    print_reg                       // DSI BASIC_CTL0 after HS start
 .endif
+    bl    de_clk_init                     // PLL_DE, DE clock + bus gate/reset (p-boot de2_init head)
+.ifdef PANELDBG
+    ldr   x0, =s_plde
+    ldr   x1, =CCU+0x48
+    ldr   w1, [x1]
+    bl    print_reg                       // PLL_DE (bit28 = lock) — now after its setup
+.endif
     bl    backlight_on                    // PWM + enable GPIO
     ldp   x29, x30, [sp], #16
     ret
 
 // ============================================================================
-// CCU clocks / PLLs (base 0x01C20000)
-// ============================================================================
-clk_init:
+// panel_dsi_only — BISECTION variant (build.sh pbootdsi). Re-inits ONLY the DSI link
+// (DSI host + D-PHY + panel reset/DCS + dsi_start) on top of p-boot's already-running
+// clocks AND TCON0 — i.e. it does NOT touch the PLLs/TCON0/DE clocks. Used under
+// PBOOT+NATIVEPANEL+DSIONLY to split the panel_init suspect set: if THIS breaks p-boot's
+// working display (black) the bug is in our DSI-host/D-PHY/dsi_start (the leading HS-
+// transmit theory — LP works, HS is separate analog); if the launcher survives, our DSI
+// link bring-up is fine and the bug is in our clocks/TCON0. p-boot already powered the
+// PMIC rails, so PMIC is skipped (no RSB re-init). Mirrors panel_init's DSI portion.
+panel_dsi_only:
     stp   x29, x30, [sp, #-16]!
-    // ENVIRONMENTAL FIX (2026-06-20): we run as a U-Boot `go` payload, not from cold
-    // like NuttX/p-boot. Our register sequence is byte-faithful to BOTH (verified), yet
-    // the DE2->TCON0->DSI video path produces no pixels — so the difference must be the
-    // STARTING state U-Boot left these blocks in. Force them cold-clean: ASSERT (clear)
-    // their CCU resets here, then the de-assert sequence below brings them up from a
-    // known-reset state. (Display blocks; U-Boot has no DSI/DE/TCON driver, so safe to
-    // reset-cycle — nothing else uses them.)
-    ldr   x0, =CCU+0x2C4                  // BUS_SOFT_RST1: assert DE(bit12) + TCON0(bit3)
-    mov   w1, #0x1008
-    bl    mmio_clrbits
-    ldr   x0, =CCU+0x2C0                  // BUS_SOFT_RST0: assert MIPI-DSI(bit1)
-    mov   w1, #0x2
-    bl    mmio_clrbits
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #2                          // GREEN: DSI host
+    bl    led_stage
+    bl    dsi_bus_clk_on                  // DSI bus gate/reset (idempotent on p-boot's)
+    bl    dsi_host_init                   // re-init the DSI host registers
+.ifdef PANELDBG
+    ldr   x0, =s_dsih
+    bl    uart_puts
+.endif
+    mov   w0, #1                          // RED: panel reset (PMIC already up from p-boot)
+    bl    led_stage
+    bl    panel_reset_low
+    mov   w0, #15
+    bl    delay_ms
+    bl    dphy_clk_on                     // DSI D-PHY clock
+    bl    dphy_init                       // D-PHY + analog LDO sequence
+.ifdef PANELDBG
+    ldr   x0, =s_dphy
+    bl    uart_puts
+.endif
+    mov   w0, #3                          // YELLOW: ST7703
+    bl    led_stage
+    bl    panel_reset_high
+    mov   w0, #15
+    bl    delay_ms
+    bl    st7703_init                     // re-send the panel DCS init stream
+.ifdef PANELDBG
+    ldr   x0, =s_st70
+    bl    uart_puts
+    bl    dcs_read_dbg                     // panel still answering? (LP read)
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start                       // bus -> high-speed video mode
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// panel_dsistart_only — FINEST bisection (build.sh pbootdsistart). Re-runs ONLY our
+// dsi_start (the HS handoff: JUMP_SEL HSC -> clear LANE_CEN -> 1ms -> JUMP_SEL HSD) on
+// top of p-boot's FULLY-working DSI link — no panel reset, no DSI-host re-init, no D-PHY
+// re-power, so it's the lowest-artifact perturbation possible. Splits the DSI-link
+// suspect set: black -> our dsi_start HS handoff is the bug; launcher survives -> it's
+// dsi_host_init or dphy_init (build a dphy-only test next). NOTE: no dcs_read here — that
+// would flip JUMP_SEL to LPRX and itself disturb the HS state we're testing.
+panel_dsistart_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start                       // re-issue HSC -> LANE_CEN -> HSD on p-boot's link
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// panel_dsihost_only — splits the last two suspects (build.sh pbootdsihost). Re-writes
+// our DSI HOST register table (dsi_host_init) + re-triggers HS (dsi_start) on top of
+// p-boot's live pipe, leaving p-boot's D-PHY analog UNTOUCHED. dsi_start is already
+// proven safe to re-run (pbootdsistart = launcher), so the only new variable here is our
+// dsi_host_init. Low-artifact (config-register rewrite, not an analog re-power). Outcome:
+//   black     -> our dsi_host_init is the bug.
+//   launcher  -> dsi_host_init is fine => dphy_init is the bug BY ELIMINATION (which also
+//                sidesteps the D-PHY re-power-glitch artifact a direct dphy-only test has).
+panel_dsihost_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #2                          // GREEN: DSI host
+    bl    led_stage
+    bl    dsi_bus_clk_on                  // DSI bus gate/reset (idempotent on p-boot's)
+    bl    dsi_host_init                   // rewrite our DSI host register table
+.ifdef PANELDBG
+    ldr   x0, =s_dsih
+    bl    uart_puts
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start                       // re-trigger HS on p-boot's D-PHY
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// panel_nodphy_only — AIRTIGHT confirmation that dphy_init is the bug (build.sh
+// pbootnodphy). Runs the ENTIRE DSI link EXCEPT dphy_clk_on/dphy_init — dsi_host_init +
+// panel reset + st7703 (re-DCS) + dsi_start — keeping p-boot's known-good D-PHY analog.
+// It's the exact complement of pbootdsi (which was BLACK): the ONLY thing removed is our
+// dphy. launcher -> dphy_init is DEFINITIVELY the bug; black -> the breakage is in our
+// panel reset / st7703 re-init path, not dphy (would redirect the hunt).
+panel_nodphy_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #2                          // GREEN: DSI host
+    bl    led_stage
+    bl    dsi_bus_clk_on
+    bl    dsi_host_init
+.ifdef PANELDBG
+    ldr   x0, =s_dsih
+    bl    uart_puts
+.endif
+    mov   w0, #1                          // RED: panel reset (NO dphy — keep p-boot's)
+    bl    led_stage
+    bl    panel_reset_low
+    mov   w0, #15
+    bl    delay_ms
+    bl    panel_reset_high
+    mov   w0, #15
+    bl    delay_ms
+    mov   w0, #3                          // YELLOW: ST7703 re-DCS
+    bl    led_stage
+    bl    st7703_init
+.ifdef PANELDBG
+    ldr   x0, =s_st70
+    bl    uart_puts
+    bl    dcs_read_dbg
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// CCU clocks / PLLs (base 0x01C20000) — DISTRIBUTED in p-boot order
+// ============================================================================
+// 2026-06-22: after EXHAUSTIVE register-snapshot parity with working p-boot (every
+// display-path register byte-identical; PINEPHONE-BRINGUP §8) the panel is still
+// backlit-black. The one thing a snapshot cannot capture is the RUNTIME bring-up
+// ORDER. We previously front-loaded EVERY clock in one clk_init (plus an assert→
+// deassert reset-cycle p-boot never does). p-boot instead brings each block's clock
+// up *immediately before* using that block, distributed across display_init:
+//   tcon0_init   -> PLL_VIDEO0, PLL_MIPI, TCON0 source clock, LCD0 gate/reset
+//   dsi_init     -> DSI bus gate/reset  (just before the DSI host regs)
+//   dphy_enable  -> CCU_MIPI_DSI_CLK    (its first act)
+//   de2_init     -> PLL_DE, DE clock, DE gate/reset  (LAST, before the mixer)
+// These helpers reproduce that exact ordering. Register VALUES are unchanged from the
+// snapshot-verified set; only WHEN each clock comes up (and deassert-only resets,
+// matching p-boot — the assert-cycle is dropped) differs. panel_init calls them at the
+// p-boot-equivalent points. (If this still doesn't light it, we've faithfully tested
+// "exact p-boot order" and the next wedge is a DE2-output-vs-DSI-HS-transmit splitter.)
+
+// tcon0_clk_init: p-boot tcon0_init head — PLL_VIDEO0, PLL_MIPI (LDO→settle→full),
+// TCON0 source = MIPI_PLL, LCD0 bus gate + reset-off. Run BEFORE tcon0_init's regs.
+tcon0_clk_init:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =CCU+0x10                   // PLL_VIDEO0 = 297 MHz
+    ldr   w1, =0x81006207
+    str   w1, [x0]
+    dsb   sy
     mov   w0, #1
     bl    delay_ms
+    ldr   x0, =CCU+0x40                   // PLL_MIPI: LDO1/LDO2 enable first
+    ldr   w1, =0x00C00000
+    str   w1, [x0]
+    dsb   sy
+    mov   w0, #1                          // p-boot udelay(100); 1ms is amply longer
+    bl    delay_ms
+    ldr   x0, =CCU+0x40                   // PLL_MIPI: full enable (K=2 N=8 M=11 -> 432 MHz)
+    ldr   w1, =0x80C0071A
+    str   w1, [x0]
+    dsb   sy
+    mov   w0, #1
+    bl    delay_ms
+    ldr   x0, =CCU+0x118                  // TCON0 clock: source = MIPI_PLL, gate on
+    ldr   w1, =0x80000000
+    str   w1, [x0]
+    dsb   sy
+    ldr   x0, =CCU+0x64                   // LCD0/TCON0 bus gate (bit 3)
+    mov   w1, #0x8
+    bl    mmio_setbits
+    ldr   x0, =CCU+0x2C4                  // de-assert TCON0 reset (bit 3) — deassert-only
+    mov   w1, #0x8
+    bl    mmio_setbits
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dsi_bus_clk_on: p-boot dsi_init head — gate the MIPI-DSI bus clock + reset-off, run
+// immediately before the DSI host register table.
+dsi_bus_clk_on:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =CCU+0x60                   // MIPI-DSI bus gate (bit 1)
+    mov   w1, #0x2
+    bl    mmio_setbits
+    ldr   x0, =CCU+0x2C0                  // de-assert MIPI-DSI reset (bit 1)
+    mov   w1, #0x2
+    bl    mmio_setbits
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dphy_clk_on: p-boot dphy_enable's first act — the DSI D-PHY clock (150 MHz, src
+// periph0, M=4). Run immediately before dphy_init.
+dphy_clk_on:
+    ldr   x0, =CCU+0x168
+    ldr   w1, =0x00008203
+    str   w1, [x0]
+    dsb   sy
+    ret
+
+// de_clk_init: p-boot de2_init head — SRAM-C -> DE, PLL_DE, DE special clock + bus
+// gate/reset. Run LAST (after the DSI is in HS video mode), right before fb_init's
+// mixer config — exactly as p-boot does de2_init after sun6i_dsi_start(HSD).
+de_clk_init:
+    stp   x29, x30, [sp, #-16]!
     ldr   x0, =SRAM_CTRL1                 // map SRAM C1 -> Display Engine: clear ONLY bit24
-    mov   w1, #0x01000000                 // (SRAM-C -> DE), as p-boot/NuttX do via RMW —
-    bl    mmio_clrbits                     // zeroing the whole reg could disturb other SRAM.
-    // PLL_DE = 288 MHz, poll lock (bit 28)
-    ldr   x0, =CCU+0x48
+    mov   w1, #0x01000000                 // (RMW, as p-boot/NuttX — zeroing the whole reg
+    bl    mmio_clrbits                     // could disturb other SRAM mappings).
+    ldr   x0, =CCU+0x48                   // PLL_DE, poll lock (bit 28)
     ldr   w1, =0x81001701
     str   w1, [x0]
     dsb   sy
@@ -517,64 +760,20 @@ cdk_lock:
     subs  w2, w2, #1
     b.ne  cdk_lock
 cdk_locked:
-    // DE clock: source = PLL_DE, special-clock gating on. Clear the DIVIDER (bits[3:0])
-    // too: post-U-Boot it may be non-zero, which would divide the DE clock below the
-    // pixel rate and starve TCON0 -> blank/garbage scanout. Cold boot leaves it 0 (/1).
-    ldr   x0, =CCU+0x104
-    ldr   w1, [x0]
-    ldr   w2, =0x8300000F                 // clear gate(31), src-sel(25:24), div(3:0)
+    ldr   x0, =CCU+0x104                  // DE clock: source = PLL_DE, gate on, div=0 (/1).
+    ldr   w1, [x0]                         // Clear divider[3:0] too (a U-Boot-left divider
+    ldr   w2, =0x8300000F                 // would starve TCON0 below the pixel rate).
     bic   w1, w1, w2
-    ldr   w2, =0x81000000                 // gate on, src=PLL_DE, div=0 (/1)
+    ldr   w2, =0x81000000
     orr   w1, w1, w2
     str   w1, [x0]
     dsb   sy
-    ldr   x0, =CCU+0x2C4                  // de-assert DE bus reset (bit 12)
+    ldr   x0, =CCU+0x2C4                  // de-assert DE bus reset (bit 12) — deassert-only
     mov   w1, #0x1000
     bl    mmio_setbits
     ldr   x0, =CCU+0x64                   // open DE bus gate (bit 12)
     mov   w1, #0x1000
     bl    mmio_setbits
-    // PLL_VIDEO0 = 297 MHz
-    ldr   x0, =CCU+0x10
-    ldr   w1, =0x81006207
-    str   w1, [x0]
-    dsb   sy
-    mov   w0, #1
-    bl    delay_ms
-    // PLL_MIPI: enable LDO1/LDO2 first, settle, THEN enable the PLL (order matters)
-    ldr   x0, =CCU+0x40
-    ldr   w1, =0x00C00000
-    str   w1, [x0]
-    dsb   sy
-    mov   w0, #1
-    bl    delay_ms
-    ldr   x0, =CCU+0x40
-    ldr   w1, =0x80C0071A
-    str   w1, [x0]
-    dsb   sy
-    mov   w0, #1
-    bl    delay_ms
-    // TCON0 clock: source = PLL_MIPI, gating on
-    ldr   x0, =CCU+0x118
-    ldr   w1, =0x80000000
-    str   w1, [x0]
-    dsb   sy
-    ldr   x0, =CCU+0x64                   // TCON0 bus gate (bit 3)
-    mov   w1, #0x8
-    bl    mmio_setbits
-    ldr   x0, =CCU+0x2C4                  // de-assert TCON0 reset (bit 3)
-    mov   w1, #0x8
-    bl    mmio_setbits
-    ldr   x0, =CCU+0x60                   // MIPI-DSI bus gate (bit 1)
-    mov   w1, #0x2
-    bl    mmio_setbits
-    ldr   x0, =CCU+0x2C0                  // de-assert MIPI-DSI reset (bit 1)
-    mov   w1, #0x2
-    bl    mmio_setbits
-    ldr   x0, =CCU+0x168                  // DSI D-PHY clock = 150 MHz
-    ldr   w1, =0x00008203
-    str   w1, [x0]
-    dsb   sy
     ldp   x29, x30, [sp], #16
     ret
 

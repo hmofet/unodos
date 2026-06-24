@@ -38,6 +38,12 @@ case "$1" in
   panelpost) DEFS="--defsym PANELDBG=1 --defsym POST=1";     OUT=build/unodos_panelpost.bin ;;
   pboot)    DEFS="--defsym PBOOT=1";                         OUT=build/unodos_pboot.bin ;;
   pbootdbg) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1";     OUT=build/unodos_pbootdbg.bin ;;
+  de2test)  DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1"; OUT=build/unodos_de2test.bin ;;
+  pbootnative) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1"; OUT=build/unodos_pbootnative.bin ;;
+  pbootdsi) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSIONLY=1"; OUT=build/unodos_pbootdsi.bin ;;
+  pbootdsistart) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSISTARTONLY=1"; OUT=build/unodos_pbootdsistart.bin ;;
+  pbootdsihost) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSIHOSTONLY=1"; OUT=build/unodos_pbootdsihost.bin ;;
+  pbootnodphy) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym NODPHY=1"; OUT=build/unodos_pbootnodphy.bin ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."
