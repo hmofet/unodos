@@ -337,6 +337,37 @@ mclr:
     bl    uart_puts
     bl    dump_all
 .endif
+.ifdef NATIVEPANEL
+    // DIFFERENTIAL TEST (build.sh pbootnative = PBOOT+PANELDBG+DE2TEST+NATIVEPANEL): after
+    // p-boot has lit the panel, RE-RUN our full native panel_init (clocks/TCON0/DSI/D-PHY/
+    // st7703/dsi_start) on top — tearing down p-boot's working pipe and rebuilding it with
+    // OUR code, starting from p-boot's warm clock/DRAM state. With DE2TEST also set, fb_init
+    // then reprograms DE2 natively (already proven correct). Outcomes:
+    //   launcher shows -> our panel_init CODE is functionally correct; the native-cold
+    //     failure is ENVIRONMENTAL (U-Boot's clock/DRAM cascade != p-boot's SPL) -> stop
+    //     perturbing panel.inc.s, compare the non-display clock tree U-Boot vs p-boot SPL.
+    //   black -> our panel_init actively breaks a working pipe -> the bug is one of its
+    //     blocks; bisect by adding them incrementally (clocks, then +TCON0, then +DSI/DPHY).
+    // CONFIRMED black 2026-06-22 -> bug IS in panel_init. DSIONLY (build.sh pbootdsi) bisects:
+    // re-init ONLY the DSI link (DSI/D-PHY/panel/dsi_start) on p-boot's clocks+TCON0.
+.ifdef DSISTARTONLY
+    bl    panel_dsistart_only           // finest cut: re-run ONLY dsi_start (HS handoff)
+.else
+.ifdef DSIHOSTONLY
+    bl    panel_dsihost_only            // dsi_host_init + dsi_start (no dphy) — splits last 2
+.else
+.ifdef NODPHY
+    bl    panel_nodphy_only             // whole DSI link MINUS dphy — airtight dphy confirm
+.else
+.ifdef DSIONLY
+    bl    panel_dsi_only
+.else
+    bl    panel_init
+.endif
+.endif
+.endif
+.endif
+.endif
 .endif
 .ifdef PANELDBG
     mov   w0, #2                          // GREEN (post): entering fb_init
@@ -466,6 +497,14 @@ mainloop:
 // renders unchanged into the 480-wide buffer.
 fb_init:
 .ifdef PBOOT
+.ifndef DE2TEST
+    // DIFFERENTIAL PERTURBATION TEST (build.sh de2test = PBOOT+PANELDBG+DE2TEST): when
+    // DE2TEST is set we DELIBERATELY skip this adopt path and fall through to our native
+    // DE2 programming below, running it ON TOP of p-boot's known-good TCON0/DSI/DPHY/clocks
+    // (p-boot has already lit the panel). The [pboot-ref] dump_all above captured p-boot's
+    // working DE2 first. If the panel goes BLACK after our reprogram -> our DE2 mixer config
+    // is the bug. If it shows our RED backdrop / launcher -> our DE2 is CORRECT and the
+    // native wall is upstream (our TCON0/DSI/DPHY/clock bring-up). One cycle bisects it.
     // p-boot already lit the panel and left a live framebuffer scanning out via DE2.
     // ADOPT it: read the overlay address + pitch the DE2 is currently scanning and draw
     // straight into THAT buffer; do NOT reprogram DE2 (our own scanout bring-up is the
@@ -505,9 +544,11 @@ pb_clr:
     ldr   x2, =fb_pitch
     str   w4, [x2]
     ret
+.endif                                    // ifndef DE2TEST (DE2TEST falls through to native DE2)
 .endif
-    // Bring the DE2 block itself out of gate/reset before touching MIXER0. clk_init has
-    // enabled the DE *bus* clock at the CCU, but the Display Engine has its own internal
+    // Bring the DE2 block itself out of gate/reset before touching MIXER0. de_clk_init
+    // (end of panel_init) enabled the DE *bus* clock at the CCU, but the Display Engine
+    // has its own internal
     // clock gates + per-module reset; without these the MIXER0 writes below are dropped
     // and read back 0 on hardware (the Unicorn harness masks this — it maps DE2 as RAM).
     ldr   x0, =DE_SCLK_GATE               // pixel clock gate, mixer0
