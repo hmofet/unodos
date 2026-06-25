@@ -820,6 +820,64 @@ rate-vs-not; (b) diff the two `[ccu-full]` sweeps for any divergent CCU register
 picks the final wedge: clock-rate fault (chase the divider) vs TCON0-video/DSI-sync logic (a behaviour a
 snapshot can't see).
 
+### 2026-06-25 (cont.) — HW RESULTS: rate IDENTICAL + full CCU clean → clock hypothesis DEAD; bug is non-register [HW]
+
+Ran both builds on hardware (native U-Boot card `paneldbg`, then p-boot card `pbootdbg`; serial via the
+`at`-detached capture below). Traces saved: `shots/trace-native-frameperiod.log`,
+`shots/trace-pboot-frameperiod.log`.
+
+**#1 — frame rate is IDENTICAL (the decisive result):**
+- native `FRAME_TICKS_1 = 0x6095E = 395,614` ticks/frame → **60.665 Hz**
+- p-boot `FRAME_TICKS_1 = 0x60603 = 394,755` ticks/frame → **60.797 Hz**
+- Δ = 859 ticks over 60 frames ≈ 14 ticks/frame = **0.2 %** — pure measurement jitter (the two runs enter
+  `measure_frame_period` at different GINT0 phases after the 3×50 ms `tcon_scan`). The TCON0 frame period
+  is the same in the failing-native and the working-p-boot pipe. **The "wrong clock rate despite matching
+  register bits" hypothesis is ELIMINATED.** (The naive 399,960 video-mode prediction was ~1 % off both —
+  expected, since the panel runs TCON0 in 8080/TRI mode, not plain video timing; the native-vs-p-boot
+  equality is the valid test, and they match.)
+
+**#2 — full CCU sweep + every swept block, native vs p-boot pristine (`[pboot-ref]`): display tree IDENTICAL.**
+Comprehensive `reg=val` diff over all dumped ranges (362 shared registers):
+
+| block | diffs | verdict |
+|---|---|---|
+| DSI (full 0x00–0xEC) | 0 | byte-identical |
+| D-PHY (full 0x00–0x60) | 0 | byte-identical |
+| DE-top (gates/reset/mux) | 0 | byte-identical |
+| TCON0 (curated config) | 0 config | the 2 "diffs" are live status — `GINT0` frame-latch + `TRI1` hi-half running block-counter |
+| CCU (full 192 words) | 9 | **all non-display:** CPU PLL (0x00), **disabled** PLL_PERIPH1 (0x50, bit31=0), MMC0/1/2 gates+clocks+resets (0x60/0x64/0x8c/0x90/0x2c0/0x2c4 — U-Boot uses MMC1, p-boot doesn't), one PLL bias reg (0x250). Confirmed from p-boot's own `display.c`: its display init touches only the TCON0 (bit3) + DE (bit12) gates, which native ALSO has set. |
+| DE2 (glb/blender/UI) | 9 | expected — our 480×640 RED-backdrop UI vs p-boot's 720×1440 splash |
+
+**CONCLUSION — the entire clock/register hypothesis class is dead.** Across the lit-p-boot and the
+black-native boots, **every display-path register (DSI, D-PHY, DE-top, TCON0 config, all display CCU
+clocks/gates/dividers/muxes) is byte-identical, and the measured TCON0 frame rate is identical.** Plus #3
+(computed timing) already matched. The perturbation method had narrowed the bug to "our clocks or TCON0";
+we have now proven our clocks and our TCON0 config + rate are indistinguishable from the working p-boot's.
+So the fault is **NOT a register value, NOT a clock rate, NOT a derived-timing slip, NOT an unsampled CCU
+clock.** It is **non-register state** — something a snapshot cannot hold.
+
+**WHAT'S LEFT (next experiments, in priority):**
+1. **Full TCON0 sweep** — TCON0 is the ONE block we only dump *curated* (15 regs; we skip 0x64–0x6c CPU-IF
+   data ports). Sweep the rest (e.g. 0x00–0x60, 0x70–0x158, 0x160–0x230, avoiding the data ports) native
+   vs p-boot. If an UNDUMPED TCON0 register (BASIC1/2/3 @0x4c/0x50/0x54, HV/CTL sub-fields, FILL, gamma…)
+   differs, that's the bug. This is the last register surface never fully compared.
+2. **Dump the AXP803 PMIC rails** (DLDO1/DLDO2/GPIO0LDO voltages, over RSB) native vs p-boot — panel power
+   (DLDO2) at a subtly different voltage would light the backlight yet leave the panel unable to lock the
+   HS video stream, and it's invisible to every MMIO dump we've done.
+3. If both match: the residual is **analog/calibration state** the U-Boot `go` handoff leaves differently
+   than p-boot's cold SPL — most likely **D-PHY HS-lane calibration/bias** (LP signalling works — panel
+   answers DCS — but the HS data lanes are a separate analog path that p-boot's cold bring-up may train
+   differently). At that point the wedge is to capture p-boot's D-PHY ANA* state immediately post-`dsi_start`
+   and compare, or to add an explicit D-PHY calibration step.
+
+**Workflow note (LAN robustness):** the amanuensis→devbuntu SSH link drops frequently mid-command (exit
+255), killing any foreground or `&`-backgrounded capture and even truncating multi-step commands. The
+robust pattern that worked: write a self-contained script on devbuntu, launch it with **`at -f <script> now`**
+(atd fully decouples it from the SSH session), and poll a marker file / the log with short separate SSH
+calls. Used this for both the serial capture (`/tmp/cap*.sh` → `/tmp/pine-*.log`) and the p-boot card build
+(`/tmp/mk-pboot.sh`, which also mv's the udev write-blocker rule aside for the whole build then restores it
+via trap — the per-write `blockdev --setrw` races udev re-arming RO after `sfdisk`).
+
 ---
 
 ## 9. References
