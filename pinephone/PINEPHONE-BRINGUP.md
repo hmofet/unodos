@@ -916,6 +916,54 @@ state — that corrupts the pipe, and it is invisible to any register dump (ever
    (proves we don't BREAK a locked link, not that we LOCK from cold). Probe the D-PHY HS state right after
    `dsi_start` cold vs the warm case.
 
+### 2026-06-25 (cont.) — probes #1+#2 run: clk+TCON0 SAFE, PMIC identical → bug RELOCATED to the cold panel-reset+ST7703-init [HW]
+
+Ran the two behavioural probes on hardware.
+
+**Probe #1 — clk+TCON0 WARM CUT = LIT (`pbootclktcon0`).** Re-ran ONLY our clock setup
+(`tcon0_clk_init` incl. the PLL_MIPI LDO→settle→full re-lock, `dsi_bus_clk_on`, `dphy_clk_on`,
+`de_clk_init`) + `tcon0_init` on p-boot's live, lit DSI/D-PHY/panel pipe → **panel stayed lit, UnoDOS
+launcher rendered.** So our clock + TCON0 bring-up sequence does NOT disrupt a working pipe — it even
+re-locks PLL_MIPI mid-scanout without breaking the DSI/panel. **Our clocks + TCON0 are exonerated** (the
+last block group the warm-perturbation method could cleanly test). Survival is decisive here (the caveat
+was that a *black* would be ambiguous due to live-reprogram self-disturbance; LIT has no such caveat).
+
+**Probe #2 — AXP803 PMIC rails = IDENTICAL.** native vs p-boot (`dump_pmic`, over RSB):
+
+| rail | native | p-boot |
+|---|---|---|
+| 03 chip-id | 0x51 | 0x51 |
+| 00 pwr-src | 0xf7 | 0xf7 |
+| 12 LDO on/off | 0xf9 | 0x19 (only bits 5-7 = non-display DLDO3/4 that U-Boot leaves on; **both have DLDO1 bit3 + DLDO2 bit4**) |
+| 15 DLDO1 V | 0x1a (3.3V) | 0x1a |
+| **16 DLDO2 V** (MIPI/panel) | **0x0b (1.8V)** | **0x0b** |
+| 90 GPIO0 mode | 0x03 | 0x03 |
+| 91 GPIO0LDO V | 0x1a | 0x1a |
+
+The panel/MIPI power rail (DLDO2) is the **same voltage and enabled** in both. **PMIC exonerated.**
+
+**THE BUG IS NOW PINNED (by total elimination) to the COLD panel-reset + ST7703 cold-init sequence.**
+Everything else is proven identical or safe: all display registers (DSI/DPHY/DE-top/DE2/TCON0-full/CCU-full),
+frame rate, computed timing, PMIC rails, and now clocks+TCON0. **Every individual block of ours, warm-tested
+on p-boot's pipe, lights the panel** — INCLUDING clk+TCON0. The ONLY operation the warm method *cannot*
+cleanly test is the **panel GPIO reset + ST7703 init from a cold/reset state**, because resetting p-boot's
+live, scanning panel is inherently destructive (this is why `pbootnative`/`pbootnodphy` go black — a
+reset-perturbation artifact, NOT a clk/TCON0/dphy fault). `pbootst7703` only ever proved our DCS *data +
+transmission* are correct when re-sent to an **already-initialised, running** panel (and `cmp_st7703.py`
+confirms all 20 DCS commands are byte-identical to p-boot) — it never exercised the panel transitioning
+**reset → configured**. That transition is the last untested thing, and cold-native (which must do it) is
+the only boot that fails.
+
+**Since the DCS command DATA matches p-boot byte-for-byte, the suspect is NOT the command bytes but the
+cold-init TIMING / SEQUENCING around them:** (1) the **reset pulse** width + the reset-low→dphy→reset-high
+ordering + the post-reset settle before the first DCS; (2) the **post-SLPOUT 120 ms** and any per-command
+delays vs p-boot's `panel_dcs_seq` timing; (3) whether the cold panel needs the DCS stream in a specific
+LP-escape timing the warm panel tolerates. **NEXT: re-derive p-boot's exact panel reset/delay/order
+(`display_board_init` + `panel_dcs_seq` timing) and diff against our `panel_reset_*` + `st7703_init` delays
+line-by-line** (data already matches — look only at the µs/ms delays and the reset-relative-to-dphy order).
+Then a cold-boot A/B of any delay/order fix. Traces: `shots/trace-native-pmic.log`,
+`shots/trace-pboot-clktcon0.log`.
+
 ---
 
 ## 9. References
