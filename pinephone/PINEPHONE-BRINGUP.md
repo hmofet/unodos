@@ -736,6 +736,35 @@ subtlety); (c) cold-native A/B of candidate clock/TCON0 tweaks. Full bisection-f
 (DE2TEST/NATIVEPANEL/DSIONLY/DSISTARTONLY/DSIHOSTONLY/NODPHY/ST7703ONLY/DPHYONLY) + `panel_*_only` routines in tree.
 ~9 HW cycles; default regression byte-identical throughout.
 
+### NEW STRATEGY (the warm-perturbation method is exhausted for the last mile)
+
+The differential-perturbation method (re-run one of our blocks on p-boot's live pipe) narrowed the bug from the whole
+pipeline to **our clocks or TCON0** — but it *cannot* cleanly isolate those two: reprogramming a live PLL or the timing
+master mid-scanout glitches the pipe regardless of correctness, so any black result is ambiguous. And every clock/TCON0
+register is already byte-identical to p-boot. So the next phase needs a different lever — **measure behaviour, not
+registers**, and **widen the comparison beyond the display block**:
+
+1. **On-chip rate measurement (the key new idea).** The ARM generic timer (`cntpct_el0`) is a fixed 24 MHz reference.
+   Time the **TCON0 frame period** precisely against it — count `cntpct` ticks between successive `GINT0` bit11 (vblank)
+   latches — in BOTH native and PBOOT(=p-boot) mode, and compare. This directly tests the "rate differs despite matching
+   registers" hypothesis with NO disruption. If native's frame period ≠ p-boot's, a clock divider/PLL is at the wrong
+   *rate* (trace PLL_VIDEO0→PLL_MIPI→TCON0 DCLK); if they're identical, the bug is **not** a clock rate → redirect to
+   TCON0's video/CPU-IF logic or a DSI↔TCON0 sync detail. (Can also gate other observable clocks the same way.)
+2. **Full CCU sweep.** `dump_all` compares only a *curated* CCU list. Dump the COMPLETE CCU register space
+   (`0x01C20000`–`0x01C202FF`, every PLL/gate/divider/mux) p-boot vs native and diff — catch a clock register we never
+   compared (a sub-block gate, a source mux, PLL hidden bits) that diverges.
+3. **Recompute the derived timing values.** p-boot *computes* `sun6i_dsi_get_video_start_delay()`, the TCON0
+   `start_delay`, and `BASIC_CTL1` from the panel constants at runtime; we hardcoded them. Re-derive p-boot's formulas for
+   the XBD599 numbers and confirm our literals match exactly — a one-off math slip here would pass the register dump (we'd
+   be comparing our wrong value to our wrong value) yet desync the video.
+4. **Bigger pivot if 1–3 are inconclusive:** rebuild p-boot from source with its `dump_de2/dsi_registers()` +
+   clock-state dumps enabled to capture its EXACT runtime clock tree (the original blocked plan — megous TLS was dead;
+   retry via a mirror, or lift the clock setup from a known-good pmOS/Tow-Boot build). Compare its live PLL/divider
+   readbacks against ours value-by-value.
+
+Priority: **#1 then #2** — both are cheap (extend the existing PANELDBG dump/measure code), non-disruptive, and directly
+attack the clocks-vs-TCON0 fork that perturbation can't.
+
 ---
 
 ## 9. References
