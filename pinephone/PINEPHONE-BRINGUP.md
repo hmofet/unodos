@@ -716,7 +716,25 @@ placement** — the post-SLPOUT 120 ms and any per-command waits, relative to p-
 = 20 DCS + 1 sleep); (3) **`dcs_send` framing/mode** for the LONG packets (SETGIP1 = 64 B, SETGIP2 = 62 B, SETGAMMA);
 (4) any command/order difference. Can't cheaply split reset-vs-st7703 on HW (reset-alone leaves the panel blank).
 Bisection flags now also DSISTARTONLY/DSIHOSTONLY/NODPHY (`panel_{dsistart,dsihost,nodphy}_only`). Default regression
-still byte-identical 4922-B. ~7 HW cycles done; all diagnostic code uncommitted.
+still byte-identical 4922-B.
+
+**HW RESULTS (2026-06-23, cont.) — `st7703` and `dphy` both EXONERATED; bug down to our clocks or TCON0.** Two more
+low-artifact cuts: `pbootst7703` (re-send our DCS on p-boot's lit panel **without** a reset) = **launcher** → our ST7703
+data *and* transmission are correct, and the earlier `pbootnodphy` black was the **panel-reset perturbation artifact**
+(confirmed: `cmp_st7703.py` shows all 20 commands byte-identical to p-boot; framing/order/delays/FIFO-content all match).
+`pbootdphy` (our `dphy_clk_on`+`dphy_init`+`dsi_start` on p-boot's everything, no reset) = **launcher** → our D-PHY analog
+bring-up is correct even with the 1 ms delays. **Five blocks now cleanly proven correct: DE2, dsi_host_init, dsi_start,
+st7703, dphy_init.** Every working test ran on **p-boot's clocks + TCON0**; native runs **ours** — so the bug is in our
+**clock setup or TCON0**, plus possibly panel-reset+cold-init (the one block never cleanly isolated, though our reset+PMIC
+order matches p-boot exactly). All of clocks/TCON0 are register-verified identical to p-boot and *functioning* (PLLs lock,
+TCON0 scans), so the remaining fault is a subtle **rate / sequencing** issue a snapshot can't capture.
+
+**NEXT (next session):** (a) a clk+TCON warm cut — reprogram our clocks + `tcon0_init` on p-boot's DSI/dphy/panel
+(launcher → clocks/TCON0 fine, bug is panel-cold-reset; black → clocks/TCON0, modulo live-reprogram disruption); (b) rate
+analysis of PLL_VIDEO0 → PLL_MIPI → TCON0 DCLK vs p-boot (registers match, so hunt a derived-rate or lock-sequence
+subtlety); (c) cold-native A/B of candidate clock/TCON0 tweaks. Full bisection-flag set
+(DE2TEST/NATIVEPANEL/DSIONLY/DSISTARTONLY/DSIHOSTONLY/NODPHY/ST7703ONLY/DPHYONLY) + `panel_*_only` routines in tree.
+~9 HW cycles; default regression byte-identical throughout.
 
 ---
 
