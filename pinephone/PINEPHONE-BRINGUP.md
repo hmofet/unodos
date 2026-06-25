@@ -765,6 +765,61 @@ registers**, and **widen the comparison beyond the display block**:
 Priority: **#1 then #2** — both are cheap (extend the existing PANELDBG dump/measure code), non-disruptive, and directly
 attack the clocks-vs-TCON0 fork that perturbation can't.
 
+### 2026-06-25 — strategy #3 DONE (computed-timing eliminated); #1+#2 diagnostics IMPLEMENTED + staged [code-only, awaiting HW]
+
+Executed the new strategy. **#3 (re-derive the computed timing values) is COMPLETE and ELIMINATED** —
+done analytically, no hardware needed. p-boot *computes* four timing values from the XBD599 panel
+constants at runtime (`src/display.c`, mirror `C:\Users\arin\pboot_display.c`); we hardcoded them, so a
+one-off math slip would pass every register dump (wrong-vs-wrong) yet desync the video. Re-derived each
+of p-boot's formulas for the panel numbers (720×1440; HTOT=808, VTOT=1485, pixel clock 72000 kHz,
+4 lanes, 24bpp, **PANEL_BURST=0** → the burst/DRQ-edge/line_num path is dead code, never written) and
+confirmed **every one is byte-identical to our literal**:
+
+| value | p-boot formula | computed | our literal |
+|---|---|---|---|
+| DSI `BASIC_CTL1` video_start_delay | `VTOT-(VSS-VDISP)+1 = 1468`, `<<4 \| 0x7` | `0x00005BC7` | `0x00005BC7` ✓ |
+| TCON0 `TRI2` start_delay | `(VTOT-VDISP-11)*HTOT*149/(CLK/1000)/8 = 7106` | `0x1BC2000A` | `0x1BC2000A` ✓ |
+| DSI `TCON_DRQ` | burst=0,(HSS-HDISP)>20 → `((30-20)*24/32)=7 \| EN` | `0x10000007` | `0x10000007` ✓ |
+| DSI `INST_LOOP_NUM0/1` | burst=0 → N0=N1=49 | `0x00310031` | `0x00310031` ✓ |
+| DSI `INST_LOOP_SEL` | `2<<(4·LP11) \| 3<<(4·DLY)` | `0x30000002` | `0x30000002` ✓ |
+
+So the **derived constants are not the bug** — the whole "computed-value math slip" hypothesis class is
+out. (Cross-check arithmetic in the commit; the chained integer divisions on start_delay were the
+error-prone one — 4,093,328 / 72 / 8 = 7106, exact.)
+
+**Bonus — an ABSOLUTE prediction for #1.** The same constants give the *expected* TCON0 frame period:
+HTOT·VTOT / pixel_clock = 808·1485 / 72 MHz = **60.006 Hz** → at the 24 MHz cntpct reference,
+**≈399,960 ticks/frame (0x61A58)**, ≈23,997,600 over 60 frames. So #1 now has a target, not just a
+native-vs-pboot diff: native reads ≈400k ⇒ DCLK rate is **correct** ⇒ redirect to TCON0 video/CPU-IF
+logic or DSI↔TCON0 sync (NOT a rate bug); native reads materially different ⇒ a divider/PLL is at the
+wrong rate (chase PLL_VIDEO0→PLL_MIPI→TCON0 DCLK ÷6).
+
+**#1 + #2 IMPLEMENTED (PANELDBG, harness-safe):**
+- **#1 `measure_frame_period`** (`panel.inc.s`): `wait_frame_edge` spins on TCON0 `GINT0` bit11
+  (frame-done latch), clears it, bounded ~50 ms by cntpct so a stalled TCON0 can't hang it; the driver
+  times 60 frames against `cntpct_el0` and prints `FRAME_TICKS_60` + `FRAME_TICKS_1` (`udiv`/60), or
+  `FRAME_PERIOD=STALL`. Wired into the mainloop PANELDBG block (`kernel.s`) right after the GINT0 scan.
+  Runs in BOTH native (`paneldbg` = our TCON0) and PBOOT (`pbootdbg` = p-boot's TCON0) — compare the two,
+  and both against the 399,960 prediction.
+- **#2 `dump_ccu_full`** (`panel.inc.s`): blind-sweeps the COMPLETE CCU `0x01C20000–0x01C202FF` (192
+  words, no read side effects) instead of the curated `dump_tbl` subset; appended to `dump_all` so it
+  appears in both the `pbootdbg` pboot-ref dump (p-boot's CCU) and the `paneldbg` mainloop dump (ours).
+  Offline-diff the two to catch a clock register we never compared.
+
+**Verified:** all builds assemble clean (`paneldbg` 31744 B, `pbootdbg` 31752 B, default 26088 B); the
+**default regression renders the byte-identical 4922-B launcher** (`cmp` vs `shots/m1_boot.png`) and
+`paneldbg` runs end-to-end in the Unicorn harness with no hang/fault (TCON0 reads 0 in the sink → the
+new measure routine hits its bounded timeout once and prints STALL, exactly as designed; UART TX is a
+harness no-op so the trace is hardware-only). Diagnostics are PANELDBG-only and don't touch the render
+path.
+
+**NEXT (needs user + phone + serial rig):** flash `unodos_paneldbg.bin` (native U-Boot card) AND
+`unodos_pbootdbg.bin` (p-boot card) — or XMODEM-into-RAM both via `iload.py` — and read the trace:
+(a) the `[frameperiod]` `FRAME_TICKS_1` in each (native vs p-boot vs the 399,960 prediction) → tells us
+rate-vs-not; (b) diff the two `[ccu-full]` sweeps for any divergent CCU register. That binary outcome
+picks the final wedge: clock-rate fault (chase the divider) vs TCON0-video/DSI-sync logic (a behaviour a
+snapshot can't see).
+
 ---
 
 ## 9. References

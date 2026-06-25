@@ -302,6 +302,11 @@ s_dsi0:  .asciz "DSI_BASIC_CTL0"
 s_de2:   .asciz "DE2_GLB_CTL"
 s_ovl:   .asciz "DE2_OVL_TOPADD"
 s_done:  .asciz "[unodos] mainloop\r\n"
+s_fphdr:   .asciz "\r\n[frameperiod] cntpct ticks over 60 TCON0 frames:\r\n"
+s_fptot:   .asciz "FRAME_TICKS_60"
+s_fpfrm:   .asciz "FRAME_TICKS_1"
+s_fpstall: .asciz "FRAME_PERIOD=STALL (GINT0 never latched)\r\n"
+s_ccufull: .asciz "\r\n[ccu-full] complete CCU sweep 0x01C20000-0x01C202FF:\r\n"
 s_pbref: .asciz "\r\n[pboot-ref] live DE2/TCON0/DSI/DPHY/CCU as left by p-boot:\r\n"
 s_pmic:  .asciz "[pmic] ok\r\n"
 s_dsih:  .asciz "[dsi_host] ok\r\n"
@@ -1175,6 +1180,93 @@ dump_all:
     bl    dump_range
     ldr   x0, =dump_tbl                       // TCON0 (CPU-IF-data-port-safe) + CCU, curated
     bl    dump_regs
+    bl    dump_ccu_full                        // NEW STRATEGY #2: the COMPLETE CCU space
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// frame-period measurement (PINEPHONE-BRINGUP §8 NEW STRATEGY #1) — the decisive
+// rate test. cntpct_el0 is a fixed 24 MHz reference independent of the display
+// clock tree. Count cntpct ticks across N TCON0 frames (GINT0 bit11 = frame-done /
+// vblank latch) to get the ACTUAL frame period. Run in native (our TCON0) AND in
+// PBOOT (p-boot's TCON0); if the periods differ, a clock divider/PLL is at the wrong
+// RATE despite matching register bits (chase PLL_VIDEO0->PLL_MIPI->TCON0 DCLK). If
+// identical, the bug is NOT a clock rate -> redirect to TCON0 video/CPU-IF logic or
+// a DSI<->TCON0 sync detail. Non-disruptive: pure reads of GINT0 + the timer.
+// ----------------------------------------------------------------------------
+// wait_frame_edge: spin until TCON0 GINT0 bit11 latches, then clear it. Bounded
+// ~50 ms by cntpct so a stalled TCON0 can't hang the diagnostic. Returns w0=1 (edge
+// seen) / w0=0 (timeout). No calls (leaf).
+wait_frame_edge:
+    mrs   x2, cntpct_el0
+    ldr   x3, =1200000                        // 50 ms @ 24 MHz (>> one 60 Hz frame)
+    add   x2, x2, x3                           // deadline
+    ldr   x1, =TCON0+0x04
+wfe_spin:
+    ldr   w0, [x1]
+    tst   w0, #(1<<11)
+    b.ne  wfe_edge
+    mrs   x4, cntpct_el0
+    cmp   x4, x2
+    b.lo  wfe_spin
+    mov   w0, #0                              // timeout: TCON0 not latching frames
+    ret
+wfe_edge:
+    str   wzr, [x1]                           // clear latch so the next set is a fresh edge
+    dsb   sy
+    mov   w0, #1
+    ret
+
+.equ MFP_FRAMES, 60
+// measure_frame_period: time MFP_FRAMES TCON0 frames against cntpct; print total
+// ticks and ticks/frame (the offline native-vs-pboot comparison). "STALL" if GINT0
+// never latches (would mean TCON0 isn't scanning — but we've confirmed it does).
+measure_frame_period:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    ldr   x0, =s_fphdr
+    bl    uart_puts
+    bl    wait_frame_edge                      // align to a frame boundary first
+    cbz   w0, mfp_stall
+    mrs   x19, cntpct_el0                      // start tick
+    mov   w20, #MFP_FRAMES
+mfp_l:
+    bl    wait_frame_edge
+    cbz   w0, mfp_stall
+    subs  w20, w20, #1
+    b.ne  mfp_l
+    mrs   x0, cntpct_el0
+    sub   x19, x0, x19                         // total ticks across MFP_FRAMES frames
+    ldr   x0, =s_fptot
+    mov   w1, w19
+    bl    print_reg
+    mov   x0, x19
+    mov   x1, #MFP_FRAMES
+    udiv  x20, x0, x1                          // ticks per single frame
+    ldr   x0, =s_fpfrm
+    mov   w1, w20
+    bl    print_reg
+    b     mfp_done
+mfp_stall:
+    ldr   x0, =s_fpstall
+    bl    uart_puts
+mfp_done:
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dump_ccu_full (NEW STRATEGY #2): sweep the COMPLETE CCU register space
+// 0x01C20000-0x01C202FF (every PLL / gate / divider / mux), not just the curated
+// dump_tbl subset. Diff p-boot (pbootdbg pboot-ref dump) vs native (paneldbg mainloop
+// dump) to catch a clock register we never compared. CCU regs have no read side
+// effects, so a blind sweep is safe.
+dump_ccu_full:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =s_ccufull
+    bl    uart_puts
+    ldr   x0, =0x01C20000
+    mov   w1, #192                            // 0x300 bytes / 4 words
+    bl    dump_range
     ldp   x29, x30, [sp], #16
     ret
 
