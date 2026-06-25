@@ -878,6 +878,44 @@ calls. Used this for both the serial capture (`/tmp/cap*.sh` → `/tmp/pine-*.lo
 (`/tmp/mk-pboot.sh`, which also mv's the udev write-blocker rule aside for the whole build then restores it
 via trap — the per-write `blockdev --setrw` races udev re-arming RO after `sfdisk`).
 
+### 2026-06-25 (cont.) — full TCON0 sweep = IDENTICAL; EVERY display register now matches → bug is non-register/analog/sequencing [HW]
+
+Added `dump_tcon0_full` (sweeps TCON0 0x00–0x60 + 0x70–0x230, skipping the CPU-IF data ports
+0x64/0x6c) and ran it on both cards. Traces: `shots/trace-native-tcon0full.log`,
+`shots/trace-pboot-tcon0full.log`. **Full TCON0 diff (138 regs each): 2 differences, BOTH live status**
+— `GINT0` (frame-done latch, sampled mid-flight) and `TRI1` hi-half (the running block counter). **Every
+TCON0 config register is byte-identical.**
+
+**So every register in the entire display pipeline is now proven identical native(black) vs p-boot(lit):**
+DSI (full 0x00–0xEC) ✓, D-PHY (full) ✓, DE-top ✓, DE2 ✓ (modulo our UI content), **TCON0 (FULL 138-reg
+sweep) ✓**, CCU (full 192) ✓ (only non-display CPU/MMC/bias diffs), frame rate ✓ (0.2 %), computed timing
+✓. There is **no register surface left to compare** — the snapshot hypothesis class is fully exhausted.
+
+Also re-audited p-boot's `dphy_enable` for a non-register step we might omit: it has **no lock/status poll**
+(pure register writes + `udelay(5)` then `udelay(1)×4` between the ANA2/ANA3/ANA1 analog-LDO enables). Our
+`dphy_init` matches its values + order; our only delta is `delay_ms(1)` where p-boot uses `udelay(1–5)` —
+i.e. ~1000× *longer* settling, which is safe (not too short). So D-PHY is faithful, poll included (there is
+none).
+
+**CONCLUSION (hardened): the fault is NOT in any MMIO register, clock rate, or bring-up value.** Recall the
+perturbation result that `pbootnative` (re-running our FULL `panel_init` on p-boot's warm, lit pipe) goes
+**black**, while every *individual* block of ours re-run on p-boot's pipe stays lit. So the bug is something
+our **full clocks+TCON0 bring-up does as a sequence** — a transient or ordering effect, or a non-MMIO analog
+state — that corrupts the pipe, and it is invisible to any register dump (every end-state register matches).
+
+**WHAT'S LEFT (register dumping is done — these are behavioural/analog probes):**
+1. **The clk+TCON0 warm cut** (the one perturbation never cleanly done): re-run ONLY our `*_clk_init` +
+   `tcon0_init` on p-boot's otherwise-live DSI/D-PHY/panel. Black → our clock/TCON0 *bring-up sequence*
+   disrupts a working pipe (transient/ordering — chase what our PLL_MIPI re-program or TCON0 enable does to
+   the already-running DSI/DE); survives → clocks/TCON0 fine, isolate the panel-cold-reset path. (Caveat:
+   live-reprogramming the timing master self-disturbs — a black is ambiguous, but survival is decisive.)
+2. **AXP803 PMIC rail dump** (DLDO1/DLDO2=panel power/GPIO0LDO, over RSB) native vs p-boot — the one
+   subsystem with NO register dump yet; a panel-rail voltage delta lights the backlight but can stop the
+   panel locking the HS stream, invisible to all MMIO.
+3. **D-PHY HS-lane analog from cold**: every "works" test re-ran our D-PHY on p-boot's *already-trained* PHY
+   (proves we don't BREAK a locked link, not that we LOCK from cold). Probe the D-PHY HS state right after
+   `dsi_start` cold vs the warm case.
+
 ---
 
 ## 9. References
