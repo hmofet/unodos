@@ -350,8 +350,11 @@ mclr:
     //     blocks; bisect by adding them incrementally (clocks, then +TCON0, then +DSI/DPHY).
     // CONFIRMED black 2026-06-22 -> bug IS in panel_init. DSIONLY (build.sh pbootdsi) bisects:
     // re-init ONLY the DSI link (DSI/D-PHY/panel/dsi_start) on p-boot's clocks+TCON0.
-.ifdef DSISTARTONLY
-    bl    panel_dsistart_only           // finest cut: re-run ONLY dsi_start (HS handoff)
+.ifdef CLKTCON0ONLY
+    bl    panel_clktcon0_only           // re-run ONLY our clocks + tcon0_init on p-boot's live
+.else                                   //   DSI/D-PHY/panel — the one perturbation never cleanly
+.ifdef DSISTARTONLY                     //   done. survives=clocks/TCON0 seq safe; black=our PLL/
+    bl    panel_dsistart_only           //   TCON0 reprogram transient disrupts the pipe.
 .else
 .ifdef DSIHOSTONLY
     bl    panel_dsihost_only            // dsi_host_init + dsi_start (no dphy) — splits last 2
@@ -369,6 +372,7 @@ mclr:
     bl    panel_dsi_only
 .else
     bl    panel_init
+.endif
 .endif
 .endif
 .endif

@@ -46,6 +46,7 @@ case "$1" in
   pbootnodphy) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym NODPHY=1"; OUT=build/unodos_pbootnodphy.bin ;;
   pbootst7703) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym ST7703ONLY=1"; OUT=build/unodos_pbootst7703.bin ;;
   pbootdphy) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DPHYONLY=1"; OUT=build/unodos_pbootdphy.bin ;;
+  pbootclktcon0) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym CLKTCON0ONLY=1"; OUT=build/unodos_pbootclktcon0.bin ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."
