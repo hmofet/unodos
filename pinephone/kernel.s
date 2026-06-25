@@ -466,6 +466,10 @@ tcon_scan:
     bl    delay_ms
     subs  w19, w19, #1
     b.ne  tcon_scan
+    // NEW STRATEGY #1 (PINEPHONE-BRINGUP §8): measure the ACTUAL TCON0 frame period
+    // against the fixed 24 MHz cntpct. Compare native (this build) vs p-boot (pbootdbg):
+    // a different period = a clock at the wrong RATE despite matching register bits.
+    bl    measure_frame_period
     mov   w0, #6                          // CYAN held (visual backup)
     bl    led_rgb
 .endif
