@@ -964,6 +964,43 @@ line-by-line** (data already matches — look only at the µs/ms delays and the 
 Then a cold-boot A/B of any delay/order fix. Traces: `shots/trace-native-pmic.log`,
 `shots/trace-pboot-clktcon0.log`.
 
+### 2026-06-25 (cont.) — cold panel-init reset/timing/transmission re-derived from p-boot: ALL faithful [analysis]
+
+Re-derived p-boot's exact cold panel bring-up (`display_init`/`display_board_init`/`panel_init`/
+`mipi_dsi_dcs_write` in `pboot_display.c`) and diffed against ours line-by-line — NOT the DCS data
+(`cmp_st7703.py` already proved that identical) but the **reset sequence, delays, order, and FIFO
+transmission**:
+
+- **Reset order/timing.** p-boot: reset-LOW + PMIC + 15 ms (in `display_board_init`) → … → `dphy_enable`
+  → reset-HIGH → 15 ms → DCS → HSC → 1 ms → HSD. Ours: …dsi_host → reset-LOW + PMIC + 15 ms → dphy →
+  reset-HIGH → 15 ms → DCS → HSC → 1 ms → HSD. The **load-bearing order matches**: power applied with reset
+  held low ≥15 ms (ST7703 needs ≥10 ms post-power), reset deasserted AFTER dphy, 15 ms settle before DCS.
+  (p-boot asserts reset a bit earlier/holds it longer — through tcon0+dsi setup — but the panel is unpowered
+  until PMIC in both, so the power-on-reset window is equivalent; a prior session already reordered to
+  p-boot's exact order with no change.)
+- **DCS delays.** p-boot: all 18 config commands delay-0, then SLPOUT, **120 ms**, DISPON. Ours: identical,
+  + a harmless extra 20 ms after DISPON. Order of all 20 commands identical.
+- **Long-packet transmission.** p-boot `mipi_dsi_dcs_write` (len>2): header→`CMD_TX_REG(0)`, data+CRC→
+  `CMD_TX_REG(1+i)`, `CMD_CTL = total_bytes-1`, `DSI_START_LPTX`, wait-for-completion. Our `dcs_send` pushes
+  the contiguous precomputed `[header(4)][payload][CRC(2)]` as words from `TX_REG(0)` (== header in word0,
+  data in word1+) with `CMD_CTL = pkt_len-1` — **identical FIFO layout + length**. The 64 B/62 B SETGIP
+  packets (18/17 FIFO words) fit the TX FIFO; no truncation.
+
+**So the cold panel-init path is faithful to p-boot in data, order, delays, AND transmission — yet cold boot
+is black.** Static/source analysis is now FULLY exhausted across the entire pipeline. The bug survives every
+comparison we can make. The remaining unknown is the **panel's actual internal response** to our cold init
+vs p-boot's — which a register dump of the *SoC* side cannot see.
+
+**NEXT (requires new HW instrumentation, not more analysis):** probe the PANEL itself during/after cold init
+via DCS **reads** — extend `dcs_read_dbg` to read back ST7703 config (e.g. read-back of the gate-driver /
+SETGIP / address-mode / pixel-format registers the panel exposes, and the RDDPM/RDDSDR status) AFTER
+`st7703_init` on a COLD boot, and compare to the same reads on p-boot's working panel. If a panel register
+reads different cold vs p-boot-warm, that command didn't take effect on the cold panel despite identical
+SoC-side transmission (points at a panel-state/timing dependency); if all panel reads match yet it's still
+black, the fault is in the HS **video** path the panel receives after DISPON (DE2→TCON0→DSI HS pixel
+delivery) under cold conditions, not the DCS config. Either way the probe is on the panel side, where every
+SoC-side avenue has now been exhausted.
+
 ---
 
 ## 9. References
