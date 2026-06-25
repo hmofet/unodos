@@ -359,10 +359,18 @@ mclr:
 .ifdef NODPHY
     bl    panel_nodphy_only             // whole DSI link MINUS dphy — airtight dphy confirm
 .else
+.ifdef ST7703ONLY
+    bl    panel_st7703_only             // re-DCS WITHOUT reset — splits reset-artifact vs st7703
+.else
+.ifdef DPHYONLY
+    bl    panel_dphy_only               // last untested block: our dphy on p-boot's everything
+.else
 .ifdef DSIONLY
     bl    panel_dsi_only
 .else
     bl    panel_init
+.endif
+.endif
 .endif
 .endif
 .endif

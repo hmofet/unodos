@@ -665,6 +665,80 @@ panel_nodphy_only:
     ret
 
 // ============================================================================
+// panel_st7703_only — splits RESET-artifact vs st7703-transmission (build.sh pbootst7703).
+// Re-sends our st7703 DCS init on top of p-boot's ALREADY-LIT panel WITHOUT a panel reset
+// (the only artifact-prone step). Our st7703 DATA is proven byte-identical to p-boot
+// (cmp_st7703.py: all 20 match), so this isolates the TRANSMISSION/re-DCS act. Outcome:
+//   launcher -> st7703 is fine; the pbootnodphy black was the panel-RESET perturbation
+//               artifact -> the real cold bug is reset-timing or back in clocks/TCON0/dphy.
+//   black    -> our dcs_send transmission corrupts the panel even with correct data.
+panel_st7703_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #2                          // GREEN: DSI host
+    bl    led_stage
+    bl    dsi_bus_clk_on
+    bl    dsi_host_init
+    mov   w0, #3                          // YELLOW: ST7703 re-DCS (NO panel reset)
+    bl    led_stage
+    bl    st7703_init
+.ifdef PANELDBG
+    ldr   x0, =s_st70
+    bl    uart_puts
+    bl    dcs_read_dbg
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// panel_dphy_only — the LAST untested block (build.sh pbootdphy). Re-runs ONLY our
+// dphy_clk_on + dphy_init + dsi_start on top of p-boot's clocks/TCON0/DSI-host/panel —
+// no panel reset, no dsi_host rewrite. Every prior working test used p-boot's D-PHY; this
+// is the first to drive OUR D-PHY analog bring-up. launcher -> our dphy is fine => the cold
+// bug is in our clocks or TCON0 (a rate issue registers can't show); black -> our dphy_init
+// is the bug (modulo a re-power glitch from reconfiguring an already-powered D-PHY: our
+// dphy_tbl writes ANA2=0x2, briefly clearing CK_CPU/P2S_CPU, then rebuilds).
+panel_dphy_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #2                          // GREEN: D-PHY (re-driven by us)
+    bl    led_stage
+    bl    dphy_clk_on
+    bl    dphy_init
+.ifdef PANELDBG
+    ldr   x0, =s_dphy
+    bl    uart_puts
+.endif
+    mov   w0, #5                          // MAGENTA: DSI HS start
+    bl    led_stage
+    bl    dsi_start
+.ifdef PANELDBG
+    ldr   x0, =s_dsi0
+    ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
 // CCU clocks / PLLs (base 0x01C20000) — DISTRIBUTED in p-boot order
 // ============================================================================
 // 2026-06-22: after EXHAUSTIVE register-snapshot parity with working p-boot (every
