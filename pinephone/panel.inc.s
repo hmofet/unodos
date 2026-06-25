@@ -308,6 +308,14 @@ s_fpfrm:   .asciz "FRAME_TICKS_1"
 s_fpstall: .asciz "FRAME_PERIOD=STALL (GINT0 never latched)\r\n"
 s_ccufull: .asciz "\r\n[ccu-full] complete CCU sweep 0x01C20000-0x01C202FF:\r\n"
 s_tcfull:  .asciz "\r\n[tcon0-full] TCON0 sweep 0x00-0x60,0x70-0x230 (CPU-IF data ports skipped):\r\n"
+s_pmicdmp: .asciz "\r\n[pmic] AXP803 rail readback over RSB:\r\n"
+s_pm03:    .asciz "PMIC_03_CHIPID"
+s_pm00:    .asciz "PMIC_00_PWRSRC"
+s_pm12:    .asciz "PMIC_12_LDO_ONOFF"
+s_pm15:    .asciz "PMIC_15_DLDO1_V"
+s_pm16:    .asciz "PMIC_16_DLDO2_V"
+s_pm90:    .asciz "PMIC_90_GPIO0_MODE"
+s_pm91:    .asciz "PMIC_91_GPIO0LDO_V"
 s_pbref: .asciz "\r\n[pboot-ref] live DE2/TCON0/DSI/DPHY/CCU as left by p-boot:\r\n"
 s_pmic:  .asciz "[pmic] ok\r\n"
 s_dsih:  .asciz "[dsi_host] ok\r\n"
@@ -738,6 +746,41 @@ panel_dphy_only:
 .ifdef PANELDBG
     ldr   x0, =s_dsi0
     ldr   x1, =DSI+0x10
+    ldr   w1, [x1]
+    bl    print_reg
+.endif
+    ldp   x29, x30, [sp], #16
+    ret
+
+// panel_clktcon0_only — the clk+TCON0 WARM CUT (build.sh pbootclktcon0). The one
+// perturbation never cleanly done: re-run ONLY our clock setup (tcon0_clk_init incl.
+// PLL_VIDEO0/PLL_MIPI, dsi_bus_clk_on, dphy_clk_on, de_clk_init) + tcon0_init on top of
+// p-boot's live, lit DSI/D-PHY/panel pipe; fb_init (DE2TEST) then drives our DE2. Every
+// "works" perturbation used p-boot's clocks+TCON0; this is the first to drive OURS. With
+// rate + ALL display registers (incl. the full TCON0 sweep) proven identical, this tests
+// the last hypothesis: that our clocks+TCON0 *bring-up sequence* (re-locking PLL_MIPI, the
+// TCON0 enable) transiently disrupts the running pipe. SURVIVES (launcher) => our clk+TCON0
+// sequence is safe -> the cold bug is the panel-reset / DSI-link interaction, not clk/TCON0.
+// BLACK => our clk/TCON0 reprogram breaks a working pipe (the transient). Caveat: live-
+// reprogramming PLL_MIPI + the timing master self-disturbs scanout, so black is somewhat
+// ambiguous; SURVIVAL is the decisive outcome here.
+panel_clktcon0_only:
+    stp   x29, x30, [sp, #-16]!
+.ifdef PANELDBG
+    bl    led_init
+    ldr   x0, =s_panel
+    bl    uart_puts
+.endif
+    mov   w0, #4                          // BLUE: clocks + TCON0 (re-driven by us)
+    bl    led_stage
+    bl    tcon0_clk_init                  // PLL_VIDEO0, PLL_MIPI, TCON0 source clock
+    bl    tcon0_init                      // TCON0 timing registers
+    bl    dsi_bus_clk_on                  // DSI bus gate/reset (idempotent on p-boot's)
+    bl    dphy_clk_on                     // DSI D-PHY clock
+    bl    de_clk_init                     // PLL_DE + DE clock/gate/reset (for our DE2)
+.ifdef PANELDBG
+    ldr   x0, =s_tcon
+    ldr   x1, =TCON0+0x00
     ldr   w1, [x1]
     bl    print_reg
 .endif
@@ -1183,6 +1226,57 @@ dump_all:
     bl    dump_regs
     bl    dump_ccu_full                        // NEW STRATEGY #2: the COMPLETE CCU space
     bl    dump_tcon0_full                       // the one block never FULLY swept (curated only)
+    bl    dump_pmic                             // AXP803 rails — the one subsystem with no MMIO dump
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dump_pmic: read back the AXP803 PMIC rails over RSB and print them — the ONE display
+// subsystem we have never dumped (it's behind the RSB serial bus, not MMIO). The backlight
+// is lit, so the digital rails are roughly OK, but the panel's analog supply (DLDO2 = MIPI
+// power) being at a subtly wrong VOLTAGE would let the backlight glow yet stop the panel
+// locking the HS video stream — invisible to every register sweep we've done. Diff native
+// vs p-boot (pboot-ref). rsb_init is idempotent and read-only-safe on p-boot's live PMIC
+// (it re-establishes bus comms; the rail OUTPUTS are unchanged).
+dump_pmic:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =s_pmicdmp
+    bl    uart_puts
+    bl    rsb_init                              // ensure the RSB bus is up (safe if already)
+    mov   w0, #0x03                             // chip-ID (AXP803 = 0x41) — confirms bus works
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm03
+    bl    print_reg
+    mov   w0, #0x00                             // power-source status
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm00
+    bl    print_reg
+    mov   w0, #0x12                             // LDO on/off control (DLDO1=bit3, DLDO2=bit4)
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm12
+    bl    print_reg
+    mov   w0, #0x15                             // DLDO1 voltage
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm15
+    bl    print_reg
+    mov   w0, #0x16                             // DLDO2 voltage (MIPI/panel power) — KEY
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm16
+    bl    print_reg
+    mov   w0, #0x90                             // GPIO0 mode (LDO)
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm90
+    bl    print_reg
+    mov   w0, #0x91                             // GPIO0LDO voltage
+    bl    rsb_rd8
+    mov   w1, w0
+    ldr   x0, =s_pm91
+    bl    print_reg
     ldp   x29, x30, [sp], #16
     ret
 
