@@ -307,6 +307,7 @@ s_fptot:   .asciz "FRAME_TICKS_60"
 s_fpfrm:   .asciz "FRAME_TICKS_1"
 s_fpstall: .asciz "FRAME_PERIOD=STALL (GINT0 never latched)\r\n"
 s_ccufull: .asciz "\r\n[ccu-full] complete CCU sweep 0x01C20000-0x01C202FF:\r\n"
+s_tcfull:  .asciz "\r\n[tcon0-full] TCON0 sweep 0x00-0x60,0x70-0x230 (CPU-IF data ports skipped):\r\n"
 s_pbref: .asciz "\r\n[pboot-ref] live DE2/TCON0/DSI/DPHY/CCU as left by p-boot:\r\n"
 s_pmic:  .asciz "[pmic] ok\r\n"
 s_dsih:  .asciz "[dsi_host] ok\r\n"
@@ -1181,6 +1182,26 @@ dump_all:
     ldr   x0, =dump_tbl                       // TCON0 (CPU-IF-data-port-safe) + CCU, curated
     bl    dump_regs
     bl    dump_ccu_full                        // NEW STRATEGY #2: the COMPLETE CCU space
+    bl    dump_tcon0_full                       // the one block never FULLY swept (curated only)
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dump_tcon0_full: TCON0 is the LAST register surface only ever dumped curated (15 regs).
+// With rate + all display CCU clocks + DSI/DPHY/DE-top all proven byte-identical native-vs-
+// p-boot, an UNDUMPED TCON0 register (BASIC1/2/3 @0x4c/0x50/0x54, HV-IF, CTL sub-fields,
+// FILL, TCON1 block, gamma-enable…) that p-boot sets and we don't is the leading suspect.
+// Sweep 0x00-0x60 then 0x70-0x230, SKIPPING the CPU-IF data ports 0x64/0x68/0x6c (reading
+// 0x68/0x6c triggers a CPU-IF read transaction) — the only read-side-effect regs in TCON0.
+dump_tcon0_full:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =s_tcfull
+    bl    uart_puts
+    ldr   x0, =0x01C0C000                     // 0x00..0x60 (stops before the 0x64 data port)
+    mov   w1, #25
+    bl    dump_range
+    ldr   x0, =0x01C0C070                     // 0x70..0x230 (data ports 0x64-0x6c already past)
+    mov   w1, #113
+    bl    dump_range
     ldp   x29, x30, [sp], #16
     ret
 
