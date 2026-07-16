@@ -21,12 +21,15 @@ plays exactly the role INT 10h/13h/15h play for the x86 reference kernel.
 ## Status
 
 **`./build.sh` boots straight into the unoui shell** — a themed widget desktop
-(splash screen → window manager + retained-mode toolkit + 8 live-switchable
-themes + a taskbar, desktop icons, a scrollable Start menu and a system-tray
-clock). It carries the whole app roster: the native widget apps, the migrated
-creative tools + games, Runner3D, the Network self-test, and the web browser —
-plus the net/TLS/3D drivers. The default image is ~624 KB (most of it BearSSL +
-uno3d); the pure shell + toolkit is a small fraction of that. **Validated on a
+that defaults to **Aurora**, a modern flat/rounded look (soft shadows, an accent
+title underline, a frosted taskbar), with 9 other live-switchable themes
+(Aurora Light/Dark + the 8 retro looks) — a splash screen, window manager,
+retained-mode toolkit, taskbar, desktop icons, a scrollable Start menu and a
+system-tray clock. It carries the whole app roster: the native widget apps, the
+migrated creative tools + games, Runner3D, the Network self-test, and the web
+browser (which now loads pages over HTTP) — plus the net/TLS/3D drivers. The
+default image is ~657 KB (most of it BearSSL + uno3d); the pure shell + toolkit
+is a small fraction of that. **Validated on a
 Lenovo ThinkPad X1 Carbon Gen 8** (USB-stick ESP boot): boots, TrackPoint +
 keyboard (and a smoothed firmware-pointer path) drive it, live theme and
 resolution switching. The metal pass hardened three emulator-invisible firmware
@@ -56,10 +59,11 @@ and all the drivers; only the UI layer differs.
   PC-speaker Sound Manager), `pc64_fs.c` (unified RAM + FAT namespace),
   `pc64_pci.c` (PCI config scan).
 - **Default shell (unoui)** — `pc64_uui.c` (desktop/taskbar/Start menu/tray) +
-  the cross-platform `../unoui/` toolkit + 8 themes, with `pc64_uui_apps.c`
-  (the `mac_compat` bridge for the creative tools + Network), `pc64_games.c`
-  (native Dostris/Pacman/Outlast + Runner3D canvases), `pc64_browser.c` +
-  `pc64_fs.c` + `js.c` (the web browser, file system and JS engine),
+  the cross-platform `../unoui/` toolkit + 10 themes (Aurora Light/Dark +
+  `theme_aurora.c`, plus 8 retro looks), with `pc64_uui_apps.c` (the
+  `mac_compat` bridge for the creative tools + Network), `pc64_games.c` (native
+  Dostris/Pacman/Outlast + Runner3D canvases), `pc64_browser.c` + `pc64_fs.c` +
+  `js.c` + `pc64_http.c` (the web browser, file system, JS engine and HTTP),
   `pc64_icons.c` (procedural icons) and `../unosound/unosound_seq.c` (audio).
   See "unoui shell" and "Web browser" below.
 - **Legacy shell** — `unodos.c` (WM + icon desktop + module dispatch) +
@@ -117,8 +121,9 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   Each window carries a **title-bar close box**, and dragging a window moves a
   light outline (no full-window redraw storm).
 - **The app roster**: six native widget apps — a **Control Panel** (live theme
-  dropdown → re-skins the desktop across all 8 themes; live resolution
-  dropdown; **date/time spinners** that set the UEFI clock; checkboxes/slider),
+  dropdown → re-skins the desktop across all 10 themes; a **Dark mode** toggle
+  that swaps Aurora Light↔Dark; live resolution dropdown; **date/time spinners**
+  that set the UEFI clock; checkboxes/slider),
   an **Editor** (File/Edit menubar, multi-line editing, Save/Open/New wired to
   the RAM-disk File Manager), a **Files** list, a **System** panel, a **Clock**
   and a **Canvas** demo — plus the migrated **creative tools** (Paint, Music,
@@ -128,6 +133,17 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
 - **Startup**: a **splash screen** with a loading bar paints while the shell and
   drivers come up, then a short **startup chime** (UnoSound) plays as the
   desktop appears.
+- **Aurora — the modern default theme** (`themes/theme_aurora.c`, light + dark):
+  a unique design language drawing from Windows 11 (rounded, mica-ish), macOS
+  (clean surfaces, left close, translucency) and Material (tonal surfaces, one
+  strong accent). It's a **graphics theme** — a custom painter vtable built on
+  new `fb` primitives (alpha blend, vertical gradient, anti-aliased rounded
+  rects — all additive and clip-safe, so the retro themes are byte-identical):
+  soft drop shadows, AA-rounded windows, flat widgets, an **accent underline
+  beneath the active title bar** (the signature), a subtle aurora-gradient
+  desktop, and a **frosted rounded taskbar** with an accent Start pill. The
+  Control Panel's **Dark mode** toggle swaps Light↔Dark
+  (`shots/aurora_light.png`, `shots/aurora_dark.png`).
 - **Canvas + fullscreen** (toolkit features, benefit every port): `UI_CANVAS`
   is an app-drawn widget — the toolkit does the chrome/focus/drag, the app
   owns the pixels inside the rect (games / paint / tracker / browser), with a
@@ -190,10 +206,20 @@ interpreter (`js.c`) executes each `<script>` block, splicing its
   (the same firmware-as-BIOS approach used for GOP and the pointer). The browser
   lists RAM files and ESP/FAT files side by side; Enter opens, Backspace
   returns, arrows/PgUp/PgDn scroll.
+- **Network** (`pc64_http.c`) — the browser loads pages over the wire, not just
+  from disk. An **address bar** (Up from the file list focuses it) takes a
+  `http://host[:port]/path` URL; `pc64_http_get` brings the link up on demand
+  (`pc64_net_up`: e1000 + DHCP, shared with the Network app), resolves the host
+  by **DNS** (`net_dns_query`, UDP/53; DHCP now learns the resolver + gateway
+  from options 6/3), TCP-connects, sends a HTTP/1.0 GET and renders the reply —
+  including any `<script>`. HTTPS isn't supported yet (it needs CA trust);
+  https:// URLs report that.
 
-Verified in QEMU: the **Script.html** demo's `<script>` builds a Fibonacci table
-and a sum/`sqrt` line via `document.write`, and its `console.log` lines appear in
-the console panel — no network yet.
+Verified in QEMU: the **Script.html** demo runs its `<script>` (a Fibonacci
+table + a sum/`sqrt` line via `document.write`, `console.log` in the console
+panel), and a page fetched over the network (`http://…` via SLIRP) renders with
+its embedded JavaScript running too (`shots/browser_network.png`). HTTPS and a
+Wi-Fi/USB-Ethernet NIC for the X1 are the remaining network work.
 
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 
@@ -385,7 +411,7 @@ pc64/
 │  --- platform (both builds) ---
 ├── uefi.h  uefi_main.c # UEFI surface: GOP + input(+smoothing) + fill-scaling
 │                       # + runtime services (clock, ResetSystem) + Simple FS
-├── fb.c fb.h           # software framebuffer (runtime-sized, clip window)
+├── fb.c fb.h           # software framebuffer (clip window, blend/gradient/round)
 ├── pc64_libc.c pc64_math.c include/*.h  # freestanding libc + float math
 ├── pc64_io.c           # RAM-disk File Manager + PC-speaker Sound Manager
 ├── pc64_fs.c pc64_fs.h # unified file system (RAM vol 0 + FAT vols via UEFI)
@@ -397,14 +423,16 @@ pc64/
 ├── pc64_games.c        # native games (Dostris/Pacman/Outlast) + Runner3D
 ├── pc64_browser.c      # web browser: HTML/Markdown/CSS canvas app
 ├── js.c js.h           # tree-walking JavaScript interpreter (for <script>)
+├── pc64_http.c .h      # HTTP/1.0 GET for the browser (address bar -> net)
 ├── pc64_icons.c        # procedural app icons
 │                       # + ../unosound/unosound_seq.c (unified audio)
+│                       # + ../unoui/themes/theme_aurora.c (modern default look)
 │  --- legacy shell (./build.sh legacy) ---
 ├── unodos.c mac_compat.* app_loader.c pc64_modload.c uno_app.h
 ├── apps/               # 14 apps + uno_mod.h (settings/network/runner are pc64)
 │  --- drivers ---
 ├── e1000.c e1000.h     # native Intel e1000 NIC driver
-├── net.c net.h uno_nic.h  # Ethernet/ARP/IPv4/ICMP/UDP/TCP + DHCP
+├── net.c net.h uno_nic.h  # Ethernet/ARP/IPv4/ICMP/UDP/TCP + DHCP + DNS
 ├── tls.c tls.h bearssl/ tls_test/  # BearSSL TLS client (pinned key, RDRAND)
 ├── i2c_hid.c i2c_hid.h # native I2C-HID trackpad (opt-in, -DUNO_I2C_TRACKPAD)
 └── shots/              # harness-captured evidence
