@@ -491,48 +491,59 @@ static void clamp_cursor(void)
     if (g_cy > FB_H - 1) g_cy = FB_H - 1;
 }
 
+/* Per-instance LATCHED button state. UEFI GetState returns EFI_NOT_READY when
+   there's no new input, so a held button is only reported on the press frame;
+   we must remember it until the release frame or the click "doesn't work". */
+static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
+
 static void poll_pointer(void)
 {
-    int i;
-    /* absolute pointers: map panel coords -> the letterboxed desktop rect */
+    int i, mb = 0, moved = 0;
+
+    /* absolute pointers (touchpads, tablets): position is absolute. Only the
+       FIRST instance that reports new data drives the cursor this frame, so
+       two devices (touchpad + TrackPoint) never fight over the position. */
     for (i = 0; i < gNAbs; i++) {
         EFI_ABSOLUTE_POINTER_STATE st;
-        if (gAbs[i]->GetState(gAbs[i], &st) != EFI_SUCCESS) continue;
-        {
+        if (gAbs[i]->GetState(gAbs[i], &st) != EFI_SUCCESS) continue;   /* no change */
+        gAbsBtn[i] = st.ActiveButtons ? 1 : 0;                          /* latch */
+        if (!moved) {
             UINT64 rx = gAbs[i]->Mode->AbsoluteMaxX - gAbs[i]->Mode->AbsoluteMinX;
             UINT64 ry = gAbs[i]->Mode->AbsoluteMaxY - gAbs[i]->Mode->AbsoluteMinY;
             if (rx && ry && gOutW > 0 && gOutH > 0) {
                 int sx = (int)(((st.CurrentX - gAbs[i]->Mode->AbsoluteMinX) * gModeW) / rx);
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
-                /* panel coord -> filled rect -> fb coord */
-                g_cx = (sx - (int)gOffX) * uno_fb_w / gOutW;
+                g_cx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
                 g_cy = (sy - (int)gOffY) * uno_fb_h / gOutH;
                 clamp_cursor();
-                g_have_pointer = 1;
+                g_have_pointer = 1; moved = 1;
             }
-            pointer_moved_clicked((st.ActiveButtons & 1) ? 1 : 0);
         }
     }
-    /* relative pointers: sub-count accumulation so slow motion still moves
-       (a plain dx/Resolution divide rounds small deltas to zero - the reason
-       a "working" mouse can look dead) */
+
+    /* relative pointers (mice, TrackPoint): sub-count accumulation so slow
+       motion still moves; only the first mover drives the cursor. */
     for (i = 0; i < gNPtr; i++) {
         EFI_SIMPLE_POINTER_STATE st;
         if (gPtr[i]->GetState(gPtr[i], &st) != EFI_SUCCESS) continue;
-        {
+        gPtrBtn[i] = (st.LeftButton || st.RightButton) ? 1 : 0;         /* latch */
+        if (!moved && (st.RelativeMovementX || st.RelativeMovementY)) {
             int div = (int)(gPtr[i]->Mode->ResolutionX ? gPtr[i]->Mode->ResolutionX : 1);
             int mv;
             gAccX[i] += (int)st.RelativeMovementX * 3;   /* ~3 px per mm */
             gAccY[i] += (int)st.RelativeMovementY * 3;
             mv = gAccX[i] / div; gAccX[i] -= mv * div; g_cx += mv;
             mv = gAccY[i] / div; gAccY[i] -= mv * div; g_cy += mv;
-            if (st.RelativeMovementX || st.RelativeMovementY) {
-                clamp_cursor();
-                g_have_pointer = 1;
-            }
-            pointer_moved_clicked(st.LeftButton ? 1 : 0);
+            clamp_cursor();
+            g_have_pointer = 1; moved = 1;
         }
     }
+
+    /* a click on ANY device's ANY button counts (clickpads report the whole
+       surface as one button, sometimes on a different instance/bit) */
+    for (i = 0; i < gNAbs; i++) mb |= gAbsBtn[i];
+    for (i = 0; i < gNPtr; i++) mb |= gPtrBtn[i];
+    pointer_moved_clicked(mb);
 }
 
 void uno_pc64_poll(void)
