@@ -21,12 +21,17 @@ plays exactly the role INT 10h/13h/15h play for the x86 reference kernel.
 ## Status
 
 **`./build.sh` boots straight into the unoui shell** — a themed widget desktop
-(window manager + retained-mode toolkit + 8 live-switchable themes), the whole
-UI in ~76 KB with no legacy code. **Validated on a Lenovo ThinkPad X1 Carbon
-Gen 8** (USB-stick ESP boot): boots, TrackPoint + keyboard drive it, live theme
-and resolution switching. The metal pass hardened three emulator-invisible
-firmware traps into the layer (see Design notes): the 640×480 SetMode eDP
-black-panel trap, an SMM-trapped debug port, and phantom-keystroke firmware.
+(splash screen → window manager + retained-mode toolkit + 8 live-switchable
+themes + a taskbar, desktop icons, a scrollable Start menu and a system-tray
+clock). It carries the whole app roster: the native widget apps, the migrated
+creative tools + games, Runner3D, the Network self-test, and the web browser —
+plus the net/TLS/3D drivers. The default image is ~624 KB (most of it BearSSL +
+uno3d); the pure shell + toolkit is a small fraction of that. **Validated on a
+Lenovo ThinkPad X1 Carbon Gen 8** (USB-stick ESP boot): boots, TrackPoint +
+keyboard (and a smoothed firmware-pointer path) drive it, live theme and
+resolution switching. The metal pass hardened three emulator-invisible firmware
+traps into the layer (see Design notes): the 640×480 SetMode eDP black-panel
+trap, an SMM-trapped debug port, and phantom-keystroke firmware.
 
 Everything below the shell is verified headlessly by `harness.py` — QEMU is
 natively scriptable (QMP `send-key` + `screendump`), so the *real* image boots
@@ -34,20 +39,29 @@ the *real* firmware on every run; no ROM-free CPU-core harness needed.
 
 `./build.sh legacy` builds the **previous** shell — the `unodos.c` core + an
 icon desktop + the 14 hand-drawn family apps + the drivers below (networking,
-TLS, 3D). Those apps still work there and are the source for the remaining
-migration into unoui windows. The two builds share the platform layer, `fb`,
-the RAM-disk FS, and all the drivers; only the UI layer differs.
+TLS, 3D). It was the source for the app migration into unoui windows, which is
+now complete (the games, creative tools, Network and Runner3D all run in the
+default shell). The two builds share the platform layer, `fb`, the RAM-disk FS,
+and all the drivers; only the UI layer differs.
 
 ## Layout: the platform, the two shells, the drivers
 
 - **Platform (both builds)** — `uefi.h` / `uefi_main.c` (handwritten minimal
-  UEFI surface, no gnu-efi/EDK2: GOP present, conin/pointer poll, PC speaker,
-  fill-scaling), `fb.*` (software framebuffer), `pc64_libc.c` / `pc64_math.c`
-  (freestanding libc + float math, own `include/*.h`, no host libc),
-  `pc64_io.c` (RAM-disk File Manager + PC-speaker Sound Manager),
+  UEFI surface, no gnu-efi/EDK2: GOP present, conin/pointer poll + smoothing, PC
+  speaker, fill-scaling, plus the UEFI **runtime services** it now uses — the
+  real-time clock `GetTime`/`SetTime`, `ResetSystem` for shut down / restart —
+  and the **Simple File System** protocol for FAT volumes), `fb.*` (software
+  framebuffer), `pc64_libc.c` / `pc64_math.c` (freestanding libc + float math,
+  own `include/*.h`, no host libc), `pc64_io.c` (RAM-disk File Manager +
+  PC-speaker Sound Manager), `pc64_fs.c` (unified RAM + FAT namespace),
   `pc64_pci.c` (PCI config scan).
-- **Default shell (unoui)** — `pc64_uui.c` + the cross-platform `../unoui/`
-  toolkit + 8 themes. See "unoui shell" below.
+- **Default shell (unoui)** — `pc64_uui.c` (desktop/taskbar/Start menu/tray) +
+  the cross-platform `../unoui/` toolkit + 8 themes, with `pc64_uui_apps.c`
+  (the `mac_compat` bridge for the creative tools + Network), `pc64_games.c`
+  (native Dostris/Pacman/Outlast + Runner3D canvases), `pc64_browser.c` +
+  `pc64_fs.c` + `js.c` (the web browser, file system and JS engine),
+  `pc64_icons.c` (procedural icons) and `../unosound/unosound_seq.c` (audio).
+  See "unoui shell" and "Web browser" below.
 - **Legacy shell** — `unodos.c` (WM + icon desktop + module dispatch) +
   `mac_compat.c` (Mac-Toolbox/QuickDraw shim) + `app_loader.c` +
   `pc64_modload.c` + `apps/*.c` (14 apps incl. `settings.c`, `network.c`,
@@ -92,22 +106,35 @@ into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
 key-combo reliance — **every control is reachable by pointer OR keyboard**
 (Tab focus, arrows, Enter), so it needs no mouse.
 
-- A persistent **Launcher** window opens apps on demand (raise if already
-  open, **Ctrl-W** closes the focused window, **F2** / **Ctrl-Tab** cycles
-  windows for keyboard-only use): a **Control Panel** (live theme dropdown →
-  re-skins the whole desktop across all 8 themes; live resolution dropdown;
-  checkboxes/slider/spinner), an **Editor** (File/Edit menubar, real
-  multi-line editing, filename field, format dropdown, Save/Open/New wired to
-  the RAM-disk File Manager), a **Files** list, a **System** panel, a
-  **Clock**, and a **Canvas** demo. Windows are sized to the theme metrics so
-  no widget overflows the frame.
+- **Desktop furniture**: a **Start button** opens a **scrollable Start menu**
+  (hover the up/down chevrons to scroll a roster larger than the screen; it
+  ends with **Restart** and **Shut Down**, which call UEFI `ResetSystem`); a
+  **taskbar** along the bottom shows a chip per open window (click to focus /
+  raise) and a **system-tray clock** (real wall-clock time from the UEFI
+  runtime `GetTime`, not just uptime); **desktop icons** launch apps directly.
+  Keyboard-only stays first-class: **Ctrl-Esc** opens the Start menu,
+  **Ctrl-W** closes the focused window, **F2** / **Ctrl-Tab** cycles windows.
+  Each window carries a **title-bar close box**, and dragging a window moves a
+  light outline (no full-window redraw storm).
+- **The app roster**: six native widget apps — a **Control Panel** (live theme
+  dropdown → re-skins the desktop across all 8 themes; live resolution
+  dropdown; **date/time spinners** that set the UEFI clock; checkboxes/slider),
+  an **Editor** (File/Edit menubar, multi-line editing, Save/Open/New wired to
+  the RAM-disk File Manager), a **Files** list, a **System** panel, a **Clock**
+  and a **Canvas** demo — plus the migrated **creative tools** (Paint, Music,
+  Tracker), the native **games** (Dostris, Pacman, Outlast), **Runner3D**, the
+  **Network** self-test, and the **web browser**. Windows are sized to the theme
+  metrics so no widget overflows the frame.
+- **Startup**: a **splash screen** with a loading bar paints while the shell and
+  drivers come up, then a short **startup chime** (UnoSound) plays as the
+  desktop appears.
 - **Canvas + fullscreen** (toolkit features, benefit every port): `UI_CANVAS`
   is an app-drawn widget — the toolkit does the chrome/focus/drag, the app
-  owns the pixels inside the rect (games / paint / tracker), with a `draw` and
-  an `event` callback. `unoui_fullscreen(ui, win)` makes a window's canvas
-  fill the whole screen with no chrome and routes all input to it (Esc to
-  return); this is the target for the games / 3D migration. Both verified in
-  QEMU (`shots/canvas_win.png`, `shots/canvas_full.png`).
+  owns the pixels inside the rect (games / paint / tracker / browser), with a
+  `draw` and an `event` callback. `unoui_fullscreen(ui, win)` makes a window's
+  canvas fill the whole screen with no chrome and routes all input to it (Esc
+  to return); the games and Runner3D use it. Both verified in QEMU
+  (`shots/canvas_win.png`, `shots/canvas_full.png`).
 - **Present-on-change**: the frame is redrawn/presented only when something
   changed (input or the ~2 Hz caret blink); idle frames touch no VRAM, so the
   desktop is steady and a drag only rewrites the moving window's rows. A
@@ -124,12 +151,19 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   straight to the desktop, live keyboard theme switching (UnoDOS → Windows 3.1
   → …) re-skins the whole desktop.
 
-The remaining migration is folding the games / Network / Runner3D into unoui
-windows (custom-render for Paint/Tracker/Music/Network, `unoui_fullscreen` for
-the games/3D), after which `./build.sh legacy` (and its source) can be deleted.
-High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can adopt the same unoui
-shell; only the tiny targets (NES 2 KB, Game Boy 8 KB, C64) keep the minimal
-legacy path — the toolkit won't fit.
+The app migration is **complete**: every family app runs in the default shell.
+The creative tools and Network are custom-render canvases (`pc64_uui_apps.c`
+bridges them to a `mac_compat` Toolbox over `fb`); the **games are a native
+rewrite** (`pc64_games.c`) — Dostris/Pacman/Outlast draw into whatever rect
+they're handed, so the *same* canvas fills a window or the full screen with no
+letterboxing, and Runner3D drives `uno3d` directly. **All audio is unified on
+UnoSound** (`unosound_seq.c`, a single-voice PC-speaker sequencer): the games,
+Music and Tracker all emit through `uno_seq_beep/play/stop`, so there is one
+mixer path instead of per-app speaker banging. With the migration done,
+`./build.sh legacy` (and its source) is now only kept as reference and could be
+deleted. High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can adopt the same
+unoui shell; only the tiny targets (NES 2 KB, Game Boy 8 KB, C64) keep the
+minimal legacy path — the toolkit won't fit.
 
 ## Web browser + file system (`pc64_browser.c`, `pc64_fs.c`, `js.c`)
 
@@ -187,8 +221,11 @@ facts that normally come from ACPI/AML (not parsed yet):
 
 The firmware-pointer path was also fixed independently (latched buttons so
 held clicks register; only the first pointer instance drives the cursor so a
-touchpad and TrackPoint don't fight) — that alone may resolve the jerky-pad /
-dead-button symptoms on machines where the firmware exposes the pad.
+touchpad and TrackPoint don't fight) and **smoothed** — a 2-pole low-pass over
+the raw deltas plus a small dead-zone and axis snap, so it tracks cleanly on
+most pads with no per-device tuning. That alone may resolve the jerky-pad /
+dead-button symptoms on machines where the firmware exposes the pad; the native
+I2C-HID driver above is the eventual replacement for hardware that needs it.
 
 ## TLS (BearSSL)
 
@@ -313,6 +350,12 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
   Executor-test fallback, enabled for `UNO_PC64`) is the mountable PC
   volume Files/Notepad use. Both persist in-session only, by design, until
   the block driver lands.
+- **Unified file system** (`pc64_fs.c`): a single read-only namespace over the
+  RAM disk (volume 0) **and** the firmware-mounted FAT / FAT32 / local disks
+  (volumes 1..), the latter reached through the UEFI **Simple File System**
+  protocol — so the browser and Files can already *read* real on-disk files
+  (e.g. the ESP) with no native block driver. Write/persistence still waits on
+  the NVMe/AHCI tail below.
 
 ## The driver tail (where unobus/unonet meet real PC hardware)
 
@@ -340,14 +383,22 @@ pc64/
 ├── harness.py          # QEMU+OVMF QMP harness (boot / screenshots)
 ├── nettest.py          # net + TLS QEMU verification (legacy build)
 │  --- platform (both builds) ---
-├── uefi.h  uefi_main.c # UEFI surface + GOP present + input + fill-scaling
-├── fb.c fb.h           # software framebuffer (runtime-sized on pc64)
+├── uefi.h  uefi_main.c # UEFI surface: GOP + input(+smoothing) + fill-scaling
+│                       # + runtime services (clock, ResetSystem) + Simple FS
+├── fb.c fb.h           # software framebuffer (runtime-sized, clip window)
 ├── pc64_libc.c pc64_math.c include/*.h  # freestanding libc + float math
 ├── pc64_io.c           # RAM-disk File Manager + PC-speaker Sound Manager
+├── pc64_fs.c pc64_fs.h # unified file system (RAM vol 0 + FAT vols via UEFI)
 ├── pc64_pci.c pc64_pci.h  # PCI config-space scan
 │  --- default shell: unoui ---
-├── pc64_uui.c          # the unoui shell: launcher + app windows + adapter
-│                       # (links ../unoui/ + ../unoui/themes/*)
+├── pc64_uui.c          # the unoui shell: desktop, taskbar, Start menu, tray,
+│                       # app windows + UEFI event adapter (links ../unoui/*)
+├── pc64_uui_apps.c     # mac_compat bridge for creative tools + Network
+├── pc64_games.c        # native games (Dostris/Pacman/Outlast) + Runner3D
+├── pc64_browser.c      # web browser: HTML/Markdown/CSS canvas app
+├── js.c js.h           # tree-walking JavaScript interpreter (for <script>)
+├── pc64_icons.c        # procedural app icons
+│                       # + ../unosound/unosound_seq.c (unified audio)
 │  --- legacy shell (./build.sh legacy) ---
 ├── unodos.c mac_compat.* app_loader.c pc64_modload.c uno_app.h
 ├── apps/               # 14 apps + uno_mod.h (settings/network/runner are pc64)
