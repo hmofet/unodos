@@ -1,0 +1,176 @@
+/* ===========================================================================
+ * UnoDOS/pc64 - per-app icon artwork (see pc64_icons.h).
+ *
+ * Distinct, high-colour emblems drawn procedurally so every app reads at a
+ * glance on the desktop, in the launcher and on the taskbar. Each emblem is
+ * designed on a 32x32 grid and scaled to whatever box it is asked to fill, so
+ * the same art serves a big desktop icon and a small taskbar chip.
+ * ======================================================================== */
+#include "pc64_icons.h"
+#include "fb.h"
+
+/* app icon ids match the shell's app enum order */
+enum { IC_CTRL, IC_EDIT, IC_FILES, IC_SYS, IC_CLOCK, IC_CANVAS,
+       IC_DOSTRIS, IC_PACMAN, IC_OUTLAST, IC_MUSIC, IC_TRACKER, IC_PAINT };
+
+static void rr(int x, int y, int w, int h, fb_px c) { if (w > 0 && h > 0) fb_fill_rect(x, y, w, h, c); }
+
+static void disc(int cx, int cy, int rad, fb_px c)
+{
+    int x, y;
+    for (y = -rad; y <= rad; y++)
+        for (x = -rad; x <= rad; x++)
+            if (x * x + y * y <= rad * rad) fb_pixel(cx + x, cy + y, c);
+}
+static void ring(int cx, int cy, int rad, int th, fb_px c)
+{
+    int x, y, in = (rad - th) * (rad - th);
+    for (y = -rad; y <= rad; y++)
+        for (x = -rad; x <= rad; x++) {
+            int d = x * x + y * y;
+            if (d <= rad * rad && d >= in) fb_pixel(cx + x, cy + y, c);
+        }
+}
+static void seg(int x0, int y0, int x1, int y1, fb_px c)
+{
+    int dx = x1 - x0, dy = y1 - y0, adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+    int n = adx > ady ? adx : ady, i;
+    if (n < 1) n = 1;
+    for (i = 0; i <= n; i++) fb_pixel(x0 + dx * i / n, y0 + dy * i / n, c);
+}
+static void thick(int x0, int y0, int x1, int y1, int w, fb_px c)
+{ int k; for (k = 0; k < w; k++) seg(x0 + k, y0, x1 + k, y1, c); }
+
+void pc64_icon_emblem(int icon, unoui_rect box)
+{
+    int s  = (box.w < box.h ? box.w : box.h);
+    int ox, oy, cx, cy;
+    if (s < 8) s = 8;
+    ox = box.x + (box.w - s) / 2;
+    oy = box.y + (box.h - s) / 2;
+    cx = ox + s / 2; cy = oy + s / 2;
+#define G(a) ((a) * s / 32)
+
+    switch (icon) {
+    case IC_CTRL: {                                  /* settings: sliders */
+        fb_px trk = FB_RGB(90, 100, 120), kn = FB_RGB(235, 235, 245);
+        int r, ys[3] = { G(8), G(16), G(24) }, kx[3] = { G(20), G(10), G(24) };
+        for (r = 0; r < 3; r++) {
+            rr(ox + G(4), oy + ys[r] - G(1), G(24), G(2), trk);
+            rr(ox + kx[r] - G(2), oy + ys[r] - G(4), G(5), G(8), kn);
+            fb_frame_rect(ox + kx[r] - G(2), oy + ys[r] - G(4), G(5), G(8), FB_RGB(40, 45, 60));
+        }
+        break; }
+    case IC_EDIT: {                                  /* document + fold + pencil */
+        fb_px paper = FB_RGB(250, 250, 244), ink = FB_RGB(90, 100, 125);
+        int i;
+        rr(ox + G(7), oy + G(4), G(16), G(24), paper);
+        fb_frame_rect(ox + G(7), oy + G(4), G(16), G(24), FB_RGB(120, 125, 140));
+        rr(ox + G(17), oy + G(4), G(6), G(6), FB_RGB(210, 212, 205));   /* fold */
+        seg(ox + G(17), oy + G(10), ox + G(23), oy + G(4), FB_RGB(120,125,140));
+        for (i = 0; i < 4; i++) rr(ox + G(10), oy + G(12) + i * G(4), G(10), G(1), ink);
+        thick(ox + G(18), oy + G(22), ox + G(26), oy + G(14), G(2), FB_RGB(240, 190, 60)); /* pencil */
+        disc(ox + G(26), oy + G(14), G(2), FB_RGB(60, 60, 60));
+        break; }
+    case IC_FILES: {                                 /* manila folder */
+        fb_px body = FB_RGB(244, 200, 92), tab = FB_RGB(224, 176, 60), edge = FB_RGB(150, 110, 30);
+        rr(ox + G(5), oy + G(7), G(10), G(4), tab);
+        rr(ox + G(4), oy + G(10), G(24), G(16), body);
+        fb_frame_rect(ox + G(4), oy + G(10), G(24), G(16), edge);
+        rr(ox + G(4), oy + G(13), G(24), G(1), FB_RGB(255, 225, 140));
+        break; }
+    case IC_SYS: {                                   /* monitor */
+        rr(ox + G(4), oy + G(5), G(24), G(18), FB_RGB(55, 58, 70));
+        rr(ox + G(7), oy + G(8), G(18), G(12), FB_RGB(40, 120, 210));
+        rr(ox + G(8), oy + G(9), G(16), G(4), FB_RGB(90, 160, 235));    /* screen sheen */
+        rr(ox + G(13), oy + G(23), G(6), G(3), FB_RGB(80, 84, 96));     /* stand */
+        rr(ox + G(9), oy + G(26), G(14), G(2), FB_RGB(80, 84, 96));
+        break; }
+    case IC_CLOCK: {                                 /* clock face */
+        disc(cx, cy, G(13), FB_RGB(250, 250, 250));
+        ring(cx, cy, G(13), G(2), FB_RGB(60, 70, 90));
+        seg(cx, cy, cx, cy - G(8), FB_RGB(30, 30, 45));                 /* minute */
+        seg(cx, cy, cx + G(6), cy + G(3), FB_RGB(200, 60, 60));         /* hour */
+        disc(cx, cy, G(2), FB_RGB(30, 30, 45));
+        break; }
+    case IC_CANVAS: {                                /* artist palette */
+        disc(cx, cy, G(13), FB_RGB(222, 192, 150));
+        ring(cx, cy, G(13), G(1), FB_RGB(150, 120, 80));
+        disc(cx + G(5), cy + G(5), G(3), FB_RGB(0, 0, 0));              /* thumb hole */
+        disc(cx - G(5), cy - G(4), G(2), FB_RGB(220, 60, 60));
+        disc(cx + G(1), cy - G(6), G(2), FB_RGB(60, 180, 70));
+        disc(cx + G(6), cy - G(2), G(2), FB_RGB(60, 110, 230));
+        disc(cx - G(6), cy + G(3), G(2), FB_RGB(240, 205, 60));
+        break; }
+    case IC_DOSTRIS: {                               /* S-tetromino */
+        fb_px a = FB_RGB(60, 200, 90), b = FB_RGB(0, 200, 200);
+        int u = G(7);
+        rr(ox + G(11), oy + G(6), u, u, a); rr(ox + G(18), oy + G(6), u, u, a);
+        rr(ox + G(4),  oy + G(13), u, u, b); rr(ox + G(11), oy + G(13), u, u, b);
+        rr(ox + G(4),  oy + G(20), u, u, a); rr(ox + G(11), oy + G(20), u, u, a);
+        break; }
+    case IC_PACMAN: {                                /* pac + pellet */
+        disc(cx - G(2), cy, G(11), FB_RGB(255, 216, 0));
+        seg(cx - G(2), cy, ox + G(30), oy + G(6), 0);                   /* mouth wedge */
+        { int i; for (i = 0; i < G(11); i++)                            /* wedge fill */
+            seg(cx - G(2), cy, ox + G(28), oy + G(9) + i, FB_RGB(0,0,0)); }
+        disc(ox + G(26), cy, G(2), FB_RGB(255, 240, 180));             /* pellet */
+        break; }
+    case IC_OUTLAST: {                               /* ghost */
+        fb_px g = FB_RGB(235, 80, 100);
+        disc(cx, oy + G(13), G(10), g);
+        rr(ox + G(6), oy + G(13), G(20), G(11), g);
+        { int i; for (i = 0; i < 4; i++) disc(ox + G(8) + i * G(5), oy + G(24), G(2), g); }
+        disc(cx - G(4), oy + G(12), G(3), FB_RGB(255,255,255));
+        disc(cx + G(4), oy + G(12), G(3), FB_RGB(255,255,255));
+        disc(cx - G(4), oy + G(12), G(1), FB_RGB(40,60,180));
+        disc(cx + G(4), oy + G(12), G(1), FB_RGB(40,60,180));
+        break; }
+    case IC_MUSIC: {                                 /* eighth note */
+        fb_px n = FB_RGB(30, 40, 64);
+        disc(ox + G(11), oy + G(24), G(5), n);
+        rr(ox + G(15), oy + G(6), G(2), G(18), n);
+        rr(ox + G(15), oy + G(6), G(9), G(2), n);                       /* flag */
+        rr(ox + G(21), oy + G(6), G(2), G(6), n);
+        break; }
+    case IC_TRACKER: {                               /* equaliser bars */
+        static const int h[6] = { 10, 20, 14, 26, 8, 18 };
+        fb_px col[6] = { FB_RGB(60,180,230), FB_RGB(80,200,120), FB_RGB(240,200,60),
+                         FB_RGB(230,90,90), FB_RGB(160,110,230), FB_RGB(60,180,230) };
+        int i;
+        for (i = 0; i < 6; i++)
+            rr(ox + G(4) + i * G(4), oy + G(28) - G(h[i]), G(3), G(h[i]), col[i]);
+        break; }
+    case IC_PAINT: {                                 /* paintbrush + dab */
+        thick(ox + G(20), oy + G(6), ox + G(10), oy + G(20), G(3), FB_RGB(165, 105, 55));
+        thick(ox + G(9),  oy + G(19), ox + G(6),  oy + G(24), G(3), FB_RGB(185, 185, 195));
+        disc(ox + G(6), oy + G(25), G(3), FB_RGB(220, 60, 60));         /* bristle paint */
+        disc(ox + G(24), oy + G(24), G(4), FB_RGB(60, 120, 230));       /* colour dab */
+        break; }
+    default:
+        rr(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(160, 170, 190));
+        fb_frame_rect(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(60, 70, 90));
+        break;
+    }
+#undef G
+}
+
+void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags)
+{
+    unoui_rect emb = { r.x, r.y, r.w, r.h - 12 };
+    int tw = (label ? (int)0 : 0);
+    (void)tw;
+    if (emb.h > r.w) emb.h = r.w;                    /* keep the emblem square-ish */
+    pc64_icon_emblem(icon, emb);
+    if (label) {
+        int lx = r.x + (r.w - (int)(fb_text_w(label))) / 2;
+        int ly = r.y + r.h - 10;
+        if (flags & UI_F_FOCUS) {                    /* selected: highlighted label */
+            fb_fill_rect(lx - 3, ly - 1, fb_text_w(label) + 6, 10, FB_RGB(40, 90, 200));
+            fb_text(lx, ly, label, FB_RGB(255, 255, 255), -1);
+        } else {                                     /* light, with a 1px shadow */
+            fb_text(lx + 1, ly + 1, label, FB_RGB(10, 15, 30), -1);
+            fb_text(lx, ly, label, FB_RGB(232, 236, 245), -1);
+        }
+    }
+}

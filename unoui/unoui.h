@@ -105,7 +105,14 @@ typedef struct unoui_widget {
     const unoui_menu *menus;  /* menubar: array of menus                      */
     int          nmenus;
     unoui_canvas *canvas;     /* non-NULL => app-drawn UI_CANVAS              */
+    int          icon;        /* UI_ICON: art id for the icon-art hook        */
 } unoui_widget;
+
+/* Optional per-app icon artwork. When set, UI_ICON widgets are drawn by this
+ * hook (given the icon's full rect, its `icon` id, label and flags) instead of
+ * the theme's generic glyph - so a port can supply distinct app icons. */
+typedef void (*unoui_icon_fn)(int icon, unoui_rect r, const char *label, int flags);
+extern unoui_icon_fn unoui_icon_art;
 
 #define UNOUI_MAX_WIDGETS 64
 

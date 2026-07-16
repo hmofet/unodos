@@ -8,6 +8,9 @@
 #include "unoui_theme.h"
 #include <string.h>
 
+/* optional per-app icon artwork hook (NULL = use the theme's generic glyph) */
+unoui_icon_fn unoui_icon_art = 0;
+
 /* ------------------------------------------------------------------ build -- */
 
 static unoui_widget *push(unoui_window *win, ui_kind k, int x, int y,
@@ -323,8 +326,17 @@ static void d_button(const unoui_theme *t, unoui_rect r, const char *s, int f)
         fb_frame_rect(r.x - 3, r.y - 3, r.w + 6, r.h + 6, t->pal.dark);
     }
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
-    in = ui_bevel(r, t, t->m.bevel ? t->m.bevel : 1, press ? -1 : 1);
-    (void)in;
+    /* crisp 1px outer edge so buttons read as distinct raised controls, then
+     * the bevel inside it (skip the hard edge on 1-bit themes - the dither
+     * bevel carries the shape there). */
+    if (t->m.depth != UNOUI_DEPTH_1) {
+        fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.dark);
+        { unoui_rect ir = { r.x + 1, r.y + 1, r.w - 2, r.h - 2 };
+          ui_bevel(ir, t, t->m.bevel ? t->m.bevel : 1, press ? -1 : 1); }
+    } else {
+        ui_bevel(r, t, t->m.bevel ? t->m.bevel : 1, press ? -1 : 1);
+    }
+    in = r; (void)in;
     if (press) { r.x++; r.y++; }
     ui_text_in(r, s, (f & UI_F_DISABLED) ? t->pal.text_dim : t->pal.face_text,
                -1, 1);
@@ -760,7 +772,8 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
     case UI_LIST:     PICK(list)(t, r, w->items, w->nitems, w->sel); break;
     case UI_GROUP:    PICK(group)(t, r, w->text); break;
     case UI_SEP:      PICK(sep)(t, r); break;
-    case UI_ICON:     PICK(icon)(t, r, w->text, eff); break;
+    case UI_ICON:     if (unoui_icon_art) unoui_icon_art(w->icon, r, w->text, eff);
+                      else PICK(icon)(t, r, w->text, eff); break;
     case UI_CANVAS:
         /* the app draws arbitrary pixels - confine it to the canvas rect, then
          * restore the window content clip for the widgets that follow. */

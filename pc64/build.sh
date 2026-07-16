@@ -38,7 +38,7 @@ if [ "$1" != "legacy" ]; then
     UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -I../unoui"
     OBJS=""
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci i2c_hid uefi_main pc64_uui pc64_uui_apps; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_icons; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     for u in unoui unoui_input; do
