@@ -131,6 +131,36 @@ High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can adopt the same unoui
 shell; only the tiny targets (NES 2 KB, Game Boy 8 KB, C64) keep the minimal
 legacy path — the toolkit won't fit.
 
+## Web browser + file system (`pc64_browser.c`, `pc64_fs.c`, `js.c`)
+
+A native unoui canvas app renders **HTML + Markdown + basic CSS** with a single
+immediate-mode flow (word-wrap, heading scale, `<b>/<i>/<code>/<a>`, lists,
+`<pre>`, rules, entity decode). It runs **JavaScript** too: a small tree-walking
+interpreter (`js.c`) executes each `<script>` block, splicing its
+`document.write` output into the page and collecting `console.log` into a
+"console" panel at the foot of the document.
+
+- **js.c** — arena-allocated (no `malloc`), freestanding (only `string.h` from
+  `pc64_libc`; `Math.sqrt` is Newton's method, `Math.random` an xorshift). A
+  lexer + recursive-descent parser to an AST + tree-walking evaluator: numbers/
+  strings/booleans, `var`, arithmetic/logical/comparison/`+=`/`++`, `if`/`for`/
+  `while`/ternary, functions + recursion, arrays (`.length`/`.push`),
+  `console.log`, `document.write`, `Math.*`, `String`/`Number`/`parseInt`. ⚠
+  Function calls **mark/release** the arena on return (copying out simple return
+  values), so deep recursion is O(depth) not O(calls) — `fib(24)` (46 k calls)
+  runs in the 512 KB arena. It has a `-DJS_TEST` host harness for native
+  testing before it ever touches the EFI image.
+- **File system** (`pc64_fs.c`) — a unified read-only namespace. Volume 0 is the
+  RAM disk (`uno_ramfs_*`); volumes 1.. are the FAT / FAT32 / local disks the
+  firmware mounted, reached through the UEFI **Simple File System** protocol
+  (the same firmware-as-BIOS approach used for GOP and the pointer). The browser
+  lists RAM files and ESP/FAT files side by side; Enter opens, Backspace
+  returns, arrows/PgUp/PgDn scroll.
+
+Verified in QEMU: the **Script.html** demo's `<script>` builds a Fibonacci table
+and a sum/`sqrt` line via `document.write`, and its `console.log` lines appear in
+the console panel — no network yet.
+
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 
 Modern laptop trackpads (2015+, incl. the X1 Carbon Gen 8) are **I2C-HID**
