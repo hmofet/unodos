@@ -170,19 +170,21 @@ pass.
 
 ## Design notes (each metal-hardened rule is marked ⚠)
 
-- **⚠ Full resolution support without SetMode**: laptop eDP panels accept a
-  640×480 SetMode at the API level and then stop scanning out (black panel —
-  the X1 Carbon did exactly this). So the GOP mode is KEPT and the desktop
-  resolution changes instead: the **Settings app** offers the standard
-  desktop-OS list (640×480 … 1920×1200, filtered to the panel + the fb
-  ceiling, native and chunky sizes included), and the chosen resolution runs
-  *genuinely* — the framebuffer is runtime-sized (`uno_fb_w/h`, ceiling
-  1920×1200) — pixel-replicated at its best integer zoom and centred. The
-  core re-reads its screen rect through the `uno_screen_changed()` hook and
-  repaints, pulling stranded windows back on-screen. Boot default is the
-  chunky look (mode ÷ max zoom — 960×540@2× on the X1's FHD panel). **F10**
-  cycles GOP modes (external monitors — a panel that won't sync a mode
-  stays dark until F10 cycles back around).
+- **⚠ Full resolution support without SetMode, FILL-scaled**: laptop eDP
+  panels accept a 640×480 SetMode at the API level and then stop scanning out
+  (black panel — the X1 Carbon did exactly this). So the GOP mode is KEPT and
+  the desktop resolution changes instead: the **Settings app** offers the
+  standard desktop-OS list, the framebuffer is runtime-sized (`uno_fb_w/h`,
+  ceiling 1920×1200), and present **fractionally scales it to FILL the panel**
+  — nearest-neighbour, aspect preserved, centred (16.16 fixed-point source
+  maps, `gColMap`/`gRowMap`). So a *low* resolution fills the screen as a big
+  chunky UI instead of sitting in a small letterboxed box. The core re-reads
+  its screen rect via `uno_screen_changed()` and repaints, rescuing stranded
+  windows. Boot default is ~half the panel (fills exactly at 2×). **F10**
+  cycles GOP modes for external monitors. `uno_pc64_lowres()` drops the fb to
+  ~¼ the panel for full-screen 3D (Runner), then the same scaler upscales it —
+  ~16× fewer pixels for the software rasteriser, the difference between a
+  slideshow and a playable game.
 - **⚠ No legacy-port debug I/O on metal**: QEMU-debugcon writes (port
   0x402) hung the X1 Carbon — legacy-port I/O can be SMM-trapped and vendor
   SMI handlers mishandle unclaimed ports. Compiled out unless `-DUNO_DBGCON`.

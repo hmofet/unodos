@@ -58,19 +58,26 @@ static EFI_ABSOLUTE_POINTER_PROTOCOL *gAbs[MAXPTR];
 static int gNPtr, gNAbs;
 static int gAccX[MAXPTR], gAccY[MAXPTR];    /* sub-pixel remainders per device */
 
-/* ---- present-target geometry --------------------------------------------- */
-#define MAX_SCALE 4
-#define GROW_W   4096               /* output-row ceiling (4K panels) */
+/* ---- present-target geometry ---------------------------------------------
+ * The desktop framebuffer (uno_fb_w x uno_fb_h) is FRACTIONALLY scaled to
+ * FILL the panel - nearest-neighbour, aspect preserved, centred - so a low
+ * desktop resolution fills the screen (a big chunky UI) instead of sitting in
+ * a small letterboxed box. gColMap/gRowMap are the per-output-pixel source
+ * indices; gOutW x gOutH is the filled region at gOffX,gOffY. */
+#define GROW_W  3840                /* output-row ceiling (4K-wide panels) */
+#define GROW_H  2160
 static volatile UINT32 *gVram;      /* GOP linear framebuffer (when usable) */
 static UINT32 gStride;              /* pixels per scan line */
 static UINT32 gModeW, gModeH;       /* native mode geometry */
-static UINT32 gOffX, gOffY;         /* centring offset of the scaled desktop */
-static int    gScale = 1;           /* integer zoom: fb pixel -> scale^2 block */
-static int    gMaxScale = 1;
+static UINT32 gOffX, gOffY;         /* centring offset of the filled desktop */
+static int    gOutW, gOutH;         /* filled (scaled) desktop size on the panel */
 static int    gSwapRB;              /* output wants BGRX (Blt always does) */
 static int    gUseBlt;              /* no usable linear FB: present via Blt() */
 static UINT32 gRow[GROW_W];         /* one scaled output row */
 static fb_px  gCurRow[FB_MAX_W];    /* cursor-composited fb row */
+static int    gColMap[GROW_W];      /* output col -> source col */
+static short  gRowMap[GROW_H];      /* output row -> source row */
+static unsigned char gDirtyRow[FB_MAX_H];   /* per-source-row dirty flags */
 
 /* dirty-row shadow: present writes VRAM only for rows that changed since the
    last frame. Full-screen VRAM rewrites are what made the first metal build's
@@ -167,30 +174,19 @@ static void read_mode(void)
     gSwapRB = gUseBlt ||
               (gGop->Mode->Info->PixelFormat != PixelRedGreenBlueReserved8BitPerColor);
     gVram = (volatile UINT32 *)(UINTN)gGop->Mode->FrameBufferBase;
-
-    /* zoom range: every zoom whose desktop stays >= 640x480 */
-    gMaxScale = (int)(gModeW / 640);
-    if ((int)(gModeH / 480) < gMaxScale) gMaxScale = (int)(gModeH / 480);
-    if (gMaxScale < 1) gMaxScale = 1;
-    if (gMaxScale > MAX_SCALE) gMaxScale = MAX_SCALE;
+    if (gModeW > GROW_W) gModeW = GROW_W;
+    if (gModeH > GROW_H) gModeH = GROW_H;
 }
 
-/* the largest integer zoom that fits a fbw x fbh desktop on the panel */
-static int fit_zoom(int fbw, int fbh)
+/* commit a desktop resolution: set the fb dims + the shim screen rect, then
+   compute the FILL mapping (fractional nearest-neighbour, aspect preserved,
+   centred) and the per-pixel source maps; clear the surface. */
+static void apply_desktop(int fbw, int fbh)
 {
-    int z = (int)(gModeW / (UINT32)fbw);
-    if ((int)(gModeH / (UINT32)fbh) < z) z = (int)(gModeH / (UINT32)fbh);
-    if (z > MAX_SCALE) z = MAX_SCALE;
-    while (z > 1 && fbw * z > GROW_W) z--;
-    if (z < 1) z = 1;
-    return z;
-}
-
-/* commit a desktop resolution + zoom: fb dims, shim screen rect, centring,
-   full surface clear, shadow invalidation */
-static void apply_desktop(int fbw, int fbh, int zoom)
-{
-    gScale = zoom;
+    UINT32 sx, sy;
+    int i;
+    if (fbw < 64) fbw = 64;  if (fbw > FB_MAX_W) fbw = FB_MAX_W;
+    if (fbh < 48) fbh = 48;  if (fbh > FB_MAX_H) fbh = FB_MAX_H;
     uno_fb_w = fbw;
     uno_fb_h = fbh;
 
@@ -199,38 +195,52 @@ static void apply_desktop(int fbw, int fbh, int zoom)
     qd.screenBits.bounds.right  = (short)uno_fb_w;
     qd.screenBits.bounds.bottom = (short)uno_fb_h;
 
-    gOffX = (gModeW > (UINT32)(uno_fb_w * gScale)) ? (gModeW - uno_fb_w * gScale) / 2 : 0;
-    gOffY = (gModeH > (UINT32)(uno_fb_h * gScale)) ? (gModeH - uno_fb_h * gScale) / 2 : 0;
+    /* fill the panel, preserve aspect: scale = min(modeW/fbw, modeH/fbh),
+       computed in 16.16 fixed point so the largest axis fills exactly */
+    {
+        unsigned long long sxf = ((unsigned long long)gModeW << 16) / (unsigned)fbw;
+        unsigned long long syf = ((unsigned long long)gModeH << 16) / (unsigned)fbh;
+        unsigned long long sc = (sxf < syf) ? sxf : syf;   /* fit */
+        gOutW = (int)(((unsigned long long)fbw * sc) >> 16);
+        gOutH = (int)(((unsigned long long)fbh * sc) >> 16);
+        if (gOutW > (int)gModeW) gOutW = gModeW;
+        if (gOutH > (int)gModeH) gOutH = gModeH;
+    }
+    gOffX = (gModeW - (UINT32)gOutW) / 2;
+    gOffY = (gModeH - (UINT32)gOutH) / 2;
 
-    gShadowValid = 0;               /* stride/geometry changed: full rewrite */
+    /* source-index maps (nearest neighbour) */
+    for (i = 0; i < gOutW; i++) {
+        int c = (int)(((long long)i * fbw) / gOutW);
+        gColMap[i] = (c < fbw) ? c : fbw - 1;
+    }
+    for (i = 0; i < gOutH; i++) {
+        int r = (int)(((long long)i * fbh) / gOutH);
+        gRowMap[i] = (short)((r < fbh) ? r : fbh - 1);
+    }
 
-    /* clear the whole surface (letterbox border + stale pixels) */
+    gShadowValid = 0;               /* geometry changed: full rewrite */
+
+    /* clear the whole surface (any residual border pixels) */
     if (gUseBlt) {
         UINT32 black = 0;
         gGop->Blt(gGop, &black, EfiBltVideoFill, 0, 0, 0, 0, gModeW, gModeH, 0);
     } else {
-        UINT32 x, y;
-        for (y = 0; y < gModeH; y++)
-            for (x = 0; x < gModeW; x++) gVram[y * gStride + x] = 0;
+        for (sy = 0; sy < gModeH; sy++)
+            for (sx = 0; sx < gModeW; sx++) gVram[sy * gStride + sx] = 0;
     }
     if (g_cx > uno_fb_w - 1) g_cx = uno_fb_w - 1;
     if (g_cy > uno_fb_h - 1) g_cy = uno_fb_h - 1;
 }
 
-/* boot / mode-change default: the mode/zoom-derived desktop */
-static void set_geometry(int wantZoom)
+/* boot / mode-change default: a chunky desktop (~half the panel) that fills
+   the screen. Half-res on a 16:9 panel fills exactly (2x) with no borders and
+   gives a comfortably large UI. */
+static void set_geometry(int unused)
 {
-    int z, fbw, fbh;
+    (void)unused;
     read_mode();
-    z = wantZoom;
-    if (z < 1) z = gMaxScale;                   /* <1 = default: chunky look */
-    if (z > gMaxScale) z = gMaxScale;
-    fbw = (int)(gModeW / (UINT32)z);
-    fbh = (int)(gModeH / (UINT32)z);
-    if (fbw > FB_MAX_W) fbw = FB_MAX_W;
-    if (fbh > FB_MAX_H) fbh = FB_MAX_H;
-    if (fbw * z > GROW_W) fbw = GROW_W / z;
-    apply_desktop(fbw, fbh, z);
+    apply_desktop((int)(gModeW / 2), (int)(gModeH / 2));
 }
 
 /* ---- the Settings app's resolution list (KernelApi pc64 tail) ------------
@@ -262,12 +272,14 @@ static void build_res_list(void)
     short capW = (short)(gModeW > FB_MAX_W ? FB_MAX_W : gModeW);
     short capH = (short)(gModeH > FB_MAX_H ? FB_MAX_H : gModeH);
     gResN = 0;
+    /* the chunky default (half the panel) first, then the standard list.
+       Every entry is FILL-scaled to the panel, so all of them fill the
+       screen - the list is just how big you want the UI. */
+    res_add((short)(gModeW / 2), (short)(gModeH / 2));
     for (i = 0; i < NSTDRES; i++)
         if (kStdRes[i].w <= capW && kStdRes[i].h <= capH)
             res_add(kStdRes[i].w, kStdRes[i].h);
     res_add(capW, capH);                        /* native (fb-capped) */
-    if (gMaxScale > 1)                          /* the chunky default */
-        res_add((short)(gModeW / gMaxScale), (short)(gModeH / gMaxScale));
 }
 
 int uno_pc64_res_count(void)
@@ -281,7 +293,7 @@ void uno_pc64_res_get(int idx, short *w, short *h, short *zoom, Boolean *active)
     if (idx < 0 || idx >= gResN) { *w = *h = *zoom = 0; *active = 0; return; }
     *w = gResList[idx].w;
     *h = gResList[idx].h;
-    *zoom = (short)fit_zoom(*w, *h);
+    *zoom = 0;                       /* fractional fill: no integer zoom label */
     *active = (Boolean)(uno_fb_w == *w && uno_fb_h == *h);
 }
 
@@ -291,8 +303,24 @@ void uno_pc64_res_set(int idx)
     if (idx < 0 || idx >= gResN) return;
     w = gResList[idx].w; h = gResList[idx].h;
     if (uno_fb_w == w && uno_fb_h == h) return;  /* already active */
-    apply_desktop(w, h, fit_zoom(w, h));
+    apply_desktop(w, h);
     uno_screen_changed();           /* core: new gScreen + full repaint */
+}
+
+/* Runner3D (and any full-screen 3D) renders far fewer pixels at a low fb
+   resolution; the fractional fill-scaler then upscales it to the panel. */
+static int gSavedW, gSavedH, gLowres;
+void uno_pc64_lowres(int on)
+{
+    if (on && !gLowres) {
+        gSavedW = uno_fb_w; gSavedH = uno_fb_h; gLowres = 1;
+        apply_desktop((int)(gModeW / 4), (int)(gModeH / 4));  /* ~1/16 the pixels */
+        uno_screen_changed();
+    } else if (!on && gLowres) {
+        gLowres = 0;
+        apply_desktop(gSavedW, gSavedH);
+        uno_screen_changed();
+    }
 }
 
 /* F10: cycle GOP modes (external monitors; a laptop panel may not sync a
@@ -473,11 +501,12 @@ static void poll_pointer(void)
         {
             UINT64 rx = gAbs[i]->Mode->AbsoluteMaxX - gAbs[i]->Mode->AbsoluteMinX;
             UINT64 ry = gAbs[i]->Mode->AbsoluteMaxY - gAbs[i]->Mode->AbsoluteMinY;
-            if (rx && ry) {
+            if (rx && ry && gOutW > 0 && gOutH > 0) {
                 int sx = (int)(((st.CurrentX - gAbs[i]->Mode->AbsoluteMinX) * gModeW) / rx);
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
-                g_cx = (sx - (int)gOffX) / gScale;
-                g_cy = (sy - (int)gOffY) / gScale;
+                /* panel coord -> filled rect -> fb coord */
+                g_cx = (sx - (int)gOffX) * uno_fb_w / gOutW;
+                g_cy = (sy - (int)gOffY) * uno_fb_h / gOutH;
                 clamp_cursor();
                 g_have_pointer = 1;
             }
@@ -543,47 +572,51 @@ static const fb_px *cursor_row(int y, const fb_px *src)
 
 void uno_pc64_present(void)
 {
-    int x, y, k, s = gScale;
+    int x, oy, sy, fbw = FB_W, fbh = FB_H;
     {
         static int first = 1;
         if (first) { stage_mark2(0, 0x000080FF); first = 0; }  /* gray -> blue */
     }
-    for (y = 0; y < FB_H; y++) {
-        const fb_px *src = cursor_row(y, fb + y * FB_W);
-        fb_px *sh = gShadow + y * FB_W;
-        /* dirty check: skip rows unchanged since the last frame */
-        if (gShadowValid) {
-            for (x = 0; x < FB_W && src[x] == sh[x]; x++) ;
-            if (x == FB_W) continue;
-        }
-        for (x = 0; x < FB_W; x++) sh[x] = src[x];
-        /* one output row at fb-row y, scaled horizontally */
+
+    /* pass 1: composite the cursor into each source row and flag the rows
+       that changed since last frame (stored composited in gShadow) */
+    for (sy = 0; sy < fbh; sy++) {
+        const fb_px *src = cursor_row(sy, fb + sy * fbw);
+        fb_px *sh = gShadow + sy * fbw;
+        int dirty = !gShadowValid;
+        if (!dirty)
+            for (x = 0; x < fbw; x++) if (src[x] != sh[x]) { dirty = 1; break; }
+        gDirtyRow[sy] = (unsigned char)dirty;
+        if (dirty) for (x = 0; x < fbw; x++) sh[x] = src[x];
+    }
+
+    /* pass 2: for each output row whose source row changed, build the scaled
+       output row (nearest-neighbour via gColMap) and write the filled span */
+    for (oy = 0; oy < gOutH; oy++) {
+        const fb_px *sh;
+        UINT32 dy;
+        sy = gRowMap[oy];
+        if (!gDirtyRow[sy]) continue;
+        sh = gShadow + sy * fbw;
         if (gSwapRB) {
-            for (x = 0; x < FB_W; x++) {
-                fb_px p = src[x];   /* 0xAABBGGRR -> 0x00RRGGBB */
-                UINT32 c = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
-                for (k = 0; k < s; k++) gRow[x * s + k] = c;
+            for (x = 0; x < gOutW; x++) {
+                fb_px p = sh[gColMap[x]];   /* 0xAABBGGRR -> 0x00RRGGBB */
+                gRow[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
             }
         } else {
-            for (x = 0; x < FB_W; x++) {
-                UINT32 c = src[x] & 0x00FFFFFF;
-                for (k = 0; k < s; k++) gRow[x * s + k] = c;
-            }
+            for (x = 0; x < gOutW; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
         }
-        /* replicate vertically */
-        for (k = 0; k < s; k++) {
-            UINT32 dy = gOffY + (UINT32)(y * s + k);
-            if (gUseBlt) {
-                gGop->Blt(gGop, gRow, EfiBltBufferToVideo, 0, 0,
-                          gOffX, dy, (UINTN)FB_W * s, 1, 0);
-            } else {
-                volatile UINT32 *dst = gVram + dy * gStride + gOffX;
-                for (x = 0; x < FB_W * s; x++) dst[x] = gRow[x];
-            }
+        dy = gOffY + (UINT32)oy;
+        if (gUseBlt) {
+            gGop->Blt(gGop, gRow, EfiBltBufferToVideo, 0, 0,
+                      gOffX, dy, (UINTN)gOutW, 1, 0);
+        } else {
+            volatile UINT32 *dst = gVram + dy * gStride + gOffX;
+            for (x = 0; x < gOutW; x++) dst[x] = gRow[x];
         }
     }
     gShadowValid = 1;
-    gBS->Stall(8000);               /* idle frames are now nearly free */
+    gBS->Stall(8000);
 }
 
 /* ===========================================================================

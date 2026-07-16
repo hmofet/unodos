@@ -17,12 +17,18 @@
 #include "uno3d_game.h"
 #include "uno3d_backend.h"
 #include "fb.h"
+#include "mac_compat.h"      /* uno_pc64_lowres */
 
 static int gInited;
 static int gSteerL, gSteerR;
 
 static void runner_start(void)
 {
+    /* drop to a low render resolution: the software rasteriser then draws
+       ~1/16 the pixels and the platform upscales to fill the panel - the
+       difference between a slideshow and a smooth game on an iGPU with no
+       hardware 3D backend yet. */
+    uno_pc64_lowres(1);
     u3d_use_backend(&u3d_backend_intel);     /* probes Intel; soft-fallback */
     game_init(FB_W, FB_H);
     u3d_init(FB_W, FB_H);
@@ -70,7 +76,11 @@ static Boolean runner_key(char ch, short code, Boolean cmd)
 }
 
 static void runner_opened(void) { runner_start(); }
-static void runner_closed(void) { if (gInited) { u3d_shutdown(); gInited = 0; } }
+static void runner_closed(void)
+{
+    if (gInited) { u3d_shutdown(); gInited = 0; }
+    uno_pc64_lowres(0);          /* restore the desktop resolution */
+}
 
 static const AppInterface kIface = {
     runner_draw, runner_key, 0, runner_tick, runner_opened, runner_closed,

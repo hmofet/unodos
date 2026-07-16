@@ -7,11 +7,25 @@
 
 #define NBUF   4096
 #define NLINE_H 14
+#define NTOOL_H 18                      /* toolbar height under the title bar */
 
 static char    gNBuf[NBUF];
 static short   gNLen = 0, gNCaret = 0, gNTop = 0;   /* gNTop = first line shown */
 static Boolean gNDirty = false;
 static char    gNName[16] = "NOTES.TXT";
+
+/* toolbar buttons (x set per-draw from the window's left edge) */
+static UiBtn gBSave = {0, 0, 50, 15};
+static UiBtn gBOpen = {0, 0, 50, 15};
+static UiBtn gBNew  = {0, 0, 44, 15};
+
+static void notepad_toolbar_layout(UnoWin *w)
+{
+    short x = w->bounds.left + 5, y = w->bounds.top + TBAR_H + 2;
+    gBSave.x = x;        gBSave.y = y;
+    gBOpen.x = x + 54;   gBOpen.y = y;
+    gBNew.x  = x + 108;  gBNew.y  = y;
+}
 
 static void notepad_caret_linecol(short *line, short *col)
 {
@@ -34,12 +48,21 @@ static short notepad_line_start(short line)
 static void notepad_draw(UnoWin *w)
 {
     Rect r = w->bounds, ct;
-    short rows = (r.bottom - r.top - TBAR_H - 22) / NLINE_H;
-    short x = r.left + 5, y = r.top + TBAR_H + 12;
+    short ctop = r.top + TBAR_H + NTOOL_H;
+    short rows = (r.bottom - ctop - 16) / NLINE_H;
+    short x = r.left + 5, y = ctop + 12;
     short line, col, ln = 0, i = 0, drawn = 0;
     char st[80], num[12];
 
-    ct = r; ct.top += TBAR_H; InsetRect(&ct, 1, 1);
+    /* toolbar: clickable Save / Open / New so no key combo is required */
+    { Rect tb = r; tb.top += TBAR_H; tb.bottom = ctop; InsetRect(&tb, 1, 0);
+      uno_fill(&tb, C_WHITE); }
+    notepad_toolbar_layout(w);
+    ui_button(&gBSave, gNDirty ? "Save*" : "Save", false);
+    ui_button(&gBOpen, "Open", false);
+    ui_button(&gBNew,  "New", false);
+
+    ct = r; ct.top = ctop; InsetRect(&ct, 1, 1);
     ct.bottom -= 14;
     uno_fill(&ct, C_BLUE);
 
@@ -84,7 +107,7 @@ static void notepad_draw(UnoWin *w)
         strcat(st, "  Co "); fmt_u(col + 1, num); strcat(st, num);
         strcat(st, "  "); fmt_u(gNLen, num); strcat(st, num); strcat(st, " B");
         if (gNDirty) strcat(st, " *");
-        strcat(st, "   Cmd-S: save");
+        strcat(st, "   (Ctrl-S save)");
         text_at(r.left + 6, r.bottom - 4, st, C_BLUE, C_WHITE, true);
     }
 }
@@ -92,7 +115,7 @@ static void notepad_draw(UnoWin *w)
 static void notepad_scroll_to_caret(UnoWin *w)
 {
     short line, col;
-    short rows = (w->bounds.bottom - w->bounds.top - TBAR_H - 22) / NLINE_H;
+    short rows = (w->bounds.bottom - w->bounds.top - TBAR_H - NTOOL_H - 16) / NLINE_H;
     notepad_caret_linecol(&line, &col);
     if (line < gNTop) gNTop = line;
     if (line >= gNTop + rows) gNTop = line - rows + 1;
@@ -114,14 +137,28 @@ static void notepad_save(void)
     }
 }
 
+static void notepad_new(void)
+{
+    gNLen = 0; gNCaret = 0; gNTop = 0; gNDirty = false; gNBuf[0] = 0;
+}
+
 static void notepad_opened(void)
 {
     if (gNLen == 0) {
-        const char *demo = "UnoDOS Notepad\rThis app is a loadable MODULE.\r"
-                           "Cmd-S saves to the FAT volume.";
+        const char *demo = "UnoDOS Notepad\rClick Save / Open / New above -\r"
+                           "no key combo needed (Ctrl-S also saves).";
         short n = (short)strlen(demo);
         memcpy(gNBuf, demo, n); gNLen = n; gNCaret = n;
     }
+}
+
+static void notepad_click(UnoWin *w, Point p)
+{
+    if      (ui_hit(&gBSave, p)) notepad_save();
+    else if (ui_hit(&gBOpen, p)) notepad_load();
+    else if (ui_hit(&gBNew,  p)) notepad_new();
+    else return;
+    if (w) draw_window(w);
 }
 
 static Boolean notepad_key(char ch, short code, Boolean cmd)
@@ -176,7 +213,7 @@ static Boolean notepad_key(char ch, short code, Boolean cmd)
 }
 
 static const AppInterface kIface = {
-    notepad_draw, notepad_key, 0, 0, notepad_opened, 0,
+    notepad_draw, notepad_key, notepad_click, 0, notepad_opened, 0,
     "Notepad", { 56, 34, 484, 320 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }
