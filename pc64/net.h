@@ -20,6 +20,12 @@ void net_init(uno_nic_t *nic, const u8 mac[6]);
 void net_poll(void);                 /* pump once; call often */
 int  net_link(void);
 const u8 *net_ip(void);              /* our current IPv4 (u8[4]) */
+const u8 *net_gw(void);              /* gateway (static or DHCP opt 3)  */
+const u8 *net_dns(void);             /* resolver (static or DHCP opt 6) */
+
+/* DNS: resolve an A record. 1 = out[4] set, 0 = failed/timeout. Synchronous
+ * (pumps net_poll internally); call after the link + DHCP are up. */
+int  net_dns_query(const char *host, u8 out[4]);
 
 /* ARP */
 int  net_arp_resolve(const u8 ip[4], u8 mac_out[6]);   /* 1=known (else kicks req) */

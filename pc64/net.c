@@ -8,6 +8,7 @@
 static u8 MYIP[4] = {10, 0, 2, 15};
 static u8 GW[4]   = {10, 0, 2, 2};
 static u8 MASK[4] = {255, 255, 255, 0};
+static u8 DNS[4]  = {10, 0, 2, 3};        /* resolver (SLIRP default; DHCP opt 6) */
 
 static uno_nic_t *g_nic;
 static u8 g_mac[6];
@@ -488,7 +489,10 @@ void dhcp_input(const u8 *udp, int len)
         g_dhcp_state = 2;
         dhcp_send(3, g_dhcp_offer, g_dhcp_srv);  /* REQUEST */
     } else if (mt[0] == 5 && g_dhcp_state == 2) { /* ACK */
+        const u8 *rtr, *dns;
         memcpy(MYIP, boot + 16, 4);
+        rtr = dhcp_opt(boot, blen, 3, &ol);  if (rtr && ol >= 4) memcpy(GW,  rtr, 4);
+        dns = dhcp_opt(boot, blen, 6, &ol);  if (dns && ol >= 4) memcpy(DNS, dns, 4);
         g_dhcp_state = 3;
     }
 }
@@ -523,6 +527,71 @@ void net_init(uno_nic_t *nic, const u8 mac[6])
 
 int net_link(void) { return g_nic ? g_nic->link(g_nic->ctx) : 0; }
 const u8 *net_ip(void) { return MYIP; }
+const u8 *net_gw(void) { return GW; }
+const u8 *net_dns(void) { return DNS; }
+
+/* ---- DNS (A-record resolver over UDP/53) --------------------------------- *
+ * Synchronous + bounded: builds a query, then pumps net_poll while stalling a
+ * few ms per turn until the answer arrives or the budget runs out. The browser
+ * fetch is a discrete action, so blocking the UI for a beat is acceptable. */
+void uno_pc64_delay_ms(int ms);          /* firmware Stall (from uefi_main) */
+
+static int dns_name(u8 *o, const char *host)   /* encode "a.b.c" as labels */
+{
+    int n = 0; const char *p = host;
+    while (*p) {
+        const char *s = p; int len = 0;
+        while (*p && *p != '.') { p++; len++; }
+        if (len > 63) return -1;
+        o[n++] = (u8)len;
+        while (s < p) o[n++] = (u8)*s++;
+        if (*p == '.') p++;
+    }
+    o[n++] = 0;                                /* root label */
+    return n;
+}
+
+int net_dns_query(const char *host, u8 out[4])
+{
+    u8 q[300]; int qn = 0, ql, tries;
+    const u16 sport = 5300;
+    /* header: id, flags(RD), qd=1 */
+    q[0]=0x51; q[1]=0x53; q[2]=0x01; q[3]=0x00;
+    q[4]=0; q[5]=1; q[6]=0; q[7]=0; q[8]=0; q[9]=0; q[10]=0; q[11]=0;
+    qn = 12;
+    ql = dns_name(q + qn, host); if (ql < 0) return 0; qn += ql;
+    q[qn++]=0; q[qn++]=1;                       /* QTYPE  A  */
+    q[qn++]=0; q[qn++]=1;                       /* QCLASS IN */
+    for (tries = 0; tries < 4; tries++) {       /* (re)send, then wait */
+        int waited;
+        net_udp_send(DNS, 53, sport, q, qn);
+        for (waited = 0; waited < 120; waited++) {
+            u8 r[512]; u8 src[4]; u16 sp; int n, i, qd, an;
+            net_poll(); uno_pc64_delay_ms(8);
+            n = net_udp_recv(sport, r, sizeof r, src, &sp);
+            if (n < 12) continue;
+            qd = (r[4]<<8)|r[5]; an = (r[6]<<8)|r[7];
+            if (an < 1) return 0;
+            i = 12;
+            for (; qd > 0; qd--) {               /* skip questions */
+                while (i < n && r[i]) { if ((r[i]&0xC0)==0xC0){ i++; break; } i += r[i]+1; }
+                i++; i += 4;                     /* null + QTYPE + QCLASS */
+            }
+            for (; an > 0 && i + 12 <= n; an--) { /* answers */
+                u16 type, rdl;
+                if ((r[i]&0xC0)==0xC0) i += 2;   /* compressed name */
+                else { while (i < n && r[i]) i += r[i]+1; i++; }
+                type = (r[i]<<8)|r[i+1];
+                rdl  = (r[i+8]<<8)|r[i+9];
+                i += 10;
+                if (type == 1 && rdl == 4 && i + 4 <= n) { memcpy(out, r + i, 4); return 1; }
+                i += rdl;
+            }
+            return 0;
+        }
+    }
+    return 0;
+}
 
 void net_poll(void)
 {
