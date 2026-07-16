@@ -32,4 +32,10 @@ int  uno_i2c_hid_dump(unsigned char *out, int max);
 
 int  uno_i2c_hid_present(void);
 
+/* diagnostics: how many candidate BARs were seen, how many were confirmed
+   DesignWare I2C controllers, whether a HID device answered, its slave addr,
+   and whether its report descriptor parsed. Any pointer may be NULL. Lets the
+   System app surface WHY the trackpad did / didn't come up. */
+void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed);
+
 #endif

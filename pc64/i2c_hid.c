@@ -12,6 +12,8 @@ int uno_i2c_hid_init(void) { return 0; }
 int uno_i2c_hid_poll(int *ax, int *ay, int *b) { (void)ax;(void)ay;(void)b; return 0; }
 int uno_i2c_hid_dump(unsigned char *o, int m) { (void)o;(void)m; return 0; }
 int uno_i2c_hid_present(void) { return 0; }
+void uno_i2c_hid_status(int *nb, int *nc, int *pr, int *ad, int *pa)
+{ if (nb)*nb=0; if (nc)*nc=0; if (pr)*pr=0; if (ad)*ad=0; if (pa)*pa=0; }
 
 #else  /* ================= UNO_I2C_TRACKPAD enabled ==================== */
 
@@ -263,11 +265,14 @@ static void parse_report_desc(void)
     if (n >= 4) parse_rd(rd, n);
 }
 
+static int g_nbars, g_nctrl;       /* diagnostics (uno_i2c_hid_status) */
+
 int uno_i2c_hid_init(void)
 {
     u64 bars[8];
     int nb, bi, ai, di;
     nb = list_bars(bars, 8);
+    g_nbars = nb;
     for (bi = 0; bi < nb; bi++) {
         g_i2c = (volatile u8 *)(unsigned long)(uintptr_t)bars[bi];
         if (!g_i2c) continue;
@@ -275,6 +280,7 @@ int uno_i2c_hid_init(void)
          * unmapped/foreign BAR reads 0xFFFFFFFF here, so we skip it and stay
          * inert (e.g. under QEMU, which has no LPSS I2C). */
         if (r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) continue;
+        g_nctrl++;
         for (ai = 0; ai < (int)sizeof kAddrs; ai++)
             for (di = 0; di < (int)(sizeof kDescRegs / sizeof kDescRegs[0]); di++)
                 if (try_hid(kAddrs[ai], kDescRegs[di])) {
@@ -349,5 +355,14 @@ int uno_i2c_hid_dump(unsigned char *out, int max)
 }
 
 int uno_i2c_hid_present(void) { return g_present; }
+
+void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed)
+{
+    if (nbars)   *nbars   = g_nbars;
+    if (nctrl)   *nctrl   = g_nctrl;
+    if (present) *present = g_present;
+    if (addr)    *addr    = g_addr;
+    if (parsed)  *parsed  = g_parsed;
+}
 
 #endif /* UNO_I2C_TRACKPAD */
