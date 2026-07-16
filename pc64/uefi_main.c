@@ -636,11 +636,17 @@ static void poll_pointer(void)
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
                 int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
                 int ty = (sy - (int)gOffY) * uno_fb_h / gOutH;
-                /* light smoothing: firmware touchpad Absolute Pointer coords
-                   can be jumpy; move partway toward the target (halves jitter,
-                   ~1 frame of lag). Snap on large jumps so it stays responsive. */
-                if (tx - g_cx > 40 || g_cx - tx > 40) g_cx = tx; else g_cx = (g_cx + tx) / 2;
-                if (ty - g_cy > 40 || g_cy - ty > 40) g_cy = ty; else g_cy = (g_cy + ty) / 2;
+                /* Firmware touchpad Absolute Pointer coords are jumpy. A 2-pole
+                   low-pass (weight the previous position 2:1) smooths the
+                   jitter; a small dead-zone drops sub-pixel wobble; and a snap
+                   on a big delta keeps finger repositions instant. Tuned
+                   conservatively - the constants want a metal pass on the X1. */
+                int dxx = tx - g_cx, dyy = ty - g_cy;
+                int adx = dxx < 0 ? -dxx : dxx, ady = dyy < 0 ? -dyy : dyy;
+                if (adx > 48)      g_cx = tx;               /* reposition: snap */
+                else if (adx >= 2) g_cx = (g_cx * 2 + tx) / 3;   /* glide */
+                if (ady > 48)      g_cy = ty;
+                else if (ady >= 2) g_cy = (g_cy * 2 + ty) / 3;
                 clamp_cursor();
                 g_have_pointer = 1; moved = 1;
             }
