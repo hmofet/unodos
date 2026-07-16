@@ -137,7 +137,7 @@ void unoui_text_set(unoui_text *t, const char *s)
 
 void ui_px(int x, int y, fb_px c)
 {
-    if (x >= 0 && x < FB_W && y >= 0 && y < FB_H) fb[y * FB_W + x] = c;
+    fb_pixel(x, y, c);          /* clip-window aware (see fb_set_clip) */
 }
 
 static int chan(fb_px c, int shift) { return (int)((c >> shift) & 0xFF); }
@@ -758,7 +758,17 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
     case UI_GROUP:    PICK(group)(t, r, w->text); break;
     case UI_SEP:      PICK(sep)(t, r); break;
     case UI_ICON:     PICK(icon)(t, r, w->text, eff); break;
-    case UI_CANVAS:   if (w->canvas && w->canvas->draw) w->canvas->draw(w, r, w->canvas->ctx); break;
+    case UI_CANVAS:
+        /* the app draws arbitrary pixels - confine it to the canvas rect, then
+         * restore the window content clip for the widgets that follow. */
+        if (w->canvas && w->canvas->draw) {
+            int fw = t->m.frame_w, th = t->m.title_h;
+            fb_set_clip(r.x, r.y, r.w, r.h);
+            w->canvas->draw(w, r, w->canvas->ctx);
+            fb_set_clip(win->r.x + fw, win->r.y + th,
+                        win->r.w - 2 * fw, win->r.h - th - fw);
+        }
+        break;
     }
 }
 
@@ -779,11 +789,13 @@ void unoui_desktop(const unoui_theme *t, int W, int H)
 void unoui_render(unoui_window *win, const unoui_theme *t)
 {
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
-    int i;
+    int fw = t->m.frame_w, th = t->m.title_h, i;
     PICK(window)(t, win);
     PICK(titlebar)(t, win);
+    fb_set_clip(win->r.x + fw, win->r.y + th, win->r.w - 2 * fw, win->r.h - th - fw);
     for (i = 0; i < win->nw; i++)
         draw_one(d, t, win, &win->w[i], win->w[i].flags, -1);
+    fb_reset_clip();
 }
 
 void unoui_fullscreen(unoui_ui *ui, unoui_window *win) { ui->full = win; }
@@ -807,9 +819,17 @@ void unoui_render_ui(unoui_ui *ui)
     PICK(desktop)(t, ui->screen_w, ui->screen_h);
     for (wn = 0; wn < ui->nwin; wn++) {
         unoui_window *win = ui->win[wn];
+        int fw = t->m.frame_w, th = t->m.title_h;
         win->active = (wn == ui->nwin - 1);
+        /* chrome (frame, titlebar, shadow) draws unclipped - its painters are
+         * authored not to overflow win->r. */
         PICK(window)(t, win);
         PICK(titlebar)(t, win);
+        /* widgets are confined to the content rect (the region d_window fills
+         * below the titlebar) so an over-sized widget or a too-long label is
+         * cut at the frame instead of spilling onto the desktop. */
+        fb_set_clip(win->r.x + fw, win->r.y + th,
+                    win->r.w - 2 * fw, win->r.h - th - fw);
         for (i = 0; i < win->nw; i++) {
             unoui_widget *w = &win->w[i];
             int eff = w->flags, menuopen = -1;
@@ -824,7 +844,10 @@ void unoui_render_ui(unoui_ui *ui)
                 menuopen = ui->popup_menu;
             draw_one(d, t, win, w, eff, menuopen);
         }
+        fb_reset_clip();
     }
+    /* the open menu's popup deliberately extends past its window - draw it
+     * after the clip is reset. */
     if (ui->popup_wi >= 0)
         PICK(popup)(t, ui->popup_r, ui->popup_items, ui->popup_n, ui->popup_hot);
 }

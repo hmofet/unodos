@@ -106,7 +106,7 @@ static void build_ctrl(unoui_window *w)
     unoui_add_label(w, 8, 8, "Theme:");
     x = unoui_add_dropdown(w, 74, 4, 150, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
     unoui_add_label(w, 8, 34, "Resolution:");
-    x = unoui_add_dropdown(w, 92, 30, 128, g_res_items, g_res_n, 0); x->id = ID_RES;
+    x = unoui_add_dropdown(w, 100, 30, 124, g_res_items, g_res_n, 0); x->id = ID_RES;
     unoui_add_check(w, 8, 60, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
     unoui_add_check(w, 120, 60, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
     unoui_add_label(w, 8, 86, "Volume");
@@ -170,10 +170,12 @@ static void canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         fb_fill_rect(r.x + r.w * i / 8, r.y, r.w / 8 + 1, r.h, c);
     }
     fb_frame_rect(r.x, r.y, r.w, r.h, FB_RGB(255, 255, 255));
-    fb_text(r.x + 8, r.y + 8, "unoui canvas - app draws these pixels",
-            FB_RGB(255, 255, 255), -1);
-    fb_text(r.x + 8, r.y + 22, "Fullscreen button; Esc to return",
-            FB_RGB(255, 255, 255), -1);
+    /* caption on a dark backing strip so it reads over the bars and fits */
+    fb_fill_rect(r.x + 1, r.y + 1, r.w - 2, 30, FB_RGB(0, 0, 0));
+    fb_text(r.x + 6, r.y + 5,  "UI_CANVAS: the app owns",
+            FB_RGB(255, 255, 255), FB_RGB(0, 0, 0));
+    fb_text(r.x + 6, r.y + 17, "these pixels.",
+            FB_RGB(255, 255, 255), FB_RGB(0, 0, 0));
 }
 static int canvas_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
@@ -243,10 +245,22 @@ static void close_focused(void)
 
 static void build_launcher(void)
 {
-    unoui_widget *x; int i;
-    unoui_window_init(&g_launch, "Launcher", 8, 30, 128, 30 + NAPPS * 26 + 14);
-    for (i = 0; i < NAPPS; i++) {
-        x = unoui_add_button(&g_launch, 8, 6 + i * 26, 112, kAppNames[i], 0);
+    /* Size from theme metrics so buttons fill the content width exactly and
+     * the window is wide enough for the longest label - no overflow, no
+     * reliance on the clip as a crutch. */
+    const unoui_metrics *m = &theme_unodos.m;
+    int i, tw = 0, bw, winw;
+    for (i = 0; i < NAPPS; i++) {                 /* widest label + button pad */
+        int w = fb_text_w(kAppNames[i]);
+        if (w > tw) tw = w;
+    }
+    bw   = tw + 32;                                /* label + centred margins  */
+    winw = bw + 2 * m->frame_w + 2 * m->pad;
+    unoui_window_init(&g_launch, "Launcher", 8, 30,
+                      winw, m->title_h + m->pad + NAPPS * 28 + m->pad + m->frame_w);
+    unoui_widget *x;
+    for (i = 0; i < NAPPS; i++) {                 /* flush to content origin   */
+        x = unoui_add_button(&g_launch, 0, i * 28, bw, kAppNames[i], 0);
         x->id = ID_LAUNCH0 + i;
     }
 }

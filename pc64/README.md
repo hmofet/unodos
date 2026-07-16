@@ -112,6 +112,12 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   changed (input or the ~2 Hz caret blink); idle frames touch no VRAM, so the
   desktop is steady and a drag only rewrites the moving window's rows. A
   fullscreen canvas redraws every frame (for animation).
+- **Clip-to-window**: `fb` grew a clip window (`fb_set_clip`/`fb_reset_clip`);
+  the renderer confines each window's widgets (and a canvas's own drawing) to
+  its content rect, so an over-sized widget or a too-long label is cut at the
+  frame instead of bleeding onto the desktop — overflow is impossible by
+  construction, not by per-window hand-tuning. Chrome (frame/titlebar/shadow)
+  draws unclipped since those painters are authored not to overflow.
 - The only pc64-specific code is a ~40-line event adapter (UEFI input →
   `unoui_event`, gated so the legacy event queue is compiled out) + the window
   tree + action handlers; unoui owns everything else. Verified in QEMU: boots
