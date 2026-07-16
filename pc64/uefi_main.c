@@ -451,6 +451,7 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
     return 1;
 }
 void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
+void uno_pc64_delay_ms(int ms) { if (gBS && ms > 0) gBS->Stall((UINTN)ms * 1000); }
 
 static void map_key(UINT16 scan, CHAR16 uni, short mods)
 {
@@ -569,8 +570,13 @@ static void poll_pointer(void)
             if (rx && ry && gOutW > 0 && gOutH > 0) {
                 int sx = (int)(((st.CurrentX - gAbs[i]->Mode->AbsoluteMinX) * gModeW) / rx);
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
-                g_cx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
-                g_cy = (sy - (int)gOffY) * uno_fb_h / gOutH;
+                int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
+                int ty = (sy - (int)gOffY) * uno_fb_h / gOutH;
+                /* light smoothing: firmware touchpad Absolute Pointer coords
+                   can be jumpy; move partway toward the target (halves jitter,
+                   ~1 frame of lag). Snap on large jumps so it stays responsive. */
+                if (tx - g_cx > 40 || g_cx - tx > 40) g_cx = tx; else g_cx = (g_cx + tx) / 2;
+                if (ty - g_cy > 40 || g_cy - ty > 40) g_cy = ty; else g_cy = (g_cy + ty) / 2;
                 clamp_cursor();
                 g_have_pointer = 1; moved = 1;
             }
