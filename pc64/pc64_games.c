@@ -8,6 +8,10 @@
  * ======================================================================== */
 #include "pc64_games.h"
 #include "fb.h"
+#include "uno3d.h"
+#include "uno3d_game.h"
+#include "uno3d_backend.h"
+#include "mac_compat.h"      /* uno_pc64_lowres */
 
 /* ---------------------------------------------------------------- Dostris --- */
 #define DT_COLS 10
@@ -459,10 +463,59 @@ static void ol_tick(void)
     if (olFrame-(unsigned long)gOlLastSec >= 60) { gOlLastSec=olFrame; if(--gOlTime<=0){ gOlTime=0; gOlState=2; } }
 }
 
+/* --------------------------------------------------------------- Runner3D --- *
+ * The uno3d "UnoDOS Runner" game. It renders the 3D corridor straight into fb
+ * at the desktop resolution (fullscreen), so it runs as a native game that
+ * auto-fullscreens. uno_pc64_lowres(1) drops the render res for a playable
+ * frame-rate on the software rasteriser; open/close manage uno3d + the res. */
+static int gRnInit, gRnL, gRnR;
+static void rn_start(void)
+{
+    uno_pc64_lowres(1);
+    u3d_use_backend(&u3d_backend_intel);
+    game_init(FB_W, FB_H); u3d_init(FB_W, FB_H);
+    gRnInit = 1; gRnL = gRnR = 0;
+}
+static void rn_frame(void)
+{
+    game_input in; char line[48], nb[12]; const char *s; char *p; long sc;
+    if (!gRnInit) rn_start();
+    in.left = gRnL > 0; in.right = gRnR > 0; in.up = in.down = 0;
+    in.fire = in.start = 0;
+    if (gRnL > 0) gRnL--; if (gRnR > 0) gRnR--;
+    game_update(&in); game_render();
+    p = line; s = "UnoDOS Runner 3D   score "; while (*s) *p++ = *s++;
+    sc = game_score(); num(sc, nb); { char *q = nb; while (*q) *p++ = *q++; } *p = 0;
+    fb_text(12, 10, line, FB_RGB(255,255,255), -1);
+    fb_text(12, 22, u3d_backend_name(), FB_RGB(100,255,255), -1);
+    if (game_over()) fb_text(FB_W/2 - 90, FB_H/2, "CRASH - Space to restart", FB_RGB(255,110,110), -1);
+    else             fb_text(12, FB_H - 16, "Left/Right steer   Esc quit", FB_RGB(170,170,170), -1);
+}
+static void rn_draw(struct unoui_widget *w, unoui_rect r, void *ctx) { (void)w;(void)r;(void)ctx; rn_frame(); }
+static int rn_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev; (void)w;(void)ctx;
+    if (e->kind == UI_EV_KEY) {
+        if (e->key == UI_KEY_LEFT)  { gRnL = 6; return 1; }
+        if (e->key == UI_KEY_RIGHT) { gRnR = 6; return 1; }
+        return 0;
+    }
+    if (e->kind == UI_EV_CHAR && (e->ch == ' ' || e->ch == '\r')) {
+        game_input in = {0,0,0,0,0,1}; game_update(&in); return 1;   /* start/restart */
+    }
+    return 0;
+}
+static void rn_close(void)
+{
+    if (gRnInit) { u3d_shutdown(); gRnInit = 0; }
+    uno_pc64_lowres(0);
+}
+
 /* ------------------------------------------------------ registry ----------- */
 static unoui_canvas g_dostris = { dt_draw, dt_event, 0 };
 static unoui_canvas g_pacman  = { pm_draw, pm_event, 0 };
 static unoui_canvas g_outlast = { ol_draw, ol_event, 0 };
+static unoui_canvas g_runner  = { rn_draw, rn_event, 0 };
 
 unoui_canvas *pc64_game_canvas(int game)
 {
@@ -470,6 +523,7 @@ unoui_canvas *pc64_game_canvas(int game)
     case GAME_DOSTRIS: return &g_dostris;
     case GAME_PACMAN:  return &g_pacman;
     case GAME_OUTLAST: return &g_outlast;
+    case GAME_RUNNER:  return &g_runner;
     default:           return 0;
     }
 }
@@ -478,12 +532,15 @@ void pc64_game_open(int game)
     if (game == GAME_DOSTRIS)      { dtState = 0; dt_new(); }
     else if (game == GAME_PACMAN)  { gPmState = PM_TITLE; }
     else if (game == GAME_OUTLAST) { gOlState = 0; }
+    else if (game == GAME_RUNNER)  { rn_start(); }
 }
+void pc64_game_close(int game) { if (game == GAME_RUNNER) rn_close(); }
 void pc64_game_tick(int game)
 {
     if (game == GAME_DOSTRIS)      dt_tick();
     else if (game == GAME_PACMAN)  pm_tick();
     else if (game == GAME_OUTLAST) ol_tick();
+    /* GAME_RUNNER: update+render happen together in rn_draw (every frame) */
 }
 const char *pc64_game_name(int game)
 {

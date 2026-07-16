@@ -6,10 +6,11 @@
 #define PC64_GAMES_H
 #include "unoui.h"
 
-enum { GAME_DOSTRIS, GAME_PACMAN, GAME_OUTLAST, PC64_NGAMES };
+enum { GAME_DOSTRIS, GAME_PACMAN, GAME_OUTLAST, GAME_RUNNER, PC64_NGAMES };
 
 unoui_canvas *pc64_game_canvas(int game);   /* the game's draw/event vtable   */
 void          pc64_game_open(int game);      /* (re)start it                  */
+void          pc64_game_close(int game);     /* teardown (uno3d shutdown, ...) */
 void          pc64_game_tick(int game);      /* advance one frame (~60 Hz)    */
 const char   *pc64_game_name(int game);
 

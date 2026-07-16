@@ -35,7 +35,9 @@ static const char *kThemeNames[NTHEMES];
  * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NNATIVE };
-#define NAPPS  (NNATIVE + UNOAPP_COUNT)
+#define NEXTRA 1                          /* extra native apps beyond the bridge */
+#define EX_RUNNER (NNATIVE + UNOAPP_COUNT)   /* Runner3D: shell app index        */
+#define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas" };
@@ -56,8 +58,10 @@ static int          g_lidx[UNOAPP_COUNT];
 
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
-static const char *app_name(int a)  { return a < NNATIVE ? kAppNames[a]    : unoapp_name(a - NNATIVE); }
-static const char *app_short(int a) { return a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
+static const char *app_name(int a)
+{ return a == EX_RUNNER ? "Runner3D" : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
+static const char *app_short(int a)
+{ return a == EX_RUNNER ? "Runner" : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
@@ -424,12 +428,14 @@ static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
     return 0;
 }
 
-/* native game index for app `a`, or -1 (the rest use the mac_compat bridge) */
+/* the native GAME index for shell app `a`, or -1 (the rest use the bridge) */
 static int app_game(int a)
 {
-    int li = a - NNATIVE;
-    if (a < NNATIVE || li < 0 || li >= PC64_NGAMES) return -1;
-    return pc64_game_canvas(li) ? li : -1;
+    int li = a - NNATIVE, g = -1;
+    if (a < NNATIVE) return -1;
+    if (a == EX_RUNNER)             g = GAME_RUNNER;        /* extra native app */
+    else if (li >= 0 && li < 3)     g = li;                 /* Dostris/Pacman/Outlast */
+    return (g >= 0 && pc64_game_canvas(g)) ? g : -1;
 }
 
 static void build_legacy(int a)
@@ -514,8 +520,10 @@ static void close_focused(void)
     if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
     if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
+        int g = app_game(i);
         g_open[i] = 0;
-        if (i >= NNATIVE) unoapp_close(i - NNATIVE);
+        if (g >= 0)            pc64_game_close(g);        /* native game teardown */
+        else if (i >= NNATIVE) unoapp_close(i - NNATIVE); /* bridge app          */
         break;
     }
     if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
@@ -783,13 +791,9 @@ int main(void)
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }
         la = active_legacy();           /* drive the focused game/tool clock */
-        if (la >= 0 && app_game(NNATIVE + la) >= 0) {
-            pc64_game_tick(la); g_dirty = 1;    /* native game: animate each frame */
-            unoapp_focus(-1);
-        } else {
-            unoapp_focus(la);
-            if (la >= 0) unoapp_run_tick(la);   /* bridge app tick */
-        }
+        { int g = (la >= 0) ? app_game(NNATIVE + la) : -1;
+          if (g >= 0) { pc64_game_tick(g); g_dirty = 1; unoapp_focus(-1); }  /* native game */
+          else { unoapp_focus(la); if (la >= 0) unoapp_run_tick(la); } }     /* bridge app */
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
         if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
         else uno_pc64_delay_ms(16);
