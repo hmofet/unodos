@@ -1,0 +1,125 @@
+/* pc64_http - HTTP/1.0 GET for the browser. See pc64_http.h. */
+#include "pc64_http.h"
+#include "net.h"
+#include "e1000.h"
+#include <string.h>
+
+void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
+
+/* ---- shared network bring-up (idempotent) -------------------------------- */
+static int g_net_inited;
+
+int pc64_net_up(void)
+{
+    uno_nic_t *nic;
+    if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
+    nic = e1000_nic();
+    if (!nic) return 0;                          /* no NIC (e.g. the X1 Wi-Fi) */
+    net_init(nic, e1000_mac());
+    g_net_inited = 1;
+    net_dhcp_start();
+    { int i; for (i = 0; i < 400 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); } }
+    return 1;
+}
+
+/* ---- tiny helpers -------------------------------------------------------- */
+static int is_ipv4(const char *s, unsigned char out[4])
+{
+    int part = 0, val = 0, digits = 0, i;
+    for (i = 0; ; i++) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') { val = val*10 + (c-'0'); digits++; if (val > 255) return 0; }
+        else if (c == '.' || c == 0) {
+            if (!digits || part > 3) return 0;
+            out[part++] = (unsigned char)val; val = 0; digits = 0;
+            if (c == 0) break;
+        } else return 0;
+    }
+    return part == 4;
+}
+
+/* ---- GET ----------------------------------------------------------------- */
+int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
+{
+    char host[128], path[512];
+    unsigned char ip[4];
+    int port = 80, hn = 0, i;
+    const char *p = url;
+
+    if (statusmax > 0) status[0] = 0;
+    if (bodymax > 0) body[0] = 0;
+
+    /* scheme */
+    if (!strncmp(p, "https://", 8)) {
+        if (statusmax) strncpy(status, "HTTPS not supported yet (no CA trust) - try http://", statusmax-1);
+        return -1;
+    }
+    if (!strncmp(p, "http://", 7)) p += 7;
+
+    /* host[:port] */
+    while (*p && *p != '/' && *p != ':' && hn < (int)sizeof(host)-1) host[hn++] = *p++;
+    host[hn] = 0;
+    if (*p == ':') { p++; port = 0; while (*p >= '0' && *p <= '9') port = port*10 + (*p++ - '0'); }
+    /* path */
+    if (*p != '/') { path[0] = '/'; i = 1; } else { i = 0; }
+    { int j = i; while (*p && j < (int)sizeof(path)-1) path[j++] = *p++; path[j] = 0; if (!i && !path[0]) strcpy(path,"/"); }
+    if (path[0] == 0) strcpy(path, "/");
+    if (host[0] == 0) { if (statusmax) strncpy(status,"Empty host",statusmax-1); return -2; }
+
+    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No e1000 NIC found (Wi-Fi not supported)",statusmax-1); return -3; }
+
+    /* resolve */
+    if (!is_ipv4(host, ip)) {
+        if (!net_dns_query(host, ip)) { if (statusmax) strncpy(status,"DNS lookup failed",statusmax-1); return -4; }
+    }
+
+    /* connect */
+    if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
+    for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
+    if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
+
+    /* request */
+    { char req[720]; int rn = 0;
+      const char *a = "GET ", *b = " HTTP/1.0\r\nHost: ", *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n\r\n";
+      memcpy(req+rn,a,4); rn+=4;
+      { int l=(int)strlen(path); if(rn+l<(int)sizeof(req)){memcpy(req+rn,path,l);rn+=l;} }
+      { int l=(int)strlen(b); memcpy(req+rn,b,l); rn+=l; }
+      { int l=(int)strlen(host); if(rn+l<(int)sizeof(req)){memcpy(req+rn,host,l);rn+=l;} }
+      { int l=(int)strlen(c); memcpy(req+rn,c,l); rn+=l; }
+      net_tcp_send(req, rn);
+    }
+
+    /* receive until the server closes (Connection: close) or we time out */
+    { static char raw[49152];
+      int rn = 0, idle = 0;
+      while (rn < (int)sizeof(raw)-1) {
+          char tmp[1460]; int n;
+          net_poll();
+          n = net_tcp_recv(tmp, sizeof tmp);
+          if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; idle = 0; }
+          else {
+              int st = net_tcp_state();
+              if (st == TCP_DONE || st == TCP_CLOSED || st == TCP_FIN_WAIT) { if (++idle > 20) break; }
+              else if (++idle > 600) break;      /* ~3s of no data */
+              uno_pc64_delay_ms(5);
+          }
+      }
+      raw[rn] = 0;
+      net_tcp_close();
+
+      /* status line */
+      if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
+                           if (j==0) strncpy(status,"No response",statusmax-1); }
+
+      /* split headers from body at the blank line */
+      { const char *bp = raw, *e = raw + rn; const char *split = 0;
+        for (; bp + 3 < e; bp++) {
+            if (bp[0]=='\r'&&bp[1]=='\n'&&bp[2]=='\r'&&bp[3]=='\n') { split = bp+4; break; }
+            if (bp[0]=='\n'&&bp[1]=='\n') { split = bp+2; break; }
+        }
+        if (!split) split = raw;                 /* no headers found - show all */
+        { int bl = (int)(e - split); if (bl > bodymax-1) bl = bodymax-1; if (bl < 0) bl = 0;
+          memcpy(body, split, bl); body[bl] = 0; return bl; }
+      }
+    }
+}

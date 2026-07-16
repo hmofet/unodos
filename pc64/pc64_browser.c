@@ -3,9 +3,10 @@
  *
  * A native unoui canvas app: it lays out a document and paints it with fb
  * primitives, wrapping text to the canvas width and scaling headings. It runs
- * <script> blocks through a tiny interpreter (js.c) - no network yet. It renders
- * a built-in welcome page and opens files from the local file system (uno_fs_*:
- * the RAM disk today, FAT32/local disks too).
+ * <script> blocks through a tiny interpreter (js.c) and loads pages over the
+ * network (address bar -> pc64_http GET over e1000/TCP; HTTP today, HTTPS TBD).
+ * It also renders a built-in welcome page and opens files from the local file
+ * system (uno_fs_*: the RAM disk and FAT32/local disks).
  *
  * Rendering model: a single immediate-mode flow. A cursor walks left-to-right
  * wrapping words; block elements start new lines and add vertical gaps; a small
@@ -17,7 +18,10 @@
 #include "fb.h"
 #include "pc64_fs.h"
 #include "js.h"
+#include "pc64_http.h"
 #include <string.h>
+
+void uno_pc64_present(void);       /* fb -> GOP (for a Loading frame mid-fetch) */
 
 /* ---- page palette (a light "document" look) ------------------------------ */
 #define PG_BG    FB_RGB(250, 250, 248)
@@ -209,6 +213,10 @@ static void render_html(const char *src, unoui_rect r, int scroll)
 static char g_doc[DOC_MAX];
 static int  g_is_html, g_scroll, g_view;      /* g_view: 0 list, 1 document */
 static char g_title[48] = "UnoDOS Browser";
+static char g_url[256] = "http://";            /* address bar buffer */
+static char g_status[128];                     /* last fetch status / hint */
+static int  g_addr;                            /* 1 = editing the address bar */
+static unoui_rect g_rect;                      /* last-drawn rect (Loading present) */
 
 /* the file list: built-in demos + whatever the file system offers */
 #define MAXFILES 40
@@ -219,14 +227,15 @@ static int  g_nfiles, g_sel;
 static const char kWelcome[] =
 "# UnoDOS Browser\n\n"
 "A tiny **HTML / Markdown / CSS** renderer for pc64. It lays out a document and "
-"paints it straight into the framebuffer, and now *runs JavaScript* too "
-"(no network yet).\n\n"
+"paints it straight into the framebuffer, *runs JavaScript*, and *loads pages "
+"over the network*.\n\n"
 "## Features\n\n"
 "- Headings, **bold**, *italic*, `inline code`\n"
 "- Bullet lists and paragraphs with word-wrap\n"
-"- [Links](none) and horizontal rules\n"
 "- Runs `<script>` blocks (see the **Script.html** demo)\n"
-"- Loads files from the local disks (see the file list)\n\n"
+"- Loads files from the local disks (see the file list)\n"
+"- **Network**: type a `http://host/path` URL in the address bar and press "
+"Enter (Up from the file list focuses the bar). HTTPS is not supported yet.\n\n"
 "---\n\n"
 "## Try it\n\n"
 "Press **Backspace** to return to the file list, pick a `.md` / `.html` / `.txt`\n"
@@ -352,23 +361,80 @@ static void refresh_list(void)
 static long fs_load(int vol, const char *name, char *buf, long max)
 { return uno_fs_read(vol, name, (unsigned char *)buf, max); }
 
+/* ---- network fetch ------------------------------------------------------- */
+static void url_kind(const char *url)          /* pick MD vs HTML from suffix */
+{
+    int n = (int)strlen(url), q = n;
+    int i; for (i = 0; i < n; i++) if (url[i]=='?' || url[i]=='#') { q = i; break; }
+    g_is_html = 1;                              /* default: HTML (handles plain text) */
+    if (q >= 3 && !strncmp(url+q-3, ".md", 3)) g_is_html = 0;
+    else if (q >= 4 && !strncmp(url+q-4, ".txt", 4)) g_is_html = 0;
+}
+
+static void loading_frame(void)                 /* one presented "Loading" frame */
+{
+    unoui_rect r = g_rect;
+    fb_fill_rect(r.x, r.y, r.w, r.h, PG_BG);
+    fb_fill_rect(r.x, r.y, r.w, 20, FB_RGB(40, 60, 110));
+    fb_text(r.x + 8, r.y + 6, "Loading...", FB_RGB(255,255,255), -1);
+    fb_text(r.x + 12, r.y + 44, g_url, PG_LINK, -1);
+    uno_pc64_present();
+}
+
+static void fetch_url(void)
+{
+    int n;
+    loading_frame();                            /* show progress before we block */
+    n = pc64_http_get(g_url, g_doc, DOC_MAX-1, g_status, sizeof g_status);
+    g_scroll = 0;
+    if (n < 0) {                                /* build an error page */
+        char *d = g_doc; int o = 0;
+        const char *a = "<h1>Couldn't load the page</h1><p><b>URL:</b> ";
+        const char *b = "</p><p><b>Reason:</b> ";
+        const char *c = "</p><hr><p>The address bar takes <code>http://host/path</code>. "
+                        "HTTPS and DNS need a working link (QEMU SLIRP provides both; "
+                        "the X1 has no wired NIC).</p>";
+        #define APP(s) do { int l=(int)strlen(s); if(o+l<DOC_MAX-1){memcpy(d+o,s,l);o+=l;} } while(0)
+        APP(a); APP(g_url); APP(b); APP(g_status[0]?g_status:"unknown"); APP(c);
+        #undef APP
+        d[o] = 0; g_is_html = 1;
+    } else {
+        url_kind(g_url);
+        if (g_is_html) js_expand();
+    }
+    strncpy(g_title, g_url, 47); g_title[47] = 0;
+    g_view = 1;
+}
+
 /* ---- rendering ----------------------------------------------------------- */
 static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     (void)w; (void)ctx;
+    g_rect = r;
     fb_fill_rect(r.x, r.y, r.w, r.h, PG_BG);
-    if (g_view == 0) {                              /* file list */
-        int i; unoui_rect lr = r;
+    if (g_view == 0) {                              /* file list + address bar */
+        int i, ay = r.y + 24, top;
         fb_fill_rect(r.x, r.y, r.w, 20, FB_RGB(40, 60, 110));
-        fb_text(r.x + 8, r.y + 6, "Open a page  (Up/Down + Enter)", FB_RGB(255,255,255), -1);
+        fb_text(r.x + 8, r.y + 6, "UnoDOS Browser", FB_RGB(255,255,255), -1);
+        /* address bar */
+        fb_fill_rect(r.x + 6, ay, r.w - 12, 18, FB_RGB(255,255,255));
+        fb_frame_rect(r.x + 6, ay, r.w - 12, 18, g_addr ? PG_LINK : PG_RULE);
+        fb_text(r.x + 12, ay + 5, g_url, PG_TEXT, -1);
+        if (g_addr) { int cx = r.x + 12 + fb_text_w(g_url);
+                      fb_vline(cx, ay + 3, 12, PG_TEXT); }
+        fb_text(r.x + 8, ay + 22,
+                g_status[0] ? g_status
+                            : "Type a URL + Enter  -  or Down to the file list",
+                g_status[0] ? PG_QUOTE : FB_RGB(120,120,130), -1);
+        top = ay + 40;
         for (i = 0; i < g_nfiles; i++) {
-            int y = r.y + 26 + i * 16;
+            int y = top + i * 16;
             if (y > r.y + r.h - 12) break;
-            if (i == g_sel) fb_fill_rect(r.x + 2, y - 2, r.w - 4, 15, FB_RGB(210, 225, 250));
+            if (!g_addr && i == g_sel) fb_fill_rect(r.x + 2, y - 2, r.w - 4, 15, FB_RGB(210, 225, 250));
             fb_text(r.x + 24, y, g_names[i], PG_TEXT, -1);
             fb_text(r.x + 8, y, g_vol[i] < 0 ? "*" : ">", g_vol[i]<0?PG_LINK:PG_QUOTE, -1);
         }
-        (void)lr; return;
+        return;
     }
     /* document view: title bar + body */
     fb_fill_rect(r.x, r.y, r.w, 18, FB_RGB(40, 60, 110));
@@ -385,11 +451,28 @@ static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
-    if (g_view == 0) {                              /* file list */
+    if (g_view == 0) {                              /* file list + address bar */
+        if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
+            if (!g_addr) { g_addr = 1; g_url[0] = 0; }   /* typing focuses the bar */
+            { int l = (int)strlen(g_url); if (l < (int)sizeof(g_url)-1) { g_url[l] = (char)e->ch; g_url[l+1] = 0; } }
+            return 1;
+        }
         if (e->kind == UI_EV_KEY) {
+            if (g_addr) {
+                if (e->key == UI_KEY_BACKSPACE) { int l=(int)strlen(g_url); if (l>0) g_url[l-1]=0; return 1; }
+                if (e->key == UI_KEY_ENTER)     { if (g_url[0]) fetch_url(); return 1; }
+                if (e->key == UI_KEY_ESC || e->key == UI_KEY_DOWN) { g_addr = 0; return 1; }
+                return 1;                       /* swallow other keys while editing */
+            }
+            if (e->key == UI_KEY_UP)   { if (g_sel > 0) g_sel--; else g_addr = 1; return 1; }
             if (e->key == UI_KEY_DOWN && g_sel < g_nfiles-1) { g_sel++; return 1; }
-            if (e->key == UI_KEY_UP   && g_sel > 0)          { g_sel--; return 1; }
             if (e->key == UI_KEY_ENTER) { open_entry(g_sel); return 1; }
+        }
+        if (e->kind == UI_EV_MOUSE_DOWN) {      /* click bar or a file row (metal) */
+            unoui_rect r = g_rect; int ay = r.y + 24, top = ay + 40;
+            if (e->y >= ay && e->y < ay + 18) { g_addr = 1; return 1; }
+            { int row = (e->y - top) / 16;
+              if (row >= 0 && row < g_nfiles && e->y >= top) { g_addr = 0; g_sel = row; open_entry(row); return 1; } }
         }
         return 0;
     }
