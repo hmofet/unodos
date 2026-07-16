@@ -422,8 +422,32 @@ static void post_key_mod(short keycode, char ch, short mods)
 }
 static void post_key(short keycode, char ch) { post_key_mod(keycode, ch, 0); }
 
+/* ---- raw key ring: a platform-neutral (scan, unicode, ctrl) stream the
+   unoui shell consumes directly. The legacy core uses the Mac-coded events
+   posted below; both are filled, harmlessly. ------------------------------- */
+#define RAWK 32
+static struct { int scan, uni, ctrl; } gRawK[RAWK];
+static int gRawHead, gRawTail;
+static void raw_push(int scan, int uni, int ctrl)
+{
+    int n = (gRawTail + 1) % RAWK;
+    if (n == gRawHead) return;
+    gRawK[gRawTail].scan = scan; gRawK[gRawTail].uni = uni;
+    gRawK[gRawTail].ctrl = ctrl; gRawTail = n;
+}
+int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
+{
+    if (gRawHead == gRawTail) return 0;
+    *scan = gRawK[gRawHead].scan; *uni = gRawK[gRawHead].uni;
+    *ctrl = gRawK[gRawHead].ctrl;
+    gRawHead = (gRawHead + 1) % RAWK;
+    return 1;
+}
+void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
+
 static void map_key(UINT16 scan, CHAR16 uni, short mods)
 {
+    raw_push((int)scan, (int)uni, mods ? 1 : 0);
     switch (scan) {                           /* Mac keycode + arrow ASCII */
     case SCAN_LEFT:  post_key_mod(0x7B, 0x1C, mods); return;
     case SCAN_RIGHT: post_key_mod(0x7C, 0x1D, mods); return;

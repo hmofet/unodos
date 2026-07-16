@@ -22,6 +22,34 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
         -nostdinc -Iinclude -I. -I../uno3d -Ibearssl/inc \
         -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main ${UNO_EXTRA:-}"
 
+# ============================================================================
+# unoui shell variant:  ./build.sh uui [run]
+# The cross-platform unoui toolkit AS the whole UI (a themed desktop + WM +
+# widgets) - a lean image: platform + fb + RAM-disk FS + unoui + 8 themes,
+# no legacy core / apps / net / 3D.
+# ============================================================================
+if [ "$1" = "uui" ]; then
+    echo "[2/3] compiling the unoui shell..."
+    UCF="$CFLAGS -DUNO_UUI -I../unoui"
+    OBJS=""
+    for f in fb mac_compat pc64_libc pc64_io i2c_hid uefi_main pc64_uui; do
+        "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+    done
+    for u in unoui unoui_input; do
+        "$CC" $UCF -c -o "build/uui_$u.o" "../unoui/$u.c"; OBJS="$OBJS build/uui_$u.o"
+    done
+    for t in $(find ../unoui/themes -name '*.c' | sort); do
+        b=$(basename "$t" .c)
+        "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
+    done
+    echo "[3/3] linking the unoui image..."
+    "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
+        -o build/BOOTX64.EFI $OBJS
+    mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
+    ls -l build/BOOTX64.EFI; echo "done: unoui shell -> build/esp/"
+    exit 0
+fi
+
 echo "[2/3] compiling the kernel + subsystems + apps..."
 OBJS=""
 for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls i2c_hid uefi_main unodos; do
