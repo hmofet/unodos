@@ -14,6 +14,7 @@
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
+#include "pc64_uui_apps.h"   /* the legacy-app bridge (games, paint, ...) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -26,9 +27,15 @@ static const struct { const char *name; const struct unoui_theme *theme; } kThem
 #define NTHEMES ((int)(sizeof kThemes / sizeof kThemes[0]))
 static const char *kThemeNames[NTHEMES];
 
-/* ---- apps -------------------------------------------------------------- */
-enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NAPPS };
-static const char *kAppNames[NAPPS] =
+/* ---- apps --------------------------------------------------------------- *
+ * The first NNATIVE are unoui-native (built from widgets). The rest are the
+ * migrated legacy apps (games / paint / tracker / music), each hosted in a
+ * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
+ * index a-NNATIVE. */
+enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NNATIVE };
+#define NAPPS  (NNATIVE + UNOAPP_COUNT)
+#define APP_TBAR 18                       /* legacy apps' own title-bar height */
+static const char *kAppNames[NNATIVE] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas" };
 
 #define TASKH 26                          /* taskbar height, px */
@@ -40,6 +47,13 @@ static unoui_window g_task;               /* bare/top: the taskbar */
 static unoui_window g_win[NAPPS];
 static int          g_built[NAPPS], g_open[NAPPS];
 static int          g_dirty = 1;
+
+/* one canvas per legacy app; ctx carries its legacy index */
+static unoui_canvas g_lcanvas[UNOAPP_COUNT];
+static int          g_lidx[UNOAPP_COUNT];
+
+static const char *app_name(int a)  { return a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
+#define app_short(a) app_name(a)          /* legacy names are already short */
 
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
@@ -202,7 +216,7 @@ static void build_demo(unoui_window *w)
     x = unoui_add_button(w, 6, 150, 120, "Fullscreen", UI_F_DEFAULT); x->id = ID_FULL;
 }
 
-static void (*const g_build[NAPPS])(unoui_window *) =
+static void (*const g_build[NNATIVE])(unoui_window *) =
     { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo };
 
 /* ---- window management -------------------------------------------------- */
@@ -220,10 +234,6 @@ static void remove_win(unoui_window *win)
     if (UI.focus_win >= UI.nwin) UI.focus_win = UI.nwin - 1;
     UI.focus_wi = -1;
 }
-
-/* short desktop-icon / taskbar labels (the window titles are the long names) */
-static const char *kShort[NAPPS] =
-    { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
 
 /* the taskbar background: a bare window draws no chrome, so a non-interactive
  * canvas paints the bar face + top highlight under the buttons. */
@@ -247,7 +257,7 @@ static void rebuild_taskbar(void)
     b = unoui_add_button(&g_task, 4, 4, 50, "Start", 0); b->id = ID_START;
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
-        b = unoui_add_button(&g_task, x, 4, 100, kShort[i], 0); b->id = ID_TASK0 + i;
+        b = unoui_add_button(&g_task, x, 4, 100, app_short(i), 0); b->id = ID_TASK0 + i;
         x += 104;
     }
     unoui_add_label(&g_task, FB_W - 118, 8, g_clock);
@@ -262,11 +272,14 @@ static void build_taskbar(void)
 
 static void build_desktop(void)
 {
-    int i;
+    int i, percol;
     unoui_window_init(&g_desk, "", 0, 0, FB_W, FB_H - TASKH);
     g_desk.flags = UI_WIN_BARE | UI_WIN_BOTTOM;
+    percol = (FB_H - TASKH - 20) / 52; if (percol < 1) percol = 1;   /* grid */
     for (i = 0; i < NAPPS; i++) {
-        unoui_widget *ic = unoui_add_icon(&g_desk, 16, 14 + i * 52, kShort[i]);
+        int col = i / percol, row = i % percol;
+        unoui_widget *ic = unoui_add_icon(&g_desk, 16 + col * 104, 14 + row * 52,
+                                          app_short(i));
         ic->r.w = 84;                       /* wide enough for the label       */
         ic->id  = ID_LAUNCH0 + i;
     }
@@ -281,14 +294,56 @@ static void clamp_to_workarea(unoui_window *w)
     if (w->r.y < 0) w->r.y = 0;
 }
 
+/* ---- legacy apps hosted in a canvas ------------------------------------- */
+static void lcanvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{ (void)w; unoapp_paint(*(int *)ctx, r); }
+
+static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev; (void)w;
+    if (UI.full && e->kind == UI_EV_KEY && e->key == UI_KEY_ESC) {
+        unoui_fullscreen(&UI, 0); g_dirty = 1; return 1;   /* leave fullscreen */
+    }
+    if (unoapp_input(*(int *)ctx, e)) { g_dirty = 1; return 1; }
+    return 0;
+}
+
+static void build_legacy(int a)
+{
+    int li = a - NNATIVE, aw, ah;
+    const unoui_metrics *m = &theme_unodos.m;
+    unoui_canvas *cv = &g_lcanvas[li];
+    unoapp_size(li, &aw, &ah);
+    if (aw < 140) aw = 140;
+    if (ah < 100) ah = 100;
+    g_lidx[li] = li;
+    cv->draw = lcanvas_draw; cv->event = lcanvas_event; cv->ctx = &g_lidx[li];
+    /* size the window so its content area == the app's drawable area (the app
+     * minus its own title bar, which unoui draws instead). */
+    unoui_window_init(&g_win[a], app_name(a), 40, 20,
+                      aw + 2 * m->frame_w + 2 * m->pad,
+                      (ah - APP_TBAR) + m->title_h + 2 * m->pad + m->frame_w);
+    unoui_add_canvas(&g_win[a], 0, 0, aw, ah - APP_TBAR, cv);
+}
+
 static void open_app(int a)
 {
     if (a < 0 || a >= NAPPS) return;
-    if (!g_built[a]) { g_build[a](&g_win[a]); g_built[a] = 1; }
+    if (!g_built[a]) {
+        if (a < NNATIVE) g_build[a](&g_win[a]);
+        else             build_legacy(a);
+        g_built[a] = 1;
+    }
     if (!g_open[a]) {
         clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
-        unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1; rebuild_taskbar();
+        unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1;
+        if (a >= NNATIVE) unoapp_open(a - NNATIVE);
+        rebuild_taskbar();
     } else raise_win(&g_win[a]);
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
+    /* games take the whole screen; Esc returns to the desktop */
+    if (a >= NNATIVE && unoapp_is_game(a - NNATIVE))
+        unoui_fullscreen(&UI, &g_win[a]);
     g_dirty = 1;
 }
 
@@ -320,7 +375,12 @@ static void close_focused(void)
     win = UI.win[f];
     if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
     if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
-    for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { g_open[i] = 0; break; }
+    for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
+        g_open[i] = 0;
+        if (i >= NNATIVE) unoapp_close(i - NNATIVE);
+        break;
+    }
+    if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
     remove_win(win);
     rebuild_taskbar();
     g_dirty = 1;
@@ -332,18 +392,19 @@ static void build_launcher(void)
      * the window is wide enough for the longest label - no overflow. Opened by
      * the taskbar Start button. */
     const unoui_metrics *m = &theme_unodos.m;
+    const int row = 24;
     int i, tw = 0, bw, winw;
     for (i = 0; i < NAPPS; i++) {                 /* widest label + button pad */
-        int w = fb_text_w(kAppNames[i]);
+        int w = fb_text_w(app_name(i));
         if (w > tw) tw = w;
     }
     bw   = tw + 32;                                /* label + centred margins  */
     winw = bw + 2 * m->frame_w + 2 * m->pad;
-    unoui_window_init(&g_launch, "Programs", 8, 30,
-                      winw, m->title_h + m->pad + NAPPS * 28 + m->pad + m->frame_w);
+    unoui_window_init(&g_launch, "Programs", 8, 20,
+                      winw, m->title_h + m->pad + NAPPS * row + m->pad + m->frame_w);
     unoui_widget *x;
     for (i = 0; i < NAPPS; i++) {                 /* flush to content origin   */
-        x = unoui_add_button(&g_launch, 0, i * 28, bw, kAppNames[i], 0);
+        x = unoui_add_button(&g_launch, 0, i * row, bw, app_name(i), 0);
         x->id = ID_LAUNCH0 + i;
     }
 }
@@ -444,6 +505,17 @@ static void fmt_uptime(int secs)
     g_clock[j++] = ' '; g_clock[j++] = 's'; g_clock[j] = 0;
 }
 
+/* the legacy app index currently in front (fullscreen or focused), or -1 */
+static int active_legacy(void)
+{
+    unoui_window *win = UI.full ? UI.full
+                      : (UI.focus_win >= 0 && UI.focus_win < UI.nwin ? UI.win[UI.focus_win] : 0);
+    int a;
+    if (win) for (a = NNATIVE; a < NAPPS; a++)
+        if (&g_win[a] == win && g_open[a]) return a - NNATIVE;
+    return -1;
+}
+
 int main(void)
 {
     unoui_event tick;
@@ -451,6 +523,7 @@ int main(void)
 
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
+    unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
@@ -458,6 +531,7 @@ int main(void)
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
     for (;;) {
+        int la;
         uno_pc64_poll();
         if (pump_input()) { g_dirty = 1; idle = 0; }
         else if (++idle >= 30) {        /* ~0.5 s: blink the caret + tick clock */
@@ -466,6 +540,9 @@ int main(void)
             else { fmt_uptime(halfsecs / 2); }
         }
         feed(&tick);                    /* advance the caret-blink timebase */
+        la = active_legacy();           /* drive the focused game/tool clock */
+        unoapp_focus(la);
+        if (la >= 0) unoapp_run_tick(la);   /* may set g_dirty via draw_window */
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
         if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
         else uno_pc64_delay_ms(16);

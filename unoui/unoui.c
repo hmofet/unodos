@@ -809,9 +809,12 @@ void unoui_render_ui(unoui_ui *ui)
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
     int wn, i;
 
-    /* fullscreen: the window's canvas owns the whole screen, no chrome */
+    /* fullscreen: the window's canvas owns the whole screen, no chrome. Clear
+     * first - an app canvas (a game) may not paint every pixel, and without the
+     * clear the desktop/windows from the prior frame would show through. */
     if (ui->full) {
         unoui_widget *cv = first_canvas(ui->full);
+        fb_fill_rect(0, 0, ui->screen_w, ui->screen_h, FB_RGB(0, 0, 0));
         if (cv && cv->canvas && cv->canvas->draw) {
             unoui_rect fs = { 0, 0, ui->screen_w, ui->screen_h };
             cv->canvas->draw(cv, fs, cv->canvas->ctx);
