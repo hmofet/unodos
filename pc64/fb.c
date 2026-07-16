@@ -87,6 +87,99 @@ void fb_invert_rect(int x, int y, int w, int h)
     }
 }
 
+/* ---- alpha blending + gradients (for modern/"Aurora"-style chrome) --------
+ * Additive + default-safe: no existing caller is touched. Pixels are
+ * 0xFFBBGGRR (see FB_RGB); alpha `a` is 0..255 (0 = keep dst, 255 = src). */
+static fb_px blend_px(fb_px d, fb_px s, int a)
+{
+    int dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
+    int sr = s & 0xFF, sg = (s >> 8) & 0xFF, sb = (s >> 16) & 0xFF;
+    int r = dr + ((sr - dr) * a) / 255;
+    int g = dg + ((sg - dg) * a) / 255;
+    int b = db + ((sb - db) * a) / 255;
+    return 0xFF000000u | ((fb_px)b << 16) | ((fb_px)g << 8) | (fb_px)r;
+}
+
+void fb_blend_pixel(int x, int y, fb_px c, int a)
+{
+    int x0, y0, x1, y1; clip_bounds(&x0, &y0, &x1, &y1);
+    if (a <= 0) return;
+    if (a >= 255) { if (x>=x0&&x<x1&&y>=y0&&y<y1) fb[y*FB_W+x]=c; return; }
+    if (x >= x0 && x < x1 && y >= y0 && y < y1) {
+        fb_px *p = &fb[y * FB_W + x]; *p = blend_px(*p, c, a);
+    }
+}
+
+void fb_blend_rect(int x, int y, int w, int h, fb_px c, int a)
+{
+    int r, j;
+    if (a >= 255) { fb_fill_rect(x, y, w, h, c); return; }
+    if (a <= 0 || !clip(&x, &y, &w, &h)) return;
+    for (r = 0; r < h; r++) {
+        fb_px *p = &fb[(y + r) * FB_W + x];
+        for (j = 0; j < w; j++) p[j] = blend_px(p[j], c, a);
+    }
+}
+
+void fb_grad_v(int x, int y, int w, int h, fb_px top, fb_px bot)
+{
+    int tr = top & 0xFF, tg = (top>>8)&0xFF, tb = (top>>16)&0xFF;
+    int br = bot & 0xFF, bg = (bot>>8)&0xFF, bb = (bot>>16)&0xFF;
+    int H = h, r, j, ox = x, oy = y, ow = w, oh = h;
+    if (!clip(&x, &y, &w, &h)) return;
+    (void)ow; (void)oh;
+    for (r = 0; r < h; r++) {
+        int sy = (y + r) - oy;                       /* row within the full band */
+        int t = H > 1 ? (sy * 255) / (H - 1) : 0;
+        int cr = tr + ((br - tr) * t) / 255;
+        int cg = tg + ((bg - tg) * t) / 255;
+        int cb = tb + ((bb - tb) * t) / 255;
+        fb_px c = 0xFF000000u | ((fb_px)cb << 16) | ((fb_px)cg << 8) | (fb_px)cr;
+        fb_px *p = &fb[(y + r) * FB_W + x];
+        for (j = 0; j < w; j++) p[j] = c;
+    }
+    (void)ox;
+}
+
+/* ---- anti-aliased rounded rectangles (modern chrome) --------------------- *
+ * `corners` is a bitmask (FB_CORNER_*); alpha 0..255. Corner arcs fade via
+ * coverage blend, so rounded surfaces sit cleanly on any background. */
+static void round_corner(int bx, int by, int rad, int cx_left, int cy_top,
+                         fb_px c, int alpha)
+{
+    int R = 2*rad, R2 = R*R, band = 2*R + 1, i, j;
+    for (j = 0; j < rad; j++) for (i = 0; i < rad; i++) {
+        int AX = cx_left ? (2*i+1) : (R-2*i-1);
+        int AY = cy_top  ? (2*j+1) : (R-2*j-1);
+        int d2 = AX*AX + AY*AY, cov, a2;
+        if (d2 <= R2 - band) cov = 255;
+        else if (d2 >= R2 + band) cov = 0;
+        else cov = 255*(R2 + band - d2)/(2*band);
+        if (cov <= 0) continue;
+        a2 = (alpha >= 255) ? cov : cov*alpha/255;
+        fb_blend_pixel(bx+i, by+j, c, a2);
+    }
+}
+
+void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int corners)
+{
+    if (w <= 0 || h <= 0) return;
+    if (rad < 0) rad = 0;
+    if (rad > w/2) rad = w/2;
+    if (rad > h/2) rad = h/2;
+    fb_blend_rect(x+rad, y, w-2*rad, h, c, a);
+    fb_blend_rect(x, y+rad, rad, h-2*rad, c, a);
+    fb_blend_rect(x+w-rad, y+rad, rad, h-2*rad, c, a);
+    if (rad == 0) return;
+    if (corners & FB_CORNER_TL) round_corner(x,       y,       rad,0,0,c,a); else fb_blend_rect(x,       y,       rad,rad,c,a);
+    if (corners & FB_CORNER_TR) round_corner(x+w-rad, y,       rad,1,0,c,a); else fb_blend_rect(x+w-rad, y,       rad,rad,c,a);
+    if (corners & FB_CORNER_BL) round_corner(x,       y+h-rad, rad,0,1,c,a); else fb_blend_rect(x,       y+h-rad, rad,rad,c,a);
+    if (corners & FB_CORNER_BR) round_corner(x+w-rad, y+h-rad, rad,1,1,c,a); else fb_blend_rect(x+w-rad, y+h-rad, rad,rad,c,a);
+}
+
+void fb_round_rect(int x, int y, int w, int h, int rad, fb_px c)
+{ fb_round_rect_a(x, y, w, h, rad, c, 255, FB_CORNER_ALL); }
+
 int fb_glyph(int x, int y, int ch, fb_px fg, long bg)
 {
     int r, c, x0, y0, x1, y1;
