@@ -1,0 +1,7 @@
+# build artifacts + harness scratch
+build/
+__pycache__/
+*.pyc
+*.o
+*.pcap
+*.log
