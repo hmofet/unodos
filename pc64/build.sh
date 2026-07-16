@@ -38,7 +38,7 @@ if [ "$1" != "legacy" ]; then
     UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -I../unoui"
     OBJS=""
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games pc64_icons; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games pc64_icons e1000 net tls; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # uno3d: the write-once 3D pipeline + soft rasteriser + Intel scaffold + game
@@ -53,10 +53,19 @@ if [ "$1" != "legacy" ]; then
         b=$(basename "$t" .c)
         "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
     done
-    # migrated legacy apps: games + creative tools, hosted in unoui canvases
-    for app in dostris pacman outlast music tracker paint; do
+    # migrated legacy apps: creative tools + Network (Runner3D is native, above)
+    for app in dostris pacman outlast music tracker paint network; do
         "$CC" $UCF -DUNO_APP_SYM=uno_app_main_$app -c -o "build/app_$app.o" "apps/$app.c"
         OBJS="$OBJS build/app_$app.o"
+    done
+    # BearSSL (TLS for the Network app) - portable C only; skip the CPU-accel /
+    # OS-entropy files (portable equivalents build instead).
+    BSSL_SKIP=" ghash_pclmul sysrng aes_x86ni aes_x86ni_cbcdec aes_x86ni_cbcenc aes_x86ni_ctr aes_x86ni_ctrcbc chacha20_sse2 "
+    BSSLF="-O2 -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc -Iinclude -Ibearssl/inc -Ibearssl/src -DUNO_PC64"
+    for c in $(find bearssl/src -name '*.c' | sort); do
+        base=$(basename "$c" .c)
+        case "$BSSL_SKIP" in *" $base "*) continue;; esac
+        "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"; OBJS="$OBJS build/bssl_$base.o"
     done
     echo "[3/3] linking the unoui image..."
     "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
