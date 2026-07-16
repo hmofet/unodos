@@ -63,6 +63,7 @@ static int interactive(const unoui_widget *w)
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_TEXTAREA:
     case UI_VSCROLL: case UI_HSCROLL: case UI_SLIDER: case UI_SPINNER:
     case UI_DROPDOWN: case UI_TABS: case UI_MENUBAR: case UI_LIST: case UI_ICON:
+    case UI_CANVAS:            /* app-drawn regions take clicks (games, taskbar) */
         return 1;
     case UI_FIELD: return w->edit != 0;
     default: return 0;

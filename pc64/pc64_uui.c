@@ -15,6 +15,7 @@
 #include "unoui_theme.h"
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (games, paint, ...) */
+#include "pc64_icons.h"      /* per-app icon artwork */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -237,37 +238,101 @@ static void remove_win(unoui_window *win)
 
 /* the taskbar background: a bare window draws no chrome, so a non-interactive
  * canvas paints the bar face + top highlight under the buttons. */
-static void taskbg_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+/* forward decls (taskbar events fire these, defined below) */
+static void toggle_launcher(void);
+static void open_app(int a);
+
+/* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- */
+#define TB_START_X 4
+#define TB_START_W 60
+#define TB_CHIP_X  70
+#define TB_CHIP_W  108
+#define TB_CHIP_GAP 112
+
+/* app index of the focused window, or -1 (used to highlight its taskbar chip) */
+static int focused_app(void)
 {
-    const unoui_theme *t = UI.theme; (void)w; (void)ctx;
+    int i;
+    if (UI.focus_win < 0 || UI.focus_win >= UI.nwin) return -1;
+    for (i = 0; i < NAPPS; i++) if (&g_win[i] == UI.win[UI.focus_win]) return i;
+    return -1;
+}
+
+/* a raised (or pressed) 3D panel - the shared taskbar-chip / Start look */
+static void tb_panel(int x, int y, int w, int h, fb_px face, int pressed)
+{
+    const unoui_theme *t = UI.theme;
+    fb_fill_rect(x, y, w, h, face);
+    fb_frame_rect(x, y, w, h, t->pal.dark);          /* crisp outer edge */
+    if (pressed) {
+        fb_hline(x + 1, y + 1, w - 2, t->pal.shadow);
+        fb_vline(x + 1, y + 1, h - 2, t->pal.shadow);
+    } else {
+        fb_hline(x + 1, y + 1, w - 2, t->pal.light);
+        fb_vline(x + 1, y + 1, h - 2, t->pal.light);
+        fb_hline(x + 1, y + h - 2, w - 2, t->pal.shadow);
+        fb_vline(x + w - 2, y + 1, h - 2, t->pal.shadow);
+    }
+}
+
+static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme;
+    int i, x, act = focused_app(), by = r.y + 3, bh = TASKH - 6;
+    (void)w; (void)ctx;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
     fb_hline(r.x, r.y, r.w, t->pal.light);
-    fb_hline(r.x, r.y + 1, r.w, t->pal.light);
+    /* Start button - accent-coloured, 4-square emblem + label */
+    { int bx = r.x + TB_START_X;
+      fb_px q[4] = { FB_RGB(230,70,70), FB_RGB(70,200,90),
+                     FB_RGB(70,120,230), FB_RGB(240,205,60) };
+      int gx = bx + 7, gy = by + (bh - 11) / 2, u = 5;
+      tb_panel(bx, by, TB_START_W, bh, t->pal.accent, 0);
+      fb_fill_rect(gx, gy, u, u, q[0]);       fb_fill_rect(gx + u + 1, gy, u, u, q[1]);
+      fb_fill_rect(gx, gy + u + 1, u, u, q[2]); fb_fill_rect(gx + u + 1, gy + u + 1, u, u, q[3]);
+      fb_text(bx + 22, by + (bh - 8) / 2, "Start", t->pal.accent_text, -1); }
+    /* one chip per open window: mini icon + name, pressed if it's the active one */
+    x = r.x + TB_CHIP_X;
+    for (i = 0; i < NAPPS; i++) {
+        int d = (i == act) ? 1 : 0;
+        unoui_rect eb;
+        if (!g_open[i]) continue;
+        tb_panel(x, by, TB_CHIP_W, bh, t->pal.face, d);
+        eb.x = x + 4 + d; eb.y = by + (bh - 16) / 2 + d; eb.w = 16; eb.h = 16;
+        pc64_icon_emblem(i, eb);
+        fb_text(x + 24 + d, by + (bh - 8) / 2 + d, app_short(i), t->pal.text, -1);
+        x += TB_CHIP_GAP;
+    }
+    fb_text(r.x + r.w - 118, r.y + (r.h - 8) / 2, g_clock, t->pal.text, -1);
 }
-static unoui_canvas g_taskbg = { taskbg_draw, 0, 0 };
 
-/* rebuild the taskbar widget list: Start + one button per open app + clock.
- * Called on open/close/reflow; the clock label tracks g_clock in place. */
-static void rebuild_taskbar(void)
+static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
-    int i, x = 60;
-    unoui_widget *b;
-    g_task.nw = 0;
-    unoui_add_canvas(&g_task, 0, 0, FB_W, TASKH, &g_taskbg);
-    b = unoui_add_button(&g_task, 4, 4, 50, "Start", 0); b->id = ID_START;
+    const unoui_event *e = (const unoui_event *)ev;
+    int px, i, x;
+    (void)w; (void)ctx;
+    if (e->kind != UI_EV_MOUSE_DOWN) return 0;
+    px = e->x - g_task.r.x;
+    if (px >= TB_START_X && px < TB_START_X + TB_START_W) { toggle_launcher(); return 1; }
+    x = TB_CHIP_X;
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
-        b = unoui_add_button(&g_task, x, 4, 100, app_short(i), 0); b->id = ID_TASK0 + i;
-        x += 104;
+        if (px >= x && px < x + TB_CHIP_W) { open_app(i); return 1; }
+        x += TB_CHIP_GAP;
     }
-    unoui_add_label(&g_task, FB_W - 118, 8, g_clock);
+    return 0;
 }
+static unoui_canvas g_taskcv = { taskbar_draw, taskbar_event, 0 };
+
+/* the taskbar is one canvas; it reads g_open live, so "rebuild" is just a
+ * redraw request (kept as a name the open/close paths already call). */
+static void rebuild_taskbar(void) { g_dirty = 1; }
 
 static void build_taskbar(void)
 {
     unoui_window_init(&g_task, "", 0, FB_H - TASKH, FB_W, TASKH);
     g_task.flags = UI_WIN_BARE | UI_WIN_TOP;
-    rebuild_taskbar();
+    unoui_add_canvas(&g_task, 0, 0, FB_W, TASKH, &g_taskcv);
 }
 
 static void build_desktop(void)
@@ -280,7 +345,8 @@ static void build_desktop(void)
         int col = i / percol, row = i % percol;
         unoui_widget *ic = unoui_add_icon(&g_desk, 16 + col * 104, 14 + row * 52,
                                           app_short(i));
-        ic->r.w = 84;                       /* wide enough for the label       */
+        ic->r.w = 84; ic->r.h = 48;         /* room for emblem + label         */
+        ic->icon = i;                       /* -> pc64_icon_art draws its art  */
         ic->id  = ID_LAUNCH0 + i;
     }
 }
@@ -416,6 +482,7 @@ static void reflow(void)
     UI.screen_w = FB_W; UI.screen_h = FB_H;
     g_desk.r.w = FB_W; g_desk.r.h = FB_H - TASKH;      /* desktop fills - taskbar */
     g_task.r.y = FB_H - TASKH; g_task.r.w = FB_W;      /* taskbar re-anchored     */
+    if (g_task.nw > 0) g_task.w[0].r.w = FB_W;         /* stretch the bar canvas  */
     rebuild_taskbar();
     for (i = 0; i < UI.nwin; i++) {
         unoui_window *win = UI.win[i];
@@ -523,6 +590,7 @@ int main(void)
 
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
+    unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
