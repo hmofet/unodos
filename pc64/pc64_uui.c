@@ -27,9 +27,9 @@ static const struct { const char *name; const struct unoui_theme *theme; } kThem
 static const char *kThemeNames[NTHEMES];
 
 /* ---- apps -------------------------------------------------------------- */
-enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, NAPPS };
+enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NAPPS };
 static const char *kAppNames[NAPPS] =
-    { "Control Panel", "Editor", "Files", "System", "Clock" };
+    { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas" };
 
 static unoui_ui     UI;
 static unoui_window g_launch;             /* the launcher (always open) */
@@ -40,7 +40,7 @@ static int          g_dirty = 1;
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_LAUNCH0 = 100 };            /* launcher buttons: ID_LAUNCH0 + app */
+       ID_FULL, ID_LAUNCH0 = 100 };   /* launcher buttons: ID_LAUNCH0 + app */
 
 /* editor + status buffers */
 static char g_body[1024], g_name[32], g_status[48] = "ready";
@@ -160,8 +160,42 @@ static void build_clock(unoui_window *w)
     unoui_add_label(w, 10, 10, g_clock);
     unoui_add_label(w, 10, 30, "(uptime since boot)");
 }
+
+/* ---- Canvas demo: proves UI_CANVAS (app-drawn region) + unoui_fullscreen -- */
+static void canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    int i; (void)w; (void)ctx;
+    for (i = 0; i < 8; i++) {                       /* colour bars */
+        fb_px c = FB_RGB((i & 1) ? 255 : 0, (i & 2) ? 255 : 0, (i & 4) ? 255 : 0);
+        fb_fill_rect(r.x + r.w * i / 8, r.y, r.w / 8 + 1, r.h, c);
+    }
+    fb_frame_rect(r.x, r.y, r.w, r.h, FB_RGB(255, 255, 255));
+    fb_text(r.x + 8, r.y + 8, "unoui canvas - app draws these pixels",
+            FB_RGB(255, 255, 255), -1);
+    fb_text(r.x + 8, r.y + 22, "Fullscreen button; Esc to return",
+            FB_RGB(255, 255, 255), -1);
+}
+static int canvas_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
+    if (e->kind == UI_EV_KEY && e->key == UI_KEY_ESC) {
+        unoui_fullscreen(&UI, 0); g_dirty = 1; return 1;    /* exit fullscreen */
+    }
+    return 0;
+}
+static unoui_canvas g_canvas = { canvas_draw, canvas_event, 0 };
+
+static void build_demo(unoui_window *w)
+{
+    unoui_widget *x;
+    unoui_window_init(w, "Canvas", 200, 120, 270, 210);
+    unoui_add_label(w, 6, 6, "App-drawn canvas (UI_CANVAS):");
+    unoui_add_canvas(w, 6, 20, 256, 120, &g_canvas);
+    x = unoui_add_button(w, 6, 150, 120, "Fullscreen", UI_F_DEFAULT); x->id = ID_FULL;
+}
+
 static void (*const g_build[NAPPS])(unoui_window *) =
-    { build_ctrl, build_edit, build_files, build_sys, build_clock };
+    { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo };
 
 /* ---- window management -------------------------------------------------- */
 static void raise_win(unoui_window *win)
@@ -180,6 +214,18 @@ static void open_app(int a)
     else raise_win(&g_win[a]);
     g_dirty = 1;
 }
+/* cycle the focused/top window (F2 or Ctrl-Tab) - keyboard window switching */
+static void cycle_window(void)
+{
+    unoui_window *front; int j;
+    if (UI.nwin < 2) return;
+    front = UI.win[UI.nwin - 1];
+    for (j = UI.nwin - 1; j > 0; j--) UI.win[j] = UI.win[j - 1];
+    UI.win[0] = front;                 /* current top -> bottom, next -> top */
+    UI.focus_win = UI.nwin - 1; UI.focus_wi = -1;
+    g_dirty = 1;
+}
+
 static void close_focused(void)
 {
     int f = UI.focus_win, i, j;
@@ -236,6 +282,7 @@ static void on_action(const unoui_action *a)
     case ID_MENU:  if (a->value == 2) editor_save(); else if (a->value == 1) editor_open();
                    else if (a->value == 0) { unoui_text_set(&g_body_t, ""); strcpy(g_status, "new"); } break;
     case ID_ABOUT: strcpy(g_status, "unoui shell v0.3"); break;
+    case ID_FULL:  unoui_fullscreen(&UI, &g_win[APP_DEMO]); break;   /* go fullscreen */
     default: break;
     }
 }
@@ -264,6 +311,7 @@ static int pump_input(void)
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
         any = 1;
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }
+        if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
         switch (scan) {
         case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
         case 0x03: vk = UI_KEY_RIGHT; break; case 0x04: vk = UI_KEY_LEFT; break;
@@ -313,6 +361,7 @@ int main(void)
             else { fmt_uptime(halfsecs / 2); }
         }
         feed(&tick);                    /* advance the caret-blink timebase */
+        if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
         if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
         else uno_pc64_delay_ms(16);
     }

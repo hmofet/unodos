@@ -78,6 +78,10 @@ unoui_widget *unoui_add_sep(unoui_window *w, int x, int y, int ww)
 unoui_widget *unoui_add_icon(unoui_window *w, int x, int y, const char *t)
 { return push(w, UI_ICON, x, y, 48, 44, t); }
 
+unoui_widget *unoui_add_canvas(unoui_window *w, int x, int y, int ww, int h,
+                               unoui_canvas *c)
+{ unoui_widget *d = push(w, UI_CANVAS, x, y, ww, h, 0); d->canvas = c; return d; }
+
 unoui_widget *unoui_add_edit(unoui_window *w, int x, int y, int ww, unoui_text *t)
 { unoui_widget *d = push(w, UI_FIELD, x, y, ww, 16, 0); d->edit = t; return d; }
 
@@ -754,7 +758,16 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
     case UI_GROUP:    PICK(group)(t, r, w->text); break;
     case UI_SEP:      PICK(sep)(t, r); break;
     case UI_ICON:     PICK(icon)(t, r, w->text, eff); break;
+    case UI_CANVAS:   if (w->canvas && w->canvas->draw) w->canvas->draw(w, r, w->canvas->ctx); break;
     }
+}
+
+/* first UI_CANVAS widget in a window (used by fullscreen), or NULL */
+static unoui_widget *first_canvas(unoui_window *win)
+{
+    int i;
+    for (i = 0; i < win->nw; i++) if (win->w[i].kind == UI_CANVAS) return &win->w[i];
+    return 0;
 }
 
 void unoui_desktop(const unoui_theme *t, int W, int H)
@@ -773,11 +786,24 @@ void unoui_render(unoui_window *win, const unoui_theme *t)
         draw_one(d, t, win, &win->w[i], win->w[i].flags, -1);
 }
 
+void unoui_fullscreen(unoui_ui *ui, unoui_window *win) { ui->full = win; }
+
 void unoui_render_ui(unoui_ui *ui)
 {
     const unoui_theme *t = ui->theme;
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
     int wn, i;
+
+    /* fullscreen: the window's canvas owns the whole screen, no chrome */
+    if (ui->full) {
+        unoui_widget *cv = first_canvas(ui->full);
+        if (cv && cv->canvas && cv->canvas->draw) {
+            unoui_rect fs = { 0, 0, ui->screen_w, ui->screen_h };
+            cv->canvas->draw(cv, fs, cv->canvas->ctx);
+        }
+        return;
+    }
+
     PICK(desktop)(t, ui->screen_w, ui->screen_h);
     for (wn = 0; wn < ui->nwin; wn++) {
         unoui_window *win = ui->win[wn];

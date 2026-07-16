@@ -62,10 +62,23 @@ static int focusable(const unoui_widget *w)
     switch (w->kind) {
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_TEXTAREA:
     case UI_SLIDER: case UI_SPINNER: case UI_DROPDOWN: case UI_TABS: case UI_LIST:
+    case UI_CANVAS:
         return 1;
     case UI_FIELD: return w->edit != 0;
     default: return 0;
     }
+}
+
+/* forward an event to the focused canvas widget, if any; 1 = forwarded */
+static int canvas_forward(unoui_ui *ui, const unoui_event *ev)
+{
+    unoui_widget *w;
+    if (ui->focus_win < 0 || ui->focus_wi < 0) return 0;
+    w = &ui->win[ui->focus_win]->w[ui->focus_wi];
+    if (w->kind == UI_CANVAS && w->canvas && w->canvas->event) {
+        w->canvas->event(w, ev, w->canvas->ctx); return 1;
+    }
+    return 0;
 }
 
 static int window_at(unoui_ui *ui, int x, int y)
@@ -236,6 +249,11 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
     ui->cap_win = ui->focus_win; ui->cap_wi = hi;
 
     switch (w->kind) {
+    case UI_CANVAS:
+        ui->focus_wi = hi; ui->cap_mode = UI_CAP_NONE;
+        if (w->canvas && w->canvas->event) w->canvas->event(w, ev, w->canvas->ctx);
+        return NO_ACT;
+
     case UI_BUTTON: case UI_CHECK: case UI_RADIO:
         ui->cap_mode = UI_CAP_BUTTON; return NO_ACT;
 
@@ -379,6 +397,7 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
     if (ev->key == UI_KEY_ESC) { close_popup(ui); return NO_ACT; }
     if (ev->key == UI_KEY_TAB) { focus_step(ui, ext ? -1 : 1); return NO_ACT; }
     if (ui->focus_win < 0 || ui->focus_wi < 0) return NO_ACT;
+    if (canvas_forward(ui, ev)) return NO_ACT;   /* a focused canvas gets keys */
 
     win = ui->win[ui->focus_win]; w = &win->w[ui->focus_wi];
 
@@ -433,6 +452,19 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
 
 unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
 {
+    /* fullscreen: the window's canvas owns all input (TICK still blinks) */
+    if (ui->full) {
+        int i;
+        if (ev->kind == UI_EV_TICK) ui->ticks++;
+        for (i = 0; i < ui->full->nw; i++)
+            if (ui->full->w[i].kind == UI_CANVAS) {
+                unoui_widget *w = &ui->full->w[i];
+                if (w->canvas && w->canvas->event) w->canvas->event(w, ev, w->canvas->ctx);
+                break;
+            }
+        return NO_ACT;
+    }
+
     switch (ev->kind) {
 
     case UI_EV_TICK:
@@ -441,6 +473,7 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
 
     case UI_EV_CHAR: {
         unoui_window *win; unoui_widget *w;
+        if (canvas_forward(ui, ev)) return NO_ACT;
         if (ui->focus_win < 0 || ui->focus_wi < 0) return NO_ACT;
         win = ui->win[ui->focus_win]; w = &win->w[ui->focus_wi];
         if (w->edit && ev->ch >= 32 && ev->ch < 127) {
@@ -487,6 +520,8 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
         }
         default: break;
         }
+        /* while the button is held on a focused canvas, forward drag moves */
+        if (ui->mdown && canvas_forward(ui, ev)) return NO_ACT;
         /* plain hover tracking */
         { int wn = window_at(ui, ev->x, ev->y);
           ui->hot_win = wn;
@@ -534,6 +569,7 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
         if (ui->cap_mode == UI_CAP_BUTTON &&
             hit_widget(ui, ui->win[ui->cap_win], ev->x, ev->y) == ui->cap_wi)
             a = activate(ui, ui->cap_win, ui->cap_wi);
+        else if (ui->cap_mode == UI_CAP_NONE) canvas_forward(ui, ev);  /* canvas release */
         ui->cap_mode = UI_CAP_NONE;
         return a;
     }

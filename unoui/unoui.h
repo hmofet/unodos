@@ -35,7 +35,8 @@ typedef enum {
     UI_SPINNER,    /* numeric stepper with up/down arrows                     */
     UI_DROPDOWN,   /* closed combo; opens a popup list                        */
     UI_TABS,       /* row of tab headers; sel = active                        */
-    UI_MENUBAR     /* row of menu titles; each opens a popup of items         */
+    UI_MENUBAR,    /* row of menu titles; each opens a popup of items         */
+    UI_CANVAS      /* app-drawn region: the app renders into fb inside .r     */
 } ui_kind;
 
 /* ---- per-widget state flags --------------------------------------------- */
@@ -75,6 +76,20 @@ typedef struct unoui_menu {
     int          nitems;
 } unoui_menu;
 
+/* ---- canvas (UI_CANVAS): an app-drawn region -----------------------------
+ * The toolkit does the window chrome, focus, drag and z-order; the app owns
+ * the pixels inside the canvas rect. `draw` is called each render with the
+ * canvas's absolute screen rect (the whole screen in fullscreen); `event`
+ * receives input while the canvas is focused (or always, in fullscreen). This
+ * is how games / paint / tracker render custom graphics inside the same
+ * desktop, and pairs with unoui_fullscreen() for full-screen apps. */
+struct unoui_widget;
+typedef struct unoui_canvas {
+    void (*draw)(struct unoui_widget *w, unoui_rect r, void *ctx);
+    int  (*event)(struct unoui_widget *w, const void *ev, void *ctx); /* ev = unoui_event* */
+    void *ctx;
+} unoui_canvas;
+
 /* A single widget. Geometry `r` is relative to the window's CONTENT origin. */
 typedef struct unoui_widget {
     ui_kind      kind;
@@ -89,6 +104,7 @@ typedef struct unoui_widget {
     unoui_text  *edit;        /* non-NULL => editable text widget             */
     const unoui_menu *menus;  /* menubar: array of menus                      */
     int          nmenus;
+    unoui_canvas *canvas;     /* non-NULL => app-drawn UI_CANVAS              */
 } unoui_widget;
 
 #define UNOUI_MAX_WIDGETS 64
@@ -139,6 +155,8 @@ unoui_widget *unoui_add_group (unoui_window *, int x, int y, int w, int h,
                                const char *title);
 unoui_widget *unoui_add_sep   (unoui_window *, int x, int y, int w);
 unoui_widget *unoui_add_icon  (unoui_window *, int x, int y, const char *text);
+unoui_widget *unoui_add_canvas(unoui_window *, int x, int y, int w, int h,
+                               unoui_canvas *c);
 
 /* compute a window's canonical content origin from the theme metrics. Window
  * painters AND hit-testing use this, so what you see is what you can click. */
@@ -209,6 +227,7 @@ typedef struct unoui_ui {
     int popup_n, popup_hot;
 
     unsigned ticks;              /* caret blink timebase                      */
+    unoui_window *full;          /* fullscreen window (NULL = normal desktop) */
 } unoui_ui;
 
 /* absolute screen rect of a widget (menubar spans the content top edge) */
@@ -220,6 +239,11 @@ void          unoui_ui_theme(unoui_ui *, const struct unoui_theme *);
 void          unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus */
 unoui_action  unoui_handle  (unoui_ui *, const unoui_event *);
 void          unoui_render_ui(unoui_ui *);
+
+/* Full-screen mode: `win` (its first UI_CANVAS) fills the whole screen with no
+ * desktop / chrome, and all input routes to that canvas. NULL restores the
+ * normal desktop. For games / 3D that want the whole panel. */
+void          unoui_fullscreen(unoui_ui *, unoui_window *win);
 
 /* ---- lower-level rendering (used by the UI + the static contact sheet) --- */
 void unoui_desktop(const struct unoui_theme *theme, int screen_w, int screen_h);
