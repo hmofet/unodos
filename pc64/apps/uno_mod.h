@@ -45,6 +45,38 @@ static const KernelApi *gK;
 
 enum { C_BLUE = 0, C_CYAN = 1, C_MAG = 2, C_WHITE = 3 };
 
+/* ---------------------------------------------------------------------------
+ * Shared GUI button - the reusable pattern for giving every app a clickable
+ * control so features never depend on a key combo. An app lays out UiBtn rects
+ * (absolute screen coords), draws them with ui_button(), and hit-tests clicks
+ * with ui_hit(). Draws through the KernelApi primitives, so it works on every
+ * pc64 desktop resolution.
+ * ------------------------------------------------------------------------- */
+typedef struct { short x, y, w, h; } UiBtn;
+
+#if defined(__GNUC__)
+#  define UI_UNUSED __attribute__((unused))
+#else
+#  define UI_UNUSED
+#endif
+
+UI_UNUSED
+static void ui_button(const UiBtn *b, const char *label, Boolean pressed)
+{
+    Rect r;
+    r.left = b->x; r.top = b->y; r.right = b->x + b->w; r.bottom = b->y + b->h;
+    uno_fill(&r, pressed ? C_CYAN : C_WHITE);
+    uno_box(&r, C_BLUE);
+    text_at((short)(b->x + 6), (short)(b->y + b->h - 5), label,
+            C_BLUE, pressed ? C_CYAN : C_WHITE, true);
+}
+UI_UNUSED
+static Boolean ui_hit(const UiBtn *b, Point p)
+{
+    return (Boolean)(p.h >= b->x && p.h < b->x + b->w &&
+                     p.v >= b->y && p.v < b->y + b->h);
+}
+
 /* Module entry symbol.  On loadable-module targets (host .so, PS2 .uno, DC CD
    romdisk) every module exports the SAME symbol `uno_app_main`, resolved per
    file at load time.  On the classic Mac native build all modules are linked
