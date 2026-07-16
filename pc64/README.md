@@ -116,12 +116,19 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   Only platform + fb + RAM-disk FS + unoui + 8 themes.
 - `./build.sh legacy` still builds the old core + 14 apps + net/TLS/3D
   (source preserved until those apps are migrated to unoui windows).
-- The shell ships four functional windows: a **Control Panel** (live theme
+- A persistent **Launcher** window opens apps on demand (raise if already
+  open, **Ctrl-W** closes the focused window): a **Control Panel** (live theme
   dropdown → re-skins the whole desktop across all 8 themes; live resolution
   dropdown; checkboxes/slider/spinner), an **Editor** (File/Edit menubar,
   real multi-line editing, filename field, format dropdown, Save/Open/New
-  wired to the RAM-disk File Manager), a **Files** list, and a **System**
-  panel.
+  wired to the RAM-disk File Manager), a **Files** list, a **System** panel,
+  and a **Clock**. Windows are sized so no widget overflows the frame.
+- **Present-on-change**: the frame is redrawn/presented only when something
+  changed (input or the ~2 Hz caret blink); idle frames touch no VRAM, so the
+  desktop is steady and a drag only rewrites the moving window's rows.
+- The touchpad Absolute Pointer is lightly smoothed (halves firmware jitter);
+  the remaining migration is folding the games / Network / Runner3D into unoui
+  windows (their engines need rebuilding against the unoui shell).
 - The only pc64-specific code is a ~40-line event adapter (UEFI input →
   `unoui_event`, gated so the legacy event queue is compiled out) + the
   window tree + action handlers; unoui owns everything else. Verified in QEMU:
