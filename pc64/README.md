@@ -100,6 +100,34 @@ bring-up — which is how the LLP64 footgun below was caught.
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
 
+## unoui shell — the toolkit as the whole UI (`./build.sh uui`)
+
+`pc64_uui.c` is an alternative shell that makes the cross-platform **unoui**
+widget toolkit the entire UnoDOS UI: a themed desktop + window manager +
+retained-mode widgets (dropdowns, checkboxes, sliders, spinners, buttons,
+menubars, multi-line text areas, fields, lists, scrollbars, tabs), rendered
+into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
+the key-combo reliance — **every control is reachable by pointer OR keyboard**
+(Tab focus, arrows, Enter), so it needs no mouse.
+
+- Build: `./build.sh uui` — a lean 80 KB image (platform + fb + RAM-disk FS +
+  unoui + 8 themes; no legacy core/apps/net/3D). The default `./build.sh`
+  still produces the full legacy build.
+- The shell ships four functional windows: a **Control Panel** (live theme
+  dropdown → re-skins the whole desktop across all 8 themes; live resolution
+  dropdown → `uno_pc64_res_set`; checkboxes/slider/spinner), an **Editor**
+  (File/Edit menubar, real multi-line editing, filename field, format
+  dropdown, Save/Open/New wired to the RAM-disk File Manager), a **Files**
+  list, and a **System** panel.
+- The only pc64-specific code is the ~40-line event adapter (UEFI input →
+  `unoui_event`) + the window tree + action handlers; unoui owns everything
+  else. Verified in QEMU: boots, renders the full widget set, and
+  **keyboard-drives live theme switching** (UnoDOS → Windows 3.1 →
+  Mac Plus → …) — `shots/uui_desktop.png`, `shots/uui_theme2.png`.
+
+Folding the games / Network / Runner3D into unoui windows and making the
+unoui shell the default is the continued migration.
+
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 
 Modern laptop trackpads (2015+, incl. the X1 Carbon Gen 8) are **I2C-HID**
