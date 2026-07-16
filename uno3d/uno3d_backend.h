@@ -60,6 +60,9 @@ extern const u3d_backend u3d_backend_soft;   /* uno3d_soft.c - universal (also t
                                               * 3D hardware) */
 extern const u3d_backend u3d_backend_ps2;    /* uno3d_ps2.c  - GS (gsKit) */
 extern const u3d_backend u3d_backend_dc;     /* uno3d_dc.c   - PowerVR2 (KOS) */
+extern const u3d_backend u3d_backend_intel;  /* uno3d_intel.c - pc64 Intel iGPU
+                                              * (scaffold: soft fallback today) */
+int uno3d_intel_present(void);               /* 1 if an Intel display device exists */
 /* planned HARDWARE backends: u3d_backend_ps3 (RSX), u3d_backend_pc_d3d (D3D/GL on
  * a GPU-equipped PC), u3d_backend_gc (GX), u3d_backend_xbox (D3D8), ... - add the
  * extern when the file lands. (Old/3D-less PCs just use u3d_backend_soft.)        */

@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""UnoDOS/pc64 scripted verification harness - QEMU + OVMF, fully headless.
+
+The pc64 counterpart of the family's harness.py pattern - but where the
+console ports need a ROM-free CPU-core harness (no headless grab under RDP),
+QEMU is natively scriptable: boot the ESP under OVMF with no display, drive
+the desktop over QMP (send-key), and capture the GOP surface (screendump)
+into shots/*.png at each step.
+
+  python3 harness.py            boot -> desktop shot, then the scripted
+                                keyboard pass: SysInfo, Clock, Notepad
+                                (typing), Dostris (playing) - a shot each.
+  python3 harness.py boot       boot -> desktop shot only.
+"""
+import json, os, socket, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+os.chdir(HERE)
+
+OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
+OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+QMP_SOCK  = "/tmp/unodos-pc64-qmp.sock"   # NOT under build/: a Windows-mounted
+                                          # drvfs tree cannot host unix sockets
+
+
+class Qmp:
+    def __init__(self, path, timeout=30):
+        deadline = time.time() + timeout
+        while True:
+            try:
+                self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.s.connect(path)
+                break
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.3)
+        self.buf = b""
+        self.recv()                          # greeting
+        self.cmd("qmp_capabilities")
+
+    def recv(self):
+        while b"\n" not in self.buf:
+            self.buf += self.s.recv(65536)
+        line, self.buf = self.buf.split(b"\n", 1)
+        return json.loads(line)
+
+    def cmd(self, name, **args):
+        msg = {"execute": name}
+        if args:
+            msg["arguments"] = args
+        self.s.sendall(json.dumps(msg).encode() + b"\n")
+        while True:
+            r = self.recv()
+            if "return" in r or "error" in r:
+                return r
+
+
+def keys(q, *names, hold=40, gap=0.12):
+    for n in names:
+        q.cmd("send-key", keys=[{"type": "qcode", "data": n}], **{"hold-time": hold})
+        time.sleep(gap)
+
+
+def text(q, s):
+    QMAP = {" ": "spc", ".": "dot", ",": "comma", "-": "minus", "/": "slash"}
+    for ch in s:
+        if ch.isupper():
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "shift"},
+                                    {"type": "qcode", "data": ch.lower()}])
+        else:
+            q.cmd("send-key", keys=[{"type": "qcode", "data": QMAP.get(ch, ch)}])
+        time.sleep(0.1)
+
+
+def mouse_move(q, x, y):
+    q.cmd("input-send-event", events=[
+        {"type": "abs", "data": {"axis": "x", "value": int(x * 32767 / 640)}},
+        {"type": "abs", "data": {"axis": "y", "value": int(y * 32767 / 480)}}])
+    time.sleep(0.1)
+
+
+def mouse_btn(q, down):
+    q.cmd("input-send-event", events=[
+        {"type": "btn", "data": {"down": down, "button": "left"}}])
+    time.sleep(0.1)
+
+
+def click(q, x, y):
+    mouse_move(q, x, y)
+    mouse_btn(q, True)
+    mouse_btn(q, False)
+
+
+def shot(q, tag):
+    ppm = "shots/%s.ppm" % tag
+    q.cmd("screendump", filename=ppm)
+    time.sleep(0.4)
+    subprocess.run([sys.executable, "tools/ppm2png.py", ppm, "shots/%s.png" % tag],
+                   check=True)
+    os.remove(ppm)
+    print("shot: shots/%s.png" % tag)
+
+
+def main():
+    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    if os.path.exists(QMP_SOCK):
+        os.remove(QMP_SOCK)
+    qemu = subprocess.Popen([
+        "qemu-system-x86_64", "-machine", "q35", "-m", "256",
+        "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
+        "-drive", "if=pflash,format=raw,file=build/vars.fd",
+        "-drive", "format=vvfat,file=fat:rw:build/esp",
+        "-device", "qemu-xhci", "-device", "usb-tablet",
+        "-nic", "none",
+        "-display", "none",
+        "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
+        "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
+    ])
+    try:
+        q = Qmp(QMP_SOCK)
+        print("qemu up; waiting for OVMF -> UnoDOS boot...")
+        time.sleep(18)                        # OVMF + splash + first desktop paint
+        shot(q, "m1_desktop")
+
+        if len(sys.argv) > 1 and sys.argv[1] == "boot":
+            return
+
+        # ---- M4: mouse (usb-tablet -> EFI Absolute Pointer) ----------------
+        if len(sys.argv) > 1 and sys.argv[1] == "mouse":
+            click(q, 232, 50)                  # select the Files icon
+            time.sleep(0.5)
+            click(q, 232, 50)                  # second click = double: launch
+            time.sleep(1.5)
+            shot(q, "m4_mouse_open")
+            mouse_move(q, 180, 48)             # grab the Files title bar
+            mouse_btn(q, True)
+            for step in range(1, 7):           # outline drag, WIn3.1 style
+                mouse_move(q, 180 + step * 30, 48 + step * 25)
+            mouse_btn(q, False)
+            time.sleep(1.0)
+            shot(q, "m4_mouse_drag")
+            click(q, 500, 300)                 # background click
+            time.sleep(0.5)
+            shot(q, "m4_mouse_done")
+            return
+
+        # ---- M2: keyboard navigation. Desktop icon 0 = SysInfo. ----------
+        keys(q, "ret"); time.sleep(1.5)
+        shot(q, "m2_sysinfo")
+        keys(q, "esc"); time.sleep(1.0)
+
+        keys(q, "right"); keys(q, "ret"); time.sleep(1.5)      # icon 1 = Clock
+        shot(q, "m2_clock")
+        keys(q, "esc"); time.sleep(1.0)
+
+        # ---- M2: Files (RAM disk listing: README.TXT) ---------------------
+        keys(q, "right"); keys(q, "ret"); time.sleep(1.5)      # icon 2 = Files
+        shot(q, "m2_files")
+        keys(q, "esc"); time.sleep(1.0)
+
+        # ---- M2: Notepad + typing + Ctrl-S (cmdKey) save -------------------
+        keys(q, "right"); keys(q, "ret"); time.sleep(1.5)      # icon 3 = Notepad
+        text(q, "UnoDOS on a modern PC via UEFI GOP.")
+        time.sleep(1.0)
+        shot(q, "m2_notepad")
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "s"}])
+        time.sleep(1.0)
+        keys(q, "esc"); time.sleep(1.0)
+
+        # ---- M2: Files again - the saved file on the FAT volume ------------
+        keys(q, "left"); keys(q, "ret"); time.sleep(1.5)       # icon 2 = Files
+        keys(q, "r"); time.sleep(1.0)                          # refresh listing
+        shot(q, "m2_files_saved")
+        keys(q, "esc"); time.sleep(1.0)
+
+        # ---- M3: Dostris ---------------------------------------------------
+        keys(q, "right", "right", "right"); keys(q, "ret"); time.sleep(1.5)  # icon 5
+        keys(q, "n"); time.sleep(0.5)          # new game
+        for _ in range(6):
+            keys(q, "left", gap=0.2)
+            keys(q, "spc", gap=0.3)            # hard-drop a few pieces
+        time.sleep(0.8)
+        shot(q, "m3_dostris")
+    finally:
+        try:
+            q.cmd("quit")
+        except Exception:
+            qemu.kill()
+        qemu.wait(timeout=10)
+
+
+if __name__ == "__main__":
+    main()

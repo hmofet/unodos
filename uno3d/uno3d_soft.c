@@ -15,7 +15,14 @@
 #include "fb.h"
 #include <math.h>
 
+/* pc64 has a RUNTIME framebuffer size (FB_W/FB_H are variables), so the
+   z-buffer is sized to the ceiling and indexed with the live stride. Other
+   ports keep the exact static array. */
+#ifdef UNO_PC64
+static float g_zbuf[FB_BUF_PIX];
+#else
 static float g_zbuf[FB_W * FB_H];
+#endif
 
 static int soft_init(int w, int h) { (void)w; (void)h; return 0; }
 static void soft_shutdown(void) { }
