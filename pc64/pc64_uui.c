@@ -16,6 +16,7 @@
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
+#include "pc64_browser.h"    /* the web browser (native windowed canvas) */
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include <string.h>
@@ -36,8 +37,9 @@ static const char *kThemeNames[NTHEMES];
  * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NNATIVE };
-#define NEXTRA 1                          /* extra native apps beyond the bridge */
-#define EX_RUNNER (NNATIVE + UNOAPP_COUNT)   /* Runner3D: shell app index        */
+#define NEXTRA 2                          /* extra native apps beyond the bridge */
+#define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
+#define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -60,9 +62,11 @@ static int          g_lidx[UNOAPP_COUNT];
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
 static const char *app_name(int a)
-{ return a == EX_RUNNER ? "Runner3D" : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
+{ return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
+       : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
 static const char *app_short(int a)
-{ return a == EX_RUNNER ? "Runner" : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
+{ return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
+       : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
@@ -438,6 +442,9 @@ static int app_game(int a)
     else if (li >= 0 && li < 3)     g = li;                 /* Dostris/Pacman/Outlast */
     return (g >= 0 && pc64_game_canvas(g)) ? g : -1;
 }
+/* a mac_compat-bridge app (Music/Tracker/Paint/Network - not a native game/browser) */
+static int app_is_bridge(int a)
+{ int li = a - NNATIVE; return a >= NNATIVE && li >= 0 && li < UNOAPP_COUNT && app_game(a) < 0; }
 
 static void build_legacy(int a)
 {
@@ -449,6 +456,13 @@ static void build_legacy(int a)
         unoui_window_init(&g_win[a], app_name(a), 30, 16,
                           aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
         unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_game_canvas(g));
+        return;
+    }
+    if (a == EX_BROWSER) {             /* native windowed browser canvas */
+        aw = 440; ah = 300;
+        unoui_window_init(&g_win[a], app_name(a), 24, 14,
+                          aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
+        unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_browser_canvas());
         return;
     }
     cv = &g_lcanvas[li];
@@ -477,14 +491,18 @@ static void open_app(int a)
         int g = app_game(a);
         clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
         unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1;
-        if (g >= 0)              pc64_game_open(g);          /* native game */
-        else if (a >= NNATIVE)   unoapp_open(a - NNATIVE);  /* bridge app  */
+        if (g >= 0)                 pc64_game_open(g);           /* native game   */
+        else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
+        else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
     } else raise_win(&g_win[a]);
-    if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
+    /* focus the opened window + its canvas (closing the launcher above moved
+     * focus to the taskbar, so do this last). */
+    { int fi; for (fi = 0; fi < UI.nwin; fi++) if (UI.win[fi] == &g_win[a]) { UI.focus_win = fi; break; } }
+    if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
     /* native games scale to any rect, so they can fill the screen (Esc returns).
-     * Bridge apps stay windowed (they draw at a fixed size). */
+     * Bridge apps + the browser stay windowed (they draw at a fixed size). */
     if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
     g_dirty = 1;
 }
@@ -523,8 +541,8 @@ static void close_focused(void)
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
         int g = app_game(i);
         g_open[i] = 0;
-        if (g >= 0)            pc64_game_close(g);        /* native game teardown */
-        else if (i >= NNATIVE) unoapp_close(i - NNATIVE); /* bridge app          */
+        if (g >= 0)              pc64_game_close(g);        /* native game teardown */
+        else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
         break;
     }
     if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
@@ -797,7 +815,8 @@ int main(void)
         la = active_legacy();           /* drive the focused game/tool clock */
         { int g = (la >= 0) ? app_game(NNATIVE + la) : -1;
           if (g >= 0) { pc64_game_tick(g); g_dirty = 1; unoapp_focus(-1); }  /* native game */
-          else { unoapp_focus(la); if (la >= 0) unoapp_run_tick(la); } }     /* bridge app */
+          else if (la >= 0 && app_is_bridge(NNATIVE + la)) { unoapp_focus(la); unoapp_run_tick(la); }
+          else unoapp_focus(-1); }                                            /* browser: no tick */
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
         if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
         else uno_pc64_delay_ms(16);
