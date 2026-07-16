@@ -109,11 +109,23 @@ typedef struct unoui_widget {
 
 #define UNOUI_MAX_WIDGETS 64
 
+/* ---- window flags (unoui_window.flags) ---------------------------------- *
+ * BARE strips the frame + titlebar and disables dragging - for shell chrome
+ * that isn't a normal app window (the desktop-icon layer, a dock/taskbar). The
+ * pin flags fix z-order: a BOTTOM window stays behind every normal window, a
+ * TOP window stays in front of them, and raising a normal window on click can
+ * never jump above a TOP bar or below a BOTTOM desktop. */
+enum {
+    UI_WIN_BARE   = 1 << 0,   /* no chrome (frame/titlebar), not draggable    */
+    UI_WIN_BOTTOM = 1 << 1,   /* pinned behind normal windows (the desktop)   */
+    UI_WIN_TOP    = 1 << 2    /* pinned in front of normal windows (taskbar)  */
+};
+
 typedef struct unoui_window {
     const char   *title;
     unoui_rect    r;          /* whole window incl. title bar, screen coords  */
     int           active;     /* 1 = focused window (active title chrome)     */
-    int           flags;      /* reserved (e.g. no-drag); 0 = normal          */
+    int           flags;      /* UI_WIN_*; 0 = normal draggable app window     */
     unoui_widget  w[UNOUI_MAX_WIDGETS];
     int           nw;
     int           content_x;  /* set by the window painter; canonical origin  */
@@ -237,6 +249,9 @@ unoui_rect unoui_widget_rect(const struct unoui_theme *, const unoui_window *,
 void          unoui_ui_init (unoui_ui *, const struct unoui_theme *, int sw, int sh);
 void          unoui_ui_theme(unoui_ui *, const struct unoui_theme *);
 void          unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus */
+/* raise `win` to the top of its z-band (respecting UI_WIN_BOTTOM/TOP pins) and
+ * give it focus. Use instead of hand-editing ui->win[]. No-op if not added. */
+void          unoui_bring_to_front(unoui_ui *, unoui_window *win);
 unoui_action  unoui_handle  (unoui_ui *, const unoui_event *);
 void          unoui_render_ui(unoui_ui *);
 

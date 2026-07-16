@@ -31,8 +31,12 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NAPPS };
 static const char *kAppNames[NAPPS] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas" };
 
+#define TASKH 26                          /* taskbar height, px */
+
 static unoui_ui     UI;
-static unoui_window g_launch;             /* the launcher (always open) */
+static unoui_window g_launch;             /* app menu, opened by the Start button */
+static unoui_window g_desk;               /* bare/bottom: the desktop-icon layer */
+static unoui_window g_task;               /* bare/top: the taskbar */
 static unoui_window g_win[NAPPS];
 static int          g_built[NAPPS], g_open[NAPPS];
 static int          g_dirty = 1;
@@ -40,7 +44,9 @@ static int          g_dirty = 1;
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_FULL, ID_LAUNCH0 = 100 };   /* launcher buttons: ID_LAUNCH0 + app */
+       ID_FULL, ID_START = 90,
+       ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
+       ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
 
 /* editor + status buffers */
 static char g_body[1024], g_name[32], g_status[48] = "ready";
@@ -200,54 +206,131 @@ static void (*const g_build[NAPPS])(unoui_window *) =
     { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo };
 
 /* ---- window management -------------------------------------------------- */
-static void raise_win(unoui_window *win)
+static int g_launch_open;
+
+static void raise_win(unoui_window *win) { unoui_bring_to_front(&UI, win); }
+
+static void remove_win(unoui_window *win)
 {
     int i, j;
     for (i = 0; i < UI.nwin; i++) if (UI.win[i] == win) break;
     if (i >= UI.nwin) return;
     for (j = i; j < UI.nwin - 1; j++) UI.win[j] = UI.win[j + 1];
-    UI.win[UI.nwin - 1] = win; UI.focus_win = UI.nwin - 1; UI.focus_wi = -1;
+    UI.nwin--;
+    if (UI.focus_win >= UI.nwin) UI.focus_win = UI.nwin - 1;
+    UI.focus_wi = -1;
 }
+
+/* short desktop-icon / taskbar labels (the window titles are the long names) */
+static const char *kShort[NAPPS] =
+    { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
+
+/* the taskbar background: a bare window draws no chrome, so a non-interactive
+ * canvas paints the bar face + top highlight under the buttons. */
+static void taskbg_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme; (void)w; (void)ctx;
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
+    fb_hline(r.x, r.y, r.w, t->pal.light);
+    fb_hline(r.x, r.y + 1, r.w, t->pal.light);
+}
+static unoui_canvas g_taskbg = { taskbg_draw, 0, 0 };
+
+/* rebuild the taskbar widget list: Start + one button per open app + clock.
+ * Called on open/close/reflow; the clock label tracks g_clock in place. */
+static void rebuild_taskbar(void)
+{
+    int i, x = 60;
+    unoui_widget *b;
+    g_task.nw = 0;
+    unoui_add_canvas(&g_task, 0, 0, FB_W, TASKH, &g_taskbg);
+    b = unoui_add_button(&g_task, 4, 4, 50, "Start", 0); b->id = ID_START;
+    for (i = 0; i < NAPPS; i++) {
+        if (!g_open[i]) continue;
+        b = unoui_add_button(&g_task, x, 4, 100, kShort[i], 0); b->id = ID_TASK0 + i;
+        x += 104;
+    }
+    unoui_add_label(&g_task, FB_W - 118, 8, g_clock);
+}
+
+static void build_taskbar(void)
+{
+    unoui_window_init(&g_task, "", 0, FB_H - TASKH, FB_W, TASKH);
+    g_task.flags = UI_WIN_BARE | UI_WIN_TOP;
+    rebuild_taskbar();
+}
+
+static void build_desktop(void)
+{
+    int i;
+    unoui_window_init(&g_desk, "", 0, 0, FB_W, FB_H - TASKH);
+    g_desk.flags = UI_WIN_BARE | UI_WIN_BOTTOM;
+    for (i = 0; i < NAPPS; i++) {
+        unoui_widget *ic = unoui_add_icon(&g_desk, 16, 14 + i * 52, kShort[i]);
+        ic->r.w = 84;                       /* wide enough for the label       */
+        ic->id  = ID_LAUNCH0 + i;
+    }
+}
+
+/* pull a window fully into the work area (screen minus the taskbar) */
+static void clamp_to_workarea(unoui_window *w)
+{
+    if (w->r.x + w->r.w > FB_W)         w->r.x = FB_W - w->r.w;
+    if (w->r.y + w->r.h > FB_H - TASKH) w->r.y = FB_H - TASKH - w->r.h;
+    if (w->r.x < 0) w->r.x = 0;
+    if (w->r.y < 0) w->r.y = 0;
+}
+
 static void open_app(int a)
 {
     if (a < 0 || a >= NAPPS) return;
     if (!g_built[a]) { g_build[a](&g_win[a]); g_built[a] = 1; }
-    if (!g_open[a]) { unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1; }
-    else raise_win(&g_win[a]);
+    if (!g_open[a]) {
+        clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
+        unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1; rebuild_taskbar();
+    } else raise_win(&g_win[a]);
     g_dirty = 1;
 }
-/* cycle the focused/top window (F2 or Ctrl-Tab) - keyboard window switching */
+
+/* Start button: toggle the app-menu launcher window */
+static void toggle_launcher(void)
+{
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
+    else { unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
+    g_dirty = 1;
+}
+
+/* F2 / Ctrl-Tab: raise the next OPEN app window (skips desktop + taskbar) */
 static void cycle_window(void)
 {
-    unoui_window *front; int j;
-    if (UI.nwin < 2) return;
-    front = UI.win[UI.nwin - 1];
-    for (j = UI.nwin - 1; j > 0; j--) UI.win[j] = UI.win[j - 1];
-    UI.win[0] = front;                 /* current top -> bottom, next -> top */
-    UI.focus_win = UI.nwin - 1; UI.focus_wi = -1;
-    g_dirty = 1;
+    int i, cur = -1;
+    if (UI.focus_win >= 0 && UI.focus_win < UI.nwin)
+        for (i = 0; i < NAPPS; i++) if (&g_win[i] == UI.win[UI.focus_win]) { cur = i; break; }
+    for (i = 1; i <= NAPPS; i++) {
+        int a = (cur + i) % NAPPS;
+        if (g_open[a]) { raise_win(&g_win[a]); g_dirty = 1; return; }
+    }
 }
 
 static void close_focused(void)
 {
-    int f = UI.focus_win, i, j;
+    int f = UI.focus_win, i;
     unoui_window *win;
     if (f < 0 || f >= UI.nwin) return;
     win = UI.win[f];
-    if (win == &g_launch) return;                 /* never close the launcher */
+    if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
+    if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { g_open[i] = 0; break; }
-    for (j = f; j < UI.nwin - 1; j++) UI.win[j] = UI.win[j + 1];
-    UI.nwin--;
-    if (UI.focus_win >= UI.nwin) UI.focus_win = UI.nwin - 1;
-    UI.focus_wi = -1;
+    remove_win(win);
+    rebuild_taskbar();
     g_dirty = 1;
 }
 
 static void build_launcher(void)
 {
     /* Size from theme metrics so buttons fill the content width exactly and
-     * the window is wide enough for the longest label - no overflow, no
-     * reliance on the clip as a crutch. */
+     * the window is wide enough for the longest label - no overflow. Opened by
+     * the taskbar Start button. */
     const unoui_metrics *m = &theme_unodos.m;
     int i, tw = 0, bw, winw;
     for (i = 0; i < NAPPS; i++) {                 /* widest label + button pad */
@@ -256,7 +339,7 @@ static void build_launcher(void)
     }
     bw   = tw + 32;                                /* label + centred margins  */
     winw = bw + 2 * m->frame_w + 2 * m->pad;
-    unoui_window_init(&g_launch, "Launcher", 8, 30,
+    unoui_window_init(&g_launch, "Programs", 8, 30,
                       winw, m->title_h + m->pad + NAPPS * 28 + m->pad + m->frame_w);
     unoui_widget *x;
     for (i = 0; i < NAPPS; i++) {                 /* flush to content origin   */
@@ -270,10 +353,14 @@ static void reflow(void)
 {
     int i;
     UI.screen_w = FB_W; UI.screen_h = FB_H;
+    g_desk.r.w = FB_W; g_desk.r.h = FB_H - TASKH;      /* desktop fills - taskbar */
+    g_task.r.y = FB_H - TASKH; g_task.r.w = FB_W;      /* taskbar re-anchored     */
+    rebuild_taskbar();
     for (i = 0; i < UI.nwin; i++) {
         unoui_window *win = UI.win[i];
+        if (win->flags & UI_WIN_BARE) continue;        /* desk/taskbar done above */
         if (win->r.x + win->r.w > FB_W) win->r.x = FB_W - win->r.w;
-        if (win->r.y + win->r.h > FB_H) win->r.y = FB_H - win->r.h;
+        if (win->r.y + win->r.h > FB_H - TASKH) win->r.y = FB_H - TASKH - win->r.h;
         if (win->r.x < 0) win->r.x = 0;
         if (win->r.y < 0) win->r.y = 0;
     }
@@ -286,8 +373,10 @@ static void on_action(const unoui_action *a)
 {
     if (!a->changed) return;
     g_dirty = 1;
+    if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
     switch (a->id) {
+    case ID_START: toggle_launcher(); break;
     case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
@@ -324,7 +413,8 @@ static int pump_input(void)
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
         any = 1;
-        if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }
+        if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
+        if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
         if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
         switch (scan) {
         case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
@@ -361,8 +451,9 @@ int main(void)
 
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
-    build_launcher();
-    unoui_ui_add(&UI, &g_launch);
+    build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
+    build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
+    build_launcher();                                /* opened via Start    */
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
