@@ -14,7 +14,8 @@
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
-#include "pc64_uui_apps.h"   /* the legacy-app bridge (games, paint, ...) */
+#include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
+#include "pc64_games.h"      /* native unoui games (Dostris, ...) */
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include <string.h>
 
@@ -423,11 +424,27 @@ static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
     return 0;
 }
 
+/* native game index for app `a`, or -1 (the rest use the mac_compat bridge) */
+static int app_game(int a)
+{
+    int li = a - NNATIVE;
+    if (a < NNATIVE || li < 0 || li >= PC64_NGAMES) return -1;
+    return pc64_game_canvas(li) ? li : -1;
+}
+
 static void build_legacy(int a)
 {
-    int li = a - NNATIVE, aw, ah;
+    int li = a - NNATIVE, aw, ah, g = app_game(a);
     const unoui_metrics *m = &theme_unodos.m;
-    unoui_canvas *cv = &g_lcanvas[li];
+    unoui_canvas *cv;
+    if (g >= 0) {                      /* native game: one canvas that scales */
+        aw = 320; ah = 240;
+        unoui_window_init(&g_win[a], app_name(a), 30, 16,
+                          aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
+        unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_game_canvas(g));
+        return;
+    }
+    cv = &g_lcanvas[li];
     unoapp_size(li, &aw, &ah);
     if (aw < 140) aw = 140;
     if (ah < 100) ah = 100;
@@ -450,15 +467,18 @@ static void open_app(int a)
         g_built[a] = 1;
     }
     if (!g_open[a]) {
+        int g = app_game(a);
         clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
         unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1;
-        if (a >= NNATIVE) unoapp_open(a - NNATIVE);
+        if (g >= 0)              pc64_game_open(g);          /* native game */
+        else if (a >= NNATIVE)   unoapp_open(a - NNATIVE);  /* bridge app  */
         rebuild_taskbar();
     } else raise_win(&g_win[a]);
+    if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
-    /* Apps open windowed at their natural size (games are designed for a fixed
-     * window, not an arbitrary full screen - stretching left them tiny in a
-     * corner). Fullscreen returns once the games are rewritten to scale. */
+    /* native games scale to any rect, so they can fill the screen (Esc returns).
+     * Bridge apps stay windowed (they draw at a fixed size). */
+    if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
     g_dirty = 1;
 }
 
@@ -682,6 +702,9 @@ static int pump_input(void)
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
         any = 1;
+        if (UI.full && scan == 0x17) {          /* Esc leaves a fullscreen game */
+            unoui_fullscreen(&UI, 0); UI.focus_wi = 0; g_dirty = 1; continue;
+        }
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
         if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
@@ -760,8 +783,13 @@ int main(void)
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }
         la = active_legacy();           /* drive the focused game/tool clock */
-        unoapp_focus(la);
-        if (la >= 0) unoapp_run_tick(la);   /* may set g_dirty via draw_window */
+        if (la >= 0 && app_game(NNATIVE + la) >= 0) {
+            pc64_game_tick(la); g_dirty = 1;    /* native game: animate each frame */
+            unoapp_focus(-1);
+        } else {
+            unoapp_focus(la);
+            if (la >= 0) unoapp_run_tick(la);   /* bridge app tick */
+        }
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
         if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
         else uno_pc64_delay_ms(16);
