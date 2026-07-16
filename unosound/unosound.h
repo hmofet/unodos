@@ -22,4 +22,22 @@ size_t unosound_render(const u_note_t *score, int n, int16_t *out, size_t cap, i
 
 int unosound_write_wav(const char *path, const int16_t *pcm, size_t nsamples, int rate);
 
+/* ===========================================================================
+ * Live sequencer (Phase 9 real-time floor). Where unosound_render() bakes a
+ * score to PCM for host evidence, this plays a score LIVE on a single hardware
+ * voice - the PC speaker (pc64), a PSG channel, the Sound Manager - through a
+ * note_on(midi) / note_off() backend. Games loop a background song and fire
+ * one-shot SFX; the host advances playback by calling uno_seq_tick() ~60x/sec.
+ * MIDI-note based (0 = rest), so the same song table drives every port.
+ * ======================================================================== */
+typedef struct { unsigned char midi, dur; } u_seqnote_t;   /* dur in ~1/60 s ticks */
+
+void uno_seq_backend(void (*note_on)(int midi), void (*note_off)(void));
+void uno_seq_init(void);                                   /* reset + silence      */
+void uno_seq_beep(int midi, int ticks);                    /* one-shot SFX         */
+void uno_seq_play(const u_seqnote_t *song, int count);     /* loop a song          */
+void uno_seq_stop(void);
+int  uno_seq_playing(void);
+void uno_seq_tick(void);                                   /* advance ~60 Hz       */
+
 #endif /* UNOSOUND_H */

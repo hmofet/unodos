@@ -117,18 +117,34 @@ static void repaint_all(void)      { if (gDirty) *gDirty = 1; }
 static void launch_app(short proc) { (void)proc; }   /* the shell owns launching */
 static short kapi_topmost(void)    { return gActiveProc; }
 
-/* ---- FAT12: the raw-sector API paint/tracker use to load/save.
- * Not yet wired to pc64_io's RAM FS - stubbed so those apps run (save/open are
- * inert for now). TODO: wrap pc64_io FSOpen/FSRead/FSWrite. -------------------*/
+/* ---- files: Paint/Tracker load/save, wired to pc64_io's RAM-disk FS via the
+ * Mac-Toolbox file calls (same path the Editor uses). ----------------------- */
 static short         gFatCount;
 static unsigned char gFatNames[16][13];
 static long          gFatSizes[16];
+static void bc2p(const char *s, unsigned char *p)   /* C string -> Pascal string */
+{ int n = 0; while (s[n] && n < 31) n++; p[0] = (unsigned char)n;
+  { int i; for (i = 0; i < n; i++) p[i + 1] = (unsigned char)s[i]; } }
 static Boolean fat12_mount(void) { return true; }
-static void    fat12_list(void)  { gFatCount = 0; }
-static long    fat12_read(const char *n, unsigned char *b, long m)
-{ (void)n; (void)b; (void)m; return -1; }
-static Boolean fat12_write(const char *n, const unsigned char *b, long l)
-{ (void)n; (void)b; (void)l; return false; }
+static void    fat12_list(void)  { gFatCount = 0; }   /* name listing: TODO      */
+static long    fat12_read(const char *name, unsigned char *buf, long max)
+{
+    unsigned char pn[34]; short ref; long cnt = max;
+    bc2p(name, pn);
+    if (FSOpen(pn, 0, &ref) != noErr) return -1;
+    if (FSRead(ref, &cnt, buf) != noErr) cnt = -1;
+    FSClose(ref);
+    return cnt;
+}
+static Boolean fat12_write(const char *name, const unsigned char *buf, long len)
+{
+    unsigned char pn[34]; short ref; long cnt = len;
+    bc2p(name, pn);
+    Create(pn, 0, 0, 0);
+    if (FSOpen(pn, 0, &ref) != noErr) return false;
+    FSWrite(ref, &cnt, buf); FSClose(ref);
+    return true;
+}
 
 /* ---- the KernelApi handed to every app ----------------------------------- */
 static KernelApi gKApi;

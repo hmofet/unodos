@@ -289,6 +289,10 @@ void uno_pc64_res_get(int idx, short *w, short *h, short *zoom,
                       Boolean *active);
 void uno_pc64_res_set(int idx);
 
+/* PC-speaker single voice (uefi_main.c) - the UnoSound backend */
+void uno_pc64_snd_note(int midi);
+void uno_pc64_snd_quiet(void);
+
 /* power, wall-clock (firmware RTC) + startup chime (uefi_main.c) */
 void uno_pc64_shutdown(void);
 void uno_pc64_restart(void);

@@ -12,6 +12,19 @@
 #include "uno3d_game.h"
 #include "uno3d_backend.h"
 #include "mac_compat.h"      /* uno_pc64_lowres */
+#include "unosound.h"        /* game music + SFX (UnoSound live sequencer) */
+
+/* background songs (MIDI note + 1/60 s ticks) - the same tables the legacy
+ * game-music engine looped, now driven through UnoSound. */
+static const u_seqnote_t kDtSong[] = {   /* Dostris (Korobeiniki) */
+    {76,16},{71,10},{72,10},{74,16},{72,10},{71,10},{69,16},{69,10},{72,10},{76,16},
+    {74,10},{72,10},{71,26},{72,10},{74,16},{76,16},{72,16},{69,16},{69,33},{0,10} };
+static const u_seqnote_t kOlSong[] = {   /* OutLast (Sunset Drive) */
+    {76,10},{74,10},{72,20},{0,7},{76,10},{74,10},{72,10},{74,10},{76,20},{0,7},
+    {74,10},{72,10},{71,20},{0,7},{74,10},{72,10},{71,10},{72,10},{74,20},{0,7},
+    {72,20},{76,20},{79,20},{76,20},{74,20},{72,20},{71,20},{0,10},{72,20},{74,20},{76,40},{0,20} };
+#define NDT ((int)(sizeof kDtSong/sizeof kDtSong[0]))
+#define NOL ((int)(sizeof kOlSong/sizeof kOlSong[0]))
 
 /* ---------------------------------------------------------------- Dostris --- */
 #define DT_COLS 10
@@ -54,13 +67,14 @@ static int dt_fits(int p, int rot, int c0, int r0)
 static void dt_spawn(void)
 {
     dtPiece = dtNext; dtNext = dt_rand7(); dtRot = 0; dtCol = 3; dtRow = -1; dtDropTmr = 0;
-    if (!dt_fits(dtPiece, dtRot, dtCol, dtRow+1)) dtState = 3;   /* game over */
+    if (!dt_fits(dtPiece, dtRot, dtCol, dtRow+1)) { dtState = 3; uno_seq_stop(); }  /* game over */
 }
 static void dt_new(void)
 {
     int r, c; for (r = 0; r < DT_ROWS; r++) for (c = 0; c < DT_COLS; c++) dtBoard[r][c] = 0;
     dtScore = dtLines = 0; dtLevel = 1; dtSeed = (dtSeed ^ 0x9E3779B9u) | 1;
     dtNext = dt_rand7(); dtState = 1; dt_spawn();
+    uno_seq_play(kDtSong, NDT);                 /* start the theme */
 }
 static void dt_clear_lines(void)
 {
@@ -73,7 +87,8 @@ static void dt_clear_lines(void)
             for (c = 0; c < DT_COLS; c++) dtBoard[0][c] = 0; }
     }
     if (n) { dtScore += kLineScore[n] * (dtLevel+1); dtLines += n;
-             dtLevel = (int)(dtLines/10)+1; if (dtLevel > 15) dtLevel = 15; }
+             dtLevel = (int)(dtLines/10)+1; if (dtLevel > 15) dtLevel = 15;
+             uno_seq_beep(88, 5); }             /* line-clear blip */
 }
 static void dt_lock(void)
 {
@@ -236,7 +251,7 @@ static void pm_ghost_steer(short gi){
           if(dist<bestd){bestd=dist;best=d;} } }
     if(best>=0) g->dir=best;
 }
-static void pm_kill_pac(void){ gPmLives--;
+static void pm_kill_pac(void){ gPmLives--; uno_seq_beep(45,22);   /* death wail */
     if(gPmLives<=0){ gPmState=PM_OVER; if(gPmScore>gPmHi)gPmHi=gPmScore; }
     else { pm_reset_actors(); gPmState=PM_READY; gPmStateT=pmFrame+40; } }
 static void pm_step(void){
@@ -246,8 +261,8 @@ static void pm_step(void){
         for(i=0;i<3;i++) if(gPmGh[i].state==GH_SCATTER||gPmGh[i].state==GH_CHASE){ gPmGh[i].state=pm_mode_state(); gPmGh[i].dir^=2; } } }
     for(sub=0;sub<2;sub++){
         if((gPmX%PM_TILE)==0&&(gPmY%PM_TILE)==0){ short tx=gPmX/PM_TILE,ty=gPmY/PM_TILE; unsigned char *t=&gPmMaze[ty][tx];
-            if(*t==2){*t=0;gPmScore+=10;gPmDots--;}
-            else if(*t==3){*t=0;gPmScore+=50;gPmDots--;gPmFright=200;gPmKills=0;
+            if(*t==2){*t=0;gPmScore+=10;gPmDots--; uno_seq_beep(72,2);}    /* waka */
+            else if(*t==3){*t=0;gPmScore+=50;gPmDots--;gPmFright=200;gPmKills=0; uno_seq_beep(55,10);
                 for(i=0;i<3;i++) if(gPmGh[i].state==GH_SCATTER||gPmGh[i].state==GH_CHASE){gPmGh[i].state=GH_FRIGHT;gPmGh[i].dir^=2;} }
             if(!gPmDots){ gPmLevel++; pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=pmFrame+40; return; }
             if(pm_walkable(tx+kPmDX[gPmNextDir],ty+kPmDY[gPmNextDir],0,0)) gPmDir=gPmNextDir;
@@ -373,6 +388,7 @@ static void ol_new(void)
     gOlX=160; gOlSpeed=0; gOlZ=0; gOlScore=0; gOlTime=60; gOlCrash=0;
     gOlTraffic[0]=400; gOlTraffic[1]=1600; gOlTraffic[2]=800; gOlTraffic[3]=2000;
     gOlLastStep=gOlLastSec=olFrame; gOlState=1;
+    uno_seq_play(kOlSong, NOL);                 /* Sunset Drive theme */
 }
 static void ol_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
@@ -458,9 +474,11 @@ static void ol_tick(void)
               if(rel<15){ short cx=(short)(160+(kOlTrafLane[t]?30:-30)); if(gOlX>cx-25&&gOlX<cx+25)gOlCrash=30; } } }
         for (t=0;t<8;t++){ long rel=kOlTreeZ[t]-(gOlZ%OL_TRACKLEN); if(rel<0)rel+=OL_TRACKLEN;
             if(rel<12 && ((t&1)?(gOlX>gOlRoadR-5):(gOlX<gOlRoadL+5))) gOlCrash=30; }
-        if (gOlCrash) gOlSpeed=0;
+        if (gOlCrash == 30) { gOlSpeed=0; uno_seq_beep(43, 14); }   /* just crashed */
+        else if (gOlCrash) gOlSpeed=0;
     }
-    if (olFrame-(unsigned long)gOlLastSec >= 60) { gOlLastSec=olFrame; if(--gOlTime<=0){ gOlTime=0; gOlState=2; } }
+    if (olFrame-(unsigned long)gOlLastSec >= 60) { gOlLastSec=olFrame;
+        if(--gOlTime<=0){ gOlTime=0; gOlState=2; uno_seq_stop(); } }
 }
 
 /* --------------------------------------------------------------- Runner3D --- *
@@ -534,7 +552,7 @@ void pc64_game_open(int game)
     else if (game == GAME_OUTLAST) { gOlState = 0; }
     else if (game == GAME_RUNNER)  { rn_start(); }
 }
-void pc64_game_close(int game) { if (game == GAME_RUNNER) rn_close(); }
+void pc64_game_close(int game) { uno_seq_stop(); if (game == GAME_RUNNER) rn_close(); }
 void pc64_game_tick(int game)
 {
     if (game == GAME_DOSTRIS)      dt_tick();
