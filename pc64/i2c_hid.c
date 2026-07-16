@@ -19,33 +19,23 @@ int uno_i2c_hid_present(void) { return 0; }
 #include <stdint.h>
 
 /* ===========================================================================
- * CONFIG - fill these from Linux on the SAME machine, then rebuild with
- * -DUNO_I2C_TRACKPAD. (ACPI/AML parsing to discover them automatically is a
- * future step.)
- *
- *   I2C controller MMIO base:  the LPSS I2C the pad is on. If it is PCI-
- *     visible we auto-find it (see discover_controller); otherwise set
- *     I2C_HID_BASE to the address from Linux, e.g. from
- *        dmesg | grep i2c_designware      (look for the MMIO region), or
- *        the platform device's resource under sysfs.
- *   Slave address:  i2cdetect -l   then i2cdetect -y <bus>   (Synaptics is
- *     often 0x2c, Elan 0x15/0x2a).
- *   HID descriptor register:  the _DSM HIDREG, almost always 0x0020 (some
- *     0x0001). dmesg 'i2c_hid' / the ACPI I2cSerialBus descriptor.
+ * SELF-CONFIGURING bring-up. Rather than depend on ACPI/AML constants, we
+ * enumerate the machine: scan every PCI-visible Intel LPSS I2C controller, and
+ * on each probe the handful of slave-address x HID-descriptor-register
+ * combinations real trackpads use, validating each by the HID descriptor's
+ * signature (wHIDDescLength==30, bcdVersion==0x0100). Whatever answers with a
+ * valid descriptor IS the trackpad - no hand-supplied constants. An override
+ * (-DI2C_HID_BASE=... etc.) is still honoured for a controller hidden from PCI
+ * (ACPI-only mode), the one case enumeration can't reach.
  * ======================================================================== */
-#ifndef I2C_HID_BASE
-#define I2C_HID_BASE   0            /* 0 = auto-find a PCI-visible LPSS I2C */
-#endif
-#ifndef I2C_HID_ADDR
-#define I2C_HID_ADDR   0x2c         /* Synaptics default */
-#endif
-#ifndef I2C_HID_DESCREG
-#define I2C_HID_DESCREG 0x0020
-#endif
-
 typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
+typedef unsigned long long u64;
+
+/* candidates a Windows-Precision-Touchpad / HID-over-I2C pad answers on */
+static const u8  kAddrs[]   = { 0x2c, 0x15, 0x2a, 0x10, 0x20 };
+static const u16 kDescRegs[] = { 0x0020, 0x0001 };
 
 /* ---- DesignWare (Synopsys DW_apb_i2c) register offsets ------------------ */
 #define DW_IC_CON           0x00
@@ -62,6 +52,8 @@ typedef unsigned int   u32;
 #define DW_IC_RXFLR         0x78
 #define DW_IC_TX_ABRT_SOURCE 0x80
 #define DW_IC_ENABLE_STATUS 0x9c
+#define DW_IC_COMP_TYPE     0xfc    /* DesignWare signature register */
+#define DW_COMP_TYPE_VALUE  0x44570140u   /* "DW" identity - guards a bad BAR */
 
 #define DW_CON_MASTER       0x01
 #define DW_CON_SPEED_FAST   0x04
@@ -76,13 +68,23 @@ typedef unsigned int   u32;
 #define DW_CMD_STOP         (1u << 9)
 #define DW_CMD_RESTART      (1u << 10)
 
-static volatile u8 *g_i2c;         /* controller MMIO base */
+static volatile u8 *g_i2c;         /* controller MMIO base (the found one) */
+static u8  g_addr;                  /* the found slave address */
 static int g_present;
 static u8  g_report[64];
 static int g_report_len;
 
 /* HID-over-I2C descriptor fields we use */
-static u16 g_input_reg, g_max_input, g_cmd_reg;
+static u16 g_input_reg, g_max_input, g_cmd_reg, g_rd_reg, g_rd_len;
+
+/* report-descriptor parse results: bit offsets (within the report data, after
+ * the leading report-id byte) + sizes + logical maxima for scaling. When
+ * g_parsed is 0 the poll falls back to the common WPT/boot-mouse shape. */
+static int g_parsed;
+static u8  g_report_id;
+static int g_x_off, g_x_bits, g_x_lmax;
+static int g_y_off, g_y_bits, g_y_lmax;
+static int g_tip_off;              /* tip-switch / button-1 bit, -1 if none */
 
 static u32 r32(u32 o) { return *(volatile u32 *)(g_i2c + o); }
 static void w32(u32 o, u32 v) { *(volatile u32 *)(g_i2c + o) = v; }
@@ -142,81 +144,193 @@ static int dw_reg_read(u8 addr, u16 reg, u8 *out, int len)
     return dw_wr_rd(addr, w, 2, out, len);
 }
 
-/* ---- discovery: a PCI-visible Intel LPSS I2C controller ----------------- */
-static int discover_controller(void)
+/* ---- discovery: every PCI-visible Intel LPSS I2C controller -------------- */
+static int list_bars(u64 *bars, int max)
 {
-#if I2C_HID_BASE
-    g_i2c = (volatile u8 *)(unsigned long)(uintptr_t)I2C_HID_BASE;
-    return 1;
-#else
-    pci_dev d;
-    /* Intel (8086) serial-bus / other (class 0x0C, subclass 0x80) = LPSS I2C
-       in PCI mode. In ACPI mode it is hidden - then set I2C_HID_BASE manually. */
-    if (pci_find_class(0x0C, 0x80, &d) && d.vendor == 0x8086) {
-        pci_enable_bus_master(&d);
-        g_i2c = (volatile u8 *)(unsigned long)(uintptr_t)pci_bar(&d, 0);
-        return g_i2c != 0;
-    }
-    return 0;
+    int n = 0;
+#ifdef I2C_HID_BASE
+    if ((u64)(I2C_HID_BASE) && n < max) bars[n++] = (u64)(I2C_HID_BASE);  /* override */
 #endif
+    { pci_dev d;                              /* first class-0C80 8086 match */
+      if (pci_find_class(0x0C, 0x80, &d) && d.vendor == 0x8086 && n < max) {
+          pci_enable_bus_master(&d); bars[n++] = pci_bar(&d, 0);
+      } }
+    /* Intel LPSS I2C sit at fixed BDFs; probe them too so a pad on a later
+       controller (not the first class match) is still found. */
+    { static const int devs[] = { 0x15, 0x19, 0x1e };
+      int di, fn;
+      for (di = 0; di < 3; di++) for (fn = 0; fn < 4 && n < max; fn++) {
+          pci_dev d; u32 id, cls; u64 b; int j, dup = 0;
+          d.bus = 0; d.dev = devs[di]; d.fn = fn; d.vendor = d.device = 0;
+          id = pci_cfg_read32(&d, 0x00);
+          if (id == 0xFFFFFFFFu || (id & 0xFFFF) != 0x8086) continue;
+          cls = pci_cfg_read32(&d, 0x08) >> 16;         /* subclass|class<<8 */
+          if ((cls & 0xFFFF) != 0x0C80) continue;       /* serial bus / other */
+          d.vendor = id & 0xFFFF; d.device = id >> 16;
+          pci_enable_bus_master(&d);
+          b = pci_bar(&d, 0);
+          for (j = 0; j < n; j++) if (bars[j] == b) dup = 1;
+          if (b && !dup) bars[n++] = b;
+      } }
+    return n;
 }
 
-/* ---- HID-over-I2C bring-up ---------------------------------------------- */
-static int hid_bringup(void)
+/* read + validate the HID descriptor at (addr, descReg); fills the register
+ * map on success. Validation by signature = self-configuring probe. */
+static int try_hid(u8 addr, u16 descReg)
 {
-    u8 desc[30];
-    int n = dw_reg_read(I2C_HID_ADDR, I2C_HID_DESCREG, desc, sizeof desc);
+    u8 d[30];
+    int n = dw_reg_read(addr, descReg, d, sizeof d);
     if (n < 30) return 0;
-    /* HID descriptor: wHIDDescLength@0 must be 30; input register @8; max
-       input length @10; command register @16 */
-    if (desc[0] != 30) return 0;
-    g_input_reg = desc[8] | (desc[9] << 8);
-    g_max_input = desc[10] | (desc[11] << 8);
-    g_cmd_reg   = desc[16] | (desc[17] << 8);
+    if ((d[0] | (d[1] << 8)) != 30)      return 0;   /* wHIDDescLength */
+    if ((d[2] | (d[3] << 8)) != 0x0100)  return 0;   /* bcdVersion 1.00 */
+    g_addr      = addr;
+    g_rd_len    = (u16)(d[4]  | (d[5]  << 8));
+    g_rd_reg    = (u16)(d[6]  | (d[7]  << 8));
+    g_input_reg = (u16)(d[8]  | (d[9]  << 8));
+    g_max_input = (u16)(d[10] | (d[11] << 8));
+    g_cmd_reg   = (u16)(d[16] | (d[17] << 8));
     if (g_max_input == 0 || g_max_input > sizeof g_report) g_max_input = sizeof g_report;
-
-    /* SET_POWER on: [cmdReg LE][0x00, 0x08] */
-    { u8 c[4] = { g_cmd_reg & 0xFF, g_cmd_reg >> 8, 0x00, 0x08 };
-      dw_write(I2C_HID_ADDR, c, 4); }
-    /* RESET: [cmdReg LE][0x00, 0x01] */
-    { u8 c[4] = { g_cmd_reg & 0xFF, g_cmd_reg >> 8, 0x00, 0x01 };
-      dw_write(I2C_HID_ADDR, c, 4); }
-    { int t = 500000; while (t--) spin(4); }    /* let reset settle */
     return 1;
+}
+
+static void hid_power_reset(void)
+{
+    u8 c[4];
+    c[0] = g_cmd_reg & 0xFF; c[1] = g_cmd_reg >> 8; c[2] = 0x00; c[3] = 0x08;  /* power on */
+    dw_write(g_addr, c, 4);
+    c[2] = 0x00; c[3] = 0x01;                                                  /* reset */
+    dw_write(g_addr, c, 4);
+    { int t = 500000; while (t--) spin(4); }         /* let reset settle */
+}
+
+/* ---- HID report-descriptor parser: find the X / Y / tip fields ---------- *
+ * Walk the item stream tracking usage page, report size/count and the running
+ * bit offset, and record the bit position of Generic-Desktop X (page 1 usage
+ * 0x30), Y (0x31) and the tip switch (Digitizer page 0x0D usage 0x42, or
+ * Button-1). This replaces the fixed-offset guess with the device's own map. */
+static void parse_rd(const u8 *rd, int len)
+{
+    int i = 0, page = 0, rsize = 0, rcount = 0, bitpos = 0, lmax = 0, cur_id = 0;
+    u16 usages[32]; int nusg = 0;
+    g_parsed = 0; g_tip_off = -1; g_x_off = g_y_off = -1;
+    while (i < len) {
+        u8 p = rd[i++];
+        int sz = p & 3, type = (p >> 2) & 3, tag = (p >> 4) & 0xF, k;
+        u32 data = 0;
+        if (sz == 3) sz = 4;
+        for (k = 0; k < sz && i < len; k++) data |= (u32)rd[i++] << (8 * k);
+        if (type == 1) {                                  /* global */
+            switch (tag) {
+            case 0x0: page = (int)data; break;            /* Usage Page */
+            case 0x2: lmax = (int)data; break;            /* Logical Maximum */
+            case 0x7: rsize = (int)data; break;           /* Report Size */
+            case 0x8: cur_id = (int)data; bitpos = 0; break;  /* Report ID */
+            case 0x9: rcount = (int)data; break;          /* Report Count */
+            }
+        } else if (type == 2) {                           /* local */
+            if (tag == 0x0 && nusg < 32) usages[nusg++] = (u16)data;   /* Usage */
+        } else if (type == 0) {                           /* main */
+            if (tag == 0x8) {                             /* Input */
+                int f;
+                for (f = 0; f < rcount; f++) {
+                    u16 u = (f < nusg) ? usages[f] : (nusg ? usages[nusg - 1] : 0);
+                    int off = bitpos + f * rsize;
+                    if (page == 0x01 && u == 0x30 && g_x_off < 0) {
+                        g_x_off = off; g_x_bits = rsize; g_x_lmax = lmax; g_report_id = (u8)cur_id;
+                    } else if (page == 0x01 && u == 0x31 && g_y_off < 0) {
+                        g_y_off = off; g_y_bits = rsize; g_y_lmax = lmax;
+                    } else if (((page == 0x0D && u == 0x42) ||
+                                (page == 0x09 && u == 0x01)) && g_tip_off < 0) {
+                        g_tip_off = off;
+                    }
+                }
+                bitpos += rsize * rcount;
+            }
+            nusg = 0;                                     /* usages consumed */
+        }
+    }
+    if (g_x_off >= 0 && g_y_off >= 0) g_parsed = 1;
+}
+
+static void parse_report_desc(void)
+{
+    static u8 rd[512];
+    int len = g_rd_len, n;
+    if (len <= 0) return;
+    if (len > (int)sizeof rd) len = sizeof rd;
+    n = dw_reg_read(g_addr, g_rd_reg, rd, len);
+    if (n >= 4) parse_rd(rd, n);
 }
 
 int uno_i2c_hid_init(void)
 {
-    if (!discover_controller()) return 0;
-    g_present = hid_bringup();
-    return g_present;
+    u64 bars[8];
+    int nb, bi, ai, di;
+    nb = list_bars(bars, 8);
+    for (bi = 0; bi < nb; bi++) {
+        g_i2c = (volatile u8 *)(unsigned long)(uintptr_t)bars[bi];
+        if (!g_i2c) continue;
+        /* confirm this BAR really is a DesignWare I2C before poking it - an
+         * unmapped/foreign BAR reads 0xFFFFFFFF here, so we skip it and stay
+         * inert (e.g. under QEMU, which has no LPSS I2C). */
+        if (r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) continue;
+        for (ai = 0; ai < (int)sizeof kAddrs; ai++)
+            for (di = 0; di < (int)(sizeof kDescRegs / sizeof kDescRegs[0]); di++)
+                if (try_hid(kAddrs[ai], kDescRegs[di])) {
+                    hid_power_reset();
+                    parse_report_desc();
+                    g_present = 1;
+                    return 1;
+                }
+    }
+    return 0;
+}
+
+static int getbits(const u8 *d, int bitoff, int nbits)
+{
+    int v = 0, i;
+    for (i = 0; i < nbits; i++) {
+        int b = bitoff + i;
+        if (d[b >> 3] & (1 << (b & 7))) v |= (1 << i);
+    }
+    return v;
 }
 
 /* ---- input reports ------------------------------------------------------ *
- * Read maxInputLength bytes; report layout is [len LE][reportID][data...].
- * The data layout is device-specific (defined by the HID report descriptor,
- * which we don't parse yet). This first pass handles the common HID BOOT-mouse
- * and Windows-Precision-Touchpad first-finger shapes; use uno_i2c_hid_dump()
- * to capture the real bytes and refine here. */
+ * Report on the wire is [len16][reportID][data...]. With a parsed descriptor we
+ * pull X/Y/tip from their real bit offsets and scale to 0..32767; otherwise we
+ * fall back to the common WPT first-finger shape (refine via _dump). */
 int uno_i2c_hid_poll(int *absx, int *absy, int *buttons)
 {
     u8 rep[64];
     int n, len;
     if (!g_present) return 0;
-    n = dw_reg_read(I2C_HID_ADDR, g_input_reg, rep, g_max_input);
+    n = dw_reg_read(g_addr, g_input_reg, rep, g_max_input);
     if (n < 2) return 0;
     len = rep[0] | (rep[1] << 8);
     if (len < 2 || len > n) return 0;
-    /* cache raw for dumping */
     g_report_len = (len < (int)sizeof g_report) ? len : (int)sizeof g_report;
     { int i; for (i = 0; i < g_report_len; i++) g_report[i] = rep[i]; }
 
-    /* Heuristic first-pass parse (WILL be refined from real dumps):
-     * treat rep[2] as report id; for a WPT contact the first finger is at a
-     * fixed offset with a 16-bit X/Y and a tip/button byte. We expose the
-     * first plausible 16-bit X/Y pair >byte 3 and any low-bit button. */
-    if (len >= 8) {
-        int btn = rep[3] & 0x07;                 /* tip/switch bits (guess) */
+    if (g_parsed) {
+        int base = g_report_id ? 3 : 2;          /* skip len16 [+ reportID] */
+        const u8 *data = rep + base;
+        int x, y, tip;
+        if (g_report_id && rep[2] != g_report_id) return 0;   /* a different report */
+        if (len <= base) return 0;
+        x = getbits(data, g_x_off, g_x_bits);
+        y = getbits(data, g_y_off, g_y_bits);
+        tip = (g_tip_off >= 0) ? getbits(data, g_tip_off, 1) : 0;
+        if (g_x_lmax > 0) x = (int)((long)x * 32767 / g_x_lmax);
+        if (g_y_lmax > 0) y = (int)((long)y * 32767 / g_y_lmax);
+        *absx = x < 0 ? 0 : (x > 32767 ? 32767 : x);
+        *absy = y < 0 ? 0 : (y > 32767 ? 32767 : y);
+        *buttons = tip ? 1 : 0;
+        return 1;
+    }
+    if (len >= 8) {                              /* unparsed fallback */
+        int btn = rep[3] & 0x07;
         int x = rep[4] | (rep[5] << 8);
         int y = rep[6] | (rep[7] << 8);
         *absx = (x > 32767) ? 32767 : (x < 0 ? 0 : x);
