@@ -557,8 +557,13 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
         switch (ui->cap_mode) {
         case UI_CAP_WINDOW: {
             unoui_window *win = ui->win[ui->cap_win];
-            win->r.x = ev->x - ui->grab_dx; win->r.y = ev->y - ui->grab_dy;
-            clamp_win(ui, win); return NO_ACT;
+            /* move only the outline; the window commits on release */
+            ui->drag_x = ev->x - ui->grab_dx; ui->drag_y = ev->y - ui->grab_dy;
+            if (ui->drag_x < -ui->drag_w + 48) ui->drag_x = -ui->drag_w + 48;
+            if (ui->drag_x > ui->screen_w - 48) ui->drag_x = ui->screen_w - 48;
+            if (ui->drag_y < 0) ui->drag_y = 0;
+            if (ui->drag_y > ui->screen_h - 16) ui->drag_y = ui->screen_h - 16;
+            (void)win; return NO_ACT;
         }
         case UI_CAP_VTHUMB: return set_vscroll(ui, ev->y);
         case UI_CAP_HTHUMB: return set_hscroll(ui, ev->x);
@@ -607,8 +612,20 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
 
         if (!(win->flags & UI_WIN_BARE) &&           /* bare windows don't drag */
             ev->y >= win->r.y && ev->y < win->r.y + ui->theme->m.title_h) {
+            const unoui_theme *t = ui->theme;
+            int cs = t->m.closebox, fw = t->m.frame_w, th = t->m.title_h;
+            if (cs) {                                /* title-bar close box */
+                int cbx = win->r.x + fw + 4, cby = win->r.y + fw + (th - fw - cs) / 2;
+                if (ev->x >= cbx && ev->x < cbx + cs && ev->y >= cby && ev->y < cby + cs) {
+                    unoui_action a; a.changed = 1; a.id = 0;
+                    a.kind = UI_ACT_CLOSE; a.value = ui->focus_win; return a;
+                }
+            }
             ui->cap_mode = UI_CAP_WINDOW; ui->cap_win = ui->focus_win;
             ui->grab_dx = ev->x - win->r.x; ui->grab_dy = ev->y - win->r.y;
+            ui->drag_active = 1;                     /* rubber-band outline drag */
+            ui->drag_x = win->r.x; ui->drag_y = win->r.y;
+            ui->drag_w = win->r.w; ui->drag_h = win->r.h;
             return NO_ACT;
         }
         hi = hit_widget(ui, win, ev->x, ev->y);
@@ -620,7 +637,12 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
     case UI_EV_MOUSE_UP: {
         unoui_action a = NO_ACT;
         ui->mdown = 0;
-        if (ui->cap_mode == UI_CAP_BUTTON &&
+        if (ui->cap_mode == UI_CAP_WINDOW && ui->drag_active) {  /* commit the drag */
+            unoui_window *win = ui->win[ui->cap_win];
+            win->r.x = ui->drag_x; win->r.y = ui->drag_y;
+            clamp_win(ui, win); ui->drag_active = 0;
+        }
+        else if (ui->cap_mode == UI_CAP_BUTTON &&
             hit_widget(ui, ui->win[ui->cap_win], ev->x, ev->y) == ui->cap_wi)
             a = activate(ui, ui->cap_win, ui->cap_wi);
         else if (ui->cap_mode == UI_CAP_NONE) canvas_forward(ui, ev);  /* canvas release */

@@ -289,4 +289,11 @@ void uno_pc64_res_get(int idx, short *w, short *h, short *zoom,
                       Boolean *active);
 void uno_pc64_res_set(int idx);
 
+/* power, wall-clock (firmware RTC) + startup chime (uefi_main.c) */
+void uno_pc64_shutdown(void);
+void uno_pc64_restart(void);
+int  uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s);
+int  uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s);
+void uno_pc64_chime(void);
+
 #endif /* UNO_MAC_COMPAT_H */

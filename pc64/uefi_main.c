@@ -42,6 +42,21 @@
 int uno_main(void);                 /* the portable core (-Dmain=uno_main) */
 void uno_screen_changed(void);      /* core hook: resolution changed (unodos.c) */
 
+/* ---- UEFI runtime services (uefi.h leaves RuntimeServices void*) ---------- */
+typedef struct {
+    UINT16 Year; UINT8 Month, Day, Hour, Minute, Second, Pad1;
+    UINT32 Nanosecond; short TimeZone; UINT8 Daylight, Pad2;
+} EFI_TIME;
+typedef enum { EfiResetCold, EfiResetWarm, EfiResetShutdown, EfiResetPlatformSpecific } EFI_RESET_TYPE;
+typedef struct {
+    UINT8 Hdr[24];
+    EFI_STATUS (*GetTime)(EFI_TIME *, void *);
+    EFI_STATUS (*SetTime)(EFI_TIME *);
+    void *GetWakeupTime, *SetWakeupTime, *SetVirtualAddressMap, *ConvertPointer;
+    void *GetVariable, *GetNextVariableName, *SetVariable, *GetNextHighMonotonicCount;
+    void (*ResetSystem)(EFI_RESET_TYPE, EFI_STATUS, UINTN, void *);
+} EFI_RUNTIME_SERVICES;
+
 /* the RUNTIME desktop size (fb.h's FB_W/FB_H resolve to these on pc64) */
 int uno_fb_w = 640, uno_fb_h = 480;
 
@@ -458,6 +473,7 @@ void uno_pc64_init(void)
     splash_step(3);                 /* input located */
     uno_i2c_hid_init();             /* native trackpad; inert unless built in */
     splash_step(4);                 /* ready - the bar fills, core takes over */
+    uno_pc64_chime();               /* startup chime: loading complete */
 
     dbg_puts("unodos-pc64: init done\n");
 }
@@ -774,4 +790,39 @@ void uno_pc64_snd_note(int midi)
 void uno_pc64_snd_quiet(void)
 {
     outb(0x61, (unsigned char)(inb(0x61) & ~0x03));
+}
+
+/* ===========================================================================
+ * power + wall clock (UEFI runtime services) + the startup chime
+ * ======================================================================== */
+static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->RuntimeServices; }
+
+void uno_pc64_shutdown(void) { rts()->ResetSystem(EfiResetShutdown, 0, 0, 0); for(;;){} }
+void uno_pc64_restart(void)  { rts()->ResetSystem(EfiResetCold,     0, 0, 0); for(;;){} }
+
+/* wall-clock time from the firmware RTC; returns 1 on success */
+int uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s)
+{
+    EFI_TIME t;
+    if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;
+    if (y)  *y  = t.Year;   if (mo) *mo = t.Month;  if (d)  *d  = t.Day;
+    if (h)  *h  = t.Hour;   if (mi) *mi = t.Minute; if (s)  *s  = t.Second;
+    return 1;
+}
+int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
+{
+    EFI_TIME t;
+    if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;   /* keep tz/dst fields */
+    t.Year = (UINT16)y; t.Month = (UINT8)mo; t.Day = (UINT8)d;
+    t.Hour = (UINT8)h;  t.Minute = (UINT8)mi; t.Second = (UINT8)s; t.Nanosecond = 0;
+    return rts()->SetTime(&t) == EFI_SUCCESS;
+}
+
+/* a short rising arpeggio played after the splash completes (PC speaker) */
+void uno_pc64_chime(void)
+{
+    static const int notes[] = { 60, 64, 67, 72 };   /* C E G C */
+    int i;
+    for (i = 0; i < 4; i++) { uno_pc64_snd_note(notes[i]); gBS->Stall(110000); }
+    uno_pc64_snd_quiet();
 }

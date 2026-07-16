@@ -220,9 +220,13 @@ enum {
 typedef struct {
     int changed;      /* nonzero if `id`/`kind`/`value` are meaningful         */
     int id;           /* the widget's app id                                  */
-    int kind;         /* the widget's ui_kind                                 */
+    int kind;         /* the widget's ui_kind, or UI_ACT_CLOSE                 */
     int value;        /* new value: toggle state, slider/scroll pos, sel idx   */
 } unoui_action;
+
+/* special action kind: the title-bar close box was clicked. `value` is the
+ * window's z-index; the app should close/remove that window. */
+#define UI_ACT_CLOSE 9999
 
 /* ---- the UI context (windows + interaction state) ------------------------ */
 #define UNOUI_MAX_WINDOWS 8
@@ -247,6 +251,11 @@ typedef struct unoui_ui {
 
     unsigned ticks;              /* caret blink timebase                      */
     unoui_window *full;          /* fullscreen window (NULL = normal desktop) */
+
+    /* outline drag: while a title bar is dragged, only a rubber-band outline
+     * moves (drag_active); the window commits to it on release. Keeps drags
+     * flicker-free - the static desktop isn't rewritten every frame. */
+    int drag_active, drag_x, drag_y, drag_w, drag_h;
 } unoui_ui;
 
 /* absolute screen rect of a widget (menubar spans the content top edge) */
