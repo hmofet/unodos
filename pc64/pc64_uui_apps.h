@@ -6,7 +6,7 @@
 
 #include "unoui.h"      /* unoui_rect, unoui_event */
 
-#define UNOAPP_COUNT 6  /* Dostris, Pac-Man, OutLast, Music, Tracker, Paint */
+#define UNOAPP_COUNT 7  /* Dostris, Pac-Man, OutLast, Music, Tracker, Paint, Network */
 
 void        unoapp_setup(int *dirtyflag);        /* wire the KernelApi once   */
 const char *unoapp_name(int i);

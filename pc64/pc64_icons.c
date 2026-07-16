@@ -147,7 +147,15 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         disc(ox + G(6), oy + G(25), G(3), FB_RGB(220, 60, 60));         /* bristle paint */
         disc(ox + G(24), oy + G(24), G(4), FB_RGB(60, 120, 230));       /* colour dab */
         break; }
-    case 12: {                                       /* Runner3D: perspective road */
+    case 12: {                                       /* Network: connected nodes */
+        disc(ox+G(8),  oy+G(8),  G(3), FB_RGB(70,180,230));
+        disc(ox+G(24), oy+G(10), G(3), FB_RGB(80,200,120));
+        disc(ox+G(14), oy+G(24), G(3), FB_RGB(240,200,60));
+        seg(ox+G(8), oy+G(8), ox+G(24), oy+G(10), FB_RGB(160,175,200));
+        seg(ox+G(8), oy+G(8), ox+G(14), oy+G(24), FB_RGB(160,175,200));
+        seg(ox+G(24), oy+G(10), ox+G(14), oy+G(24), FB_RGB(160,175,200));
+        break; }
+    case 13: {                                       /* Runner3D: perspective road */
         rr(ox + G(2), oy + G(3), G(28), G(12), FB_RGB(90,150,225));    /* sky */
         rr(ox + G(2), oy + G(15), G(28), G(14), FB_RGB(45,140,55));    /* grass */
         { int yy; for (yy = 0; yy < G(14); yy++) {                     /* road wedge */
