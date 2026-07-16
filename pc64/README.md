@@ -1,11 +1,11 @@
 # UnoDOS / pc64 — modern PC (x86-64, UEFI)
 
-The **first modern-PC world**: the portable C core (the same `unodos.c` /
-`mac_compat` / `fb` stack the Mac, PS2, and Dreamcast ports run) booting
-**bare-metal on any 64-bit UEFI PC** — which is to say, essentially every
-x86 machine made since ~2007, the hardware the 16-bit real-mode reference
-kernel can never reach (no BIOS, no INT 13h/10h/15h, peripherals that only
-exist above the 1MB line).
+The **first modern-PC world**: UnoDOS booting **bare-metal on any 64-bit UEFI
+PC** — essentially every x86 machine since ~2007, the hardware the 16-bit
+real-mode reference kernel can never reach (no BIOS, no INT 13h/10h/15h,
+peripherals that only exist above the 1 MB line). The default UI is the
+cross-platform **unoui** widget toolkit as a full themed desktop shell; a
+`legacy` build keeps the earlier `unodos.c` core + the 14 family apps.
 
 **Firmware-as-BIOS, the family pattern.** The Pi asks the VideoCore firmware
 for its framebuffer; the PowerPC Mac boots as an Open Firmware client and
@@ -18,62 +18,43 @@ plays exactly the role INT 10h/13h/15h play for the x86 reference kernel.
 *driver tail*, not a bring-up requirement — and they are the point at which
 `unobus`/`unonet` get their first real PC hardware backends.
 
-## Status — M1–M3 QEMU+OVMF-verified (scripted, headless) + ✅ **validated on real hardware**
+## Status
 
-**Boots and runs on a Lenovo ThinkPad X1 Carbon Gen 8** (2026-07-15, USB-stick
-ESP boot): desktop, keyboard nav, SysInfo — the first modern-PC silicon under
-any UnoDOS. The metal pass caught three real-hardware-only bugs the emulator
-can never show, each now baked into the layer (see Design notes): the
-640×480 SetMode eDP black-panel trap, an SMM-trapped debug port, and
-phantom-keystroke firmware.
+**`./build.sh` boots straight into the unoui shell** — a themed widget desktop
+(window manager + retained-mode toolkit + 8 live-switchable themes), the whole
+UI in ~76 KB with no legacy code. **Validated on a Lenovo ThinkPad X1 Carbon
+Gen 8** (USB-stick ESP boot): boots, TrackPoint + keyboard drive it, live theme
+and resolution switching. The metal pass hardened three emulator-invisible
+firmware traps into the layer (see Design notes): the 640×480 SetMode eDP
+black-panel trap, an SMM-trapped debug port, and phantom-keystroke firmware.
 
-| Milestone | Evidence |
-|---|---|
-| **M1 boot → desktop**: OVMF loads `BOOTX64.EFI` from the ESP; GOP mode-scan picks native 640×480; splash → full 11-icon desktop | `shots/m1_desktop.png` |
-| **M2 windows + input**: keyboard nav (arrows/Enter/Esc over PS/2-compat conin), SysInfo / Clock / Files windows, Notepad typing with live Ln/Co/bytes | `shots/m2_sysinfo.png`, `m2_clock.png`, `m2_notepad.png` |
-| **M2 storage**: Ctrl-S (Text Input Ex reports Ctrl → the Mac `cmdKey`) saves NOTES.TXT to the FAT12 volume; Files lists it (111 B) after refresh | `shots/m2_files_saved.png` |
-| **M3 game + audio**: Dostris playing (scripted drops, score on the board); Music/Tracker/Dostris voice PIT channel-2 PC-speaker square waves — the same audio the x86 reference kernel makes | `shots/m3_dostris.png` |
-| **M4 networking** (native e1000 + a from-scratch TCP/IP stack): the Network app runs a live self-test — MAC read, link up, **DHCP lease**, **ICMP ping**, a **UDP** round-trip (TFTP RRQ→DATA), and a **TCP** connect+echo — all green against QEMU SLIRP | `shots/net_2.png` |
-| **M4 TLS** (BearSSL): a **TLS 1.2** handshake to a pinned-key echo server, negotiating **ECDHE-ECDSA-AES128-GCM-SHA256** (`cs=0xC02B`), seeded from **RDRAND**, encrypted app-data round-trip — the Network app's 7th line | `shots/tls_1.png` |
-| **M4 3D** (uno3d ported): the write-once "UnoDOS Runner" game — the same one the PS2 (GS) and Dreamcast (PVR) ports run — rendering full-screen through the software rasteriser into the GOP framebuffer, perspective + z-buffer + gouraud, score HUD | `shots/runner_2.png` |
+Everything below the shell is verified headlessly by `harness.py` — QEMU is
+natively scriptable (QMP `send-key` + `screendump`), so the *real* image boots
+the *real* firmware on every run; no ROM-free CPU-core harness needed.
 
-All screenshots are captured by `harness.py` — QEMU is natively scriptable
-(QMP `send-key` + `screendump`), so unlike the console ports this world needs
-no ROM-free CPU-core harness: the *real* image boots the *real* firmware
-headlessly on every run.
+`./build.sh legacy` builds the **previous** shell — the `unodos.c` core + an
+icon desktop + the 14 hand-drawn family apps + the drivers below (networking,
+TLS, 3D). Those apps still work there and are the source for the remaining
+migration into unoui windows. The two builds share the platform layer, `fb`,
+the RAM-disk FS, and all the drivers; only the UI layer differs.
 
-## What is reused vs. new
+## Layout: the platform, the two shells, the drivers
 
-- **Reused verbatim from the Dreamcast port** (which reuses the PS2 port):
-  `unodos.c` (core: WM, desktop, scheduler, FAT12, module loader),
-  `mac_compat.*` (Toolbox shim), `fb.*` (software framebuffer), `app_loader.c`,
-  `uno_app.h`, the 11 family apps. Core edits: three `UNO_PC64` hook lines in
-  `main()`, the RAM-FAT12 fallback enabled, runtime fb dimensions
-  (`FB_W/FB_H` resolve to variables on pc64), and the `uno_screen_changed()`
-  resolution hook.
-- **`apps/settings.c` — the family's first Settings app** (12th icon):
-  display-resolution picker over a `display_res_*` tail added to the
-  KernelApi (NULL on other ports), the C-core sibling of the x86 reference
-  port's video-mode selector.
-- **New platform + subsystems**:
-  - `uefi.h` / `uefi_main.c` — handwritten minimal UEFI surface (no
-    gnu-efi/EDK2) + GOP present, conin/pointer poll, PC speaker
-  - `pc64_libc.c` / `pc64_math.c` — freestanding mem/str + first-fit malloc
-    + the float math uno3d needs (`sinf/cosf/tanf/floorf/ceilf/sqrtf`); own
-    `include/` headers, no host libc at all
-  - `pc64_io.c` — File Manager over a RAM disk + Sound Manager → speaker
-  - `pc64_modload.c` — static app registry (`-DUNO_APP_SYM=...`)
-  - `pc64_pci.c` — PCI config-space scan (ports 0xCF8/0xCFC)
-  - `e1000.c` — **native Intel e1000 (82540EM) NIC driver** — the family's
-    first real `nic`-service hardware backend (MMIO descriptor rings; DMA is
-    trivial while UEFI keeps the machine identity-mapped)
-  - `net.c` — **a from-scratch TCP/IP stack**: Ethernet / ARP / IPv4 /
-    ICMP-echo / UDP / a minimal single-connection TCP + a DHCP client
-  - `apps/network.c` — the Network self-test app (13th icon)
-  - `apps/runner.c` — the **uno3d "UnoDOS Runner" 3D game** (14th icon),
-    linking `../uno3d/{uno3d,uno3d_soft,uno3d_intel,uno3d_game}.c` — the
-    write-once game the PS2/DC ports run, here on the software rasteriser
-    into the GOP framebuffer
+- **Platform (both builds)** — `uefi.h` / `uefi_main.c` (handwritten minimal
+  UEFI surface, no gnu-efi/EDK2: GOP present, conin/pointer poll, PC speaker,
+  fill-scaling), `fb.*` (software framebuffer), `pc64_libc.c` / `pc64_math.c`
+  (freestanding libc + float math, own `include/*.h`, no host libc),
+  `pc64_io.c` (RAM-disk File Manager + PC-speaker Sound Manager),
+  `pc64_pci.c` (PCI config scan).
+- **Default shell (unoui)** — `pc64_uui.c` + the cross-platform `../unoui/`
+  toolkit + 8 themes. See "unoui shell" below.
+- **Legacy shell** — `unodos.c` (WM + icon desktop + module dispatch) +
+  `mac_compat.c` (Mac-Toolbox/QuickDraw shim) + `app_loader.c` +
+  `pc64_modload.c` + `apps/*.c` (14 apps incl. `settings.c`, `network.c`,
+  `runner.c`). Built only by `./build.sh legacy`.
+- **Drivers (linked by the build that needs them)** — `e1000.c` (native NIC),
+  `net.c` (TCP/IP stack), `tls.c` + `bearssl/` (TLS), `../uno3d/*` (3D),
+  `i2c_hid.c` (native trackpad, opt-in). Documented in their own sections.
 
 ## Networking (native e1000 + hand-rolled TCP/IP)
 
@@ -86,7 +67,8 @@ DHCP client, and a minimal TCP (active open, one in-flight segment,
 retransmit, close). Static config matches QEMU SLIRP (10.0.2.15/24, gw
 10.0.2.2); DHCP overrides it.
 
-`harness.py net` verifies the whole stack headlessly against SLIRP: DHCP
+The **Network** self-test app (legacy build) drives it; `nettest.py` verifies
+the whole stack headlessly against SLIRP: DHCP
 lease, ping the gateway, a **UDP** round-trip via SLIRP's built-in TFTP
 server (RRQ → DATA), and a **TCP** connect+echo to a `guestfwd` host `cat`.
 A packet-capture (`filter-dump`) pass confirmed the wire traffic during
@@ -110,41 +92,38 @@ into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
 key-combo reliance — **every control is reachable by pointer OR keyboard**
 (Tab focus, arrows, Enter), so it needs no mouse.
 
-- `./build.sh` builds the unoui image (**default now**): a lean ~71 KB with
-  **no legacy UI code at all** — the Toolbox/QuickDraw shim (`mac_compat.c`),
-  the `unodos.c` core, the per-app drawing, `net`/`tls`/`uno3d` are all gone.
-  Only platform + fb + RAM-disk FS + unoui + 8 themes.
-- `./build.sh legacy` still builds the old core + 14 apps + net/TLS/3D
-  (source preserved until those apps are migrated to unoui windows).
 - A persistent **Launcher** window opens apps on demand (raise if already
-  open, **Ctrl-W** closes the focused window): a **Control Panel** (live theme
-  dropdown → re-skins the whole desktop across all 8 themes; live resolution
-  dropdown; checkboxes/slider/spinner), an **Editor** (File/Edit menubar,
-  real multi-line editing, filename field, format dropdown, Save/Open/New
-  wired to the RAM-disk File Manager), a **Files** list, a **System** panel,
-  and a **Clock**. Windows are sized so no widget overflows the frame.
+  open, **Ctrl-W** closes the focused window, **F2** / **Ctrl-Tab** cycles
+  windows for keyboard-only use): a **Control Panel** (live theme dropdown →
+  re-skins the whole desktop across all 8 themes; live resolution dropdown;
+  checkboxes/slider/spinner), an **Editor** (File/Edit menubar, real
+  multi-line editing, filename field, format dropdown, Save/Open/New wired to
+  the RAM-disk File Manager), a **Files** list, a **System** panel, a
+  **Clock**, and a **Canvas** demo. Windows are sized to the theme metrics so
+  no widget overflows the frame.
+- **Canvas + fullscreen** (toolkit features, benefit every port): `UI_CANVAS`
+  is an app-drawn widget — the toolkit does the chrome/focus/drag, the app
+  owns the pixels inside the rect (games / paint / tracker), with a `draw` and
+  an `event` callback. `unoui_fullscreen(ui, win)` makes a window's canvas
+  fill the whole screen with no chrome and routes all input to it (Esc to
+  return); this is the target for the games / 3D migration. Both verified in
+  QEMU (`shots/canvas_win.png`, `shots/canvas_full.png`).
 - **Present-on-change**: the frame is redrawn/presented only when something
   changed (input or the ~2 Hz caret blink); idle frames touch no VRAM, so the
-  desktop is steady and a drag only rewrites the moving window's rows.
-- The touchpad Absolute Pointer is lightly smoothed (halves firmware jitter);
-  the remaining migration is folding the games / Network / Runner3D into unoui
-  windows (their engines need rebuilding against the unoui shell).
+  desktop is steady and a drag only rewrites the moving window's rows. A
+  fullscreen canvas redraws every frame (for animation).
 - The only pc64-specific code is a ~40-line event adapter (UEFI input →
-  `unoui_event`, gated so the legacy event queue is compiled out) + the
-  window tree + action handlers; unoui owns everything else. Verified in QEMU:
-  boots straight to the desktop, renders the full widget set, and
-  **keyboard-drives live theme switching** (UnoDOS → Windows 3.1 → …) —
-  `shots/uui_desktop.png`, `shots/uui_theme2.png`.
+  `unoui_event`, gated so the legacy event queue is compiled out) + the window
+  tree + action handlers; unoui owns everything else. Verified in QEMU: boots
+  straight to the desktop, live keyboard theme switching (UnoDOS → Windows 3.1
+  → …) re-skins the whole desktop.
 
-**Legacy vs unoui.** *Legacy* = `unodos.c` (WM + icon desktop + app dispatch)
-+ `mac_compat.c` (Mac-Toolbox shim over `fb`) + 14 apps each hand-drawing
-their own UI. *unoui* = one retained-mode toolkit with themes and a
-consistent widget set. The default image carries none of the legacy UI; the
-remaining migration is folding the games / Network / Runner3D into unoui
-windows, after which `./build.sh legacy` (and the legacy source) can be
-deleted outright. High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can
-adopt the same unoui shell; only the tiny targets (NES 2 KB, Game Boy 8 KB,
-C64) must keep the minimal legacy path.
+The remaining migration is folding the games / Network / Runner3D into unoui
+windows (custom-render for Paint/Tracker/Music/Network, `unoui_fullscreen` for
+the games/3D), after which `./build.sh legacy` (and its source) can be deleted.
+High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can adopt the same unoui
+shell; only the tiny targets (NES 2 KB, Game Boy 8 KB, C64) keep the minimal
+legacy path — the toolkit won't fit.
 
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 
@@ -233,15 +212,17 @@ Ubuntu packages, no EDK2:
 
 ```
 sudo apt install gcc-mingw-w64-x86-64 qemu-system-x86 ovmf
-./build.sh            # -> build/BOOTX64.EFI + build/esp/EFI/BOOT/BOOTX64.EFI
-./build.sh run        # boot it in QEMU+OVMF (VNC :0)
-python3 harness.py    # the scripted M1-M3 verification pass -> shots/*.png
+./build.sh            # unoui shell (default) -> build/esp/EFI/BOOT/BOOTX64.EFI
+./build.sh run        # unoui shell, boot in QEMU+OVMF (VNC :0)
+./build.sh legacy     # the old core + 14 apps + net/TLS/3D
+./build.sh legacy run # legacy, boot in QEMU
+python3 harness.py boot   # scripted boot -> shots/*.png (QMP send-key/screendump)
+python3 nettest.py        # net + TLS verification (needs the legacy build)
 ```
 
 **Real hardware:** format a USB stick FAT32, copy `build/esp/*` onto it
-(so it holds `EFI/BOOT/BOOTX64.EFI`), boot the target machine with Secure
-Boot disabled. Any 64-bit UEFI PC is in scope; pending the first physical
-pass.
+(so it holds `EFI/BOOT/BOOTX64.EFI`), boot the target with Secure Boot
+disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 
 ## Design notes (each metal-hardened rule is marked ⚠)
 
@@ -319,22 +300,25 @@ pass.
 
 ```
 pc64/
-├── build.sh            # mingw-w64 build -> BOOTX64.EFI + ESP tree
-├── harness.py          # QEMU+OVMF QMP harness (boot / full pass / mouse)
-├── uefi.h  uefi_main.c # the UEFI platform layer
-├── pc64_libc.c pc64_math.c  # freestanding libc + float math (+ include/*.h)
+├── build.sh            # mingw-w64 build: default = unoui, "legacy" = old core
+├── harness.py          # QEMU+OVMF QMP harness (boot / screenshots)
+├── nettest.py          # net + TLS QEMU verification (legacy build)
+│  --- platform (both builds) ---
+├── uefi.h  uefi_main.c # UEFI surface + GOP present + input + fill-scaling
+├── fb.c fb.h           # software framebuffer (runtime-sized on pc64)
+├── pc64_libc.c pc64_math.c include/*.h  # freestanding libc + float math
 ├── pc64_io.c           # RAM-disk File Manager + PC-speaker Sound Manager
-├── pc64_modload.c      # static app registry (14 apps)
-├── pc64_pci.c          # PCI config-space scan
+├── pc64_pci.c pc64_pci.h  # PCI config-space scan
+│  --- default shell: unoui ---
+├── pc64_uui.c          # the unoui shell: launcher + app windows + adapter
+│                       # (links ../unoui/ + ../unoui/themes/*)
+│  --- legacy shell (./build.sh legacy) ---
+├── unodos.c mac_compat.* app_loader.c pc64_modload.c uno_app.h
+├── apps/               # 14 apps + uno_mod.h (settings/network/runner are pc64)
+│  --- drivers ---
 ├── e1000.c e1000.h     # native Intel e1000 NIC driver
 ├── net.c net.h uno_nic.h  # Ethernet/ARP/IPv4/ICMP/UDP/TCP + DHCP
-├── tls.c tls.h         # BearSSL TLS client (pinned key, RDRAND entropy)
-├── bearssl/            # vendored BearSSL (inc/ src/ + freestanding config.h)
-├── tls_test/           # throwaway EC cert + stdio-TLS test server
-├── nettest.py          # net+TLS QEMU verification harness
-├── fb.c fb.h mac_compat.c mac_compat.h unodos.c app_loader.c uno_app.h
-│                       # the shared portable core (Dreamcast copies + UNO_PC64 gates)
-├── apps/               # 14 apps + uno_mod.h (Settings/Network/Runner3D are pc64)
-│                       # Runner3D links ../uno3d/{uno3d,uno3d_soft,uno3d_intel,uno3d_game}
+├── tls.c tls.h bearssl/ tls_test/  # BearSSL TLS client (pinned key, RDRAND)
+├── i2c_hid.c i2c_hid.h # native I2C-HID trackpad (opt-in, -DUNO_I2C_TRACKPAD)
 └── shots/              # harness-captured evidence
 ```
