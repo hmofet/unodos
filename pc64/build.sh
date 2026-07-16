@@ -34,7 +34,8 @@ if [ "$1" != "legacy" ]; then
     echo "[2/3] compiling the unoui shell (default)..."
     UCF="$CFLAGS -DUNO_UUI -I../unoui"
     OBJS=""
-    for f in fb pc64_libc pc64_io i2c_hid uefi_main pc64_uui; do
+    # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
+    for f in fb mac_compat pc64_libc pc64_io i2c_hid uefi_main pc64_uui pc64_uui_apps; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     for u in unoui unoui_input; do
@@ -43,6 +44,11 @@ if [ "$1" != "legacy" ]; then
     for t in $(find ../unoui/themes -name '*.c' | sort); do
         b=$(basename "$t" .c)
         "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
+    done
+    # migrated legacy apps: games + creative tools, hosted in unoui canvases
+    for app in dostris pacman outlast music tracker paint; do
+        "$CC" $UCF -DUNO_APP_SYM=uno_app_main_$app -c -o "build/app_$app.o" "apps/$app.c"
+        OBJS="$OBJS build/app_$app.o"
     done
     echo "[3/3] linking the unoui image..."
     "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
