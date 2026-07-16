@@ -2,9 +2,10 @@
  * UnoDOS/pc64 - a minimal web browser (HTML + Markdown + basic CSS).
  *
  * A native unoui canvas app: it lays out a document and paints it with fb
- * primitives, wrapping text to the canvas width and scaling headings. No JS
- * and no network yet - it renders a built-in welcome page and opens files from
- * the local file system (uno_fs_*: the RAM disk today, FAT32/local disks next).
+ * primitives, wrapping text to the canvas width and scaling headings. It runs
+ * <script> blocks through a tiny interpreter (js.c) - no network yet. It renders
+ * a built-in welcome page and opens files from the local file system (uno_fs_*:
+ * the RAM disk today, FAT32/local disks too).
  *
  * Rendering model: a single immediate-mode flow. A cursor walks left-to-right
  * wrapping words; block elements start new lines and add vertical gaps; a small
@@ -15,6 +16,7 @@
 #include "unoui.h"
 #include "fb.h"
 #include "pc64_fs.h"
+#include "js.h"
 #include <string.h>
 
 /* ---- page palette (a light "document" look) ------------------------------ */
@@ -217,11 +219,13 @@ static int  g_nfiles, g_sel;
 static const char kWelcome[] =
 "# UnoDOS Browser\n\n"
 "A tiny **HTML / Markdown / CSS** renderer for pc64. It lays out a document and "
-"paints it straight into the framebuffer - *no JavaScript, no network* yet.\n\n"
+"paints it straight into the framebuffer, and now *runs JavaScript* too "
+"(no network yet).\n\n"
 "## Features\n\n"
 "- Headings, **bold**, *italic*, `inline code`\n"
 "- Bullet lists and paragraphs with word-wrap\n"
 "- [Links](none) and horizontal rules\n"
+"- Runs `<script>` blocks (see the **Script.html** demo)\n"
 "- Loads files from the local disks (see the file list)\n\n"
 "---\n\n"
 "## Try it\n\n"
@@ -238,24 +242,89 @@ static const char kSample[] =
 "<hr><pre>  pre-formatted text\n  keeps its   spacing</pre>"
 "<p>Unknown tags are ignored; their text still shows.</p>";
 
+static const char kScript[] =
+"<h1>JavaScript</h1>"
+"<p>The <code>&lt;script&gt;</code> block below runs in a tiny tree-walking "
+"interpreter; its <code>document.write</code> output is spliced into the page "
+"and <code>console.log</code> appears in the console panel.</p>"
+"<script>"
+"document.write('<h2>Generated from JS</h2>');"
+"function fib(n){ return n < 2 ? n : fib(n-1) + fib(n-2); }"
+"document.write('<p>A Fibonacci table:</p><ul>');"
+"for (var i = 0; i < 8; i++)"
+"  document.write('<li>fib(' + i + ') = ' + fib(i) + '</li>');"
+"document.write('</ul>');"
+"var sum = 0; for (var k = 1; k <= 10; k++) sum += k;"
+"document.write('<p>Sum 1..10 = <b>' + sum + '</b>, sqrt(2) = ' + Math.sqrt(2) + '</p>');"
+"console.log('script ran; fib(10) =', fib(10));"
+"console.log('Math.floor(3.7) =', Math.floor(3.7));"
+"</script>"
+"<hr><p>Everything above the rule was produced at open time by the script.</p>";
+
 static long fs_load(int vol, const char *name, char *buf, long max);   /* fwd */
 
 static void detect_kind(const char *name) { int n=(int)strlen(name);
     g_is_html = (n>5 && !strcmp(name+n-5,".html")) || (n>4 && !strcmp(name+n-4,".htm")); }
+
+/* Run <script> blocks in g_doc: replace each with its document.write output and
+ * collect console.log lines into a "console" panel appended at the end. A tiny
+ * tree-walking interpreter (js.c) does the work; this is the HTML<->JS glue. */
+static int ci(char c){ return (c>='A'&&c<='Z') ? c+32 : c; }
+static int tag_at(const char *p, const char *name)   /* case-insensitive "<name" / "</name" */
+{ while (*name){ if (ci(*p)!=*name) return 0; p++; name++; } return 1; }
+
+static void js_expand(void)
+{
+    static char out[DOC_MAX];
+    static char code[8192], wbuf[8192], logbuf[4096], lbuf[2048];
+    int oi = 0, haslog = 0;
+    const char *p = g_doc;
+    logbuf[0] = 0;
+    while (*p && oi < DOC_MAX-1) {
+        if (p[0]=='<' && tag_at(p+1,"script")) {
+            const char *s = p + 7; while (*s && *s!='>') s++; if (*s=='>') s++;
+            const char *e = s;
+            while (*e) { if (e[0]=='<' && e[1]=='/' && tag_at(e+2,"script")) break; e++; }
+            int inlen = (int)(e - s); if (inlen > (int)sizeof(code)-1) inlen = sizeof(code)-1;
+            memcpy(code, s, inlen); code[inlen] = 0;
+            wbuf[0] = 0; lbuf[0] = 0;
+            js_run(code, wbuf, sizeof wbuf, lbuf, sizeof lbuf);
+            int wl = (int)strlen(wbuf);
+            if (wl > DOC_MAX-1-oi) wl = DOC_MAX-1-oi;
+            memcpy(out+oi, wbuf, wl); oi += wl;
+            if (lbuf[0]) { int have=(int)strlen(logbuf), ll=(int)strlen(lbuf);
+                if (have+ll < (int)sizeof(logbuf)-1) memcpy(logbuf+have, lbuf, ll+1); haslog = 1; }
+            p = e; while (*p && *p!='>') p++; if (*p=='>') p++;
+            continue;
+        }
+        out[oi++] = *p++;
+    }
+    out[oi] = 0;
+    if (haslog) {                                    /* a small console panel */
+        const char *h = "<hr><h3>console</h3><pre>", *f = "</pre>";
+        int hl=(int)strlen(h), ll=(int)strlen(logbuf), fl2=(int)strlen(f);
+        if (oi+hl+ll+fl2 < DOC_MAX-1) {
+            memcpy(out+oi,h,hl); oi+=hl; memcpy(out+oi,logbuf,ll); oi+=ll;
+            memcpy(out+oi,f,fl2); oi+=fl2; out[oi]=0;
+        }
+    }
+    memcpy(g_doc, out, oi+1);
+}
 
 static void open_entry(int idx)
 {
     if (idx < 0 || idx >= g_nfiles) return;
     g_scroll = 0;
     if (g_vol[idx] < 0) {                          /* built-in demo */
-        const char *d = (idx == 0) ? kWelcome : kSample;
+        const char *d = (idx == 0) ? kWelcome : (idx == 1) ? kSample : kScript;
         strncpy(g_doc, d, DOC_MAX-1); g_doc[DOC_MAX-1]=0;
-        g_is_html = (idx == 1);
+        g_is_html = (idx >= 1);
     } else {
         long n = fs_load(g_vol[idx], g_names[idx], g_doc, DOC_MAX-1);
         if (n < 0) n = 0; g_doc[n] = 0;
         detect_kind(g_names[idx]);
     }
+    if (g_is_html) js_expand();                    /* run any <script> blocks */
     strncpy(g_title, g_names[idx], 47); g_title[47]=0;
     g_view = 1;
 }
@@ -266,6 +335,7 @@ static void refresh_list(void)
     g_nfiles = 0;
     strcpy(g_names[g_nfiles], "Welcome.md");  g_vol[g_nfiles++] = -1;
     strcpy(g_names[g_nfiles], "Sample.html"); g_vol[g_nfiles++] = -1;
+    strcpy(g_names[g_nfiles], "Script.html"); g_vol[g_nfiles++] = -1;
     nv = uno_fs_volumes();
     for (v = 0; v < nv && g_nfiles < MAXFILES; v++) {
         char nm[32]; int i, cnt = uno_fs_list_begin(v);
