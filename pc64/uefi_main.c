@@ -37,6 +37,7 @@
 #include "uefi.h"
 #include "fb.h"
 #include "mac_compat.h"
+#include "i2c_hid.h"        /* native I2C-HID trackpad (inert unless -DUNO_I2C_TRACKPAD) */
 
 int uno_main(void);                 /* the portable core (-Dmain=uno_main) */
 void uno_screen_changed(void);      /* core hook: resolution changed (unodos.c) */
@@ -403,6 +404,7 @@ void uno_pc64_init(void)
                                           (void **)&gKeyEx)))
             gKeyEx = 0;
     }
+    uno_i2c_hid_init();             /* native trackpad; inert unless built in */
     stage_stripe(3, 0x00FFFFFF);    /* white: input located - core takes over */
 
     dbg_puts("unodos-pc64: init done\n");
@@ -499,6 +501,25 @@ static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
 static void poll_pointer(void)
 {
     int i, mb = 0, moved = 0;
+
+    /* native I2C-HID trackpad (when built in + present): its absolute coords
+       take priority over the firmware pointer path */
+    if (uno_i2c_hid_present()) {
+        int ax, ay, b;
+        if (uno_i2c_hid_poll(&ax, &ay, &b)) {
+            /* ax/ay normalised 0..32767 -> panel -> fb (calibrate once real
+               report ranges are known from the X1) */
+            int px = (int)((long long)ax * gModeW / 32767);
+            int py = (int)((long long)ay * gModeH / 32767);
+            if (gOutW > 0 && gOutH > 0) {
+                g_cx = (px - (int)gOffX) * uno_fb_w / gOutW;
+                g_cy = (py - (int)gOffY) * uno_fb_h / gOutH;
+                clamp_cursor();
+                g_have_pointer = 1; moved = 1;
+            }
+            if (b) mb = 1;
+        }
+    }
 
     /* absolute pointers (touchpads, tablets): position is absolute. Only the
        FIRST instance that reports new data drives the cursor this frame, so

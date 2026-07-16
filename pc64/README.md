@@ -100,6 +100,35 @@ bring-up — which is how the LLP64 footgun below was caught.
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
 
+## Native I2C-HID trackpad (foundation — needs hardware bring-up)
+
+Modern laptop trackpads (2015+, incl. the X1 Carbon Gen 8) are **I2C-HID**
+devices behind an Intel LPSS DesignWare I2C controller, described in ACPI. A
+native driver replaces the firmware's (jerky) Absolute Pointer with direct
+control. `i2c_hid.c` has the two reusable, spec-defined layers — the
+**DesignWare I2C master** and **HID-over-I2C** (descriptor / SET_POWER / RESET
+/ input-report read) — plus a first-pass report parser and a raw-dump hook.
+
+**Honest status**: this is *unverifiable in QEMU* (no emulated I2C touchpad),
+so it is **gated behind `-DUNO_I2C_TRACKPAD` and OFF by default** — the shipped
+build is byte-for-byte unaffected (it compiles to inert stubs; `present()`
+returns 0 and the firmware-pointer path is used). Bring-up needs two device
+facts that normally come from ACPI/AML (not parsed yet):
+
+1. From Linux on the same machine: the **LPSS I2C controller** (auto-found if
+   PCI-visible; else set `I2C_HID_BASE` from `dmesg | grep i2c_designware`),
+   the **slave address** (`i2cdetect` — Synaptics ~0x2c, Elan ~0x15/0x2a), and
+   the **HID descriptor register** (almost always 0x0020).
+2. Build `UNO_EXTRA='-DUNO_I2C_TRACKPAD -DI2C_HID_ADDR=0x2c ...' ./build.sh`,
+   boot, and capture real report bytes via `uno_i2c_hid_dump()` — the report
+   layout is device-specific (defined by the HID report descriptor), so the
+   parser gets refined from those bytes.
+
+The firmware-pointer path was also fixed independently (latched buttons so
+held clicks register; only the first pointer instance drives the cursor so a
+touchpad and TrackPoint don't fight) — that alone may resolve the jerky-pad /
+dead-button symptoms on machines where the firmware exposes the pad.
+
 ## TLS (BearSSL)
 
 TLS is **BearSSL** (`bearssl/`), chosen for security over convenience: it is
