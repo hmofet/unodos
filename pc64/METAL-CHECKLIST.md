@@ -7,6 +7,29 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest batch — network loading + the Aurora visual overhaul
+
+These shipped after the JavaScript build; all QEMU-verified. Re-flash the stick
+to pick them up.
+
+### Aurora theme (the new default look) — verify it reads well on the real eDP
+- [ ] **Aurora Light** is the boot default — confirm the rounded windows, soft
+      shadows, the accent underline under the active title, the frosted taskbar
+      and the aurora-gradient desktop all render cleanly at the panel's native
+      resolution (the AA rounding + blends are resolution-independent, but worth
+      a look on real hardware / real colour).
+- [ ] **Dark mode** — Control Panel → "Dark mode" checkbox should swap to Aurora
+      Dark instantly (and back). Both are also in the theme dropdown.
+- [ ] The **8 retro themes** should still look exactly as before (the Aurora
+      primitives are additive; QEMU-confirmed against Windows 3.1).
+
+### Browser network loading — expected to be inert on the X1 (no wired NIC)
+- [ ] The browser **address bar** (Up from the file list) + a `http://…` URL:
+      on the X1 this will report **"No e1000 NIC found"** because the machine
+      has Intel Wi-Fi, not e1000 — expected until a Wi-Fi / USB-Ethernet driver
+      lands. The whole path (DNS + TCP + HTTP + render) is QEMU-verified via
+      SLIRP instead. Nothing to fix here; just confirm the error is graceful.
+
 ## Pending since the last metal test (2026-07-16, commit b2c8d04 build)
 
 Everything below shipped after the last on-metal boot. The current stick already
