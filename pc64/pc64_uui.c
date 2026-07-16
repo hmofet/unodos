@@ -23,6 +23,7 @@
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
 static const struct { const char *name; const struct unoui_theme *theme; } kThemes[] = {
+    { "Aurora Light", &theme_aurora_light }, { "Aurora Dark", &theme_aurora_dark },
     { "UnoDOS",    &theme_unodos  }, { "Mac OS 7",    &theme_macos7 },
     { "Mac Plus",  &theme_macplus }, { "Windows 3.1", &theme_win31  },
     { "Amiga",     &theme_amiga   }, { "C64",         &theme_c64    },
@@ -332,37 +333,51 @@ static void tb_panel(int x, int y, int w, int h, fb_px face, int pressed)
 static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     const unoui_theme *t = UI.theme;
-    int i, x, act = focused_app(), by = r.y + 3, bh = TASKH - 6;
+    int modern = t->m.radius > 0;
+    int i, x, act = focused_app(), by = r.y + (modern ? 5 : 3), bh = TASKH - (modern ? 10 : 6);
+    int cr = bh/2 > 8 ? 8 : bh/2;                 /* chip corner radius */
     (void)w; (void)ctx;
-    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
-    fb_hline(r.x, r.y, r.w, t->pal.light);
+    if (modern) {                                 /* Aurora: a frosted bar + hairline */
+        fb_blend_rect(r.x, r.y, r.w, r.h, t->pal.win_bg, 236);
+        fb_blend_rect(r.x, r.y, r.w, 1, t->pal.text_dim, 45);
+    } else {
+        fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
+        fb_hline(r.x, r.y, r.w, t->pal.light);
+    }
     /* Start button - accent-coloured, 4-square emblem + label */
     { int bx = r.x + TB_START_X;
-      fb_px q[4] = { FB_RGB(230,70,70), FB_RGB(70,200,90),
-                     FB_RGB(70,120,230), FB_RGB(240,205,60) };
+      fb_px q[4] = { FB_RGB(255,255,255), FB_RGB(210,225,255),
+                     FB_RGB(225,235,255), FB_RGB(255,255,255) };
       int gx = bx + 7, gy = by + (bh - 11) / 2, u = 5;
-      tb_panel(bx, by, TB_START_W, bh, t->pal.accent, 0);
+      if (modern) fb_round_rect(bx, by, TB_START_W, bh, cr, t->pal.accent);
+      else        tb_panel(bx, by, TB_START_W, bh, t->pal.accent, 0);
       fb_fill_rect(gx, gy, u, u, q[0]);       fb_fill_rect(gx + u + 1, gy, u, u, q[1]);
       fb_fill_rect(gx, gy + u + 1, u, u, q[2]); fb_fill_rect(gx + u + 1, gy + u + 1, u, u, q[3]);
       fb_text(bx + 22, by + (bh - 8) / 2, "Start", t->pal.accent_text, -1); }
-    /* one chip per open window: mini icon + name, pressed if it's the active one */
+    /* one chip per open window: mini icon + name, highlighted if it's active */
     x = r.x + TB_CHIP_X;
     for (i = 0; i < NAPPS; i++) {
         int d = (i == act) ? 1 : 0;
         unoui_rect eb;
         if (!g_open[i]) continue;
-        tb_panel(x, by, TB_CHIP_W, bh, t->pal.face, d);
-        eb.x = x + 4 + d; eb.y = by + (bh - 16) / 2 + d; eb.w = 16; eb.h = 16;
-        pc64_icon_emblem(i, eb);
-        fb_set_clip(x + 22, by, TB_CHIP_W - 24, bh);          /* keep the name in the chip */
-        fb_text(x + 24 + d, by + (bh - 8) / 2 + d, app_short(i), t->pal.text, -1);
-        fb_set_clip(r.x, r.y, r.w, r.h);                      /* back to the bar */
+        if (modern) {
+            if (d) { fb_round_rect_a(x, by, TB_CHIP_W, bh, cr, t->pal.accent, 48, FB_CORNER_ALL);
+                     fb_fill_rect(x + 8, by + bh - 2, TB_CHIP_W - 16, 2, t->pal.accent); }
+            else     fb_round_rect_a(x, by, TB_CHIP_W, bh, cr, t->pal.text, 18, FB_CORNER_ALL);
+        } else tb_panel(x, by, TB_CHIP_W, bh, t->pal.face, d);
+        { int dd = modern ? 0 : d;
+          eb.x = x + 4 + dd; eb.y = by + (bh - 16) / 2 + dd; eb.w = 16; eb.h = 16;
+          pc64_icon_emblem(i, eb);
+          fb_set_clip(x + 22, by, TB_CHIP_W - 24, bh);        /* keep the name in the chip */
+          fb_text(x + 24 + dd, by + (bh - 8) / 2 + dd, app_short(i), t->pal.text, -1);
+          fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
         x += TB_CHIP_GAP;
     }
-    /* system tray: a recessed clock chip, right-aligned */
+    /* system tray: a clock chip, right-aligned */
     { int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
-      tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
-      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, t->pal.field_text, -1); }
+      if (modern) fb_round_rect_a(cxx, by, cw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
+      else        tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
+      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1); }
 }
 
 static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
@@ -449,7 +464,7 @@ static int app_is_bridge(int a)
 static void build_legacy(int a)
 {
     int li = a - NNATIVE, aw, ah, g = app_game(a);
-    const unoui_metrics *m = &theme_unodos.m;
+    const unoui_metrics *m = &UI.theme->m;
     unoui_canvas *cv;
     if (g >= 0) {                      /* native game: one canvas that scales */
         aw = 320; ah = 240;
@@ -645,7 +660,7 @@ static void launcher_hover(int mx, int my)
 
 static void build_launcher(void)
 {
-    const unoui_metrics *m = &theme_unodos.m;
+    const unoui_metrics *m = &UI.theme->m;
     int i, tw = 0, winw, vis = menu_vis();
     for (i = 0; i < menu_count(); i++) { int t = fb_text_w(menu_label(i)); if (t > tw) tw = t; }
     winw = tw + 26 + 14 + 2 * m->frame_w + 2 * m->pad;
@@ -689,6 +704,7 @@ static void on_action(const unoui_action *a)
     case ID_SHUTDOWN: uno_pc64_shutdown(); break;
     case ID_RESTART:  uno_pc64_restart();  break;
     case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
+    case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
     case ID_OPEN:  editor_open(); break;
@@ -787,7 +803,7 @@ int main(void)
     int idle = 0, halfsecs = 0;
 
     uno_pc64_init();
-    unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
+    unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);

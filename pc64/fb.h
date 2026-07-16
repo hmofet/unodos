@@ -71,6 +71,18 @@ void fb_invert_rect(int x, int y, int w, int h);           /* XOR to white */
 void fb_hline(int x, int y, int w, fb_px c);
 void fb_vline(int x, int y, int h, fb_px c);
 
+/* alpha blend (a: 0..255) + vertical gradient - for modern themes. Clip-safe,
+ * additive: no effect on callers that don't use them. */
+void fb_blend_pixel(int x, int y, fb_px c, int a);
+void fb_blend_rect (int x, int y, int w, int h, fb_px c, int a);
+void fb_grad_v     (int x, int y, int w, int h, fb_px top, fb_px bot);
+
+/* anti-aliased rounded rectangles. `corners` is a bitmask of FB_CORNER_*. */
+enum { FB_CORNER_TL = 1, FB_CORNER_TR = 2, FB_CORNER_BL = 4, FB_CORNER_BR = 8,
+       FB_CORNER_ALL = 15, FB_CORNER_TOP = 3, FB_CORNER_BOTTOM = 12 };
+void fb_round_rect  (int x, int y, int w, int h, int rad, fb_px c);
+void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int corners);
+
 /* 8x8 text. bg < 0 = transparent (glyph pixels only). Returns the x past the
    string. Each glyph advances 8px. */
 int  fb_glyph(int x, int y, int ch, fb_px fg, long bg);

@@ -167,5 +167,7 @@ extern const unoui_theme theme_amiga;     /* Amiga Workbench 1.x               *
 extern const unoui_theme theme_c64;       /* Commodore 64 (blue PETSCII)       */
 extern const unoui_theme theme_apple2;    /* Apple II (green phosphor mono)    */
 extern const unoui_theme theme_next;      /* NeXTSTEP chiselled greyscale      */
+extern const unoui_theme theme_aurora_light; /* modern flat/rounded, light      */
+extern const unoui_theme theme_aurora_dark;  /* modern flat/rounded, dark       */
 
 #endif /* UNOUI_THEME_H */
