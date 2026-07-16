@@ -32,10 +32,13 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
 # ============================================================================
 if [ "$1" != "legacy" ]; then
     echo "[2/3] compiling the unoui shell (default)..."
-    UCF="$CFLAGS -DUNO_UUI -I../unoui"
+    # UNO_I2C_TRACKPAD: the native trackpad driver is now self-configuring
+    # (enumerates LPSS I2C + probes HID), bounded, and inert when no pad is
+    # found (e.g. QEMU), so it ships enabled - it just needs pc64_pci.
+    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -I../unoui"
     OBJS=""
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io i2c_hid uefi_main pc64_uui pc64_uui_apps; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci i2c_hid uefi_main pc64_uui pc64_uui_apps; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     for u in unoui unoui_input; do
