@@ -53,13 +53,16 @@ static int          g_dirty = 1;
 static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
 
-static const char *app_name(int a)  { return a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
-#define app_short(a) app_name(a)          /* legacy names are already short */
+static const char *kNativeShort[NNATIVE] =
+    { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
+static const char *app_name(int a)  { return a < NNATIVE ? kAppNames[a]    : unoapp_name(a - NNATIVE); }
+static const char *app_short(int a) { return a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_FULL, ID_START = 90,
+       ID_FULL, ID_DATE, ID_TIME, ID_SETDT,
+       ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
 
@@ -326,10 +329,15 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         tb_panel(x, by, TB_CHIP_W, bh, t->pal.face, d);
         eb.x = x + 4 + d; eb.y = by + (bh - 16) / 2 + d; eb.w = 16; eb.h = 16;
         pc64_icon_emblem(i, eb);
+        fb_set_clip(x + 22, by, TB_CHIP_W - 24, bh);          /* keep the name in the chip */
         fb_text(x + 24 + d, by + (bh - 8) / 2 + d, app_short(i), t->pal.text, -1);
+        fb_set_clip(r.x, r.y, r.w, r.h);                      /* back to the bar */
         x += TB_CHIP_GAP;
     }
-    fb_text(r.x + r.w - 118, r.y + (r.h - 8) / 2, g_clock, t->pal.text, -1);
+    /* system tray: a recessed clock chip, right-aligned */
+    { int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
+      tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
+      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, t->pal.field_text, -1); }
 }
 
 static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
@@ -443,7 +451,7 @@ static void open_app(int a)
 static void toggle_launcher(void)
 {
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
-    else { unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
+    else { clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
     g_dirty = 1;
 }
 
@@ -484,7 +492,7 @@ static void build_launcher(void)
      * the window is wide enough for the longest label - no overflow. Opened by
      * the taskbar Start button. */
     const unoui_metrics *m = &theme_unodos.m;
-    const int row = 24;
+    const int row = 20;                            /* fit 12 apps + power on 400px */
     int i, tw = 0, bw, winw;
     for (i = 0; i < NAPPS; i++) {                 /* widest label + button pad */
         int w = fb_text_w(app_name(i));
@@ -493,12 +501,15 @@ static void build_launcher(void)
     bw   = tw + 32;                                /* label + centred margins  */
     winw = bw + 2 * m->frame_w + 2 * m->pad;
     unoui_window_init(&g_launch, "Programs", 8, 20,
-                      winw, m->title_h + m->pad + NAPPS * row + m->pad + m->frame_w);
+                      winw, m->title_h + m->pad + (NAPPS + 3) * row + 10 + m->pad + m->frame_w);
     unoui_widget *x;
     for (i = 0; i < NAPPS; i++) {                 /* flush to content origin   */
         x = unoui_add_button(&g_launch, 0, i * row, bw, app_name(i), 0);
         x->id = ID_LAUNCH0 + i;
     }
+    unoui_add_sep(&g_launch, 0, NAPPS * row + 3, bw);   /* --- power --- */
+    x = unoui_add_button(&g_launch, 0, NAPPS * row + 10,       bw, "Restart",   0); x->id = ID_RESTART;
+    x = unoui_add_button(&g_launch, 0, (NAPPS + 1) * row + 10, bw, "Shut Down", 0); x->id = ID_SHUTDOWN;
 }
 
 /* ---- keep windows on-screen after a resolution change ------------------- */
@@ -527,10 +538,13 @@ static void on_action(const unoui_action *a)
 {
     if (!a->changed) return;
     g_dirty = 1;
+    if (a->kind == UI_ACT_CLOSE) { close_focused(); return; }   /* title-bar close box */
     if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
     switch (a->id) {
-    case ID_START: toggle_launcher(); break;
+    case ID_START:    toggle_launcher(); break;
+    case ID_SHUTDOWN: uno_pc64_shutdown(); break;
+    case ID_RESTART:  uno_pc64_restart();  break;
     case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
@@ -589,13 +603,20 @@ static int pump_input(void)
     return any;
 }
 
-static void fmt_uptime(int secs)
+/* system-tray clock: the firmware RTC wall time, HH:MM:SS */
+static void fmt_clock(int uptime_secs)
 {
-    int j = 0, v = secs, k = 0; char t[12];
-    strcpy(g_clock, "Uptime ");
-    j = 7; if (!v) t[k++] = '0'; while (v) { t[k++] = '0' + v % 10; v /= 10; }
-    while (k) g_clock[j++] = t[--k];
-    g_clock[j++] = ' '; g_clock[j++] = 's'; g_clock[j] = 0;
+    int h = 0, mi = 0, s = 0;
+    if (uno_pc64_time(0, 0, 0, &h, &mi, &s)) {
+        g_clock[0]='0'+(h/10)%10;  g_clock[1]='0'+h%10;  g_clock[2]=':';
+        g_clock[3]='0'+(mi/10)%10; g_clock[4]='0'+mi%10; g_clock[5]=':';
+        g_clock[6]='0'+(s/10)%10;  g_clock[7]='0'+s%10;  g_clock[8]=0;
+    } else {                              /* no RTC (e.g. bare QEMU): uptime */
+        int j = 0, v = uptime_secs, k = 0; char t[12];
+        strcpy(g_clock, "up ");
+        j = 3; if (!v) t[k++]='0'; while (v){t[k++]='0'+v%10; v/=10;}
+        while (k) g_clock[j++]=t[--k]; g_clock[j++]='s'; g_clock[j]=0;
+    }
 }
 
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
@@ -621,6 +642,7 @@ int main(void)
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
+    fmt_clock(0);                                    /* tray clock ready now */
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
@@ -628,10 +650,9 @@ int main(void)
         int la;
         uno_pc64_poll();
         if (pump_input()) { g_dirty = 1; idle = 0; }
-        else if (++idle >= 30) {        /* ~0.5 s: blink the caret + tick clock */
+        else if (++idle >= 30) {        /* ~0.5 s: caret blink + tray clock tick */
             idle = 0; g_dirty = 1;
-            if (++halfsecs & 1) {}      /* update the uptime label once a second */
-            else { fmt_uptime(halfsecs / 2); }
+            fmt_clock(++halfsecs / 2);
         }
         feed(&tick);                    /* advance the caret-blink timebase */
         la = active_legacy();           /* drive the focused game/tool clock */

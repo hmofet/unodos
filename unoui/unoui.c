@@ -875,4 +875,12 @@ void unoui_render_ui(unoui_ui *ui)
      * after the clip is reset. */
     if (ui->popup_wi >= 0)
         PICK(popup)(t, ui->popup_r, ui->popup_items, ui->popup_n, ui->popup_hot);
+
+    /* rubber-band drag outline (the window itself hasn't moved yet) */
+    if (ui->drag_active) {
+        int x = ui->drag_x, y = ui->drag_y, w = ui->drag_w, h = ui->drag_h;
+        fb_frame_rect(x,     y,     w,     h,     t->pal.dark);
+        fb_frame_rect(x + 1, y + 1, w - 2, h - 2, t->pal.accent);
+        fb_frame_rect(x + 2, y + 2, w - 4, h - 4, t->pal.dark);
+    }
 }
