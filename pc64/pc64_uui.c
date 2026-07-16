@@ -17,6 +17,7 @@
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
 #include "pc64_icons.h"      /* per-app icon artwork */
+#include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -770,6 +771,8 @@ int main(void)
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
+    uno_seq_init();                     /* UnoSound: PC-speaker voice */
+    uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
@@ -787,6 +790,7 @@ int main(void)
             fmt_clock(++halfsecs / 2);
         }
         feed(&tick);                    /* advance the caret-blink timebase */
+        uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
         if (g_launch_open) {            /* Start-menu hover highlight + scroll */
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }
