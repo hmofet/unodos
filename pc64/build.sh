@@ -19,12 +19,12 @@ echo "[1/3] exporting the shared font to a C array..."
 "$PY" mkfont_c.py
 
 CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
-        -nostdinc -Iinclude -I. -I../uno3d \
+        -nostdinc -Iinclude -I. -I../uno3d -Ibearssl/inc \
         -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main ${UNO_EXTRA:-}"
 
 echo "[2/3] compiling the kernel + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net uefi_main unodos; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls uefi_main unodos; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done
@@ -32,6 +32,18 @@ done
 for u in uno3d uno3d_soft uno3d_intel uno3d_game; do
     "$CC" $CFLAGS -c -o "build/$u.o" "../uno3d/$u.c"
     OBJS="$OBJS build/$u.o"
+done
+# BearSSL (TLS) - portable C only; the 8 CPU-accel / OS-entropy files that
+# pull intrinsics or OS headers are excluded (portable equivalents are built).
+echo "      compiling BearSSL..."
+BSSL_SKIP=" ghash_pclmul sysrng aes_x86ni aes_x86ni_cbcdec aes_x86ni_cbcenc aes_x86ni_ctr aes_x86ni_ctrcbc chacha20_sse2 "
+BSSLF="-O2 -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc \
+       -Iinclude -Ibearssl/inc -Ibearssl/src -DUNO_PC64"
+for c in $(find bearssl/src -name '*.c' | sort); do
+    base=$(basename "$c" .c)
+    case "$BSSL_SKIP" in *" $base "*) continue;; esac
+    "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"
+    OBJS="$OBJS build/bssl_$base.o"
 done
 for app in sysinfo clock files notepad music dostris outlast pacman tracker paint theme settings network runner; do
     "$CC" $CFLAGS -DUNO_APP_SYM=uno_app_main_$app -c -o "build/app_$app.o" "apps/$app.c"

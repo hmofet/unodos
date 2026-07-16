@@ -5,3 +5,5 @@ __pycache__/
 *.o
 *.pcap
 *.log
+tls_test/server.key
+tls_test/server.crt
