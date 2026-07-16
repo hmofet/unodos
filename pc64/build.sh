@@ -24,7 +24,7 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
 
 echo "[2/3] compiling the kernel + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls uefi_main unodos; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls i2c_hid uefi_main unodos; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done
