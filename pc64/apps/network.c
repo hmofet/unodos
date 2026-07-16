@@ -13,6 +13,7 @@
 #include "uno_mod.h"
 #include "net.h"
 #include "e1000.h"
+#include "tls.h"
 
 /* SLIRP peers: the gateway runs a built-in TFTP server (UDP round-trip proof,
    fully self-contained); 10.0.2.100 is a guestfwd -> host `cat` (TCP echo). */
@@ -20,6 +21,7 @@ static const u8 GW[4]   = {10, 0, 2, 2};
 static const u8 ECHO[4] = {10, 0, 2, 100};
 #define TFTP_PORT 69
 #define TCP_PORT  9000
+#define TLS_PORT  9443
 #define SPORT     5000
 
 /* build a TFTP Read Request for "uno.txt" in octet mode */
@@ -33,13 +35,13 @@ static int tftp_rrq(u8 *o)
     return i;
 }
 
-enum { S_INIT, S_DHCP, S_PING, S_UDP, S_TCP, S_DONE, S_NONIC };
+enum { S_INIT, S_DHCP, S_PING, S_UDP, S_TCP, S_TLS, S_DONE, S_NONIC };
 enum { R_WAIT = 0, R_OK = 1, R_FAIL = 2 };
 
 static int  gStep, gTimer, gStarted;
-static int  gRes[5];                 /* dhcp, ping, udp, tcp results (+link) */
+static int  gRes[6];                 /* dhcp,ping,udp,tcp,link,tls */
 static char gLease[20], gMacStr[20];
-static char gUdpEcho[24], gTcpEcho[24];
+static char gUdpEcho[24], gTcpEcho[24], gTlsInfo[40];
 
 static void hex2(char *o, unsigned v) {
     const char *h = "0123456789ABCDEF";
@@ -59,8 +61,8 @@ static void net_reset(void)
 {
     uno_nic_t *nic;
     gStep = S_INIT; gTimer = 0;
-    gRes[0]=gRes[1]=gRes[2]=gRes[3]=gRes[4]=R_WAIT;
-    gLease[0]=gMacStr[0]=gUdpEcho[0]=gTcpEcho[0]=0;
+    gRes[0]=gRes[1]=gRes[2]=gRes[3]=gRes[4]=gRes[5]=R_WAIT;
+    gLease[0]=gMacStr[0]=gUdpEcho[0]=gTcpEcho[0]=gTlsInfo[0]=0;
     nic = e1000_nic();
     if (!nic) { gStep = S_NONIC; return; }
     {
@@ -121,10 +123,35 @@ static void net_step(void)
             char buf[24];
             int n = net_tcp_recv(buf, sizeof buf - 1);
             if (n > 0) { buf[n] = 0; { int i; for(i=0;i<=n&&i<23;i++) gTcpEcho[i]=buf[i]; }
-                gRes[3] = R_OK; net_tcp_close(); gStep = S_DONE; }
+                gRes[3] = R_OK; net_tcp_close(); gStep = S_TLS; gTimer = 0; }
         }
         if (gStep == S_TCP && gTimer > 150) { gRes[3] = R_FAIL; net_tcp_close();
-            gStep = S_DONE; }
+            gStep = S_TLS; gTimer = 0; }
+        break;
+    }
+    case S_TLS: {
+        /* the whole TLS exchange runs synchronously (it pumps net_poll
+           internally); one net_step tick is enough */
+        char buf[32], num[12];
+        int rc = tls_connect(ECHO, TLS_PORT, "unodos-pc64");
+        if (rc == 0) {
+            tls_write("UNODOS-TLS", 10);
+            int n = tls_read(buf, sizeof buf - 1);
+            if (n > 0 && tls_last_error() == 0) {
+                unsigned v = tls_version(), c = tls_cipher();
+                strcpy(gTlsInfo, (v == 0x0303) ? "TLS1.2 cs=" :
+                                 (v == 0x0304) ? "TLS1.3 cs=" : "TLS cs=");
+                fmt_u(c, num); strcat(gTlsInfo, num);
+                strcat(gTlsInfo, tls_have_rdrand() ? " rdrand" : " tsc");
+                gRes[5] = R_OK;
+            } else {
+                strcpy(gTlsInfo, "err ");
+                fmt_u((unsigned)tls_last_error(), num); strcat(gTlsInfo, num);
+                gRes[5] = R_FAIL;
+            }
+            tls_close();
+        } else { gRes[5] = R_FAIL; }
+        gStep = S_DONE;
         break;
     }
     default: break;
@@ -166,8 +193,10 @@ static void network_draw(UnoWin *w)
     row(x, y, "DHCP lease", gRes[0], gLease); y += 14;
     row(x, y, "Ping 10.0.2.2", gRes[1], 0); y += 14;
     row(x, y, "UDP (TFTP)", gRes[2], gUdpEcho); y += 14;
-    row(x, y, "TCP echo", gRes[3], gTcpEcho); y += 16;
-    text_at(x, y, gStep == S_DONE ? "Done.  R: re-run" : "testing...",
+    row(x, y, "TCP echo", gRes[3], gTcpEcho); y += 14;
+    row(x, y, "TLS (BearSSL)", gRes[5], gTlsInfo); y += 16;
+    text_at(x, y, gStep == S_DONE ? "Done.  R: re-run" :
+            gStep == S_TLS ? "TLS handshake..." : "testing...",
             C_CYAN, C_BLUE, false);
 }
 
@@ -187,6 +216,6 @@ static void network_opened(void)
 
 static const AppInterface kIface = {
     network_draw, network_key, 0, network_tick, network_opened, 0,
-    "Network", { 120, 46, 470, 250 }
+    "Network", { 120, 40, 470, 268 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }

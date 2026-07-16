@@ -34,6 +34,7 @@ phantom-keystroke firmware.
 | **M2 storage**: Ctrl-S (Text Input Ex reports Ctrl → the Mac `cmdKey`) saves NOTES.TXT to the FAT12 volume; Files lists it (111 B) after refresh | `shots/m2_files_saved.png` |
 | **M3 game + audio**: Dostris playing (scripted drops, score on the board); Music/Tracker/Dostris voice PIT channel-2 PC-speaker square waves — the same audio the x86 reference kernel makes | `shots/m3_dostris.png` |
 | **M4 networking** (native e1000 + a from-scratch TCP/IP stack): the Network app runs a live self-test — MAC read, link up, **DHCP lease**, **ICMP ping**, a **UDP** round-trip (TFTP RRQ→DATA), and a **TCP** connect+echo — all green against QEMU SLIRP | `shots/net_2.png` |
+| **M4 TLS** (BearSSL): a **TLS 1.2** handshake to a pinned-key echo server, negotiating **ECDHE-ECDSA-AES128-GCM-SHA256** (`cs=0xC02B`), seeded from **RDRAND**, encrypted app-data round-trip — the Network app's 7th line | `shots/tls_1.png` |
 | **M4 3D** (uno3d ported): the write-once "UnoDOS Runner" game — the same one the PS2 (GS) and Dreamcast (PVR) ports run — rendering full-screen through the software rasteriser into the GOP framebuffer, perspective + z-buffer + gouraud, score HUD | `shots/runner_2.png` |
 
 All screenshots are captured by `harness.py` — QEMU is natively scriptable
@@ -98,6 +99,38 @@ bring-up — which is how the LLP64 footgun below was caught.
 > `unsigned long long` / `uintptr_t` for every DMA address. On real hardware
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
+
+## TLS (BearSSL)
+
+TLS is **BearSSL** (`bearssl/`), chosen for security over convenience: it is
+constant-time by design, a small audited single-author codebase, and — decisive
+for us — freestanding with **no dynamic allocation and no OS dependencies**, so
+it drops into the `-ffreestanding -nostdlib` build where mbedTLS/OpenSSL would
+not. We roll **none** of our own crypto.
+
+- **Build**: a freestanding `bearssl/src/config.h` forces portable C only (no
+  CPU intrinsics, no int128, no OS entropy, no clock); the 8 CPU-accel /
+  OS-entropy files that pull `<intrin.h>`/`<unistd.h>` are excluded (their
+  portable equivalents are built). ~286 BearSSL sources compile unmodified
+  with the same mingw flags as the rest of the port.
+- **Trust = pinned key** (`br_x509_knownkey`): the client pins the server's
+  P-256 public key, so no CA store and **no system clock** are needed — a
+  strong, simple model for a fixed endpoint, and a clean fit for a machine
+  with no RTC wired yet.
+- **Entropy**: `tls.c` seeds BearSSL's PRNG from **RDRAND** when the CPU
+  advertises it (CPUID leaf 1, ECX bit 30), else a documented TSC-mix
+  fallback (demo-grade — a real deployment wires a proper source here).
+- **Transport**: `tls.c` drives the BearSSL record engine (`br_sslio`) over
+  `net_tcp_send/recv`, fragmenting to the stack's one-segment-in-flight TCP.
+- **Verified**: `nettest.py` runs a per-connection TLS echo server on the
+  host (reachable via SLIRP `guestfwd`), and the Network app completes a full
+  **TLS 1.2** handshake negotiating **ECDHE-ECDSA-AES128-GCM-SHA256**,
+  validates the pinned key, and round-trips encrypted application data — with
+  `-cpu max` exposing RDRAND. (`no-TLS-1.3` only because the test pins TLS
+  1.2 to match a fixed suite; BearSSL itself supports 1.2.)
+
+`tls_test/` holds the throwaway EC key/cert and the stdio-TLS test server;
+regenerate with `gen.sh` and re-pin `PINNED_EC_Q` in `tls.c`.
 
 ## 3D — uno3d ported (software rasteriser; Intel backend scaffolded)
 
@@ -218,6 +251,10 @@ pc64/
 ├── pc64_pci.c          # PCI config-space scan
 ├── e1000.c e1000.h     # native Intel e1000 NIC driver
 ├── net.c net.h uno_nic.h  # Ethernet/ARP/IPv4/ICMP/UDP/TCP + DHCP
+├── tls.c tls.h         # BearSSL TLS client (pinned key, RDRAND entropy)
+├── bearssl/            # vendored BearSSL (inc/ src/ + freestanding config.h)
+├── tls_test/           # throwaway EC cert + stdio-TLS test server
+├── nettest.py          # net+TLS QEMU verification harness
 ├── fb.c fb.h mac_compat.c mac_compat.h unodos.c app_loader.c uno_app.h
 │                       # the shared portable core (Dreamcast copies + UNO_PC64 gates)
 ├── apps/               # 14 apps + uno_mod.h (Settings/Network/Runner3D are pc64)
