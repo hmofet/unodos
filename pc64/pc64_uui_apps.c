@@ -15,7 +15,8 @@
  * ======================================================================== */
 #include "uno_app.h"        /* AppInterface, KernelApi, mac_compat.h (Toolbox) */
 #include "unoui.h"
-#include "mac_compat.h"     /* uno_pc64_res_* + Snd*/
+#include "mac_compat.h"     /* uno_pc64_res_* */
+#include "unosound.h"       /* the shared single-voice audio (Music/Tracker/games) */
 #include <string.h>
 
 enum { C_BLUE = 0, C_CYAN = 1, C_MAG = 2, C_WHITE = 3 };
@@ -74,37 +75,24 @@ static void fmt_u(long v, char *out)
 }
 static void put2(long v, char *out) { out[0]='0'+(char)((v/10)%10); out[1]='0'+(char)(v%10); out[2]=0; }
 
-/* ---- sound (channel + game-music sequencer, from unodos.c) ---------------- */
-static SndChannelPtr gSnd;
-static void music_open_chan(void)
-{ if (gSnd) return; if (SndNewChannel(&gSnd, 0, 0, 0) != noErr) gSnd = 0; }
+/* ---- sound: routed to UnoSound, the shared single-voice sequencer ---------
+ * Music/Tracker reach these through the KernelApi; the native games use
+ * UnoSound directly. All share the one PC-speaker voice, which the shell loop
+ * advances via uno_seq_tick() - so the old per-app sequencer here is gone.
+ * (Note and u_seqnote_t are both {u8 midi; u8 dur}, so a score casts across.) */
+static void music_open_chan(void) { }                 /* UnoSound is inited by the shell */
 static void music_note_on(short midi, short durTicks)
-{ SndCommand c; if (!gSnd) return; c.cmd = noteCmd;
-  c.param1 = (short)(durTicks * 33); c.param2 = midi; SndDoImmediate(gSnd, &c); }
-static void music_quiet(void)
-{ SndCommand c; if (!gSnd) return; c.cmd = quietCmd; c.param1 = 0; c.param2 = 0;
-  SndDoImmediate(gSnd, &c); }
-static void music_start(void) { music_open_chan(); }
-static void music_stop(void)  { music_quiet(); }
+{ uno_seq_beep(midi, durTicks > 0 ? durTicks : 6); }  /* one-shot note */
+static void music_quiet(void) { uno_seq_stop(); }
+static void music_start(void) { }
+static void music_stop(void)  { uno_seq_stop(); }
 
-static const Note *gGmNotes; static short gGmCount, gGmIx, gGmOwner = -1;
-static long gGmEnd; static Boolean gGmOn;
-static short gActiveProc = -1;             /* set by the shell (focused app) */
+static short gActiveProc = -1;             /* focused app (used by kapi_topmost) */
 
 static void gm_start(const Note *notes, short count, short owner)
-{ if (!gSnd) music_open_chan(); gGmNotes = notes; gGmCount = count; gGmOwner = owner;
-  gGmIx = count - 1; gGmOn = true; gGmEnd = TickCount(); }
-static void gm_stop(void) { gGmOn = false; music_quiet(); }
-static void gm_tick(void)
-{
-    if (!gGmOn || !gGmNotes) return;
-    if (gActiveProc != gGmOwner) return;              /* muted unless focused */
-    if (TickCount() < gGmEnd) return;
-    if (++gGmIx >= gGmCount) gGmIx = 0;
-    gGmEnd = TickCount() + gGmNotes[gGmIx].dur;
-    if (gGmNotes[gGmIx].midi) music_note_on(gGmNotes[gGmIx].midi, gGmNotes[gGmIx].dur);
-    else music_quiet();
-}
+{ (void)owner; uno_seq_play((const u_seqnote_t *)notes, count); }   /* loop a song */
+static void gm_stop(void) { uno_seq_stop(); }
+static void gm_tick(void) { }              /* UnoSound advances in the shell loop */
 
 /* ---- window-manager hooks -> "mark the shell dirty" ---------------------- */
 static int    *gDirty;
