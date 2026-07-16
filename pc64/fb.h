@@ -58,6 +58,14 @@ extern fb_px fb[FB_BUF_PIX];
 
 void fb_clear(fb_px c);
 void fb_fill_rect(int x, int y, int w, int h, fb_px c);
+
+/* Clip window (absolute fb coords): confine all subsequent drawing to the
+ * intersection of this rect and the screen. Default is the whole screen, so
+ * callers that never set it are unaffected. unoui uses this to stop widgets
+ * from overflowing their window. fb_pixel is a clip-respecting single plot. */
+void fb_set_clip(int x, int y, int w, int h);
+void fb_reset_clip(void);
+void fb_pixel(int x, int y, fb_px c);
 void fb_frame_rect(int x, int y, int w, int h, fb_px c);   /* 1px border */
 void fb_invert_rect(int x, int y, int w, int h);           /* XOR to white */
 void fb_hline(int x, int y, int w, fb_px c);
