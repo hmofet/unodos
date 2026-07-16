@@ -128,8 +128,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     gBS = SystemTable->BootServices;
     gBS->SetWatchdogTimer(0, 0, 0, 0);
     con_puts("UnoDOS 3.1 / pc64: firmware handoff...\r\n");
-    con_puts("(bring-up stripes: red=GOP  green=mode  cyan=drivers  white=input)\r\n");
-    gBS->Stall(2000000);            /* hold the banner readable on real panels */
+    /* no banner hold - the graphical splash + loading bar takes over as soon as
+       the fb is up (see platform_init / splash_step). */
     uno_main();
     return EFI_SUCCESS;
 }
@@ -152,6 +152,55 @@ static void stage_stripe(int idx, UINT32 bgra)
 { stripe_at(0, idx, bgra); gBS->Stall(250000); }
 static void stage_mark2(int idx, UINT32 bgra)
 { stripe_at(10, idx, bgra); }
+
+/* ===========================================================================
+ * boot splash + loading bar - the pc64 splash screen. Drawn into the software
+ * fb and presented (same font + fill-scale path as the desktop), so it appears
+ * centred and crisp on the panel. The four progress segments keep the old
+ * bring-up meaning (GOP / drivers / input / ready) as red/green/cyan/white.
+ * Requires the fb to exist, so it runs only after set_geometry().
+ * ======================================================================== */
+#define SPLASH_STEPS 4
+static void splash_draw(int done)
+{
+    int W = uno_fb_w, H = uno_fb_h, cx = W / 2, i;
+    int barw = (W < 360) ? (W - 80) : 280, bx, by = H / 2 + 46, bh = 14, seg;
+    int sc = (W >= 640) ? 4 : 3;
+    fb_px segc[SPLASH_STEPS] = { FB_RGB(220,60,60), FB_RGB(70,200,90),
+                                 FB_RGB(60,190,210), FB_RGB(240,240,245) };
+    if (barw < 120) barw = 120;
+    bx = cx - barw / 2; seg = barw / SPLASH_STEPS;
+    /* backdrop: deep blue with a lighter upper band */
+    fb_fill_rect(0, 0, W, H, FB_RGB(10, 14, 34));
+    fb_fill_rect(0, 0, W, (H / 2) - 58, FB_RGB(16, 22, 54));
+    /* 4-square emblem above the wordmark (matches the Start button motif) */
+    { int u = 10, ex = cx - u - 1, ey = H / 2 - 98;
+      fb_fill_rect(ex, ey, u, u, FB_RGB(230,70,70));
+      fb_fill_rect(ex + u + 2, ey, u, u, FB_RGB(70,200,90));
+      fb_fill_rect(ex, ey + u + 2, u, u, FB_RGB(70,120,230));
+      fb_fill_rect(ex + u + 2, ey + u + 2, u, u, FB_RGB(240,205,60)); }
+    /* wordmark + subtitle */
+    { const char *t = "UnoDOS"; int tw = fb_text_w(t) * sc;
+      fb_big_text(cx - tw / 2, H / 2 - 46, t, FB_RGB(255,255,255), -1, sc); }
+    { const char *s = "Modern PC world  -  x86-64 UEFI";
+      fb_text(cx - fb_text_w(s) / 2, H / 2 + 6, s, FB_RGB(150,170,225), -1); }
+    { const char *s = "pc64   -   UnoDOS 3.1";
+      fb_text(cx - fb_text_w(s) / 2, H / 2 + 22, s, FB_RGB(110,130,185), -1); }
+    /* loading bar: recessed track + filled coloured segments */
+    fb_fill_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(30, 38, 70));
+    fb_frame_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(70, 84, 130));
+    fb_fill_rect(bx, by, barw, bh, FB_RGB(20, 26, 52));
+    for (i = 0; i < done && i < SPLASH_STEPS; i++)
+        fb_fill_rect(bx + i * seg + 1, by + 1, seg - 2, bh - 2, segc[i]);
+    { const char *s = "loading";
+      fb_text(cx - fb_text_w(s) / 2, by + bh + 9, s, FB_RGB(120,138,185), -1); }
+}
+static void splash_step(int done)
+{
+    splash_draw(done);
+    uno_pc64_present();
+    gBS->Stall(done >= SPLASH_STEPS ? 700000 : 400000);
+}
 
 /* ===========================================================================
  * display geometry - FULL resolution support, panel-safe.
@@ -389,11 +438,10 @@ void uno_pc64_init(void)
     }
 
     set_geometry(-1);               /* keep the native mode, auto zoom */
-    stage_stripe(0, 0x00FF0000);    /* red: GOP up, surface cleared */
-    stage_stripe(1, 0x0000FF00);    /* green: geometry set */
+    splash_step(1);                 /* GOP + geometry: the splash appears */
 
     connect_all();
-    stage_stripe(2, 0x0000FFFF);    /* cyan: driver connect sweep done */
+    splash_step(2);                 /* drivers connected */
 
     gNAbs = collect(&absGuid, (void **)gAbs, MAXPTR);
     gNPtr = collect(&ptrGuid, (void **)gPtr, MAXPTR);
@@ -407,11 +455,11 @@ void uno_pc64_init(void)
                                           (void **)&gKeyEx)))
             gKeyEx = 0;
     }
+    splash_step(3);                 /* input located */
     uno_i2c_hid_init();             /* native trackpad; inert unless built in */
-    stage_stripe(3, 0x00FFFFFF);    /* white: input located - core takes over */
+    splash_step(4);                 /* ready - the bar fills, core takes over */
 
     dbg_puts("unodos-pc64: init done\n");
-    stage_mark2(0, 0x00808080);     /* gray: platform init fully returned */
 }
 
 /* ===========================================================================

@@ -433,9 +433,9 @@ static void open_app(int a)
         rebuild_taskbar();
     } else raise_win(&g_win[a]);
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
-    /* games take the whole screen; Esc returns to the desktop */
-    if (a >= NNATIVE && unoapp_is_game(a - NNATIVE))
-        unoui_fullscreen(&UI, &g_win[a]);
+    /* Apps open windowed at their natural size (games are designed for a fixed
+     * window, not an arbitrary full screen - stretching left them tiny in a
+     * corner). Fullscreen returns once the games are rewritten to scale. */
     g_dirty = 1;
 }
 
