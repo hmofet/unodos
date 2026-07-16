@@ -254,6 +254,9 @@ void ui_text_in(unoui_rect r, const char *s, fb_px fg, long bg, int center)
 void unoui_content_origin(const unoui_theme *t, const unoui_window *w,
                           int *ox, int *oy)
 {
+    if (w->flags & UI_WIN_BARE) {   /* no frame/titlebar: widgets sit at origin */
+        *ox = w->r.x; *oy = w->r.y; return;
+    }
     *ox = w->r.x + t->m.frame_w + t->m.pad;
     *oy = w->r.y + t->m.title_h + t->m.pad;
 }
@@ -820,16 +823,22 @@ void unoui_render_ui(unoui_ui *ui)
     for (wn = 0; wn < ui->nwin; wn++) {
         unoui_window *win = ui->win[wn];
         int fw = t->m.frame_w, th = t->m.title_h;
-        win->active = (wn == ui->nwin - 1);
-        /* chrome (frame, titlebar, shadow) draws unclipped - its painters are
-         * authored not to overflow win->r. */
-        PICK(window)(t, win);
-        PICK(titlebar)(t, win);
-        /* widgets are confined to the content rect (the region d_window fills
-         * below the titlebar) so an over-sized widget or a too-long label is
-         * cut at the frame instead of spilling onto the desktop. */
-        fb_set_clip(win->r.x + fw, win->r.y + th,
-                    win->r.w - 2 * fw, win->r.h - th - fw);
+        win->active = (wn == ui->focus_win);
+        if (win->flags & UI_WIN_BARE) {
+            /* shell chrome (desktop / taskbar): no frame or titlebar; widgets
+             * fill the whole window rect and are clipped to it. */
+            fb_set_clip(win->r.x, win->r.y, win->r.w, win->r.h);
+        } else {
+            /* chrome (frame, titlebar, shadow) draws unclipped - its painters
+             * are authored not to overflow win->r. */
+            PICK(window)(t, win);
+            PICK(titlebar)(t, win);
+            /* widgets are confined to the content rect (the region d_window
+             * fills below the titlebar) so an over-sized widget or a too-long
+             * label is cut at the frame instead of spilling onto the desktop. */
+            fb_set_clip(win->r.x + fw, win->r.y + th,
+                        win->r.w - 2 * fw, win->r.h - th - fw);
+        }
         for (i = 0; i < win->nw; i++) {
             unoui_widget *w = &win->w[i];
             int eff = w->flags, menuopen = -1;

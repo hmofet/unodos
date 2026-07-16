@@ -32,10 +32,22 @@ void unoui_ui_theme(unoui_ui *ui, const unoui_theme *t) { ui->theme = t; }
 
 void unoui_ui_add(unoui_ui *ui, unoui_window *win)
 {
+    int r, pos, i;
     if (ui->nwin >= UNOUI_MAX_WINDOWS) return;
-    ui->win[ui->nwin++] = win;
-    ui->focus_win = ui->nwin - 1;        /* newest = front = focused */
-    ui->focus_wi = -1;
+    /* insert just above the last window of the same-or-lower band, so the list
+     * stays sorted BOTTOM < normal < TOP and pins hold. */
+    r = (win->flags & UI_WIN_BOTTOM) ? 0 : (win->flags & UI_WIN_TOP) ? 2 : 1;
+    pos = ui->nwin;
+    while (pos > 0) {
+        const unoui_window *p = ui->win[pos - 1];
+        int pr = (p->flags & UI_WIN_BOTTOM) ? 0 : (p->flags & UI_WIN_TOP) ? 2 : 1;
+        if (pr <= r) break;
+        pos--;
+    }
+    for (i = ui->nwin; i > pos; i--) ui->win[i] = ui->win[i - 1];
+    ui->win[pos] = win; ui->nwin++;
+    if (r == 1) { ui->focus_win = pos; ui->focus_wi = -1; }  /* focus new apps */
+    else if (ui->focus_win >= pos) ui->focus_win++;          /* keep focus ptr */
 }
 
 /* ----------------------------------------------------------- helpers ------ */
@@ -99,12 +111,49 @@ static int hit_widget(unoui_ui *ui, unoui_window *win, int x, int y)
     return found;
 }
 
-static void to_front(unoui_ui *ui, int idx)
+/* z-band of a window: 0 = BOTTOM (desktop), 1 = normal, 2 = TOP (taskbar).
+ * The window list is kept sorted by band, so all BOTTOM windows sit at low
+ * indices and all TOP windows at high indices. */
+static int pin_rank(const unoui_window *w)
 {
-    unoui_window *w = ui->win[idx];
+    if (w->flags & UI_WIN_BOTTOM) return 0;
+    if (w->flags & UI_WIN_TOP)    return 2;
+    return 1;
+}
+
+/* move the window at `from` to index `to`, sliding the rest to fill the gap */
+static void move_win(unoui_ui *ui, int from, int to)
+{
+    unoui_window *w = ui->win[from];
     int i;
-    for (i = idx; i < ui->nwin - 1; i++) ui->win[i] = ui->win[i + 1];
-    ui->win[ui->nwin - 1] = w;
+    if (from < to)      for (i = from; i < to; i++) ui->win[i] = ui->win[i + 1];
+    else if (from > to) for (i = from; i > to; i--) ui->win[i] = ui->win[i - 1];
+    ui->win[to] = w;
+}
+
+/* raise idx to the top of its own band (just below the first higher band).
+ * Returns the window's new index. */
+static int raise_within_rank(unoui_ui *ui, int idx)
+{
+    int r = pin_rank(ui->win[idx]), dest = ui->nwin - 1;
+    while (dest > idx && pin_rank(ui->win[dest]) > r) dest--;
+    move_win(ui, idx, dest);
+    return dest;
+}
+
+/* find a window's current index, or -1 */
+static int win_index(unoui_ui *ui, const unoui_window *win)
+{
+    int i; for (i = 0; i < ui->nwin; i++) if (ui->win[i] == win) return i;
+    return -1;
+}
+
+void unoui_bring_to_front(unoui_ui *ui, unoui_window *win)
+{
+    int idx = win_index(ui, win);
+    if (idx < 0) return;
+    ui->focus_win = raise_within_rank(ui, idx);
+    ui->focus_wi = -1;
 }
 
 static void clamp_win(unoui_ui *ui, unoui_window *w)
@@ -254,8 +303,8 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
         if (w->canvas && w->canvas->event) w->canvas->event(w, ev, w->canvas->ctx);
         return NO_ACT;
 
-    case UI_BUTTON: case UI_CHECK: case UI_RADIO:
-        ui->cap_mode = UI_CAP_BUTTON; return NO_ACT;
+    case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_ICON:
+        ui->cap_mode = UI_CAP_BUTTON; return NO_ACT;   /* fires on release */
 
     case UI_FIELD: case UI_TEXTAREA: {
         unoui_rect in = ui_edit_inner(r, t);
@@ -374,7 +423,10 @@ static void focus_step(unoui_ui *ui, int dir)
     unoui_window *win;
     int n, start, i, j;
     if (ui->nwin == 0) return;
-    ui->focus_win = ui->nwin - 1; win = ui->win[ui->focus_win];
+    /* Tab traverses the FOCUSED window - not blindly the front one, which with
+     * a pinned taskbar (UI_WIN_TOP) is always the bar, never the app. */
+    if (ui->focus_win < 0 || ui->focus_win >= ui->nwin) ui->focus_win = ui->nwin - 1;
+    win = ui->win[ui->focus_win];
     n = win->nw; if (n == 0) return;
     start = ui->focus_wi;
     for (i = 1; i <= n; i++) {
@@ -549,10 +601,11 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
 
         wn = window_at(ui, ev->x, ev->y);
         if (wn < 0) { ui->focus_wi = -1; return NO_ACT; }
-        to_front(ui, wn); ui->focus_win = ui->nwin - 1;
+        ui->focus_win = raise_within_rank(ui, wn);   /* pin-aware; keeps bars */
         win = ui->win[ui->focus_win];
 
-        if (ev->y >= win->r.y && ev->y < win->r.y + ui->theme->m.title_h) {
+        if (!(win->flags & UI_WIN_BARE) &&           /* bare windows don't drag */
+            ev->y >= win->r.y && ev->y < win->r.y + ui->theme->m.title_h) {
             ui->cap_mode = UI_CAP_WINDOW; ui->cap_win = ui->focus_win;
             ui->grab_dx = ev->x - win->r.x; ui->grab_dy = ev->y - win->r.y;
             return NO_ACT;
