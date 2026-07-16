@@ -38,8 +38,13 @@ if [ "$1" != "legacy" ]; then
     UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -I../unoui"
     OBJS=""
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games pc64_icons; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games pc64_icons; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+    done
+    # uno3d: the write-once 3D pipeline + soft rasteriser + Intel scaffold + game
+    # (Runner3D is a native game canvas that drives these directly).
+    for u in uno3d uno3d_soft uno3d_intel uno3d_game; do
+        "$CC" $UCF -c -o "build/uui_$u.o" "../uno3d/$u.c"; OBJS="$OBJS build/uui_$u.o"
     done
     for u in unoui unoui_input; do
         "$CC" $UCF -c -o "build/uui_$u.o" "../unoui/$u.c"; OBJS="$OBJS build/uui_$u.o"

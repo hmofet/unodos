@@ -147,6 +147,15 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         disc(ox + G(6), oy + G(25), G(3), FB_RGB(220, 60, 60));         /* bristle paint */
         disc(ox + G(24), oy + G(24), G(4), FB_RGB(60, 120, 230));       /* colour dab */
         break; }
+    case 12: {                                       /* Runner3D: perspective road */
+        rr(ox + G(2), oy + G(3), G(28), G(12), FB_RGB(90,150,225));    /* sky */
+        rr(ox + G(2), oy + G(15), G(28), G(14), FB_RGB(45,140,55));    /* grass */
+        { int yy; for (yy = 0; yy < G(14); yy++) {                     /* road wedge */
+            int w = G(4) + yy*G(20)/G(14), xx = cx - w/2;
+            fb_hline(xx, oy + G(15) + yy, w, FB_RGB(105,105,105)); } }
+        { int yy; for (yy = 0; yy < G(14); yy += G(3))                 /* centre line */
+            fb_hline(cx-1, oy + G(15) + yy, 2, FB_RGB(240,220,60)); }
+        break; }
     default:
         rr(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(160, 170, 190));
         fb_frame_rect(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(60, 70, 90));
