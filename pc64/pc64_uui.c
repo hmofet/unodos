@@ -167,13 +167,39 @@ static void build_files(unoui_window *w)
     unoui_add_label(w, 6, 6, "RAM disk:");
     x = unoui_add_list(w, 6, 22, 156, 100, g_files, 3, 0); x->id = ID_FILES;
 }
+/* tiny no-libc string builders for the diagnostics line */
+static char *ap_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *ap_int(char *p, int v) { char t[12]; int n = 0;
+    if (v < 0) { *p++ = '-'; v = -v; } if (!v) t[n++] = '0';
+    while (v) { t[n++] = (char)('0' + v % 10); v /= 10; } while (n) *p++ = t[--n]; return p; }
+static char *ap_hex(char *p, int v) { const char *h = "0123456789abcdef";
+    *p++ = '0'; *p++ = 'x'; *p++ = h[(v >> 4) & 0xF]; *p++ = h[v & 0xF]; return p; }
+
+static char g_tp1[64], g_tp2[64];
+static void build_tpstat(void)
+{
+    int nb = 0, nc = 0, pr = 0, ad = 0, pa = 0; char *p;
+    uno_i2c_hid_status(&nb, &nc, &pr, &ad, &pa);
+    p = ap_str(g_tp1, "Trackpad I2C: ");
+    p = ap_int(p, nc); p = ap_str(p, " DW ctrl / ");
+    p = ap_int(p, nb); p = ap_str(p, " bars"); *p = 0;
+    p = ap_str(g_tp2, "  HID device: ");
+    if (pr) { p = ap_str(p, "UP  addr "); p = ap_hex(p, ad);
+              p = ap_str(p, pa ? "  parsed" : "  UNPARSED"); }
+    else    { p = ap_str(p, nc ? "not found on ctrl" : "no controller (ACPI-only?)"); }
+    *p = 0;
+}
+
 static void build_sys(unoui_window *w)
 {
-    unoui_window_init(w, "System", 420, 250, 300, 116);
+    build_tpstat();
+    unoui_window_init(w, "System", 400, 240, 320, 140);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
     unoui_add_label(w, 8, 42, "8 themes  -  live re-skin");
-    unoui_add_label(w, 8, 60, "TrackPoint / touchpad + keyboard");
+    unoui_add_sep  (w, 8, 60, 300);
+    unoui_add_label(w, 8, 68, g_tp1);
+    unoui_add_label(w, 8, 84, g_tp2);
 }
 static void build_clock(unoui_window *w)
 {
