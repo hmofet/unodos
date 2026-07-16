@@ -264,6 +264,7 @@ static void (*const g_build[NNATIVE])(unoui_window *) =
 
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
+static int g_menu_scroll, g_menu_hot = -1, g_scroll_tmr;   /* Start-menu scroll */
 
 static void raise_win(unoui_window *win) { unoui_bring_to_front(&UI, win); }
 
@@ -465,7 +466,10 @@ static void open_app(int a)
 static void toggle_launcher(void)
 {
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
-    else { clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
+    else { g_menu_scroll = 0; g_menu_hot = 0;
+           clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch);
+           UI.focus_wi = 0;                    /* focus the menu canvas for keys */
+           g_launch_open = 1; }
     g_dirty = 1;
 }
 
@@ -500,30 +504,108 @@ static void close_focused(void)
     g_dirty = 1;
 }
 
+/* ---- Start menu: a scrollable canvas (apps + Restart + Shut Down) --------- *
+ * Entries beyond the visible window scroll: hovering the bottom edge shows a
+ * down chevron and scrolls down; once scrolled, an up chevron appears at the
+ * top edge and hovering it scrolls back. */
+#define MROW 22
+#define MENU_MAXVIS 11
+
+static int  menu_count(void)         { return NAPPS + 2; }   /* apps + restart + shutdown */
+static const char *menu_label(int i) { return i < NAPPS ? app_name(i) : (i == NAPPS ? "Restart" : "Shut Down"); }
+static int  menu_icon(int i)         { return i < NAPPS ? i : -1; }
+static int  menu_vis(void)           { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
+
+static void menu_activate(int i)
+{
+    if (i < 0 || i >= menu_count()) return;
+    if (i < NAPPS)       open_app(i);            /* also closes the launcher */
+    else if (i == NAPPS) uno_pc64_restart();
+    else                 uno_pc64_shutdown();
+}
+
+static void chevron(int cx, int y, int dir, fb_px c)         /* -1 up, +1 down */
+{ int k; for (k = 0; k < 4; k++) { int wd = (dir < 0 ? 2*k+1 : 2*(3-k)+1); fb_hline(cx - wd/2, y + k, wd, c); } }
+
+static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme; int vis = menu_vis(), total = menu_count(), i;
+    (void)w; (void)ctx;
+    for (i = 0; i < vis; i++) {
+        int idx = g_menu_scroll + i, ry = r.y + i * MROW, hot = (idx == g_menu_hot);
+        if (idx >= total) break;
+        if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
+        if (idx == NAPPS) fb_hline(r.x, ry, r.w, t->pal.shadow);     /* power divider */
+        if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
+        fb_text(r.x + 26, ry + (MROW - 8) / 2, menu_label(idx),
+                hot ? t->pal.accent_text : t->pal.text, -1);
+    }
+    if (g_menu_scroll > 0)           chevron(r.x + r.w/2, r.y + 1,           -1, t->pal.text);
+    if (g_menu_scroll + vis < total) chevron(r.x + r.w/2, r.y + vis*MROW - 6, +1, t->pal.text);
+}
+
+/* keep the highlighted entry within the scrolled window */
+static void menu_reveal(void)
+{
+    int vis = menu_vis();
+    if (g_menu_hot < g_menu_scroll)           g_menu_scroll = g_menu_hot;
+    if (g_menu_hot >= g_menu_scroll + vis)    g_menu_scroll = g_menu_hot - vis + 1;
+}
+
+static int launcher_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev; int ox, oy, row;
+    (void)w; (void)ctx;
+    if (e->kind == UI_EV_KEY) {                       /* keyboard navigation */
+        int total = menu_count();
+        if (g_menu_hot < 0) g_menu_hot = g_menu_scroll;
+        if (e->key == UI_KEY_DOWN) { if (g_menu_hot < total - 1) g_menu_hot++; menu_reveal(); g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_UP)   { if (g_menu_hot > 0) g_menu_hot--;         menu_reveal(); g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_ENTER){ menu_activate(g_menu_hot); return 1; }
+        return 0;
+    }
+    if (e->kind != UI_EV_MOUSE_DOWN) return 0;
+    unoui_content_origin(UI.theme, &g_launch, &ox, &oy);
+    row = (e->y - oy) / MROW;
+    if (row >= 0 && row < menu_vis()) { menu_activate(g_menu_scroll + row); return 1; }
+    return 0;
+}
+static unoui_canvas g_menu_cv = { launcher_draw, launcher_event, 0 };
+
+/* per-frame while the launcher is open: highlight the hovered row, and scroll
+ * when the pointer rests on the top/bottom scroll zone. */
+static void launcher_hover(int mx, int my)
+{
+    int ox, oy, vis = menu_vis(), total = menu_count(), row, oldhot = g_menu_hot;
+    unoui_content_origin(UI.theme, &g_launch, &ox, &oy);
+    /* only the pointer sitting ON the menu changes the highlight - otherwise
+     * leave it (so keyboard selection isn't clobbered every frame). */
+    if (mx < g_launch.r.x || mx >= g_launch.r.x + g_launch.r.w) return;
+    if (my < oy || my >= oy + vis * MROW) return;
+    if (g_menu_scroll > 0 && my < oy + 12) {                        /* up zone */
+        if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll--; g_dirty = 1; }
+        return;
+    }
+    if (g_menu_scroll + vis < total && my >= oy + vis*MROW - 12) {  /* down zone */
+        if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll++; g_dirty = 1; }
+        return;
+    }
+    g_scroll_tmr = 0;
+    row = (my - oy) / MROW;
+    if (row >= 0 && row < vis) g_menu_hot = g_menu_scroll + row;
+    if (g_menu_hot != oldhot) g_dirty = 1;
+}
+
 static void build_launcher(void)
 {
-    /* Size from theme metrics so buttons fill the content width exactly and
-     * the window is wide enough for the longest label - no overflow. Opened by
-     * the taskbar Start button. */
     const unoui_metrics *m = &theme_unodos.m;
-    const int row = 20;                            /* fit 12 apps + power on 400px */
-    int i, tw = 0, bw, winw;
-    for (i = 0; i < NAPPS; i++) {                 /* widest label + button pad */
-        int w = fb_text_w(app_name(i));
-        if (w > tw) tw = w;
-    }
-    bw   = tw + 32;                                /* label + centred margins  */
-    winw = bw + 2 * m->frame_w + 2 * m->pad;
+    int i, tw = 0, winw, vis = menu_vis();
+    for (i = 0; i < menu_count(); i++) { int t = fb_text_w(menu_label(i)); if (t > tw) tw = t; }
+    winw = tw + 26 + 14 + 2 * m->frame_w + 2 * m->pad;
+    g_menu_scroll = 0; g_menu_hot = -1;
     unoui_window_init(&g_launch, "Programs", 8, 20,
-                      winw, m->title_h + m->pad + (NAPPS + 3) * row + 10 + m->pad + m->frame_w);
-    unoui_widget *x;
-    for (i = 0; i < NAPPS; i++) {                 /* flush to content origin   */
-        x = unoui_add_button(&g_launch, 0, i * row, bw, app_name(i), 0);
-        x->id = ID_LAUNCH0 + i;
-    }
-    unoui_add_sep(&g_launch, 0, NAPPS * row + 3, bw);   /* --- power --- */
-    x = unoui_add_button(&g_launch, 0, NAPPS * row + 10,       bw, "Restart",   0); x->id = ID_RESTART;
-    x = unoui_add_button(&g_launch, 0, (NAPPS + 1) * row + 10, bw, "Shut Down", 0); x->id = ID_SHUTDOWN;
+                      winw, m->title_h + m->pad + vis * MROW + m->pad + m->frame_w);
+    unoui_add_canvas(&g_launch, 0, 0, winw - 2 * m->frame_w - 2 * m->pad, vis * MROW, &g_menu_cv);
 }
 
 /* ---- keep windows on-screen after a resolution change ------------------- */
@@ -674,6 +756,9 @@ int main(void)
             fmt_clock(++halfsecs / 2);
         }
         feed(&tick);                    /* advance the caret-blink timebase */
+        if (g_launch_open) {            /* Start-menu hover highlight + scroll */
+            int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
+        }
         la = active_legacy();           /* drive the focused game/tool clock */
         unoapp_focus(la);
         if (la >= 0) unoapp_run_tick(la);   /* may set g_dirty via draw_window */
