@@ -100,33 +100,44 @@ bring-up — which is how the LLP64 footgun below was caught.
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
 
-## unoui shell — the toolkit as the whole UI (`./build.sh uui`)
+## unoui shell — the DEFAULT UI (`./build.sh`)
 
-`pc64_uui.c` is an alternative shell that makes the cross-platform **unoui**
-widget toolkit the entire UnoDOS UI: a themed desktop + window manager +
+`pc64_uui.c` is the shell: it makes the cross-platform **unoui** widget
+toolkit the entire UnoDOS UI — a themed desktop + window manager +
 retained-mode widgets (dropdowns, checkboxes, sliders, spinners, buttons,
 menubars, multi-line text areas, fields, lists, scrollbars, tabs), rendered
 into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
-the key-combo reliance — **every control is reachable by pointer OR keyboard**
+key-combo reliance — **every control is reachable by pointer OR keyboard**
 (Tab focus, arrows, Enter), so it needs no mouse.
 
-- Build: `./build.sh uui` — a lean 80 KB image (platform + fb + RAM-disk FS +
-  unoui + 8 themes; no legacy core/apps/net/3D). The default `./build.sh`
-  still produces the full legacy build.
+- `./build.sh` builds the unoui image (**default now**): a lean ~71 KB with
+  **no legacy UI code at all** — the Toolbox/QuickDraw shim (`mac_compat.c`),
+  the `unodos.c` core, the per-app drawing, `net`/`tls`/`uno3d` are all gone.
+  Only platform + fb + RAM-disk FS + unoui + 8 themes.
+- `./build.sh legacy` still builds the old core + 14 apps + net/TLS/3D
+  (source preserved until those apps are migrated to unoui windows).
 - The shell ships four functional windows: a **Control Panel** (live theme
   dropdown → re-skins the whole desktop across all 8 themes; live resolution
-  dropdown → `uno_pc64_res_set`; checkboxes/slider/spinner), an **Editor**
-  (File/Edit menubar, real multi-line editing, filename field, format
-  dropdown, Save/Open/New wired to the RAM-disk File Manager), a **Files**
-  list, and a **System** panel.
-- The only pc64-specific code is the ~40-line event adapter (UEFI input →
-  `unoui_event`) + the window tree + action handlers; unoui owns everything
-  else. Verified in QEMU: boots, renders the full widget set, and
-  **keyboard-drives live theme switching** (UnoDOS → Windows 3.1 →
-  Mac Plus → …) — `shots/uui_desktop.png`, `shots/uui_theme2.png`.
+  dropdown; checkboxes/slider/spinner), an **Editor** (File/Edit menubar,
+  real multi-line editing, filename field, format dropdown, Save/Open/New
+  wired to the RAM-disk File Manager), a **Files** list, and a **System**
+  panel.
+- The only pc64-specific code is a ~40-line event adapter (UEFI input →
+  `unoui_event`, gated so the legacy event queue is compiled out) + the
+  window tree + action handlers; unoui owns everything else. Verified in QEMU:
+  boots straight to the desktop, renders the full widget set, and
+  **keyboard-drives live theme switching** (UnoDOS → Windows 3.1 → …) —
+  `shots/uui_desktop.png`, `shots/uui_theme2.png`.
 
-Folding the games / Network / Runner3D into unoui windows and making the
-unoui shell the default is the continued migration.
+**Legacy vs unoui.** *Legacy* = `unodos.c` (WM + icon desktop + app dispatch)
++ `mac_compat.c` (Mac-Toolbox shim over `fb`) + 14 apps each hand-drawing
+their own UI. *unoui* = one retained-mode toolkit with themes and a
+consistent widget set. The default image carries none of the legacy UI; the
+remaining migration is folding the games / Network / Runner3D into unoui
+windows, after which `./build.sh legacy` (and the legacy source) can be
+deleted outright. High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can
+adopt the same unoui shell; only the tiny targets (NES 2 KB, Game Boy 8 KB,
+C64) must keep the minimal legacy path.
 
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 

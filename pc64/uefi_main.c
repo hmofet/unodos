@@ -191,10 +191,13 @@ static void apply_desktop(int fbw, int fbh)
     uno_fb_w = fbw;
     uno_fb_h = fbh;
 
+#ifndef UNO_UUI
+    /* tell the legacy Toolbox shim the screen size (unoui reads FB_W/FB_H) */
     qd.screenBits.bounds.left = 0;
     qd.screenBits.bounds.top = 0;
     qd.screenBits.bounds.right  = (short)uno_fb_w;
     qd.screenBits.bounds.bottom = (short)uno_fb_h;
+#endif
 
     /* fill the panel, preserve aspect: scale = min(modeW/fbw, modeH/fbh),
        computed in 16.16 fixed point so the largest axis fills exactly */
@@ -416,9 +419,13 @@ void uno_pc64_init(void)
  * ======================================================================== */
 static void post_key_mod(short keycode, char ch, short mods)
 {
+#ifndef UNO_UUI                          /* legacy event queue; unoui uses the raw ring */
     Point p = { 0, 0 };
     long msg = ((long)(keycode & 0xFF) << 8) | (unsigned char)ch;
     uno_post_event(keyDown, msg, p, mods);
+#else
+    (void)keycode; (void)ch; (void)mods;
+#endif
 }
 static void post_key(short keycode, char ch) { post_key_mod(keycode, ch, 0); }
 
@@ -501,10 +508,14 @@ static void poll_keyboard(void)
 
 static void pointer_moved_clicked(int mb)
 {
+#ifndef UNO_UUI                          /* legacy path; unoui reads g_cx/g_cy/g_prev_mb */
     uno_set_mouse((short)g_cx, (short)g_cy, (Boolean)mb);
+#endif
     if (mb != g_prev_mb) {
+#ifndef UNO_UUI
         Point p; p.h = (short)g_cx; p.v = (short)g_cy;
         uno_post_event(mb ? mouseDown : mouseUp, 0, p, 0);
+#endif
         g_prev_mb = mb;
     }
 }

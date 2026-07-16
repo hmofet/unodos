@@ -23,16 +23,18 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
         -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main ${UNO_EXTRA:-}"
 
 # ============================================================================
-# unoui shell variant:  ./build.sh uui [run]
-# The cross-platform unoui toolkit AS the whole UI (a themed desktop + WM +
-# widgets) - a lean image: platform + fb + RAM-disk FS + unoui + 8 themes,
-# no legacy core / apps / net / 3D.
+# DEFAULT build = the unoui shell: the cross-platform unoui toolkit AS the
+# whole UI (a themed desktop + WM + widgets). A lean image with NO legacy UI -
+# platform + fb + RAM-disk FS + unoui + 8 themes.
+#   ./build.sh          unoui shell -> build/esp
+#   ./build.sh run      unoui shell, then boot in QEMU
+#   ./build.sh legacy [run]   the old core + 14 apps + net/TLS/3D (below)
 # ============================================================================
-if [ "$1" = "uui" ]; then
-    echo "[2/3] compiling the unoui shell..."
+if [ "$1" != "legacy" ]; then
+    echo "[2/3] compiling the unoui shell (default)..."
     UCF="$CFLAGS -DUNO_UUI -I../unoui"
     OBJS=""
-    for f in fb mac_compat pc64_libc pc64_io i2c_hid uefi_main pc64_uui; do
+    for f in fb pc64_libc pc64_io i2c_hid uefi_main pc64_uui; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     for u in unoui unoui_input; do
@@ -46,11 +48,20 @@ if [ "$1" = "uui" ]; then
     "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
         -o build/BOOTX64.EFI $OBJS
     mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
-    ls -l build/BOOTX64.EFI; echo "done: unoui shell -> build/esp/"
+    ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"
+    if [ "$1" = "run" ]; then
+        OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
+        cp /usr/share/OVMF/OVMF_VARS_4M.fd build/vars.fd
+        exec qemu-system-x86_64 -machine q35 -m 256 \
+            -drive if=pflash,format=raw,readonly=on,file=$OVMF \
+            -drive if=pflash,format=raw,file=build/vars.fd \
+            -drive format=raw,file=fat:rw:build/esp \
+            -device qemu-xhci -device usb-tablet -vnc :0
+    fi
     exit 0
 fi
 
-echo "[2/3] compiling the kernel + subsystems + apps..."
+echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
 for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls i2c_hid uefi_main unodos; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
@@ -85,9 +96,9 @@ echo "[3/3] linking the UEFI image..."
 mkdir -p build/esp/EFI/BOOT
 cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
 ls -l build/BOOTX64.EFI
-echo "done: build/esp/ (boot with ./build.sh run, or harness.py for the scripted pass)"
+echo "done: LEGACY build/esp/ (boot with ./build.sh legacy run)"
 
-if [ "$1" = "run" ]; then
+if [ "$2" = "run" ]; then
     OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
     cp /usr/share/OVMF/OVMF_VARS_4M.fd build/vars.fd
     exec qemu-system-x86_64 -machine q35 -m 256 \
