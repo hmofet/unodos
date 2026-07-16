@@ -121,23 +121,36 @@ static const unoui_menu g_menus[] = { { "File", m_file, 3 }, { "Edit", m_edit, 3
 
 /* ---- app window builders (sized so nothing overflows: usable content
  *      height is win.h - title_h(18) - 2*pad(10) - frame ~= win.h - 40) ---- */
+static unoui_widget *g_sp_y, *g_sp_mo, *g_sp_d, *g_sp_h, *g_sp_mi;
+
 static void build_ctrl(unoui_window *w)
 {
     unoui_widget *x; int i;
+    int yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
-    unoui_window_init(w, "Control Panel", 150, 30, 250, 210);
+    unoui_window_init(w, "Control Panel", 150, 24, 270, 250);
     unoui_add_label(w, 8, 8, "Theme:");
-    x = unoui_add_dropdown(w, 74, 4, 150, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
+    x = unoui_add_dropdown(w, 74, 4, 170, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
     unoui_add_label(w, 8, 34, "Resolution:");
-    x = unoui_add_dropdown(w, 100, 30, 124, g_res_items, g_res_n, 0); x->id = ID_RES;
+    x = unoui_add_dropdown(w, 100, 30, 144, g_res_items, g_res_n, 0); x->id = ID_RES;
     unoui_add_check(w, 8, 60, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
-    unoui_add_check(w, 120, 60, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
+    unoui_add_check(w, 130, 60, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
     unoui_add_label(w, 8, 86, "Volume");
-    x = unoui_add_slider(w, 66, 82, 154, 0, 100, 70); x->id = ID_VOL;
+    x = unoui_add_slider(w, 66, 82, 178, 0, 100, 70); x->id = ID_VOL;
     unoui_add_label(w, 8, 110, "UI scale");
     x = unoui_add_spinner(w, 72, 106, 70, 1, 4, 1); x->id = ID_SCALE;
-    x = unoui_add_button(w, 8, 138, 100, "About", 0); x->id = ID_ABOUT;
+    x = unoui_add_button(w, 150, 106, 94, "About", 0); x->id = ID_ABOUT;
+    /* --- date & time (firmware RTC) --- */
+    unoui_add_sep(w, 8, 132, 236);
+    unoui_add_label(w, 8, 140, "Set date & time:");
+    uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
+    g_sp_y  = unoui_add_spinner(w, 8,   156, 58, 2000, 2099, yy);
+    g_sp_mo = unoui_add_spinner(w, 70,  156, 44, 1, 12, mo);
+    g_sp_d  = unoui_add_spinner(w, 118, 156, 44, 1, 31, dd);
+    g_sp_h  = unoui_add_spinner(w, 166, 156, 40, 0, 23, hh);
+    g_sp_mi = unoui_add_spinner(w, 210, 156, 40, 0, 59, mi);
+    x = unoui_add_button(w, 8, 182, 100, "Apply Clock", 0); x->id = ID_SETDT;
 }
 static void build_edit(unoui_window *w)
 {
@@ -270,6 +283,7 @@ static void remove_win(unoui_window *win)
 /* forward decls (taskbar events fire these, defined below) */
 static void toggle_launcher(void);
 static void open_app(int a);
+static void fmt_clock(int uptime_secs);
 
 /* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- */
 #define TB_START_X 4
@@ -553,6 +567,11 @@ static void on_action(const unoui_action *a)
     case ID_MENU:  if (a->value == 2) editor_save(); else if (a->value == 1) editor_open();
                    else if (a->value == 0) { unoui_text_set(&g_body_t, ""); strcpy(g_status, "new"); } break;
     case ID_ABOUT: strcpy(g_status, "unoui shell v0.3"); break;
+    case ID_SETDT:
+        if (g_sp_y) uno_pc64_set_time(g_sp_y->value, g_sp_mo->value, g_sp_d->value,
+                                      g_sp_h->value, g_sp_mi->value, 0);
+        fmt_clock(0);
+        break;
     case ID_FULL:  unoui_fullscreen(&UI, &g_win[APP_DEMO]); break;   /* go fullscreen */
     default: break;
     }
