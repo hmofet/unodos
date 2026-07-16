@@ -832,3 +832,94 @@ void uno_pc64_chime(void)
     for (i = 0; i < 4; i++) { uno_pc64_snd_note(notes[i]); gBS->Stall(110000); }
     uno_pc64_snd_quiet();
 }
+
+/* ===========================================================================
+ * EFI Simple File System - read FAT (incl. FAT32) / local disks the firmware
+ * mounted, the same firmware-as-BIOS approach as GOP. pc64_fs.c wraps this as
+ * volumes 1.. (the RAM disk is volume 0). Read-only.
+ * ======================================================================== */
+typedef struct _EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct _EFI_FILE_PROTOCOL {
+    UINT64 Revision;
+    EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *, EFI_FILE_PROTOCOL **, CHAR16 *, UINT64, UINT64);
+    EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
+    EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
+    EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *, UINTN *, void *);
+    EFI_STATUS (*Write)(EFI_FILE_PROTOCOL *, UINTN *, void *);
+    EFI_STATUS (*GetPosition)(EFI_FILE_PROTOCOL *, UINT64 *);
+    EFI_STATUS (*SetPosition)(EFI_FILE_PROTOCOL *, UINT64);
+    EFI_STATUS (*GetInfo)(EFI_FILE_PROTOCOL *, EFI_GUID *, UINTN *, void *);
+    EFI_STATUS (*SetInfo)(EFI_FILE_PROTOCOL *, EFI_GUID *, UINTN, void *);
+    EFI_STATUS (*Flush)(EFI_FILE_PROTOCOL *);
+};
+typedef struct _EFI_SIMPLE_FS EFI_SIMPLE_FS;
+struct _EFI_SIMPLE_FS {
+    UINT64 Revision;
+    EFI_STATUS (*OpenVolume)(EFI_SIMPLE_FS *, EFI_FILE_PROTOCOL **);
+};
+typedef struct {
+    UINT64 Size, FileSize, PhysicalSize;
+    EFI_TIME Create, Access, Modify;
+    UINT64 Attribute;                    /* bit 0x10 = directory */
+    CHAR16 FileName[1];
+} EFI_FILE_INFO;
+
+static EFI_GUID gSfsGuid = { 0x964e5b22, 0x6459, 0x11d2,
+                             { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+static EFI_HANDLE gFsH[16]; static UINTN gNFs; static int gFsScanned;
+
+static void efifs_scan(void)
+{
+    EFI_HANDLE *b = 0; UINTN n = 0, i;
+    if (gFsScanned) return; gFsScanned = 1;
+    if (gBS->LocateHandleBuffer(2 /*ByProtocol*/, &gSfsGuid, 0, &n, &b) == EFI_SUCCESS && b) {
+        for (i = 0; i < n && gNFs < 16; i++) gFsH[gNFs++] = b[i];
+        gBS->FreePool(b);
+    }
+}
+static EFI_FILE_PROTOCOL *fs_root(int vol)
+{
+    EFI_SIMPLE_FS *sfs; EFI_FILE_PROTOCOL *root = 0;
+    efifs_scan();
+    if (vol < 0 || vol >= (int)gNFs) return 0;
+    if (gBS->HandleProtocol(gFsH[vol], &gSfsGuid, (void **)&sfs) != EFI_SUCCESS) return 0;
+    if (sfs->OpenVolume(sfs, &root) != EFI_SUCCESS) return 0;
+    return root;
+}
+static void a_from16(char *d, const CHAR16 *s, int max)
+{ int i; for (i = 0; i < max - 1 && s[i]; i++) d[i] = (s[i] > 0 && s[i] < 128) ? (char)s[i] : '?'; d[i] = 0; }
+static void a_to16(CHAR16 *d, const char *s, int max)
+{ int i; for (i = 0; i < max - 1 && s[i]; i++) d[i] = (unsigned char)s[i]; d[i] = 0; }
+
+int  uno_efifs_volumes(void) { efifs_scan(); return (int)gNFs; }
+
+int uno_efifs_snapshot(int vol, char (*names)[32], int maxn)
+{
+    EFI_FILE_PROTOCOL *root = fs_root(vol); int cnt = 0;
+    static unsigned char info[1024];
+    if (!root) return 0;
+    for (;;) {
+        UINTN sz = sizeof info;
+        if (root->Read(root, &sz, info) != EFI_SUCCESS || sz == 0) break;
+        { EFI_FILE_INFO *fi = (EFI_FILE_INFO *)info;
+          if (!(fi->Attribute & 0x10) && fi->FileName[0] != '.') {
+              if (cnt < maxn) { a_from16(names[cnt], fi->FileName, 32); cnt++; }
+          } }
+    }
+    root->Close(root);
+    return cnt;
+}
+long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
+{
+    EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80]; long total = 0;
+    if (!root) return -1;
+    a_to16(wn, name, 80);
+    if (root->Open(root, &f, wn, 1, 0) != EFI_SUCCESS || !f) { root->Close(root); return -1; }
+    while (total < max) {
+        UINTN sz = (UINTN)(max - total);
+        if (f->Read(f, &sz, buf + total) != EFI_SUCCESS || sz == 0) break;
+        total += (long)sz;
+    }
+    f->Close(f); root->Close(root);
+    return total;
+}

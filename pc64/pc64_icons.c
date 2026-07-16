@@ -155,6 +155,16 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(ox+G(8), oy+G(8), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         seg(ox+G(24), oy+G(10), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         break; }
+    case 14: {                                       /* Browser: window + globe */
+        rr(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(245,246,250));
+        fb_frame_rect(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(70,80,110));
+        rr(ox+G(4), oy+G(5), G(24), G(6), FB_RGB(70,120,210));   /* address bar */
+        rr(ox+G(7), oy+G(6), G(16), G(4), FB_RGB(230,238,250));
+        disc(cx, oy+G(18), G(6), FB_RGB(70,170,90));             /* globe */
+        ring(cx, oy+G(18), G(6), G(1), FB_RGB(40,110,60));
+        seg(cx-G(6), oy+G(18), cx+G(6), oy+G(18), FB_RGB(230,245,235));
+        seg(cx, oy+G(12), cx, oy+G(24), FB_RGB(230,245,235));
+        break; }
     case 13: {                                       /* Runner3D: perspective road */
         rr(ox + G(2), oy + G(3), G(28), G(12), FB_RGB(90,150,225));    /* sky */
         rr(ox + G(2), oy + G(15), G(28), G(14), FB_RGB(45,140,55));    /* grass */

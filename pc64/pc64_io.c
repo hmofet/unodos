@@ -97,6 +97,28 @@ static RamFile *disk_slot(void)
     return 0;
 }
 
+/* ---- native RAM-disk enumeration (pc64_fs volume 0) ---------------------- */
+int uno_ramfs_count(void)
+{ int i, n = 0; seed_disk(); for (i = 0; i < MAXFILES; i++) if (gDisk[i].used) n++; return n; }
+
+int uno_ramfs_name(int idx, char *out, int max)
+{
+    int i, n = 0; seed_disk();
+    for (i = 0; i < MAXFILES; i++) if (gDisk[i].used) {
+        if (n == idx) { int j; for (j = 0; j < max - 1 && gDisk[i].name[j]; j++) out[j] = gDisk[i].name[j]; out[j] = 0; return 1; }
+        n++;
+    }
+    return 0;
+}
+long uno_ramfs_read(const char *name, unsigned char *buf, long max)
+{
+    RamFile *f = disk_find(name); long n;
+    if (!f || !f->buf) return -1;
+    n = f->len < max ? f->len : max;
+    memcpy(buf, f->buf, (unsigned long)n);
+    return n;
+}
+
 /* =========================================================================
  * File Manager handles - flush-on-close RAM buffers (the VMU backend shape)
  * ======================================================================== */
