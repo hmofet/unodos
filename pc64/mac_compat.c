@@ -251,7 +251,16 @@ Boolean GetNextEvent(short mask, EventRecord *ev)
     gEvHead = (gEvHead + 1) % EVQ;
     return true;
 }
-void GetMouse(Point *p) { *p = gMouse; }
+/* Optional live-pointer hook (platform-set). When present, GetMouse pumps it so
+ * a blocking drag loop (Paint) tracks the real cursor and the button releases;
+ * NULL on ports that update gMouse from their event pump instead. */
+int (*uno_mac_mouse)(short *h, short *v) = 0;
+void GetMouse(Point *p)
+{
+    if (uno_mac_mouse) { short h = 0, v = 0; int b = uno_mac_mouse(&h, &v);
+        gMouse.h = h; gMouse.v = v; gMouseDown = b ? true : false; }
+    *p = gMouse;
+}
 Boolean StillDown(void) { return gMouseDown; }
 
 static unsigned long gRnd = 0x2A6D365Bul;

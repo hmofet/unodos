@@ -515,6 +515,21 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
     return 1;
 }
 void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
+
+/* Live pointer sample for a legacy blocking drag (Paint's GetMouse/StillDown
+ * spin). Those apps loop reading the mouse WITHOUT returning to the main event
+ * pump, so nothing would otherwise refresh the cursor - here we pump the pointer
+ * once and present the frame so the drag both tracks and shows live. Returns the
+ * button; fills fb-space coords. Wired to mac_compat's GetMouse via uno_mac_mouse. */
+static void poll_pointer(void);          /* fwd (defined below) */
+int uno_pc64_mac_mouse(short *h, short *v)
+{
+    poll_pointer();
+    uno_pc64_present();
+    if (h) *h = (short)g_cx;
+    if (v) *v = (short)g_cy;
+    return g_prev_mb;
+}
 void uno_pc64_delay_ms(int ms) { if (gBS && ms > 0) gBS->Stall((UINTN)ms * 1000); }
 
 static void map_key(UINT16 scan, CHAR16 uni, short mods)

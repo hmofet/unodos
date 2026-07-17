@@ -7,6 +7,20 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest batch — TTF fonts, Paint fix, resizable windows, calendar picker
+
+- [ ] **Paint draws under the cursor** — the drag bug (all pixels landed at the
+      canvas top-left) is fixed: Paint's blocking `GetMouse` spin now samples the
+      live firmware pointer. Confirm pencil/brush/shapes follow the cursor and
+      the stroke shows live. **[HW — QEMU has no pointer]**
+- [ ] **TTF fonts** — Control Panel → Font picker (System / Sans / Mono /
+      Ubuntu); the whole UI re-skins to proportional subpixel-AA text. Editor →
+      "Doc font" changes just the document face. Confirm the subpixel AA looks
+      right on the real eDP (subpixel order assumes RGB stripes). Default stays
+      the bitmap monospace until you're happy with TTF. **[QEMU✓ render]**
+- [ ] **Resizable windows** — drag a window's bottom-right grip; content reflows.
+      **[HW — needs pointer]**
+
 ## Newest batch — network loading + the Aurora visual overhaul
 
 These shipped after the JavaScript build; all QEMU-verified. Re-flash the stick

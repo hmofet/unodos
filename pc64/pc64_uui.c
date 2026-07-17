@@ -829,6 +829,7 @@ int main(void)
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
     unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
     unoui_font_pop  = uno_font_pop;
+    uno_mac_mouse   = uno_pc64_mac_mouse;   /* live pointer for Paint's drag spin */
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
