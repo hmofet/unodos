@@ -7,6 +7,29 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest — xHCI USB stack (the start of USB Ethernet for the X1)
+
+The USB host-controller driver + device enumeration. **Gated behind `-DUNO_XHCI`
+(OFF by default)** — build a test image with it, since taking over the USB
+controller can conflict with the firmware.
+
+- [ ] **Build with USB on:** `UNO_EXTRA="-DUNO_XHCI" ./build.sh`, write the stick.
+- [ ] **Plug in the ASIX AX88179 USB Ethernet adapter**, boot, open the **System
+      app**. Expect: `USB xHCI: up, N port, M dev  0xNNNN:0xNNNN`. For the
+      AX88179 the VID should be **0x0b95** (ASIX). If it reads `0bda:...` it's a
+      Realtek batch (different driver); `0525:...` is a phone/gadget.
+- [ ] **Keyboard/trackpad should survive** — the X1's built-in keyboard + pad are
+      PS/2 / I2C, not USB, so the xHCI takeover shouldn't kill them. If input
+      dies, that's the firmware-USB conflict (note it and we add the USBLEGSUP
+      BIOS→OS handoff).
+- [ ] **If `init failed at stage N` or `0 dev`:** report the second System line
+      (`sl=… sts=0x… disc=… spd=…`). `disc=1` = we detached the firmware driver;
+      `sts=0x1000` = HC error (the retry usually recovers — QEMU needed it);
+      `sl=-N` = a command completion code.
+- [ ] Real Intel xHCI may need the **USBLEGSUP** (xHCI extended-cap BIOS→OS
+      ownership) handoff, which isn't implemented yet — if enumeration never
+      works on metal but does in QEMU, that's the likely reason.
+
 ## Newest batch — HTTPS, trackpad probe, GUI controls, stub fixes
 
 - [ ] **HTTPS** — the browser now does CA-validated TLS 1.2 (`https://`). Fully
