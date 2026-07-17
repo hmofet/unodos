@@ -16,6 +16,14 @@ void uno_xhci_status(int *p, int *n, int *d, unsigned *e)
 void uno_xhci_diag(int *s, int *a, int *d, int *sp)
 { if (s)*s=0; if (a)*a=0; if (d)*d=0; if (sp)*sp=0; }
 void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc) { if (sts)*sts=0; if (ev0)*ev0=0; if (disc)*disc=0; }
+int uno_usb_control(int dev, unsigned char rt, unsigned char req, unsigned short val,
+                    unsigned short idx, void *data, int len)
+{ (void)dev;(void)rt;(void)req;(void)val;(void)idx;(void)data;(void)len; return -1; }
+int uno_usb_get_config(int dev, void *buf, int len) { (void)dev;(void)buf;(void)len; return -1; }
+int uno_usb_set_config(int dev, int cfg) { (void)dev;(void)cfg; return -1; }
+int uno_usb_setup_bulk(int dev, int i, int o, int im, int om) { (void)dev;(void)i;(void)o;(void)im;(void)om; return -1; }
+int uno_usb_bulk_out(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
+int uno_usb_bulk_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
@@ -80,9 +88,11 @@ typedef struct { u64 param; u32 status; u32 control; } __attribute__((packed)) t
 #define TRB_GET_TYPE(c) (((c)>>10)&0x3F)
 #define TRB_CYCLE     (1u<<0)
 /* types */
+#define TR_NORMAL      1
 #define TR_LINK        6
 #define TR_ENABLE_SLOT 9
 #define TR_ADDRESS_DEV 11
+#define TR_CONFIG_EP   12
 #define TR_NOOP_CMD    23
 #define TR_XFER_EVENT  32
 #define TR_CMD_COMPLETE 33
@@ -113,6 +123,13 @@ static int   g_ep0_i[MAX_DEV], g_ep0_cyc[MAX_DEV];
 static u8    g_descbuf[256] __attribute__((aligned(64)));
 static uno_usb_dev g_devs[MAX_DEV];
 
+/* bulk transfer rings (one in + one out per device, set up by Configure EP) */
+#define BULK_RING_SZ 32
+static trb_t g_bin[MAX_DEV][BULK_RING_SZ]  __attribute__((aligned(64)));
+static trb_t g_bout[MAX_DEV][BULK_RING_SZ] __attribute__((aligned(64)));
+static int   g_bin_i[MAX_DEV], g_bin_cyc[MAX_DEV], g_bin_dci[MAX_DEV];
+static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
+
 /* ---- state --------------------------------------------------------------- */
 static volatile u8 *g_cap;         /* MMIO base */
 static volatile u8 *g_op, *g_rt, *g_db;
@@ -120,6 +137,7 @@ static int g_caplen, g_csz, g_maxslots, g_maxports;
 static int g_present, g_nports_conn, g_ndevs;
 static unsigned g_err;             /* stage/failure code for the diagnostic */
 static int g_dbg_slot, g_dbg_addr, g_dbg_desc, g_dbg_speed, g_dbg_disc; /* enum diagnostics */
+static int g_dbg_cc = -99, g_dbg_resid = -99;  /* last control_xfer raw cc + residual */
 static unsigned g_dbg_sts, g_dbg_ev0;   /* USBSTS + first event TRB control */
 static int g_cmd_i, g_cmd_cyc;     /* command ring enqueue + producer cycle */
 static int g_evt_i, g_evt_cyc;     /* event ring dequeue + consumer cycle */
@@ -195,6 +213,19 @@ static int run_command(u64 param, u32 control, int *slot_out)
 
 static void mdelay(int ms) { while (ms-- > 0) { volatile int n = 200000; while (n-- > 0) __asm__ volatile(""); } }
 
+/* ---- opt-in debug console (QEMU port 0x402) - METAL-UNSAFE ---------------- */
+#ifdef UNO_DBGCON
+static void xd_c(char c){ __asm__ volatile("outb %0,%1"::"a"((unsigned char)c),"Nd"((unsigned short)0x402)); }
+static void xd(const char *s){ while(*s) xd_c(*s++); }
+static void xd_i(int v){ char b[12]; int i=0; unsigned u; if(v<0){xd_c('-');u=(unsigned)(-v);}else u=(unsigned)v;
+    if(!u)xd_c('0'); while(u){b[i++]=(char)('0'+u%10);u/=10;} while(i)xd_c(b[--i]); }
+static void xd_h(unsigned v){ const char *h="0123456789abcdef"; int i; xd("0x"); for(i=28;i>=0;i-=4) xd_c(h[(v>>i)&0xF]); }
+#else
+#define xd(s)   ((void)0)
+#define xd_i(v) ((void)0)
+#define xd_h(v) ((void)0)
+#endif
+
 static void reset_port(int p)
 {
     u32 sc = rd32(g_op, OP_PORTSC(p));
@@ -209,31 +240,54 @@ static void reset_port(int p)
 static void ctx_wr(u8 *ctx, int off, u32 v) { *(volatile u32 *)(ctx + off) = v; }
 static int  mps_for_speed(int sp) { return sp == 4 ? 512 : sp == 3 ? 64 : 8; }
 
-/* one control transfer: GET_DESCRIPTOR(device) into `out`. 1 on success. */
-static int get_device_descriptor(int di, int slot, u8 *out, int len)
+/* enqueue one TRB on a transfer ring, managing the cycle bit + a Link-TRB wrap
+ * (last slot reserved for the Link). Control-transfer stages and bulk transfers
+ * are single-TRB TDs, so a Link between them is harmless. */
+static void ep_push(trb_t *ring, int *enq, int *cyc, int size, u64 param, u32 status, u32 ctl)
 {
-    trb_t *ring = g_ep0[di];
-    int *ei = &g_ep0_i[di]; u32 cyc = (u32)g_ep0_cyc[di];
-    trb_t ev;
-    u64 setup = (u64)0x80 | ((u64)6 << 8) | ((u64)0x0100 << 16) | ((u64)0 << 32) | ((u64)len << 48);
-    /* Setup stage (immediate data, IN transfer) */
-    ring[*ei].param = setup; ring[*ei].status = 8;
-    ring[*ei].control = TRB_TYPE(2) | (1u<<6) | (3u<<16) | cyc; (*ei)++;
-    /* Data stage (IN) */
-    ring[*ei].param = (u64)(uintptr_t)out; ring[*ei].status = (u32)len;
-    ring[*ei].control = TRB_TYPE(3) | (1u<<16) | cyc; (*ei)++;
-    /* Status stage (OUT, interrupt-on-completion) */
-    ring[*ei].param = 0; ring[*ei].status = 0;
-    ring[*ei].control = TRB_TYPE(4) | (1u<<5) | cyc; (*ei)++;
-    wr32(g_db, slot*4, 1);                       /* slot doorbell, EP0 (DCI 1) */
-    for (;;) {
-        int cc;
-        if (!poll_event(&ev, 3000000)) return 0;
-        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
-        cc = (ev.status >> 24) & 0xFF;
-        return cc == CC_SUCCESS || cc == 13 /* short packet is fine */;
+    ring[*enq].param = param; ring[*enq].status = status;
+    ring[*enq].control = ctl | (u32)*cyc;
+    if (++(*enq) >= size - 1) {
+        ring[size-1].param = (u64)(uintptr_t)ring; ring[size-1].status = 0;
+        ring[size-1].control = TRB_TYPE(TR_LINK) | (1u<<1) | (u32)*cyc;
+        *enq = 0; *cyc ^= 1;
     }
 }
+
+/* wait for the next transfer event; returns the completion code (1/13 = ok),
+ * fills the residual (untransferred bytes of the last TRB). -1 on timeout. */
+static int poll_xfer(int *residual, int budget)
+{
+    trb_t ev;
+    for (;;) {
+        if (!poll_event(&ev, budget)) return -1;
+        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
+        if (residual) *residual = ev.status & 0xFFFFFF;
+        return (ev.status >> 24) & 0xFF;
+    }
+}
+
+/* a full control transfer on EP0. Returns bytes transferred (>=0) or -1. */
+static int control_xfer(int di, u8 rt, u8 req, u16 val, u16 idx, u8 *buf, int len)
+{
+    int slot = g_devs[di].slot, in = (rt & 0x80) != 0, resid = 0, cc;
+    u32 trt = len ? (in ? 3u : 2u) : 0u;         /* transfer type: IN/OUT/no-data */
+    u64 setup = (u64)rt | ((u64)req<<8) | ((u64)val<<16) | ((u64)idx<<32) | ((u64)len<<48);
+    ep_push(g_ep0[di], &g_ep0_i[di], &g_ep0_cyc[di], EP0_RING_SZ,
+            setup, 8, TRB_TYPE(2) | (1u<<6) | (trt<<16));      /* Setup (immediate data) */
+    if (len)
+        ep_push(g_ep0[di], &g_ep0_i[di], &g_ep0_cyc[di], EP0_RING_SZ,
+                (u64)(uintptr_t)buf, (u32)len, TRB_TYPE(3) | (in ? (1u<<16) : 0)); /* Data */
+    ep_push(g_ep0[di], &g_ep0_i[di], &g_ep0_cyc[di], EP0_RING_SZ,
+            0, 0, TRB_TYPE(4) | ((len && in) ? 0 : (1u<<16)) | (1u<<5));  /* Status (opp dir, IOC) */
+    wr32(g_db, slot*4, 1);                        /* slot doorbell, EP0 (DCI 1) */
+    cc = poll_xfer(&resid, 3000000);
+    g_dbg_cc = cc; g_dbg_resid = resid;
+    return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
+}
+
+static int get_device_descriptor(int di, int slot, u8 *out, int len)
+{ (void)slot; return control_xfer(di, 0x80, 6, 0x0100, 0, out, len) >= 0; }
 
 static void enumerate_port(int port)
 {
@@ -269,16 +323,99 @@ static void enumerate_port(int port)
     if (cc != CC_SUCCESS) return;
     mdelay(2);                                                  /* let the address settle */
 
+    /* publish slot/port/speed BEFORE the descriptor fetch: control_xfer reads
+     * g_devs[di].slot to ring the right doorbell (it's a full transfer API now,
+     * not the old slot-parameter helper). */
+    g_devs[di].slot = slot; g_devs[di].port = port; g_devs[di].speed = speed;
+
     for (i = 0; i < 18; i++) g_descbuf[i] = 0;
     g_dbg_desc = get_device_descriptor(di, slot, g_descbuf, 18) ? g_descbuf[1] : -1;
+    g_dbg_sts = rd32(g_op, OP_USBSTS);           /* post-transfer status (HCE shows here) */
+    xd("[xhci] port="); xd_i(port); xd(" slot="); xd_i(slot);
+    xd(" addr_cc="); xd_i((int)cc); xd(" desc_cc="); xd_i(g_dbg_cc);
+    xd(" resid="); xd_i(g_dbg_resid); xd(" bDescType="); xd_i(g_dbg_desc);
+    xd(" vid="); xd_h((unsigned)(g_descbuf[8]|(g_descbuf[9]<<8)));
+    xd(" pid="); xd_h((unsigned)(g_descbuf[10]|(g_descbuf[11]<<8))); xd("\n");
     if (g_dbg_desc != 1) return;                                /* must be a device descriptor */
-    g_devs[di].slot = slot; g_devs[di].port = port; g_devs[di].speed = speed;
     g_devs[di].vendor  = (u16)(g_descbuf[8]  | (g_descbuf[9]  << 8));
     g_devs[di].product = (u16)(g_descbuf[10] | (g_descbuf[11] << 8));
     g_devs[di].dev_class    = g_descbuf[4];
     g_devs[di].dev_subclass = g_descbuf[5];
     g_devs[di].dev_proto    = g_descbuf[6];
     g_ndevs++;
+}
+
+/* ---- USB transfer API for class drivers (dev = index in the device list) -- */
+static void setup_ep(int di, int dci, int eptype, int mps, trb_t *ring)
+{
+    int st = g_csz ? 64 : 32, off = (dci + 1) * st;
+    u64 tr = (u64)(uintptr_t)ring | 1u;                    /* dequeue ptr + DCS */
+    ctx_wr(g_inctx[di], off+4, ((u32)mps<<16) | ((u32)eptype<<3) | (3u<<1)); /* MPS, type, CErr=3 */
+    ctx_wr(g_inctx[di], off+8,  (u32)tr);
+    ctx_wr(g_inctx[di], off+12, (u32)(tr>>32));
+    ctx_wr(g_inctx[di], off+16, 1024);                     /* average TRB length */
+}
+
+int uno_usb_control(int dev, unsigned char rt, unsigned char req,
+                    unsigned short val, unsigned short idx, void *data, int len)
+{
+    if (dev < 0 || dev >= g_ndevs) return -1;
+    return control_xfer(dev, rt, req, val, idx, (u8 *)data, len);
+}
+int uno_usb_get_config(int dev, void *buf, int len)
+{ return uno_usb_control(dev, 0x80, 6, 0x0200, 0, buf, len); }        /* GET_DESCRIPTOR config */
+int uno_usb_set_config(int dev, int cfg)
+{ return uno_usb_control(dev, 0x00, 9, (unsigned short)cfg, 0, 0, 0); } /* SET_CONFIGURATION */
+
+int uno_usb_setup_bulk(int dev, int in_addr, int out_addr, int in_mps, int out_mps)
+{
+    int di = dev, slot, in_dci, out_dci, maxdci, st, i, cc;
+    u32 sdw0, sdw1;
+    if (dev < 0 || dev >= g_ndevs) return -1;
+    slot = g_devs[di].slot;
+    in_dci  = (in_addr  & 0xF) * 2 + 1;                    /* IN  endpoint DCI */
+    out_dci = (out_addr & 0xF) * 2 + 0;                    /* OUT endpoint DCI */
+    maxdci  = in_dci > out_dci ? in_dci : out_dci;
+    st = g_csz ? 64 : 32;
+    for (i = 0; i < 2048; i++) g_inctx[di][i] = 0;
+    ctx_wr(g_inctx[di], 4, 1u | (1u<<in_dci) | (1u<<out_dci));   /* add slot + both endpoints */
+    sdw0 = *(volatile u32 *)(g_devctx[di] + 0);           /* copy slot ctx from device ctx */
+    sdw1 = *(volatile u32 *)(g_devctx[di] + 4);
+    sdw0 = (sdw0 & ~(0x1Fu<<27)) | ((u32)maxdci<<27);      /* context entries = max DCI */
+    ctx_wr(g_inctx[di], st+0, sdw0);
+    ctx_wr(g_inctx[di], st+4, sdw1);
+    for (i = 0; i < BULK_RING_SZ; i++) {
+        g_bin[di][i].param=0;  g_bin[di][i].status=0;  g_bin[di][i].control=0;
+        g_bout[di][i].param=0; g_bout[di][i].status=0; g_bout[di][i].control=0;
+    }
+    g_bin_i[di]=0; g_bin_cyc[di]=1; g_bout_i[di]=0; g_bout_cyc[di]=1;
+    setup_ep(di, in_dci,  6 /*Bulk In*/,  in_mps,  g_bin[di]);
+    setup_ep(di, out_dci, 2 /*Bulk Out*/, out_mps, g_bout[di]);
+    cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
+    if (cc != CC_SUCCESS) return -1;
+    g_bin_dci[di] = in_dci; g_bout_dci[di] = out_dci;
+    return 0;
+}
+
+int uno_usb_bulk_out(int dev, void *data, int len)
+{
+    int resid = 0, cc;
+    if (dev < 0 || dev >= g_ndevs || !g_bout_dci[dev]) return -1;
+    ep_push(g_bout[dev], &g_bout_i[dev], &g_bout_cyc[dev], BULK_RING_SZ,
+            (u64)(uintptr_t)data, (u32)len, TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/);
+    wr32(g_db, g_devs[dev].slot*4, g_bout_dci[dev]);
+    cc = poll_xfer(&resid, 5000000);
+    return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
+}
+int uno_usb_bulk_in(int dev, void *data, int len)
+{
+    int resid = 0, cc;
+    if (dev < 0 || dev >= g_ndevs || !g_bin_dci[dev]) return -1;
+    ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
+            (u64)(uintptr_t)data, (u32)len, TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP*/);
+    wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
+    cc = poll_xfer(&resid, 5000000);
+    return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
 }
 
 /* one bring-up attempt: reset -> rings -> run -> port scan -> enumerate.

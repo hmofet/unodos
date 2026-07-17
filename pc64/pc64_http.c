@@ -2,6 +2,7 @@
 #include "pc64_http.h"
 #include "net.h"
 #include "e1000.h"
+#include "ax88179.h"      /* USB Ethernet fallback (X1 has no wired NIC) */
 #include "tls.h"          /* tls_connect_ca / tls_write / tls_read (HTTPS) */
 #include <string.h>
 
@@ -13,10 +14,12 @@ static int g_net_inited;
 int pc64_net_up(void)
 {
     uno_nic_t *nic;
+    const unsigned char *mac;
     if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
-    nic = e1000_nic();
-    if (!nic) return 0;                          /* no NIC (e.g. the X1 Wi-Fi) */
-    net_init(nic, e1000_mac());
+    nic = e1000_nic(); mac = e1000_mac();       /* native PCI NIC first */
+    if (!nic) { nic = ax88179_nic(); mac = ax88179_mac(); }   /* else a USB Ethernet adapter */
+    if (!nic) return 0;                          /* no NIC at all */
+    net_init(nic, mac);
     g_net_inited = 1;
     net_dhcp_start();
     { int i; for (i = 0; i < 400 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); } }
