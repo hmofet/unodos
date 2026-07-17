@@ -7,6 +7,24 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest batch — HTTPS, trackpad probe, GUI controls, stub fixes
+
+- [ ] **Trackpad (I2C-HID)** — last X1 readout: "2 DW ctrl / 2 bars, HID device:
+      not found on ctrl". Added an **Intel LPSS reset-release** (controllers were
+      likely found-but-held-in-reset, so every transfer timed out), a broader
+      address/descriptor probe, and a richer System readout. **Re-check the
+      System app**: it now shows either `no HID (no ACK, abrt 0xNNNN)` (address
+      NAK → wrong slave address) or `no HID (bus ok, abrt 0xNNNN)` (a device
+      answered but the descriptor didn't validate), or `UP addr 0xNN parsed`.
+      Report the new line — abrt `0x0000` with "no ACK" means the bus still isn't
+      driving (deeper LPSS clock/power issue); `0x0080` means NAK (address).
+- [ ] **GUI controls for every keypress action** — all mouse-reachable now:
+      games' New Game/Retry/Drive/Restart buttons, Tracker's Play/Clear/Demo/
+      Save/Load toolbar, Music's Play/Prev/Next, Paint's Clear/Save/Load,
+      Network's Re-run. Confirm the clicks work (QEMU has no pointer).
+- [ ] **Paint/Tracker file pickers** now list real files (fat12_list wired to
+      uno_fs) — confirm save/open show the file list.
+
 ## Newest batch — TTF fonts, Paint fix, resizable windows, calendar picker
 
 - [ ] **Paint draws under the cursor** — the drag bug (all pixels landed at the
