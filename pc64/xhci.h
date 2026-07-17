@@ -29,6 +29,17 @@ typedef struct {
 int  uno_xhci_dev_count(void);
 const uno_usb_dev *uno_xhci_dev(int i);
 
+/* USB transfer API for class drivers (dev = index into the enumerated list). */
+int  uno_usb_control(int dev, unsigned char bmRequestType, unsigned char bRequest,
+                     unsigned short wValue, unsigned short wIndex, void *data, int len);
+int  uno_usb_get_config(int dev, void *buf, int len);      /* GET_DESCRIPTOR(config) */
+int  uno_usb_set_config(int dev, int cfg);                 /* SET_CONFIGURATION */
+/* Configure the device's bulk in/out endpoints (addresses from the config
+ * descriptor, e.g. 0x81 / 0x02). Returns 0 on success. */
+int  uno_usb_setup_bulk(int dev, int in_ep_addr, int out_ep_addr, int in_mps, int out_mps);
+int  uno_usb_bulk_out(int dev, void *data, int len);       /* returns bytes sent / -1 */
+int  uno_usb_bulk_in(int dev, void *data, int len);        /* returns bytes received / -1 */
+
 /* Diagnostics for the System app. */
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err);
 /* enumeration debug: slot id (or -completion_code), Address Device completion,

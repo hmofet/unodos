@@ -21,6 +21,7 @@
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
+#include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -254,9 +255,9 @@ static void build_usbstat(void)
         uno_xhci_diag(&sl, &ad, &de, &sp);
         uno_xhci_diag2(&sts, &ev0, &dc);
         q = ap_str(q, "  sl="); q = ap_int(q, sl);
-        q = ap_str(q, " sts="); q = ap_hex16(q, sts);
-        q = ap_str(q, " disc="); q = ap_int(q, dc);
-        q = ap_str(q, " spd="); q = ap_int(q, sp); *q = 0;
+        q = ap_str(q, " ad="); q = ap_int(q, ad);
+        q = ap_str(q, " de="); q = ap_int(q, de);
+        q = ap_str(q, " sts="); q = ap_hex16(q, sts); *q = 0;
     }
     p = ap_str(g_usb, "USB xHCI: ");
     if (pr) { p = ap_str(p, "up, "); p = ap_int(p, np); p = ap_str(p, " port, ");
@@ -267,6 +268,13 @@ static void build_usbstat(void)
     else if (e) { p = ap_str(p, "init failed at stage "); p = ap_int(p, (int)e); }
     else        { p = ap_str(p, "no controller"); }
     *p = 0;
+    /* AX88179 USB Ethernet (only shown when an adapter was seen) */
+    { int fnd=0, bnd=0, lnk=0; unsigned short vid=0, pid=0;
+      ax88179_status(&fnd, &bnd, &lnk, &vid, &pid);
+      if (fnd) { char *r = ap_str(g_usb2, "  ASIX ");
+          r = ap_hex16(r, vid); r = ap_str(r, ":"); r = ap_hex16(r, pid);
+          r = ap_str(r, bnd ? "  bound  link " : "  found (not bound)");
+          if (bnd) r = ap_str(r, lnk ? "up" : "down"); *r = 0; } }
 }
 
 static void build_sys(unoui_window *w)
@@ -920,6 +928,7 @@ int main(void)
     unoui_font_pop  = uno_font_pop;
     uno_mac_mouse   = uno_pc64_mac_mouse;   /* live pointer for Paint's drag spin */
     uno_xhci_init();                    /* USB host controller (inert unless -DUNO_XHCI) */
+    ax88179_nic();                      /* bind a USB Ethernet adapter if one is attached */
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
