@@ -20,6 +20,7 @@
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
+#include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -242,16 +243,31 @@ static void build_tpstat(void)
     *p = 0;
 }
 
+static char g_usb[80];
+static void build_usbstat(void)
+{
+    int pr = 0, np = 0, nd = 0; unsigned e = 0; char *p;
+    uno_xhci_status(&pr, &np, &nd, &e);
+    p = ap_str(g_usb, "USB xHCI: ");
+    if (pr) { p = ap_str(p, "up, "); p = ap_int(p, np); p = ap_str(p, " connected port(s), ");
+              p = ap_int(p, nd); p = ap_str(p, " dev"); }
+    else if (e) { p = ap_str(p, "init failed at stage "); p = ap_int(p, (int)e); }
+    else        { p = ap_str(p, "no controller"); }
+    *p = 0;
+}
+
 static void build_sys(unoui_window *w)
 {
     build_tpstat();
-    unoui_window_init(w, "System", 400, 240, 320, 140);
+    build_usbstat();
+    unoui_window_init(w, "System", 400, 220, 320, 158);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
-    unoui_add_label(w, 8, 42, "8 themes  -  live re-skin");
+    unoui_add_label(w, 8, 42, "10 themes  -  live re-skin");
     unoui_add_sep  (w, 8, 60, 300);
-    unoui_add_label(w, 8, 68, g_tp1);
-    unoui_add_label(w, 8, 84, g_tp2);
+    unoui_add_label(w, 8, 68,  g_tp1);
+    unoui_add_label(w, 8, 84,  g_tp2);
+    unoui_add_label(w, 8, 102, g_usb);
 }
 static void build_clock(unoui_window *w)
 {
@@ -889,6 +905,7 @@ int main(void)
     unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
     unoui_font_pop  = uno_font_pop;
     uno_mac_mouse   = uno_pc64_mac_mouse;   /* live pointer for Paint's drag spin */
+    uno_xhci_init();                    /* USB host controller (inert unless -DUNO_XHCI) */
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
