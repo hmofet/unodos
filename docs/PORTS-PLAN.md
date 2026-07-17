@@ -1,5 +1,12 @@
 # UnoDOS new-ports program: Apple II, Apple IIGS, SNES, Sony PS2, Sega Dreamcast
 
+> **Status:** this program is essentially complete — **IIGS, SNES, PS2, and Dreamcast are
+> done** (emulator/host-verified; real-hardware passes tracked in [../TODO.md](../TODO.md)),
+> and **Apple II is in progress**. The document is kept as the per-port strategy/envelope
+> reference it's linked from; for current status see [FEATURE-MATRIX.md](FEATURE-MATRIX.md)
+> and [../TODO.md](../TODO.md). Many more ports were subsequently built beyond this original
+> five (the fresh-3.1 consoles and the `pc64/` Modern PC world) — see the top-level README.
+
 Direction (2026-06-12): bring UnoDOS to four new platforms, in this order.
 The order is chosen so each port feeds the next: the Apple II establishes
 the 6502 toolchain and the keyboard-driven input adaptation; the IIGS

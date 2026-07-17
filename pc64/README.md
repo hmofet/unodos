@@ -351,7 +351,7 @@ python3 nettest.py        # net + TLS verification (needs the legacy build)
 
 The build pulls in the sibling toolkits (`../unoui`, `../uno3d`, `../unosound`)
 and a couple of generator scripts (`mkfont_c.py`, `../amiga/mkdata.py`), so
-clone the **whole** `unodos-3` repo, not just `pc64/`.
+clone the **whole** `unodos` repo, not just `pc64/`.
 
 **Setting up a fresh machine (Linux or Windows):** see
 [`DEVELOPMENT.md`](DEVELOPMENT.md) for step-by-step environment setup, the exact

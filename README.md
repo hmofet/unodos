@@ -1,13 +1,22 @@
 # UnoDOS 3
 
-A graphical operating system for IBM PC XT-compatible computers, written entirely in x86 assembly language.
+A GUI-first operating system whose original IBM PC/XT kernel is written entirely in x86 assembly — now a whole family spanning 20+ hardware targets, from 8-bit consoles to a modern **x86-64 / UEFI** world ([`pc64/`](pc64/)) written in C.
 
 ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-blue)
 
-> **Two lines.** This repo now carries both:
-> - **UnoDOS 3 Legacy** — the shipped, real-code-validated OS and its many ports
->   (branch `unodos-3-legacy`, tag `legacy-pre-3.1`). Stable, known-good.
-> - **UnoDOS 3.1** — the forward, contract-driven redesign (branch `master`): one
+> **Active repo — [`github.com/hmofet/unodos`](https://github.com/hmofet/unodos).**
+> All current development happens here, on `master`.
+>
+> **Repos & branches:**
+> - **`master`** (this repo) — the forward, contract-driven line, and the home of the
+>   **[`pc64/`](pc64/) Modern PC world** (see below).
+> - **`classic`** branch — the pre-pc64 snapshot of the forward line (no `pc64/`),
+>   preserved for independent maintenance.
+> - **[`hmofet/unodos-3-legacy`](https://github.com/hmofet/unodos-3-legacy)** — the
+>   original shipped, real-hardware-validated OS and its many ports (tag
+>   `legacy-pre-3.1`). **Frozen & archived**, known-good.
+>
+> **The forward line — UnoDOS 3.1.** A contract-driven redesign: one
 >   machine-readable Contract (`unodef/`) every world is generated from or checked
 >   against. All 7 reachable asm ports + x86 consume it byte-identically; the **3.1
 >   window ABI** (a greenfield logical window model → per-platform derived layout,
@@ -35,11 +44,6 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 > **browser with a JavaScript interpreter**, **uno3d** 3D, and **xHCI USB** bring-up.
 > QEMU+OVMF- and **real-hardware-verified (Lenovo X1 Carbon Gen 8)**. Full detail in
 > **[pc64/README.md](pc64/README.md)**.
->
-> **Branches.** `master` is the forward line **and includes the `pc64/` Modern PC world**.
-> `classic` preserves the pre-pc64 snapshot of this forward line (no `pc64/` directory)
-> for independent maintenance. `unodos-3-legacy` (tag `legacy-pre-3.1`) is the older
-> shipped/known-good line.
 
 ## Overview
 
@@ -52,11 +56,15 @@ UnoDOS 3 is a GUI-first operating system that boots directly into a windowed des
 - **Vintage-Friendly**: Designed for the constraints of 1980s hardware — runs on an IBM PC/XT-class machine with a CGA card. (Verified on a cycle-accurate 8088: 256KB boots the desktop; 640KB enables the full 5-app multitasking envelope. The kernel itself loads in 128KB but the launcher does not fit below 192KB — see [docs/PORT-8088.md](docs/PORT-8088.md).)
 - **Self-Contained**: The kernel, window manager, GUI toolkit, filesystem drivers, and the application set fit on one floppy disk.
 
-### Non-Goals
+### Non-Goals (of the x86 real-mode reference OS)
 
-- Networking (no TCP/IP, no modem)
+These bound the original IBM PC/XT floppy OS described above. The modern
+[`pc64/`](pc64/) world deliberately goes beyond several of them (it adds a full
+TCP/IP + TLS networking stack and runs in 64-bit long mode).
+
+- Networking (no TCP/IP, no modem) — *added in the `pc64/` world*
 - Preemptive multitasking (cooperative only)
-- Protected mode (real mode for XT compatibility)
+- Protected / long mode (the reference OS stays real mode for XT compatibility; `pc64/` is 64-bit)
 - DOS compatibility (different API)
 
 ## Ports
