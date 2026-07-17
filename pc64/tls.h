@@ -10,7 +10,8 @@
 #define PC64_TLS_H
 #include "net.h"
 
-int  tls_connect(const u8 dst[4], u16 port, const char *sni);  /* 0 = handshake ok */
+int  tls_connect(const u8 dst[4], u16 port, const char *sni);  /* 0 = handshake ok (pinned key) */
+int  tls_connect_ca(const u8 dst[4], u16 port, const char *sni);  /* 0 = ok (CA-validated, HTTPS) */
 int  tls_write(const void *data, int len);
 int  tls_read(void *buf, int cap);
 void tls_close(void);

@@ -2,6 +2,7 @@
 #include "pc64_http.h"
 #include "net.h"
 #include "e1000.h"
+#include "tls.h"          /* tls_connect_ca / tls_write / tls_read (HTTPS) */
 #include <string.h>
 
 void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
@@ -23,6 +24,19 @@ int pc64_net_up(void)
 }
 
 /* ---- tiny helpers -------------------------------------------------------- */
+static void set_tls_err(char *status, int statusmax, const char *what)
+{
+    int e = tls_last_error(), i = 0, n = 0; char num[8];
+    if (statusmax <= 0) return;
+    while (what[i] && i < statusmax-1) { status[i] = what[i]; i++; }
+    { const char *sfx = " (BearSSL err "; int k = 0; while (sfx[k] && i < statusmax-1) status[i++] = sfx[k++]; }
+    if (e < 0) { if (i < statusmax-1) status[i++]='-'; e = -e; }
+    if (!e) num[n++]='0'; while (e) { num[n++]=(char)('0'+e%10); e/=10; }
+    while (n && i < statusmax-1) status[i++] = num[--n];
+    if (i < statusmax-1) status[i++]=')';
+    status[i] = 0;
+}
+
 static int is_ipv4(const char *s, unsigned char out[4])
 {
     int part = 0, val = 0, digits = 0, i;
@@ -43,18 +57,15 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
 {
     char host[128], path[512];
     unsigned char ip[4];
-    int port = 80, hn = 0, i;
+    int port = 80, hn = 0, i, secure = 0;
     const char *p = url;
 
     if (statusmax > 0) status[0] = 0;
     if (bodymax > 0) body[0] = 0;
 
     /* scheme */
-    if (!strncmp(p, "https://", 8)) {
-        if (statusmax) strncpy(status, "HTTPS not supported yet (no CA trust) - try http://", statusmax-1);
-        return -1;
-    }
-    if (!strncmp(p, "http://", 7)) p += 7;
+    if (!strncmp(p, "https://", 8)) { secure = 1; port = 443; p += 8; }
+    else if (!strncmp(p, "http://", 7)) p += 7;
 
     /* host[:port] */
     while (*p && *p != '/' && *p != ':' && hn < (int)sizeof(host)-1) host[hn++] = *p++;
@@ -73,10 +84,15 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
         if (!net_dns_query(host, ip)) { if (statusmax) strncpy(status,"DNS lookup failed",statusmax-1); return -4; }
     }
 
-    /* connect */
-    if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
-    for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
-    if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
+    /* connect (plain TCP, or TLS with CA validation for https) */
+    if (secure) {
+        int rc = tls_connect_ca(ip, (unsigned short)port, host);
+        if (rc != 0) { set_tls_err(status, statusmax, "TLS connect failed"); return -5; }
+    } else {
+        if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
+        for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
+        if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
+    }
 
     /* request */
     { char req[720]; int rn = 0;
@@ -86,7 +102,8 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
       { int l=(int)strlen(b); memcpy(req+rn,b,l); rn+=l; }
       { int l=(int)strlen(host); if(rn+l<(int)sizeof(req)){memcpy(req+rn,host,l);rn+=l;} }
       { int l=(int)strlen(c); memcpy(req+rn,c,l); rn+=l; }
-      net_tcp_send(req, rn);
+      if (secure) { if (tls_write(req, rn) < 0) { set_tls_err(status, statusmax, "TLS write failed"); tls_close(); return -7; } }
+      else        net_tcp_send(req, rn);
     }
 
     /* receive until the server closes (Connection: close) or we time out */
@@ -94,18 +111,24 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
       int rn = 0, idle = 0;
       while (rn < (int)sizeof(raw)-1) {
           char tmp[1460]; int n;
-          net_poll();
-          n = net_tcp_recv(tmp, sizeof tmp);
-          if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; idle = 0; }
-          else {
-              int st = net_tcp_state();
-              if (st == TCP_DONE || st == TCP_CLOSED || st == TCP_FIN_WAIT) { if (++idle > 20) break; }
-              else if (++idle > 600) break;      /* ~3s of no data */
-              uno_pc64_delay_ms(5);
+          if (secure) {
+              n = tls_read(tmp, sizeof tmp);
+              if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; }
+              else break;                        /* <=0: TLS closed or error */
+          } else {
+              net_poll();
+              n = net_tcp_recv(tmp, sizeof tmp);
+              if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; idle = 0; }
+              else {
+                  int st = net_tcp_state();
+                  if (st == TCP_DONE || st == TCP_CLOSED || st == TCP_FIN_WAIT) { if (++idle > 20) break; }
+                  else if (++idle > 600) break;  /* ~3s of no data */
+                  uno_pc64_delay_ms(5);
+              }
           }
       }
       raw[rn] = 0;
-      net_tcp_close();
+      if (secure) tls_close(); else net_tcp_close();
 
       /* status line */
       if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
