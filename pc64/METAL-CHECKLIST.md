@@ -9,6 +9,13 @@ Newest at the top. Check items off as they're confirmed on the X1.
 
 ## Newest batch — HTTPS, trackpad probe, GUI controls, stub fixes
 
+- [ ] **HTTPS** — the browser now does CA-validated TLS 1.2 (`https://`). Fully
+      verified in QEMU (handshake + chain + RTC validity). On the X1 it needs a
+      NIC (none wired), so it's inert there like the rest of networking. **Note:
+      cert dates want the RTC in UTC** — if the X1's RTC is local time and far
+      from UTC, real certs could read as not-yet-valid; set the clock to UTC via
+      Control Panel if HTTPS reports `BearSSL err 54`.
+
 - [ ] **Trackpad (I2C-HID)** — last X1 readout: "2 DW ctrl / 2 bars, HID device:
       not found on ctrl". Added an **Intel LPSS reset-release** (controllers were
       likely found-but-held-in-reset, so every transfer timed out), a broader
