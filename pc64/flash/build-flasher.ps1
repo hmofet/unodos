@@ -23,15 +23,25 @@ $build = Join-Path $pc64 "build"
 # C:\...\unodos\pc64  ->  /mnt/c/.../unodos/pc64  (no wslpath: arg quoting eats backslashes)
 $wslPc64 = "/mnt/" + $pc64.Substring(0,1).ToLower() + ($pc64.Substring(2) -replace '\\','/')
 
+# Run a native command, letting it write to stderr WITHOUT tripping
+# $ErrorActionPreference='Stop' (in Windows PowerShell 5.1 native stderr is
+# wrapped as a terminating NativeCommandError).  gcc warnings from build.sh go
+# to stderr on a perfectly good build, so we gate on the exit code instead.
+function Invoke-Native([scriptblock]$sb, [string]$what) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $sb 2>&1 | ForEach-Object { Write-Host $_ } }
+    finally { $ErrorActionPreference = $prev }
+    if ($LASTEXITCODE -ne 0) { throw "$what (exit $LASTEXITCODE)" }
+}
+
 # ---- 1+2. build the EFI image and pack it into a raw UEFI disk image --------
 if (-not $SkipBuild) {
     Write-Host "Building UnoDOS/pc64 (BOOTX64.EFI + ESP) under WSL..."
-    & wsl bash -lc "cd '$wslPc64' && ./build.sh"
-    if ($LASTEXITCODE -ne 0) { throw "pc64 build failed (try: wsl bash -lc 'cd pc64 && ./build.sh')" }
+    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && ./build.sh" } "pc64 build failed (try: wsl bash -lc 'cd pc64 && ./build.sh')"
 }
 Write-Host "Packing UEFI disk image ($SizeMiB MiB) under WSL..."
-& wsl bash -lc "cd '$wslPc64' && python3 tools/mkuefi.py $SizeMiB"
-if ($LASTEXITCODE -ne 0) { throw "mkuefi.py failed (needs sgdisk + mtools in WSL)" }
+Invoke-Native { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkuefi.py $SizeMiB" } "mkuefi.py failed (needs sgdisk + mtools in WSL)"
 
 $img = Join-Path $build "unodos-uefi.img"
 if (-not (Test-Path $img)) { throw "Missing image: $img" }
