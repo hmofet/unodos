@@ -144,6 +144,27 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   desktop, and a **frosted rounded taskbar** with an accent Start pill. The
   Control Panel's **Dark mode** toggle swaps Light↔Dark
   (`shots/aurora_light.png`, `shots/aurora_dark.png`).
+- **TrueType text** (`pc64_font.c` + vendored `stb_truetype.h`): an optional
+  font engine that registers an `fb` text provider (`fb_set_font`), so picking a
+  TTF re-skins **all** UI text — titles, labels, buttons, lists —
+  proportionally and anti-aliased, with **subpixel (LCD) AA**. Three open faces
+  (DejaVu Sans / Sans Mono, Ubuntu) ship on the ESP and load on demand from the
+  FAT volume. The Control Panel has a system-wide **Font** picker; the Editor
+  has a per-document **Doc font** picker (a new per-window font override:
+  `win->font_slot` + `unoui_font_push/pop` hooks). Freestanding: a malloc arena
+  + math shims, an ASCII glyph cache. The built-in 8×8 bitmap (monospace) stays
+  the **default and the fallback** (a TTF that fails to load reverts to it)
+  (`shots/aurora_ttf.png`).
+- **Resizable windows** (`UI_WIN_RESIZE`): a bottom-right grip live-resizes a
+  window (clamped to per-window `min_w/min_h`); widgets flagged `UI_WF_FILL`
+  stretch to the content rect on resize (`unoui_reflow_window`), so canvas apps
+  **reflow dynamically** — the browser re-wraps its text to the new width, the
+  games rescale, Paint/Tracker/Music get a bigger drawable area
+  (`shots/resize_grip.png`).
+- **Calendar date-picker**: `unoui_calendar_draw` / `_hit` (+ `days_in_month`,
+  `day_of_week`) are a reusable date-picker core in the toolkit; the Control
+  Panel's **Pick date...** button opens a month-grid popup over them — chevrons
+  page months, clicking a day sets the clock (`shots/calendar.png`).
 - **Canvas + fullscreen** (toolkit features, benefit every port): `UI_CANVAS`
   is an app-drawn widget — the toolkit does the chrome/focus/drag, the app
   owns the pixels inside the rect (games / paint / tracker / browser), with a
@@ -310,7 +331,7 @@ mingw cross compiler's native output, so the whole port builds with stock
 Ubuntu packages, no EDK2:
 
 ```
-sudo apt install gcc-mingw-w64-x86-64 qemu-system-x86 ovmf
+sudo apt install gcc-mingw-w64-x86-64 qemu-system-x86 ovmf python3 python3-pil
 ./build.sh            # unoui shell (default) -> build/esp/EFI/BOOT/BOOTX64.EFI
 ./build.sh run        # unoui shell, boot in QEMU+OVMF (VNC :0)
 ./build.sh legacy     # the old core + 14 apps + net/TLS/3D
@@ -318,6 +339,14 @@ sudo apt install gcc-mingw-w64-x86-64 qemu-system-x86 ovmf
 python3 harness.py boot   # scripted boot -> shots/*.png (QMP send-key/screendump)
 python3 nettest.py        # net + TLS verification (needs the legacy build)
 ```
+
+The build pulls in the sibling toolkits (`../unoui`, `../uno3d`, `../unosound`)
+and a couple of generator scripts (`mkfont_c.py`, `../amiga/mkdata.py`), so
+clone the **whole** `unodos-3` repo, not just `pc64/`.
+
+**Setting up a fresh machine (Linux or Windows):** see
+[`DEVELOPMENT.md`](DEVELOPMENT.md) for step-by-step environment setup, the exact
+packages, the QEMU test loop, and how to write the boot stick on each OS.
 
 **Real hardware:** format a USB stick FAT32, copy `build/esp/*` onto it
 (so it holds `EFI/BOOT/BOOTX64.EFI`), boot the target with Secure Boot
@@ -424,6 +453,9 @@ pc64/
 ├── pc64_browser.c      # web browser: HTML/Markdown/CSS canvas app
 ├── js.c js.h           # tree-walking JavaScript interpreter (for <script>)
 ├── pc64_http.c .h      # HTTP/1.0 GET for the browser (address bar -> net)
+├── pc64_font.c .h      # TrueType text engine (subpixel AA; optional system font)
+├── stb_truetype.h      # vendored TrueType rasteriser (public domain)
+├── fonts/              # bundled open TTFs (DejaVu Sans/Mono, Ubuntu) + README
 ├── pc64_icons.c        # procedural app icons
 │                       # + ../unosound/unosound_seq.c (unified audio)
 │                       # + ../unoui/themes/theme_aurora.c (modern default look)
