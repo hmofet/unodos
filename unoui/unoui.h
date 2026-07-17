@@ -144,6 +144,14 @@ typedef struct unoui_window {
 
 struct unoui_theme;           /* fwd (defined in unoui_theme.h) */
 
+/* ---- calendar (reusable core of a date-picker) --------------------------- */
+enum { UI_CAL_NONE = 0, UI_CAL_PREV = -1, UI_CAL_NEXT = -2 };
+int  unoui_days_in_month(int y, int m);
+int  unoui_day_of_week(int y, int m, int d);       /* 0 = Sunday */
+void unoui_calendar_draw(const struct unoui_theme *, unoui_rect r, int y, int m, int sel);
+/* map a click to a day (1..31) / UI_CAL_PREV / UI_CAL_NEXT / UI_CAL_NONE */
+int  unoui_calendar_hit(unoui_rect r, int y, int m, int px, int py);
+
 /* widget flag (persistent, in widget->flags): a fill widget's w/h are stretched
  * to the window content rect on resize, so canvas apps reflow. */
 #define UI_WF_FILL (1 << 12)

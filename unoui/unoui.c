@@ -826,6 +826,79 @@ void unoui_desktop(const unoui_theme *t, int W, int H)
     PICK(desktop)(t, W, H);
 }
 
+/* ---- calendar (the reusable core of a date-picker) ----------------------- *
+ * Draw a month grid + hit-test it. A port builds a date picker by putting a
+ * canvas over these: unoui_calendar_draw paints, unoui_calendar_hit maps a
+ * click to a day (1..31) or a nav arrow (UI_CAL_PREV / UI_CAL_NEXT). */
+int unoui_days_in_month(int y, int m)
+{
+    static const int d[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) return 29;
+    return (m >= 1 && m <= 12) ? d[m-1] : 30;
+}
+int unoui_day_of_week(int y, int m, int d)         /* 0 = Sunday (Sakamoto) */
+{
+    static const int t[12] = { 0,3,2,5,0,3,5,1,4,6,2,4 };
+    if (m < 3) y -= 1;
+    return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
+}
+static const char *kMon[12] = { "January","February","March","April","May","June",
+    "July","August","September","October","November","December" };
+#define CAL_HDR 20
+#define CAL_WK  14
+
+void unoui_calendar_draw(const unoui_theme *t, unoui_rect r, int y, int m, int sel)
+{
+    static const char *wk[7] = { "S","M","T","W","T","F","S" };
+    int cw = r.w / 7, ch = (r.h - CAL_HDR - CAL_WK) / 6;
+    int fdow = unoui_day_of_week(y, m, 1), dim = unoui_days_in_month(y, m), d, i;
+    char hdr[32]; int hn = 0; const char *mn = kMon[((m-1)%12+12)%12];
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.win_bg);
+    /* header: Month Year */
+    { const char *p = mn; while (*p && hn < 20) hdr[hn++] = *p++; hdr[hn++] = ' ';
+      { int yy = y, div = 1000, started = 0; if (yy < 0) yy = 0;
+        while (div) { int dg = (yy/div)%10; if (dg || started || div==1) { hdr[hn++]=(char)('0'+dg); started=1; } div/=10; } }
+      hdr[hn] = 0; }
+    fb_text(r.x + (r.w - fb_text_w(hdr))/2, r.y + (CAL_HDR-8)/2, hdr, t->pal.text, -1);
+    { int mid = r.y + CAL_HDR/2, k;                              /* < and > chevrons */
+      for (k = 0; k < 4; k++) {
+          fb_vline(r.x + 6 + k,        mid - k, 1, t->pal.accent);   /* < top */
+          fb_vline(r.x + 6 + k,        mid + k, 1, t->pal.accent);   /* < bottom */
+          fb_vline(r.x + r.w - 7 - k,  mid - k, 1, t->pal.accent);   /* > top */
+          fb_vline(r.x + r.w - 7 - k,  mid + k, 1, t->pal.accent);   /* > bottom */
+      } }
+    /* weekday row */
+    for (i = 0; i < 7; i++)
+        fb_text(r.x + i*cw + (cw-8)/2, r.y + CAL_HDR + 3, wk[i], t->pal.text_dim, -1);
+    /* day cells */
+    for (d = 1; d <= dim; d++) {
+        int idx = fdow + d - 1, col = idx % 7, row = idx / 7;
+        int cx = r.x + col*cw, cy = r.y + CAL_HDR + CAL_WK + row*ch;
+        char nb[3]; int n = 0; if (d >= 10) nb[n++] = (char)('0'+d/10); nb[n++] = (char)('0'+d%10); nb[n]=0;
+        if (d == sel) fb_fill_rect(cx+2, cy, cw-4, ch-1, t->pal.accent);
+        fb_text(cx + (cw - (d>=10?16:8))/2, cy + (ch-8)/2,
+                nb, d == sel ? t->pal.accent_text : t->pal.text, -1);
+    }
+}
+
+int unoui_calendar_hit(unoui_rect r, int y, int m, int px, int py)
+{
+    int cw = r.w / 7, ch = (r.h - CAL_HDR - CAL_WK) / 6;
+    if (px < r.x || px >= r.x + r.w) return UI_CAL_NONE;
+    if (py >= r.y && py < r.y + CAL_HDR) {                       /* header arrows */
+        if (px < r.x + cw)          return UI_CAL_PREV;
+        if (px >= r.x + r.w - cw)   return UI_CAL_NEXT;
+        return UI_CAL_NONE;
+    }
+    if (py >= r.y + CAL_HDR + CAL_WK) {                          /* day cells */
+        int col = (px - r.x) / cw, row = (py - (r.y + CAL_HDR + CAL_WK)) / ch;
+        int fdow = unoui_day_of_week(y, m, 1), dim = unoui_days_in_month(y, m);
+        int d = row*7 + col - fdow + 1;
+        if (d >= 1 && d <= dim) return d;
+    }
+    return UI_CAL_NONE;
+}
+
 void unoui_render(unoui_window *win, const unoui_theme *t)
 {
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
