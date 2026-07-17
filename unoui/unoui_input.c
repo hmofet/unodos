@@ -503,7 +503,24 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
 
 /* ----------------------------------------------------------- dispatch ----- */
 
+static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev);
+
+/* Public entry: if the focused window uses a per-window font (the Editor's doc
+ * font), push it so text hit-testing (caret placement, reveal) measures with
+ * the SAME face the renderer drew - otherwise a click lands on the wrong glyph. */
 unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
+{
+    unoui_window *fw = (ui->focus_win >= 0 && ui->focus_win < ui->nwin)
+                       ? ui->win[ui->focus_win] : 0;
+    int pushed = (fw && fw->font_slot != UI_FONT_INHERIT && unoui_font_push != 0);
+    unoui_action a;
+    if (pushed) unoui_font_push(fw->font_slot);
+    a = handle_inner(ui, ev);
+    if (pushed) unoui_font_pop();
+    return a;
+}
+
+static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
 {
     /* fullscreen: the window's canvas owns all input (TICK still blinks) */
     if (ui->full) {
