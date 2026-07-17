@@ -20,6 +20,9 @@ Newest at the top. Check items off as they're confirmed on the X1.
       the bitmap monospace until you're happy with TTF. **[QEMU✓ render]**
 - [ ] **Resizable windows** — drag a window's bottom-right grip; content reflows.
       **[HW — needs pointer]**
+- [ ] **Calendar date-picker** — Control Panel → "Pick date..." opens the month
+      grid; the chevrons page months and clicking a day sets the clock.
+      **[HW — needs pointer]** (renders correctly in QEMU)
 
 ## Newest batch — network loading + the Aurora visual overhaul
 
