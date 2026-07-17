@@ -31,5 +31,9 @@ const uno_usb_dev *uno_xhci_dev(int i);
 
 /* Diagnostics for the System app. */
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err);
+/* enumeration debug: slot id (or -completion_code), Address Device completion,
+ * descriptor result (1=ok, -1=none), and the port speed. */
+void uno_xhci_diag(int *slot, int *addr_cc, int *desc, int *speed);
+void uno_xhci_diag2(unsigned *usbsts, unsigned *ev0, int *disc); /* USBSTS, 1st event, disconnect count */
 
 #endif

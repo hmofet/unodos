@@ -13,11 +13,17 @@ int  uno_xhci_dev_count(void) { return 0; }
 const uno_usb_dev *uno_xhci_dev(int i) { (void)i; return 0; }
 void uno_xhci_status(int *p, int *n, int *d, unsigned *e)
 { if (p)*p=0; if (n)*n=0; if (d)*d=0; if (e)*e=0; }
+void uno_xhci_diag(int *s, int *a, int *d, int *sp)
+{ if (s)*s=0; if (a)*a=0; if (d)*d=0; if (sp)*sp=0; }
+void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc) { if (sts)*sts=0; if (ev0)*ev0=0; if (disc)*disc=0; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
 #include "pc64_pci.h"
 #include <stdint.h>
+
+/* detach the firmware's USB driver from this controller first (uefi_main) */
+int uno_pc64_pci_disconnect(int bus, int dev, int fn);
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -47,6 +53,7 @@ typedef unsigned long long u64;
 #define CMD_INTE  (1u<<2)
 #define STS_HCH   (1u<<0)
 #define STS_CNR   (1u<<11)
+#define STS_HCE   (1u<<12)   /* host controller error (fatal) */
 
 #define PORTSC_CCS (1u<<0)    /* current connect status */
 #define PORTSC_PED (1u<<1)    /* port enabled */
@@ -55,8 +62,9 @@ typedef unsigned long long u64;
 #define PORTSC_CSC (1u<<17)   /* connect status change */
 #define PORTSC_PRC (1u<<21)   /* port reset change */
 #define PORTSC_SPEED(v) (((v)>>10)&0xF)
-/* write-1-to-clear change bits live in PORTSC; preserve the rest when writing */
-#define PORTSC_RW1CS (PORTSC_CSC|PORTSC_PRC|(1u<<18)|(1u<<19)|(1u<<20)|(1u<<22)|(1u<<23))
+/* bits that must be cleared before writing PORTSC back: the write-1-to-clear
+ * change bits (17-23) AND PED (bit1, which is write-1-to-DISABLE the port). */
+#define PORTSC_RW1CS (PORTSC_PED|PORTSC_CSC|PORTSC_PRC|(1u<<18)|(1u<<19)|(1u<<20)|(1u<<22)|(1u<<23))
 
 /* ---- runtime + interrupter 0 (base + RTSOFF) ----------------------------- */
 #define RT_IR0      0x20
@@ -94,12 +102,25 @@ static struct { u64 base; u32 size; u32 rsvd; } g_erst[1] __attribute__((aligned
 static u64   g_scratch_arr[MAX_SCRATCH] __attribute__((aligned(64)));
 static u8    g_scratch_buf[MAX_SCRATCH][4096] __attribute__((aligned(4096)));
 
+/* per-device: input context (control+slot+ep0), output device context, and an
+ * EP0 (control) transfer ring, all 64-byte aligned. */
+#define MAX_DEV 8
+#define EP0_RING_SZ 16
+static u8    g_inctx[MAX_DEV][2048]  __attribute__((aligned(64)));
+static u8    g_devctx[MAX_DEV][2048] __attribute__((aligned(64)));
+static trb_t g_ep0[MAX_DEV][EP0_RING_SZ] __attribute__((aligned(64)));
+static int   g_ep0_i[MAX_DEV], g_ep0_cyc[MAX_DEV];
+static u8    g_descbuf[256] __attribute__((aligned(64)));
+static uno_usb_dev g_devs[MAX_DEV];
+
 /* ---- state --------------------------------------------------------------- */
 static volatile u8 *g_cap;         /* MMIO base */
 static volatile u8 *g_op, *g_rt, *g_db;
 static int g_caplen, g_csz, g_maxslots, g_maxports;
 static int g_present, g_nports_conn, g_ndevs;
 static unsigned g_err;             /* stage/failure code for the diagnostic */
+static int g_dbg_slot, g_dbg_addr, g_dbg_desc, g_dbg_speed, g_dbg_disc; /* enum diagnostics */
+static unsigned g_dbg_sts, g_dbg_ev0;   /* USBSTS + first event TRB control */
 static int g_cmd_i, g_cmd_cyc;     /* command ring enqueue + producer cycle */
 static int g_evt_i, g_evt_cyc;     /* event ring dequeue + consumer cycle */
 
@@ -150,6 +171,7 @@ static int poll_event(trb_t *out, int budget)
 static int run_command(u64 param, u32 control, int *slot_out)
 {
     trb_t *t = &g_cmd[g_cmd_i];
+    u64 mytrb = (u64)(uintptr_t)t;           /* the completion event points back here */
     trb_t ev;
     t->param = param; t->status = 0;
     t->control = control | (u32)g_cmd_cyc;
@@ -162,46 +184,110 @@ static int run_command(u64 param, u32 control, int *slot_out)
     wr32(g_db, 0, 0);                        /* doorbell 0 = command ring */
     for (;;) {
         if (!poll_event(&ev, 2000000)) return 0;
-        if (TRB_GET_TYPE(ev.control) == TR_CMD_COMPLETE) {
+        /* only OUR command's completion (match the TRB pointer) - skip stale or
+         * other events so a leftover completion can't be mistaken for this one */
+        if (TRB_GET_TYPE(ev.control) == TR_CMD_COMPLETE && ev.param == mytrb) {
             if (slot_out) *slot_out = (ev.control >> 24) & 0xFF;
             return (ev.status >> 24) & 0xFF;
         }
-        /* ignore port-status-change / stray events and keep waiting */
     }
 }
+
+static void mdelay(int ms) { while (ms-- > 0) { volatile int n = 200000; while (n-- > 0) __asm__ volatile(""); } }
 
 static void reset_port(int p)
 {
     u32 sc = rd32(g_op, OP_PORTSC(p));
     wr32(g_op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PR | PORTSC_PP);
-    { int t = 500000; while (t-- > 0) { sc = rd32(g_op, OP_PORTSC(p));
+    { int t = 1000000; while (t-- > 0) { sc = rd32(g_op, OP_PORTSC(p));
         if (sc & PORTSC_PRC) break; spin(20); } }
     wr32(g_op, OP_PORTSC(p), (rd32(g_op, OP_PORTSC(p)) & ~PORTSC_RW1CS) | PORTSC_PRC); /* ack */
-    { int t = 200000; while (t--) spin(4); }
+    mdelay(20);                              /* USB reset recovery (>=10ms) before addressing */
 }
 
-int uno_xhci_init(void)
+/* ---- enumeration: Enable Slot -> Address Device -> GET_DESCRIPTOR --------- */
+static void ctx_wr(u8 *ctx, int off, u32 v) { *(volatile u32 *)(ctx + off) = v; }
+static int  mps_for_speed(int sp) { return sp == 4 ? 512 : sp == 3 ? 64 : 8; }
+
+/* one control transfer: GET_DESCRIPTOR(device) into `out`. 1 on success. */
+static int get_device_descriptor(int di, int slot, u8 *out, int len)
 {
-    pci_dev d; u64 bar; u32 hcs1, hcs2, hcc; int i, nscratch, tries;
+    trb_t *ring = g_ep0[di];
+    int *ei = &g_ep0_i[di]; u32 cyc = (u32)g_ep0_cyc[di];
+    trb_t ev;
+    u64 setup = (u64)0x80 | ((u64)6 << 8) | ((u64)0x0100 << 16) | ((u64)0 << 32) | ((u64)len << 48);
+    /* Setup stage (immediate data, IN transfer) */
+    ring[*ei].param = setup; ring[*ei].status = 8;
+    ring[*ei].control = TRB_TYPE(2) | (1u<<6) | (3u<<16) | cyc; (*ei)++;
+    /* Data stage (IN) */
+    ring[*ei].param = (u64)(uintptr_t)out; ring[*ei].status = (u32)len;
+    ring[*ei].control = TRB_TYPE(3) | (1u<<16) | cyc; (*ei)++;
+    /* Status stage (OUT, interrupt-on-completion) */
+    ring[*ei].param = 0; ring[*ei].status = 0;
+    ring[*ei].control = TRB_TYPE(4) | (1u<<5) | cyc; (*ei)++;
+    wr32(g_db, slot*4, 1);                       /* slot doorbell, EP0 (DCI 1) */
+    for (;;) {
+        int cc;
+        if (!poll_event(&ev, 3000000)) return 0;
+        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
+        cc = (ev.status >> 24) & 0xFF;
+        return cc == CC_SUCCESS || cc == 13 /* short packet is fine */;
+    }
+}
 
-    g_err = 1;
-    if (!find_xhci(&d)) return 0;
-    pci_enable_bus_master(&d);
-    bar = pci_bar(&d, 0);
-    if (!bar) return 0;
-    g_cap = (volatile u8 *)(uintptr_t)bar;
+static void enumerate_port(int port)
+{
+    int slot = 0, cc, di, speed, mps, st, i;
+    if (g_ndevs >= MAX_DEV) return;
+    di = g_ndevs;
+    speed = PORTSC_SPEED(rd32(g_op, OP_PORTSC(port)));
+    g_dbg_speed = speed;
 
-    g_caplen   = rd32(g_cap, CAP_CAPLENGTH) & 0xFF;
-    hcs1       = rd32(g_cap, CAP_HCSPARAMS1);
-    hcs2       = rd32(g_cap, CAP_HCSPARAMS2);
-    hcc        = rd32(g_cap, CAP_HCCPARAMS1);
-    g_maxslots = hcs1 & 0xFF;
-    g_maxports = (hcs1 >> 24) & 0xFF;
-    g_csz      = (hcc >> 2) & 1;               /* 1 => 64-byte contexts */
-    g_op = g_cap + g_caplen;
-    g_rt = g_cap + (rd32(g_cap, CAP_RTSOFF) & ~0x1Fu);
-    g_db = g_cap + (rd32(g_cap, CAP_DBOFF)  & ~0x3u);
-    if (g_maxslots > MAX_SLOTS_SUP) g_maxslots = MAX_SLOTS_SUP;
+    cc = run_command(0, TRB_TYPE(TR_ENABLE_SLOT), &slot);
+    g_dbg_slot = (cc == CC_SUCCESS) ? slot : -(int)cc;
+    g_dbg_sts  = rd32(g_op, OP_USBSTS);
+    g_dbg_ev0  = g_evt[0].control;
+    if (cc != CC_SUCCESS || slot == 0 || slot > g_maxslots) return;
+
+    for (i = 0; i < EP0_RING_SZ; i++) { g_ep0[di][i].param=0; g_ep0[di][i].status=0; g_ep0[di][i].control=0; }
+    g_ep0_i[di] = 0; g_ep0_cyc[di] = 1;
+    for (i = 0; i < 2048; i++) { g_inctx[di][i]=0; g_devctx[di][i]=0; }
+
+    st = g_csz ? 64 : 32; mps = mps_for_speed(speed);
+    ctx_wr(g_inctx[di], 4, 0x3);                                 /* add flags A0|A1 */
+    ctx_wr(g_inctx[di], st,    (1u<<27) | ((u32)speed<<20));     /* slot: 1 ctx entry, speed */
+    ctx_wr(g_inctx[di], st+4,  ((u32)port<<16));                 /* slot: root hub port */
+    ctx_wr(g_inctx[di], 2*st+4, ((u32)mps<<16) | (4u<<3) | (3u<<1)); /* EP0: Control, CErr=3, MPS */
+    { u64 tr = (u64)(uintptr_t)g_ep0[di] | 1u;                   /* TR dequeue ptr + DCS */
+      ctx_wr(g_inctx[di], 2*st+8,  (u32)tr);
+      ctx_wr(g_inctx[di], 2*st+12, (u32)(tr>>32)); }
+    ctx_wr(g_inctx[di], 2*st+16, 8);                             /* avg TRB length */
+
+    g_dcbaa[slot] = (u64)(uintptr_t)g_devctx[di];               /* output ctx, before Address Device */
+    cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_ADDRESS_DEV) | ((u32)slot<<24), 0);
+    g_dbg_addr = (int)cc;
+    if (cc != CC_SUCCESS) return;
+    mdelay(2);                                                  /* let the address settle */
+
+    for (i = 0; i < 18; i++) g_descbuf[i] = 0;
+    g_dbg_desc = get_device_descriptor(di, slot, g_descbuf, 18) ? g_descbuf[1] : -1;
+    if (g_dbg_desc != 1) return;                                /* must be a device descriptor */
+    g_devs[di].slot = slot; g_devs[di].port = port; g_devs[di].speed = speed;
+    g_devs[di].vendor  = (u16)(g_descbuf[8]  | (g_descbuf[9]  << 8));
+    g_devs[di].product = (u16)(g_descbuf[10] | (g_descbuf[11] << 8));
+    g_devs[di].dev_class    = g_descbuf[4];
+    g_devs[di].dev_subclass = g_descbuf[5];
+    g_devs[di].dev_proto    = g_descbuf[6];
+    g_ndevs++;
+}
+
+/* one bring-up attempt: reset -> rings -> run -> port scan -> enumerate.
+ * Returns 1 if the controller ran (whether or not a device enumerated), 0 if
+ * reset/run failed. HCE is checked by the caller so it can retry. */
+static int xhci_bringup(void)
+{
+    u32 hcs2 = rd32(g_cap, CAP_HCSPARAMS2);
+    int i, nscratch, tries;
 
     g_err = 2;                                 /* wait for Controller Not Ready */
     for (tries = 1000000; (rd32(g_op, OP_USBSTS) & STS_CNR) && tries; tries--) spin(4);
@@ -249,9 +335,7 @@ int uno_xhci_init(void)
     if (rd32(g_op, OP_USBSTS) & STS_HCH) return 0;
 
     g_present = 1; g_err = 0;
-
-    /* sanity: a No-Op command should complete (proves the rings + doorbell) */
-    (void)run_command(0, TRB_TYPE(TR_NOOP_CMD), 0);
+    mdelay(50);                        /* let the controller + any firmware activity settle */
 
     /* power + reset every root port, count the connected ones */
     g_nports_conn = 0;
@@ -261,13 +345,53 @@ int uno_xhci_init(void)
                                  { int t=20000; while(t--) spin(4); } }
         sc = rd32(g_op, OP_PORTSC(i));
         if (sc & PORTSC_CCS) { reset_port(i);
-            if (rd32(g_op, OP_PORTSC(i)) & PORTSC_CCS) g_nports_conn++; }
+            if (rd32(g_op, OP_PORTSC(i)) & (PORTSC_CCS|PORTSC_PED)) {
+                g_nports_conn++;
+                enumerate_port(i);           /* Enable Slot -> Address Device -> descriptor */
+            } }
     }
     return 1;
 }
 
+int uno_xhci_init(void)
+{
+    pci_dev d; u64 bar; u32 hcs1, hcc; int attempt;
+
+    g_err = 1;
+    if (!find_xhci(&d)) return 0;
+    g_dbg_disc = uno_pc64_pci_disconnect(d.bus, d.dev, d.fn);   /* take it from the firmware first */
+    pci_enable_bus_master(&d);
+    bar = pci_bar(&d, 0);
+    if (!bar) return 0;
+    g_cap = (volatile u8 *)(uintptr_t)bar;
+
+    g_caplen   = rd32(g_cap, CAP_CAPLENGTH) & 0xFF;
+    hcs1       = rd32(g_cap, CAP_HCSPARAMS1);
+    hcc        = rd32(g_cap, CAP_HCCPARAMS1);
+    g_maxslots = hcs1 & 0xFF;
+    g_maxports = (hcs1 >> 24) & 0xFF;
+    g_csz      = (hcc >> 2) & 1;               /* 1 => 64-byte contexts */
+    g_op = g_cap + g_caplen;
+    g_rt = g_cap + (rd32(g_cap, CAP_RTSOFF) & ~0x1Fu);
+    g_db = g_cap + (rd32(g_cap, CAP_DBOFF)  & ~0x3u);
+    if (g_maxslots > MAX_SLOTS_SUP) g_maxslots = MAX_SLOTS_SUP;
+
+    /* A fresh HCRST + re-init recovers from an intermittent HC error (the
+     * firmware-handoff race), so retry a few times until it comes up clean and
+     * enumerates any connected device. */
+    for (attempt = 0; attempt < 5; attempt++) {
+        g_present = 0; g_ndevs = 0; g_nports_conn = 0;
+        if (!xhci_bringup()) { mdelay(20); continue; }
+        if (!(rd32(g_op, OP_USBSTS) & STS_HCE) &&
+            (g_nports_conn == 0 || g_ndevs > 0)) return 1;   /* clean + enumerated */
+        mdelay(20);                                          /* HCE or nothing found: retry */
+    }
+    return g_present;
+}
+
 int uno_xhci_dev_count(void) { return g_ndevs; }
-const uno_usb_dev *uno_xhci_dev(int i) { (void)i; return 0; }   /* Phase B */
+const uno_usb_dev *uno_xhci_dev(int i)
+{ return (i >= 0 && i < g_ndevs) ? &g_devs[i] : 0; }
 
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err)
 {
@@ -276,5 +400,15 @@ void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err)
     if (ndevs)   *ndevs   = g_ndevs;
     if (err)     *err     = g_err;
 }
+
+void uno_xhci_diag(int *slot, int *addr_cc, int *desc, int *speed)
+{
+    if (slot)    *slot    = g_dbg_slot;
+    if (addr_cc) *addr_cc = g_dbg_addr;
+    if (desc)    *desc    = g_dbg_desc;
+    if (speed)   *speed   = g_dbg_speed;
+}
+void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc)
+{ if (sts) *sts = g_dbg_sts; if (ev0) *ev0 = g_dbg_ev0; if (disc) *disc = g_dbg_disc; }
 
 #endif /* UNO_XHCI */
