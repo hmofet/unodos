@@ -406,6 +406,16 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
         base = (unsigned char *)(uintptr_t)seg_base[tgt_sec];
         rel  = (const Elf32_Rela *)(img + rs->sh_offset);
         nrel = rs->sh_size / sizeof(Elf32_Rela);
+        /* S1: the write target base+r_offset must stay inside the target
+         * section, else a crafted r_offset is an arbitrary 32-bit write into
+         * EE RAM (no MMU). sh_size bounds the region copied to seg_base. */
+        {
+            Elf32_Word tgt_size = sh[tgt_sec].sh_size;
+            for (j = 0; j < nrel; j++) {
+                Elf32_Word ro = rel[j].r_offset;
+                if (ro > tgt_size || tgt_size - ro < 4) { free(blob); return NULL; }
+            }
+        }
         gHiN = 0;                              /* reset HI16 queue per section */
         for (j = 0; j < nrel; j++) {
             Elf32_Word type = ELF32_R_TYPE(rel[j].r_info);
