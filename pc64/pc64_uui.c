@@ -489,14 +489,16 @@ static void build_legacy(int a)
         aw = 320; ah = 240;
         unoui_window_init(&g_win[a], app_name(a), 30, 16,
                           aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
-        unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_game_canvas(g));
+        unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_game_canvas(g)));
+        g_win[a].flags |= UI_WIN_RESIZE;    /* the game canvas scales to the rect */
         return;
     }
     if (a == EX_BROWSER) {             /* native windowed browser canvas */
         aw = 440; ah = 300;
         unoui_window_init(&g_win[a], app_name(a), 24, 14,
                           aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
-        unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_browser_canvas());
+        unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_browser_canvas()));
+        g_win[a].flags |= UI_WIN_RESIZE;    /* text reflows to the new width */
         return;
     }
     cv = &g_lcanvas[li];
@@ -510,7 +512,8 @@ static void build_legacy(int a)
     unoui_window_init(&g_win[a], app_name(a), 40, 20,
                       aw + 2 * m->frame_w + 2 * m->pad,
                       (ah - APP_TBAR) + m->title_h + 2 * m->pad + m->frame_w);
-    unoui_add_canvas(&g_win[a], 0, 0, aw, ah - APP_TBAR, cv);
+    unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah - APP_TBAR, cv));
+    g_win[a].flags |= UI_WIN_RESIZE;
 }
 
 static void open_app(int a)

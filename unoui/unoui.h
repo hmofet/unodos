@@ -125,7 +125,8 @@ extern unoui_icon_fn unoui_icon_art;
 enum {
     UI_WIN_BARE   = 1 << 0,   /* no chrome (frame/titlebar), not draggable    */
     UI_WIN_BOTTOM = 1 << 1,   /* pinned behind normal windows (the desktop)   */
-    UI_WIN_TOP    = 1 << 2    /* pinned in front of normal windows (taskbar)  */
+    UI_WIN_TOP    = 1 << 2,   /* pinned in front of normal windows (taskbar)  */
+    UI_WIN_RESIZE = 1 << 3    /* draggable bottom-right grip; fill widgets reflow */
 };
 
 typedef struct unoui_window {
@@ -138,7 +139,17 @@ typedef struct unoui_window {
     int           content_x;  /* set by the window painter; canonical origin  */
     int           content_y;
     int           font_slot;  /* per-window font override: -2 inherit, -1 bitmap, 0.. TTF */
+    int           min_w, min_h; /* resize floor (UI_WIN_RESIZE)                */
 } unoui_window;
+
+struct unoui_theme;           /* fwd (defined in unoui_theme.h) */
+
+/* widget flag (persistent, in widget->flags): a fill widget's w/h are stretched
+ * to the window content rect on resize, so canvas apps reflow. */
+#define UI_WF_FILL (1 << 12)
+void unoui_widget_fill(unoui_widget *w);          /* mark a widget as fill */
+/* recompute fill widgets' sizes from the window's current content rect */
+void unoui_reflow_window(const struct unoui_theme *, unoui_window *);
 
 /* per-window font override hooks (set by the platform; NULL = ignored). When a
  * window's font_slot != UI_FONT_INHERIT, the renderer wraps its widget drawing
@@ -221,7 +232,7 @@ typedef struct {
 /* mouse-capture / drag modes (shared by the input + render layers) */
 enum {
     UI_CAP_NONE = 0, UI_CAP_WINDOW, UI_CAP_BUTTON, UI_CAP_VTHUMB, UI_CAP_HTHUMB,
-    UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST
+    UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST, UI_CAP_RESIZE
 };
 
 /* result of feeding one event: did a widget activate / change? */

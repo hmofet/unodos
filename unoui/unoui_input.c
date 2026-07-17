@@ -565,6 +565,18 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
             if (ui->drag_y > ui->screen_h - 16) ui->drag_y = ui->screen_h - 16;
             (void)win; return NO_ACT;
         }
+        case UI_CAP_RESIZE: {
+            unoui_window *win = ui->win[ui->cap_win];
+            int nw = (ev->x - ui->grab_dx) - win->r.x;
+            int nh = (ev->y - ui->grab_dy) - win->r.y;
+            if (nw < win->min_w) nw = win->min_w;
+            if (nh < win->min_h) nh = win->min_h;
+            if (win->r.x + nw > ui->screen_w) nw = ui->screen_w - win->r.x;
+            if (win->r.y + nh > ui->screen_h) nh = ui->screen_h - win->r.y;
+            win->r.w = nw; win->r.h = nh;
+            unoui_reflow_window(ui->theme, win);
+            return NO_ACT;
+        }
         case UI_CAP_VTHUMB: return set_vscroll(ui, ev->y);
         case UI_CAP_HTHUMB: return set_hscroll(ui, ev->x);
         case UI_CAP_SLIDER: return set_slider(ui, ev->x);
@@ -609,6 +621,17 @@ unoui_action unoui_handle(unoui_ui *ui, const unoui_event *ev)
         if (wn < 0) { ui->focus_wi = -1; return NO_ACT; }
         ui->focus_win = raise_within_rank(ui, wn);   /* pin-aware; keeps bars */
         win = ui->win[ui->focus_win];
+
+        if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
+            int gs = 16;                             /* bottom-right resize grip */
+            if (ev->x >= win->r.x + win->r.w - gs && ev->x < win->r.x + win->r.w &&
+                ev->y >= win->r.y + win->r.h - gs && ev->y < win->r.y + win->r.h) {
+                ui->cap_mode = UI_CAP_RESIZE; ui->cap_win = ui->focus_win;
+                ui->grab_dx = ev->x - (win->r.x + win->r.w);
+                ui->grab_dy = ev->y - (win->r.y + win->r.h);
+                return NO_ACT;
+            }
+        }
 
         if (!(win->flags & UI_WIN_BARE) &&           /* bare windows don't drag */
             ev->y >= win->r.y && ev->y < win->r.y + ui->theme->m.title_h) {
