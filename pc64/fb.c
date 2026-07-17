@@ -180,10 +180,31 @@ void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int co
 void fb_round_rect(int x, int y, int w, int h, int rad, fb_px c)
 { fb_round_rect_a(x, y, w, h, rad, c, 255, FB_CORNER_ALL); }
 
+void fb_blend_pixel_sub(int x, int y, fb_px fg, int aR, int aG, int aB)
+{
+    int x0, y0, x1, y1; clip_bounds(&x0, &y0, &x1, &y1);
+    if (x < x0 || x >= x1 || y < y0 || y >= y1) return;
+    {
+        fb_px *p = &fb[y * FB_W + x], d = *p;
+        int dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
+        int fr = fg & 0xFF, fgn = (fg >> 8) & 0xFF, fbn = (fg >> 16) & 0xFF;
+        int r = dr + ((fr - dr) * aR) / 255;
+        int g = dg + ((fgn - dg) * aG) / 255;
+        int b = db + ((fbn - db) * aB) / 255;
+        *p = 0xFF000000u | ((fb_px)b << 16) | ((fb_px)g << 8) | (fb_px)r;
+    }
+}
+
+/* optional text provider (TrueType); NULL = the built-in bitmap font */
+static const fb_font *g_font = 0;
+void fb_set_font(const fb_font *f) { g_font = f; }
+const fb_font *fb_get_font(void) { return g_font; }
+
 int fb_glyph(int x, int y, int ch, fb_px fg, long bg)
 {
     int r, c, x0, y0, x1, y1;
     const unsigned char *g;
+    if (g_font && g_font->glyph) return g_font->glyph(x, y, ch, fg, bg);
     clip_bounds(&x0, &y0, &x1, &y1);
     if (ch < UNO_FONT_FIRST || ch >= UNO_FONT_FIRST + UNO_FONT_COUNT) ch = ' ';
     g = uno_font8x8[ch - UNO_FONT_FIRST];
@@ -210,6 +231,7 @@ int fb_text(int x, int y, const char *s, fb_px fg, long bg)
 int fb_text_w(const char *s)
 {
     int n = 0;
+    if (g_font && g_font->text_w) return g_font->text_w(s);
     while (*s++) n++;
     return n * 8;
 }

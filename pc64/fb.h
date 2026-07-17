@@ -83,6 +83,22 @@ enum { FB_CORNER_TL = 1, FB_CORNER_TR = 2, FB_CORNER_BL = 4, FB_CORNER_BR = 8,
 void fb_round_rect  (int x, int y, int w, int h, int rad, fb_px c);
 void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int corners);
 
+/* per-channel (subpixel/LCD) blend of `fg` over the pixel, alphas 0..255. With
+ * aR==aG==aB this is a plain grayscale-AA plot. Clip-safe. */
+void fb_blend_pixel_sub(int x, int y, fb_px fg, int aR, int aG, int aB);
+
+/* Optional text provider: when registered, fb_glyph/fb_text/fb_text_w route
+ * through it (e.g. a TrueType engine) instead of the built-in 8x8 bitmap font.
+ * Register NULL to fall back to the bitmap font. Additive + default-safe: ports
+ * that never register one are unaffected. */
+typedef struct {
+    int (*glyph) (int x, int y, int cp, fb_px fg, long bg);  /* draw; return advanced x */
+    int (*text_w)(const char *s);                            /* pixel width of s        */
+    int (*height)(void);                                     /* line height in px       */
+} fb_font;
+void fb_set_font(const fb_font *f);      /* NULL = built-in bitmap font */
+const fb_font *fb_get_font(void);
+
 /* 8x8 text. bg < 0 = transparent (glyph pixels only). Returns the x past the
    string. Each glyph advances 8px. */
 int  fb_glyph(int x, int y, int ch, fb_px fg, long bg);

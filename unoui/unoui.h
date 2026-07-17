@@ -137,7 +137,15 @@ typedef struct unoui_window {
     int           nw;
     int           content_x;  /* set by the window painter; canonical origin  */
     int           content_y;
+    int           font_slot;  /* per-window font override: -2 inherit, -1 bitmap, 0.. TTF */
 } unoui_window;
+
+/* per-window font override hooks (set by the platform; NULL = ignored). When a
+ * window's font_slot != UI_FONT_INHERIT, the renderer wraps its widget drawing
+ * in push/pop so that window's content uses a different face. */
+#define UI_FONT_INHERIT (-2)
+extern void (*unoui_font_push)(int slot);
+extern void (*unoui_font_pop)(void);
 
 struct unoui_theme;           /* defined in unoui_theme.h */
 

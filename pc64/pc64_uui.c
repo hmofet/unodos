@@ -18,6 +18,7 @@
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
 #include "pc64_browser.h"    /* the web browser (native windowed canvas) */
 #include "pc64_icons.h"      /* per-app icon artwork */
+#include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include <string.h>
 
@@ -72,7 +73,7 @@ static const char *app_short(int a)
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_FULL, ID_DATE, ID_TIME, ID_SETDT,
+       ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -134,39 +135,54 @@ static const unoui_menu g_menus[] = { { "File", m_file, 3 }, { "Edit", m_edit, 3
  *      height is win.h - title_h(18) - 2*pad(10) - frame ~= win.h - 40) ---- */
 static unoui_widget *g_sp_y, *g_sp_mo, *g_sp_d, *g_sp_h, *g_sp_mi;
 
+static const char *g_font_items[6];
+static int         g_font_n;
+static void build_font_items(void)
+{
+    int i, nf = uno_font_count();
+    g_font_items[0] = "System (mono)";
+    for (i = 0; i < nf && i < 5; i++) g_font_items[1 + i] = uno_font_name(i);
+    g_font_n = 1 + (nf > 5 ? 5 : nf);
+}
+
 static void build_ctrl(unoui_window *w)
 {
     unoui_widget *x; int i;
     int yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
-    unoui_window_init(w, "Control Panel", 150, 24, 270, 250);
+    build_font_items();
+    unoui_window_init(w, "Control Panel", 150, 24, 270, 272);
     unoui_add_label(w, 8, 8, "Theme:");
     x = unoui_add_dropdown(w, 74, 4, 170, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
     unoui_add_label(w, 8, 34, "Resolution:");
     x = unoui_add_dropdown(w, 100, 30, 144, g_res_items, g_res_n, 0); x->id = ID_RES;
-    unoui_add_check(w, 8, 60, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
-    unoui_add_check(w, 130, 60, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
-    unoui_add_label(w, 8, 86, "Volume");
-    x = unoui_add_slider(w, 66, 82, 178, 0, 100, 70); x->id = ID_VOL;
-    unoui_add_label(w, 8, 110, "UI scale");
-    x = unoui_add_spinner(w, 72, 106, 70, 1, 4, 1); x->id = ID_SCALE;
-    x = unoui_add_button(w, 150, 106, 94, "About", 0); x->id = ID_ABOUT;
+    unoui_add_label(w, 8, 60, "Font:");
+    x = unoui_add_dropdown(w, 74, 56, 170, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
+    unoui_add_check(w, 8, 86, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
+    unoui_add_check(w, 130, 86, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
+    unoui_add_label(w, 8, 112, "Volume");
+    x = unoui_add_slider(w, 66, 108, 178, 0, 100, 70); x->id = ID_VOL;
+    unoui_add_label(w, 8, 136, "UI scale");
+    x = unoui_add_spinner(w, 72, 132, 70, 1, 4, 1); x->id = ID_SCALE;
+    x = unoui_add_button(w, 150, 132, 94, "About", 0); x->id = ID_ABOUT;
     /* --- date & time (firmware RTC) --- */
-    unoui_add_sep(w, 8, 132, 236);
-    unoui_add_label(w, 8, 140, "Set date & time:");
+    unoui_add_sep(w, 8, 158, 236);
+    unoui_add_label(w, 8, 166, "Set date & time:");
     uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
-    g_sp_y  = unoui_add_spinner(w, 8,   156, 58, 2000, 2099, yy);
-    g_sp_mo = unoui_add_spinner(w, 70,  156, 44, 1, 12, mo);
-    g_sp_d  = unoui_add_spinner(w, 118, 156, 44, 1, 31, dd);
-    g_sp_h  = unoui_add_spinner(w, 166, 156, 40, 0, 23, hh);
-    g_sp_mi = unoui_add_spinner(w, 210, 156, 40, 0, 59, mi);
-    x = unoui_add_button(w, 8, 182, 100, "Apply Clock", 0); x->id = ID_SETDT;
+    g_sp_y  = unoui_add_spinner(w, 8,   182, 58, 2000, 2099, yy);
+    g_sp_mo = unoui_add_spinner(w, 70,  182, 44, 1, 12, mo);
+    g_sp_d  = unoui_add_spinner(w, 118, 182, 44, 1, 31, dd);
+    g_sp_h  = unoui_add_spinner(w, 166, 182, 40, 0, 23, hh);
+    g_sp_mi = unoui_add_spinner(w, 210, 182, 40, 0, 59, mi);
+    x = unoui_add_button(w, 8, 208, 100, "Apply Clock", 0); x->id = ID_SETDT;
+    x = unoui_add_button(w, 116, 208, 128, "Pick date...", 0); x->id = ID_CAL;
 }
 static void build_edit(unoui_window *w)
 {
     unoui_widget *x;
-    unoui_window_init(w, "Editor", 150, 60, 300, 288);
+    build_font_items();
+    unoui_window_init(w, "Editor", 150, 60, 300, 314);
     unoui_text_init(&g_body_t, g_body, sizeof g_body, 1);
     unoui_text_set(&g_body_t, "unoui is the whole UnoDOS UI now.\n"
                               "Open apps from the launcher; drag,\n"
@@ -185,7 +201,10 @@ static void build_edit(unoui_window *w)
     x = unoui_add_button(w, 4,  198, 80, "Save", UI_F_DEFAULT); x->id = ID_SAVE;
     x = unoui_add_button(w, 90, 198, 80, "Open", 0); x->id = ID_OPEN;
     x = unoui_add_button(w, 176, 198, 80, "New", 0); x->id = ID_NEWF;
-    unoui_add_label(w, 4, 228, g_status);
+    unoui_add_label(w, 4, 228, "Doc font:");
+    x = unoui_add_dropdown(w, 78, 224, 178, g_font_items, g_font_n,
+                           w->font_slot == UI_FONT_INHERIT ? 0 : w->font_slot + 1); x->id = ID_EFONT;
+    unoui_add_label(w, 4, 256, g_status);
 }
 static void build_files(unoui_window *w)
 {
@@ -718,6 +737,9 @@ static void on_action(const unoui_action *a)
         fmt_clock(0);
         break;
     case ID_FULL:  unoui_fullscreen(&UI, &g_win[APP_DEMO]); break;   /* go fullscreen */
+    case ID_FONT:  uno_font_use(a->value - 1); break;   /* 0 = System bitmap, 1.. = TTF */
+    case ID_EFONT: g_win[APP_EDIT].font_slot =          /* Editor per-document font */
+                       (a->value <= 0) ? UI_FONT_INHERIT : a->value - 1; break;
     default: break;
     }
 }
@@ -805,6 +827,8 @@ int main(void)
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
+    unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
+    unoui_font_pop  = uno_font_pop;
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
@@ -812,6 +836,9 @@ int main(void)
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
+    uno_font_set_subpixel(1);           /* subpixel AA when a TTF is picked */
+    /* default stays the built-in 8x8 bitmap (monospace) - a safe, tested
+     * fallback; the Control Panel Font picker opts into a TTF face. */
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
