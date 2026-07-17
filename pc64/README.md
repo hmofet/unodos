@@ -72,7 +72,8 @@ and all the drivers; only the UI layer differs.
   `runner.c`). Built only by `./build.sh legacy`.
 - **Drivers (linked by the build that needs them)** — `e1000.c` (native NIC),
   `net.c` (TCP/IP stack), `tls.c` + `bearssl/` (TLS), `../uno3d/*` (3D),
-  `i2c_hid.c` (native trackpad, opt-in). Documented in their own sections.
+  `i2c_hid.c` (native trackpad, opt-in), `xhci.c` + `ax88179.c` (USB host +
+  USB Ethernet, opt-in `-DUNO_XHCI`). Documented in their own sections.
 
 ## Networking (native e1000 + hand-rolled TCP/IP)
 
@@ -99,6 +100,50 @@ bring-up — which is how the LLP64 footgun below was caught.
 > `unsigned long long` / `uintptr_t` for every DMA address. On real hardware
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
+
+## USB (xHCI host controller + USB Ethernet)
+
+The X1 Carbon has no wired NIC, so networking on metal needs a **USB Ethernet
+adapter** — which needs a **USB host stack**. `xhci.c` is a polled xHCI (USB
+3.0) driver, gated behind **`-DUNO_XHCI`** (inert stubs otherwise, so the
+shipped image is byte-identical). It finds the controller by PCI class
+`0C/03` prog-if `30`, detaches the firmware's USB driver first
+(`gBS->DisconnectController` on the matching `EFI_PCI_IO` handle — essential,
+or the firmware fights it), resets and runs it (CNR wait → HCRST → CONFIG →
+scratchpad → DCBAA → command ring → event ring/ERST on interrupter 0 → RUN),
+powers/resets the root ports, and enumerates each connected device:
+**Enable Slot → input context (Slot + EP0, honouring the CSZ 32/64-byte
+stride) → Address Device → GET_DESCRIPTOR**. DMA uses static aligned `.bss`
+(identity-mapped under boot services, `phys == virt`, like `e1000`).
+
+On top sits a small **transfer API** (`control_xfer` = Setup/Data/Status via a
+cycle-managed ring with Link-TRB wrap; `poll_xfer` returns completion code +
+residual) exposing `uno_usb_control` / `get_config` / `set_config` and
+`setup_bulk` / `bulk_out` / `bulk_in` (Configure Endpoint + bulk rings) for
+class drivers.
+
+`ax88179.c` is the first such driver: **ASIX AX88179 / AX88179A USB Gigabit
+Ethernet** (VID `0x0b95`). It reads registers via `AX_ACCESS_MAC` vendor
+control transfers, discovers the bulk endpoints from the config descriptor,
+resets the PHY/clocks, reads the MAC, sets gigabit/full-duplex, and moves
+frames over the bulk endpoints (8-byte TX header; RX aggregation trailer with
+per-packet descriptors). It publishes a `uno_nic_t`, so `pc64_net_up()` — and
+therefore the whole TCP/IP + TLS/HTTPS + browser stack — falls back to it when
+no `e1000` is present.
+
+**Verified in QEMU** (`-device qemu-xhci,id=xhci -device usb-net,bus=xhci.0`):
+the controller inits and enumerates attached devices cleanly (the USB-net
+gadget reads `0525:a4a2`, a tablet `0627:0001`; both complete Address Device +
+GET_DESCRIPTOR). QEMU has no ASIX chip, so the AX88179 register init and the
+RX/TX framing are **metal-only** to verify — that is the job of the incoming
+adapter. `usbtest.py` boots QEMU with a USB-net gadget on the xHCI bus, and
+`-DUNO_DBGCON` traces per-port `slot`/`addr_cc`/`desc_cc`/`residual`/VID:PID to
+the QEMU debug console. The System app also shows `USB xHCI: up, N port, M dev`
+plus a diagnostic line, and an `ASIX vid:pid` line when an adapter is found.
+
+> **On real Intel xHCI** the BIOS→OS ownership handoff (**USBLEGSUP**, an xHCI
+> extended capability) is **not yet implemented** — if QEMU enumerates but a
+> physical machine does not, that is the likely cause.
 
 ## unoui shell — the DEFAULT UI (`./build.sh`)
 
@@ -248,8 +293,9 @@ panel); an `http://…` page fetched via SLIRP renders with its JavaScript runni
 (`shots/browser_network.png`); and an `https://…` page completes a **full TLS 1.2
 handshake + chain validation + RTC validity check** and renders (verified with a
 guestfwd TLS server whose cert chains to a test root injected into the bundle —
-`shots/browser_https.png`). A Wi-Fi / USB-Ethernet NIC for the X1 (which has no
-wired NIC) is the remaining network work.
+`shots/browser_https.png`). The X1 has no wired NIC, so on metal the browser
+rides a **USB Ethernet adapter** over the xHCI stack below (`ax88179.c` →
+`uno_nic_t`, tried after e1000 by `pc64_net_up`); Wi-Fi is the remaining gap.
 
 ## Native I2C-HID trackpad (foundation — needs hardware bring-up)
 
@@ -430,8 +476,11 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 2. **ExitBootServices** + own long-mode setup (GDT/IDT, APIC timer, PCIe
    ECAM via ACPI MCFG) — graduates the port from firmware-hosted to
    self-hosted (and makes DMA independent of the firmware identity map).
-3. **xHCI + USB HID** (`input`) — keyboard/mouse without firmware help; also
-   unblocks the mouse on every machine.
+3. **xHCI** (`input`/`nic`) — ✅ **host stack + USB Ethernet done** (QEMU-verified
+   enumeration; `xhci.c` + `ax88179.c`, opt-in `-DUNO_XHCI`), pending on-metal
+   verification of the AX88179 framing + real-Intel USBLEGSUP handoff. Still to
+   come on top: **USB HID** (keyboard/mouse without firmware help, unblocking the
+   mouse on every machine).
 4. **NVMe, then AHCI** (`block`) — real persistence: the FAT12 code in the
    core (and `unofs`) gets a device; apps go storage-loaded like PS2/DC
    (`pc64_modload.c` shrinks to a FAT read).
@@ -477,5 +526,8 @@ pc64/
 ├── tls.c tls.h bearssl/ tls_test/  # BearSSL TLS client (pinned key + CA/HTTPS)
 ├── tls_ca.c tls_ca.h mktrust.py    # bundled CA trust anchors (generated) for HTTPS
 ├── i2c_hid.c i2c_hid.h # native I2C-HID trackpad (opt-in, -DUNO_I2C_TRACKPAD)
+├── xhci.c xhci.h       # polled xHCI USB host + transfer API (opt-in, -DUNO_XHCI)
+├── ax88179.c ax88179.h # ASIX AX88179 USB Gigabit Ethernet -> uno_nic_t
+├── usbtest.py          # QEMU xHCI enumeration test (usb-net on the xHCI bus)
 └── shots/              # harness-captured evidence
 ```
