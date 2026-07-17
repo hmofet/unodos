@@ -32,7 +32,12 @@ void unoui_window_init(unoui_window *win, const char *title,
     win->title = title;
     win->r.x = x; win->r.y = y; win->r.w = w; win->r.h = h;
     win->active = 1;
+    win->font_slot = UI_FONT_INHERIT;
 }
+
+/* per-window font override hooks (platform-supplied; default no-ops) */
+void (*unoui_font_push)(int slot) = 0;
+void (*unoui_font_pop)(void) = 0;
 
 unoui_widget *unoui_add_label(unoui_window *w, int x, int y, const char *t)
 { return push(w, UI_LABEL, x, y, fb_text_w(t), 8, t); }
@@ -855,6 +860,8 @@ void unoui_render_ui(unoui_ui *ui)
             fb_set_clip(win->r.x + fw, win->r.y + th,
                         win->r.w - 2 * fw, win->r.h - th - fw);
         }
+        { int fontpushed = (win->font_slot != UI_FONT_INHERIT && unoui_font_push);
+          if (fontpushed) unoui_font_push(win->font_slot);    /* per-window doc font */
         for (i = 0; i < win->nw; i++) {
             unoui_widget *w = &win->w[i];
             int eff = w->flags, menuopen = -1;
@@ -869,6 +876,7 @@ void unoui_render_ui(unoui_ui *ui)
                 menuopen = ui->popup_menu;
             draw_one(d, t, win, w, eff, menuopen);
         }
+          if (fontpushed) unoui_font_pop(); }
         fb_reset_clip();
     }
     /* the open menu's popup deliberately extends past its window - draw it

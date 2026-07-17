@@ -40,7 +40,7 @@ if [ "$1" != "legacy" ]; then
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games js pc64_http pc64_browser pc64_icons e1000 net tls; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs i2c_hid uefi_main pc64_uui pc64_uui_apps pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # uno3d: the write-once 3D pipeline + soft rasteriser + Intel scaffold + game
@@ -76,6 +76,10 @@ if [ "$1" != "legacy" ]; then
     # sample docs on the ESP (a real FAT volume) for the browser to open
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
     printf '<h1>Disk HTML</h1><p>An <b>HTML</b> file loaded from the FAT volume by the pc64 browser.</p><ul><li>local disk</li><li>FAT32</li></ul>' > build/esp/PAGE.HTML
+    # bundle the open TrueType fonts on the ESP (the TTF engine loads them at runtime)
+    cp fonts/Sans.ttf   build/esp/SANS.TTF
+    cp fonts/Mono.ttf   build/esp/MONO.TTF
+    cp fonts/Ubuntu.ttf build/esp/UBUNTU.TTF
     ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"
     if [ "$1" = "run" ]; then
         OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
