@@ -90,14 +90,20 @@ void fb_invert_rect(int x, int y, int w, int h)
 /* ---- alpha blending + gradients (for modern/"Aurora"-style chrome) --------
  * Additive + default-safe: no existing caller is touched. Pixels are
  * 0xFFBBGGRR (see FB_RGB); alpha `a` is 0..255 (0 = keep dst, 255 = src). */
+/* round(x / 255) for x in 0..65025, no division. The modern chrome is
+ * alpha-blend heavy, so replacing the three per-pixel integer divides in the
+ * blend path with a multiply+shift is a large, broad speedup. */
+static inline unsigned div255(unsigned x) { return (x * 257u + 257u) >> 16; }
+
 static fb_px blend_px(fb_px d, fb_px s, int a)
 {
-    int dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
-    int sr = s & 0xFF, sg = (s >> 8) & 0xFF, sb = (s >> 16) & 0xFF;
-    int r = dr + ((sr - dr) * a) / 255;
-    int g = dg + ((sg - dg) * a) / 255;
-    int b = db + ((sb - db) * a) / 255;
-    return 0xFF000000u | ((fb_px)b << 16) | ((fb_px)g << 8) | (fb_px)r;
+    unsigned dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
+    unsigned sr = s & 0xFF, sg = (s >> 8) & 0xFF, sb = (s >> 16) & 0xFF;
+    unsigned na = 255u - (unsigned)a;         /* reformulate so both terms are >= 0 */
+    unsigned r = div255(dr * na + sr * (unsigned)a);
+    unsigned g = div255(dg * na + sg * (unsigned)a);
+    unsigned b = div255(db * na + sb * (unsigned)a);
+    return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
 void fb_blend_pixel(int x, int y, fb_px c, int a)
@@ -130,10 +136,11 @@ void fb_grad_v(int x, int y, int w, int h, fb_px top, fb_px bot)
     (void)ow; (void)oh;
     for (r = 0; r < h; r++) {
         int sy = (y + r) - oy;                       /* row within the full band */
-        int t = H > 1 ? (sy * 255) / (H - 1) : 0;
-        int cr = tr + ((br - tr) * t) / 255;
-        int cg = tg + ((bg - tg) * t) / 255;
-        int cb = tb + ((bb - tb) * t) / 255;
+        unsigned t = H > 1 ? (unsigned)(sy * 255) / (unsigned)(H - 1) : 0;
+        unsigned nt = 255u - t;
+        int cr = (int)div255((unsigned)tr * nt + (unsigned)br * t);
+        int cg = (int)div255((unsigned)tg * nt + (unsigned)bg * t);
+        int cb = (int)div255((unsigned)tb * nt + (unsigned)bb * t);
         fb_px c = 0xFF000000u | ((fb_px)cb << 16) | ((fb_px)cg << 8) | (fb_px)cr;
         fb_px *p = &fb[(y + r) * FB_W + x];
         for (j = 0; j < w; j++) p[j] = c;
@@ -156,7 +163,7 @@ static void round_corner(int bx, int by, int rad, int cx_left, int cy_top,
         else if (d2 >= R2 + band) cov = 0;
         else cov = 255*(R2 + band - d2)/(2*band);
         if (cov <= 0) continue;
-        a2 = (alpha >= 255) ? cov : cov*alpha/255;
+        a2 = (alpha >= 255) ? cov : (int)div255((unsigned)cov * (unsigned)alpha);
         fb_blend_pixel(bx+i, by+j, c, a2);
     }
 }
@@ -186,12 +193,12 @@ void fb_blend_pixel_sub(int x, int y, fb_px fg, int aR, int aG, int aB)
     if (x < x0 || x >= x1 || y < y0 || y >= y1) return;
     {
         fb_px *p = &fb[y * FB_W + x], d = *p;
-        int dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
-        int fr = fg & 0xFF, fgn = (fg >> 8) & 0xFF, fbn = (fg >> 16) & 0xFF;
-        int r = dr + ((fr - dr) * aR) / 255;
-        int g = dg + ((fgn - dg) * aG) / 255;
-        int b = db + ((fbn - db) * aB) / 255;
-        *p = 0xFF000000u | ((fb_px)b << 16) | ((fb_px)g << 8) | (fb_px)r;
+        unsigned dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
+        unsigned fr = fg & 0xFF, fgn = (fg >> 8) & 0xFF, fbn = (fg >> 16) & 0xFF;
+        unsigned r = div255(dr * (255u - (unsigned)aR) + fr  * (unsigned)aR);
+        unsigned g = div255(dg * (255u - (unsigned)aG) + fgn * (unsigned)aG);
+        unsigned b = div255(db * (255u - (unsigned)aB) + fbn * (unsigned)aB);
+        *p = 0xFF000000u | (b << 16) | (g << 8) | r;
     }
 }
 

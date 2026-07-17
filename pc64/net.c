@@ -502,8 +502,15 @@ static void ip_recv(const u8 *ip, int len)
 {
     int hl = (ip[0] & 0x0F) * 4;
     u8 proto = ip[9];
-    int plen = rd16(ip + 2) - hl;
-    if (len < hl || plen < 0) return;
+    int tot = rd16(ip + 2);         /* IP total length - attacker-controlled */
+    int plen;
+    if (hl < 20 || len < hl) return;
+    /* clamp the claimed total length to what we actually received: a short
+       frame whose header claims a huge length must never drive an L4 read past
+       the capture buffer (remote OOB read / info-leak). */
+    if (tot > len) tot = len;
+    plen = tot - hl;
+    if (plen < 0) return;
     if (!ip_eq(ip + 16, MYIP) && !(ip[16]==255&&ip[17]==255)) {
         /* not for us (and not broadcast) - but accept during DHCP (no IP yet) */
         if (g_dhcp_state && g_dhcp_state < 3) { /* allow */ }
@@ -581,6 +588,7 @@ int net_dns_query(const char *host, u8 out[4])
                 u16 type, rdl;
                 if ((r[i]&0xC0)==0xC0) i += 2;   /* compressed name */
                 else { while (i < n && r[i]) i += r[i]+1; i++; }
+                if (i + 10 > n) return 0;         /* name walk ran off the buffer */
                 type = (r[i]<<8)|r[i+1];
                 rdl  = (r[i+8]<<8)|r[i+9];
                 i += 10;
