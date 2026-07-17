@@ -178,6 +178,8 @@ static void row(short x, short y, const char *label, int res, const char *extra)
     if (extra && extra[0]) text_at(x + 180, y, extra, C_CYAN, C_BLUE, false);
 }
 
+static UiBtn gNetBtn;                       /* mouse-reachable "Re-run tests" */
+
 static void network_draw(UnoWin *w)
 {
     Rect r = w->bounds;
@@ -195,9 +197,16 @@ static void network_draw(UnoWin *w)
     row(x, y, "UDP (TFTP)", gRes[2], gUdpEcho); y += 14;
     row(x, y, "TCP echo", gRes[3], gTcpEcho); y += 14;
     row(x, y, "TLS (BearSSL)", gRes[5], gTlsInfo); y += 16;
-    text_at(x, y, gStep == S_DONE ? "Done.  R: re-run" :
+    text_at(x, y, gStep == S_DONE ? "Done." :
             gStep == S_TLS ? "TLS handshake..." : "testing...",
             C_CYAN, C_BLUE, false);
+    gNetBtn.x = x; gNetBtn.y = (short)(y + 14); gNetBtn.w = 96; gNetBtn.h = 16;
+    ui_button(&gNetBtn, "Re-run tests", false);
+}
+
+static void network_click(UnoWin *w, Point p)
+{
+    if (ui_hit(&gNetBtn, p)) { net_reset(); gStarted = 1; draw_window(w); }
 }
 
 static Boolean network_key(char ch, short code, Boolean cmd)
@@ -215,7 +224,7 @@ static void network_opened(void)
 }
 
 static const AppInterface kIface = {
-    network_draw, network_key, 0, network_tick, network_opened, 0,
+    network_draw, network_key, network_click, network_tick, network_opened, 0,
     "Network", { 120, 40, 470, 268 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }

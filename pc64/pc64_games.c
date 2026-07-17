@@ -100,6 +100,25 @@ static void dt_lock(void)
 
 static void num(long v, char *o){ char t[16]; int n=0,k=0; if(v<=0)t[n++]='0'; while(v){t[n++]=(char)('0'+v%10);v/=10;} while(n)o[k++]=t[--n]; o[k]=0; }
 
+/* On-canvas GUI button (games are canvases, so their controls live on the
+ * pixels). Draw one and remember its rect; hit_btn() tests a click against it,
+ * so every key command (new game, restart) also has a mouse-reachable control. */
+static unoui_rect dtBtn, pmBtn, olBtn, rnBtn;
+static int draw_btn(unoui_rect *out, int x, int y, const char *label, fb_px col)
+{
+    int w = fb_text_w(label) + 18, h = 17;
+    fb_round_rect(x, y, w, h, 5, col);
+    fb_round_rect_a(x, y, w, h, 5, FB_RGB(255,255,255), 26, FB_CORNER_ALL);   /* soft top light */
+    fb_text(x + 9, y + 5, label, FB_RGB(255,255,255), -1);
+    out->x = x; out->y = y; out->w = w; out->h = h;
+    return w;
+}
+static int hit_btn(const unoui_rect *b, const unoui_event *e)
+{
+    return e->kind == UI_EV_MOUSE_DOWN && b->w > 0 &&
+           e->x >= b->x && e->x < b->x + b->w && e->y >= b->y && e->y < b->y + b->h;
+}
+
 static void dt_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     int boardW = r.w * 2 / 3, cell, bw, bh, bx, by, rr, cc, i, sx, ty, sc;
@@ -123,18 +142,18 @@ static void dt_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     fb_text(sx, ty, "Score", FB_RGB(0,200,200), -1); num(dtScore,b); fb_text(sx+56, ty, b, FB_RGB(255,255,255), -1); ty += 16;
     fb_text(sx, ty, "Lines", FB_RGB(0,200,200), -1); num(dtLines,b); fb_text(sx+56, ty, b, FB_RGB(255,255,255), -1); ty += 16;
     fb_text(sx, ty, "Level", FB_RGB(0,200,200), -1); num(dtLevel,b); fb_text(sx+56, ty, b, FB_RGB(255,255,255), -1); ty += 24;
-    if (dtState == 0)      fb_text(sx, ty, "N: new game", FB_RGB(255,255,255), -1);
-    else if (dtState == 3) { fb_text(sx, ty, "GAME OVER", FB_RGB(240,80,80), -1);
-                             fb_text(sx, ty+16, "N: retry", FB_RGB(200,200,210), -1); }
-    else { fb_text(sx, ty, "<- -> move", FB_RGB(160,170,200), -1);
+    if (dtState == 3) { fb_text(sx, ty, "GAME OVER", FB_RGB(240,80,80), -1); ty += 18; }
+    else if (dtState == 1) { fb_text(sx, ty, "<- -> move", FB_RGB(160,170,200), -1);
            fb_text(sx, ty+14, "up: rotate", FB_RGB(160,170,200), -1);
            fb_text(sx, ty+28, "dn: drop", FB_RGB(160,170,200), -1);
-           fb_text(sx, ty+42, "spc: slam", FB_RGB(160,170,200), -1); }
+           fb_text(sx, ty+42, "spc: slam", FB_RGB(160,170,200), -1); ty += 60; }
+    draw_btn(&dtBtn, sx, ty, dtState == 3 ? "Retry (N)" : "New Game (N)", FB_RGB(120,60,180));
 }
 
 static int dt_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
+    if (hit_btn(&dtBtn, e)) { dt_new(); return 1; }
     if (e->kind == UI_EV_CHAR) {
         if (e->ch == 'n' || e->ch == 'N') { dt_new(); return 1; }
         if (e->ch == ' ' && dtState == 1) {
@@ -295,7 +314,7 @@ static void pm_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 #define PSY(py) (by + (py)*ts/PM_TILE)
     if (gPmState==PM_TITLE) {
         fb_big_text(bx+mw/2-84, by+mh/3, "PAC-MAN", FB_RGB(240,230,60), -1, 2);
-        fb_text(bx+mw/2-44, by+mh/3+40, "N: new game", FB_RGB(0,200,200), -1);
+        draw_btn(&pmBtn, bx+mw/2-52, by+mh/3+40, "New Game (N)", FB_RGB(30,50,220));
         return;
     }
     for (rr=0; rr<PM_ROWS; rr++) for (cc=0; cc<PM_COLS; cc++) { unsigned char t=gPmMaze[rr][cc];
@@ -317,6 +336,7 @@ static void pm_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     fb_text(sx, ty, "LEVEL", FB_RGB(0,200,200), -1); num(gPmLevel,b); fb_text(sx, ty+12, b, FB_RGB(255,255,255), -1); ty += 34;
     if (gPmState==PM_READY)     fb_text(bx+mw/2-24, by+mh/2, "READY!", FB_RGB(240,230,60), -1);
     else if (gPmState==PM_OVER) fb_text(bx+mw/2-40, by+mh/2, "GAME OVER", FB_RGB(240,80,80), -1);
+    draw_btn(&pmBtn, sx, ty + 6, gPmState==PM_OVER ? "Retry (N)" : "New Game (N)", FB_RGB(30,50,220));
 #undef PSX
 #undef PSY
 }
@@ -399,7 +419,7 @@ static void ol_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         for (y=0;y<10;y++){ short t=(short)(102+y*10), hw2=(short)(8+y*14); ol_v(160-hw2,t,160+hw2,t+10,OC_ROAD); }
         ol_v(140,150,180,176,OC_CAR); ol_v(146,154,174,162,OC_CARWIN);
         fb_big_text(ol_tx(112), ol_ty(30), "OUTLAST", FB_RGB(255,255,255), -1, 2);
-        fb_text(ol_tx(112), ol_ty(180), "Press N to drive", FB_RGB(0,200,200), -1);
+        draw_btn(&olBtn, ol_tx(112), ol_ty(176), "Drive (N)", FB_RGB(200,90,30));
         return;
     }
     ol_v(0,12,OL_W,OL_HORIZON,OC_SKY); ol_v(0,OL_HORIZON,OL_W,OL_HORIZON+2,OC_HORIZON);
@@ -438,13 +458,14 @@ static void ol_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     fb_text(g_olR.x+6, ol_ty(4), hud, FB_RGB(255,255,255), -1);
     if (gOlState==2) {
         ol_v(80,70,240,130,OC_HUD);
-        fb_text(ol_tx(120), ol_ty(90), "GAME OVER", FB_RGB(255,255,255), -1);
-        fb_text(ol_tx(108), ol_ty(112), "N: new game", FB_RGB(0,200,200), -1);
+        fb_text(ol_tx(120), ol_ty(88), "GAME OVER", FB_RGB(255,255,255), -1);
+        draw_btn(&olBtn, ol_tx(104), ol_ty(106), "New Game (N)", FB_RGB(200,90,30));
     }
 }
 static int ol_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e=(const unoui_event*)ev; (void)w;(void)ctx;
+    if (hit_btn(&olBtn, e)) { ol_new(); return 1; }
     if (e->kind==UI_EV_CHAR) { if (e->ch=='n'||e->ch=='N'){ ol_new(); return 1; } return 0; }
     if (e->kind!=UI_EV_KEY || gOlState!=1 || gOlCrash) return 0;
     switch (e->key) {
@@ -506,13 +527,15 @@ static void rn_frame(void)
     sc = game_score(); num(sc, nb); { char *q = nb; while (*q) *p++ = *q++; } *p = 0;
     fb_text(12, 10, line, FB_RGB(255,255,255), -1);
     fb_text(12, 22, u3d_backend_name(), FB_RGB(100,255,255), -1);
-    if (game_over()) fb_text(FB_W/2 - 90, FB_H/2, "CRASH - Space to restart", FB_RGB(255,110,110), -1);
-    else             fb_text(12, FB_H - 16, "Left/Right steer   Esc quit", FB_RGB(170,170,170), -1);
+    if (game_over()) { fb_text(FB_W/2 - 40, FB_H/2 - 18, "CRASH", FB_RGB(255,110,110), -1);
+                       draw_btn(&rnBtn, FB_W/2 - 62, FB_H/2, "Restart (Space)", FB_RGB(40,120,220)); }
+    else             { rnBtn.w = 0; fb_text(12, FB_H - 16, "Left/Right steer   Esc quit", FB_RGB(170,170,170), -1); }
 }
 static void rn_draw(struct unoui_widget *w, unoui_rect r, void *ctx) { (void)w;(void)r;(void)ctx; rn_frame(); }
 static int rn_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; (void)w;(void)ctx;
+    if (hit_btn(&rnBtn, e)) { game_input in = {0,0,0,0,0,1}; game_update(&in); return 1; }
     if (e->kind == UI_EV_KEY) {
         if (e->key == UI_KEY_LEFT)  { gRnL = 6; return 1; }
         if (e->key == UI_KEY_RIGHT) { gRnR = 6; return 1; }

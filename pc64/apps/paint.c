@@ -393,6 +393,18 @@ static void pt_repaint_canvas(UnoWin *w)
 #endif
 }
 
+/* action toolbar (Clear/Save/Load) below the tool grid - so those keys ('n'/
+ * 's'/'l') have mouse-reachable buttons too. */
+enum { PB_CLEAR, PB_SAVE, PB_LOAD, PB_NBTN };
+static UiBtn gPtBtn[PB_NBTN];
+static void pt_layout_btns(UnoWin *w)
+{
+    short x = (short)(w->bounds.left + 6);
+    short y = (short)(w->bounds.top + TBAR_H + 6 + ((PT_TOOLS + 1) / 2) * (PT_CELL + 2) + 6);
+    int i; for (i = 0; i < PB_NBTN; i++) {
+        gPtBtn[i].x = x; gPtBtn[i].y = (short)(y + i * 19); gPtBtn[i].w = 52; gPtBtn[i].h = 16; }
+}
+
 static void paint_draw(UnoWin *w)
 {
     Rect r = w->bounds, ct = r, cr;
@@ -409,6 +421,11 @@ static void paint_draw(UnoWin *w)
         if (i == gPtTool) { InsetRect(&tr, -2, -2); uno_box(&tr, C_MAG); }
         else { uno_box(&tr, C_CYAN); }
     }
+    /* action buttons under the tools */
+    pt_layout_btns(w);
+    ui_button(&gPtBtn[PB_CLEAR], "Clear", false);
+    ui_button(&gPtBtn[PB_SAVE],  "Save",  false);
+    ui_button(&gPtBtn[PB_LOAD],  "Load",  false);
     /* canvas frame + content */
     pt_canvas_rect(w, &cr);
     InsetRect(&cr, -1, -1); uno_box(&cr, C_WHITE); InsetRect(&cr, 1, 1);
@@ -463,6 +480,10 @@ static void paint_click(UnoWin *w, Point p)
 {
     Rect cr;
     short i;
+    /* action buttons (Clear/Save/Load) */
+    if (ui_hit(&gPtBtn[PB_CLEAR], p)) { if (gPtCanvas) memset(gPtCanvas, PT_BG, (long)PT_W * PT_H); draw_window(w); return; }
+    if (ui_hit(&gPtBtn[PB_SAVE],  p)) { pt_save(); return; }
+    if (ui_hit(&gPtBtn[PB_LOAD],  p)) { pt_load(w); draw_window(w); return; }
     /* tool palette */
     for (i = 0; i < PT_TOOLS; i++) {
         Rect tr; pt_tool_rect(w, i, &tr);

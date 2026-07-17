@@ -71,6 +71,23 @@ static void tk_fmt_cell(const unsigned char *cell, char *out)
     }
 }
 
+static void tk_redraw(void);
+static void tk_save(void);
+static void tk_load(void);
+static void tk_toggle_play(void);
+
+/* on-screen toolbar so every action has a mouse-reachable control (not just a
+ * key). Rects are laid out in tracker_draw and hit-tested in tracker_click. */
+enum { TB_PLAY, TB_CLR, TB_DEMO, TB_SAVE, TB_LOAD, TB_NBTN };
+static UiBtn gTkBtn[TB_NBTN];
+static void tk_layout(Rect r)
+{
+    static const short ws[TB_NBTN] = { 56, 50, 56, 50, 50 };
+    short x = (short)(r.left + 10), y = (short)(r.bottom - 24); int i;
+    for (i = 0; i < TB_NBTN; i++) { gTkBtn[i].x = x; gTkBtn[i].y = y;
+        gTkBtn[i].w = ws[i]; gTkBtn[i].h = 16; x = (short)(x + ws[i] + 4); }
+}
+
 static void tracker_draw(UnoWin *w)
 {
     Rect r = w->bounds, ct = r;
@@ -108,11 +125,26 @@ static void tracker_draw(UnoWin *w)
                     (short)(row == gTkRow ? C_BLUE : C_WHITE), C_BLUE, false);
         }
     }
-    text_at(x0, (short)(r.bottom - 22), "q/w:note e:inst x:clr d:demo s/l:save",
+    text_at(x0, (short)(r.bottom - 40), "arrows: move   q/w: note   e: inst",
             C_CYAN, C_BLUE, false);
-    text_at(x0, (short)(r.bottom - 8),
-            gTkPlaying ? "Space: stop   arrows: move"
-                       : "Space: play   arrows: move", C_CYAN, C_BLUE, false);
+    tk_layout(r);                             /* toolbar: clickable actions */
+    ui_button(&gTkBtn[TB_PLAY], gTkPlaying ? "Stop" : "Play", gTkPlaying);
+    ui_button(&gTkBtn[TB_CLR],  "Clear", false);
+    ui_button(&gTkBtn[TB_DEMO], "Demo",  false);
+    ui_button(&gTkBtn[TB_SAVE], "Save",  false);
+    ui_button(&gTkBtn[TB_LOAD], "Load",  false);
+}
+
+static void tracker_click(UnoWin *w, Point p)
+{
+    unsigned char *cell = tk_cell(gTkRow, gTkCh); (void)w;
+    if      (ui_hit(&gTkBtn[TB_PLAY], p)) tk_toggle_play();
+    else if (ui_hit(&gTkBtn[TB_CLR],  p)) { cell[0] = 0; cell[1] = 0; }
+    else if (ui_hit(&gTkBtn[TB_DEMO], p)) memcpy(gTkPat, kTkDemo, TK_PATLEN);
+    else if (ui_hit(&gTkBtn[TB_SAVE], p)) tk_save();
+    else if (ui_hit(&gTkBtn[TB_LOAD], p)) tk_load();
+    else return;
+    tk_redraw();
 }
 
 static void tk_redraw(void)
@@ -124,6 +156,12 @@ static void tk_redraw(void)
 static void tk_save(void){ fat12_write("SONG.TRK", gTkPat, TK_PATLEN); fat12_list(); }
 static void tk_load(void){ fat12_read("SONG.TRK", gTkPat, TK_PATLEN); }
 static void tk_stop(void){ gTkPlaying = false; music_quiet(); }
+static void tk_toggle_play(void)
+{
+    if (gTkPlaying) tk_stop();
+    else { gm_stop(); music_open_chan();
+           gTkPlaying = true; gTkPRow = TK_ROWS - 1; gTkLast = TickCount() - 6; }
+}
 
 static void tracker_tick(void)
 {
@@ -155,11 +193,8 @@ static Boolean tracker_key(char ch, short code, Boolean cmd)
     else if (ch == 'd') { memcpy(gTkPat, kTkDemo, TK_PATLEN); }
     else if (ch == 's') { tk_save(); }
     else if (ch == 'l') { tk_load(); }
-    else if (ch == ' ') {
-        if (gTkPlaying) tk_stop();
-        else { gm_stop(); music_open_chan();
-               gTkPlaying = true; gTkPRow = TK_ROWS - 1; gTkLast = TickCount() - 6; }
-    } else return false;
+    else if (ch == ' ') { tk_toggle_play(); }
+    else return false;
     tk_redraw();
     return true;
 }
@@ -167,7 +202,7 @@ static Boolean tracker_key(char ch, short code, Boolean cmd)
 static void tracker_closed(void){ tk_stop(); }
 
 static const AppInterface kIface = {
-    tracker_draw, tracker_key, 0, tracker_tick, 0, tracker_closed,
+    tracker_draw, tracker_key, tracker_click, tracker_tick, 0, tracker_closed,
     "Tracker", { 26, 30, 486, 326 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }

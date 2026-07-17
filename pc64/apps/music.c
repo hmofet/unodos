@@ -69,6 +69,21 @@ static short   gNoteIx = 0;
 static long    gNoteEnd = 0;
 static short   gSong = 0;
 
+static void music_play(void);
+static void music_halt(void);
+static void music_select(short s);
+
+/* on-screen toolbar (mouse-reachable Play/Stop + song nav, not just keys) */
+enum { MB_PLAY, MB_PREV, MB_NEXT, MB_NBTN };
+static UiBtn gMuBtn[MB_NBTN];
+static void mu_layout(Rect r)
+{
+    static const short ws[MB_NBTN] = { 56, 50, 50 };
+    short x = (short)(r.left + 8), y = (short)(r.bottom - 24); int i;
+    for (i = 0; i < MB_NBTN; i++) { gMuBtn[i].x = x; gMuBtn[i].y = y;
+        gMuBtn[i].w = ws[i]; gMuBtn[i].h = 16; x = (short)(x + ws[i] + 4); }
+}
+
 static void music_draw(UnoWin *w)
 {
     Rect r = w->bounds;
@@ -101,9 +116,20 @@ static void music_draw(UnoWin *w)
         if (gPlaying && i == gNoteIx) uno_fill(&nr, C_MAG);
         else                          uno_fill(&nr, C_CYAN);
     }
-    text_at(r.left + 8, r.bottom - 8,
-            gPlaying ? "Spc:stop  <>,1-8:song" : "Spc:play  <>,1-8:song",
-            C_CYAN, C_BLUE, false);
+    mu_layout(r);                             /* clickable toolbar */
+    ui_button(&gMuBtn[MB_PLAY], gPlaying ? "Stop" : "Play", gPlaying);
+    ui_button(&gMuBtn[MB_PREV], "Prev", false);
+    ui_button(&gMuBtn[MB_NEXT], "Next", false);
+}
+
+static void music_click(UnoWin *w, Point p)
+{
+    (void)w;
+    if      (ui_hit(&gMuBtn[MB_PLAY], p)) { if (gPlaying) music_halt(); else music_play(); }
+    else if (ui_hit(&gMuBtn[MB_PREV], p)) music_select((short)(gSong - 1));
+    else if (ui_hit(&gMuBtn[MB_NEXT], p)) music_select((short)(gSong + 1));
+    else return;
+    { UnoWin *ww = find_app_window(APP_MUSIC); if (ww) draw_window(ww); }
 }
 
 static void music_play(void)
@@ -164,7 +190,7 @@ static void music_opened(void){ music_open_chan(); }
 static void music_closed(void){ music_halt(); }
 
 static const AppInterface kIface = {
-    music_draw, music_key_w, 0, music_tick, music_opened, music_closed,
+    music_draw, music_key_w, music_click, music_tick, music_opened, music_closed,
     "Music", { 80, 60, 440, 230 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }
