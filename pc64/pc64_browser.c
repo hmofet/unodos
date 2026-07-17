@@ -4,7 +4,7 @@
  * A native unoui canvas app: it lays out a document and paints it with fb
  * primitives, wrapping text to the canvas width and scaling headings. It runs
  * <script> blocks through a tiny interpreter (js.c) and loads pages over the
- * network (address bar -> pc64_http GET over e1000/TCP; HTTP today, HTTPS TBD).
+ * network (address bar -> pc64_http GET over e1000/TCP; HTTP + CA-validated HTTPS).
  * It also renders a built-in welcome page and opens files from the local file
  * system (uno_fs_*: the RAM disk and FAT32/local disks).
  *
@@ -213,7 +213,7 @@ static void render_html(const char *src, unoui_rect r, int scroll)
 static char g_doc[DOC_MAX];
 static int  g_is_html, g_scroll, g_view;      /* g_view: 0 list, 1 document */
 static char g_title[48] = "UnoDOS Browser";
-static char g_url[256] = "http://";            /* address bar buffer */
+static char g_url[256] = "https://";           /* address bar buffer */
 static char g_status[128];                     /* last fetch status / hint */
 static int  g_addr;                            /* 1 = editing the address bar */
 static unoui_rect g_rect;                      /* last-drawn rect (Loading present) */
@@ -234,8 +234,9 @@ static const char kWelcome[] =
 "- Bullet lists and paragraphs with word-wrap\n"
 "- Runs `<script>` blocks (see the **Script.html** demo)\n"
 "- Loads files from the local disks (see the file list)\n"
-"- **Network**: type a `http://host/path` URL in the address bar and press "
-"Enter (Up from the file list focuses the bar). HTTPS is not supported yet.\n\n"
+"- **Network**: type a `http://` or `https://` URL in the address bar and press "
+"Enter (Up from the file list focuses the bar). HTTPS is CA-validated (TLS 1.2)"
+" against a bundled root store, using the system clock.\n\n"
 "---\n\n"
 "## Try it\n\n"
 "Press **Backspace** to return to the file list, pick a `.md` / `.html` / `.txt`\n"
@@ -391,9 +392,9 @@ static void fetch_url(void)
         char *d = g_doc; int o = 0;
         const char *a = "<h1>Couldn't load the page</h1><p><b>URL:</b> ";
         const char *b = "</p><p><b>Reason:</b> ";
-        const char *c = "</p><hr><p>The address bar takes <code>http://host/path</code>. "
-                        "HTTPS and DNS need a working link (QEMU SLIRP provides both; "
-                        "the X1 has no wired NIC).</p>";
+        const char *c = "</p><hr><p>The address bar takes <code>http://host/path</code> "
+                        "or <code>https://</code>. HTTPS and DNS need a working link (QEMU "
+                        "SLIRP provides both; the X1 has no wired NIC).</p>";
         #define APP(s) do { int l=(int)strlen(s); if(o+l<DOC_MAX-1){memcpy(d+o,s,l);o+=l;} } while(0)
         APP(a); APP(g_url); APP(b); APP(g_status[0]?g_status:"unknown"); APP(c);
         #undef APP
