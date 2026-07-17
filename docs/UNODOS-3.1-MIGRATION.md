@@ -268,104 +268,20 @@ on the user's real x86 laptop, and on a cycle-accurate 8088 (MartyPC).** A CGA
 save-under cursor fix shipped alongside. The other ports already use the compact
 16 B layout, so x86 was the only outlier to migrate.
 
-## Toolchains (this environment)
 
-- Reachable: `nasm` (x86), `vasmm68k_mot` (68K), `ca65/ld65` (65816), `dasm` (6502),
-  WSL `gcc` incl. **ThreadSanitizer** (needs `setarch -R`).
-- Blocked here: `vbcc` (68K C), the console SDKs (KOS/ee/devkit*/PSL1GHT/libyaul/…),
-  and all emulators.
+## Status & next directions
 
-## Next directions (prioritized, for the new session)
+Since this migration doc was first written the forward line has gone much further —
+most notably the **[`pc64/`](../pc64/) Modern PC (x86-64 / UEFI) world** with real
+networking, TLS/HTTPS, a JS-capable browser, `uno3d` 3D, and a full `unoui` desktop
+shell, verified on real hardware. For the current, maintained view:
 
-1. ~~**Broaden asm consumption** to the remaining reachable ports: Genesis + MacPlus
-   (vasm), IIGS (ca65), C64 + Apple II (dasm).~~ **DONE** — all wired, byte-identical
-   (incl. disk apps + packed images); IIGS also sources its own FAT12 geometry. The
-   6502 ports turned out NOT to need the feared "deeper refactor": investigation showed
-   they're architecturally `single_app` (no window-entry struct, no event queue — one
-   disk-loaded app at a time), so forcing a windowed window-entry ABI on them would FAKE
-   an ABI they don't ship. Instead they source the genuine overlap (cell screen geometry)
-   byte-identically, and their no-WM shape is now Contract-declared (`[port.c64]`/
-   `[port.apple2]`, profile=single_app) + conformance-checked (rule 9). **All 7 reachable
-   asm toolchains now consume the Contract.** The only un-consumed asm tail left is the
-   blocked-toolchain ports (need vbcc / console SDKs) — see #3.
-2. ~~**Decide the canonical 3.1 ABI**, then pilot Phase 12 end-to-end on one port.~~
-   **DONE** — greenfield window model decided; x86 piloted the clean 16 B layout,
-   QEMU + real-hardware + cycle-accurate-8088 (MartyPC) validated. See "The 3.1
-   window ABI — DECIDED" above.
-3. ~~**NEW PORT: Sega Master System (Z80).**~~ **DONE** — the first port built fresh
-   on the contract-driven + greenfield-window architecture. Consumes `gen/z80/` +
-   `[world.sms]` via sjasmplus. **M1** desktop, **M2** window manager (sprite cursor,
-   Contract event queue, create/draw/raise/drag/close, z-order) + d-pad input, **M3**
-   apps (SysInfo, live Clock, Notepad, Files, Theme, Music) + a playable **Dostris**
-   game + **PSG audio** — all BlastEm-verified via AUTOTEST scripted-pad builds. See
-   [../sms/README.md](../sms/README.md). (Game Boy is a *separate* CPU — Sharp
-   LR35902 — needs rgbds + a new `gbz80` dialect; deferred until that toolchain is in.)
-4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1–M3 + game + audio DONE** — the
-   Contract's `minimal` profile flagship (2 KB RAM, no WM, directional nav). Consumes
-   `gen/6502/` + `[world.nes]` via dasm. M1 launcher; M2 `$4016` pad + a vblank-NMI
-   loop + a directional selection highlight (A launches full-screen, B returns); M3
-   full-screen apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the 2A03
-   APU) + a from-scratch **Dostris**. Mesen2-verified via AUTOTEST scripted-pad
-   builds. See [../nes/README.md](../nes/README.md). NEXT on NES: real hardware.
-5. ~~**NEW PORT: Game Boy / Game Boy Color (Sharp SM83).**~~ **M1–M3 + game + audio
-   DONE** — the FIRST `gbz80` world (a genuinely new unogen dialect, rgbds). `minimal`
-   profile with a **vertical-list** launcher (the 160×144 LCD suits a list). M1
-   launcher; M2 `$FF00` joypad + a vblank-interrupt loop + an Up/Down highlight; M3
-   apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the GB APU) + a
-   from-scratch **Dostris**. One ROM = greyscale on DMG / colour on GBC. Mesen2/GBC-
-   verified via AUTOTEST. See [../gb/README.md](../gb/README.md). NEXT on GB: real hw.
-6. ~~**NEW PORT: Sega Game Gear (Z80).**~~ **M1–M3 + game + audio DONE** — SMS silicon
-   reusing `gen/z80/` + the SMS hardware bring-up / 4bpp tiles / PSG / Dostris, but the
-   GB's `minimal` 160×144 layout (drawn at a (6,3) offset; 12-bit CRAM the one delta).
-   Mesen2/GG-verified. See [../gg/README.md](../gg/README.md).
-7. ~~**NEW PORT: Game Boy Advance (ARM7TDMI).**~~ **M1–M3 + game + audio DONE** — the
-   FIRST ARM world (a new `arm`/GNU-as dialect), a `minimal` Mode-3 software framebuffer.
-   mGBA won't grab under RDP, so it is verified on a **Unicorn ARM7TDMI** core running the
-   real ROM. See [../gba/README.md](../gba/README.md). NEXT on GBA: real hw + audio-ear.
-8. ~~**NEW PORT: Commodore VIC-20 (6502).**~~ **M1–M3 + game + audio DONE** — reuses the
-   `gen/6502/` + dasm path as a 22×23 character-cell list launcher; **py65**-verified. See
-   [../vic20/README.md](../vic20/README.md). NEXT on VIC-20: real hw / VICE.
-9. ~~**NEW PORT: Bandai WonderSwan (NEC V30MZ).**~~ **M1–M3 + game + audio DONE** — the
-   FIRST x86 handheld (V30MZ ≈ 80186, nasm, the Contract's x86 surface), a hardware-tile
-   launcher. Verified on a **Unicorn x86** core that runs the genuine reset-vector boot
-   path. See [../ws/README.md](../ws/README.md). NEXT on WonderSwan: real hw + audio-ear.
-10. ~~**NEW PORT: NEC PC Engine (HuC6280).**~~ **M1–M3 + game + audio DONE** — the FIRST
-    HuC6280 world (65C02 superset, `ca65 --cpu huc6280`), a VDC tile launcher. Mesen's GPU
-    surface won't grab under RDP, so it is verified on a **ROM-free HuC6280 harness** (py65 +
-    the TAM/CSH opcodes + the MMU + a VDC/VCE model). See [../pce/README.md](../pce/README.md).
-    NEXT on PCE: real hw + audio-ear.
-11. **More fresh ports / the next CPU family.** The next genuinely new ISA (e.g. a deeper
-    ARM/RISC-V or PowerPC target) follows once its SDK is installed.
-12. **Generalize the greenfield model to the next subsystem** — the event record
-   (x86 3 B vs asm 4 B) and file_handle diverge across ports exactly like windows did;
-   bring them under the logical-model + derived-layout treatment (host-verifiable).
-13. **Reach a blocked tail** when a toolchain is available: vbcc for Phase 5 (Amiga
-   `unofs_core` + trackdisk + WinUAE); a console SDK for a C-world uno2d/unosound
-   backend. Also: retarget `unoui` onto `uno2d` + Amiga blitter; rule-4 conformance
-   vectors.
+- **Open work & direction:** [../TODO.md](../TODO.md)
+- **Per-feature / per-port status:** [FEATURE-MATRIX.md](FEATURE-MATRIX.md)
+- **Contract phase status:** [../unodef/PHASES.md](../unodef/PHASES.md)
+- **The Modern PC world:** [../pc64/README.md](../pc64/README.md)
 
-### Screenshots / verification on this machine (RDP-aware)
-GUI focus + SendKeys capture fails over RDP. Use a tool's control channel (QEMU
-monitor `screendump` — `tools/qemu_test.py`) or the focus-independent helper
-`%USERPROFILE%\.claude\tools\cc-capture.ps1` (`-Out f.png [-Window <substr>]`). See
-`~/.claude/CLAUDE.md` (loads in every session). MartyPC (cycle-accurate 8088,
-`xt-tools/`, harness `tools/xt/shot_xt.ps1`) needs a windowed launch +
-ShowWindow-restore, then cc-capture (not its Ctrl+F5). QEMU at
-`C:\Program Files\qemu\qemu-system-i386.exe`.
-
-## Resume checklist
-
-```
-git checkout master
-python unodef/unogen.py --check && python unodef/conformance/conformance.py  # trust anchor + 52/52
-python unodef/wmgen.py        # regenerate the greenfield window layouts (gen/wm/)
-cat unodef/PHASES.md ; cat unodef/WMODEL.md ; cat unodef/gen/wm/ARCHITECTURES.txt
-# x86 bootable image (clean 16B layout + CGA cursor fix), QEMU-verified:
-PATH=~/AppData/Local/bin/NASM:$PATH make floppy144   # -> build/unodos-144.img
-# build/run the fresh ports:
-sh sms/build.sh && powershell -File sms/run.ps1   # SMS (M1-M3 + game + audio), BlastEm
-sh nes/build.sh && powershell -File nes/run.ps1   # NES (M1-M3 + game + audio), Mesen2
-sh gb/build.sh  && powershell -File gb/run.ps1    # Game Boy (M1-M3 + game + audio), Mesen2/GBC
-sh gg/build.sh  && powershell -File gg/run.ps1    # Game Gear (M1-M3 + game + audio), Mesen2/GG
-# pick a "Next directions" item above and go. (the next CPU family, or real hw.)
-```
+All 7 reachable asm toolchains (nasm / vasm / ca65 / dasm and the newer dialects) plus
+x86 and the pc64 world consume the Contract; the 3.1 window ABI is decided and shipped.
+The remaining tail is the blocked-toolchain ports (vbcc for 68K C, the console SDKs) and
+the per-port real-hardware passes tracked in TODO.md.

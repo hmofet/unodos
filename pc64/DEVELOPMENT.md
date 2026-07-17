@@ -34,8 +34,8 @@ The build reaches into sibling directories (`../unoui`, `../uno3d`,
 you must clone the **whole** monorepo, not just `pc64/`.
 
 ```sh
-git clone https://github.com/hmofet/unodos-3.git
-cd unodos-3
+git clone https://github.com/hmofet/unodos.git
+cd unodos
 git checkout pc64-net-3d      # the active development branch
 ```
 
@@ -84,7 +84,7 @@ wsl --install -d Ubuntu-24.04
 
 Reboot if prompted, launch "Ubuntu" once to create your Linux user, then follow
 **§2** *inside* the Ubuntu shell (`sudo apt install ...`). Clone the repo inside
-the WSL filesystem (e.g. `~/unodos-3`) for speed, or under `/mnt/c/...` if you
+the WSL filesystem (e.g. `~/unodos`) for speed, or under `/mnt/c/...` if you
 want it visible to Windows tools — the build works either way, but native WSL
 paths build noticeably faster.
 
@@ -110,11 +110,11 @@ just:
 ```powershell
 # with the stick mounted as, say, E:
 New-Item -ItemType Directory -Force E:\EFI\BOOT | Out-Null
-Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos-3\pc64\build\esp\EFI\BOOT\BOOTX64.EFI E:\EFI\BOOT\ -Force
+Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos\pc64\build\esp\EFI\BOOT\BOOTX64.EFI E:\EFI\BOOT\ -Force
 # (optional) the browser's demo assets + fonts:
-Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos-3\pc64\build\esp\*.TTF E:\ -Force
-Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos-3\pc64\build\esp\*.MD  E:\ -Force
-Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos-3\pc64\build\esp\*.HTML E:\ -Force
+Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos\pc64\build\esp\*.TTF E:\ -Force
+Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos\pc64\build\esp\*.MD  E:\ -Force
+Copy-Item \\wsl$\Ubuntu-24.04\home\<you>\unodos\pc64\build\esp\*.HTML E:\ -Force
 ```
 
 > The `\\wsl$\<distro>\...` UNC path lets Windows read files inside WSL. If you
@@ -223,8 +223,8 @@ See [`METAL-CHECKLIST.md`](METAL-CHECKLIST.md) for what to verify on hardware
   -drive format=raw,file=fat:rw:build/esp -m 256 -vga std -rtc base=localtime
 ```
 
-Commit as you go; the active branch is `pc64-net-3d` on
-`github.com/hmofet/unodos-3`.
+Commit as you go; the pc64 world lives on `master` of
+`github.com/hmofet/unodos` (the pre-pc64 snapshot is preserved on the `classic` branch).
 
 ---
 

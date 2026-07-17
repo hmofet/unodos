@@ -1,436 +1,187 @@
 # UnoDOS Roadmap
 
-## Planned major features (2026-06-15)
+*Updated 2026-07-17. This file tracks **open** work only. Completed milestones are
+recorded in [CHANGELOG.md](CHANGELOG.md) and the per-port READMEs/HANDOFFs — they are
+not repeated here.*
 
-### Music Player app — hardware-scaled, plays files (full design: docs/MUSIC-PLAYER-PLAN.md)
-A new app (alongside the built-in-tune **Music** app) that plays music **files**,
-routed to the best sound hardware on each platform and scaled down gracefully.
-- [ ] Formats: **WAV/AU** (PCM, every platform), **MIDI/SMF** (synth-capable HW),
-      **MP3** (PS2 / Dreamcast only — integrate a fixed-point decoder), and
-      **console-native** formats (Amiga **MOD**, Genesis **VGM**, SNES **SPC**,
-      C64 **SID**, PS2 **VAG**, DC **ADX**).
-- [ ] PC sound cards: **AdLib OPL2/OPL3** (FM), **SoundBlaster** (DSP + DMA PCM),
-      **GUS** (wavetable). Probe order SB → GUS → AdLib → PC-speaker fallback.
-      Aureal / AC97 / PCI cards are out of envelope for a real-mode 8088 target.
-- [ ] Native chips elsewhere: Paula (Amiga), SPC700 (SNES), Ensoniq DOC (IIGS),
-      SID (C64), PSG **+ the currently-unused YM2612 FM** (Genesis), SPU2 (PS2),
-      AICA (DC). 1-bit PWM fallback on speaker-only platforms.
-- [ ] Architecture: portable core (probe → decoder → sink) + per-device
-      **audio-sink vtable** with `caps` (PCM/FM/wavetable/MP3); the core only
-      offers formats the sink can play. Mirrors the Uno3D backend pattern.
-- [ ] **Prereq — Music multi-song parity:** finish the remaining built-in
-      Music apps (Amiga, MacPlus, Apple II, SNES, IIGS, C64). Done + verified:
-      x86 (10 songs), Mac 7 / Mac 1-6 / PS2 / Dreamcast (8, shared C core),
-      Genesis (8, PSG). Reference impl: the Genesis port; pattern in the plan doc.
+## Direction
 
-### GUI widget overhaul — ALL widgets, ALL ports
-Complete overhaul of the widget toolkit used across **every** port — not just the
-Music app's prev/next arrows.
-- [ ] Replace ad-hoc text-char controls (e.g. the `<` / `>` song chevrons, text
-      footers) with proper reusable widget primitives.
-- [ ] A shared, consistent widget model (buttons, arrow/stepper controls, lists,
-      scrollbars, etc.) adapted to each platform's renderer: x86, the C-core ports
-      (Mac / PS2 / Dreamcast), and the bare-metal asm ports (Amiga, MacPlus,
-      Genesis, Apple II, SNES, IIGS, C64).
-- [ ] Unify look + behaviour so widgets are authored once per concept and themed
-      per platform, rather than re-implemented ad hoc per app.
+The forward line is converging on two write-once, retarget-per-platform layers — the
+**[`unodef/`](unodef/) Contract** (screen/window/event geometry every world generates
+from) and the **[`unoui/`](unoui/) toolkit** (the whole UI as swappable-theme widgets).
+The **[`pc64/`](pc64/) Modern PC world** (x86-64 / UEFI) is the furthest-developed
+target and the proving ground for the modern stack (networking, TLS, a browser, 3D, USB);
+its `unoui` shell is the template the other high-spec ports (PS2, Dreamcast, ARM/PPC) are
+expected to adopt. The 8-bit/console ports keep a minimal native path.
 
-## Post-Audit Backlog (2026-06) — COMPLETE as of v3.26.0 / Build 405
-All items from the June 2026 audit backlog are done:
-- [x] 8088 compatibility pass — kernel + all apps + floppy boot chain
-      assemble under `cpu 8086`; FAT16/IDE region is `cpu 386`-bracketed
-      and runtime-gated in fat16_mount; HD boot chain stays 386+ by design
-- [x] Cursor hide/lock race fix (cursor_protect_begin, 36 sites)
-- [x] Performance wave (cga_pixel_calc row LUT, cursor sprite byte-XOR
-      fast path, floppy multi-sector reads, stosw fills, dispatcher
-      movzx/bt removal)
-- [x] Confirmed-but-unfixed findings (app_load size validation, file-handle
-      reaping on task kill, press-time key/click routing, EVENT_MOUSE
-      edge-only + focus routing, deferred IRQ12 cursor, 360KB make target,
-      FAT16 AH=41h probe, XT KBC gate, SysInfo uptime, Notepad status bar,
-      drag clamping, body click-to-raise)
-- [x] Dynamic QEMU regression scenarios re-run green against Build 405
+---
 
-### Known issue (2026-06-12): root-dir entries past 16 break app launch
-The low-res launcher has 16 icon slots (MAX_ICONS_LO) and the LAST one
-is its own Refresh icon - so only 15 apps fit. App #16+ collides with
-the refresh slot: blank icon, launch becomes a disk rescan (or fails).
-Repro: add a 16th .BIN to the floppy144 list and Enter-launch the last
-icons. Fix direction: exclude the refresh slot from MAX_ICONS_LO math
-or page the icon grid. Workaround shipped: MOUSE.BIN and MKBOOT.BIN
-(diagnostic/utility) left off the default image so Tracker + Paint fit
-in the 15-app envelope; both still build via 'make apps'.
+## pc64 — Modern PC (x86-64 / UEFI) — the active frontier
 
-### 8088 port — FEATURE PARITY ACHIEVED on a cycle-accurate IBM PC/XT (Build 410)
-MartyPC + open GLaBIOS (ROM-free). See docs/PORT-8088.md + tools/xt/.
-- [x] Boot + CGA desktop + WM + cooperative scheduler on the emulated 8088
-- [x] Keyboard via the XT 8255 PPI path
-- [x] Serial mouse (Microsoft, COM1/IRQ4) — install_serial_mouse + int_0C_handler;
-      motion (both axes), buttons, double-click launch verified
-- [x] CGA app sweep: SysInfo, Settings, Files, Paint, Clock, Notepad, Music,
-      Tracker, Pac-Man all render on the XT
-- [x] Storage: FAT12 read (Files/loads) + write (Notepad save) verified
-- [x] draw_char CGA row-blit fast path — ALREADY IMPLEMENTED (draw_char_cga_fast,
-      active via dcf_check in CGA mode); the old "Stage 2" TODO was stale
-- [x] RAM-floor reality: corrected the false "128KB min" → 256K desktop / 640K full
-- [x] VGA apps documented out-of-envelope on a CGA 5150/5160 (deviation, w/ shot)
-- [x] **Boot off a CompactFlash card on an XT-IDE adapter** — FAT12 "superfloppy"
-      CF (reserved-sector layout + FAT12) on drive 0x80; geometry-aware stage2 +
-      probe_boot_disk (INT 13h/08h) + parameterized FAT12 driver + boot_fs16
-      routing. Verified in MartyPC's XT-IDE rig (XT-IDE Universal BIOS detects the
-      CF, GLaBIOS boots C:, desktop + SysInfo "Boot: HD/CF" + Files read).
-      tools/xt/make_cf_vhd.py + unodos_xt_xtide machine. shots/cf_*.png
-- [~] **FAT16-on-8088 (DOS-interchangeable CF):** make the 386-only HD path 8086.
-      - [x] Stage 1: boot chain (mbr/vbr/stage2_hd) 8086-clean — 32-bit LBA via
-            word pairs, AH=42h + two-16-bit-DIV CHS. VERIFIED: a DOS-style FAT16
-            CF boots through MBR→VBR→stage2_hd to the kernel splash on the 8088
-            (tools/xt/make_fat16_vhd.py, create_hd_image.py @ 615/4/26).
-      - [ ] Stage 2/3: convert the kernel FAT16 driver (~104 sites across
-            read_sector/write_sector/mount/open/get_next_cluster/set_fat_entry/
-            alloc_cluster/read/readdir/create/write/delete/rename) to 8086 +
-            remove the pre-286 mount gate → desktop + apps + save from a FAT16 CF
+Shipped and verified on real hardware (Lenovo X1 Carbon Gen 8): the `unoui` desktop
+shell, e1000 NIC + from-scratch TCP/IP, TLS 1.2 / HTTPS (BearSSL), a JS-capable browser,
+`uno3d` 3D, live resolution/theme switching, resizable windows. Remaining driver tail
+(details in [pc64/README.md](pc64/README.md), metal items in
+[pc64/METAL-CHECKLIST.md](pc64/METAL-CHECKLIST.md)):
+
+- [ ] **AX88179 USB-Ethernet bulk driver** → `uno_nic_t`, so the net/TLS/HTTPS stack
+      lights up on the X1 (which has no wired e1000; Intel Wi-Fi only). xHCI USB core
+      (Phases A+B) is done; this is the class driver on top.
+- [ ] **xHCI HID** (USB keyboard/mouse) class driver on the USB core.
+- [ ] **USBLEGSUP** BIOS→OS handoff (xECP) — may be required for xHCI on real Intel
+      controllers (QEMU works without it).
+- [ ] **ExitBootServices** — take full ownership from firmware (currently UEFI-as-BIOS
+      with boot services alive).
+- [ ] **NVMe / AHCI block driver** — real disk storage (today: RAM-FAT + UEFI Simple FS).
+- [ ] **Real Intel-GPU 3D backend** for `uno3d` (today: soft rasteriser + honest
+      Intel-iGPU soft-fallback scaffold).
+- [ ] **I2C-HID trackpad** on-metal bring-up — driver ships gated/self-configuring;
+      needs the X1 diagnostic readout iterated (LPSS reset-release landed; parser tuning
+      pending real report dumps).
+- [ ] Metal re-test pass of the latest build (mouse-driven apps, PC-speaker audio, RTC
+      set, HTTPS-needs-NIC) — see the checklist.
+
+---
+
+## Cross-platform features
+
+### Music Player app (full design: [docs/MUSIC-PLAYER-PLAN.md](docs/MUSIC-PLAYER-PLAN.md))
+A new app (alongside the built-in-tune **Music** app) that plays music **files**, routed
+to the best sound hardware on each platform and scaled down gracefully.
+- [ ] Formats: **WAV/AU** (PCM, every platform), **MIDI/SMF** (synth-capable HW), **MP3**
+      (PS2 / Dreamcast only — fixed-point decoder), **console-native** (Amiga **MOD**,
+      Genesis **VGM**, SNES **SPC**, C64 **SID**, PS2 **VAG**, DC **ADX**).
+- [ ] PC sound cards: **AdLib OPL2/OPL3**, **SoundBlaster** (DSP + DMA PCM), **GUS**
+      (wavetable). Probe SB → GUS → AdLib → PC-speaker.
+- [ ] Native chips: Paula (Amiga), SPC700 (SNES), Ensoniq DOC (IIGS), SID (C64),
+      PSG **+ the unused YM2612 FM** (Genesis), SPU2 (PS2), AICA (DC); 1-bit PWM fallback.
+- [ ] Architecture: portable core (probe → decoder → sink) + per-device **audio-sink
+      vtable** with `caps`; mirrors the Uno3D backend pattern.
+- [ ] **Prereq — Music multi-song parity:** finish the remaining built-in Music apps
+      (Amiga, MacPlus, Apple II, SNES, IIGS, C64). Done: x86 (10), Mac 7 / Mac 1-6 /
+      PS2 / Dreamcast (8, shared C core), Genesis (8, PSG).
+
+### GUI widget model
+The C-side ports are covered by **`unoui`** (the pc64 shell + PS2/Dreamcast). The
+remaining work is the **bare-metal asm ports**:
+- [ ] Bring a shared, themeable widget model (buttons, stepper/arrow controls, lists,
+      scrollbars) to the asm ports (Amiga, MacPlus, Genesis, Apple II, SNES, IIGS, C64),
+      replacing ad-hoc text-char controls — authored once per concept, themed per platform.
+
+### Kernel / Window Manager (x86 reference OS)
+- [ ] Modal window flag (`WIN_FLAG_MODAL`) — block focus changes while modal.
+- [ ] Window minimize / maximize.
+- [ ] Preemptive multitasking / threading (currently cooperative).
+- [ ] Animated sprite support (multi-frame sprite API).
+
+### New apps (x86 reference OS)
+- [ ] Calculator.
+- [ ] Simple game (Minesweeper, Snake, …).
+
+### App improvements (x86 reference OS)
+- [ ] Notepad: Find/Replace.
+- [ ] Notepad: Save-As via the system file dialog.
+- [ ] File Manager: create new file / new folder.
+- [ ] Dostris: 386+ performance path.
+- [ ] Music: animated note playback (stems, beams, durations).
+
+### File dialog
+- [ ] File-type filter (e.g. show only `.TXT`).
+- [ ] Show file sizes in the list.
+
+### Filesystem
+- [ ] Directory support (create / navigate subdirectories).
+- [ ] Long filename support (LFN).
+
+### APIs
+- [ ] Multi-byte-wide sprite support (>8px width).
+- [ ] 2bpp color sprite API (like icons, variable size).
+- [ ] Update [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for APIs 91–104 (and API 28's
+      SI/DI/AH/AL press-latch returns, API 63 ticks-since-boot).
+
+### Documentation
+- [ ] App-development tutorial / sample-app walkthrough.
+- [ ] Screenshots for the README.
+
+---
+
+## Per-port remaining work
+
+### 8088 / IBM PC-XT (feature parity achieved on a cycle-accurate XT; see [docs/PORT-8088.md](docs/PORT-8088.md))
+- [~] **FAT16-on-8088** (DOS-interchangeable CF): boot chain is 8086-clean and verified.
+      Remaining — [ ] convert the kernel FAT16 driver (~104 sites across
+      read/write/mount/open/cluster/FAT/alloc/readdir/create/delete/rename) to 8086 and
+      drop the pre-286 mount gate → desktop + apps + save from a FAT16 CF.
 - [ ] **Physical IBM PC/XT pass** (real INT 13h write timing, cross-boot floppy
-      persistence) — hardware-blocked, the final real-hardware step (as every port)
-- [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77MHz
-- [ ] Launcher select_icon draws over open windows (z-order violation,
-      cosmetic — known audit finding, low priority)
-- [ ] Background window content not repainted until raised (single-topmost
-      clipping model; visible when a covered window is exposed by a drag)
+      persistence) — the final real-hardware step.
+- [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77 MHz.
+- [ ] Launcher `select_icon` draws over open windows (z-order, cosmetic, low priority).
+- [ ] Background window content not repainted until raised (single-topmost clipping model).
 
-## Platform Ports (68K) — milestone 2 shipped 2026-06-11
-Done: Amiga (bare-metal, amiga/) + Mac System 7 color + Mac System 1-6
-mono (Toolbox-based, mac/) all boot to the desktop with the WM and run
-SysInfo, Clock, Files, Notepad, Music. Spec: docs/PORT-SPEC.md.
+### Known issue — root-dir entries past 16 break app launch
+The low-res launcher has 16 icon slots and the last is its own Refresh icon, so only 15
+apps fit; app #16+ collides with the refresh slot. **Workaround shipped** (MOUSE.BIN and
+MKBOOT.BIN kept off the default image so Tracker + Paint fit; both still build via
+`make apps`). Real fix: exclude the refresh slot from the count or page the icon grid.
 
-Next steps:
-- [x] Amiga: MFM track reader + portable FAT12 core, READ path
-      (fdd.i + fat12.i): DF1 trackdisk DMA + Amiga-MFM sector decode
-      with track cache; FAT12 mount/root-dir/chain-walk; Files mounts
-      the DF1 data disk ('m') and opens files in Notepad. mkfat.py
-      builds the 880KB FAT12 data image (PC interchange via mtools).
-      Verified in WinUAE: multi-cluster CHAIN.TXT read end-to-end.
-- [x] Amiga FAT12 WRITE path: MFM track encoder (sector headers,
-      checksums, clock-fixup), one-revolution track writes with
-      write-protect gate, track-granular RMW sector writes; FAT
-      alloc/free/flush, root-dir create/overwrite. Notepad F1 saves to
-      DF1 (FAT files + new UNTITLEDTXT), Tracker s/l persists the song.
-      Verified in WinUAE: byte-exact image deltas + on-screen re-read.
-- [ ] FAT12 polish: delete, rename, free-space display, dir-full UX,
-      Tracker .MOD-format export, write-verify pass
-- [x] Amiga: Notepad up/down line navigation (goal-column memory) +
-      vertical scroll (caret-follow clamp) — verified in WinUAE via the
-      AUTOTEST_NOTEPAD build
-- [ ] Amiga: blitter fast paths (text row-blit, fills) — the big OCS win
-- [ ] Amiga: TICKS_SEC calibration (vblank pacing runs fast under the
-      WinUAE test config) + NTSC detection
-- [x] Mac: Files subdirectory navigation (PBGetCatInfo ioDrDirID walk,
-      PBHSetVol current dir, ".." parent entry) — verified under Executor
-      via the UnoDOS7FTest build (enter dir, "..", open file in subdir)
-- [ ] Mac: offscreen GWorld double-buffering for flicker-free repaints
-- [ ] Both: audio ear-check on real hardware / sound-enabled emulator
-      (sequencers are register-verified; test configs run sound off)
-- [x] Amiga: MILESTONE 3 cooperative scheduler (scheduler.i): every
-      window runs its app proc in its own task with a private 2KB
-      stack; task_yield context switch, per-task event mailboxes,
-      keys + frame ticks posted by the kernel task, spawn/kill tied
-      to window create/close. Verified in WinUAE: game gravity and
-      the FAT12 write flow both run through the task machinery.
-- [x] Mac: milestone 3 scheduler (2026-06-12): per-window cooperative
-      tasks in unodos.c - 68K asm context switch (movem + SP swap),
-      heap stacks, one-slot mailboxes with key yield-retry, StkLowPt
-      cleared per the Thread Manager convention; both targets
-- [x] Mac Tracker (2026-06-12): the 32x4 pattern editor on up to four
-      Sound Manager square channels, byte-identical pattern format,
-      SONG.TRK via the File Manager
-- [x] Mac PC floppy (2026-06-12): FAT12 R/W core in C over an
-      injectable block device (.Sony raw driver on SuperDrives; RAM
-      image under Executor); Files 'v' volume toggle, Notepad
-      round-trip; PC-interchange verified byte-for-byte by an
-      independent parser (mac/test_fat12.py)
-- [x] Paint on ALL FIVE targets (2026-06-12): the MacPaint-style
-      editor (pencil/brush/eraser/line/rect/frect/oval/foval/flood/
-      spray) with platform-gamut color selectors - 256 8-bit colors
-      on Mac 7, 1-bit dither patterns on Classic, 4096 via copper
-      pens on Amiga, 512 via CRAM line-3 tuning on Genesis, full
-      mode palette on x86 incl. the 256-color VGA picker
-- [x] x86 Tracker + Paint (2026-06-12): apps/tracker.asm (PC speaker,
-      leftmost-voice playback, shared SONG.TRK format - QEMU-verified
-      with the demo song playing) and apps/paint.asm (QEMU-verified:
-      drag strokes, filled shapes, spray, CGA all-colors picker)
-- [x] Window click routing fix (2026-06-12): find_window_at returned
-      hits with stale flags on Genesis AND Amiga - every window click
-      fell through to the desktop (found on real Genesis hardware;
-      AUTOTEST_CLICK now guards it by closing a window's close box)
-- [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class)
-- [ ] Mac: Executor visual pass for the milestone-3 features (blocked
-      on a capture path; a Windows-native Executor build would let the
-      automated rig drive it like BlastEm/WinUAE)
+### Amiga (bare-metal)
+- [ ] FAT12 polish: delete, rename, free-space display, dir-full UX, Tracker `.MOD`
+      export, write-verify pass.
+- [ ] Blitter fast paths (text row-blit, fills) — the big OCS win.
+- [ ] `TICKS_SEC` calibration (vblank pacing runs fast under the WinUAE test config) + NTSC detect.
+- [ ] 640-wide OCS hires option (16 colors; needs WM-wide content scaling per PORT-SPEC).
+- [ ] Workbench-style chrome (blue/orange/white gadget look).
 
-## Genesis Port (2026-06-12) - MILESTONES 1-6 DONE (Amiga parity)
-- [x] M0 boot PoC (TMSS, VDP init, font tiles, splash) — verified in
-      BlastEm
-- [x] M1 kernel: cell-based desktop on plane A (40x28, H40), WM with
-      drag/raise/close/z-order, event queue + click latch, sprite
-      cursor, icons from the x86 .BIN art (genesis/kernel.asm)
-- [x] M1 input: 6-button pad as mouse (d-pad accel + Z turbo, A=click,
-      B=soft kbd, C/Start/X/Y synth keys; 3-button safe) + full soft
-      keyboard overlay (QWERTY, sticky Shift, F1, arrows)
-- [x] M1 PS/2 drivers wired for real hardware: port 2 kbd on the EXT
-      interrupt (set-2 decode), port 1 mouse via host-inhibit vblank
-      windows + boot probe; decode paths emulator-verified via
-      synthetic streams (AUTOTEST_PS2)
-- [x] M1 apps: SysInfo, Clock, Notepad (caret/line-nav/scroll/status),
-      Music (PSG ch0 Canon in D, staff view)
-- [x] M2 game ports (2026-06-11): Dostris + OutLast + Pac-Man, same
-      tables/physics/AI as x86, cell rendering via the gcol map
-      (Amiga $0RGB -> Genesis $0BGR!), Pac-Man actors as hardware
-      sprites, Korobeiniki/Sunset Drive on PSG ch1, game-mode pad
-      (d-pad = arrows w/ hold-repeat, A=Space, X=new, Y=pause);
-      verified in BlastEm (dostris/outlast/pacman AUTOTESTs)
-- [x] M4 SRAM storage (2026-06-11): 8KB battery SRAM + USV1 mini-FS
-      (8 files, overwrite-by-name, delete-compaction), Files app,
-      Notepad F1-save; BlastEm-verified round trip. $A130F1 once at
-      boot only (toggling unmaps it in BlastEm).
-- [x] M4.5 tape/WAV storage (2026-06-11): KCS 1200-baud AFSK, PSG
-      write path (record the headphone jack), comparator-on-port-2
-      read path, injectable decoder (AUTOTEST_TAPE), mktape.py
-      WAV encode/decode round trip; Files w/r keys. Comparator
-      hardware = real-hw checklist.
-- [x] M3 (2026-06-12): Theme over CRAM (8 shared presets + 3-bit RGB
-      custom editing, themed entries rewritten live) and Tracker over
-      PSG (3 square channels + noise, byte-identical pattern format
-      to the Amiga tracker, demo song, edit preview, s/l to SRAM and
-      t/y to tape) — BlastEm-verified (AUTOTEST_THEME/_TRACKER)
-- [x] M5 (2026-06-12): Sega CD backup RAM via Mode-1 (genesis/bram.i):
-      expansion probe (DISK bit + bus-error recovery — BlastEm raises
-      a bus error on $400000 with no CD), Kosinski sub-BIOS
-      decompress + Sub-CPU boot, ~300-byte SP stub calling the BIOS
-      _BURAM traps, LIST/READ/WRITE/DELETE mailbox RPC with Word-RAM
-      staging, Files volume toggle ('v') + Notepad F1 to the active
-      volume, names normalized 8.3 -> 11 chars with the original name
-      in the payload header. RPC/UI emulator-verified through the
-      injectable fake transport (AUTOTEST_BRAM); the BIOS-trap path
-      itself is a CD-emulator/real-hardware item
-- [x] M6 (2026-06-12): cooperative scheduler (genesis/scheduler.i,
-      port of amiga/scheduler.i): per-window tasks with private 2KB
-      stacks, one-slot mailboxes (keys yield-retry so bursts survive),
-      kernel task 0 pumps input/audio; BlastEm-verified (soft-kbd
-      typing, PS/2, game gravity all through the task machinery)
-- [ ] BRAM follow-ups: verify the Mode-1 BIOS path under Genesis Plus
-      GX / Ares (BlastEm has no CD), listing >8 files (BRMDIR paging),
-      Tracker save-to-BRAM
-- [ ] Deferred: SD card over bit-banged SPI + FAT16 (spec:
-      docs/STORAGE.md tier 4; lands with the adapter PCB)
-- [x] Real hardware (2026-06-12): the cartridge boots and runs on a
-      physical console — first new port validated on metal
-- [ ] Real-hardware adapters still to exercise: PS/2 wiring, tape
-      comparator, Sega CD Mode-1 end-to-end
+### Mac System 1–7 (Toolbox, hosted)
+- [ ] Offscreen GWorld double-buffering for flicker-free repaints.
+- [ ] Audio ear-check on real hardware / sound-enabled emulator (sequencers are register-verified).
+- [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class).
+- [ ] Executor visual pass for the milestone-3 features (blocked on a capture path; a
+      Windows-native Executor build would let the rig drive it like BlastEm/WinUAE).
 
-## Game Ports (2026-06-11) - DONE
-- [x] Dostris on Amiga + Mac (same piece tables/scoring/speed curve as
-      apps/dostris.asm; windowed; verified WinUAE + Executor)
-- [x] OutLast on Amiga + Mac (same track/perspective/traffic/physics as
-      apps/outlast.asm; verified WinUAE + Executor)
-- [x] Game music on the 68K ports (Korobeiniki + Sunset Drive; Paula + Sound Manager sequencers)
-- [x] Pac-Man on the 68K ports (full maze + 3-ghost AI on both;
-      Amiga uses incremental tile rendering; verified WinUAE + Executor)
+### MacPlus (standalone OS)
+- [ ] Files launches `*.APP` entries directly (real multi-app launcher, not the fixed Demo
+      icon); FAT12 delete/rename; free-space display; a proper Demo icon.
+- [ ] Color milestone: 8bpp framebuffer for the IIci → full-color Theme/Paint/games there.
+- [ ] Real-hardware items: sound ear-check, SE sound audibility; Mini vMac validation
+      (needs a user-supplied Mac Plus ROM at `macplus/vMac.ROM`); mouse quadrature polarity,
+      keyboard poll cadence, SCC write-recovery calibration.
+- [ ] Harness: SE/Classic screen-base variants; bus-error injection for the fault screens.
+- [ ] Known harness-only bug: ~1/1000 lazy-CCR misevaluation at an interrupt-restore
+      boundary (root-caused to Unicorn's context restore; real hardware / Mini vMac unaffected).
 
-## Tracker (2026-06-11) - v1 DONE
-- [x] Amiga Tracker app: write + play 4-channel Paula music (MOD-style
-      ProTracker periods, 32-row pattern editor, 4 chip-synthesized
-      instruments, demo song, edit preview)
-- [ ] Tracker: load/save real .MOD files (needs FAT12), more patterns,
-      volume/effect columns, sample import
+### Genesis (hardware-validated)
+- [ ] BRAM follow-ups: verify the Mode-1 BIOS path under Genesis Plus GX / Ares, `>8`-file
+      listing (BRMDIR paging), Tracker save-to-BRAM.
+- [ ] Deferred: SD card over bit-banged SPI + FAT16 ([docs/STORAGE.md](docs/STORAGE.md)
+      tier 4; lands with the adapter PCB).
+- [ ] Real-hardware adapters still to exercise: PS/2 wiring, tape comparator, Sega CD Mode-1.
+- [ ] Console-flavored chrome (after weighing the real-hardware regression risk).
 
-## Color/Resolution Upgrade (2026-06-11) - DONE
-- [x] Amiga: 5 bitplanes / 32 colors (OCS lowres max); themed UI colors
-      0-3 + fixed extended game palette 4-31; per-plane primitives
-- [x] Mac color targets: true-RGB game art (8-bit QuickDraw), larger
-      playfields (Dostris 16px cells, OutLast 480x300 at 3/2 scale)
-- [ ] Amiga 640-wide OCS hires option (16 colors max; needs WM-wide
-      content scaling per PORT-SPEC)
+### Apple II (in progress)
+- [ ] 6502/dasm/py65; Disk II boot + own GCR RWTS; 280×192 hi-res 1-bit; keyboard desktop.
+      M1 landed (toolchain, `mkfont.py`, `boot.s` with 6-and-2 RWTS + multi-track loader).
+      Remaining M1: `kernel.s`, `mkdsk.py`, `harness.py`, `build.sh`, `tests/m1.script`,
+      README. M2: RWTS write + USV1 FS + Files/Notepad + paddle pointer. M3:
+      Dostris/Pac-Man/Paint/Tracker/Theme; OutLast feasibility-gated at 1 MHz.
+      Validation: py65 harness → AppleWin → FloppyEmu.
 
-## Theming & Splash (2026-06-11) - DONE
-- [x] 8 shared preset palettes on every color-capable platform (x86 VGA
-      via new kernel API 105 + Settings buttons; Amiga Theme app via
-      copper; Mac Theme app via mutable kPalette). Preset 1 = Classic
-      VGA. Custom colors: per-channel RGB editing on Amiga + Mac;
-      element-color mapping (existing) on x86 CGA.
-- [x] Per-platform boot splash stating "UnoDOS 3" with platform art:
-      IBM PC (CRT/unit/keyboard) on x86, striped checkmark on Amiga,
-      happy compact Mac on the Mac targets.
+### PS2 (via FreeMcBoot)
+- [ ] PS2SDK ELF launched by FMCB; port the portable C core over a gsKit/pad/mc/audsrv
+      layer; pad-as-pointer + soft keyboard always, USB kbd/mouse when present; memory-card
+      storage. Core + apps are host-shim/PCSX2-verified; remaining is on-device PS2 validation.
 
-## Kernel / Window Manager
-- [ ] Modal window flag (WIN_FLAG_MODAL) — block focus changes when modal is active
-- [ ] Window minimize/maximize
-- [ ] Preemptive multitasking / threading
-- [x] Serial mouse support (Microsoft mouse on COM1 / IRQ4 — see 8088 M2, Build 409)
-- [ ] Animated sprite support (multi-frame sprite API)
+### SNES / Apple IIGS (emulator-verified — real-hardware remaining)
+- [ ] SNES: real hardware (flashcart + SNES Mouse) + audio ear-check
+      (backlog in [snes/HANDOFF.md](snes/HANDOFF.md)).
+- [ ] IIGS: real hardware (GSplus/KEGS/MAME then FloppyEmu SmartPort) + audio ear-check
+      (see [iigs/HANDOFF.md](iigs/HANDOFF.md)).
 
-## New Apps
-- [ ] Calculator
-- [ ] Paint / drawing tool
-- [ ] Simple game (Minesweeper, Snake, etc.)
-
-## App Improvements
-- [ ] Notepad: Find/Replace
-- [ ] Notepad: Save As uses system file dialog
-- [ ] File Manager: create new file / new folder
-- [ ] Dostris: performance improvements for 386+
-- [ ] Music: animated note playback (stems, beams, note duration visuals)
-
-## File Dialog
-- [ ] File type filter (e.g. show only .TXT)
-- [ ] Show file sizes in list
-
-## Filesystem
-- [ ] Directory support (create, navigate subdirectories)
-- [ ] Long filename support (LFN)
-
-## Boot / Hardware
-- [ ] 8086-compatible boot for HP 200LX, Sharp PC-3100 (kernel itself is
-      now 8086-clean; needs 720KB media/geometry support — see audit digest
-      ~line 4552 for the design notes)
-
-## APIs
-- [ ] Multi-byte-wide sprite support (>8px width)
-- [ ] 2bpp color sprite API (like icons but variable size)
-- [ ] Update API_REFERENCE.md for APIs 91-104 (and API 28's new
-      SI/DI/AH/AL press-latch returns, API 63 ticks-since-boot)
-
-## Documentation
-- [ ] App development tutorial / sample app walkthrough
-- [ ] Screenshots for README
-
-## MacPlus standalone OS port (macplus/, after M1 2026-06-12)
-- [x] M2 (2026-06-12): UnoDOS floppy filesystem (FAT12, shared layout with
-      the x86 port) read + written through the .Sony BIOS layer
-      (sony.i over _Read/_Write A-traps + the portable fat12.i core from
-      the Amiga port); Files + Notepad apps (in-kernel procs, key routing
-      via the topmost window's WPROC); disk-loaded app binaries — the
-      launcher reads DEMO.APP off the floppy into $40000 and runs it as a
-      windowed app through a position-independent ksys-table ABI
-      (diskapp.i + demo_app.asm), like the x86 launcher loads .BINs.
-      Harness extended to emulate _Write; verified end-to-end in
-      tests/m2.script (list/open/edit/save/persist + disk-app load+keys).
-- [ ] M2 follow-ups: Files should launch *.APP entries directly (a real
-      multi-app launcher rather than the single fixed Demo icon); FAT12
-      delete/rename; free-space display; a proper Demo icon (reuses
-      icon_paint today)
-- [ ] M2 real-hardware risk: .Sony _Read/_Write *after* the kernel has
-      taken the VIA/SCC is harness- and spec-validated but unproven on
-      metal (the boot-time _Read path is). Watch this on the SE/IIci run.
-- [x] REAL-HW FIX (2026-06-12, first SE run): Sad Mac 0F/00000001 - the
-      boot block + sony.i hardcoded drive 1; a FloppyEmu on the external
-      port boots as drive 2/3. Both layers now honor BootDrive ($210);
-      distinctive fail codes ($42 read failed / $43 kernel magic missing);
-      harness boots from drive 2 and asserts the drive number end-to-end.
-      Sad Mac decode for future runs: 0F/xx = SysError xx during boot;
-      0F/0001 from a current build = a REAL bus error (our codes are
-      $42/$43).
-### M3: full app parity - COMPLETE 2026-06-12
-macplus now carries the entire shared app roster (11 apps + the
-disk-loaded Demo): SysInfo, Clock, Files, Notepad, Dostris, Pac-Man,
-OutLast, Paint, Music, Tracker, Theme.
-- [x] Sound foundation (snd.i): the Plus pulse-width buffer (370 words at
-      MemTop-$300, high bytes only - low bytes are the .Sony disk PWM),
-      Paula-period square synth, machine-gated (Plus full VIA control /
-      SE buffer-only / II disabled). gm_* sequencer with 50->60Hz tempo.
-- [x] Cooperative scheduler (scheduler.i): per-window tasks, private 2KB
-      stacks at $3C000, one-slot mailboxes with the Genesis bounded key
-      yield-retry; StkLowPt cleared (ROM stack sniffer). task_body
-      re-derives the proc per event (registers are app-clobberable -
-      found via Theme's repaint_all using d7).
-- [x] Music (square sequencer + staff view, background playback)
-- [x] Tracker (byte-identical pattern format; leftmost-voice playback
-      like the x86 PC-speaker port; SONG.UNO on the FAT12 floppy)
-- [x] Theme - 1-bit dither schemes through the now-mutable pat_tab,
-      6 presets incl. full video invert, live whole-screen preview
-- [x] Paint (4-dither-ink variant; PAINT.UNO byte-exact round-trip)
-- [x] Games: Dostris, OutLast, Pac-Man (verbatim tables/AI; 1-bit
-      rendering schemes; gravity/physics through task ticks)
-- [ ] Color milestone (orthogonal): 8bpp framebuffer for the IIci, which
-      then unlocks full-color Theme/Paint/games on that machine
-- [ ] M3 real-hardware items: sound ear-check (synthesis is
-      buffer-verified only), SE sound audibility (no VIA writes there)
-- [ ] Real-hardware / Mini vMac validation (needs a user-supplied Mac
-      Plus ROM dump at macplus/vMac.ROM). Calibration points: mouse
-      quadrature polarity (flip eor sense in isr_lvl2 if an axis is
-      reversed), keyboard Instant-poll cadence, SCC write-recovery
-      delays (nops may need widening on real silicon)
-- [ ] Harness: SE/Classic variants (screen base differences), bus-error
-      injection to exercise the kernel fault screens
-- [ ] macplus harness: rare (~1/1000 injections) lazy-CCR misevaluation at
-      an interrupt-injection/restore boundary - a conditional branch right
-      at the boundary can misread stale flags. ROOT-CAUSED 2026-06-12 via
-      Paint: polls returned exactly the clamp constants (255/139) when the
-      clamp's ble misfired; widening the pre-step to flag-producing
-      instructions does NOT change the rate (measured), so the fault is in
-      Unicorn's context restore, not the boundary choice. Manifests as
-      1px clamp spikes in long Paint drags and the 2-char label gap.
-      Harness-only; Mini vMac / real hardware unaffected.
-
-## Cross-platform chrome themes (2026-06-12 direction, AFTER macplus parity)
-Make the window-decoration LOOK a selectable theme on the COLOR platforms,
-not a hardcoded per-port style. So an Amiga can wear the Mac System 7 look,
-a PC the Amiga Workbench look, etc. This is a distinct axis from the
-color-palette "Theme" app (slot palettes) - it is the draw_window chrome
-style. Scope (user 2026-06-12): color platforms only - x86 VGA, Amiga,
-mac/ hosted, Genesis; macplus (1-bit) and x86 CGA keep their native look.
-- [ ] Define a portable chrome-style id (0=Mac System 7, 1=Amiga Workbench,
-      2=Windows 3.x, 3=Windows XP) + a shared spec in docs/PORT-SPEC.md
-- [ ] Refactor each color port's draw_window to branch on the style and
-      implement ALL styles: kernel/ (x86 VGA), amiga/, mac/ (hosted),
-      genesis/
-- [ ] NEW Windows XP "Luna" style: blue gradient title bar, rounded top
-      corners, the red close button, 3D raised frame (gradient -> CRAM
-      ramp on Genesis, banded gradient on 32-color Amiga)
-- [ ] Expose the picker in each port's Theme/Appearance app; persist the
-      choice with the palette/theme settings
-
-## New ports program (2026-06-12; full plan: docs/PORTS-PLAN.md)
-Order: Apple II -> (chrome themes) -> Apple IIGS -> SNES -> PS2. Each
-milestone ships with a scripted regression rig + screenshots, macplus-style.
-- [ ] Apple II (IN PROGRESS): 6502/dasm/py65; Disk II boot via T0S0
-      autoload + own GCR read-RWTS; 280x192 hi-res 1-bit; keyboard-driven
-      "UnoDOS Lite" desktop. M1 done so far: toolchain, mkfont.py, boot.s
-      (boot0 + 6-and-2 RWTS + multi-track loader). Remaining M1: kernel.s,
-      mkdsk.py, harness.py (py65), build.sh, tests/m1.script, README.
-      Validation: py65 harness -> AppleWin (proves RWTS) -> FloppyEmu.
-      M2: RWTS write + USV1-style FS + Files/Notepad + paddle pointer.
-      M3: Dostris/Pac-Man/Paint/Tracker(blocking speaker)/Theme-dithers;
-      OutLast feasibility-gated at 1MHz.
-- [x] Apple IIGS (FULL PARITY, build 420): 65C816/ca65; firmware block boot (the macplus model:
-      SmartPort = the .Sony equivalent); SHR 320x200x16 desktop; ADB
-      firmware-state input; FAT12 in the 800K block space; Ensoniq
-      wavetable Music/Tracker. Harness decision at M0 (py65816 vs GSplus
-      scripting). FloppyEmu covers real-hw media.
-- [x] SNES: M0–M3 DONE (emulator-verified). 65816 toolchain shared with
-      IIGS; the GENESIS architecture re-expressed on a shadow+DMA model
-      (tile desktop, sprite cursor, pad-as-pointer + soft keyboard, SRAM
-      USV1 FS, the three games, Music/Theme/Tracker/Paint, tick scheduler).
-      The SPC700 audio driver (built by a Python SPC700 assembler, IPL
-      upload + mailbox) was the hardest novel piece — verified by ack.
-      Rig: Mesen2 F12 framebuffer. Remaining: real hardware (flashcart +
-      SNES Mouse) + audio ear-check; backlog in snes/HANDOFF.md.
-- [ ] PS2 via FreeMcBoot: PS2SDK ELF launched by FMCB; port the PORTABLE
-      C CORE from mac/unodos.c over a gsKit/pad/mc/audsrv platform layer;
-      pad-as-pointer + soft keyboard always, USB kbd/mouse when present;
-      memory-card file storage. Rig: PCSX2 boots ELFs directly.
-      Open Qs: SNES flashcart + Mouse on hand? PS2 USB kbd? MC vs USB
-      storage primary? Apple II target machine (II+/IIe/IIc)?
-
-## Platform-authentic chrome (2026-06-12 direction)
-- [x] Mac ports: classic Mac / System 7 look (shadows, pinstriped active
-      title, square close box)
-- [ ] Amiga: Workbench-style chrome (blue/orange/white gadget look)
-- [ ] x86 VGA (486): Windows 3.x-style chrome (3D bevels, solid title bar)
-- [ ] x86 CGA (8088): same design language reduced to 4 colors
-- [ ] Genesis: console-flavored chrome (after real-hardware regression risk
-      is weighed - port is hardware-validated as-is)
-- [ ] x86 chrome status (2026-06-12): VGA already ships the Windows-3.x
-      3D widget_style; CGA ships the flat variant - platform-authentic
-      as-is. Follow-ups: (a) qemu_test.py key/click injection didn't land
-      this session (boot+render fine) - re-check the QEMU input workaround;
-      (b) optional VGA window drop shadows need the dirty-rect/move-erase
-      interaction solved first
+### Cross-platform chrome themes (color platforms)
+Make window-decoration chrome a selectable style (Mac System 7 / Amiga Workbench /
+Windows 3.x / Windows XP "Luna"), distinct from the color-palette "Theme" app. x86 VGA
+already ships the Windows-3.x style; CGA ships the flat variant.
+- [ ] Define a portable chrome-style id + shared spec in [docs/PORT-SPEC.md](docs/PORT-SPEC.md).
+- [ ] Implement all styles in each color port's `draw_window` (x86 VGA, Amiga, mac/ hosted, Genesis).
+- [ ] Windows XP "Luna" style (blue gradient title, rounded top, red close, 3D frame).
+- [ ] Expose the picker in each port's Theme/Appearance app; persist with the theme settings.

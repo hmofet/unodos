@@ -1,6 +1,11 @@
 # UnoDOS 3.1 — the Contract-Driven Architecture
 
-**Status:** design proposal (architect pass; no implementation yet).
+**Status:** partially implemented. The Contract (`unodef/`) and the 3.1 window ABI now
+ship across the reachable asm ports + x86 and the `pc64/` world (all generate from or are
+checked against `unodef/`). The broader models described here — the runtime driver/bus,
+the tiered concurrency/scheduler spanning a 6502 to the PS3 Cell, and the multi-surface
+display model — remain the forward design being built out (`pc64/` is furthest along:
+real `unobus`/`unonet` drivers, a NIC + TCP/IP stack, TLS, and 3D).
 **Scope:** a redesign of how UnoDOS is *authored, generated, and verified* across
 its many worlds; a rethink of the asm/C split; a write-once subsystem model that
 still lets each machine exploit its custom hardware; a **tiered concurrency /
@@ -659,5 +664,6 @@ the generator trustworthy.
 
 ---
 
-*Design proposal for review — no implementation yet. On agreement, build per §16,
-verifying host-first at each phase.*
+*The Contract core (`unodef/` + the 3.1 window ABI) is implemented and shipping across the
+ports; the broader driver/bus, scheduler, and multi-surface models here are the forward
+design, built per §16 and verified host-first at each phase.*

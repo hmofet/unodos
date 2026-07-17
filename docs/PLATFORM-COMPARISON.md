@@ -23,7 +23,9 @@ which family a platform is in:
   Raspberry Pi, PinePhone, and PowerPC Mac are the eleven ports built fresh on the 3.1
   Contract — see below.)*
 - **Portable C core — shared `unodos.c`** (one ~52 KB core + a thin per-platform
-  backend): Mac System 7, Mac System 1–6, PS2, Dreamcast.
+  backend): Mac System 7, Mac System 1–6, PS2, Dreamcast — and the **Modern PC
+  (pc64)** UEFI world, whose `legacy` build runs this core while its default build
+  promotes the [`unoui`](UNOUI.md) toolkit to a full desktop shell.
 
 ## All platforms
 
@@ -39,6 +41,7 @@ which family a platform is in:
 | **Apple II** | 6502 @1 MHz / 48–64 KB | 6502 asm, bare-metal Disk II autoload | Hi-res 280×192 1-bit SW | 8 binaries via GCR RWTS → fixed `$6000`; **full-screen, one-at-a-time** | Own GCR mini-FS | M1–M3; py65; ⏳ AppleWin |
 | **Sony PS2** | R5900 / 32 MB | **C core**, PS2SDK bare-metal | SW 640×448×32 fb → GS each vsync | `AppInterface`, 11 `.uno` from `mc0:`; **windowed** | Memory card (libmc) | M0–M3; PCSX2 @60 fps |
 | **Sega Dreamcast** | SH-4 / 16 MB | **C core**, KallistiOS | SW 640×480×32 fb → PVR RGB565 each vblank | `AppInterface`, `.uno` from `/cd` (ISO9660); **windowed** | VMU | at parity; Flycast @60 fps |
+| **Modern PC (pc64)** *(flagship)* | x86-64 (any UEFI PC ~2007+) / MBs | **C**, bare-metal **UEFI** app (PE32+ via mingw-w64, no EDK2) | SW `fb` 32bpp → GOP linear FB on change, FILL-scaled (≤1920×1200) | default: **unoui** shell in one image; `legacy`: `AppInterface` `unodos.c` core + modules; **windowed** (move + resize) | RAM disk + FAT/FAT32 via UEFI Simple File System (read); NVMe/AHCI pending | ✅ **real X1 Carbon Gen 8**; QEMU + OVMF |
 | **Super Nintendo** | 65816 @3.58 / 128 KB | 65816 asm, bare-metal LoROM, shadow+DMA | WRAM tilemap shadow → VRAM DMA (NMI) | **built into ROM** → in-ROM table | Battery SRAM mini-FS | M0–M3; Mesen2; 🟡 boots on a SupaBoy clone (FXPak, icons/audio issues) |
 | **Apple IIGS** | 65C816 @2.8 / 256 KB–8 MB | 65816 asm, bare-metal ProDOS/SmartPort boot | 4 bpp Super Hi-Res SW | 8 `.APP` from FAT12/SmartPort → bank-0 slots, **JMP vectors**, multi-resident; **windowed** | FAT12 over SmartPort | M0–M3; py65816 |
 | **Commodore 64** | 6510 @1 MHz / 64 KB | 6510 asm, bare-metal PRG (`SYS 2061`) | VIC-II hi-res bitmap, per-cell color | disk-loaded to `$5000` via `$DE00`, **`mkapi.py` addresses**; **full-screen, one-at-a-time** | USV1 byte-heap on `.d64` | M1–M3; py65 |
