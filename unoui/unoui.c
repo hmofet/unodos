@@ -33,11 +33,30 @@ void unoui_window_init(unoui_window *win, const char *title,
     win->r.x = x; win->r.y = y; win->r.w = w; win->r.h = h;
     win->active = 1;
     win->font_slot = UI_FONT_INHERIT;
+    win->min_w = 140; win->min_h = 100;
 }
 
 /* per-window font override hooks (platform-supplied; default no-ops) */
 void (*unoui_font_push)(int slot) = 0;
 void (*unoui_font_pop)(void) = 0;
+
+void unoui_widget_fill(unoui_widget *w) { if (w) w->flags |= UI_WF_FILL; }
+
+/* stretch every fill widget to the window's current content rect (called on
+ * resize + resolution change). content = the region below the titlebar/frame. */
+void unoui_reflow_window(const unoui_theme *t, unoui_window *win)
+{
+    int bare = (win->flags & UI_WIN_BARE) != 0;
+    int fw = t->m.frame_w, th = bare ? 0 : t->m.title_h, pad = bare ? 0 : t->m.pad;
+    int cw = win->r.w - 2 * fw - 2 * pad;         /* usable content (matches origin) */
+    int ch = win->r.h - th - fw - 2 * pad, i;
+    for (i = 0; i < win->nw; i++) {
+        unoui_widget *w = &win->w[i];
+        if (!(w->flags & UI_WF_FILL)) continue;
+        w->r.w = cw - w->r.x;  if (w->r.w < 1) w->r.w = 1;
+        w->r.h = ch - w->r.y;  if (w->r.h < 1) w->r.h = 1;
+    }
+}
 
 unoui_widget *unoui_add_label(unoui_window *w, int x, int y, const char *t)
 { return push(w, UI_LABEL, x, y, fb_text_w(t), 8, t); }
@@ -878,6 +897,11 @@ void unoui_render_ui(unoui_ui *ui)
         }
           if (fontpushed) unoui_font_pop(); }
         fb_reset_clip();
+        if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
+            int gx = win->r.x + win->r.w - fw - 3, gy = win->r.y + win->r.h - fw - 3, k, j;
+            for (k = 0; k < 3; k++) for (j = 0; j <= k; j++)   /* corner grip */
+                fb_fill_rect(gx - j * 4, gy - k * 4, 2, 2, t->pal.text_dim);
+        }
     }
     /* the open menu's popup deliberately extends past its window - draw it
      * after the clip is reset. */
