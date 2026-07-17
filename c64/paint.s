@@ -384,6 +384,10 @@ pt_load:
         sta zpFSDat
         lda #>CANVAS
         sta zpFSDat+1
+        lda #<512               ; CANVAS = 512 bytes (fs_read cap)
+        sta zpFSMax
+        lda #>512
+        sta zpFSMax+1
         pla
         jsr fs_read
         jsr sid_click
