@@ -312,11 +312,18 @@ int uno_i2c_hid_init(void)
     return 0;
 }
 
-static int getbits(const u8 *d, int bitoff, int nbits)
+/* Extract nbits starting at bitoff from d[], which holds nbytes valid bytes.
+ * Every field (bit offset, width) comes from the device's HID report
+ * descriptor, so both are untrusted: clamp nbits to a word and stop at the end
+ * of the buffer rather than reading past it. */
+static int getbits(const u8 *d, int nbytes, int bitoff, int nbits)
 {
     int v = 0, i;
+    if (bitoff < 0 || nbits <= 0) return 0;
+    if (nbits > 31) nbits = 31;
     for (i = 0; i < nbits; i++) {
         int b = bitoff + i;
+        if ((b >> 3) >= nbytes) break;
         if (d[b >> 3] & (1 << (b & 7))) v |= (1 << i);
     }
     return v;
@@ -341,12 +348,13 @@ int uno_i2c_hid_poll(int *absx, int *absy, int *buttons)
     if (g_parsed) {
         int base = g_report_id ? 3 : 2;          /* skip len16 [+ reportID] */
         const u8 *data = rep + base;
+        int avail = n - base;                     /* valid bytes behind `data` */
         int x, y, tip;
         if (g_report_id && rep[2] != g_report_id) return 0;   /* a different report */
-        if (len <= base) return 0;
-        x = getbits(data, g_x_off, g_x_bits);
-        y = getbits(data, g_y_off, g_y_bits);
-        tip = (g_tip_off >= 0) ? getbits(data, g_tip_off, 1) : 0;
+        if (len <= base || avail <= 0) return 0;
+        x = getbits(data, avail, g_x_off, g_x_bits);
+        y = getbits(data, avail, g_y_off, g_y_bits);
+        tip = (g_tip_off >= 0) ? getbits(data, avail, g_tip_off, 1) : 0;
         if (g_x_lmax > 0) x = (int)((long)x * 32767 / g_x_lmax);
         if (g_y_lmax > 0) y = (int)((long)y * 32767 / g_y_lmax);
         *absx = x < 0 ? 0 : (x > 32767 ? 32767 : x);

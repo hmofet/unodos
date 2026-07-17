@@ -16,10 +16,19 @@
 #include <stddef.h>
 
 /* ---- mem* / str* (gcc also emits calls to these for struct copies) ------ */
+typedef unsigned long long uword;   /* 64-bit word for bulk copies/fills */
+
 void *memcpy(void *dst, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
+    /* copy 8 bytes at a time once the pointers are word-aligned and in the same
+       phase - the desktop background blit and per-frame scene restore move
+       megabytes, so a byte-at-a-time loop was a real cost. */
+    if ((((size_t)d ^ (size_t)s) & 7u) == 0) {
+        while (n && ((size_t)d & 7u)) { *d++ = *s++; n--; }
+        while (n >= 8) { *(uword *)d = *(const uword *)s; d += 8; s += 8; n -= 8; }
+    }
     while (n--) *d++ = *s++;
     return dst;
 }
@@ -36,7 +45,12 @@ void *memmove(void *dst, const void *src, size_t n)
 void *memset(void *dst, int c, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
-    while (n--) *d++ = (unsigned char)c;
+    unsigned char b = (unsigned char)c;
+    uword w = (uword)b;
+    w |= w << 8; w |= w << 16; w |= w << 32;
+    while (n && ((size_t)d & 7u)) { *d++ = b; n--; }
+    while (n >= 8) { *(uword *)d = w; d += 8; n -= 8; }
+    while (n--) *d++ = b;
     return dst;
 }
 
@@ -147,15 +161,25 @@ void *malloc(size_t n)
 
 void free(void *p)
 {
-    Blk *b;
+    Blk *b, *w;
     if (!p) return;
     b = (Blk *)((unsigned char *)p - HDR);
+    /* reject pointers that aren't inside the arena, and double-frees, rather
+       than corrupting block metadata. */
+    if ((unsigned char *)b < gHeap || (unsigned char *)b >= gHeap + HEAP_BYTES)
+        return;
+    if (!b->used) return;
     b->used = 0;
-    /* coalesce forward runs of free blocks */
-    while (b->next && !b->next->used &&
-           (unsigned char *)b + HDR + b->size == (unsigned char *)b->next) {
-        b->size += HDR + b->next->size;
-        b->next = b->next->next;
+    /* coalesce ALL adjacent free runs. The free list stays address-ordered, so
+       a single forward sweep merges both the just-freed block with its
+       successor AND its predecessor with it (backward coalescing) - the old
+       forward-only merge left long-run fragmentation. */
+    for (w = gHead; w; w = w->next) {
+        while (w->next && !w->used && !w->next->used &&
+               (unsigned char *)w + HDR + w->size == (unsigned char *)w->next) {
+            w->size += HDR + w->next->size;
+            w->next = w->next->next;
+        }
     }
 }
 
@@ -176,8 +200,11 @@ void *realloc(void *p, size_t n)
 
 void *calloc(size_t nm, size_t sz)
 {
-    size_t n = nm * sz;
-    void *p = malloc(n);
+    size_t n;
+    void *p;
+    if (sz && nm > (size_t)-1 / sz) return 0;   /* multiply would overflow */
+    n = nm * sz;
+    p = malloc(n);
     if (p) memset(p, 0, n);
     return p;
 }
