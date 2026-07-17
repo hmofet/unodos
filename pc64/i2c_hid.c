@@ -14,6 +14,7 @@ int uno_i2c_hid_dump(unsigned char *o, int m) { (void)o;(void)m; return 0; }
 int uno_i2c_hid_present(void) { return 0; }
 void uno_i2c_hid_status(int *nb, int *nc, int *pr, int *ad, int *pa)
 { if (nb)*nb=0; if (nc)*nc=0; if (pr)*pr=0; if (ad)*ad=0; if (pa)*pa=0; }
+void uno_i2c_hid_diag(int *sa, unsigned *ab) { if (sa)*sa=0; if (ab)*ab=0; }
 
 #else  /* ================= UNO_I2C_TRACKPAD enabled ==================== */
 
@@ -36,8 +37,8 @@ typedef unsigned int   u32;
 typedef unsigned long long u64;
 
 /* candidates a Windows-Precision-Touchpad / HID-over-I2C pad answers on */
-static const u8  kAddrs[]   = { 0x2c, 0x15, 0x2a, 0x10, 0x20 };
-static const u16 kDescRegs[] = { 0x0020, 0x0001 };
+static const u8  kAddrs[]   = { 0x2c, 0x15, 0x2a, 0x10, 0x20, 0x05, 0x06, 0x07, 0x25, 0x2d };
+static const u16 kDescRegs[] = { 0x0020, 0x0001, 0x0000 };
 
 /* ---- DesignWare (Synopsys DW_apb_i2c) register offsets ------------------ */
 #define DW_IC_CON           0x00
@@ -56,6 +57,7 @@ static const u16 kDescRegs[] = { 0x0020, 0x0001 };
 #define DW_IC_ENABLE_STATUS 0x9c
 #define DW_IC_COMP_TYPE     0xfc    /* DesignWare signature register */
 #define DW_COMP_TYPE_VALUE  0x44570140u   /* "DW" identity - guards a bad BAR */
+#define LPSS_RESETS         0x804   /* Intel LPSS private: controller reset */
 
 #define DW_CON_MASTER       0x01
 #define DW_CON_SPEED_FAST   0x04
@@ -91,6 +93,13 @@ static int g_tip_off;              /* tip-switch / button-1 bit, -1 if none */
 static u32 r32(u32 o) { return *(volatile u32 *)(g_i2c + o); }
 static void w32(u32 o, u32 v) { *(volatile u32 *)(g_i2c + o) = v; }
 static void spin(volatile int n) { while (n-- > 0) __asm__ volatile (""); }
+
+/* probe diagnostics (surfaced by uno_i2c_hid_diag for the System readout):
+ * did any transfer return bytes (bus + a device answered), and the last
+ * TX_ABRT_SOURCE. Lets the next metal readout distinguish a dead bus (all
+ * timeout, abrt 0) from NAKs (abrt bit7 set) from a bad descriptor. */
+static int g_saw_bytes;
+static u32 g_last_abrt;
 
 /* ---- DesignWare master: write wbuf then (repeated-start) read rbuf ------- */
 static int dw_wr_rd(u8 addr, const u8 *wbuf, int wlen, u8 *rbuf, int rlen)
@@ -130,7 +139,9 @@ static int dw_wr_rd(u8 addr, const u8 *wbuf, int wlen, u8 *rbuf, int rlen)
         if (!(r32(DW_IC_STATUS) & DW_STATUS_RFNE)) break;   /* timeout */
         rbuf[got++] = (u8)(r32(DW_IC_DATA_CMD) & 0xFF);
     }
-    if (r32(DW_IC_TX_ABRT_SOURCE)) { (void)r32(DW_IC_CLR_TX_ABRT); return -1; }
+    { u32 ab = r32(DW_IC_TX_ABRT_SOURCE); if (ab) g_last_abrt = ab;
+      if (got > 0) g_saw_bytes = 1;
+      if (ab) { (void)r32(DW_IC_CLR_TX_ABRT); return -1; } }
     return got;
 }
 
@@ -281,6 +292,14 @@ int uno_i2c_hid_init(void)
          * inert (e.g. under QEMU, which has no LPSS I2C). */
         if (r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) continue;
         g_nctrl++;
+        /* Intel LPSS leaves the DW core in reset until its private RESETS
+         * register is released; a controller still in reset never drives SCL,
+         * so every transfer times out (the "found controllers, no device"
+         * symptom). Assert then release host controller + iDMA, and settle. */
+        w32(LPSS_RESETS, 0x0);
+        { int t = 20000; while (t--) spin(2); }
+        w32(LPSS_RESETS, 0x7);
+        { int t = 100000; while (t--) spin(2); }
         for (ai = 0; ai < (int)sizeof kAddrs; ai++)
             for (di = 0; di < (int)(sizeof kDescRegs / sizeof kDescRegs[0]); di++)
                 if (try_hid(kAddrs[ai], kDescRegs[di])) {
@@ -363,6 +382,12 @@ void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *pa
     if (present) *present = g_present;
     if (addr)    *addr    = g_addr;
     if (parsed)  *parsed  = g_parsed;
+}
+
+void uno_i2c_hid_diag(int *saw_ack, unsigned *abrt)
+{
+    if (saw_ack) *saw_ack = g_saw_bytes;
+    if (abrt)    *abrt    = (unsigned)g_last_abrt;
 }
 
 #endif /* UNO_I2C_TRACKPAD */

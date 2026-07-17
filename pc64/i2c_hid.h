@@ -37,5 +37,8 @@ int  uno_i2c_hid_present(void);
    and whether its report descriptor parsed. Any pointer may be NULL. Lets the
    System app surface WHY the trackpad did / didn't come up. */
 void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed);
+/* extra probe diagnostics: saw_ack = a transfer returned bytes (bus alive + a
+ * device answered); abrt = last DW TX_ABRT_SOURCE (bit7 = address NAK). */
+void uno_i2c_hid_diag(int *saw_ack, unsigned *abrt);
 
 #endif

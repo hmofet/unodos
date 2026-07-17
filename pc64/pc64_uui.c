@@ -220,6 +220,8 @@ static char *ap_int(char *p, int v) { char t[12]; int n = 0;
     while (v) { t[n++] = (char)('0' + v % 10); v /= 10; } while (n) *p++ = t[--n]; return p; }
 static char *ap_hex(char *p, int v) { const char *h = "0123456789abcdef";
     *p++ = '0'; *p++ = 'x'; *p++ = h[(v >> 4) & 0xF]; *p++ = h[v & 0xF]; return p; }
+static char *ap_hex16(char *p, unsigned v) { const char *h = "0123456789abcdef"; int i;
+    *p++ = '0'; *p++ = 'x'; for (i = 12; i >= 0; i -= 4) *p++ = h[(v >> i) & 0xF]; return p; }
 
 static char g_tp1[64], g_tp2[64];
 static void build_tpstat(void)
@@ -232,7 +234,11 @@ static void build_tpstat(void)
     p = ap_str(g_tp2, "  HID device: ");
     if (pr) { p = ap_str(p, "UP  addr "); p = ap_hex(p, ad);
               p = ap_str(p, pa ? "  parsed" : "  UNPARSED"); }
-    else    { p = ap_str(p, nc ? "not found on ctrl" : "no controller (ACPI-only?)"); }
+    else if (nc) {                               /* found controllers, no device */
+        int sa = 0; unsigned ab = 0; uno_i2c_hid_diag(&sa, &ab);
+        p = ap_str(p, sa ? "no HID (bus ok, abrt " : "no HID (no ACK, abrt ");
+        p = ap_hex16(p, ab); *p++ = ')';
+    } else  { p = ap_str(p, "no controller (ACPI-only?)"); }
     *p = 0;
 }
 
