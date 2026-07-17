@@ -22,6 +22,7 @@
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
+#include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -747,6 +748,7 @@ static void reflow(void)
 {
     int i;
     UI.screen_w = FB_W; UI.screen_h = FB_H;
+    unoui_bg_invalidate();                             /* desktop size changed: rebuild bg cache */
     g_desk.r.w = FB_W; g_desk.r.h = FB_H - TASKH;      /* desktop fills - taskbar */
     g_task.r.y = FB_H - TASKH; g_task.r.w = FB_W;      /* taskbar re-anchored     */
     if (g_task.nw > 0) g_task.w[0].r.w = FB_W;         /* stretch the bar canvas  */
@@ -919,7 +921,7 @@ static int active_legacy(void)
 int main(void)
 {
     unoui_event tick;
-    int idle = 0, halfsecs = 0;
+    int idle = 0, halfsecs = 0, was_dragging = 0;
 
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
@@ -961,8 +963,35 @@ int main(void)
           else if (la >= 0 && app_is_bridge(NNATIVE + la)) { unoapp_focus(la); unoapp_run_tick(la); }
           else unoapp_focus(-1); }                                            /* browser: no tick */
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
-        if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
-        else uno_pc64_delay_ms(16);
+        /* Rubber-band window drag: the desktop and windows are static while a
+           title bar is dragged - only the outline moves. Render the full scene
+           once when the drag begins, snapshot it, then each moved frame just
+           restore the snapshot and redraw the outline, instead of re-running the
+           (alpha-blend heavy) full-scene painter every mouse move. This is the
+           fix for laggy dragging. */
+        if (UI.drag_active) {
+            if (!was_dragging) {                 /* drag just began */
+                UI.drag_active = 0;              /* render the scene without the outline */
+                unoui_render_ui(&UI);
+                UI.drag_active = 1;
+                uno_pc64_scene_save();
+                unoui_draw_drag_outline(&UI);
+                uno_pc64_present();
+                g_dirty = 0;
+            } else if (g_dirty) {                /* outline moved */
+                uno_pc64_scene_restore();
+                unoui_draw_drag_outline(&UI);
+                uno_pc64_present();
+                g_dirty = 0;
+            } else {
+                uno_pc64_delay_ms(16);
+            }
+        } else {
+            if (was_dragging) g_dirty = 1;       /* drag ended: repaint to commit the move */
+            if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
+            else uno_pc64_delay_ms(16);
+        }
+        was_dragging = UI.drag_active;
     }
     return 0;
 }

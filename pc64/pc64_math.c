@@ -13,15 +13,22 @@
 #define TWOPI  6.28318530717959f
 #define HALFPI 1.57079632679490f
 
+/* Guard the int cast: |x| beyond INT range (or NaN) is UB as (int)x, so return
+   the input unchanged for those - callers only feed small demo 3D/font values,
+   but a stray large/NaN value must not invoke UB. */
 float floorf(float x)
 {
-    int i = (int)x;
+    int i;
+    if (!(x > -2147483000.0f && x < 2147483000.0f)) return x;
+    i = (int)x;
     if ((float)i > x) i--;
     return (float)i;
 }
 float ceilf(float x)
 {
-    int i = (int)x;
+    int i;
+    if (!(x > -2147483000.0f && x < 2147483000.0f)) return x;
+    i = (int)x;
     if ((float)i < x) i++;
     return (float)i;
 }
