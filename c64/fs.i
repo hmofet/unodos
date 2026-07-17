@@ -42,6 +42,8 @@ zpFSTmp  equ $52   ; (2) scratch (victim start / shift bookkeeping)
 zpFSIdx  equ $54   ; directory index scratch
 zpFSCnt  equ $55   ; loop counter scratch
 zpFSNewSz equ $56  ; (2) fs_save: new file size, kept across fs_delete
+                   ; (aliased as zpFSMax in sys.inc: fs_read's caller-set dest
+                   ; cap - safe, fs_save and fs_read never overlap)
 
 ; ---- layout constants ----
 FSBASE      equ $C000
@@ -233,6 +235,22 @@ fs_read:
         sta zpFSDst
         lda zpFSDat+1
         sta zpFSDst+1
+        ; S1: clamp the copy length to the caller's buffer capacity (zpFSMax) so
+        ; a crafted catalog size field can't overrun the destination buffer.
+        lda zpFSSize+1
+        cmp zpFSMax+1
+        bcc fsr_len             ; hi(size) < hi(cap)
+        bne fsr_clamp           ; hi(size) > hi(cap)
+        lda zpFSSize
+        cmp zpFSMax
+        bcc fsr_len             ; lo(size) < lo(cap)
+        beq fsr_len             ; size == cap
+fsr_clamp:
+        lda zpFSMax
+        sta zpFSSize
+        lda zpFSMax+1
+        sta zpFSSize+1
+fsr_len:
         lda zpFSSize
         sta zpFSLen
         lda zpFSSize+1

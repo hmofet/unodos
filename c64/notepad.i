@@ -37,6 +37,10 @@ nl_name:
         sta zpFSDat
         lda #>NOTEBUF
         sta zpFSDat+1
+        lda #<NOTE_MAXLEN       ; NOTEBUF = 2048 bytes (fs_read cap)
+        sta zpFSMax
+        lda #>NOTE_MAXLEN
+        sta zpFSMax+1
         lda note_idx
         jsr fs_read             ; zpFSSize = byte size
         lda zpFSSize
