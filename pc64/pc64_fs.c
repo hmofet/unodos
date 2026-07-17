@@ -34,6 +34,7 @@ int uno_fs_list_begin(int vol)
 }
 int uno_fs_list_get(int vol, int idx, char *name, int max)
 {
+    if (max <= 0) return 0;
     if (vol == 0) return uno_ramfs_name(idx, name, max);
     if (vol != g_cache_vol || idx < 0 || idx >= g_cache_n) return 0;
     { int j; for (j = 0; j < max - 1 && g_cache[idx][j]; j++) name[j] = g_cache[idx][j]; name[j] = 0; }

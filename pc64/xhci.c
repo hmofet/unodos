@@ -116,8 +116,11 @@ static u8    g_scratch_buf[MAX_SCRATCH][4096] __attribute__((aligned(4096)));
  * EP0 (control) transfer ring, all 64-byte aligned. */
 #define MAX_DEV 8
 #define EP0_RING_SZ 16
-static u8    g_inctx[MAX_DEV][2048]  __attribute__((aligned(64)));
-static u8    g_devctx[MAX_DEV][2048] __attribute__((aligned(64)));
+/* 64-byte contexts with a max device-context index of 31 need
+ * (1 input-control + 1 slot + 31 endpoint) * 64 = 2112 bytes; the old 2048
+ * sizing overflowed by one endpoint context. 4096 leaves headroom. */
+static u8    g_inctx[MAX_DEV][4096]  __attribute__((aligned(64)));
+static u8    g_devctx[MAX_DEV][4096] __attribute__((aligned(64)));
 static trb_t g_ep0[MAX_DEV][EP0_RING_SZ] __attribute__((aligned(64)));
 static int   g_ep0_i[MAX_DEV], g_ep0_cyc[MAX_DEV];
 static u8    g_descbuf[256] __attribute__((aligned(64)));
@@ -305,7 +308,7 @@ static void enumerate_port(int port)
 
     for (i = 0; i < EP0_RING_SZ; i++) { g_ep0[di][i].param=0; g_ep0[di][i].status=0; g_ep0[di][i].control=0; }
     g_ep0_i[di] = 0; g_ep0_cyc[di] = 1;
-    for (i = 0; i < 2048; i++) { g_inctx[di][i]=0; g_devctx[di][i]=0; }
+    for (i = 0; i < (int)sizeof g_inctx[di]; i++) { g_inctx[di][i]=0; g_devctx[di][i]=0; }
 
     st = g_csz ? 64 : 32; mps = mps_for_speed(speed);
     ctx_wr(g_inctx[di], 4, 0x3);                                 /* add flags A0|A1 */
@@ -376,8 +379,12 @@ int uno_usb_setup_bulk(int dev, int in_addr, int out_addr, int in_mps, int out_m
     in_dci  = (in_addr  & 0xF) * 2 + 1;                    /* IN  endpoint DCI */
     out_dci = (out_addr & 0xF) * 2 + 0;                    /* OUT endpoint DCI */
     maxdci  = in_dci > out_dci ? in_dci : out_dci;
+    /* highest write is setup_ep's off+16 = (maxdci+1)*st+16; with st=64 and the
+       4096-byte context that is safe for maxdci<=31. Reject anything larger (a
+       malformed endpoint address) rather than write past the context. */
+    if (maxdci > 31) return -1;
     st = g_csz ? 64 : 32;
-    for (i = 0; i < 2048; i++) g_inctx[di][i] = 0;
+    for (i = 0; i < (int)sizeof g_inctx[di]; i++) g_inctx[di][i] = 0;
     ctx_wr(g_inctx[di], 4, 1u | (1u<<in_dci) | (1u<<out_dci));   /* add slot + both endpoints */
     sdw0 = *(volatile u32 *)(g_devctx[di] + 0);           /* copy slot ctx from device ctx */
     sdw1 = *(volatile u32 *)(g_devctx[di] + 4);

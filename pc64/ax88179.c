@@ -147,7 +147,11 @@ static int ax_recv(void *ctx, void *pkt, int cap)
           g_rx_cnt = hdr & 0xFFFF; g_rx_hdroff = (hdr >> 16); g_rx_off = 0; g_rx_len = n; }
         if (g_rx_cnt == 0 || g_rx_hdroff + 4 > g_rx_len) { g_rx_cnt = 0; return 0; }
     }
-    /* pop the next packet: its descriptor is at g_rx_hdroff, data at g_rx_off */
+    /* pop the next packet: its descriptor is at g_rx_hdroff, data at g_rx_off.
+       g_rx_cnt persists across calls, so re-validate the descriptor offset on
+       every pop (not just on refill) - a device-supplied count must never walk
+       the descriptor pointer past g_rx[]. */
+    if (g_rx_hdroff + 4 > g_rx_len || g_rx_off > g_rx_len) { g_rx_cnt = 0; return 0; }
     { u32 *desc = (u32 *)(g_rx + g_rx_hdroff);
       u32 d = *desc;
       int pkt_len = (int)((d >> 16) & 0x1FFF);

@@ -297,6 +297,12 @@ void          unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus *
 void          unoui_bring_to_front(unoui_ui *, unoui_window *win);
 unoui_action  unoui_handle  (unoui_ui *, const unoui_event *);
 void          unoui_render_ui(unoui_ui *);
+/* Draw only the rubber-band drag outline (no-op unless a drag is live). Lets a
+ * platform snapshot the scene once and redraw just the outline per drag frame. */
+void          unoui_draw_drag_outline(unoui_ui *);
+/* Invalidate any cached desktop background (call on theme / resolution change).
+ * A no-op where the cache isn't compiled in. */
+void          unoui_bg_invalidate(void);
 
 /* Full-screen mode: `win` (its first UI_CANVAS) fills the whole screen with no
  * desktop / chrome, and all input routes to that canvas. NULL restores the
