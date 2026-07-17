@@ -295,6 +295,9 @@ static void (*const g_build[NNATIVE])(unoui_window *) =
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
 static int g_menu_scroll, g_menu_hot = -1, g_scroll_tmr;   /* Start-menu scroll */
+static unoui_window g_cal;                 /* calendar date-picker popup */
+static int g_cal_open, g_cal_y = 2026, g_cal_mo = 1, g_cal_sel = 1;
+static unoui_rect g_cal_rect;
 
 static void raise_win(unoui_window *win) { unoui_bring_to_front(&UI, win); }
 
@@ -575,6 +578,7 @@ static void close_focused(void)
     win = UI.win[f];
     if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
     if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
+    if (win == &g_cal)    { remove_win(&g_cal);    g_cal_open = 0;    g_dirty = 1; return; }
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
         int g = app_game(i);
         g_open[i] = 0;
@@ -713,6 +717,49 @@ static void reflow(void)
 }
 void uno_screen_changed(void) { if (UI.nwin) reflow(); }
 
+/* ---- calendar date picker (a popup over the unoui calendar core) --------- */
+static void cal_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{ (void)w; (void)ctx; g_cal_rect = r;
+  unoui_calendar_draw(UI.theme, r, g_cal_y, g_cal_mo, g_cal_sel); }
+
+static void cal_apply_and_close(void)
+{
+    if (g_sp_y)  g_sp_y->value  = g_cal_y;
+    if (g_sp_mo) g_sp_mo->value = g_cal_mo;
+    if (g_sp_d)  g_sp_d->value  = g_cal_sel;
+    uno_pc64_set_time(g_cal_y, g_cal_mo, g_cal_sel,
+                      g_sp_h ? g_sp_h->value : 0, g_sp_mi ? g_sp_mi->value : 0, 0);
+    fmt_clock(0);
+    remove_win(&g_cal); g_cal_open = 0; g_dirty = 1;
+}
+
+static int cal_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
+    if (e->kind != UI_EV_MOUSE_DOWN) return 0;
+    { int hit = unoui_calendar_hit(g_cal_rect, g_cal_y, g_cal_mo, e->x, e->y);
+      if (hit == UI_CAL_PREV) { if (--g_cal_mo < 1) { g_cal_mo = 12; g_cal_y--; } g_dirty = 1; return 1; }
+      if (hit == UI_CAL_NEXT) { if (++g_cal_mo > 12) { g_cal_mo = 1;  g_cal_y++; } g_dirty = 1; return 1; }
+      if (hit >= 1) { g_cal_sel = hit; cal_apply_and_close(); return 1; } }
+    return 0;
+}
+static unoui_canvas g_cal_cv = { cal_draw, cal_event, 0 };
+
+static void open_calendar(void)
+{
+    const unoui_metrics *m = &UI.theme->m;
+    int cw = 210, chh = 176, yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
+    if (g_cal_open) { remove_win(&g_cal); g_cal_open = 0; }
+    if (g_sp_y) { g_cal_y = g_sp_y->value; g_cal_mo = g_sp_mo->value; g_cal_sel = g_sp_d->value; }
+    else { uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0); g_cal_y = yy; g_cal_mo = mo; g_cal_sel = dd; }
+    unoui_window_init(&g_cal, "Pick a date", 180, 56,
+                      cw + 2*m->frame_w + 2*m->pad, chh + m->title_h + 2*m->pad + m->frame_w);
+    unoui_add_canvas(&g_cal, 0, 0, cw, chh, &g_cal_cv);
+    clamp_to_workarea(&g_cal);
+    unoui_ui_add(&UI, &g_cal);
+    g_cal_open = 1; g_dirty = 1;
+}
+
 /* ---- actions ----------------------------------------------------------- */
 static void on_action(const unoui_action *a)
 {
@@ -743,6 +790,7 @@ static void on_action(const unoui_action *a)
     case ID_FONT:  uno_font_use(a->value - 1); break;   /* 0 = System bitmap, 1.. = TTF */
     case ID_EFONT: g_win[APP_EDIT].font_slot =          /* Editor per-document font */
                        (a->value <= 0) ? UI_FONT_INHERIT : a->value - 1; break;
+    case ID_CAL:   open_calendar(); break;              /* calendar date picker */
     default: break;
     }
 }
