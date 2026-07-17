@@ -1670,6 +1670,8 @@ MainLoop:
 .a16
 .i16
         stz DVQ
+        lda S1                  ; B2: divisor 0 -> quotient 0 (else the
+        beq @done               ; subtract loop never terminates -> hang)
 @loop:  lda S0
         cmp S1
         bcc @done

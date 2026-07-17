@@ -267,8 +267,9 @@ v_tk_playing    rs.b    1           ; Tracker: sequencer running
 v_tk_nzatt      rs.b    1           ; Tracker: noise decay attenuation
 v_brprobe       rs.b    1           ; BRAM probe active (bus-error trap)
         rs.b    1                   ; (pad: byte count above stays even)
-v_np_name       rs.b    12          ; current Notepad file name
-        rs.b    1                   ; (byte count above stays even)
+v_np_name       rs.b    13          ; B2: 13 bytes (12 name + NUL) so sram_name's
+                                    ; terminating clr.b stays inside the field
+                                    ; (absorbs the old 1-byte pad: total unchanged)
 v_evq           rs.b    EVQ_SIZE*4
 v_zlist         rs.b    MAXWIN
 v_wintab        rs.b    MAXWIN*WENT_SIZE
