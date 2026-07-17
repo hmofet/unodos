@@ -26,6 +26,20 @@ A graphical operating system for IBM PC XT-compatible computers, written entirel
 >   x86 / py65+HuC6280 / Unicorn AArch64 / Unicorn PPC) where an emulator can't be captured headlessly under RDP. See
 >   **[docs/UNODOS-3.1-MIGRATION.md](docs/UNODOS-3.1-MIGRATION.md)** for status, the
 >   design, and next directions.
+>
+> **Modern PC — the x86-64 / UEFI world ([`pc64/`](pc64/)).** The furthest-developed
+> world lives in the **[`pc64/`](pc64/)** directory: a bare-metal **UEFI application**
+> for any x86-64 PC (~2007+) — the **first 64-bit x86 world**. Default `./build.sh`
+> boots the **unoui** toolkit as a full themed desktop shell; a `legacy` build adds the
+> family's first native **e1000 NIC + from-scratch TCP/IP + TLS 1.2/HTTPS** stack, a web
+> **browser with a JavaScript interpreter**, **uno3d** 3D, and **xHCI USB** bring-up.
+> QEMU+OVMF- and **real-hardware-verified (Lenovo X1 Carbon Gen 8)**. Full detail in
+> **[pc64/README.md](pc64/README.md)**.
+>
+> **Branches.** `master` is the forward line **and includes the `pc64/` Modern PC world**.
+> `classic` preserves the pre-pc64 snapshot of this forward line (no `pc64/` directory)
+> for independent maintenance. `unodos-3-legacy` (tag `legacy-pre-3.1`) is the older
+> shipped/known-good line.
 
 ## Overview
 
@@ -508,6 +522,10 @@ unodos/
 │   ├── font8x8.asm          # 8x8 default font
 │   └── font8x12.asm         # 8x14 large font
 ├── build/                   # Compiled binaries and disk images
+├── pc64/                    # Modern PC world — x86-64/UEFI (C), unoui shell + net/TLS/3D/browser/USB
+├── unodef/                  # The 3.1 machine-readable Contract (all worlds generate from it)
+├── unoui/                   # Cross-platform C widget toolkit (the pc64 shell's UI)
+├── uno3d/                   # Portable 3D library (software + PS2/Dreamcast backends)
 ├── docs/                    # Technical documentation
 ├── tools/                   # Build and deployment scripts
 ├── Makefile
