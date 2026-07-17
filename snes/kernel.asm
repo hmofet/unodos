@@ -416,6 +416,9 @@ MainLoop:
         cpx #$0200
         bne @v
         stz v_pm_hi             ; Pac-Man hi-score persists 0 until first game
+        stz v_pm_state          ; B1: init Pac-Man state ($0CC8 is outside the
+                                ; VARS clear) so a non-zero power-on WRAM value
+                                ; can't take the @game path and draw/write OOB
         ldx #$0000
 @t:     sta TMAP,x
         inx

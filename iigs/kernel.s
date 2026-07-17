@@ -2040,8 +2040,10 @@ handle_drag:
         bcs @ymin
         lda #MENUBAR_C
         sta A1
-@ymin:  lda #(SCRH_C-1)
-        cmp A1
+@ymin:  lda #SCRH_C             ; B1: max WY = SCRH_C - WH (keep the window's
+        sec                     ; bottom edge on screen), mirroring the X clamp.
+        sbc v_wintab+WH,x       ; was #(SCRH_C-1): ignored height -> drag past the
+        cmp A1                  ; SHR framebuffer into the SCB/palette bytes.
         bcs @yok
         sta A1
 @yok:   ldx v_drag_win
