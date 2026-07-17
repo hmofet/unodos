@@ -414,6 +414,35 @@ static void connect_all(void)
     gBS->FreePool(hs);
 }
 
+/* Detach the firmware's own driver from a PCI device (bus/dev/fn) so a native
+ * driver can take it over without the firmware fighting it. Needed for xHCI:
+ * the firmware's USB stack keeps touching the controller otherwise, causing
+ * intermittent HC errors when our driver reprograms it. */
+typedef struct _EFI_PCI_IO_PROTOCOL {
+    void *pad[14];                                 /* PollMem..Flush (14 members) */
+    EFI_STATUS (*GetLocation)(struct _EFI_PCI_IO_PROTOCOL *,
+                              UINTN *seg, UINTN *bus, UINTN *dev, UINTN *fn);
+} EFI_PCI_IO_PROTOCOL;
+
+int uno_pc64_pci_disconnect(int bus, int dev, int fn)
+{
+    static EFI_GUID pio = { 0x4cf5b200, 0x68b8, 0x4ca5,
+        { 0x9e, 0xec, 0xb2, 0x3e, 0x3f, 0x50, 0x02, 0x9a } };
+    EFI_STATUS (*disc)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE) =
+        (EFI_STATUS (*)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE))gBS->DisconnectController;
+    UINTN n = 0, i; EFI_HANDLE *hs = 0; int done = 0;
+    if (!gBS || EFI_ERROR(gBS->LocateHandleBuffer(EFI_LOCATE_BY_PROTOCOL, &pio, 0, &n, &hs)))
+        return 0;
+    for (i = 0; i < n; i++) {
+        EFI_PCI_IO_PROTOCOL *p; UINTN s, b, d, f;
+        if (EFI_ERROR(gBS->HandleProtocol(hs[i], &pio, (void **)&p))) continue;
+        if (EFI_ERROR(p->GetLocation(p, &s, &b, &d, &f))) continue;
+        if ((int)b == bus && (int)d == dev && (int)f == fn) { if (!EFI_ERROR(disc(hs[i], 0, 0))) done++; }
+    }
+    gBS->FreePool(hs);
+    return done;
+}
+
 /* collect every instance of a pointer protocol (device handles first, the
    ConIn splitter aggregate last, so real hardware wins) */
 static int collect(EFI_GUID *guid, void **out, int max)

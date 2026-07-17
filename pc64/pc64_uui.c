@@ -243,14 +243,27 @@ static void build_tpstat(void)
     *p = 0;
 }
 
-static char g_usb[80];
+static char g_usb[80], g_usb2[80];
 static void build_usbstat(void)
 {
     int pr = 0, np = 0, nd = 0; unsigned e = 0; char *p;
     uno_xhci_status(&pr, &np, &nd, &e);
+    g_usb2[0] = 0;
+    if (pr && nd == 0 && np > 0) {              /* enumeration failed - show why */
+        int sl=0, ad=0, de=0, sp=0, dc=0; unsigned sts=0, ev0=0; char *q = g_usb2;
+        uno_xhci_diag(&sl, &ad, &de, &sp);
+        uno_xhci_diag2(&sts, &ev0, &dc);
+        q = ap_str(q, "  sl="); q = ap_int(q, sl);
+        q = ap_str(q, " sts="); q = ap_hex16(q, sts);
+        q = ap_str(q, " disc="); q = ap_int(q, dc);
+        q = ap_str(q, " spd="); q = ap_int(q, sp); *q = 0;
+    }
     p = ap_str(g_usb, "USB xHCI: ");
-    if (pr) { p = ap_str(p, "up, "); p = ap_int(p, np); p = ap_str(p, " connected port(s), ");
-              p = ap_int(p, nd); p = ap_str(p, " dev"); }
+    if (pr) { p = ap_str(p, "up, "); p = ap_int(p, np); p = ap_str(p, " port, ");
+              p = ap_int(p, nd); p = ap_str(p, " dev");
+              if (nd > 0) { const uno_usb_dev *d = uno_xhci_dev(0);
+                  p = ap_str(p, "  "); p = ap_hex16(p, d->vendor);
+                  p = ap_str(p, ":"); p = ap_hex16(p, d->product); } }
     else if (e) { p = ap_str(p, "init failed at stage "); p = ap_int(p, (int)e); }
     else        { p = ap_str(p, "no controller"); }
     *p = 0;
@@ -260,14 +273,15 @@ static void build_sys(unoui_window *w)
 {
     build_tpstat();
     build_usbstat();
-    unoui_window_init(w, "System", 400, 220, 320, 158);
+    unoui_window_init(w, "System", 400, 210, 340, 176);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
     unoui_add_label(w, 8, 42, "10 themes  -  live re-skin");
-    unoui_add_sep  (w, 8, 60, 300);
+    unoui_add_sep  (w, 8, 60, 320);
     unoui_add_label(w, 8, 68,  g_tp1);
     unoui_add_label(w, 8, 84,  g_tp2);
     unoui_add_label(w, 8, 102, g_usb);
+    unoui_add_label(w, 8, 118, g_usb2);
 }
 static void build_clock(unoui_window *w)
 {
