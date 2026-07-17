@@ -1,0 +1,4 @@
+UnoDosFlasher.app/
+staging/
+*.iconset/
+.build/
