@@ -7,25 +7,39 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
-## Newest — xHCI USB stack (the start of USB Ethernet for the X1)
+## Newest — xHCI USB stack + AX88179 USB Ethernet (networking for the X1)
 
-The USB host-controller driver + device enumeration. **Gated behind `-DUNO_XHCI`
-(OFF by default)** — build a test image with it, since taking over the USB
-controller can conflict with the firmware.
+The USB host-controller driver + transfer API + the AX88179 USB Gigabit
+Ethernet driver. **Gated behind `-DUNO_XHCI` (OFF by default)** — build a test
+image with it, since taking over the USB controller can conflict with the
+firmware. In QEMU the host stack + device **enumeration** are verified
+(controller inits; a USB-net gadget and a tablet both complete Address Device +
+GET_DESCRIPTOR over the control-transfer path). QEMU has no ASIX chip, so
+**everything AX88179-specific is metal-first**.
 
 - [ ] **Build with USB on:** `UNO_EXTRA="-DUNO_XHCI" ./build.sh`, write the stick.
 - [ ] **Plug in the ASIX AX88179 USB Ethernet adapter**, boot, open the **System
-      app**. Expect: `USB xHCI: up, N port, M dev  0xNNNN:0xNNNN`. For the
-      AX88179 the VID should be **0x0b95** (ASIX). If it reads `0bda:...` it's a
-      Realtek batch (different driver); `0525:...` is a phone/gadget.
+      app**. Expect: `USB xHCI: up, N port, M dev  0xNNNN:0xNNNN`, plus an
+      `ASIX 0x0b95:0xNNNN  bound  link up/down` line once the driver binds. VID
+      must be **0x0b95** (ASIX). If it reads `0bda:...` it's a Realtek batch
+      (different driver); `0525:...` is a phone/gadget.
+- [ ] **Network over USB:** open the browser and load an `http://` page (or the
+      Network app). `pc64_net_up()` tries e1000 then the AX88179; a successful
+      DHCP lease + page load is the real end-to-end win. The RX aggregation
+      trailer + 8-byte TX header are unverified against silicon — if the link is
+      up but no packets flow, that framing is the first suspect.
 - [ ] **Keyboard/trackpad should survive** — the X1's built-in keyboard + pad are
       PS/2 / I2C, not USB, so the xHCI takeover shouldn't kill them. If input
       dies, that's the firmware-USB conflict (note it and we add the USBLEGSUP
       BIOS→OS handoff).
 - [ ] **If `init failed at stage N` or `0 dev`:** report the second System line
-      (`sl=… sts=0x… disc=… spd=…`). `disc=1` = we detached the firmware driver;
-      `sts=0x1000` = HC error (the retry usually recovers — QEMU needed it);
-      `sl=-N` = a command completion code.
+      (`sl=… ad=… de=… sts=0x…`): `sl` = Enable-Slot result (`-N` = a completion
+      code), `ad` = Address-Device cc (1 = ok), `de` = device-descriptor
+      byte (1 = ok, `-1` = the control transfer failed), `sts` = USBSTS
+      (`0x1000` = HC error; the bring-up retry usually recovers it — QEMU needed
+      it). For a full per-port trace (`slot`/`addr_cc`/`desc_cc`/`residual`/
+      VID:PID) rebuild with `-DUNO_XHCI -DUNO_DBGCON` — **but 0x402 debugcon is
+      SMM-trapped on this X1 and hung it once**, so only use DBGCON for QEMU.
 - [ ] Real Intel xHCI may need the **USBLEGSUP** (xHCI extended-cap BIOS→OS
       ownership) handoff, which isn't implemented yet — if enumeration never
       works on metal but does in QEMU, that's the likely reason.
