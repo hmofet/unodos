@@ -235,6 +235,10 @@ long TickCount(void);
 Boolean GetNextEvent(short eventMask, EventRecord *theEvent);
 void GetMouse(Point *mouseLoc);
 Boolean StillDown(void);
+/* live-pointer hook for blocking drags (see mac_compat.c); pc64 sets this to
+ * uno_pc64_mac_mouse so Paint's GetMouse/StillDown track the real cursor. */
+extern int (*uno_mac_mouse)(short *h, short *v);
+int uno_pc64_mac_mouse(short *h, short *v);
 short Random(void);
 
 /* memory */
