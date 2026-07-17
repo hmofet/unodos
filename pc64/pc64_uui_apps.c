@@ -17,6 +17,7 @@
 #include "unoui.h"
 #include "mac_compat.h"     /* uno_pc64_res_* */
 #include "unosound.h"       /* the shared single-voice audio (Music/Tracker/games) */
+#include "pc64_fs.h"        /* uno_fs_* - the unified file listing for pickers */
 #include <string.h>
 
 enum { C_BLUE = 0, C_CYAN = 1, C_MAG = 2, C_WHITE = 3 };
@@ -114,7 +115,23 @@ static void bc2p(const char *s, unsigned char *p)   /* C string -> Pascal string
 { int n = 0; while (s[n] && n < 31) n++; p[0] = (unsigned char)n;
   { int i; for (i = 0; i < n; i++) p[i + 1] = (unsigned char)s[i]; } }
 static Boolean fat12_mount(void) { return true; }
-static void    fat12_list(void)  { gFatCount = 0; }   /* name listing: TODO      */
+static void    fat12_list(void)                  /* enumerate all volumes for the pickers */
+{
+    int nv = uno_fs_volumes(), v, i, cnt;
+    char nm[32];
+    gFatCount = 0;
+    for (v = 0; v < nv && gFatCount < 16; v++) {
+        cnt = uno_fs_list_begin(v);
+        for (i = 0; i < cnt && gFatCount < 16; i++) {
+            if (uno_fs_list_get(v, i, nm, sizeof nm)) {
+                int j; for (j = 0; j < 12 && nm[j]; j++) gFatNames[gFatCount][j] = (unsigned char)nm[j];
+                gFatNames[gFatCount][j] = 0;
+                gFatSizes[gFatCount] = 0;        /* size not needed by the picker */
+                gFatCount++;
+            }
+        }
+    }
+}
 static long    fat12_read(const char *name, unsigned char *buf, long max)
 {
     unsigned char pn[34]; short ref; long cnt = max;
