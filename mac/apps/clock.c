@@ -16,10 +16,19 @@ static void clock_draw(UnoWin *w)
     text_at(cx, cy, buf, C_CYAN, C_BLUE, true);
 }
 
-/* a tick so the uptime display advances while the window is open */
+/* a tick so the uptime display advances while the window is open. Gated on the
+   displayed value (now_secs()) actually changing: without this the main loop's
+   ungated spin redraws the whole window thousands of times/sec for a value that
+   ticks once a second (AUDIT-mac §1 P1) - pure waste + a flicker source. Every
+   other app's tick is already TickCount-gated. */
 static void clock_tick(void)
 {
-    UnoWin *w = find_app_window(APP_CLOCK);
+    static long last = -1;
+    long s = now_secs();
+    UnoWin *w;
+    if (s == last) return;
+    last = s;
+    w = find_app_window(APP_CLOCK);
     if (w) draw_window(w);
 }
 
