@@ -74,6 +74,7 @@ tk_kplay:
 tk_k2:
         cmp #K_UP
         bne tk_k3
+        jsr tk_save_cursor
         lda tk_row
         bne tk_kdecr
         lda #TK_ROWS
@@ -81,10 +82,11 @@ tk_kdecr:
         sec
         sbc #1
         sta tk_row
-        jmp tk_draw
+        jmp tk_nav_redraw
 tk_k3:
         cmp #K_DOWN
         bne tk_k4
+        jsr tk_save_cursor
         lda tk_row
         clc
         adc #1
@@ -93,10 +95,11 @@ tk_k3:
         lda #0
 tk_ksr:
         sta tk_row
-        jmp tk_draw
+        jmp tk_nav_redraw
 tk_k4:
         cmp #K_LEFT
         bne tk_k5
+        jsr tk_save_cursor
         lda tk_chan
         bne tk_kdecc
         lda #TK_CHANS
@@ -104,10 +107,11 @@ tk_kdecc:
         sec
         sbc #1
         sta tk_chan
-        jmp tk_draw
+        jmp tk_nav_redraw
 tk_k5:
         cmp #K_RIGHT
         bne tk_k6
+        jsr tk_save_cursor
         lda tk_chan
         clc
         adc #1
@@ -116,7 +120,7 @@ tk_k5:
         lda #0
 tk_ksc:
         sta tk_chan
-        jmp tk_draw
+        jmp tk_nav_redraw
 tk_k6:
         cmp #K_BS                ; DEL clears the cell
         bne tk_k7
@@ -296,79 +300,7 @@ tkd_row:
         lda #0
         sta zpTkCh
 tkd_chan:
-        ; idx = row*3 + chan
-        lda zpTkI
-        asl
-        clc
-        adc zpTkI
-        clc
-        adc zpTkCh
-        tax
-        lda TKPAT,x
-        sta zpTkTmp             ; note value
-        ; col = 5 + chan*6
-        lda zpTkCh
-        asl
-        sta zpApp3
-        asl
-        clc
-        adc zpApp3              ; chan*6
-        clc
-        adc #5
-        sta zpCol
-        lda zpTkI
-        clc
-        adc #2
-        sta zpRow
-        ; highlight if cursor cell
-        lda #0
-        sta zpInv
-        lda zpTkI
-        cmp tk_row
-        bne tkd_nohi
-        lda zpTkCh
-        cmp tk_chan
-        bne tkd_nohi
-        lda #$FF
-        sta zpInv
-        ; highlight band (2 cells) - save loop vars (fill_rows clobbers X)
-        lda zpCol
-        sta zpFX
-        lda zpRow
-        asl
-        asl
-        asl
-        sta zpFY
-        lda #2
-        sta zpFW
-        lda #8
-        sta zpFH
-        lda #$FF
-        sta zpFPat
-        jsr fill_rows
-tkd_nohi:
-        ; draw the note name (2 chars) or ".."
-        lda zpTkTmp
-        beq tkd_empty
-        ; note letter + octave digit
-        tax
-        dex
-        lda tk_notename,x
-        sta zpApp4
-        lda #$34                ; '4' (single octave for simplicity)
-        sta zpApp5
-        jmp tkd_putcell
-tkd_empty:
-        lda #$2E                ; '.'
-        sta zpApp4
-        sta zpApp5
-tkd_putcell:
-        lda zpApp4
-        jsr draw_char
-        inc zpCol
-        lda zpApp5
-        jsr draw_char
-        ; next chan
+        jsr tk_cell_draw
         inc zpTkCh
         lda zpTkCh
         cmp #TK_CHANS
@@ -404,6 +336,114 @@ tkd_help:
         sta zpPtr+1
         jmp draw_string
 
+; tk_cell_draw - draw one pattern cell (zpTkI = row, zpTkCh = channel): the
+; 2-cell highlight band (pattern = zpInv: $00 plain / $FF when it's the cursor
+; cell) then the 2-char note / "..". Filling the band for non-cursor cells is a
+; no-op on a freshly app_cleared screen but lets a cursor move erase the old
+; highlight by repainting just the old + new cells. Factored verbatim (band
+; filled before content) so the full tk_draw stays byte-identical.
+tk_cell_draw:
+        lda #COL_WIN            ; cell text colour (app_clear default)
+        sta zpFCol
+        ; idx = row*3 + chan
+        lda zpTkI
+        asl
+        clc
+        adc zpTkI
+        clc
+        adc zpTkCh
+        tax
+        lda TKPAT,x
+        sta zpTkTmp             ; note value
+        ; col = 5 + chan*6
+        lda zpTkCh
+        asl
+        sta zpApp3
+        asl
+        clc
+        adc zpApp3              ; chan*6
+        clc
+        adc #5
+        sta zpCol
+        lda zpTkI
+        clc
+        adc #2
+        sta zpRow
+        ; cursor cell?
+        lda #0
+        sta zpInv
+        lda zpTkI
+        cmp tk_row
+        bne tcd_fill
+        lda zpTkCh
+        cmp tk_chan
+        bne tcd_fill
+        lda #$FF
+        sta zpInv
+tcd_fill:
+        ; highlight band (2 cells) - save loop vars (fill_rows clobbers X)
+        lda zpCol
+        sta zpFX
+        lda zpRow
+        asl
+        asl
+        asl
+        sta zpFY
+        lda #2
+        sta zpFW
+        lda #8
+        sta zpFH
+        lda zpInv
+        sta zpFPat
+        jsr fill_rows
+        ; draw the note name (2 chars) or ".."
+        lda zpTkTmp
+        beq tcd_empty
+        ; note letter + octave digit
+        tax
+        dex
+        lda tk_notename,x
+        sta zpApp4
+        lda #$34                ; '4' (single octave for simplicity)
+        sta zpApp5
+        jmp tcd_putcell
+tcd_empty:
+        lda #$2E                ; '.'
+        sta zpApp4
+        sta zpApp5
+tcd_putcell:
+        lda zpApp4
+        jsr draw_char
+        inc zpCol
+        lda zpApp5
+        jsr draw_char
+        rts
+
+; tk_save_cursor - snapshot the cursor cell before a move (for tk_nav_redraw).
+tk_save_cursor:
+        lda tk_row
+        sta tk_orow
+        lda tk_chan
+        sta tk_ochan
+        rts
+
+; tk_nav_redraw - a cursor move only shifts the 2-cell highlight from the old
+; cell to the new one; row numbers, headers, other cells and the status line
+; don't change. Repaint just the old cell (now plain) and the new cell (cursor).
+; Byte-identical to a full tk_draw at the new cursor position.
+tk_nav_redraw:
+        lda tk_orow
+        sta zpTkI
+        lda tk_ochan
+        sta zpTkCh
+        jsr tk_cell_draw
+        lda tk_row
+        sta zpTkI
+        lda tk_chan
+        sta zpTkCh
+        jsr tk_cell_draw
+        rts
+
 ; ============================================================================
 ; data
 ; ============================================================================
@@ -434,6 +474,8 @@ msg_tk_help:    dc.b "CRSR move  CDEFGAB=note  SPACE=play",0
 ; ---- state ----
 tk_row:   dc.b 0
 tk_chan:  dc.b 0
+tk_orow:  dc.b 0       ; prior cursor row/chan (for the incremental nav redraw)
+tk_ochan: dc.b 0
 tk_play:  dc.b 0
 tk_prow:  dc.b 0       ; currently-playing row
 tk_ctr:   dc.b TK_RATE
