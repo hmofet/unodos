@@ -88,6 +88,14 @@ neighbour's move. Split `draw_window` into `draw_window_chrome` + `draw_content`
 and in the bottom-up loop only redraw content for windows whose body cells were
 actually clobbered (with P1's damage set, usually just the top/moved one).
 
+**P3 / P4 — largely mopped up on the raise path (`24b0683`).** raise_window now
+calls `redraw_topmost` (draw the topmost window + kbd overlay) instead of
+`repaint_all`, so on a raise there is no `clear_screen` (P3) and no 11-icon
+`draw_desktop` (P4) at all — genesis has no active-title restyle, so the raised
+window on top is the only delta. Byte-identical (`build.sh raise`, retro-shot).
+`close_window` still `repaint_all`s (it must reveal occluded content); the P3/P4
+wins below remain only for that one-shot close path.
+
 **P3 — Skip the redundant `clear_screen` pass.**
 `repaint_all` clears all 1120 cells to tile 0 (`kernel.asm:1546`) and then
 `draw_desktop` + the windows immediately overwrite most of them. Only the desktop
