@@ -1001,6 +1001,44 @@ black, the fault is in the HS **video** path the panel receives after DISPON (DE
 delivery) under cold conditions, not the DCS config. Either way the probe is on the panel side, where every
 SoC-side avenue has now been exhausted.
 
+### 2026-06-25 (cont.) — panel DCS-readback probe IMPLEMENTED + staged [code-only, awaiting HW]
+
+Built the panel-side probe the previous entry called for: read the PANEL's own state cold-vs-warm. New code
+(all PANELDBG, harness-safe):
+- **`mkdata.py`** emits `dsi_read_seq` — a table of (reg, read-request-header) word pairs for the ST7703's
+  **standard MIPI DCS readable registers**: power-mode `RDDPM 0x0A`, address-mode/MADCTL `RDDMADCTL 0x0B`,
+  pixel-format `RDDCOLMOD 0x0C`, image-mode `RDDIM 0x0D`, signal-mode `RDDSM 0x0E`, self-diag `RDDSDR 0x0F`,
+  + IDs `RDID1/2/3 0xDA/0xDB/0xDC` (link-sanity baseline). Each header `{DI=0x06, reg, 0x00, ECC}` reuses the
+  proven `mipi_ecc` (the emitted 0x0A header `0x3F000A06` is byte-identical to the old hardcoded literal →
+  validates the per-reg ECC). **NOTE:** the panel's manufacturer command-set regs (SETMIPI 0xBA, SETGIP1/2
+  0xE9/0xEA, …) are **write-only — not DCS-readable**, so the gate-driver/SETGIP config can't be read back
+  directly; `RDDSM`/`RDDPM`/`RDDSDR` are the proxies (they reflect whether the panel believes it has a valid
+  display/signal after our cold init).
+- **`panel.inc.s`**: factored the read mechanics out of `dcs_read_dbg` into **`dcs_read_raw`** (in: header
+  word; out: w0=RXCTL, w1=RXDAT; bounded poll) — `dcs_read_dbg`'s single 0x0A liveness output is unchanged, so
+  the 4 existing callers are unaffected. Added **`dcs_panel_dump`**: walks `dsi_read_seq`, prints
+  `PANEL_<reg>=<RXCTL>,<RXDAT>` per register.
+- Wired into BOTH sides of the A/B: native cold path calls `dcs_panel_dump` right after `st7703_init` (LP,
+  before `dsi_start`) in `panel_init`; the warm p-boot path calls it in the `[pboot-ref]` block in `kernel.s`
+  (after `dump_all`, before `fb_init`), reading p-boot's lit panel.
+
+**Verified:** all three builds assemble clean (default 26208 B, `paneldbg` 32728 B, `pbootdbg` 32736 B); the
+**default regression renders the byte-identical 4922-B launcher** (`cmp` vs `shots/m1_boot.png` ✓); `paneldbg`
+**and** `pbootdbg` both run end-to-end in the Unicorn harness with no hang/fault (the new reads hit the bounded
+poll timeout once in the MMIO sink and move on; UART TX is a harness no-op → the trace is hardware-only).
+
+**NEXT (needs user + phone + serial rig — fresh native + p-boot cards, card is currently in the phone):** flash
+`unodos_paneldbg.bin` (native U-Boot card) and `unodos_pbootdbg.bin` (p-boot card), capture both serial traces,
+and **diff the `[paneldump]` `PANEL_xx=` lines cold (native) vs warm (p-boot)**:
+- a register that reads **DIFFERENT** cold-vs-warm ⇒ that DCS config never took effect on the cold panel
+  (panel-state/timing dependency = the bug) → chase the cold-init timing around that command;
+- **all** panel reads **MATCH** yet native still black ⇒ the DCS config is fine and the fault is the post-DISPON
+  HS **video** delivery (DE2→TCON0→DSI HS pixels) under cold conditions → pivot to instrumenting that path
+  (the warm-perturbation method already exonerated DE2 + our DSI/D-PHY/clocks/TCON0 individually, so this would
+  point hard at a cold-only HS-lane training/analog effect).
+
+Code uncommitted on `parity-push-fresh-ports`.
+
 ---
 
 ## 9. References

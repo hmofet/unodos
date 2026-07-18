@@ -336,6 +336,11 @@ mclr:
     ldr   x0, =s_pbref
     bl    uart_puts
     bl    dump_all
+    // WARM panel-state reference: read back p-boot's lit/working panel's DCS status/config
+    // registers (LP read, drops the bus to LP briefly). Diff offline against the native cold
+    // paneldbg dcs_panel_dump: a register that differs cold-vs-warm = the DCS config that
+    // didn't take on the cold panel (PINEPHONE-BRINGUP.md §8, 2026-06-25). Runs BEFORE fb_init.
+    bl    dcs_panel_dump
 .endif
 .ifdef NATIVEPANEL
     // DIFFERENTIAL TEST (build.sh pbootnative = PBOOT+PANELDBG+DE2TEST+NATIVEPANEL): after

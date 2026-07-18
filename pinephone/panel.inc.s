@@ -292,6 +292,8 @@ s_panel: .asciz "\r\n[unodos] panel_init\r\n"
 s_sctlr: .asciz "SCTLR"
 s_rxctl: .asciz "RXCTL"
 s_rxdat: .asciz "RXDAT"
+s_pandmp: .asciz "\r\n[paneldump] ST7703 DCS status/config readback (PANEL_reg=RXCTL,RXDAT):\r\n"
+s_panreg: .asciz "PANEL_"
 s_plde:  .asciz "PLL_DE"
 s_plv0:  .asciz "PLL_VIDEO0"
 s_plmi:  .asciz "PLL_MIPI"
@@ -484,6 +486,9 @@ pi_sctl_pr:
     bl    uart_puts
     bl    dcs_read_dbg                     // probe: is the panel alive / answering DSI?
                                           // (LP read of power-mode, BEFORE the HS switch)
+    bl    dcs_panel_dump                   // COLD panel-state probe: read back the panel's
+                                          // DCS status/config regs after our cold init, for
+                                          // offline diff vs p-boot's warm panel (§8 2026-06-25)
 .endif
     // HS video start, THEN de2_init's clocks (p-boot brings PLL_DE/DE clock up LAST,
     // after sun6i_dsi_start(HSD), right before the mixer). fb_init does the mixer config.
@@ -1092,13 +1097,37 @@ dsi_start:
 // MUST run in LP/command mode (before dsi_start switches the bus to HS video).
 dcs_read_dbg:
     stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    ldr   w1, =0x3F000A06                   // RDDPM (0x0A) request header (ECC=0x3F)
+    bl    dcs_read_raw                       // -> w0=RXCTL, w1=RXDAT
+    mov   w19, w0
+    mov   w20, w1
+    ldr   x0, =s_rxctl
+    mov   w1, w19
+    bl    print_reg                          // CMD_CTL: bit25=RX_FLAG, bit26=RX_OVERFLOW
+    ldr   x0, =s_rxdat
+    mov   w1, w20
+    bl    print_reg                          // CMD_RX0: the panel's response word
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dcs_read_raw: the low-level DCS read mechanics, shared by the liveness probe above and the
+// panel-register dump below. in: w1 = read-request header word ({DI=0x06, reg, 0x00, ECC}
+// little-endian, precomputed in mkdata.py). out: w0 = CMD_CTL/RXCTL (bit25 RX_FLAG set =
+// panel answered, bit26 RX_OVERFLOW), w1 = CMD_RX0/RXDAT (response word; bits[15:8] = the
+// returned parameter byte). LP/command mode ONLY (the LPRX chain forces LP11->LPDT). The
+// completion poll is bounded so a wedged DSI engine can't hang the diagnostic.
+dcs_read_raw:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    mov   w19, w1                            // header word (consumed before any sub-call)
     ldr   x0, =DSI+0x200                    // clear RX_OVERFLOW|RX_FLAG|TX_FLAG
     ldr   w1, =0x06000200
     str   w1, [x0]
     dsb   sy
-    ldr   x0, =DSI+0x300                    // read-request header: DI=0x06(DCS read),
-    ldr   w1, =0x3F000A06                   // d0=0x0A(power mode), d1=0, ECC=0x3F
-    str   w1, [x0]
+    ldr   x0, =DSI+0x300                    // read-request header (DI=0x06, reg, 0, ECC)
+    str   w19, [x0]
     dsb   sy
     ldr   x0, =DSI+0x200                    // CMD_CTL length = 4-1 = 3 (RMW low byte)
     ldr   w1, [x0]
@@ -1119,21 +1148,67 @@ dcs_read_dbg:
     bl    mmio_setbits
     ldr   x0, =DSI+0x10                     // wait for the instruction to finish (bounded)
     mov   w3, #0x100000
-drd_poll:
+drr_poll:
     ldr   w4, [x0]
     tst   w4, #1
-    b.eq  drd_done
+    b.eq  drr_done
     subs  w3, w3, #1
-    b.ne  drd_poll
-drd_done:
-    ldr   x0, =DSI+0x200                    // CMD_CTL: bit25=RX_FLAG, bit26=RX_OVERFLOW
+    b.ne  drr_poll
+drr_done:
+    ldr   x0, =DSI+0x200                    // RXCTL
+    ldr   w20, [x0]
+    ldr   x0, =DSI+0x240                    // RXDAT (the panel's response word)
     ldr   w1, [x0]
-    ldr   x0, =s_rxctl
-    bl    print_reg
-    ldr   x0, =DSI+0x240                    // CMD_RX0: the panel's response word
-    ldr   w1, [x0]
-    ldr   x0, =s_rxdat
-    bl    print_reg
+    mov   w0, w20
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// dcs_panel_dump: read back the PANEL's own standard MIPI DCS status/config registers and
+// print "PANEL_<reg>=<RXCTL>,<RXDAT>" for each (table dsi_read_seq from gfx.s: power-mode
+// 0x0A, address-mode 0x0B, pixel-format 0x0C, image-mode 0x0D, signal-mode 0x0E, self-diag
+// 0x0F, ID1/2/3 0xDA/0xDB/0xDC). Run AFTER a COLD st7703_init (native paneldbg) and on
+// p-boot's WARM lit panel (pbootdbg [pboot-ref]). Diff the two traces offline: a register
+// that reads DIFFERENT cold-vs-warm => that DCS config never took effect on the cold panel
+// (panel-state/timing dependency = the bug, PINEPHONE-BRINGUP.md §8). ALL reads matching yet
+// still black => the fault is the post-DISPON HS *video* delivery (DE2->TCON0->DSI HS pixels),
+// NOT the DCS config -> pivot to instrumenting that. LP/command mode only. Bounded per read.
+dcs_panel_dump:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    stp   x21, x22, [sp, #-16]!
+    ldr   x0, =s_pandmp
+    bl    uart_puts
+    ldr   x19, =dsi_read_seq
+dpd_l:
+    ldr   w20, [x19]                         // reg number (0xFFFFFFFF terminates)
+    cmn   w20, #1
+    b.eq  dpd_done
+    ldr   w1, [x19, #4]                      // the precomputed read-request header word
+    bl    dcs_read_raw                        // -> w0=RXCTL, w1=RXDAT
+    mov   w21, w0
+    mov   w22, w1
+    ldr   x0, =s_panreg                       // "PANEL_"
+    bl    uart_puts
+    mov   w0, w20
+    bl    uart_hex                            // the register number
+    mov   w0, #'='
+    bl    uart_putc
+    mov   w0, w21
+    bl    uart_hex                            // RXCTL
+    mov   w0, #','
+    bl    uart_putc
+    mov   w0, w22
+    bl    uart_hex                            // RXDAT
+    mov   w0, #0x0D
+    bl    uart_putc
+    mov   w0, #0x0A
+    bl    uart_putc
+    add   x19, x19, #8
+    b     dpd_l
+dpd_done:
+    ldp   x21, x22, [sp], #16
+    ldp   x19, x20, [sp], #16
     ldp   x29, x30, [sp], #16
     ret
 
