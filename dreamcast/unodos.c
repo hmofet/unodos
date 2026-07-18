@@ -1010,7 +1010,9 @@ static void post_ticks(void)
 static void tick_all_apps(void)
 {
     short z;
-    for (z = 0; z < gZCount; z++)
+    /* skip the topmost (z = gZCount-1): post_ticks dispatches its tick via the
+       app task, so ticking it here too runs its tick() twice/frame. */
+    for (z = 0; z + 1 < gZCount; z++)
         app_tick_dispatch(zwin(z)->proc);
 }
 
