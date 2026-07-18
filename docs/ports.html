@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The UnoDOS family — UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="active" href="ports.html">The UnoDOS family</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>The UnoDOS family</h1>
+<p class="lede">pc64 is one world of many. The same GUI-first OS, and one machine-readable Contract, span
+20+ hardware targets — from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
+
+<h2 id="pattern">One idea, many machines</h2>
+<p>Every port follows the same <strong>firmware-as-BIOS</strong> pattern pc64 uses with UEFI: ask the
+platform's firmware for a framebuffer and input, then let UnoDOS do the rest. The Raspberry&nbsp;Pi asks the
+VideoCore firmware for its framebuffer over the mailbox; the PowerPC Mac boots as an Open&nbsp;Firmware client;
+the consoles talk to their video chips and VRAM directly. A single Contract (<code>unodef/</code>) — including
+a shared logical <strong>window model</strong> — is what every world is generated from or checked against, so
+the ports stay consistent rather than diverging.</p>
+
+<h2 id="tiers">UI tiers</h2>
+<p>How much UI a port carries depends on how much memory it has:</p>
+<ul>
+  <li><strong>Full desktop shell (unoui):</strong> the high-spec worlds — pc64, PlayStation&nbsp;2, Dreamcast,
+  and the ARM/PowerPC boards — can run the same themed toolkit desktop pc64 uses.</li>
+  <li><strong>Minimal legacy path:</strong> the tiny targets — NES (2&nbsp;KB RAM), Game&nbsp;Boy (8&nbsp;KB),
+  the C64 — keep a compact icon/button desktop; the full toolkit simply won't fit.</li>
+</ul>
+<p>And where pc64 is written in C, the classic x86 kernel and the retro ports are hand-written in each
+CPU's native assembly — 6502, Z80, 68000, Sharp&nbsp;SM83, ARM7TDMI, NEC&nbsp;V30MZ, HuC6280, PowerPC and
+AArch64.</p>
+
+<h2 id="gallery">A few of the worlds</h2>
+<div class="grid cols-2">
+  <figure><img src="assets/img/classic_xt.png" alt="The original — UnoDOS 3 on an IBM PC/XT: a ~46&amp;nbsp;KB pure-assembly kernel, 106 syscalls and 19 apps on a single 1.44&amp;nbsp;MB floppy, on an 8088 with CGA." loading="lazy"><figcaption><b>The original</b> — UnoDOS 3 on an IBM PC/XT: a ~46&nbsp;KB pure-assembly kernel, 106 syscalls and 19 apps on a single 1.44&nbsp;MB floppy, on an 8088 with CGA.</figcaption></figure>
+  <figure><img src="assets/img/port_c64.png" alt="Commodore 64 — the minimal legacy desktop; 6510 @ 0.985&amp;nbsp;MHz, 64&amp;nbsp;KB, VIC-II, SID." loading="lazy"><figcaption><b>Commodore 64</b> — the minimal legacy desktop; 6510 @ 0.985&nbsp;MHz, 64&nbsp;KB, VIC-II, SID.</figcaption></figure>
+  <figure><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast — a high-spec console running the native desktop at parity." loading="lazy"><figcaption><b>Sega Dreamcast</b> — a high-spec console running the native desktop at parity.</figcaption></figure>
+  <figure><img src="assets/img/port_pinephone.png" alt="PinePhone — the AArch64 core retargeted to the Allwinner A64 display engine, in portrait." loading="lazy"><figcaption><b>PinePhone</b> — the AArch64 core retargeted to the Allwinner A64 display engine, in portrait.</figcaption></figure>
+  <figure><img src="assets/img/port_rpi.png" alt="Raspberry Pi — the first 64-bit ARM world, on the VideoCore mailbox framebuffer." loading="lazy"><figcaption><b>Raspberry Pi</b> — the first 64-bit ARM world, on the VideoCore mailbox framebuffer.</figcaption></figure>
+  <figure><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac — the first big-endian PowerPC world, booting over Open Firmware." loading="lazy"><figcaption><b>PowerPC Mac</b> — the first big-endian PowerPC world, booting over Open Firmware.</figcaption></figure>
+  <figure><img src="assets/img/port_iigs.png" alt="Apple IIGS — the 65816 desktop." loading="lazy"><figcaption><b>Apple IIGS</b> — the 65816 desktop.</figcaption></figure>
+  <figure><img src="assets/img/port_mac.png" alt="Classic Macintosh — the compact 68000 Mac desktop." loading="lazy"><figcaption><b>Classic Macintosh</b> — the compact 68000 Mac desktop.</figcaption></figure>
+</div>
+
+<h2 id="table">The full lineup</h2>
+<div class="tw"><table>
+<thead><tr><th>World</th><th>Hardware</th><th>CPU</th><th>Boot / display</th></tr></thead>
+<tbody>
+<tr><td><strong>pc64</strong></td><td>Modern PC (2007+)</td><td>x86-64</td><td>UEFI GOP <span class="muted">(this manual)</span></td></tr>
+<tr><td>Classic</td><td>IBM PC/XT</td><td>Intel 8088+</td><td>BIOS · CGA</td></tr>
+<tr><td>Amiga</td><td>Commodore Amiga</td><td>68000</td><td>native chipset</td></tr>
+<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td></tr>
+<tr><td>PowerPC Mac</td><td>Power Macintosh</td><td>PowerPC 32-bit</td><td>Open Firmware</td></tr>
+<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td></tr>
+<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td></tr>
+<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td></tr>
+<tr><td>VIC-20</td><td>Commodore VIC-20</td><td>6502</td><td>VIC 6560/1</td></tr>
+<tr><td>NES</td><td>Nintendo NES</td><td>6502 / 2A03</td><td>PPU</td></tr>
+<tr><td>SNES</td><td>Super Nintendo</td><td>65C816</td><td>native</td></tr>
+<tr><td>Master System</td><td>Sega Master System</td><td>Z80</td><td>315-5124 VDP</td></tr>
+<tr><td>Game Gear</td><td>Sega Game Gear</td><td>Z80</td><td>315-5124 VDP</td></tr>
+<tr><td>Genesis</td><td>Sega Mega Drive</td><td>68000 + Z80</td><td>native</td></tr>
+<tr><td>Game Boy / Color</td><td>Nintendo Game Boy</td><td>Sharp SM83</td><td>native</td></tr>
+<tr><td>Game Boy Advance</td><td>Nintendo GBA</td><td>ARM7TDMI</td><td>native</td></tr>
+<tr><td>PC Engine</td><td>NEC TurboGrafx-16</td><td>HuC6280</td><td>HuC6270 VDC</td></tr>
+<tr><td>WonderSwan</td><td>Bandai WonderSwan</td><td>NEC V30MZ</td><td>native</td></tr>
+<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td></tr>
+<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td></tr>
+<tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td></tr>
+<tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td></tr>
+</tbody>
+</table></div>
+<div class="note"><b>Where to read more</b>The forward line is <strong>UnoDOS 3.1</strong>, a contract-driven redesign. Full family status lives in the repository — <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.</div>
+
+<nav class="pagenav"><a href="networking.html">&lsaquo; Networking</a><span></span></nav>
+</div></main>
+</div>
+</body>
+</html>
