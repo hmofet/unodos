@@ -21,28 +21,28 @@ emulator (screendump), not just building**; commit per port; push to
     alpha** — `soft_shadow` skipped, corners squared).
   - "Aurora lite" checkbox in the pc64 Control panel. Render-verified in QEMU.
 - **Phase 1 ps2** (`9679da6`): `./build.sh ee uui` builds unoui + Aurora on the
-  EE. Build+link verified (`unodos-ps2-uui.elf`, MIPS N32). Rebuilt + PCSX2
-  **execution**-verified (the EE ELF loads + runs the render loop; emulog shows
-  entry `0x00101570` executing, NTSC vsync, no EE exceptions). A live GS
-  **screendump** is still pending: PCSX2 v2.x presents every renderer (incl.
-  software) through a GPU swapchain, and this box's RDP session is currently
-  **disconnected**, so `CopyFromScreen` returns "handle invalid" and PrintWindow
-  can't read a GPU surface. `ps2/tools/run_pcsx2_windowed.ps1` + the existing
-  `run_pcsx2.ps1` will both capture once RDP is **connected** (or the installed-
-  but-inactive virtual display driver is enabled). The Aurora *content* is
-  render-verified via the identical host software path (see below).
+  EE. Build+link verified (`unodos-ps2-uui.elf`, MIPS N32) and **GS
+  render-verified in PCSX2** — the EE ELF boots and presents the Aurora desktop
+  (About + Display windows, soft-shadow chrome, rounded corners, widgets) on the
+  real GS pipeline. Capture recipe: `ps2/tools/run_pcsx2_windowed.ps1` (windowed
+  + DWM-composited so `CopyFromScreen` reads the GPU frame; the fullscreen
+  `run_pcsx2.ps1` only works when RDP is connected AND reads black under
+  fullscreen-exclusive — use the windowed one). ps2 `.gitignore`s `shots/`, so
+  no shot is committed (port policy).
 - **Phase 1 dreamcast** (this branch): `./build.sh dc uui` builds the SH4 KOS
   ELF `unodos-dc-uui.elf` + a bootable image (`.iso`/`.cdi`). Files:
   `dreamcast/fb_aa.c` (portable ops), `dreamcast/fb.h` (unoui decls),
   `dreamcast/dc_uui.c` (KOS shell: 640×480 RGB565 present, maple d-pad nav).
   **KallistiOS is now fully built** (sh-elf gcc 15.2.0 at `/opt/toolchains/dc/sh-elf`
   + `libkallisti.a`; `source /opt/toolchains/dc/kos/environ.sh` before `dc uui`).
-  Aurora **content** render-verified via `./build.sh uui-host` →
+  Aurora content render-verified two ways: (1) `./build.sh uui-host` →
   `dreamcast/shots/aurora.png` (the SAME unoui+theme_aurora+fb_aa software path
-  the DC runs; only the present differs, fb→565). Live emulator screendump
-  pending the same capture constraint as ps2 (no DC emulator installed; all are
-  GPU-present). The DC 565 present mirrors the already-verified legacy
-  `dc_main.c` path.
+  the DC runs; only the present differs, fb→565); (2) **flycast v2.6
+  render-verified on the PowerVR2 pipeline** → `dreamcast/shots/aurora_flycast.png`
+  — the SH4 ELF boots and presents Aurora FULL, no visible RGB565 banding at 480p.
+  Recipe: flycast boots the DC **`.elf` directly** (HLE BIOS, windowed) — the
+  genisoimage `.iso` fallback did NOT boot in flycast; install `mkdcdisc` for a
+  `.cdi` if a disc image is needed. flycast lives at `C:\Users\arin\dc-tools\flycast`.
 
 ## The reusable per-port pattern (established by ps2)
 
@@ -64,17 +64,16 @@ emulator (screendump), not just building**; commit per port; push to
 
 ## Capture note (read before "verify in the emulator")
 
-Live emulator screendumps are currently blocked by the **dev box's session
-state**, not the ports: this machine is driven over RDP and the session is
-presently **disconnected**, so a full-screen/GDI `CopyFromScreen` fails ("handle
-invalid"), and modern console emulators (PCSX2 v2.x, flycast, redream) present
-through a **GPU swapchain** that `PrintWindow` can't read either. The verified
-escape hatches: (a) reconnect RDP, then the `run_pcsx2*.ps1` capture scripts
-work; (b) enable the **virtual display driver** (winget package
-`VirtualDrivers.Virtual-Display-Driver` is installed but no virtual monitor is
-active — a one-time admin step per `~/.claude/CLAUDE.md`). Until then, each new
-port is verified by: real cross-toolchain ELF build + **host-identical Aurora
-render** (`uui-host`, byte-identical software path) + emulog "executes" evidence.
+Emulator screendumps on this RDP-driven box: modern console emulators (PCSX2
+v2.x, flycast) present through a **GPU swapchain** `PrintWindow` can't read, and
+**fullscreen-exclusive** reads black. The recipe that works: **RDP connected +
+emulator windowed** (so the frame composites through DWM) + `CopyFromScreen` of
+the window rect. If the RDP session is *disconnected*, `CopyFromScreen` returns
+"handle invalid" — reconnect, or enable the installed-but-inactive virtual
+display driver (`VirtualDrivers.Virtual-Display-Driver`, a one-time admin step
+per `~/.claude/CLAUDE.md`). Belt-and-suspenders: every port also gets a
+host-identical render (`uui-host`, byte-identical software path) so verification
+never *depends* on the capture working.
 
 ## Remaining work, in order
 
