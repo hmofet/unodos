@@ -7,6 +7,11 @@ NICONS      EQU 11
 T_SOLW      EQU 236  ; solid white block
 T_SOLC      EQU 237  ; solid cyan block
 T_SOLM      EQU 238  ; solid magenta block
+T_PCUR      EQU 239  ; paint cursor (hollow box)
+T_PMDOT     EQU 240  ; pac-man dot
+T_PMPOW     EQU 241  ; pac-man power pellet
+T_PMPAC     EQU 242  ; pac-man
+T_PMGHO     EQU 243  ; pac-man ghost
 palette:
     dc.b $11,$30,$2C,$24
 

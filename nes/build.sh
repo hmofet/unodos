@@ -19,6 +19,7 @@ echo "[1/4] generating CHR (font + icons + blocks) + data from the shared assets
 
 # AUTOTEST switches: exactly one AT_* is 1 for a test build, all 0 otherwise.
 AUTOTEST=0; AT_NAV=0; AT_APP=0; AT_CLOCK=0; AT_THEME=0; AT_MUSIC=0; AT_DOSTRIS=0
+AT_TRACKER=0; AT_OUTLAST=0; AT_PACMAN=0; AT_PAINT=0
 OUT=build/unodos.nes
 case "$1" in
   nav)     AUTOTEST=1; AT_NAV=1;     OUT=build/unodos_nav.nes ;;
@@ -27,6 +28,10 @@ case "$1" in
   theme)   AUTOTEST=1; AT_THEME=1;   OUT=build/unodos_theme.nes ;;
   music)   AUTOTEST=1; AT_MUSIC=1;   OUT=build/unodos_music.nes ;;
   dostris) AUTOTEST=1; AT_DOSTRIS=1; OUT=build/unodos_dt.nes ;;
+  tracker) AUTOTEST=1; AT_TRACKER=1; OUT=build/unodos_tracker.nes ;;
+  outlast) AUTOTEST=1; AT_OUTLAST=1; OUT=build/unodos_outlast.nes ;;
+  pacman)  AUTOTEST=1; AT_PACMAN=1;  OUT=build/unodos_pacman.nes ;;
+  paint)   AUTOTEST=1; AT_PAINT=1;   OUT=build/unodos_paint.nes ;;
 esac
 
 echo "[2/4] writing build/cfg.inc (AUTOTEST switches)..."
@@ -39,6 +44,10 @@ AT_CLOCK    EQU $AT_CLOCK
 AT_THEME    EQU $AT_THEME
 AT_MUSIC    EQU $AT_MUSIC
 AT_DOSTRIS  EQU $AT_DOSTRIS
+AT_TRACKER  EQU $AT_TRACKER
+AT_OUTLAST  EQU $AT_OUTLAST
+AT_PACMAN   EQU $AT_PACMAN
+AT_PAINT    EQU $AT_PAINT
 EOF
 
 echo "[3/4] assembling kernel.s (6502, 32KB PRG)..."

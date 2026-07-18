@@ -13,8 +13,8 @@
 ;     SELECTION highlight (d-pad moves it, the selected label inverts), A launches
 ;     the selected app full-screen, B returns to the launcher.
 ; M3: full-screen apps — SysInfo, live Clock, Notepad, Files, Theme (palette
-;     cycling), Music (2A03 APU pulse), the Dostris falling-blocks game, and
-;     generic placeholders. One app is resident at a time, dispatched by proc.
+;     cycling), Music (2A03 APU pulse), Dostris, Tracker, OutLast, Pac-Man and
+;     Paint — full 11-app parity. One app is resident at a time, dispatched by proc.
 ;
 ; Rendering model (the §9 minimal floor): the NMI is minimal (a 60 Hz tick + a
 ; vblank flag, NO PPU access). The main loop syncs to vblank, then does SMALL
@@ -259,10 +259,22 @@ up_disp:
 ud1:    cmp #5
         bne ud2
         jmp theme_input
-ud2:    cmp #7
+ud2:    cmp #6
         bne ud3
+        jmp tracker_update
+ud3:    cmp #7
+        bne ud4
         jmp dostris_update
-ud3:    rts                     ; clock (proc 1): clock_advance already ran
+ud4:    cmp #8
+        bne ud5
+        jmp outlast_update
+ud5:    cmp #9
+        bne ud6
+        jmp pacman_update
+ud6:    cmp #10
+        bne ud7
+        jmp paint_update
+ud7:    rts                     ; clock (proc 1): clock_advance already ran
 
 ; ============================================================================
 ; launcher navigation (M2)
@@ -353,8 +365,24 @@ enter_app:
 ea_music:
         lda v_app
         cmp #3
-        bne ea_done
+        bne ea_tk
         jsr music_init
+ea_tk:  lda v_app
+        cmp #6
+        bne ea_ol
+        jsr tracker_init
+ea_ol:  lda v_app
+        cmp #8
+        bne ea_pm
+        jsr outlast_init
+ea_pm:  lda v_app
+        cmp #9
+        bne ea_pt
+        jsr pacman_init
+ea_pt:  lda v_app
+        cmp #10
+        bne ea_done
+        jsr paint_init
 ea_done:
         lda #1
         sta v_dirty
@@ -397,7 +425,19 @@ rpa2:   cmp #5
 rpa3:   cmp #7
         bne rpa4
         jmp rp_dostris
-rpa4:   rts
+rpa4:   cmp #6
+        bne rpa5
+        jmp rp_tracker
+rpa5:   cmp #8
+        bne rpa6
+        jmp rp_outlast
+rpa6:   cmp #9
+        bne rpa7
+        jmp rp_pacman
+rpa7:   cmp #10
+        bne rpa8
+        jmp rp_paint
+rpa8:   rts
 rp_clock:
         lda pf_clk
         bne rpc
@@ -771,6 +811,10 @@ two_digits:
 ; ---- includes --------------------------------------------------------------
         include "apps.inc"         ; app draws, clock/theme/music, AUTOTEST script + data
         include "dostris.inc"      ; the Dostris (falling-blocks) game
+        include "tracker.inc"      ; Tracker (app 6): APU pattern sequencer
+        include "outlast.inc"      ; OutLast (app 8): pseudo-3D racer
+        include "pacman.inc"       ; Pac-Man (app 9): maze + chase AI
+        include "paint.inc"        ; Paint (app 10): cell canvas
         include "nes_data.inc"     ; T_*/NICONS/palette + piece + music tables
 
 ; ---- interrupt vectors -----------------------------------------------------
