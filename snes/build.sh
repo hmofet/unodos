@@ -19,6 +19,7 @@ FLAGS=""
 OUT=build/unodos.sfc
 case "$1" in
   test|autotest) FLAGS="-D AUTOTEST=1"; OUT=build/unodos_test.sfc ;;
+  drag)    FLAGS="-D AUTOTEST=1 -D AUTOTEST_DRAG=1"; OUT=build/unodos_dg.sfc ;;
 esac
 
 echo "[2/4] assembling kernel.asm (ca65 --cpu 65816)..."
