@@ -221,6 +221,18 @@ super:
         moveq   #1,d0
         bsr     launch_app          ; Clock exists -> raise to top
         endc
+        ifd     AUTOTEST_CLOSE
+        ; P1 close: open three overlapping windows (the top one covers the icon
+        ; grid + the two below), then close it. The band-clipped repaint must
+        ; reveal the icons + windows behind byte-identically to a full repaint.
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo (bottom)
+        moveq   #1,d0
+        bsr     launch_app          ; Clock
+        moveq   #2,d0
+        bsr     launch_app          ; Files (top, covers icons + the two below)
+        bsr     close_topmost       ; close Files -> reveal behind
+        endc
         ifd     AUTOTEST_PAINT
         ; Paint variant: open the app (loaded from DF1). The PAINT.APP image,
         ; assembled with -DAUTOTEST_PAINT=1, draws a demo scene through its own
@@ -449,6 +461,7 @@ super:
         ifnd    AUTOTEST_MFM
         ifnd    AUTOTEST_FILES
         ifnd    AUTOTEST_RAISE
+        ifnd    AUTOTEST_CLOSE
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom, disk-loaded)
@@ -460,6 +473,7 @@ super:
         moveq   #' ',d1             ; space = play/stop, through MUSIC.APP
         moveq   #0,d2
         bsr     at_app_key
+        endc
         endc
         endc
         endc
@@ -1115,6 +1129,14 @@ close_window:
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
+        ; capture the closed window's row band (+1 = its bottom shadow) so the
+        ; repaint below only touches those rows (P1 close damage-rect)
+        lea     vars(pc),a4
+        move.w  WY(a2),d1
+        move.w  d1,clip_y0-vars(a4)
+        add.w   WH(a2),d1
+        addq.w  #1,d1
+        move.w  d1,clip_y1-vars(a4)
         sf      WSTATE(a2)
         ; free the app task (slot from the window entry address)
         movem.l d0/a0,-(sp)
@@ -1135,7 +1157,35 @@ close_window:
         move.b  1(a0,d0.w),(a0,d0.w)
         addq.w  #1,d0
         bra     .shift
-.done:  bsr     repaint_all
+.done:  ; union the band with the new topmost's rows (it restyles to active),
+        ; then repaint just that band. If no windows remain the band-clear runs.
+        move.w  zcount(pc),d2
+        beq     .clamp
+        subq.w  #1,d2
+        bsr     zwin_ptr            ; a2 = new topmost
+        lea     vars(pc),a4
+        move.w  WY(a2),d0
+        cmp.w   clip_y0-vars(a4),d0
+        bge     .cuy0
+        move.w  d0,clip_y0-vars(a4) ; band top = min(closed, topmost)
+.cuy0:  move.w  WY(a2),d0
+        add.w   WH(a2),d0
+        addq.w  #1,d0
+        cmp.w   clip_y1-vars(a4),d0
+        ble     .clamp
+        move.w  d0,clip_y1-vars(a4) ; band bottom = max(closed, topmost)+shadow
+.clamp: lea     vars(pc),a4
+        move.w  clip_y0-vars(a4),d0
+        bpl     .cl0
+        clr.w   clip_y0-vars(a4)
+.cl0:   move.w  clip_y1-vars(a4),d0
+        cmp.w   #SCRH,d0
+        ble     .cl1
+        move.w  #SCRH,clip_y1-vars(a4)
+.cl1:   bsr     repaint_all         ; clear + desktop + windows, all clipped to the band
+        lea     vars(pc),a4         ; restore the full-screen clip
+        clr.w   clip_y0-vars(a4)
+        move.w  #SCRH,clip_y1-vars(a4)
         rts
 
 close_topmost:
@@ -1148,7 +1198,7 @@ close_topmost:
 
 ; repaint_all - desktop, then windows bottom-up (paint order = z-clip)
 repaint_all:
-        bsr     clear_screen
+        bsr     clear_band          ; clears the full screen, or just the clip band
         bsr     draw_desktop
         moveq   #0,d7
 .wins:  cmp.w   zcount(pc),d7
@@ -1486,6 +1536,43 @@ clear_screen:
         movem.l (sp)+,d0-d1/a0
         rts
 
+; clear_band - clear rows [clip_y0, clip_y1) across all planes to 0. Full screen
+; (the default clip) takes the fast clear_screen; a narrowed band (close_window)
+; clears only those rows. Byte-identical to clear_screen for the full case.
+clear_band:
+        move.w  clip_y0(pc),d0
+        bne     .band
+        move.w  clip_y1(pc),d0
+        cmp.w   #SCRH,d0
+        blt     .band
+        bra     clear_screen        ; full screen -> fast path
+.band:
+        movem.l d0-d4/a0,-(sp)
+        move.w  clip_y1(pc),d1
+        move.w  clip_y0(pc),d2
+        sub.w   d2,d1               ; d1 = band row count
+        ble     .cbout
+        move.w  d1,d3
+        mulu    #ROWB,d3            ; d3 = band bytes per plane
+        move.w  d2,d4
+        mulu    #ROWB,d4            ; d4 = start byte offset (clip_y0*ROWB)
+        moveq   #NPLANES-1,d2       ; plane index
+.cbpl:  lea     PLANE0,a0
+        move.w  d2,d0
+        mulu    #PLANE_SZ,d0
+        add.l   d0,a0
+        add.l   d4,a0              ; a0 = this plane's band start
+        move.l  d3,d0
+        lsr.l   #1,d0
+        subq.l  #1,d0              ; word count - 1
+        moveq   #0,d1
+.cbw:   move.w  d1,(a0)+
+        dbra    d0,.cbw
+        subq.w  #1,d2
+        bpl     .cbpl
+.cbout: movem.l (sp)+,d0-d4/a0
+        rts
+
 ; plane_row - d1 = y -> a0/a1 = row bases. Trashes d5.
 plane_row:
         move.w  d1,d5
@@ -1506,6 +1593,20 @@ fill_rect_raw:
         tst.w   d2
         ble     fr_out
         tst.w   d3
+        ble     fr_out
+        ; --- vertical clip to the row band [clip_y0, clip_y1) (d4=color kept) ---
+        move.w  d1,d5
+        add.w   d3,d5               ; d5 = bottom = y+h
+        move.w  clip_y1(pc),d6
+        cmp.w   d6,d5
+        ble     .frcb
+        move.w  d6,d5               ; bottom = min(bottom, clip_y1)
+.frcb:  move.w  clip_y0(pc),d6
+        cmp.w   d6,d1
+        bge     .frct
+        move.w  d6,d1               ; y = max(y, clip_y0)
+.frct:  move.w  d5,d3
+        sub.w   d1,d3               ; h = bottom - y
         ble     fr_out
         ; a3 = byte offset of (x,y)
         move.w  d1,d6
@@ -1696,32 +1797,67 @@ xs_out: rts
 ; draw_icon16 - a0 = planar icon (16 words plane0, then 16 words plane1),
 ;               d0 = x (multiple of 8), d1 = y
 draw_icon16:
-        movem.l d0-d5/a0-a4,-(sp)
+        movem.l d0-d7/a0-a4,-(sp)   ; d6/d7 = clip scratch
         bsr     di16_raw
-        movem.l (sp)+,d0-d5/a0-a4
+        movem.l (sp)+,d0-d7/a0-a4
         rts
 di16_raw:
-        move.l  a0,a4               ; a4 = source data
-        bsr     plane_row           ; a0/a1 = row bases (trashes d5)
+        move.l  a0,a4               ; a4 = source data (16 words pl0, 16 words pl1)
+        bsr     plane_row           ; a0/a1 = row bases at y (trashes d5; keeps d1=y)
         move.w  d0,d5
         lsr.w   #3,d5
         add.w   d5,a0
         add.w   d5,a1
-        moveq   #15,d2
+        ; --- vertical clip to the row band [clip_y0, clip_y1) ---
+        move.w  clip_y0(pc),d6
+        sub.w   d1,d6               ; d6 = clip_y0 - y
+        bpl     .iskp
+        moveq   #0,d6               ; skip = max(0, clip_y0 - y)
+.iskp:  move.w  d1,d7
+        add.w   #16,d7              ; y+16
+        move.w  clip_y1(pc),d5
+        cmp.w   d5,d7
+        ble     .ivb
+        move.w  d5,d7               ; min(y+16, clip_y1)
+.ivb:   sub.w   d1,d7               ; (vis_bot - y)
+        sub.w   d6,d7               ; d7 = count = (vis_bot - y) - skip
+        ble     .idone              ; nothing in band
+        ; plane 0: skip `skip` rows, draw `count`, then step a4 to plane-1 data
+        move.w  d6,d5
+        beq     .r0go
+.r0sk:  addq.l  #2,a4
+        lea     ROWB(a0),a0
+        subq.w  #1,d5
+        bne     .r0sk
+.r0go:  move.w  d7,d2
+        subq.w  #1,d2
 .r0:    move.w  (a4)+,d3
         move.b  d3,1(a0)
         lsr.w   #8,d3
         move.b  d3,(a0)
         lea     ROWB(a0),a0
         dbra    d2,.r0
-        moveq   #15,d2
+        move.w  #16,d2
+        sub.w   d6,d2
+        sub.w   d7,d2               ; tail = 16 - skip - count
+        add.w   d2,d2
+        add.w   d2,a4               ; a4 -> plane-1 data start
+        ; plane 1: same skip/count
+        move.w  d6,d5
+        beq     .r1go
+.r1sk:  addq.l  #2,a4
+        lea     ROWB(a1),a1
+        subq.w  #1,d5
+        bne     .r1sk
+.r1go:  move.w  d7,d2
+        subq.w  #1,d2
 .r1:    move.w  (a4)+,d3
         move.b  d3,1(a1)
         lsr.w   #8,d3
         move.b  d3,(a1)
         lea     ROWB(a1),a1
         dbra    d2,.r1
-        rts
+.idone: rts
 
 ; ----------------------------------------------------------------------------
 ; draw_char - d0=x d1=y d2=char d3=fg(0-31) d4=bg(0-31, or -1 = transparent)
@@ -1738,6 +1874,27 @@ draw_char:
 .hi:    lsl.w   #3,d2
         lea     font8x8(pc),a4
         lea     (a4,d2.w),a4        ; a4 = glyph rows
+        ; --- vertical clip: draw only glyph rows within [clip_y0, clip_y1) ---
+        move.w  clip_y1(pc),d5
+        move.w  d1,d6
+        addq.w  #8,d6               ; d6 = y+8
+        cmp.w   d5,d6
+        ble     .dcvb
+        move.w  d5,d6               ; vis_bot = min(y+8, clip_y1)
+.dcvb:  move.w  clip_y0(pc),d5
+        move.w  d1,d2
+        cmp.w   d5,d2
+        bge     .dcvt
+        move.w  d5,d2              ; vis_top = max(y, clip_y0)
+.dcvt:  move.w  d6,d5
+        sub.w   d2,d5             ; d5 = count = vis_bot - vis_top
+        ble     .dcout            ; fully clipped -> nothing
+        move.w  d2,d6
+        sub.w   d1,d6             ; d6 = skip = vis_top - y
+        move.w  d2,d1             ; y = vis_top (a3 lands on first visible row)
+        add.w   d6,a4             ; glyph pointer += skip rows
+        subq.w  #1,d5
+        move.w  d5,-(sp)          ; stash (count-1) for the row counter
         ; a3 = plane-0 address of (x,y)
         mulu    #ROWB,d1
         move.w  d0,d5
@@ -1748,7 +1905,7 @@ draw_char:
         add.l   d1,a3
         move.w  d0,d6
         and.w   #7,d6               ; d6 = shift
-        moveq   #7,d7               ; 8 rows
+        move.w  (sp)+,d7           ; row count-1 (clipped)
 .row:
         moveq   #0,d2
         move.b  (a4)+,d2
@@ -1794,7 +1951,7 @@ draw_char:
         dbra    d0,.pl
         lea     ROWB(a3),a3
         dbra    d7,.row
-        movem.l (sp)+,d0-d7/a0-a4
+.dcout: movem.l (sp)+,d0-d7/a0-a4
         rts
 
 ; draw_string    - a0 = NUL string, d0=x d1=y d2=fg (transparent bg)
@@ -2288,6 +2445,10 @@ dbl_icon:       dc.w    -1
 ev_head:        dc.w    0
 ev_tail:        dc.w    0
 zcount:         dc.w    0
+clip_y0:        dc.w    0           ; repaint row-band clip [y0,y1); default = full
+clip_y1:        dc.w    SCRH        ; screen. close_window narrows it to the closed
+                                    ; window's rows (+ the new topmost's) so the
+                                    ; primitives repaint only that band.
 mouse_cntx:     dc.b    0
 mouse_cnty:     dc.b    0
 mouse_btn:      dc.b    0
