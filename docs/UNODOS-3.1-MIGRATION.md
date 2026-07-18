@@ -70,7 +70,9 @@ small, generated surface:
 sms/    Sega Master System (Z80, sjasmplus)  -- M1 desktop + M2 WM + M3 apps
                                                  + Dostris game + PSG audio
 nes/    Nintendo NES (6502/2A03, dasm)        -- M1 launcher + M2 directional nav
-                                                 + M3 apps + Dostris game + APU audio
+                                                 + M3 FULL 11-app parity (+ Tracker/
+                                                 OutLast/Pac-Man/Paint) + APU audio;
+                                                 headless py65 PPU harness
 gb/     Game Boy / Color (Sharp SM83, rgbds) -- M1 list launcher + M2 directional nav
                                                  + M3 apps + Dostris + APU; DMG+GBC colour
 gg/     Sega Game Gear (Z80, sjasmplus)      -- SMS silicon + the GB minimal layout;
@@ -300,13 +302,17 @@ save-under cursor fix shipped alongside. The other ports already use the compact
    game + **PSG audio** — all BlastEm-verified via AUTOTEST scripted-pad builds. See
    [../sms/README.md](../sms/README.md). (Game Boy is a *separate* CPU — Sharp
    LR35902 — needs rgbds + a new `gbz80` dialect; deferred until that toolchain is in.)
-4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1–M3 + game + audio DONE** — the
-   Contract's `minimal` profile flagship (2 KB RAM, no WM, directional nav). Consumes
-   `gen/6502/` + `[world.nes]` via dasm. M1 launcher; M2 `$4016` pad + a vblank-NMI
-   loop + a directional selection highlight (A launches full-screen, B returns); M3
-   full-screen apps (SysInfo, live Clock, Notepad, Files, Theme, Music on the 2A03
-   APU) + a from-scratch **Dostris**. Mesen2-verified via AUTOTEST scripted-pad
-   builds. See [../nes/README.md](../nes/README.md). NEXT on NES: real hardware.
+4. ~~**NEW PORT: Nintendo NES (6502/2A03).**~~ **M1–M3 + FULL 11-app parity DONE** —
+   the Contract's `minimal` profile flagship (2 KB RAM, no WM, directional nav).
+   Consumes `gen/6502/` + `[world.nes]` via dasm. M1 launcher; M2 `$4016` pad + a
+   vblank-NMI loop + a directional selection highlight (A launches full-screen, B
+   returns); M3 full-screen apps — SysInfo, live Clock, Notepad, Files, Theme, Music
+   (2A03 APU), Dostris, **Tracker, OutLast, Pac-Man and Paint** (the 4 parity apps,
+   2026-06-18, all background-tile with per-app palettes; Paint is a cell canvas =
+   the NROM CHR-ROM ceiling). Verified on a **new headless py65 PPU harness**
+   (`nes/harness.py` → full 256×240 PNG, no Mesen/RDP dependency) + Mesen2. See
+   [../nes/README.md](../nes/README.md). The base 7 + Dostris ran on a real AV
+   Famicom; the 4 parity apps are emulator-verified, HW re-test pending.
 5. ~~**NEW PORT: Game Boy / Game Boy Color (Sharp SM83).**~~ **M1–M3 + game + audio
    DONE** — the FIRST `gbz80` world (a genuinely new unogen dialect, rgbds). `minimal`
    profile with a **vertical-list** launcher (the 160×144 LCD suits a list). M1
