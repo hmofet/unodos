@@ -29,6 +29,9 @@ whole screen on every event. On a 1 MHz 6510 the dominant costs are the
 full-screen wipe and the per-keystroke full redraws.
 
 ### P1 — Full-screen wipe (`app_clear`) on every redraw, even cursor-only moves
+
+> **✅ FIXED — Files (`55f7bdd`), Theme (`e0f8ce2`), Tracker (`1c923e5`)** — each cursor move now repaints only the two affected rows/cells instead of `app_clear` + full relist. The per-row/per-cell body is factored into a shared `*_row_draw`/`tk_cell_draw` that always fills the highlight band with the pattern (`$00` plain / `$FF` selected) so the full redraw stays byte-identical while a nav key can erase the old highlight (`files_nav_redraw`/`theme_nav_redraw`/`tk_nav_redraw`). Render-verified BYTE-IDENTICAL via `harness.py` (py65 → VIC bitmap → PNG), waits between keys so both builds register each edge. **Notepad deferred** (see below): it has no cursor-nav / highlight — it is an append-only editor whose every keystroke changes `note_len` and can tail-scroll the whole visible region, so there is no "two rows changed" case; a byte-identical incremental would have to replicate the wrap/scroll layout for low, per-keystroke value.
+
 `kernel.s:942-953` (`app_clear`) calls `clear_bitmap` (`kernel.s:678-694`, which
 stores **8192 bytes** one at a time through `(zpDst),y` — it clears the full
 `$2000` page though only 8000 bytes are live) and then a whole-screen
