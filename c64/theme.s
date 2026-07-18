@@ -63,8 +63,10 @@ tk_n3:
         beq tk_apply
         rts
 tk_setsel:
+        ldx th_sel              ; remember old cursor row for the incremental redraw
+        stx th_osel
         sta th_sel
-        jmp theme_draw
+        jmp theme_nav_redraw
 tk_apply:
         lda th_sel
         sta th_cur
@@ -110,7 +112,37 @@ theme_draw:
         ; list presets
         ldx #0
 th_row:
+        jsr theme_row_draw
+        ldx zpSlot
+        inx
+        cpx #NTHEMES
+        beq th_rowdone
+        jmp th_row
+th_rowdone:
+        ; help line
+        lda #1
+        sta zpCol
+        lda #23
+        sta zpRow
+        lda #0
+        sta zpInv
+        lda #COL_WIN
+        sta zpFCol
+        lda #<msg_theme_help
+        sta zpPtr
+        lda #>msg_theme_help
+        sta zpPtr+1
+        jmp draw_string
+
+; theme_row_draw - draw one preset row (X = index): "*"/space marker, the
+; highlight band if X == th_sel (the band is filled AFTER the marker, so on the
+; cursor row it covers the marker - preserved exactly), the name, and the
+; colour swatch. zpSlot holds the index on return. Factored verbatim from the
+; old th_row loop so the full theme_draw stays byte-identical.
+theme_row_draw:
         stx zpSlot
+        lda #COL_WIN            ; text colour for marker/name (app_clear default)
+        sta zpFCol
         ; row = 2 + x*2
         txa
         asl
@@ -189,26 +221,35 @@ th_nohi:
         jsr fill_rows
         lda #COL_WIN             ; restore default text colour for the next row
         sta zpFCol
-        ldx zpSlot
-        inx
-        cpx #NTHEMES
-        beq th_rowdone
-        jmp th_row
-th_rowdone:
-        ; help line
-        lda #1
-        sta zpCol
-        lda #23
-        sta zpRow
+        rts
+
+; theme_nav_redraw - a cursor move only shifts the highlight band; th_cur (the
+; "*"), swatches, title and help line don't change. Erase the old cursor row's
+; band (cols 0..19) back to background, then repaint the old row (now
+; unselected) and the new row (selected). Byte-identical to a full theme_draw.
+theme_nav_redraw:
+        lda th_osel             ; old row pixel Y = (2 + osel*2)*8
+        asl
+        clc
+        adc #2
+        asl
+        asl
+        asl
+        sta zpFY
         lda #0
-        sta zpInv
-        lda #COL_WIN
-        sta zpFCol
-        lda #<msg_theme_help
-        sta zpPtr
-        lda #>msg_theme_help
-        sta zpPtr+1
-        jmp draw_string
+        sta zpFX
+        lda #20
+        sta zpFW
+        lda #8
+        sta zpFH
+        lda #0
+        sta zpFPat
+        jsr fill_rows
+        ldx th_osel
+        jsr theme_row_draw
+        ldx th_sel
+        jsr theme_row_draw
+        rts
 
 ; preset tables (desktop colour fg<<4|bg, VIC border colour, name)
 th_desk_tab:   dc.b $E6,$D5,$A4,$78,$FB,$60
@@ -227,4 +268,5 @@ msg_th_night:  dc.b "Night",0
 ; app state (reset on each launch). th_cur starts at 0 (Ocean = the kernel
 ; default theme_desk/theme_border); applying a preset persists for this run.
 th_sel:  dc.b 0
+th_osel: dc.b 0       ; prior cursor row (for the incremental nav redraw)
 th_cur:  dc.b 0
