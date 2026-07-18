@@ -55,11 +55,18 @@ Mesen/GPU/RDP dependency, and it captures the *whole* frame (vs Mesen's 21×17 c
 This harness + the per-app-palette + background-tile patterns transfer directly to
 the remaining tile ports (PCE/VIC-20/GB). Storage: NROM has none (the hardware tail).
 
+### SMS — COMPLETE: full 11-app parity (2026-07-18)
+Pac-Man added as the 4th app — the shared 13×13 pillar maze + greedy-chase ghost
+AI ported to Z80, fitted to the WM window (proc 9). New `sms/pacman.inc` + 4 tiles
+(`T_PMDOT/PMPOW/PMPAC/PMGHO`, walls reuse `T_SOLC`), wired into the init/input/draw
+dispatch. BlastEm-verified (`build.sh pacman` → `build/pacman.png`). (Battery-SRAM
+storage remains a hardware-tail item.)
+
 ### Remaining
-- **SMS Pac-Man** — needs a screen-fitted maze (28×25 > 32×24) + the Z80 AI port.
 - **SMS battery-SRAM** storage (hardware-tail item).
 - **GG, PCE, VIC-20, GB, WS** — tile-model ports; constrained ones (VIC-20 22×23)
-  get the feasible subset with the ceiling documented. (NES done — see above.)
+  get the feasible subset with the ceiling documented. (NES + SMS done — see above;
+  GG is Z80/SMS-silicon so it reuses the SMS app code near-verbatim.)
 - **C-core refactor** — PS2/DC/Mac consume `gen/c/unodef.h` (thin: the ports
   legitimately diverge — MAXWIN=6, TBAR_H=18 are intentional).
 
