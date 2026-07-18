@@ -288,6 +288,11 @@ v_brdir         rs.b    8*16        ; BRAM listing cache (BRMDIR shape)
 v_brwr          rs.b    2176        ; fake-transport Word RAM staging
 v_brfk_dir      rs.b    8*16        ; fake BRAM store directory
 v_brfk_heap     rs.b    48*64       ; fake BRAM store heap (64B blocks)
+v_clip_x0       rs.w    1           ; damage-rect clip window (cells): draw only
+v_clip_y0       rs.w    1           ; cells in [x0,x1) x [y0,y1). Default = full
+v_clip_x1       rs.w    1           ; screen; set by handle_drag to union(old,new)
+v_clip_y1       rs.w    1           ; so a clipped repaint_all touches only the
+                                    ; moved window's damage (byte-identical out).
 VARS_END        rs.b    0
 
 ; ---------------------------------------------------------------- vectors
@@ -400,6 +405,7 @@ start:
         move.w  #-1,v_dbl_icon(a4)
         move.w  #-1,v_kb_hover(a4)
         move.w  #-1,v_np_goal(a4)
+        bsr     clip_reset          ; clip window = whole screen (no clipping)
         st      v_cur_dirty(a4)
         lea     str_untitled(pc),a0
         lea     v_np_name(a4),a1
@@ -820,6 +826,44 @@ start:
         bsr     mouse_buttons
         bsr     handle_clicks
         endc
+        ifd     AUTOTEST_DRAG
+        ; synthetic window drag: open two windows, then drag the TOP one
+        ; diagonally across the desktop (over the icon grid + the other
+        ; window) one cell per handle_drag step. Exercises the damage-rect
+        ; repaint: vacated desktop cells + the moved window over another
+        ; window must composite byte-identically to a full repaint_all.
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo (bottom window)
+        moveq   #2,d0
+        bsr     launch_app          ; Notepad  (top window)
+        lea     VARS,a4
+        move.w  v_zcount(a4),d2
+        subq.w  #1,d2
+        bsr     zwin_ptr            ; a2 = topmost (Notepad)
+        move.l  a2,v_drag_win(a4)
+        move.w  #0,v_drag_offx(a4)  ; grab at the window origin
+        move.w  #0,v_drag_offy(a4)
+        st      v_drag_active(a4)
+        move.b  #1,v_mouse_btn(a4)  ; button held for the whole drag
+        move.w  WX(a2),d0           ; mouse at the window's cell origin (px = cell*8)
+        lsl.w   #3,d0
+        move.w  d0,v_mouse_x(a4)
+        move.w  WY(a2),d0
+        lsl.w   #3,d0
+        move.w  d0,v_mouse_y(a4)
+        moveq   #8-1,d3             ; 8 cells down-right
+.atdrag:
+        move.w  v_mouse_x(a4),d0
+        addq.w  #8,d0
+        move.w  d0,v_mouse_x(a4)
+        move.w  v_mouse_y(a4),d0
+        addq.w  #8,d0
+        move.w  d0,v_mouse_y(a4)
+        bsr     handle_drag
+        dbra    d3,.atdrag
+        sf      v_mouse_btn(a4)
+        bsr     handle_drag         ; .finish (drop)
+        endc
         ifnd    AUTOTEST_NOTEPAD
         ifnd    AUTOTEST_MUSIC
         ifnd    AUTOTEST_KBD
@@ -834,6 +878,7 @@ start:
         ifnd    AUTOTEST_THEME
         ifnd    AUTOTEST_TRACKER
         ifnd    AUTOTEST_PAINT
+        ifnd    AUTOTEST_DRAG
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -843,6 +888,7 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
         endc
         endc
         endc
@@ -1118,9 +1164,39 @@ handle_drag:
         cmp.w   WY(a2),d1
         bne     .move
         rts
-.move:  move.w  d0,WX(a2)
+.move:  movem.l d3-d5,-(sp)         ; preserve scratch (callers keep loop vars here)
+        move.w  WX(a2),d3           ; d3 = old WX
+        move.w  WY(a2),d4           ; d4 = old WY
+        move.w  d0,WX(a2)           ; commit the new cell position
         move.w  d1,WY(a2)
+        ; clip = union(old_rect, new_rect) so the repaint below only touches the
+        ; cells the move actually changed (vacated band + the window's new spot),
+        ; fully composited -> byte-identical to a full repaint_all, but cheap.
+        move.w  d3,d5               ; x0 = min(oldWX,newWX)
+        cmp.w   d0,d5
+        ble     .ux0
+        move.w  d0,d5
+.ux0:   move.w  d5,VARS+v_clip_x0
+        move.w  d3,d5               ; x1 = max(oldWX,newWX) + WW
+        cmp.w   d0,d5
+        bge     .ux1
+        move.w  d0,d5
+.ux1:   add.w   WW(a2),d5
+        move.w  d5,VARS+v_clip_x1
+        move.w  d4,d5               ; y0 = min(oldWY,newWY)
+        cmp.w   d1,d5
+        ble     .uy0
+        move.w  d1,d5
+.uy0:   move.w  d5,VARS+v_clip_y0
+        move.w  d4,d5               ; y1 = max(oldWY,newWY) + WH
+        cmp.w   d1,d5
+        bge     .uy1
+        move.w  d1,d5
+.uy1:   add.w   WH(a2),d5
+        move.w  d5,VARS+v_clip_y1
         bsr     repaint_all
+        bsr     clip_reset
+        movem.l (sp)+,d3-d5
         rts
 .finish:
         sf      v_drag_active(a4)
@@ -1229,17 +1305,19 @@ draw_icon_cell:
         move.w  d7,d4
         lsl.w   #2,d4
         add.w   #T_ICONS,d4         ; first of 4 tiles (TL TR BL BR)
-        lea     VDP_DATA,a1
-        bsr     cell_addr
-        move.w  d4,(a1)
+        ; the 2x2 icon block, each cell clipped to the damage window (put_cell)
+        bsr     put_cell            ; TL at (x,y)
+        addq.w  #1,d0
         addq.w  #1,d4
-        move.w  d4,(a1)
-        addq.w  #1,d4
+        bsr     put_cell            ; TR at (x+1,y)
+        subq.w  #1,d0
         addq.w  #1,d1
-        bsr     cell_addr
-        move.w  d4,(a1)
         addq.w  #1,d4
-        move.w  d4,(a1)
+        bsr     put_cell            ; BL at (x,y+1)
+        addq.w  #1,d0
+        addq.w  #1,d4
+        bsr     put_cell            ; BR at (x+1,y+1)
+        subq.w  #1,d0               ; d0 back to x, d1 = y+1 (for the label)
         ; label at (x-1, y+3); selected = inverted (the selection box)
         move.w  d7,d2
         lsl.w   #2,d2
@@ -1763,12 +1841,39 @@ cell_addr:
         rts
 
 ; fill_cells - d0=cx d1=cy d2=w d3=h d4=name word. Preserves all.
+; Clipped to the v_clip_* window (default = whole screen) so a clipped
+; repaint_all touches only the damage rect (handle_drag). d4 is the tile.
 fill_cells:
-        movem.l d1/d3/d5/a1,-(sp)
-        tst.w   d2
+        movem.l d0-d7/a1,-(sp)
+        ; --- clip horizontal: cx=max(cx,x0), right=min(cx+w,x1), w=right-cx ---
+        move.w  d0,d6
+        add.w   d2,d6               ; d6 = right = cx+w
+        move.w  VARS+v_clip_x0,d7
+        cmp.w   d7,d0
+        bge     .cxok
+        move.w  d7,d0
+.cxok:  move.w  VARS+v_clip_x1,d7
+        cmp.w   d7,d6
+        ble     .rxok
+        move.w  d7,d6
+.rxok:  move.w  d6,d2
+        sub.w   d0,d2
         ble     .out
-        tst.w   d3
+        ; --- clip vertical ---
+        move.w  d1,d6
+        add.w   d3,d6               ; d6 = bottom = cy+h
+        move.w  VARS+v_clip_y0,d7
+        cmp.w   d7,d1
+        bge     .cyok
+        move.w  d7,d1
+.cyok:  move.w  VARS+v_clip_y1,d7
+        cmp.w   d7,d6
+        ble     .byok
+        move.w  d7,d6
+.byok:  move.w  d6,d3
+        sub.w   d1,d3
         ble     .out
+        ; --- draw ---
         lea     VDP_DATA,a1
         subq.w  #1,d3
 .row:   bsr     cell_addr
@@ -1778,17 +1883,64 @@ fill_cells:
         dbra    d5,.cell
         addq.w  #1,d1
         dbra    d3,.row
-.out:   movem.l (sp)+,d1/d3/d5/a1
+.out:   movem.l (sp)+,d0-d7/a1
+        rts
+
+; clip_reset - set the clip window to the whole screen (no clipping). Trashes
+; nothing (uses only immediates to absolute VARS).
+clip_reset:
+        move.w  #0,VARS+v_clip_x0
+        move.w  #0,VARS+v_clip_y0
+        move.w  #SCRW_C,VARS+v_clip_x1
+        move.w  #SCRH_C,VARS+v_clip_y1
+        rts
+
+; put_cell - write d4 at cell (d0,d1) iff inside the clip window. Preserves all.
+put_cell:
+        movem.l d0-d2/a1,-(sp)
+        move.w  VARS+v_clip_x0,d2
+        cmp.w   d2,d0
+        blt     .out
+        move.w  VARS+v_clip_x1,d2
+        cmp.w   d2,d0
+        bge     .out
+        move.w  VARS+v_clip_y0,d2
+        cmp.w   d2,d1
+        blt     .out
+        move.w  VARS+v_clip_y1,d2
+        cmp.w   d2,d1
+        bge     .out
+        lea     VDP_DATA,a1
+        bsr     cell_addr
+        move.w  d4,(a1)
+.out:   movem.l (sp)+,d0-d2/a1
         rts
 
 ; draw_str - a0 = NUL string, d0=cx d1=cy, d4 = attr. Preserves all.
 ; Clips at the right screen edge; control chars render as space.
 draw_str:
-        movem.l d2-d3/a0-a1,-(sp)
-        bsr     cell_addr
+        movem.l d0-d3/a0-a1,-(sp)
+        ; row clip: skip the whole string if cy is outside [y0,y1)
+        move.w  VARS+v_clip_y0,d2
+        cmp.w   d2,d1
+        blt     .skip
+        move.w  VARS+v_clip_y1,d2
+        cmp.w   d2,d1
+        bge     .skip
+        ; left clip: advance past chars left of x0 (stop at NUL), cx = x0
+        move.w  VARS+v_clip_x0,d2
+        cmp.w   d2,d0
+        bge     .lclr
+.lcl:   tst.b   (a0)
+        beq     .skip               ; string ends before the clip window
+        addq.l  #1,a0
+        addq.w  #1,d0
+        cmp.w   d2,d0
+        blt     .lcl
+.lclr:  bsr     cell_addr
         lea     VDP_DATA,a1
-        move.w  #SCRW_C,d3
-        sub.w   d0,d3               ; cells available
+        move.w  VARS+v_clip_x1,d3
+        sub.w   d0,d3               ; cells available before the right clip edge
 .ch:    moveq   #0,d2
         move.b  (a0)+,d2
         beq     .done
@@ -1804,7 +1956,8 @@ draw_str:
         move.w  d2,(a1)
         subq.w  #1,d3
         bra     .ch
-.done:  movem.l (sp)+,d2-d3/a0-a1
+.done:
+.skip:  movem.l (sp)+,d0-d3/a0-a1
         rts
 
 ; draw_char - d0=cx d1=cy d2=char d4=attr. Preserves all.
