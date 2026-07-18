@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API reference · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>API reference</h1>
+<p class="lede">The public surface an app or driver codes against. Signatures are quoted from the headers
+(<code>unoui/unoui.h</code>, <code>pc64/fb.h</code>, <code>pc64/uno_app.h</code>, <code>uno3d.h</code>).</p>
+
+<h2 id="windows">unoui: windows</h2>
+<pre><code>void unoui_window_init(unoui_window *win, const char *title,
+                       int x, int y, int w, int h);
+
+void         unoui_ui_init (unoui_ui *, const unoui_theme *, int sw, int sh);
+void         unoui_ui_theme(unoui_ui *, const unoui_theme *);   /* live re-skin */
+void         unoui_ui_add  (unoui_ui *, unoui_window *);        /* topmost = focus */
+void         unoui_bring_to_front(unoui_ui *, unoui_window *win);
+unoui_action unoui_handle  (unoui_ui *, const unoui_event *);   /* feed one event */
+void         unoui_render_ui(unoui_ui *);
+void         unoui_fullscreen(unoui_ui *, unoui_window *win);   /* NULL = restore */
+void         unoui_reflow_window(const unoui_theme *, unoui_window *);
+
+/* window flags: UI_WIN_BARE UI_WIN_BOTTOM UI_WIN_TOP UI_WIN_RESIZE
+   limits: UNOUI_MAX_WIDGETS = 64, UNOUI_MAX_WINDOWS = 8 */</code></pre>
+
+<h2 id="widgets">unoui: widgets</h2>
+<p>Every constructor returns a <code>unoui_widget *</code>; set its <code>-&gt;id</code> so you can recognise it in
+the returned <code>unoui_action</code>.</p>
+<pre><code>/* all return unoui_widget *; set -&gt;id afterwards to identify it in actions */
+unoui_widget *unoui_add_label   (unoui_window *, int x, int y, const char *text);
+unoui_widget *unoui_add_button  (unoui_window *, int x, int y, int w, const char *text, int flags);
+unoui_widget *unoui_add_check   (unoui_window *, int x, int y, const char *text, int on);
+unoui_widget *unoui_add_radio   (unoui_window *, int x, int y, const char *text, int on);
+unoui_widget *unoui_add_field   (unoui_window *, int x, int y, int w, const char *text, int focus);
+unoui_widget *unoui_add_edit    (unoui_window *, int x, int y, int w, unoui_text *t);
+unoui_widget *unoui_add_textarea(unoui_window *, int x, int y, int w, int h, unoui_text *t);
+unoui_widget *unoui_add_progress(unoui_window *, int x, int y, int w, int v, int vmax);
+unoui_widget *unoui_add_vscroll (unoui_window *, int x, int y, int h, int v, int vmax);
+unoui_widget *unoui_add_hscroll (unoui_window *, int x, int y, int w, int v, int vmax);
+unoui_widget *unoui_add_slider  (unoui_window *, int x, int y, int w, int vmin, int vmax, int v);
+unoui_widget *unoui_add_spinner (unoui_window *, int x, int y, int w, int vmin, int vmax, int v);
+unoui_widget *unoui_add_dropdown(unoui_window *, int x, int y, int w, const char **items, int n, int sel);
+unoui_widget *unoui_add_tabs    (unoui_window *, int x, int y, int w, const char **items, int n, int sel);
+unoui_widget *unoui_add_menubar (unoui_window *, const unoui_menu *menus, int n);
+unoui_widget *unoui_add_list    (unoui_window *, int x, int y, int w, int h, const char **items, int n, int sel);
+unoui_widget *unoui_add_group   (unoui_window *, int x, int y, int w, int h, const char *title);
+unoui_widget *unoui_add_sep     (unoui_window *, int x, int y, int w);
+unoui_widget *unoui_add_canvas  (unoui_window *, int x, int y, int w, int h, unoui_canvas *c);
+
+/* widget state flags: UI_F_DEFAULT UI_F_PRESSED UI_F_FOCUS UI_F_DISABLED
+                       UI_F_CHECKED UI_F_CARET UI_F_HOT */</code></pre>
+
+<h2 id="text">unoui: editable text</h2>
+<p>Fields and text areas edit a buffer the app owns; the toolkit tracks caret and selection in place.</p>
+<pre><code>/* editable text: the APP owns the char buffer; the toolkit edits it in place */
+typedef struct {
+    char *buf; int cap; int len; int caret; int sel;
+    int scroll_x; int scroll_y; int multiline;
+} unoui_text;
+
+void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline);
+void unoui_text_set (unoui_text *t, const char *s);</code></pre>
+
+<h2 id="events">unoui: the event model</h2>
+<p>This is the portability contract. A platform adapter produces <code>unoui_event</code>s;
+<code>unoui_handle</code> returns an <code>unoui_action</code> describing what changed.</p>
+<pre><code>typedef enum {
+    UI_EV_NONE = 0,
+    UI_EV_MOUSE_DOWN, UI_EV_MOUSE_UP, UI_EV_MOUSE_MOVE,
+    UI_EV_KEY,    /* virtual key (UI_KEY_*)  */
+    UI_EV_CHAR,   /* printable char (.ch)    */
+    UI_EV_WHEEL,  /* scroll (.wheel notches) */
+    UI_EV_TICK    /* frame tick, drives caret blink */
+} ui_event_kind;
+
+enum { UI_MOD_SHIFT = 1, UI_MOD_CTRL = 2, UI_MOD_ALT = 4 };
+
+enum {  /* virtual keys, kept above ASCII so CHAR vs KEY split cleanly */
+    UI_KEY_LEFT = 0x100, UI_KEY_RIGHT, UI_KEY_UP, UI_KEY_DOWN,
+    UI_KEY_HOME, UI_KEY_END, UI_KEY_PGUP, UI_KEY_PGDN,
+    UI_KEY_BACKSPACE, UI_KEY_DELETE, UI_KEY_ENTER, UI_KEY_TAB, UI_KEY_ESC
+};
+
+typedef struct {                 /* one input event */
+    ui_event_kind kind;
+    int x, y, button;            /* mouse position (screen) + button */
+    int key;                     /* UI_KEY_* for UI_EV_KEY   */
+    int ch;                      /* ASCII for UI_EV_CHAR     */
+    int mods;                    /* UI_MOD_* bitmask         */
+    int wheel;                   /* +down / -up              */
+} unoui_event;
+
+typedef struct {                 /* result of feeding one event */
+    int changed;                 /* nonzero =&gt; id/kind/value are meaningful */
+    int id;                      /* the widget&#x27;s app id      */
+    int kind;                    /* the widget&#x27;s kind, or UI_ACT_CLOSE */
+    int value;                   /* new value / selection / z-index    */
+} unoui_action;
+
+#define UI_ACT_CLOSE 9999        /* close box clicked; action.value = z-index */</code></pre>
+
+<h2 id="theming">unoui: theming</h2>
+<p>A theme is a semantic colour palette plus metrics plus an optional vtable of chrome painters; a NULL painter
+falls back to the portable default, so the same widgets render on 1-bit through 32-bit targets. Ten themes ship:
+<code>theme_aurora_light</code>, <code>theme_aurora_dark</code>, <code>theme_unodos</code>, <code>theme_macos7</code>,
+<code>theme_macplus</code>, <code>theme_win31</code>, <code>theme_amiga</code>, <code>theme_c64</code>,
+<code>theme_apple2</code>, <code>theme_next</code>. Switch live with <code>unoui_ui_theme(&amp;ui, &amp;theme_c64)</code>.</p>
+
+<h2 id="fb">Framebuffer (fb)</h2>
+<p>The software drawing surface underneath the toolkit; canvas apps draw with it directly.</p>
+<pre><code>typedef uint32_t fb_px;
+
+void fb_clear(fb_px c);
+void fb_fill_rect(int x,int y,int w,int h,fb_px c);
+void fb_frame_rect(int x,int y,int w,int h,fb_px c);
+void fb_pixel(int x,int y,fb_px c);
+void fb_hline(int x,int y,int w,fb_px c);
+void fb_vline(int x,int y,int h,fb_px c);
+void fb_invert_rect(int x,int y,int w,int h);
+void fb_set_clip(int x,int y,int w,int h);   /* confine drawing */
+void fb_reset_clip(void);
+void fb_blend_pixel(int x,int y,fb_px c,int a);          /* alpha 0..255 */
+void fb_blend_rect(int x,int y,int w,int h,fb_px c,int a);
+void fb_grad_v(int x,int y,int w,int h,fb_px top,fb_px bot);
+void fb_round_rect(int x,int y,int w,int h,int rad,fb_px c);
+void fb_set_font(const fb_font *f);
+int  fb_text(int x,int y,const char *s,fb_px fg,long bg);   /* bg = -1 =&gt; transparent */
+int  fb_text_w(const char *s);
+int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
+
+/* FB_RGB(r,g,b); named colors UNO_WHITE UNO_BLACK UNO_BLUE UNO_CYAN UNO_MAG
+   corner masks FB_CORNER_TL/TR/BL/BR/ALL; externs fb[], uno_fb_w, uno_fb_h */</code></pre>
+
+<h2 id="platform">Platform subsystems</h2>
+<p>Names and roles (see the corresponding <code>.c</code> for exact prototypes):</p>
+<div class="tw"><table>
+<thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified read-only file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted through the UEFI Simple File System protocol.</td></tr>
+<tr><td><code>unosound</code></td><td>Single-voice PC-speaker sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>).</td></tr>
+<tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
+<tr><td><code>net</code> / <code>e1000</code></td><td>e1000 driver publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, minimal TCP.</td></tr>
+<tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
+<tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
+<tr><td><code>xhci</code> / <code>ax88179</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host and an ASIX USB-gigabit driver that also publishes a <code>uno_nic_t</code>.</td></tr>
+<tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="uno3d">3D (uno3d)</h2>
+<p>A small write-once 3D pipeline with a software rasteriser (Gouraud shading, no textures). Runner3D drives it
+directly.</p>
+<pre><code>typedef struct { float x, y, z; } u3d_vec3;
+typedef struct { float x, y, z; unsigned char r, g, b; } u3d_vert;
+
+void u3d_init(int w, int h);
+void u3d_shutdown(void);
+void u3d_begin(unsigned char r, unsigned char g, unsigned char b);  /* clear */
+void u3d_perspective(float fov_deg, float aspect, float znear, float zfar);
+void u3d_load_identity(void);
+void u3d_translate(float x, float y, float z);
+void u3d_scale(float x, float y, float z);
+void u3d_rotate_x(float deg);
+void u3d_rotate_y(float deg);
+void u3d_rotate_z(float deg);
+void u3d_triangles(const u3d_vert *verts, int tri_count);   /* Gouraud, no textures */
+void u3d_end(void);
+void u3d_present(void);</code></pre>
+
+<nav class="pagenav"><a href="dev-apps.html">&lsaquo; Writing apps</a><a class="nxt" href="dev-build.html">Building &amp; tooling &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

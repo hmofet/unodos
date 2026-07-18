@@ -35,7 +35,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="active" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li><a class="" href="developer.html">Developer guide</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="active" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -74,10 +74,24 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
 <h2 id="boot">Boot the target PC</h2>
 <ol>
   <li>Plug the USB stick into the PC you want to run UnoDOS on.</li>
-  <li>Enter firmware setup (usually <kbd>Del</kbd>, <kbd>F2</kbd> or <kbd>F12</kbd> at power-on) and turn
-      <strong>Secure Boot off</strong> (the image is unsigned).</li>
-  <li>Pick the USB stick from the UEFI boot menu.</li>
+  <li>Turn off <strong>Secure Boot</strong> in firmware setup (steps below). The image is unsigned, so it
+      will not boot with Secure Boot on.</li>
+  <li>Restart, open the one-time boot menu (often <kbd>F12</kbd>, <kbd>F9</kbd>, <kbd>F10</kbd> or
+      <kbd>Esc</kbd> at power-on), and pick the USB stick.</li>
 </ol>
+
+<h3 id="securebook">Turning off Secure Boot</h3>
+<ol>
+  <li>Restart the PC and press the firmware-setup key at power-on. It is commonly <kbd>Del</kbd> on
+      desktops and <kbd>F2</kbd> on laptops (some use <kbd>F1</kbd>, <kbd>F10</kbd> or <kbd>Esc</kbd>).</li>
+  <li>Find <strong>Secure Boot</strong>, usually under a <em>Security</em>, <em>Boot</em> or
+      <em>Authentication</em> menu, and set it to <strong>Disabled</strong>. Some firmwares first need you to
+      set a supervisor/administrator password, or to switch the boot mode from "Windows UEFI" to "Other OS".</li>
+  <li>Save and exit (usually <kbd>F10</kbd>).</li>
+</ol>
+<p>When you are finished with UnoDOS, turn Secure Boot back on the same way to return the PC to normal.</p>
+<div class="note warn"><b>BitLocker recovery prompt</b><b>If the PC runs Windows with BitLocker:</b> changing Secure Boot can make Windows ask for your BitLocker recovery key the next time it starts. This is reversible and does not erase anything. Enter the 48-digit recovery key (find it in your Microsoft account at <b>aka.ms/myrecoverykey</b>, or from your IT department), or simply turn Secure Boot back on to stop the prompt. To avoid it altogether, suspend BitLocker before changing Secure Boot (search Windows for <b>Manage BitLocker</b>, then <b>Suspend protection</b>) and resume it afterwards.</div>
+
 <p>Prefer not to touch hardware? You can boot the same image in an emulator instead.
 See <a href="developer.html#qemu">Run it in QEMU</a>.</p>
 
