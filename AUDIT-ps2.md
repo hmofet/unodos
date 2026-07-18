@@ -34,6 +34,8 @@ Line numbers are exact against the current tree.
 ## 1. Performance
 
 ### P1 — The topmost window is fully repainted every single frame (biggest win)
+
+> **✅ FIXED (`810914a`)** — the kernel-driven `task_post` no longer forces `draw_window` on the per-frame tick path (keys keep it; dynamic apps self-draw; live SysInfo/Clock via `app_secondly`). Builds + executes on PCSX2, no EE exceptions.
 `unodos.c:1597` (`post_ticks()` in the main loop) → `unodos.c:984-986` →
 `task_post(...,type=2,...)` → `unodos.c:979` `draw_window(&gWins[slot])`.
 

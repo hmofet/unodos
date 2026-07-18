@@ -38,6 +38,8 @@ proper routine — a `/10` reciprocal-multiply for `fmt_dec`, or the classic
 its own `/10` fast path. Biggest single win in the port.
 
 ### P2 — Full-scene `repaint_all` on every drag cell-step
+
+> **✅ FIXED (`a4bc3aa`)** — `handle_drag` clips `repaint_all` to `union(old,new)` via a clip window on `fill_cells`/`draw_str`/`draw_char`. Byte-identical (`build.sh drag`, retro-shot snes9x).
 `handle_drag` (`kernel.asm:2089`) snaps the dragged window to a cell and, when the
 cell changes, calls `repaint_all` (`kernel.asm:2140` → `repaint_all` at `1193`).
 `repaint_all` unconditionally `clear_screen`s the whole 32×28 field, redraws the

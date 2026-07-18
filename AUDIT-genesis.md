@@ -25,6 +25,8 @@ Three areas, most-actionable first. Line numbers are exact against the current t
 
 ## 1. Performance — the window drag rebuilds the whole desktop every step
 
+> **✅ P1 FIXED (`facd5f8`)** — `handle_drag` now clips `repaint_all` to `union(old,new)` window rects via a clip window on `fill_cells`/`draw_str`/`draw_icon_cell`; render-verified byte-identical (`build.sh drag`, retro-shot genesis_plus_gx).
+
 ### The root cause
 Dragging a window is **cell-snapped** (the window commits to a new 8-px cell as
 the cursor crosses cell boundaries — `handle_drag`, `kernel.asm:1083`). The header

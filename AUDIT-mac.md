@@ -39,6 +39,8 @@ waste is in the **per-frame** path — the main event loop and the app tick
 handlers — and it is fixable cheaply.
 
 ### P1 — Clock redraws its whole window on *every* main-loop iteration
+
+> **✅ FIXED (`9cd96e3`)** — `clock_tick` gated on `now_secs()` change. Builds clean on Retro68; no visible delta.
 `apps/clock.c:20-24` (`clock_tick`) unconditionally calls `draw_window(w)` — full
 chrome (shadow, border, titlebar, pinstripes, `TextWidth`-centred title) **plus**
 `clock_draw` — every time it is ticked. It is ticked once per `tick_all_apps()`
