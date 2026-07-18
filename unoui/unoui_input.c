@@ -26,9 +26,10 @@ void unoui_ui_init(unoui_ui *ui, const unoui_theme *t, int sw, int sh)
     ui->popup_items = 0; ui->popup_n = 0; ui->popup_hot = -1;
     ui->ticks = 0;
     for (i = 0; i < UNOUI_MAX_WINDOWS; i++) ui->win[i] = 0;
+    unoui_bg_invalidate();
 }
 
-void unoui_ui_theme(unoui_ui *ui, const unoui_theme *t) { ui->theme = t; }
+void unoui_ui_theme(unoui_ui *ui, const unoui_theme *t) { ui->theme = t; unoui_bg_invalidate(); }
 
 void unoui_ui_add(unoui_ui *ui, unoui_window *win)
 {

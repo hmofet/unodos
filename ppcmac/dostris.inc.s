@@ -33,13 +33,13 @@ pc_loop:
     andi. r16, r15, 3
     LWZA  r3, g_tx
     add   r16, r16, r3                    # bx
-    cmpwi r16, BW
-    bge   pc_yes
+    cmplwi r16, BW                        # unsigned: a negative bx (off the left
+    bge   pc_yes                          # edge) reads as huge -> collision, not OOB
     srwi  r0, r15, 2
     andi. r17, r0, 3
     LWZA  r3, g_ty
     add   r17, r17, r3                    # by
-    cmpwi r17, BH
+    cmplwi r17, BH                        # unsigned lower+upper bound in one check
     bge   pc_yes
     mulli r0, r17, BW
     add   r0, r0, r16

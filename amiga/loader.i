@@ -207,6 +207,9 @@ load_app:
         beq     .fail
         move.w  d0,d4               ; d4 = start cluster (held)
         move.l  d1,d7               ; d7 = size / read budget (held)
+        cmp.l   #APPSLOT_SZ,d7      ; S1: refuse an app image larger than its 8 KB
+        bhi     .fail               ; slot - else fat_read_file overruns the slot
+                                    ; into the neighbour + bitplanes at $60000
         ; dest = slot base
         move.w  d6,d1
         bsr     app_slot_base       ; a1 = dest (preserves d-regs)

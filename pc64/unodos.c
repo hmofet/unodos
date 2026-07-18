@@ -192,7 +192,7 @@ static long now_secs(void) { return (TickCount() - gBootTicks) / 60; }
 
 static void fmt_u(long v, char *out)
 {
-    char tmp[12]; int n = 0, i = 0;
+    char tmp[24]; int n = 0, i = 0;   /* 64-bit long needs up to 20 digits */
     if (v <= 0) tmp[n++] = '0';
     while (v > 0) { tmp[n++] = '0' + (v % 10); v /= 10; }
     while (n) out[i++] = tmp[--n];

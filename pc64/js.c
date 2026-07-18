@@ -196,6 +196,23 @@ static int is_punct(int op) { return cur.t == T_PUNCT && cur.op == op; }
 static int eat_punct(int op) { if (is_punct(op)) { adv(); return 1; } return 0; }
 static void perr(const char *m) { if (!g_err) { g_err = 1; g_errmsg = m; } }
 
+/* Recursion guard. The parser (nested parens/arrays/unary) and the evaluator
+ * (recursive calls) descend the native C stack with no per-frame counter; on
+ * bare metal there is no guard page, so an overflow corrupts adjacent RAM
+ * rather than faulting. Measure actual stack use against a base captured at the
+ * top-level entry and trip an error well before the ~128 KB UEFI stack runs
+ * out. One cheap check per recursive hub covers every cycle. */
+static char *g_stkbase;
+#define JS_STACK_LIMIT (48 * 1024)
+static int too_deep(void)
+{
+    char probe;
+    long used = g_stkbase - &probe;         /* stack grows down */
+    if (used < 0) used = -used;
+    if (used > JS_STACK_LIMIT) { perr("nesting too deep"); return 1; }
+    return 0;
+}
+
 /* ======================= AST ============================================== */
 enum { N_NUM, N_STR, N_BOOL, N_NULL, N_UNDEF, N_ID, N_BIN, N_UN, N_ASSIGN,
        N_CALL, N_INDEX, N_MEMBER, N_ARR, N_TERN, N_VAR, N_IF, N_WHILE, N_FOR,
@@ -226,6 +243,7 @@ static node *parse_args(node *callee)
 static node *parse_primary(void)
 {
     node *n;
+    if (too_deep()) return nn(N_UNDEF);
     if (cur.t == T_NUM) { n = nn(N_NUM); n->num = cur.num; adv(); return n; }
     if (cur.t == T_STR) { n = nn(N_STR); n->str = cur.str; adv(); return n; }
     if (cur.t == T_ID)  { n = nn(N_ID); n->str = cur.str; adv(); return n; }
@@ -269,6 +287,7 @@ static node *parse_postfix(void)
 }
 static node *parse_unary(void)
 {
+    if (too_deep()) return nn(N_UNDEF);
     if (is_punct('!') || is_punct('-') || is_punct('+')) { int op = cur.op; adv(); { node *u = nn(N_UN); u->op = op; u->a = parse_unary(); return u; } }
     if (is_punct('I') || is_punct('D')) { int op = cur.op; adv(); { node *u = nn(N_PREPOST); u->op = op; u->pre = 1; u->a = parse_unary(); return u; } }
     return parse_postfix();
@@ -315,7 +334,7 @@ static node *parse_block(void)
 {
     node *b = nn(N_BLOCK); b->list = (node **)ar_alloc(sizeof(node*) * 256); b->nlist = 0;
     adv();  /* '{' */
-    while (!is_punct('}') && cur.t != T_EOF && !g_err) if (b->nlist < 256) b->list[b->nlist++] = parse_stmt();
+    while (!is_punct('}') && cur.t != T_EOF && !g_err) { node *st = parse_stmt(); if (b->nlist < 256) b->list[b->nlist++] = st; }
     if (!eat_punct('}')) perr("expected }");
     return b;
 }
@@ -334,6 +353,7 @@ static node *parse_var(void)
 }
 static node *parse_stmt(void)
 {
+    if (too_deep()) return nn(N_UNDEF);
     if (is_punct('{')) return parse_block();
     if (cur.t == T_KW) {
         int w = cur.kw;
@@ -422,6 +442,7 @@ static jval *do_assign_target(node *t, jval *val, scope *s)   /* returns val */
 static jval *ev(node *n, scope *s)
 {
     if (!n || g_err || g_oom) return judef();
+    if (too_deep()) return judef();
     switch (n->k) {
     case N_NUM: return jnum(n->num);
     case N_STR: return jstr(n->str);
@@ -524,12 +545,14 @@ static void def_globals(scope *g)
 int js_run(const char *src, char *out, int outmax, char *log, int logmax)
 {
     scope *g; node *prog; int i;
+    char base;
+    g_stkbase = &base;                    /* recursion-guard reference point */
     g_used = 0; g_oom = 0; g_err = 0; g_errmsg = 0; g_ret = 0;
     g_out = out; g_outmax = outmax; g_outn = (int)strlen(out);
     g_log = log; g_logmax = logmax; g_logn = (int)strlen(log);
     lx_init(src);
     prog = nn(N_BLOCK); prog->list = (node **)ar_alloc(sizeof(node*) * 512); prog->nlist = 0;
-    while (cur.t != T_EOF && !g_err) if (prog->nlist < 512) prog->list[prog->nlist++] = parse_stmt();
+    while (cur.t != T_EOF && !g_err) { node *st = parse_stmt(); if (prog->nlist < 512) prog->list[prog->nlist++] = st; }
     if (g_err) { emit(log, &g_logn, g_logmax, "JS parse error: "); emit(log,&g_logn,g_logmax, g_errmsg?g_errmsg:"?"); emit(log,&g_logn,g_logmax,"\n"); return 1; }
     g = sc_new(0); def_globals(g);
     /* hoist top-level function declarations */

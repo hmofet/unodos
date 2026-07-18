@@ -697,6 +697,8 @@ pt_load:
         sta zpFSDat
         lda #>PAINTBUF
         sta zpFSDat+1
+        lda #5                  ; PAINTBUF = 1088 B = 5 sectors (fs_read cap)
+        sta zpFSTmp
         pla
         jsr fs_read
         jsr beep_click

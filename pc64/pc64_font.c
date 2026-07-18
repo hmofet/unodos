@@ -84,6 +84,10 @@ static int ensure_loaded(int slot)
     if (f->loaded) return 1;
     { long n = font_read(f->file, g_data[slot], FONT_BUF);
       if (n <= 0) return 0;
+      /* a file that fills the whole buffer was almost certainly truncated by the
+         FS read cap; a truncated font hands stb_truetype table offsets that run
+         past the buffer, so refuse it rather than parse a partial file. */
+      if (n >= FONT_BUF) return 0;
       f->len = n;
       if (!stbtt_InitFont(&f->info, g_data[slot], stbtt_GetFontOffsetForIndex(g_data[slot], 0)))
           return 0;

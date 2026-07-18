@@ -321,9 +321,11 @@ static unsigned char *mc_read_module(short proc, long *out_len)
 
 /* resolve a symbol-table index to its final runtime address (or NULL) */
 static void *resolve_sym(const Elf32_Sym *syms, const char *strtab,
-                         Elf32_Word *seg_base, int idx)
+                         Elf32_Word *seg_base, int idx, long nsyms)
 {
-    const Elf32_Sym *s = &syms[idx];
+    const Elf32_Sym *s;
+    if (idx < 0 || idx >= nsyms) return NULL;  /* S1: bound the symbol index */
+    s = &syms[idx];
     Elf32_Half shndx = s->st_shndx;
     const char *nm = strtab + s->st_name;
 
@@ -345,7 +347,7 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
     Elf32_Shdr *sh;
     Elf32_Word seg_base[MAX_SHDR];
     unsigned char *blob = NULL;
-    long blob_sz = 0, off;
+    long blob_sz = 0, off, nsyms = 0;
     int i, shnum, symtab_i = -1, strtab_i = -1;
     const Elf32_Sym *syms = NULL;
     const char *strtab = NULL, *shstr;
@@ -355,6 +357,11 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
     if (eh->e_type != 1 /*ET_REL*/) return NULL;
     shnum = eh->e_shnum;
     if (shnum <= 0 || shnum > MAX_SHDR) return NULL;
+    /* S1: bound the section-header table and shstrndx against the image so a
+     * crafted e_shoff/e_shstrndx can't read past the malloc'd module. */
+    if ((long)eh->e_shoff <= 0 ||
+        (long)eh->e_shoff + (long)shnum * (long)sizeof(Elf32_Shdr) > len) return NULL;
+    if (eh->e_shstrndx >= (Elf32_Half)shnum) return NULL;
     sh = (Elf32_Shdr *)(img + eh->e_shoff);
     shstr = (const char *)(img + sh[eh->e_shstrndx].sh_offset);
     (void)shstr;
@@ -370,7 +377,7 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
             blob_sz += sh[i].sh_size;
         }
     }
-    if (symtab_i < 0 || strtab_i < 0 || blob_sz == 0) return NULL;
+    if (symtab_i < 0 || strtab_i < 0 || strtab_i >= shnum || blob_sz == 0) return NULL;
 
     /* one 64-byte-aligned executable blob holds every loaded section */
     blob = (unsigned char *)memalign(64, blob_sz + 64);
@@ -387,12 +394,20 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
         }
         seg_base[i] = (Elf32_Word)(uintptr_t)(blob + off);
         if (sh[i].sh_type == SHT_NOBITS) memset(blob + off, 0, sh[i].sh_size);
-        else memcpy(blob + off, img + sh[i].sh_offset, sh[i].sh_size);
+        else {
+            /* S1: the section's source bytes must lie within the image */
+            if ((long)sh[i].sh_offset + (long)sh[i].sh_size > len) { free(blob); return NULL; }
+            memcpy(blob + off, img + sh[i].sh_offset, sh[i].sh_size);
+        }
         off += sh[i].sh_size;
     }
 
+    /* S1: bound the symbol + string table offsets against the image */
+    if ((long)sh[symtab_i].sh_offset + (long)sh[symtab_i].sh_size > len) { free(blob); return NULL; }
+    if ((long)sh[strtab_i].sh_offset >= len) { free(blob); return NULL; }
     syms   = (const Elf32_Sym *)(img + sh[symtab_i].sh_offset);
     strtab = (const char *)(img + sh[strtab_i].sh_offset);
+    nsyms  = (long)sh[symtab_i].sh_size / (long)sizeof(Elf32_Sym);
 
     /* pass 3: apply RELA relocations for each loaded section */
     for (i = 0; i < shnum; i++) {
@@ -406,12 +421,22 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
         base = (unsigned char *)(uintptr_t)seg_base[tgt_sec];
         rel  = (const Elf32_Rela *)(img + rs->sh_offset);
         nrel = rs->sh_size / sizeof(Elf32_Rela);
+        /* S1: the write target base+r_offset must stay inside the target
+         * section, else a crafted r_offset is an arbitrary 32-bit write into
+         * EE RAM (no MMU). sh_size bounds the region copied to seg_base. */
+        {
+            Elf32_Word tgt_size = sh[tgt_sec].sh_size;
+            for (j = 0; j < nrel; j++) {
+                Elf32_Word ro = rel[j].r_offset;
+                if (ro > tgt_size || tgt_size - ro < 4) { free(blob); return NULL; }
+            }
+        }
         gHiN = 0;                              /* reset HI16 queue per section */
         for (j = 0; j < nrel; j++) {
             Elf32_Word type = ELF32_R_TYPE(rel[j].r_info);
             Elf32_Word symx = ELF32_R_SYM(rel[j].r_info);
             unsigned int *loc = (unsigned int *)(base + rel[j].r_offset);
-            void *S = resolve_sym(syms, strtab, seg_base, symx);
+            void *S = resolve_sym(syms, strtab, seg_base, symx, nsyms);
             Elf32_Word A = rel[j].r_addend;
             Elf32_Word value;
             if (!S && ELF32_R_SYM(rel[j].r_info) != 0) {
@@ -452,7 +477,7 @@ static UnoAppEntry overlay_load(unsigned char *img, long len, const char *want_e
             const char *nm = strtab + syms[k].st_name;
             if (syms[k].st_shndx != SHN_UNDEF &&
                 strcmp(nm, want_entry) == 0) {
-                entry = resolve_sym(syms, strtab, seg_base, k);
+                entry = resolve_sym(syms, strtab, seg_base, k, nsyms);
                 break;
             }
         }

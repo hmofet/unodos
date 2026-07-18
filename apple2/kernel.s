@@ -1347,6 +1347,8 @@ fs_selftest:
         sta zpFSDat
         lda #>SECBUF
         sta zpFSDat+1
+        lda #2                  ; SECBUF+SECBUF2 = 2 sectors (fs_read cap)
+        sta zpFSTmp
         pla
         jsr fs_read
         lda zpFSSize
@@ -1441,6 +1443,8 @@ fs_selftest:
         sta zpFSDat
         lda #>SECBUF
         sta zpFSDat+1
+        lda #2                  ; SECBUF+SECBUF2 = 2 sectors (fs_read cap)
+        sta zpFSTmp
         pla
         jsr fs_read
         ldy #0
