@@ -78,6 +78,7 @@ pf_hl   = $24
 pf_clk  = $25
 pf_pc   = $26
 pf_score= $27
+pf_bd   = $28          ; dostris board dirty (lock/lineclear): board-only repaint
 g_type  = $30
 g_rot   = $31
 g_px    = $32
@@ -521,7 +522,15 @@ rp_mus: lda pf_score
         lda #0
         sta pf_score
         rts
-rp_dos: lda pf_pc
+rp_dos: lda pf_bd
+        beq rp_dos_pc
+        jsr dostris_draw_board
+        lda #0
+        sta pf_bd
+        sta pf_pc
+        rts
+rp_dos_pc:
+        lda pf_pc
         beq rp_done
         jsr draw_piece_partial
         lda #0
@@ -533,6 +542,7 @@ full_redraw:
         sta v_dirty
         sta pf_hl
         sta pf_pc
+        sta pf_bd
         lda v_inapp
         bne fr_app
         jsr draw_launcher

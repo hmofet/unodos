@@ -180,8 +180,12 @@ du_grav:
         jsr dostris_lock
         jsr dostris_clearlines
         jsr dostris_spawn
+        ; only the board region changed (locked cells / collapsed rows / new
+        ; piece) — repaint just the board body, not the whole screen. Chrome,
+        ; walls and floor are static, so skip the clear_screen + draw_chrome
+        ; that v_dirty would trigger (avoids the full-matrix wipe + tearing).
         lda #1
-        sta v_dirty
+        sta pf_bd
         lda #0
         sta pf_pc
         rts
@@ -407,6 +411,8 @@ df:     stx g_tmp
         inx
         cpx #BW+2
         bne df
+        ; --- board body (cells + piece + score); repainted alone on lock ---
+dostris_draw_board:
         ; board cells
         lda #0
         sta g_row
