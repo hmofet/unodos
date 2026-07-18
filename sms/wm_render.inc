@@ -327,6 +327,54 @@ pc_out:
     pop bc
     ret
 
+; ---- dirty_proc: A = proc. Mark only that app's window dirty (AUDIT-sms §1 P2):
+; find the visible window owning proc A, set the clip to its rect so the deferred
+; redraw_all repaints just that window (redraw_all still composites all windows
+; bottom-up within the clip, so z-order stays correct -> byte-identical), then
+; set v_dirty. Falls back to a full-screen dirty if the window isn't found. ----
+dirty_proc:
+    ld c, a                         ; c = target proc
+    ld b, 0                         ; b = slot
+dpr_loop:
+    ld a, b
+    cp MAXWIN
+    jr nc, dpr_full                 ; not found -> full redraw (safe)
+    push bc
+    ld a, b
+    call win_ptr                    ; ix = wintab + slot*16
+    ld a, (ix+WSTATE)
+    or a
+    jr z, dpr_next                  ; not a live window
+    ld a, (ix+WPROC)
+    cp c
+    jr z, dpr_found
+dpr_next:
+    pop bc
+    inc b
+    jr dpr_loop
+dpr_found:
+    ld a, (ix+WX)
+    ld (v_clip_c0), a
+    ld d, a
+    ld a, (ix+WW)
+    add a, d
+    ld (v_clip_c1), a
+    ld a, (ix+WY)
+    ld (v_clip_r0), a
+    ld d, a
+    ld a, (ix+WH)
+    add a, d
+    ld (v_clip_r1), a
+    pop bc
+    ld a, 1
+    ld (v_dirty), a
+    ret
+dpr_full:
+    call clip_reset
+    ld a, 1
+    ld (v_dirty), a
+    ret
+
 ; ---- fill_cells: dp_col,dp_row,dp_w,dp_h,dp_tile. Clipped to the clip window
 ; (default = whole screen), so a clipped redraw_all touches only the damage. ---
 fill_cells:

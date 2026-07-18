@@ -128,8 +128,8 @@ mt_open:
 mt_set:
     ld (m_idx), a
     call music_load_note
-    ld a, 1
-    ld (v_dirty), a                 ; refresh the progress bar
+    ld a, 3                         ; refresh just the Music window (proc 3), not
+    call dirty_proc                 ; the whole scene (AUDIT-sms §1 P2)
     ret
 
 ; ---- music_draw: content for the Music window (ix = window entry) ----------

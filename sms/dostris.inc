@@ -8,9 +8,8 @@
 ; ============================================================================
 
 set_dirty:
-    ld a, 1
-    ld (v_dirty), a
-    ret
+    ld a, 7                         ; refresh just the Dostris window (proc 7),
+    jp dirty_proc                   ; not the whole scene (AUDIT-sms §1 P2)
 
 ; ---- topmost_proc: -> A = WPROC of the topmost window, or $FF if none ------
 topmost_proc:
