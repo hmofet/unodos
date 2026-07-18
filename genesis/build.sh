@@ -36,6 +36,7 @@ case "$1" in
   theme)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_THEME=1";    OUT=build/unodos_th.gen ;;
   tracker) FLAGS="-DAUTOTEST=1 -DAUTOTEST_TRACKER=1";  OUT=build/unodos_tk.gen ;;
   paint)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_PAINT=1";    OUT=build/unodos_pt.gen ;;
+  drag)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_DRAG=1";     OUT=build/unodos_dg.gen ;;
 esac
 
 echo "[2/2] assembling kernel.asm (cpu 68000, flat binary)..."
