@@ -190,8 +190,11 @@ dostris_update:
     jsr dostris_lock
     jsr dostris_clearlines
     jsr dostris_spawn
+    ; only the board region changed (locked cells / collapsed rows / new
+    ; piece) — repaint just the board body, not display_off + clear_bat (all
+    ; 1024 BAT entries through the single VDC port) + a full dostris_draw.
     lda #1
-    sta v_dirty
+    sta pf_bd
     lda #0
     sta pf_pc
     rts
@@ -413,6 +416,8 @@ dostris_draw:
     jsr putcell
     dex
     bne @floor
+    ; --- board body (cells + piece + score); repainted alone on lock ---
+dostris_draw_board:
     ; board cells
     lda #0
     sta g_row
