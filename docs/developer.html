@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Developer guide — UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li><a class="active" href="developer.html">Developer guide</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Developer guide</h1>
+<p class="lede">For building UnoDOS pc64 from source, running it under QEMU, packing a bootable USB
+image, and building the flashers themselves. End users don't need any of this — the
+<a href="getting-started.html">flasher</a> covers them.</p>
+
+<h2 id="need">Toolchain</h2>
+<ul>
+  <li><strong>Build:</strong> <code>x86_64-w64-mingw32-gcc</code> (UEFI apps are PE32+ images — the mingw
+      target's native output, so no gnu-efi or EDK2) and <code>python3</code>.</li>
+  <li><strong>USB image:</strong> <code>sgdisk</code> (gptfdisk), <code>mtools</code>, <code>python3</code>.</li>
+  <li><strong>Emulator:</strong> <code>qemu-system-x86</code> + OVMF.</li>
+</ul>
+
+<h2 id="build">Build the image</h2>
+<p>From the <code>pc64/</code> directory:</p>
+<pre><code>./build.sh            # build the unoui desktop shell -&gt; build/esp/
+./build.sh run        # build, then boot it in QEMU + OVMF</code></pre>
+<p>The build compiles the shell, the toolkit, the ten themes, the apps and the drivers, links a single
+<code>BOOTX64.EFI</code>, and stages a bootable <strong>ESP</strong> tree in <code>build/esp/</code> — a
+real FAT volume with the loader at <code>EFI/BOOT/BOOTX64.EFI</code> plus sample documents and the TrueType
+fonts. The default image is about 660&nbsp;KB. A separate <code>./build.sh legacy</code> builds the earlier
+icon-desktop shell, kept only as reference.</p>
+
+<h2 id="qemu">Run it in QEMU</h2>
+<p><code>./build.sh run</code> launches QEMU with OVMF and the ESP as a virtual FAT disk:</p>
+<pre><code>qemu-system-x86_64 -machine q35 -m 256 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,file=vars.fd \
+  -drive format=raw,file=fat:rw:build/esp \
+  -device qemu-xhci -device usb-tablet</code></pre>
+<div class="note"><b>Keyboard-first</b>The whole desktop is driven from the keyboard, so QEMU needs no special input setup. QEMU is also natively scriptable over QMP (<code>send-key</code> + <code>screendump</code>) — see the screenshot harness below.</div>
+
+<h2 id="image">Pack a real USB disk image</h2>
+<p>QEMU fakes a disk from the <code>build/esp/</code> directory (<code>-drive fat:rw:build/esp</code>), but real
+UEFI firmware needs a partition table. <code>tools/mkuefi.py</code> turns the ESP tree into a real raw disk
+image — GPT with one EF00 EFI System Partition (FAT32) holding the whole tree:</p>
+<pre><code>./build.sh                    # -&gt; build/esp/
+python3 tools/mkuefi.py 512   # -&gt; build/unodos-uefi.img  (512 MiB)</code></pre>
+<p>Boot-test the image directly by pointing QEMU's last drive at <code>build/unodos-uefi.img</code> instead of
+the ESP directory.</p>
+
+<h2 id="flashers">Build the flashers</h2>
+<p>The flashers (<a href="getting-started.html">what end users run</a>) each embed a single gzipped copy of
+<code>unodos-uefi.img</code> and stream it to the raw device. Source lives in
+<a href="https://github.com/hmofet/unodos/tree/master/pc64/flash" target="_blank" rel="noopener"><code>pc64/flash/</code></a>.</p>
+<div class="tw"><table>
+<thead><tr><th>Target</th><th>Build on</th><th>Command</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><strong>Windows</strong></td><td>Windows + WSL (in-box <code>csc.exe</code>, no SDK)</td><td><code>pc64\flash\build-flasher.ps1</code></td><td><code>UnoDosFlasher.exe</code></td></tr>
+<tr><td><strong>macOS</strong></td><td>a Mac (Swift toolchain)</td><td><code>pc64/flash/mac/build-app.sh</code></td><td><code>UnoDosFlasher.app</code> (universal)</td></tr>
+</tbody>
+</table></div>
+<p>Both build scripts run <code>build.sh</code> → <code>mkuefi.py</code> → gzip → embed automatically; pass
+<code>--skip-build</code> to reuse an already-built <code>build/unodos-uefi.img</code> (handy when the pc64
+image is built on another machine). Attach the binaries to a GitHub Release with
+<code>pc64/flash/publish-release.ps1</code>.</p>
+<div class="note"><b>Cross-machine builds</b>Building the macOS <code>.app</code> needs the pc64 image, which requires <code>x86_64-w64-mingw32-gcc</code>. If your Mac lacks the mingw cross-compiler, build <code>unodos-uefi.img</code> on a Linux box and pass it to <code>build-app.sh --skip-build</code>.</div>
+
+<h2 id="shots">Regenerate the manual screenshots</h2>
+<p>The screenshots in this manual are produced headlessly by <code>pc64/docs_shots.py</code>: it boots the
+real image under QEMU + OVMF and drives the desktop over QMP, capturing each scene to
+<code>pc64/shots/manual/</code>. Because OVMF doesn't surface the emulated pointer to the shell, every scene is
+driven from the <strong>keyboard</strong>.</p>
+<pre><code>python3 docs_shots.py                       # all scenes
+python3 docs_shots.py themes editor browser_docs   # selected scenes
+UNO_NIC=1 python3 docs_shots.py browser_http       # networking scenes (SLIRP)</code></pre>
+<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit. If the shell's app
+roster or the Control Panel's tab order changes, update the scene offsets in <code>docs_shots.py</code> first.</p>
+
+<nav class="pagenav"><a href="ports.html">&lsaquo; The UnoDOS family</a><span></span></nav>
+</div></main>
+</div>
+</body>
+</html>
