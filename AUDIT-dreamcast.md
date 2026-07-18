@@ -31,6 +31,8 @@ outlines), so most frames only touch a small region of `fb[]` — but the presen
 that away and reprocesses the whole screen, every frame, unconditionally.
 
 ### P1 — Full-screen framebuffer→RGB565 conversion every present, no dirty tracking (biggest win)
+
+> **✅ FIXED (`b040917`, subsumes P2)** — `uno_dc_present` converts only the min/max changed row band (compared to the previous frame; cursor rows folded in). Byte-identical by construction; host algorithm test + Flycast boot confirm it.
 `dc_main.c:243-250` (`uno_dc_present`). The loop `for (i = 0; i < n; i++) vram[i] =
 to565(fb[i])` with `n = FB_W*FB_H = 307200` (line 246-248) converts and copies the
 **entire 640×480 framebuffer** to VRAM on every present — regardless of how little of

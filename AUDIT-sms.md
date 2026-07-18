@@ -32,6 +32,8 @@ There is **no damage tracking and no cached desktop**. This is the same shape as
 the pc64 drag-lag: the cheapest visual change costs the most expensive paint.
 
 ### P1 — HIGH impact — dragging a window repaints the whole scene every frame
+
+> **✅ FIXED (`6a5396a`)** — `drag_move` sets a damage clip to `union(old,new)`; `redraw_all` clears via a clipped fill; primitives clip to the window. Byte-identical (`build.sh test` drag, retro-shot).
 `dispatch` (`kernel.asm:422`) → `drag_move` (`kernel.asm:524`) sets `v_dirty`
 **every frame** while trigger-1 is held (`kernel.asm:573-574`). So while you drag
 one window a few cells, the loop clears and repaints the full desktop and *all*
@@ -41,6 +43,8 @@ plus the desktop cells that got revealed, restoring them from a cached desktop
 base rather than `clear_names` + full desktop redraw.
 
 ### P2 — HIGH-ish — the same full repaint fires for one-cell changes
+
+> **✅ FIXED (`f4aebe8`)** — `dirty_proc` clips music/Dostris content ticks to their own window (Theme left as a whole-screen CRAM recolour). Byte-identical (dostris + music autotests).
 `v_dirty` is set for every trivial update: each **music note** advance
 (`music.inc:132`), every **Dostris** move/gravity step (`dostris.inc:10`
 `set_dirty`, called from `ds_left`/`ds_right`/`ds_rotate`/`ds_softdrop` and
