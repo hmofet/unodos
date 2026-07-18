@@ -38,16 +38,19 @@ Output: `~/unodos-flasher-shots/flasher-macos.png` (+ `capture.log`). Copy it in
 
 | File | Role |
 |------|------|
-| `winid.swift` | prints the flasher window id via `CGWindowListCopyWindowInfo` (no permission needed for the id/geometry) |
-| `capture` | the app's executable: download latest, open, `screencapture -l`, quit, clean up |
+| `capture.swift` | the app's compiled executable: download latest, open, find the window (`CGWindowListCopyWindowInfo`), capture it **in-process** via ScreenCaptureKit, trim transparent margins, quit, clean up |
 | `Info.plist` | bundle metadata (`LSUIElement`, so no Dock icon) |
-| `build-capture-app.sh` | assemble + ad-hoc sign the `.app` |
+| `build-capture-app.sh` | compile `capture.swift` into the `.app` + ad-hoc sign |
 | `run-capture-mac.sh` | fire a capture and wait for the PNG |
 
 ## Notes
 
-- The `.app` is ad-hoc signed for a stable TCC identity. If you edit `capture`
-  and rebuild, the signature changes and you may need to re-grant Screen
-  Recording.
-- The login user must be logged in (an active aqua session) for the capture to
-  render, same as the Windows pipeline needs an interactive session.
+- Capture is **in-process** (ScreenCaptureKit) on purpose: a shelled-out
+  `/usr/sbin/screencapture` is evaluated by TCC as its own binary and stays
+  denied even when the `.app` is granted.
+- The `.app` is ad-hoc signed, so its TCC identity is its code hash. If you edit
+  `capture.swift` and rebuild, re-grant Screen Recording
+  (`tccutil reset ScreenCapture org.unodos.flashercapture`, then re-add it).
+  Normal per-release captures reuse the same `.app`, so no re-grant is needed.
+- The login user must have an active aqua session for the capture to render,
+  same as the Windows pipeline needs an interactive session.
