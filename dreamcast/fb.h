@@ -59,4 +59,22 @@ int  fb_text_w(const char *s);                             /* pixel width */
    advances 8*scale per glyph). bg < 0 = transparent. */
 int  fb_big_text(int x, int y, const char *s, fb_px fg, long bg, int scale);
 
+/* ---- unoui/Aurora support (implemented in fb_aa.c, uui build only) --------
+ * The alpha-blend / gradient / rounded-corner primitives the unoui toolkit and
+ * the Aurora theme draw with (fb.c's legacy Mac core never touches them, so
+ * fb_aa.c is only linked into the unoui (`dc uui`) build). */
+#define FB_BUF_PIX (FB_W * FB_H)      /* unoui's cached desktop bg is g_bg[FB_BUF_PIX] */
+
+enum { FB_CORNER_TL = 1, FB_CORNER_TR = 2, FB_CORNER_BL = 4, FB_CORNER_BR = 8,
+       FB_CORNER_ALL = 15, FB_CORNER_TOP = 3, FB_CORNER_BOTTOM = 12 };
+
+void fb_pixel      (int x, int y, fb_px c);
+void fb_blend_pixel(int x, int y, fb_px c, int a);
+void fb_blend_rect (int x, int y, int w, int h, fb_px c, int a);
+void fb_grad_v     (int x, int y, int w, int h, fb_px top, fb_px bot);
+void fb_round_rect (int x, int y, int w, int h, int rad, fb_px c);
+void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int corners);
+void fb_set_clip   (int x, int y, int w, int h);   /* confine drawing to a rect */
+void fb_reset_clip (void);                          /* clip = whole screen */
+
 #endif
