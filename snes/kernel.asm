@@ -121,6 +121,13 @@ v_kb_hover  = VARS+$3E
 v_dirty     = VARS+$40
 v_auto      = VARS+$42
 v_mouse_present = VARS+$44
+; damage-rect clip window (cells): draw only [c0,c1) x [r0,r1). Default = whole
+; screen; handle_drag sets it to union(old,new) so a clipped repaint_all writes
+; only the moved window's damage into the tilemap shadow (byte-identical out).
+v_clip_c0   = VARS+$1F8
+v_clip_r0   = VARS+$1FA
+v_clip_c1   = VARS+$1FC
+v_clip_r1   = VARS+$1FE
 v_numbuf    = VARS+$60
 v_clkbuf    = VARS+$70
 v_zlist     = VARS+$80
@@ -294,6 +301,7 @@ PAD_DPAD = $0F00
         bne @dmaz
         jsr InitPPURegs
         jsr ClearState
+        jsr clip_reset          ; clip window = whole screen (VARS clear left it 0)
 
 .ifdef AUTOTEST
         lda #$01
@@ -665,12 +673,71 @@ MainLoop:
 ; All take 16-bit A/X/Y. Cell offset = (cy*32 + cx)*2.
 ; ============================================================================
 
+; clip_reset: clip window = whole screen (no clipping). Mode-safe (called from
+; both the 8-bit boot path and the 16-bit WM path) via php/plp.
+.proc clip_reset
+        php
+        rep #$20
+.a16
+        stz v_clip_c0
+        stz v_clip_r0
+        lda #SCRW_C
+        sta v_clip_c1
+        lda #SCRH_C
+        sta v_clip_r1
+        plp
+        rts
+.endproc
+
 ; fill_cells: A0=cx A1=cy A2=w A3=h A4=cell-word. Clobbers A/X, A0..A4 scratch.
+; Clipped to the v_clip_* window (default = whole screen), so a clipped
+; repaint_all writes only the damage rect into the tilemap shadow.
 .proc fill_cells
 .a16
 .i16
-        lda A3
+        ; --- clip horizontal: cx=max(cx,c0); right=min(cx+w,c1); w=right-cx ---
+        lda A0
+        clc
+        adc A2
+        sta S0                  ; right = cx+w
+        lda A0
+        cmp v_clip_c0
+        bcs @cx0                ; cx >= c0
+        lda v_clip_c0
+        sta A0
+@cx0:   lda S0
+        cmp v_clip_c1
+        bcc @cx1                ; right < c1
+        lda v_clip_c1
+        sta S0
+@cx1:   lda S0
+        sec
+        sbc A0
+        bcc @done               ; right < cx
         beq @done
+        sta A2
+        ; --- clip vertical ---
+        lda A1
+        clc
+        adc A3
+        sta S0                  ; bottom = cy+h
+        lda A1
+        cmp v_clip_r0
+        bcs @cy0
+        lda v_clip_r0
+        sta A1
+@cy0:   lda S0
+        cmp v_clip_r1
+        bcc @cy1
+        lda v_clip_r1
+        sta S0
+@cy1:   lda S0
+        sec
+        sbc A1
+        bcc @done
+        beq @done
+        sta A3
+        ; --- draw ---
         sta S0                  ; rows remaining
 @row:   lda A1
         asl a
@@ -697,11 +764,32 @@ MainLoop:
 @done:  rts
 .endproc
 
-; draw_str: P0=ptr A0=cx A1=cy A4=attr. Clips at the right edge.
+; draw_str: P0=ptr A0=cx A1=cy A4=attr. Clipped to the v_clip_* window.
 .proc draw_str
 .a16
 .i16
+        ; row clip: draw nothing unless r0 <= cy < r1
         lda A1
+        cmp v_clip_r0
+        bcc @skip               ; cy < r0
+        cmp v_clip_r1
+        bcs @skip               ; cy >= r1
+        ; left clip: advance past chars left of c0 (stop at NUL), cx -> c0
+        ldy #$0000
+@lcl:   lda A0
+        cmp v_clip_c0
+        bcs @lclr               ; cx >= c0
+        sep #$20
+.a8
+        lda (P0),y
+        rep #$20
+.a16
+        and #$00FF
+        beq @skip               ; string ends before the clip window
+        iny
+        inc A0
+        bra @lcl
+@lclr:  lda A1
         asl a
         asl a
         asl a
@@ -711,11 +799,12 @@ MainLoop:
         adc A0
         asl a
         tax
-        lda #SCRW_C
+        lda v_clip_c1
         sec
         sbc A0
-        sta S0                  ; cells available
-        ldy #$0000
+        bcc @skip
+        beq @skip
+        sta S0                  ; cells available before the right clip edge
 @ch:    sep #$20
 .a8
         lda (P0),y
@@ -745,12 +834,23 @@ MainLoop:
         iny
         bra @ch
 @done:  rts
+@skip:  rts
 .endproc
 
-; draw_char: A0=cx A1=cy A2=char A4=attr.
+; draw_char: A0=cx A1=cy A2=char A4=attr. Clipped to the v_clip_* window.
 .proc draw_char
 .a16
 .i16
+        lda A0
+        cmp v_clip_c0
+        bcc @skip
+        cmp v_clip_c1
+        bcs @skip
+        lda A1
+        cmp v_clip_r0
+        bcc @skip
+        cmp v_clip_r1
+        bcs @skip
         lda A1
         asl a
         asl a
@@ -773,7 +873,7 @@ MainLoop:
         adc #T_FONT
         ora A4
         sta TMAP,x
-        rts
+@skip:  rts
 .endproc
 
 ; clear_screen - desktop blue
@@ -2120,7 +2220,9 @@ MainLoop:
         rts
 @active:
         lda v_mouse_btn
-        beq @finish
+        bne @havebtn
+        jmp @finish
+@havebtn:
         ldx v_drag_win
         lda v_mouse_x
         lsr a
@@ -2159,11 +2261,38 @@ MainLoop:
         lda A1
         cmp v_wintab+WY,x
         beq @nochange
-@move:  lda A0
+@move:  ; clip = union(old_rect, new_rect) so repaint_all writes only the
+        ; vacated band + the window's new footprint into the tilemap shadow.
+        lda v_wintab+WX,x       ; c0 = min(oldWX, newWX=A0)
+        cmp A0
+        bcc @c0
+        lda A0
+@c0:    sta v_clip_c0
+        lda v_wintab+WX,x       ; c1 = max(oldWX, newWX) + WW
+        cmp A0
+        bcs @c1
+        lda A0
+@c1:    clc
+        adc v_wintab+WW,x
+        sta v_clip_c1
+        lda v_wintab+WY,x       ; r0 = min(oldWY, newWY=A1)
+        cmp A1
+        bcc @r0
+        lda A1
+@r0:    sta v_clip_r0
+        lda v_wintab+WY,x       ; r1 = max(oldWY, newWY) + WH
+        cmp A1
+        bcs @r1
+        lda A1
+@r1:    clc
+        adc v_wintab+WH,x
+        sta v_clip_r1
+        lda A0                  ; commit the new position
         sta v_wintab+WX,x
         lda A1
         sta v_wintab+WY,x
         jsr repaint_all
+        jsr clip_reset
 @nochange:
         rts
 @finish:
@@ -2418,6 +2547,50 @@ MainLoop:
 .proc AutotestSetup
 .a16
 .i16
+.ifdef AUTOTEST_DRAG
+        ; open two windows and drag the top one diagonally across the desktop
+        ; (over the icon labels + the other window) to exercise the damage-rect.
+        lda #2
+        jsr launch_app          ; Notepad (bottom, static demo text)
+        lda #10
+        jsr launch_app          ; Paint (top, static) - both static so the
+                                ; drag verify isn't perturbed by a live clock
+        lda v_zcount
+        dec a
+        jsr zent_x              ; X = topmost window entry offset
+        stx v_drag_win
+        stz v_drag_offx
+        stz v_drag_offy
+        lda #1
+        sta v_drag_active
+        sta v_mouse_btn
+        lda v_wintab+WX,x       ; mouse at the window's cell origin (px = cell*8)
+        asl a
+        asl a
+        asl a
+        sta v_mouse_x
+        lda v_wintab+WY,x
+        asl a
+        asl a
+        asl a
+        sta v_mouse_y
+        lda #6
+        sta LC0                 ; 6 cells down-right
+@dloop: lda v_mouse_x
+        clc
+        adc #8
+        sta v_mouse_x
+        lda v_mouse_y
+        clc
+        adc #8
+        sta v_mouse_y
+        jsr handle_drag
+        dec LC0
+        bne @dloop
+        stz v_mouse_btn
+        jsr handle_drag         ; release
+        rts
+.endif
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
         lda #10
