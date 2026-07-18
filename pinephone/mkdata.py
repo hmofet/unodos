@@ -161,6 +161,28 @@ ST7703 = [
 #  isn't refreshing => no DSI HS video reaches it; the lead is U-Boot's CONFIG_VIDEO_DE2
 #  pre-touching the display. See PINEPHONE-BRINGUP.md §8.)
 
+# ---- ST7703 readable status/config registers (cold-vs-warm panel-state probe) ----
+# Every SoC-side avenue is exhausted (PINEPHONE-BRINGUP.md §8, 2026-06-25): native cold
+# boot is backlit-black, p-boot warm is lit, yet all SoC registers / clocks / rates / PMIC
+# rails / DCS-init bytes are proven byte-identical. The one thing a SoC dump can't see is
+# the PANEL's own internal state. So read the panel's standard MIPI DCS readable registers
+# AFTER a cold st7703_init and compare to the same reads on p-boot's warm working panel: a
+# register that reads DIFFERENT cold-vs-warm means that DCS config never took effect on the
+# cold panel (a panel-state/timing dependency = the bug). All reads matching yet still black
+# => the fault is the post-DISPON HS *video* delivery, not the DCS config.
+#
+# These are DCS reads (data type 0x06, one command byte, no params). NOTE: the ST7703
+# manufacturer command-set regs (SETMIPI 0xBA, SETGIP1/2 0xE9/0xEA, ...) are write-only —
+# they cannot be read back over DCS — so we read the standard MIPI DCS readable set that the
+# panel does expose: power-mode (RDDPM 0x0A), address-mode/MADCTL (RDDMADCTL 0x0B), pixel-
+# format (RDDCOLMOD 0x0C), image-mode (RDDIM 0x0D), signal-mode (RDDSM 0x0E), self-diagnostic
+# (RDDSDR 0x0F), plus the 3 ID bytes (RDID1/2/3 0xDA/0xDB/0xDC = a link-sanity baseline that
+# should match regardless of init state). RDDSM/RDDPM/RDDSDR are the most diagnostic: they
+# reflect whether the panel believes it has a valid display/signal after our cold init.
+# Each read-request header is {DI=0x06, reg, 0x00, ECC} — same Hamming ECC as the write path
+# (mipi_ecc), emitted as one little-endian .word for the asm reader to spill into DSI CMD_TX.
+DSI_READ_REGS = [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xDA, 0xDB, 0xDC]
+
 
 def mipi_ecc(b0, b1, b2):
     """MIPI DSI packet-header ECC: a Hamming code over the 24 header bits."""
@@ -262,6 +284,14 @@ with open(OUT, "w", newline="\n") as f:
         f.write(f"    .hword {len(pkt)}, {delay}   // cmd 0x{cmd[0]:02X}\n")
         f.write("    .byte " + ",".join("0x%02X" % b for b in pkt) + "\n")
     f.write("    .hword 0, 0\n")
+    # ST7703 readable status/config registers: a table of (reg, read-request-header) word
+    # pairs the kernel's dcs_panel_dump walks (cold-vs-warm panel-state probe). Header word =
+    # {DI=0x06, reg, 0x00, ECC} little-endian. Terminated by reg == 0xFFFFFFFF.
+    f.write(".global dsi_read_seq\n.align 2\ndsi_read_seq:\n")
+    for reg in DSI_READ_REGS:
+        hdr = 0x06 | (reg << 8) | (mipi_ecc(0x06, reg, 0x00) << 24)
+        f.write(f"    .word 0x{reg:02X}, 0x{hdr:08X}   // DCS read 0x{reg:02X}\n")
+    f.write("    .word 0xFFFFFFFF, 0\n")
 
 print(f"wrote {OUT}: font 95, {NICONS} icons, {len(music_song)} notes, {NTHEMES} themes, "
       f"{len(ST7703)} panel cmds")
