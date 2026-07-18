@@ -399,6 +399,8 @@ app_draw_content:
     jp z, tracker_draw
     cp 8
     jp z, outlast_draw
+    cp 9
+    jp z, pacman_draw
     jp generic_draw
 
 sysinfo_draw:
@@ -688,6 +690,7 @@ B1 EQU PAD_B1
   IFNDEF AUTOTEST_PAINT
   IFNDEF AUTOTEST_TRACKER
   IFNDEF AUTOTEST_OUTLAST
+  IFNDEF AUTOTEST_PACMAN
 ; Open Clock, SysInfo, Theme (in an order that keeps each icon clickable),
 ; cycle the Theme palette, then drag the Theme window by its title bar — one
 ; screenshot that exercises launch + z-order + live content + theme + drag.
@@ -709,6 +712,7 @@ auto_script:
     db 4, 52,150, 0                ; release (drop)
     db 40, 52,150, 0               ; settle for the capture
     db 0, 0, 0, 0                  ; end -> idle
+  ENDIF ; AUTOTEST_PACMAN
   ENDIF ; AUTOTEST_OUTLAST
   ENDIF ; AUTOTEST_TRACKER
   ENDIF ; AUTOTEST_PAINT
