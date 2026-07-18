@@ -104,6 +104,7 @@ Mechanics worth reusing:
 | genesis | §1 P3/P4 (raise path) — raise_window → `redraw_topmost`, not `repaint_all` | `24b0683` | byte-identical (`build.sh raise`, genesis_plus_gx) |
 | **amiga** | **deterministic headless renderer** `uae/render.py` (Unicorn 68000; unblocks all amiga byte-verify — WinUAE can't) | `7831ae7` | two runs of one build are byte-identical |
 | amiga | §1 P1 (raise+create) — raise_window/win_create → `redraw_top2`, not `repaint_all` | `41c05e6` | byte-identical (`render.py`, `build.sh test` + `test RAISE`) |
+| amiga | §1 P1 (close) — clip `repaint_all` to the closed window's **row band** (clip on `fill_rect`/`draw_char`/`draw_icon16` + `clear_band`) | `fc75a2b` | byte-identical (`render.py`, `build.sh test CLOSE`); clip is a no-op at full screen |
 
 **The amiga render path is the reusable unlock here.** `uae/render.py` is a
 frame-deterministic Unicorn-68000 harness (hunk-loads `build/UnoDOS68K_test`,
@@ -121,10 +122,12 @@ a raise/create makes a window topmost, so — when a port has no active-title
 restyle, or restyles only the previously-topmost — the sole visible deltas are
 that window on top (+ the old topmost going inactive). Redraw just those 1–2
 windows instead of the full clear+desktop+all-windows `repaint_all`; nothing is
-newly exposed, so it's byte-identical. **close still needs the full repaint** (it
-must reveal occluded content — that one wants a clipped damage-rect; on amiga the
-windows sit at arbitrary pixel-x so it means pixel-column clipping of
-`fill_rect`/`draw_char`/`draw_icon16`).
+newly exposed, so it's byte-identical. **close** reveals occluded content so it
+can't use redraw-top-N — but a close only changes the closed window's *rows*, so
+clipping `repaint_all` to that **row band** (a `clip_y0/clip_y1` window on
+`fill_rect`/`draw_char`/`draw_icon16` + a banded clear) is byte-identical and
+needs no pixel-column masking (done on amiga, `fc75a2b`; genesis close could do
+the same reusing its existing drag clip window).
 
 **New autotest scaffolding added** (needed for the above): snes `build.sh dostris`
 (`AUTOTEST_DOSTRIS`); amiga `build.sh test RAISE` (`AUTOTEST_RAISE`) + the
@@ -170,12 +173,11 @@ scripts drive `harness.py` directly with `wait`s between keys (see below).
   wins. (Also each has P2 busy-spin `wait_vblank`, P3 per-word `frect`, P4 static
   wall/floor repaint.) *(pinephone/ppcmac share the core the user is doing rpi
   with — coordinate / mirror rpi.)*
-- **amiga** §1 P1 — ✅ **raise+create done** (`41c05e6`, verified via the new
-  `uae/render.py`). **close remains**: it must reveal what the closed window
-  occluded, so it needs a clipped damage-rect repaint (add a clip window to
-  `fill_rect`/`draw_char`/`draw_icon16`; windows are at arbitrary pixel-x so the
-  text/icon clip is pixel-column, not byte — the fiddly part). Now verifiable with
-  `render.py` — build an `AUTOTEST` close scene and `cmp`.
+- **amiga** §1 P1 — ✅ **DONE** (raise+create `41c05e6`, close `fc75a2b`). All
+  three z-order ops now avoid the full-scene repaint (raise/create → `redraw_top2`;
+  close → row-band-clipped `repaint_all`), all verified byte-identical via
+  `uae/render.py`. The row-band clip sidestepped the pixel-column-clip worry: a
+  close only changes the closed window's *rows*.
 - **c64** §1 P1 — ✅ **done for Files/Theme/Tracker** this session (`55f7bdd`,
   `e0f8ce2`, `1c923e5`). **Notepad deferred**: append-only editor, no cursor-nav /
   highlight — every keystroke changes `note_len` and can tail-scroll the whole
