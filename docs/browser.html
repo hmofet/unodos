@@ -44,42 +44,36 @@
 <main class="main"><div class="wrap">
 
 <h1>Web browser</h1>
-<p class="lede">A native canvas app that renders HTML, Markdown and basic CSS, runs JavaScript, and loads
-pages from local disks or over the network — HTTP and HTTPS.</p>
+<p class="lede">A built-in web browser that shows HTML, Markdown and basic CSS, runs JavaScript, and loads
+pages from local disks or over the web (HTTP and HTTPS).</p>
 
 <h2 id="files">Files and the address bar</h2>
-<p>The browser opens on a unified file list: volume&nbsp;0 is the RAM disk, and volumes 1+ are the FAT /
-FAT32 disks the firmware mounted (reached through the UEFI Simple File System protocol — the same
-firmware-as-BIOS approach used for the framebuffer and pointer). RAM files and disk files are listed side
-by side. An <strong>address bar</strong> at the top takes a <code>http://</code> or <code>https://</code>
-URL; press <kbd>↓</kbd> to drop into the file list, <kbd>Enter</kbd> to open, and <kbd>Backspace</kbd> to
-return.</p>
-<figure><img src="assets/img/browser_files.png" alt="The unified file list — RAM-disk documents (✳) and FAT/ESP files (›) together, with the URL address bar on top." loading="lazy"><figcaption>The unified file list — RAM-disk documents (✳) and FAT/ESP files (›) together, with the URL address bar on top.</figcaption></figure>
+<p>The browser opens on a file list that shows the built-in RAM disk and any FAT-formatted USB sticks or
+disks together. Type a web address in the bar at the top, or press <kbd>↓</kbd> to move into the file
+list; <kbd>Enter</kbd> opens a file and <kbd>Backspace</kbd> goes back.</p>
+<figure><img src="assets/img/browser_files.png" alt="The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top." loading="lazy"><figcaption>The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top.</figcaption></figure>
 
 <h2 id="render">HTML, Markdown &amp; CSS</h2>
-<p>A single immediate-mode flow lays out headings, word-wrapped paragraphs, <code>&lt;b&gt;/&lt;i&gt;/&lt;code&gt;/&lt;a&gt;</code>,
-lists, <code>&lt;pre&gt;</code>, rules and entities — for both HTML and Markdown.</p>
+<p>The browser lays out headings, word-wrapped paragraphs, bold and italic, code, links, lists and
+preformatted text, for both HTML and Markdown.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/browser_markdown.png" alt="A Markdown document rendered — headings, bold/italic, inline code and lists." loading="lazy"><figcaption>A <b>Markdown</b> document rendered — headings, bold/italic, inline code and lists.</figcaption></figure>
-  <figure><img src="assets/img/browser_html.png" alt="An HTML page — emphasis, code spans, links, lists and preformatted text; unknown tags are ignored." loading="lazy"><figcaption>An <b>HTML</b> page — emphasis, code spans, links, lists and preformatted text; unknown tags are ignored.</figcaption></figure>
+  <figure><img src="assets/img/browser_markdown.png" alt="A Markdown document: headings, bold and italic, inline code and lists." loading="lazy"><figcaption>A <b>Markdown</b> document: headings, bold and italic, inline code and lists.</figcaption></figure>
+  <figure><img src="assets/img/browser_html.png" alt="An HTML page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored." loading="lazy"><figcaption>An <b>HTML</b> page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored.</figcaption></figure>
 </div>
 
 <h2 id="js">JavaScript</h2>
-<p>Each <code>&lt;script&gt;</code> block runs in a small tree-walking interpreter: a lexer, a
-recursive-descent parser to an AST, and an evaluator supporting numbers/strings/booleans, <code>var</code>,
-arithmetic and logic, <code>if</code>/<code>for</code>/<code>while</code>/ternary, functions and recursion,
-arrays, <code>Math.*</code>, <code>console.log</code> and <code>document.write</code>. Its output is spliced
-into the page; <code>console.log</code> collects into a console panel at the foot of the document.</p>
-<figure><img src="assets/img/browser_js.png" alt="Script.html — the page&#x27;s &amp;lt;script&amp;gt; generated this Fibonacci table via document.write." loading="lazy"><figcaption><b>Script.html</b> — the page's <code>&lt;script&gt;</code> generated this Fibonacci table via <code>document.write</code>.</figcaption></figure>
+<p>The browser runs the JavaScript on a page and adds its output to the page, with a console panel at the
+bottom for <code>console.log</code> messages.</p>
+<figure><img src="assets/img/browser_js.png" alt="Script.html: its JavaScript generated this Fibonacci table on the page." loading="lazy"><figcaption><b>Script.html</b>: its JavaScript generated this Fibonacci table on the page.</figcaption></figure>
 
 <h2 id="net">Over the network</h2>
-<p>Give the address bar a URL and the browser brings the link up on demand (e1000 + DHCP), resolves the host
-by DNS, connects, sends an HTTP/1.0 GET and renders the reply — including any JavaScript.</p>
+<p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
+runs any JavaScript on it.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/browser_http.png" alt="A live page fetched over HTTP through the network stack." loading="lazy"><figcaption>A live page fetched over <b>HTTP</b> through the network stack.</figcaption></figure>
-  <figure><img src="assets/img/browser_https.png" alt="An HTTPS page over CA-validated TLS 1.2." loading="lazy"><figcaption>An <b>HTTPS</b> page over CA-validated <b>TLS 1.2</b>.</figcaption></figure>
+  <figure><img src="assets/img/browser_http.png" alt="A live page loaded over HTTP." loading="lazy"><figcaption>A live page loaded over <b>HTTP</b>.</figcaption></figure>
+  <figure><img src="assets/img/browser_https.png" alt="A secure page loaded over HTTPS." loading="lazy"><figcaption>A secure page loaded over <b>HTTPS</b>.</figcaption></figure>
 </div>
-<div class="note"><b>How HTTPS works</b><b>HTTPS</b> uses the BearSSL minimal X.509 engine with a bundled root store (14 common CAs) and sets the validation clock from the UEFI RTC, so certificate validity windows are checked. BearSSL is TLS&nbsp;1.2 (no 1.3); for correct certificate dates the RTC should be UTC. See <a href="networking.html">Networking</a>.</div>
+<div class="note"><b>Secure sites</b>Secure (https://) pages load over an encrypted TLS connection, and UnoDOS checks the site certificate against a built-in list of common certificate authorities. See <a href="networking.html">Networking</a>.</div>
 
 <nav class="pagenav"><a href="apps.html">&lsaquo; Applications</a><a class="nxt" href="networking.html">Networking &rsaquo;</a></nav>
 </div></main>

@@ -45,9 +45,9 @@
 
 <div class="hero">
   <h1>UnoDOS <span style="color:var(--accent-2)">pc64</span></h1>
-  <p class="lede">A GUI-first operating system that boots bare-metal on any 64-bit UEFI PC —
-  straight into a themed desktop, with its own window manager, web browser, TCP/IP + TLS stack,
-  and a 3D engine. No BIOS, no DOS, no runtime. This manual covers the <strong>pc64</strong> world.</p>
+  <p class="lede">A GUI-first operating system that boots on any 64-bit UEFI PC, straight into a themed
+  desktop with its own window manager, web browser, networking and built-in apps. No install and no
+  command line required. This manual covers the <strong>pc64</strong> version.</p>
   <div>
     <span class="pill">x86-64 · UEFI</span>
     <span class="pill">~660&nbsp;KB image</span>
@@ -61,35 +61,24 @@
   </div>
 </div>
 
-<p>UnoDOS is a whole family of GUI-first operating systems — its original kernel is hand-written
-IBM PC/XT assembly — that now spans 20+ hardware targets. <strong>pc64</strong> is the modern-PC
-member: the first 64-bit x86 world, written in C, that runs as a UEFI application on essentially
-every PC built since ~2007. It has been verified under QEMU + OVMF and on a
-<strong>Lenovo ThinkPad X1 Carbon Gen 8</strong> booting from a USB stick.</p>
+<p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
+<strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
+2007, and it has been tested in emulators and on a real <strong>Lenovo ThinkPad X1 Carbon</strong>
+laptop booting from a USB stick.</p>
 
-<div class="note tip"><b>Just want to try it?</b>Most people run UnoDOS with the one-click <strong>USB flasher</strong> — download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.</div>
+<div class="note tip"><b>Just want to try it?</b>Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.</div>
 
-<figure><img src="assets/img/desktop.png" alt="The pc64 desktop — the default Aurora Light theme, with desktop icons, a Start button, a taskbar and a system-tray clock." loading="lazy"><figcaption>The pc64 desktop — the default <b>Aurora Light</b> theme, with desktop icons, a Start button, a taskbar and a system-tray clock.</figcaption></figure>
+<figure><img src="assets/img/desktop.png" alt="The pc64 desktop in the default Aurora Light theme, with desktop icons, a Start button, a taskbar and a clock." loading="lazy"><figcaption>The pc64 desktop in the default <b>Aurora Light</b> theme, with desktop icons, a Start button, a taskbar and a clock.</figcaption></figure>
 
 <h2 id="what">What you get</h2>
 <div class="cards">
-  <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, draggable/resizable windows — all keyboard- or pointer-driven.</p></div>
-  <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light/dark) plus eight retro skins, switchable live from the Control Panel.</p></div>
+  <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, and windows you can move and resize, all by keyboard or pointer.</p></div>
+  <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel.</p></div>
   <div class="card"><h4>Applications</h4><p>Editor, Files, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
-  <div class="card"><h4>A web browser</h4><p>Renders HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
-  <div class="card"><h4>Networking + TLS</h4><p>A native e1000 driver, a from-scratch TCP/IP stack, DHCP/DNS, and CA-validated TLS 1.2.</p></div>
-  <div class="card"><h4>Drivers</h4><p>UEFI GOP framebuffer, keyboard &amp; pointer, PC-speaker audio, PCI, FAT via the firmware, and xHCI USB.</p></div>
+  <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
+  <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
+  <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, sound, and USB, plus reading files from FAT-formatted USB sticks and disks.</p></div>
 </div>
-
-<h2 id="firmware">Firmware-as-BIOS</h2>
-<p>pc64 never leaves the firmware behind at boot. UEFI's <strong>GOP</strong> hands the kernel a linear
-32-bit framebuffer; Simple Text Input hands it the keyboard with modifier state; the Simple/Absolute
-Pointer protocols hand it a mouse where the firmware binds one; and the UEFI <strong>runtime services</strong>
-provide the real-time clock and shutdown/restart. Boot services stay alive — UEFI plays exactly the role
-that INT&nbsp;10h/13h/15h play for the classic 16-bit kernel. Native drivers (xHCI, e1000) are the
-<em>driver tail</em>, not a bring-up requirement.</p>
-
-<div class="note tip"><b>Which build this covers</b>This manual documents the default <code>./build.sh</code> image — the <strong>unoui</strong> desktop shell. A separate <code>legacy</code> build keeps the earlier icon-desktop and is only retained as reference; everything it did now runs in the default shell.</div>
 
 <p class="kv">New here? Start with <a href="getting-started.html">Getting started</a>, then take the
 <a href="desktop.html">desktop tour</a>.</p>

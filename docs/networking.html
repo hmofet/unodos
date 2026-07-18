@@ -44,33 +44,27 @@
 <main class="main"><div class="wrap">
 
 <h1>Networking</h1>
-<p class="lede">A native NIC driver, a from-scratch TCP/IP stack, DHCP and DNS, and CA-validated TLS 1.2 —
-all built in-tree, no third-party OS underneath.</p>
+<p class="lede">UnoDOS can get online by itself: it connects over Ethernet, gets an address automatically,
+and browses the web, including secure sites.</p>
 
-<h2 id="stack">The stack</h2>
-<p>The <strong>e1000</strong> driver finds the card by PCI scan, enables bus-mastering, reads the MAC from
-EEPROM and drives RX/TX descriptor rings by MMIO — publishing the family's <code>uno_nic_t</code>
-(send / recv / link). On top sits a hand-rolled IPv4 stack: ARP with a small cache, IPv4 with checksums,
-ICMP echo, UDP, a DHCP client (which also learns the DNS resolver and gateway), and a minimal TCP
-(active open, retransmit, close). Static config matches QEMU's SLIRP; DHCP overrides it.</p>
+<h2 id="online">Getting online</h2>
+<p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
+address automatically (DHCP), finds the gateway and other machines, and browses the web over HTTP and
+HTTPS. Nothing else needs to be installed.</p>
 
 <h2 id="selftest">The Network self-test</h2>
-<p>The Network app exercises the whole stack end-to-end and reports each step. Under an emulator it runs
-against QEMU's SLIRP services; on metal it drives a real adapter.</p>
-<figure><img src="assets/img/network.png" alt="The Network self-test, all green: link up, a DHCP lease (10.0.2.15), a gateway ping, a UDP/TFTP round-trip, a TCP echo, and a full TLS 1.2 handshake (cipher suite 0xC030)." loading="lazy"><figcaption>The Network self-test, all green: link up, a DHCP lease (10.0.2.15), a gateway ping, a UDP/TFTP round-trip, a TCP echo, and a full <b>TLS 1.2</b> handshake (cipher suite 0xC030).</figcaption></figure>
+<p>The Network app checks the whole connection step by step and shows the result. In an emulator it tests
+against the emulator's network; on a real PC it uses the real adapter.</p>
+<figure><img src="assets/img/network.png" alt="The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection." loading="lazy"><figcaption>The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection.</figcaption></figure>
 
-<h2 id="tls">TLS &amp; HTTPS</h2>
-<p><code>https://</code> URLs go over CA-validated TLS 1.2 using BearSSL's <code>br_x509_minimal</code> engine
-with a bundled root store of 14 common CAs (ISRG/Let's&nbsp;Encrypt, DigiCert, GlobalSign, USERTrust, Amazon,
-Google&nbsp;GTS, and more). The validation clock comes from the UEFI real-time clock, so certificate validity
-windows are enforced. BearSSL implements TLS&nbsp;1.2, which nearly all sites still accept.</p>
+<h2 id="tls">Secure sites</h2>
+<p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
+certificate against a built-in list of common certificate authorities (Let's Encrypt, DigiCert and others),
+so you can browse the secure web.</p>
 
-<h2 id="usb">USB Ethernet on metal</h2>
-<p>Some laptops — the X1 Carbon among them — have no wired NIC, so networking on metal rides a
-<strong>USB Ethernet adapter</strong>, which needs a USB host stack. pc64 includes a polled
-<strong>xHCI</strong> (USB 3.0) driver and an <strong>AX88179</strong> USB-gigabit driver; when no e1000 is
-present, the TCP/IP + TLS + browser stack falls back to the USB NIC automatically. Wi-Fi is the remaining gap.</p>
-<div class="note warn"><b>Known limitation</b>On real Intel xHCI the BIOS→OS ownership handoff (USBLEGSUP) is not yet implemented — if QEMU enumerates a device but a physical machine does not, that is the likely cause.</div>
+<h2 id="usb">USB Ethernet</h2>
+<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. Wi-Fi is not
+supported yet.</p>
 
 <nav class="pagenav"><a href="browser.html">&lsaquo; Web browser</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
 </div></main>
