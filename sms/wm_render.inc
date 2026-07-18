@@ -16,7 +16,17 @@ maybe_redraw:
     ; fall through to redraw_all
 
 redraw_all:
-    call clear_names
+    ; clear the damage region to tile 0 (clipped fill == clear_names at full clip)
+    xor a
+    ld (dp_col), a
+    ld (dp_row), a
+    ld a, SCRCOLS
+    ld (dp_w), a
+    ld a, 28
+    ld (dp_h), a
+    xor a
+    ld (dp_tile), a
+    call fill_cells
     call draw_desktop_base
     xor a
     ld (dr_slot), a                 ; z index 0..zcount-1 (bottom..top)
@@ -37,6 +47,7 @@ ra_loop:
     ld (dr_slot), a
     jr ra_loop
 ra_done:
+    call clip_reset                 ; restore full-screen clip after every redraw
     ret
 
 ; ---- draw_desktop_base: title bar + the labelled icon grid ----------------
@@ -102,67 +113,22 @@ ddb_ig:
     ret
 
 ; ---- draw_icon: D=col E=row, C=TL tile (TL,TR,BL,BR consecutive) ----------
+; draw_icon - D=col E=row, C=TL tile (TL,TR,BL,BR consecutive). Each of the four
+; cells is clipped to the damage window via put_cell.
 draw_icon:
     push de
     push bc
-    ld h, 0
-    ld l, e
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl                      ; row*32
-    ld a, d
-    add a, l
-    ld l, a
-    jr nc, di_1
-    inc h
-di_1:
-    add hl, hl                      ; *2
-    ld de, NAME_BASE
-    add hl, de
-    call vram_set_addr
-    ld a, c
-    out (VDP_DATA), a               ; TL
-    xor a
-    out (VDP_DATA), a
-    ld a, c
-    inc a
-    out (VDP_DATA), a               ; TR
-    xor a
-    out (VDP_DATA), a
-    pop bc
-    pop de
-    push de
-    push bc
-    inc e                           ; row+1
-    ld h, 0
-    ld l, e
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld a, d
-    add a, l
-    ld l, a
-    jr nc, di_2
-    inc h
-di_2:
-    add hl, hl
-    ld de, NAME_BASE
-    add hl, de
-    call vram_set_addr
-    ld a, c
-    add a, 2                        ; BL
-    out (VDP_DATA), a
-    xor a
-    out (VDP_DATA), a
-    ld a, c
-    add a, 3                        ; BR
-    out (VDP_DATA), a
-    xor a
-    out (VDP_DATA), a
+    call put_cell                   ; TL at (d,e)
+    inc d
+    inc c
+    call put_cell                   ; TR at (d+1,e)
+    dec d
+    inc e
+    inc c
+    call put_cell                   ; BL at (d,e+1)
+    inc d
+    inc c
+    call put_cell                   ; BR at (d+1,e+1)
     pop bc
     pop de
     ret
@@ -297,11 +263,131 @@ draw_window:
     call fill_cells
     jp app_draw_content
 
-; ---- fill_cells: dp_col,dp_row,dp_w,dp_h,dp_tile --------------------------
+; ---- clip_reset: clip window = whole screen (no clipping) -----------------
+clip_reset:
+    xor a
+    ld (v_clip_c0), a
+    ld (v_clip_r0), a
+    ld a, SCRCOLS
+    ld (v_clip_c1), a
+    ld a, 28                        ; SCRROWS visible rows
+    ld (v_clip_r1), a
+    ret
+
+; ---- put_cell: write tile C at cell (D=col,E=row) iff inside the clip window.
+; Preserves BC, DE, HL. -----------------------------------------------------
+put_cell:
+    push bc
+    push de
+    push hl
+    ld a, (v_clip_c0)
+    ld b, a
+    ld a, d
+    cp b
+    jr c, pc_out                    ; d < c0
+    ld a, (v_clip_c1)
+    ld b, a
+    ld a, d
+    cp b
+    jr nc, pc_out                   ; d >= c1
+    ld a, (v_clip_r0)
+    ld b, a
+    ld a, e
+    cp b
+    jr c, pc_out                    ; e < r0
+    ld a, (v_clip_r1)
+    ld b, a
+    ld a, e
+    cp b
+    jr nc, pc_out                   ; e >= r1
+    ld h, 0
+    ld l, e
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl                      ; row*32
+    ld a, d
+    add a, l
+    ld l, a
+    jr nc, pc_1
+    inc h
+pc_1:
+    add hl, hl                      ; *2
+    ld de, NAME_BASE
+    add hl, de
+    call vram_set_addr
+    ld a, c
+    out (VDP_DATA), a
+    xor a
+    out (VDP_DATA), a
+pc_out:
+    pop hl
+    pop de
+    pop bc
+    ret
+
+; ---- fill_cells: dp_col,dp_row,dp_w,dp_h,dp_tile. Clipped to the clip window
+; (default = whole screen), so a clipped redraw_all touches only the damage. ---
 fill_cells:
-    ld a, (dp_h)
-    or a
+    ; --- clip the rect (dp_col,dp_row,dp_w,dp_h) to [c0,c1) x [r0,r1) ---
+    ; horizontal: right=col+w; col=max(col,c0); right=min(right,c1); w=right-col
+    ld a, (dp_col)
+    ld b, a
+    ld a, (dp_w)
+    add a, b
+    ld c, a                         ; c = right
+    ld a, (v_clip_c0)
+    ld b, a
+    ld a, (dp_col)
+    cp b
+    jr nc, fc_c0ok
+    ld a, b                         ; col = c0
+    ld (dp_col), a
+fc_c0ok:
+    ld a, (v_clip_c1)
+    cp c
+    jr nc, fc_c1ok
+    ld c, a                         ; right = c1
+fc_c1ok:
+    ld a, c
+    ld b, a
+    ld a, (dp_col)
+    ld c, a
+    ld a, b
+    sub c                           ; w = right - col
+    ret c                           ; right < col -> nothing
     ret z
+    ld (dp_w), a
+    ; vertical: bottom=row+h; row=max(row,r0); bottom=min(bottom,r1); h=bottom-row
+    ld a, (dp_row)
+    ld b, a
+    ld a, (dp_h)
+    add a, b
+    ld c, a                         ; c = bottom
+    ld a, (v_clip_r0)
+    ld b, a
+    ld a, (dp_row)
+    cp b
+    jr nc, fc_r0ok
+    ld a, b
+    ld (dp_row), a
+fc_r0ok:
+    ld a, (v_clip_r1)
+    cp c
+    jr nc, fc_r1ok
+    ld c, a
+fc_r1ok:
+    ld a, c
+    ld b, a
+    ld a, (dp_row)
+    ld c, a
+    ld a, b
+    sub c                           ; h = bottom - row
+    ret c
+    ret z
+    ld (dp_h), a
+    ; --- draw ---
     ld b, a                         ; rows
 fc_rl:
     push bc
@@ -330,6 +416,41 @@ fc_cl:
 
 ; ---- puts_at: D=col E=row, HL=str (NUL-term), C=tile base for ASCII 32 ----
 puts_at:
+    ; --- row clip: draw nothing unless r0 <= row(e) < r1 ---
+    ld a, (v_clip_r0)
+    ld b, a
+    ld a, e
+    cp b
+    ret c                           ; e < r0
+    ld a, (v_clip_r1)
+    ld b, a
+    ld a, e
+    cp b
+    ret nc                          ; e >= r1
+    ; --- left clip: skip chars left of c0, advancing col(d) to c0 ---
+    ld a, (v_clip_c0)
+    ld b, a
+    ld a, d
+    cp b
+    jr nc, pa_lclr                  ; d >= c0
+pa_lcl:
+    ld a, (hl)
+    or a
+    ret z                           ; string ends before the clip window
+    inc hl
+    inc d
+    ld a, (v_clip_c0)
+    ld b, a
+    ld a, d
+    cp b
+    jr c, pa_lcl                    ; d < c0
+pa_lclr:
+    ; avail = c1 - d cells before the right clip edge
+    ld a, (v_clip_c1)
+    sub d
+    ret c
+    ret z
+    push af                         ; save avail
     push hl
     ld h, 0
     ld l, e
@@ -350,6 +471,8 @@ puts_at:
     add hl, de
     call vram_set_addr
     pop hl
+    pop af
+    ld b, a                         ; b = remaining cells (right clip)
 ps_loop:
     ld a, (hl)
     or a
@@ -360,7 +483,8 @@ ps_loop:
     xor a
     out (VDP_DATA), a
     inc hl
-    jr ps_loop
+    djnz ps_loop
+    ret
 
 ; ---- cput: A=content line, HL=string -> draw at (WX+1, WY+1+line) ----------
 cput:
