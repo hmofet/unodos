@@ -242,9 +242,51 @@ static void overlay_cursor(uint16 *vram)
 
 void uno_dc_present(void)
 {
+    /* AUDIT-dreamcast §1 P1: convert/upload only the rows of fb[] that changed
+       since the last present, instead of the whole 640x480 (307 200 px) every
+       frame. UnoDOS draws incrementally, so most frames touch a small band.
+       The band is derived by comparing fb[] to the previous frame (fb_prev) -
+       byte-identical by construction, and needs no per-primitive dirty flags
+       (fb[] is written from both fb.c and the mac_compat QuickDraw shim). Idle
+       frames convert nothing (subsumes P2). */
+    static fb_px fb_prev[FB_W * FB_H];
+    static int   prev_cy = FB_H / 2, prev_have = 0, first = 1;
     uint16 *vram = (uint16 *)vram_s;
-    int i, n = FB_W * FB_H;
+    int top, bot, y, i;
+
     vid_waitvbl();                      /* present at vblank to limit tearing */
-    for (i = 0; i < n; i++) vram[i] = to565(fb[i]);
+
+    if (first) { top = 0; bot = FB_H; first = 0; }
+    else {
+        top = FB_H; bot = 0;
+        for (y = 0; y < FB_H; y++) {
+            if (memcmp(&fb[y * FB_W], &fb_prev[y * FB_W], FB_W * sizeof(fb_px))) {
+                if (y < top) top = y;
+                bot = y + 1;
+            }
+        }
+    }
+    /* the cursor is overlaid onto VRAM (not in fb[]), so a moved cursor's old
+       and new row bands must be reconverted to erase the old + draw the new. */
+    if (g_have_pointer || prev_have) {
+        if (g_cy < top)       top = g_cy;
+        if (g_cy + 15 > bot)  bot = g_cy + 15;
+        if (prev_have) {
+            if (prev_cy < top)      top = prev_cy;
+            if (prev_cy + 15 > bot) bot = prev_cy + 15;
+        }
+    }
+    if (top < 0) top = 0;
+    if (bot > FB_H) bot = FB_H;
+
+    for (y = top; y < bot; y++) {
+        int base = y * FB_W;
+        for (i = 0; i < FB_W; i++) {
+            vram[base + i] = to565(fb[base + i]);
+            fb_prev[base + i] = fb[base + i];
+        }
+    }
     overlay_cursor(vram);
+    prev_cy = g_cy;
+    prev_have = g_have_pointer;
 }
