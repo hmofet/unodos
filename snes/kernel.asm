@@ -2547,6 +2547,16 @@ MainLoop:
 .proc AutotestSetup
 .a16
 .i16
+.ifdef AUTOTEST_DOSTRIS
+        ; open Dostris (topmost game) and start a game; gravity from the main
+        ; loop then drives dt_step + the incremental piece redraw for many
+        ; frames (locks/spawns exercise the full-repaint path too). Deterministic
+        ; (LCG seeded from v_frame/v_secs at this fixed boot frame).
+        lda #4
+        jsr launch_app          ; Dostris (proc 4), becomes topmost
+        jsr dostris_new         ; seed + spawn -> state = playing
+        rts
+.endif
 .ifdef AUTOTEST_DRAG
         ; open two windows and drag the top one diagonally across the desktop
         ; (over the icon labels + the other window) to exercise the damage-rect.
@@ -2646,6 +2656,9 @@ MainLoop:
 .proc AutotestInput
 .a16
 .i16
+.ifdef AUTOTEST_DOSTRIS
+        rts                     ; dostris scene is gravity-driven; no pad input
+.endif
         lda v_frame
         cmp #40
         bcs @phase2

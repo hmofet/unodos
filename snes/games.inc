@@ -1040,14 +1040,13 @@ DT_ROWS = 20
         lda v_dt_state
         cmp #1
         bne @out
+        jsr dt_interval         ; A = gravity interval (clobbers S0/S1)
+        sta S3                  ; stash it (S3 survives the elapsed calc)
         lda v_frame
         sec
-        sbc v_dt_last
-        sta S0
-        jsr dt_interval
-        cmp S0
-        beq @step
-        bcs @out
+        sbc v_dt_last           ; A = frames since last step
+        cmp S3
+        bcc @out                ; elapsed < interval -> not yet
 @step:  lda v_frame
         sta v_dt_last
         jsr dt_step
