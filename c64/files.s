@@ -122,6 +122,7 @@ files_next:
         jmp files_draw
 fn_go:
         lda files_sel
+        sta files_osel
         clc
         adc #1
         cmp FSBASE+FSC_COUNT
@@ -129,7 +130,7 @@ fn_go:
         lda #0
 fn_ok:
         sta files_sel
-        jmp files_draw
+        jmp files_nav_redraw
 
 files_prev:
         lda FSBASE+FSC_COUNT
@@ -137,15 +138,16 @@ files_prev:
         jmp files_draw
 fp_go:
         lda files_sel
+        sta files_osel
         bne fp_dec
         lda FSBASE+FSC_COUNT
         sec
         sbc #1
         sta files_sel
-        jmp files_draw
+        jmp files_nav_redraw
 fp_dec:
         dec files_sel
-        jmp files_draw
+        jmp files_nav_redraw
 
 files_open_selected:
         lda FSBASE+FSC_COUNT
@@ -245,51 +247,7 @@ fd_row:
         bne fd_go
         jmp fd_status
 fd_go:
-        lda #1
-        sta zpCol
-        txa
-        clc
-        adc #1
-        sta zpRow
-        lda #0
-        sta zpInv
-        cpx files_sel
-        bne fd_pat
-        lda #$FF
-        sta zpInv
-fd_pat:
-        lda zpInv
-        beq fd_nohi
-        ; highlight band; fill_rows clobbers X (the entry index) - save/restore.
-        stx zpSlot
-        lda #0
-        sta zpFX
-        lda zpRow
-        asl
-        asl
-        asl
-        sta zpFY
-        lda #SCRCOLS
-        sta zpFW
-        lda #8
-        sta zpFH
-        lda #$FF
-        sta zpFPat
-        jsr fill_rows
-        ldx zpSlot
-fd_nohi:
-        txa
-        jsr fs_entry_ptr        ; zpFSPtr = &entry
-        jsr draw_name12
-        lda #20
-        sta zpCol
-        ldy #FSE_SIZE
-        lda (zpFSPtr),y
-        sta zpFSSize
-        iny
-        lda (zpFSPtr),y
-        sta zpFSSize+1
-        jsr draw_dec16
+        jsr files_row_draw
         inx
         jmp fd_row
 ; ---- status / confirm line (row23) ----
@@ -327,6 +285,67 @@ fd_help:
         lda #>msg_files_help
         sta zpPtr+1
         jmp draw_string
+
+; files_row_draw - draw one directory row (X = entry index): the 8-pixel
+; highlight band (pattern = zpInv: $00 plain, $FF inverted when selected) then
+; the name + size. Filling the band for unselected rows too is a no-op on a
+; freshly app_cleared screen (bitmap already 0) but lets a nav key erase the
+; previous highlight by repainting just the old + new rows (P1). X preserved.
+files_row_draw:
+        lda #1
+        sta zpCol
+        txa
+        clc
+        adc #1
+        sta zpRow
+        lda #0
+        sta zpInv
+        cpx files_sel
+        bne frd_pat
+        lda #$FF
+        sta zpInv
+frd_pat:
+        stx zpSlot              ; fill_rows clobbers X (the entry index)
+        lda #0
+        sta zpFX
+        lda zpRow
+        asl
+        asl
+        asl
+        sta zpFY
+        lda #SCRCOLS
+        sta zpFW
+        lda #8
+        sta zpFH
+        lda zpInv
+        sta zpFPat
+        jsr fill_rows
+        ldx zpSlot
+        txa
+        jsr fs_entry_ptr        ; zpFSPtr = &entry
+        jsr draw_name12
+        lda #20
+        sta zpCol
+        ldy #FSE_SIZE
+        lda (zpFSPtr),y
+        sta zpFSSize
+        iny
+        lda (zpFSPtr),y
+        sta zpFSSize+1
+        jsr draw_dec16
+        rts
+
+; files_nav_redraw - after a nav key changed files_sel, repaint only the two
+; affected rows: the old row (files_osel, now unselected -> highlight erased)
+; and the new row (files_sel, now selected). Byte-identical to a full
+; files_draw at the new state - the title, separator and help line don't change
+; on a plain cursor move.
+files_nav_redraw:
+        ldx files_osel
+        jsr files_row_draw
+        ldx files_sel
+        jsr files_row_draw
+        rts
 
 ; ============================================================================
 ; Notepad (editor)
@@ -757,6 +776,7 @@ msg_saved:         dc.b "  SAVED",0
 ; ============================================================================
 ui_mode:       dc.b 0       ; 0 = Files list, 1 = Notepad editor
 files_sel:     dc.b 0
+files_osel:    dc.b 0       ; prior selection (for the incremental nav redraw)
 files_confirm: dc.b 0
 note_idx:      dc.b 0
 note_name:     dc.b 0,0,0,0,0,0,0,0,0,0,0,0
