@@ -51,6 +51,9 @@ window, instead of `repaint_all`. (Mouse moves within a cell already no-op at
 `@nochange`, so only actual cell steps pay this — but each one pays in full.)
 
 ### P3 — Whole-board / whole-road game redraws each tick
+
+> **✅ FIXED — Dostris (`57597ec`)** — `dt_step` now reports move-vs-lock; a pure gravity descent calls `dt_redraw_piece` (erase the 4 old piece cells to the black slab, draw the 4 new cells), mirroring Pac-Man's `pm_redraw_actors`, instead of `redraw_topmost`. A lock still full-repaints. Byte-identical (`build.sh dostris`, retro-shot snes9x, frames 400–6000). **Prereq:** `65cf383` first fixed a dead gravity throttle (`dt_interval` clobbered the elapsed scratch in S0) that had frozen Dostris entirely — surfaced by the P3 verify rig. **OutLast still open** (`ol_fillrow` rebuilds every row each `outlast_tick`; same delta-tracking fix applies).
+
 `dostris_draw` (`games.inc:604`) repaints the entire 10×20 board cell-by-cell
 (`@brow`/`@bcol` 623-656, a `gfill`→`fill_cells` per occupied cell) plus the
 piece, every gravity step (`dostris_tick:1037` → `redraw_topmost`). `outlast_draw`
