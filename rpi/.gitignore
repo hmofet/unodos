@@ -1,2 +1,4 @@
 build/*
 !build/kernel8.img
+# closed VideoCore blobs fetched by make-card.sh (not redistributable)
+firmware/
