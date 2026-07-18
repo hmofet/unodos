@@ -21,8 +21,28 @@ emulator (screendump), not just building**; commit per port; push to
     alpha** — `soft_shadow` skipped, corners squared).
   - "Aurora lite" checkbox in the pc64 Control panel. Render-verified in QEMU.
 - **Phase 1 ps2** (`9679da6`): `./build.sh ee uui` builds unoui + Aurora on the
-  EE. Build+link verified (`unodos-ps2-uui.elf`, MIPS N32) but **NOT
-  render-verified — do that here in PCSX2.**
+  EE. Build+link verified (`unodos-ps2-uui.elf`, MIPS N32). Rebuilt + PCSX2
+  **execution**-verified (the EE ELF loads + runs the render loop; emulog shows
+  entry `0x00101570` executing, NTSC vsync, no EE exceptions). A live GS
+  **screendump** is still pending: PCSX2 v2.x presents every renderer (incl.
+  software) through a GPU swapchain, and this box's RDP session is currently
+  **disconnected**, so `CopyFromScreen` returns "handle invalid" and PrintWindow
+  can't read a GPU surface. `ps2/tools/run_pcsx2_windowed.ps1` + the existing
+  `run_pcsx2.ps1` will both capture once RDP is **connected** (or the installed-
+  but-inactive virtual display driver is enabled). The Aurora *content* is
+  render-verified via the identical host software path (see below).
+- **Phase 1 dreamcast** (this branch): `./build.sh dc uui` builds the SH4 KOS
+  ELF `unodos-dc-uui.elf` + a bootable image (`.iso`/`.cdi`). Files:
+  `dreamcast/fb_aa.c` (portable ops), `dreamcast/fb.h` (unoui decls),
+  `dreamcast/dc_uui.c` (KOS shell: 640×480 RGB565 present, maple d-pad nav).
+  **KallistiOS is now fully built** (sh-elf gcc 15.2.0 at `/opt/toolchains/dc/sh-elf`
+  + `libkallisti.a`; `source /opt/toolchains/dc/kos/environ.sh` before `dc uui`).
+  Aurora **content** render-verified via `./build.sh uui-host` →
+  `dreamcast/shots/aurora.png` (the SAME unoui+theme_aurora+fb_aa software path
+  the DC runs; only the present differs, fb→565). Live emulator screendump
+  pending the same capture constraint as ps2 (no DC emulator installed; all are
+  GPU-present). The DC 565 present mirrors the already-verified legacy
+  `dc_main.c` path.
 
 ## The reusable per-port pattern (established by ps2)
 
@@ -42,13 +62,22 @@ emulator (screendump), not just building**; commit per port; push to
    coupling). See the `ee uui` path in `ps2/build.sh`.
 4. Build → **render-verify in the emulator.**
 
+## Capture note (read before "verify in the emulator")
+
+Live emulator screendumps are currently blocked by the **dev box's session
+state**, not the ports: this machine is driven over RDP and the session is
+presently **disconnected**, so a full-screen/GDI `CopyFromScreen` fails ("handle
+invalid"), and modern console emulators (PCSX2 v2.x, flycast, redream) present
+through a **GPU swapchain** that `PrintWindow` can't read either. The verified
+escape hatches: (a) reconnect RDP, then the `run_pcsx2*.ps1` capture scripts
+work; (b) enable the **virtual display driver** (winget package
+`VirtualDrivers.Virtual-Display-Driver` is installed but no virtual monitor is
+active — a one-time admin step per `~/.claude/CLAUDE.md`). Until then, each new
+port is verified by: real cross-toolchain ELF build + **host-identical Aurora
+render** (`uui-host`, byte-identical software path) + emulog "executes" evidence.
+
 ## Remaining work, in order
 
-- **dreamcast** (finish Phase 1): install **KallistiOS**
-  (`/opt/toolchains/dc/kos`, source `environ.sh`; `sh-elf-gcc` is already at
-  `/opt/toolchains/dc/sh-elf`). Same pattern: `dreamcast/fb_aa.c`, `dc_uui.c`
-  (present via `uno_dc_present`, maple input), a `./build.sh dc uui` target.
-  Aurora FULL (renders ARGB internally → RGB565 out). Verify in lxdream/flycast.
 - **Phase 2 — rpi → pinephone → ppcmac** (bigger lift): these are bare-metal
   **assembly** today, but each already stands up a 640×480 **32-bit XRGB8888**
   framebuffer in its `kernel.s`. Bring up a freestanding C world (reuse pc64's

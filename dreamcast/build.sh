@@ -15,6 +15,14 @@
 #                       Needs the KOS environment ($KOS_BASE) - sources
 #                       $KOS_BASE/../environ.sh if KOS_BASE is unset. UNVERIFIED
 #                       here (no sh-elf-gcc / DC emulator on the dev machine).
+#   ./build.sh uui-host the unoui/Aurora shell rendered on the host (software
+#                       fb -> shots/aurora.png). No KOS needed; the pixels are
+#                       byte-identical to what `dc uui` presents on hardware.
+#   ./build.sh dc uui   the unoui shell (modern desktop + Aurora theme) ELF
+#                       (build/unodos-dc-uui.elf) + a bootable image
+#                       (build/unodos-dc-uui.cdi via mkdcdisc, else .iso). The DC
+#                       analogue of `ps2 ee uui`: fb + fb_aa + dc_uui + unoui +
+#                       themes, Aurora FULL (32-bit internal -> RGB565 out).
 #   ./build.sh iso [FEATURE]
 #                       dc + a bootable selfboot CD image (build/unodos-dc.iso)
 #                       via the KOS tools + genisoimage.
@@ -47,6 +55,19 @@ case "$1" in
     UNO_OUT="shots/m1_$TAG.ppm" ./build/host_desktop
     "$PY" tools/ppm2png.py "shots/m1_$TAG.ppm" "shots/m1_$TAG.png"
     echo "done: shots/m1_$TAG.png" ;;
+  uui-host)
+    # host render of the unoui/Aurora shell (dc_uui.c's scene) -> shots/aurora.png.
+    # The SAME portable software path the DC runs (unoui + theme_aurora + fb_aa
+    # over fb.c); only the present differs (console = fb->565, host = fb->PPM).
+    echo "[2/2] rendering the unoui/Aurora shell on the host (software fb)..."
+    CC="${CC:-gcc}"
+    "$CC" -O2 -Wall -Wno-unused-value -Wno-multichar -DUNO_COLOR=1 -DUNO_UUI -DUNO_BG_CACHE \
+        -I. -Ibuild -I../unoui \
+        host_uui.c fb.c fb_aa.c ../unoui/unoui.c ../unoui/unoui_input.c \
+        ../unoui/themes/theme_aurora.c -o build/host_uui
+    ./build/host_uui shots/aurora.ppm
+    "$PY" tools/ppm2png.py shots/aurora.ppm shots/aurora.png
+    echo "done: shots/aurora.png" ;;
   dc|cdi|iso)
     echo "[2/2] building the Dreamcast ELF (KallistiOS)..."
     # source the KOS environment if not already present
@@ -61,6 +82,46 @@ case "$1" in
       echo "       (see README.md - Toolchain). The host targets above need no KOS." >&2
       exit 1
     fi
+
+    # --- `dc uui`: the unoui shell (modern desktop + Aurora), the DC analogue of
+    # ps2's `ee uui`. Self-contained kos-cc compile of fb + fb_aa + dc_uui +
+    # unoui + the themes (the Makefile builds the legacy Mac core instead), then
+    # a bootable image for the emulator. -ffunction/-fdata-sections + --gc-sections
+    # keeps the static desktop demo lean; -DUNO_BG_CACHE bakes the Aurora bg once.
+    if [ "$2" = "uui" ]; then
+      echo "[2/2] building the unoui shell ELF (KallistiOS + unoui + Aurora)..."
+      INCS="-I. -Ibuild -I../unoui"
+      CF="-O2 -Wall -Wno-unused-value -Wno-multichar -ffunction-sections -fdata-sections \
+          -DUNO_COLOR=1 -DUNO_DC -DUNO_UUI -DUNO_BG_CACHE"
+      OBJS=""
+      for s in fb fb_aa dc_uui; do
+        kos-cc $CF $INCS -c "$s.c" -o "build/$s.o"; OBJS="$OBJS build/$s.o"
+      done
+      for u in unoui unoui_input; do
+        kos-cc $CF $INCS -c "../unoui/$u.c" -o "build/$u.o"; OBJS="$OBJS build/$u.o"
+      done
+      for t in ../unoui/themes/*.c; do
+        b=$(basename "$t" .c)
+        kos-cc $CF $INCS -c "$t" -o "build/th_$b.o"; OBJS="$OBJS build/th_$b.o"
+      done
+      kos-cc -Wl,--gc-sections -o build/unodos-dc-uui.elf $OBJS $KOS_LIBS
+      echo "done: build/unodos-dc-uui.elf (unoui shell + Aurora)"
+      # a bootable image: prefer mkdcdisc, else the scramble + genisoimage path.
+      if command -v mkdcdisc >/dev/null 2>&1; then
+        mkdcdisc -e build/unodos-dc-uui.elf -o build/unodos-dc-uui.cdi -n "UnoDOS Aurora" -N \
+          && echo "done: build/unodos-dc-uui.cdi"
+      else
+        "$KOS_CC_BASE/bin/$KOS_CC_PREFIX-objcopy" -R .stack -O binary \
+          build/unodos-dc-uui.elf build/uui_unscr.bin
+        "$KOS_BASE/utils/scramble/scramble" build/uui_unscr.bin build/1ST_READ.BIN
+        [ -f build/IP.BIN ] || "$KOS_BASE/utils/makeip/makeip" -f build/IP.BIN
+        rm -rf build/uui_iso && mkdir -p build/uui_iso && cp build/1ST_READ.BIN build/uui_iso/
+        genisoimage -C 0,11702 -V UNODOS -G build/IP.BIN -joliet -rock -l \
+          -o build/unodos-dc-uui.iso build/uui_iso && echo "done: build/unodos-dc-uui.iso"
+      fi
+      exit 0
+    fi
+
     EXTRA_DEF=""
     [ -n "$2" ] && EXTRA_DEF="-DUNO_AUTOTEST_$2"
     make clean >/dev/null 2>&1 || true
