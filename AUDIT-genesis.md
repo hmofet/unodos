@@ -78,6 +78,9 @@ of cell rows between the old and new `WY`, plus the moved window" — removes th
 per-step full-screen churn and the redraw of unrelated game/Paint bodies.
 
 **P2 — Don't repaint every window's *content* on a chrome-only rebuild.**
+
+> **✅ FIXED (`f845166`)** — `draw_window` early-outs when the window rect doesn't intersect the `v_clip` window, so during a drag the unmoved windows' full chrome+content passes (already clipped to zero VDP writes by P1) are skipped entirely. Byte-identical on `build.sh drag`/`test` (retro-shot). Note: the live-game dostris autotest is cycle-timing-sensitive (state at frame N depends on per-frame render cost), so any `draw_window` edit — even NOPs — shifts it; the shipped P1 `facd5f8` does the same. Verify draw-path changes on the settled drag/test scenes, not dostris.
+
 `repaint_all`/`draw_window` unconditionally call `app_draw_content`
 (`kernel.asm:1648`). For a full-screen game or Paint window this is the dominant
 cost and is pure waste when the window merely got re-blitted at the same size for a
