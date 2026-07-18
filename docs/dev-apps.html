@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writing apps · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="active" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Writing apps</h1>
+<p class="lede">pc64 apps are linked statically into the single boot image. There are three styles; the
+native widget app is the normal path.</p>
+
+<ul>
+  <li><strong>Native widget app</strong>: build a window out of toolkit widgets and let the shell run the event loop.</li>
+  <li><strong>Canvas app</strong>: the toolkit owns the window chrome, focus, dragging and z-order; your app owns
+      the pixels inside a canvas rectangle and receives raw input. Games, Paint, Tracker, the browser and
+      Runner3D are canvas apps.</li>
+  <li><strong>Legacy bridge app</strong>: an existing <code>AppInterface</code> app hosted inside a canvas through
+      the compatibility bridge.</li>
+</ul>
+
+<h2 id="native">A native widget app</h2>
+<p>An app is simply a <em>builder function</em> that populates a window. It uses only <code>unoui.h</code> calls,
+and every widget is reachable by pointer or keyboard for free.</p>
+<pre><code>#include &quot;unoui.h&quot;
+
+enum { ID_HELLO_BTN = 100 };
+
+/* An app is just a builder that populates a window.
+   The shell owns the event loop and calls this once. */
+void build_hello(unoui_window *w)
+{
+    /* title, x, y, width, height (screen coords, includes the title bar) */
+    unoui_window_init(w, &quot;Hello&quot;, 160, 60, 200, 110);
+
+    /* a static label at content-relative (12, 10) */
+    unoui_add_label(w, 12, 10, &quot;Hello, UnoDOS pc64!&quot;);
+
+    /* a default push button; its id is echoed back on click */
+    unoui_widget *b = unoui_add_button(w, 12, 40, 80, &quot;OK&quot;, UI_F_DEFAULT);
+    b-&gt;id = ID_HELLO_BTN;
+}</code></pre>
+<p>The shell turns each input event into an <code>unoui_action</code> and dispatches by the widget <code>id</code>
+you assigned:</p>
+<pre><code>unoui_ui_init(&amp;ui, &amp;theme_unodos, FB_W, FB_H);
+unoui_ui_add(&amp;ui, &amp;window);
+for (;;) {
+    unoui_event  ev = port_next_event();       /* platform input adapter   */
+    unoui_action a  = unoui_handle(&amp;ui, &amp;ev);  /* portable widget behavior */
+    if (a.changed &amp;&amp; a.id == ID_HELLO_BTN) { /* the OK button was pressed */ }
+    if (a.changed &amp;&amp; a.kind == UI_ACT_CLOSE) { /* close box; value = z-index */ }
+    unoui_render_ui(&amp;ui);
+    port_present(fb);                          /* platform present adapter */
+}</code></pre>
+<p>Widget positions are relative to the window <em>content</em> origin (inside the frame and title bar); the
+toolkit computes that origin from the active theme, so hit-testing always matches what is drawn.</p>
+
+<h2 id="register">Registering and building an app in</h2>
+<p>There is no runtime module loading on bare metal: every app is compiled into <code>BOOTX64.EFI</code>. The shell
+keeps a table of builder functions and opens an app on demand:</p>
+<pre><code>static void open_app(int a) {
+    if (!g_built[a]) {
+        if (a &lt; NNATIVE) g_build[a](&amp;g_win[a]);   /* native builder     */
+        else             build_legacy(a);         /* bridged legacy app */
+        g_built[a] = 1;
+    }
+    if (!g_open[a]) {
+        unoui_ui_add(&amp;UI, &amp;g_win[a]);             /* add window to the UI */
+        g_open[a] = 1;
+    }
+}</code></pre>
+<p>Native builders live in a function-pointer table (<code>g_build[]</code> in <code>pc64_uui.c</code>); a desktop
+icon or Start-menu row calls <code>open_app(index)</code>. Bridged legacy apps are compiled once each with a
+distinct entry symbol via <code>-DUNO_APP_SYM=uno_app_main_&lt;name&gt;</code> so they can all coexist in one binary.</p>
+
+<h2 id="canvas">A canvas app</h2>
+<p>Give the toolkit a <code>unoui_canvas</code> (a draw callback plus an event callback) and it manages the window
+around your pixels:</p>
+<pre><code>#include &quot;unoui.h&quot;
+
+/* the app owns every pixel inside its canvas rectangle */
+static void hello_draw(struct unoui_widget *w, unoui_rect r, void *ctx) {
+    fb_fill_rect(r.x, r.y, r.w, r.h, FB_RGB(20, 30, 60));
+    fb_text(r.x + 8, r.y + 8, &quot;these pixels are mine&quot;, UNO_WHITE, -1);
+}
+/* return 1 if the event was consumed */
+static int hello_event(struct unoui_widget *w, const void *ev, void *ctx) {
+    const unoui_event *e = ev;
+    if (e-&gt;kind == UI_EV_KEY &amp;&amp; e-&gt;key == UI_KEY_ESC) return 1;
+    return 0;
+}
+static unoui_canvas g_hello = { hello_draw, hello_event, 0 };
+
+void build_hello_canvas(unoui_window *w) {
+    unoui_window_init(w, &quot;Canvas&quot;, 120, 40, 280, 180);
+    unoui_add_canvas(w, 6, 20, 256, 120, &amp;g_hello);
+}</code></pre>
+<p>For a game or a 3D view, call <code>unoui_fullscreen(&amp;ui, win)</code> to make the canvas fill the screen with
+all input routed to it (<kbd>Esc</kbd> returns), and <code>unoui_fullscreen(&amp;ui, NULL)</code> to restore the
+desktop. Mark widgets that should stretch on resize with <code>unoui_widget_fill</code> and set the
+<code>UI_WIN_RESIZE</code> window flag so canvas apps reflow.</p>
+
+<h2 id="bridge">The legacy bridge</h2>
+<p>The older family apps implement a small shared ABI in <code>pc64/uno_app.h</code>. Each exports one entry that
+returns a vtable of callbacks; the kernel dispatches purely through the pointers, with no per-app
+<code>switch</code>.</p>
+<pre><code>/* pc64/uno_app.h -- the legacy shared ABI (for bridged apps) */
+typedef struct AppInterface {
+    void    (*draw)(UnoWin *w);
+    Boolean (*key)(char ch, short code, Boolean cmd);
+    void    (*click)(UnoWin *w, Point p);
+    void    (*tick)(void);
+    void    (*opened)(void);
+    void    (*closed)(void);
+    const char *win_title;
+    short   win_rect[4];
+} AppInterface;
+
+/* every legacy app module exports exactly one entry: */
+const AppInterface *uno_app_main(const KernelApi *k);   /* UNO_APP_ENTRY_NAME */</code></pre>
+<p>On pc64 these apps are handed a <code>KernelApi</code> callback table (drawing primitives, a FAT reader, and the
+music engine) and hosted inside a canvas, so they run unchanged inside the modern desktop.</p>
+
+<nav class="pagenav"><a href="developer.html">&lsaquo; Overview &amp; architecture</a><a class="nxt" href="dev-api.html">API reference &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
