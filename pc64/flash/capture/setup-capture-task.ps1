@@ -23,10 +23,10 @@ $here   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script = Join-Path $here 'capture-flasher.ps1'
 if (-not (Test-Path $script)) { throw "capture-flasher.ps1 not found next to this script ($script)" }
 
+$userId    = [Security.Principal.WindowsIdentity]::GetCurrent().Name   # e.g. MACHINE\arin
 $action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
                -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $script)
-$principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) `
-               -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
 Register-ScheduledTask -TaskName 'UnoDOSFlasherCapture' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
