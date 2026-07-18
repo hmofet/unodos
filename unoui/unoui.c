@@ -917,9 +917,10 @@ void unoui_fullscreen(unoui_ui *ui, unoui_window *win) { ui->full = win; }
  * The desktop painter fills the whole screen every frame with a gradient plus
  * two large alpha-blended "aurora" blobs - static content that was being
  * recomputed on every repaint (and every drag frame). Cache it once and blit
- * it thereafter; invalidate on theme / resolution change. Guarded to pc64 so no
- * other port pays the buffer. */
-#ifdef UNO_PC64
+ * it thereafter; invalidate on theme / resolution change. Gated on UNO_BG_CACHE,
+ * an opt-in per-port capability (define it in the port's build when it can spare
+ * an fb-sized g_bg[]), so ports that can't afford the buffer don't pay for it. */
+#ifdef UNO_BG_CACHE
 static fb_px g_bg[FB_BUF_PIX];
 static int   g_bg_valid;
 void unoui_bg_invalidate(void) { g_bg_valid = 0; }
@@ -954,7 +955,7 @@ void unoui_render_ui(unoui_ui *ui)
         return;
     }
 
-#ifdef UNO_PC64
+#ifdef UNO_BG_CACHE
     draw_desktop_cached(t, d, ui);
 #else
     PICK(desktop)(t, ui->screen_w, ui->screen_h);
