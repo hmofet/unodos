@@ -35,7 +35,7 @@ if [ "$1" != "legacy" ]; then
     # UNO_I2C_TRACKPAD: the native trackpad driver is now self-configuring
     # (enumerates LPSS I2C + probes HID), bounded, and inert when no pad is
     # found (e.g. QEMU), so it ships enabled - it just needs pc64_pci.
-    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -I../unoui -I../unosound"
+    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -I../unoui -I../unosound"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"

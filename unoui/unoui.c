@@ -913,6 +913,29 @@ void unoui_render(unoui_window *win, const unoui_theme *t)
 
 void unoui_fullscreen(unoui_ui *ui, unoui_window *win) { ui->full = win; }
 
+/* ---- cached desktop background (pc64) ------------------------------------- *
+ * The desktop painter fills the whole screen every frame with a gradient plus
+ * two large alpha-blended "aurora" blobs - static content that was being
+ * recomputed on every repaint (and every drag frame). Cache it once and blit
+ * it thereafter; invalidate on theme / resolution change. Gated on UNO_BG_CACHE,
+ * an opt-in per-port capability (define it in the port's build when it can spare
+ * an fb-sized g_bg[]), so ports that can't afford the buffer don't pay for it. */
+#ifdef UNO_BG_CACHE
+static fb_px g_bg[FB_BUF_PIX];
+static int   g_bg_valid;
+void unoui_bg_invalidate(void) { g_bg_valid = 0; }
+static void draw_desktop_cached(const unoui_theme *t, const unoui_draw *d, unoui_ui *ui)
+{
+    size_t px = (size_t)FB_W * (size_t)FB_H;
+    if (g_bg_valid) { memcpy(fb, g_bg, px * sizeof(fb_px)); return; }
+    PICK(desktop)(t, ui->screen_w, ui->screen_h);
+    memcpy(g_bg, fb, px * sizeof(fb_px));
+    g_bg_valid = 1;
+}
+#else
+void unoui_bg_invalidate(void) { }
+#endif
+
 void unoui_render_ui(unoui_ui *ui)
 {
     const unoui_theme *t = ui->theme;
@@ -932,7 +955,11 @@ void unoui_render_ui(unoui_ui *ui)
         return;
     }
 
+#ifdef UNO_BG_CACHE
+    draw_desktop_cached(t, d, ui);
+#else
     PICK(desktop)(t, ui->screen_w, ui->screen_h);
+#endif
     for (wn = 0; wn < ui->nwin; wn++) {
         unoui_window *win = ui->win[wn];
         int fw = t->m.frame_w, th = t->m.title_h;
@@ -982,6 +1009,15 @@ void unoui_render_ui(unoui_ui *ui)
         PICK(popup)(t, ui->popup_r, ui->popup_items, ui->popup_n, ui->popup_hot);
 
     /* rubber-band drag outline (the window itself hasn't moved yet) */
+    unoui_draw_drag_outline(ui);
+}
+
+/* Draw just the rubber-band outline. Split out so a platform can render the
+ * scene once, snapshot it, and per drag frame restore + redraw only this
+ * outline instead of repainting the whole scene. No-op when not dragging. */
+void unoui_draw_drag_outline(unoui_ui *ui)
+{
+    const unoui_theme *t = ui->theme;
     if (ui->drag_active) {
         int x = ui->drag_x, y = ui->drag_y, w = ui->drag_w, h = ui->drag_h;
         fb_frame_rect(x,     y,     w,     h,     t->pal.dark);

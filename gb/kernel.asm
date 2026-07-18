@@ -107,6 +107,7 @@ pf_clk:    ds 1
 pf_pal:    ds 1
 pf_pc:     ds 1
 pf_score:  ds 1
+pf_bd:     ds 1                                 ; dostris board dirty (lock): board-only repaint
 col:       ds 1
 row:       ds 1
 ; Dostris game state
@@ -214,7 +215,13 @@ main:
     call update
     ld a, [v_dirty]
     and a
+    jr nz, .full
+    ld a, [pf_bd]                           ; dostris board-only change (a lock)?
+    and a
     jr z, main
+    call board_redraw                       ; LCD-off board repaint, no clear_map
+    jr main
+.full:
     call full_redraw                        ; LCD-off whole-screen redraw
     jr main
 
@@ -682,6 +689,7 @@ full_redraw:
     ld [v_dirty], a
     ld [pf_hl], a
     ld [pf_pc], a
+    ld [pf_bd], a
     call lcd_off
     call clear_map
     ld a, [v_inapp]
@@ -692,6 +700,21 @@ full_redraw:
 .app:
     call draw_app
 .on:
+    call lcd_on
+    ret
+
+; board_redraw: a Dostris lock only changed the board region. Repaint the board
+; (walls+floor+board+piece+score from g_board) with the LCD off - but SKIP the
+; 1024-entry clear_map and the chrome/desktop redraw that full_redraw does, since
+; only the board changed. dostris_draw is too large to fit one vblank, so the LCD
+; is briefly disabled (shorter blank than a full_redraw); avoids clear_map's
+; 1024 writes + the app-content chrome pass every landing.
+board_redraw:
+    xor a
+    ld [pf_bd], a
+    ld [pf_pc], a
+    call lcd_off
+    call dostris_draw
     call lcd_on
     ret
 

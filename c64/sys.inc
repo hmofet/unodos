@@ -59,6 +59,9 @@ zpFSPtr  equ $44   ; (2) directory entry / 12-byte name pointer
 zpFSName equ $46   ; (2) name to find/save
 zpFSSize equ $48   ; (2) byte size / draw_dec16 value
 zpFSDat  equ $4A   ; (2) caller data pointer (read dest / save source)
+zpFSMax  equ $56   ; (2) fs_read: caller's dest-buffer byte cap. Aliases the
+                   ; kernel's fs_save-only zpFSNewSz ($56) - unused during a
+                   ; read, and in the kernel-reserved gap apps never scratch.
 
 ; ---- zero page free for disk-loaded apps ($67-$8F; the kernel API routines
 ;      never touch these, only the param/scratch slots above) ----

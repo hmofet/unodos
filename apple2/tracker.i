@@ -446,6 +446,8 @@ tk_load:
         sta zpFSDat
         lda #>TKPAT
         sta zpFSDat+1
+        lda #1                  ; TKPAT = 256 B = 1 sector (fs_read cap)
+        sta zpFSTmp
         pla
         jsr fs_read
         jsr beep_click

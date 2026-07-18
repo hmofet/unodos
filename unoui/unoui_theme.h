@@ -170,4 +170,11 @@ extern const unoui_theme theme_next;      /* NeXTSTEP chiselled greyscale      *
 extern const unoui_theme theme_aurora_light; /* modern flat/rounded, light      */
 extern const unoui_theme theme_aurora_dark;  /* modern flat/rounded, dark       */
 
+/* Aurora compositing level. 0 = FULL (per-frame soft drop shadows + AA rounded
+ * corners); 1 = LITE/STATIC (opaque squared chrome, no per-frame alpha) for
+ * hardware that can't composite live. The desktop gradient/blobs are unaffected
+ * (they are baked into the cached background either way). Set it, then request a
+ * repaint. */
+extern int unoui_aurora_lite;
+
 #endif /* UNOUI_THEME_H */

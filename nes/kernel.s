@@ -282,14 +282,17 @@ nav_dir:
         and #PAD_R
         beq nd_l
         jsr sel_right
-nd_l:   lda v_pade
+        rts                     ; B2: one direction per frame - a diagonal must
+nd_l:   lda v_pade              ; not run a second sel_* and overwrite v_selp
         and #PAD_L
         beq nd_d
         jsr sel_left
+        rts
 nd_d:   lda v_pade
         and #PAD_D
         beq nd_u
         jsr sel_down
+        rts
 nd_u:   lda v_pade
         and #PAD_U
         beq nd_done

@@ -30,12 +30,23 @@ static void aa_border(int x,int y,int w,int h,int rad,int t,fb_px border,fb_px i
     aa_fill_a(x+t, y+t, w-2*t, h-2*t, rad-t>0?rad-t:0, inner, 255, C_ALL);
 }
 
-/* soft drop shadow: several expanding low-alpha rounded layers, offset down. */
+/* Aurora compositing level (see unoui_theme.h). 0 = full alpha, 1 = lite/static. */
+int unoui_aurora_lite = 0;
+
+/* soft drop shadow: several expanding low-alpha rounded layers, offset down.
+ * In LITE mode there is no per-frame alpha: the window simply sits flat (a 1px
+ * frame gives it definition), so the shadow is skipped entirely. */
 static void soft_shadow(int x,int y,int w,int h,int rad)
 {
-    int i; for (i = 6; i >= 1; i--)
+    int i;
+    if (unoui_aurora_lite) return;
+    for (i = 6; i >= 1; i--)
         aa_fill_a(x-i, y-i+4, w+2*i, h+2*i, rad+i, FB_RGB(0,0,0), 8, C_ALL);
 }
+
+/* window/title corner radius: 0 in LITE (squared corners avoid the anti-aliased
+ * per-pixel alpha on the curves), the theme radius in FULL. */
+static int a_rad(const unoui_theme *t) { return unoui_aurora_lite ? 0 : t->m.radius; }
 
 /* ---------------------------------------------------------------- painters */
 static void a_desktop(const unoui_theme *t, int W, int H)
@@ -50,7 +61,7 @@ static void a_desktop(const unoui_theme *t, int W, int H)
 static void a_window(const unoui_theme *t, unoui_window *win)
 {
     unoui_rect r = win->r;
-    int fw = t->m.frame_w, rad = t->m.radius;
+    int fw = t->m.frame_w, rad = a_rad(t);
     soft_shadow(r.x, r.y, r.w, r.h, rad);
     aa_border(r.x, r.y, r.w, r.h, rad, fw > 0 ? fw : 1, t->pal.win_frame, t->pal.win_bg);
     unoui_content_origin(t, win, &win->content_x, &win->content_y);
@@ -59,7 +70,7 @@ static void a_window(const unoui_theme *t, unoui_window *win)
 static void a_titlebar(const unoui_theme *t, const unoui_window *win)
 {
     unoui_rect r = win->r;
-    int fw = t->m.frame_w, th = t->m.title_h, rad = t->m.radius;
+    int fw = t->m.frame_w, th = t->m.title_h, rad = a_rad(t);
     int cs = t->m.closebox, cbx = r.x + fw + 6, cby = r.y + fw + (th - fw - cs)/2;
     fb_px bg = win->active ? t->pal.title_bg : t->pal.title_bg_in;
     fb_px fg = win->active ? t->pal.title_fg : t->pal.title_fg_in;

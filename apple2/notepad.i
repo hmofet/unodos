@@ -30,6 +30,8 @@ nl_name:
         sta zpFSDat
         lda #>NOTEBUF
         sta zpFSDat+1
+        lda #8                  ; NOTEBUF = 2048 B = 8 sectors (fs_read cap)
+        sta zpFSTmp
         lda note_idx
         jsr fs_read             ; zpFSSize = byte size (LE) on exit
         lda zpFSSize

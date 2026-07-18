@@ -108,6 +108,7 @@ g_by        EQU $C032
 g_n         EQU $C033
 numstr      EQU $C034               ; 4
 clk_str     EQU $C038               ; 9
+pf_bd       EQU $C041               ; dostris board dirty (lock): board-only repaint
 g_board     EQU $C044               ; BW*BH = 120
 
 ; ============================================================================
@@ -670,11 +671,20 @@ rp_theme:
     ld (pf_pal), a
     ret
 rp_dostris:
+    ld a, (pf_bd)
+    or a
+    jr nz, .board
     ld a, (pf_pc)
     or a
     ret z
     call draw_piece_partial
     xor a
+    ld (pf_pc), a
+    ret
+.board:
+    call dostris_draw
+    xor a
+    ld (pf_bd), a
     ld (pf_pc), a
     ret
 
@@ -686,6 +696,7 @@ full_redraw:
     ld (v_dirty), a
     ld (pf_hl), a
     ld (pf_pc), a
+    ld (pf_bd), a
     ld a, $A0                       ; display OFF (keep frame interrupt)
     call set_r1
     call clear_names

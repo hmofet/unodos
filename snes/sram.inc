@@ -110,6 +110,10 @@ SRH_OFF     = 144                  ; heap offset
 .i16
         ldx #4
         jsr sr_w
+        cmp #SRD_MAX+1          ; S1: clamp a crafted count to the 8-entry
+        bcc :+                  ; directory so files_draw/find/delete loops
+        lda #SRD_MAX            ; can't walk past the tilemap into bank 0
+:
         rts
 .endproc
 

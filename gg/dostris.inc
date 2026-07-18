@@ -218,8 +218,14 @@ dostris_update:
     call dostris_lock
     call dostris_clearlines
     call dostris_spawn
+    ; Only the board region changed (locked cells / collapsed rows / new piece).
+    ; Repaint just the board via dostris_draw instead of the display-off
+    ; full_redraw, which blanked the whole screen every landing (the "black
+    ; settle"). dostris_draw redraws walls+floor+board+piece+score from g_board,
+    ; so it reconstructs any lock outcome (plain lock, line collapse, game over)
+    ; without clearing the static chrome/desktop.
     ld a, 1
-    ld (v_dirty), a
+    ld (pf_bd), a
     xor a
     ld (pf_pc), a
     ret

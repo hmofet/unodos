@@ -64,7 +64,16 @@ fs_init:
         lda #>CATBUF
         sta zpBuf+1
         lda #0
-        jmp rwts_read
+        jsr rwts_read
+        ; S2: a crafted catalog file-count would drive fs_find / files_draw /
+        ; fs_delete loops past the 15-entry directory -> clamp it at load.
+        lda CATBUF+FSC_COUNT
+        cmp #FS_MAXFILES+1
+        bcc fsi_ok
+        lda #FS_MAXFILES
+        sta CATBUF+FSC_COUNT
+fsi_ok:
+        rts
 
 ; ---------------------------------------------------------------- fs_flush
 ; fs_flush - write CATBUF back to rel sector 0 (after any mutation).
@@ -227,6 +236,15 @@ fs_read:
         sta zpFSRel
         jsr fs_size_to_sectors
         sta zpFSCnt
+        ; S1: clamp the sector count to the caller's buffer capacity (zpFSTmp,
+        ; set by every fs_read caller) so a crafted catalog size field can't
+        ; drive the read past the destination buffer into adjacent RAM.
+        cmp zpFSTmp
+        bcc frd_go              ; count < cap
+        beq frd_go              ; count == cap
+        lda zpFSTmp             ; count > cap -> clamp to cap
+        sta zpFSCnt
+frd_go:
         jmp fs_read_sectors
 
 ; ----------------------------------------------------------------- fs_delete

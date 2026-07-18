@@ -237,13 +237,18 @@ pstr_d:
 .ltorg
 
 @ frect: r0=x r1=y r2=w r3=h ; colour from d_fg
+@ Two BGR555 pixels pack into one 32-bit word, so the bulk of each row is filled
+@ with word stores (str) instead of one strh per pixel — halving the store count
+@ on the port's hottest primitive (clear_screen = a 240x160 frect on every
+@ full_redraw). Odd start x / odd width fall back to a single strh at each end.
 frect:
     push {r4-r8, lr}
     ldr r4, =palette
     ldr r5, =d_fg
     ldr r5, [r5]
     add r4, r4, r5, lsl #1
-    ldrh r4, [r4]             @ colour
+    ldrh r4, [r4]             @ colour (16-bit, zero-extended)
+    orr r4, r4, r4, lsl #16   @ pack the colour into both halves of a word
 fr_row:
     cmp r3, #0
     beq fr_done
@@ -251,12 +256,25 @@ fr_row:
     mov r6, r1, lsl #8
     sub r6, r6, r1, lsl #4
     add r6, r6, r0
-    add r5, r5, r6, lsl #1
-    mov r7, r2
-fr_col:
-    strh r4, [r5], #2
+    add r5, r5, r6, lsl #1    @ r5 = row base (halfword-aligned)
+    movs r7, r2              @ r7 = pixels left this row
+    beq fr_rownext
+    tst r5, #2               @ word-aligned start?
+    beq fr_words
+    strh r4, [r5], #2        @ leading unaligned pixel -> now word-aligned
     subs r7, r7, #1
-    bne fr_col
+    beq fr_rownext
+fr_words:
+    cmp r7, #2
+    blt fr_tail
+    str r4, [r5], #4        @ two pixels at once
+    sub r7, r7, #2
+    b fr_words
+fr_tail:
+    cmp r7, #0
+    beq fr_rownext
+    strh r4, [r5], #2       @ trailing odd pixel
+fr_rownext:
     add r1, r1, #1
     sub r3, r3, #1
     b fr_row

@@ -39,6 +39,10 @@ TM      = $212C
 RDNMI   = $4210
 HVBJOY  = $4212
 NMITIMEN = $4200
+WRDIVL  = $4204          ; 16-bit dividend (L/H); write WRDIVB starts the divide
+WRDIVB  = $4206          ; 8-bit divisor
+RDDIVL  = $4214          ; 16-bit quotient  (ready 16 cycles after WRDIVB)
+RDMPYL  = $4216          ; 16-bit remainder (shared with WRMPY result)
 JOY1L   = $4218
 MDMAEN  = $420B
 DMAP0   = $4300
@@ -78,7 +82,6 @@ S4  = $1A
 S5  = $1C
 S6  = $1E
 S7  = $20
-DVQ = $22          ; div16 private quotient (so callers keep S4/S5)
 LC0 = $24          ; outer-loop counters - NO draw routine touches these
 LC1 = $26
 
@@ -416,6 +419,9 @@ MainLoop:
         cpx #$0200
         bne @v
         stz v_pm_hi             ; Pac-Man hi-score persists 0 until first game
+        stz v_pm_state          ; B1: init Pac-Man state ($0CC8 is outside the
+                                ; VARS clear) so a non-zero power-on WRAM value
+                                ; can't take the @game path and draw/write OOB
         ldx #$0000
 @t:     sta TMAP,x
         inx
@@ -1662,20 +1668,40 @@ MainLoop:
 ; ============================================================================
 
 ; div16: dividend S0, divisor S1 -> A = quotient, S0 = remainder.
-; Uses only DVQ + A internally (callers keep all S* slots).
+; Uses the SNES CPU hardware divider (16-bit / 8-bit) instead of the old
+; repeated-subtraction loop, which was O(quotient): formatting an N-digit
+; number cost ~value/10 iterations on the first digit, so a 4-5 digit HUD value
+; approached a whole frame (AUDIT-snes.md P1). Every caller's divisor is a small
+; constant (3,7,10,12,60 <= 255), so the 8-bit divisor register suffices.
+; Only called from main-loop context; the NMI path does no division, so the
+; shared $4204-$4217 math registers can't be clobbered mid-divide.
 .proc div16
 .a16
 .i16
-        stz DVQ
-@loop:  lda S0
-        cmp S1
-        bcc @done
-        sec
-        sbc S1
+        lda S1
+        and #$00FF
+        beq @zero               ; divisor 0 -> quotient 0, remainder unchanged
+        lda S0
+        sta WRDIVL              ; dividend -> $4204/$4205 (16-bit store)
+        sep #$20
+.a8
+        lda S1
+        sta WRDIVB              ; divisor -> $4206: starts the divide
+        rep #$20
+.a16
+        nop                     ; wait out the 16-cycle divide latency
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        lda RDMPYL              ; remainder -> S0
         sta S0
-        inc DVQ
-        bra @loop
-@done:  lda DVQ
+        lda RDDIVL              ; quotient  -> A
+        rts
+@zero:  lda #0
         rts
 .endproc
 

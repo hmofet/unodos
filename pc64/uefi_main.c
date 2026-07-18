@@ -38,6 +38,7 @@
 #include "fb.h"
 #include "mac_compat.h"
 #include "i2c_hid.h"        /* native I2C-HID trackpad (inert unless -DUNO_I2C_TRACKPAD) */
+#include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 
 int uno_main(void);                 /* the portable core (-Dmain=uno_main) */
 void uno_screen_changed(void);      /* core hook: resolution changed (unodos.c) */
@@ -101,6 +102,16 @@ static unsigned char gDirtyRow[FB_MAX_H];   /* per-source-row dirty flags */
    entirely static frame-to-frame. */
 static fb_px gShadow[FB_BUF_PIX];
 static int   gShadowValid;
+
+/* scene snapshot for the rubber-band window drag: while a drag is live the
+   underlying desktop/windows don't change, so we render the scene once, snapshot
+   it here, and each frame restore it + redraw the moving outline instead of
+   re-running the (expensive, alpha-blend heavy) full-scene painter. */
+static fb_px gScene[FB_BUF_PIX];
+void uno_pc64_scene_save(void)
+{ memcpy(gScene, fb, (size_t)FB_W * (size_t)FB_H * sizeof(fb_px)); }
+void uno_pc64_scene_restore(void)
+{ memcpy(fb, gScene, (size_t)FB_W * (size_t)FB_H * sizeof(fb_px)); }
 
 /* ---- cursor state --------------------------------------------------------- */
 static int g_cx = 320, g_cy = 240;      /* re-clamped when geometry is set */
@@ -759,7 +770,7 @@ static const fb_px *cursor_row(int y, const fb_px *src)
 
 void uno_pc64_present(void)
 {
-    int x, oy, sy, fbw = FB_W, fbh = FB_H;
+    int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0;
     {
         static int first = 1;
         if (first) { stage_mark2(0, 0x000080FF); first = 0; }  /* gray -> blue */
@@ -774,8 +785,12 @@ void uno_pc64_present(void)
         if (!dirty)
             for (x = 0; x < fbw; x++) if (src[x] != sh[x]) { dirty = 1; break; }
         gDirtyRow[sy] = (unsigned char)dirty;
-        if (dirty) for (x = 0; x < fbw; x++) sh[x] = src[x];
+        if (dirty) { any_dirty = 1; for (x = 0; x < fbw; x++) sh[x] = src[x]; }
     }
+
+    /* nothing changed since the last present: skip the VRAM write pass entirely
+       (common - a drag only touches a few rows, an idle frame touches none). */
+    if (!any_dirty) { gShadowValid = 1; gBS->Stall(1000); return; }
 
     /* pass 2: for each output row whose source row changed, build the scaled
        output row (nearest-neighbour via gColMap) and write the filled span */
@@ -803,7 +818,9 @@ void uno_pc64_present(void)
         }
     }
     gShadowValid = 1;
-    gBS->Stall(8000);
+    /* light pacing only - the main loop already sleeps 16 ms on idle frames, so
+       an 8 ms tail here just added latency to every interactive (drag) frame. */
+    gBS->Stall(1000);
 }
 
 /* ===========================================================================

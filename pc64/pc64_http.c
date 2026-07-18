@@ -98,13 +98,14 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
     }
 
     /* request */
-    { char req[720]; int rn = 0;
+    { char req[1024]; int rn = 0;
       const char *a = "GET ", *b = " HTTP/1.0\r\nHost: ", *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n\r\n";
-      memcpy(req+rn,a,4); rn+=4;
-      { int l=(int)strlen(path); if(rn+l<(int)sizeof(req)){memcpy(req+rn,path,l);rn+=l;} }
-      { int l=(int)strlen(b); memcpy(req+rn,b,l); rn+=l; }
-      { int l=(int)strlen(host); if(rn+l<(int)sizeof(req)){memcpy(req+rn,host,l);rn+=l;} }
-      { int l=(int)strlen(c); memcpy(req+rn,c,l); rn+=l; }
+      /* every append is bounds-checked against sizeof(req): host/path come from
+         the address bar AND from links in untrusted pages, so a crafted long URL
+         must not overflow this stack buffer. */
+      #define REQ_PUT(s) do { int l=(int)strlen(s); if (rn+l >= (int)sizeof(req)) { if (statusmax) strncpy(status,"URL too long",statusmax-1); if (secure) tls_close(); else net_tcp_close(); return -8; } memcpy(req+rn,(s),l); rn+=l; } while (0)
+      REQ_PUT(a); REQ_PUT(path); REQ_PUT(b); REQ_PUT(host); REQ_PUT(c);
+      #undef REQ_PUT
       if (secure) { if (tls_write(req, rn) < 0) { set_tls_err(status, statusmax, "TLS write failed"); tls_close(); return -7; } }
       else        net_tcp_send(req, rn);
     }
