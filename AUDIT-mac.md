@@ -55,6 +55,8 @@ waste and a flicker source. Every other tick handler is `TickCount`-gated
 `app_secondly` own it).
 
 ### P2 — The focused app's `tick()` runs twice per loop iteration
+
+> **✅ FIXED (`tick_all_apps`)** — `tick_all_apps` now skips the topmost window (post_ticks dispatches its tick via the app task); ticks are TickCount-gated so byte-identical. Builds on Retro68.
 `unodos.c:1500` (`tick_all_apps` — dispatches `tick()` for **all** windows) is
 immediately followed by `post_ticks()` (`unodos.c:1501`) → `task_yield()`
 (`1502`) → `task_body` (`unodos.c:889` `app_tick_dispatch`), which dispatches the

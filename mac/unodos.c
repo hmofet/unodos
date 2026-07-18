@@ -975,7 +975,11 @@ static void post_ticks(void)
 static void tick_all_apps(void)
 {
     short z;
-    for (z = 0; z < gZCount; z++)
+    /* skip the topmost window (z = gZCount-1): post_ticks() dispatches its tick
+       via the app task, so ticking it here too runs its tick() twice per frame
+       (AUDIT-mac §1 P2). Ticks are TickCount-gated so this is only waste; drop
+       it. Non-topmost windows still tick here. */
+    for (z = 0; z + 1 < gZCount; z++)
         app_tick_dispatch(zwin(z)->proc);
 }
 
