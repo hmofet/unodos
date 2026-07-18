@@ -101,10 +101,35 @@ Mechanics worth reusing:
 | c64 | §1 P1 — incremental **Theme** nav | `e0f8ce2` | byte-identical (`harness.py`) |
 | c64 | §1 P1 — incremental **Tracker** cursor (2-cell) | `1c923e5` | byte-identical (`harness.py`) |
 | genesis | §1 P2 — cull non-damaged windows from the clipped drag repaint | `f845166` | byte-identical (`build.sh drag`/`test`, genesis_plus_gx) |
+| genesis | §1 P3/P4 (raise path) — raise_window → `redraw_topmost`, not `repaint_all` | `24b0683` | byte-identical (`build.sh raise`, genesis_plus_gx) |
+| **amiga** | **deterministic headless renderer** `uae/render.py` (Unicorn 68000; unblocks all amiga byte-verify — WinUAE can't) | `7831ae7` | two runs of one build are byte-identical |
+| amiga | §1 P1 (raise+create) — raise_window/win_create → `redraw_top2`, not `repaint_all` | `41c05e6` | byte-identical (`render.py`, `build.sh test` + `test RAISE`) |
+
+**The amiga render path is the reusable unlock here.** `uae/render.py` is a
+frame-deterministic Unicorn-68000 harness (hunk-loads `build/UnoDOS68K_test`,
+fakes just enough hardware — Supervisor `jmp (a5)` stub, free-running beam for the
+splash's `splash_wait_frames`, TBE-ready serial, `ticks` auto-advanced on read so
+`fdd_delay` returns; the cursor it also drives is a sprite, not in the bitplanes —
+halts at a new `UNODOS68K: ATDONE` serial marker before `main_loop`, reads the 5
+bitplanes at `$60000` + copper palette at `$76000` → PNG). Any amiga draw refactor
+is now verified by rendering pre/post `AUTOTEST` builds and `cmp`-ing, same
+discipline as the retro-shot ports. **This retires the "amiga is unverifiable"
+blocker from the prior session.**
+
+The **redraw-top-N pattern** (amiga `redraw_top2`, genesis raise `redraw_topmost`):
+a raise/create makes a window topmost, so — when a port has no active-title
+restyle, or restyles only the previously-topmost — the sole visible deltas are
+that window on top (+ the old topmost going inactive). Redraw just those 1–2
+windows instead of the full clear+desktop+all-windows `repaint_all`; nothing is
+newly exposed, so it's byte-identical. **close still needs the full repaint** (it
+must reveal occluded content — that one wants a clipped damage-rect; on amiga the
+windows sit at arbitrary pixel-x so it means pixel-column clipping of
+`fill_rect`/`draw_char`/`draw_icon16`).
 
 **New autotest scaffolding added** (needed for the above): snes `build.sh dostris`
-(`AUTOTEST_DOSTRIS`); c64 nav scripts drive `harness.py` directly with `wait`s
-between keys (see below).
+(`AUTOTEST_DOSTRIS`); amiga `build.sh test RAISE` (`AUTOTEST_RAISE`) + the
+`UNODOS68K: ATDONE` marker; genesis `build.sh raise` (`AUTOTEST_RAISE`); c64 nav
+scripts drive `harness.py` directly with `wait`s between keys (see below).
 
 ### Verification lessons this session (READ before touching a shared draw path)
 - **`harness.py` key timing (c64):** the kernel edge-detects keys; a *slow* full
@@ -145,10 +170,12 @@ between keys (see below).
   wins. (Also each has P2 busy-spin `wait_vblank`, P3 per-word `frect`, P4 static
   wall/floor repaint.) *(pinephone/ppcmac share the core the user is doing rpi
   with — coordinate / mirror rpi.)*
-- **amiga** §1 P1 (`repaint_all` full-scene on raise/close/create). 68k. ⚠️
-  **Verification-blocked** — no frame-deterministic amiga renderer here (WinUAE is
-  nondeterministic; see "Verification lessons" above). Don't ship an amiga
-  draw-path change until a deterministic renderer / host algorithm test exists.
+- **amiga** §1 P1 — ✅ **raise+create done** (`41c05e6`, verified via the new
+  `uae/render.py`). **close remains**: it must reveal what the closed window
+  occluded, so it needs a clipped damage-rect repaint (add a clip window to
+  `fill_rect`/`draw_char`/`draw_icon16`; windows are at arbitrary pixel-x so the
+  text/icon clip is pixel-column, not byte — the fiddly part). Now verifiable with
+  `render.py` — build an `AUTOTEST` close scene and `cmp`.
 - **c64** §1 P1 — ✅ **done for Files/Theme/Tracker** this session (`55f7bdd`,
   `e0f8ce2`, `1c923e5`). **Notepad deferred**: append-only editor, no cursor-nav /
   highlight — every keystroke changes `note_len` and can tail-scroll the whole
@@ -160,11 +187,19 @@ ps2/dc double-tick, **snes P3**, **c64 P1 (3 apps)** and **genesis P2** are ✅ 
 above; ps2 P2 + snes P4 ⏸ deferred low-value above):
 - **snes** P3 OutLast — the road/HUD still rebuilds every `outlast_tick`; same
   delta-tracking idea as the Dostris fix (`57597ec`), unverified for OutLast yet.
-- **genesis** P3 (skip the redundant `clear_screen`) + P4 (skip re-drawing the 11
-  static icons) — both need damage-tracking extended to the **one-shot**
-  `repaint_all` on raise/close/create (no clip is set there today, unlike the drag
-  path P1/P2 use). Same shape as the deferred amiga P1; verify on a raise/close
-  autotest built with **static** windows (a live game scene is cycle-fragile).
+- **genesis** P3/P4 — ✅ **raise path done** (`24b0683`: `redraw_topmost`, no
+  `clear_screen`/no 11-icon `draw_desktop`). Only the **close** path still
+  `repaint_all`s; a clipped close (genesis already has the drag clip window from
+  P1) would finish P3/P4 — verify on a static-window close scene (a live game
+  scene is cycle-fragile; see the lesson above).
+- **sms** P3 (full redraw display-ON → raster tear; blank R1) + P4 (redundant
+  `clear_names`). sms defers its repaint via a `v_dirty` flag (raise_window just
+  sets it — already lighter than genesis), so the genesis raise trick doesn't
+  port directly; these are the display-blank / redundant-clear micro-wins.
+- **tile-port clock micro** (gb/gg/…): `clock_advance` already reformats only on a
+  second-change and sets `pf_clk`; the residual is `app_clock` calling
+  `clock_format` again on every clock-window draw. Removing it needs `clk_str` to
+  be initialised before the first draw — check the boot path first. Tiny.
 - **genesis** P2 (don't repaint every window's *content* on a chrome-only rebuild),
   P3 (skip the redundant `clear_screen`), P4 (stop redrawing the 11 static icons).
   Lower value — these are one-shot `repaint_all` events (raise/close), not per-frame.
