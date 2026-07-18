@@ -457,6 +457,16 @@ super:
         endc
         endc
 
+        ifd     AUTOTEST
+        ; Headless-harness stop marker: the autotest scene above draws
+        ; synchronously at boot, so the framebuffer is final here (before the
+        ; tick-driven main loop starts animating). The Unicorn render harness
+        ; (uae/render.py) watches the serial stream for this line, then dumps
+        ; the bitplanes at $60000. Serial only; no effect on the framebuffer.
+        lea     str_atdone(pc),a0
+        bsr     ser_puts
+        endc
+
 ; ============================================================================
 ; Main loop - single cooperative context (milestone-1 scaffolding for the
 ; portable-core scheduler). All input decisions live here, never in ISRs.
@@ -2087,6 +2097,9 @@ ser_puts:
         even
 str_boot:       dc.b    "UNODOS68K: boot",13,10,0
 str_desktop:    dc.b    "UNODOS68K: desktop up",13,10,0
+        ifd     AUTOTEST
+str_atdone:     dc.b    "UNODOS68K: ATDONE",13,10,0
+        endc
 str_launch:     dc.b    "UNODOS68K: app launched",13,10,0
 str_menutitle:  dc.b    "UnoDOS 68K",0
 str_version:    dc.b    "UnoDOS/68K v0.2.0",0

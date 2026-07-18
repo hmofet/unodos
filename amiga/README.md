@@ -79,6 +79,31 @@ WinUAE with the built-in AROS ROM (no Kickstart needed) — config in
 `uae/unodos.uae`; `uae/autotest.ps1` and `uae/snapwin.ps1` drive
 headless screenshot runs.
 
+### Deterministic headless render (`uae/render.py`)
+
+WinUAE screenshots are **not reproducible** run-to-run (wall-clock boot timing +
+a live desktop clock), so they cannot byte-verify a redraw refactor. `render.py`
+is a frame-deterministic renderer built on a Unicorn 68000 core (the same
+approach as `macplus/harness.py`): it hunk-loads `build/UnoDOS68K_test`, models
+just enough of the hardware (a `jmp (a5)` Supervisor stub, a free-running beam so
+the splash's `splash_wait_frames` terminates, TBE-ready serial, and an
+auto-advancing `ticks` so `fdd_delay` returns — the cursor it also drives is a
+hardware sprite, absent from the bitplanes), runs the boot + the synchronous
+autotest scene, and halts at the `UNODOS68K: ATDONE` serial marker (emitted right
+before `main_loop`, so the framebuffer is final and the tick-driven main loop
+hasn't started animating). It then reads the 5 bitplanes at the fixed chip
+address `$60000` and the palette from the copper list at `$76000`, and writes a
+320×200 RGB PNG.
+
+```
+python3 uae/render.py build/UnoDOS68K_test out.png
+```
+
+Two runs of the same build are byte-identical, so a redraw refactor is verified
+by rendering `AUTOTEST` builds from the pre- and post-change source and `cmp`-ing
+the PNGs — the discipline used for genesis/snes/c64. No display, GPU, or RDP
+session required.
+
 ## Architecture
 
 `kernel.asm` plus includes: `apps_m2.i` (Files/Notepad/Music + shared
