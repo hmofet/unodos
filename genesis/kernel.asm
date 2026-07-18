@@ -1655,6 +1655,25 @@ redraw_topmost:
 ; draw_window - a2 = window entry
 draw_window:
         movem.l d0-d7/a0-a1,-(sp)
+        ; damage-rect cull (AUDIT §1 P2): if the window doesn't intersect the
+        ; clip window, every fill_cells/draw_str/draw_char below - and the whole
+        ; app_draw_content body - would clip to a no-op, so skip the pass. The
+        ; default clip is the full screen (clip_reset), which every window
+        ; intersects, so this only bites during a drag (clip = union(old,new)),
+        ; where it drops the unmoved windows' content passes (e.g. a 700-cell
+        ; game maze) that P1 already reduced to zero VDP writes. Byte-identical.
+        move.w  WX(a2),d0
+        cmp.w   VARS+v_clip_x1,d0
+        bge     .cull               ; WX >= clip_x1  (window right of the clip)
+        add.w   WW(a2),d0
+        cmp.w   VARS+v_clip_x0,d0
+        ble     .cull               ; WX+WW <= clip_x0 (left of the clip)
+        move.w  WY(a2),d0
+        cmp.w   VARS+v_clip_y1,d0
+        bge     .cull               ; WY >= clip_y1  (below the clip)
+        add.w   WH(a2),d0
+        cmp.w   VARS+v_clip_y0,d0
+        ble     .cull               ; WY+WH <= clip_y0 (above the clip)
         ; title bar: white row + title + close box
         move.w  WX(a2),d0
         move.w  WY(a2),d1
@@ -1725,7 +1744,7 @@ draw_window:
         moveq   #0,d0
         move.b  WPROC(a2),d0
         bsr     app_draw_content
-        movem.l (sp)+,d0-d7/a0-a1
+.cull:  movem.l (sp)+,d0-d7/a0-a1
         rts
 
 ; app_draw_content - d0 = proc index, a2 = window
