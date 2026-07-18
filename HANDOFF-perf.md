@@ -91,6 +91,45 @@ Mechanics worth reusing:
   time; "secondary to P1–P3" per the audit. A dirty-row-span hint is possible
   (the clip bounds already know the damaged rows) if it's ever wanted.
 
+## DONE — this session (per-app incremental redraws + a real bug, all pushed)
+
+| Port | Finding | Commit | Verify |
+|------|---------|--------|--------|
+| snes | **gravity bug** — Dostris was frozen: `dt_interval` clobbers the elapsed-time scratch in `S0` (the div16→hardware-divider rewrite leaves the remainder there), so the throttle never fired | `65cf383` | retro-shot: piece now descends/locks/stacks (frozen before) |
+| snes | §1 P3 — Dostris incremental piece redraw (erase old row / draw new, mirrors `pm_redraw_actors`); lock still full-repaints | `57597ec` | byte-identical (`build.sh dostris`, snes9x, frames 400–6000) |
+| c64 | §1 P1 — incremental **Files** nav (repaint 2 rows, not the whole bitmap) | `55f7bdd` | byte-identical (`harness.py`, spaced keys) |
+| c64 | §1 P1 — incremental **Theme** nav | `e0f8ce2` | byte-identical (`harness.py`) |
+| c64 | §1 P1 — incremental **Tracker** cursor (2-cell) | `1c923e5` | byte-identical (`harness.py`) |
+| genesis | §1 P2 — cull non-damaged windows from the clipped drag repaint | `f845166` | byte-identical (`build.sh drag`/`test`, genesis_plus_gx) |
+
+**New autotest scaffolding added** (needed for the above): snes `build.sh dostris`
+(`AUTOTEST_DOSTRIS`); c64 nav scripts drive `harness.py` directly with `wait`s
+between keys (see below).
+
+### Verification lessons this session (READ before touching a shared draw path)
+- **`harness.py` key timing (c64):** the kernel edge-detects keys; a *slow* full
+  redraw overruns the harness's short key-release window (`KEY_INSTRS//4`), so a
+  following identical key isn't seen as a new edge and is **dropped** — a fast
+  (incremental) build catches it, and the two builds then reach different states.
+  Put a `wait 3` **between every key** so both builds register each edge; then the
+  renders compare byte-for-byte.
+- **c64 renders under Windows Python** (py65 lives there), not WSL:
+  `python3 c64/harness.py <prg> <artdir> [--storage x.sav] < script`.
+- **genesis (and likely sms/other 68k) main loop is cycle-timing-sensitive:** a
+  live game's state at frame N depends on per-frame *render cost*, so **any**
+  `draw_window`/draw-primitive edit — even inserting NOPs — shifts the **dostris**
+  autotest frame. The already-shipped P1 `facd5f8` perturbs it too. ⇒ Verify
+  draw-path changes on the **settled `drag`/`test` scenes**, never against a live
+  game. (snes/c64 are frame-deterministic — a faster redraw stays byte-identical —
+  which is why snes P3 verified cleanly.)
+- **amiga can't be byte-verified here:** the only renderer is WinUAE (GUI, AROS
+  ROM). Two runs of the *same* build produce different captures (24 s wall-clock
+  boot lands at different guest states; det test: `det_1` was still blank). No
+  frame-deterministic headless 68k renderer exists for amiga (unlike the snes
+  Unicorn harness / c64 py65 harness). **amiga §1 P1 is blocked on verification**,
+  not on the fix. A frame-deterministic ADF-level renderer (or a host algorithm
+  test à la the dreamcast P1 commit) would unblock it.
+
 ## DONE — earlier sessions (per the prior handoff, already pushed)
 - `pf_bd` board-only Dostris-lock repaint on **vic20 / pce / gg / gb** (gb under
   `lcd_off`); **gba** `frect` two-px-per-`str`; **snes** `div16` via the CPU
@@ -104,16 +143,28 @@ Mechanics worth reusing:
   on every dirty event." These are bare-metal **AArch64 / PPC asm**; same
   damage-rect shape as genesis/sms but in the asm redraw path. Biggest remaining
   wins. (Also each has P2 busy-spin `wait_vblank`, P3 per-word `frect`, P4 static
-  wall/floor repaint.)
-- **c64** §1 P1 (full-screen `app_clear` on every redraw, even cursor moves) and
-  **amiga** §1 P1 (`repaint_all` full-scene on raise/close/create). 6502 / 68k.
+  wall/floor repaint.) *(pinephone/ppcmac share the core the user is doing rpi
+  with — coordinate / mirror rpi.)*
+- **amiga** §1 P1 (`repaint_all` full-scene on raise/close/create). 68k. ⚠️
+  **Verification-blocked** — no frame-deterministic amiga renderer here (WinUAE is
+  nondeterministic; see "Verification lessons" above). Don't ship an amiga
+  draw-path change until a deterministic renderer / host algorithm test exists.
+- **c64** §1 P1 — ✅ **done for Files/Theme/Tracker** this session (`55f7bdd`,
+  `e0f8ce2`, `1c923e5`). **Notepad deferred**: append-only editor, no cursor-nav /
+  highlight — every keystroke changes `note_len` and can tail-scroll the whole
+  view, so there's no "two rows changed" case; a byte-identical incremental would
+  have to replicate the wrap/scroll layout for low, per-keystroke value.
 
 **Tails on the ports already touched this pass** (dreamcast P3, mac P2, the
-ps2/dc double-tick are ✅ done above; ps2 P2 + snes P4 ⏸ deferred low-value above):
-- **snes** P3 — whole-board/road game redraws each tick (Dostris/OutLast); track
-  the board delta the way Pac-Man's `pm_redraw_actors` does. Per-app refactor.
-- **c64** P1 — Files/Theme/Tracker/Notepad rebuild the whole screen on a nav key;
-  re-invert only the two affected rows. The audit's "biggest single win"; 3–4 apps.
+ps2/dc double-tick, **snes P3**, **c64 P1 (3 apps)** and **genesis P2** are ✅ done
+above; ps2 P2 + snes P4 ⏸ deferred low-value above):
+- **snes** P3 OutLast — the road/HUD still rebuilds every `outlast_tick`; same
+  delta-tracking idea as the Dostris fix (`57597ec`), unverified for OutLast yet.
+- **genesis** P3 (skip the redundant `clear_screen`) + P4 (skip re-drawing the 11
+  static icons) — both need damage-tracking extended to the **one-shot**
+  `repaint_all` on raise/close/create (no clip is set there today, unlike the drag
+  path P1/P2 use). Same shape as the deferred amiga P1; verify on a raise/close
+  autotest built with **static** windows (a live game scene is cycle-fragile).
 - **genesis** P2 (don't repaint every window's *content* on a chrome-only rebuild),
   P3 (skip the redundant `clear_screen`), P4 (stop redrawing the 11 static icons).
   Lower value — these are one-shot `repaint_all` events (raise/close), not per-frame.
