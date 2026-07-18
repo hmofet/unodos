@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started — UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="active" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Getting started</h1>
+<p class="lede">Build the image, boot it in an emulator or on real hardware, and meet the desktop.</p>
+
+<h2 id="req">What you need</h2>
+<ul>
+  <li>A 64-bit <strong>UEFI</strong> machine (any x86-64 PC from ~2007 on), <em>or</em> QEMU + OVMF for an emulator.</li>
+  <li>To build: <code>x86_64-w64-mingw32-gcc</code> (UEFI apps are PE32+ images, the mingw target's native output — no gnu-efi or EDK2 needed) and <code>python3</code>.</li>
+</ul>
+
+<h2 id="build">Build the image</h2>
+<p>From the <code>pc64/</code> directory:</p>
+<pre><code>./build.sh            # build the unoui desktop shell -&gt; build/esp/
+./build.sh run        # build, then boot it in QEMU + OVMF</code></pre>
+<p>The build compiles the shell, the toolkit, the ten themes, the apps and the drivers, links a single
+<code>BOOTX64.EFI</code>, and stages a bootable <strong>ESP</strong> tree in <code>build/esp/</code> —
+a real FAT volume with the loader at <code>EFI/BOOT/BOOTX64.EFI</code> plus a few sample documents and the
+TrueType fonts. The default image is about 660&nbsp;KB.</p>
+
+<h2 id="run">Run it in QEMU</h2>
+<p><code>./build.sh run</code> launches QEMU with the OVMF firmware and the ESP as a virtual FAT disk.
+The same invocation that verifies the image is the one you use to try it:</p>
+<pre><code>qemu-system-x86_64 -machine q35 -m 256 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,file=vars.fd \
+  -drive format=raw,file=fat:rw:build/esp \
+  -device qemu-xhci -device usb-tablet</code></pre>
+<div class="note"><b>Keyboard-first</b>The whole desktop is driven from the keyboard, so QEMU needs no special input setup. For scripted/headless capture, QEMU is natively scriptable over QMP (<code>send-key</code> + <code>screendump</code>) — the screenshots in this manual were produced exactly that way.</div>
+
+<h2 id="usb">Boot on real hardware</h2>
+<ol>
+  <li>Write the <code>build/esp/</code> tree to a FAT-formatted USB stick (the loader must be at <code>EFI/BOOT/BOOTX64.EFI</code>).</li>
+  <li>In firmware setup, boot the stick as a UEFI device. Secure Boot should be off (the image is unsigned).</li>
+  <li>UnoDOS paints its splash, then the desktop. On the X1 Carbon Gen 8 the TrackPoint, touchpad and keyboard all drive it.</li>
+</ol>
+
+<h2 id="firstboot">First boot</h2>
+<p>A splash screen with a loading bar paints while the shell and drivers come up; a short start-up chime
+plays as the desktop appears.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/splash.png" alt="The boot splash — loading bar and version." loading="lazy"><figcaption>The boot splash — loading bar and version.</figcaption></figure>
+  <figure><img src="assets/img/controlpanel.png" alt="First desktop paint: the Control Panel opens over the Aurora Light desktop." loading="lazy"><figcaption>First desktop paint: the Control Panel opens over the Aurora Light desktop.</figcaption></figure>
+</div>
+<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the Start menu;
+arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a window. The
+<a href="desktop.html">desktop tour</a> covers the rest.</p>
+
+<nav class="pagenav"><a href="index.html">&lsaquo; Overview</a><a class="nxt" href="desktop.html">The desktop &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

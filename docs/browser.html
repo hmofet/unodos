@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web browser — UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="active" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Web browser</h1>
+<p class="lede">A native canvas app that renders HTML, Markdown and basic CSS, runs JavaScript, and loads
+pages from local disks or over the network — HTTP and HTTPS.</p>
+
+<h2 id="files">Files and the address bar</h2>
+<p>The browser opens on a unified file list: volume&nbsp;0 is the RAM disk, and volumes 1+ are the FAT /
+FAT32 disks the firmware mounted (reached through the UEFI Simple File System protocol — the same
+firmware-as-BIOS approach used for the framebuffer and pointer). RAM files and disk files are listed side
+by side. An <strong>address bar</strong> at the top takes a <code>http://</code> or <code>https://</code>
+URL; press <kbd>↓</kbd> to drop into the file list, <kbd>Enter</kbd> to open, and <kbd>Backspace</kbd> to
+return.</p>
+<figure><img src="assets/img/browser_files.png" alt="The unified file list — RAM-disk documents (✳) and FAT/ESP files (›) together, with the URL address bar on top." loading="lazy"><figcaption>The unified file list — RAM-disk documents (✳) and FAT/ESP files (›) together, with the URL address bar on top.</figcaption></figure>
+
+<h2 id="render">HTML, Markdown &amp; CSS</h2>
+<p>A single immediate-mode flow lays out headings, word-wrapped paragraphs, <code>&lt;b&gt;/&lt;i&gt;/&lt;code&gt;/&lt;a&gt;</code>,
+lists, <code>&lt;pre&gt;</code>, rules and entities — for both HTML and Markdown.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/browser_markdown.png" alt="A Markdown document rendered — headings, bold/italic, inline code and lists." loading="lazy"><figcaption>A <b>Markdown</b> document rendered — headings, bold/italic, inline code and lists.</figcaption></figure>
+  <figure><img src="assets/img/browser_html.png" alt="An HTML page — emphasis, code spans, links, lists and preformatted text; unknown tags are ignored." loading="lazy"><figcaption>An <b>HTML</b> page — emphasis, code spans, links, lists and preformatted text; unknown tags are ignored.</figcaption></figure>
+</div>
+
+<h2 id="js">JavaScript</h2>
+<p>Each <code>&lt;script&gt;</code> block runs in a small tree-walking interpreter: a lexer, a
+recursive-descent parser to an AST, and an evaluator supporting numbers/strings/booleans, <code>var</code>,
+arithmetic and logic, <code>if</code>/<code>for</code>/<code>while</code>/ternary, functions and recursion,
+arrays, <code>Math.*</code>, <code>console.log</code> and <code>document.write</code>. Its output is spliced
+into the page; <code>console.log</code> collects into a console panel at the foot of the document.</p>
+<figure><img src="assets/img/browser_js.png" alt="Script.html — the page&#x27;s &amp;lt;script&amp;gt; generated this Fibonacci table via document.write." loading="lazy"><figcaption><b>Script.html</b> — the page's <code>&lt;script&gt;</code> generated this Fibonacci table via <code>document.write</code>.</figcaption></figure>
+
+<h2 id="net">Over the network</h2>
+<p>Give the address bar a URL and the browser brings the link up on demand (e1000 + DHCP), resolves the host
+by DNS, connects, sends an HTTP/1.0 GET and renders the reply — including any JavaScript.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/browser_http.png" alt="A live page fetched over HTTP through the network stack." loading="lazy"><figcaption>A live page fetched over <b>HTTP</b> through the network stack.</figcaption></figure>
+  <figure><img src="assets/img/browser_https.png" alt="An HTTPS page over CA-validated TLS 1.2." loading="lazy"><figcaption>An <b>HTTPS</b> page over CA-validated <b>TLS 1.2</b>.</figcaption></figure>
+</div>
+<div class="note"><b>How HTTPS works</b><b>HTTPS</b> uses the BearSSL minimal X.509 engine with a bundled root store (14 common CAs) and sets the validation clock from the UEFI RTC, so certificate validity windows are checked. BearSSL is TLS&nbsp;1.2 (no 1.3); for correct certificate dates the RTC should be UTC. See <a href="networking.html">Networking</a>.</div>
+
+<nav class="pagenav"><a href="apps.html">&lsaquo; Applications</a><a class="nxt" href="networking.html">Networking &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
