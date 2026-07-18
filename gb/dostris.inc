@@ -230,8 +230,13 @@ dostris_update:
     call dostris_lock
     call dostris_clearlines
     call dostris_spawn
+    ; Only the board region changed (locked cells / collapsed rows / new piece).
+    ; Repaint just the board via dostris_draw in vblank instead of raising
+    ; v_dirty, which did an lcd_off + a 1024-entry clear_map + a full
+    ; draw_app every landing (a visible LCD-off settle). dostris_draw rebuilds
+    ; walls+floor+board+piece+score from g_board, covering every lock outcome.
     ld a, 1
-    ld [v_dirty], a                         ; full board redraw
+    ld [pf_bd], a
     xor a
     ld [pf_pc], a
     ret
