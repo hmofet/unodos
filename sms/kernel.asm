@@ -119,6 +119,16 @@ m_idx       EQU $C135               ; current note
 m_timer     EQU $C136               ; frames left on the current note
 m_play      EQU $C137               ; non-zero while playing
 
+; ---- damage-rect clip window (cells): draw only [c0,c1) x [r0,r1). Default =
+; whole screen (no clipping); drag_move sets it to union(old,new) so a clipped
+; redraw_all touches only the moved window's damage (byte-identical output).
+v_clip_c0   EQU $C138
+v_clip_r0   EQU $C139
+v_clip_c1   EQU $C13A
+v_clip_r1   EQU $C13B
+v_drag_px   EQU $C13C               ; drag: window col/row before this step's move
+v_drag_py   EQU $C13D
+
 ; ---------------------------------------------------------------- reset
 ; Canonical SMS startup: jp over the RST / interrupt vectors (sjasmplus --raw
 ; does not pad ORG jumps, so we never ORG forward — DEFS fills the gaps).
@@ -164,6 +174,7 @@ boot:
     ld (hl), 0
     ldir
 
+    call clip_reset                 ; clip window = whole screen (no clipping)
     call vdp_init
     call load_palette
     call load_tiles
@@ -524,6 +535,10 @@ oc_desktop:
 drag_move:
     ld a, (v_drag)
     call win_ptr                    ; ix = dragged entry
+    ld a, (ix+WX)                   ; stash the pre-move window origin (for the
+    ld (v_drag_px), a               ; damage-rect union below)
+    ld a, (ix+WY)
+    ld (v_drag_py), a
     ld a, (v_curx)
     srl a
     srl a
@@ -570,6 +585,48 @@ dm_y1b:
     ld c, a
 dm_y2:
     ld (ix+WY), c
+    ; --- clip = union(old_rect, new_rect) so redraw_all only repaints the
+    ; vacated band + the window's new spot (byte-identical to a full redraw) ---
+    ; c0 = min(oldWX, newWX)
+    ld a, (v_drag_px)
+    ld b, a                         ; b = oldWX
+    ld a, (ix+WX)
+    ld c, a                         ; c = newWX
+    cp b
+    jr c, dm_cx0                    ; newWX < oldWX -> c0 = newWX (a)
+    ld a, b
+dm_cx0:
+    ld (v_clip_c0), a
+    ; c1 = max(oldWX, newWX) + WW
+    ld a, (v_drag_px)
+    ld b, a
+    ld a, c                         ; newWX
+    cp b
+    jr nc, dm_cx1                   ; newWX >= oldWX -> max = newWX (a)
+    ld a, b
+dm_cx1:
+    add a, (ix+WW)
+    ld (v_clip_c1), a
+    ; r0 = min(oldWY, newWY)
+    ld a, (v_drag_py)
+    ld b, a
+    ld a, (ix+WY)
+    ld c, a
+    cp b
+    jr c, dm_cy0
+    ld a, b
+dm_cy0:
+    ld (v_clip_r0), a
+    ; r1 = max(oldWY, newWY) + WH
+    ld a, (v_drag_py)
+    ld b, a
+    ld a, c
+    cp b
+    jr nc, dm_cy1
+    ld a, b
+dm_cy1:
+    add a, (ix+WH)
+    ld (v_clip_r1), a
     ld a, 1
     ld (v_dirty), a
     ret
