@@ -80,7 +80,7 @@ static const char *app_short(int a)
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT,
+       ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -159,7 +159,7 @@ static void build_ctrl(unoui_window *w)
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
     build_font_items();
-    unoui_window_init(w, "Control Panel", 150, 24, 270, 272);
+    unoui_window_init(w, "Control Panel", 150, 24, 270, 300);
     unoui_add_label(w, 8, 8, "Theme:");
     x = unoui_add_dropdown(w, 74, 4, 170, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
     unoui_add_label(w, 8, 34, "Resolution:");
@@ -168,22 +168,24 @@ static void build_ctrl(unoui_window *w)
     x = unoui_add_dropdown(w, 74, 56, 170, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
     unoui_add_check(w, 8, 86, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
     unoui_add_check(w, 130, 86, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
-    unoui_add_label(w, 8, 112, "Volume");
-    x = unoui_add_slider(w, 66, 108, 178, 0, 100, 70); x->id = ID_VOL;
-    unoui_add_label(w, 8, 136, "UI scale");
-    x = unoui_add_spinner(w, 72, 132, 70, 1, 4, 1); x->id = ID_SCALE;
-    x = unoui_add_button(w, 150, 132, 94, "About", 0); x->id = ID_ABOUT;
+    unoui_add_check(w, 8, 106, "Aurora lite", unoui_aurora_lite);
+    w->w[w->nw-1].id = ID_ALITE;
+    unoui_add_label(w, 8, 136, "Volume");
+    x = unoui_add_slider(w, 66, 132, 178, 0, 100, 70); x->id = ID_VOL;
+    unoui_add_label(w, 8, 160, "UI scale");
+    x = unoui_add_spinner(w, 72, 156, 70, 1, 4, 1); x->id = ID_SCALE;
+    x = unoui_add_button(w, 150, 156, 94, "About", 0); x->id = ID_ABOUT;
     /* --- date & time (firmware RTC) --- */
-    unoui_add_sep(w, 8, 158, 236);
-    unoui_add_label(w, 8, 166, "Set date & time:");
+    unoui_add_sep(w, 8, 182, 236);
+    unoui_add_label(w, 8, 190, "Set date & time:");
     uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
-    g_sp_y  = unoui_add_spinner(w, 8,   182, 58, 2000, 2099, yy);
-    g_sp_mo = unoui_add_spinner(w, 70,  182, 44, 1, 12, mo);
-    g_sp_d  = unoui_add_spinner(w, 118, 182, 44, 1, 31, dd);
-    g_sp_h  = unoui_add_spinner(w, 166, 182, 40, 0, 23, hh);
-    g_sp_mi = unoui_add_spinner(w, 210, 182, 40, 0, 59, mi);
-    x = unoui_add_button(w, 8, 208, 100, "Apply Clock", 0); x->id = ID_SETDT;
-    x = unoui_add_button(w, 116, 208, 128, "Pick date...", 0); x->id = ID_CAL;
+    g_sp_y  = unoui_add_spinner(w, 8,   206, 58, 2000, 2099, yy);
+    g_sp_mo = unoui_add_spinner(w, 70,  206, 44, 1, 12, mo);
+    g_sp_d  = unoui_add_spinner(w, 118, 206, 44, 1, 31, dd);
+    g_sp_h  = unoui_add_spinner(w, 166, 206, 40, 0, 23, hh);
+    g_sp_mi = unoui_add_spinner(w, 210, 206, 40, 0, 59, mi);
+    x = unoui_add_button(w, 8, 232, 100, "Apply Clock", 0); x->id = ID_SETDT;
+    x = unoui_add_button(w, 116, 232, 128, "Pick date...", 0); x->id = ID_CAL;
 }
 static void build_edit(unoui_window *w)
 {
@@ -826,6 +828,7 @@ static void on_action(const unoui_action *a)
     case ID_RESTART:  uno_pc64_restart();  break;
     case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
     case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
+    case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; break;   /* Aurora full<->lite (no live composite) */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
     case ID_OPEN:  editor_open(); break;
