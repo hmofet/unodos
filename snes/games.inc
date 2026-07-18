@@ -553,7 +553,7 @@ DT_ROWS = 20
         rts
 .endproc
 
-; dt_step - gravity: move down or lock
+; dt_step - gravity: move down or lock. -> A = 0 moved (row+1) / 1 locked.
 .proc dt_step
 .a16
 .i16
@@ -570,8 +570,102 @@ DT_ROWS = 20
         cmp #0
         beq @lock
         inc v_dt_row
+        lda #0                  ; moved
         rts
 @lock:  jsr dt_lock
+        lda #1                  ; locked (board changed -> caller does full repaint)
+        rts
+.endproc
+
+; dt_piece_pass - draw the 4 cells of the current piece's shape.
+;   P0 = shape ptr, S5 = donor colour, S6 = row base (dy is added to it),
+;   S2 = window entry offset. Column base is v_dt_col. Cells whose final row
+;   is < 0 (piece still above the board top) are skipped, exactly as
+;   dostris_draw's inline piece loop does. Used by dt_redraw_piece for both the
+;   erase pass (donor = black slab) and the draw pass (donor = piece colour).
+.proc dt_piece_pass
+.a16
+.i16
+        ldy #$0000
+        stz LC0
+@pcell: sep #$20
+.a8
+        lda (P0),y
+        rep #$20
+.a16
+        and #$00FF
+        cmp #$80
+        bcc @pc
+        ora #$FF00
+@pc:    clc
+        adc v_dt_col
+        sta A0
+        iny
+        sep #$20
+.a8
+        lda (P0),y
+        rep #$20
+.a16
+        and #$00FF
+        cmp #$80
+        bcc @pr
+        ora #$FF00
+@pr:    clc
+        adc S6                  ; row base (row-1 to erase, row to draw)
+        sta A1
+        iny
+        lda A1
+        bmi @pskip
+        lda S5
+        sta A4
+        jsr dt_cell
+@pskip: inc LC0
+        lda LC0
+        cmp #4
+        bcc @pcell
+        rts
+.endproc
+
+; dt_redraw_piece - incremental: erase the piece at its previous row (row-1)
+; back to the black board, then draw it at the current row. Only valid on a
+; pure gravity descent (piece/rot/col unchanged, row advanced by 1); every
+; other transition (key, lock, spawn) goes through the full redraw_topmost.
+; Byte-identical to a full dostris_draw for a pure move: the settled board and
+; the (unchanged) score/level/lines panel are already correct, so only the
+; falling piece's cells differ. S2 = window entry offset.
+.proc dt_redraw_piece
+.a16
+.i16
+        lda v_dt_piece          ; shape ptr = dt_shapes + (piece*4 + rot)*8
+        sta S4
+        asl a
+        asl a
+        clc
+        adc v_dt_rot
+        asl a
+        asl a
+        asl a
+        clc
+        adc #.loword(dt_shapes)
+        sta P0
+        lda #30                 ; erase old cells (row-1) as black slab
+        sta S5
+        lda v_dt_row
+        dec a
+        sta S6
+        jsr dt_piece_pass
+        ldx S4                  ; draw new cells (row) in the piece colour
+        sep #$20
+.a8
+        lda dt_colors,x
+        rep #$20
+.a16
+        sta S5
+        lda v_dt_row
+        sta S6
+        jsr dt_piece_pass
+        lda #$01
+        sta v_dirty
         rts
 .endproc
 
@@ -1050,7 +1144,16 @@ DT_ROWS = 20
 @step:  lda v_frame
         sta v_dt_last
         jsr dt_step
-        jsr redraw_topmost
+        cmp #0
+        bne @full               ; locked -> board changed, full repaint
+        ; pure descent: repaint only the piece (erase old row, draw new row)
+        lda v_zcount
+        dec a
+        jsr zent_x
+        stx S2
+        jsr dt_redraw_piece
+        rts
+@full:  jsr redraw_topmost
 @out:   rts
 .endproc
 
