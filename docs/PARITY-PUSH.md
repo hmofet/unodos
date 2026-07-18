@@ -65,10 +65,63 @@ storage remains a hardware-tail item.)
 ### Remaining
 - **SMS battery-SRAM** storage (hardware-tail item).
 - **GG, PCE, VIC-20, GB, WS** — tile-model ports; constrained ones (VIC-20 22×23)
-  get the feasible subset with the ceiling documented. (NES + SMS done — see above;
-  GG is Z80/SMS-silicon so it reuses the SMS app code near-verbatim.)
+  get the feasible subset with the ceiling documented. (NES + SMS done — see above.)
 - **C-core refactor** — PS2/DC/Mac consume `gen/c/unodef.h` (thin: the ports
   legitimately diverge — MAXWIN=6, TBAR_H=18 are intentional).
+
+## Handoff — how to add a parity app (the SMS Pac-Man template, 2026-07-18)
+
+Each remaining port needs the 4 apps **Tracker, OutLast, Pac-Man, Paint** (or the
+feasible subset — see per-port notes). Two worked reference implementations bracket
+the two port *shapes*:
+- **`nes/pacman.inc`** — the **minimal profile** (20×18-ish, single `apps.inc`,
+  full-screen app that owns the display; partial-repaint on a vblank hook). 6502.
+  This is the template for **GG, GB, VIC-20, WS** (all minimal-profile tile ports).
+- **`sms/pacman.inc`** — the **windowed WM** profile (app draws into a WM window via
+  `fill_cells`; the WM redraws content on `v_dirty`, so a full redraw per step, no
+  partial). Z80. This is the template for **PCE** (windowed).
+
+### The recipe (what the SMS Pac-Man commit touched — mirror per app/port)
+1. **Tiles** (`<port>/mkdata.py`): add the app's tiles via the port's tile helper
+   (SMS `planar()` of 8×8 palette-index grids) + emit `T_*` constants in the output
+   section. Pac-Man = `T_PMDOT/PMPOW/PMPAC/PMGHO`; walls reuse an existing solid
+   (`T_SOLC`). Keep the total tile count < 256 for 8-bit tile indices.
+2. **App logic** (`<port>/<app>.inc`): port the shared algorithm — Pac-Man = the
+   13×13 pillar maze template + `pm_walk`/`pm_idx` + greedy-chase `pm_ghost_steer`
+   (open, non-reverse, min-Manhattan) from `nes/pacman.inc`. Reuse `c64/outlast.s`
+   (band racer), the tracker pattern, and `c64/fs.i` for the others. Algorithms are
+   settled — re-express in the native ISA, do **not** redesign.
+3. **Wiring** (`<port>/kernel.asm` + its render/dispatch include): 4 hook points —
+   (a) init-on-launch (`cp <proc> / call z, <app>_init`), (b) input dispatch (main
+   loop: `cp <proc> / jr z, ml_game_<app>` + the `call <app>_input` block),
+   (c) content-draw dispatch (`cp <proc> / jp z, <app>_draw`), (d) `include` the
+   `.inc`. Pac-Man = **proc 9** (its icon/label/window-def usually already exist —
+   only the logic is missing; check first).
+4. **Autotest + verify**: add `-DAUTOTEST_<APP>` to `build.sh`, an `auto_script`
+   under `IFDEF AUTOTEST_<APP>` that clicks the app's desktop icon (cell col/row →
+   cursor pixels), and extend the default script's `IFNDEF` guard chain. Then build
+   the autotest ROM and render it in the port's emulator harness (BlastEm
+   `sms/run.ps1`, Mesen2/Emulicious, Mednafen for PCE, py65 for the 6502 ports),
+   **screendump** it, commit per port with the shot.
+
+### Per-port notes
+- **GG** (Z80, 20×18 minimal, `gg/apps.inc`): missing **all 4** parity apps. Z80 so
+  the *code* reuses SMS's, but the *profile* is minimal (like GB/NES) not windowed —
+  follow `nes/pacman.inc`'s full-screen structure with SMS/Z80 syntax + the GG 20×18
+  layout. GG shows only the centre 160×144 (20×18 cells).
+- **GB** (Sharp SM83, 20×18 minimal): light SM83 re-expression of the NES minimal
+  apps. One ROM = DMG+GBC. Verify in Mesen2 GBC.
+- **PCE** (HuC6280, windowed WM, 256×224 4bpp): follow the **SMS windowed** template.
+  6280 is 6502-family so the NES pacman logic ports closely; the WM/window-draw
+  glue follows SMS. Verify in Mednafen.
+- **VIC-20** (6502, 22×23, very tight RAM): the **feasible subset** — document the
+  ceiling (e.g. a reduced maze / no Paint if CHR/RAM won't hold it), like the note
+  did for NES Paint. Reuse `c64/*.s` heavily (same 6502).
+- **WS** (NEC V30MZ / x86-16, minimal): re-express in V30MZ; the `ws/` port already
+  has the base apps + the Unicorn x86/V30MZ harness for headless verify.
+
+Bug classes to watch (per ISA) are in the section below — e.g. caller-saved reg
+clobber across a helper call, and (SMS) `fill_cells` advancing `dp_row`.
 
 ## Verify-loop bug classes caught (per ISA)
 - Caller-saved register clobbered across a helper call (rpi/gba `pm_walkable`).
