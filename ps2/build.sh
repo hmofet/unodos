@@ -61,6 +61,38 @@ case "$1" in
     if [ "$1" = "ee-splash" ]; then
         make splash
         echo "done: build/unodos-ps2-splash.elf"
+    elif [ "$2" = "uui" ]; then
+        # The unoui shell (modern desktop + Aurora) instead of the legacy Mac
+        # core - the EE analogue of pc64's unoui build. Self-contained compile
+        # (the Makefile's build/%.o rule can't reach ../unoui). -ffunction-
+        # sections + --gc-sections drops ee_platform's uno_ee_poll (which the
+        # uui shell never calls; it reads the pad directly), so the legacy Mac
+        # event queue (uno_post_event) isn't pulled in.
+        echo "[2/2] building the unoui shell ELF (PS2SDK + unoui + Aurora)..."
+        EE_CC=mips64r5900el-ps2-elf-gcc
+        INCS="-I. -Ibuild -I../unoui -I$PS2SDK/ee/include -I$PS2SDK/common/include -I$GSKIT/include"
+        CF="-O2 -Wall -Wno-unused-value -Wno-multichar -ffunction-sections -fdata-sections \
+            -D_EE -DUNO_COLOR=1 -DUNO_EE -DUNO_UUI -DUNO_BG_CACHE"
+        # bin2c the IRX images so ee_usb.c / ee_audio.c can #include them (they
+        # embed them directly - do NOT also compile these as separate objects).
+        for irx in usbd ps2kbd ps2mouse audsrv; do
+            bin2c "$PS2SDK/iop/irx/$irx.irx" "build/${irx}_irx.c" "${irx}_irx" >/dev/null
+        done
+        OBJS=""
+        for s in fb fb_aa ee_platform ee_usb ee_audio ee_uui; do
+            "$EE_CC" $CF $INCS -c "$s.c" -o "build/$s.o"; OBJS="$OBJS build/$s.o"
+        done
+        for u in unoui unoui_input; do
+            "$EE_CC" $CF $INCS -c "../unoui/$u.c" -o "build/$u.o"; OBJS="$OBJS build/$u.o"
+        done
+        for t in ../unoui/themes/*.c; do
+            b=$(basename "$t" .c)
+            "$EE_CC" $CF $INCS -c "$t" -o "build/th_$b.o"; OBJS="$OBJS build/th_$b.o"
+        done
+        "$EE_CC" -T"$PS2SDK/ee/startup/linkfile" -Wl,--gc-sections \
+            -L"$PS2SDK/ee/lib" -L"$GSKIT/lib" -o build/unodos-ps2-uui.elf $OBJS \
+            -lgskit -ldmakit -lpad -lmc -lkbd -lmouse -laudsrv -lpacket -lgraph -ldraw -ldma -lkernel
+        echo "done: build/unodos-ps2-uui.elf (unoui shell + Aurora)"
     else
         EXTRA_DEF=""
         [ -n "$2" ] && EXTRA_DEF="-DUNO_AUTOTEST_$2"
