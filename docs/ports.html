@@ -44,39 +44,33 @@
 <main class="main"><div class="wrap">
 
 <h1>The UnoDOS family</h1>
-<p class="lede">pc64 is one world of many. The same GUI-first OS, and one machine-readable Contract, span
-20+ hardware targets — from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
+<p class="lede">pc64 is one of many. The same GUI-first UnoDOS runs on more than 20 kinds of hardware,
+from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
 
 <h2 id="pattern">One idea, many machines</h2>
-<p>Every port follows the same <strong>firmware-as-BIOS</strong> pattern pc64 uses with UEFI: ask the
-platform's firmware for a framebuffer and input, then let UnoDOS do the rest. The Raspberry&nbsp;Pi asks the
-VideoCore firmware for its framebuffer over the mailbox; the PowerPC Mac boots as an Open&nbsp;Firmware client;
-the consoles talk to their video chips and VRAM directly. A single Contract (<code>unodef/</code>) — including
-a shared logical <strong>window model</strong> — is what every world is generated from or checked against, so
-the ports stay consistent rather than diverging.</p>
+<p>The same UnoDOS desktop and apps run on machines as different as a Commodore 64 and a Raspberry Pi. On
+each one, UnoDOS asks the machine for a screen and for input, then runs the same way. A shared design keeps
+every version consistent instead of drifting apart.</p>
 
-<h2 id="tiers">UI tiers</h2>
-<p>How much UI a port carries depends on how much memory it has:</p>
+<h2 id="tiers">How much desktop each machine gets</h2>
+<p>It depends on how much memory the machine has:</p>
 <ul>
-  <li><strong>Full desktop shell (unoui):</strong> the high-spec worlds — pc64, PlayStation&nbsp;2, Dreamcast,
-  and the ARM/PowerPC boards — can run the same themed toolkit desktop pc64 uses.</li>
-  <li><strong>Minimal legacy path:</strong> the tiny targets — NES (2&nbsp;KB RAM), Game&nbsp;Boy (8&nbsp;KB),
-  the C64 — keep a compact icon/button desktop; the full toolkit simply won't fit.</li>
+  <li><strong>The full desktop:</strong> more capable machines (pc64, PlayStation&nbsp;2, Dreamcast, and the
+  ARM and PowerPC boards) run the full desktop shown in this manual.</li>
+  <li><strong>A simpler desktop:</strong> the smallest machines (NES, Game&nbsp;Boy, the C64) have very little
+  memory, so they run a simpler icon-and-button desktop instead.</li>
 </ul>
-<p>And where pc64 is written in C, the classic x86 kernel and the retro ports are hand-written in each
-CPU's native assembly — 6502, Z80, 68000, Sharp&nbsp;SM83, ARM7TDMI, NEC&nbsp;V30MZ, HuC6280, PowerPC and
-AArch64.</p>
 
-<h2 id="gallery">A few of the worlds</h2>
+<h2 id="gallery">A few of the machines</h2>
 <div class="grid cols-2">
-  <figure><img src="assets/img/classic_xt.png" alt="The original — UnoDOS 3 on an IBM PC/XT: a ~46&amp;nbsp;KB pure-assembly kernel, 106 syscalls and 19 apps on a single 1.44&amp;nbsp;MB floppy, on an 8088 with CGA." loading="lazy"><figcaption><b>The original</b> — UnoDOS 3 on an IBM PC/XT: a ~46&nbsp;KB pure-assembly kernel, 106 syscalls and 19 apps on a single 1.44&nbsp;MB floppy, on an 8088 with CGA.</figcaption></figure>
-  <figure><img src="assets/img/port_c64.png" alt="Commodore 64 — the minimal legacy desktop; 6510 @ 0.985&amp;nbsp;MHz, 64&amp;nbsp;KB, VIC-II, SID." loading="lazy"><figcaption><b>Commodore 64</b> — the minimal legacy desktop; 6510 @ 0.985&nbsp;MHz, 64&nbsp;KB, VIC-II, SID.</figcaption></figure>
-  <figure><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast — a high-spec console running the native desktop at parity." loading="lazy"><figcaption><b>Sega Dreamcast</b> — a high-spec console running the native desktop at parity.</figcaption></figure>
-  <figure><img src="assets/img/port_pinephone.png" alt="PinePhone — the AArch64 core retargeted to the Allwinner A64 display engine, in portrait." loading="lazy"><figcaption><b>PinePhone</b> — the AArch64 core retargeted to the Allwinner A64 display engine, in portrait.</figcaption></figure>
-  <figure><img src="assets/img/port_rpi.png" alt="Raspberry Pi — the first 64-bit ARM world, on the VideoCore mailbox framebuffer." loading="lazy"><figcaption><b>Raspberry Pi</b> — the first 64-bit ARM world, on the VideoCore mailbox framebuffer.</figcaption></figure>
-  <figure><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac — the first big-endian PowerPC world, booting over Open Firmware." loading="lazy"><figcaption><b>PowerPC Mac</b> — the first big-endian PowerPC world, booting over Open Firmware.</figcaption></figure>
-  <figure><img src="assets/img/port_iigs.png" alt="Apple IIGS — the 65816 desktop." loading="lazy"><figcaption><b>Apple IIGS</b> — the 65816 desktop.</figcaption></figure>
-  <figure><img src="assets/img/port_mac.png" alt="Classic Macintosh — the compact 68000 Mac desktop." loading="lazy"><figcaption><b>Classic Macintosh</b> — the compact 68000 Mac desktop.</figcaption></figure>
+  <figure><img src="assets/img/classic_xt.png" alt="The original: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy." loading="lazy"><figcaption><b>The original</b>: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy.</figcaption></figure>
+  <figure><img src="assets/img/port_c64.png" alt="Commodore 64: the simpler icon-and-button desktop." loading="lazy"><figcaption><b>Commodore 64</b>: the simpler icon-and-button desktop.</figcaption></figure>
+  <figure><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast: a game console running the full desktop." loading="lazy"><figcaption><b>Sega Dreamcast</b>: a game console running the full desktop.</figcaption></figure>
+  <figure><img src="assets/img/port_pinephone.png" alt="PinePhone: the desktop in portrait on a phone." loading="lazy"><figcaption><b>PinePhone</b>: the desktop in portrait on a phone.</figcaption></figure>
+  <figure><img src="assets/img/port_rpi.png" alt="Raspberry Pi: UnoDOS on the popular ARM board." loading="lazy"><figcaption><b>Raspberry Pi</b>: UnoDOS on the popular ARM board.</figcaption></figure>
+  <figure><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac: on a classic Power Macintosh." loading="lazy"><figcaption><b>PowerPC Mac</b>: on a classic Power Macintosh.</figcaption></figure>
+  <figure><img src="assets/img/port_iigs.png" alt="Apple IIGS." loading="lazy"><figcaption><b>Apple IIGS</b>.</figcaption></figure>
+  <figure><img src="assets/img/port_mac.png" alt="Classic Macintosh: on a compact 68000 Mac." loading="lazy"><figcaption><b>Classic Macintosh</b>: on a compact 68000 Mac.</figcaption></figure>
 </div>
 
 <h2 id="table">The full lineup</h2>
@@ -107,7 +101,7 @@ AArch64.</p>
 <tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td></tr>
 </tbody>
 </table></div>
-<div class="note"><b>Where to read more</b>The forward line is <strong>UnoDOS 3.1</strong>, a contract-driven redesign. Full family status lives in the repository — <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.</div>
+<div class="note"><b>Where to read more</b>Full details for every machine live in the repository: <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.</div>
 
 <nav class="pagenav"><a href="networking.html">&lsaquo; Networking</a><a class="nxt" href="developer.html">Developer guide &rsaquo;</a></nav>
 </div></main>

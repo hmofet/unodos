@@ -44,40 +44,36 @@
 <main class="main"><div class="wrap">
 
 <h1>Applications</h1>
-<p class="lede">The full roster runs in the desktop shell — native widget apps, creative tools, games and a
+<p class="lede">The full set of apps runs on the desktop: everyday tools, creative apps, games and a
 3D runner. Launch any of them from the Start menu or a desktop icon.</p>
 
-<h2 id="native">Native widget apps</h2>
+<h2 id="native">Everyday apps</h2>
 <div class="grid cols-2">
-  <figure><img src="assets/img/editor.png" alt="Editor — a File/Edit menubar, multi-line editing, and Save/Open/New wired to the RAM-disk file manager. Supports a per-document font override." loading="lazy"><figcaption><b>Editor</b> — a File/Edit menubar, multi-line editing, and Save/Open/New wired to the RAM-disk file manager. Supports a per-document font override.</figcaption></figure>
-  <figure><img src="assets/img/files.png" alt="Files — lists the RAM disk; saved documents appear here." loading="lazy"><figcaption><b>Files</b> — lists the RAM disk; saved documents appear here.</figcaption></figure>
-  <figure><img src="assets/img/system.png" alt="System — platform, firmware and driver status at a glance (trackpad, USB xHCI, and more)." loading="lazy"><figcaption><b>System</b> — platform, firmware and driver status at a glance (trackpad, USB xHCI, and more).</figcaption></figure>
-  <figure><img src="assets/img/clock.png" alt="Clock — the current time from the UEFI real-time clock." loading="lazy"><figcaption><b>Clock</b> — the current time from the UEFI real-time clock.</figcaption></figure>
+  <figure><img src="assets/img/editor.png" alt="Editor: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font." loading="lazy"><figcaption><b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.</figcaption></figure>
+  <figure><img src="assets/img/files.png" alt="Files: your saved documents." loading="lazy"><figcaption><b>Files</b>: your saved documents.</figcaption></figure>
+  <figure><img src="assets/img/system.png" alt="System: system and device information at a glance." loading="lazy"><figcaption><b>System</b>: system and device information at a glance.</figcaption></figure>
+  <figure><img src="assets/img/clock.png" alt="Clock: the current time." loading="lazy"><figcaption><b>Clock</b>: the current time.</figcaption></figure>
 </div>
-<p>A <strong>Canvas</strong> demo shows the app-drawn widget: the toolkit owns the window chrome, focus and
-dragging, while the app owns every pixel inside the content rectangle — the same mechanism the games,
-Paint and the browser use.</p>
-<figure class="shot-sm"><img src="assets/img/canvas.png" alt="The Canvas demo — an app-drawn widget inside a managed window." loading="lazy"><figcaption>The <b>Canvas</b> demo — an app-drawn widget inside a managed window.</figcaption></figure>
+<p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
+<figure class="shot-sm"><img src="assets/img/canvas.png" alt="The Canvas demo: an app drawing inside its own window." loading="lazy"><figcaption>The <b>Canvas</b> demo: an app drawing inside its own window.</figcaption></figure>
 
 <h2 id="creative">Creative tools</h2>
 <div class="grid cols-3">
-  <figure><img src="assets/img/paint.png" alt="Paint — pencil, shapes, fills and a colour palette." loading="lazy"><figcaption><b>Paint</b> — pencil, shapes, fills and a colour palette.</figcaption></figure>
-  <figure><img src="assets/img/tracker.png" alt="Tracker — a 4-channel pattern sequencer." loading="lazy"><figcaption><b>Tracker</b> — a 4-channel pattern sequencer.</figcaption></figure>
-  <figure><img src="assets/img/music.png" alt="Music — a melody player." loading="lazy"><figcaption><b>Music</b> — a melody player.</figcaption></figure>
+  <figure><img src="assets/img/paint.png" alt="Paint: pencil, shapes, fills and a colour palette." loading="lazy"><figcaption><b>Paint</b>: pencil, shapes, fills and a colour palette.</figcaption></figure>
+  <figure><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
+  <figure><img src="assets/img/music.png" alt="Music: a melody player." loading="lazy"><figcaption><b>Music</b>: a melody player.</figcaption></figure>
 </div>
-<p>All audio is unified on <strong>UnoSound</strong>, a single-voice PC-speaker sequencer, so the games,
-Music and Tracker all emit through one mixer path.</p>
+<p>The games, Music and Tracker all play sound through the PC speaker.</p>
 
 <h2 id="games">Games</h2>
-<p>The games are a native rewrite: each draws into whatever rectangle it is handed, so the same canvas fills
-a window or the whole screen with no letter-boxing. Press <kbd>Esc</kbd> to leave a full-screen game.</p>
+<p>Each game runs in a window or full screen. Press <kbd>Esc</kbd> to leave a full-screen game.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/dostris.png" alt="Dostris — the falling-block game, with score, lines and level." loading="lazy"><figcaption><b>Dostris</b> — the falling-block game, with score, lines and level.</figcaption></figure>
-  <figure><img src="assets/img/pacman.png" alt="Pac-Man — maze, dots, power pellets and ghosts." loading="lazy"><figcaption><b>Pac-Man</b> — maze, dots, power pellets and ghosts.</figcaption></figure>
-  <figure><img src="assets/img/outlast.png" alt="OutLast — a pseudo-3D arcade driver." loading="lazy"><figcaption><b>OutLast</b> — a pseudo-3D arcade driver.</figcaption></figure>
-  <figure><img src="assets/img/runner3d.png" alt="Runner3D — a real 3-D canvas driving the uno3d software rasteriser." loading="lazy"><figcaption><b>Runner3D</b> — a real 3-D canvas driving the <code>uno3d</code> software rasteriser.</figcaption></figure>
+  <figure><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level." loading="lazy"><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level.</figcaption></figure>
+  <figure><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts." loading="lazy"><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts.</figcaption></figure>
+  <figure><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game." loading="lazy"><figcaption><b>OutLast</b>: an arcade driving game.</figcaption></figure>
+  <figure><img src="assets/img/runner3d.png" alt="Runner3D: a real-time 3D game." loading="lazy"><figcaption><b>Runner3D</b>: a real-time 3D game.</figcaption></figure>
 </div>
-<div class="note"><b>About the 3D</b><b>uno3d</b> is a write-once 3D pipeline with a software rasteriser (and an Intel scaffold). Runner3D drives it directly — the same portable library used across the higher-spec ports.</div>
+<div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
 
 <nav class="pagenav"><a href="appearance.html">&lsaquo; Themes &amp; appearance</a><a class="nxt" href="browser.html">Web browser &rsaquo;</a></nav>
 </div></main>

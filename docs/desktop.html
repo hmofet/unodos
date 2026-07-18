@@ -45,34 +45,31 @@
 
 <h1>The desktop</h1>
 <p class="lede">A themed desktop with a window manager, a scrollable Start menu, a taskbar and a
-live tray clock — every control reachable by keyboard or pointer.</p>
+live clock. Every control works by keyboard or pointer.</p>
 
-<figure><img src="assets/img/desktop.png" alt="The desktop furniture: app icons, the Start button (bottom-left), the taskbar with a chip per open window, and the system-tray clock (real UEFI wall-clock time)." loading="lazy"><figcaption>The desktop furniture: app icons, the <b>Start</b> button (bottom-left), the taskbar with a chip per open window, and the system-tray clock (real UEFI wall-clock time).</figcaption></figure>
+<figure><img src="assets/img/desktop.png" alt="The desktop: app icons, the Start button (bottom-left), the taskbar with a button per open window, and the clock." loading="lazy"><figcaption>The desktop: app icons, the <b>Start</b> button (bottom-left), the taskbar with a button per open window, and the clock.</figcaption></figure>
 
 <h2 id="furniture">Desktop furniture</h2>
 <ul>
   <li><strong>Desktop icons</strong> launch apps directly.</li>
-  <li>The <strong>Start button</strong> opens a scrollable <strong>Start menu</strong> ("Programs") — hover the
-      up/down chevrons to scroll a roster larger than the screen; it ends with <strong>Restart</strong> and
-      <strong>Shut Down</strong>, which call the UEFI <code>ResetSystem</code> runtime service.</li>
-  <li>The <strong>taskbar</strong> along the bottom shows a chip per open window — click to focus and raise.</li>
-  <li>The <strong>system-tray clock</strong> reads real wall-clock time from the UEFI runtime (<code>GetTime</code>), not uptime.</li>
+  <li>The <strong>Start button</strong> opens a scrollable <strong>Start menu</strong> ("Programs") that lists
+      every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>.</li>
+  <li>The <strong>taskbar</strong> along the bottom shows a button for each open window; click one to bring it to the front.</li>
+  <li>The <strong>clock</strong> in the corner shows the current time.</li>
 </ul>
 
-<figure><img src="assets/img/startmenu.png" alt="The Start menu lists the whole app roster in order, then Restart and Shut Down. Open it with Ctrl+Esc; move with the arrows and launch with Enter." loading="lazy"><figcaption>The Start menu lists the whole app roster in order, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.</figcaption></figure>
+<figure><img src="assets/img/startmenu.png" alt="The Start menu lists every app, then Restart and Shut Down. Open it with Ctrl+Esc; move with the arrows and launch with Enter." loading="lazy"><figcaption>The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.</figcaption></figure>
 
 <h2 id="windows">Windows</h2>
-<p>Each window carries a title bar with a <strong>close box</strong>. Dragging a window moves a light
-outline rather than repainting the whole surface (no redraw storm). Windows flagged resizable have a
-bottom-right <strong>grip</strong>; widgets set to fill stretch on resize, so canvas apps reflow — the
-browser re-wraps its text, the games rescale, Paint/Tracker/Music get a bigger drawing area. The frame
-is only redrawn when something actually changes (input, or the ~2&nbsp;Hz caret blink), so an idle
-desktop touches no video memory.</p>
+<p>Each window has a title bar with a <strong>close box</strong>. Drag the title bar to move a window.
+Windows that can be resized have a <strong>grip</strong> in the bottom-right corner, and resizing them
+reflows their contents: the browser re-wraps its text, the games rescale, and Paint, Tracker and Music
+get a bigger drawing area.</p>
 
 <h2 id="keys">Keyboard &amp; pointer reference</h2>
-<p>The desktop is designed to be fully usable without a mouse — Tab moves focus, arrows adjust the focused
-control, and <kbd>Enter</kbd> activates it. On a laptop panel the firmware pointer (TrackPoint / touchpad)
-drives a smoothed cursor.</p>
+<p>The desktop is designed to be fully usable without a mouse: <kbd>Tab</kbd> moves between controls,
+the arrow keys adjust the focused control, and <kbd>Enter</kbd> activates it. On a laptop, the TrackPoint
+or touchpad moves the pointer.</p>
 <div class="tw"><table>
 <thead><tr><th>Key</th><th>Action</th></tr></thead>
 <tbody>
@@ -82,10 +79,10 @@ drives a smoothed cursor.</p>
 <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Move focus between controls in a window</td></tr>
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></td><td>Adjust the focused control (dropdown value, slider, spinner, list, menu)</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Activate a button, checkbox or menu item</td></tr>
-<tr><td><kbd>Esc</kbd></td><td>Return from a full-screen canvas (games, Runner3D)</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Leave a full-screen game (games, Runner3D)</td></tr>
 </tbody>
 </table></div>
-<div class="note tip"><b>Note</b>Because a focused dropdown changes its value with <kbd>↑</kbd>/<kbd>↓</kbd>, you can switch themes, fonts and resolution entirely from the keyboard — see <a href="appearance.html">Themes &amp; appearance</a>.</div>
+<div class="note tip"><b>Note</b>Because a focused menu changes its value with <kbd>↑</kbd>/<kbd>↓</kbd>, you can switch themes, fonts and resolution entirely from the keyboard. See <a href="appearance.html">Themes &amp; appearance</a>.</div>
 
 <nav class="pagenav"><a href="getting-started.html">&lsaquo; Getting started</a><a class="nxt" href="appearance.html">Themes &amp; appearance &rsaquo;</a></nav>
 </div></main>

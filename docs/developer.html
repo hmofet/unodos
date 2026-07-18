@@ -45,12 +45,12 @@
 
 <h1>Developer guide</h1>
 <p class="lede">For building UnoDOS pc64 from source, running it under QEMU, packing a bootable USB
-image, and building the flashers themselves. End users don't need any of this — the
+image, and building the flashers themselves. End users do not need any of this; the
 <a href="getting-started.html">flasher</a> covers them.</p>
 
 <h2 id="need">Toolchain</h2>
 <ul>
-  <li><strong>Build:</strong> <code>x86_64-w64-mingw32-gcc</code> (UEFI apps are PE32+ images — the mingw
+  <li><strong>Build:</strong> <code>x86_64-w64-mingw32-gcc</code> (UEFI apps are PE32+ images, the mingw
       target's native output, so no gnu-efi or EDK2) and <code>python3</code>.</li>
   <li><strong>USB image:</strong> <code>sgdisk</code> (gptfdisk), <code>mtools</code>, <code>python3</code>.</li>
   <li><strong>Emulator:</strong> <code>qemu-system-x86</code> + OVMF.</li>
@@ -61,7 +61,7 @@ image, and building the flashers themselves. End users don't need any of this �
 <pre><code>./build.sh            # build the unoui desktop shell -&gt; build/esp/
 ./build.sh run        # build, then boot it in QEMU + OVMF</code></pre>
 <p>The build compiles the shell, the toolkit, the ten themes, the apps and the drivers, links a single
-<code>BOOTX64.EFI</code>, and stages a bootable <strong>ESP</strong> tree in <code>build/esp/</code> — a
+<code>BOOTX64.EFI</code>, and stages a bootable <strong>ESP</strong> tree in <code>build/esp/</code>, a
 real FAT volume with the loader at <code>EFI/BOOT/BOOTX64.EFI</code> plus sample documents and the TrueType
 fonts. The default image is about 660&nbsp;KB. A separate <code>./build.sh legacy</code> builds the earlier
 icon-desktop shell, kept only as reference.</p>
@@ -73,12 +73,12 @@ icon-desktop shell, kept only as reference.</p>
   -drive if=pflash,format=raw,file=vars.fd \
   -drive format=raw,file=fat:rw:build/esp \
   -device qemu-xhci -device usb-tablet</code></pre>
-<div class="note"><b>Keyboard-first</b>The whole desktop is driven from the keyboard, so QEMU needs no special input setup. QEMU is also natively scriptable over QMP (<code>send-key</code> + <code>screendump</code>) — see the screenshot harness below.</div>
+<div class="note"><b>Keyboard-first</b>The whole desktop is driven from the keyboard, so QEMU needs no special input setup. QEMU is also natively scriptable over QMP (<code>send-key</code> + <code>screendump</code>); see the screenshot harness below.</div>
 
 <h2 id="image">Pack a real USB disk image</h2>
 <p>QEMU fakes a disk from the <code>build/esp/</code> directory (<code>-drive fat:rw:build/esp</code>), but real
 UEFI firmware needs a partition table. <code>tools/mkuefi.py</code> turns the ESP tree into a real raw disk
-image — GPT with one EF00 EFI System Partition (FAT32) holding the whole tree:</p>
+image: GPT with one EF00 EFI System Partition (FAT32) holding the whole tree:</p>
 <pre><code>./build.sh                    # -&gt; build/esp/
 python3 tools/mkuefi.py 512   # -&gt; build/unodos-uefi.img  (512 MiB)</code></pre>
 <p>Boot-test the image directly by pointing QEMU's last drive at <code>build/unodos-uefi.img</code> instead of
