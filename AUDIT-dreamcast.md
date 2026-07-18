@@ -53,6 +53,8 @@ global `g_dirty` when any primitive writes `fb[]`, and skip the convert/upload (
 an empty rect uploads nothing.
 
 ### P3 — Focused window ticks and redraws up to twice per frame
+
+> **✅ FIXED (P3 draw)** — the kernel-driven `task_post` no longer forces `draw_window` on the per-frame tick path (keys keep it; dynamic apps self-draw; live SysInfo/Clock via `app_secondly`). Same fix as ps2 §1 P1. Builds + boots in Flycast.
 `unodos.c:1602-1603`. `tick_all_apps()` (`unodos.c:1002-1007`) dispatches `tick()` to
 **every** open window including the topmost; then `post_ticks()` (`unodos.c:984-987`)
 posts a tick to the topmost window's task, and the kernel-driven `task_post`
