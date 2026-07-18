@@ -206,6 +206,21 @@ super:
         ifd     AUTOTEST
         ; Auto-launch the app stack for screenshot verification without
         ; host input injection. Build: -DAUTOTEST=1
+        ifd     AUTOTEST_RAISE
+        ; P1 exercise: open three overlapping windows (create -> redraw_top2),
+        ; then raise two buried ones back to top (launch_app raises an existing
+        ; app -> redraw_top2). The final composite must equal a full repaint_all.
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo (bottom)
+        moveq   #1,d0
+        bsr     launch_app          ; Clock
+        moveq   #2,d0
+        bsr     launch_app          ; Files (top)
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo exists -> raise to top
+        moveq   #1,d0
+        bsr     launch_app          ; Clock exists -> raise to top
+        endc
         ifd     AUTOTEST_PAINT
         ; Paint variant: open the app (loaded from DF1). The PAINT.APP image,
         ; assembled with -DAUTOTEST_PAINT=1, draws a demo scene through its own
@@ -433,6 +448,7 @@ super:
         ifnd    AUTOTEST_FATW
         ifnd    AUTOTEST_MFM
         ifnd    AUTOTEST_FILES
+        ifnd    AUTOTEST_RAISE
         moveq   #2,d0               ; README.TXT (romdisk sorts: CANON,HELLO,README)
         bsr     notepad_open_file
         moveq   #3,d0               ; Notepad (bottom, disk-loaded)
@@ -444,6 +460,7 @@ super:
         moveq   #' ',d1             ; space = play/stop, through MUSIC.APP
         moveq   #0,d2
         bsr     at_app_key
+        endc
         endc
         endc
         endc
@@ -997,7 +1014,7 @@ win_create:
         ; (its title stripes must go), so repaint everything then
         cmp.w   #1,zcount-vars(a4)
         beq     .first
-        bsr     repaint_all
+        bsr     redraw_top2         ; new window on top + old topmost -> inactive
         rts
 .first: bsr     draw_window
         rts
@@ -1087,7 +1104,7 @@ raise_window:
         addq.w  #1,d0
         bra     .shift
 .place: move.b  d2,(a0,d0.w)
-        bsr     repaint_all
+        bsr     redraw_top2         ; only the raised window + the old topmost change
         rts
 
 ; close_window - d0 = z index
@@ -1142,6 +1159,30 @@ repaint_all:
         addq.w  #1,d7
         bra     .wins
 .done:  rts
+
+; redraw_top2 - repaint only the top two windows: the second-from-top first,
+; then the topmost over it (AUDIT-amiga §1 P1). Raising/creating a window makes
+; it topmost, so the ONLY visible deltas are (a) that window drawn on top and
+; (b) the previously-topmost window losing its active title stripes; the static
+; desktop and every window below are unchanged, and nothing gets newly exposed
+; (a window is only added/raised, never removed or shrunk). So this is
+; byte-identical to the full clear+desktop+all-windows repaint_all, at a
+; fraction of the cost. (close_window still uses repaint_all - it must reveal
+; the content a removed window was occluding.)
+redraw_top2:
+        move.w  zcount(pc),d0
+        cmp.w   #2,d0
+        blt     .top1
+        move.w  d0,d2
+        subq.w  #2,d2               ; second-from-top -> inactive now
+        bsr     zwin_ptr
+        bsr     draw_window
+.top1:  move.w  zcount(pc),d2
+        subq.w  #1,d2
+        bmi     .out
+        bsr     zwin_ptr           ; topmost (new / raised) over it
+        bsr     draw_window
+.out:   rts
 
 ; draw_window - a2 = window entry. System 7-style chrome: dark drop
 ; shadow (pen 23), white title bar with theme-color pinstripes when
