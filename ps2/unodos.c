@@ -974,9 +974,19 @@ static void task_yield(void)  {}
 static void task_post(short slot, char type, short d1, short d2, Boolean cmd)
 {
     if (slot < 0 || slot >= MAXWIN || !gWins[slot].used) return;
-    if (type == 1) app_key(gWins[slot].proc, (char)d1, d2, cmd);
-    else           app_tick_dispatch(gWins[slot].proc);
-    draw_window(&gWins[slot]);
+    if (type == 1) {
+        app_key(gWins[slot].proc, (char)d1, d2, cmd);
+        draw_window(&gWins[slot]);     /* a key-driven change -> repaint */
+    } else {
+        /* per-frame tick (type 2): no unconditional repaint (AUDIT-ps2 §1 P1).
+         * draw_window is the most expensive paint in the system and it was run
+         * 60x/s for the topmost window even when idle. Dynamic apps (clock,
+         * games, music) already repaint themselves in their tick; live SysInfo/
+         * Clock are refreshed once a second by app_secondly; static apps
+         * (Files/Notepad/Theme/Paint) need no per-frame paint and redraw on the
+         * key path above. So the tick only dispatches. */
+        app_tick_dispatch(gWins[slot].proc);
+    }
 }
 static void task_post_key(short slot, short d1, short d2, Boolean cmd)
 { task_post(slot, 1, d1, d2, cmd); }
