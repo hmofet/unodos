@@ -11,4 +11,9 @@ void pc64_icon_emblem(int icon, unoui_rect box);
 /* the unoui_icon_art hook: emblem centred in r + the label below it */
 void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags);
 
+/* the live shell theme, so icon art recolours to match it (defined in
+ * pc64_uui.c; returns UI.theme). */
+struct unoui_theme;
+const struct unoui_theme *pc64_shell_theme(void);
+
 #endif

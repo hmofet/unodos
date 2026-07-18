@@ -53,6 +53,10 @@ static const char *kAppNames[NNATIVE] =
 #define TASKH 26                          /* taskbar height, px */
 
 static unoui_ui     UI;
+
+/* the live theme, for theme-aware icon recolouring (pc64_icons.c) */
+const struct unoui_theme *pc64_shell_theme(void) { return UI.theme; }
+
 static unoui_window g_launch;             /* app menu, opened by the Start button */
 static unoui_window g_desk;               /* bare/bottom: the desktop-icon layer */
 static unoui_window g_task;               /* bare/top: the taskbar */
