@@ -864,6 +864,19 @@ start:
         sf      v_mouse_btn(a4)
         bsr     handle_drag         ; .finish (drop)
         endc
+        ifd     AUTOTEST_RAISE
+        ; open three static windows, then raise the buried one (SysInfo) to the
+        ; top. redraw_topmost must composite byte-identically to a repaint_all.
+        bsr     notepad_set_demo
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo (bottom)
+        moveq   #2,d0
+        bsr     launch_app          ; Notepad
+        moveq   #10,d0
+        bsr     launch_app          ; Paint (top)
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo exists -> raise to top
+        endc
         ifnd    AUTOTEST_NOTEPAD
         ifnd    AUTOTEST_MUSIC
         ifnd    AUTOTEST_KBD
@@ -879,6 +892,7 @@ start:
         ifnd    AUTOTEST_TRACKER
         ifnd    AUTOTEST_PAINT
         ifnd    AUTOTEST_DRAG
+        ifnd    AUTOTEST_RAISE
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -888,6 +902,7 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
         endc
         endc
         endc
@@ -1550,7 +1565,8 @@ raise_window:
         addq.w  #1,d0
         bra     .shift
 .place: move.b  d2,(a0,d0.w)
-        bsr     repaint_all
+        bsr     redraw_topmost      ; raised window goes on top; nothing else
+                                    ; changes (no active-title restyle) -> P1
         rts
 
 ; close_window - d0 = z index
