@@ -199,6 +199,8 @@ main_loop:
     jr z, ml_game_tracker
     cp 8                            ; OutLast owns the d-pad too
     jr z, ml_game_outlast
+    cp 9                            ; Pac-Man owns the d-pad too
+    jr z, ml_game_pacman
     call move_cursor
     call dispatch
     jr ml_tick
@@ -213,6 +215,9 @@ ml_game_tracker:
     jr ml_tick
 ml_game_outlast:
     call outlast_input
+    jr ml_tick
+ml_game_pacman:
+    call pacman_input
 ml_tick:
     call app_ticks
     call dostris_gravity            ; no-op unless a Dostris window is playing
@@ -999,6 +1004,9 @@ wc_got:
     ld a, (la_proc)
     cp 8
     call z, outlast_init
+    ld a, (la_proc)
+    cp 9
+    call z, pacman_init
     ld a, 1
     ld (v_dirty), a
     ret
@@ -1010,6 +1018,7 @@ wc_got:
     include "paint.inc"             ; the Paint app
     include "tracker.inc"           ; the Tracker app
     include "outlast.inc"           ; the OutLast app
+    include "pacman.inc"            ; the Pac-Man app
     include "music.inc"             ; PSG audio + the Music app
     include "gen_data.inc"          ; tiles_all, palette, NTILES, T_*, NICONS
 
