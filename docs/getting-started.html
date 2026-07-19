@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="active" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Getting started</h1>
+<p class="lede">The easiest way to run UnoDOS pc64 is the <strong>USB flasher</strong>: download it, write
+UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
+
+<h2 id="need">What you need</h2>
+<ul>
+  <li>A spare <strong>USB stick</strong> of any size (the image is tiny). <strong>Everything on it will be erased.</strong></li>
+  <li>A 64-bit <strong>UEFI</strong> PC to boot it on, meaning essentially any x86-64 machine from about 2007 on.</li>
+</ul>
+
+<h2 id="flasher">Install with the flasher</h2>
+<ol>
+  <li>Download the flasher for your operating system:
+    <ul>
+      <li><strong>Windows</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher.exe">UnoDosFlasher.exe</a>.
+          No install; it prompts for Administrator (raw disk writes need it).</li>
+      <li><strong>macOS</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher-macOS.zip">UnoDosFlasher-macOS.zip</a>.
+          Unzip and open <code>UnoDosFlasher.app</code>; it prompts for your administrator password.</li>
+    </ul>
+    <p class="muted" style="margin:.4em 0 0">All versions are on the
+      <a href="https://github.com/hmofet/unodos/releases">releases page</a>.</p>
+  </li>
+  <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
+  <li>Click <strong>Install</strong> and confirm the erase. The flasher writes a bootable UnoDOS image to the drive.</li>
+</ol>
+<div class="grid cols-2">
+  <figure><img src="assets/img/flasher-windows.png" alt="The flasher on Windows: choose your USB drive and click Install." loading="lazy"><figcaption>The flasher on <b>Windows</b>: choose your USB drive and click Install.</figcaption></figure>
+  <figure><img src="assets/img/flasher-macos.png" alt="The flasher on macOS: the same steps." loading="lazy"><figcaption>The flasher on <b>macOS</b>: the same steps.</figcaption></figure>
+</div>
+<div class="note warn"><b>This wipes the drive</b><b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.</div>
+<div class="note tip"><b>First launch</b>These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.</div>
+
+<h2 id="boot">Boot the target PC</h2>
+<ol>
+  <li>Plug the USB stick into the PC you want to run UnoDOS on.</li>
+  <li>Turn off <strong>Secure Boot</strong> in firmware setup (steps below). The image is unsigned, so it
+      will not boot with Secure Boot on.</li>
+  <li>Restart, open the one-time boot menu (often <kbd>F12</kbd>, <kbd>F9</kbd>, <kbd>F10</kbd> or
+      <kbd>Esc</kbd> at power-on), and pick the USB stick.</li>
+</ol>
+
+<h3 id="securebook">Turning off Secure Boot</h3>
+<ol>
+  <li>Restart the PC and press the firmware-setup key at power-on. It is commonly <kbd>Del</kbd> on
+      desktops and <kbd>F2</kbd> on laptops (some use <kbd>F1</kbd>, <kbd>F10</kbd> or <kbd>Esc</kbd>).</li>
+  <li>Find <strong>Secure Boot</strong>, usually under a <em>Security</em>, <em>Boot</em> or
+      <em>Authentication</em> menu, and set it to <strong>Disabled</strong>. Some firmwares first need you to
+      set a supervisor/administrator password, or to switch the boot mode from "Windows UEFI" to "Other OS".</li>
+  <li>Save and exit (usually <kbd>F10</kbd>).</li>
+</ol>
+<p>When you are finished with UnoDOS, turn Secure Boot back on the same way to return the PC to normal.</p>
+<div class="note warn"><b>BitLocker recovery prompt</b><b>If the PC runs Windows with BitLocker:</b> changing Secure Boot can make Windows ask for your BitLocker recovery key the next time it starts. This is reversible and does not erase anything. Enter the 48-digit recovery key (find it in your Microsoft account at <b>aka.ms/myrecoverykey</b>, or from your IT department), or simply turn Secure Boot back on to stop the prompt. To avoid it altogether, suspend BitLocker before changing Secure Boot (search Windows for <b>Manage BitLocker</b>, then <b>Suspend protection</b>) and resume it afterwards.</div>
+
+<p>Prefer not to touch hardware? You can boot the same image in an emulator instead.
+See <a href="developer.html#qemu">Run it in QEMU</a>.</p>
+
+<h2 id="firstboot">First boot</h2>
+<p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
+plays as the desktop appears. On a laptop the TrackPoint, touchpad and keyboard all work.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/splash.png" alt="The boot splash, with a loading bar and version." loading="lazy"><figcaption>The boot splash, with a loading bar and version.</figcaption></figure>
+  <figure><img src="assets/img/controlpanel.png" alt="First desktop paint: the Control Panel opens over the Aurora Light desktop." loading="lazy"><figcaption>First desktop paint: the Control Panel opens over the Aurora Light desktop.</figcaption></figure>
+</div>
+<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the Start menu;
+arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a window. The
+<a href="desktop.html">desktop tour</a> covers the rest.</p>
+
+<p class="kv">Want to build UnoDOS from source instead of flashing a prebuilt image? That's in the
+<a href="developer.html">Developer guide</a>.</p>
+
+<nav class="pagenav"><a href="index.html">&lsaquo; Overview</a><a class="nxt" href="desktop.html">The desktop &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

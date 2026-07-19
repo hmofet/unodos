@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Themes & appearance · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="active" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Themes &amp; appearance</h1>
+<p class="lede">Ten live themes, a Dark-mode toggle, TrueType fonts, and real resolution choice, all from
+the Control Panel and all without a reboot.</p>
+
+<h2 id="control">The Control Panel</h2>
+<p>The Control Panel is where you change how UnoDOS looks: a <strong>Theme</strong> menu, a
+<strong>Dark mode</strong> toggle, a <strong>Resolution</strong> menu, a system-wide <strong>Font</strong>
+picker, a volume slider, a UI-scale control, and settings for the date and time. It opens on first boot
+and from the Start menu.</p>
+<figure><img src="assets/img/controlpanel.png" alt="The Control Panel. Focus a menu with Tab and change it with ↑/↓; the desktop re-skins instantly." loading="lazy"><figcaption>The Control Panel. Focus a menu with <kbd>Tab</kbd> and change it with <kbd>↑</kbd>/<kbd>↓</kbd>; the desktop re-skins instantly.</figcaption></figure>
+
+<h2 id="themes">The ten themes</h2>
+<p>Aurora is the modern default, with soft shadows, rounded windows, a frosted taskbar and a coloured
+underline under the active window title. The other eight are faithful retro looks. Choosing a theme
+instantly re-skins the whole desktop.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/theme_aurora_light.png" alt="Aurora Light: the default modern look." loading="lazy"><figcaption><b>Aurora Light</b>: the default modern look.</figcaption></figure>
+  <figure><img src="assets/img/theme_aurora_dark.png" alt="Aurora Dark: the Dark-mode counterpart." loading="lazy"><figcaption><b>Aurora Dark</b>: the Dark-mode counterpart.</figcaption></figure>
+  <figure><img src="assets/img/theme_unodos.png" alt="UnoDOS: the house retro theme." loading="lazy"><figcaption><b>UnoDOS</b>: the house retro theme.</figcaption></figure>
+  <figure><img src="assets/img/theme_win31.png" alt="Windows 3.1: teal desktop, raised widgets." loading="lazy"><figcaption><b>Windows 3.1</b>: teal desktop, raised widgets.</figcaption></figure>
+  <figure><img src="assets/img/theme_macos7.png" alt="Mac OS 7: the classic platinum look." loading="lazy"><figcaption><b>Mac OS 7</b>: the classic platinum look.</figcaption></figure>
+  <figure><img src="assets/img/theme_macplus.png" alt="Mac Plus: black and white." loading="lazy"><figcaption><b>Mac Plus</b>: black and white.</figcaption></figure>
+  <figure><img src="assets/img/theme_amiga.png" alt="Amiga: the Workbench palette." loading="lazy"><figcaption><b>Amiga</b>: the Workbench palette.</figcaption></figure>
+  <figure><img src="assets/img/theme_c64.png" alt="C64: Commodore blue on blue." loading="lazy"><figcaption><b>C64</b>: Commodore blue on blue.</figcaption></figure>
+  <figure><img src="assets/img/theme_apple2.png" alt="Apple II: the retro Apple look." loading="lazy"><figcaption><b>Apple II</b>: the retro Apple look.</figcaption></figure>
+  <figure><img src="assets/img/theme_next.png" alt="NeXTSTEP: greyscale, chiselled bezels." loading="lazy"><figcaption><b>NeXTSTEP</b>: greyscale, chiselled bezels.</figcaption></figure>
+</div>
+
+<h2 id="fonts">TrueType fonts</h2>
+<p>Pick a TrueType font and all the on-screen text restyles: titles, labels, buttons and lists, drawn
+smoothly and proportionally. Three fonts are included (DejaVu Sans, DejaVu Sans Mono and Ubuntu), and the
+built-in font stays the default.</p>
+<figure><img src="assets/img/font_ttf.png" alt="The same interface using the proportional Sans TrueType font (shown here with the NeXTSTEP theme)." loading="lazy"><figcaption>The same interface using the proportional <b>Sans</b> TrueType font (shown here with the NeXTSTEP theme).</figcaption></figure>
+
+<h2 id="resolution">Resolution &amp; scaling</h2>
+<p>Pick a resolution from the Control Panel and the desktop resizes to match, scaled to fill your screen
+while keeping the correct proportions.</p>
+<figure><img src="assets/img/resolution.png" alt="A 640×480 desktop scaled to fit a widescreen panel, shown with the NeXTSTEP theme and Sans font." loading="lazy"><figcaption>A 640×480 desktop scaled to fit a widescreen panel, shown with the NeXTSTEP theme and Sans font.</figcaption></figure>
+
+<nav class="pagenav"><a href="desktop.html">&lsaquo; The desktop</a><a class="nxt" href="apps.html">Applications &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
