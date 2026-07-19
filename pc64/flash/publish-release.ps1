@@ -26,7 +26,16 @@ $in  = [IO.File]::Open($img, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.Fil
 $out = [IO.File]::Create($gz)
 $gzs = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
 $in.CopyTo($gzs); $gzs.Dispose(); $out.Dispose(); $in.Dispose()
-$assets = @($exe, $gz)
+
+# the hybrid UEFI ISO (VM CD-ROM boot + Rufus/Etcher/dd to USB) - build if absent
+$iso = Join-Path $build "unodos-pc64.iso"
+if (-not (Test-Path $iso)) {
+    Write-Host "Building the hybrid ISO (tools/mkiso.py under WSL)..."
+    $wslPc64 = (& wsl wslpath -a ($pc64 -replace '\\','/')).Trim()
+    & wsl bash -lc "cd '$wslPc64' && python3 tools/mkiso.py"
+    if ($LASTEXITCODE -ne 0) { throw "mkiso.py failed (needs xorriso + mtools in WSL)" }
+}
+$assets = @($exe, $gz, $iso)
 
 $notes = @"
 **UnoDOS / pc64** - the modern-PC (x86-64 / UEFI) world of UnoDOS. Boots straight
@@ -40,6 +49,11 @@ Or write the image yourself with Rufus / balenaEtcher (they read ``.gz`` directl
 or ``dd`` (gunzip first):
 
 ``gunzip -c unodos-pc64-uefi.img.gz | sudo dd of=/dev/sdX bs=4M status=progress``
+
+### Or use the ISO
+**unodos-pc64.iso** is a hybrid UEFI ISO: attach it to a VM (QEMU, VirtualBox,
+VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with Rufus,
+balenaEtcher or ``dd`` - both ways boot the same desktop.
 
 ### Boot it
 UEFI only (x86-64 PCs, ~2012 on). In firmware: disable **Secure Boot**, then pick

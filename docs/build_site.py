@@ -77,7 +77,7 @@ code,kbd,pre,.mono{font-family:"SFMono-Regular",ui-monospace,"JetBrains Mono",Me
 .brand .logo i:nth-child(1){background:#e8503a}.brand .logo i:nth-child(2){background:#37b24d}
 .brand .logo i:nth-child(3){background:#4c6ef5}.brand .logo i:nth-child(4){background:#f4b400}
 .brand b{font-size:18px;letter-spacing:.2px}
-.brand span{display:block;font-size:12px;color:var(--muted);font-weight:400}
+.brand .sub{display:block;font-size:12px;color:var(--muted);font-weight:400}
 .nav{list-style:none;margin:14px 0 0;padding:0}
 .nav a{display:block;padding:8px 22px;color:var(--text);font-size:14.5px;border-left:3px solid transparent}
 .nav a:hover{background:var(--surface-2);text-decoration:none}
@@ -116,7 +116,7 @@ figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px 
 .grid{display:grid;gap:18px}
 .grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
-.grid figure{margin:0}
+.grid figure{margin:0;align-self:start}
 
 /* cards */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin:1.2em 0}
@@ -128,7 +128,7 @@ figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px 
 .note{border:1px solid var(--border);border-left:4px solid var(--accent);background:var(--surface);
   border-radius:10px;padding:12px 16px;margin:1.4em 0;font-size:14.6px}
 .note.tip{border-left-color:#37b24d}.note.warn{border-left-color:#f08c00}
-.note b{display:block;margin-bottom:2px}
+.note>b:first-child{display:block;margin-bottom:2px}
 
 /* kbd + code */
 kbd{display:inline-block;background:var(--surface-2);border:1px solid var(--border);border-bottom-width:2px;
@@ -200,7 +200,7 @@ def sidebar(active):
 <aside class="sidebar">
   <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
     <span class="logo"><i></i><i></i><i></i><i></i></span>
-    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
   <ul class="nav">{items}</ul>
   <div class="side-foot">
@@ -539,6 +539,7 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
   <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
   <li>Click <strong>Install</strong> and confirm the erase. The flasher writes a bootable UnoDOS image to the drive.</li>
 </ol>
+{note('Prefer a standard image? <b>unodos-pc64.iso</b> is a hybrid UEFI ISO: attach it to a virtual machine (QEMU, VirtualBox, VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with <b>Rufus</b>, <b>balenaEtcher</b> or <code>dd</code> - both ways boot the same desktop. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same writing tools.', kind="tip", title="ISO and raw-image alternatives")}
 <div class="grid cols-2">
   {fig("flasher-windows.png", "The flasher on <b>Windows</b>: choose your USB drive and click Install.")}
   {fig("flasher-macos.png", "The flasher on <b>macOS</b>: the same steps.")}
