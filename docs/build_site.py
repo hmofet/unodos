@@ -907,19 +907,18 @@ every version consistent instead of drifting apart.</p>
 <p>Every port's ready-to-run image is committed in the repository, so each
 <em>Download</em> link below always gets you the latest build - a ROM for a
 console runs in any emulator or on a flash cart, and each port's folder has a
-README with the details. Rows marked <em>source</em> build in a few minutes
-from that port's folder.</p>
+README with the details.</p>
 <div class="tw"><table>
 <thead><tr><th>World</th><th>Hardware</th><th>CPU</th><th>Boot / display</th><th>Download</th></tr></thead>
 <tbody>
 <tr><td><strong>pc64</strong></td><td>Modern PC (2007+)</td><td>x86-64</td><td>UEFI GOP <span class="muted">(this manual)</span></td><td><a href="https://github.com/hmofet/unodos/releases/latest">ISO &amp; flasher</a></td></tr>
 <tr><td>Classic</td><td>IBM PC/XT</td><td>Intel 8088+</td><td>BIOS · CGA</td><td><a href="https://github.com/hmofet/unodos/raw/master/build/unodos-144.img">floppy image</a></td></tr>
 <tr><td>Amiga</td><td>Commodore Amiga</td><td>68000</td><td>native chipset</td><td><a href="https://github.com/hmofet/unodos/raw/master/amiga/build/unodos68k.adf">ADF</a></td></tr>
-<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td><td><a href="https://github.com/hmofet/unodos/tree/master/macplus">source</a></td></tr>
+<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/macplus/build/unodos_macplus.dsk">disk image</a></td></tr>
 <tr><td>PowerPC Mac</td><td>Power Macintosh</td><td>PowerPC 32-bit</td><td>Open Firmware</td><td><a href="https://github.com/hmofet/unodos/raw/master/ppcmac/build/unodos.bin">boot image</a></td></tr>
-<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td><td><a href="https://github.com/hmofet/unodos/tree/master/apple2">source</a></td></tr>
-<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td><td><a href="https://github.com/hmofet/unodos/tree/master/iigs">source</a></td></tr>
-<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td><td><a href="https://github.com/hmofet/unodos/tree/master/c64">source</a></td></tr>
+<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/apple2/build/unodos_apple2.dsk">disk image</a></td></tr>
+<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/iigs/build/unodos_iigs.po">disk image</a></td></tr>
+<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td><td><a href="https://github.com/hmofet/unodos/raw/master/c64/build/unodos_c64.d64">D64</a></td></tr>
 <tr><td>VIC-20</td><td>Commodore VIC-20</td><td>6502</td><td>VIC 6560/1</td><td><a href="https://github.com/hmofet/unodos/raw/master/vic20/build/unodos.prg">PRG</a></td></tr>
 <tr><td>NES</td><td>Nintendo NES</td><td>6502 / 2A03</td><td>PPU</td><td><a href="https://github.com/hmofet/unodos/raw/master/nes/build/unodos.nes">ROM</a></td></tr>
 <tr><td>SNES</td><td>Super Nintendo</td><td>65C816</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/snes/build/unodos.sfc">ROM</a></td></tr>
@@ -930,8 +929,8 @@ from that port's folder.</p>
 <tr><td>Game Boy Advance</td><td>Nintendo GBA</td><td>ARM7TDMI</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/gba/build/unodos.gba">ROM</a></td></tr>
 <tr><td>PC Engine</td><td>NEC TurboGrafx-16</td><td>HuC6280</td><td>HuC6270 VDC</td><td><a href="https://github.com/hmofet/unodos/raw/master/pce/build/unodos.pce">ROM</a></td></tr>
 <tr><td>WonderSwan</td><td>Bandai WonderSwan</td><td>NEC V30MZ</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ws/build/unodos.ws">ROM</a></td></tr>
-<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td><td><a href="https://github.com/hmofet/unodos/tree/master/dreamcast">source</a></td></tr>
-<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td><td><a href="https://github.com/hmofet/unodos/tree/master/ps2">source</a></td></tr>
+<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/dreamcast/build/unodos-dc-uui.elf">ELF</a> · <a href="https://github.com/hmofet/unodos/raw/master/dreamcast/build/unodos-dc-uui.iso">ISO</a></td></tr>
+<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ps2/build/unodos-ps2-uui.elf">ELF</a></td></tr>
 <tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td><td><a href="https://github.com/hmofet/unodos/raw/master/rpi/build/kernel8.img">kernel8.img</a></td></tr>
 <tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td><td><a href="https://github.com/hmofet/unodos/raw/master/pinephone/build/unodos.bin">boot image</a></td></tr>
 </tbody>
