@@ -7,6 +7,24 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest — M3 firmware detach (ExitBootServices) on metal
+
+QEMU-verified end-to-end (auto-detach, PS/2 input, native-AHCI module loads,
+CMOS clock). Metal is where the gate's conservatism actually matters:
+
+- [ ] **A machine WITH an i8042 + AHCI system disk** (older desktop/laptop,
+      UnoDOS *installed* to the internal disk): boot → System app should say
+      `DETACHED (native): ahci ...`; keyboard + (PS/2) mouse still work, the
+      clock ticks (CMOS), apps open (native AHCI `.UNO` loads), Restart works
+      (CF9). Music/games audio still fine (PIT speaker was already native).
+- [ ] **USB-stick boot on the same machine**: must STAY attached (the boot
+      volume is USB) — System says `Native FS: fw-sect ...`, Install works.
+- [ ] **The Surface / X1 (no i8042 or NVMe-only)**: must stay attached and
+      behave exactly as before (the detach gate declines quietly; check
+      `detach:` lines with a `-DUNO_DBGCON` build if curious).
+- [ ] If a machine misbehaves detached, `-DUNO_NO_DETACH` is the escape hatch
+      (and file what broke — likely NX page tables or an AHCI quirk).
+
 ## Newest — xHCI USB stack + AX88179 USB Ethernet (networking for the X1)
 
 The USB host-controller driver + transfer API + the AX88179 USB Gigabit

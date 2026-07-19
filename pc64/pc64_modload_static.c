@@ -49,3 +49,6 @@ UnoAppEntry uno_load_module(short proc)
     if (proc < 0 || proc >= APP_NAPPS) return 0;
     return gEntry[proc];
 }
+
+/* M3 detach hook (uefi_main): nothing to reserve - apps are linked in */
+void uno_modload_reserve(void) { }

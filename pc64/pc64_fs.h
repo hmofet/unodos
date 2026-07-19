@@ -24,4 +24,7 @@ long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 int  uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
 int  uno_fs_writable(int vol);                   /* 1 if uno_fs_write can work  */
 
+/* M3 detach: rebuild the volume map after the block-device set changed */
+void uno_fs_remap(void);
+
 #endif

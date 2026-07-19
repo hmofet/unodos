@@ -5,6 +5,40 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 firmware detach — UnoDOS runs on its own drivers (M3)] - 2026-07-19
+
+Milestone 3, the end of the decoupling arc: when the native stack covers the
+machine, pc64 calls **ExitBootServices at the end of boot** and runs with no
+firmware in the picture — native AHCI moves sectors, a polled i8042 PS/2 driver
+supplies keyboard + mouse, the TSC paces frames and delays, the CMOS RTC tells
+time, CF9 resets. The System window shows `DETACHED (native)`.
+
+- **`pc64/pc64_native.c`** — the native platform layer: calibrated-TSC delays,
+  CMOS RTC read/write, a bounded polled i8042 driver (scan-set-1 keyboard with
+  shift/ctrl/caps decode + 3-byte mouse packets), CF9+i8042 reset. All port
+  I/O; every wait bounded.
+- **The detach gate is conservative and automatic**: linear framebuffer +
+  i8042 present + TSC calibrated + a *UnoDOS system volume* on the AHCI
+  controller (`uno_fat_native_eligible` checks for a UnoDOS `BOOTX64.EFI`, so
+  a machine merely *having* a FAT disk doesn't detach away its own USB boot
+  volume or the firmware-dependent Install app). Laptops without an i8042
+  (Surface) simply stay attached — every service falls back to firmware
+  exactly as before. `-DUNO_NO_DETACH` opts a build out.
+- **Detach-aware routing everywhere**: input polls, `uno_pc64_delay_ms`,
+  present pacing, wall clock, reset/shutdown, uACPI stalls, GOP mode cycling
+  (frozen once detached), the module loader (post-detach `.UNO` loads come
+  from an executable arena reserved pre-EBS), `pc64_fs` (firmware SFS volumes
+  drop out), and the installer (refuses with a clear message once detached).
+- The write-back FAT cache is synced before `ExitBootServices`, then blkdev
+  re-registers native AHCI disks and the volumes remount natively.
+- Also: the unoui window table grew 8 → 24 with `unoui_ui_add` reporting
+  failure and `open_app` rolling back — five-plus open windows no longer
+  silently swallow new ones.
+- Verified headless: boots detach on QEMU (q35 AHCI + PS/2), all 7 `.UNO`
+  apps open post-detach via the PS/2 path, `install_test.py` end-to-end both
+  modes — the USB-boot phase stays attached (installer works), the installed
+  system detaches on its own disk.
+
 ## [pc64 dynamic apps — every app is a .UNO module loaded from storage] - 2026-07-19
 
 Milestone 2 of decoupling pc64 from EFI firmware: **no app code is linked into

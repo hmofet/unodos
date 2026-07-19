@@ -12,6 +12,14 @@
 /* Scan all block devices + mount FAT volumes.  Idempotent. */
 void uno_fat_init(void);
 
+/* M3 detach support: flush dirty cache lines (while the old transport is
+ * still alive); re-scan volumes over the current device set (after the
+ * transport changed - drops the cache unflushed); detach-eligibility gate
+ * (a FAT volume lives on the disk the native AHCI driver will reach). */
+void uno_fat_sync(void);
+void uno_fat_remount(void);
+int  uno_fat_native_eligible(void);
+
 int         uno_fat_volumes(void);
 const char *uno_fat_label(int vol);              /* 11-char volume label / ""  */
 unsigned int uno_fat_serial(int vol);            /* BPB volume id (dedup key)  */

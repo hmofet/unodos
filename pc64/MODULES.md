@@ -42,7 +42,10 @@ Imports are **functions only**. Each undefined symbol in the app object
 becomes a one-instruction thunk `jmp *slot(%rip)` in a generated assembly
 file, so there are no import libraries at build time and no PE machinery at
 runtime. Loading = read + CRC32 check + `AllocatePages(EfiLoaderCode)`
-(executable under firmware NX policies) + copy + rebase + resolve.
+(executable under firmware NX policies) + copy + rebase + resolve. After the
+M3 firmware detach, `AllocatePages` is gone: loads come from a 1.5 MB
+executable arena the loader reserves (same memory type) right before
+`ExitBootServices`.
 
 ## Build pipeline (in `build.sh`, per app)
 

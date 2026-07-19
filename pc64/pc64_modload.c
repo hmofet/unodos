@@ -139,17 +139,45 @@ static long mod_read(const char *file, unsigned char *buf, long max)
 }
 
 /* EFI page allocation, typed EfiLoaderCode so the image is executable even
- * under firmware NX policies (AllocatePages is a void* slot in uefi.h). */
+ * under firmware NX policies (AllocatePages is a void* slot in uefi.h).
+ * Once detached (M3) AllocatePages is gone - a static bump arena takes over
+ * (module images are ~40 KB each; 1.5 MB covers the whole roster twice). */
 typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN Type, UINTN MemType, UINTN Pages,
                                       unsigned long long *Memory);
 typedef EFI_STATUS (*EFI_FREE_PAGES)(unsigned long long Memory, UINTN Pages);
 #define EFI_LOADER_CODE 1
 
+int uno_pc64_detached(void);                       /* uefi_main.c (M3) */
+
+/* The post-detach arena is RESERVED while boot services are still live (an
+ * EfiLoaderCode allocation stays ours - and stays executable - after EBS;
+ * a .bss array might sit in pages the firmware's image protection marked
+ * NX).  try_detach() calls the reserve right before ExitBootServices. */
+#define MOD_ARENA_PAGES 384u                       /* 1.5 MB */
+static unsigned char *gModArena;
+static unsigned long  gModArenaUsed;
+
+void uno_modload_reserve(void)
+{
+    EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    unsigned long long mem = 0;
+    if (gModArena || !ST) return;
+    if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)
+            (0, EFI_LOADER_CODE, MOD_ARENA_PAGES, &mem) == EFI_SUCCESS)
+        gModArena = (unsigned char *)(unsigned long long)mem;
+}
+
 static unsigned char *mod_alloc(unsigned long np)
 {
     EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
     unsigned long long mem = 0;
-    if (!ST) return 0;
+    if (uno_pc64_detached() || !ST) {
+        unsigned long bytes = np << 12;
+        if (!gModArena || gModArenaUsed + bytes > (MOD_ARENA_PAGES << 12))
+            return 0;
+        { unsigned char *p = gModArena + gModArenaUsed;
+          gModArenaUsed += bytes; return p; }
+    }
     if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)
             (0 /*AnyPages*/, EFI_LOADER_CODE, np, &mem) != EFI_SUCCESS)
         return 0;
@@ -158,7 +186,15 @@ static unsigned char *mod_alloc(unsigned long np)
 static void mod_free(unsigned char *base, unsigned long np)
 {
     EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
-    if (ST && base)
+    if (!base) return;
+    if (gModArena && base >= gModArena &&
+        base < gModArena + (MOD_ARENA_PAGES << 12)) {
+        /* bump arena: only the most recent allocation can be returned */
+        if (base + (np << 12) == gModArena + gModArenaUsed)
+            gModArenaUsed -= np << 12;
+        return;
+    }
+    if (ST && !uno_pc64_detached())
         ((EFI_FREE_PAGES)ST->BootServices->FreePages)
             ((unsigned long long)base, np);
 }

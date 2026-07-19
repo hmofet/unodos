@@ -133,6 +133,8 @@ def start_qemu(with_usb):
         "-device", "qemu-xhci", "-device", "usb-tablet,id=tab",
         "-nic", "none", "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
+        "-debugcon", "file:build/inst-ovmf.log",
+        "-global", "isa-debugcon.iobase=0x402",
     ]
     if with_usb:
         argv += ["-drive", "if=none,id=us,format=raw,file=" + USB_IMG,

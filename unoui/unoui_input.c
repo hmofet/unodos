@@ -31,10 +31,10 @@ void unoui_ui_init(unoui_ui *ui, const unoui_theme *t, int sw, int sh)
 
 void unoui_ui_theme(unoui_ui *ui, const unoui_theme *t) { ui->theme = t; unoui_bg_invalidate(); }
 
-void unoui_ui_add(unoui_ui *ui, unoui_window *win)
+int unoui_ui_add(unoui_ui *ui, unoui_window *win)
 {
     int r, pos, i;
-    if (ui->nwin >= UNOUI_MAX_WINDOWS) return;
+    if (ui->nwin >= UNOUI_MAX_WINDOWS) return 0;
     /* insert just above the last window of the same-or-lower band, so the list
      * stays sorted BOTTOM < normal < TOP and pins hold. */
     r = (win->flags & UI_WIN_BOTTOM) ? 0 : (win->flags & UI_WIN_TOP) ? 2 : 1;
@@ -49,6 +49,7 @@ void unoui_ui_add(unoui_ui *ui, unoui_window *win)
     ui->win[pos] = win; ui->nwin++;
     if (r == 1) { ui->focus_win = pos; ui->focus_wi = -1; }  /* focus new apps */
     else if (ui->focus_win >= pos) ui->focus_win++;          /* keep focus ptr */
+    return 1;
 }
 
 /* ----------------------------------------------------------- helpers ------ */

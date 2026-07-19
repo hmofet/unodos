@@ -335,8 +335,10 @@ static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
     char *p;
+    int uno_pc64_detached(void);
     for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i); if (b && b->native) nnat++; }
-    p = ap_str(g_nat, "Native FS: ");
+    p = ap_str(g_nat, uno_pc64_detached() ? "DETACHED (native): "
+                                          : "Native FS: ");
     p = ap_str(p, nnat ? "ahci " : "fw-sect ");
     p = ap_int(p, nblk); p = ap_str(p, " disk");
     p = ap_str(p, "  FAT vols "); p = ap_int(p, nfat);
@@ -752,7 +754,15 @@ static void open_app(int a)
     if (!g_open[a]) {
         int g = app_game(a);
         clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
-        unoui_ui_add(&UI, &g_win[a]); g_open[a] = 1;
+        if (!unoui_ui_add(&UI, &g_win[a])) {         /* window table full */
+#ifdef UNO_DBGCON
+            { const char *s = "open_app: window table full\n";
+              while (*s) __asm__ volatile ("outb %0, %1"
+                             : : "a"((unsigned char)*s++), "Nd"((unsigned short)0x402)); }
+#endif
+            return;
+        }
+        g_open[a] = 1;
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */

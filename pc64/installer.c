@@ -22,6 +22,7 @@
 /* uefi_main.c */
 void *uno_pc64_st(void);
 void *uno_pc64_image_handle(void);
+int   uno_pc64_detached(void);
 
 /* pc64_modload.c - the .UNO app-module roster (copied on ESP installs) */
 int         uno_mod_count(void);
@@ -291,6 +292,10 @@ int uno_inst_scan(void)
     EFI_HANDLE *hs = 0; UINTN n = 0, i;
     EFI_BLOCK_IO *src;
     g_nt = 0; g_err[0] = 0;
+    if (uno_pc64_detached()) {              /* fw SFS/Block IO/handles are gone */
+        err("Install needs the firmware - reboot to install");
+        return 0;
+    }
     if (!bind()) return 0;
 
     src = src_disk();                       /* also powers the size check      */
@@ -646,6 +651,7 @@ int uno_inst_install(int i, int make_default,
                      void (*progress)(int, const char *))
 {
     g_err[0] = 0;
+    if (uno_pc64_detached()) { err("Install needs the firmware - reboot to install"); return 0; }
     if (!bind()) return 0;
     if (i < 0 || i >= g_nt) { err("no target selected"); return 0; }
     if (!g_t[i].usable) { err("target not usable (see its listing)"); return 0; }

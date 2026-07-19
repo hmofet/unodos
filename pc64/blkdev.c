@@ -143,3 +143,12 @@ void uno_blk_init(void)
     else
         fw_scan();                   /* firmware moves sectors; we own the FS  */
 }
+
+/* M3 detach: firmware Block IO just died with ExitBootServices - drop every
+ * registered device and re-populate from the native drivers, which are now
+ * the only ones on the bus.  Callers then uno_fat_remount(). */
+void uno_blk_detach(void)
+{
+    g_ndev = 0;
+    uno_ahci_init();
+}
