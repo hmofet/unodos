@@ -137,6 +137,19 @@ int acpi_lid_state(void)
     return g_lid_cache;
 }
 
+acpi_lid_event_t acpi_lid_event(void)
+{
+    static int prev = -1;            /* last KNOWN state; -1 = no baseline yet */
+    int ls = acpi_lid_state();
+    if (ls < 0)                      /* unknown: keep the baseline untouched */
+        return ACPI_LID_EVT_NONE;
+    int was = prev;
+    prev = ls;
+    if (was < 0 || was == ls)        /* first known reading, or no change */
+        return ACPI_LID_EVT_NONE;
+    return ls ? ACPI_LID_EVT_OPEN : ACPI_LID_EVT_CLOSE;
+}
+
 int acpi_device_power_on(const char *hid)
 {
     uacpi_namespace_node *node = find_first_device(hid, UACPI_NULL);

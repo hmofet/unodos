@@ -7,7 +7,15 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
-## Newest — native input takeover (I2C-HID kbd + USB HID + 64-bit BAR fix)
+## Newest — lid-close sleep
+
+- [ ] On any laptop with a working ACPI lid (the System window shows
+      `lid open`/`closed`): close the lid → screen blanks; open it → the desktop
+      comes back. A key also wakes. Toggle it off in Control Panel → "Lid sleep"
+      and confirm closing the lid then does nothing. (QEMU-verified via a
+      synthetic toggling lid; real `_LID`/EC lid is metal-only.)
+
+## Native input takeover (I2C-HID kbd + USB HID + 64-bit BAR fix)
 
 The floaty-mouse / firmware-OSK work. On the **Surface Laptop Go 1** (the
 machine that showed `0 DW ctrl / 3 bars`):

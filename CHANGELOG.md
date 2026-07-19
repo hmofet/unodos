@@ -5,6 +5,18 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 lid-close sleep] - 2026-07-19
+
+Close the lid → the screen blanks and the CPU idles; open it (or press a key) →
+wake and repaint. Uses the shared ACPI stack's new `acpi_lid_event()` edge
+primitive (synced from `hmofet/acpipower` @ `884d18c`), the same pattern the
+contract names for Writer's Unlock. Read-only ACPI (no GPE/SCI): the shell polls
+the lid edge (`_LID` cached ~1 Hz) in its main loop — `CLOSE` blanks the
+framebuffer + low-power idles, `OPEN`/key wakes. Inert on machines with no lid
+and toggleable from the Control Panel ("Lid sleep", on by default). Verified in
+QEMU with a toggling-lid SSDT (`tools/testlid.asl`, `harness.py lidsleep`): the
+screen blanks and restores in lockstep with the synthetic lid.
+
 ## [pc64 native input — take keyboard & mouse from the firmware] - 2026-07-19
 
 Native drivers for all three x86 input transports, so pc64 no longer depends on
