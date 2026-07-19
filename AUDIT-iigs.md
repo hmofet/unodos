@@ -46,6 +46,16 @@ single window is drawn. `repaint_all` fires from `raise_window`, `close_window`,
 
 ### Fixes, highest impact first
 
+> **✅ P1 FIXED (`b2a5c3f` raise/create, `440dd31` close/drag).** A row-band clip
+> (`v_clip_y0/y1`, default = whole screen) was added to the SHR primitives
+> (`fill_band` clamps PY/PH, `render_glyph` draws only in-band glyph rows,
+> `clear_screen` clears just the band). raise/create → `redraw_topmost` (iigs has
+> no active-title restyle); close/drag set the band (closed window's rows / union
+> of the drag's old+new rows) around `repaint_all` then `clip_reset`. Byte-identical
+> via `harness.py` (m1 + close-reveal + a title-bar drag; adds a `drag` script op).
+> P2 below is no longer needed for P1 — the coarse row-band already removes the
+> per-cell-step full repaint.
+
 **P1 — Window drag repaints the entire screen every cell step.**
 `handle_drag` calls `repaint_all` (`kernel.s:2059`) whenever the dragged window
 crosses an 8-px cell boundary. Each such frame re-runs the full `fill_screen` wipe
@@ -61,6 +71,10 @@ frame to frame yet is recomputed on every `repaint_all`. **Fix:** render the sta
 desktop once into a bank-0 (or bank-`$E1` off-screen) buffer and blit the needed
 rows; invalidate only in `apply_theme`/resolution change. Removes most of P1's cost.
 
+> **✅ P3 FIXED (`350358c`).** `fill_band` stays a16 and stores 16-bit words (PB
+> replicated to both bytes), with a single tail byte for odd widths (window
+> borders are 1 byte wide). Byte-identical (`harness.py` m1).
+
 **P3 — `fill_band` stores one byte at a time in 8-bit mode.**
 `fill_band`'s inner column loop drops to `sep #$20` and does `sta [GP],y` one byte
 per pixel-pair (`kernel.s:350-357`, store at `353`). This is *the* universal fill
@@ -70,6 +84,12 @@ i.e. **always even**, so a 16-bit `sta [GP]` word store (PB replicated to both
 bytes, as `fill_screen` already does at `377-381`) **halves** the store count on the
 hottest loop in the renderer.
 
+> **⏸ P4 — not byte-identical.** `v_ol_scroll` advances every tick and the road is
+> drawn from it, so the canvas genuinely changes every frame; gating the redraw or
+> dropping the cadence changes the animation (fewer/slower frames), so it can't be
+> done under the byte-identical rule. It's a gameplay-cadence choice, not a
+> transparent perf fix. Left as-is.
+
 **P4 — OutLast redraws the entire road canvas every single frame.**
 `outlast_tick` calls `redraw_topmost` unconditionally at `outlast.i:65` (the `@found`
 path always animates), and `outlast_draw` (`outlast.i:110-189`) fills the full
@@ -78,6 +98,12 @@ Every *other* game gates its redraw behind a step timer (Dostris `game_tick`
 `dostris.i:391`, Pac-Man `pacman_tick` `pacman.i:185`, Tracker `tracker.i:102`), so
 only OutLast pays a full-window repaint at 60 Hz. **Fix:** redraw only when the scene
 actually changes (scroll/phase/steer) or drop the cadence to every 2-3 frames.
+
+> **remaining (low value).** P5 is byte-identical but a wash: the caller-side
+> row-base hoist needs changes in every game draw loop, while a transparent
+> `calc_gp_px` memo (cache PY×160 keyed on PY) speeds the game canvases but adds a
+> compare to every window fill. P2 (cache the static desktop) is a larger
+> architectural change and no longer needed for P1. Both left for later.
 
 **P5 — `fillcell` recomputes the row-base multiply per cell.**
 `fillcell` (`kernel.s:571-595`) calls `fill_band`, which calls `calc_gp_px`
