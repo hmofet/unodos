@@ -24,6 +24,12 @@ void fb_set_clip(int x, int y, int w, int h)
 void fb_reset_clip(void)
 { cl_x0 = 0; cl_y0 = 0; cl_x1 = CL_BIG; cl_y1 = CL_BIG; }
 
+void fb_get_clip(int *x, int *y, int *w, int *h)
+{ *x = cl_x0; *y = cl_y0; *w = cl_x1 - cl_x0; *h = cl_y1 - cl_y0; }
+
+/* line height of the active text face - this port has only the 8x8 bitmap */
+int fb_text_h(void) { return 8; }
+
 static void clip_bounds(int *x0, int *y0, int *x1, int *y1)
 {
     *x0 = cl_x0 > 0 ? cl_x0 : 0;

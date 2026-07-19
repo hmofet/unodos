@@ -270,6 +270,7 @@ typedef struct unoui_ui {
     int hot_win,   hot_wi;       /* hovered widget                            */
     int cap_win,   cap_wi, cap_mode;   /* mouse-captured drag target          */
     int grab_dx, grab_dy;        /* pointer offset within the grabbed thing   */
+    int resize_axes;             /* UI_CAP_RESIZE: bit0 = width, bit1 = height */
     int mx, my, mdown;
 
     /* an open popup (menubar menu or dropdown list) */

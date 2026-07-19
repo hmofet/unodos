@@ -43,7 +43,7 @@ static void m_titlebar(const unoui_theme *t, const unoui_window *win)
     tw = fb_text_w(win->title);
     tx = r.x + (r.w - tw) / 2;
     fb_fill_rect(tx - 6, r.y + 1, tw + 12, th - 1, M7_WHITE);
-    fb_text(tx, r.y + (th - 8)/2, win->title,
+    fb_text(tx, r.y + (th - fb_text_h())/2, win->title,
             win->active ? M7_BLACK : M7_GREY, -1);
 }
 
@@ -75,7 +75,7 @@ static void m_check(const unoui_theme *t, unoui_rect r, const char *s, int f)
             ui_px(r.x+i, r.y+i, M7_BLACK); ui_px(r.x+11-i, r.y+i, M7_BLACK);
         }
     }
-    fb_text(r.x + 18, r.y + 2, s, (f & UI_F_DISABLED) ? M7_GREY : M7_BLACK, -1);
+    fb_text(r.x + 18, r.y + (r.h - fb_text_h())/2, s, (f & UI_F_DISABLED) ? M7_GREY : M7_BLACK, -1);
 }
 
 static const unoui_draw macos7_draw = {

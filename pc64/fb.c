@@ -23,6 +23,11 @@ void fb_reset_clip(void)
     cl_x0 = 0; cl_y0 = 0; cl_x1 = CL_BIG; cl_y1 = CL_BIG;
 }
 
+void fb_get_clip(int *x, int *y, int *w, int *h)
+{
+    *x = cl_x0; *y = cl_y0; *w = cl_x1 - cl_x0; *h = cl_y1 - cl_y0;
+}
+
 /* current clip window intersected with the screen */
 static void clip_bounds(int *x0, int *y0, int *x1, int *y1)
 {
@@ -231,8 +236,15 @@ int fb_glyph(int x, int y, int ch, fb_px fg, long bg)
 
 int fb_text(int x, int y, const char *s, fb_px fg, long bg)
 {
+    if (g_font && g_font->text) return g_font->text(x, y, s, fg, bg);
     for (; *s; s++) x = fb_glyph(x, y, (unsigned char)*s, fg, bg);
     return x;
+}
+
+int fb_text_h(void)
+{
+    if (g_font && g_font->height) return g_font->height();
+    return 8;
 }
 
 int fb_text_w(const char *s)

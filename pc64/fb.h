@@ -65,6 +65,7 @@ void fb_fill_rect(int x, int y, int w, int h, fb_px c);
  * from overflowing their window. fb_pixel is a clip-respecting single plot. */
 void fb_set_clip(int x, int y, int w, int h);
 void fb_reset_clip(void);
+void fb_get_clip(int *x, int *y, int *w, int *h);  /* current window (for save/restore) */
 void fb_pixel(int x, int y, fb_px c);
 void fb_frame_rect(int x, int y, int w, int h, fb_px c);   /* 1px border */
 void fb_invert_rect(int x, int y, int w, int h);           /* XOR to white */
@@ -95,9 +96,14 @@ typedef struct {
     int (*glyph) (int x, int y, int cp, fb_px fg, long bg);  /* draw; return advanced x */
     int (*text_w)(const char *s);                            /* pixel width of s        */
     int (*height)(void);                                     /* line height in px       */
+    /* optional full-string draw: a provider that positions glyphs with a
+     * fractional pen + kerning implements this; fb_text prefers it over the
+     * per-glyph loop. NULL is fine (older providers, 3-field initializers). */
+    int (*text)  (int x, int y, const char *s, fb_px fg, long bg);
 } fb_font;
 void fb_set_font(const fb_font *f);      /* NULL = built-in bitmap font */
 const fb_font *fb_get_font(void);
+int  fb_text_h(void);                    /* line height of the active font (8 = bitmap) */
 
 /* 8x8 text. bg < 0 = transparent (glyph pixels only). Returns the x past the
    string. Each glyph advances 8px. */

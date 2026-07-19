@@ -11,6 +11,11 @@ void pc64_icon_emblem(int icon, unoui_rect box);
 /* the unoui_icon_art hook: emblem centred in r + the label below it */
 void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags);
 
+/* The UnoDOS brand mark (the Start button logo): a ring broken open at the
+ * top with the numeral 1 dropped through the gap. One colour, procedural,
+ * reads from 12 px up. Draws inside the size x size box at (x,y). */
+void pc64_start_logo(int x, int y, int size, fb_px fg);
+
 /* the live shell theme, so icon art recolours to match it (defined in
  * pc64_uui.c; returns UI.theme). */
 struct unoui_theme;

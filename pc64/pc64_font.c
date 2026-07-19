@@ -112,34 +112,73 @@ static int ensure_loaded(int slot)
 #define GMAXW 40
 #define GMAXH 40
 typedef struct {
-    int ready, w, h, ox, oy, adv;      /* grayscale bbox + advance (px) */
+    int ready, w, h, ox, oy, adv;      /* grayscale bbox + integer advance (px) */
+    int adv26;                         /* exact advance, 26.6 fixed point */
     int ox3, cw3;                      /* subpixel: 3x box left + 3x width */
     unsigned char cov[GMAXW * 3 * GMAXH];
 } gcache;
-static gcache g_cache[GC_COUNT];
+
+/* Glyph caches are banked by (font slot, px, subpixel-mode) so alternating
+ * between the UI font and a document font (the Editor does this every frame)
+ * keeps both rasterized. The old single cache was invalidated on every font
+ * switch, re-rendering every glyph of both fonts once per redraw. */
+#define NBANK 6
+typedef struct { int slot, px, sub; unsigned stamp; gcache g[GC_COUNT]; } gbank;
+static gbank g_banks[NBANK];
+static gcache *g_cache = g_banks[0].g;     /* active bank's glyphs */
+static unsigned g_stamp;
 
 static int g_active = -1, g_px = 13, g_sub = 1;
-static int g_baseline, g_cellh, g_space;
+static int g_uiscale = 100;                 /* UI scale, percent (100/125/150/200) */
+static int g_baseline, g_cellh, g_space, g_space26;
+static float g_scale;
 
 /* effective per-active-font settings: a bitmap face (px>0) renders at its own
  * native px with AA off (crisp 1:1 pixels); an outline face uses the UI px and
- * the user's subpixel-AA preference. */
-static int cur_px(void)  { int p = g_active >= 0 ? g_fonts[g_active].px : 0; return p > 0 ? p : g_px; }
-static int cur_sub(void) { return g_sub && (g_active < 0 || g_fonts[g_active].px == 0); }
+ * the user's subpixel-AA preference. The UI scale multiplies both; a scaled
+ * bitmap face is no longer pixel-native, so it gets anti-aliasing then. */
+static int cur_px(void)
+{
+    int p = g_active >= 0 ? g_fonts[g_active].px : 0;
+    int base = p > 0 ? p : g_px;
+    int eff = base * g_uiscale / 100;
+    if (eff < 8) eff = 8; if (eff > 40) eff = 40;
+    return eff;
+}
+static int cur_sub(void)
+{
+    int bitmap_native = g_active >= 0 && g_fonts[g_active].px > 0 && g_uiscale == 100;
+    return g_sub && !bitmap_native;
+}
 
-static void invalidate(void){ int i; for (i = 0; i < GC_COUNT; i++) g_cache[i].ready = 0; }
+static void bank_select(void)
+{
+    int px = cur_px(), sub = cur_sub(), i, lru = 0;
+    for (i = 0; i < NBANK; i++) {
+        gbank *b = &g_banks[i];
+        if (b->stamp && b->slot == g_active && b->px == px && b->sub == sub) {
+            b->stamp = ++g_stamp; g_cache = b->g; return;
+        }
+        if (b->stamp < g_banks[lru].stamp) lru = i;
+    }
+    { gbank *b = &g_banks[lru];
+      b->slot = g_active; b->px = px; b->sub = sub; b->stamp = ++g_stamp;
+      for (i = 0; i < GC_COUNT; i++) b->g[i].ready = 0;
+      g_cache = b->g; }
+}
 
 static void set_metrics(void)
 {
     fslot *f = &g_fonts[g_active];
-    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)cur_px());
     int asc, desc, gap, a, l;
+    g_scale = stbtt_ScaleForPixelHeight(&f->info, (float)cur_px());
     stbtt_GetFontVMetrics(&f->info, &asc, &desc, &gap);
-    g_baseline = (int)(asc * scale + 0.5f);
-    g_cellh    = (int)((asc - desc) * scale + 0.5f) + 1;
+    g_baseline = (int)(asc * g_scale + 0.5f);
+    g_cellh    = (int)((asc - desc) * g_scale + 0.5f) + 1;
     stbtt_GetCodepointHMetrics(&f->info, ' ', &a, &l);
-    g_space = (int)(a * scale + 0.5f);
-    invalidate();
+    g_space26 = (int)(a * g_scale * 64.0f + 0.5f);
+    g_space   = (g_space26 + 32) >> 6;
+    bank_select();
 }
 
 /* Render one glyph's coverage into the cache. In subpixel mode `cov` holds a
@@ -149,10 +188,11 @@ static void render_glyph(int cp)
 {
     gcache *gc = &g_cache[cp - GC_FIRST];
     fslot *f = &g_fonts[g_active];
-    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)cur_px());
+    float scale = g_scale;
     int adv, lsb, x0, y0, x1, y1, w, h;
     stbtt_GetCodepointHMetrics(&f->info, cp, &adv, &lsb);
-    gc->adv = (int)(adv * scale + 0.5f);
+    gc->adv26 = (int)(adv * scale * 64.0f + 0.5f);
+    gc->adv   = (gc->adv26 + 32) >> 6;
     stbtt_GetCodepointBitmapBox(&f->info, cp, scale, scale, &x0, &y0, &x1, &y1);
     w = x1 - x0; h = y1 - y0;
     if (w < 0) w = 0; if (h < 0) h = 0; if (w > GMAXW) w = GMAXW; if (h > GMAXH) h = GMAXH;
@@ -171,24 +211,37 @@ static void render_glyph(int cp)
     gc->ready = 1;
 }
 
-/* ---- compositing --------------------------------------------------------- */
-static int draw_glyph(int x, int y, int cp, fb_px fg, long bg)
+/* kerning between two codepoints, 26.6 px (0 for fonts without a kern table) */
+static int kern26(int a, int b)
 {
-    gcache *gc;
-    if (g_active < 0) return x + 8;                 /* shouldn't happen */
-    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) {
-        if (bg >= 0) fb_fill_rect(x, y, g_space, g_cellh, (fb_px)bg);
-        return x + g_space;
-    }
-    gc = &g_cache[cp - GC_FIRST];
-    if (!gc->ready) render_glyph(cp);
-    if (bg >= 0) fb_fill_rect(x, y, gc->adv > 0 ? gc->adv : g_space, g_cellh, (fb_px)bg);
+    fslot *f = &g_fonts[g_active];
+    int k = stbtt_GetCodepointKernAdvance(&f->info, a, b);
+    return k ? (int)(k * g_scale * 64.0f + (k > 0 ? 0.5f : -0.5f)) : 0;
+}
+
+/* floor division by 3 (ox3 can be negative for glyphs with negative lsb) */
+static int fdiv3(int v) { return v >= 0 ? v / 3 : -((-v + 2) / 3); }
+
+/* ---- compositing --------------------------------------------------------- *
+ * Paint one glyph's cached coverage with the pen at `pen26` (26.6 fixed-point
+ * x). In subpixel mode the pen's fraction is honored at 1/3-px resolution by
+ * shifting the 5-tap LCD filter's sampling window; in grayscale mode the pen
+ * rounds to the nearest pixel. Styles: bold = second strike at +1px, italic =
+ * per-row shear (~14 deg) about the baseline. */
+static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
+{
     if (cur_sub()) {
-        int r, X, cw3 = gc->cw3, pixox = gc->ox3 / 3, base = 3 * pixox - gc->ox3;
-        int wout = (cw3 - base) / 3 + 2;
+        int f3 = ((pen26 & 63) * 3 + 32) >> 6;      /* pen fraction in thirds */
+        int xi = pen26 >> 6;
+        int ox3s, pixox, base, wout, r, X, cw3 = gc->cw3;
+        if (f3 >= 3) { xi++; f3 -= 3; }
+        ox3s = gc->ox3 + f3;
+        pixox = fdiv3(ox3s); base = 3 * pixox - ox3s;
+        wout = (cw3 - base) / 3 + 2;
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * cw3;
             int Y = y + g_baseline + gc->oy + r;
+            int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
             for (X = 0; X < wout; X++) {
                 int j = base + 3 * X;                /* subpixel index of this pixel's R */
                 int a = (j-1 >= 0 && j-1 < cw3) ? row[j-1] : 0;
@@ -197,21 +250,42 @@ static int draw_glyph(int x, int y, int cp, fb_px fg, long bg)
                 int d = (j+2 >= 0 && j+2 < cw3) ? row[j+2] : 0;
                 int e = (j+3 >= 0 && j+3 < cw3) ? row[j+3] : 0;
                 int cR = (a + 2*b + c) / 4, cG = (b + 2*c + d) / 4, cB = (c + 2*d + e) / 4;
-                if (cR | cG | cB) fb_blend_pixel_sub(x + pixox + X, Y, fg, cR, cG, cB);
+                if (cR | cG | cB) fb_blend_pixel_sub(xi + pixox + X + sk, Y, fg, cR, cG, cB);
             }
         }
     } else {
-        int r, c;
+        int xg = (pen26 + 32) >> 6, r, c;
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * gc->w;
             int Y = y + g_baseline + gc->oy + r;
+            int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
             for (c = 0; c < gc->w; c++) {
                 int cov = row[c];
-                if (cov) fb_blend_pixel_sub(x + gc->ox + c, Y, fg, cov, cov, cov);
+                if (cov) fb_blend_pixel_sub(xg + gc->ox + c + sk, Y, fg, cov, cov, cov);
             }
         }
     }
-    return x + gc->adv;
+}
+
+/* advance the pen over codepoint cp, drawing it; styled variant used by the
+ * string path (style bit 1 = bold double-strike, bit 2 = italic shear) */
+static int pen_glyph(int pen26, int y, int cp, fb_px fg, long bg, int style)
+{
+    gcache *gc;
+    int next;
+    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) {
+        next = pen26 + g_space26;
+        if (bg >= 0) fb_fill_rect(pen26 >> 6, y, (next >> 6) - (pen26 >> 6), g_cellh, (fb_px)bg);
+        return next;
+    }
+    gc = &g_cache[cp - GC_FIRST];
+    if (!gc->ready) render_glyph(cp);
+    next = pen26 + (gc->adv26 > 0 ? gc->adv26 : g_space26);
+    if (style & 1) next += 32;                       /* bold: half-px wider */
+    if (bg >= 0) fb_fill_rect(pen26 >> 6, y, (next >> 6) - (pen26 >> 6), g_cellh, (fb_px)bg);
+    paint_cov(pen26, y, gc, fg, style & 2);
+    if (style & 1) paint_cov(pen26 + 64, y, gc, fg, style & 2);
+    return next;
 }
 
 static int adv_of(int cp)
@@ -219,12 +293,49 @@ static int adv_of(int cp)
     if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) return g_space;
     { gcache *gc = &g_cache[cp - GC_FIRST]; if (!gc->ready) render_glyph(cp); return gc->adv; }
 }
+static int adv26_of(int cp)
+{
+    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) return g_space26;
+    { gcache *gc = &g_cache[cp - GC_FIRST]; if (!gc->ready) render_glyph(cp);
+      return gc->adv26 > 0 ? gc->adv26 : g_space26; }
+}
+
+/* string draw/measure with the fractional pen + kerning; these two must stay
+ * in exact lockstep or carets and centering drift off the pixels. */
+static int text_pen(int x, int y, const char *s, fb_px fg, long bg, int style, int draw)
+{
+    int pen26 = x << 6, prev = 0;
+    for (; *s; s++) {
+        int cp = (unsigned char)*s;
+        if (prev) pen26 += kern26(prev, cp);
+        if (draw) pen26 = pen_glyph(pen26, y, cp, fg, bg, style);
+        else {
+            pen26 += adv26_of(cp);
+            if (style & 1) pen26 += 32;
+        }
+        prev = cp;
+    }
+    return (pen26 + 32) >> 6;
+}
 
 /* ---- fb text provider ---------------------------------------------------- */
-static int prov_glyph(int x, int y, int cp, fb_px fg, long bg) { return draw_glyph(x, y, cp, fg, bg); }
-static int prov_text_w(const char *s) { int w = 0; for (; *s; s++) w += adv_of((unsigned char)*s); return w; }
+static int prov_glyph(int x, int y, int cp, fb_px fg, long bg)
+{
+    if (g_active < 0) return x + 8;                  /* shouldn't happen */
+    return (pen_glyph(x << 6, y, cp, fg, bg, 0) + 32) >> 6;
+}
+static int prov_text(int x, int y, const char *s, fb_px fg, long bg)
+{
+    if (g_active < 0) return x;
+    return text_pen(x, y, s, fg, bg, 0, 1);
+}
+static int prov_text_w(const char *s)
+{
+    if (g_active < 0) { int n = 0; while (*s++) n++; return n * 8; }
+    return text_pen(0, 0, s, 0, -1, 0, 0);
+}
 static int prov_height(void) { return g_cellh; }
-static const fb_font g_provider = { prov_glyph, prov_text_w, prov_height };
+static const fb_font g_provider = { prov_glyph, prov_text_w, prov_height, prov_text };
 
 /* ---- public API ---------------------------------------------------------- */
 int uno_font_count(void) { return NSLOT; }
@@ -240,7 +351,14 @@ int uno_font_use(int slot)
     return slot;
 }
 void uno_font_set_px(int px) { if (px < 8) px = 8; if (px > 32) px = 32; g_px = px; if (g_active >= 0) set_metrics(); }
-void uno_font_set_subpixel(int on) { g_sub = on ? 1 : 0; invalidate(); }
+void uno_font_set_subpixel(int on) { g_sub = on ? 1 : 0; if (g_active >= 0) set_metrics(); }
+void uno_font_set_ui_scale(int pct)
+{
+    if (pct < 100) pct = 100; if (pct > 200) pct = 200;
+    g_uiscale = pct;
+    if (g_active >= 0) set_metrics();
+}
+int uno_font_ui_scale(void) { return g_uiscale; }
 
 /* push/pop the active font (depth-1 stack) - lets the toolkit render one window
  * (e.g. the Editor's document) in a different face than the system font. */
@@ -286,4 +404,50 @@ int uno_font_height_with(int slot)
     if (!ensure_loaded(slot)) return 8;
     g_active = slot; set_metrics(); h = g_cellh;
     g_active = save; if (save >= 0) set_metrics(); return h;
+}
+
+/* ---- styled text at an explicit px (browser headings, Write runs) -------- */
+static int styled_enter(int slot, int px, int *sav_slot, int *sav_px)
+{
+    *sav_slot = g_active; *sav_px = g_px;
+    if (px < 8) px = 8; if (px > 40) px = 40;
+    if (slot < 0 || !ensure_loaded(slot)) return 0;
+    g_active = slot; g_px = px; set_metrics();
+    return 1;
+}
+static void styled_leave(int sav_slot, int sav_px)
+{
+    g_active = sav_slot; g_px = sav_px;
+    if (g_active >= 0) set_metrics();
+}
+int uno_font_draw_styled(int slot, int px, int style, int x, int y,
+                         const char *s, fb_px fg, long bg)
+{
+    int ss, sp, rx;
+    if (!styled_enter(slot, px, &ss, &sp)) return fb_text(x, y, s, fg, bg);
+    rx = text_pen(x, y, s, fg, bg, style, 1);
+    styled_leave(ss, sp);
+    return rx;
+}
+int uno_font_text_w_styled(int slot, int px, int style, const char *s)
+{
+    int ss, sp, w;
+    if (!styled_enter(slot, px, &ss, &sp)) return fb_text_w(s);
+    w = text_pen(0, 0, s, 0, -1, style, 0);
+    styled_leave(ss, sp);
+    return w;
+}
+int uno_font_height_px(int slot, int px)
+{
+    int ss, sp, h;
+    if (!styled_enter(slot, px, &ss, &sp)) return 8;
+    h = g_cellh; styled_leave(ss, sp);
+    return h;
+}
+int uno_font_baseline_px(int slot, int px)
+{
+    int ss, sp, b;
+    if (!styled_enter(slot, px, &ss, &sp)) return 7;
+    b = g_baseline; styled_leave(ss, sp);
+    return b;
 }
