@@ -44,6 +44,7 @@
 #include "blkdev.h"
 #include "pc64_fs.h"        /* uno_fs_volumes/remap (the M3 detach dance) */
 #include "pc64_native.h"    /* TSC/CMOS/PS2/CF9 - life after ExitBootServices */
+#include "snd_pcm.h"        /* sampled audio: HD Audio / AC'97 PCM ring */
 #ifdef UNO_ACPI
 #include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
 #endif
@@ -608,6 +609,8 @@ void uno_pc64_init(void)
      * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
     uno_acpi_start(gST);
 #endif
+    uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
+    dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
     splash_step(4);                 /* ready - the bar fills, core takes over */
     uno_pc64_chime();               /* startup chime: loading complete */
 
@@ -908,6 +911,7 @@ void uno_pc64_poll(void)
     if (first) stage_mark2(2, 0x00FF00FF);    /* magenta: keyboard poll survived */
     poll_pointer();
     if (first) { stage_mark2(3, 0x00FF8000); first = 0; }  /* orange: pointer too */
+    uno_snd_poll();                 /* keep the PCM ring ahead of the hardware */
 }
 
 /* ===========================================================================
@@ -1012,6 +1016,7 @@ void uno_pc64_snd_note(int midi)
 {
     int hz = midi_hz(midi);
     unsigned divisor;
+    if (uno_snd_active()) { uno_snd_note(midi); return; }   /* real DAC first */
     if (hz < 20) { return; }
     divisor = 1193182u / (unsigned)hz;
     if (divisor > 0xFFFF) divisor = 0xFFFF;
@@ -1023,6 +1028,7 @@ void uno_pc64_snd_note(int midi)
 
 void uno_pc64_snd_quiet(void)
 {
+    if (uno_snd_active()) { uno_snd_quiet(); return; }
     outb(0x61, (unsigned char)(inb(0x61) & ~0x03));
 }
 
@@ -1066,13 +1072,19 @@ int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
     return rts()->SetTime(&t) == EFI_SUCCESS;
 }
 
-/* a short rising arpeggio played after the splash completes (PC speaker) */
+/* a short rising arpeggio played after the splash completes (PC speaker,
+   or the HDA/AC'97 DAC when one is up - pumped in slices so the PCM ring
+   stays ahead of the hardware through the note gaps) */
 void uno_pc64_chime(void)
 {
     static const int notes[] = { 60, 64, 67, 72 };   /* C E G C */
-    int i;
-    for (i = 0; i < 4; i++) { uno_pc64_snd_note(notes[i]); gBS->Stall(110000); }
+    int i, j;
+    for (i = 0; i < 4; i++) {
+        uno_pc64_snd_note(notes[i]);
+        for (j = 0; j < 10; j++) { gBS->Stall(11000); uno_snd_poll(); }
+    }
     uno_pc64_snd_quiet();
+    for (j = 0; j < 4; j++) { gBS->Stall(11000); uno_snd_poll(); }  /* release tail */
 }
 
 /* ===========================================================================
