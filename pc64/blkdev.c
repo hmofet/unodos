@@ -141,8 +141,16 @@ void uno_blk_init(void)
     if (uno_pc64_detached()) {
         uno_ahci_init();             /* native controller ownership (no fw)    */
         uno_nvme_init();
-    } else
+        uno_sdhci_init();
+    } else {
+#ifdef UNO_SDHCI_TEST
+        /* QEMU-only: take the SDHCI controller eagerly while attached (OVMF
+         * ships no SdMmc driver, so nobody else touches it). Registered first
+         * so fw_scan's claimed-controller dedup skips any firmware view. */
+        uno_sdhci_init();
+#endif
         fw_scan();                   /* firmware moves sectors; we own the FS  */
+    }
 }
 
 /* M3 detach: firmware Block IO just died with ExitBootServices - drop every
@@ -153,4 +161,5 @@ void uno_blk_detach(void)
     g_ndev = 0;
     uno_ahci_init();
     uno_nvme_init();
+    uno_sdhci_init();
 }

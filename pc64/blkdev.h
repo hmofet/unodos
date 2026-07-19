@@ -4,10 +4,11 @@
  * (fat.c) mounts partitions from.  Backends register at init:
  *   - ahci.c        - the NATIVE AHCI (SATA) driver (no firmware in the path)
  *   - nvme.c        - the NATIVE NVMe driver (PCIe SSDs, ditto)
+ *   - sdhci.c       - the NATIVE SDHCI driver (eMMC + SD cards, ditto)
  *   - blkdev.c      - a fallback wrapping firmware EFI Block IO whole-disk
  *                     handles, so disks without a native controller driver
- *                     (eMMC/USB) still get native partition scanning and
- *                     FAT mounting.  The FS bytes still never go through the
+ *                     (USB) still get native partition scanning and FAT
+ *                     mounting.  The FS bytes still never go through the
  *                     firmware FAT driver - only the sector transport does.
  */
 #ifndef PC64_BLKDEV_H
@@ -44,5 +45,9 @@ int uno_ahci_present(void);          /* controller found + brought up      */
 /* nvme.c */
 int uno_nvme_init(void);             /* registers its namespaces; returns count */
 int uno_nvme_present(void);          /* controller found + brought up      */
+
+/* sdhci.c */
+int uno_sdhci_init(void);            /* registers the eMMC/SD medium; count */
+int uno_sdhci_present(void);         /* controller found + brought up      */
 
 #endif
