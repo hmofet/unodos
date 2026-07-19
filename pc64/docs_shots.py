@@ -8,8 +8,9 @@ surface to shots/manual/<tag>.png at each scene.
   python3 docs_shots.py [scene ...]     run named scenes (default: all core)
 
 The desktop is deterministic, so the Start-menu order is fixed:
-  0 Control 1 Editor 2 Files 3 System 4 Clock 5 Canvas 6 Dostris 7 Pac-Man
-  8 OutLast 9 Music 10 Tracker 11 Paint 12 Network 13 Runner3D 14 Browser
+  0 Control 1 Editor 2 Files 3 System 4 Clock 5 Canvas 6 Install 7 Dostris
+  8 Pac-Man 9 OutLast 10 Music 11 Tracker 12 Paint 13 Network 14 Runner3D
+  15 Browser
 Launch app N: Ctrl-Esc, Down*N, Enter.  Close focused window: Ctrl-W.
 """
 import json, os, socket, subprocess, sys, time
@@ -164,6 +165,8 @@ def sc_themes(q):
                 "win31", "amiga", "c64", "apple2", "next"]:
         key(q, "down"); time.sleep(0.45)
         shot(q, "theme_" + tag)
+    for _ in range(9):                               # back to Aurora Light so
+        key(q, "up", gap=0.3)                        # later scenes match
 
 def sc_fonts(q):
     # Tab x3 -> Font dropdown; Down picks a TrueType face (re-skins all UI text).
@@ -199,8 +202,12 @@ def sc_canvas(q):
     close_all(q); launch(q, 5)
     shot(q, "canvas")
 
+def sc_install(q):
+    close_all(q); launch(q, 6, settle=2.0)
+    shot(q, "install")
+
 def sc_dostris(q):
-    close_all(q); launch(q, 6)
+    close_all(q); launch(q, 7)
     key(q, "n"); time.sleep(0.5)
     for _ in range(4):
         key(q, "left", gap=0.15); key(q, "spc", gap=0.25)
@@ -208,7 +215,7 @@ def sc_dostris(q):
     shot(q, "dostris")
 
 def sc_pacman(q):
-    close_all(q); launch(q, 7)
+    close_all(q); launch(q, 8)
     key(q, "n"); time.sleep(0.4)
     for _ in range(3):
         key(q, "right", gap=0.2)
@@ -216,36 +223,36 @@ def sc_pacman(q):
     shot(q, "pacman")
 
 def sc_outlast(q):
-    close_all(q); launch(q, 8)
+    close_all(q); launch(q, 9)
     key(q, "n"); time.sleep(0.5)
     shot(q, "outlast")
 
 def sc_music(q):
-    close_all(q); launch(q, 9)
+    close_all(q); launch(q, 10)
     shot(q, "music")
 
 def sc_tracker(q):
-    close_all(q); launch(q, 10)
+    close_all(q); launch(q, 11)
     shot(q, "tracker")
 
 def sc_paint(q):
-    close_all(q); launch(q, 11)
+    close_all(q); launch(q, 12)
     shot(q, "paint")
 
 def sc_runner3d(q):
-    close_all(q); launch(q, 13, settle=2.2)
+    close_all(q); launch(q, 14, settle=2.2)
     time.sleep(1.0)
     shot(q, "runner3d")
 
 def sc_browser_disk(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 15, settle=2.0)
     shot(q, "browser_files")
 
 def _browser_open(q, row, tag, settle=1.6):
     # Fresh browser each time. Entering the list from the address bar lands on
     # row 1 (Sample.html); Up from row 0 jumps BACK to the address bar, so we
     # navigate RELATIVE to row 1 and never go above row 0.
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 15, settle=2.0)
     key(q, "down"); time.sleep(0.3)                  # address bar -> list row 1
     delta = row - 1
     for _ in range(abs(delta)):
@@ -259,18 +266,18 @@ def sc_browser_docs(q):
 
 def sc_net_selftest(q):
     # Needs a NIC (run with UNO_NIC=1). SLIRP provides DHCP/gw/TFTP.
-    close_all(q); launch(q, 12, settle=1.6)          # Network app
+    close_all(q); launch(q, 13, settle=1.6)          # Network app
     time.sleep(24)                                   # DHCP+ping+UDP+TCP+TLS
     shot(q, "network")
 
 def sc_browser_http(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 15, settle=2.0)
     text(q, "http://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(5.0)                   # DHCP+DNS+TCP+GET+render
     shot(q, "browser_http")
 
 def sc_browser_https(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 15, settle=2.0)
     text(q, "https://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
@@ -279,7 +286,7 @@ SCENES = {
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
     "editor": sc_editor, "files": sc_files, "system": sc_system, "clock": sc_clock,
-    "canvas": sc_canvas, "dostris": sc_dostris, "pacman": sc_pacman,
+    "canvas": sc_canvas, "install": sc_install, "dostris": sc_dostris, "pacman": sc_pacman,
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d, "browser_disk": sc_browser_disk,
     "browser_docs": sc_browser_docs, "net_selftest": sc_net_selftest,

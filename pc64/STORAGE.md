@@ -40,11 +40,19 @@ Block IO — which corrupted an installer disk clone mid-write. So:
 - **Attached** (boot services live): `blkdev` uses the **EFI Block IO backend**
   for every disk. Our FAT code still does all partition + filesystem work; only
   the sector transport is firmware.
-- **Detached** (after `ExitBootServices`, a later milestone): the native
-  `ahci.c` driver is the only thing on the bus and firmware Block IO is gone.
+- **Detached** (after `ExitBootServices` — M3, SHIPPED): the native `ahci.c`
+  driver is the only thing on the bus and firmware Block IO is gone.
 
-The gate is `uno_pc64_detached()` (in `uefi_main.c`), which returns 0 until the
-detach milestone lands.
+The gate is `uno_pc64_detached()` (in `uefi_main.c`).  The detach itself is
+automatic at the end of boot when the native stack covers the machine: linear
+framebuffer + i8042 present + a calibrated TSC + **a UnoDOS system volume on
+the AHCI controller** (`uno_fat_native_eligible()` — a foreign FAT partition
+alone must not count, or a USB-booted system would detach away its own boot
+volume and the firmware-dependent Install app).  The sequence is
+`uno_fat_sync()` (flush the write-back cache over the dying transport) →
+`GetMemoryMap`+`ExitBootServices` → `uno_blk_detach()` (drop fw devices,
+`uno_ahci_init()`) → `uno_fat_remount()` → `uno_fs_remap()`.  Build with
+`-DUNO_NO_DETACH` to keep a build permanently attached.
 
 ## Sector-buffer alignment (a footgun)
 

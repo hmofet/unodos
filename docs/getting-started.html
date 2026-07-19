@@ -99,6 +99,21 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
 <p>Prefer not to touch hardware? You can boot the same image in an emulator instead.
 See <a href="developer.html#qemu">Run it in QEMU</a>.</p>
 
+<h2 id="install">Install onto the PC (optional)</h2>
+<p>Running from the USB stick is fine forever - but the <strong>Install</strong> app (in the Start
+menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
+<ul>
+  <li><strong>Onto an existing EFI partition</strong> (the rows marked <em>keeps data</em>): UnoDOS is
+      copied into its own folder next to your other operating systems and added to the firmware boot
+      menu. <strong>Nothing is deleted</strong> - Windows keeps booting as before, and you can undo it
+      by deleting the <code>\EFI\UNODOS</code> folder.</li>
+  <li><strong>Onto a whole disk</strong> (the <em>Disk</em> rows): the entire disk is erased and
+      becomes a UnoDOS disk. This is destructive and asks you to confirm twice.</li>
+</ul>
+<p>Pick a target with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>I</kbd> to install
+(<kbd>R</kbd> rescans). The system files, fonts, documents and all the apps are copied along.</p>
+<figure class="shot-sm"><img src="assets/img/install.png" alt="The Install app: pick a target, press I. Rows marked keeps data are non-destructive." loading="lazy"><figcaption>The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.</figcaption></figure>
+
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
 plays as the desktop appears. On a laptop the TrackPoint, touchpad and keyboard all work.</p>

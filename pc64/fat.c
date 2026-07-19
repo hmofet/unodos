@@ -15,6 +15,7 @@
  * ======================================================================== */
 #include "fat.h"
 #include "blkdev.h"
+#include "pc64_pci.h"       /* uno_fat_native_eligible: AHCI-class lookup */
 #include "string.h"
 #include <stdint.h>
 
@@ -193,6 +194,49 @@ void uno_fat_init(void)
         uno_bdev *d = uno_blk_get(i);
         if (d) scan_disk(d);
     }
+}
+
+/* flush every dirty cache line to disk (call BEFORE the sector transport
+ * changes - e.g. right before ExitBootServices kills firmware Block IO) */
+void uno_fat_sync(void) { cache_sync(); }
+
+/* Rebuild the volume table over the CURRENT block-device set, dropping every
+ * cached line WITHOUT flushing (the old devices' transport is already gone -
+ * the caller synced while it was still alive).  The M3 detach path: firmware
+ * Block IO devices out, native AHCI in, same disks re-scanned natively. */
+void uno_fat_remount(void)
+{
+    int i;
+    for (i = 0; i < CH_N; i++) { g_ch[i].valid = 0; g_ch[i].dirty = 0; g_ch[i].dev = 0; }
+    g_nvol = 0;
+    g_done = 0;
+    uno_fat_init();
+}
+
+/* The detach gate: 1 only if a volume the native AHCI driver will still
+ * reach after the firmware dies (its controller PCI dev/fn is the AHCI-class
+ * function pc64's driver binds) actually CARRIES OUR SYSTEM (a UnoDOS
+ * BOOTX64.EFI).  A merely-present foreign FAT partition must not count -
+ * a USB-booted system would detach away its own boot volume and the
+ * firmware-dependent Install app. */
+int uno_fat_native_eligible(void)
+{
+    static const char *marks[] = { "EFI\\UNODOS\\BOOTX64.EFI",
+                                   "EFI\\BOOT\\BOOTX64.EFI" };
+    pci_dev ah;
+    int i, m;
+    unsigned char sig[2];
+    if (!pci_find_class(0x01, 0x06, &ah)) return 0;
+    for (i = 0; i < g_nvol; i++) {
+        if (!g_vol[i].dev || g_vol[i].dev->pci_dev != ah.dev ||
+            g_vol[i].dev->pci_fn != ah.fn)
+            continue;
+        for (m = 0; m < 2; m++)
+            if (uno_fat_read(i, marks[m], sig, 2) == 2 &&
+                sig[0] == 'M' && sig[1] == 'Z')
+                return 1;
+    }
+    return 0;
 }
 
 int uno_fat_volumes(void) { return g_nvol; }

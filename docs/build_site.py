@@ -571,6 +571,21 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
 <p>Prefer not to touch hardware? You can boot the same image in an emulator instead.
 See <a href="developer.html#qemu">Run it in QEMU</a>.</p>
 
+<h2 id="install">Install onto the PC (optional)</h2>
+<p>Running from the USB stick is fine forever - but the <strong>Install</strong> app (in the Start
+menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
+<ul>
+  <li><strong>Onto an existing EFI partition</strong> (the rows marked <em>keeps data</em>): UnoDOS is
+      copied into its own folder next to your other operating systems and added to the firmware boot
+      menu. <strong>Nothing is deleted</strong> - Windows keeps booting as before, and you can undo it
+      by deleting the <code>\\EFI\\UNODOS</code> folder.</li>
+  <li><strong>Onto a whole disk</strong> (the <em>Disk</em> rows): the entire disk is erased and
+      becomes a UnoDOS disk. This is destructive and asks you to confirm twice.</li>
+</ul>
+<p>Pick a target with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>I</kbd> to install
+(<kbd>R</kbd> rescans). The system files, fonts, documents and all the apps are copied along.</p>
+{fig("install.png", "The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.", cls="shot-sm")}
+
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
 plays as the desktop appears. On a laptop the TrackPoint, touchpad and keyboard all work.</p>
@@ -607,8 +622,7 @@ live clock. Every control works by keyboard or pointer.</p>
 <h2 id="windows">Windows</h2>
 <p>Each window has a title bar with a <strong>close box</strong>. Drag the title bar to move a window.
 Windows that can be resized have a <strong>grip</strong> in the bottom-right corner, and resizing them
-reflows their contents: the browser re-wraps its text, the games rescale, and Paint, Tracker and Music
-get a bigger drawing area.</p>
+reflows their contents: the browser re-wraps its text and Runner3D rescales its 3D view.</p>
 
 <h2 id="keys">Keyboard &amp; pointer reference</h2>
 <p>The desktop is designed to be fully usable without a mouse: <kbd>Tab</kbd> moves between controls,
@@ -623,7 +637,7 @@ or touchpad moves the pointer.</p>
 <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Move focus between controls in a window</td></tr>
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></td><td>Adjust the focused control (dropdown value, slider, spinner, list, menu)</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Activate a button, checkbox or menu item</td></tr>
-<tr><td><kbd>Esc</kbd></td><td>Leave a full-screen game (games, Runner3D)</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Leave a full-screen game (Runner3D)</td></tr>
 </tbody>
 </table></div>
 {note('Because a focused menu changes its value with <kbd>↑</kbd>/<kbd>↓</kbd>, you can switch themes, fonts and resolution entirely from the keyboard. See <a href="appearance.html">Themes &amp; appearance</a>.', kind="tip")}
@@ -679,7 +693,7 @@ PAGES["apps.html"] = ("Applications", f"""
 <div class="grid cols-2">
   {fig("editor.png", "<b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.")}
   {fig("files.png", "<b>Files</b>: your saved documents.")}
-  {fig("system.png", "<b>System</b>: system and device information at a glance.")}
+  {fig("system.png", "<b>System</b>: system and device information at a glance. Its status line shows how independent of the firmware UnoDOS is running - on PCs the native drivers can take over storage, input and timers completely (shown as <i>DETACHED</i>).")}
   {fig("clock.png", "<b>Clock</b>: the current time.")}
 </div>
 <p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
@@ -694,7 +708,8 @@ PAGES["apps.html"] = ("Applications", f"""
 <p>The games, Music and Tracker all play sound through the PC speaker.</p>
 
 <h2 id="games">Games</h2>
-<p>Each game runs in a window or full screen. Press <kbd>Esc</kbd> to leave a full-screen game.</p>
+<p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
+(press <kbd>Esc</kbd> to come back to the desktop).</p>
 <div class="grid cols-2">
   {fig("dostris.png", "<b>Dostris</b>: the falling-block game, with score, lines and level.")}
   {fig("pacman.png", "<b>Pac-Man</b>: maze, dots, power pellets and ghosts.")}
@@ -702,6 +717,12 @@ PAGES["apps.html"] = ("Applications", f"""
   {fig("runner3d.png", "<b>Runner3D</b>: a real-time 3D game.")}
 </div>
 {note('Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.', title="3D graphics")}
+
+<h2 id="modules">Apps live on the disk</h2>
+<p>The games and creative tools are not baked into the system: each one is a small
+<code>.UNO</code> file in the <code>APPS</code> folder of the UnoDOS disk, loaded the first time you
+open it. Installing UnoDOS onto a PC copies them along automatically. If an app's file is missing,
+its window simply says so - nothing crashes.</p>
 """)
 
 PAGES["browser.html"] = ("Web browser", f"""

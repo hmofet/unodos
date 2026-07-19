@@ -26,6 +26,10 @@ typedef struct uno_bdev {
 /* Bring up all backends + register their disks.  Idempotent. */
 void uno_blk_init(void);
 
+/* M3: after ExitBootServices - drop the (dead) firmware devices and take the
+ * controllers natively.  Follow with uno_fat_remount(). */
+void uno_blk_detach(void);
+
 int       uno_blk_count(void);
 uno_bdev *uno_blk_get(int i);
 

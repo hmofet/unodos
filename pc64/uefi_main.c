@@ -41,6 +41,8 @@
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
+#include "pc64_fs.h"        /* uno_fs_volumes/remap (the M3 detach dance) */
+#include "pc64_native.h"    /* TSC/CMOS/PS2/CF9 - life after ExitBootServices */
 #ifdef UNO_ACPI
 #include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
 #endif
@@ -418,7 +420,9 @@ void uno_pc64_lowres(int on)
    non-native mode - keep pressing F10, the cycle returns to the native one) */
 static void cycle_mode(void)
 {
-    UINT32 next = (gGop->Mode->Mode + 1) % gGop->Mode->MaxMode;
+    UINT32 next;
+    if (gDetached) return;          /* GOP SetMode died with boot services */
+    next = (gGop->Mode->Mode + 1) % gGop->Mode->MaxMode;
     gGop->SetMode(gGop, next);
     set_geometry(-1);               /* re-derive; default zoom for the mode */
     uno_screen_changed();
@@ -492,6 +496,54 @@ static int collect(EFI_GUID *guid, void **out, int max)
 /* ===========================================================================
  * uno_pc64_init
  * ======================================================================== */
+/* ===========================================================================
+ * M3 - the firmware detach.  When the native stack covers this machine
+ * (linear framebuffer + i8042 input + a FAT volume on the AHCI controller +
+ * a calibrated TSC), call ExitBootServices and run on our own drivers:
+ * native AHCI moves sectors, PS/2 supplies input, the TSC paces frames, the
+ * CMOS RTC tells time.  Machines the native stack cannot cover (USB-only
+ * boot media, no i8042 - e.g. the Surface) simply stay attached; every
+ * service routes through the firmware exactly as before.
+ * ======================================================================== */
+static unsigned char gMMap[65536];      /* memory-map scratch for the EBS key */
+
+static int try_detach(void)
+{
+    typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
+    typedef EFI_STATUS (*EBS_FN)(EFI_HANDLE, UINTN);
+    int t;
+    if (gDetached) return 1;
+    if (gUseBlt || !gVram)      { dbg_puts("detach: no linear FB\n");   return 0; }
+    if (!uno_ps2_present())     { dbg_puts("detach: no i8042\n");       return 0; }
+    if (!uno_native_tsc_ok())   { dbg_puts("detach: no TSC base\n");    return 0; }
+    (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
+    if (!uno_fat_native_eligible()) {
+        dbg_puts("detach: no AHCI-backed FAT volume\n");
+        return 0;
+    }
+    uno_fat_sync();             /* flush write-back lines while fw Block IO lives */
+    { void uno_modload_reserve(void); uno_modload_reserve(); }
+                                /* executable arena for post-detach .UNO loads */
+    for (t = 0; t < 2; t++) {   /* per spec: one retry after a fresh map */
+        UINTN sz = sizeof gMMap, key = 0, dsz = 0;
+        UINT32 ver = 0;
+        if (((GMM_FN)gBS->GetMemoryMap)(&sz, gMMap, &key, &dsz, &ver) != EFI_SUCCESS)
+            break;
+        if (((EBS_FN)gBS->ExitBootServices)(gIH, key) == EFI_SUCCESS) {
+            gDetached = 1;
+            gKeyEx = 0; gNAbs = gNPtr = 0;    /* firmware input died with EBS  */
+            uno_ps2_init();                   /* the i8042 is ours now         */
+            uno_blk_detach();                 /* native AHCI takes the bus     */
+            uno_fat_remount();                /* same disks, native transport  */
+            uno_fs_remap();
+            dbg_puts("detached: ExitBootServices done - native storage/input/timers\n");
+            return 1;
+        }
+    }
+    dbg_puts("detach: ExitBootServices failed - staying attached\n");
+    return 0;
+}
+
 void uno_pc64_init(void)
 {
     static EFI_GUID gopGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
@@ -538,7 +590,19 @@ void uno_pc64_init(void)
     splash_step(4);                 /* ready - the bar fills, core takes over */
     uno_pc64_chime();               /* startup chime: loading complete */
 
+    /* TSC time base: calibrate against Stall while it still exists (M3) */
+    {
+        unsigned long long t0 = uno_native_rdtsc();
+        gBS->Stall(50000);
+        uno_native_tsc_set((uno_native_rdtsc() - t0) / 50000);
+    }
+
     dbg_puts("unodos-pc64: init done\n");
+
+#ifndef UNO_NO_DETACH
+    try_detach();                   /* M3: leave the firmware behind if the
+                                       native stack covers this machine */
+#endif
 }
 
 /* ===========================================================================
@@ -593,7 +657,12 @@ int uno_pc64_mac_mouse(short *h, short *v)
     if (v) *v = (short)g_cy;
     return g_prev_mb;
 }
-void uno_pc64_delay_ms(int ms) { if (gBS && ms > 0) gBS->Stall((UINTN)ms * 1000); }
+void uno_pc64_delay_ms(int ms)
+{
+    if (ms <= 0) return;
+    if (gDetached)   uno_native_delay_us((unsigned long)ms * 1000);
+    else if (gBS)    gBS->Stall((UINTN)ms * 1000);
+}
 
 static void map_key(UINT16 scan, CHAR16 uni, short mods)
 {
@@ -627,6 +696,13 @@ static void poll_keyboard(void)
     /* budget the drain: firmware exists whose ReadKeyStrokeEx returns
        SUCCESS forever with phantom "partial keystroke" data */
     int budget = 32;
+    if (gDetached) {                       /* native PS/2 (M3) */
+        int sc, uni, ct;
+        uno_ps2_pump();
+        while (uno_ps2_next_key(&sc, &uni, &ct))
+            map_key((UINT16)sc, (CHAR16)uni, ct ? cmdKey : 0);
+        return;
+    }
     if (gKeyEx) {
         EFI_KEY_DATA kd;
         while (budget-- > 0 &&
@@ -749,6 +825,19 @@ static void poll_pointer(void)
         }
     }
 
+    /* native PS/2 mouse (M3, post-detach; the fw loops above are empty then) */
+    if (gDetached) {
+        int dx, dy, pb;
+        uno_ps2_pump();
+        uno_ps2_mouse(&dx, &dy, &pb);
+        if (dx || dy) {
+            g_cx += dx; g_cy += dy;
+            clamp_cursor();
+            g_have_pointer = 1;
+        }
+        mb |= pb;
+    }
+
     /* a click on ANY device's ANY button counts (clickpads report the whole
        surface as one button, sometimes on a different instance/bit) */
     for (i = 0; i < gNAbs; i++) mb |= gAbsBtn[i];
@@ -813,7 +902,7 @@ void uno_pc64_present(void)
 
     /* nothing changed since the last present: skip the VRAM write pass entirely
        (common - a drag only touches a few rows, an idle frame touches none). */
-    if (!any_dirty) { gShadowValid = 1; gBS->Stall(1000); return; }
+    if (!any_dirty) { gShadowValid = 1; uno_pc64_delay_ms(1); return; }
 
     /* pass 2: for each output row whose source row changed, build the scaled
        output row (nearest-neighbour via gColMap) and write the filled span */
@@ -843,7 +932,7 @@ void uno_pc64_present(void)
     gShadowValid = 1;
     /* light pacing only - the main loop already sleeps 16 ms on idle frames, so
        an 8 ms tail here just added latency to every interactive (drag) frame. */
-    gBS->Stall(1000);
+    uno_pc64_delay_ms(1);
 }
 
 /* ===========================================================================
@@ -887,13 +976,26 @@ void uno_pc64_snd_quiet(void)
  * ======================================================================== */
 static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->RuntimeServices; }
 
-void uno_pc64_shutdown(void) { rts()->ResetSystem(EfiResetShutdown, 0, 0, 0); for(;;){} }
-void uno_pc64_restart(void)  { rts()->ResetSystem(EfiResetCold,     0, 0, 0); for(;;){} }
+void uno_pc64_shutdown(void)
+{
+    /* ResetSystem is a RUNTIME service - legal after ExitBootServices while
+       we stay in physical addressing.  If the firmware won't power off, halt
+       quietly (the screen keeps the last frame - safe to switch off). */
+    rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
+    for (;;) __asm__ volatile ("hlt");
+}
+void uno_pc64_restart(void)
+{
+    if (gDetached) uno_native_reset();           /* CF9 + i8042 pulse */
+    rts()->ResetSystem(EfiResetCold, 0, 0, 0);
+    for (;;) __asm__ volatile ("hlt");
+}
 
-/* wall-clock time from the firmware RTC; returns 1 on success */
+/* wall-clock time; firmware RTC while attached, CMOS once detached */
 int uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s)
 {
     EFI_TIME t;
+    if (gDetached) return uno_native_rtc_read(y, mo, d, h, mi, s);
     if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;
     if (y)  *y  = t.Year;   if (mo) *mo = t.Month;  if (d)  *d  = t.Day;
     if (h)  *h  = t.Hour;   if (mi) *mi = t.Minute; if (s)  *s  = t.Second;
@@ -902,6 +1004,7 @@ int uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s)
 int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
 {
     EFI_TIME t;
+    if (gDetached) return uno_native_rtc_write(y, mo, d, h, mi, s);
     if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;   /* keep tz/dst fields */
     t.Year = (UINT16)y; t.Month = (UINT8)mo; t.Day = (UINT8)d;
     t.Hour = (UINT8)h;  t.Minute = (UINT8)mi; t.Second = (UINT8)s; t.Nanosecond = 0;

@@ -42,9 +42,11 @@ unsigned int uno_efifs_serial(int vol);          /* BPB volume id, 0 unknown  */
 static struct { int kind, idx; } g_map[MAXMAP];
 static int g_nmap, g_mapped;
 
+int uno_pc64_detached(void);                              /* uefi_main.c (M3)  */
+
 static void build_map(void)
 {
-    int i, nfat, nfw, m = 0;
+    int i, nfat, m = 0;
     if (g_mapped) return;
     g_mapped = 1;
     uno_fat_init();
@@ -54,16 +56,23 @@ static void build_map(void)
     nfat = uno_fat_volumes();
     for (i = 0; i < nfat && m < MAXMAP; i++) { g_map[m].kind = KIND_FAT; g_map[m].idx = i; m++; }
 
-    nfw = uno_efifs_volumes();
-    for (i = 0; i < nfw && m < MAXMAP; i++) {
-        unsigned int fs = uno_efifs_serial(i);
-        int dup = 0, j;
-        if (fs) for (j = 0; j < nfat; j++) if (uno_fat_serial(j) == fs) { dup = 1; break; }
-        if (dup) continue;                                /* same disk, native */
-        g_map[m].kind = KIND_FW; g_map[m].idx = i; m++;
+    /* firmware SFS volumes exist only while boot services are live */
+    if (!uno_pc64_detached()) {
+        int nfw = uno_efifs_volumes();
+        for (i = 0; i < nfw && m < MAXMAP; i++) {
+            unsigned int fs = uno_efifs_serial(i);
+            int dup = 0, j;
+            if (fs) for (j = 0; j < nfat; j++) if (uno_fat_serial(j) == fs) { dup = 1; break; }
+            if (dup) continue;                            /* same disk, native */
+            g_map[m].kind = KIND_FW; g_map[m].idx = i; m++;
+        }
     }
     g_nmap = m;
 }
+
+/* a firmware-SFS volume left in a stale map is unreachable once detached */
+static int fw_dead(int vol)
+{ return g_map[vol].kind == KIND_FW && uno_pc64_detached(); }
 
 int uno_fs_volumes(void) { build_map(); return g_nmap; }
 
@@ -83,10 +92,19 @@ const char *uno_fs_volume_name(int vol)
 static char g_cache[64][32];
 static int  g_cache_n, g_cache_vol = -2;
 
+/* M3 detach: the device set changed under us - rebuild the volume map (the
+ * caller already ran uno_blk_detach + uno_fat_remount) */
+void uno_fs_remap(void)
+{
+    g_mapped = 0;
+    g_cache_vol = -2;
+    build_map();
+}
+
 int uno_fs_list_begin(int vol)
 {
     build_map();
-    if (vol < 0 || vol >= g_nmap) return 0;
+    if (vol < 0 || vol >= g_nmap || fw_dead(vol)) return 0;
     if (g_map[vol].kind == KIND_RAM) return uno_ramfs_count();
     if (g_map[vol].kind == KIND_FAT) {
         static char fn[64][13];
@@ -115,7 +133,7 @@ int uno_fs_list_get(int vol, int idx, char *name, int max)
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max)
 {
     build_map();
-    if (vol < 0 || vol >= g_nmap) return -1;
+    if (vol < 0 || vol >= g_nmap || fw_dead(vol)) return -1;
     if (g_map[vol].kind == KIND_RAM) return uno_ramfs_read(name, buf, max);
     if (g_map[vol].kind == KIND_FAT) return uno_fat_read(g_map[vol].idx, name, buf, max);
     return uno_efifs_read(g_map[vol].idx, name, buf, max);

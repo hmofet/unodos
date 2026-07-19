@@ -256,7 +256,10 @@ typedef struct {
 #define UI_ACT_CLOSE 9999
 
 /* ---- the UI context (windows + interaction state) ------------------------ */
-#define UNOUI_MAX_WINDOWS 8
+/* 24 = the pc64 shell's worst case (taskbar + desktop + Start menu + calendar
+ * + all 16 apps open at once) with headroom; was 8, which the shell could hit
+ * silently with ~5 app windows open. */
+#define UNOUI_MAX_WINDOWS 24
 
 typedef struct unoui_ui {
     const struct unoui_theme *theme;
@@ -291,7 +294,8 @@ unoui_rect unoui_widget_rect(const struct unoui_theme *, const unoui_window *,
 
 void          unoui_ui_init (unoui_ui *, const struct unoui_theme *, int sw, int sh);
 void          unoui_ui_theme(unoui_ui *, const struct unoui_theme *);
-void          unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus */
+int           unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus;
+                                            0 = window table full (not added) */
 /* raise `win` to the top of its z-band (respecting UI_WIN_BOTTOM/TOP pins) and
  * give it focus. Use instead of hand-editing ui->win[]. No-op if not added. */
 void          unoui_bring_to_front(unoui_ui *, unoui_window *win);

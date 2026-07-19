@@ -166,8 +166,14 @@ uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void)
     return (uacpi_u64)((d * 1000u) / g_tsc_mhz);      /* d/mhz = us; *1000=ns */
 }
 
-void uacpi_kernel_stall(uacpi_u8 usec)  { if (gBS_) gBS_->Stall(usec); }
-void uacpi_kernel_sleep(uacpi_u64 msec) { if (gBS_) gBS_->Stall((UINTN)(msec * 1000u)); }
+int  uno_pc64_detached(void);                     /* uefi_main.c (M3) */
+void uno_native_delay_us(unsigned long us);       /* pc64_native.c    */
+
+void uacpi_kernel_stall(uacpi_u8 usec)
+{ if (uno_pc64_detached()) uno_native_delay_us(usec); else if (gBS_) gBS_->Stall(usec); }
+void uacpi_kernel_sleep(uacpi_u64 msec)
+{ if (uno_pc64_detached()) uno_native_delay_us((unsigned long)msec * 1000u);
+  else if (gBS_) gBS_->Stall((UINTN)(msec * 1000u)); }
 
 /* ---- locks / events / threads (single-threaded boot-services stubs) -------- */
 uacpi_handle uacpi_kernel_create_mutex(void)                        { return (uacpi_handle)&g_dummy; }
