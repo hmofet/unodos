@@ -44,8 +44,9 @@
 <main class="main"><div class="wrap">
 
 <h1>Getting started</h1>
-<p class="lede">The easiest way to run UnoDOS pc64 is the <strong>USB flasher</strong>: download it, write
-UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
+<p class="lede">Download the <strong>ISO</strong>, write it to a spare USB stick with a tool you already
+know (Rufus, balenaEtcher) or boot it straight in a virtual machine &mdash; or use the one-click
+UnoDOS flasher. No building, no command line.</p>
 
 <h2 id="need">What you need</h2>
 <ul>
@@ -53,28 +54,45 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
   <li>A 64-bit <strong>UEFI</strong> PC to boot it on, meaning essentially any x86-64 machine from about 2007 on.</li>
 </ul>
 
-<h2 id="flasher">Install with the flasher</h2>
+<h2 id="iso">Download the ISO and write it</h2>
+<p><a class="btn" href="https://github.com/hmofet/unodos/releases/latest/download/unodos-pc64.iso"><strong>Download unodos-pc64.iso</strong></a></p>
+<p><code>unodos-pc64.iso</code> is a hybrid UEFI image: the same file boots as a virtual machine's
+CD-ROM <em>and</em> writes to a USB stick with any standard imaging tool.</p>
+<p><strong>With Rufus</strong> (Windows):</p>
 <ol>
-  <li>Download the flasher for your operating system:
+  <li>Open <a href="https://rufus.ie">Rufus</a> and plug in the USB stick; pick it under <strong>Device</strong>.</li>
+  <li>Click <strong>SELECT</strong> and choose <code>unodos-pc64.iso</code>. Leave the other options as they are.</li>
+  <li>Click <strong>START</strong>. If Rufus asks how to write the image, choose
+      <strong>Write in DD Image mode</strong> (an exact copy). Confirm the erase and wait a few seconds.</li>
+</ol>
+<p><strong>With balenaEtcher</strong> (Windows, macOS, Linux):</p>
+<ol>
+  <li>Open <a href="https://etcher.balena.io">balenaEtcher</a> and click <strong>Flash from file</strong>; choose <code>unodos-pc64.iso</code>.</li>
+  <li>Click <strong>Select target</strong> and pick the USB stick.</li>
+  <li>Click <strong>Flash!</strong> and confirm.</li>
+</ol>
+<div class="note warn"><b>This wipes the drive</b><b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.</div>
+<div class="note tip"><b>Command line and raw image</b>On Linux or macOS you can also write it with <code>dd</code>: <code>dd if=unodos-pc64.iso of=/dev/&lt;your-usb-disk&gt; bs=4M</code>. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same tools. All downloads are on the <a href="https://github.com/hmofet/unodos/releases">releases page</a>.</div>
+
+<h2 id="flasher">Or: the one-click flasher</h2>
+<p>The UnoDOS flasher does the download-and-write in one step - it carries the image inside it:</p>
+<ol>
+  <li>Download it for your operating system:
     <ul>
       <li><strong>Windows</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher.exe">UnoDosFlasher.exe</a>.
           No install; it prompts for Administrator (raw disk writes need it).</li>
       <li><strong>macOS</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher-macOS.zip">UnoDosFlasher-macOS.zip</a>.
           Unzip and open <code>UnoDosFlasher.app</code>; it prompts for your administrator password.</li>
     </ul>
-    <p class="muted" style="margin:.4em 0 0">All versions are on the
-      <a href="https://github.com/hmofet/unodos/releases">releases page</a>.</p>
   </li>
   <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
   <li>Click <strong>Install</strong> and confirm the erase. The flasher writes a bootable UnoDOS image to the drive.</li>
 </ol>
-<div class="note tip"><b>ISO and raw-image alternatives</b>Prefer a standard image? <b>unodos-pc64.iso</b> is a hybrid UEFI ISO: attach it to a virtual machine (QEMU, VirtualBox, VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with <b>Rufus</b>, <b>balenaEtcher</b> or <code>dd</code> - both ways boot the same desktop. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same writing tools.</div>
 <div class="grid cols-2">
   <figure><img src="assets/img/flasher-windows.png" alt="The flasher on Windows: choose your USB drive and click Install." loading="lazy"><figcaption>The flasher on <b>Windows</b>: choose your USB drive and click Install.</figcaption></figure>
   <figure><img src="assets/img/flasher-macos.png" alt="The flasher on macOS: the same steps." loading="lazy"><figcaption>The flasher on <b>macOS</b>: the same steps.</figcaption></figure>
 </div>
-<div class="note warn"><b>This wipes the drive</b><b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.</div>
-<div class="note tip"><b>First launch</b>These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.</div>
+<div class="note tip"><b>First launch</b>These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). The same applies to Rufus/Etcher warnings about an unrecognised image signature. Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.</div>
 
 <h2 id="boot">Boot the target PC</h2>
 <ol>
