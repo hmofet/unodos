@@ -87,9 +87,10 @@ if [ "$1" != "legacy" ]; then
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
     printf '<h1>Disk HTML</h1><p>An <b>HTML</b> file loaded from the FAT volume by the pc64 browser.</p><ul><li>local disk</li><li>FAT32</li></ul>' > build/esp/PAGE.HTML
     # bundle the open TrueType fonts on the ESP (the TTF engine loads them at runtime)
-    cp fonts/Sans.ttf   build/esp/SANS.TTF
-    cp fonts/Mono.ttf   build/esp/MONO.TTF
-    cp fonts/Ubuntu.ttf build/esp/UBUNTU.TTF
+    cp fonts/Sans.ttf       build/esp/SANS.TTF
+    cp fonts/Mono.ttf       build/esp/MONO.TTF
+    cp fonts/Ubuntu.ttf     build/esp/UBUNTU.TTF
+    cp fonts/ChiKareGo2.ttf build/esp/CHICAGO.TTF   # the default (Chicago-style) UI face
 
     # ---- .UNO app modules: every app is loaded from storage at runtime -----
     # (apps/<name>.c -> object -> import thunks -> linked DLL -> APPS/<N>.UNO)
