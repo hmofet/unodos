@@ -44,7 +44,7 @@ if [ "$1" != "legacy" ]; then
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci fat i2c_hid xhci ax88179 uefi_main pc64_native pc64_uui pc64_uui_apps pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci fat hid_kbd i2c_hid xhci usbhid ax88179 uefi_main pc64_native pc64_uui pc64_uui_apps pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
@@ -87,9 +87,10 @@ if [ "$1" != "legacy" ]; then
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
     printf '<h1>Disk HTML</h1><p>An <b>HTML</b> file loaded from the FAT volume by the pc64 browser.</p><ul><li>local disk</li><li>FAT32</li></ul>' > build/esp/PAGE.HTML
     # bundle the open TrueType fonts on the ESP (the TTF engine loads them at runtime)
-    cp fonts/Sans.ttf   build/esp/SANS.TTF
-    cp fonts/Mono.ttf   build/esp/MONO.TTF
-    cp fonts/Ubuntu.ttf build/esp/UBUNTU.TTF
+    cp fonts/Sans.ttf       build/esp/SANS.TTF
+    cp fonts/Mono.ttf       build/esp/MONO.TTF
+    cp fonts/Ubuntu.ttf     build/esp/UBUNTU.TTF
+    cp fonts/ChiKareGo2.ttf build/esp/CHICAGO.TTF   # the default (Chicago-style) UI face
 
     # ---- .UNO app modules: every app is loaded from storage at runtime -----
     # (apps/<name>.c -> object -> import thunks -> linked DLL -> APPS/<N>.UNO)
@@ -134,7 +135,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci fat tls_ca e1000 net tls i2c_hid uefi_main pc64_native unodos; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci fat tls_ca e1000 net tls hid_kbd i2c_hid xhci usbhid uefi_main pc64_native unodos; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done

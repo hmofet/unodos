@@ -71,6 +71,36 @@ static unoui_window g_win[NAPPS];
 static int          g_built[NAPPS], g_open[NAPPS];
 static int          g_dirty = 1;
 
+/* ---- lid-close deep-idle sleep (ACPI) -------------------------------------
+ * Mirrors the Writer's Unlock pattern the contract names as the worked example:
+ * poll acpi_lid_event() (cached ~1 Hz), CLOSE -> blank the screen + low-power
+ * idle, OPEN (or any key) -> wake + full repaint. Read-only ACPI, no GPE/SCI.
+ * Inert on machines with no lid (lid_state -1 -> the edge detector never fires)
+ * and when ACPI isn't built in. */
+static int g_asleep;
+static int g_lidsleep = 1;       /* lid-close enters sleep (on by default) */
+#ifdef UNO_ACPI
+#ifdef UNO_DBGCON
+static void slp_dbg(const char *s){ while(*s) __asm__ volatile("outb %0,%1"::"a"((unsigned char)*s++),"Nd"((unsigned short)0x402)); }
+#else
+static void slp_dbg(const char *s){ (void)s; }
+#endif
+static void uui_sleep_enter(void)
+{
+    g_asleep = 1;
+    slp_dbg("SLEEP: lid closed -> screen off\n");
+    uno_seq_stop();              /* silence any music/SFX */
+    fb_clear(FB_RGB(0, 0, 0));   /* blank the framebuffer */
+    uno_pc64_present();
+}
+static void uui_sleep_wake(void)
+{
+    g_asleep = 0;
+    slp_dbg("WAKE: repaint\n");
+    g_dirty = 1;                 /* force a full repaint next frame */
+}
+#endif
+
 /* one canvas per legacy app; ctx carries its legacy index */
 static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
@@ -88,7 +118,7 @@ static const char *app_short(int a)
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
        ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
-       ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO,
+       ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_LIDSLP,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -179,6 +209,8 @@ static void build_ctrl(unoui_window *w)
     unoui_add_check(w, 130, 86, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
     unoui_add_check(w, 8, 106, "Aurora lite", unoui_aurora_lite);
     w->w[w->nw-1].id = ID_ALITE;
+    unoui_add_check(w, 130, 106, "Lid sleep", g_lidsleep);
+    w->w[w->nw-1].id = ID_LIDSLP;
     unoui_add_label(w, 8, 136, "Volume");
     x = unoui_add_slider(w, 66, 132, 178, 0, 100, 70); x->id = ID_VOL;
     unoui_add_label(w, 8, 160, "UI scale");
@@ -1012,6 +1044,7 @@ static void on_action(const unoui_action *a)
     case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
     case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
     case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; break;   /* Aurora full<->lite (no live composite) */
+    case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; break;                      /* lid-close enters sleep */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
     case ID_OPEN:  editor_open(); break;
@@ -1171,15 +1204,36 @@ int main(void)
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
     fmt_batt();                                      /* tray battery (ACPI)  */
-    uno_font_set_subpixel(1);           /* subpixel AA when a TTF is picked */
-    /* default stays the built-in 8x8 bitmap (monospace) - a safe, tested
-     * fallback; the Control Panel Font picker opts into a TTF face. */
+    uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
+    /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
+     * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
+     * (e.g. missing from the ESP) uno_font_use falls back to the built-in 8x8
+     * bitmap, which the Control Panel picker ("System (mono)") also selects. */
+    uno_font_use(0);
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
     for (;;) {
         int la;
         uno_pc64_poll();
+#ifdef UNO_ACPI
+        {
+            /* Always poll the edge (keeps the detector's baseline current even
+             * when the toggle is off); only ACT on it when lid-sleep is on. */
+            acpi_lid_event_t le = acpi_lid_event();
+            if (!g_lidsleep) le = ACPI_LID_EVT_NONE;
+            if (!g_asleep) {
+                if (le == ACPI_LID_EVT_CLOSE) uui_sleep_enter();
+            } else {
+                /* asleep: wake on lid-open or any key/click; discard the input */
+                int woke = (le == ACPI_LID_EVT_OPEN), sc, uni, ct, mx, my, mb;
+                while (uno_pc64_next_key(&sc, &uni, &ct)) woke = 1;
+                uno_pc64_mouse(&mx, &my, &mb); if (mb) woke = 1;
+                if (woke) uui_sleep_wake();
+                else { uno_pc64_delay_ms(50); continue; }
+            }
+        }
+#endif
         if (pump_input()) { g_dirty = 1; idle = 0; }
         else if (++idle >= 30) {        /* ~0.5 s: caret blink + tray clock tick */
             idle = 0; g_dirty = 1;

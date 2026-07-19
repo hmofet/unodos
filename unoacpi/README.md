@@ -2,12 +2,16 @@
 
 A portable, host-abstracted ACPI battery / lid / device-power stack built on a
 vendored [uACPI](https://github.com/uACPI/uACPI) interpreter. **Shared verbatim
-with Writer's Unlock** (`hmofet/writers-unlock`, which is the reference host and
-the upstream for these files) — do not hand-edit anything here except to re-sync
-from that repo; per-OS code belongs in the host layer (`pc64/acpi_host.c`).
+from the canonical repo `hmofet/acpipower`** (extracted from writers-unlock
+2026-07-19) — do not hand-edit anything here except to re-sync:
 
-Integration contract: `docs/ACPI-POWER-INTERFACE.md` in the writers-unlock repo.
-uACPI pin/re-vendor instructions: `uacpi/UACPI-PIN.md` (tag 6.0.0).
+    <acpipower>/tools/sync-to-consumer.sh --flat <unodos>/unoacpi
+
+Per-OS code belongs in the host layer (`pc64/acpi_host.c`).
+
+Integration contract: `CONTRACT.md` in the acpipower repo (Writer's Unlock
+remains the hardware-reference host). uACPI pin/re-vendor instructions:
+`uacpi/UACPI-PIN.md` (tag 6.0.0).
 
 | Layer | Files | Ownership |
 |---|---|---|
