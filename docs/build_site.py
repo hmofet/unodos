@@ -440,6 +440,8 @@ void fb_round_rect(int x,int y,int w,int h,int rad,fb_px c);
 void fb_set_font(const fb_font *f);
 int  fb_text(int x,int y,const char *s,fb_px fg,long bg);   /* bg = -1 => transparent */
 int  fb_text_w(const char *s);
+int  fb_text_h(void);                        /* line height of the active font */
+void fb_get_clip(int *x,int *y,int *w,int *h);   /* save/restore the clip */
 int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 
 /* FB_RGB(r,g,b); named colors UNO_WHITE UNO_BLACK UNO_BLUE UNO_CYAN UNO_MAG
@@ -502,8 +504,8 @@ PAGES["index.html"] = ("Overview", f"""
 <h2 id="what">What you get</h2>
 <div class="cards">
   <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, and windows you can move and resize, all by keyboard or pointer.</p></div>
-  <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel.</p></div>
-  <div class="card"><h4>Applications</h4><p>Editor, Files, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
+  <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
+  <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
   <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
@@ -628,18 +630,21 @@ live clock. Every control works by keyboard or pointer.</p>
 <h2 id="furniture">Desktop furniture</h2>
 <ul>
   <li><strong>Desktop icons</strong> launch apps directly.</li>
-  <li>The <strong>Start button</strong> opens a scrollable <strong>Start menu</strong> ("Programs") that lists
+  <li>The <strong>Start button</strong> carries the UnoDOS mark (a ring broken open with a numeral
+      <em>1</em> through it) and opens a scrollable <strong>Start menu</strong> ("Programs") that lists
       every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>.</li>
   <li>The <strong>taskbar</strong> along the bottom shows a button for each open window; click one to bring it to the front.</li>
-  <li>The <strong>clock</strong> in the corner shows the current time.</li>
+  <li>The <strong>clock</strong> in the corner shows the current time (and the battery level, on laptops).</li>
 </ul>
 
 {fig("startmenu.png", "The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.")}
 
 <h2 id="windows">Windows</h2>
 <p>Each window has a title bar with a <strong>close box</strong>. Drag the title bar to move a window.
-Windows that can be resized have a <strong>grip</strong> in the bottom-right corner, and resizing them
-reflows their contents: the browser re-wraps its text and Runner3D rescales its 3D view.</p>
+Every app window can be resized: grab the ridged <strong>grip</strong> in the bottom-right corner, or
+simply drag the window's <strong>right or bottom edge</strong> (an edge drag resizes that direction
+only). Resizing reflows the contents live: the Editor re-wraps its document, the Files panes grow,
+the browser re-wraps its text and Runner3D rescales its 3D view.</p>
 
 <h2 id="keys">Keyboard &amp; pointer reference</h2>
 <p>The desktop is designed to be fully usable without a mouse: <kbd>Tab</kbd> moves between controls,
@@ -668,9 +673,10 @@ the Control Panel and all without a reboot.</p>
 <h2 id="control">The Control Panel</h2>
 <p>The Control Panel is where you change how UnoDOS looks: a <strong>Theme</strong> menu, a
 <strong>Dark mode</strong> toggle, a <strong>Resolution</strong> menu, a system-wide <strong>Font</strong>
-picker, a <strong>Volume</strong> slider (it adjusts the sound output live, even mid-note, on machines
-with HD&nbsp;Audio or AC'97 audio), a UI-scale control, and settings for the date and time. It opens on
-first boot and from the Start menu.</p>
+picker, a <strong>UI scale</strong> menu (100&ndash;200%), a <strong>Volume</strong> slider (it adjusts
+the sound output live, even mid-note, on machines with HD&nbsp;Audio or AC'97 audio), and the clock:
+the time is set with two spinners, and the date with the <strong>Set date&hellip;</strong> calendar
+picker &mdash; click a day and it is applied. It opens on first boot and from the Start menu.</p>
 {fig("controlpanel.png", "The Control Panel. Focus a menu with <kbd>Tab</kbd> and change it with <kbd>↑</kbd>/<kbd>↓</kbd>; the desktop re-skins instantly.")}
 
 <h2 id="themes">The ten themes</h2>
@@ -691,15 +697,22 @@ instantly re-skins the whole desktop.</p>
 </div>
 
 <h2 id="fonts">TrueType fonts</h2>
-<p>Pick a TrueType font and all the on-screen text restyles: titles, labels, buttons and lists, drawn
-smoothly and proportionally. Three fonts are included (DejaVu Sans, DejaVu Sans Mono and Ubuntu), and the
-built-in font stays the default.</p>
-{fig("font_ttf.png", "The same interface using the proportional <b>Sans</b> TrueType font (shown here with the NeXTSTEP theme).")}
+<p>All the on-screen text is drawn by a TrueType engine with proper proportional spacing and kerning.
+Four faces are included: <strong>Chicago</strong> (the crisp bitmap-style default), <strong>Sans</strong>,
+<strong>Mono</strong> and <strong>Ubuntu</strong>. Pick one and everything restyles &mdash; titles,
+labels, buttons, lists &mdash; and the whole layout re-measures itself to fit the new face.</p>
+{fig("font_ttf.png", "The same interface using the proportional <b>Sans</b> TrueType face.")}
+
+<h2 id="scale">UI scale</h2>
+<p>The <strong>UI scale</strong> menu makes everything bigger without changing the resolution: 100%,
+125%, 150% or 200%. Every font scales and every window, menu and toolbar re-lays itself out to match
+&mdash; handy on high-resolution laptop panels.</p>
+{fig("uiscale.png", "The desktop at <b>150%</b> UI scale: same resolution, larger text and controls everywhere.")}
 
 <h2 id="resolution">Resolution &amp; scaling</h2>
 <p>Pick a resolution from the Control Panel and the desktop resizes to match, scaled to fill your screen
 while keeping the correct proportions.</p>
-{fig("resolution.png", "A 640×480 desktop scaled to fit a widescreen panel, shown with the NeXTSTEP theme and Sans font.")}
+{fig("resolution.png", "A smaller desktop mode scaled to fit the panel.")}
 """)
 
 PAGES["apps.html"] = ("Applications", f"""
@@ -707,11 +720,37 @@ PAGES["apps.html"] = ("Applications", f"""
 <p class="lede">The full set of apps runs on the desktop: everyday tools, creative apps, games and a
 3D runner. Launch any of them from the Start menu or a desktop icon.</p>
 
+<h2 id="editor">The Editor: real word processing</h2>
+<p>The Editor is a WordPad-class <strong>rich-text word processor</strong>. Select text and make it
+<strong>bold</strong>, <em>italic</em> or underlined; mix <strong>four typefaces</strong> and
+<strong>eight sizes</strong> in one document; set each paragraph left, centred or right. The document
+word-wraps to the window and everything is on the menu bar, the toolbar, or a shortcut
+(<kbd>Ctrl</kbd>+<kbd>B</kbd>/<kbd>I</kbd>/<kbd>U</kbd>, <kbd>Ctrl</kbd>+<kbd>S</kbd>/<kbd>O</kbd>/<kbd>N</kbd>,
+<kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>).
+There's find &amp; replace, a ruler, and a status bar with the cursor position.</p>
+<div class="grid cols-2">
+  {fig("editor.png", "<b>Editor</b>: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar.")}
+  {fig("editor_rich.png", "Rich text for real: the whole document selected and set bold from the keyboard.")}
+</div>
+<p>Documents save through the <strong>Open / Save As</strong> dialog to any writable volume: the
+styled <strong>UWD</strong> format keeps the formatting, or name a file <code>.TXT</code> to save
+plain text.</p>
+
+<h2 id="filesapp">Files: a real file manager</h2>
+<p>Files shows every mounted volume: the built-in RAM disk, the UnoDOS disk and any FAT-formatted
+sticks or drives. Browse into folders (<kbd>Enter</kbd> opens, <kbd>Backspace</kbd> goes up) and use
+the toolbar for real operations: <strong>new folder</strong>, <strong>rename</strong>,
+<strong>delete</strong> (it asks twice), <strong>copy</strong> and <strong>move</strong>. The
+<strong>Two panes</strong> button switches to a classic two-pane commander layout: copy and move then
+target the other pane's folder.</p>
+<div class="grid cols-2">
+  {fig("files.png", "<b>Files</b>: volumes, folders and files with sizes, and a toolbar of real file operations.")}
+  {fig("files_two.png", "The <b>two-pane</b> layout: the active pane's header is highlighted; Copy/Move target the other pane.")}
+</div>
+
 <h2 id="native">Everyday apps</h2>
 <div class="grid cols-2">
-  {fig("editor.png", "<b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.")}
-  {fig("files.png", "<b>Files</b>: your saved documents.")}
-  {fig("system.png", "<b>System</b>: system and device information at a glance. Its status lines show how independent of the firmware UnoDOS is running - which native storage driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i> for SATA, NVMe and eMMC disks), and which audio backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).")}
+  {fig("system.png", "<b>System</b>: device information in tidy groups - Input &amp; USB, Storage, Power &amp; ACPI, and Audio. The Storage group shows which native driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio shows which backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).")}
   {fig("clock.png", "<b>Clock</b>: the current time.")}
 </div>
 <p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
@@ -759,7 +798,8 @@ list; <kbd>Enter</kbd> opens a file and <kbd>Backspace</kbd> goes back.</p>
 
 <h2 id="render">HTML, Markdown &amp; CSS</h2>
 <p>The browser lays out headings, word-wrapped paragraphs, bold and italic, code, links, lists and
-preformatted text, for both HTML and Markdown.</p>
+preformatted text, for both HTML and Markdown &mdash; all typeset with real TrueType typography:
+large bold headings, a monospace face for code, and true italics.</p>
 <div class="grid cols-2">
   {fig("browser_markdown.png", "A <b>Markdown</b> document: headings, bold and italic, inline code and lists.")}
   {fig("browser_html.png", "An <b>HTML</b> page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored.")}
