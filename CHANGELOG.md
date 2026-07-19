@@ -5,6 +5,34 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 native storage — run the filesystem from any FAT32, no firmware FAT] - 2026-07-19
+
+Milestone 1 of decoupling pc64 from EFI firmware: UnoDOS now owns partition
+scanning and FAT16/32 read+write itself, over its own block layer
+([pc64/STORAGE.md](pc64/STORAGE.md)). The firmware no longer parses the
+filesystem — it only (optionally) moves sectors.
+
+- **`pc64/blkdev.{c,h}`** — a 512-byte-sector block-device registry.
+- **`pc64/ahci.c`** — a native AHCI driver (PCI class 01/06, ABAR, polled
+  READ/WRITE DMA EXT, static command-list/FIS, no interrupts).
+- **`pc64/fat.{c,h}`** — native FAT16/32 read/write/create/delete/list, with
+  GPT + MBR + superfloppy partition discovery. Mounts **every** FAT16/32
+  partition — a firmware ESP and a plain basic-data FAT32 are identical — which
+  is what lets UnoDOS live on any FAT32 volume, not just "the ESP the firmware
+  exposed". Fonts, docs, and (in M2) apps come from there.
+- **`pc64_fs.c`** gains a real `uno_fs_write`/`uno_fs_writable` API (the fs
+  surface was read-only before); Notepad/Editor saves persist to a writable FAT
+  volume. The System window shows a `Native FS:` line.
+
+Architecture note — **one driver per controller**: while boot services are live
+the firmware owns the AHCI/NVMe controllers, so the block layer takes the sector
+transport from firmware Block IO (reprogramming a port out from under firmware
+corrupted an installer clone). The native AHCI driver activates only once the OS
+detaches from firmware (a later milestone). Verified headless
+(`pc64/tools/storage_test.py`) on WSL (TCG) and devbuntu (KVM): native FAT reads
+a marker and a gated boot-time self-test proves write+delete on a plain FAT32
+basic-data disk; the install-to-disk flow stays regression-clean.
+
 ## [pc64 installer — put UnoDOS on a local disk] - 2026-07-19
 
 A new **Install** app in the pc64 shell installs the running system to a local
