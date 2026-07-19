@@ -581,6 +581,7 @@ hypervisor. In <strong>VirtualBox</strong>:</p>
   <li>Start. The splash, chime and desktop should appear in a few seconds. For sound, either audio
       controller works - UnoDOS has drivers for both <em>Intel HD Audio</em> and <em>ICH AC97</em>.</li>
 </ol>
+{fig("virtualbox.png", "The ISO booted in a <b>VirtualBox</b> EFI virtual machine - the same desktop as real hardware, captured straight from the VM's screen.")}
 <p>Other hypervisors are the same idea: attach the ISO as a CD and boot with UEFI firmware -
 <strong>VMware</strong> (firmware type UEFI), <strong>Hyper-V</strong> (a Generation&nbsp;2 VM with
 Secure Boot turned off), or QEMU + OVMF (see <a href="developer.html#qemu">Run it in QEMU</a>).</p>
