@@ -229,6 +229,24 @@ class Harness:
         self.mouse_btn = 0
         self.frames(1)
 
+    def drag(self, x0, y0, x1, y1, step=8):
+        """Press at (x0,y0), step-move to (x1,y1) with the button held (so the
+        window follows one cell-step per frame), then release. Exercises the
+        drag damage-rect."""
+        self.move_to(x0, y0)
+        self.mouse_btn = 1
+        self.frames(1)
+        while self.cmd_x != x1 or self.cmd_y != y1:
+            dx = max(-step, min(step, x1 - self.cmd_x))
+            dy = max(-step, min(step, y1 - self.cmd_y))
+            self.cmd_x += dx
+            self.cmd_y += dy
+            self._push_delta(dx, dy)
+            self.frames(1)
+        self.frames(2)
+        self.mouse_btn = 0
+        self.frames(1)
+
     def run_script(self, path):
         """Run a wait/shot/key/move/click text script (parity with apple2).
 
@@ -253,6 +271,9 @@ class Harness:
                     self.click(int(parts[1]), int(parts[2]))
                 else:
                     self.click()
+            elif op == "drag":
+                self.drag(int(parts[1]), int(parts[2]),
+                          int(parts[3]), int(parts[4]))
             elif op == "shot":
                 self.render_png(parts[1])
             else:

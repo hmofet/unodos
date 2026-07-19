@@ -161,6 +161,8 @@ v_ev_tail   = VARS+$2E
 v_cur_saved = VARS+$30
 v_cur_gp    = VARS+$32
 v_frac      = VARS+$34            ; sub-second frame accumulator
+v_clip_y0   = VARS+$36            ; repaint row-band clip [y0,y1) in pixel rows;
+v_clip_y1   = VARS+$38            ; default = whole screen. close/drag narrow it.
 v_numbuf    = VARS+$40            ; 16 bytes
 v_clkbuf    = VARS+$50            ; 16 bytes
 v_zlist     = VARS+$60            ; MAXWIN bytes
@@ -276,6 +278,11 @@ clear_state:
         inx
         cpx #$0500
         bne @v
+        ; fall through: leave the repaint clip band = whole screen
+clip_reset:
+        stz v_clip_y0
+        lda #(SCRH_C*8)
+        sta v_clip_y1
         rts
 
 ; init_scb_pal: 200 SCBs -> palette 0/320 mode, copy palette line 0.
@@ -344,6 +351,26 @@ calc_gp_px:
 .a16
 .i16
 fill_band:
+        ; clip rows to the repaint band [v_clip_y0, v_clip_y1) (P1 damage-rect).
+        ; Default band = whole screen, so this is a no-op for on-screen fills.
+        lda PY
+        clc
+        adc PH
+        sta mtmp             ; bottom = PY + PH
+        lda v_clip_y1
+        cmp mtmp
+        bcs @cb1
+        sta mtmp             ; bottom = min(bottom, clip_y1)
+@cb1:   lda v_clip_y0
+        cmp PY
+        bcc @cb0
+        sta PY               ; PY = max(PY, clip_y0)
+@cb0:   lda mtmp
+        sec
+        sbc PY               ; PH = bottom - PY
+        bcc @ret
+        beq @ret
+        sta PH
         jsr calc_gp_px
         lda PW
         beq @ret              ; 0-width fill: nothing (matches old no-op loop)
@@ -455,15 +482,26 @@ render_glyph:
         asl a
         asl a                  ; *8
         sta GIDX
+        lda PY                 ; running glyph-row Y for the row-band clip
+        sta mtmp2
         sep #$20
         lda #8
         sta rowc16
 rg_row:
+        ; P1: draw this glyph row only if it lies inside the repaint band.
+        ; Default band = whole screen, so every row draws (a no-op then).
+        rep #$20
+        lda mtmp2
+        cmp v_clip_y0
+        bcc @hide
+        cmp v_clip_y1
+        bcc @draw              ; y0 <= rowY < y1 -> in band
+@hide:  jmp rg_skip            ; out of band (jmp: the draw block is > 128 bytes)
+@draw:  sep #$20
         ldx GIDX
         lda f:font_data,x
         sta fbits
         rep #$20
-        inc GIDX
         sep #$20
         ldy #0
         PIXBYTE $80, $40
@@ -478,6 +516,9 @@ rg_row:
         PIXBYTE $02, $01
         sta [GP],y
         rep #$20
+rg_skip:
+        inc GIDX               ; consume the glyph row + advance GP either way
+        inc mtmp2
         lda GP
         clc
         adc #ROWBYTES
@@ -485,6 +526,7 @@ rg_row:
         sep #$20
         dec rowc16
         beq rg_done
+        rep #$20
         jmp rg_row
 rg_done:
         rep #$20
@@ -774,7 +816,22 @@ snd_off:
 .i16
 clear_screen:
         stz PB
+        ; whole-screen band -> the fast fill_screen; a narrowed band (close/drag)
+        ; -> a band-clipped fill_band so only the damaged rows are cleared. (P1)
+        lda v_clip_y0
+        bne @band
+        lda v_clip_y1
+        cmp #(SCRH_C*8)
+        bcc @band
         jsr fill_screen
+        rts
+@band:  stz PX
+        stz PY
+        lda #(SCRW_C*4)        ; 160 bytes = full width
+        sta PW
+        lda #(SCRH_C*8)        ; 200 rows; fill_band clamps to the clip band
+        sta PH
+        jsr fill_band
         rts
 
 ; ============================================================================
@@ -1324,6 +1381,21 @@ raise_window:
 close_window:
         sta S0
         jsr zent_x
+        ; repaint band = the closed window's pixel rows. iigs draws no shadow
+        ; beyond the rect and has no active-title restyle, so that band is the
+        ; whole damage; the repaint below reveals what was behind it. (P1 close)
+        lda v_wintab+WY,x
+        asl a
+        asl a
+        asl a                   ; WY * 8 (cells -> pixel rows)
+        sta v_clip_y0
+        lda v_wintab+WY,x
+        clc
+        adc v_wintab+WH,x
+        asl a
+        asl a
+        asl a                   ; (WY + WH) * 8
+        sta v_clip_y1
         sep #$20
         stz v_wintab+WSTATE,x
         rep #$20
@@ -1340,7 +1412,8 @@ close_window:
         rep #$20
         inc S0
         bra @shift
-@done:  jsr repaint_all
+@done:  jsr repaint_all         ; clipped to the closed window's row band
+        jsr clip_reset
         rts
 
 .a16
@@ -2082,11 +2155,34 @@ handle_drag:
         cmp v_wintab+WY,x
         beq @done
 @move:  ldx v_drag_win
+        ; damage band = union of the old and new window row ranges, so the
+        ; repaint touches only the vacated + new rows instead of the whole
+        ; screen every cell-step. oldWY = v_wintab+WY,x (not overwritten yet),
+        ; newWY = A1, WH = v_wintab+WH,x. (P1 drag)
+        lda v_wintab+WY,x
+        cmp A1
+        bcc @dmin
+        lda A1
+@dmin:  asl a
+        asl a
+        asl a
+        sta v_clip_y0           ; min(oldWY,newWY) * 8
+        lda v_wintab+WY,x
+        cmp A1
+        bcs @dmax
+        lda A1
+@dmax:  clc
+        adc v_wintab+WH,x
+        asl a
+        asl a
+        asl a
+        sta v_clip_y1           ; (max(oldWY,newWY) + WH) * 8
         lda A0
         sta v_wintab+WX,x
         lda A1
         sta v_wintab+WY,x
-        jsr repaint_all
+        jsr repaint_all         ; clipped to the union band
+        jsr clip_reset
 @done:  rts
 
 ; handle_events: drain the queue. ESC closes topmost; else route by focus. (a16)
