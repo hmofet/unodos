@@ -11,7 +11,7 @@
 #include "unoui_theme.h"
 
 /* app icon ids match the shell's app enum order */
-enum { IC_CTRL, IC_EDIT, IC_FILES, IC_SYS, IC_CLOCK, IC_CANVAS,
+enum { IC_CTRL, IC_EDIT, IC_FILES, IC_SYS, IC_CLOCK, IC_CANVAS, IC_SETUP,
        IC_DOSTRIS, IC_PACMAN, IC_OUTLAST, IC_MUSIC, IC_TRACKER, IC_PAINT };
 
 /* ---- theme-aware recolouring -------------------------------------------
@@ -150,6 +150,19 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         disc(cx + G(6), cy - G(2), G(2), FB_RGB(60, 110, 230));
         disc(cx - G(6), cy + G(3), G(2), FB_RGB(240, 205, 60));
         break; }
+    case IC_SETUP: {                                 /* install: disk + down arrow */
+        fb_px platter = FB_RGB(70, 76, 92), sheen = FB_RGB(105, 112, 130);
+        fb_px arrow = FB_RGB(70, 190, 110);
+        rr(ox + G(4), oy + G(18), G(24), G(9), platter);     /* drive body     */
+        frame(ox + G(4), oy + G(18), G(24), G(9), FB_RGB(35, 40, 52));
+        rr(ox + G(6), oy + G(20), G(20), G(2), sheen);
+        disc(ox + G(24), oy + G(24), G(1), FB_RGB(90, 230, 120));  /* LED      */
+        thick(ox + G(15), oy + G(3), ox + G(15), oy + G(12), G(3), arrow);
+        seg(ox + G(10), oy + G(10), ox + G(16), oy + G(16), arrow); /* head    */
+        seg(ox + G(11), oy + G(10), ox + G(16), oy + G(15), arrow);
+        seg(ox + G(21), oy + G(10), ox + G(16), oy + G(16), arrow);
+        seg(ox + G(20), oy + G(10), ox + G(16), oy + G(15), arrow);
+        break; }
     case IC_DOSTRIS: {                               /* S-tetromino */
         fb_px a = FB_RGB(60, 200, 90), b = FB_RGB(0, 200, 200);
         int u = G(7);
@@ -195,7 +208,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         disc(ox + G(6), oy + G(25), G(3), FB_RGB(220, 60, 60));         /* bristle paint */
         disc(ox + G(24), oy + G(24), G(4), FB_RGB(60, 120, 230));       /* colour dab */
         break; }
-    case 12: {                                       /* Network: connected nodes */
+    case IC_PAINT + 1: {                             /* Network: connected nodes */
         disc(ox+G(8),  oy+G(8),  G(3), FB_RGB(70,180,230));
         disc(ox+G(24), oy+G(10), G(3), FB_RGB(80,200,120));
         disc(ox+G(14), oy+G(24), G(3), FB_RGB(240,200,60));
@@ -203,7 +216,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(ox+G(8), oy+G(8), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         seg(ox+G(24), oy+G(10), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         break; }
-    case 14: {                                       /* Browser: window + globe */
+    case IC_PAINT + 3: {                             /* Browser: window + globe */
         rr(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(245,246,250));
         frame(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(70,80,110));
         rr(ox+G(4), oy+G(5), G(24), G(6), FB_RGB(70,120,210));   /* address bar */
@@ -213,7 +226,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(cx-G(6), oy+G(18), cx+G(6), oy+G(18), FB_RGB(230,245,235));
         seg(cx, oy+G(12), cx, oy+G(24), FB_RGB(230,245,235));
         break; }
-    case 13: {                                       /* Runner3D: perspective road */
+    case IC_PAINT + 2: {                             /* Runner3D: perspective road */
         rr(ox + G(2), oy + G(3), G(28), G(12), FB_RGB(90,150,225));    /* sky */
         rr(ox + G(2), oy + G(15), G(28), G(14), FB_RGB(45,140,55));    /* grass */
         { int yy; for (yy = 0; yy < G(14); yy++) {                     /* road wedge */

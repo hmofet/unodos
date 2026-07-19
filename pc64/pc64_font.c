@@ -72,8 +72,14 @@ static fslot g_fonts[NSLOT] = {
 
 static int font_read(const char *name, unsigned char *buf, long max)
 {
+    /* volume roots first (the USB/dev layout), then \EFI\UNODOS\ (where the
+     * installer puts everything on an installed system's ESP) */
     int nv = uno_fs_volumes(), v;
+    char sub[48];
+    strcpy(sub, "EFI\\UNODOS\\"); strncpy(sub + 11, name, sizeof sub - 12);
+    sub[sizeof sub - 1] = 0;
     for (v = 0; v < nv; v++) { long n = uno_fs_read(v, name, buf, max); if (n > 0) return (int)n; }
+    for (v = 1; v < nv; v++) { long n = uno_fs_read(v, sub,  buf, max); if (n > 0) return (int)n; }
     return 0;
 }
 static int ensure_loaded(int slot)

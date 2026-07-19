@@ -27,6 +27,7 @@
 #include "acpi_power.h"      /* unoacpi: AML battery/lid (portable consumer API) */
 #include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
 #endif
+#include "installer.h"       /* install to a local disk (the Install app) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -45,14 +46,14 @@ static const char *kThemeNames[NTHEMES];
  * migrated legacy apps (games / paint / tracker / music), each hosted in a
  * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
  * index a-NNATIVE. */
-enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, NNATIVE };
+enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, APP_SETUP, NNATIVE };
 #define NEXTRA 2                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
-    { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas" };
+    { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas", "Install" };
 
 #define TASKH 26                          /* taskbar height, px */
 
@@ -73,7 +74,7 @@ static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
 
 static const char *kNativeShort[NNATIVE] =
-    { "Control", "Editor", "Files", "System", "Clock", "Canvas" };
+    { "Control", "Editor", "Files", "System", "Clock", "Canvas", "Install" };
 static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
@@ -85,6 +86,7 @@ static const char *app_short(int a)
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
        ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
+       ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -382,8 +384,103 @@ static void build_demo(unoui_window *w)
     x = unoui_add_button(w, 6, 150, 120, "Fullscreen", UI_F_DEFAULT); x->id = ID_FULL;
 }
 
+/* ---- Install: put UnoDOS on a local disk (backend: installer.c) ---------- */
+#define INST_MAXT 12
+static char        g_inst_item[INST_MAXT][72];
+static const char *g_inst_ptr[INST_MAXT];
+static int         g_inst_n, g_inst_sel = -1, g_inst_armed;
+static char        g_inst_stat[96] = "Select a target, then Install.";
+static int         g_inst_default = 1;       /* "Boot UnoDOS by default"       */
+static unoui_widget *g_inst_list_w, *g_inst_prog_w;
+
+static void inst_rescan(void)
+{
+    int i;
+    g_inst_n = uno_inst_scan();
+    if (g_inst_n > INST_MAXT) g_inst_n = INST_MAXT;
+    for (i = 0; i < g_inst_n; i++) {
+        strncpy(g_inst_item[i], uno_inst_desc(i), 71); g_inst_item[i][71] = 0;
+        g_inst_ptr[i] = g_inst_item[i];
+    }
+    g_inst_sel = g_inst_n ? 0 : -1; g_inst_armed = 0;
+    if (g_inst_list_w) { g_inst_list_w->nitems = g_inst_n; g_inst_list_w->value = g_inst_sel; }
+    if (g_inst_prog_w) g_inst_prog_w->value = 0;
+    strcpy(g_inst_stat, g_inst_n ? "Select a target, then Install."
+                                 : "No install targets found.");
+}
+
+static void inst_select(int n)
+{
+    if (n < 0 || n >= g_inst_n) return;
+    g_inst_sel = n; g_inst_armed = 0;
+    if (g_inst_list_w) g_inst_list_w->value = n;
+    strcpy(g_inst_stat, uno_inst_kind(n) == UNO_INST_DISK
+           ? "Destructive: erases that disk. Install asks twice."
+           : "Non-destructive: adds \\EFI\\UNODOS + a boot entry.");
+}
+
+/* live progress while the copy runs (the shell loop is blocked inside the
+ * install call, so paint + present directly - same trick as the Paint drag) */
+static void inst_progress(int pct, const char *msg)
+{
+    char *p = g_inst_stat;
+    if (g_inst_prog_w) g_inst_prog_w->value = pct;
+    while (*msg && p < g_inst_stat + 78) *p++ = *msg++;
+    *p = 0;
+    unoui_render_ui(&UI);
+    uno_pc64_present();
+}
+
+static void inst_go(void)
+{
+    int k;
+    if (g_inst_sel < 0 || g_inst_sel >= g_inst_n) {
+        strcpy(g_inst_stat, "Pick a target from the list first.");
+        return;
+    }
+    if (!uno_inst_usable(g_inst_sel)) {
+        strcpy(g_inst_stat, "That target cannot be used (see its listing).");
+        return;
+    }
+    k = uno_inst_kind(g_inst_sel);
+    if (k == UNO_INST_DISK && !g_inst_armed) {
+        g_inst_armed = 1;                    /* destructive: double-confirm    */
+        strcpy(g_inst_stat, "ERASES THAT WHOLE DISK - press Install again.");
+        return;
+    }
+    g_inst_armed = 0;
+    if (uno_inst_install(g_inst_sel, g_inst_default, inst_progress)) {
+        strcpy(g_inst_stat, "Installed. Remove the USB stick and restart.");
+        if (g_inst_prog_w) g_inst_prog_w->value = 100;
+    } else {
+        char *p = ap_str(g_inst_stat, "FAILED: ");
+        const char *e = uno_inst_error();
+        while (*e && p < g_inst_stat + 90) *p++ = *e++;
+        *p = 0;
+        if (g_inst_prog_w) g_inst_prog_w->value = 0;
+    }
+}
+
+static void build_setup(unoui_window *w)
+{
+    inst_rescan();
+    unoui_window_init(w, "Install", 150, 60, 400, 286);
+    unoui_add_label(w, 8, 4, "Install UnoDOS to a local disk");
+    unoui_add_label(w, 8, 20, "Volumes keep your files; Disks are ERASED.");
+    unoui_add_label(w, 8, 34, "Keys: Up/Down pick - I installs - R rescans");
+    g_inst_list_w = unoui_add_list(w, 8, 52, 384, 92, g_inst_ptr, g_inst_n, g_inst_sel);
+    g_inst_list_w->id = ID_ILIST;
+    { unoui_widget *c = unoui_add_check(w, 8, 150, "Boot UnoDOS by default", 1);
+      c->id = ID_IDEF; }
+    { unoui_widget *b = unoui_add_button(w, 8, 172, 100, "Rescan", 0);  b->id = ID_IRESCAN; }
+    { unoui_widget *b = unoui_add_button(w, 292, 172, 100, "Install", 0); b->id = ID_IGO; }
+    g_inst_prog_w = unoui_add_progress(w, 8, 200, 384, 0, 100);
+    unoui_add_label(w, 8, 218, g_inst_stat);
+}
+
 static void (*const g_build[NNATIVE])(unoui_window *) =
-    { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo };
+    { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo,
+      build_setup };
 
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
@@ -871,6 +968,10 @@ static void on_action(const unoui_action *a)
     if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
     switch (a->id) {
+    case ID_ILIST:    inst_select(a->value); break;
+    case ID_IDEF:     g_inst_default = a->value; break;
+    case ID_IRESCAN:  inst_rescan(); break;
+    case ID_IGO:      inst_go(); break;
     case ID_START:    toggle_launcher(); break;
     case ID_SHUTDOWN: uno_pc64_shutdown(); break;
     case ID_RESTART:  uno_pc64_restart();  break;
@@ -927,6 +1028,20 @@ static int pump_input(void)
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
         if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
+        /* Install window focused: keyboard drive (works before any pointer is
+           up - important on the harness AND on laptops with exotic trackpads).
+           Up/Down pick a target, I = Install, R = Rescan. */
+        if (!g_launch_open && !UI.full && g_open[APP_SETUP] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[APP_SETUP]) {
+            int used = 1;
+            if      (scan == 0x01) inst_select(g_inst_sel - 1);      /* up   */
+            else if (scan == 0x02) inst_select(g_inst_sel + 1);      /* down */
+            else if (uni == 'i' || uni == 'I') inst_go();
+            else if (uni == 'r' || uni == 'R') inst_rescan();
+            else used = 0;
+            if (used) { g_dirty = 1; continue; }
+        }
         switch (scan) {
         case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
         case 0x03: vk = UI_KEY_RIGHT; break; case 0x04: vk = UI_KEY_LEFT; break;
