@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Applications · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="active" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Applications</h1>
+<p class="lede">The full set of apps runs on the desktop: everyday tools, creative apps, games and a
+3D runner. Launch any of them from the Start menu or a desktop icon.</p>
+
+<h2 id="native">Everyday apps</h2>
+<div class="grid cols-2">
+  <figure><img src="assets/img/editor.png" alt="Editor: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font." loading="lazy"><figcaption><b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.</figcaption></figure>
+  <figure><img src="assets/img/files.png" alt="Files: your saved documents." loading="lazy"><figcaption><b>Files</b>: your saved documents.</figcaption></figure>
+  <figure><img src="assets/img/system.png" alt="System: system and device information at a glance." loading="lazy"><figcaption><b>System</b>: system and device information at a glance.</figcaption></figure>
+  <figure><img src="assets/img/clock.png" alt="Clock: the current time." loading="lazy"><figcaption><b>Clock</b>: the current time.</figcaption></figure>
+</div>
+<p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
+<figure class="shot-sm"><img src="assets/img/canvas.png" alt="The Canvas demo: an app drawing inside its own window." loading="lazy"><figcaption>The <b>Canvas</b> demo: an app drawing inside its own window.</figcaption></figure>
+
+<h2 id="creative">Creative tools</h2>
+<div class="grid cols-3">
+  <figure><img src="assets/img/paint.png" alt="Paint: pencil, shapes, fills and a colour palette." loading="lazy"><figcaption><b>Paint</b>: pencil, shapes, fills and a colour palette.</figcaption></figure>
+  <figure><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
+  <figure><img src="assets/img/music.png" alt="Music: a melody player." loading="lazy"><figcaption><b>Music</b>: a melody player.</figcaption></figure>
+</div>
+<p>The games, Music and Tracker all play sound through the PC speaker.</p>
+
+<h2 id="games">Games</h2>
+<p>Each game runs in a window or full screen. Press <kbd>Esc</kbd> to leave a full-screen game.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level." loading="lazy"><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level.</figcaption></figure>
+  <figure><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts." loading="lazy"><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts.</figcaption></figure>
+  <figure><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game." loading="lazy"><figcaption><b>OutLast</b>: an arcade driving game.</figcaption></figure>
+  <figure><img src="assets/img/runner3d.png" alt="Runner3D: a real-time 3D game." loading="lazy"><figcaption><b>Runner3D</b>: a real-time 3D game.</figcaption></figure>
+</div>
+<div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
+
+<nav class="pagenav"><a href="appearance.html">&lsaquo; Themes &amp; appearance</a><a class="nxt" href="browser.html">Web browser &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

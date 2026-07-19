@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Developer guide · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="active" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Developer guide: overview &amp; architecture</h1>
+<p class="lede">This section is for people building or extending UnoDOS pc64 itself, or writing apps for it.
+End users do not need any of it; the <a href="getting-started.html">flasher</a> covers them.</p>
+
+<p>pc64 is a bare-metal <strong>x86-64 UEFI</strong> operating system written entirely in freestanding C:
+no host C library, no underlying OS. It ships two interchangeable desktops, selected at build time:</p>
+<ul>
+  <li><strong>unoui</strong> (the default, <code>./build.sh</code>): the modern themed desktop this manual documents,
+      built on the cross-platform <em>unoui</em> widget toolkit.</li>
+  <li><strong>legacy</strong> (<code>./build.sh legacy</code>): the older core with 14 hand-drawn apps, kept only
+      as reference. Everything it did now runs in the unoui desktop.</li>
+</ul>
+
+<h2 id="layers">The layers</h2>
+<p>From the top down:</p>
+<div class="tw"><table>
+<thead><tr><th>Layer</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><strong>Apps</strong></td><td>Native <em>unoui</em> widget apps, custom-drawn canvas apps (games, Paint, browser, Runner3D), and bridged legacy apps.</td></tr>
+<tr><td><strong>Shell</strong></td><td><code>pc64_uui.c</code>: the themed desktop, icons, taskbar, window z-order, and app open/close.</td></tr>
+<tr><td><strong>Toolkit (unoui)</strong></td><td>The portable widget core: windows, widgets, events, and a swappable theme (ten themes ship).</td></tr>
+<tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
+<tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
+<tr><td><strong>Drivers (tail)</strong></td><td>e1000 NIC and the TCP/IP + TLS stack, xHCI USB and USB Ethernet, uno3d 3D, UnoSound audio, and the TrueType engine.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="boot">Boot flow</h2>
+<ol>
+  <li><strong>Firmware handoff.</strong> UEFI GOP provides a linear 32-bit framebuffer; Simple Text Input provides
+      the keyboard with modifier state; the Simple and Absolute Pointer protocols provide a mouse where the
+      firmware binds one.</li>
+  <li><strong>Boot Services stay alive.</strong> UEFI Boot Services take the role the old INT 10h/13h/15h calls
+      played for the 16-bit kernel. <code>ExitBootServices</code> and native drivers are the driver <em>tail</em>,
+      not a bring-up requirement.</li>
+  <li><strong>Platform + shell init,</strong> then the desktop paints and a start-up chime plays. The UEFI
+      watchdog is disabled at startup (<code>SetWatchdogTimer(0, ...)</code>) so a long-running app is not reset
+      after five minutes.</li>
+</ol>
+
+<h2 id="freestanding">The freestanding model</h2>
+<p>The build target is a <strong>PE32+ UEFI application</strong> (<code>EFI/BOOT/BOOTX64.EFI</code>) produced by
+mingw-w64. There is no host libc: the project ships its own headers in <code>pc64/include/</code>, a small libc
+in <code>pc64_libc.c</code>, and float math in <code>pc64_math.c</code>. Hot paths avoid dynamic allocation
+(the TLS engine, the browser JavaScript engine, and the 3D math are all no-malloc).</p>
+<div class="note warn"><b>LLP64: long is 32-bit</b>The single most important portability rule: under mingw, <b>long is 32-bit</b> (LLP64). Use <code>unsigned long long</code> or <code>uintptr_t</code> for every address and 64-bit value. A truncated 64-bit DMA address was a real, hard-to-find bug in the NIC driver.</div>
+
+<h2 id="contract">The Contract (unodef)</h2>
+<p>The wider UnoDOS family is generated from, or checked against, a single machine-readable <strong>Contract</strong>
+in <code>unodef/</code>. It keeps every port (from the 8-bit consoles to pc64) consistent. For a pc64 app author
+it is background: you code against the concrete C headers, <code>unoui.h</code> and <code>uno_app.h</code>.</p>
+
+<p class="kv">Next: <a href="dev-apps.html">Writing apps</a>, the <a href="dev-api.html">API reference</a>, and
+<a href="dev-build.html">Building &amp; tooling</a>.</p>
+
+<nav class="pagenav"><a href="ports.html">&lsaquo; The UnoDOS family</a><a class="nxt" href="dev-apps.html">Writing apps &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

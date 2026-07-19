@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The UnoDOS family · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="active" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>The UnoDOS family</h1>
+<p class="lede">pc64 is one of many. The same GUI-first UnoDOS runs on more than 20 kinds of hardware,
+from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
+
+<h2 id="pattern">One idea, many machines</h2>
+<p>The same UnoDOS desktop and apps run on machines as different as a Commodore 64 and a Raspberry Pi. On
+each one, UnoDOS asks the machine for a screen and for input, then runs the same way. A shared design keeps
+every version consistent instead of drifting apart.</p>
+
+<h2 id="tiers">How much desktop each machine gets</h2>
+<p>It depends on how much memory the machine has:</p>
+<ul>
+  <li><strong>The full desktop:</strong> more capable machines (pc64, PlayStation&nbsp;2, Dreamcast, and the
+  ARM and PowerPC boards) run the full desktop shown in this manual.</li>
+  <li><strong>A simpler desktop:</strong> the smallest machines (NES, Game&nbsp;Boy, the C64) have very little
+  memory, so they run a simpler icon-and-button desktop instead.</li>
+</ul>
+
+<h2 id="gallery">A few of the machines</h2>
+<div class="grid cols-2">
+  <figure><img src="assets/img/classic_xt.png" alt="The original: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy." loading="lazy"><figcaption><b>The original</b>: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy.</figcaption></figure>
+  <figure><img src="assets/img/port_c64.png" alt="Commodore 64: the simpler icon-and-button desktop." loading="lazy"><figcaption><b>Commodore 64</b>: the simpler icon-and-button desktop.</figcaption></figure>
+  <figure><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast: a game console running the full desktop." loading="lazy"><figcaption><b>Sega Dreamcast</b>: a game console running the full desktop.</figcaption></figure>
+  <figure><img src="assets/img/port_pinephone.png" alt="PinePhone: the desktop in portrait on a phone." loading="lazy"><figcaption><b>PinePhone</b>: the desktop in portrait on a phone.</figcaption></figure>
+  <figure><img src="assets/img/port_rpi.png" alt="Raspberry Pi: UnoDOS on the popular ARM board." loading="lazy"><figcaption><b>Raspberry Pi</b>: UnoDOS on the popular ARM board.</figcaption></figure>
+  <figure><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac: on a classic Power Macintosh." loading="lazy"><figcaption><b>PowerPC Mac</b>: on a classic Power Macintosh.</figcaption></figure>
+  <figure><img src="assets/img/port_iigs.png" alt="Apple IIGS." loading="lazy"><figcaption><b>Apple IIGS</b>.</figcaption></figure>
+  <figure><img src="assets/img/port_mac.png" alt="Classic Macintosh: on a compact 68000 Mac." loading="lazy"><figcaption><b>Classic Macintosh</b>: on a compact 68000 Mac.</figcaption></figure>
+</div>
+
+<h2 id="table">The full lineup</h2>
+<div class="tw"><table>
+<thead><tr><th>World</th><th>Hardware</th><th>CPU</th><th>Boot / display</th></tr></thead>
+<tbody>
+<tr><td><strong>pc64</strong></td><td>Modern PC (2007+)</td><td>x86-64</td><td>UEFI GOP <span class="muted">(this manual)</span></td></tr>
+<tr><td>Classic</td><td>IBM PC/XT</td><td>Intel 8088+</td><td>BIOS · CGA</td></tr>
+<tr><td>Amiga</td><td>Commodore Amiga</td><td>68000</td><td>native chipset</td></tr>
+<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td></tr>
+<tr><td>PowerPC Mac</td><td>Power Macintosh</td><td>PowerPC 32-bit</td><td>Open Firmware</td></tr>
+<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td></tr>
+<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td></tr>
+<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td></tr>
+<tr><td>VIC-20</td><td>Commodore VIC-20</td><td>6502</td><td>VIC 6560/1</td></tr>
+<tr><td>NES</td><td>Nintendo NES</td><td>6502 / 2A03</td><td>PPU</td></tr>
+<tr><td>SNES</td><td>Super Nintendo</td><td>65C816</td><td>native</td></tr>
+<tr><td>Master System</td><td>Sega Master System</td><td>Z80</td><td>315-5124 VDP</td></tr>
+<tr><td>Game Gear</td><td>Sega Game Gear</td><td>Z80</td><td>315-5124 VDP</td></tr>
+<tr><td>Genesis</td><td>Sega Mega Drive</td><td>68000 + Z80</td><td>native</td></tr>
+<tr><td>Game Boy / Color</td><td>Nintendo Game Boy</td><td>Sharp SM83</td><td>native</td></tr>
+<tr><td>Game Boy Advance</td><td>Nintendo GBA</td><td>ARM7TDMI</td><td>native</td></tr>
+<tr><td>PC Engine</td><td>NEC TurboGrafx-16</td><td>HuC6280</td><td>HuC6270 VDC</td></tr>
+<tr><td>WonderSwan</td><td>Bandai WonderSwan</td><td>NEC V30MZ</td><td>native</td></tr>
+<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td></tr>
+<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td></tr>
+<tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td></tr>
+<tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td></tr>
+</tbody>
+</table></div>
+<div class="note"><b>Where to read more</b>Full details for every machine live in the repository: <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.</div>
+
+<nav class="pagenav"><a href="networking.html">&lsaquo; Networking</a><a class="nxt" href="developer.html">Overview &amp; architecture &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

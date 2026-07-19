@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="active" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<div class="hero">
+  <h1>UnoDOS <span style="color:var(--accent-2)">pc64</span></h1>
+  <p class="lede">A GUI-first operating system that boots on any 64-bit UEFI PC, straight into a themed
+  desktop with its own window manager, web browser, networking and built-in apps. No install and no
+  command line required. This manual covers the <strong>pc64</strong> version.</p>
+  <div>
+    <span class="pill">x86-64 · UEFI</span>
+    <span class="pill">~660&nbsp;KB image</span>
+    <span class="pill">10 themes</span>
+    <span class="pill">Keyboard-first</span>
+    <span class="pill">QEMU &amp; real-metal verified</span>
+  </div>
+  <div class="btnrow">
+    <a class="btn" href="getting-started.html">Get started &rsaquo;</a>
+    <a class="btn ghost" href="desktop.html">Tour the desktop</a>
+  </div>
+</div>
+
+<p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
+<strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
+2007, and it has been tested in emulators and on a real <strong>Lenovo ThinkPad X1 Carbon</strong>
+laptop booting from a USB stick.</p>
+
+<div class="note tip"><b>Just want to try it?</b>Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.</div>
+
+<figure><img src="assets/img/desktop.png" alt="The pc64 desktop in the default Aurora Light theme, with desktop icons, a Start button, a taskbar and a clock." loading="lazy"><figcaption>The pc64 desktop in the default <b>Aurora Light</b> theme, with desktop icons, a Start button, a taskbar and a clock.</figcaption></figure>
+
+<h2 id="what">What you get</h2>
+<div class="cards">
+  <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, and windows you can move and resize, all by keyboard or pointer.</p></div>
+  <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel.</p></div>
+  <div class="card"><h4>Applications</h4><p>Editor, Files, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
+  <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
+  <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
+  <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, sound, and USB, plus reading files from FAT-formatted USB sticks and disks.</p></div>
+</div>
+
+<p class="kv">New here? Start with <a href="getting-started.html">Getting started</a>, then take the
+<a href="desktop.html">desktop tour</a>.</p>
+
+<nav class="pagenav"><span></span><a class="nxt" href="getting-started.html">Getting started &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

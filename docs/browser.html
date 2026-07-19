@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web browser · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="active" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Web browser</h1>
+<p class="lede">A built-in web browser that shows HTML, Markdown and basic CSS, runs JavaScript, and loads
+pages from local disks or over the web (HTTP and HTTPS).</p>
+
+<h2 id="files">Files and the address bar</h2>
+<p>The browser opens on a file list that shows the built-in RAM disk and any FAT-formatted USB sticks or
+disks together. Type a web address in the bar at the top, or press <kbd>↓</kbd> to move into the file
+list; <kbd>Enter</kbd> opens a file and <kbd>Backspace</kbd> goes back.</p>
+<figure><img src="assets/img/browser_files.png" alt="The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top." loading="lazy"><figcaption>The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top.</figcaption></figure>
+
+<h2 id="render">HTML, Markdown &amp; CSS</h2>
+<p>The browser lays out headings, word-wrapped paragraphs, bold and italic, code, links, lists and
+preformatted text, for both HTML and Markdown.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/browser_markdown.png" alt="A Markdown document: headings, bold and italic, inline code and lists." loading="lazy"><figcaption>A <b>Markdown</b> document: headings, bold and italic, inline code and lists.</figcaption></figure>
+  <figure><img src="assets/img/browser_html.png" alt="An HTML page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored." loading="lazy"><figcaption>An <b>HTML</b> page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored.</figcaption></figure>
+</div>
+
+<h2 id="js">JavaScript</h2>
+<p>The browser runs the JavaScript on a page and adds its output to the page, with a console panel at the
+bottom for <code>console.log</code> messages.</p>
+<figure><img src="assets/img/browser_js.png" alt="Script.html: its JavaScript generated this Fibonacci table on the page." loading="lazy"><figcaption><b>Script.html</b>: its JavaScript generated this Fibonacci table on the page.</figcaption></figure>
+
+<h2 id="net">Over the network</h2>
+<p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
+runs any JavaScript on it.</p>
+<div class="grid cols-2">
+  <figure><img src="assets/img/browser_http.png" alt="A live page loaded over HTTP." loading="lazy"><figcaption>A live page loaded over <b>HTTP</b>.</figcaption></figure>
+  <figure><img src="assets/img/browser_https.png" alt="A secure page loaded over HTTPS." loading="lazy"><figcaption>A secure page loaded over <b>HTTPS</b>.</figcaption></figure>
+</div>
+<div class="note"><b>Secure sites</b>Secure (https://) pages load over an encrypted TLS connection, and UnoDOS checks the site certificate against a built-in list of common certificate authorities. See <a href="networking.html">Networking</a>.</div>
+
+<nav class="pagenav"><a href="apps.html">&lsaquo; Applications</a><a class="nxt" href="networking.html">Networking &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building & tooling · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span>User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="active" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Building &amp; tooling</h1>
+<p class="lede">Building UnoDOS pc64 from source, running it under QEMU, packing a bootable USB image,
+building the flashers, and regenerating this manual.</p>
+
+<h2 id="need">Toolchain</h2>
+<ul>
+  <li><strong>Build:</strong> <code>x86_64-w64-mingw32-gcc</code> (UEFI apps are PE32+ images, the mingw target's
+      native output, so no gnu-efi or EDK2) and <code>python3</code>.</li>
+  <li><strong>USB image:</strong> <code>sgdisk</code> (gptfdisk), <code>mtools</code>, <code>python3</code>.</li>
+  <li><strong>Emulator:</strong> <code>qemu-system-x86</code> + OVMF.</li>
+</ul>
+<p class="muted">On Ubuntu: <code>sudo apt install gcc-mingw-w64-x86-64 qemu-system-x86 ovmf mtools gdisk python3</code></p>
+
+<h2 id="build">Build &amp; run</h2>
+<p>From the <code>pc64/</code> directory:</p>
+<pre><code>./build.sh                 # build the unoui desktop shell -&gt; build/esp/
+./build.sh run             # build, then boot it in QEMU + OVMF
+./build.sh legacy          # build the older 14-app &quot;legacy&quot; core
+python3 tools/mkuefi.py 512   # pack build/esp/ into build/unodos-uefi.img (512 MiB)
+python3 harness.py boot    # scripted QEMU boot + screenshot
+python3 nettest.py         # headless network + TLS verification</code></pre>
+<p>The build compiles the platform, framebuffer, toolkit, ten themes, apps and drivers freestanding, and links a
+single <code>BOOTX64.EFI</code> into a bootable <strong>ESP</strong> tree in <code>build/esp/</code>. The default
+image is about 660&nbsp;KB.</p>
+<div class="note"><b>Keyboard-first</b>The desktop is fully keyboard-driven, so QEMU needs no special input setup. QEMU is also scriptable over QMP (<code>send-key</code> + <code>screendump</code>), which is how the screenshots in this manual are made.</div>
+
+<h2 id="image">Pack a real USB disk image</h2>
+<p>QEMU fakes a disk from the <code>build/esp/</code> directory, but real firmware needs a partition table.
+<code>tools/mkuefi.py</code> turns the ESP tree into a raw disk image: GPT with one FAT32 EFI System Partition
+holding the whole tree. This is the image the flashers embed.</p>
+
+<h2 id="flags">Feature flags</h2>
+<div class="tw"><table>
+<thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>-DUNO_XHCI</code></td><td>Compile the xHCI USB host + USB-Ethernet stack (inert stubs otherwise).</td></tr>
+<tr><td><code>-DUNO_I2C_TRACKPAD</code></td><td>Enable the native I2C-HID trackpad driver (inert stubs otherwise).</td></tr>
+<tr><td><code>-DUNO_DBGCON</code></td><td>Enable the port-0x402 debug console. Off by default: it SMM-traps and hangs some real hardware.</td></tr>
+<tr><td><code>-DUNO_APP_SYM=...</code></td><td>Name a bridged app's entry symbol so multiple apps link into one binary.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="gotchas">Gotchas worth knowing</h2>
+<ul>
+  <li><strong>LLP64:</strong> <code>long</code> is 32-bit under mingw. Use <code>unsigned long long</code> /
+      <code>uintptr_t</code> for addresses.</li>
+  <li><strong>Freestanding:</strong> no host libc or CRT; use <code>pc64_libc.c</code> / <code>pc64_math.c</code>.</li>
+  <li><strong>Resolution:</strong> some laptop panels black out on a real <code>SetMode</code>. pc64 keeps the GOP
+      mode and scales the desktop framebuffer to fit instead.</li>
+  <li><strong>Watchdog:</strong> disable it at startup or UEFI resets the machine after about five minutes.</li>
+  <li><strong>Present-on-change:</strong> only changed framebuffer rows are written to video memory; full-frame
+      rewrites every frame ruin input smoothness on real hardware.</li>
+</ul>
+
+<h2 id="flashers">Build the flashers</h2>
+<p>The <a href="getting-started.html">flashers</a> each embed a gzipped copy of the USB image and stream it to
+the raw device. Source: <a href="https://github.com/hmofet/unodos/tree/master/pc64/flash" target="_blank" rel="noopener"><code>pc64/flash/</code></a>.</p>
+<div class="tw"><table>
+<thead><tr><th>Target</th><th>Build on</th><th>Command</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><strong>Windows</strong></td><td>Windows + WSL (in-box <code>csc.exe</code>, no SDK)</td><td><code>pc64\flash\build-flasher.ps1</code></td><td><code>UnoDosFlasher.exe</code></td></tr>
+<tr><td><strong>macOS</strong></td><td>a Mac (Swift toolchain)</td><td><code>pc64/flash/mac/build-app.sh</code></td><td><code>UnoDosFlasher.app</code> (universal)</td></tr>
+</tbody>
+</table></div>
+<p>Pass <code>--skip-build</code> to reuse an existing <code>build/unodos-uefi.img</code> (useful when the image is
+built on another machine). The built binaries are published on the project's GitHub Releases.</p>
+
+<h2 id="shots">Regenerate the manual screenshots</h2>
+<p>The desktop screenshots in this manual are produced headlessly by <code>pc64/docs_shots.py</code>: it boots the
+real image under QEMU + OVMF and drives the desktop over QMP, capturing each scene to
+<code>pc64/shots/manual/</code>. Because the emulated pointer does not reach the shell, every scene is driven from
+the keyboard.</p>
+<pre><code>python3 docs_shots.py                               # all scenes
+python3 docs_shots.py themes editor browser_docs    # selected scenes
+UNO_NIC=1 python3 docs_shots.py browser_http        # networking scenes</code></pre>
+<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit. If the shell's app roster or
+the Control Panel tab order changes, update the scene offsets in <code>docs_shots.py</code> first.</p>
+
+<nav class="pagenav"><a href="dev-api.html">&lsaquo; API reference</a><span></span></nav>
+</div></main>
+</div>
+</body>
+</html>
