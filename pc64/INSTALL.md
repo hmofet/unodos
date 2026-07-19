@@ -11,7 +11,7 @@ target, **I** installs, **R** rescans.
 
 | Listing | What happens |
 |---|---|
-| `Volume "..."  ESP (has \EFI)  [keeps data]` | **Non-destructive.** Copies the running system into `\EFI\UNODOS\` on that FAT/ESP volume (BOOTX64.EFI + fonts + docs), adds a `UnoDOS` UEFI boot entry (NVRAM `Boot####` + `BootOrder`), and — only if the volume has no `\EFI\BOOT\BOOTX64.EFI` already — a removable-media fallback copy. Nothing is deleted; an existing Windows install keeps booting. |
+| `Volume "..."  ESP (has \EFI)  [keeps data]` | **Non-destructive.** Copies the running system into `\EFI\UNODOS\` on that FAT/ESP volume (BOOTX64.EFI + fonts + docs + the `APPS\*.UNO` app modules), adds a `UnoDOS` UEFI boot entry (NVRAM `Boot####` + `BootOrder`), and — only if the volume has no `\EFI\BOOT\BOOTX64.EFI` already — a removable-media fallback copy. Nothing is deleted; an existing Windows install keeps booting. |
 | `Disk ...  [ERASES ALL]` | **Destructive.** Clones the boot USB's GPT + ESP onto that disk, relocates the backup GPT to the disk's real end (CRCs recomputed), and adds the boot entry. The Install button asks twice. |
 
 "Boot UnoDOS by default" prepends the boot entry to `BootOrder`; unticked, it

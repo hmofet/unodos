@@ -5,6 +5,37 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 dynamic apps — every app is a .UNO module loaded from storage] - 2026-07-19
+
+Milestone 2 of decoupling pc64 from EFI firmware: **no app code is linked into
+the kernel image**. Each of the 7 apps (Dostris, Pac-Man, OutLast, Music,
+Tracker, Paint, Network) ships as a `.UNO` file — a flattened PE32+ DLL with a
+relocation table and named import slots — and is loaded from storage on first
+launch, the modern-PC analogue of the C64 port's JMP-table `.PRG` loading
+([pc64/MODULES.md](pc64/MODULES.md)).
+
+- **`pc64/tools/mkuno.py`** — builds modules: generates `jmp *slot(%rip)`
+  thunks for every undefined symbol (imports are functions only, no import
+  libs, no PE machinery at runtime), then flattens the linked DLL into the
+  `.UNO` container (48-byte header, image, DIR64 reloc RVAs, `.unoimp`
+  name/slot records, CRC32).
+- **`pc64/pc64_modload.c`** — the in-kernel loader: read from `APPS\` on any
+  volume (or `EFI\UNODOS\APPS\` on an installed system), CRC check,
+  `AllocatePages(EfiLoaderCode)`, rebase, resolve imports against the
+  `kExports[]` table. Missing module = a "module not found" window, no crash.
+  (The old static registry survives as `pc64_modload_static.c` for the frozen
+  legacy build, whose M1-era link breakage is also fixed.)
+- The classic games now run through the bridge as modules too (the native
+  `pc64_games.c` canvases are no longer routed) — ALL apps load from storage;
+  only Runner3D and the Browser remain native shell canvases.
+- Two build asserts keep it honest: no `uno_app_main_*` symbol in the kernel
+  image; every module import present in the kernel export table.
+- The ESP installer copies `APPS\*.UNO`; whole-disk installs clone them.
+  End-to-end verified headless both ways (`pc64/tools/install_test.py`):
+  install → reboot from the installed disk alone → open a `.UNO` app; plus
+  `harness.py unoapps` (all 7 apps, one screenshot each) and the
+  missing-module negative test.
+
 ## [pc64 native storage — run the filesystem from any FAT32, no firmware FAT] - 2026-07-19
 
 Milestone 1 of decoupling pc64 from EFI firmware: UnoDOS now owns partition
