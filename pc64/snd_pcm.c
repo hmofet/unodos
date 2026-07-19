@@ -17,7 +17,7 @@
 #include "ac97.h"
 #include <stdint.h>
 
-#define LEAD_FRAMES 6000u              /* write ~125 ms ahead of the hardware  */
+#define LEAD_FRAMES 9600u              /* write ~200 ms ahead of the hardware  */
 #define AMP_MAX 12000                  /* ~-8.7 dBFS square at volume 100      */
 #define RAMP 24                        /* amp step per frame: ~8 ms att/rel    */
 
@@ -91,6 +91,13 @@ void uno_snd_poll(void)
     if (!g_ring) return;
     rd     = g_pos() % g_frames;
     target = (rd + LEAD_FRAMES) % g_frames;
+    /* After a long stall the hardware can lap the write cursor.  The cursor
+       is normally 0..LEAD_FRAMES ahead of the read position; more than that
+       means DMA overtook it and the "future" we would extend is already the
+       past.  Jump just ahead of the hardware so recovery is one clean glitch
+       instead of a sustained mangled region. */
+    if ((g_w - rd + g_frames) % g_frames > LEAD_FRAMES)
+        g_w = (rd + 64) % g_frames;
     n      = (target - g_w + g_frames) % g_frames;
     if (n > g_frames - 64) n = 0;      /* already at the lead target           */
     for (i = 0; i < n; i++) {
@@ -103,5 +110,7 @@ void uno_snd_poll(void)
         g_ring[g_w * 2 + 1] = s;
         g_w = (g_w + 1) % g_frames;
     }
+    if (n)                             /* drain stores before DMA reads them   */
+        __asm__ volatile ("sfence" ::: "memory");
     if (g_kick) g_kick();
 }

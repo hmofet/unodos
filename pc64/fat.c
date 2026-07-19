@@ -430,26 +430,32 @@ static int resolve_parent(fatvol *v, const char *path,
     }
 }
 
+/* resolve `dir` ("" or NULL = root; else a backslash path) to the directory's
+ * start for a cursor: fills *clus,*fixed and returns 1, else 0. */
+static int dir_locate(fatvol *v, const char *dir, uint32_t *clus, int *fixed)
+{
+    uint8_t leaf[11]; uint32_t elba; int eoff; cline *c;
+    if (!dir || !dir[0]) {
+        *clus = v->fat32 ? v->root_clus : 0; *fixed = v->fat32 ? 0 : 1;
+        return 1;
+    }
+    /* resolve_parent leaves us at the dir's own parent + leaf name; open it */
+    if (!resolve_parent(v, dir, clus, fixed, leaf)) return 0;
+    if (!dir_find(v, *clus, *fixed, leaf, &elba, &eoff)) return 0;
+    c = cache_get(v->dev, elba);
+    if (!c || !(c->buf[eoff + 11] & 0x10)) return 0;    /* not a dir          */
+    *clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
+    *fixed = 0;
+    return 1;
+}
+
 /* ---- public: list --------------------------------------------------------- */
 int uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn)
 {
     fatvol *v; uint32_t clus; int fixed, cnt = 0;
     if (vol < 0 || vol >= g_nvol) return 0;
     v = &g_vol[vol];
-    if (!dir || !dir[0]) { clus = v->fat32 ? v->root_clus : 0; fixed = v->fat32 ? 0 : 1; }
-    else {
-        uint8_t leaf[11]; uint32_t elba; int eoff; cline *c;
-        char pathslash[64]; int i;
-        for (i = 0; dir[i] && i < 62; i++) pathslash[i] = dir[i];
-        pathslash[i++] = '\\'; pathslash[i] = 0;      /* resolve dir as parent */
-        if (!resolve_parent(v, pathslash, &clus, &fixed, leaf)) return 0;
-        /* resolve_parent left us at the dir's own parent + leaf name; open it */
-        if (!dir_find(v, clus, fixed, leaf, &elba, &eoff)) return 0;
-        c = cache_get(v->dev, elba);
-        if (!c || !(c->buf[eoff + 11] & 0x10)) return 0;
-        clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
-        fixed = 0;
-    }
+    if (!dir_locate(v, dir, &clus, &fixed)) return 0;
     {
         dircur d; dir_open(&d, v, clus, fixed);
         do {
@@ -461,6 +467,37 @@ int uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn)
                 if (e[0] == 0xE5 || (e[11] & 0x0F) == 0x0F || (e[11] & 0x08)) continue;
                 if (e[11] & 0x10) continue;           /* skip subdirs in listing */
                 if (cnt < maxn) unpack83(e, names[cnt]);
+                cnt++;
+            }
+        } while (dir_next(&d));
+    }
+    return cnt;
+}
+
+/* like uno_fat_list, but with metadata (dir flag + size) and INCLUDING
+ * subdirectory entries; "."/"..", volume labels, LFN and deleted entries are
+ * skipped.  Returns the total entry count (may exceed maxn). */
+int uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn)
+{
+    fatvol *v; uint32_t clus; int fixed, cnt = 0;
+    if (vol < 0 || vol >= g_nvol) return 0;
+    v = &g_vol[vol];
+    if (!dir_locate(v, dir, &clus, &fixed)) return 0;
+    {
+        dircur d; dir_open(&d, v, clus, fixed);
+        do {
+            cline *c = cache_get(v->dev, d.lba); int i;
+            if (!c) break;
+            for (i = 0; i < SECT; i += 32) {
+                uint8_t *e = c->buf + i;
+                if (e[0] == 0x00) return cnt;
+                if (e[0] == 0xE5 || (e[11] & 0x0F) == 0x0F || (e[11] & 0x08)) continue;
+                if (e[0] == '.') continue;            /* "." and ".."          */
+                if (cnt < maxn) {
+                    unpack83(e, ents[cnt].name);
+                    ents[cnt].is_dir = (e[11] & 0x10) ? 1 : 0;
+                    ents[cnt].size   = (long)rd32(e + 28);
+                }
                 cnt++;
             }
         } while (dir_next(&d));
@@ -605,6 +642,88 @@ int uno_fat_delete(int vol, const char *path)
     clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
     c->buf[eoff] = 0xE5; cache_put(c);
     if (clus >= 2) fat_free_chain(v, clus);
+    cache_sync(); cache_drop(v->dev);
+    return 1;
+}
+
+/* ---- public: mkdir -------------------------------------------------------- */
+int uno_fat_mkdir(int vol, const char *path)
+{
+    fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
+    uint32_t elba; int eoff; cline *c;
+    uint32_t nc, dotdot, s;
+    if (vol < 0 || vol >= g_nvol) return 0;
+    v = &g_vol[vol];
+    if (v->dev->write == 0) return 0;
+    if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return 0;
+    if (dir_find(v, pclus, fixed, leaf, &elba, &eoff)) return 0;  /* exists    */
+
+    if (!dir_alloc_slot(v, pclus, fixed, &elba, &eoff)) return 0;
+    c = cache_get(v->dev, elba); if (!c) return 0;
+    memset(c->buf + eoff, 0, 32);
+    memcpy(c->buf + eoff, leaf, 11);
+    c->buf[eoff + 11] = 0x10;                         /* directory            */
+    cache_put(c);   /* mark dirty NOW - same eviction trap as uno_fat_write:
+                       fat_alloc's free-scan can evict the line, and a clean
+                       eviction discards the name */
+
+    nc = fat_alloc(v);
+    if (!nc) {                                        /* disk full: undo slot */
+        c = cache_get(v->dev, elba);
+        if (c) { c->buf[eoff] = 0xE5; cache_put(c); cache_sync(); }
+        return 0;
+    }
+    /* zero the directory's cluster (a 0x00 first byte = end-of-dir) */
+    for (s = 0; s < v->sec_per_clus; s++) {
+        cline *cc = cache_get(v->dev, clus_lba(v, nc) + s);
+        if (!cc) return 0;
+        memset(cc->buf, 0, SECT); cache_put(cc);
+    }
+    /* "." = this dir; ".." = the parent - except the root, whose ".." link is
+       cluster 0 by the FAT spec (even on FAT32, where the real root cluster
+       is elsewhere) */
+    dotdot = (fixed || (v->fat32 && pclus == v->root_clus)) ? 0 : pclus;
+    {
+        cline *cc = cache_get(v->dev, clus_lba(v, nc));
+        if (!cc) return 0;
+        memcpy(cc->buf, ".          ", 11);
+        cc->buf[11] = 0x10;
+        wr16(cc->buf + 26, (uint16_t)(nc & 0xFFFF));
+        wr16(cc->buf + 20, (uint16_t)((nc >> 16) & 0xFFFF));
+        memcpy(cc->buf + 32, "..         ", 11);
+        cc->buf[32 + 11] = 0x10;
+        wr16(cc->buf + 32 + 26, (uint16_t)(dotdot & 0xFFFF));
+        wr16(cc->buf + 32 + 20, (uint16_t)((dotdot >> 16) & 0xFFFF));
+        cache_put(cc);
+    }
+    /* fill the parent entry (re-fetch: fat ops may have evicted the line) */
+    c = cache_get(v->dev, elba); if (!c) return 0;
+    wr16(c->buf + eoff + 26, (uint16_t)(nc & 0xFFFF));            /* lo cluster */
+    wr16(c->buf + eoff + 20, (uint16_t)((nc >> 16) & 0xFFFF));    /* hi cluster */
+    wr32(c->buf + eoff + 28, 0);                                  /* dirs: size 0 */
+    cache_put(c);
+    cache_sync();
+    cache_drop(v->dev);
+    return 1;
+}
+
+/* ---- public: rename ------------------------------------------------------- */
+int uno_fat_rename(int vol, const char *path, const char *newname)
+{
+    fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11], new83[11];
+    uint32_t elba, dlba; int eoff, doff, i; cline *c;
+    if (vol < 0 || vol >= g_nvol) return 0;
+    v = &g_vol[vol];
+    if (v->dev->write == 0) return 0;
+    for (i = 0; newname[i]; i++)                      /* bare name, no path   */
+        if (newname[i] == '\\' || newname[i] == '/') return 0;
+    if (!pack83(newname, new83)) return 0;
+    if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return 0;
+    if (!dir_find(v, pclus, fixed, leaf, &elba, &eoff)) return 0;
+    if (dir_find(v, pclus, fixed, new83, &dlba, &doff)) return 0; /* taken    */
+    c = cache_get(v->dev, elba); if (!c) return 0;
+    memcpy(c->buf + eoff, new83, 11);
+    cache_put(c);
     cache_sync(); cache_drop(v->dev);
     return 1;
 }

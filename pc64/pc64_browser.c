@@ -16,6 +16,7 @@
  * ======================================================================== */
 #include "unoui.h"
 #include "fb.h"
+#include "pc64_font.h"
 #include "pc64_fs.h"
 #include "js.h"
 #include "pc64_http.h"
@@ -33,7 +34,12 @@ void uno_pc64_present(void);       /* fb -> GOP (for a Loading frame mid-fetch) 
 #define PG_QUOTE FB_RGB(90, 100, 120)
 #define PG_RULE  FB_RGB(200, 200, 195)
 
-typedef struct { int scale, bold, under, mono; fb_px color; } bstyle;
+/* ---- content faces (fixed: page content doesn't follow the UI font) ------ */
+#define BR_BODY_SLOT 1                 /* Sans - body + headings */
+#define BR_MONO_SLOT 2                 /* Mono - code spans/blocks */
+#define BR_BODY_PX   14                /* base body size; scale N -> 14+(N-1)*7 */
+
+typedef struct { int scale, bold, ital, under, mono; fb_px color; } bstyle;
 
 /* ---- the layout cursor (one active flow at a time) ----------------------- */
 static int fx, fy, fleft, fright, fscroll, flh;
@@ -47,23 +53,33 @@ static void fl_reset(unoui_rect r, int scroll, int pad)
 static void fl_nl(void) { fx = fleft; fy += flh; flh = 12; }
 static void fl_gap(int h) { if (fx > fleft) fl_nl(); fy += h; }
 
+/* run parameters for a style: content face, pixel size, style bits */
+static int br_slot(const bstyle *s)  { return s->mono ? BR_MONO_SLOT : BR_BODY_SLOT; }
+static int br_px(const bstyle *s)    { int sc = s->scale ? s->scale : 1;
+                                       return BR_BODY_PX + (sc - 1) * (BR_BODY_PX / 2); }
+static int br_style(const bstyle *s) { return (s->bold ? UNO_FS_BOLD   : 0)
+                                            | (s->ital ? UNO_FS_ITALIC : 0); }
+
 /* place one word (already NUL-terminated in `buf`); wraps at the right edge */
 static void fl_word(const char *buf, int indent, bstyle *s)
 {
-    int len = (int)strlen(buf), sc = s->scale ? s->scale : 1;
-    int ww = len * 8 * sc, lh = 8 * sc + 5, dy;
+    int slot = br_slot(s), px = br_px(s), st = br_style(s);
+    int ww = uno_font_text_w_styled(slot, px, st, buf);
+    int ch = uno_font_height_px(slot, px);           /* cell height */
+    int lh = ch + 3, dy;                             /* + leading */
+    int sp = uno_font_text_w_styled(slot, px, st, " ");
+    if (sp <= 0) sp = px / 2;
     if (lh > flh) flh = lh;
     if (fx + ww > fright && fx > fleft + indent) fl_nl();
     if (fx == fleft) fx = fleft + indent;
     dy = fy - fscroll;
     if (dy > fclip.y - lh && dy < fclip.y + fclip.h) {          /* visible row */
-        if (s->mono) fb_fill_rect(fx - 1, dy - 1, ww + 2, lh - 2, PG_CODEBG);
-        if (sc > 1) fb_big_text(fx, dy, buf, s->color, -1, sc);
-        else { fb_text(fx, dy, buf, s->color, -1);
-               if (s->bold) fb_text(fx + 1, dy, buf, s->color, -1); }
-        if (s->under) fb_hline(fx, dy + lh - 3, ww, s->color);
+        if (s->mono) fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2, PG_CODEBG);
+        uno_font_draw_styled(slot, px, st, fx, dy, buf, s->color, -1);
+        if (s->under) { int bl = uno_font_baseline_px(slot, px);
+                        fb_hline(fx, dy + bl + 2, ww, s->color); }
     }
-    fx += ww + 8 * sc;                                          /* + space */
+    fx += ww + sp;                                              /* + space */
 }
 
 /* emit a run of text, splitting on spaces into wrappable words */
@@ -92,7 +108,9 @@ static void md_inline(const char *s, int len, int indent, bstyle base)
             if (i > start) fl_text(s + start, i - start, indent, &cur);
             if (i == len) break;
             if (s[i] == '*' && i + 1 < len && s[i + 1] == '*') { cur.bold ^= 1; i++; }
-            else if (s[i] == '*') { cur.scale = cur.scale; cur.under ^= 0; /* italic~underline hint */ cur.bold ^= 0; cur.color = (cur.color==base.color)?FB_RGB(70,70,90):base.color; }
+            else if (s[i] == '*') {                              /* toggle italic */
+                cur.ital ^= 1; cur.color = cur.ital ? FB_RGB(70,70,90) : base.color;
+            }
             else if (s[i] == '`') {                              /* toggle code */
                 cur.mono ^= 1; cur.color = cur.mono ? PG_CODE : base.color;
             }
@@ -111,7 +129,7 @@ static void md_inline(const char *s, int len, int indent, bstyle base)
 static void render_md(const char *src, unoui_rect r, int scroll)
 {
     const char *p = src; int code = 0;
-    bstyle base = { 1, 0, 0, 0, PG_TEXT };
+    bstyle base = { 1, 0, 0, 0, 0, PG_TEXT };
     fl_reset(r, scroll, 10);
     while (*p) {
         const char *ls = p; int llen;
@@ -119,7 +137,7 @@ static void render_md(const char *src, unoui_rect r, int scroll)
         llen = (int)(p - ls); if (*p == '\n') p++;
         if (llen >= 3 && ls[0] == '`' && ls[1] == '`' && ls[2] == '`') { code = !code; fl_gap(4); continue; }
         if (code) {                                              /* code block */
-            bstyle cs = { 1, 0, 0, 1, PG_CODE };
+            bstyle cs = { 1, 0, 0, 0, 1, PG_CODE };
             if (llen == 0) { fl_gap(10); }
             else { fx = fleft; fl_word("", 12, &cs);   /* indent */
                    { char b[256]; int n = llen<255?llen:255; memcpy(b,ls,n); b[n]=0; fl_word(b,12,&cs); } fl_nl(); }
@@ -156,7 +174,7 @@ static int tag_is(const char *t, int len, const char *name)
 static void render_html(const char *src, unoui_rect r, int scroll)
 {
     const char *p = src; bstyle st[24]; int sp = 0, li = 0, pre = 0;
-    bstyle base = { 1, 0, 0, 0, PG_TEXT };
+    bstyle base = { 1, 0, 0, 0, 0, PG_TEXT };
     st[0] = base;
     fl_reset(r, scroll, 10);
     while (*p) {
@@ -174,7 +192,7 @@ static void render_html(const char *src, unoui_rect r, int scroll)
                   else { int lvl = ts[1]-'0'; fl_gap(lvl<=2?8:4); PUSH(st[sp].scale=lvl<=1?3:2; st[sp].bold=1; st[sp].color=PG_HEAD); }
               }
               else if (tag_is(ts,tl,"b")||tag_is(ts,tl,"strong")) { if(close)POP(); else PUSH(st[sp].bold=1); }
-              else if (tag_is(ts,tl,"i")||tag_is(ts,tl,"em")) { if(close)POP(); else PUSH(st[sp].color=FB_RGB(70,70,95)); }
+              else if (tag_is(ts,tl,"i")||tag_is(ts,tl,"em")) { if(close)POP(); else PUSH(st[sp].ital=1; st[sp].color=FB_RGB(70,70,95)); }
               else if (tag_is(ts,tl,"code")||tag_is(ts,tl,"tt")) { if(close)POP(); else PUSH(st[sp].mono=1; st[sp].color=PG_CODE); }
               else if (tag_is(ts,tl,"a")) { if(close){POP();} else PUSH(st[sp].color=PG_LINK; st[sp].under=1); }
               else if (tag_is(ts,tl,"pre")) { pre = !close; fl_gap(6); if(!close) PUSH(st[sp].mono=1; st[sp].color=PG_CODE); else POP(); }

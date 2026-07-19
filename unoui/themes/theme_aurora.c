@@ -120,7 +120,8 @@ static void a_check(const unoui_theme *t, unoui_rect r, const char *s, int f)
         fb_blend_pixel(b.x+3+i,  b.y+8+i, t->pal.accent_text, 160);
     }
     if (on) for (i = 0; i < 6; i++) fb_blend_pixel(b.x+6+i, b.y+9-i, t->pal.accent_text, 255);
-    fb_text(r.x + 20, r.y + 3, s, (f & UI_F_DISABLED) ? t->pal.text_dim : t->pal.text, -1);
+    fb_text(r.x + 20, r.y + (r.h - fb_text_h())/2, s,
+            (f & UI_F_DISABLED) ? t->pal.text_dim : t->pal.text, -1);
 }
 
 static void a_field(const unoui_theme *t, unoui_rect r, const char *s,
@@ -129,21 +130,28 @@ static void a_field(const unoui_theme *t, unoui_rect r, const char *s,
     unoui_rect in;
     aa_border(r.x, r.y, r.w, r.h, 5, 1,
               (f & UI_F_FOCUS) ? t->pal.accent : t->pal.dark, t->pal.field_bg);
-    in.x = r.x + 5; in.y = r.y + 1; in.w = r.w - 10; in.h = r.h - 2;
-    (void)ed;                                         /* editable text: default geometry */
-    fb_text(in.x, in.y + (in.h - 8)/2, s ? s : "", t->pal.field_text, -1);
-    if (f & UI_F_CARET)
-        fb_vline(in.x + fb_text_w(s ? s : ""), in.y + 2, in.h - 4, t->pal.field_text);
+    in = ui_edit_inner(r, t);      /* same inner rect as hit-testing uses */
+    if (ed) {
+        ui_draw_edit_text(in, ed, t, (f & UI_F_FOCUS) != 0, (f & UI_F_CARET) != 0);
+    } else {
+        fb_text(in.x + 2, in.y + (in.h - fb_text_h())/2, s ? s : "",
+                t->pal.field_text, -1);
+        if (f & UI_F_CARET)
+            fb_vline(in.x + 2 + fb_text_w(s ? s : ""), in.y + 2, in.h - 4,
+                     t->pal.field_text);
+    }
 }
 
 static void a_list(const unoui_theme *t, unoui_rect r, const char **it, int n, int sel)
 {
-    int i, row = 13, y;
+    /* row pitch + origin must mirror the input layer's set_list() so a click
+     * selects the row under the pointer */
+    int i, row = ui_row_h(), y, fh = fb_text_h();
     aa_border(r.x, r.y, r.w, r.h, 6, 1, t->pal.win_frame, t->pal.field_bg);
-    for (i = 0, y = r.y + 5; i < n && y + row <= r.y + r.h - 3; i++, y += row) {
+    for (i = 0, y = r.y + 4; i < n && y + row <= r.y + r.h - 3; i++, y += row) {
         fb_px fg = t->pal.field_text;
-        if (i == sel) { aa_fill(r.x+4, y-2, r.w-8, row, 5, t->pal.accent); fg = t->pal.accent_text; }
-        fb_text(r.x + 9, y, it[i], fg, -1);
+        if (i == sel) { aa_fill(r.x+4, y-1, r.w-8, row, 5, t->pal.accent); fg = t->pal.accent_text; }
+        fb_text(r.x + 9, y + (row - 1 - fh)/2, it[i], fg, -1);
     }
 }
 
@@ -153,8 +161,8 @@ static void a_group(const unoui_theme *t, unoui_rect r, const char *s)
     aa_fill_a(r.x, r.y + 5, r.w, r.h - 5, rad, t->pal.win_frame, 255, C_ALL);
     aa_fill_a(r.x + 1, r.y + 6, r.w - 2, r.h - 7, rad-1, t->pal.win_bg, 255, C_ALL);
     if (s && *s) {
-        int tw = fb_text_w(s);
-        fb_fill_rect(r.x + 10, r.y, tw + 8, 9, t->pal.win_bg);
+        int tw = fb_text_w(s), fh = fb_text_h();
+        fb_fill_rect(r.x + 10, r.y, tw + 8, fh + 1, t->pal.win_bg);
         fb_text(r.x + 14, r.y, s, t->pal.text_dim, -1);
     }
 }
@@ -187,7 +195,7 @@ static void a_dropdown(const unoui_theme *t, unoui_rect r, const char *s, int f)
     int i, cx = r.x + r.w - 14, cy = r.y + r.h/2 - 1;
     aa_border(r.x, r.y, r.w, r.h, 5, 1,
               (f & UI_F_FOCUS) ? t->pal.accent : t->pal.dark, t->pal.field_bg);
-    fb_text(r.x + 8, r.y + (r.h - 8)/2, s ? s : "", t->pal.field_text, -1);
+    fb_text(r.x + 8, r.y + (r.h - fb_text_h())/2, s ? s : "", t->pal.field_text, -1);
     for (i = 0; i < 4; i++) fb_hline(cx - i, cy - i, 2*i+1, t->pal.text_dim);  /* chevron */
 }
 
@@ -200,8 +208,8 @@ static void a_menubar(const unoui_theme *t, unoui_rect r, const unoui_menu *m,
     for (i = 0; i < n; i++) {
         int tw = fb_text_w(m[i].title) + 16;
         if (i == hot || i == open) { aa_fill(x, r.y + 1, tw, r.h - 2, 4, t->pal.accent);
-            fb_text(x + 8, r.y + (r.h - 8)/2, m[i].title, t->pal.accent_text, -1); }
-        else fb_text(x + 8, r.y + (r.h - 8)/2, m[i].title, t->pal.text, -1);
+            fb_text(x + 8, r.y + (r.h - fb_text_h())/2, m[i].title, t->pal.accent_text, -1); }
+        else fb_text(x + 8, r.y + (r.h - fb_text_h())/2, m[i].title, t->pal.text, -1);
         x += tw + 2;
     }
 }
@@ -214,7 +222,7 @@ static void a_spinner(const unoui_theme *t, unoui_rect r, int v, int f)
     (void)f;
     aa_border(r.x, r.y, r.w - bw - 1, r.h, 5, 1, t->pal.dark, t->pal.field_bg);
     { char tmp[16]; int m=0; if(!u) tmp[m++]='0'; while(u){tmp[m++]=(char)('0'+u%10);u/=10;} if(neg)b[k++]='-'; while(m)b[k++]=tmp[--m]; b[k]=0; }
-    fb_text(r.x + 6, r.y + (r.h-8)/2, b, t->pal.field_text, -1);
+    fb_text(r.x + 6, r.y + (r.h - fb_text_h())/2, b, t->pal.field_text, -1);
     aa_fill(up.x, up.y, bw, r.h, 5, t->pal.face);
     for (i = 0; i < 3; i++) { fb_hline(up.x+bw/2-i, up.y+3+i, 2*i+1, t->pal.face_text);
         fb_hline(up.x+bw/2-(2-i), up.y+r.h-4-i, 2*(2-i)+1, t->pal.face_text); }

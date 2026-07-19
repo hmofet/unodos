@@ -2,7 +2,8 @@
  *
  * Brings up the first HDA controller + codec output path and loops a
  * 48 kHz / 16-bit / stereo DMA ring forever. The PCM layer (snd_pcm.c)
- * writes samples into the ring; position comes from the stream's LPIB. */
+ * writes samples into the ring; position comes from the controller's DMA
+ * position buffer (LPIB as the fallback when that never advances). */
 #ifndef PC64_HDAUDIO_H
 #define PC64_HDAUDIO_H
 

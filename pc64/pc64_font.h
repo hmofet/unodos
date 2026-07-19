@@ -19,6 +19,8 @@ int         uno_font_subpixel(void);         /* 1 if subpixel AA is on */
 int  uno_font_use(int slot);
 void uno_font_set_px(int px);                /* target UI text height in px */
 void uno_font_set_subpixel(int on);          /* LCD subpixel AA on/off */
+void uno_font_set_ui_scale(int pct);         /* UI scale % (100..200): scales all text */
+int  uno_font_ui_scale(void);
 
 /* Draw with a specific slot regardless of the system font (for the Editor's
  * per-document font). Returns the advanced x. slot -1 = bitmap. These push/pop
@@ -31,5 +33,18 @@ int  uno_font_height_with(int slot);
  * = inherit (no change); -1 = bitmap; 0.. = a TTF. */
 void uno_font_push(int slot);
 void uno_font_pop(void);
+
+/* Styled text at an explicit pixel size, independent of the system font/px
+ * (browser headings, the Write app's rich runs). style: bit 0 = bold (double
+ * strike), bit 1 = italic (sheared). px is clamped 8..40; slot must be a TTF
+ * slot (falls back to the system path if it can't load). Draw returns the
+ * advanced x; the _w/_h forms measure with identical metrics. */
+#define UNO_FS_BOLD   1
+#define UNO_FS_ITALIC 2
+int  uno_font_draw_styled(int slot, int px, int style, int x, int y,
+                          const char *s, fb_px fg, long bg);
+int  uno_font_text_w_styled(int slot, int px, int style, const char *s);
+int  uno_font_height_px(int slot, int px);
+int  uno_font_baseline_px(int slot, int px);         /* ascent within the cell */
 
 #endif
