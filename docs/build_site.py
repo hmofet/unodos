@@ -539,6 +539,7 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
   <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
   <li>Click <strong>Install</strong> and confirm the erase. The flasher writes a bootable UnoDOS image to the drive.</li>
 </ol>
+{note('Prefer a standard image? <b>unodos-pc64.iso</b> is a hybrid UEFI ISO: attach it to a virtual machine (QEMU, VirtualBox, VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with <b>Rufus</b>, <b>balenaEtcher</b> or <code>dd</code> - both ways boot the same desktop. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same writing tools.', kind="tip", title="ISO and raw-image alternatives")}
 <div class="grid cols-2">
   {fig("flasher-windows.png", "The flasher on <b>Windows</b>: choose your USB drive and click Install.")}
   {fig("flasher-macos.png", "The flasher on <b>macOS</b>: the same steps.")}

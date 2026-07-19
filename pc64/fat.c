@@ -117,7 +117,9 @@ static int mount_at(uno_bdev *dev, uint64_t start)
     data_sectors   = tot - (resv + nfats * fatsz + rootdir_sectors);
     v.clusters     = data_sectors / v.sec_per_clus;
     /* classify by cluster count if the BPB was ambiguous */
-    if (!v.fat32 && v.clusters >= 4085 && v.clusters < 65525) v.fat32 = 0;
+    if (!v.fat32 && v.clusters < 4085) return 0;    /* FAT12: unsupported - a
+                                                       FAT16 mis-mount would
+                                                       serve garbage chains */
     if (v.fat32) {
         v.root_clus = rd32(bs + 44);
         v.serial    = rd32(bs + 67);
