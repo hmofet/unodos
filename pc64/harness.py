@@ -121,6 +121,10 @@ def main():
         # unoacpi verification: inject the synthetic battery/lid SSDT (50%).
         # Build it first if needed:  iasl tools/testbat.asl
         argv += ["-acpitable", "file=tools/testbat.aml"]
+    if len(sys.argv) > 1 and sys.argv[1] == "lidsleep":
+        # lid-close sleep: inject the TOGGLING-lid SSDT (open ~5s / closed ~5s).
+        # Build it first if needed:  iasl tools/testlid.asl
+        argv += ["-acpitable", "file=tools/testlid.aml"]
     qemu = subprocess.Popen(argv)
     try:
         q = Qmp(QMP_SOCK)
@@ -129,6 +133,15 @@ def main():
         shot(q, "m1_desktop")
 
         if len(sys.argv) > 1 and sys.argv[1] == "boot":
+            return
+
+        # ---- lid-close sleep: the toggling-lid SSDT closes the lid ~5s after
+        # boot (screen blanks = asleep) and reopens ~5s later (desktop wakes).
+        # Sample across a full cycle. --------------------------------------
+        if len(sys.argv) > 1 and sys.argv[1] == "lidsleep":
+            for i in range(12):
+                time.sleep(2)
+                shot(q, "lid_%02d" % i)
             return
 
         # ---- unoacpi: synthetic battery boot (harness.py acpi) -------------

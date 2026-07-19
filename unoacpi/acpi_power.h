@@ -76,6 +76,27 @@ int acpi_battery_percent(void);
 /* Lid state via _LID.  1 open, 0 closed, -1 unknown. */
 int acpi_lid_state(void);
 
+/* ---- Lid transition events (polled edge detection) -------------------------
+ * The product-side primitive for "sleep on lid close": call acpi_lid_event()
+ * as often as convenient (every frame is fine - each call reads through the
+ * 1 s lid cache, so _LID is evaluated at most ~1 Hz) and act on the edges.
+ * Read-only: this never touches GPE/SCI hardware, it only re-evaluates _LID.
+ *
+ * Robustness contract:
+ *   - the first KNOWN reading only establishes the baseline (never an edge),
+ *     so booting with the lid already closed does not fire a close event;
+ *   - -1 (unknown) readings are ignored entirely - a transient EC timeout
+ *     between two identical states can neither fabricate nor swallow an edge;
+ *   - one detector instance (module state): both of a host's consumers should
+ *     share the returned event, not call this from two places. */
+typedef enum {
+    ACPI_LID_EVT_NONE = 0,
+    ACPI_LID_EVT_CLOSE,      /* open -> closed edge observed  */
+    ACPI_LID_EVT_OPEN        /* closed -> open edge observed  */
+} acpi_lid_event_t;
+
+acpi_lid_event_t acpi_lid_event(void);
+
 /* Put a device (located by _HID/_CID) into D0 by evaluating its _PS0 (ungates,
  * e.g., an LPSS UART clock).  Returns 1 on success, 0 otherwise. */
 int acpi_device_power_on(const char *hid);
