@@ -76,9 +76,57 @@ int acpi_battery_percent(void);
 /* Lid state via _LID.  1 open, 0 closed, -1 unknown. */
 int acpi_lid_state(void);
 
+/* ---- Lid transition events (polled edge detection) -------------------------
+ * The product-side primitive for "sleep on lid close": call acpi_lid_event()
+ * as often as convenient (every frame is fine - each call reads through the
+ * 1 s lid cache, so _LID is evaluated at most ~1 Hz) and act on the edges.
+ * Read-only: this never touches GPE/SCI hardware, it only re-evaluates _LID.
+ *
+ * Robustness contract:
+ *   - the first KNOWN reading only establishes the baseline (never an edge),
+ *     so booting with the lid already closed does not fire a close event;
+ *   - -1 (unknown) readings are ignored entirely - a transient EC timeout
+ *     between two identical states can neither fabricate nor swallow an edge;
+ *   - one detector instance (module state): both of a host's consumers should
+ *     share the returned event, not call this from two places. */
+typedef enum {
+    ACPI_LID_EVT_NONE = 0,
+    ACPI_LID_EVT_CLOSE,      /* open -> closed edge observed  */
+    ACPI_LID_EVT_OPEN        /* closed -> open edge observed  */
+} acpi_lid_event_t;
+
+acpi_lid_event_t acpi_lid_event(void);
+
 /* Put a device (located by _HID/_CID) into D0 by evaluating its _PS0 (ungates,
  * e.g., an LPSS UART clock).  Returns 1 on success, 0 otherwise. */
 int acpi_device_power_on(const char *hid);
+
+/* ---- UART-controller power bring-up (Surface SAM path) ---------------------
+ * A UART *client* device (e.g. the Surface Serial Hub, MSHW0084) does not own
+ * the UART silicon - its _CRS UARTSerialBusV2 descriptor names the *controller*
+ * device (the LPSS UART PCI function) as its ResourceSource.  Powering the link
+ * on the way an OS does means driving the CONTROLLER to D0 - its _PR0 power
+ * resources' _ON, then its _PS0 - and only then the client's own _PR0/_PS0.
+ * acpi_uart_power_on() does exactly that, resolving the controller from the
+ * client's _CRS (falling back to a namespace-wide _ADR search for 'pci_adr' =
+ * (dev << 16) | fn, pass 0xFFFFFFFF for none). */
+typedef struct {
+    int      ran;
+    int      client_found;      /* the client HID exists / is present         */
+    char     ctrl_path[64];     /* controller path (from _CRS ResourceSource) */
+    int      ctrl_found;        /* controller node resolved                   */
+    int      ctrl_by_adr;       /* ...via the _ADR fallback, not _CRS         */
+    uint32_t ctrl_mmio;         /* controller _CRS memory base (0 = none)     */
+    uint32_t client_baud;       /* client _CRS UART baud (post-_INI, so the
+                                 * REAL rate - e.g. Surface Laptop Go 1's _INI
+                                 * patches 3,000,000 into the descriptor)     */
+    int      ctrl_pr0_n,   ctrl_pr0_on;    /* _PR0 resources found / _ON ok   */
+    int      client_pr0_n, client_pr0_on;
+    uint32_t ctrl_ps0_st,  client_ps0_st;  /* raw uacpi_status of each _PS0   */
+} acpi_uart_power_diag;
+
+int  acpi_uart_power_on(const char *client_hid, uint32_t pci_adr);
+void acpi_uart_power_get_diag(acpi_uart_power_diag *out);
 
 /* Copy the latest diagnostics (arena stats refreshed at call time). */
 void acpi_power_get_diag(acpi_power_diag *out);

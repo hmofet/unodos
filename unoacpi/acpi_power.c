@@ -9,16 +9,31 @@
 #include <uacpi/tables.h>
 #include <uacpi/namespace.h>
 #include <uacpi/utilities.h>
+#include <uacpi/resources.h>
 #include <uacpi/opregion.h>
 #include <uacpi/status.h>
 #include <uacpi/acpi.h>
 #include <uacpi/kernel_api.h>   /* uacpi_kernel_get_nanoseconds_since_boot */
 #include <uacpi/internal/context.h>   /* g_uacpi_rt_ctx.has_global_lock (see below) */
+#include <uacpi/internal/namespace.h> /* uacpi_namespace_node_get_object (match
+                                       * _PR0 references to their nodes, below) */
 
 static acpi_power_diag      g_pd;
 static int                  g_done;
 static uacpi_namespace_node *g_bat_node;   /* first present PNP0C0A */
 static uacpi_namespace_node *g_lid_node;   /* first present PNP0C0D */
+
+/* EC _CRS port collection (data port first, command/status second). */
+static struct { uint16_t ports[2]; int n; } g_ec_crs;
+static uacpi_iteration_decision ec_crs_cb(void *user, uacpi_resource *r)
+{
+    (void)user;
+    uint16_t port = 0;
+    if (r->type == UACPI_RESOURCE_TYPE_IO)            port = r->io.minimum;
+    else if (r->type == UACPI_RESOURCE_TYPE_FIXED_IO) port = r->fixed_io.address;
+    if (port && g_ec_crs.n < 2) g_ec_crs.ports[g_ec_crs.n++] = port;
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
 
 const char *acpi_power_status_str(acpi_power_status s)
 {
@@ -122,6 +137,19 @@ int acpi_lid_state(void)
     return g_lid_cache;
 }
 
+acpi_lid_event_t acpi_lid_event(void)
+{
+    static int prev = -1;            /* last KNOWN state; -1 = no baseline yet */
+    int ls = acpi_lid_state();
+    if (ls < 0)                      /* unknown: keep the baseline untouched */
+        return ACPI_LID_EVT_NONE;
+    int was = prev;
+    prev = ls;
+    if (was < 0 || was == ls)        /* first known reading, or no change */
+        return ACPI_LID_EVT_NONE;
+    return ls ? ACPI_LID_EVT_OPEN : ACPI_LID_EVT_CLOSE;
+}
+
 int acpi_device_power_on(const char *hid)
 {
     uacpi_namespace_node *node = find_first_device(hid, UACPI_NULL);
@@ -130,6 +158,199 @@ int acpi_device_power_on(const char *hid)
     g_pd.ps0_ran = 1;
     g_pd.ps0_ok = (uacpi_execute_simple(node, "_PS0") == UACPI_STATUS_OK);
     return g_pd.ps0_ok;
+}
+
+/* ---- UART-controller power bring-up (see acpi_power.h) --------------------- */
+static acpi_uart_power_diag g_ud;
+
+/* Match a _PR0 package element (a reference to a PowerResource) back to its
+ * namespace node so _ON can be executed on it.  Method returns are shallow
+ * copies in uACPI, so the dereferenced element IS the node's own object. */
+struct pwr_find { uacpi_object *target; uacpi_namespace_node *node; };
+static uacpi_iteration_decision pwr_find_cb(void *user, uacpi_namespace_node *node,
+                                            uacpi_u32 depth)
+{
+    (void)depth;
+    struct pwr_find *pf = (struct pwr_find *)user;
+    if (uacpi_namespace_node_get_object(node) == pf->target) {
+        pf->node = node;
+        return UACPI_ITERATION_DECISION_BREAK;
+    }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+/* Evaluate dev._PR0 and run _ON on every referenced power resource.
+ * uACPI stores named objects inside static packages as PATH STRINGS (resolved
+ * lazily, mirroring NT), so the common case is a string element; a reference
+ * element (dynamically built package) is matched back to its node by object
+ * pointer instead. */
+static void run_pr0_on(uacpi_namespace_node *dev, int *n_out, int *on_out)
+{
+    *n_out = 0; *on_out = 0;
+    uacpi_object *ret = UACPI_NULL;
+    if (uacpi_eval_typed(dev, "_PR0", UACPI_NULL, UACPI_OBJECT_PACKAGE_BIT, &ret)
+            != UACPI_STATUS_OK || !ret)
+        return;
+    uacpi_object_array arr;
+    if (uacpi_object_get_package(ret, &arr) == UACPI_STATUS_OK) {
+        *n_out = (int)arr.count;
+        for (uacpi_size i = 0; i < arr.count; i++) {
+            uacpi_object *el = arr.objects[i], *deref = UACPI_NULL;
+            uacpi_namespace_node *pr = UACPI_NULL;
+            uacpi_data_view sv;
+            if (uacpi_object_get_string(el, &sv) == UACPI_STATUS_OK &&
+                sv.text && sv.length) {
+                /* path string: absolute first, then scope-relative w/ search-up */
+                if (uacpi_namespace_node_find(UACPI_NULL, sv.text, &pr)
+                        != UACPI_STATUS_OK)
+                    pr = UACPI_NULL;
+                if (!pr &&
+                    uacpi_namespace_node_resolve_from_aml_namepath(dev, sv.text,
+                                                                   &pr)
+                        != UACPI_STATUS_OK)
+                    pr = UACPI_NULL;
+            } else {
+                if (uacpi_object_get_type(el) == UACPI_OBJECT_REFERENCE &&
+                    uacpi_object_get_dereferenced(el, &deref) == UACPI_STATUS_OK)
+                    el = deref;
+                struct pwr_find pf = { el, UACPI_NULL };
+                uacpi_namespace_for_each_child(
+                    uacpi_namespace_root(), pwr_find_cb, UACPI_NULL,
+                    UACPI_OBJECT_POWER_RESOURCE_BIT, UACPI_MAX_DEPTH_ANY, &pf);
+                pr = pf.node;
+            }
+            if (pr && uacpi_execute_simple(pr, "_ON") == UACPI_STATUS_OK)
+                (*on_out)++;
+            if (deref)
+                uacpi_object_unref(deref);
+        }
+    }
+    uacpi_object_unref(ret);
+}
+
+/* Client _CRS walk: copy the serial-bus ResourceSource (controller path) and
+ * the UART baud.  _CRS is evaluated at runtime (after namespace_initialize ran
+ * _INI), so a descriptor whose speed field is patched by _INI - the Surface
+ * pattern - reads back with the REAL rate here, not the static-AML zero. */
+static uacpi_iteration_decision uart_src_cb(void *user, uacpi_resource *r)
+{
+    (void)user;
+    if ((r->type == UACPI_RESOURCE_TYPE_SERIAL_UART_CONNECTION ||
+         r->type == UACPI_RESOURCE_TYPE_SERIAL_I2C_CONNECTION ||
+         r->type == UACPI_RESOURCE_TYPE_SERIAL_SPI_CONNECTION) &&
+        r->serial_bus_common.source.string && !g_ud.ctrl_path[0]) {
+        const char *s = r->serial_bus_common.source.string;
+        size_t i = 0;
+        for (; s[i] && i < sizeof(g_ud.ctrl_path) - 1; i++)
+            g_ud.ctrl_path[i] = s[i];
+        g_ud.ctrl_path[i] = 0;
+    }
+    if (r->type == UACPI_RESOURCE_TYPE_SERIAL_UART_CONNECTION &&
+        !g_ud.client_baud)
+        g_ud.client_baud = r->uart_connection.baud_rate;
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+/* Controller _CRS walk: first memory descriptor = the UART's MMIO base. */
+static uacpi_iteration_decision uart_mmio_cb(void *user, uacpi_resource *r)
+{
+    (void)user;
+    if (!g_ud.ctrl_mmio) {
+        if (r->type == UACPI_RESOURCE_TYPE_FIXED_MEMORY32)
+            g_ud.ctrl_mmio = r->fixed_memory32.address;
+        else if (r->type == UACPI_RESOURCE_TYPE_MEMORY32)
+            g_ud.ctrl_mmio = r->memory32.minimum;
+    }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+/* _ADR fallback: find a device whose _ADR == the wanted PCI (dev << 16) | fn. */
+struct adr_find { uacpi_u64 adr; uacpi_namespace_node *node; };
+static uacpi_iteration_decision adr_find_cb(void *user, uacpi_namespace_node *node,
+                                            uacpi_u32 depth)
+{
+    (void)depth;
+    struct adr_find *af = (struct adr_find *)user;
+    uacpi_u64 v = 0;
+    if (uacpi_eval_simple_integer(node, "_ADR", &v) == UACPI_STATUS_OK &&
+        v == af->adr) {
+        af->node = node;
+        return UACPI_ITERATION_DECISION_BREAK;
+    }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+int acpi_uart_power_on(const char *client_hid, uint32_t pci_adr)
+{
+    g_ud.ran = 1;
+    g_ud.ctrl_ps0_st = g_ud.client_ps0_st = 0xFFFFFFFFu;   /* "not run" */
+
+    uacpi_namespace_node *client = find_first_device(client_hid, UACPI_NULL);
+    g_ud.client_found = (client != UACPI_NULL);
+
+    /* Resolve the controller from the client's _CRS ResourceSource. */
+    uacpi_namespace_node *ctrl = UACPI_NULL;
+    if (client) {
+        uacpi_resources *res = UACPI_NULL;
+        if (uacpi_get_current_resources(client, &res) == UACPI_STATUS_OK && res) {
+            uacpi_for_each_resource(res, uart_src_cb, UACPI_NULL);
+            uacpi_free_resources(res);
+        }
+        if (g_ud.ctrl_path[0]) {
+            if (uacpi_namespace_node_find(UACPI_NULL, g_ud.ctrl_path, &ctrl)
+                    != UACPI_STATUS_OK)
+                ctrl = UACPI_NULL;
+            if (!ctrl &&
+                uacpi_namespace_node_resolve_from_aml_namepath(
+                    uacpi_namespace_node_parent(client), g_ud.ctrl_path, &ctrl)
+                    != UACPI_STATUS_OK)
+                ctrl = UACPI_NULL;
+        }
+    }
+    if (!ctrl && pci_adr != 0xFFFFFFFFu) {   /* fallback: search by PCI _ADR */
+        struct adr_find af = { pci_adr, UACPI_NULL };
+        uacpi_namespace_for_each_child(
+            uacpi_namespace_root(), adr_find_cb, UACPI_NULL,
+            UACPI_OBJECT_DEVICE_BIT, UACPI_MAX_DEPTH_ANY, &af);
+        ctrl = af.node;
+        if (ctrl) {
+            g_ud.ctrl_by_adr = 1;
+            const char *p = uacpi_namespace_node_generate_absolute_path(ctrl);
+            if (p) {
+                size_t i = 0;
+                for (; p[i] && i < sizeof(g_ud.ctrl_path) - 1; i++)
+                    g_ud.ctrl_path[i] = p[i];
+                g_ud.ctrl_path[i] = 0;
+                uacpi_free_absolute_path(p);
+            }
+        }
+    }
+    g_ud.ctrl_found = (ctrl != UACPI_NULL);
+
+    /* Controller to D0 the way an OS does: _PR0 resources _ON, then _PS0.
+     * Then the client's own _PR0/_PS0 (it may reference the now-live clock). */
+    if (ctrl) {
+        run_pr0_on(ctrl, &g_ud.ctrl_pr0_n, &g_ud.ctrl_pr0_on);
+        g_ud.ctrl_ps0_st = (uint32_t)uacpi_execute_simple(ctrl, "_PS0");
+        uacpi_resources *res = UACPI_NULL;
+        if (uacpi_get_current_resources(ctrl, &res) == UACPI_STATUS_OK && res) {
+            uacpi_for_each_resource(res, uart_mmio_cb, UACPI_NULL);
+            uacpi_free_resources(res);
+        }
+    }
+    if (client) {
+        run_pr0_on(client, &g_ud.client_pr0_n, &g_ud.client_pr0_on);
+        g_ud.client_ps0_st = (uint32_t)uacpi_execute_simple(client, "_PS0");
+        g_pd.ps0_ran = 1;                    /* keep the old PS0= overlay live */
+        g_pd.ps0_ok  = (g_ud.client_ps0_st == UACPI_STATUS_OK);
+    }
+    return g_ud.ctrl_found && g_ud.ctrl_ps0_st == UACPI_STATUS_OK;
+}
+
+void acpi_uart_power_get_diag(acpi_uart_power_diag *out)
+{
+    if (out)
+        *out = g_ud;
 }
 
 acpi_power_status acpi_power_bringup(void)
@@ -202,6 +423,25 @@ acpi_power_status acpi_power_bringup(void)
     g_pd.nsinit_status = (uint32_t)s;
     g_pd.nsinit_str    = uacpi_status_to_string(s);
     /* non-fatal: a single device's _INI may fault; still read what did init */
+
+    /* Without an ECDT (e.g. the Dell) the EC ports must come from the PNP0C09
+     * _CRS - two IO descriptors, data port first, command/status second.  Do it
+     * after namespace_initialize so _CRS/_STA are reliably evaluable. */
+    int ec_src = 0;
+    wu_ec_info(UACPI_NULL, UACPI_NULL, &ec_src, UACPI_NULL, UACPI_NULL);
+    if (ec_src != 1) {   /* not from an ECDT -> try the PNP0C09 _CRS */
+        int ec_cnt = 0;
+        uacpi_namespace_node *ecn = find_first_device("PNP0C09", &ec_cnt);
+        if (ecn) {
+            uacpi_resources *res = UACPI_NULL;
+            if (uacpi_get_current_resources(ecn, &res) == UACPI_STATUS_OK && res) {
+                uacpi_for_each_resource(res, ec_crs_cb, UACPI_NULL);
+                uacpi_free_resources(res);
+                if (g_ec_crs.n >= 2)
+                    wu_ec_set_ports(g_ec_crs.ports[1], g_ec_crs.ports[0]);  /* [1]=cmd, [0]=data */
+            }
+        }
+    }
 
     g_bat_node = find_first_device("PNP0C0A", &g_pd.batteries);
     g_lid_node = find_first_device("PNP0C0D", &g_pd.lids);

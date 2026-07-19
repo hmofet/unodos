@@ -37,7 +37,8 @@
 #include "uefi.h"
 #include "fb.h"
 #include "mac_compat.h"
-#include "i2c_hid.h"        /* native I2C-HID trackpad (inert unless -DUNO_I2C_TRACKPAD) */
+#include "i2c_hid.h"        /* native I2C-HID trackpad + keyboard */
+#include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
@@ -507,20 +508,30 @@ static int collect(EFI_GUID *guid, void **out, int max)
  * ======================================================================== */
 static unsigned char gMMap[65536];      /* memory-map scratch for the EBS key */
 
+/* A native KEYBOARD that survives ExitBootServices must cover this machine, or
+ * a detached system is unusable (the shell is keyboard-driven and firmware
+ * ConIn dies with EBS). That's the i8042 (PS/2), a bound I2C-HID keyboard, or a
+ * bound USB HID keyboard. A native pointer is a bonus, not required. */
+static int native_kbd_for_detach(void)
+{
+    return uno_ps2_present() || uno_i2c_hid_kbd_present() || uno_usb_hid_kbd_present();
+}
+
 static int try_detach(void)
 {
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
     typedef EFI_STATUS (*EBS_FN)(EFI_HANDLE, UINTN);
-    int t;
+    int t, had_i8042;
     if (gDetached) return 1;
-    if (gUseBlt || !gVram)      { dbg_puts("detach: no linear FB\n");   return 0; }
-    if (!uno_ps2_present())     { dbg_puts("detach: no i8042\n");       return 0; }
-    if (!uno_native_tsc_ok())   { dbg_puts("detach: no TSC base\n");    return 0; }
+    if (gUseBlt || !gVram)        { dbg_puts("detach: no linear FB\n");    return 0; }
+    if (!native_kbd_for_detach()) { dbg_puts("detach: no native keyboard\n"); return 0; }
+    if (!uno_native_tsc_ok())     { dbg_puts("detach: no TSC base\n");     return 0; }
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
     if (!uno_fat_native_eligible()) {
         dbg_puts("detach: no AHCI-backed FAT volume\n");
         return 0;
     }
+    had_i8042 = uno_ps2_present();
     uno_fat_sync();             /* flush write-back lines while fw Block IO lives */
     { void uno_modload_reserve(void); uno_modload_reserve(); }
                                 /* executable arena for post-detach .UNO loads */
@@ -532,7 +543,11 @@ static int try_detach(void)
         if (((EBS_FN)gBS->ExitBootServices)(gIH, key) == EFI_SUCCESS) {
             gDetached = 1;
             gKeyEx = 0; gNAbs = gNPtr = 0;    /* firmware input died with EBS  */
-            uno_ps2_init();                   /* the i8042 is ours now         */
+            if (had_i8042) uno_ps2_init();    /* the i8042 is ours now         */
+            /* I2C-HID kbd/pad were already native (polled the same either way).
+             * USB HID: firmware no longer owns xHCI, so claim external USB
+             * keyboards/mice now (harmless no-op if none / already up). */
+            uno_usb_hid_init();
             uno_blk_detach();                 /* native AHCI takes the bus     */
             uno_fat_remount();                /* same disks, native transport  */
             uno_fs_remap();
@@ -575,7 +590,13 @@ void uno_pc64_init(void)
             gKeyEx = 0;
     }
     splash_step(3);                 /* input located */
-    uno_i2c_hid_init();             /* native trackpad; inert unless built in */
+    uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
+#ifdef UNO_USBHID_TEST
+    /* eager native USB HID (test only): takes xHCI from the firmware while
+     * attached so QEMU can exercise it with -device usb-kbd/usb-mouse. In
+     * production USB HID comes up at detach (post-ExitBootServices) instead. */
+    uno_usb_hid_init();
+#endif
     uno_fat_init();                 /* native block + FAT stack (AHCI + fw sectors) */
 #ifdef UNO_STORTEST
     uno_fat_selftest();             /* WRTEST.REQ -> WRTEST.OK (harness write proof) */
@@ -691,11 +712,30 @@ static void map_key(UINT16 scan, CHAR16 uni, short mods)
     }
 }
 
+/* shared emit for the native HID keyboards (I2C-HID + USB HID): translate the
+ * (EFI scan, unicode, ctrl) triple into map_key's (scan, uni, mods) space. */
+static void hid_key_emit(int scan, int uni, int ctrl, void *ctx)
+{ (void)ctx; map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
+
+/* 1 if a NATIVE keyboard (I2C-HID or USB HID) is bound - once one is, we drive
+ * the keyboard from it and stop polling firmware ConIn (which on a touch device
+ * like the Surface is what keeps the firmware on-screen keyboard drawn). */
+static int native_kbd_present(void)
+{ return uno_i2c_hid_kbd_present() || uno_usb_hid_kbd_present(); }
+
 static void poll_keyboard(void)
 {
     /* budget the drain: firmware exists whose ReadKeyStrokeEx returns
        SUCCESS forever with phantom "partial keystroke" data */
     int budget = 32;
+
+    /* native HID keyboards work whether attached or detached, and take priority
+     * over the firmware path when present */
+    if (native_kbd_present()) {
+        uno_i2c_hid_kbd_poll(hid_key_emit, 0);
+        uno_usb_hid_kbd_poll(hid_key_emit, 0);
+        return;
+    }
     if (gDetached) {                       /* native PS/2 (M3) */
         int sc, uni, ct;
         uno_ps2_pump();
@@ -790,17 +830,19 @@ static void poll_pointer(void)
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
                 int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
                 int ty = (sy - (int)gOffY) * uno_fb_h / gOutH;
-                /* Firmware touchpad Absolute Pointer coords are jumpy. A 2-pole
-                   low-pass (weight the previous position 2:1) smooths the
-                   jitter; a small dead-zone drops sub-pixel wobble; and a snap
-                   on a big delta keeps finger repositions instant. Tuned
-                   conservatively - the constants want a metal pass on the X1. */
+                /* Firmware Absolute Pointer coords: a light low-pass drops
+                   sub-pixel wobble, but weight the TARGET 3:1 (not the previous
+                   position) so the cursor tracks the finger instead of gliding
+                   after it - the earlier 2:1-toward-previous filter read as
+                   "floaty" on the Surface's precision touchpad. A 1px dead-zone
+                   still kills jitter; a big delta snaps. (Only used when the
+                   NATIVE I2C-HID pad isn't bound - native maps 1:1, no filter.) */
                 int dxx = tx - g_cx, dyy = ty - g_cy;
                 int adx = dxx < 0 ? -dxx : dxx, ady = dyy < 0 ? -dyy : dyy;
-                if (adx > 48)      g_cx = tx;               /* reposition: snap */
-                else if (adx >= 2) g_cx = (g_cx * 2 + tx) / 3;   /* glide */
-                if (ady > 48)      g_cy = ty;
-                else if (ady >= 2) g_cy = (g_cy * 2 + ty) / 3;
+                if (adx > 24)      g_cx = tx;               /* reposition: snap */
+                else if (adx >= 1) g_cx = (g_cx + tx * 3) / 4;   /* track */
+                if (ady > 24)      g_cy = ty;
+                else if (ady >= 1) g_cy = (g_cy + ty * 3) / 4;
                 clamp_cursor();
                 g_have_pointer = 1; moved = 1;
             }
@@ -836,6 +878,19 @@ static void poll_pointer(void)
             g_have_pointer = 1;
         }
         mb |= pb;
+    }
+
+    /* native USB HID mouse (relative deltas + buttons) */
+    if (uno_usb_hid_present()) {
+        int dx = 0, dy = 0, ub = 0;
+        if (uno_usb_hid_mouse_poll(&dx, &dy, &ub)) {
+            if (dx || dy) {
+                g_cx += dx; g_cy += dy;
+                clamp_cursor();
+                g_have_pointer = 1;
+            }
+            mb |= ub;
+        }
     }
 
     /* a click on ANY device's ANY button counts (clickpads report the whole

@@ -10,6 +10,8 @@
 
 int uno_i2c_hid_init(void) { return 0; }
 int uno_i2c_hid_poll(int *ax, int *ay, int *b) { (void)ax;(void)ay;(void)b; return 0; }
+int uno_i2c_hid_kbd_poll(uno_i2c_key_fn e, void *c) { (void)e;(void)c; return 0; }
+int uno_i2c_hid_kbd_present(void) { return 0; }
 int uno_i2c_hid_dump(unsigned char *o, int m) { (void)o;(void)m; return 0; }
 int uno_i2c_hid_present(void) { return 0; }
 void uno_i2c_hid_status(int *nb, int *nc, int *pr, int *ad, int *pa)
@@ -19,17 +21,20 @@ void uno_i2c_hid_diag(int *sa, unsigned *ab) { if (sa)*sa=0; if (ab)*ab=0; }
 #else  /* ================= UNO_I2C_TRACKPAD enabled ==================== */
 
 #include "pc64_pci.h"
+#include "hid_kbd.h"
 #include <stdint.h>
 
 /* ===========================================================================
  * SELF-CONFIGURING bring-up. Rather than depend on ACPI/AML constants, we
  * enumerate the machine: scan every PCI-visible Intel LPSS I2C controller, and
  * on each probe the handful of slave-address x HID-descriptor-register
- * combinations real trackpads use, validating each by the HID descriptor's
- * signature (wHIDDescLength==30, bcdVersion==0x0100). Whatever answers with a
- * valid descriptor IS the trackpad - no hand-supplied constants. An override
- * (-DI2C_HID_BASE=... etc.) is still honoured for a controller hidden from PCI
- * (ACPI-only mode), the one case enumeration can't reach.
+ * combinations real HID devices use, validating each by the HID descriptor's
+ * signature (wHIDDescLength==30, bcdVersion==0x0100). Each valid device is
+ * classified from its report descriptor as a POINTER (Generic-Desktop X/Y) or
+ * a KEYBOARD (Keyboard/Keypad page) and kept in the matching slot - so a laptop
+ * whose keyboard AND touchpad are both I2C-HID (the Surface) gets both, no
+ * hand-supplied constants. An override (-DI2C_HID_BASE=...) is still honoured
+ * for a controller hidden from PCI (ACPI-only mode).
  * ======================================================================== */
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -72,23 +77,31 @@ static const u16 kDescRegs[] = { 0x0020, 0x0001, 0x0000 };
 #define DW_CMD_STOP         (1u << 9)
 #define DW_CMD_RESTART      (1u << 10)
 
-static volatile u8 *g_i2c;         /* controller MMIO base (the found one) */
-static u8  g_addr;                  /* the found slave address */
-static int g_present;
-static u8  g_report[64];
+static volatile u8 *g_i2c;         /* controller MMIO base of the CURRENT xfer */
+
+/* one discovered HID device (pointer or keyboard) */
+typedef struct {
+    volatile u8 *i2c;              /* its controller base */
+    u8  addr;                      /* its slave address    */
+    int present;
+    u16 input_reg, max_input, cmd_reg, rd_reg, rd_len;
+    /* pointer parse results: bit offsets + sizes + logical maxima for scaling.
+     * parsed==0 -> poll falls back to the common WPT/boot-mouse shape. */
+    int parsed;
+    u8  report_id;
+    int x_off, x_bits, x_lmax;
+    int y_off, y_bits, y_lmax;
+    int tip_off;                   /* tip-switch / button-1 bit, -1 if none */
+    /* keyboard */
+    int is_kbd;
+    u8  kbd_report_id;             /* report ID prefixing kbd input, 0 if none */
+    hid_kbd_state kbd;
+} hiddev;
+
+static hiddev g_ptr;               /* trackpad / mouse slot   */
+static hiddev g_kbd;               /* keyboard slot           */
+static u8  g_report[64];           /* last pointer report (for _dump)         */
 static int g_report_len;
-
-/* HID-over-I2C descriptor fields we use */
-static u16 g_input_reg, g_max_input, g_cmd_reg, g_rd_reg, g_rd_len;
-
-/* report-descriptor parse results: bit offsets (within the report data, after
- * the leading report-id byte) + sizes + logical maxima for scaling. When
- * g_parsed is 0 the poll falls back to the common WPT/boot-mouse shape. */
-static int g_parsed;
-static u8  g_report_id;
-static int g_x_off, g_x_bits, g_x_lmax;
-static int g_y_off, g_y_bits, g_y_lmax;
-static int g_tip_off;              /* tip-switch / button-1 bit, -1 if none */
 
 static u32 r32(u32 o) { return *(volatile u32 *)(g_i2c + o); }
 static void w32(u32 o, u32 v) { *(volatile u32 *)(g_i2c + o) = v; }
@@ -189,44 +202,47 @@ static int list_bars(u64 *bars, int max)
 }
 
 /* read + validate the HID descriptor at (addr, descReg); fills the register
- * map on success. Validation by signature = self-configuring probe. */
-static int try_hid(u8 addr, u16 descReg)
+ * map of `dev` on success. Validation by signature = self-configuring probe. */
+static int try_hid(hiddev *dev, u8 addr, u16 descReg)
 {
     u8 d[30];
     int n = dw_reg_read(addr, descReg, d, sizeof d);
     if (n < 30) return 0;
     if ((d[0] | (d[1] << 8)) != 30)      return 0;   /* wHIDDescLength */
     if ((d[2] | (d[3] << 8)) != 0x0100)  return 0;   /* bcdVersion 1.00 */
-    g_addr      = addr;
-    g_rd_len    = (u16)(d[4]  | (d[5]  << 8));
-    g_rd_reg    = (u16)(d[6]  | (d[7]  << 8));
-    g_input_reg = (u16)(d[8]  | (d[9]  << 8));
-    g_max_input = (u16)(d[10] | (d[11] << 8));
-    g_cmd_reg   = (u16)(d[16] | (d[17] << 8));
-    if (g_max_input == 0 || g_max_input > sizeof g_report) g_max_input = sizeof g_report;
+    dev->i2c       = g_i2c;
+    dev->addr      = addr;
+    dev->rd_len    = (u16)(d[4]  | (d[5]  << 8));
+    dev->rd_reg    = (u16)(d[6]  | (d[7]  << 8));
+    dev->input_reg = (u16)(d[8]  | (d[9]  << 8));
+    dev->max_input = (u16)(d[10] | (d[11] << 8));
+    dev->cmd_reg   = (u16)(d[16] | (d[17] << 8));
+    if (dev->max_input == 0 || dev->max_input > sizeof g_report) dev->max_input = sizeof g_report;
     return 1;
 }
 
-static void hid_power_reset(void)
+static void hid_power_reset(hiddev *dev)
 {
     u8 c[4];
-    c[0] = g_cmd_reg & 0xFF; c[1] = g_cmd_reg >> 8; c[2] = 0x00; c[3] = 0x08;  /* power on */
-    dw_write(g_addr, c, 4);
-    c[2] = 0x00; c[3] = 0x01;                                                  /* reset */
-    dw_write(g_addr, c, 4);
+    c[0] = dev->cmd_reg & 0xFF; c[1] = dev->cmd_reg >> 8; c[2] = 0x00; c[3] = 0x08;  /* power on */
+    dw_write(dev->addr, c, 4);
+    c[2] = 0x00; c[3] = 0x01;                                                        /* reset */
+    dw_write(dev->addr, c, 4);
     { int t = 500000; while (t--) spin(4); }         /* let reset settle */
 }
 
-/* ---- HID report-descriptor parser: find the X / Y / tip fields ---------- *
+/* ---- HID report-descriptor parser --------------------------------------- *
  * Walk the item stream tracking usage page, report size/count and the running
- * bit offset, and record the bit position of Generic-Desktop X (page 1 usage
- * 0x30), Y (0x31) and the tip switch (Digitizer page 0x0D usage 0x42, or
- * Button-1). This replaces the fixed-offset guess with the device's own map. */
-static void parse_rd(const u8 *rd, int len)
+ * bit offset. For a POINTER: record Generic-Desktop X (page 1 usage 0x30), Y
+ * (0x31) and the tip switch (Digitizer 0x0D/0x42 or Button-1). For a KEYBOARD:
+ * note any Input item on the Keyboard/Keypad page (0x07) and its report ID.
+ * One device can only be one or the other in the slot it lands in. */
+static void parse_rd(hiddev *dev, const u8 *rd, int len)
 {
     int i = 0, page = 0, rsize = 0, rcount = 0, bitpos = 0, lmax = 0, cur_id = 0;
     u16 usages[32]; int nusg = 0;
-    g_parsed = 0; g_tip_off = -1; g_x_off = g_y_off = -1;
+    dev->parsed = 0; dev->tip_off = -1; dev->x_off = dev->y_off = -1;
+    dev->is_kbd = 0; dev->kbd_report_id = 0;
     while (i < len) {
         u8 p = rd[i++];
         int sz = p & 3, type = (p >> 2) & 3, tag = (p >> 4) & 0xF, k;
@@ -246,16 +262,19 @@ static void parse_rd(const u8 *rd, int len)
         } else if (type == 0) {                           /* main */
             if (tag == 0x8) {                             /* Input */
                 int f;
+                if (page == 0x07 && !dev->is_kbd) {       /* Keyboard/Keypad */
+                    dev->is_kbd = 1; dev->kbd_report_id = (u8)cur_id;
+                }
                 for (f = 0; f < rcount; f++) {
                     u16 u = (f < nusg) ? usages[f] : (nusg ? usages[nusg - 1] : 0);
                     int off = bitpos + f * rsize;
-                    if (page == 0x01 && u == 0x30 && g_x_off < 0) {
-                        g_x_off = off; g_x_bits = rsize; g_x_lmax = lmax; g_report_id = (u8)cur_id;
-                    } else if (page == 0x01 && u == 0x31 && g_y_off < 0) {
-                        g_y_off = off; g_y_bits = rsize; g_y_lmax = lmax;
+                    if (page == 0x01 && u == 0x30 && dev->x_off < 0) {
+                        dev->x_off = off; dev->x_bits = rsize; dev->x_lmax = lmax; dev->report_id = (u8)cur_id;
+                    } else if (page == 0x01 && u == 0x31 && dev->y_off < 0) {
+                        dev->y_off = off; dev->y_bits = rsize; dev->y_lmax = lmax;
                     } else if (((page == 0x0D && u == 0x42) ||
-                                (page == 0x09 && u == 0x01)) && g_tip_off < 0) {
-                        g_tip_off = off;
+                                (page == 0x09 && u == 0x01)) && dev->tip_off < 0) {
+                        dev->tip_off = off;
                     }
                 }
                 bitpos += rsize * rcount;
@@ -263,17 +282,17 @@ static void parse_rd(const u8 *rd, int len)
             nusg = 0;                                     /* usages consumed */
         }
     }
-    if (g_x_off >= 0 && g_y_off >= 0) g_parsed = 1;
+    if (dev->x_off >= 0 && dev->y_off >= 0) dev->parsed = 1;
 }
 
-static void parse_report_desc(void)
+static void parse_report_desc(hiddev *dev)
 {
     static u8 rd[512];
-    int len = g_rd_len, n;
+    int len = dev->rd_len, n;
     if (len <= 0) return;
     if (len > (int)sizeof rd) len = sizeof rd;
-    n = dw_reg_read(g_addr, g_rd_reg, rd, len);
-    if (n >= 4) parse_rd(rd, n);
+    n = dw_reg_read(dev->addr, dev->rd_reg, rd, len);
+    if (n >= 4) parse_rd(dev, rd, n);
 }
 
 static int g_nbars, g_nctrl;       /* diagnostics (uno_i2c_hid_status) */
@@ -285,7 +304,13 @@ int uno_i2c_hid_init(void)
     nb = list_bars(bars, 8);
     g_nbars = nb;
     for (bi = 0; bi < nb; bi++) {
-        g_i2c = (volatile u8 *)(unsigned long)(uintptr_t)bars[bi];
+        /* NB: cast straight through uintptr_t (pointer-width, 64-bit on this
+         * LLP64 mingw target) - an intermediate (unsigned long) is only 32 bits
+         * here and TRUNCATES an above-4GB BAR, which is exactly where the
+         * Surface's LPSS I2C controllers live (same 64-bit-BAR wall the SAM
+         * battery path hit). Truncation -> wrong MMIO -> COMP_TYPE miss -> the
+         * "N bars / 0 ctrl" symptom. */
+        g_i2c = (volatile u8 *)(uintptr_t)bars[bi];
         if (!g_i2c) continue;
         /* confirm this BAR really is a DesignWare I2C before poking it - an
          * unmapped/foreign BAR reads 0xFFFFFFFF here, so we skip it and stay
@@ -300,16 +325,29 @@ int uno_i2c_hid_init(void)
         { int t = 20000; while (t--) spin(2); }
         w32(LPSS_RESETS, 0x7);
         { int t = 100000; while (t--) spin(2); }
+        /* probe every slave x descriptor-register; classify each valid device
+         * into the pointer or keyboard slot. Keep scanning this + later
+         * controllers until BOTH slots are filled (the Surface has them on the
+         * same controller at different addresses). */
         for (ai = 0; ai < (int)sizeof kAddrs; ai++)
-            for (di = 0; di < (int)(sizeof kDescRegs / sizeof kDescRegs[0]); di++)
-                if (try_hid(kAddrs[ai], kDescRegs[di])) {
-                    hid_power_reset();
-                    parse_report_desc();
-                    g_present = 1;
-                    return 1;
+            for (di = 0; di < (int)(sizeof kDescRegs / sizeof kDescRegs[0]); di++) {
+                hiddev tmp;
+                if (g_ptr.present && g_kbd.present) return 1;
+                if (!try_hid(&tmp, kAddrs[ai], kDescRegs[di])) continue;
+                hid_power_reset(&tmp);
+                parse_report_desc(&tmp);
+                if (tmp.is_kbd && !g_kbd.present) {
+                    g_kbd = tmp; g_kbd.present = 1; hid_kbd_reset(&g_kbd.kbd);
+                } else if (tmp.parsed && !g_ptr.present) {
+                    g_ptr = tmp; g_ptr.present = 1;
+                } else if (!g_ptr.present && !tmp.is_kbd) {
+                    /* an unparsed pointer-ish device: keep as the pointer
+                     * fallback (the old single-device behaviour) */
+                    g_ptr = tmp; g_ptr.present = 1;
                 }
+            }
     }
-    return 0;
+    return (g_ptr.present || g_kbd.present) ? 1 : 0;
 }
 
 /* Extract nbits starting at bitoff from d[], which holds nbytes valid bytes.
@@ -337,26 +375,27 @@ int uno_i2c_hid_poll(int *absx, int *absy, int *buttons)
 {
     u8 rep[64];
     int n, len;
-    if (!g_present) return 0;
-    n = dw_reg_read(g_addr, g_input_reg, rep, g_max_input);
+    if (!g_ptr.present) return 0;
+    g_i2c = g_ptr.i2c;                            /* select its controller */
+    n = dw_reg_read(g_ptr.addr, g_ptr.input_reg, rep, g_ptr.max_input);
     if (n < 2) return 0;
     len = rep[0] | (rep[1] << 8);
     if (len < 2 || len > n) return 0;
     g_report_len = (len < (int)sizeof g_report) ? len : (int)sizeof g_report;
     { int i; for (i = 0; i < g_report_len; i++) g_report[i] = rep[i]; }
 
-    if (g_parsed) {
-        int base = g_report_id ? 3 : 2;          /* skip len16 [+ reportID] */
+    if (g_ptr.parsed) {
+        int base = g_ptr.report_id ? 3 : 2;      /* skip len16 [+ reportID] */
         const u8 *data = rep + base;
         int avail = n - base;                     /* valid bytes behind `data` */
         int x, y, tip;
-        if (g_report_id && rep[2] != g_report_id) return 0;   /* a different report */
+        if (g_ptr.report_id && rep[2] != g_ptr.report_id) return 0;  /* other report */
         if (len <= base || avail <= 0) return 0;
-        x = getbits(data, avail, g_x_off, g_x_bits);
-        y = getbits(data, avail, g_y_off, g_y_bits);
-        tip = (g_tip_off >= 0) ? getbits(data, avail, g_tip_off, 1) : 0;
-        if (g_x_lmax > 0) x = (int)((long)x * 32767 / g_x_lmax);
-        if (g_y_lmax > 0) y = (int)((long)y * 32767 / g_y_lmax);
+        x = getbits(data, avail, g_ptr.x_off, g_ptr.x_bits);
+        y = getbits(data, avail, g_ptr.y_off, g_ptr.y_bits);
+        tip = (g_ptr.tip_off >= 0) ? getbits(data, avail, g_ptr.tip_off, 1) : 0;
+        if (g_ptr.x_lmax > 0) x = (int)((long)x * 32767 / g_ptr.x_lmax);
+        if (g_ptr.y_lmax > 0) y = (int)((long)y * 32767 / g_ptr.y_lmax);
         *absx = x < 0 ? 0 : (x > 32767 ? 32767 : x);
         *absy = y < 0 ? 0 : (y > 32767 ? 32767 : y);
         *buttons = tip ? 1 : 0;
@@ -374,6 +413,25 @@ int uno_i2c_hid_poll(int *absx, int *absy, int *buttons)
     return 0;
 }
 
+/* poll the keyboard device: read its input report, hand the 8-byte boot-shape
+ * payload (mod, reserved, 6 keycodes) to the shared hid_kbd edge translator. */
+int uno_i2c_hid_kbd_poll(uno_i2c_key_fn emit, void *ctx)
+{
+    u8 rep[64];
+    int n, len, base;
+    if (!g_kbd.present) return 0;
+    g_i2c = g_kbd.i2c;
+    n = dw_reg_read(g_kbd.addr, g_kbd.input_reg, rep, g_kbd.max_input);
+    if (n < 2) return 1;                         /* present but no report now */
+    len = rep[0] | (rep[1] << 8);
+    if (len < 2 || len > n) return 1;
+    base = 2 + (g_kbd.kbd_report_id ? 1 : 0);    /* skip len16 [+ reportID] */
+    if (g_kbd.kbd_report_id && rep[2] != g_kbd.kbd_report_id) return 1;  /* other report */
+    if (n - base >= 8)
+        hid_kbd_report(&g_kbd.kbd, rep + base, (hid_key_fn)emit, ctx);
+    return 1;
+}
+
 int uno_i2c_hid_dump(unsigned char *out, int max)
 {
     int i, n = g_report_len < max ? g_report_len : max;
@@ -381,15 +439,16 @@ int uno_i2c_hid_dump(unsigned char *out, int max)
     return n;
 }
 
-int uno_i2c_hid_present(void) { return g_present; }
+int uno_i2c_hid_present(void)     { return g_ptr.present; }
+int uno_i2c_hid_kbd_present(void) { return g_kbd.present; }
 
 void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed)
 {
     if (nbars)   *nbars   = g_nbars;
     if (nctrl)   *nctrl   = g_nctrl;
-    if (present) *present = g_present;
-    if (addr)    *addr    = g_addr;
-    if (parsed)  *parsed  = g_parsed;
+    if (present) *present = g_ptr.present;
+    if (addr)    *addr    = g_ptr.addr;
+    if (parsed)  *parsed  = g_ptr.parsed;
 }
 
 void uno_i2c_hid_diag(int *saw_ack, unsigned *abrt)

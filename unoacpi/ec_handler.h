@@ -25,7 +25,11 @@ int wu_ec_init(void);
  * UACPI_ADDRESS_SPACE_EMBEDDED_CONTROLLER. */
 uacpi_status wu_ec_region_handler(uacpi_region_op op, uacpi_handle op_data);
 
-/* Diagnostics for the overlay: the resolved ports, whether they came from the
- * ECDT, and running read/timeout counters (so a hostile EC is visible). */
-void wu_ec_info(uint16_t *cmd_port, uint16_t *data_port, int *from_ecdt,
+/* Override the EC command/status + data ports from the DSDT PNP0C09 _CRS (for
+ * machines with no ECDT, e.g. the Dell).  Call after namespace_initialize. */
+void wu_ec_set_ports(uint16_t cmd_port, uint16_t data_port);
+
+/* Diagnostics for the overlay: the resolved ports, their source (0 = default,
+ * 1 = ECDT, 2 = _CRS), and running read/timeout counters. */
+void wu_ec_info(uint16_t *cmd_port, uint16_t *data_port, int *port_source,
                 int *reads, int *timeouts);

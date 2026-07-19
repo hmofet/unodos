@@ -26,6 +26,7 @@ static inline void    ec_outb(uint16_t p, uint8_t v){ __asm__ volatile("outb %0,
 static uint16_t g_cmd  = 0x66;    /* command/status port */
 static uint16_t g_data = 0x62;    /* data port           */
 static int      g_from_ecdt;
+static int      g_from_crs;        /* ports came from the PNP0C09 _CRS */
 static int      g_reads;          /* successful byte reads (diag)  */
 static int      g_timeouts;       /* bounded-wait timeouts (diag)  */
 
@@ -57,9 +58,46 @@ static int ec_wait(uint8_t mask, uint8_t want)
     }
 }
 
+#define EC_BURST 0x10u   /* status bit: EC is in burst mode                 */
+#define BE_EC    0x82u    /* Burst Enable  (ack byte = 0x90)                 */
+#define BD_EC    0x83u    /* Burst Disable                                   */
+
+/* Drain any stale output byte before starting a transaction.  A desynced EC
+ * that left OBF set (the Yoga/lid-saga lesson) otherwise makes the next read
+ * return the previous byte or wedge the handshake. */
+static void ec_drain(void)
+{
+    uint64_t dl = uacpi_kernel_get_nanoseconds_since_boot() + (1ull * 1000 * 1000);  /* 1 ms */
+    while ((ec_inb(g_cmd) & EC_OBF) &&
+           uacpi_kernel_get_nanoseconds_since_boot() < dl)
+        (void)ec_inb(g_data);
+}
+
+/* Best-effort burst enable.  Some ECs (notably hostile ones like the Dell) will
+ * not service RD_EC unless first put into burst mode.  Returns 1 if entered.
+ * If the EC does not ack quickly we just proceed without burst - no regression
+ * on ECs that read fine already. */
+static int ec_burst_enable(void)
+{
+    if (ec_inb(g_cmd) & EC_BURST) return 1;             /* already in burst */
+    if (!ec_wait(EC_IBF, 0)) return 0;
+    ec_outb(g_cmd, BE_EC);
+    if (!ec_wait(EC_OBF, EC_OBF)) return 0;
+    uint8_t ack = ec_inb(g_data);
+    return (ack == 0x90) || (ec_inb(g_cmd) & EC_BURST);
+}
+static void ec_burst_disable(void)
+{
+    if (!(ec_inb(g_cmd) & EC_BURST)) return;
+    if (!ec_wait(EC_IBF, 0)) return;
+    ec_outb(g_cmd, BD_EC);
+    ec_wait(EC_IBF, 0);
+}
+
 /* RD_EC: read one byte at EC address 'addr'.  Returns 1 + *out on success. */
 static int ec_read_byte(uint8_t addr, uint8_t *out)
 {
+    ec_drain();
     if (!ec_wait(EC_IBF, 0)) return 0;
     ec_outb(g_cmd, RD_EC);
     if (!ec_wait(EC_IBF, 0)) return 0;
@@ -68,6 +106,16 @@ static int ec_read_byte(uint8_t addr, uint8_t *out)
     *out = ec_inb(g_data);
     g_reads++;
     return 1;
+}
+
+/* Override the EC ports from the DSDT PNP0C09 _CRS (data port first, command/
+ * status port second, per ACPI spec 12.10).  Called after namespace_initialize,
+ * for machines without an ECDT (e.g. the Dell). */
+void wu_ec_set_ports(uint16_t cmd_port, uint16_t data_port)
+{
+    if (cmd_port)  g_cmd  = cmd_port;
+    if (data_port) g_data = data_port;
+    g_from_crs = 1;
 }
 
 /* WR_EC: write one byte 'val' at EC address 'addr'. */
@@ -95,15 +143,17 @@ uacpi_status wu_ec_region_handler(uacpi_region_op op, uacpi_handle op_data)
         uint64_t off = d->offset;
         uint8_t  w   = d->byte_width ? d->byte_width : 1;
         uint64_t val = 0;
+        int burst = ec_burst_enable();             /* best-effort; helps stubborn ECs */
+        uacpi_status ret = UACPI_STATUS_OK;
         for (uint8_t i = 0; i < w; i++) {
             if (off + i > 0xFF) break;             /* EC space is 256 bytes */
             uint8_t b;
-            if (!ec_read_byte((uint8_t)(off + i), &b))
-                return UACPI_STATUS_HARDWARE_TIMEOUT;
+            if (!ec_read_byte((uint8_t)(off + i), &b)) { ret = UACPI_STATUS_HARDWARE_TIMEOUT; break; }
             val |= (uint64_t)b << (8u * i);
         }
-        d->value = val;
-        return UACPI_STATUS_OK;
+        if (burst) ec_burst_disable();
+        if (ret == UACPI_STATUS_OK) d->value = val;
+        return ret;
     }
 
     case UACPI_REGION_OP_WRITE: {
@@ -128,7 +178,7 @@ void wu_ec_info(uint16_t *cmd_port, uint16_t *data_port, int *from_ecdt,
 {
     if (cmd_port)  *cmd_port  = g_cmd;
     if (data_port) *data_port = g_data;
-    if (from_ecdt) *from_ecdt = g_from_ecdt;
+    if (from_ecdt) *from_ecdt = g_from_crs ? 2 : (g_from_ecdt ? 1 : 0);  /* 0 dflt / 1 ecdt / 2 crs */
     if (reads)     *reads     = g_reads;
     if (timeouts)  *timeouts  = g_timeouts;
 }

@@ -60,14 +60,20 @@ static void *fa_alloc(long n){ n = (n + 15) & ~15L;
 #include "stb_truetype.h"
 
 /* ---- font slots ---------------------------------------------------------- */
-#define NSLOT 3
+#define NSLOT 4
 #define FONT_BUF (1200 * 1024)
 static unsigned char g_data[NSLOT][FONT_BUF];
-typedef struct { int loaded; stbtt_fontinfo info; long len; const char *name, *file; } fslot;
+/* px: native pixel height of a bitmap-derived face (rendered at that exact
+ * size with AA off, so its pixels land 1:1 and stay crisp); 0 = a scalable
+ * outline face (rendered at the UI px with anti-aliasing). */
+typedef struct { int loaded; stbtt_fontinfo info; long len; const char *name, *file; int px; } fslot;
 static fslot g_fonts[NSLOT] = {
-    { 0, {0}, 0, "Sans",   "SANS.TTF"   },
-    { 0, {0}, 0, "Mono",   "MONO.TTF"   },
-    { 0, {0}, 0, "Ubuntu", "UBUNTU.TTF" },
+    /* ChiKareGo2 (Giles Booth, CC BY) - a Chicago-style bitmap face; its 1024-
+     * unit em is a 16px grid (64 u/px), so px 15 = ascent(12)+descent(3) = 1:1. */
+    { 0, {0}, 0, "Chicago", "CHICAGO.TTF", 15 },
+    { 0, {0}, 0, "Sans",    "SANS.TTF",    0  },
+    { 0, {0}, 0, "Mono",    "MONO.TTF",    0  },
+    { 0, {0}, 0, "Ubuntu",  "UBUNTU.TTF",  0  },
 };
 
 static int font_read(const char *name, unsigned char *buf, long max)
@@ -115,12 +121,18 @@ static gcache g_cache[GC_COUNT];
 static int g_active = -1, g_px = 13, g_sub = 1;
 static int g_baseline, g_cellh, g_space;
 
+/* effective per-active-font settings: a bitmap face (px>0) renders at its own
+ * native px with AA off (crisp 1:1 pixels); an outline face uses the UI px and
+ * the user's subpixel-AA preference. */
+static int cur_px(void)  { int p = g_active >= 0 ? g_fonts[g_active].px : 0; return p > 0 ? p : g_px; }
+static int cur_sub(void) { return g_sub && (g_active < 0 || g_fonts[g_active].px == 0); }
+
 static void invalidate(void){ int i; for (i = 0; i < GC_COUNT; i++) g_cache[i].ready = 0; }
 
 static void set_metrics(void)
 {
     fslot *f = &g_fonts[g_active];
-    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)g_px);
+    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)cur_px());
     int asc, desc, gap, a, l;
     stbtt_GetFontVMetrics(&f->info, &asc, &desc, &gap);
     g_baseline = (int)(asc * scale + 0.5f);
@@ -137,7 +149,7 @@ static void render_glyph(int cp)
 {
     gcache *gc = &g_cache[cp - GC_FIRST];
     fslot *f = &g_fonts[g_active];
-    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)g_px);
+    float scale = stbtt_ScaleForPixelHeight(&f->info, (float)cur_px());
     int adv, lsb, x0, y0, x1, y1, w, h;
     stbtt_GetCodepointHMetrics(&f->info, cp, &adv, &lsb);
     gc->adv = (int)(adv * scale + 0.5f);
@@ -145,7 +157,7 @@ static void render_glyph(int cp)
     w = x1 - x0; h = y1 - y0;
     if (w < 0) w = 0; if (h < 0) h = 0; if (w > GMAXW) w = GMAXW; if (h > GMAXH) h = GMAXH;
     gc->w = w; gc->h = h; gc->ox = x0; gc->oy = y0;
-    if (g_sub) {
+    if (cur_sub()) {
         int bx0, by0, bx1, by1, cw3;
         stbtt_GetCodepointBitmapBox(&f->info, cp, scale * 3, scale, &bx0, &by0, &bx1, &by1);
         cw3 = bx1 - bx0; if (cw3 < 0) cw3 = 0; if (cw3 > GMAXW * 3) cw3 = GMAXW * 3;
@@ -171,7 +183,7 @@ static int draw_glyph(int x, int y, int cp, fb_px fg, long bg)
     gc = &g_cache[cp - GC_FIRST];
     if (!gc->ready) render_glyph(cp);
     if (bg >= 0) fb_fill_rect(x, y, gc->adv > 0 ? gc->adv : g_space, g_cellh, (fb_px)bg);
-    if (g_sub) {
+    if (cur_sub()) {
         int r, X, cw3 = gc->cw3, pixox = gc->ox3 / 3, base = 3 * pixox - gc->ox3;
         int wout = (cw3 - base) / 3 + 2;
         for (r = 0; r < gc->h; r++) {
