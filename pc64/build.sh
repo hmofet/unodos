@@ -44,7 +44,7 @@ if [ "$1" != "legacy" ]; then
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci fat hid_kbd i2c_hid xhci usbhid ax88179 uefi_main pc64_native pc64_uui pc64_uui_apps pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 uefi_main pc64_native pc64_uui pc64_uui_apps pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
@@ -135,7 +135,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci fat tls_ca e1000 net tls hid_kbd i2c_hid xhci usbhid uefi_main pc64_native unodos; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls hid_kbd i2c_hid xhci usbhid uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done

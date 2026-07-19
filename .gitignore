@@ -37,8 +37,17 @@ SESSION_SUMMARY.md
 test-artifacts/
 build/unodos.img
 
-# SNES intermediate objects
+# SNES port build outputs (snes/build/). `.o` = intermediate objects; `.sfc` =
+# assembled SNES ROMs. The two CANONICAL ROMs stay tracked as ready-to-run
+# evidence: unodos.sfc (the main build) and unodos_test.sfc (AUTOTEST synthetic-
+# input build). The scratch per-scenario AUTOTEST variants are ignored:
+# unodos_dg.sfc (drag test, AUTOTEST_DRAG) and unodos_dt.sfc (Dostris test,
+# AUTOTEST_DOSTRIS) - see snes/build.sh. (snes/build/*.png test shots ARE
+# committed evidence, so they're not ignored.)
 snes/build/*.o
+snes/build/*.sfc
+!snes/build/unodos.sfc
+!snes/build/unodos_test.sfc
 
 # 8088 port: scratch harness screenshots (canonical shots live in tools/xt/shots/)
 build/xt/

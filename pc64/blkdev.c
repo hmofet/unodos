@@ -138,10 +138,19 @@ void uno_blk_init(void)
      * sector transport (our FAT code still does all partition + filesystem
      * work).  Detached (post-ExitBootServices, M3): the native drivers are the
      * only ones on the bus, and firmware Block IO is gone. */
-    if (uno_pc64_detached())
+    if (uno_pc64_detached()) {
         uno_ahci_init();             /* native controller ownership (no fw)    */
-    else
+        uno_nvme_init();
+        uno_sdhci_init();
+    } else {
+#ifdef UNO_SDHCI_TEST
+        /* QEMU-only: take the SDHCI controller eagerly while attached (OVMF
+         * ships no SdMmc driver, so nobody else touches it). Registered first
+         * so fw_scan's claimed-controller dedup skips any firmware view. */
+        uno_sdhci_init();
+#endif
         fw_scan();                   /* firmware moves sectors; we own the FS  */
+    }
 }
 
 /* M3 detach: firmware Block IO just died with ExitBootServices - drop every
@@ -151,4 +160,6 @@ void uno_blk_detach(void)
 {
     g_ndev = 0;
     uno_ahci_init();
+    uno_nvme_init();
+    uno_sdhci_init();
 }

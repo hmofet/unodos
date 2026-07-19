@@ -42,10 +42,10 @@ machine that showed `0 DW ctrl / 3 bars`):
       metal-first**. For an attached-mode smoke test: `-DUNO_XHCI
       -DUNO_USBHID_TEST -DUNO_NO_DETACH` brings USB HID up eagerly.
 
-**Surface full OSK removal** still needs **native NVMe** so the Surface can
-detach (its storage is NVMe; the AHCI driver + the detach gate only cover
-SATA/AHCI today). That's the remaining gap — input takeover is done, storage
-isn't.
+**Surface full OSK removal**: every piece now exists — input takeover +
+native **NVMe** (`nvme.c`) + native **SDHCI/eMMC** (`sdhci.c`, this Surface
+Laptop Go is the eMMC model). All QEMU-verified including detach and
+raw-verified writes; the Surface itself is the metal test below.
 
 ## M3 firmware detach (ExitBootServices) on metal
 
@@ -59,9 +59,23 @@ CMOS clock). Metal is where the gate's conservatism actually matters:
       (CF9). Music/games audio still fine (PIT speaker was already native).
 - [ ] **USB-stick boot on the same machine**: must STAY attached (the boot
       volume is USB) — System says `Native FS: fw-sect ...`, Install works.
-- [ ] **The Surface / X1 (no i8042 or NVMe-only)**: must stay attached and
-      behave exactly as before (the detach gate declines quietly; check
-      `detach:` lines with a `-DUNO_DBGCON` build if curious).
+- [ ] **A machine with an NVMe system disk** (UnoDOS installed to the internal
+      SSD): boot → System should say `DETACHED (native): nvme0 ...`; apps open
+      (native NVMe `.UNO` loads), an Editor save survives a reboot.
+      QEMU-verified end-to-end by `tools/nvme_test.py`; metal-pending.
+- [ ] **The Surface Laptop Go (eMMC)**: install UnoDOS to the internal eMMC
+      (ESP mode), boot → System should say `DETACHED (native): emmc0 ...`;
+      the firmware on-screen keyboard should be fully gone (the original
+      goal); I2C-HID keyboard + trackpad drive it, apps open (native eMMC
+      `.UNO` loads), an Editor save survives a reboot. Watch for: Intel
+      eMMC controllers that hide behind ACPI-only enumeration (no PCI
+      08/05 function → driver won't find it — check System's disk line
+      while attached), 1.8 V-only rails (handled), HS200 tuning NOT needed
+      (we run 25 MHz legacy). QEMU-verified via tools/sdhci_test.py (SD)
+      + tools/emmc_test_win.py (eMMC handshake); metal-pending.
+- [ ] **Machines with no native keyboard**: must stay attached and behave
+      exactly as before (the detach gate declines quietly; check `detach:`
+      lines with a `-DUNO_DBGCON` build if curious).
 - [ ] If a machine misbehaves detached, `-DUNO_NO_DETACH` is the escape hatch
       (and file what broke — likely NX page tables or an AHCI quirk).
 

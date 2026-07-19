@@ -30,29 +30,66 @@ xHCI, which has no native block driver), de-duplicated by FAT serial. The RAM
 disk and native FAT volumes are writable (`uno_fs_write`); firmware SFS is
 read-only here.
 
-## One driver per controller (why AHCI is gated)
+## One driver per controller (why the native drivers are gated)
 
 While UEFI boot services are live, the **firmware** owns the AHCI/NVMe
-controllers. If the native AHCI driver reprograms a port (stops it, repoints the
-command list/FIS to its own buffers, restarts), it breaks the firmware's own
+controllers. If a native driver reprograms one (stops a port, repoints the
+command list/queues to its own buffers, restarts), it breaks the firmware's own
 Block IO — which corrupted an installer disk clone mid-write. So:
 
 - **Attached** (boot services live): `blkdev` uses the **EFI Block IO backend**
   for every disk. Our FAT code still does all partition + filesystem work; only
   the sector transport is firmware.
-- **Detached** (after `ExitBootServices` — M3, SHIPPED): the native `ahci.c`
-  driver is the only thing on the bus and firmware Block IO is gone.
+- **Detached** (after `ExitBootServices` — M3, SHIPPED): the native drivers
+  (`ahci.c` for SATA, `nvme.c` for PCIe SSDs, `sdhci.c` for eMMC/SD) are the
+  only things on the bus and firmware Block IO is gone.
 
 The gate is `uno_pc64_detached()` (in `uefi_main.c`).  The detach itself is
 automatic at the end of boot when the native stack covers the machine: linear
-framebuffer + i8042 present + a calibrated TSC + **a UnoDOS system volume on
-the AHCI controller** (`uno_fat_native_eligible()` — a foreign FAT partition
-alone must not count, or a USB-booted system would detach away its own boot
-volume and the firmware-dependent Install app).  The sequence is
-`uno_fat_sync()` (flush the write-back cache over the dying transport) →
-`GetMemoryMap`+`ExitBootServices` → `uno_blk_detach()` (drop fw devices,
-`uno_ahci_init()`) → `uno_fat_remount()` → `uno_fs_remap()`.  Build with
+framebuffer + a native keyboard + a calibrated TSC + **a UnoDOS system volume
+on a controller a native driver binds — AHCI (01/06), NVMe (01/08) or SDHCI
+(08/05)**
+(`uno_fat_native_eligible()` — a foreign FAT partition alone must not count,
+or a USB-booted system would detach away its own boot volume and the
+firmware-dependent Install app).  The sequence is `uno_fat_sync()` (flush the
+write-back cache over the dying transport) → `GetMemoryMap`+`ExitBootServices`
+→ `uno_blk_detach()` (drop fw devices, `uno_ahci_init()` + `uno_nvme_init()`
++ `uno_sdhci_init()`) → `uno_fat_remount()` → `uno_fs_remap()`.  Build with
 `-DUNO_NO_DETACH` to keep a build permanently attached.
+
+`nvme.c` is the same polled/bounded shape as `ahci.c`: admin + one I/O queue
+pair in static 4 KB-aligned buffers, PRP1/PRP2 (+ a static PRP list page for
+64 KB chunks), completion by phase-bit poll, every 512-byte-LBA namespace
+registered as `nvme0..`. Namespaces formatted with 4 KB LBAs are skipped
+(fat.c speaks 512-byte sectors). Verify with `python3 tools/nvme_test.py`:
+boots the packed GPT image as an **NVMe-only** machine, asserts the detach,
+opens a `.UNO` off the NVMe ESP (read path), saves in the Editor and pulls
+`NOTES.TXT` back out of the raw image with mtools (write path).
+
+`sdhci.c` (the Surface Laptop Go's eMMC is the target; SD cards come along
+for free) does the standard dual identity probe — SD (CMD8 + ACMD41) first,
+then eMMC/MMC (CMD1, host-assigned RCA, EXT_CSD capacity for > 2 GB) — and a
+shared data plane: 4-bit bus at 25 MHz, single-block CMD17/CMD24 with PIO
+through the buffer-data port (no DMA descriptors; multi-block/SDMA is the
+upgrade if it ever matters). Byte- and block-addressed cards both handled.
+Verify: `python3 tools/sdhci_test.py` (WSL, SD path — build with
+`UNO_EXTRA='-DUNO_SDHCI_TEST -DUNO_DBGCON'`) and `python tools\emmc_test_win.py`
+(Windows QEMU ≥ 9.1, whose `-device emmc` models the MMC handshake; WSL's
+QEMU 8.2 has SD only). Both boot from a USB stick with the image on the
+card, so the card is the ONLY gate-eligible volume: they prove the 08/05
+gate line, detach-time re-registration, post-detach `.UNO` loads, and a
+raw-verified Editor save. `-DUNO_SDHCI_TEST` exists because OVMF ships no
+SdMmc driver (the card is firmware-invisible in QEMU, so the eager attached
+bring-up stands in for the firmware eMMC volume a real machine provides —
+and is safe there for the same reason: nobody else drives the controller).
+
+**The dirty-line lesson (found by the NVMe test):** `uno_fat_write`'s create path
+once wrote the new 8.3 name into a cache line *without* marking it dirty;
+`fat_alloc`'s free-scan then churned the 8-line cache, evicting the clean line
+and silently discarding the name — the final entry-fill stamped cluster/size
+into a slot whose name was zeroed, i.e. an invisible file + leaked chain, on
+every post-detach save on ANY native transport. If you touch a cache line's
+bytes, `cache_put()` it in the same breath.
 
 ## Sector-buffer alignment (a footgun)
 
@@ -84,8 +121,13 @@ debugging.
 
 | File | Role |
 |---|---|
-| `blkdev.{c,h}` | block-device registry + firmware-Block-IO backend + AHCI gate |
-| `ahci.c` | native AHCI driver (detached-mode transport) |
+| `blkdev.{c,h}` | block-device registry + firmware-Block-IO backend + native gate |
+| `ahci.c` | native AHCI (SATA) driver (detached-mode transport) |
+| `nvme.c` | native NVMe driver (detached-mode transport) |
+| `sdhci.c` | native SDHCI driver: eMMC + SD (detached-mode transport) |
 | `fat.{c,h}` | native FAT16/32 R/W + partition discovery + `uno_fat_selftest` |
 | `pc64_fs.{c,h}` | unified volume list + `uno_fs_read/write/writable` |
 | `tools/storage_test.py` | headless QEMU/KVM read+write+delete verification |
+| `tools/nvme_test.py` | NVMe-only boot: detach + `.UNO` read + raw-verified write |
+| `tools/sdhci_test.py` | USB boot + SD card: 08/05 gate, detach, raw-verified write |
+| `tools/emmc_test_win.py` | same via Windows QEMU ≥ 9.1's `-device emmc` (MMC handshake) |
