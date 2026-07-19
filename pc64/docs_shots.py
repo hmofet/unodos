@@ -182,13 +182,34 @@ def sc_resolution(q):
     key(q, "down"); time.sleep(0.6)
     shot(q, "resolution")
 
+def sc_uiscale(q):
+    # Tab x4 -> the UI scale dropdown (100/125/150/200%). Each change rescales
+    # every font and rebuilds the shell, so refocus (Tab x4) between steps.
+    # Ends by resetting to 100% so later scenes shoot at the normal scale.
+    close_all(q); launch(q, 0)
+    key(q, "tab", "tab", "tab", "tab"); time.sleep(0.3)
+    key(q, "down"); time.sleep(1.2)                  # 125% (shell rebuilds)
+    key(q, "tab", "tab", "tab", "tab"); time.sleep(0.3)
+    key(q, "down"); time.sleep(1.2)                  # 150%
+    shot(q, "uiscale")
+    for _ in range(2):                               # back to 100%
+        key(q, "tab", gap=0.12); key(q, "tab", gap=0.12)
+        key(q, "tab", gap=0.12); key(q, "tab", gap=0.12)
+        key(q, "up"); time.sleep(1.2)
+
 def sc_editor(q):
     close_all(q); launch(q, 1)
     shot(q, "editor")
+    # rich text: select all, bold + italic via the Ctrl accelerators
+    combo(q, "ctrl", "a"); time.sleep(0.3)
+    combo(q, "ctrl", "b"); time.sleep(0.5)
+    shot(q, "editor_rich")
 
 def sc_files(q):
     close_all(q); launch(q, 2)
     shot(q, "files")
+    text(q, "2"); time.sleep(0.6)                    # two-pane commander view
+    shot(q, "files_two")
 
 def sc_system(q):
     close_all(q); launch(q, 3)
@@ -285,6 +306,7 @@ def sc_browser_https(q):
 SCENES = {
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
+    "uiscale": sc_uiscale,
     "editor": sc_editor, "files": sc_files, "system": sc_system, "clock": sc_clock,
     "canvas": sc_canvas, "install": sc_install, "dostris": sc_dostris, "pacman": sc_pacman,
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,

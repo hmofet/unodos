@@ -166,6 +166,8 @@ void fb_round_rect(int x,int y,int w,int h,int rad,fb_px c);
 void fb_set_font(const fb_font *f);
 int  fb_text(int x,int y,const char *s,fb_px fg,long bg);   /* bg = -1 =&gt; transparent */
 int  fb_text_w(const char *s);
+int  fb_text_h(void);                        /* line height of the active font */
+void fb_get_clip(int *x,int *y,int *w,int *h);   /* save/restore the clip */
 int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 
 /* FB_RGB(r,g,b); named colors UNO_WHITE UNO_BLACK UNO_BLUE UNO_CYAN UNO_MAG
