@@ -40,7 +40,7 @@ static void p_titlebar(const unoui_theme *t, const unoui_window *win)
       if (win->active) fb_frame_rect(cb.x, cb.y, 11, 11, MP_BLACK); }
     tw = fb_text_w(win->title); tx = r.x + (r.w - tw)/2;
     fb_fill_rect(tx - 6, r.y + 2, tw + 12, th - 3, MP_WHITE);
-    fb_text(tx, r.y + (th - 8)/2, win->title, MP_BLACK, -1);
+    fb_text(tx, r.y + (th - fb_text_h())/2, win->title, MP_BLACK, -1);
 }
 
 static void p_button(const unoui_theme *t, unoui_rect r, const char *s, int f)

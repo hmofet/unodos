@@ -24,6 +24,11 @@ long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 int  uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
 int  uno_fs_writable(int vol);                   /* 1 if uno_fs_write can work  */
 
+/* what backs a volume, and the escape hatch to the native FAT layer's richer
+ * calls (subdirs, mkdir, rename - see fat.h) for volumes that have one */
+int  uno_fs_kind(int vol);      /* 0 = RAM disk, 1 = native FAT, 2 = firmware SFS, -1 bad */
+int  uno_fs_fat_index(int vol); /* fat.c volume index when kind==1, else -1 */
+
 /* M3 detach: rebuild the volume map after the block-device set changed */
 void uno_fs_remap(void);
 

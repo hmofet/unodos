@@ -245,18 +245,19 @@ void pc64_icon_emblem(int icon, unoui_rect box)
 
 void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags)
 {
-    unoui_rect emb = { r.x, r.y, r.w, r.h - 12 };
+    int fh = fb_text_h();
+    unoui_rect emb = { r.x, r.y, r.w, r.h - fh - 4 };
     const unoui_theme *t;
     if (emb.h > r.w) emb.h = r.w;                    /* keep the emblem square-ish */
     pc64_icon_emblem(icon, emb);                     /* also refreshes g_ith */
     t = g_ith;
     if (label) {
         int lx = r.x + (r.w - (int)(fb_text_w(label))) / 2;
-        int ly = r.y + r.h - 10;
+        int ly = r.y + r.h - fh - 1;
         if (flags & UI_F_FOCUS) {                    /* selected: theme accent */
             fb_px fbg = t ? t->pal.accent      : FB_RGB(40, 90, 200);
             fb_px ftx = t ? t->pal.accent_text : FB_RGB(255, 255, 255);
-            fb_fill_rect(lx - 3, ly - 1, fb_text_w(label) + 6, 10, fbg);
+            fb_fill_rect(lx - 3, ly - 1, fb_text_w(label) + 6, fh + 2, fbg);
             fb_text(lx, ly, label, ftx, -1);
         } else {                                     /* label contrasts the desktop */
             fb_px dt = t ? t->pal.desktop : FB_RGB(30, 40, 70);
@@ -267,4 +268,33 @@ void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags)
             fb_text(lx, ly, label, txt, -1);
         }
     }
+}
+
+/* ---- the UnoDOS brand mark ----------------------------------------------- *
+ * "The One": a ring broken open at the top, with the numeral 1 dropped through
+ * the gap so it reads as both a power glyph and the number one. Drawn from
+ * geometry (no bitmap), one colour, so it scales from a 12 px taskbar chip to
+ * a large About panel and stays crisp on every theme depth. */
+void pc64_start_logo(int x, int y, int size, fb_px fg)
+{
+    int cx2 = 2 * x + size - 1, cy2 = 2 * y + size - 1;   /* centre, doubled */
+    int rad = size / 2, th = size / 5; if (th < 2) th = 2;
+    int ro2 = (2 * rad) * (2 * rad), ri = rad - th, ri2 = (2 * ri) * (2 * ri);
+    int gap = rad;                          /* full top-quarter opening */
+    int px, py;
+    int bw = th, bx0 = (cx2 - (2 * bw - 1)) / 2;          /* the "1" stem */
+    /* ring with a wedge cut from the top: skip points whose x is within the
+     * gap while above centre */
+    for (py = y; py < y + size; py++)
+        for (px = x; px < x + size; px++) {
+            int dx = 2 * px - cx2, dy = 2 * py - cy2;
+            int d = dx * dx + dy * dy;
+            if (d > ro2 || d < ri2) continue;
+            if (dy < 0 && dx > -gap && dx < gap) continue;    /* the opening */
+            fb_pixel(px, py, fg);
+        }
+    /* the numeral 1: a stem falling through the opening to the ring's centre
+     * line, with a short serif flag at its top-left */
+    fb_fill_rect(bx0, y, bw, size / 2 + th, fg);
+    fb_fill_rect(bx0 - bw / 2 - 1, y + 1, bw / 2 + 1, th - 1 > 1 ? th - 1 : 1, fg);
 }

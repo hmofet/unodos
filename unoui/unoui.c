@@ -11,6 +11,47 @@
 /* optional per-app icon artwork hook (NULL = use the theme's generic glyph) */
 unoui_icon_fn unoui_icon_art = 0;
 
+/* ---- font-derived metrics (see unoui_theme.h) ----------------------------- *
+ * Every pitch keeps its historic value under the 8px bitmap font and scales
+ * with a TTF. Floors preserve minimum touch-target sizes. */
+int ui_line_h(void)    { return fb_text_h() + 2; }
+int ui_row_h(void)     { return fb_text_h() + 3; }
+int ui_prow_h(void)    { return fb_text_h() + 4; }
+int ui_menubar_h(void) { int h = fb_text_h() + 7;  return h < 15 ? 15 : h; }
+int ui_tab_h(void)     { int h = fb_text_h() + 10; return h < 18 ? 18 : h; }
+int ui_ctl_h(void)     { int h = fb_text_h() + 8;  return h < 16 ? 16 : h; }
+int ui_field_h(void)   { int h = fb_text_h() + 6;  return h < 16 ? 16 : h; }
+
+/* pixel width of the byte range [s,e) of `buf` in the active font. Measured in
+ * bounded chunks so unterminated ranges of any length work; the edit painter
+ * DRAWS with the same chunking, keeping measure and paint in exact lockstep. */
+#define UI_SEG_CHUNK 96
+int ui_seg_w(const char *buf, int s, int e)
+{
+    char tmp[UI_SEG_CHUNK + 1];
+    int w = 0;
+    while (s < e) {
+        int n = e - s > UI_SEG_CHUNK ? UI_SEG_CHUNK : e - s;
+        memcpy(tmp, buf + s, (size_t)n); tmp[n] = 0;
+        w += fb_text_w(tmp);
+        s += n;
+    }
+    return w;
+}
+
+/* draw the byte range [s,e) at (x,y); returns the advanced x (same chunking) */
+static int seg_draw(const char *buf, int s, int e, int x, int y, fb_px fg, long bg)
+{
+    char tmp[UI_SEG_CHUNK + 1];
+    while (s < e) {
+        int n = e - s > UI_SEG_CHUNK ? UI_SEG_CHUNK : e - s;
+        memcpy(tmp, buf + s, (size_t)n); tmp[n] = 0;
+        x = fb_text(x, y, tmp, fg, bg);
+        s += n;
+    }
+    return x;
+}
+
 /* ------------------------------------------------------------------ build -- */
 
 static unoui_widget *push(unoui_window *win, ui_kind k, int x, int y,
@@ -59,25 +100,27 @@ void unoui_reflow_window(const unoui_theme *t, unoui_window *win)
 }
 
 unoui_widget *unoui_add_label(unoui_window *w, int x, int y, const char *t)
-{ return push(w, UI_LABEL, x, y, fb_text_w(t), 8, t); }
+{ return push(w, UI_LABEL, x, y, fb_text_w(t), fb_text_h(), t); }
 
 unoui_widget *unoui_add_button(unoui_window *w, int x, int y, int ww,
                                const char *t, int flags)
-{ unoui_widget *d = push(w, UI_BUTTON, x, y, ww, 16, t); d->flags = flags; return d; }
+{ unoui_widget *d = push(w, UI_BUTTON, x, y, ww, ui_ctl_h(), t); d->flags = flags; return d; }
 
 unoui_widget *unoui_add_check(unoui_window *w, int x, int y, const char *t, int on)
-{ unoui_widget *d = push(w, UI_CHECK, x, y, 12 + fb_text_w(t) + 6, 12, t);
+{ int h = fb_text_h() > 12 ? fb_text_h() : 12;
+  unoui_widget *d = push(w, UI_CHECK, x, y, 12 + fb_text_w(t) + 6, h, t);
   d->flags = on ? UI_F_CHECKED : 0;
   return d; }
 
 unoui_widget *unoui_add_radio(unoui_window *w, int x, int y, const char *t, int on)
-{ unoui_widget *d = push(w, UI_RADIO, x, y, 12 + fb_text_w(t) + 6, 12, t);
+{ int h = fb_text_h() > 12 ? fb_text_h() : 12;
+  unoui_widget *d = push(w, UI_RADIO, x, y, 12 + fb_text_w(t) + 6, h, t);
   d->flags = on ? UI_F_CHECKED : 0;
   return d; }
 
 unoui_widget *unoui_add_field(unoui_window *w, int x, int y, int ww,
                               const char *t, int focus)
-{ unoui_widget *d = push(w, UI_FIELD, x, y, ww, 16, t);
+{ unoui_widget *d = push(w, UI_FIELD, x, y, ww, ui_field_h(), t);
   d->flags = focus ? UI_F_FOCUS : 0;
   return d; }
 
@@ -110,7 +153,7 @@ unoui_widget *unoui_add_canvas(unoui_window *w, int x, int y, int ww, int h,
 { unoui_widget *d = push(w, UI_CANVAS, x, y, ww, h, 0); d->canvas = c; return d; }
 
 unoui_widget *unoui_add_edit(unoui_window *w, int x, int y, int ww, unoui_text *t)
-{ unoui_widget *d = push(w, UI_FIELD, x, y, ww, 16, 0); d->edit = t; return d; }
+{ unoui_widget *d = push(w, UI_FIELD, x, y, ww, ui_field_h(), 0); d->edit = t; return d; }
 
 unoui_widget *unoui_add_textarea(unoui_window *w, int x, int y, int ww, int h,
                                  unoui_text *t)
@@ -122,17 +165,17 @@ unoui_widget *unoui_add_hscroll(unoui_window *w, int x, int y, int ww, int v, in
 
 unoui_widget *unoui_add_slider(unoui_window *w, int x, int y, int ww,
                                int vmin, int vmax, int v)
-{ unoui_widget *d = push(w, UI_SLIDER, x, y, ww, 16, 0);
+{ unoui_widget *d = push(w, UI_SLIDER, x, y, ww, ui_field_h(), 0);
   d->vmin = vmin; d->vmax = vmax; d->value = v; return d; }
 
 unoui_widget *unoui_add_spinner(unoui_window *w, int x, int y, int ww,
                                 int vmin, int vmax, int v)
-{ unoui_widget *d = push(w, UI_SPINNER, x, y, ww, 16, 0);
+{ unoui_widget *d = push(w, UI_SPINNER, x, y, ww, ui_field_h(), 0);
   d->vmin = vmin; d->vmax = vmax; d->value = v; return d; }
 
 unoui_widget *unoui_add_dropdown(unoui_window *w, int x, int y, int ww,
                                  const char **items, int n, int sel)
-{ unoui_widget *d = push(w, UI_DROPDOWN, x, y, ww, 16, 0);
+{ unoui_widget *d = push(w, UI_DROPDOWN, x, y, ww, ui_field_h(), 0);
   d->items = items; d->nitems = n; d->sel = sel; return d; }
 
 unoui_widget *unoui_add_tabs(unoui_window *w, int x, int y, int ww,
@@ -272,7 +315,7 @@ void ui_text_in(unoui_rect r, const char *s, fb_px fg, long bg, int center)
 {
     int tw = fb_text_w(s);
     int tx = center ? r.x + (r.w - tw) / 2 : r.x + 4;
-    int ty = r.y + (r.h - 8) / 2;
+    int ty = r.y + (r.h - fb_text_h()) / 2;
     fb_text(tx, ty, s, fg, bg);
 }
 
@@ -368,7 +411,8 @@ static void d_button(const unoui_theme *t, unoui_rect r, const char *s, int f)
 
 static void d_check(const unoui_theme *t, unoui_rect r, const char *s, int f)
 {
-    unoui_rect box = { r.x, r.y, 12, 12 };
+    int by = r.y + (r.h - 12) / 2;                 /* box centred in the row */
+    unoui_rect box = { r.x, by, 12, 12 };
     fb_fill_rect(box.x, box.y, 12, 12, t->pal.field_bg);
     ui_bevel(box, t, 1, -1);
     if (f & UI_F_CHECKED) {                        /* an X */
@@ -377,14 +421,14 @@ static void d_check(const unoui_theme *t, unoui_rect r, const char *s, int f)
             ui_px(box.x + 11 - i, box.y + i, t->pal.text);
         }
     }
-    fb_text(r.x + 18, r.y + 2, s,
+    fb_text(r.x + 18, r.y + (r.h - fb_text_h()) / 2, s,
             (f & UI_F_DISABLED) ? t->pal.text_dim : t->pal.text, -1);
 }
 
 static void d_radio(const unoui_theme *t, unoui_rect r, const char *s, int f)
 {
-    /* small filled-circle radio drawn in a 12x12 cell */
-    int cx = r.x + 6, cy = r.y + 6, yy, xx;
+    /* small filled-circle radio drawn in a 12x12 cell, centred in the row */
+    int cx = r.x + 6, cy = r.y + (r.h - 12) / 2 + 6, yy, xx;
     for (yy = -5; yy <= 5; yy++)
       for (xx = -5; xx <= 5; xx++) {
         int d = xx*xx + yy*yy;
@@ -395,7 +439,7 @@ static void d_radio(const unoui_theme *t, unoui_rect r, const char *s, int f)
       for (yy = -2; yy <= 2; yy++)
         for (xx = -2; xx <= 2; xx++)
           if (xx*xx + yy*yy <= 5) ui_px(cx+xx, cy+yy, t->pal.text);
-    fb_text(r.x + 18, r.y + 2, s,
+    fb_text(r.x + 18, r.y + (r.h - fb_text_h()) / 2, s,
             (f & UI_F_DISABLED) ? t->pal.text_dim : t->pal.text, -1);
 }
 
@@ -431,32 +475,39 @@ static int text_lines(const unoui_text *t)
 
 void ui_text_caret_xy(unoui_rect in, const unoui_text *t, int idx, int *cx, int *cy)
 {
-    int line, col; idx_linecol(t, idx, &line, &col);
-    *cx = in.x + 3 + col * 8 - t->scroll_x;
+    int line, col, s, e; idx_linecol(t, idx, &line, &col);
+    line_span(t, line, &s, &e);
+    *cx = in.x + 3 + ui_seg_w(t->buf, s, s + col) - t->scroll_x;
     *cy = t->multiline ? in.y + 2 + line * UI_LINE_H - t->scroll_y
-                       : in.y + (in.h - 8) / 2;
+                       : in.y + (in.h - fb_text_h()) / 2;
 }
 
 int ui_text_index_at(unoui_rect in, const unoui_text *t, int px, int py)
 {
-    int line = 0, s, e, col;
+    int line = 0, s, e, i, x, want;
     if (t->multiline) {
         line = (py - (in.y + 2) + t->scroll_y) / UI_LINE_H;
         if (line < 0) line = 0;
         if (line > text_lines(t) - 1) line = text_lines(t) - 1;
     }
     line_span(t, line, &s, &e);
-    col = (px - (in.x + 3) + t->scroll_x + 4) / 8;
-    if (col < 0) col = 0;
-    if (col > e - s) col = e - s;
-    return s + col;
+    /* walk the line's glyphs; snap to whichever gap is nearest the pointer */
+    want = px - (in.x + 3) + t->scroll_x;
+    x = 0;
+    for (i = s; i < e; i++) {
+        int cw = ui_seg_w(t->buf, i, i + 1);
+        if (want < x + cw / 2) return i;
+        x += cw;
+    }
+    return e;
 }
 
 void ui_text_reveal(unoui_rect in, unoui_text *t)
 {
-    int line, col, cpx, vis_w = in.w - 6, vis_h = in.h - 4;
+    int line, col, s, e, cpx, vis_w = in.w - 6, vis_h = in.h - 4;
     idx_linecol(t, t->caret, &line, &col);
-    cpx = 3 + col * 8;
+    line_span(t, line, &s, &e);
+    cpx = 3 + ui_seg_w(t->buf, s, s + col);
     if (cpx - t->scroll_x < 0)         t->scroll_x = cpx;
     if (cpx - t->scroll_x > vis_w)     t->scroll_x = cpx - vis_w;
     if (t->scroll_x < 0) t->scroll_x = 0;
@@ -482,32 +533,53 @@ static void draw_edit_text(unoui_rect in, const unoui_text *t,
 {
     int selA = t->sel < t->caret ? t->sel : t->caret;
     int selB = t->sel < t->caret ? t->caret : t->sel;
-    int nlines = text_lines(t), line;
+    int nlines = text_lines(t), line, fh = fb_text_h(), lh = UI_LINE_H;
+    int scx, scy, scw, sch;                        /* clip save */
+    fb_get_clip(&scx, &scy, &scw, &sch);
+    /* confine text (which may scroll past the box) to the inner rect, inside
+     * whatever window clip is already active */
+    { int x0 = in.x > scx ? in.x : scx, y0 = in.y > scy ? in.y : scy;
+      int x1 = in.x + in.w < scx + scw ? in.x + in.w : scx + scw;
+      int y1 = in.y + in.h < scy + sch ? in.y + in.h : scy + sch;
+      fb_set_clip(x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0); }
     for (line = 0; line < nlines; line++) {
-        int s, e, i, y;
+        int s, e, y, x0;
         line_span(t, line, &s, &e);
-        y = t->multiline ? in.y + 2 + line * UI_LINE_H - t->scroll_y
-                         : in.y + (in.h - 8) / 2;
-        if (y + 8 < in.y || y > in.y + in.h) continue;          /* vertical clip */
+        y = t->multiline ? in.y + 2 + line * lh - t->scroll_y
+                         : in.y + (in.h - fh) / 2;
+        if (y + fh < in.y || y > in.y + in.h) continue;         /* vertical clip */
+        x0 = in.x + 3 - t->scroll_x;
         if (focused && selB > selA) {                           /* selection bg */
             int a = s > selA ? s : selA, b = e < selB ? e : selB;
-            if (b > a)
-                clamp_fill(in, in.x + 3 + (a - s) * 8 - t->scroll_x, y - 1,
-                           (b - a) * 8, UI_LINE_H, th->pal.accent);
+            if (b > a) {
+                int sx = x0 + ui_seg_w(t->buf, s, a);
+                clamp_fill(in, sx, y - 1, ui_seg_w(t->buf, a, b), lh, th->pal.accent);
+            }
         }
-        for (i = s; i < e; i++) {                               /* glyphs */
-            int col = i - s, cx = in.x + 3 + col * 8 - t->scroll_x;
-            fb_px fg;
-            if (cx < in.x || cx + 8 > in.x + in.w) continue;    /* horizontal clip */
-            fg = (focused && i >= selA && i < selB) ? th->pal.accent_text
-                                                    : th->pal.field_text;
-            fb_glyph(cx, y, (unsigned char)t->buf[i], fg, -1);
-        }
+        /* draw up to three runs so selection recolours without breaking the
+         * glyph flow: [s,a) normal, [a,b) selected, [b,e) normal */
+        { int a = focused && selB > selA ? (selA > s ? (selA < e ? selA : e) : s) : e;
+          int b = focused && selB > selA ? (selB > s ? (selB < e ? selB : e) : s) : e;
+          int x = x0;
+          x = seg_draw(t->buf, s, a, x, y, th->pal.field_text, -1);
+          x = seg_draw(t->buf, a, b, x, y, th->pal.accent_text, -1);
+          (void)seg_draw(t->buf, b, e, x, y, th->pal.field_text, -1); }
     }
     if (focused && caret_on) {
         int cx, cy; ui_text_caret_xy(in, t, t->caret, &cx, &cy);
-        if (cx >= in.x && cx <= in.x + in.w) fb_vline(cx, cy - 1, 9, th->pal.field_text);
+        if (cx >= in.x && cx <= in.x + in.w)
+            fb_vline(cx, cy - 1, fh + 1, th->pal.field_text);
     }
+    fb_set_clip(scx, scy, scw, sch);
+}
+
+/* public wrapper so custom themes can reuse the exact default text painter
+ * (selection runs, fractional-pen positioning, clip) inside their own field
+ * chrome instead of reimplementing it. */
+void ui_draw_edit_text(unoui_rect in, const unoui_text *t,
+                       const unoui_theme *th, int focused, int caret_on)
+{
+    draw_edit_text(in, t, th, focused, caret_on);
 }
 
 static void d_field(const unoui_theme *t, unoui_rect r, const char *s,
@@ -520,7 +592,8 @@ static void d_field(const unoui_theme *t, unoui_rect r, const char *s,
     if (ed) {
         draw_edit_text(in, ed, t, (f & UI_F_FOCUS) != 0, (f & UI_F_CARET) != 0);
     } else {                                                    /* static text */
-        fb_text(in.x + 2, in.y + (in.h - 8) / 2, s ? s : "", t->pal.field_text, -1);
+        fb_text(in.x + 2, in.y + (in.h - fb_text_h()) / 2, s ? s : "",
+                t->pal.field_text, -1);
         if (f & UI_F_CARET)
             fb_vline(in.x + 2 + fb_text_w(s ? s : ""), in.y + 2, in.h - 4,
                      t->pal.field_text);
@@ -568,7 +641,7 @@ static void d_vscroll(const unoui_theme *t, unoui_rect r, int v, int vm)
 
 static void d_list(const unoui_theme *t, unoui_rect r, const char **it, int n, int sel)
 {
-    int i, row = 11, y;
+    int i, row = ui_row_h(), y;
     unoui_rect in;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.field_bg);
     in = ui_bevel(r, t, 1, -1);
@@ -578,17 +651,18 @@ static void d_list(const unoui_theme *t, unoui_rect r, const char **it, int n, i
             fb_fill_rect(in.x, y - 1, in.w, row, t->pal.accent);
             fg = t->pal.accent_text;
         }
-        fb_text(in.x + 3, y, it[i], fg, -1);
+        fb_text(in.x + 3, y + (row - 1 - fb_text_h()) / 2, it[i], fg, -1);
     }
 }
 
 static void d_group(const unoui_theme *t, unoui_rect r, const char *s)
 {
-    fb_frame_rect(r.x, r.y + 4, r.w, r.h - 4, t->pal.shadow);
-    fb_frame_rect(r.x + 1, r.y + 5, r.w, r.h - 4, t->pal.light);
+    int fh = fb_text_h();
+    fb_frame_rect(r.x, r.y + fh / 2, r.w, r.h - fh / 2, t->pal.shadow);
+    fb_frame_rect(r.x + 1, r.y + fh / 2 + 1, r.w, r.h - fh / 2, t->pal.light);
     if (s && *s) {
         int tw = fb_text_w(s);
-        fb_fill_rect(r.x + 8, r.y, tw + 6, 8, t->pal.win_bg);
+        fb_fill_rect(r.x + 8, r.y, tw + 6, fh, t->pal.win_bg);
         fb_text(r.x + 11, r.y, s, t->pal.text, -1);
     }
 }
@@ -601,14 +675,15 @@ static void d_sep(const unoui_theme *t, unoui_rect r)
 
 static void d_icon(const unoui_theme *t, unoui_rect r, const char *s, int f)
 {
-    unoui_rect g = { r.x + 8, r.y, 32, 28 };
+    int fh = fb_text_h();
+    unoui_rect g = { r.x + (r.w - 32) / 2, r.y, 32, 28 };
     fb_fill_rect(g.x, g.y, g.w, g.h, t->pal.face);
     ui_bevel(g, t, 1, 1);
     /* a little folder/doc glyph */
     fb_fill_rect(g.x + 6, g.y + 8, 20, 14, t->pal.accent);
     if (f & UI_F_FOCUS)                                   /* selected label bg */
-        fb_fill_rect(r.x, r.y + 30, r.w, 10, t->pal.accent);
-    ui_text_in((unoui_rect){ r.x, r.y + 31, r.w, 8 }, s,
+        fb_fill_rect(r.x, r.y + 30, r.w, fh + 2, t->pal.accent);
+    ui_text_in((unoui_rect){ r.x, r.y + 31, r.w, fh }, s,
                (f & UI_F_FOCUS) ? t->pal.accent_text : t->pal.text, -1, 1);
 }
 
@@ -658,7 +733,7 @@ static void d_spinner(const unoui_theme *t, unoui_rect r, int v, int f)
     int bw = 12, i; char num[16]; ui_itoa(v, num);
     { unoui_rect box = { r.x, r.y, r.w - bw, r.h };
       fb_fill_rect(box.x, box.y, box.w, box.h, t->pal.field_bg); ui_bevel(box, t, 1, -1);
-      fb_text(box.x + 3, box.y + (box.h - 8)/2, num, t->pal.field_text, -1);
+      fb_text(box.x + 3, box.y + (box.h - fb_text_h())/2, num, t->pal.field_text, -1);
       if (f & UI_F_FOCUS) fb_frame_rect(box.x, box.y, box.w, box.h, t->pal.accent); }
     { unoui_rect up = { r.x + r.w - bw, r.y, bw, r.h/2 };
       unoui_rect dn = { r.x + r.w - bw, r.y + r.h/2, bw, r.h - r.h/2 };
@@ -674,7 +749,7 @@ static void d_dropdown(const unoui_theme *t, unoui_rect r, const char *s, int f)
 {
     int bw = 14, i;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.field_bg); ui_bevel(r, t, 1, -1);
-    fb_text(r.x + 3, r.y + (r.h - 8)/2, s ? s : "", t->pal.field_text, -1);
+    fb_text(r.x + 3, r.y + (r.h - fb_text_h())/2, s ? s : "", t->pal.field_text, -1);
     { unoui_rect b = { r.x + r.w - bw, r.y + 1, bw - 1, r.h - 2 };
       fb_fill_rect(b.x, b.y, b.w, b.h, t->pal.face); ui_bevel(b, t, 1, 1);
       for (i = 0; i < 4; i++)
@@ -693,7 +768,7 @@ static void d_tabs(const unoui_theme *t, unoui_rect r, const char **it, int n, i
         fb_hline(tab.x, tab.y, tab.w, t->pal.dark);
         fb_vline(tab.x, tab.y, tab.h, t->pal.light);
         fb_vline(tab.x + tab.w - 1, tab.y, tab.h, t->pal.shadow);
-        fb_text(tab.x + 8, top + (tab.h - 8)/2, it[i],
+        fb_text(tab.x + 8, top + (tab.h - fb_text_h())/2, it[i],
                 (i == sel) ? t->pal.text : t->pal.text_dim, -1);
         x += tw;
     }
@@ -724,9 +799,9 @@ static void d_menubar(const unoui_theme *t, unoui_rect r, const unoui_menu *m,
         int tw = fb_text_w(m[i].title) + 12;
         if (i == open) {
             fb_fill_rect(x, r.y + 1, tw, r.h - 2, t->pal.accent);
-            fb_text(x + 6, r.y + (r.h - 8)/2, m[i].title, t->pal.accent_text, -1);
+            fb_text(x + 6, r.y + (r.h - fb_text_h())/2, m[i].title, t->pal.accent_text, -1);
         } else {
-            fb_text(x + 6, r.y + (r.h - 8)/2, m[i].title, t->pal.text, -1);
+            fb_text(x + 6, r.y + (r.h - fb_text_h())/2, m[i].title, t->pal.text, -1);
         }
         x += tw;
     }
@@ -734,7 +809,7 @@ static void d_menubar(const unoui_theme *t, unoui_rect r, const unoui_menu *m,
 
 static void d_popup(const unoui_theme *t, unoui_rect r, const char **it, int n, int hot)
 {
-    int i, row = 12, y;
+    int i, row = ui_prow_h(), y, fh = fb_text_h();
     ui_stipple(r.x + 2, r.y + r.h, r.w, 2, t->pal.dark, t->pal.dark, 16);
     ui_stipple(r.x + r.w, r.y + 2, 2, r.h, t->pal.dark, t->pal.dark, 16);
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.win_bg);
@@ -743,7 +818,7 @@ static void d_popup(const unoui_theme *t, unoui_rect r, const char **it, int n, 
         fb_px fg = t->pal.text;
         if (i == hot) { fb_fill_rect(r.x + 1, y - 1, r.w - 2, row, t->pal.accent);
                         fg = t->pal.accent_text; }
-        fb_text(r.x + 6, y, it[i], fg, -1);
+        fb_text(r.x + 6, y + (row - fh - 1) / 2, it[i], fg, -1);
     }
 }
 
@@ -859,7 +934,7 @@ void unoui_calendar_draw(const unoui_theme *t, unoui_rect r, int y, int m, int s
       { int yy = y, div = 1000, started = 0; if (yy < 0) yy = 0;
         while (div) { int dg = (yy/div)%10; if (dg || started || div==1) { hdr[hn++]=(char)('0'+dg); started=1; } div/=10; } }
       hdr[hn] = 0; }
-    fb_text(r.x + (r.w - fb_text_w(hdr))/2, r.y + (CAL_HDR-8)/2, hdr, t->pal.text, -1);
+    fb_text(r.x + (r.w - fb_text_w(hdr))/2, r.y + (CAL_HDR - fb_text_h())/2, hdr, t->pal.text, -1);
     { int mid = r.y + CAL_HDR/2, k;                              /* < and > chevrons */
       for (k = 0; k < 4; k++) {
           fb_vline(r.x + 6 + k,        mid - k, 1, t->pal.accent);   /* < top */
@@ -869,14 +944,15 @@ void unoui_calendar_draw(const unoui_theme *t, unoui_rect r, int y, int m, int s
       } }
     /* weekday row */
     for (i = 0; i < 7; i++)
-        fb_text(r.x + i*cw + (cw-8)/2, r.y + CAL_HDR + 3, wk[i], t->pal.text_dim, -1);
+        fb_text(r.x + i*cw + (cw - fb_text_w(wk[i]))/2, r.y + CAL_HDR + 3,
+                wk[i], t->pal.text_dim, -1);
     /* day cells */
     for (d = 1; d <= dim; d++) {
         int idx = fdow + d - 1, col = idx % 7, row = idx / 7;
         int cx = r.x + col*cw, cy = r.y + CAL_HDR + CAL_WK + row*ch;
         char nb[3]; int n = 0; if (d >= 10) nb[n++] = (char)('0'+d/10); nb[n++] = (char)('0'+d%10); nb[n]=0;
         if (d == sel) fb_fill_rect(cx+2, cy, cw-4, ch-1, t->pal.accent);
-        fb_text(cx + (cw - (d>=10?16:8))/2, cy + (ch-8)/2,
+        fb_text(cx + (cw - fb_text_w(nb))/2, cy + (ch - fb_text_h())/2,
                 nb, d == sel ? t->pal.accent_text : t->pal.text, -1);
     }
 }
@@ -998,9 +1074,17 @@ void unoui_render_ui(unoui_ui *ui)
           if (fontpushed) unoui_font_pop(); }
         fb_reset_clip();
         if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
-            int gx = win->r.x + win->r.w - fw - 3, gy = win->r.y + win->r.h - fw - 3, k, j;
-            for (k = 0; k < 3; k++) for (j = 0; j <= k; j++)   /* corner grip */
-                fb_fill_rect(gx - j * 4, gy - k * 4, 2, 2, t->pal.text_dim);
+            /* corner grip: three diagonal ridges (light over shadow), the
+             * classic "this corner drags" affordance - clearer than the old
+             * faint dot cluster the user couldn't find. */
+            int bx = win->r.x + win->r.w - fw, by = win->r.y + win->r.h - fw, k;
+            for (k = 0; k < 3; k++) {
+                int o = 4 + k * 4, j;
+                for (j = 0; j < o; j++) {
+                    fb_pixel(bx - o + j - 1, by - 1 - j, t->pal.light);
+                    fb_pixel(bx - o + j,     by - 1 - j, t->pal.shadow);
+                }
+            }
         }
     }
     /* the open menu's popup deliberately extends past its window - draw it

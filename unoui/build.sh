@@ -23,7 +23,7 @@ fi
 THEMES="themes/theme_unodos.c themes/theme_macos7.c themes/theme_macplus.c \
         themes/theme_win31.c  themes/theme_amiga.c  themes/theme_c64.c \
         themes/theme_apple2.c themes/theme_next.c"
-CORE="unoui.c unoui_input.c $THEMES $FB/fb.c"
+CORE="unoui.c unoui_input.c $THEMES $FB/fb.c $FB/fb_aa.c"
 
 rm -f build/*.ppm
 

@@ -131,12 +131,28 @@ unoui_rect ui_bevel(unoui_rect r, const unoui_theme *th, int thick, int lifted);
 void ui_round_frame(unoui_rect r, int radius, fb_px c);
 void ui_round_fill (unoui_rect r, int radius, fb_px c);
 
-/* centre / left text within a rect, honouring vertical centring on 8px font */
+/* centre / left text within a rect, vertically centred on the ACTIVE font's
+ * line height (fb_text_h) - not a hard-coded 8px cell. */
 void ui_text_in(unoui_rect r, const char *s, fb_px fg, long bg, int center);
+
+/* ---- font-derived metrics ------------------------------------------------- *
+ * All row/line pitches follow the active font (fb_text_h): with the classic
+ * 8px bitmap font they equal the historic constants (10/11/12/15/18), with a
+ * TrueType face they grow so nothing overlaps or crowds. Widgets are laid out
+ * and hit-tested with the SAME functions, so clicks always land where pixels
+ * were drawn. */
+int ui_line_h(void);            /* multi-line text pitch  (bitmap: 10) */
+int ui_row_h(void);             /* list row pitch         (bitmap: 11) */
+int ui_prow_h(void);            /* popup/menu row pitch   (bitmap: 12) */
+int ui_menubar_h(void);         /* menu bar height        (bitmap: 15) */
+int ui_tab_h(void);             /* tab strip height       (bitmap: 18) */
+int ui_ctl_h(void);             /* button height          (bitmap: 16) */
+int ui_field_h(void);           /* field/spinner/dropdown (bitmap: 16) */
+int ui_seg_w(const char *buf, int s, int e);  /* width of buf[s..e), active font */
 
 /* ---- text geometry (shared by the edit painter and the input layer, so a
  * mouse click lands on exactly the glyph that was drawn) ------------------- */
-#define UI_LINE_H 10            /* line pitch for multi-line text             */
+#define UI_LINE_H (ui_line_h())        /* line pitch for multi-line text      */
 /* map a pointer (px,py, screen coords) to a caret index within `inner` */
 int  ui_text_index_at(unoui_rect inner, const unoui_text *t, int px, int py);
 /* map a caret index to its top-left pixel (screen coords) within `inner` */
@@ -145,11 +161,15 @@ void ui_text_caret_xy(unoui_rect inner, const unoui_text *t, int idx, int *cx, i
 void ui_text_reveal(unoui_rect inner, unoui_text *t);
 /* the inner (post-bevel) rect a field/textarea draws its text into */
 unoui_rect ui_edit_inner(unoui_rect r, const unoui_theme *th);
+/* the default editable-text painter (selection runs, caret, clip) - exported
+ * so custom theme field painters can draw the text identically. */
+void ui_draw_edit_text(unoui_rect inner, const unoui_text *t,
+                       const unoui_theme *th, int focused, int caret_on);
 
-/* constant heights (kept out of unoui_metrics so the 8 positional theme
+/* font-following heights (kept out of unoui_metrics so the 8 positional theme
  * initialisers stay untouched) */
-#define UI_MENUBAR_H 15
-#define UI_TAB_H     18
+#define UI_MENUBAR_H (ui_menubar_h())
+#define UI_TAB_H     (ui_tab_h())
 
 /* index of the menubar title under px (-1 if none); *tx gets its left x */
 int unoui_menubar_index_at(const unoui_theme *, unoui_rect r,

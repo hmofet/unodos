@@ -41,6 +41,8 @@
 #define HDA_ICOI     0x60              /* immediate command out               */
 #define HDA_ICII     0x64              /* immediate response in               */
 #define HDA_ICIS     0x68              /* bit0 = busy (ICB), bit1 = valid     */
+#define HDA_DPLBASE  0x70              /* DMA position buffer (bit0 = enable) */
+#define HDA_DPUBASE  0x74
 
 /* stream descriptor block (0x80 + n*0x20); n counts input streams first */
 #define SD_CTL0   0x00                 /* bit0 SRST, bit1 RUN                 */
@@ -66,9 +68,14 @@ static uint64_t gRirb[256] __attribute__((aligned(2048)));
 static struct { uint64_t addr; uint32_t len, flags; }
                 gBdl[2]    __attribute__((aligned(128)));
 static short    gRing[RING_FRAMES * 2] __attribute__((aligned(128)));
+/* DMA Position Buffer: the controller writes each stream's link position into
+   an 8-byte entry (DWORD position + DWORD reserved), entry n = SD n.  Sized
+   for the architectural maximum of 30 streams. */
+static volatile uint32_t gPosBuf[64] __attribute__((aligned(128)));
 
 static volatile uint8_t *gM;           /* BAR0 */
 static volatile uint8_t *gSd;          /* our output stream descriptor        */
+static unsigned gSdIdx;                /* its SD index (= ISS count: first out)*/
 static unsigned gCorbN, gRirbN;        /* ring sizes in entries               */
 static unsigned gRirbRp;               /* last consumed RIRB index            */
 static int      gUseImm;               /* CORB dead -> immediate commands     */
@@ -283,7 +290,8 @@ static int rings_init(void)
 static int stream_start(void)
 {
     unsigned iss = (r16(HDA_GCAP) >> 8) & 0xF, i;
-    gSd = gM + 0x80 + iss * 0x20;                /* first OUTPUT descriptor    */
+    gSdIdx = iss;                                /* first OUTPUT descriptor    */
+    gSd = gM + 0x80 + iss * 0x20;
 
 #define sr8(o)     (*(volatile uint8_t  *)(gSd + (o)))
 #define sr32(o)    (*(volatile uint32_t *)(gSd + (o)))
@@ -304,6 +312,13 @@ static int stream_start(void)
     gBdl[1].addr = (uint64_t)(uintptr_t)gRing + RING_FRAMES * 2;
     gBdl[1].len  = RING_FRAMES * 2;
     gBdl[1].flags = 0;
+
+    /* point the controller's position buffer at ours (128-byte aligned, so
+       OR-ing the enable bit into the low base is safe); the DMA engine then
+       snapshots every stream's read position into memory, which tracks what
+       has actually been fetched better than a racy LPIB read on real codecs */
+    w32(HDA_DPUBASE, (uint32_t)((uint64_t)(uintptr_t)gPosBuf >> 32));
+    w32(HDA_DPLBASE, (uint32_t)(uintptr_t)gPosBuf | 0x1);
 
     sw32(SD_BDPL, (uint32_t)(uintptr_t)gBdl);
     sw32(SD_BDPU, (uint32_t)((uint64_t)(uintptr_t)gBdl >> 32));
@@ -350,6 +365,10 @@ short *uno_hda_ring(unsigned *frames) { *frames = RING_FRAMES; return gRing; }
 
 unsigned uno_hda_pos(void)
 {
+    uint32_t p;
     if (!gUp) return 0;
-    return (*(volatile uint32_t *)(gSd + SD_LPIB) / 4) % RING_FRAMES;
+    p = gPosBuf[gSdIdx * 2];                     /* our 8-byte entry's DWORD   */
+    if (!p)                                      /* posbuf dead on this hw     */
+        p = *(volatile uint32_t *)(gSd + SD_LPIB);
+    return (p / 4) % RING_FRAMES;
 }
