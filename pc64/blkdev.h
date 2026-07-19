@@ -1,0 +1,39 @@
+/* blkdev.h - the pc64 block-device layer (see blkdev.c).
+ *
+ * A small registry of 512-byte-sector block devices the native storage stack
+ * (fat.c) mounts partitions from.  Backends register at init:
+ *   - ahci.c        - the NATIVE AHCI driver (no firmware in the path)
+ *   - blkdev.c      - a fallback wrapping firmware EFI Block IO whole-disk
+ *                     handles, so disks without a native controller driver
+ *                     (NVMe/eMMC/USB) still get native partition scanning and
+ *                     FAT mounting.  The FS bytes still never go through the
+ *                     firmware FAT driver - only the sector transport does.
+ */
+#ifndef PC64_BLKDEV_H
+#define PC64_BLKDEV_H
+
+typedef struct uno_bdev {
+    int  native;                     /* 1 = our silicon driver, 0 = fw sectors */
+    unsigned long long sectors;      /* total 512-byte sectors                 */
+    char name[8];                    /* "ahci0", "fw2", ...                    */
+    int  pci_dev, pci_fn;            /* controller PCI location (-1 unknown);
+                                        used to dedup firmware FS volumes      */
+    void *ctx;
+    int (*read)(struct uno_bdev *, unsigned long long lba, unsigned int n, void *buf);
+    int (*write)(struct uno_bdev *, unsigned long long lba, unsigned int n, const void *buf);
+} uno_bdev;
+
+/* Bring up all backends + register their disks.  Idempotent. */
+void uno_blk_init(void);
+
+int       uno_blk_count(void);
+uno_bdev *uno_blk_get(int i);
+
+/* Register a device (backends call this).  Returns 0 when the table is full. */
+int uno_blk_register(const uno_bdev *dev);
+
+/* ahci.c */
+int uno_ahci_init(void);             /* registers its disks; returns count */
+int uno_ahci_present(void);          /* controller found + brought up      */
+
+#endif

@@ -39,6 +39,8 @@
 #include "mac_compat.h"
 #include "i2c_hid.h"        /* native I2C-HID trackpad (inert unless -DUNO_I2C_TRACKPAD) */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
+#include "fat.h"            /* native block + FAT stack bring-up */
+#include "blkdev.h"
 #ifdef UNO_ACPI
 #include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
 #endif
@@ -151,8 +153,10 @@ static void con_puts(const char *s)
  * efi_main - the PE entry
  * ======================================================================== */
 static EFI_HANDLE gIH;                  /* our image handle (installer needs it) */
+static int gDetached;                   /* 1 after ExitBootServices (M3)        */
 void *uno_pc64_st(void)           { return gST; }
 void *uno_pc64_image_handle(void) { return gIH; }
+int   uno_pc64_detached(void)     { return gDetached; }
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -520,6 +524,10 @@ void uno_pc64_init(void)
     }
     splash_step(3);                 /* input located */
     uno_i2c_hid_init();             /* native trackpad; inert unless built in */
+    uno_fat_init();                 /* native block + FAT stack (AHCI + fw sectors) */
+#ifdef UNO_STORTEST
+    uno_fat_selftest();             /* WRTEST.REQ -> WRTEST.OK (harness write proof) */
+#endif
 #ifdef UNO_ACPI
     /* Bring up the AML interpreter (unoacpi): parse the firmware's DSDT/SSDTs
      * and locate the battery/lid devices.  Read-only (NO_ACPI_MODE, no SCI/GPE)
@@ -968,6 +976,16 @@ static void a_to16(CHAR16 *d, const char *s, int max)
 { int i; for (i = 0; i < max - 1 && s[i]; i++) d[i] = (unsigned char)s[i]; d[i] = 0; }
 
 int  uno_efifs_volumes(void) { efifs_scan(); return (int)gNFs; }
+
+/* BPB volume serial of a firmware SFS volume, for de-duplicating it against a
+ * native FAT mount of the same partition.  The firmware File-System-Info does
+ * not expose it, and re-reading the boot sector via the SFS parent Block-IO is
+ * more than the dedup is worth here: in practice the native stack and firmware
+ * SFS reach DISJOINT media on the machines we target (native AHCI SATA vs the
+ * firmware-only USB boot stick behind xHCI), so 0 = "unknown, don't dedupe" is
+ * correct.  If a future machine mounts one partition both ways, wire this to a
+ * real boot-sector read. */
+unsigned int uno_efifs_serial(int vol) { (void)vol; return 0; }
 
 int uno_efifs_snapshot(int vol, char (*names)[32], int maxn)
 {
