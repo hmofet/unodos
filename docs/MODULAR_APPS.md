@@ -64,6 +64,7 @@ The same source compiles two ways:
 
 | Platform | Hook file | Storage path | Status |
 |---|---|---|---|
+| pc64 (x86-64 UEFI) | `pc64/pc64_modload.c` | `APPS\<NAME>.UNO` / `EFI\UNODOS\APPS\<NAME>.UNO` on any FAT volume | **REAL & QEMU-VERIFIED end-to-end** — flattened-PE `.UNO` (tools/mkuno.py: rebase table + named `jmp *slot(%rip)` import thunks resolved against the kernel export table); NO app code in the kernel image (build-asserted); loads survive the M3 firmware detach (pre-reserved executable arena + native AHCI). See `pc64/MODULES.md` |
 | Host shim (WSL gcc) | `host_modload.c` | `apps_store/appNN.so` via `dlopen` | **REAL & HOST-RUN-VERIFIED** — genuine runtime load + pointer dispatch of all 11, screenshot-rendered |
 | PS2 (EE) | `ee_modload.c` | `mc0:/UnoDOS/Apps/appNN.uno` via libmc File Mgr | BUILD-WIRED; storage read REAL on hw; EE-overlay relocate = TODO (`UNO_EE_OVERLAY`) — registry links the modules in meanwhile |
 | Dreamcast | `dc_modload.c` | `/cd/UNODOS/APPS/APPNN.KLF` via KOS `library_open`/`elf_load` | **GENUINE runtime load+relocate from CD** — see the DC note below |
