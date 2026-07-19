@@ -122,6 +122,39 @@ def shot(q, tag):
     print("shot: %s/%s.png" % (OUTDIR, tag), flush=True)
 
 
+def wait_splash(q, timeout=30):
+    """Poll screendumps until the UnoDOS splash is actually on screen (deep
+    navy backdrop), so the splash shot is never the pre-GOP black frame or
+    the firmware's own logo. Returns once seen (or on timeout)."""
+    os.makedirs(OUTDIR, exist_ok=True)
+    probe = "%s/_probe.ppm" % OUTDIR
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            q.cmd("screendump", filename=probe)
+            time.sleep(0.25)
+            with open(probe, "rb") as f:
+                if f.readline().strip() != b"P6":
+                    raise ValueError
+                line = f.readline()
+                while line.startswith(b"#"):
+                    line = f.readline()
+                w, h = map(int, line.split())
+                f.readline()
+                px = f.read()
+            o = (10 * w + 10) * 3                     # a corner pixel
+            r, g, b = px[o], px[o + 1], px[o + 2]
+            if b > 34 and b > r + 12 and g < 90:      # the navy backdrop
+                os.remove(probe)
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if os.path.exists(probe):
+        os.remove(probe)
+    return False
+
+
 def close_all(q):
     """Close any open windows so we return to a bare desktop."""
     for _ in range(6):
@@ -350,7 +383,7 @@ def main():
         print("qemu up; waiting for boot...", flush=True)
         if "splash" in want:
             want = [w for w in want if w != "splash"]
-            time.sleep(3.0); shot(q, "splash")
+            wait_splash(q); time.sleep(0.6); shot(q, "splash")
             time.sleep(15.0)
         else:
             time.sleep(18)
