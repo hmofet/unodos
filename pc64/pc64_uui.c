@@ -26,6 +26,7 @@
 #ifdef UNO_ACPI
 #include "acpi_power.h"      /* unoacpi: AML battery/lid (portable consumer API) */
 #include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
+#include "snd_pcm.h"         /* PCM audio (HDA/AC'97): the Volume slider target */
 #endif
 #include "installer.h"       /* install to a local disk (the Install app) */
 #include "blkdev.h"          /* native block layer (System readout) */
@@ -325,6 +326,17 @@ static void build_usbstat(void)
           if (bnd) r = ap_str(r, lnk ? "up" : "down"); *r = 0; } }
 }
 
+/* audio: which backend the Sound Manager voice reaches, for System */
+static char g_snd[64];
+static void build_sndstat(void)
+{
+    char *p = ap_str(g_snd, "Audio: ");
+    if (uno_snd_active()) { p = ap_str(p, uno_snd_name());
+                            p = ap_str(p, "  (PCM 48k s16 stereo)"); }
+    else                    p = ap_str(p, "PC speaker (PIT ch2)");
+    *p = 0;
+}
+
 /* ACPI (unoacpi AML interpreter): bring-up + battery/lid, for System */
 static char g_acpi1[80], g_acpi2[80];
 static void build_acpistat(void)
@@ -367,11 +379,14 @@ static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
     char *p;
+    const char *nat0 = 0;                /* first native driver's name (ahci0/nvme0) */
     int uno_pc64_detached(void);
-    for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i); if (b && b->native) nnat++; }
+    for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i);
+        if (b && b->native) { nnat++; if (!nat0) nat0 = b->name; } }
     p = ap_str(g_nat, uno_pc64_detached() ? "DETACHED (native): "
                                           : "Native FS: ");
-    p = ap_str(p, nnat ? "ahci " : "fw-sect ");
+    if (nnat) { p = ap_str(p, nat0); *p++ = ' '; }
+    else        p = ap_str(p, "fw-sect ");
     p = ap_int(p, nblk); p = ap_str(p, " disk");
     p = ap_str(p, "  FAT vols "); p = ap_int(p, nfat);
     if (nfat > 0) { p = ap_str(p, " (");
@@ -389,6 +404,7 @@ static void build_sys(unoui_window *w)
     build_usbstat();
     build_natstat();
     build_acpistat();
+    build_sndstat();
     unoui_window_init(w, "System", 400, 210, 376, 226);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
@@ -399,6 +415,7 @@ static void build_sys(unoui_window *w)
     unoui_add_label(w, 8, 100, g_nat);
     unoui_add_label(w, 8, 116, g_acpi1);
     unoui_add_label(w, 8, 132, g_acpi2);
+    unoui_add_label(w, 8, 148, g_snd);
 }
 static void build_clock(unoui_window *w)
 {
@@ -1045,6 +1062,7 @@ static void on_action(const unoui_action *a)
     case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
     case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; break;   /* Aurora full<->lite (no live composite) */
     case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; break;                      /* lid-close enters sleep */
+    case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_SAVE:  editor_save(); break;
     case ID_OPEN:  editor_open(); break;
