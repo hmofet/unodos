@@ -63,8 +63,17 @@ certificate against a built-in list of common certificate authorities (Let's Enc
 so you can browse the secure web.</p>
 
 <h2 id="usb">USB Ethernet</h2>
-<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. Wi-Fi is not
-supported yet.</p>
+<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. The driver
+speaks to adapters built on the <strong>ASIX AX88179 / AX88178A</strong> chip &mdash; when you shop,
+check the listing's chipset line for those names. Known AX88179-based products include:</p>
+<ul>
+  <li><strong>Plugable USB3-E1000</strong> (USB&nbsp;3.0 gigabit)</li>
+  <li><strong>StarTech USB31000S</strong></li>
+  <li><strong>TRENDnet TU3-ETG</strong></li>
+  <li><strong>j5create JUE130</strong></li>
+</ul>
+<p>Adapters built on Realtek chips (the RTL8153 family - for example the TP-Link UE300) use a
+different chip and are <em>not</em> supported yet. Wi-Fi is not supported yet either.</p>
 
 <nav class="pagenav"><a href="browser.html">&lsaquo; Web browser</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
 </div></main>
