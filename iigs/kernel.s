@@ -345,23 +345,51 @@ calc_gp_px:
 .i16
 fill_band:
         jsr calc_gp_px
+        lda PW
+        beq @ret              ; 0-width fill: nothing (matches old no-op loop)
+        ; P3: fill by 16-bit word stores - two pixel-pair bytes per store instead
+        ; of the old sep-#$20 byte-at-a-time loop. Most widths are cx*4 (even), but
+        ; window borders are 1 byte wide, so store full words then a single tail
+        ; byte for an odd width -> byte-identical for any PW. Replicate PB into
+        ; both bytes of a word (as fill_screen does).
+        lda PB
+        and #$00FF
+        sta mtmp2
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        asl a
+        ora mtmp2
+        sta mtmp2             ; mtmp2 = PB in both bytes (survives the row loop)
+        lda PW
+        dec a
+        sta mtmp              ; mtmp = PW-1: word-store while y < PW-1 (>=2 left)
         lda PH
         sta rowc16
 @row:   ldy #0
-        sep #$20
-        lda PB
-@col:   sta [GP],y
+        lda mtmp2
+@col:   cpy mtmp
+        bcs @tail             ; fewer than 2 bytes remain in this row
+        sta [GP],y
         iny
-        cpy PW
-        bcc @col
+        iny
+        bra @col
+@tail:  cpy PW
+        bcs @next             ; even width: no trailing byte
+        sep #$20
+        sta [GP],y            ; odd width: final single byte (A low = PB)
         rep #$20
-        lda GP
+@next:  lda GP
         clc
         adc #ROWBYTES
         sta GP
         dec rowc16
         bne @row
-        rts
+@ret:   rts
 
 ; fill_screen: fill all NPIX bytes with PB (replicated word). (a16)
 .a16
