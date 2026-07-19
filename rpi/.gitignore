@@ -1,2 +1,11 @@
 build/*
 !build/kernel8.img
+
+# Raspberry Pi Foundation boot firmware (rpi/firmware/) - Broadcom's
+# closed-source GPU bootloader + firmware + device-tree blobs that the Pi runs
+# first to load our bare-metal kernel8.img. Contents: bootcode.bin,
+# start.elf/start4.elf, fixup.dat/fixup4.dat, bcm27xx-*.dtb, overlays/. These
+# are ~5 MB of REDISTRIBUTABLE THIRD-PARTY binaries fetched from
+# github.com/raspberrypi/firmware (boot/ dir), NOT UnoDOS source - they go on
+# the SD card's boot partition alongside kernel8.img. Re-fetch, don't commit.
+firmware/
