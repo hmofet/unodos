@@ -223,12 +223,13 @@ int uno_fat_native_eligible(void)
 {
     static const char *marks[] = { "EFI\\UNODOS\\BOOTX64.EFI",
                                    "EFI\\BOOT\\BOOTX64.EFI" };
-    static const unsigned char cls[2][2] = { { 0x01, 0x06 },   /* AHCI */
-                                             { 0x01, 0x08 } }; /* NVMe */
+    static const unsigned char cls[3][2] = { { 0x01, 0x06 },   /* AHCI  */
+                                             { 0x01, 0x08 },   /* NVMe  */
+                                             { 0x08, 0x05 } }; /* SDHCI */
     pci_dev ctl;
     int c, i, m;
     unsigned char sig[2];
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 3; c++) {
         if (!pci_find_class(cls[c][0], cls[c][1], &ctl)) continue;
         for (i = 0; i < g_nvol; i++) {
             if (!g_vol[i].dev || g_vol[i].dev->pci_dev != ctl.dev ||
