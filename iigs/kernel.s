@@ -1222,8 +1222,8 @@ win_create:
         sta v_vecptr
         jsr call_vec           ; app START RTSes back here
 @nohook:
-        jsr repaint_all
-        rts
+        jsr redraw_topmost     ; new window is topmost; iigs has no active-title
+        rts                    ; restyle + static desktop -> only it changed (P1)
 
 .a16
 .i16
@@ -1316,7 +1316,7 @@ raise_window:
         lda S1
         sta v_zlist,x
         rep #$20
-        jsr repaint_all
+        jsr redraw_topmost     ; raised window goes topmost; nothing else changes
 @done:  rts
 
 .a16
