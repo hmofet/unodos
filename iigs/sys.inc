@@ -131,6 +131,8 @@ v_ev_tail   = VARS+$2E
 v_cur_saved = VARS+$30
 v_cur_gp    = VARS+$32
 v_frac      = VARS+$34
+v_clip_y0   = VARS+$36            ; repaint row-band clip [y0,y1) in pixel rows;
+v_clip_y1   = VARS+$38            ; default = whole screen. close/drag narrow it.
 v_numbuf    = VARS+$40            ; 16 bytes (fmt_dec / put2dig output)
 v_clkbuf    = VARS+$50            ; 16 bytes
 v_zlist     = VARS+$60            ; MAXWIN bytes
