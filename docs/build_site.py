@@ -568,8 +568,22 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
 <p>When you are finished with UnoDOS, turn Secure Boot back on the same way to return the PC to normal.</p>
 {note('<b>If the PC runs Windows with BitLocker:</b> changing Secure Boot can make Windows ask for your BitLocker recovery key the next time it starts. This is reversible and does not erase anything. Enter the 48-digit recovery key (find it in your Microsoft account at <b>aka.ms/myrecoverykey</b>, or from your IT department), or simply turn Secure Boot back on to stop the prompt. To avoid it altogether, suspend BitLocker before changing Secure Boot (search Windows for <b>Manage BitLocker</b>, then <b>Suspend protection</b>) and resume it afterwards.', kind="warn", title="BitLocker recovery prompt")}
 
-<p>Prefer not to touch hardware? You can boot the same image in an emulator instead.
-See <a href="developer.html#qemu">Run it in QEMU</a>.</p>
+<h2 id="vm">Try it in a virtual machine first</h2>
+<p>Prefer not to touch hardware yet? <strong>unodos-pc64.iso</strong> boots in any UEFI-capable
+hypervisor. In <strong>VirtualBox</strong>:</p>
+<ol>
+  <li><strong>New</strong> machine &rarr; Type <em>Other</em>, Version <em>Other/Unknown (64-bit)</em>.
+      A hard disk is optional - UnoDOS runs entirely from the ISO.</li>
+  <li>Give it at least <strong>256 MB</strong> of memory (the <em>Other</em> profile's default is too small).</li>
+  <li>Settings &rarr; <strong>System</strong> &rarr; tick <strong>Enable EFI (special OSes only)</strong>.
+      UnoDOS is UEFI-native; without this the VM shows a black screen.</li>
+  <li>Settings &rarr; <strong>Storage</strong> &rarr; put <code>unodos-pc64.iso</code> in the optical drive.</li>
+  <li>Start. The splash, chime and desktop should appear in a few seconds. For sound, either audio
+      controller works - UnoDOS has drivers for both <em>Intel HD Audio</em> and <em>ICH AC97</em>.</li>
+</ol>
+<p>Other hypervisors are the same idea: attach the ISO as a CD and boot with UEFI firmware -
+<strong>VMware</strong> (firmware type UEFI), <strong>Hyper-V</strong> (a Generation&nbsp;2 VM with
+Secure Boot turned off), or QEMU + OVMF (see <a href="developer.html#qemu">Run it in QEMU</a>).</p>
 
 <h2 id="install">Install onto the PC (optional)</h2>
 <p>Running from the USB stick is fine forever - but the <strong>Install</strong> app (in the Start
