@@ -26,6 +26,14 @@ int  uno_i2c_hid_init(void);
    position (0..32767 range) + button mask and returns 1. */
 int  uno_i2c_hid_poll(int *absx, int *absy, int *buttons);
 
+/* poll the I2C-HID KEYBOARD (a distinct device from the trackpad): reads its
+   input report and, for each newly-pressed key, calls emit(scan, uni, ctrl,
+   ctx) - EFI SimpleTextIn scan codes + unicode, same space as the firmware
+   path. Returns 1 if a keyboard is present + was polled. */
+typedef void (*uno_i2c_key_fn)(int scan, int uni, int ctrl, void *ctx);
+int  uno_i2c_hid_kbd_poll(uno_i2c_key_fn emit, void *ctx);
+int  uno_i2c_hid_kbd_present(void);
+
 /* debug: copy the last raw input report (for nailing the parser). Returns
    its length. */
 int  uno_i2c_hid_dump(unsigned char *out, int max);

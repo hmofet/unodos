@@ -7,7 +7,39 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
-## Newest — M3 firmware detach (ExitBootServices) on metal
+## Newest — native input takeover (I2C-HID kbd + USB HID + 64-bit BAR fix)
+
+The floaty-mouse / firmware-OSK work. On the **Surface Laptop Go 1** (the
+machine that showed `0 DW ctrl / 3 bars`):
+
+- [ ] **Trackpad binds now.** Boot, open System: line 1 should read
+      `N DW ctrl / N bars` (was `0 DW ctrl`) — the fix was the 64-bit-BAR
+      truncation (`(unsigned long)` cast dropped an above-4GB LPSS BAR). Line 2
+      `HID device: UP addr 0xNN parsed`. The mouse should track 1:1, no float
+      (native pointer bypasses the firmware Absolute-Pointer EMA).
+- [ ] **Keyboard binds.** The Surface keyboard is also I2C-HID; a second HID
+      device should be claimed. Type in the Editor — keys should register
+      through `uno_i2c_hid_kbd_poll` (once a native keyboard binds, firmware
+      ConIn is bypassed, which is what should stop the firmware drawing its
+      on-screen keyboard). If the OSK persists while attached, it only fully
+      goes with a real detach (needs native NVMe — see below).
+- [ ] If the trackpad still shows `0 DW ctrl`, a `-DUNO_DBGCON` build is silent
+      here; use the System line + `uno_i2c_hid_diag` (abrt/ack) to triage.
+
+**USB HID** (external keyboards/mice + docks; build `-DUNO_XHCI`):
+- [ ] Plug a USB keyboard/mouse, boot a detached-capable machine; after detach
+      they should work (USB HID is brought up post-ExitBootServices). QEMU
+      confirmed enumeration + claim (`usbhid: claimed kbd=1 mouse=1`) but can't
+      route injected keys to the emulated usb-kbd, so **real USB typing is
+      metal-first**. For an attached-mode smoke test: `-DUNO_XHCI
+      -DUNO_USBHID_TEST -DUNO_NO_DETACH` brings USB HID up eagerly.
+
+**Surface full OSK removal** still needs **native NVMe** so the Surface can
+detach (its storage is NVMe; the AHCI driver + the detach gate only cover
+SATA/AHCI today). That's the remaining gap — input takeover is done, storage
+isn't.
+
+## M3 firmware detach (ExitBootServices) on metal
 
 QEMU-verified end-to-end (auto-detach, PS/2 input, native-AHCI module loads,
 CMOS clock). Metal is where the gate's conservatism actually matters:

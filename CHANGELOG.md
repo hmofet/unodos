@@ -5,6 +5,37 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 native input — take keyboard & mouse from the firmware] - 2026-07-19
+
+Native drivers for all three x86 input transports, so pc64 no longer depends on
+the firmware for keyboard/mouse (which on touch devices like the Surface is what
+keeps the firmware on-screen keyboard drawn, and whose Absolute-Pointer path was
+"floaty"). See [pc64/INPUT.md](pc64/INPUT.md).
+
+- **`pc64/hid_kbd.c`** — shared boot-keyboard translator: an 8-byte HID boot
+  report → key-down edge events in the EFI `(scan, unicode)` space the key ring
+  already uses. Used by both USB and I2C-HID keyboards; tracks Caps Lock.
+- **`pc64/i2c_hid.c`** — now discovers a **keyboard AND a pointer** (was
+  pointer-only), classifying each I2C-HID device from its report descriptor.
+  Fixes a **64-bit-BAR truncation** (`(unsigned long)` cast dropped an above-4GB
+  LPSS BAR on this LLP64 target) that gave the Surface `0 DW ctrl / N bars` —
+  the same wall the SAM battery work hit. This is the floaty-mouse fix: native
+  pointer maps 1:1, bypassing the firmware EMA.
+- **`pc64/usbhid.c`** + `xhci.c` interrupt-IN endpoints — USB HID boot driver
+  (keyboard + mouse): config-descriptor scan, `SET_PROTOCOL(boot)`, and a
+  non-blocking interrupt-IN poll that keeps one TRB outstanding. A detached-mode
+  source in production (`-DUNO_USBHID_TEST` for eager QEMU testing).
+- **Router + gate** (`uefi_main.c`): a native keyboard, once bound, drives input
+  and firmware ConIn is dropped; the pointer path prefers native I2C-HID / USB,
+  and the firmware Absolute-Pointer filter is lighter (target-weighted, was the
+  laggy 2:1-toward-previous). The M3 detach gate generalized from "requires
+  i8042" to "requires any native keyboard that survives ExitBootServices".
+- Verified: QEMU `usbhid: claimed kbd=1 mouse=1` (USB enumeration + boot-proto
+  + endpoint arm); `harness.py unoapps` keyboard nav; default build detaches +
+  loads apps unchanged; install regression both modes clean. I2C-HID has no QEMU
+  model and real USB key routing is a QEMU limit, so both are metal-pending
+  (Surface). Full Surface OSK removal still needs native NVMe to detach.
+
 ## [pc64 firmware detach — UnoDOS runs on its own drivers (M3)] - 2026-07-19
 
 Milestone 3, the end of the decoupling arc: when the native stack covers the

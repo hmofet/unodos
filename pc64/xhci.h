@@ -40,6 +40,11 @@ int  uno_usb_setup_bulk(int dev, int in_ep_addr, int out_ep_addr, int in_mps, in
 int  uno_usb_bulk_out(int dev, void *data, int len);       /* returns bytes sent / -1 */
 int  uno_usb_bulk_in(int dev, void *data, int len);        /* returns bytes received / -1 */
 
+/* HID interrupt-IN endpoint. setup posts the first transfer; intr_in is a
+ * NON-BLOCKING poll returning the report length (0 = none ready yet, -1 err). */
+int  uno_usb_setup_intr_in(int dev, int in_ep_addr, int mps);
+int  uno_usb_intr_in(int dev, void *data, int maxlen);
+
 /* Diagnostics for the System app. */
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err);
 /* enumeration debug: slot id (or -completion_code), Address Device completion,
