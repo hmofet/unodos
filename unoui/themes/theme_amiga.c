@@ -22,7 +22,7 @@ static void a_titlebar(const unoui_theme *t, const unoui_window *win)
       fb_fill_rect(g.x, g.y, g.w, g.h, A_ORANGE);
       fb_frame_rect(g.x, g.y, g.w, g.h, A_BLACK);
       fb_frame_rect(g.x+3, g.y+3, gw-9, th-fw-7, A_BLACK); }
-    fb_text(r.x + fw + 6, r.y + (th - 8)/2, win->title, fg, -1);
+    fb_text(r.x + fw + 6, r.y + (th - fb_text_h())/2, win->title, fg, -1);
 }
 
 static const unoui_draw amiga_draw = {

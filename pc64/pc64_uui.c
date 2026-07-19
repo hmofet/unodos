@@ -58,7 +58,9 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, APP_SETUP, N
 static const char *kAppNames[NNATIVE] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas", "Install" };
 
-#define TASKH 26                          /* taskbar height, px */
+/* taskbar height follows the active font (26 px under the classic 8px font) */
+static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
+#define TASKH (tb_h())
 
 static unoui_ui     UI;
 
@@ -124,38 +126,15 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
 
-/* editor + status buffers */
-static char g_body[1024], g_name[32], g_status[48] = "ready";
-static unoui_text g_body_t, g_name_t;
+/* shell status buffers */
 static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_res_n;
-static const char *g_files[] = { "README.TXT", "NOTES.TXT", "SONG.TRK" };
-static const char *g_fmts[]  = { "Plain", "Markdown", "UnoDOS" };
 static char g_clock[40] = "Uptime 0 s";
 static char g_batt[12];      /* tray battery chip, "" = no battery reported */
 
-/* ---- RAM-disk File Manager glue ---------------------------------------- */
-static void c2p(const char *s, unsigned char *p)
-{ int n = (int)strlen(s); if (n > 31) n = 31; p[0] = (unsigned char)n;
-  { int i; for (i = 0; i < n; i++) p[i + 1] = (unsigned char)s[i]; } }
-
-static void editor_save(void)
-{
-    unsigned char pn[34]; short ref; long n = g_body_t.len;
-    c2p(g_name[0] ? g_name : "NOTES.TXT", pn);
-    Create(pn, 0, 0, 0);
-    if (FSOpen(pn, 0, &ref) == noErr) { FSWrite(ref, &n, g_body); FSClose(ref);
-        strcpy(g_status, "saved"); } else strcpy(g_status, "save failed");
-}
-static void editor_open(void)
-{
-    unsigned char pn[34]; short ref; long n = sizeof g_body - 1;
-    c2p(g_name[0] ? g_name : "NOTES.TXT", pn);
-    if (FSOpen(pn, 0, &ref) == noErr) {
-        if (FSRead(ref, &n, g_body) == noErr && n >= 0) { g_body[n] = 0;
-            unoui_text_set(&g_body_t, g_body); strcpy(g_status, "opened"); }
-        FSClose(ref);
-    } else strcpy(g_status, "not found");
-}
+/* UI scale choices (percent) - drives uno_font_set_ui_scale + a shell rebuild */
+static const char *g_scale_items[] = { "100%", "125%", "150%", "200%" };
+static const int   g_scale_pcts[]  = { 100, 125, 150, 200 };
+#define NSCALES 4
 
 static void build_res_items(void)
 {
@@ -173,14 +152,10 @@ static void build_res_items(void)
     g_res_n = n;
 }
 
-/* ---- menus ------------------------------------------------------------- */
-static const char *m_file[] = { "New", "Open", "Save" };
-static const char *m_edit[] = { "Cut", "Copy", "Paste" };
-static const unoui_menu g_menus[] = { { "File", m_file, 3 }, { "Edit", m_edit, 3 } };
-
-/* ---- app window builders (sized so nothing overflows: usable content
- *      height is win.h - title_h(18) - 2*pad(10) - frame ~= win.h - 40) ---- */
-static unoui_widget *g_sp_y, *g_sp_mo, *g_sp_d, *g_sp_h, *g_sp_mi;
+/* ---- app window builders ------------------------------------------------- *
+ * Layouts flow rows from font-derived metrics (ui_field_h/ui_ctl_h/fb_text_h),
+ * so they stay aligned under any font or UI scale. */
+static unoui_widget *g_sp_h, *g_sp_mi;      /* time spinners (date = calendar) */
 
 static const char *g_font_items[6];
 static int         g_font_n;
@@ -192,78 +167,72 @@ static void build_font_items(void)
     g_font_n = 1 + (nf > 5 ? 5 : nf);
 }
 
+/* window height for `content_h` px of content under the current theme */
+static int win_h_for(int content_h)
+{
+    const unoui_metrics *m = &UI.theme->m;
+    return content_h + m->title_h + 2 * m->pad + m->frame_w;
+}
+
 static void build_ctrl(unoui_window *w)
 {
     unoui_widget *x; int i;
-    int yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
+    int hh = 0, mi = 0;
+    int fh = fb_text_h(), ch = ui_field_h(), bh = ui_ctl_h();
+    int row = ch + 8, y = 4, lw = fb_text_w("Resolution:") + 12, cw = 340;
+    int lofs = (ch - fh) / 2;                   /* label centred beside a control */
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
     build_font_items();
-    unoui_window_init(w, "Control Panel", 150, 24, 270, 300);
-    unoui_add_label(w, 8, 8, "Theme:");
-    x = unoui_add_dropdown(w, 74, 4, 170, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
-    unoui_add_label(w, 8, 34, "Resolution:");
-    x = unoui_add_dropdown(w, 100, 30, 144, g_res_items, g_res_n, 0); x->id = ID_RES;
-    unoui_add_label(w, 8, 60, "Font:");
-    x = unoui_add_dropdown(w, 74, 56, 170, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
-    unoui_add_check(w, 8, 86, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
-    unoui_add_check(w, 130, 86, "Word wrap", 1); w->w[w->nw-1].id = ID_WRAP;
-    unoui_add_check(w, 8, 106, "Aurora lite", unoui_aurora_lite);
+    unoui_window_init(w, "Control Panel", 150, 24, 1, 1);   /* sized below */
+    unoui_add_label(w, 8, y + lofs, "Theme:");
+    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
+    y += row;
+    unoui_add_label(w, 8, y + lofs, "Resolution:");
+    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_res_items, g_res_n, 0); x->id = ID_RES;
+    y += row;
+    unoui_add_label(w, 8, y + lofs, "Font:");
+    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
+    y += row;
+    unoui_add_label(w, 8, y + lofs, "UI scale:");
+    { int cur = 0; for (i = 0; i < NSCALES; i++) if (g_scale_pcts[i] == uno_font_ui_scale()) cur = i;
+      x = unoui_add_dropdown(w, lw, y, 100, g_scale_items, NSCALES, cur); x->id = ID_SCALE; }
+    y += row;
+    unoui_add_check(w, 8, y, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
+    unoui_add_check(w, cw / 2, y, "Aurora lite", unoui_aurora_lite);
     w->w[w->nw-1].id = ID_ALITE;
-    unoui_add_check(w, 130, 106, "Lid sleep", g_lidsleep);
+    y += fh + 10;
+    unoui_add_check(w, 8, y, "Lid sleep", g_lidsleep);
     w->w[w->nw-1].id = ID_LIDSLP;
-    unoui_add_label(w, 8, 136, "Volume");
-    x = unoui_add_slider(w, 66, 132, 178, 0, 100, 70); x->id = ID_VOL;
-    unoui_add_label(w, 8, 160, "UI scale");
-    x = unoui_add_spinner(w, 72, 156, 70, 1, 4, 1); x->id = ID_SCALE;
-    x = unoui_add_button(w, 150, 156, 94, "About", 0); x->id = ID_ABOUT;
-    /* --- date & time (firmware RTC) --- */
-    unoui_add_sep(w, 8, 182, 236);
-    unoui_add_label(w, 8, 190, "Set date & time:");
-    uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
-    g_sp_y  = unoui_add_spinner(w, 8,   206, 58, 2000, 2099, yy);
-    g_sp_mo = unoui_add_spinner(w, 70,  206, 44, 1, 12, mo);
-    g_sp_d  = unoui_add_spinner(w, 118, 206, 44, 1, 31, dd);
-    g_sp_h  = unoui_add_spinner(w, 166, 206, 40, 0, 23, hh);
-    g_sp_mi = unoui_add_spinner(w, 210, 206, 40, 0, 59, mi);
-    x = unoui_add_button(w, 8, 232, 100, "Apply Clock", 0); x->id = ID_SETDT;
-    x = unoui_add_button(w, 116, 232, 128, "Pick date...", 0); x->id = ID_CAL;
+    y += fh + 12;
+    unoui_add_label(w, 8, y + lofs, "Volume");
+    x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, 70); x->id = ID_VOL;
+    y += row;
+    unoui_add_sep(w, 8, y, cw - 16); y += 8;
+    /* --- clock (firmware RTC): time spinners; the date is set via the
+       calendar picker only --- */
+    uno_pc64_time(0, 0, 0, &hh, &mi, 0);
+    unoui_add_label(w, 8, y + lofs, "Time:");
+    g_sp_h  = unoui_add_spinner(w, lw,      y, 52, 0, 23, hh);
+    unoui_add_label(w, lw + 56, y + lofs, ":");
+    g_sp_mi = unoui_add_spinner(w, lw + 66, y, 52, 0, 59, mi);
+    x = unoui_add_button(w, lw + 126, y, 92, "Set time", 0); x->id = ID_SETDT;
+    y += row;
+    x = unoui_add_button(w, 8, y, 120, "Set date...", 0); x->id = ID_CAL;
+    x = unoui_add_button(w, cw - 8 - 96, y, 96, "About", 0); x->id = ID_ABOUT;
+    y += bh + 8;
+    w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
+    w->r.h = win_h_for(y);
+    w->min_w = w->r.w; w->min_h = w->r.h;
+    w->flags |= UI_WIN_RESIZE;
 }
-static void build_edit(unoui_window *w)
-{
-    unoui_widget *x;
-    build_font_items();
-    unoui_window_init(w, "Editor", 150, 60, 300, 314);
-    unoui_text_init(&g_body_t, g_body, sizeof g_body, 1);
-    unoui_text_set(&g_body_t, "unoui is the whole UnoDOS UI now.\n"
-                              "Open apps from the launcher; drag,\n"
-                              "click or Tab/arrows/Enter. Edit me,\n"
-                              "then Save (Ctrl-W closes a window).");
-    unoui_text_init(&g_name_t, g_name, sizeof g_name, 0);
-    unoui_text_set(&g_name_t, "NOTES.TXT");
-    x = unoui_add_menubar(w, g_menus, 2); x->id = ID_MENU;
-    unoui_add_label(w, 4, 30, "Body:");
-    x = unoui_add_textarea(w, 4, 42, 262, 120, &g_body_t); x->id = ID_BODY;
-    unoui_add_vscroll(w, 268, 42, 120, 0, 100);
-    unoui_add_label(w, 4, 172, "File:");
-    x = unoui_add_edit(w, 40, 168, 130, &g_name_t); x->id = ID_NAME;
-    unoui_add_label(w, 178, 172, "Fmt:");
-    x = unoui_add_dropdown(w, 210, 168, 80, g_fmts, 3, 2); x->id = ID_FMT;
-    x = unoui_add_button(w, 4,  198, 80, "Save", UI_F_DEFAULT); x->id = ID_SAVE;
-    x = unoui_add_button(w, 90, 198, 80, "Open", 0); x->id = ID_OPEN;
-    x = unoui_add_button(w, 176, 198, 80, "New", 0); x->id = ID_NEWF;
-    unoui_add_label(w, 4, 228, "Doc font:");
-    x = unoui_add_dropdown(w, 78, 224, 178, g_font_items, g_font_n,
-                           w->font_slot == UI_FONT_INHERIT ? 0 : w->font_slot + 1); x->id = ID_EFONT;
-    unoui_add_label(w, 4, 256, g_status);
-}
-static void build_files(unoui_window *w)
-{
-    unoui_widget *x;
-    unoui_window_init(w, "Files", 8, 240, 180, 168);
-    unoui_add_label(w, 6, 6, "RAM disk:");
-    x = unoui_add_list(w, 6, 22, 156, 100, g_files, 3, 0); x->id = ID_FILES;
-}
+
+/* Editor (WordPad-style word processor) + Files (real file manager) live in
+ * their own translation units; the shell just delegates the build. */
+void pc64_write_build(unoui_window *w);
+void pc64_files_build(unoui_window *w);
+static void build_edit(unoui_window *w)  { pc64_write_build(w); }
+static void build_files(unoui_window *w) { pc64_files_build(w); }
 /* tiny no-libc string builders for the diagnostics line */
 static char *ap_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
 static char *ap_int(char *p, int v) { char t[12]; int n = 0;
@@ -400,28 +369,52 @@ static void build_natstat(void)
 
 static void build_sys(unoui_window *w)
 {
+    int fh = fb_text_h(), lh = fh + 4, y = 4, cw = 420, gx = 8, tx = 20;
+    int g0;
     build_tpstat();
     build_usbstat();
     build_natstat();
     build_acpistat();
     build_sndstat();
-    unoui_window_init(w, "System", 400, 210, 376, 226);
-    unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
-    unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
-    unoui_add_label(w, 8, 42, "10 themes  -  live re-skin");
-    unoui_add_sep  (w, 8, 60, 320);
-    unoui_add_label(w, 8, 68,  g_tp1);
-    unoui_add_label(w, 8, 84,  g_usb);
-    unoui_add_label(w, 8, 100, g_nat);
-    unoui_add_label(w, 8, 116, g_acpi1);
-    unoui_add_label(w, 8, 132, g_acpi2);
-    unoui_add_label(w, 8, 148, g_snd);
+    unoui_window_init(w, "System", 400, 100, 1, 1);
+    /* header */
+    unoui_add_label(w, gx, y, "UnoDOS / pc64  -  unoui shell");           y += lh;
+    unoui_add_label(w, gx, y, "x86-64 UEFI  -  bare metal  -  10 themes"); y += lh + 8;
+    /* grouped hardware readouts: a box per subsystem, rows inside */
+#define SYS_GROUP(title, nrows) \
+    g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
+    y += fh + 4
+#define SYS_ROW(s) unoui_add_label(w, tx, y, s); y += lh
+    SYS_GROUP("Input & USB", 4);
+    SYS_ROW(g_tp1);
+    SYS_ROW(g_tp2);
+    SYS_ROW(g_usb);
+    SYS_ROW(g_usb2);
+    y += 12;
+    SYS_GROUP("Storage", 1);
+    SYS_ROW(g_nat);
+    y += 12;
+    SYS_GROUP("Power & ACPI", 2);
+    SYS_ROW(g_acpi1);
+    SYS_ROW(g_acpi2);
+    y += 12;
+    SYS_GROUP("Audio", 1);
+    SYS_ROW(g_snd);
+    y += 12;
+#undef SYS_GROUP
+#undef SYS_ROW
+    w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
+    w->r.h = win_h_for(y);
+    w->min_w = 360; w->min_h = 240;
+    w->flags |= UI_WIN_RESIZE;
 }
 static void build_clock(unoui_window *w)
 {
-    unoui_window_init(w, "Clock", 420, 30, 200, 80);
-    unoui_add_label(w, 10, 10, g_clock);
-    unoui_add_label(w, 10, 30, "(uptime since boot)");
+    int fh = fb_text_h();
+    unoui_window_init(w, "Clock", 420, 30, 220, 1);
+    unoui_add_label(w, 10, 8, g_clock);
+    unoui_add_label(w, 10, 8 + fh + 6, "(firmware RTC)");
+    w->r.h = win_h_for(2 * fh + 20);
 }
 
 /* ---- Canvas demo: proves UI_CANVAS (app-drawn region) + unoui_fullscreen -- */
@@ -583,13 +576,18 @@ static void remove_win(unoui_window *win)
 static void toggle_launcher(void);
 static void open_app(int a);
 static void fmt_clock(int uptime_secs);
+int pc64_write_canvas_index(void);    /* pc64_write.c: doc-canvas widget index */
+int pc64_files_canvas_index(void);    /* pc64_files.c: pane widget index      */
 
-/* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- */
+/* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- *
+ * All layout is measured from the live font so the bar stays aligned whatever
+ * face/scale is active (draw + hit-test share these functions). */
 #define TB_START_X 4
-#define TB_START_W 60
-#define TB_CHIP_X  70
-#define TB_CHIP_W  108
-#define TB_CHIP_GAP 112
+static int tb_logo_sz(void)  { int s = fb_text_h(); return s < 12 ? 12 : s; }
+static int tb_start_w(void)  { return 10 + tb_logo_sz() + 6 + fb_text_w("Start") + 10; }
+static int tb_chip_w(void)   { int w = 40 + fb_text_w("Manager"); return w < 108 ? 108 : w; }
+static int tb_chip_gap(void) { return tb_chip_w() + 4; }
+static int tb_chip_x(void)   { return TB_START_X + tb_start_w() + 8; }
 
 /* app index of the focused window, or -1 (used to highlight its taskbar chip) */
 static int focused_app(void)
@@ -631,45 +629,50 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
         fb_hline(r.x, r.y, r.w, t->pal.light);
     }
-    /* Start button - accent-coloured, 4-square emblem + label */
-    { int bx = r.x + TB_START_X;
-      fb_px q[4] = { FB_RGB(255,255,255), FB_RGB(210,225,255),
-                     FB_RGB(225,235,255), FB_RGB(255,255,255) };
-      int gx = bx + 7, gy = by + (bh - 11) / 2, u = 5;
-      if (modern) fb_round_rect(bx, by, TB_START_W, bh, cr, t->pal.accent);
-      else        tb_panel(bx, by, TB_START_W, bh, t->pal.accent, 0);
-      fb_fill_rect(gx, gy, u, u, q[0]);       fb_fill_rect(gx + u + 1, gy, u, u, q[1]);
-      fb_fill_rect(gx, gy + u + 1, u, u, q[2]); fb_fill_rect(gx + u + 1, gy + u + 1, u, u, q[3]);
-      fb_text(bx + 22, by + (bh - 8) / 2, "Start", t->pal.accent_text, -1); }
-    /* one chip per open window: mini icon + name, highlighted if it's active */
-    x = r.x + TB_CHIP_X;
+    /* Start button - accent-coloured, the UnoDOS "One" mark + label, the
+       logo+label group centred as a unit within the button */
+    { int bx = r.x + TB_START_X, bw = tb_start_w(), fh = fb_text_h();
+      int lsz = tb_logo_sz(), grp = lsz + 6 + fb_text_w("Start");
+      int gx = bx + (bw - grp) / 2, gy = by + (bh - lsz) / 2;
+      if (modern) fb_round_rect(bx, by, bw, bh, cr, t->pal.accent);
+      else        tb_panel(bx, by, bw, bh, t->pal.accent, 0);
+      pc64_start_logo(gx, gy, lsz, t->pal.accent_text);
+      fb_text(gx + lsz + 6, by + (bh - fh) / 2, "Start", t->pal.accent_text, -1); }
+    /* one chip per open window: mini icon + name, highlighted if it's active.
+       Chips stop before the tray (clock/battery) instead of colliding. */
+    x = r.x + tb_chip_x();
+    { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
+      int tray_x = r.x + r.w - (fb_text_w(g_clock) + 16) - 6
+                   - (g_batt[0] ? fb_text_w(g_batt) + 20 : 0);
     for (i = 0; i < NAPPS; i++) {
         int d = (i == act) ? 1 : 0;
         unoui_rect eb;
         if (!g_open[i]) continue;
+        if (x + cw > tray_x - 4) break;      /* no room left before the tray */
         if (modern) {
-            if (d) { fb_round_rect_a(x, by, TB_CHIP_W, bh, cr, t->pal.accent, 48, FB_CORNER_ALL);
-                     fb_fill_rect(x + 8, by + bh - 2, TB_CHIP_W - 16, 2, t->pal.accent); }
-            else     fb_round_rect_a(x, by, TB_CHIP_W, bh, cr, t->pal.text, 18, FB_CORNER_ALL);
-        } else tb_panel(x, by, TB_CHIP_W, bh, t->pal.face, d);
+            if (d) { fb_round_rect_a(x, by, cw, bh, cr, t->pal.accent, 48, FB_CORNER_ALL);
+                     fb_fill_rect(x + 8, by + bh - 2, cw - 16, 2, t->pal.accent); }
+            else     fb_round_rect_a(x, by, cw, bh, cr, t->pal.text, 18, FB_CORNER_ALL);
+        } else tb_panel(x, by, cw, bh, t->pal.face, d);
         { int dd = modern ? 0 : d;
-          eb.x = x + 4 + dd; eb.y = by + (bh - 16) / 2 + dd; eb.w = 16; eb.h = 16;
+          eb.x = x + 4 + dd; eb.y = by + (bh - es) / 2 + dd; eb.w = es; eb.h = es;
           pc64_icon_emblem(i, eb);
-          fb_set_clip(x + 22, by, TB_CHIP_W - 24, bh);        /* keep the name in the chip */
-          fb_text(x + 24 + dd, by + (bh - 8) / 2 + dd, app_short(i), t->pal.text, -1);
+          fb_set_clip(x + es + 6, by, cw - es - 8, bh);        /* keep the name in the chip */
+          fb_text(x + es + 8 + dd, by + (bh - fh) / 2 + dd, app_short(i), t->pal.text, -1);
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
-        x += TB_CHIP_GAP;
-    }
+        x += tb_chip_gap();
+    } }
     /* system tray: battery (when ACPI reports one) + clock chips, right-aligned */
-    { int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
+    { int fh = fb_text_h();
+      int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
       if (modern) fb_round_rect_a(cxx, by, cw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
       else        tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
-      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1);
+      fb_text(cxx + 8, by + (bh - fh) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1);
       if (g_batt[0]) {
           int bw = fb_text_w(g_batt) + 16, bx = cxx - bw - 4;
           if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
           else        tb_panel(bx, by, bw, bh, t->pal.field_bg, 1);
-          fb_text(bx + 8, r.y + (r.h - 8) / 2, g_batt, modern ? t->pal.text : t->pal.field_text, -1);
+          fb_text(bx + 8, by + (bh - fh) / 2, g_batt, modern ? t->pal.text : t->pal.field_text, -1);
       } }
 }
 
@@ -680,12 +683,12 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     (void)w; (void)ctx;
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     px = e->x - g_task.r.x;
-    if (px >= TB_START_X && px < TB_START_X + TB_START_W) { toggle_launcher(); return 1; }
-    x = TB_CHIP_X;
+    if (px >= TB_START_X && px < TB_START_X + tb_start_w()) { toggle_launcher(); return 1; }
+    x = tb_chip_x();
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
-        if (px >= x && px < x + TB_CHIP_W) { open_app(i); return 1; }
-        x += TB_CHIP_GAP;
+        if (px >= x && px < x + tb_chip_w()) { open_app(i); return 1; }
+        x += tb_chip_gap();
     }
     return 0;
 }
@@ -704,15 +707,16 @@ static void build_taskbar(void)
 
 static void build_desktop(void)
 {
-    int i, percol;
+    int i, percol, fh = fb_text_h();
+    int ich = 34 + fh, pitch = ich + 8, colw = 20 + fb_text_w("MMMMMMMM");
     unoui_window_init(&g_desk, "", 0, 0, FB_W, FB_H - TASKH);
     g_desk.flags = UI_WIN_BARE | UI_WIN_BOTTOM;
-    percol = (FB_H - TASKH - 20) / 52; if (percol < 1) percol = 1;   /* grid */
+    percol = (FB_H - TASKH - 20) / pitch; if (percol < 1) percol = 1;   /* grid */
     for (i = 0; i < NAPPS; i++) {
         int col = i / percol, row = i % percol;
-        unoui_widget *ic = unoui_add_icon(&g_desk, 16 + col * 104, 14 + row * 52,
+        unoui_widget *ic = unoui_add_icon(&g_desk, 16 + col * colw, 14 + row * pitch,
                                           app_short(i));
-        ic->r.w = 84; ic->r.h = 48;         /* room for emblem + label         */
+        ic->r.w = colw - 20; ic->r.h = ich; /* room for emblem + label         */
         ic->icon = i;                       /* -> pc64_icon_art draws its art  */
         ic->id  = ID_LAUNCH0 + i;
     }
@@ -822,6 +826,8 @@ static void open_app(int a)
      * focus to the taskbar, so do this last). */
     { int fi; for (fi = 0; fi < UI.nwin; fi++) if (UI.win[fi] == &g_win[a]) { UI.focus_win = fi; break; } }
     if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
+    if (a == APP_EDIT)  { int wi = pc64_write_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     /* native games scale to any rect, so they can fill the screen (Esc returns).
      * Bridge apps + the browser stay windowed (they draw at a fixed size). */
     if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
@@ -877,7 +883,8 @@ static void close_focused(void)
  * Entries beyond the visible window scroll: hovering the bottom edge shows a
  * down chevron and scrolls down; once scrolled, an up chevron appears at the
  * top edge and hovering it scrolls back. */
-#define MROW 22
+static int mrow_h(void) { int h = fb_text_h() + 8; return h < 22 ? 22 : h; }
+#define MROW (mrow_h())
 #define MENU_MAXVIS 11
 
 static int  menu_count(void)         { return NAPPS + 2; }   /* apps + restart + shutdown */
@@ -905,8 +912,8 @@ static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         if (idx >= total) break;
         if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
         if (idx == NAPPS) fb_hline(r.x, ry, r.w, t->pal.shadow);     /* power divider */
-        if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
-        fb_text(r.x + 26, ry + (MROW - 8) / 2, menu_label(idx),
+        if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + (MROW - 18) / 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
+        fb_text(r.x + 26, ry + (MROW - fb_text_h()) / 2, menu_label(idx),
                 hot ? t->pal.accent_text : t->pal.text, -1);
     }
     if (g_menu_scroll > 0)           chevron(r.x + r.w/2, r.y + 1,           -1, t->pal.text);
@@ -1006,11 +1013,12 @@ static void cal_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 
 static void cal_apply_and_close(void)
 {
-    if (g_sp_y)  g_sp_y->value  = g_cal_y;
-    if (g_sp_mo) g_sp_mo->value = g_cal_mo;
-    if (g_sp_d)  g_sp_d->value  = g_cal_sel;
-    uno_pc64_set_time(g_cal_y, g_cal_mo, g_cal_sel,
-                      g_sp_h ? g_sp_h->value : 0, g_sp_mi ? g_sp_mi->value : 0, 0);
+    /* the calendar owns the date; the time of day is left as it is (from the
+       time spinners when the Control Panel is built, else the live RTC) */
+    int hh = 0, mi = 0;
+    if (g_sp_h && g_sp_mi) { hh = g_sp_h->value; mi = g_sp_mi->value; }
+    else uno_pc64_time(0, 0, 0, &hh, &mi, 0);
+    uno_pc64_set_time(g_cal_y, g_cal_mo, g_cal_sel, hh, mi, 0);
     fmt_clock(0);
     remove_win(&g_cal); g_cal_open = 0; g_dirty = 1;
 }
@@ -1032,14 +1040,55 @@ static void open_calendar(void)
     const unoui_metrics *m = &UI.theme->m;
     int cw = 210, chh = 176, yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
     if (g_cal_open) { remove_win(&g_cal); g_cal_open = 0; }
-    if (g_sp_y) { g_cal_y = g_sp_y->value; g_cal_mo = g_sp_mo->value; g_cal_sel = g_sp_d->value; }
-    else { uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0); g_cal_y = yy; g_cal_mo = mo; g_cal_sel = dd; }
+    uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
+    g_cal_y = yy; g_cal_mo = mo; g_cal_sel = dd;
     unoui_window_init(&g_cal, "Pick a date", 180, 56,
                       cw + 2*m->frame_w + 2*m->pad, chh + m->title_h + 2*m->pad + m->frame_w);
     unoui_add_canvas(&g_cal, 0, 0, cw, chh, &g_cal_cv);
     clamp_to_workarea(&g_cal);
     unoui_ui_add(&UI, &g_cal);
     g_cal_open = 1; g_dirty = 1;
+}
+
+/* ---- shell services for the standalone apps (Write / Files) ------------- */
+void pc64_shell_add_window(unoui_window *w)
+{ clamp_to_workarea(w); unoui_ui_add(&UI, w); g_dirty = 1; }
+void pc64_shell_remove_window(unoui_window *w) { remove_win(w); g_dirty = 1; }
+void pc64_shell_focus_window(unoui_window *w)
+{ int i; for (i = 0; i < UI.nwin; i++) if (UI.win[i] == w) { UI.focus_win = i; break; } }
+void pc64_shell_dirty(void) { g_dirty = 1; }
+int  pc64_shell_workarea_w(void) { return FB_W; }
+int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
+
+/* app-side action hooks (in pc64_write.c / pc64_files.c) */
+int pc64_write_action(const unoui_action *a);
+int pc64_files_action(const unoui_action *a);
+int pc64_write_key(int uni, int ctrl);
+void pc64_write_frame(void);
+
+/* Rebuild everything laid out in font-space (native app windows, taskbar,
+ * desktop icon grid, Start menu) after a font or UI-scale change. Open native
+ * windows are torn down and reopened at the new metrics; module/bridge apps
+ * keep their canvases and just get clamped. */
+static void rebuild_shell(void)
+{
+    int a, wasopen[NAPPS];
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
+    if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0; }
+    for (a = 0; a < NAPPS; a++) {
+        wasopen[a] = g_open[a];
+        if (a < NNATIVE) {
+            if (g_open[a]) { remove_win(&g_win[a]); g_open[a] = 0; }
+            g_built[a] = 0;
+        }
+    }
+    remove_win(&g_desk); remove_win(&g_task);
+    build_desktop();  unoui_ui_add(&UI, &g_desk);
+    build_taskbar();  unoui_ui_add(&UI, &g_task);
+    build_launcher();
+    for (a = 0; a < NNATIVE; a++) if (wasopen[a]) open_app(a);
+    for (a = NNATIVE; a < NAPPS; a++) if (g_open[a]) clamp_to_workarea(&g_win[a]);
+    g_dirty = 1;
 }
 
 /* ---- actions ----------------------------------------------------------- */
@@ -1050,6 +1099,8 @@ static void on_action(const unoui_action *a)
     if (a->kind == UI_ACT_CLOSE) { close_focused(); return; }   /* title-bar close box */
     if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
+    if (pc64_write_action(a)) return;           /* the Editor's menus/toolbar */
+    if (pc64_files_action(a)) return;           /* the file manager's toolbar */
     switch (a->id) {
     case ID_ILIST:    inst_select(a->value); break;
     case ID_IDEF:     g_inst_default = a->value; break;
@@ -1064,21 +1115,21 @@ static void on_action(const unoui_action *a)
     case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; break;                      /* lid-close enters sleep */
     case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
-    case ID_SAVE:  editor_save(); break;
-    case ID_OPEN:  editor_open(); break;
-    case ID_NEWF:  unoui_text_set(&g_body_t, ""); strcpy(g_status, "new"); break;
-    case ID_MENU:  if (a->value == 2) editor_save(); else if (a->value == 1) editor_open();
-                   else if (a->value == 0) { unoui_text_set(&g_body_t, ""); strcpy(g_status, "new"); } break;
-    case ID_ABOUT: strcpy(g_status, "unoui shell v0.3"); break;
-    case ID_SETDT:
-        if (g_sp_y) uno_pc64_set_time(g_sp_y->value, g_sp_mo->value, g_sp_d->value,
-                                      g_sp_h->value, g_sp_mi->value, 0);
+    case ID_ABOUT: open_app(APP_SYS); break;
+    case ID_SETDT: {                    /* time spinners; the date stays as-is */
+        int yy = 2026, mo = 1, dd = 1;
+        uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
+        if (g_sp_h && g_sp_mi)
+            uno_pc64_set_time(yy, mo, dd, g_sp_h->value, g_sp_mi->value, 0);
         fmt_clock(0);
         break;
+    }
     case ID_FULL:  unoui_fullscreen(&UI, &g_win[APP_DEMO]); break;   /* go fullscreen */
-    case ID_FONT:  uno_font_use(a->value - 1); break;   /* 0 = System bitmap, 1.. = TTF */
-    case ID_EFONT: g_win[APP_EDIT].font_slot =          /* Editor per-document font */
-                       (a->value <= 0) ? UI_FONT_INHERIT : a->value - 1; break;
+    case ID_FONT:  uno_font_use(a->value - 1); rebuild_shell(); break;
+    case ID_SCALE: if (a->value >= 0 && a->value < NSCALES) {
+                       uno_font_set_ui_scale(g_scale_pcts[a->value]);
+                       rebuild_shell();
+                   } break;
     case ID_CAL:   open_calendar(); break;              /* calendar date picker */
     default: break;
     }
@@ -1113,15 +1164,12 @@ static int pump_input(void)
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
         if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
-        /* Ctrl-S / Ctrl-O: save / open in the Editor (a keyboard path to the
-           Save button - also the natural accelerator). Only when Editor front. */
-        if (ctrl && (uni == 's' || uni == 'S' || uni == 0x13 ||
-                     uni == 'o' || uni == 'O' || uni == 0x0F) &&
-            !g_launch_open && !UI.full && g_open[APP_EDIT] &&
+        /* Editor accelerators (Ctrl-S/O/N, B/I/U, X/C/V, A, F...) - only when
+           the Editor window is in front; pc64_write.c owns the mapping. */
+        if (ctrl && !g_launch_open && !UI.full && g_open[APP_EDIT] &&
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[APP_EDIT]) {
-            if (uni == 's' || uni == 'S' || uni == 0x13) editor_save(); else editor_open();
-            g_dirty = 1; continue;
+            if (pc64_write_key(uni, 1)) { g_dirty = 1; continue; }
         }
         /* Install window focused: keyboard drive (works before any pointer is
            up - important on the harness AND on laptops with exotic trackpads).
@@ -1217,17 +1265,19 @@ int main(void)
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
+    uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
+    /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
+     * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
+     * (e.g. missing from the ESP) uno_font_use falls back to the built-in 8x8
+     * bitmap, which the Control Panel picker ("System (mono)") also selects.
+     * MUST run before the shell chrome is built: the taskbar, icon grid and
+     * launcher are all laid out in the live font's metrics. */
+    uno_font_use(0);
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
     fmt_batt();                                      /* tray battery (ACPI)  */
-    uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
-    /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
-     * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
-     * (e.g. missing from the ESP) uno_font_use falls back to the built-in 8x8
-     * bitmap, which the Control Panel picker ("System (mono)") also selects. */
-    uno_font_use(0);
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
@@ -1259,6 +1309,7 @@ int main(void)
             fmt_batt();                 /* AML _BST, self-cached ~2 s */
         }
         feed(&tick);                    /* advance the caret-blink timebase */
+        pc64_write_frame();             /* Editor caret blink / autoscroll */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
         if (g_launch_open) {            /* Start-menu hover highlight + scroll */
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);

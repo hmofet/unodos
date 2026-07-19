@@ -89,7 +89,7 @@ static void w_check(const unoui_theme *t, unoui_rect r, const char *s, int f)
         for (i = 0; i < 6; i++) { ui_px(box.x+5+i, box.y+8-i, WIN_DARK);
                                   ui_px(box.x+5+i, box.y+9-i, WIN_DARK); }
     }
-    fb_text(r.x + 18, r.y + 3, s, (f & UI_F_DISABLED) ? WIN_GREY : WIN_DARK, -1);
+    fb_text(r.x + 18, r.y + (r.h - fb_text_h())/2, s, (f & UI_F_DISABLED) ? WIN_GREY : WIN_DARK, -1);
 }
 
 static const unoui_draw win31_draw = {

@@ -20,7 +20,7 @@ void unoui_ui_init(unoui_ui *ui, const unoui_theme *t, int sw, int sh)
     ui->focus_win = ui->focus_wi = -1;
     ui->hot_win = ui->hot_wi = -1;
     ui->cap_win = ui->cap_wi = -1; ui->cap_mode = UI_CAP_NONE;
-    ui->grab_dx = ui->grab_dy = 0;
+    ui->grab_dx = ui->grab_dy = 0; ui->resize_axes = 0;
     ui->mx = ui->my = ui->mdown = 0;
     ui->popup_win = ui->popup_wi = -1; ui->popup_menu = -1;
     ui->popup_items = 0; ui->popup_n = 0; ui->popup_hot = -1;
@@ -284,7 +284,7 @@ static unoui_action set_list(unoui_ui *ui, int y)
 {
     unoui_window *win = ui->win[ui->cap_win]; unoui_widget *w = &win->w[ui->cap_wi];
     unoui_rect r = unoui_widget_rect(ui->theme, win, w);
-    int idx = (y - (r.y + 3)) / 11;
+    int idx = (y - (r.y + 3)) / ui_row_h();
     if (idx < 0) idx = 0;
     if (idx > w->nitems - 1) idx = w->nitems - 1;
     w->sel = idx; { unoui_action a = change(w); a.value = idx; return a; }
@@ -366,7 +366,7 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
         ui->cap_mode = UI_CAP_NONE;
         ui->popup_win = ui->focus_win; ui->popup_wi = hi; ui->popup_menu = -1;
         ui->popup_items = w->items; ui->popup_n = w->nitems; ui->popup_hot = w->sel;
-        { unoui_rect pr = { r.x, r.y + r.h, r.w, w->nitems * 12 + 4 }; ui->popup_r = pr; }
+        { unoui_rect pr = { r.x, r.y + r.h, r.w, w->nitems * ui_prow_h() + 4 }; ui->popup_r = pr; }
         return NO_ACT;
 
     case UI_MENUBAR: {
@@ -381,7 +381,7 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
             mw += 16;
             ui->popup_win = ui->focus_win; ui->popup_wi = hi; ui->popup_menu = mi;
             ui->popup_items = m->items; ui->popup_n = m->nitems; ui->popup_hot = -1;
-            { unoui_rect pr = { tx, r.y + r.h, mw, m->nitems * 12 + 4 }; ui->popup_r = pr; }
+            { unoui_rect pr = { tx, r.y + r.h, mw, m->nitems * ui_prow_h() + 4 }; ui->popup_r = pr; }
         }
         return NO_ACT;
     }
@@ -561,6 +561,10 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
     case UI_EV_WHEEL: {                          /* scroll the hovered scrollbar/list */
         if (ui->hot_win >= 0 && ui->hot_wi >= 0) {
             unoui_widget *w = &ui->win[ui->hot_win]->w[ui->hot_wi];
+            if (w->kind == UI_CANVAS && w->canvas && w->canvas->event) {
+                w->canvas->event(w, ev, w->canvas->ctx);   /* app-scrolled region */
+                return NO_ACT;
+            }
             if (w->kind == UI_VSCROLL || w->kind == UI_HSCROLL) {
                 w->value += ev->wheel * (w->vmax / 10 + 1);
                 if (w->value < 0) w->value = 0;
@@ -588,6 +592,8 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             unoui_window *win = ui->win[ui->cap_win];
             int nw = (ev->x - ui->grab_dx) - win->r.x;
             int nh = (ev->y - ui->grab_dy) - win->r.y;
+            if (!(ui->resize_axes & 1)) nw = win->r.w;   /* edge grab: one axis */
+            if (!(ui->resize_axes & 2)) nh = win->r.h;
             if (nw < win->min_w) nw = win->min_w;
             if (nh < win->min_h) nh = win->min_h;
             if (win->r.x + nw > ui->screen_w) nw = ui->screen_w - win->r.x;
@@ -616,7 +622,7 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
           ui->hot_win = wn;
           ui->hot_wi = (wn >= 0) ? hit_widget(ui, ui->win[wn], ev->x, ev->y) : -1; }
         if (ui->popup_wi >= 0) {
-            int idx = (ev->y - (ui->popup_r.y + 2)) / 12;
+            int idx = (ev->y - (ui->popup_r.y + 2)) / ui_prow_h();
             ui->popup_hot = (idx >= 0 && idx < ui->popup_n) ? idx : -1;
         }
         return NO_ACT;
@@ -628,7 +634,7 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
 
         if (ui->popup_wi >= 0) {                 /* a popup is open */
             if (pt_in(ui->popup_r, ev->x, ev->y)) {
-                int idx = (ev->y - (ui->popup_r.y + 2)) / 12;
+                int idx = (ev->y - (ui->popup_r.y + 2)) / ui_prow_h();
                 if (idx < 0) idx = 0;
                 if (idx >= ui->popup_n) idx = ui->popup_n - 1;
                 { unoui_action a = popup_commit(ui, idx); close_popup(ui); return a; }
@@ -642,12 +648,22 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         win = ui->win[ui->focus_win];
 
         if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
-            int gs = 16;                             /* bottom-right resize grip */
-            if (ev->x >= win->r.x + win->r.w - gs && ev->x < win->r.x + win->r.w &&
-                ev->y >= win->r.y + win->r.h - gs && ev->y < win->r.y + win->r.h) {
+            /* resize zones: a generous bottom-right corner, plus the right and
+             * bottom window edges (frame + a few px inside) - so grabbing any
+             * edge works like a normal desktop, not just an invisible corner. */
+            int gs = 18, eg = ui->theme->m.frame_w + 3;
+            int in_r = ev->x >= win->r.x + win->r.w - eg && ev->x < win->r.x + win->r.w;
+            int in_b = ev->y >= win->r.y + win->r.h - eg && ev->y < win->r.y + win->r.h;
+            int in_c = ev->x >= win->r.x + win->r.w - gs && ev->y >= win->r.y + win->r.h - gs &&
+                       ev->x < win->r.x + win->r.w && ev->y < win->r.y + win->r.h;
+            int below_title = ev->y >= win->r.y + ui->theme->m.title_h;
+            if (in_c || (below_title && (in_r || in_b))) {
                 ui->cap_mode = UI_CAP_RESIZE; ui->cap_win = ui->focus_win;
                 ui->grab_dx = ev->x - (win->r.x + win->r.w);
                 ui->grab_dy = ev->y - (win->r.y + win->r.h);
+                /* edge grabs resize only that axis: pin the other by parking
+                 * its grab offset so the pointer tracks the same edge. */
+                ui->resize_axes = in_c ? 3 : ((in_r ? 1 : 0) | (in_b ? 2 : 0));
                 return NO_ACT;
             }
         }

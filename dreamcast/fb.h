@@ -76,5 +76,7 @@ void fb_round_rect (int x, int y, int w, int h, int rad, fb_px c);
 void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int corners);
 void fb_set_clip   (int x, int y, int w, int h);   /* confine drawing to a rect */
 void fb_reset_clip (void);                          /* clip = whole screen */
+void fb_get_clip   (int *x, int *y, int *w, int *h); /* current clip (save/restore) */
+int  fb_text_h(void);                               /* line height (8 = bitmap font) */
 
 #endif

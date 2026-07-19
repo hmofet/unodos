@@ -28,6 +28,12 @@ unsigned int uno_fat_serial(int vol);            /* BPB volume id (dedup key)  *
  * get() copies entry i.  dir "" or NULL = root; else a backslash path. */
 int  uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn);
 
+/* like uno_fat_list, but with metadata (dir flag + byte size) and INCLUDING
+ * subdirectory entries; "."/"..", labels, LFN and deleted entries are skipped.
+ * Fills up to maxn entries; returns the total count (may exceed maxn). */
+typedef struct { char name[13]; int is_dir; long size; } uno_fat_entry;
+int  uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn);
+
 /* read a file by path; returns bytes read (<= max), or -1 if not found */
 long uno_fat_read(int vol, const char *path, unsigned char *buf, long max);
 
@@ -37,6 +43,16 @@ int  uno_fat_write(int vol, const char *path, const unsigned char *buf, long len
 
 /* delete a file; returns 1 if it existed and was removed. */
 int  uno_fat_delete(int vol, const char *path);
+
+/* create ONE directory level ("DOCS" or "EFI\DOCS"; the parent must already
+ * exist).  Returns 1 on success, 0 on failure - an existing entry of that
+ * name counts as failure (harmless: nothing is touched). */
+int  uno_fat_mkdir(int vol, const char *path);
+
+/* rename a file or subdirectory within its directory (newname is a bare 8.3
+ * name, no path).  Returns 1 on success, 0 if the source is missing or the
+ * new name is already taken there. */
+int  uno_fat_rename(int vol, const char *path, const char *newname);
 
 /* Boot-time storage self-test (inert unless armed): on any writable FAT volume
  * holding "WRTEST.REQ", read it, write "WRTEST.OK" containing that text plus a

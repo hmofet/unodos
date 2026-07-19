@@ -7,7 +7,41 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
-## Newest — lid-close sleep
+## Newest — UI overhaul (fonts, alignment, resize, Editor/Files rewrites)
+
+QEMU-verified: layout/alignment, the WordPad-class Editor (typing, select-all,
+bold, wrap), the Files two-pane manager, System groups, UI-scale rebuild,
+theme re-skins, HDA/AC'97 tone capture. Metal-only follow-ups:
+
+- [ ] **Text spacing on the panel.** The TTF engine now positions glyphs with
+      a fractional pen + kerning and honors subpixel (LCD) fractions. On the
+      Carbon's panel, UI text and Editor text should read evenly - no more
+      erratic letter/word gaps. If subpixel fringing looks off on this panel,
+      toggle it: Control Panel font stays, `uno_font_set_subpixel(0)` is the
+      code-side switch (worth a knob later if needed).
+- [ ] **Window resize with the trackpad.** Every native window (Editor, Files,
+      System, Control Panel) now sets UI_WIN_RESIZE. Grab the visible ridged
+      grip at the bottom-right corner (18 px zone), or any right/bottom edge
+      (frame + 3 px), below the title bar. Fill widgets (Editor doc, Files
+      panes) must reflow live while dragging.
+- [ ] **Editor on metal.** Type at speed (layout cache + glyph banks should
+      hold 60 fps at 1920x1200); bold/italic/underline + face/size runs; save
+      as UWD to the FAT volume, reboot, reopen (styles intact); save a .TXT
+      and check it in the Browser.
+- [ ] **Files real ops on the installed FAT volume.** New folder, rename,
+      delete (armed twice), copy + move between panes (Two panes), subdir
+      navigation (Open/Enter, Up/Backspace). Then `uno_fat_sync` coverage:
+      do ops, detach-reboot, confirm they persisted.
+- [ ] **UI scale on the Carbon.** 125% / 150% at native 1920x1200 - everything
+      (taskbar, icons, menus, windows) re-lays out; pick what reads best.
+- [ ] **HDA crackle.** Playback now runs a 200 ms lead against the DMA
+      position buffer (LPIB fallback) with stall resync + sfence. Play the
+      Music app + the chime: crackle should be gone or greatly reduced. If a
+      posbuf reads dead on this codec the LPIB fallback engages silently.
+- [ ] **Start button + taskbar.** The One-mark logo reads at taskbar size;
+      chips stop before the tray clock instead of overlapping.
+
+## Lid-close sleep
 
 - [ ] On any laptop with a working ACPI lid (the System window shows
       `lid open`/`closed`): close the lid → screen blanks; open it → the desktop

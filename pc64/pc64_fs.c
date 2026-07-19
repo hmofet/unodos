@@ -156,3 +156,20 @@ int uno_fs_writable(int vol)
     if (vol < 0 || vol >= g_nmap) return 0;
     return g_map[vol].kind == KIND_RAM || g_map[vol].kind == KIND_FAT;
 }
+
+/* what backs a volume: KIND_RAM / KIND_FAT / KIND_FW, or -1 for a bad index */
+int uno_fs_kind(int vol)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return -1;
+    return g_map[vol].kind;
+}
+
+/* fat.c volume index behind a native-FAT volume (for the richer uno_fat_*
+ * calls - subdirs, mkdir, rename); -1 unless uno_fs_kind(vol) == 1 */
+int uno_fs_fat_index(int vol)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap || g_map[vol].kind != KIND_FAT) return -1;
+    return g_map[vol].idx;
+}
