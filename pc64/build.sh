@@ -35,13 +35,26 @@ if [ "$1" != "legacy" ]; then
     # UNO_I2C_TRACKPAD: the native trackpad driver is now self-configuring
     # (enumerates LPSS I2C + probes HID), bounded, and inert when no pad is
     # found (e.g. QEMU), so it ships enabled - it just needs pc64_pci.
-    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -I../unoui -I../unosound"
+    # UNO_ACPI: the unoacpi AML/ACPI stack (vendored uACPI + shared handlers +
+    # the pc64 host layer) - battery %/lid via _BST/_LID on real laptops.
+    # Read-only, NO_ACPI_MODE, every EC wait bounded -> inert/safe on QEMU.
+    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI \
+         -I../unoui -I../unosound -I../unoacpi -I../unoacpi/uacpi/include"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs i2c_hid xhci ax88179 uefi_main pc64_uui pc64_uui_apps pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs i2c_hid xhci ax88179 uefi_main pc64_uui pc64_uui_apps pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+    done
+    # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
+    # vendored uACPI interpreter (third-party -> -w).
+    for u in acpi_arena ec_handler smbus_handler acpi_power; do
+        "$CC" $UCF -c -o "build/unoacpi_$u.o" "../unoacpi/$u.c"; OBJS="$OBJS build/unoacpi_$u.o"
+    done
+    for c in $(find ../unoacpi/uacpi/source -name '*.c' | sort); do
+        b=$(basename "$c" .c)
+        "$CC" $UCF -w -c -o "build/uacpi_$b.o" "$c"; OBJS="$OBJS build/uacpi_$b.o"
     done
     # uno3d: the write-once 3D pipeline + soft rasteriser + Intel scaffold + game
     # (Runner3D is a native game canvas that drives these directly).

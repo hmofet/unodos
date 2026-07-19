@@ -5,6 +5,29 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unoacpi — AML/ACPI interpreter: battery + lid on pc64] - 2026-07-18
+
+pc64 now runs a real AML interpreter: **unoacpi** ([unoacpi/](unoacpi/)), the
+portable ACPI power stack shared verbatim with Writer's Unlock (vendored
+[uACPI](https://github.com/uACPI/uACPI) 6.0.0 + arena heap + EmbeddedController
+and SMBus/GenericSerialBus op-region handlers + battery/lid consumer API).
+UnoDOS implements only the thin host layer ([pc64/acpi_host.c](pc64/acpi_host.c)
+— the ~25 `uacpi_kernel_*` callbacks: RSDP from the EFI config table, identity
+map, TSC nanosecond clock, port I/O, PCI mech #1, single-threaded stubs).
+
+- **Battery % in the taskbar tray** (AML `_BST`/`_BIF`, cached ~2 s) — appears
+  only when ACPI reports a battery, so QEMU/desktops show no chip.
+- **System window readout**: bring-up status, namespace nodes, battery, lid
+  (`_LID`), EC state, arena high-water.
+- Read-only and hardened for real laptops: `NO_ACPI_MODE` (never writes
+  SMI/ACPI-enable), every EC/SMBus wait TSC-bounded (hostile ECs time out, never
+  hang), FACS Global Lock neutralised after namespace load (`Lock`-ed EC fields
+  dispatch without an SCI handshake). All lessons inherited from the
+  writers-unlock hardware campaign (X1 Carbon/Yoga/Latitude/Surface/MBP).
+- Verified headless: `harness.py acpi` boots QEMU+OVMF with a synthetic
+  `PNP0C0A`/`PNP0C0D` SSDT ([pc64/tools/testbat.asl](pc64/tools/testbat.asl))
+  and screenshots the 50% tray chip + System readout; plain boot stays clean.
+
 ## [unoui — cross-platform UI toolkit (write-once widgets, themes, portable input)] - 2026-06-15
 
 A new portable C widget toolkit, **unoui** ([unoui/](unoui/), guide in

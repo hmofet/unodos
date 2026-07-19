@@ -106,7 +106,7 @@ def main():
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
-    qemu = subprocess.Popen([
+    argv = [
         "qemu-system-x86_64", "-machine", "q35", "-m", "256",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
@@ -116,7 +116,12 @@ def main():
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
         "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
-    ])
+    ]
+    if len(sys.argv) > 1 and sys.argv[1] == "acpi":
+        # unoacpi verification: inject the synthetic battery/lid SSDT (50%).
+        # Build it first if needed:  iasl tools/testbat.asl
+        argv += ["-acpitable", "file=tools/testbat.aml"]
+    qemu = subprocess.Popen(argv)
     try:
         q = Qmp(QMP_SOCK)
         print("qemu up; waiting for OVMF -> UnoDOS boot...")
@@ -124,6 +129,18 @@ def main():
         shot(q, "m1_desktop")
 
         if len(sys.argv) > 1 and sys.argv[1] == "boot":
+            return
+
+        # ---- unoacpi: synthetic battery boot (harness.py acpi) -------------
+        # Open System via the Start menu, keyboard-only: Ctrl-Esc opens the
+        # launcher, Down x3 = System (menu order = app order), Enter activates.
+        if len(sys.argv) > 1 and sys.argv[1] == "acpi":
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "esc"}])
+            time.sleep(0.8)
+            keys(q, "down", "down", "down"); keys(q, "ret")
+            time.sleep(1.5)
+            shot(q, "acpi_system")             # "ACPI AML: up ... bat 50% lid open"
             return
 
         # ---- M4: mouse (usb-tablet -> EFI Absolute Pointer) ----------------
