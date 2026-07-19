@@ -222,7 +222,13 @@ reach the same state at frame N — no live-clock timing skew to dodge).
 `AUDIT-<port>.md §1` — c64 P2/P3/P4, gb P2/P3, gba P2/P3, gg P2, nes P1/P2, pce
 P2/P3, vic20, and the `clock_format`-every-wall-second micro on the tile ports.
 
-**On hold:** **iigs P1** — skip per the user.
+**iigs** — ✅ **P1 done** (raise/create `b2a5c3f`, close/drag `440dd31`: row-band
+clip on the SHR primitives + `redraw_topmost` for raise/create) and ✅ **P3 done**
+(`350358c`: `fill_band` 16-bit word stores). Verified byte-identical via
+`harness.py` (its `drag` script op was added). Remaining: **P4** OutLast is *not*
+byte-identical (the road scrolls every frame — gating changes the animation);
+**P5** (per-cell multiply) and **P2** (cache the static desktop) are low-value /
+larger and left for later.
 
 ## Models to copy
 - Damage-rect / clip: the genesis+sms+snes work above is now the in-repo
