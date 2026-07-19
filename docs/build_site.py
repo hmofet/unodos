@@ -493,8 +493,7 @@ PAGES["index.html"] = ("Overview", f"""
 
 <p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
 <strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
-2007, and it has been tested in emulators and on a real <strong>Lenovo ThinkPad X1 Carbon</strong>
-laptop booting from a USB stick.</p>
+2007, and it has been tested in emulators and on real hardware booting from a USB stick.</p>
 
 {note('Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
