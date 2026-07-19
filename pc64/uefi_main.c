@@ -39,6 +39,9 @@
 #include "mac_compat.h"
 #include "i2c_hid.h"        /* native I2C-HID trackpad (inert unless -DUNO_I2C_TRACKPAD) */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
+#ifdef UNO_ACPI
+#include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
+#endif
 
 int uno_main(void);                 /* the portable core (-Dmain=uno_main) */
 void uno_screen_changed(void);      /* core hook: resolution changed (unodos.c) */
@@ -512,6 +515,13 @@ void uno_pc64_init(void)
     }
     splash_step(3);                 /* input located */
     uno_i2c_hid_init();             /* native trackpad; inert unless built in */
+#ifdef UNO_ACPI
+    /* Bring up the AML interpreter (unoacpi): parse the firmware's DSDT/SSDTs
+     * and locate the battery/lid devices.  Read-only (NO_ACPI_MODE, no SCI/GPE)
+     * and every EC/SMBus wait is TSC-bounded, so a hostile or absent EC times
+     * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
+    uno_acpi_start(gST);
+#endif
     splash_step(4);                 /* ready - the bar fills, core takes over */
     uno_pc64_chime();               /* startup chime: loading complete */
 

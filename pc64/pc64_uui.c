@@ -23,6 +23,10 @@
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
+#ifdef UNO_ACPI
+#include "acpi_power.h"      /* unoacpi: AML battery/lid (portable consumer API) */
+#include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
+#endif
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -92,6 +96,7 @@ static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_
 static const char *g_files[] = { "README.TXT", "NOTES.TXT", "SONG.TRK" };
 static const char *g_fmts[]  = { "Plain", "Markdown", "UnoDOS" };
 static char g_clock[40] = "Uptime 0 s";
+static char g_batt[12];      /* tray battery chip, "" = no battery reported */
 
 /* ---- RAM-disk File Manager glue ---------------------------------------- */
 static void c2p(const char *s, unsigned char *p)
@@ -284,11 +289,46 @@ static void build_usbstat(void)
           if (bnd) r = ap_str(r, lnk ? "up" : "down"); *r = 0; } }
 }
 
+/* ACPI (unoacpi AML interpreter): bring-up + battery/lid, for System */
+static char g_acpi1[80], g_acpi2[80];
+static void build_acpistat(void)
+{
+#ifdef UNO_ACPI
+    acpi_power_diag d;
+    char *p;
+    acpi_power_get_diag(&d);
+    p = ap_str(g_acpi1, "ACPI AML: ");
+    if (!uno_acpi_rsdp())      p = ap_str(p, "no RSDP");
+    else if (!d.ok)            p = ap_str(p, "bring-up failed");
+    else {
+        p = ap_str(p, "up, "); p = ap_int(p, (int)d.ns_nodes);
+        p = ap_str(p, " nodes  bat ");
+        if (d.bat_percent >= 0) { p = ap_int(p, d.bat_percent); *p++ = '%'; }
+        else                      p = ap_str(p, "--");
+        p = ap_str(p, "  lid ");
+        p = ap_str(p, d.lid_state == 1 ? "open" :
+                      d.lid_state == 0 ? "closed" : "--");
+    }
+    *p = 0;
+    p = ap_str(g_acpi2, "  EC ");
+    p = ap_str(p, d.ec_present ? "up" : "--");
+    p = ap_str(p, " rd="); p = ap_int(p, d.ec_reads);
+    p = ap_str(p, " tmo="); p = ap_int(p, d.ec_timeouts);
+    p = ap_str(p, "  arena "); p = ap_int(p, (int)(d.arena_peak >> 10));
+    p = ap_str(p, "/"); p = ap_int(p, (int)(d.arena_total >> 10));
+    p = ap_str(p, " KB"); *p = 0;
+#else
+    ap_str(g_acpi1, "ACPI AML: not built in")[0] = 0;
+    g_acpi2[0] = 0;
+#endif
+}
+
 static void build_sys(unoui_window *w)
 {
     build_tpstat();
     build_usbstat();
-    unoui_window_init(w, "System", 400, 210, 340, 176);
+    build_acpistat();
+    unoui_window_init(w, "System", 400, 210, 376, 208);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
     unoui_add_label(w, 8, 42, "10 themes  -  live re-skin");
@@ -297,6 +337,8 @@ static void build_sys(unoui_window *w)
     unoui_add_label(w, 8, 84,  g_tp2);
     unoui_add_label(w, 8, 102, g_usb);
     unoui_add_label(w, 8, 118, g_usb2);
+    unoui_add_label(w, 8, 136, g_acpi1);
+    unoui_add_label(w, 8, 152, g_acpi2);
 }
 static void build_clock(unoui_window *w)
 {
@@ -446,11 +488,17 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
         x += TB_CHIP_GAP;
     }
-    /* system tray: a clock chip, right-aligned */
+    /* system tray: battery (when ACPI reports one) + clock chips, right-aligned */
     { int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
       if (modern) fb_round_rect_a(cxx, by, cw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
       else        tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
-      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1); }
+      fb_text(cxx + 8, r.y + (r.h - 8) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1);
+      if (g_batt[0]) {
+          int bw = fb_text_w(g_batt) + 16, bx = cxx - bw - 4;
+          if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
+          else        tb_panel(bx, by, bw, bh, t->pal.field_bg, 1);
+          fb_text(bx + 8, r.y + (r.h - 8) / 2, g_batt, modern ? t->pal.text : t->pal.field_text, -1);
+      } }
 }
 
 static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
@@ -914,6 +962,24 @@ static void fmt_clock(int uptime_secs)
     }
 }
 
+/* tray battery chip: AML _BST percentage (internally cached ~2 s, so this is
+ * cheap to call every half-second tick).  Empty string = no battery -> hidden. */
+static void fmt_batt(void)
+{
+#ifdef UNO_ACPI
+    int pct = acpi_battery_percent();
+    if (pct >= 0) {
+        int j = 0;
+        if (pct >= 100) g_batt[j++] = '0' + (pct / 100) % 10;
+        if (pct >= 10)  g_batt[j++] = '0' + (pct / 10) % 10;
+        g_batt[j++] = '0' + pct % 10;
+        g_batt[j++] = '%';
+        g_batt[j] = 0;
+    } else
+        g_batt[0] = 0;
+#endif
+}
+
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
 static int active_legacy(void)
 {
@@ -945,6 +1011,7 @@ int main(void)
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
+    fmt_batt();                                      /* tray battery (ACPI)  */
     uno_font_set_subpixel(1);           /* subpixel AA when a TTF is picked */
     /* default stays the built-in 8x8 bitmap (monospace) - a safe, tested
      * fallback; the Control Panel Font picker opts into a TTF face. */
@@ -958,6 +1025,7 @@ int main(void)
         else if (++idle >= 30) {        /* ~0.5 s: caret blink + tray clock tick */
             idle = 0; g_dirty = 1;
             fmt_clock(++halfsecs / 2);
+            fmt_batt();                 /* AML _BST, self-cached ~2 s */
         }
         feed(&tick);                    /* advance the caret-blink timebase */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
