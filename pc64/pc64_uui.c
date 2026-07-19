@@ -1204,9 +1204,12 @@ int main(void)
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
     fmt_batt();                                      /* tray battery (ACPI)  */
-    uno_font_set_subpixel(1);           /* subpixel AA when a TTF is picked */
-    /* default stays the built-in 8x8 bitmap (monospace) - a safe, tested
-     * fallback; the Control Panel Font picker opts into a TTF face. */
+    uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
+    /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
+     * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
+     * (e.g. missing from the ESP) uno_font_use falls back to the built-in 8x8
+     * bitmap, which the Control Panel picker ("System (mono)") also selects. */
+    uno_font_use(0);
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;

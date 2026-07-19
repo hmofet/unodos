@@ -495,7 +495,7 @@ static int write_boot_entry(const DP_NODE *prefix, int prefix_sz, int make_defau
 static int install_esp(target *t, int make_default,
                        void (*progress)(int, const char *))
 {
-    static const char *aux[] = { "SANS.TTF", "MONO.TTF", "UBUNTU.TTF",
+    static const char *aux[] = { "CHICAGO.TTF", "SANS.TTF", "MONO.TTF", "UBUNTU.TTF",
                                  "HELLO.MD", "PAGE.HTML" };
     char dst[64]; int i; I_FILE *sroot, *droot;
     DP_NODE *dp;
