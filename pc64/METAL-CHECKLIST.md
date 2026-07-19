@@ -42,10 +42,11 @@ machine that showed `0 DW ctrl / 3 bars`):
       metal-first**. For an attached-mode smoke test: `-DUNO_XHCI
       -DUNO_USBHID_TEST -DUNO_NO_DETACH` brings USB HID up eagerly.
 
-**Surface full OSK removal** still needs **native NVMe** so the Surface can
-detach (its storage is NVMe; the AHCI driver + the detach gate only cover
-SATA/AHCI today). That's the remaining gap — input takeover is done, storage
-isn't.
+**Surface full OSK removal** still needs a native driver for its storage so it
+can detach. Native **NVMe now exists** (`nvme.c`, QEMU-verified incl. detach +
+raw-verified writes) — but this particular Surface Laptop Go is the **eMMC**
+model, so the remaining gap for THAT machine is an SDHCI/eMMC driver, not NVMe.
+NVMe-SSD laptops are covered. Input takeover is done either way.
 
 ## M3 firmware detach (ExitBootServices) on metal
 
@@ -59,9 +60,14 @@ CMOS clock). Metal is where the gate's conservatism actually matters:
       (CF9). Music/games audio still fine (PIT speaker was already native).
 - [ ] **USB-stick boot on the same machine**: must STAY attached (the boot
       volume is USB) — System says `Native FS: fw-sect ...`, Install works.
-- [ ] **The Surface / X1 (no i8042 or NVMe-only)**: must stay attached and
-      behave exactly as before (the detach gate declines quietly; check
-      `detach:` lines with a `-DUNO_DBGCON` build if curious).
+- [ ] **A machine with an NVMe system disk** (UnoDOS installed to the internal
+      SSD): boot → System should say `DETACHED (native): nvme0 ...`; apps open
+      (native NVMe `.UNO` loads), an Editor save survives a reboot.
+      QEMU-verified end-to-end by `tools/nvme_test.py`; metal-pending.
+- [ ] **The Surface (eMMC, no native driver) / machines with no native kbd**:
+      must stay attached and behave exactly as before (the detach gate
+      declines quietly; check `detach:` lines with a `-DUNO_DBGCON` build if
+      curious).
 - [ ] If a machine misbehaves detached, `-DUNO_NO_DETACH` is the escape hatch
       (and file what broke — likely NX page tables or an AHCI quirk).
 

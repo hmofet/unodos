@@ -379,11 +379,14 @@ static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
     char *p;
+    const char *nat0 = 0;                /* first native driver's name (ahci0/nvme0) */
     int uno_pc64_detached(void);
-    for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i); if (b && b->native) nnat++; }
+    for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i);
+        if (b && b->native) { nnat++; if (!nat0) nat0 = b->name; } }
     p = ap_str(g_nat, uno_pc64_detached() ? "DETACHED (native): "
                                           : "Native FS: ");
-    p = ap_str(p, nnat ? "ahci " : "fw-sect ");
+    if (nnat) { p = ap_str(p, nat0); *p++ = ' '; }
+    else        p = ap_str(p, "fw-sect ");
     p = ap_int(p, nblk); p = ap_str(p, " disk");
     p = ap_str(p, "  FAT vols "); p = ap_int(p, nfat);
     if (nfat > 0) { p = ap_str(p, " (");

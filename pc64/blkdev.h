@@ -2,10 +2,11 @@
  *
  * A small registry of 512-byte-sector block devices the native storage stack
  * (fat.c) mounts partitions from.  Backends register at init:
- *   - ahci.c        - the NATIVE AHCI driver (no firmware in the path)
+ *   - ahci.c        - the NATIVE AHCI (SATA) driver (no firmware in the path)
+ *   - nvme.c        - the NATIVE NVMe driver (PCIe SSDs, ditto)
  *   - blkdev.c      - a fallback wrapping firmware EFI Block IO whole-disk
  *                     handles, so disks without a native controller driver
- *                     (NVMe/eMMC/USB) still get native partition scanning and
+ *                     (eMMC/USB) still get native partition scanning and
  *                     FAT mounting.  The FS bytes still never go through the
  *                     firmware FAT driver - only the sector transport does.
  */
@@ -39,5 +40,9 @@ int uno_blk_register(const uno_bdev *dev);
 /* ahci.c */
 int uno_ahci_init(void);             /* registers its disks; returns count */
 int uno_ahci_present(void);          /* controller found + brought up      */
+
+/* nvme.c */
+int uno_nvme_init(void);             /* registers its namespaces; returns count */
+int uno_nvme_present(void);          /* controller found + brought up      */
 
 #endif

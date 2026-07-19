@@ -213,28 +213,32 @@ void uno_fat_remount(void)
     uno_fat_init();
 }
 
-/* The detach gate: 1 only if a volume the native AHCI driver will still
- * reach after the firmware dies (its controller PCI dev/fn is the AHCI-class
- * function pc64's driver binds) actually CARRIES OUR SYSTEM (a UnoDOS
- * BOOTX64.EFI).  A merely-present foreign FAT partition must not count -
- * a USB-booted system would detach away its own boot volume and the
- * firmware-dependent Install app. */
+/* The detach gate: 1 only if a volume a native driver will still reach
+ * after the firmware dies (its controller PCI dev/fn is an AHCI- or
+ * NVMe-class function pc64's drivers bind) actually CARRIES OUR SYSTEM (a
+ * UnoDOS BOOTX64.EFI).  A merely-present foreign FAT partition must not
+ * count - a USB-booted system would detach away its own boot volume and
+ * the firmware-dependent Install app. */
 int uno_fat_native_eligible(void)
 {
     static const char *marks[] = { "EFI\\UNODOS\\BOOTX64.EFI",
                                    "EFI\\BOOT\\BOOTX64.EFI" };
-    pci_dev ah;
-    int i, m;
+    static const unsigned char cls[2][2] = { { 0x01, 0x06 },   /* AHCI */
+                                             { 0x01, 0x08 } }; /* NVMe */
+    pci_dev ctl;
+    int c, i, m;
     unsigned char sig[2];
-    if (!pci_find_class(0x01, 0x06, &ah)) return 0;
-    for (i = 0; i < g_nvol; i++) {
-        if (!g_vol[i].dev || g_vol[i].dev->pci_dev != ah.dev ||
-            g_vol[i].dev->pci_fn != ah.fn)
-            continue;
-        for (m = 0; m < 2; m++)
-            if (uno_fat_read(i, marks[m], sig, 2) == 2 &&
-                sig[0] == 'M' && sig[1] == 'Z')
-                return 1;
+    for (c = 0; c < 2; c++) {
+        if (!pci_find_class(cls[c][0], cls[c][1], &ctl)) continue;
+        for (i = 0; i < g_nvol; i++) {
+            if (!g_vol[i].dev || g_vol[i].dev->pci_dev != ctl.dev ||
+                g_vol[i].dev->pci_fn != ctl.fn)
+                continue;
+            for (m = 0; m < 2; m++)
+                if (uno_fat_read(i, marks[m], sig, 2) == 2 &&
+                    sig[0] == 'M' && sig[1] == 'Z')
+                    return 1;
+        }
     }
     return 0;
 }
@@ -518,6 +522,11 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
         memset(c->buf + eoff, 0, 32);
         memcpy(c->buf + eoff, leaf, 11);
         c->buf[eoff + 11] = 0x20;                     /* archive              */
+        cache_put(c);   /* mark dirty NOW: fat_alloc's free-scan below churns
+                           the 8-line cache, and evicting a clean line DISCARDS
+                           the name - the final entry-fill then re-reads the
+                           old sector and stamps cluster/size into a slot whose
+                           name is zeroed (invisible file, leaked chain) */
     }
 
     /* write data cluster by cluster */
