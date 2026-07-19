@@ -877,6 +877,18 @@ start:
         moveq   #0,d0
         bsr     launch_app          ; SysInfo exists -> raise to top
         endc
+        ifd     AUTOTEST_CLOSE
+        ; open three overlapping static windows, then close the top one. The
+        ; clipped repaint must reveal the two behind byte-identically.
+        bsr     notepad_set_demo
+        moveq   #0,d0
+        bsr     launch_app          ; SysInfo (bottom)
+        moveq   #2,d0
+        bsr     launch_app          ; Notepad
+        moveq   #10,d0
+        bsr     launch_app          ; Paint (top)
+        bsr     close_topmost       ; close Paint -> reveal Notepad + SysInfo
+        endc
         ifnd    AUTOTEST_NOTEPAD
         ifnd    AUTOTEST_MUSIC
         ifnd    AUTOTEST_KBD
@@ -893,6 +905,7 @@ start:
         ifnd    AUTOTEST_PAINT
         ifnd    AUTOTEST_DRAG
         ifnd    AUTOTEST_RAISE
+        ifnd    AUTOTEST_CLOSE
         ; default composite: notepad with demo text, music on top playing,
         ; soft keyboard panel up
         bsr     notepad_set_demo
@@ -902,6 +915,7 @@ start:
         bsr     launch_app
         bsr     music_start
         bsr     softkbd_show
+        endc
         endc
         endc
         endc
@@ -1575,6 +1589,17 @@ close_window:
         move.w  d0,-(sp)
         move.w  d0,d2
         bsr     zwin_ptr
+        ; clip = the closed window's rect: genesis draws no shadow beyond the
+        ; rect and has no active-title restyle, so that rect is the entire
+        ; damage. repaint_all (clipped) reveals what was behind it (P1 close).
+        move.w  WX(a2),d1
+        move.w  d1,VARS+v_clip_x0
+        add.w   WW(a2),d1
+        move.w  d1,VARS+v_clip_x1
+        move.w  WY(a2),d1
+        move.w  d1,VARS+v_clip_y0
+        add.w   WH(a2),d1
+        move.w  d1,VARS+v_clip_y1
         sf      WSTATE(a2)
         ; free the app task (slot from the window entry address)
         movem.l d0/a0,-(sp)
@@ -1595,7 +1620,8 @@ close_window:
         move.b  1(a0,d0.w),(a0,d0.w)
         addq.w  #1,d0
         bra     .shift
-.done:  bsr     repaint_all
+.done:  bsr     repaint_all         ; clipped to the closed window's rect
+        bsr     clip_reset
         rts
 
 close_topmost:

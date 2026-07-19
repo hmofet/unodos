@@ -38,6 +38,7 @@ case "$1" in
   paint)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_PAINT=1";    OUT=build/unodos_pt.gen ;;
   drag)    FLAGS="-DAUTOTEST=1 -DAUTOTEST_DRAG=1";     OUT=build/unodos_dg.gen ;;
   raise)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_RAISE=1";    OUT=build/unodos_rz.gen ;;
+  close)   FLAGS="-DAUTOTEST=1 -DAUTOTEST_CLOSE=1";    OUT=build/unodos_cz.gen ;;
 esac
 
 echo "[2/2] assembling kernel.asm (cpu 68000, flat binary)..."
