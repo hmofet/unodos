@@ -24,6 +24,8 @@ int uno_usb_set_config(int dev, int cfg) { (void)dev;(void)cfg; return -1; }
 int uno_usb_setup_bulk(int dev, int i, int o, int im, int om) { (void)dev;(void)i;(void)o;(void)im;(void)om; return -1; }
 int uno_usb_bulk_out(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
+int uno_usb_setup_intr_in(int dev, int a, int m) { (void)dev;(void)a;(void)m; return -1; }
+int uno_usb_intr_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
@@ -132,6 +134,11 @@ static trb_t g_bin[MAX_DEV][BULK_RING_SZ]  __attribute__((aligned(64)));
 static trb_t g_bout[MAX_DEV][BULK_RING_SZ] __attribute__((aligned(64)));
 static int   g_bin_i[MAX_DEV], g_bin_cyc[MAX_DEV], g_bin_dci[MAX_DEV];
 static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
+
+/* interrupt-IN endpoint (HID) - one outstanding TRB into a per-device buffer,
+ * polled non-blocking each frame; reuses the g_bin ring of that device slot. */
+static int   g_intr_dci[MAX_DEV], g_intr_mps[MAX_DEV];
+static u8    g_hidbuf[MAX_DEV][64] __attribute__((aligned(64)));
 
 /* ---- state --------------------------------------------------------------- */
 static volatile u8 *g_cap;         /* MMIO base */
@@ -423,6 +430,62 @@ int uno_usb_bulk_in(int dev, void *data, int len)
     wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
     cc = poll_xfer(&resid, 5000000);
     return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
+}
+
+/* post one interrupt-IN TRB into the device's HID buffer + ring the doorbell */
+static void intr_post(int dev)
+{
+    ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
+            (u64)(uintptr_t)g_hidbuf[dev], (u32)g_intr_mps[dev],
+            TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP short-packet ok*/);
+    wr32(g_db, g_devs[dev].slot*4, g_intr_dci[dev]);
+}
+
+/* Configure a single interrupt-IN endpoint (HID). in_addr = bEndpointAddress
+ * (e.g. 0x81); mps from the endpoint descriptor. Posts the first TRB. */
+int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
+{
+    int di = dev, slot, in_dci, st, i, cc;
+    u32 sdw0, sdw1;
+    if (dev < 0 || dev >= g_ndevs) return -1;
+    if (mps <= 0 || mps > (int)sizeof g_hidbuf[0]) mps = (int)sizeof g_hidbuf[0];
+    slot = g_devs[di].slot;
+    in_dci = (in_addr & 0xF) * 2 + 1;                     /* IN endpoint DCI */
+    if (in_dci > 31) return -1;
+    st = g_csz ? 64 : 32;
+    for (i = 0; i < (int)sizeof g_inctx[di]; i++) g_inctx[di][i] = 0;
+    ctx_wr(g_inctx[di], 4, 1u | (1u<<in_dci));            /* add slot + the EP */
+    sdw0 = *(volatile u32 *)(g_devctx[di] + 0);
+    sdw1 = *(volatile u32 *)(g_devctx[di] + 4);
+    sdw0 = (sdw0 & ~(0x1Fu<<27)) | ((u32)in_dci<<27);     /* context entries = max DCI */
+    ctx_wr(g_inctx[di], st+0, sdw0);
+    ctx_wr(g_inctx[di], st+4, sdw1);
+    for (i = 0; i < BULK_RING_SZ; i++) {
+        g_bin[di][i].param=0; g_bin[di][i].status=0; g_bin[di][i].control=0;
+    }
+    g_bin_i[di]=0; g_bin_cyc[di]=1;
+    setup_ep(di, in_dci, 7 /*Interrupt In*/, mps, g_bin[di]);
+    cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
+    if (cc != CC_SUCCESS) return -1;
+    g_intr_dci[di] = in_dci; g_intr_mps[di] = mps;
+    intr_post(di);                                        /* first outstanding TRB */
+    return 0;
+}
+
+/* Non-blocking: if the outstanding interrupt-IN transfer completed, copy the
+ * report into `data`, re-post, and return its byte count; 0 if none yet; -1 on
+ * error. Keeps exactly one TRB outstanding, so it never desyncs the ring. */
+int uno_usb_intr_in(int dev, void *data, int maxlen)
+{
+    int resid = 0, cc, n, i;
+    if (dev < 0 || dev >= g_ndevs || !g_intr_dci[dev]) return -1;
+    cc = poll_xfer(&resid, 40000);                        /* short budget: ~no stall */
+    if (cc != CC_SUCCESS && cc != 13) return 0;           /* no report this frame */
+    n = g_intr_mps[dev] - resid;
+    if (n > maxlen) n = maxlen;
+    for (i = 0; i < n; i++) ((u8 *)data)[i] = g_hidbuf[dev][i];
+    intr_post(dev);                                       /* re-arm */
+    return n;
 }
 
 /* one bring-up attempt: reset -> rings -> run -> port scan -> enumerate.
