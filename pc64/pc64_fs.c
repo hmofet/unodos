@@ -1,47 +1,140 @@
 /* ===========================================================================
  * UnoDOS/pc64 - unified file system (see pc64_fs.h).
  *
- * Volume 0 = the RAM disk (pc64_io.c: uno_ramfs_*). Volumes 1.. = the FAT /
- * local disks the firmware mounted, via the EFI Simple File System wrappers in
- * uefi_main.c (uno_efifs_*). One flat namespace per volume; read-only.
+ * Volume layering, in order:
+ *   0                     the RAM disk (pc64_io.c: uno_ramfs_*)
+ *   1 .. 1+nfat           NATIVE FAT16/32 mounts (fat.c over the block layer -
+ *                         AHCI or firmware-sector transport; no firmware FAT
+ *                         code in the path).  This is where an installed
+ *                         UnoDOS lives - any FAT32 partition on any disk.
+ *   1+nfat .. end         remaining firmware Simple-File-System volumes that
+ *                         the native stack did NOT already mount (e.g. the boot
+ *                         USB behind xHCI, which has no native block driver),
+ *                         deduplicated against the native mounts by FAT serial.
+ *
+ * Read AND write.  Native FAT and the RAM disk are writable; firmware SFS is
+ * read-only here (its write path stays in installer.c where it is proven).
+ * Names are 8.3 in the root of each volume; the native FAT layer also accepts
+ * backslash subdir paths for the app loader / font fallback.
  * ======================================================================== */
 #include "pc64_fs.h"
+#include "fat.h"
 
 /* pc64_io.c (RAM disk) */
 int  uno_ramfs_count(void);
 int  uno_ramfs_name(int idx, char *out, int max);
 long uno_ramfs_read(const char *name, unsigned char *buf, long max);
+int  uno_ramfs_write(const char *name, const unsigned char *buf, long len);
 
 /* uefi_main.c (EFI Simple File System) */
 int  uno_efifs_volumes(void);
 int  uno_efifs_snapshot(int vol, char (*names)[32], int maxn);
 long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max);
+unsigned int uno_efifs_serial(int vol);          /* BPB volume id, 0 unknown  */
 
-int uno_fs_volumes(void) { return 1 + uno_efifs_volumes(); }
+/* ---- volume map ----------------------------------------------------------- *
+ * Built once: an ordered list of (kind, index) pairs.  kind 0 = RAM,
+ * 1 = native FAT (index into fat.c), 2 = firmware SFS (index into efifs). */
+#define KIND_RAM 0
+#define KIND_FAT 1
+#define KIND_FW  2
+#define MAXMAP   20
+static struct { int kind, idx; } g_map[MAXMAP];
+static int g_nmap, g_mapped;
 
-const char *uno_fs_volume_name(int vol) { return vol == 0 ? "RAM" : "Disk"; }
+static void build_map(void)
+{
+    int i, nfat, nfw, m = 0;
+    if (g_mapped) return;
+    g_mapped = 1;
+    uno_fat_init();
 
-/* snapshot cache for the current EFI volume listing (RAM lists live) */
+    g_map[m].kind = KIND_RAM; g_map[m].idx = 0; m++;      /* volume 0 = RAM    */
+
+    nfat = uno_fat_volumes();
+    for (i = 0; i < nfat && m < MAXMAP; i++) { g_map[m].kind = KIND_FAT; g_map[m].idx = i; m++; }
+
+    nfw = uno_efifs_volumes();
+    for (i = 0; i < nfw && m < MAXMAP; i++) {
+        unsigned int fs = uno_efifs_serial(i);
+        int dup = 0, j;
+        if (fs) for (j = 0; j < nfat; j++) if (uno_fat_serial(j) == fs) { dup = 1; break; }
+        if (dup) continue;                                /* same disk, native */
+        g_map[m].kind = KIND_FW; g_map[m].idx = i; m++;
+    }
+    g_nmap = m;
+}
+
+int uno_fs_volumes(void) { build_map(); return g_nmap; }
+
+const char *uno_fs_volume_name(int vol)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return "?";
+    switch (g_map[vol].kind) {
+    case KIND_RAM: return "RAM";
+    case KIND_FAT: { const char *l = uno_fat_label(g_map[vol].idx);
+                     return (l && l[0] && l[0] != ' ') ? l : "Disk"; }
+    default:       return "USB";
+    }
+}
+
+/* snapshot cache for a listing (RAM + native FAT list live; firmware cached) */
 static char g_cache[64][32];
 static int  g_cache_n, g_cache_vol = -2;
 
 int uno_fs_list_begin(int vol)
 {
-    if (vol == 0) return uno_ramfs_count();
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_count();
+    if (g_map[vol].kind == KIND_FAT) {
+        static char fn[64][13];
+        int n = uno_fat_list(g_map[vol].idx, 0, fn, 64), i;
+        for (i = 0; i < n && i < 64; i++) {
+            int j; for (j = 0; j < 12 && fn[i][j]; j++) g_cache[i][j] = fn[i][j]; g_cache[i][j] = 0;
+        }
+        g_cache_n = n < 64 ? n : 64; g_cache_vol = vol;
+        return g_cache_n;
+    }
     g_cache_vol = vol;
-    g_cache_n = uno_efifs_snapshot(vol - 1, g_cache, 64);
+    g_cache_n = uno_efifs_snapshot(g_map[vol].idx, g_cache, 64);
     return g_cache_n;
 }
+
 int uno_fs_list_get(int vol, int idx, char *name, int max)
 {
-    if (max <= 0) return 0;
-    if (vol == 0) return uno_ramfs_name(idx, name, max);
+    build_map();
+    if (max <= 0 || vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_name(idx, name, max);
     if (vol != g_cache_vol || idx < 0 || idx >= g_cache_n) return 0;
     { int j; for (j = 0; j < max - 1 && g_cache[idx][j]; j++) name[j] = g_cache[idx][j]; name[j] = 0; }
     return 1;
 }
+
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max)
 {
-    if (vol == 0) return uno_ramfs_read(name, buf, max);
-    return uno_efifs_read(vol - 1, name, buf, max);
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return -1;
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_read(name, buf, max);
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_read(g_map[vol].idx, name, buf, max);
+    return uno_efifs_read(g_map[vol].idx, name, buf, max);
+}
+
+/* write a file to a volume's root; 1 on success, 0 if the volume is read-only
+ * or the write failed.  RAM disk + native FAT are writable; firmware SFS is not. */
+int uno_fs_write(int vol, const char *name, const unsigned char *buf, long len)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_write(name, buf, len);
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_write(g_map[vol].idx, name, buf, len);
+    return 0;                                            /* firmware SFS: RO    */
+}
+
+int uno_fs_writable(int vol)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return 0;
+    return g_map[vol].kind == KIND_RAM || g_map[vol].kind == KIND_FAT;
 }

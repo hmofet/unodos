@@ -20,6 +20,7 @@
  * ===========================================================================
  */
 #include "mac_compat.h"
+#include "pc64_fs.h"          /* uno_fs_write: mirror saves to native FAT */
 #include <stdlib.h>
 #include <string.h>
 
@@ -121,6 +122,22 @@ long uno_ramfs_read(const char *name, unsigned char *buf, long max)
     memcpy(buf, f->buf, (unsigned long)n);
     return n;
 }
+/* create/overwrite a RAM-disk file; returns 1 on success (used by uno_fs_write
+   so the unified fs surface has a working write path on volume 0 too). */
+int uno_ramfs_write(const char *name, const unsigned char *buf, long len)
+{
+    RamFile *f;
+    if (len < 0 || len > FILE_MAX) return 0;
+    f = disk_find(name);
+    if (!f) { f = disk_slot(); if (!f) return 0;
+              { int j; for (j = 0; j < NAME_MAX - 1 && name[j]; j++) f->name[j] = name[j]; f->name[j] = 0; } }
+    else if (f->buf) { free(f->buf); f->buf = 0; }
+    f->buf = (unsigned char *)malloc((unsigned long)(len ? len : 1));
+    if (!f->buf) { f->used = 0; return 0; }
+    if (len) memcpy(f->buf, buf, (unsigned long)len);
+    f->len = len; f->used = 1;
+    return 1;
+}
 
 /* =========================================================================
  * File Manager handles - flush-on-close RAM buffers (the VMU backend shape)
@@ -189,6 +206,15 @@ OSErr FSClose(short refNum)
                 free(f->buf);
                 f->buf = nb; f->len = h->len;
             }
+        }
+        /* Persist to disk too: mirror the save onto the first writable native
+         * FAT volume (the RAM disk is volatile).  On an installed system this
+         * is what makes a Notepad/Editor save survive a reboot; harmless when
+         * there is no native volume (returns 0). */
+        {
+            int nv = uno_fs_volumes(), v;
+            for (v = 1; v < nv; v++)
+                if (uno_fs_writable(v)) { uno_fs_write(v, h->name, h->buf, h->len); break; }
         }
     }
     free(h->buf);

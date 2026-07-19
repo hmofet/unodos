@@ -28,6 +28,8 @@
 #include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
 #endif
 #include "installer.h"       /* install to a local disk (the Install app) */
+#include "blkdev.h"          /* native block layer (System readout) */
+#include "fat.h"             /* native FAT mounts (System readout) */
 #include <string.h>
 
 /* ---- themes (dropdown + live re-skin) ---------------------------------- */
@@ -325,22 +327,44 @@ static void build_acpistat(void)
 #endif
 }
 
+/* Native storage: our block registry + FAT mounts.  Our FS code does all
+ * partition scanning + FAT read/write; the sector TRANSPORT is firmware Block
+ * IO while attached, and the native AHCI driver once detached (M3). */
+static char g_nat[80];
+static void build_natstat(void)
+{
+    int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
+    char *p;
+    for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i); if (b && b->native) nnat++; }
+    p = ap_str(g_nat, "Native FS: ");
+    p = ap_str(p, nnat ? "ahci " : "fw-sect ");
+    p = ap_int(p, nblk); p = ap_str(p, " disk");
+    p = ap_str(p, "  FAT vols "); p = ap_int(p, nfat);
+    if (nfat > 0) { p = ap_str(p, " (");
+        for (i = 0; i < nfat && i < 3; i++) { const char *l = uno_fat_label(i);
+            if (i) *p++ = ',';
+            if (l && l[0] && l[0] != ' ') { int k; for (k = 0; k < 11 && l[k] && l[k] != ' '; k++) *p++ = l[k]; }
+            else p = ap_str(p, "?"); }
+        *p++ = ')'; }
+    *p = 0;
+}
+
 static void build_sys(unoui_window *w)
 {
     build_tpstat();
     build_usbstat();
+    build_natstat();
     build_acpistat();
-    unoui_window_init(w, "System", 400, 210, 376, 208);
+    unoui_window_init(w, "System", 400, 210, 376, 226);
     unoui_add_label(w, 8, 6,  "UnoDOS / pc64  -  unoui shell");
     unoui_add_label(w, 8, 24, "x86-64 UEFI  -  bare metal");
     unoui_add_label(w, 8, 42, "10 themes  -  live re-skin");
     unoui_add_sep  (w, 8, 60, 320);
     unoui_add_label(w, 8, 68,  g_tp1);
-    unoui_add_label(w, 8, 84,  g_tp2);
-    unoui_add_label(w, 8, 102, g_usb);
-    unoui_add_label(w, 8, 118, g_usb2);
-    unoui_add_label(w, 8, 136, g_acpi1);
-    unoui_add_label(w, 8, 152, g_acpi2);
+    unoui_add_label(w, 8, 84,  g_usb);
+    unoui_add_label(w, 8, 100, g_nat);
+    unoui_add_label(w, 8, 116, g_acpi1);
+    unoui_add_label(w, 8, 132, g_acpi2);
 }
 static void build_clock(unoui_window *w)
 {
@@ -1028,6 +1052,16 @@ static int pump_input(void)
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
         if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
+        /* Ctrl-S / Ctrl-O: save / open in the Editor (a keyboard path to the
+           Save button - also the natural accelerator). Only when Editor front. */
+        if (ctrl && (uni == 's' || uni == 'S' || uni == 0x13 ||
+                     uni == 'o' || uni == 'O' || uni == 0x0F) &&
+            !g_launch_open && !UI.full && g_open[APP_EDIT] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[APP_EDIT]) {
+            if (uni == 's' || uni == 'S' || uni == 0x13) editor_save(); else editor_open();
+            g_dirty = 1; continue;
+        }
         /* Install window focused: keyboard drive (works before any pointer is
            up - important on the harness AND on laptops with exotic trackpads).
            Up/Down pick a target, I = Install, R = Rescan. */

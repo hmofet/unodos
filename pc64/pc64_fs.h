@@ -20,4 +20,8 @@ int  uno_fs_list_get(int vol, int idx, char *name, int max);
 /* read a file from a volume's root; returns bytes read, or -1 */
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 
+/* write a file to a volume's root; 1 on success, 0 if read-only / failed */
+int  uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
+int  uno_fs_writable(int vol);                   /* 1 if uno_fs_write can work  */
+
 #endif
