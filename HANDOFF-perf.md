@@ -102,6 +102,7 @@ Mechanics worth reusing:
 | c64 | §1 P1 — incremental **Tracker** cursor (2-cell) | `1c923e5` | byte-identical (`harness.py`) |
 | genesis | §1 P2 — cull non-damaged windows from the clipped drag repaint | `f845166` | byte-identical (`build.sh drag`/`test`, genesis_plus_gx) |
 | genesis | §1 P3/P4 (raise path) — raise_window → `redraw_topmost`, not `repaint_all` | `24b0683` | byte-identical (`build.sh raise`, genesis_plus_gx) |
+| genesis | §1 P3/P4 (close path) — clip `repaint_all` to the closed window's rect (drag clip window) | `3a8c5ff` | byte-identical (`build.sh close`, genesis_plus_gx) |
 | **amiga** | **deterministic headless renderer** `uae/render.py` (Unicorn 68000; unblocks all amiga byte-verify — WinUAE can't) | `7831ae7` | two runs of one build are byte-identical |
 | amiga | §1 P1 (raise+create) — raise_window/win_create → `redraw_top2`, not `repaint_all` | `41c05e6` | byte-identical (`render.py`, `build.sh test` + `test RAISE`) |
 | amiga | §1 P1 (close) — clip `repaint_all` to the closed window's **row band** (clip on `fill_rect`/`draw_char`/`draw_icon16` + `clear_band`) | `fc75a2b` | byte-identical (`render.py`, `build.sh test CLOSE`); clip is a no-op at full screen |
@@ -126,8 +127,9 @@ newly exposed, so it's byte-identical. **close** reveals occluded content so it
 can't use redraw-top-N — but a close only changes the closed window's *rows*, so
 clipping `repaint_all` to that **row band** (a `clip_y0/clip_y1` window on
 `fill_rect`/`draw_char`/`draw_icon16` + a banded clear) is byte-identical and
-needs no pixel-column masking (done on amiga, `fc75a2b`; genesis close could do
-the same reusing its existing drag clip window).
+needs no pixel-column masking (amiga `fc75a2b`). genesis close does the tighter
+**rect** clip (`3a8c5ff`) — it already has a full-rect drag clip window and no
+shadow/restyle, so the closed window's rect is the whole damage.
 
 **New autotest scaffolding added** (needed for the above): snes `build.sh dostris`
 (`AUTOTEST_DOSTRIS`); amiga `build.sh test RAISE` (`AUTOTEST_RAISE`) + the
@@ -189,11 +191,9 @@ ps2/dc double-tick, **snes P3**, **c64 P1 (3 apps)** and **genesis P2** are ✅ 
 above; ps2 P2 + snes P4 ⏸ deferred low-value above):
 - **snes** P3 OutLast — the road/HUD still rebuilds every `outlast_tick`; same
   delta-tracking idea as the Dostris fix (`57597ec`), unverified for OutLast yet.
-- **genesis** P3/P4 — ✅ **raise path done** (`24b0683`: `redraw_topmost`, no
-  `clear_screen`/no 11-icon `draw_desktop`). Only the **close** path still
-  `repaint_all`s; a clipped close (genesis already has the drag clip window from
-  P1) would finish P3/P4 — verify on a static-window close scene (a live game
-  scene is cycle-fragile; see the lesson above).
+- **genesis** P3/P4 — ✅ **DONE** (raise `24b0683` → `redraw_topmost`; close
+  `3a8c5ff` → clip `repaint_all` to the closed window's rect via the drag P1 clip
+  window). No genesis z-order op full-repaints anymore.
 - **sms** P3 (full redraw display-ON → raster tear; blank R1) + P4 (redundant
   `clear_names`). sms defers its repaint via a `v_dirty` flag (raise_window just
   sets it — already lighter than genesis), so the genesis raise trick doesn't
