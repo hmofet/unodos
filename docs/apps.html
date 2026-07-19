@@ -51,7 +51,7 @@
 <div class="grid cols-2">
   <figure><img src="assets/img/editor.png" alt="Editor: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font." loading="lazy"><figcaption><b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.</figcaption></figure>
   <figure><img src="assets/img/files.png" alt="Files: your saved documents." loading="lazy"><figcaption><b>Files</b>: your saved documents.</figcaption></figure>
-  <figure><img src="assets/img/system.png" alt="System: system and device information at a glance. Its status line shows how independent of the firmware UnoDOS is running - on PCs the native drivers can take over storage, input and timers completely (shown as DETACHED)." loading="lazy"><figcaption><b>System</b>: system and device information at a glance. Its status line shows how independent of the firmware UnoDOS is running - on PCs the native drivers can take over storage, input and timers completely (shown as <i>DETACHED</i>).</figcaption></figure>
+  <figure><img src="assets/img/system.png" alt="System: system and device information at a glance. Its status lines show how independent of the firmware UnoDOS is running - which native storage driver has taken over (DETACHED (native): ahci0 / nvme0 / emmc0 for SATA, NVMe and eMMC disks), and which audio backend the sound reaches (HD Audio, AC&#x27;97, or the PC speaker)." loading="lazy"><figcaption><b>System</b>: system and device information at a glance. Its status lines show how independent of the firmware UnoDOS is running - which native storage driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i> for SATA, NVMe and eMMC disks), and which audio backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).</figcaption></figure>
   <figure><img src="assets/img/clock.png" alt="Clock: the current time." loading="lazy"><figcaption><b>Clock</b>: the current time.</figcaption></figure>
 </div>
 <p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
@@ -63,7 +63,10 @@
   <figure><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
   <figure><img src="assets/img/music.png" alt="Music: a melody player." loading="lazy"><figcaption><b>Music</b>: a melody player.</figcaption></figure>
 </div>
-<p>The games, Music and Tracker all play sound through the PC speaker.</p>
+<p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
+or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
+PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
+sets the level.</p>
 
 <h2 id="games">Games</h2>
 <p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen

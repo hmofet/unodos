@@ -315,6 +315,10 @@ def main():
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
         "-drive", "format=vvfat,file=fat:rw:build/esp",
         "-device", "qemu-xhci", "-device", "usb-tablet",
+        # an HD Audio device, so the System window's Audio line shows the real
+        # PCM backend (the "none" audiodev just swallows the samples headless)
+        "-audiodev", "none,id=snd0",
+        "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
         "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
