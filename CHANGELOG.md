@@ -5,6 +5,23 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 installer — put UnoDOS on a local disk] - 2026-07-19
+
+A new **Install** app in the pc64 shell installs the running system to a local
+disk ([pc64/INSTALL.md](pc64/INSTALL.md)): non-destructively into an existing
+FAT/ESP volume (`\EFI\UNODOS\` + a `UnoDOS` NVRAM boot entry — Windows keeps
+booting), or destructively by cloning the boot USB's GPT+ESP onto a whole disk
+with the backup GPT relocated to the disk's real end. Backend
+([pc64/installer.c](pc64/installer.c)) runs on firmware plumbing alone: Simple
+File System writes, Block IO, `SetVariable` (`Boot####`/`BootOrder`, with a
+short-form HD() path for freshly-cloned disks). The boot USB is never a
+target; undersized/4Kn disks are refused; destructive installs double-confirm.
+Keyboard-drivable (Up/Down/I/R). Fonts now also load from `\EFI\UNODOS\` so an
+installed system finds them. Verified headless both ways
+(`pc64/tools/install_test.py`): install → reboot from the internal disk only →
+desktop, on WSL QEMU (TCG) and devbuntu (KVM); the ESP flow proves foreign
+`\EFI` content survives. Hardware target: Surface Laptop Go 1 (ESP mode).
+
 ## [unoacpi — AML/ACPI interpreter: battery + lid on pc64] - 2026-07-18
 
 pc64 now runs a real AML interpreter: **unoacpi** ([unoacpi/](unoacpi/)), the

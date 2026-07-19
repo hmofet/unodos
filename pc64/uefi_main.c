@@ -150,10 +150,15 @@ static void con_puts(const char *s)
 /* ===========================================================================
  * efi_main - the PE entry
  * ======================================================================== */
+static EFI_HANDLE gIH;                  /* our image handle (installer needs it) */
+void *uno_pc64_st(void)           { return gST; }
+void *uno_pc64_image_handle(void) { return gIH; }
+
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
     (void)ImageHandle;
     gST = SystemTable;
+    gIH = ImageHandle;
     gBS = SystemTable->BootServices;
     gBS->SetWatchdogTimer(0, 0, 0, 0);
     con_puts("UnoDOS 3.1 / pc64: firmware handoff...\r\n");
