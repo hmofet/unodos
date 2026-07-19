@@ -179,6 +179,15 @@ def phase_boot_from_disk(tag):
         print("from-disk boot; waiting...")
         time.sleep(20)
         shot(q, tag + "_fromdisk")
+        # decoupling proof: apps are .UNO modules, so opening one on the
+        # installed system exercises the loader against the installed volume
+        # (\EFI\UNODOS\APPS on an ESP install, the cloned APPS\ on whole-disk).
+        combo(q, "ctrl", "esc")            # Start menu
+        time.sleep(0.8)
+        keys(q, *(["down"] * 7))           # menu order = app order; Dostris = 7
+        keys(q, "ret")
+        time.sleep(2.0)
+        shot(q, tag + "_fromdisk_app")
         q.cmd("quit")
     finally:
         qemu.wait(timeout=15)
@@ -225,9 +234,11 @@ def verify_esp_disk():
     with open(fat, "wb") as f:
         f.write(data)
     ok = True
-    for path in ["::/EFI/OTHER/MARKER.TXT", "::/EFI/UNODOS/BOOTX64.EFI"]:
+    apps = ["DOSTRIS", "PACMAN", "OUTLAST", "MUSIC", "TRACKER", "PAINT", "NETWORK"]
+    for path in (["::/EFI/OTHER/MARKER.TXT", "::/EFI/UNODOS/BOOTX64.EFI"] +
+                 ["::/EFI/UNODOS/APPS/%s.UNO" % a for a in apps]):
         r = subprocess.run(["mdir", "-i", fat, path], capture_output=True)
-        print("%-28s %s" % (path, "OK" if r.returncode == 0 else "MISSING"))
+        print("%-36s %s" % (path, "OK" if r.returncode == 0 else "MISSING"))
         ok = ok and r.returncode == 0
     os.remove(fat)
     return ok

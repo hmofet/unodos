@@ -44,7 +44,7 @@ if [ "$1" != "legacy" ]; then
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci fat i2c_hid xhci ax88179 uefi_main pc64_uui pc64_uui_apps pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci fat i2c_hid xhci ax88179 uefi_main pc64_uui pc64_uui_apps pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
@@ -68,11 +68,8 @@ if [ "$1" != "legacy" ]; then
         b=$(basename "$t" .c)
         "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
     done
-    # migrated legacy apps: creative tools + Network (Runner3D is native, above)
-    for app in dostris pacman outlast music tracker paint network; do
-        "$CC" $UCF -DUNO_APP_SYM=uno_app_main_$app -c -o "build/app_$app.o" "apps/$app.c"
-        OBJS="$OBJS build/app_$app.o"
-    done
+    # NOTE: no app objects here - apps ship as .UNO modules (built below);
+    # the kernel image contains no app code at all.
     # BearSSL (TLS for the Network app) - portable C only; skip the CPU-accel /
     # OS-entropy files (portable equivalents build instead).
     BSSL_SKIP=" ghash_pclmul sysrng aes_x86ni aes_x86ni_cbcdec aes_x86ni_cbcenc aes_x86ni_ctr aes_x86ni_ctrcbc chacha20_sse2 "
@@ -93,6 +90,35 @@ if [ "$1" != "legacy" ]; then
     cp fonts/Sans.ttf   build/esp/SANS.TTF
     cp fonts/Mono.ttf   build/esp/MONO.TTF
     cp fonts/Ubuntu.ttf build/esp/UBUNTU.TTF
+
+    # ---- .UNO app modules: every app is loaded from storage at runtime -----
+    # (apps/<name>.c -> object -> import thunks -> linked DLL -> APPS/<N>.UNO)
+    echo "[3b] building the .UNO app modules..."
+    NM="${NM:-x86_64-w64-mingw32-nm}"
+    mkdir -p build/apps build/esp/APPS
+    grep -oE 'KX\([A-Za-z_0-9]+\)' pc64_modload.c | sed 's/KX(//;s/)//' \
+        | sort -u > build/apps/kexports.txt
+    for app in dostris pacman outlast music tracker paint network; do
+        "$CC" $UCF -DUNO_APP_SYM=uno_app_main_$app -c -o "build/apps/$app.o" "apps/$app.c"
+        "$NM" -u "build/apps/$app.o" | awk '{print $2}' | sort -u > "build/apps/$app.syms"
+        # decoupling assert: every import must be in the kernel export table
+        while read -r s; do
+            grep -qx "$s" build/apps/kexports.txt || {
+                echo "FAIL: $app imports '$s' which pc64_modload.c does not export"; exit 1; }
+        done < "build/apps/$app.syms"
+        "$PY" tools/mkuno.py thunks "build/apps/$app.syms" "build/apps/${app}_thunks.s"
+        "$CC" -c -o "build/apps/${app}_thunks.o" "build/apps/${app}_thunks.s"
+        "$CC" -shared -nostdlib -e uno_app_main_$app -Wl,--exclude-all-symbols \
+            -o "build/apps/$app.dll" "build/apps/$app.o" "build/apps/${app}_thunks.o"
+        UP=$(echo "$app" | tr '[:lower:]' '[:upper:]')
+        "$PY" tools/mkuno.py convert "build/apps/$app.dll" "build/esp/APPS/$UP.UNO"
+    done
+    # decoupling assert: no app code linked into the kernel image
+    if "$NM" build/BOOTX64.EFI 2>/dev/null | grep -q "uno_app_main_"; then
+        echo "FAIL: uno_app_main_* found in the kernel image - apps must be .UNO only"
+        exit 1
+    fi
+
     ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"
     if [ "$1" = "run" ]; then
         OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
@@ -108,7 +134,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload pc64_pci e1000 net tls i2c_hid uefi_main unodos; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci fat tls_ca e1000 net tls i2c_hid uefi_main unodos; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done

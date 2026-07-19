@@ -143,6 +143,25 @@ def main():
             shot(q, "acpi_system")             # "ACPI AML: up ... bat 50% lid open"
             return
 
+        # ---- M2 (decoupling): every bridge app is a .UNO module loaded from
+        # storage; open each through the launcher (menu order = app order,
+        # bridge apps at indices 7..13) and screenshot it running. ----------
+        if len(sys.argv) > 1 and sys.argv[1] == "unoapps":
+            bridge = ["dostris", "pacman", "outlast", "music",
+                      "tracker", "paint", "network"]
+            for i, name in enumerate(bridge):
+                q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                        {"type": "qcode", "data": "esc"}])
+                time.sleep(0.8)
+                keys(q, *(["down"] * (7 + i)))
+                keys(q, "ret")
+                time.sleep(2.0)
+                shot(q, "uno_" + name)
+                q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                        {"type": "qcode", "data": "w"}])
+                time.sleep(0.8)
+            return
+
         # ---- M4: mouse (usb-tablet -> EFI Absolute Pointer) ----------------
         if len(sys.argv) > 1 and sys.argv[1] == "mouse":
             click(q, 232, 50)                  # select the Files icon

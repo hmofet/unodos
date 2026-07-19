@@ -690,13 +690,13 @@ static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
     return 0;
 }
 
-/* the native GAME index for shell app `a`, or -1 (the rest use the bridge) */
+/* the native GAME index for shell app `a`, or -1 (the rest use the bridge).
+ * Only Runner3D is native (it drives uno3d directly and has no module
+ * counterpart); the classic games run as .UNO modules through the bridge so
+ * ALL apps load from storage - the decoupling contract. */
 static int app_game(int a)
 {
-    int li = a - NNATIVE, g = -1;
-    if (a < NNATIVE) return -1;
-    if (a == EX_RUNNER)             g = GAME_RUNNER;        /* extra native app */
-    else if (li >= 0 && li < 3)     g = li;                 /* Dostris/Pacman/Outlast */
+    int g = (a == EX_RUNNER) ? GAME_RUNNER : -1;
     return (g >= 0 && pc64_game_canvas(g)) ? g : -1;
 }
 /* a mac_compat-bridge app (Music/Tracker/Paint/Network - not a native game/browser) */

@@ -23,6 +23,10 @@
 void *uno_pc64_st(void);
 void *uno_pc64_image_handle(void);
 
+/* pc64_modload.c - the .UNO app-module roster (copied on ESP installs) */
+int         uno_mod_count(void);
+const char *uno_mod_file(int proc);
+
 /* ---- EFI protocol shapes not in uefi.h (natural layout matches spec) ------ */
 typedef struct {
     UINT32 MediaId;
@@ -510,9 +514,34 @@ static int install_esp(target *t, int make_default,
 
     for (i = 0; i < (int)(sizeof aux / sizeof aux[0]); i++) {
         char *p = aps(dst, "EFI\\UNODOS\\"); p = aps(p, aux[i]); *p = 0;
-        if (progress) progress(25 + i * 12, aux[i]);
+        if (progress) progress(25 + i * 10, aux[i]);
         if (copy_file(sroot, aux[i], droot, dst) < 0) {      /* missing = soft */
             err("copying a support file failed");
+            goto fail;
+        }
+    }
+
+    /* the .UNO app modules: source is APPS\ on a dev/USB volume, or
+     * EFI\UNODOS\APPS\ when installing from an already-installed system */
+    if (progress) progress(78, "App modules");
+    if (!mkdir_p(droot, "EFI\\UNODOS\\APPS")) {
+        err("mkdir \\EFI\\UNODOS\\APPS failed");
+        goto fail;
+    }
+    for (i = 0; i < uno_mod_count(); i++) {
+        const char *f = uno_mod_file(i);
+        char src[64], *p;
+        int r;
+        if (!f) continue;
+        p = aps(src, "APPS\\"); p = aps(p, f); *p = 0;
+        p = aps(dst, "EFI\\UNODOS\\APPS\\"); p = aps(p, f); *p = 0;
+        r = copy_file(sroot, src, droot, dst);
+        if (r == 0) {                                        /* try installed layout */
+            p = aps(src, "EFI\\UNODOS\\APPS\\"); p = aps(p, f); *p = 0;
+            r = copy_file(sroot, src, droot, dst);
+        }
+        if (r < 0) {                                         /* missing = soft */
+            err("copying an app module failed");
             goto fail;
         }
     }

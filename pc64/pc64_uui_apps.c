@@ -156,28 +156,10 @@ static KernelApi gKApi;
 static const AppInterface *gIface[APP_NAPPS];
 static int                 gTried[APP_NAPPS];
 
-/* entry symbols of the migrated apps (compiled with -DUNO_APP_SYM=...) */
-extern const AppInterface *uno_app_main_dostris(const KernelApi *);
-extern const AppInterface *uno_app_main_pacman (const KernelApi *);
-extern const AppInterface *uno_app_main_outlast(const KernelApi *);
-extern const AppInterface *uno_app_main_music  (const KernelApi *);
-extern const AppInterface *uno_app_main_tracker(const KernelApi *);
-extern const AppInterface *uno_app_main_paint  (const KernelApi *);
-extern const AppInterface *uno_app_main_network(const KernelApi *);
-
-static UnoAppEntry entry_for(short proc)
-{
-    switch (proc) {
-    case APP_DOSTRIS: return uno_app_main_dostris;
-    case APP_PACMAN:  return uno_app_main_pacman;
-    case APP_OUTLAST: return uno_app_main_outlast;
-    case APP_MUSIC:   return uno_app_main_music;
-    case APP_TRACKER: return uno_app_main_tracker;
-    case APP_PAINT:   return uno_app_main_paint;
-    case APP_NETWORK: return uno_app_main_network;
-    default:          return 0;
-    }
-}
+/* apps are .UNO modules loaded from storage at runtime (pc64_modload.c) -
+ * no app code is linked into this image */
+extern UnoAppEntry uno_load_module(short proc);
+extern const char *uno_mod_file(int proc);
 
 void unoapp_init(int *dirtyflag)
 {
@@ -205,7 +187,7 @@ static const AppInterface *iface(short proc)
 {
     if (proc < 0 || proc >= APP_NAPPS) return 0;
     if (!gTried[proc]) {
-        UnoAppEntry e = entry_for(proc);
+        UnoAppEntry e = uno_load_module(proc);
         gTried[proc] = 1;
         if (e) gIface[proc] = e(&gKApi);
     }
@@ -257,7 +239,14 @@ void unoapp_paint(int i, unoui_rect r)
     short proc; const AppInterface *a; UnoWin *w;
     if (i < 0 || i >= UNOAPP_COUNT) return;
     proc = kProc[i]; a = iface(proc);
-    if (!a || !a->draw) return;
+    if (!a || !a->draw) {                  /* module missing / failed to load */
+        char msg[48];
+        const char *f = uno_mod_file(proc);
+        strcpy(msg, "module not found: APPS\\");
+        strcat(msg, f ? f : "?");
+        text_at((short)(r.x + 8), (short)(r.y + 24), msg, C_BLUE, C_WHITE, false);
+        return;
+    }
     w = &gAppWins[proc];
     w->used = true; w->proc = proc; w->title = a->win_title;
     w->bounds.left = (short)r.x;          w->bounds.top    = (short)(r.y - TBAR_H);
