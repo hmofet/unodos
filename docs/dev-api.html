@@ -176,8 +176,8 @@ int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 <div class="tw"><table>
 <thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
 <tbody>
-<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified read-only file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted through the UEFI Simple File System protocol.</td></tr>
-<tr><td><code>unosound</code></td><td>Single-voice PC-speaker sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>).</td></tr>
+<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI drivers, with firmware Simple File System volumes as read-only extras while attached.</td></tr>
+<tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
 <tr><td><code>net</code> / <code>e1000</code></td><td>e1000 driver publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, minimal TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>

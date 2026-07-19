@@ -507,7 +507,7 @@ laptop booting from a USB stick.</p>
   <div class="card"><h4>Applications</h4><p>Editor, Files, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
-  <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, sound, and USB, plus reading files from FAT-formatted USB sticks and disks.</p></div>
+  <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
 </div>
 
 <p class="kv">New here? Start with <a href="getting-started.html">Getting started</a>, then take the
@@ -588,7 +588,9 @@ menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
 
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
-plays as the desktop appears. On a laptop the TrackPoint, touchpad and keyboard all work.</p>
+plays as the desktop appears - through the machine's sound hardware (HD&nbsp;Audio or AC'97) on a
+modern PC, or the PC speaker on machines that have one. On a laptop the TrackPoint, touchpad and
+keyboard all work.</p>
 <div class="grid cols-2">
   {fig("splash.png", "The boot splash, with a loading bar and version.")}
   {fig("controlpanel.png", "First desktop paint: the Control Panel opens over the Aurora Light desktop.")}
@@ -651,8 +653,9 @@ the Control Panel and all without a reboot.</p>
 <h2 id="control">The Control Panel</h2>
 <p>The Control Panel is where you change how UnoDOS looks: a <strong>Theme</strong> menu, a
 <strong>Dark mode</strong> toggle, a <strong>Resolution</strong> menu, a system-wide <strong>Font</strong>
-picker, a volume slider, a UI-scale control, and settings for the date and time. It opens on first boot
-and from the Start menu.</p>
+picker, a <strong>Volume</strong> slider (it adjusts the sound output live, even mid-note, on machines
+with HD&nbsp;Audio or AC'97 audio), a UI-scale control, and settings for the date and time. It opens on
+first boot and from the Start menu.</p>
 {fig("controlpanel.png", "The Control Panel. Focus a menu with <kbd>Tab</kbd> and change it with <kbd>↑</kbd>/<kbd>↓</kbd>; the desktop re-skins instantly.")}
 
 <h2 id="themes">The ten themes</h2>
@@ -693,7 +696,7 @@ PAGES["apps.html"] = ("Applications", f"""
 <div class="grid cols-2">
   {fig("editor.png", "<b>Editor</b>: a text editor with a File and Edit menu, multi-line editing, and Save, Open and New. Each document can even have its own font.")}
   {fig("files.png", "<b>Files</b>: your saved documents.")}
-  {fig("system.png", "<b>System</b>: system and device information at a glance. Its status line shows how independent of the firmware UnoDOS is running - on PCs the native drivers can take over storage, input and timers completely (shown as <i>DETACHED</i>).")}
+  {fig("system.png", "<b>System</b>: system and device information at a glance. Its status lines show how independent of the firmware UnoDOS is running - which native storage driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i> for SATA, NVMe and eMMC disks), and which audio backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).")}
   {fig("clock.png", "<b>Clock</b>: the current time.")}
 </div>
 <p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
@@ -705,7 +708,10 @@ PAGES["apps.html"] = ("Applications", f"""
   {fig("tracker.png", "<b>Tracker</b>: a 4-channel pattern sequencer.")}
   {fig("music.png", "<b>Music</b>: a melody player.")}
 </div>
-<p>The games, Music and Tracker all play sound through the PC speaker.</p>
+<p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
+or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
+PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
+sets the level.</p>
 
 <h2 id="games">Games</h2>
 <p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
@@ -870,7 +876,7 @@ no host C library, no underlying OS. It ships two interchangeable desktops, sele
 <tr><td><strong>Toolkit (unoui)</strong></td><td>The portable widget core: windows, widgets, events, and a swappable theme (ten themes ship).</td></tr>
 <tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
 <tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
-<tr><td><strong>Drivers (tail)</strong></td><td>e1000 NIC and the TCP/IP + TLS stack, xHCI USB and USB Ethernet, uno3d 3D, UnoSound audio, and the TrueType engine.</td></tr>
+<tr><td><strong>Drivers (tail)</strong></td><td>e1000 NIC and the TCP/IP + TLS stack, xHCI USB and USB Ethernet, native AHCI/NVMe/SDHCI storage, HD&nbsp;Audio and AC'97 PCM audio, uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
 </tbody>
 </table></div>
 
@@ -991,8 +997,8 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <div class="tw"><table>
 <thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
 <tbody>
-<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified read-only file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted through the UEFI Simple File System protocol.</td></tr>
-<tr><td><code>unosound</code></td><td>Single-voice PC-speaker sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>).</td></tr>
+<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI drivers, with firmware Simple File System volumes as read-only extras while attached.</td></tr>
+<tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
 <tr><td><code>net</code> / <code>e1000</code></td><td>e1000 driver publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, minimal TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
