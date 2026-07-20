@@ -12,4 +12,8 @@ tls_test/server.crt
 
 # MicroPython port build artifacts + developer-supplied Doom WADs
 build/upyhost/
-wads/
+# the WAD data itself is never committed; the README that explains how to get
+# it is kept.
+wads/*.wad
+wads/*.WAD
+wads/*.zip
