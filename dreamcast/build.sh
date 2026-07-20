@@ -10,22 +10,24 @@
 #                       shots/m1_<tag>.png. FEATURE bakes in -DUNO_AUTOTEST_<F>
 #                       (PACMAN/PAINT/THEME/DOSTRIS/TRACKER/FILES/OUTLAST/FAT12,
 #                       or "stack"); empty = the bare desktop. VERIFIED.
-#   ./build.sh dc [FEATURE]
-#                       the Dreamcast ELF (build/unodos-dc.elf) via KallistiOS.
-#                       Needs the KOS environment ($KOS_BASE) - sources
-#                       $KOS_BASE/../environ.sh if KOS_BASE is unset. UNVERIFIED
-#                       here (no sh-elf-gcc / DC emulator on the dev machine).
+#   ./build.sh dc [uui|test]
+#                       DEFAULT DC target: the unoui SHELL (modern desktop +
+#                       Aurora + the full 11-app roster hosted via the
+#                       dc_uui_apps.c bridge) -> build/unodos-dc-uui.elf + a
+#                       bootable image (build/unodos-dc-uui.cdi via mkdcdisc,
+#                       else .iso). `dc test` bakes in -DUNO_UUI_AUTOTEST (a
+#                       self-driving screenshot script). Needs the KOS
+#                       environment ($KOS_BASE) - sources environ.sh if unset.
+#   ./build.sh dc legacy [FEATURE]
+#                       the LEGACY Mac-style core (unodos.c + mac_compat) ELF
+#                       (build/unodos-dc.elf) + the 11 loadable .klf modules.
+#                       FEATURE bakes in -DUNO_AUTOTEST_<FEATURE>.
 #   ./build.sh uui-host the unoui/Aurora shell rendered on the host (software
 #                       fb -> shots/aurora.png). No KOS needed; the pixels are
-#                       byte-identical to what `dc uui` presents on hardware.
-#   ./build.sh dc uui   the unoui shell (modern desktop + Aurora theme) ELF
-#                       (build/unodos-dc-uui.elf) + a bootable image
-#                       (build/unodos-dc-uui.cdi via mkdcdisc, else .iso). The DC
-#                       analogue of `ps2 ee uui`: fb + fb_aa + dc_uui + unoui +
-#                       themes, Aurora FULL (32-bit internal -> RGB565 out).
+#                       byte-identical to what `dc` presents on hardware.
 #   ./build.sh iso [FEATURE]
-#                       dc + a bootable selfboot CD image (build/unodos-dc.iso)
-#                       via the KOS tools + genisoimage.
+#                       legacy core + a bootable selfboot CD image
+#                       (build/unodos-dc.iso) via the KOS tools + genisoimage.
 #   ./build.sh cdi [FEATURE]
 #                       iso, converted to .cdi if cdi4dc/mkdcdisc is present.
 #
@@ -83,18 +85,23 @@ case "$1" in
       exit 1
     fi
 
-    # --- `dc uui`: the unoui shell (modern desktop + Aurora), the DC analogue of
-    # ps2's `ee uui`. Self-contained kos-cc compile of fb + fb_aa + dc_uui +
-    # unoui + the themes (the Makefile builds the legacy Mac core instead), then
-    # a bootable image for the emulator. -ffunction/-fdata-sections + --gc-sections
-    # keeps the static desktop demo lean; -DUNO_BG_CACHE bakes the Aurora bg once.
-    if [ "$2" = "uui" ]; then
-      echo "[2/2] building the unoui shell ELF (KallistiOS + unoui + Aurora)..."
+    # --- the unoui SHELL (DEFAULT `dc` target): the modern desktop + Aurora +
+    # the full 11-app roster, the DC analogue of pc64's unoui build. fb + fb_aa
+    # + mac_compat/mac_io (Toolbox + VMU FS + AICA Sound Manager) + dc_uui
+    # (shell) + dc_uui_apps (bridge) + unoui + themes + the 11 app cores, each
+    # statically linked under a distinct -DUNO_APP_SYM (the classic-Mac native
+    # pattern; the .KLF load-from-CD pipeline stays with the legacy build).
+    # `dc test` (or `dc uui test`) adds -DUNO_UUI_AUTOTEST, the self-driving
+    # screenshot script.
+    if [ "$1" = "dc" ] && [ "$2" != "legacy" ]; then
+      echo "[2/2] building the unoui shell ELF (KallistiOS + unoui + Aurora + roster)..."
+      TESTDEF=""
+      if [ "$2" = "test" ] || [ "$3" = "test" ]; then TESTDEF="-DUNO_UUI_AUTOTEST"; fi
       INCS="-I. -Ibuild -I../unoui"
       CF="-O2 -Wall -Wno-unused-value -Wno-multichar -ffunction-sections -fdata-sections \
-          -DUNO_COLOR=1 -DUNO_DC -DUNO_UUI -DUNO_BG_CACHE"
+          -DUNO_COLOR=1 -DUNO_DC -DUNO_UUI -DUNO_BG_CACHE $TESTDEF"
       OBJS=""
-      for s in fb fb_aa dc_uui; do
+      for s in fb fb_aa mac_compat mac_io dc_uui dc_uui_apps; do
         kos-cc $CF $INCS -c "$s.c" -o "build/$s.o"; OBJS="$OBJS build/$s.o"
       done
       for u in unoui unoui_input; do
@@ -104,8 +111,12 @@ case "$1" in
         b=$(basename "$t" .c)
         kos-cc $CF $INCS -c "$t" -o "build/th_$b.o"; OBJS="$OBJS build/th_$b.o"
       done
-      kos-cc -Wl,--gc-sections -o build/unodos-dc-uui.elf $OBJS $KOS_LIBS
-      echo "done: build/unodos-dc-uui.elf (unoui shell + Aurora)"
+      for a in sysinfo clock files notepad music dostris outlast pacman tracker paint theme; do
+        kos-cc $CF $INCS -DUNO_APP_SYM=uno_app_main_$a -c "apps/$a.c" -o "build/ua_$a.o"
+        OBJS="$OBJS build/ua_$a.o"
+      done
+      kos-cc -Wl,--gc-sections -o build/unodos-dc-uui.elf $OBJS -lm $KOS_LIBS
+      echo "done: build/unodos-dc-uui.elf (unoui shell + Aurora + 11-app roster)"
       # a bootable image: prefer mkdcdisc, else the scramble + genisoimage path.
       if command -v mkdcdisc >/dev/null 2>&1; then
         mkdcdisc -e build/unodos-dc-uui.elf -o build/unodos-dc-uui.cdi -n "UnoDOS Aurora" -N \
@@ -123,7 +134,9 @@ case "$1" in
     fi
 
     EXTRA_DEF=""
-    [ -n "$2" ] && EXTRA_DEF="-DUNO_AUTOTEST_$2"
+    FEAT="$2"
+    [ "$1" = "dc" ] && FEAT="$3"     # `dc legacy [FEATURE]`
+    [ -n "$FEAT" ] && EXTRA_DEF="-DUNO_AUTOTEST_$FEAT"
     make clean >/dev/null 2>&1 || true
     case "$1" in
       cdi) make cdi EXTRA_DEF="$EXTRA_DEF"; echo "done: build/unodos-dc.cdi (or .iso) ${2:+(AUTOTEST_$2)}" ;;
