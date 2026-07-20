@@ -158,12 +158,12 @@ def main():
             shot(q, "duum_build")
             q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
                                     {"type": "qcode", "data": "r"}])
-            time.sleep(12)                              # first render
+            time.sleep(28)                              # first render (+texture compose)
             shot(q, "duum_a")
             for _ in range(4):                          # walk forward
-                keys(q, "up"); time.sleep(2.5)
+                keys(q, "up"); time.sleep(5)
             shot(q, "duum_b")
-            keys(q, "left"); time.sleep(3)              # turn
+            keys(q, "left"); time.sleep(6)             # turn
             shot(q, "duum_c")
             return
 
