@@ -58,6 +58,8 @@ extern fb_px fb[FB_BUF_PIX];
 
 void fb_clear(fb_px c);
 void fb_fill_rect(int x, int y, int w, int h, fb_px c);
+int  fb_width(void);                     /* FB_W/FB_H as functions (modules) */
+int  fb_height(void);
 
 /* Clip window (absolute fb coords): confine all subsequent drawing to the
  * intersection of this rect and the screen. Default is the whole screen, so

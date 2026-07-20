@@ -60,6 +60,11 @@ void fb_clear(fb_px c)
     for (i = 0; i < FB_W * FB_H; i++) fb[i] = c;
 }
 
+/* function forms of FB_W/FB_H: loadable modules can only import functions,
+ * and the macros hide variables when the desktop size is dynamic */
+int fb_width(void)  { return FB_W; }
+int fb_height(void) { return FB_H; }
+
 void fb_fill_rect(int x, int y, int w, int h, fb_px c)
 {
     int r, j;

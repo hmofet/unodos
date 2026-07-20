@@ -55,7 +55,7 @@ def gen_thunks(syms_path, out_path):
     print("mkuno: %d import thunks -> %s" % (len(syms), out_path))
 
 
-def convert(dll_path, uno_path):
+def convert(dll_path, uno_path, flags=0):
     d = open(dll_path, "rb").read()
     if d[:2] != b"MZ":
         sys.exit("mkuno: not a PE file")
@@ -140,7 +140,7 @@ def convert(dll_path, uno_path):
     file_size = (file_size + 7) & ~7
 
     payload = bytes(img[:file_size]) + struct.pack("<%dI" % len(relocs), *relocs)
-    hdr = struct.pack(HDR_FMT, MAGIC, ABI, 0, entry, size_image, file_size,
+    hdr = struct.pack(HDR_FMT, MAGIC, ABI, flags, entry, size_image, file_size,
                       len(relocs), imp_rva, imp_count, image_base,
                       zlib.crc32(payload) & 0xFFFFFFFF, 0)
     open(uno_path, "wb").write(hdr + payload)
@@ -156,7 +156,9 @@ def convert(dll_path, uno_path):
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "thunks":
         gen_thunks(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) == 4 and sys.argv[1] == "convert":
-        convert(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) in (4, 5) and sys.argv[1] == "convert":
+        # optional 4th arg: header flags (1 = unoui-class module)
+        convert(sys.argv[2], sys.argv[3],
+                int(sys.argv[4], 0) if len(sys.argv) == 5 else 0)
     else:
-        sys.exit(__doc__ or "usage: mkuno.py thunks|convert <in> <out>")
+        sys.exit(__doc__ or "usage: mkuno.py thunks|convert <in> <out> [flags]")
