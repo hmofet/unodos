@@ -168,7 +168,7 @@ static long inc_read(void *ctx, const char *name, char *buf, long max)
     return n;
 }
 
-#define WRAP "\nlong uno_app_main(long a, long b) { return test(a, b); }\n"
+#define WRAP "\nlong long uno_app_main(long long a, long long b) { return test(a, b); }\n"
 
 static int g_pass, g_fail;
 static unsigned char g_out[1 << 20];
@@ -664,12 +664,21 @@ int main(void)
       " for (long i = 0; i < n; i++) s += v[i]; return s; }"
       "long test(long a, long b) { long v[3]; v[0]=1; v[1]=2; v[2]=3;"
       " return sum(v, 3); }");
-    T("sizeof-arr", 24, "long test(long a, long b) { long v[3]; return sizeof(v); }");
-    T("sizeof-2d", 96, "long test(long a, long b) { long m[3][4]; return sizeof m; }");
-    T("sizeof-elem", 8, "long test(long a, long b) { long m[3][4]; return sizeof m[0][0]; }");
-    T("sizeof-types", 1 + 2 + 4 + 8 + 8,
+    T("sizeof-arr", 12, "long test(long a, long b) { long v[3]; return sizeof(v); }");
+    T("sizeof-2d", 48, "long test(long a, long b) { long m[3][4]; return sizeof m; }");
+    T("sizeof-elem", 4, "long test(long a, long b) { long m[3][4]; return sizeof m[0][0]; }");
+    T("sizeof-types", 1 + 2 + 4 + 4 + 8 + 8,     /* LLP64: long is 4 */
       "long test(long a, long b) { return sizeof(char) + sizeof(short)"
-      " + sizeof(int) + sizeof(long) + sizeof(char *); }");
+      " + sizeof(int) + sizeof(long) + sizeof(long long) + sizeof(char *); }");
+    T("long-is-4", 1,
+      "long test(long a, long b) { return sizeof(long) == 4"
+      " && sizeof(unsigned long) == 4 && sizeof(long long) == 8; }");
+    T("llong-shift", 1,
+      "long test(long a, long b) { long long x = 1LL << 40;"
+      " return (x >> 40) == 1 && x > 0x7FFFFFFF; }");
+    T("llong-gvar", 1,
+      "long long big = 0x123456789AB;"
+      "long test(long a, long b) { return big == 0x123456789ABLL; }");
     T("char-arr-str", 'e',
       "char *strcpy(char *d, const char *s);"
       "long test(long a, long b) { char s[6]; strcpy(s, \"hello\"); return s[1]; }");
@@ -700,7 +709,7 @@ int main(void)
       "struct P { short x; short y; };"
       "long test(long a, long b) { struct P v[4]; v[2].x = 5; v[2].y = 7;"
       " return v[2].x + v[2].y; }");
-    T("struct-layout", 16,
+    T("struct-layout", 8,                        /* LLP64: long aligns to 4 */
       "struct M { char c; long q; };"
       "long test(long a, long b) { return sizeof(struct M); }");
     T("struct-fnarg", 30,
@@ -874,8 +883,8 @@ int main(void)
       "#define NK (short)(sizeof(kK)/sizeof(kK[0]))\n"
       "long test(long a, long b) { return NK; }");
     T("cast-chains", -2,
-      "long test(long a, long b) { unsigned long s = 0xFFFFFFFFFFFFFFFEUL;"
-      " return (long)s; }");
+      "long test(long a, long b) { unsigned long long s = 0xFFFFFFFFFFFFFFFEULL;"
+      " return (long)(long long)s; }");
     T("bool-ret", 1,
       "typedef unsigned char Boolean;"
       "Boolean fits(long c) { return (Boolean)(c >= 0 && c < 10); }"
@@ -899,7 +908,7 @@ int main(void)
     run_err("err-fnlike-macro", "#define SQ(x) ((x)*(x))\n", 1,
             "function-like");
     run_err("err-struct-byval",
-            "struct P { long x, y; };"
+            "struct P { long x, y, z; };"        /* 12 bytes: no register class */
             "long f(struct P p);"
             "long test(long a, long b) { return 0; }", 1, "pointer");
     T("small-struct-byval", 220,

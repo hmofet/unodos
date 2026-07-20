@@ -286,7 +286,7 @@ static Tok *lx_one(Lx *L, int stop_nl)
         for (;;) {                              /* suffixes, any order */
             int d = lx_peek(L);
             if (d == 'u' || d == 'U') { t->num_uns = 1; lx_adv(L); }
-            else if (d == 'l' || d == 'L') { t->num_long = 1; lx_adv(L); }
+            else if (d == 'l' || d == 'L') { t->num_long++; lx_adv(L); }
             else break;
         }
         t->val = (i64)v;
@@ -1046,7 +1046,10 @@ static Type *declspec(Cc *cc, int *storage)
     }
     if (!seen) ucc_err_tok(cc, cc->tok, "type name expected", 0);
     if (ty) return ty;
-    if (longs) base = TY_LONG;
+    /* LLP64, matching the mingw-built kernel ABI exactly: long is 4 bytes
+     * (an int), long long is the 8-byte type */
+    if (longs >= 2)      base = TY_LONG;
+    else if (longs == 1) base = TY_INT;
     if (base < 0) base = TY_INT;                 /* unsigned / signed alone */
     switch (base) {
     case TY_VOID:  return ty_new(cc, TY_VOID, 0, 1);
@@ -1296,7 +1299,8 @@ static Node *primary(Cc *cc)
     if (t->kind == TK_NUM) {
         Type *ty;
         advance(cc);
-        if (t->num_long || (u64)t->val > 0xFFFFFFFFull)
+        /* LLP64: only LL (or a value that needs 64 bits) makes a long long */
+        if (t->num_long >= 2 || (u64)t->val > 0xFFFFFFFFull)
             ty = ty_long(cc);
         else
             ty = ty_int(cc);
