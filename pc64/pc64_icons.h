@@ -20,7 +20,7 @@ typedef enum {
     PCI_GENERIC = 0,
     PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC,
     PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT,
-    PCI_NETWORK, PCI_RUNNER, PCI_BROWSER, PCI_STUDIO
+    PCI_NETWORK, PCI_RUNNER, PCI_BROWSER, PCI_STUDIO, PCI_PHOTOS
 } pc64_icon_id;
 
 /* draw emblem `icon` (a PCI_*) to fit `box` (no label) - used by the taskbar */
