@@ -32,4 +32,18 @@ int um_png_open_at(long off, um_image_info *info);
  * successful open, um_idec_bmp.frame/close apply. */
 int um_bmp_open_dib(long off, long end, int ico, um_image_info *info);
 
+/* ---- the VP8 core (um_vp8.c) ----------------------------------------------
+ * WebP's lossy payload. The container (um_webp.c) hands over one whole VP8
+ * chunk in memory (WebP frames are single key frames, RFC 6386); the core
+ * is stateless across calls and touches nothing but the buffer it is given.
+ *
+ * um_vp8_dims: parse the uncompressed frame header only; 1 = a key frame
+ * with sane dimensions (w/h filled), 0 = not decodable (um_set_error says).
+ * um_vp8_decode: full decode into dst (w*h um_px from um_vp8_dims, rows
+ * top-down, A=0xFF). Working memory from um_alloc, freed before return.
+ * Returns 1, or 0 on malformed data (um_set_error; dst contents then
+ * undefined). */
+int um_vp8_dims(const unsigned char *buf, long n, int *w, int *h);
+int um_vp8_decode(const unsigned char *buf, long n, um_px *dst);
+
 #endif /* UNOMEDIA_INT_H */

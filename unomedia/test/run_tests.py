@@ -173,7 +173,15 @@ def main():
     if filt in "jpg_gray": cmp_psnr("jpg_gray", p)
     p = g("jpg_prog.jpg")
     sh(CONVERT, base, "-interlace", "Plane", "-quality", "85", p)
-    if filt in "jpg_prog": expect_err("jpg_prog_refused", p, "progressive")
+    if filt in "jpg_prog": cmp_psnr("jpg_prog", p)
+    p = g("jpg_prog_gray.jpg")
+    sh(CONVERT, base, "-colorspace", "Gray", "-interlace", "Plane",
+       "-quality", "90", p)
+    if filt in "jpg_prog_gray": cmp_psnr("jpg_prog_gray", p)
+    p = g("jpg_prog_420.jpg")
+    sh(CONVERT, base, "-interlace", "Plane", "-sampling-factor", "4:2:0",
+       "-quality", "80", p)
+    if filt in "jpg_prog_420": cmp_psnr("jpg_prog_420", p)
 
     # ---- GIF ----
     p = g("gif_still.gif"); sh(CONVERT, base, "+dither", "-colors", "64", p)
@@ -214,11 +222,32 @@ def main():
         check("qoi_grad", rc == 0 and raw == raw_rgba(px),
               head if rc else "pixel mismatch")
 
+    # ---- WebP ----
+    # lossy: both decoders read the same deterministic VP8 bitstream, but
+    # chroma upsampling + YUV->RGB rounding differ, hence PSNR not exact
+    p = g("webp_lossy.webp")
+    sh("ffmpeg", "-v", "quiet", "-y", "-i", base,
+       "-c:v", "libwebp", "-quality", "80", p)
+    if filt in "webp_lossy": cmp_psnr("webp_lossy", p, 35.0)
+    p = g("webp_lossless.webp")
+    sh("ffmpeg", "-v", "quiet", "-y", "-i", base,
+       "-c:v", "libwebp", "-lossless", "1", p)
+    if filt in "webp_lossless": cmp_exact("webp_lossless", p)
+    p = g("webp_alpha.webp")     # lossless keeps the base scene's real alpha
+    sh("ffmpeg", "-v", "quiet", "-y", "-i", base, "-pix_fmt", "rgba",
+       "-c:v", "libwebp", "-lossless", "1", p)
+    if filt in "webp_alpha": cmp_exact("webp_alpha", p)
+    p = g("webp_lossy_alpha.webp")   # ALPH chunk on a lossy frame
+    sh("ffmpeg", "-v", "quiet", "-y", "-i", base, "-pix_fmt", "yuva420p",
+       "-c:v", "libwebp", "-quality", "80", p)
+    if filt in "webp_lossy_alpha": cmp_psnr("webp_lossy_alpha", p, 35.0)
+    p = g("webp_anim.webp")
+    sh("ffmpeg", "-v", "quiet", "-y", "-f", "lavfi",
+       "-i", "testsrc=size=64x48:rate=5:duration=1",
+       "-c:v", "libwebp_anim", "-lossless", "1", "-loop", "0", p)
+    if filt in "webp_anim": cmp_exact("webp_anim", p, coalesce=True)
+
     # ---- refusals ----
-    if filt in "webp_refused":
-        open(g("fake.webp"), "wb").write(
-            b"RIFF\x24\0\0\0WEBPVP8 \x10\0\0\0" + b"\0" * 16)
-        expect_err("webp_refused", g("fake.webp"), "WebP")
     if filt in "trunc_png":
         data = open(base, "rb").read()
         open(g("trunc.png"), "wb").write(data[:len(data) // 3])

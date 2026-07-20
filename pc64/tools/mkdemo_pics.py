@@ -198,6 +198,36 @@ def scene_tiles(w=192, h=192):                        # -> TILES.QOI
                           min(255,c[2]+40+e*10)) if e else c)
     return im
 
+def scene_lagoon(w=320, h=200):                       # -> LAGOON.WEB (WebP)
+    im = Img(w, h)
+    horizon = int(h * 0.45)
+    for y in range(h):                                # sky then sea
+        if y < horizon:
+            t = y / horizon
+            im_c = (int(120+80*t), int(190+40*t), int(240-20*t))
+        else:
+            t = (y - horizon) / (h - horizon)
+            im_c = (int(30+30*t), int(140-40*t), int(170-50*t))
+        for x in range(w):
+            im.set(x, y, im_c)
+    for r in range(60, 10, -12):                      # lagoon rings
+        im.disc(w*0.62, horizon+34, r, (60+r, 200-r, 200, 90))
+    for y in range(horizon-16, horizon):              # island
+        t = (horizon - y) / 16.0
+        half = int((1-t) * 52)
+        for x in range(int(w*0.28)-half, int(w*0.28)+half):
+            im.set(x, y, (194, 178, 128))
+    for k in range(5):                                # palm fronds
+        ang = -0.6 - k*0.45
+        for r in range(2, 30):
+            im.set(int(w*0.28 + math.cos(ang)*r),
+                   int(horizon-30 + math.sin(ang)*r*0.6), (40, 110, 50))
+    for y in range(horizon-30, horizon-14):           # trunk
+        im.set(int(w*0.28 + (y-(horizon-30))*0.25), y, (110, 80, 50))
+        im.set(int(w*0.28 + (y-(horizon-30))*0.25)+1, y, (110, 80, 50))
+    return im
+
+
 def frames_orbit(n=10, w=120, h=120):                 # -> ORBIT.GIF
     fr = []
     for k in range(n):
@@ -222,6 +252,14 @@ def main():
     tmp = p("_sunset.ppm")
     write_ppm(tmp, scene_sunset())
     subprocess.run(["convert", tmp, "-quality", "90", p("SUNSET.JPG")],
+                   check=True)
+    os.remove(tmp)
+
+    # WebP, named 8.3 (LAGOON.WEB) so the FAT lister shows it cleanly - the
+    # decoder probes by RIFF magic, so the truncated extension is harmless
+    tmp = p("_lagoon.ppm")
+    write_ppm(tmp, scene_lagoon())
+    subprocess.run(["convert", tmp, "-quality", "85", "webp:" + p("LAGOON.WEB")],
                    check=True)
     os.remove(tmp)
 
