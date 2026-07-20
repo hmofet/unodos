@@ -178,7 +178,51 @@ if [ "$1" != "legacy" ]; then
         # the SDK + developer docs ride on the ESP for Studio to open
         mkdir -p build/esp/SDK build/esp/DOCS
         cp sdk/UNO.H sdk/SAMPLE.C sdk/DOSTRIS.C build/esp/SDK/ 2>/dev/null || true
+        cp sdk/*.py sdk/*.pyi build/esp/SDK/ 2>/dev/null || true
         [ -d docs_esp ] && cp docs_esp/*.MD build/esp/DOCS/ 2>/dev/null || true
+    fi
+
+    # ---- PYRT.UNO: the Python runtime, a vendored-MicroPython module -------
+    # (optional, header-flag 0x2 = UNO_MODF_PY).  Built like STUDIO.UNO but
+    # multi-hundred-object: the whole py/ core + the port + the `uno` bindings.
+    # Codegen (mkupy.py) makes MicroPython's qstr/module/version headers first.
+    if [ "${UNO_PYRT:-1}" != "0" ]; then
+        echo "[3d] building PYRT.UNO (the Python runtime)..."
+        PB=build/pyrt
+        mkdir -p "$PB"
+        PYF="$UCF -w -Iupy -Iupy_port -I$PB"
+        PSRC="$(ls upy/py/*.c) upy/shared/runtime/gchelper_native.c \
+              upy_port/pc64_upy_port.c upy_port/mod_uno.c upy_port/pc64_upy_stubs.c \
+              apps/pyrt.c"
+        "$PY" upy_port/mkupy.py --top upy --port upy_port --build "$PB" \
+              --cpp "$CC -E" --cflags "$PYF" -- $PSRC
+        POBJ=""
+        for s in $PSRC; do
+            o="$PB/$(echo "$s" | tr '/.' '__').o"
+            "$CC" $PYF -DUNO_APP_SYM=uno_app_main -c -o "$o" "$s"
+            POBJ="$POBJ $o"
+        done
+        # imports = undefined-across-all minus defined-by-any, EXCLUDING the
+        # compiler/libgcc runtime helpers (__*), which -lgcc resolves at link
+        # (soft float/int conversions), not the kernel export table.
+        "$NM" $POBJ | awk '$1=="U"&&$2!=""&&$2!~/^__/{u[$2]=1} \
+            $1!="U"&&NF>=3{d[$3]=1} \
+            END{for(s in u) if(!(s in d)) print s}' \
+            | sort -u > "$PB/pyrt.syms"
+        while read -r s; do
+            [ -z "$s" ] && continue
+            grep -qx "$s" build/apps/kexports.txt || {
+                echo "FAIL: PYRT imports '$s' which pc64_modload.c does not export"; exit 1; }
+        done < "$PB/pyrt.syms"
+        "$PY" tools/mkuno.py thunks "$PB/pyrt.syms" "$PB/pyrt_thunks.s"
+        "$CC" -c -o "$PB/pyrt_thunks.o" "$PB/pyrt_thunks.s"
+        # -lgcc embeds libgcc's compiler-runtime helpers (soft float/int
+        # conversions MicroPython's float code needs, e.g. __extendhfsf2)
+        # statically - no PE imports, so the flattened .UNO stays self-contained.
+        "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols \
+            -o "$PB/pyrt.dll" $POBJ "$PB/pyrt_thunks.o" -lgcc
+        "$PY" tools/mkuno.py convert "$PB/pyrt.dll" "build/esp/APPS/PYRT.UNO" 2
+        ls -l build/esp/APPS/PYRT.UNO
     fi
 
     # decoupling assert: no app code linked into the kernel image

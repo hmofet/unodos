@@ -47,19 +47,16 @@ void mp_hal_stdout_tx_str(const char *str) { mp_hal_stdout_tx_strn(str, strlen(s
 void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) { mp_hal_stdout_tx_strn(str, len); }
 
 /* ---- GC root scan of the C stack ------------------------------------------
- * PYRT records the stack top at init; gc_collect walks from the current frame
- * up to it.  Registers are flushed by gc_helper_get_regs_for_collect on x64. */
-extern void *gc_helper_get_regs_for_collect(void *regs);  /* upy/shared/runtime/gchelper */
-static void *g_stack_top;
-void pyrt_set_stack_top(void *p) { g_stack_top = p; }
+ * MicroPython's shared gchelper flushes the callee-saved registers to the
+ * stack and traces from the current sp up to MP_STATE_THREAD(stack_top)
+ * (set by mp_stack_ctrl_init in py_init). */
+void gc_helper_collect_regs_and_stack(void);   /* upy/shared/runtime/gchelper_native.c */
+void pyrt_set_stack_top(void *p) { (void)p; }  /* mp_stack_ctrl_init owns stack_top */
 
 void gc_collect(void)
 {
-    void *regs[18];
-    void *sp = gc_helper_get_regs_for_collect(regs);
     gc_collect_start();
-    gc_collect_root(regs, ((uintptr_t)regs - (uintptr_t)sp) / sizeof(uintptr_t) + sizeof(regs)/sizeof(void*));
-    gc_collect_root((void **)sp, ((uintptr_t)g_stack_top - (uintptr_t)sp) / sizeof(uintptr_t));
+    gc_helper_collect_regs_and_stack();
     gc_collect_end();
 }
 

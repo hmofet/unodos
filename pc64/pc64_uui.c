@@ -64,11 +64,12 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, NNATIVE };
-#define NEXTRA 4                          /* extra native apps beyond the bridge */
+#define NEXTRA 5                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
 #define EX_USERAPP (NNATIVE + UNOAPP_COUNT + 3)   /* the app Studio just built    */
+#define EX_PYAPP   (NNATIVE + UNOAPP_COUNT + 4)   /* a running Python app (PYRT)  */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -130,6 +131,7 @@ static int          g_lidx[UNOAPP_COUNT];
  * first open, and drives it through the same build/action/key/frame hooks
  * the built-in apps use.  A distro without the file just has no Studio. */
 #include "uno_uuiapp.h"
+#include "pyhost.h"
 static const UnoUuiApp *g_studio;
 static int  g_studio_tried, g_studio_present;
 static void studio_ensure(void)
@@ -143,25 +145,49 @@ static void studio_ensure(void)
     }
 }
 
+/* ---- PYRT: the Python runtime module (APPS\PYRT.UNO), optional -----------
+ * Loaded lazily on the first Python run.  It hosts Python apps and hands the
+ * shell a UnoUuiApp (g_pyapp) driven exactly like Studio's window. */
+static const PyHost   *g_pyrt;
+static int             g_pyrt_tried, g_pyrt_present;
+static char            g_pyrt_gc[16 * 1024 * 1024];   /* MicroPython GC heap */
+static const UnoUuiApp *g_pyapp;                       /* the running Python app */
+static void pyrt_ensure(void)
+{
+    if (g_pyrt || g_pyrt_tried) return;
+    g_pyrt_tried = 1;
+    {
+        PyHostEntry e = uno_mod_load_pyrt();
+        if (e) g_pyrt = e(0);
+        if (g_pyrt && g_pyrt->abi != UNO_PYHOST_ABI) g_pyrt = 0;
+        if (g_pyrt) { g_pyrt->init(g_pyrt_gc, sizeof g_pyrt_gc); g_pyrt_present = 1; }
+    }
+}
+
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Install",
       "Music" };
+static const char *py_app_name(void)
+{ return (g_pyapp && g_pyapp->name) ? g_pyapp->name : "Python app"; }
 static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
        : a == EX_STUDIO ? "Studio"
        : a == EX_USERAPP ? unoapp_user_title()
+       : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
 static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
        : a == EX_STUDIO ? "Studio"
        : a == EX_USERAPP ? unoapp_user_title()
+       : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
-/* hidden from the launcher + desktop: the user-app slot until something runs
- * in it, and Studio when no STUDIO.UNO ships on this system */
+/* hidden from the launcher + desktop: the user/py-app slots until something
+ * runs in them, and Studio when no STUDIO.UNO ships on this system */
 static int app_hidden(int a)
 {
     if (a == EX_USERAPP) return !g_open[EX_USERAPP];
+    if (a == EX_PYAPP)   return !g_open[EX_PYAPP];
     if (a == EX_STUDIO)  return !g_studio_present;
     return 0;
 }
@@ -182,6 +208,7 @@ static int app_icon(int a)
     if (a == EX_BROWSER) return PCI_BROWSER;
     if (a == EX_STUDIO)  return PCI_STUDIO;
     if (a == EX_USERAPP) return PCI_GENERIC;
+    if (a == EX_PYAPP)   return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
     if (a >= NNATIVE && a - NNATIVE < UNOAPP_COUNT) return kBridgeIcon[a - NNATIVE];
     return PCI_GENERIC;
@@ -1019,6 +1046,12 @@ static void build_legacy(int a)
         unoui_add_canvas(&g_win[a], 0, 0, aw, ah - APP_TBAR, &ucv);
         return;
     }
+    if (a == EX_PYAPP) {               /* a running Python app (a UnoUuiApp) */
+        if (g_pyapp) { g_pyapp->build(&g_win[a]); return; }
+        unoui_window_init(&g_win[a], "Python", 60, 40, 240, 80);
+        unoui_add_label(&g_win[a], 8, 10, "No Python app running.");
+        return;
+    }
     cv = &g_lcanvas[li];
     unoapp_size(li, &aw, &ah);
     if (aw < 140) aw = 140;
@@ -1059,6 +1092,7 @@ static void open_app(int a)
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
         else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
+        else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
         else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
@@ -1072,6 +1106,8 @@ static void open_app(int a)
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
         { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == EX_PYAPP && g_pyapp && g_pyapp->canvas_index)
+        { int wi = g_pyapp->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     /* native games scale to any rect, so they can fill the screen (Esc returns).
      * Bridge apps + the browser stay windowed (they draw at a fixed size). */
     if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
@@ -1202,6 +1238,8 @@ static void close_focused(void)
         if (g >= 0)              pc64_game_close(g);        /* native game teardown */
         else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
         else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
+        else if (i == EX_PYAPP)  { if (g_pyapp) { if (g_pyapp->closed) g_pyapp->closed();
+                                     if (g_pyrt) g_pyrt->unload(); g_pyapp = 0; } }
         else if (i == EX_USERAPP) unoapp_user_close();
         else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
         break;
@@ -1425,8 +1463,31 @@ int pc64_shell_font_mono(void)
 /* Studio's Run: host the module it just wrote at vol:path in the user-app
  * window (replacing whatever ran there before). 0 = running, -1 = load
  * failure (bad image / unresolved import / slot full). */
+/* run the Python container at vol:path: ensure PYRT is loaded, hand it the
+ * source, host the returned UnoUuiApp in the EX_PYAPP window. */
+static int pc64_shell_run_python(int vol, const char *path)
+{
+    const unsigned char *src; int len;
+    pyrt_ensure();
+    if (!g_pyrt) return -2;                       /* no PYRT.UNO on this system */
+    if (uno_mod_load_pyapp(vol, path, &src, &len) < 0) return -1;
+    if (g_open[EX_PYAPP]) {                        /* replace any running app */
+        remove_win(&g_win[EX_PYAPP]);
+        if (g_pyapp && g_pyapp->closed) g_pyapp->closed();
+        g_pyrt->unload();
+        g_open[EX_PYAPP] = 0;
+    }
+    g_pyapp = g_pyrt->load(src, len, path);
+    if (!g_pyapp) return -3;                       /* compile/exec error (last_error) */
+    g_built[EX_PYAPP] = 0;
+    open_app(EX_PYAPP);
+    return 0;
+}
+
 int pc64_shell_run_user(int vol, const char *path)
 {
+    if (uno_mod_peek_flags(vol, path) & UNO_MODF_PYAPP)   /* a Python app */
+        return pc64_shell_run_python(vol, path);
     if (unoapp_user_run(vol, path) < 0) return -1;
     if (g_open[EX_USERAPP]) {            /* rebuild for the new size/title */
         remove_win(&g_win[EX_USERAPP]);
@@ -1436,6 +1497,9 @@ int pc64_shell_run_user(int vol, const char *path)
     open_app(EX_USERAPP);
     return 0;
 }
+
+/* Studio calls this to show a Python compile error in its output pane */
+const char *pc64_shell_py_error(void) { return g_pyrt ? g_pyrt->last_error() : ""; }
 
 /* app-side action hooks (in pc64_write.c / pc64_files.c) */
 int pc64_write_action(const unoui_action *a);
@@ -1485,6 +1549,8 @@ static void on_action(const unoui_action *a)
     if (pc64_clock_action(a)) return;           /* the world clock            */
     if (g_studio && g_open[EX_STUDIO] && g_studio->action &&
         g_studio->action(a)) return;            /* the Studio module          */
+    if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->action &&
+        g_pyapp->action(a)) return;             /* the running Python app      */
     switch (a->id) {
     case ID_ILIST:    inst_select(a->value); break;
     case ID_IDEF:     g_inst_default = a->value; break;
@@ -1630,6 +1696,12 @@ static int pump_input(void)
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[EX_STUDIO] && g_studio->key) {
             if (g_studio->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        }
+        /* a focused Python app's accelerators */
+        if (!g_launch_open && !UI.full && g_pyapp && g_open[EX_PYAPP] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[EX_PYAPP] && g_pyapp->key) {
+            if (g_pyapp->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
         }
         /* Install window focused: keyboard drive (works before any pointer is
            up - important on the harness AND on laptops with exotic trackpads).
@@ -1804,6 +1876,8 @@ int main(void)
         pc64_write_frame();             /* Editor caret blink / autoscroll */
         if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
             g_studio->frame();          /* Studio caret blink / build pumps */
+        if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->frame)
+            g_pyapp->frame();           /* the Python app's per-frame tick   */
         if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
         if (g_open[APP_CLOCK]) pc64_clock_tick();  /* self-throttling: only

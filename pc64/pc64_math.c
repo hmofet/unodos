@@ -71,7 +71,6 @@ float sqrtf(float x)
 #define LN2_F  0.69314718056f
 #define LG2E   1.44269504089f       /* 1/ln2 */
 
-float fabsf(float x) { return x < 0.0f ? -x : x; }
 float copysignf(float x, float y) { float a = fabsf(x); return y < 0.0f ? -a : a; }
 float truncf(float x) { return x < 0.0f ? ceilf(x) : floorf(x); }
 float roundf(float x) { return x < 0.0f ? ceilf(x - 0.5f) : floorf(x + 0.5f); }
@@ -178,3 +177,6 @@ float frexpf(float x, int *e)
     return b.f;
 }
 float modff(float x, float *ip) { float t = truncf(x); *ip = t; return x - t; }
+
+float nearbyintf(float x) { return roundf(x); }   /* round-half-away is fine here */
+float rintf(float x) { return roundf(x); }
