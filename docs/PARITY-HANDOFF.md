@@ -1,5 +1,32 @@
 # Parity program — handoff (2026-07-19)
 
+> **CORRECTION (2026-07-20): the audit below was wrong about the June work, and
+> the "ground truth" it states is out of date. Read this first.**
+>
+> The June parity work was **not** lost. It was committed and pushed, on the
+> branch `parity-push-fresh-ports` — a branch the 2026-07-19 survey did not
+> look at. It has since been **merged to master**, and it brings Tracker,
+> OutLast, Pac-Man and Paint to **six** fresh ports (sms, nes, gba, rpi,
+> pinephone, ppcmac), all wired into dispatch rather than placeholders, plus
+> the PC Engine real-hardware black-screen fix, the rpi DWC2 USB-HID keyboard
+> host driver, and the PinePhone cold-panel-init investigation.
+>
+> So: **sms, nes, gba, rpi, pinephone and ppcmac are at 11 apps**, and the
+> remaining placeholders are gb, gg, vic20, ws and pce. Storage persistence is
+> still outstanding across the fresh tier. The orphan binaries the survey found
+> in build directories were the *outputs of that branch*, not evidence of lost
+> source.
+>
+> `parity-wip` is now **fully superseded** — master has strictly more (six
+> ports at four apps each, versus wip's five ports with gba at one app and
+> pinephone missing Paint), and master builds where wip by design does not.
+> Nothing needs to be recovered from it.
+>
+> The procedural lesson still stands, but the accurate form of it is: *before
+> concluding work is lost, check every branch and remote, not just the
+> mainline.*
+
+
 A full-family parity audit ran on 2026-07-19, followed by a fix program that was
 **cut short by an account spend limit** (six worker agents were killed mid-edit).
 This document records what landed, what is parked, and exactly how to resume.

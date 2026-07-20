@@ -1,31 +1,28 @@
 # UnoDOS — agent instructions
 
-## Unfinished work waiting on branch `parity-wip` (picked up later)
+## Fresh-port parity — state as of 2026-07-20
 
-The 2026-07-19 family parity program was cut short mid-flight. Its finished
-parts are on `master`; the **interrupted parts are parked on the branch
-`parity-wip` (commit `b2e40c1`), which does NOT build by design** — six ports
-were caught mid-edit.
+The 2026-07-19 audit concluded the June parity work was "never committed and is
+lost". **That was wrong.** It was committed and pushed on
+`parity-push-fresh-ports`, a branch the survey missed, and it is now **merged to
+master**.
 
-**Read [`docs/PARITY-HANDOFF.md`](docs/PARITY-HANDOFF.md) before resuming
-anything parity-related.** It has the audit findings, what landed with evidence,
-a per-port table of exactly what each parked port is missing, and the ordered
-backlog.
+- **sms, nes, gba, rpi, pinephone, ppcmac are at 11 of 11 apps** — Tracker,
+  OutLast, Pac-Man and Paint are real and wired into dispatch. All six build.
+- **gb, gg, vic20, ws, pce still ship 7 of 11** (those four are launcher
+  placeholders). Storage persistence is outstanding across the whole fresh tier.
+- `parity-wip` (`b2e40c1`, does not build by design) is now **fully superseded**
+  by master and holds nothing worth recovering. Do not merge it; it is a
+  deletion candidate.
+- `docs/FEATURE-MATRIX.md` is stale (no C64 column, pc64 storage row predates
+  the native drivers, fresh-port rows now understate six ports) — fix it as
+  parity lands.
 
-The short version:
+[`docs/PARITY-HANDOFF.md`](docs/PARITY-HANDOFF.md) carries the full history,
+including the correction above; read it before resuming parity work.
 
-- Every "3.1-fresh" port (sms, nes, gb, gg, vic20, ws, pce, gba, rpi, pinephone,
-  ppcmac) ships **7 of 11 apps** — Tracker, OutLast, Pac-Man and Paint are
-  launcher placeholders, and none has storage persistence. An earlier June
-  attempt at this was **never committed and is lost**, so treat any doc or note
-  claiming fresh-port parity as false until the source says otherwise.
-- `parity-wip` holds new per-app sources for nes/vic20/gba/rpi/ppcmac/pinephone.
-  rpi and vic20 build (dispatch unwired); ppcmac needs a `t_tracker` entry; gba
-  needs `outlast.inc.s`; pinephone needs `paint.inc.s`; nes is mid-wire.
-- **Do not merge `parity-wip` to master as-is.** Finish + harness-verify a port,
-  then merge it forward.
-- `docs/FEATURE-MATRIX.md` is stale (overstates fresh-port parity, has no C64
-  column, pc64 storage row predates the native drivers) — fix it as parity lands.
+**The procedural lesson:** before concluding work is lost, check every branch
+and every remote, not just the mainline.
 
 ## Standing rule: keep the shared pc64 flasher current
 
