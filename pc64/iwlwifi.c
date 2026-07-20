@@ -145,45 +145,80 @@ static void prph_w(u32 reg, u32 v) { w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mas
 /* =====================================================================
  * 2. device identity: family, generation, firmware file name
  * ===================================================================== */
-enum { FAM_7000, FAM_8000, FAM_9000, FAM_22000, FAM_AX210 };
+/* Order matters: the generation checks below are `g_family >= FAM_*`, so the
+ * newer gen3 families (BZ/SC) MUST sort after FAM_AX210 to inherit the gen3
+ * context-info-v2 + PNVM load path. */
+enum { FAM_7000, FAM_8000, FAM_9000, FAM_22000, FAM_AX210, FAM_BZ, FAM_SC };
 static int  g_family;
+static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) */
 static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
 static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
 static u32  g_hw_rev, g_hw_rf_id;
-static char g_fwfile[16];    /* 8.3 name under FIRMWARE\ on the ESP */
-static char g_pnvmfile[16];
+static char g_fwfile[20];    /* 8.3 name under FIRMWARE\ on the ESP */
+static char g_pnvmfile[20];
 static u8   g_mac[6];
 static u8   g_joined;
 static char g_ssid_str[36];
 
-/* Intel PCI device-id table (subset covering the AC + AX parts we target). */
+/* Classify an Intel WiFi PCI device id into its iwlwifi family. In current
+ * mainline the family is a pure function of the device id (the subsystem id and
+ * RF-ID register only refine the marketing name / RF firmware suffix, which the
+ * fixed-per-family ESP filename abstracts away). Full table from Linux
+ * pcie/drv.c iwl_hw_card_ids[]. Returns 1 if supported (MVM), 0 otherwise;
+ * sets g_is_dvm for the older iwldvm-only parts so the status can say so. */
 static int identify_by_pci(u16 dev)
 {
-    /* 7000/3000 */
     switch (dev) {
-    case 0x08b1: case 0x08b2: case 0x08b3: case 0x08b4:              /* 7260/7265 */
-    case 0x095a: case 0x095b:                                        /* 7265D */
+    /* ---- FAM_7000 (gen1 legacy fw, single-queue RX) ---- */
+    case 0x08b1: case 0x08b2:                     /* 7260  */
+    case 0x08b3: case 0x08b4:                     /* 3160  */
+    case 0x3165: case 0x3166:                     /* 3165  */
+    case 0x24fb:                                  /* 3168  */
+    case 0x095a: case 0x095b:                     /* 7265  */
         g_family = FAM_7000; return 1;
-    case 0x08b5: case 0x08b6: case 0x3165: case 0x3166: case 0x3167: case 0x3168:
-        g_family = FAM_7000; return 1;                                /* 3160/3165/3168 */
-    case 0x24f3: case 0x24f4: case 0x24fd: case 0x24f5: case 0x24f6: /* 8260/8265 */
+    /* ---- FAM_8000 (gen1 secure fw) ---- */
+    case 0x24f3: case 0x24f4:                     /* 8260  */
+    case 0x24f5: case 0x24f6:                     /* 4165  */
+    case 0x24fd:                                  /* 8265/8275 */
         g_family = FAM_8000; return 1;
-    case 0x2526: case 0x271b: case 0x271c: case 0x30dc: case 0x31dc: /* 9260/9461/9462/9560 */
-    case 0x9df0: case 0xa370: case 0x2723:
+    /* ---- FAM_9000 (gen1 transport, multi-queue RX) ---- */
+    case 0x2526: case 0x271b: case 0x271c:        /* 9260 "th" fw */
+    case 0x30dc: case 0x31dc:                     /* 9560 "pu" fw */
+    case 0x9df0: case 0xa370:                     /* 9560/9461/9462 "pu" fw */
         g_family = FAM_9000; return 1;
-    case 0x2725:                                                      /* AX210 (discrete) */
-    case 0x7a70: case 0x7af0: case 0x7e40: case 0x7f70:               /* AX210/AX211 (So/Ty) */
-        g_family = FAM_AX210; return 1;
-    case 0x2723 & 0: break;
-    }
-    /* AX200 / AX201 (Qu/QuZ CNVi) - device ids 0x2723 (AX200), 0x02f0/0x4df0
-       (AX201 CNVi variants), 0x34f0/0xa0f0/0x43f0 (Qu). */
-    switch (dev) {
-    case 0x02f0: case 0x4df0: case 0x34f0: case 0xa0f0: case 0x43f0:
-    case 0x06f0: case 0x3df0:
+    /* ---- FAM_22000 (gen2 context-info fw load) ---- */
+    case 0x2723:                                  /* AX200 discrete -> cc-a0 */
+    case 0x02f0: case 0x06f0:                     /* Qu AX201 -> Qu-b0-hr-b0 */
+    case 0x34f0: case 0x3df0: case 0x4df0:
+    case 0x43f0: case 0xa0f0:
         g_family = FAM_22000; return 1;
+    /* ---- FAM_AX210 (gen3 ctx-info-v2 + IML + PNVM); Ty/So/Ma ---- */
+    case 0x2725:                                  /* AX210 (Ty) -> ty-a0-gf-a0 */
+    case 0x7af0: case 0x7f70:                     /* So AX211/AX411 -> so-a0-gf-a0 */
+    case 0x7a70: case 0x51f0: case 0x51f1: case 0x54f0:
+    case 0x2729: case 0x7e40:                     /* Ma -> ma-a0-* */
+        g_family = FAM_AX210; return 1;
+    /* ---- FAM_BZ (WiFi 7 BE200/BE201; gen3-like + TOP reset) [best-effort] ---- */
+    case 0x272b:                                  /* Gl / BE200 discrete -> gl-b0-fm-b0 */
+    case 0xa840:                                  /* Bz (any subsystem) -> bz-a0-fm-b0 */
+    case 0x7740: case 0x4d40:                     /* Bz */
+        g_family = FAM_BZ; return 1;
+    /* ---- FAM_SC (WiFi 7 BE211; newer) [best-effort] ---- */
+    case 0xe440: case 0xe340: case 0xd340:
+    case 0x6e70: case 0xd240:                     /* Sc -> sc-a0-wh-a0 / -fm-b0 */
+        g_family = FAM_SC; return 1;
+    /* ---- iwldvm-only parts: recognised but UNSUPPORTED by this MVM driver ---- */
+    case 0x4232: case 0x4235: case 0x4236: case 0x4237: case 0x423a: case 0x423b:
+    case 0x423c: case 0x423d:                     /* 5000/5300/5350/5150 */
+    case 0x422b: case 0x422c: case 0x4238: case 0x4239: /* 6000 */
+    case 0x0082: case 0x0085: case 0x008a: case 0x008b: case 0x0090: case 0x0091:
+    case 0x0087: case 0x0089: case 0x0885: case 0x0886: /* 6005/6030/6050/6150 */
+    case 0x0083: case 0x0084: case 0x08ae: case 0x08af: /* 1000/100 */
+    case 0x0896: case 0x0897: case 0x0890: case 0x0891: /* 130/2000 */
+    case 0x0887: case 0x0888: case 0x088e: case 0x088f: /* 2030/6035 */
+    case 0x0894: case 0x0895: case 0x0892: case 0x0893: /* 105/135 */
+        g_is_dvm = 1; return 0;
     }
-    if (dev == 0x2723) { g_family = FAM_22000; return 1; }   /* AX200 discrete */
     return 0;
 }
 
@@ -200,16 +235,39 @@ static void choose_firmware(void)
     switch (g_family) {
     case FAM_7000:  strcpy(g_fwfile, "FIRMWARE\\IWL7260.UCO"); break;
     case FAM_8000:  strcpy(g_fwfile, "FIRMWARE\\IWL8000.UCO"); break;
-    case FAM_9000:  strcpy(g_fwfile, "FIRMWARE\\IWL9000.UCO"); break;
+    case FAM_9000:
+        /* 9260 (device 0x2526/0x271b/0x271c) uses the th-b0-jf-b0 image;
+           9461/9462/9560 use the pu-b0-jf-b0 image - different upstream files. */
+        if (g_pci.device==0x2526 || g_pci.device==0x271b || g_pci.device==0x271c)
+             strcpy(g_fwfile, "FIRMWARE\\IWL9260.UCO");
+        else strcpy(g_fwfile, "FIRMWARE\\IWL9000.UCO");
+        break;
     case FAM_22000:
-        /* AX200 (discrete PU, device 0x2723) uses the cc-a0 image; AX201 (Qu/QuZ
-           CNVi) uses the Qu image - different files, so pick by device id. */
+        /* AX200 (discrete, device 0x2723) uses the cc-a0 image; AX201 (Qu/QuZ
+           CNVi) uses the Qu-b0-hr-b0 image - different files. */
         if (g_pci.device == 0x2723) strcpy(g_fwfile, "FIRMWARE\\IWLAX200.UCO");
         else                        strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");
         break;
     case FAM_AX210:
-        strcpy(g_fwfile,   "FIRMWARE\\IWLAX210.UCO");
-        strcpy(g_pnvmfile, "FIRMWARE\\IWLAX210.PNV"); break;
+        /* Ty (0x2725) uses ty-a0-gf-a0; So/Ma parts (AX211/AX411) use
+           so-a0-gf-a0 - separate files. Both need a matching PNVM. */
+        if (g_pci.device == 0x2725) { strcpy(g_fwfile,"FIRMWARE\\IWLAX210.UCO");
+                                      strcpy(g_pnvmfile,"FIRMWARE\\IWLAX210.PNV"); }
+        else                        { strcpy(g_fwfile,"FIRMWARE\\IWLAX211.UCO");
+                                      strcpy(g_pnvmfile,"FIRMWARE\\IWLAX211.PNV"); }
+        break;
+    case FAM_BZ:
+        /* WiFi 7 Bz/Gl. Best-effort: routed through the gen3 loader, but Bz adds
+           a TOP-reset + ROM-start handshake this driver does not yet perform, so
+           this is metal-pending even by the family's standard. */
+        if (g_pci.device == 0x272b) { strcpy(g_fwfile,"FIRMWARE\\IWLBE200.UCO");   /* Gl discrete */
+                                      strcpy(g_pnvmfile,"FIRMWARE\\IWLBE200.PNV"); }
+        else                        { strcpy(g_fwfile,"FIRMWARE\\IWLBE201.UCO");   /* Bz */
+                                      strcpy(g_pnvmfile,"FIRMWARE\\IWLBE201.PNV"); }
+        break;
+    case FAM_SC:
+        strcpy(g_fwfile,   "FIRMWARE\\IWLBE211.UCO");
+        strcpy(g_pnvmfile, "FIRMWARE\\IWLBE211.PNV"); break;
     }
 }
 
@@ -1340,7 +1398,10 @@ int iwl_present(void)
        Match by our device table. */
     if (pci_find_class(0x02, 0x80, &d)) {
         u16 dev = pci_cfg_read16(&d, 2);
-        if (d.vendor == 0x8086 && identify_by_pci(dev)) { g_pci = d; g_present = 1; return 1; }
+        if (d.vendor == 0x8086) {
+            if (identify_by_pci(dev)) { g_pci = d; g_present = 1; return 1; }
+            if (g_is_dvm) st_set("Intel WiFi found, but it is an older iwldvm card (unsupported)");
+        }
     }
     return 0;
 }

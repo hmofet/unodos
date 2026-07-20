@@ -15,6 +15,11 @@
 #include "e1000.h"
 #include "tls.h"
 #include "iwlwifi.h"      /* Intel WiFi status readout */
+#include "rtwifi.h"       /* Realtek PCIe WiFi */
+#include "mrvlwifi.h"     /* Marvell/NXP PCIe WiFi */
+#include "e1000e.h"       /* Intel e1000e wired GbE (82574 / I219) */
+#include "igb.h"          /* Intel igb wired GbE (I210/I211/82576) */
+#include "r8169.h"        /* Realtek RTL8168/8111 wired GbE */
 
 /* SLIRP peers: the gateway runs a built-in TFTP server (UDP round-trip proof,
    fully self-contained); 10.0.2.100 is a guestfwd -> host `cat` (TCP echo). */
@@ -61,19 +66,23 @@ static void fmt_ip(char *o, const u8 *ip) {
 
 static void net_reset(void)
 {
-    uno_nic_t *nic;
+    uno_nic_t *nic; const u8 *m = 0;
     gStep = S_INIT; gTimer = 0;
     gRes[0]=gRes[1]=gRes[2]=gRes[3]=gRes[4]=gRes[5]=R_WAIT;
     gLease[0]=gMacStr[0]=gUdpEcho[0]=gTcpEcho[0]=gTlsInfo[0]=0;
-    nic = e1000_nic();
-    if (!nic) { gStep = S_NONIC; return; }
+    /* try each wired NIC in turn: e1000, e1000e (82574/I219), igb, Realtek 8168 */
+    if      ((nic = e1000_nic()))  m = e1000_mac();
+    else if ((nic = e1000e_nic())) m = e1000e_mac();
+    else if ((nic = igb_nic()))    m = igb_mac();
+    else if ((nic = r8169_nic()))  m = r8169_mac();
+    if (!nic || !m) { gStep = S_NONIC; return; }
     {
-        const u8 *m = e1000_mac(); int i, j = 0;
+        int i, j = 0;
         for (i = 0; i < 6; i++) { hex2(gMacStr + j, m[i]); j += 2;
             if (i < 5) gMacStr[j++] = ':'; }
         gMacStr[j] = 0;
     }
-    net_init(nic, e1000_mac());
+    net_init(nic, m);
     gRes[4] = net_link() ? R_OK : R_WAIT;
     net_dhcp_start();
     gStep = S_DHCP; gTimer = 0;
@@ -183,16 +192,19 @@ static void row(short x, short y, const char *label, int res, const char *extra)
 static UiBtn gNetBtn;                       /* mouse-reachable "Re-run tests" */
 static UiBtn gWifiBtn;                       /* "Connect WiFi" (Intel iwlwifi) */
 
-/* draw the Intel-WiFi status block; returns the y past it */
+/* draw the WiFi status block (Intel / Realtek / Marvell); returns the y past it */
 static short wifi_draw(short x, short y)
 {
-    text_at(x, y, "Intel WiFi", C_MAG, C_BLUE, false); y += 16;
-    if (!iwl_present()) {
-        text_at(x, y, "No Intel WiFi card on the PCI bus.", C_WHITE, C_BLUE, false);
+    int present = iwl_present() || rtwifi_present() || mrvlwifi_present();
+    text_at(x, y, "WiFi", C_MAG, C_BLUE, false); y += 16;
+    if (!present) {
+        text_at(x, y, "No supported WiFi card on the PCI bus.", C_WHITE, C_BLUE, false);
         return (short)(y + 14);
     }
-    /* the driver keeps a human-readable state string; empty until first probe */
-    iwl_status_str(gWifiStat, sizeof gWifiStat);
+    /* each driver keeps a human-readable state string; empty until first probe */
+    if (iwl_present())          iwl_status_str(gWifiStat, sizeof gWifiStat);
+    else if (rtwifi_present())  rtwifi_status_str(gWifiStat, sizeof gWifiStat);
+    else                        mrvlwifi_status_str(gWifiStat, sizeof gWifiStat);
     text_at(x, y, gWifiStat[0] ? gWifiStat : "Detected - press Connect to join.",
             C_CYAN, C_BLUE, false); y += 18;
     gWifiBtn.x = x; gWifiBtn.y = y; gWifiBtn.w = 110; gWifiBtn.h = 16;
@@ -204,9 +216,9 @@ static void network_draw(UnoWin *w)
 {
     Rect r = w->bounds;
     short x = r.left + 10, y = r.top + TBAR_H + 14;
-    text_at(x, y, "e1000 Networking", C_MAG, C_BLUE, false); y += 18;
+    text_at(x, y, "Wired Ethernet", C_MAG, C_BLUE, false); y += 18;
     if (gStep == S_NONIC) {
-        text_at(x, y, "No e1000 NIC found (need -device e1000).", C_WHITE, C_BLUE, false);
+        text_at(x, y, "No wired NIC (e1000/e1000e/igb/RTL8168).", C_WHITE, C_BLUE, false);
         y += 20;
         wifi_draw(x, y);                     /* WiFi may still be present */
         return;
@@ -233,8 +245,9 @@ static void network_draw(UnoWin *w)
    is idempotent (returns the cached nic once bound). Inert if no card. */
 static void wifi_connect(void)
 {
-    if (iwl_present()) iwl_nic();
-    iwl_status_str(gWifiStat, sizeof gWifiStat);
+    if      (iwl_present())     { iwl_nic();      iwl_status_str(gWifiStat, sizeof gWifiStat); }
+    else if (rtwifi_present())  { rtwifi_nic();   rtwifi_status_str(gWifiStat, sizeof gWifiStat); }
+    else if (mrvlwifi_present()){ mrvlwifi_nic(); mrvlwifi_status_str(gWifiStat, sizeof gWifiStat); }
 }
 
 static void network_click(UnoWin *w, Point p)
