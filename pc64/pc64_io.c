@@ -113,14 +113,25 @@ int uno_ramfs_name(int idx, char *out, int max)
     }
     return 0;
 }
-long uno_ramfs_read(const char *name, unsigned char *buf, long max)
+/* read from byte `off` - the offset form the media decoders stream through */
+long uno_ramfs_read_at(const char *name, long off, unsigned char *buf, long max)
 {
     RamFile *f = disk_find(name); long n;
-    if (max < 0) return -1;
+    if (max < 0 || off < 0) return -1;
     if (!f || !f->buf) return -1;
-    n = f->len < max ? f->len : max;
-    memcpy(buf, f->buf, (unsigned long)n);
+    if (off >= f->len) return 0;
+    n = f->len - off; if (n > max) n = max;
+    memcpy(buf, f->buf + off, (unsigned long)n);
     return n;
+}
+long uno_ramfs_read(const char *name, unsigned char *buf, long max)
+{
+    return uno_ramfs_read_at(name, 0, buf, max);
+}
+long uno_ramfs_size(const char *name)
+{
+    RamFile *f = disk_find(name);
+    return (f && f->buf) ? f->len : -1;
 }
 /* create/overwrite a RAM-disk file; returns 1 on success (used by uno_fs_write
    so the unified fs surface has a working write path on volume 0 too). */
