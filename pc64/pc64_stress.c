@@ -54,8 +54,36 @@ static unsigned long g_frame;
 static unsigned long g_action;
 static int   g_pass;
 
+/* Match `key` as a whole word on a NON-COMMENT line.  A naive strstr over the
+ * whole file is wrong: the shipped STRESS.CFG documents the keys in a comment
+ * ("# keys: once fast slow allow-force"), and substring-matching that comment
+ * silently enabled every key - including allow-force, so a "safe" stick forced
+ * a #PF on pass 1.  Found on the Surface (CR003).  So: skip any line whose
+ * first non-space char is '#', and require the key to be delimited (not a
+ * substring of a longer token). */
+static int tok_delim(char c) { return c == 0 || c == ' ' || c == '\t' ||
+                                      c == '\r' || c == '\n' || c == '='; }
 static int cfg_has(const char *cfg, const char *key)
-{ return strstr(cfg, key) != 0; }
+{
+    const char *p = cfg;
+    int klen = (int)strlen(key);
+    while (*p) {
+        const char *ls = p;                    /* line start */
+        while (*ls == ' ' || *ls == '\t') ls++;
+        if (*ls != '#') {                      /* not a comment line */
+            const char *s = ls;
+            while (*s && *s != '\n') {
+                int atstart = (s == ls) || tok_delim(s[-1]);
+                if (atstart && !strncmp(s, key, (size_t)klen) && tok_delim(s[klen]))
+                    return 1;
+                s++;
+            }
+        }
+        while (*p && *p != '\n') p++;           /* advance to next line */
+        if (*p) p++;
+    }
+    return 0;
+}
 
 static void arm(void)
 {

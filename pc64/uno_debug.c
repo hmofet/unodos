@@ -478,10 +478,29 @@ static int disk_write_report(int kind)
 /* ===========================================================================
  * the exception path
  * ======================================================================== */
+/* firmware ResetSystem (a runtime service): enough of the struct to reach it.
+ * Layout matches uefi_main.c's EFI_RUNTIME_SERVICES. */
+typedef struct {
+    unsigned char Hdr[24];
+    void *GetTime, *SetTime, *GetWakeupTime, *SetWakeupTime;
+    void *SetVirtualAddressMap, *ConvertPointer;
+    void *GetVariable, *GetNextVariableName, *SetVariable, *GetNextHighMonotonicCount;
+    void (*ResetSystem)(int, EFI_STATUS, UINTN, void *);
+} DbgRuntimeServices;
+
 static void trap_reset(void)
 {
     uno_native_delay_us(2000000);       /* 2 s: let debugcon/HDMI show it */
-    uno_native_reset();                 /* CF9; never returns */
+    /* An ATTACHED machine may ignore CF9 + the i8042 pulse - the Surface did
+     * (CR003 captured fine, then black-screened because uno_native_reset never
+     * took, leaving the firmware OSK drawn).  While attached the firmware still
+     * owns the platform, so use its ResetSystem runtime service first; the
+     * native CF9 path is the only option once detached, and the fallback. */
+    if (!uno_pc64_detached() && g_st) {
+        DbgRuntimeServices *rs = (DbgRuntimeServices *)g_st->RuntimeServices;
+        if (rs && rs->ResetSystem) rs->ResetSystem(0 /*EfiResetCold*/, 0, 0, 0);
+    }
+    uno_native_reset();                 /* CF9 + i8042 pulse; then hlt */
 }
 
 void uno_dbg_trap(DbgFrame *f);         /* referenced from the asm stubs */
