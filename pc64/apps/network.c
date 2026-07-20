@@ -14,6 +14,7 @@
 #include "net.h"
 #include "e1000.h"
 #include "tls.h"
+#include "iwlwifi.h"      /* Intel WiFi status readout */
 
 /* SLIRP peers: the gateway runs a built-in TFTP server (UDP round-trip proof,
    fully self-contained); 10.0.2.100 is a guestfwd -> host `cat` (TCP echo). */
@@ -42,6 +43,7 @@ static int  gStep, gTimer, gStarted;
 static int  gRes[6];                 /* dhcp,ping,udp,tcp,link,tls */
 static char gLease[20], gMacStr[20];
 static char gUdpEcho[24], gTcpEcho[24], gTlsInfo[40];
+static char gWifiStat[196];          /* iwl_status_str() readout */
 
 static void hex2(char *o, unsigned v) {
     const char *h = "0123456789ABCDEF";
@@ -179,6 +181,24 @@ static void row(short x, short y, const char *label, int res, const char *extra)
 }
 
 static UiBtn gNetBtn;                       /* mouse-reachable "Re-run tests" */
+static UiBtn gWifiBtn;                       /* "Connect WiFi" (Intel iwlwifi) */
+
+/* draw the Intel-WiFi status block; returns the y past it */
+static short wifi_draw(short x, short y)
+{
+    text_at(x, y, "Intel WiFi", C_MAG, C_BLUE, false); y += 16;
+    if (!iwl_present()) {
+        text_at(x, y, "No Intel WiFi card on the PCI bus.", C_WHITE, C_BLUE, false);
+        return (short)(y + 14);
+    }
+    /* the driver keeps a human-readable state string; empty until first probe */
+    iwl_status_str(gWifiStat, sizeof gWifiStat);
+    text_at(x, y, gWifiStat[0] ? gWifiStat : "Detected - press Connect to join.",
+            C_CYAN, C_BLUE, false); y += 18;
+    gWifiBtn.x = x; gWifiBtn.y = y; gWifiBtn.w = 110; gWifiBtn.h = 16;
+    ui_button(&gWifiBtn, "Connect WiFi", false);
+    return (short)(y + 20);
+}
 
 static void network_draw(UnoWin *w)
 {
@@ -187,6 +207,8 @@ static void network_draw(UnoWin *w)
     text_at(x, y, "e1000 Networking", C_MAG, C_BLUE, false); y += 18;
     if (gStep == S_NONIC) {
         text_at(x, y, "No e1000 NIC found (need -device e1000).", C_WHITE, C_BLUE, false);
+        y += 20;
+        wifi_draw(x, y);                     /* WiFi may still be present */
         return;
     }
     text_at(x, y, "MAC", C_WHITE, C_BLUE, false);
@@ -202,17 +224,32 @@ static void network_draw(UnoWin *w)
             C_CYAN, C_BLUE, false);
     gNetBtn.x = x; gNetBtn.y = (short)(y + 14); gNetBtn.w = 96; gNetBtn.h = 16;
     ui_button(&gNetBtn, "Re-run tests", false);
+    y += 40;
+    wifi_draw(x, y);
+}
+
+/* User-initiated WiFi join: iwl_nic() runs the scan + 4-way handshake, which
+   blocks for a few seconds, so it must be driven by a click, not the tick. It
+   is idempotent (returns the cached nic once bound). Inert if no card. */
+static void wifi_connect(void)
+{
+    if (iwl_present()) iwl_nic();
+    iwl_status_str(gWifiStat, sizeof gWifiStat);
 }
 
 static void network_click(UnoWin *w, Point p)
 {
     if (ui_hit(&gNetBtn, p)) { net_reset(); gStarted = 1; draw_window(w); }
+    else if (ui_hit(&gWifiBtn, p)) { wifi_connect(); draw_window(w); }
 }
 
 static Boolean network_key(char ch, short code, Boolean cmd)
 {
     (void)code; (void)cmd;
     if (ch == 'r' || ch == 'R') { net_reset(); gStarted = 1;
+        { UnoWin *w = find_app_window(APP_NETWORK); if (w) draw_window(w); }
+        return true; }
+    if (ch == 'w' || ch == 'W') { wifi_connect();
         { UnoWin *w = find_app_window(APP_NETWORK); if (w) draw_window(w); }
         return true; }
     return false;
@@ -225,6 +262,6 @@ static void network_opened(void)
 
 static const AppInterface kIface = {
     network_draw, network_key, network_click, network_tick, network_opened, 0,
-    "Network", { 120, 40, 470, 268 }
+    "Network", { 120, 40, 470, 344 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }

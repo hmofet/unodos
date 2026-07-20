@@ -39,6 +39,12 @@ int  uno_usb_set_config(int dev, int cfg);                 /* SET_CONFIGURATION 
 int  uno_usb_setup_bulk(int dev, int in_ep_addr, int out_ep_addr, int in_mps, int out_mps);
 int  uno_usb_bulk_out(int dev, void *data, int len);       /* returns bytes sent / -1 */
 int  uno_usb_bulk_in(int dev, void *data, int len);        /* returns bytes received / -1 */
+/* Async bulk-IN (NIC recv): arm posts one transfer and returns immediately
+ * (1 = armed, 0 = already armed, -1 = error); poll is NON-BLOCKING and returns
+ * received bytes once it lands, 0 while outstanding, -1 on error/not armed.
+ * The buffer passed to arm must stay valid until poll returns nonzero. */
+int  uno_usb_bulk_in_arm(int dev, void *data, int len);
+int  uno_usb_bulk_in_poll(int dev);
 
 /* HID interrupt-IN endpoint. setup posts the first transfer; intr_in is a
  * NON-BLOCKING poll returning the report length (0 = none ready yet, -1 err). */

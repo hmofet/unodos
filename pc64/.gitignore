@@ -1,5 +1,7 @@
 # build artifacts + harness scratch
 build/
+# Intel/Realtek WiFi firmware blobs (non-redistributable; fetched locally)
+fw-blobs/
 __pycache__/
 *.pyc
 *.o
