@@ -68,7 +68,8 @@ int  uno_dbg_crash_count(void);         /* CRASH\ report files seen at boot    *
 unsigned long long uno_dbg_uptime_ms(void);
 const char *uno_dbg_build_id(void);
 void uno_dbg_mark_clean(void);          /* deliberate shutdown/restart         */
-void uno_dbg_write_bootenv(void);       /* BOOTENV.TXT (stress driver, once)   */
+void uno_dbg_write_bootenv(void);       /* BOOTENV.TXT                         */
+void uno_dbg_write_bootlog(void);       /* CRASH\BOOTLOG.TXT - every boot      */
 void uno_dbg_write_perf(const char *text, int len);  /* CRASH\PF###.TXT        */
 
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */

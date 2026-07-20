@@ -42,7 +42,10 @@ if [ "$UNO_DEBUG" != "0" ]; then
     # -fno-omit-frame-pointer: the crash handler walks the RBP chain.
     # -mgeneral-regs-only on uno_debug.c only (the interrupt file); the rest of
     #  the kernel keeps SSE (fb blits use it).  Applied per-file below.
-    DBG_ID="debug-$(git rev-parse --short HEAD 2>/dev/null || echo local)-$(date -u +%Y%m%d 2>/dev/null || echo x)"
+    # HHMM matters: every build on a given day was otherwise stamped identically
+    # ("debug-local-20260720"), so the splash could say "a debug build" but not
+    # WHICH one - useless for confirming that a reflash actually took.
+    DBG_ID="debug-$(git rev-parse --short HEAD 2>/dev/null || echo local)-$(date -u +%Y%m%d-%H%M 2>/dev/null || echo x)"
     DBGDEF="-DUNO_DEBUG -DUNO_BUILD_ID=\"$DBG_ID\" -fno-omit-frame-pointer"
     [ "${UNO_DBGCON:-0}" != "0" ] && DBGDEF="$DBGDEF -DUNO_DBGCON"
     if [ "${UNO_UBSAN:-1}" != "0" ]; then

@@ -210,7 +210,18 @@ void uno_dbg_check(const char *tag)
     st->h.last_check_ms = uno_dbg_uptime_ms();
 }
 
-void uno_dbg_heartbeat(void) { g_heartbeat_ms = uno_dbg_uptime_ms(); }
+void uno_dbg_heartbeat(void)
+{
+    static unsigned long long next_log;
+    g_heartbeat_ms = uno_dbg_uptime_ms();
+    /* refresh the boot log every 30 s so a machine that misbehaves WITHOUT
+     * crashing still leaves an up-to-date trace on disk (the operator's only
+     * exit from such a run is a power-off, which captures nothing else). */
+    if (g_env_len && g_heartbeat_ms > next_log) {
+        next_log = g_heartbeat_ms + 30000;
+        uno_dbg_write_bootlog();
+    }
+}
 
 /* ===========================================================================
  * symbolization - RVA -> "name+0xoff" via the generated table
@@ -1140,6 +1151,30 @@ void uno_dbg_write_bootenv(void)
     uno_fat_write(vol, "BOOTENV.TXT", (const unsigned char *)g_env, g_env_len);
     uno_fat_sync();     /* a test run normally ends in a forced power-off, and
                            an unsynced write dies in the FAT write-back cache */
+    g_in_disk = 0;
+}
+
+/* Dump the kernel log + env block to CRASH\BOOTLOG.TXT.
+ *
+ * Until now the kernel log only reached disk if something CRASHED, so a boot
+ * that came up "wrong but alive" (no HUD, stress driver never arming) left
+ * nothing to read and we were reduced to guessing from the machine's
+ * behaviour.  This runs unconditionally at the end of init and periodically
+ * after, so every boot leaves a readable trace. */
+void uno_dbg_write_bootlog(void);
+void uno_dbg_write_bootlog(void)
+{
+    int vol = crash_vol();
+    if (vol < 0 || g_in_trap) return;
+    g_rlen = 0;
+    rp_common_head("BOOT LOG");
+    rp("\n(written unconditionally - this is NOT a crash)\n");
+    rp_env();
+    rp_log_tail();
+    g_in_disk = 1;
+    uno_fat_write(vol, "CRASH\\BOOTLOG.TXT", (const unsigned char *)g_report,
+                  (long)g_rlen);
+    uno_fat_sync();
     g_in_disk = 0;
 }
 

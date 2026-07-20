@@ -1941,6 +1941,15 @@ int main(void)
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
+#ifdef UNO_DEBUG
+    /* Prove the shell's main loop was reached and that the debug hooks are
+     * live. If the HUD or the stress driver never appear on a machine, the
+     * boot log now distinguishes "the loop never ran" from "the loop ran but
+     * the hook did nothing". */
+    { char hb[96]; int n = uno_dbg_hud(hb, sizeof hb);
+      uno_dbg_log("shell: main loop entered, fb=%dx%d, hud_len=%d (%s)",
+                  FB_W, FB_H, n, n > 0 ? hb : "HUD DISABLED"); }
+#endif
     for (;;) {
         int la, cursor_only = 0;
         uno_dbg_heartbeat();            /* debug build: the watchdog's liveness */
