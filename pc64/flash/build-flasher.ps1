@@ -1,20 +1,27 @@
 # Build the UnoDOS USB Flasher - a single self-contained Windows exe.
 #
-# Bundles the UEFI disk image (build/unodos-uefi.img) as one gzip-compressed
-# embedded resource (the mostly-empty image compresses to a few MB), so the exe
-# stays small and runs from anywhere with no install.  Compiles with the in-box
-# .NET Framework csc (no SDK needed).
+# The flasher no longer clones a raw image: it BUILDS the volume on the target
+# (GPT + one whole-disk FAT32 ESP) and copies the system files in, so a 32 GB
+# stick becomes a 32 GB UnoDOS drive instead of a 512 MB one.  What it embeds is
+# therefore the ESP *tree* as a .zip, not a disk image.
+#
+# The raw image is still built, because deploy-to-share.ps1 publishes it for
+# Rufus / balenaEtcher / dd users and mkiso.py turns it into the hybrid ISO.
 #
 # Pipeline (all under WSL, which has the mingw cross-compiler + sgdisk + mtools):
 #   1. ./build.sh          -> build/esp/ + build/esp/EFI/BOOT/BOOTX64.EFI
 #   2. tools/mkuefi.py N   -> build/unodos-uefi.img  (GPT + ESP FAT32, N MiB)
-#   3. gzip + csc          -> build/UnoDosFlasher.exe
+#   3. zip build/esp + csc -> build/UnoDosFlasher.exe
 #
-# Usage:  pc64/flash/build-flasher.ps1 [-SizeMiB 512] [-SkipBuild]
+# Usage:  pc64/flash/build-flasher.ps1 [-SizeMiB 512] [-SkipBuild] [-TestTool]
 #   -SkipBuild : reuse build/esp/ as-is (don't re-run ./build.sh)
+#   -TestTool  : also build build/UnoDiskTest.exe, which runs the same volume
+#                builder into an image FILE so fsck.vfat / sgdisk / QEMU can
+#                check it (see tools/diskboot_test.py)
 param(
     [int]$SizeMiB = 512,      # capacity of the release image (documents get room)
-    [switch]$SkipBuild        # reuse the already-built ESP tree
+    [switch]$SkipBuild,       # reuse the already-built ESP tree
+    [switch]$TestTool         # also build the headless image-builder for tests
 )
 $ErrorActionPreference = "Stop"
 $pc64  = Split-Path $PSScriptRoot -Parent
@@ -46,15 +53,21 @@ Invoke-Native { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkuefi.py $SizeMi
 $img = Join-Path $build "unodos-uefi.img"
 if (-not (Test-Path $img)) { throw "Missing image: $img" }
 
-# ---- 3. gzip the image into an embeddable resource --------------------------
-$gz = Join-Path $build "unodos_uefi.img.gz"
-Write-Host "Compressing $([IO.Path]::GetFileName($img))..."
-# share ReadWrite so a lingering drvfs/WSL handle on the image doesn't block us
-$in  = [IO.File]::Open($img, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-$out = [IO.File]::Create($gz)
-$gzs = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
-$in.CopyTo($gzs)
-$gzs.Dispose(); $out.Dispose(); $in.Dispose()
+# ---- 3. zip the ESP tree into an embeddable resource ------------------------
+# This is what the flasher actually installs; the .img above is only for the
+# dd-style tools.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$espDir = Join-Path $build "esp"
+if (-not (Test-Path (Join-Path $espDir "EFI\BOOT\BOOTX64.EFI"))) {
+    throw "build/esp/EFI/BOOT/BOOTX64.EFI missing - run ./build.sh first"
+}
+$zip = Join-Path $build "unodos_esp.zip"
+Remove-Item $zip -ErrorAction SilentlyContinue
+Write-Host "Zipping the ESP tree for embedding..."
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $espDir, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+$zmb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+Write-Host "  unodos_esp.zip = $zmb MB"
 
 # ---- locate csc (in-box .NET Framework) -------------------------------------
 $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -62,6 +75,8 @@ if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR "Microsoft.NET\Framewo
 if (-not (Test-Path $csc)) { throw "csc.exe (.NET Framework 4.x) not found" }
 
 $src      = Join-Path $PSScriptRoot "UnoDosFlash.cs"
+$disk     = Join-Path $PSScriptRoot "UnoDisk.cs"
+$settings = Join-Path $PSScriptRoot "UnoSettings.cs"
 $manifest = Join-Path $PSScriptRoot "app.manifest"
 $icon     = Join-Path $PSScriptRoot "unodos.ico"
 $exe      = Join-Path $build "UnoDosFlasher.exe"
@@ -73,15 +88,29 @@ $args = @(
     "/reference:System.Management.dll",
     "/reference:System.Windows.Forms.dll",
     "/reference:System.Drawing.dll",
-    "/resource:$gz,unodos_uefi"
+    "/reference:System.IO.Compression.dll",
+    "/reference:System.IO.Compression.FileSystem.dll",
+    "/resource:$zip,unodos_esp"
 )
 if (Test-Path $icon) { $args += "/win32icon:$icon" }
-$args += @("/optimize+", "$src")
+$args += @("/optimize+", "$src", "$disk", "$settings")
 
 Write-Host "Compiling $([IO.Path]::GetFileName($exe))..."
 & $csc $args
 if ($LASTEXITCODE -ne 0) { throw "csc failed ($LASTEXITCODE)" }
 
-Remove-Item $gz -ErrorAction SilentlyContinue
+# The headless twin: same UnoDisk.cs, writing to a file instead of a drive, so
+# the filesystem can be checked by real tools rather than by flashing a stick.
+if ($TestTool) {
+    $testExe = Join-Path $build "UnoDiskTest.exe"
+    Write-Host "Compiling UnoDiskTest.exe..."
+    & $csc @("/target:exe", "/out:$testExe",
+             "/reference:System.IO.Compression.dll",
+             "/reference:System.IO.Compression.FileSystem.dll",
+             "/optimize+", "$disk", (Join-Path $PSScriptRoot "UnoDiskTest.cs"))
+    if ($LASTEXITCODE -ne 0) { throw "csc failed for UnoDiskTest ($LASTEXITCODE)" }
+}
+
+Remove-Item $zip -ErrorAction SilentlyContinue
 $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Host "Built $exe  ($mb MB)"
