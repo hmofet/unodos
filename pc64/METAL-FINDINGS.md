@@ -12,12 +12,17 @@ Raw reports are preserved off each stick under
 
 | Machine | CPU | Runs | Notes |
 |---------|-----|------|-------|
-| Surface Laptop Go | i5-1035G1 | 1 (2026-07-20) | stays firmware-**attached** (no i8042; eMMC; i2c-hid didn't bind). Reports saved. |
-| X1 Carbon (Gen 8) | — | pending | |
-| Latitude | — | pending | |
+| Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | stays firmware-**attached** (no i8042; eMMC; i2c-hid didn't bind). Both runs' reports saved. |
+| X1 Carbon (Gen 8) | — | pending | expected to **detach** → exercises the native-IDT / LAPIC-watchdog / CF9 paths |
+| Latitude | — | pending | expected to detach (AHCI) |
 
-Re-run the Surface with the fixed kernel is still pending (the first run's stick
-had the self-crash bug; reflashed 2026-07-20).
+**Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
+ZERO hangs.** `surface-2026-07-20-run2/`. A pass is ~30 s at the default
+cadence. This is a clean stability result, and it validates the F1/F2 fixes on
+metal: no self-crash across 31 passes (F1) and no black-screen (F2). Telemetry
+wrote 31 `PF` snapshots + `BOOTENV.TXT` and survived the operator's power-off.
+**Caveat:** because nothing crashed, F2's *attached-reset* fix is still only
+QEMU-verified — no real fault occurred on metal to exercise reset-and-reboot.
 
 ## Severity key
 
@@ -52,6 +57,7 @@ write is uncached — measured **~14 MB/s vs ~1.8 GB/s to RAM (≈1:130000)**. T
 is the review's predicted "slideshow UI". Present is `linear` (direct CPU
 writes), so the whole UI pays the UC penalty on every changed pixel; the
 existing dirty-row/shadow tracking limits but does not remove it.
+- **Reproduced in run 2** with near-identical numbers (`fb bench: vram 14125 KB/s ram 1793855911 KB/s ratio 1:126998`), same `mtrr6 ... type=0`. Two independent data points.
 - Evidence (`surface-2026-07-20/BOOTENV.TXT`):
   - `gop: mode 1536x1024 stride 1536 pixfmt 1 fb_base 4000000000 present=linear`
   - `mtrr6 covers fb: base=4000000000 mask=4000000800 type=0 (UC - SLOW PRESENT!)`
@@ -76,6 +82,7 @@ native trackpad and keyboard are unavailable; input falls back to the firmware
 Absolute/Simple pointers, and because no native keyboard binds, firmware ConIn
 keeps being polled → the firmware on-screen keyboard stays drawn (the OSK icon).
 This is also why the Surface never detaches.
+- **Reproduced in run 2** (identical: `ctrls=3 present=0`).
 - Evidence (`BOOTENV.TXT`): `i2c-hid: ctrls=3 present=0 addr=0 desc_parsed=0`;
   `pointer: fw_simple=1 fw_abs=3 detach_blocked=0`; `ps2: kbd=0 aux=0`;
   `usb-hid: kbd=0 mouse=0`.
@@ -96,6 +103,14 @@ This is also why the Surface never detaches.
 - **Stress driver runs on metal** — opened every app, built the deep directory
   tree (16 levels / 163-char path) and fed the corpus without incident up to the
   forced crash (`PF002` perf snapshot).
+
+### F5 — open-window count creeps up over a long run  ·  HARNESS (watch)  ·  S4  ·  OPEN
+Across run 2 the driver's open-window count drifted 9 → 12 over 31 passes: the
+smoke phase opens more than the close phase closes. Harmless at this rate, but
+unoui has a 24-window cap, so a long enough run would start hitting `ui_add`
+failures and the run would silently change character. Not an OS bug — it is the
+driver's phase balance. Worth rebalancing if we ever do very long soaks.
+- Evidence: `PF002` `open_windows=9` → `PF032` `open_windows=12`.
 
 ## To carry into future runs
 
