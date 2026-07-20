@@ -32,7 +32,7 @@ def build():
             if f.endswith(".c")]
     srcs.append(os.path.join(HERE, "imgtest.c"))
     sh("gcc", "-O2", "-g", "-fsanitize=address,undefined", "-Wall", "-Wextra",
-       "-I", UM, "-o", BIN, *srcs)
+       "-I", UM, "-o", BIN, *srcs, "-lm")
 
 def ref_rgba(path, coalesce=False):
     """ImageMagick's decode of `path` as raw RGBA (all frames)."""

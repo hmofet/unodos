@@ -2,9 +2,9 @@
 
 The pc64 counterpart of AUDIO.md's media chain, for pictures: **Photos** is a
 unoui-class `.UNO` module (`APPS\PHOTOS.UNO`, the second after Studio) and
-the first consumer of **unomedia**, the new top-level media-foundation
-library (`../unomedia/` — see its README for the decoder inventory and the
-plan to migrate the audio decoders there next).
+the first consumer of **unomedia**, the top-level media-foundation library
+(`../unomedia/` — see its README for the decoder inventory; since phase 2
+the audio decoders live there too and Music is its second consumer).
 
 ```
 file on any volume ──► um_src over uno_fs_read_at / uno_fat_read_at

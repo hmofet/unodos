@@ -36,6 +36,7 @@ MEDIA = {
     "wav":  ("TONE.WAV", "tone"),
     "midi": ("SONG.MID", "melody"),
     "mp3":  ("FURELISE.MP3", "melody"),
+    "aac":  ("ODEJOY.M4A", "melody"),
 }
 
 
@@ -96,6 +97,12 @@ def stage_media():
     if os.path.exists("media/FURELISE.MP3"):
         p = "build/esp/FURELISE.MP3"
         open(p, 'wb').write(open("media/FURELISE.MP3", 'rb').read())
+        made.append(p)
+
+    # the committed demo M4A (Ode to Joy) - the AAC decoder end to end
+    if os.path.exists("media/ODEJOY.M4A"):
+        p = "build/esp/ODEJOY.M4A"
+        open(p, 'wb').write(open("media/ODEJOY.M4A", 'rb').read())
         made.append(p)
     return made
 
@@ -247,7 +254,7 @@ def run(which):
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "both"
-    modes = ["wav", "midi", "mp3"] if mode == "both" else [mode]
+    modes = ["wav", "midi", "mp3", "aac"] if mode == "both" else [mode]
     fixtures = stage_media()
     try:
         ok = all([run(m) for m in modes])
