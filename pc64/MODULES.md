@@ -20,8 +20,11 @@ The ESP installer copies the `APPS` directory; the whole-disk installer
 clones it implicitly. A missing module degrades gracefully: the window shows
 "module not found: APPS\\<NAME>.UNO".
 
-The 7 module apps: Dostris, Pac-Man, OutLast, Music, Tracker, Paint,
-Network. (Runner3D and the Browser are native shell canvases — they drive
+The 6 module apps: Dostris, Pac-Man, OutLast, Tracker, Paint, Network.
+(**Music left this list**: it is now a native unoui app, `pc64_music.c`. The
+legacy module drew itself with the Mac-Toolbox primitives against a fixed
+four-colour palette — that is where its hardcoded blue background came from,
+and why no theme change ever affected it. See AUDIO.md.) (Runner3D and the Browser are native shell canvases — they drive
 uno3d / the HTML engine directly and have no AppInterface counterpart.
 The classic games' native canvases in `pc64_games.c` are no longer routed;
 the `.UNO` bridge versions run instead, so ALL apps load from storage.)
