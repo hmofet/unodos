@@ -193,11 +193,16 @@ static unsigned n_scale(long v)
 static long n_bin(void)
 {
     int hi = n_byte(), lo;
+    long v;
     if (hi < 0) return -1;
-    if (n_maxval <= 255) return hi;
-    lo = n_byte();
-    if (lo < 0) return -1;
-    return ((long)hi << 8) | lo;
+    if (n_maxval <= 255) v = hi;
+    else {
+        lo = n_byte();
+        if (lo < 0) return -1;
+        v = ((long)hi << 8) | lo;
+    }
+    if (v > n_maxval) v = n_maxval;   /* clamp oversamples so n_scale stays in 0..255, as n_ascii range-checks */
+    return v;
 }
 
 /* one ASCII sample, range-checked; -1 = truncated/malformed/out of range */

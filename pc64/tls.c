@@ -13,6 +13,10 @@
  * - the handshake only succeeds if the server proves possession of this key. */
 #include "tls_test/pinned_key.h"
 
+/* millisecond delay from the pc64 kernel - used to pace + time-bound the
+ * transport waits below so a black-holed peer cannot busy-spin the UI. */
+void uno_pc64_delay_ms(int ms);
+
 /* ---- entropy: RDRAND if present, else a TSC mix (demo-grade fallback) ---- */
 static unsigned cpuid_ecx1(void)
 {
@@ -71,20 +75,24 @@ br_prng_seeder br_prng_seeder_system(const char **name)
 /* ---- low-level record transport over the pc64 TCP stack ----------------- */
 static int low_read(void *ctx, unsigned char *buf, size_t len)
 {
-    long tries = 6000000;
+    long tries = 6000000;       /* hard iteration ceiling (backstop) */
+    int  ms = 0;                /* accumulated wall-clock wait */
     (void)ctx;
     for (;;) {
         int n = net_tcp_recv(buf, (int)len);
         if (n > 0) return n;
         net_poll();
         { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -1; }
+        uno_pc64_delay_ms(1);                   /* pace the idle wait to ~1ms/poll */
+        if (++ms > 4000) return -1;             /* ~4s deadline: peer is unresponsive */
         if (--tries <= 0) return -1;
     }
 }
 static int low_write(void *ctx, const unsigned char *buf, size_t len)
 {
     int off = 0;
-    long tries = 12000000;
+    long tries = 12000000;      /* hard iteration ceiling (backstop) */
+    int  ms = 0;                /* accumulated wall-clock wait */
     (void)ctx;
     while (off < (int)len) {
         int chunk = (int)len - off;
@@ -94,6 +102,10 @@ static int low_write(void *ctx, const unsigned char *buf, size_t len)
         if (r > 0) off += r;
         net_poll();
         if (net_tcp_state() != TCP_ESTABLISHED) return (off > 0) ? off : -1;
+        if (r <= 0) {                          /* no progress: pace + bound the wait */
+            uno_pc64_delay_ms(1);
+            if (++ms > 8000) return (off > 0) ? off : -1;   /* ~8s deadline */
+        }
         if (--tries <= 0) return (off > 0) ? off : -1;
     }
     return off;
@@ -116,12 +128,15 @@ int tls_connect(const u8 dst[4], u16 port, const char *sni)
     long t;
 
     if (net_tcp_connect(dst, port) != 0) return -1;
-    t = 4000000;
-    while (net_tcp_state() != TCP_ESTABLISHED) {
+    t = 4000000;                                /* hard iteration ceiling (backstop) */
+    { int ms = 0;
+      while (net_tcp_state() != TCP_ESTABLISHED) {
         net_poll();
         { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
+        uno_pc64_delay_ms(1);
+        if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
         if (--t <= 0) return -2;
-    }
+      } }
 
     /* suites + algorithms from the standard client profile... */
     br_ssl_client_init_full(&g_sc, &g_xm, 0, 0);
@@ -170,12 +185,15 @@ int tls_connect_ca(const u8 dst[4], u16 port, const char *sni)
     long t;
 
     if (net_tcp_connect(dst, port) != 0) return -1;
-    t = 4000000;
-    while (net_tcp_state() != TCP_ESTABLISHED) {
+    t = 4000000;                                /* hard iteration ceiling (backstop) */
+    { int ms = 0;
+      while (net_tcp_state() != TCP_ESTABLISHED) {
         net_poll();
         { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
+        uno_pc64_delay_ms(1);
+        if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
         if (--t <= 0) return -2;
-    }
+      } }
     br_ssl_client_init_full(&g_sc, &g_xm, uno_tls_tas, uno_tls_tas_num);  /* trust the roots */
     tls_now(&days, &secs);
     br_x509_minimal_set_time(&g_xm, days, secs);            /* validity window */

@@ -14,14 +14,23 @@ static int  upc(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 static uint32_t cluster_lba(uint32_t cl) { return FAT12_DATA_AREA_START + (cl - 2) * SPC; }
 
 /* 12-bit FAT entry get/set over the resident FAT image (handles the straddle). */
+/* A crafted image can point start_cluster / a chain link at any value below the
+ * EOC threshold (0xFF8), and o = cl*3/2 then indexes past the resident FAT buffer
+ * (fat_bytes). Bound every access: an out-of-range cluster reads as end-of-chain
+ * and its write is refused, closing the OOB read (fat_get) and OOB heap write
+ * (fat_set on delete/append). */
 static uint16_t fat_get(unofs_t *fs, uint32_t cl) {
     uint32_t o = cl + (cl >> 1);                 /* cl * 3/2 */
-    uint16_t w = (uint16_t)(fs->fat[o] | (fs->fat[o + 1] << 8));
+    uint16_t w;
+    if (o + 1 >= fs->fat_bytes) return 0xFFF;    /* out of range -> end-of-chain */
+    w = (uint16_t)(fs->fat[o] | (fs->fat[o + 1] << 8));
     return (cl & 1) ? (w >> 4) : (w & 0x0FFF);
 }
 static void fat_set(unofs_t *fs, uint32_t cl, uint16_t v) {
     uint32_t o = cl + (cl >> 1);
-    uint16_t w = (uint16_t)(fs->fat[o] | (fs->fat[o + 1] << 8));
+    uint16_t w;
+    if (o + 1 >= fs->fat_bytes) return;          /* out of range -> refuse the write */
+    w = (uint16_t)(fs->fat[o] | (fs->fat[o + 1] << 8));
     if (cl & 1) w = (uint16_t)((w & 0x000F) | (v << 4));
     else        w = (uint16_t)((w & 0xF000) | (v & 0x0FFF));
     fs->fat[o]     = (uint8_t)(w & 0xFF);

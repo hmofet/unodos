@@ -585,6 +585,6 @@ void pc64_game_tick(int game)
 }
 const char *pc64_game_name(int game)
 {
-    static const char *n[PC64_NGAMES] = { "Dostris", "Pac-Man", "OutLast" };
+    static const char *n[PC64_NGAMES] = { "Dostris", "Pac-Man", "OutLast", "Runner3D" };
     return (game >= 0 && game < PC64_NGAMES) ? n[game] : "Game";
 }

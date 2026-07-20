@@ -421,9 +421,15 @@ class Duum(uno.App):
         cv.text(6, 6, LEVEL + "  arrows move/turn", rgb(235, 235, 210))
 
     def tick(self):
+        # Return True only when we actually re-rendered this frame, so the shell
+        # repaints on movement but idles (16ms sleep) when standing still.
+        # Returning False when nothing changed is what stops the 100% CPU busy
+        # loop; the error screen was already painted once at window open.
         if self.err is None and self.dirty:
             self.render()
             self.dirty = False
+            return True
+        return False
 
     def _blocked(self, nx, ny):
         s = self.point_sector(nx, ny)

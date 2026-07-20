@@ -57,6 +57,8 @@ static const char *fm_vols[12];
 static int fm_nvols;
 
 static char *fcat(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+/* bounded fcat: never writes past end (which must point at the last slot) */
+static char *fcatn(char *p, char *end, const char *s) { while (*s && p < end) *p++ = *s++; return p; }
 static char *fcat_int(char *p, long v)
 { char t[14]; int n = 0; if (v < 0) { *p++ = '-'; v = -v; }
   if (!v) t[n++] = '0'; while (v) { t[n++] = (char)('0' + v % 10); v /= 10; }
@@ -260,10 +262,10 @@ static void draw_pane(const unoui_theme *t, fm_pane *P, unoui_rect r, int active
 {
     int fh = fb_text_h(), rh = row_h(), hdr = fh + 6;
     int rows = (r.h - hdr) / rh, i;
-    char head[64]; char *p;
-    /* header: VOLUME\PATH */
-    p = fcat(head, uno_fs_volume_name(P->vol));
-    if (P->path[0]) { p = fcat(p, "\\"); p = fcat(p, P->path); }
+    char head[160]; char *p, *hend = head + sizeof head - 1;
+    /* header: VOLUME\PATH (bounded: label ~11 + sep + path up to 119) */
+    p = fcatn(head, hend, uno_fs_volume_name(P->vol));
+    if (P->path[0]) { p = fcatn(p, hend, "\\"); p = fcatn(p, hend, P->path); }
     *p = 0;
     fb_fill_rect(r.x, r.y, r.w, hdr, active ? t->pal.accent : t->pal.face);
     fb_set_clip(r.x, r.y, r.w - 4, hdr);

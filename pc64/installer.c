@@ -227,8 +227,14 @@ static int read_src_gpt(EFI_BLOCK_IO *src)
         { err("read source GPT failed"); return 0; }
     if (memcmp(g_gpt, "EFI PART", 8) != 0) { err("no GPT on the boot disk"); return 0; }
     elba = rd64(g_gpt + 72); num = rd32(g_gpt + 80); esz = rd32(g_gpt + 84);
-    if (num * esz > sizeof g_gpt - 512) { err("GPT entry table too big"); return 0; }
-    if (src->ReadBlocks(src, src->Media->MediaId, elba, ((num * esz + 511) & ~511u), g_gpt + 512)
+    /* num/esz come from the boot medium's GPT (attacker-controlled). The 32-bit
+     * product num*esz wrapped past the sizeof guard, giving an OOB read in the
+     * entry loop below. Bound esz to the spec range (128..512, multiple of 8) and
+     * do the size math in 64-bit. */
+    if (esz < 128 || esz > 512 || (esz & 7)) { err("bad GPT entry size"); return 0; }
+    if ((UINT64)num * esz > (UINT64)(sizeof g_gpt - 512)) { err("GPT entry table too big"); return 0; }
+    if (src->ReadBlocks(src, src->Media->MediaId, elba,
+            (UINTN)(((UINT64)num * esz + 511) & ~511ull), g_gpt + 512)
             != EFI_SUCCESS) { err("read GPT entries failed"); return 0; }
     /* the clone extent = end of the last used partition */
     g_src_need = 0;

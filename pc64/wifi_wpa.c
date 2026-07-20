@@ -99,12 +99,13 @@ static void aes1_dec(const br_aes_big_cbcdec_keys *k, u8 blk[16])
     br_aes_big_cbcdec_run(k, iv, blk, 16);
 }
 
-static int aes_unwrap(const u8 kek[16], const u8 *in, int inlen, u8 *out)
+static int aes_unwrap(const u8 kek[16], const u8 *in, int inlen, u8 *out, int outcap)
 {
     br_aes_big_cbcdec_keys k;
     u8 a[8], b[16];
     int n = inlen / 8 - 1, i, j;
     if (inlen < 24 || (inlen & 7)) return -1;
+    if (n * 8 > outcap) return -1;               /* never write past out[outcap] */
     br_aes_big_cbcdec_init(&k, kek, 16);
     memcpy(a, in, 8);
     memcpy(out, in + 8, (size_t)(n * 8));
@@ -304,7 +305,8 @@ int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
             sm->state = WPA_ST_FAILED; return -1;      /* ANonce changed */
         }
         if (ki & KI_ENCRYPTED) {
-            n = aes_unwrap(sm->ptk + 16, frame + EK_KDATA, kdlen, kd);
+            if (kdlen < 24 || kdlen > (int)sizeof kd) { sm->state = WPA_ST_FAILED; return -1; }
+            n = aes_unwrap(sm->ptk + 16, frame + EK_KDATA, kdlen, kd, sizeof kd);
             if (n < 0 || find_gtk(sm, kd, n) < 0) { sm->state = WPA_ST_FAILED; return -1; }
         }
         memcpy(sm->replay, frame + EK_REPLAY, 8);
@@ -320,7 +322,8 @@ int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
         int n;
         if (sm->state != WPA_ST_DONE) return 0;
         if (!mic_ok(sm, frame, len)) return -1;
-        n = aes_unwrap(sm->ptk + 16, frame + EK_KDATA, kdlen, kd);
+        if (kdlen < 24 || kdlen > (int)sizeof kd) { sm->state = WPA_ST_FAILED; return -1; }
+        n = aes_unwrap(sm->ptk + 16, frame + EK_KDATA, kdlen, kd, sizeof kd);
         if (n < 0 || find_gtk(sm, kd, n) < 0) return -1;
         memcpy(sm->replay, frame + EK_REPLAY, 8);
         return build_reply(sm, reply,

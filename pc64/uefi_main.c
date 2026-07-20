@@ -328,6 +328,13 @@ static void apply_desktop(int fbw, int fbh)
         unsigned long long sxf = ((unsigned long long)gModeW << 16) / (unsigned)fbw;
         unsigned long long syf = ((unsigned long long)gModeH << 16) / (unsigned)fbh;
         unsigned long long sc = (sxf < syf) ? sxf : syf;   /* fit */
+        /* Integer-only zoom when upscaling: a fractional nearest-neighbour
+         * upscale duplicates some source columns/rows and not others, which
+         * mangles glyph stems (the "fuzzy Notepad" report - text shows it
+         * worst). Flooring to a whole factor trades a small centred border
+         * (gOffX/gOffY + the surface clear below already handle it) for
+         * pixel-exact text at every panel resolution. */
+        if (sc >= (1ULL << 16)) sc &= ~0xFFFFULL;
         gOutW = (int)(((unsigned long long)fbw * sc) >> 16);
         gOutH = (int)(((unsigned long long)fbh * sc) >> 16);
         if (gOutW > (int)gModeW) gOutW = gModeW;
@@ -879,6 +886,12 @@ static void clamp_cursor(void)
    there's no new input, so a held button is only reported on the press frame;
    we must remember it until the release frame or the click "doesn't work". */
 static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
+/* firmware absolute-pointer relative tracking: a laptop precision touchpad is a
+ * RELATIVE device, so mapping its absolute position straight onto the screen (and
+ * then EMA-filtering it) read as "floaty / teleporting" on the Surface. We instead
+ * derive deltas from successive positions (like the native i2c-hid rel_from_abs),
+ * swallowing large jumps as finger lift-and-replace. */
+static int gAbsHave[MAXPTR], gAbsLX[MAXPTR], gAbsLY[MAXPTR];
 
 static void poll_pointer(void)
 {
@@ -898,8 +911,12 @@ static void poll_pointer(void)
              * finger travel cross the whole display.
              * The remainder accumulates so slow, precise movement still
              * tracks rather than rounding away to nothing. */
-            accx += dx * uno_fb_w * g_ptr_speed / 100;
-            accy += dy * uno_fb_h * g_ptr_speed / 100;
+            /* 64-bit intermediate: dx*uno_fb_w*g_ptr_speed overflows int32 on a
+             * wide (1920) desktop at speed 300 (2.3e9 > INT_MAX), which wrapped
+             * negative and flung the cursor backward on the X1's high-DPI panel.
+             * The accumulated result stays small, so only the product needs 64-bit. */
+            accx += (int)((long long)dx * uno_fb_w * g_ptr_speed / 100);
+            accy += (int)((long long)dy * uno_fb_h * g_ptr_speed / 100);
             { int mvx = accx / (32767 * 2), mvy = accy / (32767 * 2);
               accx -= mvx * (32767 * 2);
               accy -= mvy * (32767 * 2);
@@ -926,22 +943,22 @@ static void poll_pointer(void)
             if (rx && ry && gOutW > 0 && gOutH > 0) {
                 int sx = (int)(((st.CurrentX - gAbs[i]->Mode->AbsoluteMinX) * gModeW) / rx);
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
-                int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* panel -> fb */
+                int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* pad pos in fb coords */
                 int ty = (sy - (int)gOffY) * uno_fb_h / gOutH;
-                /* Firmware Absolute Pointer coords: a light low-pass drops
-                   sub-pixel wobble, but weight the TARGET 3:1 (not the previous
-                   position) so the cursor tracks the finger instead of gliding
-                   after it - the earlier 2:1-toward-previous filter read as
-                   "floaty" on the Surface's precision touchpad. A 1px dead-zone
-                   still kills jitter; a big delta snaps. (Only used when the
-                   NATIVE I2C-HID pad isn't bound - native maps 1:1, no filter.) */
-                int dxx = tx - g_cx, dyy = ty - g_cy;
-                int adx = dxx < 0 ? -dxx : dxx, ady = dyy < 0 ? -dyy : dyy;
-                if (adx > 24)      g_cx = tx;               /* reposition: snap */
-                else if (adx >= 1) g_cx = (g_cx + tx * 3) / 4;   /* track */
-                if (ady > 24)      g_cy = ty;
-                else if (ady >= 1) g_cy = (g_cy + ty * 3) / 4;
-                clamp_cursor();
+                /* Relative from successive absolute positions (see gAbsHave note):
+                   a small continuous move is a real drag and applies as a delta;
+                   a large jump is a lift-and-replace or a second contact and is
+                   swallowed so the cursor never teleports. Half-screen is well
+                   above any single-poll drag but below a re-placement. */
+                if (gAbsHave[i]) {
+                    int ddx = tx - gAbsLX[i], ddy = ty - gAbsLY[i];
+                    int addx = ddx < 0 ? -ddx : ddx, addy = ddy < 0 ? -ddy : ddy;
+                    if (addx <= uno_fb_w / 2 && addy <= uno_fb_h / 2) {
+                        g_cx += ddx; g_cy += ddy;
+                        clamp_cursor();
+                    }
+                }
+                gAbsLX[i] = tx; gAbsLY[i] = ty; gAbsHave[i] = 1;
                 g_have_pointer = 1; moved = 1;
             }
         }
@@ -1039,7 +1056,7 @@ static const fb_px *cursor_row(int y, const fb_px *src)
 
 void uno_pc64_present(void)
 {
-    int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0;
+    int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0, built_sy = -1;
     {
         static int first = 1;
         if (first) { stage_mark2(0, 0x000080FF); first = 0; }  /* gray -> blue */
@@ -1068,14 +1085,20 @@ void uno_pc64_present(void)
         UINT32 dy;
         sy = gRowMap[oy];
         if (!gDirtyRow[sy]) continue;
-        sh = gShadow + sy * fbw;
-        if (gSwapRB) {
-            for (x = 0; x < gOutW; x++) {
-                fb_px p = sh[gColMap[x]];   /* 0xAABBGGRR -> 0x00RRGGBB */
-                gRow[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
+        /* At an integer/fractional upscale several output rows map to the same
+         * source row; the scaled gRow they need is identical, so build it only
+         * when the source row actually changes (~Nx fewer gather+swizzle passes). */
+        if (sy != built_sy) {
+            sh = gShadow + sy * fbw;
+            if (gSwapRB) {
+                for (x = 0; x < gOutW; x++) {
+                    fb_px p = sh[gColMap[x]];   /* 0xAABBGGRR -> 0x00RRGGBB */
+                    gRow[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
+                }
+            } else {
+                for (x = 0; x < gOutW; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
             }
-        } else {
-            for (x = 0; x < gOutW; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
+            built_sy = sy;
         }
         dy = gOffY + (UINT32)oy;
         if (gUseBlt) {

@@ -154,7 +154,16 @@ static void tk_redraw(void)
 }
 
 static void tk_save(void){ fat12_write("SONG.TRK", gTkPat, TK_PATLEN); fat12_list(); }
-static void tk_load(void){ fat12_read("SONG.TRK", gTkPat, TK_PATLEN); }
+static void tk_load(void)
+{
+    int i;
+    fat12_read("SONG.TRK", gTkPat, TK_PATLEN);
+    /* a corrupt SONG.TRK can hold note bytes far outside the 1..24 range the
+       editor enforces; drop out-of-range notes so tk_trigger_row never
+       over-drives music_note_on (0 = empty cell) */
+    for (i = 0; i < TK_PATLEN; i += 2)
+        if (gTkPat[i] > 24) gTkPat[i] = 0;
+}
 static void tk_stop(void){ gTkPlaying = false; music_quiet(); }
 static void tk_toggle_play(void)
 {

@@ -542,7 +542,10 @@ static void build_acpistat(void)
 /* Native storage: our block registry + FAT mounts.  Our FS code does all
  * partition scanning + FAT read/write; the sector TRANSPORT is firmware Block
  * IO while attached, and the native AHCI driver once detached (M3). */
-static char g_nat[80];
+/* Sized for the worst case: "DETACHED (native): " + driver name + disk count +
+ * "  FAT vols N (" + three 11-char labels with commas + ")" is ~90 bytes; 160
+ * leaves headroom so the unbounded ap_str/ap_int appends below cannot overrun. */
+static char g_nat[160];
 static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
@@ -1656,7 +1659,7 @@ static int feed(const unoui_event *ev)
 static int pump_input(void)
 {
     static int lastx = -1, lasty = -1, lastb = 0;
-    int mx, my, mb, scan, uni, ctrl, any = 0;
+    int mx, my, mb, scan, uni, ctrl, any = 0, real = 0;
     unoui_event ev;
 
     uno_pc64_mouse(&mx, &my, &mb);
@@ -1667,10 +1670,20 @@ static int pump_input(void)
             g_desk.w[g_drag_icon].r.y = my - g_drag_oy;
             if (mx - g_drag_x0 > 3 || g_drag_x0 - mx > 3 ||
                 my - g_drag_y0 > 3 || g_drag_y0 - my > 3) g_drag_moved = 1;
-            g_dirty = 1;
+            g_dirty = 1; real = 1;
         } else {
+            /* Bare cursor motion only needs the cursor recomposited (present does
+               that), NOT the whole alpha-blend scene repaint - unless the move
+               crosses a widget/menu boundary and changes the hover highlight, or
+               the Start menu is open (its hover is recomputed each frame). Snapshot
+               the hover state across the feed and only force a full repaint when it
+               actually changed. This is the "redraw is slow on mouse move" fix. */
+            int ohw = UI.hot_win, ohi = UI.hot_wi, oph = UI.popup_hot;
             memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
             feed(&ev);
+            if (g_launch_open || UI.hot_win != ohw || UI.hot_wi != ohi ||
+                UI.popup_hot != oph)
+                real = 1;
         }
     }
     /* Only the LEFT button drives the widget layer. unoui has one notion of
@@ -1680,7 +1693,7 @@ static int pump_input(void)
       if (left && !(lastb & 1)) {                     /* press */
           int hit = (!g_desk_lock && point_on_desktop(mx, my))
                     ? desk_icon_at(mx, my) : -1;
-          any = 1;
+          any = 1; real = 1;
           if (hit >= 0) {                             /* begin a drag */
               g_drag_icon = hit;
               g_drag_app  = g_desk.w[hit].id - ID_LAUNCH0;
@@ -1693,7 +1706,7 @@ static int pump_input(void)
               ev.kind = UI_EV_MOUSE_DOWN; ev.x = mx; ev.y = my; feed(&ev);
           }
       } else if (!left && (lastb & 1)) {              /* release */
-          any = 1;
+          any = 1; real = 1;
           if (g_drag_icon >= 0) {
               if (!g_drag_moved) {
                   /* it was a click after all - replay it so the app opens */
@@ -1722,14 +1735,14 @@ static int pump_input(void)
       }
       /* right-press on bare desktop: the launcher, at the pointer */
       if (right && !((lastb >> 1) & 1)) {
-          if (point_on_desktop(mx, my)) { launcher_at(mx, my); any = 1; }
-          else if (g_launch_open)       { toggle_launcher();   any = 1; }
+          if (point_on_desktop(mx, my)) { launcher_at(mx, my); any = 1; real = 1; }
+          else if (g_launch_open)       { toggle_launcher();   any = 1; real = 1; }
       }
       lastb = mb;
     }
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
-        any = 1;
+        any = 1; real = 1;
         if (UI.full && scan == 0x17) {          /* Esc leaves a fullscreen game */
             unoui_fullscreen(&UI, 0); UI.focus_wi = 0; g_dirty = 1; continue;
         }
@@ -1818,7 +1831,9 @@ static int pump_input(void)
         if (vk) { ev.kind = UI_EV_KEY; ev.key = vk; ev.mods = mods; feed(&ev); }
         else if (uni >= 32 && uni < 127) { ev.kind = UI_EV_CHAR; ev.ch = uni; feed(&ev); }
     }
-    return any;
+    /* 0 = nothing; 1 = something changed, full repaint; 2 = cursor moved only,
+       present recomposites the cursor without the full-scene painter. */
+    return real ? 1 : (any ? 2 : 0);
 }
 
 /* system-tray clock: the firmware RTC wall time, HH:MM:SS */
@@ -1905,7 +1920,7 @@ int main(void)
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
     for (;;) {
-        int la;
+        int la, cursor_only = 0;
         uno_pc64_poll();
 #ifdef UNO_ACPI
         {
@@ -1925,11 +1940,14 @@ int main(void)
             }
         }
 #endif
-        if (pump_input()) { g_dirty = 1; idle = 0; }
-        else if (++idle >= 30) {        /* ~0.5 s: caret blink + tray clock tick */
-            idle = 0; g_dirty = 1;
-            fmt_clock(++halfsecs / 2);
-            fmt_batt();                 /* AML _BST, self-cached ~2 s */
+        { int pr = pump_input();
+          if (pr == 1)      { g_dirty = 1; idle = 0; }
+          else if (pr == 2) { cursor_only = 1; idle = 0; }   /* moved only: present, no repaint */
+          else if (++idle >= 30) {      /* ~0.5 s: caret blink + tray clock tick */
+              idle = 0; g_dirty = 1;
+              fmt_clock(++halfsecs / 2);
+              fmt_batt();               /* AML _BST, self-cached ~2 s */
+          }
         }
         feed(&tick);                    /* advance the caret-blink timebase */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
@@ -1981,6 +1999,7 @@ int main(void)
         } else {
             if (was_dragging) g_dirty = 1;       /* drag ended: repaint to commit the move */
             if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
+            else if (cursor_only) uno_pc64_present();  /* cursor moved: recomposite only */
             else uno_pc64_delay_ms(16);
         }
         was_dragging = UI.drag_active;

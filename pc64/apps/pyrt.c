@@ -150,7 +150,15 @@ static int tr_key(int uni, int scan, int ctrl)
 }
 static void tr_frame(void)
 {
-    if (gApp.tick) { call0(gApp.tick); pc64_shell_dirty(); }   /* draw fires in the canvas */
+    if (!gApp.tick) return;
+    mp_obj_t r = call0(gApp.tick);              /* draw fires in the canvas */
+    /* Only repaint when tick() actually re-rendered.  Backward-compat: an app
+     * that returns None (most PYAPPs, e.g. SAMPLE.PY) or that raised (r ==
+     * MP_OBJ_NULL) is treated as always-dirty; only an explicit falsey non-None
+     * return (e.g. False) suppresses the repaint, so idle apps stop the busy
+     * loop and let the shell reach its 16ms idle sleep. */
+    if (r == MP_OBJ_NULL || r == mp_const_none || mp_obj_is_true(r))
+        pc64_shell_dirty();
 }
 static void tr_opened(void) { call0(gApp.opened); }
 static void tr_closed(void) { call0(gApp.closed); }

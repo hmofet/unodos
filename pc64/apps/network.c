@@ -21,9 +21,14 @@
 #include "igb.h"          /* Intel igb wired GbE (I210/I211/82576) */
 #include "r8169.h"        /* Realtek RTL8168/8111 wired GbE */
 
-/* SLIRP peers: the gateway runs a built-in TFTP server (UDP round-trip proof,
-   fully self-contained); 10.0.2.100 is a guestfwd -> host `cat` (TCP echo). */
-static const u8 GW[4]   = {10, 0, 2, 2};
+/* The gateway (ping + TFTP-over-UDP target) comes from net_gw() so the test
+   follows the DHCP-provided gateway on real hardware instead of a SLIRP-only
+   literal; under QEMU SLIRP that gateway is 10.0.2.2 with a built-in TFTP
+   server, so the QEMU path is unchanged. ECHO is the TCP/TLS echo peer - a
+   QEMU guestfwd -> host `cat` with no real-hardware equivalent, so those two
+   steps only complete under QEMU. On metal they black-hole, but each step is
+   time-bounded (gTimer for TCP; the tls.c deadlines for TLS) so they fail fast
+   rather than freeze the UI. */
 static const u8 ECHO[4] = {10, 0, 2, 100};
 #define TFTP_PORT 69
 #define TCP_PORT  9000
@@ -96,17 +101,17 @@ static void net_step(void)
     switch (gStep) {
     case S_DHCP:
         if (net_dhcp_done()) { gRes[0] = R_OK; fmt_ip(gLease, net_ip());
-            gStep = S_PING; gTimer = 0; net_ping(GW); }
+            gStep = S_PING; gTimer = 0; net_ping(net_gw()); }
         else if (gTimer > 150) { gRes[0] = R_FAIL; fmt_ip(gLease, net_ip());
-            gStep = S_PING; gTimer = 0; net_ping(GW); }
+            gStep = S_PING; gTimer = 0; net_ping(net_gw()); }
         break;
     case S_PING: {
         u8 rrq[32]; int rn = tftp_rrq(rrq);
         if (net_ping_replied()) { gRes[1] = R_OK; gStep = S_UDP; gTimer = 0;
-            net_udp_send(GW, TFTP_PORT, SPORT, rrq, rn); }
+            net_udp_send(net_gw(), TFTP_PORT, SPORT, rrq, rn); }
         else if (gTimer > 120) { gRes[1] = R_FAIL; gStep = S_UDP; gTimer = 0;
-            net_udp_send(GW, TFTP_PORT, SPORT, rrq, rn); }
-        else if ((gTimer % 40) == 0) net_ping(GW);
+            net_udp_send(net_gw(), TFTP_PORT, SPORT, rrq, rn); }
+        else if ((gTimer % 40) == 0) net_ping(net_gw());
         break;
     }
     case S_UDP: {
@@ -121,7 +126,7 @@ static void net_step(void)
             net_tcp_connect(ECHO, TCP_PORT); }
         else if ((gTimer % 40) == 0) {
             u8 rrq[32]; int rn = tftp_rrq(rrq);
-            net_udp_send(GW, TFTP_PORT, SPORT, rrq, rn); }
+            net_udp_send(net_gw(), TFTP_PORT, SPORT, rrq, rn); }
         break;
     }
     case S_TCP: {
@@ -227,7 +232,7 @@ static void network_draw(UnoWin *w)
     text_at(x + 40, y, gMacStr, C_CYAN, C_BLUE, false); y += 14;
     row(x, y, "Link", gRes[4], 0); y += 14;
     row(x, y, "DHCP lease", gRes[0], gLease); y += 14;
-    row(x, y, "Ping 10.0.2.2", gRes[1], 0); y += 14;
+    row(x, y, "Ping gateway", gRes[1], 0); y += 14;
     row(x, y, "UDP (TFTP)", gRes[2], gUdpEcho); y += 14;
     row(x, y, "TCP echo", gRes[3], gTcpEcho); y += 14;
     row(x, y, "TLS (BearSSL)", gRes[5], gTlsInfo); y += 16;

@@ -682,6 +682,14 @@ static Type *declspec(Cc *cc, int *storage);
 static Type *declarator(Cc *cc, Type *base, Tok **name);
 static int   is_typename(Cc *cc, Tok *t);
 
+/* Recursion-depth guard for the recursive-descent parser: deeply nested source
+ * must not overrun the ring0 stack and triple-fault. Each recursive entry point
+ * bumps depth on the way in and drops it on the normal return; ucc_fatal
+ * longjmps out, so error paths unwind the count on their own. */
+#define UCC_MAX_DEPTH 200
+static void rec_enter(Cc *cc){ if (++cc->depth > UCC_MAX_DEPTH) ucc_fatal(cc, "nesting too deep", 0); }
+static void rec_leave(Cc *cc){ cc->depth--; }
+
 /* storage flags */
 enum { ST_TYPEDEF = 1, ST_STATIC = 2, ST_EXTERN = 4 };
 
@@ -826,10 +834,15 @@ i64 ucc_const_expr(Cc *cc, Node *n, int *ok)
         case ND_DIV:
             if (!b) { *ok = 0; return 0; }
             if (n->ty->is_uns) return (i64)((u64)a / (u64)b);
+            /* INT64_MIN / -1 overflows and would raise #DE on idiv; wrap to
+               INT64_MIN, matching two's-complement runtime behaviour */
+            if (b == -1 && a == (-9223372036854775807LL - 1)) return a;
             return a / b;
         case ND_MOD:
             if (!b) { *ok = 0; return 0; }
             if (n->ty->is_uns) return (i64)((u64)a % (u64)b);
+            /* INT64_MIN % -1 raises #DE the same way; the remainder is 0 */
+            if (b == -1 && a == (-9223372036854775807LL - 1)) return 0;
             return a % b;
         case ND_AND: return a & b;   case ND_OR:  return a | b;
         case ND_XOR: return a ^ b;
@@ -1128,7 +1141,10 @@ static Type *ty_suffix(Cc *cc, Type *ty)
     return ty;
 }
 
+static Type *declarator_r(Cc *cc, Type *base, Tok **name);
 static Type *declarator(Cc *cc, Type *base, Tok **name)
+{ Type *r; rec_enter(cc); r = declarator_r(cc, base, name); rec_leave(cc); return r; }
+static Type *declarator_r(Cc *cc, Type *base, Tok **name)
 {
     Type *ty = base;
 
@@ -1287,7 +1303,10 @@ static Node *postfix_tail(Cc *cc, Node *n)
     }
 }
 
+static Node *primary_r(Cc *cc);
 static Node *primary(Cc *cc)
+{ Node *r; rec_enter(cc); r = primary_r(cc); rec_leave(cc); return r; }
+static Node *primary_r(Cc *cc)
 {
     Tok *t = peek(cc);
 
@@ -1351,7 +1370,10 @@ static Node *primary(Cc *cc)
     return 0;
 }
 
+static Node *unary_r(Cc *cc);
 static Node *unary(Cc *cc)
+{ Node *r; rec_enter(cc); r = unary_r(cc); rec_leave(cc); return r; }
+static Node *unary_r(Cc *cc)
 {
     Tok *t = peek(cc);
 
@@ -1486,7 +1508,10 @@ static Node *binexpr(Cc *cc, Node *lhs, int minprec)
     }
 }
 
+static Node *cond_expr_r(Cc *cc);
 static Node *cond_expr(Cc *cc)
+{ Node *r; rec_enter(cc); r = cond_expr_r(cc); rec_leave(cc); return r; }
+static Node *cond_expr_r(Cc *cc)
 {
     Node *c = binexpr(cc, unary(cc), 1);
     Tok *t = peek(cc);
@@ -1507,7 +1532,10 @@ static Node *cond_expr(Cc *cc)
     return c;
 }
 
+static Node *assign_r(Cc *cc);
 static Node *assign(Cc *cc)
+{ Node *r; rec_enter(cc); r = assign_r(cc); rec_leave(cc); return r; }
+static Node *assign_r(Cc *cc)
 {
     Node *l = cond_expr(cc);
     Tok *t = peek(cc);
@@ -1912,7 +1940,10 @@ static Node *local_decl(Cc *cc)
     }
 }
 
+static Node *stmt_r(Cc *cc);
 static Node *stmt(Cc *cc)
+{ Node *r; rec_enter(cc); r = stmt_r(cc); rec_leave(cc); return r; }
+static Node *stmt_r(Cc *cc)
 {
     Tok *t = peek(cc);
 
@@ -2025,7 +2056,10 @@ static Node *stmt(Cc *cc)
     }
 }
 
+static Node *block_r(Cc *cc);
 static Node *block(Cc *cc)
+{ Node *r; rec_enter(cc); r = block_r(cc); rec_leave(cc); return r; }
+static Node *block_r(Cc *cc)
 {
     Tok *t = peek(cc);
     Node *n = nd(cc, ND_BLOCK, t);

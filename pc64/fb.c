@@ -43,15 +43,22 @@ void fb_pixel(int x, int y, fb_px c)
     if (x >= x0 && x < x1 && y >= y0 && y < y1) fb[y * FB_W + x] = c;
 }
 
-/* clip a rect to the framebuffer AND the active clip window; 0 if fully out */
+/* clip a rect to the framebuffer AND the active clip window; 0 if fully out.
+ * Intersect in long long: a loadable module can pass pathological *x/*w whose
+ * int sums (*x + *w) would overflow.  long is only 32-bit on the LLP64/pc64
+ * target, so long long is required to stay safe; for on-screen inputs this is
+ * a plain no-op. */
 static int clip(int *x, int *y, int *w, int *h)
 {
     int x0, y0, x1, y1; clip_bounds(&x0, &y0, &x1, &y1);
-    if (*x < x0) { *w += *x - x0; *x = x0; }
-    if (*y < y0) { *h += *y - y0; *y = y0; }
-    if (*x + *w > x1) *w = x1 - *x;
-    if (*y + *h > y1) *h = y1 - *y;
-    return (*w > 0 && *h > 0);
+    long long rx = *x, ry = *y, rw = *w, rh = *h;
+    if (rx < x0) { rw += rx - x0; rx = x0; }
+    if (ry < y0) { rh += ry - y0; ry = y0; }
+    if (rx + rw > x1) rw = x1 - rx;
+    if (ry + rh > y1) rh = y1 - ry;
+    if (rw <= 0 || rh <= 0) return 0;
+    *x = (int)rx; *y = (int)ry; *w = (int)rw; *h = (int)rh;
+    return 1;
 }
 
 void fb_clear(fb_px c)
@@ -83,11 +90,18 @@ void fb_vline(int x, int y, int h, fb_px c) { fb_fill_rect(x, y, 1, h, c); }
  * alpha is NOT blended here - callers pre-composite (the Photos app bakes
  * its checkerboard into the scaled cache), keeping the hot loop a memcpy.
  * The clip math must offset INTO src by however much the left/top edges
- * were cut, which is why this can't be built from fb_fill_rect. */
+ * were cut, which is why this can't be built from fb_fill_rect.
+ *
+ * CONTRACT: `src` must hold at least stride*(h-1)+w pixels for the ORIGINAL
+ * w/h/stride the caller passed; this cannot be self-checked (no src length is
+ * known here), so a caller passing a short buffer is a caller bug.  What this
+ * guards: clip() only ever shrinks the rect and moves x/y up (never below the
+ * clip origin), so the offset into src below is always >= 0 and never reads
+ * before src; stride<=0 and w/h<=0 are rejected outright. */
 void fb_blit(int x, int y, int w, int h, const fb_px *src, int stride)
 {
     int r, j, ox = x, oy = y;
-    if (!src || stride <= 0) return;
+    if (!src || stride <= 0 || w <= 0 || h <= 0) return;
     if (!clip(&x, &y, &w, &h)) return;
     src += (long)(y - oy) * stride + (x - ox);
     for (r = 0; r < h; r++) {

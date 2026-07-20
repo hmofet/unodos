@@ -130,50 +130,106 @@ void u3d_present(void) { if (g_be && g_be->present) g_be->present(); }
 int u3d_last_tris(void) { return g_tris; }
 
 /* =========================================================================
+ * near-plane clipping
+ *
+ * A clip-space vertex (post model-view-projection, BEFORE the perspective
+ * divide) plus its gouraud colour, so colours interpolate correctly across a
+ * clip-generated vertex. */
+#define U3D_WNEAR 0.0001f          /* the near plane, expressed as clip w = eps */
+
+typedef struct { float cx, cy, cz, cw, r, g, b; } u3d_cv;
+
+/* Sutherland-Hodgman clip of a convex polygon (here always a triangle, nin = 3)
+   against the single half-space cw >= U3D_WNEAR. Vertices in front of the near
+   plane are kept; each edge that crosses the plane contributes one new vertex
+   interpolated to exactly cw = eps. A wholly-in-front triangle returns its three
+   vertices unchanged (so the downstream projection is bit-identical to the old
+   no-clip path); a wholly-behind one returns 0; a crossing one returns 4 (fanned
+   into two triangles) or 3. Doing this before the divide is what recovers the
+   corridor floor/ceiling geometry that the old whole-triangle reject dropped,
+   and what stops a barely-surviving vertex from projecting to a near-infinite
+   screen coordinate whose bounding box was the whole display. */
+static int u3d_clip_near(const u3d_cv *in, int nin, u3d_cv *out)
+{
+    int nout = 0, i;
+    for (i = 0; i < nin; i++) {
+        const u3d_cv *a = &in[i];
+        const u3d_cv *b = &in[(i + 1) % nin];
+        float da = a->cw - U3D_WNEAR;          /* signed distance to the plane   */
+        float db = b->cw - U3D_WNEAR;          /* (>= 0 means in front)          */
+        int ain = (da >= 0.0f), bin = (db >= 0.0f);
+        if (ain) out[nout++] = *a;
+        if (ain != bin) {                      /* edge crosses: emit intersection */
+            float t = da / (da - db);          /* da != db when signs differ     */
+            u3d_cv *o = &out[nout++];
+            o->cx = a->cx + t * (b->cx - a->cx);
+            o->cy = a->cy + t * (b->cy - a->cy);
+            o->cz = a->cz + t * (b->cz - a->cz);
+            o->cw = a->cw + t * (b->cw - a->cw);
+            o->r  = a->r  + t * (b->r  - a->r);
+            o->g  = a->g  + t * (b->g  - a->g);
+            o->b  = a->b  + t * (b->b  - a->b);
+        }
+    }
+    return nout;
+}
+
+/* =========================================================================
  * the transform front-end: model space -> screen-space triangle queue
  * ======================================================================== */
 void u3d_triangles(const u3d_vert *verts, int tri_count)
 {
     u3d_mat4 mvp;
-    int i, j;
+    int i, j, k, nclip;
+    u3d_cv cin[3], cout[6];        /* one plane clips a tri to at most 4 verts */
     mat_mul(&mvp, &g_proj, &g_mv);
 
     for (i = 0; i < tri_count; i++) {
         const u3d_vert *tv = &verts[i * 3];
-        u3d_sv sv[3];
-        float area;
-        int behind = 0;
 
+        /* transform the three vertices to clip space (carry colour) */
         for (j = 0; j < 3; j++) {
             float x = tv[j].x, y = tv[j].y, z = tv[j].z;
-            float cx = mvp.m[0]*x + mvp.m[4]*y + mvp.m[8]*z  + mvp.m[12];
-            float cy = mvp.m[1]*x + mvp.m[5]*y + mvp.m[9]*z  + mvp.m[13];
-            float cz = mvp.m[2]*x + mvp.m[6]*y + mvp.m[10]*z + mvp.m[14];
-            float cw = mvp.m[3]*x + mvp.m[7]*y + mvp.m[11]*z + mvp.m[15];
-            if (cw < 0.0001f) { behind = 1; break; }     /* near-plane reject */
-            {
-                float inv = 1.0f / cw;
-                sv[j].sx = (cx * inv * 0.5f + 0.5f) * (float)g_w;
-                sv[j].sy = (1.0f - (cy * inv * 0.5f + 0.5f)) * (float)g_h;
-                sv[j].z  = cz * inv * 0.5f + 0.5f;
-                sv[j].r  = tv[j].r;
-                sv[j].g  = tv[j].g;
-                sv[j].b  = tv[j].b;
-            }
+            cin[j].cx = mvp.m[0]*x + mvp.m[4]*y + mvp.m[8]*z  + mvp.m[12];
+            cin[j].cy = mvp.m[1]*x + mvp.m[5]*y + mvp.m[9]*z  + mvp.m[13];
+            cin[j].cz = mvp.m[2]*x + mvp.m[6]*y + mvp.m[10]*z + mvp.m[14];
+            cin[j].cw = mvp.m[3]*x + mvp.m[7]*y + mvp.m[11]*z + mvp.m[15];
+            cin[j].r  = tv[j].r;
+            cin[j].g  = tv[j].g;
+            cin[j].b  = tv[j].b;
         }
-        if (behind) continue;
 
-        /* back-face cull: screen-space signed area (y down, so a model front
-           face winds clockwise here -> negative area is front-facing) */
-        area = (sv[1].sx - sv[0].sx) * (sv[2].sy - sv[0].sy)
-             - (sv[2].sx - sv[0].sx) * (sv[1].sy - sv[0].sy);
-        if (area >= 0.0f) continue;   /* back-face cull (front faces wind CW) */
+        nclip = u3d_clip_near(cin, 3, cout);   /* 0, 3 or 4 vertices out */
 
-        if (g_nq < U3D_MAXTRI) {
-            g_queue[g_nq].v[0] = sv[0];
-            g_queue[g_nq].v[1] = sv[1];
-            g_queue[g_nq].v[2] = sv[2];
-            g_nq++;
+        /* fan-triangulate the clipped polygon: (0,1,2), (0,2,3), ... */
+        for (k = 2; k < nclip; k++) {
+            const u3d_cv *p[3];
+            u3d_sv sv[3];
+            float area;
+
+            p[0] = &cout[0]; p[1] = &cout[k - 1]; p[2] = &cout[k];
+            for (j = 0; j < 3; j++) {
+                float inv = 1.0f / p[j]->cw;    /* perspective divide (per vertex) */
+                sv[j].sx = (p[j]->cx * inv * 0.5f + 0.5f) * (float)g_w;
+                sv[j].sy = (1.0f - (p[j]->cy * inv * 0.5f + 0.5f)) * (float)g_h;
+                sv[j].z  = p[j]->cz * inv * 0.5f + 0.5f;
+                sv[j].r  = p[j]->r;
+                sv[j].g  = p[j]->g;
+                sv[j].b  = p[j]->b;
+            }
+
+            /* back-face cull: screen-space signed area (y down, so a model front
+               face winds clockwise here -> negative area is front-facing) */
+            area = (sv[1].sx - sv[0].sx) * (sv[2].sy - sv[0].sy)
+                 - (sv[2].sx - sv[0].sx) * (sv[1].sy - sv[0].sy);
+            if (area >= 0.0f) continue;   /* back-face cull (front faces wind CW) */
+
+            if (g_nq < U3D_MAXTRI) {
+                g_queue[g_nq].v[0] = sv[0];
+                g_queue[g_nq].v[1] = sv[1];
+                g_queue[g_nq].v[2] = sv[2];
+                g_nq++;
+            }
         }
     }
 }

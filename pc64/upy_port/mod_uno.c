@@ -23,6 +23,7 @@ void fb_fill_rect(int x, int y, int w, int h, fb_px c);
 void fb_hline(int x, int y, int w, fb_px c);
 void fb_vline(int x, int y, int h, fb_px c);
 void fb_pixel(int x, int y, fb_px c);
+void fb_blit(int x, int y, int w, int h, const fb_px *src, int stride);
 void fb_frame_rect(int x, int y, int w, int h, fb_px c);
 void fb_round_rect(int x, int y, int w, int h, int rad, fb_px c);
 int  fb_text(int x, int y, const char *s, fb_px fg, long bg);
@@ -104,6 +105,11 @@ static mp_obj_t cv_text(size_t n, const mp_obj_t *a) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_text_obj, 5, 5, cv_text);
 
+/* Max pixels composed per fb_blit chunk.  The PYRT canvas height is capped at
+ * ~380px (pyrt.c tr_build), so a 512-entry run (2KB stack) blits any column in
+ * one pass; taller columns fall back to chunked blits, still one clip each. */
+#define FB_WALLCOL_MAX 512
+
 /* Textured wall column: the whole per-pixel inner loop in C so Python calls it
  * once per screen column, not once per pixel.  Samples an 8-bit texture (column-
  * major grid[texcol*th + v]), shades by a fixed-point factor (sh/256), looks up
@@ -123,15 +129,30 @@ static mp_obj_t cv_wall_col(size_t n, const mp_obj_t *a) {
     int sh = mp_obj_get_int(a[11]);
     const unsigned char *grid = (const unsigned char *)g.buf;
     const unsigned char *pal = (const unsigned char *)p.buf;
-    if (tw <= 0 || th <= 0) return mp_const_none;
+    if (tw <= 0 || th <= 0 || count <= 0) return mp_const_none;
     texcol %= tw; if (texcol < 0) texcol += tw;
-    int colbase = texcol * th;
-    for (int i = 0; i < count; i++) {
-        int vv = (int)((v >> 8) % th); if (vv < 0) vv += th;
-        const unsigned char *c = pal + grid[colbase + vv] * 3;
-        unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8, bb = (c[2] * sh) >> 8;
-        fb_pixel(x, y0 + i, 0xFF000000u | (bb << 16) | (gg << 8) | rr);
-        v += dv;
+    const unsigned char *gcol = grid + texcol * th;      /* hoisted column base */
+    /* Compose the column into a local run and blit it once instead of calling
+     * fb_pixel per pixel.  fb_pixel re-derives the clip window and the row
+     * address (y*FB_W+x) for every pixel; fb_blit clips the span a single time
+     * and pointer-walks the framebuffer, so the per-pixel invariants are paid
+     * once per column.  Output is byte-identical: fb_blit clips a 1-wide run
+     * with the same clip_bounds() the per-pixel path used.  (A dedicated
+     * fb_wall_column kernel primitive that also folds the shade/palette step
+     * would be the further win, but that needs an fb.c export we can't add here.) */
+    for (int base = 0; base < count; ) {
+        int chunk = count - base;
+        if (chunk > FB_WALLCOL_MAX) chunk = FB_WALLCOL_MAX;
+        fb_px run[FB_WALLCOL_MAX];
+        for (int i = 0; i < chunk; i++) {
+            int vv = (int)((v >> 8) % th); if (vv < 0) vv += th;
+            const unsigned char *c = pal + gcol[vv] * 3;
+            unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8, bb = (c[2] * sh) >> 8;
+            run[i] = 0xFF000000u | (bb << 16) | (gg << 8) | rr;
+            v += dv;
+        }
+        fb_blit(x, y0 + base, 1, chunk, run, 1);
+        base += chunk;
     }
     return mp_const_none;
 }

@@ -114,8 +114,18 @@ static int mount_at(uno_bdev *dev, uint64_t start)
     v.root_sectors = rootdir_sectors;
     v.data_start   = (uint32_t)start + resv + nfats * fatsz + rootdir_sectors;
     v.root_start   = (uint32_t)start + resv + nfats * fatsz;   /* FAT16 root   */
-    data_sectors   = tot - (resv + nfats * fatsz + rootdir_sectors);
+    /* Crafted-BPB guard: if TotalSectors is below the reserved+FAT+root region,
+     * this unsigned subtraction underflows to ~4 billion clusters and the first
+     * fat_alloc scan effectively hangs the machine. Compute the metadata span in
+     * 64-bit (a huge fatsz can also overflow 32-bit) and reject anything below it. */
+    {
+        unsigned long long meta = (unsigned long long)resv +
+              (unsigned long long)nfats * fatsz + rootdir_sectors;
+        if (tot <= meta) return 0;
+        data_sectors = (uint32_t)(tot - meta);
+    }
     v.clusters     = data_sectors / v.sec_per_clus;
+    if (v.clusters > 0x0FFFFFF6u) return 0;         /* implausible: beyond FAT32 max */
     /* classify by cluster count if the BPB was ambiguous */
     if (!v.fat32 && v.clusters < 4085) return 0;    /* FAT12: unsupported - a
                                                        FAT16 mis-mount would

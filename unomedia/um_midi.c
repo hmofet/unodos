@@ -487,13 +487,13 @@ static void do_event(int ti, int render_it)
                 default: break;
                 }
                 break;
-            case 0xC0: m_ch[chan].program = (unsigned char)a; break;
+            case 0xC0: m_ch[chan].program = (unsigned char)(a & 0x7F); break;
             case 0xD0: break;                          /* channel aftertouch */
             case 0xE0: m_ch[chan].pitch_bend = ((b << 7) | a) - 8192; break;
             default: break;
             }
         } else if (hi == 0xC0) {
-            m_ch[chan].program = (unsigned char)a;
+            m_ch[chan].program = (unsigned char)(a & 0x7F);
         }
     }
     trk_next(t);
