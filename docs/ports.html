@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -63,14 +102,14 @@ every version consistent instead of drifting apart.</p>
 
 <h2 id="gallery">A few of the machines</h2>
 <div class="grid cols-2">
-  <figure><img src="assets/img/classic_xt.png" alt="The original: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy." loading="lazy"><figcaption><b>The original</b>: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy.</figcaption></figure>
-  <figure><img src="assets/img/port_c64.png" alt="Commodore 64: the simpler icon-and-button desktop." loading="lazy"><figcaption><b>Commodore 64</b>: the simpler icon-and-button desktop.</figcaption></figure>
-  <figure><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast: a game console running the full desktop." loading="lazy"><figcaption><b>Sega Dreamcast</b>: a game console running the full desktop.</figcaption></figure>
-  <figure><img src="assets/img/port_pinephone.png" alt="PinePhone: the desktop in portrait on a phone." loading="lazy"><figcaption><b>PinePhone</b>: the desktop in portrait on a phone.</figcaption></figure>
-  <figure><img src="assets/img/port_rpi.png" alt="Raspberry Pi: UnoDOS on the popular ARM board." loading="lazy"><figcaption><b>Raspberry Pi</b>: UnoDOS on the popular ARM board.</figcaption></figure>
-  <figure><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac: on a classic Power Macintosh." loading="lazy"><figcaption><b>PowerPC Mac</b>: on a classic Power Macintosh.</figcaption></figure>
-  <figure><img src="assets/img/port_iigs.png" alt="Apple IIGS." loading="lazy"><figcaption><b>Apple IIGS</b>.</figcaption></figure>
-  <figure><img src="assets/img/port_mac.png" alt="Classic Macintosh: on a compact 68000 Mac." loading="lazy"><figcaption><b>Classic Macintosh</b>: on a compact 68000 Mac.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/classic_xt.png" aria-label="Enlarge: The original: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy."><img src="assets/img/classic_xt.png" alt="The original: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy." loading="lazy"></button><figcaption><b>The original</b>: UnoDOS on an IBM PC/XT, fitting a full desktop and 19 apps on a single 1.44 MB floppy.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_c64.png" aria-label="Enlarge: Commodore 64: the simpler icon-and-button desktop."><img src="assets/img/port_c64.png" alt="Commodore 64: the simpler icon-and-button desktop." loading="lazy"></button><figcaption><b>Commodore 64</b>: the simpler icon-and-button desktop.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_dreamcast.png" aria-label="Enlarge: Sega Dreamcast: a game console running the full desktop."><img src="assets/img/port_dreamcast.png" alt="Sega Dreamcast: a game console running the full desktop." loading="lazy"></button><figcaption><b>Sega Dreamcast</b>: a game console running the full desktop.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_pinephone.png" aria-label="Enlarge: PinePhone: the desktop in portrait on a phone."><img src="assets/img/port_pinephone.png" alt="PinePhone: the desktop in portrait on a phone." loading="lazy"></button><figcaption><b>PinePhone</b>: the desktop in portrait on a phone.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_rpi.png" aria-label="Enlarge: Raspberry Pi: UnoDOS on the popular ARM board."><img src="assets/img/port_rpi.png" alt="Raspberry Pi: UnoDOS on the popular ARM board." loading="lazy"></button><figcaption><b>Raspberry Pi</b>: UnoDOS on the popular ARM board.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_ppcmac.png" aria-label="Enlarge: PowerPC Mac: on a classic Power Macintosh."><img src="assets/img/port_ppcmac.png" alt="PowerPC Mac: on a classic Power Macintosh." loading="lazy"></button><figcaption><b>PowerPC Mac</b>: on a classic Power Macintosh.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_iigs.png" aria-label="Enlarge: Apple IIGS."><img src="assets/img/port_iigs.png" alt="Apple IIGS." loading="lazy"></button><figcaption><b>Apple IIGS</b>.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/port_mac.png" aria-label="Enlarge: Classic Macintosh: on a compact 68000 Mac."><img src="assets/img/port_mac.png" alt="Classic Macintosh: on a compact 68000 Mac." loading="lazy"></button><figcaption><b>Classic Macintosh</b>: on a compact 68000 Mac.</figcaption></figure>
 </div>
 
 <h2 id="table">The full lineup</h2>

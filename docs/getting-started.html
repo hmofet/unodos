@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -70,8 +109,8 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
 </ol>
 <div class="note tip"><b>ISO and raw-image alternatives</b>Prefer a standard image? <b>unodos-pc64.iso</b> is a hybrid UEFI ISO: attach it to a virtual machine (QEMU, VirtualBox, VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with <b>Rufus</b>, <b>balenaEtcher</b> or <code>dd</code> - both ways boot the same desktop. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same writing tools.</div>
 <div class="grid cols-2">
-  <figure><img src="assets/img/flasher-windows.png" alt="The flasher on Windows: choose your USB drive and click Install." loading="lazy"><figcaption>The flasher on <b>Windows</b>: choose your USB drive and click Install.</figcaption></figure>
-  <figure><img src="assets/img/flasher-macos.png" alt="The flasher on macOS: the same steps." loading="lazy"><figcaption>The flasher on <b>macOS</b>: the same steps.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/flasher-windows.png" aria-label="Enlarge: The flasher on Windows: choose your USB drive and click Install."><img src="assets/img/flasher-windows.png" alt="The flasher on Windows: choose your USB drive and click Install." loading="lazy"></button><figcaption>The flasher on <b>Windows</b>: choose your USB drive and click Install.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/flasher-macos.png" aria-label="Enlarge: The flasher on macOS: the same steps."><img src="assets/img/flasher-macos.png" alt="The flasher on macOS: the same steps." loading="lazy"></button><figcaption>The flasher on <b>macOS</b>: the same steps.</figcaption></figure>
 </div>
 <div class="note warn"><b>This wipes the drive</b><b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.</div>
 <div class="note tip"><b>First launch</b>These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.</div>
@@ -110,7 +149,7 @@ hypervisor. In <strong>VirtualBox</strong>:</p>
   <li>Start. The splash, chime and desktop should appear in a few seconds. For sound, either audio
       controller works - UnoDOS has drivers for both <em>Intel HD Audio</em> and <em>ICH AC97</em>.</li>
 </ol>
-<figure><img src="assets/img/virtualbox.png" alt="The ISO booted in a VirtualBox EFI virtual machine - the same desktop as real hardware, captured straight from the VM&#x27;s screen." loading="lazy"><figcaption>The ISO booted in a <b>VirtualBox</b> EFI virtual machine - the same desktop as real hardware, captured straight from the VM's screen.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/virtualbox.png" aria-label="Enlarge: The ISO booted in a VirtualBox EFI virtual machine - the same desktop as real hardware, captured straight from the VM&#x27;s screen."><img src="assets/img/virtualbox.png" alt="The ISO booted in a VirtualBox EFI virtual machine - the same desktop as real hardware, captured straight from the VM&#x27;s screen." loading="lazy"></button><figcaption>The ISO booted in a <b>VirtualBox</b> EFI virtual machine - the same desktop as real hardware, captured straight from the VM's screen.</figcaption></figure>
 <p>Other hypervisors are the same idea: attach the ISO as a CD and boot with UEFI firmware -
 <strong>VMware</strong> (firmware type UEFI), <strong>Hyper-V</strong> (a Generation&nbsp;2 VM with
 Secure Boot turned off), or QEMU + OVMF (see <a href="developer.html#qemu">Run it in QEMU</a>).</p>
@@ -128,7 +167,7 @@ menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
 </ul>
 <p>Pick a target with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>I</kbd> to install
 (<kbd>R</kbd> rescans). The system files, fonts, documents and all the apps are copied along.</p>
-<figure class="shot-sm"><img src="assets/img/install.png" alt="The Install app: pick a target, press I. Rows marked keeps data are non-destructive." loading="lazy"><figcaption>The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.</figcaption></figure>
+<figure class="shot-sm"><button type="button" class="zoom" data-full="assets/img/install.png" aria-label="Enlarge: The Install app: pick a target, press I. Rows marked keeps data are non-destructive."><img src="assets/img/install.png" alt="The Install app: pick a target, press I. Rows marked keeps data are non-destructive." loading="lazy"></button><figcaption>The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.</figcaption></figure>
 
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
@@ -136,10 +175,10 @@ plays as the desktop appears - through the machine's sound hardware (HD&nbsp;Aud
 modern PC, or the PC speaker on machines that have one. On a laptop the TrackPoint, touchpad and
 keyboard all work.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/splash.png" alt="The boot splash, with a loading bar and version." loading="lazy"><figcaption>The boot splash, with a loading bar and version.</figcaption></figure>
-  <figure><img src="assets/img/controlpanel.png" alt="First desktop paint: the Control Panel opens over the Aurora Light desktop." loading="lazy"><figcaption>First desktop paint: the Control Panel opens over the Aurora Light desktop.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/splash.png" aria-label="Enlarge: The boot splash, with a loading bar and version."><img src="assets/img/splash.png" alt="The boot splash, with a loading bar and version." loading="lazy"></button><figcaption>The boot splash, with a loading bar and version.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/controlpanel.png" aria-label="Enlarge: First desktop paint: the Control Panel opens over the Aurora Light desktop."><img src="assets/img/controlpanel.png" alt="First desktop paint: the Control Panel opens over the Aurora Light desktop." loading="lazy"></button><figcaption>First desktop paint: the Control Panel opens over the Aurora Light desktop.</figcaption></figure>
 </div>
-<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the Start menu;
+<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the programs menu (so does a right-click on the desktop);
 arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a window. The
 <a href="desktop.html">desktop tour</a> covers the rest.</p>
 

@@ -24,7 +24,7 @@ plays exactly the role INT 10h/13h/15h play for the x86 reference kernel.
 that defaults to **Aurora**, a modern flat/rounded look (soft shadows, an accent
 title underline, a frosted taskbar), with 9 other live-switchable themes
 (Aurora Light/Dark + the 8 retro looks) — a splash screen, window manager,
-retained-mode toolkit, taskbar, desktop icons, a scrollable Start menu and a
+retained-mode toolkit, taskbar, desktop icons, a scrollable programs menu and a
 system-tray clock. It carries the whole app roster: the native widget apps, the
 migrated creative tools + games, Runner3D, the Network self-test, and the web
 browser (which now loads pages over HTTP) — plus the net/TLS/3D drivers. The
@@ -58,7 +58,7 @@ and all the drivers; only the UI layer differs.
   own `include/*.h`, no host libc), `pc64_io.c` (RAM-disk File Manager +
   PC-speaker Sound Manager), `pc64_fs.c` (unified RAM + FAT namespace),
   `pc64_pci.c` (PCI config scan).
-- **Default shell (unoui)** — `pc64_uui.c` (desktop/taskbar/Start menu/tray) +
+- **Default shell (unoui)** — `pc64_uui.c` (desktop/taskbar/programs menu/tray) +
   the cross-platform `../unoui/` toolkit + 10 themes (Aurora Light/Dark +
   `theme_aurora.c`, plus 8 retro looks), with `pc64_uui_apps.c` (the
   `mac_compat` bridge for the creative tools + Network), `pc64_games.c` (native
@@ -155,13 +155,15 @@ into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
 key-combo reliance — **every control is reachable by pointer OR keyboard**
 (Tab focus, arrows, Enter), so it needs no mouse.
 
-- **Desktop furniture**: a **Start button** opens a **scrollable Start menu**
-  (hover the up/down chevrons to scroll a roster larger than the screen; it
-  ends with **Restart** and **Shut Down**, which call UEFI `ResetSystem`); a
-  **taskbar** along the bottom shows a chip per open window (click to focus /
-  raise) and a **system-tray clock** (real wall-clock time from the UEFI
-  runtime `GetTime`, not just uptime); **desktop icons** launch apps directly.
-  Keyboard-only stays first-class: **Ctrl-Esc** opens the Start menu,
+- **Desktop furniture**: **right-click the desktop** for a **scrollable
+  programs menu** at the pointer (hover the up/down chevrons to scroll a roster
+  larger than the screen; it ends with **Restart** and **Shut Down**, which
+  call UEFI `ResetSystem`) - there is no Start button, the bar is windows and
+  the tray; a **taskbar** along the bottom shows a chip per open window (click
+  to focus / raise) and a **system-tray clock** (real wall-clock time from the
+  UEFI runtime `GetTime`, not just uptime); **desktop icons** launch apps
+  directly and arrange by columns or rows, in launcher or name order (Control
+  Panel). Keyboard-only stays first-class: **Ctrl-Esc** opens the menu,
   **Ctrl-W** closes the focused window, **F2** / **Ctrl-Tab** cycles windows.
   Each window carries a **title-bar close box**, and dragging a window moves a
   light outline (no full-window redraw storm).
@@ -171,7 +173,8 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   that set the UEFI clock; checkboxes/slider),
   an **Editor** (File/Edit menubar, multi-line editing, Save/Open/New wired to
   the RAM-disk File Manager), a **Files** list, a **System** panel, a **Clock**
-  and a **Canvas** demo — plus the migrated **creative tools** (Paint, Music,
+  (analog face + world map with the day/night terminator) and a **Music**
+  player (WAV/MIDI from disk) — plus the migrated **creative tools** (Paint,
   Tracker), the native **games** (Dostris, Pacman, Outlast), **Runner3D**, the
   **Network** self-test, and the **web browser**. Windows are sized to the theme
   metrics so no widget overflows the frame.
@@ -504,7 +507,7 @@ pc64/
 ├── pc64_fs.c pc64_fs.h # unified file system (RAM vol 0 + FAT vols via UEFI)
 ├── pc64_pci.c pc64_pci.h  # PCI config-space scan
 │  --- default shell: unoui ---
-├── pc64_uui.c          # the unoui shell: desktop, taskbar, Start menu, tray,
+├── pc64_uui.c          # the unoui shell: desktop, taskbar, programs menu, tray,
 │                       # app windows + UEFI event adapter (links ../unoui/*)
 ├── pc64_uui_apps.c     # mac_compat bridge for creative tools + Network
 ├── pc64_games.c        # native games (Dostris/Pacman/Outlast) + Runner3D

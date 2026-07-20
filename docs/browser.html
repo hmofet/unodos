@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -51,28 +90,28 @@ pages from local disks or over the web (HTTP and HTTPS).</p>
 <p>The browser opens on a file list that shows the built-in RAM disk and any FAT-formatted USB sticks or
 disks together. Type a web address in the bar at the top, or press <kbd>↓</kbd> to move into the file
 list; <kbd>Enter</kbd> opens a file and <kbd>Backspace</kbd> goes back.</p>
-<figure><img src="assets/img/browser_files.png" alt="The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top." loading="lazy"><figcaption>The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/browser_files.png" aria-label="Enlarge: The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top."><img src="assets/img/browser_files.png" alt="The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top." loading="lazy"></button><figcaption>The file list: built-in documents (✳) and USB or disk files (›) together, with the web address bar on top.</figcaption></figure>
 
 <h2 id="render">HTML, Markdown &amp; CSS</h2>
 <p>The browser lays out headings, word-wrapped paragraphs, bold and italic, code, links, lists and
 preformatted text, for both HTML and Markdown &mdash; all typeset with real TrueType typography:
 large bold headings, a monospace face for code, and true italics.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/browser_markdown.png" alt="A Markdown document: headings, bold and italic, inline code and lists." loading="lazy"><figcaption>A <b>Markdown</b> document: headings, bold and italic, inline code and lists.</figcaption></figure>
-  <figure><img src="assets/img/browser_html.png" alt="An HTML page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored." loading="lazy"><figcaption>An <b>HTML</b> page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/browser_markdown.png" aria-label="Enlarge: A Markdown document: headings, bold and italic, inline code and lists."><img src="assets/img/browser_markdown.png" alt="A Markdown document: headings, bold and italic, inline code and lists." loading="lazy"></button><figcaption>A <b>Markdown</b> document: headings, bold and italic, inline code and lists.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/browser_html.png" aria-label="Enlarge: An HTML page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored."><img src="assets/img/browser_html.png" alt="An HTML page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored." loading="lazy"></button><figcaption>An <b>HTML</b> page: emphasis, code, links, lists and preformatted text. Unknown tags are ignored.</figcaption></figure>
 </div>
 
 <h2 id="js">JavaScript</h2>
 <p>The browser runs the JavaScript on a page and adds its output to the page, with a console panel at the
 bottom for <code>console.log</code> messages.</p>
-<figure><img src="assets/img/browser_js.png" alt="Script.html: its JavaScript generated this Fibonacci table on the page." loading="lazy"><figcaption><b>Script.html</b>: its JavaScript generated this Fibonacci table on the page.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/browser_js.png" aria-label="Enlarge: Script.html: its JavaScript generated this Fibonacci table on the page."><img src="assets/img/browser_js.png" alt="Script.html: its JavaScript generated this Fibonacci table on the page." loading="lazy"></button><figcaption><b>Script.html</b>: its JavaScript generated this Fibonacci table on the page.</figcaption></figure>
 
 <h2 id="net">Over the network</h2>
 <p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
 runs any JavaScript on it.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/browser_http.png" alt="A live page loaded over HTTP." loading="lazy"><figcaption>A live page loaded over <b>HTTP</b>.</figcaption></figure>
-  <figure><img src="assets/img/browser_https.png" alt="A secure page loaded over HTTPS." loading="lazy"><figcaption>A secure page loaded over <b>HTTPS</b>.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/browser_http.png" aria-label="Enlarge: A live page loaded over HTTP."><img src="assets/img/browser_http.png" alt="A live page loaded over HTTP." loading="lazy"></button><figcaption>A live page loaded over <b>HTTP</b>.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/browser_https.png" aria-label="Enlarge: A secure page loaded over HTTPS."><img src="assets/img/browser_https.png" alt="A secure page loaded over HTTPS." loading="lazy"></button><figcaption>A secure page loaded over <b>HTTPS</b>.</figcaption></figure>
 </div>
 <div class="note"><b>Secure sites</b>Secure (https://) pages load over an encrypted TLS connection, and UnoDOS checks the site certificate against a built-in list of common certificate authorities. See <a href="networking.html">Networking</a>.</div>
 
