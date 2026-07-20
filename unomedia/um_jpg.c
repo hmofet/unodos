@@ -7,10 +7,11 @@
  * basis cosines, which are mathematics, not authorship.
  *
  * ---- pipeline --------------------------------------------------------------
- *   markers -> DQT/DHT/DRI/SOF0-1/SOS -> per MCU row:
- *     Huffman entropy decode -> dequantise -> integer IDCT -> level shift
- *     -> (next MCU row decoded one ahead) -> triangle chroma upsample
- *     -> BT.601 full-range YCbCr->RGB -> dst rows
+ *   markers -> DQT/DHT/DRI/SOF0-2/SOS -> per MCU row:
+ *     Huffman entropy decode (sequential: streamed; progressive: replayed
+ *     from the stored coefficient arrays) -> dequantise -> integer IDCT ->
+ *     level shift -> (next MCU row decoded one ahead) -> triangle chroma
+ *     upsample -> BT.601 full-range YCbCr->RGB -> dst rows
  *
  * The only full-image buffer is the caller's dst. Per component the decoder
  * holds two MCU-row bands (current + lookahead) plus one saved sample row,
@@ -27,17 +28,33 @@
  * Annex A accuracy the 40 dB test target implies. No float anywhere.
  *
  * ---- scope (deliberate) ----------------------------------------------------
- * Decoded: baseline sequential (SOF0) and 8-bit extended sequential (SOF1),
- * Huffman coding, 1-component greyscale and 3-component YCbCr (a 3-component
- * file with ids 'R','G','B', or an Adobe APP14 transform of 0, is taken as
- * plain RGB), sampling factors 1 and 2 in either axis (4:4:4, 4:2:2, 4:4:0,
- * 4:2:0), restart markers with resync, missing-EOI tolerance.
+ * Decoded: baseline sequential (SOF0), 8-bit extended sequential (SOF1) and
+ * progressive (SOF2, spectral selection + successive approximation, T.81
+ * Annex G), Huffman coding, 1-component greyscale and 3-component YCbCr (a
+ * 3-component file with ids 'R','G','B', or an Adobe APP14 transform of 0,
+ * is taken as plain RGB), sampling factors 1 and 2 in either axis (4:4:4,
+ * 4:2:2, 4:4:0, 4:2:0), restart markers with resync, missing-EOI tolerance.
+ *
+ * ---- progressive -----------------------------------------------------------
+ * Progressive is the one path that cannot stream: every scan revisits every
+ * block, so all scans are entropy-decoded at open() into per-component
+ * full-image coefficient arrays (int16, um_alloc'd, freed in close). That
+ * is the memory cost the baseline path avoids - 2 bytes per padded sample
+ * per component (~6.9 MB for a 1920x1200 4:2:0 file) - and the SOF
+ * dimension guards run before any of it is allocated. After the scans (DC
+ * first/refine, interleaved or single-component; AC first/refine with
+ * EOBRUN and the correction-bit protocol; restart markers) the stored
+ * coefficients feed the same dequant/IDCT/upsample/colour pipeline per MCU
+ * row, so frame() still streams into dst. A truncated stream keeps every
+ * scan that arrived - the bit reader knows when only phantom (zero-pad)
+ * bits remain and ends the scan there, which is the point of progressive:
+ * what got through is a coarser but complete picture.
  *
  * Recognised but refused, each with its own message (the AAC precedent -
  * "a good file this build declines" must never read as "not an image"):
- * progressive (SOF2), lossless (SOF3), hierarchical (SOF5-7/13-15),
- * arithmetic coding (SOF9-11), 12-bit precision, 4-component CMYK/YCCK,
- * sampling factors 3 and 4, multi-scan sequential.
+ * lossless (SOF3), hierarchical (SOF5-7/13-15), arithmetic coding
+ * (SOF9-11), 12-bit precision, 4-component CMYK/YCCK, sampling factors 3
+ * and 4, multi-scan sequential.
  *
  * Every header field is distrusted: dimension guards before any allocation,
  * segment-length accounting on every marker, bounded resync loops, and a
@@ -165,6 +182,9 @@ typedef struct {
     int      cwv, chv;          /* valid component width / total valid rows  */
     uint8_t *band[2];           /* cw * (v*8) each: current + lookahead      */
     uint8_t *prev;              /* last sample row of the previous band      */
+    /* progressive only */
+    int      bw, bh;            /* full padded block grid: mcux*h x mcuy*v   */
+    int16_t *coef;              /* bw*bh blocks of 64, zigzag order          */
 } jcomp;
 
 typedef struct {
@@ -174,6 +194,7 @@ typedef struct {
     int      bc;
     int      marker;            /* pending marker byte seen by the filler   */
     int      starved;           /* EOF reached: pad with zero bits           */
+    int      phantom;           /* how many of the bc bits are zero padding  */
     /* tables */
     uint16_t qt[4][64];         /* zigzag order, as stored in DQT            */
     int      qt_ok[4];
@@ -192,6 +213,13 @@ typedef struct {
     int      done;
     uint8_t *bigbuf;            /* one allocation carved into bands/prev/tmp */
     uint8_t *tmp[3];            /* one full-width upsampled row per comp     */
+    /* progressive only */
+    int      prog;              /* frame is SOF2                             */
+    int      scan_ns;           /* components in the current scan            */
+    int      scan_ss, scan_se;  /* spectral selection band                   */
+    int      scan_ah, scan_al;  /* successive approximation bit positions    */
+    uint32_t eobrun;            /* pending end-of-band run (AC scans)        */
+    int16_t *coefbuf;           /* one allocation carved into comp[].coef    */
 } jstate;
 
 static jstate *g;               /* the decoder's entire .bss                 */
@@ -204,13 +232,13 @@ static jstate *g;               /* the decoder's entire .bss                 */
 static void jb_init(jstate *s, long off)
 {
     jr_seek(&s->rd, off);
-    s->bb = 0; s->bc = 0; s->marker = 0; s->starved = 0;
+    s->bb = 0; s->bc = 0; s->marker = 0; s->starved = 0; s->phantom = 0;
 }
 
 static void jb_fill(jstate *s)
 {
     while (s->bc <= 24) {
-        int b = 0;
+        int b = 0, real = 0;
         if (!s->marker && !s->starved) {
             b = jr_byte(&s->rd);
             if (b < 0) { s->starved = 1; b = 0; }
@@ -218,13 +246,31 @@ static void jb_fill(jstate *s)
                 int c;
                 do c = jr_byte(&s->rd); while (c == 0xFF);
                 if (c < 0)       { s->starved = 1; b = 0; }
-                else if (c == 0) b = 0xFF;              /* stuffed data byte */
+                else if (c == 0) { b = 0xFF; real = 1; } /* stuffed data byte */
                 else             { s->marker = c; b = 0; }
+            } else {
+                real = 1;
             }
         }
         s->bb = (s->bb << 8) | (uint32_t)b;
         s->bc += 8;
+        if (!real) s->phantom += 8;
     }
+}
+
+/* consume n bits; padding bits are always the newest, so real bits go first */
+static void jb_use(jstate *s, int n)
+{
+    s->bc -= n;
+    if (s->phantom > s->bc) s->phantom = s->bc;
+}
+
+/* 1 while only phantom (zero-pad) bits remain: the scan's data has truly
+ * ended (EOF or a latched marker) - a progressive scan stops here and keeps
+ * everything already decoded instead of milling a garbage tail. */
+static int jb_dry(const jstate *s)
+{
+    return (s->starved || s->marker) && s->bc <= s->phantom;
 }
 
 static uint32_t jb_peek(jstate *s, int n)     /* 1 <= n <= 16 */
@@ -238,7 +284,7 @@ static int32_t jb_get(jstate *s, int n)       /* 0 <= n <= 16 */
     uint32_t v;
     if (n == 0) return 0;
     v = jb_peek(s, n);
-    s->bc -= n;
+    jb_use(s, n);
     return (int32_t)v;
 }
 
@@ -257,11 +303,11 @@ static int jh_dec(jstate *s, jhuff *h)
     uint16_t e   = h->fast[v16 >> 8];
     int l;
 
-    if (e) { s->bc -= e >> 8; return e & 0xFF; }
+    if (e) { jb_use(s, e >> 8); return e & 0xFF; }
     for (l = 9; l <= 16; l++) {
         int32_t c = (int32_t)(v16 >> (16 - l));
         if (h->maxcode[l] >= 0 && c >= h->mincode[l] && c <= h->maxcode[l]) {
-            s->bc -= l;
+            jb_use(s, l);
             return h->vals[h->valptr[l] + (c - h->mincode[l])];
         }
     }
@@ -363,7 +409,7 @@ static int jb_restart(jstate *s)
 {
     int j;
 
-    s->bb = 0; s->bc = 0;            /* drop pad bits (and any phantom fill) */
+    s->bb = 0; s->bc = 0; s->phantom = 0;  /* drop pad bits + phantom fill  */
     if (!s->marker) {
         /* the filler has not reached the marker yet: resync byte-by-byte */
         int b;
@@ -387,7 +433,208 @@ static int jb_restart(jstate *s)
     return 0;
 }
 
-/* ---- one MCU row into a band slot ----------------------------------------- */
+/* ---- progressive scans (T.81 Annex G, Huffman) ----------------------------
+ * Coefficients live in per-component full-image arrays, one int16[64] block
+ * in ZIGZAG order (dequant maps through kZig at render time, exactly as the
+ * sequential path does). Every scan is bounds-checked: k never leaves
+ * Ss..Se and Se <= 63, so no coefficient write can escape its block. Al is
+ * applied by multiplication, never by shifting a negative value. */
+
+/* one block of a DC scan (first or refinement, either interleaving) */
+static int jp_dc_unit(jstate *s, jcomp *cp, int16_t *co)
+{
+    if (s->scan_ah == 0) {
+        int     t = jh_dec(s, &s->hf[cp->td]);
+        int32_t v;
+        if (t < 0 || t > 16) {
+            um_set_error("JPEG: bad Huffman code in scan");
+            return 0;
+        }
+        cp->dcpred += jx_extend(jb_get(s, t), t);
+        if (cp->dcpred >  32767) cp->dcpred =  32767;   /* hostile guard     */
+        if (cp->dcpred < -32768) cp->dcpred = -32768;
+        v = cp->dcpred * (1 << s->scan_al);
+        co[0] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    } else {
+        /* refinement: append one magnitude bit; OR works for negatives too
+         * because every stored value is a multiple of 1<<Al */
+        if (jb_get(s, 1))
+            co[0] = (int16_t)(co[0] | (1 << s->scan_al));
+    }
+    return 1;
+}
+
+/* one block of an AC first scan (Ah = 0): F.2.2.2 runs plus EOBRUN */
+static int jp_ac_first(jstate *s, jcomp *cp, int16_t *co)
+{
+    int k = s->scan_ss, se = s->scan_se;
+
+    if (s->eobrun) { s->eobrun--; return 1; }
+    while (k <= se) {
+        int rs = jh_dec(s, &s->hf[4 + cp->ta]), r, sz;
+        if (rs < 0) {
+            um_set_error("JPEG: bad Huffman code in scan");
+            return 0;
+        }
+        r = rs >> 4; sz = rs & 15;
+        if (sz == 0) {
+            if (r != 15) {                               /* EOBn             */
+                s->eobrun = ((uint32_t)1 << r) - 1;
+                if (r) s->eobrun += (uint32_t)jb_get(s, r);
+                break;
+            }
+            k += 16;                                     /* ZRL              */
+        } else {
+            int32_t v;
+            k += r;
+            if (k > se) {
+                um_set_error("JPEG: AC coefficient run past end of band");
+                return 0;
+            }
+            v = jx_extend(jb_get(s, sz), sz) * (1 << s->scan_al);
+            co[k] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+            k++;
+        }
+    }
+    return 1;
+}
+
+/* one block of an AC refinement scan (Ah = Al+1): the correction-bit
+ * protocol - already-nonzero coefficients take one bit each as they are
+ * passed; zero-history runs and EOB runs place the newly significant ones */
+static int jp_ac_refine(jstate *s, jcomp *cp, int16_t *co)
+{
+    int32_t p1 = 1 << s->scan_al;
+    int     k  = s->scan_ss, se = s->scan_se;
+
+    if (s->eobrun == 0) {
+        while (k <= se) {
+            int     rs = jh_dec(s, &s->hf[4 + cp->ta]), r, sz;
+            int32_t nv = 0;
+            if (rs < 0) {
+                um_set_error("JPEG: bad Huffman code in scan");
+                return 0;
+            }
+            r = rs >> 4; sz = rs & 15;
+            if (sz == 0) {
+                if (r != 15) {                           /* EOBn             */
+                    s->eobrun = (uint32_t)1 << r;
+                    if (r) s->eobrun += (uint32_t)jb_get(s, r);
+                    break;
+                }
+                /* ZRL: r = 15, pass 16 zero-history coefficients */
+            } else {
+                if (sz != 1) {
+                    um_set_error("JPEG: bad refinement coefficient size");
+                    return 0;
+                }
+                nv = jb_get(s, 1) ? p1 : -p1;
+            }
+            while (k <= se) {                /* pass r zeros, correcting     */
+                int16_t *c = &co[k];
+                if (*c) {
+                    if (jb_get(s, 1) && !(*c & p1)) {
+                        int32_t w = *c + (*c >= 0 ? p1 : -p1);
+                        *c = (int16_t)(w > 32767 ? 32767 :
+                                       w < -32768 ? -32768 : w);
+                    }
+                } else {
+                    if (r == 0) break;
+                    r--;
+                }
+                k++;
+            }
+            if (k <= se) {
+                if (nv) co[k] = (int16_t)nv;
+                k++;
+            }
+        }
+    }
+    if (s->eobrun) {                         /* EOB: corrections only        */
+        while (k <= se) {
+            int16_t *c = &co[k];
+            if (*c && jb_get(s, 1) && !(*c & p1)) {
+                int32_t w = *c + (*c >= 0 ? p1 : -p1);
+                *c = (int16_t)(w > 32767 ? 32767 : w < -32768 ? -32768 : w);
+            }
+            k++;
+        }
+        s->eobrun--;
+    }
+    return 1;
+}
+
+/* entropy-decode the current scan (header already in s->scan_*). Returns 1
+ * when the scan's data is exhausted - including the truncation case, where
+ * jb_dry() ends it early with everything so far kept - and 0 only on
+ * corrupt entropy data, which stops all further parsing. */
+static int jp_prog_scan(jstate *s)
+{
+    jcomp *c0 = &s->comp[s->scanord[0]];
+    long   nunits, u;
+    int    cbw = 1, j;
+
+    jb_init(s, jr_tell(&s->rd));
+    s->eobrun    = 0;
+    s->mcu_count = 0;
+    for (j = 0; j < s->ncomp; j++) s->comp[j].dcpred = 0;
+
+    if (s->scan_ns == 1) {
+        /* non-interleaved: the component's own block raster (A.2.2) */
+        cbw    = (c0->cwv + 7) / 8;
+        nunits = (long)cbw * ((c0->chv + 7) / 8);
+    } else {
+        nunits = (long)s->mcux * s->mcuy;
+    }
+
+    for (u = 0; u < nunits; u++) {
+        if (s->ri && s->mcu_count && s->mcu_count % s->ri == 0) {
+            if (!jb_restart(s)) return 0;
+            s->eobrun = 0;
+        }
+        jb_fill(s);
+        if (jb_dry(s)) return 1;             /* truncated: keep what came    */
+        if (s->scan_ns == 1) {
+            int16_t *co = c0->coef +
+                          ((u / cbw) * (long)c0->bw + u % cbw) * 64;
+            int ok = s->scan_ss ? (s->scan_ah ? jp_ac_refine(s, c0, co)
+                                              : jp_ac_first(s, c0, co))
+                                : jp_dc_unit(s, c0, co);
+            if (!ok) return 0;
+        } else {                             /* interleaved: DC scans only   */
+            int mx = (int)(u % s->mcux), my = (int)(u / s->mcux);
+            for (j = 0; j < s->scan_ns; j++) {
+                jcomp *cp = &s->comp[s->scanord[j]];
+                int    by, bx;
+                for (by = 0; by < cp->v; by++)
+                    for (bx = 0; bx < cp->h; bx++) {
+                        int16_t *co = cp->coef +
+                            (((long)my * cp->v + by) * cp->bw +
+                             (long)mx * cp->h + bx) * 64;
+                        if (!jp_dc_unit(s, cp, co)) return 0;
+                    }
+            }
+        }
+        s->mcu_count++;
+    }
+    return 1;
+}
+
+/* first real marker after a scan's entropy data: the one the bit reader
+ * latched, else scan forward past stuffed bytes and stray RSTn */
+static int jp_scan_tail(jstate *s)
+{
+    int m;
+    if (s->marker) { m = s->marker; s->marker = 0; return m; }
+    for (;;) {
+        int b;
+        do { b = jr_byte(&s->rd); if (b < 0) return -1; } while (b != 0xFF);
+        do b = jr_byte(&s->rd); while (b == 0xFF);
+        if (b < 0) return -1;
+        if (b == 0 || (b >= 0xD0 && b <= 0xD7)) continue;
+        return b;
+    }
+}
 static int jd_band(jstate *s, int slot)
 {
     int mx, j, by, bx;
@@ -408,6 +655,28 @@ static int jd_band(jstate *s, int slot)
         s->mcu_count++;
     }
     return 1;
+}
+
+/* ---- one MCU row from stored progressive coefficients --------------------- */
+static void jp_render_band(jstate *s, int band, int slot)
+{
+    int j, by, bx, k;
+
+    for (j = 0; j < s->ncomp; j++) {
+        jcomp          *cp = &s->comp[j];
+        const uint16_t *q  = s->qt[cp->tq];
+        for (by = 0; by < cp->v; by++) {
+            long row = (long)band * cp->v + by;
+            for (bx = 0; bx < cp->bw; bx++) {
+                const int16_t *co = cp->coef + (row * cp->bw + bx) * 64;
+                int32_t        blk[64];
+                for (k = 0; k < 64; k++)
+                    blk[kZig[k]] = (int32_t)co[k] * (int32_t)q[k];
+                jd_idct(blk, cp->band[slot] + (long)by * 8 * cp->cw + bx * 8,
+                        cp->cw);
+            }
+        }
+    }
 }
 
 /* ---- upsampling + colour --------------------------------------------------
@@ -649,13 +918,13 @@ static int jp_parse_sof(jstate *s, long seg)
 static int jp_parse_sos(jstate *s, long seg)
 {
     int ns, j, k, used[3] = { 0, 0, 0 };
-    int ss, se, a;
+    int ss, se, a, ah, al;
 
     if (!s->w) { um_set_error("JPEG: scan before frame header"); return 0; }
     ns = jr_byte(&s->rd);
     if (ns < 0) { um_set_error("JPEG: truncated header"); return 0; }
-    if (ns != s->ncomp) {
-        um_set_error(s->ncomp > 1 && ns >= 1 && ns < s->ncomp
+    if (s->prog ? (ns < 1 || ns > s->ncomp) : (ns != s->ncomp)) {
+        um_set_error(!s->prog && s->ncomp > 1 && ns >= 1 && ns < s->ncomp
                      ? "multi-scan sequential JPEG - not decoded in this build"
                      : "JPEG: bad scan component count");
         return 0;
@@ -693,17 +962,39 @@ static int jp_parse_sos(jstate *s, long seg)
         um_set_error("JPEG: truncated header");
         return 0;
     }
-    if (ss != 0 || se != 63 || a != 0) {
-        um_set_error("JPEG: unexpected scan parameters");
-        return 0;
+    ah = a >> 4; al = a & 15;
+    if (!s->prog) {
+        if (ss != 0 || se != 63 || a != 0) {
+            um_set_error("JPEG: unexpected scan parameters");
+            return 0;
+        }
+    } else {
+        /* G.1.1.1.1-2: DC scans are Ss=Se=0 (only they may interleave),
+         * AC scans one component; each refinement drops Al by exactly 1 */
+        if (ss > 63 || se > 63 || se < ss ||
+            (ss == 0 && se != 0) || (ss != 0 && ns != 1) ||
+            al > 13 || ah > 13 || (ah != 0 && ah != al + 1)) {
+            um_set_error("JPEG: unexpected scan parameters");
+            return 0;
+        }
     }
-    for (j = 0; j < s->ncomp; j++) {
-        jcomp *cp = &s->comp[j];
+    s->scan_ns = ns;
+    s->scan_ss = ss; s->scan_se = se;
+    s->scan_ah = ah; s->scan_al = al;
+    for (j = 0; j < ns; j++) {
+        jcomp *cp = &s->comp[s->scanord[j]];
         if (!s->qt_ok[cp->tq]) {
             um_set_error("JPEG: missing quantisation table");
             return 0;
         }
-        if (!s->hf[cp->td].defined || !s->hf[4 + cp->ta].defined) {
+        if (s->prog) {
+            /* DC refinement reads raw bits only - no table to demand */
+            if (((ss == 0 && ah == 0) && !s->hf[cp->td].defined) ||
+                (ss != 0 && !s->hf[4 + cp->ta].defined)) {
+                um_set_error("JPEG: missing Huffman table");
+                return 0;
+            }
+        } else if (!s->hf[cp->td].defined || !s->hf[4 + cp->ta].defined) {
             um_set_error("JPEG: missing Huffman table");
             return 0;
         }
@@ -711,10 +1002,56 @@ static int jp_parse_sos(jstate *s, long seg)
     return 1;
 }
 
+/* ---- the progressive multi-scan loop --------------------------------------
+ * Runs at open(), after the first SOS header parsed and the coefficient
+ * arrays exist. Decodes scan after scan, handling the between-scan markers
+ * (DHT/DQT/DRI/APPn/COM), until EOI or EOF. Best-effort by design: any
+ * corruption or truncation from here on just stops the parse - whatever
+ * scans arrived are already in the coefficient arrays and will render,
+ * which is precisely what progressive is for. Every loop is bounded by
+ * file position or MCU count; garbage can not make it spin. */
+static void jp_prog_parse(jstate *s)
+{
+    int scanning = 1;
+
+    while (scanning) {
+        if (!jp_prog_scan(s)) return;        /* corrupt entropy data: stop  */
+        scanning = 0;
+        for (;;) {                           /* markers between scans       */
+            int  m = jp_scan_tail(s);
+            long seg;
+            if (m < 0 || m == 0xD9) return;  /* EOF or EOI: done            */
+            if (m == 0x01 || m == 0xD8) continue;        /* no length       */
+            seg = jr_u16(&s->rd);
+            if (seg < 2) return;             /* junk length: stop cleanly   */
+            seg -= 2;
+            switch (m) {
+            case 0xC4: if (!jp_parse_dht(s, seg)) return; break;
+            case 0xDB: if (!jp_parse_dqt(s, seg)) return; break;
+            case 0xDD:
+                if (seg < 2) return;
+                s->ri = jr_u16(&s->rd);
+                if (s->ri < 0) return;
+                jr_skip(&s->rd, seg - 2);
+                break;
+            case 0xDA:
+                if (!jp_parse_sos(s, seg)) return;       /* bad SOS: stop   */
+                scanning = 1;
+                break;
+            default:                         /* APPn/COM/DNL/other: skip    */
+                jr_skip(&s->rd, seg);
+                break;
+            }
+            if (scanning) break;             /* go decode the new scan      */
+        }
+    }
+}
+
 /* ---- the vtable ----------------------------------------------------------- */
 static void jp_close(void)
 {
     if (!g) return;
+    um_free(g->coefbuf);
     um_free(g->bigbuf);
     um_free(g);
     g = 0;
@@ -762,12 +1099,12 @@ static int jp_open(um_image_info *info)
         seg -= 2;
 
         switch (m) {
+        case 0xC2:                                   /* SOF2 progressive     */
+            s->prog = 1;
+            /* fall through */
         case 0xC0: case 0xC1:                        /* SOF0 / SOF1          */
             if (!jp_parse_sof(s, seg)) goto fail;
             break;
-        case 0xC2:
-            um_set_error("progressive JPEG - not decoded in this build");
-            goto fail;
         case 0xC3:
             um_set_error("lossless JPEG - not decoded in this build");
             goto fail;
@@ -858,6 +1195,31 @@ scan_ready:
     }
 
     s->scan_pos = jr_tell(&s->rd);
+
+    if (s->prog) {
+        /* the full-image coefficient arrays - the cost the baseline path
+         * avoids; bounded because the SOF dimension guards already passed */
+        unsigned long csz = 0;
+        int16_t      *cc;
+        for (j = 0; j < s->ncomp; j++) {
+            jcomp *cp = &s->comp[j];
+            cp->bw = s->mcux * cp->h;
+            cp->bh = s->mcuy * cp->v;
+            csz   += (unsigned long)cp->bw * (unsigned long)cp->bh *
+                     64ul * sizeof(int16_t);
+        }
+        s->coefbuf = (int16_t *)um_alloc(csz);
+        if (!s->coefbuf) { um_set_error("JPEG: out of memory"); goto fail; }
+        memset(s->coefbuf, 0, csz);
+        cc = s->coefbuf;
+        for (j = 0; j < s->ncomp; j++) {
+            jcomp *cp = &s->comp[j];
+            cp->coef  = cc;
+            cc       += (long)cp->bw * cp->bh * 64;
+        }
+        jp_prog_parse(s);        /* every scan the stream delivers, kept    */
+    }
+
     info->format = "JPEG";
     info->w      = s->w;
     info->h      = s->h;
@@ -879,16 +1241,24 @@ static int jp_frame(um_px *dst, int *delay_ms)
     if (!s) { um_set_error("JPEG: no open image"); return -1; }
     if (s->done) return 0;
 
-    jb_init(s, s->scan_pos);
-    s->mcu_count = 0;
-    for (j = 0; j < s->ncomp; j++) s->comp[j].dcpred = 0;
-
-    if (!jd_band(s, 0)) return -1;                   /* band 0 -> slot 0     */
+    if (s->prog) {
+        jp_render_band(s, 0, 0);                     /* coefficients stored  */
+    } else {
+        jb_init(s, s->scan_pos);
+        s->mcu_count = 0;
+        for (j = 0; j < s->ncomp; j++) s->comp[j].dcpred = 0;
+        if (!jd_band(s, 0)) return -1;               /* band 0 -> slot 0     */
+    }
     for (j = 0; j < s->ncomp; j++)                   /* top edge replicates  */
         memcpy(s->comp[j].prev, s->comp[j].band[0], (size_t)s->comp[j].cw);
 
     for (i = 0; i < s->mcuy; i++) {
-        if (i + 1 < s->mcuy && !jd_band(s, (i + 1) & 1)) return -1;
+        if (i + 1 < s->mcuy) {
+            if (s->prog)
+                jp_render_band(s, i + 1, (i + 1) & 1);
+            else if (!jd_band(s, (i + 1) & 1))
+                return -1;
+        }
         jp_emit(s, i, dst);
         for (j = 0; j < s->ncomp; j++) {             /* save the seam row    */
             jcomp *cp = &s->comp[j];

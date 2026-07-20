@@ -15,6 +15,9 @@ One file per format on purpose; together they exercise every unomedia decoder:
   GRAD.TGA     TGA, 24-bit uncompressed       - RGB gradient
   MOON.PGM     PGM (netpbm grayscale)         - cratered moon
   TILES.QOI    QOI, spec 1.0                  - bevelled tiles
+  LAGOON.WEB   WebP, lossy VP8 (named 8.3:    - island lagoon
+               the decoder probes by RIFF
+               magic, not the extension)
 
 Regenerate with: python3 tools/mkdemo_pics.py  (needs ImageMagick `convert`
 for the JPG/GIF conversions; everything else is stdlib-written bytes).
