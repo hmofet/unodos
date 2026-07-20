@@ -7,6 +7,68 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## REGRESSION FIXED (unverified on metal) — boot froze at the third bar
+
+The first cut of the trackpad work **hung both the Carbon and the Surface at
+splash bar 3**, which is `uno_i2c_hid_init()` (uefi_main.c:652-653). Two
+causes, both now undone:
+
+1. **The likely one:** it added a write to `BAR+0x204` alongside the existing
+   `BAR+0x804`. From Sunrise Point onward 0x204 IS the LPSS private RESETS
+   register, so that write put the DW core *into reset*, and the following
+   0x804 write then landed in the iDMA64 window of a block being held there.
+   An MMIO access to a block in reset can simply never complete - a real hang,
+   not slowness. Reverted: only the historical 0x804 offset is written, and it
+   was never needed anyway since `DW_IC_COMP_TYPE` validates first.
+2. **The aggravating one:** the SCL-timing sweep ran the full 10-address x
+   3-register grid at all six candidates, with a retry on every non-answering
+   address - about 360 failed transfers per controller against 30 before.
+
+Now: the full grid runs at candidate 0 only (byte-for-byte the scan that
+shipped before), and later candidates cost two qualification transfers each
+unless one answers. A `PROBE_BUDGET` caps total probe transfers so any future
+mistake here degrades to "no trackpad" rather than a machine that won't boot.
+
+- [ ] **Both machines boot again.** This is the first thing to check. If either
+      still freezes at bar 3, the timing sweep needs to come out entirely -
+      say so and it will be gated off by default.
+- [ ] **The Surface's trackpad still binds** (it did before; it takes the
+      identical candidate-0 path now, so this is a no-change check).
+
+## Newest — the trackpad fix + the Music player
+
+The trackpad work is grounded in a Linux hardware probe of a real X1 Carbon
+Gen 8 (20U9), which settles the topology: the **touchpad is `SYNA8006`
+(06CB:CD8B) HID-over-I2C on PCI 00:15.1**, and the **TrackPoint is a separate
+Elan PS/2 device on the i8042 aux port** — two buses, two drivers, not one
+device. See INPUT.md for the SCL-timing analysis.
+
+- [ ] **Trackpad binds.** Open **System** and read the `Trackpad I2C:` lines.
+      Expect `HID device: UP addr 0x2c parsed  scl#N`. `scl#1` would confirm
+      the 216 MHz Comet Lake timing was the fix; `scl#0` means it bound on the
+      historical pair after all. Still `no HID` → report the `abrt` value, which
+      now distinguishes a NAK from a dead bus.
+- [ ] **The new pointer readout is truthful.** The same window now shows
+      `Pointer: fw simple N / abs N` and `PS/2: kbd .., aux port .., mouse ..`.
+      On a USB-stick boot (attached) the TrackPoint works via firmware, so
+      expect non-zero firmware counts and `(live)`.
+- [ ] **Installed boot keeps a pointer.** This is the real test. Install to the
+      internal NVMe and boot it. Either the trackpad binds (above) and the
+      machine detaches normally, or the gate holds it attached and the window
+      says `[attached to keep pointer]` — with a working TrackPoint either way.
+      **A detached machine with no pointer is a regression; report it.**
+- [ ] **The aux port answers.** `aux port ok` + a `mouse streaming id 0` would
+      mean the TrackPoint survives detach on PS/2 and the gate can be relaxed
+      later. `aux port none` means it cannot, and the gate is load-bearing.
+- [ ] **Music plays a real file.** Copy a `.WAV` and a `.MID` onto the stick,
+      open **Music**, press `V` to reach the volume, arrow to the file, Enter.
+      Ear-check: this is the first time the HDA path carries sampled audio on a
+      real Realtek/Conexant codec rather than QEMU's 2-widget model. Also check
+      the seek slider tracks and Pause/Stop respond.
+- [ ] **Music is fully keyboard-operable** (no pointer needed):
+      Up/Down select, Enter play, Space pause, S stop, N/P skip, V source,
+      U up-a-folder, Left/Right seek ±5 s.
+
 ## Newest — UI overhaul (fonts, alignment, resize, Editor/Files rewrites)
 
 QEMU-verified: layout/alignment, the WordPad-class Editor (typing, select-all,
