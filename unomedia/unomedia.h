@@ -110,6 +110,51 @@ int  um_image_is(const char *name);
 #define UM_MAX_DIM     16384
 #define UM_MAX_PIXELS  (64L * 1024 * 1024)
 
+/* ===========================================================================
+ * AUDIO (phase 2) - the decoders that began life as pc64's dec_wav/dec_midi/
+ * dec_mp3/dec_aac, moved here so every port shares them. The surface is
+ * pc64_media.h's, renamed: one open instance, streaming reads, s16 frames.
+ * ======================================================================== */
+typedef struct {
+    const char *format;      /* "WAV" / "MIDI" / "MP3" / "AAC"              */
+    int   rate;              /* decoder's native sample rate                */
+    int   channels;          /* 1 or 2 (decoders downmix anything wider)    */
+    long  duration_ms;       /* -1 when the format can't say               */
+    int   bitrate;           /* kbps, 0 when not meaningful                 */
+    char  title[64];         /* from metadata (ID3 / MIDI track name), or ""*/
+    char  artist[64];
+} um_audio_info;
+
+/* Open `src` as audio (same source contract as um_image_open; an instance
+ * plays ONE stream at a time - pc64 runs two instances, the kernel's for
+ * Music and PHOTOS.UNO's private copy for stills, so they never collide). */
+int  um_audio_open(const um_src *src, const char *name, um_audio_info *info);
+int  um_audio_decode(short *out, int max_frames);   /* frames; 0 = end      */
+int  um_audio_seek_ms(long ms);                     /* 1 if the format seeks */
+long um_audio_pos_ms(void);
+void um_audio_close(void);
+
+/* 1 if `name` has an extension the audio layer handles (file-list filter). */
+int  um_audio_is(const char *name);
+
+/* ---- the audio decoder vtable (one per format, state in each file) -------- */
+typedef struct {
+    const char *name;
+    int  (*probe)(const unsigned char *head, long n, const char *ext);
+    int  (*open)(um_audio_info *info);            /* 1 = ready to decode     */
+    int  (*decode)(short *out, int max_frames);
+    int  (*seek)(long ms);
+    void (*close)(void);
+    long (*pos_ms)(void);
+} um_adecoder;
+
+#define UM_AUD_HEAD 512
+
+extern const um_adecoder um_adec_wav;
+extern const um_adecoder um_adec_midi;
+extern const um_adecoder um_adec_mp3;
+extern const um_adecoder um_adec_aac;
+
 /* ---- the image decoder vtable (one per format) ---------------------------- */
 #define UM_IMG_HEAD 64          /* probe sees the first 64 bytes (or fewer) */
 

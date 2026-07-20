@@ -1,5 +1,5 @@
 /* ===========================================================================
- * UnoDOS/pc64 - Standard MIDI File playback, written from scratch: a type
+ * unomedia - Standard MIDI File playback, written from scratch: a type
  * 0/1/2 parser, a tick-accurate event scheduler, and a polyphonic subtractive
  * synthesiser that renders the result to PCM.
  *
@@ -29,7 +29,7 @@
  * So an event lands on the exact sample it should, regardless of the buffer
  * size the player happens to ask for.
  * ======================================================================== */
-#include "pc64_media.h"
+#include "unomedia.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -587,15 +587,15 @@ static int midi_probe(const unsigned char *head, long n, const char *ext)
     return !strcmp(ext, "MID") || !strcmp(ext, "MIDI") || !strcmp(ext, "RMI");
 }
 
-static int midi_open(uno_media_info *info)
+static int midi_open(um_audio_info *info)
 {
-    long n = uno_src_size();
+    long n = um_size();
     long base = 0;
     int i;
 
     m_ok = 0;
     if (n <= 0 || n > MIDI_MAX_FILE) return 0;
-    if (uno_src_read(0, m_buf, n) != n) return 0;
+    if (um_read(0, m_buf, n) != n) return 0;
     m_len = n;
 
     /* .RMI wraps the SMF in a RIFF "data" chunk - find it and shift */
@@ -750,6 +750,6 @@ static long midi_pos_ms(void)
 
 static void midi_close(void) { m_ok = 0; }
 
-const uno_decoder uno_dec_midi = {
+const um_adecoder um_adec_midi = {
     "MIDI", midi_probe, midi_open, midi_decode, midi_seek, midi_close, midi_pos_ms
 };

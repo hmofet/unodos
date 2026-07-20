@@ -115,7 +115,7 @@ static int   mu_n, mu_sel;
 
 static int   mu_state;
 static int   mu_track = -1;             /* index in mu_e of what's playing    */
-static uno_media_info mu_info;
+static um_audio_info mu_info;
 static char  mu_now[80] = "Nothing playing";
 static char  mu_meta[80] = "";
 static char  mu_time[40] = "";
@@ -174,7 +174,7 @@ static void mu_relist(void)
         for (i = 0; i < n && k < MU_MAXE; i++) {
             /* directories always show (you have to be able to navigate);
                files only when the media layer could actually open them */
-            if (!tmp[i].is_dir && !uno_media_is_audio(tmp[i].name)) continue;
+            if (!tmp[i].is_dir && !um_audio_is(tmp[i].name)) continue;
             mu_e[k] = tmp[i];
             { char *p = mu_names[k];
               if (tmp[i].is_dir) p = mcat(p, "[");
@@ -191,7 +191,7 @@ static void mu_relist(void)
         for (i = 0; i < n && k < MU_MAXE; i++) {
             char nm[16];
             if (!uno_fs_list_get(mu_fsvol(), i, nm, sizeof nm)) continue;
-            if (!uno_media_is_audio(nm)) continue;
+            if (!um_audio_is(nm)) continue;
             strncpy(mu_e[k].name, nm, 12); mu_e[k].name[12] = 0;
             mu_e[k].is_dir = 0; mu_e[k].size = -1;
             strncpy(mu_names[k], nm, sizeof mu_names[0] - 1);
@@ -221,7 +221,7 @@ static void join_path(const char *name, char *out, int max)
 /* ---- transport ------------------------------------------------------------- */
 static void mu_stop(void)
 {
-    if (uno_snd_stream_open()) { uno_snd_stream_end(); uno_media_close(); }
+    if (uno_snd_stream_open()) { uno_snd_stream_end(); um_audio_close(); }
     uno_seq_stop();
     mu_state = ST_STOP;
     mu_track = -1;
@@ -268,10 +268,10 @@ static int mu_play_index(int idx)
     }
     if (mu_e[idx].is_dir) return 0;
     join_path(mu_e[idx].name, path, sizeof path);
-    if (!uno_media_open(mu_fsvol(), path, &mu_info)) {
+    if (!pc64_media_open(mu_fsvol(), path, &mu_info)) {
         /* prefer the decoder's own reason: "no decoder in this build" is a
            very different thing to tell someone than "malformed" */
-        const char *why = uno_media_error();
+        const char *why = um_error();
         strcpy(mu_now, "Cannot play that file");
         if (why && why[0]) {
             strncpy(mu_meta, why, sizeof mu_meta - 1);
@@ -339,7 +339,7 @@ void pc64_music_tick(void)
            tick is bounded by buffer space, not by the file. */
         while (mu_state == ST_PLAY && (space = uno_snd_stream_space()) > 0) {
             int want = space > MU_PCM ? MU_PCM : space;
-            int got  = uno_media_decode(mu_pcm, want);
+            int got  = um_audio_decode(mu_pcm, want);
             if (got <= 0) {                       /* end of this track       */
                 if (uno_snd_stream_queued() > 0) break;   /* let it drain    */
                 if (!mu_step(1)) mu_stop();
@@ -361,7 +361,7 @@ void pc64_music_tick(void)
         else if (mu_peak_hold > 0) mu_peak_hold--;
     }
     if (mu_state != ST_STOP && uno_snd_stream_open()) {
-        long pos = uno_media_pos_ms();
+        long pos = um_audio_pos_ms();
         char *p = mcat_time(mu_time, pos);
         if (mu_info.duration_ms > 0) {
             p = mcat(p, " / ");
@@ -456,7 +456,7 @@ int pc64_music_action(const unoui_action *a)
     case MID_SEEK:
         if (uno_snd_stream_open() && mu_info.duration_ms > 0) {
             long ms = (long)(((long long)a->value * mu_info.duration_ms) / 1000);
-            if (uno_media_seek_ms(ms)) uno_snd_stream_flush();
+            if (um_audio_seek_ms(ms)) uno_snd_stream_flush();
         }
         break;
     case MID_GAIN:
@@ -494,9 +494,9 @@ int pc64_music_key(int uni, int scan)
         break;
     case 0x04:                                            /* left  - seek -5 */
     case 0x03: {                                          /* right - seek +5 */
-        long pos = uno_media_pos_ms() + (scan == 0x03 ? 5000 : -5000);
+        long pos = um_audio_pos_ms() + (scan == 0x03 ? 5000 : -5000);
         if (pos < 0) pos = 0;
-        if (uno_snd_stream_open() && uno_media_seek_ms(pos)) uno_snd_stream_flush();
+        if (uno_snd_stream_open() && um_audio_seek_ms(pos)) uno_snd_stream_flush();
         break;
     }
     default:

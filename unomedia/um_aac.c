@@ -1,5 +1,5 @@
 /* ===========================================================================
- * UnoDOS/pc64 - AAC: the container layer.
+ * unomedia - AAC: the container layer.
  *
  * Two very different wrappers carry AAC, and a player has to handle both:
  *
@@ -18,7 +18,7 @@
  * AudioSpecificConfig, duration, and handing whole raw AAC frames to the
  * decode core.
  * ======================================================================== */
-#include "pc64_media.h"
+#include "unomedia.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -57,7 +57,7 @@ static int adts_at(long off, int *rate, int *chans, int *flen, int *hdr)
 {
     unsigned char h[9];
     int idx, prof, ch, len, prot;
-    if (uno_src_read(off, h, 7) != 7) return 0;
+    if (um_read(off, h, 7) != 7) return 0;
     if (h[0] != 0xFF || (h[1] & 0xF0) != 0xF0) return 0;
     prot = !(h[1] & 1);                       /* protection_absent inverted    */
     prof = ((h[2] >> 6) & 3) + 1;             /* 2 = LC                        */
@@ -75,7 +75,7 @@ static int adts_at(long off, int *rate, int *chans, int *flen, int *hdr)
 
 static long adts_find(long off)
 {
-    long limit = uno_src_size();
+    long limit = um_size();
     int guard = 0;
     while (off + 9 <= limit && guard++ < (1 << 20)) {
         int len;
@@ -131,13 +131,13 @@ static void mp4_build_table(void)
     A.nsamp = 0;
     for (chunk = 0; chunk < S_stco_n && samp < AAC_MAX_SAMPLES; chunk++) {
         long coff;
-        if (uno_src_read(S_stco + 8 + chunk * 4, b, 4) != 4) break;
+        if (um_read(S_stco + 8 + chunk * 4, b, 4) != 4) break;
         coff = (long)be32(b);
         /* which stsc run covers this chunk? */
         while (S_stsc && sc_i < S_stsc_n) {
             unsigned char e[12];
             long first;
-            if (uno_src_read(S_stsc + 8 + sc_i * 12, e, 12) != 12) break;
+            if (um_read(S_stsc + 8 + sc_i * 12, e, 12) != 12) break;
             first = (long)be32(e);
             if (first > chunk + 1) break;
             per = (long)be32(e + 4);
@@ -148,7 +148,7 @@ static void mp4_build_table(void)
         for (i = 0; i < per && samp < AAC_MAX_SAMPLES; i++, samp++) {
             unsigned char z[4];
             long len;
-            if (uno_src_read(S_stsz + 12 + (long)samp * 4, z, 4) != 4) { samp = AAC_MAX_SAMPLES; break; }
+            if (um_read(S_stsz + 12 + (long)samp * 4, z, 4) != 4) { samp = AAC_MAX_SAMPLES; break; }
             len = (long)be32(z);
             if (len <= 0 || len > AAC_MAX_FRAME) continue;
             A.samp_off[A.nsamp] = coff;
@@ -165,11 +165,11 @@ static int mp4_walk(long off, long end, int depth)
     unsigned char h[8];
     while (off + 8 <= end && depth < 8) {
         long size;
-        if (uno_src_read(off, h, 8) != 8) return 0;
+        if (um_read(off, h, 8) != 8) return 0;
         size = (long)be32(h);
         if (size == 1) {                       /* 64-bit largesize */
             unsigned char e[8];
-            if (uno_src_read(off + 8, e, 8) != 8) return 0;
+            if (um_read(off + 8, e, 8) != 8) return 0;
             size = (long)(((uint64_t)be32(e) << 32) | be32(e + 4));
             if (size < 16) return 0;
         } else if (size == 0) {
@@ -185,17 +185,17 @@ static int mp4_walk(long off, long end, int depth)
             mp4_find_asc(off + 16, off + size, depth + 1);
         } else if (!memcmp(h + 4, "stsz", 4)) {
             unsigned char b[12];
-            if (uno_src_read(off + 8, b, 12) == 12) {
+            if (um_read(off + 8, b, 12) == 12) {
                 S_stsz = off + 8; S_stsz_n = (long)be32(b + 8);
             }
         } else if (!memcmp(h + 4, "stco", 4)) {
             unsigned char b[8];
-            if (uno_src_read(off + 8, b, 8) == 8) {
+            if (um_read(off + 8, b, 8) == 8) {
                 S_stco = off + 8; S_stco_n = (long)be32(b + 4);
             }
         } else if (!memcmp(h + 4, "stsc", 4)) {
             unsigned char b[8];
-            if (uno_src_read(off + 8, b, 8) == 8) {
+            if (um_read(off + 8, b, 8) == 8) {
                 S_stsc = off + 8; S_stsc_n = (long)be32(b + 4);
             }
         } else if (!memcmp(h + 4, "stts", 4)) {
@@ -214,7 +214,7 @@ static int mp4_find_asc(long off, long end, int depth)
     unsigned char h[8];
     while (off + 8 <= end && depth < 10) {
         long size;
-        if (uno_src_read(off, h, 8) != 8) return 0;
+        if (um_read(off, h, 8) != 8) return 0;
         size = (long)be32(h);
         if (size < 8 || off + size > end) return 0;
         if (!memcmp(h + 4, "mp4a", 4)) {
@@ -222,7 +222,7 @@ static int mp4_find_asc(long off, long end, int depth)
             mp4_find_asc(off + 8 + 28, off + size, depth + 1);
         } else if (!memcmp(h + 4, "esds", 4)) {
             unsigned char b[64];
-            int n = (int)uno_src_read(off + 12, b, sizeof b), i = 0;
+            int n = (int)um_read(off + 12, b, sizeof b), i = 0;
             while (i < n) {
                 int tag = b[i++], len = 0, k;
                 for (k = 0; k < 4 && i < n; k++) {   /* variable-length size */
@@ -254,7 +254,7 @@ static int aac_probe(const unsigned char *head, long n, const char *ext)
     return !strcmp(ext, "AAC") || !strcmp(ext, "M4A") || !strcmp(ext, "ADT");
 }
 
-static int aac_open(uno_media_info *info)
+static int aac_open(um_audio_info *info)
 {
     memset(&A, 0, sizeof A);
     S_stsz = S_stco = S_stsc = S_stts = 0;
@@ -262,9 +262,9 @@ static int aac_open(uno_media_info *info)
 
     {   /* MP4 if it opens with an ftyp box */
         unsigned char h[12];
-        if (uno_src_read(0, h, 12) == 12 && !memcmp(h + 4, "ftyp", 4)) {
+        if (um_read(0, h, 12) == 12 && !memcmp(h + 4, "ftyp", 4)) {
             A.is_mp4 = 1;
-            mp4_walk(0, uno_src_size(), 0);
+            mp4_walk(0, um_size(), 0);
             if (!A.rate) return 0;                    /* no AudioSpecificConfig */
             mp4_build_table();
             if (!A.nsamp) return 0;
@@ -281,7 +281,7 @@ static int aac_open(uno_media_info *info)
         A.channels = ch;
         A.obj_type = 2;
         /* frame count by average frame size - ADTS carries no duration */
-        A.total_frames = flen ? (uno_src_size() - off) / flen : 0;
+        A.total_frames = flen ? (um_size() - off) / flen : 0;
     }
     if (A.channels < 1) A.channels = 2;
     if (A.channels > 2) A.channels = 2;         /* downmix wider layouts       */
@@ -315,7 +315,7 @@ static int aac_open(uno_media_info *info)
      * AudioSpecificConfig - is written here and stays useful if the decision
      * is ever revisited.
      */
-    uno_media_set_error(A.is_mp4
+    um_set_error(A.is_mp4
         ? "AAC (M4A) recognised - no decoder in this build"
         : "AAC (ADTS) recognised - no decoder in this build");
     return 0;
@@ -327,6 +327,6 @@ static int aac_seek(long ms) { (void)ms; return 0; }
 static long aac_pos_ms(void) { return 0; }
 static void aac_close(void) { }
 
-const uno_decoder uno_dec_aac = {
+const um_adecoder um_adec_aac = {
     "AAC", aac_probe, aac_open, aac_decode, aac_seek, aac_close, aac_pos_ms
 };
