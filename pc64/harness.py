@@ -175,6 +175,27 @@ def main():
                 time.sleep(0.8)
             return
 
+        # ---- Studio: the IDE loads from APPS\STUDIO.UNO, edits + builds +
+        # runs a UnoC app on-device.  Launcher order = app order; with the IDE
+        # shipped, Studio is the last listed app (after Runner + Browser). ----
+        if len(sys.argv) > 1 and sys.argv[1] == "ide":
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "esc"}])
+            time.sleep(0.8)
+            keys(q, *(["down"] * 15))          # 0..14 apps, 15 = Studio
+            keys(q, "ret")
+            time.sleep(2.5)
+            shot(q, "ide_open")                # editor with SAMPLE.C loaded
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "b"}])
+            time.sleep(2.5)
+            shot(q, "ide_build")               # SAMPLE.UNO written
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "r"}])
+            time.sleep(2.5)
+            shot(q, "ide_run")                 # the built app runs in its window
+            return
+
         # ---- M4: mouse (usb-tablet -> EFI Absolute Pointer) ----------------
         if len(sys.argv) > 1 and sys.argv[1] == "mouse":
             click(q, 232, 50)                  # select the Files icon
