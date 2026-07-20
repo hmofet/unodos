@@ -85,3 +85,9 @@ build/unobus_test
 build/unobus_test.exe
 build/unonet_test
 build/unonet_test.exe
+
+# Raw QEMU/emulator screendumps. Every capture path writes a .ppm and then
+# converts it to .png; the .ppm is a bulky intermediate (~3 MB each) with no
+# value once the .png exists. Committing them added ~18 MB of dead weight
+# before this rule. Keep the .png, never the .ppm.
+*.ppm
