@@ -230,8 +230,11 @@ app-key routing through `app_key`:
   suggested is viable but the cell-grid keeps the whole game on the existing
   shadow+DMA model — a clean fit, left as the shipped form.
 
-DEVIATION (carried from M2): Notepad is an append editor, not full caret/line
-nav — the storage round-trip is what M2 proves.
+~~DEVIATION (carried from M2): Notepad is an append editor~~ — RESOLVED post-M3:
+Notepad now has a full caret (arrows $4C–$4F move it, up/down by logical
+CR-line keeping the column; typing inserts and Backspace deletes AT the caret;
+the caret renders as the inverted cell). AUTOTEST variant `build.sh npcaret`
+(`build/np_caret.png`).
 
 Traps that bit M2 (don't repeat in M3):
 - A ca65 A-width-tracking leak crashed `sram_init` — a label reached at
@@ -285,10 +288,12 @@ per-pixel **unique-tile canvas**: pixels painted into a planar-tile shadow in
 bank $7F, dirty tiles DMA'd by the NMI at ≤24/frame). 11 desktop icons.
 
 DEVIATIONS (M3): SPC driver is square-wave only (no real instruments yet);
-the Tracker's 4th channel is a tone not noise; Paint is pencil-only with a
-fixed line-3 palette and no tape I/O; the scheduler is tick-based, not
-context-switched (the bank-0 verdict below). Backlog: game-music gm_* hooks,
-DSP noise/instruments, Paint tools + live colour, the SNES-Mouse probe.
+the Tracker's 4th channel is a tone not noise; Paint has pencil + eraser with
+the line-3 palette ([ / ] step the pen, `c` cycles it with wrap, `e` toggles
+the eraser — AUTOTEST `build.sh paint`, `build/pt_tools.png`) but no shapes/
+fill/tape I/O; the scheduler is tick-based, not context-switched (the bank-0
+verdict below). Backlog: game-music gm_* hooks, DSP noise/instruments, Paint
+shape tools, the SNES-Mouse probe.
 
 **Scheduler verdict (bank-0 constraint).** Per-task private stacks are
 infeasible — the 65816 stack lives in bank 0, whose low 8 KB is full here

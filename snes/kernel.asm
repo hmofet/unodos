@@ -138,6 +138,7 @@ v_np_len    = VARS+$180
 v_np_dirty  = VARS+$182
 v_files_sel = VARS+$184
 v_np_name   = VARS+$186     ; 13 bytes (12 name + NUL)
+v_np_car    = VARS+$194     ; Notepad caret index (0..v_np_len)
 v_npbuf     = $0400         ; 2 KB Notepad buffer ($0400-$0BFF)
 NBUF        = 2048
 ; ---- game state (Dostris/Pac-Man/OutLast) ----
@@ -194,6 +195,7 @@ v_pt_x      = $19B6         ; cursor canvas x (pixels)
 v_pt_y      = $19B8         ; cursor canvas y
 v_pt_qh     = $19BA         ; dirty-tile queue head
 v_pt_qt     = $19BC         ; dirty-tile queue tail
+v_pt_erase  = $19BE         ; 1 = eraser mode (paint with PT_BG)
 ; canvas planar-tile shadow, dirty-dedup flags, and dirty queue in bank $7F:
 PT_CANV     = $7F0000       ; 240 planar 4bpp tiles (240*32 = 7680 bytes)
 PT_INQ      = $7F2000       ; per-tile "already queued" flag (240 bytes)
@@ -2601,6 +2603,105 @@ MainLoop:
         jsr handle_drag         ; release
         rts
 .endif
+.ifdef AUTOTEST_NPCARET
+        ; caret scene: Notepad with the demo text, then drive notepad_key with
+        ; synthetic events - left x4, up (to mid line 1), insert "<>" at the
+        ; caret. Proves caret movement + insert-at-caret + the inverted-caret
+        ; render (the caret lands mid-line, not at the end).
+        jsr notepad_set_demo
+        lda #2
+        jsr launch_app          ; Notepad, topmost
+        lda #4
+@nl:    pha                     ; LC0/LC1 are clobbered by redraw_topmost
+        lda #$4F00              ; left arrow (raw<<8)
+        sta A1
+        jsr notepad_key
+        pla
+        dec a
+        bne @nl
+        lda #$4C00              ; up arrow
+        sta A1
+        jsr notepad_key
+        lda #'<'
+        sta A1
+        jsr notepad_key         ; insert at the caret, mid line 1
+        lda #'>'
+        sta A1
+        jsr notepad_key
+        rts
+.endif
+.ifdef AUTOTEST_PAINT
+        ; paint-tools scene: line with the default pen (4), 'c' x4 cycles the
+        ; pen to 8, second line, 'e' -> eraser, erase a band through both
+        ; lines. Proves colour cycling + the eraser (and the ERASE indicator).
+        lda #10
+        jsr launch_app          ; Paint, topmost
+        stz LC0                 ; line 1: y=20/21, x=20..139, pen 4 (default)
+@p1:    lda LC0
+        clc
+        adc #20
+        sta A0
+        lda #20
+        sta A1
+        jsr pt_pen_eff
+        sta A2
+        jsr pt_setpx
+        inc A1
+        jsr pt_setpx
+        inc LC0
+        lda LC0
+        cmp #120
+        bcc @p1
+        lda #4                  ; 'c' x4: pen 4 -> 8 (red)
+@pc:    pha                     ; paint_key redraws -> clobbers LC0/LC1
+        lda #'c'
+        sta A1
+        jsr paint_key
+        pla
+        dec a
+        bne @pc
+        stz LC0                 ; line 2: y=40/41, x=20..139, pen 8
+@p2:    lda LC0
+        clc
+        adc #20
+        sta A0
+        lda #40
+        sta A1
+        jsr pt_pen_eff
+        sta A2
+        jsr pt_setpx
+        inc A1
+        jsr pt_setpx
+        inc LC0
+        lda LC0
+        cmp #120
+        bcc @p2
+        lda #'e'                ; eraser on
+        sta A1
+        jsr paint_key
+        lda #16                 ; erase band x=60..99, y=16..47 (cuts both lines)
+        sta LC1
+@pe:    stz LC0
+@pec:   lda LC0
+        clc
+        adc #60
+        sta A0
+        lda LC1
+        sta A1
+        jsr pt_pen_eff          ; = PT_BG while erasing
+        sta A2
+        jsr pt_setpx
+        inc LC0
+        lda LC0
+        cmp #40
+        bcc @pec
+        inc LC1
+        lda LC1
+        cmp #48
+        bcc @pe
+        jsr redraw_topmost      ; header now shows ERASE
+        rts
+.endif
         jsr notepad_set_demo
         jsr np_save             ; persist DEMO.TXT to SRAM
         lda #10
@@ -2658,6 +2759,12 @@ MainLoop:
 .i16
 .ifdef AUTOTEST_DOSTRIS
         rts                     ; dostris scene is gravity-driven; no pad input
+.endif
+.ifdef AUTOTEST_NPCARET
+        rts                     ; caret scene is event-driven; keep it static
+.endif
+.ifdef AUTOTEST_PAINT
+        rts                     ; paint scene draws in setup; keep it static
 .endif
         lda v_frame
         cmp #40
