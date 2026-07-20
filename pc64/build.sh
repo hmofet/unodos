@@ -153,7 +153,7 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_STUDIO:-1}" != "0" ]; then
         echo "[3c] building STUDIO.UNO (the IDE)..."
         SOBJ=""
-        for s in studio studio_hl studio_ai studio_json ucc ucc_x64; do
+        for s in studio studio_hl studio_py studio_ai studio_json ucc ucc_x64; do
             "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
                   -DUCC_KEXPORTS_H='"build/apps/ucc_kexports.h"' \
                   -c -o "build/apps/$s.o" "apps/$s.c"
@@ -178,7 +178,12 @@ if [ "$1" != "legacy" ]; then
         # the SDK + developer docs ride on the ESP for Studio to open
         mkdir -p build/esp/SDK build/esp/DOCS
         cp sdk/UNO.H sdk/SAMPLE.C sdk/DOSTRIS.C build/esp/SDK/ 2>/dev/null || true
-        cp sdk/*.py sdk/*.pyi build/esp/SDK/ 2>/dev/null || true
+        # Python SDK: sources (.py/.PY) + type stubs (.pyi).  Copy each match
+        # individually so a missing glob never drops a valid sibling, and both
+        # letter cases are picked up (the on-disk names are upper-case).
+        for f in sdk/*.py sdk/*.PY sdk/*.pyi sdk/*.pyi; do
+            [ -f "$f" ] && cp "$f" build/esp/SDK/
+        done
         [ -d docs_esp ] && cp docs_esp/*.MD build/esp/DOCS/ 2>/dev/null || true
     fi
 

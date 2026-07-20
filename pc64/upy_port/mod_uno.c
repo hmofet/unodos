@@ -192,6 +192,17 @@ static mp_obj_t opt_method(mp_obj_t app, qstr name) {
 }
 /* PyApp mirror (must match pyrt.c's struct layout) */
 typedef struct { mp_obj_t app, build, draw, action, key, tick, opened, closed; const char *name; } PyApp;
+/* The app instance and its bound methods live only in the C-side PyApp struct
+ * (pyrt.c) and the module globals - neither is scanned by the GC, so a
+ * gc_collect() would free them and leave the trampolines calling dangling
+ * objects.  Pin them in a registered root-pointer array so the GC keeps them
+ * alive for the app's whole lifetime. */
+MP_REGISTER_ROOT_POINTER(mp_obj_t uno_app_roots[8]);
+
+void uno_clear_app_roots(void) {
+    for (int i = 0; i < 8; i++) MP_STATE_VM(uno_app_roots)[i] = MP_OBJ_NULL;
+}
+
 int uno_bind_app(PyApp *pa) {
     mp_obj_t g = MP_OBJ_FROM_PTR(mp_globals_get());
     mp_map_elem_t *e = mp_map_lookup(mp_obj_dict_get_map(g),
@@ -205,6 +216,11 @@ int uno_bind_app(PyApp *pa) {
     pa->tick   = opt_method(pa->app, MP_QSTR_tick);
     pa->opened = opt_method(pa->app, MP_QSTR_opened);
     pa->closed = opt_method(pa->app, MP_QSTR_closed);
+    /* keep every cached callable reachable across GC cycles */
+    mp_obj_t *root = MP_STATE_VM(uno_app_roots);
+    root[0] = pa->app;    root[1] = pa->build;  root[2] = pa->draw;
+    root[3] = pa->action; root[4] = pa->key;    root[5] = pa->tick;
+    root[6] = pa->opened; root[7] = pa->closed;
     return 1;
 }
 

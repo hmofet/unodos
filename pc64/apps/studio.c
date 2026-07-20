@@ -54,6 +54,12 @@ int   pc64_shell_run_user(int vol, const char *path);
 int   pc64_shell_font_mono(void);
 void  pc64_browser_open_path(const char *path);
 
+const char *pc64_shell_py_error(void);       /* PYRT compile/exec traceback */
+
+/* studio_py.c - Python app packaging (source -> UNO_MODF_PYAPP container) */
+int   studio_is_py(const char *name);
+int   studio_py_pack(const unsigned char *src, int len, unsigned char *out, int cap);
+
 void *malloc(unsigned long n);
 void  free(void *p);
 void *memcpy(void *d, const void *s, unsigned long n);
@@ -289,10 +295,11 @@ static void refresh_project(void)
     for (i = 0; i < cnt && proj_n < MAXPROJ; i++) {
         if (uno_fs_list_get(proj_vol, i, nm, sizeof nm)) {
             int L = s_len(nm);
-            /* show source-ish files: .C .H .MD .TXT .UNO */
+            /* show source-ish files: .C .H .PY .MD .TXT .UNO */
             if (L >= 2 && (
                 (nm[L-2]=='.' && (nm[L-1]=='C'||nm[L-1]=='H'||nm[L-1]=='c'||nm[L-1]=='h')) ||
                 (L>=3 && nm[L-3]=='.' && (nm[L-2]=='M'||nm[L-2]=='m')) ||
+                (L>=3 && nm[L-3]=='.' && (nm[L-2]=='P'||nm[L-2]=='p') && (nm[L-1]=='Y'||nm[L-1]=='y')) ||
                 (L>=4 && nm[L-4]=='.') ))
                 s_cpy(proj_name[proj_n++], nm, 16);
         }
@@ -382,6 +389,24 @@ static int do_build(char *out_uno_name)
     char line[80], num[16];
     out_reset(); g_ndiag = 0;
     if (!ed_name[0]) { out_add("Save the file first (Ctrl-S)."); return -1; }
+
+    if (studio_is_py(ed_name)) {                  /* Python: wrap source, no ucc */
+        int cn = studio_py_pack((const unsigned char *)ed_buf, ed_len,
+                                (unsigned char *)g_uno, UNO_CAP);
+        if (cn < 0) { out_add("Python source too large for the .UNO buffer."); return -1; }
+        uno_name(out_uno_name, ed_name);
+        if (!uno_fs_write(ed_vol, out_uno_name, (const unsigned char *)g_uno, cn)) {
+            out_add("Saving the .UNO failed (read-only volume?)."); return -1; }
+        s_cpy(line, "Packed ", 80);
+        { int p = s_len(line), k = 0; while (out_uno_name[k] && p < 60) line[p++] = out_uno_name[k++];
+          { const char *sm = " (Python - runs on PYRT.UNO)"; int j = 0; while (sm[j] && p < 78) line[p++] = sm[j++]; }
+          line[p] = 0; }
+        out_add(line);
+        status_set("Packed", out_uno_name);
+        refresh_project();
+        return 0;
+    }
+
     n = ucc_compile(ed_buf, ed_len, ed_name, inc_reader, 0,
                     g_work, WORK_CAP, g_uno, UNO_CAP, g_diag, 16, &ndiag);
     g_ndiag = ndiag;
@@ -422,8 +447,20 @@ static void do_run(void)
     char uno[16];
     if (ed_dirty) doc_save();
     if (do_build(uno) != 0) return;
-    if (pc64_shell_run_user(ed_vol, uno) != 0)
-        { out_add("Run failed: the module would not load."); status_set("Run failed", 0); }
+    if (pc64_shell_run_user(ed_vol, uno) != 0) {
+        if (studio_is_py(ed_name)) {              /* Python: distinguish causes */
+            const char *err = pc64_shell_py_error();
+            if (err && err[0]) {                  /* a compile/exec traceback */
+                out_add("Python error:");
+                out_add(err);
+            } else {
+                out_add("Python runtime not installed (APPS\\PYRT.UNO missing).");
+            }
+        } else {
+            out_add("Run failed: the module would not load.");
+        }
+        status_set("Run failed", 0);
+    }
     else
         status_set("Running", uno);
 }
@@ -561,6 +598,7 @@ static void draw_editor(const unoui_palette *p)
 {
     int rows = L_edit.h / g_lh, r, off, ln, in_comment = 0, i;
     int gutw = 44, tx0 = L_edit.x + gutw + 2;
+    int lang = studio_is_py(ed_name) ? HL_LANG_PY : HL_LANG_C;
     HlSpan sp[128];
     char numbuf[8];
 
@@ -573,7 +611,7 @@ static void draw_editor(const unoui_palette *p)
     while (ln < ed_scroll && off < ed_len) {
         int le = line_end(off);
         int junk = in_comment;
-        studio_hl_line(ed_buf + off, le - off, &junk, sp, 128);
+        studio_hl_line_lang(ed_buf + off, le - off, &junk, sp, 128, lang);
         in_comment = junk;
         off = (le < ed_len) ? le + 1 : le; ln++;
     }
@@ -587,7 +625,7 @@ static void draw_editor(const unoui_palette *p)
         u_dec(numbuf, curline + 1);
         fb_text(L_edit.x + gutw - 6 - fb_text_w(numbuf), y + 1, numbuf, p->text_dim, -1);
         /* tokenize + draw spans (honoring horizontal scroll) */
-        ns = studio_hl_line(ed_buf + off, le - off, &cn, sp, 128);
+        ns = studio_hl_line_lang(ed_buf + off, le - off, &cn, sp, 128, lang);
         for (k = 0; k < ns; k++) {
             int cstart = sp[k].start, clen = sp[k].len, c;
             fb_px col = hl_color(sp[k].cls, p);
@@ -871,19 +909,25 @@ static void studio_opened(void)
     metrics_init();
     refresh_project();
     if (ed_buf && !ed_len && !ed_name[0]) {
-        /* first open: greet with the SDK sample, found on whichever volume
-         * carries the ESP (search them all - it is rarely volume 0) */
-        int nv = uno_fs_volumes(), v;
+        /* first open: greet with an SDK sample, found on whichever volume
+         * carries the ESP (search them all - it is rarely volume 0).  Python
+         * is a first-class app language here, so lead with SAMPLE.PY when it
+         * ships, falling back to the UnoC SAMPLE.C. */
+        static const char *const greet[2][2] = {
+            { "SDK\\SAMPLE.PY", "SAMPLE.PY" },
+            { "SDK\\SAMPLE.C",  "SAMPLE.C"  } };
+        int nv = uno_fs_volumes(), v, g;
         long n = -1;
-        for (v = 0; v < nv && n < 0; v++)
-            n = uno_fs_read(v, "SDK\\SAMPLE.C", (unsigned char *)ed_buf, ED_CAP - 1);
-        if (n > 0) {
-            int r, w = 0;
-            for (r = 0; r < n; r++) if (ed_buf[r] != '\r') ed_buf[w++] = ed_buf[r];
-            ed_len = w; ed_buf[ed_len] = 0;
-            s_cpy(ed_name, "SAMPLE.C", sizeof ed_name);
-            ed_vol = v - 1;              /* the volume the loop matched */
-        } else ed_buf[0] = 0;
+        for (g = 0; g < 2 && n < 0; g++)
+            for (v = 0; v < nv && n < 0; v++)
+                if ((n = uno_fs_read(v, greet[g][0], (unsigned char *)ed_buf, ED_CAP - 1)) > 0) {
+                    int r, w = 0;
+                    for (r = 0; r < n; r++) if (ed_buf[r] != '\r') ed_buf[w++] = ed_buf[r];
+                    ed_len = w; ed_buf[ed_len] = 0;
+                    s_cpy(ed_name, greet[g][1], sizeof ed_name);
+                    ed_vol = v;
+                }
+        if (n <= 0) ed_buf[0] = 0;
     }
     studio_ai_init();
     status_set("^B Build   ^R Run   AI menu for the assistant", 0);

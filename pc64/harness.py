@@ -135,6 +135,28 @@ def main():
         if len(sys.argv) > 1 and sys.argv[1] == "boot":
             return
 
+        # ---- Python: Studio greets SDK\SAMPLE.PY; Ctrl-B packs it into a
+        # UNO_MODF_PYAPP container, Ctrl-R hands it to PYRT.UNO which compiles
+        # and runs it.  Two shots a beat apart prove the ball animates. -------
+        if len(sys.argv) > 1 and sys.argv[1] == "py":
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "esc"}])
+            time.sleep(0.8)
+            keys(q, *(["down"] * 15)); keys(q, "ret")   # last app = Studio
+            time.sleep(2.5)
+            shot(q, "py_studio")                         # editor with SAMPLE.PY
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "b"}])
+            time.sleep(2.0)
+            shot(q, "py_build")                          # "Packed SAMPLE.UNO"
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "r"}])
+            time.sleep(2.0)
+            shot(q, "py_run_a")                          # the Python app running
+            time.sleep(1.3)
+            shot(q, "py_run_b")                          # a later frame (ball moved)
+            return
+
         # ---- lid-close sleep: the toggling-lid SSDT closes the lid ~5s after
         # boot (screen blanks = asleep) and reopens ~5s later (desktop wakes).
         # Sample across a full cycle. --------------------------------------

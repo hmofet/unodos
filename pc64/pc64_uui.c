@@ -152,15 +152,21 @@ static const PyHost   *g_pyrt;
 static int             g_pyrt_tried, g_pyrt_present;
 static char            g_pyrt_gc[16 * 1024 * 1024];   /* MicroPython GC heap */
 static const UnoUuiApp *g_pyapp;                       /* the running Python app */
+#ifdef UNO_DBGCON
+static void pdbg(const char *s){ while(*s) __asm__ volatile("outb %0,%1"::"a"((unsigned char)*s++),"Nd"((unsigned short)0x402)); }
+#else
+static void pdbg(const char *s){ (void)s; }
+#endif
 static void pyrt_ensure(void)
 {
     if (g_pyrt || g_pyrt_tried) return;
     g_pyrt_tried = 1;
     {
         PyHostEntry e = uno_mod_load_pyrt();
+        pdbg(e ? "pyrt: PYRT.UNO loaded\n" : "pyrt: PYRT.UNO absent\n");
         if (e) g_pyrt = e(0);
-        if (g_pyrt && g_pyrt->abi != UNO_PYHOST_ABI) g_pyrt = 0;
-        if (g_pyrt) { g_pyrt->init(g_pyrt_gc, sizeof g_pyrt_gc); g_pyrt_present = 1; }
+        if (g_pyrt && g_pyrt->abi != UNO_PYHOST_ABI) { pdbg("pyrt: abi mismatch\n"); g_pyrt = 0; }
+        if (g_pyrt) { g_pyrt->init(g_pyrt_gc, sizeof g_pyrt_gc); g_pyrt_present = 1; pdbg("pyrt: init ok\n"); }
     }
 }
 
@@ -1477,8 +1483,10 @@ static int pc64_shell_run_python(int vol, const char *path)
         g_pyrt->unload();
         g_open[EX_PYAPP] = 0;
     }
+    pdbg("pyrt: compiling app\n");
     g_pyapp = g_pyrt->load(src, len, path);
-    if (!g_pyapp) return -3;                       /* compile/exec error (last_error) */
+    if (!g_pyapp) { pdbg("pyrt: load FAILED\n"); pdbg(g_pyrt->last_error()); return -3; }
+    pdbg("pyrt: app loaded, opening window\n");
     g_built[EX_PYAPP] = 0;
     open_app(EX_PYAPP);
     return 0;

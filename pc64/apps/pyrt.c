@@ -52,8 +52,17 @@ static UnoUuiApp gVt;                        /* the vtable handed to the shell *
 static char gName[32];
 static int  gInited;
 
+#ifdef UNO_DBGCON
+static void rdbg(const char *s){ while(*s) __asm__ volatile("outb %0,%1"::"a"((unsigned char)*s++),"Nd"((unsigned short)0x402)); }
+static void rdbg_out(const char *tag){ const char *o = pyrt_out_text(); if (o && o[0]) { rdbg(tag); rdbg(o); rdbg("\n"); } }
+#else
+static void rdbg(const char *s){ (void)s; }
+static void rdbg_out(const char *tag){ (void)tag; }
+#endif
+
 /* mod_uno.c: pull `app` out of a just-exec'd module and fill gApp */
 int  uno_bind_app(PyApp *pa);                /* 1 ok, 0 no app / bad */
+void uno_clear_app_roots(void);              /* release GC-pinned app on unload */
 void uno_win_set(unoui_window *w);           /* stash the current window for uno.ui */
 mp_obj_t uno_canvas_obj(void);               /* the canvas arg passed to draw() */
 
@@ -97,11 +106,13 @@ static mp_obj_t call3(mp_obj_t fn, mp_obj_t a, mp_obj_t b, mp_obj_t c)
 }
 
 /* ---- the app's canvas: draws by calling the Python draw() ----------------- */
+static int gDrewOnce;
 static void py_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     (void)w; (void)ctx;
     uno_set_draw_rect(r.x, r.y, r.w, r.h);
     if (gApp.draw) call1(gApp.draw, uno_canvas_obj());
+    if (gDrewOnce == 0) { gDrewOnce = 1; rdbg_out("pyrt: draw exc: "); }
 }
 static int py_canvas_event(struct unoui_widget *w, const void *ev, void *ctx)
 { (void)w; (void)ev; (void)ctx; return 0; }
@@ -117,7 +128,11 @@ static void tr_build(unoui_window *w)
     /* a full-window canvas the app draws into; build() may add widgets too */
     unoui_window_init(w, gName, 40, 24, aw + 24, ah + 40);
     unoui_widget_fill(unoui_add_canvas(w, 0, 0, aw, ah, &gCanvas));
-    if (gApp.build) call1(gApp.build, uno_canvas_obj());
+    rdbg("pyrt: tr_build canvas added\n");
+    /* publish the canvas size so cv.width()/height() are valid inside build()
+     * (the per-draw rect isn't set until the first paint) */
+    uno_set_draw_rect(0, 0, aw, ah);
+    if (gApp.build) { call1(gApp.build, uno_canvas_obj()); rdbg_out("pyrt: build exc: "); }
     gc_collect();
 }
 static int tr_action(const unoui_action *a)
@@ -203,6 +218,8 @@ static void py_unload(void)
     gApp.app = MP_OBJ_NULL;
     gApp.build = gApp.draw = gApp.action = gApp.key = gApp.tick =
         gApp.opened = gApp.closed = MP_OBJ_NULL;
+    uno_clear_app_roots();          /* release the pinned app so GC can reap it */
+    gDrewOnce = 0;
     if (gInited) gc_collect();
 }
 

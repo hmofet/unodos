@@ -15,6 +15,7 @@
 #
 #   mkuno.py thunks  <syms.txt> <out.s>       generate the thunk assembly
 #   mkuno.py convert <in.dll>   <out.uno>     flatten the linked DLL
+#   mkuno.py pyapp   <in.py>    <out.uno>     wrap Python source (MODF_PYAPP)
 #
 # .UNO layout (all little-endian):
 #   u32 magic 'UNO1'   u16 abi   u16 flags
@@ -31,6 +32,23 @@ NAME_MAX = 23               # 24-byte name field, NUL-terminated
 HDR_FMT = "<IHHIIIIIIQII"   # 48 bytes
 IMAGE_REL_BASED_ABSOLUTE = 0
 IMAGE_REL_BASED_DIR64    = 10
+UNO_MODF_PYAPP = 0x0004     # source-container tier (no code/relocs/imports)
+
+
+def pyapp(py_path, uno_path):
+    """Wrap a .py file's source bytes into a UNO_MODF_PYAPP container: the
+    48-byte header (flags=PYAPP, file_size=len(src), crc32(src)) followed by
+    the raw source.  No image, no relocs, no imports - PYRT.UNO compiles the
+    payload at load time.  Source is normalised to LF so an on-disk CRLF
+    checkout can't shift the crc away from what the on-device writer produces."""
+    src = open(py_path, "rb").read().replace(b"\r\n", b"\n")
+    hdr = struct.pack(HDR_FMT, MAGIC, ABI, UNO_MODF_PYAPP,
+                      0, len(src), len(src),   # entry=0, mem_size, file_size
+                      0, 0, 0,                 # nreloc, imp_rva, imp_count
+                      0,                       # pref_base
+                      zlib.crc32(src) & 0xFFFFFFFF, 0)
+    open(uno_path, "wb").write(hdr + src)
+    print("mkuno: %s  PYAPP src=%d bytes" % (uno_path, len(src)))
 
 
 def gen_thunks(syms_path, out_path):
@@ -156,6 +174,8 @@ def convert(dll_path, uno_path, flags=0):
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "thunks":
         gen_thunks(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "pyapp":
+        pyapp(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "convert":
         # optional 4th arg: header flags (1 = unoui-class module)
         convert(sys.argv[2], sys.argv[3],
