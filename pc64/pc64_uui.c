@@ -62,9 +62,11 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, NNATIVE };
-#define NEXTRA 2                          /* extra native apps beyond the bridge */
+#define NEXTRA 4                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
+#define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
+#define EX_USERAPP (NNATIVE + UNOAPP_COUNT + 3)   /* the app Studio just built    */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -121,15 +123,46 @@ static void uui_sleep_wake(void)
 static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
 
+/* ---- Studio: the IDE, a unoui-CLASS module (APPS\STUDIO.UNO) --------------
+ * Not linked into the kernel: the shell probes for the file, loads it on
+ * first open, and drives it through the same build/action/key/frame hooks
+ * the built-in apps use.  A distro without the file just has no Studio. */
+#include "uno_uuiapp.h"
+static const UnoUuiApp *g_studio;
+static int  g_studio_tried, g_studio_present;
+static void studio_ensure(void)
+{
+    if (g_studio || g_studio_tried) return;
+    g_studio_tried = 1;
+    {
+        UnoUuiEntry e = uno_mod_load_uui("STUDIO.UNO");
+        if (e) g_studio = e(0);
+        if (g_studio && g_studio->abi != UNO_UUIAPP_ABI) g_studio = 0;
+    }
+}
+
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Install",
       "Music" };
 static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
+       : a == EX_STUDIO ? "Studio"
+       : a == EX_USERAPP ? unoapp_user_title()
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
 static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
+       : a == EX_STUDIO ? "Studio"
+       : a == EX_USERAPP ? unoapp_user_title()
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
+
+/* hidden from the launcher + desktop: the user-app slot until something runs
+ * in it, and Studio when no STUDIO.UNO ships on this system */
+static int app_hidden(int a)
+{
+    if (a == EX_USERAPP) return !g_open[EX_USERAPP];
+    if (a == EX_STUDIO)  return !g_studio_present;
+    return 0;
+}
 
 /* Which emblem an app wears. A LOOKUP, not the app's index: apps come and go
  * (and will eventually be loaded from storage, where no static numbering can
@@ -145,6 +178,8 @@ static int app_icon(int a)
 {
     if (a == EX_RUNNER)  return PCI_RUNNER;
     if (a == EX_BROWSER) return PCI_BROWSER;
+    if (a == EX_STUDIO)  return PCI_STUDIO;
+    if (a == EX_USERAPP) return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
     if (a >= NNATIVE && a - NNATIVE < UNOAPP_COUNT) return kBridgeIcon[a - NNATIVE];
     return PCI_GENERIC;
@@ -726,6 +761,7 @@ static void remove_win(unoui_window *win)
  * canvas paints the bar face + top highlight under the buttons. */
 /* forward decls (taskbar events fire these, defined below) */
 static void toggle_launcher(void);
+static void menu_refresh(void);
 static void build_desktop(void);
 static void open_app(int a);
 static void fmt_clock(int uptime_secs);
@@ -874,12 +910,16 @@ static void build_desktop(void)
     percol      = (FB_H - TASKH - 20) / pitch; if (percol < 1) percol = 1;
     percol_rows = (FB_W - 16) / colw;           if (percol_rows < 1) percol_rows = 1;
     desk_order(order, NAPPS);
+    { int kk = 0;
     for (k = 0; k < NAPPS; k++) {
         int i = order[k];
-        int col = g_desk_flow ? (k % percol_rows) : (k / percol);
-        int row = g_desk_flow ? (k / percol_rows) : (k % percol);
-        int ix = 16 + col * colw, iy = 14 + row * pitch;
+        int col, row, ix, iy;
         unoui_widget *ic;
+        if (app_hidden(i)) continue;           /* no icon for absent apps */
+        col = g_desk_flow ? (kk % percol_rows) : (kk / percol);
+        row = g_desk_flow ? (kk / percol_rows) : (kk % percol);
+        kk++;
+        ix = 16 + col * colw; iy = 14 + row * pitch;
         if (i < 32 && g_icon_pos[i].placed) {      /* the user put it here */
             ix = g_icon_pos[i].x; iy = g_icon_pos[i].y;
         }
@@ -887,7 +927,7 @@ static void build_desktop(void)
         ic->r.w = colw - 20; ic->r.h = ich; /* room for emblem + label         */
         ic->icon = app_icon(i);             /* -> pc64_icon_art draws its art  */
         ic->id  = ID_LAUNCH0 + i;
-    }
+    } }
 }
 
 /* pull a window fully into the work area (screen minus the taskbar) */
@@ -902,6 +942,16 @@ static void clamp_to_workarea(unoui_window *w)
 /* ---- legacy apps hosted in a canvas ------------------------------------- */
 static void lcanvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 { (void)w; unoapp_paint(*(int *)ctx, r); }
+
+/* the user-app slot's canvas (same hosting, separate identity) */
+static void userapp_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{ (void)w; (void)ctx; unoapp_user_paint(r); }
+static int userapp_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    (void)w; (void)ctx;
+    if (unoapp_user_input((const unoui_event *)ev)) { g_dirty = 1; return 1; }
+    return 0;
+}
 
 static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
@@ -947,6 +997,26 @@ static void build_legacy(int a)
         g_win[a].flags |= UI_WIN_RESIZE;    /* text reflows to the new width */
         return;
     }
+    if (a == EX_STUDIO) {              /* the IDE module fills its own window */
+        studio_ensure();
+        if (g_studio) { g_studio->build(&g_win[a]); return; }
+        unoui_window_init(&g_win[a], "Studio", 60, 40, 280, 90);
+        unoui_add_label(&g_win[a], 8, 10, "APPS\\STUDIO.UNO is missing");
+        unoui_add_label(&g_win[a], 8, 28, "This system ships without the IDE.");
+        return;
+    }
+    if (a == EX_USERAPP) {             /* the app Studio just built */
+        static unoui_canvas ucv;
+        unoapp_user_size(&aw, &ah);
+        if (aw < 140) aw = 140;
+        if (ah < 100) ah = 100;
+        ucv.draw  = userapp_draw; ucv.event = userapp_event; ucv.ctx = 0;
+        unoui_window_init(&g_win[a], app_name(a), 50, 26,
+                          aw + 2 * m->frame_w + 2 * m->pad,
+                          (ah - APP_TBAR) + m->title_h + 2 * m->pad + m->frame_w);
+        unoui_add_canvas(&g_win[a], 0, 0, aw, ah - APP_TBAR, &ucv);
+        return;
+    }
     cv = &g_lcanvas[li];
     unoapp_size(li, &aw, &ah);
     if (aw < 140) aw = 140;
@@ -986,6 +1056,8 @@ static void open_app(int a)
         g_open[a] = 1;
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
+        else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
+        else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
     } else raise_win(&g_win[a]);
@@ -996,6 +1068,8 @@ static void open_app(int a)
     if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
     if (a == APP_EDIT)  { int wi = pc64_write_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
+        { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     /* native games scale to any rect, so they can fill the screen (Esc returns).
      * Bridge apps + the browser stay windowed (they draw at a fixed size). */
     if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
@@ -1006,7 +1080,7 @@ static void open_app(int a)
 static void toggle_launcher(void)
 {
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
-    else { g_menu_scroll = 0; g_menu_hot = 0;
+    else { g_menu_scroll = 0; g_menu_hot = 0; menu_refresh();
            clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch);
            UI.focus_wi = 0;                    /* focus the menu canvas for keys */
            g_launch_open = 1; }
@@ -1018,7 +1092,7 @@ static void toggle_launcher(void)
  * right-click elsewhere should obviously do. */
 static void launcher_at(int x, int y)
 {
-    g_menu_scroll = 0; g_menu_hot = 0;
+    g_menu_scroll = 0; g_menu_hot = 0; menu_refresh();
     g_launch.r.x = x;
     g_launch.r.y = y;
     clamp_to_workarea(&g_launch);
@@ -1125,6 +1199,8 @@ static void close_focused(void)
         g_open[i] = 0;
         if (g >= 0)              pc64_game_close(g);        /* native game teardown */
         else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
+        else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
+        else if (i == EX_USERAPP) unoapp_user_close();
         else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
         break;
     }
@@ -1142,17 +1218,29 @@ static int mrow_h(void) { int h = fb_text_h() + 8; return h < 22 ? 22 : h; }
 #define MROW (mrow_h())
 #define MENU_MAXVIS 11
 
-static int  menu_count(void)         { return NAPPS + 2; }   /* apps + restart + shutdown */
-static const char *menu_label(int i) { return i < NAPPS ? app_name(i) : (i == NAPPS ? "Restart" : "Shut Down"); }
-static int  menu_icon(int i)         { return i < NAPPS ? app_icon(i) : -1; }
-static int  menu_vis(void)           { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
+/* the launcher lists only visible apps (Studio needs its module on disk;
+ * the user-app slot appears once something has run in it) */
+static int menu_apps[NAPPS];
+static int menu_napps;
+static void menu_refresh(void)
+{
+    int a;
+    menu_napps = 0;
+    for (a = 0; a < NAPPS; a++) if (!app_hidden(a)) menu_apps[menu_napps++] = a;
+}
+static int  menu_count(void) { return menu_napps + 2; }  /* + restart/shutdown */
+static const char *menu_label(int i)
+{ return i < menu_napps ? app_name(menu_apps[i])
+       : (i == menu_napps ? "Restart" : "Shut Down"); }
+static int  menu_icon(int i) { return i < menu_napps ? app_icon(menu_apps[i]) : -1; }
+static int  menu_vis(void)   { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
 
 static void menu_activate(int i)
 {
     if (i < 0 || i >= menu_count()) return;
-    if (i < NAPPS)       open_app(i);            /* also closes the launcher */
-    else if (i == NAPPS) uno_pc64_restart();
-    else                 uno_pc64_shutdown();
+    if (i < menu_napps)       open_app(menu_apps[i]);  /* also closes the launcher */
+    else if (i == menu_napps) uno_pc64_restart();
+    else                      uno_pc64_shutdown();
 }
 
 static void chevron(int cx, int y, int dir, fb_px c)         /* -1 up, +1 down */
@@ -1166,7 +1254,7 @@ static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         int idx = g_menu_scroll + i, ry = r.y + i * MROW, hot = (idx == g_menu_hot);
         if (idx >= total) break;
         if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
-        if (idx == NAPPS) fb_hline(r.x, ry, r.w, t->pal.shadow);     /* power divider */
+        if (idx == menu_napps) fb_hline(r.x, ry, r.w, t->pal.shadow);  /* power divider */
         if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + (MROW - 18) / 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
         fb_text(r.x + 26, ry + (MROW - fb_text_h()) / 2, menu_label(idx),
                 hot ? t->pal.accent_text : t->pal.text, -1);
@@ -1230,7 +1318,9 @@ static void launcher_hover(int mx, int my)
 static void build_launcher(void)
 {
     const unoui_metrics *m = &UI.theme->m;
-    int i, tw = 0, winw, vis = menu_vis();
+    int i, tw = 0, winw, vis;
+    menu_refresh();
+    vis = menu_vis();
     for (i = 0; i < menu_count(); i++) { int t = fb_text_w(menu_label(i)); if (t > tw) tw = t; }
     winw = tw + 26 + 14 + 2 * m->frame_w + 2 * m->pad;
     g_menu_scroll = 0; g_menu_hot = -1;
@@ -1309,11 +1399,41 @@ static void open_calendar(void)
 void pc64_shell_add_window(unoui_window *w)
 { clamp_to_workarea(w); unoui_ui_add(&UI, w); g_dirty = 1; }
 void pc64_shell_remove_window(unoui_window *w) { remove_win(w); g_dirty = 1; }
+void pc64_shell_del_window(unoui_window *w) { pc64_shell_remove_window(w); }
+                                     /* alias: import names cap at 23 chars */
 void pc64_shell_focus_window(unoui_window *w)
 { int i; for (i = 0; i < UI.nwin; i++) if (UI.win[i] == w) { UI.focus_win = i; break; } }
 void pc64_shell_dirty(void) { g_dirty = 1; }
 int  pc64_shell_workarea_w(void) { return FB_W; }
 int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
+
+/* the bundled monospace face's font slot (Studio's code editor), -1 = none */
+int pc64_shell_font_mono(void)
+{
+    int i;
+    for (i = 0; i < 8; i++) {
+        const char *n = uno_font_name(i);
+        if (!n) break;
+        if (n[0] == 'M' && n[1] == 'o' && n[2] == 'n' && n[3] == 'o' && !n[4])
+            return i;
+    }
+    return -1;
+}
+
+/* Studio's Run: host the module it just wrote at vol:path in the user-app
+ * window (replacing whatever ran there before). 0 = running, -1 = load
+ * failure (bad image / unresolved import / slot full). */
+int pc64_shell_run_user(int vol, const char *path)
+{
+    if (unoapp_user_run(vol, path) < 0) return -1;
+    if (g_open[EX_USERAPP]) {            /* rebuild for the new size/title */
+        remove_win(&g_win[EX_USERAPP]);
+        g_open[EX_USERAPP] = 0;
+    }
+    g_built[EX_USERAPP] = 0;
+    open_app(EX_USERAPP);
+    return 0;
+}
 
 /* app-side action hooks (in pc64_write.c / pc64_files.c) */
 int pc64_write_action(const unoui_action *a);
@@ -1361,6 +1481,8 @@ static void on_action(const unoui_action *a)
     if (pc64_files_action(a)) return;           /* the file manager's toolbar */
     if (pc64_music_action(a)) return;           /* the media player           */
     if (pc64_clock_action(a)) return;           /* the world clock            */
+    if (g_studio && g_open[EX_STUDIO] && g_studio->action &&
+        g_studio->action(a)) return;            /* the Studio module          */
     switch (a->id) {
     case ID_ILIST:    inst_select(a->value); break;
     case ID_IDEF:     g_inst_default = a->value; break;
@@ -1500,6 +1622,13 @@ static int pump_input(void)
             UI.win[UI.focus_win] == &g_win[APP_EDIT]) {
             if (pc64_write_key(uni, 1)) { g_dirty = 1; continue; }
         }
+        /* Studio accelerators (Ctrl-S/F, F5 Run, F7 Build, ...) - only while
+           its window is in front; the module owns the mapping. */
+        if (!g_launch_open && !UI.full && g_studio && g_open[EX_STUDIO] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[EX_STUDIO] && g_studio->key) {
+            if (g_studio->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        }
         /* Install window focused: keyboard drive (works before any pointer is
            up - important on the harness AND on laptops with exotic trackpads).
            Up/Down pick a target, I = Install, R = Rescan. */
@@ -1621,6 +1750,7 @@ int main(void)
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
+    g_studio_present = uno_mod_present("STUDIO.UNO");   /* IDE shipped here? */
     uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
     /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
      * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
@@ -1666,6 +1796,9 @@ int main(void)
         }
         feed(&tick);                    /* advance the caret-blink timebase */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
+        if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
+            g_studio->frame();          /* Studio caret blink / build pumps */
+        if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
         if (g_open[APP_CLOCK]) pc64_clock_tick();  /* self-throttling: only
                                         redraws when the second changes */

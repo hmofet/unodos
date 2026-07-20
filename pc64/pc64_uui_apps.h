@@ -22,4 +22,15 @@ int         unoapp_input(int i, const unoui_event *ev);  /* 1 = consumed       *
 void        unoapp_focus(int i);                 /* -1 = no legacy app focused */
 void        unoapp_run_tick(int i);              /* per-frame game/clock tick  */
 
+/* the Studio user-app slot: hosts the .UNO the user just built (classic
+ * KernelApi tier), replaced wholesale on every Run */
+int         unoapp_user_run(int vol, const char *path);   /* 0 ok, -1 fail */
+void        unoapp_user_close(void);
+int         unoapp_user_live(void);
+const char *unoapp_user_title(void);
+void        unoapp_user_size(int *w, int *h);
+void        unoapp_user_paint(unoui_rect r);
+int         unoapp_user_input(const unoui_event *ev);
+void        unoapp_user_tick(void);
+
 #endif

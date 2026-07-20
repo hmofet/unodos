@@ -5,4 +5,5 @@
 #include "unoui.h"
 unoui_canvas *pc64_browser_canvas(void);
 void          pc64_browser_open(void);
+void          pc64_browser_open_path(const char *path);  /* Help deep-links */
 #endif

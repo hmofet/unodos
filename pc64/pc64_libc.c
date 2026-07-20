@@ -115,7 +115,9 @@ char *strchr(const char *s, int c)
 int abs(int v) { return v < 0 ? -v : v; }
 
 /* ---- first-fit free-list allocator over a static arena ------------------ */
-#define HEAP_BYTES (8u * 1024u * 1024u)
+#define HEAP_BYTES (32u * 1024u * 1024u)   /* Studio's compile arena + editor
+                                              buffers live here; QEMU runs
+                                              -m 256 so 32 MB of .bss is cheap */
 
 typedef struct Blk {
     size_t       size;              /* payload bytes */

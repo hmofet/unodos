@@ -380,6 +380,32 @@ static void refresh_list(void)
 static long fs_load(int vol, const char *name, char *buf, long max)
 { return uno_fs_read(vol, name, (unsigned char *)buf, max); }
 
+/* open a local document by path (subdirectories fine: "DOCS\\API.MD") -
+ * the Help menu's entry point.  Searches every volume; a miss shows an
+ * inline note instead of a page. */
+void pc64_browser_open_path(const char *path)
+{
+    int v, nv = uno_fs_volumes();
+    long n = -1;
+    for (v = 0; v < nv && n < 0; v++)
+        n = uno_fs_read(v, path, (unsigned char *)g_doc, DOC_MAX - 1);
+    g_scroll = 0;
+    if (n < 0) {
+        strcpy(g_doc, "# Not found\n\nNo volume carries `");
+        strncpy(g_doc + strlen(g_doc), path, 80);
+        strcat(g_doc, "`.\n");
+        g_is_html = 0;
+    } else {
+        g_doc[n] = 0;
+        detect_kind(path);
+        if (g_is_html) js_expand();
+    }
+    { const char *base = path, *p;
+      for (p = path; *p; p++) if (*p == '\\') base = p + 1;
+      strncpy(g_title, base, 47); g_title[47] = 0; }
+    g_view = 1;
+}
+
 /* ---- network fetch ------------------------------------------------------- */
 static void url_kind(const char *url)          /* pick MD vs HTML from suffix */
 {

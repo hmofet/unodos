@@ -90,6 +90,12 @@ static void music_stop(void)  { uno_seq_stop(); }
 
 static short gActiveProc = -1;             /* focused app (used by kapi_topmost) */
 
+/* the Studio-built user app (one live at a time); its UnoWin answers
+ * find_app_window(APP_NAPPS) - "your own window" from a user app's view */
+static const AppInterface *gUserIface;
+static UnoWin              gUserWin;
+static Boolean             gUserLive;
+
 static void gm_start(const Note *notes, short count, short owner)
 { (void)owner; uno_seq_play((const u_seqnote_t *)notes, count); }   /* loop a song */
 static void gm_stop(void) { uno_seq_stop(); }
@@ -100,7 +106,10 @@ static int    *gDirty;
 static UnoWin  gAppWins[APP_NAPPS];
 static Boolean gAppLive[APP_NAPPS];
 static UnoWin *find_app_window(short proc)
-{ return (proc >= 0 && proc < APP_NAPPS && gAppLive[proc]) ? &gAppWins[proc] : 0; }
+{
+    if (proc == APP_NAPPS && gUserLive) return &gUserWin;   /* the user app */
+    return (proc >= 0 && proc < APP_NAPPS && gAppLive[proc]) ? &gAppWins[proc] : 0;
+}
 static void draw_window(UnoWin *w) { (void)w; if (gDirty) *gDirty = 1; }
 static void repaint_all(void)      { if (gDirty) *gDirty = 1; }
 static void launch_app(short proc) { (void)proc; }   /* the shell owns launching */
@@ -292,3 +301,84 @@ void unoapp_run_tick(int i)
     gm_tick();
 }
 void unoapp_setup(int *dirtyflag) { unoapp_init(dirtyflag); }
+
+/* ---- the Studio user-app slot ---------------------------------------------
+ * Hosts the .UNO the user just built, through the same KernelApi as every
+ * bridge app.  One at a time; Run replaces the previous instance. */
+extern UnoAppEntry uno_mod_load_user(int vol, const char *path);
+extern void        uno_mod_unload_user(void);
+
+int unoapp_user_run(int vol, const char *path)
+{
+    UnoAppEntry e;
+    if (gUserIface && gUserIface->closed) gUserIface->closed();
+    gUserIface = 0; gUserLive = false;
+    uno_mod_unload_user();
+    e = uno_mod_load_user(vol, path);
+    if (!e) return -1;
+    gUserIface = e(&gKApi);
+    if (!gUserIface || !gUserIface->draw) { gUserIface = 0; return -1; }
+    gUserLive = true;
+    if (gUserIface->opened) gUserIface->opened();
+    return 0;
+}
+
+void unoapp_user_close(void)
+{
+    if (gUserIface && gUserIface->closed) gUserIface->closed();
+    gUserLive = false;
+    /* keep the module loaded: reopening from the taskbar must still work;
+     * the next Run replaces it wholesale */
+}
+
+int  unoapp_user_live(void) { return gUserIface != 0; }
+const char *unoapp_user_title(void)
+{ return (gUserIface && gUserIface->win_title) ? gUserIface->win_title : "My App"; }
+
+void unoapp_user_size(int *w, int *h)
+{
+    if (gUserIface) {
+        *w = gUserIface->win_rect[2] - gUserIface->win_rect[0];
+        *h = gUserIface->win_rect[3] - gUserIface->win_rect[1];
+    } else { *w = 280; *h = 200; }
+}
+
+void unoapp_user_paint(unoui_rect r)
+{
+    if (!gUserIface) return;
+    gUserWin.used = true; gUserWin.proc = APP_NAPPS;
+    gUserWin.title = gUserIface->win_title;
+    gUserWin.bounds.left  = (short)r.x;         gUserWin.bounds.top    = (short)(r.y - TBAR_H);
+    gUserWin.bounds.right = (short)(r.x + r.w); gUserWin.bounds.bottom = (short)(r.y + r.h);
+    gUserLive = true;
+    gUserIface->draw(&gUserWin);
+}
+
+int unoapp_user_input(const unoui_event *ev)
+{
+    const AppInterface *a = gUserIface;
+    if (!a) return 0;
+    if (ev->kind == UI_EV_CHAR && a->key)
+        return a->key((char)ev->ch, 0, (ev->mods & UI_MOD_CTRL) != 0) ? 1 : 0;
+    if (ev->kind == UI_EV_KEY && a->key) {
+        char ch = 0; short code = 0;
+        switch (ev->key) {
+        case UI_KEY_LEFT:  ch = 0x1C; code = 0x7B; break;
+        case UI_KEY_RIGHT: ch = 0x1D; code = 0x7C; break;
+        case UI_KEY_DOWN:  ch = 0x1F; code = 0x7D; break;
+        case UI_KEY_UP:    ch = 0x1E; code = 0x7E; break;
+        case UI_KEY_ENTER: ch = 0x0D; break;
+        case UI_KEY_BACKSPACE: ch = 0x08; break;
+        default: return 0;
+        }
+        return a->key(ch, code, (ev->mods & UI_MOD_CTRL) != 0) ? 1 : 0;
+    }
+    if (ev->kind == UI_EV_MOUSE_DOWN && a->click) {
+        Point p; p.h = (short)ev->x; p.v = (short)ev->y;
+        a->click(&gUserWin, p); return 1;
+    }
+    return 0;
+}
+
+void unoapp_user_tick(void)
+{ if (gUserIface && gUserIface->tick) gUserIface->tick(); }

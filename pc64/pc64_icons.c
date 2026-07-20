@@ -241,6 +241,24 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         { int yy; for (yy = 0; yy < G(14); yy += G(3))                 /* centre line */
             hln(cx-1, oy + G(15) + yy, 2, FB_RGB(240,220,60)); }
         break; }
+    case PCI_STUDIO: {                               /* code page + wrench   */
+        rr(ox + G(5), oy + G(3), G(22), G(26), FB_RGB(30, 34, 44));    /* dark page */
+        frame(ox + G(5), oy + G(3), G(22), G(26), FB_RGB(90, 100, 125));
+        rr(ox + G(8),  oy + G(7),  G(6), G(2), FB_RGB(197, 134, 192)); /* keyword */
+        rr(ox + G(15), oy + G(7),  G(9), G(2), FB_RGB(220, 220, 220));
+        rr(ox + G(10), oy + G(11), G(8), G(2), FB_RGB(206, 145, 120)); /* string  */
+        rr(ox + G(19), oy + G(11), G(4), G(2), FB_RGB(181, 206, 168)); /* number  */
+        rr(ox + G(10), oy + G(15), G(12), G(2), FB_RGB(106, 153, 85)); /* comment */
+        rr(ox + G(8),  oy + G(19), G(5), G(2), FB_RGB(78, 201, 176));  /* type    */
+        rr(ox + G(14), oy + G(19), G(8), G(2), FB_RGB(220, 220, 220));
+        /* the build gear: a filled disc + four teeth, bottom-right */
+        disc(ox + G(23), oy + G(24), G(5), FB_RGB(240, 180, 60));
+        rr(ox + G(22), oy + G(17), G(2), G(3), FB_RGB(240, 180, 60));
+        rr(ox + G(22), oy + G(28), G(2), G(3), FB_RGB(240, 180, 60));
+        rr(ox + G(16), oy + G(23), G(3), G(2), FB_RGB(240, 180, 60));
+        rr(ox + G(27), oy + G(23), G(3), G(2), FB_RGB(240, 180, 60));
+        disc(ox + G(23), oy + G(24), G(2), FB_RGB(30, 34, 44));        /* hub */
+        break; }
     case PCI_GENERIC:
     default: {
         /* Any app that does not name a known emblem - notably one loaded from
