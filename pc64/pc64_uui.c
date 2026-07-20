@@ -263,6 +263,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
+       ID_LIC,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -576,9 +577,18 @@ static void build_sys(unoui_window *w)
     build_acpistat();
     build_sndstat();
     unoui_window_init(w, "System", 400, 100, 1, 1);
-    /* header */
+    /* header - identity + licensing (the About surface; the notices the
+     * bundled open components require live behind View licenses, which
+     * opens DOCS\LICENSES.MD in the Browser). Kept up here: the window
+     * already runs the height of an 800 px desktop, so anything appended
+     * at the bottom is born invisible. */
     unoui_add_label(w, gx, y, "UnoDOS / pc64  -  unoui shell");           y += lh;
-    unoui_add_label(w, gx, y, "x86-64 UEFI  -  bare metal  -  10 themes"); y += lh + 8;
+    unoui_add_label(w, gx, y, "x86-64 UEFI  -  bare metal  -  10 themes"); y += lh;
+    { int bw = fb_text_w("View licenses") + 26;
+      unoui_widget *b;
+      unoui_add_label(w, gx, y, "CC BY-NC 4.0 + MIT/Apache-2.0 parts");
+      b = unoui_add_button(w, cw - gx - 4 - bw, y - 3, bw, "View licenses", 0);
+      b->id = ID_LIC; y += lh + 8; }
     /* grouped hardware readouts: a box per subsystem, rows inside */
 #define SYS_GROUP(title, nrows) \
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
@@ -1619,6 +1629,8 @@ static void on_action(const unoui_action *a)
     case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_ABOUT: open_app(APP_SYS); break;
+    case ID_LIC:   pc64_browser_open_path("DOCS\\LICENSES.MD");
+                   open_app(EX_BROWSER); break;
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
