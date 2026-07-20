@@ -129,6 +129,11 @@ entry:
     jmp halt_loop                   ; hold on the PASS/FAIL screen
 %endif
 
+%ifdef FAT12_SEEK_TEST
+    call fat12_seek_test            ; FAT12 mid-file (position != 0) read test
+    jmp halt_loop                   ; hold on the PASS/FAIL screen
+%endif
+
     ; Auto-load launcher from boot disk
     call auto_load_launcher
 
@@ -13513,6 +13518,154 @@ fat12_straddle_test:
 %endif
 
 ; ============================================================================
+; fat12_seek_test (built only under -DFAT12_SEEK_TEST)
+; Regression test for mid-file (position != 0) FAT12 reads. Reads the first
+; 2100 bytes of LAUNCHER.BIN in ONE read as the reference, then re-reads the
+; same span with chunked reads whose later chunks all start from non-zero
+; file positions:
+;   pass A: 700+700+700  (cluster skip + unaligned intra-cluster resume)
+;   pass B: 512+1588     (cluster-aligned resume into the multi-sector path)
+;   pass C: 100+2000     (unaligned head, then the multi-sector fast path)
+; Each pass is byte-compared against the reference. Renders PASS/FAIL; the
+; caller halts on the result. Read-only: no FAT/disk writes.
+; ============================================================================
+%ifdef FAT12_SEEK_TEST
+FS2_SPAN equ 2100
+fat12_seek_test:
+    PUSHA86
+    push es
+    mov al, 0
+    xor ah, ah
+    call fs_mount_stub              ; sets fat_start / data_area_start / etc.
+    jc .fs2_fail
+
+    ; --- Reference: one read of FS2_SPAN bytes from position 0 ---
+    mov si, .fs2_fname
+    call fat12_open
+    jc .fs2_fail
+    mov [cs:.fs2_h], ax
+    mov bx, 0x3000
+    mov es, bx
+    xor di, di
+    mov cx, FS2_SPAN
+    call fat12_read
+    jc .fs2_fail
+    cmp ax, FS2_SPAN
+    jne .fs2_fail
+    mov ax, [cs:.fs2_h]
+    call fat12_close
+
+    ; --- Pass A: 700 + 700 + 700 ---
+    mov word [cs:.fs2_c + 0], 700
+    mov word [cs:.fs2_c + 2], 700
+    mov word [cs:.fs2_c + 4], 700
+    mov bx, 0x4000
+    call .fs2_chunked
+    jc .fs2_fail
+    mov bx, 0x4000
+    call .fs2_compare
+    jc .fs2_fail
+
+    ; --- Pass B: 512 + 1588 (aligned resume) ---
+    mov word [cs:.fs2_c + 0], 512
+    mov word [cs:.fs2_c + 2], 1588
+    mov word [cs:.fs2_c + 4], 0
+    mov bx, 0x4100
+    call .fs2_chunked
+    jc .fs2_fail
+    mov bx, 0x4100
+    call .fs2_compare
+    jc .fs2_fail
+
+    ; --- Pass C: 100 + 2000 (unaligned head + fast path) ---
+    mov word [cs:.fs2_c + 0], 100
+    mov word [cs:.fs2_c + 2], 2000
+    mov word [cs:.fs2_c + 4], 0
+    mov bx, 0x4200
+    call .fs2_chunked
+    jc .fs2_fail
+    mov bx, 0x4200
+    call .fs2_compare
+    jc .fs2_fail
+
+    mov bx, 10
+    mov cx, 10
+    mov si, .fs2_msg_pass
+    call gfx_draw_string_stub
+    pop es
+    POPA86
+    ret
+.fs2_fail:
+    mov bx, 10
+    mov cx, 10
+    mov si, .fs2_msg_fail
+    call gfx_draw_string_stub
+    pop es
+    POPA86
+    ret
+
+; .fs2_chunked - open LAUNCHER.BIN and read the chunk sizes in [.fs2_c]
+; (up to 3 words, 0 = stop) back-to-back into segment BX starting at offset 0.
+; Each chunk must return exactly the requested byte count. CF=1 on any error.
+.fs2_chunked:
+    mov [cs:.fs2_seg], bx
+    mov si, .fs2_fname
+    call fat12_open
+    jc .fs2_ch_err
+    mov [cs:.fs2_h], ax
+    xor di, di
+    xor bx, bx                      ; BX = chunk table index (0/2/4)
+.fs2_ch_loop:
+    cmp bx, 6
+    jae .fs2_ch_done
+    mov cx, [cs:.fs2_c + bx]
+    jcxz .fs2_ch_done
+    mov es, [cs:.fs2_seg]
+    mov ax, [cs:.fs2_h]
+    call fat12_read                 ; preserves BX/DI; AX = bytes read
+    jc .fs2_ch_err
+    cmp ax, [cs:.fs2_c + bx]
+    jne .fs2_ch_err                 ; short read = fail
+    add di, ax
+    add bx, 2
+    jmp .fs2_ch_loop
+.fs2_ch_done:
+    mov ax, [cs:.fs2_h]
+    call fat12_close
+    clc
+    ret
+.fs2_ch_err:
+    stc
+    ret
+
+; .fs2_compare - compare FS2_SPAN bytes at 0x3000:0 (reference) against
+; segment BX offset 0. CF=1 on mismatch.
+.fs2_compare:
+    push ds
+    mov ax, 0x3000
+    mov ds, ax
+    mov es, bx
+    xor si, si
+    xor di, di
+    mov cx, FS2_SPAN
+    repe cmpsb
+    pop ds                          ; POP preserves flags (ZF from cmpsb)
+    jne .fs2_cmp_bad
+    clc
+    ret
+.fs2_cmp_bad:
+    stc
+    ret
+
+.fs2_h:     dw 0
+.fs2_seg:   dw 0
+.fs2_c:     dw 0, 0, 0
+.fs2_fname: db 'LAUNCHER.BIN', 0
+.fs2_msg_pass: db 'FAT12 SEEK TEST: PASS', 0
+.fs2_msg_fail: db 'FAT12 SEEK TEST: FAIL', 0
+%endif
+
+; ============================================================================
 ; fat12_read - Read data from file
 ; ============================================================================
 ; Input: AX = file handle
@@ -13574,16 +13727,89 @@ fat12_read:
     pop bx
     ret
 .have_bytes:
-    ; For simplicity, only support reading from start of file (position = 0)
-    ; Multi-cluster reads ARE supported by following FAT chain
-    cmp bp, 0
-    jne .not_supported
-
     ; Store variables in temp space (using reserved bytes in file handle)
     mov [si + 12], ax               ; Store starting cluster
     mov [si + 14], cx               ; Store bytes to read
     xor ax, ax
     mov [si + 16], ax               ; Store bytes read = 0
+
+    ; Seek: walk the FAT chain to the cluster covering the current file
+    ; position, so successive reads (open, read N, read again) continue
+    ; where the last one stopped — mirroring fat16_read. This driver
+    ; treats clusters as 512 bytes throughout (1 sector/cluster on the
+    ; 1.44MB floppy), so position >> 9 = whole clusters to skip and
+    ; position & 511 = byte offset within that cluster.
+    mov dx, bp
+    SHR_N dx, 9                     ; DX = whole clusters to skip
+.seek_walk:
+    test dx, dx
+    jz .seek_done
+    mov ax, [si + 12]               ; Current cluster
+    call get_next_cluster           ; Preserves DX; CF=1 at end of chain
+    jc .read_error_multi            ; Chain shorter than position: corrupt
+    mov [si + 12], ax
+    dec dx
+    jmp .seek_walk
+.seek_done:
+    mov ax, bp
+    and ax, 511                     ; AX = offset within current cluster
+    jz .cluster_loop                ; Aligned: normal loop handles it
+    mov [cs:.head_off], ax
+
+    ; Unaligned head: bounce-read the cluster's sector and copy from
+    ; the intra-cluster offset up to the end of the sector (or fewer,
+    ; if the request ends inside this sector).
+    mov ax, [si + 12]               ; Current cluster
+    sub ax, 2
+    xor bh, bh
+    mov bl, [sectors_per_cluster]
+    mul bx
+    add ax, [data_area_start]       ; AX = sector number
+
+    push es
+    push di
+    push si
+    mov bx, 0x1000
+    mov es, bx                      ; ES = 0x1000 (for INT 13h read)
+    mov bx, bpb_buffer              ; BX = buffer offset
+    call floppy_read_sector         ; Read with retry (preserves AX)
+    pop si
+    pop di
+    pop es
+    jc .read_error_multi
+
+    mov cx, 512
+    sub cx, [cs:.head_off]          ; CX = bytes from offset to sector end
+    cmp cx, [si + 14]
+    jbe .head_len_ok
+    mov cx, [si + 14]               ; Request ends inside this sector
+.head_len_ok:
+    ; Copy CX bytes from bpb_buffer+head_off to ES:DI
+    push si
+    push ds
+    mov ax, cx                      ; Save bytes to copy
+    mov si, bpb_buffer
+    add si, [cs:.head_off]          ; Source = buffer + intra-sector offset
+    mov bx, 0x1000
+    mov ds, bx
+    shr cx, 1                      ; CF = odd-byte flag
+    rep movsw                       ; Word copy (MOVS keeps CF)
+    jnc .head_copy_done
+    movsb                           ; Odd trailing byte
+.head_copy_done:
+    pop ds
+    pop si
+    mov cx, ax                      ; CX = bytes copied (DI already advanced)
+
+    ; Update counters
+    sub [si + 14], cx               ; Bytes remaining
+    add [si + 16], cx               ; Total bytes read
+
+    ; Advance to the next cluster for the main loop
+    mov ax, [si + 12]
+    call get_next_cluster
+    jc .read_complete_multi         ; End of chain: return what we have
+    mov [si + 12], ax
 
 .cluster_loop:
     ; Check if we've read all requested bytes
@@ -13782,17 +14008,6 @@ fat12_read:
     pop bx
     ret
 
-.not_supported:
-    mov ax, FS_ERR_READ_ERROR
-    stc
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
 .invalid_handle:
     mov ax, FS_ERR_INVALID_HANDLE
     stc
@@ -13809,6 +14024,7 @@ fat12_read:
 .run_first: dw 0
 .run_cont:  dw 0
 .run_eoc:   db 0
+.head_off:  dw 0                    ; Intra-cluster offset of an unaligned read
 
 ; fat12_close - Close a file
 ; Input: AX = file handle
