@@ -48,13 +48,18 @@ BSP tree - then the view redraws as you move.
 
 ## Scope
 
-This is v1: the walls, floors and ceilings are **flat-shaded** (by distance,
-sector light and wall orientation), with sky filling open areas. It renders
-one level (E1M1) and has simple wall collision. **Texture mapping, things
-(monsters/items), doors and combat are not implemented** - Duum is a proof
-that the platform can carry a real engine, not a complete port. The renderer
-already produces per-column spans, which is the right shape to add textures
-later.
+The **walls are texture-mapped** from the WAD (real Doom wall textures,
+composed from patches, perspective-correct, distance/light/orientation
+shaded). Floors and ceilings are flat-shaded, with sky filling open areas.
+It renders one level (E1M1) and has simple wall collision. **Flat (floor/
+ceiling) texturing, things (monsters/items), doors and combat are not
+implemented** - Duum is a proof that the platform can carry a real engine,
+not a complete port.
+
+The first frame takes several seconds while the textures for what you can see
+are composed and cached; after that, moving redraws faster. The textured
+column inner loop runs in C (`cv.wall_col`) so the per-pixel work does not go
+through the interpreter.
 
 See **[Python apps](PYTHON.MD)** for the app model and **[the `uno` API](PYAPI.MD)**
 for what Python code can reach.

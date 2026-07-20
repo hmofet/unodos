@@ -104,6 +104,39 @@ static mp_obj_t cv_text(size_t n, const mp_obj_t *a) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_text_obj, 5, 5, cv_text);
 
+/* Textured wall column: the whole per-pixel inner loop in C so Python calls it
+ * once per screen column, not once per pixel.  Samples an 8-bit texture (column-
+ * major grid[texcol*th + v]), shades by a fixed-point factor (sh/256), looks up
+ * the raw palette (768 bytes rgb) and writes pixels.  v0/dv are .8 fixed-point
+ * texel coords.  Args: x, y0, count, grid, tw, th, texcol, v0fp, dvfp, pal, sh */
+static mp_obj_t cv_wall_col(size_t n, const mp_obj_t *a) {
+    (void)n;
+    int x = gRX + mp_obj_get_int(a[1]);
+    int y0 = gRY + mp_obj_get_int(a[2]);
+    int count = mp_obj_get_int(a[3]);
+    mp_buffer_info_t g, p;
+    mp_get_buffer_raise(a[4], &g, MP_BUFFER_READ);
+    int tw = mp_obj_get_int(a[5]), th = mp_obj_get_int(a[6]);
+    int texcol = mp_obj_get_int(a[7]);
+    long v = (long)mp_obj_get_int(a[8]), dv = (long)mp_obj_get_int(a[9]);
+    mp_get_buffer_raise(a[10], &p, MP_BUFFER_READ);
+    int sh = mp_obj_get_int(a[11]);
+    const unsigned char *grid = (const unsigned char *)g.buf;
+    const unsigned char *pal = (const unsigned char *)p.buf;
+    if (tw <= 0 || th <= 0) return mp_const_none;
+    texcol %= tw; if (texcol < 0) texcol += tw;
+    int colbase = texcol * th;
+    for (int i = 0; i < count; i++) {
+        int vv = (int)((v >> 8) % th); if (vv < 0) vv += th;
+        const unsigned char *c = pal + grid[colbase + vv] * 3;
+        unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8, bb = (c[2] * sh) >> 8;
+        fb_pixel(x, y0 + i, 0xFF000000u | (bb << 16) | (gg << 8) | rr);
+        v += dv;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_wall_col_obj, 12, 12, cv_wall_col);
+
 static mp_obj_t cv_width(mp_obj_t self)  { (void)self; return mp_obj_new_int(gRW); }
 static MP_DEFINE_CONST_FUN_OBJ_1(cv_width_obj, cv_width);
 static mp_obj_t cv_height(mp_obj_t self) { (void)self; return mp_obj_new_int(gRH); }
@@ -117,6 +150,7 @@ static const mp_rom_map_elem_t canvas_locals[] = {
     { MP_ROM_QSTR(MP_QSTR_hline),     MP_ROM_PTR(&cv_hline_obj) },
     { MP_ROM_QSTR(MP_QSTR_vline),     MP_ROM_PTR(&cv_vline_obj) },
     { MP_ROM_QSTR(MP_QSTR_text),      MP_ROM_PTR(&cv_text_obj) },
+    { MP_ROM_QSTR(MP_QSTR_wall_col),  MP_ROM_PTR(&cv_wall_col_obj) },
     { MP_ROM_QSTR(MP_QSTR_width),     MP_ROM_PTR(&cv_width_obj) },
     { MP_ROM_QSTR(MP_QSTR_height),    MP_ROM_PTR(&cv_height_obj) },
 };

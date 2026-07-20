@@ -59,6 +59,15 @@ class Canvas:
     def vline(self, x: int, y: int, h: int, color: int) -> None: ...
     def text(self, x: int, y: int, s: str, color: int) -> None: ...
 
+    def wall_col(self, x: int, y0: int, count: int, grid, tw: int, th: int,
+                 texcol: int, v0_fp: int, dv_fp: int, pal, sh: int) -> None:
+        """Fast textured vertical column (the whole per-pixel loop in C): draw
+        `count` pixels down from (x, y0) sampling an 8-bit texture
+        `grid[texcol*th + v]` with .8 fixed-point texel coords v0_fp/dv_fp,
+        shaded by sh/256, through the 768-byte RGB palette `pal`.  Built for
+        Duum's renderer; grid and pal are bytes-like."""
+        ...
+
 
 class App:
     """Base class for a UnoDOS Python app.  Subclass it, define the callbacks
