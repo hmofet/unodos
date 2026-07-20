@@ -117,7 +117,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unoui_text_init),   KX(unoui_text_set),   KX(unoui_widget_fill),
     KX(unoui_widget_rect), KX(unoui_content_origin),
     /* framebuffer + fonts */
-    KX(fb_fill_rect), KX(fb_hline), KX(fb_vline), KX(fb_text),
+    KX(fb_fill_rect), KX(fb_hline), KX(fb_vline), KX(fb_blit), KX(fb_text),
     KX(fb_text_w),    KX(fb_text_h), KX(fb_width), KX(fb_height),
     KX(uno_font_draw_styled), KX(uno_font_text_w_styled),
     KX(uno_font_height_px),   KX(uno_font_baseline_px), KX(uno_font_active),
