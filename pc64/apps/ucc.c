@@ -113,8 +113,16 @@ void ucc_err_tok(Cc *cc, Tok *t, const char *m1, const char *m2)
  * LEXER (+ the directive layer: the two live in one loop because directives
  * are line-oriented while tokens are not)
  * ========================================================================== */
+/* a macro is visible to tokens lexed in [defseq, undefseq); redefinition
+ * simply prepends a fresh entry with a later window */
 typedef struct Macro Macro;
-struct Macro { const char *name; int len; Tok *body; u8 busy; Macro *next; };
+struct Macro {
+    const char *name; int len;
+    Tok *body;
+    int  defseq, undefseq;
+    u8   busy;
+    Macro *next;
+};
 
 typedef struct Lx {
     Cc *cc;
@@ -222,6 +230,7 @@ static Tok *tok_new(Cc *cc, int kind, Lx *L, int line, int col)
     memset(t, 0, sizeof *t);
     t->kind = (u8)kind; t->file = L ? L->file : 0;
     t->line = line; t->col = col;
+    t->seq = ++cc->lexseq;
     return t;
 }
 
@@ -347,11 +356,15 @@ static Tok *lx_one(Lx *L, int stop_nl)
 }
 
 /* ---- directives + include splicing ---------------------------------------- */
-static Macro *macro_find(Cc *cc, const char *p, int len)
+/* the macro visible to a token lexed at sequence position seq (entries are
+ * prepended, so the first window hit is the latest matching definition) */
+static Macro *macro_find(Cc *cc, const char *p, int len, int seq)
 {
     Macro *m;
     for (m = cc->macros; m; m = m->next)
-        if (m->len == len && !strncmp(m->name, p, (unsigned long)len)) return m;
+        if (m->len == len && !strncmp(m->name, p, (unsigned long)len) &&
+            seq >= m->defseq && seq < m->undefseq)
+            return m;
     return 0;
 }
 
@@ -412,8 +425,10 @@ static Tok *directive(Cc *cc, Lx *L, UccIncRead inc, void *incctx, int depth,
             ucc_err_tok(cc, id, "function-like macros are not in UnoC", 0);
         m = ucc_alloc(cc, sizeof *m);
         m->name = id->p; m->len = id->len; m->busy = 0; m->body = 0;
+        m->undefseq = 0x7FFFFFFF;
         bt = &m->body;
         while ((b = lx_one(L, 1)) != 0) { *bt = b; bt = &b->next; }
+        m->defseq = cc->lexseq + 1;        /* visible from the next token on */
         m->next = cc->macros; cc->macros = m;
         return 0;
     }
@@ -421,8 +436,8 @@ static Tok *directive(Cc *cc, Lx *L, UccIncRead inc, void *incctx, int depth,
         Tok *id = lx_one(L, 1);
         Macro *m;
         if (id && id->kind == TK_IDENT) {
-            m = macro_find(cc, id->p, id->len);
-            if (m) m->len = -1;            /* dead entry */
+            m = macro_find(cc, id->p, id->len, cc->lexseq + 1);
+            if (m) m->undefseq = cc->lexseq + 1;
         }
         while (lx_one(L, 1)) {}
         return 0;
@@ -432,7 +447,7 @@ static Tok *directive(Cc *cc, Lx *L, UccIncRead inc, void *incctx, int depth,
         int def;
         if (!id || id->kind != TK_IDENT)
             ucc_err_tok(cc, id ? id : d, "#ifdef expects a name", 0);
-        def = macro_find(cc, id->p, id->len) != 0;
+        def = macro_find(cc, id->p, id->len, cc->lexseq + 1) != 0;
         if (!strcmp(dn, "ifndef")) def = !def;
         while (lx_one(L, 1)) {}
         if (def) { *skip = 0; *sksat = 1; }     /* branch taken */
@@ -495,27 +510,29 @@ static Tok *tok_dup(Cc *cc, Tok *t, Tok *site)
     Tok *n = ucc_alloc(cc, sizeof *n);
     *n = *t;
     n->next = 0;
-    /* report diagnostics at the use site */
+    /* report diagnostics (and any later rescans) at the use site */
     n->file = site->file; n->line = site->line; n->col = site->col;
+    n->seq = site->seq;
     return n;
 }
 
+/* splice a macro body at a use site; nested names rescan against the table
+ * as visible AT THE USE SITE (site->seq), per cpp rescanning semantics */
 static Tok *expand_list(Cc *cc, Tok *in, Tok *site, int depth)
 {
     Tok *head = 0, **tail = &head, *t;
     if (depth > 32) ucc_fatal(cc, "macro expansion too deep", 0);
     for (t = in; t; t = t->next) {
-        Macro *m = (t->kind == TK_IDENT) ? macro_find(cc, t->p, t->len) : 0;
-        if (m && !m->busy && m->len >= 0) {
+        Macro *m = (t->kind == TK_IDENT)
+                 ? macro_find(cc, t->p, t->len, site->seq) : 0;
+        if (m && !m->busy) {
             Tok *ex;
             m->busy = 1;
-            ex = expand_list(cc, m->body, site ? site : t, depth + 1);
+            ex = expand_list(cc, m->body, site, depth + 1);
             m->busy = 0;
             while (ex) { Tok *nx = ex->next; ex->next = 0; *tail = ex; tail = &ex->next; ex = nx; }
         } else {
-            Tok *cp = site ? tok_dup(cc, t, site) : t;
-            Tok *sav = cp->next; (void)sav;
-            cp->next = 0;
+            Tok *cp = tok_dup(cc, t, site);
             *tail = cp; tail = &cp->next;
         }
     }
@@ -528,9 +545,10 @@ static Tok *expand_stream(Cc *cc, Tok *in)
 {
     Tok *head = 0, **tail = &head, *t, *nx;
     for (t = in; t; t = nx) {
-        Macro *m = (t->kind == TK_IDENT) ? macro_find(cc, t->p, t->len) : 0;
+        Macro *m = (t->kind == TK_IDENT)
+                 ? macro_find(cc, t->p, t->len, t->seq) : 0;
         nx = t->next;
-        if (m && !m->busy && m->len >= 0) {
+        if (m && !m->busy) {
             Tok *ex;
             m->busy = 1;
             ex = expand_list(cc, m->body, t, 1);
@@ -1066,9 +1084,12 @@ static Type *func_params(Cc *cc, Type *ret)
         ty = declarator(cc, bt, &name);
         if (ty->kind == TY_ARR) ty = ty_ptr(cc, ty->base);     /* decay */
         if (ty->kind == TY_FUNC) ty = ty_ptr(cc, ty);
-        if (ty->kind == TY_STRUCT || ty->kind == TY_UNION)
+        if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+            ty->size != 1 && ty->size != 2 && ty->size != 4 && ty->size != 8)
             ucc_err_tok(cc, name ? name : cc->tok,
                         "pass structs by pointer in UnoC", 0);
+            /* 1/2/4/8-byte structs ride in a register per the MS x64 ABI
+             * (Point is the one that matters - GetMouse/click take it) */
         p = ucc_alloc(cc, sizeof *p);
         p->ty = ty; p->name = 0; p->next = 0;
         if (name) {
@@ -1185,7 +1206,9 @@ static Node *funcall(Cc *cc, Node *fn, Tok *t)
         for (;;) {
             Node *a = assign(cc);
             decay(cc, &a);
-            if (a->ty->kind == TY_STRUCT || a->ty->kind == TY_UNION)
+            if ((a->ty->kind == TY_STRUCT || a->ty->kind == TY_UNION) &&
+                a->ty->size != 1 && a->ty->size != 2 &&
+                a->ty->size != 4 && a->ty->size != 8)
                 ucc_err_tok(cc, a->tok, "pass structs by pointer in UnoC", 0);
             *at = a; at = &a->next;
             nargs++;
@@ -1814,10 +1837,11 @@ static Node *local_decl(Cc *cc)
             continue;
         }
         if (storage & ST_STATIC) {
-            /* a function-scope static is a uniquely-named global */
+            /* a function-scope static is a global that only this scope sees
+             * (globals are placed by Sym identity, never looked up by name,
+             * so no renaming is needed) */
             Sym *s = sym_new(cc, name, ty, SYM_GLOBAL);
             s->is_static = 1;
-            s->name = uniq_name(cc, s->name);
             if (eat_punct(cc, P_ASSIGN)) global_var(cc, s, 1);
             else                          global_var(cc, s, 0);
             if (at_punct(cc, P_SEMI)) break;
