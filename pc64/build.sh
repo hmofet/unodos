@@ -42,13 +42,19 @@ if [ "$1" != "legacy" ]; then
     # the pc64 host layer) - battery %/lid via _BST/_LID on real laptops.
     # Read-only, NO_ACPI_MODE, every EC wait bounded -> inert/safe on QEMU.
     UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI \
-         -I../unoui -I../unosound -I../unoacpi -I../unoacpi/uacpi/include"
+         -I../unoui -I../unosound -I../unomedia -I../unoacpi -I../unoacpi/uacpi/include"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media dec_wav dec_midi dec_mp3 dec_aac pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+    done
+    # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
+    # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
+    # a second private instance of the library, so the two never collide.
+    for u in unomedia um_audio um_wav um_midi um_mp3 um_aac; do
+        "$CC" $UCF -c -o "build/uml_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/uml_$u.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
     # vendored uACPI interpreter (third-party -> -w).
@@ -189,11 +195,12 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_PHOTOS:-1}" != "0" ]; then
         echo "[3d] building PHOTOS.UNO (the image viewer + unomedia)..."
         POBJ="build/apps/photos.o"
-        "$CC" $UCF -I../unomedia -DUNO_APP_SYM=uno_app_main \
+        "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
               -c -o "build/apps/photos.o" "apps/photos.c"
-        for s in ../unomedia/*.c; do
-            b=$(basename "$s" .c)
-            "$CC" $UCF -I../unomedia -c -o "build/apps/um_$b.o" "$s"
+        # core + the IMAGE half only (the AUDIO half links into the kernel)
+        for b in unomedia um_image um_inflate um_png um_jpg um_gif um_bmp \
+                 um_ico um_tga um_pnm um_qoi um_stub; do
+            "$CC" $UCF -c -o "build/apps/um_$b.o" "../unomedia/$b.c"
             POBJ="$POBJ build/apps/um_$b.o"
         done
         "$NM" $POBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
