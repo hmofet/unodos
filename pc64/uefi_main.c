@@ -235,12 +235,10 @@ static void splash_draw(int done)
     /* backdrop: deep blue with a lighter upper band */
     fb_fill_rect(0, 0, W, H, FB_RGB(10, 14, 34));
     fb_fill_rect(0, 0, W, (H / 2) - 58, FB_RGB(16, 22, 54));
-    /* 4-square emblem above the wordmark (matches the Start button motif) */
-    { int u = 10, ex = cx - u - 1, ey = H / 2 - 98;
-      fb_fill_rect(ex, ey, u, u, FB_RGB(230,70,70));
-      fb_fill_rect(ex + u + 2, ey, u, u, FB_RGB(70,200,90));
-      fb_fill_rect(ex, ey + u + 2, u, u, FB_RGB(70,120,230));
-      fb_fill_rect(ex + u + 2, ey + u + 2, u, u, FB_RGB(240,205,60)); }
+    /* the Uno-tile mark above the wordmark (matches the Start button) */
+    { void pc64_start_logo(int x, int y, int size, fb_px fg);   /* pc64_icons */
+      int u = 26;
+      pc64_start_logo(cx - u / 2, H / 2 - 102, u, FB_RGB(238, 241, 250)); }
     /* wordmark + subtitle */
     { const char *t = "UnoDOS"; int tw = fb_text_w(t) * sc;
       fb_big_text(cx - tw / 2, H / 2 - 46, t, FB_RGB(255,255,255), -1, sc); }

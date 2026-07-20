@@ -2,11 +2,13 @@
 ; UnoDOS/SNES apps (milestone 2): Notepad (proc 2) + Files (proc 7), backed
 ; by the USV1 SRAM mini-FS (sram.inc).
 ;
-; Notepad is an append-style editor: soft-keyboard / pad keys append to a 2 KB
-; buffer, Backspace deletes the last char, Enter inserts a newline, F1 saves
-; under the current name to SRAM. (The Genesis port's full caret/line
-; navigation is a documented M2 simplification - the storage round-trip is
-; what M2 proves.) Files lists the SRAM directory, opens a file into Notepad
+; Notepad is a caret editor: soft-keyboard / pad keys INSERT at the caret in a
+; 2 KB buffer, Backspace deletes the char before the caret, Enter inserts a
+; newline, arrows ($4C-$4F: up/down/right/left) move the caret (up/down move by
+; logical CR-delimited line, keeping the column, clamped to the line end), and
+; F1 saves under the current name to SRAM. The caret renders as the inverted
+; cell under it (an inverted space at end-of-text / on a newline).
+; Files lists the SRAM directory, opens a file into Notepad
 ; (Enter), and deletes (X/Backspace); arrows / pad move the selection.
 ; ============================================================================
 
@@ -31,6 +33,7 @@
 @done:  rep #$20
 .a16
         sty v_np_len
+        sty v_np_car            ; caret at end of the seeded text
         lda #.loword(str_demo_name)
         sta P0
         jsr np_setname
@@ -99,11 +102,20 @@
         stz LC1                 ; source index
 @ch:    lda LC0
         cmp S5
-        bcs @status
-        lda LC1
+        bcc :+
+        jmp @status             ; out of visible rows (bcs: out of branch range)
+:       lda LC1
         cmp v_np_len
         bcs @caret
-        ldx LC1
+        ; the char under the caret draws inverted (S7 = attr for this char)
+        lda #ATTR_NORM
+        sta S7
+        lda LC1
+        cmp v_np_car
+        bne :+
+        lda #ATTR_INV
+        sta S7
+:       ldx LC1
         sep #$20
 .a8
         lda v_npbuf,x
@@ -117,7 +129,7 @@
         sta A0
         lda S6
         sta A1
-        lda #ATTR_NORM
+        lda S7
         sta A4
         jsr draw_char
         inc A6                  ; cx++
@@ -133,13 +145,29 @@
         inc LC0
 @next:  inc LC1
         bra @ch
-@nl:    lda S3
+@nl:    ; caret on a newline: show an inverted space before wrapping
+        lda S7
+        cmp #ATTR_INV
+        bne @nl2
+        lda A6
+        sta A0
+        lda S6
+        sta A1
+        lda #32
+        sta A2
+        lda #ATTR_INV
+        sta A4
+        jsr draw_char
+@nl2:   lda S3
         sta A6
         inc S6
         inc LC0
         inc LC1
-        bra @ch
-@caret: ; caret block at the current position
+        jmp @ch
+@caret: ; caret block after end-of-text (only when the caret sits there)
+        lda v_np_car
+        cmp v_np_len
+        bcc @status
         lda LC0
         cmp S5
         bcs @status
@@ -227,6 +255,14 @@
         lda S1
         cmp #$50                ; F1 = save
         beq @save
+        cmp #$4F                ; left arrow
+        beq @left
+        cmp #$4E                ; right arrow
+        beq @right
+        cmp #$4C                ; up arrow
+        beq @up
+        cmp #$4D                ; down arrow
+        beq @down
         lda S0
         cmp #8                  ; Backspace
         beq @bs
@@ -236,30 +272,179 @@
         bcc @done               ; control char: ignore
         cmp #127
         bcs @done
-@ins:   lda v_np_len
-        cmp #(NBUF-1)
-        bcs @done
-        ldx v_np_len
-        sep #$20
-.a8
-        lda S0
-        sta v_npbuf,x
-        rep #$20
-.a16
-        inc v_np_len
-        lda #1
-        sta v_np_dirty
-        bra @redraw
-@bs:    lda v_np_len
+        bra @ins
+@left:  lda v_np_car
         beq @done
-        dec v_np_len
-        lda #1
-        sta v_np_dirty
+        dec v_np_car
+        bra @redraw
+@right: lda v_np_car
+        cmp v_np_len
+        bcs @done
+        inc v_np_car
+        bra @redraw
+@up:    jsr np_caret_up
+        bra @redraw
+@down:  jsr np_caret_down
         bra @redraw
 @save:  jsr np_save
 @redraw:
         jsr redraw_topmost
 @done:  rts
+@ins:   lda v_np_len
+        cmp #(NBUF-1)
+        bcs @done
+        ; shift buf[car..len-1] up one byte (copy from the end downward)
+        ldx v_np_len
+        sep #$20
+.a8
+@shr:   cpx v_np_car
+        beq @stow
+        lda v_npbuf-1,x
+        sta v_npbuf,x
+        dex
+        bra @shr
+@stow:  lda S0
+        sta v_npbuf,x           ; X = v_np_car
+        rep #$20
+.a16
+        inc v_np_len
+        inc v_np_car
+        lda #1
+        sta v_np_dirty
+        bra @redraw
+@bs:    lda v_np_car
+        beq @done               ; caret at start: nothing before it
+        ; shift buf[car..len-1] down one byte
+        ldx v_np_car
+        sep #$20
+.a8
+@shl:   cpx v_np_len
+        bcs @shld
+        lda v_npbuf,x
+        sta v_npbuf-1,x
+        inx
+        bra @shl
+@shld:  rep #$20
+.a16
+        dec v_np_len
+        dec v_np_car
+        lda #1
+        sta v_np_dirty
+        bra @redraw
+.endproc
+
+; np_linestart - S2 = buffer index of the first char of the caret's
+; CR-delimited logical line. Clobbers A/X.
+.proc np_linestart
+.a16
+.i16
+        ldx v_np_car
+@sc:    cpx #0
+        beq @done
+        sep #$20
+.a8
+        lda v_npbuf-1,x
+        rep #$20
+.a16
+        and #$00FF
+        cmp #13
+        beq @done
+        dex
+        bra @sc
+@done:  stx S2
+        rts
+.endproc
+
+; np_caret_up - move the caret to the previous logical line, same column,
+; clamped to that line's end. No-op on the first line. Clobbers A/X/S2-S4.
+.proc np_caret_up
+.a16
+.i16
+        jsr np_linestart        ; S2 = current line start
+        lda S2
+        beq @out                ; already on the first line
+        lda v_np_car
+        sec
+        sbc S2
+        sta S3                  ; column
+        ; previous line start: scan back from the CR at S2-1
+        ldx S2
+        dex                     ; X = index of the CR ending the prev line
+@psc:   cpx #0
+        beq @pf
+        sep #$20
+.a8
+        lda v_npbuf-1,x
+        rep #$20
+.a16
+        and #$00FF
+        cmp #13
+        beq @pf
+        dex
+        bra @psc
+@pf:    ; target = min(prevstart + col, prev line end = S2-1)
+        txa
+        clc
+        adc S3
+        sta S4
+        lda S2
+        dec a
+        cmp S4
+        bcs :+
+        sta S4
+:       lda S4
+        sta v_np_car
+@out:   rts
+.endproc
+
+; np_caret_down - move the caret to the next logical line, same column,
+; clamped to that line's end. No-op on the last line. Clobbers A/X/S2-S5.
+.proc np_caret_down
+.a16
+.i16
+        jsr np_linestart        ; S2 = current line start
+        lda v_np_car
+        sec
+        sbc S2
+        sta S3                  ; column
+        ; find the CR ending the current line
+        ldx v_np_car
+@fsc:   cpx v_np_len
+        bcs @out                ; no CR after the caret: last line
+        sep #$20
+.a8
+        lda v_npbuf,x
+        rep #$20
+.a16
+        and #$00FF
+        cmp #13
+        beq @cr
+        inx
+        bra @fsc
+@cr:    inx                     ; X = next line start
+        stx S4
+        ; next line end: CR or end-of-text
+@esc:   cpx v_np_len
+        bcs @eok
+        sep #$20
+.a8
+        lda v_npbuf,x
+        rep #$20
+.a16
+        and #$00FF
+        cmp #13
+        beq @eok
+        inx
+        bra @esc
+@eok:   stx S5                  ; next line end
+        lda S4
+        clc
+        adc S3
+        cmp S5
+        bcc @set
+        lda S5
+@set:   sta v_np_car
+@out:   rts
 .endproc
 
 ; ---- Files (proc 7) ----
@@ -406,6 +591,7 @@
         lda v_files_sel
         jsr sram_read
         sta v_np_len
+        sta v_np_car            ; caret at end of the opened file
         stz v_np_dirty
         lda #2
         jsr launch_app          ; Notepad

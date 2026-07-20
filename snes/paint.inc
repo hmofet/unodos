@@ -10,10 +10,12 @@
 ; (the per-frame DMA budget, HANDOFF SS2/SS7). Painting is cursor-driven:
 ; move the desktop pointer over the canvas and hold the button.
 ;
-; DEVIATION from the Genesis editor: pencil only (no line/rect/oval/fill/
-; spray), a fixed 12-colour pen palette (palette line 3), and no tape I/O -
+; DEVIATION from the Genesis editor: pencil + eraser only (no line/rect/oval/
+; fill/spray), a 12-colour pen palette (palette line 3), and no tape I/O -
 ; the unique-tile CANVAS is what this milestone proves. Flagged in HANDOFF.
-;   [ / ]  previous / next pen colour     n  clear
+;   [ / ]  previous / next pen colour     c  cycle pen (wraps 4..15)
+;   e      toggle eraser (paints PT_BG)   n  clear
+; Picking a pen ([ / ] / c) drops back out of eraser mode.
 ; ============================================================================
 
 PT_W  = 160
@@ -309,6 +311,7 @@ PT_BG = 3                   ; background pen = palette-3 white
         sta v_pt_x
         lda #(PT_H/2)
         sta v_pt_y
+        stz v_pt_erase
         stz v_pt_qh
         stz v_pt_qt
         ; clear in-queue flags
@@ -350,8 +353,20 @@ PT_BG = 3                   ; background pen = palette-3 white
         rts
 .endproc
 
+; pt_pen_eff - A = the effective draw colour: PT_BG in eraser mode, else the pen
+.proc pt_pen_eff
+.a16
+.i16
+        lda v_pt_erase
+        bne @er
+        lda v_pt_pen
+        rts
+@er:    lda #PT_BG
+        rts
+.endproc
+
 ; paint_tick - main loop: when Paint is topmost and the pointer is over the
-; canvas with the button down, paint at that pixel.
+; canvas with the button down, paint at that pixel (pen or eraser colour).
 .proc paint_tick
 .a16
 .i16
@@ -395,7 +410,7 @@ PT_BG = 3                   ; background pen = palette-3 white
         sec
         sbc S1
         sta A1
-        lda v_pt_pen
+        jsr pt_pen_eff
         sta A2
         jsr pt_setpx
         ; thicken: also the pixel to the right + below (a 2x2 nib)
@@ -460,6 +475,26 @@ PT_BG = 3                   ; background pen = palette-3 white
         sta A1
         lda #ATTR_NORM
         sta A4
+        jsr draw_str
+        ; eraser indicator ("ERASE" inverted when on, blanked when off)
+        lda v_pt_erase
+        bne @eron
+        lda #.loword(str_pt_noer)
+        sta P0
+        lda #ATTR_NORM
+        bra @erput
+@eron:  lda #.loword(str_pt_er)
+        sta P0
+        lda #ATTR_INV
+@erput: sta A4
+        ldx S2
+        lda v_wintab+WX,x
+        clc
+        adc #15
+        sta A0
+        lda v_wintab+WY,x
+        inc a
+        sta A1
         jsr draw_str
         ; canvas cells: T_PTCAN + ty*PT_TW + tx on palette line 3
         stz LC1                 ; ty
@@ -531,20 +566,38 @@ PT_BG = 3                   ; background pen = palette-3 white
         beq @prev
         cmp #']'
         beq @next
+        cmp #'c'
+        beq @cyc
+        cmp #'e'
+        beq @ers
         cmp #'n'
         beq @clear
         rts
-@prev:  lda v_pt_pen
+@prev:  stz v_pt_erase          ; picking a pen leaves eraser mode
+        lda v_pt_pen
         cmp #5
         bcc @rd
         dec a
         sta v_pt_pen
         bra @rd
-@next:  lda v_pt_pen
+@next:  stz v_pt_erase
+        lda v_pt_pen
         cmp #15
         bcs @rd
         inc a
         sta v_pt_pen
+        bra @rd
+@cyc:   stz v_pt_erase          ; cycle the CGRAM palette-3 pen row, wrapping
+        lda v_pt_pen
+        inc a
+        cmp #16
+        bcc @cset
+        lda #4
+@cset:  sta v_pt_pen
+        bra @rd
+@ers:   lda v_pt_erase          ; toggle eraser
+        eor #1
+        sta v_pt_erase
         bra @rd
 @clear: jsr pt_clear
 @rd:    jsr redraw_topmost
@@ -556,4 +609,6 @@ PT_BG = 3                   ; background pen = palette-3 white
 str_t_paint:  .byte "Paint", 0
 name_paint:   .byte "Paint", 0
 str_pt_title: .byte "Paint  pen", 0
-str_pt_foot:  .byte "[ ] pen   n clear", 0
+str_pt_foot:  .byte "[ ]c pen e ers n clr", 0
+str_pt_er:    .byte "ERASE", 0
+str_pt_noer:  .byte "     ", 0

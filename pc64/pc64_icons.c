@@ -285,30 +285,38 @@ void pc64_icon_art(int icon, unoui_rect r, const char *label, int flags)
 }
 
 /* ---- the UnoDOS brand mark ----------------------------------------------- *
- * "The One": a ring broken open at the top, with the numeral 1 dropped through
- * the gap so it reads as both a power glyph and the number one. Drawn from
- * geometry (no bitmap), one colour, so it scales from a 12 px taskbar chip to
- * a large About panel and stays crisp on every theme depth. */
+ * "The Uno key": a rounded keycap tile with the numeral 1 punched clear
+ * through it - uno, on the key you press first. The punch-through makes it
+ * two-tone for free: on the accent Start button it reads as a white key with
+ * an accent-blue 1; on the splash, a light key with a navy 1. Drawn from
+ * geometry (no bitmap), so it scales from a 12 px taskbar chip to a large
+ * splash mark and stays crisp on every theme depth. */
 void pc64_start_logo(int x, int y, int size, fb_px fg)
 {
-    int cx2 = 2 * x + size - 1, cy2 = 2 * y + size - 1;   /* centre, doubled */
-    int rad = size / 2, th = size / 5; if (th < 2) th = 2;
-    int ro2 = (2 * rad) * (2 * rad), ri = rad - th, ri2 = (2 * ri) * (2 * ri);
-    int gap = rad;                          /* full top-quarter opening */
+    int E = size - 1;                       /* half-extent, doubled coords    */
+    int r = size / 5; if (r < 2) r = 2;     /* corner radius, px              */
+    int R = 2 * r, edge = E - R;            /* corner-circle bound, doubled   */
+    int w1 = size / 6; if (w1 < 2) w1 = 2;  /* the numeral's stroke width     */
+    int ty = y + size / 5, by = y + size - size / 5;  /* stem top / bottom    */
+    int sx = x + (size - w1) / 2 + (size >= 20 ? 1 : 0);  /* stem left        */
+    int fl = size / 4;                      /* flag length (down-left)        */
     int px, py;
-    int bw = th, bx0 = (cx2 - (2 * bw - 1)) / 2;          /* the "1" stem */
-    /* ring with a wedge cut from the top: skip points whose x is within the
-     * gap while above centre */
     for (py = y; py < y + size; py++)
         for (px = x; px < x + size; px++) {
-            int dx = 2 * px - cx2, dy = 2 * py - cy2;
-            int d = dx * dx + dy * dy;
-            if (d > ro2 || d < ri2) continue;
-            if (dy < 0 && dx > -gap && dx < gap) continue;    /* the opening */
+            int dx = 2 * (px - x) - E, dy = 2 * (py - y) - E;
+            int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+            int in1;
+            if (ax > edge && ay > edge) {   /* rounded corner */
+                int cxo = ax - edge, cyo = ay - edge;
+                if (cxo * cxo + cyo * cyo > R * R) continue;
+            }
+            /* the punched numeral 1: stem + a diagonal flag off its top */
+            in1 = (px >= sx && px < sx + w1 && py >= ty && py < by);
+            if (!in1 && px < sx && px >= sx - fl) {
+                int d = sx - px;            /* 1..fl, leftward */
+                if (py >= ty + d - 1 && py < ty + d - 1 + w1) in1 = 1;
+            }
+            if (in1) continue;
             fb_pixel(px, py, fg);
         }
-    /* the numeral 1: a stem falling through the opening to the ring's centre
-     * line, with a short serif flag at its top-left */
-    fb_fill_rect(bx0, y, bw, size / 2 + th, fg);
-    fb_fill_rect(bx0 - bw / 2 - 1, y + 1, bw / 2 + 1, th - 1 > 1 ? th - 1 : 1, fg);
 }
