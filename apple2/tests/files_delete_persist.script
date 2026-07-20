@@ -1,0 +1,16 @@
+# Re-boot the writeback image from tests/files_delete.script and verify the
+# deletion survived the power cycle: Files lists only README.TXT, and opening
+# it still shows intact content (fs_delete's heap compaction moved its 2 data
+# sectors from rel 2,3 down to rel 1,2 - a corrupt shift would show here).
+#
+# Run: python3 harness.py build/unodos_apple2_test_deleted.dsk shots \
+#        < tests/files_delete_persist.script
+wait 600
+key right                # Clock(1) -> Files(2)
+key return
+wait 200
+shot fdel_persist_files  # only README.TXT - HELLO.TXT gone across the power cycle
+key return               # open README.TXT in Notepad (reads the SHIFTED sectors)
+wait 200                 # head seek to the FS tracks + 2-sector fs_read + draw
+shot fdel_persist_readme # intact content + "Bytes:361" proves the compaction
+quit

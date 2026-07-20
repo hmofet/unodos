@@ -561,7 +561,7 @@ PAGES["index.html"] = ("Overview", f"""
 <strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
 2007, and it has been tested in emulators and on real hardware booting from a USB stick.</p>
 
-{note('Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
+{note('Download <strong>unodos-pc64.iso</strong> and write it to a spare USB stick with Rufus or balenaEtcher (or boot it in a VM) - or use the one-click <strong>USB flasher</strong>. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
 {fig("desktop.png", "The pc64 desktop in the default <b>Aurora Light</b> theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock.")}
 
@@ -581,8 +581,9 @@ PAGES["index.html"] = ("Overview", f"""
 
 PAGES["getting-started.html"] = ("Getting started", f"""
 <h1>Getting started</h1>
-<p class="lede">The easiest way to run UnoDOS pc64 is the <strong>USB flasher</strong>: download it, write
-UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
+<p class="lede">Download the <strong>ISO</strong>, write it to a spare USB stick with a tool you already
+know (Rufus, balenaEtcher) or boot it straight in a virtual machine &mdash; or use the one-click
+UnoDOS flasher. No building, no command line.</p>
 
 <h2 id="need">What you need</h2>
 <ul>
@@ -590,28 +591,45 @@ UnoDOS to a spare USB stick, and boot. No building, no command line.</p>
   <li>A 64-bit <strong>UEFI</strong> PC to boot it on, meaning essentially any x86-64 machine from about 2007 on.</li>
 </ul>
 
-<h2 id="flasher">Install with the flasher</h2>
+<h2 id="iso">Download the ISO and write it</h2>
+<p><a class="btn" href="https://github.com/hmofet/unodos/releases/latest/download/unodos-pc64.iso"><strong>Download unodos-pc64.iso</strong></a></p>
+<p><code>unodos-pc64.iso</code> is a hybrid UEFI image: the same file boots as a virtual machine's
+CD-ROM <em>and</em> writes to a USB stick with any standard imaging tool.</p>
+<p><strong>With Rufus</strong> (Windows):</p>
 <ol>
-  <li>Download the flasher for your operating system:
+  <li>Open <a href="https://rufus.ie">Rufus</a> and plug in the USB stick; pick it under <strong>Device</strong>.</li>
+  <li>Click <strong>SELECT</strong> and choose <code>unodos-pc64.iso</code>. Leave the other options as they are.</li>
+  <li>Click <strong>START</strong>. If Rufus asks how to write the image, choose
+      <strong>Write in DD Image mode</strong> (an exact copy). Confirm the erase and wait a few seconds.</li>
+</ol>
+<p><strong>With balenaEtcher</strong> (Windows, macOS, Linux):</p>
+<ol>
+  <li>Open <a href="https://etcher.balena.io">balenaEtcher</a> and click <strong>Flash from file</strong>; choose <code>unodos-pc64.iso</code>.</li>
+  <li>Click <strong>Select target</strong> and pick the USB stick.</li>
+  <li>Click <strong>Flash!</strong> and confirm.</li>
+</ol>
+{note('<b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.', kind="warn", title="This wipes the drive")}
+{note('On Linux or macOS you can also write it with <code>dd</code>: <code>dd if=unodos-pc64.iso of=/dev/&lt;your-usb-disk&gt; bs=4M</code>. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same tools. All downloads are on the <a href="https://github.com/hmofet/unodos/releases">releases page</a>.', kind="tip", title="Command line and raw image")}
+
+<h2 id="flasher">Or: the one-click flasher</h2>
+<p>The UnoDOS flasher does the download-and-write in one step - it carries the image inside it:</p>
+<ol>
+  <li>Download it for your operating system:
     <ul>
       <li><strong>Windows</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher.exe">UnoDosFlasher.exe</a>.
           No install; it prompts for Administrator (raw disk writes need it).</li>
       <li><strong>macOS</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher-macOS.zip">UnoDosFlasher-macOS.zip</a>.
           Unzip and open <code>UnoDosFlasher.app</code>; it prompts for your administrator password.</li>
     </ul>
-    <p class="muted" style="margin:.4em 0 0">All versions are on the
-      <a href="https://github.com/hmofet/unodos/releases">releases page</a>.</p>
   </li>
   <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
   <li>Click <strong>Install</strong> and confirm the erase. The flasher writes a bootable UnoDOS image to the drive.</li>
 </ol>
-{note('Prefer a standard image? <b>unodos-pc64.iso</b> is a hybrid UEFI ISO: attach it to a virtual machine (QEMU, VirtualBox, VMware, Hyper-V) as a CD-ROM, or write it to a USB stick with <b>Rufus</b>, <b>balenaEtcher</b> or <code>dd</code> - both ways boot the same desktop. There is also <b>unodos-pc64-uefi.img.gz</b>, a raw disk image for the same writing tools.', kind="tip", title="ISO and raw-image alternatives")}
 <div class="grid cols-2">
   {fig("flasher-windows.png", "The flasher on <b>Windows</b>: choose your USB drive and click Install.")}
   {fig("flasher-macos.png", "The flasher on <b>macOS</b>: the same steps.")}
 </div>
-{note('<b>The whole selected drive is erased.</b> Double-check you picked the USB stick and not an internal disk before confirming.', kind="warn", title="This wipes the drive")}
-{note('These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.', kind="tip", title="First launch")}
+{note('These builds are not signed with a paid developer certificate yet, so your OS may warn on first launch. On <b>Windows</b>, if SmartScreen appears, click <i>More info &rarr; Run anyway</i>. On <b>macOS</b>, right-click the app and choose <i>Open</i> the first time (Gatekeeper). The same applies to Rufus/Etcher warnings about an unrecognised image signature. Prefer to build it yourself? See the <a href="developer.html">Developer guide</a>.', kind="tip", title="First launch")}
 
 <h2 id="boot">Boot the target PC</h2>
 <ol>
@@ -905,8 +923,17 @@ certificate against a built-in list of common certificate authorities (Let's Enc
 so you can browse the secure web.</p>
 
 <h2 id="usb">USB Ethernet</h2>
-<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. Wi-Fi is not
-supported yet.</p>
+<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. The driver
+speaks to adapters built on the <strong>ASIX AX88179 / AX88178A</strong> chip &mdash; when you shop,
+check the listing's chipset line for those names. Known AX88179-based products include:</p>
+<ul>
+  <li><strong>Plugable USB3-E1000</strong> (USB&nbsp;3.0 gigabit)</li>
+  <li><strong>StarTech USB31000S</strong></li>
+  <li><strong>TRENDnet TU3-ETG</strong></li>
+  <li><strong>j5create JUE130</strong></li>
+</ul>
+<p>Adapters built on Realtek chips (the RTL8153 family - for example the TP-Link UE300) use a
+different chip and are <em>not</em> supported yet. Wi-Fi is not supported yet either.</p>
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
@@ -941,31 +968,35 @@ every version consistent instead of drifting apart.</p>
 </div>
 
 <h2 id="table">The full lineup</h2>
+<p>Every port's ready-to-run image is committed in the repository, so each
+<em>Download</em> link below always gets you the latest build - a ROM for a
+console runs in any emulator or on a flash cart, and each port's folder has a
+README with the details.</p>
 <div class="tw"><table>
-<thead><tr><th>World</th><th>Hardware</th><th>CPU</th><th>Boot / display</th></tr></thead>
+<thead><tr><th>World</th><th>Hardware</th><th>CPU</th><th>Boot / display</th><th>Download</th></tr></thead>
 <tbody>
-<tr><td><strong>pc64</strong></td><td>Modern PC (2007+)</td><td>x86-64</td><td>UEFI GOP <span class="muted">(this manual)</span></td></tr>
-<tr><td>Classic</td><td>IBM PC/XT</td><td>Intel 8088+</td><td>BIOS · CGA</td></tr>
-<tr><td>Amiga</td><td>Commodore Amiga</td><td>68000</td><td>native chipset</td></tr>
-<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td></tr>
-<tr><td>PowerPC Mac</td><td>Power Macintosh</td><td>PowerPC 32-bit</td><td>Open Firmware</td></tr>
-<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td></tr>
-<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td></tr>
-<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td></tr>
-<tr><td>VIC-20</td><td>Commodore VIC-20</td><td>6502</td><td>VIC 6560/1</td></tr>
-<tr><td>NES</td><td>Nintendo NES</td><td>6502 / 2A03</td><td>PPU</td></tr>
-<tr><td>SNES</td><td>Super Nintendo</td><td>65C816</td><td>native</td></tr>
-<tr><td>Master System</td><td>Sega Master System</td><td>Z80</td><td>315-5124 VDP</td></tr>
-<tr><td>Game Gear</td><td>Sega Game Gear</td><td>Z80</td><td>315-5124 VDP</td></tr>
-<tr><td>Genesis</td><td>Sega Mega Drive</td><td>68000 + Z80</td><td>native</td></tr>
-<tr><td>Game Boy / Color</td><td>Nintendo Game Boy</td><td>Sharp SM83</td><td>native</td></tr>
-<tr><td>Game Boy Advance</td><td>Nintendo GBA</td><td>ARM7TDMI</td><td>native</td></tr>
-<tr><td>PC Engine</td><td>NEC TurboGrafx-16</td><td>HuC6280</td><td>HuC6270 VDC</td></tr>
-<tr><td>WonderSwan</td><td>Bandai WonderSwan</td><td>NEC V30MZ</td><td>native</td></tr>
-<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td></tr>
-<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td></tr>
-<tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td></tr>
-<tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td></tr>
+<tr><td><strong>pc64</strong></td><td>Modern PC (2007+)</td><td>x86-64</td><td>UEFI GOP <span class="muted">(this manual)</span></td><td><a href="https://github.com/hmofet/unodos/releases/latest">ISO &amp; flasher</a></td></tr>
+<tr><td>Classic</td><td>IBM PC/XT</td><td>Intel 8088+</td><td>BIOS · CGA</td><td><a href="https://github.com/hmofet/unodos/raw/master/build/unodos-144.img">floppy image</a></td></tr>
+<tr><td>Amiga</td><td>Commodore Amiga</td><td>68000</td><td>native chipset</td><td><a href="https://github.com/hmofet/unodos/raw/master/amiga/build/unodos68k.adf">ADF</a></td></tr>
+<tr><td>Mac Plus</td><td>Compact Macintosh</td><td>68000</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/macplus/build/unodos_macplus.dsk">disk image</a></td></tr>
+<tr><td>PowerPC Mac</td><td>Power Macintosh</td><td>PowerPC 32-bit</td><td>Open Firmware</td><td><a href="https://github.com/hmofet/unodos/raw/master/ppcmac/build/unodos.bin">boot image</a></td></tr>
+<tr><td>Apple II</td><td>Apple II</td><td>MOS 6502</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/apple2/build/unodos_apple2.dsk">disk image</a></td></tr>
+<tr><td>Apple IIGS</td><td>Apple IIGS</td><td>65C816</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/iigs/build/unodos_iigs.po">disk image</a></td></tr>
+<tr><td>C64</td><td>Commodore 64</td><td>6510</td><td>VIC-II · SID</td><td><a href="https://github.com/hmofet/unodos/raw/master/c64/build/unodos_c64.d64">D64</a></td></tr>
+<tr><td>VIC-20</td><td>Commodore VIC-20</td><td>6502</td><td>VIC 6560/1</td><td><a href="https://github.com/hmofet/unodos/raw/master/vic20/build/unodos.prg">PRG</a></td></tr>
+<tr><td>NES</td><td>Nintendo NES</td><td>6502 / 2A03</td><td>PPU</td><td><a href="https://github.com/hmofet/unodos/raw/master/nes/build/unodos.nes">ROM</a></td></tr>
+<tr><td>SNES</td><td>Super Nintendo</td><td>65C816</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/snes/build/unodos.sfc">ROM</a></td></tr>
+<tr><td>Master System</td><td>Sega Master System</td><td>Z80</td><td>315-5124 VDP</td><td><a href="https://github.com/hmofet/unodos/raw/master/sms/build/unodos.sms">ROM</a></td></tr>
+<tr><td>Game Gear</td><td>Sega Game Gear</td><td>Z80</td><td>315-5124 VDP</td><td><a href="https://github.com/hmofet/unodos/raw/master/gg/build/unodos.gg">ROM</a></td></tr>
+<tr><td>Genesis</td><td>Sega Mega Drive</td><td>68000 + Z80</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/genesis/build/unodos.gen">ROM</a></td></tr>
+<tr><td>Game Boy / Color</td><td>Nintendo Game Boy</td><td>Sharp SM83</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/gb/build/unodos.gb">ROM</a></td></tr>
+<tr><td>Game Boy Advance</td><td>Nintendo GBA</td><td>ARM7TDMI</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/gba/build/unodos.gba">ROM</a></td></tr>
+<tr><td>PC Engine</td><td>NEC TurboGrafx-16</td><td>HuC6280</td><td>HuC6270 VDC</td><td><a href="https://github.com/hmofet/unodos/raw/master/pce/build/unodos.pce">ROM</a></td></tr>
+<tr><td>WonderSwan</td><td>Bandai WonderSwan</td><td>NEC V30MZ</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ws/build/unodos.ws">ROM</a></td></tr>
+<tr><td>Dreamcast</td><td>Sega Dreamcast</td><td>SH-4</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/dreamcast/build/unodos-dc-uui.elf">ELF</a> · <a href="https://github.com/hmofet/unodos/raw/master/dreamcast/build/unodos-dc-uui.iso">ISO</a></td></tr>
+<tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ps2/build/unodos-ps2-uui.elf">ELF</a></td></tr>
+<tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td><td><a href="https://github.com/hmofet/unodos/raw/master/rpi/build/kernel8.img">kernel8.img</a></td></tr>
+<tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td><td><a href="https://github.com/hmofet/unodos/raw/master/pinephone/build/unodos.bin">boot image</a></td></tr>
 </tbody>
 </table></div>
 {note('Full details for every machine live in the repository: <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.', title="Where to read more")}

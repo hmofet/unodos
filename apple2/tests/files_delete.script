@@ -1,0 +1,30 @@
+# UnoDOS/AppleII Files delete + rescan regression: proves the Files app's
+# d-delete (y/n confirm -> fs_delete: heap compaction + catalog flush via the
+# GCR RWTS write path) and r-rescan (fs_init re-reads the catalog sector from
+# disk) work end-to-end. The seeded HELLO.TXT is deleted; the rescan then
+# proves the listing without it comes from the on-disk catalog, not stale RAM.
+#
+# Run: ./build.sh test &&
+#      python3 harness.py build/unodos_apple2_test.dsk shots \
+#        --writeback build/unodos_apple2_test_deleted.dsk < tests/files_delete.script
+# Then re-boot the writeback image with tests/files_delete_persist.script to
+# prove the deletion survives a power cycle.
+wait 600
+key right                # sel_icon: Clock(1) -> Files(2)
+key return               # load + run Files (RWTS read into APP_BASE)
+wait 200
+shot fdel_files          # HELLO.TXT 87 + README.TXT 361 listed, HELLO.TXT selected
+key d                    # arm the delete confirm
+wait 60
+shot fdel_confirm        # row23: "Delete HELLO.TXT? (Y/N)"
+key y                    # confirm: fs_delete (shift README.TXT's 2 sectors down,
+wait 400                 #   fix starts, drop slot, flush catalog - RWTS r/w heavy)
+shot fdel_deleted        # listing shows only README.TXT
+key r                    # rescan: fs_init re-reads the catalog from disk
+wait 60
+shot fdel_rescan         # still only README.TXT -> the on-disk catalog agrees
+key n                    # 'n' at the (unarmed) prompt state: no-op guard exercise
+key esc                  # back to the desktop
+wait 60
+shot fdel_desktop
+quit

@@ -21,6 +21,8 @@ case "$1" in
   test|autotest) FLAGS="-D AUTOTEST=1"; OUT=build/unodos_test.sfc ;;
   drag)    FLAGS="-D AUTOTEST=1 -D AUTOTEST_DRAG=1"; OUT=build/unodos_dg.sfc ;;
   dostris) FLAGS="-D AUTOTEST=1 -D AUTOTEST_DOSTRIS=1"; OUT=build/unodos_dt.sfc ;;
+  npcaret) FLAGS="-D AUTOTEST=1 -D AUTOTEST_NPCARET=1"; OUT=build/unodos_np.sfc ;;
+  paint)   FLAGS="-D AUTOTEST=1 -D AUTOTEST_PAINT=1";   OUT=build/unodos_pt.sfc ;;
 esac
 
 echo "[2/4] assembling kernel.asm (ca65 --cpu 65816)..."
