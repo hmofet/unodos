@@ -250,6 +250,17 @@ static void splash_draw(int done)
       fb_text(cx - fb_text_w(s) / 2, H / 2 + 6, s, FB_RGB(150,170,225), -1); }
     { const char *s = "pc64   -   UnoDOS 3.1";
       fb_text(cx - fb_text_w(s) / 2, H / 2 + 22, s, FB_RGB(110,130,185), -1); }
+#ifdef UNO_DEBUG
+    /* Say WHICH build this is, right on the splash.  A machine with UnoDOS also
+     * installed to its internal ESP offers a "UnoDOS" boot entry that looks
+     * identical to booting the USB stick, so "is this actually the debug build
+     * I just flashed?" was costing real test time. Now it is unmissable.
+     * Note the clamp: centring goes NEGATIVE for a string wider than the
+     * surface, and fb_text -> text_pen does `x << 6` (UB on negatives, F7). */
+    { const char *s = "DEBUG / STRESS BUILD   " UNO_BUILD_ID;
+      int x = cx - fb_text_w(s) / 2; if (x < 0) x = 0;
+      fb_text(x, H / 2 + 40, s, FB_RGB(255, 210, 90), -1); }
+#endif
     /* loading bar: recessed track + filled coloured segments */
     fb_fill_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(30, 38, 70));
     fb_frame_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(70, 84, 130));
