@@ -750,6 +750,15 @@ void uno_pc64_init(void)
     if (gDetached) uno_dbg_on_detach();
     else           uno_dbg_watchdog_start();
     uno_dbg_check("init:done");
+    /* Telemetry must NOT depend on the stress driver arming: BOOTENV.TXT used
+     * to be written only from arm(), so a boot where the driver never armed
+     * (no STRESS.CFG found, unreadable volume, ...) left NOTHING on disk to
+     * diagnose. Write the env block and a boot log here, unconditionally. */
+    uno_dbg_log("init done: detached=%d volumes=%d - shell starting "
+                "(HUD + stress driver run from the shell's main loop)",
+                gDetached, uno_fs_volumes());
+    uno_dbg_write_bootenv();
+    uno_dbg_write_bootlog();
 #endif
 }
 
