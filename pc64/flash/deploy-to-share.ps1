@@ -68,6 +68,18 @@ Copy-Item $gz  -Destination $Dest -Force
 Copy-Item $iso -Destination $Dest -Force
 Remove-Item $gz -ErrorAction SilentlyContinue
 
+# 4b. stamp the staged flasher so deployed copies can self-update against it.
+# Written AFTER the exe so a client that checks mid-deploy sees the old stamp
+# (and at worst a sha mismatch it retries), never a new stamp with an old exe.
+$stampFile  = Join-Path $build "flasher-build.txt"
+$buildStamp = if (Test-Path $stampFile) { (Get-Content $stampFile -TotalCount 1).Trim() }
+              else { (Get-Item $exe).LastWriteTime.ToString('yyyyMMdd-HHmmss') }
+$sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -Path (Join-Path $Dest "flasher-version.txt") -Encoding ASCII -Value @(
+    "build=$buildStamp",
+    "sha256=$sha",
+    "size=$((Get-Item $exe).Length)")
+
 # 5. keep a tiny build stamp next to the artifacts (commit + when)
 $commit = (& git -C $pc64 rev-parse --short HEAD 2>$null)
 $stamp  = "UnoDosFlasher.exe + unodos-pc64-uefi.img.gz + unodos-pc64.iso`r`n" +

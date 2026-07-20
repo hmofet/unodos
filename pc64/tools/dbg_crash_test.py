@@ -31,11 +31,19 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, check=True, **kw)
 
 
+SAFE = os.environ.get("SAFE") == "1"
+
+
 def build_disk():
-    """GPT + one EF00 FAT32 partition holding build/esp, allow-force armed."""
-    # arm the stress driver to self-crash for this test only
-    with open(os.path.join(ESP, "STRESS.CFG"), "w", newline="\r\n") as f:
-        f.write("# QEMU crash-pipeline test\nallow-force\nfast\n")
+    """GPT + one EF00 FAT32 partition holding build/esp.
+
+    Default: arm allow-force so the driver self-crashes (crash-pipeline test).
+    SAFE=1: leave the SHIPPED STRESS.CFG untouched and assert NO self-crash -
+    the regression test for the comment-matching parser bug (a shipped stick
+    must not force a #PF)."""
+    if not SAFE:
+        with open(os.path.join(ESP, "STRESS.CFG"), "w", newline="\r\n") as f:
+            f.write("# QEMU crash-pipeline test\nallow-force\nfast\n")
     disk_sectors = MIB * 2048
     with open(DISK, "wb") as f:
         f.truncate(disk_sectors * SECTOR)
@@ -86,6 +94,14 @@ def boot():
         "-no-reboot",                                  # CF9 reset -> QEMU exits
         "-display", "none", "-serial", "null",
     ]
+    if SAFE:
+        print("booting QEMU with the SHIPPED STRESS.CFG (must NOT self-crash)...")
+        try:
+            subprocess.run(argv, timeout=55)
+            print("  QEMU exited/reset on its own - unexpected in safe mode")
+        except subprocess.TimeoutExpired:
+            print("  ran 55s without resetting (expected: no crash)")
+        return
     print("booting QEMU (forces a #PF, then resets -> QEMU exits)...")
     try:
         subprocess.run(argv, timeout=90)
@@ -146,12 +162,39 @@ def check_disk(fat):
     return False
 
 
+def check_disk_safe(fat):
+    part_start = 2048
+    with open(DISK, "rb") as df:
+        df.seek(part_start * SECTOR)
+        data = df.read(os.path.getsize(fat))
+    with open(fat, "wb") as f:
+        f.write(data)
+    r = subprocess.run(["mdir", "-i", fat, "::/CRASH"], capture_output=True, text=True)
+    out = r.stdout
+    crashed = bool(re.search(r"\b(CR|HG|PN)\w*\s+TXT", out))
+    ran = "PF" in out
+    print("---- CRASH\\ after a safe-default run ----")
+    print(out or r.stderr)
+    if crashed:
+        print("FAIL: a self-crash report appeared with the SHIPPED cfg "
+              "(the parser bug is back)")
+    else:
+        print("PASS: no self-crash with the shipped default STRESS.CFG")
+    if ran:
+        print("PASS: the stress driver ran benignly (PF snapshots present)")
+    return not crashed
+
+
 def main():
     if not os.path.exists(os.path.join(ESP, "BUILD.TXT")):
         print("no debug build in build/esp - run: UNO_DBGCON=1 ./build.sh")
         sys.exit(1)
     fat = build_disk()
     boot()
+    if SAFE:
+        ok = check_disk_safe(fat)
+        print("\n=== %s ===" % ("VERIFIED (no self-crash)" if ok else "FAILED"))
+        sys.exit(0 if ok else 2)
     a = check_log()
     b = check_disk(fat)
     print("\n=== %s ===" % ("VERIFIED" if (a and b) else

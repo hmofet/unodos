@@ -26,6 +26,8 @@ class UnoSettings
     public string ZipPath   = "";
     public string ZipDest   = "";     // subfolder on the disk, blank = root
     public string Label     = "UNODOS";
+    public bool   AutoUpdate = true;  // check the share + self-update at startup
+    public string UpdatePath = "";    // ini-only override of the update share dir
 
     readonly Dictionary<string, string> extra = new Dictionary<string, string>();
 
@@ -58,6 +60,8 @@ class UnoSettings
                     case "zippath":     s.ZipPath    = v;         break;
                     case "zipdest":     s.ZipDest    = v;         break;
                     case "label":       if (v.Length > 0) s.Label = v; break;
+                    case "autoupdate":  s.AutoUpdate = Truthy(v); break;
+                    case "updatepath":  s.UpdatePath = v;         break;
                     default:            s.extra[k] = v;           break;
                 }
             }
@@ -79,6 +83,8 @@ class UnoSettings
             sb.AppendLine("zippath="    + ZipPath);
             sb.AppendLine("zipdest="    + ZipDest);
             sb.AppendLine("label="      + Label);
+            sb.AppendLine("autoupdate=" + (AutoUpdate ? "1" : "0"));
+            sb.AppendLine("updatepath=" + UpdatePath);
             foreach (var kv in extra) sb.AppendLine(kv.Key + "=" + kv.Value);
             File.WriteAllText(FilePath, sb.ToString(), Encoding.UTF8);
         } catch { }
