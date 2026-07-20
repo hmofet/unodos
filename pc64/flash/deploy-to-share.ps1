@@ -51,7 +51,13 @@ $iso = Join-Path $build "unodos-pc64.iso"
 if (-not $SkipBuild -or -not (Test-Path $iso)) {
     Write-Host "Building the hybrid ISO (tools/mkiso.py under WSL)..."
     $wslPc64 = (& wsl wslpath -a ($pc64 -replace '\\','/')).Trim()
-    & wsl bash -lc "cd '$wslPc64' && python3 tools/mkiso.py"
+    # xorriso writes a normal banner to stderr; in Windows PowerShell 5.1 native
+    # stderr is wrapped as a terminating NativeCommandError under
+    # $ErrorActionPreference='Stop', which aborted the deploy before the copy.
+    # Gate on the exit code instead (same pattern as build-flasher.ps1).
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkiso.py" 2>&1 | ForEach-Object { Write-Host $_ } }
+    finally { $ErrorActionPreference = $prev }
     if ($LASTEXITCODE -ne 0) { throw "mkiso.py failed (needs xorriso + mtools in WSL)" }
 }
 
