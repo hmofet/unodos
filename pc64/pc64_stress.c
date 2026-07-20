@@ -311,11 +311,16 @@ static void run_action(void)
     if (g_action % (unsigned)(nph * 6) == 0) {
         char buf[512];
         int n = snprintf(buf, sizeof buf,
-            "pass %d complete  uptime=%llums  open_windows=%d  crash_reports=%d\n"
-            "(see the HUD for render/present/idle; this file is a periodic\n"
-            " liveness snapshot proving the driver is still running)\n",
+            "pass %d complete  uptime=%llums  open_windows=%d  crash_reports=%d\n",
             g_pass, uno_dbg_uptime_ms(), pc64_dbg_open_count(),
             uno_dbg_crash_count());
+        /* hard perf numbers, not just liveness: render_avg vs present_avg says
+         * whether this machine is CPU-bound (rasteriser/repaint) or bound by
+         * the framebuffer write path - the F3 uncached-VRAM question - and it
+         * has to be on DISK, because the HUD is on-screen only. */
+        n += uno_dbg_perf_line(buf + n, (int)sizeof buf - n);
+        n += snprintf(buf + n, sizeof buf - (unsigned)n,
+            "\n(periodic snapshot; see BOOTENV.TXT for the fb bandwidth bench)\n");
         uno_dbg_write_perf(buf, n);
         g_pass++;
         if (g_max_passes) snprintf(g_status, sizeof g_status, "STRESS running  pass %d/%d",

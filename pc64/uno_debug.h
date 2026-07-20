@@ -53,6 +53,7 @@ void uno_dbg_frame_render_cyc(unsigned long long cyc);
 void uno_dbg_frame_present_cyc(unsigned long long cyc);
 void uno_dbg_frame_idle(int was_idle);  /* 1 = frame slept, 0 = worked         */
 int  uno_dbg_hud(char *buf, int max);   /* one-line HUD text; 0 = HUD off      */
+int  uno_dbg_perf_line(char *buf, int max);  /* perf numbers for the PF report */
 void uno_dbg_hud_toggle(void);
 
 /* ---- fault injection ----------------------------------------------------- */
