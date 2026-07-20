@@ -200,10 +200,10 @@ static const AppInterface *iface(short proc)
 #include "pc64_uui_apps.h"
 
 static const short kProc[UNOAPP_COUNT] =
-    { APP_DOSTRIS, APP_PACMAN, APP_OUTLAST, APP_MUSIC, APP_TRACKER, APP_PAINT, APP_NETWORK };
-static const signed char kGame[UNOAPP_COUNT] = { 1, 1, 1, 0, 0, 0, 0 };
+    { APP_DOSTRIS, APP_PACMAN, APP_OUTLAST, APP_TRACKER, APP_PAINT, APP_NETWORK };
+static const signed char kGame[UNOAPP_COUNT] = { 1, 1, 1, 0, 0, 0 };
 static const char *kName[UNOAPP_COUNT] =
-    { "Dostris", "Pac-Man", "OutLast", "Music", "Tracker", "Paint", "Network" };
+    { "Dostris", "Pac-Man", "OutLast", "Tracker", "Paint", "Network" };
 
 const char *unoapp_name(int i) { return (i >= 0 && i < UNOAPP_COUNT) ? kName[i] : "App"; }
 int unoapp_is_game(int i)      { return (i >= 0 && i < UNOAPP_COUNT) ? kGame[i] : 0; }
