@@ -25,6 +25,28 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/unodos_theme.bin ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/unodos_music.bin ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/unodos_dt.bin ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/unodos_paint.bin ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/unodos_pm.bin ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/unodos_ol.bin ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.bin ;;
+  fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
+  fs2)     DEFS="--defsym AUTOTEST=1 --defsym AT_FS2=1";     OUT=build/unodos_fs2.bin ;;
+  fsview)  DEFS="--defsym AUTOTEST=1 --defsym AT_FSVIEW=1";  OUT=build/unodos_fsv.bin ;;
+  post)    DEFS="--defsym POST=1";                          OUT=build/unodos_post.bin ;;
+  led)     DEFS="--defsym LEDTEST=1";                        OUT=build/unodos_led.bin ;;
+  paneldbg) DEFS="--defsym PANELDBG=1";                      OUT=build/unodos_paneldbg.bin ;;
+  panelpost) DEFS="--defsym PANELDBG=1 --defsym POST=1";     OUT=build/unodos_panelpost.bin ;;
+  pboot)    DEFS="--defsym PBOOT=1";                         OUT=build/unodos_pboot.bin ;;
+  pbootdbg) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1";     OUT=build/unodos_pbootdbg.bin ;;
+  de2test)  DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1"; OUT=build/unodos_de2test.bin ;;
+  pbootnative) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1"; OUT=build/unodos_pbootnative.bin ;;
+  pbootdsi) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSIONLY=1"; OUT=build/unodos_pbootdsi.bin ;;
+  pbootdsistart) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSISTARTONLY=1"; OUT=build/unodos_pbootdsistart.bin ;;
+  pbootdsihost) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DSIHOSTONLY=1"; OUT=build/unodos_pbootdsihost.bin ;;
+  pbootnodphy) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym NODPHY=1"; OUT=build/unodos_pbootnodphy.bin ;;
+  pbootst7703) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym ST7703ONLY=1"; OUT=build/unodos_pbootst7703.bin ;;
+  pbootdphy) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym DPHYONLY=1"; OUT=build/unodos_pbootdphy.bin ;;
+  pbootclktcon0) DEFS="--defsym PBOOT=1 --defsym PANELDBG=1 --defsym DE2TEST=1 --defsym NATIVEPANEL=1 --defsym CLKTCON0ONLY=1"; OUT=build/unodos_pbootclktcon0.bin ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."

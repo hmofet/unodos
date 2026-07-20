@@ -22,6 +22,13 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/unodos_theme.gba ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/unodos_music.gba ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/unodos_dt.gba ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/unodos_pm.gba ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/unodos_ol.gba ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/unodos_paint.gba ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.gba ;;
+  fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.gba ;;
+  fs2)     DEFS="--defsym AUTOTEST=1 --defsym AT_FS2=1";     OUT=build/unodos_fs2.gba ;;
+  fsview)  DEFS="--defsym AUTOTEST=1 --defsym AT_FSVIEW=1";  OUT=build/unodos_fsv.gba ;;
 esac
 
 echo "[2/3] assembling (ARM7TDMI) + linking via WSL..."

@@ -69,6 +69,39 @@
 .equ BORG_Y, 64
 .equ FALLRATE, 30
 
+# Paint geometry (640x480, same layout as rpi)
+.equ PCW, 36
+.equ PCH, 24
+.equ PCELL, 12
+.equ PCO_X, 16
+.equ PCO_Y, 24
+.equ NSWATCH, 8
+.equ PSW_W, 26
+.equ PSW_Y, (PCO_Y + PCH*PCELL + 10)
+# Pac-Man geometry
+.equ PM_COLS, 28
+.equ PM_ROWS, 25
+.equ PM_CELL, 16
+.equ PMO_X, 16
+.equ PMO_Y, 24
+.equ GSIZE, 20
+.equ FRIGHT_STEPS, 45
+.equ PM_STEPFRAMES, 4
+# OutLast geometry
+.equ OL_BANDS, 20
+.equ OL_COLW, 16
+.equ OL_BH, 22
+.equ OLO_Y, 24
+.equ OL_RATE, 4
+# Tracker geometry
+.equ NT_ROWS, 16
+.equ NT_CH, 4
+.equ TK_STEPF, 12
+.equ TKO_X, 60
+.equ TKO_Y, 44
+.equ TK_RH, 22
+.equ TK_CW, 80
+
 # ---- fixed RAM layout -------------------------------------------------------
 .equ STACK_TOP, 0x00300000
 .equ VARS,      0x00400000        # cleared at boot
@@ -128,10 +161,49 @@
 .equ a_gpause, VARS+172
 .equ m_phase,  VARS+176           # PCM square-wave phase accumulator
 .equ m_freq,   VARS+180           # current note frequency (Hz)
+
+.equ p_cx,     VARS+184
+.equ p_cy,     VARS+188
+.equ p_col,    VARS+192
+.equ pm_x,     VARS+196
+.equ pm_y,     VARS+200
+.equ pm_dir,   VARS+204
+.equ pm_ndir,  VARS+208
+.equ pm_score, VARS+212
+.equ pm_lives, VARS+216
+.equ pm_level, VARS+220
+.equ pm_dots,  VARS+224
+.equ pm_mode,  VARS+228
+.equ pm_modet, VARS+232
+.equ pm_fr,    VARS+236
+.equ pm_kills, VARS+240
+.equ pm_st,    VARS+244
+.equ pm_sc,    VARS+248
+.equ pm_tgx,   VARS+252
+.equ pm_tgy,   VARS+256
+.equ pm_ft,    VARS+260
+.equ pm_gh,    VARS+264
+.equ ol_carx,  VARS+324
+.equ ol_scroll,VARS+328
+.equ ol_dist,  VARS+332
+.equ ol_over,  VARS+336
+.equ ol_ctr,   VARS+340
+.equ tk_crow,  VARS+344
+.equ tk_cch,   VARS+348
+.equ tk_prow,  VARS+352
+.equ tk_ptmr,  VARS+356
+.equ fl_sel,   VARS+360
+.equ fl_view,  VARS+364
+.equ np_saved, VARS+368
 .equ palette,  VARS+0x200         # 16 XRGB words
 .equ clk_str,  VARS+0x240         # 9 bytes
 .equ numstr,   VARS+0x250         # 6 bytes
 .equ g_board,  VARS+0x260         # BW*BH bytes
+
+.equ pcanvas,  VARS+0x400
+.equ pm_maze,  VARS+0x800
+.equ tk_pat,   VARS+0xC00
+.equ fbuf,     VARS+0x1000
 
 .section .text
 .globl _start
@@ -147,6 +219,7 @@ clr:
     addi  r3, r3, 4
     bdnz  clr
     bl    fb_init                         # ask Open Firmware for the framebuffer
+    bl    fs_init                         # load/format the USV1 disk
     bl    draw_launcher
 mainloop:
     bl    wait_vblank
@@ -710,8 +783,38 @@ up_d1:
 up_d2:
     LWZA  r3, v_app
     cmpwi r3, 7
-    bne   up_ret
+    bne   up_pm
     bl    dostris_update
+up_pm:
+    LWZA  r3, v_app
+    cmpwi r3, 9
+    bne   up_ol
+    bl    pacman_update
+up_ol:
+    LWZA  r3, v_app
+    cmpwi r3, 8
+    bne   up_pt
+    bl    outlast_update
+up_pt:
+    LWZA  r3, v_app
+    cmpwi r3, 10
+    bne   up_tk
+    bl    paint_update
+up_tk:
+    LWZA  r3, v_app
+    cmpwi r3, 6
+    bne   up_fl
+    bl    tracker_update
+up_fl:
+    LWZA  r3, v_app
+    cmpwi r3, 4
+    bne   up_np
+    bl    files_update
+up_np:
+    LWZA  r3, v_app
+    cmpwi r3, 2
+    bne   up_ret
+    bl    notepad_update
 up_ret:
     lwz   r0, 20(r1)
     addi  r1, r1, 16
@@ -815,8 +918,38 @@ enter_app:
 ea1:
     LWZA  r3, v_app
     cmpwi r3, 3
-    bne   ea2
+    bne   ea_pm
     bl    music_init
+ea_pm:
+    LWZA  r3, v_app
+    cmpwi r3, 9
+    bne   ea_ol
+    bl    pacman_init
+ea_ol:
+    LWZA  r3, v_app
+    cmpwi r3, 8
+    bne   ea_pt
+    bl    outlast_init
+ea_pt:
+    LWZA  r3, v_app
+    cmpwi r3, 10
+    bne   ea_tk
+    bl    paint_init
+ea_tk:
+    LWZA  r3, v_app
+    cmpwi r3, 6
+    bne   ea_fl
+    bl    tracker_init
+ea_fl:
+    LWZA  r3, v_app
+    cmpwi r3, 4
+    bne   ea_np
+    bl    files_init
+ea_np:
+    LWZA  r3, v_app
+    cmpwi r3, 2
+    bne   ea2
+    bl    notepad_init
 ea2:
     li    r3, 1
     STWA  r3, v_dirty, r4
@@ -919,3 +1052,8 @@ fred_ret:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "pacman.inc.s"
+    .include "outlast.inc.s"
+    .include "paint.inc.s"
+    .include "tracker.inc.s"
+    .include "fs.inc.s"

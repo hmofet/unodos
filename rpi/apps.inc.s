@@ -75,6 +75,14 @@ draw_app:
     b.eq  app_theme
     cmp   w0, #7
     b.eq  app_dostris
+    cmp   w0, #9
+    b.eq  app_pacman
+    cmp   w0, #8
+    b.eq  app_outlast
+    cmp   w0, #6
+    b.eq  app_tracker
+    cmp   w0, #10
+    b.eq  app_paint
     b     app_generic
 app_sysinfo:
     ldr   x2, =t_sysinfo
@@ -84,17 +92,11 @@ app_sysinfo:
     ldp   x29, x30, [sp], #16
     ret
 app_notepad:
-    ldr   x2, =t_notepad
-    bl    draw_chrome
-    ldr   x0, =c_notepad
-    bl    draw_content
+    bl    notepad_draw
     ldp   x29, x30, [sp], #16
     ret
 app_files:
-    ldr   x2, =t_files
-    bl    draw_chrome
-    ldr   x0, =c_files
-    bl    draw_content
+    bl    files_draw
     ldp   x29, x30, [sp], #16
     ret
 app_generic:
@@ -463,6 +465,81 @@ auto_script:
     .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
     .byte 2,PAD_L,2,0, 6,PAD_D, 2,0, 0,0
 .endif
+.ifdef AT_FS
+    .byte 6,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0       // launcher sel 0->2 (Notepad)
+    .byte 2,PAD_A, 6,0                    // launch Notepad
+    .byte 2,PAD_A, 6,0                    // A = save NOTES.TXT
+    .byte 2,PAD_B, 6,0                    // back to launcher
+    .byte 2,PAD_L,2,0, 2,PAD_L,2,0       // sel 2->0
+    .byte 2,PAD_D,2,0                     // 0->4 (Files)
+    .byte 2,PAD_A, 12,0                   // launch Files (list shows 3 files)
+    .byte 0,0
+.endif
+.ifdef AT_FS2
+    .byte 6,0
+    .byte 2,PAD_D,2,0                     // sel 0->4 (Files) - no write this run
+    .byte 2,PAD_A, 12,0                   // list should show persisted NOTES.TXT
+    .byte 0,0
+.endif
+.ifdef AT_FSVIEW
+    .byte 6,0
+    .byte 2,PAD_D,2,0                     // sel 0->4 (Files)
+    .byte 2,PAD_A, 6,0                    // launch Files (list)
+    .byte 2,PAD_A, 12,0                   // open README.TXT (view its contents)
+    .byte 0,0
+.endif
+.ifdef AT_TRACKER
+    .byte 6,0
+    .byte 2,PAD_D,2,0                     // launcher sel 0->4
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0       // 4->5->6 (Tracker)
+    .byte 2,PAD_A, 40,0                   // launch + play the seeded scale
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0       // move cursor down
+    .byte 2,PAD_R,2,0                     // to channel 1
+    .byte 2,PAD_A,2,0, 2,PAD_A,2,0, 2,PAD_A,2,0   // cycle a note in
+    .byte 30,0
+    .byte 0,0
+.endif
+.ifdef AT_OUTLAST
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0       // launcher sel 0->4->8 (OutLast)
+    .byte 2,PAD_A, 30,0                   // launch + drive
+    .byte 2,PAD_L,4,0, 2,PAD_L,4,0, 30,0 // steer left
+    .byte 2,PAD_R,4,0, 2,PAD_R,4,0, 30,0 // steer right
+    .byte 0,0
+.endif
+.ifdef AT_PACMAN
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0       // launcher sel 0->4->8
+    .byte 2,PAD_R,2,0                     // 8->9 (Pac-Man)
+    .byte 2,PAD_A, 40,0                   // launch; pac runs left eating dots
+    .byte 2,PAD_U, 40,0                   // roam up
+    .byte 2,PAD_L, 40,0                   // left
+    .byte 2,PAD_D, 40,0                   // down
+    .byte 2,PAD_R, 40,0                   // right
+    .byte 0,0
+.endif
+.ifdef AT_PAINT
+    .byte 6,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0       // launcher sel 0->4->8
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0       // 8->9->10 (Paint)
+    .byte 2,PAD_A, 6,0                    // launch Paint (cursor at 0,0, white)
+    .byte 2,PAD_A,2,0                     // paint (0,0)
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0       // (1,0)
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0       // (2,0)
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0       // (3,0)
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0       // (4,0)
+    .byte 2,PAD_U,2,0                     // row0 -> palette row (cursor carries x)
+    .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0   // clamp to swatch 0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0   // -> swatch 5 (red)
+    .byte 2,PAD_A,2,0                     // pick red
+    .byte 2,PAD_D,2,0                     // palette -> canvas row0 (cx=5)
+    .byte 2,PAD_A,2,0                     // paint (5,0) red
+    .byte 2,PAD_R,2,0, 2,PAD_A,2,0       // (6,0)
+    .byte 2,PAD_D,2,0, 2,PAD_A,2,0       // (6,1)
+    .byte 2,PAD_D,2,0, 2,PAD_A,2,0       // (6,2)
+    .byte 0,0
+.endif
 .align 3
 .section .text
 .endif
@@ -488,6 +565,7 @@ l_pacman:  .asciz "Pac-Man"
 l_paint:   .asciz "Paint"
 s_title:   .asciz "UnoDOS 3 - Raspberry Pi (AArch64)"
 s_back:    .asciz "B = Back"
+s_usb:     .asciz "USB:"
 t_sysinfo: .asciz "SysInfo"
 t_clock:   .asciz "Clock"
 t_notepad: .asciz "Notepad"
@@ -495,6 +573,10 @@ t_music:   .asciz "Music"
 t_files:   .asciz "Files"
 t_theme:   .asciz "Theme"
 t_dostris: .asciz "Dostris"
+t_paint:   .asciz "Paint"
+t_pacman:  .asciz "Pac-Man"
+t_outlast: .asciz "OutLast"
+t_tracker: .asciz "Tracker"
 .align 2
 c_sysinfo:
     .word 16, 48, m_si0

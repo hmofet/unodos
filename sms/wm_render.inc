@@ -565,6 +565,14 @@ app_draw_content:
     jp z, theme_draw
     cp 7
     jp z, dostris_draw
+    cp 10
+    jp z, paint_draw
+    cp 6
+    jp z, tracker_draw
+    cp 8
+    jp z, outlast_draw
+    cp 9
+    jp z, pacman_draw
     jp generic_draw
 
 sysinfo_draw:
@@ -851,6 +859,10 @@ ai_hold:
 B1 EQU PAD_B1
   IFNDEF AUTOTEST_DOSTRIS
   IFNDEF AUTOTEST_MUSIC
+  IFNDEF AUTOTEST_PAINT
+  IFNDEF AUTOTEST_TRACKER
+  IFNDEF AUTOTEST_OUTLAST
+  IFNDEF AUTOTEST_PACMAN
 ; Open Clock, SysInfo, Theme (in an order that keeps each icon clickable),
 ; cycle the Theme palette, then drag the Theme window by its title bar — one
 ; screenshot that exercises launch + z-order + live content + theme + drag.
@@ -872,6 +884,10 @@ auto_script:
     db 4, 52,150, 0                ; release (drop)
     db 40, 52,150, 0               ; settle for the capture
     db 0, 0, 0, 0                  ; end -> idle
+  ENDIF ; AUTOTEST_PACMAN
+  ENDIF ; AUTOTEST_OUTLAST
+  ENDIF ; AUTOTEST_TRACKER
+  ENDIF ; AUTOTEST_PAINT
   ENDIF ; AUTOTEST_MUSIC
   ENDIF ; AUTOTEST_DOSTRIS
   ENDIF ; AUTOTEST
@@ -913,11 +929,11 @@ app_def_tab:
     dw l_files
     db  9,11,18, 9
     dw l_theme
-    db  6, 5,18,12
+    db  4, 3,22,18
     dw l_tracker
     db  6, 4,20,14
     dw l_dostris
-    db  6, 4,20,12
+    db  4, 4,24,13
     dw l_outlast
     db  5, 3,22,18
     dw l_pacman

@@ -1,0 +1,24 @@
+# UnoDOS 3 / Raspberry Pi — VideoCore firmware boot configuration.
+# The GPU reads this from the first FAT partition before any ARM code runs.
+
+arm_64bit=1            # load the 64-bit kernel at 0x80000 and enter in AArch64
+disable_overscan=1
+# Route the PL011 UART to GPIO14/15 as a serial console (the fallback input path
+# when no USB keyboard is attached). disable-bt frees the good UART from Bluetooth.
+enable_uart=1
+dtoverlay=disable-bt
+
+# Pi 3 / Pi Zero 2 W (BCM2837): the default Pi-3-based kernel.
+[pi3]
+kernel=kernel8.img
+[pi02]
+kernel=kernel8.img
+
+# Pi 4 (BCM2711): peripheral base differs (0xFE000000) — separate kernel.
+# NOTE: USB-HID input works on Pi 3 only (its USB-A ports hang off the SoC DWC2
+# controller this kernel drives). Pi 4's USB-A ports are behind the VL805 xHCI,
+# which this port does not drive — use the UART console on Pi 4.
+[pi4]
+kernel=kernel8-pi4.img
+
+[all]

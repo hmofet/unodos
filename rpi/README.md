@@ -41,16 +41,30 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
   falling-blocks game with a 16px-cell well. Tracker / OutLast / Pac-Man / Paint
   open framed placeholders.
 
-> **Real input + audio.** The interactive (non-AUTOTEST) build reads a real
-> **PL011 UART serial console** (GPIO14/15): `WASD` = d-pad, `Enter`/`Space` = A,
-> `Backspace` = B — so the launcher is fully drivable from a serial terminal. The
-> harness emulates the PL011 RX, so this path is verified end-to-end too
-> (`shots/live_nav.png`, `shots/live_notepad.png` — navigation + app launch from
-> injected serial input). USB-HID keyboard is a heavier future driver. The Music
-> app drives the **PWM headphone jack in mark/space mode** (a real, audible
+> **Real input + audio.** The interactive (non-AUTOTEST) build now takes a real
+> **USB-HID keyboard** *and* a **PL011 UART serial console** (the USB path wins
+> when a key is held; the UART is the fallback). `WASD`/arrows = d-pad,
+> `Enter`/`Space` = A, `Backspace`/`Delete` = B — drivable from a USB keyboard or
+> a serial terminal (GPIO14/15). USB is a hand-written **DWC2 host driver**
+> (`usb.inc.s`): core/port reset → control transfers → enumerate the onboard SMSC
+> **LAN9514 hub** → enumerate the keyboard behind it via **split transactions** →
+> SET_PROTOCOL(boot) → per-frame interrupt-IN poll of the 8-byte boot report. The
+> harness models the DWC2 register file + the hub + a keyboard, so the whole
+> enumeration state machine and HID decode are verified headlessly
+> (`shots/usb_notepad.png`, `shots/usb_theme.png` — nav + launch from injected USB
+> reports); the UART path is verified the same way (`shots/live_nav.png`,
+> `shots/live_notepad.png`). The two-phase START/COMPLETE-split handshake (with
+> NYET retry) is implemented and modelled; only its real-silicon retry *timing* is
+> the metal-only unknown. The
+> Music app drives the **PWM headphone jack in mark/space mode** (a real, audible
 > square-wave tone on Pi 3); the harness reconstructs that output from the PWM
 > register writes to a **WAV** and confirms the note sequence is "Ode to Joy"
 > (`shots/music.wav`). Everything emulator-verifiable is verified.
+>
+> **Pixel order.** Pixels are stored as little-endian `0xFFRRGGBB` words → bytes
+> `[B,G,R,A]` in memory, so the mailbox *set-pixel-order* tag must request **BGR**
+> (value 0); requesting RGB made real Pi 3 silicon read blue-as-red and the desktop
+> rendered brown. Override with `--defsym FB_PIXEL_ORDER=1` for on-metal A/B.
 
 ## Hardware brought up (from scratch)
 
@@ -58,11 +72,11 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
 |---|---|
 | CPU | **ARM Cortex-A (AArch64 / ARMv8-A)** — secondary cores parked via `mpidr_el1`, core 0 runs UnoDOS |
 | Video | firmware-allocated **mailbox framebuffer**, flat 640×480 **32bpp XRGB8888** linear surface |
-| FB setup | mailbox property channel (`0x3F00B880/98/A0`, ch 8): set phys/virt size + depth 32 + RGB order, allocate buffer, get pitch; GPU bus addr → ARM physical via `& 0x3FFFFFFF` |
-| Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word |
+| FB setup | mailbox property channel (`0x3F00B880/98/A0`, ch 8): set phys/virt size + depth 32 + **BGR** pixel order, allocate buffer, get pitch; GPU bus addr → ARM physical via `& 0x3FFFFFFF` |
+| Colour | 16-entry 32-bit palette in RAM; pixels store the looked-up XRGB word (`0xFFRRGGBB`, delivered to the firmware as `[B,G,R,A]` — see *Pixel order* above) |
 | Timing | BCM system timer low word `0x3F003004` (1 MHz); `wait_vblank` = busy-wait one `FRAME_US` (~60 Hz) |
 | Audio | **PWM0/1 mark/space** on the headphone jack: square wave at `PWM_CLK / RNG1`, `DAT1 = RNG1/2` (clock `0x3F1010A0`, PWM `0x3F20C000`). Harness reconstructs it to a WAV (note sequence = "Ode to Joy") |
-| Input | **PL011 UART** serial console (`0x3F201000`); poll `FR.RXFE`, read `DR`; WASD+Enter+Backspace → pad (USB-HID = future) |
+| Input | **USB-HID keyboard** via the **DWC2** host controller (`0x3F980000`) through the onboard LAN9514 hub (split transactions), boot-protocol 8-byte reports — *plus* a **PL011 UART** serial console fallback (`0x3F201000`). WASD/arrows + Enter/Space + Backspace/Delete → pad |
 | RAM | fixed layout: stack `→0x200000`, vars `0x300000`, mailbox buffer `0x310000`, fb base/pitch `0x320000` |
 | Boot | `kernel8.img` flat at `0x80000` (the `arm_64bit=1` entry); `_start` parks cores, sets SP, brings up the FB |
 
@@ -72,12 +86,26 @@ AUTOTEST images drive the pad through the same input path; nothing is faked
 sh rpi/build.sh                                        # -> rpi/build/kernel8.img
 sh rpi/build.sh nav|app|clock|theme|music|dostris      # AUTOTEST builds
 python rpi/harness.py rpi/build/kernel8.img rpi/shots/m1_boot.png
+python rpi/harness.py --usbkeys="dd " rpi/build/kernel8.img out.png   # drive USB-HID
+python rpi/harness.py --keys="dd "    rpi/build/kernel8.img out.png   # drive UART
 ```
 
+**Complete bootable microSD** (fetches the VideoCore firmware + builds both
+kernels + lays an MBR/FAT32 image, all unprivileged — run inside WSL/devbuntu):
+
+```sh
+bash rpi/make-card.sh            # -> rpi/build/unodos-rpi.img
+sudo dd if=rpi/build/unodos-rpi.img of=/dev/sdX bs=4M conv=fsync   # flash it
+```
+
+The image holds `config.txt` (`arm_64bit=1`, per-model kernel select, UART on),
+both kernels (`kernel8.img` Pi 3 / `kernel8-pi4.img` Pi 4), and the closed
+VideoCore blobs (`bootcode.bin`, `start.elf`, `fixup.dat`, `start4.elf`,
+`fixup4.dat`) — everything a Pi needs to boot to the desktop.
+
 Toolchain: `aarch64-linux-gnu-{as,ld,objcopy}` (binutils 2.42, via WSL) +
-`python` with `unicorn` 2.x. On a real Pi 3/4: drop `kernel8.img` on a FAT32 card
-with `config.txt` containing `arm_64bit=1` and the firmware (`bootcode.bin`,
-`start.elf`).
+`python` with `unicorn` 2.x; card builder also needs `dosfstools`, `mtools`,
+`util-linux` (`sfdisk`), `curl`.
 
 ## Contract
 

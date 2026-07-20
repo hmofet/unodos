@@ -151,6 +151,29 @@ GAME_SOLID_IDX = [8, 9, 7, 10]   # green, yellow, red, orange
 for idx in GAME_SOLID_IDX:
     tiles.append((f"solid idx{idx}", planar([[idx] * 8] * 8)))
 
+# ---------------- Pac-Man tiles -------------------------------------------------
+# The maze walls reuse T_SOLC (cyan); these are the dot, power pellet, Pac-Man
+# and ghost, drawn 8x8 on the blue window bg (index 2). Same 13x13 pillar-maze
+# design as the NES port, but SMS tiles carry their own colour (no per-app
+# palette), so each actor is its own coloured shape. 1=white 2=blue 9=yellow
+# 4=magenta 5=black.
+def pmtile(rows, m):
+    return planar([[m[c] for c in r] for r in rows])
+
+PM_BASE = len(tiles)
+tiles.append(("pm dot", pmtile([
+    "........", "........", "........", "...##...",
+    "...##...", "........", "........", "........"], {".": 2, "#": 1})))
+tiles.append(("pm power", pmtile([
+    "........", "..####..", "..####..", "..####..",
+    "..####..", "..####..", "........", "........"], {".": 2, "#": 9})))
+tiles.append(("pm pac", pmtile([          # yellow disc, wedge mouth facing right
+    "..####..", ".######.", "####....", "###.....",
+    "####....", ".######.", "..####..", "........"], {".": 2, "#": 9})))
+tiles.append(("pm ghost", pmtile([        # magenta body, white eyes, wavy skirt
+    "..####..", ".######.", "#oo##oo#", "#oo##oo#",
+    "########", "########", "########", "#.##.##."], {".": 2, "#": 4, "o": 1})))
+
 # ---------------- palette (CRAM bg entries 0..15) --------------------------------
 # SMS colour = %00BBGGRR; 2 bits per channel (0..3).
 def rgb(r, g, b):
@@ -254,7 +277,12 @@ with open(OUT, "w", newline="\n") as f:
     f.write(f"T_SGREEN      EQU {T_SGREEN}\n")
     f.write(f"T_SYELLOW     EQU {T_SYELLOW}\n")
     f.write(f"T_SRED        EQU {T_SRED}\n")
-    f.write(f"T_SORANGE     EQU {T_SORANGE}\n\n")
+    f.write(f"T_SORANGE     EQU {T_SORANGE}\n")
+    # Pac-Man: dot, power pellet, Pac-Man, ghost (walls reuse T_SOLC)
+    f.write(f"T_PMDOT       EQU {PM_BASE}\n")
+    f.write(f"T_PMPOW       EQU {PM_BASE+1}\n")
+    f.write(f"T_PMPAC       EQU {PM_BASE+2}\n")
+    f.write(f"T_PMGHO       EQU {PM_BASE+3}\n\n")
     f.write("; 4bpp planar tile blob, uploaded contiguously to VRAM tile 0\n")
     f.write("tiles_all:\n")
     for comment, b in tiles:

@@ -7,3 +7,7 @@ build/*
 !build/dostris.png
 !build/theme.png
 !build/music.png
+!build/tracker.png
+!build/outlast.png
+!build/pacman.png
+!build/paint.png

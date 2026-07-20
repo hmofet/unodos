@@ -4,3 +4,4 @@ build/*
 !build/wm.png
 !build/dostris.png
 !build/music.png
+!build/pacman.png
