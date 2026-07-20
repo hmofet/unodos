@@ -36,12 +36,18 @@ fwd=usr/lib/firmware/intel/iwlwifi
 
 mkdir -p "$dst"
 pick() { ls "$fwd"/$1 2>/dev/null | sort -V | tail -1; }
-cp "$(pick 'iwlwifi-QuZ-a0-hr-b0-*.ucode')" "$dst/IWLAX201.UCO"
-cp "$(pick 'iwlwifi-cc-a0-*.ucode')"        "$dst/IWLAX200.UCO"
-cp "$(pick 'iwlwifi-ty-a0-gf-a0-*.ucode')"  "$dst/IWLAX210.UCO"
+cp "$(pick 'iwlwifi-QuZ-a0-hr-b0-*.ucode')" "$dst/IWLAX201.UCO"   # AX201 (Qu/QuZ)
+cp "$(pick 'iwlwifi-cc-a0-*.ucode')"        "$dst/IWLAX200.UCO"   # AX200 (discrete)
+cp "$(pick 'iwlwifi-ty-a0-gf-a0-*.ucode')"  "$dst/IWLAX210.UCO"   # AX210 (Ty)
 cp "$fwd/iwlwifi-ty-a0-gf-a0.pnvm"          "$dst/IWLAX210.PNV"
+so=$(pick 'iwlwifi-so-a0-gf-a0-*.ucode')                          # AX211/AX411 (So)
+[ -n "$so" ] && { cp "$so" "$dst/IWLAX211.UCO"; cp "$fwd/iwlwifi-so-a0-gf-a0.pnvm" "$dst/IWLAX211.PNV"; } || true
 p9=$(pick 'iwlwifi-9000-pu-b0-jf-b0-*.ucode'); [ -n "$p9" ] && cp "$p9" "$dst/IWL9000.UCO" || true
 p92=$(pick 'iwlwifi-9260-th-b0-jf-b0-*.ucode'); [ -n "$p92" ] && cp "$p92" "$dst/IWL9260.UCO" || true
+p7=$(pick 'iwlwifi-7260-*.ucode'); [ -n "$p7" ] && cp "$p7" "$dst/IWL7260.UCO" || true
+p8=$(pick 'iwlwifi-8000C-*.ucode'); [ -n "$p8" ] && cp "$p8" "$dst/IWL8000.UCO" || true
+# WiFi-7 (Bz/Gl/Sc) is best-effort in the driver; fetch on demand with
+# tools/uno-wifi-fw.py --card be200|be201|be211 rather than bundling it.
 
 echo "Populated $dst:"
 ls -la "$dst"

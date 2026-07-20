@@ -1,5 +1,5 @@
 /* ===========================================================================
- * UnoDOS/pc64 - MPEG-1 Layer III (MP3) decoder.
+ * unomedia - MPEG-1 Layer III (MP3) decoder.
  *
  * Written from scratch against ISO/IEC 11172-3. The only thing not written
  * here is the specification's constant data - Huffman codebooks, the 512-tap
@@ -37,7 +37,7 @@
  * requantisation curve, via a Newton cube root) or a power of two reached by
  * repeated multiplication from sqrtf-derived constants.
  * ======================================================================== */
-#include "pc64_media.h"
+#include "unomedia.h"
 #include "mp3_tables.h"
 #include <string.h>
 #include <stdint.h>
@@ -208,7 +208,7 @@ static int raw_byte(long off)
 {
     if (off < m_buf_off || off >= m_buf_off + m_buf_len) {
         m_buf_off = off;
-        m_buf_len = (int)uno_src_read(off, m_buf, READ_CHUNK);
+        m_buf_len = (int)um_read(off, m_buf, READ_CHUNK);
         if (m_buf_len <= 0) { m_buf_len = 0; return -1; }
     }
     return m_buf[off - m_buf_off];
@@ -272,7 +272,7 @@ static int parse_header(const unsigned char *h, mp3_hdr *o)
 static long find_frame(long off, mp3_hdr *o)
 {
     unsigned char h[4], h2[4];
-    long limit = uno_src_size();
+    long limit = um_size();
     int guard = 0;
     while (off + 4 <= limit && guard++ < 1 << 20) {
         if (raw_read(off, h, 4) != 4) break;
@@ -832,7 +832,7 @@ static void reset_state(void)
     m_pcm_have = m_pcm_taken = 0;
 }
 
-static int mp3_open(uno_media_info *info)
+static int mp3_open(um_audio_info *info)
 {
     mp3_hdr h;
     long off;
@@ -864,7 +864,7 @@ static int mp3_open(uno_media_info *info)
             m_total_ms = (long)(((int64_t)frames * 1152 * 1000) / m_rate);
             m_pos = off + h.size;                  /* skip the header frame  */
         } else {
-            total = uno_src_size() - off;
+            total = um_size() - off;
             m_total_ms = (long)(((int64_t)total * 8) / kBitrate[h.br_idx]);
         }
     }
@@ -915,7 +915,7 @@ static int mp3_seek(long ms)
        header - the same one-frame settle every decoder has here. */
     target = ms;
     if (target > m_total_ms) target = m_total_ms;
-    bytes = m_first + (long)(((int64_t)(uno_src_size() - m_first) * target) /
+    bytes = m_first + (long)(((int64_t)(um_size() - m_first) * target) /
                              (m_total_ms ? m_total_ms : 1));
     reset_state();
     m_pos = bytes;
@@ -931,6 +931,6 @@ static long mp3_pos_ms(void)
 
 static void mp3_close(void) { m_ok = 0; }
 
-const uno_decoder uno_dec_mp3 = {
+const um_adecoder um_adec_mp3 = {
     "MP3", mp3_probe, mp3_open, mp3_decode, mp3_seek, mp3_close, mp3_pos_ms
 };

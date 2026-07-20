@@ -1,5 +1,5 @@
 /* ===========================================================================
- * UnoDOS/pc64 - the WAV decoder (RIFF/WAVE), written from scratch.
+ * unomedia - the WAV decoder (RIFF/WAVE), written from scratch.
  *
  * Handles what real files actually contain: linear PCM at 8 / 16 / 24 / 32
  * bits, IEEE float at 32 / 64 bits, any sample rate, any channel count
@@ -13,10 +13,10 @@
  * canonical 44-byte layout. Odd-sized chunks are word-padded, which several
  * popular encoders get wrong in the length field but right on disk.
  *
- * Nothing is loaded up front - samples stream through uno_src_read as they
+ * Nothing is loaded up front - samples stream through um_read as they
  * are converted, so file size is irrelevant to memory use.
  * ======================================================================== */
-#include "pc64_media.h"
+#include "unomedia.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -48,20 +48,20 @@ static int wav_probe(const unsigned char *head, long n, const char *ext)
 }
 
 /* walk the chunk list collecting `fmt ` and `data` */
-static int wav_open(uno_media_info *info)
+static int wav_open(um_audio_info *info)
 {
-    long off = 12, size = uno_src_size();
+    long off = 12, size = um_size();
     int have_fmt = 0, have_data = 0;
     unsigned char hdr[8], fmt[40];
 
     w_ok = 0; w_cur = 0;
     while (off + 8 <= size && !(have_fmt && have_data)) {
         uint32_t clen;
-        if (uno_src_read(off, hdr, 8) != 8) break;
+        if (um_read(off, hdr, 8) != 8) break;
         clen = rd32(hdr + 4);
         if (!memcmp(hdr, "fmt ", 4)) {
             long want = clen > sizeof fmt ? (long)sizeof fmt : (long)clen;
-            if (want < 16 || uno_src_read(off + 8, fmt, want) != want) return 0;
+            if (want < 16 || um_read(off + 8, fmt, want) != want) return 0;
             w_fmt   = rd16(fmt);
             w_nch   = rd16(fmt + 2);
             w_rate  = (int)rd32(fmt + 4);
@@ -144,7 +144,7 @@ static int wav_decode(short *out, int max_frames)
         if (want > RAW_BUF) want = RAW_BUF - (RAW_BUF % w_align);
         if (want > left)    want = left - (left % w_align);
         if (want < w_align) break;
-        got = uno_src_read(w_data_off + w_cur, w_raw, want);
+        got = um_read(w_data_off + w_cur, w_raw, want);
         if (got < w_align) break;                        /* short read = stop */
         nf = (int)(got / w_align);
         for (i = 0; i < nf; i++) {
@@ -179,6 +179,6 @@ static long wav_pos_ms(void)
 
 static void wav_close(void) { w_ok = 0; w_cur = 0; }
 
-const uno_decoder uno_dec_wav = {
+const um_adecoder um_adec_wav = {
     "WAV", wav_probe, wav_open, wav_decode, wav_seek, wav_close, wav_pos_ms
 };

@@ -20,7 +20,10 @@ The ESP installer copies the `APPS` directory; the whole-disk installer
 clones it implicitly. A missing module degrades gracefully: the window shows
 "module not found: APPS\\<NAME>.UNO".
 
-The 6 module apps: Dostris, Pac-Man, OutLast, Tracker, Paint, Network.
+The 6 classic-tier module apps: Dostris, Pac-Man, OutLast, Tracker, Paint,
+Network. Two more ship in the unoui-class tier (flags bit 0, full desktop
+citizens): **Studio** (the IDE) and **Photos** (the image viewer, carrying
+the whole unomedia decoder library inside the module - see IMAGES.md).
 (**Music left this list**: it is now a native unoui app, `pc64_music.c`. The
 legacy module drew itself with the Mac-Toolbox primitives against a fixed
 four-colour palette — that is where its hardcoded blue background came from,
