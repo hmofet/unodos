@@ -54,6 +54,7 @@ struct Tok {
     u8   kind;
     u8   id;                    /* KW_* or P_* */
     u16  file;                  /* index into Cc.files[] */
+    int  seq;                   /* lexing order (macro visibility window) */
     int  line, col;
     const char *p; int len;     /* identifier spelling (arena copy)        */
     i64  val;                   /* TK_NUM value                            */
@@ -198,6 +199,7 @@ struct Cc {
     Node *cur_sw;                   /* innermost switch (case collection) */
     /* statics uniquifier */
     int   statno;
+    int   lexseq;                   /* token sequence counter */
     int   dry;                      /* sizing pass for unsized-array inits:
                                        parse but write/reserve nothing */
     /* string literals: interned into data section image */

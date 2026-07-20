@@ -303,7 +303,23 @@ static void gen_call(G *g, Node *n)
 
     for (i = nargs - 1; i >= 0; i--) {                       /* right to left */
         gen_expr(g, argv[i]);
+        /* a small struct arg rides by value: rax holds its address, load
+         * the bytes themselves (MS ABI register-class for sizes 1/2/4/8) */
+        if (argv[i]->ty->kind == TY_STRUCT || argv[i]->ty->kind == TY_UNION) {
+            switch (argv[i]->ty->size) {
+            case 1: EB(0x0F, 0xB6, 0x00); break;             /* movzx eax,[rax] */
+            case 2: EB(0x0F, 0xB7, 0x00); break;
+            case 4: EB(0x8B, 0x00); break;
+            default: EB(0x48, 0x8B, 0x00); break;
+            }
+        }
         push_rax(g);
+    }
+    /* an indirect callee is evaluated BEFORE the argument registers load
+     * (its expression may freely clobber rcx/rdx/r8/r9) and parked in r10 */
+    if (!n->sym) {
+        gen_expr(g, n->lhs);
+        EB(0x49, 0x89, 0xC2);                                /* mov r10, rax */
     }
     if (nargs > 0) pop_rcx(g);
     if (nargs > 1) pop_rdx(g);
@@ -319,9 +335,8 @@ static void gen_call(G *g, Node *n)
         EB(0x48, 0x83, 0xEC, 0x20);                          /* sub rsp,32 */
         emit_call_direct(g, s);
     } else {
-        gen_expr(g, n->lhs);                                 /* fn ptr (stack-neutral) */
         EB(0x48, 0x83, 0xEC, 0x20);
-        EB(0xFF, 0xD0);                                      /* call rax */
+        EB(0x41, 0xFF, 0xD2);                                /* call r10 */
     }
     {
         int drop = 32 + 8 * stackargs + (pad ? 8 : 0);
@@ -460,7 +475,7 @@ static void gen_expr(G *g, Node *n)
         return;
     case ND_ASSIGN: {
         Type *lt = n->lhs->ty;
-        if (lt->kind == TY_STRUCT || lt->kind == TY_UNION) {
+        if (lt->kind == TY_STRUCT || lt->kind == TY_UNION || lt->kind == TY_ARR) {
             gen_addr(g, n->lhs);
             push_rax(g);
             gen_addr(g, n->rhs);                 /* struct rvalues are lvalues here */
