@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -44,22 +83,24 @@
 <main class="main"><div class="wrap">
 
 <h1>The desktop</h1>
-<p class="lede">A themed desktop with a window manager, a scrollable Start menu, a taskbar and a
+<p class="lede">A themed desktop with a window manager, a scrollable programs menu, a taskbar and a
 live clock. Every control works by keyboard or pointer.</p>
 
-<figure><img src="assets/img/desktop.png" alt="The desktop: app icons, the Start button (bottom-left), the taskbar with a button per open window, and the clock." loading="lazy"><figcaption>The desktop: app icons, the <b>Start</b> button (bottom-left), the taskbar with a button per open window, and the clock.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/desktop.png" aria-label="Enlarge: The desktop: app icons, the Start button (bottom-left), the taskbar with a button per open window, and the clock."><img src="assets/img/desktop.png" alt="The desktop: app icons, the Start button (bottom-left), the taskbar with a button per open window, and the clock." loading="lazy"></button><figcaption>The desktop: app icons, the <b>Start</b> button (bottom-left), the taskbar with a button per open window, and the clock.</figcaption></figure>
 
 <h2 id="furniture">Desktop furniture</h2>
 <ul>
-  <li><strong>Desktop icons</strong> launch apps directly.</li>
-  <li>The <strong>Start button</strong> carries the UnoDOS mark (a ring broken open with a numeral
-      <em>1</em> through it) and opens a scrollable <strong>Start menu</strong> ("Programs") that lists
-      every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>.</li>
+  <li><strong>Desktop icons</strong> launch apps directly. Arrange them in columns or rows,
+      in launcher order or by name, from the Control Panel.</li>
+  <li><strong>Right-click anywhere on the desktop</strong> for the scrollable <strong>programs
+      menu</strong> ("Programs"), which opens at the pointer, lists every app and ends with
+      <strong>Restart</strong> and <strong>Shut Down</strong>. <kbd>Ctrl</kbd>+<kbd>Esc</kbd>
+      opens it too. There is no Start button - the taskbar is your open windows and the clock.</li>
   <li>The <strong>taskbar</strong> along the bottom shows a button for each open window; click one to bring it to the front.</li>
   <li>The <strong>clock</strong> in the corner shows the current time (and the battery level, on laptops).</li>
 </ul>
 
-<figure><img src="assets/img/startmenu.png" alt="The Start menu lists every app, then Restart and Shut Down. Open it with Ctrl+Esc; move with the arrows and launch with Enter." loading="lazy"><figcaption>The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/startmenu.png" aria-label="Enlarge: The Start menu lists every app, then Restart and Shut Down. Open it with Ctrl+Esc; move with the arrows and launch with Enter."><img src="assets/img/startmenu.png" alt="The Start menu lists every app, then Restart and Shut Down. Open it with Ctrl+Esc; move with the arrows and launch with Enter." loading="lazy"></button><figcaption>The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.</figcaption></figure>
 
 <h2 id="windows">Windows</h2>
 <p>Each window has a title bar with a <strong>close box</strong>. Drag the title bar to move a window.

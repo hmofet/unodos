@@ -79,6 +79,24 @@ figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);b
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
+
+/* click-to-enlarge: the figure's image is a button, so it is keyboard
+   reachable and announces itself; the cursor and a soft hover lift are the
+   only affordance needed. */
+button.zoom{display:block;width:100%;padding:0;border:0;background:none;cursor:zoom-in}
+button.zoom:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+button.zoom img{transition:filter .12s ease}
+button.zoom:hover img{filter:brightness(1.06)}
+#lb{position:fixed;inset:0;z-index:99;display:none;place-items:center;
+  background:rgba(8,10,16,.86);padding:24px;cursor:zoom-out}
+#lb.on{display:grid}
+#lb img{max-width:100%;max-height:calc(100vh - 96px);width:auto;height:auto;
+  border-radius:10px;box-shadow:0 18px 60px rgba(0,0,0,.6);background:#0b0d13}
+#lb figcaption{position:fixed;left:0;right:0;bottom:0;text-align:center;
+  background:rgba(8,10,16,.92);color:#cfd6e6;border-top:0;padding:12px 20px}
+#lb .x{position:fixed;top:14px;right:18px;font-size:26px;line-height:1;
+  color:#cfd6e6;background:none;border:0;cursor:pointer;padding:6px 10px}
+@media print{button.zoom{cursor:default}#lb{display:none!important}}
 .shot-sm{max-width:520px}
 .grid{display:grid;gap:18px}
 .grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}

@@ -112,6 +112,24 @@ figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);b
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
+
+/* click-to-enlarge: the figure's image is a button, so it is keyboard
+   reachable and announces itself; the cursor and a soft hover lift are the
+   only affordance needed. */
+button.zoom{display:block;width:100%;padding:0;border:0;background:none;cursor:zoom-in}
+button.zoom:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+button.zoom img{transition:filter .12s ease}
+button.zoom:hover img{filter:brightness(1.06)}
+#lb{position:fixed;inset:0;z-index:99;display:none;place-items:center;
+  background:rgba(8,10,16,.86);padding:24px;cursor:zoom-out}
+#lb.on{display:grid}
+#lb img{max-width:100%;max-height:calc(100vh - 96px);width:auto;height:auto;
+  border-radius:10px;box-shadow:0 18px 60px rgba(0,0,0,.6);background:#0b0d13}
+#lb figcaption{position:fixed;left:0;right:0;bottom:0;text-align:center;
+  background:rgba(8,10,16,.92);color:#cfd6e6;border-top:0;padding:12px 20px}
+#lb .x{position:fixed;top:14px;right:18px;font-size:26px;line-height:1;
+  color:#cfd6e6;background:none;border:0;cursor:pointer;padding:6px 10px}
+@media print{button.zoom{cursor:default}#lb{display:none!important}}
 .shot-sm{max-width:520px}
 .grid{display:grid;gap:18px}
 .grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -185,6 +203,45 @@ THEME_TOGGLE = r"""
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 """
 
 def sidebar(active):
@@ -249,9 +306,16 @@ def page(fname, title, body):
 
 # --------------------------------------------------------------------------- helpers
 def fig(src, cap, cls=""):
+    """A screenshot figure. Clicking the image opens it full size in the
+    lightbox (see LIGHTBOX_JS): manual screenshots are scaled down to fit the
+    text column, which makes small UI detail - a status line, an icon, a menu
+    item - unreadable at the size it is printed."""
     c = f' class="{cls}"' if cls else ""
     alt = html.escape(re.sub(r"<[^>]+>", "", cap))          # plain text for alt
-    return f'<figure{c}><img src="assets/img/{src}" alt="{alt}" loading="lazy"><figcaption>{cap}</figcaption></figure>'
+    return (f'<figure{c}><button type="button" class="zoom" '
+            f'data-full="assets/img/{src}" aria-label="Enlarge: {alt}">'
+            f'<img src="assets/img/{src}" alt="{alt}" loading="lazy">'
+            f'</button><figcaption>{cap}</figcaption></figure>')
 
 def note(body, kind="", title="Note"):
     k = f" {kind}" if kind else ""
@@ -499,11 +563,11 @@ PAGES["index.html"] = ("Overview", f"""
 
 {note('Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
-{fig("desktop.png", "The pc64 desktop in the default <b>Aurora Light</b> theme, with desktop icons, a Start button, a taskbar and a clock.")}
+{fig("desktop.png", "The pc64 desktop in the default <b>Aurora Light</b> theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock.")}
 
 <h2 id="what">What you get</h2>
 <div class="cards">
-  <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, and windows you can move and resize, all by keyboard or pointer.</p></div>
+  <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. Right-click the desktop for the programs menu.</p></div>
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
   <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
@@ -612,7 +676,7 @@ keyboard all work.</p>
   {fig("splash.png", "The boot splash, with a loading bar and version.")}
   {fig("controlpanel.png", "First desktop paint: the Control Panel opens over the Aurora Light desktop.")}
 </div>
-<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the Start menu;
+<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the programs menu (so does a right-click on the desktop);
 arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a window. The
 <a href="desktop.html">desktop tour</a> covers the rest.</p>
 
@@ -622,17 +686,19 @@ arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes
 
 PAGES["desktop.html"] = ("The desktop", f"""
 <h1>The desktop</h1>
-<p class="lede">A themed desktop with a window manager, a scrollable Start menu, a taskbar and a
+<p class="lede">A themed desktop with a window manager, a scrollable programs menu, a taskbar and a
 live clock. Every control works by keyboard or pointer.</p>
 
 {fig("desktop.png", "The desktop: app icons, the <b>Start</b> button (bottom-left), the taskbar with a button per open window, and the clock.")}
 
 <h2 id="furniture">Desktop furniture</h2>
 <ul>
-  <li><strong>Desktop icons</strong> launch apps directly.</li>
-  <li>The <strong>Start button</strong> carries the UnoDOS mark (a ring broken open with a numeral
-      <em>1</em> through it) and opens a scrollable <strong>Start menu</strong> ("Programs") that lists
-      every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>.</li>
+  <li><strong>Desktop icons</strong> launch apps directly. Arrange them in columns or rows,
+      in launcher order or by name, from the Control Panel.</li>
+  <li><strong>Right-click anywhere on the desktop</strong> for the scrollable <strong>programs
+      menu</strong> ("Programs"), which opens at the pointer, lists every app and ends with
+      <strong>Restart</strong> and <strong>Shut Down</strong>. <kbd>Ctrl</kbd>+<kbd>Esc</kbd>
+      opens it too. There is no Start button - the taskbar is your open windows and the clock.</li>
   <li>The <strong>taskbar</strong> along the bottom shows a button for each open window; click one to bring it to the front.</li>
   <li>The <strong>clock</strong> in the corner shows the current time (and the battery level, on laptops).</li>
 </ul>
@@ -751,16 +817,14 @@ target the other pane's folder.</p>
 <h2 id="native">Everyday apps</h2>
 <div class="grid cols-2">
   {fig("system.png", "<b>System</b>: device information in tidy groups - Input &amp; USB, Storage, Power &amp; ACPI, and Audio. The Storage group shows which native driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio shows which backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).")}
-  {fig("clock.png", "<b>Clock</b>: the current time.")}
+  {fig("clock.png", "<b>Clock</b>: an analog face beside a world map showing the day/night terminator, with world times for twenty cities.")}
 </div>
-<p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
-{fig("canvas.png", "The <b>Canvas</b> demo: an app drawing inside its own window.", cls="shot-sm")}
 
 <h2 id="creative">Creative tools</h2>
 <div class="grid cols-3">
   {fig("paint.png", "<b>Paint</b>: pencil, shapes, fills and a colour palette.")}
   {fig("tracker.png", "<b>Tracker</b>: a 4-channel pattern sequencer.")}
-  {fig("music.png", "<b>Music</b>: a melody player.")}
+  {fig("music.png", "<b>Music</b>: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes.")}
 </div>
 <p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
 or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic

@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -56,8 +95,8 @@ word-wraps to the window and everything is on the menu bar, the toolbar, or a sh
 <kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>).
 There's find &amp; replace, a ruler, and a status bar with the cursor position.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/editor.png" alt="Editor: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar." loading="lazy"><figcaption><b>Editor</b>: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar.</figcaption></figure>
-  <figure><img src="assets/img/editor_rich.png" alt="Rich text for real: the whole document selected and set bold from the keyboard." loading="lazy"><figcaption>Rich text for real: the whole document selected and set bold from the keyboard.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/editor.png" aria-label="Enlarge: Editor: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar."><img src="assets/img/editor.png" alt="Editor: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar." loading="lazy"></button><figcaption><b>Editor</b>: menu bar, toolbar (faces, sizes, B/I/U, alignment), ruler, word-wrapped document and status bar.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/editor_rich.png" aria-label="Enlarge: Rich text for real: the whole document selected and set bold from the keyboard."><img src="assets/img/editor_rich.png" alt="Rich text for real: the whole document selected and set bold from the keyboard." loading="lazy"></button><figcaption>Rich text for real: the whole document selected and set bold from the keyboard.</figcaption></figure>
 </div>
 <p>Documents save through the <strong>Open / Save As</strong> dialog to any writable volume: the
 styled <strong>UWD</strong> format keeps the formatting, or name a file <code>.TXT</code> to save
@@ -71,23 +110,21 @@ the toolbar for real operations: <strong>new folder</strong>, <strong>rename</st
 <strong>Two panes</strong> button switches to a classic two-pane commander layout: copy and move then
 target the other pane's folder.</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/files.png" alt="Files: volumes, folders and files with sizes, and a toolbar of real file operations." loading="lazy"><figcaption><b>Files</b>: volumes, folders and files with sizes, and a toolbar of real file operations.</figcaption></figure>
-  <figure><img src="assets/img/files_two.png" alt="The two-pane layout: the active pane&#x27;s header is highlighted; Copy/Move target the other pane." loading="lazy"><figcaption>The <b>two-pane</b> layout: the active pane's header is highlighted; Copy/Move target the other pane.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/files.png" aria-label="Enlarge: Files: volumes, folders and files with sizes, and a toolbar of real file operations."><img src="assets/img/files.png" alt="Files: volumes, folders and files with sizes, and a toolbar of real file operations." loading="lazy"></button><figcaption><b>Files</b>: volumes, folders and files with sizes, and a toolbar of real file operations.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/files_two.png" aria-label="Enlarge: The two-pane layout: the active pane&#x27;s header is highlighted; Copy/Move target the other pane."><img src="assets/img/files_two.png" alt="The two-pane layout: the active pane&#x27;s header is highlighted; Copy/Move target the other pane." loading="lazy"></button><figcaption>The <b>two-pane</b> layout: the active pane's header is highlighted; Copy/Move target the other pane.</figcaption></figure>
 </div>
 
 <h2 id="native">Everyday apps</h2>
 <div class="grid cols-2">
-  <figure><img src="assets/img/system.png" alt="System: device information in tidy groups - Input &amp;amp; USB, Storage, Power &amp;amp; ACPI, and Audio. The Storage group shows which native driver has taken over (DETACHED (native): ahci0 / nvme0 / emmc0), and Audio shows which backend the sound reaches (HD Audio, AC&#x27;97, or the PC speaker)." loading="lazy"><figcaption><b>System</b>: device information in tidy groups - Input &amp; USB, Storage, Power &amp; ACPI, and Audio. The Storage group shows which native driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio shows which backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).</figcaption></figure>
-  <figure><img src="assets/img/clock.png" alt="Clock: the current time." loading="lazy"><figcaption><b>Clock</b>: the current time.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/system.png" aria-label="Enlarge: System: device information in tidy groups - Input &amp;amp; USB, Storage, Power &amp;amp; ACPI, and Audio. The Storage group shows which native driver has taken over (DETACHED (native): ahci0 / nvme0 / emmc0), and Audio shows which backend the sound reaches (HD Audio, AC&#x27;97, or the PC speaker)."><img src="assets/img/system.png" alt="System: device information in tidy groups - Input &amp;amp; USB, Storage, Power &amp;amp; ACPI, and Audio. The Storage group shows which native driver has taken over (DETACHED (native): ahci0 / nvme0 / emmc0), and Audio shows which backend the sound reaches (HD Audio, AC&#x27;97, or the PC speaker)." loading="lazy"></button><figcaption><b>System</b>: device information in tidy groups - Input &amp; USB, Storage, Power &amp; ACPI, and Audio. The Storage group shows which native driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio shows which backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/clock.png" aria-label="Enlarge: Clock: an analog face beside a world map showing the day/night terminator, with world times for twenty cities."><img src="assets/img/clock.png" alt="Clock: an analog face beside a world map showing the day/night terminator, with world times for twenty cities." loading="lazy"></button><figcaption><b>Clock</b>: an analog face beside a world map showing the day/night terminator, with world times for twenty cities.</figcaption></figure>
 </div>
-<p>A <strong>Canvas</strong> demo shows how an app can draw freely inside its window.</p>
-<figure class="shot-sm"><img src="assets/img/canvas.png" alt="The Canvas demo: an app drawing inside its own window." loading="lazy"><figcaption>The <b>Canvas</b> demo: an app drawing inside its own window.</figcaption></figure>
 
 <h2 id="creative">Creative tools</h2>
 <div class="grid cols-3">
-  <figure><img src="assets/img/paint.png" alt="Paint: pencil, shapes, fills and a colour palette." loading="lazy"><figcaption><b>Paint</b>: pencil, shapes, fills and a colour palette.</figcaption></figure>
-  <figure><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
-  <figure><img src="assets/img/music.png" alt="Music: a melody player." loading="lazy"><figcaption><b>Music</b>: a melody player.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/paint.png" aria-label="Enlarge: Paint: pencil, shapes, fills and a colour palette."><img src="assets/img/paint.png" alt="Paint: pencil, shapes, fills and a colour palette." loading="lazy"></button><figcaption><b>Paint</b>: pencil, shapes, fills and a colour palette.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/tracker.png" aria-label="Enlarge: Tracker: a 4-channel pattern sequencer."><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"></button><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/music.png" aria-label="Enlarge: Music: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes."><img src="assets/img/music.png" alt="Music: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes." loading="lazy"></button><figcaption><b>Music</b>: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes.</figcaption></figure>
 </div>
 <p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
 or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
@@ -98,10 +135,10 @@ sets the level.</p>
 <p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
 (press <kbd>Esc</kbd> to come back to the desktop).</p>
 <div class="grid cols-2">
-  <figure><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level." loading="lazy"><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level.</figcaption></figure>
-  <figure><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts." loading="lazy"><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts.</figcaption></figure>
-  <figure><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game." loading="lazy"><figcaption><b>OutLast</b>: an arcade driving game.</figcaption></figure>
-  <figure><img src="assets/img/runner3d.png" alt="Runner3D: a real-time 3D game." loading="lazy"><figcaption><b>Runner3D</b>: a real-time 3D game.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/dostris.png" aria-label="Enlarge: Dostris: the falling-block game, with score, lines and level."><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level." loading="lazy"></button><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/pacman.png" aria-label="Enlarge: Pac-Man: maze, dots, power pellets and ghosts."><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts." loading="lazy"></button><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/outlast.png" aria-label="Enlarge: OutLast: an arcade driving game."><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game." loading="lazy"></button><figcaption><b>OutLast</b>: an arcade driving game.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/runner3d.png" aria-label="Enlarge: Runner3D: a real-time 3D game."><img src="assets/img/runner3d.png" alt="Runner3D: a real-time 3D game." loading="lazy"></button><figcaption><b>Runner3D</b>: a real-time 3D game.</figcaption></figure>
 </div>
 <div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
 

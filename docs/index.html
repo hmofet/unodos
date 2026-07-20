@@ -20,6 +20,45 @@
   };
 })();
 </script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
 
 </head>
 <body>
@@ -67,11 +106,11 @@
 
 <div class="note tip"><b>Just want to try it?</b>Most people run UnoDOS with the one-click <strong>USB flasher</strong>: download it, write UnoDOS to a spare USB stick, and boot. No building required. See <a href="getting-started.html">Getting started</a>.</div>
 
-<figure><img src="assets/img/desktop.png" alt="The pc64 desktop in the default Aurora Light theme, with desktop icons, a Start button, a taskbar and a clock." loading="lazy"><figcaption>The pc64 desktop in the default <b>Aurora Light</b> theme, with desktop icons, a Start button, a taskbar and a clock.</figcaption></figure>
+<figure><button type="button" class="zoom" data-full="assets/img/desktop.png" aria-label="Enlarge: The pc64 desktop in the default Aurora Light theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock."><img src="assets/img/desktop.png" alt="The pc64 desktop in the default Aurora Light theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock." loading="lazy"></button><figcaption>The pc64 desktop in the default <b>Aurora Light</b> theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock.</figcaption></figure>
 
 <h2 id="what">What you get</h2>
 <div class="cards">
-  <div class="card"><h4>A real desktop</h4><p>Window manager, Start menu, taskbar, desktop icons, and windows you can move and resize, all by keyboard or pointer.</p></div>
+  <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. Right-click the desktop for the programs menu.</p></div>
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
   <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
