@@ -73,6 +73,7 @@ void uno_dbg_write_perf(const char *text, int len);  /* CRASH\PF###.TXT        *
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */
 void pc64_stress_tick(void);            /* call once per main-loop frame       */
 void pc64_stress_stop(void);            /* F12: disarm + hand back the desktop */
+const char *pc64_stress_status(void);   /* on-screen run state, 0 when unarmed */
 
 /* ---- synthetic input (uefi_main.c, UNO_DEBUG only) ----------------------- */
 void uno_pc64_inject_key(int scan, int uni, int ctrl);
