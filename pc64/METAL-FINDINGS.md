@@ -14,7 +14,9 @@ Raw reports are preserved off each stick under
 |---------|-----|------|-------|
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
-| Latitude | — | pending | expected to detach (AHCI) — but see F6 before assuming it will |
+| Latitude | — | in progress | expected to detach (AHCI) — but see F6 before assuming it will |
+| Lenovo X13 Yoga Gen 3 | — | pending | convertible/touch — another I2C-HID + firmware-pointer data point for F4/F6 |
+| MacBook Pro 2013 13" | — | pending | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
 ZERO hangs.** `surface-2026-07-20-run2/`. A pass is ~30 s at the default
@@ -77,6 +79,21 @@ existing dirty-row/shadow tracking limits but does not remove it.
   - `gop: mode 1536x1024 stride 1536 pixfmt 1 fb_base 4000000000 present=linear`
   - `mtrr6 covers fb: base=4000000000 mask=4000000800 type=0 (UC - SLOW PRESENT!)`
   - `fb bench: vram 14062 KB/s ram 1828932096 KB/s ratio 1:130062  << UNCACHED-CLASS VRAM`
+- **What it costs, in frames.** A full-screen repaint writes `w*h*4` to VRAM:
+  - X1: 1920x1080x4 = 8100 KB / 24937 KB/s = **0.32 s → ~3 fps**
+  - Surface: 1536x1024x4 = 6144 KB / 14125 KB/s = **0.43 s → ~2.3 fps**
+  This is a hard ceiling nothing above the present path can beat, and it matches
+  the reported symptoms exactly. Two consequences worth carrying into the fix:
+  - **Fullscreen apps are pinned to it.** `UI.full` forces `g_dirty` every frame,
+    so Runner3D repaints the whole screen every frame → ~3 fps no matter how
+    fast the 3D pipeline itself is. "3D Runner is extremely slow" is this.
+  - **Low-res mode does not help.** `uno_pc64_lowres()` drops the desktop to
+    1/4 x 1/4 (~1/16 the pixels to *render*), but present scales up and still
+    writes the **full panel area** to VRAM. It cuts render cost and leaves the
+    actual bottleneck untouched — so the existing optimisation is aimed at the
+    wrong half of the frame.
+  - Ordinary desktop use stays tolerable only because dirty-row tracking keeps
+    most frames far below full-screen.
 - Root cause / fix difficulty (investigated, **do not blind-fix**):
   - `mtrr6` is coarse — its physmask (`0x40_0000_0000`) also blankets the >4 GB
     high-MMIO region where the Surface's xHCI/NVMe/I2C register BARs live, which

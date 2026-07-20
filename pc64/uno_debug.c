@@ -1163,6 +1163,7 @@ void uno_dbg_write_perf(const char *text, int len)
 static unsigned long g_render_us, g_present_us;     /* EMA (x16)            */
 static unsigned long g_frames, g_idle_frames;
 static unsigned long long g_hud_t0;
+static unsigned long g_fps;                         /* refreshed once a second */
 
 void uno_dbg_frame_render_cyc(unsigned long long cyc)
 {
@@ -1175,22 +1176,43 @@ void uno_dbg_frame_present_cyc(unsigned long long cyc)
     g_present_us += us - g_present_us / 16;
 }
 void uno_dbg_frame_idle(int was_idle)
-{ g_frames++; if (was_idle) g_idle_frames++; }
-void uno_dbg_hud_toggle(void) { g_hud_on = !g_hud_on; }
-
-int uno_dbg_hud(char *buf, int max)
 {
-    static unsigned long fps;
+    static unsigned long last_frames;
     unsigned long long now;
-    unsigned long hu = 0, hf = 0, hl = 0;
-    if (!g_hud_on) return 0;
+    g_frames++;
+    if (was_idle) g_idle_frames++;
+    /* fps here, not in the HUD: the HUD only runs when it is drawn/enabled, and
+     * the perf snapshot must carry real numbers either way. */
     now = uno_dbg_uptime_ms();
     if (now - g_hud_t0 >= 1000) {
-        static unsigned long last_frames;
-        fps = g_frames - last_frames;
+        g_fps = g_frames - last_frames;
         last_frames = g_frames;
         g_hud_t0 = now;
     }
+}
+void uno_dbg_hud_toggle(void) { g_hud_on = !g_hud_on; }
+
+/* One line of hard perf numbers for CRASH\PF###.TXT.  The HUD is on-screen
+ * only, so without this the render-vs-present split - the thing that says
+ * whether a machine is CPU-bound or framebuffer-bound - never reached disk and
+ * we had to ask the operator to read a HUD. */
+int uno_dbg_perf_line(char *buf, int max)
+{
+    unsigned long hu = 0, hf = 0, hl = 0;
+    uno_heap_stats(&hu, &hf, &hl);
+    return snprintf(buf, (size_t)max,
+        "perf: render_avg=%lu us  present_avg=%lu us  fps=%lu  idle=%lu%%  "
+        "frames=%lu  heap_used=%lu",
+        g_render_us / 16, g_present_us / 16, g_fps,
+        g_frames ? g_idle_frames * 100 / g_frames : 0,
+        g_frames, hu);
+}
+
+int uno_dbg_hud(char *buf, int max)
+{
+    unsigned long fps = g_fps;
+    unsigned long hu = 0, hf = 0, hl = 0;
+    if (!g_hud_on) return 0;
     uno_heap_stats(&hu, &hf, &hl);
     return snprintf(buf, (size_t)max,
                     "DBG r%lu.%lums p%lu.%lums f%lu idle%lu%% heap%luM cr%d",
