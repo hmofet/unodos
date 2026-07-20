@@ -123,8 +123,10 @@ static int menuh(void) { return g_lh + 6; }
 static void layout(unoui_rect c)
 {
     int mh = menuh(), sh = g_lh + 4, oh = g_lh * OUT_ROWS + 6;
+    /* the AI column wants room; on the default chunky desktop it stays hidden
+     * (raise the resolution in the Control Panel to bring it in) */
     int lw = (g_show_proj && c.w >= 470) ? 116 : 0;
-    int rw = (g_show_ai   && c.w >= 820) ? 210 : 0;
+    int rw = (g_show_ai   && c.w >= 720) ? 208 : 0;
     int bodyy = c.y + mh, bodyh = c.h - mh - sh;
     L_menu   = (R){ c.x, c.y, c.w, mh };
     L_status = (R){ c.x, c.y + c.h - sh, c.w, sh };
