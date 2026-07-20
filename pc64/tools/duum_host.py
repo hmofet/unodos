@@ -115,6 +115,98 @@ def render_map(m, path):
 FOV = math.pi / 2
 NEAR = 4.0
 EYE = 41
+VER = 1.5             # vertical exaggeration: walls were too short vs sky/floor
+
+
+# ---- textures: palette, patches, TEXTUREx composition ---------------------
+def load_palette(wad):
+    d, _ = wad.lump("PLAYPAL")
+    return [(d[i*3], d[i*3+1], d[i*3+2]) for i in range(256)]
+
+
+def load_pnames(wad):
+    d, _ = wad.lump("PNAMES")
+    n = struct.unpack_from("<I", d, 0)[0]
+    return [d[4+i*8:4+i*8+8].split(b"\0")[0].decode("latin1").upper() for i in range(n)]
+
+
+def parse_textures(wad, lumpname, pnames, out):
+    d, _ = wad.lump(lumpname)
+    if d is None:
+        return
+    count = struct.unpack_from("<I", d, 0)[0]
+    offs = struct.unpack_from("<%dI" % count, d, 4)
+    for o in offs:
+        name = d[o:o+8].split(b"\0")[0].decode("latin1").upper()
+        w, h = struct.unpack_from("<HH", d, o+12)
+        pc = struct.unpack_from("<H", d, o+20)[0]
+        patches = []
+        for p in range(pc):
+            ox, oy, pidx = struct.unpack_from("<hhH", d, o+22+p*10)
+            if pidx < len(pnames):
+                patches.append((ox, oy, pnames[pidx]))
+        out[name] = (w, h, patches)
+
+
+def decode_patch(wad, name):
+    d, _ = wad.lump(name)
+    if d is None:
+        return None
+    w, h, lo, to = struct.unpack_from("<HHhh", d, 0)
+    colofs = struct.unpack_from("<%dI" % w, d, 8)
+    cols = []
+    for c in range(w):
+        posts = []
+        p = colofs[c]
+        while p < len(d) and d[p] != 0xFF:
+            top = d[p]; length = d[p+1]
+            pix = d[p+3:p+3+length]
+            posts.append((top, pix))
+            p += length + 4
+        cols.append(posts)
+    return w, h, cols
+
+
+def compose_texture(wad, texdef):
+    """Return (w, h, grid) where grid[x*h + y] = palette index (-1 transparent)."""
+    w, h, patches = texdef
+    grid = bytearray([0]) * (w * h)      # 0 = default fill; good enough (no masking on walls)
+    for (ox, oy, pname) in patches:
+        pat = decode_patch(wad, pname)
+        if pat is None:
+            continue
+        pw, ph, cols = pat
+        for cx in range(pw):
+            dx = ox + cx
+            if dx < 0 or dx >= w:
+                continue
+            base = dx * h
+            for (top, pix) in cols[cx]:
+                for i in range(len(pix)):
+                    dy = oy + top + i
+                    if 0 <= dy < h:
+                        grid[base + dy] = pix[i]
+    return w, h, grid
+
+
+class Textures:
+    def __init__(self, wad):
+        self.wad = wad
+        self.pal = load_palette(wad)
+        pn = load_pnames(wad)
+        self.defs = {}
+        parse_textures(wad, "TEXTURE1", pn, self.defs)
+        parse_textures(wad, "TEXTURE2", pn, self.defs)
+        self.cache = {}
+
+    def get(self, name):
+        name = name.upper()
+        if name in self.cache:
+            return self.cache[name]
+        td = self.defs.get(name)
+        t = compose_texture(self.wad, td) if td else None
+        self.cache[name] = t
+        return t
 
 
 def seg_sectors(m, seg):
@@ -146,7 +238,7 @@ def shade(base, dist, light, k=1.0):
     return (min(255, int(base[0] * f)), min(255, int(base[1] * f)), min(255, int(base[2] * f)))
 
 
-def render_view(m, px, py, pa, path):
+def render_view(m, px, py, pa, path, tx):
     buf = bytearray(W * H * 3)
     ceilc = [0] * W          # top of the still-open window per column (inclusive)
     floorc = [H - 1] * W     # bottom of the open window per column (inclusive)
@@ -154,6 +246,7 @@ def render_view(m, px, py, pa, path):
     ps = point_sector(m, px, py)
     viewz = (ps[0] if ps else 0) + EYE           # eye = floor height + 41
     scale = (W / 2) / math.tan(FOV / 2)
+    vscale = scale * VER          # taller walls: vertical exaggeration/aspect
     hh = H / 2
 
     def vspan(x, y0, y1, rgb):
@@ -168,37 +261,71 @@ def render_view(m, px, py, pa, path):
 
     CEIL = (84, 88, 104); FLOORC = (120, 100, 74)
     WALL = (200, 188, 170); UPPER = (172, 150, 122); LOWER = (140, 150, 170)
+    pal = tx.pal
+
+    def texname(b):
+        s = b.split(b"\0")[0].decode("latin1")
+        return s if (s and s != "-") else None
+
+    def wall_col(x, ytop, ybot, ct, cb, tex, tc, v0, dv, f, fb):
+        """Draw a textured wall column clipped to the open window [ct,cb]."""
+        y0 = ytop if ytop > ct else ct
+        y1 = ybot if ybot < cb else cb
+        if y0 < 0: y0 = 0
+        if y1 > H - 1: y1 = H - 1
+        if y1 < y0: return
+        base = (y0 * W + x) * 3
+        if tex is None:                              # no texture -> flat colour
+            r = int(fb[0]*f); g = int(fb[1]*f); b = int(fb[2]*f)
+            for _ in range(y0, y1 + 1):
+                buf[base] = r; buf[base+1] = g; buf[base+2] = b; base += W*3
+            return
+        tw, th, grid = tex
+        col = (int(tc) % tw) * th
+        v = v0 + (y0 - ytop) * dv
+        for _ in range(y0, y1 + 1):
+            p = pal[grid[col + (int(v) % th)]]
+            buf[base] = int(p[0]*f); buf[base+1] = int(p[1]*f); buf[base+2] = int(p[2]*f)
+            base += W*3; v += dv
 
     def draw_seg(seg):
         v1, v2, ang, ldi, side, off = seg
         fs, bs = seg_sectors(m, seg)
         if fs is None: return
+        ld = m.lines[ldi]
+        fsd = m.sides[ld[6] if side else ld[5]]      # front sidedef
+        xoff = fsd[0]; yoff = fsd[1]
+        mid_t = tx.get(texname(fsd[4])) if texname(fsd[4]) else None
+        up_t  = tx.get(texname(fsd[2])) if texname(fsd[2]) else None
+        lo_t  = tx.get(texname(fsd[3])) if texname(fsd[3]) else None
         ax, ay = m.verts[v1]; bx, by = m.verts[v2]
-        wk = 1.15 if abs(bx - ax) > abs(by - ay) else 0.85    # fake contrast by facing
-        # view space: depth = forward, sx = right
+        wk = 1.12 if abs(bx - ax) > abs(by - ay) else 0.88    # fake contrast by facing
         d1x, d1y = ax - px, ay - py
         d2x, d2y = bx - px, by - py
         depth1 = d1x * cos_a + d1y * sin_a
         depth2 = d2x * cos_a + d2y * sin_a
         sx1 = d1y * cos_a - d1x * sin_a
         sx2 = d2y * cos_a - d2x * sin_a
-        # near-clip: both behind -> skip; one behind -> clip to NEAR
+        wlen = math.hypot(bx - ax, by - ay)
+        u1 = off + xoff; u2 = u1 + wlen              # texture u at v1, v2
         if depth1 < NEAR and depth2 < NEAR: return
         if depth1 < NEAR:
             t = (NEAR - depth1) / (depth2 - depth1)
-            sx1 += t * (sx2 - sx1); depth1 = NEAR
+            sx1 += t * (sx2 - sx1); u1 += t * (u2 - u1); depth1 = NEAR
         elif depth2 < NEAR:
             t = (NEAR - depth2) / (depth1 - depth2)
-            sx2 += t * (sx1 - sx2); depth2 = NEAR
+            sx2 += t * (sx1 - sx2); u2 += t * (u1 - u2); depth2 = NEAR
         rx1 = (W / 2) + (sx1 / depth1) * scale
         rx2 = (W / 2) + (sx2 / depth2) * scale
         if rx1 >= rx2: return                     # back-face / degenerate
         ix1 = max(0, int(math.ceil(rx1))); ix2 = min(W - 1, int(math.floor(rx2)))
         if ix1 > ix2: return
         inv1, inv2 = 1.0 / depth1, 1.0 / depth2
+        uz1 = u1 * inv1; uz2 = u2 * inv2
         fc, ff, flight = fs[1], fs[0], fs[4]
         if bs is not None:
             bc, bf = bs[1], bs[0]
+        lf = 0.72 + 0.28 * (flight / 255.0)
         span = rx2 - rx1
         for x in range(ix1, ix2 + 1):
             if ceilc[x] > floorc[x]:
@@ -206,28 +333,35 @@ def render_view(m, px, py, pa, path):
             t = (x - rx1) / span
             invd = inv1 + (inv2 - inv1) * t
             dist = 1.0 / invd
-            yfc = int(hh - (fc - viewz) * scale * invd)     # front ceil screen y
-            yff = int(hh - (ff - viewz) * scale * invd)     # front floor screen y
+            u = (uz1 + (uz2 - uz1) * t) / invd       # perspective-correct texel u
+            df = 1200.0 / (dist + 650.0)
+            if df > 1.0: df = 1.0
+            elif df < 0.68: df = 0.68
+            f = lf * df; fw = f * wk
+            dv = dist / vscale                        # texels per screen row
+            yfc = int(hh - (fc - viewz) * vscale * invd)
+            yff = int(hh - (ff - viewz) * vscale * invd)
             ct, cb = ceilc[x], floorc[x]
-            # ceiling fill above the front ceiling
-            if yfc > ct:
+            if yfc > ct:                              # ceiling
                 vspan(x, ct, min(yfc - 1, cb), shade(CEIL, dist, flight))
-            # floor fill below the front floor
-            if yff < cb:
+            if yff < cb:                              # floor
                 vspan(x, max(yff + 1, ct), cb, shade(FLOORC, dist, flight))
-            if bs is None:                              # solid wall: full column
-                vspan(x, max(yfc, ct), min(yff, cb), shade(WALL, dist, flight, wk))
-                ceilc[x] = 1; floorc[x] = 0             # column closed
-            else:                                       # two-sided portal
-                ybc = int(hh - (bc - viewz) * scale * invd)
-                ybf = int(hh - (bf - viewz) * scale * invd)
-                newct, newcb = max(ct, yfc), min(cb, yff)
-                if bc < fc:                             # upper step
-                    vspan(x, max(yfc, ct), min(ybc - 1, cb), shade(UPPER, dist, flight, wk))
-                    newct = max(newct, ybc)
-                if bf > ff:                             # lower step
-                    vspan(x, max(ybf + 1, ct), min(yff, cb), shade(LOWER, dist, flight, wk))
-                    newcb = min(newcb, ybf)
+            if bs is None:                            # solid wall
+                wall_col(x, yfc, yff, ct, cb, mid_t, u, yoff, dv, fw, WALL)
+                ceilc[x] = 1; floorc[x] = 0
+            else:
+                ybc = int(hh - (bc - viewz) * vscale * invd)
+                ybf = int(hh - (bf - viewz) * vscale * invd)
+                newct = ct if ct > yfc else yfc
+                newcb = cb if cb < yff else yff
+                if bc < fc:                           # upper step (pegged to fc)
+                    fbc = UPPER if up_t else CEIL     # no texture -> blend w/ ceiling
+                    wall_col(x, yfc, ybc - 1, ct, cb, up_t, u, yoff, dv, fw if up_t else f, fbc)
+                    if ybc > newct: newct = ybc
+                if bf > ff:                           # lower step (pegged to bf)
+                    fbc = LOWER if lo_t else FLOORC   # no texture -> blend w/ floor
+                    wall_col(x, ybf + 1, yff, ct, cb, lo_t, u, yoff, dv, fw if lo_t else f, fbc)
+                    if ybf < newcb: newcb = ybf
                 ceilc[x] = newct; floorc[x] = newcb
 
     def walk(n):
@@ -267,5 +401,7 @@ if __name__ == "__main__":
     if cmd == "map":
         render_map(m, os.path.join(out, "duum_map.ppm"))
     elif cmd == "view":
+        tx = Textures(wad)
         px, py, pa = m.player_start()
-        render_view(m, px, py, math.radians(pa), os.path.join(out, "duum_view.ppm"))
+        deg = float(sys.argv[2]) if len(sys.argv) > 2 else pa
+        render_view(m, px, py, math.radians(deg), os.path.join(out, "duum_view.ppm"), tx)
