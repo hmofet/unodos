@@ -47,7 +47,7 @@ if [ "$1" != "legacy" ]; then
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media dec_wav dec_midi dec_mp3 dec_aac pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 rtl8152 iwlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media dec_wav dec_midi dec_mp3 dec_aac pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
         "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
@@ -100,6 +100,21 @@ if [ "$1" != "legacy" ]; then
     cp fonts/Mono.ttf       build/esp/MONO.TTF
     cp fonts/Ubuntu.ttf     build/esp/UBUNTU.TTF
     cp fonts/ChiKareGo2.ttf build/esp/CHICAGO.TTF   # the default (Chicago-style) UI face
+
+    # ---- Intel WiFi firmware (TESTING only) --------------------------------
+    # The iwlwifi driver loads FIRMWARE\IWL*.UCO from the ESP. Intel's licence
+    # forbids redistribution, so the blobs are NOT in the repo (fw-blobs/ is
+    # gitignored). If a developer has populated fw-blobs/ (via the fetch tool or
+    # tools/fetch-fw.sh), bundle them so a flashed test stick can bring WiFi up
+    # without a separate copy step. A clean clone has no fw-blobs/ -> no bundle.
+    if ls fw-blobs/*.UCO >/dev/null 2>&1; then
+        echo "[fw] bundling Intel WiFi firmware from fw-blobs/ (testing)"
+        mkdir -p build/esp/FIRMWARE
+        cp fw-blobs/*.UCO build/esp/FIRMWARE/ 2>/dev/null || true
+        cp fw-blobs/*.PNV build/esp/FIRMWARE/ 2>/dev/null || true
+        # a starter WIFI.CFG the user edits with their SSID/passphrase
+        [ -f build/esp/WIFI.CFG ] || printf '# UnoDOS WiFi config - edit these two lines\nssid=YourNetwork\npsk=YourPassphrase\n' > build/esp/WIFI.CFG
+    fi
 
     # ---- .UNO app modules: every app is loaded from storage at runtime -----
     # (apps/<name>.c -> object -> import thunks -> linked DLL -> APPS/<N>.UNO)

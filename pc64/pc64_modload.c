@@ -30,6 +30,8 @@
 #include "net.h"
 #include "tls.h"
 #include "pc64_http.h"     /* pc64_net_up */
+#include "iwlwifi.h"
+#include "rtl8152.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -93,6 +95,9 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* net bring-up + DNS + CA-validated TLS: a module (Studio's AI assistant)
      * makes its own HTTPS request through these */
     KX(pc64_net_up), KX(net_dns_query), KX(tls_connect_ca), KX(uno_pc64_delay_ms),
+    /* Intel WiFi + Realtek USB-ethernet status (Network app readout) */
+    KX(iwl_present), KX(iwl_nic),    KX(iwl_mac),   KX(iwl_status_str),
+    KX(rtl8152_nic), KX(rtl8152_mac), KX(rtl8152_status),
     /* ---- the unoui-class surface (Studio and friends) ------------------- */
     /* toolkit */
     KX(unoui_window_init), KX(unoui_add_label),  KX(unoui_add_button),

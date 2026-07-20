@@ -26,6 +26,8 @@ int uno_usb_bulk_out(int dev, void *d, int l) { (void)dev;(void)d;(void)l; retur
 int uno_usb_bulk_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_setup_intr_in(int dev, int a, int m) { (void)dev;(void)a;(void)m; return -1; }
 int uno_usb_intr_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
+int uno_usb_bulk_in_arm(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
+int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
@@ -138,6 +140,20 @@ static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
 /* interrupt-IN endpoint (HID) - one outstanding TRB into a per-device buffer,
  * polled non-blocking each frame; reuses the g_bin ring of that device slot. */
 static int   g_intr_dci[MAX_DEV], g_intr_mps[MAX_DEV];
+
+/* Outstanding ASYNC transfers (the HID interrupt-IN and the NIC's armed
+ * bulk-IN). All consumers share interrupter 0's single event ring, so a
+ * blocking waiter (control/bulk) could dequeue a completion that belongs to
+ * an async TRB - and an async poll could dequeue a sync one. Every dequeued
+ * transfer event is therefore ROUTED: if its TRB pointer matches a registered
+ * async transfer, the completion is stashed for that transfer's owner instead
+ * of being returned to (or dropped by) whoever happened to dequeue it. */
+enum { ASY_INTR = 0, ASY_BIN = 1 };
+static u64 g_async_trb[MAX_DEV][2];      /* posted TRB address; 0 = none     */
+static u32 g_async_sts[MAX_DEV][2];      /* stashed ev.status; 0 = none (a   */
+                                         /* real completion has cc>=1 in     */
+                                         /* bits 24-31, so 0 is free)        */
+static int g_abin_len[MAX_DEV];          /* armed bulk-IN posted length      */
 static u8    g_hidbuf[MAX_DEV][64] __attribute__((aligned(64)));
 
 /* ---- state --------------------------------------------------------------- */
@@ -264,16 +280,54 @@ static void ep_push(trb_t *ring, int *enq, int *cyc, int size, u64 param, u32 st
     }
 }
 
+/* route one transfer event: if it completes a registered async TRB, stash it
+ * for that owner and return 0; else 1 = the event is the caller's. */
+static int route_event(const trb_t *ev)
+{
+    int d, k;
+    for (d = 0; d < MAX_DEV; d++)
+        for (k = 0; k < 2; k++)
+            if (g_async_trb[d][k] && ev->param == g_async_trb[d][k]) {
+                g_async_sts[d][k] = ev->status;
+                g_async_trb[d][k] = 0;
+                return 0;
+            }
+    return 1;
+}
+
 /* wait for the next transfer event; returns the completion code (1/13 = ok),
- * fills the residual (untransferred bytes of the last TRB). -1 on timeout. */
+ * fills the residual (untransferred bytes of the last TRB). -1 on timeout.
+ * Events that belong to outstanding async TRBs are stashed, not returned. */
 static int poll_xfer(int *residual, int budget)
 {
     trb_t ev;
     for (;;) {
         if (!poll_event(&ev, budget)) return -1;
         if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
+        if (!route_event(&ev)) continue;
         if (residual) *residual = ev.status & 0xFFFFFF;
         return (ev.status >> 24) & 0xFF;
+    }
+}
+
+/* non-blocking check of async transfer (dev,kind): drain any ready events
+ * through the router, then return the stashed completion code (0 = still
+ * outstanding), filling *residual. */
+static int async_poll(int dev, int kind, int *residual)
+{
+    trb_t ev;
+    int guard = EVT_RING_SZ + 4;
+    while (!g_async_sts[dev][kind] && guard-- > 0) {
+        if (!poll_event(&ev, 1000)) break;
+        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
+        route_event(&ev);      /* strays (timed-out sync transfers) drop */
+    }
+    if (!g_async_sts[dev][kind]) return 0;
+    {
+        u32 s = g_async_sts[dev][kind];
+        g_async_sts[dev][kind] = 0;
+        if (residual) *residual = (int)(s & 0xFFFFFF);
+        return (int)(s >> 24) & 0xFF;
     }
 }
 
@@ -432,9 +486,39 @@ int uno_usb_bulk_in(int dev, void *data, int len)
     return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
 }
 
+/* Async bulk-IN for the NIC recv path: arm posts one TRB and returns at once;
+ * poll is non-blocking and returns the byte count when the transfer lands
+ * (0 = still outstanding). One outstanding transfer per device; the caller's
+ * buffer must stay valid until poll reports completion. */
+int uno_usb_bulk_in_arm(int dev, void *data, int len)
+{
+    if (dev < 0 || dev >= g_ndevs || !g_bin_dci[dev]) return -1;
+    if (g_async_trb[dev][ASY_BIN] || g_async_sts[dev][ASY_BIN]) return 0; /* busy */
+    g_async_trb[dev][ASY_BIN] = (u64)(uintptr_t)&g_bin[dev][g_bin_i[dev]];
+    g_async_sts[dev][ASY_BIN] = 0;
+    ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
+            (u64)(uintptr_t)data, (u32)len, TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP*/);
+    wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
+    g_abin_len[dev] = len;
+    return 1;
+}
+
+int uno_usb_bulk_in_poll(int dev)
+{
+    int resid = 0, cc;
+    if (dev < 0 || dev >= g_ndevs || !g_bin_dci[dev]) return -1;
+    if (!g_async_trb[dev][ASY_BIN] && !g_async_sts[dev][ASY_BIN]) return -1; /* not armed */
+    cc = async_poll(dev, ASY_BIN, &resid);
+    if (cc == 0) return 0;                                /* still outstanding */
+    if (cc != CC_SUCCESS && cc != 13) return -1;
+    { int n = g_abin_len[dev] - resid; return n > 0 ? n : -1; }
+}
+
 /* post one interrupt-IN TRB into the device's HID buffer + ring the doorbell */
 static void intr_post(int dev)
 {
+    g_async_trb[dev][ASY_INTR] = (u64)(uintptr_t)&g_bin[dev][g_bin_i[dev]];
+    g_async_sts[dev][ASY_INTR] = 0;
     ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
             (u64)(uintptr_t)g_hidbuf[dev], (u32)g_intr_mps[dev],
             TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP short-packet ok*/);
@@ -479,7 +563,7 @@ int uno_usb_intr_in(int dev, void *data, int maxlen)
 {
     int resid = 0, cc, n, i;
     if (dev < 0 || dev >= g_ndevs || !g_intr_dci[dev]) return -1;
-    cc = poll_xfer(&resid, 40000);                        /* short budget: ~no stall */
+    cc = async_poll(dev, ASY_INTR, &resid);               /* non-blocking */
     if (cc != CC_SUCCESS && cc != 13) return 0;           /* no report this frame */
     n = g_intr_mps[dev] - resid;
     if (n > maxlen) n = maxlen;

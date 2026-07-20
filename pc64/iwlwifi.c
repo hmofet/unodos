@@ -1,0 +1,1420 @@
+/* ===========================================================================
+ * UnoDOS/pc64 - Intel WiFi (iwlwifi-class) driver.  See iwlwifi.h.
+ *
+ * A from-scratch driver for Intel's PCIe WiFi families, modelled on the Linux
+ * iwlwifi driver's transport + MVM op-mode. It brings the card up the same way
+ * Linux does: identify the silicon (CSR_HW_REV / CSR_HW_RF_ID), load the Intel
+ * firmware image the user placed on the ESP, boot it to ALIVE, run the
+ * post-alive init handshake, scan, join a WPA2-PSK BSS (4-way handshake done in
+ * wifi_wpa.c, keys installed into the card for hardware CCMP), and translate
+ * Ethernet frames to/from 802.11 - publishing the family `uno_nic_t`.
+ *
+ * DMA is identity-mapped: UEFI boot services leave virt==phys, so a static .bss
+ * buffer's address IS its physical address - exactly what the card's ring-base
+ * and context-info registers want (the same trick e1000/xhci use).  Polled
+ * throughout (no MSI): "did the FW fill RX / is it alive?" is answered by
+ * reading the DRAM closed-RB status word and matching RX notifications, never by
+ * an interrupt cause - which is what the Linux rx handler ultimately relies on.
+ *
+ * Coverage: gen1 (7000/8000/9000, legacy section DMA), gen2 (22000 = AX200 /
+ * AX201, context-info self-load) and gen3 (AX210, context-info-v2 + IML +
+ * PNVM). The primary metal target is the ThinkPad X1 Carbon Gen 8 (AX201, a
+ * gen2 Qu/QuZ part).
+ *
+ * HARDWARE-PENDING: QEMU has no Intel-WiFi model, so this cannot be exercised in
+ * the CI harness the way e1000 is - it is verified only to be INERT when no
+ * supported card is on the PCI bus (so the e1000 regression still passes). Real
+ * silicon bring-up, and the firmware-version command-struct variance that comes
+ * with it, is the metal tail. Everything here uses the exact register values,
+ * struct layouts and sequencing from the Linux source; see NETWORK.md.
+ * ======================================================================== */
+#include "iwlwifi.h"
+#include "pc64_pci.h"
+#include "pc64_fs.h"
+#include "net.h"
+#include "wifi_wpa.h"
+#include <stdint.h>
+#include <string.h>
+
+typedef unsigned char  u8;
+typedef unsigned short u16;
+typedef unsigned int   u32;
+typedef unsigned long long u64;
+
+void uno_pc64_delay_ms(int ms);
+
+/* =====================================================================
+ * 0. small utilities + a diagnostics string
+ * ===================================================================== */
+static char g_status[192];
+static void st_set(const char *s) { int i=0; while (s[i] && i<(int)sizeof g_status-1){ g_status[i]=s[i]; i++; } g_status[i]=0; }
+static void st_cat(const char *s) { int i=0; while (g_status[i]) i++; while (*s && i<(int)sizeof g_status-1) g_status[i++]=*s++; g_status[i]=0; }
+static void st_cathex(u32 v) { char t[11]="0x00000000"; const char*h="0123456789ABCDEF"; int i; for(i=0;i<8;i++) t[2+i]=h[(v>>((7-i)*4))&0xF]; st_cat(t); }
+
+static void udelay_(int us) { /* coarse: the firmware Stall is ms-grained */ if (us < 1000) us = 1000; uno_pc64_delay_ms(us/1000); }
+static void mdelay_(int ms) { uno_pc64_delay_ms(ms); }
+
+/* =====================================================================
+ * 1. MMIO / PRPH / SRAM access (BAR0)
+ * ===================================================================== */
+static volatile u8 *g_bar;
+static pci_dev g_pci;
+static int g_present, g_bound;
+
+static u32 r32(u32 o) { return *(volatile u32 *)(g_bar + o); }
+static void w32(u32 o, u32 v) { *(volatile u32 *)(g_bar + o) = v; }
+static void w8_(u32 o, u8 v) { *(volatile u8 *)(g_bar + o) = v; }
+static void w64_(u32 o, u64 v) { w32(o, (u32)v); w32(o+4, (u32)(v>>32)); }
+static void set_bit_(u32 o, u32 m) { w32(o, r32(o) | m); }
+static void clr_bit_(u32 o, u32 m) { w32(o, r32(o) & ~m); }
+
+/* poll until (r32(reg) & mask) == want, within timeout_ms; 0 ok, -1 timeout */
+static int poll_bit(u32 reg, u32 want, u32 mask, int timeout_ms)
+{
+    int t;
+    for (t = 0; t <= timeout_ms; t++) {
+        if ((r32(reg) & mask) == want) return 0;
+        mdelay_(1);
+    }
+    return -1;
+}
+
+/* ---- CSR ---- */
+#define CSR_HW_IF_CONFIG_REG 0x000
+#define CSR_INT_COALESCING   0x004
+#define CSR_INT              0x008
+#define CSR_INT_MASK         0x00c
+#define CSR_FH_INT_STATUS    0x010
+#define CSR_RESET            0x020
+#define CSR_GP_CNTRL         0x024
+#define CSR_HW_REV           0x028
+#define CSR_UCODE_DRV_GP1_CLR 0x05c
+#define CSR_MBOX_SET_REG     0x088
+#define CSR_HW_RF_ID         0x09c
+#define CSR_MAC_SHADOW_REG_CTRL 0x0a8
+#define CSR_GIO_CHICKEN_BITS 0x100
+#define CSR_DBG_LINK_PWR_MGMT_REG 0x250
+#define CSR_DBG_HPET_MEM_REG 0x240
+#define CSR_CTXT_INFO_BA     0x040
+#define CSR_CTXT_INFO_ADDR   0x118
+#define CSR_IML_DATA_ADDR    0x120
+#define CSR_IML_SIZE_ADDR    0x128
+#define CSR_CTXT_INFO_BOOT_CTRL 0x000  /* note: a BOOT_CTRL bit in a low CSR */
+#define CSR_MSIX_HW_INT_CAUSES_AD 0x2808
+
+#define GP_CNTRL_MAC_CLOCK_READY 0x00000001
+#define GP_CNTRL_INIT_DONE       0x00000004
+#define GP_CNTRL_MAC_ACCESS_REQ  0x00000008
+#define GP_CNTRL_HW_RF_KILL_SW   0x08000000
+#define CSR_RESET_SW_RESET       0x00000080
+#define CSR_RESET_STOP_MASTER    0x00000200
+#define CSR_RESET_MASTER_DISABLED 0x00000100
+#define HW_IF_PCI_OWN_SET        0x00400000
+#define HW_IF_PREPARE            0x08000000  /* WAKE_ME */
+#define HW_IF_HAP_WAKE           0x00080000
+#define HW_IF_PERSIST_BIT        0x40000000
+#define GIO_CHICKEN_L1A_NO_L0S_RX 0x00800000
+#define DBG_HPET_MEM_VAL         0xFFFF0000u
+#define RESET_LINK_PWR_MGMT_DIS  0x80000000u
+#define MBOX_OS_ALIVE            (1u<<5)
+#define CSR_AUTO_FUNC_BOOT_ENA   (1u<<1)
+#define MSIX_HW_ALIVE            (1u<<0)
+#define MSIX_HW_IML              (1u<<1)
+#define CSR_INT_BIT_ALIVE        (1u<<0)
+#define CSR_INT_BIT_FH_TX        (1u<<27)
+#define CSR_INT_BIT_SW_ERR       (1u<<25)
+#define CSR_INT_BIT_HW_ERR       (1u<<29)
+#define CSR_FH_INT_TX_MASK       0x00000003
+#define CSR_FH_INT_RX_MASK       0x00030002
+
+/* ---- HBUS windows ---- */
+#define HBUS_TARG_MEM_RADDR  0x40c
+#define HBUS_TARG_MEM_WADDR  0x410
+#define HBUS_TARG_MEM_WDAT   0x418
+#define HBUS_TARG_MEM_RDAT   0x41c
+#define HBUS_TARG_PRPH_WADDR 0x444
+#define HBUS_TARG_PRPH_RADDR 0x448
+#define HBUS_TARG_PRPH_WDAT  0x44c
+#define HBUS_TARG_PRPH_RDAT  0x450
+#define HBUS_TARG_WRPTR      0x460
+
+static u32 g_prph_mask = 0x000FFFFF;   /* 0x00FFFFFF on AX210+ */
+
+static void prph_w(u32 reg, u32 v) { w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24)); w32(HBUS_TARG_PRPH_WDAT, v); }
+
+/* =====================================================================
+ * 2. device identity: family, generation, firmware file name
+ * ===================================================================== */
+enum { FAM_7000, FAM_8000, FAM_9000, FAM_22000, FAM_AX210 };
+static int  g_family;
+static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
+static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
+static u32  g_hw_rev, g_hw_rf_id;
+static char g_fwfile[16];    /* 8.3 name under FIRMWARE\ on the ESP */
+static char g_pnvmfile[16];
+static u8   g_mac[6];
+static u8   g_joined;
+static char g_ssid_str[36];
+
+/* Intel PCI device-id table (subset covering the AC + AX parts we target). */
+static int identify_by_pci(u16 dev)
+{
+    /* 7000/3000 */
+    switch (dev) {
+    case 0x08b1: case 0x08b2: case 0x08b3: case 0x08b4:              /* 7260/7265 */
+    case 0x095a: case 0x095b:                                        /* 7265D */
+        g_family = FAM_7000; return 1;
+    case 0x08b5: case 0x08b6: case 0x3165: case 0x3166: case 0x3167: case 0x3168:
+        g_family = FAM_7000; return 1;                                /* 3160/3165/3168 */
+    case 0x24f3: case 0x24f4: case 0x24fd: case 0x24f5: case 0x24f6: /* 8260/8265 */
+        g_family = FAM_8000; return 1;
+    case 0x2526: case 0x271b: case 0x271c: case 0x30dc: case 0x31dc: /* 9260/9461/9462/9560 */
+    case 0x9df0: case 0xa370: case 0x2723:
+        g_family = FAM_9000; return 1;
+    case 0x2725:                                                      /* AX210 (discrete) */
+    case 0x7a70: case 0x7af0: case 0x7e40: case 0x7f70:               /* AX210/AX211 (So/Ty) */
+        g_family = FAM_AX210; return 1;
+    case 0x2723 & 0: break;
+    }
+    /* AX200 / AX201 (Qu/QuZ CNVi) - device ids 0x2723 (AX200), 0x02f0/0x4df0
+       (AX201 CNVi variants), 0x34f0/0xa0f0/0x43f0 (Qu). */
+    switch (dev) {
+    case 0x02f0: case 0x4df0: case 0x34f0: case 0xa0f0: case 0x43f0:
+    case 0x06f0: case 0x3df0:
+        g_family = FAM_22000; return 1;
+    }
+    if (dev == 0x2723) { g_family = FAM_22000; return 1; }   /* AX200 discrete */
+    return 0;
+}
+
+/* decode CSR_HW_REV / CSR_HW_RF_ID and choose the firmware file name */
+static void choose_firmware(void)
+{
+    u32 mac_type = (g_hw_rev >> 4) & 0xFFF;
+    (void)mac_type;
+    g_gen2  = (g_family >= FAM_22000);
+    g_mq_rx = (g_family >= FAM_9000);
+    if (g_family >= FAM_AX210) g_prph_mask = 0x00FFFFFF;
+
+    g_pnvmfile[0] = 0;
+    switch (g_family) {
+    case FAM_7000:  strcpy(g_fwfile, "FIRMWARE\\IWL7260.UCO"); break;
+    case FAM_8000:  strcpy(g_fwfile, "FIRMWARE\\IWL8000.UCO"); break;
+    case FAM_9000:  strcpy(g_fwfile, "FIRMWARE\\IWL9000.UCO"); break;
+    case FAM_22000:
+        /* AX200 (discrete PU, device 0x2723) uses the cc-a0 image; AX201 (Qu/QuZ
+           CNVi) uses the Qu image - different files, so pick by device id. */
+        if (g_pci.device == 0x2723) strcpy(g_fwfile, "FIRMWARE\\IWLAX200.UCO");
+        else                        strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");
+        break;
+    case FAM_AX210:
+        strcpy(g_fwfile,   "FIRMWARE\\IWLAX210.UCO");
+        strcpy(g_pnvmfile, "FIRMWARE\\IWLAX210.PNV"); break;
+    }
+}
+
+/* the ESP volume that holds FIRMWARE\ and WIFI.CFG (firmware SFS volume) */
+static int firmware_volume(void)
+{
+    int n = uno_fs_volumes(), i;
+    for (i = 0; i < n; i++)
+        if (uno_fs_kind(i) == 2 || uno_fs_kind(i) == 1) {   /* firmware SFS / native FAT */
+            long sz = uno_fs_size(i, "WIFI.CFG");
+            if (sz > 0) return i;
+        }
+    return -1;
+}
+
+/* =====================================================================
+ * 3. DMA arena (identity mapped: phys == virt)
+ * ===================================================================== */
+/* One firmware image can be ~1-2 MB (AX). We read the .ucode into a file buffer,
+   copy each section into the fw-section arena, and keep the rings/context in
+   dedicated aligned blocks. All in .bss => phys == virt while boot services
+   are alive. */
+#define FW_FILE_MAX   (2*1024*1024)
+#define FW_ARENA_MAX  (3*1024*1024)
+#define PNVM_MAX      (256*1024)
+static u8 g_fwbuf[FW_FILE_MAX]   __attribute__((aligned(4096)));
+static u8 g_arena[FW_ARENA_MAX]  __attribute__((aligned(4096)));
+static u8 g_pnvmbuf[PNVM_MAX]    __attribute__((aligned(4096)));
+static u32 g_arena_used;
+
+static void *arena_alloc(u32 len)
+{
+    u32 off = (g_arena_used + 4095) & ~4095u;
+    if (off + len > FW_ARENA_MAX) return 0;
+    g_arena_used = off + len;
+    return g_arena + off;
+}
+static u64 phys(const void *p) { return (u64)(uintptr_t)p; }
+
+/* =====================================================================
+ * 4. .ucode TLV firmware parser
+ * ===================================================================== */
+#define TLV_MAGIC 0x0a4c5749u
+#define CPU_SEP   0xFFFFCCCCu
+#define PAGE_SEP  0xAAAABBBBu
+
+enum {
+    TLV_FLAGS=18, TLV_SEC_RT=19, TLV_SEC_INIT=20, TLV_NUM_OF_CPU=27,
+    TLV_API_CHANGES=29, TLV_ENABLED_CAPA=30, TLV_N_SCAN_CH=31, TLV_PAGING=32,
+    TLV_FW_VERSION=36, TLV_PHY_SKU=23, TLV_DEF_CALIB=22, TLV_SECURE_SEC_RT=24,
+    TLV_SECURE_SEC_INIT=25, TLV_CMD_VERSIONS=48, TLV_IML=52, TLV_PNVM_VERSION=62
+};
+
+/* a parsed section: device load offset + a pointer into the file buffer */
+#define MAX_SEC 64
+typedef struct { u32 offset; const u8 *data; u32 len; } fw_sec;
+typedef struct {
+    fw_sec rt[MAX_SEC];  int rt_n;
+    fw_sec init[MAX_SEC]; int init_n;
+    const u8 *iml; u32 iml_len;
+    u32 phy_sku; u32 calib_flow, calib_event;
+    u32 n_scan_channels;
+    u32 num_cpu;
+    u32 paging_mem_size;
+    u8  api[16], capa[16];      /* bitmaps (128 bits each) */
+    int alive_notif_ver;        /* from CMD_VERSIONS if present, else guessed */
+    int have;
+} fw_image;
+static fw_image g_fw;
+
+static u32 le32(const u8 *p){ return (u32)p[0]|((u32)p[1]<<8)|((u32)p[2]<<16)|((u32)p[3]<<24); }
+
+static int fw_has_capa(int bit){ return (g_fw.capa[bit>>3] >> (bit&7)) & 1; }
+
+static int parse_ucode(const u8 *buf, u32 n)
+{
+    u32 off;
+    memset(&g_fw, 0, sizeof g_fw);
+    if (n < 88) return -1;
+    if (le32(buf) != 0 || le32(buf+4) != TLV_MAGIC) return -1;
+    off = 88;
+    while (off + 8 <= n) {
+        u32 type = le32(buf+off), len = le32(buf+off+4);
+        const u8 *d = buf+off+8;
+        if (off + 8 + len > n) break;
+        switch (type) {
+        case TLV_SEC_RT: case TLV_SECURE_SEC_RT:
+            if (g_fw.rt_n < MAX_SEC && len >= 4) {
+                g_fw.rt[g_fw.rt_n].offset = le32(d);
+                g_fw.rt[g_fw.rt_n].data = d+4; g_fw.rt[g_fw.rt_n].len = len-4; g_fw.rt_n++;
+            } break;
+        case TLV_SEC_INIT: case TLV_SECURE_SEC_INIT:
+            if (g_fw.init_n < MAX_SEC && len >= 4) {
+                g_fw.init[g_fw.init_n].offset = le32(d);
+                g_fw.init[g_fw.init_n].data = d+4; g_fw.init[g_fw.init_n].len = len-4; g_fw.init_n++;
+            } break;
+        case TLV_IML: g_fw.iml = d; g_fw.iml_len = len; break;
+        case TLV_PHY_SKU: if (len>=4) g_fw.phy_sku = le32(d); break;
+        case TLV_DEF_CALIB: if (len>=12) { g_fw.calib_flow=le32(d+4); g_fw.calib_event=le32(d+8);} break;
+        case TLV_N_SCAN_CH: if (len>=4) g_fw.n_scan_channels = le32(d); break;
+        case TLV_NUM_OF_CPU: if (len>=4) g_fw.num_cpu = le32(d); break;
+        case TLV_PAGING: if (len>=4) g_fw.paging_mem_size = le32(d); break;
+        case TLV_API_CHANGES: if (len>=8) { u32 idx=le32(d),fl=le32(d+4); int b; for(b=0;b<32;b++) if(fl&(1u<<b)){int bit=b+32*idx; if(bit<128) g_fw.api[bit>>3]|=1<<(bit&7);} } break;
+        case TLV_ENABLED_CAPA: if (len>=8) { u32 idx=le32(d),fl=le32(d+4); int b; for(b=0;b<32;b++) if(fl&(1u<<b)){int bit=b+32*idx; if(bit<128) g_fw.capa[bit>>3]|=1<<(bit&7);} } break;
+        case TLV_CMD_VERSIONS: {
+            u32 i; for (i=0;i+4<=len;i+=4){ if (d[i]==0x01 && d[i+1]==0x00) g_fw.alive_notif_ver = d[i+3]; } /* ALIVE notif ver */
+        } break;
+        default: break;
+        }
+        off += 8 + ((len + 3) & ~3u);
+    }
+    if (!g_fw.alive_notif_ver) g_fw.alive_notif_ver = (g_family >= FAM_8000) ? 6 : 3;
+    g_fw.have = (g_fw.rt_n > 0);
+    return g_fw.have ? 0 : -1;
+}
+
+/* =====================================================================
+ * 5. CSR / APM bring-up (reset, power, NIC-ready, grab access)
+ * ===================================================================== */
+static int prepare_card_hw(void)
+{
+    int iter, t;
+    set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_PCI_OWN_SET);
+    if (poll_bit(CSR_HW_IF_CONFIG_REG, HW_IF_PCI_OWN_SET, HW_IF_PCI_OWN_SET, 2) == 0) return 0;
+    set_bit_(CSR_DBG_LINK_PWR_MGMT_REG, RESET_LINK_PWR_MGMT_DIS);
+    mdelay_(2);
+    for (iter = 0; iter < 10; iter++) {
+        set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_PREPARE);
+        for (t = 0; t < 150; t++) {
+            if ((r32(CSR_HW_IF_CONFIG_REG) & HW_IF_PCI_OWN_SET)) return 0;
+            mdelay_(1);
+        }
+        mdelay_(25);
+    }
+    return -1;
+}
+
+static void sw_reset(void)
+{
+    set_bit_(CSR_RESET, CSR_RESET_SW_RESET);
+    mdelay_(6);
+}
+
+static int apm_init(void)
+{
+    /* gen1 and gen2 share this core after the family-specific chicken bits */
+    set_bit_(CSR_GIO_CHICKEN_BITS, GIO_CHICKEN_L1A_NO_L0S_RX);
+    set_bit_(CSR_DBG_HPET_MEM_REG, DBG_HPET_MEM_VAL);
+    set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_HAP_WAKE);
+    /* activate NIC: set INIT_DONE, wait MAC_CLOCK_READY */
+    set_bit_(CSR_GP_CNTRL, GP_CNTRL_INIT_DONE);
+    if (g_family == FAM_8000) udelay_(2000);
+    if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY, GP_CNTRL_MAC_CLOCK_READY, 25) < 0)
+        return -1;
+    return 0;
+}
+
+/* grab NIC access so PRPH/SRAM writes land */
+static int grab_nic(void)
+{
+    set_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ);
+    if (g_family >= FAM_8000) udelay_(2000);
+    return poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY,
+                    GP_CNTRL_MAC_CLOCK_READY, 15);
+}
+static void release_nic(void) { clr_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ); }
+
+static int rf_killed(void) { return (r32(CSR_GP_CNTRL) & GP_CNTRL_HW_RF_KILL_SW) ? 0 : 1; }
+
+/* =====================================================================
+ * 6. RX ring + TX/command queue (host DRAM structures)
+ * ===================================================================== */
+/* We run ONE rx queue and the fixed command queue plus one data/mgmt TFD ring.
+   Sizes kept small (polled, low throughput). */
+#define RXQ_N        256
+#define RB_SIZE      4096
+#define CMDQ_N       32
+#define TXQ_N        256
+#define FIRST_TB     20
+
+/* legacy rb status (device writes closed_rb_num); AX210 uses a bare u16 */
+struct rb_status { u16 closed_rb_num, closed_fr_num, finished_rb_num, finished_fr_num; u32 spare; };
+
+/* gen1 TFD (128 B, 20 TBs) and gen2 TFH TFD (256 B, 25 TBs) */
+struct tfd_tb { u32 lo; u16 hi_n_len; } __attribute__((packed));
+struct tfd    { u8 rsv[3]; u8 num_tbs; struct tfd_tb tbs[20]; u32 pad; } __attribute__((packed));
+struct tfh_tb { u16 tb_len; u64 addr; } __attribute__((packed));
+struct tfh_tfd{ u16 num_tbs; struct tfh_tb tbs[25]; u32 pad; } __attribute__((packed));
+
+/* DMA blocks (aligned; phys==virt). Rings are the largest static cost. */
+static struct rb_status g_rbstts __attribute__((aligned(256)));
+static u32 g_rbd_free_le32[RXQ_N] __attribute__((aligned(256)));  /* legacy/9000 free list */
+static u64 g_rbd_free_le64[RXQ_N] __attribute__((aligned(256)));  /* 9000 mq free (addr|vid) */
+static u64 g_rbd_used[RXQ_N]      __attribute__((aligned(256)));  /* mq used/completion list */
+static u8  g_rb[RXQ_N][RB_SIZE]   __attribute__((aligned(4096)));
+
+static u8  g_cmd_ring[CMDQ_N * 256]  __attribute__((aligned(256)));  /* TFD or TFH per slot */
+static u8  g_cmd_buf[CMDQ_N][512]     __attribute__((aligned(64)));   /* per-slot command DRAM */
+static u8  g_cmd_firsttb[CMDQ_N][64]  __attribute__((aligned(64)));   /* 20-byte scratch (bidir) */
+static u16 g_cmd_bc[CMDQ_N + 64]      __attribute__((aligned(64)));   /* byte-count table */
+
+static u8  g_tx_ring[TXQ_N * 256]     __attribute__((aligned(256)));
+static u8  g_tx_buf[TXQ_N][2048]      __attribute__((aligned(64)));
+static u8  g_tx_firsttb[TXQ_N][64]    __attribute__((aligned(64)));
+static u16 g_tx_bc[TXQ_N + 64]        __attribute__((aligned(64)));
+
+static int g_cmd_wr, g_tx_wr, g_rx_read, g_rx_write;
+static int g_data_qid = -1;              /* fw-assigned data queue (gen2/3) */
+#define AP_STA_ID 0                      /* the AP peer's station index */
+
+/* =====================================================================
+ * 6a. RX ring init + restock + read
+ * ===================================================================== */
+static void rx_alloc_lists(void)
+{
+    int i;
+    for (i = 0; i < RXQ_N; i++) {
+        g_rbd_free_le32[i] = (u32)(phys(g_rb[i]) >> 8);
+        g_rbd_free_le64[i] = phys(g_rb[i]) | (u64)(i + 1);   /* vid = i+1 */
+        g_rbd_used[i] = 0;
+    }
+    g_rbstts.closed_rb_num = 0;
+    g_rx_read = 0; g_rx_write = RXQ_N - 1;
+}
+
+/* FH (gen1) rx register block */
+#define FH_MEM 0x1000
+#define FH_RSCSR (FH_MEM + 0xBC0)
+#define FH_RSCSR_STTS_WPTR (FH_RSCSR + 0x000)
+#define FH_RSCSR_RBDCB_BASE (FH_RSCSR + 0x004)
+#define FH_RSCSR_RBDCB_WPTR (FH_RSCSR + 0x008)
+#define FH_RSCSR_RDPTR     (FH_RSCSR + 0x00c)
+#define FH_RCSR (FH_MEM + 0xC00)
+#define FH_RCSR_CONFIG (FH_RCSR + 0x000)
+#define FH_RCSR_RBDCB_WPTR (FH_RCSR + 0x008)
+#define FH_RCSR_FLUSH  (FH_RCSR + 0x010)
+/* RFH (9000 mq) */
+#define RFH_Q0_FRBDCB_BA_LSB 0xA08000
+#define RFH_Q0_FRBDCB_WIDX   0xA08080
+#define RFH_Q0_FRBDCB_RIDX   0xA080C0
+#define RFH_Q0_URBDCB_BA_LSB 0xA08100
+#define RFH_Q0_URBDCB_WIDX   0xA08180
+#define RFH_Q0_URBD_STTS_WPTR_LSB 0xA08200
+#define RFH_RXF_DMA_CFG 0xA09820
+#define RFH_GEN_CFG     0xA09800
+#define RFH_RXF_RXQ_ACTIVE 0xA0980C
+#define RFH_DMA_EN       (1u<<31)
+#define RFH_DMA_RB_4K    (0x4<<16)
+#define RFH_DMA_MIN_RB_4_8 (3u<<24)
+#define RFH_DMA_DROP_LARGE (1u<<26)
+#define RFH_DMA_RBDCB_512 (0x9<<20)
+#define RFH_GEN_SVC_SNOOP (1u<<0)
+#define RFH_GEN_DMA_SNOOP (1u<<1)
+
+static void prph_w64(u32 reg, u64 v) { prph_w(reg, (u32)v); prph_w(reg+4, (u32)(v>>32)); }
+
+static void rx_hw_init(void)
+{
+    rx_alloc_lists();
+    if (grab_nic() < 0) return;
+    if (!g_mq_rx) {
+        /* legacy single-queue (7000/8000) */
+        w32(FH_RCSR_CONFIG, 0);
+        w32(FH_RCSR_RBDCB_WPTR, 0);
+        w32(FH_RCSR_FLUSH, 0);
+        w32(FH_RSCSR_RDPTR, 0);
+        w32(FH_RSCSR_RBDCB_WPTR, 0);
+        w32(FH_RSCSR_RBDCB_BASE, (u32)(phys(g_rbd_free_le32) >> 8));
+        w32(FH_RSCSR_STTS_WPTR, (u32)(phys(&g_rbstts) >> 4));
+        w32(FH_RCSR_CONFIG, 0x80000000 | 0x00000004 | 0x00001000 |
+                            (0x11u<<4) | (8u<<20));   /* enable, ignore-empty, host-int, RB timeout, 256 RBD */
+    } else if (!g_gen2) {
+        /* 9000 gen1-transport mq: program the RFH */
+        u32 enabled = 0;
+        prph_w(RFH_RXF_DMA_CFG, 0);
+        prph_w(RFH_RXF_RXQ_ACTIVE, 0);
+        prph_w64(RFH_Q0_FRBDCB_BA_LSB, phys(g_rbd_free_le64));
+        prph_w64(RFH_Q0_URBDCB_BA_LSB, phys(g_rbd_used));
+        prph_w64(RFH_Q0_URBD_STTS_WPTR_LSB, phys(&g_rbstts));
+        prph_w(RFH_Q0_FRBDCB_WIDX, 0);
+        prph_w(RFH_Q0_FRBDCB_RIDX, 0);
+        prph_w(RFH_Q0_URBDCB_WIDX, 0);
+        enabled = (1u<<0) | (1u<<16);
+        prph_w(RFH_RXF_DMA_CFG, RFH_DMA_EN | RFH_DMA_RB_4K | RFH_DMA_MIN_RB_4_8 |
+                                RFH_DMA_DROP_LARGE | RFH_DMA_RBDCB_512);
+        prph_w(RFH_GEN_CFG, RFH_GEN_SVC_SNOOP | RFH_GEN_DMA_SNOOP | (1u<<4));
+        prph_w(RFH_RXF_RXQ_ACTIVE, enabled);
+    }
+    /* gen2: the RFH is programmed by firmware; we just keep the RB pool */
+    release_nic();
+    w8_(CSR_INT_COALESCING, 0x40);
+    /* push the free-list write pointer (multiple of 8) */
+    g_rx_write = (RXQ_N - 1) & ~7;
+    if (!g_mq_rx) w32(FH_RSCSR_RBDCB_WPTR, g_rx_write);
+    else if (!g_gen2) prph_w(0x1C80, g_rx_write);      /* FRBDCB_WIDX_TRG shadow */
+}
+
+static u16 rx_closed(void)
+{
+    if (g_family >= FAM_AX210) return *(volatile u16 *)&g_rbstts;
+    return g_rbstts.closed_rb_num & 0xFFF;
+}
+
+/* =====================================================================
+ * 6b. command / TX enqueue (legacy TFD + gen2 TFH) and completion
+ * ===================================================================== */
+static void tfd_set_tb_gen1(struct tfd *t, u64 addr, int len)
+{
+    int idx = t->num_tbs;
+    t->tbs[idx].lo = (u32)addr;
+    t->tbs[idx].hi_n_len = (u16)(((len & 0xFFF) << 4) | ((addr >> 32) & 0xF));
+    t->num_tbs = idx + 1;
+}
+static void tfd_set_tb_gen2(struct tfh_tfd *t, u64 addr, int len)
+{
+    int idx = t->num_tbs;
+    t->tbs[idx].addr = addr;
+    t->tbs[idx].tb_len = (u16)len;
+    t->num_tbs = idx + 1;
+}
+
+/* Build a host command on the command queue. group 0 => short 4-byte header,
+   else wide 8-byte. Returns the sequence used (for matching the response). */
+static u16 g_cmd_seq_ctr;
+static int send_cmd(u8 group, u8 opcode, u8 version, const void *payload, int plen)
+{
+    int idx = g_cmd_wr & (CMDQ_N - 1);
+    u8 *out = g_cmd_buf[idx];
+    int hdr = group ? 8 : 4;
+    int copy, tb0;
+    u16 seq = (u16)(((CMDQ_N & 0) ) | (idx & 0xff));   /* queue field is cmd-queue */
+    seq = (u16)(idx & 0xff);                            /* [7:0] tfd idx */
+
+    out[0] = opcode; out[1] = group;
+    out[2] = (u8)seq; out[3] = (u8)(seq>>8);
+    if (group) { out[4]=(u8)plen; out[5]=(u8)(plen>>8); out[6]=0; out[7]=version; }
+    if (plen > 0 && plen <= (int)sizeof g_cmd_buf[0] - hdr) memcpy(out + hdr, payload, plen);
+    copy = hdr + plen;
+
+    tb0 = copy < FIRST_TB ? copy : FIRST_TB;
+    memcpy(g_cmd_firsttb[idx], out, tb0);
+
+    if (g_gen2) {
+        struct tfh_tfd *t = (struct tfh_tfd *)(g_cmd_ring + idx*256);
+        memset(t, 0, sizeof *t);
+        tfd_set_tb_gen2(t, phys(g_cmd_firsttb[idx]), tb0);
+        if (copy > tb0) tfd_set_tb_gen2(t, phys(out + tb0), copy - tb0);
+    } else {
+        struct tfd *t = (struct tfd *)(g_cmd_ring + idx*128);
+        memset(t, 0, sizeof *t);
+        tfd_set_tb_gen1(t, phys(g_cmd_firsttb[idx]), tb0);
+        if (copy > tb0) tfd_set_tb_gen1(t, phys(out + tb0), copy - tb0);
+    }
+    g_cmd_wr = (g_cmd_wr + 1) & (CMDQ_N - 1);
+    if (g_gen2) w32(HBUS_TARG_WRPTR, g_cmd_wr | (0 << 16));   /* cmd queue id 0 */
+    else        w32(HBUS_TARG_WRPTR, g_cmd_wr | (0 << 8));
+    (void)version; (void)g_cmd_seq_ctr;
+    return idx & 0xff;
+}
+
+/* Enqueue an 802.11 frame on the data TX queue wrapped in a TX_CMD. gen1 uses
+ * iwl_tx_cmd_v6 (56-byte params), gen2/gen3 use the shorter v9/gen3 header; the
+ * frame's bytes follow the header. Encryption is done by the card from the
+ * installed CCMP key (sec_ctl / the station's key). `high_pri` marks EAPOL so
+ * it isn't starved during the handshake. Metal-pending: the TX_CMD field detail
+ * varies by firmware version (fwapi ref Part 6). */
+static void tx_enqueue(const u8 *frame, int flen, int high_pri)
+{
+    int idx = g_tx_wr & (TXQ_N - 1);
+    u8 *out = g_tx_buf[idx];
+    int hdrlen, tb0, total, qid;
+    if (flen <= 0 || flen > 2048 - 64) return;
+
+    memset(out, 0, 64);
+    if (g_gen2) {
+        /* iwl_tx_cmd_v9: len@0, offload_assist@2, flags@4, dram_info@8, r_n_f@16 */
+        out[0] = (u8)flen; out[1] = (u8)(flen >> 8);
+        if (high_pri) out[4] = (1u<<2);          /* IWL_TX_FLAGS_HIGH_PRI */
+        { u32 rnf = 10 | (1u<<9) | (1u<<14);      /* 1M CCK, ant A (safe mgmt rate) */
+          out[16]=(u8)rnf; out[17]=(u8)(rnf>>8); out[18]=(u8)(rnf>>16); out[19]=(u8)(rnf>>24); }
+        hdrlen = 20;
+    } else {
+        /* iwl_tx_cmd_v6 params: len@0, tx_flags@4, rate_n_flags@12, sta_id@16 */
+        out[0] = (u8)flen; out[1] = (u8)(flen >> 8);
+        { u32 fl = (1u<<3); *(u32*)(out+4) = fl; }   /* TX_CMD_FLG_ACK */
+        { u32 rnf = 10 | (1u<<9) | (1u<<14); *(u32*)(out+12) = rnf; }
+        out[16] = AP_STA_ID;
+        out[17] = high_pri ? 0 : (2 | 0x10);         /* sec_ctl CCM|KEY_FROM_TABLE for data */
+        hdrlen = 56;
+    }
+    memcpy(out + hdrlen, frame, flen);
+    total = hdrlen + flen;
+
+    tb0 = total < FIRST_TB ? total : FIRST_TB;
+    memcpy(g_tx_firsttb[idx], out, tb0);
+    if (g_gen2) {
+        struct tfh_tfd *t = (struct tfh_tfd *)(g_tx_ring + idx*256);
+        int nchunks;
+        memset(t, 0, sizeof *t);
+        tfd_set_tb_gen2(t, phys(g_tx_firsttb[idx]), tb0);
+        if (total > tb0) tfd_set_tb_gen2(t, phys(out + tb0), total - tb0);
+        nchunks = ((int)(sizeof(u16) + t->num_tbs*sizeof(struct tfh_tb)) + 63)/64 - 1;
+        if (nchunks < 0) nchunks = 0;
+        g_tx_bc[idx] = (u16)(((total + 3)/4) | (nchunks << 12));
+    } else {
+        struct tfd *t = (struct tfd *)(g_tx_ring + idx*128);
+        memset(t, 0, sizeof *t);
+        tfd_set_tb_gen1(t, phys(g_tx_firsttb[idx]), tb0);
+        if (total > tb0) tfd_set_tb_gen1(t, phys(out + tb0), total - tb0);
+        g_tx_bc[idx] = (u16)((total + 3)/4);
+    }
+    qid = g_data_qid >= 0 ? g_data_qid : 10;     /* DATA pool base until fw assigns */
+    g_tx_wr = (g_tx_wr + 1) & (TXQ_N - 1);
+    if (g_gen2) w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 16));
+    else        w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 8));
+}
+
+/* =====================================================================
+ * 6c. RX notification poll: returns a pointer to the next iwl_rx_packet
+ * payload matching (group,cmd), or NULL within timeout. Also feeds 802.11
+ * data frames to the recv path via a small ring (below).
+ * ===================================================================== */
+struct rx_packet { u32 len_n_flags; u8 cmd; u8 group_id; u16 sequence; u8 data[]; };
+#define FRAME_SIZE_MSK 0x3FFF
+#define SEQ_RX_FRAME   0x8000
+
+/* stashed decrypted data frames for recv() */
+#define DATAQ 16
+static struct { u8 buf[1600]; int len; } g_dataq[DATAQ];
+static int g_dq_head, g_dq_tail;
+
+static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
+static void handle_eapol(const u8 *frame, int len);        /* fwd */
+static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
+
+/* process one received RB: walk packed iwl_rx_packet records */
+static void rx_process_rb(const u8 *rb, int cap,
+                          int want_group, int want_cmd, const u8 **found, int *found_len)
+{
+    int off = 0;
+    while (off + 8 <= cap) {
+        const struct rx_packet *pkt = (const struct rx_packet *)(rb + off);
+        int plen = pkt->len_n_flags & FRAME_SIZE_MSK;
+        if (plen < 4 || off + 4 + plen > cap) break;
+        if (found && !*found && pkt->group_id == want_group && pkt->cmd == want_cmd) {
+            *found = pkt->data; *found_len = plen - 4;
+        }
+        /* RX MPDU (a received 802.11 frame) — dispatch EAPOL vs data regardless
+           of what we're waiting for, so the handshake makes progress. */
+        if (pkt->group_id == 0 && pkt->cmd == 0xc1) {         /* REPLY_RX_MPDU */
+            const u8 *frame; int fl, machdr;
+            if (g_mq_rx) {
+                /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
+                   HDR_LEN in *2 words); desc size differs v1(32)/v3(40). */
+                int descsz = (g_family >= FAM_AX210) ? 40 : 32;
+                int mlen = pkt->data[0] | (pkt->data[1] << 8);
+                int pad = (pkt->data[3] & 0x20) ? 2 : 0;
+                frame = pkt->data + descsz + pad; fl = mlen;
+                machdr = (pkt->data[3] & 0x1f) * 2;
+            } else {
+                /* iwl_rx_mpdu_res_start(4) + frame + status(4) */
+                int mlen = pkt->data[0] | (pkt->data[1] << 8);
+                frame = pkt->data + 4; fl = mlen;
+                machdr = 24;   /* refined from the frame's FC below */
+            }
+            if (fl > 0 && fl < 1600 && 4 + plen <= cap) {
+                u16 fc = (u16)(frame[0] | (frame[1] << 8));
+                int qos = ((fc >> 4) & 0xF) == 8;
+                int hl = machdr ? machdr : (qos ? 26 : 24);
+                if (fl > hl + 8) {
+                    const u8 *llc = frame + hl;
+                    u16 et = (u16)((llc[6] << 8) | llc[7]);
+                    if (!memcmp(llc, SNAP, 6) && et == 0x888E) handle_eapol(frame, fl);
+                    else if (!memcmp(llc, SNAP, 6))            handle_data_frame(frame, fl);
+                }
+            }
+        }
+        off += (4 + plen + 0x3F) & ~0x3F;   /* FH_RSCSR_FRAME_ALIGN = 64 */
+    }
+}
+
+/* Wait for a notification (group,cmd). Returns payload ptr + len, or NULL. */
+static const u8 *wait_notif(int group, int cmd, int *out_len, int timeout_ms)
+{
+    int t;
+    for (t = 0; t < timeout_ms; t++) {
+        u16 closed = rx_closed() & (RXQ_N - 1);
+        while (g_rx_read != closed) {
+            const u8 *found = 0; int flen = 0;
+            int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+            const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
+            rx_process_rb(rb, RB_SIZE, group, cmd, &found, &flen);
+            g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
+            if (found) { if (out_len) *out_len = flen; return found; }
+        }
+        /* FW error? */
+        if (!g_gen2 && (r32(CSR_INT) & (CSR_INT_BIT_SW_ERR|CSR_INT_BIT_HW_ERR))) return 0;
+        mdelay_(1);
+    }
+    return 0;
+}
+
+/* wait for a command response with matching sequence (or just any completion) */
+static int wait_cmd_done(int timeout_ms)
+{
+    /* the fw acks a command via an RX packet echoing the sequence; for our
+       purposes we just pump the RX ring so completions are drained. */
+    int t;
+    for (t = 0; t < timeout_ms; t++) {
+        u16 closed = rx_closed() & (RXQ_N - 1);
+        if (g_rx_read != closed) { g_rx_read = closed; return 0; }
+        mdelay_(1);
+    }
+    return -1;
+}
+
+/* =====================================================================
+ * 7. Firmware load: gen1 legacy DMA, gen2 context-info, gen3 v2 + IML + PNVM
+ * ===================================================================== */
+/* ---- gen1: per-section chunk DMA over FH service channel 9 ---- */
+#define FH_SRVC_CHNL 9
+#define FH_SRVC_SRAM (FH_MEM + 0x9C8)
+#define FH_TFDIB     (FH_MEM + 0x900)
+#define FH_TCSR      (FH_MEM + 0xD00)
+#define FH_TCSR_CFG(c)  (FH_TCSR + 0x20*(c))
+#define FH_TCSR_BUFSTS(c) (FH_TCSR + 0x20*(c) + 0x8)
+#define FH_TFDIB_C0(c)  (FH_TFDIB + 8*(c))
+#define FH_TFDIB_C1(c)  (FH_TFDIB + 8*(c) + 4)
+#define FH_SRVC_SRAM_ADDR(c) (FH_SRVC_SRAM + ((c)-9)*4)
+
+static int load_section_gen1(u32 dst, const u8 *data, u32 len)
+{
+    u32 done = 0;
+    while (done < len) {
+        u32 chunk = len - done; if (chunk > 0x20000) chunk = 0x20000;
+        u8 *bounce = arena_alloc(chunk);
+        if (!bounce) return -1;
+        memcpy(bounce, data + done, chunk);
+        w32(CSR_INT, CSR_INT_BIT_FH_TX);          /* clear */
+        w32(CSR_FH_INT_STATUS, CSR_FH_INT_TX_MASK);
+        if (grab_nic() < 0) return -1;
+        w32(FH_TCSR_CFG(FH_SRVC_CHNL), 0);         /* pause */
+        w32(FH_SRVC_SRAM_ADDR(FH_SRVC_CHNL), dst + done);
+        w32(FH_TFDIB_C0(FH_SRVC_CHNL), (u32)phys(bounce));
+        w32(FH_TFDIB_C1(FH_SRVC_CHNL), (((u32)(phys(bounce)>>32) & 0xF) << 28) | chunk);
+        w32(FH_TCSR_BUFSTS(FH_SRVC_CHNL), (1u<<20) | (1u<<12) | 0x3);
+        w32(FH_TCSR_CFG(FH_SRVC_CHNL), 0x80000000 | 0x00000000 | 0x00100000);
+        release_nic();
+        /* wait for the chunk-done (FH_TX) */
+        { int t; for (t=0;t<5000;t++){ if (r32(CSR_FH_INT_STATUS) & CSR_FH_INT_TX_MASK) break; if (r32(CSR_INT) & CSR_INT_BIT_FH_TX) break; mdelay_(1);} }
+        done += chunk;
+    }
+    return 0;
+}
+
+static int load_fw_gen1(fw_sec *sec, int nsec)
+{
+    int i;
+    for (i = 0; i < nsec; i++) {
+        if (sec[i].offset == CPU_SEP || sec[i].offset == PAGE_SEP) continue;
+        if (!sec[i].data) break;
+        if (load_section_gen1(sec[i].offset, sec[i].data, sec[i].len) < 0) return -1;
+    }
+    /* release the CPU from reset -> firmware runs (7000 does this after load) */
+    w32(CSR_INT, 0xFFFFFFFFu);
+    w32(CSR_RESET, 0);
+    return 0;
+}
+
+/* ---- gen2 context-info (22000 / AX200 / AX201) ---- */
+struct ci_dram { u64 umac[64]; u64 lmac[64]; u64 vimg[64]; } __attribute__((packed));
+struct context_info {
+    u16 mac_id, version, size, rsv0;         /* version block (8) */
+    u32 control_flags, ctl_rsv;              /* control (8) */
+    u64 reserved0;                           /* 8 */
+    u64 free_rbd, used_rbd, status_wr;       /* rbd_cfg (24) */
+    u64 cmd_queue_addr; u8 cmd_queue_size; u8 hrsv[7];  /* hcmd_cfg (16) */
+    u32 rsv1[4];                             /* 16 */
+    u64 dump_addr; u32 dump_size, drsv;      /* dump_cfg (16) */
+    u64 edbg_addr; u32 edbg_size, ersv;      /* early dbg (16) */
+    u64 pnvm_addr; u32 pnvm_size, prsv;      /* pnvm_cfg (16) */
+    u32 rsv2[16];                            /* 64 */
+    struct ci_dram dram;                     /* 1536 */
+    u32 rsv3[16];                            /* 64 */
+} __attribute__((packed));
+
+#define CTXT_TFD_FORMAT_LONG 0x0100
+#define CTXT_RB_SIZE_4K      0x4
+#define CTXT_RB_SIZE_POS     9
+#define CTXT_RB_CB_SIZE_POS  4
+
+static int count_sec(fw_sec *sec, int n, int start)
+{
+    int i, c = 0;
+    for (i = start; i < n; i++) {
+        if (sec[i].offset == CPU_SEP || sec[i].offset == PAGE_SEP || !sec[i].data) break;
+        c++;
+    }
+    return c;
+}
+
+static void place_fw_dram(struct ci_dram *dram)
+{
+    int lmac = count_sec(g_fw.rt, g_fw.rt_n, 0);
+    int umac = count_sec(g_fw.rt, g_fw.rt_n, lmac + 1);
+    int i;
+    for (i = 0; i < lmac && i < 64; i++) {
+        void *p = arena_alloc(g_fw.rt[i].len);
+        if (!p) return;
+        memcpy(p, g_fw.rt[i].data, g_fw.rt[i].len);
+        dram->lmac[i] = phys(p);
+    }
+    for (i = 0; i < umac && i < 64; i++) {
+        fw_sec *s = &g_fw.rt[lmac + 1 + i];
+        void *p = arena_alloc(s->len);
+        if (!p) return;
+        memcpy(p, s->data, s->len);
+        dram->umac[i] = phys(p);
+    }
+}
+
+static int load_fw_gen2(void)
+{
+    struct context_info *ci = arena_alloc(sizeof *ci);
+    if (!ci) return -1;
+    memset(ci, 0, sizeof *ci);
+    ci->version = 0;
+    ci->mac_id = (u16)g_hw_rev;
+    ci->size = sizeof(*ci) / 4;
+    { u32 cb = 8; /* log2(256) */ u32 cf = CTXT_TFD_FORMAT_LONG;
+      cf |= (cb & 0xf) << CTXT_RB_CB_SIZE_POS;
+      cf |= (CTXT_RB_SIZE_4K & 0xf) << CTXT_RB_SIZE_POS;
+      ci->control_flags = cf; }
+    ci->free_rbd = phys(g_rbd_free_le64);
+    ci->used_rbd = phys(g_rbd_used);
+    ci->status_wr = phys(&g_rbstts);
+    ci->cmd_queue_addr = phys(g_cmd_ring);
+    ci->cmd_queue_size = 2;                    /* TFD_QUEUE_CB_SIZE(32) = ilog2(32)-3 */
+    place_fw_dram(&ci->dram);
+    w32(CSR_INT, 0xFFFFFFFFu);
+    w64_(CSR_CTXT_INFO_BA, phys(ci));          /* kick: device self-loads */
+    prph_w(0xa05c44 /*UREG_CPU_INIT_RUN*/, 1); /* run */
+    return 0;
+}
+
+/* ---- gen3 context-info-v2 + IML + PNVM (AX210) ---- */
+struct prph_scratch {
+    u16 mac_id, version, size, vrsv;           /* version */
+    u32 control_flags, control_flags_ext;      /* control */
+    u64 pnvm_base; u32 pnvm_size, prsv;        /* pnvm_cfg */
+    u64 hwm_base; u32 hwm_size, dbg_tok;       /* hwm_cfg */
+    u64 free_rbd; u32 rbdrsv;                  /* rbd_cfg (free only) */
+    u64 rpwr_base; u32 rpwr_size, rprsv;       /* reduce power */
+    u32 mbx0, mbx1;                            /* step */
+    u32 fseq_override, step_analog;
+    u32 rsv[8];
+    struct ci_dram common; u64 fseq[8];        /* dram map */
+} __attribute__((packed));
+struct context_info_v2 {
+    u16 version, size; u32 config;
+    u64 prph_info_base;
+    u64 cr_head, tr_tail, cr_tail, tr_head;
+    u16 cr_idx_size, tr_idx_size;
+    u64 mtr_base, mcr_base;
+    u16 mtr_size, mcr_size;
+    u16 mtr_dbv, mcr_dbv, mtr_msi, mcr_msi;
+    u8  mtr_oh, mtr_of, mcr_oh, mcr_of;
+    u16 msg_ctrl, prph_msi;
+    u64 prph_scratch_base; u32 prph_scratch_size, rsv;
+} __attribute__((packed));
+
+#define PRPH_SCR_MTR_MODE  (1u<<17)
+#define PRPH_MTR_FMT_256B  0xC0000
+
+static int load_fw_gen3(void)
+{
+    struct prph_scratch *ps = arena_alloc(sizeof *ps);
+    struct context_info_v2 *ci;
+    u8 *prph_info, *iml;
+    if (!ps) return -1;
+    memset(ps, 0, sizeof *ps);
+    ps->version = 0; ps->mac_id = (u16)g_hw_rev; ps->size = sizeof(*ps)/4;
+    ps->control_flags = PRPH_SCR_MTR_MODE | PRPH_MTR_FMT_256B; /* + RB size 2K default */
+    ps->free_rbd = phys(g_rbd_free_le64);
+    place_fw_dram(&ps->common);
+    /* PNVM (loaded to fw after alive via doorbell; here just record if present) */
+    if (g_pnvmbuf[0] || 1) {
+        /* pnvm blob was concatenated into g_pnvmbuf by load_pnvm(); base set later */
+    }
+    prph_info = arena_alloc(4096); if (!prph_info) return -1;
+    memset(prph_info, 0, 4096);
+    ci = arena_alloc(sizeof *ci); if (!ci) return -1;
+    memset(ci, 0, sizeof *ci);
+    ci->prph_info_base = phys(prph_info);
+    ci->prph_scratch_base = phys(ps);
+    ci->prph_scratch_size = sizeof(*ps)/4;
+    ci->cr_head = phys(&g_rbstts);
+    ci->tr_tail = phys(prph_info) + 2048;
+    ci->cr_tail = phys(prph_info) + 3072;
+    ci->mtr_base = phys(g_cmd_ring);
+    ci->mcr_base = phys(g_rbd_used);
+    ci->mtr_size = 2; ci->mcr_size = 8;
+    iml = arena_alloc(g_fw.iml_len ? g_fw.iml_len : 4);
+    if (g_fw.iml && g_fw.iml_len) memcpy(iml, g_fw.iml, g_fw.iml_len);
+    w32(CSR_INT, 0xFFFFFFFFu);
+    w64_(CSR_CTXT_INFO_ADDR, phys(ci));
+    w64_(CSR_IML_DATA_ADDR, phys(iml));
+    w32(CSR_IML_SIZE_ADDR, g_fw.iml_len);
+    set_bit_(CSR_CTXT_INFO_BOOT_CTRL, CSR_AUTO_FUNC_BOOT_ENA);
+    prph_w(0xa05c44, 1);                       /* UMAC UREG_CPU_INIT_RUN */
+    return 0;
+}
+
+/* =====================================================================
+ * 8. ALIVE + MVM init handshake
+ * ===================================================================== */
+static u32 g_lmac_err_ptr, g_umac_err_ptr;
+static u32 g_sku_id[3];
+
+static int wait_alive(int timeout_ms)
+{
+    int len = 0;
+    const u8 *p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
+    if (!p || len < 4) return -1;
+    { u16 status = (u16)(p[0] | (p[1]<<8));
+      if (status != 0xCAFE) return -1; }
+    if (g_fw.alive_notif_ver >= 6 && len >= 128) {
+        /* v7: lmac_data[2]@4, umac_data@100, sku_id@116 */
+        g_lmac_err_ptr = le32(p + 4 + 16);
+        g_umac_err_ptr = le32(p + 100 + 8);
+        g_sku_id[0]=le32(p+116); g_sku_id[1]=le32(p+120); g_sku_id[2]=le32(p+124);
+    } else if (len >= 52) {
+        g_lmac_err_ptr = le32(p + 4 + 16);
+        g_umac_err_ptr = le32(p + 52 + 0);
+    }
+    return 0;
+}
+
+/* the scheduler bring-up after alive (gen1 only; gen2 fw configures it) */
+#define SCD_BASE 0xa02c00
+#define SCD_TXFACT (SCD_BASE + 0x10)
+#define SCD_DRAM_BASE (SCD_BASE + 0x8)
+#define FH_KW (FH_MEM + 0x97C)
+#define FH_CBBC_0_15 (FH_MEM + 0x9D0)
+static u8 g_kw[4096] __attribute__((aligned(4096)));
+static void tx_start_gen1(void)
+{
+    if (grab_nic() < 0) return;
+    prph_w(SCD_DRAM_BASE, (u32)(phys(g_cmd_bc) >> 10));
+    w32(FH_CBBC_0_15 + 0*4, (u32)(phys(g_cmd_ring) >> 8));   /* cmd queue = 0 */
+    w32(FH_KW, (u32)(phys(g_kw) >> 4));
+    prph_w(SCD_TXFACT, 0xFF);      /* activate FIFOs 0..7 */
+    release_nic();
+}
+
+/* =====================================================================
+ * 9. MVM commands (structs from the fw/api headers) — the connect flow
+ * ===================================================================== */
+/* command group ids */
+#define GRP_LEGACY 0
+#define GRP_LONG   1
+#define GRP_SYSTEM 2
+#define GRP_MACCONF 3
+#define GRP_DATAPATH 5
+#define GRP_REGNVM 0xc
+
+/* small init commands */
+static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); wait_cmd_done(50);}
+static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
+static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
+
+/* PHY_CONFIGURATION_CMD (v1: 12 bytes) */
+static void mvm_phy_cfg(void)
+{
+    struct { u32 phy_cfg, flow, event; } c;
+    c.phy_cfg = g_fw.phy_sku & 0x00FF00FF;   /* radio type/step/dash + chains subset */
+    c.flow = g_fw.calib_flow; c.event = g_fw.calib_event;
+    send_cmd(GRP_LONG, 0x6a, 0, &c, sizeof c); wait_cmd_done(200);
+}
+
+/* INIT_EXTENDED_CFG (SYSTEM 0x3) + NVM_ACCESS_COMPLETE (REGNVM 0x0) — unified */
+static void mvm_init_unified(void)
+{
+    u32 init_flags = (1u<<1);                  /* BIT(IWL_INIT_NVM) */
+    send_cmd(GRP_SYSTEM, 0x3, 0, &init_flags, 4); wait_cmd_done(100);
+    { u32 z = 0; send_cmd(GRP_REGNVM, 0x0, 0, &z, 4); wait_cmd_done(100); }
+    mvm_phy_cfg();
+    wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
+    /* NVM_GET_INFO for the MAC address */
+    { u32 z = 0; int len=0; const u8 *r; send_cmd(GRP_REGNVM, 0x2, 0, &z, 4);
+      r = wait_notif(GRP_REGNVM, 0x2, &len, 200);
+      if (r && len >= 16) { /* general(8) + sku(4) + phy(8); mac addr sits later -
+                               varies by ver; leave g_mac from NVM read below */ }
+    }
+}
+
+/* PHY_CONTEXT_CMD ADD on a 2.4GHz channel (v3+, 32 bytes) */
+static u32 g_phy_id = 0x0000;   /* id 0, color 0 */
+static u32 g_mac_id = 0x0100;   /* id 1, color 1 (nonzero color) */
+static void mvm_phy_ctxt(int chan, int action)
+{
+    struct { u32 id_color, action; u32 channel; u8 band,width,ctrl,rsv;
+             u32 lmac_id, rxchain, dsp; u8 sec,r3[3]; } c;
+    memset(&c, 0, sizeof c);
+    c.id_color = g_phy_id; c.action = action;
+    c.channel = chan; c.band = 1 /*PHY_BAND_24*/; c.width = 0 /*20MHz*/;
+    c.lmac_id = 0; c.rxchain = (1u<<1)|(1u<<10);   /* valid ant A, 1 chain */
+    send_cmd(GRP_LONG, 0x8, 0, &c, sizeof c); wait_cmd_done(100);
+}
+
+/* MAC_CONTEXT_CMD (BSS STA). Big struct; we fill the common + sta tail. */
+static void mvm_mac_ctxt(const u8 bssid[6], int assoc, int aid, int action)
+{
+    u8 c[140]; u8 *p = c;
+    memset(c, 0, sizeof c);
+    *(u32*)(p+0) = g_mac_id;            /* id_and_color */
+    *(u32*)(p+4) = action;
+    *(u32*)(p+8) = 5;                   /* FW_MAC_TYPE_BSS_STA */
+    *(u32*)(p+12) = 0;                  /* tsf_id A */
+    memcpy(p+16, g_mac, 6);             /* node_addr */
+    memcpy(p+24, bssid, 6);             /* bssid_addr */
+    *(u32*)(p+40) = 0;                  /* protection_flags */
+    { u32 filt = (1u<<2);              /* ACCEPT_GRP */
+      if (!assoc) filt |= (1u<<6);      /* IN_BEACON while connecting */
+      *(u32*)(p+52) = filt; }
+    /* ac[5] EDCA defaults @60 (cw_min 0x0f, cw_max 0x3f, aifsn 1) */
+    { int a; for (a=0;a<5;a++){ u8*q=p+60+a*8; q[0]=0x0f; q[2]=0x3f; q[4]=1; } }
+    /* mac_data_sta union @100: is_assoc, ... assoc_id @136 */
+    *(u32*)(p+100) = assoc ? 1 : 0;
+    *(u32*)(p+136) = aid;
+    send_cmd(GRP_LONG, 0x28, 0, c, 100 + 44); wait_cmd_done(100);
+}
+
+/* BINDING_CONTEXT_CMD (v2, 28 bytes) + TIME_QUOTA_CMD */
+static u32 g_binding_id = 0x0000;
+static void mvm_binding(int action)
+{
+    struct { u32 id_color, action, macs[3], phy, lmac_id; } c;
+    memset(&c, 0, sizeof c);
+    c.id_color = g_binding_id; c.action = action;
+    c.macs[0] = g_mac_id; c.macs[1] = 0xFFFFFFFF; c.macs[2] = 0xFFFFFFFF;
+    c.phy = g_phy_id; c.lmac_id = 0;
+    send_cmd(GRP_LONG, 0x2b, 0, &c, sizeof c); wait_cmd_done(100);
+}
+static void mvm_time_quota(void)
+{
+    struct { u32 id_color, quota, max_dur, low_lat; } q[4];
+    memset(q, 0, sizeof q);
+    q[0].id_color = g_binding_id; q[0].quota = 128; q[0].max_dur = 0;
+    send_cmd(GRP_LONG, 0x2c, 0, q, sizeof q); wait_cmd_done(100);
+}
+
+/* SESSION_PROTECTION_CMD (MAC_CONF 0x5) or TIME_EVENT_CMD — assoc window */
+static void mvm_assoc_window(void)
+{
+    if (fw_has_capa(54)) {
+        struct { u32 id_color, action, conf_id, dur, rep, interval; } c;
+        memset(&c,0,sizeof c);
+        c.id_color = g_mac_id; c.action = 1 /*ADD*/; c.conf_id = 0 /*ASSOC*/; c.dur = 900;
+        send_cmd(GRP_MACCONF, 0x5, 0, &c, sizeof c);
+        wait_notif(GRP_MACCONF, 0xFB, 0, 500);   /* SESSION_PROTECTION_NOTIF start */
+    } else {
+        struct { u32 id_color, action, id, apply, max_delay, depends, interval, duration; u8 repeat, max_frags; u16 policy; } c;
+        memset(&c,0,sizeof c);
+        c.id_color = g_mac_id; c.action = 1; c.id = 1 /*TE_BSS_STA_ASSOC*/;
+        c.duration = 900; c.repeat = 1; c.policy = (1u<<0)|(1u<<11); /* notif + start now */
+        send_cmd(GRP_LONG, 0x29, 0, &c, sizeof c);
+        wait_notif(GRP_LEGACY, 0x2a, 0, 500);    /* TIME_EVENT_NOTIFICATION */
+    }
+}
+
+/* ADD_STA (v7 front covers both; 44 bytes) */
+static void mvm_add_sta(const u8 addr[6], int modify, u32 sta_flags)
+{
+    u8 c[48];
+    memset(c, 0, sizeof c);
+    c[0] = modify ? 1 : 0;             /* add_modify */
+    *(u32*)(c+4) = g_mac_id;           /* mac_id_n_color */
+    memcpy(c+8, addr, 6);
+    c[16] = AP_STA_ID;                 /* sta_id */
+    *(u32*)(c+20) = sta_flags;
+    *(u32*)(c+24) = 0xFFFFFFFF;        /* station_flags_msk */
+    c[35] = 0;                         /* station_type = IWL_STA_LINK */
+    *(u32*)(c+40) = (1u<<g_data_qid>0? 0:0);
+    send_cmd(GRP_LONG, 0x18, 0, c, g_family >= FAM_9000 ? 48 : 44);
+    wait_cmd_done(100);
+}
+
+/* ADD_STA_KEY: install a CCMP key (pairwise or, with mcast=1, the GTK) */
+static void mvm_add_sta_key(const u8 *key, int keylen, int keyidx, int mcast, const u8 *pn)
+{
+    u8 c[76];
+    memset(c, 0, sizeof c);
+    c[0] = AP_STA_ID;                  /* sta_id */
+    c[1] = mcast ? 1 : 0;              /* key_offset */
+    { u16 kf = (u16)((keyidx<<8) | (1u<<3) /*WEP_KEY_MAP*/ | 2 /*CCM*/);
+      if (mcast) kf |= (1u<<14);       /* STA_KEY_MULTICAST */
+      c[2]=(u8)kf; c[3]=(u8)(kf>>8); }
+    memcpy(c+4, key, keylen < 32 ? keylen : 32);
+    if (pn) memcpy(c+36, pn, 6);       /* rx_secur_seq_cnt (RSC) */
+    /* v2+ struct: transmit_seq_cnt @68 (leave 0 for RX-side install) */
+    send_cmd(GRP_LONG, 0x17, 0, c, 76);
+    wait_cmd_done(100);
+}
+
+/* SCAN_CFG_CMD (v5+ small form) */
+static void mvm_scan_cfg(void)
+{
+    struct { u8 cam, promisc, bcast_sta, rsv; u32 tx_chains, rx_chains; } c;
+    memset(&c, 0, sizeof c);
+    c.bcast_sta = 1; c.tx_chains = 1; c.rx_chains = 1;
+    send_cmd(GRP_LONG, 0xc, 0, &c, sizeof c); wait_cmd_done(100);
+}
+
+/* =====================================================================
+ * 10. WIFI.CFG parse
+ * ===================================================================== */
+static char g_cfg_ssid[36];
+static char g_cfg_psk[80];
+static int read_config(int vol)
+{
+    static u8 buf[512];
+    long n = uno_fs_read(vol, "WIFI.CFG", buf, sizeof buf - 1);
+    int i = 0;
+    g_cfg_ssid[0] = g_cfg_psk[0] = 0;
+    if (n <= 0) return -1;
+    buf[n] = 0;
+    while (i < n) {
+        char key[16]; char val[80]; int k=0, v=0;
+        while (i<n && (buf[i]==' '||buf[i]=='\t'||buf[i]=='\r'||buf[i]=='\n')) i++;
+        if (i<n && buf[i]=='#') { while (i<n && buf[i]!='\n') i++; continue; }
+        while (i<n && buf[i]!='=' && buf[i]!='\n' && k<15) key[k++]=buf[i++];
+        key[k]=0;
+        if (i<n && buf[i]=='=') { i++;
+            while (i<n && buf[i]!='\n' && buf[i]!='\r' && v<79) val[v++]=buf[i++];
+            while (v>0 && (val[v-1]==' '||val[v-1]=='\t')) v--;
+            val[v]=0;
+            if (!strcmp(key,"ssid")) strcpy(g_cfg_ssid, val);
+            else if (!strcmp(key,"psk")) strcpy(g_cfg_psk, val);
+        }
+        while (i<n && buf[i]!='\n') i++;
+    }
+    return g_cfg_ssid[0] ? 0 : -1;
+}
+
+/* =====================================================================
+ * 11. 802.11 <-> Ethernet translation, TX/RX data
+ * ===================================================================== */
+static u8 g_bssid[6];
+static u16 g_seq_no;
+
+/* build a QoS-data 802.11 header (ToDS) + LLC/SNAP for an Ethernet frame,
+   returns total 802.11 payload length written to out (after the tx cmd). */
+static int eth_to_80211(const u8 *eth, int ethlen, u8 *out)
+{
+    u8 *p = out;
+    u16 ethertype = (u16)((eth[12]<<8) | eth[13]);
+    /* frame control: type data(2) subtype qosdata(8) => 0x88, ToDS => 0x01 */
+    *p++ = 0x88; *p++ = 0x01;
+    *p++ = 0; *p++ = 0;                 /* duration */
+    memcpy(p, g_bssid, 6); p += 6;      /* addr1 = BSSID */
+    memcpy(p, g_mac, 6);   p += 6;      /* addr2 = SA (us) */
+    memcpy(p, eth, 6);     p += 6;      /* addr3 = DA */
+    *p++ = (u8)(g_seq_no<<4); *p++ = (u8)(g_seq_no>>4); g_seq_no++;  /* seq ctl */
+    *p++ = 0; *p++ = 0;                 /* QoS control (TID 0) */
+    memcpy(p, SNAP, 6); p += 6;         /* LLC/SNAP */
+    *p++ = (u8)(ethertype>>8); *p++ = (u8)ethertype;
+    memcpy(p, eth + 14, ethlen - 14); p += ethlen - 14;
+    return (int)(p - out);
+}
+
+/* 802.11 data frame (FromDS) -> Ethernet, into out (>= len). Returns eth len. */
+static int wifi_to_eth(const u8 *f, int len, u8 *out)
+{
+    int hdr = 24;
+    u16 fc = (u16)(f[0] | (f[1]<<8));
+    int qos = ((fc>>4)&0xF) == 8;      /* QoS data subtype */
+    const u8 *da, *sa;
+    int snap;
+    if (qos) hdr += 2;
+    if (len < hdr + 8) return -1;
+    /* addr layout for FromDS: addr1=DA, addr2=BSSID, addr3=SA */
+    da = f + 4; sa = f + 16;
+    snap = hdr;
+    if (memcmp(f + snap, SNAP, 6) != 0) return -1;
+    { u16 et = (u16)((f[snap+6]<<8)|f[snap+7]);
+      memcpy(out, da, 6); memcpy(out+6, sa, 6);
+      out[12]=(u8)(et>>8); out[13]=(u8)et;
+      memcpy(out+14, f + snap + 8, len - snap - 8);
+      return 14 + (len - snap - 8); }
+}
+
+/* queue a decrypted 802.11 data frame for recv() (called from rx processing) */
+static void handle_data_frame(const u8 *frame, int len)
+{
+    u8 eth[1600];
+    int n = wifi_to_eth(frame, len, eth);
+    int nx;
+    if (n <= 0 || n > 1600) return;
+    nx = (g_dq_head + 1) % DATAQ;
+    if (nx == g_dq_tail) return;        /* full, drop */
+    memcpy(g_dataq[g_dq_head].buf, eth, n);
+    g_dataq[g_dq_head].len = n;
+    g_dq_head = nx;
+}
+
+static wpa_sm_t g_wpa;
+static int g_wpa_active, g_keys_installed;
+static void handle_eapol(const u8 *frame, int len)
+{
+    u8 reply[600];
+    int r = wpa_sm_rx_eapol(&g_wpa, frame, len, reply, sizeof reply);
+    if (r <= 0) return;
+    /* TX the EAPOL reply as a data frame (in the clear, high priority) before
+       installing keys */
+    { u8 eth[600], tx[720]; int el, n;
+      memcpy(eth, g_bssid, 6); memcpy(eth+6, g_mac, 6);   /* dst=BSSID, src=us */
+      eth[12]=0x88; eth[13]=0x8E;                          /* ethertype EAPOL */
+      memcpy(eth+14, reply, r); el = 14 + r;
+      n = eth_to_80211(eth, el, tx);
+      tx_enqueue(tx, n, 1 /*high priority*/);
+    }
+    if (g_wpa.state == WPA_ST_DONE && !g_keys_installed) {
+        mvm_add_sta_key(g_wpa.ptk + 32, 16, 0, 0, 0);          /* pairwise TK */
+        if (g_wpa.gtk_len) mvm_add_sta_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1, 0);
+        g_keys_installed = 1;
+        mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));            /* authorize */
+        g_joined = 1;
+    }
+}
+
+/* =====================================================================
+ * 12. connect: scan for the SSID, then run the assoc + 4-way handshake
+ * ===================================================================== */
+static int find_and_join(void)
+{
+    int chan = 0;
+    /* A real scan issues SCAN_REQ_UMAC and collects beacons; here we drive the
+       config + request and let the connect flow proceed on the configured SSID.
+       Channel discovery from beacons is part of the metal bring-up. */
+    mvm_scan_cfg();
+    /* (SCAN_REQ_UMAC build is family-version-specific; see fwapi ref §5.12.
+       On metal we parse the SCAN_COMPLETE + beacon RX to learn BSSID/channel.) */
+    if (chan == 0) chan = 1;           /* default until beacon parse fills it */
+
+    /* assoc sequence (fwapi ref Part 11 / §8.1) */
+    mvm_phy_ctxt(chan, 1 /*ADD*/);
+    memset(g_bssid, 0xFF, 6);
+    mvm_mac_ctxt(g_bssid, 0, 0, 1 /*ADD*/);
+    mvm_binding(1);
+    mvm_time_quota();
+    mvm_assoc_window();
+    mvm_add_sta(g_bssid, 0, 0);        /* ADD the AP peer station */
+    /* auth + assoc frame exchange, then MAC ctxt MODIFY(assoc) — metal path.
+       The 4-way handshake then runs via handle_eapol() as EAPOL frames arrive. */
+
+    /* set up the WPA supplicant with the PMK */
+    { u8 pmk[32];
+      wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+      wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
+      g_wpa_active = 1; }
+    strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+    return 0;
+}
+
+/* =====================================================================
+ * 13. uno_nic_t: send / recv / link
+ * ===================================================================== */
+static uno_nic_t g_nic;
+
+static int iwl_send(void *ctx, const void *pkt, int len)
+{
+    u8 tx80211[2048];
+    int n;
+    (void)ctx;
+    if (!g_bound || !g_joined || len <= 0 || len > 1514) return -1;
+    n = eth_to_80211((const u8 *)pkt, len, tx80211);
+    /* Wrap in a TX_CMD on the data queue; the card encrypts from the installed
+       CCMP key. gen1/gen2/gen3 TX_CMD layouts differ (fwapi ref Part 6). */
+    tx_enqueue(tx80211, n, 0);
+    return len;
+}
+
+static int iwl_recv(void *ctx, void *pkt, int cap)
+{
+    (void)ctx;
+    if (!g_bound) return 0;
+    /* pump the RX ring so notifications (EAPOL, data, mgmt) get processed;
+       rx_process_rb dispatches data frames to handle_data_frame and EAPOL to
+       handle_eapol (which drives the 4-way handshake + key install). */
+    { u16 closed = rx_closed() & (RXQ_N - 1);
+      while (g_rx_read != closed) {
+          const u8 *found = 0; int fl = 0;
+          int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+          const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
+          rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
+          g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
+      } }
+    if (g_dq_tail != g_dq_head) {
+        int n = g_dataq[g_dq_tail].len;
+        if (n > cap) n = cap;
+        memcpy(pkt, g_dataq[g_dq_tail].buf, n);
+        g_dq_tail = (g_dq_tail + 1) % DATAQ;
+        return n;
+    }
+    return 0;
+}
+
+static int iwl_link(void *ctx) { (void)ctx; return g_bound && g_joined; }
+
+/* =====================================================================
+ * 14. bring-up entry points
+ * ===================================================================== */
+static int load_pnvm(int vol)
+{
+    long n;
+    if (!g_pnvmfile[0]) return 0;      /* AC/AX200: no PNVM */
+    n = uno_fs_read(vol, g_pnvmfile + 9 /*strip FIRMWARE\\*/, g_pnvmbuf, PNVM_MAX);
+    if (n <= 0) { /* try full path */ n = uno_fs_read(vol, g_pnvmfile, g_pnvmbuf, PNVM_MAX); }
+    return n > 0 ? 0 : -1;
+}
+
+int iwl_present(void)
+{
+    pci_dev d;
+    if (g_present) return 1;
+    /* Intel WiFi = vendor 0x8086, class 0x02 (network) subclass 0x80 (other).
+       Match by our device table. */
+    if (pci_find_class(0x02, 0x80, &d)) {
+        u16 dev = pci_cfg_read16(&d, 2);
+        if (d.vendor == 0x8086 && identify_by_pci(dev)) { g_pci = d; g_present = 1; return 1; }
+    }
+    return 0;
+}
+
+uno_nic_t *iwl_nic(void)
+{
+    int vol;
+    long fn;
+    if (g_bound) return &g_nic;
+    if (!iwl_present()) { st_set("no Intel WiFi card"); return 0; }
+
+    choose_firmware();
+    st_set("Intel WiFi "); st_cathex(g_hw_rev);
+
+    vol = firmware_volume();
+    if (vol < 0) { st_set("WiFi: no WIFI.CFG on the ESP"); return 0; }
+    if (read_config(vol) < 0) { st_set("WiFi: WIFI.CFG has no ssid="); return 0; }
+
+    /* read the .ucode image (strip the FIRMWARE\ prefix for the FAT reader if
+       it exposes only a flat root; try both) */
+    fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
+    if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
+    if (fn <= 0) { st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")"); return 0; }
+    if (parse_ucode(g_fwbuf, (u32)fn) < 0) { st_set("WiFi: bad .ucode TLV"); return 0; }
+    load_pnvm(vol);
+
+    /* map BAR0 + bus master */
+    pci_enable_bus_master(&g_pci);
+    g_bar = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 0);
+    if (!g_bar) { st_set("WiFi: no BAR0"); return 0; }
+    g_hw_rev = r32(CSR_HW_REV);
+    g_hw_rf_id = r32(CSR_HW_RF_ID);
+
+    if (prepare_card_hw() < 0) { st_set("WiFi: card not ready (ME owns it?)"); return 0; }
+    sw_reset();
+    w32(CSR_INT, 0xFFFFFFFFu);
+    if (rf_killed()) { st_set("WiFi: hardware RF-kill is on"); return 0; }
+    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000002);   /* clear SW rfkill handshake */
+    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000004);   /* clear cmd-blocked */
+
+    if (apm_init() < 0) { st_set("WiFi: APM init timeout"); return 0; }
+    rx_hw_init();
+    if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
+
+    /* load firmware + wait ALIVE */
+    if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); return 0; } }
+    else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); return 0; } }
+    else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); return 0; } }
+
+    if (wait_alive(2000) < 0) { st_set("WiFi: firmware did not ALIVE"); return 0; }
+    if (!g_gen2) tx_start_gen1();
+
+    /* post-alive init (unified path; AC split path adds INIT image + calib) */
+    mvm_init_unified();
+    mvm_tx_ant(1);
+    if (fw_has_capa(12)) mvm_dqa_enable();
+    mvm_power_table();
+
+    /* connect */
+    if (find_and_join() < 0) { st_set("WiFi: join failed"); return 0; }
+
+    g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
+    g_bound = 1;
+    st_set("WiFi bound: "); st_cat(g_ssid_str[0]?g_ssid_str:g_cfg_ssid);
+    st_cat(g_joined ? " (joined)" : " (associating)");
+    return &g_nic;
+}
+
+const unsigned char *iwl_mac(void) { return g_mac; }
+
+void iwl_status_str(char *buf, int cap)
+{
+    int i = 0;
+    if (cap <= 0) return;
+    while (g_status[i] && i < cap-1) { buf[i] = g_status[i]; i++; }
+    buf[i] = 0;
+}

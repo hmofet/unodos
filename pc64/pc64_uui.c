@@ -22,6 +22,8 @@
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
+#include "rtl8152.h"         /* USB Ethernet adapter (Realtek; docks/dongles) */
+#include "iwlwifi.h"         /* Intel AC/AX WiFi (firmware-driven) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
 #include "pc64_native.h"     /* PS/2 kbd/aux bind status (System readout)   */
 /* firmware pointer-instance counts + the detach-held-for-pointer flag */
@@ -1746,7 +1748,11 @@ int main(void)
     unoui_font_pop  = uno_font_pop;
     uno_mac_mouse   = uno_pc64_mac_mouse;   /* live pointer for Paint's drag spin */
     uno_xhci_init();                    /* USB host controller (inert unless -DUNO_XHCI) */
-    ax88179_nic();                      /* bind a USB Ethernet adapter if one is attached */
+    if (!ax88179_nic())                 /* bind a USB Ethernet adapter if one is attached */
+        rtl8152_nic();                  /* ...else try a Realtek USB NIC (docks/dongles) */
+    /* Intel WiFi is bound lazily on first net use (pc64_net_up): it reads
+       WIFI.CFG + firmware off the ESP and runs a scan/join that can take a
+       few seconds - not something to do on the boot path. */
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */

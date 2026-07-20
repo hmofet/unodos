@@ -3,6 +3,8 @@
 #include "net.h"
 #include "e1000.h"
 #include "ax88179.h"      /* USB Ethernet fallback (X1 has no wired NIC) */
+#include "rtl8152.h"      /* the other common USB Ethernet family (docks) */
+#include "iwlwifi.h"      /* Intel AC/AX WiFi (firmware-driven; WIFI.CFG) */
 #include "tls.h"          /* tls_connect_ca / tls_write / tls_read (HTTPS) */
 #include <string.h>
 
@@ -17,7 +19,9 @@ int pc64_net_up(void)
     const unsigned char *mac;
     if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
     nic = e1000_nic(); mac = e1000_mac();       /* native PCI NIC first */
-    if (!nic) { nic = ax88179_nic(); mac = ax88179_mac(); }   /* else a USB Ethernet adapter */
+    if (!nic) { nic = ax88179_nic(); mac = ax88179_mac(); }   /* USB Ethernet (ASIX) */
+    if (!nic) { nic = rtl8152_nic(); mac = rtl8152_mac(); }   /* USB Ethernet (Realtek dock) */
+    if (!nic) { nic = iwl_nic();     mac = iwl_mac();     }   /* Intel WiFi (needs firmware + WIFI.CFG) */
     if (!nic) return 0;                          /* no NIC at all */
     net_init(nic, mac);
     g_net_inited = 1;
@@ -80,7 +84,7 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
     if (path[0] == 0) strcpy(path, "/");
     if (host[0] == 0) { if (statusmax) strncpy(status,"Empty host",statusmax-1); return -2; }
 
-    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No e1000 NIC found (Wi-Fi not supported)",statusmax-1); return -3; }
+    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No network link (no NIC, or WiFi not joined - check WIFI.CFG + firmware)",statusmax-1); return -3; }
 
     /* resolve */
     if (!is_ipv4(host, ip)) {
