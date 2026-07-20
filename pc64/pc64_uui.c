@@ -1752,6 +1752,19 @@ static int pump_input(void)
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
         any = 1; real = 1;
+#ifdef UNO_DEBUG
+        /* F12 = operator escape hatch: stop the stress driver and hand back a
+         * usable desktop.  FIRST in the loop and it also drops fullscreen, so
+         * it works even while a fullscreen app (Runner3D) has focus - that is
+         * precisely when the operator is otherwise trapped and can't reach
+         * Start > Shut Down.  F10 is taken by the platform (GOP mode cycle). */
+        if (scan == 0x16) {
+            pc64_stress_stop();
+            if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+            g_dirty = 1;
+            continue;
+        }
+#endif
         if (UI.full && scan == 0x17) {          /* Esc leaves a fullscreen game */
             unoui_fullscreen(&UI, 0); UI.focus_wi = 0; g_dirty = 1; continue;
         }

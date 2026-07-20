@@ -47,8 +47,9 @@ void uno_dbg_force(int what);
 
 /* ---- config -------------------------------------------------------------- */
 static int   g_armed = -1;              /* -1 unknown, 0 off, 1 on            */
-static int   g_once;                    /* stop after one full pass           */
+static int   g_max_passes;              /* stop after N passes (0 = unlimited) */
 static int   g_allow_force;             /* explicit opt-in to self-crash tests */
+static int   g_force_kind;              /* pass-1 self-test: 0 #PF, 4 hang     */
 static int   g_speed = 4;               /* frames between actions (>=1)       */
 static unsigned long g_frame;
 static unsigned long g_action;
@@ -63,7 +64,9 @@ static int   g_pass;
  * substring of a longer token). */
 static int tok_delim(char c) { return c == 0 || c == ' ' || c == '\t' ||
                                       c == '\r' || c == '\n' || c == '='; }
-static int cfg_has(const char *cfg, const char *key)
+/* Returns a pointer just past `key` where it appears as a whole token on a
+ * non-comment line, else NULL.  cfg_has/cfg_int are both built on this. */
+static const char *cfg_find(const char *cfg, const char *key)
 {
     const char *p = cfg;
     int klen = (int)strlen(key);
@@ -75,7 +78,7 @@ static int cfg_has(const char *cfg, const char *key)
             while (*s && *s != '\n') {
                 int atstart = (s == ls) || tok_delim(s[-1]);
                 if (atstart && !strncmp(s, key, (size_t)klen) && tok_delim(s[klen]))
-                    return 1;
+                    return s + klen;
                 s++;
             }
         }
@@ -83,6 +86,19 @@ static int cfg_has(const char *cfg, const char *key)
         if (*p) p++;
     }
     return 0;
+}
+static int cfg_has(const char *cfg, const char *key)
+{ return cfg_find(cfg, key) != 0; }
+
+/* `key=N` -> N, else `dflt`.  Used for passes=3. */
+static int cfg_int(const char *cfg, const char *key, int dflt)
+{
+    const char *s = cfg_find(cfg, key);
+    int v = 0, any = 0;
+    if (!s) return dflt;
+    while (*s == ' ' || *s == '\t' || *s == '=') s++;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; any = 1; }
+    return any ? v : dflt;
 }
 
 static void arm(void)
@@ -96,8 +112,19 @@ static void arm(void)
     if (got < 0) { uno_dbg_log("stress: no STRESS.CFG - driver disabled"); return; }
     cfg[got] = 0;
     g_armed = 1;
-    g_once  = cfg_has((char *)cfg, "once");
-    g_allow_force = cfg_has((char *)cfg, "allow-force");
+    /* how long to run: `passes=N` (bounded), `once` = passes=1, neither =
+     * forever.  A BOUNDED run matters on metal: while the driver is arming
+     * and opening apps every few frames the operator cannot reach the Start
+     * menu to shut down cleanly, so an unbounded run can only be ended by
+     * pulling the power. */
+    g_max_passes = cfg_has((char *)cfg, "once") ? 1 : 0;
+    g_max_passes = cfg_int((char *)cfg, "passes", g_max_passes);
+    /* self-test on pass 1 (proves the crash/hang pipeline end to end on metal):
+     *   allow-force -> a #PF (crash report path)
+     *   force-hang  -> an infinite loop (watchdog / HG report path)
+     * Either implies "force"; both off = the driver never self-triggers. */
+    g_allow_force = cfg_has((char *)cfg, "allow-force") || cfg_has((char *)cfg, "force-hang");
+    g_force_kind  = cfg_has((char *)cfg, "force-hang") ? 4 : 0;
     if (cfg_has((char *)cfg, "slow"))  g_speed = 12;
     if (cfg_has((char *)cfg, "fast"))  g_speed = 1;
     {   /* boot-loop guard: throttle hard once several reports have piled up */
@@ -106,8 +133,9 @@ static void arm(void)
                        uno_dbg_log("stress: %d prior reports - THROTTLED", cr); }
     }
     uno_dbg_write_bootenv();            /* snapshot BOOTENV.TXT while safe */
-    uno_dbg_log("stress: ARMED (once=%d force=%d speed=%d, %d prior reports)",
-                g_once, g_allow_force, g_speed, uno_dbg_crash_count());
+    uno_dbg_log("stress: ARMED (passes=%d force=%d/kind%d speed=%d, %d prior reports)",
+                g_max_passes, g_allow_force, g_force_kind, g_speed,
+                uno_dbg_crash_count());
 }
 
 /* ---- a tiny deterministic PRNG (no Math.random equivalent needed) -------- */
@@ -284,18 +312,46 @@ static void run_action(void)
         uno_dbg_log("stress: === pass %d ===", g_pass);
 
         if (g_pass == 1 && g_allow_force) {
-            /* prove the whole pipeline end-to-end on real hardware: force one
-             * #PF.  The report lands in CRASH\, the machine resets, and the
-             * NEXT boot's residue flush (or the direct write) makes it
-             * readable.  Only with explicit allow-force in STRESS.CFG. */
-            uno_dbg_log("stress: allow-force set - forcing a #PF to prove the pipeline");
-            uno_dbg_force(0);
+            /* prove the whole pipeline end-to-end on real hardware:
+             *   kind 0 -> a #PF: the crash-report path (CRASH\CR###, reset).
+             *   kind 4 -> an infinite loop: the WATCHDOG path (heartbeat stops
+             *             -> HG### + reset), so a real freeze is provably
+             *             caught on this machine, not just a fault.
+             * Only with explicit allow-force / force-hang in STRESS.CFG. */
+            uno_dbg_log("stress: force set - triggering self-test kind %d (%s)",
+                        g_force_kind, g_force_kind == 4 ? "hang/watchdog" : "#PF");
+            uno_dbg_force(g_force_kind);
         }
-        if (g_once && g_pass >= 1) {
+        if (g_max_passes && g_pass >= g_max_passes) {
+            /* Done: go idle and hand the machine back, so the operator can
+             * reach the Start menu and Shut Down cleanly (a clean shutdown
+             * also marks the boot clean + flushes).  Close what we opened so
+             * they get a usable desktop rather than a pile of windows. */
+            int guard = 32;
             g_armed = 0;
-            uno_dbg_log("stress: mode=once - single pass done, driver idle");
+            while (pc64_dbg_open_count() > 1 && guard-- > 0)
+                pc64_dbg_close_focused();
+            pc64_dbg_mark_dirty();
+            uno_dbg_log("stress: %d pass(es) done - driver IDLE, desktop is yours "
+                        "(use Start > Shut Down)", g_pass);
         }
     }
+}
+
+/* Operator escape hatch (F12 in the shell).  While the driver is arming and
+ * opening apps every few frames there is no way to reach the Start menu, so an
+ * unbounded run could only be ended by pulling the power - which is also the
+ * one exit that can lose unsynced telemetry.  This stops the driver dead and
+ * clears the windows it opened, handing back a usable desktop. */
+void pc64_stress_stop(void)
+{
+    int guard = 32;
+    if (g_armed <= 0) return;
+    g_armed = 0;
+    uno_dbg_oom_every = 0;                 /* release any OOM injection */
+    while (pc64_dbg_open_count() > 1 && guard-- > 0) pc64_dbg_close_focused();
+    pc64_dbg_mark_dirty();
+    uno_dbg_log("stress: STOPPED by operator (F12) after %d pass(es)", g_pass);
 }
 
 void pc64_stress_tick(void)

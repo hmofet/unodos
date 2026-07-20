@@ -388,8 +388,22 @@ if [ "$1" != "legacy" ]; then
         # lets real bugs surface).  Rename/delete to boot a quiet desktop; add
         # 'allow-force' to prove the crash pipeline end to end.  See DEBUG.md.
         if [ ! -f build/esp/STRESS.CFG ]; then
-            printf '# UnoDOS pc64 stress driver config (presence = armed)\r\n# keys: once  fast  slow  allow-force\r\nmode=continuous\r\n' \
-                > build/esp/STRESS.CFG
+            # BOUNDED by default (passes=3): while the driver is running the
+            # operator cannot reach Start > Shut Down, so an unbounded run can
+            # only be ended by pulling the power. After N passes the driver
+            # goes idle and hands back a usable desktop. F12 stops it early.
+            # Keys are listed one-per-line commented out, NOT in a prose list -
+            # the parser ignores comments now, but a key hiding in a comment is
+            # exactly the bug that made every "safe" stick self-crash (F1).
+            { printf '# UnoDOS pc64 stress driver config (presence of this file = armed)\r\n'
+              printf '# Press F12 on the machine to stop the driver early.\r\n'
+              printf '#\r\n'
+              printf '# passes=N     stop after N passes (0/absent = run forever)\r\n'
+              printf '# fast | slow  action cadence\r\n'
+              printf '# allow-force  self-test: force a #PF (proves the crash pipeline)\r\n'
+              printf '# force-hang   self-test: force a freeze (proves the watchdog)\r\n'
+              printf 'passes=3\r\n'
+            } > build/esp/STRESS.CFG
         fi
         # BUILD.TXT stamp so a report can be tied back to an exact image
         printf 'UnoDOS pc64 DEBUG build\r\nid: %s\r\nubsan: %s  dbgcon: %s\r\n' \

@@ -1128,6 +1128,8 @@ void uno_dbg_write_bootenv(void)
     if (vol < 0 || !g_env_len) return;
     g_in_disk = 1;
     uno_fat_write(vol, "BOOTENV.TXT", (const unsigned char *)g_env, g_env_len);
+    uno_fat_sync();     /* a test run normally ends in a forced power-off, and
+                           an unsynced write dies in the FAT write-back cache */
     g_in_disk = 0;
 }
 
@@ -1141,6 +1143,7 @@ void uno_dbg_write_perf(const char *text, int len)
     g_in_disk = 1;
     snprintf(path, sizeof path, "CRASH\\PF%03d.TXT", next_seq(vol));
     uno_fat_write(vol, path, (const unsigned char *)text, len);
+    uno_fat_sync();     /* same: survive the operator pulling the plug */
     g_in_disk = 0;
 }
 

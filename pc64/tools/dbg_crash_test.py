@@ -32,18 +32,20 @@ def sh(cmd, **kw):
 
 
 SAFE = os.environ.get("SAFE") == "1"
+HANG = os.environ.get("HANG") == "1"
 
 
 def build_disk():
     """GPT + one EF00 FAT32 partition holding build/esp.
 
     Default: arm allow-force so the driver self-crashes (crash-pipeline test).
-    SAFE=1: leave the SHIPPED STRESS.CFG untouched and assert NO self-crash -
-    the regression test for the comment-matching parser bug (a shipped stick
-    must not force a #PF)."""
+    HANG=1:  arm force-hang so the driver spins -> tests the WATCHDOG (HG report).
+    SAFE=1:  leave the SHIPPED STRESS.CFG untouched and assert NO self-crash -
+    the regression test for the comment-matching parser bug."""
     if not SAFE:
         with open(os.path.join(ESP, "STRESS.CFG"), "w", newline="\r\n") as f:
-            f.write("# QEMU crash-pipeline test\nallow-force\nfast\n")
+            f.write("# QEMU pipeline test\n" +
+                    ("force-hang\nfast\n" if HANG else "allow-force\nfast\n"))
     disk_sectors = MIB * 2048
     with open(DISK, "wb") as f:
         f.truncate(disk_sectors * SECTOR)
@@ -101,6 +103,14 @@ def boot():
             print("  QEMU exited/reset on its own - unexpected in safe mode")
         except subprocess.TimeoutExpired:
             print("  ran 55s without resetting (expected: no crash)")
+        return
+    if HANG:
+        print("booting QEMU (force-hang -> watchdog must fire an HG report + reset)...")
+        try:
+            subprocess.run(argv, timeout=110)   # ~29s to pass 1 + 20s watchdog
+            print("  QEMU reset on its own - watchdog fired")
+        except subprocess.TimeoutExpired:
+            print("  TIMED OUT - watchdog did NOT reset the machine (a real gap)")
         return
     print("booting QEMU (forces a #PF, then resets -> QEMU exits)...")
     try:
@@ -195,6 +205,23 @@ def main():
         ok = check_disk_safe(fat)
         print("\n=== %s ===" % ("VERIFIED (no self-crash)" if ok else "FAILED"))
         sys.exit(0 if ok else 2)
+    if HANG:
+        txt = open(LOG, errors="replace").read() if os.path.exists(LOG) else ""
+        log_ok = "watchdog" in txt and ("HANG" in txt or "main loop silent" in txt)
+        print("PASS: watchdog fired + logged an HG report" if log_ok
+              else "FAIL: no watchdog HANG report on debugcon")
+        # re-read the disk for an HG file
+        part_start = 2048
+        with open(DISK, "rb") as df:
+            df.seek(part_start * SECTOR); data = df.read(os.path.getsize(fat))
+        with open(fat, "wb") as f: f.write(data)
+        r = subprocess.run(["mdir", "-i", fat, "::/CRASH"], capture_output=True, text=True)
+        disk_ok = bool(re.search(r"\bHG\w*\s+TXT", r.stdout))
+        print(r.stdout)
+        print("PASS: HG report persisted to \\CRASH" if disk_ok
+              else "NOTE: no HG file on disk (may have written on reset path)")
+        print("\n=== %s ===" % ("VERIFIED (watchdog works)" if log_ok else "FAILED"))
+        sys.exit(0 if log_ok else 2)
     a = check_log()
     b = check_disk(fat)
     print("\n=== %s ===" % ("VERIFIED" if (a and b) else
