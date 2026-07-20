@@ -90,6 +90,15 @@ This is also why the Surface never detaches.
   no device (address discovery? the Surface's HID-over-I2C descriptor path?).
   Cross-ref the LPSS-clock / 64-bit-BAR history in the pc64 trackpad notes.
 
+### F5 — open-window count creeps up over a long run  ·  HARNESS (watch)  ·  S4  ·  OPEN
+Across run 2 the driver's open-window count drifted 9 → 12 over 31 passes: the
+smoke phase opens more than the close phase closes. Harmless at this rate, but
+unoui has a 24-window cap, so a long enough soak would start hitting `ui_add`
+failures and the run would silently change character (fewer apps actually
+opening). Not an OS bug — it is the driver's phase balance. Rebalance if we
+ever do very long soaks; it does not affect bounded `passes=N` runs.
+- Evidence: `PF002` `open_windows=9` → `PF032` `open_windows=12` (run 2).
+
 ---
 
 ## Positive confirmations (not bugs — the harness works on metal)
@@ -103,14 +112,6 @@ This is also why the Surface never detaches.
 - **Stress driver runs on metal** — opened every app, built the deep directory
   tree (16 levels / 163-char path) and fed the corpus without incident up to the
   forced crash (`PF002` perf snapshot).
-
-### F5 — open-window count creeps up over a long run  ·  HARNESS (watch)  ·  S4  ·  OPEN
-Across run 2 the driver's open-window count drifted 9 → 12 over 31 passes: the
-smoke phase opens more than the close phase closes. Harmless at this rate, but
-unoui has a 24-window cap, so a long enough run would start hitting `ui_add`
-failures and the run would silently change character. Not an OS bug — it is the
-driver's phase balance. Worth rebalancing if we ever do very long soaks.
-- Evidence: `PF002` `open_windows=9` → `PF032` `open_windows=12`.
 
 ## To carry into future runs
 
