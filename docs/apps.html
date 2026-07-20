@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="active" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="active" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -142,11 +142,20 @@ sets the level.</p>
 </div>
 <div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
 
+<h2 id="studio">Studio: make your own apps</h2>
+<p>UnoDOS comes with its own IDE. <strong>Studio</strong> is a code editor, a compiler and an AI
+assistant in one window: write an app, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to build it and
+<kbd>Ctrl</kbd>+<kbd>R</kbd> to run it, all on the machine, with no PC or toolchain. The full story,
+including the built-in ChatGPT / Claude / Gemini assistant, is on the <a href="studio.html">Studio</a>
+page.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/studio.png" aria-label="Enlarge: Studio: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine."><img src="assets/img/studio.png" alt="Studio: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine." loading="lazy"></button><figcaption><b>Studio</b>: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine.</figcaption></figure>
+
 <h2 id="modules">Apps live on the disk</h2>
 <p>The games and creative tools are not baked into the system: each one is a small
 <code>.UNO</code> file in the <code>APPS</code> folder of the UnoDOS disk, loaded the first time you
 open it. Installing UnoDOS onto a PC copies them along automatically. If an app's file is missing,
-its window simply says so - nothing crashes.</p>
+its window simply says so - nothing crashes. (Studio itself is one of these files, so a build can
+include or omit it freely.)</p>
 
 <nav class="pagenav"><a href="appearance.html">&lsaquo; Themes &amp; appearance</a><a class="nxt" href="browser.html">Web browser &rsaquo;</a></nav>
 </div></main>

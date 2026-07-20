@@ -24,6 +24,7 @@ NAV = [
     ("ports.html",           "The UnoDOS family"),
     (None,                   "Developer"),          # section header
     ("developer.html",       "Overview &amp; architecture"),
+    ("studio.html",          "Studio: the built-in IDE"),
     ("dev-apps.html",        "Writing apps"),
     ("dev-api.html",         "API reference"),
     ("dev-build.html",       "Building &amp; tooling"),
@@ -528,6 +529,33 @@ void u3d_triangles(const u3d_vert *verts, int tri_count);   /* Gouraud, no textu
 void u3d_end(void);
 void u3d_present(void);''')
 
+CODE_UNOC_SAMPLE = code('''#include "UNO.H"          /* the whole app SDK in one header */
+
+static short bx = 40, by = 30, vx = 3, vy = 2;   /* a bouncing ball */
+
+static void draw(UnoWin *w) {
+    Rect f;
+    short x0 = w->bounds.left + 10, y0 = w->bounds.top + TBAR_H + 8;
+    SetRect(&f, x0, y0, x0 + 260, y0 + 160);
+    fill_rgb(&f, &kField);                        /* true-colour fill    */
+    SetRect(&f, x0 + bx - 9, y0 + by - 9, x0 + bx + 9, y0 + by + 9);
+    fill_rgb(&f, &kBall);
+}
+static void tick(void) {                          /* ~60 times a second  */
+    bx += vx; by += vy;
+    if (bx < 9 || bx > 251) vx = -vx;
+    if (by < 9 || by > 151) vy = -vy;
+    { UnoWin *w = find_app_window(APP_RUNNER); if (w) draw_window(w); }
+}
+static const GameRGB kBall  = { 240, 200, 40, C_WHITE };
+static const GameRGB kField = {  10,  40, 120, C_BLUE  };
+
+/* the vtable the desktop drives: draw / key / click / tick / opened / closed */
+static const AppInterface kIface = {
+    draw, 0, 0, tick, 0, 0, "Bouncer", { 30, 30, 330, 260 }
+};
+const AppInterface *uno_app_main(const KernelApi *k) { gK = k; return &kIface; }''')
+
 CODE_BUILD = code('''./build.sh                 # build the unoui desktop shell -> build/esp/
 ./build.sh run             # build, then boot it in QEMU + OVMF
 ./build.sh legacy          # build the older 14-app "legacy" core
@@ -571,6 +599,7 @@ PAGES["index.html"] = ("Overview", f"""
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
   <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
+  <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
   <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
 </div>
@@ -860,11 +889,20 @@ sets the level.</p>
 </div>
 {note('Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.', title="3D graphics")}
 
+<h2 id="studio">Studio: make your own apps</h2>
+<p>UnoDOS comes with its own IDE. <strong>Studio</strong> is a code editor, a compiler and an AI
+assistant in one window: write an app, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to build it and
+<kbd>Ctrl</kbd>+<kbd>R</kbd> to run it, all on the machine, with no PC or toolchain. The full story,
+including the built-in ChatGPT / Claude / Gemini assistant, is on the <a href="studio.html">Studio</a>
+page.</p>
+{fig("studio.png", "<b>Studio</b>: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine.")}
+
 <h2 id="modules">Apps live on the disk</h2>
 <p>The games and creative tools are not baked into the system: each one is a small
 <code>.UNO</code> file in the <code>APPS</code> folder of the UnoDOS disk, loaded the first time you
 open it. Installing UnoDOS onto a PC copies them along automatically. If an app's file is missing,
-its window simply says so - nothing crashes.</p>
+its window simply says so - nothing crashes. (Studio itself is one of these files, so a build can
+include or omit it freely.)</p>
 """)
 
 PAGES["browser.html"] = ("Web browser", f"""
@@ -1059,10 +1097,84 @@ it is background: you code against the concrete C headers, <code>unoui.h</code> 
 <a href="dev-build.html">Building &amp; tooling</a>.</p>
 """)
 
+PAGES["studio.html"] = ("Studio: the built-in IDE", f"""
+<h1>Studio: the built-in IDE</h1>
+<p class="lede">Write, compile and run UnoDOS apps <strong>on the machine itself</strong> - no PC, no
+toolchain, no command line. Studio is a code editor, a real compiler and an AI assistant in one window,
+and the app it builds opens right next to it.</p>
+
+{fig("studio.png", "<b>Studio</b>: a monospace code editor with UnoC syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on the bundled <code>SAMPLE.C</code>.")}
+
+<h2 id="loop">Edit, build, run - all on the machine</h2>
+<p>Studio compiles your source straight to a runnable app inside UnoDOS. There is nothing to install and
+no separate computer in the loop:</p>
+<ol>
+  <li>Open <strong>Studio</strong> from the programs menu. It greets you with <code>SAMPLE.C</code>, a
+      small bouncing-ball app.</li>
+  <li>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> to <strong>build</strong>. The output pane reports the result,
+      for example <code>Built SAMPLE.UNO code=2303 ...</code>, and the new <code>.UNO</code> file appears
+      in the project list.</li>
+  <li>Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to <strong>run</strong> it. Your app opens in its own window with
+      its own taskbar button.</li>
+</ol>
+<div class="grid cols-2">
+  {fig("studio_build.png", "After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane shows <i>Built SAMPLE.UNO</i> with its code, data and import sizes, and <code>SAMPLE.UNO</code> joins the project list.")}
+  {fig("studio_run.png", "After <kbd>Ctrl</kbd>+<kbd>R</kbd>: the app you just compiled runs in its own window (the yellow ball bounces), while Studio stays open behind it.")}
+</div>
+<p>If a build fails, the output pane lists each error with its line number; press or click a red error line
+and the caret jumps straight to it.</p>
+
+<h2 id="editor">The editor</h2>
+<p>The editor is monospace with live <strong>syntax highlighting</strong> - keywords, types, strings,
+numbers, comments and preprocessor lines each in their own colour - a line-number gutter, and the usual
+editing keys: arrows and <kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move,
+<kbd>Shift</kbd>+movement to select, and <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>/<kbd>A</kbd>
+to cut, copy, paste and select all. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves. The <strong>Project</strong> list
+on the left shows the source files on your working disk; click one to open it.</p>
+
+<h2 id="unoc">The UnoC language</h2>
+<p>Apps are written in <strong>UnoC</strong>, a practical subset of C that the built-in compiler accepts.
+It has the integer types (with <code>long</code> at 4 bytes, matching the system), pointers, arrays,
+<code>struct</code>/<code>union</code>, <code>enum</code>, <code>typedef</code> and function pointers, the
+full C expression and statement set, constant initializers, and a small preprocessor
+(<code>#include "X.H"</code>, object-like <code>#define</code>, <code>#ifdef</code>). Floating point,
+variadic functions and function-like macros are left out. An app <code>#include</code>s <code>UNO.H</code>
+(shipped in the <code>SDK</code> folder on the disk) and defines one entry point that returns a vtable the
+desktop drives:</p>
+{CODE_UNOC_SAMPLE}
+<p>That is the whole shape of an app: draw into your window, react to keys and ticks, and hand back the
+vtable. The <a href="dev-apps.html">Writing apps</a> and <a href="dev-api.html">API reference</a> pages
+cover the app model and the calls in depth; the same reference ships inside UnoDOS under
+<strong>Help</strong> in Studio's menu bar.</p>
+
+<h2 id="ai">The AI assistant</h2>
+<p>Studio has a built-in assistant that knows UnoC and the app API, so it can write and fix UnoDOS apps
+for you. It connects to <strong>ChatGPT</strong> (OpenAI), <strong>Claude</strong> (Anthropic) or
+<strong>Gemini</strong> (Google) over a secure connection. On a roomy desktop it appears as a column on
+the right; on the compact default desktop, raise the resolution in the Control Panel to bring it in.</p>
+{fig("studio_ai.png", "Studio on a larger desktop, with the <b>assistant</b> column on the right beside the editor and project list. The editor's colouring shows keywords, types and numbers each in their own colour.")}
+<p>You supply your own API key from your provider and enter it once in the assistant's input line:</p>
+<pre><code>/provider anthropic          (or: openai, gemini)
+/key sk-ant-...              (your API key)
+/save                        (remember it)</code></pre>
+<p>Then type a question and press <kbd>Enter</kbd>. The <strong>AI</strong> menu's <em>Ask Assistant</em>
+attaches the file you are editing to your next message, so you can ask "why won't this build?" with the
+code included.</p>
+{note('Your API key is stored in plain text in <code>AI.CFG</code> on the disk - anyone with the disk can read it, so use a low-value, revocable key rather than your main one. Your questions (and any attached file) are sent to the provider you choose. Secure connections check the site certificate against the built-in trust store and use the machine clock, so a wrong clock will stop them.', kind="warn", title="About your key and privacy")}
+
+<h2 id="ship">Studio is optional</h2>
+<p>Studio ships as a single loadable file, <code>APPS\\STUDIO.UNO</code>, on the UnoDOS disk. A build that
+does not want the IDE simply leaves the file out - the rest of the system is identical, and Studio just
+does not appear in the programs menu.</p>
+""")
+
 PAGES["dev-apps.html"] = ("Writing apps", f"""
 <h1>Writing apps</h1>
-<p class="lede">pc64 apps are linked statically into the single boot image. There are three styles; the
-native widget app is the normal path.</p>
+<p class="lede">A UnoDOS app is a small <code>.UNO</code> module loaded from the disk at runtime. You can
+build one right on the machine with <a href="studio.html">Studio</a>, or from a PC with the toolchain.
+There are a few styles; the native widget app is the normal path for a built-in.</p>
+
+{note('The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed. This page covers the app model itself, which Studio and the host build share.', kind="tip", title="Start with Studio")}
 
 <ul>
   <li><strong>Native widget app</strong>: build a window out of toolkit widgets and let the shell run the event loop.</li>
@@ -1083,13 +1195,19 @@ you assigned:</p>
 <p>Widget positions are relative to the window <em>content</em> origin (inside the frame and title bar); the
 toolkit computes that origin from the active theme, so hit-testing always matches what is drawn.</p>
 
-<h2 id="register">Registering and building an app in</h2>
-<p>There is no runtime module loading on bare metal: every app is compiled into <code>BOOTX64.EFI</code>. The shell
-keeps a table of builder functions and opens an app on demand:</p>
+<h2 id="register">How an app reaches the desktop</h2>
+<p>Each app (the games, Paint, Tracker, the Network app, Studio) is a <code>.UNO</code> file in the
+<code>APPS</code> folder of the disk, loaded the first time you open it. A <code>.UNO</code> is a small
+relocatable code module: the loader (<code>pc64_modload.c</code>) reads it, checks it, places it in memory,
+and resolves the kernel functions it calls by name against an export table - so the app carries no kernel
+code and the kernel carries no app code. The shell keeps a table of window builders and opens an app's
+window on demand:</p>
 {CODE_OPEN_APP}
-<p>Native builders live in a function-pointer table (<code>g_build[]</code> in <code>pc64_uui.c</code>); a desktop
-icon or Start-menu row calls <code>open_app(index)</code>. Bridged legacy apps are compiled once each with a
-distinct entry symbol via <code>-DUNO_APP_SYM=uno_app_main_&lt;name&gt;</code> so they can all coexist in one binary.</p>
+<p>The core shell windows (Control Panel, the Editor, Files) are built by function-pointer builders in
+<code>g_build[]</code> (<code>pc64_uui.c</code>); a desktop icon or programs-menu row calls
+<code>open_app(index)</code>. Loadable apps are compiled once each with a distinct entry symbol via
+<code>-DUNO_APP_SYM=uno_app_main_&lt;name&gt;</code>, then flattened into a <code>.UNO</code> by
+<code>tools/mkuno.py</code>. Studio builds exactly this format on the machine itself.</p>
 
 <h2 id="canvas">A canvas app</h2>
 <p>Give the toolkit a <code>unoui_canvas</code> (a draw callback plus an event callback) and it manages the window

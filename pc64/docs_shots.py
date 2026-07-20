@@ -10,6 +10,7 @@ surface to shots/manual/<tag>.png at each scene.
 The desktop is deterministic, so the Start-menu order is fixed:
   0 Control 1 Editor 2 Files 3 System 4 Clock 5 Install 6 Music 7 Dostris
   8 Pac-Man 9 OutLast 10 Tracker 11 Paint 12 Network 13 Runner3D 14 Browser
+  15 Studio  (present only when APPS\\STUDIO.UNO ships)
 Launch app N: Ctrl-Esc, Down*N, Enter.  Close focused window: Ctrl-W.
 """
 import json, os, socket, subprocess, sys, time
@@ -293,6 +294,31 @@ def sc_runner3d(q):
     time.sleep(1.0)
     shot(q, "runner3d")
 
+def sc_studio(q):
+    # The IDE (Start-menu index 15). Greets with SDK\SAMPLE.C, syntax-lit.
+    close_all(q); launch(q, 15, settle=2.8)
+    shot(q, "studio")
+    combo(q, "ctrl", "b"); time.sleep(2.8)           # build -> SAMPLE.UNO
+    shot(q, "studio_build")                          # build-output pane
+    combo(q, "ctrl", "r"); time.sleep(2.8)           # run the built app
+    shot(q, "studio_run")
+
+def sc_studio_ai(q):
+    # The AI column needs a wide desktop, so bump the resolution first
+    # (Control Panel -> Resolution dropdown -> a bigger mode), then open Studio.
+    close_all(q); launch(q, 0)
+    key(q, "tab", "tab"); time.sleep(0.3)            # focus Resolution dropdown
+    key(q, "down", gap=0.5); key(q, "down", gap=0.5) # up two modes; shell reflows
+    time.sleep(1.4)
+    close_all(q)
+    launch(q, 15, settle=2.8)                        # Studio, now wide -> AI column shows
+    shot(q, "studio_ai")
+    # back to the default resolution so later scenes match
+    close_all(q); launch(q, 0)
+    key(q, "tab", "tab"); time.sleep(0.3)
+    key(q, "up", gap=0.5); key(q, "up", gap=0.5)
+    time.sleep(1.0); close_all(q)
+
 def sc_browser_disk(q):
     close_all(q); launch(q, 14, settle=2.0)
     shot(q, "browser_files")
@@ -338,7 +364,9 @@ SCENES = {
     "editor": sc_editor, "files": sc_files, "system": sc_system, "clock": sc_clock,
     "install": sc_install, "dostris": sc_dostris, "pacman": sc_pacman,
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
-    "paint": sc_paint, "runner3d": sc_runner3d, "browser_disk": sc_browser_disk,
+    "paint": sc_paint, "runner3d": sc_runner3d,
+    "studio": sc_studio, "studio_ai": sc_studio_ai,
+    "browser_disk": sc_browser_disk,
     "browser_docs": sc_browser_docs, "net_selftest": sc_net_selftest,
     "browser_http": sc_browser_http, "browser_https": sc_browser_https,
 }
