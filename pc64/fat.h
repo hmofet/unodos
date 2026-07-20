@@ -37,6 +37,20 @@ int  uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn);
 /* read a file by path; returns bytes read (<= max), or -1 if not found */
 long uno_fat_read(int vol, const char *path, unsigned char *buf, long max);
 
+/* a file's size in bytes, or -1 if not found */
+long uno_fat_size(int vol, const char *path);
+
+/* drop the sequential-read cursor (see fat.c) - called automatically by the
+ * write/delete/rename/remount paths; exposed for anything that moves sectors
+ * behind this driver's back. */
+void uno_fat_seq_flush(void);
+
+/* read from byte `off` - what the audio decoders stream large media through,
+ * so a file never has to fit in RAM.  Returns bytes read (0 at/past EOF), or
+ * -1 if not found. */
+long uno_fat_read_at(int vol, const char *path, long off,
+                     unsigned char *buf, long max);
+
 /* create/overwrite a file with exactly len bytes; makes no directories.
  * returns 1 on success. */
 int  uno_fat_write(int vol, const char *path, const unsigned char *buf, long len);

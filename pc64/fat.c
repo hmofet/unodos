@@ -208,6 +208,7 @@ void uno_fat_sync(void) { cache_sync(); }
  * Block IO devices out, native AHCI in, same disks re-scanned natively. */
 void uno_fat_remount(void)
 {
+    uno_fat_seq_flush();   /* chains may move under the read cursor */
     int i;
     for (i = 0; i < CH_N; i++) { g_ch[i].valid = 0; g_ch[i].dirty = 0; g_ch[i].dev = 0; }
     g_nvol = 0;
@@ -506,33 +507,119 @@ int uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn)
 }
 
 /* ---- public: read --------------------------------------------------------- */
-long uno_fat_read(int vol, const char *path, unsigned char *buf, long max)
+/* locate a file's directory entry and pull out its start cluster + size */
+static int file_locate(fatvol *v, const char *path, uint32_t *clus, uint32_t *size)
 {
-    fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
-    uint32_t elba; int eoff; cline *c; uint32_t clus, size; long total = 0;
+    uint32_t pclus; int fixed; uint8_t leaf[11];
+    uint32_t elba; int eoff; cline *c;
+    if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return 0;
+    if (!dir_find(v, pclus, fixed, leaf, &elba, &eoff)) return 0;
+    c = cache_get(v->dev, elba); if (!c) return 0;
+    *clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
+    *size = rd32(c->buf + eoff + 28);
+    return 1;
+}
+
+long uno_fat_size(int vol, const char *path)
+{
+    uint32_t clus, size;
     if (vol < 0 || vol >= g_nvol) return -1;
+    if (!file_locate(&g_vol[vol], path, &clus, &size)) return -1;
+    return (long)size;
+}
+
+/* Read `max` bytes starting at byte `off`.  Media files run far larger than
+ * anything this port wants resident, so the audio decoders stream through
+ * here instead of slurping whole files: walk the cluster chain to the one
+ * holding `off`, then copy from that point. */
+/* Sequential-read cursor.
+ *
+ * Walking the cluster chain from byte 0 on every call makes streaming a file
+ * quadratic: read N of a large file and you have walked N/2 chains. On QEMU's
+ * cached vvfat that is invisible; on real storage it is why audio playback
+ * skipped. One cursor is enough - the media layer streams one file at a time -
+ * and it only ever SKIPS work, so a miss is just the old behaviour. */
+static struct {
+    int      vol;
+    char     path[80];
+    long     off;                       /* byte offset this cluster starts at */
+    uint32_t clus;
+    int      valid;
+} g_seq;
+
+static int seq_hit(int vol, const char *path, long off, uint32_t *clus, long *rem)
+{
+    int i;
+    if (!g_seq.valid || g_seq.vol != vol || off < g_seq.off) return 0;
+    for (i = 0; i < 79 && path[i]; i++)
+        if (g_seq.path[i] != path[i]) return 0;
+    if (g_seq.path[i] != 0 || path[i] != 0) return 0;
+    *clus = g_seq.clus;
+    *rem  = off - g_seq.off;            /* bytes from this cluster's start    */
+    return 1;
+}
+
+static void seq_save(int vol, const char *path, long off, uint32_t clus)
+{
+    int i;
+    for (i = 0; i < 79 && path[i]; i++) g_seq.path[i] = path[i];
+    g_seq.path[i] = 0;
+    g_seq.vol = vol; g_seq.off = off; g_seq.clus = clus; g_seq.valid = 1;
+}
+
+/* any write/delete/rename can move a chain out from under the cursor */
+void uno_fat_seq_flush(void) { g_seq.valid = 0; }
+
+long uno_fat_read_at(int vol, const char *path, long off,
+                     unsigned char *buf, long max)
+{
+    fatvol *v; uint32_t clus, size; long total = 0;
+    uint32_t bpc, guard = 0, skip_sec;
+    long skip_byte, walked = 0;
+    if (vol < 0 || vol >= g_nvol || off < 0) return -1;
     v = &g_vol[vol];
-    if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return -1;
-    if (!dir_find(v, pclus, fixed, leaf, &elba, &eoff)) return -1;
-    c = cache_get(v->dev, elba); if (!c) return -1;
-    clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
-    size = rd32(c->buf + eoff + 28);
-    if ((long)size < max) max = size;
-    {
-        uint32_t guard = 0;
-        while (total < max && clus >= 2 && !fat_eoc(v, clus) && guard++ < MAXCLUS_WALK) {
-            uint32_t s;
-            for (s = 0; s < v->sec_per_clus && total < max; s++) {
-                cline *cc = cache_get(v->dev, clus_lba(v, clus) + s);
-                long n = max - total; if (n > SECT) n = SECT;
-                if (!cc) return total;
-                memcpy(buf + total, cc->buf, (size_t)n);
-                total += n;
-            }
-            clus = fat_get(v, clus);
+    if (!file_locate(v, path, &clus, &size)) return -1;
+    if (off >= (long)size) return 0;
+    if (max > (long)size - off) max = (long)size - off;
+    if (max <= 0) return 0;
+
+    /* walk whole clusters until `off` falls inside the current one, resuming
+       from the sequential cursor when this read continues the last one */
+    bpc = v->sec_per_clus * SECT;
+    { uint32_t c2; long rem;
+      if (seq_hit(vol, path, off, &c2, &rem)) { clus = c2; walked = off - rem; off = rem; }
+    }
+    while (off >= (long)bpc && clus >= 2 && !fat_eoc(v, clus)
+           && guard++ < MAXCLUS_WALK) {
+        clus = fat_get(v, clus);
+        off -= (long)bpc;
+        walked += (long)bpc;
+    }
+    if (clus >= 2 && !fat_eoc(v, clus)) seq_save(vol, path, walked, clus);
+    skip_sec  = (uint32_t)(off / SECT);        /* sectors into this cluster    */
+    skip_byte = off % SECT;                    /* bytes into that sector       */
+
+    guard = 0;
+    while (total < max && clus >= 2 && !fat_eoc(v, clus) && guard++ < MAXCLUS_WALK) {
+        uint32_t s;
+        for (s = skip_sec; s < v->sec_per_clus && total < max; s++) {
+            cline *cc = cache_get(v->dev, clus_lba(v, clus) + s);
+            long n = SECT - skip_byte;
+            if (n > max - total) n = max - total;
+            if (!cc) return total;
+            memcpy(buf + total, cc->buf + skip_byte, (size_t)n);
+            total += n;
+            skip_byte = 0;
         }
+        skip_sec = 0;
+        clus = fat_get(v, clus);
     }
     return total;
+}
+
+long uno_fat_read(int vol, const char *path, unsigned char *buf, long max)
+{
+    return uno_fat_read_at(vol, path, 0, buf, max);
 }
 
 /* ---- public: write (create/overwrite) ------------------------------------- */
@@ -540,6 +627,7 @@ static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint32_t *lba, i
 
 int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
 {
+    uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
     uint32_t elba; int eoff; cline *c;
     uint32_t first = 0, prev = 0, need, made = 0;
@@ -631,6 +719,7 @@ static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint32_t *lba, i
 /* ---- public: delete ------------------------------------------------------- */
 int uno_fat_delete(int vol, const char *path)
 {
+    uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
     uint32_t elba; int eoff; cline *c; uint32_t clus;
     if (vol < 0 || vol >= g_nvol) return 0;
@@ -710,6 +799,7 @@ int uno_fat_mkdir(int vol, const char *path)
 /* ---- public: rename ------------------------------------------------------- */
 int uno_fat_rename(int vol, const char *path, const char *newname)
 {
+    uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11], new83[11];
     uint32_t elba, dlba; int eoff, doff, i; cline *c;
     if (vol < 0 || vol >= g_nvol) return 0;

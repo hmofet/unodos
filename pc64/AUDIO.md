@@ -60,6 +60,109 @@ loop, so `uno_pc64_chime` pumps the ring itself in 11 ms slices.
   the PCM layer's rate.
 - BDL entry lengths are in **samples**, not frames or bytes.
 
+## The sample stream — playing files, not just notes
+
+The square voice above is a *synthesiser*: one note at a time, generated
+straight into the ring. Playing a file needs the opposite — arbitrary sample
+data pushed in from outside — so `snd_pcm.c` grew a second source that takes
+the ring while it is open (the square voice is muted for the duration):
+
+```
+Music app (pc64_music.c)
+   │  uno_snd_stream_begin(rate, channels)
+   ▼
+decoder ── s16 frames at the DECODER's rate ──► uno_snd_stream_write()
+                                                   │  16.16 linear resampler
+                                                   ▼
+                                           32768-frame FIFO (~0.68 s)
+                                                   │  uno_snd_poll()
+                                                   ▼
+                                             the 48 kHz DMA ring
+```
+
+Two properties make this safe in a cooperative single-threaded shell:
+
+- **The decode is bounded by buffer space, not by the file.** The app asks
+  `uno_snd_stream_space()` how many input frames fit and decodes at most that
+  many per tick, so a big file costs latency, never a stalled frame.
+- **Underrun is silence, not a glitch.** A starved FIFO writes zeros and the
+  decode catches up next tick, which is the same bargain the square voice
+  already makes with its looping ring.
+
+Files stream from disk rather than being loaded: `uno_fs_read_at` (and the
+`uno_fat_read_at` / `uno_efifs_read_at` / `uno_ramfs_read_at` behind it) reads
+from an arbitrary offset, so resident memory is a 64 KB sliding window in
+`pc64_media.c` regardless of how long the song is.
+
+## Decoders (all written from scratch, no third-party codec)
+
+| Format | File | Notes |
+|---|---|---|
+| **WAV** | `dec_wav.c` | RIFF chunk walk (order-tolerant); PCM 8/16/24/32, IEEE float 32/64; any rate; >2 channels folded to the front pair; `WAVE_FORMAT_EXTENSIBLE` resolved through the SubFormat GUID |
+| **MIDI** | `dec_midi.c` | SMF type 0/1/2 + `.RMI`; live multi-track merge (no flattening), 16.16 tick→sample accumulation so tempo changes don't drift; 48-voice synth, GM families mapped to 2-oscillator patches with ADSR, channel 10 synthesised as drums |
+| **MP3** | `dec_mp3.c` | MPEG-1 Layer III, 32/44.1/48 kHz, mono / stereo / joint (M-S + intensity) / dual. ID3v2 skip, Xing/VBRI frame counts, bit reservoir, full Huffman + requantise + reorder + alias reduction + IMDCT + polyphase filterbank |
+
+MP3 needs ISO constant data no decoder can invent - the Huffman codebooks, the
+512-tap synthesis window, the scalefactor-band boundaries. Those live in the
+generated `mp3_tables.h`; `tools/mkmp3tables.py` documents where they come
+from (a public-domain reference) and recovers the canonical codebooks rather
+than copying another program's data structure. Everything else in `dec_mp3.c`
+is written here.
+
+**Not decoded:** MPEG-2 / 2.5 (the 8-24 kHz half- and quarter-rate
+extensions) use different scalefactor tables and a different intensity-stereo
+rule; they are detected and refused rather than turned into noise.
+
+## AAC: identified, deliberately not decoded
+
+`dec_aac.c` parses the container - ADTS framing, the MP4 box tree, the
+`stsz`/`stsc`/`stco` sample table, the AudioSpecificConfig - and then declines
+with "AAC (M4A) recognised - no decoder in this build". That is a decision, not
+an unfinished job.
+
+AAC-LC needs ISO constant tables no decoder can invent: the 11 spectral Huffman
+codebooks, the scalefactor codebook, and the scalefactor-band offsets. MP3 had
+a way out - PDMP3 is public domain, so `mp3_tables.h` carries no obligations.
+AAC has no equivalent. Every implementation holding those tables is GPL
+(FAAD2, Rockbox), LGPL (FFmpeg), RPSL copyleft (Helix), non-OSI with an
+explicit refusal of any patent grant (Fraunhofer FDK), or Apache-2.0
+(OpenCORE, libxaac).
+
+Apache-2.0 would have been legally clean - and patents are **not** the
+obstacle: AAC-LC claims lapsed around 2017-2018, which is why Fedora, Debian
+and Wikimedia all ship it. The obstacle is that Apache-2.0 is not a
+public-domain dedication, so it would put a third-party copyright and a licence
+file into a tree that is otherwise uniformly this project's own. That trade was
+declined deliberately, so the repo stays uniformly licensed.
+
+If it is ever revisited, the container layer is already written and the tables
+would come from OpenCORE's `sfb.cpp` and `hcbtables_binary.cpp`.
+
+**The media layer carries the reason.** `uno_media_error()` lets a decoder that
+RECOGNISES a file but cannot play it say so; the Music app shows that instead
+of a generic failure, because "no decoder in this build" and "malformed" are
+very different things to tell someone.
+
+MIDI carries no audio, so its "decoder" is really a synthesiser — there is no
+soundfont (a GM sample set dwarfs the 1 MB boot image), so instruments are
+approximated per GM family. Seeking replays the event stream with rendering
+suppressed, because programs/controllers/tempo are all stateful.
+
+## Verifying the media chain
+
+```
+python3 tools/music_test.py both     # WAV + MIDI + MP3, end to end in QEMU
+```
+
+Boots with `-audiodev wav`, opens Music, switches to the ESP volume, plays a
+staged file and asserts the captured audio: a steady tone is judged on its
+median frequency, a melody on the *spread* of pitches (a stuck note would pass
+a "was it loud" check). Keyboard-driven — the machine detaches under QEMU, so
+the firmware AbsolutePointer is gone and only a relative PS/2 mouse survives.
+
+The decoders also build natively for host-side unit testing; that is the fast
+path when changing one, since it isolates codec bugs from OS plumbing.
+
 ## Volume
 
 The Control Panel slider (ID_VOL) drives `uno_snd_volume(0..100)` — linear

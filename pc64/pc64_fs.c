@@ -24,12 +24,17 @@
 int  uno_ramfs_count(void);
 int  uno_ramfs_name(int idx, char *out, int max);
 long uno_ramfs_read(const char *name, unsigned char *buf, long max);
+long uno_ramfs_read_at(const char *name, long off, unsigned char *buf, long max);
+long uno_ramfs_size(const char *name);
 int  uno_ramfs_write(const char *name, const unsigned char *buf, long len);
 
 /* uefi_main.c (EFI Simple File System) */
 int  uno_efifs_volumes(void);
 int  uno_efifs_snapshot(int vol, char (*names)[32], int maxn);
 long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max);
+long uno_efifs_read_at(int vol, const char *name, long off,
+                       unsigned char *buf, long max);
+long uno_efifs_size(int vol, const char *name);
 unsigned int uno_efifs_serial(int vol);          /* BPB volume id, 0 unknown  */
 
 /* ---- volume map ----------------------------------------------------------- *
@@ -132,11 +137,29 @@ int uno_fs_list_get(int vol, int idx, char *name, int max)
 
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max)
 {
+    return uno_fs_read_at(vol, name, 0, buf, max);
+}
+
+/* Read from byte `off`.  Media files are far larger than anything the port
+ * wants resident, so the audio decoders stream through this instead of
+ * slurping whole files; every backend has a real seek behind it. */
+long uno_fs_read_at(int vol, const char *name, long off,
+                    unsigned char *buf, long max)
+{
     build_map();
     if (vol < 0 || vol >= g_nmap || fw_dead(vol)) return -1;
-    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_read(name, buf, max);
-    if (g_map[vol].kind == KIND_FAT) return uno_fat_read(g_map[vol].idx, name, buf, max);
-    return uno_efifs_read(g_map[vol].idx, name, buf, max);
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_read_at(name, off, buf, max);
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_read_at(g_map[vol].idx, name, off, buf, max);
+    return uno_efifs_read_at(g_map[vol].idx, name, off, buf, max);
+}
+
+long uno_fs_size(int vol, const char *name)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap || fw_dead(vol)) return -1;
+    if (g_map[vol].kind == KIND_RAM) return uno_ramfs_size(name);
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_size(g_map[vol].idx, name);
+    return uno_efifs_size(g_map[vol].idx, name);
 }
 
 /* write a file to a volume's root; 1 on success, 0 if the volume is read-only
