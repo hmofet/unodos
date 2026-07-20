@@ -150,8 +150,6 @@ class Duum(uno.App):
         m = self.lvl
         RW = self.cw if self.cw < 200 else 200        # internal columns (cap work)
         RH = self.ch if self.ch < 140 else 140
-        colw = self.cw // RW
-        if colw < 1: colw = 1
         rowh = self.ch / RH
         px, py, pa = self.px, self.py, self.pa
         cos_a = math.cos(pa); sin_a = math.sin(pa)
@@ -282,11 +280,13 @@ class Duum(uno.App):
 
         # scale internal columns/rows up to the canvas and cache as rects
         frame = []
+        cw = self.cw
         for (x, y0, y1, col) in out:
-            cx = x * colw
+            cx0 = x * cw // RW
+            cx1 = (x + 1) * cw // RW
             cy0 = int(y0 * rowh)
             cy1 = int((y1 + 1) * rowh)
-            frame.append((cx, cy0, colw, cy1 - cy0, col))
+            frame.append((cx0, cy0, cx1 - cx0, cy1 - cy0, col))
         self.frame = frame
 
     # ---- app callbacks -----------------------------------------------------
@@ -326,14 +326,14 @@ class Duum(uno.App):
         m = MOVE
         ca = math.cos(self.pa); sa = math.sin(self.pa)
         nx, ny = self.px, self.py
-        # arrow scancodes (UnoDOS): Up=0x48 Down=0x50 Left=0x4B Right=0x4D
-        if scan == 0x4B:
+        # arrow scancodes (UnoDOS): Up=0x01 Down=0x02 Right=0x03 Left=0x04
+        if scan == 0x04:
             self.pa -= TURN; self.dirty = True; return True
-        if scan == 0x4D:
+        if scan == 0x03:
             self.pa += TURN; self.dirty = True; return True
-        if scan == 0x48:
+        if scan == 0x01:
             nx = self.px + ca * m; ny = self.py + sa * m
-        elif scan == 0x50:
+        elif scan == 0x02:
             nx = self.px - ca * m; ny = self.py - sa * m
         elif uni == ord(','):
             nx = self.px + sa * m; ny = self.py - ca * m

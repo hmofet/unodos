@@ -23,6 +23,7 @@
 #include <string.h>
 
 void pc64_shell_dirty(void);
+int  pc64_shell_run_user(int vol, const char *path);   /* launch a .UNO app */
 int  pc64_shell_workarea_w(void);
 int  pc64_shell_workarea_h(void);
 
@@ -118,7 +119,20 @@ static void pane_enter(fm_pane *P)
     uno_fat_entry *E;
     if (P->sel < 0 || P->sel >= P->n) return;
     E = &P->e[P->sel];
-    if (!E->is_dir) { set_status("That is a file (dirs open with Enter/Open)."); return; }
+    if (!E->is_dir) {
+        int L = 0; while (E->name[L]) L++;
+        if (L >= 4 && E->name[L-4] == '.' &&
+            (E->name[L-3] == 'U' || E->name[L-3] == 'u') &&
+            (E->name[L-2] == 'N' || E->name[L-2] == 'n') &&
+            (E->name[L-1] == 'O' || E->name[L-1] == 'o')) {
+            char np[120]; join_path(P, E->name, np, sizeof np);
+            if (pc64_shell_run_user(P->vol, np) == 0) set_status("Launched.");
+            else set_status("Could not launch that .UNO.");
+        } else {
+            set_status("That is a file (dirs open with Enter/Open).");
+        }
+        return;
+    }
     { char np[120]; join_path(P, E->name, np, sizeof np);
       strcpy(P->path, np); }
     P->sel = 0; P->scroll = 0;

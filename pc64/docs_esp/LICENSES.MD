@@ -16,6 +16,9 @@ lives at `DOCS\LICENSES.MD` on the system volume.
   Daniil Tatianin. MIT license, below.
 - **stb_truetype** (the TrueType rasteriser inside pc64_font) - Sean Barrett,
   public domain / MIT at your option.
+- **MicroPython** (the Python 3 interpreter inside the optional `PYRT.UNO`) -
+  (c) 2013-2024 Damien P. George and contributors. MIT license, below. Only
+  present when the Python runtime module is built into the image.
 - **AAC decoding tables** (in unomedia's `aac_tables.h`) - the spectral
   Huffman codebooks, scalefactor codebook and scalefactor-band offset tables
   are derived from **OpenCORE aacdec** (Android Open Source Project),
@@ -45,6 +48,16 @@ lives at `DOCS\LICENSES.MD` on the system volume.
   license; DejaVu changes are public domain (full text below).
 - **Ubuntu** (`UBUNTU.TTF`) - Ubuntu Font Licence 1.0 (full text below).
 
+## Game data (Duum)
+
+Duum, the Python Doom engine, loads a Doom-format IWAD that is **not part of
+this project** and **not committed** to the repo. The shippable free default
+is **Freedoom** (freedoom.github.io), a from-scratch Doom-compatible IWAD
+under a **BSD 3-clause** license; a distribution that bundles `freedoom1.wad`
+carries Freedoom's own `COPYING`/credits. id Software's shareware
+`DOOM1.WAD` may be supplied by the developer for testing but is never
+redistributed here. UnoDOS ships neither WAD by default.
+
 ## Bundled demo content
 
 The demo music (`MEDIA\`) and demo pictures (`PICTURES\`) were generated
@@ -61,8 +74,9 @@ AAC decoders freely). UnoDOS decodes both; it encodes neither.
 
 ## The MIT License
 
-Applies to BearSSL ((c) 2016 Thomas Pornin) and uACPI ((c) 2022-2026
-Daniil Tatianin):
+Applies to BearSSL ((c) 2016 Thomas Pornin), uACPI ((c) 2022-2026
+Daniil Tatianin), and MicroPython ((c) 2013-2024 Damien P. George and
+contributors):
 
     Permission is hereby granted, free of charge, to any person obtaining
     a copy of this software and associated documentation files (the
