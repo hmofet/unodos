@@ -63,15 +63,36 @@ firmware boot menu. `\CRASH`, `\STRESS.CFG`, the fuzz corpus and
 
 ## Running a stress session on the three machines
 
-The stress driver is **armed by the presence of `\STRESS.CFG`** (any contents).
-A freshly flashed stick has a safe default one (`mode=continuous`, no
-self-crash). Config keys (whitespace/newline separated, substring-matched):
+The stress driver is **armed by the presence of `\STRESS.CFG`**. A freshly
+flashed stick ships `passes=3`. Keys are matched as whole tokens on
+**non-comment** lines (a key mentioned in a `#` comment does nothing — that was
+finding F1, which armed `allow-force` on every "safe" stick):
 
-- `once` - stop after a single full pass (good for a quick smoke run)
+- `passes=N` - stop after N passes, then go idle and hand back a usable
+  desktop. **Use a bounded run**: while the driver is going it opens an app
+  every few frames, so you cannot reach Start > Shut Down, and the only exit is
+  pulling the power. `once` = `passes=1`. Omit for an endless run.
 - `fast` / `slow` - action cadence (default: one action every 4 frames)
-- `allow-force` - **opt in** to a forced `#PF` on pass 1 that proves the whole
-  crash pipeline end to end. Off by default so an armed stick never
-  self-crashes.
+- `allow-force` - **opt in** to a forced `#PF` on pass 1 that proves the crash
+  pipeline end to end. Off by default so an armed stick never self-crashes.
+- `force-hang` - **opt in** to a forced freeze on pass 1 that proves the
+  watchdog. Off by default.
+
+**F12 stops the driver at any time** and hands back the desktop (it drops
+fullscreen too, so it works even while Runner3D has focus). Use it if a run
+traps you.
+
+### Where a report lands, and when
+
+|  | crash (`CR`) | hang (`HG`) |
+|--|--------------|-------------|
+| **detached** (X1, Latitude) | written immediately by our own driver | written immediately (LAPIC watchdog) |
+| **attached** (Surface) | written immediately via firmware Block IO | **stashed in RAM, written on the NEXT boot** |
+
+An attached machine cannot write from the firmware timer callback (wrong TPL to
+touch Block IO), so a hang report rides the warm-reset RAM stash. **On the
+Surface, let the machine reboot after a freeze — don't power it off — or the
+hang report is lost.** Crash reports are safe either way.
 
 For each of the X1 / Surface / Latitude:
 

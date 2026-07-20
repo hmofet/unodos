@@ -498,7 +498,17 @@ static void trap_reset(void)
      * native CF9 path is the only option once detached, and the fallback. */
     if (!uno_pc64_detached() && g_st) {
         DbgRuntimeServices *rs = (DbgRuntimeServices *)g_st->RuntimeServices;
-        if (rs && rs->ResetSystem) rs->ResetSystem(0 /*EfiResetCold*/, 0, 0, 0);
+        /* WARM, not cold: an attached machine cannot write a HANG report from
+         * the firmware timer callback (wrong TPL to touch Block IO), so that
+         * report lives only in the RAM stash until the next boot flushes it.
+         * A cold reset re-inits DRAM and would throw it away; a warm reset
+         * preserves memory, which is what makes hang reports collectable on
+         * attached machines like the Surface.  Falls through to the native
+         * path below if the firmware declines. */
+        if (rs && rs->ResetSystem) {
+            rs->ResetSystem(1 /*EfiResetWarm*/, 0, 0, 0);
+            rs->ResetSystem(0 /*EfiResetCold*/, 0, 0, 0);   /* warm refused */
+        }
     }
     uno_native_reset();                 /* CF9 + i8042 pulse; then hlt */
 }
