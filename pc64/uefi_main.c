@@ -48,6 +48,8 @@
 #ifdef UNO_ACPI
 #include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
 #endif
+#include "uno_debug.h"      /* debug build: crash reports / watchdog / HUD
+                               (every hook compiles away without -DUNO_DEBUG) */
 
 int uno_main(void);                 /* the portable core (-Dmain=uno_main) */
 void uno_screen_changed(void);      /* core hook: resolution changed (unodos.c) */
@@ -188,6 +190,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     gIH = ImageHandle;
     gBS = SystemTable->BootServices;
     gBS->SetWatchdogTimer(0, 0, 0, 0);
+    uno_dbg_early(SystemTable);     /* debug build: stash + log + fault hooks
+                                       FIRST, so even init crashes report */
     con_puts("UnoDOS 3.1 / pc64: firmware handoff...\r\n");
     /* no banner hold - the graphical splash + loading bar takes over as soon as
        the fb is up (see platform_init / splash_step). */
@@ -679,6 +683,7 @@ void uno_pc64_init(void)
     }
     splash_step(3);                 /* input located */
     splash_stage(3, "trackpad (I2C-HID)");
+    uno_dbg_check("init:i2c-hid");
     uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
 #ifdef UNO_USBHID_TEST
     /* eager native USB HID (test only): takes xHCI from the firmware while
@@ -687,7 +692,10 @@ void uno_pc64_init(void)
     uno_usb_hid_init();
 #endif
     splash_stage(3, "storage (AHCI / NVMe / FAT)");
+    uno_dbg_check("init:storage");
     uno_fat_init();                 /* native block + FAT stack (AHCI + fw sectors) */
+    uno_dbg_flush_residue();        /* debug build: persist any crash/hang report
+                                       the PREVIOUS boot left in the RAM stash */
 #ifdef UNO_STORTEST
     uno_fat_selftest();             /* WRTEST.REQ -> WRTEST.OK (harness write proof) */
 #endif
@@ -697,9 +705,11 @@ void uno_pc64_init(void)
      * and every EC/SMBus wait is TSC-bounded, so a hostile or absent EC times
      * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
     splash_stage(3, "power (ACPI / AML)");
+    uno_dbg_check("init:acpi");
     uno_acpi_start(gST);
 #endif
     splash_stage(3, "audio (HD Audio / AC'97)");
+    uno_dbg_check("init:audio");
     uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
     splash_stage(3, 0);
     dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
@@ -715,9 +725,20 @@ void uno_pc64_init(void)
 
     dbg_puts("unodos-pc64: init done\n");
 
+    uno_dbg_check("init:detach");
 #ifndef UNO_NO_DETACH
     try_detach();                   /* M3: leave the firmware behind if the
                                        native stack covers this machine */
+#endif
+
+#ifdef UNO_DEBUG
+    /* debug build: the environment block wants the FINAL machine state
+     * (post-detach), then arm the freeze watchdog - the LAPIC timer once
+     * detached, a firmware timer event otherwise. */
+    uno_dbg_envblock();
+    if (gDetached) uno_dbg_on_detach();
+    else           uno_dbg_watchdog_start();
+    uno_dbg_check("init:done");
 #endif
 }
 
@@ -1150,6 +1171,7 @@ static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->Run
 
 void uno_pc64_shutdown(void)
 {
+    uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
     /* ResetSystem is a RUNTIME service - legal after ExitBootServices while
        we stay in physical addressing.  If the firmware won't power off, halt
        quietly (the screen keeps the last frame - safe to switch off). */
@@ -1158,6 +1180,7 @@ void uno_pc64_shutdown(void)
 }
 void uno_pc64_restart(void)
 {
+    uno_dbg_mark_clean();
     if (gDetached) uno_native_reset();           /* CF9 + i8042 pulse */
     rts()->ResetSystem(EfiResetCold, 0, 0, 0);
     for (;;) __asm__ volatile ("hlt");
@@ -1309,6 +1332,43 @@ long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
 {
     return uno_efifs_read_at(vol, name, 0, buf, max);
 }
+
+#ifdef UNO_DEBUG
+/* ===========================================================================
+ * debug-build platform accessors + synthetic input (uno_debug.c / stress)
+ * ======================================================================== */
+void uno_pc64_dbg_display(unsigned long long *base, int *w, int *h,
+                          int *stride, int *pixfmt, int *useblt,
+                          int *dtw, int *dth, int *outw, int *outh)
+{
+    if (base)   *base   = gGop ? gGop->Mode->FrameBufferBase : 0;
+    if (w)      *w      = (int)gModeW;
+    if (h)      *h      = (int)gModeH;
+    if (stride) *stride = (int)gStride;
+    if (pixfmt) *pixfmt = gGop ? (int)gGop->Mode->Info->PixelFormat : -1;
+    if (useblt) *useblt = gUseBlt;
+    if (dtw)    *dtw    = uno_fb_w;
+    if (dth)    *dth    = uno_fb_h;
+    if (outw)   *outw   = gOutW;
+    if (outh)   *outh   = gOutH;
+}
+
+void uno_pc64_dbg_invalidate(void) { gShadowValid = 0; }
+
+/* synthetic input for the stress driver: keys go through the SAME map_key
+ * path real firmware/native keys use, pointer moves through the same
+ * clamp + click plumbing - so a stress run exercises the true input stack. */
+void uno_pc64_inject_key(int scan, int uni, int ctrl)
+{ map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
+
+void uno_pc64_inject_pointer(int x, int y, int btn)
+{
+    g_cx = x; g_cy = y;
+    clamp_cursor();
+    g_have_pointer = 1;
+    pointer_moved_clicked(btn ? 1 : 0);
+}
+#endif /* UNO_DEBUG */
 
 /* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */
 long uno_efifs_size(int vol, const char *name)

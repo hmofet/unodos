@@ -83,9 +83,9 @@ class FlashForm : Form
         Controls.Add(refreshBtn);
 
         Controls.Add(new Label {
-            Text = "The whole drive becomes one FAT32 volume, so UnoDOS can use all of it.\n" +
-                   "UEFI boot (x86-64 PCs, 2012+). Turn OFF Secure Boot in firmware, then\n" +
-                   "pick this USB from the boot menu. pc64 is UEFI-only - there is no BIOS build.",
+            Text = "DEBUG build: one whole-disk FAT32 volume; UnoDOS writes crash/hang\n" +
+                   "reports to \\CRASH - copy that folder off after a test run. UEFI only,\n" +
+                   "Secure Boot OFF. Delete \\STRESS.CFG for a quiet desktop (no auto-stress).",
             Location = new Point(16, 108), Size = new Size(536, 58),
             ForeColor = Color.FromArgb(60, 60, 60) });
 

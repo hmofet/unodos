@@ -53,6 +53,17 @@ If the diff confirms full supersession, delete the branch (local +
 `origin/pc64-usb-flasher`) rather than merging - merging would resurrect the
 dead pre-`unomedia` decoder architecture in `pc64_media.c`/`pc64_music.c`.
 
+## Standing rule (2026-07-20): pc64 ships ONE flasher — the debug build
+
+On this line of work we no longer build/deploy every OS variant. Produce a
+**single standard flasher, embedding the DEBUG/stress build**, and that flasher
+**formats the whole disk as one FAT32 volume** so UnoDOS can write crash/hang
+reports into `\CRASH` on it. The debug harness lives on branch
+`pc64-debug-stress` (`pc64/DEBUG.md`); `pc64/build.sh` defaults `UNO_DEBUG=1`
+there. Don't resurrect multi-variant builds. The deploy path is unchanged
+(`flash/build-flasher.ps1` → `flash/deploy-to-share.ps1`); it just carries the
+debug OS now.
+
 ## Standing rule: keep the shared pc64 flasher current
 
 **Whenever you produce a new build of the pc64 OS** (i.e. you run `pc64/build.sh`

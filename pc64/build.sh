@@ -26,6 +26,36 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
         -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main ${UNO_EXTRA:-}"
 
 # ============================================================================
+# DEBUG BUILD (branch pc64-debug-stress) - crash reports, watchdog, kernel log,
+# boot env block, perf HUD, fuzz/stress driver, sanitizer traps, symbolized
+# backtraces.  ON by default here; UNO_DEBUG=0 builds the plain OS.
+#   UNO_DEBUG=1   (default) the debug harness
+#   UNO_UBSAN=1   (default when debug) trap signed-overflow/OOB/shift/null on
+#                 FIRST-PARTY pc64 code (not bearssl/uacpi/upy)
+#   UNO_DBGCON=1  also mirror the log + reports to QEMU debugcon (port 0x402)
+#     -> METAL-UNSAFE (SMM-trapped on some laptops); QEMU verification only.
+# The report families and how to read them live in pc64/DEBUG.md.
+# ============================================================================
+UNO_DEBUG="${UNO_DEBUG:-1}"
+DBGDEF=""; DBGSAN=""; DBG_ID=""
+if [ "$UNO_DEBUG" != "0" ]; then
+    # -fno-omit-frame-pointer: the crash handler walks the RBP chain.
+    # -mgeneral-regs-only on uno_debug.c only (the interrupt file); the rest of
+    #  the kernel keeps SSE (fb blits use it).  Applied per-file below.
+    DBG_ID="debug-$(git rev-parse --short HEAD 2>/dev/null || echo local)-$(date -u +%Y%m%d 2>/dev/null || echo x)"
+    DBGDEF="-DUNO_DEBUG -DUNO_BUILD_ID=\"$DBG_ID\" -fno-omit-frame-pointer"
+    [ "${UNO_DBGCON:-0}" != "0" ] && DBGDEF="$DBGDEF -DUNO_DBGCON"
+    if [ "${UNO_UBSAN:-1}" != "0" ]; then
+        # trap-on-error routes every caught UB to a ud2 -> our #UD handler ->
+        # a "UBSAN TRAP" crash report with the exact faulting RIP.  Only the
+        # bug classes that are already undefined behaviour are trapped.
+        DBGSAN="-fsanitize=signed-integer-overflow,bounds,shift,integer-divide-by-zero,null \
+                -fsanitize-undefined-trap-on-error -fstack-protector-strong"
+    fi
+    echo "[dbg] DEBUG build: id=$DBG_ID ubsan=${UNO_UBSAN:-1} dbgcon=${UNO_DBGCON:-0}"
+fi
+
+# ============================================================================
 # DEFAULT build = the unoui shell: the cross-platform unoui toolkit AS the
 # whole UI (a themed desktop + WM + widgets). A lean image with NO legacy UI -
 # platform + fb + RAM-disk FS + unoui + 8 themes.
@@ -41,15 +71,27 @@ if [ "$1" != "legacy" ]; then
     # UNO_ACPI: the unoacpi AML/ACPI stack (vendored uACPI + shared handlers +
     # the pc64 host layer) - battery %/lid via _BST/_LID on real laptops.
     # Read-only, NO_ACPI_MODE, every EC wait bounded -> inert/safe on QEMU.
-    UCF="$CFLAGS -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI \
+    UCF="$CFLAGS $DBGDEF -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI \
          -I../unoui -I../unosound -I../unomedia -I../unoacpi -I../unoacpi/uacpi/include"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
     "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
-    # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb)
+    # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb).
+    # $DBGSAN (UBSan trap + stack canary) rides on this FIRST-PARTY set only -
+    # third-party bearssl/uacpi/upy below build without it (they do defined
+    # unsigned wraparound the sanitizer must not trap).
     for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbhid ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
-        "$CC" $UCF -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+        "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
+    # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
+    # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
+    # NO sanitizer (its ud2 handler must not itself be instrumented).
+    if [ "$UNO_DEBUG" != "0" ]; then
+        "$CC" $UCF -mgeneral-regs-only -c -o "build/uno_debug.o" "uno_debug.c"
+        OBJS="$OBJS build/uno_debug.o"
+        "$CC" $UCF $DBGSAN -c -o "build/pc64_stress.o" "pc64_stress.c"
+        OBJS="$OBJS build/pc64_stress.o"
+    fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
     # a second private instance of the library, so the two never collide.
@@ -89,8 +131,31 @@ if [ "$1" != "legacy" ]; then
         "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"; OBJS="$OBJS build/bssl_$base.o"
     done
     echo "[3/3] linking the unoui image..."
-    "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
-        -o build/BOOTX64.EFI $OBJS
+    LINK="-nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat"
+    if [ "$UNO_DEBUG" != "0" ]; then
+        # two-pass symbolization: link once with the empty stub, extract .text
+        # RVAs from that image, bake them into build/dbg_syms.c, relink.  The
+        # table is const (.rdata, after .text), so .text RVAs are stable across
+        # the relink - build.sh asserts this below.
+        "$CC" $UCF -c -o "build/dbg_syms_stub.o" "tools/dbg_syms_stub.c"
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms_stub.o
+        NM="${NM:-x86_64-w64-mingw32-nm}"
+        "$NM" -n build/BOOTX64.EFI | awk '$2=="T"||$2=="t"{print $1}' | sort > build/syms_pass1.txt
+        "$PY" tools/mksyms.py build/BOOTX64.EFI build/dbg_syms.c build/SYMBOLS.TXT "$NM"
+        "$CC" $UCF -c -o "build/dbg_syms.o" "build/dbg_syms.c"
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms.o
+        # assert .text RVAs did not move (else the baked symbols are wrong)
+        "$NM" -n build/BOOTX64.EFI | awk '$2=="T"||$2=="t"{print $1}' | sort > build/syms_pass2.txt
+        if ! cmp -s build/syms_pass1.txt build/syms_pass2.txt; then
+            echo "WARN: .text addresses shifted between link passes - baked symbols"
+            echo "      may be off by a section delta; SYMBOLS.TXT + crashsym.py"
+            echo "      (regenerated from the FINAL image) remain authoritative."
+            "$PY" tools/mksyms.py build/BOOTX64.EFI build/dbg_syms.c build/SYMBOLS.TXT "$NM"
+        fi
+        mkdir -p build/esp/DOCS; cp build/SYMBOLS.TXT build/esp/DOCS/SYMBOLS.TXT
+    else
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS
+    fi
     mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
     # sample docs on the ESP (a real FAT volume) for the browser to open
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
@@ -309,6 +374,26 @@ if [ "$1" != "legacy" ]; then
     if "$NM" build/BOOTX64.EFI 2>/dev/null | grep -q "uno_app_main_"; then
         echo "FAIL: uno_app_main_* found in the kernel image - apps must be .UNO only"
         exit 1
+    fi
+
+    # ---- DEBUG build staging: CRASH dir, fuzz corpus, a default STRESS.CFG --
+    if [ "$UNO_DEBUG" != "0" ]; then
+        echo "[dbg] staging CRASH\\, fuzz corpus, STRESS.CFG onto the ESP..."
+        mkdir -p build/esp/CRASH
+        printf 'Crash / hang / residue reports land here (CR###, HG###, RS###).\r\nCopy this whole folder to amanuensis for a Claude Code agent to read.\r\n' \
+            > build/esp/CRASH/README.TXT
+        "$PY" tools/mkcorpus.py build/esp || echo "[dbg] mkcorpus warning (non-fatal)"
+        # STRESS.CFG present = the stress driver is ARMED.  Ship a SAFE default
+        # (no allow-force, so it never self-crashes; it only drives the OS and
+        # lets real bugs surface).  Rename/delete to boot a quiet desktop; add
+        # 'allow-force' to prove the crash pipeline end to end.  See DEBUG.md.
+        if [ ! -f build/esp/STRESS.CFG ]; then
+            printf '# UnoDOS pc64 stress driver config (presence = armed)\r\n# keys: once  fast  slow  allow-force\r\nmode=continuous\r\n' \
+                > build/esp/STRESS.CFG
+        fi
+        # BUILD.TXT stamp so a report can be tied back to an exact image
+        printf 'UnoDOS pc64 DEBUG build\r\nid: %s\r\nubsan: %s  dbgcon: %s\r\n' \
+            "$DBG_ID" "${UNO_UBSAN:-1}" "${UNO_DBGCON:-0}" > build/esp/BUILD.TXT
     fi
 
     ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"

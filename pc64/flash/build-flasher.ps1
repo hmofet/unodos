@@ -43,8 +43,12 @@ function Invoke-Native([scriptblock]$sb, [string]$what) {
 }
 
 # ---- 1+2. build the EFI image and pack it into a raw UEFI disk image --------
+# NOTE (branch pc64-debug-stress): ./build.sh defaults to UNO_DEBUG=1 here, so
+# this flasher embeds the DEBUG / stress-test OS - crash reports to \CRASH, the
+# stress driver armed by \STRESS.CFG, symbols in \DOCS\SYMBOLS.TXT.  Per the
+# standing rule we ship ONE flasher (this debug build), not every OS variant.
 if (-not $SkipBuild) {
-    Write-Host "Building UnoDOS/pc64 (BOOTX64.EFI + ESP) under WSL..."
+    Write-Host "Building UnoDOS/pc64 DEBUG build (BOOTX64.EFI + ESP) under WSL..." -ForegroundColor Yellow
     Invoke-Native { & wsl bash -lc "cd '$wslPc64' && ./build.sh" } "pc64 build failed (try: wsl bash -lc 'cd pc64 && ./build.sh')"
 }
 Write-Host "Packing UEFI disk image ($SizeMiB MiB) under WSL..."

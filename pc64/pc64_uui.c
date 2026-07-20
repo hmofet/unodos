@@ -21,6 +21,10 @@
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
+#include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
+#ifdef UNO_DEBUG
+unsigned long long uno_native_rdtsc(void);
+#endif
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include "rtl8152.h"         /* USB Ethernet adapter (Realtek; docks/dongles) */
 #include "iwlwifi.h"         /* Intel AC/AX WiFi (firmware-driven) */
@@ -1926,6 +1930,8 @@ int main(void)
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
     for (;;) {
         int la, cursor_only = 0;
+        uno_dbg_heartbeat();            /* debug build: the watchdog's liveness */
+        pc64_stress_tick();             /* debug build: the metal stress driver */
         uno_pc64_poll();
 #ifdef UNO_ACPI
         {
@@ -2003,11 +2009,59 @@ int main(void)
             }
         } else {
             if (was_dragging) g_dirty = 1;       /* drag ended: repaint to commit the move */
+#ifdef UNO_DEBUG
+            /* timed render/present + the perf HUD, drawn into the frame the
+             * same way any widget is so the present path carries it */
+            if (g_dirty) {
+                unsigned long long t0 = uno_native_rdtsc(), t1;
+                unoui_render_ui(&UI);
+                t1 = uno_native_rdtsc();
+                uno_dbg_frame_render_cyc(t1 - t0);
+                { char hud[96];
+                  int n = uno_dbg_hud(hud, sizeof hud);
+                  if (n > 0) fb_text(FB_W - fb_text_w(hud) - 4, 3, hud,
+                                     FB_RGB(255, 245, 130), FB_RGB(28, 30, 48)); }
+                t1 = uno_native_rdtsc();
+                uno_pc64_present();
+                uno_dbg_frame_present_cyc(uno_native_rdtsc() - t1);
+                g_dirty = 0;
+                uno_dbg_frame_idle(0);
+            } else if (cursor_only) {
+                unsigned long long t1 = uno_native_rdtsc();
+                uno_pc64_present();
+                uno_dbg_frame_present_cyc(uno_native_rdtsc() - t1);
+                uno_dbg_frame_idle(0);
+            } else { uno_pc64_delay_ms(16); uno_dbg_frame_idle(1); }
+#else
             if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
             else if (cursor_only) uno_pc64_present();  /* cursor moved: recomposite only */
             else uno_pc64_delay_ms(16);
+#endif
         }
         was_dragging = UI.drag_active;
     }
     return 0;
 }
+
+#ifdef UNO_DEBUG
+/* ===========================================================================
+ * shell hooks the metal stress driver (pc64_stress.c) drives - thin wrappers
+ * over the same open_app/close_focused/g_dirty the real UI uses, so a stress
+ * run exercises the true window/app machinery, not a private shadow of it.
+ * ======================================================================== */
+int  pc64_dbg_app_count(void) { return NAPPS; }
+int  pc64_dbg_app_hidden(int a) { return (a < 0 || a >= NAPPS) ? 1 : app_hidden(a); }
+const char *pc64_dbg_app_name(int a) { return (a >= 0 && a < NAPPS) ? app_name(a) : "?"; }
+int  pc64_dbg_app_is_open(int a) { return (a >= 0 && a < NAPPS) ? g_open[a] : 0; }
+int  pc64_dbg_open_count(void)
+{ int i, n = 0; for (i = 0; i < NAPPS; i++) if (g_open[i]) n++; return n; }
+void pc64_dbg_open_app(int a) { if (a >= 0 && a < NAPPS && !app_hidden(a)) open_app(a); g_dirty = 1; }
+void pc64_dbg_close_focused(void) { close_focused(); }
+void pc64_dbg_focus_next(void)
+{ if (UI.nwin > 0) { UI.focus_win = (UI.focus_win + 1) % UI.nwin; g_dirty = 1; } }
+void pc64_dbg_mark_dirty(void) { g_dirty = 1; }
+/* open a document through the shell's own browser path (the Help deep-link
+ * route): the launcher for the malformed text/markup/html fuzz corpus. */
+void pc64_dbg_open_path(const char *path)
+{ pc64_browser_open_path(path); g_dirty = 1; }
+#endif /* UNO_DEBUG */
