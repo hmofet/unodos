@@ -45,7 +45,8 @@ class FlashForm : Form
     const string ESP_RESOURCE = "unodos_esp";        // zip of the UnoDOS system tree
 
     ComboBox driveBox;
-    Button refreshBtn, flashBtn, showAllBtn, devBtn;
+    Button refreshBtn, flashBtn, showAllBtn, devBtn, updateBtn;
+    CheckBox autoChk;
     Label devSummary;
     ProgressBar progress;
     Label status;
@@ -54,6 +55,7 @@ class FlashForm : Form
     bool showAll = false;                                       // include 0 GB (empty) drives?
     UnoSettings settings = UnoSettings.Load();
     int lastPct = -1;
+    bool busy;                       // a flash or an update swap is in progress
 
     public FlashForm()
     {
@@ -95,6 +97,7 @@ class FlashForm : Form
                 if (d.ShowDialog(this) == DialogResult.OK) { settings.Save(); UpdateDevSummary(); }
                 else settings = UnoSettings.Load();      // discard edits
             }
+            autoChk.Checked = settings.AutoUpdate;       // the reload may have changed it
         };
         Controls.Add(devBtn);
         devSummary = new Label { Location = new Point(176, 174), Size = new Size(376, 40),
@@ -117,8 +120,101 @@ class FlashForm : Form
         flashBtn.Click += FlashClicked;
         Controls.Add(flashBtn);
 
+        // ---- self-update row (the staged flasher on \\behemoth) -------------
+        Controls.Add(new Label {
+            Text = "Build " + UnoVersion.Build + (UnoUpdate.IsDevBuild ? " (dev - self-update off)" : ""),
+            Location = new Point(16, 336), AutoSize = true,
+            ForeColor = Color.FromArgb(120, 120, 120) });
+        autoChk = new CheckBox { Text = "Update automatically", Checked = settings.AutoUpdate,
+                                 Location = new Point(216, 332), AutoSize = true };
+        autoChk.CheckedChanged += (s, e) => { settings.AutoUpdate = autoChk.Checked; settings.Save(); };
+        Controls.Add(autoChk);
+        updateBtn = new Button { Text = "Check for updates", Location = new Point(412, 329), Size = new Size(140, 26) };
+        updateBtn.Click += (s, e) => StartUpdateCheck(true);
+        Controls.Add(updateBtn);
+
         UpdateDevSummary();
         LoadDrives();
+
+        // after the handle exists: sweep update leftovers, then the auto check
+        Shown += (s, e) => {
+            UnoUpdate.CleanupAfterUpdate();
+            if (settings.AutoUpdate) StartUpdateCheck(false);
+        };
+    }
+
+    /* ---- self-update ---------------------------------------------------- */
+
+    void StartUpdateCheck(bool manual)
+    {
+        if (manual) updateBtn.Enabled = false;
+        var t = new Thread(() => RunUpdateCheck(manual));
+        t.IsBackground = true; t.Start();
+    }
+
+    // Runs on a worker thread: every share touch here can block for the SMB
+    // timeout.  `manual` decides whether quiet outcomes get a MessageBox.
+    void RunUpdateCheck(bool manual)
+    {
+        try {
+            if (UnoUpdate.RunningFromShare(settings)) {
+                if (manual) Ui(() => MessageBox.Show(this,
+                    "You are running the copy on the share itself - deploy-to-share.ps1 keeps that one current.\n" +
+                    "Copy the exe to a local disk if you want self-update.",
+                    "Check for updates", MessageBoxButtons.OK, MessageBoxIcon.Information));
+                return;
+            }
+
+            string error;
+            var info = UnoUpdate.Check(settings, out error);
+            if (info == null) {
+                if (manual) Ui(() => MessageBox.Show(this,
+                    "Could not reach the update share.\n\n" + error,
+                    "Check for updates", MessageBoxButtons.OK, MessageBoxIcon.Warning));
+                return;
+            }
+            if (!UnoUpdate.IsNewer(info)) {
+                if (manual) Ui(() => MessageBox.Show(this,
+                    UnoUpdate.IsDevBuild
+                        ? "This is a dev build, so self-update is off.\nThe share has build " + info.Build + "."
+                        : "You are up to date.\n\nThis exe:  build " + UnoVersion.Build +
+                          "\nShare:      build " + info.Build,
+                    "Check for updates", MessageBoxButtons.OK, MessageBoxIcon.Information));
+                return;
+            }
+
+            if (manual) {
+                bool yes = (bool)Invoke((Func<bool>)(() => MessageBox.Show(this,
+                    "Build " + info.Build + " is staged on the share (you have " + UnoVersion.Build + ").\n\n" +
+                    "Update now? The flasher will restart.",
+                    "Update available", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes));
+                if (!yes) return;
+            }
+
+            // claim the UI atomically so the swap can't start mid-flash
+            bool proceed = (bool)Invoke((Func<bool>)(() => {
+                if (busy) return false;
+                SetBusy(true);
+                status.Text = "Updating to build " + info.Build + "...";
+                return true;
+            }));
+            if (!proceed) return;
+
+            try {
+                UnoUpdate.Apply(info);           // the new exe is already running
+                Ui(() => Close());
+            } catch (Exception ex) {
+                Ui(() => {
+                    SetBusy(false);
+                    status.Text = "Update failed: " + ex.Message;
+                    if (manual) MessageBox.Show(this, "Update failed:\n\n" + ex.Message,
+                        "Check for updates", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                });
+            }
+        } catch { /* form closed mid-check - nothing to report to */ }
+        finally {
+            if (manual) Ui(() => { if (!busy) updateBtn.Enabled = true; });
+        }
     }
 
     void UpdateDevSummary()
@@ -280,10 +376,11 @@ class FlashForm : Form
         var t = new Thread(() => DoFlash(drive)); t.IsBackground = true; t.Start();
     }
 
-    void SetBusy(bool busy)
+    void SetBusy(bool b)
     {
+        busy = b;
         flashBtn.Enabled = refreshBtn.Enabled = showAllBtn.Enabled =
-            driveBox.Enabled = devBtn.Enabled = !busy;
+            driveBox.Enabled = devBtn.Enabled = updateBtn.Enabled = !b;
     }
 
     void Ui(Action a) { if (IsHandleCreated) BeginInvoke(a); }

@@ -41,6 +41,33 @@ settings.
 If a configured folder or zip is missing at install time you get a warning and
 the choice to continue - a stale developer path never blocks a flash.
 
+## Self-update
+
+`deploy-to-share.ps1` stages every new flasher on
+`\\behemoth\unreplicated\unodos\pc64\` together with `flasher-version.txt`
+(build stamp + sha256 of the exe). A locally-run flasher compares its own
+embedded stamp against that file:
+
+- **Automatically at startup** (the "Update automatically" checkbox, on by
+  default, stored as `autoupdate=` in `flasher.ini`), and
+- **on demand** via the **Check for updates** button.
+
+The share is tried by name first, then by IP (`\\192.168.2.75\...`) in case DNS
+is down; `updatepath=` in `flasher.ini` overrides the folder entirely. This LAN
+share is the interim channel - an internet-based endpoint will join or replace
+it later (`UnoUpdate.Check()` is the only piece that has to learn HTTP).
+
+Updating downloads the staged exe next to the running one, verifies its sha256,
+renames the running exe to `*.exe.old` (Windows allows renaming, not deleting, a
+running exe), moves the new one into place and launches it; the new instance
+deletes the `*.exe.old` as soon as the old process exits. Any failure rolls
+back, so the exe you started with always survives.
+
+Two cases never self-update: the copy on the share itself (that one is owned by
+`deploy-to-share.ps1`), and a hand-compiled exe (its stamp is the `0-dev`
+placeholder from the checked-in `UnoVersion.cs` - only `build-flasher.ps1`
+generates a real stamp), so an update can't clobber work in progress.
+
 Names are converted to 8.3 the way Windows does it, because the OS reads short
 names only: `My Song.mp3` is stored as `MYSONG~1.MP3` with a long-name entry, so
 Explorer shows the real name and UnoDOS sees the alias. A name that is already
@@ -77,6 +104,8 @@ Regenerate the icon (needs Pillow): `python pc64/flash/make-icon.py`.
 | `UnoDosFlash.cs` | the GUI: drive scan (WMI), volume dismount, developer options |
 | `UnoDisk.cs` | GPT + FAT32 builder and the file writer - all the on-disk format |
 | `UnoSettings.cs` | developer settings in `%APPDATA%`, so they outlive the exe |
+| `UnoUpdate.cs` | self-update against the staged flasher on the share |
+| `UnoVersion.cs` | dev-placeholder build stamp; the real one is generated at build |
 | `UnoDiskTest.cs` | builds a volume into an image FILE so real tools can check it |
 | `app.manifest` | forces the Administrator (UAC) elevation the raw write needs |
 | `build-flasher.ps1` | build.sh -> mkuefi.py -> zip the ESP -> csc, all in one |
