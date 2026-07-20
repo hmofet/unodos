@@ -1,20 +1,26 @@
 /*  UnoDOS USB Installer  -  a single self-contained Windows exe.
  *
- *  Picks a removable USB drive, confirms, and writes the bundled bootable
- *  UnoDOS/pc64 disk image to it (raw).  One image is embedded (gzip-compressed):
- *  a GPT-partitioned UEFI disk with an EFI System Partition (FAT32) holding
- *  /EFI/BOOT/BOOTX64.EFI.  pc64 is UEFI/x86-64 only, so - unlike the Writer's
- *  Unlock flasher this is modeled on - there is no BIOS or filesystem choice.
+ *  Picks a removable USB drive, confirms, then BUILDS a bootable UnoDOS drive
+ *  on it: GPT, one EFI System Partition spanning the whole disk, formatted
+ *  FAT32, with the UnoDOS system files copied in.  The system tree rides along
+ *  as an embedded .zip resource.
  *
- *  Build: pc64/flash/build-flasher.ps1  (csc + embedded image resource).
+ *  It used to clone a fixed-size raw image, which left most of a modern stick
+ *  unallocated - a 512 MiB image on a 32 GB stick wasted 31.5 GB and gave the
+ *  OS nowhere to save documents.  Building the volume to fit the target fixes
+ *  that, and makes it cheap to drop extra files on at install time (see
+ *  Developer options: the media/test kit, and any .zip you choose).
+ *
+ *  Developer settings live in %APPDATA%\UnoDOS\flasher.ini, NOT beside the exe,
+ *  because deploy-to-share.ps1 replaces the exe on the share after every build.
+ *
+ *  Build: pc64/flash/build-flasher.ps1  (csc + embedded esp.zip resource).
  *  Requires admin (raw disk write) - the manifest forces a UAC prompt.
  */
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
-using System.IO.Compression;
-using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -36,20 +42,23 @@ class UsbDrive
 
 class FlashForm : Form
 {
-    const string IMAGE_RESOURCE = "unodos_uefi";     // the single embedded image
+    const string ESP_RESOURCE = "unodos_esp";        // zip of the UnoDOS system tree
 
     ComboBox driveBox;
-    Button refreshBtn, flashBtn, showAllBtn;
+    Button refreshBtn, flashBtn, showAllBtn, devBtn;
+    Label devSummary;
     ProgressBar progress;
     Label status;
 
     readonly List<UsbDrive> allDrives = new List<UsbDrive>();   // full scan, smallest-first
     bool showAll = false;                                       // include 0 GB (empty) drives?
+    UnoSettings settings = UnoSettings.Load();
+    int lastPct = -1;
 
     public FlashForm()
     {
         Text = "UnoDOS - USB Installer";
-        Size = new Size(580, 366);
+        Size = new Size(580, 430);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -74,37 +83,68 @@ class FlashForm : Form
         Controls.Add(refreshBtn);
 
         Controls.Add(new Label {
-            Text = "UEFI boot (x86-64 PCs, 2012+). Turn OFF Secure Boot in firmware, then\n" +
+            Text = "The whole drive becomes one FAT32 volume, so UnoDOS can use all of it.\n" +
+                   "UEFI boot (x86-64 PCs, 2012+). Turn OFF Secure Boot in firmware, then\n" +
                    "pick this USB from the boot menu. pc64 is UEFI-only - there is no BIOS build.",
-            Location = new Point(16, 112), Size = new Size(536, 44),
+            Location = new Point(16, 108), Size = new Size(536, 58),
             ForeColor = Color.FromArgb(60, 60, 60) });
+
+        devBtn = new Button { Text = "Developer options...", Location = new Point(16, 172), Size = new Size(150, 26) };
+        devBtn.Click += (s, e) => {
+            using (var d = new DevForm(settings)) {
+                if (d.ShowDialog(this) == DialogResult.OK) { settings.Save(); UpdateDevSummary(); }
+                else settings = UnoSettings.Load();      // discard edits
+            }
+        };
+        Controls.Add(devBtn);
+        devSummary = new Label { Location = new Point(176, 174), Size = new Size(376, 40),
+                                 ForeColor = Color.FromArgb(0, 100, 0) };
+        Controls.Add(devSummary);
 
         Controls.Add(new Label {
             Text = "Everything on the selected drive will be erased.",
             ForeColor = Color.FromArgb(176, 0, 32),
-            Location = new Point(16, 168), AutoSize = true });
+            Location = new Point(16, 222), AutoSize = true });
 
-        progress = new ProgressBar { Location = new Point(16, 200), Size = new Size(536, 22) };
+        progress = new ProgressBar { Location = new Point(16, 250), Size = new Size(536, 22) };
         Controls.Add(progress);
-        status = new Label { Text = "", Location = new Point(16, 232), Size = new Size(420, 20) };
+        status = new Label { Text = "", Location = new Point(16, 282), Size = new Size(430, 34) };
         Controls.Add(status);
 
         flashBtn = new Button {
-            Text = "Install", Location = new Point(464, 230), Size = new Size(88, 32),
+            Text = "Install", Location = new Point(464, 282), Size = new Size(88, 32),
             BackColor = Color.FromArgb(0, 120, 215), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         flashBtn.Click += FlashClicked;
         Controls.Add(flashBtn);
 
+        UpdateDevSummary();
         LoadDrives();
+    }
+
+    void UpdateDevSummary()
+    {
+        if (!settings.DevMode) { devSummary.Text = ""; return; }
+        var bits = new List<string>();
+        if (settings.KitEnabled) bits.Add("test kit: " + Short(settings.KitPath));
+        if (settings.ZipEnabled) bits.Add("zip: " + Short(settings.ZipPath));
+        devSummary.Text = bits.Count == 0
+            ? "Developer mode on (nothing extra to copy)."
+            : "Also copying - " + string.Join("; ", bits.ToArray());
+    }
+
+    static string Short(string p)
+    {
+        if (string.IsNullOrEmpty(p)) return "(not set)";
+        return p.Length <= 44 ? p : "..." + p.Substring(p.Length - 41);
     }
 
     void LoadDrives()
     {
         allDrives.Clear();
         try {
-            using (var searcher = new ManagementObjectSearcher(
+            using (var searcher = new System.Management.ManagementObjectSearcher(
                 "SELECT * FROM Win32_DiskDrive WHERE InterfaceType='USB'")) {
-                foreach (ManagementObject d in searcher.Get()) {
+                foreach (System.Management.ManagementObject d in searcher.Get()) {
                     string did = (string)d["DeviceID"];          // \\.\PHYSICALDRIVE<n>
                     var d2 = new UsbDrive {
                         Model = ((string)(d["Model"] ?? "USB drive")).Trim(),
@@ -196,67 +236,96 @@ class FlashForm : Form
         return held;
     }
 
+    // The real capacity, straight from the driver.  WMI's Size is the CHS-rounded
+    // figure and can be a little short, which would waste the tail of the disk.
+    static long DiskLength(SafeFileHandle disk, ulong wmiSize)
+    {
+        byte[] buf = new byte[8]; uint br;
+        var gch = GCHandle.Alloc(buf, GCHandleType.Pinned);
+        try {
+            if (Native.DeviceIoControl(disk, Native.IOCTL_DISK_GET_LENGTH_INFO, IntPtr.Zero, 0,
+                    gch.AddrOfPinnedObject(), 8, out br, IntPtr.Zero) && br >= 8) {
+                long n = BitConverter.ToInt64(buf, 0);
+                if (n > 0) return n;
+            }
+        } finally { gch.Free(); }
+        return (long)wmiSize;
+    }
+
     void FlashClicked(object sender, EventArgs e)
     {
         var drive = driveBox.SelectedItem as UsbDrive;
         if (drive == null) { status.Text = "Select a USB drive first."; return; }
 
+        List<string> warn;
+        var extras = settings.ExtraPayloads(out warn);
+        string extraText = "";
+        foreach (var s in extras) extraText += "\n    + " + s.Describe();
+        if (warn.Count > 0) {
+            if (MessageBox.Show(string.Join("\n", warn.ToArray()) +
+                    "\n\nInstall without it?", "Developer extras missing",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        }
+
         var confirm = MessageBox.Show(
             "This will ERASE everything on:\n\n    " + drive.ToString() + "\n\n" +
-            "and write UnoDOS (UEFI).\n\nContinue?",
+            "and build a full-disk FAT32 UnoDOS drive (UEFI)." +
+            (extraText.Length > 0 ? "\n\nAlso copying:" + extraText : "") +
+            "\n\nContinue?",
             "Confirm erase", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
         if (confirm != DialogResult.Yes) return;
 
         SetBusy(true);
-        var t = new Thread(() => DoFlash(drive, IMAGE_RESOURCE)); t.IsBackground = true; t.Start();
+        lastPct = -1;
+        var t = new Thread(() => DoFlash(drive)); t.IsBackground = true; t.Start();
     }
 
     void SetBusy(bool busy)
     {
-        flashBtn.Enabled = refreshBtn.Enabled = showAllBtn.Enabled = driveBox.Enabled = !busy;
+        flashBtn.Enabled = refreshBtn.Enabled = showAllBtn.Enabled =
+            driveBox.Enabled = devBtn.Enabled = !busy;
     }
 
     void Ui(Action a) { if (IsHandleCreated) BeginInvoke(a); }
 
-    void DoFlash(UsbDrive drive, string res)
+    void DoFlash(UsbDrive drive)
     {
         List<SafeFileHandle> locks = null;
         try {
             Ui(() => status.Text = "Dismounting volumes...");
-            locks = DismountVolumes(drive.Index);          // 1. free the card's volumes
+            locks = DismountVolumes(drive.Index);          // 1. free the drive's volumes
 
-            // 2. open the raw physical drive and stream the decompressed image to it
+            // 2. open the raw physical drive
             var disk = Native.CreateFile(drive.DeviceId, Native.GENERIC_READ | Native.GENERIC_WRITE,
                 Native.FILE_SHARE_READ | Native.FILE_SHARE_WRITE, IntPtr.Zero, Native.OPEN_EXISTING,
                 Native.FILE_FLAG_WRITE_THROUGH, IntPtr.Zero);
             if (disk.IsInvalid)
                 throw new IOException("Cannot open the drive (run as Administrator). Win32 error " + Marshal.GetLastWin32Error());
 
-            Stream gz = Assembly.GetExecutingAssembly().GetManifestResourceStream(res);
-            if (gz == null) throw new IOException("Bundled image '" + res + "' is missing from this exe.");
+            long bytes = DiskLength(disk, drive.Size);
 
-            long total = ReadGzipSize(gz);
-            gz.Position = 0;
-            using (var diskStream = new FileStream(disk, FileAccess.Write))
-            using (var inflate = new GZipStream(gz, CompressionMode.Decompress)) {
-                byte[] buf = new byte[1024 * 1024];        // 1 MiB, sector-aligned
-                long done = 0; int n, partial = 0;
-                while ((n = inflate.Read(buf, partial, buf.Length - partial)) > 0) {
-                    partial += n;
-                    if (partial == buf.Length) {
-                        diskStream.Write(buf, 0, partial);
-                        done += partial; partial = 0;
-                        long pct = total > 0 ? done * 100 / total : 0;
-                        Ui(() => { progress.Value = (int)Math.Min(100, pct);
-                                   status.Text = string.Format("Writing... {0} MB", done / (1024 * 1024)); });
-                    }
-                }
-                if (partial > 0) {
-                    int pad = (512 - (partial % 512)) % 512;
-                    for (int i = 0; i < pad; i++) buf[partial + i] = 0;
-                    diskStream.Write(buf, 0, partial + pad);
-                }
-                diskStream.Flush();
+            // 3. the payload list: UnoDOS itself, then whatever developer mode adds
+            var sources = new List<IPayloadSource>();
+            Stream esp = Assembly.GetExecutingAssembly().GetManifestResourceStream(ESP_RESOURCE);
+            if (esp == null) throw new IOException("Bundled system files ('" + ESP_RESOURCE + "') are missing from this exe.");
+            sources.Add(new ZipPayload(esp, ""));
+            List<string> warn;
+            sources.AddRange(settings.ExtraPayloads(out warn));
+
+            string summary;
+            // bufferSize 1 = no FileStream buffering: a physical-drive handle only
+            // accepts whole-sector writes, and .NET's buffering would happily
+            // issue a partial one at the tail of a copy.
+            using (var fs = new FileStream(disk, FileAccess.ReadWrite, 1)) {
+                summary = UnoDisk.Build(fs, bytes, sources, settings.Label,
+                    (stage, done, total) => {
+                        int pct = total > 0 ? (int)(done * 100 / total) : 0;
+                        if (pct == lastPct) return;
+                        lastPct = pct;
+                        Ui(() => { progress.Value = Math.Min(100, Math.Max(0, pct));
+                                   status.Text = stage; });
+                    });
+                fs.Flush();
                 // flush to the medium + re-read the partition table while the handle is
                 // still open: the FileStream OWNS `disk` and closes it on dispose, so
                 // touching it after the using-block would throw "Safe handle closed".
@@ -265,8 +334,10 @@ class FlashForm : Form
                 Native.DeviceIoControl(disk, Native.IOCTL_DISK_UPDATE_PROPERTIES, IntPtr.Zero, 0, IntPtr.Zero, 0, out br, IntPtr.Zero);
             }   // FileStream disposes `disk` here
 
+            string done2 = summary;
             Ui(() => { progress.Value = 100; status.Text = "Done - you can remove the drive.";
-                       MessageBox.Show("UnoDOS was written successfully.\n\nBoot the target machine from this USB (UEFI, Secure Boot off).",
+                       MessageBox.Show("UnoDOS was installed successfully.\n\n" + done2 +
+                                       "\n\nBoot the target machine from this USB (UEFI, Secure Boot off).",
                                        "Finished", MessageBoxButtons.OK, MessageBoxIcon.Information); });
         } catch (Exception ex) {
             bool denied = ex is UnauthorizedAccessException ||
@@ -285,22 +356,124 @@ class FlashForm : Form
         }
     }
 
-    // gzip stores the uncompressed size (mod 2^32) in the last 4 bytes (ISIZE)
-    static long ReadGzipSize(Stream s)
-    {
-        long pos = s.Position;
-        s.Seek(-4, SeekOrigin.End);
-        byte[] b = new byte[4]; s.Read(b, 0, 4);
-        s.Position = pos;
-        return (uint)(b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
-    }
-
     [STAThread]
     static void Main()
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new FlashForm());
+    }
+}
+
+/* ---- developer options ------------------------------------------------------ */
+class DevForm : Form
+{
+    readonly UnoSettings s;
+    CheckBox devChk, kitChk, zipChk;
+    TextBox kitBox, zipBox, destBox, labelBox;
+    Button kitBrowse, zipBrowse;
+
+    public DevForm(UnoSettings settings)
+    {
+        s = settings;
+        Text = "Developer options";
+        Size = new Size(560, 350);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterParent;
+        Font = new Font("Segoe UI", 9f);
+
+        devChk = new CheckBox { Text = "Enable developer extras", Checked = s.DevMode,
+                                Location = new Point(16, 14), AutoSize = true,
+                                Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
+        devChk.CheckedChanged += (a, b) => Sync();
+        Controls.Add(devChk);
+
+        // --- the media / test kit -------------------------------------------
+        kitChk = new CheckBox { Text = "Copy a folder onto the drive (the media test kit)",
+                                Checked = s.KitEnabled, Location = new Point(16, 46), AutoSize = true };
+        kitChk.CheckedChanged += (a, b) => Sync();
+        Controls.Add(kitChk);
+        kitBox = new TextBox { Text = s.KitPath, Location = new Point(34, 70), Size = new Size(410, 23) };
+        Controls.Add(kitBox);
+        kitBrowse = new Button { Text = "Browse...", Location = new Point(450, 69), Size = new Size(84, 25) };
+        kitBrowse.Click += (a, b) => {
+            using (var d = new FolderBrowserDialog { SelectedPath = Dir(kitBox.Text),
+                       Description = "Folder whose CONTENTS are copied to the drive root" })
+                if (d.ShowDialog(this) == DialogResult.OK) kitBox.Text = d.SelectedPath;
+        };
+        Controls.Add(kitBrowse);
+        Controls.Add(new Label { Text = "The folder's contents land in the drive root.",
+                                 Location = new Point(34, 96), AutoSize = true,
+                                 ForeColor = Color.FromArgb(90, 90, 90) });
+
+        // --- a chosen zip ----------------------------------------------------
+        zipChk = new CheckBox { Text = "Extract a .zip onto the drive",
+                                Checked = s.ZipEnabled, Location = new Point(16, 126), AutoSize = true };
+        zipChk.CheckedChanged += (a, b) => Sync();
+        Controls.Add(zipChk);
+        zipBox = new TextBox { Text = s.ZipPath, Location = new Point(34, 150), Size = new Size(410, 23) };
+        Controls.Add(zipBox);
+        zipBrowse = new Button { Text = "Browse...", Location = new Point(450, 149), Size = new Size(84, 25) };
+        zipBrowse.Click += (a, b) => {
+            using (var d = new OpenFileDialog { Filter = "Zip archives (*.zip)|*.zip|All files (*.*)|*.*",
+                                                Title = "Choose a .zip to unpack onto the drive" }) {
+                if (File.Exists(zipBox.Text)) d.FileName = zipBox.Text;
+                if (d.ShowDialog(this) == DialogResult.OK) zipBox.Text = d.FileName;
+            }
+        };
+        Controls.Add(zipBrowse);
+        Controls.Add(new Label { Text = "Into subfolder (blank = drive root):",
+                                 Location = new Point(34, 180), AutoSize = true });
+        destBox = new TextBox { Text = s.ZipDest, Location = new Point(232, 177), Size = new Size(212, 23) };
+        Controls.Add(destBox);
+
+        // --- volume label ----------------------------------------------------
+        Controls.Add(new Label { Text = "Volume label:", Location = new Point(16, 216), AutoSize = true });
+        labelBox = new TextBox { Text = s.Label, Location = new Point(104, 213), Size = new Size(120, 23), MaxLength = 11 };
+        Controls.Add(labelBox);
+
+        Controls.Add(new Label {
+            Text = "Saved in %APPDATA%\\UnoDOS\\flasher.ini, so these survive a flasher update.",
+            Location = new Point(16, 248), Size = new Size(520, 20),
+            ForeColor = Color.FromArgb(90, 90, 90) });
+
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK,
+                              Location = new Point(366, 274), Size = new Size(80, 28) };
+        ok.Click += (a, b) => Commit();
+        Controls.Add(ok);
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel,
+                                  Location = new Point(454, 274), Size = new Size(80, 28) };
+        Controls.Add(cancel);
+        AcceptButton = ok; CancelButton = cancel;
+
+        Sync();
+    }
+
+    static string Dir(string p)
+    {
+        try { if (Directory.Exists(p)) return p; } catch { }
+        return "";
+    }
+
+    void Sync()
+    {
+        bool on = devChk.Checked;
+        kitChk.Enabled = zipChk.Enabled = labelBox.Enabled = on;
+        kitBox.Enabled = kitBrowse.Enabled = on && kitChk.Checked;
+        zipBox.Enabled = zipBrowse.Enabled = destBox.Enabled = on && zipChk.Checked;
+    }
+
+    void Commit()
+    {
+        s.DevMode    = devChk.Checked;
+        s.KitEnabled = kitChk.Checked;
+        s.KitPath    = kitBox.Text.Trim();
+        s.ZipEnabled = zipChk.Checked;
+        s.ZipPath    = zipBox.Text.Trim();
+        s.ZipDest    = destBox.Text.Trim().Trim('\\', '/');
+        string lab   = labelBox.Text.Trim();
+        s.Label      = lab.Length > 0 ? lab : "UNODOS";
     }
 }
 
@@ -313,6 +486,7 @@ static class Native
     public const uint FSCTL_LOCK_VOLUME = 0x00090018;
     public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
     public const uint IOCTL_DISK_UPDATE_PROPERTIES = 0x00070140;
+    public const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
     public const uint IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000;
     public static readonly IntPtr INVALID_HANDLE = new IntPtr(-1);
 
