@@ -13,6 +13,7 @@ machine itself, no host toolchain.
 - **[The UnoC language](LANG.MD)** — the exact C subset the compiler accepts.
 - **[Python apps](PYTHON.MD)** — writing apps in Python 3, the `uno.App` model.
 - **[The Python API](PYAPI.MD)** — the `uno` module: canvas, sound, files.
+- **[Duum](DUUM.MD)** — a Doom engine written in Python; the acceptance demo.
 - **[Using Studio](IDE.MD)** — the editor, project pane, build output, keys.
 - **[The AI assistant](AI.MD)** — connect ChatGPT, Claude or Gemini for help.
 
