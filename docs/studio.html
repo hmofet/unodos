@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio: the built-in IDE · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="active" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Studio: the built-in IDE</h1>
+<p class="lede">Write, compile and run UnoDOS apps <strong>on the machine itself</strong> - no PC, no
+toolchain, no command line. Studio is a code editor, a real compiler and an AI assistant in one window,
+and the app it builds opens right next to it.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/studio.png" aria-label="Enlarge: Studio: a monospace code editor with UnoC syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on the bundled SAMPLE.C."><img src="assets/img/studio.png" alt="Studio: a monospace code editor with UnoC syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on the bundled SAMPLE.C." loading="lazy"></button><figcaption><b>Studio</b>: a monospace code editor with UnoC syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on the bundled <code>SAMPLE.C</code>.</figcaption></figure>
+
+<h2 id="loop">Edit, build, run - all on the machine</h2>
+<p>Studio compiles your source straight to a runnable app inside UnoDOS. There is nothing to install and
+no separate computer in the loop:</p>
+<ol>
+  <li>Open <strong>Studio</strong> from the programs menu. It greets you with <code>SAMPLE.C</code>, a
+      small bouncing-ball app.</li>
+  <li>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> to <strong>build</strong>. The output pane reports the result,
+      for example <code>Built SAMPLE.UNO code=2303 ...</code>, and the new <code>.UNO</code> file appears
+      in the project list.</li>
+  <li>Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to <strong>run</strong> it. Your app opens in its own window with
+      its own taskbar button.</li>
+</ol>
+<div class="grid cols-2">
+  <figure><button type="button" class="zoom" data-full="assets/img/studio_build.png" aria-label="Enlarge: After Ctrl+B: the build-output pane shows Built SAMPLE.UNO with its code, data and import sizes, and SAMPLE.UNO joins the project list."><img src="assets/img/studio_build.png" alt="After Ctrl+B: the build-output pane shows Built SAMPLE.UNO with its code, data and import sizes, and SAMPLE.UNO joins the project list." loading="lazy"></button><figcaption>After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane shows <i>Built SAMPLE.UNO</i> with its code, data and import sizes, and <code>SAMPLE.UNO</code> joins the project list.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/studio_run.png" aria-label="Enlarge: After Ctrl+R: the app you just compiled runs in its own window (the yellow ball bounces), while Studio stays open behind it."><img src="assets/img/studio_run.png" alt="After Ctrl+R: the app you just compiled runs in its own window (the yellow ball bounces), while Studio stays open behind it." loading="lazy"></button><figcaption>After <kbd>Ctrl</kbd>+<kbd>R</kbd>: the app you just compiled runs in its own window (the yellow ball bounces), while Studio stays open behind it.</figcaption></figure>
+</div>
+<p>If a build fails, the output pane lists each error with its line number; press or click a red error line
+and the caret jumps straight to it.</p>
+
+<h2 id="editor">The editor</h2>
+<p>The editor is monospace with live <strong>syntax highlighting</strong> - keywords, types, strings,
+numbers, comments and preprocessor lines each in their own colour - a line-number gutter, and the usual
+editing keys: arrows and <kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move,
+<kbd>Shift</kbd>+movement to select, and <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>/<kbd>A</kbd>
+to cut, copy, paste and select all. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves. The <strong>Project</strong> list
+on the left shows the source files on your working disk; click one to open it.</p>
+
+<h2 id="unoc">The UnoC language</h2>
+<p>Apps are written in <strong>UnoC</strong>, a practical subset of C that the built-in compiler accepts.
+It has the integer types (with <code>long</code> at 4 bytes, matching the system), pointers, arrays,
+<code>struct</code>/<code>union</code>, <code>enum</code>, <code>typedef</code> and function pointers, the
+full C expression and statement set, constant initializers, and a small preprocessor
+(<code>#include "X.H"</code>, object-like <code>#define</code>, <code>#ifdef</code>). Floating point,
+variadic functions and function-like macros are left out. An app <code>#include</code>s <code>UNO.H</code>
+(shipped in the <code>SDK</code> folder on the disk) and defines one entry point that returns a vtable the
+desktop drives:</p>
+<pre><code>#include &quot;UNO.H&quot;          /* the whole app SDK in one header */
+
+static short bx = 40, by = 30, vx = 3, vy = 2;   /* a bouncing ball */
+
+static void draw(UnoWin *w) {
+    Rect f;
+    short x0 = w-&gt;bounds.left + 10, y0 = w-&gt;bounds.top + TBAR_H + 8;
+    SetRect(&amp;f, x0, y0, x0 + 260, y0 + 160);
+    fill_rgb(&amp;f, &amp;kField);                        /* true-colour fill    */
+    SetRect(&amp;f, x0 + bx - 9, y0 + by - 9, x0 + bx + 9, y0 + by + 9);
+    fill_rgb(&amp;f, &amp;kBall);
+}
+static void tick(void) {                          /* ~60 times a second  */
+    bx += vx; by += vy;
+    if (bx &lt; 9 || bx &gt; 251) vx = -vx;
+    if (by &lt; 9 || by &gt; 151) vy = -vy;
+    { UnoWin *w = find_app_window(APP_RUNNER); if (w) draw_window(w); }
+}
+static const GameRGB kBall  = { 240, 200, 40, C_WHITE };
+static const GameRGB kField = {  10,  40, 120, C_BLUE  };
+
+/* the vtable the desktop drives: draw / key / click / tick / opened / closed */
+static const AppInterface kIface = {
+    draw, 0, 0, tick, 0, 0, &quot;Bouncer&quot;, { 30, 30, 330, 260 }
+};
+const AppInterface *uno_app_main(const KernelApi *k) { gK = k; return &amp;kIface; }</code></pre>
+<p>That is the whole shape of an app: draw into your window, react to keys and ticks, and hand back the
+vtable. The <a href="dev-apps.html">Writing apps</a> and <a href="dev-api.html">API reference</a> pages
+cover the app model and the calls in depth; the same reference ships inside UnoDOS under
+<strong>Help</strong> in Studio's menu bar.</p>
+
+<h2 id="ai">The AI assistant</h2>
+<p>Studio has a built-in assistant that knows UnoC and the app API, so it can write and fix UnoDOS apps
+for you. It connects to <strong>ChatGPT</strong> (OpenAI), <strong>Claude</strong> (Anthropic) or
+<strong>Gemini</strong> (Google) over a secure connection. On a roomy desktop it appears as a column on
+the right; on the compact default desktop, raise the resolution in the Control Panel to bring it in.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/studio_ai.png" aria-label="Enlarge: Studio on a larger desktop, with the assistant column on the right beside the editor and project list. The editor&#x27;s colouring shows keywords, types and numbers each in their own colour."><img src="assets/img/studio_ai.png" alt="Studio on a larger desktop, with the assistant column on the right beside the editor and project list. The editor&#x27;s colouring shows keywords, types and numbers each in their own colour." loading="lazy"></button><figcaption>Studio on a larger desktop, with the <b>assistant</b> column on the right beside the editor and project list. The editor's colouring shows keywords, types and numbers each in their own colour.</figcaption></figure>
+<p>You supply your own API key from your provider and enter it once in the assistant's input line:</p>
+<pre><code>/provider anthropic          (or: openai, gemini)
+/key sk-ant-...              (your API key)
+/save                        (remember it)</code></pre>
+<p>Then type a question and press <kbd>Enter</kbd>. The <strong>AI</strong> menu's <em>Ask Assistant</em>
+attaches the file you are editing to your next message, so you can ask "why won't this build?" with the
+code included.</p>
+<div class="note warn"><b>About your key and privacy</b>Your API key is stored in plain text in <code>AI.CFG</code> on the disk - anyone with the disk can read it, so use a low-value, revocable key rather than your main one. Your questions (and any attached file) are sent to the provider you choose. Secure connections check the site certificate against the built-in trust store and use the machine clock, so a wrong clock will stop them.</div>
+
+<h2 id="ship">Studio is optional</h2>
+<p>Studio ships as a single loadable file, <code>APPS\STUDIO.UNO</code>, on the UnoDOS disk. A build that
+does not want the IDE simply leaves the file out - the rest of the system is identical, and Studio just
+does not appear in the programs menu.</p>
+
+<nav class="pagenav"><a href="developer.html">&lsaquo; Overview &amp; architecture</a><a class="nxt" href="dev-apps.html">Writing apps &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
