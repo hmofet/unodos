@@ -27,9 +27,9 @@ from harness import Qmp, keys, QMP_SOCK, OVMF_CODE, OVMF_VARS
 PHOTOS_MENU_INDEX = 16   # 7 native + 6 bridge + Runner + Browser + Studio
 
 # FAT order = build.sh's copy order = alphabetical
-PICS = ["bloom_png", "flag_bmp", "grad_tga", "moon_pgm",
-        "orbit_gif", "sunset_jpg", "tiles_qoi"]
-GIF_STEP = 4             # ORBIT.GIF's index in that walk
+PICS = ["bloom_png", "flag_bmp", "grad_tga", "lagoon_web",
+        "moon_pgm", "orbit_gif", "sunset_jpg", "tiles_qoi"]
+GIF_STEP = 5             # ORBIT.GIF's index in that walk
 
 
 def crop_view(ppm):

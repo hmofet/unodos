@@ -257,7 +257,7 @@ if [ "$1" != "legacy" ]; then
               -c -o "build/apps/photos.o" "apps/photos.c"
         # core + the IMAGE half only (the AUDIO half links into the kernel)
         for b in unomedia um_image um_inflate um_png um_jpg um_gif um_bmp \
-                 um_ico um_tga um_pnm um_qoi um_stub; do
+                 um_ico um_tga um_pnm um_qoi um_webp um_vp8 um_stub; do
             "$CC" $UCF -c -o "build/apps/um_$b.o" "../unomedia/$b.c"
             POBJ="$POBJ build/apps/um_$b.o"
         done
