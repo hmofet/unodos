@@ -173,6 +173,8 @@ typedef struct {
     void (*close)(void);                          /* free decoder buffers   */
 } um_idecoder;
 
+extern const um_idecoder um_idec_webp;  /* lossy (VP8), lossless (VP8L),
+                                           alpha, animation                */
 extern const um_idecoder um_idec_png;
 extern const um_idecoder um_idec_jpg;
 extern const um_idecoder um_idec_gif;

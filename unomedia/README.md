@@ -45,7 +45,8 @@ um_src (random-access bytes)          um_image_open(src, name, &info)
 | Format | File | Notes |
 |---|---|---|
 | **PNG**  | `um_png.c` + `um_inflate.c` | own RFC 1950/1951 inflate (32 KB window, streaming); color types 0/2/3/4/6, depths 1/2/4/8/16 (16 folds to 8), Adam7, tRNS |
-| **JPEG** | `um_jpg.c` | baseline sequential (SOF0/SOF1@8-bit), integer-only fixed-point IDCT, sampling h,v ∈ {1,2}, restart markers; MCU-row streaming |
+| **JPEG** | `um_jpg.c` | baseline + extended-sequential + full **progressive** (spectral selection, successive approximation, EOB runs; a truncated progressive file renders the coarse image it carries), integer-only IDCT, sampling h,v ∈ {1,2}, restart markers |
+| **WebP** | `um_webp.c` + `um_vp8.c` | lossy (complete RFC 6386 VP8 key-frame decode incl. the in-loop deblocking filter — RGBA bit-identical to libwebp), lossless (full VP8L: all transforms, meta-prefix groups, color cache), ALPH alpha on lossy frames, animated WebP with GIF-style compositing |
 | **GIF**  | `um_gif.c` | 87a/89a, streaming LZW, interlace, local palettes, full GCE (transparency, delays, disposal 0-3 incl. restore-previous), exact frame count on open |
 | **BMP**  | `um_bmp.c` | CORE/INFO/V4/V5, 1/4/8-bit palette, 16/32-bit with BI_BITFIELDS, 24-bit, RLE4/RLE8, both row orders; also the bare-DIB core ICO delegates to |
 | **ICO**  | `um_ico.c` | ICO/CUR directory, best-entry pick, PNG or DIB payload (delegates to the PNG/BMP decoders), AND-mask transparency |
@@ -67,10 +68,10 @@ MP3/AAC at aligned PSNR vs ffmpeg's decode of the same files, MIDI synth
 sanity. The pc64 in-OS pass is `pc64/tools/music_test.py`.
 
 **Identified, deliberately not decoded** (`um_stub.c`, the AAC-container precedent):
-WebP, TIFF, AVIF, HEIC, JPEG XL, SVG — each is recognised and refused with
-its name, so the viewer can say *"WebP recognised - no decoder in this
-build"* instead of the false *"not an image"*. Ditto inside real decoders:
-progressive/arithmetic/12-bit/CMYK JPEG and PAM (P7) refuse with precise
+TIFF, AVIF, HEIC, JPEG XL, SVG — each is recognised and refused with its
+name, so the viewer can say *"HEIC recognised - no decoder in this build"*
+instead of the false *"not an image"*. Ditto inside real decoders:
+arithmetic/12-bit/lossless/CMYK JPEG and PAM (P7) refuse with precise
 reasons through `um_error()`.
 
 ## Verifying
@@ -99,5 +100,15 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -ffreestanding -fno-stack-protector \
 ## Adding a format
 
 One new `um_<fmt>.c` defining a `um_idecoder`, plus a roster line in
-`unomedia.c` — nothing else changes. Writers (encode) will join as a
-parallel vtable when the first consumer (screenshots? Paint export?) lands.
+`um_image.c` / `um_audio.c` — nothing else changes. Writers (encode) will
+join as a parallel vtable when the first consumer (screenshots? Paint
+export?) lands.
+
+## What unomedia is NOT: unodoc
+
+SVG stays refused here on purpose: it is a *document*, not a raster
+bitstream — rendering it means XML, paths, CSS and text layout, a different
+kind of machine than a decoder. It is earmarked for **unodoc**, the planned
+sibling library for document formats (Word, Excel, PDF, SVG), which will
+stand next to unomedia the way unoui stands next to uno3d. Media bitstreams
+decode here; documents will render there.

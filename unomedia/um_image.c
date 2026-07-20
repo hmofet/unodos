@@ -14,7 +14,8 @@ int um_image_is(const char *name)
 {
     static const char *k[] = { "PNG", "JPG", "JPEG", "JFIF", "GIF", "BMP",
                                "DIB", "TGA", "PPM", "PGM", "PBM", "PNM",
-                               "QOI", "ICO", "CUR" };
+                               "QOI", "ICO", "CUR",
+                               "WEBP", "WEB" /* .webp truncated to 8.3 */ };
     char e[8];
     unsigned i;
     um_ext_of(name, e);
@@ -29,8 +30,8 @@ int um_image_is(const char *name)
  * is headerless BMP), the stub last (it exists to catch what nothing else
  * claimed but a human would still call an image). */
 static const um_idecoder *const kDec[] = {
-    &um_idec_png, &um_idec_jpg, &um_idec_gif, &um_idec_ico, &um_idec_bmp,
-    &um_idec_qoi, &um_idec_pnm, &um_idec_tga, &um_idec_stub,
+    &um_idec_png, &um_idec_jpg, &um_idec_gif, &um_idec_webp, &um_idec_ico,
+    &um_idec_bmp, &um_idec_qoi, &um_idec_pnm, &um_idec_tga, &um_idec_stub,
 };
 #define NDEC ((int)(sizeof kDec / sizeof kDec[0]))
 
