@@ -141,10 +141,40 @@ static void heap_init(void)
     gHead->next = 0;
 }
 
+#ifdef UNO_DEBUG
+#include "uno_debug.h"
+/* debug build: walkable heap stats for the HUD + crash reports, and the
+ * fail-every-Nth-malloc OOM injection the stress driver drives */
+void uno_heap_stats(unsigned long *used, unsigned long *free_,
+                    unsigned long *largest)
+{
+    Blk *b;
+    unsigned long u = 0, f = 0, l = 0;
+    for (b = gHead; b; b = b->next) {
+        if (b->used) u += (unsigned long)b->size;
+        else { f += (unsigned long)b->size;
+               if (b->size > l) l = (unsigned long)b->size; }
+    }
+    if (used) *used = u;
+    if (free_) *free_ = f;
+    if (largest) *largest = l;
+}
+#else
+void uno_heap_stats(unsigned long *used, unsigned long *free_,
+                    unsigned long *largest)
+{ if (used) *used = 0; if (free_) *free_ = 0; if (largest) *largest = 0; }
+#endif
+
 void *malloc(size_t n)
 {
     Blk *b;
     if (!gHead) heap_init();
+#ifdef UNO_DEBUG
+    if (uno_dbg_oom_tick()) {
+        uno_dbg_log("oom-inject: malloc(%lu) forced to fail", (unsigned long)n);
+        return 0;
+    }
+#endif
     if (n == 0) n = 1;
     n = ALIGN16(n);
     for (b = gHead; b; b = b->next) {
@@ -227,7 +257,12 @@ __asm__(
  * string helpers, and a compact snprintf/vsnprintf.  Shared with C apps.
  * ======================================================================== */
 long long llabs(long long v) { return v < 0 ? -v : v; }
+#ifdef UNO_DEBUG
+void uno_dbg_panic(const char *why);
+void abort(void) { uno_dbg_panic("abort() called"); for (;;) { } }
+#else
 void abort(void) { for (;;) { } }
+#endif
 
 char *strrchr(const char *s, int c)
 { const char *last = 0; do { if (*s == (char)c) last = s; } while (*s++); return (char *)last; }
