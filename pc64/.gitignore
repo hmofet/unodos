@@ -9,3 +9,7 @@ __pycache__/
 *.log
 tls_test/server.key
 tls_test/server.crt
+
+# MicroPython port build artifacts + developer-supplied Doom WADs
+build/upyhost/
+wads/
