@@ -1,3 +1,5 @@
+#include <stdarg.h>
+#include <stdint.h>
 /* ===========================================================================
  * UnoDOS/pc64 - freestanding mini-libc.
  *
@@ -219,3 +221,130 @@ __asm__(
     "___chkstk_ms:\n"
     "    ret\n"
 );
+
+/* ===========================================================================
+ * Extended libc for the MicroPython port (PYRT.UNO): number parsers, a few
+ * string helpers, and a compact snprintf/vsnprintf.  Shared with C apps.
+ * ======================================================================== */
+long long llabs(long long v) { return v < 0 ? -v : v; }
+void abort(void) { for (;;) { } }
+
+char *strrchr(const char *s, int c)
+{ const char *last = 0; do { if (*s == (char)c) last = s; } while (*s++); return (char *)last; }
+
+char *strstr(const char *hay, const char *needle)
+{
+    if (!*needle) return (char *)hay;
+    for (; *hay; hay++) {
+        const char *h = hay, *n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return (char *)hay;
+    }
+    return 0;
+}
+void *memchr(const void *s, int c, size_t n)
+{ const unsigned char *p = s; while (n--) { if (*p == (unsigned char)c) return (void *)p; p++; } return 0; }
+size_t strspn(const char *s, const char *set)
+{ size_t n = 0; for (; s[n]; n++) { const char *t = set; while (*t && *t != s[n]) t++; if (!*t) break; } return n; }
+
+static int dval(int c)
+{ if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'Z') return c - 'A' + 10; return 99; }
+
+unsigned long long strtoull(const char *s, char **end, int base)
+{
+    unsigned long long v = 0; int d;
+    while (*s == ' ' || (*s >= 9 && *s <= 13)) s++;
+    if (*s == '+') s++;
+    if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { s += 2; base = 16; }
+    else if (base == 0 && s[0] == '0') { base = 8; }
+    else if (base == 0) base = 10;
+    while ((d = dval((unsigned char)*s)) < base) { v = v * (unsigned)base + (unsigned)d; s++; }
+    if (end) *end = (char *)s;
+    return v;
+}
+long long strtoll(const char *s, char **end, int base)
+{
+    int neg = 0;
+    while (*s == ' ' || (*s >= 9 && *s <= 13)) s++;
+    if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+    { unsigned long long v = strtoull(s, end, base); return neg ? -(long long)v : (long long)v; }
+}
+long strtol(const char *s, char **end, int base) { return (long)strtoll(s, end, base); }
+unsigned long strtoul(const char *s, char **end, int base) { return (unsigned long)strtoull(s, end, base); }
+int atoi(const char *s) { return (int)strtoll(s, 0, 10); }
+
+/* simple insertion+quicksort hybrid; MicroPython's own sort is internal, this
+   is only for stray libc qsort references */
+void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void *))
+{
+    char *a = base, tmp;
+    size_t i, j, k;
+    for (i = 1; i < n; i++)
+        for (j = i; j > 0 && cmp(a + j * sz, a + (j - 1) * sz) < 0; j--)
+            for (k = 0; k < sz; k++) { tmp = a[j*sz+k]; a[j*sz+k] = a[(j-1)*sz+k]; a[(j-1)*sz+k] = tmp; }
+}
+
+/* ---- compact vsnprintf: %d/i/u/x/X/o/c/s/p/%, l/ll/z length, width, 0/-/+ ---
+   Float (%f/%g/%e) is deferred to MicroPython's own float formatter; a bare
+   %f prints "<flt>" rather than pulling in a dtoa. */
+static int u64_str(unsigned long long v, int base, int upper, char *out)
+{
+    char t[24]; int n = 0, i; const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    if (!v) t[n++] = '0';
+    while (v) { t[n++] = dig[v % (unsigned)base]; v /= (unsigned)base; }
+    for (i = 0; i < n; i++) out[i] = t[n - 1 - i];
+    return n;
+}
+int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
+{
+    size_t o = 0;
+    #define PUT(ch) do { if (o + 1 < cap) buf[o] = (char)(ch); o++; } while (0)
+    for (; *fmt; fmt++) {
+        if (*fmt != '%') { PUT(*fmt); continue; }
+        fmt++;
+        { int left = 0, zero = 0, plus = 0, width = 0, lng = 0, i, neg = 0; char nb[24]; int nn;
+          unsigned long long uv; long long sv;
+          while (*fmt=='-'||*fmt=='0'||*fmt=='+'||*fmt==' '||*fmt=='#') {
+              if (*fmt=='-') left=1; else if (*fmt=='0') zero=1; else if (*fmt=='+') plus=1; fmt++; }
+          while (*fmt >= '0' && *fmt <= '9') width = width*10 + (*fmt++ - '0');
+          if (*fmt=='.') { fmt++; while (*fmt>='0'&&*fmt<='9') fmt++; }  /* precision parsed, ignored for ints */
+          while (*fmt=='l'||*fmt=='z'||*fmt=='h'||*fmt=='j'||*fmt=='t') { if (*fmt=='l') lng++; if (*fmt=='z'||*fmt=='j'||*fmt=='t') lng=2; fmt++; }
+          switch (*fmt) {
+          case 'd': case 'i':
+              sv = lng>=2 ? va_arg(ap,long long) : (long long)va_arg(ap,int);
+              if (sv < 0) { neg = 1; uv = (unsigned long long)(-sv); } else uv = (unsigned long long)sv;
+              nn = u64_str(uv,10,0,nb); goto emit_num;
+          case 'u': uv = lng>=2 ? va_arg(ap,unsigned long long) : (unsigned long long)va_arg(ap,unsigned); nn=u64_str(uv,10,0,nb); goto emit_num;
+          case 'x': uv = lng>=2 ? va_arg(ap,unsigned long long) : (unsigned long long)va_arg(ap,unsigned); nn=u64_str(uv,16,0,nb); goto emit_num;
+          case 'X': uv = lng>=2 ? va_arg(ap,unsigned long long) : (unsigned long long)va_arg(ap,unsigned); nn=u64_str(uv,16,1,nb); goto emit_num;
+          case 'o': uv = lng>=2 ? va_arg(ap,unsigned long long) : (unsigned long long)va_arg(ap,unsigned); nn=u64_str(uv,8,0,nb); goto emit_num;
+          case 'p': PUT('0'); PUT('x'); uv=(unsigned long long)(uintptr_t)va_arg(ap,void*); nn=u64_str(uv,16,0,nb); for(i=0;i<nn;i++) PUT(nb[i]); break;
+          case 'c': PUT((char)va_arg(ap,int)); break;
+          case 's': { const char *s = va_arg(ap,const char*); int pad; if(!s) s="(null)";
+                      { int sl=0; while(s[sl]) sl++; pad=width-sl;
+                        if(!left) while(pad-->0) PUT(' ');
+                        while(*s) PUT(*s++);
+                        if(left) while(pad-->0) PUT(' '); } } break;
+          case 'f': case 'g': case 'e': { double dd = va_arg(ap,double); (void)dd; const char *m="<flt>"; while(*m) PUT(*m++); } break;
+          case '%': PUT('%'); break;
+          default: PUT('%'); if (*fmt) PUT(*fmt); break;
+          }
+          continue;
+          emit_num:
+          { int total = nn + (neg||plus?1:0), pad = width - total;
+            if (!left && !zero) while (pad-- > 0) PUT(' ');
+            if (neg) PUT('-'); else if (plus) PUT('+');
+            if (!left && zero) while (pad-- > 0) PUT('0');
+            for (i = 0; i < nn; i++) PUT(nb[i]);
+            if (left) while (pad-- > 0) PUT(' '); }
+        }
+    }
+    if (cap) buf[o < cap ? o : cap - 1] = 0;
+    #undef PUT
+    return (int)o;
+}
+int snprintf(char *buf, size_t n, const char *fmt, ...)
+{ va_list ap; int r; va_start(ap,fmt); r = vsnprintf(buf,n,fmt,ap); va_end(ap); return r; }
+int printf(const char *fmt, ...) { (void)fmt; return 0; }   /* no stdout stream here */
