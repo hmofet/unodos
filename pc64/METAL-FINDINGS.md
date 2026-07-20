@@ -12,9 +12,9 @@ Raw reports are preserved off each stick under
 
 | Machine | CPU | Runs | Notes |
 |---------|-----|------|-------|
-| Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | stays firmware-**attached** (no i8042; eMMC; i2c-hid didn't bind). Both runs' reports saved. |
-| X1 Carbon (Gen 8) | — | pending | expected to **detach** → exercises the native-IDT / LAPIC-watchdog / CF9 paths |
-| Latitude | — | pending | expected to detach (AHCI) |
+| Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
+| X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
+| Latitude | — | pending | expected to detach (AHCI) — but see F6 before assuming it will |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
 ZERO hangs.** `surface-2026-07-20-run2/`. A pass is ~30 s at the default
@@ -23,6 +23,12 @@ metal: no self-crash across 31 passes (F1) and no black-screen (F2). Telemetry
 wrote 31 `PF` snapshots + `BOOTENV.TXT` and survived the operator's power-off.
 **Caveat:** because nothing crashed, F2's *attached-reset* fix is still only
 QEMU-verified — no real fault occurred on metal to exercise reset-and-reboot.
+
+**X1 Carbon run 1 (bounded `passes=3`): completed all 3 passes in 135 s, ZERO
+crashes, ZERO hangs.** `x1carbon-2026-07-20/`. The bounded-run machinery worked
+as designed (3 `PF` snapshots, then the driver went idle and handed back the
+desktop). Two machines are now clean under stress; the substantive findings are
+environmental, not crash bugs.
 
 ## Severity key
 
@@ -51,13 +57,22 @@ uncollectable-looking (machine appears hung, not rebooted).
 - Evidence: CR003 captured with `detached: 0`, then no reboot; operator saw black screen + OSK.
 - **Already fixed** (commit 6010041): use the firmware `ResetSystem` runtime service while attached; native CF9 only once detached / as fallback. (QEMU's CF9 works, so it never surfaced there.)
 
-### F3 — framebuffer mapped UNCACHED on the Surface  ·  OS / PERF  ·  S3 (S2 for UX)  ·  OPEN
+### F3 — framebuffer mapped UNCACHED (both laptops)  ·  OS / PERF  ·  S3 (S2 for UX)  ·  OPEN
 The GOP framebuffer is covered by a variable MTRR of type **UC**, so every VRAM
 write is uncached — measured **~14 MB/s vs ~1.8 GB/s to RAM (≈1:130000)**. This
 is the review's predicted "slideshow UI". Present is `linear` (direct CPU
 writes), so the whole UI pays the UC penalty on every changed pixel; the
 existing dirty-row/shadow tracking limits but does not remove it.
-- **Reproduced in run 2** with near-identical numbers (`fb bench: vram 14125 KB/s ram 1793855911 KB/s ratio 1:126998`), same `mtrr6 ... type=0`. Two independent data points.
+- **NOT machine-specific — reproduced on BOTH laptops, three data points:**
+  - Surface run 1: `vram 14062 KB/s`, ratio 1:130062, via `mtrr6` (coarse, >4 GB)
+  - Surface run 2: `vram 14125 KB/s`, ratio 1:126998, same MTRR
+  - **X1 Carbon: `vram 24937 KB/s ram 3001222540 KB/s ratio 1:120352`**, via a
+    *different* MTRR — `mtrr0 base=80000000 mask=7f80000800 type=0`, i.e. the
+    32-bit MMIO hole (0x80000000-0xFFFFFFFF) with `fb_base c0000000` inside it.
+  Different firmware, different MTRR, same outcome: the framebuffer is UC and
+  the UC range also covers device MMIO, so the same "cannot simply flip it"
+  constraint applies on both. This is a general pc64 problem, not a Surface
+  quirk — which raises its priority for the fix session.
 - Evidence (`surface-2026-07-20/BOOTENV.TXT`):
   - `gop: mode 1536x1024 stride 1536 pixfmt 1 fb_base 4000000000 present=linear`
   - `mtrr6 covers fb: base=4000000000 mask=4000000800 type=0 (UC - SLOW PRESENT!)`
@@ -76,13 +91,15 @@ existing dirty-row/shadow tracking limits but does not remove it.
   - Cheaper partial mitigations to weigh: present via GOP `Blt()` when the fb is
     UC (firmware blitter may DMA); reduce full-screen repaints further.
 
-### F4 — I2C-HID pointer/keyboard don't bind on the Surface  ·  OS / DRIVER  ·  S2 (feature) / S4 (OSK)  ·  OPEN
+### F4 — I2C-HID pointer/keyboard bind on NO tested machine  ·  OS / DRIVER  ·  S2 (feature) / S4 (OSK)  ·  OPEN
 Three LPSS I2C controllers are found but **no** I2C-HID device binds, so the
 native trackpad and keyboard are unavailable; input falls back to the firmware
 Absolute/Simple pointers, and because no native keyboard binds, firmware ConIn
 keeps being polled → the firmware on-screen keyboard stays drawn (the OSK icon).
-This is also why the Surface never detaches.
-- **Reproduced in run 2** (identical: `ctrls=3 present=0`).
+It is also why *neither* laptop detaches (see F6).
+- **Reproduced on both laptops**: Surface runs 1+2 `ctrls=3 present=0`; **X1
+  Carbon `ctrls=2 present=0`**. The I2C-HID probe finds controllers on every
+  machine tested and binds a device on none of them. See F6 for the knock-on.
 - Evidence (`BOOTENV.TXT`): `i2c-hid: ctrls=3 present=0 addr=0 desc_parsed=0`;
   `pointer: fw_simple=1 fw_abs=3 detach_blocked=0`; `ps2: kbd=0 aux=0`;
   `usb-hid: kbd=0 mouse=0`.
@@ -90,14 +107,32 @@ This is also why the Surface never detaches.
   no device (address discovery? the Surface's HID-over-I2C descriptor path?).
   Cross-ref the LPSS-clock / 64-bit-BAR history in the pc64 trackpad notes.
 
-### F5 — open-window count creeps up over a long run  ·  HARNESS (watch)  ·  S4  ·  OPEN
-Across run 2 the driver's open-window count drifted 9 → 12 over 31 passes: the
-smoke phase opens more than the close phase closes. Harmless at this rate, but
-unoui has a 24-window cap, so a long enough soak would start hitting `ui_add`
-failures and the run would silently change character (fewer apps actually
-opening). Not an OS bug — it is the driver's phase balance. Rebalance if we
-ever do very long soaks; it does not affect bounded `passes=N` runs.
-- Evidence: `PF002` `open_windows=9` → `PF032` `open_windows=12` (run 2).
+### F5 — ~~open-window count creeps up over a long run~~  ·  WITHDRAWN (my error)
+Originally filed from run 2's *first and last* snapshots (9 → 12) as a monotonic
+creep toward unoui's 24-window cap. **Reading the full 31-snapshot series
+refutes it**: the count oscillates in a bounded band and never trends upward —
+`9 13 14 15 12 12 11 14 13 13 13 12 13 11 9 14 15 11 14 14 12 10 12 14 12 15 13
+11 12 11 12`. The open and close phases are balanced. No action needed; kept
+here so the fix session doesn't chase it. Lesson: don't infer a trend from two
+endpoints when the whole series is sitting right there.
+
+### F6 — neither laptop detaches, so the whole native stack is untested on metal  ·  OS / COVERAGE  ·  S2  ·  OPEN
+The X1 Carbon was expected to detach (ExitBootServices → our own drivers). It
+does not: `detached: 0` with **`detach_blocked=1`**. The detach gate's
+"would this strand the pointer?" guard fires — the machine has LPSS I2C
+controllers (`ctrls=2`) but no I2C-HID pointer bound (F4), and no native USB-HID
+pointer, so detaching would kill the only working pointer (firmware
+`fw_simple=2 fw_abs=1`). The guard is behaving *correctly*; F4 is the root cause.
+- **Consequence, and the reason this is S2:** on both machines tested, pc64 runs
+  entirely on firmware services. The M3 decoupling work — our own IDT, the LAPIC
+  watchdog, native AHCI/NVMe storage, native PS/2 input, CF9 reset — has
+  therefore **never executed on real hardware**. Every metal result so far
+  describes only the attached path. (`ps2: kbd=0 aux=0` on the X1 is not
+  evidence of a missing i8042: `uno_ps2_init()` only runs post-detach, so those
+  fields are simply uninitialised.)
+- Fix F4 and the X1 should detach, which would open up the whole untested half.
+- Until then, treat "the Latitude will detach" as an assumption to verify, not a
+  given.
 
 ---
 

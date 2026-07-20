@@ -2033,7 +2033,18 @@ int main(void)
                 { char hud[96];
                   int n = uno_dbg_hud(hud, sizeof hud);
                   if (n > 0) fb_text(FB_W - fb_text_w(hud) - 4, 3, hud,
-                                     FB_RGB(255, 245, 130), FB_RGB(28, 30, 48)); }
+                                     FB_RGB(255, 245, 130), FB_RGB(28, 30, 48));
+                  /* run state under the HUD: the operator must be able to see
+                     at a glance whether a bounded run has FINISHED (safe to
+                     shut down) or is merely slow - guessing that is how a run
+                     gets powered off mid-pass. */
+                  { const char *st = pc64_stress_status();
+                    if (st) {
+                        int done = (st[7] == 'C' || st[7] == 'S');   /* COMPLETE/STOPPED */
+                        fb_text(FB_W - fb_text_w(st) - 4, 3 + fb_text_h() + 2, st,
+                                done ? FB_RGB(120, 255, 140) : FB_RGB(160, 200, 255),
+                                FB_RGB(28, 30, 48));
+                    } } }
                 t1 = uno_native_rdtsc();
                 uno_pc64_present();
                 uno_dbg_frame_present_cyc(uno_native_rdtsc() - t1);

@@ -55,6 +55,13 @@ static unsigned long g_frame;
 static unsigned long g_action;
 static int   g_pass;
 
+/* On-screen run state, drawn under the HUD by the shell.  Without this the
+ * operator cannot tell a finished run from a slow one - they just see apps
+ * cycling and have to guess whether it is safe to power down. */
+static char g_status[72];
+const char *pc64_stress_status(void)
+{ return g_status[0] ? g_status : 0; }
+
 /* Match `key` as a whole word on a NON-COMMENT line.  A naive strstr over the
  * whole file is wrong: the shipped STRESS.CFG documents the keys in a comment
  * ("# keys: once fast slow allow-force"), and substring-matching that comment
@@ -133,6 +140,8 @@ static void arm(void)
                        uno_dbg_log("stress: %d prior reports - THROTTLED", cr); }
     }
     uno_dbg_write_bootenv();            /* snapshot BOOTENV.TXT while safe */
+    if (g_max_passes) snprintf(g_status, sizeof g_status, "STRESS running  pass 1/%d", g_max_passes);
+    else              snprintf(g_status, sizeof g_status, "STRESS running  (endless - F12 stops)");
     uno_dbg_log("stress: ARMED (passes=%d force=%d/kind%d speed=%d, %d prior reports)",
                 g_max_passes, g_allow_force, g_force_kind, g_speed,
                 uno_dbg_crash_count());
@@ -309,6 +318,9 @@ static void run_action(void)
             uno_dbg_crash_count());
         uno_dbg_write_perf(buf, n);
         g_pass++;
+        if (g_max_passes) snprintf(g_status, sizeof g_status, "STRESS running  pass %d/%d",
+                                   g_pass + 1 > g_max_passes ? g_max_passes : g_pass + 1, g_max_passes);
+        else              snprintf(g_status, sizeof g_status, "STRESS running  pass %d (endless)", g_pass + 1);
         uno_dbg_log("stress: === pass %d ===", g_pass);
 
         if (g_pass == 1 && g_allow_force) {
@@ -332,6 +344,9 @@ static void run_action(void)
             while (pc64_dbg_open_count() > 1 && guard-- > 0)
                 pc64_dbg_close_focused();
             pc64_dbg_mark_dirty();
+            snprintf(g_status, sizeof g_status,
+                     "STRESS COMPLETE  %d/%d passes  -  SAFE TO SHUT DOWN",
+                     g_pass, g_max_passes);
             uno_dbg_log("stress: %d pass(es) done - driver IDLE, desktop is yours "
                         "(use Start > Shut Down)", g_pass);
         }
@@ -351,6 +366,8 @@ void pc64_stress_stop(void)
     uno_dbg_oom_every = 0;                 /* release any OOM injection */
     while (pc64_dbg_open_count() > 1 && guard-- > 0) pc64_dbg_close_focused();
     pc64_dbg_mark_dirty();
+    snprintf(g_status, sizeof g_status,
+             "STRESS STOPPED (F12) after %d pass(es)  -  SAFE TO SHUT DOWN", g_pass);
     uno_dbg_log("stress: STOPPED by operator (F12) after %d pass(es)", g_pass);
 }
 
