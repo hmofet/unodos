@@ -10,9 +10,24 @@
 #include "fb.h"
 #include "unoui_theme.h"
 
-/* app icon ids match the shell's app enum order */
-enum { IC_CTRL, IC_EDIT, IC_FILES, IC_SYS, IC_CLOCK, IC_CANVAS, IC_SETUP,
-       IC_DOSTRIS, IC_PACMAN, IC_OUTLAST, IC_MUSIC, IC_TRACKER, IC_PAINT };
+/* The emblem ids live in pc64_icons.h and are stable: an app names the icon
+ * it wants, so apps can be added, removed or reordered - including ones loaded
+ * from storage at runtime - without disturbing anyone else's artwork. */
+#define IC_CTRL    PCI_CTRL
+#define IC_EDIT    PCI_EDIT
+#define IC_FILES   PCI_FILES
+#define IC_SYS     PCI_SYS
+#define IC_CLOCK   PCI_CLOCK
+#define IC_SETUP   PCI_SETUP
+#define IC_MUSIC   PCI_MUSIC
+#define IC_DOSTRIS PCI_DOSTRIS
+#define IC_PACMAN  PCI_PACMAN
+#define IC_OUTLAST PCI_OUTLAST
+#define IC_TRACKER PCI_TRACKER
+#define IC_PAINT   PCI_PAINT
+#define IC_NETWORK PCI_NETWORK
+#define IC_RUNNER  PCI_RUNNER
+#define IC_BROWSER PCI_BROWSER
 
 /* ---- theme-aware recolouring -------------------------------------------
  * Icons adopt the ACTIVE theme so they stop looking "Aurora" on a retro
@@ -141,15 +156,6 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(cx, cy, cx + G(6), cy + G(3), FB_RGB(200, 60, 60));         /* hour */
         disc(cx, cy, G(2), FB_RGB(30, 30, 45));
         break; }
-    case IC_CANVAS: {                                /* artist palette */
-        disc(cx, cy, G(13), FB_RGB(222, 192, 150));
-        ring(cx, cy, G(13), G(1), FB_RGB(150, 120, 80));
-        disc(cx + G(5), cy + G(5), G(3), FB_RGB(0, 0, 0));              /* thumb hole */
-        disc(cx - G(5), cy - G(4), G(2), FB_RGB(220, 60, 60));
-        disc(cx + G(1), cy - G(6), G(2), FB_RGB(60, 180, 70));
-        disc(cx + G(6), cy - G(2), G(2), FB_RGB(60, 110, 230));
-        disc(cx - G(6), cy + G(3), G(2), FB_RGB(240, 205, 60));
-        break; }
     case IC_SETUP: {                                 /* install: disk + down arrow */
         fb_px platter = FB_RGB(70, 76, 92), sheen = FB_RGB(105, 112, 130);
         fb_px arrow = FB_RGB(70, 190, 110);
@@ -208,7 +214,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         disc(ox + G(6), oy + G(25), G(3), FB_RGB(220, 60, 60));         /* bristle paint */
         disc(ox + G(24), oy + G(24), G(4), FB_RGB(60, 120, 230));       /* colour dab */
         break; }
-    case IC_PAINT + 1: {                             /* Network: connected nodes */
+    case IC_NETWORK: {                               /* connected nodes */
         disc(ox+G(8),  oy+G(8),  G(3), FB_RGB(70,180,230));
         disc(ox+G(24), oy+G(10), G(3), FB_RGB(80,200,120));
         disc(ox+G(14), oy+G(24), G(3), FB_RGB(240,200,60));
@@ -216,7 +222,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(ox+G(8), oy+G(8), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         seg(ox+G(24), oy+G(10), ox+G(14), oy+G(24), FB_RGB(160,175,200));
         break; }
-    case IC_PAINT + 3: {                             /* Browser: window + globe */
+    case IC_BROWSER: {                               /* window + globe */
         rr(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(245,246,250));
         frame(ox+G(4), oy+G(5), G(24), G(22), FB_RGB(70,80,110));
         rr(ox+G(4), oy+G(5), G(24), G(6), FB_RGB(70,120,210));   /* address bar */
@@ -226,7 +232,7 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         seg(cx-G(6), oy+G(18), cx+G(6), oy+G(18), FB_RGB(230,245,235));
         seg(cx, oy+G(12), cx, oy+G(24), FB_RGB(230,245,235));
         break; }
-    case IC_PAINT + 2: {                             /* Runner3D: perspective road */
+    case IC_RUNNER: {                                /* perspective road */
         rr(ox + G(2), oy + G(3), G(28), G(12), FB_RGB(90,150,225));    /* sky */
         rr(ox + G(2), oy + G(15), G(28), G(14), FB_RGB(45,140,55));    /* grass */
         { int yy; for (yy = 0; yy < G(14); yy++) {                     /* road wedge */
@@ -235,10 +241,18 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         { int yy; for (yy = 0; yy < G(14); yy += G(3))                 /* centre line */
             hln(cx-1, oy + G(15) + yy, 2, FB_RGB(240,220,60)); }
         break; }
-    default:
-        rr(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(160, 170, 190));
-        frame(ox + G(6), oy + G(6), G(20), G(20), FB_RGB(60, 70, 90));
-        break;
+    case PCI_GENERIC:
+    default: {
+        /* Any app that does not name a known emblem - notably one loaded from
+         * storage at runtime. Deliberately a real icon rather than a debug
+         * placeholder: a user's own app should look like an app, not like
+         * something went wrong. */
+        rr(ox + G(5), oy + G(4), G(22), G(24), FB_RGB(238, 240, 246));
+        frame(ox + G(5), oy + G(4), G(22), G(24), FB_RGB(90, 100, 125));
+        rr(ox + G(5), oy + G(4), G(22), G(6), FB_RGB(95, 125, 200));   /* title bar */
+        { int i; for (i = 0; i < 3; i++)
+            rr(ox + G(9), oy + G(14) + i * G(4), G(14), G(2), FB_RGB(150, 160, 180)); }
+        break; }
     }
 #undef G
 }

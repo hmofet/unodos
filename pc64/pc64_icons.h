@@ -5,7 +5,25 @@
 #define PC64_ICONS_H
 #include "unoui.h"
 
-/* draw app `icon`'s emblem to fit `box` (no label) - used by the taskbar */
+/* ---- stable emblem ids ----------------------------------------------------
+ * An icon is a property OF AN APP, not of its position in the launcher. These
+ * ids are this module's API and never renumber: an app names the emblem it
+ * wants and the shell can gain, lose or reorder apps freely.
+ *
+ * They used to be implicit - the icon id was simply the app index - which
+ * meant deleting one app silently gave every later app its neighbour's icon.
+ * Apps loaded from storage at runtime could never have worked that way at all,
+ * since nothing static can predict their index. PCI_GENERIC is the fallback
+ * for exactly those: an app that does not name a known emblem still gets a
+ * sensible one. */
+typedef enum {
+    PCI_GENERIC = 0,
+    PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC,
+    PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT,
+    PCI_NETWORK, PCI_RUNNER, PCI_BROWSER
+} pc64_icon_id;
+
+/* draw emblem `icon` (a PCI_*) to fit `box` (no label) - used by the taskbar */
 void pc64_icon_emblem(int icon, unoui_rect box);
 
 /* the unoui_icon_art hook: emblem centred in r + the label below it */

@@ -23,6 +23,17 @@
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
+#include "pc64_native.h"     /* PS/2 kbd/aux bind status (System readout)   */
+/* firmware pointer-instance counts + the detach-held-for-pointer flag */
+void uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked);
+/* trackpad pointer speed, as a percentage (Control Panel slider) */
+void uno_pc64_pointer_speed(int pct);
+int  uno_pc64_pointer_speed_get(void);
+int  uno_pc64_detached(void);
+void pc64_music_closed(void);
+int  pc64_music_key(int uni, int scan);
+int  pc64_clock_action(const unoui_action *a);
+void pc64_clock_tick(void);
 #ifdef UNO_ACPI
 #include "acpi_power.h"      /* unoacpi: AML battery/lid (portable consumer API) */
 #include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
@@ -49,14 +60,16 @@ static const char *kThemeNames[NTHEMES];
  * migrated legacy apps (games / paint / tracker / music), each hosted in a
  * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
  * index a-NNATIVE. */
-enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_DEMO, APP_SETUP, NNATIVE };
+enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
+       APP_MUSIC, NNATIVE };
 #define NEXTRA 2                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
-    { "Control Panel", "Editor", "Files", "System", "Clock", "Canvas", "Install" };
+    { "Control Panel", "Editor", "Files", "System", "Clock", "Install",
+      "Music" };
 
 /* taskbar height follows the active font (26 px under the classic 8px font) */
 static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
@@ -109,7 +122,8 @@ static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
 
 static const char *kNativeShort[NNATIVE] =
-    { "Control", "Editor", "Files", "System", "Clock", "Canvas", "Install" };
+    { "Control", "Editor", "Files", "System", "Clock", "Install",
+      "Music" };
 static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
@@ -117,11 +131,49 @@ static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
+/* Which emblem an app wears. A LOOKUP, not the app's index: apps come and go
+ * (and will eventually be loaded from storage, where no static numbering can
+ * predict them), so an app names its icon and everyone else's stays put.
+ * Anything unrecognised gets PCI_GENERIC rather than a neighbour's art. */
+static const unsigned char kNativeIcon[NNATIVE] = {
+    PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC
+};
+static const unsigned char kBridgeIcon[UNOAPP_COUNT] = {
+    PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT, PCI_NETWORK
+};
+static int app_icon(int a)
+{
+    if (a == EX_RUNNER)  return PCI_RUNNER;
+    if (a == EX_BROWSER) return PCI_BROWSER;
+    if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
+    if (a >= NNATIVE && a - NNATIVE < UNOAPP_COUNT) return kBridgeIcon[a - NNATIVE];
+    return PCI_GENERIC;
+}
+
+/* ---- desktop icon arrangement (Control Panel) ------------------------------
+ * g_desk_flow: 0 = fill columns (down, then across), 1 = fill rows (across,
+ * then down). g_desk_sort: 0 = launcher order, 1 = by name. Kept as plain
+ * settings so the desktop can be rebuilt from them at any time.
+ *
+ * An icon the user has DRAGGED stops taking part in that flow: its position is
+ * remembered in g_icon_pos and survives a rebuild (theme, font or resolution
+ * change all rebuild the desktop). Auto-arrange forgets every placement and
+ * lets the flow lay them out again. */
+static int g_desk_flow, g_desk_sort;
+static int g_desk_snap = 1;             /* snap dragged icons to the grid     */
+static int g_desk_lock;                 /* lock: no dragging at all           */
+static struct { short x, y; unsigned char placed; } g_icon_pos[32];
+
+/* the layout grid, shared by build_desktop and the drag snap */
+static int desk_cell_w(void) { return 20 + fb_text_w("MMMMMMMM"); }
+static int desk_cell_h(void) { return 34 + fb_text_h() + 8; }
+
 /* widget ids */
 enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_MENU, ID_BODY, ID_NAME, ID_SAVE, ID_OPEN, ID_NEWF, ID_FILES, ID_FMT,
-       ID_FULL, ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
-       ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_LIDSLP,
+       ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
+       ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
+       ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -204,7 +256,34 @@ static void build_ctrl(unoui_window *w)
     y += fh + 10;
     unoui_add_check(w, 8, y, "Lid sleep", g_lidsleep);
     w->w[w->nw-1].id = ID_LIDSLP;
-    y += fh + 12;
+    y += fh + 10;
+    /* how the desktop icons lay out - flow direction and sort order */
+    { static const char *flow[] = { "Columns", "Rows" };
+      static const char *sort[] = { "Launcher order", "Name" };
+      int lw = fb_text_w("Desktop icons:") + 8;
+      unoui_add_label(w, 8, y + lofs, "Desktop icons:");
+      unoui_add_dropdown(w, 8 + lw, y, fb_text_w("Columns") + 30, flow, 2, g_desk_flow);
+      w->w[w->nw-1].id = ID_DFLOW;
+      unoui_add_dropdown(w, 8 + lw + fb_text_w("Columns") + 36, y,
+                         fb_text_w("Launcher order") + 30, sort, 2, g_desk_sort);
+      w->w[w->nw-1].id = ID_DSORT; }
+    y += ch + 8;
+    { int bw = fb_text_w("Auto-arrange") + 16;
+      unoui_add_check(w, 8, y, "Snap to grid", g_desk_snap);
+      w->w[w->nw-1].id = ID_DSNAP;
+      unoui_add_check(w, 8 + fb_text_w("Snap to grid") + 34, y, "Lock desktop", g_desk_lock);
+      w->w[w->nw-1].id = ID_DLOCK;
+      unoui_add_button(w, cw - bw - 8, y - 4, bw, "Auto-arrange", 0);
+      w->w[w->nw-1].id = ID_DARRANGE; }
+    y += ch + 10;
+    /* pointer speed - the trackpad's pad-to-screen ratio depends on physical
+       sizes the HID descriptor does not report, so it is a setting */
+    { int lw = fb_text_w("Pointer speed:") + 8;
+      unoui_add_label(w, 8, y + lofs, "Pointer speed:");
+      unoui_add_slider(w, 8 + lw, y, cw - lw - 8, 25, 800,
+                       uno_pc64_pointer_speed_get());
+      w->w[w->nw-1].id = ID_PSPEED; }
+    y += ch + 12;
     unoui_add_label(w, 8, y + lofs, "Volume");
     x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, 70); x->id = ID_VOL;
     y += row;
@@ -231,8 +310,10 @@ static void build_ctrl(unoui_window *w)
  * their own translation units; the shell just delegates the build. */
 void pc64_write_build(unoui_window *w);
 void pc64_files_build(unoui_window *w);
+void pc64_music_build(unoui_window *w);
 static void build_edit(unoui_window *w)  { pc64_write_build(w); }
 static void build_files(unoui_window *w) { pc64_files_build(w); }
+static void build_music(unoui_window *w) { pc64_music_build(w); }
 /* tiny no-libc string builders for the diagnostics line */
 static char *ap_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
 static char *ap_int(char *p, int v) { char t[12]; int n = 0;
@@ -259,6 +340,34 @@ static void build_tpstat(void)
         p = ap_str(p, sa ? "no HID (bus ok, abrt " : "no HID (no ACK, abrt ");
         p = ap_hex16(p, ab); *p++ = ')';
     } else  { p = ap_str(p, "no controller (ACPI-only?)"); }
+    if (pr) { int tm = uno_i2c_hid_timing();
+              if (tm >= 0) { p = ap_str(p, "  scl#"); p = ap_int(p, tm); } }
+    *p = 0;
+}
+
+/* Which pointer path is actually live. Nothing reported this before, so a
+ * machine that boots with a dead trackpad gave no clue whether the pad never
+ * bound, the aux port is empty, or detach took the firmware pointer away. */
+static char g_ptr1[80], g_ptr2[80];
+static void build_ptrstat(void)
+{
+    int nsim = 0, nabs = 0, blocked = 0;
+    int kbd = 0, aux = 0, auxport = 0, auxid = -1;
+    char *p;
+    uno_pc64_ptr_status(&nsim, &nabs, &blocked);
+    uno_ps2_status(&kbd, &aux, &auxport, &auxid);
+    p = ap_str(g_ptr1, "Pointer: fw simple ");
+    p = ap_int(p, nsim); p = ap_str(p, " / abs "); p = ap_int(p, nabs);
+    p = ap_str(p, uno_pc64_detached() ? "  (dead: detached)" : "  (live)");
+    *p = 0;
+    p = ap_str(g_ptr2, "  PS/2: kbd ");
+    p = ap_str(p, kbd ? "up" : "--");
+    p = ap_str(p, ", aux port ");
+    p = ap_str(p, auxport ? "ok" : "none");
+    p = ap_str(p, ", mouse ");
+    if (aux) { p = ap_str(p, "streaming id "); p = ap_int(p, auxid); }
+    else     { p = ap_str(p, "--"); }
+    if (blocked) p = ap_str(p, "  [attached to keep pointer]");
     *p = 0;
 }
 
@@ -372,6 +481,7 @@ static void build_sys(unoui_window *w)
     int fh = fb_text_h(), lh = fh + 4, y = 4, cw = 420, gx = 8, tx = 20;
     int g0;
     build_tpstat();
+    build_ptrstat();
     build_usbstat();
     build_natstat();
     build_acpistat();
@@ -385,9 +495,11 @@ static void build_sys(unoui_window *w)
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
     y += fh + 4
 #define SYS_ROW(s) unoui_add_label(w, tx, y, s); y += lh
-    SYS_GROUP("Input & USB", 4);
+    SYS_GROUP("Input & USB", 6);
     SYS_ROW(g_tp1);
     SYS_ROW(g_tp2);
+    SYS_ROW(g_ptr1);
+    SYS_ROW(g_ptr2);
     SYS_ROW(g_usb);
     SYS_ROW(g_usb2);
     y += 12;
@@ -408,49 +520,9 @@ static void build_sys(unoui_window *w)
     w->min_w = 360; w->min_h = 240;
     w->flags |= UI_WIN_RESIZE;
 }
-static void build_clock(unoui_window *w)
-{
-    int fh = fb_text_h();
-    unoui_window_init(w, "Clock", 420, 30, 220, 1);
-    unoui_add_label(w, 10, 8, g_clock);
-    unoui_add_label(w, 10, 8 + fh + 6, "(firmware RTC)");
-    w->r.h = win_h_for(2 * fh + 20);
-}
-
-/* ---- Canvas demo: proves UI_CANVAS (app-drawn region) + unoui_fullscreen -- */
-static void canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
-{
-    int i; (void)w; (void)ctx;
-    for (i = 0; i < 8; i++) {                       /* colour bars */
-        fb_px c = FB_RGB((i & 1) ? 255 : 0, (i & 2) ? 255 : 0, (i & 4) ? 255 : 0);
-        fb_fill_rect(r.x + r.w * i / 8, r.y, r.w / 8 + 1, r.h, c);
-    }
-    fb_frame_rect(r.x, r.y, r.w, r.h, FB_RGB(255, 255, 255));
-    /* caption on a dark backing strip so it reads over the bars and fits */
-    fb_fill_rect(r.x + 1, r.y + 1, r.w - 2, 30, FB_RGB(0, 0, 0));
-    fb_text(r.x + 6, r.y + 5,  "UI_CANVAS: the app owns",
-            FB_RGB(255, 255, 255), FB_RGB(0, 0, 0));
-    fb_text(r.x + 6, r.y + 17, "these pixels.",
-            FB_RGB(255, 255, 255), FB_RGB(0, 0, 0));
-}
-static int canvas_event(struct unoui_widget *w, const void *ev, void *ctx)
-{
-    const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
-    if (e->kind == UI_EV_KEY && e->key == UI_KEY_ESC) {
-        unoui_fullscreen(&UI, 0); g_dirty = 1; return 1;    /* exit fullscreen */
-    }
-    return 0;
-}
-static unoui_canvas g_canvas = { canvas_draw, canvas_event, 0 };
-
-static void build_demo(unoui_window *w)
-{
-    unoui_widget *x;
-    unoui_window_init(w, "Canvas", 200, 120, 270, 210);
-    unoui_add_label(w, 6, 6, "App-drawn canvas (UI_CANVAS):");
-    unoui_add_canvas(w, 6, 20, 256, 120, &g_canvas);
-    x = unoui_add_button(w, 6, 150, 120, "Fullscreen", UI_F_DEFAULT); x->id = ID_FULL;
-}
+/* Clock lives in its own translation unit now (analog face + world map). */
+void pc64_clock_build(unoui_window *w);
+static void build_clock(unoui_window *w) { pc64_clock_build(w); }
 
 /* ---- Install: put UnoDOS on a local disk (backend: installer.c) ---------- */
 #define INST_MAXT 12
@@ -459,7 +531,20 @@ static const char *g_inst_ptr[INST_MAXT];
 static int         g_inst_n, g_inst_sel = -1, g_inst_armed;
 static char        g_inst_stat[96] = "Select a target, then Install.";
 static int         g_inst_default = 1;       /* "Boot UnoDOS by default"       */
-static unoui_widget *g_inst_list_w, *g_inst_prog_w;
+static unoui_widget *g_inst_list_w, *g_inst_prog_w, *g_inst_conf_w;
+
+/* Whole-disk installs erase everything on the target, so they take TWO
+ * deliberate acts of different kinds: the word below has to be TYPED into the
+ * confirm box, and only then does clicking Install commit. Requiring two
+ * different input modalities is the point - a repeated click is muscle memory
+ * and a mis-click can supply both halves, whereas typing a specific word
+ * cannot happen by accident. Volume installs are non-destructive and skip all
+ * of this. */
+#define INST_CONFIRM_WORD "ERASE"
+static char       g_inst_conf[16];
+static unoui_text g_inst_conf_t;
+static int        g_inst_conf_wi = -1;       /* widget index, for focus checks */
+static void       inst_disarm(void);
 
 static void inst_rescan(void)
 {
@@ -470,20 +555,31 @@ static void inst_rescan(void)
         strncpy(g_inst_item[i], uno_inst_desc(i), 71); g_inst_item[i][71] = 0;
         g_inst_ptr[i] = g_inst_item[i];
     }
-    g_inst_sel = g_inst_n ? 0 : -1; g_inst_armed = 0;
+    g_inst_sel = g_inst_n ? 0 : -1;
+    inst_disarm();
     if (g_inst_list_w) { g_inst_list_w->nitems = g_inst_n; g_inst_list_w->value = g_inst_sel; }
     if (g_inst_prog_w) g_inst_prog_w->value = 0;
     strcpy(g_inst_stat, g_inst_n ? "Select a target, then Install."
                                  : "No install targets found.");
 }
 
+/* changing target throws away any confirmation already given - the word was
+ * typed about a specific disk, and must not carry over to a different one */
+static void inst_disarm(void)
+{
+    g_inst_armed = 0;
+    g_inst_conf[0] = 0;
+    g_inst_conf_t.len = g_inst_conf_t.caret = g_inst_conf_t.sel = 0;
+}
+
 static void inst_select(int n)
 {
     if (n < 0 || n >= g_inst_n) return;
-    g_inst_sel = n; g_inst_armed = 0;
+    g_inst_sel = n;
+    inst_disarm();
     if (g_inst_list_w) g_inst_list_w->value = n;
     strcpy(g_inst_stat, uno_inst_kind(n) == UNO_INST_DISK
-           ? "Destructive: erases that disk. Install asks twice."
+           ? "ERASES the whole disk: type " INST_CONFIRM_WORD ", then Install."
            : "Non-destructive: adds \\EFI\\UNODOS + a boot entry.");
 }
 
@@ -499,6 +595,21 @@ static void inst_progress(int pct, const char *msg)
     uno_pc64_present();
 }
 
+/* has the confirm word been typed exactly? case-insensitive, but no partial
+ * match and no surrounding whitespace - "erase" yes, "eras"/"erased" no */
+static int inst_conf_typed(void)
+{
+    const char *w = INST_CONFIRM_WORD;
+    int i = 0;
+    while (w[i]) {
+        char c = g_inst_conf[i];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (c != w[i]) return 0;
+        i++;
+    }
+    return g_inst_conf[i] == 0;
+}
+
 static void inst_go(void)
 {
     int k;
@@ -511,12 +622,31 @@ static void inst_go(void)
         return;
     }
     k = uno_inst_kind(g_inst_sel);
-    if (k == UNO_INST_DISK && !g_inst_armed) {
-        g_inst_armed = 1;                    /* destructive: double-confirm    */
-        strcpy(g_inst_stat, "ERASES THAT WHOLE DISK - press Install again.");
-        return;
+    if (k == UNO_INST_DISK) {
+        /* stage 1: the word must have been TYPED (case-insensitively, but
+           spelled exactly - no partial match, no leading/trailing slop) */
+        if (!inst_conf_typed()) {
+            char *p = ap_str(g_inst_stat, "Type ");
+            p = ap_str(p, INST_CONFIRM_WORD);
+            p = ap_str(p, " in the confirm box to erase ");
+            { const char *d = uno_inst_desc(g_inst_sel);
+              while (*d && p < g_inst_stat + 92) *p++ = *d++; }
+            *p = 0;
+            return;
+        }
+        /* stage 2: and THEN Install has to be pressed a second time */
+        if (!g_inst_armed) {
+            char *p = ap_str(g_inst_stat, "Ready to ERASE ");
+            const char *d = uno_inst_desc(g_inst_sel);
+            while (*d && p < g_inst_stat + 70) *p++ = *d++;
+            p = ap_str(p, " - Install again.");
+            *p = 0;
+            g_inst_armed = 1;
+            return;
+        }
     }
     g_inst_armed = 0;
+    inst_disarm();                       /* never leave a live confirmation up */
     if (uno_inst_install(g_inst_sel, g_inst_default, inst_progress)) {
         strcpy(g_inst_stat, "Installed. Remove the USB stick and restart.");
         if (g_inst_prog_w) g_inst_prog_w->value = 100;
@@ -531,24 +661,46 @@ static void inst_go(void)
 
 static void build_setup(unoui_window *w)
 {
+    const unoui_theme *t = pc64_shell_theme();
+    const char *conf_lab = "To erase a whole disk, type " INST_CONFIRM_WORD ":";
+    const char *keys_lab = "Keys: Up/Down pick - C confirm box (Esc leaves) - I installs - R rescans";
+    int confw = fb_text_w(conf_lab), instw = fb_text_w("Install") + 24;
+    int cw, y;
+
+    /* Content width is measured, not assumed: the confirm row is the widest
+       thing here and its width follows the active font, so a fixed 400 px
+       window clipped it (and left the Install button un-anchored). */
+    cw = 8 + confw + 8 + 80 + 8;
+    if (cw < 8 + fb_text_w(keys_lab) + 8) cw = 8 + fb_text_w(keys_lab) + 8;
+    if (cw < 400) cw = 400;
+
     inst_rescan();
-    unoui_window_init(w, "Install", 150, 60, 400, 286);
+    unoui_window_init(w, "Install", 150, 60, cw, 286);
     unoui_add_label(w, 8, 4, "Install UnoDOS to a local disk");
     unoui_add_label(w, 8, 20, "Volumes keep your files; Disks are ERASED.");
-    unoui_add_label(w, 8, 34, "Keys: Up/Down pick - I installs - R rescans");
-    g_inst_list_w = unoui_add_list(w, 8, 52, 384, 92, g_inst_ptr, g_inst_n, g_inst_sel);
+    unoui_add_label(w, 8, 34, keys_lab);
+    g_inst_list_w = unoui_add_list(w, 8, 52, cw - 16, 92, g_inst_ptr, g_inst_n, g_inst_sel);
     g_inst_list_w->id = ID_ILIST;
     { unoui_widget *c = unoui_add_check(w, 8, 150, "Boot UnoDOS by default", 1);
       c->id = ID_IDEF; }
-    { unoui_widget *b = unoui_add_button(w, 8, 172, 100, "Rescan", 0);  b->id = ID_IRESCAN; }
-    { unoui_widget *b = unoui_add_button(w, 292, 172, 100, "Install", 0); b->id = ID_IGO; }
-    g_inst_prog_w = unoui_add_progress(w, 8, 200, 384, 0, 100);
-    unoui_add_label(w, 8, 218, g_inst_stat);
+    /* the typed half of the whole-disk confirmation (ignored for volumes) */
+    unoui_add_label(w, 8, 174, conf_lab);
+    unoui_text_init(&g_inst_conf_t, g_inst_conf, sizeof g_inst_conf, 0);
+    { unoui_widget *e = unoui_add_edit(w, 8 + confw + 8, 170, 80, &g_inst_conf_t);
+      e->id = ID_ICONF; g_inst_conf_w = e; g_inst_conf_wi = w->nw - 1; }
+    y = 196;
+    { unoui_widget *b = unoui_add_button(w, 8, y, 100, "Rescan", 0); b->id = ID_IRESCAN; }
+    { unoui_widget *b = unoui_add_button(w, cw - 8 - instw, y, instw, "Install", 0);
+      b->id = ID_IGO; }
+    g_inst_prog_w = unoui_add_progress(w, 8, 224, cw - 16, 0, 100);
+    unoui_add_label(w, 8, 242, g_inst_stat);
+    w->r.w = cw + 2 * t->m.frame_w + 2 * t->m.pad;
+    w->r.h = win_h_for(262);
 }
 
 static void (*const g_build[NNATIVE])(unoui_window *) =
-    { build_ctrl, build_edit, build_files, build_sys, build_clock, build_demo,
-      build_setup };
+    { build_ctrl, build_edit, build_files, build_sys, build_clock,
+      build_setup, build_music };
 
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
@@ -574,6 +726,7 @@ static void remove_win(unoui_window *win)
  * canvas paints the bar face + top highlight under the buttons. */
 /* forward decls (taskbar events fire these, defined below) */
 static void toggle_launcher(void);
+static void build_desktop(void);
 static void open_app(int a);
 static void fmt_clock(int uptime_secs);
 int pc64_write_canvas_index(void);    /* pc64_write.c: doc-canvas widget index */
@@ -582,12 +735,12 @@ int pc64_files_canvas_index(void);    /* pc64_files.c: pane widget index      */
 /* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- *
  * All layout is measured from the live font so the bar stays aligned whatever
  * face/scale is active (draw + hit-test share these functions). */
-#define TB_START_X 4
-static int tb_logo_sz(void)  { int s = fb_text_h(); return s < 12 ? 12 : s; }
-static int tb_start_w(void)  { return 10 + tb_logo_sz() + 6 + fb_text_w("Start") + 10; }
+/* No Start button: the launcher opens by RIGHT-CLICKING the desktop (or
+ * Ctrl-Esc). The bar is window chips and the tray, so the chips start at the
+ * left edge and the reclaimed width goes to them. */
 static int tb_chip_w(void)   { int w = 40 + fb_text_w("Manager"); return w < 108 ? 108 : w; }
 static int tb_chip_gap(void) { return tb_chip_w() + 4; }
-static int tb_chip_x(void)   { return TB_START_X + tb_start_w() + 8; }
+static int tb_chip_x(void)   { return 6; }
 
 /* app index of the focused window, or -1 (used to highlight its taskbar chip) */
 static int focused_app(void)
@@ -631,13 +784,6 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     }
     /* Start button - accent-coloured, the UnoDOS "One" mark + label, the
        logo+label group centred as a unit within the button */
-    { int bx = r.x + TB_START_X, bw = tb_start_w(), fh = fb_text_h();
-      int lsz = tb_logo_sz(), grp = lsz + 6 + fb_text_w("Start");
-      int gx = bx + (bw - grp) / 2, gy = by + (bh - lsz) / 2;
-      if (modern) fb_round_rect(bx, by, bw, bh, cr, t->pal.accent);
-      else        tb_panel(bx, by, bw, bh, t->pal.accent, 0);
-      pc64_start_logo(gx, gy, lsz, t->pal.accent_text);
-      fb_text(gx + lsz + 6, by + (bh - fh) / 2, "Start", t->pal.accent_text, -1); }
     /* one chip per open window: mini icon + name, highlighted if it's active.
        Chips stop before the tray (clock/battery) instead of colliding. */
     x = r.x + tb_chip_x();
@@ -656,7 +802,7 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         } else tb_panel(x, by, cw, bh, t->pal.face, d);
         { int dd = modern ? 0 : d;
           eb.x = x + 4 + dd; eb.y = by + (bh - es) / 2 + dd; eb.w = es; eb.h = es;
-          pc64_icon_emblem(i, eb);
+          pc64_icon_emblem(app_icon(i), eb);
           fb_set_clip(x + es + 6, by, cw - es - 8, bh);        /* keep the name in the chip */
           fb_text(x + es + 8 + dd, by + (bh - fh) / 2 + dd, app_short(i), t->pal.text, -1);
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
@@ -683,7 +829,6 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     (void)w; (void)ctx;
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     px = e->x - g_task.r.x;
-    if (px >= TB_START_X && px < TB_START_X + tb_start_w()) { toggle_launcher(); return 1; }
     x = tb_chip_x();
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
@@ -705,19 +850,42 @@ static void build_taskbar(void)
     unoui_add_canvas(&g_task, 0, 0, FB_W, TASKH, &g_taskcv);
 }
 
+/* the order icons appear in, as app indices */
+static void desk_order(int *out, int n)
+{
+    int i, j;
+    for (i = 0; i < n; i++) out[i] = i;
+    if (!g_desk_sort) return;
+    for (i = 1; i < n; i++) {                       /* insertion sort by name */
+        int v = out[i];
+        for (j = i; j > 0 && strcmp(app_short(out[j - 1]), app_short(v)) > 0; j--)
+            out[j] = out[j - 1];
+        out[j] = v;
+    }
+}
+
 static void build_desktop(void)
 {
-    int i, percol, fh = fb_text_h();
+    int k, fh = fb_text_h();
     int ich = 34 + fh, pitch = ich + 8, colw = 20 + fb_text_w("MMMMMMMM");
+    int percol, percol_rows, order[NAPPS];
     unoui_window_init(&g_desk, "", 0, 0, FB_W, FB_H - TASKH);
     g_desk.flags = UI_WIN_BARE | UI_WIN_BOTTOM;
-    percol = (FB_H - TASKH - 20) / pitch; if (percol < 1) percol = 1;   /* grid */
-    for (i = 0; i < NAPPS; i++) {
-        int col = i / percol, row = i % percol;
-        unoui_widget *ic = unoui_add_icon(&g_desk, 16 + col * colw, 14 + row * pitch,
-                                          app_short(i));
+    percol      = (FB_H - TASKH - 20) / pitch; if (percol < 1) percol = 1;
+    percol_rows = (FB_W - 16) / colw;           if (percol_rows < 1) percol_rows = 1;
+    desk_order(order, NAPPS);
+    for (k = 0; k < NAPPS; k++) {
+        int i = order[k];
+        int col = g_desk_flow ? (k % percol_rows) : (k / percol);
+        int row = g_desk_flow ? (k / percol_rows) : (k % percol);
+        int ix = 16 + col * colw, iy = 14 + row * pitch;
+        unoui_widget *ic;
+        if (i < 32 && g_icon_pos[i].placed) {      /* the user put it here */
+            ix = g_icon_pos[i].x; iy = g_icon_pos[i].y;
+        }
+        ic = unoui_add_icon(&g_desk, ix, iy, app_short(i));
         ic->r.w = colw - 20; ic->r.h = ich; /* room for emblem + label         */
-        ic->icon = i;                       /* -> pc64_icon_art draws its art  */
+        ic->icon = app_icon(i);             /* -> pc64_icon_art draws its art  */
         ic->id  = ID_LAUNCH0 + i;
     }
 }
@@ -845,6 +1013,92 @@ static void toggle_launcher(void)
     g_dirty = 1;
 }
 
+/* Open the launcher AT the pointer (the right-click gesture). Already open
+ * somewhere else: move it here rather than closing, which is what a second
+ * right-click elsewhere should obviously do. */
+static void launcher_at(int x, int y)
+{
+    g_menu_scroll = 0; g_menu_hot = 0;
+    g_launch.r.x = x;
+    g_launch.r.y = y;
+    clamp_to_workarea(&g_launch);
+    if (!g_launch_open) { unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
+    else                  unoui_bring_to_front(&UI, &g_launch);
+    UI.focus_wi = 0;
+    g_dirty = 1;
+}
+
+/* ---- dragging a desktop icon ------------------------------------------------
+ * unoui treats UI_ICON as a button: press and release fire an action. Dragging
+ * therefore has to be intercepted BEFORE the toolkit sees the press, and the
+ * press replayed at release if the pointer barely moved - otherwise every drag
+ * would also launch the app it started on. */
+static int g_drag_icon = -1;            /* widget index in g_desk, or -1     */
+static int g_drag_app;                  /* which app that icon is            */
+static int g_drag_ox, g_drag_oy;        /* grab offset inside the icon       */
+static int g_drag_x0, g_drag_y0;        /* where the press landed            */
+static int g_drag_moved;
+
+/* Snap (*x,*y) to the nearest FREE grid cell, ignoring icon `self`.
+ *
+ * Snapping to the plain nearest cell lets two icons land on top of each other,
+ * which on a desktop just looks broken - overlapping emblems and interleaved
+ * labels. Search outward in rings from the nearest cell instead and take the
+ * first unoccupied one, which is what a user dropping an icon expects. */
+static void desk_snap_free(int self, int *x, int *y)
+{
+    int cw = desk_cell_w(), chh = desk_cell_h();
+    int c0 = (*x - 16 + cw / 2) / cw, r0 = (*y - 14 + chh / 2) / chh;
+    int ring, i;
+    if (c0 < 0) c0 = 0;
+    if (r0 < 0) r0 = 0;
+    for (ring = 0; ring < 24; ring++) {
+        int dc, dr;
+        for (dr = -ring; dr <= ring; dr++)
+            for (dc = -ring; dc <= ring; dc++) {
+                int c, r, px, py, taken = 0;
+                if (ring && dr != -ring && dr != ring && dc != -ring && dc != ring)
+                    continue;                       /* interior already tried */
+                c = c0 + dc; r = r0 + dr;
+                if (c < 0 || r < 0) continue;
+                px = 16 + c * cw; py = 14 + r * chh;
+                if (px + cw > FB_W || py + chh > FB_H - TASKH) continue;
+                for (i = 0; i < g_desk.nw; i++) {
+                    if (i == self) continue;
+                    if (g_desk.w[i].r.x == px && g_desk.w[i].r.y == py) { taken = 1; break; }
+                }
+                if (!taken) { *x = px; *y = py; return; }
+            }
+    }
+    /* every cell in range is occupied: leave it where it was dropped */
+}
+
+/* the desktop icon under (x,y), as a widget index, or -1 */
+static int desk_icon_at(int x, int y)
+{
+    int i;
+    for (i = 0; i < g_desk.nw; i++) {
+        unoui_rect r = g_desk.w[i].r;      /* BARE window at 0,0: r is screen */
+        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return i;
+    }
+    return -1;
+}
+
+/* Is (x,y) on bare desktop - i.e. not over any window, popup or the taskbar?
+ * Walks every window the UI knows rather than testing the desktop's own rect,
+ * because the desktop fills the screen and everything else sits on top. */
+static int point_on_desktop(int x, int y)
+{
+    int i;
+    for (i = 0; i < UI.nwin; i++) {
+        unoui_window *w = UI.win[i];
+        if (!w || w == &g_desk) continue;
+        if (x >= w->r.x && x < w->r.x + w->r.w &&
+            y >= w->r.y && y < w->r.y + w->r.h) return 0;
+    }
+    return 1;
+}
+
 /* F2 / Ctrl-Tab: raise the next OPEN app window (skips desktop + taskbar) */
 static void cycle_window(void)
 {
@@ -870,6 +1124,7 @@ static void close_focused(void)
         int g = app_game(i);
         g_open[i] = 0;
         if (g >= 0)              pc64_game_close(g);        /* native game teardown */
+        else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
         else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
         break;
     }
@@ -889,7 +1144,7 @@ static int mrow_h(void) { int h = fb_text_h() + 8; return h < 22 ? 22 : h; }
 
 static int  menu_count(void)         { return NAPPS + 2; }   /* apps + restart + shutdown */
 static const char *menu_label(int i) { return i < NAPPS ? app_name(i) : (i == NAPPS ? "Restart" : "Shut Down"); }
-static int  menu_icon(int i)         { return i < NAPPS ? i : -1; }
+static int  menu_icon(int i)         { return i < NAPPS ? app_icon(i) : -1; }
 static int  menu_vis(void)           { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
 
 static void menu_activate(int i)
@@ -1063,6 +1318,9 @@ int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
 /* app-side action hooks (in pc64_write.c / pc64_files.c) */
 int pc64_write_action(const unoui_action *a);
 int pc64_files_action(const unoui_action *a);
+int pc64_music_action(const unoui_action *a);
+void pc64_music_tick(void);
+void pc64_music_closed(void);
 int pc64_write_key(int uni, int ctrl);
 void pc64_write_frame(void);
 
@@ -1101,11 +1359,16 @@ static void on_action(const unoui_action *a)
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
     if (pc64_write_action(a)) return;           /* the Editor's menus/toolbar */
     if (pc64_files_action(a)) return;           /* the file manager's toolbar */
+    if (pc64_music_action(a)) return;           /* the media player           */
+    if (pc64_clock_action(a)) return;           /* the world clock            */
     switch (a->id) {
     case ID_ILIST:    inst_select(a->value); break;
     case ID_IDEF:     g_inst_default = a->value; break;
     case ID_IRESCAN:  inst_rescan(); break;
     case ID_IGO:      inst_go(); break;
+    /* editing the confirm box after arming revokes the arm: the second click
+       must follow the typing, not the other way round */
+    case ID_ICONF:    g_inst_armed = 0; break;
     case ID_START:    toggle_launcher(); break;
     case ID_SHUTDOWN: uno_pc64_shutdown(); break;
     case ID_RESTART:  uno_pc64_restart();  break;
@@ -1113,6 +1376,15 @@ static void on_action(const unoui_action *a)
     case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
     case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; break;   /* Aurora full<->lite (no live composite) */
     case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; break;                      /* lid-close enters sleep */
+    /* desktop arrangement: rebuild the icon layer in place */
+    case ID_DFLOW: g_desk_flow = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
+    case ID_DSORT: g_desk_sort = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
+    case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
+    case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; break;
+    case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; break;
+    case ID_DARRANGE: {          /* forget every hand placement and reflow */
+        int i; for (i = 0; i < 32; i++) g_icon_pos[i].placed = 0;
+        build_desktop(); g_dirty = 1; break; }
     case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
     case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
     case ID_ABOUT: open_app(APP_SYS); break;
@@ -1124,7 +1396,6 @@ static void on_action(const unoui_action *a)
         fmt_clock(0);
         break;
     }
-    case ID_FULL:  unoui_fullscreen(&UI, &g_win[APP_DEMO]); break;   /* go fullscreen */
     case ID_FONT:  uno_font_use(a->value - 1); rebuild_shell(); break;
     case ID_SCALE: if (a->value >= 0 && a->value < NSCALES) {
                        uno_font_set_ui_scale(g_scale_pcts[a->value]);
@@ -1147,13 +1418,71 @@ static int pump_input(void)
 
     uno_pc64_mouse(&mx, &my, &mb);
     if (mx != lastx || my != lasty) {
-        memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
-        feed(&ev); lastx = mx; lasty = my; any = 1;
+        lastx = mx; lasty = my; any = 1;
+        if (g_drag_icon >= 0) {                 /* carrying an icon */
+            g_desk.w[g_drag_icon].r.x = mx - g_drag_ox;
+            g_desk.w[g_drag_icon].r.y = my - g_drag_oy;
+            if (mx - g_drag_x0 > 3 || g_drag_x0 - mx > 3 ||
+                my - g_drag_y0 > 3 || g_drag_y0 - my > 3) g_drag_moved = 1;
+            g_dirty = 1;
+        } else {
+            memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
+            feed(&ev);
+        }
     }
-    if (mb != lastb) {
-        memset(&ev, 0, sizeof ev);
-        ev.kind = mb ? UI_EV_MOUSE_DOWN : UI_EV_MOUSE_UP; ev.x = mx; ev.y = my;
-        feed(&ev); lastb = mb; any = 1;
+    /* Only the LEFT button drives the widget layer. unoui has one notion of
+       "the mouse button", so feeding it a right-click would activate whatever
+       is under the pointer - the opposite of what a context gesture should do. */
+    { int left = mb & 1, right = (mb >> 1) & 1;
+      if (left && !(lastb & 1)) {                     /* press */
+          int hit = (!g_desk_lock && point_on_desktop(mx, my))
+                    ? desk_icon_at(mx, my) : -1;
+          any = 1;
+          if (hit >= 0) {                             /* begin a drag */
+              g_drag_icon = hit;
+              g_drag_app  = g_desk.w[hit].id - ID_LAUNCH0;
+              g_drag_ox   = mx - g_desk.w[hit].r.x;
+              g_drag_oy   = my - g_desk.w[hit].r.y;
+              g_drag_x0   = mx; g_drag_y0 = my;
+              g_drag_moved = 0;
+          } else {
+              memset(&ev, 0, sizeof ev);
+              ev.kind = UI_EV_MOUSE_DOWN; ev.x = mx; ev.y = my; feed(&ev);
+          }
+      } else if (!left && (lastb & 1)) {              /* release */
+          any = 1;
+          if (g_drag_icon >= 0) {
+              if (!g_drag_moved) {
+                  /* it was a click after all - replay it so the app opens */
+                  memset(&ev, 0, sizeof ev);
+                  ev.kind = UI_EV_MOUSE_DOWN; ev.x = g_drag_x0; ev.y = g_drag_y0;
+                  feed(&ev);
+                  memset(&ev, 0, sizeof ev);
+                  ev.kind = UI_EV_MOUSE_UP;   ev.x = mx; ev.y = my; feed(&ev);
+              } else {
+                  int x = g_desk.w[g_drag_icon].r.x, y = g_desk.w[g_drag_icon].r.y;
+                  if (g_desk_snap) desk_snap_free(g_drag_icon, &x, &y);
+                  g_desk.w[g_drag_icon].r.x = x;
+                  g_desk.w[g_drag_icon].r.y = y;
+                  if (g_drag_app >= 0 && g_drag_app < 32) {
+                      g_icon_pos[g_drag_app].x = (short)x;
+                      g_icon_pos[g_drag_app].y = (short)y;
+                      g_icon_pos[g_drag_app].placed = 1;
+                  }
+              }
+              g_drag_icon = -1;
+              g_dirty = 1;
+          } else {
+              memset(&ev, 0, sizeof ev);
+              ev.kind = UI_EV_MOUSE_UP; ev.x = mx; ev.y = my; feed(&ev);
+          }
+      }
+      /* right-press on bare desktop: the launcher, at the pointer */
+      if (right && !((lastb >> 1) & 1)) {
+          if (point_on_desktop(mx, my)) { launcher_at(mx, my); any = 1; }
+          else if (g_launch_open)       { toggle_launcher();   any = 1; }
+      }
+      lastb = mb;
     }
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
         int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
@@ -1177,13 +1506,40 @@ static int pump_input(void)
         if (!g_launch_open && !UI.full && g_open[APP_SETUP] &&
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[APP_SETUP]) {
-            int used = 1;
-            if      (scan == 0x01) inst_select(g_inst_sel - 1);      /* up   */
+            /* ...but NOT while the confirm box has focus. The word the user
+               has to type is ERASE, which contains R - so leaving the
+               accelerators live would make it impossible to type (every R
+               would rescan, and rescanning clears the box). Let the edit
+               widget have the keystrokes. */
+            int typing = (UI.focus_wi == g_inst_conf_wi && g_inst_conf_wi >= 0);
+            int used = !typing;
+            if (typing) {
+                /* leave the box on Esc so the accelerators come back */
+                if (scan == 0x17) { UI.focus_wi = -1; g_dirty = 1; continue; }
+                /* otherwise fall through: the edit widget gets the keystroke */
+            }
+            else if (scan == 0x01) inst_select(g_inst_sel - 1);      /* up   */
             else if (scan == 0x02) inst_select(g_inst_sel + 1);      /* down */
+            /* C puts the caret in the confirm box. It needs its own key: Tab
+               cycles through every focusable widget, and until focus actually
+               lands on the box the letters of ERASE are still accelerators -
+               the R would hit Rescan, which clears the box. A dedicated key
+               that appears in neither ERASE nor the other accelerators makes
+               "select target, C, type, Esc, I" a path that cannot misfire. */
+            else if (uni == 'c' || uni == 'C') {
+                if (g_inst_conf_wi >= 0) UI.focus_wi = g_inst_conf_wi;
+            }
             else if (uni == 'i' || uni == 'I') inst_go();
             else if (uni == 'r' || uni == 'R') inst_rescan();
             else used = 0;
             if (used) { g_dirty = 1; continue; }
+        }
+        /* Music focused: same keyboard-drive rationale as Install above -
+           the player must be fully operable with no pointer at all. */
+        if (!g_launch_open && !UI.full && g_open[APP_MUSIC] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[APP_MUSIC]) {
+            if (pc64_music_key(uni, scan)) { g_dirty = 1; continue; }
         }
         switch (scan) {
         case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
@@ -1311,6 +1667,11 @@ int main(void)
         feed(&tick);                    /* advance the caret-blink timebase */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
+        if (g_open[APP_CLOCK]) pc64_clock_tick();  /* self-throttling: only
+                                        redraws when the second changes */
+        if (g_open[APP_MUSIC]) pc64_music_tick();  /* decode ahead into the PCM
+                                        stream; bounded by FIFO space, so this
+                                        never blocks the frame */
         if (g_launch_open) {            /* Start-menu hover highlight + scroll */
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }
