@@ -1,22 +1,23 @@
 # unomedia — the UnoDOS media foundation
 
 Format readers (and eventually writers) for **images, audio and video**,
-written from scratch and shared by every port — the same role unoui plays for
-widgets and uno3d for rasterisation. Phase 1 (this directory today) is
-**image decoding**, feeding the pc64 Photos app.
+shared by every port — the same role unoui plays for widgets and uno3d for
+rasterisation. Phase 1 delivered **image decoding** (the pc64 Photos app);
+phase 2 moved the **audio decoders** in and put the Music app on them.
 
-## Why a top-level library
+## The shape
 
-pc64 already had a media layer — `pc64/pc64_media.c`, the audio probe/vtable
-that dec_wav/dec_midi/dec_mp3 plug into. It proved the shapes: magic-byte
-probe with extension tiebreak, one decoder vtable per format, a single global
-open instance, streaming byte access so a big file never loads whole, and an
-error surface that distinguishes *"that is not audio"* from *"that is a
-perfectly good AAC file this build declines"*. unomedia lifts exactly those
-shapes out of the port so every format family can share them; the audio
-decoders are slated to migrate here next (a mechanical move — the vtables
-already match), after which pc64_media.c becomes a thin adapter and the other
-ports get the decoders for free.
+pc64's original media layer (`pc64/pc64_media.c`) proved the shapes: a
+magic-byte probe with extension tiebreak, one decoder vtable per format, a
+single open instance, streaming byte access so a big file never loads whole,
+and an error surface that distinguishes *"that is not audio"* from *"that is
+a perfectly good progressive JPEG this build declines"*. unomedia is those
+shapes, made shared: a small core (allocator, error surface, owner-tagged
+byte source) plus one dispatcher per family — `um_image.c` and `um_audio.c`
+— so a build links only what it uses. pc64's kernel takes core+audio for
+Music; PHOTOS.UNO carries its own private core+image instance; the two never
+collide. `pc64_media.c` remains as that port's adapter: a 64 KB
+sliding-window source over `uno_fs_read_at` and one open call.
 
 ## The image surface (`unomedia.h`)
 
@@ -52,7 +53,20 @@ um_src (random-access bytes)          um_image_open(src, name, &info)
 | **PNM**  | `um_pnm.c` | P1..P6 ASCII + binary, comments, maxval to 65535 |
 | **QOI**  | `um_qoi.c` | complete spec 1.0 |
 
-**Identified, deliberately not decoded** (`um_stub.c`, the AAC precedent):
+## Audio decoders
+
+| Format | File | Notes |
+|---|---|---|
+| **WAV**  | `um_wav.c` | PCM 8/16/24/32 + IEEE float, any rate, extensible headers |
+| **MIDI** | `um_midi.c` | SMF 0/1/2 + RMI; a 48-voice synthesiser (no soundfont) |
+| **MP3**  | `um_mp3.c` | MPEG-1 Layer III complete (tables: `mp3_tables.h`, public-domain-derived, see `tools/mkmp3tables.py`) |
+| **AAC**  | `um_aac.c` | AAC-LC, ADTS + MP4/M4A. The ISO constant tables (`aac_tables.h`) derive from OpenCORE aacdec, **Apache-2.0** — see `tools/mkaactables.py`, `LICENSE.APACHE-2.0`, and the shipped `DOCS\LICENSES.MD`; the decoder code itself is this project's own |
+
+Verify with `python3 test/run_audio_tests.py` — WAV sample-exact vs ffmpeg,
+MP3/AAC at aligned PSNR vs ffmpeg's decode of the same files, MIDI synth
+sanity. The pc64 in-OS pass is `pc64/tools/music_test.py`.
+
+**Identified, deliberately not decoded** (`um_stub.c`, the AAC-container precedent):
 WebP, TIFF, AVIF, HEIC, JPEG XL, SVG — each is recognised and refused with
 its name, so the viewer can say *"WebP recognised - no decoder in this
 build"* instead of the false *"not an image"*. Ditto inside real decoders:

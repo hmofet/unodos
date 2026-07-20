@@ -106,6 +106,11 @@ if [ "$1" != "legacy" ]; then
     cp fonts/Mono.ttf       build/esp/MONO.TTF
     cp fonts/Ubuntu.ttf     build/esp/UBUNTU.TTF
     cp fonts/ChiKareGo2.ttf build/esp/CHICAGO.TTF   # the default (Chicago-style) UI face
+    # licensing notices ship on EVERY image - the Apache-2.0 AAC tables and
+    # the MIT components require their notices to travel with distributions
+    # (System > View licenses opens this in the Browser)
+    mkdir -p build/esp/DOCS
+    cp docs_esp/LICENSES.MD build/esp/DOCS/
 
     # ---- Intel WiFi firmware (TESTING only) --------------------------------
     # The iwlwifi driver loads FIRMWARE\IWL*.UCO from the ESP. Intel's licence

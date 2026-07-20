@@ -7,11 +7,10 @@
  * switching ever changed it. Everything here is a unoui widget drawn by the
  * active theme, so the player matches the desktop in all ten themes.
  *
- * What it plays:
- *   - WAV  (PCM 8/16/24/32, IEEE float, any rate)   dec_wav.c
- *   - MIDI (parsed + synthesised, no soundfont)     dec_midi.c
- *   - the built-in tune library, through the square voice, so a machine with
- *     no files still has something to play.
+ * What it plays: whatever unomedia's audio layer decodes (WAV, MIDI, MP3,
+ * AAC - see ../unomedia/README.md), reached through the pc64_media adapter's
+ * windowed byte source; plus the built-in tune library, through the square
+ * voice, so a machine with no files still has something to play.
  *
  * The one canvas is the level meter - genuinely per-pixel work, which is the
  * bar a canvas has to clear here. The browser, transport, sliders and status

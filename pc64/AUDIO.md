@@ -94,51 +94,52 @@ Files stream from disk rather than being loaded: `uno_fs_read_at` (and the
 from an arbitrary offset, so resident memory is a 64 KB sliding window in
 `pc64_media.c` regardless of how long the song is.
 
-## Decoders (all written from scratch, no third-party codec)
+## Decoders (moved to unomedia - the shared media foundation)
+
+Since phase 2 of unomedia (2026-07-20) the decoders live in `../unomedia/`
+behind its `um_adecoder` vtable, shared by every port; `pc64_media.c` is now
+just this port's adapter (the 64 KB sliding-window source + one open call)
+and the Music app drives `um_audio_*` directly. Same code, new home - the
+move was a rename because the surfaces were designed to match.
 
 | Format | File | Notes |
 |---|---|---|
-| **WAV** | `dec_wav.c` | RIFF chunk walk (order-tolerant); PCM 8/16/24/32, IEEE float 32/64; any rate; >2 channels folded to the front pair; `WAVE_FORMAT_EXTENSIBLE` resolved through the SubFormat GUID |
-| **MIDI** | `dec_midi.c` | SMF type 0/1/2 + `.RMI`; live multi-track merge (no flattening), 16.16 tick→sample accumulation so tempo changes don't drift; 48-voice synth, GM families mapped to 2-oscillator patches with ADSR, channel 10 synthesised as drums |
-| **MP3** | `dec_mp3.c` | MPEG-1 Layer III, 32/44.1/48 kHz, mono / stereo / joint (M-S + intensity) / dual. ID3v2 skip, Xing/VBRI frame counts, bit reservoir, full Huffman + requantise + reorder + alias reduction + IMDCT + polyphase filterbank |
+| **WAV** | `unomedia/um_wav.c` | RIFF chunk walk (order-tolerant); PCM 8/16/24/32, IEEE float 32/64; any rate; >2 channels folded to the front pair; `WAVE_FORMAT_EXTENSIBLE` resolved through the SubFormat GUID |
+| **MIDI** | `unomedia/um_midi.c` | SMF type 0/1/2 + `.RMI`; live multi-track merge (no flattening), 16.16 tick→sample accumulation so tempo changes don't drift; 48-voice synth, GM families mapped to 2-oscillator patches with ADSR, channel 10 synthesised as drums |
+| **MP3** | `unomedia/um_mp3.c` | MPEG-1 Layer III, 32/44.1/48 kHz, mono / stereo / joint (M-S + intensity) / dual. ID3v2 skip, Xing/VBRI frame counts, bit reservoir, full Huffman + requantise + reorder + alias reduction + IMDCT + polyphase filterbank |
+| **AAC** | `unomedia/um_aac.c` | AAC-LC (ADTS + MP4/M4A), SCE/CPE, M/S + intensity stereo, TNS, PNS, sine + KBD windows, long/short blocks. See the licensing note below |
 
 MP3 needs ISO constant data no decoder can invent - the Huffman codebooks, the
 512-tap synthesis window, the scalefactor-band boundaries. Those live in the
-generated `mp3_tables.h`; `tools/mkmp3tables.py` documents where they come
-from (a public-domain reference) and recovers the canonical codebooks rather
-than copying another program's data structure. Everything else in `dec_mp3.c`
-is written here.
+generated `unomedia/mp3_tables.h`; `unomedia/tools/mkmp3tables.py` documents
+where they come from (a public-domain reference) and recovers the canonical
+codebooks rather than copying another program's data structure. Everything
+else in `um_mp3.c` is written here.
 
 **Not decoded:** MPEG-2 / 2.5 (the 8-24 kHz half- and quarter-rate
 extensions) use different scalefactor tables and a different intensity-stereo
 rule; they are detected and refused rather than turned into noise.
 
-## AAC: identified, deliberately not decoded
+## AAC: decoded (the 2026-07-20 licensing reversal)
 
-`dec_aac.c` parses the container - ADTS framing, the MP4 box tree, the
-`stsz`/`stsc`/`stco` sample table, the AudioSpecificConfig - and then declines
-with "AAC (M4A) recognised - no decoder in this build". That is a decision, not
-an unfinished job.
+Earlier revisions of this file recorded a deliberate decision NOT to decode
+AAC: the ISO constant tables no decoder can invent (the 11 spectral Huffman
+codebooks, the scalefactor codebook, the scalefactor-band offsets) only exist
+under real licenses - the permissive option being Apache-2.0 (OpenCORE) - and
+the project declined to take on a third-party notice. **That decision has been
+reversed**: the tables in `unomedia/aac_tables.h` derive from OpenCORE aacdec
+(Apache-2.0), extracted by the documented `unomedia/tools/mkaactables.py`, and
+the required notice now ships with every image - `DOCS\LICENSES.MD`, reachable
+from **System > View licenses**. Everything AROUND the tables - the bitstream
+parse, Huffman decode, TNS, M/S, intensity, PNS, the filterbank - is this
+project's own code, like every other decoder here.
 
-AAC-LC needs ISO constant tables no decoder can invent: the 11 spectral Huffman
-codebooks, the scalefactor codebook, and the scalefactor-band offsets. MP3 had
-a way out - PDMP3 is public domain, so `mp3_tables.h` carries no obligations.
-AAC has no equivalent. Every implementation holding those tables is GPL
-(FAAD2, Rockbox), LGPL (FFmpeg), RPSL copyleft (Helix), non-OSI with an
-explicit refusal of any patent grant (Fraunhofer FDK), or Apache-2.0
-(OpenCORE, libxaac).
+Patents were never the obstacle (AAC-LC claims lapsed around 2017-2018, which
+is why Fedora, Debian and Wikimedia all ship decoders); the notice was, and
+the notice is now simply carried. HE-AAC's SBR/PS extensions are not decoded:
+a plain LC decoder legitimately plays the LC core those files contain.
 
-Apache-2.0 would have been legally clean - and patents are **not** the
-obstacle: AAC-LC claims lapsed around 2017-2018, which is why Fedora, Debian
-and Wikimedia all ship it. The obstacle is that Apache-2.0 is not a
-public-domain dedication, so it would put a third-party copyright and a licence
-file into a tree that is otherwise uniformly this project's own. That trade was
-declined deliberately, so the repo stays uniformly licensed.
-
-If it is ever revisited, the container layer is already written and the tables
-would come from OpenCORE's `sfb.cpp` and `hcbtables_binary.cpp`.
-
-**The media layer carries the reason.** `uno_media_error()` lets a decoder that
+**The media layer carries the reason.** `um_error()` lets a decoder that
 RECOGNISES a file but cannot play it say so; the Music app shows that instead
 of a generic failure, because "no decoder in this build" and "malformed" are
 very different things to tell someone.
