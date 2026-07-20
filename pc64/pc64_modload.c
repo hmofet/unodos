@@ -21,6 +21,7 @@
  * ======================================================================== */
 #include "uno_app.h"        /* AppInterface/KernelApi + mac_compat.h Toolbox */
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
+#include "pyhost.h"     /* Python-runtime + Python-app module tiers */
 #include "pc64_fs.h"
 #include "fat.h"
 #include "pc64_font.h"
@@ -32,8 +33,13 @@
 #include "pc64_http.h"     /* pc64_net_up */
 #include "iwlwifi.h"
 #include "rtl8152.h"
+#include "fb.h"             /* the full framebuffer surface (Python bindings) */
+#include "unosound.h"       /* uno_seq_* audio */
+#include "uno3d.h"          /* u3d_* 3D */
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
+#include <stdio.h>
 
 void uno_pc64_delay_ms(int ms);    /* uefi_main.c */
 
@@ -127,6 +133,36 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(pc64_shell_workarea_w), KX(pc64_shell_workarea_h),
     KX(pc64_shell_theme), KX(pc64_shell_run_user), KX(pc64_shell_font_mono),
     KX(pc64_browser_open_path),
+    /* ---- Python runtime (PYRT.UNO) surface ------------------------------- *
+     * Appended at the tail so a concurrent kExports edit (Wi-Fi) merges
+     * cleanly.  Exposes the full audio/3D/framebuffer/filesystem platform to
+     * any module (not just Python), plus the libc/libm the interpreter links. */
+    /* unosound */
+    KX(uno_seq_init), KX(uno_seq_beep), KX(uno_seq_play), KX(uno_seq_stop),
+    KX(uno_seq_playing), KX(uno_seq_tick), KX(uno_seq_backend),
+    /* uno3d */
+    KX(u3d_init), KX(u3d_shutdown), KX(u3d_begin), KX(u3d_end), KX(u3d_present),
+    KX(u3d_perspective), KX(u3d_load_identity), KX(u3d_translate), KX(u3d_scale),
+    KX(u3d_rotate_x), KX(u3d_rotate_y), KX(u3d_rotate_z), KX(u3d_triangles),
+    KX(u3d_last_tris),
+    /* framebuffer remainder */
+    KX(fb_clear), KX(fb_pixel), KX(fb_frame_rect), KX(fb_invert_rect),
+    KX(fb_blend_rect), KX(fb_grad_v), KX(fb_round_rect), KX(fb_set_clip),
+    KX(fb_reset_clip), KX(fb_big_text), KX(fb_glyph),
+    /* unoui widget gaps */
+    KX(unoui_add_radio), KX(unoui_add_progress), KX(unoui_add_slider),
+    KX(unoui_add_spinner), KX(unoui_add_hscroll), KX(unoui_add_icon),
+    /* libc the interpreter links */
+    KX(realloc), KX(calloc), KX(memchr), KX(strstr), KX(strrchr), KX(strspn),
+    KX(strchr), KX(qsort), KX(abort), KX(atoi), KX(llabs),
+    KX(snprintf), KX(vsnprintf),
+    KX(strtol), KX(strtoul), KX(strtoll), KX(strtoull),
+    /* single-precision libm */
+    KX(sinf), KX(cosf), KX(tanf), KX(asinf), KX(acosf), KX(atanf), KX(atan2f),
+    KX(sinhf), KX(coshf), KX(tanhf), KX(expf), KX(exp2f), KX(expm1f),
+    KX(logf), KX(log2f), KX(log10f), KX(log1pf), KX(powf), KX(sqrtf), KX(cbrtf),
+    KX(floorf), KX(ceilf), KX(truncf), KX(roundf), KX(fabsf), KX(fmodf),
+    KX(copysignf), KX(ldexpf), KX(frexpf), KX(modff), KX(nearbyintf), KX(rintf),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
@@ -371,6 +407,49 @@ UnoUuiEntry uno_mod_load_uui(const char *file)
     e = mod_instantiate(n, &flags, 0, 0, 0, 0);
     if (e && !(flags & UNO_MODF_UUI)) { mdbg("modload: not a uui module\n"); return 0; }
     return (UnoUuiEntry)e;
+}
+
+/* ---- the Python runtime + Python-app containers (PYRT.UNO) ----------------
+ * PYRT.UNO is native code flagged UNO_MODF_PY whose entry returns a PyHost*.
+ * A Python app is a UNO_MODF_PYAPP container carrying source bytes - not code,
+ * so it is never instantiated; the shell hands the payload to PYRT. */
+PyHostEntry uno_mod_load_pyrt(void)
+{
+    unsigned short flags = 0;
+    void *e;
+    long n = mod_read("PYRT.UNO", gModBuf, MODBUF_MAX);
+    mdbg("modload(pyrt)\n");
+    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
+    if (e && !(flags & UNO_MODF_PY)) { mdbg("modload: not a pyrt module\n"); return 0; }
+    return (PyHostEntry)e;
+}
+
+/* the first 48 bytes of a module's header hold its flags; 0 if absent/bad */
+unsigned short uno_mod_peek_flags(int vol, const char *path)
+{
+    unsigned char hdr[48];
+    long n = uno_fs_read(vol, path, hdr, sizeof hdr);
+    const UnoModHdr *h = (const UnoModHdr *)hdr;
+    if (n < (long)sizeof hdr || h->magic != UNO_MOD_MAGIC) return 0;
+    return h->flags;
+}
+
+/* read a PYAPP container from an explicit volume+path; return a pointer to its
+ * source payload inside gModBuf (transient - PYRT compiles it immediately). */
+int uno_mod_load_pyapp(int vol, const char *path, const unsigned char **src, int *len)
+{
+    const UnoModHdr *h = (const UnoModHdr *)gModBuf;
+    long n = uno_fs_read(vol, path, gModBuf, MODBUF_MAX);
+    if (n < (long)sizeof *h)                   { mdbg("pyapp: not found\n"); return -1; }
+    if (h->magic != UNO_MOD_MAGIC)             { mdbg("pyapp: bad magic\n"); return -1; }
+    if (h->abi != UNO_ABI_VERSION)             { mdbg("pyapp: bad abi\n");   return -1; }
+    if (!(h->flags & UNO_MODF_PYAPP))          { mdbg("pyapp: not a py app\n"); return -1; }
+    if ((long)sizeof *h + h->file_size > n)    { mdbg("pyapp: bad size\n");  return -1; }
+    if (mod_crc32(gModBuf + sizeof *h, h->file_size) != h->crc)
+                                               { mdbg("pyapp: bad crc\n");   return -1; }
+    *src = gModBuf + sizeof *h;
+    *len = (int)h->file_size;
+    return 0;
 }
 
 /* ---- the user-app slot (Studio's build-run loop) --------------------------

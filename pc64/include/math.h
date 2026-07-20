@@ -33,14 +33,32 @@ float copysignf(float x, float y);
 float ldexpf(float x, int e);
 float frexpf(float x, int *e);
 float modff(float x, float *ip);
+float nearbyintf(float x);
+float rintf(float x);
 
 /* MicroPython's modmath.c references the double names via MICROPY_FLOAT_C_FUN;
    under MICROPY_FLOAT_IMPL_FLOAT it appends 'f', so only the *f names are used.
    NAN/INFINITY for completeness. */
+#define nanf(s)   __builtin_nanf(s)
+#define nan(s)    __builtin_nan(s)
 #define NAN       (__builtin_nanf(""))
 #define INFINITY  (__builtin_inff())
 #define HUGE_VALF INFINITY
+#define HUGE_VAL  ((double)INFINITY)
 #define M_PI      3.14159265358979f
 #define M_E       2.71828182845905f
+
+/* classification as compiler builtins (inline, so no imported functions) */
+#define isfinite(x)  __builtin_isfinite(x)
+#define isnan(x)     __builtin_isnan(x)
+#define isinf(x)     __builtin_isinf(x)
+#define signbit(x)   __builtin_signbit(x)
+#define isnormal(x)  __builtin_isnormal(x)
+#define fpclassify(x) __builtin_fpclassify(FP_NAN,FP_INFINITE,FP_NORMAL,FP_SUBNORMAL,FP_ZERO,x)
+#define FP_NAN 0
+#define FP_INFINITE 1
+#define FP_NORMAL 2
+#define FP_SUBNORMAL 3
+#define FP_ZERO 4
 
 #endif
