@@ -41,7 +41,11 @@ def write_png(path, w, h, rgb):
 
 def main():
     rom_path, out_path = sys.argv[1], sys.argv[2]
-    budget = int(float(sys.argv[3]) * 1_000_000) if len(sys.argv) > 3 else 30_000_000
+    storage, tail = None, []
+    for a in sys.argv[3:]:
+        if a.startswith("--storage="): storage = a.split("=",1)[1]
+        else: tail.append(a)
+    budget = int(float(tail[0]) * 1_000_000) if tail else 30_000_000
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
@@ -56,6 +60,10 @@ def main():
     uc.mem_write(ROM, data)
     uc.reg_write(UC_ARM_REG_SP, 0x03007F00)
     uc.mem_write(KEYINPUT, struct.pack("<H", 0x03FF))   # no keys held (active-low)
+    import os
+    FS_PA, FS_SIZE = 0x03002000, 0x1000
+    if storage and os.path.exists(storage):
+        with open(storage,"rb") as f: uc.mem_write(FS_PA, f.read()[:FS_SIZE])
 
     # Run in chunks, alternating VCOUNT across the vblank threshold (160) so the
     # kernel's wait_vblank (poll <160 then >=160) makes one frame of progress per
@@ -87,6 +95,9 @@ def main():
         rgb[i*3+2] = b
     write_png(out_path, 240, 160, rgb)
     print("wrote %s (240x160) after ~%d instrs" % (out_path, chunks * CHUNK))
+    if storage:
+        with open(storage,"wb") as f: f.write(bytes(uc.mem_read(FS_PA, FS_SIZE)))
+        print("flushed FS -> %s" % storage)
 
 if __name__ == "__main__":
     main()

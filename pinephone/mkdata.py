@@ -104,6 +104,125 @@ TUNE = [
     ("D4", H), ("C4", Q), ("C4", H)]
 music_song = [(NOTE_HZ[n], d) for n, d in TUNE]
 
+# ---- ST7703 (Xingbangda XBD599) MIPI-DSI panel init -----------------------------
+# The PinePhone has NO bootloader stage that lights the DSI panel (unlike the Pi,
+# where VideoCore firmware brings up HDMI), so the payload does the full bring-up
+# itself. The panel controller needs ~20 DCS commands. Rather than compute the MIPI
+# DSI packet framing (ECC over the header, CRC-16 over the payload) in assembly, we
+# precompute each complete packet here and emit it as a byte blob the kernel just
+# spills into the DSI TX FIFO. Command bytes are byte-identical to Apache NuttX's
+# pinephone_lcd.c (lupyuen) / the Linux panel-sitronix-st7703 xbd599 sequence.
+# Each entry: (full command array incl. the DCS command byte, delay-ms after sending).
+ST7703 = [
+    ([0xB9, 0xF1, 0x12, 0x83], 0),                                          # SETEXTC
+    ([0xBA, 0x33, 0x81, 0x05, 0xF9, 0x0E, 0x0E, 0x20, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x44, 0x25, 0x00, 0x91, 0x0A, 0x00,
+      0x00, 0x02, 0x4F, 0x11, 0x00, 0x00, 0x37], 0),                        # SETMIPI (4 lanes)
+    # ^ 28-byte payload (0xBA + 27 params). HAD an EXTRA 0x00 (8 zeros between 0x20 and
+    #   0x44 instead of 7) = 29 bytes, which shifted every later SETMIPI parameter and
+    #   corrupted the panel's MIPI/DSI video-interface config -> panel was display-ON
+    #   (LP DCS still delivered) but could never lock our HS video -> black. Fixed
+    #   2026-06-21 to match p-boot's dsi_panel_init_seq (WC=0x1c=28) + Linux xbd599.
+    ([0xB8, 0x25, 0x22, 0x20, 0x03], 0),                                    # SETPOWER_EXT
+    ([0xB3, 0x10, 0x10, 0x05, 0x05, 0x03, 0xFF, 0x00, 0x00, 0x00, 0x00], 0),# SETRGBIF
+    ([0xC0, 0x73, 0x73, 0x50, 0x50, 0x00, 0xC0, 0x08, 0x70, 0x00], 0),      # SETSCR
+    ([0xBC, 0x4E], 0),                                                      # SETVDC
+    ([0xCC, 0x0B], 0),                                                      # SETPANEL
+    ([0xB4, 0x80], 0),                                                      # SETCYC
+    ([0xB2, 0xF0, 0x12, 0xF0], 0),                                          # SETDISP (720x1440)
+    ([0xE3, 0x00, 0x00, 0x0B, 0x0B, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00,
+      0xFF, 0x00, 0xC0, 0x10], 0),                                          # SETEQ
+    ([0xC6, 0x01, 0x00, 0xFF, 0xFF, 0x00], 0),                              # (undoc)
+    ([0xC1, 0x74, 0x00, 0x32, 0x32, 0x77, 0xF1, 0xFF, 0xFF, 0xCC, 0xCC,
+      0x77, 0x77], 0),                                                      # SETPOWER
+    ([0xB5, 0x07, 0x07], 0),                                                # SETBGP
+    ([0xB6, 0x2C, 0x2C], 0),                                                # SETVCOM
+    ([0xBF, 0x02, 0x11, 0x00], 0),                                          # (undoc)
+    ([0xE9, 0x82, 0x10, 0x06, 0x05, 0xA2, 0x0A, 0xA5, 0x12, 0x31, 0x23,
+      0x37, 0x83, 0x04, 0xBC, 0x27, 0x38, 0x0C, 0x00, 0x03, 0x00, 0x00,
+      0x00, 0x0C, 0x00, 0x03, 0x00, 0x00, 0x00, 0x75, 0x75, 0x31, 0x88,
+      0x88, 0x88, 0x88, 0x88, 0x88, 0x13, 0x88, 0x64, 0x64, 0x20, 0x88,
+      0x88, 0x88, 0x88, 0x88, 0x88, 0x02, 0x88, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 0),            # SETGIP1 (64B; HAD 60 = 4 trailing 0x00 missing vs p-boot -> corrupt gate timing)
+    ([0xEA, 0x02, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x02, 0x46, 0x02, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88,
+      0x64, 0x88, 0x13, 0x57, 0x13, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88,
+      0x75, 0x88, 0x23, 0x14, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x03, 0x0A, 0xA5, 0x00, 0x00, 0x00, 0x00], 0),                        # SETGIP2 (62B; HAD 60 = 2 0x00 missing vs p-boot -> corrupt gate timing)
+    ([0xE0, 0x00, 0x09, 0x0D, 0x23, 0x27, 0x3C, 0x41, 0x35, 0x07, 0x0D,
+      0x0E, 0x12, 0x13, 0x10, 0x12, 0x12, 0x18, 0x00, 0x09, 0x0D, 0x23,
+      0x27, 0x3C, 0x41, 0x35, 0x07, 0x0D, 0x0E, 0x12, 0x13, 0x10, 0x12,
+      0x12, 0x18], 0),                                                      # SETGAMMA (35B)
+    ([0x11], 120),                                                          # SLPOUT, wait 120 ms
+    ([0x29], 20),                                                           # DISPON
+]
+# (all_pixels_on/0x23 diagnostic removed 2026-06-21: panel stayed black => the panel
+#  isn't refreshing => no DSI HS video reaches it; the lead is U-Boot's CONFIG_VIDEO_DE2
+#  pre-touching the display. See PINEPHONE-BRINGUP.md §8.)
+
+# ---- ST7703 readable status/config registers (cold-vs-warm panel-state probe) ----
+# Every SoC-side avenue is exhausted (PINEPHONE-BRINGUP.md §8, 2026-06-25): native cold
+# boot is backlit-black, p-boot warm is lit, yet all SoC registers / clocks / rates / PMIC
+# rails / DCS-init bytes are proven byte-identical. The one thing a SoC dump can't see is
+# the PANEL's own internal state. So read the panel's standard MIPI DCS readable registers
+# AFTER a cold st7703_init and compare to the same reads on p-boot's warm working panel: a
+# register that reads DIFFERENT cold-vs-warm means that DCS config never took effect on the
+# cold panel (a panel-state/timing dependency = the bug). All reads matching yet still black
+# => the fault is the post-DISPON HS *video* delivery, not the DCS config.
+#
+# These are DCS reads (data type 0x06, one command byte, no params). NOTE: the ST7703
+# manufacturer command-set regs (SETMIPI 0xBA, SETGIP1/2 0xE9/0xEA, ...) are write-only —
+# they cannot be read back over DCS — so we read the standard MIPI DCS readable set that the
+# panel does expose: power-mode (RDDPM 0x0A), address-mode/MADCTL (RDDMADCTL 0x0B), pixel-
+# format (RDDCOLMOD 0x0C), image-mode (RDDIM 0x0D), signal-mode (RDDSM 0x0E), self-diagnostic
+# (RDDSDR 0x0F), plus the 3 ID bytes (RDID1/2/3 0xDA/0xDB/0xDC = a link-sanity baseline that
+# should match regardless of init state). RDDSM/RDDPM/RDDSDR are the most diagnostic: they
+# reflect whether the panel believes it has a valid display/signal after our cold init.
+# Each read-request header is {DI=0x06, reg, 0x00, ECC} — same Hamming ECC as the write path
+# (mipi_ecc), emitted as one little-endian .word for the asm reader to spill into DSI CMD_TX.
+DSI_READ_REGS = [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xDA, 0xDB, 0xDC]
+
+
+def mipi_ecc(b0, b1, b2):
+    """MIPI DSI packet-header ECC: a Hamming code over the 24 header bits."""
+    d = ([(b0 >> i) & 1 for i in range(8)] + [(b1 >> i) & 1 for i in range(8)] +
+         [(b2 >> i) & 1 for i in range(8)])
+    e = [0] * 8
+    e[0] = d[0]^d[1]^d[2]^d[4]^d[5]^d[7]^d[10]^d[11]^d[13]^d[16]^d[20]^d[21]^d[22]^d[23]
+    e[1] = d[0]^d[1]^d[3]^d[4]^d[6]^d[8]^d[10]^d[12]^d[14]^d[17]^d[20]^d[21]^d[22]^d[23]
+    e[2] = d[0]^d[2]^d[3]^d[5]^d[6]^d[9]^d[11]^d[12]^d[15]^d[18]^d[20]^d[21]^d[22]
+    e[3] = d[1]^d[2]^d[3]^d[7]^d[8]^d[9]^d[13]^d[14]^d[15]^d[19]^d[20]^d[21]^d[23]
+    e[4] = d[4]^d[5]^d[6]^d[7]^d[8]^d[9]^d[16]^d[17]^d[18]^d[19]^d[20]^d[22]^d[23]
+    e[5] = d[10]^d[11]^d[12]^d[13]^d[14]^d[15]^d[16]^d[17]^d[18]^d[19]^d[21]^d[22]^d[23]
+    return sum(e[i] << i for i in range(8))
+
+
+def mipi_crc(payload):
+    """MIPI DSI long-packet CRC-16 (CCITT, reflected poly 0x8408, init 0xFFFF)."""
+    crc = 0xFFFF
+    for b in payload:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x8408 if (crc & 1) else (crc >> 1)
+    return crc & 0xFFFF
+
+
+def dcs_packet(cmd):
+    """Build the complete MIPI DSI packet for a DCS write (virtual channel 0).
+    1 byte -> DCS short write (DT 0x05); 2 -> short write+param (0x15); >=3 -> long
+    write (0x39, with payload + CRC-16 footer). Header is {DI, b0/wc_lo, b1/wc_hi, ECC}."""
+    n = len(cmd)
+    dt = 0x05 if n == 1 else (0x15 if n == 2 else 0x39)
+    di = dt                                          # (vc=0 << 6) | dt
+    if dt != 0x39:
+        d0, d1 = cmd[0], (cmd[1] if n == 2 else 0)
+        return [di, d0, d1, mipi_ecc(di, d0, d1)]
+    wc = n
+    crc = mipi_crc(cmd)
+    return ([di, wc & 0xFF, (wc >> 8) & 0xFF, mipi_ecc(di, wc & 0xFF, (wc >> 8) & 0xFF)]
+            + list(cmd) + [crc & 0xFF, (crc >> 8) & 0xFF])
+
 # ---- palettes: 4 theme presets x 16 colours (32-bit XRGB 0xFFRRGGBB) ------------
 def c(r, g, b):
     return (0xFF << 24) | (r << 16) | (g << 8) | b
@@ -156,5 +275,23 @@ with open(OUT, "w", newline="\n") as f:
     f.write(".global theme_pals\n.align 2\ntheme_pals:\n")
     for ti, pal in enumerate(THEMES):
         f.write(f"    // theme {ti}\n    .word " + ",".join("0x%08X" % v for v in pal) + "\n")
+    # ST7703 panel init: a self-describing blob the kernel walks at boot. Each entry =
+    # .hword packet_len, .hword delay_ms, then packet_len bytes (the full DSI packet:
+    # 4-byte header [+ payload + 2-byte CRC for long writes]). Terminated by len == 0.
+    f.write(".global dsi_init_seq\n.align 2\ndsi_init_seq:\n")
+    for cmd, delay in ST7703:
+        pkt = dcs_packet(cmd)
+        f.write(f"    .hword {len(pkt)}, {delay}   // cmd 0x{cmd[0]:02X}\n")
+        f.write("    .byte " + ",".join("0x%02X" % b for b in pkt) + "\n")
+    f.write("    .hword 0, 0\n")
+    # ST7703 readable status/config registers: a table of (reg, read-request-header) word
+    # pairs the kernel's dcs_panel_dump walks (cold-vs-warm panel-state probe). Header word =
+    # {DI=0x06, reg, 0x00, ECC} little-endian. Terminated by reg == 0xFFFFFFFF.
+    f.write(".global dsi_read_seq\n.align 2\ndsi_read_seq:\n")
+    for reg in DSI_READ_REGS:
+        hdr = 0x06 | (reg << 8) | (mipi_ecc(0x06, reg, 0x00) << 24)
+        f.write(f"    .word 0x{reg:02X}, 0x{hdr:08X}   // DCS read 0x{reg:02X}\n")
+    f.write("    .word 0xFFFFFFFF, 0\n")
 
-print(f"wrote {OUT}: font 95, {NICONS} icons, {len(music_song)} notes, {NTHEMES} themes")
+print(f"wrote {OUT}: font 95, {NICONS} icons, {len(music_song)} notes, {NTHEMES} themes, "
+      f"{len(ST7703)} panel cmds")

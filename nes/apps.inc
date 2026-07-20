@@ -27,10 +27,22 @@ da4:    cmp #4
 da5:    cmp #5
         bne da6
         jmp app_theme
-da6:    cmp #7
+da6:    cmp #6
         bne da7
+        jmp app_tracker
+da7:    cmp #7
+        bne da8
         jmp app_dostris
-da7:    jmp app_generic
+da8:    cmp #8
+        bne da9
+        jmp app_outlast
+da9:    cmp #9
+        bne da10
+        jmp app_pacman
+da10:   cmp #10
+        bne da11
+        jmp app_paint
+da11:   jmp app_generic
 
 app_sysinfo:
         lda #<t_sysinfo
@@ -531,6 +543,88 @@ auto_script:
         dc.b 2, 0
         dc.b 6, PAD_D
         dc.b 2, 0
+        dc.b 0, 0
+  ENDIF
+  IF AT_TRACKER
+        ; navigate to Tracker (sel 6: Right Right Down), launch, edit a couple
+        ; of notes, let the playhead run, then idle for a stable shot.
+        dc.b 8, 0
+        dc.b 2, PAD_R           ; -> 1
+        dc.b 4, 0
+        dc.b 2, PAD_R           ; -> 2
+        dc.b 4, 0
+        dc.b 2, PAD_D           ; -> 6 (Tracker)
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; launch
+        dc.b 8, 0
+        dc.b 2, PAD_D           ; cursor down a row
+        dc.b 4, 0
+        dc.b 2, PAD_R           ; cursor to channel 1
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; cycle a note in
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; cycle again
+        dc.b 60, 0              ; let the playhead step down the rows
+        dc.b 0, 0
+  ENDIF
+  IF AT_PAINT
+        ; navigate to Paint (sel 10: Right Right Down Down), launch, paint a
+        ; little row of cells, then idle for a stable shot.
+        dc.b 8, 0
+        dc.b 2, PAD_R           ; -> 1
+        dc.b 4, 0
+        dc.b 2, PAD_R           ; -> 2
+        dc.b 4, 0
+        dc.b 2, PAD_D           ; -> 6
+        dc.b 4, 0
+        dc.b 2, PAD_D           ; -> 10 (Paint)
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; launch
+        dc.b 8, 0
+        dc.b 2, PAD_D           ; (0,1)
+        dc.b 2, 0
+        dc.b 2, PAD_A           ; paint
+        dc.b 2, 0
+        dc.b 2, PAD_R           ; (1,1)
+        dc.b 2, 0
+        dc.b 2, PAD_A
+        dc.b 2, 0
+        dc.b 2, PAD_R           ; (2,1)
+        dc.b 2, 0
+        dc.b 2, PAD_A
+        dc.b 2, 0
+        dc.b 2, PAD_D           ; (2,2)
+        dc.b 2, 0
+        dc.b 2, PAD_A
+        dc.b 8, 0
+        dc.b 0, 0
+  ENDIF
+  IF AT_OUTLAST
+        ; navigate to OutLast (sel 8: Down Down), launch, drive straight so the
+        ; road scrolls, then idle for a stable shot.
+        dc.b 8, 0
+        dc.b 2, PAD_D           ; -> 4
+        dc.b 4, 0
+        dc.b 2, PAD_D           ; -> 8 (OutLast)
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; launch
+        dc.b 90, 0              ; drive straight (road scrolls past)
+        dc.b 0, 0
+  ENDIF
+  IF AT_PACMAN
+        ; navigate to Pac-Man (sel 9: Down Down Right), launch, let Pac chomp
+        ; left then turn up while the ghosts close in, then idle for the shot.
+        dc.b 8, 0
+        dc.b 2, PAD_D           ; -> 4
+        dc.b 4, 0
+        dc.b 2, PAD_D           ; -> 8
+        dc.b 4, 0
+        dc.b 2, PAD_R           ; -> 9 (Pac-Man)
+        dc.b 4, 0
+        dc.b 2, PAD_A           ; launch
+        dc.b 22, 0              ; Pac chomps left (default heading)
+        dc.b 2, PAD_U           ; queue a turn up
+        dc.b 8, 0               ; freeze mid-chase (ghosts closing, still playing)
         dc.b 0, 0
   ENDIF
   ENDIF ; AUTOTEST

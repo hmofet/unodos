@@ -53,8 +53,36 @@ PWM_CLK_HZ = 9600000           # 19.2 MHz oscillator / DIVI=2 (matches the kerne
 WAV_RATE   = 8000              # WAV sample rate for the reconstruction
 FPS        = 60
 
+# ---- DWC2 USB host model (matches kernel.s USB_BASE block) ------------------
+USB_PAGE   = 0x3F980000        # DWC2 register block (PERIPH + 0x980000)
+USB_SIZE   = 0x10000
+OFF_GRSTCTL = 0x010
+OFF_HPRT    = 0x440
+OFF_HC0CHAR = 0x500
+OFF_HC0SPLT = 0x504
+OFF_HC0INT  = 0x508
+OFF_HC0TSIZ = 0x510
+OFF_HC0DMA  = 0x514
+
+# Descriptors the modelled hub + keyboard hand back during enumeration.
+HUB_DEV = bytes([18,1, 0x00,0x02, 9,0,1, 64, 0x24,0x04, 0x14,0x95,
+                 0,0, 0,0,0, 1])
+HUB_CFG = bytes([9,2, 25,0, 1,1,0, 0xE0,0,           # config (25 total)
+                 9,4, 0,0,1, 9,0,0, 0,               # interface (hub class 9)
+                 7,5, 0x81,3, 1,0, 12])              # endpoint (intr IN ep1)
+HUB_DESC = bytes([9,0x29, 5, 0,0, 0, 0, 0xFF, 0])    # 5 downstream ports
+KBD_DEV = bytes([18,1, 0x00,0x02, 0,0,0, 8, 0x6d,0x04, 0x1a,0xc0,
+                 0,1, 1,2,0, 1])
+KBD_CFG = bytes([9,2, 34,0, 1,1,0, 0xA0,50,          # config (34 total)
+                 9,4, 0,0,1, 3,1,1, 0,               # interface (HID boot kbd)
+                 9,0x21, 0x11,0x01, 0, 1, 0x22, 63,0,# HID descriptor
+                 7,5, 0x81,3, 8,0, 10])              # endpoint (intr IN ep1 mps8)
+USB_USAGE = {"w":0x1A, "a":0x04, "s":0x16, "d":0x07,
+             "\r":0x28, "\n":0x28, " ":0x2C, "<":0x2A}
+
 state = {"pending_read": 0, "clock": 0, "keys": b"", "kidx": 0, "kcool": 0,
-         "clo_reads": 0, "audio": []}     # audio: list of (frame, "freq"|"off", value)
+         "clo_reads": 0, "audio": [],     # audio: list of (frame, "freq"|"off", value)
+         "usbkeys": [], "uki": 0, "ukcool": 0, "setup": None, "usbreg": {}}
 
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -144,6 +172,86 @@ def uart_write(uc, offset, size, value, ud):
     pass
 
 
+def usb_response(setup, split):
+    """Build the control-IN data the modelled device returns for this SETUP.
+    `split` (HCSPLT enabled) means the transfer targets the keyboard downstream
+    of the hub; otherwise it targets the hub itself (root device)."""
+    bmreq, breq, wval, widx = setup
+    desc_type = wval >> 8
+    if breq == 6:                          # GET_DESCRIPTOR
+        if desc_type == 1:                 # DEVICE
+            return KBD_DEV if split else HUB_DEV
+        if desc_type == 2:                 # CONFIGURATION (+ following descriptors)
+            return KBD_CFG if split else HUB_CFG
+        if desc_type == 0x29:              # HUB class descriptor
+            return HUB_DESC
+    if breq == 0 and bmreq == 0xA3:        # GET_STATUS on a hub port
+        # connected + enabled + powered, full speed (bit9 low-speed clear)
+        return bytes([0x03, 0x01, 0x00, 0x00])
+    return b""
+
+
+def usb_hid_report():
+    """One 8-byte HID boot report from the scripted USB key sequence. Each key is
+    presented for one poll then released for a few (so nav edges register)."""
+    rpt = bytearray(8)
+    if state["ukcool"] > 0:
+        state["ukcool"] -= 1               # release frame
+    elif state["uki"] < len(state["usbkeys"]):
+        rpt[2] = state["usbkeys"][state["uki"]]
+        state["uki"] += 1
+        state["ukcool"] = 3
+    return bytes(rpt)
+
+
+def usb_service_channel(uc):
+    """A host channel was enabled (HCCHAR CHENA written): carry out the transfer
+    the channel registers describe, then post XFRC so the driver's poll completes."""
+    r = state["usbreg"]
+    char = r.get(OFF_HC0CHAR, 0)
+    tsiz = r.get(OFF_HC0TSIZ, 0)
+    dma  = r.get(OFF_HC0DMA, 0) & 0x3FFFFFFF     # strip the bus alias -> ARM phys
+    hcsplt = r.get(OFF_HC0SPLT, 0)
+    splt  = (hcsplt >> 31) & 1
+    compl = (hcsplt >> 16) & 1
+    dir_in  = (char >> 15) & 1
+    eptype  = (char >> 18) & 3
+    pid     = (tsiz >> 29) & 3
+    xfersize = tsiz & 0x7FFFF
+    if splt and not compl:
+        # START-SPLIT phase: the hub just ACKs; the payload moves on the CSPLIT.
+        r[OFF_HC0INT] = 0x20               # ACK
+        r[OFF_HC0CHAR] = char & ~0x80000000
+        return
+    if eptype == 0:                        # control
+        if pid == 3:                       # SETUP stage: latch the request
+            pkt = uc.mem_read(dma, 8)
+            state["setup"] = (pkt[0], pkt[1], pkt[2] | (pkt[3] << 8),
+                              pkt[4] | (pkt[5] << 8))
+        elif dir_in and xfersize > 0 and state["setup"] is not None:
+            resp = usb_response(state["setup"], splt)[:xfersize]
+            if resp:
+                uc.mem_write(dma, bytes(resp))
+    elif eptype == 3 and dir_in:           # interrupt IN: deliver a HID report
+        uc.mem_write(dma, usb_hid_report())
+    r[OFF_HC0INT] = 0x21                    # XFRC | ACK
+    r[OFF_HC0CHAR] = char & ~0x80000000    # clear CHENA (channel done)
+
+
+def usb_read(uc, offset, size, ud):
+    if offset == OFF_GRSTCTL:
+        return 0x80000000                  # AHBIDLE set, CSFTRST clear (reset done)
+    if offset == OFF_HPRT:
+        return 0x00001005                  # PWR | ENA | CONNSTS, high speed (spd=0)
+    return state["usbreg"].get(offset, 0)
+
+
+def usb_write(uc, offset, size, value, ud):
+    state["usbreg"][offset] = value & 0xFFFFFFFF
+    if offset == OFF_HC0CHAR and (value & 0x80000000):
+        usb_service_channel(uc)
+
+
 def write_png(path, w, h, rgb):
     raw = bytearray()
     row = w * 3
@@ -223,23 +331,37 @@ KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
 def parse_keys(argv):
     """Pull --keys=SEQ (serial input injection) and --audio=PATH (reconstruct the
     PWM tone to a WAV) out of argv."""
-    rest, seq, wav = [], b"", None
+    rest, seq, wav, usb = [], b"", None, []
     for a in argv:
         if a.startswith("--keys="):
             for ch in a[len("--keys="):]:
                 seq += KEYMAP.get(ch, ch.encode("latin-1"))
+        elif a.startswith("--usbkeys="):
+            for ch in a[len("--usbkeys="):]:
+                usb.append(USB_USAGE.get(ch, 0))
         elif a.startswith("--audio="):
             wav = a[len("--audio="):]
         else:
             rest.append(a)
-    return seq, wav, rest
+    return seq, wav, usb, rest
 
+
+FS_PA   = 0x340000            # USV1 disk region (kernel fs.inc.s FSBASE)
+FS_SIZE = 0x1000
 
 def main():
-    keys, wav, argv = parse_keys(sys.argv)
+    keys, wav, usbkeys, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
-    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 60_000_000
+    # optional "--storage=PATH": a persisted SD-card image for the USV1 disk
+    storage, tail = None, []
+    for a in argv[3:]:
+        if a.startswith("--storage="):
+            storage = a.split("=", 1)[1]
+        else:
+            tail.append(a)
+    budget = int(float(tail[0]) * 1_000_000) if tail else 60_000_000
     state["keys"] = keys
+    state["usbkeys"] = usbkeys
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
@@ -250,8 +372,15 @@ def main():
     uc.mmio_map(UART_PAGE, 0x1000, uart_read, None, uart_write, None)
     uc.mmio_map(TIMER_PAGE, 0x1000, timer_read, None, timer_write, None)
     uc.mmio_map(MBOX_PAGE, 0x1000, mbox_read, None, mbox_write, None)
+    uc.mmio_map(USB_PAGE, USB_SIZE, usb_read, None, usb_write, None)
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x00200000)
+
+    # preload the persisted USV1 disk so fs_init keeps it ("power on" with an SD card)
+    import os
+    if storage and os.path.exists(storage):
+        with open(storage, "rb") as f:
+            uc.mem_write(FS_PA, f.read()[:FS_SIZE])
 
     def on_unmapped(uc, access, address, size, value, ud):
         print("  !! unmapped access @ 0x%X (size %d) pc=0x%X"
@@ -282,6 +411,10 @@ def main():
         rgb[i*3+2] = w & 0xFF
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if storage:                          # flush the USV1 disk back ("SD write-back")
+        with open(storage, "wb") as f:
+            f.write(bytes(uc.mem_read(FS_PA, FS_SIZE)))
+        print("flushed FS -> %s" % storage)
     if wav:
         reconstruct_audio(wav)
 

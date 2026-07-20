@@ -174,7 +174,11 @@ def of_service(uc):
 def main():
     keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
-    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 120_000_000
+    storage, tail = None, []
+    for a in argv[3:]:
+        if a.startswith("--storage="): storage = a.split("=",1)[1]
+        else: tail.append(a)
+    budget = int(float(tail[0]) * 1_000_000) if tail else 120_000_000
     state["keys"] = keys
 
     data = open(rom_path, "rb").read()
@@ -184,6 +188,10 @@ def main():
     uc.mem_write(LOAD, data)
     uc.mem_write(OF_ENTRY, struct.pack(">I", 0x4E800020))   # blr
     uc.reg_write(UC_PPC_REG_5, OF_ENTRY)                    # OF client entry in r5
+    import os
+    FS_PA, FS_SIZE = 0x00402000, 0x1000
+    if storage and os.path.exists(storage):
+        with open(storage,"rb") as f: uc.mem_write(FS_PA, f.read()[:FS_SIZE])
 
     uc.hook_add(UC_HOOK_CODE, lambda uc, a, s, ud: of_service(uc),
                 None, OF_ENTRY, OF_ENTRY)
@@ -214,6 +222,9 @@ def main():
         rgb[i*3+2] = fb[i*4+3]   # B
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if storage:
+        with open(storage,"wb") as f: f.write(bytes(uc.mem_read(FS_PA, FS_SIZE)))
+        print("flushed FS -> %s" % storage)
     if wav:
         analyze_pcm(state["pcm"], wav)
 

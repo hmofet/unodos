@@ -70,6 +70,14 @@ draw_app:
     beq app_theme
     cmp r0, #7
     beq app_dostris
+    cmp r0, #9
+    beq app_pacman
+    cmp r0, #8
+    beq app_outlast
+    cmp r0, #10
+    beq app_paint
+    cmp r0, #6
+    beq app_tracker
     b app_generic
 app_sysinfo:
     ldr r0, =t_sysinfo
@@ -78,16 +86,10 @@ app_sysinfo:
     bl draw_content
     pop {pc}
 app_notepad:
-    ldr r0, =t_notepad
-    bl draw_chrome
-    ldr r0, =c_notepad
-    bl draw_content
+    bl notepad_draw
     pop {pc}
 app_files:
-    ldr r0, =t_files
-    bl draw_chrome
-    ldr r0, =c_files
-    bl draw_content
+    bl files_draw
     pop {pc}
 app_generic:
     ldr r0, =icon_lbl
@@ -432,6 +434,35 @@ auto_script:
 .ifdef AT_MUSIC
     .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 200,0, 0,0
 .endif
+.ifdef AT_TRACKER
+    .byte 6,0, 2,PAD_D,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_A,40,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0, 2,PAD_A,2,0, 2,PAD_A,2,0, 30,0, 0,0
+.endif
+.ifdef AT_FS
+    .byte 6,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_A,6,0, 2,PAD_A,6,0, 2,PAD_B,6,0
+    .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_D,2,0, 2,PAD_A,12,0, 0,0
+.endif
+.ifdef AT_FS2
+    .byte 6,0, 2,PAD_D,2,0, 2,PAD_A,12,0, 0,0
+.endif
+.ifdef AT_FSVIEW
+    .byte 6,0, 2,PAD_D,2,0, 2,PAD_A,6,0, 2,PAD_A,12,0, 0,0
+.endif
+.ifdef AT_OUTLAST
+    .byte 6,0, 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_A,30,0
+    .byte 2,PAD_L,4,0, 2,PAD_L,4,0, 30,0, 2,PAD_R,4,0, 2,PAD_R,4,0, 30,0, 0,0
+.endif
+.ifdef AT_PAINT
+    .byte 6,0, 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_A,6,0
+    .byte 2,PAD_A,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0
+    .byte 2,PAD_U,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0
+    .byte 2,PAD_D,2,0, 2,PAD_A,2,0, 0,0
+.endif
+.ifdef AT_PACMAN
+    .byte 6,0,  2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_R,2,0
+    .byte 2,PAD_A, 40,0, 2,PAD_U, 40,0, 2,PAD_L, 40,0, 2,PAD_D, 40,0, 2,PAD_R, 40,0, 0,0
+.endif
 .ifdef AT_DOSTRIS
     .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_D, 4,0, 2,PAD_A, 6,0
     .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 16,PAD_D, 34,0
@@ -473,6 +504,10 @@ t_music:   .asciz "Music"
 t_files:   .asciz "Files"
 t_theme:   .asciz "Theme"
 t_dostris: .asciz "Dostris"
+t_pacman:  .asciz "Pac-Man"
+t_outlast: .asciz "OutLast"
+t_paint:   .asciz "Paint"
+t_tracker: .asciz "Tracker"
 .align 2
 c_sysinfo:
     .word 8, 24, m_si0

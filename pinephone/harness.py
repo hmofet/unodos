@@ -134,6 +134,33 @@ def uart_write(uc, offset, size, value, ud):
     pass
 
 
+# --- Path-A panel bring-up: the kernel now runs the full MIPI-DSI bring-up
+# (panel.inc.s) before drawing. Unicorn has no panel/clock/DSI model, so we map
+# each touched peripheral page as a sink and, for the three blocks the bring-up
+# *polls*, return values that satisfy the poll so it proceeds (and never spins to
+# its bounded timeout). This makes the milestone renders a real regression of the
+# bring-up: it must run end-to-end without faulting or hanging. (It does NOT verify
+# the panel lights — only hardware can.)
+def ccu_read(uc, offset, size, ud):      # CCU @ 0x01C20000 (+ PIO @ +0x800)
+    if offset == 0x48:
+        return 0x10000000                # PLL_DE locked (bit 28)
+    return 0
+
+
+def rsb_read(uc, offset, size, ud):      # RSB @ 0x01F03400 (page base 0x01F03000)
+    if offset == 0x40C:
+        return 1                         # RSB_STAT = TRANS_OVER (bit0)
+    return 0                             # RSB_CTRL bit7 / RSB_DMCR bit31 read clear
+
+
+def sink_read(uc, offset, size, ud):     # DSI BASIC_CTL0 reads 0 -> INSTRU_EN clear
+    return 0
+
+
+def sink_write(uc, offset, size, value, ud):
+    pass
+
+
 def write_png(path, w, h, rgb):
     raw = bytearray()
     row = w * 3
@@ -152,7 +179,11 @@ def write_png(path, w, h, rgb):
 def main():
     keys, wav, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
-    budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 160_000_000
+    storage, tail = None, []
+    for a in argv[3:]:
+        if a.startswith("--storage="): storage = a.split("=",1)[1]
+        else: tail.append(a)
+    budget = int(float(tail[0]) * 1_000_000) if tail else 160_000_000
     state["keys"] = keys
 
     data = open(rom_path, "rb").read()
@@ -161,8 +192,21 @@ def main():
     uc.mem_map(DE2_BASE, DE2_SZ, UC_PROT_ALL)
     uc.mmio_map(UART_PAGE, 0x1000, uart_read, None, uart_write, None)
     uc.mmio_map(I2S_PAGE, 0x1000, i2s_read, None, i2s_write, None)
+    # panel bring-up peripheral pages (sinks; poll-satisfying where needed)
+    uc.mmio_map(0x01C00000, 0x1000, sink_read, None, sink_write, None)  # SRAM_CTRL
+    uc.mmio_map(0x01C0C000, 0x1000, sink_read, None, sink_write, None)  # TCON0
+    uc.mmio_map(0x01C20000, 0x1000, ccu_read,  None, sink_write, None)  # CCU + PIO
+    uc.mmio_map(0x01CA0000, 0x1000, sink_read, None, sink_write, None)  # MIPI-DSI host
+    uc.mmio_map(0x01CA1000, 0x1000, sink_read, None, sink_write, None)  # MIPI D-PHY
+    uc.mmio_map(0x01F01000, 0x1000, sink_read, None, sink_write, None)  # R_PRCM
+    uc.mmio_map(0x01F02000, 0x1000, sink_read, None, sink_write, None)  # R_PIO
+    uc.mmio_map(0x01F03000, 0x1000, rsb_read,  None, sink_write, None)  # RSB + R_PWM
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x40200000)
+    import os
+    FS_PA, FS_SIZE = 0x40302000, 0x1000
+    if storage and os.path.exists(storage):
+        with open(storage,"rb") as f: uc.mem_write(FS_PA, f.read()[:FS_SIZE])
 
     def on_unmapped(uc, access, address, size, value, ud):
         print("  !! unmapped access @ 0x%X (size %d) pc=0x%X"
@@ -191,6 +235,9 @@ def main():
         rgb[i*3+2] = w & 0xFF
     write_png(out_path, W, H, rgb)
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
+    if storage:
+        with open(storage,"wb") as f: f.write(bytes(uc.mem_read(FS_PA, FS_SIZE)))
+        print("flushed FS -> %s" % storage)
     if wav:
         analyze_pcm(state["pcm"], wav)
 

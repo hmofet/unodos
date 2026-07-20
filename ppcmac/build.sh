@@ -25,6 +25,13 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/unodos_theme.bin ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/unodos_music.bin ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/unodos_dt.bin ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/unodos_pm.bin ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/unodos_ol.bin ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/unodos_paint.bin ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.bin ;;
+  fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
+  fs2)     DEFS="--defsym AUTOTEST=1 --defsym AT_FS2=1";     OUT=build/unodos_fs2.bin ;;
+  fsview)  DEFS="--defsym AUTOTEST=1 --defsym AT_FSVIEW=1";  OUT=build/unodos_fsv.bin ;;
 esac
 
 echo "[2/3] assembling (PowerPC, big-endian) + linking via WSL..."
