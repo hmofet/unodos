@@ -29,8 +29,11 @@
 #include "uno_nic.h"
 #include "net.h"
 #include "tls.h"
+#include "pc64_http.h"     /* pc64_net_up */
 #include <string.h>
 #include <stdlib.h>
+
+void uno_pc64_delay_ms(int ms);    /* uefi_main.c */
 
 /* shell services (pc64_uui.c) + fb accessors a unoui-class module may import */
 struct unoui_theme;
@@ -87,6 +90,9 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(net_udp_send),    KX(net_udp_recv),
     KX(tls_connect), KX(tls_read),  KX(tls_write), KX(tls_close),
     KX(tls_cipher),  KX(tls_version), KX(tls_last_error), KX(tls_have_rdrand),
+    /* net bring-up + DNS + CA-validated TLS: a module (Studio's AI assistant)
+     * makes its own HTTPS request through these */
+    KX(pc64_net_up), KX(net_dns_query), KX(tls_connect_ca), KX(uno_pc64_delay_ms),
     /* ---- the unoui-class surface (Studio and friends) ------------------- */
     /* toolkit */
     KX(unoui_window_init), KX(unoui_add_label),  KX(unoui_add_button),

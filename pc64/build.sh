@@ -138,7 +138,7 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_STUDIO:-1}" != "0" ]; then
         echo "[3c] building STUDIO.UNO (the IDE)..."
         SOBJ=""
-        for s in studio studio_hl studio_ai ucc ucc_x64; do
+        for s in studio studio_hl studio_ai studio_json ucc ucc_x64; do
             "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
                   -DUCC_KEXPORTS_H='"build/apps/ucc_kexports.h"' \
                   -c -o "build/apps/$s.o" "apps/$s.c"
