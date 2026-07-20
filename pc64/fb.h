@@ -76,6 +76,10 @@ void fb_vline(int x, int y, int h, fb_px c);
 
 /* alpha blend (a: 0..255) + vertical gradient - for modern themes. Clip-safe,
  * additive: no effect on callers that don't use them. */
+/* copy a w x h pixel block (rows `stride` px apart in src) to (x,y), clipped.
+ * No alpha blend - callers pre-composite (see fb.c). */
+void fb_blit(int x, int y, int w, int h, const fb_px *src, int stride);
+
 void fb_blend_pixel(int x, int y, fb_px c, int a);
 void fb_blend_rect (int x, int y, int w, int h, fb_px c, int a);
 void fb_grad_v     (int x, int y, int w, int h, fb_px top, fb_px bot);

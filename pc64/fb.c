@@ -78,6 +78,25 @@ void fb_fill_rect(int x, int y, int w, int h, fb_px c)
 void fb_hline(int x, int y, int w, fb_px c) { fb_fill_rect(x, y, w, 1, c); }
 void fb_vline(int x, int y, int h, fb_px c) { fb_fill_rect(x, y, 1, h, c); }
 
+/* Copy a w x h block of pixels (rows `stride` px apart in `src`) to (x,y),
+ * clipped like every other primitive. src pixels are fb_px (0xAABBGGRR);
+ * alpha is NOT blended here - callers pre-composite (the Photos app bakes
+ * its checkerboard into the scaled cache), keeping the hot loop a memcpy.
+ * The clip math must offset INTO src by however much the left/top edges
+ * were cut, which is why this can't be built from fb_fill_rect. */
+void fb_blit(int x, int y, int w, int h, const fb_px *src, int stride)
+{
+    int r, j, ox = x, oy = y;
+    if (!src || stride <= 0) return;
+    if (!clip(&x, &y, &w, &h)) return;
+    src += (long)(y - oy) * stride + (x - ox);
+    for (r = 0; r < h; r++) {
+        fb_px       *d = &fb[(long)(y + r) * FB_W + x];
+        const fb_px *s = src + (long)r * stride;
+        for (j = 0; j < w; j++) d[j] = s[j];
+    }
+}
+
 void fb_frame_rect(int x, int y, int w, int h, fb_px c)
 {
     if (w <= 0 || h <= 0) return;

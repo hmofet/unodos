@@ -259,6 +259,22 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         rr(ox + G(27), oy + G(23), G(3), G(2), FB_RGB(240, 180, 60));
         disc(ox + G(23), oy + G(24), G(2), FB_RGB(30, 34, 44));        /* hub */
         break; }
+    case PCI_PHOTOS: {                               /* framed landscape     */
+        rr(ox + G(3), oy + G(5), G(26), G(22), FB_RGB(250, 250, 248));  /* mat  */
+        frame(ox + G(3), oy + G(5), G(26), G(22), FB_RGB(90, 100, 125));
+        rr(ox + G(5), oy + G(7), G(22), G(10), FB_RGB(120, 185, 240));  /* sky  */
+        rr(ox + G(5), oy + G(17), G(22), G(8), FB_RGB(70, 125, 80));    /* field */
+        disc(ox + G(22), oy + G(10), G(3), FB_RGB(250, 210, 80));       /* sun  */
+        /* two mountains: filled triangles built from hlines */
+        { int yy; for (yy = 0; yy < G(9); yy++) {
+            int w1 = yy * G(12) / G(9);
+            hln(ox + G(10) - w1 / 2, oy + G(8) + yy, w1 + 1, FB_RGB(80, 140, 90));
+        } }
+        { int yy; for (yy = 0; yy < G(11); yy++) {
+            int w2 = yy * G(16) / G(11);
+            hln(ox + G(19) - w2 / 2, oy + G(6) + yy, w2 + 1, FB_RGB(55, 110, 70));
+        } }
+        break; }
     case PCI_GENERIC:
     default: {
         /* Any app that does not name a known emblem - notably one loaded from
