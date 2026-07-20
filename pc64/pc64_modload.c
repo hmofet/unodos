@@ -26,12 +26,17 @@
 #include "pc64_font.h"
 #include "uefi.h"
 #include "e1000.h"
+#include "e1000e.h"
+#include "igb.h"
+#include "r8169.h"
 #include "uno_nic.h"
 #include "net.h"
 #include "tls.h"
 #include "pc64_http.h"     /* pc64_net_up */
 #include "iwlwifi.h"
 #include "rtl8152.h"
+#include "rtwifi.h"
+#include "mrvlwifi.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -84,6 +89,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(strcmp),    KX(strncmp),
     /* the network stack (Network app) */
     KX(e1000_nic), KX(e1000_mac),
+    KX(e1000e_nic), KX(e1000e_mac), KX(igb_nic), KX(igb_mac), KX(r8169_nic), KX(r8169_mac),
     KX(net_init),  KX(net_poll),   KX(net_link),   KX(net_ip),
     KX(net_dhcp_start), KX(net_dhcp_done),
     KX(net_ping),  KX(net_ping_replied),
@@ -98,6 +104,9 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* Intel WiFi + Realtek USB-ethernet status (Network app readout) */
     KX(iwl_present), KX(iwl_nic),    KX(iwl_mac),   KX(iwl_status_str),
     KX(rtl8152_nic), KX(rtl8152_mac), KX(rtl8152_status),
+    /* Realtek + Marvell PCIe WiFi status */
+    KX(rtwifi_present),   KX(rtwifi_nic),   KX(rtwifi_mac),   KX(rtwifi_status_str),
+    KX(mrvlwifi_present), KX(mrvlwifi_nic), KX(mrvlwifi_mac), KX(mrvlwifi_status_str),
     /* ---- the unoui-class surface (Studio and friends) ------------------- */
     /* toolkit */
     KX(unoui_window_init), KX(unoui_add_label),  KX(unoui_add_button),

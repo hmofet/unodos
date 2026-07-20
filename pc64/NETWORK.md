@@ -7,12 +7,24 @@ single-connection TCP, and TLS (BearSSL) — a link to run on. Drivers are probe
 in order the first time the network is used ([pc64_http.c](pc64_http.c),
 `pc64_net_up`):
 
-| order | driver | device | bus |
-|------:|--------|--------|-----|
-| 1 | [e1000.c](e1000.c)   | Intel 8254x Gigabit (incl. the QEMU `e1000`) | PCI |
-| 2 | [ax88179.c](ax88179.c) | ASIX AX88179/179A USB Gigabit | USB (xHCI) |
-| 3 | [rtl8152.c](rtl8152.c) | Realtek RTL8152/8153/8155/8156 USB Ethernet (most docks/dongles) | USB (xHCI) |
-| 4 | [iwlwifi.c](iwlwifi.c) | Intel AC/AX WiFi (7260…AX210) | PCI |
+| order | driver | device | bus | QEMU-verified |
+|------:|--------|--------|-----|:-------------:|
+| 1 | [e1000.c](e1000.c)   | Intel 8254x Gigabit (incl. the QEMU `e1000` = 82540em) | PCI | ✅ `e1000` |
+| 2 | [e1000e.c](e1000e.c) | Intel e1000e: 82571–4/82583, I217/I218/I219 LOM (incl. QEMU `e1000e` = 82574L) | PCI | ✅ `e1000e` |
+| 3 | [igb.c](igb.c)       | Intel igb: I210/I211, 82575/82576/82580, I350/I354 (incl. QEMU `igb` = 82576) | PCI | ✅ `igb` |
+| 4 | [r8169.c](r8169.c)   | Realtek RTL8168/8111/8101/8125 Gigabit/2.5G (the common consumer NIC) | PCI | — (QEMU has no rtl816x) |
+| 5 | [ax88179.c](ax88179.c) | ASIX AX88179/179A USB Gigabit | USB (xHCI) | — |
+| 6 | [rtl8152.c](rtl8152.c) | Realtek RTL8152/8153/8155/8156 USB Ethernet (most docks/dongles) | USB (xHCI) | — |
+| 7 | [iwlwifi.c](iwlwifi.c) | Intel AC/AX/BE WiFi (7260…AX210, WiFi-7 Bz/Sc best-effort) | PCI | — |
+| 8 | [rtwifi.c](rtwifi.c) | Realtek WiFi (rtw88: 8822/8821/8723/8814; rtw89: 8852/8851/8922) | PCI | — |
+| 9 | [mrvlwifi.c](mrvlwifi.c) | Marvell/NXP WiFi (mwifiex: 88W8897/8997/8766) | PCI | — |
+
+The three Intel PCI GbE drivers (e1000/e1000e/igb) are exercised end-to-end by
+`nettest.py` (swap `-device`): link, DHCP, ICMP, UDP/TFTP, TCP echo and TLS all
+pass on each. e1000e owns the 82574L (device `0x10D3`) so it, not e1000, drives
+the QEMU `e1000e`; igb needs a PHY autoneg kick over MDIC before QEMU raises
+`STATUS.LU` and un-gates RX. r8169 and all WiFi parts have no QEMU model and are
+verified by reference/inspection only (hardware-pending).
 
 The USB drivers need the xHCI stack, which is behind `-DUNO_XHCI` (see
 [xhci.h](xhci.h)); when it is off, `uno_usb_*` are inert stubs and both USB NIC
@@ -54,21 +66,38 @@ Linux box) onto the **ESP root** under a `FIRMWARE/` directory, renamed to 8.3
 (the UEFI FAT reader the driver uses is 8.3). The driver reads `CSR_HW_REV` +
 `CSR_HW_RF_ID` to identify the card and looks for these names:
 
-| card | Linux firmware file | copy to ESP as |
-|------|--------------------|----------------|
-| 7260 / 7265         | `iwlwifi-7260-17.ucode` / `iwlwifi-7265D-29.ucode` | `FIRMWARE/IWL7260.UCO` / `IWL7265D.UCO` |
-| 3160 / 3165 / 3168  | `iwlwifi-3160-17.ucode` / `iwlwifi-3168-29.ucode`  | `FIRMWARE/IWL3160.UCO` / `IWL3168.UCO` |
-| 8260 / 8265         | `iwlwifi-8000C-36.ucode` / `iwlwifi-8265-36.ucode` | `FIRMWARE/IWL8000.UCO` / `IWL8265.UCO` |
-| 9260                | `iwlwifi-9260-th-b0-jf-b0-46.ucode`                | `FIRMWARE/IWL9260.UCO` |
-| 9461 / 9462 / 9560  | `iwlwifi-9000-pu-b0-jf-b0-46.ucode`                | `FIRMWARE/IWL9000.UCO` |
-| AX200               | `iwlwifi-cc-a0-77.ucode`                           | `FIRMWARE/IWLAX200.UCO` |
-| AX201 (Qu/QuZ CNVi) | `iwlwifi-Qu-b0-hr-b0-77.ucode` / `-QuZ-a0-hr-b0-77`| `FIRMWARE/IWLAX201.UCO` |
-| AX210 / AX211       | `iwlwifi-ty-a0-gf-a0-89.ucode` **+** `iwlwifi-ty-a0-gf-a0.pnvm` | `FIRMWARE/IWLAX210.UCO` **+** `IWLAX210.PNV` |
+The driver classifies the card by its PCI device id into a family, matching the
+full Linux `iwlwifi` MVM device table (older 5000–6000/1000/2000 "iwldvm" cards
+are recognised and cleanly declined — they need a different driver).
+
+| card family | upstream firmware base | copy to ESP as | PNVM? |
+|-------------|------------------------|----------------|:-----:|
+| 7260 / 7265 / 3160 | `iwlwifi-7260` (per-device -3160/-7265/-7265D) | `FIRMWARE/IWL7260.UCO` | — |
+| 3168 | `iwlwifi-3168` | `FIRMWARE/IWL3168.UCO` | — |
+| 8260 / 8265 / 4165 | `iwlwifi-8000C` / `iwlwifi-8265` | `FIRMWARE/IWL8000.UCO` | — |
+| 9260 (discrete) | `iwlwifi-9260-th-b0-jf-b0` | `FIRMWARE/IWL9260.UCO` | — |
+| 9461 / 9462 / 9560 | `iwlwifi-9000-pu-b0-jf-b0` | `FIRMWARE/IWL9000.UCO` | — |
+| AX200 (discrete) | `iwlwifi-cc-a0` | `FIRMWARE/IWLAX200.UCO` | — |
+| AX201 (Qu/QuZ CNVi) | `iwlwifi-Qu-b0-hr-b0` / `-QuZ-a0-hr-b0` | `FIRMWARE/IWLAX201.UCO` | — |
+| AX210 (Ty) | `iwlwifi-ty-a0-gf-a0` | `FIRMWARE/IWLAX210.UCO` | **yes** |
+| AX211 / AX411 (So/Ma) | `iwlwifi-so-a0-gf-a0` | `FIRMWARE/IWLAX211.UCO` | **yes** |
+| BE200 (Gl, WiFi 7 †) | `iwlwifi-gl-*-fm-*` | `FIRMWARE/IWLBE200.UCO` | **yes** |
+| BE201 (Bz, WiFi 7 †) | `iwlwifi-bz-*-fm-*` | `FIRMWARE/IWLBE201.UCO` | **yes** |
+| BE211 (Sc, WiFi 7 †) | `iwlwifi-sc-a0-*` | `FIRMWARE/IWLBE211.UCO` | **yes** |
 
 Use the highest API revision (the number before `.ucode`) your file set has; the
-driver does not care about the exact number, only the contents. The AX210 also
-needs its `.pnvm` companion (regulatory/PHY platform data) — without it the
-firmware refuses to leave init. AC cards and AX200/AX201 have no PNVM.
+driver only cares about the contents. AX210 and every WiFi-7 part also need the
+matching `.pnvm` (regulatory/PHY data) — without it the firmware refuses to leave
+init. AC cards and AX200/AX201 have no PNVM.
+
+† **WiFi 7 (Bz/Gl/Sc) is best-effort / not yet working**: those cards boot through
+the gen3 path but add a TOP-reset + ROM-start handshake the driver does not yet
+perform. They're recognised and their firmware fetches, but bring-up is a further
+metal task. Don't rely on WiFi 7 yet — AX201 (the X1 Carbon Gen 8 target) and the
+other AX/AC parts are the ones to test.
+
+The [`uno-wifi-fw.py`](tools/uno-wifi-fw.py) tool downloads and installs the right
+file automatically — see below — so this table is mostly for reference.
 
 The primary metal target is the **ThinkPad X1 Carbon Gen 8** (AX201, a Qu/QuZ
 CNVi part) — the same machine the trackpad/keyboard work targets.
@@ -93,6 +122,30 @@ path. If no `WIFI.CFG`/firmware is present, or the join fails, `iwl_nic()`
 returns NULL and the probe chain simply falls through — a machine with a wired or
 USB NIC is unaffected.
 
+## Realtek and Marvell PCIe WiFi
+
+Two more WiFi families, same shape as the Intel driver (firmware on the ESP,
+software WPA2 via [wifi_wpa.c](wifi_wpa.c), publishes `uno_nic_t`, inert when
+absent) but each speaking its vendor's command interface:
+
+- **[rtwifi.c](rtwifi.c)** — Realtek `rtw88` (WiFi 5: RTL8822BE/CE, 8821CE,
+  8723DE, 8814AE) and `rtw89` (WiFi 6/6E/7: RTL8852AE/BE/CE, 8851BE, 8922AE).
+  Firmware `FIRMWARE\RTL8822C.FW` etc. Keys go into the chip's security CAM
+  (a direct MMIO write on rtw88, a SEC-CAM H2C on rtw89).
+- **[mrvlwifi.c](mrvlwifi.c)** — Marvell/NXP `mwifiex` (88W8897, 88W8997,
+  88W8766). Firmware `FIRMWARE\W8897.FW` etc. A HostCmd/event interface over PFU
+  DMA rings; keys installed via `HostCmd_CMD_802_11_KEY_MATERIAL`.
+
+**These are more metal-pending than the Intel driver.** Everything that is fully
+specified in the vendor drivers is implemented exactly — chip identification, the
+firmware-download state machines, the ring/descriptor formats (incl. the
+mandatory rtw88 TX-descriptor checksum), the command interfaces, and the CCMP key
+install. But the large chip-specific tables Linux carries per chip — the Realtek
+`pwr_on_seq` / rtw89 DMAC-CMAC init, and the exact Marvell `PCIE_DESC_DETAILS`
+body — are **not** reproduced, so MAC bring-up is scaffolded, not complete. They
+recognise their cards and load firmware; full association is the metal tail.
+`uno-wifi-fw.py` fetches their firmware too (see below).
+
 ### Getting the firmware onto a stick — `tools/uno-wifi-fw.py`
 
 Rather than copy files by hand, run the cross-platform helper. It downloads the
@@ -102,17 +155,20 @@ loads, plus a starter `WIFI.CFG`:
 
 ```
 python3 tools/uno-wifi-fw.py                      # auto-detect card + USB
-python3 tools/uno-wifi-fw.py --card ax201 --dest E:\        (Windows)
-python3 tools/uno-wifi-fw.py --card ax210 --dest /Volumes/UNODOS   (macOS)
+python3 tools/uno-wifi-fw.py --card ax201 --dest E:\        (Intel, Windows)
+python3 tools/uno-wifi-fw.py --card rtl8852b --dest /Volumes/UNODOS  (Realtek, macOS)
+python3 tools/uno-wifi-fw.py --card w8897 --dest /media/me/UNODOS    (Marvell, Linux)
 python3 tools/uno-wifi-fw.py --list-cards
-python3 tools/uno-wifi-fw.py --source local       # copy from this Linux box's /lib/firmware
+python3 tools/uno-wifi-fw.py --source local       # Intel: copy from this box's /lib/firmware
 ```
 
-Runs on Windows, macOS and Linux with only the Python 3 standard library (it
-unpacks the `.deb` in-process — `ar` + `tar` + `lzma`). Double-click launchers:
-`uno-wifi-fw.cmd` (Windows), `uno-wifi-fw.command` (macOS). The card→file map
-matches the driver: `ax200→IWLAX200.UCO`, `ax201→IWLAX201.UCO`,
-`ax210→IWLAX210.UCO + IWLAX210.PNV`, `9560→IWL9000.UCO`, etc.
+Runs on Windows, macOS and Linux with only the Python 3 standard library.
+**Intel** firmware comes from the Debian `firmware-iwlwifi` package (unpacked
+in-process — `ar` + `tar` + `lzma`); **Realtek and Marvell** firmware is pulled
+straight from the kernel.org `linux-firmware` tree. Double-click launchers:
+`uno-wifi-fw.cmd` (Windows), `uno-wifi-fw.command` (macOS). `--list-cards` prints
+every supported card key; auto-detect knows the Intel, Realtek (`0x10ec`) and
+Marvell (`0x11ab`/`0x1b4b`) PCI IDs.
 
 For a **test image** that already carries the firmware, populate `fw-blobs/`
 (gitignored) with `sh tools/fetch-fw.sh`, then `UNO_STUDIO=0 ./build.sh` copies

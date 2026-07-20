@@ -217,9 +217,8 @@ uno_nic_t *e1000_nic(void)
     pci_dev d;
     int i;
     if (!pci_find(0x8086, 0x100E, &d) &&        /* 82540EM (QEMU default) */
-        !pci_find(0x8086, 0x100F, &d) &&        /* 82545EM */
-        !pci_find(0x8086, 0x10D3, &d))          /* 82574L */
-        return 0;
+        !pci_find(0x8086, 0x100F, &d))          /* 82545EM */
+        return 0;                                /* 82574L (0x10D3) -> e1000e.c */
 
     pci_enable_bus_master(&d);
     g_mmio = (volatile u8 *)(uintptr_t)pci_bar(&d, 0);
