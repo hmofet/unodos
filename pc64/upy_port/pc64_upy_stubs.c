@@ -8,7 +8,13 @@ __asm__(
     "    ret\n"
 );
 
-/* MicroPython's shared gchelper needs a per-arch gc_helper_get_regs_and_sp
+/* NOTE: mpconfigport.h now sets MICROPY_GCREGS_SETJMP (1), so the GC root scan
+ * captures registers via setjmp/jmp_buf and this hand-written helper is no
+ * longer called.  It is kept (harmless) for reference; the setjmp path saves
+ * the full Win64 non-volatile set (incl. RDI/RSI) that this SysV-only stub
+ * omitted, which is what fixed the use-after-free.
+ *
+ * MicroPython's shared gchelper needs a per-arch gc_helper_get_regs_and_sp
  * (gc_helper_regs_t is uintptr_t[6] on x86-64) - the vendored tree ships it
  * for the SysV ABI, not Win64/mingw, so provide it here.  Win64: the regs
  * pointer arrives in %rcx; save the callee-saved GP set the GC must trace and

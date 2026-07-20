@@ -37,6 +37,10 @@ float fabsf(float x) { return x < 0.0f ? -x : x; }
 float sinf(float x)
 {
     float x2, x3, x5, x7;
+    /* Guard the range-reduction loop: NaN/Inf never satisfy the exit test and
+       a huge magnitude would spin for millions of iterations, so bail to a
+       defined 0 for non-finite / large inputs (same spirit as floorf/ceilf). */
+    if (!(x > -1.0e6f && x < 1.0e6f)) return 0.0f;
     /* range-reduce to [-pi, pi] */
     while (x >  PI_F) x -= TWOPI;
     while (x < -PI_F) x += TWOPI;

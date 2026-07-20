@@ -733,7 +733,10 @@ static void rx_process_rb(const u8 *rb, int cap,
                 frame = pkt->data + 4; fl = mlen;
                 machdr = 24;   /* refined from the frame's FC below */
             }
-            if (fl > 0 && fl < 1600 && 4 + plen <= cap) {
+            /* mpdu_len (fl) is descriptor-supplied and independent of the DMA'd
+               length: refuse to read fl bytes past the end of rb[cap]. */
+            if (fl > 0 && fl < 1600 && 4 + plen <= cap &&
+                (int)(frame - rb) + fl <= cap) {
                 u16 fc = (u16)(frame[0] | (frame[1] << 8));
                 int qos = ((fc >> 4) & 0xF) == 8;
                 int hl = machdr ? machdr : (qos ? 26 : 24);

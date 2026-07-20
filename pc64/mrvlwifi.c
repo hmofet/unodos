@@ -388,6 +388,8 @@ static void rx_one(const u8 *buf)
     int pkt_len = pd[2] | (pd[3]<<8);
     const u8 *frame = pd + pkt_off;
     if (rl < INTF_HDR + 20 || pkt_len <= 0) return;
+    /* device-supplied pkt_off/pkt_len are untrusted: keep frame within rl */
+    if (pkt_off < 0 || pkt_len > 1600 || pkt_off + pkt_len > rl - INTF_HDR) return;
     /* EAPOL? rx_packet_hdr's SNAP ethertype 0x888E means EAPOL */
     { const u8 *llc = frame + 14;
       if (pkt_len >= 22 && !memcmp(llc, SNAP, 6)) {

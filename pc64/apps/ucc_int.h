@@ -202,6 +202,7 @@ struct Cc {
     int   lexseq;                   /* token sequence counter */
     int   dry;                      /* sizing pass for unsized-array inits:
                                        parse but write/reserve nothing */
+    int   depth;                    /* recursive-descent depth guard */
     /* string literals: interned into data section image */
     /* section images */
     u8 *code; int codelen, codecap;

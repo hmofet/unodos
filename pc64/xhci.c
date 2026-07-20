@@ -77,6 +77,9 @@ typedef unsigned long long u64;
 /* bits that must be cleared before writing PORTSC back: the write-1-to-clear
  * change bits (17-23) AND PED (bit1, which is write-1-to-DISABLE the port). */
 #define PORTSC_RW1CS (PORTSC_PED|PORTSC_CSC|PORTSC_PRC|(1u<<18)|(1u<<19)|(1u<<20)|(1u<<22)|(1u<<23))
+/* just the write-1-to-clear CHANGE bits (17-23), i.e. RW1CS without PED - the
+ * set of bits to ack so a port stops re-firing status-change events. */
+#define PORTSC_CHG (PORTSC_RW1CS & ~PORTSC_PED)
 
 /* ---- runtime + interrupter 0 (base + RTSOFF) ----------------------------- */
 #define RT_IR0      0x20
@@ -226,6 +229,7 @@ static int run_command(u64 param, u32 control, int *slot_out)
         g_cmd_i = 0; g_cmd_cyc ^= 1;
     }
     wr32(g_db, 0, 0);                        /* doorbell 0 = command ring */
+    { int strays = 0;                        /* non-matching events consumed */
     for (;;) {
         if (!poll_event(&ev, 2000000)) return 0;
         /* only OUR command's completion (match the TRB pointer) - skip stale or
@@ -234,6 +238,12 @@ static int run_command(u64 param, u32 control, int *slot_out)
             if (slot_out) *slot_out = (ev.control >> 24) & 0xFF;
             return (ev.status >> 24) & 0xFF;
         }
+        /* A real USB3 adapter floods the ring with Port-Status-Change events
+         * that keep it non-empty, so poll_event never times out and this loop
+         * would spin forever. Bound the strays and fail like the timeout path
+         * (QEMU emits no such storm, so this cap is never reached there). */
+        if (++strays > 4096) return 0;
+    }
     }
 }
 
@@ -258,7 +268,13 @@ static void reset_port(int p)
     wr32(g_op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | PORTSC_PR | PORTSC_PP);
     { int t = 1000000; while (t-- > 0) { sc = rd32(g_op, OP_PORTSC(p));
         if (sc & PORTSC_PRC) break; spin(20); } }
-    wr32(g_op, OP_PORTSC(p), (rd32(g_op, OP_PORTSC(p)) & ~PORTSC_RW1CS) | PORTSC_PRC); /* ack */
+    /* ack the reset AND every other change bit that is currently set (CSC/PLC/
+     * etc.). Leaving CSC/PLC asserted makes a SuperSpeed port re-fire
+     * Port-Status-Change events forever, which is what floods the event ring
+     * and hangs run_command/poll_xfer on real hardware. Mask PED/PP out of the
+     * write so we neither disable the port nor drop its power. */
+    { u32 sc = rd32(g_op, OP_PORTSC(p));
+      wr32(g_op, OP_PORTSC(p), (sc & ~PORTSC_RW1CS) | (sc & PORTSC_CHG)); }
     mdelay(20);                              /* USB reset recovery (>=10ms) before addressing */
 }
 
@@ -301,10 +317,17 @@ static int route_event(const trb_t *ev)
 static int poll_xfer(int *residual, int budget)
 {
     trb_t ev;
+    int strays = 0;                          /* non-matching events consumed */
     for (;;) {
         if (!poll_event(&ev, budget)) return -1;
-        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
-        if (!route_event(&ev)) continue;
+        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) {
+            if (++strays > 4096) return -1;   /* PSC storm keeps the ring full */
+            continue;
+        }
+        if (!route_event(&ev)) {
+            if (++strays > 4096) return -1;   /* only async completions arriving */
+            continue;
+        }
         if (residual) *residual = ev.status & 0xFFFFFF;
         return (ev.status >> 24) & 0xFF;
     }

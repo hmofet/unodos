@@ -3,9 +3,13 @@
  *
  * Freestanding x86-64 / mingw (LLP64: long is 32-bit, pointers 64-bit).
  * Single-precision floats (matches pc64_math + uno3d, no double libm).
- * The x64 native emitter is on so @micropython.viper compiles hot loops
- * (Duum's renderer) to machine code.  No filesystem/os/socket/REPL; the
- * host embeds the VM and drives apps through the `uno` module.
+ * The x64 native emitter is compiled in, but @micropython.native /
+ * @micropython.viper must NOT be used on this build yet: the emitted code
+ * executes from the NX GC heap and uses the SysV ABI against the Win64
+ * runtime, so it would fault on real hardware.  Enabling it needs an RWX
+ * (EfiLoaderCode) GC heap and a Win64 JIT ABI first.  No filesystem/os/
+ * socket/REPL; the host embeds the VM and drives apps through the `uno`
+ * module.
  *
  * Two build faces share this file:
  *   - HOST test (glibc): -DUPY_HOST — real libc/libm, for the unit battery.
@@ -69,6 +73,13 @@
 #ifndef MICROPY_NLR_SETJMP
 #define MICROPY_NLR_SETJMP              (0)
 #endif
+
+/* GC root scan: capture the CPU registers via setjmp/jmp_buf rather than the
+ * hand-written gc_helper_get_regs_and_sp.  On mingw/Win64 setjmp saves the
+ * full non-volatile set (incl. RDI/RSI, which the SysV-only asm stub omitted),
+ * so a live mp_obj_t held only in RDI/RSI is traced instead of collected. This
+ * supersedes the stub in pc64_upy_stubs.c and fixes the Studio-python crash. */
+#define MICROPY_GCREGS_SETJMP           (1)
 
 /* ---- machine types: LLP64 (mingw x86-64) ------------------------------- */
 typedef intptr_t  mp_int_t;             /* 64-bit, pointer sized */

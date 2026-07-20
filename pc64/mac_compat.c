@@ -223,7 +223,25 @@ void DrawText(const void *buf, short first, short count)
     gPenX = (short)x;
 }
 short TextWidth(const void *buf, short first, short count)
-{ (void)buf; (void)first; return (short)(count * 8); }
+{
+    /* DrawText advances by each glyph's real width (fb_glyph), so a fixed
+     * count*8 drifts the caret and line-wrap on any proportional font. Measure
+     * through fb_text_w - the same width source the font provider draws with -
+     * on the substring.  Chunk in <=255-char runs so an arbitrarily long line
+     * still fits the temp buffer. */
+    const char *s = (const char *)buf + first;
+    char tmp[256];
+    int n = count, w = 0, i;
+    if (n < 0) return 0;
+    while (n > 0) {
+        int chunk = n > 255 ? 255 : n;
+        for (i = 0; i < chunk; i++) tmp[i] = s[i];
+        tmp[chunk] = 0;
+        w += fb_text_w(tmp);
+        s += chunk; n -= chunk;
+    }
+    return (short)w;
+}
 void GlobalToLocal(Point *pt) { (void)pt; }   /* full-screen port anchored at 0,0 */
 
 /* ---- events / time / input --------------------------------------------- */

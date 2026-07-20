@@ -30,7 +30,6 @@ void  pc64_shell_dirty(void);
 
 int   pc64_net_up(void);
 int   net_dns_query(const char *host, u8 out[4]);
-int   tls_connect(const u8 dst[4], unsigned short port, const char *sni);
 int   tls_connect_ca(const u8 dst[4], unsigned short port, const char *sni);
 int   tls_write(const void *data, int len);
 int   tls_read(void *buf, int cap);
@@ -65,8 +64,7 @@ static const struct {
 static int  cfg_provider = PV_ANTHROPIC;
 static char cfg_model[48];
 static char cfg_key[PV_N][160];
-static char cfg_host[48];        /* test override "ip:port", "" = real     */
-static int  cfg_insecure;        /* 1 = pinned tls_connect (offline tests)  */
+static char cfg_host[48];        /* dev IP[:port] hint; SNI + cert stay real */
 static int  cfg_vol = -1;
 
 /* ---- conversation --------------------------------------------------------- */
@@ -141,7 +139,7 @@ static void cfg_load(void)
             else if (s_eq(k, "key_anthropic")) s_cpy(cfg_key[PV_ANTHROPIC], val, 160);
             else if (s_eq(k, "key_gemini")) s_cpy(cfg_key[PV_GEMINI], val, 160);
             else if (s_eq(k, "host")) s_cpy(cfg_host, val, sizeof cfg_host);
-            else if (s_eq(k, "insecure")) cfg_insecure = val[0] == '1';
+            /* no "insecure" key: cert validation is never disableable from disk */
           } } }
       }
     }
@@ -157,7 +155,6 @@ static void cfg_save(void)
     PUT("key_anthropic="); PUT(cfg_key[PV_ANTHROPIC]); PUT("\n");
     PUT("key_gemini="); PUT(cfg_key[PV_GEMINI]); PUT("\n");
     if (cfg_host[0]) { PUT("host="); PUT(cfg_host); PUT("\n"); }
-    if (cfg_insecure) PUT("insecure=1\n");
     #undef PUT
     out[p] = 0;
     if (cfg_vol >= 0 && uno_fs_write(cfg_vol, "AI.CFG", (unsigned char *)out, p))
@@ -273,19 +270,27 @@ static int do_request(const char *usermsg)
     char host[64];
     char *body;
 
+    /* every scratch buffer is used unconditionally below; if any malloc in
+     * studio_ai_init failed, bail instead of writing through a null pointer. */
+    if (!conv || !req_buf || !resp_buf || !reply_buf) {
+        if (conv) conv_addz(ROLE_SYS, "Out of memory (assistant buffers unavailable).");
+        return -1; }
+
     if (!cfg_key[cfg_provider][0] && !cfg_host[0]) {
         conv_addz(ROLE_SYS, "No API key. Set one: /key <your-key> then /save"); return -1; }
     if (!pc64_net_up()) { conv_addz(ROLE_SYS, "No network link (need a wired NIC)."); return -1; }
     if (!tls_have_rdrand())
         conv_addz(ROLE_SYS, "Warning: no RDRAND - TLS entropy is weak here.");
 
+    /* host is always the real provider name: it is the TLS SNI and the name the
+     * cert is validated against.  cfg_host only redirects the destination IP/port
+     * (a dev hint), so even a redirected connection must still present a cert
+     * valid for the real provider - a rogue IP cannot pass tls_connect_ca. */
     s_cpy(host, kProv[cfg_provider].host, sizeof host);
     if (cfg_host[0]) parse_hostport(cfg_host, ip, &port);
     else if (!net_dns_query(host, ip)) { conv_addz(ROLE_SYS, "DNS lookup failed."); return -1; }
 
-    if (cfg_insecure) { if (tls_connect(ip, (unsigned short)port, host) != 0)
-                        { conv_addz(ROLE_SYS, "TLS connect failed."); return -1; } }
-    else if (tls_connect_ca(ip, (unsigned short)port, host) != 0)
+    if (tls_connect_ca(ip, (unsigned short)port, host) != 0)
         { conv_addz(ROLE_SYS, "TLS connect failed (cert not trusted / clock wrong)."); return -1; }
 
     build_request(usermsg, resp_buf, RESP_CAP, &blen);   /* body -> resp scratch */
@@ -359,11 +364,10 @@ static void submit(void)
         if (s_eq(a, "provider")) { int j; for (j = 0; j < PV_N; j++) if (s_eq(sp, kProv[j].name)) { cfg_provider = j; s_cpy(cfg_model, kProv[j].model, sizeof cfg_model); } conv_addz(ROLE_SYS, kProv[cfg_provider].name); }
         else if (s_eq(a, "model")) { s_cpy(cfg_model, sp, sizeof cfg_model); conv_addz(ROLE_SYS, cfg_model); }
         else if (s_eq(a, "key"))   { s_cpy(cfg_key[cfg_provider], sp, 160); conv_addz(ROLE_SYS, "Key set (save with /save)."); }
-        else if (s_eq(a, "host"))  { s_cpy(cfg_host, sp, sizeof cfg_host); conv_addz(ROLE_SYS, "host override set."); }
-        else if (s_eq(a, "insecure")) { cfg_insecure = sp[0] == '1'; conv_addz(ROLE_SYS, "insecure toggled."); }
+        else if (s_eq(a, "host"))  { s_cpy(cfg_host, sp, sizeof cfg_host); conv_addz(ROLE_SYS, "host override set (SNI/cert stay real)."); }
         else if (s_eq(a, "save"))  cfg_save();
         else if (s_eq(a, "clear")) { nmsg = 0; conv_len = 0; }
-        else conv_addz(ROLE_SYS, "commands: /provider /model /key /host /insecure /save /clear");
+        else conv_addz(ROLE_SYS, "commands: /provider /model /key /host /save /clear");
         in_len = 0; in_line[0] = 0;
         return;
     }

@@ -48,7 +48,7 @@ static void set_tls_err(char *status, int statusmax, const char *what)
     while (what[i] && i < statusmax-1) { status[i] = what[i]; i++; }
     { const char *sfx = " (BearSSL err "; int k = 0; while (sfx[k] && i < statusmax-1) status[i++] = sfx[k++]; }
     if (e < 0) { if (i < statusmax-1) status[i++]='-'; e = -e; }
-    if (!e) num[n++]='0'; while (e) { num[n++]=(char)('0'+e%10); e/=10; }
+    if (!e) num[n++]='0'; while (e && n < (int)sizeof num) { num[n++]=(char)('0'+e%10); e/=10; }
     while (n && i < statusmax-1) status[i++] = num[--n];
     if (i < statusmax-1) status[i++]=')';
     status[i] = 0;

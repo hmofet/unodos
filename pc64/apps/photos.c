@@ -70,6 +70,7 @@ int   strcmp(const char *a, const char *b);
 #define PANE_W    150               /* file pane width                         */
 #define ZOOM_MIN  10                /* percent                                 */
 #define ZOOM_MAX  800
+#define PH_MAX_IMG_BYTES  (256ull * 1024 * 1024)   /* reject gigapixel decodes */
 
 typedef struct { int x, y, w, h; } R;
 static R L_tool, L_pane, L_img, L_status;
@@ -234,10 +235,15 @@ static void ph_open_entry(int idx)
 
     src.read = ph_src_read; src.size = sz; src.ctx = 0;
     if (!um_image_open(&src, ph_file, &ph_info)) { ph_fail(um_error()); return; }
+    if (ph_info.w < 1 || ph_info.h < 1) { um_image_close(); ph_fail("bad image size"); return; }
 
-    ph_img = (um_px *)malloc((unsigned long)ph_info.w * ph_info.h * 4);
-    if (!ph_img) { um_image_close(); ph_fail("out of memory"); return; }
-    memset(ph_img, 0, (unsigned long)ph_info.w * ph_info.h * 4);
+    {   /* byte count in 64-bit so a huge w*h cannot overflow 32-bit long */
+        unsigned long long bytes = (unsigned long long)ph_info.w * ph_info.h * 4ull;
+        if (bytes > PH_MAX_IMG_BYTES) { um_image_close(); ph_fail("image too large"); return; }
+        ph_img = (um_px *)malloc((unsigned long)bytes);
+        if (!ph_img) { um_image_close(); ph_fail("out of memory"); return; }
+        memset(ph_img, 0, (unsigned long)bytes);
+    }
 
     if (um_image_frame(ph_img, &delay) != 1) {
         ph_fail(um_error()[0] ? um_error() : "decode failed");
@@ -310,13 +316,19 @@ static void ph_build_view(void)
     if (ih < 1) ih = 1;
     if (vw < 1 || vh < 1) return;
 
-    if (!ph_cache || ph_cw != vw || ph_ch != vh) {
-        if (ph_cache) free(ph_cache);
-        if (ph_map)   free(ph_map);
+    if (!ph_cache || !ph_map || ph_cw != vw || ph_ch != vh) {
+        if (ph_cache) { free(ph_cache); ph_cache = 0; }
+        if (ph_map)   { free(ph_map);   ph_map = 0; }
         ph_cache = (um_px *)malloc((unsigned long)vw * vh * 4);
         ph_map   = (int *)malloc((unsigned long)vw * sizeof(int) * 2);
+        if (!ph_cache || !ph_map) {   /* partial OOM: drop the survivor, null both */
+            if (ph_cache) { free(ph_cache); ph_cache = 0; }
+            if (ph_map)   { free(ph_map);   ph_map = 0; }
+            ph_cw = ph_ch = 0;
+            ph_cache_ok = 0;
+            return;
+        }
         ph_cw = vw; ph_ch = vh;
-        if (!ph_cache || !ph_map) { ph_cache_ok = 0; return; }
     }
 
     /* clamp the pan; centre when the scaled image is smaller than the view */
@@ -577,11 +589,11 @@ static void ph_activate(int idx)
     if (ph_e[idx].is_dir) {
         /* enter the directory ("..": the FAT lister skips dot entries, so
            going UP is the pane header's job - see pane_click) */
-        char np[120]; char *q = np; const char *s = ph_path;
-        while (*s) *q++ = *s++;
-        if (q != np) *q++ = '\\';
-        s = ph_e[idx].name; while (*s) *q++ = *s++;
-        *q = 0;
+        char np[120];
+        unsigned long pl = strlen(ph_path), nl = strlen(ph_e[idx].name);
+        /* refuse to descend if "path\name" would not fit ph_path (no overflow) */
+        if (pl + (pl ? 1 : 0) + nl >= sizeof ph_path) { pc64_shell_dirty(); return; }
+        ph_join(ph_e[idx].name, np, sizeof np);
         strcpy(ph_path, np);
         ph_sel = ph_scroll = 0;
         ph_relist();

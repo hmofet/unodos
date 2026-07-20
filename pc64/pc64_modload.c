@@ -97,7 +97,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* the network stack (Network app) */
     KX(e1000_nic), KX(e1000_mac),
     KX(e1000e_nic), KX(e1000e_mac), KX(igb_nic), KX(igb_mac), KX(r8169_nic), KX(r8169_mac),
-    KX(net_init),  KX(net_poll),   KX(net_link),   KX(net_ip),
+    KX(net_init),  KX(net_poll),   KX(net_link),   KX(net_ip),   KX(net_gw),
     KX(net_dhcp_start), KX(net_dhcp_done),
     KX(net_ping),  KX(net_ping_replied),
     KX(net_tcp_connect), KX(net_tcp_state), KX(net_tcp_send),
@@ -332,12 +332,18 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
     if (h->abi != UNO_ABI_VERSION)         { mdbg("modload: bad abi\n");   return 0; }
     if ((long)sizeof *h + h->file_size + 4ll * h->nreloc != n)
                                            { mdbg("modload: bad size\n");  return 0; }
-    if (h->entry >= h->mem_size || h->file_size > h->mem_size)
+    /* mem_size is attacker-controlled (the CRC authenticates nothing - a crafter
+     * recomputes it). Cap it: without this, mem_size near 0xFFFFFFFF wrapped the
+     * page-count math to ~0 (a tiny/zero alloc) and then memset(.., mem_size-..)
+     * wrote ~4 GB out of bounds. 64 MB is far above any real module (Studio is
+     * 256 KB). The np math below is also done in 64-bit as belt-and-suspenders. */
+    if (h->entry >= h->mem_size || h->file_size > h->mem_size ||
+        h->mem_size > (64u << 20))
                                            { mdbg("modload: bad hdr\n");   return 0; }
     if (mod_crc32(gModBuf + sizeof *h, n - (long)sizeof *h) != h->crc)
                                            { mdbg("modload: bad crc\n");   return 0; }
 
-    np = (h->mem_size + 4095u) >> 12;
+    np = (unsigned long)(((unsigned long long)h->mem_size + 4095ull) >> 12);
     if (at) {
         if (np > atpages)                  { mdbg("modload: slot full\n"); return 0; }
         base = at;
@@ -351,7 +357,9 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
     /* rebase: each listed RVA is a u64 cell holding a pref_base address */
     rel = (const unsigned int *)(gModBuf + sizeof *h + h->file_size);
     for (i = 0; i < h->nreloc; i++) {
-        if (rel[i] + 8u > h->mem_size) { if (!at) mod_free(base, np); return 0; }
+        /* 64-bit compare: rel[i]+8u in 32-bit wrapped (rel[i]=0xFFFFFFF8 passed
+         * the check) and gave an 8-byte write at an attacker offset. */
+        if ((unsigned long long)rel[i] + 8ull > h->mem_size) { if (!at) mod_free(base, np); return 0; }
         *(unsigned long long *)(base + rel[i]) +=
             (unsigned long long)base - h->pref_base;
     }
@@ -360,7 +368,7 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
     for (i = 0; i < h->imp_count; i++) {
         char *rec = (char *)base + h->imp_rva + 32u * i;
         void *fn;
-        if (h->imp_rva + 32u * (i + 1) > h->mem_size) { if (!at) mod_free(base, np); return 0; }
+        if ((unsigned long long)h->imp_rva + 32ull * (i + 1) > h->mem_size) { if (!at) mod_free(base, np); return 0; }
         rec[23] = 0;
         fn = kexport(rec);
         if (!fn) {

@@ -19,6 +19,10 @@ void uno_pc64_delay_ms(int ms);
 
 /* ---- AX88179 vendor requests + registers -------------------------------- */
 #define AX_ACCESS_MAC          0x01
+#define AX_ACCESS_PHY          0x02   /* MDIO: value=phy id, index=phy reg */
+#define AX88179_PHY_ID         0x03   /* address of the embedded gigabit PHY */
+#define MII_BMSR               0x01   /* PHY basic-mode status register    */
+#define MII_BMSR_LSTATUS       0x0004 /* link-status bit (latches low)     */
 #define AX_NODE_ID             0x10   /* 6 bytes: MAC address           */
 #define AX_MEDIUM_STATUS_MODE  0x22   /* 2 bytes                        */
 #define AX_RX_CTL              0x0B   /* 2 bytes                        */
@@ -65,6 +69,10 @@ static int  ax_write(int reg, int size, const void *buf)
 static int  ax_wr16(int reg, u16 v) { u16 t = v; return ax_write(reg, 2, &t); }
 static int  ax_wr8 (int reg, u8 v)  { u8  t = v; return ax_write(reg, 1, &t); }
 static u16  ax_rd16(int reg) { u16 t = 0; ax_read(reg, 2, &t); return t; }
+/* MDIO read of an embedded-PHY register (AX_ACCESS_PHY: value=phy id, index=
+ * reg - note the operand order differs from AX_ACCESS_MAC's value=reg,index=len). */
+static u16  ax_mii_rd(int reg)
+{ u16 t = 0; uno_usb_control(g_dev, 0xC0, AX_ACCESS_PHY, AX88179_PHY_ID, (u16)reg, &t, 2); return t; }
 
 /* find the bulk in/out endpoint addresses from the config descriptor */
 static int find_bulk_eps(int *in_ep, int *out_ep, int *in_mps, int *out_mps)
@@ -167,7 +175,19 @@ static int ax_recv(void *ctx, void *pkt, int cap)
 }
 
 static int ax_link(void *ctx)
-{ (void)ctx; if (!g_bound) return 0; return (ax_rd16(AX_MEDIUM_STATUS_MODE) & AX_MEDIUM_RECEIVE_EN) ? 1 : 0; }
+{
+    u16 bmsr;
+    (void)ctx;
+    if (!g_bound) return 0;
+    /* Read the PHY's real link status. The old code returned
+     * AX_MEDIUM_STATUS_MODE & AX_MEDIUM_RECEIVE_EN, but RECEIVE_EN is a bit the
+     * driver itself sets in ax_reset() and never clears, so it reported "up"
+     * permanently even with the cable unplugged. BMSR bit 2 latches low on a
+     * link drop, so read twice and take the second read as the current state. */
+    ax_mii_rd(MII_BMSR);
+    bmsr = ax_mii_rd(MII_BMSR);
+    return (bmsr & MII_BMSR_LSTATUS) ? 1 : 0;
+}
 
 /* ---- bring-up ------------------------------------------------------------ */
 uno_nic_t *ax88179_nic(void)
