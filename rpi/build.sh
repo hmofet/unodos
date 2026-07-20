@@ -7,7 +7,8 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python}"
-REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/rpi"
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos-logo/rpi"
 AS=aarch64-linux-gnu-as
 LD=aarch64-linux-gnu-ld
 OC=aarch64-linux-gnu-objcopy
@@ -25,13 +26,28 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/kernel8_theme.img ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/kernel8_music.img ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/kernel8_dt.img ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/kernel8_tk.img ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/kernel8_ol.img ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/kernel8_pm.img ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/kernel8_pt.img ;;
+  store)   DEFS="--defsym AUTOTEST=1 --defsym AT_STORE=1";   OUT=build/kernel8_st.img ;;
+  files)   DEFS="--defsym AUTOTEST=1 --defsym AT_FILES=1";   OUT=build/kernel8_fi.img ;;
 esac
 
-echo "[2/3] assembling (AArch64) + linking via WSL..."
-wsl bash -lc "cd $REPO_WSL && \
-  $AS -march=armv8-a $DEFS kernel.s -o build/kernel.o && \
-  $AS -march=armv8-a build/gfx.s -o build/gfx.o && \
-  $LD -T link.ld build/kernel.o build/gfx.o -o build/kernel.elf && \
-  $OC -O binary build/kernel.elf $OUT"
+echo "[2/3] assembling (AArch64) + linking..."
+if command -v "$AS" >/dev/null 2>&1; then
+  # already inside WSL (or a box with the cross binutils): run directly
+  $AS -march=armv8-a $DEFS kernel.s -o build/kernel.o
+  $AS -march=armv8-a build/gfx.s -o build/gfx.o
+  $LD -T link.ld build/kernel.o build/gfx.o -o build/kernel.elf
+  $OC -O binary build/kernel.elf $OUT
+else
+  # Windows Git Bash: shell into WSL for the toolchain
+  wsl bash -lc "cd $REPO_WSL && \
+    $AS -march=armv8-a $DEFS kernel.s -o build/kernel.o && \
+    $AS -march=armv8-a build/gfx.s -o build/gfx.o && \
+    $LD -T link.ld build/kernel.o build/gfx.o -o build/kernel.elf && \
+    $OC -O binary build/kernel.elf $OUT"
+fi
 
 echo "[3/3] done: rpi/$OUT ($(wc -c < "$OUT") bytes)"

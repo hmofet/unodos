@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python}"
-REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/ppcmac"
+REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos-logo/ppcmac"
 AS=powerpc-linux-gnu-as
 LD=powerpc-linux-gnu-ld
 OC=powerpc-linux-gnu-objcopy

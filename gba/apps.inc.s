@@ -68,8 +68,16 @@ draw_app:
     beq app_files
     cmp r0, #5
     beq app_theme
+    cmp r0, #6
+    beq app_tracker
     cmp r0, #7
     beq app_dostris
+    cmp r0, #8
+    beq app_outlast
+    cmp r0, #9
+    beq app_pacman
+    cmp r0, #10
+    beq app_paint
     b app_generic
 app_sysinfo:
     ldr r0, =t_sysinfo
@@ -80,14 +88,26 @@ app_sysinfo:
 app_notepad:
     ldr r0, =t_notepad
     bl draw_chrome
-    ldr r0, =c_notepad
-    bl draw_content
+    bl notepad_draw
     pop {pc}
 app_files:
     ldr r0, =t_files
     bl draw_chrome
-    ldr r0, =c_files
-    bl draw_content
+    bl files_draw
+    pop {pc}
+app_tracker:
+    ldr r0, =l_tracker
+    bl draw_chrome
+    bl tracker_draw
+    pop {pc}
+app_outlast:
+    bl outlast_fulldraw
+    pop {pc}
+app_pacman:
+    bl pacman_draw
+    pop {pc}
+app_paint:
+    bl paint_fulldraw
     pop {pc}
 app_generic:
     ldr r0, =icon_lbl
@@ -357,8 +377,33 @@ draw_music_status:
     pop {r4, pc}
 .ltorg
 
+@ num5: r0 = 0..65535 -> numstr = 5 zero-padded decimal digits + NUL
+num5:
+    push {r4-r6, lr}
+    ldr r4, =numstr
+    ldr r5, =num5_pows
+    mov r6, #5
+n5_l:
+    ldr r2, [r5], #4
+    mov r1, #'0'
+n5_d:
+    cmp r0, r2
+    blo n5_s
+    sub r0, r0, r2
+    add r1, r1, #1
+    b n5_d
+n5_s:
+    strb r1, [r4], #1
+    subs r6, r6, #1
+    bne n5_l
+    mov r1, #0
+    strb r1, [r4]
+    pop {r4-r6, pc}
+.ltorg
+
 @ ============================================================================
-@ AUTOTEST: drive a scripted pad into the same input path. .byte frames, pad.
+@ AUTOTEST: drive a scripted pad into the same input path. .hword frames, pad
+@ (hwords so the shoulder buttons 0x100/0x200 fit in a script entry).
 @ ============================================================================
 .ifdef AUTOTEST
 auto_input:
@@ -369,8 +414,8 @@ auto_input:
     ldr r0, =a_idx
     ldr r0, [r0]
     ldr r1, =auto_script
-    add r1, r1, r0, lsl #1
-    ldrb r2, [r1]
+    add r1, r1, r0, lsl #2
+    ldrh r2, [r1]
     cmp r2, #0
     bne ai_have
     ldr r0, =a_gpause
@@ -385,7 +430,7 @@ auto_input:
 ai_have:
     ldr r0, =a_tmr
     str r2, [r0]
-    ldrb r2, [r1, #1]
+    ldrh r2, [r1, #2]
     ldr r0, =a_pad
     str r2, [r0]
     ldr r0, =a_idx
@@ -415,31 +460,63 @@ ai_run:
 .ltorg
 
 .section .rodata
-.align 1
+.align 2
 auto_script:
 .ifdef AT_NAV
-    .byte 8,0,  2,PAD_R, 4,0, 2,PAD_R, 4,0, 2,PAD_D, 30,0, 0,0
+    .hword 8,0,  2,PAD_R, 4,0, 2,PAD_R, 4,0, 2,PAD_D, 30,0, 0,0
 .endif
 .ifdef AT_APP
-    .byte 8,0,  2,PAD_A, 40,0, 0,0
+    .hword 8,0,  2,PAD_A, 40,0, 0,0
 .endif
 .ifdef AT_CLOCK
-    .byte 6,0,  2,PAD_R, 4,0, 2,PAD_A, 200,0, 0,0
+    .hword 6,0,  2,PAD_R, 4,0, 2,PAD_A, 200,0, 0,0
 .endif
 .ifdef AT_THEME
-    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 8,0, 2,PAD_A, 8,0, 2,PAD_A, 30,0, 0,0
+    .hword 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 8,0, 2,PAD_A, 8,0, 2,PAD_A, 30,0, 0,0
 .endif
 .ifdef AT_MUSIC
-    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 200,0, 0,0
+    .hword 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 200,0, 0,0
 .endif
 .ifdef AT_DOSTRIS
-    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_D, 4,0, 2,PAD_A, 6,0
-    .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 16,PAD_D, 34,0
-    .byte 2,PAD_L,2,0, 2,PAD_L,2,0, 16,PAD_D, 34,0
-    .byte 2,PAD_A,2,0, 16,PAD_D, 34,0
-    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
-    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
-    .byte 2,PAD_L,2,0, 6,PAD_D, 2,0, 0,0
+    .hword 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_D, 4,0, 2,PAD_A, 6,0
+    .hword 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 16,PAD_D, 34,0
+    .hword 2,PAD_L,2,0, 2,PAD_L,2,0, 16,PAD_D, 34,0
+    .hword 2,PAD_A,2,0, 16,PAD_D, 34,0
+    .hword 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
+    .hword 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
+    .hword 2,PAD_L,2,0, 6,PAD_D, 2,0, 0,0
+.endif
+.ifdef AT_TRACKER
+    @ launch Tracker (icon 6), cursor down 2, enter 2 notes, chan right, note,
+    @ Start playback, let the play marker run
+    .hword 8,0, 2,PAD_R,4,0, 2,PAD_R,4,0, 2,PAD_D,4,0, 2,PAD_A, 30,0
+    .hword 2,PAD_D,4,0, 2,PAD_D,4,0, 2,PAD_A,4,0, 2,PAD_A,4,0
+    .hword 2,PAD_R,4,0, 2,PAD_A,4,0, 2,PAD_ST, 90,0, 0,0
+.endif
+.ifdef AT_OUTLAST
+    @ launch OutLast (icon 8), steer left twice, drive a while
+    .hword 8,0, 2,PAD_D,4,0, 2,PAD_D,4,0, 2,PAD_A, 30,0
+    .hword 2,PAD_L,2,0, 2,PAD_L,2,0, 120,0, 0,0
+.endif
+.ifdef AT_PACMAN
+    @ launch Pac-Man (icon 9), Start, wait out READY, munch left then down
+    .hword 8,0, 2,PAD_R,4,0, 2,PAD_D,4,0, 2,PAD_D,4,0, 2,PAD_A, 20,0
+    .hword 2,PAD_ST, 70,0, 40,PAD_L, 20,0, 30,PAD_D, 20,0, 60,PAD_L, 30,0, 0,0
+.endif
+.ifdef AT_PAINT
+    @ launch Paint (icon 10), stroke right, down, colour change, stroke left
+    .hword 8,0, 2,PAD_R,4,0, 2,PAD_R,4,0, 2,PAD_D,4,0, 2,PAD_D,4,0, 2,PAD_A, 30,0
+    .hword 24,(PAD_A|PAD_R), 4,0, 12,PAD_D, 4,0, 2,PAD_SR, 2,0
+    .hword 24,(PAD_A|PAD_L), 4,0, 2,PAD_SR, 2,0, 8,PAD_A, 20,0, 0,0
+.endif
+.ifdef AT_FILES
+    @ launch Files (icon 4): the USV1 listing
+    .hword 8,0, 2,PAD_D,4,0, 2,PAD_A, 40,0, 0,0
+.endif
+.ifdef AT_NOTE
+    @ launch Notepad (icon 2), append '+' three times (each press saves)
+    .hword 8,0, 2,PAD_R,4,0, 2,PAD_R,4,0, 2,PAD_A, 20,0
+    .hword 2,PAD_A,6,0, 2,PAD_A,6,0, 2,PAD_A,6,0, 20,0, 0,0
 .endif
 .align 2
 .section .text
@@ -450,6 +527,18 @@ auto_script:
 @ ============================================================================
 .section .rodata
 .align 2
+@ per-app dispatch tables (indexed by v_app; up_none = no handler)
+update_tab:
+    .word up_none, up_none, notepad_update, music_tick, up_none, theme_input
+    .word tracker_update, dostris_update, outlast_update, pacman_update, paint_update
+init_tab:
+    .word up_none, up_none, notepad_init, music_init, up_none, up_none
+    .word tracker_init, dostris_init, outlast_init, pacman_init, paint_init
+rp_tab:
+    .word up_none, rp_clock, up_none, rp_music, up_none, up_none
+    .word rp_tracker, rp_dostris, rp_outlast, rp_pacman, rp_paint
+num5_pows:
+    .word 10000, 1000, 100, 10, 1
 icon_lbl:
     .word l_sysinfo, l_clock, l_notepad, l_music, l_files, l_theme
     .word l_tracker, l_dostris, l_outlast, l_pacman, l_paint
@@ -493,26 +582,6 @@ c_clock:
     .word 0xFFFFFFFF
 m_cl0: .asciz "System clock"
 m_cl1: .asciz "Time:"
-.align 2
-c_notepad:
-    .word 8, 24, m_np0
-    .word 8, 44, m_np1
-    .word 8, 56, m_np2
-    .word 0xFFFFFFFF
-m_np0: .asciz "Notepad"
-m_np1: .asciz "Fifth fresh port"
-m_np2: .asciz "first ARM (32-bit RISC)"
-.align 2
-c_files:
-    .word 8, 24, m_fi0
-    .word 8, 44, m_fi1
-    .word 8, 56, m_fi2
-    .word 8, 68, m_fi3
-    .word 0xFFFFFFFF
-m_fi0: .asciz "Files - apps:"
-m_fi1: .asciz "SYSINFO CLOCK NOTEPAD"
-m_fi2: .asciz "FILES THEME MUSIC"
-m_fi3: .asciz "(no disk - cart ROM)"
 .align 2
 c_theme:
     .word 8, 24, m_th0

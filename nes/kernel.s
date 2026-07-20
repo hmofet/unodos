@@ -259,10 +259,22 @@ up_disp:
 ud1:    cmp #5
         bne ud2
         jmp theme_input
-ud2:    cmp #7
+ud2:    cmp #6
         bne ud3
+        jmp tracker_update
+ud3:    cmp #7
+        bne ud4
         jmp dostris_update
-ud3:    rts                     ; clock (proc 1): clock_advance already ran
+ud4:    cmp #8
+        bne ud5
+        jmp outlast_update
+ud5:    cmp #9
+        bne ud6
+        jmp pacman_update
+ud6:    cmp #10
+        bne ud7
+        jmp paint_update
+ud7:    rts                     ; clock (proc 1): clock_advance already ran
 
 ; ============================================================================
 ; launcher navigation (M2)
@@ -356,8 +368,24 @@ enter_app:
 ea_music:
         lda v_app
         cmp #3
-        bne ea_done
+        bne ea_trk
         jsr music_init
+ea_trk: lda v_app
+        cmp #6
+        bne ea_ol
+        jsr tracker_init
+ea_ol:  lda v_app
+        cmp #8
+        bne ea_pm
+        jsr outlast_init
+ea_pm:  lda v_app
+        cmp #9
+        bne ea_pt
+        jsr pacman_init
+ea_pt:  lda v_app
+        cmp #10
+        bne ea_done
+        jsr paint_init
 ea_done:
         lda #1
         sta v_dirty
@@ -397,10 +425,22 @@ rpa1:   cmp #3
 rpa2:   cmp #5
         bne rpa3
         jmp rp_theme
-rpa3:   cmp #7
+rpa3:   cmp #6
         bne rpa4
+        jmp rp_tracker
+rpa4:   cmp #7
+        bne rpa5
         jmp rp_dostris
-rpa4:   rts
+rpa5:   cmp #8
+        bne rpa6
+        jmp rp_outlast
+rpa6:   cmp #9
+        bne rpa7
+        jmp rp_pacman
+rpa7:   cmp #10
+        bne rpa8
+        jmp rp_paint
+rpa8:   rts
 rp_clock:
         lda pf_clk
         bne rpc

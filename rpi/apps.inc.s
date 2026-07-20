@@ -73,8 +73,16 @@ draw_app:
     b.eq  app_files
     cmp   w0, #5
     b.eq  app_theme
+    cmp   w0, #6
+    b.eq  app_tracker
     cmp   w0, #7
     b.eq  app_dostris
+    cmp   w0, #8
+    b.eq  app_outlast
+    cmp   w0, #9
+    b.eq  app_pacman
+    cmp   w0, #10
+    b.eq  app_paint
     b     app_generic
 app_sysinfo:
     ldr   x2, =t_sysinfo
@@ -86,15 +94,37 @@ app_sysinfo:
 app_notepad:
     ldr   x2, =t_notepad
     bl    draw_chrome
-    ldr   x0, =c_notepad
-    bl    draw_content
+    bl    notepad_draw
     ldp   x29, x30, [sp], #16
     ret
 app_files:
     ldr   x2, =t_files
     bl    draw_chrome
-    ldr   x0, =c_files
-    bl    draw_content
+    bl    files_draw
+    ldp   x29, x30, [sp], #16
+    ret
+app_tracker:
+    ldr   x2, =t_tracker
+    bl    draw_chrome
+    bl    tracker_draw
+    ldp   x29, x30, [sp], #16
+    ret
+app_outlast:
+    ldr   x2, =t_outlast
+    bl    draw_chrome
+    bl    ol_draw_scene
+    ldp   x29, x30, [sp], #16
+    ret
+app_pacman:
+    ldr   x2, =t_pacman
+    bl    draw_chrome
+    bl    pacman_draw
+    ldp   x29, x30, [sp], #16
+    ret
+app_paint:
+    ldr   x2, =t_paint
+    bl    draw_chrome
+    bl    paint_draw
     ldp   x29, x30, [sp], #16
     ret
 app_generic:
@@ -384,6 +414,232 @@ draw_music_status:
     ret
 
 // ============================================================================
+// Notepad — USV1-backed (fs.inc.s). Loads NOTE.TXT on entry; A appends the
+// next letter (A, B, C, ... by length) and saves, so the note is a real file
+// Files lists and the harness --storage sidecar persists across runs.
+// ============================================================================
+notepad_enter:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =fn_note
+    bl    fs_find
+    cmn   w0, #1
+    b.eq  np_seed
+    ldr   x1, =np_buf
+    mov   w2, #NP_MAX
+    bl    fs_read                         // -> w0 = size
+    ldr   x1, =np_len
+    str   w0, [x1]
+    ldr   x0, =np_saved
+    mov   w1, #1
+    str   w1, [x0]
+    ldp   x29, x30, [sp], #16
+    ret
+np_seed:
+    // no NOTE.TXT yet: seed the buffer, save nothing until the first edit
+    ldr   x0, =np_seed_txt
+    ldr   x1, =np_buf
+    mov   w2, #(np_seed_end - np_seed_txt)
+    ldr   x3, =np_len
+    str   w2, [x3]
+np_sc:
+    ldrb  w3, [x0], #1
+    strb  w3, [x1], #1
+    subs  w2, w2, #1
+    b.ne  np_sc
+    ldr   x0, =np_saved
+    str   wzr, [x0]
+    ldp   x29, x30, [sp], #16
+    ret
+
+// notepad_input: A = append one letter + save NOTE.TXT
+notepad_input:
+    stp   x29, x30, [sp, #-16]!
+    ldr   x0, =v_pade
+    ldr   w0, [x0]
+    tst   w0, #PAD_A
+    b.eq  npi_done
+    ldr   x2, =np_len
+    ldr   w0, [x2]
+    cmp   w0, #NP_MAX
+    b.hs  npi_done
+    // append 'A' + (len mod 26)
+    mov   w3, #26
+    udiv  w4, w0, w3
+    msub  w4, w4, w3, w0
+    add   w4, w4, #'A'
+    ldr   x1, =np_buf
+    strb  w4, [x1, w0, uxtw]
+    add   w0, w0, #1
+    str   w0, [x2]
+    // save
+    ldr   x0, =fn_note
+    ldr   x1, =np_buf
+    ldr   x2, =np_len
+    ldr   w2, [x2]
+    bl    fs_save
+    ldr   x0, =np_saved
+    mov   w1, #1
+    str   w1, [x0]
+    ldr   x0, =v_dirty
+    mov   w1, #1
+    str   w1, [x0]
+npi_done:
+    ldp   x29, x30, [sp], #16
+    ret
+
+// notepad_draw: status line + the note text wrapped at 48 columns
+notepad_draw:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    stp   x21, x22, [sp, #-16]!
+    // status: "NOTE.TXT NNN bytes" (or "(unsaved)" before the first save)
+    mov   w0, #1
+    mov   w1, #0
+    bl    setfb
+    mov   w0, #16
+    mov   w1, #40
+    ldr   x2, =s_np_file
+    bl    pstr
+    ldr   x0, =np_len
+    ldr   w0, [x0]
+    ldr   x1, =str_buf
+    bl    fmt_dec
+    mov   w0, #96
+    mov   w1, #40
+    ldr   x2, =str_buf
+    bl    pstr
+    mov   w0, #136
+    mov   w1, #40
+    ldr   x2, =s_np_bytes
+    bl    pstr
+    ldr   x0, =np_saved
+    ldr   w0, [x0]
+    cbnz  w0, npd_text
+    mov   w0, #192
+    mov   w1, #40
+    ldr   x2, =s_np_unsaved
+    bl    pstr
+npd_text:
+    // body: np_buf in 48-char lines from y=80
+    ldr   x19, =np_buf
+    ldr   x0, =np_len
+    ldr   w20, [x0]                       // remaining
+    mov   w21, #80                        // y
+npd_line:
+    cbz   w20, npd_help
+    cmp   w21, #420
+    b.hs  npd_help
+    mov   w22, #48
+    cmp   w20, w22
+    csel  w22, w20, w22, lo               // this line's length
+    ldr   x2, =str_buf
+    mov   w0, #0
+npd_cp:
+    ldrb  w1, [x19], #1
+    strb  w1, [x2, w0, uxtw]
+    add   w0, w0, #1
+    cmp   w0, w22
+    b.ne  npd_cp
+    strb  wzr, [x2, w0, uxtw]
+    mov   w0, #16
+    mov   w1, w21
+    bl    pstr
+    sub   w20, w20, w22
+    add   w21, w21, #16
+    b     npd_line
+npd_help:
+    mov   w0, #16
+    mov   w1, #440
+    ldr   x2, =s_np_help
+    bl    pstr
+    ldp   x21, x22, [sp], #16
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
+// Files — a real USV1 directory listing (name + size per entry)
+// ============================================================================
+files_draw:
+    stp   x29, x30, [sp, #-16]!
+    stp   x19, x20, [sp, #-16]!
+    stp   x21, x22, [sp, #-16]!
+    mov   w0, #1
+    mov   w1, #0
+    bl    setfb
+    mov   w0, #16
+    mov   w1, #40
+    ldr   x2, =s_fi_hdr
+    bl    pstr
+    ldr   x19, =FS_BASE
+    ldr   w20, [x19, #4]                  // count
+    mov   w21, #0                         // index
+    mov   w22, #64                        // y
+fid_ent:
+    cmp   w21, w20
+    b.hs  fid_sum
+    add   x1, x19, #16
+    add   x1, x1, w21, uxtw #4            // entry
+    // name (12 bytes, NUL-padded) -> str_buf
+    ldr   x2, =str_buf
+    mov   w0, #0
+fid_nm:
+    ldrb  w3, [x1, w0, uxtw]
+    strb  w3, [x2, w0, uxtw]
+    add   w0, w0, #1
+    cmp   w0, #12
+    b.ne  fid_nm
+    strb  wzr, [x2, w0, uxtw]
+    mov   w0, #16
+    mov   w1, w22
+    bl    pstr
+    // size
+    add   x1, x19, #16
+    add   x1, x1, w21, uxtw #4
+    ldrh  w0, [x1, #12]
+    ldr   x1, =str_buf
+    bl    fmt_dec
+    mov   w0, #200
+    mov   w1, w22
+    ldr   x2, =str_buf
+    bl    pstr
+    add   w21, w21, #1
+    add   w22, w22, #16
+    b     fid_ent
+fid_sum:
+    // "Files: N   Used: NNNN / 3840"
+    mov   w0, #16
+    mov   w1, #416
+    ldr   x2, =s_fi_cnt
+    bl    pstr
+    mov   w0, w20
+    ldr   x1, =str_buf
+    bl    fmt_dec
+    mov   w0, #72
+    mov   w1, #416
+    ldr   x2, =str_buf
+    bl    pstr
+    mov   w0, #16
+    mov   w1, #432
+    ldr   x2, =s_fi_used
+    bl    pstr
+    ldr   w0, [x19, #8]
+    ldr   x1, =str_buf
+    bl    fmt_dec
+    mov   w0, #64
+    mov   w1, #432
+    ldr   x2, =str_buf
+    bl    pstr
+    mov   w0, #112
+    mov   w1, #432
+    ldr   x2, =s_fi_cap
+    bl    pstr
+    ldp   x21, x22, [sp], #16
+    ldp   x19, x20, [sp], #16
+    ldp   x29, x30, [sp], #16
+    ret
+
+// ============================================================================
 // AUTOTEST: drive a scripted pad into the same input path. .byte frames, pad.
 // ============================================================================
 .ifdef AUTOTEST
@@ -463,6 +719,42 @@ auto_script:
     .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R,2,0, 16,PAD_D, 34,0
     .byte 2,PAD_L,2,0, 6,PAD_D, 2,0, 0,0
 .endif
+.ifdef AT_TRACKER
+    // launch icon 6 (R,R,D), cursor to row 2 / ch 1, cycle the cell twice
+    // (.. -> C4 -> D4), then let playback run
+    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_D, 4,0, 2,PAD_A, 8,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0, 2,PAD_A, 4,0
+    .byte 150,0, 0,0
+.endif
+.ifdef AT_OUTLAST
+    // launch icon 8 (D,D), steer right three columns, then drive
+    .byte 6,0,  2,PAD_D,2,0, 2,PAD_D, 4,0, 2,PAD_A, 8,0
+    .byte 2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_R, 4,0, 130,0, 0,0
+.endif
+.ifdef AT_PACMAN
+    // launch icon 9 (R,D,D); READY runs out, pac eats leftward, then turns
+    .byte 6,0,  2,PAD_R,2,0, 2,PAD_D,2,0, 2,PAD_D, 4,0, 2,PAD_A, 8,0
+    .byte 120,0, 2,PAD_U,2,0, 60,0, 2,PAD_L,2,0, 60,0, 0,0
+.endif
+.ifdef AT_PAINT
+    // launch icon 10 (R,R,D,D); plot three red cells, dive to the palette row,
+    // pick the 5th swatch (green), come back up and plot two more
+    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R,2,0, 2,PAD_D,2,0, 2,PAD_D, 4,0, 2,PAD_A, 8,0
+    .byte 2,PAD_A,2,0, 2,PAD_R,2,0, 2,PAD_A,2,0, 2,PAD_R,2,0, 2,PAD_A, 4,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_D,2,0
+    .byte 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_D,2,0, 2,PAD_D, 4,0
+    .byte 2,PAD_A, 4,0, 2,PAD_U,2,0, 2,PAD_A,2,0, 2,PAD_L,2,0, 2,PAD_A, 8,0, 0,0
+.endif
+.ifdef AT_STORE
+    // Notepad (icon 2): append+save three letters, back out, open Files
+    .byte 6,0,  2,PAD_R,2,0, 2,PAD_R, 4,0, 2,PAD_A, 8,0
+    .byte 2,PAD_A,4,0, 2,PAD_A,4,0, 2,PAD_A, 8,0
+    .byte 2,PAD_B,4,0, 2,PAD_L,2,0, 2,PAD_L,2,0, 2,PAD_D, 4,0, 2,PAD_A, 30,0, 0,0
+.endif
+.ifdef AT_FILES
+    // straight to Files (icon 4): the listing shows what the store holds
+    .byte 6,0,  2,PAD_D, 4,0, 2,PAD_A, 30,0, 0,0
+.endif
 .align 3
 .section .text
 .endif
@@ -495,6 +787,20 @@ t_music:   .asciz "Music"
 t_files:   .asciz "Files"
 t_theme:   .asciz "Theme"
 t_dostris: .asciz "Dostris"
+t_tracker: .asciz "Tracker"
+t_outlast: .asciz "OutLast"
+t_pacman:  .asciz "Pac-Man"
+t_paint:   .asciz "Paint"
+s_np_file:    .asciz "NOTE.TXT"
+s_np_bytes:   .asciz "bytes"
+s_np_unsaved: .asciz "(unsaved)"
+s_np_help:    .asciz "A = append + save   B = back"
+np_seed_txt:  .ascii "RPI:"
+np_seed_end:
+s_fi_hdr:  .asciz "Name          Size   (USV1 store)"
+s_fi_cnt:  .asciz "Files:"
+s_fi_used: .asciz "Used:"
+s_fi_cap:  .asciz "/ 3840 bytes"
 .align 2
 c_sysinfo:
     .word 16, 48, m_si0
@@ -515,26 +821,6 @@ c_clock:
     .word 0xFFFFFFFF
 m_cl0: .asciz "System clock"
 m_cl1: .asciz "Time:"
-.align 2
-c_notepad:
-    .word 16, 48, m_np0
-    .word 16, 96, m_np1
-    .word 16, 116, m_np2
-    .word 0xFFFFFFFF
-m_np0: .asciz "Notepad"
-m_np1: .asciz "Ninth fresh port"
-m_np2: .asciz "first AArch64 (64-bit) world"
-.align 2
-c_files:
-    .word 16, 48, m_fi0
-    .word 16, 96, m_fi1
-    .word 16, 116, m_fi2
-    .word 16, 136, m_fi3
-    .word 0xFFFFFFFF
-m_fi0: .asciz "Files - apps:"
-m_fi1: .asciz "SYSINFO CLOCK NOTEPAD"
-m_fi2: .asciz "FILES THEME MUSIC"
-m_fi3: .asciz "(no disk - flat image)"
 .align 2
 c_theme:
     .word 16, 48, m_th0

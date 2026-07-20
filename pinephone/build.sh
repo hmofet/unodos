@@ -7,7 +7,8 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python}"
-REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/pinephone"
+# WSL path of THIS directory (works from Git Bash /c/... or from WSL /mnt/c/...)
+REPO_WSL="$(pwd | sed 's#^/\([a-zA-Z]\)/#/mnt/\1/#')"
 AS=aarch64-linux-gnu-as
 LD=aarch64-linux-gnu-ld
 OC=aarch64-linux-gnu-objcopy
@@ -25,6 +26,10 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/unodos_theme.bin ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/unodos_music.bin ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/unodos_dt.bin ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.bin ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/unodos_ol.bin ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/unodos_pm.bin ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/unodos_pt.bin ;;
 esac
 
 echo "[2/3] assembling (AArch64) + linking via WSL..."

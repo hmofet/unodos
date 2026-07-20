@@ -83,8 +83,16 @@ draw_app:
     beq   app_files
     cmpwi r3, 5
     beq   app_theme
+    cmpwi r3, 6
+    beq   app_tracker
     cmpwi r3, 7
     beq   app_dostris
+    cmpwi r3, 8
+    beq   app_outlast
+    cmpwi r3, 9
+    beq   app_pacman
+    cmpwi r3, 10
+    beq   app_paint
     b     app_generic
 app_sysinfo:
     LA    r5, t_sysinfo
@@ -95,14 +103,32 @@ app_sysinfo:
 app_notepad:
     LA    r5, t_notepad
     bl    draw_chrome
-    LA    r3, c_notepad
-    bl    draw_content
+    bl    notepad_draw
     b     da_ret
 app_files:
     LA    r5, t_files
     bl    draw_chrome
-    LA    r3, c_files
-    bl    draw_content
+    bl    files_draw
+    b     da_ret
+app_tracker:
+    LA    r5, t_tracker
+    bl    draw_chrome
+    bl    app_tracker_draw
+    b     da_ret
+app_outlast:
+    LA    r5, t_outlast
+    bl    draw_chrome
+    bl    app_outlast_draw
+    b     da_ret
+app_pacman:
+    LA    r5, t_pacman
+    bl    draw_chrome
+    bl    app_pacman_draw
+    b     da_ret
+app_paint:
+    LA    r5, t_paint
+    bl    draw_chrome
+    bl    app_paint_draw
     b     da_ret
 app_generic:
     LA    r4, icon_lbl
@@ -416,6 +442,222 @@ dms_ok:
     lwz   r14, 8(r1)
     lwz   r0, 36(r1)
     addi  r1, r1, 32
+    mtlr  r0
+    blr
+
+# ---- Notepad (real: loads/saves NOTE.TXT in the USV1 store) ----------------
+notepad_init:
+    mflr  r0
+    stwu  r1, -16(r1)
+    stw   r0, 20(r1)
+    LA    r3, fn_note
+    bl    fs_find
+    cmpwi r3, -1
+    beq   npi_seed
+    LA    r4, note_buf
+    li    r5, 240
+    bl    fs_read
+    STWA  r3, np_len, r4
+    li    r3, 2                           # "Loaded NOTE.TXT"
+    STWA  r3, np_stat, r4
+    b     npi_ret
+npi_seed:
+    LA    r3, note_buf
+    LA    r4, np_seed
+    li    r5, np_seed_len
+    mtctr r5
+npi_c:
+    lbz   r0, 0(r4)
+    stb   r0, 0(r3)
+    addi  r3, r3, 1
+    addi  r4, r4, 1
+    bdnz  npi_c
+    li    r3, np_seed_len
+    STWA  r3, np_len, r4
+    li    r3, 0
+    STWA  r3, np_stat, r4
+npi_ret:
+    lwz   r0, 20(r1)
+    addi  r1, r1, 16
+    mtlr  r0
+    blr
+
+notepad_input:
+    mflr  r0
+    stwu  r1, -16(r1)
+    stw   r0, 20(r1)
+    LWZA  r3, v_pade
+    andi. r0, r3, PAD_A
+    beq   npu_ret
+    LWZA  r3, np_len
+    cmpwi r3, 239
+    bge   npu_ret
+    LA    r4, note_buf
+    li    r5, '*'
+    stbx  r5, r4, r3
+    addi  r3, r3, 1
+    STWA  r3, np_len, r4
+    LA    r3, fn_note
+    LA    r4, note_buf
+    LWZA  r5, np_len
+    bl    fs_save
+    cmpwi r3, 0
+    bne   npu_full
+    li    r3, 1                           # "Saved NOTE.TXT"
+    b     npu_st
+npu_full:
+    li    r3, 3                           # "FS FULL"
+npu_st:
+    STWA  r3, np_stat, r4
+    li    r3, 1
+    STWA  r3, v_dirty, r4
+npu_ret:
+    lwz   r0, 20(r1)
+    addi  r1, r1, 16
+    mtlr  r0
+    blr
+
+notepad_draw:
+    mflr  r0
+    stwu  r1, -48(r1)
+    stw   r0, 52(r1)
+    stw   r14, 8(r1)
+    stw   r15, 12(r1)
+    stw   r16, 16(r1)
+    stw   r17, 20(r1)
+    li    r3, 1
+    li    r4, 0
+    bl    setfb
+    li    r3, 16
+    li    r4, 24
+    LA    r5, s_np_hdr
+    bl    pstr
+    LA    r14, note_buf
+    LWZA  r17, np_len
+    li    r15, 16                         # x
+    li    r16, 48                         # y
+npd_l:
+    cmpwi r17, 0
+    beq   npd_st
+    lbz   r5, 0(r14)
+    addi  r14, r14, 1
+    subi  r17, r17, 1
+    cmpwi r5, 0x0D
+    beq   npd_nl
+    cmpwi r5, 0x0A
+    beq   npd_nl
+    cmpwi r5, 32
+    blt   npd_l
+    cmpwi r5, 126
+    bgt   npd_l
+    mr    r3, r15
+    mr    r4, r16
+    bl    pchar
+    addi  r15, r15, 8
+    cmpwi r15, 624
+    blt   npd_l
+npd_nl:
+    li    r15, 16
+    addi  r16, r16, 12
+    cmpwi r16, 430
+    blt   npd_l
+npd_st:
+    li    r3, 2
+    li    r4, 0
+    bl    setfb
+    LWZA  r3, np_stat
+    slwi  r3, r3, 2
+    LA    r4, np_stattab
+    lwzx  r5, r4, r3
+    li    r3, 16
+    li    r4, 440
+    bl    pstr
+    lwz   r14, 8(r1)
+    lwz   r15, 12(r1)
+    lwz   r16, 16(r1)
+    lwz   r17, 20(r1)
+    lwz   r0, 52(r1)
+    addi  r1, r1, 48
+    mtlr  r0
+    blr
+
+# ---- Files (real: lists the USV1 directory) ---------------------------------
+files_draw:
+    mflr  r0
+    stwu  r1, -48(r1)
+    stw   r0, 52(r1)
+    stw   r14, 8(r1)
+    stw   r15, 12(r1)
+    stw   r16, 16(r1)
+    li    r3, 1
+    li    r4, 0
+    bl    setfb
+    li    r3, 16
+    li    r4, 24
+    LA    r5, s_fi_hdr
+    bl    pstr
+    LA    r3, FSBASE
+    lwz   r15, 4(r3)                      # count
+    li    r14, 0
+fid_l:
+    cmpw  r14, r15
+    bge   fid_d
+    slwi  r3, r14, 4
+    addi  r3, r3, 16
+    LA    r4, FSBASE
+    add   r16, r4, r3                     # entry
+    LA    r5, fname_buf                   # NUL-terminated name copy
+    li    r6, 0
+fid_n:
+    lbzx  r7, r16, r6
+    stbx  r7, r5, r6
+    addi  r6, r6, 1
+    cmpwi r6, 12
+    bne   fid_n
+    li    r7, 0
+    stbx  r7, r5, r6
+    li    r3, 1
+    li    r4, 0
+    bl    setfb
+    li    r3, 16
+    slwi  r4, r14, 4
+    addi  r4, r4, 48
+    LA    r5, fname_buf
+    bl    pstr
+    lhz   r3, 12(r16)                     # size
+    LA    r4, dec_buf
+    bl    fmt_dec4
+    li    r3, 144
+    slwi  r4, r14, 4
+    addi  r4, r4, 48
+    LA    r5, dec_buf
+    bl    pstr
+    addi  r14, r14, 1
+    b     fid_l
+fid_d:
+    mr    r3, r15                         # "NN file(s) - USV1"
+    bl    two_digits
+    LA    r5, numstr
+    stb   r4, 0(r5)
+    stb   r3, 1(r5)
+    li    r3, 0
+    stb   r3, 2(r5)
+    li    r3, 2
+    li    r4, 0
+    bl    setfb
+    li    r3, 16
+    li    r4, 440
+    LA    r5, numstr
+    bl    pstr
+    li    r3, 40
+    li    r4, 440
+    LA    r5, s_fi_cnt
+    bl    pstr
+    lwz   r14, 8(r1)
+    lwz   r15, 12(r1)
+    lwz   r16, 16(r1)
+    lwz   r0, 52(r1)
+    addi  r1, r1, 48
     mtlr  r0
     blr
 

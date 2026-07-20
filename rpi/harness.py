@@ -17,6 +17,12 @@ PWM/clock writes (the Music tone path) land in a harmless RAM sink. The AUTOTEST
 images drive the pad themselves; the harness only services MMIO and runs the budget.
 
 Usage: python rpi/harness.py <kernel8.img> <out.png> [instr_millions]
+                             [--keys=SEQ] [--audio=WAV] [--storage=FILE]
+
+--storage=FILE persists the USV1 mini-FS region (4KB at 0x380000): the file is
+loaded into that RAM before the run and written back after, so files Notepad
+saves survive across harness runs — the flat-RAM analogue of the other ports'
+persisted stores. (Real SD persistence is the documented hardware tail.)
 """
 import sys, struct, zlib, math
 from unicorn import (Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_PROT_ALL,
@@ -28,6 +34,8 @@ PITCH = W * 4
 LOAD     = 0x80000
 RAM_BASE = 0x80000
 RAM_SIZE = 0x400000           # kernel + stack + vars + mailbox buffer + fbinfo
+FS_PA    = 0x380000           # USV1 mini-FS region (kernel.s FS_BASE)
+FS_SIZE  = 0x1000             # 4KB: header + 15-entry dir + byte heap
 FB_PA    = 0x08000000
 FB_SIZE  = (W * H * 4 + 0xFFFF) & ~0xFFFF
 PERI_SINK_A_BASE = 0x3F100000  # clock + GPIO writes land here (ignored)
@@ -221,22 +229,39 @@ KEYMAP = {"w": b"w", "a": b"a", "s": b"s", "d": b"d",
 
 
 def parse_keys(argv):
-    """Pull --keys=SEQ (serial input injection) and --audio=PATH (reconstruct the
-    PWM tone to a WAV) out of argv."""
-    rest, seq, wav = [], b"", None
+    """Pull --keys=SEQ (serial input injection), --audio=PATH (reconstruct the
+    PWM tone to a WAV) and --storage=PATH (USV1 sidecar) out of argv."""
+    rest, seq, wav, store = [], b"", None, None
     for a in argv:
         if a.startswith("--keys="):
             for ch in a[len("--keys="):]:
                 seq += KEYMAP.get(ch, ch.encode("latin-1"))
         elif a.startswith("--audio="):
             wav = a[len("--audio="):]
+        elif a.startswith("--storage="):
+            store = a[len("--storage="):]
         else:
             rest.append(a)
-    return seq, wav, rest
+    return seq, wav, store, rest
+
+
+def fs_summary(blob):
+    """Human-readable listing of a USV1 region (for the persistence log)."""
+    if blob[:4] != b"USV1":
+        return "(unformatted)"
+    count = int.from_bytes(blob[4:8], "little")
+    used = int.from_bytes(blob[8:12], "little")
+    names = []
+    for i in range(min(count, 15)):
+        e = blob[16 + i*16:16 + i*16 + 16]
+        name = e[:12].split(b"\0")[0].decode("latin-1", "replace")
+        size = int.from_bytes(e[12:14], "little")
+        names.append("%s(%d)" % (name, size))
+    return "%d files, %d heap bytes: %s" % (count, used, " ".join(names))
 
 
 def main():
-    keys, wav, argv = parse_keys(sys.argv)
+    keys, wav, store, argv = parse_keys(sys.argv)
     rom_path, out_path = argv[1], argv[2]
     budget = int(float(argv[3]) * 1_000_000) if len(argv) > 3 else 60_000_000
     state["keys"] = keys
@@ -252,6 +277,14 @@ def main():
     uc.mmio_map(MBOX_PAGE, 0x1000, mbox_read, None, mbox_write, None)
     uc.mem_write(LOAD, data)
     uc.reg_write(UC_ARM64_REG_SP, 0x00200000)
+
+    if store:
+        try:
+            blob = open(store, "rb").read()[:FS_SIZE]
+            uc.mem_write(FS_PA, blob)
+            print("  storage: loaded %s -> %s" % (store, fs_summary(blob)))
+        except FileNotFoundError:
+            print("  storage: %s absent (kernel formats a fresh store)" % store)
 
     def on_unmapped(uc, access, address, size, value, ud):
         print("  !! unmapped access @ 0x%X (size %d) pc=0x%X"
@@ -284,6 +317,11 @@ def main():
     print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
     if wav:
         reconstruct_audio(wav)
+    if store:
+        blob = bytes(uc.mem_read(FS_PA, FS_SIZE))
+        with open(store, "wb") as f:
+            f.write(blob)
+        print("  storage: saved %s -> %s" % (store, fs_summary(blob)))
 
 
 if __name__ == "__main__":

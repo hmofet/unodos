@@ -117,6 +117,35 @@ tiles.append(("solid white(1)",   nes_tile([[1] * 8] * 8)))   # T_SOLW (also 191
 tiles.append(("solid cyan(2)",    nes_tile([[2] * 8] * 8)))   # T_SOLC
 tiles.append(("solid magenta(3)", nes_tile([[3] * 8] * 8)))   # T_SOLM
 
+# ---- game glyph tiles (Pac-Man cells + the Paint cursor overlays) ---------------
+# All background tiles (no sprite layer): the actors are recoloured CELLS. Under
+# the Pac-Man palette index1=white (dots/ghosts/font), index2=blue (walls),
+# index3=yellow (Pac-Man).
+def glyph(rows, fg):
+    return nes_tile([[fg if ch == "#" else 0 for ch in row] for row in rows])
+
+EXTRA_BASE = len(tiles)
+tiles.append(("pac dot", glyph([                # T_DOT (index1)
+    "........", "........", "........", "...##...",
+    "...##...", "........", "........", "........"], 1)))
+tiles.append(("pac power", glyph([              # T_PWR (index1)
+    "........", "..####..", ".######.", ".######.",
+    ".######.", ".######.", "..####..", "........"], 1)))
+tiles.append(("pac-man", glyph([                # T_PAC (index3 = yellow)
+    "..####..", ".######.", "######..", "####....",
+    "######..", ".######.", "..####..", "........"], 3)))
+tiles.append(("ghost", glyph([                  # T_GHO (index1 = white)
+    "..####..", ".######.", ".#.##.#.", ".######.",
+    ".######.", ".######.", "#.#.#.#.", "........"], 1)))
+
+# Paint cursor: a 1px border ring over an interior of colour i (i = the cell's
+# ink). Border contrasts: index3 over a white cell, index1 otherwise.
+CUR_BASE = len(tiles)
+for i in range(4):
+    b = 3 if i == 1 else 1
+    ring = [[b] * 8] + [[b] + [i] * 6 + [b] for _ in range(6)] + [[b] * 8]
+    tiles.append((f"paint cursor over {i}", nes_tile(ring)))
+
 assert len(tiles) <= 256, f"{len(tiles)} tiles exceeds pattern table 0"
 
 # ---- Dostris tetromino tables --------------------------------------------------
@@ -166,8 +195,15 @@ TUNE = [  # Ode to Joy (Beethoven) — the same melody the SMS port plays
 ]
 music_song = [(round(CPU_HZ / (16 * NOTE_HZ[n])) - 1, d) for n, d in TUNE]
 
+# ---- Tracker: note period table (C4..C5, the same 8 notes the C64 grid uses) ----
+TK_NOTES = ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"]
+tk_periods = [round(CPU_HZ / (16 * NOTE_HZ[n])) - 1 for n in TK_NOTES]
+
 # ---- palette (NES master-palette indices) --------------------------------------
 PAL = [0x11, 0x30, 0x2C, 0x24]   # blue(backdrop), white, cyan, magenta
+# per-app $3F00 palettes (loaded on app entry; the launcher restores PAL on exit)
+PAL_OUTLAST = [0x1A, 0x30, 0x00, 0x16]   # green grass(backdrop), white, grey road, red car
+PAL_PACMAN  = [0x0F, 0x30, 0x12, 0x28]   # black(backdrop), white, blue walls, yellow pac
 
 # ---- emit CHR (8KB: table 0 = our tiles padded to 4KB, table 1 = zeros) --------
 os.makedirs(os.path.dirname(CHR_OUT), exist_ok=True)
@@ -196,7 +232,16 @@ with open(INC_OUT, "w", newline="\n") as f:
     f.write(f"T_SOLW      EQU {T_SOLW}  ; solid white block\n")
     f.write(f"T_SOLC      EQU {T_SOLC}  ; solid cyan block\n")
     f.write(f"T_SOLM      EQU {T_SOLM}  ; solid magenta block\n")
+    f.write(f"T_DOT       EQU {EXTRA_BASE}  ; Pac-Man dot (index1)\n")
+    f.write(f"T_PWR       EQU {EXTRA_BASE+1}  ; Pac-Man power pellet (index1)\n")
+    f.write(f"T_PAC       EQU {EXTRA_BASE+2}  ; Pac-Man actor (index3)\n")
+    f.write(f"T_GHO       EQU {EXTRA_BASE+3}  ; ghost actor (index1)\n")
+    f.write(f"T_CUR       EQU {CUR_BASE}  ; Paint cursor over ink 0..3 (4 tiles)\n")
     f.write("palette:\n    dc.b " + ",".join(f"${v:02X}" for v in PAL) + "\n")
+    f.write("pal_outlast:\n    dc.b " + ",".join(f"${v:02X}" for v in PAL_OUTLAST) + "\n")
+    f.write("pal_pacman:\n    dc.b " + ",".join(f"${v:02X}" for v in PAL_PACMAN) + "\n")
+    f.write("; Tracker: pulse periods for notes C4 D4 E4 F4 G4 A4 B4 C5\n")
+    f.write("tk_periods:\n    dc.w " + ",".join(f"${p:04X}" for p in tk_periods) + "\n")
     # Dostris piece tables (I O T S Z J L)
     f.write("\n; Dostris: 7 pieces x 4 rotations, each a 4x4 bitmask (bit15=row0col0)\n")
     f.write("piece_masks:\n")

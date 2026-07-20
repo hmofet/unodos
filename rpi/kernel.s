@@ -117,10 +117,85 @@
 .equ a_tmr,    VARS+164
 .equ a_pad,    VARS+168
 .equ a_gpause, VARS+172
+// ---- Tracker (app 6) ----
+.equ tk_row,   VARS+176                   // cursor row 0..31
+.equ tk_col,   VARS+180                   // cursor channel 0..3
+.equ tk_prow,  VARS+184                   // playing row
+.equ tk_tmr,   VARS+188                   // frames until next row
+.equ tk_orow,  VARS+192                   // previous cursor row (partial redraw)
+.equ tk_ocol,  VARS+196
+.equ tk_oprow, VARS+200                   // previous play row
+.equ pf_tk,    VARS+204                   // tracker partial-redraw flag
+// ---- OutLast (app 8) ----
+.equ ol_carx,  VARS+208                   // car column 0..39
+.equ ol_scroll,VARS+212
+.equ ol_dist,  VARS+216
+.equ ol_over,  VARS+220
+.equ ol_ctr,   VARS+224
+.equ pf_ol,    VARS+228
+// ---- Paint (app 10) ----
+.equ pt_cx,    VARS+232                   // cursor col (canvas 0..31 / palette 0..7)
+.equ pt_cy,    VARS+236                   // cursor row 0..15, 16 = palette row
+.equ pt_ink,   VARS+240                   // palette index 1..8
+.equ pf_pt,    VARS+244
+.equ pt_ocx,   VARS+248
+.equ pt_ocy,   VARS+252
+// ---- Notepad (app 2, USV1-backed) ----
+.equ np_len,   VARS+256
+.equ np_saved, VARS+260                   // 1 once NOTE.TXT exists on the store
+// ---- Pac-Man (app 9) ----
+.equ pm_state, VARS+268                   // 1 READY / 2 PLAY / 4 OVER
+.equ pm_statet,VARS+272                   // READY countdown (frames)
+.equ pm_score, VARS+276
+.equ pm_lives, VARS+280
+.equ pm_dots,  VARS+284
+.equ pm_fright,VARS+288                   // frightened frames left
+.equ pm_mode,  VARS+292                   // scatter/chase schedule index
+.equ pm_modet, VARS+296
+.equ pm_kills, VARS+300                   // ghosts eaten this fright
+.equ pm_px,    VARS+304                   // pac tile x/y
+.equ pm_py,    VARS+308
+.equ pm_pdir,  VARS+312                   // 0 up 1 left 2 down 3 right
+.equ pm_pnext, VARS+316
+.equ pm_ptmr,  VARS+320                   // frames until pac steps
+.equ pm_gtmr,  VARS+324                   // frames until ghosts step
+.equ pf_pm,    VARS+328
+.equ pm_opx,   VARS+332                   // pac's previous tile (erase)
+.equ pm_opy,   VARS+336
+.equ pm_level, VARS+340
+.equ pm_hi,    VARS+344
+.equ pm_gtick, VARS+348                   // ghost-step parity (fright half speed)
+.equ pm_gh,    VARS+352                   // 4 ghosts x 28 bytes (see GH_*)
+.equ GH_X,   0
+.equ GH_Y,   4
+.equ GH_DIR, 8
+.equ GH_ST,  12
+.equ GH_TMR, 16
+.equ GH_OX,  20
+.equ GH_OY,  24
+.equ GH_SZ,  28
+.equ pm_gi,    VARS+464                   // ghost loop index
+.equ pm_tgx,   VARS+468                   // steering target tile
+.equ pm_tgy,   VARS+472
+.equ pm_bestd, VARS+476                   // steering argmin scratch
+.equ pm_bdir,  VARS+480
+.equ pm_moved, VARS+484                   // this ghost moved (needs erase)
 .equ palette,  VARS+0x200                 // 16 XRGB words
 .equ clk_str,  VARS+0x240                 // 9 bytes
 .equ numstr,   VARS+0x250                 // 6 bytes
 .equ g_board,  VARS+0x260                 // BW*BH bytes
+.equ tk_pat,   VARS+0x300                 // 32 rows x 4 channels, 1 byte/cell
+.equ str_buf,  VARS+0x380                 // 64-byte text scratch
+.equ pt_canvas,VARS+0x400                 // 32x16 canvas, 1 palette idx/cell
+.equ np_buf,   VARS+0x600                 // Notepad text (NP_MAX bytes)
+.equ pm_maze,  VARS+0x700                 // 28x25 maze bytes (0x700..0x9BC)
+
+// ---- USV1 storage (fs.inc.s) — a fixed RAM region the harness persists ----
+.equ FS_BASE,  0x00380000                 // magic/count/used + dir + heap (4KB)
+.equ FS_HEAP,  FS_BASE+256
+.equ FS_HEAPSZ,3840                       // 4096-256
+.equ FS_MAXF,  15
+.equ NP_MAX,   250
 
 .section .text
 .global _start
@@ -137,12 +212,13 @@ core0:
     mov   sp, x0
     // clear the variable block (does not touch FBINFO / mailbox buffer)
     ldr   x0, =VARS
-    mov   w2, #256                        // 256 words = 1KB
+    mov   w2, #640                        // 640 words = 2.5KB (incl. app buffers)
 mclr:
     str   wzr, [x0], #4
     subs  w2, w2, #1
     b.ne  mclr
     bl    fb_init                         // ask the GPU for a framebuffer
+    bl    fs_init                         // mount (or format+seed) the USV1 store
     bl    draw_launcher
 mainloop:
     bl    wait_vblank
@@ -490,6 +566,29 @@ clear_screen:
     ldp   x29, x30, [sp], #16
     ret
 
+// fmt_dec: w0 = value 0..99999, x1 = dest -> decimal ASCII, NUL-terminated,
+// leading zeros suppressed. Leaf (clobbers w0-w5, x1).
+fmt_dec:
+    mov   w2, #10000
+    mov   w3, #0                          // started flag
+fd_dig:
+    udiv  w4, w0, w2
+    msub  w0, w4, w2, w0                  // remainder
+    cbnz  w4, fd_put
+    cbnz  w3, fd_put
+    cmp   w2, #1
+    b.ne  fd_next                         // suppress leading zero
+fd_put:
+    add   w4, w4, #'0'
+    strb  w4, [x1], #1
+    mov   w3, #1
+fd_next:
+    mov   w5, #10
+    udiv  w2, w2, w5
+    cbnz  w2, fd_dig
+    strb  wzr, [x1]
+    ret
+
 // two_digits: w0 = 0..99 -> w1 = tens char, w0 = units char. Leaf.
 two_digits:
     mov   w1, #'0'
@@ -644,6 +743,36 @@ up_d2:
     b.ne  up_d3
     bl    dostris_update
 up_d3:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #2
+    b.ne  up_d4
+    bl    notepad_input
+up_d4:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #6
+    b.ne  up_d5
+    bl    tracker_update
+up_d5:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #8
+    b.ne  up_d6
+    bl    outlast_update
+up_d6:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #9
+    b.ne  up_d7
+    bl    pacman_update
+up_d7:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #10
+    b.ne  up_d8
+    bl    paint_update
+up_d8:
     ldp   x29, x30, [sp], #16
     ret
 
@@ -757,6 +886,36 @@ ea1:
     b.ne  ea2
     bl    music_init
 ea2:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #2
+    b.ne  ea3
+    bl    notepad_enter
+ea3:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #6
+    b.ne  ea4
+    bl    tracker_init
+ea4:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #8
+    b.ne  ea5
+    bl    outlast_init
+ea5:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #9
+    b.ne  ea6
+    bl    pacman_init
+ea6:
+    ldr   x0, =v_app
+    ldr   w0, [x0]
+    cmp   w0, #10
+    b.ne  ea7
+    bl    paint_init
+ea7:
     ldr   x0, =v_dirty
     mov   w1, #1
     str   w1, [x0]
@@ -800,6 +959,50 @@ rp_app:
     b.eq  rp_music
     cmp   w0, #7
     b.eq  rp_dostris
+    cmp   w0, #6
+    b.eq  rp_tracker
+    cmp   w0, #8
+    b.eq  rp_outlast
+    cmp   w0, #9
+    b.eq  rp_pacman
+    cmp   w0, #10
+    b.eq  rp_paint
+    ldp   x29, x30, [sp], #16
+    ret
+rp_tracker:
+    ldr   x0, =pf_tk
+    ldr   w1, [x0]
+    cbz   w1, rp_done
+    bl    tracker_partial
+    ldr   x0, =pf_tk
+    str   wzr, [x0]
+    ldp   x29, x30, [sp], #16
+    ret
+rp_outlast:
+    ldr   x0, =pf_ol
+    ldr   w1, [x0]
+    cbz   w1, rp_done
+    bl    outlast_partial
+    ldr   x0, =pf_ol
+    str   wzr, [x0]
+    ldp   x29, x30, [sp], #16
+    ret
+rp_pacman:
+    ldr   x0, =pf_pm
+    ldr   w1, [x0]
+    cbz   w1, rp_done
+    bl    pacman_partial
+    ldr   x0, =pf_pm
+    str   wzr, [x0]
+    ldp   x29, x30, [sp], #16
+    ret
+rp_paint:
+    ldr   x0, =pf_pt
+    ldr   w1, [x0]
+    cbz   w1, rp_done
+    bl    paint_partial
+    ldr   x0, =pf_pt
+    str   wzr, [x0]
     ldp   x29, x30, [sp], #16
     ret
 rp_clock:
@@ -839,6 +1042,14 @@ full_redraw:
     str   wzr, [x0]
     ldr   x0, =pf_pc
     str   wzr, [x0]
+    ldr   x0, =pf_tk
+    str   wzr, [x0]
+    ldr   x0, =pf_ol
+    str   wzr, [x0]
+    ldr   x0, =pf_pm
+    str   wzr, [x0]
+    ldr   x0, =pf_pt
+    str   wzr, [x0]
     ldr   x0, =v_inapp
     ldr   w0, [x0]
     cbnz  w0, fr_app2
@@ -852,3 +1063,8 @@ fr_app2:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "fs.inc.s"
+    .include "tracker.inc.s"
+    .include "outlast.inc.s"
+    .include "pacman.inc.s"
+    .include "paint.inc.s"

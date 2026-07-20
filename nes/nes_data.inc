@@ -7,8 +7,20 @@ NICONS      EQU 11
 T_SOLW      EQU 236  ; solid white block
 T_SOLC      EQU 237  ; solid cyan block
 T_SOLM      EQU 238  ; solid magenta block
+T_DOT       EQU 239  ; Pac-Man dot (index1)
+T_PWR       EQU 240  ; Pac-Man power pellet (index1)
+T_PAC       EQU 241  ; Pac-Man actor (index3)
+T_GHO       EQU 242  ; ghost actor (index1)
+T_CUR       EQU 243  ; Paint cursor over ink 0..3 (4 tiles)
 palette:
     dc.b $11,$30,$2C,$24
+pal_outlast:
+    dc.b $1A,$30,$00,$16
+pal_pacman:
+    dc.b $0F,$30,$12,$28
+; Tracker: pulse periods for notes C4 D4 E4 F4 G4 A4 B4 C5
+tk_periods:
+    dc.w $01AA,$017B,$0152,$0140,$011C,$00FD,$00E1,$00D5
 
 ; Dostris: 7 pieces x 4 rotations, each a 4x4 bitmask (bit15=row0col0)
 piece_masks:

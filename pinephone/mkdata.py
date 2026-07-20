@@ -104,6 +104,57 @@ TUNE = [
     ("D4", H), ("C4", Q), ("C4", H)]
 music_song = [(NOTE_HZ[n], d) for n, d in TUNE]
 
+# ---- Tracker: 32 rows x 4 channels, one byte per cell (0 empty, 1..8 = C4..C5).
+#      The same demo riff shape as the C64/Genesis trackers, collapsed to the
+#      single-voice note range; playback voice-steals into the one PCM voice. ----
+TK_ROWS, TK_CHANS = 32, 4
+TK_DEMO_ROWS = [
+    # ch1 bass, ch2 arp, ch3 melody, ch4 accent (values 0=empty, 1..8=C4..C5)
+    (1, 5, 0, 8), (0, 0, 0, 0), (0, 3, 0, 0), (0, 0, 0, 0),
+    (1, 5, 8, 0), (0, 0, 0, 0), (0, 3, 5, 0), (0, 0, 0, 0),
+    (5, 1, 8, 8), (0, 0, 0, 0), (0, 2, 0, 0), (0, 0, 0, 0),
+    (5, 5, 6, 0), (0, 0, 0, 0), (0, 2, 0, 0), (0, 0, 0, 0),
+    (4, 6, 6, 8), (0, 0, 0, 0), (0, 4, 0, 0), (0, 0, 0, 0),
+    (4, 1, 5, 0), (0, 0, 0, 0), (0, 4, 3, 0), (0, 0, 0, 0),
+    (5, 2, 6, 8), (0, 0, 0, 0), (0, 5, 0, 0), (0, 0, 0, 0),
+    (5, 7, 8, 8), (0, 0, 0, 0), (0, 7, 0, 8), (0, 0, 0, 0)]
+assert len(TK_DEMO_ROWS) == TK_ROWS
+tk_demo = [v for row in TK_DEMO_ROWS for v in row]
+# note frequencies 1..8 = C4..C5 (Hz), same scale as the Music tune
+tk_freqs = [262, 294, 330, 349, 392, 440, 494, 523]
+
+# ---- Pac-Man maze template (28x25) - byte-identical to the Genesis/Amiga port:
+#      0 empty, 1 wall, 2 dot, 3 power, 4 house, 5 gate --------------------------
+PM_MAZE = """
+1111111111111111111111111111
+1322222222222112222222222231
+1211121111112112111111211121
+1211121111112112111111211121
+1222222222222222222222222221
+1211121211111111111121211121
+1222221222212222122221222221
+1111121111010000101111211111
+0000121000000000000001210000
+0000121011115005111101210000
+1111121014444444444101211111
+0000020014444444444100200000
+0000121014444444444101210000
+0000121011111111111101210000
+1111121000000000000001211111
+1222222222212222122222222221
+1211121111212112121111211121
+1321122222222222222222211231
+1121121211111111111121211211
+1222221222212222122221222221
+1211111111212112121111111121
+1222222222222222222222222221
+1211121111112112111111211121
+1222222222222112222222222221
+1111111111111111111111111111
+"""
+pm_maze = [int(ch) for ln in PM_MAZE.split() for ch in ln]
+assert len(pm_maze) == 28 * 25, len(pm_maze)
+
 # ---- palettes: 4 theme presets x 16 colours (32-bit XRGB 0xFFRRGGBB) ------------
 def c(r, g, b):
     return (0xFF << 24) | (r << 16) | (g << 8) | b
@@ -127,6 +178,8 @@ with open(EQU_OUT, "w", newline="\n") as f:
     f.write(".equ NICONS, %d\n" % NICONS)
     f.write(".equ NTHEMES, %d\n" % NTHEMES)
     f.write(".equ MUSIC_COUNT, %d\n" % len(music_song))
+    f.write(".equ TK_ROWS, %d\n" % TK_ROWS)
+    f.write(".equ TK_CHANS, %d\n" % TK_CHANS)
 
 # ---- emit -----------------------------------------------------------------------
 with open(OUT, "w", newline="\n") as f:
@@ -156,5 +209,16 @@ with open(OUT, "w", newline="\n") as f:
     f.write(".global theme_pals\n.align 2\ntheme_pals:\n")
     for ti, pal in enumerate(THEMES):
         f.write(f"    // theme {ti}\n    .word " + ",".join("0x%08X" % v for v in pal) + "\n")
+    # tracker: demo pattern (32x4 bytes) + note frequency table (8 hwords)
+    f.write(".global tk_demo\ntk_demo:\n")
+    for r in range(TK_ROWS):
+        f.write("    .byte " + ",".join(str(v) for v in tk_demo[r*TK_CHANS:(r+1)*TK_CHANS]) + "\n")
+    f.write(".global tk_freqs\n.align 1\ntk_freqs:\n    .hword " +
+            ",".join(str(v) for v in tk_freqs) + "\n")
+    # pac-man maze template (28x25 bytes)
+    f.write(".global pm_maze_tpl\npm_maze_tpl:\n")
+    for r in range(25):
+        f.write("    .byte " + ",".join(str(v) for v in pm_maze[r*28:(r+1)*28]) + "\n")
 
-print(f"wrote {OUT}: font 95, {NICONS} icons, {len(music_song)} notes, {NTHEMES} themes")
+print(f"wrote {OUT}: font 95, {NICONS} icons, {len(music_song)} notes, {NTHEMES} themes, "
+      f"tracker {TK_ROWS}x{TK_CHANS}, pacman maze 28x25")

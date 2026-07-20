@@ -42,6 +42,8 @@
 .equ PAD_L,   0x20
 .equ PAD_U,   0x40
 .equ PAD_D,   0x80
+.equ PAD_SR,  0x100        @ R shoulder
+.equ PAD_SL,  0x200        @ L shoulder
 
 @ Dostris geometry (in board cells; rendered at 8px cells)
 .equ BW, 10
@@ -124,6 +126,7 @@ mclr:
     str r1, [r0], #4
     subs r2, r2, #1
     bne mclr
+    bl fs_init                  @ USV1 store in EWRAM (format+seed if absent)
     bl draw_launcher
 mainloop:
     bl wait_vblank
@@ -483,18 +486,16 @@ up_app:
     bl enter_launcher
     pop {pc}
 up_disp:
+    @ table dispatch (the old cmp/bleq chain compared a clobbered r0 after each
+    @ helper returned — with 10 real apps that becomes a genuine hazard)
     ldr r0, =v_app
     ldr r0, [r0]
-    cmp r0, #1
-    bleq clock_noop
-    cmp r0, #3
-    bleq music_tick
-    cmp r0, #5
-    bleq theme_input
-    cmp r0, #7
-    bleq dostris_update
+    ldr r1, =update_tab
+    ldr r1, [r1, r0, lsl #2]
+    mov lr, pc
+    bx r1
     pop {pc}
-clock_noop:
+up_none:
     bx lr
 .ltorg
 
@@ -586,12 +587,10 @@ enter_app:
     push {lr}
     ldr r0, =v_app
     ldr r0, [r0]
-    cmp r0, #7
-    bleq dostris_init
-    ldr r0, =v_app
-    ldr r0, [r0]
-    cmp r0, #3
-    bleq music_init
+    ldr r1, =init_tab
+    ldr r1, [r1, r0, lsl #2]
+    mov lr, pc
+    bx r1
     ldr r0, =v_dirty
     mov r1, #1
     str r1, [r0]
@@ -630,14 +629,13 @@ render_partials:
 rp_app:
     ldr r0, =v_app
     ldr r0, [r0]
-    cmp r0, #1
-    beq rp_clock
-    cmp r0, #3
-    beq rp_music
-    cmp r0, #7
-    beq rp_dostris
+    ldr r1, =rp_tab
+    ldr r1, [r1, r0, lsl #2]
+    mov lr, pc
+    bx r1
     pop {pc}
 rp_clock:
+    push {lr}
     ldr r0, =pf_clk
     ldr r1, [r0]
     cmp r1, #0
@@ -648,6 +646,7 @@ rp_clock:
     str r1, [r0]
     pop {pc}
 rp_music:
+    push {lr}
     ldr r0, =pf_score
     ldr r1, [r0]
     cmp r1, #0
@@ -658,6 +657,7 @@ rp_music:
     str r1, [r0]
     pop {pc}
 rp_dostris:
+    push {lr}
     ldr r0, =pf_pc
     ldr r1, [r0]
     cmp r1, #0
@@ -692,3 +692,8 @@ fr_app:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "fs.inc.s"
+    .include "tracker.inc.s"
+    .include "outlast.inc.s"
+    .include "pacman.inc.s"
+    .include "paint.inc.s"

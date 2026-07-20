@@ -128,10 +128,69 @@
 .equ a_gpause, VARS+172
 .equ m_phase,  VARS+176           # PCM square-wave phase accumulator
 .equ m_freq,   VARS+180           # current note frequency (Hz)
+# ---- Tracker ----
+.equ tk_row,   VARS+184
+.equ tk_ch,    VARS+188
+.equ tk_orow,  VARS+192
+.equ tk_och,   VARS+196
+.equ tk_prow,  VARS+200
+.equ tk_oprow, VARS+204
+.equ tk_ctr,   VARS+208
+.equ tk_pf,    VARS+212
+# ---- OutLast ----
+.equ ol_carx,  VARS+216
+.equ ol_scroll,VARS+220
+.equ ol_dist,  VARS+224
+.equ ol_over,  VARS+228
+.equ ol_ctr,   VARS+232
+.equ ol_pf,    VARS+236
+# ---- Pac-Man ----
+.equ pm_state, VARS+240
+.equ pm_stt,   VARS+244
+.equ pm_px,    VARS+248
+.equ pm_py,    VARS+252
+.equ pm_dir,   VARS+256
+.equ pm_ndir,  VARS+260
+.equ pm_score, VARS+264
+.equ pm_lives, VARS+268
+.equ pm_dots,  VARS+272
+.equ pm_fright,VARS+276
+.equ pm_kills, VARS+280
+.equ pm_mode,  VARS+284
+.equ pm_modet, VARS+288
+.equ pm_ctr,   VARS+292
+.equ pm_hi,    VARS+296
+.equ pm_pf,    VARS+300
+.equ pm_fpar,  VARS+304
+.equ pm_opx,   VARS+308
+.equ pm_opy,   VARS+312
+# ---- Paint ----
+.equ pt_cx,    VARS+316
+.equ pt_cy,    VARS+320
+.equ pt_col,   VARS+324
+.equ pt_pf,    VARS+328
+.equ pt_ocx,   VARS+332
+.equ pt_ocy,   VARS+336
+# ---- Notepad ----
+.equ np_len,   VARS+340
+.equ np_stat,  VARS+344
 .equ palette,  VARS+0x200         # 16 XRGB words
 .equ clk_str,  VARS+0x240         # 9 bytes
 .equ numstr,   VARS+0x250         # 6 bytes
 .equ g_board,  VARS+0x260         # BW*BH bytes
+.equ tk_pat,   VARS+0x300         # Tracker pattern: 32 rows x 4 chans (128 bytes)
+.equ pm_gh,    VARS+0x380         # 4 ghosts x 20 bytes (x,y,dir,state,timer words)
+.equ pm_ogh,   VARS+0x3D0         # 4 x 8 bytes: ghost old (x,y) for partial erase
+.equ note_buf, VARS+0x400         # Notepad text buffer (256 bytes; init at app entry)
+.equ fname_buf,VARS+0x500         # 16 bytes: NUL-terminated copy of a dir name
+.equ dec_buf,  VARS+0x510         # 8 bytes: fmt_dec4 output
+.equ pt_canvas,VARS+0x800         # Paint canvas: 30x22 palette-index bytes
+.equ pm_maze,  VARS+0xC00         # Pac-Man live maze: 28x25 tile bytes
+# ---- USV1 storage: a fixed RAM region the harness persists (--storage=) -----
+.equ FSBASE,   0x00500000         # +0 magic "USV1", +4 count, +8 heap_used,
+.equ FSHEAP,   FSBASE+256         # +16 dir (15 x 16B: name12,size h,start h)
+.equ FS_HEAPSZ, 3840
+.equ FS_MAXFILES, 15
 
 .section .text
 .globl _start
@@ -147,6 +206,7 @@ clr:
     addi  r3, r3, 4
     bdnz  clr
     bl    fb_init                         # ask Open Firmware for the framebuffer
+    bl    fs_init                         # mount/format the USV1 store
     bl    draw_launcher
 mainloop:
     bl    wait_vblank
@@ -699,6 +759,11 @@ up_app:
     b     up_ret
 up_disp:
     LWZA  r3, v_app
+    cmpwi r3, 2
+    bne   up_d0
+    bl    notepad_input
+up_d0:
+    LWZA  r3, v_app
     cmpwi r3, 3
     bne   up_d1
     bl    music_tick
@@ -709,9 +774,29 @@ up_d1:
     bl    theme_input
 up_d2:
     LWZA  r3, v_app
+    cmpwi r3, 6
+    bne   up_d3
+    bl    tracker_update
+up_d3:
+    LWZA  r3, v_app
     cmpwi r3, 7
-    bne   up_ret
+    bne   up_d4
     bl    dostris_update
+up_d4:
+    LWZA  r3, v_app
+    cmpwi r3, 8
+    bne   up_d5
+    bl    outlast_update
+up_d5:
+    LWZA  r3, v_app
+    cmpwi r3, 9
+    bne   up_d6
+    bl    pacman_update
+up_d6:
+    LWZA  r3, v_app
+    cmpwi r3, 10
+    bne   up_ret
+    bl    paint_update
 up_ret:
     lwz   r0, 20(r1)
     addi  r1, r1, 16
@@ -818,6 +903,31 @@ ea1:
     bne   ea2
     bl    music_init
 ea2:
+    LWZA  r3, v_app
+    cmpwi r3, 2
+    bne   ea3
+    bl    notepad_init
+ea3:
+    LWZA  r3, v_app
+    cmpwi r3, 6
+    bne   ea4
+    bl    tracker_init
+ea4:
+    LWZA  r3, v_app
+    cmpwi r3, 8
+    bne   ea5
+    bl    outlast_init
+ea5:
+    LWZA  r3, v_app
+    cmpwi r3, 9
+    bne   ea6
+    bl    pacman_init
+ea6:
+    LWZA  r3, v_app
+    cmpwi r3, 10
+    bne   ea7
+    bl    paint_init
+ea7:
     li    r3, 1
     STWA  r3, v_dirty, r4
     lwz   r0, 20(r1)
@@ -862,8 +972,40 @@ rp_app:
     beq   rp_clock
     cmpwi r3, 3
     beq   rp_music
+    cmpwi r3, 6
+    beq   rp_tracker
     cmpwi r3, 7
     beq   rp_dostris
+    cmpwi r3, 8
+    beq   rp_outlast
+    cmpwi r3, 9
+    beq   rp_pacman
+    cmpwi r3, 10
+    beq   rp_paint
+    b     rp_done
+rp_tracker:
+    LWZA  r3, tk_pf
+    cmpwi r3, 0
+    beq   rp_done
+    bl    tracker_partial
+    b     rp_done
+rp_outlast:
+    LWZA  r3, ol_pf
+    cmpwi r3, 0
+    beq   rp_done
+    bl    outlast_partial
+    b     rp_done
+rp_pacman:
+    LWZA  r3, pm_pf
+    cmpwi r3, 0
+    beq   rp_done
+    bl    pacman_partial
+    b     rp_done
+rp_paint:
+    LWZA  r3, pt_pf
+    cmpwi r3, 0
+    beq   rp_done
+    bl    paint_partial
     b     rp_done
 rp_clock:
     LWZA  r3, pf_clk
@@ -919,3 +1061,8 @@ fred_ret:
 
     .include "apps.inc.s"
     .include "dostris.inc.s"
+    .include "fs.inc.s"
+    .include "tracker.inc.s"
+    .include "outlast.inc.s"
+    .include "pacman.inc.s"
+    .include "paint.inc.s"

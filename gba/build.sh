@@ -7,7 +7,12 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python}"
-REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/gba"
+# WSL path of THIS gba dir (worktree-relative; falls back for a WSL-side run)
+if command -v wslpath >/dev/null 2>&1; then
+  REPO_WSL="$(wslpath -a .)"
+else
+  REPO_WSL="$(wsl wslpath -a "$(pwd -W 2>/dev/null || pwd)")"
+fi
 
 mkdir -p build
 echo "[1/3] generating gfx data (font + icons + palettes + tables)..."
@@ -22,6 +27,12 @@ case "$1" in
   theme)   DEFS="--defsym AUTOTEST=1 --defsym AT_THEME=1";   OUT=build/unodos_theme.gba ;;
   music)   DEFS="--defsym AUTOTEST=1 --defsym AT_MUSIC=1";   OUT=build/unodos_music.gba ;;
   dostris) DEFS="--defsym AUTOTEST=1 --defsym AT_DOSTRIS=1"; OUT=build/unodos_dt.gba ;;
+  tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.gba ;;
+  outlast) DEFS="--defsym AUTOTEST=1 --defsym AT_OUTLAST=1"; OUT=build/unodos_ol.gba ;;
+  pacman)  DEFS="--defsym AUTOTEST=1 --defsym AT_PACMAN=1";  OUT=build/unodos_pm.gba ;;
+  paint)   DEFS="--defsym AUTOTEST=1 --defsym AT_PAINT=1";   OUT=build/unodos_pt.gba ;;
+  files)   DEFS="--defsym AUTOTEST=1 --defsym AT_FILES=1";   OUT=build/unodos_fi.gba ;;
+  note)    DEFS="--defsym AUTOTEST=1 --defsym AT_NOTE=1";    OUT=build/unodos_np.gba ;;
 esac
 
 echo "[2/3] assembling (ARM7TDMI) + linking via WSL..."

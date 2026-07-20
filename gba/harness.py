@@ -10,9 +10,13 @@ ROM on a Unicorn ARM7TDMI, services the two I/O registers the kernel polls
 framebuffer (VRAM 0x06000000, 240x160 BGR555) to a PNG. The AUTOTEST ROMs drive
 the pad themselves, so the harness only has to tick the scanline counter.
 
-Usage: python gba/harness.py <rom.gba> <out.png> [instr_millions]
+Usage: python gba/harness.py <rom.gba> <out.png> [instr_millions] [--storage f.bin]
+
+--storage persists the 4 KB USV1 region (EWRAM 0x02000000..0x02000FFF) across
+runs: the sidecar file is loaded into EWRAM before the ROM boots and written
+back after the run — the same storage-sidecar scheme the C64 harness uses.
 """
-import sys, struct, zlib
+import os, sys, struct, zlib
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_PROT_ALL
 from unicorn.arm_const import UC_ARM_REG_SP, UC_ARM_REG_PC
 
@@ -40,8 +44,14 @@ def write_png(path, w, h, rgb):
         f.write(chunk(b"IEND", b""))
 
 def main():
-    rom_path, out_path = sys.argv[1], sys.argv[2]
-    budget = int(float(sys.argv[3]) * 1_000_000) if len(sys.argv) > 3 else 30_000_000
+    args = sys.argv[1:]
+    storage = None
+    if "--storage" in args:
+        i = args.index("--storage")
+        storage = args[i + 1]
+        del args[i:i + 2]
+    rom_path, out_path = args[0], args[1]
+    budget = int(float(args[2]) * 1_000_000) if len(args) > 2 else 30_000_000
 
     data = open(rom_path, "rb").read()
     uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
@@ -56,6 +66,10 @@ def main():
     uc.mem_write(ROM, data)
     uc.reg_write(UC_ARM_REG_SP, 0x03007F00)
     uc.mem_write(KEYINPUT, struct.pack("<H", 0x03FF))   # no keys held (active-low)
+    if storage and os.path.exists(storage):
+        sd = open(storage, "rb").read()[:0x1000]
+        uc.mem_write(EWRAM, sd)
+        print("loaded storage sidecar %s (%d bytes)" % (storage, len(sd)))
 
     # Run in chunks, alternating VCOUNT across the vblank threshold (160) so the
     # kernel's wait_vblank (poll <160 then >=160) makes one frame of progress per
@@ -86,6 +100,10 @@ def main():
         rgb[i*3+1] = g
         rgb[i*3+2] = b
     write_png(out_path, 240, 160, rgb)
+    if storage:
+        with open(storage, "wb") as f:
+            f.write(uc.mem_read(EWRAM, 0x1000))
+        print("wrote storage sidecar %s (4096 bytes)" % storage)
     print("wrote %s (240x160) after ~%d instrs" % (out_path, chunks * CHUNK))
 
 if __name__ == "__main__":

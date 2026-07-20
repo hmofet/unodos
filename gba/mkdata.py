@@ -99,6 +99,11 @@ TUNE = [
     ("D4", H), ("C4", Q), ("C4", H)]
 music_song = [(round(2048 - 131072 / NOTE_HZ[n]) & 0x7FF, d) for n, d in TUNE]
 
+# ---- Tracker note periods: 24 semitones C2..B3 (GB-style 11-bit period) ---------
+TK_BASE = 65.406            # C2
+tk_periods = [round(2048 - 131072 / (TK_BASE * (2 ** (i / 12.0)))) & 0x7FF
+              for i in range(24)]
+
 # ---- palettes: 4 theme presets x 16 colours (BGR555) ----------------------------
 def c(r, g, b):
     return (b << 10) | (g << 5) | r
@@ -146,6 +151,9 @@ with open(OUT, "w", newline="\n") as f:
     f.write(".global music_song\n.align 2\nmusic_song:\n")
     for x, fr in music_song:
         f.write(f"    .hword 0x{x:04X}\n    .byte {fr}\n    .byte 0\n")
+    # tracker note periods (24 hwords, C2..B3)
+    f.write(".global tk_periods\n.align 2\ntk_periods:\n    .hword " +
+            ",".join("0x%04X" % v for v in tk_periods) + "\n")
     # theme palettes: NTHEMES * 16 BGR555 hwords
     f.write(".global theme_pals\n.align 2\ntheme_pals:\n")
     for ti, pal in enumerate(THEMES):
