@@ -2030,9 +2030,15 @@ int main(void)
                 unoui_render_ui(&UI);
                 t1 = uno_native_rdtsc();
                 uno_dbg_frame_render_cyc(t1 - t0);
+                /* Right-align, but NEVER pass a negative x: fb_text ->
+                   text_pen() does `x << 6`, which is UB on a negative int and
+                   UBSan-traps (crash CR005/CR009 - a long status string on a
+                   narrow desktop went to x=-42). Clamp here; the underlying
+                   renderer weakness is catalogued as F7. */
                 { char hud[96];
                   int n = uno_dbg_hud(hud, sizeof hud);
-                  if (n > 0) fb_text(FB_W - fb_text_w(hud) - 4, 3, hud,
+                  int hx = FB_W - fb_text_w(hud) - 4; if (hx < 0) hx = 0;
+                  if (n > 0) fb_text(hx, 3, hud,
                                      FB_RGB(255, 245, 130), FB_RGB(28, 30, 48));
                   /* run state under the HUD: the operator must be able to see
                      at a glance whether a bounded run has FINISHED (safe to
@@ -2041,7 +2047,8 @@ int main(void)
                   { const char *st = pc64_stress_status();
                     if (st) {
                         int done = (st[7] == 'C' || st[7] == 'S');   /* COMPLETE/STOPPED */
-                        fb_text(FB_W - fb_text_w(st) - 4, 3 + fb_text_h() + 2, st,
+                        int sx = FB_W - fb_text_w(st) - 4; if (sx < 0) sx = 0;
+                        fb_text(sx, 3 + fb_text_h() + 2, st,
                                 done ? FB_RGB(120, 255, 140) : FB_RGB(160, 200, 255),
                                 FB_RGB(28, 30, 48));
                     } } }

@@ -151,6 +151,27 @@ pointer, so detaching would kill the only working pointer (firmware
 - Until then, treat "the Latitude will detach" as an assumption to verify, not a
   given.
 
+### F7 — `text_pen()` shifts a negative x: UB in the text renderer  ·  OS / ROBUSTNESS  ·  S2  ·  OPEN
+`pc64_font.c:307` — `int pen26 = x << 6;`. Left-shifting a **negative** signed
+int is undefined behaviour, so drawing any string at a negative x is UB. With
+the debug build's sanitizer this is an immediate `ud2` → crash; in a release
+build it is silent UB whose result depends on the compiler.
+- **Caught by UBSan, on the first build that happened to pass a negative x.**
+  Reports `CR005`/`CR009` (QEMU): `vector 6 (#UD)`, `RIP text_pen.cold+0x0`,
+  flagged `ud2: UBSAN TRAP`, with `RBX=RCX=0xffffffd6` = **x = -42**, and the
+  raw-stack scan naming `prov_text+0x32` and `uno_main+0xcd4`. This is exactly
+  the class the sanitizer was added for, and it validates that investment.
+- The *trigger* was the debug overlay (right-aligning a status string wider
+  than the desktop) — that caller is clamped now — but the **renderer weakness
+  is real and general**: any caller that can produce a negative x hits it.
+  Plausible existing callers: the centred `fb_text(cx - fb_text_w(s)/2, ...)`
+  used by the splash and dialogs (negative whenever the string is wider than
+  the surface), and anything drawing scrolled/partially-offscreen text.
+- Fix direction for the fix session: make `text_pen` well-defined and clipping-
+  safe for negative x (multiply instead of shift, or clamp/skip glyphs left of
+  the surface), and audit `fb_text` callers that can go negative. Cheap fix,
+  broad blast radius.
+
 ---
 
 ## Positive confirmations (not bugs — the harness works on metal)
