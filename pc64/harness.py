@@ -106,11 +106,17 @@ def main():
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
+    # Storage: a vvfat view of build/esp by default (no image build needed).
+    # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
+    # that write on-device (Studio build-and-run of a larger app) set UNO_DISK
+    # to a real FAT image built by tools/mkuefi.py, where writes are reliable.
+    disk = os.environ.get("UNO_DISK")
+    disk_arg = ("format=raw,file=" + disk) if disk else "format=vvfat,file=fat:rw:build/esp"
     argv = [
         "qemu-system-x86_64", "-machine", "q35", "-m", "256",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
-        "-drive", "format=vvfat,file=fat:rw:build/esp",
+        "-drive", disk_arg,
         "-device", "qemu-xhci", "-device", "usb-tablet",
         "-nic", "none",
         "-display", "none",
@@ -133,6 +139,32 @@ def main():
         shot(q, "m1_desktop")
 
         if len(sys.argv) > 1 and sys.argv[1] == "boot":
+            return
+
+        # ---- Duum: the Python Doom engine.  Studio greets the Duum source
+        # (staged as SAMPLE.PY by the runner), Ctrl-B packs it, Ctrl-R runs it;
+        # it streams DOOM1.WAD and renders E1M1.  Generous waits: the first BSP
+        # render is heavy in the interpreter.  Move forward, shoot a second
+        # frame to prove the view changes. ------------------------------------
+        if len(sys.argv) > 1 and sys.argv[1] == "duum":
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "esc"}])
+            time.sleep(0.8)
+            keys(q, *(["down"] * 15)); keys(q, "ret")   # Studio
+            time.sleep(2.5)
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "b"}])
+            time.sleep(2.5)
+            shot(q, "duum_build")
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "r"}])
+            time.sleep(12)                              # first render
+            shot(q, "duum_a")
+            for _ in range(4):                          # walk forward
+                keys(q, "up"); time.sleep(2.5)
+            shot(q, "duum_b")
+            keys(q, "left"); time.sleep(3)              # turn
+            shot(q, "duum_c")
             return
 
         # ---- Python: Studio greets SDK\SAMPLE.PY; Ctrl-B packs it into a

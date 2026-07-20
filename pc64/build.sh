@@ -285,6 +285,26 @@ if [ "$1" != "legacy" ]; then
         fi
     fi
 
+    # ---- DUUM.UNO: the Python Doom engine (a PYAPP; needs PYRT + a WAD) -----
+    # Duum is a Python app, so it packages like any .py (source -> PYAPP
+    # container).  The WAD is developer-supplied game data, never committed
+    # (wads/ is gitignored, like the Wi-Fi fw-blobs): staged onto the ESP only
+    # when present.  Freedoom (BSD) is the shippable free default.
+    if [ "${UNO_PYRT:-1}" != "0" ] && [ -f apps/DUUM.PY ]; then
+        echo "[3e] packaging DUUM.UNO (the Python Doom engine)..."
+        "$PY" tools/mkuno.py pyapp apps/DUUM.PY build/esp/APPS/DUUM.UNO
+        mkdir -p build/esp/SDK; cp apps/DUUM.PY build/esp/SDK/ 2>/dev/null || true
+        if   [ -f wads/DOOM1.WAD ];     then WADSRC=wads/DOOM1.WAD
+        elif [ -f wads/freedoom1.wad ]; then WADSRC=wads/freedoom1.wad
+        else WADSRC=""; fi
+        if [ -n "$WADSRC" ]; then
+            cp "$WADSRC" build/esp/DOOM1.WAD
+            echo "[duum] staged $WADSRC -> ESP DOOM1.WAD ($(wc -c < "$WADSRC") bytes)"
+        else
+            echo "[duum] no WAD in wads/ (run tools/fetch-wad.sh) - Duum will say so"
+        fi
+    fi
+
     # decoupling assert: no app code linked into the kernel image
     if "$NM" build/BOOTX64.EFI 2>/dev/null | grep -q "uno_app_main_"; then
         echo "FAIL: uno_app_main_* found in the kernel image - apps must be .UNO only"

@@ -30,6 +30,8 @@ Rules when adding a row:
 | Ubuntu Font | Ubuntu font | Canonical Ltd | Ubuntu Font Licence 1.0 | `pc64/fonts/Ubuntu.ttf` | ESP (`UBUNTU.TTF`) |
 | Natural Earth | 110m land mask (the Clock's world map) | Natural Earth (naturalearthdata.com) | Public domain | fetched/cached by `pc64/tools/mkworldmap.py` → `pc64/build/world_map.h` | pc64 kernel image |
 | KallistiOS | Dreamcast OS/runtime the DC port links against | KallistiOS project | KOS license (BSD-style) | NOT vendored — external toolchain dependency of `dreamcast/` | Dreamcast images only (not pc64) |
+| MicroPython | the Python 3 interpreter inside PYRT.UNO | (c) 2013-2024 Damien P. George and contributors | MIT | `pc64/upy/` (LICENSE kept) | ESP (`PYRT.UNO`, when the optional Python runtime is built) |
+| Freedoom | free Doom-compatible IWAD — Duum's default game data | The Freedoom project | BSD 3-clause | NOT committed (`pc64/wads/`, developer-supplied) | ESP (`DOOM1.WAD`, only when a WAD is present) |
 
 Everything not listed here — the kernel, the shell, every port, unoui /
 uno3d / unosound / unomedia and all of their decoders, the demo media and
