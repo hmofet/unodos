@@ -684,8 +684,11 @@ static int   is_typename(Cc *cc, Tok *t);
 
 /* Recursion-depth guard for the recursive-descent parser: deeply nested source
  * must not overrun the ring0 stack and triple-fault. Each recursive entry point
- * bumps depth on the way in and drops it on the normal return; ucc_fatal
- * longjmps out, so error paths unwind the count on their own. */
+ * bumps depth on the way in and drops it on the normal return. On the error
+ * path ucc_fatal longjmps straight to the top-level handler (which returns and
+ * ends the compile), so rec_leave is skipped and depth is left stale - that is
+ * harmless because ucc_compile memsets the whole Cc (depth = 0) at entry, so the
+ * count never carries across compiles. */
 #define UCC_MAX_DEPTH 200
 static void rec_enter(Cc *cc){ if (++cc->depth > UCC_MAX_DEPTH) ucc_fatal(cc, "nesting too deep", 0); }
 static void rec_leave(Cc *cc){ cc->depth--; }

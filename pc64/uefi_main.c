@@ -886,12 +886,6 @@ static void clamp_cursor(void)
    there's no new input, so a held button is only reported on the press frame;
    we must remember it until the release frame or the click "doesn't work". */
 static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
-/* firmware absolute-pointer relative tracking: a laptop precision touchpad is a
- * RELATIVE device, so mapping its absolute position straight onto the screen (and
- * then EMA-filtering it) read as "floaty / teleporting" on the Surface. We instead
- * derive deltas from successive positions (like the native i2c-hid rel_from_abs),
- * swallowing large jumps as finger lift-and-replace. */
-static int gAbsHave[MAXPTR], gAbsLX[MAXPTR], gAbsLY[MAXPTR];
 
 static void poll_pointer(void)
 {
@@ -945,20 +939,16 @@ static void poll_pointer(void)
                 int sy = (int)(((st.CurrentY - gAbs[i]->Mode->AbsoluteMinY) * gModeH) / ry);
                 int tx = (sx - (int)gOffX) * uno_fb_w / gOutW;   /* pad pos in fb coords */
                 int ty = (sy - (int)gOffY) * uno_fb_h / gOutH;
-                /* Relative from successive absolute positions (see gAbsHave note):
-                   a small continuous move is a real drag and applies as a delta;
-                   a large jump is a lift-and-replace or a second contact and is
-                   swallowed so the cursor never teleports. Half-screen is well
-                   above any single-poll drag but below a re-placement. */
-                if (gAbsHave[i]) {
-                    int ddx = tx - gAbsLX[i], ddy = ty - gAbsLY[i];
-                    int addx = ddx < 0 ? -ddx : ddx, addy = ddy < 0 ? -ddy : ddy;
-                    if (addx <= uno_fb_w / 2 && addy <= uno_fb_h / 2) {
-                        g_cx += ddx; g_cy += ddy;
-                        clamp_cursor();
-                    }
-                }
-                gAbsLX[i] = tx; gAbsLY[i] = ty; gAbsHave[i] = 1;
+                /* Direct absolute mapping: correct for a genuine absolute device
+                   (usb-tablet, touchscreen, 2-in-1 digitizer) - the cursor goes
+                   exactly where the pen/finger is - with a 1px dead-zone to
+                   suppress firmware jitter. The previous 0.75 EMA "low-pass" is
+                   what read as floaty on the Surface; dropping it removes the lag
+                   without breaking absolute positioning or tap-to-position. */
+                int dxx = tx - g_cx, dyy = ty - g_cy;
+                if (dxx > 1 || dxx < -1) g_cx = tx;
+                if (dyy > 1 || dyy < -1) g_cy = ty;
+                clamp_cursor();
                 g_have_pointer = 1; moved = 1;
             }
         }

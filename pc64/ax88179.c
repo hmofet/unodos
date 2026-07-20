@@ -68,7 +68,6 @@ static int  ax_write(int reg, int size, const void *buf)
 { return uno_usb_control(g_dev, 0x40, AX_ACCESS_MAC, (u16)reg, (u16)size, (void *)buf, size); }
 static int  ax_wr16(int reg, u16 v) { u16 t = v; return ax_write(reg, 2, &t); }
 static int  ax_wr8 (int reg, u8 v)  { u8  t = v; return ax_write(reg, 1, &t); }
-static u16  ax_rd16(int reg) { u16 t = 0; ax_read(reg, 2, &t); return t; }
 /* MDIO read of an embedded-PHY register (AX_ACCESS_PHY: value=phy id, index=
  * reg - note the operand order differs from AX_ACCESS_MAC's value=reg,index=len). */
 static u16  ax_mii_rd(int reg)

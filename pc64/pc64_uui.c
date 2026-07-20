@@ -1681,8 +1681,13 @@ static int pump_input(void)
             int ohw = UI.hot_win, ohi = UI.hot_wi, oph = UI.popup_hot;
             memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
             feed(&ev);
+            /* Also force a full repaint while a drag/capture is live: window
+               drag (the rubber-band outline), live resize, and text drag-select
+               all update visible state on a bare move but go through a cap_mode
+               that returns NO_ACT and never touches the hover fields, so the
+               hover test alone would freeze them until button-release. */
             if (g_launch_open || UI.hot_win != ohw || UI.hot_wi != ohi ||
-                UI.popup_hot != oph)
+                UI.popup_hot != oph || UI.drag_active || UI.cap_mode != UI_CAP_NONE)
                 real = 1;
         }
     }

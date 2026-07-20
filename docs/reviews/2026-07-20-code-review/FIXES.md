@@ -19,7 +19,11 @@ Status as of the fix pass. Build-verified centrally after all edits.
 - USB-eth freeze: xhci run_command/poll_xfer stray-event caps + reset_port clears
   all change bits; ax_link reads real PHY link; tls.c spins time-bounded.
 - X1 pointer overflow: 64-bit multiply in the accel scaler (uefi_main.c).
-- Surface pointer: firmware-Abs path converted to relative deltas (dropped EMA).
+- Surface pointer: dropped the 0.75 EMA low-pass (the "floaty" cause) for direct
+  absolute mapping + 1px jitter dead-zone. NOTE: a full relative-delta conversion was
+  tried and reverted - it broke the harness usb-tablet and real touchscreens (both
+  genuine absolute devices). If the Surface pad is confirmed on metal to be a relative
+  touchpad exposed as absolute, a device-gated relative mode is the further fix.
 - Notepad fuzz: integer-only present upscale (uefi_main.c apply_desktop).
 - TextWidth: measures real glyph widths (caret/wrap drift).
 - Files head[64] overflow: bounded copy + [160]. Photos np[120] overflow: ph_join +
