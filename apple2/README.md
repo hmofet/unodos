@@ -136,8 +136,11 @@ reads/writes the catalog it finds (`fs_init` loads it, never reformats).
 
 - **Files**: lists the catalog (name + size, right-justified). Left/right
   moves the selection, Return opens the selected file in Notepad, ESC
-  returns to the desktop. (`d`-delete and `r`-rescan are not yet wired up
-  — only open is needed for M2's read/write/persist loop.)
+  returns to the desktop. `d` deletes the selected file behind a
+  `Delete NAME? (Y/N)` confirm line (`fs_delete`: heap compaction + catalog
+  flush through the GCR write path), `r` re-reads the catalog from disk
+  (`fs_init`). Verified by `tests/files_delete.script` +
+  `tests/files_delete_persist.script` (see below).
 - **Notepad**: 2 KB text buffer (`NOTEBUF`, $6500-$6CFF). Typing inserts at
   the cursor, `$88` (left-arrow/backspace) deletes the previous char,
   Return inserts a newline, ESC closes. **Ctrl-S saves** (`$93` —
@@ -305,6 +308,19 @@ opening it in Notepad shows the edited content ending `...HELLO` with
 python3 harness.py build/unodos_apple2_test_written.dsk shots \
   < tests/m2_persist.script
 ```
+
+[tests/files_delete.script](tests/files_delete.script) drives Files'
+delete + rescan: open Files (HELLO.TXT + README.TXT listed), `d` arms the
+`Delete HELLO.TXT? (Y/N)` confirm line, `y` runs `fs_delete` (README.TXT's
+2 data sectors shift down, catalog flushed via the GCR write path), then
+`r` re-reads the catalog from disk — the listing without HELLO.TXT comes
+from the on-disk sector, not stale RAM. 5 screenshots (`fdel_files`,
+`fdel_confirm`, `fdel_deleted`, `fdel_rescan`, `fdel_desktop`). With
+`--writeback build/unodos_apple2_test_deleted.dsk`,
+[tests/files_delete_persist.script](tests/files_delete_persist.script)
+re-boots the mutated image and verifies the deletion survived the power
+cycle AND that README.TXT still opens intact from its shifted sectors
+(`fdel_persist_files`, `fdel_persist_readme`).
 
 Two harness calibration constants matter for reproducibility:
 - `TICK_INSTRS` (5000): 6502 instruction-steps per `wait` tick, tuned so
