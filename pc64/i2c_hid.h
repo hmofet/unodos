@@ -24,7 +24,15 @@ int  uno_i2c_hid_init(void);
 
 /* poll one input report; on a movement/button report, writes absolute
    position (0..32767 range) + button mask and returns 1. */
-int  uno_i2c_hid_poll(int *absx, int *absy, int *buttons);
+/* Poll the pointer. Returns RELATIVE motion since the last report, in units
+ * normalised so 32767 spans the pad's width/height - the caller scales those
+ * to pixels and decides pointer speed. Relative, not absolute, because a
+ * touchpad is a positioning device but a desktop cursor is a motion one:
+ * mapping pad position onto the screen makes a small finger movement cross the
+ * whole display and teleports the cursor to wherever you touch down.
+ * `buttons` is the PHYSICAL button only - never the tip switch, or every
+ * brush of the pad reads as a click. */
+int  uno_i2c_hid_poll(int *dx, int *dy, int *buttons);
 
 /* poll the I2C-HID KEYBOARD (a distinct device from the trackpad): reads its
    input report and, for each newly-pressed key, calls emit(scan, uni, ctrl,
@@ -48,5 +56,10 @@ void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *pa
 /* extra probe diagnostics: saw_ack = a transfer returned bytes (bus alive + a
  * device answered); abrt = last DW TX_ABRT_SOURCE (bit7 = address NAK). */
 void uno_i2c_hid_diag(int *saw_ack, unsigned *abrt);
+
+/* which SCL-timing candidate the probe settled on (-1 = nothing bound). The
+ * DW core's HCNT/LCNT depend on an LPSS input clock that varies by SoC and is
+ * readable nowhere, so the probe walks candidates; this reports the winner. */
+int  uno_i2c_hid_timing(void);
 
 #endif

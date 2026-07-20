@@ -125,6 +125,8 @@ void uno_native_reset(void)
 #define ST_AUX   0x20
 
 static int gPs2Kbd, gPs2Aux;                   /* brought-up flags             */
+static int gPs2AuxPort;                        /* 0xA9 aux-port self-test ok   */
+static int gPs2AuxId = -1;                     /* 0xF2 device id, -1 = no answer */
 
 /* bounded waits: ~a few ms each, far beyond any healthy controller */
 static int ibf_clear(void)
@@ -179,9 +181,29 @@ int uno_ps2_init(void)
     if (!gPs2Kbd && uno_ps2_present()) gPs2Kbd = 1;   /* controller yes, ack
                                         lost: poll anyway (QEMU always ACKs) */
     ctl_cmd(0xA8);                             /* enable aux port              */
+    /* Aux self-test first: 0xA9 answers 0x00 only when a second port really
+     * exists. Without it a machine with no aux device is indistinguishable
+     * from one whose mouse merely lost an ACK, and the detach gate has no way
+     * to know it is about to throw away the only working pointer. */
+    ctl_cmd(0xA9);
+    gPs2AuxPort = (dat_in() == 0x00);
     aux_cmd(0xF6);                             /* mouse defaults               */
+    /* identify: 0x00 = plain 3-byte mouse, 0x03 = wheel, 0x04 = 5-button.
+     * Recorded for the System readout - on a ThinkPad the TrackPoint answers
+     * here even when the touchpad is off on I2C entirely. */
+    if (aux_cmd(0xF2)) { int id = dat_in(); gPs2AuxId = (id >= 0) ? id : -1; }
     gPs2Aux = aux_cmd(0xF4);                   /* stream reporting on          */
     return gPs2Kbd;
+}
+
+/* what actually bound, for the System window (there was previously no way to
+ * tell an empty aux port from a mouse that simply never ACKed) */
+void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
+{
+    if (kbd)     *kbd     = gPs2Kbd;
+    if (aux)     *aux     = gPs2Aux;
+    if (auxport) *auxport = gPs2AuxPort;
+    if (auxid)   *auxid   = gPs2AuxId;
 }
 
 /* ---- scan-set-1 decode -> the (EFI-style scan, unicode) space map_key eats */
@@ -270,7 +292,10 @@ static void aux_byte(unsigned char b)
     if (gMPk[0] & 0xC0) return;                /* overflow - drop              */
     gMdx += (int)gMPk[1] - ((gMPk[0] & 0x10) ? 256 : 0);
     gMdy -= (int)gMPk[2] - ((gMPk[0] & 0x20) ? 256 : 0);   /* PS/2 y is up    */
-    gMBtn = (gMPk[0] & 0x03) ? 1 : 0;
+    /* Keep the buttons SEPARATE (bit0 left, bit1 right, bit2 middle) rather
+     * than collapsing them to "something is pressed" - the shell needs to tell
+     * a right-click from a left one to open the launcher on the desktop. */
+    gMBtn = gMPk[0] & 0x07;
     gMNew = 1;
 }
 

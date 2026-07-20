@@ -19,6 +19,12 @@ void uno_native_reset(void);
 /* PS/2 i8042, polled.  present() is passive (safe while attached); init()
  * takes the controller and must only run once detached. */
 int  uno_ps2_present(void);
+
+/* what the i8042 bring-up actually bound: keyboard, mouse streaming, whether
+ * the aux PORT passed its 0xA9 self-test, and the 0xF2 device id (-1 = no
+ * answer). uno_ps2_present() only says the CONTROLLER answers - on a laptop
+ * that is the keyboard's EC and says nothing about a mouse. */
+void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 int  uno_ps2_init(void);
 void uno_ps2_pump(void);
 int  uno_ps2_next_key(int *scan, int *uni, int *ctrl);

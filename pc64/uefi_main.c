@@ -126,6 +126,14 @@ void uno_pc64_scene_restore(void)
 static int g_cx = 320, g_cy = 240;      /* re-clamped when geometry is set */
 static int g_have_pointer = 0;
 static int g_prev_mb = 0;
+/* Trackpad pointer speed, as a percentage: 100 means a full swipe of the pad
+ * moves the cursor half a screen, 300 means one and a half. Adjustable from
+ * the Control Panel because the right value depends on the pad's physical size
+ * versus the panel's, which no amount of reading the HID descriptor tells you. */
+static int g_ptr_speed = 300;
+void uno_pc64_pointer_speed(int pct)
+{ g_ptr_speed = pct < 25 ? 25 : (pct > 800 ? 800 : pct); }
+int  uno_pc64_pointer_speed_get(void) { return g_ptr_speed; }
 
 /* ---- port I/O (PC speaker) ------------------------------------------------ */
 static inline void outb(unsigned short port, unsigned char v)
@@ -158,9 +166,20 @@ static void con_puts(const char *s)
  * ======================================================================== */
 static EFI_HANDLE gIH;                  /* our image handle (installer needs it) */
 static int gDetached;                   /* 1 after ExitBootServices (M3)        */
+static int gDetachBlocked;              /* held attached to keep the pointer    */
 void *uno_pc64_st(void)           { return gST; }
 void *uno_pc64_image_handle(void) { return gIH; }
 int   uno_pc64_detached(void)     { return gDetached; }
+/* input diagnostics for the System window: how many firmware pointer
+ * instances the machine offered, and whether detach was held off to keep the
+ * only working one alive. Until now nothing anywhere reported which pointer
+ * path was actually live, which made the X1's dead trackpad undiagnosable. */
+void  uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked)
+{
+    if (nsimple) *nsimple = gNPtr;
+    if (nabs)    *nabs    = gNAbs;
+    if (blocked) *blocked = gDetachBlocked;
+}
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -203,6 +222,7 @@ static void stage_mark2(int idx, UINT32 bgra)
  * Requires the fb to exist, so it runs only after set_geometry().
  * ======================================================================== */
 #define SPLASH_STEPS 4
+static const char *g_splash_msg;
 static void splash_draw(int done)
 {
     int W = uno_fb_w, H = uno_fb_h, cx = W / 2, i;
@@ -234,7 +254,7 @@ static void splash_draw(int done)
     fb_fill_rect(bx, by, barw, bh, FB_RGB(20, 26, 52));
     for (i = 0; i < done && i < SPLASH_STEPS; i++)
         fb_fill_rect(bx + i * seg + 1, by + 1, seg - 2, bh - 2, segc[i]);
-    { const char *s = "loading";
+    { const char *s = g_splash_msg ? g_splash_msg : "loading";
       fb_text(cx - fb_text_w(s) / 2, by + bh + 9, s, FB_RGB(120,138,185), -1); }
 }
 static void splash_step(int done)
@@ -242,6 +262,20 @@ static void splash_step(int done)
     splash_draw(done);
     uno_pc64_present();
     gBS->Stall(done >= SPLASH_STEPS ? 700000 : 400000);
+}
+
+/* Name the bring-up step currently running, under the loading bar.
+ *
+ * The stretch between bars 3 and 4 calls four drivers that all touch real
+ * silicon - trackpad, storage, ACPI, audio - and on a laptop any of them can
+ * be slow or wedge. With only a bar to look at, "stuck on cyan" narrows it to
+ * those four and no further; debugcon is not usable here (SMM-trapped on the
+ * X1), so the screen is the only channel. No Stall: this is nearly free. */
+static void splash_stage(int done, const char *msg)
+{
+    g_splash_msg = msg;
+    splash_draw(done);
+    uno_pc64_present();
 }
 
 /* ===========================================================================
@@ -518,6 +552,48 @@ static int native_kbd_for_detach(void)
     return uno_ps2_present() || uno_i2c_hid_kbd_present() || uno_usb_hid_kbd_present();
 }
 
+/* ...and a native POINTER must too, if the firmware is currently providing
+ * one. This used to be waved through as "a bonus, not required", which is
+ * true right up until it isn't: on a ThinkPad X1 Carbon the touchpad is an
+ * I2C-HID device that may not bind, the TrackPoint arrives over firmware
+ * SimplePointer, and USB HID is not in the shipping build. Detach then sets
+ * gNAbs = gNPtr = 0 and the only working pointer on the machine disappears -
+ * keyboard fine, mouse gone, no way back short of a reinstall.
+ *
+ * So: if the firmware has a live pointer and nothing native would replace it,
+ * stay attached. A machine with no pointer either way still detaches (nothing
+ * to lose), and one with a native pointer detaches as before.
+ *
+ * The i8042 aux port counts only when its self-test passes - a bare
+ * uno_ps2_present() says the CONTROLLER answers, which on a laptop is the
+ * keyboard's EC and says nothing about whether a mouse is attached. */
+static int native_ptr_for_detach(void)
+{
+    return uno_i2c_hid_present() || uno_usb_hid_present();
+}
+
+/* Would detaching strand this machine with no pointer at all?
+ *
+ * The i8042 aux port cannot be interrogated here - the firmware still owns
+ * the controller pre-detach, and a bare uno_ps2_present() only says the
+ * CONTROLLER answers, which on a laptop is the keyboard's EC. So the test
+ * cannot be "is there a PS/2 mouse"; it has to be a shape argument.
+ *
+ * The narrow case worth refusing is exactly the one that bites: a machine
+ * with LPSS I2C controllers present (so it is a modern laptop whose pointer
+ * lives on I2C) where no I2C-HID pointer bound, and the only thing currently
+ * moving the cursor is a firmware protocol that EBS will kill. A PS/2-mouse
+ * desktop has no LPSS controller at all and is unaffected, so this cannot
+ * regress the machines that detach happily today. */
+static int detach_would_strand_pointer(void)
+{
+    int nctrl = 0;
+    if (!gNPtr && !gNAbs)          return 0;   /* no pointer to lose anyway   */
+    if (native_ptr_for_detach())   return 0;   /* something native survives   */
+    uno_i2c_hid_status(0, &nctrl, 0, 0, 0);
+    return nctrl > 0;
+}
+
 static int try_detach(void)
 {
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
@@ -526,6 +602,12 @@ static int try_detach(void)
     if (gDetached) return 1;
     if (gUseBlt || !gVram)        { dbg_puts("detach: no linear FB\n");    return 0; }
     if (!native_kbd_for_detach()) { dbg_puts("detach: no native keyboard\n"); return 0; }
+    /* refuse to trade a working firmware pointer for no pointer at all */
+    if (detach_would_strand_pointer()) {
+        dbg_puts("detach: would lose the only pointer\n");
+        gDetachBlocked = 1;                   /* surfaced in the System window */
+        return 0;
+    }
     if (!uno_native_tsc_ok())     { dbg_puts("detach: no TSC base\n");     return 0; }
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
     if (!uno_fat_native_eligible()) {
@@ -591,6 +673,7 @@ void uno_pc64_init(void)
             gKeyEx = 0;
     }
     splash_step(3);                 /* input located */
+    splash_stage(3, "trackpad (I2C-HID)");
     uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
 #ifdef UNO_USBHID_TEST
     /* eager native USB HID (test only): takes xHCI from the firmware while
@@ -598,6 +681,7 @@ void uno_pc64_init(void)
      * production USB HID comes up at detach (post-ExitBootServices) instead. */
     uno_usb_hid_init();
 #endif
+    splash_stage(3, "storage (AHCI / NVMe / FAT)");
     uno_fat_init();                 /* native block + FAT stack (AHCI + fw sectors) */
 #ifdef UNO_STORTEST
     uno_fat_selftest();             /* WRTEST.REQ -> WRTEST.OK (harness write proof) */
@@ -607,9 +691,12 @@ void uno_pc64_init(void)
      * and locate the battery/lid devices.  Read-only (NO_ACPI_MODE, no SCI/GPE)
      * and every EC/SMBus wait is TSC-bounded, so a hostile or absent EC times
      * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
+    splash_stage(3, "power (ACPI / AML)");
     uno_acpi_start(gST);
 #endif
+    splash_stage(3, "audio (HD Audio / AC'97)");
     uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
+    splash_stage(3, 0);
     dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
     splash_step(4);                 /* ready - the bar fills, core takes over */
     uno_pc64_chime();               /* startup chime: loading complete */
@@ -802,19 +889,28 @@ static void poll_pointer(void)
     /* native I2C-HID trackpad (when built in + present): its absolute coords
        take priority over the firmware pointer path */
     if (uno_i2c_hid_present()) {
-        int ax, ay, b;
-        if (uno_i2c_hid_poll(&ax, &ay, &b)) {
-            /* ax/ay normalised 0..32767 -> panel -> fb (calibrate once real
-               report ranges are known from the X1) */
-            int px = (int)((long long)ax * gModeW / 32767);
-            int py = (int)((long long)ay * gModeH / 32767);
-            if (gOutW > 0 && gOutH > 0) {
-                g_cx = (px - (int)gOffX) * uno_fb_w / gOutW;
-                g_cy = (py - (int)gOffY) * uno_fb_h / gOutH;
-                clamp_cursor();
-                g_have_pointer = 1; moved = 1;
-            }
-            if (b) mb = 1;
+        static int accx, accy;                 /* sub-pixel remainder         */
+        int dx = 0, dy = 0, b = 0;
+        if (uno_i2c_hid_poll(&dx, &dy, &b) || b) {
+            /* Deltas arrive in pad-normalised units (32767 across the pad).
+             * POINTER SPEED lives here: a full swipe of the pad should cross
+             * roughly one and a half screens, which is the ratio a laptop
+             * touchpad wants. Mapping the pad's absolute position onto the
+             * screen instead - what this did before - made a centimetre of
+             * finger travel cross the whole display.
+             * The remainder accumulates so slow, precise movement still
+             * tracks rather than rounding away to nothing. */
+            accx += dx * uno_fb_w * g_ptr_speed / 100;
+            accy += dy * uno_fb_h * g_ptr_speed / 100;
+            { int mvx = accx / (32767 * 2), mvy = accy / (32767 * 2);
+              accx -= mvx * (32767 * 2);
+              accy -= mvy * (32767 * 2);
+              if (mvx || mvy) {
+                  g_cx += mvx; g_cy += mvy;
+                  clamp_cursor();
+                  g_have_pointer = 1; moved = 1;
+              } }
+            if (b) mb |= 1;
         }
     }
 
@@ -824,6 +920,7 @@ static void poll_pointer(void)
     for (i = 0; i < gNAbs; i++) {
         EFI_ABSOLUTE_POINTER_STATE st;
         if (gAbs[i]->GetState(gAbs[i], &st) != EFI_SUCCESS) continue;   /* no change */
+        /* AbsolutePointer has no left/right split: bit0 is a touch. */
         gAbsBtn[i] = st.ActiveButtons ? 1 : 0;                          /* latch */
         if (!moved) {
             UINT64 rx = gAbs[i]->Mode->AbsoluteMaxX - gAbs[i]->Mode->AbsoluteMinX;
@@ -857,7 +954,7 @@ static void poll_pointer(void)
     for (i = 0; i < gNPtr; i++) {
         EFI_SIMPLE_POINTER_STATE st;
         if (gPtr[i]->GetState(gPtr[i], &st) != EFI_SUCCESS) continue;
-        gPtrBtn[i] = (st.LeftButton || st.RightButton) ? 1 : 0;         /* latch */
+        gPtrBtn[i] = (st.LeftButton ? 1 : 0) | (st.RightButton ? 2 : 0); /* latch */
         if (!moved && (st.RelativeMovementX || st.RelativeMovementY)) {
             int div = (int)(gPtr[i]->Mode->ResolutionX ? gPtr[i]->Mode->ResolutionX : 1);
             int mv;
@@ -897,7 +994,10 @@ static void poll_pointer(void)
     }
 
     /* a click on ANY device's ANY button counts (clickpads report the whole
-       surface as one button, sometimes on a different instance/bit) */
+       surface as one button, sometimes on a different instance/bit). The mask
+       keeps left (bit0) and right (bit1) apart so the shell can act on a
+       right-click; everything downstream that just wants "is a button down"
+       tests the whole mask, which is unchanged behaviour. */
     for (i = 0; i < gNAbs; i++) mb |= gAbsBtn[i];
     for (i = 0; i < gNPtr; i++) mb |= gPtrBtn[i];
     pointer_moved_clicked(mb);
@@ -1173,12 +1273,18 @@ int uno_efifs_snapshot(int vol, char (*names)[32], int maxn)
     root->Close(root);
     return cnt;
 }
-long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
+/* Read `max` bytes from byte `off`.  The media decoders stream through this
+ * so a song never has to be resident; SetPosition does the seek. */
+long uno_efifs_read_at(int vol, const char *name, long off,
+                       unsigned char *buf, long max)
 {
     EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80]; long total = 0;
     if (!root) return -1;
     a_to16(wn, name, 80);
     if (root->Open(root, &f, wn, 1, 0) != EFI_SUCCESS || !f) { root->Close(root); return -1; }
+    if (off > 0 && f->SetPosition(f, (UINT64)off) != EFI_SUCCESS) {
+        f->Close(f); root->Close(root); return -1;
+    }
     while (total < max) {
         UINTN sz = (UINTN)(max - total);
         if (f->Read(f, &sz, buf + total) != EFI_SUCCESS || sz == 0) break;
@@ -1186,4 +1292,24 @@ long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
     }
     f->Close(f); root->Close(root);
     return total;
+}
+
+long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
+{
+    return uno_efifs_read_at(vol, name, 0, buf, max);
+}
+
+/* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */
+long uno_efifs_size(int vol, const char *name)
+{
+    EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80];
+    UINT64 pos = 0; long n = -1;
+    if (!root) return -1;
+    a_to16(wn, name, 80);
+    if (root->Open(root, &f, wn, 1, 0) != EFI_SUCCESS || !f) { root->Close(root); return -1; }
+    if (f->SetPosition(f, 0xFFFFFFFFFFFFFFFFULL) == EFI_SUCCESS &&
+        f->GetPosition(f, &pos) == EFI_SUCCESS)
+        n = (long)pos;
+    f->Close(f); root->Close(root);
+    return n;
 }
