@@ -334,3 +334,13 @@ the operator's MacBook photo.
   native-IDT + LAPIC-watchdog + CF9-reset paths instead. Compare boot-env blocks.
 - Grab `\BOOTENV.TXT` first each run (a re-boot overwrites it), then the whole
   `\CRASH` folder.
+- **Reflash, or clear the telemetry, BETWEEN MACHINES.** A stick reused across
+  machines carries the previous machine's `BOOTLOG.TXT` / `BOOTENV.TXT` / `PF*`,
+  and a boot that writes nothing (F8/F9) leaves that stale data untouched — so
+  "old data" and "this machine failed to write" look identical. This bit us
+  once: a Latitude attempt came back byte-identical to the preceding X13 Yoga
+  run (same md5, `i5-10210U` vs the Latitude's `i7-6600U`), which could easily
+  have been misread as a Latitude result. A freshly flashed stick is always
+  unambiguous because the flasher ships an empty `CRASH\`.
+  - Cross-check every report against `cpu:` / `fb_base` in the env block before
+    attributing it to a machine.
