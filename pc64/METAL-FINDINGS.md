@@ -212,6 +212,70 @@ splash paint, the dirty-span tracking makes each message update repaint only
 the text row. The MacBook hang itself (F9) is still open — but the next boot
 will show its last stage on screen instead of a bare full bar.
 
+### Surface Blt anomaly — METAL-CONFIRMED FIXED (2026-07-21 batch #2)
+The banded-Blt present (`blt_present_banded`, one Blt per contiguous dirty
+band instead of per row) fixed the Surface's 3x-worse-than-bench present:
+
+| pass | present_avg BEFORE (build 0548, per-row) | AFTER (build 1432, banded) |
+|------|------------------------------------------|----------------------------|
+| 0 | 162 675 us | **48 565 us** |
+| 1 |  33 385 us | **16 380 us** |
+| 2 | 226 961 us | **56 203 us** |
+
+3.3-4x faster, fps 3 -> 19-20, and the ~77 hitches/pass are gone. The per-Blt()
+firmware overhead was exactly the cost, as hypothesised. The X1/Yoga/Latitude
+(already near their bench) are unaffected.
+
+### F4 UPDATE (batch #2) — ACPI enum now FINDS the device on 2/4; binding still fails
+`uno_i2c_hid_acpi_retry` results (`acpi_hits=` in BOOTENV):
+- **Surface**: `ctrls=3 acpi_hits=1` — ACPI located a PNP0C50 device (the blind
+  scan never did); `present=0` so the targeted probe still didn't bind.
+- **Latitude**: `ctrls=0 acpi_hits=1` — **exactly the F4 case**: PCI finds ZERO
+  controllers, ACPI finds the device anyway. Real progress; bind still fails.
+- **X1**: `ctrls=2 acpi_hits=0` — ACPI found no PNP0C50 (namespace lacks it, or
+  `_STA` filtered it). **Yoga**: `ctrls=0 acpi_hits=0`.
+So ACPI enumeration works and now yields the slave address on the machines that
+have a PNP0C50 node, but the follow-on I2C transfer to the pad still gets no
+response (present=0 everywhere). Fix-session lead: why the ACPI-directed probe,
+with the correct address, still can't talk to the controller (LPSS clock/reset
+sequencing again, or the controller BAR match). Metal-iterative; the trackpad
+isn't needed for the stress/net harness so this is not blocking.
+
+### F12 UPDATE (2026-07-21 batch #2) — the autopsy answered it: firmware NEVER STARTS
+The ALIVE-timeout autopsy ran on all four wifi machines (`batch2-2026-07-21/`,
+build `debug-local-20260721-1432`) and **decisively killed the "we missed the
+notification" theory**: the brute-RB scan found no ALIVE in any ring buffer,
+`rb_status=0`, `rb0` all zeros on every machine. It is a **load-path** problem —
+the firmware CPU never runs the ucode — not RX polling. Register signatures:
+
+| machine | card | UCODE_LOAD_STATUS | CPU_INIT_RUN | GP_CNTRL | RESET | reading |
+|---------|------|-------------------|--------------|----------|-------|---------|
+| X1 / Yoga | AX201 (hw_rev 351) | **00000000** | 00000000 | 08040005 / 08000005 | 00000010 | ROM never started loading ucode |
+| Surface | AX201 (hw_rev 332) | **00000000** | 00000000 | 08000005 | 00000010 | same |
+| Latitude | AX210 (hw_rev 420) | **bad0f1f2** | bad0f1f2 | 08040005 | **00000011** | PRPH inaccessible + SW_RESET (0x1) still set |
+
+Two distinct fix-session leads, both **metal-iterative** (cannot be verified
+without the card, so NOT blind-patched here):
+- **AX201 (gen2 context-info):** `UCODE_LOAD_STATUS=0` means writing
+  `CSR_CTXT_INFO_BA` did not kick the ROM into loading the ucode. The
+  `struct context_info` layout matches Linux field-for-field, so suspect the
+  kick sequence: our `load_fw_gen2` writes `CSR_CTXT_INFO_BA` **and**
+  `UREG_CPU_INIT_RUN=1`; Linux's gen2 self-load kicks on the BA write alone
+  (`UREG_CPU_INIT_RUN` is a gen3/IML register) and first arms the fw-load path
+  via `iwl_enable_fw_load_int_ctx_info` + `iwl_finish_nic_init`. Check whether
+  a `CSR_GP_CNTRL`/finish-nic-init bit or the fw-load-int arm is the missing
+  precondition; the spurious `UREG_CPU_INIT_RUN` write is also suspect.
+- **AX210 (gen3):** `RESET=0x11` — **the SW_RESET bit (0x1) is still set**, so
+  the device is held in reset and PRPH reads return the `0xbad0f1f2` poison.
+  Something after `sw_reset()` never clears it before the ctxt-info-v2/IML
+  load, or the gen3 TOP-reset + ROM-start handshake (NETWORK.md's known WiFi-7
+  gap, but the AX210 hits it too) is incomplete. PNVM now loads (55020 B, my
+  fix works) but that is post-ALIVE and moot until the fw runs.
+
+The autopsy is the deliverable: one batch narrowed "no ALIVE" to "the ROM never
+launched the ucode, here are the exact registers per family." A focused fix
+session with a card present works from this.
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)
