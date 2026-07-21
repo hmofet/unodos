@@ -96,6 +96,25 @@ class ZipPayload : IPayloadSource
     }
 }
 
+/* A single file written from an in-memory string (the generated STRESS.CFG the
+ * dev-options test toggles produce). Added AFTER the base ESP, so on a
+ * duplicate path it wins (Place is last-writer-wins) and overrides the debug
+ * ESP's shipped default. */
+class InlineFilePayload : IPayloadSource
+{
+    readonly string relPath; readonly byte[] bytes; readonly string desc;
+    public InlineFilePayload(string path, string content, string describe)
+    { relPath = path; bytes = System.Text.Encoding.ASCII.GetBytes(content); desc = describe; }
+    public void Dispose() { }
+    public string Describe() { return desc; }
+    public IEnumerable<PayloadItem> Items()
+    {
+        yield return new PayloadItem {
+            Path = relPath, Size = bytes.Length, Time = DateTime.Now,
+            Open = () => new MemoryStream(bytes, false) };
+    }
+}
+
 /* A folder tree copied as-is (the media/test kit). */
 class FolderPayload : IPayloadSource
 {

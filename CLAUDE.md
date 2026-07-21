@@ -53,16 +53,25 @@ If the diff confirms full supersession, delete the branch (local +
 `origin/pc64-usb-flasher`) rather than merging - merging would resurrect the
 dead pre-`unomedia` decoder architecture in `pc64_media.c`/`pc64_music.c`.
 
-## Standing rule (2026-07-20): pc64 ships ONE flasher — the debug build
+## Standing rule (2026-07-21): the flasher embeds BOTH production + debug builds
 
-On this line of work we no longer build/deploy every OS variant. Produce a
-**single standard flasher, embedding the DEBUG/stress build**, and that flasher
-**formats the whole disk as one FAT32 volume** so UnoDOS can write crash/hang
-reports into `\CRASH` on it. The debug harness lives on branch
-`pc64-debug-stress` (`pc64/DEBUG.md`); `pc64/build.sh` defaults `UNO_DEBUG=1`
-there. Don't resurrect multi-variant builds. The deploy path is unchanged
-(`flash/build-flasher.ps1` → `flash/deploy-to-share.ps1`); it just carries the
-debug OS now.
+**Supersedes the 2026-07-20 "ships ONE flasher = the debug build" rule.** The
+single flasher (`flash/build-flasher.ps1`) now builds BOTH the production OS
+(`UNO_DEBUG=0`) and the debug/stress OS (`UNO_DEBUG=1`) and embeds both ESP
+trees as resources `unodos_esp_prod` / `unodos_esp_debug`. It **formats the
+whole disk as one FAT32 volume** either way.
+
+- **Developer options OFF (default)** → flashes the clean PRODUCTION build.
+- **Developer options ON** → flashes the DEBUG build AND writes a `\STRESS.CFG`
+  from the test toggles (conformance `spec`, WiFi/Ethernet network test,
+  `mtrr-wc`, stress passes, auto power-off). WiFi/Eth toggles map to
+  `net-force-wifi` / `net-eth-only` / `nonet`.
+
+Intel WiFi firmware (`fw-blobs/`) is bundled into the DEBUG tree only (licence:
+no redistribution), so the production image is clean. The raw dd/Rufus image
+is the production build. `build.sh` populates `build/esp` incrementally, so the
+flasher wipes it before each of the two builds. Deploy is unchanged
+(`build-flasher.ps1` → `deploy-to-share.ps1`).
 
 ## Standing rule: keep the shared pc64 flasher current
 

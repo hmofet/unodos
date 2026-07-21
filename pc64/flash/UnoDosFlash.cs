@@ -42,7 +42,8 @@ class UsbDrive
 
 class FlashForm : Form
 {
-    const string ESP_RESOURCE = "unodos_esp";        // zip of the UnoDOS system tree
+    // Two ESP trees are embedded; Developer options selects which (production
+    // by default, debug when dev mode is on): settings.EspResource.
 
     ComboBox driveBox;
     Button refreshBtn, flashBtn, showAllBtn, devBtn, updateBtn;
@@ -85,9 +86,9 @@ class FlashForm : Form
         Controls.Add(refreshBtn);
 
         Controls.Add(new Label {
-            Text = "DEBUG build: one whole-disk FAT32 volume; UnoDOS writes crash/hang\n" +
-                   "reports to \\CRASH - copy that folder off after a test run. UEFI only,\n" +
-                   "Secure Boot OFF. Delete \\STRESS.CFG for a quiet desktop (no auto-stress).",
+            Text = "Flashes the PRODUCTION build (a clean UnoDOS) as one whole-disk FAT32\n" +
+                   "volume. UEFI only, Secure Boot OFF. For test builds - the debug OS,\n" +
+                   "the stress driver, and the network / conformance tests - use Developer options.",
             Location = new Point(16, 108), Size = new Size(536, 58),
             ForeColor = Color.FromArgb(60, 60, 60) });
 
@@ -219,13 +220,23 @@ class FlashForm : Form
 
     void UpdateDevSummary()
     {
-        if (!settings.DevMode) { devSummary.Text = ""; return; }
-        var bits = new List<string>();
-        if (settings.KitEnabled) bits.Add("test kit: " + Short(settings.KitPath));
-        if (settings.ZipEnabled) bits.Add("zip: " + Short(settings.ZipPath));
-        devSummary.Text = bits.Count == 0
-            ? "Developer mode on (nothing extra to copy)."
-            : "Also copying - " + string.Join("; ", bits.ToArray());
+        if (!settings.DevMode) {
+            devSummary.Text = "Production build (clean OS).";
+            return;
+        }
+        var tests = new List<string>();
+        if (settings.TestWifi && settings.TestEth) tests.Add("network (auto)");
+        else if (settings.TestWifi) tests.Add("WiFi");
+        else if (settings.TestEth)  tests.Add("Ethernet");
+        if (settings.TestSpec) tests.Add("conformance");
+        if (settings.TestMtrr) tests.Add("MTRR-WC");
+        if (settings.StressPasses > 0) tests.Add(settings.StressPasses + "x stress");
+        string t = tests.Count == 0 ? "no tests" : string.Join(", ", tests.ToArray());
+        var extra = new List<string>();
+        if (settings.KitEnabled) extra.Add("test kit");
+        if (settings.ZipEnabled) extra.Add("zip");
+        devSummary.Text = "DEBUG build - tests: " + t
+            + (extra.Count > 0 ? "  (+ " + string.Join(", ", extra.ToArray()) + ")" : "");
     }
 
     static string Short(string p)
@@ -403,8 +414,9 @@ class FlashForm : Form
 
             // 3. the payload list: UnoDOS itself, then whatever developer mode adds
             var sources = new List<IPayloadSource>();
-            Stream esp = Assembly.GetExecutingAssembly().GetManifestResourceStream(ESP_RESOURCE);
-            if (esp == null) throw new IOException("Bundled system files ('" + ESP_RESOURCE + "') are missing from this exe.");
+            string espRes = settings.EspResource;
+            Stream esp = Assembly.GetExecutingAssembly().GetManifestResourceStream(espRes);
+            if (esp == null) throw new IOException("Bundled system files ('" + espRes + "') are missing from this exe.");
             sources.Add(new ZipPayload(esp, ""));
             List<string> warn;
             sources.AddRange(settings.ExtraPayloads(out warn));
@@ -462,11 +474,12 @@ class FlashForm : Form
     }
 }
 
-/* ---- developer options ------------------------------------------------------ */
+/* ---- developer options: debug build + test selection ------------------------ */
 class DevForm : Form
 {
     readonly UnoSettings s;
-    CheckBox devChk, kitChk, zipChk;
+    CheckBox devChk, specChk, wifiChk, ethChk, mtrrChk, shutoffChk, kitChk, zipChk;
+    NumericUpDown passesBox;
     TextBox kitBox, zipBox, destBox, labelBox;
     Button kitBrowse, zipBrowse;
 
@@ -474,44 +487,73 @@ class DevForm : Form
     {
         s = settings;
         Text = "Developer options";
-        Size = new Size(560, 350);
+        Size = new Size(560, 540);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Segoe UI", 9f);
 
-        devChk = new CheckBox { Text = "Enable developer extras", Checked = s.DevMode,
-                                Location = new Point(16, 14), AutoSize = true,
+        devChk = new CheckBox { Text = "Flash the DEBUG build and run the tests below",
+                                Checked = s.DevMode, Location = new Point(16, 14), AutoSize = true,
                                 Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
         devChk.CheckedChanged += (a, b) => Sync();
         Controls.Add(devChk);
+        Controls.Add(new Label { Text = "Off = flash the clean production build (no tests, no \\CRASH telemetry).",
+                                 Location = new Point(34, 38), AutoSize = true,
+                                 ForeColor = Color.FromArgb(90, 90, 90) });
 
-        // --- the media / test kit -------------------------------------------
-        kitChk = new CheckBox { Text = "Copy a folder onto the drive (the media test kit)",
-                                Checked = s.KitEnabled, Location = new Point(16, 46), AutoSize = true };
+        // --- tests ----------------------------------------------------------
+        var testsBox = new GroupBox { Text = "Tests", Location = new Point(16, 62),
+                                      Size = new Size(518, 150) };
+        Controls.Add(testsBox);
+        specChk = new CheckBox { Text = "Conformance suite (SPECTEST -> CRASH\\<machine>\\SPECTEST.TXT)",
+                                 Checked = s.TestSpec, Location = new Point(14, 22), AutoSize = true };
+        testsBox.Controls.Add(specChk);
+        wifiChk = new CheckBox { Text = "WiFi test", Checked = s.TestWifi,
+                                 Location = new Point(14, 48), AutoSize = true };
+        testsBox.Controls.Add(wifiChk);
+        ethChk = new CheckBox { Text = "Ethernet test (USB adapter auto-detected)", Checked = s.TestEth,
+                                Location = new Point(120, 48), AutoSize = true };
+        testsBox.Controls.Add(ethChk);
+        wifiChk.CheckedChanged += (a, b) => Sync();
+        ethChk.CheckedChanged  += (a, b) => Sync();
+        mtrrChk = new CheckBox { Text = "MTRR write-combining experiment (advanced; operator present)",
+                                 Checked = s.TestMtrr, Location = new Point(14, 74), AutoSize = true };
+        testsBox.Controls.Add(mtrrChk);
+        testsBox.Controls.Add(new Label { Text = "Stress passes:", Location = new Point(14, 104), AutoSize = true });
+        passesBox = new NumericUpDown { Location = new Point(110, 100), Size = new Size(56, 23),
+                                        Minimum = 0, Maximum = 999, Value = Math.Max(0, Math.Min(999, s.StressPasses)) };
+        testsBox.Controls.Add(passesBox);
+        shutoffChk = new CheckBox { Text = "Power off when the run finishes", Checked = s.AutoShutoff,
+                                    Location = new Point(200, 102), AutoSize = true };
+        testsBox.Controls.Add(shutoffChk);
+        testsBox.Controls.Add(new Label { Text = "WiFi+Ethernet both on = auto-detect; one only = force that; both off = no network test.",
+                                          Location = new Point(14, 128), AutoSize = true,
+                                          ForeColor = Color.FromArgb(90, 90, 90) });
+
+        // --- the media / test kit (carries wifi.txt creds) ------------------
+        kitChk = new CheckBox { Text = "Copy the test kit onto the drive (WiFi creds wifi.txt, media)",
+                                Checked = s.KitEnabled, Location = new Point(16, 224), AutoSize = true };
         kitChk.CheckedChanged += (a, b) => Sync();
         Controls.Add(kitChk);
-        kitBox = new TextBox { Text = s.KitPath, Location = new Point(34, 70), Size = new Size(410, 23) };
+        kitBox = new TextBox { Text = s.KitPath, Location = new Point(34, 248), Size = new Size(410, 23) };
         Controls.Add(kitBox);
-        kitBrowse = new Button { Text = "Browse...", Location = new Point(450, 69), Size = new Size(84, 25) };
+        kitBrowse = new Button { Text = "Browse...", Location = new Point(450, 247), Size = new Size(84, 25) };
         kitBrowse.Click += (a, b) => {
             using (var d = new FolderBrowserDialog { SelectedPath = Dir(kitBox.Text),
                        Description = "Folder whose CONTENTS are copied to the drive root" })
                 if (d.ShowDialog(this) == DialogResult.OK) kitBox.Text = d.SelectedPath;
         };
         Controls.Add(kitBrowse);
-        Controls.Add(new Label { Text = "The folder's contents land in the drive root.",
-                                 Location = new Point(34, 96), AutoSize = true,
-                                 ForeColor = Color.FromArgb(90, 90, 90) });
 
         // --- a chosen zip ----------------------------------------------------
         zipChk = new CheckBox { Text = "Extract a .zip onto the drive",
-                                Checked = s.ZipEnabled, Location = new Point(16, 126), AutoSize = true };
+                                Checked = s.ZipEnabled, Location = new Point(16, 284), AutoSize = true };
         zipChk.CheckedChanged += (a, b) => Sync();
         Controls.Add(zipChk);
-        zipBox = new TextBox { Text = s.ZipPath, Location = new Point(34, 150), Size = new Size(410, 23) };
+        zipBox = new TextBox { Text = s.ZipPath, Location = new Point(34, 308), Size = new Size(410, 23) };
         Controls.Add(zipBox);
-        zipBrowse = new Button { Text = "Browse...", Location = new Point(450, 149), Size = new Size(84, 25) };
+        zipBrowse = new Button { Text = "Browse...", Location = new Point(450, 307), Size = new Size(84, 25) };
         zipBrowse.Click += (a, b) => {
             using (var d = new OpenFileDialog { Filter = "Zip archives (*.zip)|*.zip|All files (*.*)|*.*",
                                                 Title = "Choose a .zip to unpack onto the drive" }) {
@@ -521,26 +563,26 @@ class DevForm : Form
         };
         Controls.Add(zipBrowse);
         Controls.Add(new Label { Text = "Into subfolder (blank = drive root):",
-                                 Location = new Point(34, 180), AutoSize = true });
-        destBox = new TextBox { Text = s.ZipDest, Location = new Point(232, 177), Size = new Size(212, 23) };
+                                 Location = new Point(34, 338), AutoSize = true });
+        destBox = new TextBox { Text = s.ZipDest, Location = new Point(232, 335), Size = new Size(212, 23) };
         Controls.Add(destBox);
 
         // --- volume label ----------------------------------------------------
-        Controls.Add(new Label { Text = "Volume label:", Location = new Point(16, 216), AutoSize = true });
-        labelBox = new TextBox { Text = s.Label, Location = new Point(104, 213), Size = new Size(120, 23), MaxLength = 11 };
+        Controls.Add(new Label { Text = "Volume label:", Location = new Point(16, 374), AutoSize = true });
+        labelBox = new TextBox { Text = s.Label, Location = new Point(104, 371), Size = new Size(120, 23), MaxLength = 11 };
         Controls.Add(labelBox);
 
         Controls.Add(new Label {
             Text = "Saved in %APPDATA%\\UnoDOS\\flasher.ini, so these survive a flasher update.",
-            Location = new Point(16, 248), Size = new Size(520, 20),
+            Location = new Point(16, 406), Size = new Size(520, 20),
             ForeColor = Color.FromArgb(90, 90, 90) });
 
         var ok = new Button { Text = "OK", DialogResult = DialogResult.OK,
-                              Location = new Point(366, 274), Size = new Size(80, 28) };
+                              Location = new Point(366, 462), Size = new Size(80, 28) };
         ok.Click += (a, b) => Commit();
         Controls.Add(ok);
         var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel,
-                                  Location = new Point(454, 274), Size = new Size(80, 28) };
+                                  Location = new Point(454, 462), Size = new Size(80, 28) };
         Controls.Add(cancel);
         AcceptButton = ok; CancelButton = cancel;
 
@@ -556,21 +598,29 @@ class DevForm : Form
     void Sync()
     {
         bool on = devChk.Checked;
-        kitChk.Enabled = zipChk.Enabled = labelBox.Enabled = on;
+        specChk.Enabled = wifiChk.Enabled = ethChk.Enabled = mtrrChk.Enabled =
+            passesBox.Enabled = shutoffChk.Enabled = kitChk.Enabled = zipChk.Enabled =
+            labelBox.Enabled = on;
         kitBox.Enabled = kitBrowse.Enabled = on && kitChk.Checked;
         zipBox.Enabled = zipBrowse.Enabled = destBox.Enabled = on && zipChk.Checked;
     }
 
     void Commit()
     {
-        s.DevMode    = devChk.Checked;
-        s.KitEnabled = kitChk.Checked;
-        s.KitPath    = kitBox.Text.Trim();
-        s.ZipEnabled = zipChk.Checked;
-        s.ZipPath    = zipBox.Text.Trim();
-        s.ZipDest    = destBox.Text.Trim().Trim('\\', '/');
-        string lab   = labelBox.Text.Trim();
-        s.Label      = lab.Length > 0 ? lab : "UNODOS";
+        s.DevMode     = devChk.Checked;
+        s.TestSpec    = specChk.Checked;
+        s.TestWifi    = wifiChk.Checked;
+        s.TestEth     = ethChk.Checked;
+        s.TestMtrr    = mtrrChk.Checked;
+        s.StressPasses = (int)passesBox.Value;
+        s.AutoShutoff = shutoffChk.Checked;
+        s.KitEnabled  = kitChk.Checked;
+        s.KitPath     = kitBox.Text.Trim();
+        s.ZipEnabled  = zipChk.Checked;
+        s.ZipPath     = zipBox.Text.Trim();
+        s.ZipDest     = destBox.Text.Trim().Trim('\\', '/');
+        string lab    = labelBox.Text.Trim();
+        s.Label       = lab.Length > 0 ? lab : "UNODOS";
     }
 }
 

@@ -79,6 +79,9 @@ finding F1, which armed `allow-force` on every "safe" stick):
   watchdog. Off by default.
 - `nonet` - skip the network hardware test (below). Off by default: an armed
   stick tests the network once per boot, before the stress passes.
+- `net-force-wifi` - test WiFi even when a USB ethernet adapter is present
+  (overrides the "adapter present = eth round" auto-detect).
+- `net-eth-only` - test ONLY ethernet; no WiFi fallback when no adapter is found.
 - `mtrr-wc` - **opt-in, operator-present** (P3): rebuild the MTRRs so the
   framebuffer is write-combining instead of uncached. Benches the fb before
   and after (`NETLOG.TXT`), keeps the change only if the direct-write
