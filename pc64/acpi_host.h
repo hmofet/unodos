@@ -19,11 +19,15 @@ uint64_t uno_acpi_rsdp(void);
 /* F4: I2C-HID devices declared in the ACPI namespace (PNP0C50/ACPI0C50).
  * slave = I2C address from _CRS I2cSerialBus; desc_reg = HID descriptor
  * register from _DSM (0x0001 fallback); ctrl_dev/ctrl_fn = the controller's
- * PCI location from its _ADR (-1 = unresolved); src = controller ACPI path.
- * Returns the number of hits. Requires uno_acpi_start() to have succeeded. */
+ * PCI location from its _ADR (-1 = unresolved); ctrl_mmio = the controller's
+ * MMIO base from its own _CRS memory resource (0 = none) - the ONLY way to
+ * reach an LPSS I2C controller the firmware presents in ACPI mode, hidden from
+ * PCI (the Yoga's ctrls=0); src = controller ACPI path. Returns the number of
+ * hits. Requires uno_acpi_start() to have succeeded. */
 typedef struct {
     unsigned short slave, desc_reg;
     int ctrl_dev, ctrl_fn;
+    uint64_t ctrl_mmio;
     char src[40];
 } uno_acpi_i2chid;
 int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max);

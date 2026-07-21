@@ -126,6 +126,12 @@ static int poll_bit(u32 reg, u32 want, u32 mask, int timeout_ms)
 #define CSR_INT_BIT_FH_TX        (1u<<27)
 #define CSR_INT_BIT_SW_ERR       (1u<<25)
 #define CSR_INT_BIT_HW_ERR       (1u<<29)
+#define CSR_INT_BIT_FH_RX        (1u<<31)     /* Rx DMA / cmd responses         */
+/* The gen2 ROM self-load handshake needs the FW-load interrupt UNMASKED before
+ * the CSR_CTXT_INFO_BA kick - Linux does this in iwl_enable_fw_load_int_ctx_info,
+ * and its absence is the leading suspect for "ROM never starts"
+ * (UCODE_LOAD_STATUS=0) on the AX201 fleet. */
+#define CSR_INT_FWLOAD_MASK      (CSR_INT_BIT_ALIVE | CSR_INT_BIT_FH_RX)
 #define CSR_FH_INT_TX_MASK       0x00000003
 #define CSR_FH_INT_RX_MASK       0x00030002
 
@@ -898,6 +904,12 @@ static void place_fw_dram(struct ci_dram *dram)
     }
 }
 
+/* diagnostics for the F12 autopsy: the context-info physaddr we kicked with,
+ * and the first LMAC firmware section address the ROM will DMA. If the ROM
+ * never starts, these tell us whether the kick address or the fw placement is
+ * the problem (vs the register write path itself). */
+static u64 g_ci_phys, g_ci_dram0;
+
 static int load_fw_gen2(void)
 {
     struct context_info *ci = arena_alloc(sizeof *ci);
@@ -916,9 +928,19 @@ static int load_fw_gen2(void)
     ci->cmd_queue_addr = phys(g_cmd_ring);
     ci->cmd_queue_size = 2;                    /* TFD_QUEUE_CB_SIZE(32) = ilog2(32)-3 */
     place_fw_dram(&ci->dram);
+    g_ci_phys = phys(ci); g_ci_dram0 = ci->dram.lmac[0];
+    /* Match Linux iwl_pcie_ctxt_info_init() exactly:
+     *   1. clear stale interrupts,
+     *   2. ARM the FW-load interrupt mask (iwl_enable_fw_load_int_ctx_info) -
+     *      the gen2 ROM's self-load handshake needs ALIVE|FH_RX unmasked or it
+     *      never begins loading the ucode (the F12 "UCODE_LOAD_STATUS=0" case),
+     *   3. kick with the 64-bit CSR_CTXT_INFO_BA write ALONE.
+     * The old code skipped step 2 and added a spurious UREG_CPU_INIT_RUN write,
+     * which is a gen3/IML register (used by load_fw_gen3, kicked via
+     * CSR_CTXT_INFO_ADDR) - a no-op here at best. */
     w32(CSR_INT, 0xFFFFFFFFu);
-    w64_(CSR_CTXT_INFO_BA, phys(ci));          /* kick: device self-loads */
-    prph_w(0xa05c44 /*UREG_CPU_INIT_RUN*/, 1); /* run */
+    w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);
+    w64_(CSR_CTXT_INFO_BA, g_ci_phys);         /* kick: device self-loads */
     return 0;
 }
 
@@ -1022,8 +1044,24 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   CSR_INT=%08x MASK=%08x GP_CNTRL=%08x RESET=%08x GP1=%08x",
                           r32(CSR_INT), r32(CSR_INT_MASK), r32(CSR_GP_CNTRL),
                           r32(CSR_RESET), r32(0x054 /*CSR_UCODE_DRV_GP1*/));
+        uno_dbg_net_trace("wifi:   FH_INT=%08x  (any bit set = the ROM's DMA engine ran)",
+                          r32(CSR_FH_INT_STATUS));
         uno_dbg_net_trace("wifi:   UREG_UCODE_LOAD_STATUS=%08x UREG_CPU_INIT_RUN=%08x",
                           prph_r(0xa05c40), prph_r(0xa05c44));
+        /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
+         * not equal what we wrote, the CSR write path (not the fw) is the fault.
+         * And confirm the fw sections were placed (dram0 != 0) - a zero there
+         * means place_fw_dram never populated the image the ROM is meant to
+         * DMA, which alone would leave UCODE_LOAD_STATUS=0. (g_gen2 only.) */
+        if (g_gen2) {
+            u64 ba = (u64)r32(CSR_CTXT_INFO_BA) | ((u64)r32(CSR_CTXT_INFO_BA + 4) << 32);
+            uno_dbg_net_trace("wifi:   CTXT_INFO_BA readback=%08x%08x wrote=%08x%08x "
+                              "fw_dram0=%08x%08x %s",
+                              (u32)(ba >> 32), (u32)ba,
+                              (u32)(g_ci_phys >> 32), (u32)g_ci_phys,
+                              (u32)(g_ci_dram0 >> 32), (u32)g_ci_dram0,
+                              ba == g_ci_phys ? "(kick stuck)" : "(KICK LOST - CSR write path!)");
+        }
         uno_dbg_net_trace("wifi:   rb_status=%04x rx_read=%d used[0]=%08x%08x rb0[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x",
                           rx_closed(), g_rx_read,
                           (u32)(g_rbd_used[0] >> 32), (u32)g_rbd_used[0],

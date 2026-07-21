@@ -294,6 +294,8 @@ uacpi_status uacpi_kernel_pci_write32(uacpi_handle h, uacpi_size o, uacpi_u32 v)
 
 struct i2chid_ctx { uno_acpi_i2chid *out; int max, n; };
 
+static const uacpi_char *const kI2cHidIds[] = { "PNP0C50", "ACPI0C50", UACPI_NULL };
+
 static uacpi_iteration_decision i2chid_res_cb(void *user, uacpi_resource *res)
 {
     struct i2chid_ctx *cx = (struct i2chid_ctx *)user;
@@ -304,6 +306,7 @@ static uacpi_iteration_decision i2chid_res_cb(void *user, uacpi_resource *res)
         uno_acpi_i2chid *h = &cx->out[cx->n];
         h->slave = ic->slave_address;
         h->ctrl_dev = h->ctrl_fn = -1;
+        h->ctrl_mmio = 0;
         h->src[0] = 0;
         if (ic->common.source.string) {
             int i;
@@ -315,6 +318,25 @@ static uacpi_iteration_decision i2chid_res_cb(void *user, uacpi_resource *res)
     return UACPI_ITERATION_DECISION_BREAK;    /* first I2C resource is the one */
 }
 
+/* The controller node's own _CRS memory base. LPSS I2C controllers declare a
+ * Memory32Fixed (usually) MMIO window; when the firmware hides them from PCI
+ * (ACPI mode) this _CRS base is the only handle on the controller. Records the
+ * first memory resource into cx->out[cx->n].ctrl_mmio. */
+static uacpi_iteration_decision ctrl_mem_cb(void *user, uacpi_resource *res)
+{
+    struct i2chid_ctx *cx = (struct i2chid_ctx *)user;
+    uacpi_u64 base = 0;
+    switch (res->type) {
+    case UACPI_RESOURCE_TYPE_FIXED_MEMORY32: base = res->fixed_memory32.address; break;
+    case UACPI_RESOURCE_TYPE_MEMORY32:       base = res->memory32.minimum;       break;
+    case UACPI_RESOURCE_TYPE_ADDRESS32:      base = res->address32.minimum;       break;
+    case UACPI_RESOURCE_TYPE_ADDRESS64:      base = res->address64.minimum;       break;
+    default: return UACPI_ITERATION_DECISION_CONTINUE;
+    }
+    if (base) { cx->out[cx->n].ctrl_mmio = base; return UACPI_ITERATION_DECISION_BREAK; }
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
 static uacpi_iteration_decision i2chid_dev_cb(void *user,
                                               uacpi_namespace_node *node,
                                               uacpi_u32 depth)
@@ -323,6 +345,13 @@ static uacpi_iteration_decision i2chid_dev_cb(void *user,
     int had = cx->n;
     (void)depth;
     if (cx->n >= cx->max) return UACPI_ITERATION_DECISION_BREAK;
+
+    /* Self-check the PNP id so this same callback serves BOTH the _STA-filtered
+     * uacpi_find_devices() path AND the raw _STA-blind namespace walk below
+     * (which passes every node). uacpi_find_devices already matched, so this is
+     * redundant there and load-bearing on the fallback. */
+    if (!uacpi_device_matches_pnp_id(node, kI2cHidIds))
+        return UACPI_ITERATION_DECISION_CONTINUE;
 
     if (uacpi_for_each_device_resource(node, "_CRS", i2chid_res_cb, cx)
             != UACPI_STATUS_OK || cx->out[cx->n].src[0] == 0)
@@ -360,7 +389,10 @@ static uacpi_iteration_decision i2chid_dev_cb(void *user,
         { int k; for (k = 0; k < 4; k++) if (args[k]) uacpi_object_unref(args[k]); }
     }
 
-    /* resolve the controller path -> PCI dev/fn via its _ADR */
+    /* resolve the controller path -> PCI dev/fn via its _ADR, AND its MMIO base
+     * via its _CRS. On a chipset that hides the controller from PCI (the Yoga)
+     * _ADR is absent/meaningless and the MMIO base is the only way in; on a PCI
+     * chipset both resolve and either handle works. */
     {
         uacpi_namespace_node *ctrl = UACPI_NULL;
         if (uacpi_namespace_node_find(UACPI_NULL, cx->out[cx->n].src, &ctrl)
@@ -370,6 +402,12 @@ static uacpi_iteration_decision i2chid_dev_cb(void *user,
                 cx->out[cx->n].ctrl_dev = (int)((adr >> 16) & 0xFFFF);
                 cx->out[cx->n].ctrl_fn  = (int)(adr & 0xFFFF);
             }
+            uacpi_for_each_device_resource(ctrl, "_CRS", ctrl_mem_cb, cx);
+            /* Power the controller ON. An ACPI-mode LPSS controller can sit in
+             * a low D-state (its MMIO reads back 0xFFFFFFFF) until _PS0 runs;
+             * the i2c-hid probe follows within milliseconds, so do it now while
+             * we hold the node. No-op if absent or already on. */
+            uacpi_eval(ctrl, "_PS0", UACPI_NULL, UACPI_NULL);
         }
     }
 
@@ -386,6 +424,17 @@ int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max)
     cx.out = out; cx.max = max; cx.n = 0;
     uacpi_find_devices("PNP0C50", i2chid_dev_cb, &cx);
     if (cx.n < max) uacpi_find_devices("ACPI0C50", i2chid_dev_cb, &cx);
+    /* Fallback for the Yoga (ctrls=0 acpi_hits=0): uacpi_find_devices SKIPS any
+     * device whose _STA reports not-present, and an LPSS-attached touchpad that
+     * the firmware left power-gated reads _STA=0 in our read-only ACPI context
+     * - so the real device is filtered out. A PNP0C50 declared in the DSDT is
+     * real hardware regardless of the current _STA, so walk the namespace
+     * directly (no _STA gate) when the filtered pass found nothing. The I2C
+     * probe still validates via the HID descriptor signature, so a genuinely
+     * absent device won't bind. */
+    if (cx.n == 0)
+        uacpi_namespace_for_each_child_simple(uacpi_namespace_root(),
+                                              i2chid_dev_cb, &cx);
     return cx.n;
 }
 

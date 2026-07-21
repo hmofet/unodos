@@ -559,16 +559,38 @@ int uno_i2c_hid_acpi_retry(void)
     nb = list_bars(bars, 8);
     g_probe_left = PROBE_BUDGET;        /* fresh budget: this pass is targeted */
     for (i = 0; i < n; i++) {
-        uno_dbg_log("i2c-hid: acpi hit %d: slave=%02x desc_reg=%04x ctrl=%d.%d (%s)",
+        /* candidate controller MMIO bases for THIS device, most-specific first:
+         *   1. the controller's own _CRS MMIO base - the ONLY handle when the
+         *      firmware hides it from PCI (the Yoga's ctrls=0, where the loop
+         *      below used to have nothing to iterate);
+         *   2. any PCI BAR matching the controller's _ADR (or all BARs, if the
+         *      _ADR did not resolve). */
+        unsigned long long cand[9]; int nc = 0, ci;
+        uno_dbg_log("i2c-hid: acpi hit %d: slave=%02x desc_reg=%04x ctrl=%d.%d mmio=%08x%08x (%s)",
                     i, hits[i].slave, hits[i].desc_reg,
-                    hits[i].ctrl_dev, hits[i].ctrl_fn, hits[i].src);
-        for (bi = 0; bi < nb; bi++) {
-            /* controller match by PCI location when _ADR resolved; else all */
+                    hits[i].ctrl_dev, hits[i].ctrl_fn,
+                    (unsigned)(hits[i].ctrl_mmio >> 32), (unsigned)hits[i].ctrl_mmio,
+                    hits[i].src);
+        if (hits[i].ctrl_mmio) cand[nc++] = hits[i].ctrl_mmio;
+        for (bi = 0; bi < nb && nc < 9; bi++) {
             if (hits[i].ctrl_dev >= 0 &&
                 (g_bar_dev[bi] != hits[i].ctrl_dev || g_bar_fn[bi] != hits[i].ctrl_fn))
                 continue;
-            g_i2c = (volatile u8 *)(uintptr_t)bars[bi];
-            if (!g_i2c || r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) continue;
+            cand[nc++] = bars[bi];
+        }
+        if (nc == 0)
+            uno_dbg_log("i2c-hid: acpi hit %d has no reachable controller "
+                        "(no _CRS MMIO, no matching PCI BAR)", i);
+        for (ci = 0; ci < nc; ci++) {
+            g_i2c = (volatile u8 *)(uintptr_t)cand[ci];
+            if (!g_i2c) continue;
+            if (r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) {
+                uno_dbg_log("i2c-hid:   ctrl @ %08x%08x: COMP_TYPE=%08x (not a live "
+                            "DW core - powered down? wrong base?)",
+                            (unsigned)(cand[ci] >> 32), (unsigned)cand[ci],
+                            r32(DW_IC_COMP_TYPE));
+                continue;
+            }
             w32(LPSS_RESETS_OLD, 0x0);
             { int t = 20000; while (t--) spin(2); }
             w32(LPSS_RESETS_OLD, 0x7);
@@ -580,8 +602,9 @@ int uno_i2c_hid_acpi_retry(void)
                     try_hid_ex(&tmp, (int)hits[i].slave, 0x0001, 1)) {
                     adopt(&tmp);
                     g_timing_used = ti;
-                    uno_dbg_log("i2c-hid: acpi probe BOUND slave %02x (scl#%d)",
-                                hits[i].slave, ti);
+                    uno_dbg_log("i2c-hid: acpi probe BOUND slave %02x on ctrl @ "
+                                "%08x%08x (scl#%d)", hits[i].slave,
+                                (unsigned)(cand[ci] >> 32), (unsigned)cand[ci], ti);
                     break;
                 }
             }
