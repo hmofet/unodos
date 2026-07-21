@@ -236,6 +236,26 @@ operator for later investigation; recorded now while the evidence is fresh.
   - Test cheaply: boot it once more and see whether `CRASH\HG###.TXT` appears
     (the watchdog stashes and the report lands on the following boot), or build
     with the watchdog disabled and see if the Mac comes up.
+- **The stick was read afterwards (devbuntu, direct): build `0042` confirmed on
+  it, and `CRASH\` holds ONLY the shipped `README.TXT` — no `BOOTLOG.TXT`, no
+  `BOOTENV.TXT`, nothing.** So the MBP wrote *no telemetry at all*.
+  - That narrows it usefully. The operator's photo shows the `0042` splash
+    banner AND the `fb bench` pattern along the bottom edge (F10) — and the
+    bench lives *inside* `uno_dbg_envblock()`, which runs immediately before
+    `uno_dbg_write_bootenv()` / `uno_dbg_write_bootlog()`. So execution reached
+    the writes and the **writes themselves failed**: `crash_vol()` found no
+    writable FAT volume.
+  - Detach is compiled out in this build, so unlike F8 this is NOT detach. On
+    Apple firmware our native block/FAT layer appears not to enumerate the USB
+    stick through Block IO at all.
+  - Caveat, stated honestly: the disk cannot prove *which* boot last touched it,
+    so "the MBP reached the writes and they failed" is inference from the photo
+    plus the empty CRASH dir, not something the disk alone establishes. It is
+    consistent with both, and it is the first thing to re-test.
+  - **Consequence: the MBP cannot produce ANY telemetry until this is fixed** —
+    it is untestable, not merely slow, and the watchdog theory above is now only
+    one candidate among two (a reset from the watchdog, or something after the
+    failed writes).
 - **Cost of leaving it broken:** this was the most informative machine left for
   F3 — Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is
   a direct clue toward fixing the uncached-framebuffer problem on the PCs.
@@ -250,6 +270,13 @@ the operator's MacBook photo.
 - Also visible in that photo: the splash's `DEBUG / STRESS BUILD <id>` banner is
   drawn at `H/2+40` and **collides with the loading bar** at `H/2+46`; the bar
   paints over the middle of the text. Cosmetic, mine, one-line fix.
+- Related harness inefficiency spotted while reading this: `crash_vol()` caches
+  its result **only on success**. On a machine where no volume qualifies (F8,
+  F9) every single call re-scans every volume with `uno_fat_list_ex` +
+  `uno_fat_mkdir` — and `uno_dbg_write_bootlog()` is called every 30 s from the
+  heartbeat. Repeated failing scans over firmware Block IO are exactly the kind
+  of thing that could make a struggling machine feel "extremely slow". Cache the
+  negative result (or bound the retries).
 - Neither affects results, but both are noise in operator photos and the bench
   garbage could be mistaken for framebuffer corruption — which is exactly the
   kind of thing we are trying to diagnose, so it should not be self-inflicted.
