@@ -68,10 +68,10 @@ flashed stick ships `passes=3`. Keys are matched as whole tokens on
 **non-comment** lines (a key mentioned in a `#` comment does nothing — that was
 finding F1, which armed `allow-force` on every "safe" stick):
 
-- `passes=N` - stop after N passes, then go idle and hand back a usable
-  desktop. **Use a bounded run**: while the driver is going it opens an app
-  every few frames, so you cannot reach Start > Shut Down, and the only exit is
-  pulling the power. `once` = `passes=1`. Omit for an endless run.
+- `passes=N` - stop after N passes, then POWER OFF automatically (see below).
+  **Always use a bounded run**: while the driver is going it opens an app
+  every few frames, so you cannot reach Start > Shut Down by hand.
+  `once` = `passes=1`. Omit for an endless run (F12 to stop).
 - `fast` / `slow` - action cadence (default: one action every 4 frames)
 - `allow-force` - **opt in** to a forced `#PF` on pass 1 that proves the crash
   pipeline end to end. Off by default so an armed stick never self-crashes.
