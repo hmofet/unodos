@@ -114,11 +114,19 @@ static class UnoReconfig
         int  clusBytes = secPerClus * SECTOR;
         long fatLba    = part + reserved;
         long dataLba   = part + (long)reserved + (long)numFats * fatSz;
+        // Total data clusters, so a directory entry's cluster number can be range-
+        // checked before it steers a raw whole-disk write (a corrupt STRESS.CFG
+        // entry with a bogus high-cluster word must never point the write off into
+        // another partition).
+        long totSec = U32(bpb, 32); if (totSec == 0) totSec = U16(bpb, 19);
+        long clusters = (totSec - (reserved + (long)numFats * fatSz)) / secPerClus;
+        if (clusters < 1) return "Unreadable FAT32 geometry on this disk.";
 
         byte[] data = Encoding.ASCII.GetBytes(content);
-        if (data.Length > clusBytes)
-            return "The new config (" + data.Length + " B) is larger than one cluster (" +
-                   clusBytes + " B) - reflash the disk instead.";
+        // The OS reads STRESS.CFG into a 512-byte buffer (511 usable), so cap here
+        // to match - and it is always well under one cluster.
+        if (data.Length > SECTOR - 1)
+            return "The new config (" + data.Length + " B) exceeds the 511-byte STRESS.CFG limit - reflash instead.";
 
         byte[] want = Pack83("STRESS.CFG");
         uint clus = rootClus;
@@ -140,7 +148,15 @@ static class UnoReconfig
                 if (!match) continue;
 
                 uint fc = (uint)U16(cbuf, off + 26) | ((uint)U16(cbuf, off + 20) << 16);
-                if (fc < 2) return "STRESS.CFG has no data cluster - reflash instead.";
+                if (fc < 2 || fc >= clusters + 2)
+                    return "STRESS.CFG points at an out-of-range cluster (" + fc +
+                           ") - the disk looks corrupt; reflash instead.";
+                // Refuse a multi-cluster STRESS.CFG: this only rewrites the first
+                // cluster, so a longer chain would be left with orphaned tail
+                // clusters. It is always one cluster in practice (config < 512 B).
+                uint nxt = NextClus(s, fatLba, fc);
+                if (nxt >= 2 && nxt < 0x0FFFFFF8)
+                    return "STRESS.CFG spans more than one cluster - reflash instead.";
                 // overwrite the file's first (only) cluster, zero-padded
                 var w = new byte[clusBytes];
                 Array.Copy(data, w, data.Length);

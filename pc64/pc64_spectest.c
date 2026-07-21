@@ -275,11 +275,15 @@ static void test_libc(void)
       for (i = 0; i < 8; i++) if (b[i] != 0xAB) ok = 0; CHECK("S-LIBC-02", ok); }
     /* S-LIBC-03: strcmp ordering */
     CHECK("S-LIBC-03", strcmp("abc","abc")==0 && strcmp("abc","abd")<0 && strcmp("abd","abc")>0);
-    /* S-LIBC-05: snprintf produces exact output + count (non-truncating case).
-     * The TRUNCATING case is S-LIBC-06 (HANGS pc64 - see SPEC divergences);
-     * NOT executed here - a conformance test must never wedge its own host. */
+    /* S-LIBC-05: snprintf produces exact output + count (non-truncating case). */
     { char b[16]; int n = snprintf(b, sizeof b, "n=%d", 42);
       CHECK("S-LIBC-05", n == 4 && b[0]=='n' && b[3]=='2' && b[4]==0); }
+    /* S-LIBC-06 (REGRESSION, fixed this session): a TRUNCATING "%s" used to HANG
+     * (PUT() gated the s++ side effect on buffer space, so while(*s) span forever
+     * once full). Now it must terminate, return the untruncated length, write
+     * exactly cap-1 chars + NUL. Reaching the assert at all proves no hang. */
+    { char b[8]; int n = snprintf(b, 8, "%s", "abcdefghijk");
+      CHECK("S-LIBC-06", n == 11 && b[7] == 0 && strncmp(b, "abcdefg", 7) == 0); }
 }
 
 /* ====================================================================== JS */
