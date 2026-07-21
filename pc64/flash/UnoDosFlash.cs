@@ -46,7 +46,7 @@ class FlashForm : Form
     // by default, debug when dev mode is on): settings.EspResource.
 
     ComboBox driveBox;
-    Button refreshBtn, flashBtn, showAllBtn, devBtn, updateBtn;
+    Button refreshBtn, flashBtn, showAllBtn, devBtn, updateBtn, reconfigBtn;
     CheckBox autoChk;
     Label devSummary;
     ProgressBar progress;
@@ -61,7 +61,7 @@ class FlashForm : Form
     public FlashForm()
     {
         Text = "UnoDOS - USB Installer";
-        Size = new Size(580, 430);
+        Size = new Size(580, 476);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -121,16 +121,30 @@ class FlashForm : Form
         flashBtn.Click += FlashClicked;
         Controls.Add(flashBtn);
 
+        // ---- reconfigure row: change the tests on an already-flashed disk ----
+        // The UnoDOS volume is an EFI System Partition, which Windows hides from
+        // Explorer, so you can't just edit STRESS.CFG by hand. This rewrites it
+        // in place over the raw disk (no erase) with the current Developer
+        // options - handy for re-tasking a batch stick without a full reflash.
+        reconfigBtn = new Button { Text = "Reconfigure tests (no erase)",
+                                   Location = new Point(16, 330), Size = new Size(200, 28) };
+        reconfigBtn.Click += ReconfigClicked;
+        Controls.Add(reconfigBtn);
+        Controls.Add(new Label {
+            Text = "Rewrites the debug test settings on an already-flashed UnoDOS disk. Debug build only.",
+            Location = new Point(224, 336), Size = new Size(330, 34),
+            ForeColor = Color.FromArgb(120, 120, 120) });
+
         // ---- self-update row (the staged flasher on \\behemoth) -------------
         Controls.Add(new Label {
             Text = "Build " + UnoVersion.Build + (UnoUpdate.IsDevBuild ? " (dev - self-update off)" : ""),
-            Location = new Point(16, 336), AutoSize = true,
+            Location = new Point(16, 382), AutoSize = true,
             ForeColor = Color.FromArgb(120, 120, 120) });
         autoChk = new CheckBox { Text = "Update automatically", Checked = settings.AutoUpdate,
-                                 Location = new Point(216, 332), AutoSize = true };
+                                 Location = new Point(216, 378), AutoSize = true };
         autoChk.CheckedChanged += (s, e) => { settings.AutoUpdate = autoChk.Checked; settings.Save(); };
         Controls.Add(autoChk);
-        updateBtn = new Button { Text = "Check for updates", Location = new Point(412, 329), Size = new Size(140, 26) };
+        updateBtn = new Button { Text = "Check for updates", Location = new Point(412, 375), Size = new Size(140, 26) };
         updateBtn.Click += (s, e) => StartUpdateCheck(true);
         Controls.Add(updateBtn);
 
@@ -237,8 +251,8 @@ class FlashForm : Form
             else if (settings.IncludeInteractive) tests.Add("conformance(interactive)");
         }
         if (settings.IncludeInteractive) tests.Add("interactive");
-        if (settings.RunStandard && settings.StressPasses > 0)
-            tests.Add(settings.StressPasses + "x standard");
+        if (settings.RunStandard)
+            tests.Add((settings.StressPasses > 0 ? settings.StressPasses + "x" : "endless") + " stress");
         if (settings.RunNetwork) {
             if (settings.TestWifi && settings.TestEth) tests.Add("network (auto)");
             else if (settings.TestWifi) tests.Add("WiFi");
@@ -408,7 +422,7 @@ class FlashForm : Form
     {
         busy = b;
         flashBtn.Enabled = refreshBtn.Enabled = showAllBtn.Enabled =
-            driveBox.Enabled = devBtn.Enabled = updateBtn.Enabled = !b;
+            driveBox.Enabled = devBtn.Enabled = updateBtn.Enabled = reconfigBtn.Enabled = !b;
     }
 
     void Ui(Action a) { if (IsHandleCreated) BeginInvoke(a); }
@@ -482,6 +496,69 @@ class FlashForm : Form
         }
     }
 
+    // ---- reconfigure an already-flashed disk (rewrite STRESS.CFG only) -------
+    void ReconfigClicked(object sender, EventArgs e)
+    {
+        var drive = driveBox.SelectedItem as UsbDrive;
+        if (drive == null) { status.Text = "Select the UnoDOS drive first."; return; }
+        if (!settings.DevMode) {
+            MessageBox.Show(
+                "Reconfigure changes which tests a DEBUG UnoDOS disk runs.\n\n" +
+                "Turn on Developer options and pick the tests first. (A production disk " +
+                "has no tests to reconfigure - use Install to write a debug build.)",
+                "Developer options are off", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        string cfg = settings.StressCfg();
+        var confirm = MessageBox.Show(
+            "Rewrite the test settings on:\n\n    " + drive.ToString() + "\n\n" +
+            "This does NOT erase the disk - it only updates \\STRESS.CFG in place. " +
+            "The disk must already hold a UnoDOS debug build.\n\nNew STRESS.CFG:\n\n" + cfg +
+            "\nContinue?",
+            "Reconfigure tests", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes) return;
+
+        SetBusy(true);
+        var t = new Thread(() => DoReconfig(drive, cfg)); t.IsBackground = true; t.Start();
+    }
+
+    void DoReconfig(UsbDrive drive, string cfg)
+    {
+        List<SafeFileHandle> locks = null;
+        try {
+            Ui(() => status.Text = "Opening the drive...");
+            locks = DismountVolumes(drive.Index);
+            var disk = Native.CreateFile(drive.DeviceId, Native.GENERIC_READ | Native.GENERIC_WRITE,
+                Native.FILE_SHARE_READ | Native.FILE_SHARE_WRITE, IntPtr.Zero, Native.OPEN_EXISTING,
+                Native.FILE_FLAG_WRITE_THROUGH, IntPtr.Zero);
+            if (disk.IsInvalid)
+                throw new IOException("Cannot open the drive (run as Administrator). Win32 error " + Marshal.GetLastWin32Error());
+            string info, err;
+            using (var fs = new FileStream(disk, FileAccess.ReadWrite, 1)) {
+                err = UnoReconfig.WriteStressCfg(fs, cfg, out info);
+                fs.Flush();
+                Native.FlushFileBuffers(disk);
+                uint br;
+                Native.DeviceIoControl(disk, Native.IOCTL_DISK_UPDATE_PROPERTIES, IntPtr.Zero, 0, IntPtr.Zero, 0, out br, IntPtr.Zero);
+            }
+            if (err != null) {
+                Ui(() => { status.Text = "Reconfigure failed: " + err;
+                           MessageBox.Show(err, "Could not reconfigure", MessageBoxButtons.OK, MessageBoxIcon.Warning); });
+            } else {
+                string ok = info;
+                Ui(() => { status.Text = "Reconfigured - you can remove the drive.";
+                           MessageBox.Show(ok + "\n\nBoot the target machine from this disk to run the new selection.",
+                                           "Reconfigured", MessageBoxButtons.OK, MessageBoxIcon.Information); });
+            }
+        } catch (Exception ex) {
+            Ui(() => { status.Text = "Failed: " + ex.Message;
+                       MessageBox.Show(ex.Message, "Reconfigure failed", MessageBoxButtons.OK, MessageBoxIcon.Error); });
+        } finally {
+            if (locks != null) foreach (var h in locks) { try { h.Dispose(); } catch { } }
+            Ui(() => SetBusy(false));
+        }
+    }
+
     [STAThread]
     static void Main()
     {
@@ -527,7 +604,7 @@ class DevForm : Form
     {
         s = settings;
         Text = "Developer options";
-        Size = new Size(560, 720);
+        Size = new Size(560, 800);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -565,11 +642,11 @@ class DevForm : Form
         conf.Controls.Add(aApps); conf.Controls.Add(aNetwork);
         y += 158;
 
-        // ---- 2. Standard suite (stress driver) -----------------------------
-        var std = new GroupBox { Text = "2. Standard suite - stress driver (app-launch / runner3D / input / FS fuzz)",
-                                 Location = new Point(gx, y), Size = new Size(GW, 82) };
+        // ---- 2. Stress Test suite (stress driver) --------------------------
+        var std = new GroupBox { Text = "2. Stress Test suite - fuzz driver (app-launch / runner3D / input / FS)",
+                                 Location = new Point(gx, y), Size = new Size(GW, 104) };
         Controls.Add(std);
-        standardChk = Chk("Run the standard suite", s.RunStandard, 12, 20, true);
+        standardChk = Chk("Run the stress test", s.RunStandard, 12, 20, true);
         std.Controls.Add(standardChk);
         std.Controls.Add(new Label { Text = "Passes:", Location = new Point(28, 50), AutoSize = true });
         passesBox = new NumericUpDown { Location = new Point(82, 46), Size = new Size(56, 23),
@@ -577,7 +654,9 @@ class DevForm : Form
         std.Controls.Add(passesBox);
         shutoffChk = Chk("Power off when the run finishes", s.AutoShutoff, 170, 48, false);
         std.Controls.Add(shutoffChk);
-        y += 90;
+        std.Controls.Add(new Label { Text = "0 passes = endless (F12 stops it). Unticking the suite disables it entirely.",
+                                     Location = new Point(28, 76), AutoSize = true, ForeColor = Grey });
+        y += 112;
 
         // ---- 3. Network suite (hardware) -----------------------------------
         var net = new GroupBox { Text = "3. Network suite - hardware bring-up (\\CRASH\\<machine>\\NETLOG.TXT)",
