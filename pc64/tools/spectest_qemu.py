@@ -20,7 +20,12 @@ SECTOR, MIB = 512, 1 << 20
 def sh(a, **k): return subprocess.run(a, **k)
 
 def build_disk():
-    with open(os.path.join(ESP, "STRESS.CFG"), "w", newline="\r\n") as f:
+    # The test's own STRESS.CFG goes into the DISK IMAGE only - never into
+    # build/esp. This script used to write it into build/esp directly, and
+    # since build.sh only recreated the default when the file was absent, the
+    # dev-run config rode onto every image the flasher shipped afterwards.
+    cfg = os.path.join(os.path.dirname(DISK), "spectest_stress.cfg")
+    with open(cfg, "w", newline="\r\n") as f:
         f.write("passes=1\nspec\nnonet\n")
     disk_sectors = 96 * 2048
     with open(DISK, "wb") as f: f.truncate(disk_sectors * SECTOR)
@@ -42,6 +47,9 @@ def build_disk():
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             sh(["mcopy", "-i", FAT, "-o", src, dst],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # overlay the test config on top of the shipped default, image-only
+    sh(["mcopy", "-i", FAT, "-o", cfg, "::/STRESS.CFG"],
+       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(FAT, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(part_start * SECTOR)
         while True:
@@ -56,9 +64,14 @@ def run():
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", "format=raw,file=" + DISK,
+        # SLIRP e1000 so the NETWORK live checks (S-NET-30 / S-AI-01/02) run
+        # for real: DHCP against SLIRP, TCP/DNS via the host resolver, TLS out
+        # to the provider. Needs the build host online; without it those
+        # checks FAIL (they are part of the baseline now, not SKIPs).
+        "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
         "-display", "none",
     ], stderr=subprocess.DEVNULL)
-    for _ in range(120):
+    for _ in range(180):
         time.sleep(1)
         if q.poll() is not None: return True
     q.kill(); return False

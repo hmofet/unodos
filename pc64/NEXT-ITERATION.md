@@ -48,11 +48,37 @@ Once a lease lands, `ip_suite` (pc64_nettest.c) already runs ping → DNS. Exten
 to a **TLS handshake** to a known host (BearSSL is linked) to prove end-to-end
 reachability including certs.
 
-## Phase 4 — Convert the networking SKIPs to real conformance tests
+## Phase 4 — Convert the networking SKIPs to real conformance tests  ✅ BUILT
 
-With a live link, turn these from stubs into real SPECTEST checks:
-`S-NET-20` (DHCP/TCP round-trip), `S-WIFI-20` (join), `S-AI-01/02` (the AI
-request→stream→render path). See `test_netstub()` in `pc64_spectest.c`.
+DONE (2026-07-21): `test_netstub()` is now `test_netlive()` in
+`pc64_spectest.c` — real link-gated checks that PASS/FAIL on a connected
+machine and SKIP with a named reason otherwise:
+`S-NET-30` (DHCP lease + TCP round-trip; the stub's "S-NET-20" label collided
+with SPEC.md's RX-drain contract, hence the renumber), `S-WIFI-20` (live join
+to a lease; FAILs with `iwl_status_str` until the MLME tail lands),
+`S-AI-01/02` (DNS → CA-validated TLS to api.anthropic.com, then a full HTTPS
+request→response through it — a 401 + JSON body is the expected proof, no key
+needed). `tools/spectest_qemu.py` now boots with a SLIRP e1000 so S-NET-30 and
+S-AI-01/02 run for real in the QEMU regression (needs the build host online).
+A link-up-but-no-lease machine now shows a FAIL with the frame counters — the
+Phase 1 localization — instead of a SKIP.
+
+Building these immediately caught (and fixed) three real transport bugs the
+stack had never been driven through before — all three would have bitten the
+Browser/AI on metal too:
+- `net.c` S-NET-15/23: fixed 4096 window over a 2048 rxq, and rcv_nxt ACKing
+  bytes that missed the queue — every >2 KB TLS certificate flight arrived
+  corrupt. Window is now the rxq's real free space (rxq grown to 8 KB), only
+  stored bytes are ACKed, overlap-trimmed retransmits recover the tail.
+- `tls.c low_read`: when one poll batch delivered the last data segment AND
+  the FIN together (Connection: close servers), the state check threw away
+  the just-arrived bytes and reported EOF.
+- `tls.c tls_close`: `br_sslio_close()` loops forever against a torn-down
+  connection when the peer's close_notify was already received (ssl_io.c's
+  RFC 5246 carve-out skips the engine-fail) — 20 s spin, watchdog reset.
+  Replaced with a bounded polite close. Phase 3's "TLS handshake to a known
+  host" is hereby proven end-to-end in QEMU (S-AI-01/02); metal awaits the
+  Phase 1/2 eth fix.
 
 ## Phase 5 — WiFi (F12), same method, with a card present
 
@@ -82,8 +108,12 @@ the Surface power-off outcome logged.
 ## Test workflow reminders
 
 - Debug/QEMU: `UNO_DEBUG=1 ./build.sh` then `python3 tools/spectest_qemu.py`
-  (real-FAT; vvfat corrupts multi-cluster writes). Current baseline: **59 PASS /
-  0 FAIL / 7 SKIP**, clean.
+  (real-FAT; vvfat corrupts multi-cluster writes; boots with a SLIRP e1000 so
+  the live network checks run - needs the build host online). Current
+  baseline: **62 PASS / 0 FAIL / 4 SKIP**, clean.
+- STRESS.CFG control keys (`nostress` off-switch, `passes=1` bounded run +
+  self power-off): `UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh` then
+  `python3 tools/stresscfg_qemu.py`.
 - After any OS change, rebuild + publish the flasher:
   `flash/deploy-to-share.ps1` → `\\behemoth\unreplicated\unodos\pc64`.
 - Reading returned sticks: devbuntu has the USB write-blocker; always cross-check

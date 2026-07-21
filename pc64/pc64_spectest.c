@@ -16,6 +16,10 @@
 #include "fat.h"
 #include "pc64_fs.h"
 #include "net.h"
+#include "tls.h"
+#include "pc64_http.h"
+#include "pc64_pci.h"
+#include "iwlwifi.h"
 #include "fb.h"
 #include "pc64_font.h"
 #include "js.h"
@@ -708,16 +712,199 @@ static void test_studio(int v)
     }
 }
 
-/* ============================================================ NETWORK (stubs) */
-static void test_netstub(void)
+/* ======================================================= NETWORK (live link) */
+/* Phase 4 of NEXT-ITERATION.md: the old netstub SKIPs turned into REAL checks.
+ * Each runs whenever this machine actually has the prerequisite hardware/link
+ * and records an explicit SKIP naming what is missing when it does not - the
+ * same stick reports PASS/FAIL on a connected laptop and a clean SKIP in a
+ * netless QEMU, never a false red.
+ *   S-WIFI-20  live WiFi join to a DHCP lease (Intel card + creds present)
+ *   S-NET-30   live LAN round-trip: DHCP lease + one TCP query round-trip
+ *              (the S-NIC-12 chain at boot, on whatever NIC is present; the
+ *              old stub line said "S-NET-20", which collides with SPEC.md's
+ *              RX-drain contract of that number, hence the renumbering)
+ *   S-AI-01    the assistant's transport: DNS -> CA-validated TLS handshake
+ *              to the provider endpoint (proves reachability incl. certs)
+ *   S-AI-02    request -> response round-trip through that same pipe (no API
+ *              key needed: any HTTP status + body proves the pipeline) */
+
+static int live_wait_lease(int ms)
 {
-    /* Deferred until networking is live on metal (WiFi bring-up stops at
-     * firmware ALIVE; the AI assistant needs a working TLS link). These will
-     * become real once a link is up - see NETLOG / the wifi F12 findings. */
-    SKIP("S-WIFI-20", "WiFi join not live yet (fw ALIVE issue) - pending real link");
-    SKIP("S-NET-20",  "LAN/DHCP/TCP over a real link - pending live networking");
-    SKIP("S-AI-01",   "Studio AI assistant needs a live TLS link - pending networking");
-    SKIP("S-AI-02",   "AI request/stream/render round-trip - pending networking");
+    unsigned long long t0 = uno_dbg_uptime_ms();
+    while (!net_dhcp_done() && (int)(uno_dbg_uptime_ms() - t0) < ms) {
+        net_poll(); uno_pc64_delay_ms(5); uno_dbg_heartbeat();
+    }
+    return net_dhcp_done();
+}
+
+/* One plain-TCP round-trip against a real peer, with no LAN-side test server:
+ * a DNS query for example.com over TCP (RFC 7766 2-byte length framing) to
+ * the lease's resolver, falling back to the gateway (home routers usually run
+ * the resolver themselves). Proves connect -> send -> recv -> close. */
+static int live_tcp_roundtrip(char *why, int cap)
+{
+    static const unsigned char q[] = {
+        0x00, 0x1d,                              /* TCP length prefix (29)     */
+        0x55, 0x4e, 0x01, 0x00, 0x00, 0x01,      /* id 0x554e, RD, 1 question  */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        7, 'e','x','a','m','p','l','e', 3, 'c','o','m', 0,
+        0x00, 0x01, 0x00, 0x01 };                /* QTYPE A, QCLASS IN         */
+    const unsigned char *peer[2];
+    unsigned char rb[64];
+    int p, i, got = 0;
+    peer[0] = net_dns(); peer[1] = net_gw();
+    for (p = 0; p < 2; p++) {
+        if (p == 1 && !memcmp(peer[0], peer[1], 4)) break;   /* same box       */
+        if (net_tcp_connect(peer[p], 53) < 0) continue;
+        for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) {
+            net_poll(); uno_pc64_delay_ms(5);
+        }
+        if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); continue; }
+        net_tcp_send(q, (int)sizeof q);
+        got = 0;
+        for (i = 0; i < 600 && got < 6; i++) {
+            int r = net_tcp_recv(rb + got, (int)sizeof rb - got);
+            if (r > 0) got += r;
+            net_poll(); uno_pc64_delay_ms(5); uno_dbg_heartbeat();
+        }
+        net_tcp_close();
+        if (got < 6) { snprintf(why, (size_t)cap, "connected to %d.%d.%d.%d:53 but no reply (%d bytes)",
+                                peer[p][0], peer[p][1], peer[p][2], peer[p][3], got); return 0; }
+        if (rb[2] != 0x55 || rb[3] != 0x4e) { snprintf(why, (size_t)cap, "reply id mismatch"); return 0; }
+        if (!(rb[4] & 0x80))                { snprintf(why, (size_t)cap, "reply is not a response (QR=0)"); return 0; }
+        return 1;
+    }
+    snprintf(why, (size_t)cap, "no TCP handshake with resolver or gateway on :53");
+    return 0;
+}
+
+static void test_netlive(void)
+{
+    char why[112];
+
+    /* -- S-WIFI-20: live WiFi join. Its own bring-up + net_init, BEFORE the
+     *    wired path below re-initialises the stack. Intel-only, mirroring
+     *    the boot net test's auto-detect. */
+    {
+        pci_dev d;
+        int have_card  = pci_find_class(0x02, 0x80, &d) && d.vendor == 0x8086;
+        int have_creds = 0, i, n = uno_fs_volumes();
+        for (i = 0; i < n && !have_creds; i++)
+            have_creds = uno_fs_size(i, "WIFI.CFG") > 0 || uno_fs_size(i, "WIFI.TXT") > 0;
+        if (!have_card)
+            SKIP("S-WIFI-20", "no Intel WiFi PCI function on this machine");
+        else if (!have_creds)
+            SKIP("S-WIFI-20", "no WIFI.CFG/WIFI.TXT credentials staged");
+        else {
+            uno_nic_t *nic = iwl_nic();
+            char st[120];
+            iwl_status_str(st, sizeof st);
+            if (!nic) BAD("S-WIFI-20", "bring-up stopped: %s", st);
+            else {
+                unsigned long long t0 = uno_dbg_uptime_ms();
+                int up = 0;
+                net_init(nic, iwl_mac());
+                while ((int)(uno_dbg_uptime_ms() - t0) < 15000) {
+                    if (nic->link(nic->ctx)) { up = 1; break; }
+                    uno_pc64_delay_ms(200); uno_dbg_heartbeat();
+                }
+                if (!up) BAD("S-WIFI-20", "no link (join) in 15 s: %s", st);
+                else {
+                    net_dhcp_start();
+                    if (live_wait_lease(12000)) OK("S-WIFI-20");
+                    else BAD("S-WIFI-20", "joined but no DHCP lease in 12 s");
+                }
+            }
+        }
+    }
+
+    /* -- bind whatever NIC this machine has (wired preferred) + lease ------- */
+    if (!pc64_net_up()) {
+        SKIP("S-NET-30", "no NIC bound (no wired NIC/USB adapter, WiFi not joined)");
+        SKIP("S-AI-01",  "no NIC bound - no transport to test");
+        SKIP("S-AI-02",  "no NIC bound - no transport to test");
+        return;
+    }
+    if (!net_link()) {
+        SKIP("S-NET-30", "NIC bound but link down (no cable / AP)");
+        SKIP("S-AI-01",  "link down - no transport to test");
+        SKIP("S-AI-02",  "link down - no transport to test");
+        return;
+    }
+    if (!net_dhcp_done() && !live_wait_lease(10000)) {
+        /* a live link that cannot lease is exactly the AX88179 failure class -
+         * a FAIL with the frame counters, never a silent skip */
+        BAD("S-NET-30", "link up but no DHCP lease (tx=%u rx=%u arp=%u ip=%u)",
+            net_tx_frames(), net_rx_frames(), net_rx_arp(), net_rx_ip());
+        SKIP("S-AI-01", "no DHCP lease - no route to the provider");
+        SKIP("S-AI-02", "no DHCP lease - no route to the provider");
+        return;
+    }
+
+    /* -- S-NET-30: lease + plain-TCP round-trip ----------------------------- */
+    if (live_tcp_roundtrip(why, (int)sizeof why)) OK("S-NET-30");
+    else BAD("S-NET-30", "lease ok, TCP round-trip failed: %s", why);
+
+    /* -- S-AI-01/02: the assistant's transport, on ONE connection ----------
+     * tls_connect_ca returns before any TLS bytes move ("handshake completes
+     * on first I/O"), and the net stack has a single TCP block - so both
+     * checks ride one connection, exactly like the assistant itself: connect,
+     * write the request (which DRIVES the handshake - S-AI-01 asserts it),
+     * then read the response (S-AI-02). No API key on a test stick: the
+     * provider's 401 + JSON body is the round-trip proof. */
+    {
+        unsigned char ip[4];
+        if (!net_dns_query("api.anthropic.com", ip)) {
+            BAD("S-AI-01", "DNS lookup of api.anthropic.com failed");
+            SKIP("S-AI-02", "no provider address - transport check failed first");
+        } else if (tls_connect_ca(ip, 443, "api.anthropic.com") != 0) {
+            BAD("S-AI-01", "TCP connect to provider :443 failed");
+            SKIP("S-AI-02", "no connection - transport check failed first");
+        } else {
+            static const char req[] =
+                "GET /v1/models HTTP/1.0\r\n"
+                "Host: api.anthropic.com\r\n"
+                "User-Agent: UnoDOS-pc64-spectest\r\n"
+                "Connection: close\r\n\r\n";
+            if (tls_write(req, (int)sizeof req - 1) < 0) {
+                BAD("S-AI-01", "TLS handshake/write failed (BearSSL err %d)",
+                    tls_last_error());
+                SKIP("S-AI-02", "no TLS pipe - transport check failed first");
+                tls_close();
+            } else {
+                unsigned ver = tls_version();     /* now negotiated for real */
+                if (ver >= 0x0303)
+                    emit("S-AI-01", 1, "TLS %s to api.anthropic.com, cert chain validated",
+                         ver == 0x0303 ? "1.2" : "1.3");
+                else
+                    BAD("S-AI-01", "handshake ok but TLS version 0x%04x < 1.2", ver);
+                {
+                    enum { AI_CAP = 2048 };
+                    char *resp = malloc(AI_CAP);
+                    if (!resp) SKIP("S-AI-02", "no heap for the response buffer");
+                    else {
+                        int rn = 0;
+                        for (;;) {
+                            int r = tls_read(resp + rn, AI_CAP - 1 - rn);
+                            if (r <= 0 || rn >= AI_CAP - 1) break;
+                            rn += r;
+                        }
+                        resp[rn] = 0;
+                        if (rn > 0 && !strncmp(resp, "HTTP/", 5)) {
+                            /* first line only, for the report */
+                            int j = 0; while (resp[j] && resp[j] != '\r' && resp[j] != '\n' && j < 60) j++;
+                            resp[j] = 0;
+                            emit("S-AI-02", 1, "request/response ok (%d bytes, %s)", rn, resp);
+                        } else
+                            BAD("S-AI-02", "no HTTP response (%d bytes, BearSSL err %d)",
+                                rn, tls_last_error());
+                        free(resp);
+                    }
+                }
+                tls_close();
+            }
+        }
+    }
 }
 
 /* ============================================================== INTERACTIVE */
@@ -852,11 +1039,11 @@ void pc64_spectest_run(void)
         uno_dbg_check("spec:music");  test_music(v);
         uno_dbg_check("spec:studio"); test_studio(v);
     }
-    /* Network suite: the offline-safe stack regressions + the live stubs. */
+    /* Network suite: the offline-safe stack regressions + the live checks. */
     if (area_on("network")) {
-        section("NETWORK (stack regressions + live stubs)");
+        section("NETWORK (stack regressions + live checks)");
         uno_dbg_check("spec:net");     test_net();
-        uno_dbg_check("spec:netstub"); test_netstub();
+        uno_dbg_check("spec:netlive"); test_netlive();
     }
     /* Interactive area: human-confirmed keyboard + display. A distinct opt-in
      * (the `interactive` key) rather than a normal area, so it is never pulled

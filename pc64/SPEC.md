@@ -379,14 +379,13 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   ticks of `net_poll` with the ORIGINAL sequence number until acked
   (`tcp_tick` seq arithmetic must leave snd_nxt unchanged).
   check: loopback NIC that drops the first transmission.
-- **S-NET-15** [auto] In-order data MUST be appended to the 2048-byte rxq and
-  ACKed; `net_tcp_recv` MUST drain FIFO with partial reads preserved
-  (memmove of the remainder). Out-of-order segments (seq != rcv_nxt) MUST be
-  ignored (no reassembly by design).
-  NOTE: current code may violate this when the rxq overflows —
-  `net.c tcp_recv` advances `rcv_nxt` by the FULL dlen and ACKs even when
-  only `room` bytes were stored, permanently losing the tail. Intended:
-  never ACK bytes that were not stored.
+- **S-NET-15** [auto] In-order data MUST be appended to the rxq (8192 B) and
+  only the bytes actually stored ACKed — `rcv_nxt` MUST never advance past
+  the queue cut, so a truncated tail is recovered from the peer's retransmit
+  (partial-overlap segments are trimmed at rcv_nxt). `net_tcp_recv` MUST
+  drain FIFO with partial reads preserved (memmove of the remainder).
+  Beyond-rcv_nxt segments MUST be ignored (no reassembly by design); stale
+  duplicates re-ACKed. FIXED 2026-07-21 (was: full-dlen ACK lost the tail).
 - **S-NET-16** [auto] `net_tcp_close` in ESTABLISHED MUST send FIN|ACK and
   enter FIN_WAIT; a received FIN MUST be ACKed with rcv_nxt+1 and the state
   set to DONE.
@@ -416,8 +415,10 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   the stack emits (SPECTEST recomputes over the 20-byte header = 0).
 
 - **S-NET-23** [auto] The advertised TCP window MUST NOT exceed the receive
-  buffer. NOTE: current code advertises 4096 while rxq is 2048 — actively
-  inviting the S-NET-15 overflow loss. site: `net.c tcp_out` window field.
+  buffer's free space, and a window that collapsed below one MSS MUST be
+  re-announced when `net_tcp_recv` drains the queue (else the peer sits in
+  zero-window probes). FIXED 2026-07-21 (was: fixed 4096 over a 2048 rxq).
+  site: `net.c tcp_out` window field / `net_tcp_recv` update ACK.
 - **S-NET-24** [auto] The limited-broadcast test MUST match exactly
   255.255.255.255. NOTE: current `net.c ip_recv` checks only the first two
   octets (255.255.x.x accepted).
@@ -428,6 +429,15 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-NET-26** [auto] `net_tcp_connect`'s return value MUST be meaningful or
   documented as always-0 — callers checking `< 0` (e.g. `pc64_http.c`) are
   dead code today; connection failure is only observable via state timeout.
+- **S-NET-30** [auto, live] With a bound NIC and link up, a DHCP lease MUST
+  bind, and one plain-TCP round-trip (a DNS query for example.com over TCP,
+  RFC 7766 framing, to the lease's resolver or gateway on :53) MUST complete
+  connect → send → recv → close against the real peer. SKIP (named reason)
+  when no NIC binds or the link is down; a live link that cannot lease is a
+  FAIL carrying the tx/rx/arp/ip frame counters — the AX88179 failure class.
+  (This is the boot-time S-NIC-12 chain on whatever NIC is present. The old
+  netstub line called it "S-NET-20", which collides with the RX-drain
+  contract above — renumbered to 30.)
 
 ## S-MOD — .UNO module loader (`pc64_modload.c`, `app_loader.c`)
 
@@ -1026,6 +1036,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-WIFI-10** [auto] mrvlwifi RX MUST re-validate device-supplied
   pkt_off/pkt_len against the receive length before copying (untrusted
   DMA descriptor data).
+- **S-WIFI-20** [auto, live] When an Intel WiFi PCI function AND WiFi
+  credentials (`WIFI.CFG`/`WIFI.TXT`) are both present, the driver MUST
+  bring the nic up, reach link (join) within 15 s, and bind a DHCP lease
+  within 12 s. SKIP (named reason) when either prerequisite is absent;
+  a bring-up that stops early FAILs with `iwl_status_str` so the report
+  names the real blocker (firmware missing / no ALIVE / RF-kill / MLME
+  ceiling — see S-WIFI-08). This is the boot-time automation of S-WIFI-08's
+  join contract, expected red until the MLME tail lands.
 
 ## S-TLS — TLS client (`tls.c`, `tls_ca.c`)
 
@@ -1496,12 +1514,20 @@ decoders ship inside PHOTOS.UNO and are host-tested only.
 - **S-MEDIA-08** [manual] Image decoders (PNG/JPEG/…) live in PHOTOS.UNO
   (module), not the kernel — host-tested.
 
-## S-AI — Studio AI assistant (deferred: needs live networking)
+## S-AI — Studio AI assistant (live checks; SKIP without a link)
 
-- **S-AI-01** [auto, STUB] The assistant MUST establish a TLS link and send a
-  request. Pending live networking (WiFi bring-up stops at firmware ALIVE).
-- **S-AI-02** [auto, STUB] Request → stream → render round-trip. Pending
-  networking. Keys live in plaintext `AI.CFG` (S-STUDIO-09).
+- **S-AI-01** [auto, live] The assistant's transport MUST reach the provider:
+  DNS-resolve `api.anthropic.com` and complete a CA-validated TLS ≥ 1.2
+  handshake to :443 with the real SNI (`tls_connect_ca` — the exact call
+  `studio_ai.c` makes). Proves end-to-end reachability including certs.
+  SKIP with a named reason when no NIC/link/lease exists.
+- **S-AI-02** [auto, live] A request → response round-trip MUST complete
+  through that same pipe: an HTTPS exchange with the provider returning an
+  HTTP status line and a non-empty body. No API key is on a test stick, so
+  the expected answer is the provider's 401 + JSON error body — which is the
+  round-trip proof; only transport failures fail the contract. (The render
+  half lives in STUDIO.UNO and stays app-tested; keys live in plaintext
+  `AI.CFG`, S-STUDIO-09.)
 
 ## S-INT — interactive checks (operator-confirmed; `interactive` opt-in)
 
@@ -1681,16 +1707,21 @@ Every `NOTE:` above, collected. Line numbers are as-read on branch
 - **S-NET-08** — `net.c net_ping` (~163): stores the caller's POINTER for
   the deferred post-ARP retry; a dead stack buffer is re-read in
   net_poll. Intended: copy 4 bytes.
-- **S-NET-15** — `net.c tcp_recv` (~376-383): rcv_nxt advances by the FULL
-  dlen and ACKs even when only `room` bytes fit the rxq — bytes past the
-  buffer are ACKed and lost forever.
+- **S-NET-15** — FIXED 2026-07-21 (`net.c tcp_input`): rcv_nxt now advances
+  only past bytes actually stored, the truncated tail is taken from the
+  peer's retransmit (with overlap trim), and FIN counts only at exactly
+  rcv_nxt. Was: full-dlen ACK — bytes past the buffer acknowledged-and-lost;
+  surfaced as every real-host TLS handshake dying (S-AI-01) once the live
+  checks landed.
 - **S-NET-17** — `net.c` DHCP (~454-460): no retransmit/timeout anywhere
   in the DISCOVER/REQUEST exchange — one lost packet stalls
   net_dhcp_done() forever.
 - **S-NET-19** — `net.c net_dns_query` (~580): response transaction ID
   never verified (only the source port filters).
-- **S-NET-23** — `net.c tcp_out` (~285): advertises window 4096 over a
-  2048-byte rxq — actively invites S-NET-15.
+- **S-NET-23** — FIXED 2026-07-21 (`net.c tcp_out`): the window is now the
+  rxq's actual free space (and `net_tcp_recv` sends a window update when a
+  collapsed window reopens); rxq grown 2048 → 8192 so a CA certificate
+  flight fits. Was: fixed 4096 over a 2048-byte rxq.
 - **S-NET-24** — `net.c ip_recv` (~514): limited-broadcast test checks
   only the first two octets (255.255.x.x accepted).
 - **S-NET-25** — `net.c tcp_tick` (~392-407) / `arp_put` (~61): TCP

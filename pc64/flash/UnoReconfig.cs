@@ -22,6 +22,18 @@ using System.Text;
 
 static class UnoReconfig
 {
+    /*  The STRESS.CFG key GENERATION this flasher writes.  The debug OS stamps
+     *  the generation it understands into \BUILD.TXT as `cfgver: N` (written
+     *  by pc64/build.sh - keep the two in sync; bump both whenever a config
+     *  key is added or renamed).  Reconfigure must refuse a disk stamped older
+     *  than this: the keys are just data and the INTERPRETER is the OS already
+     *  on the stick, so writing e.g. `nostress` or `passes=1` to a build that
+     *  predates those keys is silently ignored - the observed failure was a
+     *  "disabled" stick fuzzing endlessly because its embedded OS predated the
+     *  off switch.  Generation 2 = the suite model (nostress/passes/spec=/
+     *  net-*) of 2026-07-21. */
+    const int CFG_GENERATION = 2;
+
     const int SECTOR = 512;
     static readonly byte[] ESP_TYPE = new Guid("C12A7328-F81F-11D2-BA4B-00A0C93EC93B").ToByteArray();
 
@@ -91,13 +103,17 @@ static class UnoReconfig
         return e;
     }
 
-    /* Overwrite \STRESS.CFG on the UnoDOS volume reachable through `s`.
-     * Returns null on success (with `info` set), else a human-readable reason. */
-    public static string WriteStressCfg(Stream s, string content, out string info)
+    /* FAT32 geometry, parsed once per operation. */
+    struct Geom
     {
-        info = null;
-        if (content == null) return "No test settings to write (turn on Developer options first).";
+        public long fatLba, dataLba, clusters;
+        public int  secPerClus, clusBytes;
+        public uint rootClus;
+    }
 
+    static string ReadGeom(Stream s, out Geom g)
+    {
+        g = new Geom();
         long part = FindEspLba(s);
         if (part < 0) return "No UnoDOS EFI partition on this drive - is it a UnoDOS disk?";
 
@@ -111,9 +127,6 @@ static class UnoReconfig
         uint rootClus   = U32(bpb, 44);
         if (secPerClus < 1 || reserved < 1 || numFats < 1 || fatSz < 1 || rootClus < 2)
             return "Unreadable FAT32 parameters on this disk.";
-        int  clusBytes = secPerClus * SECTOR;
-        long fatLba    = part + reserved;
-        long dataLba   = part + (long)reserved + (long)numFats * fatSz;
         // Total data clusters, so a directory entry's cluster number can be range-
         // checked before it steers a raw whole-disk write (a corrupt STRESS.CFG
         // entry with a bogus high-cluster word must never point the write off into
@@ -122,23 +135,36 @@ static class UnoReconfig
         long clusters = (totSec - (reserved + (long)numFats * fatSz)) / secPerClus;
         if (clusters < 1) return "Unreadable FAT32 geometry on this disk.";
 
-        byte[] data = Encoding.ASCII.GetBytes(content);
-        // The OS reads STRESS.CFG into a 512-byte buffer (511 usable), so cap here
-        // to match - and it is always well under one cluster.
-        if (data.Length > SECTOR - 1)
-            return "The new config (" + data.Length + " B) exceeds the 511-byte STRESS.CFG limit - reflash instead.";
+        g.secPerClus = secPerClus;
+        g.clusBytes  = secPerClus * SECTOR;
+        g.fatLba     = part + reserved;
+        g.dataLba    = part + (long)reserved + (long)numFats * fatSz;
+        g.clusters   = clusters;
+        g.rootClus   = rootClus;
+        return null;
+    }
 
-        byte[] want = Pack83("STRESS.CFG");
-        uint clus = rootClus;
+    /* A root-directory hit: where the entry lives (so its size can be patched)
+     * and what it points at. */
+    class RootEntry
+    {
+        public long   dirLba;          // LBA of the directory cluster holding it
+        public byte[] dirClusterBuf;   // that whole cluster, as read
+        public int    off;             // entry offset within the cluster
+        public uint   firstClus, size;
+    }
+
+    static RootEntry FindRootEntry(Stream s, Geom g, string name)
+    {
+        byte[] want = Pack83(name);
+        uint clus = g.rootClus;
         int guard = 100000;                     // chain-length backstop
         while (clus >= 2 && clus < 0x0FFFFFF8 && guard-- > 0) {
-            long clba = dataLba + (long)(clus - 2) * secPerClus;
-            var cbuf = ReadSectors(s, clba, secPerClus);
+            long clba = g.dataLba + (long)(clus - 2) * g.secPerClus;
+            var cbuf = ReadSectors(s, clba, g.secPerClus);
             for (int off = 0; off + 32 <= cbuf.Length; off += 32) {
                 byte first = cbuf[off];
-                if (first == 0x00)              // end of directory: not here
-                    return "STRESS.CFG is not on this disk (a production build has none - " +
-                           "flash with Developer options to add tests).";
+                if (first == 0x00) return null; // end of directory: not here
                 if (first == 0xE5) continue;    // deleted
                 byte attr = cbuf[off + 11];
                 if ((attr & 0x0F) == 0x0F) continue;   // long-name slot
@@ -146,29 +172,96 @@ static class UnoReconfig
                 bool match = true;
                 for (int k = 0; k < 11; k++) if (cbuf[off + k] != want[k]) { match = false; break; }
                 if (!match) continue;
-
-                uint fc = (uint)U16(cbuf, off + 26) | ((uint)U16(cbuf, off + 20) << 16);
-                if (fc < 2 || fc >= clusters + 2)
-                    return "STRESS.CFG points at an out-of-range cluster (" + fc +
-                           ") - the disk looks corrupt; reflash instead.";
-                // Refuse a multi-cluster STRESS.CFG: this only rewrites the first
-                // cluster, so a longer chain would be left with orphaned tail
-                // clusters. It is always one cluster in practice (config < 512 B).
-                uint nxt = NextClus(s, fatLba, fc);
-                if (nxt >= 2 && nxt < 0x0FFFFFF8)
-                    return "STRESS.CFG spans more than one cluster - reflash instead.";
-                // overwrite the file's first (only) cluster, zero-padded
-                var w = new byte[clusBytes];
-                Array.Copy(data, w, data.Length);
-                WriteSectors(s, dataLba + (long)(fc - 2) * secPerClus, w);
-                // update the directory entry's size, keep it a one-cluster file
-                PutU32(cbuf, off + 28, (uint)data.Length);
-                WriteSectors(s, clba, cbuf);
-                info = "Updated STRESS.CFG (" + data.Length + " bytes) on the existing UnoDOS disk.";
-                return null;
+                var e = new RootEntry();
+                e.dirLba = clba; e.dirClusterBuf = cbuf; e.off = off;
+                e.firstClus = (uint)U16(cbuf, off + 26) | ((uint)U16(cbuf, off + 20) << 16);
+                e.size      = U32(cbuf, off + 28);
+                return e;
             }
-            clus = NextClus(s, fatLba, clus);
+            clus = NextClus(s, g.fatLba, clus);
         }
-        return "Could not find STRESS.CFG in the UnoDOS root directory.";
+        return null;
+    }
+
+    /* First cluster of a small root file as ASCII text, or null.  Enough for
+     * BUILD.TXT (a one-cluster stamp); deliberately never follows the chain. */
+    static string ReadRootText(Stream s, Geom g, string name)
+    {
+        var e = FindRootEntry(s, g, name);
+        if (e == null || e.firstClus < 2 || e.firstClus >= g.clusters + 2) return null;
+        var b = ReadSectors(s, g.dataLba + (long)(e.firstClus - 2) * g.secPerClus, g.secPerClus);
+        int n = e.size < (uint)b.Length ? (int)e.size : b.Length;
+        return Encoding.ASCII.GetString(b, 0, n);
+    }
+
+    /* The `cfgver: N` line of the disk's BUILD.TXT.  0 = stamped before
+     * generations existed (a build too old to know the current keys). */
+    static int DiskCfgGeneration(Stream s, Geom g)
+    {
+        string txt = ReadRootText(s, g, "BUILD.TXT");
+        if (txt == null) return 0;
+        foreach (var raw in txt.Split('\n')) {
+            string t = raw.Trim();
+            if (!t.StartsWith("cfgver:")) continue;
+            int v;
+            if (int.TryParse(t.Substring(7).Trim(), out v)) return v;
+        }
+        return 0;
+    }
+
+    /* Overwrite \STRESS.CFG on the UnoDOS volume reachable through `s`.
+     * Returns null on success (with `info` set), else a human-readable reason. */
+    public static string WriteStressCfg(Stream s, string content, out string info)
+    {
+        info = null;
+        if (content == null) return "No test settings to write (turn on Developer options first).";
+
+        Geom g;
+        string gerr = ReadGeom(s, out g);
+        if (gerr != null) return gerr;
+
+        var e = FindRootEntry(s, g, "STRESS.CFG");
+        if (e == null)
+            return "STRESS.CFG is not on this disk (a production build has none - " +
+                   "flash with Developer options to add tests).";
+
+        // The keys are interpreted by the OS ALREADY ON THE STICK, which this
+        // button deliberately does not touch - so a build that predates the
+        // current keys must be refused, not configured. Writing `nostress` or
+        // `passes=1` to such a build is silently ignored and the stick fuzzes
+        // endlessly, looking exactly like "the setting has no effect".
+        int gen = DiskCfgGeneration(s, g);
+        if (gen < CFG_GENERATION)
+            return "This disk's UnoDOS build is too old for the current test settings " +
+                   (gen == 0 ? "(its BUILD.TXT carries no cfgver stamp)"
+                             : "(disk cfgver " + gen + ", flasher writes " + CFG_GENERATION + ")") +
+                   " - it would ignore keys like 'nostress'/'passes=' and run the stress " +
+                   "driver endlessly.\n\nReflash the disk (Install) to update the OS first.";
+
+        byte[] data = Encoding.ASCII.GetBytes(content);
+        // The OS reads STRESS.CFG into a 512-byte buffer (511 usable), so cap here
+        // to match - and it is always well under one cluster.
+        if (data.Length > SECTOR - 1)
+            return "The new config (" + data.Length + " B) exceeds the 511-byte STRESS.CFG limit - reflash instead.";
+
+        uint fc = e.firstClus;
+        if (fc < 2 || fc >= g.clusters + 2)
+            return "STRESS.CFG points at an out-of-range cluster (" + fc +
+                   ") - the disk looks corrupt; reflash instead.";
+        // Refuse a multi-cluster STRESS.CFG: this only rewrites the first
+        // cluster, so a longer chain would be left with orphaned tail
+        // clusters. It is always one cluster in practice (config < 512 B).
+        uint nxt = NextClus(s, g.fatLba, fc);
+        if (nxt >= 2 && nxt < 0x0FFFFFF8)
+            return "STRESS.CFG spans more than one cluster - reflash instead.";
+        // overwrite the file's first (only) cluster, zero-padded
+        var w = new byte[g.clusBytes];
+        Array.Copy(data, w, data.Length);
+        WriteSectors(s, g.dataLba + (long)(fc - 2) * g.secPerClus, w);
+        // update the directory entry's size, keep it a one-cluster file
+        PutU32(e.dirClusterBuf, e.off + 28, (uint)data.Length);
+        WriteSectors(s, e.dirLba, e.dirClusterBuf);
+        info = "Updated STRESS.CFG (" + data.Length + " bytes) on the existing UnoDOS disk.";
+        return null;
     }
 }

@@ -42,8 +42,14 @@ def build_disk():
     HANG=1:  arm force-hang so the driver spins -> tests the WATCHDOG (HG report).
     SAFE=1:  leave the SHIPPED STRESS.CFG untouched and assert NO self-crash -
     the regression test for the comment-matching parser bug."""
+    # The armed config goes into the DISK IMAGE only (overlaid after the esp
+    # copy below) - never into build/esp. Writing it into build/esp shipped an
+    # allow-force endless-fast config on real sticks once build.sh's if-absent
+    # default kept it.
+    cfg = None
     if not SAFE:
-        with open(os.path.join(ESP, "STRESS.CFG"), "w", newline="\r\n") as f:
+        cfg = "/tmp/dbgtest_stress.cfg"
+        with open(cfg, "w", newline="\r\n") as f:
             f.write("# QEMU pipeline test\n" +
                     ("force-hang\nfast\n" if HANG else "allow-force\nfast\n"))
     disk_sectors = MIB * 2048
@@ -70,6 +76,10 @@ def build_disk():
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             sh(["mcopy", "-i", fat, "-o", src, dst],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # overlay the armed test config on top of the shipped default, image-only
+    if cfg:
+        sh(["mcopy", "-i", fat, "-o", cfg, "::/STRESS.CFG"],
+           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # splice the partition image into the GPT disk at the partition LBA
     with open(fat, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(part_start * SECTOR)
