@@ -158,7 +158,8 @@ static void inventory(void)
     int n, i;
     pci_dev d;
     uno_dbg_check("net:inventory");
-    uno_dbg_net_trace("== network hardware test, build %s ==", uno_dbg_build_id());
+    uno_dbg_net_trace("== network hardware test, build %s, machine %s ==",
+                      uno_dbg_build_id(), uno_dbg_machine_tag());
 
     n = uno_usbio_count();
     uno_dbg_net_trace("usb (firmware UsbIo): %d interface handle(s)", n);

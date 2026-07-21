@@ -49,11 +49,9 @@ static uint64_t g_tsc_mhz = 1;          /* TSC cycles per microsecond          *
 static int      g_dummy;                /* address source for opaque handles   */
 static int      g_status = -1;          /* uno_acpi_start result (-1 = not run)*/
 
-/* ---- RSDP discovery (EFI configuration table) ------------------------------ */
-typedef struct {                        /* not in pc64's uefi.h - UEFI spec 4.6 */
-    EFI_GUID VendorGuid;
-    void    *VendorTable;
-} EFI_CONFIGURATION_TABLE;
+/* ---- RSDP discovery (EFI configuration table) ------------------------------
+ * (EFI_CONFIGURATION_TABLE now comes from uefi.h - the SMBIOS machine-identity
+ * reader needed it too, so the local copy that used to live here moved there) */
 
 static uint64_t find_rsdp(EFI_SYSTEM_TABLE *ST)
 {

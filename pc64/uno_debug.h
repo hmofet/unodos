@@ -71,9 +71,12 @@ void uno_dbg_mark_clean(void);          /* deliberate shutdown/restart         *
 void uno_dbg_write_bootenv(void);       /* BOOTENV.TXT                         */
 void uno_dbg_write_bootlog(void);       /* CRASH\BOOTLOG.TXT - every boot      */
 void uno_dbg_boot_marker(void);         /* CRASH\BOOTS.TXT - earliest proof    */
-void uno_dbg_write_perf(const char *text, int len);  /* CRASH\PF###.TXT        */
+void uno_dbg_write_perf(const char *text, int len);  /* CRASH\<M>\PF###.TXT    */
 int  uno_dbg_write_crashfile(const char *name, const void *data, int len);
 int  pc64_stress_cfg_flag(const char *key);  /* STRESS.CFG key set? -1 = no file */
+/* SMBIOS-derived machine tag = the telemetry folder leaf (CRASH\<TAG>\): one
+ * stick serves a whole batch of machines without results colliding. */
+const char *uno_dbg_machine_tag(void);
 
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */
 void pc64_stress_tick(void);            /* call once per main-loop frame       */

@@ -15,7 +15,7 @@ Raw reports are preserved off each stick under
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
 | Latitude (i7-6600U) | i7-6600U | 1 + 1 retest (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. **Retest on the detach-disabled build produced ZERO telemetry — most likely it never booted the stick** (see below). |
-| Lenovo X13 Yoga Gen 3 | i5-10210U | 4 (2026-07-20/21) | 1920x1080. **Clean 3-pass runs, zero crashes** — first machine to run with detach disabled, the one that PROVED F3 is the bottleneck, and the perf-iteration mule (P0, Blt, worst-frame runs). |
+| Lenovo X13 Yoga Gen 3 | i5-10210U | 5 (2026-07-20/21) | 1920x1080. **Clean 3-pass runs, zero crashes** — first machine to run with detach disabled, the one that PROVED F3 is the bottleneck, the perf-iteration mule (P0, Blt, worst-frame runs), and the first WiFi net-test machine (F12). |
 | MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
@@ -91,6 +91,17 @@ First metal data from the new `worst:` line — and it answers the operator's
 | 0 | 2 888 us | 16 443 us | 55 695 us | 83 577 us | 0 | (none) |
 | 1 | 75 772 us | **2 340 974 us** | 16 135 us | 84 343 us | **1** | **stress:close** |
 | 2 | 3 124 us | **97 577 us** | 63 013 us | 82 031 us | 0 | (none) |
+
+**X13 Yoga run 5 — first WiFi network test (2026-07-21).**
+`x13yoga-2026-07-21-NET/`. Build `debug-local-20260721-0521`, the first boot of
+the net-test harness on metal, and it worked end to end: UsbIo enumerated 8
+firmware USB interfaces (SD reader, Wacom touch, camera, Synaptics, Intel BT),
+correctly found no USB ethernet, took the WiFi plan, identified the AX201
+(PCI `02f0`, fam 3, gen2), read creds, loaded `IWLAX201.UCO` (1 406 716 bytes),
+mapped BAR0 (`hw_rev=00000351 rf_id=0010a100`), passed card-ready/RF-kill/APM —
+and stopped at **"no ALIVE notification within 2 s of fw start"** (**F12**).
+Stress ran normally afterwards (PF014-016). Also exposed two harness bugs, both
+fixed the same day (F13).
 
 ## Severity key
 
@@ -403,6 +414,55 @@ spikes the operator feels are **render-side** — exactly what QEMU hinted
   `unoui_render_ui` naming the widget being drawn). Do NOT spend more on the
   present path for hitches — it is bounded by Blt on this machine.
 
+### F12 — AX201 firmware loads but never posts ALIVE  ·  OS / DRIVER  ·  S2  ·  OPEN
+The first metal WiFi run (Yoga, AX201 CNVi) gets through every transport
+stage — card identified, `IWLAX201.UCO` read and TLV-parsed, BAR0 mapped,
+card-ready handshake, no RF-kill, APM up, gen2 context-info load issued — and
+then the firmware never raises the ALIVE notification within the 2 s wait.
+- Evidence: `x13yoga-2026-07-21-NET/NETLOG.TXT` — `hw_rev=00000351
+  rf_id=0010a100`, `FAIL no ALIVE notification within 2 s of fw start`.
+- **Suspects, in order:**
+  1. **Qu vs QuZ firmware variant.** `IWLAX201.UCO` is one filename but
+     upstream ships two AX201 images (`Qu-b0-hr-b0` vs `QuZ-a0-hr-b0`);
+     fetch-fw packs one of them. Loading the wrong variant fails exactly like
+     this (fw refuses to boot, no error visible to the host). The recorded
+     `hw_rev`/`rf_id` are the inputs Linux uses to pick — resolve against the
+     iwlwifi table in the fix session, and consider shipping both files with
+     selection by `CSR_HW_REV` (read the BAR *before* choosing firmware).
+  2. **The polled ALIVE wait.** `wait_alive()` polls the RX ring for the
+     notification with legacy-IRQ assumptions; if the card posts it with
+     MSI-X-style indexing (or to a queue the poll isn't reading), it would be
+     missed even though the firmware booted. A CSR scratch-register check
+     (the fw sets `CSR_UCODE_DRV_GP1`/scratch on boot) could distinguish
+     "fw booted, we missed the notification" from "fw never booted".
+  3. Timeout too short is the least likely (Linux's own wait is ~1 s), but
+     free to test.
+- The trace did exactly its job: on the first metal attempt, the failing
+  stage has a name and two falsifiable hypotheses. Whatever the other laptops
+  report (same line or different) will split card-specific from generic.
+
+### F13 — a shipped image carried QEMU telemetry + a creds-shadowing WIFI.CFG  ·  HARNESS  ·  S2  ·  FIXED
+Two self-inflicted hazards found via the Yoga's stick:
+1. **QEMU dev-run telemetry rode into the shipped image.** The QEMU harness
+   scripts booted `vvfat fat:rw:build/esp`, so guest writes (BOOTLOG, PF
+   snapshots, boots.txt — the latter with vvfat cluster garbage: BearSSL
+   symbol-table and HTML-corpus fragments) landed back in `build/esp`, which
+   deploy-to-share then embedded. The Yoga's stick carried lowercase
+   `pf005-013.txt` from QEMU next to its own `PF014-016.TXT` — exactly the
+   stale-vs-real ambiguity the reflash rule existed to prevent, now baked in
+   at the factory.
+2. **The shipped placeholder `WIFI.CFG` shadowed the real creds.** The driver
+   prefers `WIFI.CFG` over `WIFI.TXT`, so the staged starter
+   (`ssid=YourNetwork`) silently won over the flasher-staged `wifi.txt` —
+   the Yoga run tried to join "YourNetwork".
+- **FIXED (same day):** build.sh's dbg staging now purges `build/esp/CRASH`
+  (ships only README) and root `BOOTENV.TXT`, and ships **no** `WIFI.CFG`;
+  the QEMU scripts (`nettest.py`, `nettest_stage.py`) run on a scratch copy
+  (`build/esp-nettest`) so `build/esp` stays pristine regardless.
+- Lesson: anything a dev-loop can write into the artifact tree WILL
+  eventually ship; test harnesses must not share a directory with the
+  shipped image.
+
 ---
 
 ## Positive confirmations (not bugs — the harness works on metal)
@@ -424,7 +484,12 @@ spikes the operator feels are **render-side** — exactly what QEMU hinted
   native-IDT + LAPIC-watchdog + CF9-reset paths instead. Compare boot-env blocks.
 - Grab `\BOOTENV.TXT` first each run (a re-boot overwrites it), then the whole
   `\CRASH` folder.
-- **Reflash, or clear the telemetry, BETWEEN MACHINES.** A stick reused across
+- **SUPERSEDED (2026-07-21): telemetry is now machine-scoped** — every file
+  lands under `CRASH\<MACHINE>\` (SMBIOS-derived: X13YOGA, X1CARBON, SURFGO,
+  LATITUDE, MACBOOK, QEMU), so one stick covers a whole batch without
+  collisions and the paragraph below is history (kept for the lesson). The
+  `cpu:`/`fb_base` cross-check remains a good habit for the `UNKNOWN` folder.
+- ~~**Reflash, or clear the telemetry, BETWEEN MACHINES.**~~ A stick reused across
   machines carries the previous machine's `BOOTLOG.TXT` / `BOOTENV.TXT` / `PF*`,
   and a boot that writes nothing (F8/F9) leaves that stale data untouched — so
   "old data" and "this machine failed to write" look identical. This bit us

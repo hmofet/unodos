@@ -372,6 +372,17 @@ typedef struct {
 #define EFI_LOCATE_ALL_HANDLES 0
 #define EFI_LOCATE_BY_PROTOCOL 2
 
+/* ---- Configuration table (SMBIOS, ACPI, ... vendor tables) ---------------- */
+typedef struct {
+    EFI_GUID VendorGuid;
+    void    *VendorTable;
+} EFI_CONFIGURATION_TABLE;
+
+#define EFI_SMBIOS3_TABLE_GUID \
+    { 0xf2fd1544, 0x9794, 0x4a2c, { 0x99, 0x2e, 0xe5, 0xbb, 0xcf, 0x20, 0xe3, 0x94 } }
+#define EFI_SMBIOS_TABLE_GUID \
+    { 0xeb9d2d31, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } }
+
 /* ---- System Table ---------------------------------------------------------- */
 typedef struct {
     EFI_TABLE_HEADER                 Hdr;
@@ -386,7 +397,7 @@ typedef struct {
     void                            *RuntimeServices;
     EFI_BOOT_SERVICES               *BootServices;
     UINTN                            NumberOfTableEntries;
-    void                            *ConfigurationTable;
+    EFI_CONFIGURATION_TABLE         *ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
 #endif /* UNO_UEFI_H */
