@@ -71,7 +71,11 @@ finding F1, which armed `allow-force` on every "safe" stick):
 - `passes=N` - stop after N passes, then POWER OFF automatically (see below).
   **Always use a bounded run**: while the driver is going it opens an app
   every few frames, so you cannot reach Start > Shut Down by hand.
-  `once` = `passes=1`. Omit for an endless run (F12 to stop).
+  `once` = `passes=1`. Omit (or `passes=0`) for an endless run (F12 to stop).
+- `nostress` - **fully disable** the fuzz driver (the one-shot net/spec tests
+  still run). This is the real OFF switch: without it the only "off" was
+  `passes=0`, which the driver reads as ENDLESS, so a "disabled" stick fuzzed
+  forever. The flasher's Stress Test suite writes this when you untick it.
 - `fast` / `slow` - action cadence (default: one action every 4 frames)
 - `allow-force` - **opt in** to a forced `#PF` on pass 1 that proves the crash
   pipeline end to end. Off by default so an armed stick never self-crashes.
@@ -107,7 +111,7 @@ suites it writes, each with its own master toggle, plus the cross-cutting
 | Suite | What it does | STRESS.CFG it writes |
 |---|---|---|
 | **Conformance** | SPECTEST per-area assertions | `spec` or `spec=<areas>` |
-| **Standard** | the stress driver (app-launch / runner3D / input / FS fuzz) | `passes=N` (+ `noshutdown`) |
+| **Stress Test** | the fuzz driver (app-launch / runner3D / input / FS fuzz) | `passes=N` (+ `noshutdown`), or `nostress` when off |
 | **Network** | WiFi / USB-ethernet bring-up | none (auto), `net-force-wifi`, `net-eth-only`, or `nonet` |
 | **Diagnostics** | advanced experiments | `mtrr-wc`, `allow-force` |
 | _Include interactive_ | human-confirmed checks in Conformance | `interactive` |

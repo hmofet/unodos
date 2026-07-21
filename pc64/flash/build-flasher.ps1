@@ -97,6 +97,7 @@ if (-not (Test-Path $csc)) { throw "csc.exe (.NET Framework 4.x) not found" }
 $src      = Join-Path $PSScriptRoot "UnoDosFlash.cs"
 $disk     = Join-Path $PSScriptRoot "UnoDisk.cs"
 $settings = Join-Path $PSScriptRoot "UnoSettings.cs"
+$reconfig = Join-Path $PSScriptRoot "UnoReconfig.cs"
 $update   = Join-Path $PSScriptRoot "UnoUpdate.cs"
 $manifest = Join-Path $PSScriptRoot "app.manifest"
 $icon     = Join-Path $PSScriptRoot "unodos.ico"
@@ -126,7 +127,7 @@ $args = @(
     "/resource:$zipDebug,unodos_esp_debug"
 )
 if (Test-Path $icon) { $args += "/win32icon:$icon" }
-$args += @("/optimize+", "$src", "$disk", "$settings", "$update", "$verCs")
+$args += @("/optimize+", "$src", "$disk", "$settings", "$reconfig", "$update", "$verCs")
 
 Write-Host "Compiling $([IO.Path]::GetFileName($exe))..."
 & $csc $args

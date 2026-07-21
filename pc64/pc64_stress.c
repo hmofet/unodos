@@ -160,6 +160,16 @@ static void arm(void)
         got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
     if (got < 0) { uno_dbg_log("stress: no STRESS.CFG - driver disabled"); return; }
     cfg[got] = 0;
+    /* `nostress` fully disables the fuzz driver. This is the OFF switch the
+     * flasher's Stress Test suite writes when the operator unticks it: WITHOUT
+     * it the only "off" was `passes=0`, which the driver reads as ENDLESS (0 =
+     * unlimited) - so a "disabled" stick fuzzed forever. The one-shot net/spec
+     * tests still run; only the continuous stress driver is silenced. */
+    if (cfg_has((char *)cfg, "nostress")) {
+        g_armed = 0;
+        uno_dbg_log("stress: nostress in STRESS.CFG - fuzz driver disabled");
+        return;
+    }
     g_armed = 1;
     /* how long to run: `passes=N` (bounded), `once` = passes=1, neither =
      * forever.  A BOUNDED run matters on metal: while the driver is arming
