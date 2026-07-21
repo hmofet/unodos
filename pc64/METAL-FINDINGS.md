@@ -241,6 +241,26 @@ with the correct address, still can't talk to the controller (LPSS clock/reset
 sequencing again, or the controller BAR match). Metal-iterative; the trackpad
 isn't needed for the stress/net harness so this is not blocking.
 
+**F4 UPDATE (2026-07-21) — two root causes found + fixed (metal-pending):**
+The ACPI-directed retry only ever reached the controller through a **PCI BAR**,
+so on the Yoga (`ctrls=0`, no PCI I2C controllers — they're in ACPI mode) the
+probe loop had nothing to iterate even when ACPI found the device. And the
+Yoga's `acpi_hits=0` is because `uacpi_find_devices` **skips `_STA`-not-present
+devices**, and an LPSS touchpad the firmware left power-gated reads `_STA=0` in
+our read-only ACPI context. Both fixed:
+1. `uno_acpi_i2c_hid_enum` now also returns the **controller's own `_CRS` MMIO
+   base** (`ctrl_mmio`) and evaluates its `_PS0` to power it on; the i2c-hid
+   retry probes that base directly, so a PCI-hidden controller is reachable.
+2. When the `_STA`-filtered find returns nothing, the enum falls back to a raw
+   **`_STA`-blind namespace walk** (matching PNP0C50/ACPI0C50 by `_HID`/`_CID`),
+   recovering the power-gated device. The HID-descriptor-signature check still
+   gates binding, so a genuinely-absent node can't false-bind.
+The retry now logs each candidate controller's MMIO base + its `COMP_TYPE`
+readback, so the next Yoga boot says exactly where it stops: "no PNP0C50 in the
+namespace at all" (→ PS/2 pad, wrong subsystem) vs "controller found but
+`COMP_TYPE` wrong" (→ still power-gated / wrong base) vs "controller live, slave
+NAKs" (→ timing/address).
+
 ### F12 UPDATE (2026-07-21 batch #2) — the autopsy answered it: firmware NEVER STARTS
 The ALIVE-timeout autopsy ran on all four wifi machines (`batch2-2026-07-21/`,
 build `debug-local-20260721-1432`) and **decisively killed the "we missed the
@@ -257,14 +277,18 @@ the firmware CPU never runs the ucode — not RX polling. Register signatures:
 Two distinct fix-session leads, both **metal-iterative** (cannot be verified
 without the card, so NOT blind-patched here):
 - **AX201 (gen2 context-info):** `UCODE_LOAD_STATUS=0` means writing
-  `CSR_CTXT_INFO_BA` did not kick the ROM into loading the ucode. The
-  `struct context_info` layout matches Linux field-for-field, so suspect the
-  kick sequence: our `load_fw_gen2` writes `CSR_CTXT_INFO_BA` **and**
-  `UREG_CPU_INIT_RUN=1`; Linux's gen2 self-load kicks on the BA write alone
-  (`UREG_CPU_INIT_RUN` is a gen3/IML register) and first arms the fw-load path
-  via `iwl_enable_fw_load_int_ctx_info` + `iwl_finish_nic_init`. Check whether
-  a `CSR_GP_CNTRL`/finish-nic-init bit or the fw-load-int arm is the missing
-  precondition; the spurious `UREG_CPU_INIT_RUN` write is also suspect.
+  `CSR_CTXT_INFO_BA` did not kick the ROM into loading the ucode.
+  **FIX ATTEMPTED 2026-07-21 (metal-pending):** `load_fw_gen2` now matches
+  Linux `iwl_pcie_ctxt_info_init` exactly — it **arms the FW-load interrupt
+  mask** (`CSR_INT_MASK = ALIVE|FH_RX`, i.e. `iwl_enable_fw_load_int_ctx_info`,
+  which we skipped) *before* the BA kick, and **drops the spurious
+  `UREG_CPU_INIT_RUN=1`** write (a gen3/IML register — gen2 kicks on the BA
+  write alone). `finish_nic_init` was already satisfied (`GP_CNTRL` shows
+  INIT_DONE+clock-ready). The autopsy now also reads back `CSR_CTXT_INFO_BA`
+  (did the kick register?), `FH_INT` (did the ROM's DMA run?), and the placed
+  fw DRAM addr — so the **next Yoga boot is conclusive**: if it still says no
+  ALIVE, the readbacks separate "CSR write path dead" / "fw not placed" /
+  "ROM ran but posted ALIVE somewhere we don't poll."
 - **AX210 (gen3):** `RESET=0x11` — **the SW_RESET bit (0x1) is still set**, so
   the device is held in reset and PRPH reads return the `0xbad0f1f2` poison.
   Something after `sw_reset()` never clears it before the ctxt-info-v2/IML
