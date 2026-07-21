@@ -290,6 +290,7 @@ uacpi_status uacpi_kernel_pci_write32(uacpi_handle h, uacpi_size o, uacpi_u32 v)
 #include <uacpi/resources.h>
 #include <uacpi/namespace.h>
 #include <uacpi/types.h>
+#include <uacpi/sleep.h>
 
 struct i2chid_ctx { uno_acpi_i2chid *out; int max, n; };
 
@@ -386,4 +387,21 @@ int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max)
     uacpi_find_devices("PNP0C50", i2chid_dev_cb, &cx);
     if (cx.n < max) uacpi_find_devices("ACPI0C50", i2chid_dev_cb, &cx);
     return cx.n;
+}
+
+/* ACPI S5 (soft-off) - the reliable poweroff on hardware where the firmware's
+ * EFI_RESET_SHUTDOWN is a no-op (the Surface stalls on "Shutting down"
+ * forever with it). Writes SLP_TYPa|SLP_EN to PM1_CNT via uACPI; this is a
+ * hardware register write that powers the machine off regardless of ACPI
+ * enable mode, so it works from our NO_ACPI_MODE attached context. Returns
+ * only on failure (if it succeeds, the machine is off). */
+int uno_acpi_poweroff(void)
+{
+    if (g_status <= 0) return -1;                 /* interpreter not up */
+    if (uacpi_prepare_for_sleep_state(UACPI_SLEEP_STATE_S5) != UACPI_STATUS_OK)
+        return -1;
+    /* interrupts off: enter_sleep_state expects to run uninterrupted */
+    __asm__ volatile ("cli");
+    uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
+    return -1;                                     /* still here = it failed */
 }
