@@ -321,8 +321,9 @@ static void splash_draw(int done)
     { const char *s = g_splash_msg ? g_splash_msg : "loading";
       fb_text(cx - fb_text_w(s) / 2, by + bh + 9, s, FB_RGB(120,138,185), -1); }
 }
-static void splash_step(int done)
+static void splash_step(int done, const char *msg)
 {
+    g_splash_msg = msg;             /* white "what's loading" text under the bar */
     splash_draw(done);
     uno_pc64_present();
     gBS->Stall(done >= SPLASH_STEPS ? 700000 : 400000);
@@ -826,10 +827,10 @@ void uno_pc64_init(void)
     choose_present_path();          /* direct stores vs Blt: measure, take the
                                        winner (the fb is uncached on every
                                        machine tested, so this is the frame) */
-    splash_step(1);                 /* GOP + geometry: the splash appears */
+    splash_step(1, "graphics (GOP + geometry)");    /* the splash appears */
 
     connect_all();
-    splash_step(2);                 /* drivers connected */
+    splash_step(2, "connecting drivers");
 
     gNAbs = collect(&absGuid, (void **)gAbs, MAXPTR);
     gNPtr = collect(&ptrGuid, (void **)gPtr, MAXPTR);
@@ -843,7 +844,7 @@ void uno_pc64_init(void)
                                           (void **)&gKeyEx)))
             gKeyEx = 0;
     }
-    splash_step(3);                 /* input located */
+    splash_step(3, "input (pointer + keyboard)");
     splash_stage(3, "trackpad (I2C-HID)");
     uno_dbg_check("init:i2c-hid");
     uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
@@ -882,10 +883,18 @@ void uno_pc64_init(void)
     uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
     splash_stage(3, 0);
     dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
-    splash_step(4);                 /* ready - the bar fills, core takes over */
+    splash_step(4, "starting up");  /* ready - the bar fills, core takes over */
+    /* Past this point there is no bar left to fill, but the WHITE loading text
+     * keeps naming each stage. These stages touch real silicon (speaker, timer,
+     * storage writes, the detach handoff) and on some firmware (the MacBook
+     * hangs here with the bar full and NO telemetry - Apple firmware, our FAT
+     * never reaches the USB stick, and debugcon is SMM-trapped on the laptops)
+     * the SCREEN is the only channel that can say where it wedged. */
+    splash_stage(4, "startup chime");
     uno_pc64_chime();               /* startup chime: loading complete */
 
     /* TSC time base: calibrate against Stall while it still exists (M3) */
+    splash_stage(4, "calibrating timer");
     {
         unsigned long long t0 = uno_native_rdtsc();
         gBS->Stall(50000);
@@ -894,6 +903,7 @@ void uno_pc64_init(void)
 
     dbg_puts("unodos-pc64: init done\n");
 
+    splash_stage(4, "saving boot log");
     uno_dbg_check("init:detach");
 #ifdef UNO_DEBUG
     /* Capture telemetry BEFORE the detach attempt.
@@ -912,9 +922,11 @@ void uno_pc64_init(void)
     uno_dbg_write_bootlog();
 #endif
 #ifndef UNO_NO_DETACH
+    splash_stage(4, "detaching from firmware");
     try_detach();                   /* M3: leave the firmware behind if the
                                        native stack covers this machine */
 #endif
+    splash_stage(4, "starting desktop");
 
 #ifdef UNO_DEBUG
     /* debug build: the environment block wants the FINAL machine state
@@ -1487,9 +1499,16 @@ void uno_pc64_shutdown(void)
 {
     uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
     /* ResetSystem is a RUNTIME service - legal after ExitBootServices while
-       we stay in physical addressing.  If the firmware won't power off, halt
-       quietly (the screen keeps the last frame - safe to switch off). */
+       we stay in physical addressing. */
     rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
+    /* Some firmware ignores EFI_RESET_SHUTDOWN and just returns (the Surface
+       Laptop Go stalls on "Shutting down" forever this way). Fall back to a
+       real ACPI S5 register write, which powers the machine off directly. */
+#ifdef UNO_ACPI
+    uno_acpi_poweroff();
+#endif
+    /* neither worked: halt quietly (the screen keeps the last frame, so it's
+       safe to switch off by hand) */
     for (;;) __asm__ volatile ("hlt");
 }
 void uno_pc64_restart(void)

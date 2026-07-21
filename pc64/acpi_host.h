@@ -31,4 +31,8 @@ int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max);
 /* Tail of the interpreter's log ring (always a valid C string). */
 const char *uno_acpi_log_tail(void);
 
+/* ACPI S5 soft-off. Returns only on FAILURE (success powers the machine off).
+ * The reliable poweroff where EFI_RESET_SHUTDOWN is a no-op (the Surface). */
+int uno_acpi_poweroff(void);
+
 #endif

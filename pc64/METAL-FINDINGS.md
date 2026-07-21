@@ -186,6 +186,32 @@ where QEMU can reach; metal-pending items are flagged.
   **S-LIBC-06**: a TRUNCATING `snprintf` HANGS pc64 (watchdog HG) — open,
   not root-caused; the suite avoids executing it.
 
+### F14 — Surface stalls forever on "Shutting down" (EFI_RESET_SHUTDOWN ignored)  ·  OS  ·  S2  ·  FIXED
+The Surface Laptop Go completes its bounded run and reaches `stress: shutting
+down now`, but the firmware's `ResetSystem(EFI_RESET_SHUTDOWN)` is a no-op on
+it (it returns instead of powering off), so `uno_pc64_shutdown` fell through
+to the `hlt` loop and the machine sat on the shutdown screen indefinitely.
+- **FIXED**: after the firmware ResetSystem returns, fall back to a real ACPI
+  S5 register write (`uno_acpi_poweroff` → uACPI `prepare/enter_sleep_state(S5)`
+  → SLP_TYPa|SLP_EN to PM1_CNT). That's a hardware-level poweroff independent
+  of ACPI-enable mode, so it works from the attached NO_ACPI_MODE context.
+  QEMU still powers off via ResetSystem (never reaches the fallback), so no
+  regression. Only reached on firmware that ignores EFI_RESET_SHUTDOWN.
+
+### F15 — splash progress text on all four loading bars (+ post-bar-4 stages)  ·  UX / DIAG  ·  DONE
+Operator request after the MacBook hung at the FULL loading bar with no
+telemetry (F9): the white "what's loading" line under the bar existed only for
+the cyan (stage-3) sub-steps. Now every bar names its stage — graphics (GOP) /
+connecting drivers / input / starting up — in ALL builds, and the post-bar-4
+core-init stages (startup chime, calibrating timer, saving boot log,
+detaching, starting desktop) keep updating that line too. On machines where
+the screen is the ONLY channel (Apple firmware: our FAT never reaches the USB
+stick so no telemetry, and debugcon is SMM-trapped on the laptops), the last
+line shown now pinpoints where a boot wedges. Cheap: after the first full
+splash paint, the dirty-span tracking makes each message update repaint only
+the text row. The MacBook hang itself (F9) is still open — but the next boot
+will show its last stage on screen instead of a bare full bar.
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)
