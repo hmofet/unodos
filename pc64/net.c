@@ -46,7 +46,10 @@ static u8 g_tx[FRM];
  * DHCP replies aren't parsed. Reset each net_init. */
 static u32 g_tx_frames, g_rx_frames, g_rx_arp, g_rx_ip;
 static int nic_tx(int flen)
-{ if (!g_nic || flen <= 0) return -1; g_tx_frames++; return g_nic->send(g_nic->ctx, g_tx, flen); }
+{ int r; if (!g_nic || flen <= 0) return -1;
+  r = g_nic->send(g_nic->ctx, g_tx, flen);
+  if (r >= 0) g_tx_frames++;            /* count sends that left the driver, not attempts */
+  return r; }
 u32 net_tx_frames(void) { return g_tx_frames; }
 u32 net_rx_frames(void) { return g_rx_frames; }
 u32 net_rx_arp(void)    { return g_rx_arp; }

@@ -250,7 +250,7 @@ class FlashForm : Form
             else if (areas.Count > 0) tests.Add("conformance(" + areas.Count + "/5)");
             else if (settings.IncludeInteractive) tests.Add("conformance(interactive)");
         }
-        if (settings.IncludeInteractive) tests.Add("interactive");
+        if (settings.RunConformance && settings.IncludeInteractive) tests.Add("interactive");
         if (settings.RunStandard)
             tests.Add((settings.StressPasses > 0 ? settings.StressPasses + "x" : "endless") + " stress");
         if (settings.RunNetwork) {
@@ -757,7 +757,10 @@ class DevForm : Form
         bool net = on && networkChk.Checked;
         wifiChk.Enabled = ethChk.Enabled = net;
         bool diag = on && diagChk.Checked;
-        mtrrChk.Enabled = forceChk.Enabled = diag;
+        mtrrChk.Enabled = diag;
+        // the crash self-test fires on stress pass 1, so it needs the Stress Test
+        // suite armed - without it STRESS.CFG gets `nostress` and it never runs.
+        forceChk.Enabled = diag && standardChk.Checked;
         kitBox.Enabled = kitBrowse.Enabled = on && kitChk.Checked;
         zipBox.Enabled = zipBrowse.Enabled = destBox.Enabled = on && zipChk.Checked;
     }

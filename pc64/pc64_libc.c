@@ -335,7 +335,11 @@ static int u64_str(unsigned long long v, int base, int upper, char *out)
 int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
 {
     size_t o = 0;
-    #define PUT(ch) do { if (o + 1 < cap) buf[o] = (char)(ch); o++; } while (0)
+    /* Evaluate `ch` EXACTLY ONCE, before the space check - callers pass a
+     * side-effecting argument (PUT(*s++)), and gating the whole statement on
+     * "o+1<cap" used to skip the s++ once the buffer filled, so a TRUNCATED
+     * "%s" spun `while(*s)` forever on the same byte (the S-LIBC-06 hang). */
+    #define PUT(ch) do { char c_ = (char)(ch); if (o + 1 < cap) buf[o] = c_; o++; } while (0)
     for (; *fmt; fmt++) {
         if (*fmt != '%') { PUT(*fmt); continue; }
         fmt++;

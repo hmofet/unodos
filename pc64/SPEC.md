@@ -1553,12 +1553,14 @@ by SPECTEST on real hardware (`pc64_spectest.c`, STRESS.CFG `spec`):
 - **S-INST-07** FIXED — boot-entry device-path length checked before memcpy.
 
 New divergences FOUND this session (SPECTEST caught them on metal/QEMU):
-- **S-LIBC-06** — `pc64_libc.c vsnprintf` (~335): a TRUNCATING `%s`
-  (`snprintf(b,8,"%s","abcdefghijk")`) HANGS the machine (watchdog HG at
-  `spec:libc:5`), reproduced on QEMU. The non-truncating path is fine. Not
-  yet root-caused (the loop reads correct by inspection - suspect a UBSan/
-  stack-protector interaction on the truncating write). SPECTEST does NOT
-  execute the truncating case (a conformance test must not wedge its host).
+- **S-LIBC-06** FIXED (2026-07-21) — `pc64_libc.c vsnprintf`: a TRUNCATING `%s`
+  hung the machine. Root cause was NOT UBSan: the `PUT(ch)` macro gated the
+  whole `buf[o]=ch; o++` on `o+1<cap`, and `%s` called it `PUT(*s++)`, so once
+  the buffer filled the `s++` side effect stopped firing and `while(*s)` spun
+  forever on the same byte (the `%f` "<flt>" path had the same latent bug). Fix:
+  `PUT` now evaluates its argument exactly once, before the space check. SPECTEST
+  S-LIBC-06 now EXECUTES the truncating case (reaching the assert proves no hang);
+  verified on host and in QEMU.
 - **S-JS-05/07** — `js.c`: `document.write(number)` outputs correctly but a
   string literal / `"a"+"b"` does not reach `out` (numeric coercion or the
   string-literal truncation noted below). Only the safety contract (clean
