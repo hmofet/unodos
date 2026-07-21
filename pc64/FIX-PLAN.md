@@ -37,6 +37,13 @@ renderer** — that is the intuitive move and the measurements say it is wasted.
 
 ## P0 — Write fewer bytes to VRAM (safe, large, do first)
 
+> **STATUS: P0.1-P0.3 IMPLEMENTED on `pc64-debug-stress` as a measurable
+> experiment. P0.4 dropped — see below. QEMU-verified for correctness (desktop
+> and fullscreen 3D both render clean, no stale spans); the perf win cannot be
+> measured in QEMU because its framebuffer is not uncached. Awaiting a metal
+> run. Baseline to beat (X13 Yoga): `render_avg 2924 us / present_avg 238576 us
+> / fps 5`.**
+
 No MTRR games, no firmware assumptions, contained changes in `uno_pc64_present`.
 
 ### P0.1 Dirty **spans**, not dirty rows  ·  est. 5-20x on interactive frames
@@ -88,11 +95,12 @@ verifiable per machine.
 Do **not** expect non-temporal stores to help: on a UC region the NT hint is
 ignored, they do not write-combine.
 
-### P0.4 Don't repaint the whole screen for fullscreen apps
-`if (UI.full) g_dirty = 1;` forces a full-scene repaint every frame for any
-fullscreen app. Combined with P0.1 the shadow comparison will already reject
-unchanged regions, so this line mostly defeats the dirty tracking. Let
-fullscreen apps mark their own damage instead.
+### P0.4 ~~Don't repaint the whole screen for fullscreen apps~~ — DROPPED
+On a closer read this was wrong. `if (UI.full) g_dirty = 1;` forces a re-RENDER,
+but the shadow comparison downstream still rejects every unchanged row, so it
+costs the 3 ms half of the frame and **not** the 250 ms half. Removing it would
+have risked breaking animation in fullscreen apps that rely on it, for no VRAM
+saving. Left alone.
 
 **Expected combined P0 effect:** interactive/desktop frames become 5-20x
 cheaper; Runner3D ~16x. That is the difference between 3 fps and playable,
