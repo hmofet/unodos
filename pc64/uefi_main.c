@@ -308,9 +308,12 @@ static void splash_draw(int done)
      * surface, and fb_text -> text_pen does `x << 6` (UB on negatives, F7). */
     { const char *s = "DEBUG / STRESS BUILD   " UNO_BUILD_ID;
       int x = cx - fb_text_w(s) / 2; if (x < 0) x = 0;
-      /* BELOW the loading bar (track by=H/2+46, h=14+borders): at +40 the bar
-       * painted through the middle of this line in every operator photo (F10) */
-      fb_text(x, H / 2 + 68, s, FB_RGB(255, 210, 90), -1); }
+      /* BELOW the stage text. Layout stack: bar track by=H/2+46 h=14+borders
+       * (to ~+62), the white "what's loading" stage line at by+bh+9 = +69
+       * (to ~+85). The first F10 fix parked this at +68 - dead on top of the
+       * stage line, so the two overprinted on every splash (Yoga report,
+       * 2026-07-21). Keep a clear band under the stage text. */
+      fb_text(x, H / 2 + 92, s, FB_RGB(255, 210, 90), -1); }
 #endif
     /* loading bar: recessed track + filled coloured segments */
     fb_fill_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(30, 38, 70));

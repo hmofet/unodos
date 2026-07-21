@@ -23,6 +23,7 @@
  * folder copy. STRESS.CFG key `nonet` skips the whole test.
  * ======================================================================== */
 #include "uno_debug.h"
+#include "fb.h"
 #include "net.h"
 #include "ax88179.h"
 #include "rtl8152.h"
@@ -40,6 +41,39 @@
 int  vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 int  snprintf(char *buf, size_t cap, const char *fmt, ...);
 void uno_pc64_delay_ms(int ms);
+void uno_pc64_present(void);            /* fb -> panel (uefi_main)            */
+void pc64_dbg_mark_dirty(void);         /* full shell repaint next frame      */
+
+/* ---- boot-test progress banner (see uno_debug.h) --------------------------
+ * Painted synchronously from inside the blocking test phase, because the
+ * shell loop that would normally repaint is the thing being blocked. A
+ * full-width strip so a shorter message always erases a longer one; presented
+ * immediately (the dirty-span present makes a one-strip paint cheap). */
+static int g_prog_shown;
+
+void uno_dbg_progress(const char *fmt, ...)
+{
+    char msg[128];
+    va_list ap;
+    int n, sh = 20;
+    if (uno_fb_w <= 0) return;             /* fb not up yet */
+    n = snprintf(msg, sizeof msg, " BOOT TESTS   ");
+    va_start(ap, fmt);
+    vsnprintf(msg + n, sizeof msg - (size_t)n, fmt, ap);
+    va_end(ap);
+    fb_fill_rect(0, 0, uno_fb_w, sh, FB_RGB(52, 40, 10));
+    fb_hline(0, sh - 1, uno_fb_w, FB_RGB(120, 92, 26));
+    fb_text(6, 3, msg, FB_RGB(255, 214, 96), -1);
+    g_prog_shown = 1;
+    uno_pc64_present();
+}
+
+void uno_dbg_progress_done(void)
+{
+    if (!g_prog_shown) return;
+    g_prog_shown = 0;
+    pc64_dbg_mark_dirty();                 /* shell repaints over the strip */
+}
 
 /* ---- the NETLOG buffer ---------------------------------------------------- */
 #define NETBUF 16384
@@ -64,6 +98,7 @@ void uno_dbg_net_trace(const char *fmt, ...)
     va_end(ap);
     uno_dbg_log("%s", line);            /* mirror into the kernel log ring */
     uno_dbg_heartbeat();                /* a slow join must not trip the wd  */
+    uno_dbg_progress("%s", line);       /* live on-screen ticker (blocking phase) */
     n = snprintf(g_buf + g_len, (size_t)(NETBUF - g_len - 1), "[%6lu.%03lu] %s\n",
                  (unsigned long)(ms / 1000), (unsigned long)(ms % 1000), line);
     if (n > 0 && g_len + n < NETBUF - 1) g_len += n;
@@ -308,10 +343,12 @@ void pc64_nettest_tick(void)
     if (pc64_stress_cfg_flag("spec") > 0)
         pc64_spectest_run();
     flag = pc64_stress_cfg_flag("nonet");
-    if (flag < 0) return;                /* no STRESS.CFG = not a test stick  */
-    if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)"); return; }
+    if (flag < 0) { uno_dbg_progress_done(); return; }   /* not a test stick */
+    if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)");
+                    uno_dbg_progress_done(); return; }
     g_active = 1;
     run_test();
     flush();
     g_active = 0;
+    uno_dbg_progress_done();             /* hand the banner strip back */
 }

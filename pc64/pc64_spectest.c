@@ -74,6 +74,8 @@ static void emit(const char *id, int ok, const char *fmt, ...)
     if (n > 0 && g_len + n < SPECBUF - 1) g_len += n;
     uno_dbg_heartbeat();                 /* a long suite must not trip the wd */
     uno_dbg_log("spec: %s %s", id, ok ? "PASS" : "FAIL");   /* also in the log */
+    uno_dbg_progress("conformance: %s %s   (%d done)", id,
+                     ok ? "PASS" : "FAIL", g_pass + g_fail + g_skip);
     /* Flush to disk every few lines, not every line: the whole growing buffer
      * is rewritten each flush, so per-line was O(n^2) writes - and on QEMU's
      * vvfat the resulting multi-cluster rewrites corrupt the image on
@@ -92,6 +94,8 @@ static void emit_skip(const char *id, const char *why)
     n = snprintf(g_buf + g_len, (size_t)(SPECBUF - g_len - 1), "%s SKIP  %s\n", id, why);
     if (n > 0 && g_len + n < SPECBUF - 1) g_len += n;
     uno_dbg_heartbeat();
+    uno_dbg_progress("conformance: %s SKIP   (%d done)", id,
+                     g_pass + g_fail + g_skip);
     uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len);
 }
 #define SKIP(id, why)     emit_skip(id, why)
@@ -138,6 +142,7 @@ static void section(const char *title)
                      "\n-- %s --\n", title);
     if (n > 0 && g_len + n < SPECBUF - 1) g_len += n;
     uno_dbg_log("spec: [%s]", title);
+    uno_dbg_progress("conformance: %s", title);
 }
 
 /* ===================================================================== FAT */
@@ -1059,4 +1064,6 @@ void pc64_spectest_run(void)
       if (n > 0 && g_len + n < SPECBUF - 1) { memcpy(g_buf + g_len, tail, (size_t)n); g_len += n; } }
     uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len);
     uno_dbg_log("spectest: done - %d pass, %d fail, %d skip", g_pass, g_fail, g_skip);
+    uno_dbg_progress("conformance done: %d PASS, %d FAIL, %d SKIP",
+                     g_pass, g_fail, g_skip);
 }

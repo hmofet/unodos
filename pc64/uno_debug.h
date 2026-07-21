@@ -119,6 +119,17 @@ int  uno_pc64_dbg_key_wait(int timeout_ms, int *scan, int *uni);
  * to collect. Safe to call outside the net test (before the shell: buffered). */
 void uno_dbg_net_trace(const char *fmt, ...);
 
+/* ---- boot test phase on-screen progress (pc64_nettest.c) ------------------
+ * The whole boot test phase (mtrr experiment -> SPECTEST -> net test) runs
+ * synchronously inside one shell tick: the desktop is up but input and
+ * repaint are BLOCKED for a minute or more, which reads as a hang (a Yoga
+ * operator pulled the disk mid-run). These paint a live one-line banner from
+ * inside the blocking code so the screen always names what is running.
+ * progress() draws + presents immediately; progress_done() hands the strip
+ * back to the shell for repaint. No-ops before the fb exists. */
+void uno_dbg_progress(const char *fmt, ...);
+void uno_dbg_progress_done(void);
+
 /* ---- synthetic input (uefi_main.c, UNO_DEBUG only) ----------------------- */
 void uno_pc64_inject_key(int scan, int uni, int ctrl);
 void uno_pc64_inject_pointer(int x, int y, int btn);
@@ -144,6 +155,8 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define pc64_stress_tick()           ((void)0)
 #define pc64_nettest_tick()          ((void)0)
 #define uno_dbg_net_trace(...)       ((void)0)
+#define uno_dbg_progress(...)        ((void)0)
+#define uno_dbg_progress_done()      ((void)0)
 #define uno_dbg_win_frame_reset()    ((void)0)
 #define uno_dbg_cyc_to_us(c)         0ul
 #endif
