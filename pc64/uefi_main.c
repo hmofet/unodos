@@ -105,7 +105,44 @@ static UINT32 gRow[GROW_W];         /* one scaled output row */
 static fb_px  gCurRow[FB_MAX_W];    /* cursor-composited fb row */
 static int    gColMap[GROW_W];      /* output col -> source col */
 static short  gRowMap[GROW_H];      /* output row -> source row */
+static int    gLowres;              /* fullscreen 3D is running at 1/4 x 1/4  */
+
+/* Is this machine's framebuffer uncached-class?
+ *
+ * Measured once, by timing a short write burst to VRAM against the same burst
+ * to RAM. Every machine tested (Surface, X1 Carbon, X13 Yoga, Latitude) has the
+ * fb under a UC MTRR, where VRAM runs ~100000x slower than RAM - so the answer
+ * decides whether writing more pixels is nearly free or is the entire frame.
+ * The burst lands in row 0, which apply_desktop clears immediately afterwards,
+ * so it leaves nothing on screen (unlike the boot-env bench - see F10). */
+static int uno_pc64_fb_is_slow(void)
+{
+    static int slow = -1;
+    static volatile UINT32 scratch[4096];
+    if (slow >= 0) return slow;
+    slow = 0;
+    if (!gUseBlt && gVram && gStride >= 4096) {
+        unsigned long long t0, tv, tr;
+        int i;
+        t0 = uno_native_rdtsc();
+        for (i = 0; i < 4096; i++) gVram[i] = 0;
+        tv = uno_native_rdtsc() - t0;
+        t0 = uno_native_rdtsc();
+        for (i = 0; i < 4096; i++) scratch[i] = 0;
+        tr = uno_native_rdtsc() - t0;
+        if (tr == 0) tr = 1;
+        slow = (tv / tr) > 20;          /* >20x slower than RAM = uncached */
+    }
+    return slow;
+}
 static unsigned char gDirtyRow[FB_MAX_H];   /* per-source-row dirty flags */
+/* Per-row CHANGED-COLUMN EXTENT.  Metal measurement (X13 Yoga): rendering a
+ * frame costs ~3 ms, pushing it to VRAM costs ~250 ms - the framebuffer is
+ * uncached on every machine tested, so the only thing that matters is how many
+ * bytes we write.  Repainting a whole 1920 px row because a caret blinked was
+ * the single biggest avoidable cost, so track the span that actually changed.
+ * The compare pass already reads every pixel, so this is close to free. */
+static short gDirtyX0[FB_MAX_H], gDirtyX1[FB_MAX_H];
 
 /* dirty-row shadow: present writes VRAM only for rows that changed since the
    last frame. Full-screen VRAM rewrites are what made the first metal build's
@@ -350,6 +387,16 @@ static void apply_desktop(int fbw, int fbh)
          * (gOffX/gOffY + the surface clear below already handle it) for
          * pixel-exact text at every panel resolution. */
         if (sc >= (1ULL << 16)) sc &= ~0xFFFFULL;
+        /* LOW-RES ON AN UNCACHED FRAMEBUFFER: cap the upscale.
+         *
+         * uno_pc64_lowres() exists so 3D renders ~1/16 the pixels - but present
+         * then scaled that back up and wrote the FULL panel to VRAM, so it cut
+         * the 3 ms half of the frame and left the 250 ms half untouched. On a
+         * machine whose framebuffer is uncached, VRAM bytes ARE the frame time,
+         * so scaling up costs exactly what low-res was trying to save.
+         * Present 1:1 (centred, letterboxed) instead: 16x fewer bytes. Machines
+         * with a fast framebuffer keep filling the screen as before. */
+        if (gLowres && uno_pc64_fb_is_slow()) sc = 1ULL << 16;
         gOutW = (int)(((unsigned long long)fbw * sc) >> 16);
         gOutH = (int)(((unsigned long long)fbh * sc) >> 16);
         if (gOutW > (int)gModeW) gOutW = gModeW;
@@ -458,7 +505,7 @@ void uno_pc64_res_set(int idx)
 
 /* Runner3D (and any full-screen 3D) renders far fewer pixels at a low fb
    resolution; the fractional fill-scaler then upscales it to the panel. */
-static int gSavedW, gSavedH, gLowres;
+static int gSavedW, gSavedH;
 void uno_pc64_lowres(int on)
 {
     if (on && !gLowres) {
@@ -1110,21 +1157,29 @@ static const fb_px *cursor_row(int y, const fb_px *src)
 void uno_pc64_present(void)
 {
     int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0, built_sy = -1;
+    int built_ox0 = 0, built_ox1 = -1;
     {
         static int first = 1;
         if (first) { stage_mark2(0, 0x000080FF); first = 0; }  /* gray -> blue */
     }
 
-    /* pass 1: composite the cursor into each source row and flag the rows
-       that changed since last frame (stored composited in gShadow) */
+    /* pass 1: composite the cursor into each source row, and record BOTH that
+       the row changed and the column extent that changed.  Scanning inward
+       from each end finds the extent without walking the whole row twice. */
     for (sy = 0; sy < fbh; sy++) {
         const fb_px *src = cursor_row(sy, fb + sy * fbw);
         fb_px *sh = gShadow + sy * fbw;
-        int dirty = !gShadowValid;
-        if (!dirty)
-            for (x = 0; x < fbw; x++) if (src[x] != sh[x]) { dirty = 1; break; }
-        gDirtyRow[sy] = (unsigned char)dirty;
-        if (dirty) { any_dirty = 1; for (x = 0; x < fbw; x++) sh[x] = src[x]; }
+        int x0 = 0, x1 = fbw - 1;
+        if (gShadowValid) {
+            while (x0 <= x1 && src[x0] == sh[x0]) x0++;
+            if (x0 > x1) { gDirtyRow[sy] = 0; continue; }   /* row unchanged */
+            while (x1 > x0 && src[x1] == sh[x1]) x1--;
+        }
+        gDirtyRow[sy] = 1;
+        gDirtyX0[sy] = (short)x0;
+        gDirtyX1[sy] = (short)x1;
+        any_dirty = 1;
+        for (x = x0; x <= x1; x++) sh[x] = src[x];
     }
 
     /* nothing changed since the last present: skip the VRAM write pass entirely
@@ -1136,30 +1191,64 @@ void uno_pc64_present(void)
     for (oy = 0; oy < gOutH; oy++) {
         const fb_px *sh;
         UINT32 dy;
+        int ox0, ox1, n;
         sy = gRowMap[oy];
         if (!gDirtyRow[sy]) continue;
+        /* Map the changed SOURCE span to output columns. gColMap is monotonic
+         * (ox -> ox*fbw/gOutW), so invert it and widen by a guard pixel each
+         * way to absorb the rounding rather than reasoning about it. */
+        ox0 = (int)(((long long)gDirtyX0[sy] * gOutW) / fbw) - 1;
+        ox1 = (int)(((long long)(gDirtyX1[sy] + 1) * gOutW) / fbw) + 1;
+        if (ox0 < 0) ox0 = 0;
+        if (ox1 > gOutW - 1) ox1 = gOutW - 1;
+        if (ox1 < ox0) continue;
+        n = ox1 - ox0 + 1;
         /* At an integer/fractional upscale several output rows map to the same
          * source row; the scaled gRow they need is identical, so build it only
          * when the source row actually changes (~Nx fewer gather+swizzle passes). */
         if (sy != built_sy) {
             sh = gShadow + sy * fbw;
             if (gSwapRB) {
-                for (x = 0; x < gOutW; x++) {
+                for (x = ox0; x <= ox1; x++) {
                     fb_px p = sh[gColMap[x]];   /* 0xAABBGGRR -> 0x00RRGGBB */
                     gRow[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
                 }
             } else {
-                for (x = 0; x < gOutW; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
+                for (x = ox0; x <= ox1; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
             }
             built_sy = sy;
+            built_ox0 = ox0; built_ox1 = ox1;
+        } else if (ox0 < built_ox0 || ox1 > built_ox1) {
+            /* same source row, wider span than we built last time - rebuild */
+            sh = gShadow + sy * fbw;
+            if (gSwapRB) {
+                for (x = ox0; x <= ox1; x++) {
+                    fb_px p = sh[gColMap[x]];
+                    gRow[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
+                }
+            } else {
+                for (x = ox0; x <= ox1; x++) gRow[x] = sh[gColMap[x]] & 0x00FFFFFF;
+            }
+            built_ox0 = ox0; built_ox1 = ox1;
         }
         dy = gOffY + (UINT32)oy;
         if (gUseBlt) {
-            gGop->Blt(gGop, gRow, EfiBltBufferToVideo, 0, 0,
-                      gOffX, dy, (UINTN)gOutW, 1, 0);
+            gGop->Blt(gGop, gRow + ox0, EfiBltBufferToVideo, 0, 0,
+                      gOffX + (UINT32)ox0, dy, (UINTN)n, 1, 0);
         } else {
-            volatile UINT32 *dst = gVram + dy * gStride + gOffX;
-            for (x = 0; x < gOutW; x++) dst[x] = gRow[x];
+            /* WIDER STORES: on an uncached framebuffer each store is its own
+             * bus transaction, so transaction COUNT dominates. Two pixels per
+             * 64-bit store roughly halves them. The source values are read
+             * individually, so gRow's alignment is irrelevant - only the
+             * destination has to be 8-byte aligned. */
+            volatile UINT32 *dst = gVram + dy * gStride + gOffX + (UINT32)ox0;
+            const UINT32 *src = gRow + ox0;
+            int i = 0;
+            if (((uintptr_t)dst & 7) && i < n) { dst[0] = src[0]; i = 1; }
+            for (; i + 1 < n; i += 2)
+                *(volatile UINT64 *)(dst + i) =
+                    ((UINT64)src[i + 1] << 32) | (UINT64)src[i];
+            for (; i < n; i++) dst[i] = src[i];
         }
     }
     gShadowValid = 1;
