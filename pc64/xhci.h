@@ -16,6 +16,7 @@
 /* Bring up the controller: find it on PCI, reset, set up the rings, run, and
  * reset the root-hub ports. Returns 1 if a controller was initialised. */
 int  uno_xhci_init(void);
+int  uno_xhci_supported(void);   /* 1 = compiled with UNO_XHCI (no hw touch) */
 
 /* A discovered USB device (root-hub port), after enumeration. */
 typedef struct {

@@ -1949,6 +1949,7 @@ int main(void)
     { char hb[96]; int n = uno_dbg_hud(hb, sizeof hb);
       uno_dbg_log("shell: main loop entered, fb=%dx%d, hud_len=%d (%s)",
                   FB_W, FB_H, n, n > 0 ? hb : "HUD DISABLED"); }
+    unoui_profile_win = uno_dbg_win_profile;   /* F11: per-window draw timing */
 #endif
     for (;;) {
         int la, cursor_only = 0;
@@ -2038,7 +2039,9 @@ int main(void)
             /* timed render/present + the perf HUD, drawn into the frame the
              * same way any widget is so the present path carries it */
             if (g_dirty) {
-                unsigned long long t0 = uno_native_rdtsc(), t1;
+                unsigned long long t0, t1;
+                uno_dbg_win_frame_reset();
+                t0 = uno_native_rdtsc();
                 unoui_render_ui(&UI);
                 t1 = uno_native_rdtsc();
                 uno_dbg_frame_render_cyc(t1 - t0);

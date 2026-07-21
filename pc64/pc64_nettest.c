@@ -260,6 +260,20 @@ void pc64_nettest_tick(void)
     if (done) return;
     if (++frames < 30) return;           /* let the desktop paint first (~0.5 s) */
     done = 1;                            /* one shot, whatever happens below */
+    /* P3 opt-in: flip the framebuffer to write-combining if the operator asked
+     * (mtrr-wc). Runs before the net test so the whole session benefits; it is
+     * self-reverting when it can't prove a win, and refuses on any geometry it
+     * can't tile safely. */
+    if (pc64_stress_cfg_flag("mtrr-wc") > 0) {
+        g_active = 1;
+        uno_dbg_net_trace("== P3 MTRR write-combining experiment (operator-opted) ==");
+        uno_pc64_mtrr_wc_experiment();
+        flush();
+        g_active = 0;
+    }
+    /* SPECTEST conformance suite (spec key), before the net test + stress */
+    if (pc64_stress_cfg_flag("spec") > 0)
+        pc64_spectest_run();
     flag = pc64_stress_cfg_flag("nonet");
     if (flag < 0) return;                /* no STRESS.CFG = not a test stick  */
     if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)"); return; }

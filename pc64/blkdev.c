@@ -162,4 +162,7 @@ void uno_blk_detach(void)
     uno_ahci_init();
     uno_nvme_init();
     uno_sdhci_init();
+    /* P4: USB mass storage over the (now ours) xHCI - the boot stick, when
+     * we booted from USB. No-op when the xHCI stack is compiled out. */
+    { int uno_usbmsc_init(void); uno_usbmsc_init(); }
 }

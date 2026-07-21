@@ -94,7 +94,7 @@ if [ "$1" != "legacy" ]; then
     # $DBGSAN (UBSan trap + stack canary) rides on this FIRST-PARTY set only -
     # third-party bearssl/uacpi/upy below build without it (they do defined
     # unsigned wraparound the sanitizer must not trap).
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbio usbhid ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
         "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
@@ -107,6 +107,8 @@ if [ "$1" != "legacy" ]; then
         OBJS="$OBJS build/pc64_stress.o"
         "$CC" $UCF $DBGSAN -c -o "build/pc64_nettest.o" "pc64_nettest.c"
         OBJS="$OBJS build/pc64_nettest.o"
+        "$CC" $UCF $DBGSAN -c -o "build/pc64_spectest.o" "pc64_spectest.c"
+        OBJS="$OBJS build/pc64_spectest.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
@@ -456,7 +458,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls hid_kbd i2c_hid xhci usbhid uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls hid_kbd i2c_hid xhci usbmsc usbhid pc64_mtrr uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done

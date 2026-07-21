@@ -23,6 +23,8 @@
 #include "pc64_font.h"
 #include "pc64_fs.h"
 #include "pc64_icons.h"     /* pc64_shell_theme */
+#include "pc64_native.h"    /* uno_native_rdtsc (slow-draw autopsy)  */
+#include "uno_debug.h"      /* uno_dbg_log / uno_dbg_cyc_to_us       */
 #include <string.h>
 
 /* shell services (pc64_uui.c) */
@@ -146,14 +148,21 @@ static void lay_push(int s, int e, int *y, int h, int base, unsigned char al)
 
 static void wr_layout(int docw)
 {
-    int i = 0, y = 0;
+    int i = 0, y = 0, pstart = 0;
     if (wr_lay_ok && docw == wr_docw) return;
     wr_docw = docw; wr_nlines = 0;
     while (i <= wr_len) {
         int ls = i, x = 0, lastsp = -1, lastsp_x = 0;
         int h = lh_of(i < wr_len ? wr_style[i] : wr_cur);
         int base = bs_of(i < wr_len ? wr_style[i] : wr_cur);
-        unsigned char al = align_at(ls);
+        /* alignment of the CURRENT paragraph, tracked incrementally. The old
+         * align_at(ls) walked backward to the paragraph start for EVERY
+         * wrapped line - O(paragraph) per line = O(doc^2) on a document with
+         * long paragraphs. That single call was the F11 render spike: 750 ms
+         *-3.3 s first-layout stalls on the stress corpus, inside draw. */
+        unsigned char al = (pstart < wr_len) ? (unsigned char)WS_ALIGN(wr_style[pstart])
+                         : (wr_len > 0)      ? (unsigned char)WS_ALIGN(wr_style[wr_len - 1])
+                                             : (unsigned char)WS_ALIGN(wr_cur);
         if (i == wr_len) {                        /* trailing empty line */
             lay_push(ls, ls, &y, h, base, al);
             break;
@@ -161,7 +170,7 @@ static void wr_layout(int docw)
         while (i < wr_len) {
             int ch = (unsigned char)wr_text[i], cw;
             int chh, chb;
-            if (ch == '\n') { i++; break; }       /* paragraph end */
+            if (ch == '\n') { i++; pstart = i; break; }   /* paragraph end */
             cw = adv_of(wr_style[i], ch);
             chh = lh_of(wr_style[i]); chb = bs_of(wr_style[i]);
             if (chh > h) h = chh;
@@ -429,9 +438,18 @@ static void wr_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     int fh = fb_text_h(), stat_h = fh + 6;
     int view_h = r.h - RULER_H - stat_h;
     int selA, selB, li;
+#ifdef UNO_DEBUG
+    /* slow-draw autopsy (F11): when one editor draw blows past 150 ms, log
+     * WHERE it went - layout vs glyph loop vs the rest - so a metal PF's
+     * "window=Editor" line comes with its own breakdown in the boot log. */
+    unsigned long long dbg_t0 = uno_native_rdtsc(), dbg_t1, dbg_t2;
+#endif
     (void)w; (void)ctx;
     if (docw < 40) docw = 40;
     wr_layout(docw);
+#ifdef UNO_DEBUG
+    dbg_t1 = uno_native_rdtsc();
+#endif
     reveal_caret(view_h);
     sel_range(&selA, &selB);
 
@@ -476,6 +494,9 @@ static void wr_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
             fb_fill_rect(x, ly, 4, L->h, t->pal.accent);
     }
 
+#ifdef UNO_DEBUG
+    dbg_t2 = uno_native_rdtsc();
+#endif
     /* caret */
     if (wr_win && wr_win->active && (((wr_tick - wr_caret_frame) / 30) & 1u) == 0) {
         int cli = line_of(wr_caret);
@@ -503,6 +524,17 @@ static void wr_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
       fb_fill_rect(r.x, sy, r.w, stat_h, t->pal.face);
       fb_hline(r.x, sy, r.w, t->pal.shadow);
       fb_text(r.x + 6, sy + 3, wr_status, t->pal.face_text, -1); }
+#ifdef UNO_DEBUG
+    { unsigned long long tend = uno_native_rdtsc();
+      unsigned long ms = uno_dbg_cyc_to_us(tend - dbg_t0) / 1000;
+      if (ms > 150)
+          uno_dbg_log("editor: SLOW draw %lums (layout %lums, lines %lums, "
+                      "rest %lums; len=%d nlines=%d)",
+                      ms, uno_dbg_cyc_to_us(dbg_t1 - dbg_t0) / 1000,
+                      uno_dbg_cyc_to_us(dbg_t2 - dbg_t1) / 1000,
+                      uno_dbg_cyc_to_us(tend - dbg_t2) / 1000,
+                      wr_len, wr_nlines); }
+#endif
 }
 
 /* ---- clipboard / find ----------------------------------------------------- */

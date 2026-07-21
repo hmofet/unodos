@@ -647,13 +647,15 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
     if (v->dev->write == 0) return 0;
     if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return 0;
 
-    /* if the file exists, free its old chain and reuse the entry; else alloc */
+    /* if the file exists, reuse the entry; else alloc. S-FAT-28: capture the
+     * old chain but DON'T free it yet - freeing before the new chain is built
+     * means an ENOSPC mid-write leaves the entry pointing at freed clusters
+     * that another file can then claim (cross-link corruption). Free it only
+     * after the new chain and entry are committed. */
+    uint32_t old_chain = 0;
     if (dir_find(v, pclus, fixed, leaf, &elba, &eoff)) {
         c = cache_get(v->dev, elba); if (!c) return 0;
-        {
-            uint32_t old = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
-            if (old >= 2) fat_free_chain(v, old);
-        }
+        old_chain = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
     } else {
         if (!dir_alloc_slot(v, pclus, fixed, &elba, &eoff)) return 0;
         c = cache_get(v->dev, elba); if (!c) return 0;
@@ -671,7 +673,7 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
     need = (uint32_t)((len + (long)v->sec_per_clus * SECT - 1) / ((long)v->sec_per_clus * SECT));
     while (made < need) {
         uint32_t cl = fat_alloc(v), s;
-        if (!cl) { if (first) fat_free_chain(v, first); return 0; }
+        if (!cl) { if (first) fat_free_chain(v, first); return 0; }  /* old chain intact */
         if (!first) first = cl; else fat_set(v, prev, cl);
         prev = cl;
         for (s = 0; s < v->sec_per_clus; s++) {
@@ -694,6 +696,10 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
     wr16(c->buf + eoff + 20, (uint16_t)((first >> 16) & 0xFFFF)); /* hi cluster */
     wr32(c->buf + eoff + 28, (uint32_t)len);                     /* size       */
     cache_put(c);
+    /* new chain + entry committed: NOW it is safe to free the old chain (and
+     * only if it isn't the same chain we just wrote, which can't happen here
+     * since fat_alloc never returns an in-use cluster). */
+    if (old_chain >= 2 && old_chain != first) fat_free_chain(v, old_chain);
     cache_sync();
     cache_drop(v->dev);
     return 1;

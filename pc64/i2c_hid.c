@@ -18,11 +18,17 @@ void uno_i2c_hid_status(int *nb, int *nc, int *pr, int *ad, int *pa)
 { if (nb)*nb=0; if (nc)*nc=0; if (pr)*pr=0; if (ad)*ad=0; if (pa)*pa=0; }
 void uno_i2c_hid_diag(int *sa, unsigned *ab) { if (sa)*sa=0; if (ab)*ab=0; }
 int uno_i2c_hid_timing(void) { return -1; }
+int uno_i2c_hid_acpi_retry(void) { return 0; }
+int uno_i2c_hid_acpi_hits(void) { return -1; }
 
 #else  /* ================= UNO_I2C_TRACKPAD enabled ==================== */
 
 #include "pc64_pci.h"
 #include "hid_kbd.h"
+#include "uno_debug.h"      /* uno_dbg_log (no-op in release builds)   */
+#ifdef UNO_ACPI
+#include "acpi_host.h"      /* F4: uno_acpi_i2c_hid_enum               */
+#endif
 #include <stdint.h>
 
 /* ===========================================================================
@@ -257,15 +263,23 @@ static int dw_reg_read(u8 addr, u16 reg, u8 *out, int len)
 }
 
 /* ---- discovery: every PCI-visible Intel LPSS I2C controller -------------- */
+static int g_bar_dev[8], g_bar_fn[8];   /* PCI location per bar (F4: lets the
+                                           ACPI hit pick ITS controller)      */
 static int list_bars(u64 *bars, int max)
 {
     int n = 0;
+    if (max > 8) max = 8;
 #ifdef I2C_HID_BASE
-    if ((u64)(I2C_HID_BASE) && n < max) bars[n++] = (u64)(I2C_HID_BASE);  /* override */
+    if ((u64)(I2C_HID_BASE) && n < max) {
+        g_bar_dev[n] = g_bar_fn[n] = -1;
+        bars[n++] = (u64)(I2C_HID_BASE);              /* override */
+    }
 #endif
     { pci_dev d;                              /* first class-0C80 8086 match */
       if (pci_find_class(0x0C, 0x80, &d) && d.vendor == 0x8086 && n < max) {
-          pci_enable_bus_master(&d); bars[n++] = pci_bar(&d, 0);
+          pci_enable_bus_master(&d);
+          g_bar_dev[n] = d.dev; g_bar_fn[n] = d.fn;
+          bars[n++] = pci_bar(&d, 0);
       } }
     /* Intel LPSS I2C sit at fixed BDFs; probe them too so a pad on a later
        controller (not the first class match) is still found. */
@@ -282,7 +296,7 @@ static int list_bars(u64 *bars, int max)
           pci_enable_bus_master(&d);
           b = pci_bar(&d, 0);
           for (j = 0; j < n; j++) if (bars[j] == b) dup = 1;
-          if (b && !dup) bars[n++] = b;
+          if (b && !dup) { g_bar_dev[n] = d.dev; g_bar_fn[n] = fn; bars[n++] = b; }
       } }
     return n;
 }
@@ -417,6 +431,22 @@ static int g_timing_used = -1;     /* which kTiming entry actually worked */
 
 int uno_i2c_hid_timing(void) { return g_timing_used; }
 
+/* classify a validated device into the pointer or keyboard slot */
+static void adopt(hiddev *tmp)
+{
+    hid_power_reset(tmp);
+    parse_report_desc(tmp);
+    if (tmp->is_kbd && !g_kbd.present) {
+        g_kbd = *tmp; g_kbd.present = 1; hid_kbd_reset(&g_kbd.kbd);
+    } else if (tmp->parsed && !g_ptr.present) {
+        g_ptr = *tmp; g_ptr.present = 1;
+    } else if (!g_ptr.present && !tmp->is_kbd) {
+        /* an unparsed pointer-ish device: keep as the pointer
+         * fallback (the old single-device behaviour) */
+        g_ptr = *tmp; g_ptr.present = 1;
+    }
+}
+
 /* One full slave x descriptor-register sweep of the CURRENT controller at the
  * CURRENT timing (g_tidx). Returns 1 if anything validated. No retries: this
  * walks mostly-empty addresses and the retry cost adds up (see try_hid_ex). */
@@ -429,17 +459,7 @@ static int scan_grid(void)
             if (g_ptr.present && g_kbd.present) return 1;
             if (!try_hid_ex(&tmp, kAddrs[ai], kDescRegs[di], 0)) continue;
             found = 1;
-            hid_power_reset(&tmp);
-            parse_report_desc(&tmp);
-            if (tmp.is_kbd && !g_kbd.present) {
-                g_kbd = tmp; g_kbd.present = 1; hid_kbd_reset(&g_kbd.kbd);
-            } else if (tmp.parsed && !g_ptr.present) {
-                g_ptr = tmp; g_ptr.present = 1;
-            } else if (!g_ptr.present && !tmp.is_kbd) {
-                /* an unparsed pointer-ish device: keep as the pointer
-                 * fallback (the old single-device behaviour) */
-                g_ptr = tmp; g_ptr.present = 1;
-            }
+            adopt(&tmp);
         }
     return found;
 }
@@ -513,6 +533,65 @@ int uno_i2c_hid_init(void)
         if (g_ptr.present && g_kbd.present) return 1;
     }
     return (g_ptr.present || g_kbd.present) ? 1 : 0;
+}
+
+/* ---- F4: ACPI-directed probe ----------------------------------------------
+ * Runs AFTER uno_acpi_start (so, after uno_i2c_hid_init) and only if a slot
+ * is still empty. The namespace gives what the blind grid never had: the
+ * device's real slave address, its HID-descriptor register, and WHICH
+ * controller it hangs off. One targeted probe per timing candidate instead
+ * of a 30-address sweep - and on chipsets where the fixed-BDF list misses
+ * the controller entirely (the Yoga's ctrls=0), the _ADR lets a future pass
+ * find it by PCI location. */
+static int g_acpi_hits = -1;            /* -1 = retry never ran               */
+int uno_i2c_hid_acpi_hits(void) { return g_acpi_hits; }
+
+int uno_i2c_hid_acpi_retry(void)
+{
+#ifdef UNO_ACPI
+    uno_acpi_i2chid hits[4];
+    u64 bars[8];
+    int nb, n, i, bi, ti;
+    if (g_ptr.present && g_kbd.present) return 1;
+    n = uno_acpi_i2c_hid_enum(hits, 4);
+    g_acpi_hits = n;
+    if (n <= 0) { uno_dbg_log("i2c-hid: acpi enum found no PNP0C50 devices"); return 0; }
+    nb = list_bars(bars, 8);
+    g_probe_left = PROBE_BUDGET;        /* fresh budget: this pass is targeted */
+    for (i = 0; i < n; i++) {
+        uno_dbg_log("i2c-hid: acpi hit %d: slave=%02x desc_reg=%04x ctrl=%d.%d (%s)",
+                    i, hits[i].slave, hits[i].desc_reg,
+                    hits[i].ctrl_dev, hits[i].ctrl_fn, hits[i].src);
+        for (bi = 0; bi < nb; bi++) {
+            /* controller match by PCI location when _ADR resolved; else all */
+            if (hits[i].ctrl_dev >= 0 &&
+                (g_bar_dev[bi] != hits[i].ctrl_dev || g_bar_fn[bi] != hits[i].ctrl_fn))
+                continue;
+            g_i2c = (volatile u8 *)(uintptr_t)bars[bi];
+            if (!g_i2c || r32(DW_IC_COMP_TYPE) != DW_COMP_TYPE_VALUE) continue;
+            w32(LPSS_RESETS_OLD, 0x0);
+            { int t = 20000; while (t--) spin(2); }
+            w32(LPSS_RESETS_OLD, 0x7);
+            { int t = 100000; while (t--) spin(2); }
+            for (ti = 0; ti < NTIMING; ti++) {
+                hiddev tmp;
+                g_tidx = ti;
+                if (try_hid_ex(&tmp, (int)hits[i].slave, (int)hits[i].desc_reg, 1) ||
+                    try_hid_ex(&tmp, (int)hits[i].slave, 0x0001, 1)) {
+                    adopt(&tmp);
+                    g_timing_used = ti;
+                    uno_dbg_log("i2c-hid: acpi probe BOUND slave %02x (scl#%d)",
+                                hits[i].slave, ti);
+                    break;
+                }
+            }
+            if (g_ptr.present && g_kbd.present) return 1;
+        }
+    }
+    return (g_ptr.present || g_kbd.present) ? 1 : 0;
+#else
+    return 0;
+#endif
 }
 
 /* Extract nbits starting at bitoff from d[], which holds nbytes valid bytes.

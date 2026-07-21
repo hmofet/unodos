@@ -330,7 +330,8 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
     if (n >= MODBUF_MAX)                   { mdbg("modload: too big\n");   return 0; }
     if (h->magic != UNO_MOD_MAGIC)         { mdbg("modload: bad magic\n"); return 0; }
     if (h->abi != UNO_ABI_VERSION)         { mdbg("modload: bad abi\n");   return 0; }
-    if ((long)sizeof *h + h->file_size + 4ll * h->nreloc != n)
+    if ((unsigned long long)sizeof *h + (unsigned long long)h->file_size +
+        4ull * (unsigned long long)h->nreloc != (unsigned long long)n)
                                            { mdbg("modload: bad size\n");  return 0; }
     /* mem_size is attacker-controlled (the CRC authenticates nothing - a crafter
      * recomputes it). Cap it: without this, mem_size near 0xFFFFFFFF wrapped the
@@ -462,7 +463,11 @@ int uno_mod_load_pyapp(int vol, const char *path, const unsigned char **src, int
     if (h->magic != UNO_MOD_MAGIC)             { mdbg("pyapp: bad magic\n"); return -1; }
     if (h->abi != UNO_ABI_VERSION)             { mdbg("pyapp: bad abi\n");   return -1; }
     if (!(h->flags & UNO_MODF_PYAPP))          { mdbg("pyapp: not a py app\n"); return -1; }
-    if ((long)sizeof *h + h->file_size > n)    { mdbg("pyapp: bad size\n");  return -1; }
+    /* S-MOD-12: 64-bit compare. `(long)sizeof*h + h->file_size` is 32-bit on
+     * this LLP64 target, so a crafted file_size near UINT_MAX wrapped, passed
+     * this check, then the CRC loop read h->file_size bytes OOB. */
+    if ((unsigned long long)sizeof *h + (unsigned long long)h->file_size > (unsigned long long)n)
+                                               { mdbg("pyapp: bad size\n");  return -1; }
     if (mod_crc32(gModBuf + sizeof *h, h->file_size) != h->crc)
                                                { mdbg("pyapp: bad crc\n");   return -1; }
     *src = gModBuf + sizeof *h;

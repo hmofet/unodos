@@ -273,3 +273,117 @@ uacpi_status uacpi_kernel_pci_read32(uacpi_handle h, uacpi_size o, uacpi_u32 *v)
 uacpi_status uacpi_kernel_pci_write8 (uacpi_handle h, uacpi_size o, uacpi_u8  v){ cfg_write_masked(h,o,v,0xFFu,   (o & 3) * 8); return UACPI_STATUS_OK; }
 uacpi_status uacpi_kernel_pci_write16(uacpi_handle h, uacpi_size o, uacpi_u16 v){ cfg_write_masked(h,o,v,0xFFFFu, (o & 2) * 8); return UACPI_STATUS_OK; }
 uacpi_status uacpi_kernel_pci_write32(uacpi_handle h, uacpi_size o, uacpi_u32 v){ pout32(0xCF8, cfg_addr(h,o)); pout32(0xCFC, v); return UACPI_STATUS_OK; }
+
+/* ===========================================================================
+ * F4: I2C-HID discovery from the ACPI namespace.
+ *
+ * The PCI-scan probe finds LPSS controllers on every machine and binds a
+ * device on none, because nothing tells it the SLAVE ADDRESS (addr=0 in every
+ * BOOTENV). ACPI names everything: a HID-over-I2C device is a PNP0C50 node
+ * whose _CRS carries an I2cSerialBus (slave address + a path to the
+ * controller device), and whose _DSM (3CDFF6F7-4267-4555-AD05-B30A3D8938DE,
+ * rev 1, fn 1) returns the HID-descriptor register. The controller node's
+ * _ADR gives the PCI dev/fn to match against our BAR list.
+ * ======================================================================== */
+#include <uacpi/uacpi.h>
+#include <uacpi/utilities.h>
+#include <uacpi/resources.h>
+#include <uacpi/namespace.h>
+#include <uacpi/types.h>
+
+struct i2chid_ctx { uno_acpi_i2chid *out; int max, n; };
+
+static uacpi_iteration_decision i2chid_res_cb(void *user, uacpi_resource *res)
+{
+    struct i2chid_ctx *cx = (struct i2chid_ctx *)user;
+    if (res->type != UACPI_RESOURCE_TYPE_SERIAL_I2C_CONNECTION)
+        return UACPI_ITERATION_DECISION_CONTINUE;
+    if (cx->n < cx->max) {
+        uacpi_resource_i2c_connection *ic = &res->i2c_connection;
+        uno_acpi_i2chid *h = &cx->out[cx->n];
+        h->slave = ic->slave_address;
+        h->ctrl_dev = h->ctrl_fn = -1;
+        h->src[0] = 0;
+        if (ic->common.source.string) {
+            int i;
+            for (i = 0; ic->common.source.string[i] && i < (int)sizeof h->src - 1; i++)
+                h->src[i] = ic->common.source.string[i];
+            h->src[i] = 0;
+        }
+    }
+    return UACPI_ITERATION_DECISION_BREAK;    /* first I2C resource is the one */
+}
+
+static uacpi_iteration_decision i2chid_dev_cb(void *user,
+                                              uacpi_namespace_node *node,
+                                              uacpi_u32 depth)
+{
+    struct i2chid_ctx *cx = (struct i2chid_ctx *)user;
+    int had = cx->n;
+    (void)depth;
+    if (cx->n >= cx->max) return UACPI_ITERATION_DECISION_BREAK;
+
+    if (uacpi_for_each_device_resource(node, "_CRS", i2chid_res_cb, cx)
+            != UACPI_STATUS_OK || cx->out[cx->n].src[0] == 0)
+        return UACPI_ITERATION_DECISION_CONTINUE;   /* no I2C resource */
+
+    /* HID descriptor register via _DSM(hid-over-i2c GUID, rev 1, fn 1) */
+    cx->out[cx->n].desc_reg = 0x0001;               /* spec default fallback */
+    {
+        static const uacpi_u8 kGuid[16] = {         /* GUID little-endian mix */
+            0xF7, 0xF6, 0xDF, 0x3C, 0x67, 0x42, 0x55, 0x45,
+            0xAD, 0x05, 0xB3, 0x0A, 0x3D, 0x89, 0x38, 0xDE };
+        uacpi_data_view dv;
+        uacpi_object *args[4];
+        uacpi_object_array arr;
+        uacpi_object *ret = UACPI_NULL;
+        dv.bytes = (uacpi_u8 *)kGuid; dv.length = 16;
+        args[0] = uacpi_object_create_buffer(dv);
+        args[1] = uacpi_object_create_integer(1);
+        args[2] = uacpi_object_create_integer(1);
+        { uacpi_object_array empty; empty.objects = UACPI_NULL; empty.count = 0;
+          args[3] = uacpi_object_create_package(empty); }
+        arr.objects = args; arr.count = 4;
+        if (args[0] && args[1] && args[2] && args[3] &&
+            uacpi_eval(node, "_DSM", &arr, &ret) == UACPI_STATUS_OK && ret) {
+            uacpi_u64 v = 0;
+            uacpi_data_view bv;
+            if (uacpi_object_get_integer(ret, &v) == UACPI_STATUS_OK && v)
+                cx->out[cx->n].desc_reg = (unsigned short)v;
+            else if (uacpi_object_get_buffer(ret, &bv) == UACPI_STATUS_OK &&
+                     bv.length >= 2)
+                cx->out[cx->n].desc_reg =
+                    (unsigned short)(bv.bytes[0] | (bv.bytes[1] << 8));
+            uacpi_object_unref(ret);
+        }
+        { int k; for (k = 0; k < 4; k++) if (args[k]) uacpi_object_unref(args[k]); }
+    }
+
+    /* resolve the controller path -> PCI dev/fn via its _ADR */
+    {
+        uacpi_namespace_node *ctrl = UACPI_NULL;
+        if (uacpi_namespace_node_find(UACPI_NULL, cx->out[cx->n].src, &ctrl)
+                == UACPI_STATUS_OK && ctrl) {
+            uacpi_u64 adr = 0;
+            if (uacpi_eval_simple_integer(ctrl, "_ADR", &adr) == UACPI_STATUS_OK) {
+                cx->out[cx->n].ctrl_dev = (int)((adr >> 16) & 0xFFFF);
+                cx->out[cx->n].ctrl_fn  = (int)(adr & 0xFFFF);
+            }
+        }
+    }
+
+    cx->n++;
+    (void)had;
+    return (cx->n >= cx->max) ? UACPI_ITERATION_DECISION_BREAK
+                              : UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max)
+{
+    struct i2chid_ctx cx;
+    if (g_status <= 0) return 0;                    /* interpreter not up */
+    cx.out = out; cx.max = max; cx.n = 0;
+    uacpi_find_devices("PNP0C50", i2chid_dev_cb, &cx);
+    if (cx.n < max) uacpi_find_devices("ACPI0C50", i2chid_dev_cb, &cx);
+    return cx.n;
+}

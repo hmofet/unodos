@@ -46,6 +46,14 @@ void uno_dbg_panic(const char *why);    /* software-detected fatal (canary,
 void uno_dbg_note(const char *fmt, ...);/* non-fatal anomaly: logged + counted,
                                            surfaced in perf snapshots          */
 
+/* UNO_ASSERT(cond, "S-XXX-NN what"): the [assert]-tagged SPEC contracts, live.
+ * A violated invariant is logged + counted via uno_dbg_note (non-fatal - a
+ * spurious assert must never take down a test run), and shows up as notes>0
+ * in the perf snapshot with the contract id in the boot log. Compiles to
+ * nothing in a non-debug build, so it is free in the shipped OS. */
+#define UNO_ASSERT(cond, id) \
+    do { if (!(cond)) uno_dbg_note("ASSERT %s (%s:%d)", (id), __FILE__, __LINE__); } while (0)
+
 /* ---- perf HUD counters (fed from the main loop / present path) ----------
  * The render/present feeds take raw TSC cycle deltas (rdtsc at both ends);
  * conversion to time happens here where the calibrated rate lives. */
@@ -78,6 +86,17 @@ int  pc64_stress_cfg_flag(const char *key);  /* STRESS.CFG key set? -1 = no file
  * stick serves a whole batch of machines without results colliding. */
 const char *uno_dbg_machine_tag(void);
 
+/* ---- per-window draw profiler (F11) --------------------------------------
+ * Registered as unoui_profile_win by the shell; PF snapshots carry the top
+ * window costs, the worst-frame line names the culprit window, and a hang
+ * inside a draw callback names its window in the HG report. */
+void uno_dbg_win_profile(const char *title, int begin);
+void uno_dbg_win_frame_reset(void);
+const char *uno_dbg_current_window(void);
+unsigned long uno_dbg_cyc_to_us(unsigned long long cyc);  /* 0 if uncalibrated */
+unsigned long long uno_dbg_tsc_per_ms(void);              /* 0 if uncalibrated */
+int uno_pc64_mtrr_wc_experiment(void);   /* P3 opt-in (uefi_main); -1 = refused */
+
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */
 void pc64_stress_tick(void);            /* call once per main-loop frame       */
 void pc64_stress_stop(void);            /* F12: disarm + hand back the desktop */
@@ -88,6 +107,7 @@ const char *pc64_stress_status(void);   /* on-screen run state, 0 when unarmed *
  * ethernet if an adapter is present at boot, else WiFi with a full bring-up
  * trace. Progressive log to CRASH\NETLOG.TXT. */
 void pc64_nettest_tick(void);           /* one-shot; later calls are free      */
+void pc64_spectest_run(void);           /* SPECTEST conformance suite (spec)   */
 /* Trace sink for the network drivers (iwlwifi/wpa/usb-eth): appends a line to
  * the NETLOG buffer, mirrors it to the kernel log, and FEEDS THE WATCHDOG
  * HEARTBEAT - WiFi bring-up legitimately spends >20 s in scan+join, and a
@@ -109,6 +129,8 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define uno_dbg_check(tag)           ((void)0)
 #define uno_dbg_heartbeat()          ((void)0)
 #define uno_dbg_note(...)            ((void)0)
+#undef  UNO_ASSERT
+#define UNO_ASSERT(cond, id)         ((void)0)
 #define uno_dbg_frame_render_cyc(c)  ((void)0)
 #define uno_dbg_frame_present_cyc(c) ((void)0)
 #define uno_dbg_frame_idle(i)        ((void)0)
@@ -118,6 +140,8 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define pc64_stress_tick()           ((void)0)
 #define pc64_nettest_tick()          ((void)0)
 #define uno_dbg_net_trace(...)       ((void)0)
+#define uno_dbg_win_frame_reset()    ((void)0)
+#define uno_dbg_cyc_to_us(c)         0ul
 #endif
 
 #endif /* UNO_DEBUG_H */
