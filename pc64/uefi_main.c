@@ -1486,6 +1486,53 @@ void uno_pc64_dbg_display(unsigned long long *base, int *w, int *h,
 
 void uno_pc64_dbg_invalidate(void) { gShadowValid = 0; }
 
+/* P3 scouting: is the firmware's Blt() faster than our CPU stores?
+ *
+ * On every machine tested the framebuffer is uncached, so CPU stores crawl
+ * (26-43 MB/s). The firmware blitter may use the GPU's DMA engine and bypass
+ * that entirely - and `gUseBlt` is an existing, working present path, so if Blt
+ * wins we get most of P3's benefit for free and without touching an MTRR.
+ *
+ * Measured the way we would actually USE it: one Blt per row, which is exactly
+ * what the gUseBlt present path does. Returns 0 if Blt is unavailable (it needs
+ * boot services, so it is gone once detached).
+ *
+ * Cleans up after itself - leaving a pattern on screen reads as framebuffer
+ * corruption in operator photos, which is finding F10. */
+int uno_pc64_dbg_blt_bench(unsigned long long *cycles, unsigned long *bytes)
+{
+    static UINT32 row[GROW_W];
+    unsigned long long t0;
+    UINT32 y, top;
+    int rows = 64;
+    if (!gGop || gDetached || gModeH <= (UINT32)rows + 8 || gModeW > GROW_W)
+        return 0;
+    for (y = 0; y < gModeW; y++) row[y] = 0x00202020;
+    top = gModeH - (UINT32)rows;
+    t0 = uno_native_rdtsc();
+    for (y = 0; y < (UINT32)rows; y++)
+        gGop->Blt(gGop, row, EfiBltBufferToVideo, 0, 0, 0, top + y, gModeW, 1, 0);
+    *cycles = uno_native_rdtsc() - t0;
+    *bytes  = (unsigned long)gModeW * (unsigned long)rows * 4u;
+    return 1;
+}
+
+/* Erase whatever the benches painted along the bottom of the panel (F10). */
+void uno_pc64_dbg_bench_cleanup(void)
+{
+    UINT32 black = 0, y, x, top;
+    int rows = 72;
+    if (!gGop || gModeH <= (UINT32)rows) return;
+    top = gModeH - (UINT32)rows;
+    if (!gDetached) {
+        gGop->Blt(gGop, &black, EfiBltVideoFill, 0, 0, 0, top, gModeW, rows, 0);
+    } else if (!gUseBlt && gVram) {
+        for (y = top; y < gModeH; y++)
+            for (x = 0; x < gModeW; x++) gVram[y * gStride + x] = 0;
+    }
+    gShadowValid = 0;               /* force a full repaint over the cleared band */
+}
+
 /* synthetic input for the stress driver: keys go through the SAME map_key
  * path real firmware/native keys use, pointer moves through the same
  * clamp + click plumbing - so a stress run exercises the true input stack. */
