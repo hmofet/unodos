@@ -17,6 +17,16 @@
  * transport waits below so a black-holed peer cannot busy-spin the UI. */
 void uno_pc64_delay_ms(int ms);
 
+/* Debug-build transport trace: fires only on failure paths (EOF, deadlines,
+ * flush errors), so a dead TLS exchange names its layer in the kernel log
+ * instead of surfacing as a bare BR_ERR_IO. Compiles away in production. */
+#ifdef UNO_DEBUG
+void uno_dbg_log(const char *fmt, ...);
+#define TLSTRACE(...) uno_dbg_log(__VA_ARGS__)
+#else
+#define TLSTRACE(...) ((void)0)
+#endif
+
 /* ---- entropy: RDRAND if present, else a TSC mix (demo-grade fallback) ---- */
 static unsigned cpuid_ecx1(void)
 {
@@ -79,12 +89,19 @@ static int low_read(void *ctx, unsigned char *buf, size_t len)
     int  ms = 0;                /* accumulated wall-clock wait */
     (void)ctx;
     for (;;) {
-        int n = net_tcp_recv(buf, (int)len);
-        if (n > 0) return n;
+        /* poll FIRST, then drain: when one poll batch delivers the last data
+         * segment AND the peer's FIN together (Connection: close servers do
+         * exactly this), checking the state before re-reading the queue threw
+         * away the just-arrived bytes and reported EOF - the S-AI-02 bug. A
+         * DONE state is EOF only once the queue is empty. */
+        int n;
         net_poll();
-        { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -1; }
+        n = net_tcp_recv(buf, (int)len);
+        if (n > 0) return n;
+        { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) {
+              TLSTRACE("tls: low_read EOF (tcp state %d after %d ms)", st, ms); return -1; } }
         uno_pc64_delay_ms(1);                   /* pace the idle wait to ~1ms/poll */
-        if (++ms > 4000) return -1;             /* ~4s deadline: peer is unresponsive */
+        if (++ms > 4000) { TLSTRACE("tls: low_read -1 (4s idle deadline)"); return -1; }
         if (--tries <= 0) return -1;
     }
 }
@@ -101,10 +118,14 @@ static int low_write(void *ctx, const unsigned char *buf, size_t len)
         r = net_tcp_send(buf + off, chunk);   /* -1 while a segment is unacked */
         if (r > 0) off += r;
         net_poll();
-        if (net_tcp_state() != TCP_ESTABLISHED) return (off > 0) ? off : -1;
+        if (net_tcp_state() != TCP_ESTABLISHED) {
+            TLSTRACE("tls: low_write %d/%d (tcp state %d)", off, (int)len, net_tcp_state());
+            return (off > 0) ? off : -1;
+        }
         if (r <= 0) {                          /* no progress: pace + bound the wait */
             uno_pc64_delay_ms(1);
-            if (++ms > 8000) return (off > 0) ? off : -1;   /* ~8s deadline */
+            if (++ms > 8000) { TLSTRACE("tls: low_write %d/%d (8s deadline)", off, (int)len);
+                               return (off > 0) ? off : -1; }   /* ~8s deadline */
         }
         if (--tries <= 0) return (off > 0) ? off : -1;
     }
@@ -211,8 +232,11 @@ int tls_write(const void *data, int len)
     int r;
     if (!g_open) return -1;
     r = br_sslio_write_all(&g_io, data, (size_t)len);
-    if (r < 0) return -1;
-    br_sslio_flush(&g_io);          /* drives the handshake + sends the record */
+    if (r < 0) { TLSTRACE("tls: write_all failed, engine err %d",
+                          br_ssl_engine_last_error(&g_sc.eng)); return -1; }
+    r = br_sslio_flush(&g_io);      /* drives the handshake + sends the record */
+    if (r < 0) { TLSTRACE("tls: flush failed, engine err %d",
+                          br_ssl_engine_last_error(&g_sc.eng)); return -1; }
     return len;
 }
 
@@ -226,7 +250,36 @@ int tls_read(void *buf, int cap)
 
 void tls_close(void)
 {
-    if (g_open) { br_sslio_close(&g_io); g_open = 0; }
+    /* NOT br_sslio_close(): its loop runs until the engine reaches CLOSED,
+     * but when the peer's close_notify was already received (shutdown_recv)
+     * a failed low_write deliberately does NOT fail the engine (ssl_io.c
+     * run_until, the RFC 5246 carve-out) - so against a torn-down TCP
+     * connection it calls low_write forever. A Connection: close server
+     * (data + close_notify + FIN in one flight) hit exactly that: 20 s of
+     * spin until the watchdog reset the machine. This is the same polite
+     * close, but it gives up the moment the transport does. */
+    if (g_open) {
+        int guard = 16;
+        br_ssl_engine_close(&g_sc.eng);
+        while (br_ssl_engine_current_state(&g_sc.eng) != BR_SSL_CLOSED && guard-- > 0) {
+            unsigned st = br_ssl_engine_current_state(&g_sc.eng);
+            if (st & BR_SSL_SENDREC) {          /* our close_notify */
+                size_t len; unsigned char *buf = br_ssl_engine_sendrec_buf(&g_sc.eng, &len);
+                int w = low_write(0, buf, len);
+                if (w <= 0) break;              /* transport gone: peer won't wait (RFC 5246) */
+                br_ssl_engine_sendrec_ack(&g_sc.eng, (size_t)w);
+            } else if (st & BR_SSL_RECVAPP) {   /* discard late app data */
+                size_t len;
+                if (br_ssl_engine_recvapp_buf(&g_sc.eng, &len)) br_ssl_engine_recvapp_ack(&g_sc.eng, len);
+            } else if (st & BR_SSL_RECVREC) {   /* wait for the peer's close_notify */
+                size_t len; unsigned char *buf = br_ssl_engine_recvrec_buf(&g_sc.eng, &len);
+                int r = low_read(0, buf, len);
+                if (r <= 0) break;
+                br_ssl_engine_recvrec_ack(&g_sc.eng, (size_t)r);
+            } else break;
+        }
+        g_open = 0;
+    }
     net_tcp_close();
 }
 

@@ -291,7 +291,11 @@ static struct {
     u32   snd_nxt, snd_una, rcv_nxt;
     int   retx_at;               /* tick to retransmit the unacked control/data */
     u8    pend[512]; int pend_len;   /* the single outstanding data segment */
-    u8    rxq[2048]; int rxq_len;
+    /* 8 KB rx queue: a CA-validated TLS handshake's certificate flight is
+     * ~4-5 KB arriving back-to-back; with the old 2 KB queue the tail of the
+     * flight overflowed (and S-NET-15 ACKed the lost bytes - the stream came
+     * out corrupt and every HTTPS handshake to a real host died). */
+    u8    rxq[8192]; int rxq_len;
 } tcp;
 
 static void tcp_out(u8 flags, const u8 *data, int dlen)
@@ -305,7 +309,9 @@ static void tcp_out(u8 flags, const u8 *data, int dlen)
     wr32(seg + 8, tcp.rcv_nxt);
     seg[12] = 0x50;              /* data offset 5 words */
     seg[13] = flags;
-    wr16(seg + 14, 4096);       /* window */
+    /* advertise the space we can actually store (S-NET-23: a fixed 4096 over
+     * a smaller queue invited the peer to overrun it) */
+    wr16(seg + 14, (u16)((int)sizeof tcp.rxq - tcp.rxq_len));
     wr16(seg + 16, 0);          /* checksum (filled below) */
     if (dlen > 0) memcpy(seg + 20, data, dlen);
     seed = pseudo_seed(MYIP, tcp.dst, 6, 20 + dlen);
@@ -347,6 +353,7 @@ int net_tcp_send(const void *data, int len)
 int net_tcp_recv(void *buf, int cap)
 {
     int n = tcp.rxq_len;
+    int free_before = (int)sizeof tcp.rxq - tcp.rxq_len;
     if (n <= 0) return 0;
     if (n > cap) n = cap;
     memcpy(buf, tcp.rxq, n);
@@ -354,6 +361,9 @@ int net_tcp_recv(void *buf, int cap)
         memmove(tcp.rxq, tcp.rxq + n, tcp.rxq_len - n);
         tcp.rxq_len -= n;
     } else tcp.rxq_len = 0;
+    /* if the advertised window had collapsed below one MSS, announce the
+     * reopened space now - otherwise the peer sits in zero-window probes */
+    if (free_before < 1460 && tcp.state == TCP_ESTABLISHED) tcp_out(0x10, 0, 0);
     return n;
 }
 
@@ -396,16 +406,32 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
         if (tcp.pend_len && tcp.snd_una >= tcp.snd_nxt) tcp.pend_len = 0;
     }
 
-    if (dlen > 0 && seq == tcp.rcv_nxt) {        /* in-order data */
-        int room = (int)sizeof tcp.rxq - tcp.rxq_len;
-        int n = dlen; if (n > room) n = room;
-        memcpy(tcp.rxq + tcp.rxq_len, seg + hl, n);
-        tcp.rxq_len += n;
-        tcp.rcv_nxt += dlen;
-        tcp_out(0x10, 0, 0);                     /* ACK the data */
+    if (dlen > 0) {
+        u32 diff = tcp.rcv_nxt - seq;            /* 0 = in-order; (0,dlen) =
+                                                    partial overlap (peer resent
+                                                    from before our cut) */
+        if (diff < (u32)dlen) {
+            int off  = (int)diff;
+            int room = (int)sizeof tcp.rxq - tcp.rxq_len;
+            int n    = dlen - off; if (n > room) n = room;
+            memcpy(tcp.rxq + tcp.rxq_len, seg + hl + off, n);
+            tcp.rxq_len += n;
+            /* Advance rcv_nxt only past bytes actually STORED (S-NET-15: the
+             * old code ACKed the full dlen, so anything past `room` was
+             * acknowledged-and-lost - a >2 KB TLS flight arrived corrupt).
+             * The peer retransmits the truncated tail from our ACK point. */
+            tcp.rcv_nxt += (u32)n;
+            tcp_out(0x10, 0, 0);                 /* ACK what fits */
+        } else if (diff >= (u32)dlen && diff < 0x40000000u) {
+            tcp_out(0x10, 0, 0);                 /* stale duplicate: re-ACK */
+        }
+        /* else: beyond rcv_nxt (a future segment) - drop, the peer resends */
     }
 
-    if (flags & 0x01) {                          /* FIN */
+    /* FIN counts only at exactly rcv_nxt (i.e. after all its data has been
+     * accepted) - processing it while data was still cut off skipped the
+     * lost tail, and a retransmitted FIN must not bump rcv_nxt twice. */
+    if ((flags & 0x01) && seq + (u32)dlen == tcp.rcv_nxt && tcp.state != TCP_DONE) {
         tcp.rcv_nxt++;
         tcp_out(0x10, 0, 0);
         tcp.state = TCP_DONE;

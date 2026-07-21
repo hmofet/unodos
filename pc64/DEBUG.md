@@ -118,6 +118,18 @@ suites it writes, each with its own master toggle, plus the cross-cutting
 
 Developer options OFF flashes the clean production build (no STRESS.CFG at all).
 
+**"Reconfigure tests (no erase)" is version-gated.** The keys above are
+interpreted by the OS *already on the stick*, which Reconfigure deliberately
+does not touch - writing `nostress`/`passes=` onto a stick whose embedded OS
+predates those keys is silently ignored and the stick fuzzes endlessly (the
+2026-07-21 field report: "off doesn't turn it off, passes=1 loops forever").
+The debug build stamps the key generation it understands into `BUILD.TXT`
+(`cfgver: N`, pc64/build.sh) and the flasher refuses to reconfigure a disk
+stamped older than the keys it writes (`UnoReconfig.CFG_GENERATION` - keep the
+two in sync; bump both when adding/renaming a key). An old stick gets a clear
+"reflash instead" message. QEMU regression for the key semantics themselves:
+`tools/stresscfg_qemu.py` (needs a `UNO_DBGCON=1` build).
+
 ### Telemetry is machine-scoped: `CRASH\<MACHINE>\`
 
 **One stick serves a whole batch of machines.** Every telemetry file (CR/HG/RS
