@@ -14,7 +14,7 @@ Raw reports are preserved off each stick under
 |---------|-----|------|-------|
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
-| Latitude | — | in progress | expected to detach (AHCI) — but see F6 before assuming it will |
+| Latitude (i7-6600U) | i7-6600U | 1 (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. |
 | Lenovo X13 Yoga Gen 3 | — | pending | convertible/touch — another I2C-HID + firmware-pointer data point for F4/F6 |
 | MacBook Pro 2013 13" | — | pending | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
@@ -59,7 +59,7 @@ uncollectable-looking (machine appears hung, not rebooted).
 - Evidence: CR003 captured with `detached: 0`, then no reboot; operator saw black screen + OSK.
 - **Already fixed** (commit 6010041): use the firmware `ResetSystem` runtime service while attached; native CF9 only once detached / as fallback. (QEMU's CF9 works, so it never surfaced there.)
 
-### F3 — framebuffer mapped UNCACHED (both laptops)  ·  OS / PERF  ·  S3 (S2 for UX)  ·  OPEN
+### F3 — framebuffer mapped UNCACHED (ALL THREE machines)  ·  OS / PERF  ·  S3 (S2 for UX)  ·  OPEN
 The GOP framebuffer is covered by a variable MTRR of type **UC**, so every VRAM
 write is uncached — measured **~14 MB/s vs ~1.8 GB/s to RAM (≈1:130000)**. This
 is the review's predicted "slideshow UI". Present is `linear` (direct CPU
@@ -71,6 +71,9 @@ existing dirty-row/shadow tracking limits but does not remove it.
   - **X1 Carbon: `vram 24937 KB/s ram 3001222540 KB/s ratio 1:120352`**, via a
     *different* MTRR — `mtrr0 base=80000000 mask=7f80000800 type=0`, i.e. the
     32-bit MMIO hole (0x80000000-0xFFFFFFFF) with `fb_base c0000000` inside it.
+  - **Latitude (i7-6600U): `vram 43320 KB/s ram 4648625700 KB/s ratio
+    1:107308`**, `mtrr0 base=80000000 mask=7f80000800 type=0`, `fb_base
+    a0000000`. Third machine, third firmware.
   Different firmware, different MTRR, same outcome: the framebuffer is UC and
   the UC range also covers device MMIO, so the same "cannot simply flip it"
   constraint applies on both. This is a general pc64 problem, not a Surface
@@ -196,8 +199,20 @@ and the stress driver never armed.
   unreachable (compare the boot device path against what the native stack can
   reach), rather than asking only whether *some* eligible volume exists. The
   boot-device identity is already known — `uno_pc64_image_handle()`.
-- Harness mitigation shipped meanwhile (not a fix for this): telemetry is now
-  written **before** the detach attempt, so a stranded boot still leaves its log.
+- **CONFIRMED on the Latitude (i7-6600U), 2026-07-20.** It is the first machine
+  that actually detaches: `pointer: fw_simple=1 fw_abs=1 detach_blocked=0`, and
+  `i2c-hid: ctrls=0` so the F6 pointer-stranding guard has nothing to fire on.
+  Its `BOOTLOG.TXT` (captured only because telemetry now runs pre-detach) ends
+  at `last_checkpoint: init:detach @ 3516ms` with `volumes=7` — nothing after
+  the detach attempt is ever recorded, and the machine produced no HUD and no
+  stress cycle. The Surface and X1 escaped this only because F6 blocks their
+  detach.
+- Harness mitigations shipped (neither is a fix for this):
+  1. telemetry is written **before** the detach attempt, so a stranded boot
+     still leaves its log — this is the only reason we have the Latitude data;
+  2. **the debug build no longer detaches by default** (`-DUNO_NO_DETACH`,
+     `UNO_DETACH=1` re-enables). Every test boot is from USB, so with detach on
+     the harness is useless on any machine that qualifies.
 
 ---
 
