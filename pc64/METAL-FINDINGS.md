@@ -172,6 +172,33 @@ build it is silent UB whose result depends on the compiler.
   the surface), and audit `fb_text` callers that can go negative. Cheap fix,
   broad blast radius.
 
+### F8 — detach strands a USB-booted system on a machine with UnoDOS installed  ·  OS  ·  S1  ·  OPEN
+Booting the USB debug stick on the **Latitude** produced a correct splash (build
+`debug-local-20260720-2332`) and then **zero telemetry**: `CRASH\` held only the
+shipped `README.TXT` — no `BOOTLOG.TXT`, no `BOOTENV.TXT`, no `PF` snapshots —
+and the stress driver never armed.
+- **Mechanism.** The native stack has AHCI / NVMe / SDHCI but **no USB
+  mass-storage driver** (`xhci.c` serves HID only). After `ExitBootServices`
+  the firmware Block-IO fallback in `blkdev.c` is gone, so a **USB-booted**
+  system can no longer reach its own boot volume. `crash_vol()` then finds no
+  writable volume → all telemetry silently dies, and `arm()` cannot read
+  `STRESS.CFG` → the stress driver disables itself. Both reported symptoms fall
+  out of this single cause.
+- **Why the gate allowed it.** `uno_fat_native_eligible()` permits detach when a
+  UnoDOS `BOOTX64.EFI` sits on a natively-reachable FAT volume. The Latitude has
+  UnoDOS **installed to its internal disk**, which satisfies that test — so the
+  guard added for a *merely foreign* FAT partition does not cover "an installed
+  UnoDOS on the internal disk while running from USB".
+- **Severity S1:** the running system loses its boot device. Beyond telemetry,
+  anything loading from the boot volume afterwards (`.UNO` modules, fonts, docs)
+  is gone. Any user who installs UnoDOS and later boots the USB hits this.
+- Fix direction: refuse to detach when the volume we BOOTED FROM would become
+  unreachable (compare the boot device path against what the native stack can
+  reach), rather than asking only whether *some* eligible volume exists. The
+  boot-device identity is already known — `uno_pc64_image_handle()`.
+- Harness mitigation shipped meanwhile (not a fix for this): telemetry is now
+  written **before** the detach attempt, so a stranded boot still leaves its log.
+
 ---
 
 ## Positive confirmations (not bugs — the harness works on metal)

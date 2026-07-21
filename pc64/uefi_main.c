@@ -737,6 +737,22 @@ void uno_pc64_init(void)
     dbg_puts("unodos-pc64: init done\n");
 
     uno_dbg_check("init:detach");
+#ifdef UNO_DEBUG
+    /* Capture telemetry BEFORE the detach attempt.
+     *
+     * Detach can STRAND a USB-booted system: the native stack has AHCI/NVMe/
+     * SDHCI but no USB mass-storage driver, so once boot services are gone the
+     * boot stick is unreachable and NOTHING can be written - which is exactly
+     * what happened on the Latitude (instrumented build booted, zero telemetry
+     * on the stick). Writing here means every machine leaves its boot log and
+     * env block even if the detach that follows loses the volume. */
+    uno_dbg_envblock();
+    uno_dbg_log("pre-detach: volumes=%d - writing telemetry now, because a "
+                "detach that strands a USB boot volume would silence it",
+                uno_fs_volumes());
+    uno_dbg_write_bootenv();
+    uno_dbg_write_bootlog();
+#endif
 #ifndef UNO_NO_DETACH
     try_detach();                   /* M3: leave the firmware behind if the
                                        native stack covers this machine */
@@ -746,17 +762,20 @@ void uno_pc64_init(void)
     /* debug build: the environment block wants the FINAL machine state
      * (post-detach), then arm the freeze watchdog - the LAPIC timer once
      * detached, a firmware timer event otherwise. */
-    uno_dbg_envblock();
+    uno_dbg_envblock();                 /* re-read: detach changes the picture */
     if (gDetached) uno_dbg_on_detach();
     else           uno_dbg_watchdog_start();
     uno_dbg_check("init:done");
-    /* Telemetry must NOT depend on the stress driver arming: BOOTENV.TXT used
-     * to be written only from arm(), so a boot where the driver never armed
-     * (no STRESS.CFG found, unreadable volume, ...) left NOTHING on disk to
-     * diagnose. Write the env block and a boot log here, unconditionally. */
+    /* Second pass, best-effort. If detach stranded us this writes nothing and
+     * the PRE-detach copy above is what survives - which is the whole point of
+     * writing twice. A vanished volume count here is itself the diagnosis. */
     uno_dbg_log("init done: detached=%d volumes=%d - shell starting "
                 "(HUD + stress driver run from the shell's main loop)",
                 gDetached, uno_fs_volumes());
+    if (gDetached && uno_fs_volumes() <= 1)
+        uno_dbg_log("WARNING: detached and no writable volume remains - this "
+                    "system has lost its boot device; telemetry after this "
+                    "point cannot be persisted");
     uno_dbg_write_bootenv();
     uno_dbg_write_bootlog();
 #endif
