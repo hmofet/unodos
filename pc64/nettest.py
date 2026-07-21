@@ -20,6 +20,16 @@ subprocess.run(["cp", harness.OVMF_VARS, "build/vars.fd"], check=True)
 if os.path.exists(harness.QMP_SOCK):
     os.remove(harness.QMP_SOCK)
 
+# This scenario drives the Network app MANUALLY on a fixed timeline, so the
+# stress driver must not run (its bounded default `passes=3` powers the guest
+# off mid-test) and the boot net test must not race it (it skips when no
+# STRESS.CFG exists). Stash the config for the duration; nettest_stage.py is
+# the scenario that tests the armed-boot path.
+CFG = "build/esp/STRESS.CFG"
+had_cfg = os.path.exists(CFG)
+if had_cfg:
+    os.replace(CFG, CFG + ".stash")
+
 netdev = (
     "user,id=n0,tftp=build/tftp,"
     "guestfwd=tcp:10.0.2.100:9000-cmd:cat,"
@@ -44,6 +54,10 @@ if qemu.poll() is not None:
 
 q = harness.Qmp(harness.QMP_SOCK)
 time.sleep(16)
+# the shell auto-opens Control Panel now; close it so the arrow keys drive the
+# desktop icon selection, not the panel's widgets
+harness.keys(q, "esc")
+time.sleep(1)
 for _ in range(12):
     harness.keys(q, "right")
 harness.keys(q, "ret")
@@ -51,3 +65,5 @@ time.sleep(int(sys.argv[2]) if len(sys.argv) > 2 else 30)
 harness.shot(q, TAG)
 q.cmd("quit")
 qemu.wait()
+if had_cfg:
+    os.replace(CFG + ".stash", CFG)

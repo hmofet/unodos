@@ -100,6 +100,21 @@ static const char *cfg_find(const char *cfg, const char *key)
 static int cfg_has(const char *cfg, const char *key)
 { return cfg_find(cfg, key) != 0; }
 
+/* For other harness modules (the net test): is `key` set in STRESS.CFG?
+ * Re-reads the file - callers are one-shot, not per-frame. Returns -1 when no
+ * STRESS.CFG exists at all (distinct from "present but key absent" = 0). */
+int pc64_stress_cfg_flag(const char *key)
+{
+    unsigned char cfg[512];
+    int v, n = uno_fs_volumes();
+    long got = -1;
+    for (v = 0; v < n && got < 0; v++)
+        got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
+    if (got < 0) return -1;
+    cfg[got] = 0;
+    return cfg_has((char *)cfg, key);
+}
+
 /* `key=N` -> N, else `dflt`.  Used for passes=3. */
 static int cfg_int(const char *cfg, const char *key, int dflt)
 {

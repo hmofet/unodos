@@ -33,6 +33,7 @@
 #include "pc64_fs.h"
 #include "net.h"
 #include "wifi_wpa.h"
+#include "uno_debug.h"     /* uno_dbg_net_trace: bring-up trace (no-op in release) */
 #include <stdint.h>
 #include <string.h>
 
@@ -59,6 +60,7 @@ static void mdelay_(int ms) { uno_pc64_delay_ms(ms); }
  * ===================================================================== */
 static volatile u8 *g_bar;
 static pci_dev g_pci;
+static u16 g_devid;                     /* PCI device id (for diagnostics)     */
 static int g_present, g_bound;
 
 static u32 r32(u32 o) { return *(volatile u32 *)(g_bar + o); }
@@ -271,14 +273,17 @@ static void choose_firmware(void)
     }
 }
 
-/* the ESP volume that holds FIRMWARE\ and WIFI.CFG (firmware SFS volume) */
+/* the ESP volume that holds FIRMWARE\ and the credentials file. WIFI.CFG is
+ * the documented name; WIFI.TXT is accepted too - it is what the flasher's
+ * developer-options folder copy stages from the NAS creds template. */
+static char g_cfgname[12];
 static int firmware_volume(void)
 {
     int n = uno_fs_volumes(), i;
     for (i = 0; i < n; i++)
         if (uno_fs_kind(i) == 2 || uno_fs_kind(i) == 1) {   /* firmware SFS / native FAT */
-            long sz = uno_fs_size(i, "WIFI.CFG");
-            if (sz > 0) return i;
+            if (uno_fs_size(i, "WIFI.CFG") > 0) { strcpy(g_cfgname, "WIFI.CFG"); return i; }
+            if (uno_fs_size(i, "WIFI.TXT") > 0) { strcpy(g_cfgname, "WIFI.TXT"); return i; }
         }
     return -1;
 }
@@ -1193,7 +1198,7 @@ static char g_cfg_psk[80];
 static int read_config(int vol)
 {
     static u8 buf[512];
-    long n = uno_fs_read(vol, "WIFI.CFG", buf, sizeof buf - 1);
+    long n = uno_fs_read(vol, g_cfgname[0] ? g_cfgname : "WIFI.CFG", buf, sizeof buf - 1);
     int i = 0;
     g_cfg_ssid[0] = g_cfg_psk[0] = 0;
     if (n <= 0) return -1;
@@ -1283,6 +1288,8 @@ static void handle_eapol(const u8 *frame, int len)
 {
     u8 reply[600];
     int r = wpa_sm_rx_eapol(&g_wpa, frame, len, reply, sizeof reply);
+    uno_dbg_net_trace("wifi: EAPOL frame in (%d bytes) -> sm state %d, reply %d",
+                      len, g_wpa.state, r);
     if (r <= 0) return;
     /* TX the EAPOL reply as a data frame (in the clear, high priority) before
        installing keys */
@@ -1299,6 +1306,9 @@ static void handle_eapol(const u8 *frame, int len)
         g_keys_installed = 1;
         mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));            /* authorize */
         g_joined = 1;
+        uno_dbg_net_trace("wifi: 4-way handshake DONE - CCMP keys installed "
+                          "(gtk_len=%d idx=%d), station authorized",
+                          g_wpa.gtk_len, g_wpa.gtk_idx);
     }
 }
 
@@ -1312,6 +1322,14 @@ static int find_and_join(void)
        config + request and let the connect flow proceed on the configured SSID.
        Channel discovery from beacons is part of the metal bring-up. */
     mvm_scan_cfg();
+    /* State the scaffold boundary in the trace so a metal log is never read as
+       "the AP rejected us": everything below runs against a broadcast BSSID
+       and no auth/assoc exchange is performed yet. Reaching this line on metal
+       means card + firmware + command layer all work - the remaining tail is
+       MLME (beacon parse -> real BSSID/channel -> auth/assoc), not transport. */
+    uno_dbg_net_trace("wifi: join: scan cfg sent. KNOWN GAP: beacon parse + "
+                      "auth/assoc not implemented - bssid=broadcast, chan=1 "
+                      "assumed; a real join CANNOT complete yet");
     /* (SCAN_REQ_UMAC build is family-version-specific; see fwapi ref §5.12.
        On metal we parse the SCAN_COMPLETE + beacon RX to learn BSSID/channel.) */
     if (chan == 0) chan = 1;           /* default until beacon parse fills it */
@@ -1333,6 +1351,8 @@ static int find_and_join(void)
       wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
       g_wpa_active = 1; }
     strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+    uno_dbg_net_trace("wifi: join: phy/mac ctxt + binding + sta queued for "
+                      "\"%s\", WPA2 supplicant armed (PMK derived)", g_cfg_ssid);
     return 0;
 }
 
@@ -1402,6 +1422,7 @@ int iwl_present(void)
     if (pci_find_class(0x02, 0x80, &d)) {
         u16 dev = pci_cfg_read16(&d, 2);
         if (d.vendor == 0x8086) {
+            g_devid = dev;
             if (identify_by_pci(dev)) { g_pci = d; g_present = 1; return 1; }
             if (g_is_dvm) st_set("Intel WiFi found, but it is an older iwldvm card (unsupported)");
         }
@@ -1414,47 +1435,96 @@ uno_nic_t *iwl_nic(void)
     int vol;
     long fn;
     if (g_bound) return &g_nic;
-    if (!iwl_present()) { st_set("no Intel WiFi card"); return 0; }
+    if (!iwl_present()) {
+        st_set("no Intel WiFi card");
+        uno_dbg_net_trace("wifi: no supported Intel card on the PCI bus%s",
+                          g_is_dvm ? " (an iwldvm-era card was declined)" : "");
+        return 0;
+    }
 
     choose_firmware();
     st_set("Intel WiFi "); st_cathex(g_hw_rev);
+    uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d fw=%s",
+                      g_devid, g_family, g_gen2, g_fwfile);
 
     vol = firmware_volume();
-    if (vol < 0) { st_set("WiFi: no WIFI.CFG on the ESP"); return 0; }
-    if (read_config(vol) < 0) { st_set("WiFi: WIFI.CFG has no ssid="); return 0; }
+    if (vol < 0) {
+        st_set("WiFi: no WIFI.CFG on the ESP");
+        uno_dbg_net_trace("wifi: FAIL no WIFI.CFG/WIFI.TXT on any volume - no credentials");
+        return 0;
+    }
+    if (read_config(vol) < 0) {
+        st_set("WiFi: WIFI.CFG has no ssid=");
+        uno_dbg_net_trace("wifi: FAIL %s (vol %d) has no ssid= line", g_cfgname, vol);
+        return 0;
+    }
+    uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
+                      g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
 
     /* read the .ucode image (strip the FIRMWARE\ prefix for the FAT reader if
        it exposes only a flat root; try both) */
     fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
     if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
-    if (fn <= 0) { st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")"); return 0; }
-    if (parse_ucode(g_fwbuf, (u32)fn) < 0) { st_set("WiFi: bad .ucode TLV"); return 0; }
+    if (fn <= 0) {
+        st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
+        uno_dbg_net_trace("wifi: FAIL firmware %s not on the ESP (uno-wifi-fw.py stages it)", g_fwfile);
+        return 0;
+    }
+    if (parse_ucode(g_fwbuf, (u32)fn) < 0) {
+        st_set("WiFi: bad .ucode TLV");
+        uno_dbg_net_trace("wifi: FAIL %s (%ld bytes) failed TLV parse", g_fwfile, fn);
+        return 0;
+    }
+    uno_dbg_net_trace("wifi: firmware %s loaded from disk (%ld bytes)", g_fwfile, fn);
     load_pnvm(vol);
 
     /* map BAR0 + bus master */
     pci_enable_bus_master(&g_pci);
     g_bar = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 0);
-    if (!g_bar) { st_set("WiFi: no BAR0"); return 0; }
+    if (!g_bar) {
+        st_set("WiFi: no BAR0");
+        uno_dbg_net_trace("wifi: FAIL BAR0 unmapped");
+        return 0;
+    }
     g_hw_rev = r32(CSR_HW_REV);
     g_hw_rf_id = r32(CSR_HW_RF_ID);
+    uno_dbg_net_trace("wifi: BAR0 ok, hw_rev=%08x rf_id=%08x", g_hw_rev, g_hw_rf_id);
 
-    if (prepare_card_hw() < 0) { st_set("WiFi: card not ready (ME owns it?)"); return 0; }
+    if (prepare_card_hw() < 0) {
+        st_set("WiFi: card not ready (ME owns it?)");
+        uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
+        return 0;
+    }
     sw_reset();
     w32(CSR_INT, 0xFFFFFFFFu);
-    if (rf_killed()) { st_set("WiFi: hardware RF-kill is on"); return 0; }
+    if (rf_killed()) {
+        st_set("WiFi: hardware RF-kill is on");
+        uno_dbg_net_trace("wifi: FAIL hardware RF-kill asserted (airplane-mode key/switch)");
+        return 0;
+    }
     w32(CSR_UCODE_DRV_GP1_CLR, 0x00000002);   /* clear SW rfkill handshake */
     w32(CSR_UCODE_DRV_GP1_CLR, 0x00000004);   /* clear cmd-blocked */
 
-    if (apm_init() < 0) { st_set("WiFi: APM init timeout"); return 0; }
+    if (apm_init() < 0) {
+        st_set("WiFi: APM init timeout");
+        uno_dbg_net_trace("wifi: FAIL APM init timeout (clock-ready never came up)");
+        return 0;
+    }
+    uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
     rx_hw_init();
     if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
 
     /* load firmware + wait ALIVE */
-    if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); return 0; } }
-    else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); return 0; } }
-    else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); return 0; } }
+    if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
+    else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen2 (ctxt-info) fw load"); return 0; } }
+    else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen1 (section DMA) fw load"); return 0; } }
 
-    if (wait_alive(2000) < 0) { st_set("WiFi: firmware did not ALIVE"); return 0; }
+    if (wait_alive(2000) < 0) {
+        st_set("WiFi: firmware did not ALIVE");
+        uno_dbg_net_trace("wifi: FAIL no ALIVE notification within 2 s of fw start");
+        return 0;
+    }
+    uno_dbg_net_trace("wifi: firmware ALIVE");
     if (!g_gen2) tx_start_gen1();
 
     /* post-alive init (unified path; AC split path adds INIT image + calib) */
@@ -1462,9 +1532,10 @@ uno_nic_t *iwl_nic(void)
     mvm_tx_ant(1);
     if (fw_has_capa(12)) mvm_dqa_enable();
     mvm_power_table();
+    uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power)");
 
     /* connect */
-    if (find_and_join() < 0) { st_set("WiFi: join failed"); return 0; }
+    if (find_and_join() < 0) { st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0; }
 
     g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
     g_bound = 1;

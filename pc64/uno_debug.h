@@ -72,11 +72,25 @@ void uno_dbg_write_bootenv(void);       /* BOOTENV.TXT                         *
 void uno_dbg_write_bootlog(void);       /* CRASH\BOOTLOG.TXT - every boot      */
 void uno_dbg_boot_marker(void);         /* CRASH\BOOTS.TXT - earliest proof    */
 void uno_dbg_write_perf(const char *text, int len);  /* CRASH\PF###.TXT        */
+int  uno_dbg_write_crashfile(const char *name, const void *data, int len);
+int  pc64_stress_cfg_flag(const char *key);  /* STRESS.CFG key set? -1 = no file */
 
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */
 void pc64_stress_tick(void);            /* call once per main-loop frame       */
 void pc64_stress_stop(void);            /* F12: disarm + hand back the desktop */
 const char *pc64_stress_status(void);   /* on-screen run state, 0 when unarmed */
+
+/* ---- the network hardware test (pc64_nettest.c) --------------------------
+ * Runs once from the shell main loop, before the stress driver arms: USB
+ * ethernet if an adapter is present at boot, else WiFi with a full bring-up
+ * trace. Progressive log to CRASH\NETLOG.TXT. */
+void pc64_nettest_tick(void);           /* one-shot; later calls are free      */
+/* Trace sink for the network drivers (iwlwifi/wpa/usb-eth): appends a line to
+ * the NETLOG buffer, mirrors it to the kernel log, and FEEDS THE WATCHDOG
+ * HEARTBEAT - WiFi bring-up legitimately spends >20 s in scan+join, and a
+ * trace that reset the machine mid-join would destroy the evidence it exists
+ * to collect. Safe to call outside the net test (before the shell: buffered). */
+void uno_dbg_net_trace(const char *fmt, ...);
 
 /* ---- synthetic input (uefi_main.c, UNO_DEBUG only) ----------------------- */
 void uno_pc64_inject_key(int scan, int uni, int ctrl);
@@ -99,6 +113,8 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define uno_dbg_mark_clean()         ((void)0)
 #define uno_dbg_boot_marker()        ((void)0)
 #define pc64_stress_tick()           ((void)0)
+#define pc64_nettest_tick()          ((void)0)
+#define uno_dbg_net_trace(...)       ((void)0)
 #endif
 
 #endif /* UNO_DEBUG_H */
