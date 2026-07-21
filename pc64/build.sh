@@ -28,15 +28,19 @@ CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
 # ============================================================================
 # DEBUG BUILD (branch pc64-debug-stress) - crash reports, watchdog, kernel log,
 # boot env block, perf HUD, fuzz/stress driver, sanitizer traps, symbolized
-# backtraces.  ON by default here; UNO_DEBUG=0 builds the plain OS.
-#   UNO_DEBUG=1   (default) the debug harness
+# backtraces.  OFF by default on master: a bare `./build.sh` builds the plain
+# shippable OS.  Opt into the debug/test harness with `UNO_DEBUG=1 ./build.sh`
+# (which is what the SPECTEST / stress / dbg_crash test scripts and the flasher's
+# Developer options use).
+#   UNO_DEBUG=1   the debug harness (opt-in)
 #   UNO_UBSAN=1   (default when debug) trap signed-overflow/OOB/shift/null on
 #                 FIRST-PARTY pc64 code (not bearssl/uacpi/upy)
 #   UNO_DBGCON=1  also mirror the log + reports to QEMU debugcon (port 0x402)
 #     -> METAL-UNSAFE (SMM-trapped on some laptops); QEMU verification only.
 # The report families and how to read them live in pc64/DEBUG.md.
 # ============================================================================
-UNO_DEBUG="${UNO_DEBUG:-1}"
+UNO_DEBUG="${UNO_DEBUG:-0}"
+[ "$UNO_DEBUG" = "0" ] && echo "[build] PRODUCTION build (set UNO_DEBUG=1 for the debug/test harness)"
 DBGDEF=""; DBGSAN=""; DBG_ID=""
 if [ "$UNO_DEBUG" != "0" ]; then
     # -fno-omit-frame-pointer: the crash handler walks the RBP chain.
