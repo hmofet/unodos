@@ -106,6 +106,15 @@ static fb_px  gCurRow[FB_MAX_W];    /* cursor-composited fb row */
 static int    gColMap[GROW_W];      /* output col -> source col */
 static short  gRowMap[GROW_H];      /* output row -> source row */
 static int    gLowres;              /* fullscreen 3D is running at 1/4 x 1/4  */
+/* Present via Blt() because it is FASTER, not because we have to.
+ *
+ * Deliberately separate from gUseBlt (which means "no usable linear fb"): the
+ * detach gate keys off gUseBlt, and a machine that merely prefers Blt for speed
+ * still has a linear framebuffer and is still detach-eligible. Blt needs boot
+ * services, so this is cleared on detach. Measured on the X13 Yoga: Blt
+ * 106 161 KB/s vs direct stores 26 057 KB/s - 4x, because the firmware blitter
+ * DMAs past the uncached-framebuffer problem that costs us the whole frame. */
+static int    gBltFast;
 
 /* Is this machine's framebuffer uncached-class?
  *
@@ -429,6 +438,47 @@ static void apply_desktop(int fbw, int fbh)
     if (g_cy > uno_fb_h - 1) g_cy = uno_fb_h - 1;
 }
 
+/* Pick the faster present path by measuring both.
+ *
+ * Every machine tested leaves the framebuffer uncached, so CPU stores run at
+ * 26-43 MB/s and present IS the frame (measured: 3 ms to render, 250 ms to
+ * push). The firmware's Blt() may drive the GPU's DMA engine instead and skip
+ * that entirely - on the X13 Yoga it measured 4x faster. Rather than assume
+ * either way, time both over the same bytes and take the winner.
+ *
+ * Benches into the bottom rows, which are cleared immediately afterwards, so
+ * nothing is left on screen (F10).  Requires boot services, so this runs once
+ * during init and is undone by detach. */
+static void choose_present_path(void)
+{
+    static UINT32 row[GROW_W];
+    unsigned long long t0, td, tb;
+    UINT32 x, y, top;
+    int rows = 32;
+    if (gUseBlt || !gVram || !gGop) return;      /* no choice to make */
+    if (gModeH <= (UINT32)rows + 8 || gModeW > GROW_W) return;
+    for (x = 0; x < gModeW; x++) row[x] = 0x00101010;
+    top = gModeH - (UINT32)rows;
+
+    t0 = uno_native_rdtsc();                     /* direct CPU stores */
+    for (y = 0; y < (UINT32)rows; y++)
+        for (x = 0; x < gModeW; x++) gVram[(top + y) * gStride + x] = row[x];
+    td = uno_native_rdtsc() - t0;
+
+    t0 = uno_native_rdtsc();                     /* one Blt per row, as present does */
+    for (y = 0; y < (UINT32)rows; y++)
+        gGop->Blt(gGop, row, EfiBltBufferToVideo, 0, 0, 0, top + y, gModeW, 1, 0);
+    tb = uno_native_rdtsc() - t0;
+
+    /* Only switch on a decisive win - a marginal one is not worth changing the
+     * path for, and Blt costs us the direct path once detached. */
+    if (tb && td / tb >= 2) gBltFast = 1;
+
+    { UINT32 black = 0;                          /* erase the bench band (F10) */
+      gGop->Blt(gGop, &black, EfiBltVideoFill, 0, 0, 0, top, gModeW, rows, 0); }
+    gShadowValid = 0;
+}
+
 /* boot / mode-change default: a chunky desktop (~half the panel) that fills
    the screen. Half-res on a 16:9 panel fills exactly (2x) with no borders and
    gives a comfortably large UI. */
@@ -692,6 +742,7 @@ static int try_detach(void)
             break;
         if (((EBS_FN)gBS->ExitBootServices)(gIH, key) == EFI_SUCCESS) {
             gDetached = 1;
+            gBltFast = 0;                     /* Blt needs boot services       */
             gKeyEx = 0; gNAbs = gNPtr = 0;    /* firmware input died with EBS  */
             if (had_i8042) uno_ps2_init();    /* the i8042 is ours now         */
             /* I2C-HID kbd/pad were already native (polled the same either way).
@@ -722,6 +773,9 @@ void uno_pc64_init(void)
     }
 
     set_geometry(-1);               /* keep the native mode, auto zoom */
+    choose_present_path();          /* direct stores vs Blt: measure, take the
+                                       winner (the fb is uncached on every
+                                       machine tested, so this is the frame) */
     splash_step(1);                 /* GOP + geometry: the splash appears */
 
     connect_all();
@@ -1232,7 +1286,7 @@ void uno_pc64_present(void)
             built_ox0 = ox0; built_ox1 = ox1;
         }
         dy = gOffY + (UINT32)oy;
-        if (gUseBlt) {
+        if (gUseBlt || gBltFast) {
             gGop->Blt(gGop, gRow + ox0, EfiBltBufferToVideo, 0, 0,
                       gOffX + (UINT32)ox0, dy, (UINTN)n, 1, 0);
         } else {

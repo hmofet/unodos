@@ -99,10 +99,14 @@ def boot():
     if SAFE:
         print("booting QEMU with the SHIPPED STRESS.CFG (must NOT self-crash)...")
         try:
-            subprocess.run(argv, timeout=55)
-            print("  QEMU exited/reset on its own - unexpected in safe mode")
+            subprocess.run(argv, timeout=90)
+            # A bounded run now powers the machine off when it finishes, so
+            # QEMU exiting is the EXPECTED end - the check that matters is
+            # whether CRASH\ came back clean, done below.
+            print("  QEMU powered off on its own (expected: the run completed)")
         except subprocess.TimeoutExpired:
-            print("  ran 55s without resetting (expected: no crash)")
+            print("  ran to the timeout without powering off - the run may not "
+                  "have completed; check the PF snapshot count")
         return
     if HANG:
         print("booting QEMU (force-hang -> watchdog must fire an HG report + reset)...")

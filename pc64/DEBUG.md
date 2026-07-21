@@ -78,6 +78,13 @@ finding F1, which armed `allow-force` on every "safe" stick):
 - `force-hang` - **opt in** to a forced freeze on pass 1 that proves the
   watchdog. Off by default.
 
+**A bounded run now POWERS THE MACHINE OFF when it finishes** (4 s after the
+`STRESS COMPLETE` banner). That is deliberate: shutting down by hand meant
+hunting for Start > Shut Down under whatever windows the driver left open, and
+pulling the plug instead is the one exit that can lose telemetry. Auto-shutdown
+flushes everything and marks the boot clean. Add `noshutdown` to `STRESS.CFG` to
+keep the desktop instead.
+
 **F12 stops the driver at any time** and hands back the desktop (it drops
 fullscreen too, so it works even while Runner3D has focus). Use it if a run
 traps you.
