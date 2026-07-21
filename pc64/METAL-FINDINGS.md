@@ -276,6 +276,20 @@ The autopsy is the deliverable: one batch narrowed "no ALIVE" to "the ROM never
 launched the ucode, here are the exact registers per family." A focused fix
 session with a card present works from this.
 
+### SPECTEST — first bare-metal conformance run: 24/24 PASS (2026-07-21)
+`x13yoga-2026-07-21-SPEC/`, build `debug-local-20260721-1711`, X13 Yoga. The
+Developer-options → Conformance flow worked end to end: the flasher wrote a
+`spec` STRESS.CFG, the debug build ran SPECTEST, and `CRASH\X13YOGA\SPECTEST.TXT`
+came back **24 PASS, 0 FAIL**. This validates the six memory-safety fixes on
+REAL hardware, not just QEMU:
+- **S-FAT-28 PASS on metal** — the chain-free-ordering fix holds (it *fails*
+  under QEMU vvfat, whose multi-cluster overwrite is broken, so metal is the
+  authoritative check here).
+- S-NET-08 (ping dangling ptr), S-NET-19 (DNS txid), S-FONT-09 (F7 UB shift),
+  S-MOD-adjacent, libc/JS/font/dbg contracts — all PASS on silicon.
+The conformance harness itself is now proven on metal; future builds can regress
+against it per machine.
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)
