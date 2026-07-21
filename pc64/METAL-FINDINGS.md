@@ -50,6 +50,19 @@ have written one again. Most likely it **never booted the stick** (it has Window
 and probably an installed UnoDOS whose boot entry outranks the USB). Unresolved
 pending one observation: did the amber splash banner appear?
 
+**X13 Yoga run 2 — P0 optimizations measured (2026-07-20).**
+`x13yoga-2026-07-20-P0/`. Same machine, same 3-pass workload, build
+`debug-local-20260721-0153`. `present_avg` fell **2.2-3.4x** (238576 -> 107825,
+98653 -> 29160, 262518 -> 121732 us), fps 5->7 / 16->24 / 4->8, and the whole run
+went **121.3 s -> 70.4 s (1.72x)**. `render_avg` unchanged, as intended. Zero
+crashes. This confirms the F3 model end to end: present WAS the frame, and
+cutting VRAM bytes cut frame time proportionally. The framebuffer is still
+uncached (`vram 26269 KB/s`) — P0 does not change the memory type, so the
+remaining ~100x is still on the table via P3.
+
+Also the first metal test of the new boot marker: `CRASH\BOOTS.TXT` reads
+`boot 1  2026-07-20 21:59:04  build debug-local-20260721-0153`.
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)

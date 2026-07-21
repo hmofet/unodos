@@ -38,12 +38,27 @@ renderer** — that is the intuitive move and the measurements say it is wasted.
 
 ## P0 — Write fewer bytes to VRAM (safe, large, do first)
 
-> **STATUS: P0.1-P0.3 IMPLEMENTED on `pc64-debug-stress` as a measurable
-> experiment. P0.4 dropped — see below. QEMU-verified for correctness (desktop
-> and fullscreen 3D both render clean, no stale spans); the perf win cannot be
-> measured in QEMU because its framebuffer is not uncached. Awaiting a metal
-> run. Baseline to beat (X13 Yoga): `render_avg 2924 us / present_avg 238576 us
-> / fps 5`.**
+> **STATUS: P0.1-P0.3 IMPLEMENTED and MEASURED ON METAL. P0.4 dropped (see
+> below). Same machine, same deterministic 3-pass workload, X13 Yoga:**
+>
+> | pass | present BEFORE | present AFTER | gain | fps |
+> |------|---------------|---------------|------|-----|
+> | 0 | 238 576 us | **107 825 us** | **2.21x** | 5 -> 7 |
+> | 1 | 98 653 us | **29 160 us** | **3.38x** | 16 -> 24 |
+> | 2 | 262 518 us | **121 732 us** | **2.16x** | 4 -> 8 |
+>
+> **Whole-run wall clock: 121.3 s -> 70.4 s (1.72x) for identical work.**
+> `render_avg` is unchanged (2924->2893, 75762->75548, 3186->3154), exactly as
+> designed — these changes touch only bytes-written, not render cost. Zero
+> crashes; the model holds.
+>
+> **Honest read on the shortfall:** I estimated 5-20x for P0.1 and we got ~2.2x.
+> The stress workload opens and closes windows constantly, so most frames dirty
+> large areas and the span tracking has little to trim — pass 1, the pass with
+> the fewest dirty rows, is also the one that gained most (3.38x). Real
+> interactive use (typing, caret blink, hover) should do better than this
+> synthetic run shows, and a good chunk of the measured 2.2x is likely P0.3's
+> wider stores rather than the spans. Worth separating if it ever matters.
 
 No MTRR games, no firmware assumptions, contained changes in `uno_pc64_present`.
 
