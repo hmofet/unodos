@@ -15,7 +15,7 @@ Raw reports are preserved off each stick under
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
 | Latitude (i7-6600U) | i7-6600U | 1 (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. |
-| Lenovo X13 Yoga Gen 3 | — | pending | convertible/touch — another I2C-HID + firmware-pointer data point for F4/F6 |
+| Lenovo X13 Yoga Gen 3 | i5-10210U | 1 (2026-07-20) | 1920x1080. **Clean 3-pass run, zero crashes** — first machine to run with detach disabled, and the one that PROVED F3 is the bottleneck. |
 | MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
@@ -31,6 +31,13 @@ crashes, ZERO hangs.** `x1carbon-2026-07-20/`. The bounded-run machinery worked
 as designed (3 `PF` snapshots, then the driver went idle and handed back the
 desktop). Two machines are now clean under stress; the substantive findings are
 environmental, not crash bugs.
+
+**X13 Yoga Gen 3 run 1: all 3 passes, 121 s, ZERO crashes, ZERO hangs.**
+`x13yoga-2026-07-20/`. First run on the detach-disabled build and everything
+worked end to end: `detached=0 volumes=5`, `shell: main loop entered … hud_len=38`,
+`stress: ARMED (passes=3)`, three passes, then `driver IDLE, desktop is yours`.
+This validates the F8 workaround, the bounded-run machinery, the desktop
+hand-back, and the boot log — and it produced the perf split that settles F3.
 
 ## Severity key
 
@@ -71,6 +78,9 @@ existing dirty-row/shadow tracking limits but does not remove it.
   - **X1 Carbon: `vram 24937 KB/s ram 3001222540 KB/s ratio 1:120352`**, via a
     *different* MTRR — `mtrr0 base=80000000 mask=7f80000800 type=0`, i.e. the
     32-bit MMIO hole (0x80000000-0xFFFFFFFF) with `fb_base c0000000` inside it.
+  - **X13 Yoga Gen 3: `vram 27236 KB/s ram 3185483826 KB/s ratio 1:116958`**,
+    `mtrr0 base=c0000000 mask=7fc0000800 type=0`, `fb_base d0000000`. Fourth
+    machine, fourth MTRR layout.
   - **Latitude (i7-6600U): `vram 43320 KB/s ram 4648625700 KB/s ratio
     1:107308`**, `mtrr0 base=80000000 mask=7f80000800 type=0`, `fb_base
     a0000000`. Third machine, third firmware.
@@ -97,6 +107,25 @@ existing dirty-row/shadow tracking limits but does not remove it.
     wrong half of the frame.
   - Ordinary desktop use stays tolerable only because dirty-row tracking keeps
     most frames far below full-screen.
+- **MEASURED ON METAL — the machine is framebuffer-bound, not CPU-bound.** The
+  X13 Yoga's per-pass perf snapshots (the first run to carry them):
+
+  | pass | render_avg | present_avg | fps | present/render |
+  |------|-----------|-------------|-----|----------------|
+  | 0 | 2 924 us | **238 576 us** | 5 | **82x** |
+  | 1 | 75 762 us | 98 653 us | 16 | 1.3x |
+  | 2 | 3 186 us | **262 518 us** | 4 | **82x** |
+
+  Rendering the whole scene costs ~3 ms; **pushing it to VRAM costs ~240-260 ms**.
+  And that lands right where the bandwidth model predicts: a full-screen write is
+  1920x1080x4 = 8100 KB, and 8100 / 27 236 KB/s = **297 ms**. Two independent
+  measurements — a synthetic bandwidth bench and real frame timing — agree.
+- **The actionable conclusion for the fix session:** optimising the renderer or
+  the rasteriser is worth ~nothing here; ~99 % of a frame is the uncached VRAM
+  write. Only two things can help: change the framebuffer's memory type, or cut
+  the number of bytes pushed to VRAM. Anything else is noise. (Pass 1 is the
+  instructive counter-example: when few rows were dirty, present fell to 99 ms
+  and fps tripled.)
 - Root cause / fix difficulty (investigated, **do not blind-fix**):
   - `mtrr6` is coarse — its physmask (`0x40_0000_0000`) also blankets the >4 GB
     high-MMIO region where the Surface's xHCI/NVMe/I2C register BARs live, which
@@ -117,8 +146,11 @@ native trackpad and keyboard are unavailable; input falls back to the firmware
 Absolute/Simple pointers, and because no native keyboard binds, firmware ConIn
 keeps being polled → the firmware on-screen keyboard stays drawn (the OSK icon).
 It is also why *neither* laptop detaches (see F6).
-- **Reproduced on both laptops**: Surface runs 1+2 `ctrls=3 present=0`; **X1
-  Carbon `ctrls=2 present=0`**. The I2C-HID probe finds controllers on every
+- **Reproduced on every machine tested**: Surface runs 1+2 `ctrls=3 present=0`;
+  X1 Carbon `ctrls=2 present=0`; Latitude and **X13 Yoga `ctrls=0`** — and the
+  Yoga is a touch convertible, so finding *zero* I2C controllers there suggests
+  the enumeration itself misses them on some chipsets, not merely that binding
+  fails. The I2C-HID probe finds controllers on every
   machine tested and binds a device on none of them. See F6 for the knock-on.
 - Evidence (`BOOTENV.TXT`): `i2c-hid: ctrls=3 present=0 addr=0 desc_parsed=0`;
   `pointer: fw_simple=1 fw_abs=3 detach_blocked=0`; `ps2: kbd=0 aux=0`;
