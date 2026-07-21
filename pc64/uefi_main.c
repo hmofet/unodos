@@ -39,6 +39,8 @@
 #include "mac_compat.h"
 #include "i2c_hid.h"        /* native I2C-HID trackpad + keyboard */
 #include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
+#include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
+#include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
@@ -93,6 +95,7 @@ static int gAccX[MAXPTR], gAccY[MAXPTR];    /* sub-pixel remainders per device *
  * a small letterboxed box. gColMap/gRowMap are the per-output-pixel source
  * indices; gOutW x gOutH is the filled region at gOffX,gOffY. */
 #define GROW_W  3840                /* output-row ceiling (4K-wide panels) */
+#define BLT_BAND_H 32               /* Blt present: rows coalesced per Blt() */
 #define GROW_H  2160
 static volatile UINT32 *gVram;      /* GOP linear framebuffer (when usable) */
 static UINT32 gStride;              /* pixels per scan line */
@@ -305,7 +308,9 @@ static void splash_draw(int done)
      * surface, and fb_text -> text_pen does `x << 6` (UB on negatives, F7). */
     { const char *s = "DEBUG / STRESS BUILD   " UNO_BUILD_ID;
       int x = cx - fb_text_w(s) / 2; if (x < 0) x = 0;
-      fb_text(x, H / 2 + 40, s, FB_RGB(255, 210, 90), -1); }
+      /* BELOW the loading bar (track by=H/2+46, h=14+borders): at +40 the bar
+       * painted through the middle of this line in every operator photo (F10) */
+      fb_text(x, H / 2 + 68, s, FB_RGB(255, 210, 90), -1); }
 #endif
     /* loading bar: recessed track + filled coloured segments */
     fb_fill_rect(bx - 2, by - 2, barw + 4, bh + 4, FB_RGB(30, 38, 70));
@@ -465,9 +470,14 @@ static void choose_present_path(void)
         for (x = 0; x < gModeW; x++) gVram[(top + y) * gStride + x] = row[x];
     td = uno_native_rdtsc() - t0;
 
-    t0 = uno_native_rdtsc();                     /* one Blt per row, as present does */
-    for (y = 0; y < (UINT32)rows; y++)
-        gGop->Blt(gGop, row, EfiBltBufferToVideo, 0, 0, 0, top + y, gModeW, 1, 0);
+    t0 = uno_native_rdtsc();                     /* ONE banded Blt, as present now does */
+    { static UINT32 band[BLT_BAND_H * GROW_W];
+      UINT32 by;
+      for (by = 0; by < (UINT32)rows && by < BLT_BAND_H; by++)
+          for (x = 0; x < gModeW; x++) band[by * gModeW + x] = row[x];
+      gGop->Blt(gGop, band, EfiBltBufferToVideo, 0, 0, 0, top,
+                gModeW, (UINTN)(rows < BLT_BAND_H ? rows : BLT_BAND_H),
+                (UINTN)gModeW * 4); }
     tb = uno_native_rdtsc() - t0;
 
     /* Only switch on a decisive win - a marginal one is not worth changing the
@@ -711,6 +721,37 @@ static int detach_would_strand_pointer(void)
     return nctrl > 0;
 }
 
+/* F8: does the volume we BOOTED from ride over USB? uno_fat_native_eligible
+ * asks "is SOME UnoDOS volume natively reachable", which is the wrong
+ * question on a machine with UnoDOS installed internally: booting the USB
+ * stick there satisfied the gate, detach killed firmware Block IO, and the
+ * running system lost its own boot volume (Latitude, 2026-07-20 - all
+ * telemetry and module loads died silently). Walk the boot image's device
+ * path and look for a MESSAGING/USB node. */
+static int boot_device_is_usb(void)
+{
+    static EFI_GUID li_guid = { 0x5b1b31a1, 0x9562, 0x11d2,
+        { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };   /* LoadedImage */
+    static EFI_GUID dp_guid = { 0x09576e91, 0x6d3f, 0x11d2,
+        { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };   /* DevicePath  */
+    typedef struct { UINT32 Revision; EFI_HANDLE ParentHandle;
+                     void *SystemTable; EFI_HANDLE DeviceHandle; } LImin;
+    LImin *li = 0;
+    unsigned char *dp = 0;
+    int guard = 64;
+    if (EFI_ERROR(gBS->HandleProtocol(gIH, &li_guid, (void **)&li)) || !li)
+        return 0;
+    if (EFI_ERROR(gBS->HandleProtocol(li->DeviceHandle, &dp_guid, (void **)&dp)) || !dp)
+        return 0;
+    while (guard-- && dp[0] != 0x7f) {          /* 0x7f = END device path    */
+        int len = dp[2] | (dp[3] << 8);
+        if (len < 4) break;
+        if (dp[0] == 3 && dp[1] == 5) return 1; /* MESSAGING(3) / USB(5)     */
+        dp += len;
+    }
+    return 0;
+}
+
 static int try_detach(void)
 {
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
@@ -729,6 +770,15 @@ static int try_detach(void)
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
     if (!uno_fat_native_eligible()) {
         dbg_puts("detach: no AHCI-backed FAT volume\n");
+        return 0;
+    }
+    /* F8: "some volume survives" is not enough - the volume we BOOTED from
+     * must survive. A USB boot volume outlives detach only if the native
+     * USB mass-storage path exists to reclaim it (usbmsc.c over xHCI). */
+    if (boot_device_is_usb() && !uno_usbmsc_supported()) {
+        dbg_puts("detach: USB boot volume would be stranded (no native USB "
+                 "mass storage in this build)\n");
+        gDetachBlocked = 1;
         return 0;
     }
     had_i8042 = uno_ps2_present();
@@ -822,6 +872,10 @@ void uno_pc64_init(void)
     splash_stage(3, "power (ACPI / AML)");
     uno_dbg_check("init:acpi");
     uno_acpi_start(gST);
+    /* F4: now that the namespace is up, re-probe I2C-HID with the REAL slave
+     * address + descriptor register from PNP0C50 _CRS/_DSM. The blind PCI
+     * grid bound nothing on any tested machine; this is the targeted pass. */
+    uno_i2c_hid_acpi_retry();
 #endif
     splash_stage(3, "audio (HD Audio / AC'97)");
     uno_dbg_check("init:audio");
@@ -1208,6 +1262,67 @@ static const fb_px *cursor_row(int y, const fb_px *src)
     return gCurRow;
 }
 
+/* Build one scaled+swizzled output row into dst[a..b] (Blt pixel order:
+ * 0x00RRGGBB). Shared by the banded Blt path. */
+static void build_out_row(UINT32 *dst, int sy, int a, int b)
+{
+    const fb_px *sh = gShadow + sy * FB_W;
+    int x;
+    if (gSwapRB) {
+        for (x = a; x <= b; x++) {
+            fb_px p = sh[gColMap[x]];         /* 0xAABBGGRR -> 0x00RRGGBB */
+            dst[x] = ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF);
+        }
+    } else {
+        for (x = a; x <= b; x++) dst[x] = sh[gColMap[x]] & 0x00FFFFFF;
+    }
+}
+
+/* Present via GOP Blt(), coalescing vertically contiguous dirty output rows
+ * into one rectangular Blt each (Surface anomaly fix). Every row in a band is
+ * built across the band's UNION column span so the rectangle Blt reads no
+ * uninitialised cells; a band flushes when the dirty run breaks or it fills
+ * BLT_BAND_H rows. */
+static UINT32 gBltBand[BLT_BAND_H * GROW_W];
+static void blt_present_banded(const fb_px *fb, int fbw, int fbh)
+{
+    int oy;
+    int rows = 0, band_oy0 = 0, band_ox0 = 0, band_ox1 = -1;
+    int rsy[BLT_BAND_H], rox0[BLT_BAND_H], rox1[BLT_BAND_H];
+    (void)fb; (void)fbh;
+    for (oy = 0; oy <= gOutH; oy++) {
+        int dirty = 0, ox0 = 0, ox1 = -1, sy = 0;
+        if (oy < gOutH) {
+            sy = gRowMap[oy];
+            if (gDirtyRow[sy]) {
+                ox0 = (int)(((long long)gDirtyX0[sy] * gOutW) / fbw) - 1;
+                ox1 = (int)(((long long)(gDirtyX1[sy] + 1) * gOutW) / fbw) + 1;
+                if (ox0 < 0) ox0 = 0;
+                if (ox1 > gOutW - 1) ox1 = gOutW - 1;
+                if (ox1 >= ox0) dirty = 1;
+            }
+        }
+        /* flush the current band when this row isn't dirty, or the band is
+         * full, or we've run off the end */
+        if (rows && (!dirty || rows == BLT_BAND_H)) {
+            int k, w = band_ox1 - band_ox0 + 1;
+            for (k = 0; k < rows; k++)
+                build_out_row(gBltBand + k * gOutW, rsy[k], band_ox0, band_ox1);
+            gGop->Blt(gGop, gBltBand + band_ox0, EfiBltBufferToVideo,
+                      0, 0,
+                      gOffX + (UINT32)band_ox0, gOffY + (UINT32)band_oy0,
+                      (UINTN)w, (UINTN)rows, (UINTN)gOutW * 4);
+            rows = 0; band_ox1 = -1;
+        }
+        if (dirty) {
+            if (rows == 0) { band_oy0 = oy; band_ox0 = ox0; band_ox1 = ox1; }
+            else { if (ox0 < band_ox0) band_ox0 = ox0; if (ox1 > band_ox1) band_ox1 = ox1; }
+            rsy[rows] = sy; rox0[rows] = ox0; rox1[rows] = ox1; rows++;
+            (void)rox0; (void)rox1;
+        }
+    }
+}
+
 void uno_pc64_present(void)
 {
     int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0, built_sy = -1;
@@ -1239,6 +1354,22 @@ void uno_pc64_present(void)
     /* nothing changed since the last present: skip the VRAM write pass entirely
        (common - a drag only touches a few rows, an idle frame touches none). */
     if (!any_dirty) { gShadowValid = 1; uno_pc64_delay_ms(1); return; }
+
+    /* Surface Blt anomaly: on the Surface, present ran ~3x SLOWER than its own
+     * blt bench predicted (163-227 ms vs ~62 ms) with 77 hitches/pass, while
+     * the X1 and Latitude matched their benches. The bench does one Blt per
+     * row; so does the loop below - so the culprit is per-Blt() firmware
+     * overhead, and that machine's is high. Fix: coalesce vertically
+     * contiguous dirty output rows into ONE Blt of a rectangle (union column
+     * span, Delta stride), turning ~hundreds of Blt calls per frame into a
+     * handful. Direct-store machines are unaffected (their per-row 64-bit
+     * store path has no per-row call overhead to amortise). */
+    if (gUseBlt || gBltFast) {
+        blt_present_banded(fb, fbw, fbh);
+        gShadowValid = 1;
+        uno_pc64_delay_ms(1);
+        return;
+    }
 
     /* pass 2: for each output row whose source row changed, build the scaled
        output row (nearest-neighbour via gColMap) and write the filled span */
@@ -1286,15 +1417,13 @@ void uno_pc64_present(void)
             built_ox0 = ox0; built_ox1 = ox1;
         }
         dy = gOffY + (UINT32)oy;
-        if (gUseBlt || gBltFast) {
-            gGop->Blt(gGop, gRow + ox0, EfiBltBufferToVideo, 0, 0,
-                      gOffX + (UINT32)ox0, dy, (UINTN)n, 1, 0);
-        } else {
-            /* WIDER STORES: on an uncached framebuffer each store is its own
-             * bus transaction, so transaction COUNT dominates. Two pixels per
-             * 64-bit store roughly halves them. The source values are read
-             * individually, so gRow's alignment is irrelevant - only the
-             * destination has to be 8-byte aligned. */
+        /* WIDER STORES: on an uncached framebuffer each store is its own bus
+         * transaction, so transaction COUNT dominates. Two pixels per 64-bit
+         * store roughly halves them. The source values are read individually,
+         * so gRow's alignment is irrelevant - only the destination has to be
+         * 8-byte aligned. (The Blt path returned earlier; this loop is the
+         * linear-framebuffer direct-store path only.) */
+        {
             volatile UINT32 *dst = gVram + dy * gStride + gOffX + (UINT32)ox0;
             const UINT32 *src = gRow + ox0;
             int i = 0;
@@ -1539,6 +1668,53 @@ void uno_pc64_dbg_display(unsigned long long *base, int *w, int *h,
 }
 
 void uno_pc64_dbg_invalidate(void) { gShadowValid = 0; }
+
+/* Direct-store VRAM write bandwidth in KB/s (0 if unavailable). Same loop the
+ * env-block bench uses, exposed so the P3 MTRR experiment can measure the fb
+ * before AND after flipping it to WC. */
+unsigned long uno_pc64_dbg_vram_kbs(void)
+{
+    volatile UINT32 *vp;
+    unsigned long n, i;
+    unsigned long long t0, tv, tpm = uno_dbg_tsc_per_ms();
+    if (gUseBlt || !gVram || gModeH <= 80 || !tpm) return 0;
+    vp = gVram + (unsigned)(gModeH - 64) * gStride;
+    n = (unsigned long)gStride * 64u;
+    if (n > (1u << 20)) n = 1u << 20;
+    t0 = uno_native_rdtsc();
+    for (i = 0; i < n; i++) vp[i] = 0xFF102040u + (UINT32)i;
+    tv = uno_native_rdtsc() - t0;
+    uno_pc64_dbg_bench_cleanup();
+    return tv ? (unsigned long)((n * 4ull) * tpm / tv) : 0;
+}
+
+/* P3: apply the opt-in WC-framebuffer MTRR rebuild, benching before/after so
+ * the operator sees whether it worked. Only meaningful while attached with a
+ * linear fb (the whole point is the uncached linear-store path). */
+int uno_pc64_mtrr_wc_experiment(void)
+{
+    unsigned long before, after;
+    unsigned long long base = gGop ? gGop->Mode->FrameBufferBase : 0;
+    unsigned long long size = gGop ? gGop->Mode->FrameBufferSize : 0;
+    if (gUseBlt || !gVram || !base || !size) {
+        uno_dbg_net_trace("mtrr-wc: no linear framebuffer (Blt/absent) - skipping");
+        return -1;
+    }
+    before = uno_pc64_dbg_vram_kbs();
+    uno_dbg_net_trace("mtrr-wc: fb %llx size %llx, direct write BEFORE = %lu KB/s",
+                      base, size, before);
+    if (uno_pc64_mtrr_wc_fb(base, size) != 0) return -1;   /* refused; logged */
+    after = uno_pc64_dbg_vram_kbs();
+    uno_dbg_net_trace("mtrr-wc: direct write AFTER = %lu KB/s (%s)", after,
+                      after > before + before / 2 ? "FASTER - WC took effect"
+                      : "no gain - reverting for safety");
+    if (!(after > before + before / 2)) {   /* no clear win: don't risk it */
+        uno_pc64_mtrr_restore();
+        return -1;
+    }
+    gShadowValid = 0;                        /* repaint under the new type */
+    return 0;
+}
 
 /* P3 scouting: is the firmware's Blt() faster than our CPU stores?
  *

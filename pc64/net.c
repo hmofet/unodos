@@ -154,13 +154,19 @@ static u32 pseudo_seed(const u8 src[4], const u8 dst[4], u8 proto, int l4len)
 /* ======================= ICMP =========================================== */
 static int g_ping_sent, g_ping_got, g_ping_t0, g_ping_ms;
 static u16 g_ping_seq;
-static const u8 *g_ping_dst;
+static u8 g_ping_dst[4];               /* S-NET-08: COPY, not the caller's ptr -
+                                          the post-ARP retry runs a poll later,
+                                          by which point a caller's stack IP is
+                                          long gone (dangling read) */
+static int g_ping_dst_set;
 
 void net_ping(const u8 ip[4])
 {
     u8 icmp[8];
     int flen;
-    g_ping_dst = ip;                   /* remembered for the post-ARP retry */
+    g_ping_dst[0] = ip[0]; g_ping_dst[1] = ip[1];
+    g_ping_dst[2] = ip[2]; g_ping_dst[3] = ip[3];
+    g_ping_dst_set = 1;
     icmp[0] = 8; icmp[1] = 0;          /* echo request */
     wr16(icmp + 2, 0);
     wr16(icmp + 4, 0x4944);            /* id */
@@ -577,6 +583,10 @@ int net_dns_query(const char *host, u8 out[4])
             net_poll(); uno_pc64_delay_ms(8);
             n = net_udp_recv(sport, r, sizeof r, src, &sp);
             if (n < 12) continue;
+            if (r[0] != 0x51 || r[1] != 0x53) continue;   /* S-NET-19: match our
+                                                             transaction id, else
+                                                             a stray/forged reply
+                                                             is accepted as ours */
             qd = (r[4]<<8)|r[5]; an = (r[6]<<8)|r[7];
             if (an < 1) return 0;
             i = 12;
@@ -615,6 +625,6 @@ void net_poll(void)
         else if (type == 0x0800) ip_recv(rx + 14, n - 14);
     }
     /* deferred ping once ARP resolves */
-    if (g_ping_sent == 2 && g_ping_dst) net_ping(g_ping_dst);
+    if (g_ping_sent == 2 && g_ping_dst_set) net_ping(g_ping_dst);
     tcp_tick();
 }

@@ -8,6 +8,7 @@
 
 #ifndef UNO_XHCI
 
+int  uno_xhci_supported(void) { return 0; }
 int  uno_xhci_init(void) { return 0; }
 int  uno_xhci_dev_count(void) { return 0; }
 const uno_usb_dev *uno_xhci_dev(int i) { (void)i; return 0; }
@@ -666,6 +667,8 @@ static int xhci_bringup(void)
     }
     return 1;
 }
+
+int uno_xhci_supported(void) { return 1; }
 
 int uno_xhci_init(void)
 {

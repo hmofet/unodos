@@ -79,6 +79,14 @@ finding F1, which armed `allow-force` on every "safe" stick):
   watchdog. Off by default.
 - `nonet` - skip the network hardware test (below). Off by default: an armed
   stick tests the network once per boot, before the stress passes.
+- `mtrr-wc` - **opt-in, operator-present** (P3): rebuild the MTRRs so the
+  framebuffer is write-combining instead of uncached. Benches the fb before
+  and after (`NETLOG.TXT`), keeps the change only if the direct-write
+  bandwidth clearly improved, and reverts otherwise. Refuses any geometry it
+  can't tile safely. Off by default - this is the one change with real
+  bricking risk, so only set it when you're at the machine to power-cycle.
+- `spec` - run the boot-time conformance suite (SPECTEST, below) and write
+  per-contract PASS/FAIL to `CRASH\<MACHINE>\SPECTEST.TXT`.
 
 ### Telemetry is machine-scoped: `CRASH\<MACHINE>\`
 

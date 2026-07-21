@@ -143,6 +143,7 @@ static int poll_bit(u32 reg, u32 want, u32 mask, int timeout_ms)
 static u32 g_prph_mask = 0x000FFFFF;   /* 0x00FFFFFF on AX210+ */
 
 static void prph_w(u32 reg, u32 v) { w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24)); w32(HBUS_TARG_PRPH_WDAT, v); }
+static u32  prph_r(u32 reg) { w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24)); return r32(HBUS_TARG_PRPH_RDAT); }
 
 /* =====================================================================
  * 2. device identity: family, generation, firmware file name
@@ -301,6 +302,7 @@ static int firmware_volume(void)
 static u8 g_fwbuf[FW_FILE_MAX]   __attribute__((aligned(4096)));
 static u8 g_arena[FW_ARENA_MAX]  __attribute__((aligned(4096)));
 static u8 g_pnvmbuf[PNVM_MAX]    __attribute__((aligned(4096)));
+static long g_pnvm_len;                 /* bytes in g_pnvmbuf (0 = none)      */
 static u32 g_arena_used;
 
 static void *arena_alloc(u32 len)
@@ -603,8 +605,7 @@ static int send_cmd(u8 group, u8 opcode, u8 version, const void *payload, int pl
     u8 *out = g_cmd_buf[idx];
     int hdr = group ? 8 : 4;
     int copy, tb0;
-    u16 seq = (u16)(((CMDQ_N & 0) ) | (idx & 0xff));   /* queue field is cmd-queue */
-    seq = (u16)(idx & 0xff);                            /* [7:0] tfd idx */
+    u16 seq = (u16)(idx & 0xff);        /* [7:0] tfd idx; cmd queue = 0 */
 
     out[0] = opcode; out[1] = group;
     out[2] = (u8)seq; out[3] = (u8)(seq>>8);
@@ -961,9 +962,16 @@ static int load_fw_gen3(void)
     ps->control_flags = PRPH_SCR_MTR_MODE | PRPH_MTR_FMT_256B; /* + RB size 2K default */
     ps->free_rbd = phys(g_rbd_free_le64);
     place_fw_dram(&ps->common);
-    /* PNVM (loaded to fw after alive via doorbell; here just record if present) */
-    if (g_pnvmbuf[0] || 1) {
-        /* pnvm blob was concatenated into g_pnvmbuf by load_pnvm(); base set later */
+    /* PNVM: point the prph scratch at the blob NOW; the post-ALIVE doorbell
+     * (iwl_nic) tells the fw to consume it. This was a dead if-block that
+     * never programmed pnvm_base at all - on AX210+ the fw then refuses to
+     * leave init, which reads exactly like the Latitude's ALIVE-era stall.
+     * Best-effort caveat, stated honestly: g_pnvmbuf is the RAW .PNV TLV
+     * stream; Linux parses out the sku-matched payload first. If the fw
+     * rejects the raw form, the PNVM-complete trace below will say so. */
+    if (g_pnvm_len) {
+        ps->pnvm_base = phys(g_pnvmbuf);
+        ps->pnvm_size = (u32)g_pnvm_len;
     }
     prph_info = arena_alloc(4096); if (!prph_info) return -1;
     memset(prph_info, 0, 4096);
@@ -999,7 +1007,47 @@ static int wait_alive(int timeout_ms)
 {
     int len = 0;
     const u8 *p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
-    if (!p || len < 4) return -1;
+    if (!p) {
+        /* F12 autopsy - every fleet machine timed out here, across gen2 AND
+         * gen3 loads, which points at a COMMON host-side cause rather than
+         * per-card firmware. Two questions, answered in order:
+         *   1. Did the firmware boot at all?  CSR/PRPH state says.
+         *   2. Did it boot and post ALIVE somewhere our closed-index poll
+         *      never looks (rb-status DMA misconfig)?  Brute-scan every RB
+         *      for the notification - and if it is there, TAKE it and
+         *      continue: that is not a fallback hack, it is the datum that
+         *      names the real bug AND unblocks the rest of bring-up. */
+        int q;
+        uno_dbg_net_trace("wifi: ALIVE timeout autopsy:");
+        uno_dbg_net_trace("wifi:   CSR_INT=%08x MASK=%08x GP_CNTRL=%08x RESET=%08x GP1=%08x",
+                          r32(CSR_INT), r32(CSR_INT_MASK), r32(CSR_GP_CNTRL),
+                          r32(CSR_RESET), r32(0x054 /*CSR_UCODE_DRV_GP1*/));
+        uno_dbg_net_trace("wifi:   UREG_UCODE_LOAD_STATUS=%08x UREG_CPU_INIT_RUN=%08x",
+                          prph_r(0xa05c40), prph_r(0xa05c44));
+        uno_dbg_net_trace("wifi:   rb_status=%04x rx_read=%d used[0]=%08x%08x rb0[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x",
+                          rx_closed(), g_rx_read,
+                          (u32)(g_rbd_used[0] >> 32), (u32)g_rbd_used[0],
+                          g_rb[0][0], g_rb[0][1], g_rb[0][2], g_rb[0][3],
+                          g_rb[0][4], g_rb[0][5], g_rb[0][6], g_rb[0][7]);
+        for (q = 0; q < RXQ_N && !p; q++) {
+            const u8 *found = 0; int flen = 0;
+            rx_process_rb(g_rb[q], RB_SIZE, 0, 0x1, &found, &flen);
+            if (found) {
+                uno_dbg_net_trace("wifi:   ALIVE FOUND by brute scan in RB %d "
+                                  "(len %d) - fw BOOTED, the closed-index poll "
+                                  "is what's broken (rb-status DMA). Proceeding.",
+                                  q, flen);
+                p = found; len = flen;
+            }
+        }
+        if (!p) {
+            uno_dbg_net_trace("wifi:   no ALIVE in any RB - the firmware never "
+                              "started (or cannot DMA at all). Load-path issue, "
+                              "not notification polling.");
+            return -1;
+        }
+    }
+    if (len < 4) return -1;
     { u16 status = (u16)(p[0] | (p[1]<<8));
       if (status != 0xCAFE) return -1; }
     if (g_fw.alive_notif_ver >= 6 && len >= 128) {
@@ -1410,6 +1458,11 @@ static int load_pnvm(int vol)
     if (!g_pnvmfile[0]) return 0;      /* AC/AX200: no PNVM */
     n = uno_fs_read(vol, g_pnvmfile + 9 /*strip FIRMWARE\\*/, g_pnvmbuf, PNVM_MAX);
     if (n <= 0) { /* try full path */ n = uno_fs_read(vol, g_pnvmfile, g_pnvmbuf, PNVM_MAX); }
+    g_pnvm_len = n > 0 ? n : 0;
+    uno_dbg_net_trace("wifi: pnvm %s: %s (%ld bytes)%s", g_pnvmfile,
+                      g_pnvm_len ? "loaded" : "NOT FOUND", g_pnvm_len,
+                      (!g_pnvm_len && g_family >= FAM_AX210)
+                          ? " - AX210+ fw will not finish init without it" : "");
     return n > 0 ? 0 : -1;
 }
 
@@ -1525,6 +1578,20 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: firmware ALIVE");
+    if (g_family >= FAM_AX210 && g_pnvm_len) {
+        /* gen3: tell the fw to consume the PNVM staged in the prph scratch
+         * (UREG_DOORBELL_TO_ISR6, PNVM bit), then wait for the init-complete
+         * notification (REGULATORY_AND_NVM group 0x0c, PNVM 0xFE). */
+        int nl = 0;
+        prph_w(0xa05c04 /*UREG_DOORBELL_TO_ISR6*/, 1u /*PNVM*/);
+        if (wait_notif(0x0c, 0xFE, &nl, 1000))
+            uno_dbg_net_trace("wifi: PNVM accepted (init complete, %d bytes notif)", nl);
+        else
+            uno_dbg_net_trace("wifi: PNVM doorbell rung but NO init-complete in 1 s "
+                              "(raw-TLV form rejected? sku mismatch? - parse the "
+                              ".PNV per sku_id %08x/%08x/%08x next)",
+                              g_sku_id[0], g_sku_id[1], g_sku_id[2]);
+    }
     if (!g_gen2) tx_start_gen1();
 
     /* post-alive init (unified path; AC split path adds INIT image + calib) */

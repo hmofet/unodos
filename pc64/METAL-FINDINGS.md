@@ -138,6 +138,54 @@ Bonus data from the stress passes (all three: 3 passes, ZERO crashes):
   and its first fully-clean batch boot resolves the "does the stick even
   boot?" doubt from the 07-20 retest.
 
+## 2026-07-21 autonomous fix pass — status of every finding
+
+A full fix-and-harden pass ran through the whole findings list. QEMU-verified
+where QEMU can reach; metal-pending items are flagged.
+
+- **F3 (fb uncached)** — P3 SHIPPED as opt-in `mtrr-wc` (rebuilds MTRRs to make
+  the fb write-combining, benches before/after, self-reverts if no win, refuses
+  unsafe geometry). Operator-triggered, metal-pending. `pc64_mtrr.c`.
+- **F4 (I2C-HID binds nowhere)** — FIXED: ACPI PNP0C50 `_CRS`/`_DSM` enumeration
+  (`uno_acpi_i2c_hid_enum`) gives the slave address + descriptor register + the
+  controller's PCI location; `uno_i2c_hid_acpi_retry()` runs post-`uno_acpi_start`.
+  `acpi_hits=` added to BOOTENV. Inert-verified in QEMU; dissolves F6 on metal.
+- **F7 (text_pen UB shift)** — FIXED: `x*64` not `x<<6` (SPECTEST S-FONT-09).
+- **F8 (detach strands USB boot)** — FIXED two ways: (1) `boot_device_is_usb()`
+  makes the detach gate refuse when the boot volume rides USB and no native USB
+  MSC exists; (2) **P4: `usbmsc.c`** — a Bulk-Only-Transport MSC driver over
+  xHCI, registered as a blkdev backend post-detach, so a USB boot volume now
+  SURVIVES detach. Metal-pending (needs a detaching machine).
+- **F9 (MacBook watchdog reset)** — FIXED: the watchdog now grants a 120 s grace
+  until the shell feeds ~4 heartbeats, so a slow first paint can't trip it. Plus
+  the splash banner moved below the loading bar (F10 remainder).
+- **F11 (multi-second render spike)** — FIXED + instrumented. Root cause: the
+  editor's `wr_layout` called `align_at()` (an O(paragraph) backward walk) per
+  wrapped line = O(doc²) on long paragraphs, run inside draw. Now O(n) via an
+  incremental `pstart`. Added a per-window draw profiler (PF `windows:` line
+  names the costliest window), render+present TOTAL hitch counting, and an
+  in-draw window name in hang reports. QEMU confirmed the Editor was the culprit
+  (769 ms→ gone).
+- **F12 (AX201/AX210 no ALIVE)** — DIAGNOSTICS shipped: on ALIVE timeout the
+  driver dumps CSR/PRPH/UCODE_LOAD_STATUS + brute-scans every RB for a missed
+  notification (splitting "fw booted, we missed it" from "fw never started"),
+  and now programs the gen3 PNVM (was a dead if-block — a likely AX210 cause).
+  Metal-pending: the next batch run's NETLOG names which it is.
+- **P2.2** — FIXED: `crash_vol()` caches the negative result with a bounded
+  retry (was re-scanning every volume every 30 s on F8/F9 machines).
+- **Surface Blt anomaly** — FIXED: `blt_present_banded()` coalesces contiguous
+  dirty rows into one Blt() per band (was one Blt per row; the Surface's
+  per-call overhead was the 3× cost). Metal-pending the speedup measurement.
+- **Divergences (from the new SPEC.md audit)** — FIXED: S-FAT-28 (chain free
+  ordering), S-NET-08 (ping dangling ptr), S-NET-19 (DNS txid), S-MOD-12 (LLP64
+  size overflow), S-UUI-04 (widget slot overflow), S-INST-07 (boot-entry
+  overflow). Each is regression-checked by SPECTEST on real hardware.
+- **NEW this pass**: SPEC.md (372 contracts), `UNO_ASSERT`, and **SPECTEST**
+  (`pc64_spectest.c`, STRESS.CFG `spec`) — a boot-runnable conformance suite,
+  24/24 green on a real FAT image (`tools/spectest_qemu.py`). It found
+  **S-LIBC-06**: a TRUNCATING `snprintf` HANGS pc64 (watchdog HG) — open,
+  not root-caused; the suite avoids executing it.
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)

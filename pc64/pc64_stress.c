@@ -335,13 +335,22 @@ static void run_action(void)
             "pass %d complete  uptime=%llums  open_windows=%d  crash_reports=%d\n",
             g_pass, uno_dbg_uptime_ms(), pc64_dbg_open_count(),
             uno_dbg_crash_count());
+        /* snprintf returns intended length; clamp so the running offset can
+         * never exceed the buffer and underflow the next `sizeof buf - n` */
+        if (n > (int)sizeof buf) n = (int)sizeof buf;
         /* hard perf numbers, not just liveness: render_avg vs present_avg says
          * whether this machine is CPU-bound (rasteriser/repaint) or bound by
          * the framebuffer write path - the F3 uncached-VRAM question - and it
          * has to be on DISK, because the HUD is on-screen only. */
-        n += uno_dbg_perf_line(buf + n, (int)sizeof buf - n);
-        n += snprintf(buf + n, sizeof buf - (unsigned)n,
-            "\n(periodic snapshot; see BOOTENV.TXT for the fb bandwidth bench)\n");
+        if (n < (int)sizeof buf) {
+            int r = uno_dbg_perf_line(buf + n, (int)sizeof buf - n);
+            n += (r > (int)sizeof buf - n) ? (int)sizeof buf - n : r;
+        }
+        if (n < (int)sizeof buf) {
+            int r = snprintf(buf + n, sizeof buf - (unsigned)n,
+                "\n(periodic snapshot; see BOOTENV.TXT for the fb bandwidth bench)\n");
+            n += (r > (int)sizeof buf - n) ? (int)sizeof buf - n : r;
+        }
         uno_dbg_write_perf(buf, n);
         g_pass++;
         if (g_max_passes) snprintf(g_status, sizeof g_status, "STRESS running  pass %d/%d",

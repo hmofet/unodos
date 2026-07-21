@@ -212,10 +212,13 @@ void uno_dbg_check(const char *tag)
     st->h.last_check_ms = uno_dbg_uptime_ms();
 }
 
+static volatile unsigned g_hb_feeds;    /* how many times the loop fed us     */
+
 void uno_dbg_heartbeat(void)
 {
     static unsigned long long next_log;
     g_heartbeat_ms = uno_dbg_uptime_ms();
+    g_hb_feeds++;
     /* refresh the boot log every 30 s so a machine that misbehaves WITHOUT
      * crashing still leaves an up-to-date trace on disk (the operator's only
      * exit from such a run is a power-off, which captures nothing else). */
@@ -322,6 +325,10 @@ static void rp_common_head(const char *kind)
         rp("last_checkpoint: %s @ %llums\n",
            g_stash->h.last_check[0] ? g_stash->h.last_check : "(none)",
            g_stash->h.last_check_ms);
+    /* if we died INSIDE a window's draw callback, name the window - that is
+     * a far sharper lead than the last checkpoint (F11) */
+    if (uno_dbg_current_window())
+        rp("in-draw window: %s\n", uno_dbg_current_window());
 }
 
 static void rp_log_tail(void)
@@ -446,8 +453,16 @@ static void stash_report(int kind)
  * flasher's whole-disk layout.  Called from safe context at boot. */
 static int crash_vol(void)
 {
+    /* P2.2: cache FAILURE too (with a bounded retry), not just success. On a
+     * machine where no volume qualifies (F8/F9) every caller used to re-scan
+     * every volume - and the heartbeat calls this every 30 s, which is
+     * exactly the repeated firmware-BlockIO grind that made the MacBook feel
+     * "extremely slow". Retry only every 64th failed call so late-appearing
+     * storage still gets picked up. */
+    static unsigned fail_backoff;
     int v, n;
     if (g_crash_vol >= 0) return g_crash_vol;
+    if (fail_backoff) { fail_backoff--; return -1; }
     n = uno_fat_volumes();
     for (v = 0; v < n; v++) {
         /* uno_fat_list returns 0 for both "empty" and "missing", so probe the
@@ -459,6 +474,7 @@ static int crash_vol(void)
         if (g_crash_vol >= 0) break;
         if (uno_fat_mkdir(v, "CRASH")) { g_crash_vol = v; break; }
     }
+    if (g_crash_vol < 0) fail_backoff = 63;
     return g_crash_vol;
 }
 
@@ -479,16 +495,20 @@ static char g_mtag[12];                  /* folder leaf, 8.3-safe          */
 static char g_mdir[24];                  /* "CRASH\<TAG>"                  */
 
 /* SMBIOS string `no` of the structure at s (strings follow the formatted
- * area, NUL separated, double-NUL terminated) */
-static void smb_string(const unsigned char *s, int no, char *out, int cap)
+ * area, NUL separated, double-NUL terminated). `end` bounds the walk - a
+ * malformed/non-double-NUL-terminated string set must not read off the table
+ * into unmapped memory. */
+static void smb_string(const unsigned char *s, int no, char *out, int cap,
+                       const unsigned char *end)
 {
     const char *p = (const char *)s + s[1];          /* past formatted area */
+    const char *lim = (const char *)end;
     int i = 1;
     out[0] = 0;
     if (no <= 0) return;
-    while (i < no && *p) { while (*p) p++; p++; i++; }
-    if (!*p) return;
-    { int k = 0; while (p[k] && k < cap - 1) { out[k] = p[k]; k++; } out[k] = 0; }
+    while (i < no && p < lim && *p) { while (p < lim && *p) p++; if (p < lim) p++; i++; }
+    if (p >= lim || !*p) return;
+    { int k = 0; while (p + k < lim && p[k] && k < cap - 1) { out[k] = p[k]; k++; } out[k] = 0; }
 }
 
 static int guid_eq(const EFI_GUID *a, const EFI_GUID *b)
@@ -522,10 +542,13 @@ static void smb_read_type1(void)
         const unsigned char *s = tab, *end = tab + len;
         while (s + 4 <= end && s[0] != 127 && s[1] >= 4) {
             const unsigned char *nx = s + s[1];
-            if (s[0] == 1) {
-                smb_string(s, s[4], g_smb_mfr,  sizeof g_smb_mfr);
-                smb_string(s, s[5], g_smb_prod, sizeof g_smb_prod);
-                smb_string(s, s[6], g_smb_ver,  sizeof g_smb_ver);
+            /* Type 1 needs s[4..6] (mfr/product/version string indices); only
+             * read them if the formatted area is actually that long AND in
+             * bounds, else a truncated tail record reads past `end`. */
+            if (s[0] == 1 && s[1] >= 7 && s + 7 <= end) {
+                smb_string(s, s[4], g_smb_mfr,  sizeof g_smb_mfr,  end);
+                smb_string(s, s[5], g_smb_prod, sizeof g_smb_prod, end);
+                smb_string(s, s[6], g_smb_ver,  sizeof g_smb_ver,  end);
                 return;
             }
             while (nx + 1 < end && (nx[0] || nx[1])) nx++;   /* skip strings */
@@ -915,6 +938,18 @@ void dbg_spur_c(void)
     if (g_lapic || g_x2apic) lapic_wr(0xB0, 0);
 }
 
+/* F9: the heartbeat is only fed once the SHELL's main loop runs, but the
+ * watchdog arms at the end of init - on a slow machine (MacBook: slow
+ * firmware + F3's uncached first paints) the gap can exceed the timeout and
+ * the "watchdog" resets a machine that was merely slow, destroying the boot.
+ * Until the shell has fed the heartbeat a few times, allow a generous grace. */
+static unsigned g_hb_at_arm;
+static unsigned long long wd_limit_ms(void)
+{
+    return (g_hb_feeds - g_hb_at_arm < 4) ? 120000ull
+                                          : (unsigned long long)g_wd_timeout_s * 1000;
+}
+
 void dbg_timer_c(void);                 /* called from asm */
 void dbg_timer_c(void)
 {
@@ -922,7 +957,7 @@ void dbg_timer_c(void)
     if (g_wd_armed && g_tsc_per_ms) {
         unsigned long long now = uno_dbg_uptime_ms();
         unsigned long long hb  = g_heartbeat_ms;
-        if (now > hb && now - hb > (unsigned long long)g_wd_timeout_s * 1000) {
+        if (now > hb && now - hb > wd_limit_ms()) {
             lapic_wr(0xB0, 0);
             wd_fire("LAPIC watchdog (detached)");   /* resets; no return */
         }
@@ -972,6 +1007,7 @@ void uno_dbg_on_detach(void)
         uno_dbg_log("wd: LAPIC timer up (%s, %u ticks/s), watchdog %ds",
                     g_x2apic ? "x2apic" : "xapic", per_s, g_wd_timeout_s);
     }
+    g_hb_at_arm = g_hb_feeds;           /* F9 grace applies here too */
     uno_dbg_heartbeat();
     g_wd_armed = 1;
     __asm__ volatile ("sti");
@@ -1014,7 +1050,7 @@ static void wd_event_cb(void *ev, void *ctx)
     {
         unsigned long long now = uno_dbg_uptime_ms();
         unsigned long long hb  = g_heartbeat_ms;
-        if (now > hb && now - hb > (unsigned long long)g_wd_timeout_s * 1000)
+        if (now > hb && now - hb > wd_limit_ms())
             wd_fire("firmware timer event (attached)");
     }
 }
@@ -1036,9 +1072,11 @@ void uno_dbg_watchdog_start(void)
         uno_dbg_log("wd: SetTimer failed - no attached watchdog");
         return;
     }
+    g_hb_at_arm = g_hb_feeds;           /* F9: grace until the shell breathes */
     uno_dbg_heartbeat();
     g_wd_armed = 1;
-    uno_dbg_log("wd: firmware timer watchdog armed (%d s)", g_wd_timeout_s);
+    uno_dbg_log("wd: firmware timer watchdog armed (%d s, 120 s until the "
+                "shell's first heartbeats)", g_wd_timeout_s);
 }
 
 /* ===========================================================================
@@ -1175,8 +1213,8 @@ void uno_dbg_envblock(void)
         uno_ps2_status(&kbd, &aux, &auxport, &auxid);
         uno_usb_hid_status(&unk, &unm);
         env("pointer: fw_simple=%d fw_abs=%d detach_blocked=%d\n", ns, na, blocked);
-        env("i2c-hid: ctrls=%d present=%d addr=%x desc_parsed=%d\n",
-            nctrl, present, addr, parsed);
+        env("i2c-hid: ctrls=%d present=%d addr=%x desc_parsed=%d acpi_hits=%d\n",
+            nctrl, present, addr, parsed, uno_i2c_hid_acpi_hits());
         env("ps2: kbd=%d aux=%d auxport=%d auxid=%d\n", kbd, aux, auxport, auxid);
         env("usb-hid: kbd=%d mouse=%d\n", unk, unm);
     }
@@ -1449,9 +1487,57 @@ static void note_worst(unsigned long us)
     g_worst_tag[i] = 0;
     (void)us;
 }
-/* A hitch is a hitch whichever half caused it. Counting only present-side
- * stalls reported "hitches=0" on a pass whose worst frame spent 133 ms in
- * RENDER - a zero that actively misleads, which is worse than no number. */
+/* ---- per-window draw profiler (fed via unoui_profile_win) ----------------
+ * F11 taught us the averages-and-halves view cannot NAME a spike: four
+ * machines showed 1.2-3.3 s single renders and nothing said which window.
+ * Track draw cycles per window title (pointer identity is fine - titles are
+ * string literals), the current frame's most expensive window, and surface
+ * both in the PF snapshot and in the worst-frame tag. */
+#define WPROF_N 24
+static struct { const char *title; unsigned long long cyc; unsigned long calls;
+                unsigned long max_us; } g_wprof[WPROF_N];
+static int g_wprof_n;
+static const char *g_wp_cur;            /* window being drawn RIGHT NOW - the
+                                           hang report reads it, so a wedged
+                                           draw callback names its window     */
+static unsigned long long g_wp_t0;
+static const char *g_frame_top_title;   /* this frame's costliest window      */
+static unsigned long g_frame_top_us;
+static char g_worst_win[32];            /* worst frame's costliest window     */
+
+const char *uno_dbg_current_window(void) { return g_wp_cur; }
+
+unsigned long uno_dbg_cyc_to_us(unsigned long long cyc)
+{ return g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0; }
+
+unsigned long long uno_dbg_tsc_per_ms(void) { return g_tsc_per_ms; }
+
+void uno_dbg_win_profile(const char *title, int begin);
+void uno_dbg_win_profile(const char *title, int begin)
+{
+    if (begin) { g_wp_cur = title; g_wp_t0 = uno_native_rdtsc(); return; }
+    {
+        unsigned long long dt = uno_native_rdtsc() - g_wp_t0;
+        unsigned long us = g_tsc_per_ms ? (unsigned long)(dt * 1000 / g_tsc_per_ms) : 0;
+        int i;
+        g_wp_cur = 0;
+        for (i = 0; i < g_wprof_n; i++) if (g_wprof[i].title == title) break;
+        if (i == g_wprof_n && g_wprof_n < WPROF_N) g_wprof[g_wprof_n++].title = title;
+        if (i < g_wprof_n) {
+            g_wprof[i].cyc += dt; g_wprof[i].calls++;
+            if (us > g_wprof[i].max_us) g_wprof[i].max_us = us;
+        }
+        if (us > g_frame_top_us) { g_frame_top_us = us; g_frame_top_title = title; }
+    }
+}
+void uno_dbg_win_frame_reset(void);
+void uno_dbg_win_frame_reset(void) { g_frame_top_us = 0; g_frame_top_title = 0; }
+
+/* A hitch is a hitch whichever half caused it - and stacked halves count too:
+ * the Surface showed 97 ms render + 82 ms present frames (~3x frame time,
+ * clearly felt) that per-half thresholds scored as ZERO hitches. Render feeds
+ * remember their us; the present feed judges the TOTAL frame. */
+static unsigned long g_last_render_us, g_total_max;
 static void bump(unsigned long us, unsigned long *maxp)
 {
     if (us > *maxp) *maxp = us;
@@ -1461,12 +1547,23 @@ void uno_dbg_frame_render_cyc(unsigned long long cyc)
 {
     unsigned long us = g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0;
     g_render_us += us - g_render_us / 16;
+    g_last_render_us = us;
+    if (us > g_render_max && g_frame_top_title) {   /* name the culprit */
+        int i; const char *s = g_frame_top_title;
+        for (i = 0; i < (int)sizeof g_worst_win - 1 && s[i]; i++) g_worst_win[i] = s[i];
+        g_worst_win[i] = 0;
+    }
     bump(us, &g_render_max);
 }
 void uno_dbg_frame_present_cyc(unsigned long long cyc)
 {
     unsigned long us = g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0;
+    unsigned long total = us + g_last_render_us;
     g_present_us += us - g_present_us / 16;
+    if (total > g_total_max) g_total_max = total;
+    if (total > HITCH_US && us <= HITCH_US && g_last_render_us <= HITCH_US)
+        { g_hitches++; note_worst(total); }         /* stacked-halves hitch */
+    g_last_render_us = 0;
     bump(us, &g_present_max);
 }
 void uno_dbg_frame_idle(int was_idle)
@@ -1495,20 +1592,48 @@ int uno_dbg_perf_line(char *buf, int max)
     unsigned long hu = 0, hf = 0, hl = 0;
     uno_heap_stats(&hu, &hf, &hl);
     {
-        int n = snprintf(buf, (size_t)max,
-            "perf: render_avg=%lu us  present_avg=%lu us  fps=%lu  idle=%lu%%  "
+        /* snprintf returns the INTENDED length, which can exceed the buffer;
+         * clamp every accumulation so `n` never runs past `max` (else the
+         * caller's `sizeof buf - n` underflows to a huge size_t -> stack
+         * smash). appended() caps each result to the space that remained. */
+        int n, r;
+        #define APPEND(...) do { \
+            if (n < max) { r = snprintf(buf + n, (size_t)(max - n), __VA_ARGS__); \
+                           n += (r < 0) ? 0 : (r > max - n ? max - n : r); } } while (0)
+        n = 0;
+        APPEND("perf: render_avg=%lu us  present_avg=%lu us  fps=%lu  idle=%lu%%  "
             "frames=%lu  heap_used=%lu\n"
-            "worst: render_max=%lu us  present_max=%lu us  hitches>%lums=%lu"
-            "  during=%s",
+            "worst: render_max=%lu us  present_max=%lu us  total_max=%lu us  "
+            "hitches>%lums=%lu  during=%s  window=%s",
             g_render_us / 16, g_present_us / 16, g_fps,
             g_frames ? g_idle_frames * 100 / g_frames : 0,
             g_frames, hu,
-            g_render_max, g_present_max, HITCH_US / 1000, g_hitches,
-            g_worst_tag[0] ? g_worst_tag : "(none)");
+            g_render_max, g_present_max, g_total_max, HITCH_US / 1000, g_hitches,
+            g_worst_tag[0] ? g_worst_tag : "(none)",
+            g_worst_win[0] ? g_worst_win : "(none)");
+        /* top window draw costs this pass - the F11 attribution line */
+        {
+            int k, pass;
+            for (pass = 0; pass < 4 && n < max - 8; pass++) {
+                int best = -1; unsigned long long bc = 0;
+                for (k = 0; k < g_wprof_n; k++)
+                    if (g_wprof[k].calls && g_wprof[k].cyc >= bc)
+                        { bc = g_wprof[k].cyc; best = k; }
+                if (best < 0) break;
+                APPEND("%s%s=%lums/%luc/max%luus", pass ? "  " : "\nwindows: ",
+                    g_wprof[best].title,
+                    (unsigned long)(g_tsc_per_ms ? g_wprof[best].cyc / g_tsc_per_ms : 0),
+                    g_wprof[best].calls, g_wprof[best].max_us);
+                g_wprof[best].calls = 0;            /* consumed for ranking */
+            }
+        }
+        #undef APPEND
         /* per-pass, not cumulative: reset so each snapshot describes its own
          * pass and a late hitch cannot hide behind an early one */
-        g_render_max = g_present_max = g_hitches = 0;
-        g_worst_tag[0] = 0;
+        g_render_max = g_present_max = g_hitches = g_total_max = 0;
+        g_worst_tag[0] = 0; g_worst_win[0] = 0;
+        g_wprof_n = 0;
+        memset(g_wprof, 0, sizeof g_wprof);
         return n;
     }
 }

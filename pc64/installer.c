@@ -460,6 +460,18 @@ static int write_boot_entry(const DP_NODE *prefix, int prefix_sz, int make_defau
     fplen = 0; while (fp[fplen]) fplen++;
     fnode = 4 + 2 * (fplen + 1);                             /* File() node    */
 
+    /* S-INST-07: the prefix is a firmware-supplied device path of unbounded
+     * length; the fixed 1024-byte lo[] plus everything we append must fit, or
+     * the memcpy below overflows into whatever follows in .bss. Total = 4
+     * (attrs) + 2 (len) + 14 (desc "UnoDOS\0\0") + prefix + fnode + 4 (end). */
+    /* unsigned compare so a pathological prefix_sz can't wrap the sum negative
+     * and slip past the bound (review: low-sev but free to close) */
+    if (prefix_sz < 0 ||
+        (size_t)(4 + 2 + 14 + fnode + 4) + (size_t)prefix_sz > sizeof lo) {
+        err("boot device path too long for the entry buffer");
+        return 0;
+    }
+
     wr32(p, 1); p += 4;                                      /* ACTIVE         */
     p[0] = (unsigned char)(prefix_sz + fnode + 4);           /* FilePathListLength */
     p[1] = (unsigned char)((prefix_sz + fnode + 4) >> 8);

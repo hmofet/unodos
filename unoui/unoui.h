@@ -302,6 +302,11 @@ int           unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus;
 void          unoui_bring_to_front(unoui_ui *, unoui_window *win);
 unoui_action  unoui_handle  (unoui_ui *, const unoui_event *);
 void          unoui_render_ui(unoui_ui *);
+/* Optional per-window draw profiler (a debug harness sets it; NULL = free).
+ * Called with begin=1 before a window's chrome+widgets draw and begin=0
+ * after; the fullscreen canvas path reports the same way. The toolkit has no
+ * portable clock, so the hook owns all timing. */
+extern void (*unoui_profile_win)(const char *title, int begin);
 /* Draw only the rubber-band drag outline (no-op unless a drag is live). Lets a
  * platform snapshot the scene once and redraw just the outline per drag frame. */
 void          unoui_draw_drag_outline(unoui_ui *);

@@ -54,11 +54,22 @@ static int seg_draw(const char *buf, int s, int e, int x, int y, fb_px fg, long 
 
 /* ------------------------------------------------------------------ build -- */
 
+/* S-UUI-04: on overflow, hand back a THROWAWAY scratch widget, not the live
+ * slot 63. The old code returned &win->w[MAX-1] without bumping nw or zeroing
+ * it, so an over-widgeted window silently corrupted whatever real widget sat
+ * in the last slot (and every caller after kept overwriting it). A scratch
+ * cell is discarded when the window renders, so the excess widget simply
+ * doesn't appear - visibly wrong, but never memory corruption. */
+static unoui_widget g_widget_scratch;
 static unoui_widget *push(unoui_window *win, ui_kind k, int x, int y,
                           int w, int h, const char *text)
 {
     unoui_widget *wd;
-    if (win->nw >= UNOUI_MAX_WIDGETS) return &win->w[UNOUI_MAX_WIDGETS - 1];
+    if (win->nw >= UNOUI_MAX_WIDGETS) {
+        memset(&g_widget_scratch, 0, sizeof g_widget_scratch);
+        g_widget_scratch.kind = k;
+        return &g_widget_scratch;
+    }
     wd = &win->w[win->nw++];
     memset(wd, 0, sizeof(*wd));
     wd->kind = k; wd->r.x = x; wd->r.y = y; wd->r.w = w; wd->r.h = h;
@@ -1012,6 +1023,8 @@ static void draw_desktop_cached(const unoui_theme *t, const unoui_draw *d, unoui
 void unoui_bg_invalidate(void) { }
 #endif
 
+void (*unoui_profile_win)(const char *title, int begin);
+
 void unoui_render_ui(unoui_ui *ui)
 {
     const unoui_theme *t = ui->theme;
@@ -1023,11 +1036,15 @@ void unoui_render_ui(unoui_ui *ui)
      * clear the desktop/windows from the prior frame would show through. */
     if (ui->full) {
         unoui_widget *cv = first_canvas(ui->full);
+        if (unoui_profile_win)
+            unoui_profile_win(ui->full->title ? ui->full->title : "(fullscreen)", 1);
         fb_fill_rect(0, 0, ui->screen_w, ui->screen_h, FB_RGB(0, 0, 0));
         if (cv && cv->canvas && cv->canvas->draw) {
             unoui_rect fs = { 0, 0, ui->screen_w, ui->screen_h };
             cv->canvas->draw(cv, fs, cv->canvas->ctx);
         }
+        if (unoui_profile_win)
+            unoui_profile_win(ui->full->title ? ui->full->title : "(fullscreen)", 0);
         return;
     }
 
@@ -1040,6 +1057,9 @@ void unoui_render_ui(unoui_ui *ui)
         unoui_window *win = ui->win[wn];
         int fw = t->m.frame_w, th = t->m.title_h;
         win->active = (wn == ui->focus_win);
+        if (unoui_profile_win)
+            unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
+                              (win->title ? win->title : "(untitled)"), 1);
         if (win->flags & UI_WIN_BARE) {
             /* shell chrome (desktop / taskbar): no frame or titlebar; widgets
              * fill the whole window rect and are clipped to it. */
@@ -1086,6 +1106,9 @@ void unoui_render_ui(unoui_ui *ui)
                 }
             }
         }
+        if (unoui_profile_win)
+            unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
+                              (win->title ? win->title : "(untitled)"), 0);
     }
     /* the open menu's popup deliberately extends past its window - draw it
      * after the clip is reset. */

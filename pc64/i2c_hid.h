@@ -61,5 +61,9 @@ void uno_i2c_hid_diag(int *saw_ack, unsigned *abrt);
  * DW core's HCNT/LCNT depend on an LPSS input clock that varies by SoC and is
  * readable nowhere, so the probe walks candidates; this reports the winner. */
 int  uno_i2c_hid_timing(void);
+/* F4: ACPI-directed re-probe (PNP0C50 _CRS/_DSM) - call after uno_acpi_start.
+ * acpi_hits: -1 = never ran, else the PNP0C50 device count found. */
+int  uno_i2c_hid_acpi_retry(void);
+int  uno_i2c_hid_acpi_hits(void);
 
 #endif

@@ -304,7 +304,10 @@ static int adv26_of(int cp)
  * in exact lockstep or carets and centering drift off the pixels. */
 static int text_pen(int x, int y, const char *s, fb_px fg, long bg, int style, int draw)
 {
-    int pen26 = x << 6, prev = 0;
+    int pen26 = x * 64, prev = 0;   /* NOT x<<6: shifting a negative x is UB
+                                       (F7 - UBSan ud2 on any offscreen-left
+                                       draw); multiply is defined and the fb
+                                       layer clips the actual painting */
     for (; *s; s++) {
         int cp = (unsigned char)*s;
         if (prev) pen26 += kern26(prev, cp);
@@ -322,7 +325,7 @@ static int text_pen(int x, int y, const char *s, fb_px fg, long bg, int style, i
 static int prov_glyph(int x, int y, int cp, fb_px fg, long bg)
 {
     if (g_active < 0) return x + 8;                  /* shouldn't happen */
-    return (pen_glyph(x << 6, y, cp, fg, bg, 0) + 32) >> 6;
+    return (pen_glyph(x * 64, y, cp, fg, bg, 0) + 32) >> 6;   /* F7: no UB shift */
 }
 static int prov_text(int x, int y, const char *s, fb_px fg, long bg)
 {
