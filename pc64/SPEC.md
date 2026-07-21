@@ -1458,6 +1458,64 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 
 ---
 
+## S-3D — uno3d software 3D pipeline (`../uno3d`)
+
+Matrix/vertex transform state is file-static with no accessors, so contracts
+are checked end-to-end through the software backend + `u3d_last_tris()`.
+
+- **S-3D-01** [auto] `u3d_use_backend(&u3d_backend_soft)` MUST make
+  `u3d_backend_name()` report `"soft"`.
+- **S-3D-02** [auto] The software backend's caps MUST be exactly
+  `U3D_CAP_ZBUFFER|U3D_CAP_GOURAUD` (no `U3D_CAP_HW`).
+- **S-3D-03** [auto] A front-facing triangle in front of the near plane MUST
+  rasterise (`u3d_last_tris()==1`).
+- **S-3D-04** [auto] Back-face culling MUST hold: of a triangle and its
+  reversed winding, exactly one rasterises.
+- **S-3D-05** [auto] A triangle entirely behind the near plane MUST contribute
+  zero rasterised triangles (near-clip rejects it).
+- **S-3D-06** [manual] Gouraud interpolation and depth ordering produce the
+  right pixels (needs fb inspection / a display).
+
+## S-MEDIA — unomedia audio decoders (`../unomedia`, kernel-linked half)
+
+The audio decoders (WAV/MIDI/MP3/AAC) are linked into the kernel; the image
+decoders ship inside PHOTOS.UNO and are host-tested only.
+
+- **S-MEDIA-01** [auto] A valid WAV MUST open with correct `format`/`rate`/
+  `channels` metadata. check: hand-built 16-bit mono 8 kHz header.
+- **S-MEDIA-02** [auto] Integer-PCM WAV decode MUST be sample-exact (lossless).
+- **S-MEDIA-03** [auto] A minimal type-0 SMF MUST open as MIDI, 44.1 kHz stereo.
+- **S-MEDIA-04** [auto] MIDI synthesis MUST actually sound (peak amplitude
+  above a floor, not silence).
+- **S-MEDIA-05** [auto] A real MPEG-1 Layer III clip MUST open as MP3 and
+  decode >0 frames with no error. (dB-accuracy vs ffmpeg is host-only.)
+- **S-MEDIA-06** [auto] A real ADTS AAC-LC clip MUST open as AAC and decode
+  >0 frames.
+- **S-MEDIA-07** [auto] Garbage input MUST be rejected cleanly (open returns 0,
+  no crash, no hang).
+- **S-MEDIA-08** [manual] Image decoders (PNG/JPEG/…) live in PHOTOS.UNO
+  (module), not the kernel — host-tested.
+
+## S-AI — Studio AI assistant (deferred: needs live networking)
+
+- **S-AI-01** [auto, STUB] The assistant MUST establish a TLS link and send a
+  request. Pending live networking (WiFi bring-up stops at firmware ALIVE).
+- **S-AI-02** [auto, STUB] Request → stream → render round-trip. Pending
+  networking. Keys live in plaintext `AI.CFG` (S-STUDIO-09).
+
+> **SPECTEST coverage (2026-07-21):** the conformance suite now runs 58 [auto]
+> checks + 7 deliberate SKIPs across FAT/NET/FONT/LIBC/JS/UUI/3D/SND/MEDIA/
+> WRITE/MUSIC/STUDIO/PY/DBG. It exercises the toolkits (unoui widget lifecycle
+> + events, uno3d raster, unosound sequencer), the audio decoders (WAV sample-
+> exact, MIDI/MP3/AAC), the Editor model (insert/wrap/find/replace + UWD & TXT
+> round-trips via test hooks in `pc64_write.c`), Music decode via
+> `pc64_media_open`, Studio file save/load, and **Python-on-metal** (loads
+> PYRT.UNO, runs a `uno.App` snippet, verifies its `uno.write` side effect).
+> UnoC compile/build are UI-only in STUDIO.UNO → host-tested (`tools/ucc_test.c`);
+> WiFi/LAN/AI are SKIP-pending-networking.
+
+---
+
 ## Fix status (2026-07-21 autonomous pass)
 
 Several divergences below were FIXED this session and are now regression-checked

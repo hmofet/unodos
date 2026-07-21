@@ -1068,3 +1068,22 @@ void pc64_write_build(unoui_window *w)
     }
     wr_sync_toolbar();
 }
+
+#ifdef UNO_DEBUG
+/* ---- SPECTEST hooks (conformance suite; debug builds only) -----------------
+ * Thin wrappers over the otherwise-static editor model so pc64_spectest.c can
+ * exercise insert / wrap / find / replace / save / load without synthesizing
+ * widget events. Follows the pc64_dbg_* hook pattern in pc64_uui.c. */
+void pc64_dbg_wr_reset(void)              { wr_new_doc(); }
+void pc64_dbg_wr_insert(const char *s)    { int n = 0; while (s[n]) n++; ins_text(s, 0, n); }
+int  pc64_dbg_wr_len(void)                { return wr_len; }
+const char *pc64_dbg_wr_text(void)        { wr_text[wr_len] = 0; return wr_text; }
+int  pc64_dbg_wr_wrap(int docw)           { lay_dirty(); wr_layout(docw); return wr_nlines; }
+int  pc64_dbg_wr_find(const char *needle) { int n=0; while (needle[n] && n<39){ wr_find[n]=needle[n]; n++; } wr_find[n]=0; return find_from(0); }
+int  pc64_dbg_wr_replace_all(const char *f, const char *r)
+{ int n=0; while (f[n] && n<39){ wr_find[n]=f[n]; n++; } wr_find[n]=0;
+  n=0; while (r[n] && n<39){ wr_repl[n]=r[n]; n++; } wr_repl[n]=0;
+  do_replace_all(); return wr_len; }
+int  pc64_dbg_wr_save(int vol, const char *name) { return wr_save_to(vol, name); }
+int  pc64_dbg_wr_open(int vol, const char *name) { return wr_open_from(vol, name); }
+#endif
