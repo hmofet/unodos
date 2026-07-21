@@ -3,7 +3,8 @@
 Analysis of the metal findings in [METAL-FINDINGS.md](METAL-FINDINGS.md), scoped
 to the **Surface Laptop Go, X1 Carbon Gen 8 and X13 Yoga Gen 3** (the Latitude
 boot-selection question and the MacBook F9 are excluded). Written for a
-dedicated fix session; nothing here is implemented.
+dedicated fix session. P0.1-P0.3 are now IMPLEMENTED on this branch as a
+measurable experiment (see the P0 status note); everything else is proposal only.
 
 Evidence base: 4 clean metal runs, 4 machines' boot-environment blocks, and the
 first real render-vs-present frame timings.
