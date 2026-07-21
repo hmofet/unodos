@@ -42,36 +42,52 @@ function Invoke-Native([scriptblock]$sb, [string]$what) {
     if ($LASTEXITCODE -ne 0) { throw "$what (exit $LASTEXITCODE)" }
 }
 
-# ---- 1+2. build the EFI image and pack it into a raw UEFI disk image --------
-# NOTE (branch pc64-debug-stress): ./build.sh defaults to UNO_DEBUG=1 here, so
-# this flasher embeds the DEBUG / stress-test OS - crash reports to \CRASH, the
-# stress driver armed by \STRESS.CFG, symbols in \DOCS\SYMBOLS.TXT.  Per the
-# standing rule we ship ONE flasher (this debug build), not every OS variant.
+# ---- 1+2. build BOTH the production and debug OS, pack the release image -----
+# The flasher embeds TWO ESP trees:
+#   - PRODUCTION (UNO_DEBUG=0): what it flashes by default (a clean OS, no
+#     \CRASH, no \STRESS.CFG, no stress driver).
+#   - DEBUG      (UNO_DEBUG=1): flashed only when Developer options is on -
+#     crash reports to \CRASH, the stress driver, and the test harness the
+#     dev-options test toggles arm via \STRESS.CFG.
+# (This supersedes the old "ship ONE flasher = the debug build" rule.)
 if (-not $SkipBuild) {
-    Write-Host "Building UnoDOS/pc64 DEBUG build (BOOTX64.EFI + ESP) under WSL..." -ForegroundColor Yellow
-    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && ./build.sh" } "pc64 build failed (try: wsl bash -lc 'cd pc64 && ./build.sh')"
+    # build.sh populates build/esp INCREMENTALLY (no wipe), so a stale CRASH /
+    # STRESS.CFG / FIRMWARE from a prior debug build would leak into the
+    # production snapshot. Wipe build/esp before each build to keep them clean.
+    Write-Host "Building PRODUCTION OS (UNO_DEBUG=0) under WSL..." -ForegroundColor Yellow
+    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && UNO_DEBUG=0 ./build.sh" } "production build failed"
+    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp-prod && cp -r build/esp build/esp-prod" } "snapshot prod ESP"
+    Write-Host "Building DEBUG / stress OS (UNO_DEBUG=1) under WSL..." -ForegroundColor Yellow
+    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && UNO_DEBUG=1 ./build.sh" } "debug build failed"
+    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp-debug && cp -r build/esp build/esp-debug" } "snapshot debug ESP"
 }
-Write-Host "Packing UEFI disk image ($SizeMiB MiB) under WSL..."
+# The raw dd/Rufus image is the PRODUCTION build (the default a normal user
+# wants). build/esp is left as PRODUCTION for mkuefi.
+Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && cp -r build/esp-prod build/esp" } "restore prod ESP for the raw image"
+Write-Host "Packing UEFI disk image ($SizeMiB MiB, production) under WSL..."
 Invoke-Native { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkuefi.py $SizeMiB" } "mkuefi.py failed (needs sgdisk + mtools in WSL)"
 
 $img = Join-Path $build "unodos-uefi.img"
 if (-not (Test-Path $img)) { throw "Missing image: $img" }
 
-# ---- 3. zip the ESP tree into an embeddable resource ------------------------
-# This is what the flasher actually installs; the .img above is only for the
-# dd-style tools.
+# ---- 3. zip BOTH ESP trees into embeddable resources ------------------------
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$espDir = Join-Path $build "esp"
-if (-not (Test-Path (Join-Path $espDir "EFI\BOOT\BOOTX64.EFI"))) {
-    throw "build/esp/EFI/BOOT/BOOTX64.EFI missing - run ./build.sh first"
+$espProd  = Join-Path $build "esp-prod"
+$espDebug = Join-Path $build "esp-debug"
+foreach ($p in @($espProd, $espDebug)) {
+    if (-not (Test-Path (Join-Path $p "EFI\BOOT\BOOTX64.EFI"))) {
+        throw "$p\EFI\BOOT\BOOTX64.EFI missing - run without -SkipBuild"
+    }
 }
-$zip = Join-Path $build "unodos_esp.zip"
-Remove-Item $zip -ErrorAction SilentlyContinue
-Write-Host "Zipping the ESP tree for embedding..."
-[IO.Compression.ZipFile]::CreateFromDirectory(
-    $espDir, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
-$zmb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
-Write-Host "  unodos_esp.zip = $zmb MB"
+$zipProd  = Join-Path $build "unodos_esp_prod.zip"
+$zipDebug = Join-Path $build "unodos_esp_debug.zip"
+Remove-Item $zipProd, $zipDebug -ErrorAction SilentlyContinue
+Write-Host "Zipping both ESP trees for embedding..."
+[IO.Compression.ZipFile]::CreateFromDirectory($espProd,  $zipProd,  [IO.Compression.CompressionLevel]::Optimal, $false)
+[IO.Compression.ZipFile]::CreateFromDirectory($espDebug, $zipDebug, [IO.Compression.CompressionLevel]::Optimal, $false)
+Write-Host ("  prod  = {0} MB, debug = {1} MB" -f `
+    [math]::Round((Get-Item $zipProd).Length / 1MB, 1),
+    [math]::Round((Get-Item $zipDebug).Length / 1MB, 1))
 
 # ---- locate csc (in-box .NET Framework) -------------------------------------
 $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -106,7 +122,8 @@ $args = @(
     "/reference:System.Drawing.dll",
     "/reference:System.IO.Compression.dll",
     "/reference:System.IO.Compression.FileSystem.dll",
-    "/resource:$zip,unodos_esp"
+    "/resource:$zipProd,unodos_esp_prod",
+    "/resource:$zipDebug,unodos_esp_debug"
 )
 if (Test-Path $icon) { $args += "/win32icon:$icon" }
 $args += @("/optimize+", "$src", "$disk", "$settings", "$update", "$verCs")
@@ -127,6 +144,6 @@ if ($TestTool) {
     if ($LASTEXITCODE -ne 0) { throw "csc failed for UnoDiskTest ($LASTEXITCODE)" }
 }
 
-Remove-Item $zip -ErrorAction SilentlyContinue
+Remove-Item $zipProd, $zipDebug -ErrorAction SilentlyContinue
 $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Host "Built $exe  ($mb MB)"

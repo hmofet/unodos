@@ -11,8 +11,12 @@ It does **not** clone a fixed-size image. It builds the volume on the target:
 GPT, one EFI System Partition spanning the whole disk, formatted FAT32, with the
 UnoDOS tree copied in. A 32 GB stick becomes a 32 GB UnoDOS drive - the old
 raw-image clone left all but the first 512 MB unallocated, so the OS had nowhere
-to save documents. The system files ride in the exe as a zipped `build/esp/`
-tree rather than as a disk image.
+to save documents. The system files ride in the exe as a zipped ESP tree.
+
+The exe embeds **two** ESP trees: the clean **production** build (flashed by
+default) and the **debug / stress** build (flashed only under Developer
+options, which also arms the on-boot tests). Firmware (the Intel WiFi blobs)
+ships only in the debug tree - never in the redistributable production image.
 
 ## Use it (end user)
 1. Download **`UnoDosFlasher.exe`** from the release. No install.
@@ -22,19 +26,27 @@ tree rather than as a disk image.
 
 Everything on the selected drive is erased.
 
-## Developer options
-**Developer options...** on the main window adds two things to an install, for
-putting test material on a fresh drive without a second copy step:
+## Developer options (debug build + tests)
+With **Developer options** OFF the flasher writes the **production** build - a
+clean OS, no `\CRASH` telemetry, no stress driver. Turn it ON to flash the
+**debug / stress** build and pick which tests run on boot; the flasher writes
+the matching `\STRESS.CFG` for you:
 
-- **Copy a folder onto the drive** - the folder's *contents* land in the drive
-  root. Defaults to the media test kit at
-  `\\behemoth\unreplicated\unodos\pc64\testkit` (see its `README.TXT`).
-- **Extract a .zip onto the drive** - pick any zip; optionally into a subfolder.
+- **Conformance suite (SPECTEST)** -> `spec`: runs the [auto] SPEC.md contracts
+  and writes `CRASH\<machine>\SPECTEST.TXT`.
+- **WiFi test** / **Ethernet test**: the boot-time network test. Both on =
+  auto-detect (a plugged USB adapter -> ethernet, else WiFi). WiFi only forces
+  WiFi even with an adapter present; Ethernet only skips the WiFi fallback;
+  both off = no network test (`nonet`).
+- **MTRR write-combining experiment** -> `mtrr-wc`: the opt-in P3 framebuffer
+  experiment (self-reverting; run with the operator present).
+- **Stress passes** (default 3) and **Power off when the run finishes**.
 
-The testkit carries **`wifi.txt`** (WiFi credentials for the boot-time network
-test - `ssid=` / `psk=`, see `pc64/DEBUG.md`). Fill in the copy on the share
-once; every stick flashed with developer extras then carries it. It is stored
-in plaintext on the stick.
+It also still copies extras onto the drive:
+- **The test kit** - defaults to `\\behemoth\unreplicated\unodos\pc64\testkit`.
+  It carries **`wifi.txt`** (WiFi creds, `ssid=` / `psk=`); fill in the copy on
+  the share once and every debug stick gets it (plaintext on the stick).
+- **A .zip** - any archive, optionally into a subfolder.
 
 Settings live in **`%APPDATA%\UnoDOS\flasher.ini`**, deliberately *not* beside
 the exe: `deploy-to-share.ps1` overwrites `UnoDosFlasher.exe` on the share after

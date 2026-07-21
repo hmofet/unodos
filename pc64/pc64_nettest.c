@@ -182,12 +182,22 @@ static void run_test(void)
 {
     unsigned short vid = 0, pid = 0;
     uno_nic_t *nic;
+    /* Flasher test-selection overrides (STRESS.CFG):
+     *   net-force-wifi : test WiFi even when a USB ethernet adapter is present
+     *   net-eth-only   : test ONLY ethernet (no WiFi fallback)
+     * Neither = the default auto-detect (adapter present -> eth, else WiFi). */
+    int force_wifi = pc64_stress_cfg_flag("net-force-wifi") > 0;
+    int eth_only   = pc64_stress_cfg_flag("net-eth-only") > 0;
 
     inventory();
+    if (force_wifi) uno_dbg_net_trace("plan: net-force-wifi set - testing WiFi "
+                                      "regardless of any USB ethernet adapter");
+    if (eth_only)   uno_dbg_net_trace("plan: net-eth-only set - ethernet only, "
+                                      "no WiFi fallback");
 
-    /* 1) USB Ethernet, only if present - and if present, WiFi is NOT tested
-     *    (arin: adapters come and go; a plugged adapter means "eth round"). */
-    if (ax88179_present(&vid, &pid) || rtl8152_present(&vid, &pid)) {
+    /* 1) USB Ethernet - the default when an adapter is present (a plugged
+     *    adapter means "eth round"), unless net-force-wifi says skip to WiFi. */
+    if (!force_wifi && (ax88179_present(&vid, &pid) || rtl8152_present(&vid, &pid))) {
         uno_dbg_net_trace("plan: USB ethernet adapter %04x:%04x present -> "
                           "eth test, WiFi SKIPPED", vid, pid);
         uno_dbg_check("net:eth-bind");
@@ -203,6 +213,13 @@ static void run_test(void)
           }
           { int ok = ip_suite(nic, mac, "eth", 8000);
             uno_dbg_net_trace("== net test done: ETH %s ==", ok ? "PASS" : "FAIL"); } }
+        return;
+    }
+
+    if (eth_only) {
+        uno_dbg_net_trace("eth: no USB ethernet adapter present (net-eth-only, "
+                          "so no WiFi fallback)");
+        uno_dbg_net_trace("== net test done: ETH SKIPPED (no adapter) ==");
         return;
     }
 

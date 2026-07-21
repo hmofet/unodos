@@ -205,8 +205,11 @@ if [ "$1" != "legacy" ]; then
     # gitignored). If a developer has populated fw-blobs/ (via the fetch tool or
     # tools/fetch-fw.sh), bundle them so a flashed test stick can bring WiFi up
     # without a separate copy step. A clean clone has no fw-blobs/ -> no bundle.
-    if ls fw-blobs/*.UCO >/dev/null 2>&1; then
-        echo "[fw] bundling Intel WiFi firmware from fw-blobs/ (testing)"
+    # DEBUG builds only: Intel's licence forbids redistribution, so the
+    # firmware belongs on TEST sticks (the debug build's wifi test), never in a
+    # production image people might pass around.
+    if [ "$UNO_DEBUG" != "0" ] && ls fw-blobs/*.UCO >/dev/null 2>&1; then
+        echo "[fw] bundling Intel WiFi firmware from fw-blobs/ (debug/test image)"
         mkdir -p build/esp/FIRMWARE
         cp fw-blobs/*.UCO build/esp/FIRMWARE/ 2>/dev/null || true
         cp fw-blobs/*.PNV build/esp/FIRMWARE/ 2>/dev/null || true
