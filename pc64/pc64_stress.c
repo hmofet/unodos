@@ -43,11 +43,14 @@ void uno_pc64_inject_key(int scan, int uni, int ctrl);
 void uno_pc64_inject_pointer(int x, int y, int btn);
 void uno_dbg_write_bootenv(void);
 void uno_dbg_write_perf(const char *text, int len);
+void uno_pc64_shutdown(void);
 void uno_dbg_force(int what);
 
 /* ---- config -------------------------------------------------------------- */
 static int   g_armed = -1;              /* -1 unknown, 0 off, 1 on            */
 static int   g_max_passes;              /* stop after N passes (0 = unlimited) */
+static int   g_autoshutdown = 1;        /* power off when a bounded run ends   */
+static unsigned long long g_shutdown_at;/* uptime ms at which to power off     */
 static int   g_allow_force;             /* explicit opt-in to self-crash tests */
 static int   g_force_kind;              /* pass-1 self-test: 0 #PF, 4 hang     */
 static int   g_speed = 4;               /* frames between actions (>=1)       */
@@ -126,6 +129,9 @@ static void arm(void)
      * pulling the power. */
     g_max_passes = cfg_has((char *)cfg, "once") ? 1 : 0;
     g_max_passes = cfg_int((char *)cfg, "passes", g_max_passes);
+    /* A bounded run powers the machine off by itself unless told not to; an
+     * unbounded run never ends, so there is nothing to shut down after. */
+    if (cfg_has((char *)cfg, "noshutdown") || !g_max_passes) g_autoshutdown = 0;
     /* self-test on pass 1 (proves the crash/hang pipeline end to end on metal):
      *   allow-force -> a #PF (crash report path)
      *   force-hang  -> an infinite loop (watchdog / HG report path)
@@ -349,11 +355,27 @@ static void run_action(void)
             while (pc64_dbg_open_count() > 1 && guard-- > 0)
                 pc64_dbg_close_focused();
             pc64_dbg_mark_dirty();
-            snprintf(g_status, sizeof g_status,
-                     "STRESS COMPLETE  %d/%d passes  -  SAFE TO SHUT DOWN",
-                     g_pass, g_max_passes);
-            uno_dbg_log("stress: %d pass(es) done - driver IDLE, desktop is yours "
-                        "(use Start > Shut Down)", g_pass);
+            if (g_autoshutdown) {
+                /* Power off by ourselves. Shutting down by hand at the end of a
+                 * run is awkward: the operator has to find Start > Shut Down
+                 * under whatever windows the driver left open, and pulling the
+                 * plug instead is what risks losing telemetry. Doing it here
+                 * also guarantees the boot is marked CLEAN and everything is
+                 * flushed, which a power-cut never is. */
+                snprintf(g_status, sizeof g_status,
+                         "STRESS COMPLETE  %d/%d  -  SHUTTING DOWN...", g_pass,
+                         g_max_passes);
+                g_shutdown_at = uno_dbg_uptime_ms() + 4000;   /* let it be read */
+                uno_dbg_log("stress: %d pass(es) done - auto shutdown in 4s "
+                            "(set 'noshutdown' in STRESS.CFG to keep the desktop)",
+                            g_pass);
+            } else {
+                snprintf(g_status, sizeof g_status,
+                         "STRESS COMPLETE  %d/%d passes  -  SAFE TO SHUT DOWN",
+                         g_pass, g_max_passes);
+                uno_dbg_log("stress: %d pass(es) done - driver IDLE, desktop is "
+                            "yours (use Start > Shut Down)", g_pass);
+            }
         }
     }
 }
@@ -378,6 +400,14 @@ void pc64_stress_stop(void)
 
 void pc64_stress_tick(void)
 {
+    if (g_shutdown_at) {                /* a completed run is powering off */
+        if (uno_dbg_uptime_ms() < g_shutdown_at) return;
+        uno_dbg_log("stress: shutting down now");
+        uno_dbg_write_bootlog();        /* final flush while storage is alive */
+        uno_dbg_mark_clean();           /* not a crash - do not salvage next boot */
+        uno_pc64_shutdown();            /* does not return */
+        return;
+    }
     if (g_armed < 0) {
         /* first few hundred frames: let the desktop settle, then arm once the
          * FS is definitely mounted */
