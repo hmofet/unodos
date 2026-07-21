@@ -118,6 +118,16 @@ suites it writes, each with its own master toggle, plus the cross-cutting
 
 Developer options OFF flashes the clean production build (no STRESS.CFG at all).
 
+**The boot test phase shows a live progress banner.** The whole phase (MTRR
+experiment → SPECTEST → net test) runs synchronously inside one shell tick, so
+the desktop is up but input and repaint are blocked for a minute or more —
+which used to read as a hang (a Yoga operator pulled the disk mid-run). A
+full-width amber strip at the top of the screen now ticks through every stage
+from inside the blocking code ("BOOT TESTS  conformance: S-WRITE-11 PASS (47
+done)", the WiFi/eth bring-up trace lines, the MTRR steps) and hands the strip
+back to the shell when the phase ends. If you see the banner, the machine is
+working, not hung — wait for it to clear before expecting input.
+
 **"Reconfigure tests (no erase)" is version-gated.** The keys above are
 interpreted by the OS *already on the stick*, which Reconfigure deliberately
 does not touch - writing `nostress`/`passes=` onto a stick whose embedded OS
