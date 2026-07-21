@@ -243,6 +243,14 @@ UC machine.** The firmware blitter may DMA. The `gUseBlt` path already exists, s
 this is a measurement, not an implementation — and if Blt wins it is a large,
 zero-risk gain.
 
+> **IMPLEMENTED.** The boot-env block now carries a `blt bench:` line measured
+> the way the `gUseBlt` present path actually works (one Blt per row), with a
+> verdict: *BLT IS FASTER* / *direct wins* / *comparable*. QEMU says
+> "comparable" but its framebuffer is not uncached, so only a metal reading
+> decides it. If a real machine reports BLT IS FASTER, switching the present
+> path is a config change against code that already exists — most of P3's win
+> with none of P3's risk.
+
 ---
 
 ## P4 — Enabler: USB mass storage over xHCI

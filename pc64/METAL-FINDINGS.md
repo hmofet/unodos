@@ -316,7 +316,7 @@ operator for later investigation; recorded now while the evidence is fresh.
   F3 — Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is
   a direct clue toward fixing the uncached-framebuffer problem on the PCs.
 
-### F10 — the fb bandwidth bench leaves visible garbage on screen  ·  HARNESS  ·  S4  ·  OPEN
+### F10 — ~~the fb bandwidth bench leaves visible garbage on screen~~  ·  HARNESS  ·  S4  ·  FIXED
 The boot-env `fb bench` writes a test pattern into the **bottom 64 rows of the
 panel** and then calls `uno_pc64_dbg_invalidate()` to force a repaint. When the
 presented desktop is letterboxed (`gOutH < gModeH`) those rows lie outside the
@@ -336,6 +336,9 @@ the operator's MacBook photo.
 - Neither affects results, but both are noise in operator photos and the bench
   garbage could be mistaken for framebuffer corruption — which is exactly the
   kind of thing we are trying to diagnose, so it should not be self-inflicted.
+- **FIXED**: `uno_pc64_dbg_bench_cleanup()` erases the benched band and forces a
+  repaint over it. QEMU screenshot confirms a clean bottom edge. (The splash
+  banner/loading-bar overlap is still open — cosmetic.)
 
 ---
 

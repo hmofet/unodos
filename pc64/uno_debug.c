@@ -38,6 +38,8 @@ void uno_pc64_dbg_display(unsigned long long *base, int *w, int *h,
                           int *stride, int *pixfmt, int *useblt,
                           int *dtw, int *dth, int *outw, int *outh);
 void uno_pc64_dbg_invalidate(void);     /* force a full VRAM rewrite next frame */
+int  uno_pc64_dbg_blt_bench(unsigned long long *cycles, unsigned long *bytes);
+void uno_pc64_dbg_bench_cleanup(void);
 void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed);
 void uno_usb_hid_status(int *nkbd, int *nmouse);
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
@@ -975,7 +977,26 @@ void uno_dbg_envblock(void)
                     vk, rk, vk ? rk / vk : 0,
                     (vk && vk < 300000ull) ? "  << UNCACHED-CLASS VRAM (perf bug)" : "");
             }
-            uno_pc64_dbg_invalidate();  /* repaint over the sweep next frame */
+            /* P3 scouting: the same bytes through the firmware's Blt().
+             * If the blitter DMAs, it sidesteps the uncached-store problem
+             * entirely and gUseBlt (an existing present path) becomes a
+             * free win - no MTRR reprogramming required. */
+            {
+                unsigned long long bc = 0;
+                unsigned long bb = 0;
+                if (uno_pc64_dbg_blt_bench(&bc, &bb) && bc) {
+                    unsigned long long bk = (bb / 1024ull) * g_tsc_per_ms * 1000ull / bc;
+                    unsigned long long vk2 = tv ? (n * 4ull / 1024ull) * g_tsc_per_ms * 1000ull / tv : 0;
+                    env("blt bench: %llu KB/s  (direct %llu KB/s)  -> %s\n",
+                        bk, vk2,
+                        bk > vk2 * 2 ? "BLT IS FASTER - try the gUseBlt present path (P3, free)"
+                                     : (bk * 2 < vk2 ? "direct wins - Blt is not the answer"
+                                                     : "comparable - no easy win here"));
+                } else {
+                    env("blt bench: unavailable (detached or no GOP)\n");
+                }
+            }
+            uno_pc64_dbg_bench_cleanup();   /* F10: leave no pattern on screen */
         }
     }
 
