@@ -48,6 +48,17 @@ if [ "$UNO_DEBUG" != "0" ]; then
     DBG_ID="debug-$(git rev-parse --short HEAD 2>/dev/null || echo local)-$(date -u +%Y%m%d-%H%M 2>/dev/null || echo x)"
     DBGDEF="-DUNO_DEBUG -DUNO_BUILD_ID=\"$DBG_ID\" -fno-omit-frame-pointer"
     [ "${UNO_DBGCON:-0}" != "0" ] && DBGDEF="$DBGDEF -DUNO_DBGCON"
+    # DETACH OFF BY DEFAULT IN THE DEBUG BUILD (finding F8).
+    # The native stack has no USB mass-storage driver, so ExitBootServices on a
+    # USB-booted system strands its own boot volume: telemetry cannot be
+    # written and the stress driver cannot read STRESS.CFG. The Latitude
+    # (detach_blocked=0) hit exactly this and was untestable. Every test boot is
+    # from USB, so detaching makes the harness useless on any machine that
+    # qualifies. UNO_DETACH=1 re-enables it for deliberately testing detach.
+    if [ "${UNO_DETACH:-0}" = "0" ]; then
+        DBGDEF="$DBGDEF -DUNO_NO_DETACH"
+        echo "[dbg] detach DISABLED (F8: it strands a USB boot volume). UNO_DETACH=1 to re-enable."
+    fi
     if [ "${UNO_UBSAN:-1}" != "0" ]; then
         # trap-on-error routes every caught UB to a ud2 -> our #UD handler ->
         # a "UBSAN TRAP" crash report with the exact faulting RIP.  Only the
