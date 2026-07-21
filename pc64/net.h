@@ -51,4 +51,12 @@ void net_tcp_close(void);
 void net_dhcp_start(void);
 int  net_dhcp_done(void);            /* 1 once a lease is bound */
 
+/* Link-level frame counters since the last net_init - lets the net test say
+ * which side of a DHCP failure is at fault (did we transmit? did anything
+ * arrive? were any of them IP?). */
+u32  net_tx_frames(void);
+u32  net_rx_frames(void);
+u32  net_rx_arp(void);
+u32  net_rx_ip(void);
+
 #endif

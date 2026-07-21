@@ -115,6 +115,30 @@ int pc64_stress_cfg_flag(const char *key)
     return cfg_has((char *)cfg, key);
 }
 
+/* Copy the string value after `key=` (up to the next whitespace/newline) into
+ * `buf`.  Returns its length, or 0 when the key is absent or has no `=value`.
+ * Used for `spec=storage,apps,...` - the conformance area selection.  Like
+ * cfg_flag it re-reads STRESS.CFG (callers are one-shot, not per-frame). */
+int pc64_stress_cfg_value(const char *key, char *buf, int cap)
+{
+    unsigned char cfg[512];
+    int v, n = uno_fs_volumes(), out = 0;
+    long got = -1;
+    const char *s;
+    if (cap > 0) buf[0] = 0;
+    for (v = 0; v < n && got < 0; v++)
+        got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
+    if (got < 0) return 0;
+    cfg[got] = 0;
+    s = cfg_find((char *)cfg, key);
+    if (!s || *s != '=') return 0;          /* bare key (no value) or absent */
+    s++;
+    while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n' && out < cap - 1)
+        buf[out++] = *s++;
+    if (cap > 0) buf[out] = 0;
+    return out;
+}
+
 /* `key=N` -> N, else `dflt`.  Used for passes=3. */
 static int cfg_int(const char *cfg, const char *key, int dflt)
 {

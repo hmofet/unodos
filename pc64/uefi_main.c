@@ -1010,8 +1010,20 @@ void uno_pc64_delay_ms(int ms)
     else if (gBS)    gBS->Stall((UINTN)ms * 1000);
 }
 
+#ifdef UNO_DEBUG
+/* Interactive-SPECTEST key capture. map_key is the single funnel for every
+ * keystroke, so latching here catches the REAL keyboard path - the one thing
+ * synthetic injection can't prove works on a given laptop. Only armed inside
+ * uno_pc64_dbg_key_wait(); nothing injects during that window, so only genuine
+ * hardware keys are latched. */
+static volatile int g_dbg_kcap, g_dbg_khave, g_dbg_kscan, g_dbg_kuni;
+#endif
+
 static void map_key(UINT16 scan, CHAR16 uni, short mods)
 {
+#ifdef UNO_DEBUG
+    if (g_dbg_kcap) { g_dbg_kscan = (int)scan; g_dbg_kuni = (int)uni; g_dbg_khave = 1; }
+#endif
     raw_push((int)scan, (int)uni, mods ? 1 : 0);
     switch (scan) {                           /* Mac keycode + arrow ASCII */
     case SCAN_LEFT:  post_key_mod(0x7B, 0x1C, mods); return;
@@ -1089,6 +1101,32 @@ static void poll_keyboard(void)
             map_key(k.ScanCode, k.UnicodeChar, 0);
     }
 }
+
+#ifdef UNO_DEBUG
+/* Pump the real keyboard for up to timeout_ms and return the first key, so an
+ * interactive conformance check can confirm the physical keyboard reaches the
+ * OS on THIS machine. Returns 1 with *scan/*uni set, or 0 on timeout. Bounded
+ * and heartbeat-fed: an unattended batch run that leaves this unanswered simply
+ * times out (the check records SKIP) - it can never hang the machine. */
+int uno_pc64_dbg_key_wait(int timeout_ms, int *scan, int *uni)
+{
+    unsigned long long t0 = uno_dbg_uptime_ms();
+    g_dbg_khave = 0; g_dbg_kcap = 1;
+    while ((int)(uno_dbg_uptime_ms() - t0) < timeout_ms) {
+        poll_keyboard();
+        if (g_dbg_khave) {
+            g_dbg_kcap = 0;
+            if (scan) *scan = g_dbg_kscan;
+            if (uni)  *uni  = g_dbg_kuni;
+            return 1;
+        }
+        uno_pc64_delay_ms(10);
+        uno_dbg_heartbeat();
+    }
+    g_dbg_kcap = 0;
+    return 0;
+}
+#endif
 
 static void pointer_moved_clicked(int mb)
 {

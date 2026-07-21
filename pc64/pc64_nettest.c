@@ -111,8 +111,24 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
     net_dhcp_start();
     while (!net_dhcp_done() && (int)(uno_dbg_uptime_ms() - t0) < 12000) pump(20);
     if (!net_dhcp_done()) {
-        uno_dbg_net_trace("%s: FAIL DHCP - no lease in 12 s (link up, so L2 TX/RX "
-                          "or the server side is the suspect)", what);
+        /* Frame counters turn the old three-way guess into an answer:
+         *   tx==0            -> our TX path never fired (driver/xHCI bulk-out)
+         *   tx>0, rx==0      -> nothing came back: our RX parse, the cable, or
+         *                       a silent DHCP server
+         *   rx>0, ip==0      -> frames arrive (ARP) but no IP: RX filter/offset
+         *   rx>0, ip>0       -> we saw IP but no lease: DHCP option parsing      */
+        uno_dbg_net_trace("%s: FAIL DHCP - no lease in 12 s "
+                          "(tx=%lu rx=%lu arp=%lu ip=%lu)", what,
+                          (unsigned long)net_tx_frames(), (unsigned long)net_rx_frames(),
+                          (unsigned long)net_rx_arp(),    (unsigned long)net_rx_ip());
+        if (net_tx_frames() == 0)
+            uno_dbg_net_trace("%s:   -> TX never fired: driver send / bulk-out path", what);
+        else if (net_rx_frames() == 0)
+            uno_dbg_net_trace("%s:   -> TX ok, nothing received: RX parse, cable, or dead server", what);
+        else if (net_rx_ip() == 0)
+            uno_dbg_net_trace("%s:   -> frames arrive but no IP: RX filter / descriptor offset", what);
+        else
+            uno_dbg_net_trace("%s:   -> IP seen, no lease: DHCP offer/option parsing", what);
         return 0;
     }
     uno_dbg_net_trace("%s: DHCP lease in %lu ms: ip %s", what,

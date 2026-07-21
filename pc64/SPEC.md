@@ -1503,16 +1503,39 @@ decoders ship inside PHOTOS.UNO and are host-tested only.
 - **S-AI-02** [auto, STUB] Request → stream → render round-trip. Pending
   networking. Keys live in plaintext `AI.CFG` (S-STUDIO-09).
 
-> **SPECTEST coverage (2026-07-21):** the conformance suite now runs 58 [auto]
-> checks + 7 deliberate SKIPs across FAT/NET/FONT/LIBC/JS/UUI/3D/SND/MEDIA/
-> WRITE/MUSIC/STUDIO/PY/DBG. It exercises the toolkits (unoui widget lifecycle
-> + events, uno3d raster, unosound sequencer), the audio decoders (WAV sample-
-> exact, MIDI/MP3/AAC), the Editor model (insert/wrap/find/replace + UWD & TXT
-> round-trips via test hooks in `pc64_write.c`), Music decode via
+## S-INT — interactive checks (operator-confirmed; `interactive` opt-in)
+
+The paths synthetic injection cannot prove. Run only when the STRESS.CFG
+`interactive` key is set (the flasher's "include interactive tests" box), so an
+unattended batch never blocks. Each wait is bounded (~25 s) and records SKIP on
+a timeout rather than hanging.
+
+- **S-INT-01** [interactive] The PHYSICAL keyboard MUST reach the OS on this
+  machine: a prompted keypress arrives through `poll_keyboard`→`map_key` (the
+  same funnel injection uses, so only a human press proves the firmware/HID
+  bring-up works here — the class of bug that hit the Surface + Intel-Mac
+  keyboards). Latched via the debug capture hook `uno_pc64_dbg_key_wait`.
+- **S-INT-02** [interactive] The DISPLAY MUST show correct colour + legible
+  text: labelled red/green/blue bars drawn straight to the framebuffer (the fb
+  colour byte order + the text path, both per-machine trouble this session),
+  confirmed Y/N by the operator.
+- **S-INT-03** [interactive, STUB] Audible output. Deferred: the PCM DMA ring is
+  fed by the main-loop audio pump, which doesn't run during the blocking suite,
+  and the codecs are metal-pending. Becomes real once audio is confirmed on metal.
+
+> **SPECTEST coverage (2026-07-21):** the conformance suite is organised into
+> selectable AREAS — **storage · system · frameworks · apps · network** (plus the
+> opt-in **interactive** area) — armed as bare `spec` (all) or `spec=<areas>`.
+> It runs 58 [auto] checks + deliberate SKIPs across FAT/NET/FONT/LIBC/JS/UUI/3D/
+> SND/MEDIA/WRITE/MUSIC/STUDIO/PY/DBG, exercising the toolkits (unoui widget
+> lifecycle + events, uno3d raster, unosound sequencer), the audio decoders (WAV
+> sample-exact, MIDI/MP3/AAC), the Editor model (insert/wrap/find/replace + UWD &
+> TXT round-trips via test hooks in `pc64_write.c`), Music decode via
 > `pc64_media_open`, Studio file save/load, and **Python-on-metal** (loads
 > PYRT.UNO, runs a `uno.App` snippet, verifies its `uno.write` side effect).
 > UnoC compile/build are UI-only in STUDIO.UNO → host-tested (`tools/ucc_test.c`);
-> WiFi/LAN/AI are SKIP-pending-networking.
+> WiFi/LAN/AI are SKIP-pending-networking; the interactive area (S-INT) adds the
+> human-confirmed keyboard + display checks.
 
 ---
 
