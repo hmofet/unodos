@@ -16,7 +16,7 @@ Raw reports are preserved off each stick under
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
 | Latitude (i7-6600U) | i7-6600U | 1 (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. |
 | Lenovo X13 Yoga Gen 3 | — | pending | convertible/touch — another I2C-HID + firmware-pointer data point for F4/F6 |
-| MacBook Pro 2013 13" | — | pending | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
+| MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
 ZERO hangs.** `surface-2026-07-20-run2/`. A pass is ~30 s at the default
@@ -213,6 +213,46 @@ and the stress driver never armed.
   2. **the debug build no longer detaches by default** (`-DUNO_NO_DETACH`,
      `UNO_DETACH=1` re-enables). Every test boot is from USB, so with detach on
      the harness is useless on any machine that qualifies.
+
+### F9 — MacBook Pro 2013 boots very slowly then resets to the internal drive  ·  UNTRIAGED  ·  S2  ·  OPEN (flagged, not investigated)
+Operator report 2026-07-20: the debug stick (`debug-local-20260721-0042`, the
+detach-disabled build) on a 13" MacBook Pro 2013 boots **extremely slowly**,
+then resets and the machine boots its internal drive instead. Deferred by the
+operator for later investigation; recorded now while the evidence is fresh.
+- From the operator's photo, the splash **does** render and reaches the LAST
+  loading-bar segment (all four filled: red/green/cyan/white), so `uno_pc64_init`
+  got through GOP, driver connect, input, and the storage/ACPI/audio stages.
+  Whatever goes wrong is at or after the end of init.
+- Not F8: this build has detach compiled out.
+- **PRIME SUSPECT — our own watchdog, i.e. a HARNESS bug, not an OS one.**
+  `uno_dbg_watchdog_start()` arms a 20 s firmware-timer watchdog at the end of
+  init, but the heartbeat it watches is only fed once the *shell's* main loop
+  runs. On a machine where everything between those two points is slow (this Mac
+  is slow, and F3's uncached framebuffer makes the first paints very expensive),
+  the watchdog can time out **before the first heartbeat** and reset the machine
+  — which would present exactly as "very slow, then reboots". If so the fix is
+  ours: don't arm until the shell's first heartbeat, or give the arm a generous
+  one-shot grace period.
+  - Test cheaply: boot it once more and see whether `CRASH\HG###.TXT` appears
+    (the watchdog stashes and the report lands on the following boot), or build
+    with the watchdog disabled and see if the Mac comes up.
+- **Cost of leaving it broken:** this was the most informative machine left for
+  F3 — Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is
+  a direct clue toward fixing the uncached-framebuffer problem on the PCs.
+
+### F10 — the fb bandwidth bench leaves visible garbage on screen  ·  HARNESS  ·  S4  ·  OPEN
+The boot-env `fb bench` writes a test pattern into the **bottom 64 rows of the
+panel** and then calls `uno_pc64_dbg_invalidate()` to force a repaint. When the
+presented desktop is letterboxed (`gOutH < gModeH`) those rows lie outside the
+presented area and are never repainted, so the pattern stays on screen for the
+whole session. Clearly visible as green/blue striping along the bottom edge of
+the operator's MacBook photo.
+- Also visible in that photo: the splash's `DEBUG / STRESS BUILD <id>` banner is
+  drawn at `H/2+40` and **collides with the loading bar** at `H/2+46`; the bar
+  paints over the middle of the text. Cosmetic, mine, one-line fix.
+- Neither affects results, but both are noise in operator photos and the bench
+  garbage could be mistaken for framebuffer corruption — which is exactly the
+  kind of thing we are trying to diagnose, so it should not be self-inflicted.
 
 ---
 
