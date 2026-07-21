@@ -77,6 +77,53 @@ finding F1, which armed `allow-force` on every "safe" stick):
   pipeline end to end. Off by default so an armed stick never self-crashes.
 - `force-hang` - **opt in** to a forced freeze on pass 1 that proves the
   watchdog. Off by default.
+- `nonet` - skip the network hardware test (below). Off by default: an armed
+  stick tests the network once per boot, before the stress passes.
+
+### The network hardware test (`CRASH\NETLOG.TXT`)
+
+Every armed boot runs **one** network test before the stress driver starts,
+logging every stage (timestamped) to `CRASH\NETLOG.TXT`, flushed line by line
+so a hang mid-test still leaves the trail. The plan, per arin's spec:
+
+1. **USB Ethernet is tested only if an adapter is present at boot** (the batch
+   adapter is an ASIX AX88179A; Realtek RTL815x dongles/docks also count).
+   **If one is present, WiFi is NOT tested** - a plugged adapter means "this
+   is an ethernet round".
+2. Otherwise **WiFi** is tested with a full bring-up trace: card id, creds
+   file, firmware load, ALIVE, MVM setup, join - each line names the stage so
+   the log shows *where* it dies on each laptop, not just that it died.
+3. Neither present (QEMU): a wired PCI NIC if there is one - this is the
+   QEMU regression path (`nettest_stage.py`).
+
+Whatever link comes up then runs the same IP suite: link wait, DHCP (ip/gw/dns
+logged), 3 gateway pings, one DNS query. Stages are bracketed with checkpoints
+(`net:dhcp`, `net:wifi-bringup`, ...) so a hang report names the stage, and
+the trace feeds the watchdog heartbeat - a slow WiFi join cannot trip it.
+
+USB Ethernet runs over the firmware's own USB stack (`EFI_USB_IO`) while
+attached, so the boot stick and keyboard stay alive - no xHCI takeover (that
+would be F8 all over again). WiFi needs firmware on the ESP (`FIRMWARE\`,
+bundled automatically when `fw-blobs/` is populated - `sh tools/fetch-fw.sh`)
+and credentials in **`WIFI.CFG` or `WIFI.TXT`** at a volume root:
+
+```
+ssid=YourNetwork
+psk=your-wpa2-passphrase
+```
+
+The NAS keeps a template at `\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`
+- fill it in once and the flasher's **Developer options** folder-copy puts it
+on every stick it flashes. Plaintext on the stick; treat it accordingly.
+
+**Honest status of the WiFi driver** (why the trace matters): the transport
+side - firmware load, ALIVE, the MVM command layer - is complete, but the
+MLME tail (beacon parse -> real BSSID/channel -> auth/assoc exchange) is not
+implemented yet, and the trace says so explicitly when it crosses that line. A
+laptop that reaches `join:` lines has proven card + firmware + commands work;
+a laptop that dies earlier names the real blocker (`firmware not found`,
+`RF-kill`, `no ALIVE`, ...). That per-machine split is what the batch round
+is for.
 
 **A bounded run now POWERS THE MACHINE OFF when it finishes** (4 s after the
 `STRESS COMPLETE` banner). That is deliberate: shutting down by hand meant

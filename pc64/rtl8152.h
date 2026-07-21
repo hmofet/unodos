@@ -15,6 +15,7 @@
 /* find + bring up an RTL815x on the enumerated USB list; NULL if none */
 uno_nic_t *rtl8152_nic(void);
 const unsigned char *rtl8152_mac(void);
+int rtl8152_present(unsigned short *vid, unsigned short *pid); /* probe only, no bind */
 
 /* diagnostics for the Network app */
 void rtl8152_status(int *found, int *bound, int *link,

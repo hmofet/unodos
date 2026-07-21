@@ -31,6 +31,11 @@ putting test material on a fresh drive without a second copy step:
   `\\behemoth\unreplicated\unodos\pc64\testkit` (see its `README.TXT`).
 - **Extract a .zip onto the drive** - pick any zip; optionally into a subfolder.
 
+The testkit carries **`wifi.txt`** (WiFi credentials for the boot-time network
+test - `ssid=` / `psk=`, see `pc64/DEBUG.md`). Fill in the copy on the share
+once; every stick flashed with developer extras then carries it. It is stored
+in plaintext on the stick.
+
 Settings live in **`%APPDATA%\UnoDOS\flasher.ini`**, deliberately *not* beside
 the exe: `deploy-to-share.ps1` overwrites `UnoDosFlasher.exe` on the share after
 every build, and people run it straight from `\\behemoth`, so anything kept with

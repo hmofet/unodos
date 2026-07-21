@@ -26,10 +26,14 @@ the QEMU `e1000e`; igb needs a PHY autoneg kick over MDIC before QEMU raises
 `STATUS.LU` and un-gates RX. r8169 and all WiFi parts have no QEMU model and are
 verified by reference/inspection only (hardware-pending).
 
-The USB drivers need the xHCI stack, which is behind `-DUNO_XHCI` (see
-[xhci.h](xhci.h)); when it is off, `uno_usb_*` are inert stubs and both USB NIC
-drivers compile to "no device found". e1000 is always present. WiFi requires
-firmware files and a config file on the ESP (below).
+The USB NIC drivers have **two transports**. While the OS is firmware-attached
+they drive the adapter through the firmware's own `EFI_USB_IO` handles
+([usbio.c](usbio.c)) - no xHCI takeover, so the firmware keeps the USB boot
+stick and keyboard alive (taking the controller while boot services are up is
+the F8 stranding failure, just earlier). Once detached (or for development,
+`-DUNO_XHCI`) they use the native xHCI stack; with it off, `uno_usb_*` are
+inert stubs. e1000 is always present. WiFi requires firmware files and a
+config file on the ESP (below).
 
 ## USB Ethernet (ASIX + Realtek)
 
@@ -104,7 +108,10 @@ CNVi part) — the same machine the trackpad/keyboard work targets.
 
 ### WIFI.CFG — your network
 
-Put a `WIFI.CFG` file at the ESP root with your SSID and passphrase:
+Put a `WIFI.CFG` file at the ESP root with your SSID and passphrase
+(**`WIFI.TXT` is accepted under the same rules** - that is the name the
+flasher's developer-options folder copy stages from the NAS creds template at
+`\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`):
 
 ```
 ssid=MyNetwork

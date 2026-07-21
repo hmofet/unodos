@@ -6,9 +6,15 @@
  * The register init + the RX aggregation trailer / TX header formats follow the
  * Linux ax88179_178a driver. Those can only be fully verified against the real
  * chip, so a raw-RX dump is available for tuning if a packet doesn't parse.
- * Inert unless the USB stack is present (uno_usb_* stubs return -1). */
+ *
+ * Two transports, one driver: while firmware-attached the adapter is driven
+ * through EFI_USB_IO (usbio.c) so the firmware keeps the xHCI controller -
+ * and with it the USB boot stick and keyboard. Post-detach (or -DUNO_XHCI
+ * development) the native uno_usb_* path takes over. */
 #include "ax88179.h"
 #include "xhci.h"
+#include "usbio.h"
+#include "uno_debug.h"
 #include <string.h>
 
 typedef unsigned char  u8;
@@ -56,22 +62,29 @@ void uno_pc64_delay_ms(int ms);
 #define AX_RXHDR_DROP_ERR      0x80000000u
 
 /* ---- state --------------------------------------------------------------- */
-static int  g_dev = -1;            /* index in the xHCI enumerated device list */
+static int  g_dev = -1;            /* index in the active transport's dev list */
+static int  g_att;                 /* 1 = attached transport (EFI UsbIo)       */
+static int  g_in_ep, g_out_ep;     /* bulk endpoints (attached transport)      */
 static int  g_found, g_bound;
 static u8   g_mac[6];
 static u16  g_vid, g_pid;
 static uno_nic_t g_nic;
 
+static int ax_ctrl(u8 rt, u8 rq, u16 val, u16 idx, void *buf, int len)
+{
+    return g_att ? uno_usbio_control(g_dev, rt, rq, val, idx, buf, len)
+                 : uno_usb_control(g_dev, rt, rq, val, idx, buf, len);
+}
 static int  ax_read(int reg, int size, void *buf)
-{ return uno_usb_control(g_dev, 0xC0, AX_ACCESS_MAC, (u16)reg, (u16)size, buf, size); }
+{ return ax_ctrl(0xC0, AX_ACCESS_MAC, (u16)reg, (u16)size, buf, size); }
 static int  ax_write(int reg, int size, const void *buf)
-{ return uno_usb_control(g_dev, 0x40, AX_ACCESS_MAC, (u16)reg, (u16)size, (void *)buf, size); }
+{ return ax_ctrl(0x40, AX_ACCESS_MAC, (u16)reg, (u16)size, (void *)buf, size); }
 static int  ax_wr16(int reg, u16 v) { u16 t = v; return ax_write(reg, 2, &t); }
 static int  ax_wr8 (int reg, u8 v)  { u8  t = v; return ax_write(reg, 1, &t); }
 /* MDIO read of an embedded-PHY register (AX_ACCESS_PHY: value=phy id, index=
  * reg - note the operand order differs from AX_ACCESS_MAC's value=reg,index=len). */
 static u16  ax_mii_rd(int reg)
-{ u16 t = 0; uno_usb_control(g_dev, 0xC0, AX_ACCESS_PHY, AX88179_PHY_ID, (u16)reg, &t, 2); return t; }
+{ u16 t = 0; ax_ctrl(0xC0, AX_ACCESS_PHY, AX88179_PHY_ID, (u16)reg, &t, 2); return t; }
 
 /* find the bulk in/out endpoint addresses from the config descriptor */
 static int find_bulk_eps(int *in_ep, int *out_ep, int *in_mps, int *out_mps)
@@ -135,6 +148,8 @@ static int ax_send(void *ctx, const void *pkt, int len)
     tx[0]=(u8)h1; tx[1]=(u8)(h1>>8); tx[2]=(u8)(h1>>16); tx[3]=(u8)(h1>>24);
     tx[4]=(u8)h2; tx[5]=(u8)(h2>>8); tx[6]=(u8)(h2>>16); tx[7]=(u8)(h2>>24);
     memcpy(tx + 8, pkt, len);
+    if (g_att)
+        return uno_usbio_bulk_out(g_dev, g_out_ep, tx, len + 8) > 0 ? len : -1;
     return uno_usb_bulk_out(g_dev, tx, len + 8) > 0 ? len : -1;
 }
 
@@ -146,9 +161,11 @@ static int ax_recv(void *ctx, void *pkt, int cap)
 {
     (void)ctx;
     if (!g_bound) return 0;
-    /* refill: pull one bulk-in transfer, parse the trailing descriptor array */
+    /* refill: pull one bulk-in transfer, parse the trailing descriptor array.
+     * Attached: a short timeout keeps net_poll cheap when the queue is idle. */
     if (g_rx_cnt == 0) {
-        int n = uno_usb_bulk_in(g_dev, g_rx, sizeof g_rx);
+        int n = g_att ? uno_usbio_bulk_in(g_dev, g_in_ep, g_rx, sizeof g_rx, 4)
+                      : uno_usb_bulk_in(g_dev, g_rx, sizeof g_rx);
         if (n < 8) return 0;
         { u32 hdr = g_rx[n-4] | (g_rx[n-3]<<8) | (g_rx[n-2]<<16) | (u32)(g_rx[n-1]<<24);
           g_rx_cnt = hdr & 0xFFFF; g_rx_hdroff = (hdr >> 16); g_rx_off = 0; g_rx_len = n; }
@@ -189,6 +206,32 @@ static int ax_link(void *ctx)
 }
 
 /* ---- bring-up ------------------------------------------------------------ */
+/* Is an ASIX adapter on either transport's bus? No binding, no device state
+ * change - safe to call at boot to decide the test plan (eth vs WiFi). */
+int ax88179_present(unsigned short *vid, unsigned short *pid)
+{
+    int i, n;
+    n = uno_xhci_dev_count();
+    for (i = 0; i < n; i++) {
+        const uno_usb_dev *d = uno_xhci_dev(i);
+        if (d && d->vendor == 0x0b95) {
+            if (vid) *vid = d->vendor;
+            if (pid) *pid = d->product;
+            return 1;
+        }
+    }
+    n = uno_usbio_count();
+    for (i = 0; i < n; i++) {
+        unsigned short v = 0, p = 0;
+        if (uno_usbio_info(i, &v, &p, 0, 0) == 0 && v == 0x0b95) {
+            if (vid) *vid = v;
+            if (pid) *pid = p;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 uno_nic_t *ax88179_nic(void)
 {
     int i, n, in_ep = 0, out_ep = 0, in_mps = 512, out_mps = 512;
@@ -198,12 +241,35 @@ uno_nic_t *ax88179_nic(void)
         const uno_usb_dev *d = uno_xhci_dev(i);
         if (d && d->vendor == 0x0b95) { g_dev = i; g_found = 1; g_vid = d->vendor; g_pid = d->product; break; }
     }
+    if (!g_found) {                    /* attached: the firmware's USB stack */
+        n = uno_usbio_count();
+        for (i = 0; i < n; i++) {
+            unsigned short v = 0, p = 0;
+            if (uno_usbio_info(i, &v, &p, 0, 0) == 0 && v == 0x0b95) {
+                g_dev = i; g_att = 1; g_found = 1; g_vid = v; g_pid = p;
+                break;
+            }
+        }
+    }
     if (!g_found) return 0;
+    uno_dbg_net_trace("ax88179: found %04x:%04x via %s", g_vid, g_pid,
+                      g_att ? "UsbIo (attached)" : "xHCI (native)");
 
-    if (uno_usb_set_config(g_dev, 1) < 0) return 0;
-    if (find_bulk_eps(&in_ep, &out_ep, &in_mps, &out_mps) < 0) return 0;
-    if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    if (g_att) {
+        /* the firmware already configured the device; just find the pipes */
+        if (uno_usbio_bulk_eps(g_dev, &g_in_ep, &g_out_ep) < 0) {
+            uno_dbg_net_trace("ax88179: no bulk endpoints on the UsbIo interface");
+            return 0;
+        }
+        uno_dbg_net_trace("ax88179: bulk eps in=%02x out=%02x", g_in_ep, g_out_ep);
+    } else {
+        if (uno_usb_set_config(g_dev, 1) < 0) return 0;
+        if (find_bulk_eps(&in_ep, &out_ep, &in_mps, &out_mps) < 0) return 0;
+        if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    }
     ax_reset();
+    uno_dbg_net_trace("ax88179: reset done, mac %02x:%02x:%02x:%02x:%02x:%02x",
+                      g_mac[0], g_mac[1], g_mac[2], g_mac[3], g_mac[4], g_mac[5]);
 
     g_nic.ctx = 0; g_nic.send = ax_send; g_nic.recv = ax_recv; g_nic.link = ax_link;
     g_bound = 1;

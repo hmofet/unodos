@@ -15,7 +15,7 @@ Raw reports are preserved off each stick under
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
 | Latitude (i7-6600U) | i7-6600U | 1 + 1 retest (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. **Retest on the detach-disabled build produced ZERO telemetry — most likely it never booted the stick** (see below). |
-| Lenovo X13 Yoga Gen 3 | i5-10210U | 1 (2026-07-20) | 1920x1080. **Clean 3-pass run, zero crashes** — first machine to run with detach disabled, and the one that PROVED F3 is the bottleneck. |
+| Lenovo X13 Yoga Gen 3 | i5-10210U | 4 (2026-07-20/21) | 1920x1080. **Clean 3-pass runs, zero crashes** — first machine to run with detach disabled, the one that PROVED F3 is the bottleneck, and the perf-iteration mule (P0, Blt, worst-frame runs). |
 | MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
 **Surface run 2 (fixed kernel): 31 passes / 928 s (~15.5 min), ZERO crashes,
@@ -75,6 +75,22 @@ Also the first metal test of the new boot marker: `CRASH\BOOTS.TXT` reads
 
 fps on the present-bound passes: 5 -> 17 and 4 -> 17. Operator confirms 3D
 Runner "looked a lot smoother, but it hitched every once in a while".
+
+**X13 Yoga run 4 — worst-frame/hitch tracking (2026-07-21).**
+`x13yoga-2026-07-21-WORST/`. Build `debug-local-20260721-0326` (flasher
+`20260720-232900`), boot 1 on a fresh flash, clean 3-pass run, zero crashes,
+57.4 s. Machine identity cross-checked: `i5-10210U`, `fb_base d0000000`,
+`mtrr0 base=c0000000`, `i2c-hid ctrls=0` — unambiguously the Yoga.
+Averages reproduce the Blt run to ~1% (present_avg 55695/16135/63013 vs
+55889/16020/62957), third consecutive <1%-repeatable run on this machine.
+First metal data from the new `worst:` line — and it answers the operator's
+"smoother but hitches occasionally" report; see **F11**:
+
+| pass | render_avg | render_max | present_avg | present_max | hitches>100ms | during |
+|------|-----------|------------|-------------|-------------|---------------|--------|
+| 0 | 2 888 us | 16 443 us | 55 695 us | 83 577 us | 0 | (none) |
+| 1 | 75 772 us | **2 340 974 us** | 16 135 us | 84 343 us | **1** | **stress:close** |
+| 2 | 3 124 us | **97 577 us** | 63 013 us | 82 031 us | 0 | (none) |
 
 ## Severity key
 
@@ -352,6 +368,40 @@ the operator's MacBook photo.
 - **FIXED**: `uno_pc64_dbg_bench_cleanup()` erases the benched band and forces a
   repaint over it. QEMU screenshot confirms a clean bottom edge. (The splash
   banner/loading-bar overlap is still open — cosmetic.)
+
+### F11 — the residual hitches are in RENDER, not present  ·  OS / PERF  ·  S3  ·  OPEN
+The question the worst-frame line was added to answer, answered on metal
+(Yoga run 4). After P0+Blt, **present is bounded**: `present_max` never
+exceeded 84 ms in any pass (the Blt path caps a full-screen push at ~80 ms on
+this machine), so present can no longer produce a >100 ms hitch here. The
+spikes the operator feels are **render-side** — exactly what QEMU hinted
+(133 ms peak render vs 15 ms avg).
+- **The one >100 ms hitch: a single `unoui_render_ui()` call took 2.34 s**,
+  tagged `during=stress:close` (the driver's close-focused-window +
+  focus-next phase). The instrumentation brackets *only* `unoui_render_ui`
+  (`pc64_uui.c` timed block), so this is 2.3 s inside widget draw callbacks —
+  ~800x a normal full-scene render (~3 ms). Something a close/focus-change
+  triggers does massive one-time work inside a draw (lazy re-layout or
+  decode on first draw after focus is the prime suspect — pass 1's window
+  population includes Browser/Editor windows holding `HUGE.HTM` plus Music,
+  Tracker, Paint from earlier phases).
+- **Pass 1's `render_avg` of ~75 ms is not noise** — it reproduces across all
+  four Yoga runs (75 762 / 75 548 / 75 772 us). The pass-1 window mix makes
+  *every* full render cost ~75 ms, i.e. some resident window's draw callback
+  is ~25x the whole rest of the scene. Whatever that window is, it is also
+  the likely home of the 2.34 s outlier.
+- **Runner3D's felt hitches are real but sub-threshold per half:** pass 2
+  peaked at `render_max=97 577` us — under the 100 ms hitch bar — but stacked
+  on that pass's 63-82 ms present, the worst *frame* is ~180 ms against a
+  ~66 ms typical frame. A 3x frame-time spike is clearly visible; the counter
+  reads 0 because the threshold is applied per-half. Harness note for the
+  next iteration: also track worst render+present *total* (and tag it), so a
+  frame like this is counted, not hidden.
+- Fix-session direction: the hitch hunt has moved from present to render.
+  Next instrumentation step is per-window draw timing (name the window whose
+  draw eats 75 ms, and catch the 2.34 s path with a checkpoint inside
+  `unoui_render_ui` naming the widget being drawn). Do NOT spend more on the
+  present path for hitches — it is bounded by Blt on this machine.
 
 ---
 

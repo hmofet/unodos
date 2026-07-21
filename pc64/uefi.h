@@ -231,6 +231,74 @@ struct EFI_ABSOLUTE_POINTER_PROTOCOL {
     EFI_ABSOLUTE_POINTER_MODE *Mode;
 };
 
+/* ---- USB I/O (firmware-enumerated USB devices, one handle per interface) --
+ * The attached-mode USB transport (usbio.c): drive a USB NIC through the
+ * firmware's own stack instead of taking over the xHCI controller - a takeover
+ * while boot services are alive would kill the firmware's USB mass storage,
+ * i.e. the USB boot stick itself (the F8 failure mode). */
+#define EFI_USB_IO_PROTOCOL_GUID \
+    { 0x2B2F68D6, 0x0CD2, 0x44cf, { 0x8E, 0x8B, 0xBB, 0xA2, 0x0B, 0x1B, 0x5B, 0x75 } }
+
+typedef enum { EfiUsbDataIn = 0, EfiUsbDataOut = 1, EfiUsbNoData = 2 } EFI_USB_DATA_DIRECTION;
+
+typedef struct {
+    UINT8  RequestType;
+    UINT8  Request;
+    UINT16 Value;
+    UINT16 Index;
+    UINT16 Length;
+} EFI_USB_DEVICE_REQUEST;
+
+typedef struct {
+    UINT8  Length, DescriptorType;
+    UINT16 BcdUSB;
+    UINT8  DeviceClass, DeviceSubClass, DeviceProtocol, MaxPacketSize0;
+    UINT16 IdVendor, IdProduct, BcdDevice;
+    UINT8  StrManufacturer, StrProduct, StrSerialNumber, NumConfigurations;
+} EFI_USB_DEVICE_DESCRIPTOR;
+
+typedef struct {
+    UINT8  Length, DescriptorType, InterfaceNumber, AlternateSetting;
+    UINT8  NumEndpoints, InterfaceClass, InterfaceSubClass, InterfaceProtocol;
+    UINT8  Interface;
+} EFI_USB_INTERFACE_DESCRIPTOR;
+
+typedef struct __attribute__((packed)) {
+    UINT8  Length, DescriptorType, EndpointAddress, Attributes;
+    UINT16 MaxPacketSize;               /* unaligned on the wire -> packed */
+    UINT8  Interval;
+} EFI_USB_ENDPOINT_DESCRIPTOR;
+
+typedef struct EFI_USB_IO_PROTOCOL EFI_USB_IO_PROTOCOL;
+struct EFI_USB_IO_PROTOCOL {
+    EFI_STATUS (*UsbControlTransfer)(EFI_USB_IO_PROTOCOL *This,
+                                     EFI_USB_DEVICE_REQUEST *Request,
+                                     EFI_USB_DATA_DIRECTION Direction,
+                                     UINT32 Timeout,           /* ms */
+                                     void *Data, UINTN DataLength,
+                                     UINT32 *Status);
+    EFI_STATUS (*UsbBulkTransfer)(EFI_USB_IO_PROTOCOL *This,
+                                  UINT8 DeviceEndpoint,
+                                  void *Data, UINTN *DataLength,
+                                  UINTN Timeout,               /* ms; 0 = none */
+                                  UINT32 *Status);
+    void *UsbAsyncInterruptTransfer;
+    void *UsbSyncInterruptTransfer;
+    void *UsbIsochronousTransfer;
+    void *UsbAsyncIsochronousTransfer;
+    EFI_STATUS (*UsbGetDeviceDescriptor)(EFI_USB_IO_PROTOCOL *This,
+                                         EFI_USB_DEVICE_DESCRIPTOR *Desc);
+    void *UsbGetConfigDescriptor;
+    EFI_STATUS (*UsbGetInterfaceDescriptor)(EFI_USB_IO_PROTOCOL *This,
+                                            EFI_USB_INTERFACE_DESCRIPTOR *Desc);
+    EFI_STATUS (*UsbGetEndpointDescriptor)(EFI_USB_IO_PROTOCOL *This,
+                                           UINT8 EndpointIndex,
+                                           EFI_USB_ENDPOINT_DESCRIPTOR *Desc);
+    void *UsbGetStringDescriptor;
+    void *UsbGetSupportedLanguages;
+    void *UsbPortReset;
+};
+
 /* ---- Boot Services --------------------------------------------------------
  * Field-for-field per the spec so the offsets of the entries we call are
  * exact; entries we never touch are void* placeholders. */

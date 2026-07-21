@@ -9,9 +9,14 @@
  * trade for a compact bare-metal driver. Covers the v1-descriptor chips
  * (8152/8153/8155/8156), i.e. essentially every USB dongle and laptop dock;
  * the 16-byte-descriptor 8157/8159 (5G/10G) are recognised but declined.
- * Inert unless the USB stack is present (uno_usb_* stubs return -1). */
+ *
+ * Two transports (same pattern as ax88179.c): EFI UsbIo while firmware-
+ * attached - so the firmware keeps the xHCI controller, the boot stick and
+ * the keyboard - and the native uno_usb_* stack once detached / -DUNO_XHCI. */
 #include "rtl8152.h"
 #include "xhci.h"
+#include "usbio.h"
+#include "uno_debug.h"
 #include <string.h>
 
 typedef unsigned char  u8;
@@ -117,6 +122,8 @@ void uno_pc64_delay_ms(int ms);
 enum { FAM_NONE, FAM_8152, FAM_8153A, FAM_8153B, FAM_8156 };
 
 static int  g_dev = -1;
+static int  g_att;                    /* 1 = attached transport (EFI UsbIo)   */
+static int  g_in_ep, g_out_ep;        /* bulk endpoints (attached transport)  */
 static int  g_found, g_bound, g_link_up;
 static u8   g_mac[6];
 static u16  g_vid, g_pid;
@@ -131,9 +138,11 @@ static int g_rx_have, g_rx_off, g_rx_armed;
 
 /* ---- raw register access ------------------------------------------------ */
 static int set_regs(u16 val, u16 idx, int size, const void *data)
-{ return uno_usb_control(g_dev, REQT_WRITE, REQ_SET_REGS, val, idx, (void *)data, size); }
+{ return g_att ? uno_usbio_control(g_dev, REQT_WRITE, REQ_SET_REGS, val, idx, (void *)data, size)
+               : uno_usb_control(g_dev, REQT_WRITE, REQ_SET_REGS, val, idx, (void *)data, size); }
 static int get_regs(u16 val, u16 idx, int size, void *data)
-{ return uno_usb_control(g_dev, REQT_READ, REQ_GET_REGS, val, idx, data, size); }
+{ return g_att ? uno_usbio_control(g_dev, REQT_READ, REQ_GET_REGS, val, idx, data, size)
+               : uno_usb_control(g_dev, REQT_READ, REQ_GET_REGS, val, idx, data, size); }
 
 /* generic OCP read: whole aligned dwords, chunked at 64 bytes */
 static int gen_ocp_read(u16 index, int size, void *data, u16 type)
@@ -416,6 +425,8 @@ static int rtl_send(void *ctx, const void *pkt, int len)
     tx[0]=(u8)o1; tx[1]=(u8)(o1>>8); tx[2]=(u8)(o1>>16); tx[3]=(u8)(o1>>24);
     tx[4]=(u8)o2; tx[5]=(u8)(o2>>8); tx[6]=(u8)(o2>>16); tx[7]=(u8)(o2>>24);
     memcpy(tx + 8, pkt, len);
+    if (g_att)
+        return uno_usbio_bulk_out(g_dev, g_out_ep, tx, len + 8) > 0 ? len : -1;
     return uno_usb_bulk_out(g_dev, tx, len + 8) > 0 ? len : -1;
 }
 
@@ -444,7 +455,14 @@ static int rtl_recv(void *ctx, void *pkt, int cap)
         return flen;
     }
 
-    /* buffer drained: arm a bulk-IN, then poll it non-blocking */
+    /* buffer drained: refill. Attached = one short-timeout sync bulk-IN (the
+     * firmware stack has no async arm/poll); native = arm + non-blocking poll. */
+    if (g_att) {
+        int n = uno_usbio_bulk_in(g_dev, g_in_ep, g_rx, RXBUF, 4);
+        if (n < 60) return 0;
+        g_rx_have = n; g_rx_off = 0;
+        return 0;   /* next call drains the freshly filled buffer */
+    }
     if (!g_rx_armed) {
         if (uno_usb_bulk_in_arm(g_dev, g_rx, RXBUF) < 0) return 0;
         g_rx_armed = 1;
@@ -505,6 +523,38 @@ static int find_vendor_bulk(int *cfgval, int *in_ep, int *out_ep, int *in_mps, i
     return -1;
 }
 
+/* Attached-mode match: the VID list covers laptop/dock makers whose ids also
+ * appear on keyboards and hubs, so on the firmware bus additionally require a
+ * vendor-specific (0xff) interface before poking vendor requests at it. */
+static int usbio_match(int i, u16 *vid, u16 *pid)
+{
+    unsigned short v = 0, p = 0;
+    unsigned char cls = 0;
+    if (uno_usbio_info(i, &v, &p, &cls, 0) < 0) return 0;
+    if (!is_rtl_vid(v) || cls != 0xff) return 0;
+    if (vid) *vid = v;
+    if (pid) *pid = p;
+    return 1;
+}
+
+int rtl8152_present(unsigned short *vid, unsigned short *pid)
+{
+    int i, n;
+    n = uno_xhci_dev_count();
+    for (i = 0; i < n; i++) {
+        const uno_usb_dev *d = uno_xhci_dev(i);
+        if (d && is_rtl_vid(d->vendor)) {
+            if (vid) *vid = d->vendor;
+            if (pid) *pid = d->product;
+            return 1;
+        }
+    }
+    n = uno_usbio_count();
+    for (i = 0; i < n; i++)
+        if (usbio_match(i, vid, pid)) return 1;
+    return 0;
+}
+
 uno_nic_t *rtl8152_nic(void)
 {
     int i, n, cfgval = 1, in_ep = 0x81, out_ep = 0x02, in_mps = 512, out_mps = 512;
@@ -514,14 +564,35 @@ uno_nic_t *rtl8152_nic(void)
         const uno_usb_dev *d = uno_xhci_dev(i);
         if (d && is_rtl_vid(d->vendor)) { g_dev = i; g_vid = d->vendor; g_pid = d->product; g_found = 1; break; }
     }
+    if (!g_found) {                    /* attached: the firmware's USB stack */
+        n = uno_usbio_count();
+        for (i = 0; i < n; i++)
+            if (usbio_match(i, &g_vid, &g_pid)) { g_dev = i; g_att = 1; g_found = 1; break; }
+    }
     if (!g_found) return 0;
+    uno_dbg_net_trace("rtl8152: found %04x:%04x via %s", g_vid, g_pid,
+                      g_att ? "UsbIo (attached)" : "xHCI (native)");
 
-    if (find_vendor_bulk(&cfgval, &in_ep, &out_ep, &in_mps, &out_mps) < 0) return 0;
-    if (uno_usb_set_config(g_dev, cfgval) < 0) return 0;
-    if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    if (g_att) {
+        /* firmware already configured the device; the vendor interface has
+         * its own UsbIo handle, so just read its bulk endpoints */
+        if (uno_usbio_bulk_eps(g_dev, &g_in_ep, &g_out_ep) < 0) {
+            uno_dbg_net_trace("rtl8152: no bulk endpoints on the UsbIo interface");
+            return 0;
+        }
+        uno_dbg_net_trace("rtl8152: bulk eps in=%02x out=%02x", g_in_ep, g_out_ep);
+    } else {
+        if (find_vendor_bulk(&cfgval, &in_ep, &out_ep, &in_mps, &out_mps) < 0) return 0;
+        if (uno_usb_set_config(g_dev, cfgval) < 0) return 0;
+        if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    }
 
     detect_version();
-    if (g_family == FAM_NONE) return 0;    /* unknown / 5G-10G v2-desc: decline */
+    if (g_family == FAM_NONE) {            /* unknown / 5G-10G v2-desc: decline */
+        uno_dbg_net_trace("rtl8152: version %04x not supported - declined", g_version);
+        return 0;
+    }
+    uno_dbg_net_trace("rtl8152: chip version %04x family %d", g_version, g_family);
 
     read_mac();
     chip_init();

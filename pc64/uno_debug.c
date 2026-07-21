@@ -488,6 +488,20 @@ static int disk_write_report(int kind)
     return 1;
 }
 
+/* Named file under CRASH\ for other harness modules (the net test's NETLOG).
+ * Whole-file rewrite each call - callers flush a growing buffer. */
+int uno_dbg_write_crashfile(const char *name, const void *data, int len)
+{
+    char path[40];
+    int vol = crash_vol();
+    if (vol < 0) return 0;
+    snprintf(path, sizeof path, "CRASH\\%s", name);
+    if (!uno_fat_write(vol, path, (const unsigned char *)data, (long)len))
+        return 0;
+    uno_fat_sync();
+    return 1;
+}
+
 /* ===========================================================================
  * the exception path
  * ======================================================================== */

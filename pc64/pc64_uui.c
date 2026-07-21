@@ -1953,6 +1953,9 @@ int main(void)
     for (;;) {
         int la, cursor_only = 0;
         uno_dbg_heartbeat();            /* debug build: the watchdog's liveness */
+        pc64_nettest_tick();            /* debug build: network hw test - runs
+                                           once, BEFORE the stress driver, and
+                                           blocks this frame while it does */
         pc64_stress_tick();             /* debug build: the metal stress driver */
         uno_pc64_poll();
 #ifdef UNO_ACPI
