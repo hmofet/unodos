@@ -12,9 +12,9 @@ Raw reports are preserved off each stick under
 
 | Machine | CPU | Runs | Notes |
 |---------|-----|------|-------|
-| Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
-| X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
-| Latitude (i7-6600U) | i7-6600U | 1 + 1 retest (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. **Retest on the detach-disabled build produced ZERO telemetry — most likely it never booted the stick** (see below). |
+| Surface Laptop Go | i5-1035G1 | 3 (2026-07-20/21) | 1536x1024. Stays firmware-**attached**. AX201 (Ice Lake CNVi `34f0`, hw_rev 332). Present path badly underperforms its own Blt bench (batch run). |
+| X1 Carbon (Gen 8) | i5-10210U | 2 (2026-07-20/21) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. AX201 QuZ (`02f0`, hw_rev 351 — same silicon as the Yoga). |
+| Latitude 7280 | i7-6600U | 2 + 1 dud (2026-07-20/21) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it (detach now compiled out). The 07-20 zero-telemetry retest stays unexplained, but the 07-21 batch boot worked first try. Carries an **AX210** (`2725`, hw_rev 420, GF RF) — not the 8265 its age suggests. |
 | Lenovo X13 Yoga Gen 3 | i5-10210U | 5 (2026-07-20/21) | 1920x1080. **Clean 3-pass runs, zero crashes** — first machine to run with detach disabled, the one that PROVED F3 is the bottleneck, the perf-iteration mule (P0, Blt, worst-frame runs), and the first WiFi net-test machine (F12). |
 | MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
@@ -102,6 +102,41 @@ mapped BAR0 (`hw_rev=00000351 rf_id=0010a100`), passed card-ready/RF-kill/APM �
 and stopped at **"no ALIVE notification within 2 s of fw start"** (**F12**).
 Stress ran normally afterwards (PF014-016). Also exposed two harness bugs, both
 fixed the same day (F13).
+
+**Batch run — one stick, all laptops, machine-scoped folders (2026-07-21).**
+`batch-2026-07-21-NET/`. Build `debug-local-20260721-0548`, flashed once, booted
+on X1 Carbon, Surface Laptop Go, Latitude 7280 and the MacBook Pro 2013. The
+new layout worked exactly as designed: `CRASH\X1CARBON\`, `CRASH\SURFGO\`,
+`CRASH\LATITUDE\` each carry a complete BOOTS/BOOTENV/BOOTLOG/NETLOG/PF set,
+SMBIOS identification was correct on all three, and the flasher-staged
+`WIFI.TXT` creds (real SSID, 24-char psk) were read on every machine (F13's
+shadowing fix confirmed). The MacBook produced **no folder at all** — F9
+verbatim (splash completes, then reset; our native FAT never reaches the USB
+stick on Apple firmware, so it is untestable until that is fixed).
+
+The WiFi result that matters (see F12 for the analysis):
+
+| machine | card | pci | hw_rev | rf_id | fw / load path | result |
+|---------|------|-----|--------|-------|----------------|--------|
+| X13 Yoga (run 5) | AX201 QuZ | 02f0 | 0x351 | 0x10a100 | IWLAX201, gen2 | no ALIVE in 2 s |
+| X1 Carbon | AX201 QuZ | 02f0 | 0x351 | 0x10a100 | IWLAX201, gen2 | no ALIVE in 2 s |
+| Surface Go | AX201 (Qu?) | 34f0 | **0x332** | 0x10a100 | IWLAX201, gen2 | no ALIVE in 2 s |
+| Latitude 7280 | **AX210** | 2725 | **0x420** | 0x10d000 (GF) | IWLAX210, **gen3** | no ALIVE in 2 s |
+
+Bonus data from the stress passes (all three: 3 passes, ZERO crashes):
+- **F11 reproduces on every machine.** The multi-second render spike is not a
+  Yoga quirk: X1 `render_max=2.09 s during=stress:corpus`, Surface **3.32 s**
+  `during=stress:close`, Latitude 1.20 s `during=stress:close`. Same order of
+  magnitude, same close/corpus neighbourhood, four different machines.
+- **The Surface's present path underperforms its own Blt bench ~3x**:
+  `blt bench` says 99 MB/s (=> ~62 ms full-screen at 1536x1024) but the run
+  shows `present_avg` 163-227 ms and `present_max` ~415 ms with 76-77 >100 ms
+  hitches per fullscreen-heavy pass. The X1 and Latitude sit roughly at their
+  bench numbers. Something about the Surface's Blt (per-row overhead? the
+  >4 GB fb aperture?) costs 3x the bench's prediction — a fix-session lead.
+- The Latitude is the fastest present in the fleet (34-38 ms avg, 52 ms max)
+  and its first fully-clean batch boot resolves the "does the stick even
+  boot?" doubt from the 07-20 retest.
 
 ## Severity key
 
@@ -421,25 +456,32 @@ card-ready handshake, no RF-kill, APM up, gen2 context-info load issued — and
 then the firmware never raises the ALIVE notification within the 2 s wait.
 - Evidence: `x13yoga-2026-07-21-NET/NETLOG.TXT` — `hw_rev=00000351
   rf_id=0010a100`, `FAIL no ALIVE notification within 2 s of fw start`.
-- **Suspects, in order:**
-  1. **Qu vs QuZ firmware variant.** `IWLAX201.UCO` is one filename but
-     upstream ships two AX201 images (`Qu-b0-hr-b0` vs `QuZ-a0-hr-b0`);
-     fetch-fw packs one of them. Loading the wrong variant fails exactly like
-     this (fw refuses to boot, no error visible to the host). The recorded
-     `hw_rev`/`rf_id` are the inputs Linux uses to pick — resolve against the
-     iwlwifi table in the fix session, and consider shipping both files with
-     selection by `CSR_HW_REV` (read the BAR *before* choosing firmware).
-  2. **The polled ALIVE wait.** `wait_alive()` polls the RX ring for the
-     notification with legacy-IRQ assumptions; if the card posts it with
-     MSI-X-style indexing (or to a queue the poll isn't reading), it would be
-     missed even though the firmware booted. A CSR scratch-register check
-     (the fw sets `CSR_UCODE_DRV_GP1`/scratch on boot) could distinguish
-     "fw booted, we missed the notification" from "fw never booted".
-  3. Timeout too short is the least likely (Linux's own wait is ~1 s), but
-     free to test.
-- The trace did exactly its job: on the first metal attempt, the failing
-  stage has a name and two falsifiable hypotheses. Whatever the other laptops
-  report (same line or different) will split card-specific from generic.
+- **UPDATED after the 2026-07-21 batch: the failure is UNIFORM across the
+  fleet** — four machines, three silicon revisions (hw_rev 0x351, 0x332,
+  0x420), two RF parts (HR, GF) and **two disjoint load mechanisms** (gen2
+  context-info on the AX201s, gen3 v2/IML on the Latitude's AX210) all die on
+  the same line. That re-orders the suspects:
+  1. **A common driver-side cause is now the front-runner: the polled ALIVE
+     wait / RX-notification processing.** `wait_alive()` polls the RX ring
+     with legacy-IRQ assumptions; if real silicon posts the notification with
+     MSI-X-style indexing (or to a queue the poll isn't reading), it is
+     missed even though the firmware booted — identically on every card,
+     which is exactly what we observe. QEMU has no Intel-WiFi model, so this
+     path had never executed anywhere before this batch. **Next diagnostic:**
+     on ALIVE timeout, dump `UCODE_LOAD_STATUS` / the CSR scratch registers
+     the firmware writes as it boots — that one line splits "fw booted, we
+     missed the notification" (fix the RX poll) from "fw never started"
+     (fix the load path). Also dump the RX write pointer / rb-status word raw.
+  2. **Firmware variant mismatch is weakened but not dead**: one packed
+     IWLAX201.UCO variant cannot match both hw_rev 0x351 (QuZ) and 0x332
+     (Qu?) — yet both fail the same way, and the AX210 (which has no Qu/QuZ
+     split) fails identically. If suspect 1 clears the way and cards still
+     refuse, ship both AX201 variants and select by `CSR_HW_REV` after BAR
+     map (today firmware is chosen by PCI id before the BAR is read).
+  3. Timeout length remains the least likely (Linux waits ~1 s).
+- The per-machine traces did their job: one batch, and the hypothesis space
+  collapsed from "anything" to a single shared stage with a concrete
+  register-level next probe.
 
 ### F13 — a shipped image carried QEMU telemetry + a creds-shadowing WIFI.CFG  ·  HARNESS  ·  S2  ·  FIXED
 Two self-inflicted hazards found via the Yoga's stick:
