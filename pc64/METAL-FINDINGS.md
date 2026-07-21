@@ -14,7 +14,7 @@ Raw reports are preserved off each stick under
 |---------|-----|------|-------|
 | Surface Laptop Go | i5-1035G1 | 2 (2026-07-20) | 1536x1024. Stays firmware-**attached**. Both runs' reports saved. |
 | X1 Carbon (Gen 8) | i5-10210U | 1 (2026-07-20) | 1920x1080. **Also stays attached** — detach is *blocked* (F6), contrary to expectation. 3 passes clean. |
-| Latitude (i7-6600U) | i7-6600U | 1 (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. |
+| Latitude (i7-6600U) | i7-6600U | 1 + 1 retest (2026-07-20) | **DETACHES** (`detach_blocked=0`, no I2C controllers) - the first machine that does, and F8 strands it. Boot log ends at `init:detach`. **Retest on the detach-disabled build produced ZERO telemetry — most likely it never booted the stick** (see below). |
 | Lenovo X13 Yoga Gen 3 | i5-10210U | 1 (2026-07-20) | 1920x1080. **Clean 3-pass run, zero crashes** — first machine to run with detach disabled, and the one that PROVED F3 is the bottleneck. |
 | MacBook Pro 2013 13" | — | 1 (2026-07-20) — **FAILS TO BOOT**, see F9 | **the interesting one for F3**: Apple firmware, non-PC GOP setup. If its framebuffer is *not* UC, that is a strong clue about what the PC firmwares are doing and how to fix it |
 
@@ -38,6 +38,17 @@ worked end to end: `detached=0 volumes=5`, `shell: main loop entered … hud_len
 `stress: ARMED (passes=3)`, three passes, then `driver IDLE, desktop is yours`.
 This validates the F8 workaround, the bounded-run machinery, the desktop
 hand-back, and the boot log — and it produced the perf split that settles F3.
+
+**Latitude retest (detach-disabled build): ZERO telemetry.**
+`latitude-2026-07-20-retest/`. The stick (Cruzer) carries build
+`debug-local-20260721-0042` and `passes=3`, but `CRASH\` holds only the shipped
+README. This is *not* explained by F8: the bootenv/bootlog writes run **before**
+the `#ifndef UNO_NO_DETACH try_detach()` block, so compiling detach out cannot
+change whether they happen — and the earlier detach-*enabled* run on this same
+machine did write a log. A Latitude that reached the end of init would therefore
+have written one again. Most likely it **never booted the stick** (it has Windows
+and probably an installed UnoDOS whose boot entry outranks the USB). Unresolved
+pending one observation: did the amber splash banner appear?
 
 ## Severity key
 
