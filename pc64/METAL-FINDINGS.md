@@ -63,6 +63,19 @@ remaining ~100x is still on the table via P3.
 Also the first metal test of the new boot marker: `CRASH\BOOTS.TXT` reads
 `boot 1  2026-07-20 21:59:04  build debug-local-20260721-0153`.
 
+**X13 Yoga run 3 — Blt present path (2026-07-20).** `x13yoga-2026-07-20-BLT/`.
+`blt bench: 108018 KB/s (direct 26665 KB/s) -> BLT IS FASTER`, so
+`choose_present_path()` switched. Cumulative against the original baseline:
+
+| pass | baseline | +P0 | +Blt | total |
+|------|----------|-----|------|-------|
+| 0 | 238 576 us | 107 825 | **55 889** | **4.27x** |
+| 1 | 98 653 us | 29 160 | **16 020** | **6.16x** |
+| 2 | 262 518 us | 121 732 | **62 957** | **4.17x** |
+
+fps on the present-bound passes: 5 -> 17 and 4 -> 17. Operator confirms 3D
+Runner "looked a lot smoother, but it hitched every once in a while".
+
 ## Severity key
 
 - **S1** blocks the machine / data loss  **S2** major (crash, hang, unusable feature)
