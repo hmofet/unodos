@@ -20,15 +20,20 @@ subprocess.run(["cp", harness.OVMF_VARS, "build/vars.fd"], check=True)
 if os.path.exists(harness.QMP_SOCK):
     os.remove(harness.QMP_SOCK)
 
-# This scenario drives the Network app MANUALLY on a fixed timeline, so the
-# stress driver must not run (its bounded default `passes=3` powers the guest
-# off mid-test) and the boot net test must not race it (it skips when no
-# STRESS.CFG exists). Stash the config for the duration; nettest_stage.py is
-# the scenario that tests the armed-boot path.
-CFG = "build/esp/STRESS.CFG"
-had_cfg = os.path.exists(CFG)
-if had_cfg:
-    os.replace(CFG, CFG + ".stash")
+# Run on a scratch COPY of the ESP: vvfat fat:rw writes guest telemetry back
+# into the host dir, and build/esp must stay pristine (it gets shipped).
+# The copy also drops STRESS.CFG - this scenario drives the Network app
+# MANUALLY on a fixed timeline, so the stress driver must not run (bounded
+# default powers the guest off mid-test) and the boot net test must not race
+# it (it skips when no STRESS.CFG exists). nettest_stage.py covers the
+# armed-boot path.
+import shutil
+ESP = "build/esp-nettest"
+if os.path.exists(ESP):
+    shutil.rmtree(ESP)
+shutil.copytree("build/esp", ESP)
+if os.path.exists(ESP + "/STRESS.CFG"):
+    os.remove(ESP + "/STRESS.CFG")
 
 netdev = (
     "user,id=n0,tftp=build/tftp,"
@@ -41,7 +46,7 @@ qemu = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "q35", "-m", "256", "-cpu", "max",
     "-drive", "if=pflash,format=raw,readonly=on,file=" + harness.OVMF_CODE,
     "-drive", "if=pflash,format=raw,file=build/vars.fd",
-    "-drive", "format=vvfat,file=fat:rw:build/esp",
+    "-drive", "format=vvfat,file=fat:rw:" + ESP,
     "-netdev", netdev, "-device", "e1000,netdev=n0",
     "-display", "none",
     "-qmp", "unix:%s,server,nowait" % harness.QMP_SOCK,
@@ -65,5 +70,3 @@ time.sleep(int(sys.argv[2]) if len(sys.argv) > 2 else 30)
 harness.shot(q, TAG)
 q.cmd("quit")
 qemu.wait()
-if had_cfg:
-    os.replace(CFG + ".stash", CFG)

@@ -156,7 +156,7 @@ def check_disk(fat):
         data = df.read(os.path.getsize(fat))
     with open(fat, "wb") as f:
         f.write(data)
-    r = subprocess.run(["mdir", "-i", fat, "::/CRASH"],
+    r = subprocess.run(["mdir", "-i", fat, "::/CRASH/QEMU"],
                        capture_output=True, text=True)
     print("---- CRASH\\ on the FAT volume after the run ----")
     print(r.stdout or r.stderr)
@@ -165,7 +165,7 @@ def check_disk(fat):
         m = re.search(r"(CR\w+)\s+TXT", r.stdout)
         if m:
             name = m.group(1) + ".TXT"
-            got = subprocess.run(["mtype", "-i", fat, "::/CRASH/" + name],
+            got = subprocess.run(["mtype", "-i", fat, "::/CRASH/QEMU/" + name],
                                  capture_output=True, text=True)
             print("---- CRASH\\%s (head) ----" % name)
             print("\n".join(got.stdout.splitlines()[:30]))
@@ -183,7 +183,7 @@ def check_disk_safe(fat):
         data = df.read(os.path.getsize(fat))
     with open(fat, "wb") as f:
         f.write(data)
-    r = subprocess.run(["mdir", "-i", fat, "::/CRASH"], capture_output=True, text=True)
+    r = subprocess.run(["mdir", "-i", fat, "::/CRASH/QEMU"], capture_output=True, text=True)
     out = r.stdout
     crashed = bool(re.search(r"\b(CR|HG|PN)\w*\s+TXT", out))
     ran = "PF" in out
@@ -219,7 +219,7 @@ def main():
         with open(DISK, "rb") as df:
             df.seek(part_start * SECTOR); data = df.read(os.path.getsize(fat))
         with open(fat, "wb") as f: f.write(data)
-        r = subprocess.run(["mdir", "-i", fat, "::/CRASH"], capture_output=True, text=True)
+        r = subprocess.run(["mdir", "-i", fat, "::/CRASH/QEMU"], capture_output=True, text=True)
         disk_ok = bool(re.search(r"\bHG\w*\s+TXT", r.stdout))
         print(r.stdout)
         print("PASS: HG report persisted to \\CRASH" if disk_ok

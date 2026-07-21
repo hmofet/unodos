@@ -462,12 +462,161 @@ static int crash_vol(void)
     return g_crash_vol;
 }
 
-/* next free CRASH\XXnnn.TXT sequence number (by directory count - cheap and
+/* ===========================================================================
+ * machine identity (SMBIOS) -> per-machine telemetry folder
+ *
+ * One stick now serves a whole batch of machines: every telemetry file lands
+ * under CRASH\<MACHINE>\ so results from different laptops never overwrite
+ * each other (the reuse hazard documented in METAL-FINDINGS - stale telemetry
+ * is indistinguishable from a failed run).  The name comes from SMBIOS Type 1
+ * (System Information) via the EFI configuration table; the fleet gets short
+ * stable 8.3 names, anything else a sanitized product string.
+ * ======================================================================== */
+void *uno_pc64_st(void);                 /* EFI_SYSTEM_TABLE (uefi_main.c) */
+
+static char g_smb_mfr[48], g_smb_prod[48], g_smb_ver[48];
+static char g_mtag[12];                  /* folder leaf, 8.3-safe          */
+static char g_mdir[24];                  /* "CRASH\<TAG>"                  */
+
+/* SMBIOS string `no` of the structure at s (strings follow the formatted
+ * area, NUL separated, double-NUL terminated) */
+static void smb_string(const unsigned char *s, int no, char *out, int cap)
+{
+    const char *p = (const char *)s + s[1];          /* past formatted area */
+    int i = 1;
+    out[0] = 0;
+    if (no <= 0) return;
+    while (i < no && *p) { while (*p) p++; p++; i++; }
+    if (!*p) return;
+    { int k = 0; while (p[k] && k < cap - 1) { out[k] = p[k]; k++; } out[k] = 0; }
+}
+
+static int guid_eq(const EFI_GUID *a, const EFI_GUID *b)
+{ return !memcmp(a, b, sizeof(EFI_GUID)); }
+
+static void smb_read_type1(void)
+{
+    static const EFI_GUID g3 = EFI_SMBIOS3_TABLE_GUID;
+    static const EFI_GUID g1 = EFI_SMBIOS_TABLE_GUID;
+    EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    const unsigned char *tab = 0;
+    unsigned long len = 0;
+    UINTN i;
+    if (!ST || !ST->ConfigurationTable) return;
+    for (i = 0; i < ST->NumberOfTableEntries; i++) {
+        EFI_CONFIGURATION_TABLE *ct = &ST->ConfigurationTable[i];
+        const unsigned char *ep = (const unsigned char *)ct->VendorTable;
+        if (!ep) continue;
+        if (guid_eq(&ct->VendorGuid, &g3) && !memcmp(ep, "_SM3_", 5)) {
+            len = *(const unsigned int *)(ep + 0x0C);
+            tab = (const unsigned char *)(uintptr_t)*(const unsigned long long *)(ep + 0x10);
+            break;                                   /* 64-bit entry wins */
+        }
+        if (guid_eq(&ct->VendorGuid, &g1) && !memcmp(ep, "_SM_", 4) && !tab) {
+            len = *(const unsigned short *)(ep + 0x16);
+            tab = (const unsigned char *)(uintptr_t)*(const unsigned int *)(ep + 0x18);
+        }
+    }
+    if (!tab || !len) return;
+    {   /* walk to Type 1; strings live between formatted areas */
+        const unsigned char *s = tab, *end = tab + len;
+        while (s + 4 <= end && s[0] != 127 && s[1] >= 4) {
+            const unsigned char *nx = s + s[1];
+            if (s[0] == 1) {
+                smb_string(s, s[4], g_smb_mfr,  sizeof g_smb_mfr);
+                smb_string(s, s[5], g_smb_prod, sizeof g_smb_prod);
+                smb_string(s, s[6], g_smb_ver,  sizeof g_smb_ver);
+                return;
+            }
+            while (nx + 1 < end && (nx[0] || nx[1])) nx++;   /* skip strings */
+            s = nx + 2;
+        }
+    }
+}
+
+static int ci_contains(const char *hay, const char *needle)
+{
+    int i, j;
+    for (i = 0; hay[i]; i++) {
+        for (j = 0; needle[j]; j++) {
+            char a = hay[i + j], b = needle[j];
+            if (a >= 'a' && a <= 'z') a -= 32;
+            if (b >= 'a' && b <= 'z') b -= 32;
+            if (a != b) break;
+        }
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+const char *uno_dbg_machine_tag(void)
+{
+    if (g_mtag[0]) return g_mtag;
+    smb_read_type1();
+    {   /* the fleet first (Lenovo puts the friendly name in Version, the
+         * machine-type code in Product - check both, either order) */
+        static const struct { const char *needle, *tag; } kMap[] = {
+            { "X1 Carbon",   "X1CARBON" },
+            { "X13 Yoga",    "X13YOGA"  },
+            { "Laptop Go",   "SURFGO"   },
+            { "Surface",     "SURFACE"  },
+            { "Latitude",    "LATITUDE" },
+            { "MacBook",     "MACBOOK"  },
+            { "QEMU",        "QEMU"     },
+            { "Standard PC", "QEMU"     },
+        };
+        const char *src[3];
+        int i, s;
+        src[0] = g_smb_ver; src[1] = g_smb_prod; src[2] = g_smb_mfr;
+        for (i = 0; i < (int)(sizeof kMap / sizeof kMap[0]); i++)
+            for (s = 0; s < 3; s++)
+                if (ci_contains(src[s], kMap[i].needle)) {
+                    strcpy(g_mtag, kMap[i].tag);
+                    return g_mtag;
+                }
+        /* unknown machine: sanitized product (else version, else maker) */
+        for (s = 1; s >= 0 && !g_mtag[0]; s--) {   /* prod, then ver */
+            const char *p = s == 1 ? g_smb_prod : g_smb_ver;
+            int k = 0;
+            for (i = 0; p[i] && k < 8; i++) {
+                char c = p[i];
+                if (c >= 'a' && c <= 'z') c -= 32;
+                if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+                    g_mtag[k++] = c;
+            }
+            g_mtag[k] = 0;
+        }
+        if (!g_mtag[0]) strcpy(g_mtag, "UNKNOWN");
+    }
+    return g_mtag;
+}
+
+/* "CRASH\<TAG>", created on first use.  Falls back to plain "CRASH" if the
+ * subdir cannot be created - telemetry must never be lost to the layout. */
+static const char *crash_dir(void)
+{
+    int vol = crash_vol();
+    if (vol < 0) return 0;
+    if (!g_mdir[0]) {
+        const char *tag = uno_dbg_machine_tag();
+        snprintf(g_mdir, sizeof g_mdir, "CRASH\\%s", tag);
+        if (!uno_fat_mkdir(vol, g_mdir)) {           /* 0 = exists OR failed */
+            uno_fat_entry e[64];
+            int i, n = uno_fat_list_ex(vol, "CRASH", e, 64), ok = 0;
+            for (i = 0; i < n && i < 64; i++)
+                if (e[i].is_dir && !strcmp(e[i].name, tag)) ok = 1;
+            if (!ok) snprintf(g_mdir, sizeof g_mdir, "CRASH");
+        }
+    }
+    return g_mdir;
+}
+
+/* next free <dir>\XXnnn.TXT sequence number (by directory count - cheap and
  * monotonic enough; collisions just overwrite the same-numbered file) */
 static int next_seq(int vol)
 {
     uno_fat_entry e[999];
-    int n = uno_fat_list_ex(vol, "CRASH", e, 999);
+    int n = uno_fat_list_ex(vol, crash_dir(), e, 999);
     if (n < 0) n = 0;
     if (n > 998) n = 998;
     return n + 1;
@@ -475,12 +624,12 @@ static int next_seq(int vol)
 
 static int disk_write_report(int kind)
 {
-    char path[32];
+    char path[40];
     const char *pfx = (kind == 'H') ? "HG" : (kind == 'P') ? "PN" :
                       (kind == 'R') ? "RS" : "CR";
     int vol = crash_vol();
     if (vol < 0) return 0;
-    snprintf(path, sizeof path, "CRASH\\%s%03d.TXT", pfx, next_seq(vol));
+    snprintf(path, sizeof path, "%s\\%s%03d.TXT", crash_dir(), pfx, next_seq(vol));
     if (!uno_fat_write(vol, path, (const unsigned char *)g_report,
                        (long)g_rlen))
         return 0;
@@ -488,14 +637,14 @@ static int disk_write_report(int kind)
     return 1;
 }
 
-/* Named file under CRASH\ for other harness modules (the net test's NETLOG).
+/* Named file under the machine's telemetry dir (the net test's NETLOG).
  * Whole-file rewrite each call - callers flush a growing buffer. */
 int uno_dbg_write_crashfile(const char *name, const void *data, int len)
 {
-    char path[40];
+    char path[48];
     int vol = crash_vol();
     if (vol < 0) return 0;
-    snprintf(path, sizeof path, "CRASH\\%s", name);
+    snprintf(path, sizeof path, "%s\\%s", crash_dir(), name);
     if (!uno_fat_write(vol, path, (const unsigned char *)data, (long)len))
         return 0;
     uno_fat_sync();
@@ -918,6 +1067,8 @@ void uno_dbg_envblock(void)
     unsigned int a, b, c, d;
     g_env_len = 0;
     env("build: %s\n", g_build_id);
+    env("machine: %s  (smbios mfr=\"%s\" product=\"%s\" version=\"%s\")\n",
+        uno_dbg_machine_tag(), g_smb_mfr, g_smb_prod, g_smb_ver);
 
     {   /* CPU brand string */
         char brand[52];
@@ -1108,7 +1259,7 @@ void uno_dbg_flush_residue(void)
     {
         uno_fat_entry e[999];
         int v = crash_vol(), i, n, seen = 0;
-        n = (v >= 0) ? uno_fat_list_ex(v, "CRASH", e, 999) : 0;
+        n = (v >= 0) ? uno_fat_list_ex(v, crash_dir(), e, 999) : 0;
         for (i = 0; i < n && i < 999; i++)
             if (!e[i].is_dir &&
                 (!strncmp(e[i].name, "CR", 2) || !strncmp(e[i].name, "HG", 2) ||
@@ -1180,10 +1331,15 @@ void uno_dbg_mark_clean(void)
 void uno_dbg_write_bootenv(void);
 void uno_dbg_write_bootenv(void)
 {
+    char path[48];
     int vol = crash_vol();
     if (vol < 0 || !g_env_len) return;
     g_in_disk = 1;
+    /* root copy = "the last boot", machine-dir copy = "this machine's boot"
+     * (one stick now covers a whole batch of machines) */
     uno_fat_write(vol, "BOOTENV.TXT", (const unsigned char *)g_env, g_env_len);
+    snprintf(path, sizeof path, "%s\\BOOTENV.TXT", crash_dir());
+    uno_fat_write(vol, path, (const unsigned char *)g_env, g_env_len);
     uno_fat_sync();     /* a test run normally ends in a forced power-off, and
                            an unsynced write dies in the FAT write-back cache */
     g_in_disk = 0;
@@ -1202,7 +1358,7 @@ void uno_dbg_boot_marker(void);
 void uno_dbg_boot_marker(void)
 {
     static char buf[2048];
-    char line[160];
+    char line[160], path[48];
     int vol = crash_vol(), n, y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
     long have;
     if (vol < 0) return;
@@ -1211,12 +1367,13 @@ void uno_dbg_boot_marker(void)
                  "boot %u  %04d-%02d-%02d %02d:%02d:%02d  build %s\r\n",
                  g_stash ? g_stash->h.boot_count : 0,
                  y, mo, d, h, mi, sec, g_build_id);
+    snprintf(path, sizeof path, "%s\\BOOTS.TXT", crash_dir());
     g_in_disk = 1;
-    have = uno_fat_read(vol, "CRASH\\BOOTS.TXT", (unsigned char *)buf,
+    have = uno_fat_read(vol, path, (unsigned char *)buf,
                         (long)sizeof buf - n - 1);
     if (have < 0) have = 0;
     memcpy(buf + have, line, (size_t)n);
-    uno_fat_write(vol, "CRASH\\BOOTS.TXT", (const unsigned char *)buf,
+    uno_fat_write(vol, path, (const unsigned char *)buf,
                   have + n);
     uno_fat_sync();
     g_in_disk = 0;
@@ -1234,6 +1391,7 @@ void uno_dbg_boot_marker(void)
 void uno_dbg_write_bootlog(void);
 void uno_dbg_write_bootlog(void)
 {
+    char path[48];
     int vol = crash_vol();
     if (vol < 0 || g_in_trap) return;
     g_rlen = 0;
@@ -1241,8 +1399,9 @@ void uno_dbg_write_bootlog(void)
     rp("\n(written unconditionally - this is NOT a crash)\n");
     rp_env();
     rp_log_tail();
+    snprintf(path, sizeof path, "%s\\BOOTLOG.TXT", crash_dir());
     g_in_disk = 1;
-    uno_fat_write(vol, "CRASH\\BOOTLOG.TXT", (const unsigned char *)g_report,
+    uno_fat_write(vol, path, (const unsigned char *)g_report,
                   (long)g_rlen);
     uno_fat_sync();
     g_in_disk = 0;
@@ -1252,11 +1411,11 @@ void uno_dbg_write_bootlog(void)
 void uno_dbg_write_perf(const char *text, int len);
 void uno_dbg_write_perf(const char *text, int len)
 {
-    char path[32];
+    char path[40];
     int vol = crash_vol();
     if (vol < 0) return;
     g_in_disk = 1;
-    snprintf(path, sizeof path, "CRASH\\PF%03d.TXT", next_seq(vol));
+    snprintf(path, sizeof path, "%s\\PF%03d.TXT", crash_dir(), next_seq(vol));
     uno_fat_write(vol, path, (const unsigned char *)text, len);
     uno_fat_sync();     /* same: survive the operator pulling the plug */
     g_in_disk = 0;

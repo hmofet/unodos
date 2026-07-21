@@ -208,8 +208,8 @@ if [ "$1" != "legacy" ]; then
         mkdir -p build/esp/FIRMWARE
         cp fw-blobs/*.UCO build/esp/FIRMWARE/ 2>/dev/null || true
         cp fw-blobs/*.PNV build/esp/FIRMWARE/ 2>/dev/null || true
-        # a starter WIFI.CFG the user edits with their SSID/passphrase
-        [ -f build/esp/WIFI.CFG ] || printf '# UnoDOS WiFi config - edit these two lines\nssid=YourNetwork\npsk=YourPassphrase\n' > build/esp/WIFI.CFG
+        # (no starter WIFI.CFG here - see the dbg staging step: a shipped
+        # placeholder shadows the flasher-staged wifi.txt credentials)
     fi
 
     # ---- .UNO app modules: every app is loaded from storage at runtime -----
@@ -395,9 +395,22 @@ if [ "$1" != "legacy" ]; then
     # ---- DEBUG build staging: CRASH dir, fuzz corpus, a default STRESS.CFG --
     if [ "$UNO_DEBUG" != "0" ]; then
         echo "[dbg] staging CRASH\\, fuzz corpus, STRESS.CFG onto the ESP..."
+        # PURGE dev-run telemetry first: QEMU regression runs (vvfat fat:rw)
+        # write their BOOTLOG/PF/NETLOG *back into build/esp*, and one shipped
+        # image carried a QEMU boots.txt (with vvfat cluster garbage) onto the
+        # Yoga's stick - indistinguishable from that machine's own results.
+        # A shipped image must carry an EMPTY CRASH dir, exactly like a fresh
+        # flash. Same for the root-level artifacts those runs leave.
+        rm -rf build/esp/CRASH
+        rm -f  build/esp/BOOTENV.TXT
         mkdir -p build/esp/CRASH
-        printf 'Crash / hang / residue reports land here (CR###, HG###, RS###).\r\nCopy this whole folder to amanuensis for a Claude Code agent to read.\r\n' \
+        printf 'Per-machine telemetry lands in subfolders here (one per machine,\r\nnamed from SMBIOS: X13YOGA, X1CARBON, ...): CR/HG/RS reports, PF perf\r\nsnapshots, BOOTLOG/BOOTENV/BOOTS and the network test NETLOG.\r\nCopy this whole folder to amanuensis for a Claude Code agent to read.\r\n' \
             > build/esp/CRASH/README.TXT
+        # NO starter WIFI.CFG in the image: the flasher's developer-options
+        # copy stages the real creds as wifi.txt, and a shipped placeholder
+        # WIFI.CFG would SHADOW it (the driver checks WIFI.CFG first). End
+        # users get a starter from tools/uno-wifi-fw.py instead.
+        rm -f build/esp/WIFI.CFG
         "$PY" tools/mkcorpus.py build/esp || echo "[dbg] mkcorpus warning (non-fatal)"
         # STRESS.CFG present = the stress driver is ARMED.  Ship a SAFE default
         # (no allow-force, so it never self-crashes; it only drives the OS and

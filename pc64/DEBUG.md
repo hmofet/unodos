@@ -80,11 +80,24 @@ finding F1, which armed `allow-force` on every "safe" stick):
 - `nonet` - skip the network hardware test (below). Off by default: an armed
   stick tests the network once per boot, before the stress passes.
 
-### The network hardware test (`CRASH\NETLOG.TXT`)
+### Telemetry is machine-scoped: `CRASH\<MACHINE>\`
+
+**One stick serves a whole batch of machines.** Every telemetry file (CR/HG/RS
+reports, PF snapshots, BOOTS/BOOTLOG/BOOTENV, NETLOG) lands in a per-machine
+subfolder - `CRASH\X13YOGA\`, `CRASH\X1CARBON\`, `CRASH\SURFGO\`,
+`CRASH\LATITUDE\`, `CRASH\MACBOOK\`, `CRASH\QEMU\` - named from SMBIOS Type 1
+(the env block records the raw manufacturer/product/version strings, so an
+`UNKNOWN` or sanitized-fallback folder can always be attributed afterwards).
+Boot every machine in the round on the same stick, then hand the whole stick
+back: nothing collides, and stale-vs-failed is no longer ambiguous (the trap
+in "To carry into future runs" in METAL-FINDINGS.md). The root `BOOTENV.TXT`
+is still written as a "latest boot" copy; the per-machine one is authoritative.
+
+### The network hardware test (`CRASH\<MACHINE>\NETLOG.TXT`)
 
 Every armed boot runs **one** network test before the stress driver starts,
-logging every stage (timestamped) to `CRASH\NETLOG.TXT`, flushed line by line
-so a hang mid-test still leaves the trail. The plan, per arin's spec:
+logging every stage (timestamped) to the machine's `NETLOG.TXT`, flushed line
+by line so a hang mid-test still leaves the trail. The plan, per arin's spec:
 
 1. **USB Ethernet is tested only if an adapter is present at boot** (the batch
    adapter is an ASIX AX88179A; Realtek RTL815x dongles/docks also count).
@@ -115,6 +128,10 @@ psk=your-wpa2-passphrase
 The NAS keeps a template at `\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`
 - fill it in once and the flasher's **Developer options** folder-copy puts it
 on every stick it flashes. Plaintext on the stick; treat it accordingly.
+(The image deliberately ships NO `WIFI.CFG`: a placeholder there would shadow
+the staged `wifi.txt`, and did once - the Yoga's first WiFi run read
+`ssid="YourNetwork"` from it. End users get a starter from
+`tools/uno-wifi-fw.py` instead.)
 
 **Honest status of the WiFi driver** (why the trace matters): the transport
 side - firmware load, ALIVE, the MVM command layer - is complete, but the
