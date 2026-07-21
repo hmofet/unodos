@@ -17,30 +17,31 @@ and brings the link up — only **DHCP fails** (Yoga round: link up in 1 ms, no
 lease in 12 s). This session added link-level frame counters so the *next* boot
 localizes that failure instead of guessing.
 
-## Phase 1 — Localize the eth DHCP failure  (metal, one boot)
+## Phase 1 — Localize the eth DHCP failure  ✅ DONE (X13 Yoga, 2026-07-21)
 
-1. Reconfigure a stick with the flasher's **"Reconfigure tests (no erase)"**
-   button (Developer options → Stress Test off, Network = Ethernet only,
-   Conformance on). Or flash fresh.
-2. Boot it on a laptop with the AX88179 adapter; collect
-   `CRASH\<machine>\NETLOG.TXT`.
-3. The counter line on the DHCP-fail decides the next move deterministically:
-   - `tx==0`            → our TX path never fired: `ax_send` / the xHCI (or
-     UsbIo) bulk-out. Check the 8-byte TX header + the bulk-out call.
-   - `tx>0 rx==0`       → nothing came back: RX parse, the cable, or a silent
-     DHCP server. Sanity-check against a known-good DHCP LAN.
-   - `rx>0 ip==0`       → frames arrive but none are IP: the RX aggregation
-     trailer / per-packet descriptor offset / the 2-byte IP-align pad in
-     `ax_recv` (leading suspect).
-   - `rx>0 ip>0`        → we saw IP but no lease: DHCP offer/option parsing.
+Yoga NETLOG: link UP 0 ms, then **`FAIL DHCP … tx=1261 rx=0 arp=0 ip=0`** →
+the `tx>0 rx==0` branch: we transmit continuously and receive **nothing** —
+not one frame, not even broadcast ARP. TX, the USB control path (valid MAC
+read), and the LAN are all fine; the failure is entirely on RX.
 
-## Phase 2 — Fix the localized side in `ax88179.c`
+## Phase 2 — Fix the localized side in `ax88179.c`  ✅ FIXED (metal-pending verify)
 
-Leading suspect is `ax_recv`: the per-packet descriptor array at the tail of the
-bulk-in transfer, `pkt_len`/`step` math, and the 2-byte alignment pad. A raw-RX
-hex dump path is already available for tuning. **QEMU has no AX88179**, so this
-is metal-iterative — the counters + the dump are the instrument. Secondary
-suspect: the TX header (`ax_send`, the `0x80008000` pad-bit case).
+Root cause was NOT `ax_recv`'s descriptor parse (that would be `rx>0 ip==0`).
+It was the **MAC medium mode**: `ax_reset()` hardcoded gigabit + full-duplex
+and the driver never programmed the medium from the PHY's *negotiated* speed.
+On a 100 Mbps link the MAC RX clock domain is wrong → TX queues but RX receives
+nothing; and even on a gigabit link the code was missing `AX_MEDIUM_EN_125MHZ`
+(the GMII 125 MHz clock enable gigabit RX needs). Both give `tx>0 rx=0`.
+
+Fix (Linux `ax88179_link_reset` port): new `ax_apply_medium()` reads the ASIX
+PHY status register (`GMII_PHY_PHYSR`, reg 0x11), builds the medium from the
+real speed/duplex (giga → `GIGAMODE|EN_125MHZ`, 100 → `PS`, 10 → neither; plus
+`FULL_DUPLEX` only when negotiated), sets the matching bulk-in aggregation, and
+is called from `ax_link()` the moment the link is up (before DHCP). Idempotent
++ cached so it costs one PHY read per poll; traces the negotiated speed to
+NETLOG. **QEMU has no AX88179 → metal-pending.** If RX is STILL 0 after this,
+the next suspect drops to `ax_recv` (descriptor array / `pkt_len`/`step` /
+2-byte pad) and then the TX header's `0x80008000` pad-bit case.
 
 ## Phase 3 — Bring up the rest of the stack on the real link
 

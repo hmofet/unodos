@@ -51,6 +51,14 @@ omitted — the link trains without them. RX uses the async bulk-IN path added t
 the xHCI stack (`uno_usb_bulk_in_arm`/`_poll`) so `net_poll` never blocks waiting
 for a packet that hasn't arrived.
 
+`ax88179` programs the MAC medium (speed / duplex / gigabit 125 MHz clock) from
+the PHY's *negotiated* status (`ax_apply_medium`, called from `ax_link` once the
+link is up), not a hardcoded gigabit. A medium that doesn't match the real
+negotiated speed leaves the MAC RX clock wrong and silently kills reception —
+the X13 Yoga's first eth boot hit exactly that (`tx>0 rx=0`), which is what the
+per-`net_init` frame counters (`net_tx/rx/arp/ip_frames`, on the NETLOG DHCP-fail
+line) exist to localize.
+
 ## WiFi (Intel iwlwifi)
 
 Intel WiFi cards are firmware-driven: the host loads a signed Intel `.ucode`

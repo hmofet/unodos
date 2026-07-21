@@ -29,6 +29,17 @@ void uno_pc64_delay_ms(int ms);
 #define AX88179_PHY_ID         0x03   /* address of the embedded gigabit PHY */
 #define MII_BMSR               0x01   /* PHY basic-mode status register    */
 #define MII_BMSR_LSTATUS       0x0004 /* link-status bit (latches low)     */
+
+/* ASIX PHY status register (GMII reg 0x11): the real-time negotiated speed +
+ * duplex + link, used to program the MAC medium to match. Hardcoding gigabit
+ * (as the first cut did) leaves the MAC RX clock wrong on a 100M link, so TX
+ * queues but RX receives NOTHING - the tx>0 rx=0 signature the Yoga hit. */
+#define GMII_PHY_PHYSR         0x11
+#define GMII_PHY_PHYSR_SMASK   0xC000 /* speed field mask                  */
+#define GMII_PHY_PHYSR_GIGA    0x8000 /*   = 1000 Mbps                     */
+#define GMII_PHY_PHYSR_100     0x4000 /*   = 100 Mbps                      */
+#define GMII_PHY_PHYSR_FULL    0x2000 /* full duplex                       */
+#define GMII_PHY_PHYSR_LINK    0x0400 /* link up (real time, no latch)     */
 #define AX_NODE_ID             0x10   /* 6 bytes: MAC address           */
 #define AX_MEDIUM_STATUS_MODE  0x22   /* 2 bytes                        */
 #define AX_RX_CTL              0x0B   /* 2 bytes                        */
@@ -53,9 +64,11 @@ void uno_pc64_delay_ms(int ms);
 
 #define AX_MEDIUM_GIGAMODE      0x0001
 #define AX_MEDIUM_FULL_DUPLEX   0x0002
+#define AX_MEDIUM_EN_125MHZ     0x0080  /* gigabit GMII 125 MHz clock enable */
 #define AX_MEDIUM_RXFLOW_CTRLEN 0x0010
 #define AX_MEDIUM_TXFLOW_CTRLEN 0x0020
 #define AX_MEDIUM_RECEIVE_EN    0x0100
+#define AX_MEDIUM_PS            0x0200  /* PHY speed: set = 100 Mbps         */
 
 /* RX aggregation trailer flags (per-packet descriptor) */
 #define AX_RXHDR_CRC_ERR       0x20000000u
@@ -125,7 +138,10 @@ static void ax_reset(void)
     ax_wr8(AX_PAUSE_WATERLVL_HIGH, 0x34);
     ax_wr8(AX_PAUSE_WATERLVL_LOW,  0x2C);
     ax_wr8(AX_MONITOR_MODE, 0x00);
-    /* medium: gigabit, full duplex, RX + flow control on */
+    /* medium: an initial default only. The REAL medium (speed + duplex + the
+     * gigabit 125 MHz clock enable, plus the matching bulk-in aggregation) is
+     * programmed from the PHY's negotiated status by ax_apply_medium() once
+     * the link is up - see ax_link(). A wrong medium here silently kills RX. */
     ax_wr16(AX_MEDIUM_STATUS_MODE,
             AX_MEDIUM_RECEIVE_EN | AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN |
             AX_MEDIUM_FULL_DUPLEX | AX_MEDIUM_GIGAMODE);
@@ -190,6 +206,41 @@ static int ax_recv(void *ctx, void *pkt, int cap)
       return flen; }
 }
 
+/* Program the MAC medium (speed / duplex / gigabit clock) + the bulk-in
+ * aggregation from the PHY's negotiated status. Idempotent: caches the last
+ * mode and only rewrites (and traces) on an actual change, so calling it from
+ * ax_link() on every poll costs one PHY read and nothing more. Returns 1 if a
+ * link is present. This is the RX fix: without a medium matched to the real
+ * negotiated speed the MAC receive clock is wrong and no frames arrive. */
+static u16 g_medium;               /* last programmed AX_MEDIUM_STATUS_MODE   */
+
+static int ax_apply_medium(void)
+{
+    /* USB3 giga vs 100/10 bulk-in aggregation params (Linux AX88179_BULKIN_SIZE
+     * [0] and [3]); the giga set matches what ax_reset seeded. */
+    static const u8 giga_q[5] = { 0x07, 0x4F, 0x00, 0x12, 0xFF };
+    static const u8 slow_q[5] = { 0x07, 0xCC, 0x4C, 0x18, 0x08 };
+    u16 physr = ax_mii_rd(GMII_PHY_PHYSR);
+    u16 spd   = physr & GMII_PHY_PHYSR_SMASK;
+    u16 mode  = AX_MEDIUM_RECEIVE_EN | AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN;
+    int giga  = (spd == GMII_PHY_PHYSR_GIGA);
+
+    if (!(physr & GMII_PHY_PHYSR_LINK)) return 0;   /* no link -> leave medium */
+    if (giga)                       mode |= AX_MEDIUM_GIGAMODE | AX_MEDIUM_EN_125MHZ;
+    else if (spd == GMII_PHY_PHYSR_100) mode |= AX_MEDIUM_PS;   /* 100 Mbps    */
+    /* else 10 Mbps: no speed bit set */
+    if (physr & GMII_PHY_PHYSR_FULL)    mode |= AX_MEDIUM_FULL_DUPLEX;
+
+    if (mode == g_medium) return 1;                 /* already correct         */
+    ax_write(AX_RX_BULKIN_QCTRL, 5, giga ? giga_q : slow_q);
+    ax_wr16(AX_MEDIUM_STATUS_MODE, mode);
+    g_medium = mode;
+    uno_dbg_net_trace("ax88179: negotiated %s Mbps %s-duplex -> medium=%04x (physr=%04x)",
+                      giga ? "1000" : (spd == GMII_PHY_PHYSR_100 ? "100" : "10"),
+                      (physr & GMII_PHY_PHYSR_FULL) ? "full" : "half", mode, physr);
+    return 1;
+}
+
 static int ax_link(void *ctx)
 {
     u16 bmsr;
@@ -202,7 +253,11 @@ static int ax_link(void *ctx)
      * link drop, so read twice and take the second read as the current state. */
     ax_mii_rd(MII_BMSR);
     bmsr = ax_mii_rd(MII_BMSR);
-    return (bmsr & MII_BMSR_LSTATUS) ? 1 : 0;
+    if (!(bmsr & MII_BMSR_LSTATUS)) { g_medium = 0; return 0; }  /* down: reprogram on relink */
+    /* Link up: program the MAC medium to the negotiated speed BEFORE any RX is
+     * expected (ax_link runs in the link-wait loop, ahead of DHCP). */
+    ax_apply_medium();
+    return 1;
 }
 
 /* ---- bring-up ------------------------------------------------------------ */
