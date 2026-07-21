@@ -1255,16 +1255,46 @@ static unsigned long g_render_us, g_present_us;     /* EMA (x16)            */
 static unsigned long g_frames, g_idle_frames;
 static unsigned long long g_hud_t0;
 static unsigned long g_fps;                         /* refreshed once a second */
+/* WORST-CASE frame tracking.  render_avg/present_avg are moving averages and
+ * fps is a one-second count, so all three smooth away exactly the thing an
+ * operator actually notices: an occasional hitch in an otherwise smooth run.
+ * Averages cannot answer "what stalls it once in a while", so track the peak
+ * and how often we blow past a visible-stutter threshold - and capture the
+ * checkpoint that was live at the time, which names the culprit. */
+static unsigned long g_render_max, g_present_max, g_hitches;
+static char g_worst_tag[64];
+#define HITCH_US 100000ul                           /* 100 ms = clearly visible */
 
+/* Remember what the OS was doing during the worst frame - the checkpoint tag is
+ * already maintained for the crash/hang reports, so a hitch gets a name. */
+static void note_worst(unsigned long us)
+{
+    int i;
+    const char *tag = (g_stash && g_stash->h.last_check[0])
+                      ? g_stash->h.last_check : "(none)";
+    for (i = 0; i < 63 && tag[i]; i++) g_worst_tag[i] = tag[i];
+    g_worst_tag[i] = 0;
+    (void)us;
+}
+/* A hitch is a hitch whichever half caused it. Counting only present-side
+ * stalls reported "hitches=0" on a pass whose worst frame spent 133 ms in
+ * RENDER - a zero that actively misleads, which is worse than no number. */
+static void bump(unsigned long us, unsigned long *maxp)
+{
+    if (us > *maxp) *maxp = us;
+    if (us > HITCH_US) { g_hitches++; note_worst(us); }
+}
 void uno_dbg_frame_render_cyc(unsigned long long cyc)
 {
     unsigned long us = g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0;
     g_render_us += us - g_render_us / 16;
+    bump(us, &g_render_max);
 }
 void uno_dbg_frame_present_cyc(unsigned long long cyc)
 {
     unsigned long us = g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0;
     g_present_us += us - g_present_us / 16;
+    bump(us, &g_present_max);
 }
 void uno_dbg_frame_idle(int was_idle)
 {
@@ -1291,12 +1321,23 @@ int uno_dbg_perf_line(char *buf, int max)
 {
     unsigned long hu = 0, hf = 0, hl = 0;
     uno_heap_stats(&hu, &hf, &hl);
-    return snprintf(buf, (size_t)max,
-        "perf: render_avg=%lu us  present_avg=%lu us  fps=%lu  idle=%lu%%  "
-        "frames=%lu  heap_used=%lu",
-        g_render_us / 16, g_present_us / 16, g_fps,
-        g_frames ? g_idle_frames * 100 / g_frames : 0,
-        g_frames, hu);
+    {
+        int n = snprintf(buf, (size_t)max,
+            "perf: render_avg=%lu us  present_avg=%lu us  fps=%lu  idle=%lu%%  "
+            "frames=%lu  heap_used=%lu\n"
+            "worst: render_max=%lu us  present_max=%lu us  hitches>%lums=%lu"
+            "  during=%s",
+            g_render_us / 16, g_present_us / 16, g_fps,
+            g_frames ? g_idle_frames * 100 / g_frames : 0,
+            g_frames, hu,
+            g_render_max, g_present_max, HITCH_US / 1000, g_hitches,
+            g_worst_tag[0] ? g_worst_tag : "(none)");
+        /* per-pass, not cumulative: reset so each snapshot describes its own
+         * pass and a late hitch cannot hide behind an early one */
+        g_render_max = g_present_max = g_hitches = 0;
+        g_worst_tag[0] = 0;
+        return n;
+    }
 }
 
 int uno_dbg_hud(char *buf, int max)
