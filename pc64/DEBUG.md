@@ -89,7 +89,30 @@ finding F1, which armed `allow-force` on every "safe" stick):
   can't tile safely. Off by default - this is the one change with real
   bricking risk, so only set it when you're at the machine to power-cycle.
 - `spec` - run the boot-time conformance suite (SPECTEST, below) and write
-  per-contract PASS/FAIL to `CRASH\<MACHINE>\SPECTEST.TXT`.
+  per-contract PASS/FAIL to `CRASH\<MACHINE>\SPECTEST.TXT`. Bare `spec` runs
+  every area; `spec=<a,b,...>` restricts it to a subset. The areas are
+  `storage system frameworks apps network` (and `interactive` - see below).
+- `interactive` - **opt in** (operator present) to the SPECTEST checks that
+  need a human at the machine: the REAL keyboard path and the display colour /
+  text path, which synthetic injection can't prove. Never pulled in by a bare
+  `spec` run - an unattended batch stick must not sit at a prompt. Each prompt
+  is bounded (~25 s) and records SKIP on a timeout, so it can never hang.
+
+### The four test suites (the flasher's Developer options)
+
+The flasher's **Developer options** dialog groups the STRESS.CFG keys into the
+suites it writes, each with its own master toggle, plus the cross-cutting
+"include interactive tests" switch:
+
+| Suite | What it does | STRESS.CFG it writes |
+|---|---|---|
+| **Conformance** | SPECTEST per-area assertions | `spec` or `spec=<areas>` |
+| **Standard** | the stress driver (app-launch / runner3D / input / FS fuzz) | `passes=N` (+ `noshutdown`) |
+| **Network** | WiFi / USB-ethernet bring-up | none (auto), `net-force-wifi`, `net-eth-only`, or `nonet` |
+| **Diagnostics** | advanced experiments | `mtrr-wc`, `allow-force` |
+| _Include interactive_ | human-confirmed checks in Conformance | `interactive` |
+
+Developer options OFF flashes the clean production build (no STRESS.CFG at all).
 
 ### Telemetry is machine-scoped: `CRASH\<MACHINE>\`
 

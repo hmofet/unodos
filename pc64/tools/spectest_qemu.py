@@ -7,7 +7,7 @@ growing file - so this builds a genuine GPT+FAT32 disk with mformat/mcopy
 bounded run to power off, then reads CRASH\\<MACHINE>\\SPECTEST.TXT back out
 with mtype and prints it. Exit 0 iff the suite reports 0 FAIL.
 """
-import os, sys, subprocess, time
+import os, sys, subprocess, time, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 ESP  = os.path.join(HERE, "..", "build", "esp")
 DISK = "/tmp/spectest_disk.img"
@@ -88,8 +88,16 @@ def main():
     if not txt:
         print("FAIL: no SPECTEST.TXT on the disk"); return 1
     print(txt)
-    if "FAIL" in txt.replace("0 FAIL", ""):
-        print(">> some contracts FAILED"); return 1
+    # Authoritative verdict: the summary's FAIL count. (A naive `"FAIL" in txt`
+    # trips on the header legend "(PASS/FAIL/SKIP)" and on any FAIL-detail word.)
+    m = re.search(r'(\d+)\s+PASS,\s+(\d+)\s+FAIL', txt)
+    if not m:
+        # fall back to counting result lines shaped `S-XXX-NN FAIL ...`
+        fails = len(re.findall(r'(?m)^\S+\s+FAIL\b', txt))
+    else:
+        fails = int(m.group(2))
+    if fails > 0:
+        print(">> %d contract(s) FAILED" % fails); return 1
     print(">> SPECTEST clean"); return 0
 
 if __name__ == "__main__":

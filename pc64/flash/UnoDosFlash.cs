@@ -225,12 +225,29 @@ class FlashForm : Form
             return;
         }
         var tests = new List<string>();
-        if (settings.TestWifi && settings.TestEth) tests.Add("network (auto)");
-        else if (settings.TestWifi) tests.Add("WiFi");
-        else if (settings.TestEth)  tests.Add("Ethernet");
-        if (settings.TestSpec) tests.Add("conformance");
-        if (settings.TestMtrr) tests.Add("MTRR-WC");
-        if (settings.StressPasses > 0) tests.Add(settings.StressPasses + "x stress");
+        if (settings.RunConformance) {
+            var areas = new List<string>();
+            if (settings.SpecStorage)    areas.Add("storage");
+            if (settings.SpecSystem)     areas.Add("system");
+            if (settings.SpecFrameworks) areas.Add("frameworks");
+            if (settings.SpecApps)       areas.Add("apps");
+            if (settings.SpecNetwork)    areas.Add("network");
+            if (areas.Count == 5) tests.Add("conformance");
+            else if (areas.Count > 0) tests.Add("conformance(" + areas.Count + "/5)");
+            else if (settings.IncludeInteractive) tests.Add("conformance(interactive)");
+        }
+        if (settings.IncludeInteractive) tests.Add("interactive");
+        if (settings.RunStandard && settings.StressPasses > 0)
+            tests.Add(settings.StressPasses + "x standard");
+        if (settings.RunNetwork) {
+            if (settings.TestWifi && settings.TestEth) tests.Add("network (auto)");
+            else if (settings.TestWifi) tests.Add("WiFi");
+            else if (settings.TestEth)  tests.Add("Ethernet");
+        }
+        if (settings.RunDiagnostics) {
+            if (settings.TestMtrr)   tests.Add("MTRR-WC");
+            if (settings.ForceCrash) tests.Add("force-crash");
+        }
         string t = tests.Count == 0 ? "no tests" : string.Join(", ", tests.ToArray());
         var extra = new List<string>();
         if (settings.KitEnabled) extra.Add("test kit");
@@ -474,86 +491,138 @@ class FlashForm : Form
     }
 }
 
-/* ---- developer options: debug build + test selection ------------------------ */
+/* ---- developer options: debug build + test selection ------------------------
+ * Organised by TEST SUITE, each with a master toggle that enables its own
+ * tests, plus a cross-cutting "include interactive tests" switch:
+ *   Conformance (SPECTEST) : master + per-area (storage/system/frameworks/apps/
+ *                            network)
+ *   Standard (stress)      : master + passes + auto power-off
+ *   Network (hardware)     : master + WiFi / Ethernet
+ *   Diagnostics (advanced) : master + MTRR-WC + crash-pipeline self-test
+ * The selection is written to the drive as \STRESS.CFG (UnoSettings.StressCfg). */
 class DevForm : Form
 {
     readonly UnoSettings s;
-    CheckBox devChk, specChk, wifiChk, ethChk, mtrrChk, shutoffChk, kitChk, zipChk;
+    CheckBox devChk, interactiveChk;
+    CheckBox confChk, aStorage, aSystem, aFrameworks, aApps, aNetwork;
+    CheckBox standardChk, shutoffChk;
     NumericUpDown passesBox;
+    CheckBox networkChk, wifiChk, ethChk;
+    CheckBox diagChk, mtrrChk, forceChk;
+    CheckBox kitChk, zipChk;
     TextBox kitBox, zipBox, destBox, labelBox;
     Button kitBrowse, zipBrowse;
+
+    static readonly Color Grey = Color.FromArgb(90, 90, 90);
+
+    // a checkbox that re-runs Sync() when toggled
+    CheckBox Chk(string text, bool chk, int x, int y, bool syncs)
+    {
+        var c = new CheckBox { Text = text, Checked = chk, Location = new Point(x, y), AutoSize = true };
+        if (syncs) c.CheckedChanged += (a, b) => Sync();
+        return c;
+    }
 
     public DevForm(UnoSettings settings)
     {
         s = settings;
         Text = "Developer options";
-        Size = new Size(560, 540);
+        Size = new Size(560, 720);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
+        AutoScroll = true;
         Font = new Font("Segoe UI", 9f);
 
-        devChk = new CheckBox { Text = "Flash the DEBUG build and run the tests below",
-                                Checked = s.DevMode, Location = new Point(16, 14), AutoSize = true,
-                                Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
-        devChk.CheckedChanged += (a, b) => Sync();
+        int GW = 518, gx = 16;
+
+        devChk = Chk("Flash the DEBUG build and run the selected suites", s.DevMode, gx, 14, true);
+        devChk.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
         Controls.Add(devChk);
         Controls.Add(new Label { Text = "Off = flash the clean production build (no tests, no \\CRASH telemetry).",
-                                 Location = new Point(34, 38), AutoSize = true,
-                                 ForeColor = Color.FromArgb(90, 90, 90) });
+                                 Location = new Point(34, 38), AutoSize = true, ForeColor = Grey });
 
-        // --- tests ----------------------------------------------------------
-        var testsBox = new GroupBox { Text = "Tests", Location = new Point(16, 62),
-                                      Size = new Size(518, 150) };
-        Controls.Add(testsBox);
-        specChk = new CheckBox { Text = "Conformance suite (SPECTEST -> CRASH\\<machine>\\SPECTEST.TXT)",
-                                 Checked = s.TestSpec, Location = new Point(14, 22), AutoSize = true };
-        testsBox.Controls.Add(specChk);
-        wifiChk = new CheckBox { Text = "WiFi test", Checked = s.TestWifi,
-                                 Location = new Point(14, 48), AutoSize = true };
-        testsBox.Controls.Add(wifiChk);
-        ethChk = new CheckBox { Text = "Ethernet test (USB adapter auto-detected)", Checked = s.TestEth,
-                                Location = new Point(120, 48), AutoSize = true };
-        testsBox.Controls.Add(ethChk);
-        wifiChk.CheckedChanged += (a, b) => Sync();
-        ethChk.CheckedChanged  += (a, b) => Sync();
-        mtrrChk = new CheckBox { Text = "MTRR write-combining experiment (advanced; operator present)",
-                                 Checked = s.TestMtrr, Location = new Point(14, 74), AutoSize = true };
-        testsBox.Controls.Add(mtrrChk);
-        testsBox.Controls.Add(new Label { Text = "Stress passes:", Location = new Point(14, 104), AutoSize = true });
-        passesBox = new NumericUpDown { Location = new Point(110, 100), Size = new Size(56, 23),
+        interactiveChk = Chk("Include interactive tests (an operator confirms keyboard + display)",
+                             s.IncludeInteractive, gx + 2, 58, true);
+        Controls.Add(interactiveChk);
+        Controls.Add(new Label { Text = "Off for unattended batches; on adds the human-confirmed checks to the suites below.",
+                                 Location = new Point(34, 80), AutoSize = true, ForeColor = Grey });
+
+        int y = 104;
+
+        // ---- 1. Conformance suite (SPECTEST) -------------------------------
+        var conf = new GroupBox { Text = "1. Conformance suite - SPECTEST (\\CRASH\\<machine>\\SPECTEST.TXT)",
+                                  Location = new Point(gx, y), Size = new Size(GW, 150) };
+        Controls.Add(conf);
+        confChk = Chk("Run the conformance suite", s.RunConformance, 12, 20, true);
+        conf.Controls.Add(confChk);
+        aStorage    = Chk("Storage (FAT)", s.SpecStorage, 28, 44, false);
+        aSystem     = Chk("System (libc / font / js / harness)", s.SpecSystem, 250, 44, false);
+        aFrameworks = Chk("Frameworks (unoui / uno3d / unosound / unomedia)", s.SpecFrameworks, 28, 68, false);
+        aApps       = Chk("Apps (editor / music / studio + Python)", s.SpecApps, 28, 92, false);
+        aNetwork    = Chk("Network (stack regressions + live stubs)", s.SpecNetwork, 28, 116, false);
+        conf.Controls.Add(aStorage); conf.Controls.Add(aSystem); conf.Controls.Add(aFrameworks);
+        conf.Controls.Add(aApps); conf.Controls.Add(aNetwork);
+        y += 158;
+
+        // ---- 2. Standard suite (stress driver) -----------------------------
+        var std = new GroupBox { Text = "2. Standard suite - stress driver (app-launch / runner3D / input / FS fuzz)",
+                                 Location = new Point(gx, y), Size = new Size(GW, 82) };
+        Controls.Add(std);
+        standardChk = Chk("Run the standard suite", s.RunStandard, 12, 20, true);
+        std.Controls.Add(standardChk);
+        std.Controls.Add(new Label { Text = "Passes:", Location = new Point(28, 50), AutoSize = true });
+        passesBox = new NumericUpDown { Location = new Point(82, 46), Size = new Size(56, 23),
                                         Minimum = 0, Maximum = 999, Value = Math.Max(0, Math.Min(999, s.StressPasses)) };
-        testsBox.Controls.Add(passesBox);
-        shutoffChk = new CheckBox { Text = "Power off when the run finishes", Checked = s.AutoShutoff,
-                                    Location = new Point(200, 102), AutoSize = true };
-        testsBox.Controls.Add(shutoffChk);
-        testsBox.Controls.Add(new Label { Text = "WiFi+Ethernet both on = auto-detect; one only = force that; both off = no network test.",
-                                          Location = new Point(14, 128), AutoSize = true,
-                                          ForeColor = Color.FromArgb(90, 90, 90) });
+        std.Controls.Add(passesBox);
+        shutoffChk = Chk("Power off when the run finishes", s.AutoShutoff, 170, 48, false);
+        std.Controls.Add(shutoffChk);
+        y += 90;
 
-        // --- the media / test kit (carries wifi.txt creds) ------------------
-        kitChk = new CheckBox { Text = "Copy the test kit onto the drive (WiFi creds wifi.txt, media)",
-                                Checked = s.KitEnabled, Location = new Point(16, 224), AutoSize = true };
-        kitChk.CheckedChanged += (a, b) => Sync();
-        Controls.Add(kitChk);
-        kitBox = new TextBox { Text = s.KitPath, Location = new Point(34, 248), Size = new Size(410, 23) };
-        Controls.Add(kitBox);
-        kitBrowse = new Button { Text = "Browse...", Location = new Point(450, 247), Size = new Size(84, 25) };
+        // ---- 3. Network suite (hardware) -----------------------------------
+        var net = new GroupBox { Text = "3. Network suite - hardware bring-up (\\CRASH\\<machine>\\NETLOG.TXT)",
+                                 Location = new Point(gx, y), Size = new Size(GW, 88) };
+        Controls.Add(net);
+        networkChk = Chk("Run the network hardware test", s.RunNetwork, 12, 20, true);
+        net.Controls.Add(networkChk);
+        wifiChk = Chk("WiFi", s.TestWifi, 28, 44, false);
+        ethChk  = Chk("Ethernet (USB adapter auto-detected)", s.TestEth, 110, 44, false);
+        net.Controls.Add(wifiChk); net.Controls.Add(ethChk);
+        net.Controls.Add(new Label { Text = "Both on = auto-detect; one only = force that side.",
+                                     Location = new Point(28, 66), AutoSize = true, ForeColor = Grey });
+        y += 96;
+
+        // ---- 4. Diagnostics (advanced) -------------------------------------
+        var diag = new GroupBox { Text = "4. Diagnostics (advanced; operator present)",
+                                  Location = new Point(gx, y), Size = new Size(GW, 92) };
+        Controls.Add(diag);
+        diagChk = Chk("Run diagnostics", s.RunDiagnostics, 12, 20, true);
+        diag.Controls.Add(diagChk);
+        mtrrChk = Chk("MTRR write-combining experiment (self-reverting)", s.TestMtrr, 28, 44, false);
+        forceChk = Chk("Crash-pipeline self-test (forces a #PF on pass 1)", s.ForceCrash, 28, 68, false);
+        diag.Controls.Add(mtrrChk); diag.Controls.Add(forceChk);
+        y += 100;
+
+        // ---- developer extras (kit / zip / label) --------------------------
+        var extra = new GroupBox { Text = "Developer extras", Location = new Point(gx, y),
+                                   Size = new Size(GW, 156) };
+        Controls.Add(extra);
+        kitChk = Chk("Copy the test kit onto the drive (WiFi creds wifi.txt, media)", s.KitEnabled, 12, 20, true);
+        extra.Controls.Add(kitChk);
+        kitBox = new TextBox { Text = s.KitPath, Location = new Point(28, 44), Size = new Size(388, 23) };
+        extra.Controls.Add(kitBox);
+        kitBrowse = new Button { Text = "Browse...", Location = new Point(422, 43), Size = new Size(84, 25) };
         kitBrowse.Click += (a, b) => {
             using (var d = new FolderBrowserDialog { SelectedPath = Dir(kitBox.Text),
                        Description = "Folder whose CONTENTS are copied to the drive root" })
                 if (d.ShowDialog(this) == DialogResult.OK) kitBox.Text = d.SelectedPath;
         };
-        Controls.Add(kitBrowse);
-
-        // --- a chosen zip ----------------------------------------------------
-        zipChk = new CheckBox { Text = "Extract a .zip onto the drive",
-                                Checked = s.ZipEnabled, Location = new Point(16, 284), AutoSize = true };
-        zipChk.CheckedChanged += (a, b) => Sync();
-        Controls.Add(zipChk);
-        zipBox = new TextBox { Text = s.ZipPath, Location = new Point(34, 308), Size = new Size(410, 23) };
-        Controls.Add(zipBox);
-        zipBrowse = new Button { Text = "Browse...", Location = new Point(450, 307), Size = new Size(84, 25) };
+        extra.Controls.Add(kitBrowse);
+        zipChk = Chk("Extract a .zip onto the drive", s.ZipEnabled, 12, 76, true);
+        extra.Controls.Add(zipChk);
+        zipBox = new TextBox { Text = s.ZipPath, Location = new Point(28, 100), Size = new Size(388, 23) };
+        extra.Controls.Add(zipBox);
+        zipBrowse = new Button { Text = "Browse...", Location = new Point(422, 99), Size = new Size(84, 25) };
         zipBrowse.Click += (a, b) => {
             using (var d = new OpenFileDialog { Filter = "Zip archives (*.zip)|*.zip|All files (*.*)|*.*",
                                                 Title = "Choose a .zip to unpack onto the drive" }) {
@@ -561,28 +630,26 @@ class DevForm : Form
                 if (d.ShowDialog(this) == DialogResult.OK) zipBox.Text = d.FileName;
             }
         };
-        Controls.Add(zipBrowse);
-        Controls.Add(new Label { Text = "Into subfolder (blank = drive root):",
-                                 Location = new Point(34, 338), AutoSize = true });
-        destBox = new TextBox { Text = s.ZipDest, Location = new Point(232, 335), Size = new Size(212, 23) };
-        Controls.Add(destBox);
+        extra.Controls.Add(zipBrowse);
+        extra.Controls.Add(new Label { Text = "Into subfolder (blank = root):", Location = new Point(28, 130), AutoSize = true });
+        destBox = new TextBox { Text = s.ZipDest, Location = new Point(196, 127), Size = new Size(220, 23) };
+        extra.Controls.Add(destBox);
+        y += 164;
 
-        // --- volume label ----------------------------------------------------
-        Controls.Add(new Label { Text = "Volume label:", Location = new Point(16, 374), AutoSize = true });
-        labelBox = new TextBox { Text = s.Label, Location = new Point(104, 371), Size = new Size(120, 23), MaxLength = 11 };
+        Controls.Add(new Label { Text = "Volume label:", Location = new Point(gx, y + 4), AutoSize = true });
+        labelBox = new TextBox { Text = s.Label, Location = new Point(104, y + 1), Size = new Size(120, 23), MaxLength = 11 };
         Controls.Add(labelBox);
-
         Controls.Add(new Label {
             Text = "Saved in %APPDATA%\\UnoDOS\\flasher.ini, so these survive a flasher update.",
-            Location = new Point(16, 406), Size = new Size(520, 20),
-            ForeColor = Color.FromArgb(90, 90, 90) });
+            Location = new Point(gx, y + 30), Size = new Size(GW, 20), ForeColor = Grey });
+        y += 60;
 
         var ok = new Button { Text = "OK", DialogResult = DialogResult.OK,
-                              Location = new Point(366, 462), Size = new Size(80, 28) };
+                              Location = new Point(350, y), Size = new Size(80, 28) };
         ok.Click += (a, b) => Commit();
         Controls.Add(ok);
         var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel,
-                                  Location = new Point(454, 462), Size = new Size(80, 28) };
+                                  Location = new Point(438, y), Size = new Size(80, 28) };
         Controls.Add(cancel);
         AcceptButton = ok; CancelButton = cancel;
 
@@ -598,29 +665,50 @@ class DevForm : Form
     void Sync()
     {
         bool on = devChk.Checked;
-        specChk.Enabled = wifiChk.Enabled = ethChk.Enabled = mtrrChk.Enabled =
-            passesBox.Enabled = shutoffChk.Enabled = kitChk.Enabled = zipChk.Enabled =
-            labelBox.Enabled = on;
+        // suite masters + the cross-cutting switch
+        confChk.Enabled = standardChk.Enabled = networkChk.Enabled = diagChk.Enabled =
+            kitChk.Enabled = zipChk.Enabled = labelBox.Enabled = on;
+        // interactive only means anything when the conformance suite runs
+        interactiveChk.Enabled = on && confChk.Checked;
+        // per-suite children follow their master
+        bool conf = on && confChk.Checked;
+        aStorage.Enabled = aSystem.Enabled = aFrameworks.Enabled = aApps.Enabled = aNetwork.Enabled = conf;
+        bool std = on && standardChk.Checked;
+        passesBox.Enabled = shutoffChk.Enabled = std;
+        bool net = on && networkChk.Checked;
+        wifiChk.Enabled = ethChk.Enabled = net;
+        bool diag = on && diagChk.Checked;
+        mtrrChk.Enabled = forceChk.Enabled = diag;
         kitBox.Enabled = kitBrowse.Enabled = on && kitChk.Checked;
         zipBox.Enabled = zipBrowse.Enabled = destBox.Enabled = on && zipChk.Checked;
     }
 
     void Commit()
     {
-        s.DevMode     = devChk.Checked;
-        s.TestSpec    = specChk.Checked;
-        s.TestWifi    = wifiChk.Checked;
-        s.TestEth     = ethChk.Checked;
-        s.TestMtrr    = mtrrChk.Checked;
-        s.StressPasses = (int)passesBox.Value;
-        s.AutoShutoff = shutoffChk.Checked;
-        s.KitEnabled  = kitChk.Checked;
-        s.KitPath     = kitBox.Text.Trim();
-        s.ZipEnabled  = zipChk.Checked;
-        s.ZipPath     = zipBox.Text.Trim();
-        s.ZipDest     = destBox.Text.Trim().Trim('\\', '/');
-        string lab    = labelBox.Text.Trim();
-        s.Label       = lab.Length > 0 ? lab : "UNODOS";
+        s.DevMode            = devChk.Checked;
+        s.IncludeInteractive = interactiveChk.Checked;
+        s.RunConformance     = confChk.Checked;
+        s.SpecStorage        = aStorage.Checked;
+        s.SpecSystem         = aSystem.Checked;
+        s.SpecFrameworks     = aFrameworks.Checked;
+        s.SpecApps           = aApps.Checked;
+        s.SpecNetwork        = aNetwork.Checked;
+        s.RunStandard        = standardChk.Checked;
+        s.StressPasses       = (int)passesBox.Value;
+        s.AutoShutoff        = shutoffChk.Checked;
+        s.RunNetwork         = networkChk.Checked;
+        s.TestWifi           = wifiChk.Checked;
+        s.TestEth            = ethChk.Checked;
+        s.RunDiagnostics     = diagChk.Checked;
+        s.TestMtrr           = mtrrChk.Checked;
+        s.ForceCrash         = forceChk.Checked;
+        s.KitEnabled         = kitChk.Checked;
+        s.KitPath            = kitBox.Text.Trim();
+        s.ZipEnabled         = zipChk.Checked;
+        s.ZipPath            = zipBox.Text.Trim();
+        s.ZipDest            = destBox.Text.Trim().Trim('\\', '/');
+        string lab           = labelBox.Text.Trim();
+        s.Label              = lab.Length > 0 ? lab : "UNODOS";
     }
 }
 

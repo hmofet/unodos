@@ -82,6 +82,7 @@ void uno_dbg_boot_marker(void);         /* CRASH\BOOTS.TXT - earliest proof    *
 void uno_dbg_write_perf(const char *text, int len);  /* CRASH\<M>\PF###.TXT    */
 int  uno_dbg_write_crashfile(const char *name, const void *data, int len);
 int  pc64_stress_cfg_flag(const char *key);  /* STRESS.CFG key set? -1 = no file */
+int  pc64_stress_cfg_value(const char *key, char *buf, int cap); /* value after key= */
 /* SMBIOS-derived machine tag = the telemetry folder leaf (CRASH\<TAG>\): one
  * stick serves a whole batch of machines without results colliding. */
 const char *uno_dbg_machine_tag(void);
@@ -108,6 +109,9 @@ const char *pc64_stress_status(void);   /* on-screen run state, 0 when unarmed *
  * trace. Progressive log to CRASH\NETLOG.TXT. */
 void pc64_nettest_tick(void);           /* one-shot; later calls are free      */
 void pc64_spectest_run(void);           /* SPECTEST conformance suite (spec)   */
+/* Interactive conformance: wait up to timeout_ms for a REAL keystroke (proves
+ * the physical keyboard path). 1 = key (scan/uni set), 0 = timed out. */
+int  uno_pc64_dbg_key_wait(int timeout_ms, int *scan, int *uni);
 /* Trace sink for the network drivers (iwlwifi/wpa/usb-eth): appends a line to
  * the NETLOG buffer, mirrors it to the kernel log, and FEEDS THE WATCHDOG
  * HEARTBEAT - WiFi bring-up legitimately spends >20 s in scan+join, and a

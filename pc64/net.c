@@ -38,6 +38,20 @@ static u16 cksum(const u8 *p, int n, u32 seed)
 #define FRM 1600
 static u8 g_tx[FRM];
 
+/* Link-level frame counters. The AX88179 batch round failed at DHCP with the
+ * link up, and the NETLOG had no way to say whether we ever TRANSMITTED or ever
+ * RECEIVED anything - so "L2 TX/RX or the server" stayed a three-way guess.
+ * These make it a one-line answer: tx>0 rx==0 => our RX path or the cable/server
+ * is deaf; tx==0 => our TX path never fired; rx>0 but ip==0 => frames arrive but
+ * DHCP replies aren't parsed. Reset each net_init. */
+static u32 g_tx_frames, g_rx_frames, g_rx_arp, g_rx_ip;
+static int nic_tx(int flen)
+{ if (!g_nic || flen <= 0) return -1; g_tx_frames++; return g_nic->send(g_nic->ctx, g_tx, flen); }
+u32 net_tx_frames(void) { return g_tx_frames; }
+u32 net_rx_frames(void) { return g_rx_frames; }
+u32 net_rx_arp(void)    { return g_rx_arp; }
+u32 net_rx_ip(void)     { return g_rx_ip; }
+
 /* Ethernet: dst[6] src[6] type[2] then payload. Returns total frame length. */
 static int eth_build(const u8 dst[6], u16 type, int payload_len)
 {
@@ -85,7 +99,7 @@ static void arp_send(int op, const u8 tip[4], const u8 tmac[6])
     memcpy(a + 8, g_mac, 6); memcpy(a + 14, MYIP, 4);
     memcpy(a + 18, tmac, 6);  memcpy(a + 24, tip, 4);
     flen = eth_build(op == 1 ? bcast : tmac, 0x0806, 28);
-    g_nic->send(g_nic->ctx, g_tx, flen);
+    nic_tx(flen);
 }
 
 static void arp_request(const u8 ip[4])
@@ -174,7 +188,7 @@ void net_ping(const u8 ip[4])
     wr16(icmp + 2, cksum(icmp, 8, 0));
     flen = ip_build(ip, 1, icmp, 8);
     if (flen > 0) {
-        g_nic->send(g_nic->ctx, g_tx, flen);
+        nic_tx(flen);
         g_ping_sent = 1; g_ping_got = 0; g_ping_t0 = g_ticks;
     } else {
         g_ping_sent = 2;               /* pending ARP: retry in poll */
@@ -196,7 +210,7 @@ static void icmp_recv(const u8 *ip, const u8 *icmp, int len)
         reply[0] = 0; wr16(reply + 2, 0);
         wr16(reply + 2, cksum(reply, n, 0));
         { int flen = ip_build(ip + 12, 1, reply, n);   /* ip+12 = their src */
-          if (flen > 0) g_nic->send(g_nic->ctx, g_tx, flen); }
+          if (flen > 0) nic_tx(flen); }
     }
 }
 
@@ -230,7 +244,7 @@ int net_udp_send(const u8 dst[4], u16 dport, u16 sport, const void *data, int le
     { u16 c = cksum(udp, 8 + len, seed); wr16(udp + 6, c ? c : 0xFFFF); }
     flen = ip_build(dst, 17, udp, 8 + len);
     if (flen < 0) return -1;
-    return g_nic->send(g_nic->ctx, g_tx, flen);
+    return nic_tx(flen);
 }
 
 int net_udp_recv(u16 sport, void *buf, int cap, u8 src[4], u16 *src_port)
@@ -294,7 +308,7 @@ static void tcp_out(u8 flags, const u8 *data, int dlen)
     seed = pseudo_seed(MYIP, tcp.dst, 6, 20 + dlen);
     wr16(seg + 16, cksum(seg, 20 + dlen, seed));
     flen = ip_build(tcp.dst, 6, seg, 20 + dlen);
-    if (flen > 0) g_nic->send(g_nic->ctx, g_tx, flen);
+    if (flen > 0) nic_tx(flen);
 }
 
 int net_tcp_connect(const u8 dst[4], u16 dport)
@@ -452,7 +466,7 @@ static void dhcp_send(int type, const u8 *reqip, const u8 *srvip)
         wr16(ip + 10, cksum(ip, 20, 0));
         total = 28 + olen;
         flen = eth_build(bcast_mac, 0x0800, total);
-        g_nic->send(g_nic->ctx, g_tx, flen);
+        nic_tx(flen);
         udp_bind(68);
     }
 }
@@ -536,6 +550,7 @@ void net_init(uno_nic_t *nic, const u8 mac[6])
     memset(&tcp, 0, sizeof tcp);
     g_dhcp_state = 0;
     g_ticks = 0;
+    g_tx_frames = g_rx_frames = g_rx_arp = g_rx_ip = 0;
 }
 
 int net_link(void) { return g_nic ? g_nic->link(g_nic->ctx) : 0; }
@@ -620,9 +635,10 @@ void net_poll(void)
     while ((n = g_nic->recv(g_nic->ctx, rx, FRM)) > 0) {
         u16 type;
         if (n < 14) continue;
+        g_rx_frames++;
         type = rd16(rx + 12);
-        if (type == 0x0806) arp_recv(rx + 14, n - 14);
-        else if (type == 0x0800) ip_recv(rx + 14, n - 14);
+        if (type == 0x0806) { g_rx_arp++; arp_recv(rx + 14, n - 14); }
+        else if (type == 0x0800) { g_rx_ip++; ip_recv(rx + 14, n - 14); }
     }
     /* deferred ping once ARP resolves */
     if (g_ping_sent == 2 && g_ping_dst_set) net_ping(g_ping_dst);

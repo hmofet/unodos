@@ -101,6 +101,41 @@ static int rw_vol(void)
     return -1;
 }
 
+/* ---- suites / areas ------------------------------------------------------
+ * SPECTEST is organised into AREAS the flasher can enable individually:
+ *   storage  system  frameworks  apps  network  interactive
+ * The operator picks them in Developer options; the flasher writes the choice
+ * as `spec=storage,apps,...` (bare `spec` = all non-interactive areas). The
+ * `interactive` area is a separate opt-in (the flasher's "include interactive
+ * tests" box -> the STRESS.CFG `interactive` key) because it needs a human at
+ * the keyboard - an unattended batch run leaves it off. */
+static char g_areas[128];                 /* the spec= selection, "" = all      */
+static int  g_interactive;                /* interactive key set?               */
+
+/* Is `name` selected? Empty selection = every (non-interactive) area runs. */
+static int area_on(const char *name)
+{
+    const char *p = g_areas;
+    int nlen = (int)strlen(name);
+    if (!g_areas[0]) return 1;            /* bare `spec`: all areas             */
+    while (*p) {
+        const char *s = p;
+        while (*p && *p != ',') p++;
+        if (p - s == nlen && strncmp(s, name, (size_t)nlen) == 0) return 1;
+        if (*p) p++;
+    }
+    return 0;
+}
+
+/* A section banner in the result file, so a reader can scan by suite. */
+static void section(const char *title)
+{
+    int n = snprintf(g_buf + g_len, (size_t)(SPECBUF - g_len - 1),
+                     "\n-- %s --\n", title);
+    if (n > 0 && g_len + n < SPECBUF - 1) g_len += n;
+    uno_dbg_log("spec: [%s]", title);
+}
+
 /* ===================================================================== FAT */
 static void test_fat(void)
 {
@@ -681,6 +716,73 @@ static void test_netstub(void)
     SKIP("S-AI-02",   "AI request/stream/render round-trip - pending networking");
 }
 
+/* ============================================================== INTERACTIVE */
+/* Checks that need a human at the machine - the paths synthetic injection can
+ * never prove: does the PHYSICAL keyboard reach the OS, and does the DISPLAY
+ * actually show correct colour + text on this panel. Gated by the STRESS.CFG
+ * `interactive` key (the flasher's "include interactive tests" box); every wait
+ * is bounded and records SKIP on a timeout, so an unattended stick never hangs
+ * here. Prompts are drawn full-screen and the desktop is restored afterwards. */
+void uno_pc64_present(void);              /* fb -> panel (uefi_main)            */
+void pc64_dbg_mark_dirty(void);           /* ask the shell to repaint (pc64_uui) */
+
+static void iprompt(fb_px bg, const char *l1, const char *l2, const char *l3)
+{
+    int cx = FB_W / 2, y = FB_H / 2 - 48, lh = fb_text_h() + 6;
+    fb_clear(bg);
+    if (l1) { fb_text(cx - fb_text_w(l1) / 2, y, l1, UNO_WHITE, -1); y += lh; }
+    if (l2) { fb_text(cx - fb_text_w(l2) / 2, y, l2, FB_RGB(0xD0,0xD0,0xD0), -1); y += lh; }
+    if (l3) { fb_text(cx - fb_text_w(l3) / 2, y, l3, FB_RGB(0xD0,0xD0,0xD0), -1); }
+    uno_pc64_present();
+}
+
+/* Only called when the `interactive` key is set (an operator is present). */
+static void test_interactive(void)
+{
+    /* S-INT-01: the REAL keyboard delivers a specific key. Injection flows
+     * through the same map_key funnel, so only a human press proves the
+     * firmware/HID path works on THIS laptop (the class of bug that bit the
+     * Surface + Intel Mac keyboards). */
+    iprompt(FB_RGB(0,0,0x40), "SPECTEST interactive  (1/2): keyboard",
+            "Press the  K  key.", "Waits 25 s; any other key = fail, no key = skip.");
+    { int sc = 0, uni = 0;
+      if (!uno_pc64_dbg_key_wait(25000, &sc, &uni))
+          SKIP("S-INT-01", "no key in 25 s - keyboard path unconfirmed");
+      else if (uni == 'k' || uni == 'K') OK("S-INT-01");
+      else BAD("S-INT-01", "got scan=%d uni=%d (0x%02x), expected K", sc, uni, uni & 0xFF); }
+
+    /* S-INT-02: the DISPLAY shows correct colour + legible text. Draws labelled
+     * red/green/blue bars (the fb colour byte order + the text path, both of
+     * which were per-machine trouble this session) and asks the operator to
+     * confirm. Y = correct, N = wrong/garbled, timeout = skip. */
+    {
+        int bw = FB_W / 3, sc = 0, uni = 0;
+        fb_clear(UNO_BLACK);
+        fb_fill_rect(0,      0, bw,        FB_H - 60, FB_RGB(0xC0,0,0));
+        fb_fill_rect(bw,     0, bw,        FB_H - 60, FB_RGB(0,0xC0,0));
+        fb_fill_rect(bw * 2, 0, FB_W-bw*2, FB_H - 60, FB_RGB(0,0,0xC0));
+        fb_text(bw/2      - fb_text_w("RED")/2,   FB_H/2, "RED",   UNO_WHITE, -1);
+        fb_text(bw + bw/2 - fb_text_w("GREEN")/2, FB_H/2, "GREEN", UNO_BLACK, -1);
+        fb_text(bw*2 + bw/2 - fb_text_w("BLUE")/2, FB_H/2, "BLUE", UNO_WHITE, -1);
+        fb_text(8, FB_H - 48, "SPECTEST interactive  (2/2): display", UNO_WHITE, -1);
+        fb_text(8, FB_H - 26, "Bars RED / GREEN / BLUE, labels readable?  Y = yes, N = no.", UNO_WHITE, -1);
+        uno_pc64_present();
+        if (!uno_pc64_dbg_key_wait(25000, &sc, &uni))
+            SKIP("S-INT-02", "no key in 25 s - display unconfirmed");
+        else if (uni == 'y' || uni == 'Y') OK("S-INT-02");
+        else BAD("S-INT-02", "operator reports display wrong/garbled (key 0x%02x)", uni & 0xFF);
+    }
+
+    /* S-INT-03: audible output. The beep is generated by the sequencer, but the
+     * PCM DMA ring is fed by the main loop's audio pump, which doesn't run
+     * during this blocking suite - and the codecs are metal-pending anyway - so
+     * this is deferred rather than shipped as a check that always fails on
+     * infrastructure. Becomes real once audio is confirmed on metal. */
+    SKIP("S-INT-03", "audible-beep check pending the main-loop audio pump / real codecs");
+
+    pc64_dbg_mark_dirty();               /* hand the desktop back to the shell */
+}
+
 /* =================================================================== HARNESS */
 static void test_dbg(void)
 {
@@ -700,29 +802,66 @@ void pc64_spectest_run(void)
     char tail[80];
     int v;
     g_len = g_pass = g_fail = g_skip = 0;
+
+    /* which areas did the operator select? (spec=storage,apps,... ; bare = all)
+     * and is the interactive area opted in? */
+    pc64_stress_cfg_value("spec", g_areas, (int)sizeof g_areas);
+    g_interactive = pc64_stress_cfg_flag("interactive") > 0;
+
     uno_dbg_check("spec:start");
-    uno_dbg_log("spectest: starting conformance run");
+    uno_dbg_log("spectest: starting conformance run (areas=%s interactive=%d)",
+                g_areas[0] ? g_areas : "all", g_interactive);
     { int n = snprintf(g_buf, sizeof g_buf,
         "UnoDOS pc64 SPECTEST - build %s - machine %s\n"
-        "one line per contract (PASS/FAIL/SKIP); see SPEC.md for the full text\n\n",
-        uno_dbg_build_id(), uno_dbg_machine_tag());
+        "areas: %s   interactive: %s\n"
+        "one line per contract (PASS/FAIL/SKIP); see SPEC.md for the full text\n",
+        uno_dbg_build_id(), uno_dbg_machine_tag(),
+        g_areas[0] ? g_areas : "all", g_interactive ? "on" : "off");
       if (n > 0) g_len = n; }
     v = rw_vol();
 
-    uno_dbg_check("spec:fat");      test_fat();
-    uno_dbg_check("spec:net");      test_net();
-    uno_dbg_check("spec:font");     test_font();
-    uno_dbg_check("spec:libc");     test_libc();
-    uno_dbg_check("spec:js");       test_js();
-    uno_dbg_check("spec:unoui");    test_unoui();
-    uno_dbg_check("spec:uno3d");    test_uno3d();
-    uno_dbg_check("spec:seq");      test_unosound_seq();
-    uno_dbg_check("spec:unomedia"); test_unomedia();
-    uno_dbg_check("spec:editor");   test_editor(v);
-    uno_dbg_check("spec:music");    test_music(v);
-    uno_dbg_check("spec:studio");   test_studio(v);
-    uno_dbg_check("spec:netstub");  test_netstub();
-    uno_dbg_check("spec:dbg");      test_dbg();
+    /* Storage suite: the FAT filesystem contracts. */
+    if (area_on("storage")) {
+        section("STORAGE (FAT)");
+        uno_dbg_check("spec:fat");   test_fat();
+    }
+    /* System suite: libc, font, the JS mini-engine, the debug harness itself. */
+    if (area_on("system")) {
+        section("SYSTEM (libc / font / js / harness)");
+        uno_dbg_check("spec:libc");  test_libc();
+        uno_dbg_check("spec:font");  test_font();
+        uno_dbg_check("spec:js");    test_js();
+        uno_dbg_check("spec:dbg");   test_dbg();
+    }
+    /* Frameworks suite: the shared platform libraries. */
+    if (area_on("frameworks")) {
+        section("FRAMEWORKS (unoui / uno3d / unosound / unomedia)");
+        uno_dbg_check("spec:unoui");    test_unoui();
+        uno_dbg_check("spec:uno3d");    test_uno3d();
+        uno_dbg_check("spec:seq");      test_unosound_seq();
+        uno_dbg_check("spec:unomedia"); test_unomedia();
+    }
+    /* Apps suite: the file/input/media paths of the shipped apps. */
+    if (area_on("apps")) {
+        section("APPS (editor / music / studio + python)");
+        uno_dbg_check("spec:editor"); test_editor(v);
+        uno_dbg_check("spec:music");  test_music(v);
+        uno_dbg_check("spec:studio"); test_studio(v);
+    }
+    /* Network suite: the offline-safe stack regressions + the live stubs. */
+    if (area_on("network")) {
+        section("NETWORK (stack regressions + live stubs)");
+        uno_dbg_check("spec:net");     test_net();
+        uno_dbg_check("spec:netstub"); test_netstub();
+    }
+    /* Interactive area: human-confirmed keyboard + display. A distinct opt-in
+     * (the `interactive` key) rather than a normal area, so it is never pulled
+     * in by a bare `spec` (all-areas) run - an unattended batch stick must not
+     * sit at a prompt. Omitted entirely when off. */
+    if (g_interactive) {
+        section("INTERACTIVE (operator-confirmed)");
+        uno_dbg_check("spec:interactive"); test_interactive();
+    }
 
     { int n = snprintf(tail, sizeof tail, "\n== %d PASS, %d FAIL, %d SKIP ==\n",
                        g_pass, g_fail, g_skip);

@@ -9,6 +9,18 @@
  *  in-box csc against .NET Framework, and a JSON serializer would drag in a
  *  reference the build does not otherwise need.  Unknown keys are preserved on
  *  save, so an older flasher cannot silently drop a newer one's settings.
+ *
+ *  Test model (matches STRESS.CFG the debug OS reads).  Four SUITES, each with
+ *  a master toggle, plus one cross-cutting switch:
+ *    - Conformance (SPECTEST): master + per-area (storage/system/frameworks/
+ *      apps/network).  All areas on -> `spec`; a subset -> `spec=a,b,...`.
+ *    - Standard (stress driver: app-launch/runner3d/input/FS fuzz): `passes=N`.
+ *    - Network (WiFi / USB-ethernet hardware): off -> `nonet`; one only forces
+ *      that side (`net-force-wifi` / `net-eth-only`); both on -> auto-detect.
+ *    - Diagnostics (advanced): MTRR write-combining (`mtrr-wc`), and the
+ *      crash-pipeline self-test (`allow-force`).
+ *    - Include interactive tests (cross-cutting): the SPECTEST checks that need
+ *      a human at the keyboard -> `interactive`.  Off for unattended batches.
  */
 using System;
 using System.Collections.Generic;
@@ -17,49 +29,100 @@ using System.Text;
 
 class UnoSettings
 {
-    public const int VERSION = 1;
+    public const int VERSION = 2;
 
-    // DevMode now means "flash the DEBUG build + run the selected tests".
+    // DevMode means "flash the DEBUG build + run the selected tests".
     // OFF (the default) flashes the clean PRODUCTION build.
     public bool   DevMode;
-    // --- test selection (only meaningful in DevMode) ---
-    public bool   TestSpec;           // conformance suite (SPECTEST) -> spec
-    public bool   TestWifi   = true;  // WiFi network test
-    public bool   TestEth    = true;  // Ethernet network test (auto-detects adapter)
-    public bool   TestMtrr;           // MTRR write-combining experiment -> mtrr-wc
-    public int    StressPasses = 3;   // stress driver passes (0 = no stress run)
-    public bool   AutoShutoff = true; // power off when the run finishes
+
+    // --- Conformance suite (SPECTEST) ---
+    public bool   RunConformance = true;
+    public bool   SpecStorage    = true;   // FAT
+    public bool   SpecSystem     = true;   // libc / font / js / harness
+    public bool   SpecFrameworks = true;   // unoui / uno3d / unosound / unomedia
+    public bool   SpecApps       = true;   // editor / music / studio + python
+    public bool   SpecNetwork    = true;   // stack regressions + live stubs
+
+    // --- Standard suite (stress driver) ---
+    public bool   RunStandard    = true;
+    public int    StressPasses   = 3;      // passes per run
+
+    // --- Network suite (hardware) ---
+    public bool   RunNetwork     = true;
+    public bool   TestWifi       = true;
+    public bool   TestEth        = true;   // USB adapter auto-detected
+
+    // --- Diagnostics suite (advanced) ---
+    public bool   RunDiagnostics;          // off by default
+    public bool   TestMtrr;                // MTRR write-combining experiment
+    public bool   ForceCrash;              // pass-1 self-test of the crash pipeline
+
+    // --- cross-cutting ---
+    public bool   IncludeInteractive;      // human-confirmed checks (operator present)
+    public bool   AutoShutoff = true;      // power off when the run finishes
+
     // --- developer extras (kit / zip copy) ---
-    public bool   KitEnabled = true;  // copy the testkit (carries wifi.txt creds)
+    public bool   KitEnabled = true;       // copy the testkit (carries wifi.txt creds)
     public string KitPath   = @"\\behemoth\unreplicated\unodos\pc64\testkit";
     public bool   ZipEnabled;
     public string ZipPath   = "";
-    public string ZipDest   = "";     // subfolder on the disk, blank = root
+    public string ZipDest   = "";          // subfolder on the disk, blank = root
     public string Label     = "UNODOS";
-    public bool   AutoUpdate = true;  // check the share + self-update at startup
-    public string UpdatePath = "";    // ini-only override of the update share dir
+    public bool   AutoUpdate = true;        // check the share + self-update at startup
+    public string UpdatePath = "";          // ini-only override of the update share dir
 
     // Which embedded ESP resource to flash.
     public string EspResource { get { return DevMode ? "unodos_esp_debug" : "unodos_esp_prod"; } }
 
-    /* The STRESS.CFG the debug build reads, generated from the test toggles.
+    // The conformance areas actually selected (empty = none).
+    List<string> SelectedAreas()
+    {
+        var a = new List<string>();
+        if (SpecStorage)    a.Add("storage");
+        if (SpecSystem)     a.Add("system");
+        if (SpecFrameworks) a.Add("frameworks");
+        if (SpecApps)       a.Add("apps");
+        if (SpecNetwork)    a.Add("network");
+        return a;
+    }
+
+    /* The STRESS.CFG the debug build reads, generated from the suite toggles.
      * Written only in DevMode; overrides the debug ESP's shipped default.
-     * Returns null when nothing should be armed (all tests off + no stress). */
+     * Never null in DevMode (an all-off debug stick is a valid "no tests" run). */
     public string StressCfg()
     {
         if (!DevMode) return null;
         var sb = new StringBuilder();
         sb.Append("# UnoDOS test config - generated by the flasher's Developer options\r\n");
-        int passes = StressPasses < 0 ? 0 : StressPasses;
+
+        // Standard suite (stress driver)
+        int passes = (RunStandard && StressPasses > 0) ? StressPasses : 0;
         sb.Append("passes=" + passes + "\r\n");
         if (!AutoShutoff) sb.Append("noshutdown\r\n");
-        if (TestSpec)     sb.Append("spec\r\n");
-        if (TestMtrr)     sb.Append("mtrr-wc\r\n");
-        // network: neither -> nonet; wifi-only -> force wifi even with an
-        // adapter; eth-only -> no wifi fallback; both -> auto-detect.
-        if (!TestWifi && !TestEth) sb.Append("nonet\r\n");
+        if (RunDiagnostics && ForceCrash) sb.Append("allow-force\r\n");
+
+        // Conformance suite (SPECTEST): bare `spec` = all areas; a subset =
+        // `spec=a,b`; interactive-only (no areas) = `spec=interactive` so the
+        // suite still runs. Master off, or on with nothing selected -> omitted.
+        if (RunConformance) {
+            var areas = SelectedAreas();
+            if (areas.Count == 5)      sb.Append("spec\r\n");
+            else if (areas.Count > 0)  sb.Append("spec=" + string.Join(",", areas.ToArray()) + "\r\n");
+            else if (IncludeInteractive) sb.Append("spec=interactive\r\n");
+            // interactive is a distinct opt-in (never implied by bare `spec`);
+            // whenever it's on we've just emitted a spec key above, so the
+            // suite will run and reach the interactive area.
+            if (IncludeInteractive) sb.Append("interactive\r\n");
+        }
+
+        // Diagnostics
+        if (RunDiagnostics && TestMtrr) sb.Append("mtrr-wc\r\n");
+
+        // Network suite: off -> nonet; one side -> force that; both -> auto.
+        if (!RunNetwork || (!TestWifi && !TestEth)) sb.Append("nonet\r\n");
         else if (TestWifi && !TestEth) sb.Append("net-force-wifi\r\n");
         else if (TestEth && !TestWifi) sb.Append("net-eth-only\r\n");
+
         return sb.ToString();
     }
 
@@ -86,25 +149,45 @@ class UnoSettings
                 if (eq <= 0) continue;
                 string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
                 switch (k.ToLowerInvariant()) {
-                    case "version":     break;                       // informational
-                    case "devmode":     s.DevMode    = Truthy(v); break;
-                    case "testspec":    s.TestSpec   = Truthy(v); break;
-                    case "testwifi":    s.TestWifi   = Truthy(v); break;
-                    case "testeth":     s.TestEth    = Truthy(v); break;
-                    case "testmtrr":    s.TestMtrr   = Truthy(v); break;
-                    case "stresspasses": { int p; if (int.TryParse(v, out p)) s.StressPasses = p; break; }
-                    case "autoshutoff": s.AutoShutoff = Truthy(v); break;
-                    case "kitenabled":  s.KitEnabled = Truthy(v); break;
-                    case "kitpath":     s.KitPath    = v;         break;
-                    case "zipenabled":  s.ZipEnabled = Truthy(v); break;
-                    case "zippath":     s.ZipPath    = v;         break;
-                    case "zipdest":     s.ZipDest    = v;         break;
-                    case "label":       if (v.Length > 0) s.Label = v; break;
-                    case "autoupdate":  s.AutoUpdate = Truthy(v); break;
-                    case "updatepath":  s.UpdatePath = v;         break;
-                    default:            s.extra[k] = v;           break;
+                    case "version":        break;                        // informational
+                    case "devmode":        s.DevMode        = Truthy(v); break;
+                    // conformance
+                    case "runconformance": s.RunConformance = Truthy(v); break;
+                    case "testspec":       s.RunConformance = Truthy(v); break;  // v1 alias
+                    case "specstorage":    s.SpecStorage     = Truthy(v); break;
+                    case "specsystem":     s.SpecSystem      = Truthy(v); break;
+                    case "specframeworks": s.SpecFrameworks  = Truthy(v); break;
+                    case "specapps":       s.SpecApps        = Truthy(v); break;
+                    case "specnetwork":    s.SpecNetwork     = Truthy(v); break;
+                    // standard
+                    case "runstandard":    s.RunStandard    = Truthy(v); break;
+                    case "stresspasses":   { int p; if (int.TryParse(v, out p)) s.StressPasses = p; break; }
+                    // network
+                    case "runnetwork":     s.RunNetwork     = Truthy(v); break;
+                    case "testwifi":       s.TestWifi       = Truthy(v); break;
+                    case "testeth":        s.TestEth        = Truthy(v); break;
+                    // diagnostics
+                    case "rundiagnostics": s.RunDiagnostics = Truthy(v); break;
+                    case "testmtrr":       s.TestMtrr       = Truthy(v); break;
+                    case "forcecrash":     s.ForceCrash     = Truthy(v); break;
+                    // cross-cutting
+                    case "includeinteractive": s.IncludeInteractive = Truthy(v); break;
+                    case "autoshutoff":    s.AutoShutoff    = Truthy(v); break;
+                    // extras
+                    case "kitenabled":     s.KitEnabled     = Truthy(v); break;
+                    case "kitpath":        s.KitPath        = v;         break;
+                    case "zipenabled":     s.ZipEnabled     = Truthy(v); break;
+                    case "zippath":        s.ZipPath        = v;         break;
+                    case "zipdest":        s.ZipDest        = v;         break;
+                    case "label":          if (v.Length > 0) s.Label = v; break;
+                    case "autoupdate":     s.AutoUpdate     = Truthy(v); break;
+                    case "updatepath":     s.UpdatePath     = v;         break;
+                    default:               s.extra[k]       = v;         break;
                 }
             }
+            // v1 -> v2: an old ini set testmtrr without a diagnostics master;
+            // surface it so the box isn't silently unreachable.
+            if (s.TestMtrr || s.ForceCrash) s.RunDiagnostics = true;
         } catch { /* a corrupt settings file must never stop someone flashing */ }
         return s;
     }
@@ -115,26 +198,38 @@ class UnoSettings
             Directory.CreateDirectory(Dir);
             var sb = new StringBuilder();
             sb.AppendLine("# UnoDOS flasher settings - kept out of the exe so it survives an update.");
-            sb.AppendLine("version="    + VERSION);
-            sb.AppendLine("devmode="    + (DevMode ? "1" : "0"));
-            sb.AppendLine("testspec="   + (TestSpec ? "1" : "0"));
-            sb.AppendLine("testwifi="   + (TestWifi ? "1" : "0"));
-            sb.AppendLine("testeth="    + (TestEth ? "1" : "0"));
-            sb.AppendLine("testmtrr="   + (TestMtrr ? "1" : "0"));
-            sb.AppendLine("stresspasses=" + StressPasses);
-            sb.AppendLine("autoshutoff=" + (AutoShutoff ? "1" : "0"));
-            sb.AppendLine("kitenabled=" + (KitEnabled ? "1" : "0"));
-            sb.AppendLine("kitpath="    + KitPath);
-            sb.AppendLine("zipenabled=" + (ZipEnabled ? "1" : "0"));
-            sb.AppendLine("zippath="    + ZipPath);
-            sb.AppendLine("zipdest="    + ZipDest);
-            sb.AppendLine("label="      + Label);
-            sb.AppendLine("autoupdate=" + (AutoUpdate ? "1" : "0"));
-            sb.AppendLine("updatepath=" + UpdatePath);
+            sb.AppendLine("version="        + VERSION);
+            sb.AppendLine("devmode="         + B(DevMode));
+            sb.AppendLine("runconformance="  + B(RunConformance));
+            sb.AppendLine("specstorage="     + B(SpecStorage));
+            sb.AppendLine("specsystem="      + B(SpecSystem));
+            sb.AppendLine("specframeworks="  + B(SpecFrameworks));
+            sb.AppendLine("specapps="        + B(SpecApps));
+            sb.AppendLine("specnetwork="     + B(SpecNetwork));
+            sb.AppendLine("runstandard="     + B(RunStandard));
+            sb.AppendLine("stresspasses="    + StressPasses);
+            sb.AppendLine("runnetwork="      + B(RunNetwork));
+            sb.AppendLine("testwifi="        + B(TestWifi));
+            sb.AppendLine("testeth="         + B(TestEth));
+            sb.AppendLine("rundiagnostics="  + B(RunDiagnostics));
+            sb.AppendLine("testmtrr="        + B(TestMtrr));
+            sb.AppendLine("forcecrash="      + B(ForceCrash));
+            sb.AppendLine("includeinteractive=" + B(IncludeInteractive));
+            sb.AppendLine("autoshutoff="     + B(AutoShutoff));
+            sb.AppendLine("kitenabled="      + B(KitEnabled));
+            sb.AppendLine("kitpath="         + KitPath);
+            sb.AppendLine("zipenabled="      + B(ZipEnabled));
+            sb.AppendLine("zippath="         + ZipPath);
+            sb.AppendLine("zipdest="         + ZipDest);
+            sb.AppendLine("label="           + Label);
+            sb.AppendLine("autoupdate="      + B(AutoUpdate));
+            sb.AppendLine("updatepath="      + UpdatePath);
             foreach (var kv in extra) sb.AppendLine(kv.Key + "=" + kv.Value);
             File.WriteAllText(FilePath, sb.ToString(), Encoding.UTF8);
         } catch { }
     }
+
+    static string B(bool v) { return v ? "1" : "0"; }
 
     static bool Truthy(string v)
     {
