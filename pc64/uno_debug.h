@@ -70,6 +70,7 @@ const char *uno_dbg_build_id(void);
 void uno_dbg_mark_clean(void);          /* deliberate shutdown/restart         */
 void uno_dbg_write_bootenv(void);       /* BOOTENV.TXT                         */
 void uno_dbg_write_bootlog(void);       /* CRASH\BOOTLOG.TXT - every boot      */
+void uno_dbg_boot_marker(void);         /* CRASH\BOOTS.TXT - earliest proof    */
 void uno_dbg_write_perf(const char *text, int len);  /* CRASH\PF###.TXT        */
 
 /* ---- the stress driver (pc64_stress.c) ---------------------------------- */
@@ -96,6 +97,7 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define uno_dbg_frame_idle(i)        ((void)0)
 #define uno_dbg_oom_tick()           0
 #define uno_dbg_mark_clean()         ((void)0)
+#define uno_dbg_boot_marker()        ((void)0)
 #define pc64_stress_tick()           ((void)0)
 #endif
 

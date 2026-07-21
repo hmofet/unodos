@@ -1154,6 +1154,41 @@ void uno_dbg_write_bootenv(void)
     g_in_disk = 0;
 }
 
+/* Append one line to CRASH\BOOTS.TXT the moment storage is usable.
+ *
+ * "No telemetry on the stick" is ambiguous: it can mean the machine never
+ * booted our kernel, or that it booted and died before the first write. The
+ * Latitude produced nothing twice and we could not tell which. This marker is
+ * written as EARLY as storage allows - long before the env block, the fb bench,
+ * ACPI, audio or detach - so its presence proves the kernel ran and reached the
+ * filesystem, and its absence means it never got that far. It accumulates, so
+ * the file also counts how many times the machine actually booted us. */
+void uno_dbg_boot_marker(void);
+void uno_dbg_boot_marker(void)
+{
+    static char buf[2048];
+    char line[160];
+    int vol = crash_vol(), n, y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+    long have;
+    if (vol < 0) return;
+    uno_pc64_time(&y, &mo, &d, &h, &mi, &sec);
+    n = snprintf(line, sizeof line,
+                 "boot %u  %04d-%02d-%02d %02d:%02d:%02d  build %s\r\n",
+                 g_stash ? g_stash->h.boot_count : 0,
+                 y, mo, d, h, mi, sec, g_build_id);
+    g_in_disk = 1;
+    have = uno_fat_read(vol, "CRASH\\BOOTS.TXT", (unsigned char *)buf,
+                        (long)sizeof buf - n - 1);
+    if (have < 0) have = 0;
+    memcpy(buf + have, line, (size_t)n);
+    uno_fat_write(vol, "CRASH\\BOOTS.TXT", (const unsigned char *)buf,
+                  have + n);
+    uno_fat_sync();
+    g_in_disk = 0;
+    uno_dbg_log("boot marker written (boot #%u)",
+                g_stash ? g_stash->h.boot_count : 0);
+}
+
 /* Dump the kernel log + env block to CRASH\BOOTLOG.TXT.
  *
  * Until now the kernel log only reached disk if something CRASHED, so a boot

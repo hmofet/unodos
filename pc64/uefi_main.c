@@ -705,6 +705,9 @@ void uno_pc64_init(void)
     splash_stage(3, "storage (AHCI / NVMe / FAT)");
     uno_dbg_check("init:storage");
     uno_fat_init();                 /* native block + FAT stack (AHCI + fw sectors) */
+    uno_dbg_boot_marker();          /* EARLIEST possible proof-of-boot: storage
+                                       is up, so record that this kernel ran
+                                       before anything later can fail silently */
     uno_dbg_flush_residue();        /* debug build: persist any crash/hang report
                                        the PREVIOUS boot left in the RAM stash */
 #ifdef UNO_STORTEST
