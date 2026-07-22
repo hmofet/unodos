@@ -9,6 +9,10 @@ static u8 MYIP[4] = {10, 0, 2, 15};
 static u8 GW[4]   = {10, 0, 2, 2};
 static u8 MASK[4] = {255, 255, 255, 0};
 static u8 DNS[4]  = {10, 0, 2, 3};        /* resolver (SLIRP default; DHCP opt 6) */
+static int g_dhcp_ack_len, g_dhcp_had_dns, g_dhcp_had_rtr;   /* last-ACK diagnostics */
+int net_dhcp_ack_len(void)  { return g_dhcp_ack_len; }
+int net_dhcp_had_dns(void)  { return g_dhcp_had_dns; }
+int net_dhcp_had_rtr(void)  { return g_dhcp_had_rtr; }
 
 static uno_nic_t *g_nic;
 static u8 g_mac[6];
@@ -542,6 +546,13 @@ void dhcp_input(const u8 *udp, int len)
         memcpy(MYIP, boot + 16, 4);
         rtr = dhcp_opt(boot, blen, 3, &ol);  if (rtr && ol >= 4) memcpy(GW,  rtr, 4);
         dns = dhcp_opt(boot, blen, 6, &ol);  if (dns && ol >= 4) memcpy(DNS, dns, 4);
+        /* diag: on real hardware the DNS came back as the SLIRP default 10.0.2.3,
+         * i.e. option 6 wasn't applied. Record the ACK length + whether opts 3/6
+         * were present so a metal run says "router omitted opt 6" vs "our RX
+         * truncated the ACK before it" (a short blen = the AX88179 RX cut it). */
+        g_dhcp_ack_len = blen;
+        g_dhcp_had_dns = (dns && ol >= 4) ? 1 : 0;
+        g_dhcp_had_rtr = (rtr) ? 1 : 0;
         g_dhcp_state = 3;
     }
 }
