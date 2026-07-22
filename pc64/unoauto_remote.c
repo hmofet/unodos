@@ -26,6 +26,15 @@ void  uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
 int   pc64_stress_cfg_value(const char *key, char *buf, int cap);
 int   pc64_shell_py_exec(const char *src, char *out, int cap);   /* pc64_uui.c */
+/* A/B OS-update over the link: fs write + reboot (see REMOTE.md) */
+int   uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
+long  uno_fs_size(int vol, const char *name);
+int   uno_fs_writable(int vol);
+int   uno_fs_kind(int vol);
+int   uno_fs_volumes(void);
+const char *uno_fs_volume_name(int vol);
+void  uno_native_reset(void);
+int   uno_pc64_set_bootnext(unsigned int n);                     /* uefi_main.c */
 
 /* ---- tiny string builder (avoids snprintf; see the S-LIBC-06 history) ---- */
 typedef struct { char *p; int cap, len; } SB;
@@ -174,6 +183,47 @@ static int strcmp_(const char *a, const char *b)
     while (*a && *a == *b) { a++; b++; }
     return (unsigned char)*a - (unsigned char)*b;
 }
+static unsigned long parse_hex(const char *s)
+{
+    unsigned long v = 0;
+    if (!s) return 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    for (; *s; s++) {
+        int d;
+        if (*s >= '0' && *s <= '9') d = *s - '0';
+        else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+        else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+        else break;
+        v = (v << 4) | (unsigned long)d;
+    }
+    return v;
+}
+static int b64val(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+/* decode NUL-terminated base64 into out (cap bytes); bytes decoded, or -1.
+ * acc is UNSIGNED: the reservoir keeps shifting left, and a signed overflow
+ * there is UB (traps under UBSan as #UD - it bit the first long `put`). */
+static int b64_decode(const char *s, unsigned char *out, int cap)
+{
+    unsigned acc = 0; int nbits = 0, n = 0;
+    for (; *s; s++) {
+        int v;
+        if (*s == '=') break;
+        v = b64val(*s);
+        if (v < 0) return -1;
+        acc = (acc << 6) | (unsigned)v; nbits += 6;
+        if (nbits >= 8) { nbits -= 8; if (n >= cap) return -1;
+                          out[n++] = (unsigned char)((acc >> nbits) & 0xFF); }
+    }
+    return n;
+}
 
 /* ---- command dispatch ---------------------------------------------------- */
 static UnoAutoProbeEnt g_pe[64];
@@ -215,6 +265,97 @@ static void do_test(const char *id, char *suite)
     rsp(id, "end", 0);
 }
 
+/* ---- A/B OS-update: chunked file push + reboot ---------------------------
+ * `put` RAM-stages the whole file (base64 chunks at rising offsets), then a
+ * `put <vol> <path> done <total>` frame writes it to disk in ONE uno_fs_write
+ * and verifies the on-disk size - so a partial transfer never touches the
+ * target (stick A stays a valid fallback).  8 MB cap covers BOOTX64.EFI. */
+#define PUT_MAX (8 * 1024 * 1024)
+static unsigned char g_put[PUT_MAX];      /* debug-only staging buffer (.bss) */
+static long          g_put_len;
+static int           g_put_vol = -1;
+static char          g_put_path[80];
+static int           g_pending_reboot;
+
+static void do_put(const char *id, char *args)
+{
+    char *a_vol  = tok(&args);
+    char *a_path = tok(&args);
+    char *a3     = tok(&args);
+    char *a4     = tok(&args);
+    int vol;
+    char t[64]; SB b;
+    if (!a_vol || !a_path || !a3) {
+        rsp(id, "err", "usage: put <vol> <path> <off-hex|done> <chunk|total>");
+        rsp(id, "end", 0); return;
+    }
+    vol = (int)atol_(a_vol);
+
+    if (!strcmp_(a3, "done")) {                        /* finalize + verify */
+        long total = (long)parse_hex(a4);
+        long sz;
+        if (g_put_vol != vol || strcmp_(g_put_path, a_path) != 0) {
+            rsp(id, "err", "no-active-upload"); rsp(id, "end", 0); return;
+        }
+        if (g_put_len != total) {
+            sb_init(&b, t, sizeof t); sb_s(&b, "size-mismatch have="); sb_i(&b, g_put_len);
+            sb_s(&b, " want="); sb_i(&b, total); t[b.len] = 0;
+            rsp(id, "err", t); rsp(id, "end", 0); return;
+        }
+        if (!uno_fs_write(vol, g_put_path, g_put, g_put_len)) {
+            rsp(id, "err", "write-failed (vol read-only or full?)");
+            rsp(id, "end", 0); g_put_vol = -1; return;
+        }
+        sz = uno_fs_size(vol, g_put_path);
+        if (sz != total) {
+            sb_init(&b, t, sizeof t); sb_s(&b, "verify-mismatch disk="); sb_i(&b, sz); t[b.len] = 0;
+            rsp(id, "err", t); rsp(id, "end", 0); g_put_vol = -1; return;
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "verified "); sb_i(&b, total); t[b.len] = 0;
+        rsp(id, "ok", t); rsp(id, "end", 0);
+        g_put_vol = -1;                                /* session complete */
+        return;
+    }
+
+    {                                                  /* data chunk */
+        long off = (long)parse_hex(a3);
+        int n;
+        if (!a4) { rsp(id, "err", "missing-chunk"); rsp(id, "end", 0); return; }
+        if (off < 0 || off >= PUT_MAX) { rsp(id, "err", "offset-too-big"); rsp(id, "end", 0); return; }
+        if (off == 0) {                                /* (re)start a session */
+            int i = 0;
+            g_put_vol = vol; g_put_len = 0;
+            while (a_path[i] && i < (int)sizeof g_put_path - 1) { g_put_path[i] = a_path[i]; i++; }
+            g_put_path[i] = 0;
+        } else if (g_put_vol != vol || strcmp_(g_put_path, a_path) != 0) {
+            rsp(id, "err", "out-of-sequence (start at offset 0)"); rsp(id, "end", 0); return;
+        }
+        n = b64_decode(a4, g_put + off, (int)(PUT_MAX - off));
+        if (n < 0) { rsp(id, "err", "bad-base64-or-too-big"); rsp(id, "end", 0); return; }
+        if (off + n > g_put_len) g_put_len = off + n;
+        sb_init(&b, t, sizeof t); sb_i(&b, n); t[b.len] = 0;
+        rsp(id, "ok", t); rsp(id, "end", 0);
+    }
+}
+
+/* list volumes so the host knows which index is stick B: `vol kind writable name`
+ * (kind 0=RAM 1=native-FAT 2=firmware-SFS). */
+static void do_vols(const char *id)
+{
+    int n = uno_fs_volumes(), i;
+    for (i = 0; i < n; i++) {
+        char f[128]; SB b;
+        sb_init(&b, f, sizeof f);
+        sb_i(&b, i);                 sb_c(&b, ' ');
+        sb_i(&b, uno_fs_kind(i));    sb_c(&b, ' ');
+        sb_i(&b, uno_fs_writable(i)); sb_c(&b, ' ');
+        sb_s(&b, uno_fs_volume_name(i));
+        f[b.len] = 0;
+        rsp(id, "ok", f);
+    }
+    rsp(id, "end", 0);
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -253,6 +394,17 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     }
     if (!strcmp_(verb, "poweroff")) {
         g_pending_off = 1; rsp(id, "ok", "bye"); rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(verb, "reboot")) {
+        g_pending_reboot = 1; rsp(id, "ok", "bye"); rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(verb, "put"))  { do_put(id, args); return; }
+    if (!strcmp_(verb, "vols")) { do_vols(id); return; }
+    if (!strcmp_(verb, "bootnext")) {
+        int ok = uno_pc64_set_bootnext((unsigned)atol_(tok(&args)));
+        rsp(id, ok ? "ok" : "err",
+            ok ? "set" : "unavailable (detached / no runtime SetVariable)");
+        rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "test")) {
         do_test(id, tok(&args)); return;
@@ -387,6 +539,8 @@ void unoauto_remote_tick(void)
             g_state = RS_DOWN; g_deadline = g_tick + 300;
         } else if (g_pending_off && g_txlen == 0) {
             uno_pc64_shutdown();
+        } else if (g_pending_reboot && g_txlen == 0) {
+            uno_native_reset();                 /* never returns */
         }
         break;
     case RS_DOWN:

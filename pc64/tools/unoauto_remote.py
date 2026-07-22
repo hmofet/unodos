@@ -123,6 +123,42 @@ class UnoAutoLink:
     def poweroff(self, **k):           return self.command("poweroff", **k)
     def test(self, suite="", **k):     return self.command("test", suite, timeout=k.pop("timeout", 60.0), **k)
     def eval(self, src, **k):          return self.command("py", src, timeout=k.pop("timeout", 20.0), **k)
+    def reboot(self, **k):             return self.command("reboot", **k)
+    def bootnext(self, n, **k):        return self.command("bootnext", n, **k)
+
+    def vols(self, **k):
+        """List volumes: dicts of vol/kind/writable/name (kind 0=RAM 1=FAT 2=SFS)."""
+        out = []
+        for l in self.command("vols", **k):
+            p = l.split(None, 3)
+            if len(p) < 4:
+                continue
+            out.append({"vol": int(p[0]), "kind": int(p[1]),
+                        "writable": p[2] == "1", "name": p[3]})
+        return out
+
+    def push_file(self, vol, path, local_path, chunk=750, timeout=10.0, progress=None):
+        """A/B OS update: stream local_path to <vol>:<path> in `put` chunks, then
+        finalize+verify. Returns True iff the device reports `verified`. Raises on
+        any per-chunk error (the target is only written at finalize, so a failed
+        push never corrupts it)."""
+        import base64
+        with open(local_path, "rb") as f:
+            data = f.read()
+        total = len(data)
+        off = 0
+        while off < total:
+            piece = data[off:off + chunk]
+            b64 = base64.b64encode(piece).decode("ascii")
+            r = self.command("put", vol, path, format(off, "x"), b64, timeout=timeout)
+            if not r or int(r[0]) != len(piece):
+                raise RuntimeError("put failed at offset 0x%x: %r" % (off, r))
+            off += len(piece)
+            if progress:
+                progress(off, total)
+        r = self.command("put", vol, path, "done", format(total, "x"),
+                         timeout=max(timeout, 30.0))
+        return bool(r) and r[0].startswith("verified")
 
     # ---- receiving --------------------------------------------------------
     def _accept_loop(self):
@@ -216,16 +252,54 @@ def _cli(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--listen", default="0.0.0.0:5099",
                     help="bind address host:port (default 0.0.0.0:5099)")
+    ap.add_argument("--push", nargs=3, metavar=("VOL", "PATH", "LOCALFILE"),
+                    help="wait for pc64 to dial in, push LOCALFILE to <vol>:<path>, then exit")
+    ap.add_argument("--chunk", type=int, default=750, help="push chunk size (raw bytes)")
+    ap.add_argument("--bootnext", type=int, metavar="N",
+                    help="after --push, set BootNext=N (boot Boot#### N next reset)")
+    ap.add_argument("--reboot", action="store_true", help="after --push, reboot the target")
     a = ap.parse_args(argv)
     host, _, port = a.listen.rpartition(":")
     link = UnoAutoLink(host or "0.0.0.0", int(port))
+
+    if a.push:                                   # one-shot A/B OS-update flow
+        vol, path, localfile = a.push
+        link.listen()
+        print("waiting for pc64 to dial in on %s ..." % a.listen)
+        if not link.wait_connected(180):
+            print("FAIL: no connection"); link.close(); return 1
+        import os
+        size = os.path.getsize(localfile)
+        print("pushing %s (%d bytes) -> vol %s:%s" % (localfile, size, vol, path))
+        last = [0]
+        def prog(done, tot):
+            pct = done * 100 // tot
+            if pct != last[0]:
+                last[0] = pct
+                sys.stdout.write("\r  %d%% (%d/%d)" % (pct, done, tot)); sys.stdout.flush()
+        try:
+            ok = link.push_file(int(vol), path, localfile, chunk=a.chunk, progress=prog)
+        except Exception as e:  # noqa: BLE001
+            print("\nFAIL: " + str(e)); link.close(); return 1
+        print("\n%s" % ("verified" if ok else "FAIL: not verified"))
+        if ok and a.bootnext is not None:
+            try:
+                link.bootnext(a.bootnext); print("BootNext=%d set" % a.bootnext)
+            except Exception as e:  # noqa: BLE001
+                print("bootnext failed: " + str(e))
+        if ok and a.reboot:
+            print("rebooting target"); link.reboot()
+        link.close()
+        return 0 if ok else 1
+
     link.on_log(lambda ch, t: print("[%-7s] %s" % (ch, t)))
     link.on_message(lambda m: print("<msg> " + m))
     link.listen()
     print("unoauto_remote listening on %s. Set pc64 STRESS.CFG:" % a.listen)
     print("    remote=<this-machine-ip>:%s   (QEMU SLIRP guest: 10.0.2.2:%s)" % (port, port))
-    print("Type a command line to send (probe / launch 0 / py print(6*7) / uptime).")
-    print("Prefix /msg to send a free-form message. Ctrl-D to quit.\n")
+    print("Type a command line to send (probe / vols / launch 0 / py print(6*7) /")
+    print("  uptime / reboot / bootnext <n>). Prefix /msg for a free-form message.")
+    print("For an A/B OS push use: --push <vol> <path> <localfile> [--reboot]. Ctrl-D quits.\n")
     try:
         for raw in sys.stdin:
             cmd = raw.strip()

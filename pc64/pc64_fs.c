@@ -35,6 +35,7 @@ int  uno_efifs_snapshot(int vol, char (*names)[32], int maxn);
 long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max);
 long uno_efifs_read_at(int vol, const char *name, long off,
                        unsigned char *buf, long max);
+long uno_efifs_write(int vol, const char *name, const unsigned char *buf, long len);
 long uno_efifs_size(int vol, const char *name);
 unsigned int uno_efifs_serial(int vol);          /* BPB volume id, 0 unknown  */
 
@@ -175,13 +176,18 @@ int uno_fs_write(int vol, const char *name, const unsigned char *buf, long len)
     if (vol < 0 || vol >= g_nmap) return 0;
     if (g_map[vol].kind == KIND_RAM) return uno_ramfs_write(name, buf, len);
     if (g_map[vol].kind == KIND_FAT) return uno_fat_write(g_map[vol].idx, name, buf, len);
-    return 0;                                            /* firmware SFS: RO    */
+    /* firmware SFS: writable while boot services are live (dead after detach).
+     * This is how an ATTACHED machine writes its USB stick - the A/B OS-update
+     * path in the remote channel. */
+    if (fw_dead(vol)) return 0;
+    return uno_efifs_write(g_map[vol].idx, name, buf, len) ? 1 : 0;
 }
 
 int uno_fs_writable(int vol)
 {
     build_map();
     if (vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_FW) return !fw_dead(vol);   /* fw SFS: RW while attached */
     return g_map[vol].kind == KIND_RAM || g_map[vol].kind == KIND_FAT;
 }
 

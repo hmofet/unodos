@@ -13,10 +13,12 @@ from unoauto_remote import UnoAutoLink
 PORT = 5397
 
 
-def fake_pc64(ready):
+def fake_pc64(ready, result):
     """Connect to the listener and behave like the device end."""
+    import base64
     c = socket.create_connection(("127.0.0.1", PORT), timeout=5)
     f = c.makefile("rwb", buffering=0)
+    stage = bytearray()
 
     def send(s): f.write((s + "\n").encode())
 
@@ -39,6 +41,28 @@ def fake_pc64(ready):
             send("RSP %s err kaboom" % rid)
         elif verb == "py":
             send("RSP %s ok %s" % (rid, "42" if "6*7" in args else "?"))
+        elif verb == "vols":
+            send("RSP %s ok 0 0 1 RAM" % rid)
+            send("RSP %s ok 2 2 1 USB stick" % rid)   # kind 2 = firmware SFS
+        elif verb == "put":
+            p = args.split(" ", 3)
+            a3, a4 = p[2], (p[3] if len(p) > 3 else "")
+            if a3 == "done":
+                total = int(a4, 16)
+                if len(stage) == total:
+                    result["pushed"] = bytes(stage)
+                    send("RSP %s ok verified %d" % (rid, total))
+                else:
+                    send("RSP %s err size-mismatch" % rid)
+            else:
+                off = int(a3, 16)
+                raw = base64.b64decode(a4)
+                if off == 0:
+                    stage.clear()
+                if len(stage) < off + len(raw):
+                    stage.extend(b"\0" * (off + len(raw) - len(stage)))
+                stage[off:off + len(raw)] = raw
+                send("RSP %s ok %d" % (rid, len(raw)))
         else:
             send("RSP %s ok %s" % (rid, verb))
         send("RSP %s end" % rid)
@@ -64,7 +88,8 @@ def main():
     link.listen()
 
     ready = threading.Event()
-    threading.Thread(target=fake_pc64, args=(ready,), daemon=True).start()
+    result = {}
+    threading.Thread(target=fake_pc64, args=(ready, result), daemon=True).start()
     assert link.wait_connected(5), "no connection"
     assert ready.wait(5), "device didn't start"
     time.sleep(0.3)  # let the async LOG/MSG/CMD frames arrive
@@ -97,6 +122,24 @@ def main():
         check(False, "err response raises")
     except RuntimeError as e:
         check("kaboom" in str(e), "err response raises")
+
+    # host -> device: vols listing parsed (name may contain spaces)
+    vols = link.vols()
+    check(vols == [{"vol": 0, "kind": 0, "writable": True, "name": "RAM"},
+                   {"vol": 2, "kind": 2, "writable": True, "name": "USB stick"}],
+          "vols listing parsed")
+
+    # host -> device: push_file chunks + finalize + verify (the A/B path)
+    import tempfile, os
+    payload = bytes((i * 7 + 3) & 0xFF for i in range(1750))   # spans >1 chunk
+    tf = tempfile.NamedTemporaryFile(delete=False)
+    tf.write(payload); tf.close()
+    try:
+        verified = link.push_file(2, "EFI\\BOOT\\BOOTX64.EFI", tf.name, chunk=750)
+        check(verified, "push_file verified")
+        check(result.get("pushed") == payload, "pushed bytes match exactly")
+    finally:
+        os.unlink(tf.name)
 
     link.send("BYE")
     time.sleep(0.2)
