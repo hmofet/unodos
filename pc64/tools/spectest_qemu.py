@@ -100,7 +100,19 @@ def read_back():
 def main():
     build_disk()
     if not run():
-        print("FAIL: guest did not power off (hang?)"); return 1
+        # Salvage the evidence: SPECTEST.TXT flushes progressively (every few
+        # emit lines), so even a stalled guest leaves the trail that NAMES the
+        # check it died inside - a connectivity blip in a live check then
+        # reads as "stalled after S-AI-01", not as a whole-batch code hang.
+        txt = read_back()
+        if txt:
+            print(txt)
+            done = [l for l in txt.splitlines() if re.match(r'^\S+\s+(PASS|FAIL|SKIP)\b', l)]
+            print("FAIL: guest did not power off - stalled after %s"
+                  % (done[-1].split()[0] if done else "the header (no checks ran)"))
+        else:
+            print("FAIL: guest did not power off (hang?) - no SPECTEST.TXT salvageable")
+        return 1
     txt = read_back()
     if not txt:
         print("FAIL: no SPECTEST.TXT on the disk"); return 1

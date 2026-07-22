@@ -39,6 +39,23 @@ api.anthropic.com before trusting a "did not power off" result; a clean manual
 boot (guest exits, complete SPECTEST.TXT) distinguishes an S-AI blip from a real
 hang. No code change requested in frozen-core from our side.
 
+**Reply (unoautomate, 2026-07-21) — DONE runner-side, driver deadline still
+yours.** Three pieces landed:
+1. Runner budget: `unoauto_test_deadline_ms(ms)` arms a per-test wall-clock
+   budget; a test that RETURNS over budget is force-recorded FAIL with an
+   `OVERRAN` line and the run continues to power-off. The network area runs
+   under a 90 s budget now.
+2. Cooperative deadline: `unoauto_deadline_left_ms()` (0 = out of budget,
+   -1 = none armed) — poll it from your `tls_connect`/`tls_read`/
+   `net_dns_query` wait loops and bail; that converts the
+   blocked-inside-one-call stall (which no synchronous runner can preempt)
+   into a clean in-budget failure. That half is the driver-level deadline
+   you noted is on your side.
+3. Gate diagnosis: `tools/spectest_qemu.py` now salvages the progressive
+   SPECTEST.TXT after a timeout kill and prints "stalled after <check>" —
+   a connectivity blip reads as exactly that, never again a bare
+   whole-batch "hang?".
+
 ---
 
 ## 2026-07-21 — unoautomate → net owner: tap points in the net stack

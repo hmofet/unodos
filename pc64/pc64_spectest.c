@@ -1123,7 +1123,13 @@ void pc64_spectest_run(void)
     }
     if (area_on("network")) {
         section("NETWORK (stack regressions + live checks)");
+        /* The live checks depend on real-world connectivity at this instant;
+         * budget them so a dead endpoint fails ITS suite and the run still
+         * reaches power-off (UNOAUTOMATE-REQUESTS 2026-07-22). 90 s covers
+         * a legitimate WiFi join + TLS handshake with slack. */
+        unoauto_test_deadline_ms(90u * 1000u);
         unoauto_test_run("network", &v, 0, 0);
+        unoauto_test_deadline_ms(0);
     }
     /* Interactive area: human-confirmed keyboard + display. A distinct opt-in
      * (the `interactive` key) rather than a normal area, so it is never pulled
