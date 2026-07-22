@@ -69,6 +69,11 @@ class Peer:
         self.saw_syn = False             # guest opened a TCP connection to URC_PORT
         self.hello_seen = False          # guest sent a URC HELLO frame -> link up
         self.host_seq = 0x9000
+        # enough TCP bookkeeping to send a command back and read the reply
+        self.guest_ip_tcp = None         # guest IP on the URC connection
+        self.guest_sport = None          # guest ephemeral port
+        self.guest_ack = 0               # guest's next expected seq (= our snd ack)
+        self.urc_rx = b""                # accumulated inbound URC bytes (LOG/RSP/HELLO)
 
     def send(self, frame):
         if self.guest_tun:
@@ -95,12 +100,24 @@ class Peer:
         if (flags & 0x12) == 0x02:                      # SYN (no ACK): guest dialing us
             self.saw_syn = True
             self.host_seq = 0x9000
-            self.send_tcp(src_ip, sp, self.host_seq, seq + 1, 0x12)   # SYN,ACK
+            self.guest_ip_tcp, self.guest_sport = src_ip, sp
+            self.guest_ack = (seq + 1) & 0xFFFFFFFF
+            self.send_tcp(src_ip, sp, self.host_seq, self.guest_ack, 0x12)   # SYN,ACK
             self.host_seq += 1
         elif data:                                      # payload: ACK it, look for HELLO
-            self.send_tcp(src_ip, sp, self.host_seq, seq + len(data), 0x10)
+            self.guest_ack = (seq + len(data)) & 0xFFFFFFFF
+            self.send_tcp(src_ip, sp, self.host_seq, self.guest_ack, 0x10)
+            self.urc_rx += data
             if b"HELLO" in data:
                 self.hello_seen = True
+
+    def send_cmd(self, text):
+        """Send one URC command line over the established link (PSH,ACK)."""
+        if self.guest_ip_tcp is None: return
+        payload = (text + "\n").encode()
+        self.send_tcp(self.guest_ip_tcp, self.guest_sport, self.host_seq, self.guest_ack,
+                      0x18, payload)                     # PSH,ACK
+        self.host_seq = (self.host_seq + len(payload)) & 0xFFFFFFFF
 
     # -- ARP -----------------------------------------------------------------
     def arp(self, frame):
@@ -301,6 +318,33 @@ def main():
         # auto-dial: with no remote= key, the remote channel dials the DISCOVERED host
         check(peer.saw_syn, "remote channel auto-DIALED the discovered host (TCP SYN to :%d)" % URC_PORT)
         check(peer.hello_seen, "URC link came up (guest sent HELLO) - zero-config end to end")
+
+        # query the guest's discovery state back over the URC link (`disc` verb):
+        # prove the dev PC can ask "armed? host recorded? which host:port?".
+        disc = {}
+        if peer.hello_seen:
+            base = len(peer.urc_rx)
+            peer.send_cmd("CMD d1 disc")
+            qend = time.time() + 10
+            while time.time() < qend:
+                text = peer.urc_rx.decode("ascii", "replace")
+                for line in text.splitlines():
+                    p = line.split()
+                    if len(p) >= 3 and p[0] == "RSP" and p[1] == "d1":
+                        if p[2] == "ok" and len(p) >= 4 and "=" in p[3]:
+                            k, _, v = p[3].partition("=")
+                            disc[k] = v
+                        elif p[2] == "end":
+                            qend = 0
+                if qend == 0: break
+                time.sleep(0.2)
+            _ = base
+
+        want_host = "%s:%d" % HOST_URC
+        check(disc.get("active") == "1", "disc verb: discovery armed (active=1)", "got %r" % disc.get("active"))
+        check(disc.get("have_host") == "1", "disc verb: host recorded (have_host=1)", "got %r" % disc.get("have_host"))
+        check(disc.get("host") == want_host,
+              "disc verb: latched host:port matches our OFFER", "got %r want %r" % (disc.get("host"), want_host))
 
         print("\n>> " + ("netdisc discovery OK" if ok else "FAILURES ABOVE"))
         return 0 if ok else 1

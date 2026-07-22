@@ -708,6 +708,26 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         net_sock_close(sL);
         rsp(id, "end", 0); return;
     }
+    /* disc - report zero-config discovery state to the dev PC (query only). The
+     * discovery machinery is armed by the STRESS.CFG `discover` flag and pumped
+     * in netdisc_tick; this lets a host tool ask "is discovery armed, did pc64
+     * record my OFFER, and what host:port did it latch?" without watching the
+     * wire. link= echoes the remote-channel state (RS_UP=3 here, since we only
+     * dispatch on an established link). Driven by tools/netdisc_qemu.py. */
+    if (!strcmp_(verb, "disc")) {
+        char t[80]; SB b;
+        sb_init(&b, t, sizeof t); sb_s(&b, "active=");    sb_i(&b, netdisc_active());    t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "have_host="); sb_i(&b, netdisc_have_host()); t[b.len]=0; rsp(id,"ok",t);
+        if (netdisc_have_host()) {
+            const u8 *hip = netdisc_host_ip();
+            sb_init(&b, t, sizeof t); sb_s(&b, "host=");
+            sb_i(&b, hip[0]); sb_c(&b,'.'); sb_i(&b, hip[1]); sb_c(&b,'.');
+            sb_i(&b, hip[2]); sb_c(&b,'.'); sb_i(&b, hip[3]); sb_c(&b,':');
+            sb_i(&b, netdisc_host_port()); t[b.len]=0; rsp(id,"ok",t);
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "link=");       sb_i(&b, g_state);            t[b.len]=0; rsp(id,"ok",t);
+        rsp(id, "end", 0); return;
+    }
     if (!strcmp_(verb, "test")) {
         do_test(id, tok(&args)); return;
     }
