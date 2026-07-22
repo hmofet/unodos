@@ -1,89 +1,118 @@
-# Harness coexistence policy (WiFi/net agent) — effective 2026-07-21
+# unoautomate — contract & coexistence policy
 
-A second agent is refactoring the debug/test harness into **unoautomate** (a
-systemwide logging + automation subsystem) on branch `unoautomate`, worktree
-`Documents\Github\unodos-unoautomate`. The refactor will REPLACE the internals
-of the harness files you currently add diagnostics to. This policy keeps your
-WiFi/ethernet work mergeable with that refactor. It does not slow your driver
-work — it only changes HOW you touch shared files.
+**Owner.** One agent (the *unoautomate agent*) is responsible for **all**
+development on unoautomate — the systemwide logging / testing / probing /
+automation / remote-control subsystem — and for **this contract**: `unoauto.h`
+(the C API), `REMOTE.md` (the remote/URC wire protocol), this file, and the
+changelog below. Work lands on `master` from branch `unoautomate` (worktree
+`Documents\Github\unodos-unoautomate`).
+
+**Who this is for.** *Every* other agent working on UnoDOS pc64, whatever the
+task — a driver, an app, a subsystem, docs. unoautomate reaches into the shared
+debug/test harness and exposes an API you may build against. This policy is how
+your work and mine stay mergeable, and how you stay current with an interface
+that is **actively changing**.
+
+## 0. Stability: best-effort, NOT guaranteed — re-check the contract often
+
+unoautomate is under active development. I try to keep the interface stable,
+but **there is no guarantee, and breaking changes WILL happen** — new features,
+renamed or re-shaped calls, changed semantics, wire-protocol revisions. The
+contract is the single source of truth, and it moves:
+
+- **`unoauto.h`** is the C contract; **`REMOTE.md`** is the remote/URC wire
+  contract; the **changelog** at the bottom of this file records every change,
+  newest first, dated.
+- Items are tagged **`[STABLE]`** (I *intend* to keep the name/signature/
+  semantics, and will change one only reluctantly, with a deprecation wrapper
+  where practical) or **`[EXPERIMENTAL]`** (expect churn between rebases). Read
+  `[STABLE]` as "unlikely to break," never as "cannot break."
+- **Every breaking change bumps `UNOAUTO_API`** (in `unoauto.h`) and gets a
+  dated changelog entry. The URC protocol carries its own version in the
+  `HELLO` handshake.
+
+**Your standing rule: after any pull, re-read `unoauto.h` and this changelog
+before you build.** If `UNOAUTO_API` moved, assume something you rely on may
+have changed and read the entry — the compiler catches C signature breaks but
+NOT a semantic or wire-protocol change. Do not cache assumptions about
+unoautomate across a rebase.
+
+Need a capability, or hit a break you can't absorb? Append a dated note to
+**`UNOAUTOMATE-REQUESTS.md`** — I read it and act on it.
 
 ## 1. Territory
 
-**Yours — edit freely:**
-- Drivers: `iwlwifi.c/.h`, `mrvlwifi.*`, `ax88179.*`, `e1000*`, `igb.*`,
-  `net.c/.h`, `tls.c`, `pc64_http.*`
-- Driver docs/telemetry notes: `NETWORK.md`, `METAL-FINDINGS.md`,
-  `NEXT-ITERATION.md`, `CRASH\` analysis
+**Mine — don't edit; open a request instead:**
+- Core + remote: `unoauto.h/.c`, `unoauto_probe.c`, `unoauto_remote.h/.c`,
+  `upy_port/mod_unoauto.c`
+- Contract & docs: this file, `REMOTE.md`, `UNOAUTOMATE-REQUESTS.md`
+  (append new requests only — don't edit entries you didn't write)
+- Harness gates: `tools/remote_qemu.py`, `tools/remote_proto_test.py`,
+  `tools/automate_qemu.py`
+- The `unoautomate` branch and the `unodos-unoautomate` worktree
 
-**Frozen core — additive-only (rules in §2):**
+**Yours — edit freely:** whatever your task owns — your drivers, your app, your
+subsystem, your own docs and telemetry notes.
+
+**Frozen core — additive-only (rules in §2):** the shared debug/test harness
+unoautomate is built on and still wired through —
 - `pc64_nettest.c`, `pc64_spectest.c`, `pc64_stress.c`
 - `uno_debug.h`, `uno_debug.c`
-- `uefi_main.c` (the harness wiring parts), `pc64_uui.c` (debug-shell parts)
+- `uefi_main.c` (harness/wiring parts), `pc64_uui.c` (debug-shell parts)
 - `build.sh` (harness/test sections), `DEBUG.md`
 - `tools/spectest_qemu.py`, `nettest.py`, `nettest_stage.py`
 
-These files are being dissolved into unoautomate. Every structural edit you
-make to them is a guaranteed merge conflict against a moved/rewritten copy.
+A structural edit to a frozen-core file is a near-guaranteed conflict against a
+version I am moving or rewriting.
 
 ## 2. Rules for the frozen-core files
 
 1. **Append, never restructure.** Add new tests, trace calls, and diagnostics
    at the END of the relevant section or file. Do not rename, reorder, split,
    or move existing functions; do not reformat untouched code.
-2. **Go through the existing entry points only:** `uno_dbg_log`,
+2. **Go through the existing entry points** — `uno_dbg_log`,
    `uno_dbg_net_trace`, `uno_dbg_check`, `uno_dbg_note`, `UNO_ASSERT`,
-   `uno_dbg_progress`, and the existing suite tables in `pc64_spectest.c`.
+   `uno_dbg_progress`, the suite tables in `pc64_spectest.c` — **or, preferably,
+   the `unoauto_*` API** where it now covers your need (see §4).
 3. **No signature or semantic changes to anything declared in `uno_debug.h`.**
-   That header is the contract the refactor is being built against. Adding a
-   NEW declaration is allowed (append to the relevant section); changing or
-   removing an existing one is not.
+   Adding a NEW declaration is allowed (append to the relevant section);
+   changing or removing an existing one is not.
 4. **Need a genuinely new harness capability** (new report family, new sink,
-   new config key, new watchdog behavior)? Do NOT build it into the old core.
-   Append a dated entry to `pc64/UNOAUTOMATE-REQUESTS.md` (create it if
-   missing) describing what you need and why, use the closest existing
-   primitive as a stopgap, and move on. The unoautomate agent reads that file
-   and will provide it properly.
+   new config key, new watchdog behaviour, a new tap point, a new URC verb)? Do
+   NOT build it into the harness yourself. Append a dated entry to
+   `UNOAUTOMATE-REQUESTS.md` describing what you need and why, use the closest
+   existing primitive as a stopgap, and move on — I provide it properly.
 
-## 3. Commit hygiene (this is what makes the merge cheap)
+## 3. Commit hygiene (this is what keeps the merge cheap)
 
-1. **Never mix driver work and frozen-core edits in one commit.** One commit =
-   one territory. A `iwlwifi.c` fix and the spectest case that exercises it
-   are TWO commits (driver first, test second).
-2. Keep committing small and often to `master` in your own worktree, exactly
-   as you do now. Push after each landed milestone.
+1. **Never mix your-territory work and frozen-core edits in one commit.** One
+   commit = one territory. A driver fix and the spectest case that exercises it
+   are TWO commits (your file first, the test second).
+2. Commit small and often to `master` in your own worktree; push after each
+   landed milestone.
 3. Prefix frozen-core commits with `harness:` in the subject (e.g.
-   `harness: nettest - AX210 join-timeout diagnostic`). This lets the
-   refactor agent replay exactly those commits onto the new core.
+   `harness: nettest - <what> diagnostic`), so they are easy to replay.
 
-## 4. The checkpoint (one-time, you'll be told when)
+## 4. Registering diagnostics — target the `unoauto_*` API
 
-When the unoautomate seam lands on master you will be asked to:
-1. Finish/commit your current in-flight change (no half-done working tree).
-2. Pull master and rebuild.
-3. From then on, register diagnostics through the new `unoauto_*` API instead
-   of editing `pc64_nettest.c`/`pc64_spectest.c` internals. The old entry
-   points (`uno_dbg_net_trace` etc.) keep working — they become thin wrappers
-   — so nothing you wrote before the checkpoint breaks.
+The harness refactor has landed: LOG / TEST / PROBE / HOOK / DRIVE and the
+remote channel are live. New diagnostics and automation should go through the
+`unoauto_*` API — `unoauto_log`, `unoauto_sink_add`, `unoauto_test_register` /
+`unoauto_test_run`, `unoauto_probe`, `unoauto_hook_*` — rather than editing
+harness internals. The legacy `uno_dbg_*` entry points still work as thin
+wrappers, so older code keeps compiling; but target `unoauto_*` for new work,
+since that is where the capability (and the churn — see §0) now lives.
 
 ## 5. Hands off
 
-- Do not touch the `unoautomate` branch or the `unodos-unoautomate` worktree.
-- Do not edit this file or `UNOAUTOMATE-REQUESTS.md` entries you didn't write
+- Don't touch my files, branch, or worktree (§1).
+- Don't edit this policy, or `UNOAUTOMATE-REQUESTS.md` entries you didn't write
   (appending new requests is the point of that file).
 
-## 6. The API contract (what unoautomate promises YOU)
-
-`unoauto.h` is the contract. Sections are marked `[STABLE]` (LOG, TEST, the
-legacy `uno_dbg_*` wrappers: names/signatures/semantics frozen) or
-`[EXPERIMENTAL]` (PROBE/HOOK/DRIVE: may change between rebases; re-read the
-header after every pull before relying on one). A breaking change to a
-STABLE item always ships the old name as a deprecated wrapper for one
-transition window, bumps `UNOAUTO_API`, and gets a dated entry in the
-changelog below - so your tree keeps compiling across any rebase, and the
-compiler catches anything that slipped. **Your rule: after a pull, if
-`UNOAUTO_API` moved, read the changelog before building.**
-
 ## API changelog
+
+Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
+the entry before building (§0).
 
 - **2026-07-22 - (no bump, bugfix)**: fixed the `put` finalize hang on a large
   file (A/B kernel push). **Shared-OS change:** `fat.c fat_alloc` now uses a
