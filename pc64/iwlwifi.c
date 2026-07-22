@@ -600,6 +600,24 @@ static int force_power_gating(void)
     return 0;
 }
 
+/* Linux stop_device parity (round 5). Every real Linux firmware load runs
+ * AFTER iwl_trans_pcie_stop_device tore the device down: interrupts off,
+ * bus-master DMA stopped (STOP_MASTER + poll MASTER_DISABLED), INIT_DONE
+ * cleared, then the sw reset. We had only ever reset from whatever state the
+ * BIOS/CSME left the CNVi MAC in - a ROM that ignores the load kick because
+ * the MAC never went through a clean stop matches every round-1..4 symptom
+ * (all writes land, no error bits, LOAD_STATUS never moves). */
+static void device_stop(void)
+{
+    w32(CSR_INT_MASK, 0);
+    w32(CSR_INT, 0xFFFFFFFFu);
+    set_bit_(CSR_RESET, CSR_RESET_STOP_MASTER);
+    poll_bit(CSR_RESET, CSR_RESET_MASTER_DISABLED, CSR_RESET_MASTER_DISABLED, 100);
+    uno_dbg_net_trace("wifi: device_stop: RESET=%08x after master-stop", r32(CSR_RESET));
+    clr_bit_(CSR_GP_CNTRL, GP_CNTRL_INIT_DONE);
+    sw_reset();                      /* includes the ownership retake */
+}
+
 static int apm_init(void)
 {
     set_bit_(CSR_GIO_CHICKEN_BITS, GIO_CHICKEN_L1A_NO_L0S_RX);
@@ -1156,6 +1174,49 @@ static void place_fw_dram(struct ci_dram *dram)
 static u64 g_ci_phys, g_ci_dram0;
 static u32 g_fh_seen;      /* FH_INT bits latched in the ~200ms after the kick */
 
+/* MSI-to-RAM probe (round 5): enable the PCI MSI capability with the message
+ * address pointed at a RAM scratch dword. An MSI is just a DMA write - if the
+ * device (boot ROM or fw) EVER tries to signal an interrupt, the 0x4D51 magic
+ * lands in the scratch, giving us a visible device-initiated bus-master write.
+ * It also makes the interrupt config coherent with UREG_CHICK=MSI: Linux
+ * always has MSI or MSI-X enabled in config space before a load; we ran pure
+ * INTx. Harmless in our polled world (the "interrupt" is a plain RAM write). */
+static volatile u32 *g_msi_scratch;
+static int pci_find_cap(const pci_dev *d, u8 want)
+{
+    int pos;
+    if (!(pci_cfg_read16(d, 0x06) & 0x10)) return 0;    /* no cap list */
+    pos = pci_cfg_read16(d, 0x34) & 0xFC;
+    while (pos) {
+        u16 hdr = pci_cfg_read16(d, pos);               /* id | next<<8 */
+        if ((hdr & 0xFF) == want) return pos;
+        pos = (hdr >> 8) & 0xFC;
+    }
+    return 0;
+}
+static void msi_probe_enable(void)
+{
+    int pos = pci_find_cap(&g_pci, 0x05);
+    u16 ctl;
+    u64 pa;
+    if (!pos) { uno_dbg_net_trace("wifi: no MSI capability on the function"); return; }
+    g_msi_scratch = (volatile u32 *)arena_alloc(64);
+    if (!g_msi_scratch) return;
+    *g_msi_scratch = 0;
+    pa = phys((const void *)g_msi_scratch);
+    ctl = pci_cfg_read16(&g_pci, pos + 2);
+    pci_cfg_write32(&g_pci, pos + 4, (u32)pa);
+    if (ctl & 0x80) {                                   /* 64-bit MSI */
+        pci_cfg_write32(&g_pci, pos + 8, (u32)(pa >> 32));
+        pci_cfg_write16(&g_pci, pos + 12, 0x4D51);
+    } else {
+        pci_cfg_write16(&g_pci, pos + 8, 0x4D51);
+    }
+    pci_cfg_write16(&g_pci, pos + 2, (u16)((ctl & ~0x70) | 1));  /* enable, 1 vector */
+    uno_dbg_net_trace("wifi: MSI probe armed (cap@%02x ctl=%04x scratch=%08x%08x)",
+                      pos, ctl, (u32)(pa >> 32), (u32)pa);
+}
+
 static int load_fw_gen2(void)
 {
     struct context_info *ci = arena_alloc(sizeof *ci);
@@ -1364,6 +1425,8 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   HW_IF=%08x HPM_DEBUG=%08x HPM_HIPM=%08x HPM_UMAC_LTR=%08x grab_fail=%d",
                           r32(CSR_HW_IF_CONFIG_REG), prph_r(HPM_DEBUG),
                           prph_r(HPM_HIPM_GEN_CFG), prph_r(HPM_UMAC_LTR), g_grab_fail);
+        uno_dbg_net_trace("wifi:   msi_scratch=%08x (00004d51 = the device fired an interrupt)",
+                          g_msi_scratch ? *g_msi_scratch : 0xDEADC0DE);
         /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
          * not equal what we wrote, the CSR write path (not the fw) is the fault.
          * And confirm the fw sections were placed (dram0 != 0) - a zero there
@@ -1904,6 +1967,7 @@ uno_nic_t *iwl_nic(void)
         uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
         return 0;
     }
+    device_stop();                   /* Linux loads always stop the device first */
     clear_persistence_bit();         /* BEFORE the reset (Linux start_hw order) */
     sw_reset();                      /* now retakes ownership afterwards */
     if (g_family == FAM_22000 && g_devid != 0x2723) {   /* integrated CNVi (all AX201s) */
@@ -1943,6 +2007,7 @@ uno_nic_t *iwl_nic(void)
     uno_dbg_net_trace("wifi: DMA arena base=%08x%08x (%s 4GB)",
                       (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
                       g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
+    msi_probe_enable();
 
     /* load firmware + wait ALIVE */
     if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
