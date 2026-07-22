@@ -10,6 +10,7 @@
 #include "unoauto_remote.h"
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
 #include "pc64_http.h"      /* pc64_net_up */
+#include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
 
 #ifdef UNO_DEBUG
 
@@ -400,6 +401,14 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     }
     if (!strcmp_(verb, "put"))  { do_put(id, args); return; }
     if (!strcmp_(verb, "vols")) { do_vols(id); return; }
+    /* iwl <subcmd...> - live Intel-WiFi register/bring-up debug (F12). See
+     * iwlwifi.h iwl_dbg_cmd: csr/csw/prr/prw/rerun/status. Additive pass-through
+     * per the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md. */
+    if (!strcmp_(verb, "iwl")) {
+        int n = iwl_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (csr/csw/prr/prw/rerun/status)");
+        rsp(id, "end", 0); return;
+    }
     if (!strcmp_(verb, "bootnext")) {
         int ok = uno_pc64_set_bootnext((unsigned)atol_(tok(&args)));
         rsp(id, ok ? "ok" : "err",
