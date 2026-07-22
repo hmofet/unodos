@@ -40,9 +40,18 @@ static const struct nicent g_wifi[] = {
  * before DHCP. ~3 s covers autoneg. */
 static int net_dhcp_after_link(uno_nic_t *nic)
 {
-    if (nic->link) { int i; for (i = 0; i < 600 && !nic->link(nic->ctx); i++) uno_pc64_delay_ms(5); }
-    net_dhcp_start();
-    { int i; for (i = 0; i < 400 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); } }
+    int t, i;
+    if (nic->link) { for (i = 0; i < 600 && !nic->link(nic->ctx); i++) uno_pc64_delay_ms(5); }
+    /* Retransmit DISCOVER. The DHCP client sends ONE DISCOVER per net_dhcp_start
+     * and never re-sends on its own, so a single lost DISCOVER/OFFER stalls the
+     * whole exchange. The boot eth TEST hid this by polling for 12 s off a lease
+     * that usually landed on the first try; this shared path used to fire once
+     * and wait 2 s, so an unlucky drop after net_init left "link up, no lease"
+     * (the amber LAN chip). Re-send every ~1.5 s for up to ~9 s. */
+    for (t = 0; t < 6 && !net_dhcp_done(); t++) {
+        net_dhcp_start();
+        for (i = 0; i < 300 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); }
+    }
     return 1;
 }
 

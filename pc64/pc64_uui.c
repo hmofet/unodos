@@ -524,8 +524,11 @@ static void fmt_net(void)
         p = ap_str(p, "link up, IP ");
         p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
         p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]);
-    } else
-        p = ap_str(p, "link up, NO DHCP lease");
+    } else {
+        p = ap_str(p, "link up, NO DHCP lease (tx ");
+        p = ap_int(p, (int)net_tx_frames()); p = ap_str(p, " rx ");
+        p = ap_int(p, (int)net_rx_frames()); *p++ = ')';
+    }
     *p = 0;
 }
 
