@@ -91,6 +91,7 @@ unchanged.
 | `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
 | `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12) — `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
 | `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
+| `disc` | query zero-config discovery state (netdisc) — is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
