@@ -14,6 +14,16 @@ int net_dhcp_ack_len(void)  { return g_dhcp_ack_len; }
 int net_dhcp_had_dns(void)  { return g_dhcp_had_dns; }
 int net_dhcp_had_rtr(void)  { return g_dhcp_had_rtr; }
 
+/* last-net_dns_query diagnostics: queries sent, datagrams that reached our
+ * port, txid rejects, negative (an=0) responses. Splits "no reply ever
+ * arrived" (TX side / router policy) from "replies arrived but were
+ * rejected/negative" (parse / cold-cache) on metal. */
+static int g_dns_sent, g_dns_rx, g_dns_badid, g_dns_neg;
+int net_dns_sent(void)  { return g_dns_sent; }
+int net_dns_rx(void)    { return g_dns_rx; }
+int net_dns_badid(void) { return g_dns_badid; }
+int net_dns_neg(void)   { return g_dns_neg; }
+
 static uno_nic_t *g_nic;
 static u8 g_mac[6];
 static u32 g_ticks;
@@ -638,20 +648,33 @@ int net_dns_query(const char *host, u8 out[4])
     ql = dns_name(q + qn, host); if (ql < 0) return 0; qn += ql;
     q[qn++]=0; q[qn++]=1;                       /* QTYPE  A  */
     q[qn++]=0; q[qn++]=1;                       /* QCLASS IN */
+    g_dns_sent = g_dns_rx = g_dns_badid = g_dns_neg = 0;
     for (tries = 0; tries < 4; tries++) {       /* (re)send, then wait */
         int waited;
+        /* back off before a retry: a home-router forwarder that answered the
+         * previous try negatively (cold cache, recursion still running
+         * upstream) needs a beat before it can answer positively. */
+        if (tries) uno_pc64_delay_ms(300);
         net_udp_send(DNS, 53, sport, q, qn);
+        g_dns_sent++;
         for (waited = 0; waited < 120; waited++) {
             u8 r[512]; u8 src[4]; u16 sp; int n, i, qd, an;
             net_poll(); uno_pc64_delay_ms(8);
             n = net_udp_recv(sport, r, sizeof r, src, &sp);
             if (n < 12) continue;
-            if (r[0] != 0x51 || r[1] != 0x53) continue;   /* S-NET-19: match our
+            g_dns_rx++;
+            if (r[0] != 0x51 || r[1] != 0x53) { g_dns_badid++; continue; }
+                                                          /* S-NET-19: match our
                                                              transaction id, else
                                                              a stray/forged reply
                                                              is accepted as ours */
             qd = (r[4]<<8)|r[5]; an = (r[6]<<8)|r[7];
-            if (an < 1) return 0;
+            /* a no-answer response (SERVFAIL/NXDOMAIN/empty) used to hard-fail
+             * the WHOLE query here, killing the remaining retries. Cold-cache
+             * forwarders commonly answer SERVFAIL instantly while upstream
+             * recursion completes - break to the next try instead. (QEMU never
+             * showed this: SLIRP proxies to the host's warm resolver.) */
+            if (an < 1) { g_dns_neg++; break; }
             i = 12;
             for (; qd > 0; qd--) {               /* skip questions */
                 while (i < n && r[i]) { if ((r[i]&0xC0)==0xC0){ i++; break; } i += r[i]+1; }
@@ -661,14 +684,14 @@ int net_dns_query(const char *host, u8 out[4])
                 u16 type, rdl;
                 if ((r[i]&0xC0)==0xC0) i += 2;   /* compressed name */
                 else { while (i < n && r[i]) i += r[i]+1; i++; }
-                if (i + 10 > n) return 0;         /* name walk ran off the buffer */
+                if (i + 10 > n) { an = 0; break; } /* name walk ran off the buffer */
                 type = (r[i]<<8)|r[i+1];
                 rdl  = (r[i+8]<<8)|r[i+9];
                 i += 10;
                 if (type == 1 && rdl == 4 && i + 4 <= n) { memcpy(out, r + i, 4); return 1; }
                 i += rdl;
             }
-            return 0;
+            break;                               /* parsed but no A record: retry */
         }
     }
     return 0;

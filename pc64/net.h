@@ -29,6 +29,10 @@ int  net_dhcp_had_rtr(void);         /* 1 if the ACK carried opt 3 (router) */
 /* DNS: resolve an A record. 1 = out[4] set, 0 = failed/timeout. Synchronous
  * (pumps net_poll internally); call after the link + DHCP are up. */
 int  net_dns_query(const char *host, u8 out[4]);
+int  net_dns_sent(void);             /* last-query diag: queries transmitted */
+int  net_dns_rx(void);               /* last-query diag: datagrams reaching our port */
+int  net_dns_badid(void);            /* last-query diag: txid rejects */
+int  net_dns_neg(void);              /* last-query diag: negative (an=0) responses */
 
 /* ARP */
 int  net_arp_resolve(const u8 ip[4], u8 mac_out[6]);   /* 1=known (else kicks req) */
