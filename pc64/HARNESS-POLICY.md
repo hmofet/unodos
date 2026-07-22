@@ -85,6 +85,12 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-21 - (no bump, EXPERIMENTAL)**: HOOK is live. Tap points:
+  `libc.malloc` (injectable via `UnoAutoAllocEv.fail`), `fs.read`,
+  `fs.write`, `mod.load`, `mod.unload`. Payload structs are outside the
+  `UNO_DEBUG` gate; production fires compile away. `net.tx`/`net.rx` taps
+  are requested from you in `UNOAUTOMATE-REQUESTS.md` - your files, your
+  commit, no urgency.
 - **2026-07-21 - (no bump, EXPERIMENTAL)**: `UnoAutoProbeEnt` redesigned -
   kind-specific `v1`/`v2` detail fields replace `busy_cyc`; row schema
   documented in `unoauto.h`. PROBE is implemented now (`unoauto_probe.c`):
