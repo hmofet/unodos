@@ -321,6 +321,31 @@ static void run_test(void)
         uno_dbg_net_trace("== net test done: WIRED %s ==", ok ? "PASS" : "FAIL"); } }
 }
 
+void uno_pc64_shutdown(void);            /* platform: power off (marks clean) */
+
+/* End the one-shot test phase: hand the progress banner back, then power the
+ * machine off IF this is an unattended/headless test stick that asked for it.
+ * That auto-poweroff used to be a side effect of the stress driver's `passes=N`
+ * run; the stress driver was removed, so the one-shot spec/net path owns it now
+ * - without this a QEMU harness (which sets `passes=1`) would boot, run the
+ * suites, and hang forever waiting for a power-off that never came.
+ *   poweroff        explicit "shut down when the suites finish"
+ *   passes= / once  legacy poweroff signal (older harness/flasher configs)
+ *   noshutdown      veto - leave the desktop up (operator-present metal runs)
+ * A stick with no STRESS.CFG (all flags < 0) never powers off - a normal boot. */
+static void nettest_finish(void)
+{
+    uno_dbg_progress_done();
+    if (pc64_stress_cfg_flag("noshutdown") <= 0 &&
+        (pc64_stress_cfg_flag("poweroff") > 0 ||
+         pc64_stress_cfg_flag("passes")   > 0 ||
+         pc64_stress_cfg_flag("once")     > 0)) {
+        uno_dbg_log("nettest: one-shot suites done - powering off");
+        uno_dbg_write_bootlog();         /* final kernel-log flush while FS alive */
+        uno_pc64_shutdown();             /* marks clean + powers off; no return */
+    }
+}
+
 void pc64_nettest_tick(void)
 {
     static int done, frames;
@@ -345,10 +370,10 @@ void pc64_nettest_tick(void)
     flag = pc64_stress_cfg_flag("nonet");
     if (flag < 0) { uno_dbg_progress_done(); return; }   /* not a test stick */
     if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)");
-                    uno_dbg_progress_done(); return; }
+                    nettest_finish(); return; }          /* spec-only stick still powers off */
     g_active = 1;
     run_test();
     flush();
     g_active = 0;
-    uno_dbg_progress_done();             /* hand the banner strip back */
+    nettest_finish();                    /* banner back, then power off if asked */
 }

@@ -25,8 +25,12 @@ def build_disk():
     # since build.sh only recreated the default when the file was absent, the
     # dev-run config rode onto every image the flasher shipped afterwards.
     cfg = os.path.join(os.path.dirname(DISK), "spectest_stress.cfg")
+    # `poweroff` = shut the guest down when the one-shot suites finish, so this
+    # harness ends deterministically. (Was `passes=1`, which relied on the
+    # now-removed stress driver's auto-shutdown; the one-shot spec/net path
+    # honours `poweroff` directly - see pc64_nettest.c nettest_finish.)
     with open(cfg, "w", newline="\r\n") as f:
-        f.write("passes=1\nspec\nnonet\n")
+        f.write("poweroff\nspec\nnonet\n")
     disk_sectors = 96 * 2048
     with open(DISK, "wb") as f: f.truncate(disk_sectors * SECTOR)
     sh(["sgdisk", "--zap-all", DISK], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

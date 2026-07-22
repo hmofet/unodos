@@ -456,8 +456,24 @@ void pc64_stress_stop(void)
     uno_dbg_log("stress: STOPPED by operator (F12) after %d pass(es)", g_pass);
 }
 
+/* REMOVED 2026-07-21 (user request): the continuous fuzz driver is disconnected
+ * from the boot path. Reported repeatedly as "runs even when turned off / loops
+ * forever" - and on the last Yoga run it ran despite STRESS.CFG correctly
+ * containing `nostress` (the config path clearly has a bug we have not yet
+ * root-caused). Rather than trust the config gate, the driver is hard-disabled
+ * here AND its call site in pc64_uui.c is commented out, so no STRESS.CFG value
+ * and no parse bug can start it. The one-shot conformance (pc64_spectest_run)
+ * and network (pc64_nettest) suites are a SEPARATE path (pc64_nettest_tick) and
+ * are unaffected. To bring the fuzz driver back, delete this guard, restore the
+ * call in pc64_uui.c, and first fix why `nostress` was ignored. */
 void pc64_stress_tick(void)
 {
+    /* Hard-disabled (see banner above). Early-return leaves the rest of the body
+     * compiled and referenced (no unused-static warnings), just never reached. */
+    { static int said;
+      if (!said) { said = 1; uno_dbg_log("stress: fuzz driver REMOVED (disabled at source)"); }
+      return; }
+
     if (g_shutdown_at) {                /* a completed run is powering off */
         if (uno_dbg_uptime_ms() < g_shutdown_at) return;
         uno_dbg_log("stress: shutting down now");
