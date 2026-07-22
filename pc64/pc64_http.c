@@ -18,35 +18,63 @@ void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
 /* ---- shared network bring-up (idempotent) -------------------------------- */
 static int g_net_inited;
 
-int pc64_net_up(void)
+struct nicent { uno_nic_t *(*n)(void); const unsigned char *(*m)(void); };
+/* wired NICs are cheap to probe; the WiFi entries run a full multi-second
+ * bring-up ON PROBE, so they are a separate tier reached only if no wired NIC
+ * exists at all. */
+static const struct nicent g_wired[] = {
+    { e1000_nic, e1000_mac },   /* native PCI (82540/82545)      */
+    { e1000e_nic, e1000e_mac }, /* Intel e1000e (82574 / I219)   */
+    { igb_nic, igb_mac },       /* Intel igb (I210/I211/82576)   */
+    { r8169_nic, r8169_mac },   /* Realtek RTL8168/8111          */
+    { ax88179_nic, ax88179_mac },/* USB Ethernet (ASIX)          */
+    { rtl8152_nic, rtl8152_mac },/* USB Ethernet (Realtek dock)  */
+};
+static const struct nicent g_wifi[] = {
+    { iwl_nic, iwl_mac }, { rtwifi_nic, rtwifi_mac }, { mrvlwifi_nic, mrvlwifi_mac },
+};
+
+/* run DHCP on the already-net_init'd nic, waiting for link first. USB ethernet
+ * (ax88179/rtl8152) programs the MAC medium from the PHY's negotiated status
+ * inside nic->link(), and a wrong medium silently kills RX, so link MUST be up
+ * before DHCP. ~3 s covers autoneg. */
+static int net_dhcp_after_link(uno_nic_t *nic)
 {
-    uno_nic_t *nic;
-    const unsigned char *mac;
-    if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
-    nic = e1000_nic(); mac = e1000_mac();       /* native PCI NIC first (82540/82545) */
-    if (!nic) { nic = e1000e_nic(); mac = e1000e_mac(); }     /* Intel e1000e (82574/I219) */
-    if (!nic) { nic = igb_nic();    mac = igb_mac();    }     /* Intel igb (I210/I211/82576) */
-    if (!nic) { nic = r8169_nic();  mac = r8169_mac();  }     /* Realtek RTL8168/8111 */
-    if (!nic) { nic = ax88179_nic(); mac = ax88179_mac(); }   /* USB Ethernet (ASIX) */
-    if (!nic) { nic = rtl8152_nic(); mac = rtl8152_mac(); }   /* USB Ethernet (Realtek dock) */
-    if (!nic) { nic = iwl_nic();     mac = iwl_mac();     }   /* Intel WiFi (needs firmware + WIFI.CFG) */
-    if (!nic) { nic = rtwifi_nic();  mac = rtwifi_mac();  }   /* Realtek PCIe WiFi */
-    if (!nic) { nic = mrvlwifi_nic();mac = mrvlwifi_mac();}   /* Marvell/NXP PCIe WiFi */
-    if (!nic) return 0;                          /* no NIC at all */
-    net_init(nic, mac);
-    g_net_inited = 1;
-    /* Wait for link BEFORE DHCP. Critical for USB ethernet: ax88179/rtl8152
-     * program the MAC medium (speed/duplex + the gigabit RX clock) from the
-     * PHY's negotiated status inside their nic->link() callback, and a wrong
-     * medium silently kills RX. The boot net TEST polls link() in a loop, but
-     * this shared path (Browser / AI / the unoauto remote link) used to fire
-     * DHCP immediately - so on a machine reached via USB ethernet, or whenever
-     * the eth test was skipped (net-force-wifi), DHCP got no replies and the
-     * link never came up. ~3 s is plenty for USB-eth autoneg. */
     if (nic->link) { int i; for (i = 0; i < 600 && !nic->link(nic->ctx); i++) uno_pc64_delay_ms(5); }
     net_dhcp_start();
     { int i; for (i = 0; i < 400 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); } }
     return 1;
+}
+
+int pc64_net_up(void)
+{
+    uno_nic_t *nic, *fb = 0;
+    const unsigned char *fbmac = 0;
+    int i, nw = (int)(sizeof g_wired / sizeof g_wired[0]);
+    if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
+
+    /* Pass 1: a WIRED NIC that reports link up wins. This is the fix for a
+     * machine with a cableless onboard Intel port (e.g. the X13 Yoga's I219
+     * 0x0d4f, claimed by e1000e) sitting IN FRONT of the USB dongle that
+     * actually has the cable - committing to the linkless onboard port left
+     * the net stack "bound, no link" and the remote link never dialed. */
+    for (i = 0; i < nw; i++) {
+        nic = g_wired[i].n(); if (!nic) continue;
+        if (!fb) { fb = nic; fbmac = g_wired[i].m(); }   /* first bound = fallback */
+        if (nic->link && nic->link(nic->ctx)) {          /* has a cable */
+            net_init(nic, g_wired[i].m()); g_net_inited = 1;
+            return net_dhcp_after_link(nic);
+        }
+    }
+    /* Pass 2: a wired NIC bound but none had link yet - use the first and wait
+     * for autoneg (a cable that just needs a moment). */
+    if (fb) { net_init(fb, fbmac); g_net_inited = 1; return net_dhcp_after_link(fb); }
+    /* Pass 3: no wired NIC at all - fall back to WiFi (expensive bring-up). */
+    for (i = 0; i < (int)(sizeof g_wifi / sizeof g_wifi[0]); i++) {
+        nic = g_wifi[i].n();
+        if (nic) { net_init(nic, g_wifi[i].m()); g_net_inited = 1; return net_dhcp_after_link(nic); }
+    }
+    return 0;                                    /* no NIC at all */
 }
 
 /* ---- tiny helpers -------------------------------------------------------- */
