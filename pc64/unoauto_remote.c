@@ -66,8 +66,10 @@ static char     g_tx[8192];
 static int      g_txlen;
 static unsigned g_tx_dropped;
 
-/* inbound line assembly */
-static char     g_rx[2048];
+/* inbound line assembly. 4 KB so a `put` frame can carry a big base64 chunk
+ * (fewer synchronous round-trips = faster multi-MB pushes); still well inside
+ * the 8 KB TCP rxq. */
+static char     g_rx[4096];
 static int      g_rxlen;
 
 /* inbound MSG queue handed to Python via unoauto_remote_recv */

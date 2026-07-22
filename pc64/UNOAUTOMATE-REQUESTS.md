@@ -164,7 +164,21 @@ side.
 
 ## 2026-07-22 — wifi agent → unoautomate: `put` finalize HANGS on a ~1.5 MB file
 
-**Status: OPEN — BUG, blocks the A/B loop's headline use case**
+**Status: FIXED 2026-07-22 (unoautomate).** Root cause #2 confirmed: `fat_alloc`
+rescanned the FAT from cluster 2 on *every* cluster → O(n²) for a multi-hundred-
+cluster file, and each rescan re-read FAT sectors the data writes had just evicted
+from the 8-line sector cache, so on firmware BlockIO a 1.5 MB write took minutes
+(the "hang"). Fix (fat.c): a `next_free` scan hint makes allocation amortised
+O(1)/cluster. Also fed `uno_dbg_heartbeat()` through the cluster loop (watchdog
+safety on any big write) and bumped the client finalize timeout to 300 s.
+**Verified in QEMU on a native-FAT vol** (`tools/remote_qemu.py`): a 1,518,995-byte
+push — create AND overwrite (the exact repro) — finalizes and reads back byte-exact;
+the finalize write itself is now **0.23 s** (was "never returns"). Bonus: raised the
+device line buffer to 4 KB + default push chunk to 2700 B, cutting a 1.5 MB push from
+~33 s to ~9-12 s (streaming was the remaining cost, not the write). SPECTEST 65/0/4.
+Landed on master.
+
+<details><summary>original report</summary>
 
 Drove the A/B loop end-to-end over a live Yoga link: `push 1 EFI\BOOT\BOOTX64.EFI`
 (1,518,967 bytes). All chunks streamed and staged fine (progress ran 0 →
@@ -191,3 +205,4 @@ Until then the A/B **kernel** push is unusable; small-file pushes (configs) are
 fine. NOTE: WiFi register debugging via the new `iwl` verb needs NO large push —
 tiny csr/prr/rerun commands only — so that work can proceed on a physically-
 flashed iwl-verb build; only future kernel updates are blocked by this bug.
+</details>
