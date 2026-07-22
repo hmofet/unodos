@@ -84,6 +84,27 @@ static int fw_write(uno_bdev *d, unsigned long long lba, unsigned int n, const v
     return b->WriteBlocks(b, b->Media->MediaId, lba, (UINTN)n * 512, (void *)buf) == EFI_SUCCESS;
 }
 
+void *uno_pc64_boot_dp(void);       /* uefi_main.c: boot partition device path */
+
+/* byte length of a device path up to (not including) its END node */
+static int dp_bytelen(const unsigned char *dp)
+{
+    int total = 0, guard = 64;
+    while (dp && guard-- > 0 && dp[0] != 0x7F) {
+        int l = (int)dp[2] | ((int)dp[3] << 8);
+        if (l < 4) return -1;
+        total += l; dp += l;
+    }
+    return total;
+}
+/* 1 if whole-disk path `pre` is a node-prefix of boot partition path `full` */
+static int dp_is_prefix(const unsigned char *pre, const unsigned char *full)
+{
+    int n = dp_bytelen(pre);
+    if (!pre || !full || n <= 0) return 0;
+    return memcmp(pre, full, (unsigned long)n) == 0;
+}
+
 static void fw_scan(void)
 {
     EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
@@ -122,6 +143,10 @@ static void fw_scan(void)
         d.ctx     = b;
         d.read    = fw_read;
         d.write   = fw_write;
+        /* mark the disk we booted from so the storage safety gate can refuse it */
+        { void *bdp = uno_pc64_boot_dp();
+          if (dpv && bdp && dp_is_prefix((const unsigned char *)dpv,
+                                         (const unsigned char *)bdp)) d.is_boot = 1; }
         if (uno_blk_register(&d)) fwidx++;
     }
     BS->FreePool(hs);

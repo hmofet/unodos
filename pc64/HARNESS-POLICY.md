@@ -114,6 +114,23 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk
+  partition/format, wrapped by unoautomate. **New shared framework `unostorage`
+  (`unostorage.h/.c`)**: authors a GPT + ESP on a raw disk over `blkdev`
+  (transport-agnostic `unostorage_dev`; shared reflected `unostorage_crc32`).
+  **`fat` gains `uno_fat_mkfs`** (FAT32 formatter, raw `dev->write`).
+  **Shared-OS changes other agents should note:** `uno_bdev` gained an `is_boot`
+  field (blkdev `fw_scan` sets it by device-path prefix vs the new
+  `uno_pc64_boot_dp()` accessor in `uefi_main.c`); `installer.c`'s private crc32
+  now delegates to `unostorage_crc32` (byte-identical). All additive/prod, no API
+  break. **New UNO_DEBUG-only URC verbs** (unoauto_remote.c): `disks`/`readsec`
+  (non-destructive) and `arm`/`disarm`/`writesec`/`gptinit`/`mkpart`/`mkfs`/
+  `prepdisk` (destructive, gated behind a per-session `arm <disk>` that
+  auto-disarms and refuses the boot disk). Host: `UnoAutoLink.disks/arm/prepdisk/
+  …` + a `--prepdisk` CLI. Gate: `tools/remote_qemu.py` adds a second blank disk
+  and proves arm-rejections → `prepdisk` → fresh FAT32 volume mounts → file
+  round-trips byte-exact. SPECTEST 65/0/4; prod clean.
+
 - **2026-07-22 - (no bump, additive)**: **complete TCP/UDP stack** - multi-
   connection sockets, broadcast, and zero-config discovery. unoautomate now owns
   the transport stack (net.c/net.h, tls.*, netsock, netdisc); the driver agent

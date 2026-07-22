@@ -75,4 +75,13 @@ int  uno_fat_rename(int vol, const char *path, const char *newname);
  * effect on a normal system (no request file -> no-op).  Returns volumes hit. */
 int  uno_fat_selftest(void);
 
+/* Format [first_lba, first_lba+sectors) on a raw block device as FAT32 (the
+ * mount-compatible layout of flash/UnoDisk.cs).  Writes RAW via dev->write, so
+ * the caller must uno_fat_remount() afterwards to surface the new volume.  1 on
+ * success, 0 on failure (read-only device / geometry too small for FAT32).
+ * The disk-authoring framework unostorage_prepare_esp() calls this. */
+struct uno_bdev;
+int  uno_fat_mkfs(struct uno_bdev *dev, unsigned long long first_lba,
+                  unsigned long long sectors, const char *label);
+
 #endif
