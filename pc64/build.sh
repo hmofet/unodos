@@ -11,7 +11,43 @@
 set -e
 cd "$(dirname "$0")"
 PY="${PY:-python3}"
+
+# ---- compiler cache (transparent) --------------------------------------
+# ccache ships symlinks for the mingw cross-compiler in /usr/lib/ccache, so
+# putting that dir first on PATH turns every `x86_64-w64-mingw32-gcc` call into
+# a cache lookup with NO change to the compile lines below. Any file you didn't
+# touch (BearSSL's 294, MicroPython's 127, uACPI, and every kernel file off the
+# edit path) becomes an instant hit -> incremental rebuilds are seconds, not a
+# full recompile. Harmless if ccache isn't installed. Set NOCCACHE=1 to skip.
+if [ "${NOCCACHE:-0}" = "0" ] && [ -d /usr/lib/ccache ]; then
+    case ":$PATH:" in *:/usr/lib/ccache:*) ;; *) PATH="/usr/lib/ccache:$PATH";; esac
+fi
 CC="${CC:-x86_64-w64-mingw32-gcc}"
+
+# ---- bounded parallel compile ------------------------------------------
+# The compile loops below are independent `gcc -c` calls; running them serially
+# wastes an otherwise-idle multi-core box. `pc` launches one in the background
+# throttled to $JOBS in flight; `pcwait` drains the batch and FAILS the build if
+# any compile did (so a broken file can never slip through to the link). Object
+# paths are deterministic, so the OBJS list and the link are unchanged. JOBS=1
+# restores the old fully-serial behaviour.
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+_PC_PIDS=""
+pc() {
+    "$@" &
+    _PC_PIDS="$_PC_PIDS $!"
+    # drain when the pool is full. MUST end returning 0: a bare `[ ] && pcwait`
+    # yields the test's exit status, and a false test (pool not yet full - the
+    # common case) would return 1 and trip `set -e` on the caller.
+    if [ "$(echo $_PC_PIDS | wc -w)" -ge "$JOBS" ]; then pcwait; fi
+    return 0
+}
+pcwait() {
+    _rc=0
+    for _p in $_PC_PIDS; do wait "$_p" || _rc=1; done
+    _PC_PIDS=""
+    [ "$_rc" -eq 0 ] || { echo "build: a parallel compile failed - aborting"; exit 1; }
+}
 mkdir -p build shots
 
 echo "[1/3] exporting the shared font to a C array..."
@@ -93,53 +129,53 @@ if [ "$1" != "legacy" ]; then
          -I../unoui -I../unosound -I../unomedia -I../unoacpi -I../unoacpi/uacpi/include"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
-    "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
+    pc "$CC" $UCF -c -o "build/unosound_seq.o" "../unosound/unosound_seq.c"; OBJS="$OBJS build/unosound_seq.o"
     # platform + shell + the legacy-app bridge (mac_compat = Toolbox over fb).
     # $DBGSAN (UBSan trap + stack canary) rides on this FIRST-PARTY set only -
     # third-party bearssl/uacpi/upy below build without it (they do defined
     # unsigned wraparound the sanitizer must not trap).
     for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
-        "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
+        pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
     # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
     # NO sanitizer (its ud2 handler must not itself be instrumented).
     if [ "$UNO_DEBUG" != "0" ]; then
-        "$CC" $UCF -mgeneral-regs-only -c -o "build/uno_debug.o" "uno_debug.c"
+        pc "$CC" $UCF -mgeneral-regs-only -c -o "build/uno_debug.o" "uno_debug.c"
         OBJS="$OBJS build/uno_debug.o"
-        "$CC" $UCF $DBGSAN -c -o "build/pc64_stress.o" "pc64_stress.c"
+        pc "$CC" $UCF $DBGSAN -c -o "build/pc64_stress.o" "pc64_stress.c"
         OBJS="$OBJS build/pc64_stress.o"
-        "$CC" $UCF $DBGSAN -c -o "build/pc64_nettest.o" "pc64_nettest.c"
+        pc "$CC" $UCF $DBGSAN -c -o "build/pc64_nettest.o" "pc64_nettest.c"
         OBJS="$OBJS build/pc64_nettest.o"
-        "$CC" $UCF $DBGSAN -c -o "build/pc64_spectest.o" "pc64_spectest.c"
+        pc "$CC" $UCF $DBGSAN -c -o "build/pc64_spectest.o" "pc64_spectest.c"
         OBJS="$OBJS build/pc64_spectest.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
     # a second private instance of the library, so the two never collide.
     for u in unomedia um_audio um_wav um_midi um_mp3 um_aac; do
-        "$CC" $UCF -c -o "build/uml_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/uml_$u.o"
+        pc "$CC" $UCF -c -o "build/uml_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/uml_$u.o"
     done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
     # vendored uACPI interpreter (third-party -> -w).
     for u in acpi_arena ec_handler smbus_handler acpi_power; do
-        "$CC" $UCF -c -o "build/unoacpi_$u.o" "../unoacpi/$u.c"; OBJS="$OBJS build/unoacpi_$u.o"
+        pc "$CC" $UCF -c -o "build/unoacpi_$u.o" "../unoacpi/$u.c"; OBJS="$OBJS build/unoacpi_$u.o"
     done
     for c in $(find ../unoacpi/uacpi/source -name '*.c' | sort); do
         b=$(basename "$c" .c)
-        "$CC" $UCF -w -c -o "build/uacpi_$b.o" "$c"; OBJS="$OBJS build/uacpi_$b.o"
+        pc "$CC" $UCF -w -c -o "build/uacpi_$b.o" "$c"; OBJS="$OBJS build/uacpi_$b.o"
     done
     # uno3d: the write-once 3D pipeline + soft rasteriser + Intel scaffold + game
     # (Runner3D is a native game canvas that drives these directly).
     for u in uno3d uno3d_soft uno3d_intel uno3d_game; do
-        "$CC" $UCF -c -o "build/uui_$u.o" "../uno3d/$u.c"; OBJS="$OBJS build/uui_$u.o"
+        pc "$CC" $UCF -c -o "build/uui_$u.o" "../uno3d/$u.c"; OBJS="$OBJS build/uui_$u.o"
     done
     for u in unoui unoui_input; do
-        "$CC" $UCF -c -o "build/uui_$u.o" "../unoui/$u.c"; OBJS="$OBJS build/uui_$u.o"
+        pc "$CC" $UCF -c -o "build/uui_$u.o" "../unoui/$u.c"; OBJS="$OBJS build/uui_$u.o"
     done
     for t in $(find ../unoui/themes -name '*.c' | sort); do
         b=$(basename "$t" .c)
-        "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
+        pc "$CC" $UCF -c -o "build/uui_$b.o" "$t"; OBJS="$OBJS build/uui_$b.o"
     done
     # NOTE: no app objects here - apps ship as .UNO modules (built below);
     # the kernel image contains no app code at all.
@@ -150,8 +186,9 @@ if [ "$1" != "legacy" ]; then
     for c in $(find bearssl/src -name '*.c' | sort); do
         base=$(basename "$c" .c)
         case "$BSSL_SKIP" in *" $base "*) continue;; esac
-        "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"; OBJS="$OBJS build/bssl_$base.o"
+        pc "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"; OBJS="$OBJS build/bssl_$base.o"
     done
+    pcwait                     # barrier: every kernel object above must exist before linking
     echo "[3/3] linking the unoui image..."
     LINK="-nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat"
     if [ "$UNO_DEBUG" != "0" ]; then
@@ -259,11 +296,12 @@ if [ "$1" != "legacy" ]; then
         echo "[3c] building STUDIO.UNO (the IDE)..."
         SOBJ=""
         for s in studio studio_hl studio_py studio_ai studio_json ucc ucc_x64; do
-            "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
+            pc "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
                   -DUCC_KEXPORTS_H='"build/apps/ucc_kexports.h"' \
                   -c -o "build/apps/$s.o" "apps/$s.c"
             SOBJ="$SOBJ build/apps/$s.o"
         done
+        pcwait                 # barrier: all STUDIO objects before the nm/link
         # imports = symbols undefined across ALL objects minus those any object
         # defines (studio.o references studio_ai.o etc; those resolve at link)
         "$NM" $SOBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
@@ -309,9 +347,10 @@ if [ "$1" != "legacy" ]; then
         POBJ=""
         for s in $PSRC; do
             o="$PB/$(echo "$s" | tr '/.' '__').o"
-            "$CC" $PYF -DUNO_APP_SYM=uno_app_main -c -o "$o" "$s"
+            pc "$CC" $PYF -DUNO_APP_SYM=uno_app_main -c -o "$o" "$s"
             POBJ="$POBJ $o"
         done
+        pcwait                 # barrier: all PYRT objects before the nm/link below
         # imports = undefined-across-all minus defined-by-any, EXCLUDING the
         # compiler/libgcc runtime helpers (__*), which -lgcc resolves at link
         # (soft float/int conversions), not the kernel export table.
@@ -343,14 +382,15 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_PHOTOS:-1}" != "0" ]; then
         echo "[3d] building PHOTOS.UNO (the image viewer + unomedia)..."
         POBJ="build/apps/photos.o"
-        "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
+        pc "$CC" $UCF -DUNO_APP_SYM=uno_app_main \
               -c -o "build/apps/photos.o" "apps/photos.c"
         # core + the IMAGE half only (the AUDIO half links into the kernel)
         for b in unomedia um_image um_inflate um_png um_jpg um_gif um_bmp \
                  um_ico um_tga um_pnm um_qoi um_webp um_vp8 um_stub; do
-            "$CC" $UCF -c -o "build/apps/um_$b.o" "../unomedia/$b.c"
+            pc "$CC" $UCF -c -o "build/apps/um_$b.o" "../unomedia/$b.c"
             POBJ="$POBJ build/apps/um_$b.o"
         done
+        pcwait                 # barrier: all PHOTOS objects before the nm/link
         "$NM" $POBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
             $1!="U"&&NF>=3{d[$3]=1} \
             END{for(s in u) if(!(s in d)) print s}' \

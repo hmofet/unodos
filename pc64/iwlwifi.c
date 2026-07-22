@@ -149,6 +149,9 @@ static int poll_bit(u32 reg, u32 want, u32 mask, int timeout_ms)
 static u32 g_prph_mask = 0x000FFFFF;   /* 0x00FFFFFF on AX210+ */
 
 static void prph_w(u32 reg, u32 v) { w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24)); w32(HBUS_TARG_PRPH_WDAT, v); }
+/* used only by the UNO_DEBUG ALIVE-timeout autopsy; keep it out of the
+ * production build's unused-function warning. */
+__attribute__((unused))
 static u32  prph_r(u32 reg) { w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24)); return r32(HBUS_TARG_PRPH_RDAT); }
 
 /* =====================================================================
@@ -1061,6 +1064,7 @@ static int wait_alive(int timeout_ms)
                               (u32)(g_ci_phys >> 32), (u32)g_ci_phys,
                               (u32)(g_ci_dram0 >> 32), (u32)g_ci_dram0,
                               ba == g_ci_phys ? "(kick stuck)" : "(KICK LOST - CSR write path!)");
+            (void)ba;   /* uno_dbg_net_trace is a no-op in prod -> ba else unused */
         }
         uno_dbg_net_trace("wifi:   rb_status=%04x rx_read=%d used[0]=%08x%08x rb0[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x",
                           rx_closed(), g_rx_read,
