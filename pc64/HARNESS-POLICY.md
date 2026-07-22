@@ -85,6 +85,14 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-21 - (no bump, EXPERIMENTAL)**: DRIVE is live - Python-scripted
+  automation. `import unoauto` in any Python app (PYRT):
+  log/probe/key/pointer/apps/launch/close_top/uptime/deadline_left/
+  poweroff. Boot runner: STRESS.CFG `automate` + a raw `AUTOMATE.PY` at a
+  volume root. New tap `uui.action` (UnoAutoUiEv). Debug-only kernel
+  exports at the kExports tail; prod PYRT carries inert stubs
+  (`unoauto.available()` -> False). Gates: `tools/automate_qemu.py` (17-app
+  UI smoke), spectest unchanged.
 - **2026-07-21 - (no bump, additive)**: wall-clock test budgets, answering
   your 2026-07-22 request: `unoauto_test_deadline_ms(ms)` +
   `unoauto_deadline_left_ms()` [EXPERIMENTAL]. `unoauto_test_run` is
