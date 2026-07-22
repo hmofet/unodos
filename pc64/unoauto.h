@@ -28,22 +28,23 @@
 
 /* ---- THE CONTRACT ---------------------------------------------------------
  * This header is the interface contract between unoautomate and every other
- * agent/subsystem building against it.  Each section below is marked:
+ * agent/subsystem building against it.  It is BEST-EFFORT stable, not
+ * guaranteed: unoautomate is under active development and breaking changes
+ * WILL happen (see pc64/HARNESS-POLICY.md).  Each section below is marked:
  *
- *   [STABLE]        name, signature and semantics are FROZEN.  A breaking
- *                   change to a STABLE item must (a) ship the new name
- *                   alongside the old one, with the old kept as a deprecated
- *                   wrapper for one transition window, (b) bump UNOAUTO_API,
- *                   (c) get a dated entry in HARNESS-POLICY.md "API
- *                   changelog".  Names are never repurposed with different
- *                   semantics.
- *   [EXPERIMENTAL]  may change or disappear between rebases without a
- *                   version bump.  Usable, but re-read this header after
- *                   every pull before relying on one.
+ *   [STABLE]        name/signature/semantics are INTENDED to hold - changed
+ *                   only reluctantly, with a deprecated wrapper where
+ *                   practical.  Read this as "unlikely to break," not "cannot
+ *                   break."
+ *   [EXPERIMENTAL]  may change or disappear between rebases.  Usable, but
+ *                   re-read this header after every pull before relying on one.
  *
- * The legacy uno_dbg_* entry points (uno_debug.h) are wrappers over this
- * core and inherit [STABLE].  If UNOAUTO_API moved after a pull, read the
- * changelog before building. */
+ * Every breaking change bumps UNOAUTO_API and gets a dated entry in
+ * HARNESS-POLICY.md "API changelog".  RULE for consumers: after any pull,
+ * re-read this header and the changelog before building - if UNOAUTO_API
+ * moved, assume something you use may have changed (the compiler catches
+ * signature breaks, not semantic ones).  The legacy uno_dbg_* entry points
+ * (uno_debug.h) are thin wrappers over this core. */
 #define UNOAUTO_API 1
 
 /* ---- HOOK event payloads (outside the UNO_DEBUG gate so production call
