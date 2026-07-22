@@ -14,7 +14,10 @@ typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
 
-enum { TCP_CLOSED = 0, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT, TCP_DONE };
+enum { TCP_CLOSED = 0, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT, TCP_DONE,
+       /* appended for the netsock multi-connection layer (netsock.h): a passive
+        * server socket, and a half-open connection accepted from one. */
+       TCP_LISTEN, TCP_SYN_RCVD };
 
 void net_init(uno_nic_t *nic, const u8 mac[6]);
 void net_poll(void);                 /* pump once; call often */
@@ -46,6 +49,16 @@ int  net_ping_ms(void);              /* poll-count round trip of the last ping *
 int  net_udp_send(const u8 dst[4], u16 dport, u16 sport,
                   const void *data, int len);
 int  net_udp_recv(u16 sport, void *buf, int cap, u8 src[4], u16 *src_port);
+/* Send a datagram to the limited broadcast address 255.255.255.255 via a
+ * directly-built broadcast Ethernet frame (ARP can't resolve a broadcast IP).
+ * Binds `sport` as a side effect so a unicast reply is queued for recv. */
+int  net_udp_broadcast(u16 dport, u16 sport, const void *data, int len);
+/* Open a receive-only UDP port (bind without sending). Inbound datagrams to
+ * `port` - including broadcast - are then queued for net_udp_recv(port,...). */
+void net_udp_listen(u16 port);
+/* Our directed subnet broadcast address (network | ~mask), u8[4]. Some links
+ * prefer this over 255.255.255.255; discovery uses the limited form by default. */
+const u8 *net_broadcast(void);
 
 /* TCP (one active connection) */
 int  net_tcp_connect(const u8 dst[4], u16 dport);

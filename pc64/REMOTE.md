@@ -75,6 +75,15 @@ unchanged.
 | `poweroff` | shut the machine down after the queue drains | `ok bye` |
 | `reboot` | reset the machine after the queue drains (`uno_native_reset`) | `ok bye` |
 | `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable — attached only) | `ok set` / `err unavailable` |
+| `disks` | list raw disks | one `ok` line per disk: `idx name sectors writable is_boot` |
+| `readsec <disk> <lba-hex> [n]` | read `n` (≤4) raw sectors | base64 of the sectors, streamed as `ok` lines |
+| `arm <disk>` | arm destructive ops for `<disk>` this session (auto-disarms after ONE); **refuses the boot disk** | `ok armed <name> <sectors> sectors` / `err refused…` |
+| `disarm` | clear the armed disk | `ok disarmed` |
+| `writesec <disk> <lba-hex> <b64>` | *(armed)* write whole 512 B sectors | `ok <sectors>` |
+| `gptinit <disk>` | *(armed)* write a fresh empty GPT | `ok gpt` |
+| `mkpart <disk> <first-hex> <last-hex> esp <name>` | *(armed)* add one ESP partition | `ok part` |
+| `mkfs <disk> <first-hex> <sectors-hex> <label>` | *(armed)* format a region FAT32 (`uno_fat_mkfs`) + remount | `ok formatted` |
+| `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
@@ -116,6 +125,35 @@ returns `True` when verified; then `link.bootnext(n)` / `link.reboot()`.
 Because either end can send `CMD`/`MSG`, the dev PC can also *register handlers*
 so pc64 can drive it back (e.g. an on-device script asking the host to save a
 file) - see `on_command` below.
+
+## Preparing a fresh disk (disk B)
+
+The A/B push above needs a *formatted* stick. To go further - move UnoDOS off the
+UEFI stick and onto an internal disk - the channel can **partition and format a
+raw disk** over the wire, so a blank disk B becomes a bootable FAT32 ESP you then
+`put` the OS files onto. unoautomate implements none of this itself: the verbs
+wrap the **`unostorage`** framework (GPT authoring over `blkdev`) and
+**`uno_fat_mkfs`** (the FAT formatter), which the installer shares.
+
+Because this authors a fresh GPT, it must run where firmware sector writes work -
+**while ATTACHED** (the debug build's default). Disk B shows up as a writable
+`fw*` disk in `disks`.
+
+```bash
+# see the disks; find the one that is writable and NOT is_boot
+python tools/unoauto_remote.py --listen 0.0.0.0:5099        # then type: disks
+
+# one-shot: partition + format the blank disk (index 1 here) as a FAT32 ESP
+python tools/unoauto_remote.py --prepdisk 1 UNODOS
+# then push the OS tree onto the new volume with --push, and set a boot entry
+```
+
+> **Safety.** Every destructive verb (`writesec`/`gptinit`/`mkpart`/`mkfs`/
+> `prepdisk`) is inert until you `arm <disk>`, which **auto-disarms after one
+> op** and **refuses the disk UnoDOS booted from** (`is_boot`). `arm` echoes the
+> disk name + size so you can confirm the target before committing. Like the rest
+> of the channel these verbs are **UNO_DEBUG-only** and **LAN-only**. `prepdisk`
+> erases the whole disk.
 
 ## The dev-PC tool - `tools/unoauto_remote.py`
 

@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -217,13 +217,15 @@ int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 <div class="tw"><table>
 <thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
 <tbody>
-<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI drivers, with firmware Simple File System volumes as read-only extras while attached.</td></tr>
+<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI and USB mass-storage drivers, with firmware Simple File System volumes as read/write extras while attached.</td></tr>
+<tr><td><code>blkdev</code> / <code>unostorage</code> / <code>fat</code></td><td>The storage stack: <code>blkdev</code> is raw 512-byte sector transport (native drivers + a firmware fallback); <code>fat</code> mounts + reads/writes FAT16/32 and formats it (<code>uno_fat_mkfs</code>); <code>unostorage</code> authors a GPT + ESP on a raw disk. The installer and the remote channel both wrap these rather than re-implementing them.</td></tr>
 <tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
-<tr><td><code>net</code> / <code>e1000</code></td><td>e1000 driver publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, minimal TCP.</td></tr>
+<tr><td><code>net</code> / <code>e1000</code> / <code>e1000e</code> / <code>igb</code> / <code>r8169</code></td><td>Intel (8254x, 82571-4/82574, I217-9, I210/I211/I350) and Realtek (RTL8168/8111/8125) drivers, each publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, DNS, single-connection TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
-<tr><td><code>xhci</code> / <code>ax88179</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host and an ASIX USB-gigabit driver that also publishes a <code>uno_nic_t</code>.</td></tr>
+<tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
+<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Early Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. They map the device and load its firmware, but association is not yet working on any hardware.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
 </tbody>
 </table></div>
@@ -247,6 +249,35 @@ void u3d_rotate_z(float deg);
 void u3d_triangles(const u3d_vert *verts, int tri_count);   /* Gouraud, no textures */
 void u3d_end(void);
 void u3d_present(void);</code></pre>
+
+<h2 id="uno-py">uno: the Python app module</h2>
+<p>The surface a <a href="dev-python.html">Python app</a> codes against. <code>import uno</code>, subclass
+<code>uno.App</code>, and reach the platform through the module and the <code>Canvas</code> passed to your
+<code>build</code>/<code>draw</code>. A machine-readable stub ships in <code>SDK\uno.pyi</code>.</p>
+<pre><code>import uno
+
+uno.rgb(r, g, b)                 # pack a colour (0-255 each) -&gt; int
+
+# --- Canvas (passed to build() and draw(); coords are canvas-relative) ---
+cv.width(); cv.height()          # your drawable size, in pixels
+cv.clear(color)                  # fill the whole canvas
+cv.fill_rect(x, y, w, h, color)  # filled / outline rectangle
+cv.rect(x, y, w, h, color)
+cv.pixel(x, y, color)
+cv.hline(x, y, w, color); cv.vline(x, y, h, color)
+cv.text(x, y, &quot;string&quot;, color)
+
+# --- Sound (the shared UnoSound voice) ---
+uno.beep(midi, ticks)            # square-wave note, ticks ~= 1/60 s
+uno.quiet()
+
+# --- Files (vol defaults to 0, the boot volume) ---
+uno.read(name) -&gt; bytes                 # whole (small) file
+uno.read_at(vol, name, off, n) -&gt; bytes # stream a big file a slice at a time
+uno.size(name) -&gt; int                   # bytes, or -1 if missing
+uno.write(name, data) -&gt; bool           # to a writable volume</code></pre>
+<p class="muted">This is the app-authoring module. The separate <code>unoauto</code> module below is the
+system-<em>automation</em> surface (probe, inject input, drive the machine) and exists only in debug builds.</p>
 
 <h2 id="unoauto">unoauto: automation (Python, on the device)</h2>
 <p><code>import unoauto</code> from any Python app to observe and drive the system - the automation half of
@@ -294,6 +325,9 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>uptime()</code> / <code>poweroff()</code> / <code>reboot()</code></td><td>Read uptime, shut down, or restart.</td></tr>
 <tr><td><code>push_file(vol, path, local_path)</code></td><td>Push a file (chunk, finalize, verify); True when verified.</td></tr>
 <tr><td><code>bootnext(n)</code></td><td>Set the next UEFI boot entry.</td></tr>
+<tr><td><code>disks()</code></td><td>List raw disks (idx / name / sectors / writable / is_boot).</td></tr>
+<tr><td><code>arm(disk)</code> / <code>disarm()</code></td><td>Arm a disk for a destructive op (auto-disarms after one; refuses the boot disk).</td></tr>
+<tr><td><code>prepdisk(disk, label)</code></td><td>Partition + format a raw disk as a fresh FAT32 ESP (armed; the "prepare disk B" one-shot).</td></tr>
 </tbody>
 </table></div>
 <p class="muted">The C contract underneath (<code>unoauto_log</code>, <code>unoauto_probe</code>,
@@ -301,7 +335,7 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <a href="https://github.com/hmofet/unodos/blob/master/pc64/unoauto.h" target="_blank" rel="noopener"><code>pc64/unoauto.h</code></a>;
 the wire protocol is in <a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>REMOTE.md</code></a>.</p>
 
-<nav class="pagenav"><a href="dev-apps.html">&lsaquo; Writing apps</a><a class="nxt" href="dev-build.html">Building &amp; tooling &rsaquo;</a></nav>
+<nav class="pagenav"><a href="dev-python.html">&lsaquo; Python apps</a><a class="nxt" href="dev-build.html">Building &amp; tooling &rsaquo;</a></nav>
 </div></main>
 </div>
 </body>

@@ -9,8 +9,10 @@
 #include "unoauto.h"
 #include "unoauto_remote.h"
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
+#include "netsock.h"        /* multi-connection socket API (nst self-test) */
 #include "pc64_http.h"      /* pc64_net_up */
 #include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
+#include "unostorage.h"     /* disk authoring (brings blkdev.h): the disk verbs */
 
 #ifdef UNO_DEBUG
 
@@ -36,6 +38,11 @@ int   uno_fs_volumes(void);
 const char *uno_fs_volume_name(int vol);
 void  uno_native_reset(void);
 int   uno_pc64_set_bootnext(unsigned int n);                     /* uefi_main.c */
+/* raw-disk authoring (disks/arm/prepdisk verbs) - wraps unostorage + fat + fs */
+void  uno_fat_remount(void);                                     /* fat.c   */
+void  uno_fs_remap(void);                                        /* pc64_fs */
+int   uno_fat_mkfs(uno_bdev *dev, unsigned long long first,
+                   unsigned long long sectors, const char *label);
 
 /* ---- tiny string builder (avoids snprintf; see the S-LIBC-06 history) ---- */
 typedef struct { char *p; int cap, len; } SB;
@@ -48,6 +55,13 @@ static void sb_i(SB *b, long v)
     if (v < 0) { sb_c(b, '-'); u = (unsigned long)(-v); } else u = (unsigned long)v;
     if (!u) { sb_c(b, '0'); return; }
     while (u) { t[n++] = (char)('0' + u % 10); u /= 10; }
+    while (n) sb_c(b, t[--n]);
+}
+static void sb_ull(SB *b, unsigned long long v)   /* 64-bit (LBAs/sector counts) */
+{
+    char t[24]; int n = 0;
+    if (!v) { sb_c(b, '0'); return; }
+    while (v) { t[n++] = (char)('0' + v % 10); v /= 10; }
     while (n) sb_c(b, t[--n]);
 }
 
@@ -227,6 +241,41 @@ static int b64_decode(const char *s, unsigned char *out, int cap)
     }
     return n;
 }
+static unsigned long long parse_hex64(const char *s)
+{
+    unsigned long long v = 0;
+    if (!s) return 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    for (; *s; s++) {
+        int d;
+        if (*s >= '0' && *s <= '9') d = *s - '0';
+        else if (*s >= 'a' && *s <= 'f') d = *s - 'a' + 10;
+        else if (*s >= 'A' && *s <= 'F') d = *s - 'A' + 10;
+        else break;
+        v = (v << 4) | (unsigned)d;
+    }
+    return v;
+}
+/* base64-encode `n` bytes into out (NUL-terminated); returns length, or -1. */
+static int b64_encode(const unsigned char *in, int n, char *out, int cap)
+{
+    static const char B[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int i = 0, o = 0;
+    while (i < n) {
+        unsigned v = (unsigned)in[i] << 16; int have = 1;
+        if (i + 1 < n) { v |= (unsigned)in[i + 1] << 8; have = 2; }
+        if (i + 2 < n) { v |= in[i + 2]; have = 3; }
+        if (o + 4 > cap - 1) return -1;
+        out[o++] = B[(v >> 18) & 63];
+        out[o++] = B[(v >> 12) & 63];
+        out[o++] = have >= 2 ? B[(v >> 6) & 63] : '=';
+        out[o++] = have >= 3 ? B[v & 63] : '=';
+        i += 3;
+    }
+    out[o] = 0;
+    return o;
+}
 
 /* ---- command dispatch ---------------------------------------------------- */
 static UnoAutoProbeEnt g_pe[64];
@@ -359,6 +408,167 @@ static void do_vols(const char *id)
     rsp(id, "end", 0);
 }
 
+/* ---- raw-disk authoring (partition/format disk B) ------------------------
+ * Thin wrappers over unostorage + fat + pc64_fs - no storage logic here.
+ * Destructive verbs require an explicit `arm <disk>` that AUTO-DISARMS after
+ * one op; `arm` refuses the boot disk.  See REMOTE.md. */
+static int g_armed_disk = -1;
+
+/* emit a long string as multiple RSP `ok` lines (rsp's buffer is small); the
+ * host concatenates them.  Used for readsec's base64. */
+static void rsp_long(const char *id, const char *s)
+{
+    int len = (int)strlen(s), off = 0;
+    while (off < len) {
+        char c[500]; int k = 0;
+        while (off < len && k < 480) c[k++] = s[off++];
+        c[k] = 0;
+        rsp(id, "ok", c);
+    }
+}
+
+static uno_bdev *disk_at(int i)
+{ return (i >= 0 && i < uno_blk_count()) ? uno_blk_get(i) : 0; }
+
+/* validate the arm gate for a destructive op; consumes the arm (auto-disarm). */
+static uno_bdev *armed_bdev(const char *id, int disk)
+{
+    uno_bdev *b;
+    if (g_armed_disk != disk) {
+        rsp(id, "err", "not-armed (arm <disk> first)"); rsp(id, "end", 0); return 0;
+    }
+    g_armed_disk = -1;                                  /* auto-disarm */
+    b = disk_at(disk);
+    if (!b || !b->write) { rsp(id, "err", "bad-disk or read-only"); rsp(id, "end", 0); return 0; }
+    return b;
+}
+
+static void do_disks(const char *id)
+{
+    int n = uno_blk_count(), i;
+    for (i = 0; i < n; i++) {
+        uno_bdev *b = uno_blk_get(i);
+        char f[96]; SB sb;
+        if (!b) continue;
+        sb_init(&sb, f, sizeof f);
+        sb_i(&sb, i);                sb_c(&sb, ' ');    /* idx name sectors writable is_boot */
+        sb_s(&sb, b->name);          sb_c(&sb, ' ');
+        sb_ull(&sb, b->sectors);     sb_c(&sb, ' ');
+        sb_i(&sb, b->write ? 1 : 0); sb_c(&sb, ' ');
+        sb_i(&sb, b->is_boot);
+        f[sb.len] = 0;
+        rsp(id, "ok", f);
+    }
+    rsp(id, "end", 0);
+}
+
+static void do_arm(const char *id, int disk)
+{
+    uno_bdev *b = disk_at(disk);
+    char f[64]; SB sb;
+    if (!b)          { rsp(id, "err", "bad-disk");                     rsp(id, "end", 0); return; }
+    if (b->is_boot)  { rsp(id, "err", "refused: that is the boot disk"); rsp(id, "end", 0); return; }
+    if (!b->write)   { rsp(id, "err", "disk is read-only");            rsp(id, "end", 0); return; }
+    g_armed_disk = disk;
+    sb_init(&sb, f, sizeof f);
+    sb_s(&sb, "armed "); sb_s(&sb, b->name); sb_c(&sb, ' '); sb_ull(&sb, b->sectors); sb_s(&sb, " sectors");
+    f[sb.len] = 0;
+    rsp(id, "ok", f); rsp(id, "end", 0);
+}
+
+static void do_readsec(const char *id, char *args)      /* non-destructive */
+{
+    static unsigned char sec[4 * 512];
+    static char b64[4 * 512 * 2];
+    int disk = (int)atol_(tok(&args));
+    unsigned long long lba = parse_hex64(tok(&args));
+    char *ns = tok(&args);
+    int n = ns ? (int)atol_(ns) : 1, enc;
+    uno_bdev *b = disk_at(disk);
+    if (!b || !b->read) { rsp(id, "err", "bad-disk"); rsp(id, "end", 0); return; }
+    if (n < 1) n = 1; if (n > 4) n = 4;
+    if (!b->read(b, lba, (unsigned)n, sec)) { rsp(id, "err", "read failed"); rsp(id, "end", 0); return; }
+    enc = b64_encode(sec, n * 512, b64, (int)sizeof b64);
+    if (enc < 0) { rsp(id, "err", "encode"); rsp(id, "end", 0); return; }
+    rsp_long(id, b64);
+    rsp(id, "end", 0);
+}
+
+static void do_writesec(const char *id, char *args)     /* destructive */
+{
+    static unsigned char sec[4 * 512];
+    int disk = (int)atol_(tok(&args));
+    unsigned long long lba = parse_hex64(tok(&args));
+    char *b64 = tok(&args);
+    int n, secs;
+    uno_bdev *b = armed_bdev(id, disk);
+    if (!b) return;
+    if (!b64) { rsp(id, "err", "missing-data"); rsp(id, "end", 0); return; }
+    n = b64_decode(b64, sec, (int)sizeof sec);
+    if (n <= 0 || (n % 512)) { rsp(id, "err", "data must be whole 512B sectors"); rsp(id, "end", 0); return; }
+    secs = n / 512;
+    if (!b->write(b, lba, (unsigned)secs, sec)) { rsp(id, "err", "write failed"); rsp(id, "end", 0); return; }
+    { char t[16]; SB sb; sb_init(&sb, t, sizeof t); sb_i(&sb, secs); t[sb.len] = 0;
+      rsp(id, "ok", t); }
+    rsp(id, "end", 0);
+}
+
+static void do_gptinit(const char *id, char *args)      /* destructive */
+{
+    int disk = (int)atol_(tok(&args));
+    uno_bdev *b = armed_bdev(id, disk);
+    unostorage_dev d; int ok;
+    if (!b) return;
+    d = unostorage_from_bdev(b);
+    ok = unostorage_gpt_init(&d);
+    rsp(id, ok ? "ok" : "err", ok ? "gpt" : "failed");
+    rsp(id, "end", 0);
+}
+
+static void do_mkpart(const char *id, char *args)       /* destructive */
+{
+    int disk = (int)atol_(tok(&args));
+    unsigned long long first = parse_hex64(tok(&args));
+    unsigned long long last  = parse_hex64(tok(&args));
+    char *type = tok(&args), *name = tok(&args);
+    uno_bdev *b = armed_bdev(id, disk);
+    unostorage_dev d;
+    if (!b) return;
+    if (!type || strcmp_(type, "esp")) { rsp(id, "err", "type must be 'esp'"); rsp(id, "end", 0); return; }
+    d = unostorage_from_bdev(b);
+    rsp(id, unostorage_gpt_add(&d, first, last, unostorage_esp_type, name ? name : "UNO-ESP")
+        ? "ok" : "err", "part");
+    rsp(id, "end", 0);
+}
+
+static void do_mkfs(const char *id, char *args)         /* destructive */
+{
+    int disk = (int)atol_(tok(&args));
+    unsigned long long first = parse_hex64(tok(&args));
+    unsigned long long secs  = parse_hex64(tok(&args));
+    char *label = tok(&args);
+    uno_bdev *b = armed_bdev(id, disk);
+    if (!b) return;
+    if (uno_fat_mkfs(b, first, secs, label ? label : "UNODOS")) {
+        uno_fat_remount(); uno_fs_remap();
+        rsp(id, "ok", "formatted");
+    } else rsp(id, "err", "mkfs failed (too small / read-only?)");
+    rsp(id, "end", 0);
+}
+
+static void do_prepdisk(const char *id, char *args)     /* destructive (GPT+ESP+format) */
+{
+    int disk = (int)atol_(tok(&args));
+    char *label = tok(&args);
+    uno_bdev *b = armed_bdev(id, disk);
+    if (!b) return;
+    if (unostorage_prepare_esp(b, label ? label : "UNODOS")) {
+        uno_fat_remount(); uno_fs_remap();
+        rsp(id, "ok", "prepared");
+    } else rsp(id, "err", "prepare failed (too small / read-only?)");
+    rsp(id, "end", 0);
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -403,6 +613,16 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     }
     if (!strcmp_(verb, "put"))  { do_put(id, args); return; }
     if (!strcmp_(verb, "vols")) { do_vols(id); return; }
+    /* raw-disk authoring (partition/format disk B) - see the do_* wrappers */
+    if (!strcmp_(verb, "disks"))   { do_disks(id); return; }
+    if (!strcmp_(verb, "arm"))     { do_arm(id, (int)atol_(tok(&args))); return; }
+    if (!strcmp_(verb, "disarm"))  { g_armed_disk = -1; rsp(id, "ok", "disarmed"); rsp(id, "end", 0); return; }
+    if (!strcmp_(verb, "readsec")) { do_readsec(id, args); return; }
+    if (!strcmp_(verb, "writesec")){ do_writesec(id, args); return; }
+    if (!strcmp_(verb, "gptinit")) { do_gptinit(id, args); return; }
+    if (!strcmp_(verb, "mkpart"))  { do_mkpart(id, args); return; }
+    if (!strcmp_(verb, "mkfs"))    { do_mkfs(id, args); return; }
+    if (!strcmp_(verb, "prepdisk")){ do_prepdisk(id, args); return; }
     /* iwl <subcmd...> - live Intel-WiFi register/bring-up debug (F12). See
      * iwlwifi.h iwl_dbg_cmd: csr/csw/prr/prw/rerun/status. Additive pass-through
      * per the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md. */
@@ -415,6 +635,41 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         int ok = uno_pc64_set_bootnext((unsigned)atol_(tok(&args)));
         rsp(id, ok ? "ok" : "err",
             ok ? "set" : "unavailable (detached / no runtime SetVariable)");
+        rsp(id, "end", 0); return;
+    }
+    /* nst <p1> <p2> - netsock self-test (debug): prove the multi-connection
+     * layer. Open TWO simultaneous outbound TCP connections (to 10.0.2.2:p1 and
+     * :p2), plus a LISTEN socket on 9099 that accepts one inbound connection
+     * (the host dials in via QEMU hostfwd). Reports socket count, both outbound
+     * states, and the accepted child + its peer. Driven by tools/netsock_qemu.py. */
+    if (!strcmp_(verb, "nst")) {
+        extern void uno_pc64_delay_ms(int ms);
+        int p1 = (int)atol_(tok(&args));
+        int p2 = (int)atol_(tok(&args));
+        u8  host[4] = {10, 0, 2, 2};
+        int sA = net_socket(SOCK_TCP), sB = net_socket(SOCK_TCP), sL = net_socket(SOCK_TCP);
+        int child = -1, i;
+        char t[96]; SB b;
+        if (p1 > 0) net_connect(sA, host, (u16)p1);
+        if (p2 > 0) net_connect(sB, host, (u16)p2);
+        net_bind(sL, 9099); net_listen(sL);
+        for (i = 0; i < 400; i++) {                 /* ~2 s: settle handshakes + accept */
+            net_poll(); uno_pc64_delay_ms(5);
+            if (child < 0) { int c = net_accept(sL); if (c >= 0) child = c; }
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "count=");  sb_i(&b, net_sock_count());   t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "connA=");  sb_i(&b, net_sock_state(sA));  t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "connB=");  sb_i(&b, net_sock_state(sB));  t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "accepted="); sb_i(&b, child);
+        if (child >= 0) {
+            u8 pip[4]; u16 pp; net_sock_peer(child, pip, &pp);
+            sb_s(&b, " peer="); sb_i(&b, pip[0]); sb_c(&b,'.'); sb_i(&b, pip[1]);
+            sb_c(&b,'.'); sb_i(&b, pip[2]); sb_c(&b,'.'); sb_i(&b, pip[3]); sb_c(&b,':'); sb_i(&b, pp);
+        }
+        t[b.len]=0; rsp(id,"ok",t);
+        net_sock_close(sA); net_sock_close(sB);
+        if (child >= 0) net_sock_close(child);
+        net_sock_close(sL);
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "test")) {

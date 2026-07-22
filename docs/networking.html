@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="active" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="active" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -88,8 +88,25 @@ and browses the web, including secure sites.</p>
 
 <h2 id="online">Getting online</h2>
 <p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
-address automatically (DHCP), finds the gateway and other machines, and browses the web over HTTP and
-HTTPS. Nothing else needs to be installed.</p>
+address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
+web over HTTP and HTTPS. Nothing else needs to be installed.</p>
+<p>A small <strong>network chip</strong> sits in the corner of the taskbar so you can see the state at a
+glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
+address has arrived yet, and nothing when the link is down. The <a href="apps.html#native">System</a> app
+spells it out in full, for example <code>Network: link up, IP 192.168.2.157</code>.</p>
+
+<h3 id="wired">Wired network adapters</h3>
+<p>UnoDOS drives the common Intel Gigabit families directly - the built-in wired port on most PCs and
+laptops with an Ethernet socket:</p>
+<ul>
+  <li><strong>Intel 8254x</strong> (the classic <em>e1000</em> family)</li>
+  <li><strong>Intel 82571&ndash;4 / 82574 / 82583</strong> and the <strong>I217 / I218 / I219</strong>
+      laptop LOM chips (the <em>e1000e</em> family)</li>
+  <li><strong>Intel I210 / I211 / I350</strong> and the 8257x server parts (the <em>igb</em> family)</li>
+</ul>
+<p>A driver for <strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) is included but has not been
+verified on hardware yet.</p>
+<div class="note"><b>Emulator-verified</b>The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.</div>
 
 <h2 id="selftest">The Network self-test</h2>
 <p>The Network app checks the whole connection step by step and shows the result. In an emulator it tests
@@ -102,17 +119,25 @@ certificate against a built-in list of common certificate authorities (Let's Enc
 so you can browse the secure web.</p>
 
 <h2 id="usb">USB Ethernet</h2>
-<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. The driver
-speaks to adapters built on the <strong>ASIX AX88179 / AX88178A</strong> chip &mdash; when you shop,
-check the listing's chipset line for those names. Known AX88179-based products include:</p>
+<p>If a PC has no built-in wired network, or its port is not supported, UnoDOS can use a USB Ethernet
+adapter instead. This is the most reliable way to get a laptop online, and it is tested on real hardware.
+Two chip families are supported - check a listing's chipset line before you buy:</p>
 <ul>
-  <li><strong>Plugable USB3-E1000</strong> (USB&nbsp;3.0 gigabit)</li>
-  <li><strong>StarTech USB31000S</strong></li>
-  <li><strong>TRENDnet TU3-ETG</strong></li>
-  <li><strong>j5create JUE130</strong></li>
+  <li><strong>ASIX AX88179 / AX88179A</strong> (USB&nbsp;3.0 gigabit). Verified on real hardware. Common
+      products: <strong>Plugable USB3-E1000</strong>, <strong>StarTech USB31000S</strong>,
+      <strong>TRENDnet TU3-ETG</strong>, <strong>j5create JUE130</strong>.</li>
+  <li><strong>Realtek RTL8152 / 8153 / 8155 / 8156</strong> (up to 2.5&nbsp;Gigabit), including the chips
+      built into many <strong>Lenovo, Microsoft Surface, Dell and TP-Link</strong> USB-C docks - for example
+      the <strong>TP-Link UE300</strong>. The faster RTL8157 / 8159 (5G/10G) parts are recognised but
+      declined.</li>
 </ul>
-<p>Adapters built on Realtek chips (the RTL8153 family - for example the TP-Link UE300) use a
-different chip and are <em>not</em> supported yet. Wi-Fi is not supported yet either.</p>
+<div class="note tip"><b>Tested on metal</b>An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.</div>
+
+<h2 id="wifi">Wi-Fi</h2>
+<p><strong>Wi-Fi is not supported yet.</strong> The groundwork is in place - UnoDOS ships early drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips, and they load the adapter's firmware - but no
+machine has yet joined a network, so wireless is not usable in this release. Use a wired port or a USB
+Ethernet adapter to get online.</p>
 
 <nav class="pagenav"><a href="browser.html">&lsaquo; Web browser</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
 </div></main>

@@ -134,7 +134,7 @@ if [ "$1" != "legacy" ]; then
     # $DBGSAN (UBSan trap + stack canary) rides on this FIRST-PARTY set only -
     # third-party bearssl/uacpi/upy below build without it (they do defined
     # unsigned wraparound the sanitizer must not trap).
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
