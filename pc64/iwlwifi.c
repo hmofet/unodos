@@ -604,12 +604,16 @@ static void clear_persistence_bit(void)
  * power-gated CNVi MAC absorbs PRPH writes and the boot ROM never runs -
  * exactly the round-1 Yoga signature (doorbell written with MAC access held,
  * read back 0, UCODE_LOAD_STATUS=0). Ends with ANOTHER sw reset + retake. */
+#define WFPM_GP1_ENA             0xa03030   /* WFPM enable - working trace writes 0x80000000 here, early */
 static int force_power_gating(void)
 {
     /* iwl_finish_nic_init: INIT_DONE + wait clock */
     set_bit_(CSR_GP_CNTRL, GP_CNTRL_INIT_DONE);
     if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY, GP_CNTRL_MAC_CLOCK_READY, 25) < 0)
         return -1;
+    /* Working-trace write we were missing: a WFPM enable, done right after
+     * finish_nic_init, before the HPM power-gating dance. */
+    prph_w(WFPM_GP1_ENA, 0x80000000u);
     prph_setbits(HPM_HIPM_GEN_CFG, HIPM_CR_FORCE_ACTIVE);
     udelay_(20);
     prph_setbits(HPM_HIPM_GEN_CFG, HIPM_CR_PG_EN | HIPM_CR_SLP_EN);
@@ -687,6 +691,11 @@ static void nic_config_radio(void)
 static void conf_msix(void)
 {
     int i;
+    /* config-register writes the working trace does at this phase and we were
+     * missing: io[0x3c] (a HW config strap) + the gen2 HPET debug filter.
+     * io[0x100] (GIO chicken) we already set via apm_init's set_bit. */
+    w32(0x03c, 0x001f0042u);
+    w32(CSR_DBG_HPET_MEM_REG, DBG_HPET_MEM_VAL);   /* io[0x240]=0xffff0000, gen2 too */
     prph_w(uprph(UREG_CHICK), UREG_CHICK_MSIX);
     /* RX IVARs: index 0 = 0, indices 1..8 = their queue number (trace) */
     w8_(CSR_MSIX_RX_IVAR_BASE + 0, 0x00);
@@ -703,9 +712,10 @@ static void conf_msix(void)
     w32(CSR_MSIX_HW_INT_CAUSES_AD, 0xffffffffu);
     w32(CSR_MSIX_FH_INT_MASK_AD, MSIX_FH_MASK_FWLOAD);
     w32(CSR_MSIX_HW_INT_MASK_AD, MSIX_HW_MASK_FWLOAD);
-    uno_dbg_net_trace("wifi: MSI-X configured: CHICK=%08x FHmask=%08x HWmask=%08x",
+    uno_dbg_net_trace("wifi: MSI-X+PCI[v3] configured: CHICK=%08x FHmask=%08x HWmask=%08x WFPM=%08x",
                       prph_r(uprph(UREG_CHICK)),
-                      r32(CSR_MSIX_FH_INT_MASK_AD), r32(CSR_MSIX_HW_INT_MASK_AD));
+                      r32(CSR_MSIX_FH_INT_MASK_AD), r32(CSR_MSIX_HW_INT_MASK_AD),
+                      prph_r(WFPM_GP1_ENA));
 }
 
 /* grab NIC access so PRPH/SRAM writes land (refcounted: prph_w/prph_r grab
@@ -1245,6 +1255,24 @@ static int pci_find_cap(const pci_dev *d, u8 want)
     }
     return 0;
 }
+/* Enable MSI-X in PCI CONFIG space. The BAR0 register trace can't show this
+ * (config-space writes aren't traced), but Linux's pci_alloc_irq_vectors puts
+ * the function into MSI-X mode at the PCI level - and UREG_CHICK=MSIX is only
+ * consistent if the PCI MSI-X Enable bit is also set. We poll and never take a
+ * vector, so we set the Function-Mask bit too (all vectors masked, no MSI-X
+ * table access needed) - the device is in MSI-X mode for the ROM's check
+ * without us having to build a real table. */
+static void msix_enable_pci(void)
+{
+    int pos = pci_find_cap(&g_pci, 0x11);      /* PCI_CAP_ID_MSIX */
+    u16 ctl;
+    if (!pos) { uno_dbg_net_trace("wifi: no MSI-X capability on the function"); return; }
+    ctl = pci_cfg_read16(&g_pci, pos + 2);
+    pci_cfg_write16(&g_pci, pos + 2, (u16)(ctl | 0x8000 /*enable*/ | 0x4000 /*func-mask*/));
+    uno_dbg_net_trace("wifi: PCI MSI-X enabled: cap@%02x ctl %04x->%04x (tblsize=%d)",
+                      pos, ctl, pci_cfg_read16(&g_pci, pos + 2), (ctl & 0x7ff) + 1);
+}
+
 static void msi_probe_enable(void)
 {
     int pos = pci_find_cap(&g_pci, 0x05);
@@ -2048,11 +2076,11 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
-    if (g_gen2) conf_msix();         /* MSI-X config - REQUIRED for the ROM to start */
+    if (g_gen2) { msix_enable_pci(); conf_msix(); }  /* PCI MSI-X + BAR0 MSI-X - REQUIRED for the ROM to start */
     else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
     nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
-    if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
+    if (g_gen2) w32(CSR_MAC_SHADOW_REG_CTRL, 0x802FFFFFu);   /* working trace value */
 
     /* Force the fw/context-info DMA arena below 4GB before we build it: the boot
      * ROM DMAs from these physaddrs, and a >4GB arena is why FH_INT stayed 0. */
@@ -2060,7 +2088,7 @@ uno_nic_t *iwl_nic(void)
     uno_dbg_net_trace("wifi: DMA arena base=%08x%08x (%s 4GB)",
                       (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
                       g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
-    msi_probe_enable();
+    if (!g_gen2) msi_probe_enable();   /* gen2 uses PCI MSI-X (enabled above); MSI probe would conflict */
 
     /* load firmware + wait ALIVE */
     if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
