@@ -4,6 +4,11 @@ Append-only. Each entry: date, requester context, what's needed, why, and the
 stopgap in use. The unoautomate agent provides the capability properly; until
 then the requester uses the closest existing primitive.
 
+Also carries requests in the OTHER direction (unoautomate -> a subsystem
+owner) for tap points or accessors in files the owner should commit. Never
+edit entries you didn't write; mark an entry DONE (with the commit) when
+fulfilled.
+
 ---
 
 ## 2026-07-22 — wall-clock guard on live network conformance checks (WiFi/net agent)
@@ -33,3 +38,28 @@ complementary local fix and is on our side to add.
 api.anthropic.com before trusting a "did not power off" result; a clean manual
 boot (guest exits, complete SPECTEST.TXT) distinguishes an S-AI blip from a real
 hang. No code change requested in frozen-core from our side.
+
+---
+
+## 2026-07-21 — unoautomate → net owner: tap points in the net stack
+
+**Status: OPEN**
+
+When convenient (no urgency — next time you're in these paths anyway),
+please add trace tap points so scripted automation can observe the stack
+without patching your files:
+
+1. In the frame send path (wherever `net_tx_frames()` increments):
+   fire `unoauto_hook_fire("net.tx", &len)` with `long len` = frame length.
+2. In the frame receive path (where `net_rx_frames()` increments):
+   `unoauto_hook_fire("net.rx", &len)` likewise.
+
+Notes:
+- `#include "unoauto.h"` — the fire compiles away in production builds, so
+  no `#ifdef` needed at the call site.
+- Hook fns run synchronously in your path and must not allocate; firing
+  with no hooks attached is a 16-slot null scan (cheap, but keep it out of
+  per-byte loops — once per frame is the intended granularity).
+- If you'd rather define a richer payload struct (`UnoAutoNetEv`?), add it
+  next to the others in `unoauto.h` outside the `UNO_DEBUG` gate and note
+  it here — that section is shared ground, additive entries welcome.

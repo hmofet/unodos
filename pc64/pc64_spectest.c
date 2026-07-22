@@ -981,6 +981,15 @@ static void test_interactive(void)
 }
 
 /* =================================================================== HARNESS */
+/* hook clients for S-DBG-21/22: one injector (fails exactly one armed
+ * malloc), one tracer (counts fs.read fires) */
+static int g_hookfail_arm, g_fsread_hits;
+static void dbg_oom_hook(const char *point, void *arg, void *user)
+{ (void)point; (void)user;
+  if (g_hookfail_arm) { ((UnoAutoAllocEv *)arg)->fail = 1; g_hookfail_arm = 0; } }
+static void dbg_fsread_hook(const char *point, void *arg, void *user)
+{ (void)point; (void)arg; (void)user; g_fsread_hits++; }
+
 static void test_dbg(void)
 {
     /* S-DBG-05: the machine tag is a non-empty 8.3-safe folder name */
@@ -1002,6 +1011,22 @@ static void test_dbg(void)
       }
       if (n >= 4 && heap && shell) OK("S-DBG-20");
       else BAD("S-DBG-20", "n=%d heap=%d shell=%d", n, heap, shell); }
+    /* S-DBG-21: a "libc.malloc" hook can fail one allocation (scriptable OOM
+     * injection - the hook consumed its arm flag exactly once) */
+    { int id = unoauto_hook_add("libc.malloc", dbg_oom_hook, 0);
+      void *p;
+      g_hookfail_arm = 1;
+      p = malloc(32);
+      unoauto_hook_remove(id);
+      if (p) free(p);
+      CHECK("S-DBG-21", id >= 0 && p == 0 && g_hookfail_arm == 0); }
+    /* S-DBG-22: an "fs.read" hook observes a real read attempt */
+    { int id = unoauto_hook_add("fs.read", dbg_fsread_hook, 0);
+      unsigned char tmp[16];
+      g_fsread_hits = 0;
+      uno_fs_read(0, "NOSUCH.XYZ", tmp, (long)sizeof tmp);
+      unoauto_hook_remove(id);
+      CHECK("S-DBG-22", id >= 0 && g_fsread_hits > 0); }
 }
 
 /* ---- unoauto TEST-registry adapters ---------------------------------------
