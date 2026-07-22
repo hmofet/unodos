@@ -355,6 +355,31 @@ All three implemented; plus a decisive PRPH-window probe (write
 `HPM_*` dumps in the autopsy — the next NETLOG distinguishes "PRPH window
 now works, ROM still quiet" from "MAC still absorbing writes."
 
+**ROUND-3 UPDATE (2026-07-22, after the Yoga run of build 0408):** round 2's
+power fix WORKED — `prph window check: HPM_UMAC_LTR wrote 88fa88fa read
+88fa88fa` (and it still read back at autopsy; `HPM_HIPM=3` = the post-dance
+state; the run's single `grab_fail=1` is the diagnostic trace that reads
+HPM_HIPM right after the second reset, before clocks — harmless). But the ROM
+is STILL silent: `LOAD_STATUS=0`, `CPU_INIT_RUN=0`, `fh_after_kick=0`. So
+either the doorbell register alone still refuses the write, or the ROM
+consumes it and silently rejects our context info / firmware image. Three
+more Linux deltas found and shipped:
+1. **`iwl_op_mode_nic_config` (pre-AX210, runs inside nic_init BEFORE the
+   load)**: MAC step/dash from `CSR_HW_REV` + RADIO type/step/dash straps
+   from the firmware's PHY_SKU TLV + `RADIO_SI|MAC_SI` into
+   `CSR_HW_IF_CONFIG_REG`. We wrote NONE of it (Yoga `HW_IF=00480000`) — an
+   HR-RF image with unset radio straps is a plausible silent refuse.
+   → `nic_config_radio()`.
+2. **Paging sections → `dram.virtual_img`**: Linux places lmac/umac/paging;
+   we left `vimg[]` zero and AX201 images carry paging sections.
+3. **Doorbell probe**: `CPU_INIT_RUN` is now read back in the SAME MAC-access
+   grab as the write and again +10 ms — the next NETLOG line
+   (`doorbell CPU_INIT_RUN: instant=X +10ms=Y`) finally splits
+   "landed-and-consumed" (1/0 → dig into image validation) from
+   "still refused" (0/0 → power/ownership again).
+   Also: gen2 no longer sets the gen1-only HAP_WAKE/HPET APM bits (Linux
+   gen2 apm parity).
+
 **ALL FIXED in iwlwifi.c (metal-pending — QEMU has no Intel WiFi model):**
 refcounted MAC-access grab inside `prph_w/prph_r`, gen2 tail = LTR + doorbell,
 gen3 tail = int-mask + LTR/IML-spin + UMAC-offset doorbell (+ BZ scratch
