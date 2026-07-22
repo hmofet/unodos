@@ -23,6 +23,7 @@
  * folder copy. STRESS.CFG key `nonet` skips the whole test.
  * ======================================================================== */
 #include "uno_debug.h"
+#include "unoauto.h"
 #include "fb.h"
 #include "net.h"
 #include "ax88179.h"
@@ -75,7 +76,13 @@ void uno_dbg_progress_done(void)
     pc64_dbg_mark_dirty();                 /* shell repaints over the strip */
 }
 
-/* ---- the NETLOG buffer ---------------------------------------------------- */
+/* ---- the NETLOG buffer: an unoauto NET-channel sink ------------------------
+ * unoauto_log(UA_CH_NET, ...) is the trace path now; uno_dbg_net_trace below
+ * is a compatibility wrapper over it, so every existing driver call site is
+ * unchanged.  unoauto's sink 0 (the kernel-ring mirror) runs first, then this
+ * sink does what the old trace body did after the mirror: feed the watchdog,
+ * paint the ticker, append the timestamped line, flush - same order as before
+ * the seam, so NETLOG.TXT is byte-identical. */
 #define NETBUF 16384
 static char g_buf[NETBUF];
 static int  g_len;
@@ -87,22 +94,36 @@ static void flush(void)
         uno_dbg_write_crashfile("NETLOG.TXT", g_buf, g_len);
 }
 
-void uno_dbg_net_trace(const char *fmt, ...)
+static void netlog_sink(UnoAutoChan ch, const char *line, void *user)
 {
-    char line[240];
     unsigned long long ms = uno_dbg_uptime_ms();
-    va_list ap;
     int n;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    uno_dbg_log("%s", line);            /* mirror into the kernel log ring */
+    (void)ch; (void)user;
     uno_dbg_heartbeat();                /* a slow join must not trip the wd  */
     uno_dbg_progress("%s", line);       /* live on-screen ticker (blocking phase) */
     n = snprintf(g_buf + g_len, (size_t)(NETBUF - g_len - 1), "[%6lu.%03lu] %s\n",
                  (unsigned long)(ms / 1000), (unsigned long)(ms % 1000), line);
     if (n > 0 && g_len + n < NETBUF - 1) g_len += n;
     flush();
+}
+
+/* Called by unoauto's ua_init (transitional, see unoauto.c) and by the
+ * wrapper below, whichever runs first. */
+void pc64_netlog_sink_ensure(void)
+{
+    static int did;
+    if (did) return;
+    did = 1;
+    unoauto_sink_add(1u << UA_CH_NET, netlog_sink, 0);
+}
+
+void uno_dbg_net_trace(const char *fmt, ...)
+{
+    va_list ap;
+    pc64_netlog_sink_ensure();
+    va_start(ap, fmt);
+    unoauto_vlog(UA_CH_NET, fmt, ap);
+    va_end(ap);
 }
 
 /* ---- shared IP-layer test (any bound nic) --------------------------------- */
