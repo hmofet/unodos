@@ -114,6 +114,19 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`disc`**
+  — query-only readout of zero-config discovery (netdisc) state, so a dev PC can
+  ask "is discovery armed, did pc64 record a host OFFER, and which host:port did
+  it latch?" without watching the wire. Replies `active=<0/1>` / `have_host=<0/1>`
+  / `host=<ip>:<port>` (only when found) / `link=<state>`. Pure read of the
+  existing `netdisc.h` getters (`netdisc_active`/`have_host`/`host_ip`/`host_port`)
+  in `unoauto_remote.c`; UNO_DEBUG-only, additive to the CMD dispatch, no new C
+  API. REMOTE.md verb table documents it. Gate: `tools/netdisc_qemu.py` now drives
+  a real `disc` round-trip over the auto-dialed URC link on its raw-Ethernet L2 hub
+  (its TCP peer gained just enough seq/ack bookkeeping to send one command and read
+  the RSP frames) and asserts `active=1`, `have_host=1`, `host==` the advertised
+  OFFER — 9/9 gate checks green. Closes the "disc URC verb" leftover from the
+  transport-stack handoff.
 - **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`eth`**
   — live wired-NIC (Realtek r8169) register/bring-up debug, the exact wired
   sibling of the `iwl` WiFi verb. Additive pass-through in `unoauto_remote.c` to
