@@ -149,6 +149,10 @@ if [ "$1" != "legacy" ]; then
         OBJS="$OBJS build/pc64_nettest.o"
         pc "$CC" $UCF $DBGSAN -c -o "build/pc64_spectest.o" "pc64_spectest.c"
         OBJS="$OBJS build/pc64_spectest.o"
+        # UNOAUTOMATE core (Stage 1 seam): channelled logging + test registry.
+        # The legacy harness above delegates into it; see unoauto.h.
+        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto.o" "unoauto.c"
+        OBJS="$OBJS build/unoauto.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
