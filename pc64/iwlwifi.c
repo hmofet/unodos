@@ -34,8 +34,19 @@
 #include "net.h"
 #include "wifi_wpa.h"
 #include "uno_debug.h"     /* uno_dbg_net_trace: bring-up trace (no-op in release) */
+#include "uefi.h"          /* below-4GB DMA arena (AllocateMaxAddress) */
 #include <stdint.h>
 #include <string.h>
+
+/* boot-services page allocator (uefi.h leaves AllocatePages a void* slot). The
+ * gen2/gen3 boot ROM DMAs the context-info + fw sections from the physaddrs we
+ * program into CSR_CTXT_INFO_BA; our DMA memory is static .bss, so on a machine
+ * with >4GB RAM it lands above 4GB (metal: ctxt_info + fw_dram both 0x1_42xx)
+ * and the early ROM's DMA never reaches it -> FH_INT stays 0, fw never starts.
+ * AllocateMaxAddress(<4GB) forces the arena into 32-bit-DMA-reachable memory. */
+void *uno_pc64_st(void);                 /* uefi_main.c - the EFI system table */
+typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN Type, UINTN MemType, UINTN Pages,
+                                      unsigned long long *Memory);
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -308,15 +319,37 @@ static int firmware_volume(void)
 #define FW_FILE_MAX   (2*1024*1024)
 #define FW_ARENA_MAX  (3*1024*1024)
 #define PNVM_MAX      (256*1024)
-static u8 g_fwbuf[FW_FILE_MAX]   __attribute__((aligned(4096)));
-static u8 g_arena[FW_ARENA_MAX]  __attribute__((aligned(4096)));
-static u8 g_pnvmbuf[PNVM_MAX]    __attribute__((aligned(4096)));
+static u8 g_fwbuf[FW_FILE_MAX]   __attribute__((aligned(4096)));  /* file scratch (not DMA'd) */
+static u8 g_arena_static[FW_ARENA_MAX] __attribute__((aligned(4096)));  /* fallback if alloc fails */
+static u8 *g_arena;                     /* DMA arena base: <4GB block, else the static */
+static u8 g_pnvmbuf[PNVM_MAX]    __attribute__((aligned(4096)));  /* file scratch (not DMA'd) */
 static long g_pnvm_len;                 /* bytes in g_pnvmbuf (0 = none)      */
 static u32 g_arena_used;
+static u64 g_arena_phys;                /* base physaddr, for the bring-up trace */
+
+/* Back the DMA arena with pages forced below 4GB (see the note by the includes).
+ * Boot-services only - WiFi brings up before ExitBootServices in the debug
+ * build. Falls back to the static arena (fine on <=4GB boxes and on QEMU). */
+static void arena_init_lowmem(void)
+{
+    EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    g_arena_used = 0;
+    if (g_arena) return;                /* once per boot */
+    if (ST) {
+        unsigned long long mem = 0x00000000FFFFF000ull;   /* ceiling: below 4GB */
+        UINTN pages = (FW_ARENA_MAX + 4095) / 4096;
+        if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)(
+                1 /*AllocateMaxAddress*/, 2 /*EfiLoaderData*/, pages, &mem) == EFI_SUCCESS)
+            g_arena = (u8 *)(uintptr_t)mem;
+    }
+    if (!g_arena) g_arena = g_arena_static;             /* fallback (may be >4GB) */
+    g_arena_phys = (u64)(uintptr_t)g_arena;
+}
 
 static void *arena_alloc(u32 len)
 {
     u32 off = (g_arena_used + 4095) & ~4095u;
+    if (!g_arena) arena_init_lowmem();
     if (off + len > FW_ARENA_MAX) return 0;
     g_arena_used = off + len;
     return g_arena + off;
@@ -912,6 +945,7 @@ static void place_fw_dram(struct ci_dram *dram)
  * never starts, these tell us whether the kick address or the fw placement is
  * the problem (vs the register write path itself). */
 static u64 g_ci_phys, g_ci_dram0;
+static u32 g_fh_seen;      /* FH_INT bits latched in the ~200ms after the kick */
 
 static int load_fw_gen2(void)
 {
@@ -943,7 +977,12 @@ static int load_fw_gen2(void)
      * CSR_CTXT_INFO_ADDR) - a no-op here at best. */
     w32(CSR_INT, 0xFFFFFFFFu);
     w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);
+    g_fh_seen = 0;
     w64_(CSR_CTXT_INFO_BA, g_ci_phys);         /* kick: device self-loads */
+    /* Latch FH_INT for ~200 ms right after the kick: if the ROM's DMA engine
+     * runs at all with the now-<4GB arena, we catch it here even if it clears
+     * before the ALIVE-timeout autopsy reads the register 2 s later. */
+    { int t; for (t = 0; t < 200; t++) { g_fh_seen |= r32(CSR_FH_INT_STATUS); mdelay_(1); } }
     return 0;
 }
 
@@ -1047,8 +1086,8 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   CSR_INT=%08x MASK=%08x GP_CNTRL=%08x RESET=%08x GP1=%08x",
                           r32(CSR_INT), r32(CSR_INT_MASK), r32(CSR_GP_CNTRL),
                           r32(CSR_RESET), r32(0x054 /*CSR_UCODE_DRV_GP1*/));
-        uno_dbg_net_trace("wifi:   FH_INT=%08x  (any bit set = the ROM's DMA engine ran)",
-                          r32(CSR_FH_INT_STATUS));
+        uno_dbg_net_trace("wifi:   FH_INT=%08x  fh_after_kick=%08x  (any bit = the ROM's DMA engine ran)",
+                          r32(CSR_FH_INT_STATUS), g_fh_seen);
         uno_dbg_net_trace("wifi:   UREG_UCODE_LOAD_STATUS=%08x UREG_CPU_INIT_RUN=%08x",
                           prph_r(0xa05c40), prph_r(0xa05c44));
         /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
@@ -1608,6 +1647,13 @@ uno_nic_t *iwl_nic(void)
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
     rx_hw_init();
     if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
+
+    /* Force the fw/context-info DMA arena below 4GB before we build it: the boot
+     * ROM DMAs from these physaddrs, and a >4GB arena is why FH_INT stayed 0. */
+    arena_init_lowmem();
+    uno_dbg_net_trace("wifi: DMA arena base=%08x%08x (%s 4GB)",
+                      (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
+                      g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
 
     /* load firmware + wait ALIVE */
     if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
