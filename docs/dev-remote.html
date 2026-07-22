@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -98,6 +98,11 @@ than the other way round. You tell it where to dial with one line in the stick's
 <pre><code>remote=192.168.2.43:5099</code></pre>
 <p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
 your PC (below). If the link drops it reconnects on its own.</p>
+<p>You do not edit <code>STRESS.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
+turned on in the <a href="getting-started.html#flasher">UnoDOS flasher</a> (that is what selects the debug OS
+and writes the file), and set the remote address there. To point an existing debug stick at a different PC,
+use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>STRESS.CFG</code> in place without
+erasing the disk, so you are not reflashing the whole image just to change an IP.</p>
 <div class="note"><b>One connection</b>The remote link shares one TCP connection with the Browser and AI features, so they cannot be used while a link is active.</div>
 
 <h2 id="logging">Remote logging</h2>
@@ -179,6 +184,81 @@ the machine boot the other stick automatically on the next restart, without anyo
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
 <div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
+
+<h2 id="setup">Setting up a development environment</h2>
+<p>Putting the pieces together, a comfortable unoautomate workflow needs a one-time setup and then a tight
+loop:</p>
+<ol>
+  <li><strong>Two sticks.</strong> Flash <strong>two</strong> USB sticks with <em>Developer options</em> on:
+      <strong>A</strong>, a known-good build you keep as a fallback, and <strong>B</strong>, the spare you push
+      new builds to. Set <code>remote=&lt;your-pc-ip&gt;:5099</code> on both when you flash them (or add it later
+      with the flasher's <strong>Reconfigure</strong> button - no reflash).</li>
+  <li><strong>The bench machine boots stick B</strong> and, once its network comes up, dials your PC. The
+      driver box builds attached (<code>-DUNO_NO_DETACH</code>) so its own USB stick shows up as a writable
+      volume you can push to.</li>
+  <li><strong>Run the listener on your PC:</strong> <code>python tools/unoauto_remote.py --listen 0.0.0.0:5099</code>.
+      Its logs start streaming the moment the device connects.</li>
+  <li><strong>Edit, build, push, reboot.</strong> Change a driver, rebuild <code>BOOTX64.EFI</code>, push it to
+      stick B, and reboot into it - seconds, no walking to the bench. Stick A is always there if a build will
+      not boot.</li>
+</ol>
+<p>The whole loop scripts cleanly from the Python library, so you can wrap it in one keystroke:</p>
+<pre><code>from unoauto_remote import UnoAutoLink
+
+link = UnoAutoLink(port=5099)
+link.on_log(lambda chan, text: print(f&quot;[{chan}] {text}&quot;))  # watch the OS think
+link.listen(); link.wait_connected()                     # stick B dials in
+
+while True:                       # your edit / build / test loop
+    input(&quot;built a new BOOTX64.EFI? press enter to push it &gt; &quot;)
+    print(link.command(&quot;probe&quot;))                   # inspect the live system...
+    link.push_file(2, r&quot;EFI\BOOT\BOOTX64.EFI&quot;, &quot;build/BOOTX64.EFI&quot;)
+    link.reboot()                                  # ...then boot the new build
+    link.wait_connected()                          # it dials back in</code></pre>
+
+<h2 id="usecases">What you can do with it</h2>
+
+<h3 id="uc-driver">Driver development</h3>
+<p>This is the case unoautomate was built for. Bringing up a driver for real hardware - a NIC, a Wi-Fi chip,
+a storage controller - is a cycle of "change one thing, watch what the hardware does, change it again", and
+without a channel each turn means pulling a stick, reflashing it, walking it to the bench, booting, and
+reading a log file after the fact. unoautomate collapses that:</p>
+<ul>
+  <li><strong>Watch the bring-up live.</strong> Every line the driver logs - each register write, each
+      firmware handshake, exactly where it stalls - streams to your PC as it happens, instead of being read
+      from <code>CRASH\NETLOG.TXT</code> after a hang.</li>
+  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~1.5&nbsp;MB kernel to the
+      spare stick and reboots into it; a driver change touches one file and the round trip is a keystroke.</li>
+  <li><strong>Poke the hardware without a rebuild.</strong> Run a line of Python on the device with
+      <code>py</code> / <code>link.eval()</code> to read back state between builds, and <code>probe</code> to
+      confirm which subsystems actually came up. A debug build is exactly where you want this reach.</li>
+</ul>
+<p>The Intel Wi-Fi bring-up is the working example: the driver is iterated this way, its firmware-load
+sequence streamed back register by register while builds are pushed to the bench machine over the link.</p>
+
+<h3 id="uc-test">Automated conformance testing</h3>
+<p>A debug OS carries built-in conformance suites (<code>storage</code>, <code>system</code>,
+<code>network</code>, <code>frameworks</code>, <code>apps</code>). Run one from your PC and stream its report,
+then assert on a live <code>probe()</code> - a real regression test you can put in CI or run after every push:</p>
+<pre><code>link.wait_connected()
+report = link.test(&quot;network&quot;)            # run one built-in conformance suite
+for line in report:
+    print(line)                          # e.g.  S-NET-10 dhcp lease .......... ok
+# probe the live system and assert on it
+subs = {r[&quot;name&quot;]: r for r in link.probe() if r[&quot;kind&quot;] == 2}
+assert subs[&quot;net&quot;][&quot;state&quot;] == 1, &quot;network subsystem did not come up&quot;</code></pre>
+
+<h3 id="uc-ui">Driving the desktop headlessly</h3>
+<p>Because <code>key</code> and <code>pointer</code> are injected exactly as a human's input on the next frame,
+you can drive the whole desktop from a script: launch an app, type into it, walk a menu, and check the result -
+no monitor or keyboard attached. This is how the screenshots in this manual are produced (see
+<a href="dev-build.html#shots">Regenerate the manual screenshots</a>): the harness boots the OS and drives it
+entirely over the channel.</p>
+
+<h3 id="uc-triage">Unattended runs and remote triage</h3>
+<p>Leave a machine running a soak test on the bench, watch its log stream from your desk, and have it
+<code>poweroff</code> itself when it finishes or <code>reboot</code> when it wedges. For an intermittent bug you
+no longer reproduce-then-lose-the-evidence: the log is already on your PC when it happens.</p>
 
 <p class="muted">The full wire protocol and every command's exact reply are in
 <a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>

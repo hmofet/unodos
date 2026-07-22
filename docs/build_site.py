@@ -26,6 +26,7 @@ NAV = [
     ("developer.html",       "Overview &amp; architecture"),
     ("studio.html",          "Studio: the built-in IDE"),
     ("dev-apps.html",        "Writing apps"),
+    ("dev-python.html",      "Python apps"),
     ("dev-api.html",         "API reference"),
     ("dev-build.html",       "Building &amp; tooling"),
     ("dev-remote.html",      "Remote control &amp; automation"),
@@ -557,9 +558,88 @@ static const AppInterface kIface = {
 };
 const AppInterface *uno_app_main(const KernelApi *k) { gK = k; return &kIface; }''')
 
+# ---- Python app snippets (defined here so their indentation is preserved) ----
+CODE_PY_HELLO = code('''import uno
+
+class Hello(uno.App):
+    def draw(self, cv):
+        cv.clear(uno.rgb(0, 0, 0))
+        cv.text(8, 8, "Hello from Python", uno.rgb(255, 255, 255))
+
+# the runtime looks up `app` and drives its methods for you
+app = Hello()''')
+
+CODE_PY_SAMPLE = code('''import uno
+
+class Bouncer(uno.App):
+    def build(self, cv):                 # once, as the window opens
+        self.w, self.h = cv.width(), cv.height()
+        self.x, self.y = 20.0, 24.0      # real floats - UnoC has none
+        self.vx, self.vy = 3.2, 2.3
+        self.d = 22
+
+    def draw(self, cv):                  # paint one frame
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, "Hello from Python", uno.rgb(210, 214, 230))
+        cv.fill_rect(int(self.x), int(self.y), self.d, self.d, uno.rgb(255, 96, 96))
+
+    def tick(self):                      # ~60 times a second
+        self.x += self.vx; self.y += self.vy
+        if self.x < 0 or self.x + self.d > self.w: self.vx = -self.vx
+        if self.y < 0 or self.y + self.d > self.h: self.vy = -self.vy
+
+    def key(self, uni, scan, ctrl):      # space = speed the ball up
+        if uni == 32:
+            self.vx *= 1.25; self.vy *= 1.25
+            return True
+        return False
+
+app = Bouncer()''')
+
+CODE_PY_STREAM = code('''import uno
+
+class WadInfo(uno.App):
+    def build(self, cv):
+        # read only the 12-byte header of a multi-MB file, not the whole thing
+        n = uno.size("DOOM1.WAD")                 # -1 if it is not there
+        head = uno.read_at(0, "DOOM1.WAD", 0, 12) if n > 0 else b""
+        self.line = "no WAD" if n < 0 else \\
+            "%s  %d lumps  %d bytes" % (head[0:4].decode(), head[4], n)
+
+    def draw(self, cv):
+        cv.clear(uno.rgb(0, 0, 0))
+        cv.text(8, 8, self.line, uno.rgb(120, 230, 160))
+
+app = WadInfo()''')
+
+CODE_PY_UNO_API = code('''import uno
+
+uno.rgb(r, g, b)                 # pack a colour (0-255 each) -> int
+
+# --- Canvas (passed to build() and draw(); coords are canvas-relative) ---
+cv.width(); cv.height()          # your drawable size, in pixels
+cv.clear(color)                  # fill the whole canvas
+cv.fill_rect(x, y, w, h, color)  # filled / outline rectangle
+cv.rect(x, y, w, h, color)
+cv.pixel(x, y, color)
+cv.hline(x, y, w, color); cv.vline(x, y, h, color)
+cv.text(x, y, "string", color)
+
+# --- Sound (the shared UnoSound voice) ---
+uno.beep(midi, ticks)            # square-wave note, ticks ~= 1/60 s
+uno.quiet()
+
+# --- Files (vol defaults to 0, the boot volume) ---
+uno.read(name) -> bytes                 # whole (small) file
+uno.read_at(vol, name, off, n) -> bytes # stream a big file a slice at a time
+uno.size(name) -> int                   # bytes, or -1 if missing
+uno.write(name, data) -> bool           # to a writable volume''')
+
 CODE_BUILD = code('''./build.sh                 # build the unoui desktop shell -> build/esp/
 ./build.sh run             # build, then boot it in QEMU + OVMF
 ./build.sh legacy          # build the older 14-app "legacy" core
+UNO_DEBUG=1 ./build.sh     # the debug/test harness build (adds unoautomate)
+UNO_PYRT=0 ./build.sh      # skip PYRT.UNO (no Python runtime; smaller image)
 python3 tools/mkuefi.py 512   # pack build/esp/ into build/unodos-uefi.img (512 MiB)
 python3 harness.py boot    # scripted QEMU boot + screenshot
 python3 nettest.py         # headless network + TLS verification''')
@@ -605,6 +685,27 @@ python tools/unoauto_remote.py --listen 0.0.0.0:5099      # then type: vols
 python tools/unoauto_remote.py \\
     --push 2 "EFI\\BOOT\\BOOTX64.EFI" build/BOOTX64.EFI --reboot''')
 
+CODE_REMOTE_LOOP = code('''from unoauto_remote import UnoAutoLink
+
+link = UnoAutoLink(port=5099)
+link.on_log(lambda chan, text: print(f"[{chan}] {text}"))  # watch the OS think
+link.listen(); link.wait_connected()                     # stick B dials in
+
+while True:                       # your edit / build / test loop
+    input("built a new BOOTX64.EFI? press enter to push it > ")
+    print(link.command("probe"))                   # inspect the live system...
+    link.push_file(2, r"EFI\\BOOT\\BOOTX64.EFI", "build/BOOTX64.EFI")
+    link.reboot()                                  # ...then boot the new build
+    link.wait_connected()                          # it dials back in''')
+
+CODE_REMOTE_TEST = code('''link.wait_connected()
+report = link.test("network")            # run one built-in conformance suite
+for line in report:
+    print(line)                          # e.g.  S-NET-10 dhcp lease .......... ok
+# probe the live system and assert on it
+subs = {r["name"]: r for r in link.probe() if r["kind"] == 2}
+assert subs["net"]["state"] == 1, "network subsystem did not come up"''')
+
 # --------------------------------------------------------------------------- pages
 PAGES = {}
 
@@ -633,15 +734,15 @@ PAGES["index.html"] = ("Overview", f"""
 
 {note('Download <strong>unodos-pc64.iso</strong> and write it to a spare USB stick with Rufus or balenaEtcher (or boot it in a VM) - or use the one-click <strong>USB flasher</strong>. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
-{fig("desktop.png", "The pc64 desktop in the default <b>Aurora Light</b> theme. Right-click anywhere on the desktop for the programs menu - there is no Start button, so the taskbar is just your open windows and the clock.")}
+{fig("desktop.png", "The pc64 desktop in the default <b>Aurora Light</b> theme. The <b>Start</b> button (bottom-left, the UnoDOS brand mark) opens the programs menu; a right-click anywhere on the desktop opens the same menu at the pointer. The rest of the taskbar is your open windows and the clock.")}
 
 <h2 id="what">What you get</h2>
 <div class="cards">
-  <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. Right-click the desktop for the programs menu.</p></div>
+  <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. The Start button, a right-click on the desktop, or <kbd>Ctrl</kbd>+<kbd>Esc</kbd> all open the programs menu.</p></div>
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
   <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
-  <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
+  <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps in <strong>UnoC or Python</strong> on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
   <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
 </div>
@@ -739,7 +840,7 @@ hypervisor. In <strong>VirtualBox</strong>:</p>
 {fig("virtualbox.png", "The ISO booted in a <b>VirtualBox</b> EFI virtual machine - the same desktop as real hardware, captured straight from the VM's screen.")}
 <p>Other hypervisors are the same idea: attach the ISO as a CD and boot with UEFI firmware -
 <strong>VMware</strong> (firmware type UEFI), <strong>Hyper-V</strong> (a Generation&nbsp;2 VM with
-Secure Boot turned off), or QEMU + OVMF (see <a href="developer.html#qemu">Run it in QEMU</a>).</p>
+Secure Boot turned off), or QEMU + OVMF (see <a href="dev-build.html#build">Build &amp; run</a>).</p>
 
 <h2 id="install">Install onto the PC (optional)</h2>
 <p>Running from the USB stick is fine forever - but the <strong>Install</strong> app (in the Start
@@ -765,7 +866,8 @@ keyboard all work.</p>
   {fig("splash.png", "The boot splash, with a loading bar and version.")}
   {fig("controlpanel.png", "First desktop paint: the Control Panel opens over the Aurora Light desktop.")}
 </div>
-<p>From here, everything is a keystroke away. <kbd>Ctrl</kbd>+<kbd>Esc</kbd> opens the programs menu (so does a right-click on the desktop);
+<p>From here, everything is a keystroke away. The <strong>Start</strong> button, a right-click on the
+desktop, or <kbd>Ctrl</kbd>+<kbd>Esc</kbd> all open the programs menu;
 arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a window. The
 <a href="desktop.html">desktop tour</a> covers the rest.</p>
 
@@ -784,11 +886,12 @@ live clock. Every control works by keyboard or pointer.</p>
 <ul>
   <li><strong>Desktop icons</strong> launch apps directly. Arrange them in columns or rows,
       in launcher order or by name, from the Control Panel.</li>
-  <li><strong>Right-click anywhere on the desktop</strong> for the scrollable <strong>programs
-      menu</strong> ("Programs"), which opens at the pointer, lists every app and ends with
-      <strong>Restart</strong> and <strong>Shut Down</strong>. <kbd>Ctrl</kbd>+<kbd>Esc</kbd>
-      opens it too. There is no Start button - the taskbar is your open windows and the clock.</li>
-  <li>The <strong>taskbar</strong> along the bottom shows a button for each open window; click one to bring it to the front.</li>
+  <li>The <strong>Start button</strong> at the bottom-left (the UnoDOS brand mark and the word
+      <strong>Start</strong>) opens the scrollable <strong>programs menu</strong> ("Programs"), which lists
+      every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>. A
+      <strong>right-click anywhere on the desktop</strong> opens the same menu at the pointer, and
+      <kbd>Ctrl</kbd>+<kbd>Esc</kbd> toggles it from the keyboard.</li>
+  <li>The <strong>taskbar</strong> along the bottom shows a button for each open window, to the right of the Start button; click one to bring it to the front.</li>
   <li>The <strong>clock</strong> in the corner shows the current time (and the battery level, on laptops).</li>
 </ul>
 
@@ -920,6 +1023,14 @@ or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker
 PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
 sets the level.</p>
 
+<h2 id="photos">Photos: an image viewer</h2>
+<p><strong>Photos</strong> opens image files from any disk and steps through the rest of the folder with
+<kbd>←</kbd>/<kbd>→</kbd>. It decodes a wide range of formats itself, through the built-in
+<em>unomedia</em> library and with no plug-ins: <strong>PNG</strong>, baseline <strong>JPEG</strong>,
+animated <strong>GIF</strong>, <strong>BMP</strong>, <strong>TGA</strong>, <strong>QOI</strong>,
+<strong>ICO</strong> and <strong>PNM</strong>. Large images are scaled to fit the window, and animated GIFs
+play. (Progressive JPEG and WebP are recognised but not decoded.)</p>
+
 <h2 id="games">Games</h2>
 <p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
 (press <kbd>Esc</kbd> to come back to the desktop).</p>
@@ -933,10 +1044,10 @@ sets the level.</p>
 
 <h2 id="studio">Studio: make your own apps</h2>
 <p>UnoDOS comes with its own IDE. <strong>Studio</strong> is a code editor, a compiler and an AI
-assistant in one window: write an app, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to build it and
-<kbd>Ctrl</kbd>+<kbd>R</kbd> to run it, all on the machine, with no PC or toolchain. The full story,
-including the built-in ChatGPT / Claude / Gemini assistant, is on the <a href="studio.html">Studio</a>
-page.</p>
+assistant in one window: write an app in <strong>UnoC or Python</strong>, press
+<kbd>Ctrl</kbd>+<kbd>B</kbd> to build it and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it, all on the machine,
+with no PC or toolchain. The full story, including the built-in ChatGPT / Claude / Gemini assistant, is on
+the <a href="studio.html">Studio</a> page.</p>
 {fig("studio.png", "<b>Studio</b>: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine.")}
 
 <h2 id="modules">Apps live on the disk</h2>
@@ -989,8 +1100,25 @@ and browses the web, including secure sites.</p>
 
 <h2 id="online">Getting online</h2>
 <p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
-address automatically (DHCP), finds the gateway and other machines, and browses the web over HTTP and
-HTTPS. Nothing else needs to be installed.</p>
+address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
+web over HTTP and HTTPS. Nothing else needs to be installed.</p>
+<p>A small <strong>network chip</strong> sits in the corner of the taskbar so you can see the state at a
+glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
+address has arrived yet, and nothing when the link is down. The <a href="apps.html#native">System</a> app
+spells it out in full, for example <code>Network: link up, IP 192.168.2.157</code>.</p>
+
+<h3 id="wired">Wired network adapters</h3>
+<p>UnoDOS drives the common Intel Gigabit families directly - the built-in wired port on most PCs and
+laptops with an Ethernet socket:</p>
+<ul>
+  <li><strong>Intel 8254x</strong> (the classic <em>e1000</em> family)</li>
+  <li><strong>Intel 82571&ndash;4 / 82574 / 82583</strong> and the <strong>I217 / I218 / I219</strong>
+      laptop LOM chips (the <em>e1000e</em> family)</li>
+  <li><strong>Intel I210 / I211 / I350</strong> and the 8257x server parts (the <em>igb</em> family)</li>
+</ul>
+<p>A driver for <strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) is included but has not been
+verified on hardware yet.</p>
+{note('The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="Emulator-verified")}
 
 <h2 id="selftest">The Network self-test</h2>
 <p>The Network app checks the whole connection step by step and shows the result. In an emulator it tests
@@ -1003,17 +1131,25 @@ certificate against a built-in list of common certificate authorities (Let's Enc
 so you can browse the secure web.</p>
 
 <h2 id="usb">USB Ethernet</h2>
-<p>If a PC has no built-in wired network, UnoDOS can use a USB Ethernet adapter instead. The driver
-speaks to adapters built on the <strong>ASIX AX88179 / AX88178A</strong> chip &mdash; when you shop,
-check the listing's chipset line for those names. Known AX88179-based products include:</p>
+<p>If a PC has no built-in wired network, or its port is not supported, UnoDOS can use a USB Ethernet
+adapter instead. This is the most reliable way to get a laptop online, and it is tested on real hardware.
+Two chip families are supported - check a listing's chipset line before you buy:</p>
 <ul>
-  <li><strong>Plugable USB3-E1000</strong> (USB&nbsp;3.0 gigabit)</li>
-  <li><strong>StarTech USB31000S</strong></li>
-  <li><strong>TRENDnet TU3-ETG</strong></li>
-  <li><strong>j5create JUE130</strong></li>
+  <li><strong>ASIX AX88179 / AX88179A</strong> (USB&nbsp;3.0 gigabit). Verified on real hardware. Common
+      products: <strong>Plugable USB3-E1000</strong>, <strong>StarTech USB31000S</strong>,
+      <strong>TRENDnet TU3-ETG</strong>, <strong>j5create JUE130</strong>.</li>
+  <li><strong>Realtek RTL8152 / 8153 / 8155 / 8156</strong> (up to 2.5&nbsp;Gigabit), including the chips
+      built into many <strong>Lenovo, Microsoft Surface, Dell and TP-Link</strong> USB-C docks - for example
+      the <strong>TP-Link UE300</strong>. The faster RTL8157 / 8159 (5G/10G) parts are recognised but
+      declined.</li>
 </ul>
-<p>Adapters built on Realtek chips (the RTL8153 family - for example the TP-Link UE300) use a
-different chip and are <em>not</em> supported yet. Wi-Fi is not supported yet either.</p>
+{note('An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.', kind="tip", title="Tested on metal")}
+
+<h2 id="wifi">Wi-Fi</h2>
+<p><strong>Wi-Fi is not supported yet.</strong> The groundwork is in place - UnoDOS ships early drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips, and they load the adapter's firmware - but no
+machine has yet joined a network, so wireless is not usable in this release. Use a wired port or a USB
+Ethernet adapter to get online.</p>
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
@@ -1106,7 +1242,7 @@ no host C library, no underlying OS. It ships two interchangeable desktops, sele
 <tr><td><strong>Toolkit (unoui)</strong></td><td>The portable widget core: windows, widgets, events, and a swappable theme (ten themes ship).</td></tr>
 <tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
 <tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
-<tr><td><strong>Drivers (tail)</strong></td><td>e1000 NIC and the TCP/IP + TLS stack, xHCI USB and USB Ethernet, native AHCI/NVMe/SDHCI storage, HD&nbsp;Audio and AC'97 PCM audio, uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
+<tr><td><strong>Drivers (tail)</strong></td><td>Intel e1000 / e1000e / igb NICs (plus a Realtek RTL816x driver) and the TCP/IP + TLS stack, xHCI USB with ASIX and Realtek USB Ethernet, native AHCI / NVMe / SDHCI and USB mass storage, HD&nbsp;Audio and AC'97 PCM audio, early Intel/Realtek/Marvell Wi-Fi (firmware loads, not yet connecting), uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
 </tbody>
 </table></div>
 
@@ -1143,19 +1279,21 @@ PAGES["studio.html"] = ("Studio: the built-in IDE", f"""
 <h1>Studio: the built-in IDE</h1>
 <p class="lede">Write, compile and run UnoDOS apps <strong>on the machine itself</strong> - no PC, no
 toolchain, no command line. Studio is a code editor, a real compiler and an AI assistant in one window,
-and the app it builds opens right next to it.</p>
+and the app it builds opens right next to it. Apps can be written in <strong>UnoC</strong> or in
+<strong>Python 3</strong> - both first-class.</p>
 
-{fig("studio.png", "<b>Studio</b>: a monospace code editor with UnoC syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on the bundled <code>SAMPLE.C</code>.")}
+{fig("studio.png", "<b>Studio</b>: a monospace code editor with syntax highlighting, a project file list, a menu bar (File / Edit / Build / Run / AI / Help), and a build-output pane. It opens on a bundled bouncing-ball sample.")}
 
 <h2 id="loop">Edit, build, run - all on the machine</h2>
 <p>Studio compiles your source straight to a runnable app inside UnoDOS. There is nothing to install and
 no separate computer in the loop:</p>
 <ol>
-  <li>Open <strong>Studio</strong> from the programs menu. It greets you with <code>SAMPLE.C</code>, a
-      small bouncing-ball app.</li>
-  <li>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> to <strong>build</strong>. The output pane reports the result,
-      for example <code>Built SAMPLE.UNO code=2303 ...</code>, and the new <code>.UNO</code> file appears
-      in the project list.</li>
+  <li>Open <strong>Studio</strong> from the programs menu. It greets you with <code>SAMPLE.PY</code>, a
+      small bouncing-ball app in Python (or <code>SAMPLE.C</code>, the UnoC version, if the Python runtime
+      is not installed).</li>
+  <li>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> to <strong>build</strong>. The output pane reports the result -
+      <code>Packed SAMPLE.UNO</code> for a Python file, or <code>Built SAMPLE.UNO code=2303 ...</code> for
+      a UnoC file - and the new <code>.UNO</code> file appears in the project list.</li>
   <li>Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to <strong>run</strong> it. Your app opens in its own window with
       its own taskbar button.</li>
 </ol>
@@ -1174,20 +1312,33 @@ editing keys: arrows and <kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgD
 to cut, copy, paste and select all. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves. The <strong>Project</strong> list
 on the left shows the source files on your working disk; click one to open it.</p>
 
-<h2 id="unoc">The UnoC language</h2>
-<p>Apps are written in <strong>UnoC</strong>, a practical subset of C that the built-in compiler accepts.
-It has the integer types (with <code>long</code> at 4 bytes, matching the system), pointers, arrays,
-<code>struct</code>/<code>union</code>, <code>enum</code>, <code>typedef</code> and function pointers, the
-full C expression and statement set, constant initializers, and a small preprocessor
-(<code>#include "X.H"</code>, object-like <code>#define</code>, <code>#ifdef</code>). Floating point,
-variadic functions and function-like macros are left out. An app <code>#include</code>s <code>UNO.H</code>
-(shipped in the <code>SDK</code> folder on the disk) and defines one entry point that returns a vtable the
-desktop drives:</p>
+<h2 id="languages">Two languages: UnoC and Python</h2>
+<p>Studio routes by file extension: a <code>.c</code> file is compiled by the built-in UnoC compiler, a
+<code>.py</code> file is packaged for the Python runtime. The editor, project pane, build output and AI
+assistant are the same either way. Use <strong>File &rarr; New</strong> and end the name in <code>.c</code>
+or <code>.py</code> to pick a language.</p>
+
+<h3 id="unoc">UnoC</h3>
+<p><strong>UnoC</strong> is a practical subset of C that the built-in compiler accepts: the integer types
+(with <code>long</code> at 4 bytes, matching the system), pointers, arrays, <code>struct</code>/<code>union</code>,
+<code>enum</code>, <code>typedef</code> and function pointers, the full C expression and statement set,
+constant initializers, and a small preprocessor (<code>#include "X.H"</code>, object-like <code>#define</code>,
+<code>#ifdef</code>). Floating point, variadic functions and function-like macros are left out. An app
+<code>#include</code>s <code>UNO.H</code> (in the <code>SDK</code> folder on the disk) and defines one entry
+point that returns a vtable the desktop drives:</p>
 {CODE_UNOC_SAMPLE}
-<p>That is the whole shape of an app: draw into your window, react to keys and ticks, and hand back the
-vtable. The <a href="dev-apps.html">Writing apps</a> and <a href="dev-api.html">API reference</a> pages
-cover the app model and the calls in depth; the same reference ships inside UnoDOS under
-<strong>Help</strong> in Studio's menu bar.</p>
+<p>That is the whole shape of a UnoC app: draw into your window, react to keys and ticks, and hand back the
+vtable. The <a href="dev-apps.html">Writing apps</a> page and the <a href="dev-api.html">API reference</a>
+cover the app model and the calls in depth.</p>
+
+<h3 id="python">Python 3</h3>
+<p>The same three-key loop works for <strong>Python</strong>, with real floats, classes and the
+<code>math</code> module. A Python app subclasses <code>uno.App</code> and reaches the platform through the
+<code>uno</code> module:</p>
+{CODE_PY_HELLO}
+<p>The interpreter is MicroPython, shipped as the optional module <code>APPS\\PYRT.UNO</code>; the whole story,
+the sample, the <code>uno</code> API and the Duum demo are on the <a href="dev-python.html">Python apps</a>
+page. The same reference ships inside UnoDOS under <strong>Help</strong> in Studio's menu bar.</p>
 
 <h2 id="ai">The AI assistant</h2>
 <p>Studio has a built-in assistant that knows UnoC and the app API, so it can write and fix UnoDOS apps
@@ -1195,13 +1346,17 @@ for you. It connects to <strong>ChatGPT</strong> (OpenAI), <strong>Claude</stron
 <strong>Gemini</strong> (Google) over a secure connection. On a roomy desktop it appears as a column on
 the right; on the compact default desktop, raise the resolution in the Control Panel to bring it in.</p>
 {fig("studio_ai.png", "Studio on a larger desktop, with the <b>assistant</b> column on the right beside the editor and project list. The editor's colouring shows keywords, types and numbers each in their own colour.")}
-<p>You supply your own API key from your provider and enter it once in the assistant's input line:</p>
+<p>You supply your own API key from your provider and enter it once in the assistant's input line (each line
+is a slash command):</p>
 <pre><code>/provider anthropic          (or: openai, gemini)
+/model claude-sonnet-4-5     (optional - a sensible default is used)
 /key sk-ant-...              (your API key)
-/save                        (remember it)</code></pre>
-<p>Then type a question and press <kbd>Enter</kbd>. The <strong>AI</strong> menu's <em>Ask Assistant</em>
-attaches the file you are editing to your next message, so you can ask "why won't this build?" with the
-code included.</p>
+/save                        (writes AI.CFG so it persists)</code></pre>
+<p>The sensible defaults are <code>gpt-4o-mini</code> (OpenAI), <code>claude-sonnet-4-5</code> (Anthropic) and
+<code>gemini-2.0-flash</code> (Gemini); <code>/model</code> overrides them, <code>/clear</code> resets the
+conversation. Then type a question and press <kbd>Enter</kbd>. The <strong>AI</strong> menu's
+<em>Ask Assistant</em> attaches the file you are editing to your next message, so you can ask "why won't this
+build?" with the code included.</p>
 {note('Your API key is stored in plain text in <code>AI.CFG</code> on the disk - anyone with the disk can read it, so use a low-value, revocable key rather than your main one. Your questions (and any attached file) are sent to the provider you choose. Secure connections check the site certificate against the built-in trust store and use the machine clock, so a wrong clock will stop them.', kind="warn", title="About your key and privacy")}
 
 <h2 id="ship">Studio is optional</h2>
@@ -1214,7 +1369,9 @@ PAGES["dev-apps.html"] = ("Writing apps", f"""
 <h1>Writing apps</h1>
 <p class="lede">A UnoDOS app is a small <code>.UNO</code> module loaded from the disk at runtime. You can
 build one right on the machine with <a href="studio.html">Studio</a>, or from a PC with the toolchain.
-There are a few styles; the native widget app is the normal path for a built-in.</p>
+This page covers apps written in <strong>UnoC</strong>; for <strong>Python</strong>, see
+<a href="dev-python.html">Python apps</a>. There are a few UnoC styles; the native widget app is the
+normal path for a built-in.</p>
 
 {note('The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed. This page covers the app model itself, which Studio and the host build share.', kind="tip", title="Start with Studio")}
 
@@ -1269,6 +1426,92 @@ returns a vtable of callbacks; the kernel dispatches purely through the pointers
 music engine) and hosted inside a canvas, so they run unchanged inside the modern desktop.</p>
 """)
 
+PAGES["dev-python.html"] = ("Python apps", f"""
+<h1>Writing apps in Python</h1>
+<p class="lede">UnoDOS treats <strong>Python 3 as a first-class app language</strong>, right alongside
+<a href="dev-apps.html">UnoC</a>. Write real Python - classes, functions, floats, the <code>math</code>
+module - in <a href="studio.html">Studio</a>, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to package it and
+<kbd>Ctrl</kbd>+<kbd>R</kbd> to run it in its own window, all on the machine.</p>
+
+{note('The interpreter is <strong>MicroPython</strong>, shipped as an optional module <code>APPS\\PYRT.UNO</code> (the Python runtime). If it is not installed, Studio still edits and builds UnoC apps normally; running a <code>.py</code> app reports <code>Python runtime not installed</code>. A build that wants a smaller image can leave <code>PYRT.UNO</code> out.', title="The Python runtime is a module")}
+
+<h2 id="model">The app model</h2>
+<p>A Python app is a class that subclasses <code>uno.App</code>, plus a module-global <code>app</code>
+holding an instance of it. The runtime finds <code>app</code> and calls its methods for you:</p>
+{CODE_PY_HELLO}
+<p>Every method is optional (though an app with no <code>draw</code> shows nothing):</p>
+<div class="tw"><table>
+<thead><tr><th>Method</th><th>When it runs</th><th>Use it for</th></tr></thead>
+<tbody>
+<tr><td><code>build(self, cv)</code></td><td>once, as the window opens</td><td>set up state; <code>cv.width()</code>/<code>height()</code> are valid here</td></tr>
+<tr><td><code>draw(self, cv)</code></td><td>whenever the window repaints</td><td>paint one frame</td></tr>
+<tr><td><code>tick(self)</code></td><td>~60 times a second</td><td>advance animation or game state</td></tr>
+<tr><td><code>key(self, uni, scan, ctrl)</code></td><td>on a key press</td><td>handle input; return <code>True</code> if you consumed it</td></tr>
+<tr><td><code>opened(self)</code> / <code>closed(self)</code></td><td>window shown / closing</td><td>acquire / release resources</td></tr>
+</tbody>
+</table></div>
+<p><code>cv</code> is a <strong>Canvas</strong>; colours come from <code>uno.rgb(r, g, b)</code>. The whole
+platform - the framebuffer, sound and files - is one <code>uno.</code> call away.</p>
+
+<h2 id="sample">The sample: a bouncing ball</h2>
+<p>Studio greets you with <code>SDK\\SAMPLE.PY</code>, the Python counterpart of the UnoC sample. It shows
+the whole shape: <code>build</code> sets the ball's position and velocity, <code>tick</code> moves it and
+bounces it off the walls, <code>draw</code> paints the background and the ball, and <code>key</code> speeds
+it up on the space bar. Note the real floats - something UnoC does not have.</p>
+{CODE_PY_SAMPLE}
+<p>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> and the output pane reports <code>Packed SAMPLE.UNO</code>; press
+<kbd>Ctrl</kbd>+<kbd>R</kbd> and the ball bounces in its own window.</p>
+
+<h2 id="uno">The <code>uno</code> module</h2>
+<p>Everything a Python app reaches on the platform goes through <code>import uno</code>. The full reference
+is in <a href="dev-api.html#uno-py">the API reference</a> and in <code>SDK\\uno.pyi</code> (a stub for
+editors); here is the whole surface at a glance:</p>
+{CODE_PY_UNO_API}
+
+<h3 id="stream">Reading files without loading them whole</h3>
+<p><code>uno.read_at(vol, name, off, n)</code> reads a slice of a file at a byte offset, so a Python app can
+work with data far larger than memory - a level, a <code>.wav</code>, a multi-megabyte WAD - a piece at a
+time. This is the same call the <a href="#duum">Duum</a> engine uses to stream a Doom WAD:</p>
+{CODE_PY_STREAM}
+
+<h2 id="build">How "building" a Python app works</h2>
+<p>Pressing <kbd>Ctrl</kbd>+<kbd>B</kbd> on a <code>.py</code> file does not translate it to machine code.
+Studio wraps your source in a small <code>.UNO</code> container - the same format <code>.c</code> apps
+compile to, flagged as a Python app - and writes <code>NAME.UNO</code> beside it. Running it hands that
+source to <code>PYRT.UNO</code>, which compiles and executes it with the <code>uno</code> module bound in.
+Studio routes purely by extension: a <code>.py</code> file is packaged for the runtime, a <code>.c</code>
+file is compiled by the UnoC compiler. Everything else - the editor, the project pane, build output, the
+AI assistant - is identical.</p>
+
+<h2 id="limits">Limits (v1)</h2>
+<ul>
+  <li>One Python app runs at a time; launching another replaces it.</li>
+  <li>No <code>import</code> of other <code>.py</code> files yet - keep an app to a single file (it can be
+      large). The standard <code>math</code> module and the built-ins are available.</li>
+  <li>The <code>uno</code> module is the only door to the platform: there is no <code>os</code> /
+      <code>sys</code> or general file-system access except through <code>uno.read</code> /
+      <code>uno.write</code>.</li>
+</ul>
+
+<h2 id="duum">Duum: Doom, in Python</h2>
+<p><strong>Duum</strong> (<code>SDK\\DUUM.PY</code>) is a Doom engine written entirely in Python - the proof
+that Python is a first-class app language here. It loads a real Doom <strong>IWAD</strong>, parses the map,
+and renders a first-person, BSP-traversed view of the level you can walk around, all through the
+<code>uno</code> API. It exercises the whole platform at once: file I/O (it streams the multi-MB WAD with
+<code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
+framebuffer, keyboard input, and floating-point math.</p>
+{note('Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.', title="Bring your own WAD")}
+<p>Walls are texture-mapped from the WAD (perspective-correct, distance- and orientation-shaded); floors,
+ceilings and sky are flat-shaded. It renders one level (E1M1) with simple wall collision. Flat texturing,
+monsters, items, doors and combat are <em>not</em> implemented - Duum proves the platform can carry a real
+engine, it is not a complete port. The textured-column inner loop runs in C (<code>cv.wall_col</code>) so
+the per-pixel work does not go through the interpreter. Move with the arrows, strafe with <kbd>,</kbd> and
+<kbd>.</kbd>.</p>
+
+<p class="kv">Next: the full <a href="dev-api.html">API reference</a> (including the <a href="dev-api.html#uno-py">
+Python <code>uno</code> module</a>), and <a href="dev-build.html">Building &amp; tooling</a>.</p>
+""")
+
 PAGES["dev-api.html"] = ("API reference", f"""
 <h1>API reference</h1>
 <p class="lede">The public surface an app or driver codes against. Signatures are quoted from the headers
@@ -1307,13 +1550,14 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <div class="tw"><table>
 <thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
 <tbody>
-<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI drivers, with firmware Simple File System volumes as read-only extras while attached.</td></tr>
+<tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI and USB mass-storage drivers, with firmware Simple File System volumes as read/write extras while attached.</td></tr>
 <tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
-<tr><td><code>net</code> / <code>e1000</code></td><td>e1000 driver publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, minimal TCP.</td></tr>
+<tr><td><code>net</code> / <code>e1000</code> / <code>e1000e</code> / <code>igb</code> / <code>r8169</code></td><td>Intel (8254x, 82571-4/82574, I217-9, I210/I211/I350) and Realtek (RTL8168/8111/8125) drivers, each publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, DNS, single-connection TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
-<tr><td><code>xhci</code> / <code>ax88179</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host and an ASIX USB-gigabit driver that also publishes a <code>uno_nic_t</code>.</td></tr>
+<tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
+<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Early Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. They map the device and load its firmware, but association is not yet working on any hardware.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
 </tbody>
 </table></div>
@@ -1322,6 +1566,14 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <p>A small write-once 3D pipeline with a software rasteriser (Gouraud shading, no textures). Runner3D drives it
 directly.</p>
 {CODE_UNO3D}
+
+<h2 id="uno-py">uno: the Python app module</h2>
+<p>The surface a <a href="dev-python.html">Python app</a> codes against. <code>import uno</code>, subclass
+<code>uno.App</code>, and reach the platform through the module and the <code>Canvas</code> passed to your
+<code>build</code>/<code>draw</code>. A machine-readable stub ships in <code>SDK\\uno.pyi</code>.</p>
+{CODE_PY_UNO_API}
+<p class="muted">This is the app-authoring module. The separate <code>unoauto</code> module below is the
+system-<em>automation</em> surface (probe, inject input, drive the machine) and exists only in debug builds.</p>
 
 <h2 id="unoauto">unoauto: automation (Python, on the device)</h2>
 <p><code>import unoauto</code> from any Python app to observe and drive the system - the automation half of
@@ -1404,6 +1656,16 @@ image is about 660&nbsp;KB.</p>
 <code>tools/mkuefi.py</code> turns the ESP tree into a raw disk image: GPT with one FAT32 EFI System Partition
 holding the whole tree. This is the image the flashers embed.</p>
 
+<h2 id="variants">Build variants</h2>
+<p>Two environment toggles to <code>build.sh</code> choose what the image is:</p>
+<div class="tw"><table>
+<thead><tr><th>Toggle</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>UNO_DEBUG=1</code></td><td>The debug / test harness: crash reports, the watchdog, the conformance suites, and the whole <a href="dev-remote.html">unoautomate</a> remote channel and on-device automation. Off by default - a production image has none of it.</td></tr>
+<tr><td><code>UNO_PYRT=0</code></td><td>Skip <code>PYRT.UNO</code>, the vendored-MicroPython Python runtime, for a smaller image. On by default; without it, <a href="dev-python.html">Python apps</a> will not run.</td></tr>
+</tbody>
+</table></div>
+
 <h2 id="flags">Feature flags</h2>
 <div class="tw"><table>
 <thead><tr><th>Flag</th><th>Effect</th></tr></thead>
@@ -1469,6 +1731,11 @@ than the other way round. You tell it where to dial with one line in the stick's
 {CODE_REMOTE_CFG}
 <p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
 your PC (below). If the link drops it reconnects on its own.</p>
+<p>You do not edit <code>STRESS.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
+turned on in the <a href="getting-started.html#flasher">UnoDOS flasher</a> (that is what selects the debug OS
+and writes the file), and set the remote address there. To point an existing debug stick at a different PC,
+use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>STRESS.CFG</code> in place without
+erasing the disk, so you are not reflashing the whole image just to change an IP.</p>
 {note('The remote link shares one TCP connection with the Browser and AI features, so they cannot be used while a link is active.', title="One connection")}
 
 <h2 id="logging">Remote logging</h2>
@@ -1518,6 +1785,64 @@ the machine boot the other stick automatically on the next restart, without anyo
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
 {note('<code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.', kind="warn", title="What these can do")}
+
+<h2 id="setup">Setting up a development environment</h2>
+<p>Putting the pieces together, a comfortable unoautomate workflow needs a one-time setup and then a tight
+loop:</p>
+<ol>
+  <li><strong>Two sticks.</strong> Flash <strong>two</strong> USB sticks with <em>Developer options</em> on:
+      <strong>A</strong>, a known-good build you keep as a fallback, and <strong>B</strong>, the spare you push
+      new builds to. Set <code>remote=&lt;your-pc-ip&gt;:5099</code> on both when you flash them (or add it later
+      with the flasher's <strong>Reconfigure</strong> button - no reflash).</li>
+  <li><strong>The bench machine boots stick B</strong> and, once its network comes up, dials your PC. The
+      driver box builds attached (<code>-DUNO_NO_DETACH</code>) so its own USB stick shows up as a writable
+      volume you can push to.</li>
+  <li><strong>Run the listener on your PC:</strong> <code>python tools/unoauto_remote.py --listen 0.0.0.0:5099</code>.
+      Its logs start streaming the moment the device connects.</li>
+  <li><strong>Edit, build, push, reboot.</strong> Change a driver, rebuild <code>BOOTX64.EFI</code>, push it to
+      stick B, and reboot into it - seconds, no walking to the bench. Stick A is always there if a build will
+      not boot.</li>
+</ol>
+<p>The whole loop scripts cleanly from the Python library, so you can wrap it in one keystroke:</p>
+{CODE_REMOTE_LOOP}
+
+<h2 id="usecases">What you can do with it</h2>
+
+<h3 id="uc-driver">Driver development</h3>
+<p>This is the case unoautomate was built for. Bringing up a driver for real hardware - a NIC, a Wi-Fi chip,
+a storage controller - is a cycle of "change one thing, watch what the hardware does, change it again", and
+without a channel each turn means pulling a stick, reflashing it, walking it to the bench, booting, and
+reading a log file after the fact. unoautomate collapses that:</p>
+<ul>
+  <li><strong>Watch the bring-up live.</strong> Every line the driver logs - each register write, each
+      firmware handshake, exactly where it stalls - streams to your PC as it happens, instead of being read
+      from <code>CRASH\\NETLOG.TXT</code> after a hang.</li>
+  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~1.5&nbsp;MB kernel to the
+      spare stick and reboots into it; a driver change touches one file and the round trip is a keystroke.</li>
+  <li><strong>Poke the hardware without a rebuild.</strong> Run a line of Python on the device with
+      <code>py</code> / <code>link.eval()</code> to read back state between builds, and <code>probe</code> to
+      confirm which subsystems actually came up. A debug build is exactly where you want this reach.</li>
+</ul>
+<p>The Intel Wi-Fi bring-up is the working example: the driver is iterated this way, its firmware-load
+sequence streamed back register by register while builds are pushed to the bench machine over the link.</p>
+
+<h3 id="uc-test">Automated conformance testing</h3>
+<p>A debug OS carries built-in conformance suites (<code>storage</code>, <code>system</code>,
+<code>network</code>, <code>frameworks</code>, <code>apps</code>). Run one from your PC and stream its report,
+then assert on a live <code>probe()</code> - a real regression test you can put in CI or run after every push:</p>
+{CODE_REMOTE_TEST}
+
+<h3 id="uc-ui">Driving the desktop headlessly</h3>
+<p>Because <code>key</code> and <code>pointer</code> are injected exactly as a human's input on the next frame,
+you can drive the whole desktop from a script: launch an app, type into it, walk a menu, and check the result -
+no monitor or keyboard attached. This is how the screenshots in this manual are produced (see
+<a href="dev-build.html#shots">Regenerate the manual screenshots</a>): the harness boots the OS and drives it
+entirely over the channel.</p>
+
+<h3 id="uc-triage">Unattended runs and remote triage</h3>
+<p>Leave a machine running a soak test on the bench, watch its log stream from your desk, and have it
+<code>poweroff</code> itself when it finishes or <code>reboot</code> when it wedges. For an intermittent bug you
+no longer reproduce-then-lose-the-evidence: the log is already on your PC when it happens.</p>
 
 <p class="muted">The full wire protocol and every command's exact reply are in
 <a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>
