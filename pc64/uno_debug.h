@@ -94,6 +94,9 @@ const char *uno_dbg_machine_tag(void);
 void uno_dbg_win_profile(const char *title, int begin);
 void uno_dbg_win_frame_reset(void);
 const char *uno_dbg_current_window(void);
+/* walk the profiler table (unoautomate PROBE); 0 = past the end */
+int uno_dbg_win_stat(int i, const char **title, unsigned long long *cyc,
+                     unsigned long *max_us);
 unsigned long uno_dbg_cyc_to_us(unsigned long long cyc);  /* 0 if uncalibrated */
 unsigned long long uno_dbg_tsc_per_ms(void);              /* 0 if uncalibrated */
 int uno_pc64_mtrr_wc_experiment(void);   /* P3 opt-in (uefi_main); -1 = refused */

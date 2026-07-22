@@ -1507,6 +1507,18 @@ static char g_worst_win[32];            /* worst frame's costliest window     */
 
 const char *uno_dbg_current_window(void) { return g_wp_cur; }
 
+/* unoautomate PROBE: walk the profiler table (unoauto_probe.c). Returns 1
+ * and fills the outs while i is in range, 0 past the end. */
+int uno_dbg_win_stat(int i, const char **title, unsigned long long *cyc,
+                     unsigned long *max_us)
+{
+    if (i < 0 || i >= g_wprof_n) return 0;
+    if (title)  *title  = g_wprof[i].title;
+    if (cyc)    *cyc    = g_wprof[i].cyc;
+    if (max_us) *max_us = g_wprof[i].max_us;
+    return 1;
+}
+
 unsigned long uno_dbg_cyc_to_us(unsigned long long cyc)
 { return g_tsc_per_ms ? (unsigned long)(cyc * 1000 / g_tsc_per_ms) : 0; }
 

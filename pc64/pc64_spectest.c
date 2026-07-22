@@ -991,6 +991,17 @@ static void test_dbg(void)
       CHECK("S-DBG-10", uno_dbg_uptime_ms() >= a); }
     /* S-DBG-15: build id present */
     { const char *b = uno_dbg_build_id(); CHECK("S-DBG-15", b && b[0]); }
+    /* S-DBG-20: unoauto PROBE enumerates - the four subsystem rows are
+     * unconditional, and running from the shell tick means the shell row's
+     * window count covers the live desktop. */
+    { UnoAutoProbeEnt e[64];
+      int n = unoauto_probe(e, 64), i, heap = 0, shell = 0;
+      for (i = 0; i < n; i++) {
+          if (strcmp(e[i].name, "heap")  == 0 && e[i].kind == 2) heap  = 1;
+          if (strcmp(e[i].name, "shell") == 0 && e[i].kind == 2) shell = 1;
+      }
+      if (n >= 4 && heap && shell) OK("S-DBG-20");
+      else BAD("S-DBG-20", "n=%d heap=%d shell=%d", n, heap, shell); }
 }
 
 /* ---- unoauto TEST-registry adapters ---------------------------------------

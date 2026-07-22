@@ -83,17 +83,26 @@ int  unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn);
 int  unoauto_test_run(const char *suite_or_null, void *ctx, char *report, int cap);
 
 /* ---- PROBE: observe processes/threads/modules (Stage 2) -- [EXPERIMENTAL]
- * The one enumeration surface for "what is the system doing":  loaded .UNO
- * modules, live UnoUuiApp instances, the main-loop phase, per-window draw
- * costs, net-stack socket states.  Snapshot-based - fill caller memory, no
- * locks held across the call. */
+ * The one enumeration surface for "what is the system doing".  Snapshot-
+ * based: one call fills caller memory, no locks held across it.  Rows:
+ *
+ *   kind 0  MODULE     name=.UNO file      state=present on a volume
+ *   kind 1  WINDOW     name=window title   state=1 focused
+ *                      v1=total draw TSC   v2=worst draw us  (F11 profiler)
+ *   kind 2  SUBSYSTEM  name=               state=            v1= / v2=
+ *            "heap"                        0                 used / free
+ *            "net"                         b0 link b1 lease  tx / rx frames
+ *            "fs"                          volume count      writable count
+ *            "shell"                       open windows      uptime ms
+ *
+ * name pointers are stable (string literals / static tables). */
 typedef struct {
-    const char *name;       /* module/app/subsystem name                      */
-    int         kind;       /* 0 module  1 app  2 subsystem                   */
-    int         state;      /* kind-specific (running/blocked/idle)           */
-    unsigned long long busy_cyc;   /* TSC spent since the last snapshot       */
+    const char *name;
+    int         kind;       /* 0 module  1 window  2 subsystem                */
+    int         state;      /* kind-specific, see the table above             */
+    unsigned long long v1, v2;     /* kind-specific detail                    */
 } UnoAutoProbeEnt;
-int unoauto_probe(UnoAutoProbeEnt *out, int max);
+int unoauto_probe(UnoAutoProbeEnt *out, int max);   /* rows filled */
 
 /* ---- HOOK: intercept a call surface (Stage 2) ------------ [EXPERIMENTAL]
  * Named tap points (e.g. "net.tx", "fat.write", "uui.action") that a script
