@@ -574,6 +574,26 @@ static void do_prepdisk(const char *id, char *args)     /* destructive (GPT+ESP+
     rsp(id, "end", 0);
 }
 
+/* eth verb pass-through target. The wired-NIC driver (Realtek r8169) lands the
+ * real r8169_dbg_cmd() in r8169.c / r8169.h per the 2026-07-22 request in
+ * UNOAUTOMATE-REQUESTS.md. We declare it locally (not via r8169.h) so this file
+ * builds independently of when the driver hook arrives, and ship a weak fallback
+ * so the tree links green in the meantime; once the strong definition lands the
+ * linker prefers it - no coordination, no broken intermediate state. Same shape
+ * as iwl_dbg_cmd: returns reply length, or -1 (unknown subcmd / NIC not mapped). */
+int r8169_dbg_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int r8169_dbg_cmd(const char *line, char *out, int cap)
+{
+    static const char msg[] = "r8169 debug not built (driver hook pending)";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -634,6 +654,17 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "iwl")) {
         int n = iwl_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (csr/csw/prr/prw/rerun/status)");
+        rsp(id, "end", 0); return;
+    }
+    /* eth <subcmd...> - live wired-NIC (Realtek r8169) register/bring-up debug,
+     * the wired sibling of `iwl`. Additive pass-through to r8169_dbg_cmd (r8169.c;
+     * weak-stubbed above until the driver lands it). Subcmds:
+     * status/reg/wreg/phy/wphy/rerun/link/mac. Per the 2026-07-22 r8169 request
+     * in UNOAUTOMATE-REQUESTS.md. */
+    if (!strcmp_(verb, "eth")) {
+        int n = r8169_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err",
+            n >= 0 ? g_report : "bad-cmd (status/reg/wreg/phy/wphy/rerun/link/mac)");
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {
