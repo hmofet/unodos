@@ -1986,6 +1986,8 @@ int iwl_present(void)
     return 0;
 }
 
+static int iommu_disable(char *out, int cap);   /* defined after iwl_nic (F12 fix) */
+
 uno_nic_t *iwl_nic(void)
 {
     int vol;
@@ -2089,6 +2091,12 @@ uno_nic_t *iwl_nic(void)
                       (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
                       g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
     if (!g_gen2) msi_probe_enable();   /* gen2 uses PCI MSI-X (enabled above); MSI probe would conflict */
+
+    /* THE F12 FIX (with MSI-X): the firmware leaves VT-d DMA remapping ON
+     * (confirmed: DRHD@fed91000 TES=ON), which blocks the boot ROM's fw-load
+     * DMA to our arena. Disable it so the device can DMA. */
+    { char rep[128]; int nd = iommu_disable(rep, (int)sizeof rep);
+      uno_dbg_net_trace("wifi: IOMMU disable: %d unit(s) %s", nd, rep); }
 
     /* load firmware + wait ALIVE */
     if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
@@ -2208,12 +2216,60 @@ static int dmar_check(char *out, int cap)
     return (int)(o - out);
 }
 
+static void wrp32(u64 a, u32 v) { *(volatile u32 *)(uintptr_t)a = v; }
+
+/* Disable VT-d DMA remapping on every active DRHD unit so the WiFi device can
+ * DMA to our RAM arena. THE F12 FIX (with conf_msix): the Yoga's firmware leaves
+ * TES=ON on the PCH IOMMU (fed91000), which blocks the boot ROM's fw-load DMA -
+ * confirmed by `iwl dmar`. Clearing GCMD.TE lets DMA through untranslated, which
+ * is fine on a bare OS we fully own. Preserve the other persistent command bits
+ * (EAFL/QIE/IRE/CFI) and only clear TE; poll GSTS.TES until it drops. Returns the
+ * number of units disabled. `out` (may be NULL) gets a short report. */
+static int iommu_disable(char *out, int cap)
+{
+    u64 rsdp = (u64)uno_acpi_rsdp();
+    u64 xsdt = 0, rsdt = 0, dmar = 0;
+    char *o = out; int i, n, dl, off, rev, done = 0;
+    (void)cap;
+    if (!rsdp) { if (o) *dm_s(o, "no RSDP") = 0; return 0; }
+    rev = rdp8(rsdp + 15); rsdt = rdp32(rsdp + 16);
+    if (rev >= 2) xsdt = rdp64(rsdp + 24);
+    if (xsdt) { n = ((int)rdp32(xsdt + 4) - 36) / 8;
+        for (i = 0; i < n; i++) { u64 t = rdp64(xsdt + 36 + i*8);
+            if (rdp32(t) == 0x52414d44u) { dmar = t; break; } } }
+    if (!dmar && rsdt) { n = ((int)rdp32(rsdt + 4) - 36) / 4;
+        for (i = 0; i < n; i++) { u64 t = (u64)rdp32(rsdt + 36 + i*4);
+            if (rdp32(t) == 0x52414d44u) { dmar = t; break; } } }
+    if (!dmar) { if (o) *dm_s(o, "no DMAR") = 0; return 0; }
+    dl = (int)rdp32(dmar + 4); off = 48;
+    while (off + 4 <= dl) {
+        u16 type = (u16)(rdp8(dmar+off) | (rdp8(dmar+off+1)<<8));
+        u16 sl   = (u16)(rdp8(dmar+off+2) | (rdp8(dmar+off+3)<<8));
+        if (!sl) break;
+        if (type == 0) {                          /* DRHD */
+            u64 base = rdp64(dmar + off + 8);
+            u32 gsts = rdp32(base + 0x1c);
+            if (gsts & 0x80000000u) {             /* TES on -> disable TE */
+                wrp32(base + 0x18, gsts & 0x16800000u);   /* keep EAFL/QIE/IRE/CFI, clear TE */
+                for (i = 0; i < 100000 && (rdp32(base + 0x1c) & 0x80000000u); i++) ;
+                done++;
+                if (o) { o = dm_s(o, "disabled@"); o = dm_h(o, (u32)base);
+                         o = dm_s(o, " GSTS->"); o = dm_h(o, rdp32(base + 0x1c)); o = dm_s(o, " "); }
+            }
+        }
+        off += sl;
+    }
+    if (o) { if (!done) o = dm_s(o, "no active IOMMU units"); *o = 0; }
+    return done;
+}
+
 int iwl_dbg_cmd(const char *line, char *out, int cap)
 {
     static const char hx[] = "0123456789abcdef";
     u32 a, v;
     int i;
     if (!line || !out || cap < 12) return -1;
+    if (!strncmp(line, "dmar off", 8)) { iommu_disable(out, cap); return (int)strlen(out); }
     if (!strncmp(line, "dmar", 4)) return dmar_check(out, cap);
     if (!strncmp(line, "rerun", 5)) {
         g_bound = 0; g_joined = 0; g_alive = 0;       /* force a full retry */
