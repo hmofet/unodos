@@ -20,8 +20,11 @@
  * ======================================================================== */
 #include "r8169.h"
 #include "pc64_pci.h"
+#include "uno_debug.h"          /* uno_dbg_net_trace: on-screen in UNO_DEBUG, no-op in prod */
 #include <stdint.h>
 #include <string.h>
+
+void uno_pc64_delay_ms(int ms); /* firmware Stall (idle pacing) */
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -153,7 +156,12 @@ static int hw_start(void)
     /* soft reset */
     w8(ChipCmd, CmdReset);
     for (t=0;t<1000;t++){ if(!(r8(ChipCmd)&CmdReset)) break; spin(2000); }
-    if (r8(ChipCmd)&CmdReset) return -1;
+    if (r8(ChipCmd)&CmdReset) {
+        uno_dbg_net_trace("r8169: soft-reset never cleared (ChipCmd=%02x) - BAR/reset failure",
+                          r8(ChipCmd));
+        return -1;
+    }
+    uno_dbg_net_trace("r8169: soft-reset cleared (t=%d)", t);
 
     read_mac();
     rings_init();
@@ -238,6 +246,36 @@ static int r8169_recv(void *ctx, void *pkt, int cap)
 
 static int r8169_link(void *ctx){ (void)ctx; return g_up ? link_up() : 0; }
 
+/* ---- debug bring-up aid: watch the link for ~4s ------------------------- *
+ * hw_start() deliberately never powers the PHY up or restarts autoneg, so on
+ * real silicon fresh out of UEFI (which parks the PHY) this is where we learn,
+ * empirically, whether link ever asserts on its own.  Prints the MAC, then
+ * PHYstatus every 250ms, logging only on change plus a final summary.
+ * Compiled out entirely in production - the uno_pc64_delay_ms() is real time. */
+#ifdef UNO_DEBUG
+static void r8169_phy_poll(void)
+{
+    int i, last = -1;
+    uno_dbg_net_trace("r8169: MAC %02x:%02x:%02x:%02x:%02x:%02x - polling PHYstatus ~4s",
+                      g_mac[0],g_mac[1],g_mac[2],g_mac[3],g_mac[4],g_mac[5]);
+    for (i = 0; i < 16; i++) {
+        int ps = r8(PHYstatus);
+        if (ps != last) {
+            uno_dbg_net_trace("r8169:  +%dms PHYstatus=%02x link=%d speed=%s",
+                              i*250, ps, (ps & LinkStatus) ? 1 : 0,
+                              (ps & _1000bpsF) ? "1000" :
+                              (ps & _100bps)   ? "100"  :
+                              (ps & _10bps)    ? "10"   : "-");
+            last = ps;
+        }
+        uno_pc64_delay_ms(250);
+    }
+    uno_dbg_net_trace("r8169:  PHY poll done - final link=%s", link_up() ? "UP" : "DOWN");
+}
+#else
+static void r8169_phy_poll(void) { }
+#endif
+
 int r8169_present(void)
 {
     pci_dev d;
@@ -249,25 +287,38 @@ int r8169_present(void)
             (dev==0x8168||dev==0x8161||dev==0x8162||dev==0x8167||dev==0x8169||
              dev==0x8136||dev==0x8125||dev==0x8126||dev==0x8127||dev==0x2600||
              dev==0x8129||dev==0x0e10||dev==0x3000||dev==0x5000)) {
-            g_pci = d; g_devid = dev; g_present = 1; return 1;
+            g_pci = d; g_devid = dev; g_present = 1;
+            uno_dbg_net_trace("r8169: pci match %04x:%04x at %02x:%02x.%d (class 02:00)",
+                              d.vendor, dev, d.bus, d.dev, d.fn);
+            return 1;
         }
+        uno_dbg_net_trace("r8169: ethernet %04x:%04x at %02x:%02x.%d present but not a "
+                          "recognized RTL8168/8125 device", d.vendor, dev, d.bus, d.dev, d.fn);
     }
     return 0;
 }
 
 uno_nic_t *r8169_nic(void)
 {
+    u64 bar2, bar0;
     if (g_up) return &g_nic;
     if (!r8169_present()) return 0;
     pci_enable_bus_master(&g_pci);
     /* the register window is the first memory BAR (BAR2 on most 8168, BAR0 some) */
-    g_mmio = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 2);
-    if (!g_mmio) g_mmio = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 0);
+    bar2 = pci_bar(&g_pci, 2);
+    bar0 = pci_bar(&g_pci, 0);
+    g_mmio = (volatile u8 *)(uintptr_t)(bar2 ? bar2 : bar0);
+    uno_dbg_net_trace("r8169: BAR2=%llx BAR0=%llx -> mmio=%p (%s)",
+                      bar2, bar0, (void *)g_mmio,
+                      bar2 ? "BAR2" : (bar0 ? "BAR0" : "NONE"));
     if (!g_mmio) return 0;
     g_is8125 = detect_8125(g_devid);
+    uno_dbg_net_trace("r8169: TxConfig=%08x XID=%03x is8125=%d",
+                      r32(TxConfig), (unsigned)((r32(TxConfig) >> 20) & 0xfcf), g_is8125);
     if (hw_start() < 0) return 0;
     g_nic.ctx=0; g_nic.send=r8169_send; g_nic.recv=r8169_recv; g_nic.link=r8169_link;
     g_up = 1;
+    r8169_phy_poll();       /* debug: watch link for ~4s (compiled out in prod) */
     return &g_nic;
 }
 
