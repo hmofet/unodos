@@ -26,4 +26,17 @@ const unsigned char *iwl_mac(void);
  * that stopped bring-up) for the Network app + diagnostics. */
 void iwl_status_str(char *buf, int cap);
 
+/* Interactive F12 debug entry point (for the unoautomate remote channel -
+ * see the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md). Parses ONE command
+ * line, acts on the live card, writes a NUL-terminated reply into out:
+ *   csr <hexoff>           read a CSR dword        -> "xxxxxxxx"
+ *   csw <hexoff> <hexval>  write a CSR dword       -> "ok"
+ *   prr <hexreg>           read a PRPH reg (grab)  -> "xxxxxxxx"
+ *   prw <hexreg> <hexval>  write a PRPH reg (grab) -> "ok"
+ *   rerun                  full bring-up retry     -> iwl_status_str
+ *   status                 no side effects         -> iwl_status_str
+ * Returns reply length, or -1 (unknown command / card not mapped). Debug
+ * tooling only - never called by the production stack. */
+int  iwl_dbg_cmd(const char *line, char *out, int cap);
+
 #endif

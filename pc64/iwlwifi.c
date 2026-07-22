@@ -2057,6 +2057,56 @@ uno_nic_t *iwl_nic(void)
 
 const unsigned char *iwl_mac(void) { return g_mac; }
 
+/* ---- interactive F12 debug entry point (see iwlwifi.h) ------------------- */
+static int hex_u32(const char **p, u32 *out)
+{
+    u32 v = 0; int n = 0;
+    while (**p == ' ') (*p)++;
+    for (;; (*p)++, n++) {
+        char c = **p;
+        if      (c >= '0' && c <= '9') v = (v << 4) | (u32)(c - '0');
+        else if (c >= 'a' && c <= 'f') v = (v << 4) | (u32)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v = (v << 4) | (u32)(c - 'A' + 10);
+        else break;
+    }
+    if (!n) return -1;
+    *out = v;
+    return 0;
+}
+
+int iwl_dbg_cmd(const char *line, char *out, int cap)
+{
+    static const char hx[] = "0123456789abcdef";
+    u32 a, v;
+    int i;
+    if (!line || !out || cap < 12) return -1;
+    if (!strncmp(line, "rerun", 5)) {
+        g_bound = 0; g_joined = 0; g_alive = 0;       /* force a full retry */
+        iwl_nic();
+        iwl_status_str(out, cap);
+        return (int)strlen(out);
+    }
+    if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+    if (!strncmp(line, "csr ", 4))  { const char *p = line + 4;
+        if (hex_u32(&p, &a) < 0) return -1;
+        v = r32(a); goto hexout; }
+    if (!strncmp(line, "csw ", 4))  { const char *p = line + 4;
+        if (hex_u32(&p, &a) < 0 || hex_u32(&p, &v) < 0) return -1;
+        w32(a, v); strcpy(out, "ok"); return 2; }
+    if (!strncmp(line, "prr ", 4))  { const char *p = line + 4;
+        if (hex_u32(&p, &a) < 0) return -1;
+        v = prph_r(a); goto hexout; }
+    if (!strncmp(line, "prw ", 4))  { const char *p = line + 4;
+        if (hex_u32(&p, &a) < 0 || hex_u32(&p, &v) < 0) return -1;
+        prph_w(a, v); strcpy(out, "ok"); return 2; }
+    return -1;
+hexout:
+    for (i = 0; i < 8; i++) out[i] = hx[(v >> ((7 - i) * 4)) & 0xF];
+    out[8] = 0;
+    return 8;
+}
+
 void iwl_status_str(char *buf, int cap)
 {
     int i = 0;
