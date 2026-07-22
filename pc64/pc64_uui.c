@@ -842,12 +842,15 @@ int pc64_files_canvas_index(void);    /* pc64_files.c: pane widget index      */
 /* ---- taskbar: a single canvas we draw + hit-test by hand for full control -- *
  * All layout is measured from the live font so the bar stays aligned whatever
  * face/scale is active (draw + hit-test share these functions). */
-/* No Start button: the launcher opens by RIGHT-CLICKING the desktop (or
- * Ctrl-Esc). The bar is window chips and the tray, so the chips start at the
- * left edge and the reclaimed width goes to them. */
+/* The bar is: Start button | window chips | tray. The Start button opens the
+ * app launcher and is always visible, so the launcher is reachable even when a
+ * window covers the desktop (the right-click gesture can't reach a covered
+ * desktop; Ctrl-Esc also toggles it). Chips start after the Start button. */
 static int tb_chip_w(void)   { int w = 40 + fb_text_w("Manager"); return w < 108 ? 108 : w; }
 static int tb_chip_gap(void) { return tb_chip_w() + 4; }
-static int tb_chip_x(void)   { return 6; }
+static int tb_start_logo_sz(void) { int s = fb_text_h() + 2; return s < 12 ? 12 : s; }
+static int tb_start_w(void)  { return 8 + tb_start_logo_sz() + 6 + fb_text_w("Start") + 10; }
+static int tb_chip_x(void)   { return 6 + tb_start_w() + 6; }
 
 /* app index of the focused window, or -1 (used to highlight its taskbar chip) */
 static int focused_app(void)
@@ -889,8 +892,16 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
         fb_hline(r.x, r.y, r.w, t->pal.light);
     }
-    /* Start button - accent-coloured, the UnoDOS "One" mark + label, the
-       logo+label group centred as a unit within the button */
+    /* Start button (left): the UnoDOS brand mark + "Start", accent-coloured.
+       Opens the app launcher - reachable even when a window covers the desktop.
+       Shows pressed while the launcher is open. */
+    { int sw = tb_start_w(), sx0 = r.x + 6, ls = tb_start_logo_sz();
+      int fh = fb_text_h(), gx = sx0 + 8, ly = by + (bh - ls) / 2;
+      if (modern) fb_round_rect_a(sx0, by, sw, bh, cr, t->pal.accent,
+                                  g_launch_open ? 200 : 255, FB_CORNER_ALL);
+      else        tb_panel(sx0, by, sw, bh, t->pal.accent, g_launch_open);
+      pc64_start_logo(gx, ly, ls, t->pal.accent_text);
+      fb_text(gx + ls + 6, by + (bh - fh) / 2, "Start", t->pal.accent_text, -1); }
     /* one chip per open window: mini icon + name, highlighted if it's active.
        Chips stop before the tray (clock/battery) instead of colliding. */
     x = r.x + tb_chip_x();
@@ -936,6 +947,7 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     (void)w; (void)ctx;
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     px = e->x - g_task.r.x;
+    if (px >= 6 && px < 6 + tb_start_w()) { toggle_launcher(); return 1; }   /* Start button */
     x = tb_chip_x();
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
