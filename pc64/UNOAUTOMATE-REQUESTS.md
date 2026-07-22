@@ -80,3 +80,30 @@ Notes:
 - If you'd rather define a richer payload struct (`UnoAutoNetEv`?), add it
   next to the others in `unoauto.h` outside the `UNO_DEBUG` gate and note
   it here — that section is shared ground, additive entries welcome.
+
+---
+
+## 2026-07-22 — unoautomate → net owner: broadcast UDP for remote auto-discovery
+
+**Status: OPEN (deferred, no urgency)**
+
+The remote dev-PC channel (`unoauto_remote.c`, see `REMOTE.md`) currently takes
+the dev PC's address from a `STRESS.CFG` `remote=<ip>:<port>` key. The user
+wants zero-config auto-discovery instead, which needs a real L2 broadcast — and
+`net_udp_send` can't do it today (`ip_build` → `net_arp_resolve` routes
+`255.255.255.255` to the *gateway* MAC; only the DHCP path hand-builds a true
+broadcast Ethernet frame). When you next build out the ARP/UDP stack, either of
+these unblocks discovery:
+
+1. **`int net_udp_broadcast(u16 dport, u16 sport, const void *data, int len)`** —
+   send to `255.255.255.255` via a directly-built broadcast frame (like the
+   DHCP path), binding `sport` as a side effect. This is the richer one: pc64
+   can then broadcast a discovery beacon and the dev PC replies unicast (the
+   reply arrives on the already-bound `sport`).
+2. **`void net_udp_listen(u16 port)`** — just expose `udp_bind(port)` so a
+   receive-only port can be opened. With this alone, discovery can run the other
+   way (the dev PC broadcasts a beacon; `ip_recv` already accepts inbound
+   broadcast, so pc64 only needs the port bound to hear it).
+
+Either is fine; (1) is the more general capability. No rush — the static
+`remote=` key works now.

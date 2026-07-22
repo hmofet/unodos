@@ -23,6 +23,7 @@
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
+#include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
 #ifdef UNO_DEBUG
 unsigned long long uno_native_rdtsc(void);
 #endif
@@ -1579,6 +1580,22 @@ static int pc64_shell_run_python(int vol, const char *path)
  * a raw .py - no magic - so the automation runner comes in through here). */
 int pc64_shell_run_py(int vol, const char *path)
 { return pc64_shell_run_python(vol, path); }
+
+/* unoautomate remote `py` verb: exec a Python source string via PYRT and
+ * capture its stdout into out.  0 = ok, <0 = no PYRT / error (out carries the
+ * message).  Shares the VM with any running Python app. */
+int pc64_shell_py_exec(const char *src, char *out, int cap)
+{
+    unsigned long n = 0;
+    while (src[n]) n++;
+    pyrt_ensure();
+    if (!g_pyrt || !g_pyrt->run_src) {
+        if (cap > 0) { const char *m = "no PYRT.UNO"; int i = 0;
+                       while (m[i] && i < cap - 1) { out[i] = m[i]; i++; } out[i] = 0; }
+        return -2;
+    }
+    return g_pyrt->run_src(src, (int)n, out, cap);
+}
 #endif
 
 int pc64_shell_run_user(int vol, const char *path)
@@ -2001,6 +2018,8 @@ int main(void)
         pc64_nettest_tick();            /* debug build: network hw test + the
                                            conformance suite, runs once and
                                            blocks this frame while it does */
+        unoauto_remote_tick();          /* debug build: pump the dev-PC remote
+                                           link (armed by unoauto_remote_boot) */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no STRESS.CFG value can revive

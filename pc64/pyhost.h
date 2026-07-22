@@ -23,7 +23,7 @@
 
 #define UNO_MODF_PY     0x0002
 #define UNO_MODF_PYAPP  0x0004
-#define UNO_PYHOST_ABI  1
+#define UNO_PYHOST_ABI  2       /* +run_src (ABI 2) */
 
 typedef struct PyHost {
     int abi;                                     /* UNO_PYHOST_ABI */
@@ -35,6 +35,11 @@ typedef struct PyHost {
     const UnoUuiApp *(*load)(const unsigned char *src, int len, const char *name);
     void (*unload)(void);                        /* drop the current app's roots */
     const char *(*last_error)(void);             /* traceback text for Studio */
+    /* [ABI 2] exec a Python source string in the current runtime (statements
+     * allowed), capturing stdout into out (NUL-terminated, capped).  Returns 0
+     * on success, <0 on error (out carries the traceback).  Requires init().
+     * Shares the VM/global namespace with any running Python app. */
+    int (*run_src)(const char *src, int len, char *out, int cap);
 } PyHost;
 
 typedef const PyHost *(*PyHostEntry)(void *reserved);
