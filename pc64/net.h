@@ -14,7 +14,10 @@ typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
 
-enum { TCP_CLOSED = 0, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT, TCP_DONE };
+enum { TCP_CLOSED = 0, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT, TCP_DONE,
+       /* appended for the netsock multi-connection layer (netsock.h): a passive
+        * server socket, and a half-open connection accepted from one. */
+       TCP_LISTEN, TCP_SYN_RCVD };
 
 void net_init(uno_nic_t *nic, const u8 mac[6]);
 void net_poll(void);                 /* pump once; call often */
