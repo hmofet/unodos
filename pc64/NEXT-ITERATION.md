@@ -1,5 +1,16 @@
 # pc64 — next iteration: "Networking to first lease"
 
+> **2026-07-22 STATUS: the lease is REAL.** Yoga + AX88179A metal run:
+> link UP 182 ms, DHCP lease 1039 ms (192.168.2.157), gateway pings 10-15 ms
+> — the medium-mode fix holds and RX is fully alive. Phases 1-2 DONE on
+> metal. Last eth gap was DNS: our DHCP parameter-request list (opt 55)
+> never asked for option 6, so real routers omitted it and the resolver
+> stayed at the SLIRP default (ack diag: len=300 opt3=1 opt6=0). FIXED
+> (request 1/3/6 + fall back to the gateway as resolver when opt 6 is
+> absent) — metal-verify on the next eth round, then Phase 3 (TLS over the
+> real link) should complete itself via S-AI-01/02. WiFi (Phase 5 / F12) is
+> mid-campaign — see the F12 rounds in METAL-FINDINGS.md.
+
 Handoff for the next session. The debug/test campaign (`pc64-debug-stress`) has
 landed on **master** and the branch is retired. `master`'s default build is now
 the **production** OS; opt into the harness with `UNO_DEBUG=1 ./build.sh`.

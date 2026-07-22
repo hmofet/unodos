@@ -479,7 +479,11 @@ static void dhcp_send(int type, const u8 *reqip, const u8 *srvip)
     pkt[olen++] = 53; pkt[olen++] = 1; pkt[olen++] = (u8)type;   /* msg type */
     if (reqip) { pkt[olen++] = 50; pkt[olen++] = 4; memcpy(pkt+olen, reqip, 4); olen += 4; }
     if (srvip) { pkt[olen++] = 54; pkt[olen++] = 4; memcpy(pkt+olen, srvip, 4); olen += 4; }
-    pkt[olen++] = 55; pkt[olen++] = 2; pkt[olen++] = 1; pkt[olen++] = 3;  /* params */
+    /* param request list: subnet, router, DNS. Option 6 was missing here -
+     * RFC-compliant servers only return requested options, so real routers
+     * omitted the DNS server and the resolver stayed at the SLIRP default
+     * (Yoga metal run: ack len=300 opt3=1 opt6=0). */
+    pkt[olen++] = 55; pkt[olen++] = 3; pkt[olen++] = 1; pkt[olen++] = 3; pkt[olen++] = 6;
     pkt[olen++] = 255;                          /* end */
     (void)zero_ip;
     /* UDP 68 -> 67, broadcast (source 0.0.0.0). Build a broadcast Ethernet
@@ -553,6 +557,10 @@ void dhcp_input(const u8 *udp, int len)
         g_dhcp_ack_len = blen;
         g_dhcp_had_dns = (dns && ol >= 4) ? 1 : 0;
         g_dhcp_had_rtr = (rtr) ? 1 : 0;
+        /* no DNS option in the ACK -> the gateway is the best real-world
+         * resolver guess (home routers run a forwarder); never keep the
+         * SLIRP default on a real lease. */
+        if (!g_dhcp_had_dns && g_dhcp_had_rtr) memcpy(DNS, GW, 4);
         g_dhcp_state = 3;
     }
 }
