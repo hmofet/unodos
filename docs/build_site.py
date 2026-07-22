@@ -28,6 +28,7 @@ NAV = [
     ("dev-apps.html",        "Writing apps"),
     ("dev-api.html",         "API reference"),
     ("dev-build.html",       "Building &amp; tooling"),
+    ("dev-remote.html",      "Remote control &amp; automation"),
 ]
 PAGES_NAV = [(h, l) for h, l in NAV if h]           # real pages, for prev/next
 
@@ -562,6 +563,47 @@ CODE_BUILD = code('''./build.sh                 # build the unoui desktop shell 
 python3 tools/mkuefi.py 512   # pack build/esp/ into build/unodos-uefi.img (512 MiB)
 python3 harness.py boot    # scripted QEMU boot + screenshot
 python3 nettest.py         # headless network + TLS verification''')
+
+# ---- unoautomate (remote control) snippets ----
+CODE_REMOTE_CFG = code('''remote=192.168.2.43:5099''')
+
+CODE_REMOTE_CLI = code('''$ python tools/unoauto_remote.py --listen 0.0.0.0:5099
+unoauto_remote listening on 0.0.0.0:5099. Set pc64 STRESS.CFG:
+    remote=<this-machine-ip>:5099   (QEMU SLIRP guest: 10.0.2.2:5099)
+[SCRIPT ] remote: link up
+[NET    ] eth: DHCP lease 192.168.2.157
+probe
+  2 0 0 4980736 heap
+  2 3 1 12 shell
+  1 1 1 0 Files
+  ok
+launch 0
+  launched
+  ok
+py print(6*7)
+  42
+  ok''')
+
+CODE_REMOTE_PY = code('''from unoauto_remote import UnoAutoLink
+
+link = UnoAutoLink(port=5099)
+link.on_log(lambda chan, text: print(chan, text))   # stream the OS log
+link.listen()
+link.wait_connected()                                # pc64 dials in
+
+print(link.probe())              # [{'kind':2,'name':'heap',...}, ...]
+link.launch(0)                   # open the first app
+print(link.eval("print(6*7)"))   # run Python on the device -> ['42']
+
+# commands can go the other way too: the device can drive your PC
+link.on_command("save", lambda args: "saved " + args)''')
+
+CODE_REMOTE_PUSH = code('''# find which volume is the spare stick B (a writable "kind 2" volume)
+python tools/unoauto_remote.py --listen 0.0.0.0:5099      # then type: vols
+
+# push a freshly built kernel to stick B and reboot into it
+python tools/unoauto_remote.py \\
+    --push 2 "EFI\\BOOT\\BOOTX64.EFI" build/BOOTX64.EFI --reboot''')
 
 # --------------------------------------------------------------------------- pages
 PAGES = {}
@@ -1355,6 +1397,77 @@ python3 docs_shots.py themes editor browser_docs    # selected scenes
 UNO_NIC=1 python3 docs_shots.py browser_http        # networking scenes</code></pre>
 <p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit. If the shell's app roster or
 the Control Panel tab order changes, update the scene offsets in <code>docs_shots.py</code> first.</p>
+""")
+
+PAGES["dev-remote.html"] = ("Remote control & automation", f"""
+<h1>Remote control &amp; automation (unoautomate)</h1>
+<p class="lede">A debug build of UnoDOS pc64 can open a link to the PC you develop from and stream its
+logs to you, take commands from you, and exchange messages in either direction - all over the
+network, with a simple typed command language or a Python API. This is <strong>unoautomate</strong>:
+the OS's remote-control and automation channel. It is how you drive, observe, and update a machine
+that is sitting on a bench across the room.</p>
+
+{note('unoautomate is compiled into <strong>debug builds only</strong> (<code>UNO_DEBUG=1</code>). A production OS has none of it - the channel, the commands and the on-device Python bindings all compile away. It is meant for a <strong>trusted LAN</strong> and speaks in plaintext, so never expose it to an untrusted network.', kind="warn", title="Debug builds, LAN only")}
+
+<h2 id="enable">Turning it on</h2>
+<p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
+than the other way round. You tell it where to dial with one line in the stick's <code>STRESS.CFG</code>
+(the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
+{CODE_REMOTE_CFG}
+<p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
+your PC (below). If the link drops it reconnects on its own.</p>
+{note('The remote link shares one TCP connection with the Browser and AI features, so they cannot be used while a link is active.', title="One connection")}
+
+<h2 id="logging">Remote logging</h2>
+<p>While the link is up, every line the OS logs - boot, network, storage, UI, script output - streams to
+your PC as it happens. Instead of pulling a stick and reading <code>CRASH\\NETLOG.TXT</code> after the fact,
+you watch the machine think in real time. Nothing in the OS changes to make this happen; the remote channel
+simply subscribes to the same log stream the on-disk logs use.</p>
+
+<h2 id="commands">The command language</h2>
+<p>Either end can send the other a command or a free-form message. The commands your PC can run on the
+device are short, human-typable lines - you can even reach them with <code>nc</code>:</p>
+<div class="tw"><table>
+<thead><tr><th>Command</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>probe</code></td><td>A snapshot of what the system is doing: subsystems (heap/net/fs/shell), open windows, loaded apps.</td></tr>
+<tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
+<tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
+<tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
+<tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
+<tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
+<tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>
+<tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="host">The tool on your PC</h2>
+<p>One small script, <code>pc64/tools/unoauto_remote.py</code>, is both a listener you talk to interactively and
+a Python library you script against. Run it, and it prints the device's logs as they arrive and lets you type
+commands back:</p>
+{CODE_REMOTE_CLI}
+<p>The same thing as a library - drive the machine, read its state, run code on it, and register handlers so
+the device can drive <em>your</em> PC in return:</p>
+{CODE_REMOTE_PY}
+<p>On the device side, an automation script written in Python (see <a href="dev-apps.html">Writing apps</a>) can
+talk back over the link with <code>unoauto.remote_send()</code> and <code>unoauto.remote_recv()</code>.</p>
+
+<h2 id="ab">A/B updates: push a new build over the link</h2>
+<p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -
+<strong>A</strong>, the machine you are working on, and <strong>B</strong>, a spare - and push only a freshly
+built kernel (<code>EFI\\BOOT\\BOOTX64.EFI</code>, about 1.5&nbsp;MB) to stick B over the wire, then reboot into
+it. A driver change touches only that one file; everything else on the stick is untouched, and stick A stays as
+a known-good fallback.</p>
+{CODE_REMOTE_PUSH}
+<p>The file is streamed in chunks, staged in the device's memory, and written in one step at the end with a size
+check - so an interrupted transfer never leaves stick B half-written. Add <code>--bootnext &lt;n&gt;</code> to have
+the machine boot the other stick automatically on the next restart, without anyone touching the firmware boot
+menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
+
+{note('<code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.', kind="warn", title="What these can do")}
+
+<p class="muted">The full wire protocol and every command's exact reply are in
+<a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>
 """)
 
 # --------------------------------------------------------------------------- emit
