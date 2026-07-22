@@ -29,6 +29,7 @@ unsigned long long uno_native_rdtsc(void);
 #endif
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include "rtl8152.h"         /* USB Ethernet adapter (Realtek; docks/dongles) */
+#include "net.h"             /* net_link / net_ip / net_dhcp_done - tray LAN chip */
 #include "iwlwifi.h"         /* Intel AC/AX WiFi (firmware-driven) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
 #include "pc64_native.h"     /* PS/2 kbd/aux bind status (System readout)   */
@@ -278,6 +279,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
 static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_res_n;
 static char g_clock[40] = "Uptime 0 s";
 static char g_batt[12];      /* tray battery chip, "" = no battery reported */
+static char g_net[8];        /* tray LAN chip: "LAN"=lease, "LAN?"=up no IP, ""=down */
 
 /* UI scale choices (percent) - drives uno_font_set_ui_scale + a shell rebuild */
 static const char *g_scale_items[] = { "100%", "125%", "150%", "200%" };
@@ -500,6 +502,33 @@ static void build_usbstat(void)
           if (bnd) r = ap_str(r, lnk ? "up" : "down"); *r = 0; } }
 }
 
+/* network: the tray LAN chip + the System app's network line. net_link() is
+ * null-safe (0 when no NIC is bound) and only reads the PHY status (the medium
+ * is cached), so it is cheap on the tray's ~2 s cadence. net_ip() is only
+ * meaningful once a DHCP lease landed (net_dhcp_done), so we gate the address
+ * on that - "link up, NO lease" is exactly the state that looks connected but
+ * cannot actually reach the LAN (what the Yoga hit). */
+static char g_netline[48];   /* System app: "Network: link up, IP a.b.c.d" */
+static void fmt_net(void)
+{
+    char *p;
+    int up = net_link();
+    if (!up)                  g_net[0] = 0;          /* no NIC / link down: hide */
+    else if (net_dhcp_done()) { g_net[0]='L'; g_net[1]='A'; g_net[2]='N'; g_net[3]=0; }
+    else                      { g_net[0]='L'; g_net[1]='A'; g_net[2]='N'; g_net[3]='?'; g_net[4]=0; }
+
+    p = ap_str(g_netline, "Network: ");
+    if (!up) { *ap_str(p, "no link (no NIC bound)") = 0; return; }
+    if (net_dhcp_done()) {
+        const unsigned char *ip = net_ip();
+        p = ap_str(p, "link up, IP ");
+        p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
+        p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]);
+    } else
+        p = ap_str(p, "link up, NO DHCP lease");
+    *p = 0;
+}
+
 /* audio: which backend the Sound Manager voice reaches, for System */
 static char g_snd[64];
 static void build_sndstat(void)
@@ -585,6 +614,7 @@ static void build_sys(unoui_window *w)
     build_natstat();
     build_acpistat();
     build_sndstat();
+    fmt_net();                    /* Network line (IP / lease state) */
     unoui_window_init(w, "System", 400, 100, 1, 1);
     /* header - identity + licensing (the About surface; the notices the
      * bundled open components require live behind View licenses, which
@@ -613,6 +643,9 @@ static void build_sys(unoui_window *w)
     y += 12;
     SYS_GROUP("Storage", 1);
     SYS_ROW(g_nat);
+    y += 12;
+    SYS_GROUP("Network", 1);
+    SYS_ROW(g_netline);
     y += 12;
     SYS_GROUP("Power & ACPI", 2);
     SYS_ROW(g_acpi1);
@@ -909,7 +942,8 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     x = r.x + tb_chip_x();
     { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
       int tray_x = r.x + r.w - (fb_text_w(g_clock) + 16) - 6
-                   - (g_batt[0] ? fb_text_w(g_batt) + 20 : 0);
+                   - (g_batt[0] ? fb_text_w(g_batt) + 20 : 0)
+                   - (g_net[0]  ? fb_text_w(g_net) + 16 + 12 : 0);
     for (i = 0; i < NAPPS; i++) {
         int d = (i == act) ? 1 : 0;
         unoui_rect eb;
@@ -928,7 +962,8 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
         x += tb_chip_gap();
     } }
-    /* system tray: battery (when ACPI reports one) + clock chips, right-aligned */
+    /* system tray, right-aligned: LAN chip | battery | clock. Each chip is
+       placed to the LEFT of the previous one; cxx tracks the running left edge. */
     { int fh = fb_text_h();
       int cw = fb_text_w(g_clock) + 16, cxx = r.x + r.w - cw - 6;
       if (modern) fb_round_rect_a(cxx, by, cw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
@@ -939,6 +974,19 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
           if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
           else        tb_panel(bx, by, bw, bh, t->pal.field_bg, 1);
           fb_text(bx + 8, by + (bh - fh) / 2, g_batt, modern ? t->pal.text : t->pal.field_text, -1);
+          cxx = bx;
+      }
+      if (g_net[0]) {                    /* LAN chip: activity dot + label */
+          int lease = net_dhcp_done();
+          unsigned dot = lease ? FB_RGB(60, 200, 90)     /* green: got a lease */
+                               : FB_RGB(232, 170, 40);   /* amber: link, no IP */
+          int bw = fb_text_w(g_net) + 16 + 12, bx = cxx - bw - 4;
+          int ds = 6, dy = by + (bh - ds) / 2;
+          if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
+          else        tb_panel(bx, by, bw, bh, t->pal.field_bg, 1);
+          fb_fill_rect(bx + 8, dy, ds, ds, dot);
+          fb_text(bx + 8 + ds + 5, by + (bh - fh) / 2, g_net,
+                  modern ? t->pal.text : t->pal.field_text, -1);
       } }
 }
 
@@ -1999,6 +2047,7 @@ int main(void)
     build_launcher();                                /* opened via Start    */
     fmt_clock(0);                                    /* tray clock ready now */
     fmt_batt();                                      /* tray battery (ACPI)  */
+    fmt_net();                                       /* tray LAN chip        */
     open_app(APP_CTRL);                 /* start with Control Panel open */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
@@ -2050,6 +2099,7 @@ int main(void)
               idle = 0; g_dirty = 1;
               fmt_clock(++halfsecs / 2);
               fmt_batt();               /* AML _BST, self-cached ~2 s */
+              if ((halfsecs & 3) == 0) fmt_net();  /* LAN chip, ~2 s cadence */
           }
         }
         feed(&tick);                    /* advance the caret-blink timebase */
