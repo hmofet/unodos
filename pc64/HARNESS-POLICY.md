@@ -85,6 +85,21 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-22 - (no bump, EXPERIMENTAL)**: A/B OS-update over the remote
+  channel (answers the "put + reboot verbs" request). New URC verbs
+  `put`/`vols`/`reboot`/`bootnext` in `unoauto_remote.c` (all UNO_DEBUG-only,
+  through the existing CMD dispatch). Host: `UnoAutoLink.push_file/reboot/
+  bootnext/vols` + a `--push` CLI. **Shared-OS change other agents should
+  note:** `uno_fs_write` now writes **firmware-SFS volumes** too (new
+  `uno_efifs_write` in `uefi_main.c`; `uno_fs_writable` returns 1 for a live
+  `KIND_FW` vol) - previously firmware SFS was read-only. This is what lets an
+  *attached* machine write its USB stick; it is additive (nothing relied on the
+  old `return 0`) and compiled in all builds. New debug-only helper
+  `uno_pc64_set_bootnext` (uefi_main.c) sets the UEFI BootNext variable via
+  runtime SetVariable. Gate: `tools/remote_qemu.py` push→read-back→bootnext
+  (firmware-SFS path, all green); SPECTEST still 65/0/4. A base64-decoder
+  signed-shift-overflow (#UD under UBSan on the first long `put`) was caught by
+  the QEMU gate and fixed.
 - **2026-07-22 - (no bump, EXPERIMENTAL)**: the remote channel is live - a
   bidirectional dev-PC link (remote logging + control). New files
   `unoauto_remote.h/.c` (consume only the public net API; no `net.c` edits);

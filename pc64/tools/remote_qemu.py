@@ -71,14 +71,18 @@ def build_disk():
 
 def boot_qemu():
     sh(["cp", OVMF_VARS, VARS])
-    return subprocess.Popen([
+    cmd = [
         "qemu-system-x86_64", "-machine", "q35", "-m", "512", "-cpu", "max",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", "format=raw,file=" + DISK,
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
         "-display", "none",
-    ], stderr=subprocess.DEVNULL)
+    ]
+    if os.environ.get("URC_DBGCON"):
+        cmd += ["-debugcon", "file:" + os.environ["URC_DBGCON"],
+                "-global", "isa-debugcon.iobase=0x402"]
+    return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
 
 
 def main():
@@ -135,6 +139,46 @@ def main():
                   "%d window row(s)" % len(wins))
         except Exception as e:  # noqa: BLE001
             check(False, "launch -> window visible in probe", str(e))
+
+        # 5) A/B OS-update path: push a scratch file to a writable volume and
+        #    read it back byte-for-byte. Prefer firmware SFS (kind 2 - what an
+        #    attached USB stick actually is) to exercise uno_efifs_write.
+        try:
+            import tempfile
+            vols = link.vols(timeout=10)
+            cand = ([v for v in vols if v["writable"] and v["kind"] == 2] or
+                    [v for v in vols if v["writable"] and v["kind"] != 0] or
+                    [v for v in vols if v["writable"]])
+            if not cand:
+                check(False, "push: a writable volume exists", "vols=%r" % vols)
+            else:
+                V, kind = cand[0]["vol"], cand[0]["kind"]
+                payload = bytes((i * 7 + 3) & 0xFF for i in range(2000))
+                exp = sum((i + 1) * b for i, b in enumerate(payload)) & 0xFFFFFFFF
+                tf = tempfile.NamedTemporaryFile(delete=False)
+                tf.write(payload); tf.close()
+                try:
+                    verified = link.push_file(V, "URCTEST.BIN", tf.name, chunk=750)
+                finally:
+                    os.unlink(tf.name)
+                check(verified, "push_file finalize+verify",
+                      "vol %d kind %d (%s)" % (V, kind,
+                       "firmware-SFS" if kind == 2 else "native-FAT" if kind == 1 else "RAM"))
+                out = link.eval('import uno; d=uno.read(%d,"URCTEST.BIN"); '
+                                'print(len(d), sum((i+1)*b for i,b in enumerate(d))&0xffffffff)'
+                                % V, timeout=25)
+                got = out[0].split() if out else []
+                check(len(got) == 2 and int(got[0]) == 2000 and int(got[1]) == exp,
+                      "read-back bytes match exactly", "got=%r" % out)
+        except Exception as e:  # noqa: BLE001
+            check(False, "A/B push + read-back", str(e))
+
+        # 6) bootnext: SetVariable reachable while attached (OVMF has NV vars)
+        try:
+            link.bootnext(0, timeout=5)
+            check(True, "bootnext SetVariable ok")
+        except Exception as e:  # noqa: BLE001
+            check(False, "bootnext SetVariable ok", str(e))
 
     finally:
         try:

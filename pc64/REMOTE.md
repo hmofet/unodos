@@ -69,7 +69,46 @@ unchanged.
 | `uptime` | ms since boot | `ok <ms>` |
 | `test [suite]` | run a conformance suite (`storage`/`system`/…, empty = all) | the report, line by line, then `ok rc=<n>` |
 | `py <source>` | exec Python on-device (one line; shares the VM with any running Python app) | captured stdout, line by line |
+| `vols` | list volumes | one `ok` line per volume: `vol kind writable name` (kind `0`=RAM `1`=native-FAT `2`=firmware-SFS) |
+| `put <vol> <path> <off-hex> <b64>` | base64-decode the chunk into a RAM staging buffer at `<off>` (`0` = start a new upload) | `ok <bytes-decoded>` |
+| `put <vol> <path> done <total-hex>` | finalize: write the staged buffer to disk in one `uno_fs_write`, then verify the on-disk size == total | `ok verified <total>` / `err size-mismatch…` |
 | `poweroff` | shut the machine down after the queue drains | `ok bye` |
+| `reboot` | reset the machine after the queue drains (`uno_native_reset`) | `ok bye` |
+| `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable — attached only) | `ok set` / `err unavailable` |
+
+## A/B OS update (push a new BOOTX64.EFI over the link)
+
+Iterating on a driver (e.g. WiFi) against a live machine normally means physically
+reflashing a USB stick each round. Instead, run **two** UnoDOS sticks — **A** (the
+running, known-good OS) and **B** (a spare) — and push only the rebuilt
+`EFI\BOOT\BOOTX64.EFI` (~1.5 MB) to stick B over the link, then reboot into B. A
+driver change touches only that one file; firmware / apps / config on the stick are
+untouched, and A stays as the fallback.
+
+The upload is **RAM-staged and written in one shot at `done`**, so a partial or
+interrupted transfer never touches stick B — it stays a valid boot disk. The write
+goes through `uno_fs_write`, which now writes **firmware-SFS volumes too** (via
+`uno_efifs_write`) — so an *attached* machine (the driver box builds
+`-DUNO_NO_DETACH`) can write its USB stick, which appears as a `kind 2` volume.
+
+From the dev PC:
+
+```bash
+# find which volume is stick B (look for a writable kind-2 volume)
+python tools/unoauto_remote.py --listen 0.0.0.0:5099   # then type: vols
+
+# push a fresh build to stick B (vol 2 here) and reboot into it
+python tools/unoauto_remote.py --push 2 'EFI\BOOT\BOOTX64.EFI' build/BOOTX64.EFI --reboot
+# add --bootnext <N> to also set BootNext so it boots B without the F12 menu
+```
+
+Or from the library: `link.push_file(2, r'EFI\BOOT\BOOTX64.EFI', 'build/BOOTX64.EFI')`
+returns `True` when verified; then `link.bootnext(n)` / `link.reboot()`.
+
+> **Security — `put`/`reboot`/`bootnext` widen the blast radius.** They are arbitrary
+> file write + reset + boot-target change, and (like the whole channel) are
+> **UNO_DEBUG-only** and **plaintext, LAN-only**. Never expose the listener to an
+> untrusted network. `put` caps a single upload at 8 MB (the staging buffer).
 
 `probe` row kinds: `0` module (`.UNO` file), `1` window (title), `2` subsystem
 (`heap`/`net`/`fs`/`shell`) - see `unoauto.h` for the `v1`/`v2` meanings.

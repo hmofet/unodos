@@ -1580,6 +1580,25 @@ int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
     return rts()->SetTime(&t) == EFI_SUCCESS;
 }
 
+#ifdef UNO_DEBUG
+/* unoautomate remote `bootnext`: set the UEFI BootNext variable so the machine
+ * boots Boot#### option `n` on the next reset without the operator touching the
+ * firmware menu.  Only meaningful while ATTACHED (runtime SetVariable live -
+ * the Yoga driver box builds -DUNO_NO_DETACH).  1 on EFI_SUCCESS, else 0. */
+int uno_pc64_set_bootnext(unsigned int n)
+{
+    static EFI_GUID gv = { 0x8BE4DF61, 0x93CA, 0x11d2,
+        { 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C } };  /* EFI_GLOBAL_VARIABLE */
+    CHAR16 name[9] = { 'B', 'o', 'o', 't', 'N', 'e', 'x', 't', 0 };
+    UINT16 v = (UINT16)n;
+    EFI_STATUS (*setvar)(CHAR16 *, EFI_GUID *, UINT32, UINTN, void *);
+    if (gDetached || !gST || !rts()->SetVariable) return 0;
+    setvar = (EFI_STATUS (*)(CHAR16 *, EFI_GUID *, UINT32, UINTN, void *))rts()->SetVariable;
+    /* NON_VOLATILE | BOOTSERVICE_ACCESS | RUNTIME_ACCESS */
+    return setvar(name, &gv, 0x1 | 0x2 | 0x4, 2, &v) == EFI_SUCCESS ? 1 : 0;
+}
+#endif
+
 /* a short rising arpeggio played after the splash completes (PC speaker,
    or the HDA/AC'97 DAC when one is up - pumped in slices so the PCM ring
    stays ahead of the hardware through the note gaps) */
@@ -1705,6 +1724,38 @@ long uno_efifs_read_at(int vol, const char *name, long off,
 long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
 {
     return uno_efifs_read_at(vol, name, 0, buf, max);
+}
+
+/* Write `len` bytes to `name` on a firmware SFS volume, replacing it (so the
+ * new file is EXACTLY len bytes - delete any existing file first, since the EFI
+ * Write does not truncate).  1 on success, 0 on failure / short write.  Legal
+ * only while boot services are live (fw SFS dies at detach); traverses existing
+ * subdirs (e.g. "EFI\\BOOT\\BOOTX64.EFI") but creates no directories.  This is
+ * what makes an attached machine's USB stick writable - the A/B OS-update path
+ * in the unoautomate remote channel (see REMOTE.md) rides on it. */
+long uno_efifs_write(int vol, const char *name, const unsigned char *buf, long len)
+{
+    EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80]; long done = 0;
+    const UINT64 MODE_RW     = 3;                        /* READ|WRITE          */
+    const UINT64 MODE_CREATE = 0x8000000000000003ULL;    /* CREATE|READ|WRITE   */
+    if (!root) return 0;
+    a_to16(wn, name, 80);
+    /* delete an existing file so the replacement's size is exact */
+    if (root->Open(root, &f, wn, MODE_RW, 0) == EFI_SUCCESS && f) {
+        f->Delete(f);                                    /* closes + removes    */
+        f = 0;
+    }
+    if (root->Open(root, &f, wn, MODE_CREATE, 0) != EFI_SUCCESS || !f) {
+        root->Close(root); return 0;
+    }
+    while (done < len) {
+        UINTN sz = (UINTN)(len - done);
+        if (f->Write(f, &sz, (void *)(buf + done)) != EFI_SUCCESS || sz == 0) break;
+        done += (long)sz;
+    }
+    f->Flush(f);
+    f->Close(f); root->Close(root);
+    return done == len ? 1 : 0;
 }
 
 #ifdef UNO_DEBUG
