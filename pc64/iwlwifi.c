@@ -259,6 +259,25 @@ static int  g_family;
  * land at all" (round-3 open question). */
 #define UREG_CHICK               0xa05c00
 #define UREG_CHICK_MSI           (1u<<24)
+#define UREG_CHICK_MSIX          (1u<<25)      /* MSI-X mode - the gen2 ROM requires this */
+
+/* MSI-X hardware config block (BAR0). The gen2/22000 AX201 boot ROM will not
+ * start the firmware load unless MSI-X is enabled AND its interrupt causes are
+ * mapped + unmasked FIRST (confirmed 2026-07-22 by tracing a working Linux
+ * load on the same Yoga - see conf_msix). Offsets are the CSR_MSIX_* registers
+ * (CSR_MSIX_BASE = 0x2000). We poll for ALIVE via the RB, so we don't service
+ * these vectors - we only put the device in the state the ROM validates. */
+#define CSR_MSIX_FH_INT_CAUSES_AD 0x2800
+#define CSR_MSIX_FH_INT_MASK_AD   0x2804
+#define CSR_MSIX_HW_INT_MASK_AD   0x280C
+#define CSR_MSIX_AUTOMASK_ST_AD   0x2810
+#define CSR_MSIX_RX_IVAR_BASE     0x2880       /* RX IVAR[i] = base + i     */
+#define CSR_MSIX_IVAR_BASE        0x2890       /* cause IVARs (0x89 each)   */
+#define MSIX_IVAR_ENA            0x89          /* enable | vector (trace)   */
+/* fw-load interrupt state (iwl_enable_fw_load_int_ctx_info, MSI-X form):
+ * unmask only ALIVE in the HW mask, and the FH causes in the FH mask. */
+#define MSIX_FH_MASK_FWLOAD      0x0000fe00u
+#define MSIX_HW_MASK_FWLOAD      0xfffffffeu   /* bit0 (ALIVE) unmasked     */
 
 static u32 uprph(u32 reg) { return g_family >= FAM_AX210 ? reg + UMAC_PRPH_OFFSET : reg; }
 static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) */
@@ -655,6 +674,38 @@ static void nic_config_radio(void)
     w32(CSR_HW_IF_CONFIG_REG, (r32(CSR_HW_IF_CONFIG_REG) & ~mask) | val);
     uno_dbg_net_trace("wifi: nic_config: phy_sku=%08x -> HW_IF=%08x",
                       pc, r32(CSR_HW_IF_CONFIG_REG));
+}
+
+/* Configure MSI-X. THE F12 FIX: the gen2 AX201 boot ROM refuses to start the
+ * firmware load until MSI-X is enabled and its interrupt causes are mapped +
+ * unmasked (ground-truth from tracing a working Linux load, 2026-07-22). We
+ * poll the RB for ALIVE and never service these vectors - this only puts the
+ * device in the state the ROM validates. Values replay the working trace:
+ *   UREG_CHICK = MSIX_ENABLE (bit25, not the MSI bit24 we used before)
+ *   IVAR table (byte writes) mapping RX + HW causes to a vector
+ *   FH mask 0xfe00 / HW mask 0xfffffffe (ALIVE unmasked) - set at fw load. */
+static void conf_msix(void)
+{
+    int i;
+    prph_w(uprph(UREG_CHICK), UREG_CHICK_MSIX);
+    /* RX IVARs: index 0 = 0, indices 1..8 = their queue number (trace) */
+    w8_(CSR_MSIX_RX_IVAR_BASE + 0, 0x00);
+    for (i = 1; i <= 8; i++) w8_(CSR_MSIX_RX_IVAR_BASE + i, (u8)i);
+    /* HW/FH cause IVARs: enable|vector at the exact offsets Linux programs for
+     * this part (from the trace); harmless extras, missing ones is what stalls. */
+    { static const u8 iv[] = { 0x00,0x01,0x03,0x05, 0x10,0x11,0x12,0x13,
+                               0x16,0x17,0x18, 0x29,0x2a,0x2b,0x2d,0x2e };
+      for (i = 0; i < (int)(sizeof iv); i++)
+          w8_(CSR_MSIX_IVAR_BASE + iv[i], MSIX_IVAR_ENA); }
+    /* clear the interrupt-cause status, then set the fw-load masks (ALIVE +
+     * FH unmasked) - this is the enable the ROM waits on before it DMAs. */
+    w32(CSR_MSIX_FH_INT_CAUSES_AD, 0xffffffffu);
+    w32(CSR_MSIX_HW_INT_CAUSES_AD, 0xffffffffu);
+    w32(CSR_MSIX_FH_INT_MASK_AD, MSIX_FH_MASK_FWLOAD);
+    w32(CSR_MSIX_HW_INT_MASK_AD, MSIX_HW_MASK_FWLOAD);
+    uno_dbg_net_trace("wifi: MSI-X configured: CHICK=%08x FHmask=%08x HWmask=%08x",
+                      prph_r(uprph(UREG_CHICK)),
+                      r32(CSR_MSIX_FH_INT_MASK_AD), r32(CSR_MSIX_HW_INT_MASK_AD));
 }
 
 /* grab NIC access so PRPH/SRAM writes land (refcounted: prph_w/prph_r grab
@@ -1246,7 +1297,12 @@ static int load_fw_gen2(void)
      * which is a gen3/IML register (used by load_fw_gen3, kicked via
      * CSR_CTXT_INFO_ADDR) - a no-op here at best. */
     w32(CSR_INT, 0xFFFFFFFFu);
-    w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);
+    /* MSI-X fw-load interrupt enable (the working trace sets these masks in the
+     * two writes immediately before the CTXT_INFO_BA kick): unmask ALIVE in the
+     * HW mask + the FH causes. This is what the gen2 ROM waits on. conf_msix()
+     * already put the device in MSI-X mode + programmed the IVAR table. */
+    w32(CSR_MSIX_HW_INT_MASK_AD, MSIX_HW_MASK_FWLOAD);
+    w32(CSR_MSIX_FH_INT_MASK_AD, MSIX_FH_MASK_FWLOAD);
     g_fh_seen = 0;
     /* OpenBSD iwx does the ENTIRE kick tail (BA write, LTR, doorbell) under
      * ONE nic lock; we used to grab/release around each PRPH write. Hold one
@@ -1992,11 +2048,8 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
-    if (g_mq_rx) {                   /* legacy-INTA parity: UREG_CHICK = MSI */
-        prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
-        uno_dbg_net_trace("wifi: UREG_CHICK<=MSI readback=%08x (bit24 set = UREG-block writes land)",
-                          prph_r(uprph(UREG_CHICK)));
-    }
+    if (g_gen2) conf_msix();         /* MSI-X config - REQUIRED for the ROM to start */
+    else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
     nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
     if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
