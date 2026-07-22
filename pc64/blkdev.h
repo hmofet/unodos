@@ -22,6 +22,9 @@ typedef struct uno_bdev {
                                         used to dedup firmware FS volumes      */
     int  is_boot;                    /* 1 = the disk UnoDOS booted from (the
                                         storage safety gate refuses to wipe it) */
+    void *dp;                        /* firmware whole-disk device path (fw
+                                        devices only), for authoring a boot entry
+                                        on a partition we create; NULL if native */
     void *ctx;
     int (*read)(struct uno_bdev *, unsigned long long lba, unsigned int n, void *buf);
     int (*write)(struct uno_bdev *, unsigned long long lba, unsigned int n, const void *buf);

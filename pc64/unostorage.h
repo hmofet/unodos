@@ -52,4 +52,9 @@ int unostorage_gpt_add(unostorage_dev *d, unsigned long long first_lba,
  * NOTE: destructive - every byte on the disk is lost. */
 int unostorage_prepare_esp(uno_bdev *dev, const char *label);
 
+/* Read back the first ESP partition's LBA range + unique GUID from the GPT
+ * (for authoring a boot entry that targets it).  1 if found. */
+int unostorage_find_esp(unostorage_dev *d, unsigned long long *first,
+                        unsigned long long *last, unsigned char guid[16]);
+
 #endif /* PC64_UNOSTORAGE_H */

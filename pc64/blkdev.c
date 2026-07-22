@@ -143,6 +143,7 @@ static void fw_scan(void)
         d.ctx     = b;
         d.read    = fw_read;
         d.write   = fw_write;
+        d.dp = dpv;                  /* for authoring a boot entry on this disk */
         /* mark the disk we booted from so the storage safety gate can refuse it */
         { void *bdp = uno_pc64_boot_dp();
           if (dpv && bdp && dp_is_prefix((const unsigned char *)dpv,

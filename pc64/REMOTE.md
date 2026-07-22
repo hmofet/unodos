@@ -84,6 +84,8 @@ unchanged.
 | `mkpart <disk> <first-hex> <last-hex> esp <name>` | *(armed)* add one ESP partition | `ok part` |
 | `mkfs <disk> <first-hex> <sectors-hex> <label>` | *(armed)* format a region FAT32 (`uno_fat_mkfs`) + remount | `ok formatted` |
 | `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
+| `mkdir <vol> <path>` | create a directory on a native-FAT volume (so files can be pushed into it) | `ok mkdir` |
+| `makeboot <disk> [desc] [efi-path]` | author a UEFI boot entry for the ESP on `<disk>` (defaults: `UnoDOS`, `\EFI\BOOT\BOOTX64.EFI`, made default); attached only | `ok boot-entry added` |
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
@@ -154,6 +156,27 @@ python tools/unoauto_remote.py --prepdisk 1 UNODOS
 > disk name + size so you can confirm the target before committing. Like the rest
 > of the channel these verbs are **UNO_DEBUG-only** and **LAN-only**. `prepdisk`
 > erases the whole disk.
+
+### Installing to an internal disk
+
+`prepdisk` works on **any** writable disk - while attached, an internal SATA/NVMe
+disk shows up as a writable `fw*` disk in `disks`, so the same flow installs
+UnoDOS onto it. The full install is: partition + format → create the directory
+tree → copy the OS files → author a UEFI **boot entry** so the machine boots the
+disk. One command does all of it:
+
+```bash
+# install the built OS tree onto internal disk 1 (DESTRUCTIVE)
+python tools/unoauto_remote.py --install 1 build/esp
+# then: reboot   (the new disk is now the default boot entry)
+```
+
+Under the hood (`UnoAutoLink.install_dir`): `arm` + `prepdisk`, then `mkdir` for
+each directory and `put` for each file under `build/esp`, then `makeboot`. The
+boot entry is authored with a hand-built HD() device-path node (the firmware
+hasn't re-read the new GPT yet), the same technique the on-disk installer uses -
+`makeboot` wraps `uno_pc64_add_boot_entry` (uefi_main.c) + `unostorage_find_esp`.
+`makeboot` needs firmware runtime services, so it is **attached-only**.
 
 ## The dev-PC tool - `tools/unoauto_remote.py`
 

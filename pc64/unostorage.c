@@ -177,6 +177,28 @@ int unostorage_gpt_add(unostorage_dev *d, unsigned long long first_lba,
     return write_gpt(d, dg);
 }
 
+int unostorage_find_esp(unostorage_dev *d, unsigned long long *first,
+                        unsigned long long *last, unsigned char guid[16])
+{
+    uint8_t hdr[SEC]; uint64_t entryLba; uint32_t num, esz; unsigned i;
+    if (!d || !d->read) return 0;
+    if (!d->read(d->ctx, 1, 1, hdr) || memcmp(hdr, "EFI PART", 8) != 0) return 0;
+    entryLba = r64(hdr + 72); num = r32(hdr + 80); esz = r32(hdr + 84);
+    if (esz != GPT_ENTSZ || num != GPT_ENTS) return 0;
+    for (i = 0; i < ARR_SECS; i++)
+        if (!d->read(d->ctx, entryLba + i, 1, g_arr + i * SEC)) return 0;
+    for (i = 0; i < GPT_ENTS; i++) {
+        const unsigned char *e = g_arr + i * GPT_ENTSZ;
+        if (memcmp(e, unostorage_esp_type, 16) == 0) {      /* first ESP */
+            if (first) *first = r64(e + 32);
+            if (last)  *last  = r64(e + 40);
+            if (guid)  { int k; for (k = 0; k < 16; k++) guid[k] = e[16 + k]; }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int unostorage_prepare_esp(uno_bdev *dev, const char *label)
 {
     unostorage_dev d;

@@ -1615,6 +1615,97 @@ int uno_pc64_set_bootnext(unsigned int n)
     /* NON_VOLATILE | BOOTSERVICE_ACCESS | RUNTIME_ACCESS */
     return setvar(name, &gv, 0x1 | 0x2 | 0x4, 2, &v) == EFI_SUCCESS ? 1 : 0;
 }
+
+static void bootname16(CHAR16 *wn, int idx)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    wn[0]='B'; wn[1]='o'; wn[2]='o'; wn[3]='t';
+    wn[4]=(CHAR16)(unsigned char)hx[(idx>>12)&15]; wn[5]=(CHAR16)(unsigned char)hx[(idx>>8)&15];
+    wn[6]=(CHAR16)(unsigned char)hx[(idx>>4)&15];  wn[7]=(CHAR16)(unsigned char)hx[idx&15];
+    wn[8]=0;
+}
+
+/* Author a UEFI Boot#### entry that boots `efi_path` (e.g.
+ * "\\EFI\\BOOT\\BOOTX64.EFI") from a partition just created on the disk whose
+ * whole-disk device path is `disk_dp`.  The firmware hasn't re-read the new GPT,
+ * so there is no partition handle - a HD() media node is hand-built from the
+ * partition's LBA range + GPT unique GUID (the installer's technique).  Splices
+ * into BootOrder (make_default = boot it first).  1 on success; attached only.
+ * The remote install-to-internal-disk path (REMOTE.md) wraps this. */
+int uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first_lba,
+                            unsigned long long last_lba, const unsigned char part_guid[16],
+                            const char *desc, const char *efi_path, int make_default)
+{
+    static EFI_GUID gv = { 0x8BE4DF61, 0x93CA, 0x11d2,
+        { 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C } };
+    typedef EFI_STATUS (*SETV)(CHAR16 *, EFI_GUID *, UINT32, UINTN, void *);
+    typedef EFI_STATUS (*GETV)(CHAR16 *, EFI_GUID *, UINT32 *, UINTN *, void *);
+    static unsigned char lo[1024];
+    unsigned char hd[42], *p = lo;
+    const unsigned char *dp = disk_dp;
+    SETV setv; GETV getv;
+    int i, dlen = 0, guard = 64, dsl, fplen, fnode, idx = -1, freeslot = -1;
+    unsigned long long size;
+    UINTN losz;
+
+    if (gDetached || !gST || !disk_dp || !desc || !efi_path) return 0;
+    setv = (SETV)rts()->SetVariable; getv = (GETV)rts()->GetVariable;
+    if (!setv || !getv) return 0;
+
+    while (dp && guard-- > 0 && dp[0] != 0x7F) {          /* whole-disk path length */
+        int l = dp[2] | (dp[3] << 8); if (l < 4) return 0; dlen += l; dp += l;
+    }
+    for (i = 0; i < 42; i++) hd[i] = 0;                   /* HD() media node */
+    hd[0]=0x04; hd[1]=0x01; hd[2]=0x2A; hd[3]=0x00; hd[4]=1;   /* Hard-Drive, len 42, part #1 */
+    for (i = 0; i < 8; i++) hd[8 + i] = (unsigned char)(first_lba >> (8 * i));
+    size = last_lba - first_lba + 1;
+    for (i = 0; i < 8; i++) hd[16 + i] = (unsigned char)(size >> (8 * i));
+    for (i = 0; i < 16; i++) hd[24 + i] = part_guid[i];
+    hd[40]=2; hd[41]=2;                                   /* MBRType GPT, SigType GUID */
+
+    for (dsl = 0; desc[dsl]; dsl++) ;
+    for (fplen = 0; efi_path[fplen]; fplen++) ;
+    fnode = 4 + 2 * (fplen + 1);
+    if ((size_t)(4 + 2 + 2 * (dsl + 1) + dlen + 42 + fnode + 4) > sizeof lo) return 0;
+
+    for (i = 0; i < 0x100; i++) {                         /* find a Boot#### slot */
+        static unsigned char v[512]; UINTN sz = sizeof v; UINT32 at; CHAR16 bn[9];
+        bootname16(bn, i);
+        if (getv(bn, &gv, &at, &sz, v) == EFI_SUCCESS) {
+            if (sz > 8) { const CHAR16 *d = (const CHAR16 *)(v + 6); int m = 1, j;
+                for (j = 0; j <= dsl; j++) {
+                    CHAR16 want = (j < dsl) ? (CHAR16)(unsigned char)desc[j] : 0;
+                    if (d[j] != want) { m = 0; break; } }
+                if (m) { idx = i; break; } }
+        } else if (freeslot < 0) freeslot = i;
+    }
+    if (idx < 0) idx = freeslot;
+    if (idx < 0) return 0;
+
+    p[0]=1; p[1]=0; p[2]=0; p[3]=0; p += 4;               /* LOAD_OPTION: ACTIVE */
+    { int fpl = dlen + 42 + fnode + 4; *p++ = (unsigned char)fpl; *p++ = (unsigned char)(fpl >> 8); }
+    for (i = 0; i < dsl; i++) { *p++ = (unsigned char)desc[i]; *p++ = 0; } *p++ = 0; *p++ = 0;
+    for (i = 0; i < dlen; i++) *p++ = ((const unsigned char *)disk_dp)[i];
+    for (i = 0; i < 42; i++) *p++ = hd[i];
+    *p++ = 4; *p++ = 4; *p++ = (unsigned char)fnode; *p++ = (unsigned char)(fnode >> 8);
+    for (i = 0; i <= fplen; i++) { *p++ = (unsigned char)efi_path[i]; *p++ = 0; }
+    *p++ = 0x7F; *p++ = 0xFF; *p++ = 4; *p++ = 0;
+    losz = (UINTN)(p - lo);
+
+    { CHAR16 bn[9]; bootname16(bn, idx);
+      if (setv(bn, &gv, 0x7, losz, lo) != EFI_SUCCESS) return 0; }
+    {
+        static UINT16 bo[130], nbo[130];
+        UINTN sz = sizeof(UINT16) * 128; UINT32 at; int n = 0, m = 0;
+        CHAR16 bon[10] = {'B','o','o','t','O','r','d','e','r',0};
+        if (getv(bon, &gv, &at, &sz, bo) == EFI_SUCCESS) n = (int)(sz / 2);
+        if (make_default) nbo[m++] = (UINT16)idx;
+        for (i = 0; i < n && m < 128; i++) if (bo[i] != (UINT16)idx) nbo[m++] = bo[i];
+        if (!make_default && m < 128) nbo[m++] = (UINT16)idx;
+        if (setv(bon, &gv, 0x7, (UINTN)m * 2, nbo) != EFI_SUCCESS) return 0;
+    }
+    return 1;
+}
 #endif
 
 /* a short rising arpeggio played after the splash completes (PC speaker,

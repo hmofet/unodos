@@ -114,6 +114,19 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, EXPERIMENTAL verbs)**: install-to-internal-disk over
+  the link. New UNO_DEBUG verbs `mkdir` and `makeboot` (unoauto_remote.c) - after
+  `prepdisk`, create the directory tree, `put` the OS files, then `makeboot`
+  authors a UEFI **boot entry** for the fresh ESP so the machine boots that disk.
+  New `unostorage_find_esp` (reads the ESP LBA range + GUID back from the GPT) and
+  `uno_pc64_add_boot_entry` in `uefi_main.c` (hand-built HD() node + Boot####/
+  BootOrder via runtime SetVariable, attached-only, debug-gated). Shared-OS:
+  `uno_bdev` gained a `dp` field (the firmware whole-disk device path, set in
+  blkdev `fw_scan`) for the boot entry. Host: `UnoAutoLink.mkdir/makeboot/
+  install_dir` + a `--install <disk> <esp_dir>` CLI. Works on internal SATA/NVMe
+  disks (they enumerate as writable `fw*` while attached). Gate: `remote_qemu.py`
+  proves mkdir + nested push + makeboot; SPECTEST 65/0/4; prod clean.
+
 - **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk
   partition/format, wrapped by unoautomate. **New shared framework `unostorage`
   (`unostorage.h/.c`)**: authors a GPT + ESP on a raw disk over `blkdev`
