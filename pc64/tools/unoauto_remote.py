@@ -189,6 +189,47 @@ class UnoAutoLink:
         """Author a fresh GPT + ESP and format it FAT32 (one destructive op)."""
         return self.command("prepdisk", disk, label, timeout=k.pop("timeout", 180.0), **k)
 
+    def mkdir(self, vol, path, **k):        return self.command("mkdir", vol, path, **k)
+
+    def makeboot(self, disk, desc="UnoDOS", path=r"\EFI\BOOT\BOOTX64.EFI", **k):
+        """Author a UEFI boot entry for the ESP on <disk> (after prepdisk + files)."""
+        return self.command("makeboot", disk, desc, path, **k)
+
+    def install_dir(self, disk, esp_dir, label="UNODOS", progress=None):
+        """Full install to a raw disk: arm + prepdisk (partition/format), create
+        the directory tree + push every file under esp_dir onto the new volume,
+        then author a boot entry. Returns True. DESTRUCTIVE - erases the disk."""
+        import os
+        self.arm(disk)
+        r = self.prepdisk(disk, label)
+        if not (r and r[0] == "prepared"):
+            raise RuntimeError("prepdisk failed: %r" % r)
+        vol = None                                   # the fresh writable native-FAT vol
+        for l in self.command("vols"):
+            p = l.split(None, 3)
+            if p[1] == "1" and p[2] == "1" and int(p[0]) > 0:
+                vol = int(p[0])
+        if vol is None:
+            raise RuntimeError("the fresh volume did not mount")
+        # collect files + the set of directories they need, shallowest first
+        files, dirs = [], set()
+        for root, _, fs in os.walk(esp_dir):
+            for fn in fs:
+                lp = os.path.join(root, fn)
+                rel = os.path.relpath(lp, esp_dir).replace("/", "\\")
+                files.append((lp, rel))
+                d = os.path.dirname(rel)
+                while d:
+                    dirs.add(d); d = os.path.dirname(d)
+        for d in sorted(dirs, key=lambda s: s.count("\\")):
+            self.mkdir(vol, d)
+        for i, (lp, rel) in enumerate(files):
+            if progress:
+                progress(i, len(files), rel)
+            self.push_file(vol, rel, lp)
+        self.makeboot(disk)
+        return True
+
     def readsec(self, disk, lba, n=1, **k):
         import base64
         lines = self.command("readsec", disk, format(lba, "x"), n, **k)
@@ -300,9 +341,35 @@ def _cli(argv):
     ap.add_argument("--prepdisk", nargs=2, metavar=("DISK", "LABEL"),
                     help="wait for pc64 to dial in, then partition+format raw DISK as a fresh "
                          "FAT32 ESP (DESTRUCTIVE - use `disks` to find the index), then exit")
+    ap.add_argument("--install", nargs=2, metavar=("DISK", "ESP_DIR"),
+                    help="full install to raw DISK: partition + format + copy the ESP_DIR tree "
+                         "(e.g. build/esp) + author a boot entry (DESTRUCTIVE), then exit")
     a = ap.parse_args(argv)
     host, _, port = a.listen.rpartition(":")
     link = UnoAutoLink(host or "0.0.0.0", int(port))
+
+    if a.install:                                # full install-to-internal-disk flow
+        disk, esp_dir = int(a.install[0]), a.install[1]
+        link.listen()
+        print("waiting for pc64 to dial in on %s ..." % a.listen)
+        if not link.wait_connected(180):
+            print("FAIL: no connection"); link.close(); return 1
+        try:
+            ds = link.disks()
+            tgt = next((d for d in ds if d["idx"] == disk), None)
+            if not tgt or tgt["is_boot"]:
+                print("FAIL: disk %d missing or is the boot disk. Disks: %r" % (disk, ds))
+                link.close(); return 1
+            print("DESTRUCTIVE: erasing %s (%.1f MB) and installing UnoDOS from %s"
+                  % (tgt["name"], tgt["sectors"] * 512 / 1e6, esp_dir))
+            def prog(i, n, rel):
+                sys.stdout.write("\r  [%d/%d] %s          " % (i + 1, n, rel)); sys.stdout.flush()
+            link.install_dir(disk, esp_dir, progress=prog)
+            print("\ninstalled + boot entry added. Reboot to boot the disk (or use reboot).")
+        except Exception as e:  # noqa: BLE001
+            print("\nFAIL: " + str(e)); link.close(); return 1
+        link.close()
+        return 0
 
     if a.prepdisk:                               # one-shot partition+format flow
         disk, label = int(a.prepdisk[0]), a.prepdisk[1]

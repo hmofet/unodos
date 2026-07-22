@@ -38,11 +38,16 @@ int   uno_fs_volumes(void);
 const char *uno_fs_volume_name(int vol);
 void  uno_native_reset(void);
 int   uno_pc64_set_bootnext(unsigned int n);                     /* uefi_main.c */
+int   uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first,
+                              unsigned long long last, const unsigned char guid[16],
+                              const char *desc, const char *path, int make_default);
 /* raw-disk authoring (disks/arm/prepdisk verbs) - wraps unostorage + fat + fs */
 void  uno_fat_remount(void);                                     /* fat.c   */
 void  uno_fs_remap(void);                                        /* pc64_fs */
 int   uno_fat_mkfs(uno_bdev *dev, unsigned long long first,
                    unsigned long long sectors, const char *label);
+int   uno_fat_mkdir(int fatvol, const char *path);               /* fat.c   */
+int   uno_fs_fat_index(int vol);                                 /* pc64_fs */
 
 /* ---- tiny string builder (avoids snprintf; see the S-LIBC-06 history) ---- */
 typedef struct { char *p; int cap, len; } SB;
@@ -569,6 +574,35 @@ static void do_prepdisk(const char *id, char *args)     /* destructive (GPT+ESP+
     rsp(id, "end", 0);
 }
 
+/* makeboot <disk> [desc] [efi-path]: author a UEFI boot entry for the ESP on
+ * <disk> (after prepdisk + pushing the OS files onto it) so the machine can boot
+ * that internal disk.  Not disk-destructive (an NVRAM boot var), so no arm gate;
+ * needs firmware runtime services (attached).  Defaults: desc "UnoDOS", path
+ * \EFI\BOOT\BOOTX64.EFI, made the default boot entry. */
+static void do_makeboot(const char *id, char *args)
+{
+    int disk = (int)atol_(tok(&args));
+    char *desc = tok(&args);
+    char *path = tok(&args);
+    uno_bdev *b = disk_at(disk);
+    unostorage_dev d;
+    unsigned long long first, last; unsigned char guid[16];
+    if (!b)     { rsp(id, "err", "bad-disk"); rsp(id, "end", 0); return; }
+    if (!b->dp) { rsp(id, "err", "no device path (attached firmware disk required)");
+                  rsp(id, "end", 0); return; }
+    d = unostorage_from_bdev(b);
+    if (!unostorage_find_esp(&d, &first, &last, guid)) {
+        rsp(id, "err", "no ESP on this disk (prepdisk first)"); rsp(id, "end", 0); return;
+    }
+    if (uno_pc64_add_boot_entry(b->dp, first, last, guid,
+                                desc ? desc : "UnoDOS",
+                                path ? path : "\\EFI\\BOOT\\BOOTX64.EFI", 1))
+        rsp(id, "ok", "boot-entry added");
+    else
+        rsp(id, "err", "SetVariable failed (detached / no runtime services?)");
+    rsp(id, "end", 0);
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -623,6 +657,16 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "mkpart"))  { do_mkpart(id, args); return; }
     if (!strcmp_(verb, "mkfs"))    { do_mkfs(id, args); return; }
     if (!strcmp_(verb, "prepdisk")){ do_prepdisk(id, args); return; }
+    if (!strcmp_(verb, "makeboot")){ do_makeboot(id, args); return; }
+    if (!strcmp_(verb, "mkdir")) {   /* create a directory (native-FAT vol) */
+        int vol = (int)atol_(tok(&args));
+        char *path = tok(&args);
+        int fi = uno_fs_fat_index(vol), ok;
+        if (fi < 0 || !path) { rsp(id, "err", "native-FAT vol + path required"); rsp(id, "end", 0); return; }
+        ok = uno_fat_mkdir(fi, path);
+        rsp(id, ok ? "ok" : "err", ok ? "mkdir" : "failed");
+        rsp(id, "end", 0); return;
+    }
     /* iwl <subcmd...> - live Intel-WiFi register/bring-up debug (F12). See
      * iwlwifi.h iwl_dbg_cmd: csr/csw/prr/prw/rerun/status. Additive pass-through
      * per the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md. */

@@ -268,6 +268,23 @@ def main():
                     g = out[0].split() if out else []
                     check(len(g) == 2 and int(g[0]) == 4000 and int(g[1]) == exp2,
                           "read-back from the fresh volume matches", "got=%r" % out)
+
+                    # 8b) install primitives: mkdir a tree, push into it, boot entry
+                    link.mkdir(newvol, "EFI")
+                    link.mkdir(newvol, "EFI\\BOOT")
+                    tf2 = tempfile.NamedTemporaryFile(delete=False)
+                    tf2.write(b"MZ" + bytes(2048)); tf2.close()
+                    try:
+                        sub = link.push_file(newvol, "EFI\\BOOT\\BOOTX64.EFI", tf2.name)
+                    finally:
+                        os.unlink(tf2.name)
+                    check(sub, "mkdir + push into a created subdir")
+                    try:
+                        r = link.makeboot(D)
+                        check(bool(r) and r[0] == "boot-entry added",
+                              "makeboot: UEFI boot entry authored for the fresh ESP", "%r" % r)
+                    except Exception as e:  # noqa: BLE001
+                        check(False, "makeboot: UEFI boot entry authored", str(e))
                 else:
                     check(False, "found the fresh writable volume in vols")
         except Exception as e:  # noqa: BLE001
