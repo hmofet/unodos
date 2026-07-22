@@ -9,6 +9,7 @@
 #include "unoauto.h"
 #include "unoauto_remote.h"
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
+#include "netsock.h"        /* multi-connection socket API (nst self-test) */
 #include "pc64_http.h"      /* pc64_net_up */
 #include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
 
@@ -415,6 +416,41 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         int ok = uno_pc64_set_bootnext((unsigned)atol_(tok(&args)));
         rsp(id, ok ? "ok" : "err",
             ok ? "set" : "unavailable (detached / no runtime SetVariable)");
+        rsp(id, "end", 0); return;
+    }
+    /* nst <p1> <p2> - netsock self-test (debug): prove the multi-connection
+     * layer. Open TWO simultaneous outbound TCP connections (to 10.0.2.2:p1 and
+     * :p2), plus a LISTEN socket on 9099 that accepts one inbound connection
+     * (the host dials in via QEMU hostfwd). Reports socket count, both outbound
+     * states, and the accepted child + its peer. Driven by tools/netsock_qemu.py. */
+    if (!strcmp_(verb, "nst")) {
+        extern void uno_pc64_delay_ms(int ms);
+        int p1 = (int)atol_(tok(&args));
+        int p2 = (int)atol_(tok(&args));
+        u8  host[4] = {10, 0, 2, 2};
+        int sA = net_socket(SOCK_TCP), sB = net_socket(SOCK_TCP), sL = net_socket(SOCK_TCP);
+        int child = -1, i;
+        char t[96]; SB b;
+        if (p1 > 0) net_connect(sA, host, (u16)p1);
+        if (p2 > 0) net_connect(sB, host, (u16)p2);
+        net_bind(sL, 9099); net_listen(sL);
+        for (i = 0; i < 400; i++) {                 /* ~2 s: settle handshakes + accept */
+            net_poll(); uno_pc64_delay_ms(5);
+            if (child < 0) { int c = net_accept(sL); if (c >= 0) child = c; }
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "count=");  sb_i(&b, net_sock_count());   t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "connA=");  sb_i(&b, net_sock_state(sA));  t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "connB=");  sb_i(&b, net_sock_state(sB));  t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "accepted="); sb_i(&b, child);
+        if (child >= 0) {
+            u8 pip[4]; u16 pp; net_sock_peer(child, pip, &pp);
+            sb_s(&b, " peer="); sb_i(&b, pip[0]); sb_c(&b,'.'); sb_i(&b, pip[1]);
+            sb_c(&b,'.'); sb_i(&b, pip[2]); sb_c(&b,'.'); sb_i(&b, pip[3]); sb_c(&b,':'); sb_i(&b, pp);
+        }
+        t[b.len]=0; rsp(id,"ok",t);
+        net_sock_close(sA); net_sock_close(sB);
+        if (child >= 0) net_sock_close(child);
+        net_sock_close(sL);
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "test")) {
