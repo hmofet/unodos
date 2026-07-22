@@ -35,6 +35,15 @@ int pc64_net_up(void)
     if (!nic) return 0;                          /* no NIC at all */
     net_init(nic, mac);
     g_net_inited = 1;
+    /* Wait for link BEFORE DHCP. Critical for USB ethernet: ax88179/rtl8152
+     * program the MAC medium (speed/duplex + the gigabit RX clock) from the
+     * PHY's negotiated status inside their nic->link() callback, and a wrong
+     * medium silently kills RX. The boot net TEST polls link() in a loop, but
+     * this shared path (Browser / AI / the unoauto remote link) used to fire
+     * DHCP immediately - so on a machine reached via USB ethernet, or whenever
+     * the eth test was skipped (net-force-wifi), DHCP got no replies and the
+     * link never came up. ~3 s is plenty for USB-eth autoneg. */
+    if (nic->link) { int i; for (i = 0; i < 600 && !nic->link(nic->ctx); i++) uno_pc64_delay_ms(5); }
     net_dhcp_start();
     { int i; for (i = 0; i < 400 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); } }
     return 1;
