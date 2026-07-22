@@ -594,16 +594,41 @@ static int force_power_gating(void)
 
 static int apm_init(void)
 {
-    /* gen1 and gen2 share this core after the family-specific chicken bits */
     set_bit_(CSR_GIO_CHICKEN_BITS, GIO_CHICKEN_L1A_NO_L0S_RX);
-    set_bit_(CSR_DBG_HPET_MEM_REG, DBG_HPET_MEM_VAL);
-    set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_HAP_WAKE);
+    if (!g_gen2) {
+        /* gen1-only APM extras: Linux iwl_pcie_gen2_apm_init does NOT set
+         * the HPET debug filter or HAP_WAKE - stop diverging on gen2. */
+        set_bit_(CSR_DBG_HPET_MEM_REG, DBG_HPET_MEM_VAL);
+        set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_HAP_WAKE);
+    }
     /* activate NIC: set INIT_DONE, wait MAC_CLOCK_READY */
     set_bit_(CSR_GP_CNTRL, GP_CNTRL_INIT_DONE);
     if (g_family == FAM_8000) udelay_(2000);
     if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY, GP_CNTRL_MAC_CLOCK_READY, 25) < 0)
         return -1;
     return 0;
+}
+
+/* Linux iwl_op_mode_nic_config -> iwl_mvm_nic_config, run inside nic_init
+ * BEFORE the firmware load on every pre-AX210 part: program the MAC
+ * step/dash (from CSR_HW_REV) and the RADIO type/step/dash straps (from the
+ * firmware's PHY_SKU TLV) plus the RADIO_SI/MAC_SI sampling bits into
+ * CSR_HW_IF_CONFIG_REG. We never wrote any of it (HW_IF read 0x00480000 on
+ * the Yoga) - a boot ROM asked to load an HR-RF image with the radio straps
+ * unset is a plausible silent-refuse. */
+static void nic_config_radio(void)
+{
+    u32 pc = g_fw.phy_sku, val, mask;
+    if (g_family >= FAM_AX210 || !pc) return;
+    val  = g_hw_rev & 0x0000000F;                 /* CSR_HW_REV_STEP_DASH */
+    val |= ((pc >> 0) & 3) << 10;                 /* radio type  -> MSK 0x0C00 */
+    val |= ((pc >> 4) & 3) << 12;                 /* radio dash  -> MSK 0x3000 */
+    val |= ((pc >> 2) & 3) << 14;                 /* radio step  -> MSK 0xC000 */
+    val |= 0x00000100 /*MAC_SI*/ | 0x00000200 /*RADIO_SI*/;
+    mask = 0x0000000F | 0x00000C00 | 0x00003000 | 0x0000C000 | 0x00000300;
+    w32(CSR_HW_IF_CONFIG_REG, (r32(CSR_HW_IF_CONFIG_REG) & ~mask) | val);
+    uno_dbg_net_trace("wifi: nic_config: phy_sku=%08x -> HW_IF=%08x",
+                      pc, r32(CSR_HW_IF_CONFIG_REG));
 }
 
 /* grab NIC access so PRPH/SRAM writes land (refcounted: prph_w/prph_r grab
@@ -1088,6 +1113,7 @@ static void place_fw_dram(struct ci_dram *dram)
 {
     int lmac = count_sec(g_fw.rt, g_fw.rt_n, 0);
     int umac = count_sec(g_fw.rt, g_fw.rt_n, lmac + 1);
+    int pag  = count_sec(g_fw.rt, g_fw.rt_n, lmac + 1 + umac + 1);
     int i;
     for (i = 0; i < lmac && i < 64; i++) {
         void *p = arena_alloc(g_fw.rt[i].len);
@@ -1102,6 +1128,17 @@ static void place_fw_dram(struct ci_dram *dram)
         memcpy(p, s->data, s->len);
         dram->umac[i] = phys(p);
     }
+    /* paging sections (after the PAGING separator) -> virtual_img. Linux
+     * iwl_pcie_init_fw_sec places all THREE groups; we had left vimg[] zero,
+     * and the AX201 images do carry paging sections the fw expects mapped. */
+    for (i = 0; i < pag && i < 64; i++) {
+        fw_sec *s = &g_fw.rt[lmac + 1 + umac + 1 + i];
+        void *p = arena_alloc(s->len);
+        if (!p) return;
+        memcpy(p, s->data, s->len);
+        dram->vimg[i] = phys(p);
+    }
+    uno_dbg_net_trace("wifi: fw dram map: lmac=%d umac=%d paging=%d sections", lmac, umac, pag);
 }
 
 /* diagnostics for the F12 autopsy: the context-info physaddr we kicked with,
@@ -1162,7 +1199,18 @@ static int load_fw_gen2(void)
             * reads 0 the MAC is still absorbing PRPH writes (power state). */
            uno_dbg_net_trace("wifi: prph window check: HPM_UMAC_LTR wrote %08x read %08x",
                              LTR_LONG_VAL_250US, prph_r(HPM_UMAC_LTR)); }
-    prph_w(UREG_CPU_INIT_RUN, 1);              /* kick: device self-loads */
+    /* kick: device self-loads. Instrumented (round 3): read the doorbell back
+     * in the SAME MAC-access grab, then again 10 ms later - splits "the write
+     * lands and the ROM consumes/clears it" (instant=1, later=0: doorbell OK,
+     * dig into ctxt-info/fw validation) from "this register still refuses the
+     * write" (instant=0: power/ownership path again). */
+    { u32 v0, v1; int g = grab_nic();
+      prph_w_ng(UREG_CPU_INIT_RUN, 1);
+      v0 = prph_r_ng(UREG_CPU_INIT_RUN);
+      if (g == 0) release_nic();
+      mdelay_(10);
+      v1 = prph_r(UREG_CPU_INIT_RUN);
+      uno_dbg_net_trace("wifi: doorbell CPU_INIT_RUN: instant=%08x +10ms=%08x", v0, v1); }
     /* Latch FH_INT for ~200 ms right after the kick: if the ROM's DMA engine
      * runs at all with the now-<4GB arena, we catch it here even if it clears
      * before the ALIVE-timeout autopsy reads the register 2 s later. */
@@ -1867,6 +1915,7 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
+    nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
     if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
 
