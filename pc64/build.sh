@@ -346,8 +346,8 @@ if [ "$1" != "legacy" ]; then
         mkdir -p "$PB"
         PYF="$UCF -w -Iupy -Iupy_port -I$PB"
         PSRC="$(ls upy/py/*.c) upy/shared/runtime/gchelper_native.c \
-              upy_port/pc64_upy_port.c upy_port/mod_uno.c upy_port/pc64_upy_stubs.c \
-              apps/pyrt.c"
+              upy_port/pc64_upy_port.c upy_port/mod_uno.c upy_port/mod_unoauto.c \
+              upy_port/pc64_upy_stubs.c apps/pyrt.c"
         "$PY" upy_port/mkupy.py --top upy --port upy_port --build "$PB" \
               --cpp "$CC -E" --cflags "$PYF" -- $PSRC
         POBJ=""

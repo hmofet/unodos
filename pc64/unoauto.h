@@ -62,6 +62,7 @@
 typedef struct { unsigned long size; int fail; } UnoAutoAllocEv;
 typedef struct { int vol; const char *path; long len; } UnoAutoFsEv;
 typedef struct { const char *file; int ok; } UnoAutoModEv;
+typedef struct { int id, kind, value; } UnoAutoUiEv;   /* "uui.action" */
 
 #ifdef UNO_DEBUG
 
