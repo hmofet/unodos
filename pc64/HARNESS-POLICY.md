@@ -114,6 +114,17 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`eth`**
+  — live wired-NIC (Realtek r8169) register/bring-up debug, the exact wired
+  sibling of the `iwl` WiFi verb. Additive pass-through in `unoauto_remote.c` to
+  `r8169_dbg_cmd(line, out, cap)` (subcmds `status`/`reg`/`wreg`/`phy`/`wphy`/
+  `rerun`/`link`/`mac`), UNO_DEBUG-only. The driver-side `r8169_dbg_cmd` is the
+  r8169 agent's to land in `r8169.c`/`.h`; until it does, a **weak fallback** in
+  `unoauto_remote.c` returns `-1` + "driver hook pending" so the tree links green
+  and transparently upgrades when the strong definition arrives (no coordination
+  window). REMOTE.md verb table now also documents `iwl` (previously undocumented).
+  Answers Request 1 of the 2026-07-22 r8169 entry in UNOAUTOMATE-REQUESTS.md;
+  Request 2 (a NIC-independent UART/USB-CDC transport) remains open.
 - **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk
   partition/format, wrapped by unoautomate. **New shared framework `unostorage`
   (`unostorage.h/.c`)**: authors a GPT + ESP on a raw disk over `blkdev`

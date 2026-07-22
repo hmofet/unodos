@@ -89,6 +89,8 @@ unchanged.
 | `mkpart <disk> <first-hex> <last-hex> esp <name>` | *(armed)* add one ESP partition | `ok part` |
 | `mkfs <disk> <first-hex> <sectors-hex> <label>` | *(armed)* format a region FAT32 (`uno_fat_mkfs`) + remount | `ok formatted` |
 | `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
+| `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12) — `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
+| `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
