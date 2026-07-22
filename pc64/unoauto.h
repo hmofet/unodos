@@ -51,12 +51,16 @@ int  unoauto_sink_add(unsigned mask, UnoAutoSinkFn fn, void *user);
 void unoauto_sink_remove(int id);
 
 /* ---- TEST: the registered suite runner ----------------------------------
- * SPECTEST's suites and the net test become registrations against this
- * table instead of clauses inside one monolithic run function.  ctx is
- * per-run scratch; return 0 = pass, <0 = fail (logged with the id). */
+ * SPECTEST's suites are registrations against this table instead of clauses
+ * inside one monolithic run function - enumerable, individually runnable
+ * (the future Python `unoauto.test.run("storage")`).  ctx is per-run scratch
+ * handed to every fn; return 0 = pass, >0 = the number of failed checks
+ * inside the suite (detail lines stay the suite's own job - the runner
+ * brackets each id with uno_dbg_check and logs one result line per fn on
+ * the TEST channel). */
 typedef int (*UnoAutoTestFn)(void *ctx);
 int  unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn);
-int  unoauto_test_run(const char *suite_or_null, char *report, int cap);
+int  unoauto_test_run(const char *suite_or_null, void *ctx, char *report, int cap);
 
 /* ---- PROBE: observe processes/threads/modules (Stage 2) ------------------
  * The one enumeration surface for "what is the system doing":  loaded .UNO
@@ -92,7 +96,7 @@ int  unoauto_drive_ready(void);          /* 1 when PYRT + shell are up        */
 #define unoauto_sink_add(m, f, u)        (-1)
 #define unoauto_sink_remove(i)           ((void)0)
 #define unoauto_test_register(s, i, f)   (-1)
-#define unoauto_test_run(s, r, c)        (-1)
+#define unoauto_test_run(s, x, r, c)     (-1)
 #define unoauto_probe(o, m)              0
 #define unoauto_hook_add(p, f, u)        (-1)
 #define unoauto_hook_remove(i)           ((void)0)

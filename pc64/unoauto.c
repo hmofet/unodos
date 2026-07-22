@@ -21,7 +21,14 @@
 int  vsnprintf(char *buf, unsigned long cap, const char *fmt, __builtin_va_list ap);
 int  snprintf(char *buf, unsigned long cap, const char *fmt, ...);
 void uno_dbg_log(const char *fmt, ...);
-void uno_dbg_net_trace(const char *fmt, ...);
+void uno_dbg_check(const char *tag);
+/* Transitional (Stage 1): the NETLOG persistence sink still lives in
+ * pc64_nettest.c (it owns the CRASH\NETLOG.TXT buffer, the watchdog feed and
+ * the on-screen ticker).  ua_init asks it to self-register so a direct
+ * unoauto_log(UA_CH_NET, ...) is never dropped before the first legacy
+ * uno_dbg_net_trace call.  Stage 3 moves persistence into a generic file
+ * sink here and this extern disappears. */
+void pc64_netlog_sink_ensure(void);
 
 #define UA_LINE_MAX   256
 #define UA_SINK_MAX   8
@@ -32,31 +39,25 @@ void uno_dbg_net_trace(const char *fmt, ...);
 typedef struct { unsigned mask; UnoAutoSinkFn fn; void *user; } UaSink;
 static UaSink ua_sinks[UA_SINK_MAX];
 
-/* Legacy bridge sinks: keep the old harness outputs exactly as they were.
- * KERNEL/UI/STORAGE/TEST -> the kernel log ring; NET -> the NETLOG trace
- * (which also feeds the watchdog heartbeat - see uno_debug.h on why). */
+/* The kernel-ring sink: every channel mirrors into the ring, exactly like
+ * the old harness (uno_dbg_net_trace's first act was a ring mirror).  NET's
+ * extra behaviors - watchdog feed, on-screen ticker, the timestamped
+ * CRASH\NETLOG.TXT buffer - are the netlog sink, which pc64_nettest.c
+ * registers in slot 1 so sink ORDER matches the old call order. */
 static void ua_sink_kring(UnoAutoChan ch, const char *line, void *user)
 {
     (void)ch; (void)user;
     uno_dbg_log("%s", line);
-}
-static void ua_sink_netlog(UnoAutoChan ch, const char *line, void *user)
-{
-    (void)ch; (void)user;
-    uno_dbg_net_trace("%s", line);
 }
 
 static int ua_inited;
 static void ua_init(void)
 {
     if (ua_inited) return;
-    ua_inited = 1;
-    ua_sinks[0].mask = (1u << UA_CH_KERNEL) | (1u << UA_CH_UI) |
-                       (1u << UA_CH_STORAGE) | (1u << UA_CH_TEST) |
-                       (1u << UA_CH_SCRIPT);
+    ua_inited = 1;                        /* before ensure(): it re-enters us */
+    ua_sinks[0].mask = (1u << UA_CH_COUNT) - 1u;   /* ring mirror: all channels */
     ua_sinks[0].fn   = ua_sink_kring;
-    ua_sinks[1].mask = (1u << UA_CH_NET);
-    ua_sinks[1].fn   = ua_sink_netlog;
+    pc64_netlog_sink_ensure();            /* transitional - see the extern above */
 }
 
 void unoauto_vlog(UnoAutoChan ch, const char *fmt, __builtin_va_list ap)
@@ -116,23 +117,25 @@ int unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn)
     return ua_ntests++;
 }
 
-int unoauto_test_run(const char *suite, char *report, int cap)
+int unoauto_test_run(const char *suite, void *ctx, char *report, int cap)
 {
     int i, pass = 0, fail = 0, off = 0;
     for (i = 0; i < ua_ntests; i++) {
         int rc;
         if (suite && !ua_streq(suite, ua_tests[i].suite)) continue;
-        rc = ua_tests[i].fn(0);
-        if (rc == 0) pass++; else fail++;
-        unoauto_log(UA_CH_TEST, "%s %s.%s (%d)",
-                    rc == 0 ? "PASS" : "FAIL",
-                    ua_tests[i].suite, ua_tests[i].id, rc);
+        uno_dbg_check(ua_tests[i].id);   /* a hang report names the suite */
+        rc = ua_tests[i].fn(ctx);
+        if (rc == 0) { pass++; unoauto_log(UA_CH_TEST, "PASS %s.%s",
+                                          ua_tests[i].suite, ua_tests[i].id); }
+        else         { fail++; unoauto_log(UA_CH_TEST, "FAIL %s.%s (%d checks)",
+                                          ua_tests[i].suite, ua_tests[i].id, rc); }
         if (report && off < cap)
             off += snprintf(report + off, (unsigned long)(cap - off),
                             "%s %s.%s\n", rc == 0 ? "PASS" : "FAIL",
                             ua_tests[i].suite, ua_tests[i].id);
     }
-    unoauto_log(UA_CH_TEST, "unoauto: %d pass %d fail", pass, fail);
+    unoauto_log(UA_CH_TEST, "unoauto: suite %s - %d pass %d fail",
+                suite ? suite : "(all)", pass, fail);
     return fail;
 }
 

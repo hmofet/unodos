@@ -27,6 +27,22 @@ Reports are plain ASCII. The kernel log is a RAM ring written continuously and
 mirrored into a warm-reset-surviving stash, so even a triple fault (which
 writes no report) leaves the last log lines for the next boot to salvage.
 
+### UNOAUTOMATE (the harness core going forward)
+
+The harness is being generalized into **unoautomate** (`unoauto.h` /
+`unoauto.c`): channelled logging with pluggable sinks, a registered test
+registry (SPECTEST's suites live in it now), and - staged next - process/
+thread probing, call-surface hooks, and Python-scripted automation via the
+PYRT PyHost. **New diagnostics should go through `unoauto_*`**:
+`unoauto_log(UA_CH_NET, ...)` instead of a new trace global,
+`unoauto_test_register(...)` instead of a new clause in a run function. The
+legacy entry points (`uno_dbg_log`, `uno_dbg_net_trace`, the SPECTEST
+areas) are thin wrappers over the same core and keep working unchanged -
+output files (`NETLOG.TXT`, `SPECTEST.TXT`) are byte-identical. See
+`HARNESS-POLICY.md` (untracked, in the debug worktree) for the coexistence
+rules while the build-out runs, and `UNOAUTOMATE-REQUESTS.md` for asking
+the unoautomate agent for new harness capabilities.
+
 ## Building
 
 WSL, mingw toolchain (same as the normal build):

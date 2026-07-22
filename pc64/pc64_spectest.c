@@ -32,6 +32,7 @@
 #include "pc64_media.h"
 #include "pyhost.h"
 #include "spec_media.h"
+#include "unoauto.h"
 #include <string.h>
 #include <stdarg.h>
 
@@ -992,12 +993,61 @@ static void test_dbg(void)
     { const char *b = uno_dbg_build_id(); CHECK("S-DBG-15", b && b[0]); }
 }
 
+/* ---- unoauto TEST-registry adapters ---------------------------------------
+ * Each suite registers with unoauto (suite = the flasher-selectable AREA,
+ * id = the old uno_dbg_check tag, so hang reports name the same stage as
+ * before).  The adapters return the number of checks the suite failed; the
+ * PASS/FAIL/SKIP detail lines stay emit()'s job so SPECTEST.TXT is
+ * unchanged.  ctx is a pointer to the writable test volume (int v). */
+#define SP_SUITE(name, call)                                        \
+    static int name(void *ctx)                                      \
+    { int b = g_fail; (void)ctx; call; return g_fail - b; }
+SP_SUITE(sp_fat,      test_fat())
+SP_SUITE(sp_libc,     test_libc())
+SP_SUITE(sp_font,     test_font())
+SP_SUITE(sp_js,       test_js())
+SP_SUITE(sp_dbg,      test_dbg())
+SP_SUITE(sp_unoui,    test_unoui())
+SP_SUITE(sp_uno3d,    test_uno3d())
+SP_SUITE(sp_seq,      test_unosound_seq())
+SP_SUITE(sp_unomedia, test_unomedia())
+SP_SUITE(sp_editor,   test_editor(*(int *)ctx))
+SP_SUITE(sp_music,    test_music(*(int *)ctx))
+SP_SUITE(sp_studio,   test_studio(*(int *)ctx))
+SP_SUITE(sp_net,      test_net())
+SP_SUITE(sp_netlive,  test_netlive())
+SP_SUITE(sp_inter,    test_interactive())
+#undef SP_SUITE
+
+static void sp_register(void)
+{
+    static int did;
+    if (did) return;
+    did = 1;
+    unoauto_test_register("storage",     "spec:fat",         sp_fat);
+    unoauto_test_register("system",      "spec:libc",        sp_libc);
+    unoauto_test_register("system",      "spec:font",        sp_font);
+    unoauto_test_register("system",      "spec:js",          sp_js);
+    unoauto_test_register("system",      "spec:dbg",         sp_dbg);
+    unoauto_test_register("frameworks",  "spec:unoui",       sp_unoui);
+    unoauto_test_register("frameworks",  "spec:uno3d",       sp_uno3d);
+    unoauto_test_register("frameworks",  "spec:seq",         sp_seq);
+    unoauto_test_register("frameworks",  "spec:unomedia",    sp_unomedia);
+    unoauto_test_register("apps",        "spec:editor",      sp_editor);
+    unoauto_test_register("apps",        "spec:music",       sp_music);
+    unoauto_test_register("apps",        "spec:studio",      sp_studio);
+    unoauto_test_register("network",     "spec:net",         sp_net);
+    unoauto_test_register("network",     "spec:netlive",     sp_netlive);
+    unoauto_test_register("interactive", "spec:interactive", sp_inter);
+}
+
 void pc64_spectest_run(void);
 void pc64_spectest_run(void)
 {
     char tail[80];
     int v;
     g_len = g_pass = g_fail = g_skip = 0;
+    sp_register();
 
     /* which areas did the operator select? (spec=storage,apps,... ; bare = all)
      * and is the interactive area opted in? */
@@ -1016,39 +1066,28 @@ void pc64_spectest_run(void)
       if (n > 0) g_len = n; }
     v = rw_vol();
 
-    /* Storage suite: the FAT filesystem contracts. */
+    /* The suites live in the unoauto TEST registry (sp_register above); each
+     * area run walks its registrations in order, brackets every suite with
+     * uno_dbg_check, and logs a per-suite verdict on the TEST channel. */
     if (area_on("storage")) {
         section("STORAGE (FAT)");
-        uno_dbg_check("spec:fat");   test_fat();
+        unoauto_test_run("storage", &v, 0, 0);
     }
-    /* System suite: libc, font, the JS mini-engine, the debug harness itself. */
     if (area_on("system")) {
         section("SYSTEM (libc / font / js / harness)");
-        uno_dbg_check("spec:libc");  test_libc();
-        uno_dbg_check("spec:font");  test_font();
-        uno_dbg_check("spec:js");    test_js();
-        uno_dbg_check("spec:dbg");   test_dbg();
+        unoauto_test_run("system", &v, 0, 0);
     }
-    /* Frameworks suite: the shared platform libraries. */
     if (area_on("frameworks")) {
         section("FRAMEWORKS (unoui / uno3d / unosound / unomedia)");
-        uno_dbg_check("spec:unoui");    test_unoui();
-        uno_dbg_check("spec:uno3d");    test_uno3d();
-        uno_dbg_check("spec:seq");      test_unosound_seq();
-        uno_dbg_check("spec:unomedia"); test_unomedia();
+        unoauto_test_run("frameworks", &v, 0, 0);
     }
-    /* Apps suite: the file/input/media paths of the shipped apps. */
     if (area_on("apps")) {
         section("APPS (editor / music / studio + python)");
-        uno_dbg_check("spec:editor"); test_editor(v);
-        uno_dbg_check("spec:music");  test_music(v);
-        uno_dbg_check("spec:studio"); test_studio(v);
+        unoauto_test_run("apps", &v, 0, 0);
     }
-    /* Network suite: the offline-safe stack regressions + the live checks. */
     if (area_on("network")) {
         section("NETWORK (stack regressions + live checks)");
-        uno_dbg_check("spec:net");     test_net();
-        uno_dbg_check("spec:netlive"); test_netlive();
+        unoauto_test_run("network", &v, 0, 0);
     }
     /* Interactive area: human-confirmed keyboard + display. A distinct opt-in
      * (the `interactive` key) rather than a normal area, so it is never pulled
@@ -1056,7 +1095,7 @@ void pc64_spectest_run(void)
      * sit at a prompt. Omitted entirely when off. */
     if (g_interactive) {
         section("INTERACTIVE (operator-confirmed)");
-        uno_dbg_check("spec:interactive"); test_interactive();
+        unoauto_test_run("interactive", &v, 0, 0);
     }
 
     { int n = snprintf(tail, sizeof tail, "\n== %d PASS, %d FAIL, %d SKIP ==\n",
