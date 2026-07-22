@@ -857,6 +857,115 @@ int uno_fat_rename(int vol, const char *path, const char *newname)
     return 1;
 }
 
+/* ---- mkfs: format a region of a raw disk as FAT32 ------------------------
+ * Ports the proven, mount-compatible layout of flash/UnoDisk.cs (the host
+ * formatter mount_at() already reads).  Writes RAW via dev->write (NOT the fat
+ * cache), because callers remount afterwards and uno_fat_remount() drops the
+ * cache unflushed.  The region is [first_lba, first_lba+sectors); returns 1 on
+ * success, 0 on failure (read-only device / too small / geometry).  Used by
+ * unostorage_prepare_esp; unoautomate wraps it. */
+static unsigned long long mkfs_clusters(unsigned long long vol, int spc,
+                                        unsigned long long fatsz)
+{
+    long long data = (long long)vol - 32 - 2 * (long long)fatsz;   /* RESERVED=32, NUM_FATS=2 */
+    return data <= 0 ? 0 : (unsigned long long)data / (unsigned)spc;
+}
+static unsigned long long mkfs_fatsize(unsigned long long vol, int spc)
+{
+    unsigned long long lo = 1, hi = vol / 2 + 1;      /* smallest FAT addressing every cluster */
+    while (lo < hi) {
+        unsigned long long mid = (lo + hi) / 2;
+        if (mid * (SECT / 4) >= mkfs_clusters(vol, spc, mid) + 2) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+}
+static int mkfs_spc(unsigned long long vol)
+{
+    int spc = vol <= 532480ULL ? 1 : vol <= 16777216ULL ? 8
+            : vol <= 33554432ULL ? 16 : vol <= 67108864ULL ? 32 : 64;
+    while (spc > 1 && mkfs_clusters(vol, spc, mkfs_fatsize(vol, spc)) < 65525) spc /= 2;
+    return spc;
+}
+
+int uno_fat_mkfs(uno_bdev *dev, unsigned long long first_lba,
+                 unsigned long long sectors, const char *label)
+{
+    uint8_t sec[SECT], boot[SECT], fsi[SECT];
+    unsigned long long fatsz, clusters, fat0, dataLba, lba;
+    unsigned int serial;
+    int spc, i, j;
+
+    if (!dev || !dev->write || sectors < 65600ULL) return 0;
+    spc      = mkfs_spc(sectors);
+    fatsz    = mkfs_fatsize(sectors, spc);
+    clusters = mkfs_clusters(sectors, spc, fatsz);
+    if (clusters < 65525 || clusters > 0x0FFFFFF5ULL) return 0;    /* genuine FAT32 only */
+    fat0    = first_lba + 32;                                      /* after reserved       */
+    dataLba = fat0 + 2 * fatsz;                                    /* cluster 2            */
+
+    /* 1. zero the reserved + FAT region so every unused cluster reads free */
+    memset(sec, 0, SECT);
+    for (lba = first_lba; lba < dataLba; lba++)
+        if (!dev->write(dev, lba, 1, sec)) return 0;
+    /* ...and cluster 2 (the empty root directory) */
+    for (i = 0; i < spc; i++)
+        if (!dev->write(dev, dataLba + (unsigned)i, 1, sec)) return 0;
+
+    /* 2. FAT sector 0 of each copy: the three reserved entries (rest stays 0) */
+    memset(sec, 0, SECT);
+    wr32(sec + 0, 0x0FFFFFF8);      /* media descriptor / EOC        */
+    wr32(sec + 4, 0x0FFFFFFF);      /* clean-shutdown, no hard error  */
+    wr32(sec + 8, 0x0FFFFFFF);      /* cluster 2 (root) = EOC         */
+    if (!dev->write(dev, fat0, 1, sec)) return 0;
+    if (!dev->write(dev, fat0 + fatsz, 1, sec)) return 0;
+
+    /* 3. boot sector (BPB) + FSInfo + their backups at +6/+7 */
+    serial = (unsigned int)(sectors ^ (first_lba << 16) ^ 0x554E4F30u);   /* "UNO0" salt */
+    memset(boot, 0, SECT);
+    boot[0] = 0xEB; boot[1] = 0x58; boot[2] = 0x90;
+    memcpy(boot + 3, "MSWIN4.1", 8);
+    wr16(boot + 11, SECT);
+    boot[13] = (uint8_t)spc;
+    wr16(boot + 14, 32);            /* reserved sectors  */
+    boot[16] = 2;                   /* num FATs          */
+    wr16(boot + 17, 0);             /* root entries (0)  */
+    wr16(boot + 19, 0);             /* tot16 (0)         */
+    boot[21] = 0xF8;                /* media             */
+    wr16(boot + 22, 0);             /* FATSz16 (0 => FAT32) */
+    wr16(boot + 24, 63); wr16(boot + 26, 255);        /* CHS, cosmetic */
+    wr32(boot + 28, (uint32_t)first_lba);             /* hidden sectors */
+    wr32(boot + 32, (uint32_t)sectors);
+    wr32(boot + 36, (uint32_t)fatsz);
+    wr16(boot + 40, 0);             /* ExtFlags: mirrored */
+    wr16(boot + 42, 0);             /* FSVer 0.0          */
+    wr32(boot + 44, 2);             /* root cluster       */
+    wr16(boot + 48, 1);             /* FSInfo sector      */
+    wr16(boot + 50, 6);             /* backup boot sector */
+    boot[64] = 0x80; boot[66] = 0x29;
+    wr32(boot + 67, serial);
+    for (i = 0; i < 11; i++) boot[71 + i] = ' ';      /* volume label, space-padded, upcased */
+    for (i = 0, j = 0; label && label[i] && j < 11; i++) {
+        char c = label[i];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        boot[71 + j++] = (uint8_t)c;
+    }
+    memcpy(boot + 82, "FAT32   ", 8);
+    boot[510] = 0x55; boot[511] = 0xAA;
+
+    memset(fsi, 0, SECT);
+    wr32(fsi + 0, 0x41615252);
+    wr32(fsi + 484, 0x61417272);
+    wr32(fsi + 488, (uint32_t)(clusters - 1));        /* free count (root uses 1)   */
+    wr32(fsi + 492, 0xFFFFFFFF);                      /* next free: unknown         */
+    fsi[510] = 0x55; fsi[511] = 0xAA;
+
+    if (!dev->write(dev, first_lba + 0, 1, boot)) return 0;
+    if (!dev->write(dev, first_lba + 1, 1, fsi))  return 0;
+    if (!dev->write(dev, first_lba + 6, 1, boot)) return 0;
+    if (!dev->write(dev, first_lba + 7, 1, fsi))  return 0;
+    return 1;
+}
+
 /* ---- boot-time storage self-test (armed by a WRTEST.REQ file) ------------- */
 int uno_fat_selftest(void)
 {

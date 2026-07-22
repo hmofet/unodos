@@ -756,6 +756,24 @@ static int boot_device_is_usb(void)
     return 0;
 }
 
+/* The boot PARTITION's device path (LoadedImage->DeviceHandle), or NULL.  The
+ * storage safety gate (blkdev is_boot / unostorage) prefix-matches a whole-disk
+ * path against this to refuse wiping the disk UnoDOS booted from. */
+void *uno_pc64_boot_dp(void)
+{
+    static EFI_GUID li_guid = { 0x5b1b31a1, 0x9562, 0x11d2,
+        { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+    static EFI_GUID dp_guid = { 0x09576e91, 0x6d3f, 0x11d2,
+        { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+    typedef struct { UINT32 Revision; EFI_HANDLE ParentHandle;
+                     void *SystemTable; EFI_HANDLE DeviceHandle; } LImin;
+    LImin *li = 0; void *dp = 0;
+    if (gDetached || !gBS) return 0;             /* fw paths die at detach */
+    if (EFI_ERROR(gBS->HandleProtocol(gIH, &li_guid, (void **)&li)) || !li) return 0;
+    if (EFI_ERROR(gBS->HandleProtocol(li->DeviceHandle, &dp_guid, &dp))) return 0;
+    return dp;
+}
+
 static int try_detach(void)
 {
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);

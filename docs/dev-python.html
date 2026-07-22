@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python apps · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="active" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Writing apps in Python</h1>
+<p class="lede">UnoDOS treats <strong>Python 3 as a first-class app language</strong>, right alongside
+<a href="dev-apps.html">UnoC</a>. Write real Python - classes, functions, floats, the <code>math</code>
+module - in <a href="studio.html">Studio</a>, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to package it and
+<kbd>Ctrl</kbd>+<kbd>R</kbd> to run it in its own window, all on the machine.</p>
+
+<div class="note"><b>The Python runtime is a module</b>The interpreter is <strong>MicroPython</strong>, shipped as an optional module <code>APPS\PYRT.UNO</code> (the Python runtime). If it is not installed, Studio still edits and builds UnoC apps normally; running a <code>.py</code> app reports <code>Python runtime not installed</code>. A build that wants a smaller image can leave <code>PYRT.UNO</code> out.</div>
+
+<h2 id="model">The app model</h2>
+<p>A Python app is a class that subclasses <code>uno.App</code>, plus a module-global <code>app</code>
+holding an instance of it. The runtime finds <code>app</code> and calls its methods for you:</p>
+<pre><code>import uno
+
+class Hello(uno.App):
+    def draw(self, cv):
+        cv.clear(uno.rgb(0, 0, 0))
+        cv.text(8, 8, &quot;Hello from Python&quot;, uno.rgb(255, 255, 255))
+
+# the runtime looks up `app` and drives its methods for you
+app = Hello()</code></pre>
+<p>Every method is optional (though an app with no <code>draw</code> shows nothing):</p>
+<div class="tw"><table>
+<thead><tr><th>Method</th><th>When it runs</th><th>Use it for</th></tr></thead>
+<tbody>
+<tr><td><code>build(self, cv)</code></td><td>once, as the window opens</td><td>set up state; <code>cv.width()</code>/<code>height()</code> are valid here</td></tr>
+<tr><td><code>draw(self, cv)</code></td><td>whenever the window repaints</td><td>paint one frame</td></tr>
+<tr><td><code>tick(self)</code></td><td>~60 times a second</td><td>advance animation or game state</td></tr>
+<tr><td><code>key(self, uni, scan, ctrl)</code></td><td>on a key press</td><td>handle input; return <code>True</code> if you consumed it</td></tr>
+<tr><td><code>opened(self)</code> / <code>closed(self)</code></td><td>window shown / closing</td><td>acquire / release resources</td></tr>
+</tbody>
+</table></div>
+<p><code>cv</code> is a <strong>Canvas</strong>; colours come from <code>uno.rgb(r, g, b)</code>. The whole
+platform - the framebuffer, sound and files - is one <code>uno.</code> call away.</p>
+
+<h2 id="sample">The sample: a bouncing ball</h2>
+<p>Studio greets you with <code>SDK\SAMPLE.PY</code>, the Python counterpart of the UnoC sample. It shows
+the whole shape: <code>build</code> sets the ball's position and velocity, <code>tick</code> moves it and
+bounces it off the walls, <code>draw</code> paints the background and the ball, and <code>key</code> speeds
+it up on the space bar. Note the real floats - something UnoC does not have.</p>
+<pre><code>import uno
+
+class Bouncer(uno.App):
+    def build(self, cv):                 # once, as the window opens
+        self.w, self.h = cv.width(), cv.height()
+        self.x, self.y = 20.0, 24.0      # real floats - UnoC has none
+        self.vx, self.vy = 3.2, 2.3
+        self.d = 22
+
+    def draw(self, cv):                  # paint one frame
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, &quot;Hello from Python&quot;, uno.rgb(210, 214, 230))
+        cv.fill_rect(int(self.x), int(self.y), self.d, self.d, uno.rgb(255, 96, 96))
+
+    def tick(self):                      # ~60 times a second
+        self.x += self.vx; self.y += self.vy
+        if self.x &lt; 0 or self.x + self.d &gt; self.w: self.vx = -self.vx
+        if self.y &lt; 0 or self.y + self.d &gt; self.h: self.vy = -self.vy
+
+    def key(self, uni, scan, ctrl):      # space = speed the ball up
+        if uni == 32:
+            self.vx *= 1.25; self.vy *= 1.25
+            return True
+        return False
+
+app = Bouncer()</code></pre>
+<p>Press <kbd>Ctrl</kbd>+<kbd>B</kbd> and the output pane reports <code>Packed SAMPLE.UNO</code>; press
+<kbd>Ctrl</kbd>+<kbd>R</kbd> and the ball bounces in its own window.</p>
+
+<h2 id="uno">The <code>uno</code> module</h2>
+<p>Everything a Python app reaches on the platform goes through <code>import uno</code>. The full reference
+is in <a href="dev-api.html#uno-py">the API reference</a> and in <code>SDK\uno.pyi</code> (a stub for
+editors); here is the whole surface at a glance:</p>
+<pre><code>import uno
+
+uno.rgb(r, g, b)                 # pack a colour (0-255 each) -&gt; int
+
+# --- Canvas (passed to build() and draw(); coords are canvas-relative) ---
+cv.width(); cv.height()          # your drawable size, in pixels
+cv.clear(color)                  # fill the whole canvas
+cv.fill_rect(x, y, w, h, color)  # filled / outline rectangle
+cv.rect(x, y, w, h, color)
+cv.pixel(x, y, color)
+cv.hline(x, y, w, color); cv.vline(x, y, h, color)
+cv.text(x, y, &quot;string&quot;, color)
+
+# --- Sound (the shared UnoSound voice) ---
+uno.beep(midi, ticks)            # square-wave note, ticks ~= 1/60 s
+uno.quiet()
+
+# --- Files (vol defaults to 0, the boot volume) ---
+uno.read(name) -&gt; bytes                 # whole (small) file
+uno.read_at(vol, name, off, n) -&gt; bytes # stream a big file a slice at a time
+uno.size(name) -&gt; int                   # bytes, or -1 if missing
+uno.write(name, data) -&gt; bool           # to a writable volume</code></pre>
+
+<h3 id="stream">Reading files without loading them whole</h3>
+<p><code>uno.read_at(vol, name, off, n)</code> reads a slice of a file at a byte offset, so a Python app can
+work with data far larger than memory - a level, a <code>.wav</code>, a multi-megabyte WAD - a piece at a
+time. This is the same call the <a href="#duum">Duum</a> engine uses to stream a Doom WAD:</p>
+<pre><code>import uno
+
+class WadInfo(uno.App):
+    def build(self, cv):
+        # read only the 12-byte header of a multi-MB file, not the whole thing
+        n = uno.size(&quot;DOOM1.WAD&quot;)                 # -1 if it is not there
+        head = uno.read_at(0, &quot;DOOM1.WAD&quot;, 0, 12) if n &gt; 0 else b&quot;&quot;
+        self.line = &quot;no WAD&quot; if n &lt; 0 else \
+            &quot;%s  %d lumps  %d bytes&quot; % (head[0:4].decode(), head[4], n)
+
+    def draw(self, cv):
+        cv.clear(uno.rgb(0, 0, 0))
+        cv.text(8, 8, self.line, uno.rgb(120, 230, 160))
+
+app = WadInfo()</code></pre>
+
+<h2 id="build">How "building" a Python app works</h2>
+<p>Pressing <kbd>Ctrl</kbd>+<kbd>B</kbd> on a <code>.py</code> file does not translate it to machine code.
+Studio wraps your source in a small <code>.UNO</code> container - the same format <code>.c</code> apps
+compile to, flagged as a Python app - and writes <code>NAME.UNO</code> beside it. Running it hands that
+source to <code>PYRT.UNO</code>, which compiles and executes it with the <code>uno</code> module bound in.
+Studio routes purely by extension: a <code>.py</code> file is packaged for the runtime, a <code>.c</code>
+file is compiled by the UnoC compiler. Everything else - the editor, the project pane, build output, the
+AI assistant - is identical.</p>
+
+<h2 id="limits">Limits (v1)</h2>
+<ul>
+  <li>One Python app runs at a time; launching another replaces it.</li>
+  <li>No <code>import</code> of other <code>.py</code> files yet - keep an app to a single file (it can be
+      large). The standard <code>math</code> module and the built-ins are available.</li>
+  <li>The <code>uno</code> module is the only door to the platform: there is no <code>os</code> /
+      <code>sys</code> or general file-system access except through <code>uno.read</code> /
+      <code>uno.write</code>.</li>
+</ul>
+
+<h2 id="duum">Duum: Doom, in Python</h2>
+<p><strong>Duum</strong> (<code>SDK\DUUM.PY</code>) is a Doom engine written entirely in Python - the proof
+that Python is a first-class app language here. It loads a real Doom <strong>IWAD</strong>, parses the map,
+and renders a first-person, BSP-traversed view of the level you can walk around, all through the
+<code>uno</code> API. It exercises the whole platform at once: file I/O (it streams the multi-MB WAD with
+<code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
+framebuffer, keyboard input, and floating-point math.</p>
+<div class="note"><b>Bring your own WAD</b>Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.</div>
+<p>Walls are texture-mapped from the WAD (perspective-correct, distance- and orientation-shaded); floors,
+ceilings and sky are flat-shaded. It renders one level (E1M1) with simple wall collision. Flat texturing,
+monsters, items, doors and combat are <em>not</em> implemented - Duum proves the platform can carry a real
+engine, it is not a complete port. The textured-column inner loop runs in C (<code>cv.wall_col</code>) so
+the per-pixel work does not go through the interpreter. Move with the arrows, strafe with <kbd>,</kbd> and
+<kbd>.</kbd>.</p>
+
+<p class="kv">Next: the full <a href="dev-api.html">API reference</a> (including the <a href="dev-api.html#uno-py">
+Python <code>uno</code> module</a>), and <a href="dev-build.html">Building &amp; tooling</a>.</p>
+
+<nav class="pagenav"><a href="dev-apps.html">&lsaquo; Writing apps</a><a class="nxt" href="dev-api.html">API reference &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

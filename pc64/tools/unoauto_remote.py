@@ -163,6 +163,42 @@ class UnoAutoLink:
                          timeout=max(timeout, 300.0))
         return bool(r) and r[0].startswith("verified")
 
+    # ---- raw-disk authoring (partition/format disk B) ---------------------
+    def disks(self, **k):
+        """List raw disks: dicts of idx/name/sectors/writable/is_boot."""
+        out = []
+        for l in self.command("disks", **k):
+            p = l.split()
+            if len(p) >= 5:
+                out.append({"idx": int(p[0]), "name": p[1], "sectors": int(p[2]),
+                            "writable": p[3] == "1", "is_boot": p[4] == "1"})
+        return out
+
+    def arm(self, disk, **k):     return self.command("arm", disk, **k)
+    def disarm(self, **k):        return self.command("disarm", **k)
+    def gptinit(self, disk, **k): return self.command("gptinit", disk, **k)
+
+    def mkpart(self, disk, first, last, type="esp", name="UNO-ESP", **k):
+        return self.command("mkpart", disk, format(first, "x"), format(last, "x"), type, name, **k)
+
+    def mkfs(self, disk, first, sectors, label="UNODOS", **k):
+        return self.command("mkfs", disk, format(first, "x"), format(sectors, "x"), label,
+                            timeout=k.pop("timeout", 180.0), **k)
+
+    def prepdisk(self, disk, label="UNODOS", **k):
+        """Author a fresh GPT + ESP and format it FAT32 (one destructive op)."""
+        return self.command("prepdisk", disk, label, timeout=k.pop("timeout", 180.0), **k)
+
+    def readsec(self, disk, lba, n=1, **k):
+        import base64
+        lines = self.command("readsec", disk, format(lba, "x"), n, **k)
+        return base64.b64decode("".join(lines))
+
+    def writesec(self, disk, lba, data, **k):
+        import base64
+        return self.command("writesec", disk, format(lba, "x"),
+                            base64.b64encode(data).decode(), **k)
+
     # ---- receiving --------------------------------------------------------
     def _accept_loop(self):
         while not self._stop:
@@ -261,9 +297,35 @@ def _cli(argv):
     ap.add_argument("--bootnext", type=int, metavar="N",
                     help="after --push, set BootNext=N (boot Boot#### N next reset)")
     ap.add_argument("--reboot", action="store_true", help="after --push, reboot the target")
+    ap.add_argument("--prepdisk", nargs=2, metavar=("DISK", "LABEL"),
+                    help="wait for pc64 to dial in, then partition+format raw DISK as a fresh "
+                         "FAT32 ESP (DESTRUCTIVE - use `disks` to find the index), then exit")
     a = ap.parse_args(argv)
     host, _, port = a.listen.rpartition(":")
     link = UnoAutoLink(host or "0.0.0.0", int(port))
+
+    if a.prepdisk:                               # one-shot partition+format flow
+        disk, label = int(a.prepdisk[0]), a.prepdisk[1]
+        link.listen()
+        print("waiting for pc64 to dial in on %s ..." % a.listen)
+        if not link.wait_connected(180):
+            print("FAIL: no connection"); link.close(); return 1
+        try:
+            ds = link.disks()
+            tgt = next((d for d in ds if d["idx"] == disk), None)
+            if not tgt:
+                print("FAIL: no disk %d. Disks: %r" % (disk, ds)); link.close(); return 1
+            if tgt["is_boot"]:
+                print("FAIL: disk %d is the boot disk - refused." % disk); link.close(); return 1
+            print("DESTRUCTIVE: about to erase %s (%d sectors, %.1f MB) and format it FAT32."
+                  % (tgt["name"], tgt["sectors"], tgt["sectors"] * 512 / 1e6))
+            link.arm(disk)
+            r = link.prepdisk(disk, label)
+            print("prepdisk: %s" % (r[0] if r else "ok"))
+        except Exception as e:  # noqa: BLE001
+            print("FAIL: " + str(e)); link.close(); return 1
+        link.close()
+        return 0
 
     if a.push:                                   # one-shot A/B OS-update flow
         vol, path, localfile = a.push

@@ -114,6 +114,42 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk
+  partition/format, wrapped by unoautomate. **New shared framework `unostorage`
+  (`unostorage.h/.c`)**: authors a GPT + ESP on a raw disk over `blkdev`
+  (transport-agnostic `unostorage_dev`; shared reflected `unostorage_crc32`).
+  **`fat` gains `uno_fat_mkfs`** (FAT32 formatter, raw `dev->write`).
+  **Shared-OS changes other agents should note:** `uno_bdev` gained an `is_boot`
+  field (blkdev `fw_scan` sets it by device-path prefix vs the new
+  `uno_pc64_boot_dp()` accessor in `uefi_main.c`); `installer.c`'s private crc32
+  now delegates to `unostorage_crc32` (byte-identical). All additive/prod, no API
+  break. **New UNO_DEBUG-only URC verbs** (unoauto_remote.c): `disks`/`readsec`
+  (non-destructive) and `arm`/`disarm`/`writesec`/`gptinit`/`mkpart`/`mkfs`/
+  `prepdisk` (destructive, gated behind a per-session `arm <disk>` that
+  auto-disarms and refuses the boot disk). Host: `UnoAutoLink.disks/arm/prepdisk/
+  …` + a `--prepdisk` CLI. Gate: `tools/remote_qemu.py` adds a second blank disk
+  and proves arm-rejections → `prepdisk` → fresh FAT32 volume mounts → file
+  round-trips byte-exact. SPECTEST 65/0/4; prod clean.
+
+- **2026-07-22 - (no bump, additive)**: **complete TCP/UDP stack** - multi-
+  connection sockets, broadcast, and zero-config discovery. unoautomate now owns
+  the transport stack (net.c/net.h, tls.*, netsock, netdisc); the driver agent
+  keeps the NIC drivers + the `uno_nic_t` seam (ownership handoff recorded in
+  `UNOAUTOMATE-REQUESTS.md`). New public surface: `netsock.h`
+  (`net_socket/bind/listen/accept/connect/send/recv/sendto/recvfrom/sendbcast/
+  sock_state/sock_peer/sock_port/sock_close/sock_count`), `net.h`
+  (`net_udp_broadcast/net_udp_listen/net_broadcast`, TCP states `TCP_LISTEN/
+  TCP_SYN_RCVD`), and `netdisc.h` (`netdisc_boot/tick/active/have_host/host_ip/
+  host_port`, armed by a `discover` STRESS.CFG flag). **Shared-OS note:** the
+  single global TCP connection in `net.c` became a socket table; the legacy
+  `net_tcp_*`/`net_udp_*` API is unchanged (thin wrappers over a reserved slot),
+  so the `.UNO` app ABI and tls/http/remote callers are byte-for-byte
+  compatible. Debug-only `nst` URC verb added for the socket self-test. Gates:
+  `tools/netsock_qemu.py` (multi-conn + listen/accept, QEMU hostfwd),
+  `tools/netdisc_qemu.py` (discovery over a raw-Ethernet L2 hub); `remote_qemu`
+  unchanged and green (incl. 1.5 MB push). The `unoauto_remote` auto-dial of a
+  discovered host is deferred behind the in-flight disk-authoring edits to that
+  file.
 - **2026-07-22 - (no bump, bugfix)**: fixed the `put` finalize hang on a large
   file (A/B kernel push). **Shared-OS change:** `fat.c fat_alloc` now uses a
   `next_free` scan hint (new `fatvol.next_free`) - a multi-hundred-cluster
