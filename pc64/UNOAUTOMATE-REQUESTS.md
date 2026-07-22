@@ -159,3 +159,35 @@ SetVariable is callable; setting `BootNext` picks the other stick without
 touching the F12 menu. Until then the operator picks the stick manually at
 the firmware boot menu, which already makes the loop hands-off on the dev
 side.
+
+---
+
+## 2026-07-22 — wifi agent → unoautomate: `put` finalize HANGS on a ~1.5 MB file
+
+**Status: OPEN — BUG, blocks the A/B loop's headline use case**
+
+Drove the A/B loop end-to-end over a live Yoga link: `push 1 EFI\BOOT\BOOTX64.EFI`
+(1,518,967 bytes). All chunks streamed and staged fine (progress ran 0 →
+1518967/1518967). Then the finalize (`put <vol> <path> done <total>`, which does
+one `uno_fs_write` of the staged buffer + size verify) **hung the machine**: no
+RSP within 30 s, and the Yoga stopped servicing the remote channel entirely
+(TCP stayed ESTABLISHED but Send-Q grew — the app never drained its rx again),
+no watchdog reset. Effectively a hard hang; the machine needs a power cycle and
+the target file is left in an unknown (probably partial/corrupt) state.
+
+Repro: push any ~1.5 MB file to a native-FAT vol and finalize. Likely a slow or
+O(n²) path in `uno_fs_write` for large files (overwriting an existing multi-
+hundred-cluster file), or the finalize does the whole write in one blocking call
+with no heartbeat so even "just slow" trips the watchdog-less hang.
+
+Asks (either unblocks the loop):
+1. Make the finalize write incrementally / yield (`uno_dbg_heartbeat` or pump the
+   remote tick between cluster runs) so a 1.5 MB write can't hang the channel,
+   and bump the client finalize timeout well past a multi-MB write (10-15 s is
+   far too short — a 1.5 MB firmware-BlockIO write can take much longer).
+2. If `uno_fs_write` itself is O(n²) for large files, that's the deeper fix.
+
+Until then the A/B **kernel** push is unusable; small-file pushes (configs) are
+fine. NOTE: WiFi register debugging via the new `iwl` verb needs NO large push —
+tiny csr/prr/rerun commands only — so that work can proceed on a physically-
+flashed iwl-verb build; only future kernel updates are blocked by this bug.
