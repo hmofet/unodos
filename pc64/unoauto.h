@@ -149,6 +149,16 @@ void unoauto_hook_fire(const char *point, void *arg);   /* producers call     */
  * apps, and assert on LOG output - the systemwide automation story. */
 int  unoauto_drive_ready(void);          /* 1 when PYRT + shell are up        */
 
+/* ---- REMOTE: the bidirectional dev-PC link (Stage 2) ----- [EXPERIMENTAL]
+ * The networked extension of DRIVE: pc64 dials the PC you develop from and
+ * streams LOG channels out while accepting commands + messages in either
+ * direction (a text command language + a Python API on each end).  Declared in
+ * its own header so this file stays the pure logging/probe/hook/drive contract;
+ * consumes only the public net API (no net.c coupling).  See unoauto_remote.h
+ * for the C surface, the `unoauto.remote_*` Python bindings, and REMOTE.md for
+ * the wire protocol.  Note: pyhost.h PyHost ABI is now 2 (added run_src, the
+ * exec-a-source-string entry the remote `py` verb uses). */
+
 #else /* !UNO_DEBUG: everything compiles away */
 #define unoauto_log(...)                 ((void)0)
 #define unoauto_sink_add(m, f, u)        (-1)

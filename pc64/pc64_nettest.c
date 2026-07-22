@@ -24,6 +24,7 @@
  * ======================================================================== */
 #include "uno_debug.h"
 #include "unoauto.h"
+#include "unoauto_remote.h"
 #include "fb.h"
 #include "net.h"
 #include "ax88179.h"
@@ -384,6 +385,9 @@ const char *pc64_shell_py_error(void);
 static void automate_start(void)
 {
     int i, n;
+    /* Arm the remote dev-PC link now that the boot net test has released the
+     * single TCP connection.  No-op unless STRESS.CFG has a `remote=` key. */
+    unoauto_remote_boot();
     if (pc64_stress_cfg_flag("automate") <= 0) return;
     n = uno_fs_volumes();
     for (i = 0; i < n; i++)

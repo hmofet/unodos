@@ -233,7 +233,37 @@ static void py_unload(void)
 
 static const char *py_last_error(void) { return pyrt_out_text(); }
 
+/* [ABI 2] exec a source string (unoautomate remote `py`), capture stdout. */
+static int py_run_src(const char *src, int len, char *out, int cap)
+{
+    nlr_buf_t nlr;
+    int rc = 0, i;
+    const char *o;
+    if (!gInited) {
+        const char *m = "[pyrt] not initialized";
+        if (out && cap > 0) { i = 0; while (m[i] && i < cap - 1) { out[i] = m[i]; i++; } out[i] = 0; }
+        return -1;
+    }
+    pyrt_out_reset();
+    if (nlr_push(&nlr) == 0) {
+        mp_lexer_t *lex = mp_lexer_new_from_str_len(MP_QSTR__lt_stdin_gt_,
+                              src, (size_t)len, 0);
+        qstr sn = lex->source_name;
+        mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
+        mp_obj_t mf = mp_compile(&pt, sn, false);
+        mp_call_function_0(mf);
+        nlr_pop();
+    } else {
+        mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+        rc = -1;
+    }
+    o = pyrt_out_text();
+    if (out && cap > 0) { i = 0; while (o[i] && i < cap - 1) { out[i] = o[i]; i++; } out[i] = 0; }
+    gc_collect();
+    return rc;
+}
+
 static const PyHost kHost = {
-    UNO_PYHOST_ABI, py_init, py_load, py_unload, py_last_error
+    UNO_PYHOST_ABI, py_init, py_load, py_unload, py_last_error, py_run_src
 };
 const PyHost *uno_app_main(void *reserved) { (void)reserved; return &kHost; }

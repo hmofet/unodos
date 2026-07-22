@@ -96,6 +96,11 @@ const char *pc64_shell_win_title(int i);
 int  pc64_shell_win_focused(int i);
 void uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
+/* unoautomate remote channel (unoauto_remote.c) - Python-visible link ops */
+int  unoauto_remote_active(void);
+int  unoauto_remote_send(const char *type, const char *text);
+int  unoauto_remote_recv(char *buf, int cap);
+void unoauto_remote_stop(void);
 #endif
 static const struct { const char *name; void *addr; } kExports[] = {
     /* Toolbox geometry + drawing (mac_compat.c) */
@@ -199,6 +204,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(pc64_shell_app_count), KX(pc64_shell_launch), KX(pc64_shell_close_top),
     KX(pc64_shell_win_count), KX(pc64_shell_win_title), KX(pc64_shell_win_focused),
     KX(uno_pc64_shutdown), KX(uno_dbg_uptime_ms),
+    KX(unoauto_remote_active), KX(unoauto_remote_send),
+    KX(unoauto_remote_recv),   KX(unoauto_remote_stop),
 #endif
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
