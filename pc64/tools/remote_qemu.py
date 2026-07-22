@@ -180,6 +180,38 @@ def main():
         except Exception as e:  # noqa: BLE001
             check(False, "bootnext SetVariable ok", str(e))
 
+        # 7) LARGE write to a NATIVE-FAT volume (the 1.5 MB `put` hang repro):
+        #    push a ~1.5 MB file (create), then push it AGAIN (overwrite - the
+        #    fat_alloc O(n^2) path), reading back byte-for-byte each time. QEMU
+        #    can't reproduce the firmware-BlockIO *timing*, but it proves the
+        #    fixed allocator writes a large multi-hundred-cluster file correctly
+        #    and finalize returns (no infinite loop / corruption).
+        try:
+            import tempfile
+            vols = link.vols(timeout=10)
+            natfat = [v for v in vols if v["writable"] and v["kind"] == 1]
+            if not natfat:
+                check(False, "a native-FAT (kind 1) volume exists", "vols=%r" % vols)
+            else:
+                V = natfat[0]["vol"]
+                big = os.path.join(HERE, "..", "build", "BOOTX64.EFI")   # ~1.5 MB, realistic
+                data = open(big, "rb").read()
+                exp = sum((i + 1) * b for i, b in enumerate(data)) & 0xFFFFFFFF
+                rb = ('import uno; d=uno.read(%d,"BIGTEST.BIN"); '
+                      'print(len(d), sum((i+1)*b for i,b in enumerate(d))&0xffffffff)' % V)
+                for phase in ("create", "overwrite"):
+                    t0 = time.time()
+                    verified = link.push_file(V, "BIGTEST.BIN", big)   # default chunk
+                    dt = time.time() - t0
+                    check(verified, "big push %s finalize+verify (vol %d native-FAT)" % (phase, V),
+                          "%d bytes in %.1fs" % (len(data), dt))
+                    out = link.eval(rb, timeout=40)
+                    g = out[0].split() if out else []
+                    check(len(g) == 2 and int(g[0]) == len(data) and int(g[1]) == exp,
+                          "big read-back bytes match (%s)" % phase, "got=%r" % out)
+        except Exception as e:  # noqa: BLE001
+            check(False, "large native-FAT push + read-back", str(e))
+
     finally:
         try:
             link.command("poweroff", timeout=2)

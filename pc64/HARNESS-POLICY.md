@@ -85,6 +85,16 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-22 - (no bump, bugfix)**: fixed the `put` finalize hang on a large
+  file (A/B kernel push). **Shared-OS change:** `fat.c fat_alloc` now uses a
+  `next_free` scan hint (new `fatvol.next_free`) - a multi-hundred-cluster
+  `uno_fat_write` was O(n²) (rescanned the FAT from cluster 2 each cluster) and
+  cache-thrashed, hanging a 1.5 MB write on firmware BlockIO. Now amortised
+  O(1)/cluster; the write loop also feeds `uno_dbg_heartbeat()` (no-op in prod).
+  Transparent to callers, faster for everyone. Remote side: device line buffer
+  4 KB, default push chunk 2700 B, client finalize timeout 300 s. Gate:
+  remote_qemu big-file push (create+overwrite, native-FAT, byte-exact);
+  SPECTEST 65/0/4.
 - **2026-07-22 - (no bump, EXPERIMENTAL)**: A/B OS-update over the remote
   channel (answers the "put + reboot verbs" request). New URC verbs
   `put`/`vols`/`reboot`/`bootnext` in `unoauto_remote.c` (all UNO_DEBUG-only,

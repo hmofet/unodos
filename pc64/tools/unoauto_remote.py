@@ -137,7 +137,7 @@ class UnoAutoLink:
                         "writable": p[2] == "1", "name": p[3]})
         return out
 
-    def push_file(self, vol, path, local_path, chunk=750, timeout=10.0, progress=None):
+    def push_file(self, vol, path, local_path, chunk=2700, timeout=10.0, progress=None):
         """A/B OS update: stream local_path to <vol>:<path> in `put` chunks, then
         finalize+verify. Returns True iff the device reports `verified`. Raises on
         any per-chunk error (the target is only written at finalize, so a failed
@@ -156,8 +156,11 @@ class UnoAutoLink:
             off += len(piece)
             if progress:
                 progress(off, total)
+        # Finalize does one on-device uno_fs_write of the whole staged buffer; a
+        # multi-MB write over firmware BlockIO can take a while, so allow well
+        # past the per-chunk timeout.
         r = self.command("put", vol, path, "done", format(total, "x"),
-                         timeout=max(timeout, 30.0))
+                         timeout=max(timeout, 300.0))
         return bool(r) and r[0].startswith("verified")
 
     # ---- receiving --------------------------------------------------------
@@ -254,7 +257,7 @@ def _cli(argv):
                     help="bind address host:port (default 0.0.0.0:5099)")
     ap.add_argument("--push", nargs=3, metavar=("VOL", "PATH", "LOCALFILE"),
                     help="wait for pc64 to dial in, push LOCALFILE to <vol>:<path>, then exit")
-    ap.add_argument("--chunk", type=int, default=750, help="push chunk size (raw bytes)")
+    ap.add_argument("--chunk", type=int, default=2700, help="push chunk size (raw bytes; fits the 4 KB device line buffer)")
     ap.add_argument("--bootnext", type=int, metavar="N",
                     help="after --push, set BootNext=N (boot Boot#### N next reset)")
     ap.add_argument("--reboot", action="store_true", help="after --push, reboot the target")

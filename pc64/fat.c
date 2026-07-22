@@ -17,6 +17,7 @@
 #include "blkdev.h"
 #include "pc64_pci.h"       /* uno_fat_native_eligible: AHCI-class lookup */
 #include "string.h"
+#include "uno_debug.h"      /* uno_dbg_heartbeat: no-op macro in prod builds */
 #include <stdint.h>
 
 #define MAXVOL   8
@@ -36,6 +37,12 @@ typedef struct {
     uint32_t  root_clus;                    /* FAT32 root cluster            */
     uint32_t  sec_per_clus;
     uint32_t  clusters;                     /* count of data clusters        */
+    uint32_t  next_free;                    /* fat_alloc scan hint (>=2): the
+                                               next cluster to try, so a multi-
+                                               hundred-cluster write allocates in
+                                               amortised O(1) instead of
+                                               rescanning the FAT from 2 each
+                                               time (the 1.5 MB `put` hang)      */
     uint32_t  serial;
     char      label[12];
     int       used;
@@ -125,6 +132,7 @@ static int mount_at(uno_bdev *dev, uint64_t start)
         data_sectors = (uint32_t)(tot - meta);
     }
     v.clusters     = data_sectors / v.sec_per_clus;
+    v.next_free    = 2;                              /* fat_alloc scan hint */
     if (v.clusters > 0x0FFFFFF6u) return 0;         /* implausible: beyond FAT32 max */
     /* classify by cluster count if the BPB was ambiguous */
     if (!v.fat32 && v.clusters < 4085) return 0;    /* FAT12: unsupported - a
@@ -301,10 +309,24 @@ static uint32_t clus_lba(fatvol *v, uint32_t clus)
 /* allocate one free cluster, mark EOC; 0 = disk full */
 static uint32_t fat_alloc(fatvol *v)
 {
-    uint32_t c;
-    for (c = 2; c < v->clusters + 2; c++)
+    uint32_t c, end = v->clusters + 2;
+    uint32_t start = (v->next_free >= 2 && v->next_free < end) ? v->next_free : 2;
+    /* scan from the hint to the end, then wrap 2..start. This keeps allocation
+     * of a long chain amortised O(1) per cluster instead of O(clusters) - the
+     * old "from 2 every time" scan made a multi-hundred-cluster write O(n^2)
+     * AND thrashed the sector cache (each rescan re-read FAT sectors that the
+     * data writes had just evicted), which hung the 1.5 MB `put` on firmware
+     * BlockIO. */
+    for (c = start; c < end; c++)
         if (fat_get(v, c) == 0) {
             fat_set(v, c, v->fat32 ? 0x0FFFFFFF : 0xFFFF);
+            v->next_free = c + 1;
+            return c;
+        }
+    for (c = 2; c < start; c++)
+        if (fat_get(v, c) == 0) {
+            fat_set(v, c, v->fat32 ? 0x0FFFFFFF : 0xFFFF);
+            v->next_free = c + 1;
             return c;
         }
     return 0;
@@ -673,6 +695,7 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
     need = (uint32_t)((len + (long)v->sec_per_clus * SECT - 1) / ((long)v->sec_per_clus * SECT));
     while (made < need) {
         uint32_t cl = fat_alloc(v), s;
+        uno_dbg_heartbeat();   /* a multi-MB write must not starve the watchdog */
         if (!cl) { if (first) fat_free_chain(v, first); return 0; }  /* old chain intact */
         if (!first) first = cl; else fat_set(v, prev, cl);
         prev = cl;
