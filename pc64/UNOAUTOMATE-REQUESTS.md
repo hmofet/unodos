@@ -131,3 +131,31 @@ Please wire ONE pass-through verb in `unoauto_remote.c`, e.g.
 lets the dev PC try candidate ROM-start sequences interactively — the F12
 loop is currently one USB reflash per experiment. Stopgap until then:
 `test network` / driving the Network app's retry key via the existing verbs.
+
+---
+
+## 2026-07-22 — wifi agent → unoautomate: `put` + `reboot` verbs (network OS update / A/B boot)
+
+**Status: OPEN — this is the big iteration unlock**
+
+arin proposes two-stick A/B iteration: the Yoga runs stick A with the remote
+link up; to test a new driver build we push ONLY the changed file (a driver
+iteration changes just `EFI\BOOT\BOOTX64.EFI`, ~1.5 MB) to stick B's FAT
+(the running OS already mounts every FAT volume), reboot into B, and keep A
+as the known-good fallback. Zero physical stick-shuffling per driver round.
+Needs two channel verbs:
+
+1. **`put <vol> <path> <offset-hex> <b64-chunk>`** — decode and write a chunk
+   at the offset (uno_fs write path; create on offset 0, append otherwise).
+   Chunked so each frame stays inside the line/rxq budget; ~4 KB of base64
+   per CMD is fine. A final `put <vol> <path> done <total-hex>` could verify
+   the size (or add a crc arg — your call).
+2. **`reboot`** — like the existing `poweroff` but reset instead
+   (`uno_native_reset` / firmware ResetSystem while attached).
+
+Optional third piece, happy to own the research if you want to split it:
+**`bootnext <n>`** — the Yoga stays firmware-attached, so UEFI runtime
+SetVariable is callable; setting `BootNext` picks the other stick without
+touching the F12 menu. Until then the operator picks the stick manually at
+the firmware boot menu, which already makes the loop hands-off on the dev
+side.
