@@ -22,6 +22,7 @@
 #include "uno_app.h"        /* AppInterface/KernelApi + mac_compat.h Toolbox */
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
 #include "pyhost.h"     /* Python-runtime + Python-app module tiers */
+#include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
 #include "pc64_fs.h"
 #include "fat.h"
 #include "pc64_font.h"
@@ -424,7 +425,9 @@ UnoUuiEntry uno_mod_load_uui(const char *file)
     long n = mod_read(file, gModBuf, MODBUF_MAX);
     mdbg("modload(uui): "); mdbg(file); mdbg("\n");
     e = mod_instantiate(n, &flags, 0, 0, 0, 0);
-    if (e && !(flags & UNO_MODF_UUI)) { mdbg("modload: not a uui module\n"); return 0; }
+    if (e && !(flags & UNO_MODF_UUI)) { mdbg("modload: not a uui module\n"); e = 0; }
+    { UnoAutoModEv ev; ev.file = file; ev.ok = e != 0;
+      unoauto_hook_fire("mod.load", &ev); }
     return (UnoUuiEntry)e;
 }
 
@@ -503,6 +506,8 @@ UnoAppEntry uno_mod_load_user(int vol, const char *path)
         return 0;
     }
     if (!e) { gUserBase = 0; gUserNp = 0; }
+    { UnoAutoModEv ev; ev.file = path; ev.ok = e != 0;
+      unoauto_hook_fire("mod.load", &ev); }
     return (UnoAppEntry)e;
 }
 
@@ -512,6 +517,8 @@ void uno_mod_unload_user(void)
     if (!(gUserSlot && gUserBase == gUserSlot))   /* slot loads stay resident */
         mod_free(gUserBase, gUserNp);
     gUserBase = 0; gUserNp = 0;
+    { UnoAutoModEv ev; ev.file = "(user)"; ev.ok = 1;
+      unoauto_hook_fire("mod.unload", &ev); }
 }
 
 /* ---- the kernel-facing hook (cached per app id) --------------------------- */

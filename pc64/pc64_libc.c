@@ -143,6 +143,7 @@ static void heap_init(void)
 
 #ifdef UNO_DEBUG
 #include "uno_debug.h"
+#include "unoauto.h"
 /* debug build: walkable heap stats for the HUD + crash reports, and the
  * fail-every-Nth-malloc OOM injection the stress driver drives */
 void uno_heap_stats(unsigned long *used, unsigned long *free_,
@@ -170,6 +171,18 @@ void *malloc(size_t n)
     Blk *b;
     if (!gHead) heap_init();
 #ifdef UNO_DEBUG
+    /* unoautomate tap: a hook on "libc.malloc" can trace every allocation or
+     * force this one to fail (scriptable OOM). Guarded so a hook fn that
+     * allocates cannot recurse into its own fire. */
+    { static int in_hook;
+      if (!in_hook) {
+          UnoAutoAllocEv ev; ev.size = (unsigned long)n; ev.fail = 0;
+          in_hook = 1; unoauto_hook_fire("libc.malloc", &ev); in_hook = 0;
+          if (ev.fail) {
+              uno_dbg_log("hook-inject: malloc(%lu) forced to fail", (unsigned long)n);
+              return 0;
+          }
+      } }
     if (uno_dbg_oom_tick()) {
         uno_dbg_log("oom-inject: malloc(%lu) forced to fail", (unsigned long)n);
         return 0;

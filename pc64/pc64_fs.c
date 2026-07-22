@@ -19,6 +19,7 @@
  * ======================================================================== */
 #include "pc64_fs.h"
 #include "fat.h"
+#include "unoauto.h"     /* fs.read / fs.write tap points (no-op in prod) */
 
 /* pc64_io.c (RAM disk) */
 int  uno_ramfs_count(void);
@@ -146,6 +147,8 @@ long uno_fs_read(int vol, const char *name, unsigned char *buf, long max)
 long uno_fs_read_at(int vol, const char *name, long off,
                     unsigned char *buf, long max)
 {
+    { UnoAutoFsEv ev; ev.vol = vol; ev.path = name; ev.len = max;
+      unoauto_hook_fire("fs.read", &ev); }
     build_map();
     if (vol < 0 || vol >= g_nmap || fw_dead(vol)) return -1;
     if (g_map[vol].kind == KIND_RAM) return uno_ramfs_read_at(name, off, buf, max);
@@ -166,6 +169,8 @@ long uno_fs_size(int vol, const char *name)
  * or the write failed.  RAM disk + native FAT are writable; firmware SFS is not. */
 int uno_fs_write(int vol, const char *name, const unsigned char *buf, long len)
 {
+    { UnoAutoFsEv ev; ev.vol = vol; ev.path = name; ev.len = len;
+      unoauto_hook_fire("fs.write", &ev); }
     build_map();
     if (vol < 0 || vol >= g_nmap) return 0;
     if (g_map[vol].kind == KIND_RAM) return uno_ramfs_write(name, buf, len);

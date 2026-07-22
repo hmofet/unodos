@@ -46,6 +46,23 @@
  * changelog before building. */
 #define UNOAUTO_API 1
 
+/* ---- HOOK event payloads (outside the UNO_DEBUG gate so production call
+ * sites still typecheck; the fire itself compiles away).  One struct per
+ * tap-point family; the registered points and their payloads:
+ *
+ *   "libc.malloc"        UnoAutoAllocEv   set .fail=1 to make it return 0
+ *   "fs.read" "fs.write" UnoAutoFsEv      trace-only
+ *   "mod.load" "mod.unload"  UnoAutoModEv trace-only (.ok = outcome)
+ *   "net.tx" "net.rx"    (requested from the net owner - see
+ *                         UNOAUTOMATE-REQUESTS.md)
+ *   "uui.action"         lands with DRIVE (Phase D)
+ *
+ * Hook fns run synchronously inside the producer and MUST NOT allocate
+ * (the malloc tap is re-entrancy-guarded, but do not lean on it). */
+typedef struct { unsigned long size; int fail; } UnoAutoAllocEv;
+typedef struct { int vol; const char *path; long len; } UnoAutoFsEv;
+typedef struct { const char *file; int ok; } UnoAutoModEv;
+
 #ifdef UNO_DEBUG
 
 /* ---- LOG: channelled structured logging ------------------------ [STABLE] */
@@ -129,7 +146,8 @@ int  unoauto_drive_ready(void);          /* 1 when PYRT + shell are up        */
 #define unoauto_probe(o, m)              0
 #define unoauto_hook_add(p, f, u)        (-1)
 #define unoauto_hook_remove(i)           ((void)0)
-#define unoauto_hook_fire(p, a)          ((void)0)
+/* consumes its args: production tap sites must not warn set-but-unused */
+#define unoauto_hook_fire(p, a)          ((void)(p), (void)(a))
 #define unoauto_drive_ready()            0
 #endif
 
