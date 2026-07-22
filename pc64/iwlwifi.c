@@ -2155,12 +2155,66 @@ static int hex_u32(const char **p, u32 *out)
     return 0;
 }
 
+/* raw physical reads (UnoDOS is identity-mapped; ACPI + IOMMU MMIO are directly
+ * addressable while attached) */
+static u8  rdp8(u64 a)  { return *(volatile u8  *)(uintptr_t)a; }
+static u32 rdp32(u64 a) { return *(volatile u32 *)(uintptr_t)a; }
+static u64 rdp64(u64 a) { return *(volatile u64 *)(uintptr_t)a; }
+unsigned long long uno_acpi_rsdp(void);
+
+static char *dm_s(char *o, const char *s) { while (*s) *o++ = *s++; return o; }
+static char *dm_h(char *o, u32 v) { const char *hx="0123456789abcdef"; int i;
+    for (i=0;i<8;i++) *o++ = hx[(v>>((7-i)*4))&0xF]; return o; }
+
+/* Find the DMAR ACPI table and report each remapping unit's GSTS.TES bit -
+ * i.e. whether VT-d DMA-remapping is ENABLED (which would block our device DMA
+ * to the RAM arena, the leading F12 hypothesis). No DMAR table => no IOMMU. */
+static int dmar_check(char *out, int cap)
+{
+    u64 rsdp = (u64)uno_acpi_rsdp();
+    u64 xsdt = 0, rsdt = 0, dmar = 0;
+    char *o = out;
+    int i, n, dl, off, rev, units = 0;
+    (void)cap;
+    if (!rsdp) return (int)(dm_s(o, "no RSDP") - out);
+    rev  = rdp8(rsdp + 15);
+    rsdt = rdp32(rsdp + 16);
+    if (rev >= 2) xsdt = rdp64(rsdp + 24);
+    if (xsdt) { n = ((int)rdp32(xsdt + 4) - 36) / 8;
+        for (i = 0; i < n; i++) { u64 t = rdp64(xsdt + 36 + i*8);
+            if (rdp32(t) == 0x52414d44u) { dmar = t; break; } } }
+    if (!dmar && rsdt) { n = ((int)rdp32(rsdt + 4) - 36) / 4;
+        for (i = 0; i < n; i++) { u64 t = (u64)rdp32(rsdt + 36 + i*4);
+            if (rdp32(t) == 0x52414d44u) { dmar = t; break; } } }
+    if (!dmar) return (int)(dm_s(o, "no DMAR: platform has NO VT-d IOMMU") - out);
+    o = dm_s(o, "DMAR present; ");
+    dl = (int)rdp32(dmar + 4); off = 48;
+    while (off + 4 <= dl) {
+        u16 type = (u16)(rdp8(dmar+off) | (rdp8(dmar+off+1)<<8));
+        u16 sl   = (u16)(rdp8(dmar+off+2) | (rdp8(dmar+off+3)<<8));
+        if (!sl) break;
+        if (type == 0) {                       /* DRHD */
+            u64 base = rdp64(dmar + off + 8);
+            u32 gsts = rdp32(base + 0x1c);
+            o = dm_s(o, "DRHD@"); o = dm_h(o, (u32)base);
+            o = dm_s(o, " GSTS="); o = dm_h(o, gsts);
+            o = dm_s(o, (gsts & 0x80000000u) ? " TES=ON(DMA-remap active!) " : " TES=off ");
+            units++;
+        }
+        off += sl;
+    }
+    if (!units) o = dm_s(o, "(no DRHD units)");
+    *o = 0;
+    return (int)(o - out);
+}
+
 int iwl_dbg_cmd(const char *line, char *out, int cap)
 {
     static const char hx[] = "0123456789abcdef";
     u32 a, v;
     int i;
     if (!line || !out || cap < 12) return -1;
+    if (!strncmp(line, "dmar", 4)) return dmar_check(out, cap);
     if (!strncmp(line, "rerun", 5)) {
         g_bound = 0; g_joined = 0; g_alive = 0;       /* force a full retry */
         iwl_nic();
