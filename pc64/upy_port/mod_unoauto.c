@@ -41,6 +41,11 @@ void pc64_shell_close_top(void);
 void uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
 long unoauto_deadline_left(void);   /* 23-char alias of _left_ms */
+/* remote dev-PC channel (unoauto_remote.c) */
+int  unoauto_remote_active(void);
+int  unoauto_remote_send(const char *type, const char *text);
+int  unoauto_remote_recv(char *buf, int cap);
+void unoauto_remote_stop(void);
 
 static mp_obj_t ua_available(void) { return mp_const_true; }
 
@@ -81,6 +86,15 @@ static mp_obj_t ua_uptime(void)        { return mp_obj_new_int_from_ull(uno_dbg_
 static mp_obj_t ua_deadline(void)      { return mp_obj_new_int(unoauto_deadline_left()); }
 static mp_obj_t ua_poweroff(void)      { uno_pc64_shutdown(); return mp_const_none; }
 
+/* remote dev-PC link: exchange messages with the PC you develop from. */
+static mp_obj_t ua_rc_active(void) { return mp_obj_new_bool(unoauto_remote_active()); }
+static mp_obj_t ua_rc_send(mp_obj_t s)
+{ return mp_obj_new_int(unoauto_remote_send("MSG", mp_obj_str_get_str(s))); }
+static mp_obj_t ua_rc_recv(void)
+{ char b[256]; int n = unoauto_remote_recv(b, sizeof b);
+  return n > 0 ? mp_obj_new_str(b, n) : mp_const_none; }
+static mp_obj_t ua_rc_stop(void) { unoauto_remote_stop(); return mp_const_none; }
+
 #else /* !UNO_DEBUG: same surface, inert - no debug kernel imports */
 
 static mp_obj_t ua_available(void) { return mp_const_false; }
@@ -95,6 +109,10 @@ static mp_obj_t ua_close_top(void) { return mp_const_none; }
 static mp_obj_t ua_uptime(void)    { return mp_obj_new_int(0); }
 static mp_obj_t ua_deadline(void)  { return mp_obj_new_int(-1); }
 static mp_obj_t ua_poweroff(void)  { return mp_const_none; }
+static mp_obj_t ua_rc_active(void) { return mp_const_false; }
+static mp_obj_t ua_rc_send(mp_obj_t s) { (void)s; return mp_obj_new_int(-1); }
+static mp_obj_t ua_rc_recv(void)   { return mp_const_none; }
+static mp_obj_t ua_rc_stop(void)   { return mp_const_none; }
 
 #endif /* UNO_DEBUG */
 
@@ -109,6 +127,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(ua_close_top_obj, ua_close_top);
 static MP_DEFINE_CONST_FUN_OBJ_0(ua_uptime_obj, ua_uptime);
 static MP_DEFINE_CONST_FUN_OBJ_0(ua_deadline_obj, ua_deadline);
 static MP_DEFINE_CONST_FUN_OBJ_0(ua_poweroff_obj, ua_poweroff);
+static MP_DEFINE_CONST_FUN_OBJ_0(ua_rc_active_obj, ua_rc_active);
+static MP_DEFINE_CONST_FUN_OBJ_1(ua_rc_send_obj, ua_rc_send);
+static MP_DEFINE_CONST_FUN_OBJ_0(ua_rc_recv_obj, ua_rc_recv);
+static MP_DEFINE_CONST_FUN_OBJ_0(ua_rc_stop_obj, ua_rc_stop);
 
 static const mp_rom_map_elem_t unoauto_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__),      MP_ROM_QSTR(MP_QSTR_unoauto) },
@@ -123,6 +145,10 @@ static const mp_rom_map_elem_t unoauto_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_uptime),        MP_ROM_PTR(&ua_uptime_obj) },
     { MP_ROM_QSTR(MP_QSTR_deadline_left), MP_ROM_PTR(&ua_deadline_obj) },
     { MP_ROM_QSTR(MP_QSTR_poweroff),      MP_ROM_PTR(&ua_poweroff_obj) },
+    { MP_ROM_QSTR(MP_QSTR_remote_active), MP_ROM_PTR(&ua_rc_active_obj) },
+    { MP_ROM_QSTR(MP_QSTR_remote_send),   MP_ROM_PTR(&ua_rc_send_obj) },
+    { MP_ROM_QSTR(MP_QSTR_remote_recv),   MP_ROM_PTR(&ua_rc_recv_obj) },
+    { MP_ROM_QSTR(MP_QSTR_remote_stop),   MP_ROM_PTR(&ua_rc_stop_obj) },
 };
 static MP_DEFINE_CONST_DICT(unoauto_globals, unoauto_globals_table);
 const mp_obj_module_t mp_module_unoauto = {

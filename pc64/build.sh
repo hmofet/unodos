@@ -155,6 +155,10 @@ if [ "$1" != "legacy" ]; then
         OBJS="$OBJS build/unoauto.o"
         pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_probe.o" "unoauto_probe.c"
         OBJS="$OBJS build/unoauto_probe.o"
+        # UNOAUTOMATE remote channel: the bidirectional dev-PC link (remote
+        # logging + control).  Consumes only the public net API; see REMOTE.md.
+        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_remote.o" "unoauto_remote.c"
+        OBJS="$OBJS build/unoauto_remote.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
