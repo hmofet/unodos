@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote control & automation · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Remote control &amp; automation (unoautomate)</h1>
+<p class="lede">A debug build of UnoDOS pc64 can open a link to the PC you develop from and stream its
+logs to you, take commands from you, and exchange messages in either direction - all over the
+network, with a simple typed command language or a Python API. This is <strong>unoautomate</strong>:
+the OS's remote-control and automation channel. It is how you drive, observe, and update a machine
+that is sitting on a bench across the room.</p>
+
+<div class="note warn"><b>Debug builds, LAN only</b>unoautomate is compiled into <strong>debug builds only</strong> (<code>UNO_DEBUG=1</code>). A production OS has none of it - the channel, the commands and the on-device Python bindings all compile away. It is meant for a <strong>trusted LAN</strong> and speaks in plaintext, so never expose it to an untrusted network.</div>
+
+<h2 id="enable">Turning it on</h2>
+<p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
+than the other way round. You tell it where to dial with one line in the stick's <code>STRESS.CFG</code>
+(the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
+<pre><code>remote=192.168.2.43:5099</code></pre>
+<p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
+your PC (below). If the link drops it reconnects on its own.</p>
+<div class="note"><b>One connection</b>The remote link shares one TCP connection with the Browser and AI features, so they cannot be used while a link is active.</div>
+
+<h2 id="logging">Remote logging</h2>
+<p>While the link is up, every line the OS logs - boot, network, storage, UI, script output - streams to
+your PC as it happens. Instead of pulling a stick and reading <code>CRASH\NETLOG.TXT</code> after the fact,
+you watch the machine think in real time. Nothing in the OS changes to make this happen; the remote channel
+simply subscribes to the same log stream the on-disk logs use.</p>
+
+<h2 id="commands">The command language</h2>
+<p>Either end can send the other a command or a free-form message. The commands your PC can run on the
+device are short, human-typable lines - you can even reach them with <code>nc</code>:</p>
+<div class="tw"><table>
+<thead><tr><th>Command</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>probe</code></td><td>A snapshot of what the system is doing: subsystems (heap/net/fs/shell), open windows, loaded apps.</td></tr>
+<tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
+<tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
+<tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
+<tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
+<tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
+<tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>
+<tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="host">The tool on your PC</h2>
+<p>One small script, <code>pc64/tools/unoauto_remote.py</code>, is both a listener you talk to interactively and
+a Python library you script against. Run it, and it prints the device's logs as they arrive and lets you type
+commands back:</p>
+<pre><code>$ python tools/unoauto_remote.py --listen 0.0.0.0:5099
+unoauto_remote listening on 0.0.0.0:5099. Set pc64 STRESS.CFG:
+    remote=&lt;this-machine-ip&gt;:5099   (QEMU SLIRP guest: 10.0.2.2:5099)
+[SCRIPT ] remote: link up
+[NET    ] eth: DHCP lease 192.168.2.157
+probe
+  2 0 0 4980736 heap
+  2 3 1 12 shell
+  1 1 1 0 Files
+  ok
+launch 0
+  launched
+  ok
+py print(6*7)
+  42
+  ok</code></pre>
+<p>The same thing as a library - drive the machine, read its state, run code on it, and register handlers so
+the device can drive <em>your</em> PC in return:</p>
+<pre><code>from unoauto_remote import UnoAutoLink
+
+link = UnoAutoLink(port=5099)
+link.on_log(lambda chan, text: print(chan, text))   # stream the OS log
+link.listen()
+link.wait_connected()                                # pc64 dials in
+
+print(link.probe())              # [{&#x27;kind&#x27;:2,&#x27;name&#x27;:&#x27;heap&#x27;,...}, ...]
+link.launch(0)                   # open the first app
+print(link.eval(&quot;print(6*7)&quot;))   # run Python on the device -&gt; [&#x27;42&#x27;]
+
+# commands can go the other way too: the device can drive your PC
+link.on_command(&quot;save&quot;, lambda args: &quot;saved &quot; + args)</code></pre>
+<p>On the device side, an automation script written in Python (see <a href="dev-apps.html">Writing apps</a>) can
+talk back over the link with <code>unoauto.remote_send()</code> and <code>unoauto.remote_recv()</code>.</p>
+
+<h2 id="ab">A/B updates: push a new build over the link</h2>
+<p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -
+<strong>A</strong>, the machine you are working on, and <strong>B</strong>, a spare - and push only a freshly
+built kernel (<code>EFI\BOOT\BOOTX64.EFI</code>, about 1.5&nbsp;MB) to stick B over the wire, then reboot into
+it. A driver change touches only that one file; everything else on the stick is untouched, and stick A stays as
+a known-good fallback.</p>
+<pre><code># find which volume is the spare stick B (a writable &quot;kind 2&quot; volume)
+python tools/unoauto_remote.py --listen 0.0.0.0:5099      # then type: vols
+
+# push a freshly built kernel to stick B and reboot into it
+python tools/unoauto_remote.py \
+    --push 2 &quot;EFI\BOOT\BOOTX64.EFI&quot; build/BOOTX64.EFI --reboot</code></pre>
+<p>The file is streamed in chunks, staged in the device's memory, and written in one step at the end with a size
+check - so an interrupted transfer never leaves stick B half-written. Add <code>--bootnext &lt;n&gt;</code> to have
+the machine boot the other stick automatically on the next restart, without anyone touching the firmware boot
+menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
+
+<div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
+
+<p class="muted">The full wire protocol and every command's exact reply are in
+<a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>
+
+<nav class="pagenav"><a href="dev-build.html">&lsaquo; Building &amp; tooling</a><span></span></nav>
+</div></main>
+</div>
+</body>
+</html>

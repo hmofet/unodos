@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -247,6 +247,59 @@ void u3d_rotate_z(float deg);
 void u3d_triangles(const u3d_vert *verts, int tri_count);   /* Gouraud, no textures */
 void u3d_end(void);
 void u3d_present(void);</code></pre>
+
+<h2 id="unoauto">unoauto: automation (Python, on the device)</h2>
+<p><code>import unoauto</code> from any Python app to observe and drive the system - the automation half of
+<a href="dev-remote.html">unoautomate</a>. This surface exists only in a <strong>debug</strong> OS; in a production
+build every call is an inert stub and <code>available()</code> returns <code>False</code>.</p>
+<div class="tw"><table>
+<thead><tr><th>Function</th><th>Returns / effect</th></tr></thead>
+<tbody>
+<tr><td><code>available()</code></td><td>True in a debug OS, False in production.</td></tr>
+<tr><td><code>log(text)</code></td><td>Emit a line on the script log channel (streams to the remote link).</td></tr>
+<tr><td><code>probe()</code></td><td>System snapshot: a list of (name, kind, state, v1, v2) rows - kind 0 module, 1 window, 2 subsystem.</td></tr>
+<tr><td><code>key(scan, uni, ctrl=0)</code></td><td>Inject a keypress, processed on the next frame.</td></tr>
+<tr><td><code>pointer(x, y, btn)</code></td><td>Inject a pointer event.</td></tr>
+<tr><td><code>apps()</code></td><td>Number of launchable apps.</td></tr>
+<tr><td><code>launch(i)</code></td><td>Open app <code>i</code>; True on success.</td></tr>
+<tr><td><code>close_top()</code></td><td>Close the top window.</td></tr>
+<tr><td><code>uptime()</code></td><td>Milliseconds since boot.</td></tr>
+<tr><td><code>deadline_left()</code></td><td>Milliseconds left in the current test budget, or -1 if none is armed.</td></tr>
+<tr><td><code>poweroff()</code></td><td>Shut the machine down (for unattended runs).</td></tr>
+<tr><td><code>remote_active()</code></td><td>True when the link to the dev PC is up.</td></tr>
+<tr><td><code>remote_send(text)</code></td><td>Send a message to the dev PC.</td></tr>
+<tr><td><code>remote_recv()</code></td><td>Next inbound message, or None.</td></tr>
+<tr><td><code>remote_stop()</code></td><td>Tear the link down.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="unoautolink">UnoAutoLink: driving from your PC (Python)</h2>
+<p>From <code>pc64/tools/unoauto_remote.py</code>. Construct one, call <code>listen()</code>, and the device dials in
+(<code>wait_connected()</code>). Every command method blocks for the reply and raises on a device error or timeout.</p>
+<div class="tw"><table>
+<thead><tr><th>Method</th><th>Returns / effect</th></tr></thead>
+<tbody>
+<tr><td><code>listen()</code> / <code>close()</code></td><td>Start / stop the listener.</td></tr>
+<tr><td><code>wait_connected(timeout)</code></td><td>Block until the device connects.</td></tr>
+<tr><td><code>on_log(cb)</code> / <code>on_message(cb)</code></td><td>Callbacks for streamed logs and messages.</td></tr>
+<tr><td><code>on_command(verb, cb)</code></td><td>Handle a command the <em>device</em> sends to your PC.</td></tr>
+<tr><td><code>message(text)</code></td><td>Send a free-form message to the device.</td></tr>
+<tr><td><code>command(verb, *args, timeout=5)</code></td><td>Run any command; returns its reply lines.</td></tr>
+<tr><td><code>probe()</code></td><td>Snapshot as a list of dicts (keys: kind, state, v1, v2, name).</td></tr>
+<tr><td><code>vols()</code></td><td>Volumes as a list of dicts (keys: vol, kind, writable, name).</td></tr>
+<tr><td><code>launch(n)</code> / <code>close_top()</code> / <code>apps()</code></td><td>App control.</td></tr>
+<tr><td><code>key(scan, uni, ctrl=0)</code> / <code>pointer(x, y, btn=0)</code></td><td>Inject input.</td></tr>
+<tr><td><code>eval(src)</code></td><td>Run a line of Python on the device; returns its output.</td></tr>
+<tr><td><code>test(suite="")</code></td><td>Run a conformance suite; returns the report.</td></tr>
+<tr><td><code>uptime()</code> / <code>poweroff()</code> / <code>reboot()</code></td><td>Read uptime, shut down, or restart.</td></tr>
+<tr><td><code>push_file(vol, path, local_path)</code></td><td>Push a file (chunk, finalize, verify); True when verified.</td></tr>
+<tr><td><code>bootnext(n)</code></td><td>Set the next UEFI boot entry.</td></tr>
+</tbody>
+</table></div>
+<p class="muted">The C contract underneath (<code>unoauto_log</code>, <code>unoauto_probe</code>,
+<code>unoauto_sink_add</code>, <code>unoauto_test_run</code>, the hook taps and <code>unoauto_remote_*</code>) is in
+<a href="https://github.com/hmofet/unodos/blob/master/pc64/unoauto.h" target="_blank" rel="noopener"><code>pc64/unoauto.h</code></a>;
+the wire protocol is in <a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>REMOTE.md</code></a>.</p>
 
 <nav class="pagenav"><a href="dev-apps.html">&lsaquo; Writing apps</a><a class="nxt" href="dev-build.html">Building &amp; tooling &rsaquo;</a></nav>
 </div></main>
