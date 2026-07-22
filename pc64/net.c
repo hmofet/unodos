@@ -473,6 +473,7 @@ static void tcp_tick(void)
 static int g_dhcp_state;          /* 0 idle, 1 discover sent, 2 request sent, 3 bound */
 static u8  g_dhcp_xid[4] = {0x55, 0x4E, 0x4F, 0x21};
 static u8  g_dhcp_srv[4], g_dhcp_offer[4];
+static u32 g_dhcp_tx_tick;        /* g_ticks at the last DISCOVER/REQUEST send */
 
 static void dhcp_send(int type, const u8 *reqip, const u8 *srvip)
 {
@@ -516,6 +517,7 @@ static void dhcp_send(int type, const u8 *reqip, const u8 *srvip)
         nic_tx(flen);
         udp_bind(68);
     }
+    g_dhcp_tx_tick = g_ticks;                   /* for the retransmit timer */
 }
 
 void net_dhcp_start(void)
@@ -525,6 +527,20 @@ void net_dhcp_start(void)
     dhcp_send(1, 0, 0);            /* DISCOVER */
 }
 int net_dhcp_done(void) { return g_dhcp_state == 3; }
+
+/* RFC-style retransmission, driven from net_poll. A single lost OFFER (state 1)
+ * or ACK (state 2) - common on a marginal link or a dropped ax88179 RX frame -
+ * otherwise stalls the whole lease forever, because the client only ever sent
+ * one DISCOVER. Resend the current stage every ~1.5 s (net_poll is called at
+ * ~200 Hz in the bring-up loops). This is the root-cause fix for the Yoga's
+ * "tx=1 rx=1 ip=0 -> no lease": the OFFER was lost and never re-requested. */
+static void dhcp_tick(void)
+{
+    if (g_dhcp_state != 1 && g_dhcp_state != 2) return;
+    if ((u32)(g_ticks - g_dhcp_tx_tick) < 300) return;
+    if (g_dhcp_state == 1) dhcp_send(1, 0, 0);                     /* re-DISCOVER */
+    else                   dhcp_send(3, g_dhcp_offer, g_dhcp_srv); /* re-REQUEST  */
+}
 
 static const u8 *dhcp_opt(const u8 *o, int len, u8 want, int *olen)
 {
@@ -713,5 +729,6 @@ void net_poll(void)
     }
     /* deferred ping once ARP resolves */
     if (g_ping_sent == 2 && g_ping_dst_set) net_ping(g_ping_dst);
+    dhcp_tick();                    /* retransmit a lost DISCOVER/REQUEST */
     tcp_tick();
 }
