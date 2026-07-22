@@ -333,6 +333,28 @@ re-read) explains the entire fleet-uniform "ROM never starts" signature:
    Linux; our 9000 path even wrote it as a PRPH address). Invisible while
    the fw never booted; would have gone RX-silent after 256 frames.
 
+**ROUND-2 UPDATE (2026-07-22, after the Yoga run of build 0350):** the
+doorbell fix alone did NOT cure it — the new autopsy showed
+`UREG_CPU_INIT_RUN=0` read back right after writing 1 WITH MAC access held
+(`fh_after_kick=0`, `LOAD_STATUS=0`, `CTXT_INFO_BA` readback perfect). CSR
+space works; the MAC absorbs PRPH writes → a power-state problem, not a
+sequencing one. Linux `_iwl_trans_pcie_start_hw()` has three steps we had
+skipped, one of them EXACTLY scoped to our failing hardware class:
+- **`iwl_pcie_gen2_force_power_gating()` — integrated 22000 ONLY (= every
+  CNVi AX201)**: finish_nic_init → set `HPM_HIPM_GEN_CFG` FORCE_ACTIVE →
+  set PG_EN|SLP_EN → clear FORCE_ACTIVE → ANOTHER sw reset + ownership
+  retake. A power-gated CNVi MAC ignores everything until this runs.
+- **`iwl_trans_pcie_clear_persistence_bit()`** (9000/22000): `HPM_DEBUG`
+  bit 12 survives warm boots; cleared with the no-grab PRPH accessors
+  BEFORE the first sw reset (write-protect checked via
+  `PREG_PRPH_WPROT_22000`).
+- **sw reset must retake ownership** (`prepare_card_hw` again after every
+  reset) and hw-ready sets `CSR_MBOX_SET_REG` OS_ALIVE.
+All three implemented; plus a decisive PRPH-window probe (write
+`HPM_UMAC_LTR`, read it back, trace both) and `grab_fail` / `HW_IF` /
+`HPM_*` dumps in the autopsy — the next NETLOG distinguishes "PRPH window
+now works, ROM still quiet" from "MAC still absorbing writes."
+
 **ALL FIXED in iwlwifi.c (metal-pending — QEMU has no Intel WiFi model):**
 refcounted MAC-access grab inside `prph_w/prph_r`, gen2 tail = LTR + doorbell,
 gen3 tail = int-mask + LTR/IML-spin + UMAC-offset doorbell (+ BZ scratch
