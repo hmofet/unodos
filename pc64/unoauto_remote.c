@@ -9,7 +9,8 @@
 #include "unoauto.h"
 #include "unoauto_remote.h"
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
-#include "netsock.h"        /* multi-connection socket API (nst self-test) */
+#include "netsock.h"        /* multi-connection socket API (own link socket) */
+#include "netdisc.h"        /* zero-config discovery: auto-dial the found host */
 #include "pc64_http.h"      /* pc64_net_up */
 #include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
 #include "unostorage.h"     /* disk authoring (brings blkdev.h): the disk verbs */
@@ -28,6 +29,7 @@ void  pc64_shell_close_top(void);
 void  uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
 int   pc64_stress_cfg_value(const char *key, char *buf, int cap);
+int   pc64_stress_cfg_flag(const char *key);
 int   pc64_shell_py_exec(const char *src, char *out, int cap);   /* pc64_uui.c */
 /* A/B OS-update over the link: fs write + reboot (see REMOTE.md) */
 int   uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
@@ -71,8 +73,11 @@ static void sb_ull(SB *b, unsigned long long v)   /* 64-bit (LBAs/sector counts)
 }
 
 /* ---- link state ---------------------------------------------------------- */
-enum { RS_OFF = 0, RS_CONNECTING, RS_UP, RS_DOWN };
+enum { RS_OFF = 0, RS_DISCOVER, RS_CONNECTING, RS_UP, RS_DOWN };
 static int      g_state;
+static int      g_sock = -1;        /* our OWN socket - no longer the shared
+                                       legacy net_tcp_* slot, so the Browser/AI
+                                       apps can hold a connection alongside us */
 static u8       g_ip[4];
 static u16      g_port;
 static int      g_sink = -1;
@@ -603,6 +608,26 @@ static void do_makeboot(const char *id, char *args)
     rsp(id, "end", 0);
 }
 
+/* eth verb pass-through target. The wired-NIC driver (Realtek r8169) lands the
+ * real r8169_dbg_cmd() in r8169.c / r8169.h per the 2026-07-22 request in
+ * UNOAUTOMATE-REQUESTS.md. We declare it locally (not via r8169.h) so this file
+ * builds independently of when the driver hook arrives, and ship a weak fallback
+ * so the tree links green in the meantime; once the strong definition lands the
+ * linker prefers it - no coordination, no broken intermediate state. Same shape
+ * as iwl_dbg_cmd: returns reply length, or -1 (unknown subcmd / NIC not mapped). */
+int r8169_dbg_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int r8169_dbg_cmd(const char *line, char *out, int cap)
+{
+    static const char msg[] = "r8169 debug not built (driver hook pending)";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -673,6 +698,17 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "iwl")) {
         int n = iwl_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (csr/csw/prr/prw/rerun/status)");
+        rsp(id, "end", 0); return;
+    }
+    /* eth <subcmd...> - live wired-NIC (Realtek r8169) register/bring-up debug,
+     * the wired sibling of `iwl`. Additive pass-through to r8169_dbg_cmd (r8169.c;
+     * weak-stubbed above until the driver lands it). Subcmds:
+     * status/reg/wreg/phy/wphy/rerun/link/mac. Per the 2026-07-22 r8169 request
+     * in UNOAUTOMATE-REQUESTS.md. */
+    if (!strcmp_(verb, "eth")) {
+        int n = r8169_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err",
+            n >= 0 ? g_report : "bad-cmd (status/reg/wreg/phy/wphy/rerun/link/mac)");
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {
@@ -763,7 +799,7 @@ static void flush_tx(void)
     int n, r;
     if (g_txlen <= 0) return;
     n = g_txlen; if (n > 512) n = 512;
-    r = net_tcp_send(g_tx, n);           /* one segment in flight at a time */
+    r = net_send(g_sock, g_tx, n);       /* one segment in flight at a time */
     if (r > 0) {
         g_txlen -= r;
         if (g_txlen > 0) memmove(g_tx, g_tx + r, (unsigned long)g_txlen);
@@ -774,7 +810,7 @@ static void drain_rx(void)
 {
     unsigned char buf[512];
     int n, i;
-    while ((n = net_tcp_recv(buf, (int)sizeof buf)) > 0) {
+    while ((n = net_recv(g_sock, buf, (int)sizeof buf)) > 0) {
         for (i = 0; i < n; i++) {
             char c = (char)buf[i];
             if (c == '\r') continue;
@@ -789,7 +825,10 @@ static void start_connect(void)
 {
     g_txlen = 0; g_rxlen = 0;
     if (!pc64_net_up()) { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
-    net_tcp_connect(g_ip, g_port);
+    if (g_sock >= 0) net_sock_close(g_sock);          /* free the prior attempt */
+    g_sock = net_socket(SOCK_TCP);
+    if (g_sock < 0) { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
+    net_connect(g_sock, g_ip, g_port);
     g_state = RS_CONNECTING;
     g_deadline = g_tick + 600;           /* ~10 s handshake window */
 }
@@ -798,7 +837,17 @@ void unoauto_remote_boot(void)
 {
     char v[64]; char *p; int oct, i;
     if (g_state != RS_OFF) return;                 /* armed once */
-    if (pc64_stress_cfg_value("remote", v, (int)sizeof v) <= 0) return;   /* not set */
+    if (pc64_stress_cfg_value("remote", v, (int)sizeof v) <= 0) {
+        /* No static address. If discovery is armed (`discover` flag), wait for
+         * netdisc to find a host and dial it - zero-config. */
+        if (pc64_stress_cfg_flag("discover") > 0) {
+            if (g_sink < 0)
+                g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
+            g_state = RS_DISCOVER;
+            unoauto_log(UA_CH_SCRIPT, "remote: awaiting discovery (no remote= key)");
+        }
+        return;
+    }
     /* parse a.b.c.d:port */
     p = v;
     for (i = 0; i < 4; i++) {
@@ -827,7 +876,18 @@ void unoauto_remote_tick(void)
     if (g_state == RS_OFF) return;
     g_tick++;
     net_poll();
-    st = net_tcp_state();
+    if (g_state == RS_DISCOVER) {                    /* waiting for a discovered host */
+        if (netdisc_have_host()) {
+            const u8 *hip = netdisc_host_ip();
+            g_ip[0] = hip[0]; g_ip[1] = hip[1]; g_ip[2] = hip[2]; g_ip[3] = hip[3];
+            g_port = netdisc_host_port();
+            unoauto_log(UA_CH_SCRIPT, "remote: discovered %d.%d.%d.%d:%d",
+                        g_ip[0], g_ip[1], g_ip[2], g_ip[3], g_port);
+            start_connect();
+        }
+        return;
+    }
+    st = (g_sock >= 0) ? net_sock_state(g_sock) : TCP_CLOSED;
     switch (g_state) {
     case RS_CONNECTING:
         if (st == TCP_ESTABLISHED) {
@@ -838,7 +898,7 @@ void unoauto_remote_tick(void)
              * seeding the remote-log stream. */
             unoauto_log(UA_CH_SCRIPT, "remote: link up");
         } else if (st == TCP_CLOSED || st == TCP_DONE || g_tick > g_deadline) {
-            net_tcp_close();
+            net_sock_close(g_sock); g_sock = -1;
             g_state = RS_DOWN; g_deadline = g_tick + 300;   /* retry ~5 s */
         }
         break;
@@ -846,6 +906,7 @@ void unoauto_remote_tick(void)
         drain_rx();
         flush_tx();
         if (st != TCP_ESTABLISHED) {
+            net_sock_close(g_sock); g_sock = -1;
             g_state = RS_DOWN; g_deadline = g_tick + 300;
         } else if (g_pending_off && g_txlen == 0) {
             uno_pc64_shutdown();
@@ -865,7 +926,7 @@ int unoauto_remote_active(void) { return g_state == RS_UP; }
 void unoauto_remote_stop(void)
 {
     if (g_state == RS_UP) { unoauto_remote_send("BYE", 0); flush_tx(); }
-    net_tcp_close();
+    if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; }
     g_state = RS_OFF;
     g_txlen = 0; g_rxlen = 0;
 }
