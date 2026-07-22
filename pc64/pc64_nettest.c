@@ -211,11 +211,16 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
     }
 
     uno_dbg_check("net:dns");
+    /* target changed example.com -> api.anthropic.com: the lab's Bell router
+     * (mynetwork.home) returns NXDOMAIN for example.com SPECIFICALLY (verified
+     * from a Windows host with the same minimal query - google/cloudflare/
+     * anthropic all resolve). The stack was right; the name was filtered.
+     * api.anthropic.com is also exactly what the AI checks resolve. */
     { unsigned char a[4] = {0,0,0,0};
-      if (net_dns_query("example.com", a))
-          uno_dbg_net_trace("%s: DNS example.com -> %s", what, ip4(a, t));
+      if (net_dns_query("api.anthropic.com", a))
+          uno_dbg_net_trace("%s: DNS api.anthropic.com -> %s", what, ip4(a, t));
       else {
-          uno_dbg_net_trace("%s: DNS example.com FAILED (resolver %s)", what,
+          uno_dbg_net_trace("%s: DNS api.anthropic.com FAILED (resolver %s)", what,
                             ip4(net_dns(), t));
           uno_dbg_net_trace("%s:   dns-diag: sent=%d rx=%d badid=%d neg=%d "
                             "(rx=0 no reply ever arrived; neg>0 forwarder answered negatively)",
