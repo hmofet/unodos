@@ -300,6 +300,49 @@ The autopsy is the deliverable: one batch narrowed "no ALIVE" to "the ROM never
 launched the ucode, here are the exact registers per family." A focused fix
 session with a card present works from this.
 
+### F12 UPDATE (2026-07-21, root cause found by Linux-source review) — the ROM-start doorbell was missing / never landed
+A line-by-line diff against Linux v6.6 `iwl_trans_pcie_gen2_start_fw()` (the
+CALLER of `iwl_pcie_ctxt_info_init`, which the previous fix round did not
+re-read) explains the entire fleet-uniform "ROM never starts" signature:
+1. **The BA write does not start the ROM.** Linux continues after
+   `CSR_CTXT_INFO_BA` with `iwl_pcie_set_ltr()` and then
+   **`iwl_write_prph(UREG_CPU_INIT_RUN, 1)` — the actual ROM-start doorbell**
+   (AX210+: same register at the +0x300000 UMAC PRPH offset; BZ+:
+   FUNC_SCRATCH + GP_CNTRL ROM_START instead). The 1ad4002 fix round REMOVED
+   this write as "spurious gen3-only" because it is absent from
+   `ctxt_info_init()` — it lives in the caller's tail. Without it
+   `UCODE_LOAD_STATUS` stays 0 forever.
+2. **Why the ORIGINAL driver (which did write it) also failed:** our
+   `prph_w()` never held MAC access. Every Linux PRPH access grabs
+   `GP_CNTRL MAC_ACCESS_REQ` and polls clock-ready first
+   (`iwl_write_prph` → grab_nic_access); without the grab the write can
+   silently not land — which is exactly why the batch-2 autopsy read
+   `UREG_CPU_INIT_RUN=0` back. Two driver eras, broken differently, same
+   symptom.
+3. **Missing boot LTR workaround**: integrated 22000 (all CNVi AX201s =
+   X1/Yoga/Surface) needs `HPM_MAC_LTR_CSR=0xf` + `HPM_UMAC_LTR=0x88FA88FA`
+   before the doorbell ("workaround hardware latency issues during the boot
+   process" — Linux comment); discrete parts write `CSR_LTR_LONG_VAL_AD`.
+4. **AX210 (Latitude) extra bugs**: the doorbell went to the plain
+   `0xa05c44` instead of `0xd05c44` (UMAC offset) — a different register —
+   and gen3 never armed the FW-load interrupt mask. Also the batch-2 note
+   "SW_RESET (0x1) still set" was a misread: `CSR_RESET_REG_FLAG_SW_RESET`
+   is **0x80**, not 0x1; RESET=0x11 does not contain it.
+5. **Post-ALIVE latent bug (all families)**: consumed RX buffers were never
+   restocked to the fw (`RFH_Q0_FRBDCB_WIDX_TRG` 0x1C80 — a CSR write in
+   Linux; our 9000 path even wrote it as a PRPH address). Invisible while
+   the fw never booted; would have gone RX-silent after 256 frames.
+
+**ALL FIXED in iwlwifi.c (metal-pending — QEMU has no Intel WiFi model):**
+refcounted MAC-access grab inside `prph_w/prph_r`, gen2 tail = LTR + doorbell,
+gen3 tail = int-mask + LTR/IML-spin + UMAC-offset doorbell (+ BZ scratch
+path), UMAC-offset autopsy reads + PNVM doorbell, post-ALIVE restock gated on
+`g_alive`. SPECTEST regression 65/0/4 clean (e1000 + live TLS unaffected).
+**Next Yoga boot is decisive: `fh_after_kick != 0` proves the ROM's DMA
+finally ran; then ALIVE should follow. If ALIVE arrives, the known next gap
+is the MLME tail (find_and_join is scaffolded — S-WIFI-20 still FAILs until
+real auth/assoc lands).**
+
 ### SPECTEST — first bare-metal conformance run: 24/24 PASS (2026-07-21)
 `x13yoga-2026-07-21-SPEC/`, build `debug-local-20260721-1711`, X13 Yoga. The
 Developer-options → Conformance flow worked end to end: the flasher wrote a

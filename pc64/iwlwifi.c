@@ -159,11 +159,33 @@ static int poll_bit(u32 reg, u32 want, u32 mask, int timeout_ms)
 
 static u32 g_prph_mask = 0x000FFFFF;   /* 0x00FFFFFF on AX210+ */
 
-static void prph_w(u32 reg, u32 v) { w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24)); w32(HBUS_TARG_PRPH_WDAT, v); }
+/* Every Linux PRPH access (iwl_write_prph/iwl_read_prph) holds MAC access
+ * (GP_CNTRL MAC_ACCESS_REQ grabbed, clock-ready polled) around the HBUS
+ * window pair; without it the MAC can be asleep and the write silently does
+ * not land - the F12 metal runs read UREG_CPU_INIT_RUN back as 0 after we
+ * had written 1, which is exactly this. grab_nic/release_nic are refcounted
+ * so callers that already hold access (rx_hw_init, load_section_gen1) nest. */
+static int grab_nic(void);
+static void release_nic(void);
+
+static void prph_w(u32 reg, u32 v)
+{
+    int g = grab_nic();
+    w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24));
+    w32(HBUS_TARG_PRPH_WDAT, v);
+    if (g == 0) release_nic();
+}
 /* used only by the UNO_DEBUG ALIVE-timeout autopsy; keep it out of the
  * production build's unused-function warning. */
 __attribute__((unused))
-static u32  prph_r(u32 reg) { w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24)); return r32(HBUS_TARG_PRPH_RDAT); }
+static u32  prph_r(u32 reg)
+{
+    u32 v; int g = grab_nic();
+    w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24));
+    v = r32(HBUS_TARG_PRPH_RDAT);
+    if (g == 0) release_nic();
+    return v;
+}
 
 /* =====================================================================
  * 2. device identity: family, generation, firmware file name
@@ -173,6 +195,28 @@ static u32  prph_r(u32 reg) { w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3
  * context-info-v2 + PNVM load path. */
 enum { FAM_7000, FAM_8000, FAM_9000, FAM_22000, FAM_AX210, FAM_BZ, FAM_SC };
 static int  g_family;
+
+/* ---- ROM-start doorbell + boot-LTR registers (Linux iwl-prph.h / iwl-csr.h,
+ * v6.6, verified 2026-07-21). On AX210+ the UREG_* UMAC registers sit behind
+ * the +0x300000 UMAC PRPH offset (trans cfg .umac_prph_offset) - the plain
+ * address is a DIFFERENT register there. ---- */
+#define UREG_UCODE_LOAD_STATUS   0xa05c40
+#define UREG_CPU_INIT_RUN        0xa05c44
+#define UREG_DOORBELL_TO_ISR6    0xa05c04
+#define UMAC_PRPH_OFFSET         0x300000
+#define HPM_MAC_LTR_CSR          0xa0348c
+#define HPM_MAC_LRT_ENABLE_ALL   0xf
+#define HPM_UMAC_LTR             0xa03480
+#define CSR_LTR_LONG_VAL_AD      0x0D4
+#define CSR_LTR_LAST_MSG         0x0DC
+#define GP_CNTRL_ROM_START       0x00000080   /* BZ+ */
+#define CSR_FUNC_SCRATCH         0x02C
+#define CSR_FUNC_SCRATCH_INIT    0x01010101
+/* 250 us in both snoop/no-snoop fields, scale=usec: the boot-time LTR value
+ * Linux programs "to workaround hardware latency issues during boot". */
+#define LTR_LONG_VAL_250US       0x88FA88FA
+
+static u32 uprph(u32 reg) { return g_family >= FAM_AX210 ? reg + UMAC_PRPH_OFFSET : reg; }
 static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) */
 static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
 static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
@@ -474,15 +518,24 @@ static int apm_init(void)
     return 0;
 }
 
-/* grab NIC access so PRPH/SRAM writes land */
+/* grab NIC access so PRPH/SRAM writes land (refcounted: prph_w/prph_r grab
+ * for themselves, and some callers already hold access around a batch) */
+static int g_nic_ref;
 static int grab_nic(void)
 {
+    if (g_nic_ref) { g_nic_ref++; return 0; }
     set_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ);
     if (g_family >= FAM_8000) udelay_(2000);
-    return poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY,
-                    GP_CNTRL_MAC_CLOCK_READY, 15);
+    if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY,
+                 GP_CNTRL_MAC_CLOCK_READY, 15) < 0) return -1;
+    g_nic_ref = 1;
+    return 0;
 }
-static void release_nic(void) { clr_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ); }
+static void release_nic(void)
+{
+    if (g_nic_ref > 0 && --g_nic_ref) return;
+    clr_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ);
+}
 
 static int rf_killed(void) { return (r32(CSR_GP_CNTRL) & GP_CNTRL_HW_RF_KILL_SW) ? 0 : 1; }
 
@@ -556,6 +609,7 @@ static void rx_alloc_lists(void)
 /* RFH (9000 mq) */
 #define RFH_Q0_FRBDCB_BA_LSB 0xA08000
 #define RFH_Q0_FRBDCB_WIDX   0xA08080
+#define RFH_Q0_FRBDCB_WIDX_TRG 0x1C80        /* CSR shadow of the WIDX (write via w32) */
 #define RFH_Q0_FRBDCB_RIDX   0xA080C0
 #define RFH_Q0_URBDCB_BA_LSB 0xA08100
 #define RFH_Q0_URBDCB_WIDX   0xA08180
@@ -608,10 +662,30 @@ static void rx_hw_init(void)
     /* gen2: the RFH is programmed by firmware; we just keep the RB pool */
     release_nic();
     w8_(CSR_INT_COALESCING, 0x40);
-    /* push the free-list write pointer (multiple of 8) */
+    /* push the free-list write pointer (multiple of 8). NOTE: the WIDX_TRG
+     * shadow is a CSR write in Linux (iwl_pcie_rxq_inc_wr_ptr uses
+     * iwl_write32 RFH_Q_FRBDCB_WIDX_TRG=0x1C80), NOT a PRPH access. */
     g_rx_write = (RXQ_N - 1) & ~7;
     if (!g_mq_rx) w32(FH_RSCSR_RBDCB_WPTR, g_rx_write);
-    else if (!g_gen2) prph_w(0x1C80, g_rx_write);      /* FRBDCB_WIDX_TRG shadow */
+    else if (!g_gen2) w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);
+}
+
+/* Hand consumed RBs back to the firmware. The free list is a static identity
+ * mapping (slot i -> rb i, vid i+1) that we never rewrite, so restock is just
+ * advancing the write index to one-behind the read index (rounded to 8, as
+ * Linux does). Without this the fw exhausts the initial 256 RBDs and RX goes
+ * silent - invisible pre-ALIVE, guaranteed once real traffic flows. On gen2
+ * the fw programs the RFH from the context info at boot, so the register must
+ * not be touched before ALIVE (Linux restocks in fw_alive). */
+static int g_alive;
+static void rx_restock(void)
+{
+    int tgt = ((g_rx_read - 1) & (RXQ_N - 1)) & ~7;
+    if (tgt == g_rx_write) return;
+    if (g_gen2 && !g_alive) return;
+    g_rx_write = tgt;
+    if (!g_mq_rx) w32(FH_RSCSR_RBDCB_WPTR, g_rx_write);
+    else          w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);
 }
 
 static u16 rx_closed(void)
@@ -812,8 +886,9 @@ static const u8 *wait_notif(int group, int cmd, int *out_len, int timeout_ms)
             const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
             rx_process_rb(rb, RB_SIZE, group, cmd, &found, &flen);
             g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
-            if (found) { if (out_len) *out_len = flen; return found; }
+            if (found) { rx_restock(); if (out_len) *out_len = flen; return found; }
         }
+        rx_restock();
         /* FW error? */
         if (!g_gen2 && (r32(CSR_INT) & (CSR_INT_BIT_SW_ERR|CSR_INT_BIT_HW_ERR))) return 0;
         mdelay_(1);
@@ -829,7 +904,7 @@ static int wait_cmd_done(int timeout_ms)
     int t;
     for (t = 0; t < timeout_ms; t++) {
         u16 closed = rx_closed() & (RXQ_N - 1);
-        if (g_rx_read != closed) { g_rx_read = closed; return 0; }
+        if (g_rx_read != closed) { g_rx_read = closed; rx_restock(); return 0; }
         mdelay_(1);
     }
     return -1;
@@ -978,7 +1053,22 @@ static int load_fw_gen2(void)
     w32(CSR_INT, 0xFFFFFFFFu);
     w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);
     g_fh_seen = 0;
-    w64_(CSR_CTXT_INFO_BA, g_ci_phys);         /* kick: device self-loads */
+    w64_(CSR_CTXT_INFO_BA, g_ci_phys);
+    /* Linux continues in the CALLER (iwl_trans_pcie_gen2_start_fw) after the
+     * BA write - the BA write alone does NOT start the boot ROM:
+     *   1. iwl_pcie_set_ltr(): boot-time LTR workaround. Integrated 22000
+     *      (every CNVi AX201, incl. this fleet's Qu/QuZ) programs the HPM
+     *      LTR PRPH pair; the discrete AX200 writes CSR_LTR_LONG_VAL_AD.
+     *   2. UREG_CPU_INIT_RUN = 1 - THE ROM-START DOORBELL. The previous F12
+     *      round removed this write as "spurious" because it is absent from
+     *      iwl_pcie_ctxt_info_init(); it lives in the caller's tail. Without
+     *      it UCODE_LOAD_STATUS stays 0 forever - the exact fleet signature.
+     *      It is a PRPH write, so it also needs MAC access held to land
+     *      (prph_w now grabs; the original write lacked this and read back 0). */
+    if (g_devid == 0x2723) w32(CSR_LTR_LONG_VAL_AD, LTR_LONG_VAL_250US);
+    else { prph_w(HPM_MAC_LTR_CSR, HPM_MAC_LRT_ENABLE_ALL);
+           prph_w(HPM_UMAC_LTR, LTR_LONG_VAL_250US); }
+    prph_w(UREG_CPU_INIT_RUN, 1);              /* kick: device self-loads */
     /* Latch FH_INT for ~200 ms right after the kick: if the ROM's DMA engine
      * runs at all with the now-<4GB arena, we catch it here even if it clears
      * before the ALIVE-timeout autopsy reads the register 2 s later. */
@@ -1053,11 +1143,36 @@ static int load_fw_gen3(void)
     iml = arena_alloc(g_fw.iml_len ? g_fw.iml_len : 4);
     if (g_fw.iml && g_fw.iml_len) memcpy(iml, g_fw.iml, g_fw.iml_len);
     w32(CSR_INT, 0xFFFFFFFFu);
+    w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);    /* gen3 init arms this too (iwl_enable_fw_load_int_ctx_info) */
     w64_(CSR_CTXT_INFO_ADDR, phys(ci));
     w64_(CSR_IML_DATA_ADDR, phys(iml));
     w32(CSR_IML_SIZE_ADDR, g_fw.iml_len);
     set_bit_(CSR_CTXT_INFO_BOOT_CTRL, CSR_AUTO_FUNC_BOOT_ENA);
-    prph_w(0xa05c44, 1);                       /* UMAC UREG_CPU_INIT_RUN */
+    /* start_fw tail (same caller-side sequence the gen2 path was missing):
+     * LTR, then the ROM-start doorbell. On AX210+ UREG_CPU_INIT_RUN sits at
+     * +0x300000 (UMAC PRPH offset) - the old plain-address write hit a
+     * different register, so the Latitude's ROM was never started either.
+     * Discrete Ty (0x2725) takes the CSR LTR write; integrated So/Ma cannot
+     * set LTR from the host (ROM bug), so clear the MSIX IML cause first and
+     * poll it after the doorbell instead (iwl_pcie_spin_for_iml). BZ+ kicks
+     * via FUNC_SCRATCH + GP_CNTRL ROM_START instead of the UREG doorbell. */
+    if (g_devid == 0x2725) w32(CSR_LTR_LONG_VAL_AD, LTR_LONG_VAL_250US);
+    else                   w32(CSR_MSIX_HW_INT_CAUSES_AD, MSIX_HW_IML);
+    if (g_family >= FAM_BZ) {
+        w32(CSR_FUNC_SCRATCH, CSR_FUNC_SCRATCH_INIT);
+        set_bit_(CSR_GP_CNTRL, GP_CNTRL_ROM_START);
+    } else {
+        prph_w(uprph(UREG_CPU_INIT_RUN), 1);
+    }
+    if (g_devid != 0x2725) {                   /* spin for IML load completion */
+        int t;
+        for (t = 0; t < 100; t++) {
+            if (r32(CSR_LTR_LAST_MSG) > 1) break;
+            if (r32(CSR_MSIX_HW_INT_CAUSES_AD) & MSIX_HW_IML) break;
+            mdelay_(1);
+        }
+        w32(CSR_MSIX_HW_INT_CAUSES_AD, MSIX_HW_IML);
+    }
     return 0;
 }
 
@@ -1089,7 +1204,8 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   FH_INT=%08x  fh_after_kick=%08x  (any bit = the ROM's DMA engine ran)",
                           r32(CSR_FH_INT_STATUS), g_fh_seen);
         uno_dbg_net_trace("wifi:   UREG_UCODE_LOAD_STATUS=%08x UREG_CPU_INIT_RUN=%08x",
-                          prph_r(0xa05c40), prph_r(0xa05c44));
+                          prph_r(uprph(UREG_UCODE_LOAD_STATUS)),
+                          prph_r(uprph(UREG_CPU_INIT_RUN)));
         /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
          * not equal what we wrote, the CSR write path (not the fw) is the fault.
          * And confirm the fw sections were placed (dram0 != 0) - a zero there
@@ -1517,7 +1633,8 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
           const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
           rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
           g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
-      } }
+      }
+      rx_restock(); }
     if (g_dq_tail != g_dq_head) {
         int n = g_dataq[g_dq_tail].len;
         if (n > cap) n = cap;
@@ -1666,12 +1783,14 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: firmware ALIVE");
+    g_alive = 1;
+    rx_restock();      /* gen2: first restock happens at alive (fw owns the RFH) */
     if (g_family >= FAM_AX210 && g_pnvm_len) {
         /* gen3: tell the fw to consume the PNVM staged in the prph scratch
          * (UREG_DOORBELL_TO_ISR6, PNVM bit), then wait for the init-complete
          * notification (REGULATORY_AND_NVM group 0x0c, PNVM 0xFE). */
         int nl = 0;
-        prph_w(0xa05c04 /*UREG_DOORBELL_TO_ISR6*/, 1u /*PNVM*/);
+        prph_w(uprph(UREG_DOORBELL_TO_ISR6), 1u /*PNVM*/);
         if (wait_notif(0x0c, 0xFE, &nl, 1000))
             uno_dbg_net_trace("wifi: PNVM accepted (init complete, %d bytes notif)", nl);
         else
