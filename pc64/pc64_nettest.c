@@ -170,6 +170,12 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
                       (unsigned long)(uno_dbg_uptime_ms() - t0), ip4(net_ip(), t));
     uno_dbg_net_trace("%s:   gw %s", what, ip4(net_gw(), t));
     uno_dbg_net_trace("%s:   dns %s", what, ip4(net_dns(), t));
+    /* DHCP-ACK diagnostics: if dns shows the SLIRP default (10.0.2.3), had_dns=0
+     * says option 6 wasn't in the ACK we parsed. A short ack_len with had_rtr=1
+     * (opt 3 present) but had_dns=0 means our RX truncated the ACK after opt 3 -
+     * the AX88179 RX-length suspect; a full ack_len means the router omitted it. */
+    uno_dbg_net_trace("%s:   dhcp-ack: len=%d opt3(rtr)=%d opt6(dns)=%d", what,
+                      net_dhcp_ack_len(), net_dhcp_had_rtr(), net_dhcp_had_dns());
 
     uno_dbg_check("net:ping");
     for (i = 0; i < 3; i++) {

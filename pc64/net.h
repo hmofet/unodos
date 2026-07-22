@@ -22,6 +22,9 @@ int  net_link(void);
 const u8 *net_ip(void);              /* our current IPv4 (u8[4]) */
 const u8 *net_gw(void);              /* gateway (static or DHCP opt 3)  */
 const u8 *net_dns(void);             /* resolver (static or DHCP opt 6) */
+int  net_dhcp_ack_len(void);         /* last DHCP ACK option-area length (diag) */
+int  net_dhcp_had_dns(void);         /* 1 if the ACK carried a usable opt 6 (DNS) */
+int  net_dhcp_had_rtr(void);         /* 1 if the ACK carried opt 3 (router) */
 
 /* DNS: resolve an A record. 1 = out[4] set, 0 = failed/timeout. Synchronous
  * (pumps net_poll internally); call after the link + DHCP are up. */
