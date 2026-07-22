@@ -214,9 +214,13 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
     { unsigned char a[4] = {0,0,0,0};
       if (net_dns_query("example.com", a))
           uno_dbg_net_trace("%s: DNS example.com -> %s", what, ip4(a, t));
-      else
+      else {
           uno_dbg_net_trace("%s: DNS example.com FAILED (resolver %s)", what,
-                            ip4(net_dns(), t)); }
+                            ip4(net_dns(), t));
+          uno_dbg_net_trace("%s:   dns-diag: sent=%d rx=%d badid=%d neg=%d "
+                            "(rx=0 no reply ever arrived; neg>0 forwarder answered negatively)",
+                            what, net_dns_sent(), net_dns_rx(), net_dns_badid(), net_dns_neg());
+      } }
     return 1;
 }
 
