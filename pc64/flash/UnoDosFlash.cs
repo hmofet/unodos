@@ -251,8 +251,7 @@ class FlashForm : Form
             else if (settings.IncludeInteractive) tests.Add("conformance(interactive)");
         }
         if (settings.RunConformance && settings.IncludeInteractive) tests.Add("interactive");
-        if (settings.RunStandard)
-            tests.Add((settings.StressPasses > 0 ? settings.StressPasses + "x" : "endless") + " stress");
+        /* stress suite removed - never summarised */
         if (settings.RunNetwork) {
             if (settings.TestWifi && settings.TestEth) tests.Add("network (auto)");
             else if (settings.TestWifi) tests.Add("WiFi");
@@ -260,7 +259,7 @@ class FlashForm : Form
         }
         if (settings.RunDiagnostics) {
             if (settings.TestMtrr)   tests.Add("MTRR-WC");
-            if (settings.ForceCrash) tests.Add("force-crash");
+            /* crash self-test removed with the stress driver */
         }
         string t = tests.Count == 0 ? "no tests" : string.Join(", ", tests.ToArray());
         var extra = new List<string>();
@@ -642,11 +641,14 @@ class DevForm : Form
         conf.Controls.Add(aApps); conf.Controls.Add(aNetwork);
         y += 158;
 
-        // ---- 2. Stress Test suite (stress driver) --------------------------
-        var std = new GroupBox { Text = "2. Stress Test suite - fuzz driver (app-launch / runner3D / input / FS)",
-                                 Location = new Point(gx, y), Size = new Size(GW, 104) };
+        // ---- 2. Stress Test suite - REMOVED 2026-07-21 (user request) -------
+        // The continuous fuzz driver ran even when unticked and looped forever;
+        // it is disconnected in the OS. The controls stay for layout but are
+        // disabled and force-unticked so the option reads as gone, not broken.
+        var std = new GroupBox { Text = "2. Stress Test suite - REMOVED (disabled in this build)",
+                                 Location = new Point(gx, y), Size = new Size(GW, 104), Enabled = false };
         Controls.Add(std);
-        standardChk = Chk("Run the stress test", s.RunStandard, 12, 20, true);
+        standardChk = Chk("Run the stress test", false, 12, 20, true);
         std.Controls.Add(standardChk);
         std.Controls.Add(new Label { Text = "Passes:", Location = new Point(28, 50), AutoSize = true });
         passesBox = new NumericUpDown { Location = new Point(82, 46), Size = new Size(56, 23),
@@ -654,7 +656,7 @@ class DevForm : Form
         std.Controls.Add(passesBox);
         shutoffChk = Chk("Power off when the run finishes", s.AutoShutoff, 170, 48, false);
         std.Controls.Add(shutoffChk);
-        std.Controls.Add(new Label { Text = "0 passes = endless (F12 stops it). Unticking the suite disables it entirely.",
+        std.Controls.Add(new Label { Text = "The fuzz driver was removed pending a fix; it never runs regardless of this box.",
                                      Location = new Point(28, 76), AutoSize = true, ForeColor = Grey });
         y += 112;
 
@@ -745,22 +747,22 @@ class DevForm : Form
     {
         bool on = devChk.Checked;
         // suite masters + the cross-cutting switch
-        confChk.Enabled = standardChk.Enabled = networkChk.Enabled = diagChk.Enabled =
+        confChk.Enabled = networkChk.Enabled = diagChk.Enabled =
             kitChk.Enabled = zipChk.Enabled = labelBox.Enabled = on;
+        standardChk.Enabled = false;   // Stress Test suite removed - never selectable
         // interactive only means anything when the conformance suite runs
         interactiveChk.Enabled = on && confChk.Checked;
         // per-suite children follow their master
         bool conf = on && confChk.Checked;
         aStorage.Enabled = aSystem.Enabled = aFrameworks.Enabled = aApps.Enabled = aNetwork.Enabled = conf;
-        bool std = on && standardChk.Checked;
-        passesBox.Enabled = shutoffChk.Enabled = std;
+        passesBox.Enabled = shutoffChk.Enabled = false;   // stress suite removed
         bool net = on && networkChk.Checked;
         wifiChk.Enabled = ethChk.Enabled = net;
         bool diag = on && diagChk.Checked;
         mtrrChk.Enabled = diag;
-        // the crash self-test fires on stress pass 1, so it needs the Stress Test
-        // suite armed - without it STRESS.CFG gets `nostress` and it never runs.
-        forceChk.Enabled = diag && standardChk.Checked;
+        // the crash self-test fired on stress pass 1; the stress driver is
+        // removed, so the self-test can never run - keep it disabled.
+        forceChk.Enabled = false;
         kitBox.Enabled = kitBrowse.Enabled = on && kitChk.Checked;
         zipBox.Enabled = zipBrowse.Enabled = destBox.Enabled = on && zipChk.Checked;
     }

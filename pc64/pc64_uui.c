@@ -1954,10 +1954,13 @@ int main(void)
     for (;;) {
         int la, cursor_only = 0;
         uno_dbg_heartbeat();            /* debug build: the watchdog's liveness */
-        pc64_nettest_tick();            /* debug build: network hw test - runs
-                                           once, BEFORE the stress driver, and
+        pc64_nettest_tick();            /* debug build: network hw test + the
+                                           conformance suite, runs once and
                                            blocks this frame while it does */
-        pc64_stress_tick();             /* debug build: the metal stress driver */
+        /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
+         * fuzz driver ran even when unticked / looped forever. Disconnected here
+         * AND hard-disabled in pc64_stress.c so no STRESS.CFG value can revive
+         * it. Conformance + net tests above are unaffected. */
         uno_pc64_poll();
 #ifdef UNO_ACPI
         {
