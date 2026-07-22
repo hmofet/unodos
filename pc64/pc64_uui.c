@@ -1501,6 +1501,15 @@ void pc64_shell_dirty(void) { g_dirty = 1; }
 int  pc64_shell_workarea_w(void) { return FB_W; }
 int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
 
+#ifdef UNO_DEBUG
+/* unoautomate PROBE accessors (unoauto_probe.c): enumerate the open windows.
+ * Titles are string literals, so the returned pointer is stable. */
+int pc64_shell_win_count(void) { return UI.nwin; }
+const char *pc64_shell_win_title(int i)
+{ return (i >= 0 && i < UI.nwin) ? UI.win[i]->title : 0; }
+int pc64_shell_win_focused(int i) { return i == UI.focus_win; }
+#endif
+
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
 int pc64_shell_font_mono(void)
 {

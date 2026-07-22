@@ -139,13 +139,7 @@ int unoauto_test_run(const char *suite, void *ctx, char *report, int cap)
     return fail;
 }
 
-/* ---- PROBE / HOOK / DRIVE: Stage 2 stubs -------------------------------- */
-int unoauto_probe(UnoAutoProbeEnt *out, int max)
-{
-    (void)out; (void)max;
-    return 0;                       /* nothing enumerable yet */
-}
-
+/* ---- HOOK / DRIVE: Stage 2 stubs (PROBE lives in unoauto_probe.c) ------- */
 typedef struct { const char *point; UnoAutoHookFn fn; void *user; } UaHook;
 static UaHook ua_hooks[UA_HOOK_MAX];
 

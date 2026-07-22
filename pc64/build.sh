@@ -153,6 +153,8 @@ if [ "$1" != "legacy" ]; then
         # The legacy harness above delegates into it; see unoauto.h.
         pc "$CC" $UCF $DBGSAN -c -o "build/unoauto.o" "unoauto.c"
         OBJS="$OBJS build/unoauto.o"
+        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_probe.o" "unoauto_probe.c"
+        OBJS="$OBJS build/unoauto_probe.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
