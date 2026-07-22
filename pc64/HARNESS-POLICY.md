@@ -85,6 +85,11 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-21 - (no bump, EXPERIMENTAL)**: `UnoAutoProbeEnt` redesigned -
+  kind-specific `v1`/`v2` detail fields replace `busy_cyc`; row schema
+  documented in `unoauto.h`. PROBE is implemented now (`unoauto_probe.c`):
+  subsystem rows (heap/net/fs/shell), open windows with draw costs, the
+  .UNO module roster.
 - **2026-07-21 - UNOAUTO_API 1** (initial): LOG (channels, `unoauto_log`/
   `unoauto_vlog`, `unoauto_sink_add`/`_remove`) and TEST
   (`unoauto_test_register`, `unoauto_test_run(suite, ctx, report, cap)`)
