@@ -26,9 +26,29 @@
 #ifndef UNOAUTO_H
 #define UNOAUTO_H
 
+/* ---- THE CONTRACT ---------------------------------------------------------
+ * This header is the interface contract between unoautomate and every other
+ * agent/subsystem building against it.  Each section below is marked:
+ *
+ *   [STABLE]        name, signature and semantics are FROZEN.  A breaking
+ *                   change to a STABLE item must (a) ship the new name
+ *                   alongside the old one, with the old kept as a deprecated
+ *                   wrapper for one transition window, (b) bump UNOAUTO_API,
+ *                   (c) get a dated entry in HARNESS-POLICY.md "API
+ *                   changelog".  Names are never repurposed with different
+ *                   semantics.
+ *   [EXPERIMENTAL]  may change or disappear between rebases without a
+ *                   version bump.  Usable, but re-read this header after
+ *                   every pull before relying on one.
+ *
+ * The legacy uno_dbg_* entry points (uno_debug.h) are wrappers over this
+ * core and inherit [STABLE].  If UNOAUTO_API moved after a pull, read the
+ * changelog before building. */
+#define UNOAUTO_API 1
+
 #ifdef UNO_DEBUG
 
-/* ---- LOG: channelled structured logging --------------------------------- */
+/* ---- LOG: channelled structured logging ------------------------ [STABLE] */
 typedef enum {
     UA_CH_KERNEL = 0,   /* boot, memory, faults        (was uno_dbg_log)      */
     UA_CH_NET,          /* drivers + stack             (was uno_dbg_net_trace)*/
@@ -50,7 +70,7 @@ typedef void (*UnoAutoSinkFn)(UnoAutoChan ch, const char *line, void *user);
 int  unoauto_sink_add(unsigned mask, UnoAutoSinkFn fn, void *user);
 void unoauto_sink_remove(int id);
 
-/* ---- TEST: the registered suite runner ----------------------------------
+/* ---- TEST: the registered suite runner ------------------------- [STABLE]
  * SPECTEST's suites are registrations against this table instead of clauses
  * inside one monolithic run function - enumerable, individually runnable
  * (the future Python `unoauto.test.run("storage")`).  ctx is per-run scratch
@@ -62,7 +82,7 @@ typedef int (*UnoAutoTestFn)(void *ctx);
 int  unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn);
 int  unoauto_test_run(const char *suite_or_null, void *ctx, char *report, int cap);
 
-/* ---- PROBE: observe processes/threads/modules (Stage 2) ------------------
+/* ---- PROBE: observe processes/threads/modules (Stage 2) -- [EXPERIMENTAL]
  * The one enumeration surface for "what is the system doing":  loaded .UNO
  * modules, live UnoUuiApp instances, the main-loop phase, per-window draw
  * costs, net-stack socket states.  Snapshot-based - fill caller memory, no
@@ -75,7 +95,7 @@ typedef struct {
 } UnoAutoProbeEnt;
 int unoauto_probe(UnoAutoProbeEnt *out, int max);
 
-/* ---- HOOK: intercept a call surface (Stage 2) ----------------------------
+/* ---- HOOK: intercept a call surface (Stage 2) ------------ [EXPERIMENTAL]
  * Named tap points (e.g. "net.tx", "fat.write", "uui.action") that a script
  * or test can attach to for tracing, latency accounting, or fault
  * injection.  The oom-every-Nth-malloc knob becomes a hook client. */
@@ -84,7 +104,7 @@ int  unoauto_hook_add(const char *point, UnoAutoHookFn fn, void *user);
 void unoauto_hook_remove(int id);
 void unoauto_hook_fire(const char *point, void *arg);   /* producers call     */
 
-/* ---- DRIVE: scripted automation (Stage 2) --------------------------------
+/* ---- DRIVE: scripted automation (Stage 2) ---------------- [EXPERIMENTAL]
  * UI event injection reuses uno_pc64_inject_key/_pointer (uno_debug.h).
  * The Python binding surfaces this whole header as an `unoauto` module via
  * the PYRT PyHost (pyhost.h): scripts enumerate probes, attach hooks, drive

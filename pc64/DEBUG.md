@@ -39,9 +39,9 @@ PYRT PyHost. **New diagnostics should go through `unoauto_*`**:
 legacy entry points (`uno_dbg_log`, `uno_dbg_net_trace`, the SPECTEST
 areas) are thin wrappers over the same core and keep working unchanged -
 output files (`NETLOG.TXT`, `SPECTEST.TXT`) are byte-identical. See
-`HARNESS-POLICY.md` (untracked, in the debug worktree) for the coexistence
-rules while the build-out runs, and `UNOAUTOMATE-REQUESTS.md` for asking
-the unoautomate agent for new harness capabilities.
+`HARNESS-POLICY.md` for the coexistence rules and the API contract
+(stability tiers + `UNOAUTO_API` + changelog), and `UNOAUTOMATE-REQUESTS.md`
+for asking the unoautomate agent for new harness capabilities.
 
 ## Building
 
