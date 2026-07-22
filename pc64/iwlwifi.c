@@ -251,6 +251,14 @@ static int  g_family;
 #define HIPM_CR_PG_EN            (1u<<0)
 #define HIPM_CR_SLP_EN           (1u<<1)
 #define HIPM_CR_FORCE_ACTIVE     (1u<<10)
+/* Interrupt-mode chicken register: BOTH working drivers (Linux
+ * iwl_pcie_conf_msix_hw, OpenBSD iwx_conf_msix_hw) program this on every
+ * mq-rx part before the load - MSI_ENABLE when not using MSI-X. Same UREG
+ * block as the CPU_INIT_RUN doorbell, and unlike the doorbell it is a
+ * readable config register, so its readback answers "do UREG-block writes
+ * land at all" (round-3 open question). */
+#define UREG_CHICK               0xa05c00
+#define UREG_CHICK_MSI           (1u<<24)
 
 static u32 uprph(u32 reg) { return g_family >= FAM_AX210 ? reg + UMAC_PRPH_OFFSET : reg; }
 static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) */
@@ -1179,6 +1187,10 @@ static int load_fw_gen2(void)
     w32(CSR_INT, 0xFFFFFFFFu);
     w32(CSR_INT_MASK, CSR_INT_FWLOAD_MASK);
     g_fh_seen = 0;
+    /* OpenBSD iwx does the ENTIRE kick tail (BA write, LTR, doorbell) under
+     * ONE nic lock; we used to grab/release around each PRPH write. Hold one
+     * grab across the whole tail (inner prph_w calls nest via the refcount). */
+    { int gk = grab_nic();
     w64_(CSR_CTXT_INFO_BA, g_ci_phys);
     /* Linux continues in the CALLER (iwl_trans_pcie_gen2_start_fw) after the
      * BA write - the BA write alone does NOT start the boot ROM:
@@ -1204,13 +1216,14 @@ static int load_fw_gen2(void)
      * lands and the ROM consumes/clears it" (instant=1, later=0: doorbell OK,
      * dig into ctxt-info/fw validation) from "this register still refuses the
      * write" (instant=0: power/ownership path again). */
-    { u32 v0, v1; int g = grab_nic();
-      prph_w_ng(UREG_CPU_INIT_RUN, 1);
-      v0 = prph_r_ng(UREG_CPU_INIT_RUN);
-      if (g == 0) release_nic();
+    { u32 v0, v1;
+      prph_w(UREG_CPU_INIT_RUN, 1);
+      v0 = prph_r(UREG_CPU_INIT_RUN);
+      if (gk == 0) release_nic();     /* end of the one-grab kick tail */
       mdelay_(10);
       v1 = prph_r(UREG_CPU_INIT_RUN);
-      uno_dbg_net_trace("wifi: doorbell CPU_INIT_RUN: instant=%08x +10ms=%08x", v0, v1); }
+      uno_dbg_net_trace("wifi: doorbell CPU_INIT_RUN: instant=%08x +10ms=%08x "
+                        "(register may be write-only - UREG_CHICK is the write-lands proof)", v0, v1); } }
     /* Latch FH_INT for ~200 ms right after the kick: if the ROM's DMA engine
      * runs at all with the now-<4GB arena, we catch it here even if it clears
      * before the ALIVE-timeout autopsy reads the register 2 s later. */
@@ -1915,6 +1928,11 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
+    if (g_mq_rx) {                   /* legacy-INTA parity: UREG_CHICK = MSI */
+        prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
+        uno_dbg_net_trace("wifi: UREG_CHICK<=MSI readback=%08x (bit24 set = UREG-block writes land)",
+                          prph_r(uprph(UREG_CHICK)));
+    }
     nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
     if (g_gen2) set_bit_(CSR_MAC_SHADOW_REG_CTRL, 0x800FFFFF);
