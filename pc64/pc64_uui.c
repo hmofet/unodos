@@ -24,6 +24,7 @@
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
 #include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
+#include "netdisc.h"         /* zero-config LAN discovery (no-op in prod) */
 #ifdef UNO_DEBUG
 unsigned long long uno_native_rdtsc(void);
 #endif
@@ -2072,6 +2073,8 @@ int main(void)
                                            blocks this frame while it does */
         unoauto_remote_tick();          /* debug build: pump the dev-PC remote
                                            link (armed by unoauto_remote_boot) */
+        netdisc_tick();                 /* debug build: zero-config LAN discovery
+                                           (armed by netdisc_boot) */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no STRESS.CFG value can revive
