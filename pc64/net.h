@@ -46,6 +46,16 @@ int  net_ping_ms(void);              /* poll-count round trip of the last ping *
 int  net_udp_send(const u8 dst[4], u16 dport, u16 sport,
                   const void *data, int len);
 int  net_udp_recv(u16 sport, void *buf, int cap, u8 src[4], u16 *src_port);
+/* Send a datagram to the limited broadcast address 255.255.255.255 via a
+ * directly-built broadcast Ethernet frame (ARP can't resolve a broadcast IP).
+ * Binds `sport` as a side effect so a unicast reply is queued for recv. */
+int  net_udp_broadcast(u16 dport, u16 sport, const void *data, int len);
+/* Open a receive-only UDP port (bind without sending). Inbound datagrams to
+ * `port` - including broadcast - are then queued for net_udp_recv(port,...). */
+void net_udp_listen(u16 port);
+/* Our directed subnet broadcast address (network | ~mask), u8[4]. Some links
+ * prefer this over 255.255.255.255; discovery uses the limited form by default. */
+const u8 *net_broadcast(void);
 
 /* TCP (one active connection) */
 int  net_tcp_connect(const u8 dst[4], u16 dport);

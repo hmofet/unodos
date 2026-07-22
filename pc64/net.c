@@ -264,6 +264,36 @@ int net_udp_send(const u8 dst[4], u16 dport, u16 sport, const void *data, int le
     return nic_tx(flen);
 }
 
+/* Limited broadcast (255.255.255.255). ARP cannot resolve a broadcast IP, so
+ * build the Ethernet + IP + UDP frame directly with a broadcast dst MAC - the
+ * same technique the DHCP path uses. Source is MYIP (0.0.0.0 before a lease).
+ * Binds `sport` so a peer's unicast reply is queued for net_udp_recv. */
+int net_udp_broadcast(u16 dport, u16 sport, const void *data, int len)
+{
+    static const u8 bcast_mac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    static const u8 bcast_ip[4]  = {255,255,255,255};
+    u8 *ip = g_tx + 14, *udp = ip + 20;
+    int total, flen;
+    u32 seed;
+    if (len < 0) len = 0;
+    if (len > 512) len = 512;
+    udp_bind(sport);
+    wr16(udp + 0, sport); wr16(udp + 2, dport);
+    wr16(udp + 4, (u16)(8 + len)); wr16(udp + 6, 0);
+    memcpy(udp + 8, data, len);
+    seed = pseudo_seed(MYIP, bcast_ip, 17, 8 + len);
+    { u16 c = cksum(udp, 8 + len, seed); wr16(udp + 6, c ? c : 0xFFFF); }
+    ip[0] = 0x45; ip[1] = 0; wr16(ip + 2, (u16)(28 + len));
+    wr16(ip + 4, g_ipid++); wr16(ip + 6, 0); ip[8] = 64; ip[9] = 17;
+    wr16(ip + 10, 0); memcpy(ip + 12, MYIP, 4); memcpy(ip + 16, bcast_ip, 4);
+    wr16(ip + 10, cksum(ip, 20, 0));
+    total = 28 + len;
+    flen = eth_build(bcast_mac, 0x0800, total);
+    return nic_tx(flen);
+}
+
+void net_udp_listen(u16 port) { udp_bind(port); }
+
 int net_udp_recv(u16 sport, void *buf, int cap, u8 src[4], u16 *src_port)
 {
     int i;
@@ -592,6 +622,28 @@ void dhcp_input(const u8 *udp, int len)
 }
 
 /* ======================= dispatch ======================================= */
+/* A destination we should accept: our unicast IP, the limited broadcast
+ * 255.255.255.255, or a directed subnet broadcast (host bits all-ones on our
+ * own network). Lets broadcast discovery/beacons reach a bound udp port. */
+static int ip_is_bcast(const u8 d[4])
+{
+    int i, all = 1, sub = 1;
+    for (i = 0; i < 4; i++) {
+        if (d[i] != 255) all = 0;
+        if ((u8)(d[i] | MASK[i]) != 0xFF) sub = 0;              /* a host bit is 0 */
+        if ((d[i] & MASK[i]) != (MYIP[i] & MASK[i])) sub = 0;   /* different network */
+    }
+    return all || sub;
+}
+
+static u8 g_bcast[4];
+const u8 *net_broadcast(void)
+{
+    int i;
+    for (i = 0; i < 4; i++) g_bcast[i] = (u8)(MYIP[i] | ~MASK[i]);
+    return g_bcast;
+}
+
 static void ip_recv(const u8 *ip, int len)
 {
     int hl = (ip[0] & 0x0F) * 4;
@@ -605,7 +657,7 @@ static void ip_recv(const u8 *ip, int len)
     if (tot > len) tot = len;
     plen = tot - hl;
     if (plen < 0) return;
-    if (!ip_eq(ip + 16, MYIP) && !(ip[16]==255&&ip[17]==255)) {
+    if (!ip_eq(ip + 16, MYIP) && !ip_is_bcast(ip + 16)) {
         /* not for us (and not broadcast) - but accept during DHCP (no IP yet) */
         if (g_dhcp_state && g_dhcp_state < 3) { /* allow */ }
         else return;
