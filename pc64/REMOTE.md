@@ -8,27 +8,32 @@ as the rest of unoautomate); in production every entry point compiles away.
 
 ## Shape
 
-pc64's TCP stack is single-connection and **client-only** (`net_tcp_connect`,
-no listen), so **pc64 dials OUT** to a listener on the dev PC. You put the dev
-PC's address in the stick's `STRESS.CFG`:
+**pc64 dials OUT** to a listener on the dev PC. You put the dev PC's address in
+the stick's `STRESS.CFG`:
 
 ```
-remote=<ip>:<port>
+remote=<ip>:<port>       # static address
+discover                 # OR zero-config: find the dev PC by broadcast
 ```
 
-On a debug boot, once the boot net test releases the single TCP connection
-(`automate_start` in `pc64_nettest.c`), `unoauto_remote_boot()` reads that key,
-brings the NIC up (`pc64_net_up`), and dials. The link is pumped every shell
-frame by `unoauto_remote_tick()` (added next to `pc64_nettest_tick` in
-`pc64_uui.c`). If the connection drops it reconnects with a short backoff.
+On a debug boot, once the boot net test releases the connection (`automate_start`
+in `pc64_nettest.c`), `unoauto_remote_boot()` reads the key, brings the NIC up
+(`pc64_net_up`), and dials. The link is pumped every shell frame by
+`unoauto_remote_tick()` (next to `pc64_nettest_tick` in `pc64_uui.c`). If the
+connection drops it reconnects with a short backoff.
 
-> **Auto-discovery is deferred.** pc64 can't yet *send* an L2 broadcast (ARP
-> routes `255.255.255.255` to the gateway MAC; only the DHCP path hand-builds a
-> true broadcast frame). Broadcast discovery arrives with the fuller ARP/UDP
-> stack - see the request in `UNOAUTOMATE-REQUESTS.md`. Until then, set the IP.
+> **Zero-config discovery.** With `discover` set and no `remote=` key, pc64
+> broadcasts a UNODISC PROBE on the LAN (`netdisc`, see `NETSTACK.md`); a dev PC
+> running the listener answers with an OFFER carrying its ip:port, and pc64
+> dials it automatically — no address to type. (The old ARP/broadcast limitation
+> that deferred this is fixed: `net_udp_broadcast` now hand-builds a true
+> broadcast frame, and `ip_recv` accepts inbound broadcast.)
 
-> **One connection.** The remote link shares the single TCP connection with the
-> Browser / AI apps, so they are mutually exclusive with an active link.
+> **Multiple connections.** The remote link now runs on its **own socket**
+> (`net_socket`, from the multi-connection layer in `netsock.h`), not the shared
+> legacy `net_tcp_*` slot — so the Browser / AI apps can hold a TCP connection
+> at the same time as an active link. The stack (`net.c`) supports many
+> simultaneous connections and can `listen`/`accept` inbound ones.
 
 > **Security.** Plaintext, **LAN-only by intent**. Do not expose the listener
 > to an untrusted network; it can drive input, launch apps, run Python, and
