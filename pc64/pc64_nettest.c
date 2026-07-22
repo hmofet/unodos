@@ -373,6 +373,32 @@ static void nettest_finish(void)
     }
 }
 
+/* ---- unoautomate boot runner ----------------------------------------------
+ * STRESS.CFG key `automate` + an AUTOMATE.PY at any volume root = run it as
+ * a Python app once the boot-test phase ends.  The script's tick() drives
+ * the automation (see upy_port/mod_unoauto.c); it powers the machine off
+ * itself via unoauto.poweroff() when it finishes an unattended run. */
+int pc64_shell_run_py(int vol, const char *path);      /* pc64_uui.c (debug) */
+const char *pc64_shell_py_error(void);
+
+static void automate_start(void)
+{
+    int i, n;
+    if (pc64_stress_cfg_flag("automate") <= 0) return;
+    n = uno_fs_volumes();
+    for (i = 0; i < n; i++)
+        if (uno_fs_size(i, "AUTOMATE.PY") > 0) {
+            int rc;
+            uno_dbg_log("unoauto: running AUTOMATE.PY (vol %d)", i);
+            rc = pc64_shell_run_py(i, "AUTOMATE.PY");
+            if (rc != 0)
+                uno_dbg_log("unoauto: AUTOMATE.PY failed (%d): %s",
+                            rc, pc64_shell_py_error());
+            return;
+        }
+    uno_dbg_log("unoauto: automate set but no AUTOMATE.PY on any volume");
+}
+
 void pc64_nettest_tick(void)
 {
     static int done, frames;
@@ -395,12 +421,15 @@ void pc64_nettest_tick(void)
     if (pc64_stress_cfg_flag("spec") > 0)
         pc64_spectest_run();
     flag = pc64_stress_cfg_flag("nonet");
-    if (flag < 0) { uno_dbg_progress_done(); return; }   /* not a test stick */
+    if (flag < 0) { uno_dbg_progress_done(); automate_start(); return; }
+                                         /* not a test stick (but automation
+                                            may still be configured)          */
     if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)");
-                    nettest_finish(); return; }          /* spec-only stick still powers off */
+                    nettest_finish(); automate_start(); return; }
     g_active = 1;
     run_test();
     flush();
     g_active = 0;
     nettest_finish();                    /* banner back, then power off if asked */
+    automate_start();                    /* unreached if nettest_finish powered off */
 }

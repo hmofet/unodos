@@ -82,6 +82,21 @@ static void mdbg(const char *s) { (void)s; }
  * actually reference plus the stable Toolbox/libc surface.  build.sh greps
  * the KX() names out of this file to verify every module import resolves. */
 #define KX(n) { #n, (void *)&n }
+#ifdef UNO_DEBUG
+/* the unoautomate DRIVE surface exported below (unoauto_* come from
+ * unoauto.h; the rest are debug-only accessors with no public header) */
+long unoauto_deadline_left(void);        /* 23-char alias (unoauto.c) */
+void uno_pc64_inject_key(int scan, int uni, int ctrl);
+void uno_pc64_inject_pointer(int x, int y, int btn);
+int  pc64_shell_app_count(void);
+int  pc64_shell_launch(int a);
+void pc64_shell_close_top(void);
+int  pc64_shell_win_count(void);
+const char *pc64_shell_win_title(int i);
+int  pc64_shell_win_focused(int i);
+void uno_pc64_shutdown(void);
+unsigned long long uno_dbg_uptime_ms(void);
+#endif
 static const struct { const char *name; void *addr; } kExports[] = {
     /* Toolbox geometry + drawing (mac_compat.c) */
     KX(SetRect),   KX(OffsetRect), KX(InsetRect),  KX(PtInRect),
@@ -174,6 +189,17 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(logf), KX(log2f), KX(log10f), KX(log1pf), KX(powf), KX(sqrtf), KX(cbrtf),
     KX(floorf), KX(ceilf), KX(truncf), KX(roundf), KX(fabsf), KX(fmodf),
     KX(copysignf), KX(ldexpf), KX(frexpf), KX(modff), KX(nearbyintf), KX(rintf),
+#ifdef UNO_DEBUG
+    /* ---- unoautomate DRIVE surface (debug builds only) --------------------
+     * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these; the
+     * prod PYRT compiles that module to stubs, so a prod PYRT.UNO never
+     * imports them and the prod export table stays clean. */
+    KX(unoauto_log), KX(unoauto_probe), KX(unoauto_deadline_left),
+    KX(uno_pc64_inject_key), KX(uno_pc64_inject_pointer),
+    KX(pc64_shell_app_count), KX(pc64_shell_launch), KX(pc64_shell_close_top),
+    KX(pc64_shell_win_count), KX(pc64_shell_win_title), KX(pc64_shell_win_focused),
+    KX(uno_pc64_shutdown), KX(uno_dbg_uptime_ms),
+#endif
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
@@ -462,6 +488,13 @@ int uno_mod_load_pyapp(int vol, const char *path, const unsigned char **src, int
 {
     const UnoModHdr *h = (const UnoModHdr *)gModBuf;
     long n = uno_fs_read(vol, path, gModBuf, MODBUF_MAX);
+#ifdef UNO_DEBUG
+    /* unoautomate door (debug only): a RAW .py source file - plain text can
+     * never carry the UNO magic, so its whole content is the payload.  Lets
+     * an operator drop AUTOMATE.PY on a stick with no container step. */
+    if (n > 0 && n >= (long)sizeof *h && h->magic != UNO_MOD_MAGIC)
+    { *src = gModBuf; *len = (int)n; return 0; }
+#endif
     if (n < (long)sizeof *h)                   { mdbg("pyapp: not found\n"); return -1; }
     if (h->magic != UNO_MOD_MAGIC)             { mdbg("pyapp: bad magic\n"); return -1; }
     if (h->abi != UNO_ABI_VERSION)             { mdbg("pyapp: bad abi\n");   return -1; }

@@ -133,6 +133,8 @@ long unoauto_deadline_left_ms(void)
     now = uno_dbg_uptime_ms();
     return now >= ua_deadline_at ? 0 : (long)(ua_deadline_at - now);
 }
+/* alias: .UNO import names cap at 23 chars and _left_ms is 24 */
+long unoauto_deadline_left(void) { return unoauto_deadline_left_ms(); }
 
 int unoauto_test_run(const char *suite, void *ctx, char *report, int cap)
 {

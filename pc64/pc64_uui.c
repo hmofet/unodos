@@ -22,6 +22,7 @@
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
+#include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
 #ifdef UNO_DEBUG
 unsigned long long uno_native_rdtsc(void);
 #endif
@@ -1520,6 +1521,18 @@ int pc64_shell_win_count(void) { return UI.nwin; }
 const char *pc64_shell_win_title(int i)
 { return (i >= 0 && i < UI.nwin) ? UI.win[i]->title : 0; }
 int pc64_shell_win_focused(int i) { return i == UI.focus_win; }
+
+/* unoautomate DRIVE accessors: launch/close through the exact code paths the
+ * launcher click and the title-bar close box use.  EX_PYAPP/EX_USERAPP are
+ * refused - launching those would displace the automation script itself. */
+int pc64_shell_app_count(void) { return NAPPS; }
+int pc64_shell_launch(int a)
+{
+    if (a < 0 || a >= NAPPS || a == EX_PYAPP || a == EX_USERAPP) return 0;
+    open_app(a);
+    return 1;
+}
+void pc64_shell_close_top(void) { close_focused(); }
 #endif
 
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
@@ -1560,6 +1573,13 @@ static int pc64_shell_run_python(int vol, const char *path)
     open_app(EX_PYAPP);
     return 0;
 }
+
+#ifdef UNO_DEBUG
+/* unoautomate: run a Python source/container directly (peek_flags cannot see
+ * a raw .py - no magic - so the automation runner comes in through here). */
+int pc64_shell_run_py(int vol, const char *path)
+{ return pc64_shell_run_python(vol, path); }
+#endif
 
 int pc64_shell_run_user(int vol, const char *path)
 {
@@ -1616,6 +1636,9 @@ static void rebuild_shell(void)
 static void on_action(const unoui_action *a)
 {
     if (!a->changed) return;
+    /* unoautomate tap: scripts observe every widget action (no-op in prod) */
+    { UnoAutoUiEv ev; ev.id = a->id; ev.kind = a->kind; ev.value = a->value;
+      unoauto_hook_fire("uui.action", &ev); }
     g_dirty = 1;
     if (a->kind == UI_ACT_CLOSE) { close_focused(); return; }   /* title-bar close box */
     if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
