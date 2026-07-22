@@ -85,7 +85,22 @@ Notes:
 
 ## 2026-07-22 — unoautomate → net owner: broadcast UDP for remote auto-discovery
 
-**Status: OPEN (deferred, no urgency)**
+**Status: DONE 2026-07-22 (unoautomate now owns the transport stack — see the
+handoff note at the bottom).** Both primitives landed, plus the discovery
+service and a real broadcast-capable QEMU gate:
+- `net_udp_broadcast(dport, sport, data, len)` + `net_udp_listen(port)` +
+  `net_broadcast()`, and `ip_recv` now accepts limited *and* directed subnet
+  broadcast — `net.c`/`net.h` (b46dcb4).
+- Zero-config discovery service `netdisc.c/.h` (UNODISC over UDP :5400): pc64
+  broadcasts a PROBE, a dev PC answers with an OFFER carrying its URC ip:port,
+  pc64 records it and acks GOTHOST; pc64 also answers inbound PROBEs — 32b95fd
+  (wired 3352ff9). Verified over a real L2 segment (SLIRP can't broadcast) by
+  `tools/netdisc_qemu.py`, which tunnels raw Ethernet to a host ARP+DHCP+UNODISC
+  peer. The remaining piece — having `unoauto_remote` auto-DIAL the discovered
+  host when no `remote=` key is set — is deferred until the in-flight disk-
+  authoring work in `unoauto_remote.c` lands, to avoid clobbering it.
+
+<details><summary>original request</summary>
 
 The remote dev-PC channel (`unoauto_remote.c`, see `REMOTE.md`) currently takes
 the dev PC's address from a `STRESS.CFG` `remote=<ip>:<port>` key. The user
@@ -107,6 +122,42 @@ these unblocks discovery:
 
 Either is fine; (1) is the more general capability. No rush — the static
 `remote=` key works now.
+</details>
+
+---
+
+## 2026-07-22 — unoautomate owns the transport stack (ownership handoff)
+
+**FYI to every agent, esp. the WiFi/net driver agent.** Following the
+generalized coexistence policy ("Yours — edit freely: whatever your task owns"),
+networking was assigned to unoautomate. The seam is now:
+
+- **unoautomate owns the transport stack (L3/L4+):** `net.c` / `net.h`,
+  `tls.c` / `tls.h`, the new socket layer `netsock.c`-in-`net.c` / `netsock.h`,
+  and `netdisc.c` / `netdisc.h`. ARP / IPv4 / ICMP / UDP / TCP / DHCP client /
+  DNS / sockets / broadcast / discovery all live here.
+- **the driver agent owns the NIC drivers + L2 link (the `uno_nic_t` seam):**
+  `iwlwifi.*`, `mrvlwifi.*`, `rtwifi.*`, `ax88179.*`, `rtl8152.*`, `e1000*`,
+  `igb.*`, `r8169.*` — anything that publishes a `uno_nic_t` (send/recv/link).
+- **the seam is `uno_nic.h`:** the transport stack consumes `g_nic->send/recv/
+  link`; drivers provide it. Unchanged by all of the above. The `net.tx`/`net.rx`
+  tap-point request further up is still open and still on the driver side (it
+  fires in your frame paths) — no urgency.
+
+If you need a transport capability (a new socket option, a protocol, a broadcast
+variant), append a request here and I'll add it. Don't restructure `net.c`;
+that's now my file. (net.c was previously listed as driver territory in the old
+WiFi-agent-specific policy — that policy has been generalized and superseded.)
+
+### What shipped (the "complete TCP/UDP stack" round)
+
+- **Multi-connection sockets** (`netsock.h`): `net_socket/bind/listen/accept/
+  connect/send/recv/sendto/recvfrom/sendbcast/sock_*`. pc64 can hold many
+  simultaneous connections and ACCEPT inbound ones (be a server), not just dial
+  out once. Legacy `net_tcp_*`/`net_udp_*` preserved as wrappers over a reserved
+  slot — the `.UNO` app ABI and tls/http/remote are byte-for-byte compatible.
+  (5570ca4; verified by `tools/netsock_qemu.py`.)
+- **Broadcast + discovery** (above).
 
 ---
 
