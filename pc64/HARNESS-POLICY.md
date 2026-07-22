@@ -85,6 +85,22 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-22 - (no bump, EXPERIMENTAL)**: the remote channel is live - a
+  bidirectional dev-PC link (remote logging + control). New files
+  `unoauto_remote.h/.c` (consume only the public net API; no `net.c` edits);
+  `unoauto_remote_boot/tick/active/send/recv/stop`. pc64 dials the dev PC from
+  a `STRESS.CFG` `remote=<ip>:<port>` key; the wire protocol (URC) is in
+  `REMOTE.md`. On-device `unoauto.remote_active/send/recv/stop` added to the
+  Python module (inert stubs in prod). **PyHost ABI bumped 1 → 2**: added
+  `run_src` (exec a Python source string, capture stdout) to the `PyHost`
+  vtable in `pyhost.h`; kernel + PYRT.UNO rebuild together so the loader's abi
+  check stays matched. Frozen-core touches were append-only: one
+  `unoauto_remote_tick()` in the `pc64_uui.c` frame loop and one
+  `unoauto_remote_boot()` in `pc64_nettest.c`'s `automate_start`. Gates:
+  `tools/remote_proto_test.py` (protocol unit), `tools/remote_qemu.py` (e2e:
+  log stream + probe + `py`→42 + launch); SPECTEST unchanged (65/0/4).
+  Broadcast auto-discovery is deferred - request filed in
+  `UNOAUTOMATE-REQUESTS.md`.
 - **2026-07-21 - (no bump, EXPERIMENTAL)**: DRIVE is live - Python-scripted
   automation. `import unoauto` in any Python app (PYRT):
   log/probe/key/pointer/apps/launch/close_top/uptime/deadline_left/
