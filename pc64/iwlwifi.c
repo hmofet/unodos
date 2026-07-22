@@ -2248,13 +2248,28 @@ static int iommu_disable(char *out, int cap)
         if (!sl) break;
         if (type == 0) {                          /* DRHD */
             u64 base = rdp64(dmar + off + 8);
-            u32 gsts = rdp32(base + 0x1c);
+            u32 gsts = rdp32(base + 0x1c), pmen;
+            int acted = 0;
             if (gsts & 0x80000000u) {             /* TES on -> disable TE */
                 wrp32(base + 0x18, gsts & 0x16800000u);   /* keep EAFL/QIE/IRE/CFI, clear TE */
                 for (i = 0; i < 100000 && (rdp32(base + 0x1c) & 0x80000000u); i++) ;
+                acted = 1;
+            }
+            /* Disable Protected Memory Regions (PMEN reg @0x64). This is the
+             * boot-DMA-protection that blocks DMA to protected physical ranges
+             * REGARDLESS of translation - the likely reason clearing TES alone
+             * did not unblock the device DMA. Clear EPM (bit31), poll PRS (bit0). */
+            pmen = rdp32(base + 0x64);
+            if (pmen & 0x80000000u) {
+                wrp32(base + 0x64, pmen & ~0x80000000u);
+                for (i = 0; i < 100000 && (rdp32(base + 0x64) & 1u); i++) ;
+                acted = 1;
+            }
+            if (acted) {
                 done++;
-                if (o) { o = dm_s(o, "disabled@"); o = dm_h(o, (u32)base);
-                         o = dm_s(o, " GSTS->"); o = dm_h(o, rdp32(base + 0x1c)); o = dm_s(o, " "); }
+                if (o) { o = dm_s(o, "unit@"); o = dm_h(o, (u32)base);
+                         o = dm_s(o, " GSTS->"); o = dm_h(o, rdp32(base + 0x1c));
+                         o = dm_s(o, " PMEN->"); o = dm_h(o, rdp32(base + 0x64)); o = dm_s(o, " "); }
             }
         }
         off += sl;
