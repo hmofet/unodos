@@ -168,23 +168,45 @@ static u32 g_prph_mask = 0x000FFFFF;   /* 0x00FFFFFF on AX210+ */
 static int grab_nic(void);
 static void release_nic(void);
 
+/* _ng = no-grab: for the few pre-APM accesses Linux does with the
+ * iwl_*_umac_prph_no_grab variants (persistence bit), where MAC access
+ * cannot be grabbed yet. Everything else goes through the grabbing pair. */
+static void prph_w_ng(u32 reg, u32 v)
+{
+    w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24));
+    w32(HBUS_TARG_PRPH_WDAT, v);
+}
+static u32 prph_r_ng(u32 reg)
+{
+    w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24));
+    return r32(HBUS_TARG_PRPH_RDAT);
+}
 static void prph_w(u32 reg, u32 v)
 {
     int g = grab_nic();
-    w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24));
-    w32(HBUS_TARG_PRPH_WDAT, v);
+    prph_w_ng(reg, v);
     if (g == 0) release_nic();
 }
-/* used only by the UNO_DEBUG ALIVE-timeout autopsy; keep it out of the
- * production build's unused-function warning. */
+/* referenced by trace/autopsy call sites that compile away in production */
 __attribute__((unused))
 static u32  prph_r(u32 reg)
 {
     u32 v; int g = grab_nic();
-    w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24));
-    v = r32(HBUS_TARG_PRPH_RDAT);
+    v = prph_r_ng(reg);
     if (g == 0) release_nic();
     return v;
+}
+static void prph_setbits(u32 reg, u32 m)
+{
+    int g = grab_nic();
+    prph_w_ng(reg, prph_r_ng(reg) | m);
+    if (g == 0) release_nic();
+}
+static void prph_clrbits(u32 reg, u32 m)
+{
+    int g = grab_nic();
+    prph_w_ng(reg, prph_r_ng(reg) & ~m);
+    if (g == 0) release_nic();
 }
 
 /* =====================================================================
@@ -215,6 +237,20 @@ static int  g_family;
 /* 250 us in both snoop/no-snoop fields, scale=usec: the boot-time LTR value
  * Linux programs "to workaround hardware latency issues during boot". */
 #define LTR_LONG_VAL_250US       0x88FA88FA
+/* CNVi power-state plumbing (Linux _iwl_trans_pcie_start_hw parity - round 2
+ * of the F12 fix; the Yoga proved the doorbell alone doesn't land, pointing
+ * at a power-gated MAC): the persistence bit survives a warm boot and must be
+ * cleared BEFORE the sw reset (9000/22000 only), and integrated 22000 parts
+ * (every CNVi AX201) need the force-power-gating dance after it. */
+#define HPM_DEBUG                0xa03440
+#define PERSISTENCE_BIT          (1u<<12)
+#define PREG_PRPH_WPROT_9000     0xa04ce0
+#define PREG_PRPH_WPROT_22000    0xa04d00
+#define PREG_WFPM_ACCESS         (1u<<12)
+#define HPM_HIPM_GEN_CFG         0xa03458
+#define HIPM_CR_PG_EN            (1u<<0)
+#define HIPM_CR_SLP_EN           (1u<<1)
+#define HIPM_CR_FORCE_ACTIVE     (1u<<10)
 
 static u32 uprph(u32 reg) { return g_family >= FAM_AX210 ? reg + UMAC_PRPH_OFFSET : reg; }
 static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) */
@@ -484,13 +520,19 @@ static int prepare_card_hw(void)
 {
     int iter, t;
     set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_PCI_OWN_SET);
-    if (poll_bit(CSR_HW_IF_CONFIG_REG, HW_IF_PCI_OWN_SET, HW_IF_PCI_OWN_SET, 2) == 0) return 0;
+    if (poll_bit(CSR_HW_IF_CONFIG_REG, HW_IF_PCI_OWN_SET, HW_IF_PCI_OWN_SET, 2) == 0) {
+        set_bit_(CSR_MBOX_SET_REG, MBOX_OS_ALIVE);   /* Linux iwl_pcie_set_hw_ready */
+        return 0;
+    }
     set_bit_(CSR_DBG_LINK_PWR_MGMT_REG, RESET_LINK_PWR_MGMT_DIS);
     mdelay_(2);
     for (iter = 0; iter < 10; iter++) {
         set_bit_(CSR_HW_IF_CONFIG_REG, HW_IF_PREPARE);
         for (t = 0; t < 150; t++) {
-            if ((r32(CSR_HW_IF_CONFIG_REG) & HW_IF_PCI_OWN_SET)) return 0;
+            if ((r32(CSR_HW_IF_CONFIG_REG) & HW_IF_PCI_OWN_SET)) {
+                set_bit_(CSR_MBOX_SET_REG, MBOX_OS_ALIVE);
+                return 0;
+            }
             mdelay_(1);
         }
         mdelay_(25);
@@ -498,10 +540,56 @@ static int prepare_card_hw(void)
     return -1;
 }
 
+/* Linux sw_reset takes retake_ownership=true from start_hw: after the reset
+ * the ownership handshake must be redone or later CSR/PRPH traffic can be
+ * ignored (we never re-prepared - a round-1 F12 gap). */
 static void sw_reset(void)
 {
     set_bit_(CSR_RESET, CSR_RESET_SW_RESET);
     mdelay_(6);
+    prepare_card_hw();
+}
+
+/* Persistence mode survives a warm reboot on 9000/22000 CNVi parts: if the
+ * previous OS/BIOS left PERSISTENCE_BIT set, the MAC keeps its old state and
+ * a fresh firmware load is ignored. Linux clears it FIRST, before the sw
+ * reset, with the no-grab PRPH accessors (APM is not up yet). */
+static void clear_persistence_bit(void)
+{
+    u32 wprot_reg, hpm, wprot;
+    if (g_family == FAM_9000)       wprot_reg = PREG_PRPH_WPROT_9000;
+    else if (g_family == FAM_22000) wprot_reg = PREG_PRPH_WPROT_22000;
+    else return;
+    hpm = prph_r_ng(HPM_DEBUG);
+    if (hpm != 0xFFFFFFFFu && (hpm & PERSISTENCE_BIT)) {
+        wprot = prph_r_ng(wprot_reg);
+        if (wprot & PREG_WFPM_ACCESS) {
+            uno_dbg_net_trace("wifi: persistence bit SET and write-protected (HPM_DEBUG=%08x WPROT=%08x) - cannot clear", hpm, wprot);
+            return;
+        }
+        prph_w_ng(HPM_DEBUG, hpm & ~PERSISTENCE_BIT);
+        uno_dbg_net_trace("wifi: cleared persistence bit (HPM_DEBUG was %08x)", hpm);
+    }
+}
+
+/* Integrated 22000 (every CNVi AX201) force-power-gating dance - Linux runs
+ * this in start_hw between the first sw reset and APM init. Without it a
+ * power-gated CNVi MAC absorbs PRPH writes and the boot ROM never runs -
+ * exactly the round-1 Yoga signature (doorbell written with MAC access held,
+ * read back 0, UCODE_LOAD_STATUS=0). Ends with ANOTHER sw reset + retake. */
+static int force_power_gating(void)
+{
+    /* iwl_finish_nic_init: INIT_DONE + wait clock */
+    set_bit_(CSR_GP_CNTRL, GP_CNTRL_INIT_DONE);
+    if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY, GP_CNTRL_MAC_CLOCK_READY, 25) < 0)
+        return -1;
+    prph_setbits(HPM_HIPM_GEN_CFG, HIPM_CR_FORCE_ACTIVE);
+    udelay_(20);
+    prph_setbits(HPM_HIPM_GEN_CFG, HIPM_CR_PG_EN | HIPM_CR_SLP_EN);
+    udelay_(20);
+    prph_clrbits(HPM_HIPM_GEN_CFG, HIPM_CR_FORCE_ACTIVE);
+    sw_reset();                      /* includes the ownership retake */
+    return 0;
 }
 
 static int apm_init(void)
@@ -521,13 +609,14 @@ static int apm_init(void)
 /* grab NIC access so PRPH/SRAM writes land (refcounted: prph_w/prph_r grab
  * for themselves, and some callers already hold access around a batch) */
 static int g_nic_ref;
+static int g_grab_fail;    /* autopsy: how many PRPH ops ran without access */
 static int grab_nic(void)
 {
     if (g_nic_ref) { g_nic_ref++; return 0; }
     set_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ);
     if (g_family >= FAM_8000) udelay_(2000);
     if (poll_bit(CSR_GP_CNTRL, GP_CNTRL_MAC_CLOCK_READY,
-                 GP_CNTRL_MAC_CLOCK_READY, 15) < 0) return -1;
+                 GP_CNTRL_MAC_CLOCK_READY, 15) < 0) { g_grab_fail++; return -1; }
     g_nic_ref = 1;
     return 0;
 }
@@ -1067,7 +1156,12 @@ static int load_fw_gen2(void)
      *      (prph_w now grabs; the original write lacked this and read back 0). */
     if (g_devid == 0x2723) w32(CSR_LTR_LONG_VAL_AD, LTR_LONG_VAL_250US);
     else { prph_w(HPM_MAC_LTR_CSR, HPM_MAC_LRT_ENABLE_ALL);
-           prph_w(HPM_UMAC_LTR, LTR_LONG_VAL_250US); }
+           prph_w(HPM_UMAC_LTR, LTR_LONG_VAL_250US);
+           /* decisive probe: if this reads back 0x88FA88FA the PRPH window
+            * works and any remaining failure is past the doorbell; if it
+            * reads 0 the MAC is still absorbing PRPH writes (power state). */
+           uno_dbg_net_trace("wifi: prph window check: HPM_UMAC_LTR wrote %08x read %08x",
+                             LTR_LONG_VAL_250US, prph_r(HPM_UMAC_LTR)); }
     prph_w(UREG_CPU_INIT_RUN, 1);              /* kick: device self-loads */
     /* Latch FH_INT for ~200 ms right after the kick: if the ROM's DMA engine
      * runs at all with the now-<4GB arena, we catch it here even if it clears
@@ -1206,6 +1300,9 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   UREG_UCODE_LOAD_STATUS=%08x UREG_CPU_INIT_RUN=%08x",
                           prph_r(uprph(UREG_UCODE_LOAD_STATUS)),
                           prph_r(uprph(UREG_CPU_INIT_RUN)));
+        uno_dbg_net_trace("wifi:   HW_IF=%08x HPM_DEBUG=%08x HPM_HIPM=%08x HPM_UMAC_LTR=%08x grab_fail=%d",
+                          r32(CSR_HW_IF_CONFIG_REG), prph_r(HPM_DEBUG),
+                          prph_r(HPM_HIPM_GEN_CFG), prph_r(HPM_UMAC_LTR), g_grab_fail);
         /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
          * not equal what we wrote, the CSR write path (not the fw) is the fault.
          * And confirm the fw sections were placed (dram0 != 0) - a zero there
@@ -1746,7 +1843,15 @@ uno_nic_t *iwl_nic(void)
         uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
         return 0;
     }
-    sw_reset();
+    clear_persistence_bit();         /* BEFORE the reset (Linux start_hw order) */
+    sw_reset();                      /* now retakes ownership afterwards */
+    if (g_family == FAM_22000 && g_devid != 0x2723) {   /* integrated CNVi (all AX201s) */
+        if (force_power_gating() < 0)
+            uno_dbg_net_trace("wifi: force-power-gating clock-ready timeout (continuing)");
+        else
+            uno_dbg_net_trace("wifi: CNVi force-power-gating done (HPM_HIPM readback=%08x)",
+                              prph_r(HPM_HIPM_GEN_CFG));
+    }
     w32(CSR_INT, 0xFFFFFFFFu);
     if (rf_killed()) {
         st_set("WiFi: hardware RF-kill is on");
