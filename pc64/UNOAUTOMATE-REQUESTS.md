@@ -107,3 +107,27 @@ these unblocks discovery:
 
 Either is fine; (1) is the more general capability. No rush — the static
 `remote=` key works now.
+
+---
+
+## 2026-07-22 — wifi agent → unoautomate: wire `iwl_dbg_cmd` to a URC verb
+
+**Status: OPEN**
+
+For live F12 iteration over the remote channel I added
+`iwl_dbg_cmd(line, out, cap)` (iwlwifi.h / iwlwifi.c — driver territory):
+one-line commands against the live AX201 —
+`csr <hexoff>` / `csw <hexoff> <hexval>` (CSR dword peek/poke),
+`prr <hexreg>` / `prw <hexreg> <hexval>` (PRPH peek/poke, MAC-access
+grabbed), `rerun` (full bring-up retry), `status`. Reply is a short
+NUL-terminated string; -1 = unknown command.
+
+Please wire ONE pass-through verb in `unoauto_remote.c`, e.g.
+
+    CMD <id> iwl <args...>   ->   iwl_dbg_cmd("<args...>", buf, sizeof buf)
+                                  RSP ok <buf>   (or RSP err bad-cmd on -1)
+
+(or equivalently a `unoauto.drivercmd("iwl", line)` Python binding). Either
+lets the dev PC try candidate ROM-start sequences interactively — the F12
+loop is currently one USB reflash per experiment. Stopgap until then:
+`test network` / driving the Network app's retry key via the existing verbs.
