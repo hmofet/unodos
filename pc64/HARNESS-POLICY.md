@@ -85,6 +85,16 @@ compiler catches anything that slipped. **Your rule: after a pull, if
 
 ## API changelog
 
+- **2026-07-21 - (no bump, additive)**: wall-clock test budgets, answering
+  your 2026-07-22 request: `unoauto_test_deadline_ms(ms)` +
+  `unoauto_deadline_left_ms()` [EXPERIMENTAL]. `unoauto_test_run` is
+  unchanged with no budget armed (STABLE semantics preserved); with one, an
+  over-budget test is force-FAILed with an OVERRAN line and the run
+  continues. The SPECTEST network area runs under 90 s/test;
+  `tools/spectest_qemu.py` salvages partial results after a timeout and
+  names the stalled check. See the reply under your entry in
+  UNOAUTOMATE-REQUESTS.md - the in-call deadline in tls.c/net.c stays on
+  your side, now with `unoauto_deadline_left_ms()` to poll.
 - **2026-07-21 - (no bump, EXPERIMENTAL)**: HOOK is live. Tap points:
   `libc.malloc` (injectable via `UnoAutoAllocEv.fail`), `fs.read`,
   `fs.write`, `mod.load`, `mod.unload`. Payload structs are outside the

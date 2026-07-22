@@ -22,6 +22,7 @@ int  vsnprintf(char *buf, unsigned long cap, const char *fmt, __builtin_va_list 
 int  snprintf(char *buf, unsigned long cap, const char *fmt, ...);
 void uno_dbg_log(const char *fmt, ...);
 void uno_dbg_check(const char *tag);
+unsigned long long uno_dbg_uptime_ms(void);
 /* Transitional (Stage 1): the NETLOG persistence sink still lives in
  * pc64_nettest.c (it owns the CRASH\NETLOG.TXT buffer, the watchdog feed and
  * the on-screen ticker).  ua_init asks it to self-register so a direct
@@ -117,17 +118,46 @@ int unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn)
     return ua_ntests++;
 }
 
+/* wall-clock budget (UNOAUTOMATE-REQUESTS 2026-07-22): per-test deadline
+ * armed by the runner, pollable by any cooperative wait loop. */
+static unsigned           ua_budget_ms;      /* 0 = off                       */
+static unsigned long long ua_deadline_at;    /* uptime at which the running
+                                                test is over budget; 0 = none */
+
+void unoauto_test_deadline_ms(unsigned ms) { ua_budget_ms = ms; }
+
+long unoauto_deadline_left_ms(void)
+{
+    unsigned long long now;
+    if (!ua_deadline_at) return -1;
+    now = uno_dbg_uptime_ms();
+    return now >= ua_deadline_at ? 0 : (long)(ua_deadline_at - now);
+}
+
 int unoauto_test_run(const char *suite, void *ctx, char *report, int cap)
 {
     int i, pass = 0, fail = 0, off = 0;
     for (i = 0; i < ua_ntests; i++) {
-        int rc;
+        int rc, over;
+        unsigned long long t0;
         if (suite && !ua_streq(suite, ua_tests[i].suite)) continue;
         uno_dbg_check(ua_tests[i].id);   /* a hang report names the suite */
+        t0 = uno_dbg_uptime_ms();
+        ua_deadline_at = ua_budget_ms ? t0 + ua_budget_ms : 0;
         rc = ua_tests[i].fn(ctx);
+        over = ua_budget_ms &&
+               (uno_dbg_uptime_ms() - t0) > (unsigned long long)ua_budget_ms;
+        ua_deadline_at = 0;
+        if (over) {                      /* slow = failed, run continues */
+            if (rc == 0) rc = -1;
+            unoauto_log(UA_CH_TEST, "FAIL %s.%s OVERRAN %lu ms (budget %u ms)",
+                        ua_tests[i].suite, ua_tests[i].id,
+                        (unsigned long)(uno_dbg_uptime_ms() - t0), ua_budget_ms);
+        }
         if (rc == 0) { pass++; unoauto_log(UA_CH_TEST, "PASS %s.%s",
                                           ua_tests[i].suite, ua_tests[i].id); }
-        else         { fail++; unoauto_log(UA_CH_TEST, "FAIL %s.%s (%d checks)",
+        else         { fail++; if (!over)
+                       unoauto_log(UA_CH_TEST, "FAIL %s.%s (%d checks)",
                                           ua_tests[i].suite, ua_tests[i].id, rc); }
         if (report && off < cap)
             off += snprintf(report + off, (unsigned long)(cap - off),

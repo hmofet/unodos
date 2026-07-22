@@ -99,6 +99,17 @@ typedef int (*UnoAutoTestFn)(void *ctx);
 int  unoauto_test_register(const char *suite, const char *id, UnoAutoTestFn fn);
 int  unoauto_test_run(const char *suite_or_null, void *ctx, char *report, int cap);
 
+/* Wall-clock budget [EXPERIMENTAL] (UNOAUTOMATE-REQUESTS 2026-07-22): give
+ * every test in subsequent unoauto_test_run calls a per-test budget.  A test
+ * that returns AFTER its budget is force-recorded FAIL (even if it passed)
+ * with an OVERRAN line, and the run continues - a flaky-slow live check
+ * fails itself, not the whole gate.  0 = off (the default).
+ *   A synchronous runner cannot preempt a test blocked INSIDE one call; for
+ * that, long-running ops poll unoauto_deadline_left_ms() from their wait
+ * loops and bail when it hits 0 (-1 = no deadline armed, run free). */
+void unoauto_test_deadline_ms(unsigned ms);
+long unoauto_deadline_left_ms(void);
+
 /* ---- PROBE: observe processes/threads/modules (Stage 2) -- [EXPERIMENTAL]
  * The one enumeration surface for "what is the system doing".  Snapshot-
  * based: one call fills caller memory, no locks held across it.  Rows:
@@ -143,6 +154,8 @@ int  unoauto_drive_ready(void);          /* 1 when PYRT + shell are up        */
 #define unoauto_sink_remove(i)           ((void)0)
 #define unoauto_test_register(s, i, f)   (-1)
 #define unoauto_test_run(s, x, r, c)     (-1)
+#define unoauto_test_deadline_ms(ms)     ((void)(ms))
+#define unoauto_deadline_left_ms()       (-1L)
 #define unoauto_probe(o, m)              0
 #define unoauto_hook_add(p, f, u)        (-1)
 #define unoauto_hook_remove(i)           ((void)0)
