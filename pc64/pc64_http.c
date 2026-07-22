@@ -62,6 +62,15 @@ int pc64_net_up(void)
     int i, nw = (int)(sizeof g_wired / sizeof g_wired[0]);
     if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
 
+    /* Reuse a stack that already holds a DHCP lease. The boot eth TEST brings
+     * the ASIX up and leases with WORKING RX; re-net_init'ing it here starts a
+     * second bring-up whose RX comes up dead (tx>0 rx=0 - the medium/bulk-in
+     * re-arm does not survive the re-init), stranding the remote link on a
+     * link-up-but-leaseless NIC. Gating on an actual lease (not just link) is
+     * safe: the null test NIC used by S-NET-08/19 never leases, so SPECTEST
+     * still exercises the full fresh-probe path below. */
+    if (net_dhcp_done()) { g_net_inited = 1; return 1; }
+
     /* Pass 1: a WIRED NIC that reports link up wins. This is the fix for a
      * machine with a cableless onboard Intel port (e.g. the X13 Yoga's I219
      * 0x0d4f, claimed by e1000e) sitting IN FRONT of the USB dongle that
