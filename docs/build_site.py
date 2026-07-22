@@ -1551,6 +1551,7 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <thead><tr><th>Subsystem</th><th>Role</th></tr></thead>
 <tbody>
 <tr><td><code>pc64_fs</code> / <code>pc64_io</code></td><td>Unified file namespace: volume 0 is the RAM disk, volumes 1+ are FAT/FAT32 disks mounted by UnoDOS's own FAT stack (read/write) over the native AHCI/NVMe/SDHCI and USB mass-storage drivers, with firmware Simple File System volumes as read/write extras while attached.</td></tr>
+<tr><td><code>blkdev</code> / <code>unostorage</code> / <code>fat</code></td><td>The storage stack: <code>blkdev</code> is raw 512-byte sector transport (native drivers + a firmware fallback); <code>fat</code> mounts + reads/writes FAT16/32 and formats it (<code>uno_fat_mkfs</code>); <code>unostorage</code> authors a GPT + ESP on a raw disk. The installer and the remote channel both wrap these rather than re-implementing them.</td></tr>
 <tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
 <tr><td><code>net</code> / <code>e1000</code> / <code>e1000e</code> / <code>igb</code> / <code>r8169</code></td><td>Intel (8254x, 82571-4/82574, I217-9, I210/I211/I350) and Realtek (RTL8168/8111/8125) drivers, each publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, DNS, single-connection TCP.</td></tr>
@@ -1621,6 +1622,9 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>uptime()</code> / <code>poweroff()</code> / <code>reboot()</code></td><td>Read uptime, shut down, or restart.</td></tr>
 <tr><td><code>push_file(vol, path, local_path)</code></td><td>Push a file (chunk, finalize, verify); True when verified.</td></tr>
 <tr><td><code>bootnext(n)</code></td><td>Set the next UEFI boot entry.</td></tr>
+<tr><td><code>disks()</code></td><td>List raw disks (idx / name / sectors / writable / is_boot).</td></tr>
+<tr><td><code>arm(disk)</code> / <code>disarm()</code></td><td>Arm a disk for a destructive op (auto-disarms after one; refuses the boot disk).</td></tr>
+<tr><td><code>prepdisk(disk, label)</code></td><td>Partition + format a raw disk as a fresh FAT32 ESP (armed; the "prepare disk B" one-shot).</td></tr>
 </tbody>
 </table></div>
 <p class="muted">The C contract underneath (<code>unoauto_log</code>, <code>unoauto_probe</code>,

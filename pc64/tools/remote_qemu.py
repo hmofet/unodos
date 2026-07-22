@@ -20,8 +20,9 @@ sys.path.insert(0, HERE)
 from unoauto_remote import UnoAutoLink
 
 ESP  = os.path.join(HERE, "..", "build", "esp")
-DISK = "/tmp/remote_disk.img"
-FAT  = "/tmp/remote_fat.img"
+DISK  = "/tmp/remote_disk.img"
+DISK2 = "/tmp/remote_disk2.img"     # a SECOND blank disk for the partition/format e2e
+FAT   = "/tmp/remote_fat.img"
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
 VARS = "/tmp/remote_vars.fd"
@@ -76,6 +77,7 @@ def boot_qemu():
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", "format=raw,file=" + DISK,
+        "-drive", "format=raw,file=" + DISK2,     # blank; the disk verbs partition/format it
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
         "-display", "none",
     ]
@@ -96,6 +98,7 @@ def main():
     link.listen()
 
     build_disk()
+    with open(DISK2, "wb") as f: f.truncate(128 * MIB)   # a blank 128 MB disk B
     q = boot_qemu()
     ok = True
 
@@ -211,6 +214,64 @@ def main():
                           "big read-back bytes match (%s)" % phase, "got=%r" % out)
         except Exception as e:  # noqa: BLE001
             check(False, "large native-FAT push + read-back", str(e))
+
+        # 8) RAW-DISK AUTHORING (unostorage): partition + format the blank disk B,
+        #    then confirm the fresh FAT32 volume mounts + is writable end-to-end.
+        try:
+            import tempfile
+            ds = link.disks(timeout=10)
+            blank = next((d for d in ds if d["sectors"] == 128 * MIB // 512), None)
+            boot  = next((d for d in ds if d["is_boot"]), None)
+            check(blank is not None, "blank disk B enumerated (disks)", "disks=%r" % ds)
+            # safety: arming the boot disk is refused
+            if boot:
+                try:
+                    link.arm(boot["idx"]); check(False, "arm <bootdisk> refused")
+                except Exception:  # noqa: BLE001
+                    check(True, "arm <bootdisk> refused")
+            else:
+                check(False, "boot disk flagged is_boot", "disks=%r" % ds)
+            if blank:
+                D = blank["idx"]
+                nfat_before = len([1 for l in link.command("vols") if l.split()[1] == "1"])
+                # safety: unarmed prepdisk is refused
+                try:
+                    link.prepdisk(D, "TESTVOL"); check(False, "unarmed prepdisk refused")
+                except Exception:  # noqa: BLE001
+                    check(True, "unarmed prepdisk refused")
+                # arm + prepdisk (partition + format)
+                link.arm(D)
+                r = link.prepdisk(D, "TESTVOL")
+                check(bool(r) and r[0] == "prepared", "prepdisk (GPT + ESP + FAT32)", "%r" % r)
+                # a new writable native-FAT (kind 1) volume must have appeared
+                nfat_after = len([1 for l in link.command("vols") if l.split()[1] == "1"])
+                check(nfat_after > nfat_before, "fresh FAT32 volume mounted",
+                      "native-FAT vols %d -> %d" % (nfat_before, nfat_after))
+                # write a file to the new volume + read it back byte-exact
+                newvol = None
+                for l in link.command("vols"):
+                    p = l.split(None, 3)
+                    if p[1] == "1" and p[2] == "1" and int(p[0]) > 0:
+                        newvol = int(p[0])
+                if newvol is not None:
+                    payload = bytes((i * 5 + 1) & 0xFF for i in range(4000))
+                    exp2 = sum((i + 1) * c for i, c in enumerate(payload)) & 0xFFFFFFFF
+                    tf = tempfile.NamedTemporaryFile(delete=False); tf.write(payload); tf.close()
+                    try:
+                        v = link.push_file(newvol, "HELLO.BIN", tf.name)
+                    finally:
+                        os.unlink(tf.name)
+                    check(v, "push a file onto the fresh volume", "vol %d" % newvol)
+                    out = link.eval('import uno; d=uno.read(%d,"HELLO.BIN"); '
+                                    'print(len(d), sum((i+1)*c for i,c in enumerate(d))&0xffffffff)'
+                                    % newvol, timeout=25)
+                    g = out[0].split() if out else []
+                    check(len(g) == 2 and int(g[0]) == 4000 and int(g[1]) == exp2,
+                          "read-back from the fresh volume matches", "got=%r" % out)
+                else:
+                    check(False, "found the fresh writable volume in vols")
+        except Exception as e:  # noqa: BLE001
+            check(False, "raw-disk authoring (partition/format)", str(e))
 
     finally:
         try:

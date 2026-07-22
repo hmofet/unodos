@@ -18,6 +18,7 @@
 #include "uefi.h"
 #include "string.h"
 #include "installer.h"
+#include "unostorage.h"     /* shared CRC-32 (one copy for the GPT checksum) */
 
 /* uefi_main.c */
 void *uno_pc64_st(void);
@@ -142,15 +143,10 @@ static char *ap_size(char *p, UINT64 bytes)                 /* "7.5 GB" style */
     return p;
 }
 
+/* the GPT header/array checksum - now the one shared reflected CRC-32 in
+ * unostorage (was a private copy here; byte-identical result). */
 static UINT32 crc32(const void *data, UINTN len)
-{
-    const unsigned char *d = data; UINT32 c = 0xFFFFFFFFu; UINTN i; int k;
-    for (i = 0; i < len; i++) {
-        c ^= d[i];
-        for (k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1)));
-    }
-    return c ^ 0xFFFFFFFFu;
-}
+{ return (UINT32)unostorage_crc32(data, (unsigned long)len); }
 
 static UINT32 rd32(const unsigned char *p) { return (UINT32)p[0] | ((UINT32)p[1]<<8) | ((UINT32)p[2]<<16) | ((UINT32)p[3]<<24); }
 static UINT64 rd64(const unsigned char *p) { return (UINT64)rd32(p) | ((UINT64)rd32(p+4) << 32); }

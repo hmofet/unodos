@@ -20,6 +20,8 @@ typedef struct uno_bdev {
     char name[8];                    /* "ahci0", "fw2", ...                    */
     int  pci_dev, pci_fn;            /* controller PCI location (-1 unknown);
                                         used to dedup firmware FS volumes      */
+    int  is_boot;                    /* 1 = the disk UnoDOS booted from (the
+                                        storage safety gate refuses to wipe it) */
     void *ctx;
     int (*read)(struct uno_bdev *, unsigned long long lba, unsigned int n, void *buf);
     int (*write)(struct uno_bdev *, unsigned long long lba, unsigned int n, const void *buf);
