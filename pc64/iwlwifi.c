@@ -673,7 +673,13 @@ static void nic_config_radio(void)
     val |= ((pc >> 0) & 3) << 10;                 /* radio type  -> MSK 0x0C00 */
     val |= ((pc >> 4) & 3) << 12;                 /* radio dash  -> MSK 0x3000 */
     val |= ((pc >> 2) & 3) << 14;                 /* radio step  -> MSK 0xC000 */
-    val |= 0x00000100 /*MAC_SI*/ | 0x00000200 /*RADIO_SI*/;
+    /* MAC_SI/RADIO_SI force the MAC to re-sample the radio/silicon straps.
+     * The working Linux QuZ (gen2 CNVi) load leaves them CLEAR (ground-truth
+     * ftrace HW_IF=0x18489001, not ...9301); forcing the re-sample on this part
+     * feeds PHY/RF init a strap state Linux never uses - a plausible silent
+     * wedge that runs the ROM but never reaches ALIVE (F12).  Keep 0x300 in the
+     * mask so gen2 deterministically CLEARS them; only set them on older parts. */
+    if (!g_gen2) val |= 0x00000100 /*MAC_SI*/ | 0x00000200 /*RADIO_SI*/;
     mask = 0x0000000F | 0x00000C00 | 0x00003000 | 0x0000C000 | 0x00000300;
     w32(CSR_HW_IF_CONFIG_REG, (r32(CSR_HW_IF_CONFIG_REG) & ~mask) | val);
     uno_dbg_net_trace("wifi: nic_config: phy_sku=%08x -> HW_IF=%08x",
