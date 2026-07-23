@@ -177,6 +177,26 @@ int unostorage_gpt_add(unostorage_dev *d, unsigned long long first_lba,
     return write_gpt(d, dg);
 }
 
+int unostorage_gpt_finalize_clone(unostorage_dev *d)
+{
+    uint8_t hdr[SEC];
+    unsigned char dg[16];
+    uint64_t entryLba; uint32_t num, esz; unsigned i;
+
+    if (!d || !d->read || !d->write) return 0;
+    /* the clone left the source's primary header at LBA1 and its entry array at
+     * entryLba; read the disk GUID + the array back, then re-author over them. */
+    if (!d->read(d->ctx, 1, 1, hdr) || memcmp(hdr, "EFI PART", 8) != 0) return 0;
+    entryLba = r64(hdr + 72); num = r32(hdr + 80); esz = r32(hdr + 84);
+    if (esz != GPT_ENTSZ || num != GPT_ENTS) return 0;   /* only the standard shape */
+    memcpy(dg, hdr + 56, 16);
+    for (i = 0; i < ARR_SECS; i++)
+        if (!d->read(d->ctx, entryLba + i, 1, g_arr + i * SEC)) return 0;
+    /* write_gpt recomputes altHdr/altArr/lastUsable from d->sectors (the target),
+     * relocating the backup GPT to the true end and fixing every CRC + the MBR. */
+    return write_gpt(d, dg);
+}
+
 int unostorage_find_esp(unostorage_dev *d, unsigned long long *first,
                         unsigned long long *last, unsigned char guid[16])
 {
