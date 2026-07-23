@@ -1,6 +1,6 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-22. Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
+Status: 2026-07-23 (round 17). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
 gen2 22000-family, QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is
 fully solved; this is the WiFi tail.
 
@@ -26,6 +26,69 @@ before completing the firmware-load handshake**. `fh_after_kick=0` is a red
 herring (it watches one FH channel, not the ROM's context-info DMA). This is a
 **firmware-image / secure-boot** failure class, not a transport problem.
 
+## Round 17 (2026-07-23) — three standing suspects RETIRED, method changed
+
+Every remaining "prime suspect" in this document has now been checked against
+ground truth rather than recalled source, and all three are **correct in our
+driver**. Do not re-chase them:
+
+1. **`UREG_CPU_INIT_RUN` (PRPH `0xa05c44`) = 1 is REQUIRED, not spurious.**
+   Round 16 proposed removing it as a gen3-only register absent from
+   `iwl_pcie_ctxt_info_init()`. The working ftrace issues it on this exact card,
+   right after the HPM LTR pair, exactly where we issue it. It lives in the
+   *caller* tail (`iwl_trans_pcie_gen2_start_fw`, Linux 6.12
+   `pcie/trans-gen2.c`), which is why reading `ctxt-info.c` alone makes it look
+   bogus. Our whole kick tail (BA → `a0348c=0xf` → `a03480=88fa88fa` →
+   `a05c44=1`) matches the trace op-for-op.
+2. **MSI-X fw-load masks already match** `iwl_enable_fw_load_int_ctx_info()`:
+   HW `~ALIVE` = `0xfffffffe`, FH = `0x0000fe00`. Confirmed both in the trace
+   and in our own boot log.
+3. **The ucode image and its section split are correct.**
+   `fw-blobs/IWLAX201.UCO` is **byte-identical** to Debian's
+   `iwlwifi-QuZ-a0-hr-b0-77.ucode` (md5 `df80001381d87035b7d270220cb73bd5`), and
+   an independent parse (`tools/iwl_ucode_sections.py`) gives RT `num_sec=51`,
+   `lmac=14 umac=15 paging=20`, separators at section index 14 and 30 — exactly
+   what `place_fw_dram()` logs on metal. `struct iwl_context_info_dram` really is
+   `umac[64], lmac[64], virtual_img[64]` and `ci_dram` matches. **This retires
+   the "firmware-image / secure-boot" leading hypothesis above.**
+
+One genuine divergence was found and is **benign**: Linux sets
+`CSR_GP_CNTRL |= 0x04000000` (`RFKILL_WAKE_L1A_EN`) before the kick and we do
+not (ours reads `0x08040005`, the trace `0x0c040005`). It is set inside
+`iwl_enable_rfkill_int()` purely so a powered-down device can wake the PCIe bus
+for RF-kill interrupts — it cannot park running firmware. Worth closing for
+fidelity, not as a fix.
+
+### Why the method changed
+
+Sixteen rounds audited this load path one register at a time against recalled
+Linux source. Each round "verified" a subsystem, moved the diagnosis, and missed
+the divergence — and two of round 16's own suspects were wrong. Everything
+reachable by inspection is now verified correct, so the divergence is in the
+~250 accesses *before* the kick, where no one has looked systematically.
+
+So: stop reading, start recording.
+
+- **`iwl iotrace`** (new URC verb, UNO_DEBUG builds only) dumps a run-length
+  folded, in-order log of every BAR32/BAR8/PRPH access the driver made during
+  the last bring-up attempt. Armed fresh by each `iwl rerun`. ~250 lines.
+- **`tools/iwl_iodiff.py`** aligns that dump against the ground-truth ftrace and
+  prints MISSING / EXTRA / VALUE rows:
+
+  ```
+  python3 tools/iwl_iodiff.py ~/urc-yoga/session.log ~/iwl_from_yoga.txt
+  ```
+
+  It folds both sides the same way, windows around the chosen `CSR_CTXT_INFO_BA`
+  kick (`--kick N`, default last), and aligns on kind+offset so a data
+  difference surfaces as one VALUE row instead of desynchronising the diff.
+
+### Concrete NEXT step
+
+Boot a `UNO_DEBUG=1` build on the Yoga, `iwl rerun`, `iwl iotrace`, then run
+`iwl_iodiff.py`. Work the MISSING rows before the kick first — those are things
+Linux does to this silicon that we never do, and one of them is the park.
+
 ## Ruled out — do NOT re-chase
 
 - **MSI-X config** — REQUIRED and DONE. Proven necessary via the ground-truth
@@ -43,7 +106,7 @@ herring (it watches one FH channel, not the ROM's context-info DMA). This is a
   (`io[0x280c]=fffffffe`, `io[0x2804]=fe00`) → `CTXT_INFO_BA` (`io[0x40]`, 64-bit)
   → LTR prph (`a0348c=0xf`, `a03480=88fa88fa`) → doorbell (`a05c44=1`).
 
-## Leading hypothesis — the DMA'd firmware image / secure boot
+## RETIRED in round 17 — former leading hypothesis (fw image / secure boot)
 
 `SB` = Secure Boot; SB-CPU status nonzero + CPUs parked in *distinct* regions ⇒
 the ROM runs secure-boot over the firmware sections we place in
@@ -53,7 +116,7 @@ the ROM runs secure-boot over the firmware sections we place in
 (secure-boot certificate) section**, or wrong section DATA fails auth exactly
 like this.
 
-## Concrete NEXT step
+## DONE in round 17 — the ucode-parse step this asked for
 
 Dump our `.ucode` parser's section offsets/sizes/counts (the TLV parse feeding
 `place_fw_dram`) and **diff against a Linux-side parse of the SAME
