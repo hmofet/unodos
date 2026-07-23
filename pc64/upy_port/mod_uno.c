@@ -28,6 +28,7 @@ void fb_frame_rect(int x, int y, int w, int h, fb_px c);
 void fb_round_rect(int x, int y, int w, int h, int rad, fb_px c);
 int  fb_text(int x, int y, const char *s, fb_px fg, long bg);
 int  fb_text_w(const char *s);
+int  devmgr_list_str(char *buf, int cap);  /* unodevices (kernel export) */
 void fb_set_clip(int x, int y, int w, int h);
 void fb_reset_clip(void);
 void uno_seq_beep(int midi, int ticks);
@@ -288,6 +289,14 @@ int uno_bind_app(PyApp *pa) {
 }
 
 /* ---- the `uno` module dict ------------------------------------------------ */
+/* uno.devices() -> str: one line per PCI function "bb:dd.f ven:dev cc/ss class" (see DEVICES.md) */
+static char g_devbuf[4096];
+static mp_obj_t m_devices(void) {
+    int n = devmgr_list_str(g_devbuf, sizeof g_devbuf);
+    return mp_obj_new_str(g_devbuf, n);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(devices_obj, m_devices);
+
 static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_uno) },
     { MP_ROM_QSTR(MP_QSTR_rgb),      MP_ROM_PTR(&rgb_obj) },
@@ -299,6 +308,7 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_size),     MP_ROM_PTR(&fsize_obj) },
     { MP_ROM_QSTR(MP_QSTR_write),    MP_ROM_PTR(&write_obj) },
     { MP_ROM_QSTR(MP_QSTR_mkdir),    MP_ROM_PTR(&mkdir_obj) },
+    { MP_ROM_QSTR(MP_QSTR_devices),  MP_ROM_PTR(&devices_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {
