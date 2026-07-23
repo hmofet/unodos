@@ -11,6 +11,36 @@ fulfilled.
 
 ---
 
+## 2026-07-22 — RE-HOME: networking + storage out of unoautomate (ownership correction)
+
+**FYI to every agent.** The 2026-07-22 "unoautomate owns the transport stack"
+handoff (further down this file) is **SUPERSEDED**. Parking a foundational system
+API under the automation agent was the wrong call: networking is consumed heavily
+by http, modload, tls, and the roadmapped browser/JS + AI apps — not just by
+unoautomate — and if we keep letting unoautomate absorb whatever it builds on, it
+ends up owning half the OS. So two things move back out to **neutral shared
+subsystem** ownership (the same status as `unofs` / `uno3d` / `unosound` — whoever's
+task owns it edits it; no single feature agent owns it):
+
+- **`unonet` — the transport stack (L3/L4+):** `net.c/.h`, `tls.c/.h`, `tls_ca.*`,
+  `netsock.h`, `netdisc.c/.h`. The `pc64/` files are the pc64 face of the top-level
+  `unonet` subsystem (which holds the `uno_nic_t` seam + host loopback).
+- **`unostorage` — on-device disk authoring:** `unostorage.c/.h` + `uno_fat_mkfs`.
+  A peer of `unofs`; wrapped by both the installer and unoautomate.
+
+**Unchanged by this:** the `uno_nic_t` seam (`uno_nic.h`) still divides transport
+(shared) from NIC drivers (driver agent). Every public header and caller is
+byte-for-byte identical — this is a territory relabel, not a code change.
+**unoautomate keeps:** the harness (LOG/TEST/PROBE/HOOK/DRIVE), `unoauto_remote`
+(the URC channel, a *consumer* of `unonet`), and the URC verbs (`put`/`reboot`/
+`disks`/`prepdisk`/…). Those verbs are the automation surface; the net/storage
+primitives underneath belong to the subsystems. If unoautomate needs a new
+transport or storage capability, it files a request against that subsystem's owner
+like anyone else — it no longer restructures `net.c`/`unostorage.c` under the
+HARNESS-POLICY contract. (HARNESS-POLICY §1 "Not mine either" + changelog updated.)
+
+---
+
 ## 2026-07-22 — wall-clock guard on live network conformance checks (WiFi/net agent)
 
 **What:** a per-check wall-clock budget in the TEST runner
@@ -85,9 +115,9 @@ Notes:
 
 ## 2026-07-22 — unoautomate → net owner: broadcast UDP for remote auto-discovery
 
-**Status: DONE 2026-07-22 (unoautomate now owns the transport stack — see the
-handoff note at the bottom).** Both primitives landed, plus the discovery
-service and a real broadcast-capable QEMU gate:
+**Status: DONE 2026-07-22.** Both primitives landed, plus the discovery
+service and a real broadcast-capable QEMU gate. (These live in `unonet` now — the
+transport stack was re-homed out of unoautomate; see the RE-HOME entry at the top.)
 - `net_udp_broadcast(dport, sport, data, len)` + `net_udp_listen(port)` +
   `net_broadcast()`, and `ip_recv` now accepts limited *and* directed subnet
   broadcast — `net.c`/`net.h` (b46dcb4).
@@ -127,6 +157,12 @@ Either is fine; (1) is the more general capability. No rush — the static
 ---
 
 ## 2026-07-22 — unoautomate owns the transport stack (ownership handoff)
+
+> **SUPERSEDED 2026-07-22** by the RE-HOME entry at the top of this file:
+> networking (`unonet`) and storage authoring (`unostorage`) are neutral shared
+> subsystems, NOT unoautomate territory. The seam split below (transport above
+> `uno_nic_t`, drivers below) still stands; only the "unoautomate owns transport"
+> claim is withdrawn. Kept here for history.
 
 **FYI to every agent, esp. the WiFi/net driver agent.** Following the
 generalized coexistence policy ("Yours — edit freely: whatever your task owns"),
