@@ -162,26 +162,33 @@ int usc_ui_clipboard_set(const char *s)
 }
 
 /* -- app (shell) -------------------------------------------------------- */
+/* delegation targets: production shell accessors (pc64_uui.c). */
+int  pc64_shell_app_count(void);
+int  pc64_shell_launch(int a);
+void pc64_shell_close_top(void);
+int  pc64_shell_app_message(int idx, const char *msg, char *reply, int cap);
+
 int usc_app_count(void)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.count")) return denied(USC_CAP_APP_CTRL);
-    return USC_EUNAVAIL;   /* TODO(shell): production app enumeration */
+    return pc64_shell_app_count();
 }
 int usc_app_launch(int idx)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.launch")) return denied(USC_CAP_APP_CTRL);
-    (void)idx; return USC_EUNAVAIL;   /* TODO(shell) */
+    return pc64_shell_launch(idx) ? USC_OK : USC_EINVAL;   /* bad idx / refused slot */
 }
 int usc_app_close_top(void)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.close_top")) return denied(USC_CAP_APP_CTRL);
-    return USC_EUNAVAIL;   /* TODO(shell) */
+    pc64_shell_close_top();
+    return USC_OK;
 }
 int usc_app_message(int idx, const char *json, char *reply, int cap)
 {
     if (!unoscript_guard(USC_CAP_APP_MSG, "app.message")) return denied(USC_CAP_APP_MSG);
-    (void)idx; (void)json; if (reply && cap > 0) reply[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(shell): structured app IPC */
+    if (!reply || cap <= 0) return USC_EINVAL;
+    return pc64_shell_app_message(idx, json, reply, cap);  /* reply length >= 0 */
 }
 
 /* -- fs (unofs) --------------------------------------------------------- */

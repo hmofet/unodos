@@ -191,10 +191,15 @@ so the security store lands on a writable volume.
   `ui.clipboard_get`/`_set` use a shell-owned clipboard (`pc64_shell_clip_*`,
   tier-1 to write). QEMU-verified over URC. This is the first full *interactive*
   surface — UI automation works for any logged-in (or ambient, tier-0) user.
+- **`app.*` (shell, tier 0/1) — DONE 2026-07-23.** `app.count`/`app.launch`/
+  `app.close_top` (tier 0) drive the real launcher/close paths
+  (`pc64_shell_app_*`, formerly debug-only); `app.message(idx, verb)` (tier 1)
+  is a minimal shell-verb seam — `info`/`focus`/`close` by app index
+  (`pc64_shell_app_message`). QEMU-verified over URC.
 
-The remaining **surface seams** (shell app control, unofs user-scoped IO,
-unosched enumeration, kernel mem/io + reboot/suspend, the hook registry) are still
-`USC_EUNAVAIL` until each owner wires its accessor — so a *permitted* tier≥1 op
-returns NotImplementedError rather than OSError(EPERM). The privilege gate is
-live; the plumbing behind it lights up per-subsystem. Next up: shell app control
-(`UNOSCRIPT-NEXT-STEPS.md` §2).
+The remaining **surface seams** (unofs user-scoped IO, unosched enumeration,
+kernel mem/io + reboot/suspend, the hook registry) are still `USC_EUNAVAIL` until
+each owner wires its accessor — so a *permitted* tier≥1 op returns
+NotImplementedError rather than OSError(EPERM). The privilege gate is live; the
+plumbing behind it lights up per-subsystem. Tiers 0–1 (UI + apps) now give a
+genuinely useful scripting OS; tiers 2–3 (proc/fs/kernel/hook) trail.

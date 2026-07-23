@@ -119,14 +119,23 @@ static const mp_obj_module_t u_ui = { { &mp_type_module }, (mp_obj_dict_t *)&ui_
 static mp_obj_t app_count(void)         { return usc_ret(usc_app_count()); }
 static mp_obj_t app_launch(mp_obj_t i)  { return usc_ret(usc_app_launch(mp_obj_get_int(i))); }
 static mp_obj_t app_close_top(void)     { return usc_ret(usc_app_close_top()); }
+/* app.message(idx, verb) -> reply str; verbs: "info" / "focus" / "close" */
+static mp_obj_t app_message(mp_obj_t idx, mp_obj_t verb)
+{
+    char b[128];
+    int rc = usc_app_message(mp_obj_get_int(idx), mp_obj_str_get_str(verb), b, sizeof b);
+    return rc >= 0 ? mp_obj_new_str(b, strlen(b)) : usc_ret(rc);
+}
 static MP_DEFINE_CONST_FUN_OBJ_0(app_count_obj, app_count);
 static MP_DEFINE_CONST_FUN_OBJ_1(app_launch_obj, app_launch);
 static MP_DEFINE_CONST_FUN_OBJ_0(app_close_top_obj, app_close_top);
+static MP_DEFINE_CONST_FUN_OBJ_2(app_message_obj, app_message);
 static const mp_rom_map_elem_t app_tab[] = {
     { MP_ROM_QSTR(MP_QSTR___name__),  MP_ROM_QSTR(MP_QSTR_app) },
     { MP_ROM_QSTR(MP_QSTR_count),     MP_ROM_PTR(&app_count_obj) },
     { MP_ROM_QSTR(MP_QSTR_launch),    MP_ROM_PTR(&app_launch_obj) },
     { MP_ROM_QSTR(MP_QSTR_close_top), MP_ROM_PTR(&app_close_top_obj) },
+    { MP_ROM_QSTR(MP_QSTR_message),   MP_ROM_PTR(&app_message_obj) },
 };
 static MP_DEFINE_CONST_DICT(app_dict, app_tab);
 static const mp_obj_module_t u_app = { { &mp_type_module }, (mp_obj_dict_t *)&app_dict };

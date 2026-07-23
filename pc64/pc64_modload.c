@@ -205,7 +205,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unosec_current_user), KX(unosec_present), KX(unosec_request),
     KX(usc_ui_pointer), KX(usc_ui_key), KX(usc_ui_screen_text),
     KX(usc_ui_clipboard_get), KX(usc_ui_clipboard_set),
-    KX(usc_app_count), KX(usc_app_launch), KX(usc_app_close_top),
+    KX(usc_app_count), KX(usc_app_launch), KX(usc_app_close_top), KX(usc_app_message),
     KX(usc_proc_list), KX(usc_mem_read), KX(usc_mem_write),
     KX(usc_io_in), KX(usc_io_out), KX(usc_power),
 #ifdef UNO_DEBUG
