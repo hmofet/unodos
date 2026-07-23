@@ -324,3 +324,42 @@ URC line protocol), not a quick pass-through. Not started; happy to scope it —
 the word and I'll design the serial/CDC backend. Until then the stopgap you note
 (on-screen `uno_dbg_net_trace` + reflash, or a USB-eth dongle so `eth` rides that)
 stands.
+
+---
+
+## 2026-07-22 — unonet/seam owner → unoautomate: TLS entropy is fail-open on RDRAND-less boxes
+
+**Status: OPEN**
+
+**What:** in `tls.c`, when the CPU has no `RDRAND`, `get_entropy()` seeds BearSSL
+from a TSC mix the code itself labels **"NOT cryptographically strong"**
+(`tls.c:65`), and it proceeds anyway — `get_entropy()` calls
+`br_ssl_engine_inject_entropy` in both handshake paths (`tls.c:172` pinned-key,
+`tls.c:222` CA-chain) regardless of whether `g_rdrand` is set. So a box without
+RDRAND silently completes a TLS handshake on weak-keyed entropy. Two asks:
+
+1. **Fail closed.** When no real entropy source is available, refuse to bring up
+   TLS (return an error from `tls_connect`/`tls_connect_ca`) rather than inject
+   the demo-grade seed. `tls_have_rdrand()` (`tls.c:143`) already gives the
+   introspection half; this is making the weak path an error instead of a
+   silent proceed.
+2. **A real per-platform source** for the RDRAND-less targets (several retro/ARM
+   ports in the family have no RDRAND): e.g. accumulate timing jitter, and/or
+   mix NIC/IRQ inter-arrival timing.
+
+**Why:** the target mission is a LAN workstation + LAN server, and TLS is one of
+the genuinely strong parts of the stack (real BearSSL CA-chain + pinned-key +
+SNI). The RNG is the one security hole that undercuts it, and it fails *open*
+(silent weak keys) rather than loud. Highest-value networking fix for the
+mission. Recorded in `unonet/ROADMAP.md` item 1.
+
+**Offer from the seam side (mine):** NIC/IRQ inter-arrival timing is entropy that
+lives below the seam. If you want ask (2)'s source to include it, I'll expose an
+accumulator through the `uno_nic`/seam surface for `get_entropy()` to mix in —
+your call on the shape; the core fix in `tls.c` is yours. Timing-jitter-only (no
+seam dependency) is also fine if you'd rather keep it self-contained.
+
+**Stopgap in use:** none needed on the x86 workstation (RDRAND present, so the
+strong path runs today). The exposure is RDRAND-less targets only; no code change
+in your territory is urgent, but fail-closed (ask 1) is small and worth doing
+before any such port ships TLS.
