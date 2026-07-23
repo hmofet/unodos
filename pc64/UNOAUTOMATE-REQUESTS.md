@@ -674,3 +674,26 @@ UNO_DEBUG=1 harness dump in QEMU.
 > phase-1 line width) — say the word if a real box overruns it and I will chunk it.
 > `REMOTE.md` documents the verb; gate is `remote_qemu.py` check 9, which asserts
 > the verb dispatches today and upgrades to asserting real rows when yours lands.
+
+---
+
+## 2026-07-23 — CLAIM: unodevices (PCI/USB device tree + driver auto-binding)
+
+Claiming the `unodevices` subsystem (registry row: branch `unodevices`, `uno_devmgr.*`).
+Building full PCI + USB enumeration with a driver match/bind registry so UnoDOS
+detects all hardware and auto-loads drivers. Today every driver pulls its own
+`pci_find(ven,dev)` at boot and driver-less hardware is invisible; this inverts it to
+a central enumerate → match → bind pipeline. Design/contract: `pc64/DEVICES.md`.
+
+- **Own:** `uno_devmgr.{c,h}` (device registry, driver registry, match/bind), `DEVICES.md`.
+- **Consume, do NOT edit:** `pc64_pci.c` (use its `pci_cfg_read32/write32`, `pci_bar`
+  accessors — recursive scan + BAR sizing live in my file), `xhci.c` (USB, later phase),
+  the `uno_nic_t`/`blkdev` seams (drivers keep publishing into them).
+- **Additive seam touches:** `upy_port/mod_uno.c` module table (append `uno.pci()`/
+  `uno.devices()` binding); later a `UNO_DRIVER` linker set for self-registering drivers.
+- **Request I will file to unoautomate when Phase 1 lands:** a read-only `devices` URC
+  verb mirroring `disks` (one line per device: `loc ven:dev class driver|UNCLAIMED`).
+
+Rollout: Phase 1 = PCI enumerator + registry + `uno.devices()` introspection (read-only;
+answers "what hardware lacks a driver" on the ZimaBlade test box). Later: match-table
+binding of existing drivers, USB enumeration, loadable `.UNO` drivers + hotplug.
