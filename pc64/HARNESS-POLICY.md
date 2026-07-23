@@ -54,6 +54,25 @@ Need a capability, or hit a break you can't absorb? Append a dated note to
 **Yours — edit freely:** whatever your task owns — your drivers, your app, your
 subsystem, your own docs and telemetry notes.
 
+**Not mine either — shared system subsystems I *consume*, don't own.** unoautomate
+builds heavily on these, but they are neutral system APIs on the same footing as
+`unofs` / `uno3d` / `unosound` — governed by the normal "whoever's task owns it
+edits it" rule, not by this contract:
+- **Networking (`unonet`)** — the transport stack: `net.c/.h`, `tls.c/.h`,
+  `tls_ca.*`, `netsock.h`, `netdisc.c/.h` (ARP/IP/ICMP/UDP/TCP/DHCP/DNS + sockets
+  + broadcast + discovery). Consumed by http, modload, tls, the browser/JS + AI
+  apps, and my `unoauto_remote` link. The driver agent still owns the NIC drivers
+  below the `uno_nic_t` seam (`uno_nic.h`).
+- **On-device storage authoring (`unostorage`)** — `unostorage.c/.h` + the
+  `uno_fat_mkfs` formatter: GPT/ESP/FAT32 authoring over `blkdev`, wrapped by both
+  the installer and me. A peer of `unofs`.
+
+If I need a new capability from either (a socket option, a protocol, a storage
+primitive), I file against *their* owner just like you do — I don't restructure
+them under this policy. Re-homed out of unoautomate 2026-07-22 (see the changelog
+below and the note in `UNOAUTOMATE-REQUESTS.md`); the old "unoautomate owns the
+transport stack" handoff is superseded.
+
 **Frozen core — additive-only (rules in §2):** the shared debug/test harness
 unoautomate is built on and still wired through —
 - `pc64_nettest.c`, `pc64_spectest.c`, `pc64_stress.c`
@@ -126,7 +145,53 @@ the entry before building (§0).
   install_dir` + a `--install <disk> <esp_dir>` CLI. Works on internal SATA/NVMe
   disks (they enumerate as writable `fw*` while attached). Gate: `remote_qemu.py`
   proves mkdir + nested push + makeboot; SPECTEST 65/0/4; prod clean.
-
+- **2026-07-22 - (no bump, new transport backend, EXPERIMENTAL)**: **NIC-
+  independent URC transport** - a **16550 UART** carrier for the remote channel,
+  so a box whose only network is the NIC being debugged can still be driven live
+  over a serial cable (answers **Request 2** of the 2026-07-22 r8169 entry in
+  `UNOAUTOMATE-REQUESTS.md`). The URC framing/dispatch/queue layer was already
+  transport-agnostic, so this is a small `urc_transport` vtable in
+  `unoauto_remote.c` moving the six `net_*` touch-points behind a seam, with two
+  backends: the existing TCP link, and a new polled 16550 (`unoauto_serial.c`),
+  selected by a `remote-serial[=<hexbase>]` STRESS.CFG key (bare = COM1 0x3F8
+  @115200; e.g. `=3e8` = COM3). Every verb works identically over serial. Host
+  (`tools/unoauto_remote.py`): `attach_stream`/`attach_serial` + a `--serial
+  DEVICE[:BAUD]` CLI, and `wait_hello()` - serial has no connection handshake, so
+  the host waits for pc64's HELLO before driving, and the device re-emits HELLO
+  until heard so a late attach syncs. Gate: `tools/serial_qemu.py` boots with
+  **no NIC device at all** and drives over serial (LOG/probe/py/launch), 15/15
+  steady-state. **Caveat surfaced + documented:** the *attached* debug build
+  leaves UEFI alive, and its serial console driver steals RX bytes from its
+  console UART (COM1 *and* COM2 on OVMF) - so URC must use a non-console UART
+  (the gate uses COM3). No `UNOAUTO_API` bump (additive; the C API is unchanged).
+  SPECTEST unaffected. REMOTE.md documents the transport + the console-UART caveat.
+- **2026-07-22 - (no bump, OWNERSHIP re-home)**: **networking and on-device
+  storage authoring are pulled back out of unoautomate** into neutral shared
+  system subsystems. The transport stack (`net.c/.h`, `tls.*`, `netsock.h`,
+  `netdisc.*`) is the pc64 face of **`unonet`**; `unostorage.c/.h` + `uno_fat_mkfs`
+  are a peer of **`unofs`**. Both are now governed by the normal "whoever's task
+  owns it edits it" rule, NOT this contract — networking especially, since http,
+  modload, tls and the roadmapped browser/JS + AI apps all consume it heavily, so
+  parking it under the automation agent was wrong. The 2026-07-22 "unoautomate
+  owns the transport stack" handoff is **superseded**. No code or API change: the
+  `uno_nic_t` seam, `net.h`/`netsock.h`/`unostorage.h` contracts, and every caller
+  are byte-for-byte unchanged; this is an ownership/territory relabel only.
+  unoautomate keeps the harness (LOG/TEST/PROBE/HOOK/DRIVE), `unoauto_remote` (the
+  URC channel — a *consumer* of `unonet`), and the URC verbs, and consumes both
+  subsystems' public APIs like any other agent. See §1 "Not mine either."
+- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`disc`**
+  — query-only readout of zero-config discovery (netdisc) state, so a dev PC can
+  ask "is discovery armed, did pc64 record a host OFFER, and which host:port did
+  it latch?" without watching the wire. Replies `active=<0/1>` / `have_host=<0/1>`
+  / `host=<ip>:<port>` (only when found) / `link=<state>`. Pure read of the
+  existing `netdisc.h` getters (`netdisc_active`/`have_host`/`host_ip`/`host_port`)
+  in `unoauto_remote.c`; UNO_DEBUG-only, additive to the CMD dispatch, no new C
+  API. REMOTE.md verb table documents it. Gate: `tools/netdisc_qemu.py` now drives
+  a real `disc` round-trip over the auto-dialed URC link on its raw-Ethernet L2 hub
+  (its TCP peer gained just enough seq/ack bookkeeping to send one command and read
+  the RSP frames) and asserts `active=1`, `have_host=1`, `host==` the advertised
+  OFFER — 9/9 gate checks green. Closes the "disc URC verb" leftover from the
+  transport-stack handoff.
 - **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`eth`**
   — live wired-NIC (Realtek r8169) register/bring-up debug, the exact wired
   sibling of the `iwl` WiFi verb. Additive pass-through in `unoauto_remote.c` to
@@ -138,6 +203,11 @@ the entry before building (§0).
   window). REMOTE.md verb table now also documents `iwl` (previously undocumented).
   Answers Request 1 of the 2026-07-22 r8169 entry in UNOAUTOMATE-REQUESTS.md;
   Request 2 (a NIC-independent UART/USB-CDC transport) remains open.
+- **2026-07-23 - (no bump, r8169 driver hook LANDS)**: the strong `r8169_dbg_cmd`
+  (status/reg/wreg/phy/wphy/link/mac/rerun; MMIO + PHYAR peek/poke) now lands in
+  `r8169.c`, so the `eth` verb drives the Realtek live — the weak fallback above
+  is superseded. Enables register-by-register bring-up over URC on the Zimaboard
+  (ASIX USB-eth carries the link; serial URC is the fallback carrier).
 - **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk
   partition/format, wrapped by unoautomate. **New shared framework `unostorage`
   (`unostorage.h/.c`)**: authors a GPT + ESP on a raw disk over `blkdev`
