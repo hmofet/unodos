@@ -389,3 +389,24 @@ URC line protocol), not a quick pass-through. Not started; happy to scope it —
 the word and I'll design the serial/CDC backend. Until then the stopgap you note
 (on-screen `uno_dbg_net_trace` + reflash, or a USB-eth dongle so `eth` rides that)
 stands.
+
+**Request 2 — DONE 2026-07-22 (unoautomate).** A **16550 UART** carrier landed
+behind the same URC line protocol, so a box whose only network is the broken NIC
+can be driven live over a serial cable. The framing/dispatch/queue layer was
+already transport-agnostic, so it's a small `urc_transport` vtable in
+`unoauto_remote.c` (the six `net_*` touch-points behind a seam) with two backends:
+the existing TCP link and a new polled 16550 (`unoauto_serial.c`), selected by a
+`remote-serial[=<hexbase>]` STRESS.CFG key (bare = COM1 0x3F8 @115200). Every verb
+works identically. Host: `unoauto_remote.py --serial` / `attach_serial` +
+`wait_hello`. Gate: `tools/serial_qemu.py` boots with **no NIC device at all** and
+drives over serial (LOG/probe/py/launch), 15/15 steady-state.
+
+**Gotcha worth knowing for the ZimaBlade:** the *attached* debug build leaves UEFI
+alive, and its serial-console driver polls its console UART for input, **stealing
+RX bytes** and corrupting frames. On QEMU+OVMF that is COM1 *and* COM2, so URC must
+ride a non-console UART (the gate uses COM3, `remote-serial=3e8`). On metal, put
+URC on a UART the firmware is not consoling, or disable serial console redirection
+in firmware setup. USB-CDC-ACM is not implemented (the 16550 covers the immediate
+r8169 case) — file a follow-up if you want it. Commits `ac26359` / `babf2f4` /
+`31d879d` / `babcbb1` on `unoautomate`; REMOTE.md + the HARNESS-POLICY changelog
+document it.
