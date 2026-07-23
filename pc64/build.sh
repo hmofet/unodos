@@ -159,6 +159,11 @@ if [ "$1" != "legacy" ]; then
         # logging + control).  Consumes only the public net API; see REMOTE.md.
         pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_remote.o" "unoauto_remote.c"
         OBJS="$OBJS build/unoauto_remote.o"
+        # NIC-independent URC transport: a 16550 UART backend behind the same
+        # URC line protocol, so a box whose only network is the broken NIC can
+        # still be driven live over serial.  See REMOTE.md / unoauto_serial.c.
+        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_serial.o" "unoauto_serial.c"
+        OBJS="$OBJS build/unoauto_serial.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,
