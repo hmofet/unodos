@@ -290,6 +290,22 @@ def main():
         except Exception as e:  # noqa: BLE001
             check(False, "raw-disk authoring (partition/format)", str(e))
 
+        # 9) devices: the read-only introspection verb. unodevices is not on
+        #    master yet, so the weak devmgr_list_str stub answers today - this
+        #    asserts the verb is WIRED (dispatch reaches it and it fails with the
+        #    pending message, never "unknown-verb"), and upgrades itself to the
+        #    real assertion the moment the strong symbol links in.
+        try:
+            rows = link.devices(timeout=10)
+            check(len(rows) > 0, "devices: listing returned", "%d device(s)" % len(rows))
+            check(all(":" in r["loc"] for r in rows), "devices: rows parse as bb:dd.f",
+                  "%r" % (rows[:3],))
+        except RuntimeError as e:  # device replied err - stub, or a real failure
+            check("unodevices pending" in str(e),
+                  "devices: verb wired (unodevices not built yet)", str(e))
+        except Exception as e:  # noqa: BLE001
+            check(False, "devices: verb wired", str(e))
+
     finally:
         try:
             link.command("poweroff", timeout=2)

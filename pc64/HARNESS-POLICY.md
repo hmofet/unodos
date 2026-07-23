@@ -119,6 +119,27 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-23 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb
+  **`devices`** — read-only PCI device listing, so "what hardware is on this box,
+  and what has no driver?" is answerable on a headless machine over the link
+  (answers the 2026-07-23 planning-agent request in `UNOAUTOMATE-REQUESTS.md`;
+  feeds `docs/DETACH-COMPLETION-PLAN.md` phases B/D). Additive pass-through in
+  `unoauto_remote.c` to unodevices' `devmgr_list_str(buf, cap)`, streamed one
+  `ok` line per device (the `py` verb's newline-split loop). UNO_DEBUG-only,
+  no `arm` gate — it mutates nothing. **The line format belongs to unodevices,
+  not to URC**: we split its dump and forward it verbatim, so phase 2's
+  bound-driver / `UNCLAIMED` column will appear over the link with no change to
+  this subsystem. `devmgr_list_str` is declared locally and **weak-stubbed**
+  (same pattern as `r8169_dbg_cmd`) since `uno_devmgr.*` is still on branch
+  `unodevices` — the tree links green today, replies `err device manager not
+  built (unodevices pending)`, and upgrades transparently when the strong
+  definition lands. Host: `UnoAutoLink.devices()` returns dicts
+  (`loc`/`vendor`/`device`/`cls`/`name`/`driver`/`raw`), tolerating both the
+  phase-1 and phase-2 column counts. Gate: `remote_qemu.py` check 9 asserts the
+  verb is *wired* (dispatch reaches it; never `unknown-verb`) and flips to
+  asserting real rows once unodevices is present. No `UNOAUTO_API` bump
+  (additive; the C API is unchanged). REMOTE.md documents the verb + the
+  format-ownership rule.
 - **2026-07-22 - (no bump, EXPERIMENTAL verbs)**: install-to-internal-disk over
   the link. New UNO_DEBUG verbs `mkdir` and `makeboot` (unoauto_remote.c) - after
   `prepdisk`, create the directory tree, `put` the OS files, then `makeboot`
