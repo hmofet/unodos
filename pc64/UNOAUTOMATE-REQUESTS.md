@@ -598,3 +598,25 @@ prep); indices are not stable across reboots, so re-confirm by size before any a
 op. Ownership note: the install logic is `installer.c` (installer territory) and
 `mkdir` is unofs/fat — this asks unoautomate to wire the verb + those owners to
 expose the entry point.
+
+## 2026-07-23 — planning agent → unoautomate: read-only `devices` URC verb
+
+**Context.** unodevices phase 1 (branch `unodevices`, `uno_devmgr.*`, see
+`docs/UNODEVICES-PLAN.md`) builds the full PCI device tree with per-device
+binding state and already carries a plain-text dump routine for the debug
+harness.
+
+**Request.** A read-only `devices` verb mirroring `disks`/`eth`: one line per
+device, `loc ven:dev class driver|UNCLAIMED`, wired to the devmgr's exported
+dump (or via the weak-symbol pass-through, same pattern as `r8169_dbg_cmd`,
+so it links green before unodevices lands). No arming needed; it mutates
+nothing.
+
+**Why.** This is the fleet answer to "which device is keeping this machine
+attached to firmware": the detach-completion plan
+(`docs/DETACH-COMPLETION-PLAN.md` phases B/D) turns the detach gates into
+registry queries and needs the per-machine unclaimed list visible over URC on
+headless boxes (ZimaBlade first).
+
+**Stopgap in use.** `uno.devices()` from pc64-python locally, and the
+UNO_DEBUG=1 harness dump in QEMU.
