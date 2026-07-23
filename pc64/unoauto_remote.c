@@ -81,6 +81,8 @@ static unsigned g_tick;
 static unsigned g_deadline;         /* connect timeout / retry-at (in ticks)  */
 static int      g_pending_off;      /* shut down once the TX queue drains      */
 static unsigned g_uart_base;        /* serial transport: 16550 I/O base (or 0) */
+static unsigned g_hello_at;         /* serial: re-emit HELLO at this tick ...   */
+static int      g_rx_seen;          /* ... until the host is heard from once    */
 
 /* outbound byte queue (linear, compacted on flush) */
 static char     g_tx[8192];
@@ -853,7 +855,7 @@ static void drain_rx(void)
         for (i = 0; i < n; i++) {
             char c = (char)buf[i];
             if (c == '\r') continue;
-            if (c == '\n') { g_rx[g_rxlen] = 0; dispatch_line(g_rx); g_rxlen = 0; }
+            if (c == '\n') { g_rx[g_rxlen] = 0; dispatch_line(g_rx); g_rxlen = 0; g_rx_seen = 1; }
             else if (g_rxlen < (int)sizeof g_rx - 1) g_rx[g_rxlen++] = c;
             /* else: overline - drop chars until the next '\n' */
         }
@@ -946,6 +948,7 @@ void unoauto_remote_tick(void)
     case RS_CONNECTING:
         if (ls == LINK_UP) {
             g_state = RS_UP;
+            g_rx_seen = 0; g_hello_at = g_tick + 120;   /* ~2 s re-HELLO cadence */
             unoauto_remote_send("HELLO", "pc64 1");
             /* now that the sink is live, announce the link on the SCRIPT
              * channel - this line flows straight back out as a LOG frame,
@@ -958,6 +961,13 @@ void unoauto_remote_tick(void)
         break;
     case RS_UP:
         drain_rx();
+        /* Serial has no connection handshake, so a host that attaches AFTER the
+         * guest booted never saw the one link-up HELLO.  Re-emit it every ~2 s
+         * until we hear the host, so a late `unoauto_remote.py --serial` syncs. */
+        if (g_tp == &TP_SERIAL && !g_rx_seen && g_tick >= g_hello_at) {
+            unoauto_remote_send("HELLO", "pc64 1");
+            g_hello_at = g_tick + 120;
+        }
         flush_tx();
         if (ls != LINK_UP) {
             g_tp->close();
