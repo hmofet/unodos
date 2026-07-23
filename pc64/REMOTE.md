@@ -12,8 +12,10 @@ as the rest of unoautomate); in production every entry point compiles away.
 the stick's `STRESS.CFG`:
 
 ```
-remote=<ip>:<port>       # static address
+remote=<ip>:<port>       # static address (TCP over the LAN)
 discover                 # OR zero-config: find the dev PC by broadcast
+remote-serial            # OR NIC-independent: URC over a 16550 UART (COM1)
+remote-serial=3e8        #   ...on a specific UART base in hex (see "serial" below)
 ```
 
 On a debug boot, once the boot net test releases the connection (`automate_start`
@@ -38,6 +40,46 @@ connection drops it reconnects with a short backoff.
 > **Security.** Plaintext, **LAN-only by intent**. Do not expose the listener
 > to an untrusted network; it can drive input, launch apps, run Python, and
 > power the machine off.
+
+## NIC-independent transport (serial / UART)
+
+The link normally rides TCP over the LAN. But when the machine's **only NIC is
+the one you're debugging** (e.g. a ZimaBlade whose onboard Realtek is down), URC
+can't ride it. For that, the same URC line protocol runs over a **16550 UART**
+instead — a serial cable to the dev PC, no working network required. This is a
+transport backend (`unoauto_serial.c`) behind the same framing/dispatch/queue
+layer; every verb works identically over serial.
+
+Arm it from `STRESS.CFG` (instead of `remote=` / `discover`):
+
+```
+remote-serial            # URC over COM1 (0x3F8) @ 115200 8N1
+remote-serial=2f8        # ...or another UART base in hex (2f8 = COM2, 3e8 = COM3)
+```
+
+On the dev PC (needs `pyserial`):
+
+```bash
+python tools/unoauto_remote.py --serial COM3           # Windows
+python tools/unoauto_remote.py --serial /dev/ttyUSB0   # Linux (optional :baud)
+```
+
+As a library: `link.attach_serial('/dev/ttyUSB0'); link.wait_hello()` then drive
+it exactly as over TCP. `attach_stream(obj)` drives over any connected byte
+stream with `recv()`/`sendall()` (e.g. a QEMU serial TCP socket).
+
+> **Pick a UART the firmware isn't using as its console.** The debug build runs
+> *attached* (UEFI stays alive so it can write its USB stick), and UEFI's serial
+> console driver polls its console UART for input — **stealing bytes from URC's
+> RX FIFO** and corrupting frames. On QEMU+OVMF that console is COM1 *and* COM2,
+> so an attached-firmware box must use **COM3 (`remote-serial=3e8`)** or another
+> non-console port. If your firmware only consoles COM1, COM2 is fine; if unsure,
+> use COM3/COM4, or disable serial console redirection in the firmware setup.
+
+> **Not for multi-MB pushes.** A 16550 has a 16-byte RX FIFO, so a sustained
+> inbound flood (an A/B kernel `put`) can overrun it. Serial is for interactive
+> control — `eth`/`iwl` register debug, `probe`, the drive verbs. Do big `put`
+> pushes over TCP.
 
 ## Protocol (URC)
 
@@ -211,3 +253,8 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
   the log stream, a `probe` round-trip, `py print(6*7)`→`42`, and `launch`→
   window. From a SLIRP guest the host is `10.0.2.2`, so that address reaches
   the listener on the host's loopback.
+- **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
+  boots with a `remote-serial` STRESS.CFG and **no NIC device**, driven over the
+  guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
+  (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2 — see the console-UART
+  caveat under "NIC-independent transport" above.
