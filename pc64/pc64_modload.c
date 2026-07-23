@@ -42,6 +42,7 @@
 #include "fb.h"             /* the full framebuffer surface (Python bindings) */
 #include "unosound.h"       /* uno_seq_* audio */
 #include "uno3d.h"          /* u3d_* 3D */
+#include "unoscript.h"      /* the production scripting surface: usc_ + unosec_ */
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -194,6 +195,18 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(logf), KX(log2f), KX(log10f), KX(log1pf), KX(powf), KX(sqrtf), KX(cbrtf),
     KX(floorf), KX(ceilf), KX(truncf), KX(roundf), KX(fabsf), KX(fmodf),
     KX(copysignf), KX(ldexpf), KX(frexpf), KX(modff), KX(nearbyintf), KX(rintf),
+    /* ---- unoscript: the PRODUCTION scripting surface ----------------------
+     * PYRT.UNO's `unoscript` module (upy_port/mod_unoscript.c) binds these;
+     * they ship in every build (unlike the debug-only DRIVE symbols below).
+     * The unosec_* seam is adjudicated by unosecure; the usc_* calls are the
+     * capability-gated surface ops. */
+    KX(unoscript_available), KX(unoscript_cap_name), KX(unoscript_cap_tier),
+    KX(unosec_current_user), KX(unosec_present), KX(unosec_request),
+    KX(usc_ui_pointer), KX(usc_ui_key), KX(usc_ui_screen_text),
+    KX(usc_ui_clipboard_get), KX(usc_ui_clipboard_set),
+    KX(usc_app_count), KX(usc_app_launch), KX(usc_app_close_top),
+    KX(usc_proc_list), KX(usc_mem_read), KX(usc_mem_write),
+    KX(usc_io_in), KX(usc_io_out), KX(usc_power),
 #ifdef UNO_DEBUG
     /* ---- unoautomate DRIVE surface (debug builds only) --------------------
      * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these; the

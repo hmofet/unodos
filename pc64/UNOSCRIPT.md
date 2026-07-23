@@ -1,9 +1,13 @@
 # unoscript — the OS scripting & automation surface (design)
 
-**Status: DESIGN + STUBS, blocked on `unosecure`.** Files landed: `unoscript.h`
-(contract), `unoscript.c` (runtime skeleton + fail-closed gate), `upy_port/
-mod_unoscript.c` (the `unoscript` Python module). Not yet in `build.sh` — see
-"Build wiring" below. The privilege dependency spec is `UNOSECURE-SPEC.md`.
+**Status: LIVE — `unosecure` landed.** Files: `unoscript.h` (contract),
+`unoscript.c` (runtime + capability guard), `upy_port/mod_unoscript.c` (the
+`unoscript` Python module), all now in `build.sh`. `unosecure` (`unosecure.{c,h}`)
+provides the strong `unosec_*` adjudicator that replaces the weak fail-closed
+gate — so the privilege decision is real. The remaining work is per-subsystem
+surface wiring (see "Subsystem seams"): a permitted tier≥1 op returns
+NotImplementedError until its owner lands the accessor. Dependency spec:
+`UNOSECURE-SPEC.md`; the adjudicator's design is `UNOSECURE.md`.
 
 ## What it is
 
@@ -162,11 +166,21 @@ owning subsystem (tracked in that subsystem's request channel):
   module load path.
 - **unosecure** — the whole `unosec_*` seam (blocking dependency).
 
-## Build wiring — deferred
+## Build wiring — landed with `unosecure`
 
-`unoscript.{c,h}` and `mod_unoscript.c` are intentionally **not** added to
-`build.sh` yet. Reason: shipping a half-wired privileged surface into the
-production OS before `unosecure` exists would mean either a broken gate or a
-dead subsystem in the image. Wire it in the same change that lands `unosecure`'s
-strong `unosec_*` symbols, once the surface seams above are real. The stubs
-compile cleanly in isolation (weak gate, no undefined refs).
+`unoscript.{c,h}` and `upy_port/mod_unoscript.c` are now in `build.sh`, wired in
+the same change that landed `unosecure` (`unosecure.{c,h}`). The core object
+list compiles `unosecure unoscript`; `unosecure`'s strong `unosec_*` definitions
+replace `unoscript.c`'s weak fail-closed fallbacks at link (the r8169 pattern),
+so `unosec_present()` is now 1 and tier≥1 decisions are real. `pc64_modload.c`
+exports the `usc_*` surface + the `unosec_*`/`unoscript_*` entry points PYRT
+imports, and `mod_unoscript.c` is added to the PYRT source set so `import
+unoscript` resolves. The kernel brings the subsystem up at the end of
+`uno_pc64_init()` (`unosec_boot()` then `unoscript_boot()`), after storage/detach
+so the security store lands on a writable volume.
+
+The **surface seams** above (unoui synthetic input, shell app control, unofs
+user-scoped IO, unosched enumeration, kernel mem/io) are still `USC_EUNAVAIL`
+until each owner wires its accessor — so a *permitted* tier≥1 op now returns
+NotImplementedError rather than PermissionError. The privilege gate is live; the
+plumbing behind it lights up per-subsystem.
