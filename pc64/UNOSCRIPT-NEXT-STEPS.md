@@ -25,10 +25,11 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
 
 ## Priority order
 
-1. **unoui — synthetic input + screen read** (tier 0). This is the "generally
-   available" layer and the biggest single unlock: it makes UI automation
-   (Automator/AppleScript-style) actually work for any logged-in user. Do this first.
+1. ~~**unoui — synthetic input + screen read** (tier 0).~~ **DONE** (2026-07-23) —
+   `ui.pointer/key/screen_text/clipboard_get/clipboard_set` are wired to real
+   platform/shell seams and QEMU-verified over URC. UI automation works. See §1.
 2. **shell — app control** (tier 0/1). Launch/close/enumerate + app messaging.
+   **Now the biggest remaining unlock** — do this next.
 3. **unosched — process enumeration** (tier 2). The "what's running" surface;
    also lands the thread→session binding `unosecure` already requested.
 4. **unofs — user-scoped file IO** (tier 1).
@@ -41,26 +42,34 @@ the power-user/debugging surfaces and can trail.
 
 ---
 
-## 1. unoui — synthetic input, screen read, clipboard  ·  tier 0  ·  `ui.input` / `ui.read` / `clipboard.write`
+## 1. unoui — synthetic input, screen read, clipboard  ·  tier 0  ·  DONE (2026-07-23)
 
-**Problem:** `uno_pc64_inject_key/_pointer` exist but are `#ifdef UNO_DEBUG`.
-`unoscript` is production, so it cannot call them. Provide production equivalents.
+**Was:** `uno_pc64_inject_key/_pointer` existed but were `#ifdef UNO_DEBUG`, and
+`unoscript` is production, so it could not call them; there was no screen-tree
+accessor and no system clipboard.
 
-**Accessors to expose (production, not debug-gated):**
-```c
-/* synthetic input, delivered to the next shell frame like a real device event */
-int  unoui_input_pointer(int x, int y, int btn);      /* -> usc_ui_pointer      */
-int  unoui_input_key(int scan, int uni, int mods);    /* -> usc_ui_key          */
-/* read side */
-int  unoui_screen_text(char *out, int cap);           /* -> usc_ui_screen_text  */
-int  unoui_clipboard_get(char *out, int cap);         /* -> usc_ui_clipboard_get*/
-int  unoui_clipboard_set(const char *s);              /* -> usc_ui_clipboard_set*/
-```
-`unoui_screen_text` should render the focused window's accessibility/label text
-(the tree, not a pixel grab) so scripts can find controls. Keep injection on the
-same path the debug injector used, minus the `UNO_DEBUG` gate.
+**Shipped** (production, gated only at the unoscript/unosecure layer):
+- **Input:** the debug injectors lost their `UNO_DEBUG` gate — `uno_pc64_inject_key`
+  / `uno_pc64_inject_pointer` (uefi_main.c) are now production, still on the exact
+  `map_key` / clamp+`pointer_moved_clicked` path real device input uses.
+  `usc_ui_pointer`/`usc_ui_key` call them (unoscript.c).
+- **Screen read:** `pc64_shell_screen_text(out, cap)` (pc64_uui.c) renders the
+  window-tree text — one line per open window, the focused one marked `*` — not a
+  pixel grab. Wired to `usc_ui_screen_text`.
+- **Clipboard:** a small shell-owned text buffer with `pc64_shell_clip_set/get`
+  (there was no system clipboard; apps keep their own). Wired to
+  `usc_ui_clipboard_set` (tier-1 `clipboard.write`) / `_get` (tier-0 `ui.read`).
+  Apps don't consume it yet — integrating WordPad/others' copy-paste is a
+  follow-up.
 
-**Unlocks:** `u.ui.click/move/key/screen/clip_get/clip_set`.
+**Verified** (QEMU, ui_automation_test over URC): launch an app → `ui.screen()`
+shows its live title (focused-marked); `ui.click`/`ui.key` return `USC_OK` on the
+real input path; `ui.clip_get()` reads (tier-0); `ui.clip_set()` is refused with
+no session (tier-1 gate). Unlocked `unoscript.ui.click/move/key/screen/clip_get/clip_set`.
+
+**Follow-ups (not blocking):** `ui.key`'s modifier arg currently maps any nonzero
+`mods` to the single Cmd/Ctrl modifier (`map_key` takes one modifier); a full
+modifier bitmap is a later refinement. App-integrated clipboard as above.
 
 ## 2. shell — app enumeration, launch/close, messaging  ·  tier 0/1  ·  `app.ctrl` / `app.msg`
 

@@ -121,38 +121,44 @@ static int denied(usc_cap_t cap)
  * / the subsystem's own request file) - unoscript does not implement them.
  * ======================================================================== */
 
+/* delegation targets now provided (production): synthetic input lives in the
+ * platform (uefi_main.c); the screen-tree text + shell clipboard live in the
+ * shell (pc64_uui.c).  unoscript only adds the capability gate on top. */
+void uno_pc64_inject_key(int scan, int uni, int ctrl);
+void uno_pc64_inject_pointer(int x, int y, int btn);
+int  pc64_shell_screen_text(char *out, int cap);
+int  pc64_shell_clip_set(const char *s);
+int  pc64_shell_clip_get(char *out, int cap);
+
 /* -- ui (unoui) --------------------------------------------------------- */
 int usc_ui_pointer(int x, int y, int btn)
 {
     if (!unoscript_guard(USC_CAP_UI_INPUT, "ui.pointer")) return denied(USC_CAP_UI_INPUT);
-    /* TODO(unoui): route to the shared synthetic-input entry (today the debug
-     * uno_pc64_inject_pointer; a production seam is requested from unoui). */
-    (void)x; (void)y; (void)btn;
-    return USC_EUNAVAIL;
+    uno_pc64_inject_pointer(x, y, btn);      /* same clamp+click path as real input */
+    return USC_OK;
 }
 int usc_ui_key(int scan, int uni, int mods)
 {
     if (!unoscript_guard(USC_CAP_UI_INPUT, "ui.key")) return denied(USC_CAP_UI_INPUT);
-    (void)scan; (void)uni; (void)mods;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    uno_pc64_inject_key(scan, uni, mods);    /* same map_key path as real input     */
+    return USC_OK;
 }
 int usc_ui_screen_text(char *out, int cap)
 {
     if (!unoscript_guard(USC_CAP_UI_READ, "ui.screen_text")) return denied(USC_CAP_UI_READ);
-    if (out && cap > 0) out[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(unoui): accessibility text of the window tree */
+    if (!out || cap <= 0) return USC_EINVAL;
+    return pc64_shell_screen_text(out, cap);  /* window-tree text, focused marked */
 }
 int usc_ui_clipboard_get(char *out, int cap)
 {
     if (!unoscript_guard(USC_CAP_UI_READ, "ui.clip_get")) return denied(USC_CAP_UI_READ);
-    if (out && cap > 0) out[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    if (!out || cap <= 0) return USC_EINVAL;
+    return pc64_shell_clip_get(out, cap);
 }
 int usc_ui_clipboard_set(const char *s)
 {
     if (!unoscript_guard(USC_CAP_CLIPBOARD_WRITE, "ui.clip_set")) return denied(USC_CAP_CLIPBOARD_WRITE);
-    (void)s;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    return pc64_shell_clip_set(s) ? USC_OK : USC_EINVAL;
 }
 
 /* -- app (shell) -------------------------------------------------------- */

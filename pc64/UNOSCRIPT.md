@@ -181,13 +181,20 @@ unoscript` resolves. The kernel brings the subsystem up at the end of
 `uno_pc64_init()` (`unosec_boot()` then `unoscript_boot()`), after storage/detach
 so the security store lands on a writable volume.
 
-**First wired surface:** `usc_power(0)` (shutdown) — it consumes the existing
-production `uno_pc64_shutdown()`, so `unoscript.sys.power(0)` is a real end-to-end
-path (Python → guard → `unosec` adjudication → OS shutdown), gated behind the
-tier-2 `power` capability. It proves the whole stack works on a live surface.
+**Wired surfaces:**
+- `usc_power(0)` (shutdown) — consumes the production `uno_pc64_shutdown()`, so
+  `unoscript.sys.power(0)` is a real end-to-end path (Python → guard → `unosec`
+  adjudication → OS shutdown), gated behind the tier-2 `power` capability.
+- **`ui.*` (unoui, tier 0) — DONE 2026-07-23.** `ui.pointer`/`ui.key` inject on the
+  real device-input path (`uno_pc64_inject_*`, now production); `ui.screen_text`
+  returns the window-tree text (`pc64_shell_screen_text`, focused window marked);
+  `ui.clipboard_get`/`_set` use a shell-owned clipboard (`pc64_shell_clip_*`,
+  tier-1 to write). QEMU-verified over URC. This is the first full *interactive*
+  surface — UI automation works for any logged-in (or ambient, tier-0) user.
 
-The remaining **surface seams** (unoui synthetic input, shell app control, unofs
-user-scoped IO, unosched enumeration, kernel mem/io + reboot/suspend) are still
+The remaining **surface seams** (shell app control, unofs user-scoped IO,
+unosched enumeration, kernel mem/io + reboot/suspend, the hook registry) are still
 `USC_EUNAVAIL` until each owner wires its accessor — so a *permitted* tier≥1 op
 returns NotImplementedError rather than OSError(EPERM). The privilege gate is
-live; the plumbing behind it lights up per-subsystem.
+live; the plumbing behind it lights up per-subsystem. Next up: shell app control
+(`UNOSCRIPT-NEXT-STEPS.md` §2).
