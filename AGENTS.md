@@ -102,6 +102,35 @@ git worktree add ../unodos-<slice> -b <slice> origin/master
 Do NOT add a `develop`/`staging` layer between features and `master`. For a handful
 of agents it is pure overhead; `master` is the integration branch.
 
+### Working across sessions, and recovering from a crashed agent
+
+The durable state of in-progress work is the **branch and its worktree**, never the
+agent session. Work survives context limits and agent crashes as long as it is
+committed to the branch (and pushed, for off-machine safety). The three save
+operations have different jobs and cadences:
+
+- **Commit** constantly, at every coherent step. Commits are your save points.
+- **Push the branch** (`git push -u origin <slice>`) at the end of each session,
+  before context fills, and at least daily on multi-day work. Pushing the branch is
+  off-machine backup and cross-session handoff. It never touches `master` and never
+  conflicts with another agent, so do it freely.
+- **Rebase onto `origin/master`** at the start of every session.
+- **Land to `master`** only when a slice passes the merge gate above.
+
+To resume in a fresh session (a planned handoff, or after a crash):
+
+1. Go to the existing worktree, or recreate it: `git worktree add ../unodos-<slice> origin/<slice>`.
+2. Run `git status` (recover any uncommitted edits) and
+   `git log --oneline origin/master..HEAD` (see what is already done).
+3. Commit anything dangling, rebase onto `origin/master`, then continue.
+
+An agent crash does NOT destroy the worktree: committed and uncommitted work is
+still on disk, so a fresh agent pointed at the same worktree just continues. Only
+uncommitted edits are ever at risk, and only from disk or machine loss, which
+frequent commits plus a pushed branch cover. A continuation prompt saves the next
+agent from re-deriving intent, but it is not load-bearing: the commit history plus
+this file are enough to pick the work back up.
+
 ## 4. Claims and requests
 
 - `<SUBSYSTEM>-REQUESTS.md` (today: `pc64/UNOAUTOMATE-REQUESTS.md`) is the async
