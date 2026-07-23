@@ -83,6 +83,7 @@ static void mdbg(const char *s) { (void)s; }
  * actually reference plus the stable Toolbox/libc surface.  build.sh greps
  * the KX() names out of this file to verify every module import resolves. */
 #define KX(n) { #n, (void *)&n }
+int devmgr_list_str(char *, int);  /* unodevices */
 #ifdef UNO_DEBUG
 /* the unoautomate DRIVE surface exported below (unoauto_* come from
  * unoauto.h; the rest are debug-only accessors with no public header) */
@@ -155,6 +156,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_fs_volumes), KX(uno_fs_volume_name), KX(uno_fs_list_begin),
     KX(uno_fs_list_get), KX(uno_fs_read), KX(uno_fs_read_at), KX(uno_fs_size),
     KX(uno_fs_write), KX(uno_fs_writable), KX(uno_fs_kind), KX(uno_fs_fat_index),
+    KX(devmgr_list_str),
     KX(uno_fs_mkdir),
     KX(uno_fat_list_ex), KX(uno_fat_read), KX(uno_fat_read_at), KX(uno_fat_size),
     KX(uno_fat_write), KX(uno_fat_delete), KX(uno_fat_mkdir), KX(uno_fat_rename),
