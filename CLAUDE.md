@@ -1,5 +1,13 @@
 # UnoDOS — agent instructions
 
+## READ FIRST: [`/AGENTS.md`](AGENTS.md)
+
+Before starting any work, read [`AGENTS.md`](AGENTS.md) at the repo root. It is the
+one working agreement for **every** agent on this repo (lanes and the ownership
+registry, shared choke-points, branch/merge discipline, claims/requests). It applies
+symmetrically to all agents, including the unoautomate agent. The notes below in this
+file are project state and history; AGENTS.md is the process you follow.
+
 ## Fresh-port parity — state as of 2026-07-20
 
 The 2026-07-19 audit concluded the June parity work was "never committed and is
