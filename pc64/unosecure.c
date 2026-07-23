@@ -599,6 +599,9 @@ static int caller_can(const char *capname)
     return a ? acc_has_capname(a, capname) : 0;
 }
 
+int unosec_can(const char *cap_name)
+{ return (g_up && cap_name && cap_name[0]) ? caller_can(cap_name) : 0; }
+
 /* ===========================================================================
  * The unosec_* seam (STRONG defs; override unoscript.c's weak fallbacks).
  * ======================================================================== */

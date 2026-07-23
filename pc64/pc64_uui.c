@@ -17,6 +17,7 @@
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
 #include "pc64_browser.h"    /* the web browser (native windowed canvas) */
+#include "pc64_accounts.h"   /* the security UI: login gate, consent sheet, accounts */
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
@@ -271,7 +272,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
-       ID_LIC,
+       ID_LIC, ID_ACCT,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -632,6 +633,10 @@ static void build_sys(unoui_window *w)
       unoui_add_label(w, gx, y, "CC BY-NC 4.0 + MIT/Apache-2.0 parts");
       b = unoui_add_button(w, cw - gx - 4 - bw, y - 3, bw, "View licenses", 0);
       b->id = ID_LIC; y += lh + 8; }
+    /* accounts & security: opens the Accounts manager (login/RBAC via unosecure) */
+    { int aw = fb_text_w("Manage accounts...") + 26;
+      unoui_widget *b = unoui_add_button(w, gx, y, aw, "Manage accounts...", 0);
+      b->id = ID_ACCT; y += lh + 8; }
     /* grouped hardware readouts: a box per subsystem, rows inside */
 #define SYS_GROUP(title, nrows) \
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
@@ -1751,6 +1756,7 @@ static void on_action(const unoui_action *a)
     case ID_ABOUT: open_app(APP_SYS); break;
     case ID_LIC:   pc64_browser_open_path("DOCS\\LICENSES.MD");
                    open_app(EX_BROWSER); break;
+    case ID_ACCT:  pc64_accounts_open(); g_dirty = 1; break;   /* Accounts manager */
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
@@ -2046,6 +2052,12 @@ int main(void)
      * MUST run before the shell chrome is built: the taskbar, icon grid and
      * launcher are all laid out in the live font's metrics. */
     uno_font_use(0);
+    /* Security: register the escalation consent sheet with unosecure, then run
+     * the boot login gate.  The gate is a no-op on a fresh machine (no accounts
+     * yet), so existing/first boots reach the desktop unchanged; once accounts
+     * exist it blocks here until a valid login binds the shell session. */
+    pc64_consent_register();
+    pc64_login_gate();
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */
