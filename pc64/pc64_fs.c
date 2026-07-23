@@ -191,6 +191,31 @@ int uno_fs_writable(int vol)
     return g_map[vol].kind == KIND_RAM || g_map[vol].kind == KIND_FAT;
 }
 
+/* create one directory (its parent must already exist).  Native FAT only:
+ * the RAM disk is flat (no subdirs) and the firmware SFS mkdir path is not
+ * exposed here.  1 on success, 0 otherwise - see uno_fat_mkdir (fat.c). */
+int uno_fs_mkdir(int vol, const char *path)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_mkdir(g_map[vol].idx, path);
+    return 0;
+}
+
+/* 1 if `path` names an existing directory (native FAT only): listing it as a
+ * directory succeeds (>= 0) only when it exists and is a dir - a missing name
+ * or a plain file fails.  Used to make `mkdir` idempotent over the remote link. */
+int uno_fs_isdir(int vol, const char *path)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap) return 0;
+    if (g_map[vol].kind == KIND_FAT) {
+        uno_fat_entry e;
+        return uno_fat_list_ex(g_map[vol].idx, path, &e, 1) >= 0;
+    }
+    return 0;
+}
+
 /* what backs a volume: KIND_RAM / KIND_FAT / KIND_FW, or -1 for a bad index */
 int uno_fs_kind(int vol)
 {

@@ -43,7 +43,10 @@ void  uno_native_reset(void);
 int   uno_pc64_set_bootnext(unsigned int n);                     /* uefi_main.c */
 /* raw-disk authoring (disks/arm/prepdisk verbs) - wraps unostorage + fat + fs */
 void  uno_fat_remount(void);                                     /* fat.c   */
+void  uno_fat_sync(void);                                        /* fat.c   */
 void  uno_fs_remap(void);                                        /* pc64_fs */
+int   uno_fs_mkdir(int vol, const char *path);                   /* pc64_fs */
+int   uno_fs_isdir(int vol, const char *path);                   /* pc64_fs */
 int   uno_fat_mkfs(uno_bdev *dev, unsigned long long first,
                    unsigned long long sectors, const char *label);
 
@@ -578,6 +581,30 @@ static void do_prepdisk(const char *id, char *args)     /* destructive (GPT+ESP+
     rsp(id, "end", 0);
 }
 
+/* mkdir <vol> <path> - create ONE directory on a mounted volume (like `put`,
+ * this is a volume-level op, no `arm` gate).  The parent must already exist, so
+ * a nested loader tree is laid down a level at a time (mkdir \EFI ; mkdir
+ * \EFI\BOOT ; put \EFI\BOOT\BOOTX64.EFI ...) - the missing primitive that let
+ * `put` push flat files but never create the \EFI\BOOT\ a bootable stick needs.
+ * Idempotent: an already-existing dir reports `ok exists`, not an error. */
+static void do_mkdir(const char *id, char *args)
+{
+    int vol = (int)atol_(tok(&args));
+    char *path = tok(&args);
+    if (!path || !path[0]) { rsp(id, "err", "usage: mkdir <vol> <path>"); rsp(id, "end", 0); return; }
+    if (!uno_fs_writable(vol)) { rsp(id, "err", "vol not writable"); rsp(id, "end", 0); return; }
+    if (uno_fs_mkdir(vol, path)) {
+        uno_fat_sync();                              /* persist the dir entry now */
+        unoauto_log(UA_CH_SCRIPT, "mkdir vol=%d %s -> created", vol, path);
+        rsp(id, "ok", "created"); rsp(id, "end", 0); return;
+    }
+    /* mkdir failed: idempotent-OK if the path already is a directory, otherwise
+     * a real error (parent missing / read-only / disk full). */
+    if (uno_fs_isdir(vol, path)) { rsp(id, "ok", "exists"); rsp(id, "end", 0); return; }
+    rsp(id, "err", "mkdir failed (parent missing / read-only / full)");
+    rsp(id, "end", 0);
+}
+
 /* eth verb pass-through target. The wired-NIC driver (Realtek r8169) lands the
  * real r8169_dbg_cmd() in r8169.c / r8169.h per the 2026-07-22 request in
  * UNOAUTOMATE-REQUESTS.md. We declare it locally (not via r8169.h) so this file
@@ -652,6 +679,7 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "mkpart"))  { do_mkpart(id, args); return; }
     if (!strcmp_(verb, "mkfs"))    { do_mkfs(id, args); return; }
     if (!strcmp_(verb, "prepdisk")){ do_prepdisk(id, args); return; }
+    if (!strcmp_(verb, "mkdir"))   { do_mkdir(id, args); return; }
     /* iwl <subcmd...> - live Intel-WiFi register/bring-up debug (F12). See
      * iwlwifi.h iwl_dbg_cmd: csr/csw/prr/prw/rerun/status. Additive pass-through
      * per the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md. */
@@ -973,8 +1001,12 @@ void unoauto_remote_tick(void)
             g_tp->close();
             g_state = RS_DOWN; g_deadline = g_tick + 300;
         } else if (g_pending_off && g_txlen == 0) {
+            uno_fat_sync();                     /* flush write-back FAT lines so
+                                                   remote put/mkdir writes reach
+                                                   the disk before we power off */
             uno_pc64_shutdown();
         } else if (g_pending_reboot && g_txlen == 0) {
+            uno_fat_sync();                     /* same: persist before reset    */
             uno_native_reset();                 /* never returns */
         }
         break;

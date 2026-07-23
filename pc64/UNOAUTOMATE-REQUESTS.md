@@ -443,7 +443,39 @@ them, the plumbing does.
 
 ## 2026-07-23 — zimablade test-box: a SAFE fully-remote "install to disk N" over URC
 
-**Status: OPEN**
+**Status: PARTIALLY RESOLVED** — option #2 (the `mkdir` primitive) delivered;
+option #1 (the armed native `install <disk>` verb) still OPEN, scoped below.
+
+> **Resolution (unoautomate), part 1 of 2 — the `mkdir` path.** Delivered the
+> missing directory primitive end to end, so the proven `prepdisk → mkdir → put`
+> recipe now lays down a bootable tree headlessly:
+> - `uno_fs_mkdir` + `uno_fs_isdir` dispatchers over the existing `uno_fat_mkdir`
+>   (`pc64_fs.c/.h`, unofs territory);
+> - a **`mkdir <vol> <path>`** URC verb — volume-level like `put`, no `arm` gate,
+>   idempotent (`ok created`/`ok exists`); `REMOTE.md` has the full install recipe;
+> - **`uno.mkdir(vol, path)`** Python binding (`mod_uno.c`), exported via
+>   `pc64_modload.c` so PYRT resolves it;
+> - **durability fix:** the native FAT cache is write-back with no post-detach
+>   flush, so `poweroff`/`reboot` now `uno_fat_sync()` first — remote `put`/`mkdir`
+>   writes survive the power cycle (this fixed a latent gap for `put` too).
+>
+> A USB stick (e.g. the Kingston) boots via the firmware **removable-media path**
+> `\EFI\BOOT\BOOTX64.EFI` — no NVRAM `Boot####` entry needed — so this alone makes
+> the headless Kingston install work.
+>
+> **Why #1 (armed `install` verb) stays open, and its real shape.** The requester
+> asked to "reuse `installer.c`", but `installer.c` **hard-refuses post-detach**
+> (`uno_inst_scan`: "Install needs the firmware") because its file copy (Simple
+> File System Protocol) and whole-disk clone (Block IO) are firmware Boot Services
+> that vanish at `ExitBootServices` — and URC runs post-detach. So a native
+> `install <disk>` verb cannot wrap `installer.c` as-is; it must (a) build the ESP
+> tree on the **native** FAT stack (now possible via `mkdir`+`put`) and (b) create
+> the `Boot####`/`BootOrder` entry via **runtime `SetVariable`**, the one installer
+> capability that survives detach (retained RT services; cf. the `bootnext` verb).
+> That is a larger, install-territory piece — filed as its own scoped work below,
+> gated by `arm` (size echo + boot-disk refusal, by index) exactly as requested.
+> Until it lands, the `mkdir`+`put` recipe covers removable-media boot, which is
+> the ZimaBlade's Kingston case.
 
 **Requester context.** The ZimaBlade is now the always-on pc64 metal test box,
 driven live from devbuntu over URC (MAC `00:e0:4c:30:5b:d4` = 192.168.2.118; r8169
