@@ -247,11 +247,18 @@ int usc_io_out(unsigned port, int width, unsigned val)
 }
 
 /* -- power -------------------------------------------------------------- */
+/* Shutdown is a production primitive already (uefi_main.c, not UNO_DEBUG-gated),
+ * so unoscript consumes it directly - no new seam needed.  Reboot/suspend still
+ * await a fuller kernel power seam (see UNOAUTOMATE-REQUESTS). */
+void uno_pc64_shutdown(void);
+
 int usc_power(int action)
 {
     if (!unoscript_guard(USC_CAP_POWER, "power")) return denied(USC_CAP_POWER);
-    (void)action;
-    return USC_EUNAVAIL;   /* TODO(kernel): reboot/shutdown/suspend seam */
+    switch (action) {
+    case 0:  uno_pc64_shutdown(); return USC_OK;   /* shutdown - wired today   */
+    default: return USC_EUNAVAIL;                  /* TODO(kernel): reboot/suspend */
+    }
 }
 
 /* ---- Lifecycle -------------------------------------------------------- */

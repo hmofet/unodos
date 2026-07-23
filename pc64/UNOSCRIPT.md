@@ -161,10 +161,12 @@ owning subsystem (tracked in that subsystem's request channel):
 - **shell** — production app enumeration/launch/close + a structured app-message IPC.
 - **unofs** — a user-scoped read/write seam that honours the acting identity.
 - **unosched** — task/thread enumeration + single-task inspect (state, regs, cpu).
-- **kernel** — guarded cross-address-space `mem_read/write`, port `io_in/out`, a
-  reboot/shutdown/suspend entry, and (tier 3) a syscall-tap hook and unsigned-
+- **kernel** — guarded cross-address-space `mem_read/write`, port `io_in/out`,
+  reboot + suspend (shutdown is **wired** — `usc_power(0)` consumes the existing
+  production `uno_pc64_shutdown()`), and (tier 3) a syscall-tap hook and unsigned-
   module load path.
-- **unosecure** — the whole `unosec_*` seam (blocking dependency).
+- **unosecure** — the whole `unosec_*` seam. **DONE** — landed and verified
+  (build links green, `unosec_present()`→1, contract matches `unoscript.h`).
 
 ## Build wiring — landed with `unosecure`
 
@@ -179,8 +181,13 @@ unoscript` resolves. The kernel brings the subsystem up at the end of
 `uno_pc64_init()` (`unosec_boot()` then `unoscript_boot()`), after storage/detach
 so the security store lands on a writable volume.
 
-The **surface seams** above (unoui synthetic input, shell app control, unofs
-user-scoped IO, unosched enumeration, kernel mem/io) are still `USC_EUNAVAIL`
-until each owner wires its accessor — so a *permitted* tier≥1 op now returns
-NotImplementedError rather than PermissionError. The privilege gate is live; the
-plumbing behind it lights up per-subsystem.
+**First wired surface:** `usc_power(0)` (shutdown) — it consumes the existing
+production `uno_pc64_shutdown()`, so `unoscript.sys.power(0)` is a real end-to-end
+path (Python → guard → `unosec` adjudication → OS shutdown), gated behind the
+tier-2 `power` capability. It proves the whole stack works on a live surface.
+
+The remaining **surface seams** (unoui synthetic input, shell app control, unofs
+user-scoped IO, unosched enumeration, kernel mem/io + reboot/suspend) are still
+`USC_EUNAVAIL` until each owner wires its accessor — so a *permitted* tier≥1 op
+returns NotImplementedError rather than OSError(EPERM). The privilege gate is
+live; the plumbing behind it lights up per-subsystem.
