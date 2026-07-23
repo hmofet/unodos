@@ -73,26 +73,16 @@ is the production build. `build.sh` populates `build/esp` incrementally, so the
 flasher wipes it before each of the two builds. Deploy is unchanged
 (`build-flasher.ps1` → `deploy-to-share.ps1`).
 
-## Standing rule: keep the shared pc64 flasher current
+## Flasher deploy is no longer mandatory after a build (2026-07-23)
 
-**Whenever you produce a new build of the pc64 OS** (i.e. you run `pc64/build.sh`
-and `build/BOOTX64.EFI` / `build/esp/` is regenerated), you must also rebuild the
-USB flasher and publish it to the network share, so it can be flashed from any
-computer on the LAN and never lags the OS:
+**Retired:** the former standing rule that *every* pc64 build must be followed by
+`pc64\flash\deploy-to-share.ps1` to publish a fresh USB flasher to
+`\\behemoth\unreplicated\unodos\pc64\`. Now that the OS can be installed and
+updated **over the network** (the URC `install <disk>` verb + `unostorage`
+clone-over-link, see `pc64/REMOTE.md`), a running box no longer depends on a
+freshly-staged USB flasher to receive a new build.
 
-```powershell
-pc64\flash\deploy-to-share.ps1        # rebuilds the flasher + image, copies to the share
-```
-
-This rebuilds `UnoDosFlasher.exe` (with the fresh image embedded), then copies it
-and `unodos-pc64-uefi.img.gz` to **`\\behemoth\unreplicated\unodos\pc64\`** and
-updates that share's `MANIFEST.txt` + a `BUILD.txt` stamp.
-
-- The flasher's embedded image IS the OS, so a stale flasher ships a stale OS —
-  don't skip this after meaningful pc64 changes.
-- If you already have `build/UnoDosFlasher.exe` + `build/unodos-uefi.img` from the
-  same build and just want to (re)publish, use `deploy-to-share.ps1 -SkipBuild`.
-- If `\\behemoth` is offline, the script stops with a clear error — deploy later
-  when the share is reachable; don't treat it as a build failure.
-- Needs WSL (mingw + sgdisk + mtools) and the in-box .NET `csc`, same as the
-  flasher build. See `pc64/flash/README.md`.
+The flasher (`pc64\flash\build-flasher.ps1` → `deploy-to-share.ps1`, embedding
+both prod + debug ESP trees per the rule above) still exists and works — use it
+when you specifically want a bootable USB stick — but rebuilding/publishing it is
+now **opt-in**, not an automatic step after `build.sh`.
