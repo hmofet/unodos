@@ -143,10 +143,16 @@ static char *ap_size(char *p, UINT64 bytes)                 /* "7.5 GB" style */
     return p;
 }
 
-/* the GPT header/array checksum - now the one shared reflected CRC-32 in
- * unostorage (was a private copy here; byte-identical result). */
-static UINT32 crc32(const void *data, UINTN len)
-{ return (UINT32)unostorage_crc32(data, (unsigned long)len); }
+/* Drive the shared unostorage GPT authoring over an EFI Block IO target: the
+ * whole-disk clone re-authors the target GPT through the same write path as the
+ * remote/prepdisk flow and the host flasher, instead of a private copy of the
+ * header/CRC math (that math - and the CRC-32 - now lives in unostorage). */
+static int bio_read(void *ctx, unsigned long long lba, unsigned int n, void *buf)
+{ EFI_BLOCK_IO *b = ctx; return b->ReadBlocks(b, b->Media->MediaId, lba, (UINTN)n * 512, buf) == EFI_SUCCESS; }
+static int bio_write(void *ctx, unsigned long long lba, unsigned int n, const void *buf)
+{ EFI_BLOCK_IO *b = ctx; return b->WriteBlocks(b, b->Media->MediaId, lba, (UINTN)n * 512, (void *)buf) == EFI_SUCCESS; }
+static unostorage_dev dev_of_bio(EFI_BLOCK_IO *b)
+{ unostorage_dev d; d.ctx = b; d.sectors = b->Media->LastBlock + 1; d.read = bio_read; d.write = bio_write; return d; }
 
 static UINT32 rd32(const unsigned char *p) { return (UINT32)p[0] | ((UINT32)p[1]<<8) | ((UINT32)p[2]<<16) | ((UINT32)p[3]<<24); }
 static UINT64 rd64(const unsigned char *p) { return (UINT64)rd32(p) | ((UINT64)rd32(p+4) << 32); }
@@ -591,8 +597,7 @@ static int install_disk(target *t, int make_default,
                         void (*progress)(int, const char *))
 {
     EFI_BLOCK_IO *src = src_disk(), *dst = t->bio;
-    UINT64 lba, dlast; UINT32 num, esz, ecrc; UINTN esec;
-    static unsigned char hdr[512];
+    UINT64 lba, dlast;
 
     if (!src) { err("cannot find the boot disk"); return 0; }
     if (!read_src_gpt(src)) return 0;
@@ -612,33 +617,18 @@ static int install_disk(target *t, int make_default,
         if (progress) progress(3 + (int)(lba * 87 / g_src_need), "Copying system");
     }
 
-    /* 2. backup GPT at the target's real end + patched primary */
+    /* 2. re-author the GPT for the TARGET's true size: relocate the backup GPT
+     *    to the real end and fix the primary's alternate pointer, the protective
+     *    MBR (sized to the target, not the source), and every CRC.  This is the
+     *    same writer unostorage uses for the remote prepdisk path and that the
+     *    host flasher (UnoDisk.cs) uses - the clone above left a valid standard
+     *    (128x128) primary GPT at LBA1 for it to read, and it preserves the disk
+     *    + partition GUIDs so the boot entry built below still matches. */
     if (progress) progress(92, "Writing GPT");
-    num = rd32(g_gpt + 80); esz = rd32(g_gpt + 84);
-    esec = ((UINTN)num * esz + 511) / 512;
-    ecrc = crc32(g_gpt + 512, (UINTN)num * esz);
-
-    /* backup entries end at dlast-1; backup header at dlast */
-    if (dst->WriteBlocks(dst, dst->Media->MediaId, dlast - esec, esec * 512, g_gpt + 512)
-            != EFI_SUCCESS) { err("write backup GPT entries failed"); return 0; }
-
-    memcpy(hdr, g_gpt, 512);
-    wr64(hdr + 24, dlast);                    /* MyLBA                        */
-    wr64(hdr + 32, 1);                        /* AlternateLBA -> primary      */
-    wr64(hdr + 48, dlast - esec - 1);         /* LastUsableLBA                */
-    wr64(hdr + 72, dlast - esec);             /* PartitionEntryLBA            */
-    wr32(hdr + 88, ecrc);
-    wr32(hdr + 16, 0); wr32(hdr + 16, crc32(hdr, rd32(hdr + 12)));
-    if (dst->WriteBlocks(dst, dst->Media->MediaId, dlast, 512, hdr) != EFI_SUCCESS)
-        { err("write backup GPT header failed"); return 0; }
-
-    memcpy(hdr, g_gpt, 512);
-    wr64(hdr + 32, dlast);                    /* AlternateLBA -> backup       */
-    wr64(hdr + 48, dlast - esec - 1);         /* LastUsableLBA                */
-    wr32(hdr + 88, ecrc);
-    wr32(hdr + 16, 0); wr32(hdr + 16, crc32(hdr, rd32(hdr + 12)));
-    if (dst->WriteBlocks(dst, dst->Media->MediaId, 1, 512, hdr) != EFI_SUCCESS)
-        { err("write primary GPT header failed"); return 0; }
+    {
+        unostorage_dev ud = dev_of_bio(dst);
+        if (!unostorage_gpt_finalize_clone(&ud)) { err("re-authoring the target GPT failed"); return 0; }
+    }
     dst->FlushBlocks(dst);
 
     /* 3. boot entry via a hand-built HD() short-form path (the firmware has
