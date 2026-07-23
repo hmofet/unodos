@@ -69,14 +69,68 @@ static void mdelay_(int ms) { uno_pc64_delay_ms(ms); }
 /* =====================================================================
  * 1. MMIO / PRPH / SRAM access (BAR0)
  * ===================================================================== */
+
+/* ---- I/O trace (UNO_DEBUG builds only) -----------------------------------
+ * Records every BAR32/BAR8/PRPH access in order, so a whole bring-up can be
+ * diffed MECHANICALLY against a ground-truth Linux ftrace (iwlwifi_dev_ioread32
+ * / iowrite32 / iowrite_prph32 events) of a WORKING load on this exact card
+ * (~/iwl_from_yoga.txt on the dev box; pc64/tools/iwl_iodiff.py aligns them).
+ *
+ * Sixteen F12 rounds were spent auditing the load path one register at a time
+ * from recalled Linux source, and each round verified a different subsystem
+ * without finding the divergence.  A recorded trace turns that guessing into a
+ * diff.  Consecutive identical accesses are run-length folded so poll loops do
+ * not flood the ring (the ftrace side is folded the same way).
+ * Off in production: UNO_DEBUG=0 compiles every hook to nothing. */
+#if UNO_DEBUG
+#define IOT_N 3072
+enum { IOT_R32 = 0, IOT_W32, IOT_W8, IOT_PRR, IOT_PRW };
+static struct iot_ent { u32 o, v; u16 rep; u8 k; } g_iot[IOT_N];
+static int g_iot_n;
+static int g_iot_on;      /* armed at bring-up start                       */
+static int g_iot_inner;   /* suppress the HBUS w32/r32 behind a PRPH op    */
+static void iot(u8 k, u32 o, u32 v)
+{
+    struct iot_ent *e;
+    if (!g_iot_on || g_iot_inner) return;
+    if (g_iot_n) {
+        e = &g_iot[g_iot_n - 1];
+        if (e->k == k && e->o == o && e->v == v && e->rep < 0xFFFF) { e->rep++; return; }
+    }
+    if (g_iot_n >= IOT_N) return;
+    e = &g_iot[g_iot_n++];
+    e->k = k; e->o = o; e->v = v; e->rep = 0;
+}
+#define IOT_ENTER  do { g_iot_inner++; } while (0)
+#define IOT_LEAVE  do { g_iot_inner--; } while (0)
+/* One line per folded access, in the order they happened.  Deliberately dumped
+ * on demand (the 'iwl iotrace' verb) rather than automatically: a failed load
+ * is ~250 lines, and a rerun should not have to pay for it. */
+static void iot_dump(void)
+{
+    static const char *kn[5] = { "r32", "w32", "w8_", "prr", "prw" };
+    int i;
+    uno_dbg_net_trace("wifi: IOTRACE begin (%d folded entries%s)",
+                      g_iot_n, g_iot_n >= IOT_N ? ", RING FULL - truncated" : "");
+    for (i = 0; i < g_iot_n; i++)
+        uno_dbg_net_trace("wifi: IOT %s %06x %08x x%d", kn[g_iot[i].k],
+                          g_iot[i].o, g_iot[i].v, (int)g_iot[i].rep + 1);
+    uno_dbg_net_trace("wifi: IOTRACE end");
+}
+#else
+#define iot(k, o, v)   ((void)0)
+#define IOT_ENTER      ((void)0)
+#define IOT_LEAVE      ((void)0)
+#endif
+
 static volatile u8 *g_bar;
 static pci_dev g_pci;
 static u16 g_devid;                     /* PCI device id (for diagnostics)     */
 static int g_present, g_bound;
 
-static u32 r32(u32 o) { return *(volatile u32 *)(g_bar + o); }
-static void w32(u32 o, u32 v) { *(volatile u32 *)(g_bar + o) = v; }
-static void w8_(u32 o, u8 v) { *(volatile u8 *)(g_bar + o) = v; }
+static u32 r32(u32 o) { u32 v = *(volatile u32 *)(g_bar + o); iot(IOT_R32, o, v); return v; }
+static void w32(u32 o, u32 v) { *(volatile u32 *)(g_bar + o) = v; iot(IOT_W32, o, v); }
+static void w8_(u32 o, u8 v) { *(volatile u8 *)(g_bar + o) = v; iot(IOT_W8, o, v); }
 static void w64_(u32 o, u64 v) { w32(o, (u32)v); w32(o+4, (u32)(v>>32)); }
 static void set_bit_(u32 o, u32 m) { w32(o, r32(o) | m); }
 static void clr_bit_(u32 o, u32 m) { w32(o, r32(o) & ~m); }
@@ -173,13 +227,21 @@ static void release_nic(void);
  * cannot be grabbed yet. Everything else goes through the grabbing pair. */
 static void prph_w_ng(u32 reg, u32 v)
 {
+    IOT_ENTER;
     w32(HBUS_TARG_PRPH_WADDR, (reg & g_prph_mask) | (3u<<24));
     w32(HBUS_TARG_PRPH_WDAT, v);
+    IOT_LEAVE;
+    iot(IOT_PRW, reg, v);
 }
 static u32 prph_r_ng(u32 reg)
 {
+    u32 v;
+    IOT_ENTER;
     w32(HBUS_TARG_PRPH_RADDR, (reg & g_prph_mask) | (3u<<24));
-    return r32(HBUS_TARG_PRPH_RDAT);
+    v = r32(HBUS_TARG_PRPH_RDAT);
+    IOT_LEAVE;
+    iot(IOT_PRR, reg, v);
+    return v;
 }
 static void prph_w(u32 reg, u32 v)
 {
@@ -1999,6 +2061,9 @@ uno_nic_t *iwl_nic(void)
     int vol;
     long fn;
     if (g_bound) return &g_nic;
+#if UNO_DEBUG
+    g_iot_n = 0; g_iot_inner = 0; g_iot_on = 1;   /* fresh trace per attempt */
+#endif
     if (!iwl_present()) {
         st_set("no Intel WiFi card");
         uno_dbg_net_trace("wifi: no supported Intel card on the PCI bus%s",
@@ -2299,6 +2364,13 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+#if UNO_DEBUG
+    if (!strncmp(line, "iotrace", 7)) {
+        iot_dump();
+        strcpy(out, "iotrace dumped to the NET debug channel");
+        return (int)strlen(out);
+    }
+#endif
     if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
     if (!strncmp(line, "csr ", 4))  { const char *p = line + 4;
         if (hex_u32(&p, &a) < 0) return -1;
