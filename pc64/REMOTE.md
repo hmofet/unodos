@@ -8,31 +8,78 @@ as the rest of unoautomate); in production every entry point compiles away.
 
 ## Shape
 
-pc64's TCP stack is single-connection and **client-only** (`net_tcp_connect`,
-no listen), so **pc64 dials OUT** to a listener on the dev PC. You put the dev
-PC's address in the stick's `STRESS.CFG`:
+**pc64 dials OUT** to a listener on the dev PC. You put the dev PC's address in
+the stick's `STRESS.CFG`:
 
 ```
-remote=<ip>:<port>
+remote=<ip>:<port>       # static address (TCP over the LAN)
+discover                 # OR zero-config: find the dev PC by broadcast
+remote-serial            # OR NIC-independent: URC over a 16550 UART (COM1)
+remote-serial=3e8        #   ...on a specific UART base in hex (see "serial" below)
 ```
 
-On a debug boot, once the boot net test releases the single TCP connection
-(`automate_start` in `pc64_nettest.c`), `unoauto_remote_boot()` reads that key,
-brings the NIC up (`pc64_net_up`), and dials. The link is pumped every shell
-frame by `unoauto_remote_tick()` (added next to `pc64_nettest_tick` in
-`pc64_uui.c`). If the connection drops it reconnects with a short backoff.
+On a debug boot, once the boot net test releases the connection (`automate_start`
+in `pc64_nettest.c`), `unoauto_remote_boot()` reads the key, brings the NIC up
+(`pc64_net_up`), and dials. The link is pumped every shell frame by
+`unoauto_remote_tick()` (next to `pc64_nettest_tick` in `pc64_uui.c`). If the
+connection drops it reconnects with a short backoff.
 
-> **Auto-discovery is deferred.** pc64 can't yet *send* an L2 broadcast (ARP
-> routes `255.255.255.255` to the gateway MAC; only the DHCP path hand-builds a
-> true broadcast frame). Broadcast discovery arrives with the fuller ARP/UDP
-> stack - see the request in `UNOAUTOMATE-REQUESTS.md`. Until then, set the IP.
+> **Zero-config discovery.** With `discover` set and no `remote=` key, pc64
+> broadcasts a UNODISC PROBE on the LAN (`netdisc`, see `NETSTACK.md`); a dev PC
+> running the listener answers with an OFFER carrying its ip:port, and pc64
+> dials it automatically — no address to type. (The old ARP/broadcast limitation
+> that deferred this is fixed: `net_udp_broadcast` now hand-builds a true
+> broadcast frame, and `ip_recv` accepts inbound broadcast.)
 
-> **One connection.** The remote link shares the single TCP connection with the
-> Browser / AI apps, so they are mutually exclusive with an active link.
+> **Multiple connections.** The remote link now runs on its **own socket**
+> (`net_socket`, from the multi-connection layer in `netsock.h`), not the shared
+> legacy `net_tcp_*` slot — so the Browser / AI apps can hold a TCP connection
+> at the same time as an active link. The stack (`net.c`) supports many
+> simultaneous connections and can `listen`/`accept` inbound ones.
 
 > **Security.** Plaintext, **LAN-only by intent**. Do not expose the listener
 > to an untrusted network; it can drive input, launch apps, run Python, and
 > power the machine off.
+
+## NIC-independent transport (serial / UART)
+
+The link normally rides TCP over the LAN. But when the machine's **only NIC is
+the one you're debugging** (e.g. a ZimaBlade whose onboard Realtek is down), URC
+can't ride it. For that, the same URC line protocol runs over a **16550 UART**
+instead — a serial cable to the dev PC, no working network required. This is a
+transport backend (`unoauto_serial.c`) behind the same framing/dispatch/queue
+layer; every verb works identically over serial.
+
+Arm it from `STRESS.CFG` (instead of `remote=` / `discover`):
+
+```
+remote-serial            # URC over COM1 (0x3F8) @ 115200 8N1
+remote-serial=2f8        # ...or another UART base in hex (2f8 = COM2, 3e8 = COM3)
+```
+
+On the dev PC (needs `pyserial`):
+
+```bash
+python tools/unoauto_remote.py --serial COM3           # Windows
+python tools/unoauto_remote.py --serial /dev/ttyUSB0   # Linux (optional :baud)
+```
+
+As a library: `link.attach_serial('/dev/ttyUSB0'); link.wait_hello()` then drive
+it exactly as over TCP. `attach_stream(obj)` drives over any connected byte
+stream with `recv()`/`sendall()` (e.g. a QEMU serial TCP socket).
+
+> **Pick a UART the firmware isn't using as its console.** The debug build runs
+> *attached* (UEFI stays alive so it can write its USB stick), and UEFI's serial
+> console driver polls its console UART for input — **stealing bytes from URC's
+> RX FIFO** and corrupting frames. On QEMU+OVMF that console is COM1 *and* COM2,
+> so an attached-firmware box must use **COM3 (`remote-serial=3e8`)** or another
+> non-console port. If your firmware only consoles COM1, COM2 is fine; if unsure,
+> use COM3/COM4, or disable serial console redirection in the firmware setup.
+
+> **Not for multi-MB pushes.** A 16550 has a 16-byte RX FIFO, so a sustained
+> inbound flood (an A/B kernel `put`) can overrun it. Serial is for interactive
+> control — `eth`/`iwl` register debug, `probe`, the drive verbs. Do big `put`
+> pushes over TCP.
 
 ## Protocol (URC)
 
@@ -86,6 +133,9 @@ unchanged.
 | `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
 | `mkdir <vol> <path>` | create a directory on a native-FAT volume (so files can be pushed into it) | `ok mkdir` |
 | `makeboot <disk> [desc] [efi-path]` | author a UEFI boot entry for the ESP on `<disk>` (defaults: `UnoDOS`, `\EFI\BOOT\BOOTX64.EFI`, made default); attached only | `ok boot-entry added` |
+| `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12) — `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
+| `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
+| `disc` | query zero-config discovery state (netdisc) — is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
@@ -226,3 +276,8 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
   the log stream, a `probe` round-trip, `py print(6*7)`→`42`, and `launch`→
   window. From a SLIRP guest the host is `10.0.2.2`, so that address reaches
   the listener on the host's loopback.
+- **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
+  boots with a `remote-serial` STRESS.CFG and **no NIC device**, driven over the
+  guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
+  (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2 — see the console-UART
+  caveat under "NIC-independent transport" above.
