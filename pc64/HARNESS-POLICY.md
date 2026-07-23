@@ -133,6 +133,26 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, new transport backend, EXPERIMENTAL)**: **NIC-
+  independent URC transport** - a **16550 UART** carrier for the remote channel,
+  so a box whose only network is the NIC being debugged can still be driven live
+  over a serial cable (answers **Request 2** of the 2026-07-22 r8169 entry in
+  `UNOAUTOMATE-REQUESTS.md`). The URC framing/dispatch/queue layer was already
+  transport-agnostic, so this is a small `urc_transport` vtable in
+  `unoauto_remote.c` moving the six `net_*` touch-points behind a seam, with two
+  backends: the existing TCP link, and a new polled 16550 (`unoauto_serial.c`),
+  selected by a `remote-serial[=<hexbase>]` STRESS.CFG key (bare = COM1 0x3F8
+  @115200; e.g. `=3e8` = COM3). Every verb works identically over serial. Host
+  (`tools/unoauto_remote.py`): `attach_stream`/`attach_serial` + a `--serial
+  DEVICE[:BAUD]` CLI, and `wait_hello()` - serial has no connection handshake, so
+  the host waits for pc64's HELLO before driving, and the device re-emits HELLO
+  until heard so a late attach syncs. Gate: `tools/serial_qemu.py` boots with
+  **no NIC device at all** and drives over serial (LOG/probe/py/launch), 15/15
+  steady-state. **Caveat surfaced + documented:** the *attached* debug build
+  leaves UEFI alive, and its serial console driver steals RX bytes from its
+  console UART (COM1 *and* COM2 on OVMF) - so URC must use a non-console UART
+  (the gate uses COM3). No `UNOAUTO_API` bump (additive; the C API is unchanged).
+  SPECTEST unaffected. REMOTE.md documents the transport + the console-UART caveat.
 - **2026-07-22 - (no bump, OWNERSHIP re-home)**: **networking and on-device
   storage authoring are pulled back out of unoautomate** into neutral shared
   system subsystems. The transport stack (`net.c/.h`, `tls.*`, `netsock.h`,
