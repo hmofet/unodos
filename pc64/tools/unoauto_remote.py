@@ -248,6 +248,20 @@ class UnoAutoLink:
         """Author a fresh GPT + ESP and format it FAT32 (one destructive op)."""
         return self.command("prepdisk", disk, label, timeout=k.pop("timeout", 180.0), **k)
 
+    def mkdir(self, vol, path, **k):
+        """Create one directory on a mounted volume (its parent must exist).
+        Idempotent: returns ['created'] or ['exists']."""
+        return self.command("mkdir", vol, path, **k)
+
+    def install(self, disk, make_default=False, **k):
+        """Clone the running OS onto <disk> over URC in one armed op: prepdisk +
+        native tree clone of the boot ESP. Removable-path bootable
+        (\\EFI\\BOOT\\BOOTX64.EFI); writes NO NVRAM Boot#### entry (runtime
+        SetVariable is refused post-detach), so `make_default` is inert here.
+        Arm the disk first (arm echoes its size and refuses the boot disk)."""
+        a = [disk] + (["default"] if make_default else [])
+        return self.command("install", *a, timeout=k.pop("timeout", 300.0), **k)
+
     def readsec(self, disk, lba, n=1, **k):
         import base64
         lines = self.command("readsec", disk, format(lba, "x"), n, **k)
