@@ -1,9 +1,13 @@
 # unoscript — the OS scripting & automation surface (design)
 
-**Status: DESIGN + STUBS, blocked on `unosecure`.** Files landed: `unoscript.h`
-(contract), `unoscript.c` (runtime skeleton + fail-closed gate), `upy_port/
-mod_unoscript.c` (the `unoscript` Python module). Not yet in `build.sh` — see
-"Build wiring" below. The privilege dependency spec is `UNOSECURE-SPEC.md`.
+**Status: LIVE — `unosecure` landed.** Files: `unoscript.h` (contract),
+`unoscript.c` (runtime + capability guard), `upy_port/mod_unoscript.c` (the
+`unoscript` Python module), all now in `build.sh`. `unosecure` (`unosecure.{c,h}`)
+provides the strong `unosec_*` adjudicator that replaces the weak fail-closed
+gate — so the privilege decision is real. The remaining work is per-subsystem
+surface wiring (see "Subsystem seams"): a permitted tier≥1 op returns
+NotImplementedError until its owner lands the accessor. Dependency spec:
+`UNOSECURE-SPEC.md`; the adjudicator's design is `UNOSECURE.md`.
 
 ## What it is
 
@@ -157,16 +161,45 @@ owning subsystem (tracked in that subsystem's request channel):
 - **shell** — production app enumeration/launch/close + a structured app-message IPC.
 - **unofs** — a user-scoped read/write seam that honours the acting identity.
 - **unosched** — task/thread enumeration + single-task inspect (state, regs, cpu).
-- **kernel** — guarded cross-address-space `mem_read/write`, port `io_in/out`, a
-  reboot/shutdown/suspend entry, and (tier 3) a syscall-tap hook and unsigned-
+- **kernel** — guarded cross-address-space `mem_read/write`, port `io_in/out`,
+  reboot + suspend (shutdown is **wired** — `usc_power(0)` consumes the existing
+  production `uno_pc64_shutdown()`), and (tier 3) a syscall-tap hook and unsigned-
   module load path.
-- **unosecure** — the whole `unosec_*` seam (blocking dependency).
+- **unosecure** — the whole `unosec_*` seam. **DONE** — landed and verified
+  (build links green, `unosec_present()`→1, contract matches `unoscript.h`).
 
-## Build wiring — deferred
+## Build wiring — landed with `unosecure`
 
-`unoscript.{c,h}` and `mod_unoscript.c` are intentionally **not** added to
-`build.sh` yet. Reason: shipping a half-wired privileged surface into the
-production OS before `unosecure` exists would mean either a broken gate or a
-dead subsystem in the image. Wire it in the same change that lands `unosecure`'s
-strong `unosec_*` symbols, once the surface seams above are real. The stubs
-compile cleanly in isolation (weak gate, no undefined refs).
+`unoscript.{c,h}` and `upy_port/mod_unoscript.c` are now in `build.sh`, wired in
+the same change that landed `unosecure` (`unosecure.{c,h}`). The core object
+list compiles `unosecure unoscript`; `unosecure`'s strong `unosec_*` definitions
+replace `unoscript.c`'s weak fail-closed fallbacks at link (the r8169 pattern),
+so `unosec_present()` is now 1 and tier≥1 decisions are real. `pc64_modload.c`
+exports the `usc_*` surface + the `unosec_*`/`unoscript_*` entry points PYRT
+imports, and `mod_unoscript.c` is added to the PYRT source set so `import
+unoscript` resolves. The kernel brings the subsystem up at the end of
+`uno_pc64_init()` (`unosec_boot()` then `unoscript_boot()`), after storage/detach
+so the security store lands on a writable volume.
+
+**Wired surfaces:**
+- `usc_power(0)` (shutdown) — consumes the production `uno_pc64_shutdown()`, so
+  `unoscript.sys.power(0)` is a real end-to-end path (Python → guard → `unosec`
+  adjudication → OS shutdown), gated behind the tier-2 `power` capability.
+- **`ui.*` (unoui, tier 0) — DONE 2026-07-23.** `ui.pointer`/`ui.key` inject on the
+  real device-input path (`uno_pc64_inject_*`, now production); `ui.screen_text`
+  returns the window-tree text (`pc64_shell_screen_text`, focused window marked);
+  `ui.clipboard_get`/`_set` use a shell-owned clipboard (`pc64_shell_clip_*`,
+  tier-1 to write). QEMU-verified over URC. This is the first full *interactive*
+  surface — UI automation works for any logged-in (or ambient, tier-0) user.
+- **`app.*` (shell, tier 0/1) — DONE 2026-07-23.** `app.count`/`app.launch`/
+  `app.close_top` (tier 0) drive the real launcher/close paths
+  (`pc64_shell_app_*`, formerly debug-only); `app.message(idx, verb)` (tier 1)
+  is a minimal shell-verb seam — `info`/`focus`/`close` by app index
+  (`pc64_shell_app_message`). QEMU-verified over URC.
+
+The remaining **surface seams** (unofs user-scoped IO, unosched enumeration,
+kernel mem/io + reboot/suspend, the hook registry) are still `USC_EUNAVAIL` until
+each owner wires its accessor — so a *permitted* tier≥1 op returns
+NotImplementedError rather than OSError(EPERM). The privilege gate is live; the
+plumbing behind it lights up per-subsystem. Tiers 0–1 (UI + apps) now give a
+genuinely useful scripting OS; tiers 2–3 (proc/fs/kernel/hook) trail.

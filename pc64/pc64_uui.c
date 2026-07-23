@@ -17,6 +17,7 @@
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
 #include "pc64_browser.h"    /* the web browser (native windowed canvas) */
+#include "pc64_accounts.h"   /* the security UI: login gate, consent sheet, accounts */
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
@@ -271,7 +272,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
-       ID_LIC,
+       ID_LIC, ID_ACCT,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -632,6 +633,10 @@ static void build_sys(unoui_window *w)
       unoui_add_label(w, gx, y, "CC BY-NC 4.0 + MIT/Apache-2.0 parts");
       b = unoui_add_button(w, cw - gx - 4 - bw, y - 3, bw, "View licenses", 0);
       b->id = ID_LIC; y += lh + 8; }
+    /* accounts & security: opens the Accounts manager (login/RBAC via unosecure) */
+    { int aw = fb_text_w("Manage accounts...") + 26;
+      unoui_widget *b = unoui_add_button(w, gx, y, aw, "Manage accounts...", 0);
+      b->id = ID_ACCT; y += lh + 8; }
     /* grouped hardware readouts: a box per subsystem, rows inside */
 #define SYS_GROUP(title, nrows) \
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
@@ -1574,10 +1579,54 @@ int pc64_shell_win_count(void) { return UI.nwin; }
 const char *pc64_shell_win_title(int i)
 { return (i >= 0 && i < UI.nwin) ? UI.win[i]->title : 0; }
 int pc64_shell_win_focused(int i) { return i == UI.focus_win; }
+#endif
 
-/* unoautomate DRIVE accessors: launch/close through the exact code paths the
- * launcher click and the title-bar close box use.  EX_PYAPP/EX_USERAPP are
- * refused - launching those would displace the automation script itself. */
+/* ---- production accessors for unoscript's ui.* automation surface ----------
+ * Always built (unlike the DRIVE/PROBE accessors above); unoscript gates them at
+ * its own layer via unosecure capabilities.  Screen "read" is the window-tree
+ * accessibility text (titles + which is focused), not a pixel grab, so a script
+ * can see and target windows.  The clipboard is a small shell-owned text buffer
+ * (there is no system clipboard otherwise - each app keeps its own today). */
+int pc64_shell_screen_text(char *out, int cap)
+{
+    int i, k = 0;
+    if (!out || cap <= 0) return 0;
+    for (i = 0; i < UI.nwin && k < cap - 1; i++) {
+        const char *t = UI.win[i]->title;
+        const char *mark = (i == UI.focus_win) ? "* " : "  ";
+        int j;
+        for (j = 0; mark[j] && k < cap - 1; j++) out[k++] = mark[j];
+        for (j = 0; t && t[j] && k < cap - 1; j++) out[k++] = t[j];
+        if (k < cap - 1) out[k++] = '\n';
+    }
+    out[k] = 0;
+    return k;
+}
+
+static char g_shell_clip[512];
+static int  g_shell_clip_n;
+int pc64_shell_clip_set(const char *s)
+{
+    int n = 0;
+    if (!s) return 0;
+    while (s[n] && n < (int)sizeof g_shell_clip - 1) { g_shell_clip[n] = s[n]; n++; }
+    g_shell_clip[n] = 0; g_shell_clip_n = n;
+    return 1;
+}
+int pc64_shell_clip_get(char *out, int cap)
+{
+    int n = 0;
+    if (!out || cap <= 0) return 0;
+    while (g_shell_clip[n] && n < cap - 1) { out[n] = g_shell_clip[n]; n++; }
+    out[n] = 0;
+    return n;
+}
+
+/* ---- app control (production; unoscript app.ctrl / app.msg) ----------------
+ * Launch/close go through the exact code paths the launcher click and the
+ * title-bar close box use.  EX_PYAPP/EX_USERAPP are refused to LAUNCH - doing
+ * so would displace the automation script that is running.  (Formerly the
+ * UNO_DEBUG-only DRIVE accessors; now production, gated at the unoscript layer.) */
 int pc64_shell_app_count(void) { return NAPPS; }
 int pc64_shell_launch(int a)
 {
@@ -1586,7 +1635,42 @@ int pc64_shell_launch(int a)
     return 1;
 }
 void pc64_shell_close_top(void) { close_focused(); }
-#endif
+
+/* bounded string append: writes s at dst[at..], NUL-terminates, returns new len */
+static int sput(char *dst, int cap, int at, const char *s)
+{ while (*s && at < cap - 1) dst[at++] = *s++; if (at < cap) dst[at] = 0; return at; }
+
+/* structured app control (unoscript app.msg, tier 1).  Minimal v1 verb set by
+ * app index: `info` (name/open/focused), `focus`, `close`.  Returns the reply
+ * length; `reply` always gets a short status.  Per-app custom verbs (an app-side
+ * message handler) are a later addition. */
+int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
+{
+    int wi;
+    if (!reply || cap <= 0) return 0;
+    if (idx < 0 || idx >= NAPPS || !msg) return sput(reply, cap, 0, "bad-idx");
+    if (!strcmp(msg, "info")) {
+        int at = sput(reply, cap, 0, "name=");
+        at = sput(reply, cap, at, app_name(idx));
+        at = sput(reply, cap, at, g_open[idx] ? " open=1" : " open=0");
+        at = sput(reply, cap, at, (focused_app() == idx) ? " focused=1" : " focused=0");
+        return at;
+    }
+    if (!strcmp(msg, "focus")) {
+        if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        raise_win(&g_win[idx]);
+        for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
+        g_dirty = 1;
+        return sput(reply, cap, 0, "focused");
+    }
+    if (!strcmp(msg, "close")) {
+        if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
+        close_focused();
+        return sput(reply, cap, 0, "closed");
+    }
+    return sput(reply, cap, 0, "unknown-verb");
+}
 
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
 int pc64_shell_font_mono(void)
@@ -1751,6 +1835,7 @@ static void on_action(const unoui_action *a)
     case ID_ABOUT: open_app(APP_SYS); break;
     case ID_LIC:   pc64_browser_open_path("DOCS\\LICENSES.MD");
                    open_app(EX_BROWSER); break;
+    case ID_ACCT:  pc64_accounts_open(); g_dirty = 1; break;   /* Accounts manager */
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
@@ -2046,6 +2131,12 @@ int main(void)
      * MUST run before the shell chrome is built: the taskbar, icon grid and
      * launcher are all laid out in the live font's metrics. */
     uno_font_use(0);
+    /* Security: register the escalation consent sheet with unosecure, then run
+     * the boot login gate.  The gate is a no-op on a fresh machine (no accounts
+     * yet), so existing/first boots reach the desktop unchanged; once accounts
+     * exist it blocks here until a valid login binds the shell session. */
+    pc64_consent_register();
+    pc64_login_gate();
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
     build_launcher();                                /* opened via Start    */

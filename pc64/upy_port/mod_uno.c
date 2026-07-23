@@ -36,6 +36,7 @@ long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 long uno_fs_size(int vol, const char *name);
 long uno_fs_read_at(int vol, const char *name, long off, unsigned char *buf, long max);
 int  uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
+int  uno_fs_mkdir(int vol, const char *path);
 int  uno_fs_volumes(void);
 int  uno_fs_list_begin(int vol);
 int  uno_fs_list_get(int vol, int idx, char *name, int max);
@@ -230,6 +231,13 @@ static mp_obj_t m_write(size_t n, const mp_obj_t *a) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(write_obj, 2, 3, m_write);
 
+/* uno.mkdir(vol, path) -> bool  (create one dir; its parent must already exist) */
+static mp_obj_t m_mkdir(size_t n, const mp_obj_t *a) {
+    int vol = n > 1 ? mp_obj_get_int(a[0]) : 0;
+    return mp_obj_new_bool(uno_fs_mkdir(vol, mp_obj_str_get_str(a[n - 1])));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mkdir_obj, 1, 2, m_mkdir);
+
 /* ---- uno.App base class (empty; the app subclasses it) -------------------- */
 static mp_obj_t app_make_new(const mp_obj_type_t *type, size_t n, size_t nkw, const mp_obj_t *args) {
     (void)n; (void)nkw; (void)args;
@@ -290,6 +298,7 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_read_at),  MP_ROM_PTR(&read_at_obj) },
     { MP_ROM_QSTR(MP_QSTR_size),     MP_ROM_PTR(&fsize_obj) },
     { MP_ROM_QSTR(MP_QSTR_write),    MP_ROM_PTR(&write_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mkdir),    MP_ROM_PTR(&mkdir_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {

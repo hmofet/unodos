@@ -32,6 +32,25 @@ long uno_fs_read_at(int vol, const char *name, long off,
 int  uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
 int  uno_fs_writable(int vol);                   /* 1 if uno_fs_write can work  */
 
+/* create a single directory (its parent must already exist); 1 on success,
+ * 0 if read-only / parent missing / already exists / unsupported backing.
+ * Native FAT only - RAM disk is flat, firmware SFS is not exposed here. To lay
+ * down a nested path, create each component in order (\EFI then \EFI\BOOT). */
+int  uno_fs_mkdir(int vol, const char *path);
+
+/* 1 if `path` exists as a directory on the volume, else 0 (native FAT only). */
+int  uno_fs_isdir(int vol, const char *path);
+
+/* opaque handle for the block device backing a volume (native FAT only, else 0);
+ * stable across a remount, so a caller can match a target volume to its disk. */
+void *uno_fs_vol_bdev(int vol);
+
+/* recursively clone src_vol's whole tree onto dst_vol (both native FAT), using
+ * caller-supplied scratch[cap] as the per-file buffer. Returns files copied, or
+ * a negative error (never a silent partial). *out_bytes (nullable) = total bytes. */
+int  uno_fs_copytree(int src_vol, int dst_vol, unsigned char *scratch, long cap,
+                     long *out_bytes);
+
 /* what backs a volume, and the escape hatch to the native FAT layer's richer
  * calls (subdirs, mkdir, rename - see fat.h) for volumes that have one */
 int  uno_fs_kind(int vol);      /* 0 = RAM disk, 1 = native FAT, 2 = firmware SFS, -1 bad */

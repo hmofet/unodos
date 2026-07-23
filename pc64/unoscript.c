@@ -121,61 +121,74 @@ static int denied(usc_cap_t cap)
  * / the subsystem's own request file) - unoscript does not implement them.
  * ======================================================================== */
 
+/* delegation targets now provided (production): synthetic input lives in the
+ * platform (uefi_main.c); the screen-tree text + shell clipboard live in the
+ * shell (pc64_uui.c).  unoscript only adds the capability gate on top. */
+void uno_pc64_inject_key(int scan, int uni, int ctrl);
+void uno_pc64_inject_pointer(int x, int y, int btn);
+int  pc64_shell_screen_text(char *out, int cap);
+int  pc64_shell_clip_set(const char *s);
+int  pc64_shell_clip_get(char *out, int cap);
+
 /* -- ui (unoui) --------------------------------------------------------- */
 int usc_ui_pointer(int x, int y, int btn)
 {
     if (!unoscript_guard(USC_CAP_UI_INPUT, "ui.pointer")) return denied(USC_CAP_UI_INPUT);
-    /* TODO(unoui): route to the shared synthetic-input entry (today the debug
-     * uno_pc64_inject_pointer; a production seam is requested from unoui). */
-    (void)x; (void)y; (void)btn;
-    return USC_EUNAVAIL;
+    uno_pc64_inject_pointer(x, y, btn);      /* same clamp+click path as real input */
+    return USC_OK;
 }
 int usc_ui_key(int scan, int uni, int mods)
 {
     if (!unoscript_guard(USC_CAP_UI_INPUT, "ui.key")) return denied(USC_CAP_UI_INPUT);
-    (void)scan; (void)uni; (void)mods;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    uno_pc64_inject_key(scan, uni, mods);    /* same map_key path as real input     */
+    return USC_OK;
 }
 int usc_ui_screen_text(char *out, int cap)
 {
     if (!unoscript_guard(USC_CAP_UI_READ, "ui.screen_text")) return denied(USC_CAP_UI_READ);
-    if (out && cap > 0) out[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(unoui): accessibility text of the window tree */
+    if (!out || cap <= 0) return USC_EINVAL;
+    return pc64_shell_screen_text(out, cap);  /* window-tree text, focused marked */
 }
 int usc_ui_clipboard_get(char *out, int cap)
 {
     if (!unoscript_guard(USC_CAP_UI_READ, "ui.clip_get")) return denied(USC_CAP_UI_READ);
-    if (out && cap > 0) out[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    if (!out || cap <= 0) return USC_EINVAL;
+    return pc64_shell_clip_get(out, cap);
 }
 int usc_ui_clipboard_set(const char *s)
 {
     if (!unoscript_guard(USC_CAP_CLIPBOARD_WRITE, "ui.clip_set")) return denied(USC_CAP_CLIPBOARD_WRITE);
-    (void)s;
-    return USC_EUNAVAIL;   /* TODO(unoui) */
+    return pc64_shell_clip_set(s) ? USC_OK : USC_EINVAL;
 }
 
 /* -- app (shell) -------------------------------------------------------- */
+/* delegation targets: production shell accessors (pc64_uui.c). */
+int  pc64_shell_app_count(void);
+int  pc64_shell_launch(int a);
+void pc64_shell_close_top(void);
+int  pc64_shell_app_message(int idx, const char *msg, char *reply, int cap);
+
 int usc_app_count(void)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.count")) return denied(USC_CAP_APP_CTRL);
-    return USC_EUNAVAIL;   /* TODO(shell): production app enumeration */
+    return pc64_shell_app_count();
 }
 int usc_app_launch(int idx)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.launch")) return denied(USC_CAP_APP_CTRL);
-    (void)idx; return USC_EUNAVAIL;   /* TODO(shell) */
+    return pc64_shell_launch(idx) ? USC_OK : USC_EINVAL;   /* bad idx / refused slot */
 }
 int usc_app_close_top(void)
 {
     if (!unoscript_guard(USC_CAP_APP_CTRL, "app.close_top")) return denied(USC_CAP_APP_CTRL);
-    return USC_EUNAVAIL;   /* TODO(shell) */
+    pc64_shell_close_top();
+    return USC_OK;
 }
 int usc_app_message(int idx, const char *json, char *reply, int cap)
 {
     if (!unoscript_guard(USC_CAP_APP_MSG, "app.message")) return denied(USC_CAP_APP_MSG);
-    (void)idx; (void)json; if (reply && cap > 0) reply[0] = 0;
-    return USC_EUNAVAIL;   /* TODO(shell): structured app IPC */
+    if (!reply || cap <= 0) return USC_EINVAL;
+    return pc64_shell_app_message(idx, json, reply, cap);  /* reply length >= 0 */
 }
 
 /* -- fs (unofs) --------------------------------------------------------- */
@@ -247,11 +260,18 @@ int usc_io_out(unsigned port, int width, unsigned val)
 }
 
 /* -- power -------------------------------------------------------------- */
+/* Shutdown is a production primitive already (uefi_main.c, not UNO_DEBUG-gated),
+ * so unoscript consumes it directly - no new seam needed.  Reboot/suspend still
+ * await a fuller kernel power seam (see UNOAUTOMATE-REQUESTS). */
+void uno_pc64_shutdown(void);
+
 int usc_power(int action)
 {
     if (!unoscript_guard(USC_CAP_POWER, "power")) return denied(USC_CAP_POWER);
-    (void)action;
-    return USC_EUNAVAIL;   /* TODO(kernel): reboot/shutdown/suspend seam */
+    switch (action) {
+    case 0:  uno_pc64_shutdown(); return USC_OK;   /* shutdown - wired today   */
+    default: return USC_EUNAVAIL;                  /* TODO(kernel): reboot/suspend */
+    }
 }
 
 /* ---- Lifecycle -------------------------------------------------------- */
