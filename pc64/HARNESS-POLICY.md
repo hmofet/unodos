@@ -152,6 +152,12 @@ the entry before building (§0).
   install_dir` + a `--install <disk> <esp_dir>` CLI. Works on internal SATA/NVMe
   disks (they enumerate as writable `fw*` while attached). Gate: `remote_qemu.py`
   proves mkdir + nested push + makeboot; SPECTEST 65/0/4; prod clean.
+  *(Clarification added 2026-07-23, so this is not misread against the `install`
+  verb entry: `makeboot`'s SetVariable works because it runs **attached**, which
+  is why the verb is attached-only. It does not contradict the 2026-07-23 finding
+  that runtime SetVariable is refused **post-detach** — that is why `install`,
+  which runs post-detach like all URC traffic, writes no NVRAM entry and relies
+  on the firmware removable-media path instead.)*
 - **2026-07-22 - (no bump, new transport backend, EXPERIMENTAL)**: **NIC-
   independent URC transport** - a **16550 UART** carrier for the remote channel,
   so a box whose only network is the NIC being debugged can still be driven live
