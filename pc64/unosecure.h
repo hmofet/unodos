@@ -162,6 +162,11 @@ int  unosec_enter_session(usec_session_t s);     /* 1 ok, 0 invalid handle      
 void unosec_leave(void);
 usec_session_t unosec_current_session(void);     /* 0 if none bound              */
 
+/* Does the CURRENT bound session hold `cap_name` (a usc.* or sec.* capability,
+ * by name)?  Side-effect free; for UIs to grey out actions or decide whether an
+ * escalation/elevation prompt is needed.  System identity holds everything. */
+int  unosec_can(const char *cap_name);
+
 /* =====================================================================
  * Policy & consent  (SPEC §6)
  * ===================================================================== */
