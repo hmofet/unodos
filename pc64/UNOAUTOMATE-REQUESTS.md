@@ -438,3 +438,59 @@ binding". Stopgap: `unoscript`'s enter/leave around each script body.
 tier≥1 op still returns `USC_EUNAVAIL` until each surface owner (unoui/shell/
 unofs/unosched/kernel) lands its accessor — the privilege gate no longer blocks
 them, the plumbing does.
+
+---
+
+## 2026-07-23 — zimablade test-box: a SAFE fully-remote "install to disk N" over URC
+
+**Status: OPEN**
+
+**Requester context.** The ZimaBlade is now the always-on pc64 metal test box,
+driven live from devbuntu over URC (MAC `00:e0:4c:30:5b:d4` = 192.168.2.118; r8169
+up at gigabit). First real task: install UnoDOS to its 64 GB Kingston stick and boot
+it — headlessly, over the link, with no one at the console. That is currently
+**impossible to do safely**, for two independent reasons found this session:
+
+1. **No way to create a directory over URC.** `prepdisk` + `put` can wipe/format a
+   disk (safe, by index) and push *flat* files, but a bootable tree needs
+   `\EFI\BOOT\BOOTX64.EFI` (and `APPS\`). `uno_fat_write` → `resolve_parent`
+   (`fat.c:456`) *requires* the parent dir to already exist — it never creates one —
+   and nothing remote can make one: no `mkdir` URC verb, the `uno` Python module
+   exposes only `read`/`read_at`/`size`/`write` (no `mkdir`), and `pc64_fs.c` has no
+   mkdir dispatcher. `uno_fat_mkdir` exists in `fat.c` but is unreachable over the
+   channel. So `put` cannot lay down a loader.
+2. **The on-device Install app can't be driven safely blind.** It handles dirs +
+   creates the UEFI boot entry, but target selection is a visual list, and over URC
+   I can't read which row is highlighted before pressing **I**. With a live **ZFS
+   data disk in that list** (this box has one — `fw3`, a 500 GB zpool), a wrong pick
+   is catastrophic. `disks`/`arm` are safe *because* `arm <disk>` echoes the disk's
+   size back (and refuses `is_boot`) — the GUI gives no such readback remotely.
+
+**What's needed (either; #1 preferred).**
+
+1. **An armed `install <disk> [--default]` URC verb** — the high-value one. Reuse
+   `installer.c` (its `write_boot_entry` + ESP-clone / `\EFI\UNODOS\` copy) but
+   **select the target by INDEX, gated by the existing `arm` safety** (size echo +
+   boot-disk refusal) instead of the visual list. It lays down the loader tree AND
+   creates the `Boot####`/`BootOrder` entry, so the disk auto-boots. This turns a
+   safe primitive we already have (`arm` = confirmed target by size) into a full
+   headless install — exactly what the blind GUI lacks. Needs the installer owner to
+   expose an index-based entry (`installer_install_to_disk(idx, make_default)`),
+   which unoautomate then wraps in the verb.
+2. **Failing that, a minimal `mkdir <vol> <path>` URC verb** (and/or `uno.mkdir`)
+   exposing `uno_fat_mkdir` through a `uno_fs_mkdir` dispatcher (unofs/fat
+   territory). With just this, the proven `prepdisk` → build dirs → `put` recipe
+   (`remote_qemu.py` §8) can be scripted host-side into a full install.
+
+**Why it matters.** The ZimaBlade is meant to be a *headless* always-on test target.
+Without one of these, every install/boot test needs a human at the console to drive
+the Install app and eyeball target selection — the one manual step in an otherwise
+fully-remote loop, and the thing that makes it unusable when nobody's in the room.
+
+**Stopgap in use.** A human at the ZimaBlade console drives the on-device Install app
+(safe target selection by eye); or `arm`/`prepdisk` + flat-file `put` for
+non-bootable data only. Kingston is `fw1` this boot (62 GB, no user data — safe to
+prep); indices are not stable across reboots, so re-confirm by size before any armed
+op. Ownership note: the install logic is `installer.c` (installer territory) and
+`mkdir` is unofs/fat — this asks unoautomate to wire the verb + those owners to
+expose the entry point.
