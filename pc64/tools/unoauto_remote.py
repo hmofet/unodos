@@ -196,6 +196,34 @@ class UnoAutoLink:
                         "writable": p[2] == "1", "name": p[3]})
         return out
 
+    def devices(self, **k):
+        """Read-only PCI device listing (needs unodevices; raises if not built).
+
+        One dict per device: loc/vendor/device/cls plus `name` (the class name)
+        and `driver` (None until unodevices phase 2 reports binding state, then
+        the bound driver's name or None for UNCLAIMED). `raw` keeps the device's
+        own line, since the format belongs to unodevices, not to URC.
+
+        Splitting the trailing column assumes the class name is a single token
+        (`display`, `ethernet` — what uno_devmgr.h specifies); a class name with
+        a space in it would be mis-split, so trust `raw` over `name`/`driver` if
+        that format ever changes."""
+        out = []
+        for l in self.command("devices", **k):
+            p = l.split(None, 3)
+            if len(p) < 3:
+                continue
+            ven, _, dev = p[1].partition(":")
+            rest = p[3] if len(p) > 3 else ""
+            # phase 2 appends a driver column; phase 1 stops at the class name.
+            name, driver = rest, None
+            if " " in rest:
+                name, _, last = rest.rpartition(" ")
+                driver = None if last == "UNCLAIMED" else last
+            out.append({"loc": p[0], "vendor": ven, "device": dev, "cls": p[2],
+                        "name": name, "driver": driver, "raw": l})
+        return out
+
     def push_file(self, vol, path, local_path, chunk=2700, timeout=10.0, progress=None):
         """A/B OS update: stream local_path to <vol>:<path> in `put` chunks, then
         finalize+verify. Returns True iff the device reports `verified`. Raises on

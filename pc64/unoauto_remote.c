@@ -719,6 +719,25 @@ __attribute__((weak)) int r8169_dbg_cmd(const char *line, char *out, int cap)
     return -1;
 }
 
+/* devices verb pass-through target. unodevices (branch `unodevices`, phase 1 of
+ * docs/UNODEVICES-PLAN.md) lands the real devmgr_list_str() in uno_devmgr.c/.h
+ * per the 2026-07-23 request in UNOAUTOMATE-REQUESTS.md. Declared locally rather
+ * than via uno_devmgr.h - same rationale as r8169_dbg_cmd above: this file builds
+ * and links green before the provider exists, and the linker prefers the strong
+ * definition the moment it arrives. Writes a NUL-terminated multi-line listing
+ * into buf and returns its length (excluding the NUL), truncated to cap. */
+int devmgr_list_str(char *buf, int cap);
+__attribute__((weak)) int devmgr_list_str(char *buf, int cap)
+{
+    static const char msg[] = "device manager not built (unodevices pending)";
+    int i = 0;
+    if (buf && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) buf[i] = msg[i];
+        buf[i] = 0;
+    }
+    return -1;
+}
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
@@ -793,6 +812,26 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         int n = r8169_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err",
             n >= 0 ? g_report : "bad-cmd (status/reg/wreg/phy/wphy/rerun/link/mac)");
+        rsp(id, "end", 0); return;
+    }
+    /* devices - read-only PCI device-tree listing, one `ok` line per device.
+     * Pure pass-through to unodevices' devmgr_list_str (weak-stubbed above until
+     * that subsystem lands); mutates nothing, so no `arm` gate. The line FORMAT
+     * is unodevices' to define, not ours - we only split its dump on newlines,
+     * so a phase-2 driver/UNCLAIMED column appears here with no change to this
+     * file. Per the 2026-07-23 planning-agent request in UNOAUTOMATE-REQUESTS.md;
+     * feeds the detach-completion plan's "what is still unclaimed on this box?"
+     * query on headless machines. */
+    if (!strcmp_(verb, "devices")) {
+        int n = devmgr_list_str(g_report, (int)sizeof g_report);
+        char *p = g_report;
+        if (n < 0) { rsp(id, "err", g_report); rsp(id, "end", 0); return; }
+        while (*p) {                              /* stream the listing by line */
+            char *nl = p; while (*nl && *nl != '\n') nl++;
+            { char save = *nl; *nl = 0; if (*p) rsp(id, "ok", p); *nl = save; }
+            if (!*nl) break;
+            p = nl + 1;
+        }
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {
