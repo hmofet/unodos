@@ -11,6 +11,35 @@ fulfilled.
 
 ---
 
+## 2026-07-22 — unoscript: new subsystem stubbed, blocked on unosecure + surface seams
+
+**New subsystem `unoscript`** landed as DESIGN + STUBS: the production, always-on,
+capability-gated Python OS-scripting surface ("script every surface of the OS" —
+Automator/AppleScript-scale). Files: `unoscript.h/.c`, `upy_port/mod_unoscript.c`,
+design in `UNOSCRIPT.md`. **Not in build.sh yet — deliberately.** It is thin by
+design (bindings + capability/tier model + the gate); it owns none of the surfaces
+it scripts and none of the privilege model.
+
+**Blocking dependency — `unosecure` (another agent):** the whole `unosec_*` seam
+(identity, RBAC, escalation). Full handoff contract written for that agent:
+`UNOSECURE-SPEC.md`. Until it links strong symbols, `unoscript`'s weak fallback is
+fail-closed (tier 0 allowed, tier ≥ 1 denied).
+
+**Seams unoscript needs from subsystem owners** (it implements none of these — each
+is your file, your commit; no urgency, all currently stubbed `USC_EUNAVAIL`):
+- **unoui:** a *production* synthetic-input entry (today only debug
+  `uno_pc64_inject_*`); window-tree / accessibility text; clipboard get/set.
+- **shell:** production app enumerate/launch/close; a structured app-message IPC.
+- **unofs:** a user-scoped read/write seam that honours the acting identity.
+- **unosched:** task/thread enumeration + per-task inspect (state/regs/cpu), and the
+  thread→session binding `unosecure` needs for `unosec_current_user`.
+- **kernel:** guarded cross-address-space `mem_read/write`, port `io_in/out`, a
+  power (reboot/shutdown/suspend) entry, a syscall-tap hook, unsigned-module load.
+
+Wire `unoscript` into `build.sh` in the same change that lands `unosecure`.
+
+---
+
 ## 2026-07-22 — RE-HOME: networking + storage out of unoautomate (ownership correction)
 
 **FYI to every agent.** The 2026-07-22 "unoautomate owns the transport stack"
