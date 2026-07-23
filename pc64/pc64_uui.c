@@ -1593,6 +1593,47 @@ int pc64_shell_launch(int a)
 void pc64_shell_close_top(void) { close_focused(); }
 #endif
 
+/* ---- production accessors for unoscript's ui.* automation surface ----------
+ * Always built (unlike the DRIVE/PROBE accessors above); unoscript gates them at
+ * its own layer via unosecure capabilities.  Screen "read" is the window-tree
+ * accessibility text (titles + which is focused), not a pixel grab, so a script
+ * can see and target windows.  The clipboard is a small shell-owned text buffer
+ * (there is no system clipboard otherwise - each app keeps its own today). */
+int pc64_shell_screen_text(char *out, int cap)
+{
+    int i, k = 0;
+    if (!out || cap <= 0) return 0;
+    for (i = 0; i < UI.nwin && k < cap - 1; i++) {
+        const char *t = UI.win[i]->title;
+        const char *mark = (i == UI.focus_win) ? "* " : "  ";
+        int j;
+        for (j = 0; mark[j] && k < cap - 1; j++) out[k++] = mark[j];
+        for (j = 0; t && t[j] && k < cap - 1; j++) out[k++] = t[j];
+        if (k < cap - 1) out[k++] = '\n';
+    }
+    out[k] = 0;
+    return k;
+}
+
+static char g_shell_clip[512];
+static int  g_shell_clip_n;
+int pc64_shell_clip_set(const char *s)
+{
+    int n = 0;
+    if (!s) return 0;
+    while (s[n] && n < (int)sizeof g_shell_clip - 1) { g_shell_clip[n] = s[n]; n++; }
+    g_shell_clip[n] = 0; g_shell_clip_n = n;
+    return 1;
+}
+int pc64_shell_clip_get(char *out, int cap)
+{
+    int n = 0;
+    if (!out || cap <= 0) return 0;
+    while (g_shell_clip[n] && n < cap - 1) { out[n] = g_shell_clip[n]; n++; }
+    out[n] = 0;
+    return n;
+}
+
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
 int pc64_shell_font_mono(void)
 {

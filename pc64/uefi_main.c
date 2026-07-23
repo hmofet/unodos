@@ -1910,9 +1910,14 @@ void uno_pc64_dbg_bench_cleanup(void)
     gShadowValid = 0;               /* force a full repaint over the cleared band */
 }
 
-/* synthetic input for the stress driver: keys go through the SAME map_key
- * path real firmware/native keys use, pointer moves through the same
- * clamp + click plumbing - so a stress run exercises the true input stack. */
+#endif /* UNO_DEBUG */
+
+/* Synthetic input - PRODUCTION.  Keys go through the SAME map_key path real
+ * firmware/native keys use; pointer moves through the same clamp + click
+ * plumbing, so an injected event exercises the true input stack.  Ungated
+ * because unoscript's `ui.*` automation surface (production) drives these,
+ * capability-gated at that layer by unosecure (UI_INPUT); the stress driver and
+ * the remote channel (both debug) also call them. */
 void uno_pc64_inject_key(int scan, int uni, int ctrl)
 { map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
 
@@ -1923,7 +1928,6 @@ void uno_pc64_inject_pointer(int x, int y, int btn)
     g_have_pointer = 1;
     pointer_moved_clicked(btn ? 1 : 0);
 }
-#endif /* UNO_DEBUG */
 
 /* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */
 long uno_efifs_size(int vol, const char *name)
