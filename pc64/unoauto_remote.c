@@ -46,7 +46,13 @@ int   uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first,
                               const char *desc, const char *path, int make_default);
 /* raw-disk authoring (disks/arm/prepdisk verbs) - wraps unostorage + fat + fs */
 void  uno_fat_remount(void);                                     /* fat.c   */
+void  uno_fat_sync(void);                                        /* fat.c   */
 void  uno_fs_remap(void);                                        /* pc64_fs */
+int   uno_fs_mkdir(int vol, const char *path);                   /* pc64_fs */
+int   uno_fs_isdir(int vol, const char *path);                   /* pc64_fs */
+void *uno_fs_vol_bdev(int vol);                                  /* pc64_fs */
+int   uno_fs_copytree(int src_vol, int dst_vol,                  /* pc64_fs */
+                      unsigned char *scratch, long cap, long *out_bytes);
 int   uno_fat_mkfs(uno_bdev *dev, unsigned long long first,
                    unsigned long long sectors, const char *label);
 int   uno_fat_mkdir(int fatvol, const char *path);               /* fat.c   */
@@ -612,6 +618,87 @@ static void do_makeboot(const char *id, char *args)
     rsp(id, "end", 0);
 }
 
+/* mkdir <vol> <path> - create ONE directory on a mounted volume (like `put`,
+ * this is a volume-level op, no `arm` gate).  The parent must already exist, so
+ * a nested loader tree is laid down a level at a time (mkdir \EFI ; mkdir
+ * \EFI\BOOT ; put \EFI\BOOT\BOOTX64.EFI ...) - the missing primitive that let
+ * `put` push flat files but never create the \EFI\BOOT\ a bootable stick needs.
+ * Idempotent: an already-existing dir reports `ok exists`, not an error. */
+static void do_mkdir(const char *id, char *args)
+{
+    int vol = (int)atol_(tok(&args));
+    char *path = tok(&args);
+    if (!path || !path[0]) { rsp(id, "err", "usage: mkdir <vol> <path>"); rsp(id, "end", 0); return; }
+    if (!uno_fs_writable(vol)) { rsp(id, "err", "vol not writable"); rsp(id, "end", 0); return; }
+    if (uno_fs_mkdir(vol, path)) {
+        uno_fat_sync();                              /* persist the dir entry now */
+        unoauto_log(UA_CH_SCRIPT, "mkdir vol=%d %s -> created", vol, path);
+        rsp(id, "ok", "created"); rsp(id, "end", 0); return;
+    }
+    /* mkdir failed: idempotent-OK if the path already is a directory, otherwise
+     * a real error (parent missing / read-only / disk full). */
+    if (uno_fs_isdir(vol, path)) { rsp(id, "ok", "exists"); rsp(id, "end", 0); return; }
+    rsp(id, "err", "mkdir failed (parent missing / read-only / full)");
+    rsp(id, "end", 0);
+}
+
+/* install <disk> [default] - clone the running OS onto disk <disk> over URC,
+ * armed like the other destructive verbs (arm echoes size + refuses the boot
+ * disk).  Preps a fresh GPT+ESP+FAT32 on the target, then clones the boot ESP's
+ * whole tree onto it natively (prepdisk + copytree, built on the mkdir
+ * primitive), so the disk boots via the firmware removable-media path
+ * \EFI\BOOT\BOOTX64.EFI.  It does NOT write an NVRAM Boot#### entry: runtime
+ * SetVariable is refused post-detach (see uno_pc64_set_bootnext) and URC is
+ * always post-detach - so `default` is accepted but inert.  A USB stick
+ * auto-boots from the removable path; an internal disk boots via firmware
+ * fallback or a one-time boot-menu pick.  See REMOTE.md. */
+static void do_install(const char *id, char *args)
+{
+    int disk = (int)atol_(tok(&args));
+    char *opt = tok(&args);        /* optional "default" - inert over URC (no NVRAM) */
+    uno_bdev *b = armed_bdev(id, disk);   /* arm gate + auto-disarm */
+    int nvol, v, src = -1, dst = -1, files;
+    long bytes = 0;
+    char t[80]; SB sb;
+    (void)opt;
+    if (!b) return;
+
+    /* 1) fresh GPT + ESP + FAT32 on the target, then remount so it mounts. */
+    if (!unostorage_prepare_esp(b, "UNODOS")) {
+        rsp(id, "err", "prepare failed (too small / read-only?)"); rsp(id, "end", 0); return;
+    }
+    uno_fat_remount(); uno_fs_remap();
+    rsp(id, "ok", "prepared");
+
+    /* 2) identify source (the boot ESP, by its loader) and target (by device). */
+    nvol = uno_fs_volumes();
+    for (v = 0; v < nvol; v++) {
+        if ((void *)b == uno_fs_vol_bdev(v)) dst = v;
+        else if (src < 0 && uno_fs_size(v, "\\EFI\\BOOT\\BOOTX64.EFI") >= 0) src = v;
+    }
+    if (dst < 0) { rsp(id, "err", "target volume not found after prepare"); rsp(id, "end", 0); return; }
+    if (src < 0) { rsp(id, "err", "source ESP not found (no \\EFI\\BOOT\\BOOTX64.EFI)"); rsp(id, "end", 0); return; }
+    if (src == dst) { rsp(id, "err", "source == target"); rsp(id, "end", 0); return; }
+    rsp(id, "ok", "cloning");
+
+    /* 3) clone the whole boot tree onto the target (reuse the put staging buf). */
+    g_put_vol = -1;                          /* invalidate any prior put session */
+    files = uno_fs_copytree(src, dst, g_put, PUT_MAX, &bytes);
+    if (files < 0) {
+        sb_init(&sb, t, sizeof t); sb_s(&sb, "clone failed rc="); sb_i(&sb, files);
+        t[sb.len] = 0; rsp(id, "err", t); rsp(id, "end", 0); return;
+    }
+    uno_fat_sync();                          /* persist before we report done */
+
+    sb_init(&sb, t, sizeof t);
+    sb_s(&sb, "installed "); sb_i(&sb, files); sb_s(&sb, " files ");
+    sb_ull(&sb, (unsigned long long)bytes);
+    sb_s(&sb, " bytes (removable-path boot; no NVRAM entry)");
+    t[sb.len] = 0; rsp(id, "ok", t);
+    unoauto_log(UA_CH_SCRIPT, "install disk=%d -> %d files %ld bytes", disk, files, bytes);
+    rsp(id, "end", 0);
+}
+
 /* eth verb pass-through target. The wired-NIC driver (Realtek r8169) lands the
  * real r8169_dbg_cmd() in r8169.c / r8169.h per the 2026-07-22 request in
  * UNOAUTOMATE-REQUESTS.md. We declare it locally (not via r8169.h) so this file
@@ -687,15 +774,8 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "mkfs"))    { do_mkfs(id, args); return; }
     if (!strcmp_(verb, "prepdisk")){ do_prepdisk(id, args); return; }
     if (!strcmp_(verb, "makeboot")){ do_makeboot(id, args); return; }
-    if (!strcmp_(verb, "mkdir")) {   /* create a directory (native-FAT vol) */
-        int vol = (int)atol_(tok(&args));
-        char *path = tok(&args);
-        int fi = uno_fs_fat_index(vol), ok;
-        if (fi < 0 || !path) { rsp(id, "err", "native-FAT vol + path required"); rsp(id, "end", 0); return; }
-        ok = uno_fat_mkdir(fi, path);
-        rsp(id, ok ? "ok" : "err", ok ? "mkdir" : "failed");
-        rsp(id, "end", 0); return;
-    }
+    if (!strcmp_(verb, "mkdir"))   { do_mkdir(id, args); return; }
+    if (!strcmp_(verb, "install")) { do_install(id, args); return; }
     /* iwl <subcmd...> - live Intel-WiFi register/bring-up debug (F12). See
      * iwlwifi.h iwl_dbg_cmd: csr/csw/prr/prw/rerun/status. Additive pass-through
      * per the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md. */
@@ -1017,8 +1097,12 @@ void unoauto_remote_tick(void)
             g_tp->close();
             g_state = RS_DOWN; g_deadline = g_tick + 300;
         } else if (g_pending_off && g_txlen == 0) {
+            uno_fat_sync();                     /* flush write-back FAT lines so
+                                                   remote put/mkdir writes reach
+                                                   the disk before we power off */
             uno_pc64_shutdown();
         } else if (g_pending_reboot && g_txlen == 0) {
+            uno_fat_sync();                     /* same: persist before reset    */
             uno_native_reset();                 /* never returns */
         }
         break;

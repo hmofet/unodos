@@ -23,6 +23,7 @@ int  uno_fat_native_eligible(void);
 int         uno_fat_volumes(void);
 const char *uno_fat_label(int vol);              /* 11-char volume label / ""  */
 unsigned int uno_fat_serial(int vol);            /* BPB volume id (dedup key)  */
+struct uno_bdev *uno_fat_dev(int vol);           /* backing block device / 0   */
 
 /* root or subdir listing: begin() returns file count + snapshots names,
  * get() copies entry i.  dir "" or NULL = root; else a backslash path. */

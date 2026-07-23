@@ -45,6 +45,8 @@
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
 #include "pc64_fs.h"        /* uno_fs_volumes/remap (the M3 detach dance) */
+#include "unosecure.h"      /* security subsystem bring-up (unosec_boot) */
+#include "unoscript.h"      /* scripting runtime bring-up (unoscript_boot) */
 #include "pc64_native.h"    /* TSC/CMOS/PS2/CF9 - life after ExitBootServices */
 #include "snd_pcm.h"        /* sampled audio: HD Audio / AC'97 PCM ring */
 #ifdef UNO_ACPI
@@ -970,6 +972,22 @@ void uno_pc64_init(void)
     uno_dbg_write_bootenv();
     uno_dbg_write_bootlog();
 #endif
+
+    /* Security subsystem last: storage is up and (if it happened) detach has
+     * remapped to the writable native volume, so unosecure's root-only store
+     * lands on persistent media.  unosec_boot() seeds built-in roles / loads
+     * accounts + the audit chain; unoscript_boot() brings the scripting runtime
+     * up.  Both fail closed - a missing/read-only store degrades to an in-RAM,
+     * deny-by-default posture rather than opening anything. */
+    splash_stage(4, "security (accounts / RBAC)");
+#ifdef UNO_SECTEST
+    /* build-time gate: prove the escalation decision flips deny->allow.  Runs
+     * on a scratch store and resets the subsystem, so the real bring-up below
+     * starts clean. */
+    uno_dbg_log("unosec_selftest -> %s", unosec_selftest() ? "PASS" : "FAIL");
+#endif
+    unosec_boot();
+    unoscript_boot();
 }
 
 /* ===========================================================================
@@ -1983,9 +2001,14 @@ void uno_pc64_dbg_bench_cleanup(void)
     gShadowValid = 0;               /* force a full repaint over the cleared band */
 }
 
-/* synthetic input for the stress driver: keys go through the SAME map_key
- * path real firmware/native keys use, pointer moves through the same
- * clamp + click plumbing - so a stress run exercises the true input stack. */
+#endif /* UNO_DEBUG */
+
+/* Synthetic input - PRODUCTION.  Keys go through the SAME map_key path real
+ * firmware/native keys use; pointer moves through the same clamp + click
+ * plumbing, so an injected event exercises the true input stack.  Ungated
+ * because unoscript's `ui.*` automation surface (production) drives these,
+ * capability-gated at that layer by unosecure (UI_INPUT); the stress driver and
+ * the remote channel (both debug) also call them. */
 void uno_pc64_inject_key(int scan, int uni, int ctrl)
 { map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
 
@@ -1996,7 +2019,6 @@ void uno_pc64_inject_pointer(int x, int y, int btn)
     g_have_pointer = 1;
     pointer_moved_clicked(btn ? 1 : 0);
 }
-#endif /* UNO_DEBUG */
 
 /* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */
 long uno_efifs_size(int vol, const char *name)

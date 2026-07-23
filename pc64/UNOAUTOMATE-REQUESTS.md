@@ -449,3 +449,152 @@ seam dependency) is also fine if you'd rather keep it self-contained.
 strong path runs today). The exposure is RDRAND-less targets only; no code change
 in your territory is urgent, but fail-closed (ask 1) is small and worth doing
 before any such port ships TLS.
+
+---
+
+## 2026-07-23 — unosecure: landed; one open coordination request to unosched
+
+**`unosecure` landed** (`unosecure.{c,h}`, design `UNOSECURE.md`) and is wired
+into `build.sh` alongside `unoscript` — its strong `unosec_*` definitions replace
+`unoscript.c`'s weak fail-closed gate (r8169 pattern), so `unosec_present()` is 1
+and tier≥1 privilege decisions are real. Accounts (PBKDF2-HMAC-SHA256), RBAC by
+cap-name, sessions, escalation with scopes/consent/signed-manifest, and a
+hash-chained append-only audit log are all in.
+
+**Request — unosched: assert the thread→session binding on context switch.**
+`unosec_current_user()` reads the *current thread's* bound session. Today the
+binding follows the `unosec_enter_session()` / `unosec_leave()` calls `unoscript`
+makes around a script body — correct for the single-run-at-a-time cooperative
+model. When `unosched` runs two scripted tasks concurrently, it must, on each
+context switch, call `unosec_enter_session(task->sec_session)` for the task it
+resumes and `unosec_leave()` when it suspends, so identity follows the running
+task rather than the last enter. The binding calls are already exported and cheap
+(a bounded per-thread stack). No urgency — nothing regresses until concurrent
+scripted tasks exist. Contract + rationale in `UNOSECURE.md` "thread→session
+binding". Stopgap: `unoscript`'s enter/leave around each script body.
+
+**For `unoscript` (informational, no action):** the seam is live; a *permitted*
+tier≥1 op still returns `USC_EUNAVAIL` until each surface owner (unoui/shell/
+unofs/unosched/kernel) lands its accessor — the privilege gate no longer blocks
+them, the plumbing does.
+
+---
+
+## 2026-07-23 — zimablade test-box: a SAFE fully-remote "install to disk N" over URC
+
+**Status: RESOLVED** — both delivered over URC: option #2 (`mkdir`) and option #1
+(the armed native `install <disk>` verb). One documented limit remains, not
+fixable over URC: no NVRAM `Boot####` entry (see part 2), so an *internal* disk
+boots via firmware fallback / a one-time boot-menu pick rather than auto-first. A
+USB stick (the Kingston case) auto-boots via the removable-media path — fully
+solved. A first-class NVRAM entry needs the on-device Install app booted to
+firmware (attached), which is out of URC scope by construction.
+
+> **Resolution (unoautomate), part 1 of 2 — the `mkdir` path.** Delivered the
+> missing directory primitive end to end, so the proven `prepdisk → mkdir → put`
+> recipe now lays down a bootable tree headlessly:
+> - `uno_fs_mkdir` + `uno_fs_isdir` dispatchers over the existing `uno_fat_mkdir`
+>   (`pc64_fs.c/.h`, unofs territory);
+> - a **`mkdir <vol> <path>`** URC verb — volume-level like `put`, no `arm` gate,
+>   idempotent (`ok created`/`ok exists`); `REMOTE.md` has the full install recipe;
+> - **`uno.mkdir(vol, path)`** Python binding (`mod_uno.c`), exported via
+>   `pc64_modload.c` so PYRT resolves it;
+> - **durability fix:** the native FAT cache is write-back with no post-detach
+>   flush, so `poweroff`/`reboot` now `uno_fat_sync()` first — remote `put`/`mkdir`
+>   writes survive the power cycle (this fixed a latent gap for `put` too).
+>
+> A USB stick (e.g. the Kingston) boots via the firmware **removable-media path**
+> `\EFI\BOOT\BOOTX64.EFI` — no NVRAM `Boot####` entry needed — so this alone makes
+> the headless Kingston install work.
+>
+> **Why #1 (armed `install` verb) stays open, and its real shape.** The requester
+> asked to "reuse `installer.c`", but `installer.c` **hard-refuses post-detach**
+> (`uno_inst_scan`: "Install needs the firmware") because its file copy (Simple
+> File System Protocol) and whole-disk clone (Block IO) are firmware Boot Services
+> that vanish at `ExitBootServices` — and URC runs post-detach. So a native
+> `install <disk>` verb cannot wrap `installer.c` as-is; it must (a) build the ESP
+> tree on the **native** FAT stack (now possible via `mkdir`+`put`) and (b) create
+> the `Boot####`/`BootOrder` entry via **runtime `SetVariable`**, the one installer
+> capability that survives detach (retained RT services; cf. the `bootnext` verb).
+> That is a larger, install-territory piece — filed as its own scoped work below,
+> gated by `arm` (size echo + boot-disk refusal, by index) exactly as requested.
+> Until it lands, the `mkdir`+`put` recipe covers removable-media boot, which is
+> the ZimaBlade's Kingston case.
+
+> **Resolution (unoautomate), part 2 of 2 — the armed `install <disk>` verb.**
+> Delivered. `install <disk> [default]` clones the running OS onto the target in
+> ONE armed op (reuses the `arm` gate: size echo + boot-disk refusal + auto-disarm):
+> `unostorage_prepare_esp` the target, then a native, disk-to-disk clone of the
+> boot ESP's whole tree — so no OS bytes cross the network (unlike a host-scripted
+> `put` loop). New pieces:
+> - `uno_fs_copytree(src, dst, scratch, cap, *bytes)` — iterative-BFS recursive
+>   clone on the native FAT stack, caller-supplied buffer (reuses the debug `put`
+>   staging buffer, zero prod BSS), never a silent partial (`pc64_fs.c/.h`);
+> - `uno_fs_vol_bdev` + `uno_fat_dev` — identify the target volume by its backing
+>   device (robust across the remount), and the source by its `\EFI\BOOT\BOOTX64.EFI`;
+> - the `install` URC verb wraps it (`unoauto_remote.c`); `unoauto_remote.py` gets
+>   `.install()` / `.mkdir()`. `REMOTE.md` documents the verb + one-shot recipe.
+>
+> **Correction to part 1's plan.** Part 1 assumed runtime `SetVariable` survives
+> detach and could write the `Boot####` entry. It does NOT here: `uno_pc64_set_bootnext`
+> refuses when `gDetached` (uefi_main.c) — this OS gives up runtime-variable access
+> at `ExitBootServices`, and URC is always post-detach. So the verb writes **no**
+> NVRAM entry; `default` is accepted but inert. The disk is made bootable via the
+> firmware removable-media path `\EFI\BOOT\BOOTX64.EFI` only — complete for a USB
+> stick, fallback/boot-menu for an internal disk. NVRAM auto-boot for an internal
+> disk genuinely requires attached-mode (the on-device Install app); it is not
+> achievable over URC and is not a remaining unoautomate task.
+>
+> Verified (QEMU, install_verb_test): `arm`+`install` on a blank disk cloned 74
+> files / 7.4 MB; after `poweroff`, the target's `\EFI\BOOT\BOOTX64.EFI`, an app,
+> and a font are byte-identical to the source offline (faithful + durable).
+
+**Requester context.** The ZimaBlade is now the always-on pc64 metal test box,
+driven live from devbuntu over URC (MAC `00:e0:4c:30:5b:d4` = 192.168.2.118; r8169
+up at gigabit). First real task: install UnoDOS to its 64 GB Kingston stick and boot
+it — headlessly, over the link, with no one at the console. That is currently
+**impossible to do safely**, for two independent reasons found this session:
+
+1. **No way to create a directory over URC.** `prepdisk` + `put` can wipe/format a
+   disk (safe, by index) and push *flat* files, but a bootable tree needs
+   `\EFI\BOOT\BOOTX64.EFI` (and `APPS\`). `uno_fat_write` → `resolve_parent`
+   (`fat.c:456`) *requires* the parent dir to already exist — it never creates one —
+   and nothing remote can make one: no `mkdir` URC verb, the `uno` Python module
+   exposes only `read`/`read_at`/`size`/`write` (no `mkdir`), and `pc64_fs.c` has no
+   mkdir dispatcher. `uno_fat_mkdir` exists in `fat.c` but is unreachable over the
+   channel. So `put` cannot lay down a loader.
+2. **The on-device Install app can't be driven safely blind.** It handles dirs +
+   creates the UEFI boot entry, but target selection is a visual list, and over URC
+   I can't read which row is highlighted before pressing **I**. With a live **ZFS
+   data disk in that list** (this box has one — `fw3`, a 500 GB zpool), a wrong pick
+   is catastrophic. `disks`/`arm` are safe *because* `arm <disk>` echoes the disk's
+   size back (and refuses `is_boot`) — the GUI gives no such readback remotely.
+
+**What's needed (either; #1 preferred).**
+
+1. **An armed `install <disk> [--default]` URC verb** — the high-value one. Reuse
+   `installer.c` (its `write_boot_entry` + ESP-clone / `\EFI\UNODOS\` copy) but
+   **select the target by INDEX, gated by the existing `arm` safety** (size echo +
+   boot-disk refusal) instead of the visual list. It lays down the loader tree AND
+   creates the `Boot####`/`BootOrder` entry, so the disk auto-boots. This turns a
+   safe primitive we already have (`arm` = confirmed target by size) into a full
+   headless install — exactly what the blind GUI lacks. Needs the installer owner to
+   expose an index-based entry (`installer_install_to_disk(idx, make_default)`),
+   which unoautomate then wraps in the verb.
+2. **Failing that, a minimal `mkdir <vol> <path>` URC verb** (and/or `uno.mkdir`)
+   exposing `uno_fat_mkdir` through a `uno_fs_mkdir` dispatcher (unofs/fat
+   territory). With just this, the proven `prepdisk` → build dirs → `put` recipe
+   (`remote_qemu.py` §8) can be scripted host-side into a full install.
+
+**Why it matters.** The ZimaBlade is meant to be a *headless* always-on test target.
+Without one of these, every install/boot test needs a human at the console to drive
+the Install app and eyeball target selection — the one manual step in an otherwise
+fully-remote loop, and the thing that makes it unusable when nobody's in the room.
+
+**Stopgap in use.** A human at the ZimaBlade console drives the on-device Install app
+(safe target selection by eye); or `arm`/`prepdisk` + flat-file `put` for
+non-bootable data only. Kingston is `fw1` this boot (62 GB, no user data — safe to
+prep); indices are not stable across reboots, so re-confirm by size before any armed
+op. Ownership note: the install logic is `installer.c` (installer territory) and
+`mkdir` is unofs/fat — this asks unoautomate to wire the verb + those owners to
+expose the entry point.

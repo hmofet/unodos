@@ -119,6 +119,8 @@ unchanged.
 | `vols` | list volumes | one `ok` line per volume: `vol kind writable name` (kind `0`=RAM `1`=native-FAT `2`=firmware-SFS) |
 | `put <vol> <path> <off-hex> <b64>` | base64-decode the chunk into a RAM staging buffer at `<off>` (`0` = start a new upload) | `ok <bytes-decoded>` |
 | `put <vol> <path> done <total-hex>` | finalize: write the staged buffer to disk in one `uno_fs_write`, then verify the on-disk size == total | `ok verified <total>` / `err size-mismatch…` |
+| `mkdir <vol> <path>` | create ONE directory on a mounted volume (parent must already exist; native-FAT only). No `arm` gate — volume-level like `put`. Lets `put` target a nested path (e.g. `\EFI\BOOT\`) a level at a time. Idempotent. | `ok created` / `ok exists` / `err mkdir failed…` |
+| `install <disk> [default]` | *(armed)* clone the running OS onto `<disk>` in one op: prepdisk (GPT+ESP+FAT32) + native clone of the boot ESP's whole tree. Disk boots via the firmware removable-media path `\EFI\BOOT\BOOTX64.EFI`. Writes **no** NVRAM `Boot####` entry (runtime SetVariable is refused post-detach), so `default` is inert here. | `ok prepared`, `ok cloning`, `ok installed <n> files <bytes> bytes…` / `err…` |
 | `poweroff` | shut the machine down after the queue drains | `ok bye` |
 | `reboot` | reset the machine after the queue drains (`uno_native_reset`) | `ok bye` |
 | `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable — attached only) | `ok set` / `err unavailable` |
@@ -136,6 +138,13 @@ unchanged.
 | `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12) — `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
 | `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
 | `disc` | query zero-config discovery state (netdisc) — is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
+
+> **Durability.** The native FAT cache is write-back, and post-detach nothing
+> flushes it on its own. `poweroff`/`reboot` therefore `uno_fat_sync()` (flush all
+> dirty lines to disk) **before** powering off, so remote `put`/`mkdir` writes
+> survive the power cycle — essential when the next step is booting the disk you
+> just wrote. Don't cut power without one of these verbs, or unflushed writes are
+> lost.
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
@@ -199,6 +208,50 @@ python tools/unoauto_remote.py --listen 0.0.0.0:5099        # then type: disks
 python tools/unoauto_remote.py --prepdisk 1 UNODOS
 # then push the OS tree onto the new volume with --push, and set a boot entry
 ```
+
+### Laying down a bootable tree (headless, no console)
+
+`prepdisk` gives a formatted volume; `put` pushes files; **`mkdir`** creates the
+directories in between — the piece that was missing before. A USB stick boots via
+the firmware's **removable-media fallback** `\EFI\BOOT\BOOTX64.EFI`, so no NVRAM
+`Boot####` entry is needed (it is exactly how the boot USB itself boots):
+
+```bash
+# after prepdisk, the new FAT volume shows up in `vols` (say it is vol 2)
+mkdir 2 \EFI                 # -> ok created
+mkdir 2 \EFI\BOOT            # -> ok created   (parent \EFI must exist first)
+put   2 \EFI\BOOT\BOOTX64.EFI …      # stream the loader in (see `put`)
+mkdir 2 \APPS ; put 2 \APPS\… …      # and the app modules
+reboot                       # flushed to disk first (see the durability note)
+```
+
+`mkdir` creates ONE level at a time, so build nested paths parent-first. It is
+idempotent (`ok exists` if the dir is already there), so re-running the recipe is
+safe. All of this runs post-detach on the native FAT stack, so it needs no
+firmware — unlike the on-device Install app, which requires booting to firmware.
+
+### One-shot: `install <disk>`
+
+The manual recipe above is what `install` automates on-device. It **clones the
+running OS onto the disk in a single armed verb** — prepdisk, then a native
+copy of the whole boot ESP tree (loader + `APPS\` + fonts + everything) straight
+disk-to-disk, so no OS bytes cross the network:
+
+```bash
+python tools/unoauto_remote.py --listen 0.0.0.0:5099   # then, over the link:
+disks                 # find the writable, non-boot target (say idx 1)
+arm 1                 # echoes the disk's size; refuses the boot disk
+install 1             # prepdisk + clone -> ok installed <n> files <bytes> bytes
+reboot                # (writes are flushed first)
+```
+
+**What it does NOT do:** write an NVRAM `Boot####`/`BootOrder` entry. Runtime
+`SetVariable` is refused once detached (same constraint as the `bootnext` verb),
+and URC is always post-detach. So the disk is made bootable via the firmware
+**removable-media path** `\EFI\BOOT\BOOTX64.EFI`: a **USB stick auto-boots** from
+it (this is the ZimaBlade Kingston case), and an **internal disk** boots via the
+firmware's fallback or a one-time boot-menu pick. To get a first-class NVRAM boot
+entry you must use the on-device Install app while booted to firmware (attached).
 
 > **Safety.** Every destructive verb (`writesec`/`gptinit`/`mkpart`/`mkfs`/
 > `prepdisk`) is inert until you `arm <disk>`, which **auto-disarms after one
