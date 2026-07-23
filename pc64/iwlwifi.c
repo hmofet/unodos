@@ -813,7 +813,14 @@ static int rf_killed(void) { return (r32(CSR_GP_CNTRL) & GP_CNTRL_HW_RF_KILL_SW)
  * ===================================================================== */
 /* We run ONE rx queue and the fixed command queue plus one data/mgmt TFD ring.
    Sizes kept small (polled, low throughput). */
-#define RXQ_N        256
+/* Linux sizes the free-RBD cyclic buffer from cfg->num_rbds, and for THIS part
+ * (iwl_ax201_cfg_quz_hr) that is IWL_NUM_RBDS_22000_HE = 2048, so the CB_SIZE
+ * it hands the firmware in context_info.control_flags is ilog2(2048) = 11.  We
+ * used 256/8.  The ring sizing is invisible to an MMIO trace - it only ever
+ * reaches the device as a field in the DMA'd context-info - which is why it
+ * survived every register-level audit.  Match Linux exactly. */
+#define RXQ_N        2048
+#define RXQ_CB_SIZE  11              /* ilog2(RXQ_N) - keep the two in step */
 #define RB_SIZE      4096
 #define CMDQ_N       32
 #define TXQ_N        256
@@ -1341,6 +1348,84 @@ static void msix_enable_pci(void)
                       pos, ctl, pci_cfg_read16(&g_pci, pos + 2), (ctl & 0x7ff) + 1);
 }
 
+/* Build a REAL MSI-X table, then LIFT the function mask.
+ *
+ * The mask above is safe but final in the wrong way: PCI Function Mask = 1
+ * forbids the function from emitting ANY MSI-X message, ever.  We set it
+ * because we poll and never take a vector - but the gen2 ctxt-info handshake
+ * does not signal ALIVE through a register we can poll: the working ftrace of
+ * this card delivers it as an MSI-X message (irq_msix entry:9, hw cause bit 0
+ * = MSIX_HW_INT_CAUSES_REG_ALIVE).  A device that cannot send that message can
+ * finish loading, start both CPUs, and then sit forever with nothing to do -
+ * which is exactly the F12 signature, and why msi_scratch has read back
+ * deadc0de (never written) in every round.
+ *
+ * We still do not want a real interrupt, so every vector is pointed at a host
+ * RAM scratch dword instead of the LAPIC window (0xFEE00000): an MSI-X message
+ * is just a posted memory write, so the device gets a completable signalling
+ * path and we get visible proof it fired, without wiring an IDT vector.  This
+ * is the same trick msi_probe_enable() uses for plain MSI on gen1.
+ *
+ * Per PCIe, each table entry powers up with Vector Control bit 0 (mask) SET,
+ * so nothing can be emitted until we clear it here - programming the table
+ * before dropping the function mask is the safe order. */
+/* OFF unless armed with the "iwl msix" verb, then retried with "iwl rerun".
+ * This is a device experiment, and an experiment must never be able to cost the
+ * machine: run unconditionally from the boot bring-up it hung the Yoga hard
+ * enough to need physical recovery (no URC, so no way back in). Anything that
+ * pokes an unvalidated BAR window or lets the device DMA belongs behind a verb,
+ * where a bad guess costs one reboot instead of a trip to the hardware. */
+static int g_msix_arm;
+static volatile u32 *g_msix_scratch;
+#define IWL_BAR0_MIN 0x4000u              /* smallest BAR0 on any part we bind */
+static void msix_table_setup(void)
+{
+    int pos = pci_find_cap(&g_pci, 0x11);
+    u32 tbl, off;
+    int bir, n, i;
+    u64 pa;
+    u16 ctl;
+    if (!pos || !g_bar) return;
+    ctl = pci_cfg_read16(&g_pci, pos + 2);
+    n = (ctl & 0x7ff) + 1;
+    tbl = pci_cfg_read32(&g_pci, pos + 4);
+    bir = (int)(tbl & 7u);
+    off = tbl & ~7u;
+    if (bir != 0) {                       /* table lives in a BAR we have not mapped */
+        uno_dbg_net_trace("wifi: MSI-X table in BAR%d (not BAR0) - left masked", bir);
+        return;
+    }
+    /* pci_bar() hands back an address with no length, so we cannot ask how big
+     * BAR0 is. Refuse anything that would not fit inside the smallest BAR0 we
+     * ever bind rather than write blind into unmapped MMIO. */
+    if (off + (u32)n * 16u > IWL_BAR0_MIN) {
+        uno_dbg_net_trace("wifi: MSI-X table @+%05x x%d exceeds the assumed %05x "
+                          "BAR0 - refusing to write it", off, n, IWL_BAR0_MIN);
+        return;
+    }
+    g_msix_scratch = (volatile u32 *)arena_alloc(64);
+    if (!g_msix_scratch) return;
+    *g_msix_scratch = 0;
+    pa = phys((const void *)g_msix_scratch);
+    /* the device will DMA to this address; a bogus one corrupts host RAM */
+    if (!pa || (pa & 3u) || (pa >> 32)) {
+        uno_dbg_net_trace("wifi: MSI-X scratch phys %08x%08x unusable - refusing",
+                          (u32)(pa >> 32), (u32)pa);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        volatile u32 *e = (volatile u32 *)(g_bar + off + (u32)i * 16);
+        e[0] = (u32)pa;                   /* message address low  */
+        e[1] = (u32)(pa >> 32);           /* message address high */
+        e[2] = 0x4D510000u | (u32)i;      /* data: magic | vector */
+        e[3] = 0;                         /* vector control: UNMASKED */
+    }
+    pci_cfg_write16(&g_pci, pos + 2, (u16)((ctl | 0x8000) & ~0x4000));
+    uno_dbg_net_trace("wifi: MSI-X table armed: %d vectors @BAR0+%05x -> %08x%08x, "
+                      "func-mask lifted (ctl now %04x)", n, off,
+                      (u32)(pa >> 32), (u32)pa, pci_cfg_read16(&g_pci, pos + 2));
+}
+
 static void msi_probe_enable(void)
 {
     int pos = pci_find_cap(&g_pci, 0x05);
@@ -1372,7 +1457,7 @@ static int load_fw_gen2(void)
     ci->version = 0;
     ci->mac_id = (u16)g_hw_rev;
     ci->size = sizeof(*ci) / 4;
-    { u32 cb = 8; /* log2(256) */ u32 cf = CTXT_TFD_FORMAT_LONG;
+    { u32 cb = RXQ_CB_SIZE; u32 cf = CTXT_TFD_FORMAT_LONG;
       cf |= (cb & 0xf) << CTXT_RB_CB_SIZE_POS;
       cf |= (CTXT_RB_SIZE_4K & 0xf) << CTXT_RB_SIZE_POS;
       ci->control_flags = cf; }
@@ -1577,6 +1662,8 @@ static int wait_alive(int timeout_ms)
         uno_dbg_net_trace("wifi:   HW_IF=%08x HPM_DEBUG=%08x HPM_HIPM=%08x HPM_UMAC_LTR=%08x grab_fail=%d",
                           r32(CSR_HW_IF_CONFIG_REG), prph_r(HPM_DEBUG),
                           prph_r(HPM_HIPM_GEN_CFG), prph_r(HPM_UMAC_LTR), g_grab_fail);
+        uno_dbg_net_trace("wifi:   msix_scratch=%08x (4d51xxxx = the device DELIVERED an MSI-X message)",
+                          g_msix_scratch ? *g_msix_scratch : 0xdeadc0deu);
         uno_dbg_net_trace("wifi:   msi_scratch=%08x (00004d51 = the device fired an interrupt)",
                           g_msi_scratch ? *g_msi_scratch : 0xDEADC0DE);
         /* Did the CSR_CTXT_INFO_BA kick even register? Read it back: if it does
@@ -2149,7 +2236,8 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
     uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
-    if (g_gen2) { msix_enable_pci(); conf_msix(); }  /* PCI MSI-X + BAR0 MSI-X - REQUIRED for the ROM to start */
+    if (g_gen2) { msix_enable_pci(); conf_msix();
+                  if (g_msix_arm) msix_table_setup(); }  /* PCI MSI-X + BAR0 MSI-X - REQUIRED for the ROM to start */
     else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
     nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
@@ -2364,6 +2452,11 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!strncmp(line, "msix", 4)) {
+        g_msix_arm = 1;
+        strcpy(out, "MSI-X table arming ON - now run 'iwl rerun'");
+        return (int)strlen(out);
+    }
 #if UNO_DEBUG
     if (!strncmp(line, "iotrace", 7)) {
         iot_dump();
