@@ -1,17 +1,22 @@
-# unoautomate — contract & coexistence policy
+# unoautomate: subsystem contract
 
-**Owner.** One agent (the *unoautomate agent*) is responsible for **all**
-development on unoautomate — the systemwide logging / testing / probing /
-automation / remote-control subsystem — and for **this contract**: `unoauto.h`
-(the C API), `REMOTE.md` (the remote/URC wire protocol), this file, and the
-changelog below. Work lands on `master` from branch `unoautomate` (worktree
-`Documents\Github\unodos-unoautomate`).
+> **The system-wide, symmetric agent policy is [`/AGENTS.md`](../AGENTS.md).** It
+> binds every agent equally, unoautomate included: lanes, the ownership registry,
+> shared choke-points, branch/merge discipline, claims. Read it first. THIS file
+> is now just **unoautomate's own subsystem contract** (registry row "unoautomate"):
+> its API surface, its territory, and its changelog. It is not law over other
+> agents; the general rules live in AGENTS.md and apply to unoautomate too.
 
-**Who this is for.** *Every* other agent working on UnoDOS pc64, whatever the
-task — a driver, an app, a subsystem, docs. unoautomate reaches into the shared
-debug/test harness and exposes an API you may build against. This policy is how
-your work and mine stay mergeable, and how you stay current with an interface
-that is **actively changing**.
+**What unoautomate owns.** The harness subsystem (systemwide logging / testing /
+probing / automation) and the URC remote-control channel, plus this contract:
+`unoauto.h` (the C API), `REMOTE.md` (the remote/URC wire protocol), this file,
+and the changelog below. Everything else it CONSUMES as a neutral API, the same as
+any agent (see AGENTS.md §1 and the 2026-07-22 "OWNERSHIP re-home" changelog entry
+below, where networking and storage were handed back).
+
+**If you build against unoautomate.** This subsystem exposes a debug/test/automation
+API you may consume. The section below tells you how to stay mergeable with it and
+current with an interface that is **actively changing**.
 
 ## 0. Stability: best-effort, NOT guaranteed — re-check the contract often
 
