@@ -45,38 +45,28 @@ unoautomate across a rebase.
 Need a capability, or hit a break you can't absorb? Append a dated note to
 **`UNOAUTOMATE-REQUESTS.md`** — I read it and act on it.
 
-## 1. Territory
+## 1. unoautomate's files
 
-**Mine — don't edit; open a request instead:**
+The general own / consume / shared-choke-point model lives in
+[`/AGENTS.md`](../AGENTS.md) §1 and §2 and applies here. This section only names
+what belongs to *this* subsystem.
+
+**unoautomate owns (don't edit; open a request instead):**
 - Core + remote: `unoauto.h/.c`, `unoauto_probe.c`, `unoauto_remote.h/.c`,
   `upy_port/mod_unoauto.c`
 - Contract & docs: this file, `REMOTE.md`, `UNOAUTOMATE-REQUESTS.md`
-  (append new requests only — don't edit entries you didn't write)
+  (append new requests only; don't edit entries you didn't write)
 - Harness gates: `tools/remote_qemu.py`, `tools/remote_proto_test.py`,
   `tools/automate_qemu.py`
-- The `unoautomate` branch and the `unodos-unoautomate` worktree
 
-**Yours — edit freely:** whatever your task owns — your drivers, your app, your
-subsystem, your own docs and telemetry notes.
+Work lands on `master` (the old `unoautomate` branch and `unodos-unoautomate`
+worktree were retired 2026-07-23 once fully merged).
 
-**Not mine either — shared system subsystems I *consume*, don't own.** unoautomate
-builds heavily on these, but they are neutral system APIs on the same footing as
-`unofs` / `uno3d` / `unosound` — governed by the normal "whoever's task owns it
-edits it" rule, not by this contract:
-- **Networking (`unonet`)** — the transport stack: `net.c/.h`, `tls.c/.h`,
-  `tls_ca.*`, `netsock.h`, `netdisc.c/.h` (ARP/IP/ICMP/UDP/TCP/DHCP/DNS + sockets
-  + broadcast + discovery). Consumed by http, modload, tls, the browser/JS + AI
-  apps, and my `unoauto_remote` link. The driver agent still owns the NIC drivers
-  below the `uno_nic_t` seam (`uno_nic.h`).
-- **On-device storage authoring (`unostorage`)** — `unostorage.c/.h` + the
-  `uno_fat_mkfs` formatter: GPT/ESP/FAT32 authoring over `blkdev`, wrapped by both
-  the installer and me. A peer of `unofs`.
-
-If I need a new capability from either (a socket option, a protocol, a storage
-primitive), I file against *their* owner just like you do — I don't restructure
-them under this policy. Re-homed out of unoautomate 2026-07-22 (see the changelog
-below and the note in `UNOAUTOMATE-REQUESTS.md`); the old "unoautomate owns the
-transport stack" handoff is superseded.
+**Consumed, NOT owned** (a standing reminder, because unoautomate once wrongly
+claimed them): networking (`unonet`: `net.*`, `tls.*`, `netsock.h`, `netdisc.*`)
+and on-device storage authoring (`unostorage.*`, `uno_fat_mkfs`) are neutral
+subsystems with their own owners. unoautomate files requests against them like any
+agent. See the 2026-07-22 "OWNERSHIP re-home" changelog entry below.
 
 **Frozen core — additive-only (rules in §2):** the shared debug/test harness
 unoautomate is built on and still wired through —
@@ -107,15 +97,12 @@ version I am moving or rewriting.
    `UNOAUTOMATE-REQUESTS.md` describing what you need and why, use the closest
    existing primitive as a stopgap, and move on — I provide it properly.
 
-## 3. Commit hygiene (this is what keeps the merge cheap)
+## 3. Commit hygiene (harness-specific)
 
-1. **Never mix your-territory work and frozen-core edits in one commit.** One
-   commit = one territory. A driver fix and the spectest case that exercises it
-   are TWO commits (your file first, the test second).
-2. Commit small and often to `master` in your own worktree; push after each
-   landed milestone.
-3. Prefix frozen-core commits with `harness:` in the subject (e.g.
-   `harness: nettest - <what> diagnostic`), so they are easy to replay.
+General commit rules are in [`/AGENTS.md`](../AGENTS.md) §5 (one commit = one lane,
+small and often). Subsystem-specific: **prefix a frozen-core / harness commit with
+`harness:`** (e.g. `harness: nettest - <what> diagnostic`) so it is easy to spot and
+replay, and never mix a harness edit with your own subsystem's change in one commit.
 
 ## 4. Registering diagnostics — target the `unoauto_*` API
 
@@ -126,12 +113,6 @@ remote channel are live. New diagnostics and automation should go through the
 harness internals. The legacy `uno_dbg_*` entry points still work as thin
 wrappers, so older code keeps compiling; but target `unoauto_*` for new work,
 since that is where the capability (and the churn — see §0) now lives.
-
-## 5. Hands off
-
-- Don't touch my files, branch, or worktree (§1).
-- Don't edit this policy, or `UNOAUTOMATE-REQUESTS.md` entries you didn't write
-  (appending new requests is the point of that file).
 
 ## API changelog
 
