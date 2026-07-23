@@ -131,14 +131,19 @@ they land (`UNOSECURE-SPEC.md §9`).
 
 ## Audit (append-only, tamper-evident)
 
-`UNOSEC.LOG` is a hash-chained log: each line is `SHA256(prev_head || line)`,
-prefixed with the new head's short hex so the file carries its own chain. Covers
-auth events (login/logout/bootstrap) and every tier≥2 escalation attempt (allow
-or deny). `unosec_audit_head()` exposes the 32-byte head for an external verifier
-to pin (detects truncation/rewrite). Debug builds also forward each line to the
-`unoauto` SCRIPT LOG channel. The in-RAM tail is bounded (16 KiB) and flushed to
-`unofs` on each event; on overflow the oldest whole lines are dropped, never the
-chain head.
+`UNOSEC.LOG` is a hash-chained log: each line is `head_n = SHA256(head_{n-1} ||
+line_n)`, and the **full 32-byte head (64 hex) is stored as the leading token of
+each stored line**, so an external verifier can recompute the chain from the file
+alone. Covers auth events (login/logout/bootstrap) and every tier≥2 escalation
+attempt (allow or deny). `unosec_audit_head()` exposes the 32-byte running head
+for a verifier to pin (detects truncation/rewrite). The chain **continues across
+reboot**: on load the running head and sequence are restored from the last stored
+line (`audit_reload_head`), so a boot does not restart the chain from a zero head.
+Debug builds also forward each line to the `unoauto` SCRIPT LOG channel. The
+in-RAM tail is bounded (16 KiB) and flushed to `unofs` on each event; on overflow
+the oldest whole lines are dropped (a verifier that pinned a since-dropped head
+can no longer chain back to it, but the retained tail stays internally verifiable
+and ends at the current running head), never the chain head.
 
 ## Bootstrap
 
