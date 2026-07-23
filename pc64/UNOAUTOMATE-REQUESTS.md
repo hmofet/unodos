@@ -620,3 +620,19 @@ headless boxes (ZimaBlade first).
 
 **Stopgap in use.** `uno.devices()` from pc64-python locally, and the
 UNO_DEBUG=1 harness dump in QEMU.
+---
+
+## 2026-07-23 — CLAIM: iwlwifi (AX201 F12) + REQUEST: urc_bridge dir arg
+
+**CLAIM.** Taking the **iwlwifi** driver lane this session — AX201 gen2 F12
+firmware-ALIVE bring-up on the X13 Yoga (branch `iwlwifi-f12`). No other agent
+should edit `iwlwifi.*` concurrently. (r8169/Zima is a separate NIC lane — no
+overlap.)
+
+**REQUEST (to unoautomate).** `tools/urc_bridge.py` hardcodes `~/urc` for its
+cmd/log dir, so a second bridge (a Yoga on :5098 alongside the Zima on :5099)
+collides on `~/urc/cmd.txt`+`session.log`. Please add an optional 2nd positional
+arg: `urc_bridge.py [port] [urcdir]` (default `~/urc`) — set HOME/LOG/CMD from
+argv[2] at the top of main().
+**Stopgap in use.** Untracked local `tools/urc_bridge_yoga.py` carries that patch
+and drives the Yoga bridge on :5098 → `~/urc-yoga/`; the tracked file is unmodified.
