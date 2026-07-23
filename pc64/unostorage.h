@@ -44,6 +44,18 @@ int unostorage_gpt_add(unostorage_dev *d, unsigned long long first_lba,
                        unsigned long long last_lba,
                        const unsigned char type_guid[16], const char *name);
 
+/* Finalize a GPT that a raw sector clone just laid down, for a target whose
+ * size differs from the source: read the standard (128 x 128-byte) primary GPT
+ * the clone left at LBA1, then rewrite the protective MBR, both headers, and
+ * both entry-array copies sized to THIS device - relocating the backup GPT to
+ * the true end of the target.  Preserves the disk + partition GUIDs and the
+ * partition table (only size-dependent geometry is recomputed), so a boot entry
+ * built from the source's partition GUID still matches.  This is the same
+ * write path unostorage_gpt_init/prepare_esp use; the installer drives it over
+ * an EFI Block IO handle.  1 on success, 0 on a bad or non-standard GPT.
+ * NOTE: destructive to the GPT structures (partition DATA is left untouched). */
+int unostorage_gpt_finalize_clone(unostorage_dev *d);
+
 /* High-level, the headline "prepare disk B": author a fresh GPT holding ONE
  * ESP spanning the disk (1 MiB-aligned, backup GPT at the true end) and format
  * it FAT32 (uno_fat_mkfs).  Operates on a uno_bdev.  Afterwards the caller
