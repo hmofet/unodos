@@ -155,6 +155,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_fs_volumes), KX(uno_fs_volume_name), KX(uno_fs_list_begin),
     KX(uno_fs_list_get), KX(uno_fs_read), KX(uno_fs_read_at), KX(uno_fs_size),
     KX(uno_fs_write), KX(uno_fs_writable), KX(uno_fs_kind), KX(uno_fs_fat_index),
+    KX(uno_fs_mkdir),
     KX(uno_fat_list_ex), KX(uno_fat_read), KX(uno_fat_read_at), KX(uno_fat_size),
     KX(uno_fat_write), KX(uno_fat_delete), KX(uno_fat_mkdir), KX(uno_fat_rename),
     /* memory */
