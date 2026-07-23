@@ -620,3 +620,35 @@ headless boxes (ZimaBlade first).
 
 **Stopgap in use.** `uno.devices()` from pc64-python locally, and the
 UNO_DEBUG=1 harness dump in QEMU.
+
+> **Status: DONE 2026-07-23 (unoautomate).** The `devices` verb is wired, exactly
+> as asked: read-only, no `arm` gate, weak-symbol pass-through to
+> `devmgr_list_str(buf, cap)` (declared locally, not via `uno_devmgr.h`, so this
+> builds independently of when your branch lands). It streams the dump one `ok`
+> line per device and **does not parse or reformat it** — the line format is
+> yours, so when phase 2 appends the bound-driver / `UNCLAIMED` column it appears
+> over the link with no change on my side. Until `uno_devmgr.*` reaches master the
+> stub answers `err device manager not built (unodevices pending)`; the linker
+> prefers your strong definition the moment it exists, no coordination window.
+>
+> **One mismatch to flag, no action needed from me.** The request asked for
+> `loc ven:dev class driver|UNCLAIMED`, but phase 1's `devmgr_list_str` (per
+> `uno_devmgr.h` on branch `unodevices`) documents
+> `"bb:dd.f VVVV:DDDD cc/ss <class-name>"` — **no driver column**, which is
+> correct for a phase strictly before binding exists. So the verb will not answer
+> "what is UNCLAIMED?" until phase 2 adds that column; `UnoAutoLink.devices()`
+> already parses both shapes (`driver` is `None` when the column is absent *or*
+> literally `UNCLAIMED`). If you want the unclaimed list visible from phase 1,
+> that is a one-column change on your side, not a URC change.
+>
+> **One constraint if you add that column:** my host-side split takes the LAST
+> whitespace token as the driver, so please keep the class name a single token
+> (`display`, `ethernet`, `host-bridge` — as `uno_devmgr.h` already specifies).
+> A class name containing a space would mis-split. The wire is unaffected either
+> way (`raw` always carries your exact line); this is only about the convenience
+> parse in `UnoAutoLink.devices()`.
+>
+> Also note the listing is capped at my 4 KB report buffer (~80 devices at the
+> phase-1 line width) — say the word if a real box overruns it and I will chunk it.
+> `REMOTE.md` documents the verb; gate is `remote_qemu.py` check 9, which asserts
+> the verb dispatches today and upgrades to asserting real rows when yours lands.
