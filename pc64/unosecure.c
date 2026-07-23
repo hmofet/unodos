@@ -37,8 +37,18 @@ int  uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s);
  * ------------------------------------------------------------------------- */
 #define MAX_USERS      32
 #define MAX_ROLES      16
-#define MAX_ROLECAPS   28
+#define MAX_ROLECAPS   32          /* caps a single role may hold - see assert */
 #define MAX_USERROLES   8
+
+/* unosecure's own management caps, all seeded onto the admin role. */
+#define UNOSEC_SEC_CAP_COUNT 6     /* user.create/delete, role.assign/edit, policy.edit, audit.read */
+
+/* A role may in the worst case hold every capability the system defines: all
+ * usc caps (USC_CAP__COUNT-1, excluding NONE) plus every sec.* cap.  Keep
+ * MAX_ROLECAPS >= that so seed_roles()/role_add_cap_raw() can NEVER silently
+ * drop a cap past the table - adding a new usc cap without room fails the build. */
+typedef char unosec_rolecaps_fit_assert[
+    (MAX_ROLECAPS >= (USC_CAP__COUNT - 1) + UNOSEC_SEC_CAP_COUNT) ? 1 : -1];
 #define MAX_SESSIONS   32
 #define MAX_GRANTS     16          /* live escalations per session            */
 #define MAX_KEYS        8          /* manifest trust store                    */
@@ -424,7 +434,7 @@ static void audit_emit(usc_uid_t uid, const char *capname,
 {
     char line[256];
     unsigned char chainbuf[32 + 256];
-    char chainhex[17];
+    char chainhex[65];
     int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0, hn, need;
 
     if (!uno_pc64_time(&y, &mo, &d, &h, &mi, &s)) { y = mo = d = h = mi = s = 0; }
@@ -442,10 +452,13 @@ static void audit_emit(usc_uid_t uid, const char *capname,
     memcpy(chainbuf + 32, line, (size_t)hn);
     sha256(chainbuf, 32 + (size_t)hn, g_audit_head);
     g_audit_seq++;
-    tohex(g_audit_head, 8, chainhex);      /* short chain tag stored per line */
+    tohex(g_audit_head, 32, chainhex);     /* full chain head stored per line */
 
-    /* stored form: "<chainhex> <line>" - the file carries the chain itself */
-    need = 17 + hn;                        /* 16 hex + space + line          */
+    /* stored form: "<chainhex> <line>" - the file carries the FULL 32-byte
+     * chain (64 hex) per line, so an external verifier can recompute
+     * head_n = SHA256(head_{n-1} || line_n) from the file alone, and a reboot
+     * can restore the running head from the last line (see audit_reload_head). */
+    need = 65 + hn;                        /* 64 hex + space + line          */
     if (g_loglen + need > LOG_CAP) {       /* keep the tail; never grow past  */
         int half = LOG_CAP / 2;
         char *nl = memchr(g_log + half, '\n', (size_t)(g_loglen - half));
@@ -454,7 +467,7 @@ static void audit_emit(usc_uid_t uid, const char *capname,
         g_loglen -= keep_from;
     }
     if (g_loglen + need <= LOG_CAP) {
-        memcpy(g_log + g_loglen, chainhex, 16); g_loglen += 16;
+        memcpy(g_log + g_loglen, chainhex, 64); g_loglen += 64;
         g_log[g_loglen++] = ' ';
         memcpy(g_log + g_loglen, line, (size_t)hn); g_loglen += hn;
     }
@@ -504,6 +517,37 @@ static int db_load(void)
     if (memcmp(g_db.magic, DB_MAGIC, 8) != 0) { memset(&g_db, 0, sizeof g_db); return 0; }
     return 1;
 }
+/* Restore the running chain head + sequence from the last stored line so the
+ * hash chain continues across a reboot (else every boot restarts the chain from
+ * a zero head and a verifier reads a false tamper at each boot boundary).  The
+ * last line's leading 64-hex token IS head_n; the first field of the line body
+ * is the sequence number.  Leaves the zero head untouched if the tail is not in
+ * our format (older log / corruption) - fail safe, a fresh segment then starts. */
+static void audit_reload_head(void)
+{
+    int end = g_loglen, start, i;
+    unsigned char h[32];
+    const char *q, *qend;
+    unsigned seq = 0;
+    int any = 0;
+    if (end <= 0) return;
+    if (g_log[end - 1] == '\n') end--;                 /* drop trailing newline */
+    start = end;
+    while (start > 0 && g_log[start - 1] != '\n') start--;   /* last line start */
+    if (end - start < 65) return;                      /* 64 hex + space + body */
+    for (i = 0; i < 32; i++) {
+        int hi = hexnib((unsigned char)g_log[start + 2*i]);
+        int lo = hexnib((unsigned char)g_log[start + 2*i + 1]);
+        if (hi < 0 || lo < 0) return;                  /* not our format        */
+        h[i] = (unsigned char)((hi << 4) | lo);
+    }
+    q    = g_log + start + 64;
+    qend = g_log + end;
+    while (q < qend && *q == ' ') q++;
+    while (q < qend && *q >= '0' && *q <= '9') { seq = seq * 10 + (unsigned)(*q - '0'); q++; any = 1; }
+    memcpy(g_audit_head, h, 32);
+    if (any) g_audit_seq = seq + 1;
+}
 static void audit_load(void)
 {
     long sz;
@@ -511,7 +555,7 @@ static void audit_load(void)
     sz = uno_fs_size(g_vol, AUDIT_FILE);
     if (sz > 0 && sz <= LOG_CAP) {
         long r = uno_fs_read(g_vol, AUDIT_FILE, (unsigned char *)g_log, LOG_CAP);
-        if (r > 0) g_loglen = (int)r;
+        if (r > 0) { g_loglen = (int)r; audit_reload_head(); }
     }
 }
 
