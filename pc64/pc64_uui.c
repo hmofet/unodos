@@ -1579,18 +1579,6 @@ int pc64_shell_win_count(void) { return UI.nwin; }
 const char *pc64_shell_win_title(int i)
 { return (i >= 0 && i < UI.nwin) ? UI.win[i]->title : 0; }
 int pc64_shell_win_focused(int i) { return i == UI.focus_win; }
-
-/* unoautomate DRIVE accessors: launch/close through the exact code paths the
- * launcher click and the title-bar close box use.  EX_PYAPP/EX_USERAPP are
- * refused - launching those would displace the automation script itself. */
-int pc64_shell_app_count(void) { return NAPPS; }
-int pc64_shell_launch(int a)
-{
-    if (a < 0 || a >= NAPPS || a == EX_PYAPP || a == EX_USERAPP) return 0;
-    open_app(a);
-    return 1;
-}
-void pc64_shell_close_top(void) { close_focused(); }
 #endif
 
 /* ---- production accessors for unoscript's ui.* automation surface ----------
@@ -1632,6 +1620,56 @@ int pc64_shell_clip_get(char *out, int cap)
     while (g_shell_clip[n] && n < cap - 1) { out[n] = g_shell_clip[n]; n++; }
     out[n] = 0;
     return n;
+}
+
+/* ---- app control (production; unoscript app.ctrl / app.msg) ----------------
+ * Launch/close go through the exact code paths the launcher click and the
+ * title-bar close box use.  EX_PYAPP/EX_USERAPP are refused to LAUNCH - doing
+ * so would displace the automation script that is running.  (Formerly the
+ * UNO_DEBUG-only DRIVE accessors; now production, gated at the unoscript layer.) */
+int pc64_shell_app_count(void) { return NAPPS; }
+int pc64_shell_launch(int a)
+{
+    if (a < 0 || a >= NAPPS || a == EX_PYAPP || a == EX_USERAPP) return 0;
+    open_app(a);
+    return 1;
+}
+void pc64_shell_close_top(void) { close_focused(); }
+
+/* bounded string append: writes s at dst[at..], NUL-terminates, returns new len */
+static int sput(char *dst, int cap, int at, const char *s)
+{ while (*s && at < cap - 1) dst[at++] = *s++; if (at < cap) dst[at] = 0; return at; }
+
+/* structured app control (unoscript app.msg, tier 1).  Minimal v1 verb set by
+ * app index: `info` (name/open/focused), `focus`, `close`.  Returns the reply
+ * length; `reply` always gets a short status.  Per-app custom verbs (an app-side
+ * message handler) are a later addition. */
+int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
+{
+    int wi;
+    if (!reply || cap <= 0) return 0;
+    if (idx < 0 || idx >= NAPPS || !msg) return sput(reply, cap, 0, "bad-idx");
+    if (!strcmp(msg, "info")) {
+        int at = sput(reply, cap, 0, "name=");
+        at = sput(reply, cap, at, app_name(idx));
+        at = sput(reply, cap, at, g_open[idx] ? " open=1" : " open=0");
+        at = sput(reply, cap, at, (focused_app() == idx) ? " focused=1" : " focused=0");
+        return at;
+    }
+    if (!strcmp(msg, "focus")) {
+        if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        raise_win(&g_win[idx]);
+        for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
+        g_dirty = 1;
+        return sput(reply, cap, 0, "focused");
+    }
+    if (!strcmp(msg, "close")) {
+        if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
+        close_focused();
+        return sput(reply, cap, 0, "closed");
+    }
+    return sput(reply, cap, 0, "unknown-verb");
 }
 
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */

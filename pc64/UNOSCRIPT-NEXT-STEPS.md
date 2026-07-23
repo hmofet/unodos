@@ -28,8 +28,9 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
 1. ~~**unoui — synthetic input + screen read** (tier 0).~~ **DONE** (2026-07-23) —
    `ui.pointer/key/screen_text/clipboard_get/clipboard_set` are wired to real
    platform/shell seams and QEMU-verified over URC. UI automation works. See §1.
-2. **shell — app control** (tier 0/1). Launch/close/enumerate + app messaging.
-   **Now the biggest remaining unlock** — do this next.
+2. ~~**shell — app control** (tier 0/1).~~ **DONE** (2026-07-23) —
+   `app.count/launch/close_top` (tier 0) + `app.message` (tier 1) wired and
+   QEMU-verified over URC. See §2.
 3. **unosched — process enumeration** (tier 2). The "what's running" surface;
    also lands the thread→session binding `unosecure` already requested.
 4. **unofs — user-scoped file IO** (tier 1).
@@ -71,24 +72,31 @@ no session (tier-1 gate). Unlocked `unoscript.ui.click/move/key/screen/clip_get/
 `mods` to the single Cmd/Ctrl modifier (`map_key` takes one modifier); a full
 modifier bitmap is a later refinement. App-integrated clipboard as above.
 
-## 2. shell — app enumeration, launch/close, messaging  ·  tier 0/1  ·  `app.ctrl` / `app.msg`
+## 2. shell — app enumeration, launch/close, messaging  ·  tier 0/1  ·  DONE (2026-07-23)
 
-**Problem:** `pc64_shell_app_count/launch/close_top` are `#ifdef UNO_DEBUG`.
+**Was:** `pc64_shell_app_count/launch/close_top` were `#ifdef UNO_DEBUG`, and
+there was no app-message seam.
 
-**Accessors (production):**
-```c
-int  pc64_shell_app_count_pub(void);                       /* -> usc_app_count     */
-int  pc64_shell_launch_pub(int idx);                       /* -> usc_app_launch    */
-int  pc64_shell_close_top_pub(void);                       /* -> usc_app_close_top */
-/* structured message to an app; JSON in, JSON reply out (tier 1) */
-int  pc64_shell_app_message(int idx, const char *json,
-                            char *reply, int cap);          /* -> usc_app_message   */
-```
-(Names illustrative — if the debug ones can simply lose their gate, do that and
-say so.) App messaging is the AppleScript-"tell application" analog; define a
-minimal verb set per built-in app.
+**Shipped** (production, gated at the unoscript/unosecure layer):
+- The debug DRIVE accessors lost their gate — `pc64_shell_app_count` /
+  `pc64_shell_launch` / `pc64_shell_close_top` (pc64_uui.c) are now production,
+  still the exact launcher-click / title-bar-close paths (EX_PYAPP/EX_USERAPP
+  refused to launch so the running script isn't displaced). Wired to
+  `usc_app_count`/`usc_app_launch`/`usc_app_close_top` (tier 0, `app.ctrl`).
+- `pc64_shell_app_message(idx, msg, reply, cap)` (pc64_uui.c) — a minimal v1 verb
+  set by app index: `info` (name/open/focused), `focus`, `close`, reusing
+  `open_app`/`raise_win`/`close_focused`. Wired to `usc_app_message` (tier 1,
+  `app.msg`) + a new `unoscript.app.message(idx, verb)` Python binding
+  (mod_unoscript.c, exported in pc64_modload.c). The message is a plain verb
+  string, not JSON yet, and the verbs are generic (shell-level) — a per-app
+  message handler for app-specific verbs (AppleScript "tell Notepad to insert…")
+  is the natural follow-up.
 
-**Unlocks:** `u.app.count/launch/close_top` and structured app control.
+**Verified** (QEMU, app_control_test over URC): `app.count()`=19; `app.launch(1)`
+opened Editor (seen in `ui.screen()`); `app.close_top()` returned USC_OK and the
+window left the tree; `app.message()` was refused with no session (tier-1 gate).
+
+**Unlocked:** `unoscript.app.count/launch/close_top/message`.
 
 ## 3. unosched — process/thread enumeration + inspect  ·  tier 2  ·  `proc.enum` / `proc.inspect`
 
