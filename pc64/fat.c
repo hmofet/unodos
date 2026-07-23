@@ -268,6 +268,9 @@ int uno_fat_native_eligible(void)
 int uno_fat_volumes(void) { return g_nvol; }
 const char *uno_fat_label(int vol)  { return (vol >= 0 && vol < g_nvol) ? g_vol[vol].label : ""; }
 unsigned int uno_fat_serial(int vol){ return (vol >= 0 && vol < g_nvol) ? g_vol[vol].serial : 0; }
+/* the block device backing a mounted FAT volume (identity across a remount);
+ * used to match a freshly-formatted target volume to the disk it was made on. */
+struct uno_bdev *uno_fat_dev(int vol) { return (vol >= 0 && vol < g_nvol) ? g_vol[vol].dev : 0; }
 
 /* ---- FAT table access ----------------------------------------------------- */
 static uint32_t fat_get(fatvol *v, uint32_t clus)

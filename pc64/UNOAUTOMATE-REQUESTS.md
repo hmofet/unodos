@@ -443,8 +443,13 @@ them, the plumbing does.
 
 ## 2026-07-23 — zimablade test-box: a SAFE fully-remote "install to disk N" over URC
 
-**Status: PARTIALLY RESOLVED** — option #2 (the `mkdir` primitive) delivered;
-option #1 (the armed native `install <disk>` verb) still OPEN, scoped below.
+**Status: RESOLVED** — both delivered over URC: option #2 (`mkdir`) and option #1
+(the armed native `install <disk>` verb). One documented limit remains, not
+fixable over URC: no NVRAM `Boot####` entry (see part 2), so an *internal* disk
+boots via firmware fallback / a one-time boot-menu pick rather than auto-first. A
+USB stick (the Kingston case) auto-boots via the removable-media path — fully
+solved. A first-class NVRAM entry needs the on-device Install app booted to
+firmware (attached), which is out of URC scope by construction.
 
 > **Resolution (unoautomate), part 1 of 2 — the `mkdir` path.** Delivered the
 > missing directory primitive end to end, so the proven `prepdisk → mkdir → put`
@@ -476,6 +481,34 @@ option #1 (the armed native `install <disk>` verb) still OPEN, scoped below.
 > gated by `arm` (size echo + boot-disk refusal, by index) exactly as requested.
 > Until it lands, the `mkdir`+`put` recipe covers removable-media boot, which is
 > the ZimaBlade's Kingston case.
+
+> **Resolution (unoautomate), part 2 of 2 — the armed `install <disk>` verb.**
+> Delivered. `install <disk> [default]` clones the running OS onto the target in
+> ONE armed op (reuses the `arm` gate: size echo + boot-disk refusal + auto-disarm):
+> `unostorage_prepare_esp` the target, then a native, disk-to-disk clone of the
+> boot ESP's whole tree — so no OS bytes cross the network (unlike a host-scripted
+> `put` loop). New pieces:
+> - `uno_fs_copytree(src, dst, scratch, cap, *bytes)` — iterative-BFS recursive
+>   clone on the native FAT stack, caller-supplied buffer (reuses the debug `put`
+>   staging buffer, zero prod BSS), never a silent partial (`pc64_fs.c/.h`);
+> - `uno_fs_vol_bdev` + `uno_fat_dev` — identify the target volume by its backing
+>   device (robust across the remount), and the source by its `\EFI\BOOT\BOOTX64.EFI`;
+> - the `install` URC verb wraps it (`unoauto_remote.c`); `unoauto_remote.py` gets
+>   `.install()` / `.mkdir()`. `REMOTE.md` documents the verb + one-shot recipe.
+>
+> **Correction to part 1's plan.** Part 1 assumed runtime `SetVariable` survives
+> detach and could write the `Boot####` entry. It does NOT here: `uno_pc64_set_bootnext`
+> refuses when `gDetached` (uefi_main.c) — this OS gives up runtime-variable access
+> at `ExitBootServices`, and URC is always post-detach. So the verb writes **no**
+> NVRAM entry; `default` is accepted but inert. The disk is made bootable via the
+> firmware removable-media path `\EFI\BOOT\BOOTX64.EFI` only — complete for a USB
+> stick, fallback/boot-menu for an internal disk. NVRAM auto-boot for an internal
+> disk genuinely requires attached-mode (the on-device Install app); it is not
+> achievable over URC and is not a remaining unoautomate task.
+>
+> Verified (QEMU, install_verb_test): `arm`+`install` on a blank disk cloned 74
+> files / 7.4 MB; after `poweroff`, the target's `\EFI\BOOT\BOOTX64.EFI`, an app,
+> and a font are byte-identical to the source offline (faithful + durable).
 
 **Requester context.** The ZimaBlade is now the always-on pc64 metal test box,
 driven live from devbuntu over URC (MAC `00:e0:4c:30:5b:d4` = 192.168.2.118; r8169
