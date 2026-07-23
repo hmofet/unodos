@@ -2,8 +2,13 @@
 
 The transport stack that sits above the NIC drivers — Ethernet / ARP / IPv4 /
 ICMP / UDP / TCP / DHCP-client / DNS, plus a multi-connection **socket layer**,
-**broadcast**, and **zero-config discovery**. Owned by unoautomate (see the
-ownership handoff in `UNOAUTOMATE-REQUESTS.md`).
+**broadcast**, and **zero-config discovery**. This is the pc64 implementation of
+the **`unonet`** system subsystem — a **neutral shared system API**, on the same
+footing as `unofs` / `uno3d` / `unosound`. It is **not** owned by any single
+feature agent: whoever's task needs to evolve the transport stack edits it, and
+its many consumers (`unoauto_remote`, `pc64_http`, `pc64_modload`, tls, and the
+roadmapped browser/JS + AI apps) build against its public headers. Re-homed out
+of unoautomate on 2026-07-22 — see the note in `UNOAUTOMATE-REQUESTS.md`.
 
 ## Layers & ownership
 
@@ -12,7 +17,7 @@ ownership handoff in `UNOAUTOMATE-REQUESTS.md`).
   ────────────────────────────────────────────────
   netsock.h  socket table (net_socket/bind/listen/     \
              accept/connect/send/recv/sendto/...)        |  transport stack
-  net.c      ARP · IPv4 · ICMP · UDP · TCP · DHCP · DNS   |  (unoautomate owns)
+  net.c      ARP · IPv4 · ICMP · UDP · TCP · DHCP · DNS   |  (unonet — shared)
   netdisc.c  UNODISC discovery over UDP broadcast        /
   ────────────────────────────────────────────────
   uno_nic_t  { send, recv, link }   <- THE SEAM         <- driver agent owns
@@ -21,8 +26,10 @@ ownership handoff in `UNOAUTOMATE-REQUESTS.md`).
 ```
 
 The stack consumes only `g_nic->send/recv/link` (`uno_nic.h`). Everything above
-that line is the transport stack's; the NIC drivers below it are the driver
-agent's. This is the whole coexistence contract for networking.
+that line is the shared `unonet` transport stack; the NIC drivers below it are
+the driver agent's. This is the whole coexistence contract for networking.
+unoautomate is one consumer among many (its `unoauto_remote` URC link dials out
+over these sockets) — it does **not** own the layer.
 
 ## Sockets (`netsock.h`)
 

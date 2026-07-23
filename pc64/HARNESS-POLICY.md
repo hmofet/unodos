@@ -54,6 +54,25 @@ Need a capability, or hit a break you can't absorb? Append a dated note to
 **Yours — edit freely:** whatever your task owns — your drivers, your app, your
 subsystem, your own docs and telemetry notes.
 
+**Not mine either — shared system subsystems I *consume*, don't own.** unoautomate
+builds heavily on these, but they are neutral system APIs on the same footing as
+`unofs` / `uno3d` / `unosound` — governed by the normal "whoever's task owns it
+edits it" rule, not by this contract:
+- **Networking (`unonet`)** — the transport stack: `net.c/.h`, `tls.c/.h`,
+  `tls_ca.*`, `netsock.h`, `netdisc.c/.h` (ARP/IP/ICMP/UDP/TCP/DHCP/DNS + sockets
+  + broadcast + discovery). Consumed by http, modload, tls, the browser/JS + AI
+  apps, and my `unoauto_remote` link. The driver agent still owns the NIC drivers
+  below the `uno_nic_t` seam (`uno_nic.h`).
+- **On-device storage authoring (`unostorage`)** — `unostorage.c/.h` + the
+  `uno_fat_mkfs` formatter: GPT/ESP/FAT32 authoring over `blkdev`, wrapped by both
+  the installer and me. A peer of `unofs`.
+
+If I need a new capability from either (a socket option, a protocol, a storage
+primitive), I file against *their* owner just like you do — I don't restructure
+them under this policy. Re-homed out of unoautomate 2026-07-22 (see the changelog
+below and the note in `UNOAUTOMATE-REQUESTS.md`); the old "unoautomate owns the
+transport stack" handoff is superseded.
+
 **Frozen core — additive-only (rules in §2):** the shared debug/test harness
 unoautomate is built on and still wired through —
 - `pc64_nettest.c`, `pc64_spectest.c`, `pc64_stress.c`
@@ -114,6 +133,20 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-22 - (no bump, OWNERSHIP re-home)**: **networking and on-device
+  storage authoring are pulled back out of unoautomate** into neutral shared
+  system subsystems. The transport stack (`net.c/.h`, `tls.*`, `netsock.h`,
+  `netdisc.*`) is the pc64 face of **`unonet`**; `unostorage.c/.h` + `uno_fat_mkfs`
+  are a peer of **`unofs`**. Both are now governed by the normal "whoever's task
+  owns it edits it" rule, NOT this contract — networking especially, since http,
+  modload, tls and the roadmapped browser/JS + AI apps all consume it heavily, so
+  parking it under the automation agent was wrong. The 2026-07-22 "unoautomate
+  owns the transport stack" handoff is **superseded**. No code or API change: the
+  `uno_nic_t` seam, `net.h`/`netsock.h`/`unostorage.h` contracts, and every caller
+  are byte-for-byte unchanged; this is an ownership/territory relabel only.
+  unoautomate keeps the harness (LOG/TEST/PROBE/HOOK/DRIVE), `unoauto_remote` (the
+  URC channel — a *consumer* of `unonet`), and the URC verbs, and consumes both
+  subsystems' public APIs like any other agent. See §1 "Not mine either."
 - **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`disc`**
   — query-only readout of zero-config discovery (netdisc) state, so a dev PC can
   ask "is discovery armed, did pc64 record a host OFFER, and which host:port did
