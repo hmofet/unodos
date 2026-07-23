@@ -45,6 +45,8 @@ typedef unsigned long long u64;
 #define  NPQ        0x40
 #define IntrMask    0x3C          /* 8168: 16-bit */
 #define IntrStatus  0x3E
+#define  RxFIFOOver 0x0040        /* IntrStatus: RX FIFO overflow -> RX halts    */
+#define  RxOverflow 0x0010        /* IntrStatus: RX descriptor/buffer overflow   */
 #define TxConfig    0x40
 #define RxConfig    0x44
 #define Cfg9346     0x50
@@ -96,6 +98,7 @@ static int g_present, g_up, g_is8125;
 static u8  g_mac[6];
 static u16 g_devid;
 static int g_tx_cur, g_rx_cur;
+static int g_rx_kicks;              /* RX-overflow recoveries (metal RX-stall fix) */
 static uno_nic_t g_nic;
 static u64 phys(const void *p){ return (u64)(uintptr_t)p; }
 
@@ -226,6 +229,20 @@ static int r8169_recv(void *ctx, void *pkt, int cap)
     int len;
     (void)ctx;
     if (!g_up) return 0;
+    /* Metal RX-stall fix: in polled mode nothing services IntrStatus, so an RX
+     * FIFO/descriptor overflow (the 64-deep ring filled before we drained it)
+     * latches and the MAC halts RX forever - the symptom is rx frozen at exactly
+     * RXN. Clear the overflow (write-1-to-clear) and re-assert RxEnb so the DMA
+     * resumes scanning the re-armed descriptors. 8168 IntrStatus is the 16-bit
+     * reg at 0x3E (the 8125 relocation is handled elsewhere; 8168-only here). */
+    if (!g_is8125) {
+        u16 isr = r16(IntrStatus);
+        if (isr & (RxFIFOOver | RxOverflow)) {
+            w16(IntrStatus, (u16)(isr & (RxFIFOOver | RxOverflow)));
+            w8(ChipCmd, CmdRxEnb | CmdTxEnb);
+            g_rx_kicks++;
+        }
+    }
     st = d->opts1;
     if (st & DescOwn) return 0;                      /* still owned by NIC: nothing */
     __asm__ volatile("" ::: "memory");
@@ -323,3 +340,133 @@ uno_nic_t *r8169_nic(void)
 }
 
 const unsigned char *r8169_mac(void){ return g_mac; }
+
+/* ---- live debug hook: the `eth` verb over unoautomate ------------------- *
+ * status | reg <off> | wreg <off> <val> | phy <reg> | wphy <reg> <val> |
+ * link | mac | rerun.  MMIO + PHY peek/poke so the metal bring-up can be
+ * driven register-by-register over the remote channel without reflashing
+ * (unoauto_remote.c's eth verb calls this).  This is the STRONG definition;
+ * it overrides the weak "not built" fallback shipped in unoauto_remote.c.
+ * Returns reply length written to out, or -1 only on an unknown subcommand
+ * (a recognized-but-failed command still writes an explanatory reply). */
+
+/* PHYAR MDIO access (Linux r8169 r8168_phy_read/write): read = write reg<<16
+ * then poll for bit31 SET; write = set bit31|reg<<16|val then poll for clear. */
+static int phy_read(int reg)
+{
+    int t;
+    w32(PHYAR, (u32)((reg & 0x1f) << 16));
+    for (t = 0; t < 2000; t++) {
+        u32 v = r32(PHYAR);
+        if (v & 0x80000000u) return (int)(v & 0xffff);
+        spin(200);
+    }
+    return -1;
+}
+static void phy_write(int reg, u16 val)
+{
+    int t;
+    w32(PHYAR, 0x80000000u | (u32)((reg & 0x1f) << 16) | val);
+    for (t = 0; t < 2000; t++) { if (!(r32(PHYAR) & 0x80000000u)) return; spin(200); }
+}
+
+/* tiny bounded output builder + arg parsing (freestanding, no libc printf) */
+struct ob { char *p; int cap; int len; };
+static void ob_c(struct ob *o, char c){ if (o->len < o->cap - 1) o->p[o->len++] = c; }
+static void ob_s(struct ob *o, const char *s){ while (*s) ob_c(o, *s++); }
+static void ob_u(struct ob *o, u32 v)
+{ char t[12]; int n = 0; if (!v){ ob_c(o,'0'); return; } while (v){ t[n++]='0'+(char)(v%10); v/=10; } while (n) ob_c(o, t[--n]); }
+static void ob_hex(struct ob *o, u32 v, int digits)
+{ static const char H[] = "0123456789abcdef"; int i; for (i=(digits-1)*4; i>=0; i-=4) ob_c(o, H[(v>>i)&0xf]); }
+static u32 ahex(const char *s, const char **end)
+{
+    u32 v = 0;
+    while (*s==' '||*s=='\t') s++;
+    if (s[0]=='0' && (s[1]=='x'||s[1]=='X')) s += 2;
+    for (;;) { char c=*s; int d;
+        if (c>='0'&&c<='9') d=c-'0'; else if (c>='a'&&c<='f') d=c-'a'+10;
+        else if (c>='A'&&c<='F') d=c-'A'+10; else break;
+        v=(v<<4)|(u32)d; s++; }
+    if (end) *end = s;
+    return v;
+}
+/* whole-token match: advance past kw (+ trailing spaces) iff the leading token equals kw */
+static int mtok(const char **s, const char *kw)
+{
+    const char *p = *s;
+    while (*kw){ if (*p != *kw) return 0; p++; kw++; }
+    if (*p && *p!=' ' && *p!='\t') return 0;
+    while (*p==' '||*p=='\t') p++;
+    *s = p; return 1;
+}
+
+int r8169_dbg_cmd(const char *line, char *out, int cap)
+{
+    struct ob o; const char *s = line ? line : "";
+    o.p = out; o.cap = cap; o.len = 0;
+    if (cap <= 0) return -1;
+    while (*s==' '||*s=='\t') s++;
+
+    if (mtok(&s, "status")) {
+        ob_s(&o, "present="); ob_u(&o, (u32)r8169_present());
+        ob_s(&o, " up=");     ob_u(&o, (u32)g_up);
+        ob_s(&o, " dev=");    ob_hex(&o, g_devid, 4);
+        ob_s(&o, " is8125="); ob_u(&o, (u32)g_is8125);
+        ob_s(&o, " rxcur=");  ob_u(&o, (u32)g_rx_cur);
+        ob_s(&o, " rxkicks="); ob_u(&o, (u32)g_rx_kicks);
+        ob_s(&o, " mmio=");   ob_hex(&o, (u32)(uintptr_t)g_mmio, 8);
+        if (g_mmio) {
+            ob_s(&o, " ChipCmd=");   ob_hex(&o, r8(ChipCmd), 2);
+            ob_s(&o, " IntrStatus="); ob_hex(&o, r16(IntrStatus), 4);
+            ob_s(&o, " PHYstatus="); ob_hex(&o, r8(PHYstatus), 2);
+            ob_s(&o, " link=");      ob_u(&o, (u32)link_up());
+        } else ob_s(&o, " (window not mapped - run 'rerun')");
+    }
+    else if (mtok(&s, "rerun")) {
+        g_up = 0; g_present = 0;                 /* force a fresh probe+map+bring-up */
+        ob_s(&o, r8169_nic() ? "rerun ok - link=" : "rerun FAILED (see screen trace) link=");
+        ob_u(&o, (u32)(g_mmio ? link_up() : 0));
+    }
+    else if (mtok(&s, "link")) {
+        if (!g_mmio) { ob_s(&o, "window not mapped - run 'rerun'"); }
+        else { int ps = r8(PHYstatus);
+            ob_s(&o, "PHYstatus="); ob_hex(&o, (u32)ps, 2);
+            ob_s(&o, " link=");  ob_u(&o, (ps & LinkStatus) ? 1u : 0u);
+            ob_s(&o, " speed=");
+            ob_s(&o, (ps & _1000bpsF) ? "1000" : (ps & _100bps) ? "100" : (ps & _10bps) ? "10" : "-"); }
+    }
+    else if (mtok(&s, "mac")) {
+        int i; if (g_mmio) read_mac();
+        for (i = 0; i < 6; i++) { if (i) ob_c(&o, ':'); ob_hex(&o, g_mac[i], 2); }
+    }
+    else if (mtok(&s, "reg")) {
+        if (!g_mmio) { ob_s(&o, "window not mapped - run 'rerun'"); }
+        else { u32 off = ahex(s, 0);
+            ob_s(&o, "["); ob_hex(&o, off, 3); ob_s(&o, "]=");
+            ob_hex(&o, r32(off), 8); }
+    }
+    else if (mtok(&s, "wreg")) {
+        if (!g_mmio) { ob_s(&o, "window not mapped - run 'rerun'"); }
+        else { const char *e; u32 off = ahex(s, &e); u32 val = ahex(e, 0);
+            w32(off, val); commit();
+            ob_s(&o, "["); ob_hex(&o, off, 3); ob_s(&o, "]<-"); ob_hex(&o, val, 8);
+            ob_s(&o, " now="); ob_hex(&o, r32(off), 8); }
+    }
+    else if (mtok(&s, "phy")) {
+        if (!g_mmio) { ob_s(&o, "window not mapped - run 'rerun'"); }
+        else { int reg = (int)ahex(s, 0), v = phy_read(reg);
+            ob_s(&o, "phy["); ob_hex(&o, (u32)reg, 2); ob_s(&o, "]=");
+            if (v < 0) ob_s(&o, "timeout"); else ob_hex(&o, (u32)v, 4); }
+    }
+    else if (mtok(&s, "wphy")) {
+        if (!g_mmio) { ob_s(&o, "window not mapped - run 'rerun'"); }
+        else { const char *e; int reg = (int)ahex(s, &e); u32 val = ahex(e, 0);
+            phy_write(reg, (u16)val);
+            ob_s(&o, "phy["); ob_hex(&o, (u32)reg, 2); ob_s(&o, "]<-"); ob_hex(&o, val, 4);
+            ob_s(&o, " now="); { int v = phy_read(reg); if (v<0) ob_s(&o,"timeout"); else ob_hex(&o,(u32)v,4); } }
+    }
+    else { out[0] = 0; return -1; }             /* unknown subcommand */
+
+    out[o.len] = 0;
+    return o.len;
+}

@@ -26,9 +26,14 @@ static const struct nicent g_wired[] = {
     { e1000_nic, e1000_mac },   /* native PCI (82540/82545)      */
     { e1000e_nic, e1000e_mac }, /* Intel e1000e (82574 / I219)   */
     { igb_nic, igb_mac },       /* Intel igb (I210/I211/82576)   */
-    { r8169_nic, r8169_mac },   /* Realtek RTL8168/8111          */
     { ax88179_nic, ax88179_mac },/* USB Ethernet (ASIX)          */
     { rtl8152_nic, rtl8152_mac },/* USB Ethernet (Realtek dock)  */
+    { r8169_nic, r8169_mac },   /* Realtek RTL8168/8111 - LAST: it is under bring-up
+                                 * (dead RX until proven), so it must not be chosen as the
+                                 * management uplink ahead of a working USB adapter. On a
+                                 * Zimaboard (onboard r8169 + ASIX dongle) with no lease from
+                                 * the boot eth-test, pc64_net_up() used to bind this and
+                                 * strand the URC link on a receive-dead NIC. */
 };
 static const struct nicent g_wifi[] = {
     { iwl_nic, iwl_mac }, { rtwifi_nic, rtwifi_mac }, { mrvlwifi_nic, mrvlwifi_mac },

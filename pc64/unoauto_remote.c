@@ -14,6 +14,7 @@
 #include "pc64_http.h"      /* pc64_net_up */
 #include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
 #include "unostorage.h"     /* disk authoring (brings blkdev.h): the disk verbs */
+#include "unoauto_serial.h" /* 16550 UART backend: the NIC-independent transport */
 
 #ifdef UNO_DEBUG
 
@@ -84,6 +85,9 @@ static int      g_sink = -1;
 static unsigned g_tick;
 static unsigned g_deadline;         /* connect timeout / retry-at (in ticks)  */
 static int      g_pending_off;      /* shut down once the TX queue drains      */
+static unsigned g_uart_base;        /* serial transport: 16550 I/O base (or 0) */
+static unsigned g_hello_at;         /* serial: re-emit HELLO at this tick ...   */
+static int      g_rx_seen;          /* ... until the host is heard from once    */
 
 /* outbound byte queue (linear, compacted on flush) */
 static char     g_tx[8192];
@@ -752,6 +756,26 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         net_sock_close(sL);
         rsp(id, "end", 0); return;
     }
+    /* disc - report zero-config discovery state to the dev PC (query only). The
+     * discovery machinery is armed by the STRESS.CFG `discover` flag and pumped
+     * in netdisc_tick; this lets a host tool ask "is discovery armed, did pc64
+     * record my OFFER, and what host:port did it latch?" without watching the
+     * wire. link= echoes the remote-channel state (RS_UP=3 here, since we only
+     * dispatch on an established link). Driven by tools/netdisc_qemu.py. */
+    if (!strcmp_(verb, "disc")) {
+        char t[80]; SB b;
+        sb_init(&b, t, sizeof t); sb_s(&b, "active=");    sb_i(&b, netdisc_active());    t[b.len]=0; rsp(id,"ok",t);
+        sb_init(&b, t, sizeof t); sb_s(&b, "have_host="); sb_i(&b, netdisc_have_host()); t[b.len]=0; rsp(id,"ok",t);
+        if (netdisc_have_host()) {
+            const u8 *hip = netdisc_host_ip();
+            sb_init(&b, t, sizeof t); sb_s(&b, "host=");
+            sb_i(&b, hip[0]); sb_c(&b,'.'); sb_i(&b, hip[1]); sb_c(&b,'.');
+            sb_i(&b, hip[2]); sb_c(&b,'.'); sb_i(&b, hip[3]); sb_c(&b,':');
+            sb_i(&b, netdisc_host_port()); t[b.len]=0; rsp(id,"ok",t);
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "link=");       sb_i(&b, g_state);            t[b.len]=0; rsp(id,"ok",t);
+        rsp(id, "end", 0); return;
+    }
     if (!strcmp_(verb, "test")) {
         do_test(id, tok(&args)); return;
     }
@@ -793,13 +817,74 @@ static void dispatch_line(char *line)
     else if (!strcmp_(type, "RSP")) { skip_ws(&line); inq_push(line); }
 }
 
+/* ---- transport seam ------------------------------------------------------
+ * Everything above (URC framing, dispatch, the tx/rx queues) is transport-
+ * agnostic; only these ops touch a medium.  Two backends implement it:
+ *   - TCP    : the dev-PC LAN link (pc64's own socket, via netsock).
+ *   - serial : a 16550 UART (unoauto_serial.c), so a box whose only network is
+ *              the NIC being debugged can still be driven live over URC
+ *              (Request 2, 2026-07-22 r8169 entry in UNOAUTOMATE-REQUESTS.md).
+ * A backend reports a coarse link state; the pump's state machine is written
+ * against these, not against TCP_* directly. */
+enum { LINK_CLOSED = 0, LINK_CONNECTING, LINK_UP, LINK_DEAD };
+typedef struct {
+    const char *name;
+    int  (*medium_up)(void);                    /* physical medium ready to try */
+    int  (*open)(void);                         /* begin a link; 0 ok, <0 fail  */
+    int  (*state)(void);                        /* LINK_*                       */
+    int  (*send)(const char *buf, int n);       /* bytes accepted (>= 0)        */
+    int  (*recv)(unsigned char *buf, int cap);  /* bytes read (>= 0)            */
+    void (*close)(void);
+    void (*poll)(void);                         /* pump the lower layer         */
+} urc_transport;
+
+/* --- TCP backend (the original medium) --- */
+static int  tcp_medium_up(void) { return pc64_net_up(); }
+static int  tcp_open(void)
+{
+    if (g_sock >= 0) net_sock_close(g_sock);           /* free a prior attempt */
+    g_sock = net_socket(SOCK_TCP);
+    if (g_sock < 0) return -1;
+    net_connect(g_sock, g_ip, g_port);
+    return 0;
+}
+static int  tcp_state(void)
+{
+    int st = (g_sock >= 0) ? net_sock_state(g_sock) : TCP_CLOSED;
+    if (st == TCP_ESTABLISHED)              return LINK_UP;
+    if (st == TCP_CLOSED || st == TCP_DONE) return LINK_DEAD;
+    return LINK_CONNECTING;
+}
+static int  tcp_send(const char *b, int n)    { int r = net_send(g_sock, b, n); return r > 0 ? r : 0; }
+static int  tcp_recv(unsigned char *b, int c) { int r = net_recv(g_sock, b, c); return r > 0 ? r : 0; }
+static void tcp_close(void)                   { if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; } }
+static void tcp_poll(void)                    { net_poll(); }
+static const urc_transport TP_TCP = {
+    "tcp", tcp_medium_up, tcp_open, tcp_state, tcp_send, tcp_recv, tcp_close, tcp_poll
+};
+
+/* --- serial backend (16550 UART, unoauto_serial.c) ---
+ * The UART is a point-to-point wire with no handshake: it is "up" as soon as it
+ * is initialised.  The URC HELLO handshake still runs at the line-protocol
+ * layer; if the host attaches mid-stream it just resyncs on the next newline. */
+static int  ser_medium_up(void) { return 1; }
+static int  ser_open(void)      { uart_init(g_uart_base, 115200); return 0; }
+static int  ser_state(void)     { return LINK_UP; }
+static void ser_close(void)     { }
+static void ser_poll(void)      { }
+static const urc_transport TP_SERIAL = {
+    "serial", ser_medium_up, ser_open, ser_state, uart_write, uart_read, ser_close, ser_poll
+};
+
+static const urc_transport *g_tp = &TP_TCP;   /* default; boot may pick serial */
+
 /* ---- pump ---------------------------------------------------------------- */
 static void flush_tx(void)
 {
     int n, r;
     if (g_txlen <= 0) return;
     n = g_txlen; if (n > 512) n = 512;
-    r = net_send(g_sock, g_tx, n);       /* one segment in flight at a time */
+    r = g_tp->send(g_tx, n);             /* one segment / FIFO-load at a time */
     if (r > 0) {
         g_txlen -= r;
         if (g_txlen > 0) memmove(g_tx, g_tx + r, (unsigned long)g_txlen);
@@ -810,11 +895,11 @@ static void drain_rx(void)
 {
     unsigned char buf[512];
     int n, i;
-    while ((n = net_recv(g_sock, buf, (int)sizeof buf)) > 0) {
+    while ((n = g_tp->recv(buf, (int)sizeof buf)) > 0) {
         for (i = 0; i < n; i++) {
             char c = (char)buf[i];
             if (c == '\r') continue;
-            if (c == '\n') { g_rx[g_rxlen] = 0; dispatch_line(g_rx); g_rxlen = 0; }
+            if (c == '\n') { g_rx[g_rxlen] = 0; dispatch_line(g_rx); g_rxlen = 0; g_rx_seen = 1; }
             else if (g_rxlen < (int)sizeof g_rx - 1) g_rx[g_rxlen++] = c;
             /* else: overline - drop chars until the next '\n' */
         }
@@ -824,11 +909,8 @@ static void drain_rx(void)
 static void start_connect(void)
 {
     g_txlen = 0; g_rxlen = 0;
-    if (!pc64_net_up()) { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
-    if (g_sock >= 0) net_sock_close(g_sock);          /* free the prior attempt */
-    g_sock = net_socket(SOCK_TCP);
-    if (g_sock < 0) { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
-    net_connect(g_sock, g_ip, g_port);
+    if (!g_tp->medium_up()) { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
+    if (g_tp->open() < 0)   { g_state = RS_DOWN; g_deadline = g_tick + 300; return; }
     g_state = RS_CONNECTING;
     g_deadline = g_tick + 600;           /* ~10 s handshake window */
 }
@@ -837,6 +919,24 @@ void unoauto_remote_boot(void)
 {
     char v[64]; char *p; int oct, i;
     if (g_state != RS_OFF) return;                 /* armed once */
+
+    /* NIC-independent transport (Request 2): a 16550 UART link, for a box whose
+     * only network is the NIC being debugged.  `remote-serial` (bare flag) uses
+     * COM1 @ 115200; `remote-serial=<hexbase>` picks another UART (e.g. `2f8` =
+     * COM2).  Checked before `remote=` - a serial-only stick has no IP address,
+     * and the UART is up with no handshake, so we go straight to connecting. */
+    if (pc64_stress_cfg_flag("remote-serial") > 0) {
+        char sb[16];
+        g_uart_base = (pc64_stress_cfg_value("remote-serial", sb, (int)sizeof sb) > 0)
+                      ? (unsigned)parse_hex(sb) : 0x3F8;
+        g_tp = &TP_SERIAL;
+        if (g_sink < 0)
+            g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
+        unoauto_log(UA_CH_SCRIPT, "remote: serial link on 0x%x", g_uart_base);
+        start_connect();
+        return;
+    }
+
     if (pc64_stress_cfg_value("remote", v, (int)sizeof v) <= 0) {
         /* No static address. If discovery is armed (`discover` flag), wait for
          * netdisc to find a host and dial it - zero-config. */
@@ -872,10 +972,10 @@ bad:
 
 void unoauto_remote_tick(void)
 {
-    int st;
+    int ls;
     if (g_state == RS_OFF) return;
     g_tick++;
-    net_poll();
+    g_tp->poll();
     if (g_state == RS_DISCOVER) {                    /* waiting for a discovered host */
         if (netdisc_have_host()) {
             const u8 *hip = netdisc_host_ip();
@@ -887,26 +987,34 @@ void unoauto_remote_tick(void)
         }
         return;
     }
-    st = (g_sock >= 0) ? net_sock_state(g_sock) : TCP_CLOSED;
+    ls = g_tp->state();
     switch (g_state) {
     case RS_CONNECTING:
-        if (st == TCP_ESTABLISHED) {
+        if (ls == LINK_UP) {
             g_state = RS_UP;
+            g_rx_seen = 0; g_hello_at = g_tick + 120;   /* ~2 s re-HELLO cadence */
             unoauto_remote_send("HELLO", "pc64 1");
             /* now that the sink is live, announce the link on the SCRIPT
              * channel - this line flows straight back out as a LOG frame,
              * seeding the remote-log stream. */
             unoauto_log(UA_CH_SCRIPT, "remote: link up");
-        } else if (st == TCP_CLOSED || st == TCP_DONE || g_tick > g_deadline) {
-            net_sock_close(g_sock); g_sock = -1;
+        } else if (ls == LINK_DEAD || g_tick > g_deadline) {
+            g_tp->close();
             g_state = RS_DOWN; g_deadline = g_tick + 300;   /* retry ~5 s */
         }
         break;
     case RS_UP:
         drain_rx();
+        /* Serial has no connection handshake, so a host that attaches AFTER the
+         * guest booted never saw the one link-up HELLO.  Re-emit it every ~2 s
+         * until we hear the host, so a late `unoauto_remote.py --serial` syncs. */
+        if (g_tp == &TP_SERIAL && !g_rx_seen && g_tick >= g_hello_at) {
+            unoauto_remote_send("HELLO", "pc64 1");
+            g_hello_at = g_tick + 120;
+        }
         flush_tx();
-        if (st != TCP_ESTABLISHED) {
-            net_sock_close(g_sock); g_sock = -1;
+        if (ls != LINK_UP) {
+            g_tp->close();
             g_state = RS_DOWN; g_deadline = g_tick + 300;
         } else if (g_pending_off && g_txlen == 0) {
             uno_pc64_shutdown();
@@ -926,7 +1034,7 @@ int unoauto_remote_active(void) { return g_state == RS_UP; }
 void unoauto_remote_stop(void)
 {
     if (g_state == RS_UP) { unoauto_remote_send("BYE", 0); flush_tx(); }
-    if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; }
+    g_tp->close();
     g_state = RS_OFF;
     g_txlen = 0; g_rxlen = 0;
 }
