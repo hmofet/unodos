@@ -142,9 +142,11 @@ machines), shrink firmware usage to the unavoidable minimum:
 
 - QEMU via `tools/qemu_test.py` (monitor socket, screendumps; no
   focus/SendKeys). Real FAT images via mkuefi, never vvfat for writes.
-- After meaningful pc64 builds: `pc64\flash\deploy-to-share.ps1`.
-- Commit per step; do NOT push without asking (master carries unpushed
-  work by policy).
+- Flasher redeploy is OPT-IN as of 2026-07-23 (network install via the URC
+  `install <disk>` verb covers running boxes); build a USB stick only when
+  the test itself needs one (e.g. the Phase A usb-storage boot tests).
+- Process: follow /AGENTS.md (worktree + branch per slice, commit
+  constantly, push the branch daily, land via the merge gate).
 - ZimaBlade remote driving goes through the URC bridge on devbuntu
   (~/urc_bridge.py :5099, file-driven ~/urc/cmd.txt); the URC verb
   territory belongs to the unoautomate agent, file requests instead of

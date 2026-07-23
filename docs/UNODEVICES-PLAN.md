@@ -167,8 +167,11 @@ device transitioning BOUND -> GONE -> re-enumerated.
 - QEMU testing: use `tools/qemu_test.py` (monitor-socket screendumps, never
   focus/SendKeys per machine rules). Do not use QEMU vvfat for anything
   that writes multi-cluster files; build a real FAT image via mkuefi.
-- After any meaningful pc64 build, rebuild + publish the flasher per the
-  standing rule (`pc64\flash\deploy-to-share.ps1`); skip only if \\behemoth
-  is offline.
-- Commit per phase (small commits per driver in phase 2). Do NOT push
-  without asking; master has unpushed work by policy.
+- Flasher redeploy (`pc64\flash\deploy-to-share.ps1`) is OPT-IN as of
+  2026-07-23: running boxes update over the network (URC `install <disk>`,
+  see pc64/REMOTE.md). Publish a flasher only when you specifically need a
+  bootable USB stick.
+- Process: follow the repo working agreement in /AGENTS.md (one worktree +
+  branch per slice off origin/master, commit constantly, push the branch
+  daily, land to master only through the merge gate). Small commits per
+  driver in phase 2; seam edits are separate `seam:`-prefixed commits.
