@@ -27,6 +27,38 @@ Plaintext, LAN-only by intent - do not expose the port to untrusted networks.
 import socket, threading, itertools, sys
 
 
+class _SerialStream:
+    """Adapt a pyserial Serial to the tiny socket-shaped interface the reader and
+    writer use (recv()/sendall()/close()), so the exact same URC line protocol
+    runs over a UART.  recv() blocks until at least one byte (like a socket), and
+    returns b"" only once the port is closed - so the reader loop's `if not data`
+    EOF test behaves the same as it does for TCP."""
+    def __init__(self, ser):
+        self._ser = ser
+        self._closed = False
+
+    def recv(self, n=4096):
+        while not self._closed:
+            b = self._ser.read(1)                 # blocks up to the read-timeout
+            if b:
+                extra = getattr(self._ser, "in_waiting", 0)
+                if extra:
+                    b += self._ser.read(extra)    # drain the rest of the burst
+                return b
+        return b""
+
+    def sendall(self, data):
+        self._ser.write(data)
+        self._ser.flush()
+
+    def close(self):
+        self._closed = True
+        try:
+            self._ser.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class UnoAutoLink:
     def __init__(self, host="0.0.0.0", port=5099):
         self.host, self.port = host, port
@@ -39,6 +71,7 @@ class UnoAutoLink:
         self._msg_cb = None
         self._cmd_handlers = {}
         self._connected = threading.Event()
+        self._peer_hello = threading.Event()   # set when the guest's HELLO arrives
         self._stop = False
 
     # ---- lifecycle --------------------------------------------------------
@@ -50,6 +83,25 @@ class UnoAutoLink:
         threading.Thread(target=self._accept_loop, daemon=True).start()
         return self
 
+    def attach_stream(self, stream):
+        """Drive the link over an already-open byte stream instead of listening
+        for a TCP dial-in.  `stream` needs recv()/sendall()/close() (a connected
+        socket, or a _SerialStream).  This is the NIC-independent path: the pc64
+        stick sets `remote-serial` in STRESS.CFG and speaks URC over its UART, so
+        a box whose only NIC is the one being debugged can still be driven."""
+        with self._lock:
+            self._sock = stream
+        self._connected.set()
+        self.send("HELLO", "host 1")
+        threading.Thread(target=self._reader, args=(stream,), daemon=True).start()
+        return self
+
+    def attach_serial(self, device, baud=115200):
+        """Open a real serial port (pyserial) and drive the link over it."""
+        import serial  # pyserial; only needed for the serial transport
+        ser = serial.Serial(device, baud, timeout=0.2)
+        return self.attach_stream(_SerialStream(ser))
+
     def close(self):
         self._stop = True
         for s in (self._sock, self._srv):
@@ -60,6 +112,13 @@ class UnoAutoLink:
 
     def wait_connected(self, timeout=30.0):
         return self._connected.wait(timeout)
+
+    def wait_hello(self, timeout=30.0):
+        """Block until the guest's HELLO arrives - it means pc64 is booted and
+        draining its receive path, so commands won't be lost.  Essential on the
+        serial transport, which has no connection handshake: a command sent
+        before the guest is reading vanishes into an unread FIFO."""
+        return self._peer_hello.wait(timeout)
 
     # ---- callbacks --------------------------------------------------------
     def on_log(self, cb):     self._log_cb = cb            # cb(chan, text)
@@ -247,7 +306,9 @@ class UnoAutoLink:
             rid, _, tail = rest.partition(" ")
             verb, _, args = tail.partition(" ")
             self._on_cmd(rid, verb, args)
-        # HELLO / BYE: nothing required
+        elif typ == "HELLO":
+            self._peer_hello.set()    # guest is up and reading; safe to drive it
+        # BYE: nothing required
 
     def _on_rsp(self, rid, status, text):
         with self._lock:
@@ -291,6 +352,10 @@ def _cli(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--listen", default="0.0.0.0:5099",
                     help="bind address host:port (default 0.0.0.0:5099)")
+    ap.add_argument("--serial", metavar="DEVICE[:BAUD]",
+                    help="drive over a serial port (e.g. COM3 or /dev/ttyUSB0, optional :baud, "
+                         "default 115200) instead of TCP; the pc64 stick uses `remote-serial` "
+                         "in STRESS.CFG. NIC-independent - for a box whose only NIC is broken.")
     ap.add_argument("--push", nargs=3, metavar=("VOL", "PATH", "LOCALFILE"),
                     help="wait for pc64 to dial in, push LOCALFILE to <vol>:<path>, then exit")
     ap.add_argument("--chunk", type=int, default=2700, help="push chunk size (raw bytes; fits the 4 KB device line buffer)")
@@ -359,9 +424,23 @@ def _cli(argv):
 
     link.on_log(lambda ch, t: print("[%-7s] %s" % (ch, t)))
     link.on_message(lambda m: print("<msg> " + m))
-    link.listen()
-    print("unoauto_remote listening on %s. Set pc64 STRESS.CFG:" % a.listen)
-    print("    remote=<this-machine-ip>:%s   (QEMU SLIRP guest: 10.0.2.2:%s)" % (port, port))
+    if a.serial:                                 # NIC-independent serial transport
+        dev, baud = a.serial, 115200
+        if ":" in a.serial:
+            h, _, t = a.serial.rpartition(":")
+            if t.isdigit():
+                dev, baud = h, int(t)
+        try:
+            link.attach_serial(dev, baud)
+        except ImportError:
+            print("FAIL: pyserial not installed (pip install pyserial)"); return 1
+        except Exception as e:  # noqa: BLE001
+            print("FAIL: cannot open serial %s: %s" % (dev, e)); return 1
+        print("unoauto_remote on serial %s @ %d baud. Set pc64 STRESS.CFG: remote-serial" % (dev, baud))
+    else:
+        link.listen()
+        print("unoauto_remote listening on %s. Set pc64 STRESS.CFG:" % a.listen)
+        print("    remote=<this-machine-ip>:%s   (QEMU SLIRP guest: 10.0.2.2:%s)" % (port, port))
     print("Type a command line to send (probe / vols / launch 0 / py print(6*7) /")
     print("  uptime / reboot / bootnext <n>). Prefix /msg for a free-form message.")
     print("For an A/B OS push use: --push <vol> <path> <localfile> [--reboot]. Ctrl-D quits.\n")
