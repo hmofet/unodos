@@ -45,6 +45,8 @@ typedef unsigned long long u64;
 #define  NPQ        0x40
 #define IntrMask    0x3C          /* 8168: 16-bit */
 #define IntrStatus  0x3E
+#define  RxFIFOOver 0x0040        /* IntrStatus: RX FIFO overflow -> RX halts    */
+#define  RxOverflow 0x0010        /* IntrStatus: RX descriptor/buffer overflow   */
 #define TxConfig    0x40
 #define RxConfig    0x44
 #define Cfg9346     0x50
@@ -96,6 +98,7 @@ static int g_present, g_up, g_is8125;
 static u8  g_mac[6];
 static u16 g_devid;
 static int g_tx_cur, g_rx_cur;
+static int g_rx_kicks;              /* RX-overflow recoveries (metal RX-stall fix) */
 static uno_nic_t g_nic;
 static u64 phys(const void *p){ return (u64)(uintptr_t)p; }
 
@@ -226,6 +229,20 @@ static int r8169_recv(void *ctx, void *pkt, int cap)
     int len;
     (void)ctx;
     if (!g_up) return 0;
+    /* Metal RX-stall fix: in polled mode nothing services IntrStatus, so an RX
+     * FIFO/descriptor overflow (the 64-deep ring filled before we drained it)
+     * latches and the MAC halts RX forever - the symptom is rx frozen at exactly
+     * RXN. Clear the overflow (write-1-to-clear) and re-assert RxEnb so the DMA
+     * resumes scanning the re-armed descriptors. 8168 IntrStatus is the 16-bit
+     * reg at 0x3E (the 8125 relocation is handled elsewhere; 8168-only here). */
+    if (!g_is8125) {
+        u16 isr = r16(IntrStatus);
+        if (isr & (RxFIFOOver | RxOverflow)) {
+            w16(IntrStatus, (u16)(isr & (RxFIFOOver | RxOverflow)));
+            w8(ChipCmd, CmdRxEnb | CmdTxEnb);
+            g_rx_kicks++;
+        }
+    }
     st = d->opts1;
     if (st & DescOwn) return 0;                      /* still owned by NIC: nothing */
     __asm__ volatile("" ::: "memory");
@@ -395,9 +412,12 @@ int r8169_dbg_cmd(const char *line, char *out, int cap)
         ob_s(&o, " up=");     ob_u(&o, (u32)g_up);
         ob_s(&o, " dev=");    ob_hex(&o, g_devid, 4);
         ob_s(&o, " is8125="); ob_u(&o, (u32)g_is8125);
+        ob_s(&o, " rxcur=");  ob_u(&o, (u32)g_rx_cur);
+        ob_s(&o, " rxkicks="); ob_u(&o, (u32)g_rx_kicks);
         ob_s(&o, " mmio=");   ob_hex(&o, (u32)(uintptr_t)g_mmio, 8);
         if (g_mmio) {
             ob_s(&o, " ChipCmd=");   ob_hex(&o, r8(ChipCmd), 2);
+            ob_s(&o, " IntrStatus="); ob_hex(&o, r16(IntrStatus), 4);
             ob_s(&o, " PHYstatus="); ob_hex(&o, r8(PHYstatus), 2);
             ob_s(&o, " link=");      ob_u(&o, (u32)link_up());
         } else ob_s(&o, " (window not mapped - run 'rerun')");
