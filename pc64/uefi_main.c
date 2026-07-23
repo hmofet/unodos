@@ -45,6 +45,8 @@
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
 #include "pc64_fs.h"        /* uno_fs_volumes/remap (the M3 detach dance) */
+#include "unosecure.h"      /* security subsystem bring-up (unosec_boot) */
+#include "unoscript.h"      /* scripting runtime bring-up (unoscript_boot) */
 #include "pc64_native.h"    /* TSC/CMOS/PS2/CF9 - life after ExitBootServices */
 #include "snd_pcm.h"        /* sampled audio: HD Audio / AC'97 PCM ring */
 #ifdef UNO_ACPI
@@ -970,6 +972,22 @@ void uno_pc64_init(void)
     uno_dbg_write_bootenv();
     uno_dbg_write_bootlog();
 #endif
+
+    /* Security subsystem last: storage is up and (if it happened) detach has
+     * remapped to the writable native volume, so unosecure's root-only store
+     * lands on persistent media.  unosec_boot() seeds built-in roles / loads
+     * accounts + the audit chain; unoscript_boot() brings the scripting runtime
+     * up.  Both fail closed - a missing/read-only store degrades to an in-RAM,
+     * deny-by-default posture rather than opening anything. */
+    splash_stage(4, "security (accounts / RBAC)");
+#ifdef UNO_SECTEST
+    /* build-time gate: prove the escalation decision flips deny->allow.  Runs
+     * on a scratch store and resets the subsystem, so the real bring-up below
+     * starts clean. */
+    uno_dbg_log("unosec_selftest -> %s", unosec_selftest() ? "PASS" : "FAIL");
+#endif
+    unosec_boot();
+    unoscript_boot();
 }
 
 /* ===========================================================================

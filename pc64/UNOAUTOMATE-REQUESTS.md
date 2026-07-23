@@ -410,3 +410,31 @@ in firmware setup. USB-CDC-ACM is not implemented (the 16550 covers the immediat
 r8169 case) — file a follow-up if you want it. Commits `ac26359` / `babf2f4` /
 `31d879d` / `babcbb1` on `unoautomate`; REMOTE.md + the HARNESS-POLICY changelog
 document it.
+
+---
+
+## 2026-07-23 — unosecure: landed; one open coordination request to unosched
+
+**`unosecure` landed** (`unosecure.{c,h}`, design `UNOSECURE.md`) and is wired
+into `build.sh` alongside `unoscript` — its strong `unosec_*` definitions replace
+`unoscript.c`'s weak fail-closed gate (r8169 pattern), so `unosec_present()` is 1
+and tier≥1 privilege decisions are real. Accounts (PBKDF2-HMAC-SHA256), RBAC by
+cap-name, sessions, escalation with scopes/consent/signed-manifest, and a
+hash-chained append-only audit log are all in.
+
+**Request — unosched: assert the thread→session binding on context switch.**
+`unosec_current_user()` reads the *current thread's* bound session. Today the
+binding follows the `unosec_enter_session()` / `unosec_leave()` calls `unoscript`
+makes around a script body — correct for the single-run-at-a-time cooperative
+model. When `unosched` runs two scripted tasks concurrently, it must, on each
+context switch, call `unosec_enter_session(task->sec_session)` for the task it
+resumes and `unosec_leave()` when it suspends, so identity follows the running
+task rather than the last enter. The binding calls are already exported and cheap
+(a bounded per-thread stack). No urgency — nothing regresses until concurrent
+scripted tasks exist. Contract + rationale in `UNOSECURE.md` "thread→session
+binding". Stopgap: `unoscript`'s enter/leave around each script body.
+
+**For `unoscript` (informational, no action):** the seam is live; a *permitted*
+tier≥1 op still returns `USC_EUNAVAIL` until each surface owner (unoui/shell/
+unofs/unosched/kernel) lands its accessor — the privilege gate no longer blocks
+them, the plumbing does.

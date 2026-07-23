@@ -134,7 +134,12 @@ if [ "$1" != "legacy" ]; then
     # $DBGSAN (UBSan trap + stack canary) rides on this FIRST-PARTY set only -
     # third-party bearssl/uacpi/upy below build without it (they do defined
     # unsigned wraparound the sanitizer must not trap).
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_ca acpi_host installer snd_pcm hdaudio ac97; do
+    # unosecure = the security subsystem (identity/RBAC/escalation/audit);
+    # unoscript = the production scripting surface it adjudicates.  These land
+    # together (unosecure's strong unosec_* symbols replace unoscript.c's weak
+    # fail-closed fallbacks - the r8169 pattern), so tier>=1 script surfaces
+    # light up.  See UNOSECURE-SPEC.md / UNOSCRIPT.md.
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
@@ -356,6 +361,7 @@ if [ "$1" != "legacy" ]; then
         PYF="$UCF -w -Iupy -Iupy_port -I$PB"
         PSRC="$(ls upy/py/*.c) upy/shared/runtime/gchelper_native.c \
               upy_port/pc64_upy_port.c upy_port/mod_uno.c upy_port/mod_unoauto.c \
+              upy_port/mod_unoscript.c \
               upy_port/pc64_upy_stubs.c apps/pyrt.c"
         "$PY" upy_port/mkupy.py --top upy --port upy_port --build "$PB" \
               --cpp "$CC -E" --cflags "$PYF" -- $PSRC
