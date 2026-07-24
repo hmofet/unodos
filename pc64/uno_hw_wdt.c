@@ -99,7 +99,22 @@ static inline u16 io_in16(u32 p)
 #define ACPI_TCOBASE_OFF 0x60   /* TCO I/O block = ACPIBASE + 0x60             */
 
 #define RCBA_GCS        0x3410  /* General Control & Status (MMIO, off RCBA)   */
-#define GCS_NO_REBOOT   (1u<<5) /* GCS bit 5 = No Reboot (NR)                  */
+#define GCS_NO_REBOOT   (1u<<5) /* GCS bit 5 = No Reboot (NR)  [iTCO v2, 0x20] */
+
+/* Skylake .. Comet Lake PCH-LP (400-series): RCBA is gone; NO_REBOOT moved into
+ * the PMC's GEN_PMCON_A register, in the PWRM (power-management) MMIO window.
+ * PWRMBASE is the PMC function's BAR0 (00:14.2 on CML), or the fixed platform
+ * base when firmware didn't surface a readable BAR.  GEN_PMCON_A is at
+ * PWRMBASE + 0x1020; the no-reboot bit is bit 1 (mask 0x02) - the value Linux
+ * iTCO_wdt uses for this "memory-mapped" PCH class (no_reboot_bit() -> 0x02 for
+ * the Skylake-family part).  Verified against the live Comet Lake-U Yoga on
+ * metal (see HWWATCHDOG.md §4). */
+#define PMC_CLASS        0x05   /* PMC enumerates as class 05/00 "memory"       */
+#define PMC_SUBCLASS     0x00
+#define PMC_BAR0         0x10   /* PMC config: PWRMBASE lives in BAR0           */
+#define PWRMBASE_FIXED   0xFE000000u  /* 400-series fixed platform PWRM window   */
+#define PWRM_GEN_PMCON_A 0x1020 /* GEN_PMCON_A offset within the PWRM window    */
+#define PMCON_A_NO_REBOOT (1u<<1)     /* GEN_PMCON_A bit 1 = No Reboot (0x02)    */
 
 /* TCO I/O block offsets (relative to TCOBASE) */
 #define TCO_RLD         0x00    /* 16-bit: write reloads counter from TMR      */
@@ -124,12 +139,16 @@ static inline u16 io_in16(u32 p)
 
 /* --- discovered state ------------------------------------------------------ */
 
-enum { WDT_NONE = 0, WDT_V1 = 1, WDT_V2 = 2 };
+enum { WDT_NONE = 0, WDT_V1 = 1, WDT_V2 = 2, WDT_V3 = 3 };
+/* V2 = RCBA-GCS NO_REBOOT (ICH6..6-series PCH, QEMU ich9).
+ * V3 = PMC GEN_PMCON_A NO_REBOOT (Skylake..Comet Lake PCH-LP). */
 
 static int  g_probed;           /* discovery has run                            */
-static int  g_gen;              /* WDT_NONE / WDT_V1 / WDT_V2                    */
+static int  g_gen;              /* WDT_NONE / WDT_V1 / WDT_V2 / WDT_V3           */
 static u32  g_tcobase;          /* TCO I/O block base, 0 if none                */
-static u64  g_gcs;              /* GCS MMIO address (v2), 0 if none              */
+static u64  g_nrreg;            /* NO_REBOOT MMIO reg: GCS (v2) or GEN_PMCON_A (v3) */
+static u32  g_nrmask;           /* NO_REBOOT bit mask for the detected gen       */
+static u32  g_nrbefore;         /* raw NO_REBOOT reg value as firmware left it   */
 static int  g_present;          /* usable + NO_REBOOT confirmed clear           */
 static int  g_armed;
 static u16  g_period_ticks;     /* single-timeout period currently programmed   */
@@ -144,22 +163,40 @@ static u16 secs_to_ticks(unsigned seconds, u16 lo, u16 hi)
     return (u16)half;
 }
 
-/* Clear the chipset NO_REBOOT bit for the detected generation and confirm it
- * reads back clear.  Returns 1 on success (reboot now permitted), 0 if the bit
- * could not be cleared or this generation's NO_REBOOT home is unsupported. */
+/* Clear the chipset NO_REBOOT bit (in whichever register the detected gen puts
+ * it - RCBA GCS for v2, PMC GEN_PMCON_A for v3) and confirm it reads back clear.
+ * Returns 1 on success (reboot now permitted), 0 if the bit could not be cleared
+ * or this generation's NO_REBOOT home is unsupported.  Records the firmware
+ * value in g_nrbefore for the status dump (diagnosis on a new chipset). */
 static int clear_no_reboot(void)
 {
-    if (g_gen == WDT_V2 && g_gcs) {
-        u32 v = MMIO_RD32(g_gcs);
-        if (v & GCS_NO_REBOOT) {
-            MMIO_WR32(g_gcs, v & ~GCS_NO_REBOOT);
-            v = MMIO_RD32(g_gcs);          /* read back: locked bits stay set   */
-        }
-        return (v & GCS_NO_REBOOT) ? 0 : 1;
+    u32 v;
+    if (!g_nrreg || !g_nrmask) return 0;   /* v1 / unsupported: never pretend    */
+    v = MMIO_RD32(g_nrreg);
+    g_nrbefore = v;
+    if (v & g_nrmask) {
+        MMIO_WR32(g_nrreg, v & ~g_nrmask);
+        v = MMIO_RD32(g_nrreg);            /* read back: a locked bit stays set  */
     }
-    /* v1 (pre-RCBA) and the Skylake+/SoC PMC path are not implemented; refuse
-     * rather than program a timer that can never actually reset the board. */
-    return 0;
+    return (v & g_nrmask) ? 0 : 1;
+}
+
+/* Locate the PMC's PWRM MMIO window (Skylake..CML).  Requires an actual Intel
+ * PMC function in the tree (class 05/00, vendor 8086 - 00:14.2 on CML) before
+ * touching any PWRM address: that keeps us from poking a fixed MMIO on a
+ * chipset that isn't this family.  Prefer the PMC's BAR0 if it reads back a sane
+ * high window; else the 400-series fixed base.  Returns 0 when no PMC is found. */
+static u32 find_pwrmbase(void)
+{
+    uno_device *d = devmgr_find_class(PMC_CLASS, PMC_SUBCLASS);
+    pci_dev pmc;
+    u32 bar;
+    if (!d || d->bus_type != UNO_BUS_PCI || d->vendor != 0x8086) return 0;
+    pmc.bus = d->addr.pci.bus; pmc.dev = d->addr.pci.dev; pmc.fn = d->addr.pci.fn;
+    pmc.vendor = d->vendor; pmc.device = d->device;
+    bar = pci_cfg_read32(&pmc, PMC_BAR0) & ~0xFu;       /* memory BAR base        */
+    if (bar >= 0xF0000000u && bar < 0xFF000000u) return bar;   /* sane PWRM       */
+    return PWRMBASE_FIXED;                  /* PMC present, BAR hidden: fixed base */
 }
 
 /* Locate the PCH LPC function via the device tree and read its bases.  Uses the
@@ -174,7 +211,8 @@ static void probe(void)
     int lpc_idx = -1;
 
     g_probed = 1;
-    g_gen = WDT_NONE; g_tcobase = 0; g_gcs = 0; g_present = 0;
+    g_gen = WDT_NONE; g_tcobase = 0; g_nrreg = 0; g_nrmask = 0; g_nrbefore = 0;
+    g_present = 0;
 
     d = devmgr_find_class(0x06, 0x01);          /* ISA bridge = the PCH LPC     */
     if (d && d->bus_type == UNO_BUS_PCI) {
@@ -196,11 +234,19 @@ static void probe(void)
     if (!g_tcobase) return;
 
     rcba = pci_cfg_read32(&lpc, LPC_RCBA);
-    if (rcba & LPC_RCBA_EN) {                     /* ICH6+/PCH: v2 + RCBA GCS     */
-        g_gcs = (u64)(rcba & 0xFFFFC000u) + RCBA_GCS;
+    if (rcba & LPC_RCBA_EN) {                     /* ICH6..6-series PCH: RCBA GCS  */
+        g_nrreg  = (u64)(rcba & 0xFFFFC000u) + RCBA_GCS;
+        g_nrmask = GCS_NO_REBOOT;
         g_gen = WDT_V2;
-    } else {
-        g_gen = WDT_V1;                           /* older: no RCBA (unsupported) */
+    } else {                                       /* Skylake..CML: PMC GEN_PMCON_A */
+        u32 pwrm = find_pwrmbase();
+        if (pwrm) {
+            g_nrreg  = (u64)pwrm + PWRM_GEN_PMCON_A;
+            g_nrmask = PMCON_A_NO_REBOOT;
+            g_gen = WDT_V3;
+        } else {
+            g_gen = WDT_V1;                        /* truly unsupported            */
+        }
     }
 
     /* Take the TCO over cleanly: halt it, then try to clear NO_REBOOT.  Only
@@ -306,17 +352,23 @@ int uno_hw_wdt_status(char *buf, int cap)
     buf[0] = 0;
     ensure_probed();
     at = s_cat(buf, cap, at, "tco ");
-    at = s_cat(buf, cap, at, g_gen == WDT_V2 ? "v2" : g_gen == WDT_V1 ? "v1" : "none");
+    at = s_cat(buf, cap, at, g_gen == WDT_V3 ? "v3" : g_gen == WDT_V2 ? "v2"
+                           : g_gen == WDT_V1 ? "v1" : "none");
     at = s_cat(buf, cap, at, g_present ? " present" : " absent");
     if (g_tcobase) {
         at = s_cat(buf, cap, at, " tcobase=0x");
         at = s_hex(buf, cap, at, g_tcobase, 4);
     }
-    if (g_gcs) {
-        at = s_cat(buf, cap, at, " gcs=0x");
-        at = s_hex(buf, cap, at, g_gcs, 8);
-        at = s_cat(buf, cap, at, MMIO_RD32(g_gcs) & GCS_NO_REBOOT ? " NO_REBOOT=1"
-                                                                  : " NO_REBOOT=0");
+    if (g_nrreg) {
+        /* the NO_REBOOT register: GCS (v2) or GEN_PMCON_A (v3).  Dump the raw
+         * firmware value + live state - on a new chipset this tells you which
+         * bit firmware set, so a wrong g_nrmask is diagnosable, not silent. */
+        at = s_cat(buf, cap, at, g_gen == WDT_V3 ? " gen_pmcon_a=0x" : " gcs=0x");
+        at = s_hex(buf, cap, at, g_nrreg, 8);
+        at = s_cat(buf, cap, at, " fw=0x");
+        at = s_hex(buf, cap, at, g_nrbefore, 8);
+        at = s_cat(buf, cap, at, MMIO_RD32(g_nrreg) & g_nrmask ? " NO_REBOOT=1"
+                                                               : " NO_REBOOT=0");
     }
     at = s_cat(buf, cap, at, g_armed ? " armed period=" : " idle period=");
     at = s_dec(buf, cap, at, g_period_ticks);
