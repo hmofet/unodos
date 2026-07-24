@@ -2570,6 +2570,73 @@ static int iommu_disable(char *out, int cap)
     return done;
 }
 
+/* Post-ALIVE MVM bring-up, one stage per call, driven by "iwl mvm <n>".
+ *
+ * Same rationale as alive_steps(): this sequence has never run against real
+ * firmware, running it inline wedged the box, and a wedge eats the in-flight
+ * URC logs - so each stage is its own command that completes and flushes, and
+ * is armed only after "iwl rerun" has parked the fw at the ALIVE gate.  Drive
+ * it under the guard: "guard 40 reboot" then "iwl mvm 1", "iwl mvm 2", ...  A
+ * stage that wedges is recovered by the guard and named by the last stage that
+ * DID return.  State accumulates across calls (same boot), so run them in order.
+ *
+ *   1  mvm_init_unified   SYSTEM init + NVM + PHY cfg + INIT_COMPLETE + NVM info
+ *   2  mvm_tx_ant         TX_ANT_CONFIG
+ *   3  mvm_dqa_enable     DQA (only if fw advertises capa 12)
+ *   4  mvm_power_table    POWER_TABLE
+ *   5  scan_cfg   6 phy_ctxt   7 mac_ctxt   8 binding   9 time_quota+add_sta+wpa
+ *      (find_and_join's send_cmd chain, split so a wedge names the exact cmd) */
+static int mvm_steps(int n, char *out, int cap)
+{
+    if (!g_bar || !g_alive) {
+        strcpy(out, "err fw not ALIVE - run 'iwl rerun' first (it parks at the ALIVE gate)");
+        return (int)strlen(out);
+    }
+    switch (n) {
+    case 1: mvm_init_unified();
+        strcpy(out, "ok mvm1: init_unified returned (SYSTEM/NVM/phy_cfg/INIT_COMPLETE)"); break;
+    case 2: mvm_tx_ant(1);
+        strcpy(out, "ok mvm2: tx_ant returned"); break;
+    case 3: if (fw_has_capa(12)) { mvm_dqa_enable(); strcpy(out, "ok mvm3: dqa_enable returned"); }
+            else strcpy(out, "ok mvm3: skipped (fw lacks DQA capa 12)"); break;
+    case 4: mvm_power_table();
+        strcpy(out, "ok mvm4: power_table returned"); break;
+    /* stage 5 (find_and_join) wedged; 5..9 walk its send_cmd chain so the exact
+     * culprit command is named. Run in order - each needs the prior ones' state.
+     * g_bssid is broadcast (the scaffold has no beacon parse yet). */
+    case 5: mvm_scan_cfg();
+        strcpy(out, "ok mvm5: scan_cfg returned"); break;
+    case 6: mvm_phy_ctxt(1, 1 /*ADD*/);
+        strcpy(out, "ok mvm6: phy_ctxt ADD returned"); break;
+    case 7: memset(g_bssid, 0xFF, 6); mvm_mac_ctxt(g_bssid, 0, 0, 1 /*ADD*/);
+        strcpy(out, "ok mvm7: mac_ctxt ADD returned"); break;
+    case 8: mvm_binding(1);
+        strcpy(out, "ok mvm8: binding returned"); break;
+    case 9: mvm_time_quota(); mvm_assoc_window(); mvm_add_sta(g_bssid, 0, 0);
+        { u8 pmk[32];
+          wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+          wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1; }
+        strcpy(out, "ok mvm9: time_quota+assoc_window+add_sta+wpa returned"); break;
+    /* stage-9 split (a..d): stage 9 wedged; walk its four ops. Needs 7 first
+     * (g_bssid = broadcast). Suspicion: assoc_window waits on a NOTIFICATION,
+     * and with the MAC context up the fw may push real 802.11 RX frames that
+     * rx_process_rb's REPLY_RX_MPDU branch has never parsed. */
+    case 10: mvm_time_quota();
+        strcpy(out, "ok mvm9a: time_quota returned"); break;
+    case 11: mvm_assoc_window();
+        strcpy(out, "ok mvm9b: assoc_window returned"); break;
+    case 12: mvm_add_sta(g_bssid, 0, 0);
+        strcpy(out, "ok mvm9c: add_sta returned"); break;
+    case 13: { u8 pmk[32];
+          wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+          wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1; }
+        strcpy(out, "ok mvm9d: wpa PMK/init returned"); break;
+    default:
+        strcpy(out, "err usage: iwl mvm <1-9|a-d> (5scan 6phy 7mac 8bind 9=a+b+c+d: a quota b assoc-window c add-sta d wpa)"); break;
+    }
+    return (int)strlen(out);
+}
+
 int iwl_dbg_cmd(const char *line, char *out, int cap)
 {
     static const char hx[] = "0123456789abcdef";
@@ -2596,8 +2663,18 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
     if (!strncmp(line, "mvm", 3)) {
-        g_mvm_arm = 1;
-        strcpy(out, "post-ALIVE MVM/join sequence armed - now run 'iwl rerun'");
+        const char *q = line + 3;
+        while (*q == 0x20) q++;
+        if (*q >= 0x31 && *q <= 0x39) {              /* "iwl mvm <n>" - stepped bisect */
+            if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+            return mvm_steps(*q - 0x30, out, cap);
+        }
+        if (*q >= 0x61 && *q <= 0x64) {              /* "iwl mvm a..d" - stage-9 split */
+            if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+            return mvm_steps(10 + (*q - 0x61), out, cap);
+        }
+        g_mvm_arm = 1;                                /* bare "iwl mvm" - arm the inline run */
+        strcpy(out, "post-ALIVE MVM/join sequence armed - now run 'iwl rerun' (or 'iwl mvm <n>' to step)");
         return (int)strlen(out);
     }
     if (!strncmp(line, "alive", 5)) {
