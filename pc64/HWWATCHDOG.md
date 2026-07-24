@@ -88,36 +88,47 @@ Intel ICH9 / 5-series-PCH datasheets.
 
 ## 4. Coverage `[EXPERIMENTAL]` — what `present()` returns where
 
-| Generation | TCOBASE | NO_REBOOT home | Supported |
+| Gen | TCOBASE | NO_REBOOT home | Supported |
 |---|---|---|---|
-| ICH6 … ~6-series PCH (incl. QEMU q35 `ich9-lpc`) | LPC ACPI+0x60 | **RCBA GCS** (RCBA+0x3410, bit 5) — MMIO, read-back verifiable | **yes (v2)** |
-| pre-ICH6 (v1, no RCBA) | LPC ACPI+0x60 | no clean NR bit | no → `present()==0` |
-| Skylake-and-later PCH; SoC parts (Apollo/Gemini Lake) | SMBus/PMC | **PMC GEN_PMCON** (PMC MMIO window) — not yet implemented | no → `present()==0` |
+| **v2** — ICH6 … ~6-series PCH (incl. QEMU q35 `ich9-lpc`) | LPC ACPI+0x60 | **RCBA GCS** (RCBA+0x3410, bit 5 / mask 0x20) — MMIO, read-back verifiable | **yes** |
+| **v3** — Skylake … **Comet Lake** PCH-LP (400-series) | LPC ACPI+0x60 | **PMC `GEN_PMCON_A`** (PWRMBASE+0x1020, bit 1 / mask 0x02) — MMIO, read-back verifiable | **yes** |
+| v1 — pre-ICH6 (no RCBA) | LPC ACPI+0x60 | no clean NR bit | no → `present()==0` |
+| SoC parts (Apollo/Gemini Lake) | SMBus/PMC GCR | PMC GCR `PMC_CFG` (bit 4) — not yet implemented | no → `present()==0` |
 
-The RCBA-GCS (v2) path is the fully-implemented, read-back-verified one, and it
-is what QEMU's `ich9-lpc` emulates — so the mechanism is demonstrable in the
-harness, not just on metal. The **PMC path** that the two current metal targets
-need — the X13 Yoga (modern PCH → PMC NO_REBOOT) and the ZimaBlade (SoC PMC) —
-is a **documented follow-up**: until it lands, the driver reports `present()==0`
-on those boxes rather than arming a timer it can't prove resets them. That is the
-honesty contract doing its job, and it is the intended incremental shape (land
-the verifiable path, extend coverage per-datasheet). See the changelog.
+Both the **v2 / RCBA-GCS** path (ICH6…6-series PCH, QEMU `ich9-lpc`) and the
+**v3 / PMC GEN_PMCON_A** path (Skylake…Comet Lake PCH-LP) are fully implemented
+and read-back-verified. The v3 register locations are: `GEN_PMCON_A` at
+`PWRMBASE + 0x1020`, where PWRMBASE is the PMC function's (00:14.2, `8086:02ef`
+on the CML-U Yoga; class 05/00) BAR0 if it reads back a sane high window, else
+the 400-series fixed base `0xFE000000`; the no-reboot bit is bit 1 (mask 0x02),
+matching Linux `iTCO_wdt`'s value for this memory-mapped PCH class. The driver
+**requires an Intel PMC function to be enumerated** before touching any PWRM
+address, so it never pokes a fixed MMIO on a chipset that isn't this family.
 
-## 5. Integration with the guard (unoautomate's edit, not ours)
+The **X13 Yoga** (Comet Lake-U) is now a supported v3 target: `present()==1` and
+the guard arms the TCO. The **ZimaBlade** (SoC PMC GCR) is a distinct method
+still on the follow-up list → `present()==0` there (honest, per §2). The
+`status`/`hwwdt status` line dumps the raw `GEN_PMCON_A` value (`fw=0x…`) so a
+new chipset's firmware NO_REBOOT bit is diagnosable rather than silent.
 
-`uno_hw_wdt` ships as a **strong symbol**; unoautomate adds a local **weak-stub
-declaration** plus the call sites, the same weak-symbol seam already used for
-`r8169_dbg_cmd` and `devmgr_list_str` — so the tree links green before *and*
-after this symbol lands. The intended wiring, in `uno_debug.c`'s guard lifecycle:
+## 5. Integration with the guard `[WIRED]`
 
-- `uno_dbg_guard_arm(t)`  → `uno_hw_wdt_arm(t/1000 + margin)`
-- `uno_dbg_guard_pet()`   → `uno_hw_wdt_pet()`
-- `uno_dbg_guard_clear()` → `uno_hw_wdt_disarm()`
+`uno_hw_wdt` ships as a **strong symbol**; `uno_debug.c` carries a local
+**weak-stub declaration** plus the call sites, the same weak-symbol seam used for
+`r8169_dbg_cmd` and `devmgr_list_str` — so the tree links green with or without
+the module. Wired into the guard lifecycle (`uno_debug.c`):
 
-The TCO timeout is set to the **guard timeout plus a margin**, so the software
-firing paths always get first crack and the TCO is the true backstop, not a
-competitor that races them. This file does **not** edit `uno_debug.c`; the
-hand-off is via `UNOAUTOMATE-REQUESTS.md`.
+- `uno_dbg_guard_arm(t_ms)`  → `guard_hw_wdt_arm(t_ms)` → `uno_hw_wdt_arm(t_ms/1000 + 8)` **iff `uno_hw_wdt_present()`**
+- `uno_dbg_guard_pet()`      → `uno_hw_wdt_pet()`
+- `uno_dbg_guard_clear()`    → `uno_hw_wdt_disarm()`
+
+The TCO window is the **guard timeout + an 8 s margin** (`GUARD_HW_WDT_MARGIN_S`),
+so the three software firing paths (main-loop heartbeat / LAPIC ISR / UEFI
+`SetWatchdogTimer`) always fire first and the TCO only catches what they
+structurally cannot — the IRQs-off spin. The guard arms the TCO only when a
+usable one is present, so on a box where `present()==0` the guard behaves exactly
+as before. This is unoautomate territory (`uno_debug.c`); the two lanes landed
+together per the request in `UNOAUTOMATE-REQUESTS.md`.
 
 ## 6. The TCO in the device tree
 
@@ -138,20 +149,23 @@ absent/unsupported one.
 ## 7. Gates
 
 - **`tools/hwwdt_test.sh` / `tools/hwwdt_test.c`** — host gate: `uno_hw_wdt.c`
-  linked against a synthetic ICH9-style south bridge (fake PCI config + TCO I/O
-  block + GCS MMIO), run natively. Asserts the NO_REBOOT clear+read-back, the
-  seconds→ticks two-timeout halving, the HLT run/halt/reload sequencing, the
-  device-tree registration, and — critically — the honest-absent paths
-  (locked NO_REBOOT, non-Intel LPC, ACPI decode off, no RCBA, no LPC). Six
+  linked against a synthetic south bridge (fake PCI config + TCO I/O block + GCS
+  and GEN_PMCON_A MMIO + a CML PMC function), run natively. Asserts the NO_REBOOT
+  clear+read-back on **both** the v2 (RCBA-GCS) and v3 (PMC GEN_PMCON_A) paths,
+  the seconds→ticks two-timeout halving, the HLT run/halt/reload sequencing, the
+  device-tree registration, and the honest-absent paths (locked NO_REBOOT on v2
+  *and* v3, non-Intel LPC, ACPI decode off, no-RCBA-no-PMC, no LPC). Eight
   scenarios, seconds, no QEMU. Run after every edit to `uno_hw_wdt.c`.
-- **`tools/hwwdt_qemu.py`** — smoke test on QEMU q35's `ich9-lpc` (which
-  emulates a v2 TCO). Arms a short TCO with `-no-reboot` and asserts QEMU exits
-  (a TCO reset). See the script header for the QEMU `noreboot` caveat.
-- **Metal is the real gate.** The definition of done is an IRQs-off wedge
-  (`cli; for(;;){}`) on a real target that defeats the software guard being
-  reset by the TCO. That is an operator step on the Yoga / ZimaBlade (as the
-  software guard itself was validated on the Yoga), and it depends on the
-  unoautomate-side wiring (§5) plus a supported NO_REBOOT path (§4) on that box.
+- **`tools/hwwdt_qemu.py`** — smoke test on QEMU q35's `ich9-lpc` (a v2 TCO).
+  Arms a short TCO with `-no-reboot` and asserts QEMU exits (a TCO reset), with a
+  no-key control that stays up. Exercises the v2 path end to end.
+- **Metal (v3 / CML) — the real gate for the Yoga.** An IRQs-off wedge
+  (`cli; for(;;){}`) on the live Comet Lake-U X13 Yoga that defeats the software
+  guard, reset by the TCO. Repro (URC): `iwl rerun`, `guard 40 reboot`,
+  `iwl mvm 1..8,a,b`, then `iwl mvm c` (the ADD_STA IRQs-off wedge) → the box
+  should TCO-reset and re-dial URC on its own. The `hwwdt status` line's
+  `fw=0x…` dump confirms `present()==1` and the firmware NO_REBOOT bit before the
+  wedge; see the changelog for the run status.
 
 ## 8. Territory (AGENTS.md §1–2)
 
@@ -159,13 +173,26 @@ Own: `uno_hw_wdt.{c,h}`, `HWWATCHDOG.md`, `tools/hwwdt_test.{c,sh}`,
 `tools/hwwdt_qemu.py`, and the additive `devmgr_add_platform` in
 `uno_devmgr.{c,h}`. Consume unchanged: `pc64_pci.c` (config accessors), the
 `uno_devmgr` tree. Additive-only seam touch: the `build.sh` file list (one line
-in the DEBUG block). The guard call sites in `uno_debug.c` are unoautomate's,
-coordinated via `UNOAUTOMATE-REQUESTS.md`.
+in the DEBUG block), the boot-selftest call in `uefi_main.c`. The guard call
+sites in `uno_debug.c` (the weak-symbol seam + the three lifecycle calls) are
+**unoautomate's lane** — edited here only because this task was assigned both
+lanes; see `UNOAUTOMATE-REQUESTS.md`.
 
 ---
 
 ## Changelog
 
+- **2026-07-24 — v3 / Comet Lake PMC path + guard wiring (no API bump).** Added
+  the **v3** generation: NO_REBOOT in the PMC `GEN_PMCON_A` register
+  (`PWRMBASE + 0x1020`, bit 1 / mask 0x02), PWRMBASE from the enumerated Intel
+  PMC function's BAR0 or the 400-series fixed `0xFE000000`, gated on an actual
+  PMC being present. This makes the **Comet Lake-U X13 Yoga** a supported target
+  (`present()==1`). The guard now arms/pets/disarms the TCO via a weak-symbol
+  seam in `uno_debug.c` (guard window + 8 s), so the IRQs-off wedge the software
+  guard misses is caught by hardware. Host gate grew v3 `cml` / `cml-locked`
+  scenarios (8 total, all green). `status` now dumps the raw `GEN_PMCON_A`
+  firmware value for on-chip diagnosis. Metal validation on the live Yoga: see
+  the run note below / `UNOAUTOMATE-REQUESTS.md`.
 - **2026-07-24 — UNO_HW_WDT_API 1 (initial):** the TCO primitive lands. Four-call
   surface (`present`/`arm`/`pet`/`disarm`) + `status`; UNO_DEBUG-gated, prod
   no-op. Fully-implemented and read-back-verified NO_REBOOT clear on the

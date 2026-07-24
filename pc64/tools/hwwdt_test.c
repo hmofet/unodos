@@ -28,10 +28,19 @@ static unsigned short g_lpc_ven = 0x8086;
 static unsigned g_lpc_cfg[64];          /* dword-indexed LPC config space       */
 static int g_have_lpc = 1;              /* 0 = the machine has no LPC bridge     */
 
+/* PMC function (Comet Lake 00:14.2, 8086:02ef, class 05/00) for the v3 path */
+#define PMC_BUS 0
+#define PMC_DEV 0x14
+#define PMC_FN  2
+static unsigned g_pmc_cfg[64];
+static int g_have_pmc;                  /* 0 = no PMC (v2-only machine)          */
+
 #define ACPI_BASE   0x0400u             /* PMBASE                               */
 #define RCBA_BASE   0xFED1C000u
 #define TCOBASE     (ACPI_BASE + 0x60)  /* 0x0460                               */
 #define GCS_ADDR    (RCBA_BASE + 0x3410)
+#define PWRM_BASE   0xFE000000u
+#define PMCON_ADDR  (PWRM_BASE + 0x1020)  /* GEN_PMCON_A                        */
 
 static void lpc_reset(int rcba_enabled, int acpi_enabled)
 {
@@ -40,12 +49,18 @@ static void lpc_reset(int rcba_enabled, int acpi_enabled)
     g_lpc_cfg[0x08 / 4] = (0x06u << 24) | (0x01u << 16);          /* isa-bridge  */
     g_lpc_cfg[0x40 / 4] = ACPI_BASE | (acpi_enabled ? 1u : 0u);   /* ACPI base   */
     g_lpc_cfg[0xF0 / 4] = RCBA_BASE | (rcba_enabled ? 1u : 0u);   /* RCBA        */
+    memset(g_pmc_cfg, 0, sizeof g_pmc_cfg);
+    g_pmc_cfg[0x00 / 4] = ((unsigned)0x02ef << 16) | 0x8086;      /* CML PMC     */
+    g_pmc_cfg[0x08 / 4] = (0x05u << 24) | (0x00u << 16);          /* memory      */
+    g_pmc_cfg[0x10 / 4] = PWRM_BASE;                             /* BAR0=PWRMBASE*/
 }
 
 unsigned int pci_cfg_read32(const pci_dev *d, int off)
 {
     if (d->bus == LPC_BUS && d->dev == LPC_DEV && d->fn == LPC_FN)
         return g_lpc_cfg[(off & 0xFC) / 4];
+    if (g_have_pmc && d->bus == PMC_BUS && d->dev == PMC_DEV && d->fn == PMC_FN)
+        return g_pmc_cfg[(off & 0xFC) / 4];
     return 0xFFFFFFFFu;
 }
 unsigned short pci_cfg_read16(const pci_dev *d, int off)
@@ -70,7 +85,7 @@ int pci_find(unsigned short v, unsigned short d, pci_dev *o)
 
 /* --- fake device tree ------------------------------------------------------ */
 
-static uno_device g_tree[2];
+static uno_device g_tree[3];
 static int g_treen;
 static int g_plat_calls;
 static int g_plat_backing;
@@ -88,6 +103,14 @@ static void tree_reset(int have_lpc)
         d->addr.pci.bus = LPC_BUS; d->addr.pci.dev = LPC_DEV; d->addr.pci.fn = LPC_FN;
         d->vendor = g_lpc_ven; d->device = 0x2918;
         d->cls = 0x06; d->subcls = 0x01;
+        d->parent = UNO_DEV_NOPARENT; d->state = UNO_DEV_UNBOUND;
+    }
+    if (g_have_pmc) {
+        uno_device *d = &g_tree[g_treen++];
+        d->bus_type = UNO_BUS_PCI;
+        d->addr.pci.bus = PMC_BUS; d->addr.pci.dev = PMC_DEV; d->addr.pci.fn = PMC_FN;
+        d->vendor = 0x8086; d->device = 0x02ef;
+        d->cls = 0x05; d->subcls = 0x00;
         d->parent = UNO_DEV_NOPARENT; d->state = UNO_DEV_UNBOUND;
     }
 }
@@ -113,8 +136,10 @@ int devmgr_add_platform(int backing, unsigned char cls, unsigned char sub,
 /* --- synthetic I/O + MMIO -------------------------------------------------- */
 
 static unsigned char g_io[0x100];       /* TCO block, indexed off TCOBASE       */
-static unsigned g_gcs;                   /* the one MMIO dword we touch          */
+static unsigned g_gcs;                   /* v2 GCS MMIO dword                     */
 static int g_gcs_locked;                 /* 1 = GCS writes ignored (locked bit)  */
+static unsigned g_pmcon;                 /* v3 GEN_PMCON_A MMIO dword             */
+static int g_pmcon_locked;               /* 1 = GEN_PMCON_A writes ignored        */
 
 static int io_ok(unsigned port) { return port >= TCOBASE && port < TCOBASE + 0x100; }
 
@@ -137,9 +162,13 @@ void hwwdt_test_out16(unsigned port, unsigned short v)
         g_io[off] = (unsigned char)v; g_io[off+1] = (unsigned char)(v >> 8);
     }
 }
-unsigned hwwdt_test_mmio_rd(unsigned long long pa) { return pa == GCS_ADDR ? g_gcs : 0; }
+unsigned hwwdt_test_mmio_rd(unsigned long long pa)
+{ return pa == GCS_ADDR ? g_gcs : pa == PMCON_ADDR ? g_pmcon : 0; }
 void hwwdt_test_mmio_wr(unsigned long long pa, unsigned v)
-{ if (pa == GCS_ADDR && !g_gcs_locked) g_gcs = v; }
+{
+    if (pa == GCS_ADDR && !g_gcs_locked) g_gcs = v;
+    else if (pa == PMCON_ADDR && !g_pmcon_locked) g_pmcon = v;
+}
 
 static unsigned io16(unsigned off) { return g_io[off] | (g_io[off+1] << 8); }
 
@@ -228,10 +257,37 @@ int main(int argc, char **argv)
         rig_reset(1, 0, 1, 1, 0x8086);
         ck(uno_hw_wdt_present() == 0, "ACPI decode off -> absent");
     } else if (!strcmp(scen, "norcba")) {
-        /* no RCBA (older/unsupported NO_REBOOT home) -> honest absent */
+        /* no RCBA AND no PMC in the tree -> nowhere to reach NO_REBOOT -> absent.
+         * (find_pwrmbase refuses to poke a fixed MMIO with no PMC present.) */
         rig_reset(0, 1, 1, 1, 0x8086);
-        ck(uno_hw_wdt_present() == 0, "no RCBA (v1/PMC NO_REBOOT unsupported) -> absent");
+        ck(uno_hw_wdt_present() == 0, "no RCBA + no PMC -> absent (won't guess PWRM)");
         ck(g_plat_calls == 0, "unsupported TCO not added to the tree");
+    } else if (!strcmp(scen, "cml")) {
+        /* Comet Lake: no RCBA, PMC present, NO_REBOOT in GEN_PMCON_A (bit 1).
+         * Firmware left it set; the driver clears it via the PMC MMIO window and
+         * reports present, then arms the same TCOv2 timer as v2. */
+        g_have_pmc = 1;
+        g_pmcon = (1u << 1);                 /* firmware set NO_REBOOT           */
+        rig_reset(0, 1, 0, 1, 0x8086);       /* RCBA off, ACPI on -> v3 path      */
+        ck(uno_hw_wdt_present() == 1, "CML/PMC: present after GEN_PMCON_A NO_REBOOT cleared");
+        ck((g_pmcon & (1u << 1)) == 0, "GEN_PMCON_A NO_REBOOT bit cleared in hardware");
+        ck(g_plat_calls == 1 && g_plat_iobase == TCOBASE, "TCO registered in the tree (v3)");
+        uno_hw_wdt_arm(40);
+        /* 40 / 2 / 0.6 = 33 ticks per single timeout */
+        ck((io16(0x12) & 0x3FF) == 33, "arm(40): TCOv2_TMR = 33 ticks (v3 uses v2 timer)");
+        ck((io16(0x08) & (1u << 11)) == 0, "arm clears TCO_TMR_HLT (timer runs)");
+        uno_hw_wdt_status(sbuf, sizeof sbuf);
+        printf("  status: %s\n", sbuf);
+        ck(strstr(sbuf, "v3") && strstr(sbuf, "present") && strstr(sbuf, "gen_pmcon_a") &&
+           strstr(sbuf, "NO_REBOOT=0"), "status: v3 present, dumps GEN_PMCON_A");
+    } else if (!strcmp(scen, "cml-locked")) {
+        /* CML with GEN_PMCON_A NO_REBOOT locked -> clear ignored -> honest absent */
+        g_have_pmc = 1;
+        g_pmcon = (1u << 1);
+        g_pmcon_locked = 1;
+        rig_reset(0, 1, 0, 1, 0x8086);
+        ck(uno_hw_wdt_present() == 0, "CML locked NO_REBOOT -> absent (read-back honest)");
+        ck(g_plat_calls == 0, "a v3 TCO we can't reboot with is NOT added to the tree");
     } else if (!strcmp(scen, "nolpc")) {
         rig_reset(1, 1, 1, 0, 0x8086);
         ck(uno_hw_wdt_present() == 0, "no LPC bridge at all -> absent");
