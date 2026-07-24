@@ -214,11 +214,18 @@ void uno_dbg_check(const char *tag)
 
 static volatile unsigned g_hb_feeds;    /* how many times the loop fed us     */
 
+static void guard_check(void);          /* deadline check; may reset (no return) */
+
 void uno_dbg_heartbeat(void)
 {
     static unsigned long long next_log;
     g_heartbeat_ms = uno_dbg_uptime_ms();
     g_hb_feeds++;
+    /* Guard, main-loop path: fire when a HEALTHY box's host has gone silent past
+     * the deadline (host crash / network partition - "can't call home" without a
+     * wedge). The ISR/firmware paths (dbg_timer_c / wd_event_cb) cover the other
+     * half, a box too wedged to reach here. Cheap: a no-op unless armed. */
+    guard_check();
     /* refresh the boot log every 30 s so a machine that misbehaves WITHOUT
      * crashing still leaves an up-to-date trace on disk (the operator's only
      * exit from such a run is a power-off, which captures nothing else). */
@@ -938,6 +945,85 @@ void dbg_spur_c(void)
     if (g_lapic || g_x2apic) lapic_wr(0xB0, 0);
 }
 
+/* ===========================================================================
+ * host-attested guard (dead-man's switch for risky URC ops)
+ *
+ * A SECOND, independent deadline layered on the freeze watchdog above. It
+ * exists because the freeze watchdog is a *main-loop-liveness* check whose
+ * heartbeat `uno_dbg_net_trace()` deliberately feeds (WiFi bring-up blocks the
+ * loop for >20 s and must not be reset mid-join) - so the very path we drive
+ * into untested firmware/driver code over URC is the one that keeps petting the
+ * freeze watchdog as it marches into a wedge.
+ *
+ * The guard uses its OWN deadline (`g_guard_deadline_ms`), refreshed ONLY by
+ * inbound URC activity via uno_dbg_guard_pet() - never by net_trace or the main
+ * loop. So "the box is healthy" is proven by a full URC round-trip (NIC RX + net
+ * + dispatch + loop all alive), a strictly stronger signal than "the loop
+ * ticked", and a wedge that keeps tracing or keeps the loop half-alive still
+ * trips it. It is checked in the same timer ISR / firmware callback that already
+ * runs independent of a wedged main loop, and fires the same hard reset. v1
+ * action is reboot only; the box re-dials home on its own after reset. */
+static volatile int                g_guard_armed;
+static volatile unsigned           g_guard_timeout_ms;
+static volatile unsigned long long g_guard_deadline_ms;
+
+/* Two firing mechanisms, one per mode - each independent of a wedged main loop:
+ *
+ *  - ATTACHED: the firmware UEFI watchdog (SetWatchdogTimer). Firmware resets
+ *    the box if we don't re-arm within the window, with NO dependence on our
+ *    main loop running - which is the point, and why the firmware-timer-EVENT
+ *    path (wd_event_cb) is not enough: its notify only dispatches when our loop
+ *    cycles TPL, so an idle-but-armed box never got checked. (Init disabled the
+ *    boot watchdog at startup, so arming here is a clean take-over.)
+ *  - DETACHED: guard_check() below, run from our own LAPIC timer ISR (a true
+ *    hardware interrupt we own once firmware is gone).
+ *
+ * The one wedge class neither covers is a tight spin with interrupts disabled
+ * (no ISR, no TPL cycle) - that needs the PCH TCO hardware watchdog, filed as a
+ * request; out of v1 scope. */
+static void guard_fw_set(unsigned secs)
+{
+    EFI_BOOT_SERVICES *bs;
+    if (uno_pc64_detached() || !g_st) return;
+    bs = g_st->BootServices;
+    if (bs && bs->SetWatchdogTimer)
+        bs->SetWatchdogTimer(secs, 0x1D0Cull /*"guard" code*/, 0, 0);
+}
+
+void uno_dbg_guard_arm(unsigned timeout_ms)
+{
+    if (!timeout_ms) { uno_dbg_guard_clear(); return; }
+    g_guard_timeout_ms  = timeout_ms;
+    g_guard_deadline_ms = uno_dbg_uptime_ms() + timeout_ms;
+    g_guard_armed = 1;
+    guard_fw_set((timeout_ms + 999) / 1000);       /* whole seconds, min 1 */
+}
+void uno_dbg_guard_pet(void)
+{
+    if (!g_guard_armed) return;
+    g_guard_deadline_ms = uno_dbg_uptime_ms() + g_guard_timeout_ms;
+    guard_fw_set((g_guard_timeout_ms + 999) / 1000);  /* re-arm firmware wdt */
+}
+void uno_dbg_guard_clear(void)
+{
+    g_guard_armed = 0;
+    guard_fw_set(0);                               /* disarm firmware wdt */
+}
+int  uno_dbg_guard_armed(void) { return g_guard_armed; }
+
+/* Called from THREE places, so the guard fires whichever context is still live:
+ * the main-loop heartbeat (healthy box, host gone), the LAPIC timer ISR
+ * (detached, wedged main loop), and the firmware timer callback (attached box on
+ * real hardware). Returns normally unless the deadline has passed, in which case
+ * it hard-resets and never returns. Independent of g_wd_armed. */
+static void guard_check(void)
+{
+    if (g_guard_armed && uno_dbg_uptime_ms() > g_guard_deadline_ms) {
+        g_guard_armed = 0;
+        wd_fire("URC guard: no call-home before deadline");   /* resets; no return */
+    }
+}
+
 /* F9: the heartbeat is only fed once the SHELL's main loop runs, but the
  * watchdog arms at the end of init - on a slow machine (MacBook: slow
  * firmware + F3's uncached first paints) the gap can exceed the timeout and
@@ -954,6 +1040,7 @@ void dbg_timer_c(void);                 /* called from asm */
 void dbg_timer_c(void)
 {
     g_wd_isr_ticks++;
+    if (g_tsc_per_ms) guard_check();            /* host-attested guard: may reset */
     if (g_wd_armed && g_tsc_per_ms) {
         unsigned long long now = uno_dbg_uptime_ms();
         unsigned long long hb  = g_heartbeat_ms;
@@ -1046,7 +1133,9 @@ typedef EFI_STATUS (*ST_FN)(void *, int, UINT64);
 static void wd_event_cb(void *ev, void *ctx)
 {
     (void)ev; (void)ctx;
-    if (!g_wd_armed || !g_tsc_per_ms) return;
+    if (!g_tsc_per_ms) return;
+    guard_check();                     /* host-attested guard: may reset, no return */
+    if (!g_wd_armed) return;
     {
         unsigned long long now = uno_dbg_uptime_ms();
         unsigned long long hb  = g_heartbeat_ms;
