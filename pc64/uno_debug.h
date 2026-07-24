@@ -40,6 +40,16 @@ void uno_dbg_check(const char *tag);    /* checkpoint: named marker + TSC; the
                                            one, so bracket risky waits with it */
 void uno_dbg_heartbeat(void);           /* main loop liveness (once per frame)  */
 
+/* Host-attested guard (dead-man's switch for risky URC ops). Independent of the
+ * freeze watchdog and NOT fed by the main-loop/net-trace heartbeat: the deadline
+ * is refreshed only by inbound URC activity (uno_dbg_guard_pet), so a wedge that
+ * kills URC - even one still feeding the heartbeat - is reset. arm(0) disarms.
+ * v1 action: hard reset (the box re-dials home after reboot). See REMOTE.md. */
+void uno_dbg_guard_arm(unsigned timeout_ms);
+void uno_dbg_guard_pet(void);
+void uno_dbg_guard_clear(void);
+int  uno_dbg_guard_armed(void);
+
 /* ---- crash/panic entry points ------------------------------------------- */
 void uno_dbg_panic(const char *why);    /* software-detected fatal (canary,
                                            assert): report + reset, no return  */
@@ -146,6 +156,10 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define uno_dbg_log(...)             ((void)0)
 #define uno_dbg_check(tag)           ((void)0)
 #define uno_dbg_heartbeat()          ((void)0)
+#define uno_dbg_guard_arm(t)         ((void)0)
+#define uno_dbg_guard_pet()          ((void)0)
+#define uno_dbg_guard_clear()        ((void)0)
+#define uno_dbg_guard_armed()        0
 #define uno_dbg_note(...)            ((void)0)
 #undef  UNO_ASSERT
 #define UNO_ASSERT(cond, id)         ((void)0)
