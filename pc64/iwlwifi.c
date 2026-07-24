@@ -692,8 +692,11 @@ static int force_power_gating(void)
  * BIOS/CSME left the CNVi MAC in - a ROM that ignores the load kick because
  * the MAC never went through a clean stop matches every round-1..4 symptom
  * (all writes land, no error bits, LOAD_STATUS never moves). */
+static int g_fw_loaded;   /* a fw image was kicked; the device may be live+DMAing */
+static int g_mvm_arm;     /* opt-in: run the post-ALIVE MVM/join sequence (new frontier) */
 static void device_stop(void)
 {
+    g_fw_loaded = 0;
     w32(CSR_INT_MASK, 0);
     w32(CSR_INT, 0xFFFFFFFFu);
     set_bit_(CSR_RESET, CSR_RESET_STOP_MASTER);
@@ -1733,6 +1736,19 @@ static int wait_alive(int timeout_ms)
 {
     int len = 0;
     const u8 *p;
+    /* gen2/3 MSI-X ALIVE handshake - proven end-to-end on metal (F12 fix).
+     * The fw raises ALIVE in CSR_MSIX_HW_INT_CAUSES_AD (the legacy CSR_INT we
+     * used to poll stays 0 in MSI-X mode), and it cannot deliver the ALIVE
+     * *notification* until the RX ring is open - but the old flow opened the
+     * ring only AFTER this returned, so it deadlocked and timed out.  Ack the
+     * cause, release the automask, open the ring; then the wait_notif below
+     * actually receives the 144-byte notification.  If the cause never comes we
+     * fall through to the autopsy, which reports the MSI-X causes. */
+    if (g_gen2 && wait_alive_cause(timeout_ms) == 0) {
+        g_alive = 1;
+        w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);
+        uno_dbg_net_trace("wifi: ALIVE cause acked, RX ring opened (WIDX_TRG=%x)", g_rx_write);
+    }
     p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
     if (!p) {
         /* F12 autopsy - every fleet machine timed out here, across gen2 AND
@@ -2360,6 +2376,7 @@ uno_nic_t *iwl_nic(void)
     if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
     else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen2 (ctxt-info) fw load"); return 0; } }
     else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen1 (section DMA) fw load"); return 0; } }
+    g_fw_loaded = 1;   /* the ROM is now self-loading/running - a re-init MUST quiesce it first (see the rerun verb) */
 
     if (wait_alive(2000) < 0) {
         st_set("WiFi: firmware did not ALIVE");
@@ -2383,6 +2400,23 @@ uno_nic_t *iwl_nic(void)
                               ".PNV per sku_id %08x/%08x/%08x next)",
                               g_sku_id[0], g_sku_id[1], g_sku_id[2]);
     }
+    /* --- F12 boundary -------------------------------------------------------
+     * Reaching ALIVE is the F12 fix and it is DONE: with the handshake in
+     * wait_alive() the normal bring-up now gets the 144-byte ALIVE
+     * notification (proven standalone via "iwl alive 3": payload 0x90).
+     * Everything BELOW - MVM/NVM/PHY init, tx-antenna, power table, scan,
+     * auth, assoc - has never executed on this driver and is the next slice.
+     * Running it inline wedged the rig (and the wedge ate the logs), so it is
+     * gated OFF: a plain bring-up now stops here, reports ALIVE, and stays
+     * recoverable.  Arm it deliberately with "iwl mvm" then "iwl rerun" to work
+     * that sequence step by step, the same way the ALIVE handshake was built. */
+    if (!g_mvm_arm) {
+        st_set("WiFi: fw ALIVE (F12 solved) - MVM bring-up gated; 'iwl mvm' to continue");
+        uno_dbg_net_trace("wifi: ALIVE reached in the NORMAL path - MVM/join sequence gated off "
+                          "(run 'iwl mvm' then 'iwl rerun' to enter it)");
+        return 0;
+    }
+
     if (!g_gen2) tx_start_gen1();
 
     /* post-alive init (unified path; AC split path adds INIT image + calib) */
@@ -2545,12 +2579,27 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     if (!strncmp(line, "dmar off", 8)) { iommu_disable(out, cap); return (int)strlen(out); }
     if (!strncmp(line, "dmar", 4)) return dmar_check(out, cap);
     if (!strncmp(line, "rerun", 5)) {
+        /* If a previous attempt reached ALIVE, the ROM is still running and
+         * DMAing.  Re-running the full bring-up on top of that wedged the Yoga
+         * hard once (prepare_card_hw runs the ownership handshake against a
+         * live, busy device before the normal device_stop can quiesce it).
+         * So halt the device FIRST - STOP_MASTER + sw reset via device_stop -
+         * then re-init from a stopped device, matching a clean boot. */
+        if (g_bar && g_fw_loaded) {
+            uno_dbg_net_trace("wifi: rerun: firmware was live - halting DMA (device_stop) before re-init");
+            device_stop();
+        }
         g_bound = 0; g_joined = 0; g_alive = 0;       /* force a full retry */
         iwl_nic();
         iwl_status_str(out, cap);
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!strncmp(line, "mvm", 3)) {
+        g_mvm_arm = 1;
+        strcpy(out, "post-ALIVE MVM/join sequence armed - now run 'iwl rerun'");
+        return (int)strlen(out);
+    }
     if (!strncmp(line, "alive", 5)) {
         int upto = 1;
         const char *q = line + 5;
