@@ -141,6 +141,7 @@ unchanged.
 | `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
 | `disc` | query zero-config discovery state (netdisc) — is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
 | `devices` | read-only PCI device listing (pass-through to unodevices' `devmgr_list_str`). Mutates nothing — no `arm` gate | one `ok` line per device, e.g. `01:00.0 8086:5A85 03/00 display`; `err device manager not built…` until unodevices lands |
+| `hwwdt <subcmd…>` | PCH TCO hardware watchdog (unodevices' `uno_hw_wdt_cmd`) — the guard's IRQs-off backstop. `status` (present/gen/TCOBASE + raw `GEN_PMCON_A` `fw=0x..` dump); `arm <s>`/`pet`/`disarm` drive the TCO directly (**safe**: an armed-but-unpetted TCO resets in ~`<s>`, and if NO_REBOOT wasn't truly cleared it simply doesn't — never a hard hang); `selftest <s>`/`wedge` cli-spin to trigger the IRQs-off wedge (never returns; only the TCO recovers) | the report, then `ok`/`err` |
 
 > **Durability.** The native FAT cache is write-back, and post-detach nothing
 > flushes it on its own. `poweroff`/`reboot` therefore `uno_fat_sync()` (flush all
