@@ -148,6 +148,11 @@ if [ "$1" != "legacy" ]; then
     if [ "$UNO_DEBUG" != "0" ]; then
         pc "$CC" $UCF -mgeneral-regs-only -c -o "build/uno_debug.o" "uno_debug.c"
         OBJS="$OBJS build/uno_debug.o"
+        # PCH TCO hardware watchdog (unodevices): the guard's hardware backstop
+        # for a cli-spin / bus hang no software firing path can catch.  See
+        # HWWATCHDOG.md; unoautomate wires it into the guard via a weak stub.
+        pc "$CC" $UCF $DBGSAN -c -o "build/uno_hw_wdt.o" "uno_hw_wdt.c"
+        OBJS="$OBJS build/uno_hw_wdt.o"
         pc "$CC" $UCF $DBGSAN -c -o "build/pc64_stress.o" "pc64_stress.c"
         OBJS="$OBJS build/pc64_stress.o"
         pc "$CC" $UCF $DBGSAN -c -o "build/pc64_nettest.o" "pc64_nettest.c"
