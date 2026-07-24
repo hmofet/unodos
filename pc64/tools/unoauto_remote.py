@@ -25,6 +25,7 @@ QEMU: from a SLIRP guest the host is 10.0.2.2, so set remote=10.0.2.2:<port>.
 Plaintext, LAN-only by intent - do not expose the port to untrusted networks.
 """
 import socket, threading, itertools, sys
+from contextlib import contextmanager
 
 
 class _SerialStream:
@@ -72,6 +73,7 @@ class UnoAutoLink:
         self._cmd_handlers = {}
         self._connected = threading.Event()
         self._peer_hello = threading.Event()   # set when the guest's HELLO arrives
+        self._guard_token = None
         self._stop = False
 
     # ---- lifecycle --------------------------------------------------------
@@ -184,6 +186,47 @@ class UnoAutoLink:
     def eval(self, src, **k):          return self.command("py", src, timeout=k.pop("timeout", 20.0), **k)
     def reboot(self, **k):             return self.command("reboot", **k)
     def bootnext(self, n, **k):        return self.command("bootnext", n, **k)
+
+    # ---- host-attested guard (dead-man's switch for risky verbs) -----------
+    def guard(self, timeout_s, action="reboot", **k):
+        """Arm the dead-man's switch before a risky verb. If the box cannot
+        service an inbound URC command within timeout_s (the signature of a
+        wedge), the debug watchdog hard-resets it and it re-dials home. Any
+        later command refreshes the deadline; call safe() once the op returns.
+        Returns the session token (int)."""
+        r = self.command("guard", int(timeout_s), action, **k)
+        self._guard_token = None
+        for w in (r[0].split() if r else []):
+            if w.startswith("token="):
+                try: self._guard_token = int(w.split("=", 1)[1])
+                except ValueError: pass
+        return self._guard_token
+
+    def pet(self, **k):
+        """Explicit keep-alive for a legitimately long op (any command also
+        refreshes implicitly). Returns ['petted'] or ['not-armed']."""
+        return self.command("pet", **k)
+
+    def safe(self, **k):
+        """Disarm the guard (the op returned; stand down). Presents the token
+        from guard() so a stale disarm can't clear a fresh guard."""
+        if self._guard_token is not None:
+            return self.command("safe", self._guard_token, **k)
+        return self.command("safe", **k)
+
+    @contextmanager
+    def guarded(self, timeout_s, action="reboot"):
+        """`with link.guarded(15): link.command("iwl","rerun")` - arm, run, and
+        stand down on clean return. If the body wedges the box, control never
+        comes back here and neither does any pet, so the box resets on its own -
+        which is the point. (safe() may itself time out against a wedged box;
+        that's swallowed.)"""
+        self.guard(timeout_s, action)
+        try:
+            yield self
+        finally:
+            try: self.safe(timeout=2)
+            except Exception: pass
 
     def vols(self, **k):
         """List volumes: dicts of vol/kind/writable/name (kind 0=RAM 1=FAT 2=SFS)."""

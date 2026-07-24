@@ -119,6 +119,33 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-24 - (no bump, additive, EXPERIMENTAL verbs)**: **host-attested
+  guard** — a dead-man's switch to arm before a risky verb (the wedge class:
+  `iwl mvm` → `iwl rerun` into never-run firmware, which hangs the box and stops
+  URC, forcing a physical power cycle). New URC verbs **`guard <timeout-s>
+  [reboot]`** / **`pet`** / **`safe [token]`** (`unoauto_remote.c`): if the box
+  can't service an inbound URC command within the window, it hard-resets and
+  re-dials home. "Call home" = ANY inbound command (implicit `uno_dbg_guard_pet()`
+  at dispatch entry — a full URC round-trip, strictly stronger than the freeze
+  watchdog's main-loop heartbeat, which `uno_dbg_net_trace()` deliberately feeds
+  during WiFi bring-up and so can't detect a wedge in the debugged path). The
+  guard keeps its OWN deadline, refreshed only by URC activity, never by
+  net-trace. Firing reuses the existing `wd_fire`→`trap_reset` and is wired into
+  THREE contexts so whichever is alive fires it (additive to `uno_debug.c`, a
+  frozen-core file): the main-loop heartbeat (healthy box, host gone), the LAPIC
+  ISR (detached + wedged loop), and the firmware timer event + UEFI
+  `SetWatchdogTimer` (attached, real HW). New `uno_dbg_guard_arm/pet/clear/armed`
+  in `uno_debug.h`. Host: `UnoAutoLink.guard()/pet()/safe()` + a `with
+  link.guarded(15): …` context manager. v1 action is **reboot** only (the arg
+  slot reserves `revert` for later). Gate: **`tools/guard_qemu.py`** boots
+  `-no-reboot` (a guard reset → QEMU exits = the signal) and proves petted-stays-
+  up, disarmed-silence-stays-up, and armed-silence → reset, 4/4. **Known limits:**
+  a tight interrupts-off spin needs the PCH TCO hardware watchdog (filed as a
+  request, out of scope); and headless QEMU-attached services no firmware timer,
+  so the gate exercises the main-loop firing path (the ISR/firmware paths are
+  real-HW-validated, the same limitation the freeze watchdog already has). No
+  `UNOAUTO_API` bump (additive; C API unchanged). REMOTE.md documents the verbs +
+  the guard section.
 - **2026-07-23 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb
   **`devices`** — read-only PCI device listing, so "what hardware is on this box,
   and what has no driver?" is answerable on a headless machine over the link
