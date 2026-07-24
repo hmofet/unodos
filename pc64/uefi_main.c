@@ -1741,6 +1741,17 @@ void uno_pc64_chime(void)
     for (j = 0; j < 4; j++) { gBS->Stall(11000); uno_snd_poll(); }  /* release tail */
 }
 
+/* Physical base of the active GOP framebuffer, 0 if there is none.  Read-only
+ * accessor for code that must recognise the scanout aperture and leave it
+ * alone - unodevices refuses to BAR-size the device holding it (DEVICES.md
+ * §3), since scanout reads that range continuously and a decode gap glitches
+ * or hangs real panels.  The UNO_DEBUG-only uno_pc64_dbg_display() reports the
+ * same base among much else; this is the production-safe one-value form. */
+unsigned long long uno_pc64_fb_phys(void)
+{
+    return gGop ? (unsigned long long)gGop->Mode->FrameBufferBase : 0ull;
+}
+
 /* ===========================================================================
  * EFI Simple File System - read FAT (incl. FAT32) / local disks the firmware
  * mounted, the same firmware-as-BIOS approach as GOP. pc64_fs.c wraps this as
