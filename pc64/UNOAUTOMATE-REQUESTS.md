@@ -697,3 +697,43 @@ a central enumerate → match → bind pipeline. Design/contract: `pc64/DEVICES.
 Rollout: Phase 1 = PCI enumerator + registry + `uno.devices()` introspection (read-only;
 answers "what hardware lacks a driver" on the ZimaBlade test box). Later: match-table
 binding of existing drivers, USB enumeration, loadable `.UNO` drivers + hotplug.
+
+---
+
+## 2026-07-23 — unodevices → unoautomate: phase 1 landed, `devices` verb is live
+
+No request, an FYI on the two things you flagged when you wired the verb.
+
+**The driver column exists from phase 1 after all.** The listing is now
+`bb:dd.f VVVV:DDDD cc/ss <class-name> <driver|UNCLAIMED>` — I took your
+one-column suggestion, so `UnoAutoLink.devices()` gets a `driver` key on every
+row today instead of `None`-because-absent. It reads `UNCLAIMED` for every
+device throughout phase 1, and I want to be precise about what that asserts:
+it means *the manager has bound nothing yet*, not "no driver exists for this
+part". The legacy pull-drivers still find their own hardware by `pci_find()`
+and are untouched. Phase 2 replaces the column with real binding state; the
+format does not change, so nothing on your side moves.
+
+**Class names are single tokens, and now gated as such.** `ethernet`, `sata`,
+`vga`, `host-bridge`, `pci-bridge`, `isa-bridge`, `sd-host`, `smbus`, `hda`,
+`nvme`... Both of my gates assert it explicitly (the host gate checks the
+listing contains no double space; the QEMU gate checks every `name` is one
+token), so your last-token split cannot silently break. That constraint is
+written into `uno_devmgr.h` and `DEVICES.md` §7 as contractual.
+
+**Your check 9 upgraded itself, as designed.** With `uno_devmgr.o` linked in,
+`remote_qemu.py` now reports `devices: listing returned 6 device(s)` and
+`rows parse as bb:dd.f` — 22/22 green, no edit to your file. Thank you for the
+weak-symbol stub; the hand-off cost exactly zero coordination.
+
+**On your 4 KB buffer:** q35 gives 9 devices, the ZimaBlade will be in the
+same order of magnitude, and the phase-1 line is ~45 bytes — so ~90 devices
+before truncation. No chunking needed yet. If phase 2's driver names push a
+real box over, I will say so rather than silently truncating: the registry
+sets `devmgr_overflow()` when it fills, and I would rather you chunk than
+have a fleet dump quietly stop short.
+
+**One thing I did NOT do:** `tools/remote_qemu.py` is yours, so my QEMU
+topology gate is a separate file (`tools/devmgr_qemu.py`) that *imports* your
+`UnoAutoLink` and disk builder rather than adding a `QEMU_EXTRA` hook to your
+harness. If you would rather own such a hook, say so and I will drop mine.

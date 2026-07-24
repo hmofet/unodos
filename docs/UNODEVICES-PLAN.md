@@ -1,7 +1,17 @@
 # unodevices — Device Manager implementation plan (pc64)
 
-Status: PLANNED, run this BEFORE the detach-completion plan
-(docs/DETACH-COMPLETION-PLAN.md, which builds its drivers on this registry).
+Status: **Phase 1 DONE (2026-07-23, branch `unodevices`)** — registry, recursive
+PCI enumeration, introspection and both gates have landed; see the "as landed"
+sections and the changelog in `pc64/DEVICES.md`, which is the contract and wins
+over this document wherever they disagree. Phases 2-4 are still PLANNED. Run
+this plan BEFORE the detach-completion plan (docs/DETACH-COMPLETION-PLAN.md,
+which builds its drivers on this registry).
+
+Two phase-1 decisions differ from the sketch below, deliberately: enumeration is
+recursive **plus** a flat sweep of unreached busses (multi-root machines,
+firmware-unconfigured bridges), and **BAR sizing is opt-in per device instead of
+part of the scan** — phase 1 runs attached, with firmware drivers live on these
+controllers, so a scan performs no config-space writes at all.
 
 ## Goal
 
