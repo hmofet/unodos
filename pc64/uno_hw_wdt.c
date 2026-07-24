@@ -1,0 +1,432 @@
+/* unodevices - PCH TCO hardware watchdog.  See HWWATCHDOG.md for the contract
+ * and the chipset details; uno_hw_wdt.h for the four-call API.
+ *
+ * Reference: Linux drivers/watchdog/iTCO_wdt.c + drivers/mfd/lpc_ich.c, and the
+ * Intel ICH9 / 5-series PCH datasheets (the TCO register block, the LPC ACPI
+ * base, and the RCBA General Control & Status NO_REBOOT bit).
+ *
+ * OWNS this file (kernel/unodevices).  CONSUMES pc64_pci.c's config accessors
+ * and the uno_devmgr device tree to LOCATE the PCH LPC function - it does not
+ * edit either.  Compiled only under -DUNO_DEBUG (build.sh); the header stubs it
+ * out entirely in prod, so nothing here is in the shipped OS.
+ *
+ * -------------------------------------------------------------------------
+ * WHAT ACTUALLY RESETS THE BOX (the make-or-break details, condensed):
+ *
+ *  1. NO_REBOOT.  Firmware normally sets the chipset's NO_REBOOT bit so a TCO
+ *     timeout counts to zero but never resets.  We MUST clear it, and its home
+ *     is generation-specific:
+ *       - ICH6 .. ~6-series PCH ("v2"): RCBA General Control & Status (GCS),
+ *         at RCBA+0x3410, bit 5.  RCBA is an MMIO window whose base is in LPC
+ *         config 0xF0 (bit 0 = enable).  We clear it and READ IT BACK; if it
+ *         won't clear, we report absent.
+ *       - Skylake-and-later PCH, and the SoC parts (Apollo/Gemini Lake): the
+ *         bit moved into the PMC (GEN_PMCON, via a PMC MMIO window), reached
+ *         differently per part.  This driver does not yet implement that path,
+ *         so on those chips discovery fails the read-back check and present()
+ *         returns 0 rather than pretending to guard.  See HWWATCHDOG.md.
+ *
+ *  2. TCOBASE.  The TCO I/O block base.  On the v1/v2 parts it is the LPC ACPI
+ *     base (LPC config 0x40, a.k.a. PMBASE/ABASE, bit 0 = enable) + 0x60.
+ *
+ *  3. v1 vs v2 register layout differs; we branch on it (see the offsets).
+ *
+ *  4. TWO-TIMEOUT behaviour.  A classic TCO reboots only on the SECOND
+ *     uncleared timeout (the first just sets status / optionally raises SMI).
+ *     So we program each single-timeout period near seconds/2: two expiries
+ *     then land close to the requested backstop.  We leave the firmware's TCO
+ *     SMI routing (SMI_EN.TCO_EN) untouched - the second-timeout reboot does
+ *     not depend on it, and disabling firmware SMIs is riskier than sizing.
+ *
+ *  5. Reload/halt.  Program the period into TCO_TMR, write TCO_RLD to load the
+ *     down-counter, clear TCO1_CNT.TCO_TMR_HLT (bit 11) to run; write TCO_RLD
+ *     to pet; set TCO_TMR_HLT to disarm.  Tick is ~0.6 s.
+ *
+ *  6. Firmware may be using the TCO for its own watchdog while attached; we
+ *     take it over cleanly (halt, clear status, reprogram) at init.
+ * ------------------------------------------------------------------------- */
+#ifdef UNO_DEBUG
+
+#include "uno_hw_wdt.h"
+#include "pc64_pci.h"
+#include "uno_devmgr.h"
+#include <stdint.h>
+
+typedef unsigned char      u8;
+typedef unsigned short     u16;
+typedef unsigned int       u32;
+typedef unsigned long long u64;
+
+/* --- I/O + MMIO primitives (host gate replaces these via HWWDT_HOSTTEST) ---- */
+#ifdef HWWDT_HOSTTEST
+u8   hwwdt_test_in8(u32 port);
+u16  hwwdt_test_in16(u32 port);
+void hwwdt_test_out8(u32 port, u8 v);
+void hwwdt_test_out16(u32 port, u16 v);
+u32  hwwdt_test_mmio_rd(u64 pa);
+void hwwdt_test_mmio_wr(u64 pa, u32 v);
+#define IO_IN8(p)      hwwdt_test_in8(p)
+#define IO_IN16(p)     hwwdt_test_in16(p)
+#define IO_OUT8(p, v)  hwwdt_test_out8((p), (v))
+#define IO_OUT16(p, v) hwwdt_test_out16((p), (v))
+#define MMIO_RD32(pa)     hwwdt_test_mmio_rd(pa)
+#define MMIO_WR32(pa, v)  hwwdt_test_mmio_wr((pa), (v))
+#else
+static inline void io_out8(u32 p, u8 v)
+{ __asm__ volatile ("outb %0, %1" : : "a"(v), "Nd"((u16)p)); }
+static inline u8 io_in8(u32 p)
+{ u8 v; __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"((u16)p)); return v; }
+static inline void io_out16(u32 p, u16 v)
+{ __asm__ volatile ("outw %0, %1" : : "a"(v), "Nd"((u16)p)); }
+static inline u16 io_in16(u32 p)
+{ u16 v; __asm__ volatile ("inw %1, %0" : "=a"(v) : "Nd"((u16)p)); return v; }
+#define IO_IN8(p)      io_in8(p)
+#define IO_IN16(p)     io_in16(p)
+#define IO_OUT8(p, v)  io_out8((p), (v))
+#define IO_OUT16(p, v) io_out16((p), (v))
+#define MMIO_RD32(pa)     (*(volatile u32 *)(uintptr_t)(pa))
+#define MMIO_WR32(pa, v)  (*(volatile u32 *)(uintptr_t)(pa) = (v))
+#endif
+
+/* --- register map ---------------------------------------------------------- */
+
+/* LPC (ISA-bridge) config registers */
+#define LPC_ACPI_BASE   0x40    /* PMBASE/ABASE: I/O base of the ACPI block   */
+#define LPC_ACPI_EN_BIT 0x01    /* bit 0 of the ACPI base dword = decode on    */
+#define LPC_RCBA        0xF0    /* Root Complex Base Address (MMIO)            */
+#define LPC_RCBA_EN     0x01    /* bit 0 = RCBA enabled                        */
+
+#define ACPI_TCOBASE_OFF 0x60   /* TCO I/O block = ACPIBASE + 0x60             */
+
+#define RCBA_GCS        0x3410  /* General Control & Status (MMIO, off RCBA)   */
+#define GCS_NO_REBOOT   (1u<<5) /* GCS bit 5 = No Reboot (NR)                  */
+
+/* TCO I/O block offsets (relative to TCOBASE) */
+#define TCO_RLD         0x00    /* 16-bit: write reloads counter from TMR      */
+#define TCOv1_TMR       0x01    /* 8-bit  v1 timer initial value (6 bits)      */
+#define TCO1_STS        0x04    /* 16-bit: bit 3 = TIMEOUT                      */
+#define TCO2_STS        0x06    /* 16-bit: bit1 = SECOND_TO, bit0 = BOOT/INTRD */
+#define TCO1_CNT        0x08    /* 16-bit: bit 11 = TCO_TMR_HLT                 */
+#define TCOv2_TMR       0x12    /* 16-bit v2 timer initial value (10 bits)     */
+
+#define TCO1_STS_TIMEOUT   (1u<<3)
+#define TCO2_STS_SECOND_TO (1u<<1)
+#define TCO2_STS_BOOT      (1u<<0)
+#define TCO1_CNT_HLT       (1u<<11)
+
+/* TCO ticks are ~0.6 s.  Represent the period internally in ticks. */
+#define TCO_TICK_NUM 3          /* seconds-per-tick = 3/5 = 0.6 s              */
+#define TCO_TICK_DEN 5
+#define TCOv1_MIN 0x04
+#define TCOv1_MAX 0x3F          /* 6-bit                                        */
+#define TCOv2_MIN 0x04
+#define TCOv2_MAX 0x3FF         /* 10-bit                                       */
+
+/* --- discovered state ------------------------------------------------------ */
+
+enum { WDT_NONE = 0, WDT_V1 = 1, WDT_V2 = 2 };
+
+static int  g_probed;           /* discovery has run                            */
+static int  g_gen;              /* WDT_NONE / WDT_V1 / WDT_V2                    */
+static u32  g_tcobase;          /* TCO I/O block base, 0 if none                */
+static u64  g_gcs;              /* GCS MMIO address (v2), 0 if none              */
+static int  g_present;          /* usable + NO_REBOOT confirmed clear           */
+static int  g_armed;
+static u16  g_period_ticks;     /* single-timeout period currently programmed   */
+
+/* seconds -> single-timeout ticks, halving for the two-timeout reboot, clamped */
+static u16 secs_to_ticks(unsigned seconds, u16 lo, u16 hi)
+{
+    /* half the requested window per single timeout (two must expire to reset) */
+    u64 half = (u64)seconds * TCO_TICK_DEN / (2u * TCO_TICK_NUM);
+    if (half < lo) half = lo;
+    if (half > hi) half = hi;
+    return (u16)half;
+}
+
+/* Clear the chipset NO_REBOOT bit for the detected generation and confirm it
+ * reads back clear.  Returns 1 on success (reboot now permitted), 0 if the bit
+ * could not be cleared or this generation's NO_REBOOT home is unsupported. */
+static int clear_no_reboot(void)
+{
+    if (g_gen == WDT_V2 && g_gcs) {
+        u32 v = MMIO_RD32(g_gcs);
+        if (v & GCS_NO_REBOOT) {
+            MMIO_WR32(g_gcs, v & ~GCS_NO_REBOOT);
+            v = MMIO_RD32(g_gcs);          /* read back: locked bits stay set   */
+        }
+        return (v & GCS_NO_REBOOT) ? 0 : 1;
+    }
+    /* v1 (pre-RCBA) and the Skylake+/SoC PMC path are not implemented; refuse
+     * rather than program a timer that can never actually reset the board. */
+    return 0;
+}
+
+/* Locate the PCH LPC function via the device tree and read its bases.  Uses the
+ * enumerated uno_devmgr registry (the request's "get it via the device tree you
+ * already enumerate"); falls back to a direct class scan only if the tree is
+ * empty. */
+static void probe(void)
+{
+    pci_dev lpc;
+    uno_device *d, *d0;
+    u32 abase, rcba;
+    int lpc_idx = -1;
+
+    g_probed = 1;
+    g_gen = WDT_NONE; g_tcobase = 0; g_gcs = 0; g_present = 0;
+
+    d = devmgr_find_class(0x06, 0x01);          /* ISA bridge = the PCH LPC     */
+    if (d && d->bus_type == UNO_BUS_PCI) {
+        lpc.bus = d->addr.pci.bus; lpc.dev = d->addr.pci.dev; lpc.fn = d->addr.pci.fn;
+        lpc.vendor = d->vendor; lpc.device = d->device;
+        d0 = devmgr_get(0);
+        if (d0) lpc_idx = (int)(d - d0);         /* index for the platform node  */
+    } else if (!pci_find_class(0x06, 0x01, &lpc)) {
+        return;                                  /* no LPC bridge: no TCO here   */
+    }
+
+    /* Intel only: the ACPI-base + RCBA + TCO layout below is Intel PCH.  A
+     * non-Intel south bridge (e.g. AMD FCH) has a different watchdog entirely. */
+    if (lpc.vendor != 0x8086) return;
+
+    abase = pci_cfg_read32(&lpc, LPC_ACPI_BASE);
+    if (!(abase & LPC_ACPI_EN_BIT)) return;      /* ACPI I/O decode disabled     */
+    g_tcobase = (abase & 0xFF80u) + ACPI_TCOBASE_OFF;
+    if (!g_tcobase) return;
+
+    rcba = pci_cfg_read32(&lpc, LPC_RCBA);
+    if (rcba & LPC_RCBA_EN) {                     /* ICH6+/PCH: v2 + RCBA GCS     */
+        g_gcs = (u64)(rcba & 0xFFFFC000u) + RCBA_GCS;
+        g_gen = WDT_V2;
+    } else {
+        g_gen = WDT_V1;                           /* older: no RCBA (unsupported) */
+    }
+
+    /* Take the TCO over cleanly: halt it, then try to clear NO_REBOOT.  Only
+     * claim presence if the box can actually be rebooted by the timer. */
+    {
+        u16 cnt = IO_IN16(g_tcobase + TCO1_CNT);
+        IO_OUT16(g_tcobase + TCO1_CNT, cnt | TCO1_CNT_HLT);   /* halt first     */
+    }
+    g_present = clear_no_reboot();
+
+    /* Make the TCO visible in the device tree (merge-gate item): a platform
+     * node under the LPC function, bound to this driver.  Class 08/80 = system;
+     * the 32-byte TCO I/O block is its BAR.  Only when we found it via the tree
+     * (lpc_idx >= 0) and it is actually usable. */
+    if (g_present && lpc_idx >= 0)
+        devmgr_add_platform(lpc_idx, 0x08, 0x80, g_tcobase, 0x20, "tco-wdt");
+}
+
+static void ensure_probed(void) { if (!g_probed) probe(); }
+
+int uno_hw_wdt_present(void)
+{
+    ensure_probed();
+    return g_present;
+}
+
+void uno_hw_wdt_arm(unsigned seconds)
+{
+    u16 ticks, cnt;
+    ensure_probed();
+    if (!g_present) return;
+
+    ticks = (g_gen == WDT_V1) ? secs_to_ticks(seconds, TCOv1_MIN, TCOv1_MAX)
+                              : secs_to_ticks(seconds, TCOv2_MIN, TCOv2_MAX);
+    g_period_ticks = ticks;
+
+    /* clear any stale timeout/boot status (write-1-to-clear) so a prior
+     * expiry does not count toward this arm's two-timeout budget */
+    IO_OUT16(g_tcobase + TCO1_STS, TCO1_STS_TIMEOUT);
+    IO_OUT16(g_tcobase + TCO2_STS, TCO2_STS_SECOND_TO | TCO2_STS_BOOT);
+
+    if (g_gen == WDT_V1) {
+        u8 t = (u8)IO_IN8(g_tcobase + TCOv1_TMR);
+        t = (u8)((t & ~0x3Fu) | (ticks & 0x3F));
+        IO_OUT8(g_tcobase + TCOv1_TMR, t);
+    } else {
+        u16 t = IO_IN16(g_tcobase + TCOv2_TMR);
+        t = (u16)((t & ~0x3FFu) | (ticks & 0x3FF));
+        IO_OUT16(g_tcobase + TCOv2_TMR, t);
+    }
+    IO_OUT16(g_tcobase + TCO_RLD, 1);             /* load counter from TMR       */
+
+    cnt = IO_IN16(g_tcobase + TCO1_CNT);
+    IO_OUT16(g_tcobase + TCO1_CNT, (u16)(cnt & ~TCO1_CNT_HLT));   /* run          */
+    g_armed = 1;
+}
+
+void uno_hw_wdt_pet(void)
+{
+    if (!g_present || !g_armed) return;
+    /* clear the first-timeout status so the two-timeout progression restarts,
+     * then reload the counter to the full period */
+    IO_OUT16(g_tcobase + TCO1_STS, TCO1_STS_TIMEOUT);
+    IO_OUT16(g_tcobase + TCO_RLD, 1);
+}
+
+void uno_hw_wdt_disarm(void)
+{
+    u16 cnt;
+    if (!g_present || !g_armed) return;
+    cnt = IO_IN16(g_tcobase + TCO1_CNT);
+    IO_OUT16(g_tcobase + TCO1_CNT, (u16)(cnt | TCO1_CNT_HLT));    /* halt          */
+    g_armed = 0;
+}
+
+/* --- introspection --------------------------------------------------------- */
+
+static int s_cat(char *b, int cap, int at, const char *s)
+{ while (*s && at < cap - 1) b[at++] = *s++; if (at < cap) b[at] = 0; return at; }
+static int s_hex(char *b, int cap, int at, u64 v, int digits)
+{
+    static const char H[] = "0123456789abcdef";
+    char t[17]; int i;
+    if (digits > 16) digits = 16;
+    for (i = digits - 1; i >= 0; i--) { t[i] = H[v & 0xF]; v >>= 4; }
+    t[digits] = 0;
+    return s_cat(b, cap, at, t);
+}
+static int s_dec(char *b, int cap, int at, u64 v)
+{
+    char t[21]; int i = 0;
+    if (!v) return s_cat(b, cap, at, "0");
+    while (v && i < 20) { t[i++] = (char)('0' + (v % 10)); v /= 10; }
+    while (i-- > 0 && at < cap - 1) b[at++] = t[i];
+    if (at < cap) b[at] = 0;
+    return at;
+}
+
+int uno_hw_wdt_status(char *buf, int cap)
+{
+    int at = 0;
+    if (!buf || cap <= 0) return 0;
+    buf[0] = 0;
+    ensure_probed();
+    at = s_cat(buf, cap, at, "tco ");
+    at = s_cat(buf, cap, at, g_gen == WDT_V2 ? "v2" : g_gen == WDT_V1 ? "v1" : "none");
+    at = s_cat(buf, cap, at, g_present ? " present" : " absent");
+    if (g_tcobase) {
+        at = s_cat(buf, cap, at, " tcobase=0x");
+        at = s_hex(buf, cap, at, g_tcobase, 4);
+    }
+    if (g_gcs) {
+        at = s_cat(buf, cap, at, " gcs=0x");
+        at = s_hex(buf, cap, at, g_gcs, 8);
+        at = s_cat(buf, cap, at, MMIO_RD32(g_gcs) & GCS_NO_REBOOT ? " NO_REBOOT=1"
+                                                                  : " NO_REBOOT=0");
+    }
+    at = s_cat(buf, cap, at, g_armed ? " armed period=" : " idle period=");
+    at = s_dec(buf, cap, at, g_period_ticks);
+    at = s_cat(buf, cap, at, "t");
+    if (g_present && g_tcobase) {
+        at = s_cat(buf, cap, at, " rld=");
+        at = s_dec(buf, cap, at, IO_IN16(g_tcobase + TCO_RLD) & 0x3FF);
+    }
+    return at;
+}
+
+/* Expose the discovered TCOBASE so the driver can register the TCO as a
+ * platform node in the device tree once discovery has run (see the devmgr
+ * registration in uefi_main wiring / the harness).  Returns 0 if absent. */
+u32 uno_hw_wdt_tcobase(void) { ensure_probed(); return g_present ? g_tcobase : 0; }
+
+/* --- command dispatch (uno.hwwdt binding + operator/QEMU trigger) ----------- */
+
+static int tok_eq(const char *a, const char *b)   /* a starts with token b + sep */
+{
+    while (*b) { if (*a++ != *b++) return 0; }
+    return *a == 0 || *a == ' ';
+}
+static unsigned parse_uint(const char *s)
+{
+    unsigned v = 0;
+    while (*s == ' ') s++;
+    while (*s >= '0' && *s <= '9') v = v * 10u + (unsigned)(*s++ - '0');
+    return v;
+}
+static const char *after_tok(const char *s)
+{
+    while (*s && *s != ' ') s++;
+    while (*s == ' ') s++;
+    return s;
+}
+
+/* the IRQs-off tight spin the software guard cannot recover from */
+static void wedge_irqs_off(void)
+{
+#ifdef HWWDT_HOSTTEST
+    /* the host gate must not actually hang */
+#else
+    __asm__ volatile ("cli");
+    for (;;) __asm__ volatile ("pause");
+#endif
+}
+
+int uno_hw_wdt_cmd(const char *line, char *out, int cap)
+{
+    if (!line) line = "status";
+    while (*line == ' ') line++;
+
+    if (!*line || tok_eq(line, "status") || tok_eq(line, "present"))
+        return uno_hw_wdt_status(out, cap);
+
+    if (tok_eq(line, "arm")) {
+        unsigned s = parse_uint(after_tok(line));
+        uno_hw_wdt_arm(s);
+        return uno_hw_wdt_status(out, cap);
+    }
+    if (tok_eq(line, "pet"))    { uno_hw_wdt_pet();    return uno_hw_wdt_status(out, cap); }
+    if (tok_eq(line, "disarm")) { uno_hw_wdt_disarm(); return uno_hw_wdt_status(out, cap); }
+
+    if (tok_eq(line, "selftest")) {
+        unsigned s = parse_uint(after_tok(line));
+        if (!s) s = 8;
+        uno_hw_wdt_arm(s);
+        (void)uno_hw_wdt_status(out, cap);   /* echo state before we never return */
+        wedge_irqs_off();                    /* cli; spin - only the TCO recovers */
+        return out ? (int)0 : 0;
+    }
+    if (tok_eq(line, "wedge")) {
+        if (out && cap > 0) { const char *m = "wedging (no arm)"; int i=0; while(m[i]&&i<cap-1){out[i]=m[i];i++;} out[i]=0; }
+        wedge_irqs_off();
+        return 0;
+    }
+    if (out && cap > 0) out[0] = 0;
+    return -1;
+}
+
+/* Boot-time self-demonstration, opt-in via a STRESS.CFG key, so the hardware
+ * backstop can be exercised end-to-end (QEMU q35 ich9-lpc, and metal) WITHOUT
+ * any of the unoautomate-side guard wiring in place yet:
+ *
+ *   hw-wdt-selftest[=<seconds>]   arm the TCO, then cli-spin forever.
+ *
+ * The software guard cannot recover a cli-spin (no ISR, no loop), so ONLY a
+ * working TCO resets the box - which is exactly the claim to prove.  With QEMU
+ * -no-reboot a TCO reset makes QEMU exit; on metal the box reboots and (once
+ * URC is configured) re-dials home.  Appended as ONE guarded call at the end of
+ * the debug boot block in uefi_main.c (AGENTS.md §2 additive seam).  A no-op if
+ * the key is absent or no usable TCO was found. */
+#ifndef HWWDT_HOSTTEST
+int pc64_stress_cfg_flag(const char *key);            /* consumed (uno_debug.c) */
+int pc64_stress_cfg_value(const char *key, char *buf, int cap);
+
+void uno_hw_wdt_boot_selftest(void)
+{
+    char v[16];
+    unsigned secs = 8;
+    if (pc64_stress_cfg_flag("hw-wdt-selftest") <= 0) return;
+    if (pc64_stress_cfg_value("hw-wdt-selftest", v, sizeof v) > 0) {
+        unsigned s = parse_uint(v);
+        if (s) secs = s;
+    }
+    if (!uno_hw_wdt_present()) return;    /* no usable TCO here: don't hang       */
+    uno_hw_wdt_arm(secs);
+    wedge_irqs_off();                     /* only the TCO can end this            */
+}
+#endif
+
+#endif /* UNO_DEBUG */
