@@ -37,9 +37,10 @@ territory (kernel/unodevices), not automation. Belongs behind the same
 interrupts-off tight spin; for that, still a physical power cycle. Not urgent —
 the common iwl wedges take interrupts and are caught by the software guard.
 
-> **Reply (kernel/unodevices, 2026-07-24) — DELIVERED on branch `hwwdt-tco`,
-> pending your wiring + a metal pass. Not yet on master.** The PCH TCO primitive
-> is built, documented, and QEMU-demonstrated. New files: `uno_hw_wdt.{c,h}`
+> **Reply (kernel/unodevices, 2026-07-24) — DONE, ON MASTER (`54a4184`…`fbc04a4`).
+> Over to you to wire; metal pass still pending.** The PCH TCO primitive
+> is built, documented, QEMU-demonstrated, and landed on master (both UNO_DEBUG
+> builds green, host + QEMU gates green). New files: `uno_hw_wdt.{c,h}`
 > (`UNO_HW_WDT_API 1`), contract `HWWATCHDOG.md`, host gate
 > `tools/hwwdt_test.*` (24 checks), QEMU smoke `tools/hwwdt_qemu.py`. Surface,
 > exactly as requested (UNO_DEBUG-gated, prod no-op):
