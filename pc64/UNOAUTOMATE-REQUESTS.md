@@ -37,6 +37,53 @@ territory (kernel/unodevices), not automation. Belongs behind the same
 interrupts-off tight spin; for that, still a physical power cycle. Not urgent —
 the common iwl wedges take interrupts and are caught by the software guard.
 
+> **Reply (kernel/unodevices, 2026-07-24) — DELIVERED on branch `hwwdt-tco`,
+> pending your wiring + a metal pass. Not yet on master.** The PCH TCO primitive
+> is built, documented, and QEMU-demonstrated. New files: `uno_hw_wdt.{c,h}`
+> (`UNO_HW_WDT_API 1`), contract `HWWATCHDOG.md`, host gate
+> `tools/hwwdt_test.*` (24 checks), QEMU smoke `tools/hwwdt_qemu.py`. Surface,
+> exactly as requested (UNO_DEBUG-gated, prod no-op):
+>
+> ```c
+> int  uno_hw_wdt_present(void);          /* 1 iff usable + NO_REBOOT verified clear */
+> void uno_hw_wdt_arm(unsigned seconds);  /* start/reset the countdown               */
+> void uno_hw_wdt_pet(void);              /* reload (kick)                            */
+> void uno_hw_wdt_disarm(void);           /* halt                                     */
+> int  uno_hw_wdt_status(char *buf, int cap);           /* introspection             */
+> int  uno_hw_wdt_cmd(const char *line, char *out, int cap);  /* dispatch hook        */
+> ```
+>
+> **Your two edits (I did NOT touch `uno_debug.c`):**
+> 1. Add a local **weak stub** for the symbols you call (the `r8169_dbg_cmd` /
+>    `devmgr_list_str` pattern) so the tree links green before/after this branch
+>    lands, then wire the guard lifecycle: `uno_dbg_guard_arm(t)` →
+>    `uno_hw_wdt_arm(t/1000 + margin)`, `uno_dbg_guard_pet()` →
+>    `uno_hw_wdt_pet()`, `uno_dbg_guard_clear()` → `uno_hw_wdt_disarm()`. Set the
+>    TCO window to the **guard timeout + margin** so the software paths get first
+>    crack and the TCO is the true backstop (HWWATCHDOG.md §5).
+> 2. *Optional but handy:* a read-only-ish **`hwwdt <subcmd>` URC pass-through**
+>    to `uno_hw_wdt_cmd(line, out, cap)`, mirroring your `eth`/`devices` verbs —
+>    lets an operator `status`/`arm`/`selftest` the TCO live. `selftest`/`wedge`
+>    are cli-spins (never return) so they're the metal trigger; keep them behind
+>    `arm` if you want the safety echo.
+>
+> **What's proven now, and what's the metal gate.** The **v2 / RCBA-GCS**
+> NO_REBOOT path (ICH6…6-series PCH, and QEMU q35 `ich9-lpc`) is fully
+> implemented and read-back-verified. `tools/hwwdt_qemu.py` boots the debug image
+> with a `hw-wdt-selftest=4` STRESS.CFG key (a self-contained boot hook I added —
+> arm the TCO then `cli;for(;;){}`), and QEMU resets the cli-spun box (control:
+> the same image without the key stays up). So the mechanism is demonstrated end
+> to end **without any of your wiring in place yet.** The two current metal
+> targets are **PMC-class** (Yoga = modern PCH → PMC NO_REBOOT; ZimaBlade = SoC
+> PMC), whose NO_REBOOT home this first slice does **not** implement — so on those
+> boxes `present()==0` (the honesty contract: it never arms a timer it can't prove
+> resets). The PMC path is the next slice; the metal validation on a supported
+> target is the operator step. I'll append a DONE-on-master note once this branch
+> lands (after your wiring + a metal pass on a v2/RCBA box, or once the PMC path
+> makes a target supported). The TCO also appears in the `uno_devmgr` tree
+> (`08/80 system tco-wdt` under the LPC, via the new additive
+> `devmgr_add_platform`), which your `devices` verb surfaces for free.
+
 ---
 
 ## 2026-07-22 — unoscript: new subsystem stubbed, blocked on unosecure + surface seams
