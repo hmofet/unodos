@@ -1075,3 +1075,67 @@ arg: `urc_bridge.py [port] [urcdir]` (default `~/urc`) — set HOME/LOG/CMD from
 argv[2] at the top of main().
 **Stopgap in use.** Untracked local `tools/urc_bridge_yoga.py` carries that patch
 and drives the Yoga bridge on :5098 → `~/urc-yoga/`; the tracked file is unmodified.
+
+---
+
+## 2026-07-24 — REQUEST (iwlwifi → unoautomate): a watchdog "guard" that auto-reverts when the URC server stops driving
+
+**Problem.** Bringing up a NIC means running device code that has never executed
+on real silicon. When a guess is wrong the CPU does not fault cleanly — it
+**wedges**: the box stops servicing URC (TCP stays ESTAB but Send-Q climbs and no
+frames are processed) and only a physical power cycle recovers it. On the AX201
+F12 work this happened ~5 times in one session; each cost a human power-cycle and
+lost the in-flight URC log frames (they flush only on command completion), so the
+crash could not even be located. The rig is remote, so this is the dominant cost.
+
+**What I need.** A generic harness capability — a **dead-man's-switch watchdog**
+keyed on URC liveness: arm it before a risky command; if the box is not being
+driven by the URC server within a deadline (because it wedged, or the link
+dropped), the device **resets itself** and reboots into the known-good default,
+which redials URC. An experiment that wedges then costs `deadline + boot`, no
+hands. This is the harness's job, not any driver's — every bring-up lane
+(iwlwifi, r8169, xhci, ax88179, …) needs the same net.
+
+**Proposed URC contract** (verb names/impl are unoautomate's to set; semantics are
+the ask). Append to `REMOTE.md`:
+
+| verb | meaning | reply |
+|---|---|---|
+| `guard <secs>` | arm: the device HARD-RESETS itself in `<secs>` unless petted/cancelled first. Idempotent re-arm. | `ok guarded <secs> (max <cap>)` |
+| `guard keep [<secs>]` | pet: extend the deadline (host proves the box is alive across a long op) | `ok kept <secs>` |
+| `guard cancel` | disarm: the risky op finished and the box is provably healthy | `ok disarmed` |
+| `guard status` | query | `ok guard=<0/1> left=<secs>` |
+
+Flow: `guard 20` → risky verb → if URC still responds, `guard cancel`; if the box
+wedged, no cancel arrives → watchdog fires → reset → reboot to the safe default →
+URC redials. The petting signal can simply be **URC frame liveness** (any frame
+processed within the window re-arms), which matches "revert if the command server
+can't connect" directly — a wedged CPU processes no frames, so it cannot pet
+itself.
+
+**Recovery target.** The default boot is already safe: every wedge-prone path is
+opt-in behind a verb (e.g. `iwl mvm`), and a fresh boot idles at a known-good
+state. So a watchdog reset lands somewhere safe with no extra work.
+
+**Suggested primitive (offered, not prescribed).** pc64 runs pre-ExitBootServices
+(boot services alive), so **`gBS->SetWatchdogTimer(timeout, code, 0, NULL)`** is
+available: UEFI resets the platform if the timer is not reset/cancelled before
+`timeout`. A single re-arm call in the URC frame loop pets it while healthy; a
+wedge stops the loop → firmware watchdog fires. No PCH/ACPI/iTCO poking needed.
+Caveat: some firmwares clamp the max timeout — surface the effective cap in the
+`guard` reply. (Fallback if SetWatchdogTimer proves unreliable on this platform:
+the PCH iTCO/TCO timer via PMBASE, but that is more work and platform-specific.)
+
+**Optional stronger tier — boot A/B auto-revert.** The above covers a *runtime*
+wedge. It does NOT cover a build that hangs during boot before URC comes up. If
+cheap: arm a watchdog across a reboot-into-new-build, and require the new build to
+`boot confirm` within N seconds of boot or the next reset falls back to the
+previous `BOOTX64.EFI`. Nice-to-have; the runtime guard above is what unblocks me.
+
+**Why now / stopgap.** iwlwifi has reached firmware ALIVE on the AX201 (F12
+solved); the next slice is the post-ALIVE MVM/join sequence, which is exactly the
+never-run device code that wedges. Without the guard I can only iterate it one
+power-cycle at a time. Stopgap in use: risky paths are gated behind explicit verbs
+(`iwl mvm`, `iwl msix`) so a stock boot stays safe, and I drive single registers
+with `iwl csw`/`prr` rather than flashing when possible — but neither recovers a
+box that has already wedged.
