@@ -86,6 +86,18 @@ for devices still present at the same address (so a re-scan does not tear down b
 drivers). Everything else is re-read from hardware, so a re-scan also invalidates any
 BAR sizes previously probed.
 
+**Platform devices.** `devmgr_add_platform(backing, cls, sub, io_base, io_len, drv)`
+registers a `UNO_BUS_PLATFORM` node for a logical block that lives *inside* a PCI
+function rather than being its own function — the first user is the PCH TCO watchdog
+(`uno_hw_wdt`, HWWATCHDOG.md), which is decoded by the LPC function but is not itself
+enumerable. The node inherits the backing function's `bb:dd.f`/`ven:dev`, links to it
+as parent, records `[io_base, io_base+io_len)` as an I/O BAR, and lists as **BOUND** to
+`drv` — so it is the first device the registry reports with a real driver (phase-1 PCI
+enumeration binds nothing; §7). The registration is **sticky**: re-applied at the end of
+each `devmgr_enumerate()`, so a re-scan does not drop it, and idempotent (re-registering
+the same backing+driver does not duplicate). Additive to `UNO_DEVMGR_API 1`: no struct or
+ABI change (`UNO_BUS_PLATFORM` was always in the bus-type enum).
+
 **Capacity.** `UNO_DEV_MAX` (128) is a static table — nothing allocates this early.
 A scan that fills it sets `devmgr_overflow()`, so a truncated listing is detectable
 instead of silently short.
@@ -249,6 +261,14 @@ the `.uno_drivers` linker set. The URC `devices` verb is unoautomate's (landed).
 
 ## Changelog
 
+- **2026-07-24 — additive: `devmgr_add_platform()` (no API bump).** Platform
+  devices (a logical block inside a PCI function) can now be registered as sticky
+  `UNO_BUS_PLATFORM` nodes; the first user is the PCH TCO watchdog (`uno_hw_wdt`,
+  HWWATCHDOG.md), which lists as `08/80 system tco-wdt` under the LPC function and
+  is the registry's first `UNO_DEV_BOUND` node. Additive to `UNO_DEVMGR_API 1`:
+  no struct/ABI change, existing PCI rows unchanged. Host gate `devmgr_test.c`
+  covers creation, the inherited-location listing, re-scan stickiness, and
+  no-duplicate re-registration.
 - **2026-07-23 — UNO_DEVMGR_API 1 (Phase 1 landed):** the registry is real.
   `uno_device` gained `parent`, `hdr_type`, `sec_bus`, IRQ line/pin, capability
   offsets and `bar_flags[]`; `devmgr_enumerate()` returns the count; added

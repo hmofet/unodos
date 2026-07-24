@@ -34,6 +34,20 @@ static unsigned char g_seen[32];       /* bus-number bitmap, loop guard         
 static int bus_seen(int bus)  { return (g_seen[(bus >> 3) & 31] >> (bus & 7)) & 1; }
 static void bus_mark(int bus) { g_seen[(bus >> 3) & 31] |= (unsigned char)(1 << (bus & 7)); }
 
+/* Sticky platform-device registrations (devmgr_add_platform): logical blocks
+ * that live inside a PCI function - re-applied after every PCI walk so a
+ * re-scan does not drop them.  Keyed by the BACKING function's location so the
+ * re-emit can re-find its (possibly renumbered) registry index. */
+typedef struct {
+    int  used;
+    unsigned char bbus, bdev, bfn;     /* backing PCI function location         */
+    unsigned char cls, sub;
+    unsigned long long io_base, io_len;
+    const char *drv;
+} devmgr_plat_reg;
+#define DEVMGR_PLAT_MAX 4
+static devmgr_plat_reg g_plat[DEVMGR_PLAT_MAX];
+
 /* --- tiny NUL-terminated string builders (bounds-checked to cap-1) --------- */
 
 static int s_cat(char *b, int cap, int at, const char *s) {
@@ -261,6 +275,75 @@ static void scan_bus(int bus, int parent)
     }
 }
 
+/* Append one sticky platform registration to the table as a UNO_BUS_PLATFORM
+ * node, inheriting the backing PCI function's location + ids.  Silently skips a
+ * registration whose backing function is no longer present, or if the table is
+ * full.  Returns the new index, or -1. */
+static int emit_platform(const devmgr_plat_reg *r)
+{
+    uno_device *d;
+    int parent = UNO_DEV_NOPARENT, i;
+
+    for (i = 0; i < g_n; i++) {          /* find the backing function (a root)   */
+        if (g_dev[i].bus_type == UNO_BUS_PCI &&
+            g_dev[i].addr.pci.bus == r->bbus && g_dev[i].addr.pci.dev == r->bdev &&
+            g_dev[i].addr.pci.fn == r->bfn) { parent = i; break; }
+    }
+    if (parent == UNO_DEV_NOPARENT) return -1;
+    /* idempotent against the live table: if this platform node is already
+     * present (e.g. just re-emitted by enumerate), don't append a duplicate */
+    for (i = 0; i < g_n; i++)
+        if (g_dev[i].bus_type == UNO_BUS_PLATFORM && g_dev[i].parent == parent &&
+            g_dev[i].drv == r->drv) return i;
+    if (g_n >= UNO_DEV_MAX) { g_overflow = 1; return -1; }
+
+    d = &g_dev[g_n];
+    *d = g_dev[parent];                  /* inherit location + ven:dev, then edit */
+    d->bus_type = UNO_BUS_PLATFORM;
+    d->parent   = (short)parent;
+    d->cls = r->cls; d->subcls = r->sub; d->prog_if = 0;
+    d->hdr_type = 0; d->sec_bus = 0;
+    d->caps = 0; d->cap_msi = d->cap_msix = d->cap_pcie = 0;
+    for (i = 0; i < 6; i++) { d->bar[i] = 0; d->bar_sz[i] = 0; d->bar_flags[i] = 0; }
+    d->bar[0] = r->io_base;
+    d->bar_sz[0] = r->io_len;
+    d->bar_flags[0] = UNO_BAR_PRESENT | UNO_BAR_IO | UNO_BAR_SIZED;
+    d->state = UNO_DEV_BOUND;
+    d->drv = r->drv; d->drvdata = 0;
+    return g_n++;
+}
+
+static void reemit_platform(void)
+{
+    int i;
+    for (i = 0; i < DEVMGR_PLAT_MAX; i++)
+        if (g_plat[i].used) emit_platform(&g_plat[i]);
+}
+
+int devmgr_add_platform(int backing, unsigned char cls, unsigned char sub,
+                        unsigned long long io_base, unsigned long long io_len,
+                        const char *drv)
+{
+    uno_device *b = devmgr_get(backing);
+    devmgr_plat_reg *slot = 0;
+    int i;
+
+    if (!b || b->bus_type != UNO_BUS_PCI) return -1;
+    /* dedup on the backing location + driver; else take the first free slot */
+    for (i = 0; i < DEVMGR_PLAT_MAX; i++) {
+        if (g_plat[i].used && g_plat[i].bbus == b->addr.pci.bus &&
+            g_plat[i].bdev == b->addr.pci.dev && g_plat[i].bfn == b->addr.pci.fn &&
+            g_plat[i].drv == drv) { slot = &g_plat[i]; break; }
+        if (!slot && !g_plat[i].used) slot = &g_plat[i];
+    }
+    if (!slot) return -1;
+    slot->used = 1;
+    slot->bbus = b->addr.pci.bus; slot->bdev = b->addr.pci.dev; slot->bfn = b->addr.pci.fn;
+    slot->cls = cls; slot->sub = sub;
+    slot->io_base = io_base; slot->io_len = io_len; slot->drv = drv;
+    return emit_platform(slot);          /* materialise it now                   */
+}
+
 int devmgr_enumerate(void)
 {
     static devmgr_bind_snap old[UNO_DEV_MAX];
@@ -303,6 +386,7 @@ int devmgr_enumerate(void)
     for (i = 1; i < 256; i++) scan_bus(i, UNO_DEV_NOPARENT);
 
     for (i = 0; i < g_n; i++) carry_binding(&g_dev[i], old, oldn);
+    reemit_platform();                 /* sticky platform nodes survive re-scan  */
     g_scanned = 1;
     return g_n;
 }

@@ -116,4 +116,24 @@ int devmgr_info(int idx, unsigned int *out, int nmax);
  * framebuffer.  Returns the number of BARs sized. */
 int devmgr_size_bars(int idx);
 
+/* Register a synthetic PLATFORM device: a logical block that lives INSIDE an
+ * already-enumerated PCI function rather than being its own PCI function - the
+ * canonical case is the PCH TCO watchdog, which is decoded by the LPC/SMBus
+ * function but is not itself enumerable.  `backing` is the registry index of
+ * that PCI function; the platform node inherits its bb:dd.f location and ven:dev
+ * for the listing, links to it as parent, records [io_base, io_base+io_len) as
+ * an I/O BAR, and lists as BOUND to `drv`.  cls/sub give it a class-name token.
+ *
+ * The registration is STICKY: it is re-applied at the end of every
+ * devmgr_enumerate(), so a re-scan (which rebuilds the PCI table) does not drop
+ * it - matching the "enumerate is idempotent" contract (DEVICES.md §2).
+ * Returns the new registry index, or -1 (bad backing index / table full).
+ *
+ * Additive to UNO_DEVMGR_API 1: no struct or ABI change (UNO_BUS_PLATFORM was
+ * always in the bus-type enum); platform nodes are the first devices that can
+ * report a bound driver.  See DEVICES.md §2 + changelog. */
+int devmgr_add_platform(int backing, unsigned char cls, unsigned char sub,
+                        unsigned long long io_base, unsigned long long io_len,
+                        const char *drv);
+
 #endif /* UNO_DEVMGR_H */
