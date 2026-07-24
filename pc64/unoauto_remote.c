@@ -745,6 +745,23 @@ __attribute__((weak)) int devmgr_list_str(char *buf, int cap)
     return -1;
 }
 
+/* hwwdt verb pass-through target. unodevices lands the real uno_hw_wdt_cmd() in
+ * uno_hw_wdt.c (the PCH TCO hardware watchdog); declared locally + weak-stubbed
+ * here, same pattern as above, so this file links green with or without the
+ * module. status/arm/pet/disarm/selftest/wedge; see HWWATCHDOG.md. */
+int uno_hw_wdt_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int uno_hw_wdt_cmd(const char *line, char *out, int cap)
+{
+    static const char msg[] = "hw watchdog not built (uno_hw_wdt pending)";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
@@ -832,6 +849,22 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         int n = r8169_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err",
             n >= 0 ? g_report : "bad-cmd (status/reg/wreg/phy/wphy/rerun/link/mac)");
+        rsp(id, "end", 0); return;
+    }
+    /* hwwdt <subcmd...> - PCH TCO hardware watchdog (unodevices, uno_hw_wdt.c),
+     * the guard's IRQs-off backstop. Additive pass-through to uno_hw_wdt_cmd
+     * (weak-stubbed above until the module lands). Subcmds:
+     *   status               present/gen/TCOBASE + raw GEN_PMCON_A (fw=0x..) dump
+     *   arm <s> / pet / disarm   drive the TCO directly (no cli-spin - SAFE: an
+     *                        armed-but-unpetted TCO resets the box in ~<s>, and
+     *                        if NO_REBOOT wasn't really cleared it simply doesn't,
+     *                        so this never hard-hangs the box)
+     *   selftest <s> / wedge     cli-spin (IRQs-off) - the metal wedge trigger;
+     *                        NEVER RETURNS, only the TCO recovers. UNO_DEBUG-only. */
+    if (!strcmp_(verb, "hwwdt")) {
+        int n = uno_hw_wdt_cmd(args ? args : "status", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err",
+            n >= 0 ? g_report : "bad-cmd (status/arm/pet/disarm/selftest/wedge)");
         rsp(id, "end", 0); return;
     }
     /* devices - read-only PCI device-tree listing, one `ok` line per device.
