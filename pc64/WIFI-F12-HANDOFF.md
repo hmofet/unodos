@@ -1,6 +1,6 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-23 (round 17). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
+Status: 2026-07-23 (round 18 - diagnosis SOLVED). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
 gen2 22000-family, QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is
 fully solved; this is the WiFi tail.
 
@@ -25,6 +25,62 @@ PRPH block returns). So the CPU started, executed, and is **stuck at a fixed PC
 before completing the firmware-load handshake**. `fh_after_kick=0` is a red
 herring (it watches one FH channel, not the ROM's context-info DMA). This is a
 **firmware-image / secure-boot** failure class, not a transport problem.
+
+## Round 18 (2026-07-23) — SOLVED (diagnosis): the firmware was ALIVE the whole time
+
+F12 was a **measurement error**, not a load failure. This device runs in MSI-X
+mode, where causes are reported in `CSR_MSIX_HW/FH_INT_CAUSES_AD` and the legacy
+`CSR_INT` stays 0 forever. We polled `CSR_INT` and the RX ring, saw zeroes, and
+concluded "the firmware never starts". Measured on metal, after a load the
+driver had just declared failed:
+
+```
+CSR_MSIX_HW_INT_CAUSES_AD (0x2808) = 0x00000001   <- bit 0 = ALIVE
+CSR_MSIX_AUTOMASK_ST_AD   (0x2810) = 0x00000200   <- vector 9 automasked
+```
+
+Both match the ground-truth ftrace exactly. There was never a pre-ALIVE park —
+which is precisely why every load-path suspect kept checking out correct. The
+"frozen PCs" of round 16 are firmware idling *after* ALIVE because the host
+never answered.
+
+Corroborating (opt-in `iwl msix`): the device delivered a real MSI-X message to
+host RAM, `msix_scratch = 0x4d510009` — vector 9, the same vector Linux takes
+ALIVE on. DMA, bus mastering and IOMMU state were all fine. **The cause bit is
+set with or without that table**, so the PCI Function Mask blocked only message
+*delivery*; `msix_table_setup()` is a diagnostic, not the fix.
+
+### The remaining work, and exactly where it is
+
+Driven live over URC with `iwl csw`/`iwl prr` — no reflash, one register at a
+time — the three post-ALIVE steps are each **safe and effective**:
+
+| write | result |
+|---|---|
+| `iwl csw 1c80 7f8` (open RX ring) | **`RFH_Q0_FRBDCB_RIDX` 0 -> 0x20**: the fw consumed 32 RBDs and is DMAing |
+| `iwl csw 2808 1` (ack ALIVE) | `0x2808` 1 -> 0, write-1-to-clear confirmed |
+| `iwl csw 2810 200` (release automask) | `0x2810` -> 0 |
+
+The machine stayed healthy through all three. So the wedge that killed two
+builds this round was **not** the register sequence — it is the host-side RX
+*read* path that runs straight after: `wait_notif()` walking the ring and
+`rx_process_rb()` parsing firmware-written RB contents for the first time ever
+(plus `rx_restock()` looping once `g_alive` is set). That code has never seen
+real data. Harden the RB parse (bounds-check every length/offset before
+following it) before re-enabling the path in `wait_alive()`.
+
+`0x7f8` is `(2048-1) & ~7`, so the 2048-entry ring is required — the earlier
+256-entry ring could not have produced the doorbell value the ftrace shows.
+
+### Rig notes learned the hard way
+
+- **URC log frames in flight are LOST when the machine wedges**, so a crash in
+  the code under test tells you nothing about where it died. Prefer driving
+  single registers with `iwl csw`/`prr` over flashing a build with a new code
+  path — it isolates the failure and costs seconds instead of ~5 minutes.
+- A yellow **"LAN?"** systray means it booted fine and only ethernet is down;
+  that is not a hang. A real wedge shows as `ss -tn | grep 5098` ESTAB with a
+  non-zero Send-Q.
 
 ## Round 17 (2026-07-23) — three standing suspects RETIRED, method changed
 
