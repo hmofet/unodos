@@ -1,6 +1,6 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-23 (round 18 - diagnosis SOLVED). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
+Status: 2026-07-24 (round 19 - F12 done; post-ALIVE MVM bisected to ADD_STA). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
 gen2 22000-family, QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is
 fully solved; this is the WiFi tail.
 
@@ -25,6 +25,54 @@ PRPH block returns). So the CPU started, executed, and is **stuck at a fixed PC
 before completing the firmware-load handshake**. `fh_after_kick=0` is a red
 herring (it watches one FH channel, not the ROM's context-info DMA). This is a
 **firmware-image / secure-boot** failure class, not a transport problem.
+
+## Round 19 (2026-07-24) — post-ALIVE MVM bisected; wedge = ADD_STA (scaffold, not transport)
+
+F12 (reaching ALIVE) is closed. The next slice is the post-ALIVE MVM/join
+sequence, gated behind `iwl mvm`. Using a stepped `iwl mvm <n>` verb (mirrors
+`iwl alive <n>`) driven under the URC **guard**, the sequence was walked one
+command at a time against the fw parked at the ALIVE gate:
+
+| step | op | result |
+|---|---|---|
+| 1 | mvm_init_unified (SYSTEM/NVM/PHY cfg/INIT_COMPLETE) | ok |
+| 2 | mvm_tx_ant | ok |
+| 3 | mvm_dqa_enable | skipped (no capa 12) |
+| 4 | mvm_power_table | ok |
+| 5 | mvm_scan_cfg | ok |
+| 6 | mvm_phy_ctxt ADD | ok |
+| 7 | mvm_mac_ctxt ADD | ok |
+| 8 | mvm_binding | ok |
+| 9a | mvm_time_quota | ok |
+| 9b | mvm_assoc_window (SESSION_PROTECTION) | ok |
+| **9c** | **mvm_add_sta** | **WEDGES HARD** |
+| 9d | wpa PMK/init (host only) | (not reached) |
+
+So the entire command layer works against real firmware. The wedge is precisely
+**ADD_STA**, and it is a **scaffold** problem, not transport: `find_and_join()`
+has no beacon parse, so it calls `mvm_add_sta()` with a **broadcast BSSID**
+(`0xFF..`). ADD_STA for a broadcast peer is malformed and the fw wedges on it.
+
+**The real work = the association MLME** that must precede ADD_STA: SCAN_REQ_UMAC
+-> collect beacons -> real BSSID + channel -> auth frames -> assoc -> THEN
+ADD_STA with the real AP MAC, MAC_CONTEXT MODIFY(assoc), then the 4-way handshake
+via handle_eapol(). `find_and_join()` today is explicitly scaffolded for all of
+that (it says so in its own trace).
+
+**Operational:** the ADD_STA wedge is the **interrupts-off / tight-spin class the
+software guard CANNOT catch** — steps 1..9b were each auto-recovered by the guard
+(~80 s, no hands), but 9c did not reset and needed a physical power cycle. This is
+a concrete on-metal repro for the PCH **TCO hardware watchdog** (branch
+`hwwdt-tco`); merging that would make even this class self-recovering.
+
+**Latent bug to fix in the ADD_STA rework:** `*(u32*)(c+40) =
+(1u<<g_data_qid>0?0:0)` in `mvm_add_sta` — nonsensical expression + UB shift by
+`g_data_qid == -1`. Evaluates to 0 on x86 so it is not the wedge, but wrong.
+
+**How to reproduce / continue:** flash a UNO_DEBUG build, `iwl rerun` (parks at
+the ALIVE gate), `guard 40 reboot`, then `iwl mvm 1..8` + `iwl mvm a` + `iwl mvm
+b` all return; `iwl mvm c` wedges. Verbs: `iwl mvm <1-9>` and `iwl mvm <a-d>`
+(9-split). Bare `iwl mvm` arms the inline full run for a stock boot.
 
 ## Round 18 (2026-07-23) — SOLVED (diagnosis): the firmware was ALIVE the whole time
 
