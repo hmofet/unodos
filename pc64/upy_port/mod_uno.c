@@ -28,7 +28,12 @@ void fb_frame_rect(int x, int y, int w, int h, fb_px c);
 void fb_round_rect(int x, int y, int w, int h, int rad, fb_px c);
 int  fb_text(int x, int y, const char *s, fb_px fg, long bg);
 int  fb_text_w(const char *s);
-int  devmgr_list_str(char *buf, int cap);  /* unodevices (kernel export) */
+/* unodevices (kernel exports; DEVMGR_ROW_N from uno_devmgr.h, kept in step) */
+int  devmgr_list_str(char *buf, int cap);
+int  devmgr_count(void);
+int  devmgr_info(int idx, unsigned int *out, int nmax);
+const char *devmgr_driver_name(int idx);
+#define DEVMGR_ROW_N 15
 void fb_set_clip(int x, int y, int w, int h);
 void fb_reset_clip(void);
 void uno_seq_beep(int midi, int ticks);
@@ -289,13 +294,48 @@ int uno_bind_app(PyApp *pa) {
 }
 
 /* ---- the `uno` module dict ------------------------------------------------ */
-/* uno.devices() -> str: one line per PCI function "bb:dd.f ven:dev cc/ss class" (see DEVICES.md) */
-static char g_devbuf[4096];
+/* uno.devices() -> str: the whole machine, one line per PCI function,
+ * "bb:dd.f ven:dev cc/ss class driver|UNCLAIMED" (see DEVICES.md). */
+static char g_devbuf[8192];
 static mp_obj_t m_devices(void) {
     int n = devmgr_list_str(g_devbuf, sizeof g_devbuf);
+    if (n < 0) n = 0;
     return mp_obj_new_str(g_devbuf, n);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(devices_obj, m_devices);
+
+/* uno.pci() -> [(loc, ven, dev, cls, subcls, progif, driver_or_None), ...]
+ * The parsed form of the same registry, for scripts that want to filter
+ * rather than read.  loc is "bb:dd.f".  Rows come from devmgr_info(), a flat
+ * unsigned vector, because this module is built separately from the kernel
+ * and resolves its symbols by name - handing it a uno_device* would pin the
+ * struct layout across that boundary. */
+static mp_obj_t m_pci(void) {
+    mp_obj_t list = mp_obj_new_list(0, 0);
+    int i, n = devmgr_count();
+    for (i = 0; i < n; i++) {
+        unsigned r[DEVMGR_ROW_N];
+        const char *drv;
+        char loc[10];
+        static const char H[] = "0123456789abcdef";
+        mp_obj_t t[7];
+        if (devmgr_info(i, r, DEVMGR_ROW_N) < 0) continue;
+        loc[0] = H[(r[0] >> 4) & 0xF]; loc[1] = H[r[0] & 0xF]; loc[2] = ':';
+        loc[3] = H[(r[1] >> 4) & 0xF]; loc[4] = H[r[1] & 0xF]; loc[5] = '.';
+        loc[6] = (char)('0' + (r[2] & 7));           loc[7] = 0;
+        drv = devmgr_driver_name(i);
+        t[0] = mp_obj_new_str(loc, 7);
+        t[1] = mp_obj_new_int(r[3]);                 /* vendor   */
+        t[2] = mp_obj_new_int(r[4]);                 /* device   */
+        t[3] = mp_obj_new_int(r[5]);                 /* class    */
+        t[4] = mp_obj_new_int(r[6]);                 /* subclass */
+        t[5] = mp_obj_new_int(r[7]);                 /* prog-if  */
+        t[6] = drv ? mp_obj_new_str(drv, strlen(drv)) : mp_const_none;
+        mp_obj_list_append(list, mp_obj_new_tuple(7, t));
+    }
+    return list;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(pci_obj, m_pci);
 
 static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_uno) },
@@ -309,6 +349,7 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_write),    MP_ROM_PTR(&write_obj) },
     { MP_ROM_QSTR(MP_QSTR_mkdir),    MP_ROM_PTR(&mkdir_obj) },
     { MP_ROM_QSTR(MP_QSTR_devices),  MP_ROM_PTR(&devices_obj) },
+    { MP_ROM_QSTR(MP_QSTR_pci),      MP_ROM_PTR(&pci_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {
