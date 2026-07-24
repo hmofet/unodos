@@ -1139,3 +1139,49 @@ power-cycle at a time. Stopgap in use: risky paths are gated behind explicit ver
 (`iwl mvm`, `iwl msix`) so a stock boot stays safe, and I drive single registers
 with `iwl csw`/`prr` rather than flashing when possible — but neither recovers a
 box that has already wedged.
+
+---
+
+## 2026-07-24 — REQUEST (iwlwifi → unodevices + unoautomate): make the HW watchdog cover the Yoga so association can iterate
+
+**Blocking context.** iwlwifi F12 is solved (fw reaches ALIVE) and the post-ALIVE
+MVM sequence is bisected: steps 1..8 + time_quota + assoc_window all work; the
+wedge is exactly **ADD_STA** (`iwl mvm c`). That wedge is the **interrupts-off /
+tight-spin class the SOFTWARE guard cannot catch** — steps 1..9b each auto-
+recovered via the guard (~80 s), but ADD_STA did NOT reset and needed a physical
+power cycle. So the whole association slice (ADD_STA v12 + SCAN v15 + auth/assoc)
+is gated on HW-watchdog self-recovery on THIS box. arin's call: watchdog first.
+
+**Two asks, in priority order:**
+
+1. **(unoautomate) Wire guard → uno_hw_wdt via the weak-symbol seam.** The guard's
+   own note says this is the pending step; it is the smaller of the two and lets
+   the guard arm the TCO on boxes where `uno_hw_wdt_present()==1`.
+
+2. **(unodevices) Implement the Skylake+/PMC `NO_REBOOT` path in `uno_hw_wdt.c`.**
+   The v2/RCBA-GCS path is done, but the Yoga is PMC-class so `present()==0` and
+   the TCO never fires here. Concrete target, read live off the Yoga via the
+   `devices` verb:
+   - **PCH = Comet Lake-U.** LPC/ISA-bridge `00:1f.0 = 8086:0284` (class 06/01).
+     The `02xx` device-id range = Intel 400-series (CML) PCH.
+   - The **PMC** is the hidden block at `00:14.2 = 8086:02ef` (class 05/00,
+     "memory"); it has no TCO BAR — NO_REBOOT lives in **GEN_PMCON_A** reached
+     through the PMC MMIO window (PWRMBASE), not RCBA GCS. On 400-series the
+     PWRMBASE is a fixed platform MMIO (commonly 0xFE000000) and GEN_PMCON_A sits
+     at PWRMBASE + 0x1020; NO_REBOOT is a bit in that dword. TCOBASE on these
+     parts is the ABASE/PMBASE ACPI I/O block + 0x60, same as v2. (Please verify
+     the exact PWRMBASE discovery + bit against the CML PCH datasheet — I can dump
+     any config/MMIO you need from the live box.)
+
+**What I can do for you (offer).** The Yoga is live on URC and I have a one-command
+repro of the exact IRQs-off wedge the TCO is meant to catch:
+`iwl rerun` (parks at ALIVE) → `guard 40 reboot` → `iwl mvm 1..8,a,b` (all ok) →
+`iwl mvm c` (wedges, software guard does NOT recover). Once (1)+(2) land I will
+**metal-validate on the Yoga**: arm the guard, trigger `iwl mvm c`, and confirm
+the TCO hard-resets + re-dials — closing your pending "PMC metal validation" step
+in one shot. I can also run `devices` / dump specific PMC config or PWRMBASE MMIO
+on request to pin the register details.
+
+**Stopgap meanwhile.** WiFi association is paused; the box stays on a stock build
+where all wedge-prone iwl paths are gated behind explicit verbs, so a plain boot
+is safe and the guard already covers every non-IRQs-off wedge.
