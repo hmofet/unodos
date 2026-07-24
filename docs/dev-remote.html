@@ -103,7 +103,27 @@ turned on in the <a href="getting-started.html#flasher">UnoDOS flasher</a> (that
 and writes the file), and set the remote address there. To point an existing debug stick at a different PC,
 use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>STRESS.CFG</code> in place without
 erasing the disk, so you are not reflashing the whole image just to change an IP.</p>
-<div class="note"><b>One connection</b>The remote link shares one TCP connection with the Browser and AI features, so they cannot be used while a link is active.</div>
+<p>If you would rather not hardcode an address at all, set <code>discover</code> instead of <code>remote=</code>:
+the device broadcasts on the LAN and any PC running the listener answers with its address, so the box finds
+you automatically. And when the machine has <em>no working network</em> - because the NIC is the very thing you
+are debugging - the link can ride a serial cable instead; see
+<a href="#serial">when the only network is the one you are debugging</a> below.</p>
+<div class="note"><b>Runs alongside everything else</b>The link runs on its <strong>own</strong> network connection, so the Browser and AI apps keep working while a link is active - they are no longer mutually exclusive.</div>
+
+<h2 id="serial">When the only network is the one you are debugging</h2>
+<p>The link normally rides TCP over the LAN - but that assumes a working NIC, and the hardest bring-up cases are
+exactly the ones where the machine's <em>only</em> network card is the one that does not work yet. For that, the
+same channel runs over a <strong>serial cable</strong> instead: no network required. Every command works
+identically; only the wire underneath changes. Arm it in <code>STRESS.CFG</code> with <code>remote-serial</code>
+in place of <code>remote=</code>, and point the tool at the serial port:</p>
+<pre><code># on the stick: URC over COM1, or name another port (2f8 = COM2, 3e8 = COM3)
+remote-serial
+remote-serial=3e8
+
+# on your PC (needs pyserial):
+python tools/unoauto_remote.py --serial COM3            # Windows
+python tools/unoauto_remote.py --serial /dev/ttyUSB0    # Linux</code></pre>
+<div class="note warn"><b>Pick a non-console serial port</b>Debug builds stay attached to firmware, and a firmware serial console can steal bytes from whichever port URC is using. Put URC on a port the firmware is <em>not</em> consoling - <strong>COM3</strong> is the safe default; if unsure, disable serial console redirection in firmware setup. Serial is for interactive control (register debug, driving the desktop); do the multi-megabyte A/B pushes over TCP.</div>
 
 <h2 id="logging">Remote logging</h2>
 <p>While the link is up, every line the OS logs - boot, network, storage, UI, script output - streams to
@@ -126,8 +146,14 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>
 <tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
 <tr><td><code>guard &lt;secs&gt;</code> / <code>pet</code> / <code>safe</code></td><td>Arm a dead-man's switch before a risky command: if the box stops answering within the timeout, it resets itself and dials back in - the guard below.</td></tr>
+<tr><td><code>devices</code></td><td>List the machine's PCI devices and which driver claimed each one (or <code>UNCLAIMED</code>) - what hardware is here and what has no driver yet.</td></tr>
+<tr><td><code>iwl</code> / <code>eth</code></td><td>Poke a live network driver's registers - Intel Wi-Fi / Realtek Ethernet - reading and writing registers or retrying its bring-up, with no rebuild.</td></tr>
+<tr><td><code>disks</code> / <code>arm</code> / <code>prepdisk</code></td><td>List raw disks, arm one for a destructive op (it refuses the boot disk and echoes the target's size), and partition + format it - preparing a disk to install onto.</td></tr>
+<tr><td><code>mkdir</code> / <code>install</code></td><td>Create a directory on a volume, or clone the running OS onto a prepared disk in one armed step - the headless install below.</td></tr>
 </tbody>
 </table></div>
+<p class="muted">These are the everyday commands; the exhaustive list, with every argument and exact reply, is in
+<a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>
 
 <h2 id="host">The tool on your PC</h2>
 <p>One small script, <code>pc64/tools/unoauto_remote.py</code>, is both a listener you talk to interactively and
@@ -185,6 +211,21 @@ the machine boot the other stick automatically on the next restart, without anyo
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
 <div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
+
+<h2 id="install">Installing UnoDOS onto a disk over the link</h2>
+<p>The A/B push writes files onto an <em>already-formatted</em> stick. The channel can go further and stand up a
+bootable disk from scratch - partition a raw disk, format it, and lay the whole OS down on it - so you can move
+UnoDOS off the USB stick and onto an internal drive without ever touching the machine's keyboard. The one-shot
+<code>install</code> command does all of it, cloning the running system straight onto the target:</p>
+<pre><code>disks                # find the writable, non-boot target (say index 1)
+arm 1                # echoes the disk's name and size; refuses the boot disk
+install 1            # partition + format, then clone the whole OS onto it
+reboot               # writes are flushed to disk first</code></pre>
+<p>Because the copy is disk-to-disk on the device, none of the OS actually crosses the network. From the Python
+library the same thing is <code>link.install(1)</code>, or <code>link.install_dir(1, "build/esp")</code> to push a
+freshly built tree from your PC instead of cloning the running one. The lower-level pieces are there too if you
+want them - <code>prepdisk</code> to format, <code>mkdir</code> + <code>put</code> to build the tree by hand.</p>
+<div class="note warn"><b>Booting the installed disk</b>A <strong>USB stick</strong> installed this way boots on its own (the firmware removable-media fallback finds it). An <strong>internal disk</strong> is made bootable the same way, but writing a permanent firmware boot entry needs the on-device Install app booted to firmware - over the link, an internal disk boots via the firmware fallback or a one-time boot-menu pick. Every destructive step is inert until you <code>arm</code> the specific disk, which auto-disarms after one op and always refuses the disk UnoDOS booted from.</div>
 
 <h2 id="guard">The guard: recover a wedged box automatically</h2>
 <p>Some commands push the device into code that has never run before - driving a network card's bring-up by hand
@@ -253,6 +294,11 @@ reading a log file after the fact. unoautomate collapses that:</p>
   <li><strong>Poke the hardware without a rebuild.</strong> Run a line of Python on the device with
       <code>py</code> / <code>link.eval()</code> to read back state between builds, and <code>probe</code> to
       confirm which subsystems actually came up. A debug build is exactly where you want this reach.</li>
+  <li><strong>Read and write live registers.</strong> For a network card, <code>iwl</code> (Intel Wi-Fi) and
+      <code>eth</code> (Realtek Ethernet) reach straight into the running driver - peek and poke registers,
+      retry the bring-up sequence - so you can try a fix in seconds and only rebuild once you know it works.
+      Pair it with a <a href="#guard">guard</a> so a bad poke that hangs the card resets the box instead of
+      stranding it.</li>
 </ul>
 <p>The Intel Wi-Fi bring-up is the working example: the driver is iterated this way, its firmware-load
 sequence streamed back register by register while builds are pushed to the bench machine over the link.</p>
