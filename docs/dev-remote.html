@@ -125,6 +125,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
 <tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>
 <tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
+<tr><td><code>guard &lt;secs&gt;</code> / <code>pet</code> / <code>safe</code></td><td>Arm a dead-man's switch before a risky command: if the box stops answering within the timeout, it resets itself and dials back in - the guard below.</td></tr>
 </tbody>
 </table></div>
 
@@ -184,6 +185,26 @@ the machine boot the other stick automatically on the next restart, without anyo
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
 <div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
+
+<h2 id="guard">The guard: recover a wedged box automatically</h2>
+<p>Some commands push the device into code that has never run before - driving a network card's bring-up by hand
+is the classic case - and when that goes wrong it can <em>wedge</em> the machine: the remote channel stops
+answering and normally the only way back is to walk over and power-cycle it. The <strong>guard</strong> turns
+that into automatic recovery. Arm it right before the risky command, and if the box cannot answer the channel
+within your timeout, it resets itself and dials back in on its own.</p>
+<pre><code># arm a 15-second dead-man's switch, then run the risky command
+guard 15
+&lt;the risky command&gt;
+# if the box wedges, ~15s later it resets and reconnects by itself;
+# if the command returns fine, stand the guard down:
+safe</code></pre>
+<p>&quot;Answering the channel&quot; means <em>any</em> command getting through - each one you send pushes the
+deadline out, so an ordinary interactive session keeps the guard happy without thinking about it. For a step
+that legitimately takes a while, send <code>pet</code> as a keep-alive. From the Python library it is one
+context manager that arms on the way in and stands down on the way out:</p>
+<pre><code>with link.guarded(15):
+    link.command(&quot;iwl&quot;, &quot;rerun&quot;)   # a wedge here resets the box, which reconnects</code></pre>
+<div class="note warn"><b>It fires on silence, not just crashes</b>An armed guard <strong>will</strong> reset a perfectly healthy machine if it simply stops hearing from you (your PC goes to sleep, the network drops) - that is the whole point, so arm it around a specific risky step and <code>safe</code> it afterwards, or use <code>guarded(...)</code>, which does that for you. Debug builds only, like the rest of the channel.</div>
 
 <h2 id="setup">Setting up a development environment</h2>
 <p>Putting the pieces together, a comfortable unoautomate workflow needs a one-time setup and then a tight
@@ -257,8 +278,9 @@ entirely over the channel.</p>
 
 <h3 id="uc-triage">Unattended runs and remote triage</h3>
 <p>Leave a machine running a soak test on the bench, watch its log stream from your desk, and have it
-<code>poweroff</code> itself when it finishes or <code>reboot</code> when it wedges. For an intermittent bug you
-no longer reproduce-then-lose-the-evidence: the log is already on your PC when it happens.</p>
+<code>poweroff</code> itself when it finishes or <code>reboot</code> when it wedges. Wrap a run that might hang in a
+<a href="#guard">guard</a> and it recovers on its own - no one has to be in the room to power-cycle it. For an
+intermittent bug you no longer reproduce-then-lose-the-evidence: the log is already on your PC when it happens.</p>
 
 <p class="muted">The full wire protocol and every command's exact reply are in
 <a href="https://github.com/hmofet/unodos/blob/master/pc64/REMOTE.md" target="_blank" rel="noopener"><code>pc64/REMOTE.md</code></a>.</p>
