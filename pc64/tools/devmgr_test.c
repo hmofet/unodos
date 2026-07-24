@@ -266,6 +266,36 @@ int main(void)
        "bound device reports its driver in the listing");
     ck(!(e1000->bar_flags[0] & UNO_BAR_SIZED), "re-scan clears stale BAR sizes");
 
+    /* platform nodes (devmgr_add_platform): a logical block inside a PCI
+     * function - here a mock TCO under the ISA bridge at 00:01.0 - appears in
+     * the tree as a BOUND device and SURVIVES a re-scan (sticky). */
+    {
+        int isa = (int)(devmgr_find(0x8086, 0x7000) - devmgr_get(0));
+        int pidx = devmgr_add_platform(isa, 0x08, 0x80, 0x0460, 0x20, "tco-wdt");
+        uno_device *p = devmgr_get(pidx);
+        ck(pidx >= 0 && p && p->bus_type == UNO_BUS_PLATFORM &&
+           p->parent == isa && p->state == UNO_DEV_BOUND && p->drv &&
+           !strcmp(p->drv, "tco-wdt") && p->bar[0] == 0x0460,
+           "add_platform: node created under its backing function");
+        devmgr_list_str(buf, sizeof buf);
+        ck(has_line(buf, "00:01.0 8086:7000 08/80 system tco-wdt"),
+           "platform node lists with inherited loc + bound driver");
+        ck(!has_line(buf, "  "), "platform line has no double space (last-token parse)");
+        devmgr_enumerate();                /* re-scan must NOT drop it */
+        devmgr_list_str(buf, sizeof buf);
+        ck(has_line(buf, "00:01.0 8086:7000 08/80 system tco-wdt"),
+           "sticky platform node survives a re-scan");
+        /* idempotent: re-registering the same backing+drv does not duplicate */
+        isa = (int)(devmgr_find(0x8086, 0x7000) - devmgr_get(0));
+        devmgr_add_platform(isa, 0x08, 0x80, 0x0460, 0x20, "tco-wdt");
+        devmgr_list_str(buf, sizeof buf);
+        {
+            const char *h = strstr(buf, "08/80 system tco-wdt");
+            ck(h && !strstr(h + 1, "08/80 system tco-wdt"),
+               "re-registering the same platform node does not duplicate it");
+        }
+    }
+
     /* truncation safety: a cap smaller than the listing must still NUL-terminate */
     {
         char small[40];
