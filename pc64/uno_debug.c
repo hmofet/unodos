@@ -990,6 +990,37 @@ static void guard_fw_set(unsigned secs)
         bs->SetWatchdogTimer(secs, 0x1D0Cull /*"guard" code*/, 0, 0);
 }
 
+/* PCH TCO HARDWARE watchdog (unodevices, uno_hw_wdt.c) - the guard's backstop
+ * for the one wedge class none of its three software firing paths can catch: a
+ * tight spin with interrupts disabled (no ISR, no main loop, no TPL cycle).
+ * Separate silicon resets the box regardless of CPU state.  Declared locally
+ * (not via uno_hw_wdt.h) with WEAK fallbacks - the r8169_dbg_cmd / devmgr_list_str
+ * pattern in unoauto_remote.c - so the guard links green in a build without the
+ * module, and the strong definitions (present in the debug build) win when linked.
+ * We drive it ALONGSIDE the software paths, only when it is actually usable, and
+ * size its window to the guard timeout PLUS a margin so the software paths always
+ * get first crack and the TCO is the true backstop.  See HWWATCHDOG.md §5. */
+int  uno_hw_wdt_present(void);
+void uno_hw_wdt_arm(unsigned seconds);
+void uno_hw_wdt_pet(void);
+void uno_hw_wdt_disarm(void);
+__attribute__((weak)) int  uno_hw_wdt_present(void)      { return 0; }
+__attribute__((weak)) void uno_hw_wdt_arm(unsigned s)    { (void)s; }
+__attribute__((weak)) void uno_hw_wdt_pet(void)          { }
+__attribute__((weak)) void uno_hw_wdt_disarm(void)       { }
+
+#define GUARD_HW_WDT_MARGIN_S 8u    /* TCO backstop = guard seconds + this margin */
+
+/* Arm the hardware TCO to back the software guard, if a usable TCO is present.
+ * `timeout_ms` is the guard's own window; the TCO gets it in whole seconds plus
+ * the margin, so the software firing paths fire first and the TCO only catches
+ * what they structurally cannot (the IRQs-off spin). */
+static void guard_hw_wdt_arm(unsigned timeout_ms)
+{
+    if (uno_hw_wdt_present())
+        uno_hw_wdt_arm((timeout_ms + 999u) / 1000u + GUARD_HW_WDT_MARGIN_S);
+}
+
 void uno_dbg_guard_arm(unsigned timeout_ms)
 {
     if (!timeout_ms) { uno_dbg_guard_clear(); return; }
@@ -997,17 +1028,20 @@ void uno_dbg_guard_arm(unsigned timeout_ms)
     g_guard_deadline_ms = uno_dbg_uptime_ms() + timeout_ms;
     g_guard_armed = 1;
     guard_fw_set((timeout_ms + 999) / 1000);       /* whole seconds, min 1 */
+    guard_hw_wdt_arm(timeout_ms);                  /* + PCH TCO hardware backstop */
 }
 void uno_dbg_guard_pet(void)
 {
     if (!g_guard_armed) return;
     g_guard_deadline_ms = uno_dbg_uptime_ms() + g_guard_timeout_ms;
     guard_fw_set((g_guard_timeout_ms + 999) / 1000);  /* re-arm firmware wdt */
+    uno_hw_wdt_pet();                              /* kick the TCO (no-op if absent) */
 }
 void uno_dbg_guard_clear(void)
 {
     g_guard_armed = 0;
     guard_fw_set(0);                               /* disarm firmware wdt */
+    uno_hw_wdt_disarm();                           /* halt the TCO (no-op if absent) */
 }
 int  uno_dbg_guard_armed(void) { return g_guard_armed; }
 
