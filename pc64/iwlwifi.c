@@ -1635,10 +1635,54 @@ static int load_fw_gen3(void)
 static u32 g_lmac_err_ptr, g_umac_err_ptr;
 static u32 g_sku_id[3];
 
+/* Wait for the firmware to raise the ALIVE cause, in MSI-X terms.
+ *
+ * This is the F12 bug, and it was a measurement error, not a load failure.  In
+ * MSI-X mode the device reports causes in CSR_MSIX_HW/FH_INT_CAUSES_AD; the
+ * legacy CSR_INT stays 0 forever.  We polled CSR_INT and the RX ring, saw
+ * zeroes, and concluded across seventeen rounds that "the firmware never
+ * started" - while CSR_MSIX_HW_INT_CAUSES_AD bit 0 (ALIVE) had been set the
+ * whole time.  Verified on metal: after a "failed" load it reads 0x00000001.
+ *
+ * Then the ordering matters.  The free-RBD write index starts at 0, so the fw
+ * has no buffer to put the ALIVE *notification* in and cannot deliver it until
+ * we open the ring - which is why the RBs stayed zeroed too.  Linux does
+ * exactly this: take the ALIVE interrupt, then write RFH_Q0_FRBDCB_WIDX_TRG
+ * (the ground-truth ftrace writes 0x7f8 = (2048-1) & ~7, matching our RXQ_N).
+ * So: poll the cause, ack it, open the ring, and only then look for the
+ * notification. */
+__attribute__((unused))
+static int wait_alive_cause(int timeout_ms)
+{
+    int t;
+    for (t = 0; t < timeout_ms; t++) {
+        u32 hw = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        if (hw & MSIX_HW_ALIVE) {
+            w32(CSR_MSIX_HW_INT_CAUSES_AD, hw);        /* write-1-to-clear */
+            w32(CSR_MSIX_AUTOMASK_ST_AD, 1u << 9);     /* release the vector */
+            uno_dbg_net_trace("wifi: ALIVE cause seen after %d ms (HW causes %08x)", t, hw);
+            return 0;
+        }
+        mdelay_(1);
+    }
+    uno_dbg_net_trace("wifi: no ALIVE cause in %d ms (HW causes %08x FH %08x)",
+                      timeout_ms, r32(CSR_MSIX_HW_INT_CAUSES_AD),
+                      r32(CSR_MSIX_FH_INT_CAUSES_AD));
+    return -1;
+}
+
 static int wait_alive(int timeout_ms)
 {
     int len = 0;
-    const u8 *p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
+    const u8 *p;
+    /* NOTE: acting on the ALIVE cause here - acking it, releasing the automask
+     * and opening the RX ring - wedged the machine twice, both times losing the
+     * log frames in flight, so there is no evidence yet for WHICH of those
+     * steps is unsafe.  The claim this round is the diagnosis, not the cure:
+     * the autopsy below now prints the MSI-X causes, and MSIX_HW_CAUSES bit 0
+     * reads 1 on every "failed" load.  Bringing the fw up from there is the
+     * next slice, on a rig that can be recovered without hands. */
+    p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
     if (!p) {
         /* F12 autopsy - every fleet machine timed out here, across gen2 AND
          * gen3 loads, which points at a COMMON host-side cause rather than
@@ -1651,6 +1695,10 @@ static int wait_alive(int timeout_ms)
          *      names the real bug AND unblocks the rest of bring-up. */
         int q;
         uno_dbg_net_trace("wifi: ALIVE timeout autopsy:");
+        uno_dbg_net_trace("wifi:   MSIX_HW_CAUSES=%08x FH_CAUSES=%08x AUTOMASK=%08x "
+                          "(HW bit0 = ALIVE; CSR_INT below is ALWAYS 0 in MSI-X mode)",
+                          r32(CSR_MSIX_HW_INT_CAUSES_AD), r32(CSR_MSIX_FH_INT_CAUSES_AD),
+                          r32(CSR_MSIX_AUTOMASK_ST_AD));
         uno_dbg_net_trace("wifi:   CSR_INT=%08x MASK=%08x GP_CNTRL=%08x RESET=%08x GP1=%08x",
                           r32(CSR_INT), r32(CSR_INT_MASK), r32(CSR_GP_CNTRL),
                           r32(CSR_RESET), r32(0x054 /*CSR_UCODE_DRV_GP1*/));
