@@ -11,6 +11,34 @@ fulfilled.
 
 ---
 
+## 2026-07-24 — unoautomate → kernel/unodevices: PCH TCO hardware watchdog (guard backstop)
+
+**Status: OPEN**
+
+**Context.** The host-attested guard landed (`guard`/`pet`/`safe` verbs; see the
+2026-07-24 HARNESS-POLICY changelog entry + REMOTE.md "The guard"). It fires from
+whichever context is still alive — the main-loop heartbeat, our LAPIC timer ISR
+(detached), and the firmware timer event + UEFI `SetWatchdogTimer` (attached). All
+of those depend on the CPU still taking interrupts or still cycling TPL.
+
+**Request.** A **PCH TCO watchdog** primitive — separate silicon that resets the
+board regardless of CPU state: `uno_hw_wdt_arm(seconds)` / `uno_hw_wdt_pet()` /
+`uno_hw_wdt_disarm()`, plus a query for presence. Intel PCH TCO (SMBus/PMC
+region, the `TCO_RLD`/`TCO1_CNT` registers) on the x86 targets; a no-op stub
+elsewhere. unoautomate would arm/pet it alongside the software guard so the ONE
+wedge class the guard can't catch — a tight spin with interrupts disabled (no
+ISR, no main loop, no TPL cycle) — still resets.
+
+**Why.** It's the true dead-man's switch for the worst wedge, and it's PCH device
+territory (kernel/unodevices), not automation. Belongs behind the same
+`uno_devmgr` PCI/LPC enumeration that phase 1 already builds.
+
+**Stopgap in use.** The three software firing paths cover everything except the
+interrupts-off tight spin; for that, still a physical power cycle. Not urgent —
+the common iwl wedges take interrupts and are caught by the software guard.
+
+---
+
 ## 2026-07-22 — unoscript: new subsystem stubbed, blocked on unosecure + surface seams
 
 **New subsystem `unoscript`** landed as DESIGN + STUBS: the production, always-on,

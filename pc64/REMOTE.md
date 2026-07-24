@@ -123,6 +123,9 @@ unchanged.
 | `install <disk> [default]` | *(armed)* clone the running OS onto `<disk>` in one op: prepdisk (GPT+ESP+FAT32) + native clone of the boot ESP's whole tree. Disk boots via the firmware removable-media path `\EFI\BOOT\BOOTX64.EFI`. Writes **no** NVRAM `Boot####` entry (runtime SetVariable is refused post-detach), so `default` is inert here. | `ok prepared`, `ok cloning`, `ok installed <n> files <bytes> bytes…` / `err…` |
 | `poweroff` | shut the machine down after the queue drains | `ok bye` |
 | `reboot` | reset the machine after the queue drains (`uno_native_reset`) | `ok bye` |
+| `guard <timeout-s> [reboot]` | arm the dead-man's switch: if the box can't service an inbound URC command within `<timeout-s>`, the debug watchdog hard-resets it (and it re-dials home). Any later command refreshes the deadline; `safe` stands it down. v1 action = reboot | `ok armed <t>s action=reboot token=<n>` / `err usage…` |
+| `pet` | explicit keep-alive (any command refreshes implicitly; this is the no-op one for a long op) | `ok petted` / `ok not-armed` |
+| `safe [token]` | disarm the guard (the op returned). If a token is given it must match the one from `guard` | `ok disarmed` / `err bad-token` |
 | `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable — attached only) | `ok set` / `err unavailable` |
 | `disks` | list raw disks | one `ok` line per disk: `idx name sectors writable is_boot` |
 | `readsec <disk> <lba-hex> [n]` | read `n` (≤4) raw sectors | base64 of the sectors, streamed as `ok` lines |
@@ -156,6 +159,47 @@ unchanged.
 > (unodevices pending)` rather than `err unknown-verb`, and upgrades itself the
 > moment the strong symbol links in. The listing is capped at the 4 KB report
 > buffer. Read-only by construction: no `arm` gate, nothing is written.
+
+## The guard (dead-man's switch for risky verbs)
+
+Some verbs push the device CPU into code that has never run before — the classic
+case is driving a NIC bring-up interactively (`iwl mvm` then `iwl rerun` into the
+never-executed post-ALIVE sequence). When that wedges, the URC server stops
+answering and the box needs a physical power cycle. The **guard** turns that into
+an automatic recovery: arm it before the risky op, and if the box can't call home
+before the deadline, it hard-resets and re-dials on its own.
+
+```
+guard 15 reboot        # ok armed 15s action=reboot token=…
+iwl mvm                # arm the untested sequence
+iwl rerun              # ← if this wedges, no RSP comes back
+   … host stops petting; ~15 s later the box resets and dials home again …
+safe                   # if it RETURNED instead, stand the guard down
+```
+
+- **"Call home" is any inbound command.** Reaching the URC dispatcher proves the
+  box is alive end to end (NIC RX + net + dispatch + main loop), so *any* command
+  refreshes the deadline — a strictly stronger liveness proof than "the main loop
+  ticked." Refresh is on receipt, so the risky verb gets its full window. `pet` is
+  the explicit no-op keep-alive for a legitimately long op. **Crucially, the
+  guard's deadline is NOT the freeze-watchdog heartbeat** (`uno_dbg_net_trace()`
+  feeds that during WiFi bring-up, so it can't detect a wedge in the very path
+  being debugged) — the guard has its own deadline that only inbound URC activity
+  refreshes.
+- **Three firing paths, so whichever context is still alive fires it:** the
+  main-loop heartbeat (a *healthy* box whose host went silent — host crash /
+  network partition), our own LAPIC timer ISR (detached + wedged main loop), and
+  the firmware timer event + UEFI `SetWatchdogTimer` (attached box on real
+  hardware). All converge on the existing `wd_fire` → `trap_reset` hard reset.
+- **Not covered (v1):** a tight spin with interrupts disabled (no ISR, no main
+  loop, no TPL cycle) needs the PCH TCO hardware watchdog — separate silicon,
+  filed as a request, out of scope here.
+- **v1 action is `reboot`.** The arg slot accepts `reboot` explicitly (and is
+  where a future `revert` — roll back to known-good on next boot — will go). An
+  armed guard with no host traffic **will reset a healthy box** after the timeout:
+  that is the intended semantics, so arm it around a specific op and `safe` it (or
+  use the host `with link.guarded(15): …` helper, which arms then stands down on
+  return).
 
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
@@ -316,6 +360,8 @@ print(link.probe())            # [{'kind':2,'state':.., 'name':'heap', ...}, ...
 link.launch(0)
 print(link.eval("print(6*7)")) # ['42']
 print(link.devices())          # [{'loc':'01:00.0','vendor':'8086','driver':None, ...}, ...]
+with link.guarded(15):         # arm the dead-man's switch around a risky op;
+    link.command("iwl", "rerun")  # a wedge here resets the box, which re-dials
 link.on_command("save", lambda args: "saved " + args)  # pc64 -> host commands
 ```
 

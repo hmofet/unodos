@@ -29,6 +29,13 @@ int   pc64_shell_launch(int a);
 void  pc64_shell_close_top(void);
 void  uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
+/* host-attested guard (uno_debug.c) - the dead-man's switch behind `guard`/
+ * `pet`/`safe`. Declared locally (like uptime above) so this file needn't pull
+ * in uno_debug.h. arm(0) or clear() disarms; pet() refreshes if armed. */
+void  uno_dbg_guard_arm(unsigned timeout_ms);
+void  uno_dbg_guard_pet(void);
+void  uno_dbg_guard_clear(void);
+int   uno_dbg_guard_armed(void);
 int   pc64_stress_cfg_value(const char *key, char *buf, int cap);
 int   pc64_stress_cfg_flag(const char *key);
 int   pc64_shell_py_exec(const char *src, char *out, int cap);   /* pc64_uui.c */
@@ -738,10 +745,23 @@ __attribute__((weak)) int devmgr_list_str(char *buf, int cap)
     return -1;
 }
 
+/* session token echoed at `guard` arm; `safe` must present it (a stale disarm
+ * from a prior session must not stand a fresh guard down). Cheap, not secret. */
+static unsigned g_guard_token;
+
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
     if (!verb) { rsp(id, "err", "empty"); rsp(id, "end", 0); return; }
+
+    /* IMPLICIT CALL-HOME. Reaching here means a full inbound frame was received,
+     * parsed and dispatched - proof the box is alive end to end - so refresh the
+     * guard deadline for ANY command. A wedged command never returns to the
+     * dispatch loop and so never reaches the next frame's refresh: that is
+     * exactly what arms the reset. Refresh on receipt (before the handler runs)
+     * so the risky verb about to execute gets its full timeout window. No-op
+     * unless a guard is armed. See the `guard` verb + uno_dbg_guard_pet(). */
+    uno_dbg_guard_pet();
 
     if (!strcmp_(verb, "probe")) { do_probe(id); return; }
 
@@ -839,6 +859,50 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         rsp(id, ok ? "ok" : "err",
             ok ? "set" : "unavailable (detached / no runtime SetVariable)");
         rsp(id, "end", 0); return;
+    }
+    /* guard <timeout-s> [reboot] - arm the host-attested dead-man's switch
+     * BEFORE a risky verb (e.g. `iwl mvm` then `iwl rerun` into never-run
+     * firmware). If the box can't service an inbound URC command within
+     * <timeout-s> - the signature of a wedge that stops it from calling home -
+     * the debug watchdog ISR hard-resets it and it re-dials on its own. Any
+     * later inbound command refreshes the deadline (the implicit pet at the top
+     * of dispatch); `safe` stands it down once the op returns. v1: reboot is the
+     * only action; an explicit "reboot" word is accepted and ignored so the
+     * arg slot is stable for future actions (e.g. revert). */
+    if (!strcmp_(verb, "guard")) {
+        int secs = (int)atol_(tok(&args));
+        if (secs <= 0) {
+            rsp(id, "err", "usage: guard <timeout-s> [reboot]"); rsp(id, "end", 0); return;
+        }
+        g_guard_token = g_guard_token * 1664525u + 1013904223u
+                        + (unsigned)uno_dbg_uptime_ms();
+        uno_dbg_guard_arm((unsigned)secs * 1000u);
+        {
+            char t[64]; SB b; sb_init(&b, t, sizeof t);
+            sb_s(&b, "armed "); sb_i(&b, secs);
+            sb_s(&b, "s action=reboot token="); sb_i(&b, (long)g_guard_token);
+            t[b.len] = 0; rsp(id, "ok", t);
+        }
+        unoauto_log(UA_CH_SCRIPT, "guard armed %ds (token %u)", secs, g_guard_token);
+        rsp(id, "end", 0); return;
+    }
+    /* pet - explicit keep-alive for a legitimately long op. The refresh already
+     * happened implicitly at the top of dispatch; this just reports state so a
+     * host keep-alive loop has something to poll. */
+    if (!strcmp_(verb, "pet")) {
+        rsp(id, "ok", uno_dbg_guard_armed() ? "petted" : "not-armed");
+        rsp(id, "end", 0); return;
+    }
+    /* safe [token] - disarm; the guarded op returned, stand down. If a token is
+     * given it must match the one from `guard` (prevents a stale disarm from a
+     * previous session clearing a fresh guard). */
+    if (!strcmp_(verb, "safe")) {
+        char *a = tok(&args);
+        if (a && (unsigned)atol_(a) != g_guard_token) {
+            rsp(id, "err", "bad-token"); rsp(id, "end", 0); return;
+        }
+        uno_dbg_guard_clear();
+        rsp(id, "ok", "disarmed"); rsp(id, "end", 0); return;
     }
     /* nst <p1> <p2> - netsock self-test (debug): prove the multi-connection
      * layer. Open TWO simultaneous outbound TCP connections (to 10.0.2.2:p1 and
