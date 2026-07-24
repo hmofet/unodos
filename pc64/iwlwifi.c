@@ -1651,7 +1651,17 @@ static u32 g_sku_id[3];
  * (the ground-truth ftrace writes 0x7f8 = (2048-1) & ~7, matching our RXQ_N).
  * So: poll the cause, ack it, open the ring, and only then look for the
  * notification. */
-__attribute__((unused))
+/* out = pre + 8-hex-digit v + post; the verb path has no printf */
+static void uno_snprintf_hex(char *out, int cap, const char *pre, u32 v, const char *post)
+{
+    static const char hx[] = "0123456789abcdef";
+    int i = 0, k;
+    while (*pre && i < cap - 12) out[i++] = *pre++;
+    for (k = 0; k < 8 && i < cap - 2; k++) out[i++] = hx[(v >> ((7 - k) * 4)) & 0xF];
+    while (*post && i < cap - 1) out[i++] = *post++;
+    out[i] = 0;
+}
+
 static int wait_alive_cause(int timeout_ms)
 {
     int t;
@@ -1671,17 +1681,58 @@ static int wait_alive_cause(int timeout_ms)
     return -1;
 }
 
+/* The ALIVE handshake, driven step by step from the "iwl alive <n>" verb.
+ *
+ * Why a verb and not wait_alive(): running this inline wedged the machine twice,
+ * and URC log frames turn out to be flushed only when a command COMPLETES, so a
+ * mid-command crash takes every trace line with it - breadcrumbs and flush
+ * delays included (tested: not even the first line, emitted before anything
+ * risky, survived).  There is therefore no way to locate an inline crash from
+ * the log.  Behind a verb each step is a separate command that completes and
+ * flushes on its own, and "iwl rerun" stays on the known-good path so the rig
+ * is always usable.
+ *
+ *   iwl alive 1   take + ack the MSI-X ALIVE cause, release the automask
+ *   iwl alive 2   ... and open the RX ring (fw starts consuming RBDs)
+ *   iwl alive 3   ... and read the ALIVE notification out of the ring
+ *
+ * Steps 1 and 2 were each verified safe live via iwl csw before being coded
+ * (opening the ring moved RFH_Q0_FRBDCB_RIDX 0 -> 0x20).  Step 3 is the one
+ * that has never run against real firmware-written data. */
+static int alive_steps(int upto, char *out, int cap)
+{
+    u32 hw, ridx;
+    int len = 0;
+    const u8 *p;
+    if (!g_gen2) { strcpy(out, "err gen2 only"); return (int)strlen(out); }
+    hw = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+    if (!(hw & MSIX_HW_ALIVE)) {
+        uno_snprintf_hex(out, cap, "err no ALIVE cause (HW causes ", hw, ") - run 'iwl rerun' first");
+        return (int)strlen(out);
+    }
+    w32(CSR_MSIX_HW_INT_CAUSES_AD, hw);          /* write-1-to-clear */
+    w32(CSR_MSIX_AUTOMASK_ST_AD, 1u << 9);       /* release vector 9 */
+    if (upto < 2) { strcpy(out, "ok step1: ALIVE cause acked, automask released"); return (int)strlen(out); }
+
+    g_alive = 1;
+    w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);     /* open the RX ring */
+    mdelay_(20);
+    ridx = prph_r(RFH_Q0_FRBDCB_RIDX);
+    if (upto < 3) {
+        uno_snprintf_hex(out, cap, "ok step2: RX ring opened, RIDX=", ridx, " (nonzero = fw consuming RBDs)");
+        return (int)strlen(out);
+    }
+
+    p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, 1000);
+    if (!p) { strcpy(out, "step3: ring open but NO ALIVE notification in 1 s"); return (int)strlen(out); }
+    uno_snprintf_hex(out, cap, "ok step3: ALIVE NOTIFICATION READ, payload ", (u32)len, " bytes");
+    return (int)strlen(out);
+}
+
 static int wait_alive(int timeout_ms)
 {
     int len = 0;
     const u8 *p;
-    /* NOTE: acting on the ALIVE cause here - acking it, releasing the automask
-     * and opening the RX ring - wedged the machine twice, both times losing the
-     * log frames in flight, so there is no evidence yet for WHICH of those
-     * steps is unsafe.  The claim this round is the diagnosis, not the cure:
-     * the autopsy below now prints the MSI-X causes, and MSIX_HW_CAUSES bit 0
-     * reads 1 on every "failed" load.  Bringing the fw up from there is the
-     * next slice, on a rig that can be recovered without hands. */
     p = wait_notif(0, 0x1 /*UCODE_ALIVE_NTFY*/, &len, timeout_ms);
     if (!p) {
         /* F12 autopsy - every fleet machine timed out here, across gen2 AND
@@ -2500,6 +2551,14 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!strncmp(line, "alive", 5)) {
+        int upto = 1;
+        const char *q = line + 5;
+        while (*q == 0x20) q++;
+        if (*q >= 0x31 && *q <= 0x39) upto = *q - 0x30;
+        if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+        return alive_steps(upto, out, cap);
+    }
     if (!strncmp(line, "msix", 4)) {
         g_msix_arm = 1;
         strcpy(out, "MSI-X table arming ON - now run 'iwl rerun'");
