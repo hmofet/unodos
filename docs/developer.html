@@ -106,6 +106,7 @@ no host C library, no underlying OS. It ships two interchangeable desktops, sele
 <tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
 <tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
 <tr><td><strong>Drivers (tail)</strong></td><td>Intel e1000 / e1000e / igb NICs (plus a Realtek RTL816x driver) and the TCP/IP + TLS stack, xHCI USB with ASIX and Realtek USB Ethernet, native AHCI / NVMe / SDHCI and USB mass storage, HD&nbsp;Audio and AC'97 PCM audio, early Intel/Realtek/Marvell Wi-Fi (firmware loads, not yet connecting), uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
+<tr><td><strong>Device manager (unodevices)</strong></td><td>Enumerates the PCI tree into a registry that reports every device and which driver, if any, claimed it - surfaced on-device through the <code>devices</code> remote verb and <code>uno.devices()</code>/<code>uno.pci()</code>. Read-only introspection today; driver auto-binding is a planned phase. A <a href="dev-remote.html#hwwdt">hardware-watchdog</a> primitive (the PCH TCO) lives alongside it as the remote guard's last-resort backstop.</td></tr>
 </tbody>
 </table></div>
 

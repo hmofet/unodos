@@ -633,7 +633,14 @@ uno.quiet()
 uno.read(name) -> bytes                 # whole (small) file
 uno.read_at(vol, name, off, n) -> bytes # stream a big file a slice at a time
 uno.size(name) -> int                   # bytes, or -1 if missing
-uno.write(name, data) -> bool           # to a writable volume''')
+uno.write(name, data) -> bool           # to a writable volume
+uno.mkdir(vol, name) -> bool            # create one directory (parent must exist)
+
+# --- Devices: what hardware is on this machine (read-only) ---
+uno.devices() -> str                    # the device tree, one line per PCI function:
+                                        #   "bb:dd.f ven:dev cc/ss class driver|UNCLAIMED"
+uno.pci() -> list                       # the same, parsed for filtering:
+                                        #   [(loc, ven, dev, cls, subcls, progif, driver_or_None), ...]''')
 
 CODE_BUILD = code('''./build.sh                 # build the unoui desktop shell -> build/esp/
 ./build.sh run             # build, then boot it in QEMU + OVMF
@@ -1243,6 +1250,7 @@ no host C library, no underlying OS. It ships two interchangeable desktops, sele
 <tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
 <tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
 <tr><td><strong>Drivers (tail)</strong></td><td>Intel e1000 / e1000e / igb NICs (plus a Realtek RTL816x driver) and the TCP/IP + TLS stack, xHCI USB with ASIX and Realtek USB Ethernet, native AHCI / NVMe / SDHCI and USB mass storage, HD&nbsp;Audio and AC'97 PCM audio, early Intel/Realtek/Marvell Wi-Fi (firmware loads, not yet connecting), uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
+<tr><td><strong>Device manager (unodevices)</strong></td><td>Enumerates the PCI tree into a registry that reports every device and which driver, if any, claimed it - surfaced on-device through the <code>devices</code> remote verb and <code>uno.devices()</code>/<code>uno.pci()</code>. Read-only introspection today; driver auto-binding is a planned phase. A <a href="dev-remote.html#hwwdt">hardware-watchdog</a> primitive (the PCH TCO) lives alongside it as the remote guard's last-resort backstop.</td></tr>
 </tbody>
 </table></div>
 
@@ -1554,6 +1562,7 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <tr><td><code>blkdev</code> / <code>unostorage</code> / <code>fat</code></td><td>The storage stack: <code>blkdev</code> is raw 512-byte sector transport (native drivers + a firmware fallback); <code>fat</code> mounts + reads/writes FAT16/32 and formats it (<code>uno_fat_mkfs</code>); <code>unostorage</code> authors a GPT + ESP on a raw disk. The installer and the remote channel both wrap these rather than re-implementing them.</td></tr>
 <tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
+<tr><td><code>uno_devmgr</code> (unodevices)</td><td>The device manager: enumerates the whole PCI tree once into a registry (location, IDs, class, capabilities, BARs, parent bridge) and reports what is on the machine and which driver, if any, claimed each part. It backs the <code>devices</code> remote verb and the <code>uno.devices()</code>/<code>uno.pci()</code> Python calls. Phase&nbsp;1 is read-only introspection; driver auto-binding is a later phase. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/DEVICES.md" target="_blank" rel="noopener"><code>DEVICES.md</code></a>.</td></tr>
 <tr><td><code>net</code> / <code>e1000</code> / <code>e1000e</code> / <code>igb</code> / <code>r8169</code></td><td>Intel (8254x, 82571-4/82574, I217-9, I210/I211/I350) and Realtek (RTL8168/8111/8125) drivers, each publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, DNS, single-connection TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
@@ -1625,6 +1634,10 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>disks()</code></td><td>List raw disks (idx / name / sectors / writable / is_boot).</td></tr>
 <tr><td><code>arm(disk)</code> / <code>disarm()</code></td><td>Arm a disk for a destructive op (auto-disarms after one; refuses the boot disk).</td></tr>
 <tr><td><code>prepdisk(disk, label)</code></td><td>Partition + format a raw disk as a fresh FAT32 ESP (armed; the "prepare disk B" one-shot).</td></tr>
+<tr><td><code>mkdir(vol, path)</code></td><td>Create a directory on a volume (parent must exist).</td></tr>
+<tr><td><code>install(disk, make_default=False)</code> / <code>install_dir(disk, esp_dir)</code></td><td>Clone the running OS onto a prepared disk in one armed step, or lay down a freshly built ESP tree from your PC instead - the headless install.</td></tr>
+<tr><td><code>devices()</code></td><td>The machine's PCI devices as a list of dicts (keys: loc, vendor, device, cls, name, driver, raw) - what hardware is present and what has no driver yet.</td></tr>
+<tr><td><code>guard(secs, action="reboot")</code> / <code>pet()</code> / <code>safe()</code></td><td>Arm / keep-alive / stand down the dead-man's switch. <code>with link.guarded(secs): ...</code> arms on entry and stands down on exit, so a wedge inside the block resets the box.</td></tr>
 </tbody>
 </table></div>
 <p class="muted">The C contract underneath (<code>unoauto_log</code>, <code>unoauto_probe</code>,
@@ -1784,6 +1797,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
 <tr><td><code>guard &lt;secs&gt;</code> / <code>pet</code> / <code>safe</code></td><td>Arm a dead-man's switch before a risky command: if the box stops answering within the timeout, it resets itself and dials back in - the guard below.</td></tr>
 <tr><td><code>devices</code></td><td>List the machine's PCI devices and which driver claimed each one (or <code>UNCLAIMED</code>) - what hardware is here and what has no driver yet.</td></tr>
+<tr><td><code>hwwdt &lt;status|arm|pet|disarm&gt;</code></td><td>Read or drive the chipset's PCH TCO hardware watchdog - the guard's last-resort backstop for a wedge that has interrupts disabled. <code>status</code> reports whether a usable one was found; the rest drive it directly.</td></tr>
 <tr><td><code>iwl</code> / <code>eth</code></td><td>Poke a live network driver's registers - Intel Wi-Fi / Realtek Ethernet - reading and writing registers or retrying its bring-up, with no rebuild.</td></tr>
 <tr><td><code>disks</code> / <code>arm</code> / <code>prepdisk</code></td><td>List raw disks, arm one for a destructive op (it refuses the boot disk and echoes the target's size), and partition + format it - preparing a disk to install onto.</td></tr>
 <tr><td><code>mkdir</code> / <code>install</code></td><td>Create a directory on a volume, or clone the running OS onto a prepared disk in one armed step - the headless install below.</td></tr>
@@ -1852,6 +1866,19 @@ context manager that arms on the way in and stands down on the way out:</p>
     link.command(&quot;iwl&quot;, &quot;rerun&quot;)   # a wedge here resets the box, which reconnects</code></pre>
 {note('An armed guard <strong>will</strong> reset a perfectly healthy machine if it simply stops hearing from you (your PC goes to sleep, the network drops) - that is the whole point, so arm it around a specific risky step and <code>safe</code> it afterwards, or use <code>guarded(...)</code>, which does that for you. Debug builds only, like the rest of the channel.', kind="warn", title="It fires on silence, not just crashes")}
 
+<h3 id="hwwdt">The hardware backstop</h3>
+<p>The guard normally resets a wedged box from software - a heartbeat in the main loop, a timer interrupt, or the
+firmware watchdog. All three need the CPU to still be taking interrupts. The one failure they cannot catch is a
+tight loop that has turned interrupts <em>off</em> (or a true bus hang): nothing runs, so nothing resets the machine.
+For that last case UnoDOS can enlist separate silicon that does not care what the CPU is doing - the Intel
+<strong>PCH TCO hardware watchdog</strong>. When a usable one is present the guard arms it automatically, a little
+past the software timeout, so it only ever fires on the wedge software cannot reach. You can also drive it directly
+to check it is there:</p>
+<pre><code>hwwdt status      # is a usable TCO present on this chipset? which registers?
+hwwdt arm 20      # arm it for ~20s; if nothing pets it, the chipset resets the box
+hwwdt disarm</code></pre>
+{note('The hardware watchdog is only available where UnoDOS knows how to reach that chipset&rsquo;s registers <em>and</em> the firmware has not locked the timer. <code>hwwdt status</code> reports honestly: it says present only when it has proven the watchdog can actually fire. Where it cannot (some laptop firmwares lock it), the software guard still covers every wedge except the interrupts-off one. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/HWWATCHDOG.md" target="_blank" rel="noopener"><code>HWWATCHDOG.md</code></a>.', title="When it is available")}
+
 <h2 id="setup">Setting up a development environment</h2>
 <p>Putting the pieces together, a comfortable unoautomate workflow needs a one-time setup and then a tight
 loop:</p>
@@ -1893,6 +1920,11 @@ reading a log file after the fact. unoautomate collapses that:</p>
       retry the bring-up sequence - so you can try a fix in seconds and only rebuild once you know it works.
       Pair it with a <a href="#guard">guard</a> so a bad poke that hangs the card resets the box instead of
       stranding it.</li>
+  <li><strong>See what hardware is actually there.</strong> <code>devices</code> dumps the machine's whole
+      PCI tree - every function's location, IDs, class and which driver claimed it - so the first question of
+      any bring-up, "what is on this box and what has no driver yet?", is answered on-device instead of guessed
+      from a spec sheet. The same registry is a Python call away with <code>uno.pci()</code> for a script to
+      filter.</li>
 </ul>
 <p>The Intel Wi-Fi bring-up is the working example: the driver is iterated this way, its firmware-load
 sequence streamed back register by register while builds are pushed to the bench machine over the link.</p>

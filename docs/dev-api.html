@@ -221,6 +221,7 @@ int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 <tr><td><code>blkdev</code> / <code>unostorage</code> / <code>fat</code></td><td>The storage stack: <code>blkdev</code> is raw 512-byte sector transport (native drivers + a firmware fallback); <code>fat</code> mounts + reads/writes FAT16/32 and formats it (<code>uno_fat_mkfs</code>); <code>unostorage</code> authors a GPT + ESP on a raw disk. The installer and the remote channel both wrap these rather than re-implementing them.</td></tr>
 <tr><td><code>unosound</code></td><td>Single-voice sequencer; the shared audio path for the games, Music and Tracker (<code>uno_seq_beep</code> / <code>_play</code> / <code>_stop</code>). On pc64 the voice renders into an HD&nbsp;Audio / AC'97 PCM ring when one exists (<code>snd_pcm.c</code>), else the PC speaker.</td></tr>
 <tr><td><code>pc64_pci</code></td><td>PCI config scan; locates the e1000 NIC, xHCI controllers and the Intel iGPU.</td></tr>
+<tr><td><code>uno_devmgr</code> (unodevices)</td><td>The device manager: enumerates the whole PCI tree once into a registry (location, IDs, class, capabilities, BARs, parent bridge) and reports what is on the machine and which driver, if any, claimed each part. It backs the <code>devices</code> remote verb and the <code>uno.devices()</code>/<code>uno.pci()</code> Python calls. Phase&nbsp;1 is read-only introspection; driver auto-binding is a later phase. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/DEVICES.md" target="_blank" rel="noopener"><code>DEVICES.md</code></a>.</td></tr>
 <tr><td><code>net</code> / <code>e1000</code> / <code>e1000e</code> / <code>igb</code> / <code>r8169</code></td><td>Intel (8254x, 82571-4/82574, I217-9, I210/I211/I350) and Realtek (RTL8168/8111/8125) drivers, each publishing a <code>uno_nic_t</code>, plus a from-scratch stack: ARP, IPv4, ICMP, UDP, DHCP, DNS, single-connection TCP.</td></tr>
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
@@ -275,7 +276,14 @@ uno.quiet()
 uno.read(name) -&gt; bytes                 # whole (small) file
 uno.read_at(vol, name, off, n) -&gt; bytes # stream a big file a slice at a time
 uno.size(name) -&gt; int                   # bytes, or -1 if missing
-uno.write(name, data) -&gt; bool           # to a writable volume</code></pre>
+uno.write(name, data) -&gt; bool           # to a writable volume
+uno.mkdir(vol, name) -&gt; bool            # create one directory (parent must exist)
+
+# --- Devices: what hardware is on this machine (read-only) ---
+uno.devices() -&gt; str                    # the device tree, one line per PCI function:
+                                        #   &quot;bb:dd.f ven:dev cc/ss class driver|UNCLAIMED&quot;
+uno.pci() -&gt; list                       # the same, parsed for filtering:
+                                        #   [(loc, ven, dev, cls, subcls, progif, driver_or_None), ...]</code></pre>
 <p class="muted">This is the app-authoring module. The separate <code>unoauto</code> module below is the
 system-<em>automation</em> surface (probe, inject input, drive the machine) and exists only in debug builds.</p>
 
@@ -328,6 +336,10 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>disks()</code></td><td>List raw disks (idx / name / sectors / writable / is_boot).</td></tr>
 <tr><td><code>arm(disk)</code> / <code>disarm()</code></td><td>Arm a disk for a destructive op (auto-disarms after one; refuses the boot disk).</td></tr>
 <tr><td><code>prepdisk(disk, label)</code></td><td>Partition + format a raw disk as a fresh FAT32 ESP (armed; the "prepare disk B" one-shot).</td></tr>
+<tr><td><code>mkdir(vol, path)</code></td><td>Create a directory on a volume (parent must exist).</td></tr>
+<tr><td><code>install(disk, make_default=False)</code> / <code>install_dir(disk, esp_dir)</code></td><td>Clone the running OS onto a prepared disk in one armed step, or lay down a freshly built ESP tree from your PC instead - the headless install.</td></tr>
+<tr><td><code>devices()</code></td><td>The machine's PCI devices as a list of dicts (keys: loc, vendor, device, cls, name, driver, raw) - what hardware is present and what has no driver yet.</td></tr>
+<tr><td><code>guard(secs, action="reboot")</code> / <code>pet()</code> / <code>safe()</code></td><td>Arm / keep-alive / stand down the dead-man's switch. <code>with link.guarded(secs): ...</code> arms on entry and stands down on exit, so a wedge inside the block resets the box.</td></tr>
 </tbody>
 </table></div>
 <p class="muted">The C contract underneath (<code>unoauto_log</code>, <code>unoauto_probe</code>,
