@@ -841,3 +841,32 @@ have a fleet dump quietly stop short.
 topology gate is a separate file (`tools/devmgr_qemu.py`) that *imports* your
 `UnoAutoLink` and disk builder rather than adding a `QEMU_EXTRA` hook to your
 harness. If you would rather own such a hook, say so and I will drop mine.
+
+---
+
+## 2026-07-25 — CLAIM: unoscript proc.list wiring + shell proc-enumeration accessor
+
+Claiming the `proc` surface wiring in `unoscript` (UNOSCRIPT-NEXT-STEPS.md §3),
+plus the production shell accessor it delegates to. I hold both lanes this task
+(the unoscript wiring and the shell accessor), so I edit both directly and flag
+it here per AGENTS §4.
+
+**Design note (deviation from the roadmap's premise):** §3 named `unosched` as
+the owner of "process enumeration". `unosched/` is in fact the tiered
+concurrency-primitive library (COOP floor + SMP sync/job offload) — it has no
+PID/TID run-queue to enumerate, and pc64 is a single-address-space cooperative
+OS with no preemptive processes. So `proc.list` enumerates the **cooperative
+run-set** the `UNO_DEBUG` PROBE surface already reads (open apps/windows), now
+promoted to a production shell accessor — the same "un-gate the debug accessor"
+pattern §1/§2 used for ui.*/app.*. No `unosched` edit; no new subsystem row.
+
+- **Own this task:** `pc64_shell_proc_list()` (new, production, `pc64_uui.c`);
+  `usc_proc_list`/`usc_proc_inspect` wiring in `unoscript.c` (drop USC_EUNAVAIL).
+- **Consume, do NOT edit:** the shell's existing app/window state; the
+  `usc_proc_ent` schema (unoscript.h, unchanged).
+- **No shared-seam edits:** the `u.proc.list()` Python binding + module export
+  already landed with §1/§2 — nothing to append in `mod_unoscript.c`/modload.
+
+Row shape: `pid`=app slot index, `tid`=0 (cooperative), `state`=open|focused
+bits, `name`=app title, `owner`=`unosec_current_user()`, `v1/v2`=draw cost
+(cyc / max_us) when the F11 profiler is compiled in, else 0.
