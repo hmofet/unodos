@@ -809,6 +809,22 @@ static void release_nic(void)
     clr_bit_(CSR_GP_CNTRL, GP_CNTRL_MAC_ACCESS_REQ);
 }
 
+#if UNO_DEBUG
+/* Read `dwords` 32-bit words of device SRAM from `addr` into buf, via the HBUS
+ * auto-incrementing target-memory read port (write the base to RADDR once, then
+ * each RDAT read pulls the next word).  Mirrors iwl_trans_pcie_read_mem.  Needs
+ * NIC access; on grab failure the buffer is poisoned so a caller can tell.
+ * Debug-only: it exists purely to feed the iwl mem/iwl fwerr verbs. */
+static void mem_read(u32 addr, u32 *buf, int dwords)
+{
+    int i;
+    if (grab_nic() < 0) { for (i = 0; i < dwords; i++) buf[i] = 0xdeadbeef; return; }
+    w32(HBUS_TARG_MEM_RADDR, addr);
+    for (i = 0; i < dwords; i++) buf[i] = r32(HBUS_TARG_MEM_RDAT);
+    release_nic();
+}
+#endif
+
 static int rf_killed(void) { return (r32(CSR_GP_CNTRL) & GP_CNTRL_HW_RF_KILL_SW) ? 0 : 1; }
 
 /* =====================================================================
@@ -2858,6 +2874,56 @@ static int mvm_steps(int n, char *out, int cap)
     return (int)strlen(out);
 }
 
+#if UNO_DEBUG
+/* Look up the short assert name for an fw error_id (mask off the CPU bits),
+ * mirroring iwlwifi fw/img.c advanced_lookup[]. */
+static const char *fwerr_name(u32 id)
+{
+    static const struct { const char *n; u32 v; } t[] = {
+        {"NMI_INTERRUPT_WDG",0x34},{"SYSASSERT",0x35},{"UCODE_VERSION_MISMATCH",0x37},
+        {"BAD_COMMAND",0x38},{"BAD_COMMAND",0x39},{"NMI_INTERRUPT_DATA_ACTION_PT",0x3C},
+        {"FATAL_ERROR",0x3D},{"NMI_TRM_HW_ERR",0x46},{"NMI_INTERRUPT_TRM",0x4C},
+        {"NMI_INTERRUPT_BREAK_POINT",0x54},{"NMI_INTERRUPT_WDG_RXF_FULL",0x5C},
+        {"NMI_INTERRUPT_WDG_NO_RBD_RXF_FULL",0x64},{"NMI_INTERRUPT_HOST",0x66},
+        {"NMI_INTERRUPT_LMAC_FATAL",0x70},{"NMI_INTERRUPT_UMAC_FATAL",0x71},
+        {"NMI_INTERRUPT_OTHER_LMAC_FATAL",0x73},{"NMI_INTERRUPT_ACTION_PT",0x7C},
+        {"NMI_INTERRUPT_UNKNOWN",0x84},{"NMI_INTERRUPT_INST_ACTION_PT",0x86},
+        {"PNVM_MISSING",0x0010070d},
+    };
+    u32 m = id & ~0xf0000000u;   /* FW_SYSASSERT_CPU_MASK */
+    unsigned i;
+    for (i = 0; i < sizeof t / sizeof t[0]; i++) if (t[i].v == m) return t[i].n;
+    return "ADVANCED_SYSASSERT";
+}
+
+/* Dump the fw error-event tables (iwl_error_event_table @ g_lmac_err_ptr and
+ * iwl_umac_error_event_table @ g_umac_err_ptr, both parsed from the ALIVE
+ * notif) to the NET debug log.  This is how we learn *which* assert fired and
+ * where (error_id + name + program counter), instead of only that bit 25
+ * SW_ERR went high in 0x2808.  Word indices per fw/dump.c. */
+static void fwerr_dump(void)
+{
+    u32 L[24], U[15];
+    uno_dbg_net_trace("wifi: FWERR lmac_ptr=%08x umac_ptr=%08x", g_lmac_err_ptr, g_umac_err_ptr);
+    if (g_lmac_err_ptr) {
+        mem_read(g_lmac_err_ptr, L, 24);
+        uno_dbg_net_trace("wifi: LMAC valid=%08x error_id=%08x (%s) pc=%08x hcmd=%08x",
+                          L[0], L[1], fwerr_name(L[1]), L[20], L[23]);
+        uno_dbg_net_trace("wifi: LMAC blink2=%08x ilink1=%08x ilink2=%08x data1=%08x data2=%08x data3=%08x",
+                          L[4], L[5], L[6], L[7], L[8], L[9]);
+        uno_dbg_net_trace("wifi: LMAC ver maj=%08x min=%08x hw=%08x brd=%08x frame=%08x stack=%08x",
+                          L[16], L[17], L[18], L[19], L[21], L[22]);
+    }
+    if (g_umac_err_ptr) {
+        mem_read(g_umac_err_ptr, U, 15);
+        uno_dbg_net_trace("wifi: UMAC valid=%08x error_id=%08x (%s) frame=%08x stack=%08x cmd=%08x",
+                          U[0], U[1], fwerr_name(U[1]), U[11], U[12], U[13]);
+        uno_dbg_net_trace("wifi: UMAC blink1=%08x blink2=%08x ilink1=%08x ilink2=%08x data1=%08x data2=%08x data3=%08x",
+                          U[2], U[3], U[4], U[5], U[6], U[7], U[8]);
+    }
+}
+#endif /* UNO_DEBUG */
+
 int iwl_dbg_cmd(const char *line, char *out, int cap)
 {
     static const char hx[] = "0123456789abcdef";
@@ -2949,6 +3015,24 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     if (!strncmp(line, "prw ", 4))  { const char *p = line + 4;
         if (hex_u32(&p, &a) < 0 || hex_u32(&p, &v) < 0) return -1;
         prph_w(a, v); strcpy(out, "ok"); return 2; }
+#if UNO_DEBUG
+    if (!strncmp(line, "fwerr", 5)) {          /* dump the fw error-event tables */
+        fwerr_dump();
+        strcpy(out, "ok fwerr dumped to NET log (lmac/umac error tables)");
+        return (int)strlen(out); }
+    if (!strncmp(line, "mem ", 4))  {           /* iwl mem <hex> [nwords] */
+        const char *p = line + 4; u32 n = 8, buf[64]; unsigned j;
+        if (hex_u32(&p, &a) < 0) return -1;
+        while (*p == 0x20) p++;
+        if (*p && hex_u32(&p, &n) < 0) return -1;
+        if (n < 1) n = 1;
+        if (n > 64) n = 64;
+        mem_read(a, buf, (int)n);
+        for (j = 0; j < n; j += 4)
+            uno_dbg_net_trace("wifi: MEM %08x: %08x %08x %08x %08x", a + j*4,
+                              buf[j], j+1<n?buf[j+1]:0, j+2<n?buf[j+2]:0, j+3<n?buf[j+3]:0);
+        v = buf[0]; goto hexout; }
+#endif
     return -1;
 hexout:
     for (i = 0; i < 8; i++) out[i] = hx[(v >> ((7 - i) * 4)) & 0xF];
