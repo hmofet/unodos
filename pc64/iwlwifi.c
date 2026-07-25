@@ -1103,6 +1103,7 @@ static int g_dq_head, g_dq_tail;
 static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
 static void handle_eapol(const u8 *frame, int len);        /* fwd */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
+static int g_scanning;   /* beacons are only harvested while a scan is active */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 
 /* process one received RB: walk packed iwl_rx_packet records */
@@ -1141,7 +1142,7 @@ static void rx_process_rb(const u8 *rb, int cap,
                 (int)(frame - rb) + fl <= cap) {
                 u16 fc = (u16)(frame[0] | (frame[1] << 8));
                 int qos = ((fc >> 4) & 0xF) == 8;
-                if (((fc >> 2) & 3) == 0) scan_record_beacon(frame, fl);  /* mgmt: beacon/probe-resp */
+                if (g_scanning && ((fc >> 2) & 3) == 0) scan_record_beacon(frame, fl);  /* mgmt, scan only */
                 int hl = machdr ? machdr : (qos ? 26 : 24);
                 if (fl > hl + 8) {
                     const u8 *llc = frame + hl;
@@ -2209,11 +2210,12 @@ static int mvm_scan_passive(int dwell_ms)
     for (i = 0; i < 13; i++) { cmd.p.chan.cfg[i].num = (u8)(i + 1);
         cmd.p.chan.cfg[i].band = 0; cmd.p.chan.cfg[i].iter_count = 1; }
     cmd.p.per.sched[0].iter_count = 1;
-    g_scan_ap_n = 0;
+    g_scan_ap_n = 0; g_scanning = 1;
     send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, &cmd, (int)sizeof cmd);
     /* pump RX so beacons get recorded during the scan; SCAN_COMPLETE_UMAC comes
      * back in the LEGACY group as 0x0f, else we just poll for dwell_ms. */
     wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
+    g_scanning = 0;
     return g_scan_ap_n;
 }
 
