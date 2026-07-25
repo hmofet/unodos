@@ -147,6 +147,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>put</code> / <code>bootnext</code></td><td>Write a file to a volume and pick the next boot device - the A/B update below.</td></tr>
 <tr><td><code>guard &lt;secs&gt;</code> / <code>pet</code> / <code>safe</code></td><td>Arm a dead-man's switch before a risky command: if the box stops answering within the timeout, it resets itself and dials back in - the guard below.</td></tr>
 <tr><td><code>devices</code></td><td>List the machine's PCI devices and which driver claimed each one (or <code>UNCLAIMED</code>) - what hardware is here and what has no driver yet.</td></tr>
+<tr><td><code>hwwdt &lt;status|arm|pet|disarm&gt;</code></td><td>Read or drive the chipset's PCH TCO hardware watchdog - the guard's last-resort backstop for a wedge that has interrupts disabled. <code>status</code> reports whether a usable one was found; the rest drive it directly.</td></tr>
 <tr><td><code>iwl</code> / <code>eth</code></td><td>Poke a live network driver's registers - Intel Wi-Fi / Realtek Ethernet - reading and writing registers or retrying its bring-up, with no rebuild.</td></tr>
 <tr><td><code>disks</code> / <code>arm</code> / <code>prepdisk</code></td><td>List raw disks, arm one for a destructive op (it refuses the boot disk and echoes the target's size), and partition + format it - preparing a disk to install onto.</td></tr>
 <tr><td><code>mkdir</code> / <code>install</code></td><td>Create a directory on a volume, or clone the running OS onto a prepared disk in one armed step - the headless install below.</td></tr>
@@ -247,6 +248,19 @@ context manager that arms on the way in and stands down on the way out:</p>
     link.command(&quot;iwl&quot;, &quot;rerun&quot;)   # a wedge here resets the box, which reconnects</code></pre>
 <div class="note warn"><b>It fires on silence, not just crashes</b>An armed guard <strong>will</strong> reset a perfectly healthy machine if it simply stops hearing from you (your PC goes to sleep, the network drops) - that is the whole point, so arm it around a specific risky step and <code>safe</code> it afterwards, or use <code>guarded(...)</code>, which does that for you. Debug builds only, like the rest of the channel.</div>
 
+<h3 id="hwwdt">The hardware backstop</h3>
+<p>The guard normally resets a wedged box from software - a heartbeat in the main loop, a timer interrupt, or the
+firmware watchdog. All three need the CPU to still be taking interrupts. The one failure they cannot catch is a
+tight loop that has turned interrupts <em>off</em> (or a true bus hang): nothing runs, so nothing resets the machine.
+For that last case UnoDOS can enlist separate silicon that does not care what the CPU is doing - the Intel
+<strong>PCH TCO hardware watchdog</strong>. When a usable one is present the guard arms it automatically, a little
+past the software timeout, so it only ever fires on the wedge software cannot reach. You can also drive it directly
+to check it is there:</p>
+<pre><code>hwwdt status      # is a usable TCO present on this chipset? which registers?
+hwwdt arm 20      # arm it for ~20s; if nothing pets it, the chipset resets the box
+hwwdt disarm</code></pre>
+<div class="note"><b>When it is available</b>The hardware watchdog is only available where UnoDOS knows how to reach that chipset&rsquo;s registers <em>and</em> the firmware has not locked the timer. <code>hwwdt status</code> reports honestly: it says present only when it has proven the watchdog can actually fire. Where it cannot (some laptop firmwares lock it), the software guard still covers every wedge except the interrupts-off one. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/HWWATCHDOG.md" target="_blank" rel="noopener"><code>HWWATCHDOG.md</code></a>.</div>
+
 <h2 id="setup">Setting up a development environment</h2>
 <p>Putting the pieces together, a comfortable unoautomate workflow needs a one-time setup and then a tight
 loop:</p>
@@ -299,6 +313,11 @@ reading a log file after the fact. unoautomate collapses that:</p>
       retry the bring-up sequence - so you can try a fix in seconds and only rebuild once you know it works.
       Pair it with a <a href="#guard">guard</a> so a bad poke that hangs the card resets the box instead of
       stranding it.</li>
+  <li><strong>See what hardware is actually there.</strong> <code>devices</code> dumps the machine's whole
+      PCI tree - every function's location, IDs, class and which driver claimed it - so the first question of
+      any bring-up, "what is on this box and what has no driver yet?", is answered on-device instead of guessed
+      from a spec sheet. The same registry is a Python call away with <code>uno.pci()</code> for a script to
+      filter.</li>
 </ul>
 <p>The Intel Wi-Fi bring-up is the working example: the driver is iterated this way, its firmware-load
 sequence streamed back register by register while builds are pushed to the bench machine over the link.</p>

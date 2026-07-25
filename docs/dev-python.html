@@ -175,7 +175,14 @@ uno.quiet()
 uno.read(name) -&gt; bytes                 # whole (small) file
 uno.read_at(vol, name, off, n) -&gt; bytes # stream a big file a slice at a time
 uno.size(name) -&gt; int                   # bytes, or -1 if missing
-uno.write(name, data) -&gt; bool           # to a writable volume</code></pre>
+uno.write(name, data) -&gt; bool           # to a writable volume
+uno.mkdir(vol, name) -&gt; bool            # create one directory (parent must exist)
+
+# --- Devices: what hardware is on this machine (read-only) ---
+uno.devices() -&gt; str                    # the device tree, one line per PCI function:
+                                        #   &quot;bb:dd.f ven:dev cc/ss class driver|UNCLAIMED&quot;
+uno.pci() -&gt; list                       # the same, parsed for filtering:
+                                        #   [(loc, ven, dev, cls, subcls, progif, driver_or_None), ...]</code></pre>
 
 <h3 id="stream">Reading files without loading them whole</h3>
 <p><code>uno.read_at(vol, name, off, n)</code> reads a slice of a file at a byte offset, so a Python app can
