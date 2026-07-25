@@ -1672,6 +1672,21 @@ int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
     return sput(reply, cap, 0, "unknown-verb");
 }
 
+/* ---- running-process enumeration (unoscript proc.list / proc.inspect) ------
+ * pc64 is a single-address-space cooperative shell: there is no preemptive
+ * scheduler, so a "process" is an OPEN app slot - the same run-set the F11 /
+ * unoauto PROBE surface reports.  These production primitives let unoscript
+ * compose its usc_proc_ent rows (pid = app slot, name, focused) without
+ * reaching into shell internals.  `idx` is 0..pc64_shell_app_count()-1 and is
+ * stable for a boot (slot indices are fixed; EX_PYAPP/EX_USERAPP included, so a
+ * running Python automation app enumerates as a process too). */
+int pc64_shell_app_open(int idx)
+{ return (idx >= 0 && idx < NAPPS) ? g_open[idx] : 0; }
+const char *pc64_shell_app_name(int idx)
+{ return (idx >= 0 && idx < NAPPS) ? app_name(idx) : 0; }
+int pc64_shell_app_is_focused(int idx)
+{ return (idx >= 0 && idx < NAPPS) ? (focused_app() == idx) : 0; }
+
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
 int pc64_shell_font_mono(void)
 {
