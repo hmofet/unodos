@@ -31,8 +31,12 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
 2. ~~**shell — app control** (tier 0/1).~~ **DONE** (2026-07-23) —
    `app.count/launch/close_top` (tier 0) + `app.message` (tier 1) wired and
    QEMU-verified over URC. See §2.
-3. **unosched — process enumeration** (tier 2). The "what's running" surface;
-   also lands the thread→session binding `unosecure` already requested.
+3. ~~**process enumeration** (tier 2).~~ **DONE** (2026-07-25) — `proc.list`/
+   `proc.inspect` enumerate the shell's open-app run-set (pc64 has no preemptive
+   scheduler; `unosched` is the concurrency-primitive lib, not a run-queue), via
+   production `pc64_shell_app_open`/`_name`/`_is_focused`. QEMU-verified
+   (`tools/unoscript_qemu.py`): wired + tier-2 gated. See §3. The thread→session
+   binding remains a `unosecure` follow-up for when concurrent scripted tasks exist.
 4. **unofs — user-scoped file IO** (tier 1).
 5. **kernel — mem / io / reboot / syscall** (tier 2/3). The deep, dangerous
    surfaces; land last, most carefully, all audited.
@@ -98,22 +102,46 @@ window left the tree; `app.message()` was refused with no session (tier-1 gate).
 
 **Unlocked:** `unoscript.app.count/launch/close_top/message`.
 
-## 3. unosched — process/thread enumeration + inspect  ·  tier 2  ·  `proc.enum` / `proc.inspect`
+## 3. process enumeration + inspect  ·  tier 2  ·  `proc.enum` / `proc.inspect`  ·  DONE (2026-07-25)
 
-**Accessors:** fill `usc_proc_ent` rows (defined in `unoscript.h`:
-`{owner, pid, tid, state, name, v1, v2}`).
-```c
-int  unosched_enumerate(usc_proc_ent *out, int max);   /* -> usc_proc_list       */
-int  unosched_inspect(int pid, usc_proc_ent *out);     /* -> usc_proc_inspect    */
-```
-`v1`/`v2` carry sched detail (cpu-ms / stack use). **Also here:** the thread→
-session binding `unosecure` requested — on each context switch call
-`unosec_enter_session(task->sec_session)` / `unosec_leave()` so
-`unosec_current_user()` follows the running task once concurrent scripted tasks
-exist (contract in `UNOSECURE.md`; stopgap is `unoscript`'s enter/leave around a
-script body). Do both in the same pass.
+**Premise correction.** §3 originally named `unosched` as the owner of an
+`unosched_enumerate(usc_proc_ent*, int)` seam. `unosched/` is in fact the tiered
+**concurrency-primitive library** (COOP floor + SMP sync/`uno_job` offload) — it
+has no PID/TID run-queue. pc64 is a single-address-space cooperative OS with no
+preemptive processes, so there was nothing there to enumerate.
 
-**Unlocks:** `u.proc.list()` and per-process inspection.
+**Shipped.** The enumerable run-set is the shell's OPEN app slots — the same set
+the F11 profiler / `unoauto_probe` report — promoted from the `UNO_DEBUG`-only
+PROBE accessors to production, exactly as §1/§2 un-gated the ui/app accessors:
+- **Shell (`pc64_uui.c`):** `pc64_shell_app_open(idx)` / `pc64_shell_app_name(idx)`
+  / `pc64_shell_app_is_focused(idx)` (production), over the existing
+  `g_open`/`app_name`/`focused_app` state the launcher & taskbar already use.
+- **unoscript (`unoscript.c`):** `usc_proc_list` walks `0..pc64_shell_app_count()`,
+  emitting a `usc_proc_ent` per OPEN slot — `pid` = slot index (stable for a
+  boot), `tid` = 0 (single cooperative thread), `state` bit0 = focused,
+  `name` = app title, `owner` = `unosec_current_user()`. `usc_proc_inspect(pid)`
+  returns the one row (or `USC_EINVAL` for a closed/out-of-range pid). `v1/v2`
+  (cpu-ms/stack) are 0 — per-app draw cost lives only in the UNO_DEBUG profiler,
+  so it is not part of the production surface.
+
+The `u.proc.list()` Python binding (`mod_unoscript.c`) and the kExport already
+landed with §1/§2 — no seam edit was needed.
+
+**Verified** (`tools/unoscript_qemu.py`, QEMU over URC): `u.cap_tier('proc.enum')`
+== 2; unescalated `u.proc.list()` raises `OSError: EPERM: capability denied` (the
+guard, no longer the `NotImplementedError` "surface not wired" stub); `app.count`
+unregressed; launching an app makes it visible to a fresh PROBE (the enumeration
+source is live). prod + debug link green.
+
+**Deferred (not part of this surface):** the thread→session binding `unosecure`
+requested (`unosec_enter_session(task->sec_session)` on context switch) only
+matters once **concurrent** scripted tasks exist; today one script runs at a
+time and `unosec`'s enter/leave around the script body covers it. The
+authenticated "returns the right rows once escalated" end-to-end assertion is the
+cross-cutting deferred gate below; the C-level PROC_ENUM escalation flip is
+already proven by `unosec_selftest` (`-DUNO_SECTEST`).
+
+**Unlocked:** `u.proc.list()` and per-process inspection.
 
 ## 4. unofs — user-scoped file IO  ·  tier 1/2  ·  `fs.user` / `fs.sys`
 

@@ -196,10 +196,28 @@ so the security store lands on a writable volume.
   (`pc64_shell_app_*`, formerly debug-only); `app.message(idx, verb)` (tier 1)
   is a minimal shell-verb seam — `info`/`focus`/`close` by app index
   (`pc64_shell_app_message`). QEMU-verified over URC.
+- **`proc.*` (shell run-set, tier 2) — DONE 2026-07-25.** `proc.list()` /
+  `proc.inspect(pid)` enumerate the cooperative run-set. pc64 has no preemptive
+  scheduler (`unosched` is the concurrency-primitive library, not a run-queue),
+  so a "process" is an **open app slot** — the same set F11 / unoauto PROBE
+  report — promoted from the debug-only PROBE accessors to production
+  (`pc64_shell_app_open`/`_name`/`_is_focused`). A row is
+  `(pid, tid, state, name, owner)`: `pid` = app slot (stable for a boot),
+  `tid` = 0 (single cooperative thread), `state` bit0 = focused, `owner` = the
+  acting identity; `v1/v2` (cpu-ms/stack) are 0 — per-app draw cost lives only
+  in the UNO_DEBUG profiler. QEMU-verified over URC (`tools/unoscript_qemu.py`):
+  tier 2, and denied without a session — the guard, not a stub. Example:
 
-The remaining **surface seams** (unofs user-scoped IO, unosched enumeration,
-kernel mem/io + reboot/suspend, the hook registry) are still `USC_EUNAVAIL` until
-each owner wires its accessor — so a *permitted* tier≥1 op returns
-NotImplementedError rather than OSError(EPERM). The privilege gate is live; the
-plumbing behind it lights up per-subsystem. Tiers 0–1 (UI + apps) now give a
-genuinely useful scripting OS; tiers 2–3 (proc/fs/kernel/hook) trail.
+  ```python
+  import unoscript as u
+  u.request("proc.enum")                 # tier-2: prompt / role / autogrant
+  for pid, tid, state, name, owner in u.proc.list():
+      print(pid, name, "focused" if state & 1 else "")
+  ```
+
+The remaining **surface seams** (unofs user-scoped IO, kernel mem/io +
+reboot/suspend, the hook registry) are still `USC_EUNAVAIL` until each owner
+wires its accessor — so a *permitted* tier≥1 op returns NotImplementedError
+rather than OSError(EPERM). The privilege gate is live; the plumbing behind it
+lights up per-subsystem. Tiers 0–2 (UI + apps + proc) now give a genuinely
+useful scripting OS; the deeper fs/kernel/hook surfaces trail.
