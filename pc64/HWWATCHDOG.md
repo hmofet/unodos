@@ -106,15 +106,21 @@ actually enumerated. `status` dumps every discovery register (`abase`,
 `acpi_cntl`, `smb_tcobase`, `smb_tcoctl`, `gen_pmcon_a`, `fw=`, `tco1_cnt_fw`) so
 a new chipset is diagnosable from one URC round-trip.
 
-**Open on v3 (the Yoga):** an armed TCO does not yet actually reset the box — the
-timer stays halted (`rld` frozen), which points to the firmware having **locked
-`TCO1_CNT` (`TCO_LOCK`, bit 12)**, the way coreboot's `tco_lockdown` does.
-`present()` now honestly requires the halt bit be clearable and refuses a locked
-TCO (`absent (TCO1_CNT firmware-locked)`), so it never claims a guard it can't
-deliver. Whether this Yoga's Lenovo firmware locks the TCO — and thus whether the
-hardware backstop is achievable on it while attached — is the remaining metal
-question; the diagnostic `tco1_cnt_fw` field answers it. The **ZimaBlade** (SoC
-PMC GCR) is a separate, not-yet-implemented method → `present()==0`.
+**Confirmed on the Yoga — its firmware locks the TCO.** The live read is
+`tco1_cnt_fw=0x1800`: `TCO_LOCK` (bit 12) **and** `TCO_TMR_HLT` (bit 11) both set.
+Lenovo's UEFI locks `TCO1_CNT` with the timer halted (the way coreboot's
+`tco_lockdown` does), and `TCO_LOCK` is write-once until a platform reset, so the
+OS **cannot** un-halt the timer. Discovery is otherwise perfect (LPC `8086:0284`,
+SMBus TCOBASE `0x400`, PMC `GEN_PMCON_A` with `NO_REBOOT` already clear), but the
+timer can never fire — so `present()` honestly returns
+`absent (TCO1_CNT firmware-locked (TCO_LOCK))`. **Consequence:** the PCH TCO
+hardware backstop is **not achievable on this Yoga under its stock firmware**; the
+IRQs-off wedge there still needs a power cycle (or a firmware that leaves the TCO
+unlocked, or a different mechanism — an NMI-delivered LAPIC/perfmon watchdog,
+which a `cli` spin cannot mask, is the natural follow-up). A v2/RCBA box or a CML
+box whose firmware does **not** lock the TCO would reach `present()==1` and reset;
+the v3 code is correct and ready for those. The **ZimaBlade** (SoC PMC GCR) is a
+separate, not-yet-implemented method → `present()==0`.
 
 ## 5. Integration with the guard `[WIRED]`
 
@@ -198,10 +204,11 @@ lanes; see `UNOAUTOMATE-REQUESTS.md`.
   so it refuses a locked TCO instead of claiming a guard it can't deliver. The
   guard arms/pets/disarms the TCO via a weak-symbol seam in `uno_debug.c` (guard
   window + 8 s). Host gate: 9 scenarios / 35 checks (added `tco-locked`), green;
-  QEMU v2 smoke green. **Not yet proven on the Yoga:** the armed timer does not
-  reset the box (`rld` frozen → likely firmware `TCO_LOCK`); the `tco1_cnt_fw`
-  dump is the pending metal read. `status` now dumps every discovery register for
-  on-chip diagnosis. Metal validation on the live Yoga: see
+  QEMU v2 smoke green. **Metal result (CML Yoga):** discovery is perfect but the
+  box's firmware **locks the TCO** (`tco1_cnt_fw=0x1800` — `TCO_LOCK`+HLT), which
+  the OS can't clear, so `present()` correctly returns absent — the hardware
+  backstop is unavailable on this Yoga under stock firmware. `status` dumps every
+  discovery register for on-chip diagnosis. Full metal notes: see
   the run note below / `UNOAUTOMATE-REQUESTS.md`.
 - **2026-07-24 — UNO_HW_WDT_API 1 (initial):** the TCO primitive lands. Four-call
   surface (`present`/`arm`/`pet`/`disarm`) + `status`; UNO_DEBUG-gated, prod
