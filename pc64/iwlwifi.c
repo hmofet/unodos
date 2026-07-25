@@ -846,7 +846,7 @@ static u64 g_rbd_used[RXQ_N]      __attribute__((aligned(256)));  /* mq used/com
 static u8  g_rb[RXQ_N][RB_SIZE]   __attribute__((aligned(4096)));
 
 static u8  g_cmd_ring[CMDQ_N * 256]  __attribute__((aligned(256)));  /* TFD or TFH per slot */
-static u8  g_cmd_buf[CMDQ_N][512]     __attribute__((aligned(64)));   /* per-slot command DRAM */
+static u8  g_cmd_buf[CMDQ_N][2048]    __attribute__((aligned(64)));   /* per-slot command DRAM (2K: UMAC scan v17 ~1940 B) */
 static u8  g_cmd_firsttb[CMDQ_N][64]  __attribute__((aligned(64)));   /* 20-byte scratch (bidir) */
 static u16 g_cmd_bc[CMDQ_N + 64]      __attribute__((aligned(64)));   /* byte-count table */
 
@@ -1102,6 +1102,7 @@ static int g_dq_head, g_dq_tail;
 
 static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
 static void handle_eapol(const u8 *frame, int len);        /* fwd */
+static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 
 /* process one received RB: walk packed iwl_rx_packet records */
@@ -1140,6 +1141,7 @@ static void rx_process_rb(const u8 *rb, int cap,
                 (int)(frame - rb) + fl <= cap) {
                 u16 fc = (u16)(frame[0] | (frame[1] << 8));
                 int qos = ((fc >> 4) & 0xF) == 8;
+                if (((fc >> 2) & 3) == 0) scan_record_beacon(frame, fl);  /* mgmt: beacon/probe-resp */
                 int hl = machdr ? machdr : (qos ? 26 : 24);
                 if (fl > hl + 8) {
                     const u8 *llc = frame + hl;
@@ -2135,6 +2137,86 @@ static void handle_eapol(const u8 *frame, int len)
 /* =====================================================================
  * 12. connect: scan for the SSID, then run the assoc + 4-way handshake
  * ===================================================================== */
+/* ---- UMAC passive scan (SCAN_REQ_UMAC cmd_ver 15 = the v17 struct family) --
+ * cmd_ver 15 (per tools/iwl_cmd_versions.py) uses iwl_scan_req_umac_v17, which
+ * covers fw versions 14-17.  Passive scan needs no probe-request template: we
+ * just listen for beacons on the 2.4 GHz channels and record BSSID/SSID/channel
+ * so a real join can target a real AP (the old find_and_join used a broadcast
+ * BSSID, which wedged ADD_STA).  Layout mirrors ~/n9/kernel fw/api/scan.h; the
+ * static assert below catches any drift from the 1940 B the fw expects. */
+struct sc_chan  { u32 flags; u8 num; u8 band; u8 iter_count; u8 iter_interval; } __attribute__((packed));
+struct sc_gen   { u16 flags; u8 rsv; u8 mac_or_link; u8 active_dwell[2]; u8 adw2g; u8 adw5g;
+                  u8 adw_social; u8 flags2; u16 adw_budget; u32 max_out[2]; u32 suspend[2];
+                  u32 priority; u8 passive_dwell[2]; u8 num_frags[2]; } __attribute__((packed));
+struct sc_chanp { u8 flags; u8 count; u8 n_aps[2]; struct sc_chan cfg[67]; } __attribute__((packed));
+struct sc_sched { u16 interval; u8 iter_count; u8 rsv; } __attribute__((packed));
+struct sc_per   { struct sc_sched sched[2]; u16 delay; u16 rsv; } __attribute__((packed));
+struct sc_seg   { u16 off; u16 len; } __attribute__((packed));
+struct sc_preq  { struct sc_seg mac_hdr; struct sc_seg band[3]; struct sc_seg common; u8 buf[512]; } __attribute__((packed));
+struct sc_ssid  { u8 id; u8 len; u8 ssid[32]; } __attribute__((packed));
+struct sc_probe { struct sc_preq preq; u8 short_ssid_num; u8 bssid_num; u16 rsv;
+                  struct sc_ssid direct[20]; u32 short_ssid[8]; u8 bssid_arr[16][6]; } __attribute__((packed));
+struct sc_reqp  { struct sc_gen gen; struct sc_chanp chan; struct sc_per per; struct sc_probe probe; } __attribute__((packed));
+struct sc_umac  { u32 uid; u32 ooc; struct sc_reqp p; } __attribute__((packed));
+typedef char _sc_umac_sz_check[(sizeof(struct sc_umac) == 1940) ? 1 : -1];
+
+#define SCAN_AP_MAX 24
+static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen; } g_scan_aps[SCAN_AP_MAX];
+static int g_scan_ap_n;
+
+static void scan_record_beacon(const u8 *frame, int fl)
+{
+    u16 fc; int subtype, ielen, i;
+    const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0;
+    if (fl < 36) return;
+    fc = (u16)(frame[0] | (frame[1] << 8));
+    if (((fc >> 2) & 3) != 0) return;                 /* management frames only */
+    subtype = (fc >> 4) & 0xF;
+    if (subtype != 8 && subtype != 5) return;         /* beacon (8) / probe-resp (5) */
+    bssid = frame + 16;                               /* addr3 */
+    ie = frame + 36; ielen = fl - 36;                 /* skip ts(8)+bint(2)+cap(2) after the 24 B hdr */
+    for (i = 0; i + 2 <= ielen; ) {
+        int id = ie[i], ln = ie[i + 1];
+        if (i + 2 + ln > ielen) break;
+        if (id == 0 && ln <= 32) { ssid = ie + i + 2; ssid_len = ln; }
+        else if (id == 3 && ln >= 1) chan = ie[i + 2];
+        i += 2 + ln;
+    }
+    for (i = 0; i < g_scan_ap_n; i++)
+        if (!memcmp(g_scan_aps[i].bssid, bssid, 6)) {
+            g_scan_aps[i].seen++; if (chan) g_scan_aps[i].chan = chan; return; }
+    if (g_scan_ap_n >= SCAN_AP_MAX) return;
+    { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
+      memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
+      if (ssid && ssid_len <= 32) { memcpy(a->ssid, ssid, ssid_len); a->ssid[ssid_len] = 0; }
+      else a->ssid[0] = 0; }
+}
+
+static u32 g_scan_uid = 1;
+static int mvm_scan_passive(int dwell_ms)
+{
+    static struct sc_umac cmd;      /* ~1940 B, .bss */
+    int i;
+    memset(&cmd, 0, sizeof cmd);
+    cmd.uid = g_scan_uid++;
+    cmd.ooc = 6;                                              /* IWL_SCAN_PRIORITY_EXT_6 */
+    cmd.p.gen.flags = (1u<<1) | (1u<<2) | (1u<<9) | (1u<<11); /* PASS_ALL|NTFY_ITER|NTF_START|FORCE_PASSIVE */
+    cmd.p.gen.active_dwell[0] = cmd.p.gen.active_dwell[1] = 10;
+    cmd.p.gen.passive_dwell[0] = cmd.p.gen.passive_dwell[1] = 110;
+    cmd.p.gen.adw2g = 2; cmd.p.gen.adw5g = 2; cmd.p.gen.adw_social = 10;
+    cmd.p.gen.priority = 6;
+    cmd.p.chan.count = 13;
+    for (i = 0; i < 13; i++) { cmd.p.chan.cfg[i].num = (u8)(i + 1);
+        cmd.p.chan.cfg[i].band = 0; cmd.p.chan.cfg[i].iter_count = 1; }
+    cmd.p.per.sched[0].iter_count = 1;
+    g_scan_ap_n = 0;
+    send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, &cmd, (int)sizeof cmd);
+    /* pump RX so beacons get recorded during the scan; SCAN_COMPLETE_UMAC comes
+     * back in the LEGACY group as 0x0f, else we just poll for dwell_ms. */
+    wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
+    return g_scan_ap_n;
+}
+
 static int find_and_join(void)
 {
     int chan = 0;
@@ -2662,6 +2744,24 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!strncmp(line, "scan", 4)) {
+        int n, i;
+        if (!g_bar || !g_alive) { strcpy(out, "err fw not ALIVE - run 'iwl rerun' (then 'iwl mvm 1') first"); return (int)strlen(out); }
+        mvm_scan_cfg();
+        n = mvm_scan_passive(5000);
+        for (i = 0; i < n; i++)
+            uno_dbg_net_trace("wifi: scan[%d] %02x:%02x:%02x:%02x:%02x:%02x ch=%d seen=%d ssid=\"%s\"",
+                              i, g_scan_aps[i].bssid[0], g_scan_aps[i].bssid[1], g_scan_aps[i].bssid[2],
+                              g_scan_aps[i].bssid[3], g_scan_aps[i].bssid[4], g_scan_aps[i].bssid[5],
+                              g_scan_aps[i].chan, g_scan_aps[i].seen, g_scan_aps[i].ssid);
+        { char *o = out; const char *pre = "ok scan done: "; int v = n, j;
+          char digs[8]; int m = 0;
+          while (*pre) *o++ = *pre++;
+          if (v == 0) digs[m++] = '0'; else { while (v) { digs[m++] = (char)('0' + v % 10); v /= 10; } }
+          for (j = m - 1; j >= 0; j--) *o++ = digs[j];
+          pre = " APs (detail in NET log)"; while (*pre) *o++ = *pre++; *o = 0; }
+        return (int)strlen(out);
+    }
     if (!strncmp(line, "mvm", 3)) {
         const char *q = line + 3;
         while (*q == 0x20) q++;
