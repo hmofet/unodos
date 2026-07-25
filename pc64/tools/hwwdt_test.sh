@@ -10,7 +10,7 @@ ${CC:-cc} -O1 -Wall -Wextra -Werror -DUNO_DEBUG -DHWWDT_HOSTTEST -I. \
     -o "$OUT" tools/hwwdt_test.c uno_hw_wdt.c
 
 rc=0
-for scen in present cml cml-locked locked foreign noacpi norcba nolpc; do
+for scen in present cml cml-locked tco-locked locked foreign noacpi norcba nolpc; do
     echo "== scenario: $scen =="
     "$OUT" "$scen" || rc=1
 done

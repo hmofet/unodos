@@ -90,13 +90,29 @@ static inline u16 io_in16(u32 p)
 
 /* --- register map ---------------------------------------------------------- */
 
-/* LPC (ISA-bridge) config registers */
-#define LPC_ACPI_BASE   0x40    /* PMBASE/ABASE: I/O base of the ACPI block   */
-#define LPC_ACPI_EN_BIT 0x01    /* bit 0 of the ACPI base dword = decode on    */
+/* LPC/eSPI (ISA-bridge) config registers.  ABASE + ACPI_CNTL are stable across
+ * ICH .. Comet Lake; the decode-enable is ACPI_CNTL bit 7, NOT a bit of ABASE
+ * (ABASE bit 0 is just the I/O-space indicator - accidentally 1 on QEMU ich9,
+ * but 0 on CML, which is why checking it there wrongly read "decode off"). */
+#define LPC_ACPI_BASE   0x40    /* ABASE/PMBASE: I/O base of the ACPI block     */
+#define LPC_ACPI_BASE_MASK 0xFF80u
+#define LPC_ACPI_CNTL   0x44    /* ACPI_CNTL                                    */
+#define LPC_ACPI_EN     0x80    /* ACPI_CNTL bit 7 = ACPI I/O decode enabled    */
 #define LPC_RCBA        0xF0    /* Root Complex Base Address (MMIO)            */
 #define LPC_RCBA_EN     0x01    /* bit 0 = RCBA enabled                        */
 
-#define ACPI_TCOBASE_OFF 0x60   /* TCO I/O block = ACPIBASE + 0x60             */
+#define ACPI_TCOBASE_OFF 0x60   /* v2: TCO I/O block = LPC ABASE + 0x60         */
+
+/* v3 (Skylake..CML): the TCO I/O base is NOT off the LPC ABASE - it lives in the
+ * SMBus function (00:1f.4, class 0c/05) config space, register TCOBASE (0x50,
+ * bits 15:5), gated by TCOCTL (0x54) bit 8 = TCO_BASE_EN.  (Confirmed on the
+ * live CML-U Yoga: LPC 0x40/0x44 read 0; the TCO base is the SMBus one.) */
+#define SMBUS_CLASS      0x0C
+#define SMBUS_SUBCLASS   0x05
+#define SMBUS_TCOBASE    0x50   /* SMBus config: TCO I/O base (& 0xFFE0)        */
+#define SMBUS_TCOCTL     0x54   /* SMBus config: bit 8 = TCO_BASE_EN           */
+#define SMBUS_TCO_BASE_EN (1u<<8)
+#define SMBUS_TCOBASE_MASK 0xFFE0u
 
 #define RCBA_GCS        0x3410  /* General Control & Status (MMIO, off RCBA)   */
 #define GCS_NO_REBOOT   (1u<<5) /* GCS bit 5 = No Reboot (NR)  [iTCO v2, 0x20] */
@@ -127,7 +143,8 @@ static inline u16 io_in16(u32 p)
 #define TCO1_STS_TIMEOUT   (1u<<3)
 #define TCO2_STS_SECOND_TO (1u<<1)
 #define TCO2_STS_BOOT      (1u<<0)
-#define TCO1_CNT_HLT       (1u<<11)
+#define TCO1_CNT_HLT       (1u<<11)  /* TCO_TMR_HLT: 1 = timer halted            */
+#define TCO1_CNT_LOCK      (1u<<12)  /* TCO_LOCK: firmware froze TCO1_CNT[11:0]  */
 
 /* TCO ticks are ~0.6 s.  Represent the period internally in ticks. */
 #define TCO_TICK_NUM 3          /* seconds-per-tick = 3/5 = 0.6 s              */
@@ -152,6 +169,13 @@ static u32  g_nrbefore;         /* raw NO_REBOOT reg value as firmware left it  
 static int  g_present;          /* usable + NO_REBOOT confirmed clear           */
 static int  g_armed;
 static u16  g_period_ticks;     /* single-timeout period currently programmed   */
+/* discovery diagnostics (dumped by status, so an absent result is explainable
+ * from one URC round-trip on a new chipset rather than guessed at) */
+static u16  g_lpc_ven, g_lpc_dev;
+static u32  g_abase_raw, g_actl_raw;             /* v2: LPC ABASE + ACPI_CNTL     */
+static u32  g_smbus_tcobase_raw, g_smbus_tcoctl_raw;  /* v3: SMBus TCOBASE/TCOCTL */
+static u16  g_tco1_cnt_raw;                       /* TCO1_CNT as firmware left it  */
+static const char *g_absent_why = "not probed";
 
 /* seconds -> single-timeout ticks, halving for the two-timeout reboot, clamped */
 static u16 secs_to_ticks(unsigned seconds, u16 lo, u16 hi)
@@ -199,6 +223,24 @@ static u32 find_pwrmbase(void)
     return PWRMBASE_FIXED;                  /* PMC present, BAR hidden: fixed base */
 }
 
+/* v3 TCO I/O base: the SMBus function's TCOBASE register (00:1f.4 config 0x50),
+ * gated by TCOCTL (0x54) bit 8.  Records the raw reads for the status dump.
+ * Returns the I/O base, or 0 if no enabled TCOBASE. */
+static u32 find_tcobase_smbus(void)
+{
+    uno_device *d = devmgr_find_class(SMBUS_CLASS, SMBUS_SUBCLASS);
+    pci_dev sm;
+    u32 base, ctl;
+    if (!d || d->bus_type != UNO_BUS_PCI || d->vendor != 0x8086) return 0;
+    sm.bus = d->addr.pci.bus; sm.dev = d->addr.pci.dev; sm.fn = d->addr.pci.fn;
+    sm.vendor = d->vendor; sm.device = d->device;
+    base = pci_cfg_read32(&sm, SMBUS_TCOBASE);
+    ctl  = pci_cfg_read32(&sm, SMBUS_TCOCTL);
+    g_smbus_tcobase_raw = base; g_smbus_tcoctl_raw = ctl;
+    if (!(ctl & SMBUS_TCO_BASE_EN)) return 0;           /* TCO base not enabled   */
+    return base & SMBUS_TCOBASE_MASK;
+}
+
 /* Locate the PCH LPC function via the device tree and read its bases.  Uses the
  * enumerated uno_devmgr registry (the request's "get it via the device tree you
  * already enumerate"); falls back to a direct class scan only if the tree is
@@ -207,12 +249,13 @@ static void probe(void)
 {
     pci_dev lpc;
     uno_device *d, *d0;
-    u32 abase, rcba;
+    u32 abase, actl, rcba;
     int lpc_idx = -1;
 
     g_probed = 1;
     g_gen = WDT_NONE; g_tcobase = 0; g_nrreg = 0; g_nrmask = 0; g_nrbefore = 0;
-    g_present = 0;
+    g_present = 0; g_abase_raw = 0; g_actl_raw = 0; g_lpc_ven = 0; g_lpc_dev = 0;
+    g_absent_why = "no LPC bridge";
 
     d = devmgr_find_class(0x06, 0x01);          /* ISA bridge = the PCH LPC     */
     if (d && d->bus_type == UNO_BUS_PCI) {
@@ -223,39 +266,71 @@ static void probe(void)
     } else if (!pci_find_class(0x06, 0x01, &lpc)) {
         return;                                  /* no LPC bridge: no TCO here   */
     }
+    g_lpc_ven = lpc.vendor; g_lpc_dev = lpc.device;
 
     /* Intel only: the ACPI-base + RCBA + TCO layout below is Intel PCH.  A
      * non-Intel south bridge (e.g. AMD FCH) has a different watchdog entirely. */
+    g_absent_why = "non-Intel LPC";
     if (lpc.vendor != 0x8086) return;
 
-    abase = pci_cfg_read32(&lpc, LPC_ACPI_BASE);
-    if (!(abase & LPC_ACPI_EN_BIT)) return;      /* ACPI I/O decode disabled     */
-    g_tcobase = (abase & 0xFF80u) + ACPI_TCOBASE_OFF;
-    if (!g_tcobase) return;
-
+    /* The generation split is RCBA: present => ICH6..6-series PCH (v2, TCO off
+     * the LPC ABASE, NO_REBOOT in RCBA GCS); absent => Skylake..CML PCH-LP (v3,
+     * TCO off the SMBus TCOBASE, NO_REBOOT in the PMC GEN_PMCON_A). */
     rcba = pci_cfg_read32(&lpc, LPC_RCBA);
-    if (rcba & LPC_RCBA_EN) {                     /* ICH6..6-series PCH: RCBA GCS  */
+    if (rcba & LPC_RCBA_EN) {                     /* v2: LPC ABASE + RCBA GCS      */
+        abase = pci_cfg_read32(&lpc, LPC_ACPI_BASE);
+        actl  = pci_cfg_read32(&lpc, LPC_ACPI_CNTL);
+        g_abase_raw = abase; g_actl_raw = actl;
+        g_absent_why = "ACPI decode off (ACPI_CNTL bit7)";
+        if (!(actl & LPC_ACPI_EN)) return;
+        g_tcobase = (abase & LPC_ACPI_BASE_MASK) + ACPI_TCOBASE_OFF;
+        g_absent_why = "no ABASE";
+        if ((abase & LPC_ACPI_BASE_MASK) == 0) { g_tcobase = 0; return; }
         g_nrreg  = (u64)(rcba & 0xFFFFC000u) + RCBA_GCS;
         g_nrmask = GCS_NO_REBOOT;
         g_gen = WDT_V2;
-    } else {                                       /* Skylake..CML: PMC GEN_PMCON_A */
-        u32 pwrm = find_pwrmbase();
-        if (pwrm) {
-            g_nrreg  = (u64)pwrm + PWRM_GEN_PMCON_A;
-            g_nrmask = PMCON_A_NO_REBOOT;
-            g_gen = WDT_V3;
-        } else {
-            g_gen = WDT_V1;                        /* truly unsupported            */
-        }
+    } else {                                       /* v3: SMBus TCOBASE + PMC       */
+        u32 pwrm;
+        g_absent_why = "no SMBus TCOBASE (TCOCTL bit8)";
+        g_tcobase = find_tcobase_smbus();
+        if (!g_tcobase) return;
+        g_absent_why = "no RCBA + no PMC (NO_REBOOT home unknown)";
+        pwrm = find_pwrmbase();
+        if (!pwrm) { g_gen = WDT_V1; return; }     /* TCO found but can't reboot it */
+        g_nrreg  = (u64)pwrm + PWRM_GEN_PMCON_A;
+        g_nrmask = PMCON_A_NO_REBOOT;
+        g_gen = WDT_V3;
     }
 
-    /* Take the TCO over cleanly: halt it, then try to clear NO_REBOOT.  Only
-     * claim presence if the box can actually be rebooted by the timer. */
-    {
-        u16 cnt = IO_IN16(g_tcobase + TCO1_CNT);
-        IO_OUT16(g_tcobase + TCO1_CNT, cnt | TCO1_CNT_HLT);   /* halt first     */
+    /* Take the TCO over cleanly and prove it is actually usable.  Record the
+     * firmware TCO1_CNT (its TCO_LOCK bit says whether firmware froze the timer
+     * control - e.g. a UEFI that ran the equivalent of coreboot's tco_lockdown).
+     * Then require BOTH: NO_REBOOT clears, AND the halt bit can be cleared (the
+     * timer can be un-halted).  A locked-halted TCO can never fire, so claiming
+     * it would be exactly the false-guard the honesty contract forbids. */
+    g_tco1_cnt_raw = IO_IN16(g_tcobase + TCO1_CNT);
+    IO_OUT16(g_tcobase + TCO1_CNT, g_tco1_cnt_raw | TCO1_CNT_HLT);   /* halt      */
+
+    g_absent_why = (g_gen == WDT_V1) ? "no RCBA + no PMC (NO_REBOOT home unknown)"
+                                     : "NO_REBOOT would not clear (locked?)";
+    if (!clear_no_reboot()) { g_present = 0; goto done; }
+
+    if (g_tco1_cnt_raw & TCO1_CNT_LOCK) {         /* firmware locked the control  */
+        g_absent_why = "TCO1_CNT firmware-locked (TCO_LOCK)";
+        g_present = 0; goto done;
     }
-    g_present = clear_no_reboot();
+    {   /* prove HLT is clearable, then re-halt (arm() runs it for real) */
+        u16 cnt = IO_IN16(g_tcobase + TCO1_CNT);
+        IO_OUT16(g_tcobase + TCO1_CNT, (u16)(cnt & ~TCO1_CNT_HLT));
+        if (IO_IN16(g_tcobase + TCO1_CNT) & TCO1_CNT_HLT) {
+            g_absent_why = "TCO halt bit stuck (timer can't run)";
+            g_present = 0; goto done;
+        }
+        IO_OUT16(g_tcobase + TCO1_CNT, (u16)(IO_IN16(g_tcobase + TCO1_CNT) | TCO1_CNT_HLT));
+    }
+    g_present = 1;
+    g_absent_why = "present";
+done:;
 
     /* Make the TCO visible in the device tree (merge-gate item): a platform
      * node under the LPC function, bound to this driver.  Class 08/80 = system;
@@ -355,9 +430,35 @@ int uno_hw_wdt_status(char *buf, int cap)
     at = s_cat(buf, cap, at, g_gen == WDT_V3 ? "v3" : g_gen == WDT_V2 ? "v2"
                            : g_gen == WDT_V1 ? "v1" : "none");
     at = s_cat(buf, cap, at, g_present ? " present" : " absent");
+    if (!g_present) {                            /* why, for a new-chipset probe */
+        at = s_cat(buf, cap, at, " (");
+        at = s_cat(buf, cap, at, g_absent_why);
+        at = s_cat(buf, cap, at, ")");
+    }
+    if (g_lpc_ven) {
+        at = s_cat(buf, cap, at, " lpc=");
+        at = s_hex(buf, cap, at, g_lpc_ven, 4);
+        at = s_cat(buf, cap, at, ":");
+        at = s_hex(buf, cap, at, g_lpc_dev, 4);
+    }
+    if (g_abase_raw || g_actl_raw) {
+        at = s_cat(buf, cap, at, " abase=0x");
+        at = s_hex(buf, cap, at, g_abase_raw, 8);
+        at = s_cat(buf, cap, at, " acpi_cntl=0x");
+        at = s_hex(buf, cap, at, g_actl_raw, 8);
+    }
+    if (g_smbus_tcobase_raw || g_smbus_tcoctl_raw) {
+        at = s_cat(buf, cap, at, " smb_tcobase=0x");
+        at = s_hex(buf, cap, at, g_smbus_tcobase_raw, 8);
+        at = s_cat(buf, cap, at, " smb_tcoctl=0x");
+        at = s_hex(buf, cap, at, g_smbus_tcoctl_raw, 8);
+    }
     if (g_tcobase) {
         at = s_cat(buf, cap, at, " tcobase=0x");
         at = s_hex(buf, cap, at, g_tcobase, 4);
+        at = s_cat(buf, cap, at, " tco1_cnt_fw=0x");
+        at = s_hex(buf, cap, at, g_tco1_cnt_raw, 4);
+        if (g_tco1_cnt_raw & TCO1_CNT_LOCK) at = s_cat(buf, cap, at, "(LOCKED)");
     }
     if (g_nrreg) {
         /* the NO_REBOOT register: GCS (v2) or GEN_PMCON_A (v3).  Dump the raw
