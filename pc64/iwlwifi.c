@@ -1104,6 +1104,7 @@ static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) 
 static void handle_eapol(const u8 *frame, int len);        /* fwd */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
 static int g_scanning;   /* beacons are only harvested while a scan is active */
+static int g_scan_mpdu_seen, g_scan_beacon_calls;   /* scan diagnostics */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 
 /* process one received RB: walk packed iwl_rx_packet records */
@@ -1122,6 +1123,7 @@ static void rx_process_rb(const u8 *rb, int cap,
            of what we're waiting for, so the handshake makes progress. */
         if (pkt->group_id == 0 && pkt->cmd == 0xc1) {         /* REPLY_RX_MPDU */
             const u8 *frame; int fl, machdr;
+            if (g_scanning) g_scan_mpdu_seen++;
             if (g_mq_rx) {
                 /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
                    HDR_LEN in *2 words); desc size differs v1(32)/v3(40). */
@@ -2169,6 +2171,10 @@ static void scan_record_beacon(const u8 *frame, int fl)
 {
     u16 fc; int subtype, ielen, i;
     const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0;
+    g_scan_beacon_calls++;
+    if (g_scan_beacon_calls <= 4)
+        uno_dbg_net_trace("wifi: scan rx#%d fl=%d fc=%04x", g_scan_beacon_calls, fl,
+                          (fl >= 2) ? (frame[0] | (frame[1] << 8)) : 0);
     if (fl < 36) return;
     fc = (u16)(frame[0] | (frame[1] << 8));
     if (((fc >> 2) & 3) != 0) return;                 /* management frames only */
@@ -2210,12 +2216,15 @@ static int mvm_scan_passive(int dwell_ms)
     for (i = 0; i < 13; i++) { cmd.p.chan.cfg[i].num = (u8)(i + 1);
         cmd.p.chan.cfg[i].band = 0; cmd.p.chan.cfg[i].iter_count = 1; }
     cmd.p.per.sched[0].iter_count = 1;
-    g_scan_ap_n = 0; g_scanning = 1;
+    const u8 *comp;
+    g_scan_ap_n = 0; g_scanning = 1; g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0;
     send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, &cmd, (int)sizeof cmd);
     /* pump RX so beacons get recorded during the scan; SCAN_COMPLETE_UMAC comes
      * back in the LEGACY group as 0x0f, else we just poll for dwell_ms. */
-    wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
+    comp = wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
     g_scanning = 0;
+    uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d",
+                      comp ? "yes" : "no(timeout)", g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_ap_n);
     return g_scan_ap_n;
 }
 
