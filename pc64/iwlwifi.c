@@ -1173,6 +1173,9 @@ static const u8 *wait_notif(int group, int cmd, int *out_len, int timeout_ms)
             if (found) { rx_restock(); if (out_len) *out_len = flen; return found; }
         }
         rx_restock();
+        /* re-arm MSI-X RX vector 0 so the fw keeps delivering RBs (the working
+         * Linux scan trace writes this after every RB; delivery is gated on it) */
+        if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
         /* FW error? */
         if (!g_gen2 && (r32(CSR_INT) & (CSR_INT_BIT_SW_ERR|CSR_INT_BIT_HW_ERR))) return 0;
         mdelay_(1);
@@ -2302,7 +2305,8 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
           rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
           g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
       }
-      rx_restock(); }
+      rx_restock();
+      if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1); }
     if (g_dq_tail != g_dq_head) {
         int n = g_dataq[g_dq_tail].len;
         if (n > cap) n = cap;
