@@ -35,6 +35,13 @@ static int g_have_lpc = 1;              /* 0 = the machine has no LPC bridge    
 static unsigned g_pmc_cfg[64];
 static int g_have_pmc;                  /* 0 = no PMC (v2-only machine)          */
 
+/* SMBus function (Comet Lake 00:1f.4, 8086:02a3, class 0c/05): holds TCOBASE */
+#define SMB_BUS 0
+#define SMB_DEV 0x1f
+#define SMB_FN  4
+static unsigned g_smb_cfg[64];
+static int g_have_smb;                   /* v3: SMBus carries the TCOBASE         */
+
 #define ACPI_BASE   0x0400u             /* PMBASE                               */
 #define RCBA_BASE   0xFED1C000u
 #define TCOBASE     (ACPI_BASE + 0x60)  /* 0x0460                               */
@@ -47,12 +54,18 @@ static void lpc_reset(int rcba_enabled, int acpi_enabled)
     memset(g_lpc_cfg, 0, sizeof g_lpc_cfg);
     g_lpc_cfg[0x00 / 4] = ((unsigned)0x2918 << 16) | 0x8086;      /* ICH9 LPC    */
     g_lpc_cfg[0x08 / 4] = (0x06u << 24) | (0x01u << 16);          /* isa-bridge  */
-    g_lpc_cfg[0x40 / 4] = ACPI_BASE | (acpi_enabled ? 1u : 0u);   /* ACPI base   */
+    g_lpc_cfg[0x40 / 4] = ACPI_BASE;                             /* ABASE        */
+    g_lpc_cfg[0x44 / 4] = acpi_enabled ? 0x80u : 0u;             /* ACPI_CNTL b7 */
     g_lpc_cfg[0xF0 / 4] = RCBA_BASE | (rcba_enabled ? 1u : 0u);   /* RCBA        */
     memset(g_pmc_cfg, 0, sizeof g_pmc_cfg);
     g_pmc_cfg[0x00 / 4] = ((unsigned)0x02ef << 16) | 0x8086;      /* CML PMC     */
     g_pmc_cfg[0x08 / 4] = (0x05u << 24) | (0x00u << 16);          /* memory      */
     g_pmc_cfg[0x10 / 4] = PWRM_BASE;                             /* BAR0=PWRMBASE*/
+    memset(g_smb_cfg, 0, sizeof g_smb_cfg);
+    g_smb_cfg[0x00 / 4] = ((unsigned)0x02a3 << 16) | 0x8086;      /* CML SMBus   */
+    g_smb_cfg[0x08 / 4] = (0x0cu << 24) | (0x05u << 16);          /* smbus       */
+    g_smb_cfg[0x50 / 4] = TCOBASE;                               /* TCOBASE reg  */
+    g_smb_cfg[0x54 / 4] = 0x100u;                               /* TCO_BASE_EN   */
 }
 
 unsigned int pci_cfg_read32(const pci_dev *d, int off)
@@ -61,6 +74,8 @@ unsigned int pci_cfg_read32(const pci_dev *d, int off)
         return g_lpc_cfg[(off & 0xFC) / 4];
     if (g_have_pmc && d->bus == PMC_BUS && d->dev == PMC_DEV && d->fn == PMC_FN)
         return g_pmc_cfg[(off & 0xFC) / 4];
+    if (g_have_smb && d->bus == SMB_BUS && d->dev == SMB_DEV && d->fn == SMB_FN)
+        return g_smb_cfg[(off & 0xFC) / 4];
     return 0xFFFFFFFFu;
 }
 unsigned short pci_cfg_read16(const pci_dev *d, int off)
@@ -85,7 +100,7 @@ int pci_find(unsigned short v, unsigned short d, pci_dev *o)
 
 /* --- fake device tree ------------------------------------------------------ */
 
-static uno_device g_tree[3];
+static uno_device g_tree[4];
 static int g_treen;
 static int g_plat_calls;
 static int g_plat_backing;
@@ -111,6 +126,14 @@ static void tree_reset(int have_lpc)
         d->addr.pci.bus = PMC_BUS; d->addr.pci.dev = PMC_DEV; d->addr.pci.fn = PMC_FN;
         d->vendor = 0x8086; d->device = 0x02ef;
         d->cls = 0x05; d->subcls = 0x00;
+        d->parent = UNO_DEV_NOPARENT; d->state = UNO_DEV_UNBOUND;
+    }
+    if (g_have_smb) {
+        uno_device *d = &g_tree[g_treen++];
+        d->bus_type = UNO_BUS_PCI;
+        d->addr.pci.bus = SMB_BUS; d->addr.pci.dev = SMB_DEV; d->addr.pci.fn = SMB_FN;
+        d->vendor = 0x8086; d->device = 0x02a3;
+        d->cls = 0x0c; d->subcls = 0x05;
         d->parent = UNO_DEV_NOPARENT; d->state = UNO_DEV_UNBOUND;
     }
 }
@@ -196,7 +219,7 @@ static void rig_reset(int rcba_en, int acpi_en, int gcs_no_reboot, int have_lpc,
 int main(int argc, char **argv)
 {
     const char *scen = argc > 1 ? argv[1] : "present";
-    char sbuf[128];
+    char sbuf[256];
 
     if (!strcmp(scen, "present")) {
         /* firmware left NO_REBOOT set; the driver must clear it and report present */
@@ -266,7 +289,7 @@ int main(int argc, char **argv)
         /* Comet Lake: no RCBA, PMC present, NO_REBOOT in GEN_PMCON_A (bit 1).
          * Firmware left it set; the driver clears it via the PMC MMIO window and
          * reports present, then arms the same TCOv2 timer as v2. */
-        g_have_pmc = 1;
+        g_have_pmc = 1; g_have_smb = 1;
         g_pmcon = (1u << 1);                 /* firmware set NO_REBOOT           */
         rig_reset(0, 1, 0, 1, 0x8086);       /* RCBA off, ACPI on -> v3 path      */
         ck(uno_hw_wdt_present() == 1, "CML/PMC: present after GEN_PMCON_A NO_REBOOT cleared");
@@ -282,12 +305,24 @@ int main(int argc, char **argv)
            strstr(sbuf, "NO_REBOOT=0"), "status: v3 present, dumps GEN_PMCON_A");
     } else if (!strcmp(scen, "cml-locked")) {
         /* CML with GEN_PMCON_A NO_REBOOT locked -> clear ignored -> honest absent */
-        g_have_pmc = 1;
+        g_have_pmc = 1; g_have_smb = 1;
         g_pmcon = (1u << 1);
         g_pmcon_locked = 1;
         rig_reset(0, 1, 0, 1, 0x8086);
         ck(uno_hw_wdt_present() == 0, "CML locked NO_REBOOT -> absent (read-back honest)");
         ck(g_plat_calls == 0, "a v3 TCO we can't reboot with is NOT added to the tree");
+    } else if (!strcmp(scen, "tco-locked")) {
+        /* CML where firmware locked TCO1_CNT (TCO_LOCK bit 12): NO_REBOOT clears
+         * fine, but the halt bit can never be cleared, so the timer can't fire.
+         * present() must be honest and refuse it (not a false guard). */
+        g_have_pmc = 1; g_have_smb = 1;
+        g_pmcon = (1u << 1);
+        rig_reset(0, 1, 0, 1, 0x8086);
+        g_io[0x09] |= 0x10;                  /* TCO1_CNT |= TCO_LOCK (bit 12)      */
+        ck(uno_hw_wdt_present() == 0, "TCO1_CNT firmware-locked -> absent (can't un-halt)");
+        ck(g_plat_calls == 0, "a locked-halted TCO is NOT added to the tree");
+        uno_hw_wdt_status(sbuf, sizeof sbuf);
+        ck(strstr(sbuf, "LOCKED") != 0, "status flags the TCO_LOCK");
     } else if (!strcmp(scen, "nolpc")) {
         rig_reset(1, 1, 1, 0, 0x8086);
         ck(uno_hw_wdt_present() == 0, "no LPC bridge at all -> absent");
