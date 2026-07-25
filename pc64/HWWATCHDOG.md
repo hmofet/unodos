@@ -88,28 +88,33 @@ Intel ICH9 / 5-series-PCH datasheets.
 
 ## 4. Coverage `[EXPERIMENTAL]` — what `present()` returns where
 
-| Gen | TCOBASE | NO_REBOOT home | Supported |
+| Gen | TCOBASE | NO_REBOOT home | Status |
 |---|---|---|---|
-| **v2** — ICH6 … ~6-series PCH (incl. QEMU q35 `ich9-lpc`) | LPC ACPI+0x60 | **RCBA GCS** (RCBA+0x3410, bit 5 / mask 0x20) — MMIO, read-back verifiable | **yes** |
-| **v3** — Skylake … **Comet Lake** PCH-LP (400-series) | LPC ACPI+0x60 | **PMC `GEN_PMCON_A`** (PWRMBASE+0x1020, bit 1 / mask 0x02) — MMIO, read-back verifiable | **yes** |
-| v1 — pre-ICH6 (no RCBA) | LPC ACPI+0x60 | no clean NR bit | no → `present()==0` |
-| SoC parts (Apollo/Gemini Lake) | SMBus/PMC GCR | PMC GCR `PMC_CFG` (bit 4) — not yet implemented | no → `present()==0` |
+| **v2** — ICH6 … ~6-series PCH (incl. QEMU q35 `ich9-lpc`) | LPC `ABASE`+0x60 (ACPI_CNTL 0x44 b7 gates) | **RCBA GCS** (RCBA+0x3410, mask 0x20) | **works** — QEMU-verified reset |
+| **v3** — Skylake … **Comet Lake** PCH-LP (400-series) | **SMBus (00:1f.4) cfg 0x50** (`&0xFFE0`, TCOCTL 0x54 b8 gates) | **PMC `GEN_PMCON_A`** (PWRMBASE+0x1020, mask 0x02) | **discovery works; reset pending** |
+| v1 — pre-ICH6 (no RCBA) | — | no clean NR bit | `present()==0` |
+| SoC parts (Apollo/Gemini Lake) | SMBus/PMC GCR | PMC GCR `PMC_CFG` (bit 4) — not implemented | `present()==0` |
 
-Both the **v2 / RCBA-GCS** path (ICH6…6-series PCH, QEMU `ich9-lpc`) and the
-**v3 / PMC GEN_PMCON_A** path (Skylake…Comet Lake PCH-LP) are fully implemented
-and read-back-verified. The v3 register locations are: `GEN_PMCON_A` at
-`PWRMBASE + 0x1020`, where PWRMBASE is the PMC function's (00:14.2, `8086:02ef`
-on the CML-U Yoga; class 05/00) BAR0 if it reads back a sane high window, else
-the 400-series fixed base `0xFE000000`; the no-reboot bit is bit 1 (mask 0x02),
-matching Linux `iTCO_wdt`'s value for this memory-mapped PCH class. The driver
-**requires an Intel PMC function to be enumerated** before touching any PWRM
-address, so it never pokes a fixed MMIO on a chipset that isn't this family.
+**v2** is fully implemented and QEMU-verified end to end. **v3** discovery is
+implemented and confirmed on the live **Comet Lake-U X13 Yoga** — the driver
+correctly locates the LPC, the SMBus TCOBASE (`0x400`), and the PMC
+`GEN_PMCON_A`, and reaches `present()`. Register locations, all verified against
+the Yoga over URC: TCOBASE from the SMBus function's cfg 0x50 (NOT the LPC ABASE,
+which reads 0 on CML); NO_REBOOT in `GEN_PMCON_A` at `PWRMBASE+0x1020` (PWRMBASE
+= the PMC's BAR0 if sane, else the fixed `0xFE000000`), only when an Intel PMC is
+actually enumerated. `status` dumps every discovery register (`abase`,
+`acpi_cntl`, `smb_tcobase`, `smb_tcoctl`, `gen_pmcon_a`, `fw=`, `tco1_cnt_fw`) so
+a new chipset is diagnosable from one URC round-trip.
 
-The **X13 Yoga** (Comet Lake-U) is now a supported v3 target: `present()==1` and
-the guard arms the TCO. The **ZimaBlade** (SoC PMC GCR) is a distinct method
-still on the follow-up list → `present()==0` there (honest, per §2). The
-`status`/`hwwdt status` line dumps the raw `GEN_PMCON_A` value (`fw=0x…`) so a
-new chipset's firmware NO_REBOOT bit is diagnosable rather than silent.
+**Open on v3 (the Yoga):** an armed TCO does not yet actually reset the box — the
+timer stays halted (`rld` frozen), which points to the firmware having **locked
+`TCO1_CNT` (`TCO_LOCK`, bit 12)**, the way coreboot's `tco_lockdown` does.
+`present()` now honestly requires the halt bit be clearable and refuses a locked
+TCO (`absent (TCO1_CNT firmware-locked)`), so it never claims a guard it can't
+deliver. Whether this Yoga's Lenovo firmware locks the TCO — and thus whether the
+hardware backstop is achievable on it while attached — is the remaining metal
+question; the diagnostic `tco1_cnt_fw` field answers it. The **ZimaBlade** (SoC
+PMC GCR) is a separate, not-yet-implemented method → `present()==0`.
 
 ## 5. Integration with the guard `[WIRED]`
 
@@ -183,15 +188,20 @@ lanes; see `UNOAUTOMATE-REQUESTS.md`.
 ## Changelog
 
 - **2026-07-24 — v3 / Comet Lake PMC path + guard wiring (no API bump).** Added
-  the **v3** generation: NO_REBOOT in the PMC `GEN_PMCON_A` register
-  (`PWRMBASE + 0x1020`, bit 1 / mask 0x02), PWRMBASE from the enumerated Intel
-  PMC function's BAR0 or the 400-series fixed `0xFE000000`, gated on an actual
-  PMC being present. This makes the **Comet Lake-U X13 Yoga** a supported target
-  (`present()==1`). The guard now arms/pets/disarms the TCO via a weak-symbol
-  seam in `uno_debug.c` (guard window + 8 s), so the IRQs-off wedge the software
-  guard misses is caught by hardware. Host gate grew v3 `cml` / `cml-locked`
-  scenarios (8 total, all green). `status` now dumps the raw `GEN_PMCON_A`
-  firmware value for on-chip diagnosis. Metal validation on the live Yoga: see
+  the **v3** generation and wired the guard. v3 discovery (confirmed on the live
+  CML-U Yoga over URC): TCOBASE from the SMBus function's cfg 0x50 (NOT the LPC
+  ABASE — that reads 0 on CML), ACPI decode gated by ACPI_CNTL 0x44 bit 7,
+  NO_REBOOT in the PMC `GEN_PMCON_A` (`PWRMBASE+0x1020`, mask 0x02; PWRMBASE from
+  the PMC BAR0 else fixed `0xFE000000`), all gated on an Intel PMC being
+  enumerated. `present()` now also requires the timer be genuinely usable
+  (NO_REBOOT clears AND `TCO1_CNT` isn't firmware-locked / the halt bit clears),
+  so it refuses a locked TCO instead of claiming a guard it can't deliver. The
+  guard arms/pets/disarms the TCO via a weak-symbol seam in `uno_debug.c` (guard
+  window + 8 s). Host gate: 9 scenarios / 35 checks (added `tco-locked`), green;
+  QEMU v2 smoke green. **Not yet proven on the Yoga:** the armed timer does not
+  reset the box (`rld` frozen → likely firmware `TCO_LOCK`); the `tco1_cnt_fw`
+  dump is the pending metal read. `status` now dumps every discovery register for
+  on-chip diagnosis. Metal validation on the live Yoga: see
   the run note below / `UNOAUTOMATE-REQUESTS.md`.
 - **2026-07-24 — UNO_HW_WDT_API 1 (initial):** the TCO primitive lands. Four-call
   surface (`present`/`arm`/`pet`/`disarm`) + `status`; UNO_DEBUG-gated, prod

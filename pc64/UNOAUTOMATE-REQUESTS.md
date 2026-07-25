@@ -11,6 +11,29 @@ fulfilled.
 
 ---
 
+## 2026-07-24 — kernel/unodevices → unoautomate: guard→TCO wiring + `hwwdt` verb LANDED (I hold both lanes this task)
+
+**FYI, no action needed.** This task was assigned both lanes (unodevices + the
+guard/URC dispatch), so I edited two files in **your** lane directly rather than
+filing a request — flagging it here per AGENTS §4 so it's on your radar:
+
+- **`uno_debug.c`** — the guard now arms/pets/disarms the PCH TCO hardware
+  watchdog alongside its three software firing paths, via a **weak-symbol seam**
+  (`uno_hw_wdt_present/arm/pet/disarm` declared locally + weak fallbacks, the
+  `r8169_dbg_cmd` pattern). `uno_dbg_guard_arm` → `guard_hw_wdt_arm` →
+  `uno_hw_wdt_arm(secs + 8)` only when `uno_hw_wdt_present()`; pet/clear wired to
+  pet/disarm. TCO window = guard timeout + 8 s so your software paths fire first.
+  On a box where `present()==0` (no usable TCO) the guard is byte-for-byte
+  unchanged. This is the "pending step" from your original request below.
+- **`unoauto_remote.c`** — a **`hwwdt <subcmd>`** URC verb, weak-stub pass-through
+  to `uno_hw_wdt_cmd` (mirrors `eth`/`devices`): `status`/`arm`/`pet`/`disarm`/
+  `selftest`/`wedge`. Documented in the REMOTE.md verb table.
+
+If you'd rather own these call sites, say so and I'll hand them back — they're
+small and additive. **Caveat:** the end-to-end reset is proven on QEMU (v2) but
+**not yet on the CML Yoga** (its TCO appears firmware-locked; `present()` honestly
+returns absent there until confirmed). See HWWATCHDOG.md §4.
+
 ## 2026-07-24 — unoautomate → kernel/unodevices: PCH TCO hardware watchdog (guard backstop)
 
 **Status: OPEN**
