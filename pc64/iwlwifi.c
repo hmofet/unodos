@@ -1104,7 +1104,7 @@ static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) 
 static void handle_eapol(const u8 *frame, int len);        /* fwd */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
 static int g_scanning;   /* beacons are only harvested while a scan is active */
-static int g_scan_mpdu_seen, g_scan_beacon_calls;   /* scan diagnostics */
+static int g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_rb_total;   /* scan diagnostics */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 
 /* process one received RB: walk packed iwl_rx_packet records */
@@ -1116,6 +1116,10 @@ static void rx_process_rb(const u8 *rb, int cap,
         const struct rx_packet *pkt = (const struct rx_packet *)(rb + off);
         int plen = pkt->len_n_flags & FRAME_SIZE_MSK;
         if (plen < 4 || off + 4 + plen > cap) break;
+        if (g_scanning) { g_scan_rb_total++;
+            if (g_scan_rb_total <= 12)
+                uno_dbg_net_trace("wifi: scan pkt#%d grp=%d cmd=%02x len=%d",
+                                  g_scan_rb_total, pkt->group_id, pkt->cmd, plen); }
         if (found && !*found && pkt->group_id == want_group && pkt->cmd == want_cmd) {
             *found = pkt->data; *found_len = plen - 4;
         }
@@ -2220,12 +2224,15 @@ static int mvm_scan_passive(int dwell_ms)
         cmd.p.chan.cfg[i].band = 0; cmd.p.chan.cfg[i].iter_count = 1; }
     cmd.p.per.sched[0].iter_count = 1;
     const u8 *comp;
-    g_scan_ap_n = 0; g_scanning = 1; g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0;
+    g_scan_ap_n = 0; g_scanning = 1; g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0; g_scan_rb_total = 0;
+    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d", rx_closed() & (RXQ_N-1), g_rx_read);
     send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, &cmd, (int)sizeof cmd);
     /* pump RX so beacons get recorded during the scan; SCAN_COMPLETE_UMAC comes
      * back in the LEGACY group as 0x0f, else we just poll for dwell_ms. */
     comp = wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
     g_scanning = 0;
+    uno_dbg_net_trace("wifi: scan: post rx_closed=%d rx_read=%d rb_total=%d",
+                      rx_closed() & (RXQ_N-1), g_rx_read, g_scan_rb_total);
     uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d",
                       comp ? "yes" : "no(timeout)", g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_ap_n);
     return g_scan_ap_n;
