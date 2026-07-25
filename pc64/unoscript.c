@@ -167,6 +167,10 @@ int  pc64_shell_app_count(void);
 int  pc64_shell_launch(int a);
 void pc64_shell_close_top(void);
 int  pc64_shell_app_message(int idx, const char *msg, char *reply, int cap);
+/* proc enumeration primitives (pc64_uui.c): a "process" is an open app slot. */
+int  pc64_shell_app_open(int idx);
+const char *pc64_shell_app_name(int idx);
+int  pc64_shell_app_is_focused(int idx);
 
 int usc_app_count(void)
 {
@@ -208,18 +212,41 @@ int usc_fs_write(const char *path, const void *buf, int len)
     return USC_EUNAVAIL;   /* TODO(unofs) */
 }
 
-/* -- proc (unosched) ---------------------------------------------------- */
+/* -- proc (shell run-set) ----------------------------------------------- */
+/* pc64 has no preemptive scheduler (unosched is the concurrency-primitive lib,
+ * not a run-queue), so the enumerable run-set is the shell's OPEN app slots -
+ * the same set F11 / unoauto PROBE report.  Each open slot is one process:
+ * pid = slot index (stable for a boot), tid = 0 (cooperative single thread),
+ * state bit0 = focused, name = app title, owner = the acting identity.  v1/v2
+ * (cpu-ms / stack) carry 0 here - per-app draw cost lives only in the UNO_DEBUG
+ * profiler, so it is not part of the production surface. */
+static void proc_fill(usc_proc_ent *e, int slot)
+{
+    e->owner = unosec_current_user();
+    e->pid   = slot;
+    e->tid   = 0;
+    e->state = pc64_shell_app_is_focused(slot) ? 1 : 0;
+    e->name  = pc64_shell_app_name(slot);
+    e->v1 = e->v2 = 0;
+}
 int usc_proc_list(usc_proc_ent *out, int max)
 {
+    int i, total, n = 0;
     if (!unoscript_guard(USC_CAP_PROC_ENUM, "proc.list")) return denied(USC_CAP_PROC_ENUM);
-    (void)out; (void)max;
-    return USC_EUNAVAIL;   /* TODO(unosched): task/thread enumeration seam */
+    if (!out || max <= 0) return USC_EINVAL;
+    total = pc64_shell_app_count();
+    for (i = 0; i < total && n < max; i++)
+        if (pc64_shell_app_open(i)) proc_fill(&out[n++], i);
+    return n;   /* number of running processes written */
 }
 int usc_proc_inspect(int pid, usc_proc_ent *out)
 {
     if (!unoscript_guard(USC_CAP_PROC_INSPECT, "proc.inspect")) return denied(USC_CAP_PROC_INSPECT);
-    (void)pid; (void)out;
-    return USC_EUNAVAIL;   /* TODO(unosched) */
+    if (!out) return USC_EINVAL;
+    if (pid < 0 || pid >= pc64_shell_app_count() || !pc64_shell_app_open(pid))
+        return USC_EINVAL;   /* no such running process */
+    proc_fill(out, pid);
+    return USC_OK;
 }
 
 /* -- hook (unoauto HOOK / subsystem taps) ------------------------------- */
