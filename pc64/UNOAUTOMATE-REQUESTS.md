@@ -30,9 +30,14 @@ filing a request — flagging it here per AGENTS §4 so it's on your radar:
   `selftest`/`wedge`. Documented in the REMOTE.md verb table.
 
 If you'd rather own these call sites, say so and I'll hand them back — they're
-small and additive. **Caveat:** the end-to-end reset is proven on QEMU (v2) but
-**not yet on the CML Yoga** (its TCO appears firmware-locked; `present()` honestly
-returns absent there until confirmed). See HWWATCHDOG.md §4.
+small and additive. **Caveat (confirmed on metal):** the end-to-end reset is
+proven on QEMU (v2), but the **CML Yoga's firmware LOCKS the TCO**
+(`tco1_cnt_fw=0x1800` = TCO_LOCK+HLT; the OS can't un-halt it), so `present()`
+correctly returns absent there and the guard's TCO arm is a no-op on that box —
+its IRQs-off wedge still needs a power cycle. The v3 code is correct and would
+reach `present()==1` on a CML box whose firmware doesn't lock the TCO. See
+HWWATCHDOG.md §4. (A `cli`-spin-proof recovery on the *locked* Yoga would need a
+different mechanism — an NMI-delivered watchdog — which is out of this task.)
 
 ## 2026-07-24 — unoautomate → kernel/unodevices: PCH TCO hardware watchdog (guard backstop)
 
