@@ -87,6 +87,9 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(u_request_obj, 1, 3, u_request);
 int unoscript_e2e_selftest(void);
 static mp_obj_t u_e2e(void) { return mp_obj_new_int(unoscript_e2e_selftest()); }
 static MP_DEFINE_CONST_FUN_OBJ_0(u_e2e_obj, u_e2e);
+int unoscript_mtest(void);
+static mp_obj_t u_mtest(void) { return mp_obj_new_int(unoscript_mtest()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(u_mtest_obj, u_mtest);
 #endif
 
 /* ======================= namespace: ui (tier 0) ======================== */
@@ -287,6 +290,7 @@ static const mp_rom_map_elem_t unoscript_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_request),   MP_ROM_PTR(&u_request_obj) },
 #ifdef UNO_DEBUG
     { MP_ROM_QSTR(MP_QSTR_e2e),       MP_ROM_PTR(&u_e2e_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mtest),     MP_ROM_PTR(&u_mtest_obj) },
 #endif
     /* namespaces */
     { MP_ROM_QSTR(MP_QSTR_ui),        MP_ROM_PTR(&u_ui) },

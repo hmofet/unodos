@@ -215,11 +215,24 @@ int  usc_power(int action);   /* 0 shutdown 1 reboot 2 suspend  USC_CAP_POWER */
 void unoscript_boot(void);    /* bring the runtime up (called from kernel init) */
 int  unoscript_available(void); /* 1 when the runtime is up (always in prod)   */
 
+/* Automation-app caps: the launcher brackets a launched app with these.  begin()
+ * opens an isolated session for the app (acting user, INSTALLED trust), applies
+ * its signed `<base>.MFT` manifest if present (granting the declared caps), and
+ * enters the session for the app's lifetime; it returns the number of caps
+ * granted (0 = no/untrusted manifest).  end() logs the session out, dropping
+ * every grant.  Safe to call end() with no app open. */
+int  unoscript_app_caps_begin(int vol, const char *path);
+void unoscript_app_caps_end(void);
+
 #ifdef UNO_DEBUG
 /* authenticated end-to-end self-test (u.e2e): logs in a throwaway session and
  * proves the POSITIVE surface path.  0 = full pass, <0 = skip, else a failure
  * bitmask.  Debug-only. */
 int  unoscript_e2e_selftest(void);
+/* manifest-caps self-test (u._mtest): a signed manifest grants an app its
+ * declared caps at launch; a tampered one grants nothing.  0 = pass, <0 = skip,
+ * else a failure bitmask.  Debug-only. */
+int  unoscript_mtest(void);
 #endif
 
 #endif /* UNOSCRIPT_H */

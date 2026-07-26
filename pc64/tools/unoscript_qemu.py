@@ -207,6 +207,19 @@ def main():
                   "u.e2e() -> %s (0=pass, <0=skip, else fail-bitmask)" % out)
         except Exception as e:  # noqa: BLE001
             check(False, "e2e authenticated self-test ran", str(e))
+
+        # 6) MANIFEST-DECLARED CAPS (automated processes). u.mtest() drives the
+        #    real unoscript_app_caps_begin/end path: as a GUEST (no static
+        #    proc.enum), a validly-SIGNED manifest grants proc.enum at launch ->
+        #    proc.list works; on close the grant is dropped -> denied again; a
+        #    TAMPERED signature grants nothing. 0 = full pass, <0 = skip.
+        try:
+            out = one_line(link, "u.mtest()", timeout=40)
+            check(out == "0",
+                  "manifest caps pass (signed grants at launch, dropped on close, forged rejected)",
+                  "u.mtest() -> %s (0=pass, <0=skip, else fail-bitmask)" % out)
+        except Exception as e:  # noqa: BLE001
+            check(False, "manifest-caps self-test ran", str(e))
     finally:
         try:
             link.command("poweroff", timeout=2)
@@ -215,7 +228,7 @@ def main():
         time.sleep(1)
         vm.kill()
         link.close()
-    print(">> unoscript surface gate OK (proc + fs + kernel + hook + e2e authenticated)" if not fails
+    print(">> unoscript surface gate OK (proc + fs + kernel + hook + e2e + manifest-caps)" if not fails
           else ">> FAILED: " + "; ".join(fails))
     return 1 if fails else 0
 

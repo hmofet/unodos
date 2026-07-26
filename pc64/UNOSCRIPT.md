@@ -281,3 +281,40 @@ policy `proc.list` returns real rows and `io.in` reads a port; `mem.read`
 (KERNEL) **stays denied** (autogrant covers ≤ADMIN only). It runs in C on a
 throwaway account it deletes afterward, and `tools/unoscript_qemu.py` asserts
 `u.e2e()==0` over URC. Every surface now has its positive round-trip proof.
+
+## Caps for automated processes (manifest-declared, launch-time grants)
+
+An **automation app** runs with no human at the keyboard, so it cannot answer a
+per-op consent prompt — the escalation model that works for an interactive
+script does not work for it. The answer is a **signed manifest**: a trusted
+automation app ships a `<base>.MFT` sidecar next to its `.UNO`, declaring the
+caps it needs, signed (HMAC-SHA256) by a key in the machine's trust store. At
+launch the caps are granted up front, no prompts.
+
+- **Isolated per-app session.** The launcher brackets a Python app with
+  `unoscript_app_caps_begin(vol, path)` / `unoscript_app_caps_end()`
+  (`pc64_shell_run_python` and the pyapp close path). `begin` opens a *new*
+  `unosecure` session for the app — the **acting user's uid** (so the shell keeps
+  its own authority, which is uid/role-based) but an **INSTALLED** trust class —
+  and enters it for the app's lifetime; `end` logs it out, so every manifest
+  grant is destroyed with the app and never leaks into the desktop session.
+- **The grant.** If `begin` finds a `<base>.MFT` sidecar, it calls
+  `unosec_manifest_apply`, which verifies the signature against the trust store
+  and — since a valid signature *is* the authorization (SPEC §5) — grants each
+  declared cap SESSION-scoped. No manifest, or an untrusted/forged one, grants
+  nothing: the app runs with just the user's normal authority. A kiosk (deny)
+  policy and a SANDBOX trust class still refuse everything.
+- **Enrolling signers.** Keys load at boot from a `TRUST.MFK` file on the boot
+  volume (`unoscript_trust_boot`: `<key-id> <64 hex>` per line), or live from an
+  admin via `unosec_trust_add_key`. Author manifests with
+  `tools/uno_manifest.py` (`keygen` makes a key + its TRUST.MFK line; `sign`
+  writes a signed `.MFT`).
+- **Bound.** Grants are entered for the whole time the (single) Python app is
+  open, so its caps are visible to code running on the shell thread during that
+  window; normal apps use the unprivileged `uno` module, not `unoscript`, so the
+  exposure is narrow. Per-callback scoping is a possible refinement.
+
+**Verified** (`u.mtest()` / `unoscript_mtest`, debug, over URC): as a **guest**
+(no static `proc.enum`) a validly-signed manifest grants `proc.enum` at launch →
+`proc.list` works; on `end` the grant is dropped → denied again; a **tampered**
+signature grants nothing. `tools/unoscript_qemu.py` asserts `u.mtest()==0`.
