@@ -363,46 +363,68 @@ int usc_hook_add(const char *point)
 }
 void usc_hook_remove(int id) { (void)id; }
 
-/* -- mem (kernel) ------------------------------------------------------- */
+/* -- mem (kernel) ------------------------------------------------------- *
+ * pc64 is a single-address-space cooperative kernel: there is ONE flat address
+ * space (identity-mapped, ring 0), so `pid` 0 = that space and any other pid is
+ * USC_EINVAL (no per-task page tables to translate through).  The read/write is
+ * a bounded memcpy on the raw address - there is no MMU protection to lean on,
+ * which is exactly why this is KERNEL tier and always audited by unosecure.  A
+ * NULL address or a non-positive length is refused; an unmapped address will
+ * fault the machine, the same as any kernel-mode peek. */
 int usc_mem_read(int pid, unsigned long long addr, void *buf, int len)
 {
     if (!unoscript_guard(USC_CAP_MEM_READ, "mem.read")) return denied(USC_CAP_MEM_READ);
-    (void)pid; (void)addr; (void)buf; (void)len;
-    return USC_EUNAVAIL;   /* TODO(kernel): guarded cross-AS peek */
+    if (pid != 0) return USC_EINVAL;            /* only the one address space  */
+    if (!buf || len <= 0 || !addr) return USC_EINVAL;
+    memcpy(buf, (const void *)(unsigned long)addr, (unsigned)len);
+    return len;                                  /* bytes read                 */
 }
 int usc_mem_write(int pid, unsigned long long addr, const void *buf, int len)
 {
     if (!unoscript_guard(USC_CAP_MEM_WRITE, "mem.write")) return denied(USC_CAP_MEM_WRITE);
-    (void)pid; (void)addr; (void)buf; (void)len;
-    return USC_EUNAVAIL;   /* TODO(kernel): guarded cross-AS poke */
+    if (pid != 0) return USC_EINVAL;
+    if (!buf || len <= 0 || !addr) return USC_EINVAL;
+    memcpy((void *)(unsigned long)addr, buf, (unsigned)len);
+    return len;                                  /* bytes written              */
 }
 
 /* -- io (kernel) -------------------------------------------------------- */
+/* Raw x86 port I/O via the platform's uno_native_port_* (pc64_native.c).
+ * `width` is in BYTES (1/2/4); anything else is USC_EINVAL. */
+unsigned uno_native_port_in(unsigned port, int width);
+void     uno_native_port_out(unsigned port, int width, unsigned val);
+
+static int io_width_ok(int w) { return w == 1 || w == 2 || w == 4; }
+
 int usc_io_in(unsigned port, int width, unsigned *val)
 {
     if (!unoscript_guard(USC_CAP_IO_READ, "io.in")) return denied(USC_CAP_IO_READ);
-    (void)port; (void)width; if (val) *val = 0;
-    return USC_EUNAVAIL;   /* TODO(kernel) */
+    if (!val || !io_width_ok(width) || port > 0xFFFF) return USC_EINVAL;
+    *val = uno_native_port_in(port, width);
+    return USC_OK;
 }
 int usc_io_out(unsigned port, int width, unsigned val)
 {
     if (!unoscript_guard(USC_CAP_IO_WRITE, "io.out")) return denied(USC_CAP_IO_WRITE);
-    (void)port; (void)width; (void)val;
-    return USC_EUNAVAIL;   /* TODO(kernel) */
+    if (!io_width_ok(width) || port > 0xFFFF) return USC_EINVAL;
+    uno_native_port_out(port, width, val);
+    return USC_OK;
 }
 
 /* -- power -------------------------------------------------------------- */
-/* Shutdown is a production primitive already (uefi_main.c, not UNO_DEBUG-gated),
- * so unoscript consumes it directly - no new seam needed.  Reboot/suspend still
- * await a fuller kernel power seam (see UNOAUTOMATE-REQUESTS). */
+/* Shutdown + reboot are production platform primitives; suspend (ACPI S3) is
+ * not implemented on pc64, so it reports USC_EUNAVAIL honestly. */
 void uno_pc64_shutdown(void);
+void uno_native_reset(void);                     /* CF9 hard reset (no return) */
 
 int usc_power(int action)
 {
     if (!unoscript_guard(USC_CAP_POWER, "power")) return denied(USC_CAP_POWER);
     switch (action) {
-    case 0:  uno_pc64_shutdown(); return USC_OK;   /* shutdown - wired today   */
-    default: return USC_EUNAVAIL;                  /* TODO(kernel): reboot/suspend */
+    case 0:  uno_pc64_shutdown(); return USC_OK;   /* shutdown                 */
+    case 1:  uno_native_reset();  return USC_OK;   /* reboot (does not return) */
+    case 2:  return USC_EUNAVAIL;                  /* suspend: no S3 on pc64   */
+    default: return USC_EINVAL;
     }
 }
 

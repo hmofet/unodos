@@ -42,8 +42,12 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
    `/vol/path` (fs.sys), composed in `unoscript.c` from the existing `uno_fs_*`
    primitives. Traversal-safe path logic host-tested (`unoscript_path_test.c`);
    wired + gated over URC (`unoscript_qemu.py`). See §4.
-5. **kernel — mem / io / reboot / syscall** (tier 2/3). The deep, dangerous
-   surfaces; land last, most carefully, all audited.
+5. ~~**kernel — mem / io / reboot / syscall** (tier 2/3).~~ **DONE** (2026-07-25)
+   — `mem.read/write` (single-AS peek/poke, pid 0), `io.in_/out` (raw port I/O
+   via new `uno_native_port_*`), `sys.power` 1=reboot (`uno_native_reset`);
+   2=suspend is `USC_EUNAVAIL` (no ACPI S3); syscall/unsigned-module-load left as
+   the tier-3 "later". Wired + gated over URC with inert probes
+   (`unoscript_qemu.py`). See §5.
 6. **unoauto (self) — production HOOK registry** (tier 2). The `hook` surface.
 
 Tiers 0–1 give a genuinely useful scripting OS (UI + apps + files). Tiers 2–3 are
@@ -194,24 +198,44 @@ pre-existing/proven.
 
 **Unlocked:** `u.fs.read/write`.
 
-## 5. kernel — memory, port IO, reboot/suspend, syscall  ·  tier 2/3  ·  `mem.*` / `io.*` / `power` / `syscall`
+## 5. kernel — memory, port IO, reboot/suspend, syscall  ·  tier 2/3  ·  `mem.*` / `io.*` / `power`  ·  DONE (2026-07-25)
 
-The deep surfaces. Each must be a *guarded* accessor — the kernel enforces the
-real memory/IO safety; `unoscript`'s gate is the privilege check on top.
-```c
-int  kmem_read(int pid, unsigned long long addr, void *buf, int len);   /* -> usc_mem_read  */
-int  kmem_write(int pid, unsigned long long addr, const void *b, int len);/* -> usc_mem_write */
-int  kio_in(unsigned port, int width, unsigned *val);                   /* -> usc_io_in     */
-int  kio_out(unsigned port, int width, unsigned val);                   /* -> usc_io_out    */
-int  kpower_reboot(void);   int kpower_suspend(void);                    /* -> usc_power 1/2 */
-/* tier 3, later: a syscall-tap hook and an unsigned-module load path */
-```
-`pid` 0 = kernel/physical view; else another process's address space (translate
-via that task's page tables). Shutdown (`usc_power(0)`) is already wired to the
-existing `uno_pc64_shutdown()` — mirror it for reboot/suspend. Everything here is
-KERNEL tier: strongest escalation, always audited by `unosecure`.
+**Reality on pc64.** The original sketch assumed a multi-address-space kernel
+with per-task page tables and a distinct "kernel accessor" layer. pc64 is a
+single-address-space cooperative kernel (identity-mapped, ring 0), so the
+accessors collapse to their essence and — like §3/§4 — compose in `unoscript.c`
+onto existing/tiny platform primitives, no separate kernel-agent seam:
 
-**Unlocks:** `u.mem.read/write`, `u.io.in_/out`, `u.sys.power(1|2)`.
+- **`mem.read/write(pid, addr, buf, len)`** — a bounded `memcpy` on the one flat
+  address space. `pid` 0 = that space; any other pid is `USC_EINVAL` (there are
+  no page tables to translate through). NULL addr / non-positive len refused.
+  There is no MMU protection to enforce safety — an unmapped addr faults the
+  machine, exactly as a kernel-mode peek would — which is precisely why this is
+  KERNEL tier and always audited.
+- **`io.in_/out(port, width, …)`** — raw x86 port I/O. Added exported
+  `uno_native_port_in`/`uno_native_port_out` (widths 1/2/4 bytes) to
+  `pc64_native.c` (the platform lane), since the existing `n_inb`/`n_outb` were
+  file-local `static inline`. `port>0xFFFF` or a bad width is `USC_EINVAL`.
+- **`sys.power`** — `0` shutdown (already wired) + `1` reboot
+  (`uno_native_reset`, CF9 hard reset) are live; `2` suspend is `USC_EUNAVAIL`
+  (pc64 implements no ACPI S3). The **syscall-tap + unsigned-module-load** paths
+  named "tier 3, later" remain out of scope — there is no `usc_syscall` entry
+  point, and an unsigned module loader is a deliberate non-goal for now.
+
+**Verified** (`tools/unoscript_qemu.py`, over URC): the caps carry the right
+tiers (mem/io.write = KERNEL 3, io.read/power = ADMIN 2), and every op raises
+`OSError: EPERM: capability denied` unescalated (the guard, not the old "surface
+not wired" stub). The denial probes are deliberately **inert even if the gate
+failed** — reads, a POST-port `0x80` write, an addr-0 write (rejected by
+validation), `power(2)` (a no-op) — so the gate can never poke live memory or
+reboot the VM. prod + debug link green.
+
+**No positive round-trip, by design.** mem-poke, port-out and reboot are
+destructive/irreversible; there is nothing safe to assert once *executed*, so
+authority-gated execution is confirmed only through a real logged-in session,
+never the automated gate.
+
+**Unlocked:** `u.mem.read/write`, `u.io.in_/out`, `u.sys.power(0|1)` (2 = EUNAVAIL).
 
 ## 6. unoauto (self) — production HOOK registry  ·  tier 2  ·  `hook`
 

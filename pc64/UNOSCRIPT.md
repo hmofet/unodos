@@ -234,10 +234,28 @@ so the security store lands on a writable volume.
   print(u.fs.read("notes/todo.txt"))          # b"buy milk"  (fs.user, tier 1)
   cfg = u.fs.read("/usb/BOOT.CFG")            # absolute -> fs.sys (tier 2)
   ```
+- **`mem.*` / `io.*` / `sys.power` (kernel, tier 2/3) — DONE 2026-07-25.** The
+  deep surfaces. `mem.read/write(pid, addr, …)` peek/poke the single
+  identity-mapped address space (`pid` 0 only; there are no per-task page tables,
+  so any other pid is `EINVAL`) — a bounded `memcpy`, no MMU protection to lean
+  on, which is why it is KERNEL tier and always audited. `io.in_/out(port, width,
+  …)` are raw x86 port I/O via the platform's `uno_native_port_*` (width in bytes
+  1/2/4). `sys.power`: `0` shutdown + `1` reboot (`uno_native_reset`, CF9) are
+  live; `2` suspend is `USC_EUNAVAIL` (pc64 has no ACPI S3). QEMU-verified wired +
+  gated over URC with inert probes (reads, POST-port `0x80`, addr-0 write,
+  `power(2)`) so the gate never pokes live state. No positive round-trip: these
+  are destructive/irreversible by nature, so authority-gated execution is left to
+  a real logged-in session, not the gate. Example:
 
-The remaining **surface seams** (kernel mem/io + reboot/suspend, the hook
-registry) are still `USC_EUNAVAIL` until each owner wires its accessor — so a
-*permitted* tier≥1 op returns NotImplementedError rather than OSError(EPERM).
-The privilege gate is live; the plumbing behind it lights up per-subsystem.
-Tiers 0–2 (UI + apps + proc + files) now give a genuinely useful scripting OS;
-the deeper kernel/hook surfaces trail.
+  ```python
+  import unoscript as u
+  u.request("io.read")                       # tier-2 (io.write/mem.* are tier-3)
+  post = u.io.in_(0x80, 1)                    # read the POST diagnostic port
+  hdr  = u.mem.read(0, 0x100000, 16)          # 16 bytes at 1 MiB (pid 0 = kernel)
+  # u.sys.power(1)                            # reboot (needs `power`, does not return)
+  ```
+
+The remaining surface is the **hook registry** (`hook.*`, tier 2) — still
+`USC_EUNAVAIL` pending step 6. The privilege gate is live; the plumbing behind it
+lights up per-subsystem. Tiers 0–3 (UI + apps + proc + files + kernel mem/io/
+power) now give a genuinely capable scripting OS; only the tap registry trails.

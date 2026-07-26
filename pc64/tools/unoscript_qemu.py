@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""unoscript surface QEMU gate: prove `u.proc.*` and `u.fs.*` are WIRED + GATED.
+"""unoscript surface QEMU gate: prove u.proc.* / u.fs.* / u.mem|io|sys.* are WIRED + GATED.
 
 Roadmap steps 3-4 (UNOSCRIPT-NEXT-STEPS.md §3-4) wire the proc surface
 (`usc_proc_list`/`usc_proc_inspect` -> the shell's running-app run-set) and the
@@ -124,6 +124,38 @@ def main():
             except Exception as e:  # noqa: BLE001
                 check(False, "%s raised the expected guest error" % label, repr(e))
 
+        # 2c) kernel surface (step 5): mem/io/power. All tier 2/3, so the
+        #     no-session URC context is denied at the guard BEFORE the action.
+        #     Every probe is chosen to be inert even if the gate somehow failed:
+        #     reads have no side effect, io.out targets the POST port 0x80,
+        #     mem.write uses addr 0 (rejected by validation), power(2)=suspend is
+        #     a no-op - so this gate can never poke live memory or reboot the VM.
+        try:
+            check(one_line(link, "u.cap_tier('mem.read')") == "3", "mem.read is tier 3 (KERNEL)")
+            check(one_line(link, "u.cap_tier('mem.write')") == "3", "mem.write is tier 3 (KERNEL)")
+            check(one_line(link, "u.cap_tier('io.read')") == "2", "io.read is tier 2 (ADMIN)")
+            check(one_line(link, "u.cap_tier('io.write')") == "3", "io.write is tier 3 (KERNEL)")
+            check(one_line(link, "u.cap_tier('power')") == "2", "power is tier 2 (ADMIN)")
+        except Exception as e:  # noqa: BLE001
+            check(False, "kernel caps resolve", str(e))
+        for expr, label in (("u.mem.read(0, 0x100000, 4)", "mem.read"),
+                            ("u.mem.write(0, 0, b'x')", "mem.write"),
+                            ("u.io.in_(0x80, 1)", "io.in"),
+                            ("u.io.out(0x80, 1, 0)", "io.out"),
+                            ("u.sys.power(2)", "sys.power")):
+            try:
+                out = link.eval("import unoscript as u; print(%s)" % expr)
+                check(False, "%s denied unescalated" % label,
+                      "returned %r (expected denial)" % out)
+            except RuntimeError as e:
+                txt = str(e).lower()
+                check("denied" in txt or "eperm" in txt,
+                      "%s is wired + gated" % label, str(e).strip().replace("\n", " ")[:90])
+                check("not wired" not in txt and "notimplement" not in txt,
+                      "%s is no longer UNWIRED" % label, "")
+            except Exception as e:  # noqa: BLE001
+                check(False, "%s raised the expected guest error" % label, repr(e))
+
         # 3) regression: the step-2 app surface (tier 0) still answers
         try:
             n = one_line(link, "u.app.count()")
@@ -149,7 +181,7 @@ def main():
         time.sleep(1)
         vm.kill()
         link.close()
-    print(">> unoscript surface gate OK (proc + fs)" if not fails
+    print(">> unoscript surface gate OK (proc + fs + kernel)" if not fails
           else ">> FAILED: " + "; ".join(fails))
     return 1 if fails else 0
 
