@@ -106,6 +106,25 @@ int uno_native_rtc_write(int y, int mo, int d, int h, int mi, int s)
     return 1;
 }
 
+/* ---- raw port I/O (kernel tier: unoscript io.* surface) ------------------- *
+ * Byte/word/dword IN and OUT for a script's guarded io.in/io.out.  `width` is
+ * in BYTES (1/2/4); an unsupported width reads 0 / writes nothing. */
+unsigned uno_native_port_in(unsigned port, int width)
+{
+    unsigned short p = (unsigned short)port;
+    if (width == 1) { unsigned char  v; __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p)); return v; }
+    if (width == 2) { unsigned short v; __asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p)); return v; }
+    if (width == 4) { unsigned int   v; __asm__ volatile("inl %1,%0":"=a"(v):"Nd"(p)); return v; }
+    return 0;
+}
+void uno_native_port_out(unsigned port, int width, unsigned val)
+{
+    unsigned short p = (unsigned short)port;
+    if (width == 1) { __asm__ volatile("outb %0,%1"::"a"((unsigned char)val), "Nd"(p)); }
+    else if (width == 2) { __asm__ volatile("outw %0,%1"::"a"((unsigned short)val), "Nd"(p)); }
+    else if (width == 4) { __asm__ volatile("outl %0,%1"::"a"((unsigned int)val), "Nd"(p)); }
+}
+
 /* ---- reset ---------------------------------------------------------------- */
 void uno_native_reset(void)
 {
