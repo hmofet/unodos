@@ -472,6 +472,112 @@ int usc_power(int action)
     }
 }
 
+/* ===========================================================================
+ * End-to-end AUTHENTICATED self-test (debug-only).
+ * ---------------------------------------------------------------------------
+ * The wired+gated QEMU gate proves every surface DENIES without a session.
+ * This proves the POSITIVE path: with a REAL unosecure login + authority, the
+ * surfaces return real data.  It runs entirely in C under a genuine session (no
+ * eval-context binding tricks), driving the usc_* surfaces directly, so it is
+ * the Python-layer counterpart to unosecure's -DUNO_SECTEST C gate:
+ *
+ *   - fs (tier 1): as a GUEST (no static fs.user) a read is DENIED; the guard
+ *       never auto-requests a tier-1 cap, so it takes an explicit request, which
+ *       an interactive user is granted -> then write + read-back ROUND-TRIP.
+ *   - proc (tier 2/ADMIN): under a dev AUTOGRANT policy the guard's auto-request
+ *       is granted -> proc.list returns the running apps (real rows).
+ *   - io.read (tier 2/ADMIN): same, a non-destructive POST-port read returns a value.
+ *   - mem.read (tier 3/KERNEL): stays DENIED even under AUTOGRANT - autogrant
+ *       covers <=ADMIN only, so the tier boundary is enforced, not bypassed.
+ *
+ * It needs a FRESH unosecure store (bootstrap_admin must succeed) - which the
+ * QEMU gate's throwaway disk provides; on a provisioned system it returns <0
+ * (skip).  Best-effort cleanup: delete the tester, restore the policy, leave
+ * every session.  Returns 0 on a full pass, else a bitmask of the failures. */
+#ifdef UNO_DEBUG
+#include "unosecure.h"
+
+int  pc64_shell_launch(int a);
+void pc64_consent_register(void);     /* restore the UI's consent provider */
+
+/* A headless consent provider that always DENIES - installed for the duration of
+ * the test so the KERNEL mem.read escalation is refused WITHOUT drawing the
+ * interactive consent sheet (which would block a headless run forever).  Under
+ * AUTOGRANT the ADMIN surfaces short-circuit before consent, so only the KERNEL
+ * check reaches this. */
+static usc_consent_t e2e_deny_consent(void *ctx, usc_uid_t uid, usc_trust_t trust,
+                                      usc_cap_t cap, const char *cap_name,
+                                      usc_tier_t tier, const char *detail)
+{ (void)ctx; (void)uid; (void)trust; (void)cap; (void)cap_name; (void)tier;
+  (void)detail; return UNOSEC_CONSENT_DENY; }
+
+int unoscript_e2e_selftest(void)
+{
+    usc_uid_t admin, tester;
+    usec_session_t as, ts;
+    usc_policy_t saved_policy;
+    int fails = 0, g = 0, i, n;
+    unsigned char wr[32], rd[32];
+    usc_proc_ent rows[8];
+
+    for (i = 0; i < 32; i++) wr[i] = (unsigned char)(i * 5 + 1);
+
+    /* 1. bootstrap a throwaway admin on a FRESH store (skip otherwise). */
+    admin = unosec_bootstrap_admin("e2eadm", "e2eadmpw");
+    if (!admin) return -1;                              /* provisioned store: skip   */
+    as = unosec_login("e2eadm", "e2eadmpw", UNOSEC_TRUST_INTERACTIVE);
+    if (!as || !unosec_enter_session(as)) return -2;
+    saved_policy = unosec_policy_get();
+    tester = unosec_account_create("e2eusr", "e2euserpw", "guest");
+    unosec_policy_set(UNOSEC_POLICY_AUTOGRANT);         /* admin holds policy.edit   */
+    unosec_leave();
+    if (!tester) return -3;
+
+    /* headless: no interactive consent sheet may block the run. */
+    unosec_set_consent_provider(e2e_deny_consent, 0);
+
+    /* 2. act as the GUEST tester (interactive trust). */
+    ts = unosec_login("e2eusr", "e2euserpw", UNOSEC_TRUST_INTERACTIVE);
+    if (!ts || !unosec_enter_session(ts)) { pc64_consent_register(); return -4; }
+
+    /* --- fs: DENY (guest lacks fs.user; tier-1 is never auto-requested) --- */
+    if (usc_fs_read("E2E.TXT", rd, (int)sizeof rd) != USC_EDENIED) fails |= 1 << 0;
+    /* --- fs: an interactive user may request its own USER-tier authority --- */
+    g = unosec_request(USC_CAP_FS_USER, USC_SCOPE_SESSION, 0);
+    if (g <= 0) fails |= 1 << 1;
+    /* --- fs: write then read-back ROUND-TRIP through the granted surface --- */
+    if (usc_fs_write("E2E.TXT", wr, 32) != USC_OK) fails |= 1 << 2;
+    n = usc_fs_read("E2E.TXT", rd, (int)sizeof rd);
+    if (n != 32) fails |= 1 << 3;
+    else for (i = 0; i < 32; i++) if (rd[i] != wr[i]) { fails |= 1 << 3; break; }
+
+    /* --- proc: authorised (AUTOGRANT) -> real rows for the running apps --- */
+    pc64_shell_launch(0);                              /* ensure >=1 app is open    */
+    n = usc_proc_list(rows, 8);
+    if (n < 1) fails |= 1 << 4;
+    else if (!rows[0].name) fails |= 1 << 5;
+
+    /* --- io.read: authorised (ADMIN) -> a non-destructive port read works --- */
+    { unsigned v = 0; if (usc_io_in(0x80, 1, &v) != USC_OK) fails |= 1 << 6; }
+
+    /* --- mem.read: KERNEL > AUTOGRANT's ADMIN ceiling -> STAYS denied --- *
+     * (escalation reaches the consent provider, which denies headlessly). */
+    if (usc_mem_read(0, 0x100000, rd, 4) != USC_EDENIED) fails |= 1 << 7;
+
+    if (g > 0) unosec_drop(g);
+    unosec_leave();                                     /* leave the tester          */
+
+    /* 3. cleanup as admin: delete the tester, restore policy + the UI consent. */
+    if (unosec_enter_session(as)) {
+        unosec_account_delete(tester);
+        unosec_policy_set(saved_policy);
+        unosec_leave();
+    }
+    pc64_consent_register();                            /* restore interactive consent */
+    return fails;                                       /* 0 == every check passed   */
+}
+#endif /* UNO_DEBUG */
+
 /* ---- Lifecycle -------------------------------------------------------- */
 void unoscript_boot(void) { /* nothing to bring up in the stub */ }
 int  unoscript_available(void) { return 1; }

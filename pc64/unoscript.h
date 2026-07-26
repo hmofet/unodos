@@ -215,4 +215,11 @@ int  usc_power(int action);   /* 0 shutdown 1 reboot 2 suspend  USC_CAP_POWER */
 void unoscript_boot(void);    /* bring the runtime up (called from kernel init) */
 int  unoscript_available(void); /* 1 when the runtime is up (always in prod)   */
 
+#ifdef UNO_DEBUG
+/* authenticated end-to-end self-test (u.e2e): logs in a throwaway session and
+ * proves the POSITIVE surface path.  0 = full pass, <0 = skip, else a failure
+ * bitmask.  Debug-only. */
+int  unoscript_e2e_selftest(void);
+#endif
+
 #endif /* UNOSCRIPT_H */

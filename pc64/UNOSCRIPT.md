@@ -270,7 +270,14 @@ so the security store lands on a writable volume.
 **The surface-wiring roadmap is complete** (`UNOSCRIPT-NEXT-STEPS.md` §1–6): every
 `usc_*` surface is wired or a documented non-goal, none is a bare stub. The
 privilege gate is live across tiers 0–3 (UI + apps + proc + files + kernel
-mem/io/power + the debug hook tap) — a genuinely capable scripting OS. What
-remains is not surface wiring but the cross-cutting **end-to-end authenticated
-gate** (drive the surfaces through a real logged-in `unosecure` session so a
-tier≥2 op returns real data after `u.request()`), which every step deferred.
+mem/io/power + the debug hook tap) — a genuinely capable scripting OS.
+
+**The end-to-end authenticated gate is also in place.** `u.e2e()`
+(`unoscript_e2e_selftest`, debug-only) drives the surfaces through a REAL
+`unosecure` login, proving the POSITIVE path the wired+gated checks cannot reach
+unauthenticated: a guest is DENIED `fs.read`, `unosec_request` grants `fs.user`,
+then `fs.write`+`fs.read` **round-trips** exact bytes; under a dev AUTOGRANT
+policy `proc.list` returns real rows and `io.in` reads a port; `mem.read`
+(KERNEL) **stays denied** (autogrant covers ≤ADMIN only). It runs in C on a
+throwaway account it deletes afterward, and `tools/unoscript_qemu.py` asserts
+`u.e2e()==0` over URC. Every surface now has its positive round-trip proof.

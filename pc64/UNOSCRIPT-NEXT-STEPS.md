@@ -275,12 +275,20 @@ stub). prod + debug link green.
 
 ## Cross-cutting follow-ups (unoscript agent)
 
-- **End-to-end Python gate.** Once a *non-destructive* surface is wired (proc.enum
-  is ideal), add a QEMU gate that drives `mod_unoscript` through real `unosecure`:
-  assert `u.secured()`, a tier-2 op raises `OSError(EPERM)` unescalated, then
-  succeeds after `u.request("proc.enum")` under a dev-autogrant policy. This is the
-  Python-layer counterpart to `unosecure`'s `-DUNO_SECTEST` C gate, and it belongs
-  to the `unoscript` agent (`tools/automate_qemu.py` family).
+- ~~**End-to-end Python gate.**~~ **DONE** (2026-07-25) — `u.e2e()`
+  (`unoscript_e2e_selftest`, debug-only) drives the surfaces through a REAL
+  `unosecure` login and proves the POSITIVE path the wired+gated gate can't reach
+  unauthenticated: as a **guest** `fs.read` is DENIED, `unosec_request` grants
+  `fs.user` (interactive USER-tier), then `fs.write`+`fs.read` **round-trip** 32
+  bytes exactly; under a dev **AUTOGRANT** policy `proc.list` returns the running
+  apps and `io.in` reads a port; and `mem.read` (KERNEL) **stays denied** —
+  autogrant covers ≤ADMIN only. Runs entirely in C under a genuine session (no
+  eval-context tricks), on a throwaway account it deletes afterward, with a
+  headless deny-consent provider swapped in for the run (the interactive sheet
+  would block a headless run) and the UI provider restored. Driven over URC by
+  `tools/unoscript_qemu.py` (asserts `u.e2e()==0`). This is the Python-layer
+  counterpart to `unosecure`'s `-DUNO_SECTEST` C gate, and it retroactively gives
+  every surface its positive round-trip proof.
 - **Manifest-declared caps.** Wire an app's signed manifest (unosecure supports
   HMAC-SHA256 today) to a launch-time grant so trusted automation apps don't prompt
   per op — needs the app-launch path to pass the manifest to `unosec_manifest_apply`.
