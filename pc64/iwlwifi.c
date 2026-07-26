@@ -1146,8 +1146,12 @@ static void rx_process_rb(const u8 *rb, int cap,
             if (g_scanning) g_scan_mpdu_seen++;
             if (g_mq_rx) {
                 /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
-                   HDR_LEN in *2 words); desc size differs v1(32)/v3(40). */
-                int descsz = (g_family >= FAM_AX210) ? 40 : 32;
+                   HDR_LEN in *2 words). Size = IWL_RX_DESC_SIZE_V1 =
+                   offsetofend(desc, v1) = 20 (common DW2-DW6) + 28 (v1
+                   DW7-DW13) = 48 for pre-AX210; AX210+ uses the full v3 desc.
+                   Was 32 -> frame landed 16B early inside the desc, so the
+                   scan saw garbage FC (0x7f30) not a beacon (0x0080). */
+                int descsz = (g_family >= FAM_AX210) ? 40 : 48;   /* AX210 v3 size unverified (no HW); 48 = V1 for 9000/22000 */
                 int mlen = pkt->data[0] | (pkt->data[1] << 8);
                 int pad = (pkt->data[3] & 0x20) ? 2 : 0;
                 frame = pkt->data + descsz + pad; fl = mlen;
@@ -2828,7 +2832,7 @@ static int mvm_steps(int n, char *out, int cap)
     }
     switch (n) {
     case 1: mvm_init_unified();
-        strcpy(out, "ok mvm1: init_unified returned (SYSTEM/NVM/phy_cfg/INIT_COMPLETE)"); break;
+        strcpy(out, "ok mvm1: init_unified returned (SYSTEM/NVM/INIT_COMPLETE, no phy_cfg)"); break;
     case 2: mvm_tx_ant(1);
         strcpy(out, "ok mvm2: tx_ant returned"); break;
     case 3: if (fw_has_capa(12)) { mvm_dqa_enable(); strcpy(out, "ok mvm3: dqa_enable returned"); }
