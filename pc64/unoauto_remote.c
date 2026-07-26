@@ -973,7 +973,7 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         rsp(id, "end", 0); return;
     }
     /* disc - report zero-config discovery state to the dev PC (query only). The
-     * discovery machinery is armed by the STRESS.CFG `discover` flag and pumped
+     * discovery machinery is armed by the DEBUG.CFG `discover` flag and pumped
      * in netdisc_tick; this lets a host tool ask "is discovery armed, did pc64
      * record my OFFER, and what host:port did it latch?" without watching the
      * wire. link= echoes the remote-channel state (RS_UP=3 here, since we only
@@ -1183,7 +1183,7 @@ void unoauto_remote_boot(void)
     start_connect();
     return;
 bad:
-    unoauto_log(UA_CH_SCRIPT, "remote: bad address '%s' in STRESS.CFG", v);
+    unoauto_log(UA_CH_SCRIPT, "remote: bad address '%s' in DEBUG.CFG", v);
 }
 
 void unoauto_remote_tick(void)

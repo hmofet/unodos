@@ -467,9 +467,9 @@ if [ "$1" != "legacy" ]; then
         exit 1
     fi
 
-    # ---- DEBUG build staging: CRASH dir, fuzz corpus, a default STRESS.CFG --
+    # ---- DEBUG build staging: CRASH dir, fuzz corpus, a default DEBUG.CFG --
     if [ "$UNO_DEBUG" != "0" ]; then
-        echo "[dbg] staging CRASH\\, fuzz corpus, STRESS.CFG onto the ESP..."
+        echo "[dbg] staging CRASH\\, fuzz corpus, DEBUG.CFG onto the ESP..."
         # PURGE dev-run telemetry first: QEMU regression runs (vvfat fat:rw)
         # write their BOOTLOG/PF/NETLOG *back into build/esp*, and one shipped
         # image carried a QEMU boots.txt (with vvfat cluster garbage) onto the
@@ -487,13 +487,13 @@ if [ "$1" != "legacy" ]; then
         # users get a starter from tools/uno-wifi-fw.py instead.
         rm -f build/esp/WIFI.CFG
         "$PY" tools/mkcorpus.py build/esp || echo "[dbg] mkcorpus warning (non-fatal)"
-        # STRESS.CFG present = the stress driver is ARMED.  Ship a SAFE default
+        # DEBUG.CFG present = the stress driver is ARMED.  Ship a SAFE default
         # (no allow-force, so it never self-crashes; it only drives the OS and
         # lets real bugs surface).  Rename/delete to boot a quiet desktop; add
         # 'allow-force' to prove the crash pipeline end to end.  See DEBUG.md.
         # ALWAYS rewritten (no -f guard): the QEMU harnesses used to leave
         # their own config in build/esp, and an if-absent guard shipped a
-        # dev-run STRESS.CFG (allow-force + endless fast) on real sticks -
+        # dev-run DEBUG.CFG (allow-force + endless fast) on real sticks -
         # same class of leak as the purged telemetry above.
         # BOUNDED by default (passes=3): while the driver is running the
         # operator cannot reach Start > Shut Down, so an unbounded run can
@@ -513,7 +513,7 @@ if [ "$1" != "legacy" ]; then
           printf '# allow-force  self-test: force a #PF (proves the crash pipeline)\r\n'
           printf '# force-hang   self-test: force a freeze (proves the watchdog)\r\n'
           printf 'passes=3\r\n'
-        } > build/esp/STRESS.CFG
+        } > build/esp/DEBUG.CFG
         # BUILD.TXT stamp so a report can be tied back to an exact image.
         # cfgver = the STRESS.CFG key generation this OS understands; the
         # flasher's Reconfigure refuses to write settings onto a disk stamped

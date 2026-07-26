@@ -20,7 +20,7 @@ Everything here compiles away without `-DUNO_DEBUG`; the plain OS is unchanged.
 | **Boot environment block** | the machine-specific state almost every confirmed bug depends on | `\BOOTENV.TXT` + stamped into every report |
 | **UBSan traps** | signed-overflow / OOB index / bad shift / null deref, as a `#UD` with the exact RIP | a `CR###` report reading `UBSAN TRAP` |
 | **Perf HUD + counters** | slow render vs slow present, idle-CPU %, and the **framebuffer cache attribute** (the biggest unmeasured perf unknown) | on-screen HUD + `BOOTENV.TXT` |
-| **Stress driver** | drives every app / input path / FS depth / malformed file to *provoke* the above | armed by `\STRESS.CFG` |
+| **Stress driver** | drives every app / input path / FS depth / malformed file to *provoke* the above | armed by `\DEBUG.CFG` |
 | **Symbol table** | self-symbolized backtraces (`name+0xoff`) | baked into the image + `\DOCS\SYMBOLS.TXT` |
 
 Reports are plain ASCII. The kernel log is a RAM ring written continuously and
@@ -74,12 +74,12 @@ pc64\flash\deploy-to-share.ps1      # + publish to \\behemoth\...\unodos\pc64\
 ```
 
 Flash a stick, boot the target with **Secure Boot off**, pick the USB from the
-firmware boot menu. `\CRASH`, `\STRESS.CFG`, the fuzz corpus and
+firmware boot menu. `\CRASH`, `\DEBUG.CFG`, the fuzz corpus and
 `\DOCS\SYMBOLS.TXT` are already on the stick.
 
 ## Running a stress session on the three machines
 
-The stress driver is **armed by the presence of `\STRESS.CFG`**. A freshly
+The stress driver is **armed by the presence of `\DEBUG.CFG`**. A freshly
 flashed stick ships `passes=3`. Keys are matched as whole tokens on
 **non-comment** lines (a key mentioned in a `#` comment does nothing — that was
 finding F1, which armed `allow-force` on every "safe" stick):
@@ -120,11 +120,11 @@ finding F1, which armed `allow-force` on every "safe" stick):
 
 ### The four test suites (the flasher's Developer options)
 
-The flasher's **Developer options** dialog groups the STRESS.CFG keys into the
+The flasher's **Developer options** dialog groups the DEBUG.CFG keys into the
 suites it writes, each with its own master toggle, plus the cross-cutting
 "include interactive tests" switch:
 
-| Suite | What it does | STRESS.CFG it writes |
+| Suite | What it does | DEBUG.CFG it writes |
 |---|---|---|
 | **Conformance** | SPECTEST per-area assertions | `spec` or `spec=<areas>` |
 | **Stress Test** | the fuzz driver (app-launch / runner3D / input / FS fuzz) | `passes=N` (+ `noshutdown`), or `nostress` when off |
@@ -132,7 +132,7 @@ suites it writes, each with its own master toggle, plus the cross-cutting
 | **Diagnostics** | advanced experiments | `mtrr-wc`, `allow-force` |
 | _Include interactive_ | human-confirmed checks in Conformance | `interactive` |
 
-Developer options OFF flashes the clean production build (no STRESS.CFG at all).
+Developer options OFF flashes the clean production build (no DEBUG.CFG at all).
 
 **The boot test phase shows a live progress banner.** The whole phase (MTRR
 experiment → SPECTEST → net test) runs synchronously inside one shell tick, so
@@ -222,7 +222,7 @@ is for.
 `STRESS COMPLETE` banner). That is deliberate: shutting down by hand meant
 hunting for Start > Shut Down under whatever windows the driver left open, and
 pulling the plug instead is the one exit that can lose telemetry. Auto-shutdown
-flushes everything and marks the boot clean. Add `noshutdown` to `STRESS.CFG` to
+flushes everything and marks the boot clean. Add `noshutdown` to `DEBUG.CFG` to
 keep the desktop instead.
 
 **F12 stops the driver at any time** and hands back the desktop (it drops

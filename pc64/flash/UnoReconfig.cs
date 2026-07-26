@@ -220,9 +220,11 @@ static class UnoReconfig
         string gerr = ReadGeom(s, out g);
         if (gerr != null) return gerr;
 
-        var e = FindRootEntry(s, g, "STRESS.CFG");
+        // DEBUG.CFG is the current name; STRESS.CFG is the legacy name still
+        // accepted on disks flashed before the 2026-07-26 rename.
+        var e = FindRootEntry(s, g, "DEBUG.CFG") ?? FindRootEntry(s, g, "STRESS.CFG");
         if (e == null)
-            return "STRESS.CFG is not on this disk (a production build has none - " +
+            return "DEBUG.CFG is not on this disk (a production build has none - " +
                    "flash with Developer options to add tests).";
 
         // The keys are interpreted by the OS ALREADY ON THE STICK, which this
@@ -242,7 +244,7 @@ static class UnoReconfig
         // The OS reads STRESS.CFG into a 512-byte buffer (511 usable), so cap here
         // to match - and it is always well under one cluster.
         if (data.Length > SECTOR - 1)
-            return "The new config (" + data.Length + " B) exceeds the 511-byte STRESS.CFG limit - reflash instead.";
+            return "The new config (" + data.Length + " B) exceeds the 511-byte DEBUG.CFG limit - reflash instead.";
 
         uint fc = e.firstClus;
         if (fc < 2 || fc >= g.clusters + 2)

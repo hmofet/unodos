@@ -96,7 +96,7 @@ class ZipPayload : IPayloadSource
     }
 }
 
-/* A single file written from an in-memory string (the generated STRESS.CFG the
+/* A single file written from an in-memory string (the generated DEBUG.CFG the
  * dev-options test toggles produce). Added AFTER the base ESP, so on a
  * duplicate path it wins (Place is last-writer-wins) and overrides the debug
  * ESP's shipped default. */

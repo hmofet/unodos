@@ -8,9 +8,9 @@
  * the true stack, not a private shadow of it.  Every crash it provokes is
  * captured by uno_debug.c and lands in CRASH\ on the boot volume.
  *
- * OFF by default: it does nothing unless STRESS.CFG exists on a volume.  A
+ * OFF by default: it does nothing unless DEBUG.CFG exists on a volume.  A
  * normal flashed stick therefore boots to an ordinary desktop; a tester drops
- * STRESS.CFG (any contents; keys documented in DEBUG.md) to arm it.
+ * DEBUG.CFG (any contents; keys documented in DEBUG.md) to arm it.
  *
  * Boot-loop safe: if CRASH\ already holds many reports, the driver throttles
  * to the gentler phases so a reproducible early crash doesn't loop the machine
@@ -66,7 +66,7 @@ const char *pc64_stress_status(void)
 { return g_status[0] ? g_status : 0; }
 
 /* Match `key` as a whole word on a NON-COMMENT line.  A naive strstr over the
- * whole file is wrong: the shipped STRESS.CFG documents the keys in a comment
+ * whole file is wrong: the shipped DEBUG.CFG documents the keys in a comment
  * ("# keys: once fast slow allow-force"), and substring-matching that comment
  * silently enabled every key - including allow-force, so a "safe" stick forced
  * a #PF on pass 1.  Found on the Surface (CR003).  So: skip any line whose
@@ -100,16 +100,29 @@ static const char *cfg_find(const char *cfg, const char *key)
 static int cfg_has(const char *cfg, const char *key)
 { return cfg_find(cfg, key) != 0; }
 
-/* For other harness modules (the net test): is `key` set in STRESS.CFG?
+/* The debug/test config file.  Renamed STRESS.CFG -> DEBUG.CFG (2026-07-26);
+ * the old name is still accepted as a fallback so debug sticks flashed before
+ * the rename keep arming.  Scans every mounted volume for either name and reads
+ * the first hit into `cfg` (NUL-terminated by the caller).  Returns the byte
+ * count, or -1 when neither file exists on any volume. */
+static long dbg_cfg_read(unsigned char *cfg, long cap)
+{
+    int v, n = uno_fs_volumes();
+    long got = -1;
+    for (v = 0; v < n && got < 0; v++) {
+        got = uno_fs_read(v, "DEBUG.CFG", cfg, cap);
+        if (got < 0) got = uno_fs_read(v, "STRESS.CFG", cfg, cap);   /* legacy name */
+    }
+    return got;
+}
+
+/* For other harness modules (the net test): is `key` set in DEBUG.CFG?
  * Re-reads the file - callers are one-shot, not per-frame. Returns -1 when no
- * STRESS.CFG exists at all (distinct from "present but key absent" = 0). */
+ * DEBUG.CFG exists at all (distinct from "present but key absent" = 0). */
 int pc64_stress_cfg_flag(const char *key)
 {
     unsigned char cfg[512];
-    int v, n = uno_fs_volumes();
-    long got = -1;
-    for (v = 0; v < n && got < 0; v++)
-        got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
+    long got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
     if (got < 0) return -1;
     cfg[got] = 0;
     return cfg_has((char *)cfg, key);
@@ -118,16 +131,14 @@ int pc64_stress_cfg_flag(const char *key)
 /* Copy the string value after `key=` (up to the next whitespace/newline) into
  * `buf`.  Returns its length, or 0 when the key is absent or has no `=value`.
  * Used for `spec=storage,apps,...` - the conformance area selection.  Like
- * cfg_flag it re-reads STRESS.CFG (callers are one-shot, not per-frame). */
+ * cfg_flag it re-reads DEBUG.CFG (callers are one-shot, not per-frame). */
 int pc64_stress_cfg_value(const char *key, char *buf, int cap)
 {
     unsigned char cfg[512];
-    int v, n = uno_fs_volumes(), out = 0;
-    long got = -1;
+    int out = 0;
+    long got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
     const char *s;
     if (cap > 0) buf[0] = 0;
-    for (v = 0; v < n && got < 0; v++)
-        got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
     if (got < 0) return 0;
     cfg[got] = 0;
     s = cfg_find((char *)cfg, key);
@@ -153,12 +164,10 @@ static int cfg_int(const char *cfg, const char *key, int dflt)
 static void arm(void)
 {
     unsigned char cfg[512];
-    int v, n = uno_fs_volumes();
-    long got = -1;
+    long got;
     g_armed = 0;
-    for (v = 0; v < n && got < 0; v++)
-        got = uno_fs_read(v, "STRESS.CFG", cfg, (long)sizeof cfg - 1);
-    if (got < 0) { uno_dbg_log("stress: no STRESS.CFG - driver disabled"); return; }
+    got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
+    if (got < 0) { uno_dbg_log("stress: no DEBUG.CFG - driver disabled"); return; }
     cfg[got] = 0;
     /* `nostress` fully disables the fuzz driver. This is the OFF switch the
      * flasher's Stress Test suite writes when the operator unticks it: WITHOUT
@@ -167,7 +176,7 @@ static void arm(void)
      * tests still run; only the continuous stress driver is silenced. */
     if (cfg_has((char *)cfg, "nostress")) {
         g_armed = 0;
-        uno_dbg_log("stress: nostress in STRESS.CFG - fuzz driver disabled");
+        uno_dbg_log("stress: nostress in DEBUG.CFG - fuzz driver disabled");
         return;
     }
     g_armed = 1;
@@ -398,7 +407,7 @@ static void run_action(void)
              *   kind 4 -> an infinite loop: the WATCHDOG path (heartbeat stops
              *             -> HG### + reset), so a real freeze is provably
              *             caught on this machine, not just a fault.
-             * Only with explicit allow-force / force-hang in STRESS.CFG. */
+             * Only with explicit allow-force / force-hang in DEBUG.CFG. */
             uno_dbg_log("stress: force set - triggering self-test kind %d (%s)",
                         g_force_kind, g_force_kind == 4 ? "hang/watchdog" : "#PF");
             uno_dbg_force(g_force_kind);
@@ -425,7 +434,7 @@ static void run_action(void)
                          g_max_passes);
                 g_shutdown_at = uno_dbg_uptime_ms() + 4000;   /* let it be read */
                 uno_dbg_log("stress: %d pass(es) done - auto shutdown in 4s "
-                            "(set 'noshutdown' in STRESS.CFG to keep the desktop)",
+                            "(set 'noshutdown' in DEBUG.CFG to keep the desktop)",
                             g_pass);
             } else {
                 snprintf(g_status, sizeof g_status,
@@ -458,10 +467,10 @@ void pc64_stress_stop(void)
 
 /* REMOVED 2026-07-21 (user request): the continuous fuzz driver is disconnected
  * from the boot path. Reported repeatedly as "runs even when turned off / loops
- * forever" - and on the last Yoga run it ran despite STRESS.CFG correctly
+ * forever" - and on the last Yoga run it ran despite DEBUG.CFG correctly
  * containing `nostress` (the config path clearly has a bug we have not yet
  * root-caused). Rather than trust the config gate, the driver is hard-disabled
- * here AND its call site in pc64_uui.c is commented out, so no STRESS.CFG value
+ * here AND its call site in pc64_uui.c is commented out, so no DEBUG.CFG value
  * and no parse bug can start it. The one-shot conformance (pc64_spectest_run)
  * and network (pc64_nettest) suites are a SEPARATE path (pc64_nettest_tick) and
  * are unaffected. To bring the fuzz driver back, delete this guard, restore the

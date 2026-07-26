@@ -30,7 +30,7 @@ Everything on the selected drive is erased.
 With **Developer options** OFF the flasher writes the **production** build - a
 clean OS, no `\CRASH` telemetry, no stress driver. Turn it ON to flash the
 **debug / stress** build and pick which tests run on boot; the flasher writes
-the matching `\STRESS.CFG` for you:
+the matching `\DEBUG.CFG` for you:
 
 - **Conformance suite (SPECTEST)** -> `spec`: runs the [auto] SPEC.md contracts
   and writes `CRASH\<machine>\SPECTEST.TXT`.

@@ -3,7 +3,7 @@
  *
  * Executes the [auto]-tagged contracts from SPEC.md on bare metal and writes
  * one line per contract - "S-XXX-NN PASS" / "S-XXX-NN FAIL <detail>" - to
- * CRASH\<MACHINE>\SPECTEST.TXT. Armed by STRESS.CFG `spec`; runs once from the
+ * CRASH\<MACHINE>\SPECTEST.TXT. Armed by DEBUG.CFG `spec`; runs once from the
  * shell main loop, before the stress driver.
  *
  * This is not every contract in SPEC.md (many are [manual] or need a live
@@ -116,7 +116,7 @@ static int rw_vol(void)
  * The operator picks them in Developer options; the flasher writes the choice
  * as `spec=storage,apps,...` (bare `spec` = all non-interactive areas). The
  * `interactive` area is a separate opt-in (the flasher's "include interactive
- * tests" box -> the STRESS.CFG `interactive` key) because it needs a human at
+ * tests" box -> the DEBUG.CFG `interactive` key) because it needs a human at
  * the keyboard - an unattended batch run leaves it off. */
 static char g_areas[128];                 /* the spec= selection, "" = all      */
 static int  g_interactive;                /* interactive key set?               */
@@ -916,7 +916,7 @@ static void test_netlive(void)
 /* ============================================================== INTERACTIVE */
 /* Checks that need a human at the machine - the paths synthetic injection can
  * never prove: does the PHYSICAL keyboard reach the OS, and does the DISPLAY
- * actually show correct colour + text on this panel. Gated by the STRESS.CFG
+ * actually show correct colour + text on this panel. Gated by the DEBUG.CFG
  * `interactive` key (the flasher's "include interactive tests" box); every wait
  * is bounded and records SKIP on a timeout, so an unattended stick never hangs
  * here. Prompts are drawn full-screen and the desktop is restored afterwards. */
