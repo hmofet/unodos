@@ -1119,6 +1119,10 @@ static int g_dq_head, g_dq_tail;
 static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
 static void handle_eapol(const u8 *frame, int len);        /* fwd */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
+static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
+static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
+static int g_mgmt_rx_len;
+static u8  g_mgmt_rx_subtype;
 static int g_scanning;   /* beacons are only harvested while a scan is active */
 static int g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_rb_total;   /* scan diagnostics */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
@@ -1168,7 +1172,10 @@ static void rx_process_rb(const u8 *rb, int cap,
                 (int)(frame - rb) + fl <= cap) {
                 u16 fc = (u16)(frame[0] | (frame[1] << 8));
                 int qos = ((fc >> 4) & 0xF) == 8;
-                if (g_scanning && ((fc >> 2) & 3) == 0) scan_record_beacon(frame, fl);  /* mgmt, scan only */
+                if (((fc >> 2) & 3) == 0) {          /* type = management */
+                    if (g_scanning) scan_record_beacon(frame, fl);
+                    else            mgmt_capture(frame, fl, fc);
+                }
                 int hl = machdr ? machdr : (qos ? 26 : 24);
                 if (fl > hl + 8) {
                     const u8 *llc = frame + hl;
@@ -2460,6 +2467,100 @@ static int scan_pick(void)
     return 0;
 }
 
+
+/* Stash a management response addressed to us (auth / assoc-resp / deauth /
+ * disassoc) so mvm_auth/mvm_assoc can read it. Called from rx_process_rb when a
+ * management frame arrives outside a scan. */
+static void mgmt_capture(const u8 *frame, int fl, u16 fc)
+{
+    int st = (fc >> 4) & 0xF;
+    if (st != 11 && st != 1 && st != 3 && st != 12 && st != 10) return;
+    if (fl < 24 || memcmp(frame + 4, g_mac, 6)) return;   /* addr1 must be us */
+    if (fl > (int)sizeof g_mgmt_rx) fl = (int)sizeof g_mgmt_rx;
+    memcpy(g_mgmt_rx, frame, fl);
+    g_mgmt_rx_len = fl; g_mgmt_rx_subtype = (u8)st;
+    uno_dbg_net_trace("wifi: mgmt rx subtype=%d len=%d", st, fl);
+}
+
+/* Pump the RX ring up to timeout_ms waiting for a captured mgmt frame of
+ * `subtype`. 0 on arrival, -1 on timeout. */
+static int wait_mgmt(int subtype, int timeout_ms)
+{
+    int t;
+    for (t = 0; t < timeout_ms; t++) {
+        u16 closed = rx_closed() & (RXQ_N - 1);
+        while (g_rx_read != closed) {
+            const u8 *found = 0; int fl = 0;
+            int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+            const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
+            rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
+            g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
+        }
+        rx_restock();
+        if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
+        if (g_mgmt_rx_len && g_mgmt_rx_subtype == subtype) return 0;
+        mdelay_(1);
+    }
+    return -1;
+}
+
+/* 802.11 Open-System authentication: TX an auth frame (seq 1) on the data
+ * queue, wait for the AP auth response (seq 2). 0 = success (status 0),
+ * >0 = AP status code, -1 = no response. */
+static int mvm_auth(void)
+{
+    u8 f[30];
+    memset(f, 0, sizeof f);
+    f[0] = 0xB0;                        /* FC: mgmt(0) / subtype auth(11) */
+    memcpy(f + 4, g_bssid, 6);          /* addr1 = BSSID (RA/DA) */
+    memcpy(f + 10, g_mac, 6);           /* addr2 = SA (us) */
+    memcpy(f + 16, g_bssid, 6);         /* addr3 = BSSID */
+    /* seq ctl @22 left 0 (fw stamps it) */
+    f[24] = 0; f[25] = 0;               /* auth algorithm = Open System */
+    f[26] = 1; f[27] = 0;               /* auth transaction seq = 1 */
+    f[28] = 0; f[29] = 0;               /* status code = 0 */
+    g_mgmt_rx_len = 0;
+    tx_enqueue(f, 30, 1);
+    if (wait_mgmt(11, 800) < 0) return -1;
+    return g_mgmt_rx[24 + 4] | (g_mgmt_rx[24 + 5] << 8);   /* auth resp status */
+}
+
+/* Build + TX an Association Request (capability + listen-interval + SSID +
+ * supported/extended rates + WPA2 RSN IE) and wait for the Assoc Response.
+ * Returns the AID on success, <0 on failure / timeout. */
+static u16 g_aid;
+static int mvm_assoc(void)
+{
+    u8 f[128]; int n = 24;
+    static const u8 sr[8]  = { 0x82,0x84,0x8b,0x96,0x0c,0x12,0x18,0x24 }; /* 1..18M */
+    static const u8 er[4]  = { 0x30,0x48,0x60,0x6c };                     /* 24..54M */
+    static const u8 rsn[20]= { 0x30,0x12, 0x01,0x00, 0x00,0x0f,0xac,0x04,
+                               0x01,0x00, 0x00,0x0f,0xac,0x04, 0x01,0x00,
+                               0x00,0x0f,0xac,0x02 };   /* v1, CCMP grp+pair, PSK akm */
+    int sl = (int)strlen(g_cfg_ssid);
+    memset(f, 0, sizeof f);
+    f[0] = 0x00;                        /* FC: mgmt(0) / subtype assoc-req(0) */
+    memcpy(f + 4, g_bssid, 6);          /* addr1 = BSSID */
+    memcpy(f + 10, g_mac, 6);           /* addr2 = SA */
+    memcpy(f + 16, g_bssid, 6);         /* addr3 = BSSID */
+    /* assoc-req body @24: capability(2), listen interval(2) */
+    f[24] = 0x11; f[25] = 0x00;         /* ESS | Privacy (WPA2) */
+    f[26] = 0x0a; f[27] = 0x00;         /* listen interval = 10 */
+    n = 28;
+    f[n++] = 0x00; f[n++] = (u8)sl; memcpy(f + n, g_cfg_ssid, sl); n += sl;   /* SSID */
+    f[n++] = 0x01; f[n++] = 8; memcpy(f + n, sr, 8); n += 8;                  /* rates */
+    f[n++] = 0x32; f[n++] = 4; memcpy(f + n, er, 4); n += 4;                  /* ext rates */
+    memcpy(f + n, rsn, 20); n += 20;                                          /* RSN */
+    g_mgmt_rx_len = 0;
+    tx_enqueue(f, n, 1);
+    if (wait_mgmt(1, 800) < 0) return -1;
+    /* assoc resp body @24: capability(2), status(2), aid(2) */
+    { u16 status = g_mgmt_rx[24 + 2] | (g_mgmt_rx[24 + 3] << 8);
+      if (status != 0) return -(int)(0x1000 | status);
+      g_aid = (g_mgmt_rx[24 + 4] | (g_mgmt_rx[24 + 5] << 8)) & 0x3fff;
+      return g_aid; }
+}
+
 static int find_and_join(void)
 {
     int chan = 0;
@@ -3074,6 +3175,48 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
           if (v == 0) d[m++] = 0x30; else while (v) { d[m++] = (char)(0x30 + v % 10); v /= 10; }
           for (j = m - 1; j >= 0; j--) *o++ = d[j];
           p = " (detail in NET log)"; while (*p) *o++ = *p++; *o = 0; }
+        return (int)strlen(out);
+    }
+    if (!strncmp(line, "auth", 4)) {
+        int r;
+        if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join first (need TX queue)"); return (int)strlen(out); }
+        r = mvm_auth();
+        uno_dbg_net_trace("wifi: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
+        strcpy(out, r == 0 ? "ok auth: Open-System accepted" : (r < 0 ? "err auth: no response" : "err auth: AP rejected"));
+        return (int)strlen(out);
+    }
+    if (!strncmp(line, "assoc", 5)) {
+        int r;
+        if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join + auth first"); return (int)strlen(out); }
+        r = mvm_assoc();
+        uno_dbg_net_trace("wifi: assoc -> %d (>=0 AID, <0 fail)", r);
+        if (r >= 0) {
+            mvm_mac_ctxt(g_bssid, 1, r, 2 /*MODIFY*/);   /* mark associated */
+            u8 pmk[32];
+            wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+            wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1;
+            strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+            strcpy(out, "ok assoc: associated, supplicant armed (pump RX for 4-way)");
+        } else strcpy(out, "err assoc: failed (detail in NET log)");
+        return (int)strlen(out);
+    }
+    if (!strncmp(line, "eapol", 5)) {
+        /* pump RX for a few seconds so the AP EAPOL 4-way frames get handled */
+        int t;
+        for (t = 0; t < 4000 && !g_joined; t++) {
+            u16 closed = rx_closed() & (RXQ_N - 1);
+            while (g_rx_read != closed) {
+                const u8 *found = 0; int fl = 0;
+                int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+                const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
+                rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
+                g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
+            }
+            rx_restock();
+            if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
+            mdelay_(1);
+        }
+        strcpy(out, g_joined ? "ok eapol: 4-way DONE, station authorized" : "err eapol: no/incomplete handshake (NET log)");
         return (int)strlen(out);
     }
     if (!strncmp(line, "scan", 4)) {
