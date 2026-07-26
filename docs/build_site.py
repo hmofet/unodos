@@ -1496,9 +1496,11 @@ AI assistant - is identical.</p>
   <li>One Python app runs at a time; launching another replaces it.</li>
   <li>No <code>import</code> of other <code>.py</code> files yet - keep an app to a single file (it can be
       large). The standard <code>math</code> module and the built-ins are available.</li>
-  <li>The <code>uno</code> module is the only door to the platform: there is no <code>os</code> /
-      <code>sys</code> or general file-system access except through <code>uno.read</code> /
-      <code>uno.write</code>.</li>
+  <li>The <code>uno</code> module is an app's door to the <em>platform</em> - its window, canvas, sound and
+      <code>uno.read</code>/<code>uno.write</code> files. To script the <em>machine</em> (drive the UI, launch
+      apps, user-scoped files, and more, all behind a permission gate) a script uses
+      <a href="dev-remote.html#unoscript"><code>unoscript</code></a> instead; there is no general
+      <code>os</code>/<code>sys</code>.</li>
 </ul>
 
 <h2 id="duum">Duum: Doom, in Python</h2>
@@ -1816,6 +1818,51 @@ the device can drive <em>your</em> PC in return:</p>
 {CODE_REMOTE_PY}
 <p>On the device side, an automation script written in Python (see <a href="dev-apps.html">Writing apps</a>) can
 talk back over the link with <code>unoauto.remote_send()</code> and <code>unoauto.remote_recv()</code>.</p>
+
+<h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
+<p>The <a href="dev-python.html#uno">
+<code>uno</code> module</a> is an app's own sandbox: its window, its canvas, its files. <strong><code>unoscript</code></strong>
+is the step up from there - a surface for scripting the <em>whole machine</em>. Through <code>import unoscript as u</code>
+a script can move the pointer and type, read what is on screen, launch and close apps, see what is running, read and
+write the user's files, and - with permission - reach all the way down to memory, ports and power. It is how you
+<em>automate the OS</em>, not just write an app inside it. You reach it interactively through the <code>py</code>
+command above, or from an on-device automation app.</p>
+
+<p>Every action needs a <strong>capability</strong>, and capabilities are <strong>tiered</strong>. A script begins
+with only the ambient tier; anything higher it must ask for with <code>u.request("&lt;cap&gt;")</code>, and the
+security subsystem decides - drawing the same consent sheet the login screen uses, honouring a role the signed-in
+user holds, or, on a developer machine, an auto-grant policy. A denied action raises <code>PermissionError</code>;
+a surface a given build does not carry raises <code>NotImplementedError</code>. This is the same gate the
+<a href="getting-started.html">login screen</a> and Accounts manager enforce, so a script can never quietly do more
+than the person running it is allowed to.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Namespace</th><th>Tier</th><th>What it scripts</th></tr></thead>
+<tbody>
+<tr><td><code>u.ui</code></td><td>ambient</td><td>Move / click the pointer, press keys, read the on-screen window text, and the shared clipboard.</td></tr>
+<tr><td><code>u.app</code></td><td>ambient / user</td><td>Count, launch and close apps; send an app a message (focus, close, ask its state).</td></tr>
+<tr><td><code>u.fs</code></td><td>user / admin</td><td>Read and write files. A plain name is the user's own home (<code>USERS/&lt;id&gt;/…</code>); an absolute <code>/volume/path</code> reaches elsewhere and needs the higher tier.</td></tr>
+<tr><td><code>u.proc</code></td><td>admin</td><td>List what is running - each open app as a process, with its name and which is focused.</td></tr>
+<tr><td><code>u.mem</code> / <code>u.io</code></td><td>admin / kernel</td><td>Read and write raw memory and I/O ports - a kernel-level debugging surface, always audited.</td></tr>
+<tr><td><code>u.sys</code></td><td>admin</td><td>Power: shut down or restart the machine.</td></tr>
+<tr><td><code>u.hook</code></td><td>admin</td><td>Watch internal events (file writes, module loads) stream past - a debug-build observability tap.</td></tr>
+</tbody>
+</table></div>
+
+<p>A short session over the <code>py</code> command, escalating as it goes:</p>
+<pre><code># ambient - no permission needed: read the screen, drive the pointer
+py import unoscript as u; print(u.ui.screen())
+py import unoscript as u; u.ui.click(200, 160)
+
+# the user's own files - u.fs.read/write ask for the 'fs.user' capability first
+py import unoscript as u; u.request("fs.user"); u.fs.write("notes.txt", b"hello")
+py import unoscript as u; u.request("fs.user"); print(u.fs.read("notes.txt"))
+
+# 'what is running' is an admin surface - unescalated it is refused
+py import unoscript as u; print(u.proc.list())        # -&gt; PermissionError
+py import unoscript as u; u.request("proc.enum"); print(u.proc.list())</code></pre>
+
+{note('The <code>unoscript</code> surface itself is <strong>production</strong> - a trusted, signed automation app can use it on a normal machine, always under the permission gate. Only <code>u.hook</code> is debug-only (a production tap on hot internal events would cost every machine that ships), and the deep <code>u.mem</code>/<code>u.io</code> surfaces are kernel-tier: strongest escalation, every use audited. The full capability list and tiers are in <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOSCRIPT.md" target="_blank" rel="noopener"><code>UNOSCRIPT.md</code></a>.', title="Production surface, gated by permission")}
 
 <h2 id="ab">A/B updates: push a new build over the link</h2>
 <p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -

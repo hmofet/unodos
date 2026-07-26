@@ -218,9 +218,11 @@ AI assistant - is identical.</p>
   <li>One Python app runs at a time; launching another replaces it.</li>
   <li>No <code>import</code> of other <code>.py</code> files yet - keep an app to a single file (it can be
       large). The standard <code>math</code> module and the built-ins are available.</li>
-  <li>The <code>uno</code> module is the only door to the platform: there is no <code>os</code> /
-      <code>sys</code> or general file-system access except through <code>uno.read</code> /
-      <code>uno.write</code>.</li>
+  <li>The <code>uno</code> module is an app's door to the <em>platform</em> - its window, canvas, sound and
+      <code>uno.read</code>/<code>uno.write</code> files. To script the <em>machine</em> (drive the UI, launch
+      apps, user-scoped files, and more, all behind a permission gate) a script uses
+      <a href="dev-remote.html#unoscript"><code>unoscript</code></a> instead; there is no general
+      <code>os</code>/<code>sys</code>.</li>
 </ul>
 
 <h2 id="duum">Duum: Doom, in Python</h2>
