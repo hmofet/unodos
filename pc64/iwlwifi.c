@@ -1938,24 +1938,48 @@ static void mvm_phy_ctxt(int chan, int action)
 /* MAC_CONTEXT_CMD (BSS STA). Big struct; we fill the common + sta tail. */
 static void mvm_mac_ctxt(const u8 bssid[6], int assoc, int aid, int action)
 {
-    u8 c[140]; u8 *p = c;
+    /* iwl_mac_ctx_cmd (MAC_CONTEXT_CMD_API_S_VER_1), STA union, 144 B.
+       The fw ADVANCED_SYSASSERTs on this cmd (fwerr cmd=0x0128, 2026-07-25)
+       if the required rate + QoS-fifo fields are left zero.
+       iwl_mvm_mac_ctxt_cmd_common fills cck/ofdm ack rates and per-AC
+       fifos_mask; we mirror the minimum it needs. */
+    u8 c[148]; u8 *p = c;
+    static const u16 cwmin[4] = { 15, 15, 7, 3 };     /* ucode AC order BK,BE,VI,VO */
+    static const u16 cwmax[4] = { 1023, 1023, 15, 7 };
+    static const u8  aifs[4]  = { 7, 3, 2, 2 };
+    static const u8  fifo[4]  = { 2, 4, 8, 16 };      /* BIT(gen2 EDCA fifo) per AC */
+    int a;
     memset(c, 0, sizeof c);
-    *(u32*)(p+0) = g_mac_id;            /* id_and_color */
-    *(u32*)(p+4) = action;
-    *(u32*)(p+8) = 5;                   /* FW_MAC_TYPE_BSS_STA */
-    *(u32*)(p+12) = 0;                  /* tsf_id A */
+    *(u32*)(p+0)  = g_mac_id;           /* id_and_color */
+    *(u32*)(p+4)  = action;
+    *(u32*)(p+8)  = 5;                  /* FW_MAC_TYPE_BSS_STA */
+    *(u32*)(p+12) = 0;                  /* tsf_id */
     memcpy(p+16, g_mac, 6);             /* node_addr */
     memcpy(p+24, bssid, 6);             /* bssid_addr */
+    *(u32*)(p+32) = 0x0f;               /* cck_rates  1/2/5.5/11 */
+    *(u32*)(p+36) = 0x15;               /* ofdm_rates 6/12/24 (mandatory) */
     *(u32*)(p+40) = 0;                  /* protection_flags */
+    /* cck_short_preamble@44, short_slot@48 = 0 */
     { u32 filt = (1u<<2);              /* ACCEPT_GRP */
       if (!assoc) filt |= (1u<<6);      /* IN_BEACON while connecting */
-      *(u32*)(p+52) = filt; }
-    /* ac[5] EDCA defaults @60 (cw_min 0x0f, cw_max 0x3f, aifsn 1) */
-    { int a; for (a=0;a<5;a++){ u8*q=p+60+a*8; q[0]=0x0f; q[2]=0x3f; q[4]=1; } }
-    /* mac_data_sta union @100: is_assoc, ... assoc_id @136 */
+      *(u32*)(p+52) = filt; }           /* filter_flags */
+    *(u32*)(p+56) = 1;                  /* qos_flags = MAC_QOS_FLG_UPDATE_EDCA */
+    /* ac[5], each iwl_ac_qos = { le16 cw_min, le16 cw_max, u8 aifsn,
+       u8 fifos_mask, le16 edca_txop } @60; entry 4 (index 4) stays zero */
+    for (a = 0; a < 4; a++) {
+        u8 *q = p + 60 + a*8;
+        q[0]=(u8)cwmin[a]; q[1]=(u8)(cwmin[a]>>8);
+        q[2]=(u8)cwmax[a]; q[3]=(u8)(cwmax[a]>>8);
+        q[4]=aifs[a]; q[5]=fifo[a];
+    }
+    /* mac_data_sta union @100: is_assoc@100 ... assoc_id@136 */
     *(u32*)(p+100) = assoc ? 1 : 0;
     *(u32*)(p+136) = aid;
-    send_cmd(GRP_LONG, 0x28, 0, c, 100 + 44); wait_cmd_done(100);
+    /* 148 = sizeof(iwl_mac_ctx_cmd): 100 common + 48 for the union's largest
+       member iwl_mac_data_p2p_sta (sta+ctwin). The fw length-checks against that
+       union-max size and ADVANCED_SYSASSERTs if the cmd is shorter - sending the
+       144 the STA member needs was 4 B short (fwerr data2=0x94=148 expected). */
+    send_cmd(GRP_LONG, 0x28, 0, c, 148); wait_cmd_done(100);
 }
 
 /* BINDING_CONTEXT_CMD (v2, 28 bytes) + TIME_QUOTA_CMD */
@@ -1971,9 +1995,15 @@ static void mvm_binding(int action)
 }
 static void mvm_time_quota(void)
 {
+    /* iwl_time_quota_cmd v2: quotas[MAX_BINDINGS=4], each 16 B. Unused entries
+       MUST be FW_CTXT_INVALID (0xffffffff) - zero reads as binding 0/color 0
+       (our real binding), and the duplicate made the fw ADVANCED_SYSASSERT
+       (0x201002ff, 2026-07-25). Mirrors iwl_mvm_update_quotas (mvm/quota.c). */
     struct { u32 id_color, quota, max_dur, low_lat; } q[4];
+    int i;
     memset(q, 0, sizeof q);
-    q[0].id_color = g_binding_id; q[0].quota = 128; q[0].max_dur = 0;
+    for (i = 0; i < 4; i++) q[i].id_color = 0xFFFFFFFF;   /* FW_CTXT_INVALID */
+    q[0].id_color = g_binding_id; q[0].quota = 128 /*IWL_MVM_MAX_QUOTA*/; q[0].max_dur = 0;
     send_cmd(GRP_LONG, 0x2c, 0, q, sizeof q); wait_cmd_done(100);
 }
 
@@ -2008,7 +2038,7 @@ static void mvm_add_sta(const u8 addr[6], int modify, u32 sta_flags)
     *(u32*)(c+20) = sta_flags;
     *(u32*)(c+24) = 0xFFFFFFFF;        /* station_flags_msk */
     c[35] = 0;                         /* station_type = IWL_STA_LINK */
-    *(u32*)(c+40) = (1u<<g_data_qid>0? 0:0);
+    *(u32*)(c+40) = 0;              /* tfd_queue_msk obsolete for new-tx-api */
     send_cmd(GRP_LONG, 0x18, 0, c, g_family >= FAM_9000 ? 48 : 44);
     wait_cmd_done(100);
 }
@@ -2028,6 +2058,37 @@ static void mvm_add_sta_key(const u8 *key, int keylen, int keyidx, int mcast, co
     /* v2+ struct: transmit_seq_cnt @68 (leave 0 for RX-side install) */
     send_cmd(GRP_LONG, 0x17, 0, c, 76);
     wait_cmd_done(100);
+}
+
+/* Allocate one TX queue for (sta_id, tid) via SCD_QUEUE_CFG (queue_alloc_cmd_ver
+ * 0 = the pre-AX210 path: LEGACY-group cmd 0x1d, iwl_tx_queue_cfg_cmd, 20 B).
+ * Points the fw at our existing TFD ring (g_tx_ring) + byte-count table (g_tx_bc,
+ * already in the pre-AX210 dword bc_ent format tx_enqueue writes). The fw echoes
+ * iwl_tx_queue_cfg_rsp {queue_number, flags, write_pointer}; we adopt the queue
+ * as g_data_qid so tx_enqueue targets it. Nothing has ever transmitted before
+ * this - g_data_qid stayed -1 and tx_enqueue fell back to a bogus qid 10.
+ * Returns the assigned qid, or -1 on no/short response. */
+static int mvm_txq_alloc(int sta_id, int tid, int size)
+{
+    struct __attribute__((packed)) {
+        u8 sta_id, tid; u16 flags; u32 cb_size; u64 bc_addr, tfdq_addr;
+    } c;
+    const u8 *r; int len = 0, cb = 0, n = size;
+    while (n > 8) { cb++; n >>= 1; }              /* cb_size = ilog2(size) - 3 */
+    memset(&c, 0, sizeof c);
+    c.sta_id = (u8)sta_id; c.tid = (u8)tid;
+    c.flags = 1;                                  /* TX_QUEUE_CFG_ENABLE_QUEUE */
+    c.cb_size = (u32)cb;
+    c.bc_addr = phys(g_tx_bc);
+    c.tfdq_addr = phys(g_tx_ring);
+    send_cmd(GRP_LEGACY, 0x1d, 0, &c, (int)sizeof c);
+    r = wait_notif(GRP_LEGACY, 0x1d, &len, 300);
+    if (r && len >= 2) {
+        g_data_qid = r[0] | (r[1] << 8);
+        if (len >= 6) g_tx_wr = (r[4] | (r[5] << 8)) & (TXQ_N - 1);
+        return g_data_qid;
+    }
+    return -1;
 }
 
 /* SCAN_CFG_CMD (v5+ small form) */
@@ -2370,6 +2431,24 @@ static int mvm_scan_passive(int dwell_ms)
     uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d",
                       comp ? "yes" : "no(timeout)", g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_ap_n);
     return g_scan_ap_n;
+}
+
+/* Match the configured SSID against the scan results; on success set g_bssid +
+ * g_join_chan (prefers the most-often-seen BSSID for that SSID, a rough signal
+ * proxy). Returns 0 if the SSID is in range, -1 otherwise. */
+static u8 g_join_chan;
+static int scan_pick(void)
+{
+    int i, best = -1, sl = (int)strlen(g_cfg_ssid);
+    for (i = 0; i < g_scan_ap_n; i++)
+        if (sl > 0 && g_scan_aps[i].ssid_len == sl &&
+            !memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl) &&
+            (best < 0 || g_scan_aps[i].seen > g_scan_aps[best].seen))
+            best = i;
+    if (best < 0) return -1;
+    memcpy(g_bssid, g_scan_aps[best].bssid, 6);
+    g_join_chan = g_scan_aps[best].chan;
+    return 0;
 }
 
 static int find_and_join(void)
@@ -2950,6 +3029,42 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "status", 6)) { iwl_status_str(out, cap); return (int)strlen(out); }
+    if (!strncmp(line, "join", 4)) {
+        /* Full pre-auth association setup against the configured SSID: scan ->
+         * pick real BSSID/chan -> phy/mac/binding ctx -> time-quota/assoc-window
+         * -> ADD_STA(AP peer) -> allocate the TX queue. Detail + fw health to the
+         * NET log; the auth/assoc frame exchange is the next slice. */
+        int q; u32 h;
+        if (!g_bar || !g_alive) { strcpy(out, "err not ALIVE - run rerun then mvm 1 first"); return (int)strlen(out); }
+        mvm_scan_cfg();
+        mvm_scan_passive(5000);
+        if (scan_pick() < 0) {
+            uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs", g_cfg_ssid, g_scan_ap_n);
+            strcpy(out, "err SSID not in scan (detail in NET log)"); return (int)strlen(out);
+        }
+        uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x chan %d",
+            g_cfg_ssid, g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5], g_join_chan);
+        mvm_phy_ctxt(g_join_chan, 1);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after phy_ctxt csr2808=%08x", h);
+        mvm_mac_ctxt(g_bssid, 0, 0, 1);
+        mvm_binding(1);
+        mvm_time_quota();
+        mvm_assoc_window();
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after mac/bind/quota/window csr2808=%08x", h);
+        mvm_add_sta(g_bssid, 0, 0);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after add_sta csr2808=%08x", h);
+        q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: join: txq_alloc -> qid=%d csr2808=%08x g_tx_wr=%d", q, h, g_tx_wr);
+        { char *o = out; const char *p = h ? "err join: fw ASSERTED (iwl fwerr); qid=" : "ok join setup: qid=";
+          int v = q, m = 0, j; char d[8];
+          while (*p) *o++ = *p++;
+          if (v < 0) { *o++ = 0x2d; v = -v; }
+          if (v == 0) d[m++] = 0x30; else while (v) { d[m++] = (char)(0x30 + v % 10); v /= 10; }
+          for (j = m - 1; j >= 0; j--) *o++ = d[j];
+          p = " (detail in NET log)"; while (*p) *o++ = *p++; *o = 0; }
+        return (int)strlen(out);
+    }
     if (!strncmp(line, "scan", 4)) {
         int n, i;
         if (!g_bar || !g_alive) { strcpy(out, "err fw not ALIVE - run 'iwl rerun' (then 'iwl mvm 1') first"); return (int)strlen(out); }
