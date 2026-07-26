@@ -217,6 +217,9 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(usc_io_in), KX(usc_io_out), KX(usc_power),
     KX(usc_hook_add), KX(usc_hook_remove),
 #ifdef UNO_DEBUG
+    KX(unoscript_e2e_selftest),   /* authenticated end-to-end self-test (u.e2e) */
+#endif
+#ifdef UNO_DEBUG
     /* ---- unoautomate DRIVE surface (debug builds only) --------------------
      * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these; the
      * prod PYRT compiles that module to stubs, so a prod PYRT.UNO never
