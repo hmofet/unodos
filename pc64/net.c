@@ -59,6 +59,7 @@ static u8 g_tx[FRM];
  * is deaf; tx==0 => our TX path never fired; rx>0 but ip==0 => frames arrive but
  * DHCP replies aren't parsed. Reset each net_init. */
 static u32 g_tx_frames, g_rx_frames, g_rx_arp, g_rx_ip;
+static int g_link_mbps;               /* negotiated link speed, 0 = unknown */
 static int nic_tx(int flen)
 { int r; if (!g_nic || flen <= 0) return -1;
   r = g_nic->send(g_nic->ctx, g_tx, flen);
@@ -882,9 +883,15 @@ void net_init(uno_nic_t *nic, const u8 mac[6])
     g_dhcp_state = 0;
     g_ticks = 0;
     g_tx_frames = g_rx_frames = g_rx_arp = g_rx_ip = 0;
+    g_link_mbps = 0;
 }
 
 int net_link(void) { return g_nic ? g_nic->link(g_nic->ctx) : 0; }
+
+/* Negotiated link speed (Mbps), published by the NIC driver when it reads the
+ * PHY, 0 until then. Consumed by the shell's LAN-chip tooltip. */
+int  net_link_speed_mbps(void)      { return g_link_mbps; }
+void net_set_link_speed_mbps(int m) { g_link_mbps = m; }
 const u8 *net_ip(void) { return MYIP; }
 const u8 *net_gw(void) { return GW; }
 const u8 *net_dns(void) { return DNS; }
