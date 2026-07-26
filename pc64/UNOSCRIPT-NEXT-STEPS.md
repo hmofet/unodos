@@ -37,7 +37,11 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
    production `pc64_shell_app_open`/`_name`/`_is_focused`. QEMU-verified
    (`tools/unoscript_qemu.py`): wired + tier-2 gated. See §3. The thread→session
    binding remains a `unosecure` follow-up for when concurrent scripted tasks exist.
-4. **unofs — user-scoped file IO** (tier 1).
+4. ~~**user-scoped file IO** (tier 1).~~ **DONE** (2026-07-25) — `fs.read`/
+   `fs.write` with a per-uid home (`USERS/<uid>/`, bare relative paths) + absolute
+   `/vol/path` (fs.sys), composed in `unoscript.c` from the existing `uno_fs_*`
+   primitives. Traversal-safe path logic host-tested (`unoscript_path_test.c`);
+   wired + gated over URC (`unoscript_qemu.py`). See §4.
 5. **kernel — mem / io / reboot / syscall** (tier 2/3). The deep, dangerous
    surfaces; land last, most carefully, all audited.
 6. **unoauto (self) — production HOOK registry** (tier 2). The `hook` surface.
@@ -143,20 +147,52 @@ already proven by `unosec_selftest` (`-DUNO_SECTEST`).
 
 **Unlocked:** `u.proc.list()` and per-process inspection.
 
-## 4. unofs — user-scoped file IO  ·  tier 1/2  ·  `fs.user` / `fs.sys`
+## 4. user-scoped file IO  ·  tier 1/2  ·  `fs.user` / `fs.sys`  ·  DONE (2026-07-25)
 
-**Accessors** that honour the acting identity (`unosec_current_user()`), so a
-tier-1 script is confined to its user's scope and a path outside it re-guards
-`fs.sys`:
-```c
-int  unofs_read_as(usc_uid_t who, const char *path, void *buf, int cap);  /* -> usc_fs_read  */
-int  unofs_write_as(usc_uid_t who, const char *path, const void *buf, int len); /* -> usc_fs_write */
-```
-Path→scope policy (what "the user's scope" means) is yours; coordinate the ACL
-model with `unosecure` (it can key ACLs on its uids). Until then `usc_fs_*`
-guards `fs.user` as the floor.
+**Approach correction.** §4 originally sketched a new `unofs_read_as(uid, path,
+…)` seam in the unofs owner. In the event no new unofs API was needed: pc64's
+existing `uno_fs_*` volume primitives (`uno_fs_read`/`_write`/`_mkdir`/`_kind`/
+`_writable`/`_volume_name`) already carry everything, so — exactly as §3 composed
+the proc surface from the shell's app primitives — `usc_fs_read`/`usc_fs_write`
+compose identity + scope on top of them in `unoscript.c`. In-lane, no cross-team
+request.
 
-**Unlocks:** `u.fs.read/write`.
+**Path scheme + scope (decided 2026-07-25):**
+- **Bare relative path** (`notes/todo.txt`) → the acting user's home,
+  `USERS/<uid>/notes/todo.txt` on the **primary writable native-FAT volume**
+  (`fs_user_vol()`), always `fs.user` (tier 1). Parent dirs (`USERS/`,
+  `USERS/<uid>/`, script subdirs) are auto-provisioned on write via idempotent
+  `uno_fs_mkdir`.
+- **Absolute `/label/rest`** → the volume whose `uno_fs_volume_name` matches
+  `label` (case-insensitive), name = `rest`. `fs.sys` (tier 2) **unless** it is
+  the acting user's own home path on the user volume.
+- `..`, `.`, `//` are **rejected** (`USC_EINVAL`) — a relative path structurally
+  cannot leave its home; the absolute form is the only escape hatch, and it is
+  `fs.sys`. This traversal/scope logic is the pure `unoscript_path.c`.
+
+**Guarding:** `usc_fs_*` guards `fs.user` (the floor) first — so an
+unauthenticated/tier-0 caller is denied before the path even resolves — then a
+resolved sys path **re-guards** `fs.sys`. Mirrors the model this section
+originally described.
+
+**Verified:**
+- **Host** (`tools/unoscript_path_test.c`, seconds, no QEMU): the traversal
+  rejection, exact `USERS/<uid>/` construction, home-membership test (uid 1 must
+  not match uid 12's home), and the `/label/rest` split. This is the
+  security-critical layer.
+- **QEMU** (`tools/unoscript_qemu.py`, over URC): `fs.user`==tier 1,
+  `fs.sys`==tier 2; `fs.read`/`fs.write` on both a home and a `/vol` path raise
+  `OSError: EPERM: capability denied` unescalated (the guard, not the old
+  "surface not wired" stub). prod + debug link green.
+
+**Bounds / deferred:** `uid` is a FAT 8.3 dir component (fine for realistic
+uids); the read binding caps at 4 KB (streaming is a follow-up); an ACL model
+keyed on `unosecure` uids beyond the home subtree, and the authenticated
+read/write **round-trip** through the guarded surface (needs a logged-in
+session), are the deferred end-to-end gate. The FAT subdir write path itself is
+pre-existing/proven.
+
+**Unlocked:** `u.fs.read/write`.
 
 ## 5. kernel — memory, port IO, reboot/suspend, syscall  ·  tier 2/3  ·  `mem.*` / `io.*` / `power` / `syscall`
 

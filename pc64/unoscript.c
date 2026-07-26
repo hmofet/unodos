@@ -11,6 +11,8 @@
  * NOT in build.sh yet (see UNOSCRIPT.md "Build wiring - deferred").
  * ======================================================================== */
 #include "unoscript.h"
+#include "unoscript_path.h"   /* pure fs path helpers (scheme + scope logic)   */
+#include <string.h>
 
 /* unoauto LOG channel for audit routing when unosecure is absent (optional). */
 #ifdef UNO_DEBUG
@@ -196,20 +198,123 @@ int usc_app_message(int idx, const char *json, char *reply, int cap)
 }
 
 /* -- fs (unofs) --------------------------------------------------------- */
+/* Consumed, not owned: the volume fs primitives (pc64_fs.c).  The user-scoped
+ * surface is composed here from these + the acting identity, exactly as the
+ * proc surface composes from the shell's app primitives.  Path scheme + scope
+ * (decided 2026-07-25): a bare relative path is the acting user's home
+ * ("USERS/<uid>/..." on the primary writable native-FAT volume, always fs.user);
+ * an absolute "/label/rest" names a volume by label and is fs.sys unless it lands
+ * back in that same home subtree.  "..", "." and "//" are rejected (see
+ * unoscript_path.h), so a relative path can never leave its home. */
+int         uno_fs_volumes(void);
+const char *uno_fs_volume_name(int vol);
+int         uno_fs_kind(int vol);                 /* 1 = native FAT (subdirs)  */
+int         uno_fs_writable(int vol);
+long        uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
+int         uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
+int         uno_fs_mkdir(int vol, const char *path);
+
+#define FS_NAME_MAX 256
+
+/* case-insensitive ASCII equality (volume-label match). */
+static int fs_ieq(const char *a, const char *b)
+{
+    while (*a && *b) {
+        int ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == *b;
+}
+/* the primary user volume: first writable native-FAT vol (subdirs needed for
+ * USERS/<uid>/), or -1 if the machine has none. */
+static int fs_user_vol(void)
+{
+    int i, n = uno_fs_volumes();
+    for (i = 0; i < n; i++)
+        if (uno_fs_kind(i) == 1 && uno_fs_writable(i)) return i;
+    return -1;
+}
+static int fs_vol_by_label(const char *lab)
+{
+    int i, n = uno_fs_volumes();
+    for (i = 0; i < n; i++) {
+        const char *nm = uno_fs_volume_name(i);
+        if (nm && fs_ieq(nm, lab)) return i;
+    }
+    return -1;
+}
+/* resolve a surface path for the acting user into (vol, name, is_sys).  Pure of
+ * side effects (only reads the volume table); returns USC_OK or a USC_E* code. */
+static int fs_resolve(const char *path, char *name, int *vol, int *is_sys)
+{
+    unsigned long uid = unosec_current_user();
+    if (!path || !path[0]) return USC_EINVAL;
+
+    if (path[0] == '/') {                          /* absolute /label/rest      */
+        char lab[32]; const char *rest; int v;
+        if (uscp_split_abs(path, lab, (int)sizeof lab, &rest) != 0) return USC_EINVAL;
+        if (uscp_has_traversal(rest)) return USC_EINVAL;
+        if ((int)strlen(rest) >= FS_NAME_MAX) return USC_EINVAL;
+        v = fs_vol_by_label(lab);
+        if (v < 0) return USC_EINVAL;              /* unknown volume label      */
+        strcpy(name, rest);
+        *vol = v;
+        /* fs.user only if this absolute path IS the acting user's own home. */
+        *is_sys = !(v == fs_user_vol() && uscp_under_home(uid, rest));
+        return USC_OK;
+    }
+
+    /* relative -> the acting user's home (always fs.user). */
+    {
+        int uv = fs_user_vol();
+        if (uv < 0) return USC_EUNAVAIL;           /* no writable native-FAT vol */
+        if (uscp_has_traversal(path)) return USC_EINVAL;
+        if (uscp_home_name(uid, path, name, FS_NAME_MAX) < 0) return USC_EINVAL;
+        *vol = uv;
+        *is_sys = 0;
+        return USC_OK;
+    }
+}
+/* best-effort create every parent directory of root-relative `name`.  mkdir is
+ * idempotent (0 when the dir already exists), so walking the prefixes is safe -
+ * this is what provisions USERS/, USERS/<uid>/ and any script subdirs on first
+ * write.  A no-op on RAM / firmware-SFS volumes (mkdir unsupported there). */
+static void fs_mkparents(int vol, const char *name)
+{
+    char d[FS_NAME_MAX]; int i;
+    for (i = 0; name[i] && i < FS_NAME_MAX - 1; i++)
+        if (name[i] == '/' && i > 0) { memcpy(d, name, (size_t)i); d[i] = 0;
+                                       uno_fs_mkdir(vol, d); }
+}
+
 int usc_fs_read(const char *path, void *buf, int cap)
 {
-    /* USER scope vs SYS scope is decided by unosecure from the path; the guard
-     * here is the floor (FS_USER).  A SYS-scoped path re-guards FS_SYS inside
-     * the unofs seam once that accessor exists. */
+    char name[FS_NAME_MAX]; int vol, is_sys, rc; long got;
+    /* floor first: an unauthenticated / tier-0 caller is denied before we even
+     * resolve, so path validity never leaks below the FS_USER gate. */
     if (!unoscript_guard(USC_CAP_FS_USER, "fs.read")) return denied(USC_CAP_FS_USER);
-    (void)path; (void)buf; (void)cap;
-    return USC_EUNAVAIL;   /* TODO(unofs): user-scoped read seam */
+    if (!buf || cap <= 0) return USC_EINVAL;
+    rc = fs_resolve(path, name, &vol, &is_sys);
+    if (rc != USC_OK) return rc;
+    if (is_sys && !unoscript_guard(USC_CAP_FS_SYS, "fs.read(sys)"))
+        return denied(USC_CAP_FS_SYS);            /* outside home re-guards sys */
+    got = uno_fs_read(vol, name, (unsigned char *)buf, cap);
+    return got < 0 ? USC_EINVAL : (int)got;        /* bytes read, or missing    */
 }
 int usc_fs_write(const char *path, const void *buf, int len)
 {
+    char name[FS_NAME_MAX]; int vol, is_sys, rc;
     if (!unoscript_guard(USC_CAP_FS_USER, "fs.write")) return denied(USC_CAP_FS_USER);
-    (void)path; (void)buf; (void)len;
-    return USC_EUNAVAIL;   /* TODO(unofs) */
+    if (!buf || len < 0) return USC_EINVAL;
+    rc = fs_resolve(path, name, &vol, &is_sys);
+    if (rc != USC_OK) return rc;
+    if (is_sys && !unoscript_guard(USC_CAP_FS_SYS, "fs.write(sys)"))
+        return denied(USC_CAP_FS_SYS);
+    fs_mkparents(vol, name);                        /* provision home / subdirs  */
+    return uno_fs_write(vol, name, (const unsigned char *)buf, len) ? USC_OK : USC_EINVAL;
 }
 
 /* -- proc (shell run-set) ----------------------------------------------- */

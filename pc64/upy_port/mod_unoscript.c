@@ -140,6 +140,32 @@ static const mp_rom_map_elem_t app_tab[] = {
 static MP_DEFINE_CONST_DICT(app_dict, app_tab);
 static const mp_obj_module_t u_app = { { &mp_type_module }, (mp_obj_dict_t *)&app_dict };
 
+/* ======================= namespace: fs (tier 1/2) ====================== */
+/* read(path) -> bytes ; write(path, data) -> 0 on success. A bare relative path
+ * is the user's home ("USERS/<uid>/...", tier-1 fs.user); "/vol/rest" is an
+ * absolute volume path (tier-2 fs.sys unless it is the user's own home). */
+static mp_obj_t fs_read(mp_obj_t path)
+{
+    char buf[4096];
+    int rc = usc_fs_read(mp_obj_str_get_str(path), buf, (int)sizeof buf);
+    return rc >= 0 ? mp_obj_new_bytes((const byte *)buf, rc) : usc_ret(rc);
+}
+static mp_obj_t fs_write(mp_obj_t path, mp_obj_t data)
+{
+    mp_buffer_info_t bi;
+    mp_get_buffer_raise(data, &bi, MP_BUFFER_READ);
+    return usc_ret(usc_fs_write(mp_obj_str_get_str(path), bi.buf, (int)bi.len));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(fs_read_obj, fs_read);
+static MP_DEFINE_CONST_FUN_OBJ_2(fs_write_obj, fs_write);
+static const mp_rom_map_elem_t fs_tab[] = {
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_fs) },
+    { MP_ROM_QSTR(MP_QSTR_read),     MP_ROM_PTR(&fs_read_obj) },
+    { MP_ROM_QSTR(MP_QSTR_write),    MP_ROM_PTR(&fs_write_obj) },
+};
+static MP_DEFINE_CONST_DICT(fs_dict, fs_tab);
+static const mp_obj_module_t u_fs = { { &mp_type_module }, (mp_obj_dict_t *)&fs_dict };
+
 /* ======================= namespace: proc (tier 2) ====================== */
 /* list() -> [(pid, tid, state, name, owner), ...] */
 static mp_obj_t proc_list(void)
@@ -235,6 +261,7 @@ static const mp_rom_map_elem_t unoscript_globals_table[] = {
     /* namespaces */
     { MP_ROM_QSTR(MP_QSTR_ui),        MP_ROM_PTR(&u_ui) },
     { MP_ROM_QSTR(MP_QSTR_app),       MP_ROM_PTR(&u_app) },
+    { MP_ROM_QSTR(MP_QSTR_fs),        MP_ROM_PTR(&u_fs) },
     { MP_ROM_QSTR(MP_QSTR_proc),      MP_ROM_PTR(&u_proc) },
     { MP_ROM_QSTR(MP_QSTR_mem),       MP_ROM_PTR(&u_mem) },
     { MP_ROM_QSTR(MP_QSTR_io),        MP_ROM_PTR(&u_io) },
