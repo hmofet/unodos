@@ -20,7 +20,7 @@
  *
  * Credentials: WIFI.CFG or WIFI.TXT at a volume root (ssid= / psk=). The NAS
  * creds template (wifi.txt) rides in via the flasher's developer-options
- * folder copy. STRESS.CFG key `nonet` skips the whole test.
+ * folder copy. DEBUG.CFG key `nonet` skips the whole test.
  * ======================================================================== */
 #include "uno_debug.h"
 #include "unoauto.h"
@@ -271,7 +271,7 @@ static void run_test(void)
 {
     unsigned short vid = 0, pid = 0;
     uno_nic_t *nic;
-    /* Flasher test-selection overrides (STRESS.CFG):
+    /* Flasher test-selection overrides (DEBUG.CFG):
      *   net-force-wifi : test WiFi even when a USB ethernet adapter is present
      *   net-eth-only   : test ONLY ethernet (no WiFi fallback)
      * Neither = the default auto-detect (adapter present -> eth, else WiFi). */
@@ -370,7 +370,7 @@ void uno_pc64_shutdown(void);            /* platform: power off (marks clean) */
  *   poweroff        explicit "shut down when the suites finish"
  *   passes= / once  legacy poweroff signal (older harness/flasher configs)
  *   noshutdown      veto - leave the desktop up (operator-present metal runs)
- * A stick with no STRESS.CFG (all flags < 0) never powers off - a normal boot. */
+ * A stick with no DEBUG.CFG (all flags < 0) never powers off - a normal boot. */
 static void nettest_finish(void)
 {
     uno_dbg_progress_done();
@@ -385,7 +385,7 @@ static void nettest_finish(void)
 }
 
 /* ---- unoautomate boot runner ----------------------------------------------
- * STRESS.CFG key `automate` + an AUTOMATE.PY at any volume root = run it as
+ * DEBUG.CFG key `automate` + an AUTOMATE.PY at any volume root = run it as
  * a Python app once the boot-test phase ends.  The script's tick() drives
  * the automation (see upy_port/mod_unoauto.c); it powers the machine off
  * itself via unoauto.poweroff() when it finishes an unattended run. */
@@ -396,9 +396,9 @@ static void automate_start(void)
 {
     int i, n;
     /* Arm the remote dev-PC link now that the boot net test has released the
-     * single TCP connection.  No-op unless STRESS.CFG has a `remote=` key. */
+     * single TCP connection.  No-op unless DEBUG.CFG has a `remote=` key. */
     unoauto_remote_boot();
-    /* Arm zero-config LAN discovery.  No-op unless STRESS.CFG has `discover`. */
+    /* Arm zero-config LAN discovery.  No-op unless DEBUG.CFG has `discover`. */
     netdisc_boot();
     if (pc64_stress_cfg_flag("automate") <= 0) return;
     n = uno_fs_volumes();
@@ -440,7 +440,7 @@ void pc64_nettest_tick(void)
     if (flag < 0) { uno_dbg_progress_done(); automate_start(); return; }
                                          /* not a test stick (but automation
                                             may still be configured)          */
-    if (flag > 0) { uno_dbg_log("net: skipped (nonet in STRESS.CFG)");
+    if (flag > 0) { uno_dbg_log("net: skipped (nonet in DEBUG.CFG)");
                     nettest_finish(); automate_start(); return; }
     g_active = 1;
     run_test();

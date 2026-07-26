@@ -2,7 +2,7 @@
  * UnoDOS/pc64 - netdisc: zero-config LAN discovery over UDP broadcast.
  *
  * The remote channel (REMOTE.md) normally learns the dev PC's address from a
- * static STRESS.CFG `remote=<ip>:<port>` key. netdisc removes that: pc64
+ * static DEBUG.CFG `remote=<ip>:<port>` key. netdisc removes that: pc64
  * BROADCASTs a discovery PROBE on the LAN; a listening dev PC replies with an
  * OFFER carrying its URC listener ip:port; pc64 records it (and can then dial
  * it with no prior configuration). It also ANSWERS inbound PROBEs with an OFFER
@@ -14,7 +14,7 @@
  *   UNODISC 1 GOTHOST <ip> <port>                 (pc64's ack of a host OFFER)
  * role is "pc64" or "host". Built on the M1 broadcast + M2 socket primitives.
  *
- * Debug tier (same UNO_DEBUG gate as the remote channel); armed by a STRESS.CFG
+ * Debug tier (same UNO_DEBUG gate as the remote channel); armed by a DEBUG.CFG
  * `discover` flag. In production every entry point compiles away.
  * ======================================================================== */
 #ifndef PC64_NETDISC_H
@@ -22,7 +22,7 @@
 #include "net.h"
 
 #ifdef UNO_DEBUG
-void netdisc_boot(void);              /* arm from the STRESS.CFG `discover` flag */
+void netdisc_boot(void);              /* arm from the DEBUG.CFG `discover` flag */
 void netdisc_tick(void);              /* pump: probe + service inbound; each frame */
 int  netdisc_active(void);            /* 1 if armed */
 int  netdisc_have_host(void);         /* 1 once a host OFFER has been recorded */

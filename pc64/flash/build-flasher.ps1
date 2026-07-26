@@ -45,14 +45,14 @@ function Invoke-Native([scriptblock]$sb, [string]$what) {
 # ---- 1+2. build BOTH the production and debug OS, pack the release image -----
 # The flasher embeds TWO ESP trees:
 #   - PRODUCTION (UNO_DEBUG=0): what it flashes by default (a clean OS, no
-#     \CRASH, no \STRESS.CFG, no stress driver).
+#     \CRASH, no \DEBUG.CFG, no stress driver).
 #   - DEBUG      (UNO_DEBUG=1): flashed only when Developer options is on -
 #     crash reports to \CRASH, the stress driver, and the test harness the
-#     dev-options test toggles arm via \STRESS.CFG.
+#     dev-options test toggles arm via \DEBUG.CFG.
 # (This supersedes the old "ship ONE flasher = the debug build" rule.)
 if (-not $SkipBuild) {
     # build.sh populates build/esp INCREMENTALLY (no wipe), so a stale CRASH /
-    # STRESS.CFG / FIRMWARE from a prior debug build would leak into the
+    # DEBUG.CFG / FIRMWARE from a prior debug build would leak into the
     # production snapshot. Wipe build/esp before each build to keep them clean.
     Write-Host "Building PRODUCTION OS (UNO_DEBUG=0) under WSL..." -ForegroundColor Yellow
     Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && UNO_DEBUG=0 ./build.sh" } "production build failed"

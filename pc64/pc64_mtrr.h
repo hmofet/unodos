@@ -1,5 +1,5 @@
 /* Opt-in MTRR rebuild for a write-combining framebuffer (P3) - see pc64_mtrr.c.
- * OPT-IN and reversible: STRESS.CFG `mtrr-wc`, operator present. Returns 0 on
+ * OPT-IN and reversible: DEBUG.CFG `mtrr-wc`, operator present. Returns 0 on
  * success, -1 if it refused (logged why). Snapshots + can restore in-session. */
 #ifndef PC64_MTRR_H
 #define PC64_MTRR_H

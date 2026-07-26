@@ -77,7 +77,7 @@ int  uno_hw_wdt_status(char *buf, int cap);
  * one wedge class the software guard misses, without editing the harness. */
 int  uno_hw_wdt_cmd(const char *line, char *out, int cap);
 
-/* Opt-in boot self-demonstration (STRESS.CFG key `hw-wdt-selftest[=<seconds>]`):
+/* Opt-in boot self-demonstration (DEBUG.CFG key `hw-wdt-selftest[=<seconds>]`):
  * arm the TCO then cli-spin, so the hardware backstop resets the box with no
  * unoautomate wiring in place.  Wired as one guarded call in uefi_main.c's debug
  * boot block; a no-op without the key / without a usable TCO. */

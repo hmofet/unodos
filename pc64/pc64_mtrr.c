@@ -5,7 +5,7 @@
  * type UC on every machine tested, so present is uncached (~14-44 MB/s vs
  * ~2 GB/s to RAM) and dominates the frame. The safe wins (P0 spans, wider
  * stores, GOP Blt) are banked; this is the 100x fix, and the one with real
- * bricking risk if wrong - so it is OPT-IN (STRESS.CFG `mtrr-wc`), runs with
+ * bricking risk if wrong - so it is OPT-IN (DEBUG.CFG `mtrr-wc`), runs with
  * the operator present, logs before/after, and REFUSES rather than guess.
  *
  * Why it is hard (SDM 11.11): you cannot just add a WC MTRR over the fb - on

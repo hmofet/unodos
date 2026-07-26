@@ -551,7 +551,7 @@ int uno_hw_wdt_cmd(const char *line, char *out, int cap)
     return -1;
 }
 
-/* Boot-time self-demonstration, opt-in via a STRESS.CFG key, so the hardware
+/* Boot-time self-demonstration, opt-in via a DEBUG.CFG key, so the hardware
  * backstop can be exercised end-to-end (QEMU q35 ich9-lpc, and metal) WITHOUT
  * any of the unoautomate-side guard wiring in place yet:
  *

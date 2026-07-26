@@ -91,7 +91,7 @@ void uno_dbg_write_bootlog(void);       /* CRASH\BOOTLOG.TXT - every boot      *
 void uno_dbg_boot_marker(void);         /* CRASH\BOOTS.TXT - earliest proof    */
 void uno_dbg_write_perf(const char *text, int len);  /* CRASH\<M>\PF###.TXT    */
 int  uno_dbg_write_crashfile(const char *name, const void *data, int len);
-int  pc64_stress_cfg_flag(const char *key);  /* STRESS.CFG key set? -1 = no file */
+int  pc64_stress_cfg_flag(const char *key);  /* DEBUG.CFG key set? -1 = no file */
 int  pc64_stress_cfg_value(const char *key, char *buf, int cap); /* value after key= */
 /* SMBIOS-derived machine tag = the telemetry folder leaf (CRASH\<TAG>\): one
  * stick serves a whole batch of machines without results colliding. */

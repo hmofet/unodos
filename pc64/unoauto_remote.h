@@ -10,7 +10,7 @@
  *
  * SHAPE
  *   pc64's TCP stack is single-connection and client-only, so pc64 DIALS OUT
- *   to a listener on the dev PC.  The dev PC's address is a STRESS.CFG key,
+ *   to a listener on the dev PC.  The dev PC's address is a DEBUG.CFG key,
  *   `remote=<ip>:<port>` (broadcast auto-discovery waits on the fuller ARP/UDP
  *   stack - see UNOAUTOMATE-REQUESTS.md).  Plaintext, LAN-only by intent.
  *
@@ -26,7 +26,7 @@
 
 #ifdef UNO_DEBUG
 
-/* Read the STRESS.CFG `remote=<ip>:<port>` key and arm the connector.  A no-op
+/* Read the DEBUG.CFG `remote=<ip>:<port>` key and arm the connector.  A no-op
  * if the key is absent or already armed.  Call once the boot net test has
  * released the single TCP connection (from the automate/nettest-finish path). */
 void unoauto_remote_boot(void);

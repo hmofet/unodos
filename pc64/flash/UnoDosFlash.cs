@@ -123,7 +123,7 @@ class FlashForm : Form
 
         // ---- reconfigure row: change the tests on an already-flashed disk ----
         // The UnoDOS volume is an EFI System Partition, which Windows hides from
-        // Explorer, so you can't just edit STRESS.CFG by hand. This rewrites it
+        // Explorer, so you can't just edit DEBUG.CFG by hand. This rewrites it
         // in place over the raw disk (no erase) with the current Developer
         // options - handy for re-tasking a batch stick without a full reflash.
         reconfigBtn = new Button { Text = "Reconfigure tests (no erase)",
@@ -495,7 +495,7 @@ class FlashForm : Form
         }
     }
 
-    // ---- reconfigure an already-flashed disk (rewrite STRESS.CFG only) -------
+    // ---- reconfigure an already-flashed disk (rewrite DEBUG.CFG only) -------
     void ReconfigClicked(object sender, EventArgs e)
     {
         var drive = driveBox.SelectedItem as UsbDrive;
@@ -511,8 +511,8 @@ class FlashForm : Form
         string cfg = settings.StressCfg();
         var confirm = MessageBox.Show(
             "Rewrite the test settings on:\n\n    " + drive.ToString() + "\n\n" +
-            "This does NOT erase the disk - it only updates \\STRESS.CFG in place. " +
-            "The disk must already hold a UnoDOS debug build.\n\nNew STRESS.CFG:\n\n" + cfg +
+            "This does NOT erase the disk - it only updates \\DEBUG.CFG in place. " +
+            "The disk must already hold a UnoDOS debug build.\n\nNew DEBUG.CFG:\n\n" + cfg +
             "\nContinue?",
             "Reconfigure tests", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (confirm != DialogResult.Yes) return;
@@ -575,7 +575,7 @@ class FlashForm : Form
  *   Standard (stress)      : master + passes + auto power-off
  *   Network (hardware)     : master + WiFi / Ethernet
  *   Diagnostics (advanced) : master + MTRR-WC + crash-pipeline self-test
- * The selection is written to the drive as \STRESS.CFG (UnoSettings.StressCfg). */
+ * The selection is written to the drive as \DEBUG.CFG (UnoSettings.StressCfg). */
 class DevForm : Form
 {
     readonly UnoSettings s;

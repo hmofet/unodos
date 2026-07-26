@@ -972,7 +972,7 @@ void uno_pc64_init(void)
                     "point cannot be persisted");
     uno_dbg_write_bootenv();
     uno_dbg_write_bootlog();
-    /* opt-in PCH TCO hardware-watchdog self-demo (STRESS.CFG hw-wdt-selftest):
+    /* opt-in PCH TCO hardware-watchdog self-demo (DEBUG.CFG hw-wdt-selftest):
      * arm the TCO then cli-spin - only separate silicon can reset from there.
      * A no-op without the key / without a usable TCO.  See HWWATCHDOG.md §7. */
     uno_hw_wdt_boot_selftest();

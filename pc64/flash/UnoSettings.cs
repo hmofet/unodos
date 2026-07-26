@@ -10,7 +10,7 @@
  *  reference the build does not otherwise need.  Unknown keys are preserved on
  *  save, so an older flasher cannot silently drop a newer one's settings.
  *
- *  Test model (matches STRESS.CFG the debug OS reads).  Four SUITES, each with
+ *  Test model (matches DEBUG.CFG the debug OS reads).  Four SUITES, each with
  *  a master toggle, plus one cross-cutting switch:
  *    - Conformance (SPECTEST): master + per-area (storage/system/frameworks/
  *      apps/network).  All areas on -> `spec`; a subset -> `spec=a,b,...`.
@@ -86,7 +86,7 @@ class UnoSettings
         return a;
     }
 
-    /* The STRESS.CFG the debug build reads, generated from the suite toggles.
+    /* The DEBUG.CFG the debug build reads, generated from the suite toggles.
      * Written only in DevMode; overrides the debug ESP's shipped default.
      * Never null in DevMode (an all-off debug stick is a valid "no tests" run). */
     public string StressCfg()
@@ -247,11 +247,11 @@ class UnoSettings
         warnings = new List<string>();
         if (!DevMode) return list;
 
-        // the generated STRESS.CFG (arms the debug build's tests) - first, so
+        // the generated DEBUG.CFG (arms the debug build's tests) - first, so
         // it's applied and shown; it overrides the debug ESP's shipped default
         string cfg = StressCfg();
         if (cfg != null)
-            list.Add(new InlineFilePayload("STRESS.CFG", cfg, "test config (STRESS.CFG)"));
+            list.Add(new InlineFilePayload("DEBUG.CFG", cfg, "test config (DEBUG.CFG)"));
 
         if (KitEnabled) {
             if (Directory.Exists(KitPath)) list.Add(new FolderPayload(KitPath, ""));
