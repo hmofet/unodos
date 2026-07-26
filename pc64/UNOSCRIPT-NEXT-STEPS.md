@@ -289,9 +289,19 @@ stub). prod + debug link green.
   `tools/unoscript_qemu.py` (asserts `u.e2e()==0`). This is the Python-layer
   counterpart to `unosecure`'s `-DUNO_SECTEST` C gate, and it retroactively gives
   every surface its positive round-trip proof.
-- **Manifest-declared caps.** Wire an app's signed manifest (unosecure supports
-  HMAC-SHA256 today) to a launch-time grant so trusted automation apps don't prompt
-  per op — needs the app-launch path to pass the manifest to `unosec_manifest_apply`.
+- ~~**Manifest-declared caps.**~~ **DONE** (2026-07-26) — a launched Python app
+  now runs under an isolated `unosecure` session (acting user, INSTALLED trust),
+  opened by `unoscript_app_caps_begin(vol, path)` and logged out by
+  `unoscript_app_caps_end()` (bracketed in `pc64_shell_run_python` / the pyapp
+  close path). If the app ships a `<base>.MFT` sidecar signed by a trusted key,
+  `unosec_manifest_apply` grants its declared caps SESSION-scoped at launch — so a
+  trusted automation app never prompts per op; on close the session (and its
+  grants) is destroyed. Signing keys are enrolled from a `TRUST.MFK` file at boot
+  (`unoscript_trust_boot`) or live via `unosec_trust_add_key`. Host tool:
+  `tools/uno_manifest.py` (keygen + sign). Gate: `u.mtest()`
+  (`unoscript_mtest`) — a signed manifest grants a guest `proc.enum` at launch,
+  the grant is dropped on close, and a forged signature grants nothing;
+  `tools/unoscript_qemu.py` asserts `u.mtest()==0`.
 - **Docs.** As each surface lands, add a worked example to `UNOSCRIPT.md` and the
   user manual (the manual is a standing update rule for pc64 features).
 

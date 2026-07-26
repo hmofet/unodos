@@ -12,6 +12,7 @@
  * ======================================================================== */
 #include "unoscript.h"
 #include "unoscript_path.h"   /* pure fs path helpers (scheme + scope logic)   */
+#include "unosecure.h"        /* session/manifest API for automation-app caps  */
 #include <string.h>
 
 /* unoauto LOG channel for audit routing when unosecure is absent (optional). */
@@ -495,8 +496,6 @@ int usc_power(int action)
  * (skip).  Best-effort cleanup: delete the tester, restore the policy, leave
  * every session.  Returns 0 on a full pass, else a bitmask of the failures. */
 #ifdef UNO_DEBUG
-#include "unosecure.h"
-
 int  pc64_shell_launch(int a);
 void pc64_consent_register(void);     /* restore the UI's consent provider */
 
@@ -511,9 +510,19 @@ static usc_consent_t e2e_deny_consent(void *ctx, usc_uid_t uid, usc_trust_t trus
 { (void)ctx; (void)uid; (void)trust; (void)cap; (void)cap_name; (void)tier;
   (void)detail; return UNOSEC_CONSENT_DENY; }
 
+/* An admin session on the (debug) test store, shared by the self-tests so they
+ * run in sequence: the first bootstraps a throwaway admin, the rest log into it.
+ * Returns 0 on a real, provisioned store (no test admin exists) -> the caller
+ * skips.  bootstrap is a no-op once an admin exists, so this is idempotent. */
+static usec_session_t selftest_admin(void)
+{
+    unosec_bootstrap_admin("selftest", "selftestpw");
+    return unosec_login("selftest", "selftestpw", UNOSEC_TRUST_INTERACTIVE);
+}
+
 int unoscript_e2e_selftest(void)
 {
-    usc_uid_t admin, tester;
+    usc_uid_t tester;
     usec_session_t as, ts;
     usc_policy_t saved_policy;
     int fails = 0, g = 0, i, n;
@@ -522,11 +531,9 @@ int unoscript_e2e_selftest(void)
 
     for (i = 0; i < 32; i++) wr[i] = (unsigned char)(i * 5 + 1);
 
-    /* 1. bootstrap a throwaway admin on a FRESH store (skip otherwise). */
-    admin = unosec_bootstrap_admin("e2eadm", "e2eadmpw");
-    if (!admin) return -1;                              /* provisioned store: skip   */
-    as = unosec_login("e2eadm", "e2eadmpw", UNOSEC_TRUST_INTERACTIVE);
-    if (!as || !unosec_enter_session(as)) return -2;
+    /* 1. admin session on the throwaway test store (skip on a real one). */
+    as = selftest_admin();
+    if (!as || !unosec_enter_session(as)) return -1;    /* provisioned store: skip   */
     saved_policy = unosec_policy_get();
     tester = unosec_account_create("e2eusr", "e2euserpw", "guest");
     unosec_policy_set(UNOSEC_POLICY_AUTOGRANT);         /* admin holds policy.edit   */
@@ -576,8 +583,223 @@ int unoscript_e2e_selftest(void)
     pc64_consent_register();                            /* restore interactive consent */
     return fails;                                       /* 0 == every check passed   */
 }
+
+/* ===================================================================== *
+ * Manifest self-test (u._mtest): prove a trusted, signed manifest grants an
+ * automation app its declared caps at launch, and an untrusted one grants
+ * nothing.  Drives the REAL unoscript_app_caps_begin/end + unosec_manifest_apply
+ * path on a GUEST tester (no static proc.enum), so a granted proc.enum can only
+ * have come from the manifest.  Signs in-image with bearssl HMAC, on a fresh
+ * store; returns 0 on a full pass, <0 on skip, else a failure bitmask.
+ * ===================================================================== */
+#include "bearssl_hmac.h"
+
+static void mtest_hmac(const unsigned char key[32], const char *msg, int mlen,
+                       unsigned char out[32])
+{
+    br_hmac_key_context kc; br_hmac_context hc;
+    br_hmac_key_init(&kc, &br_sha256_vtable, key, 32);
+    br_hmac_init(&hc, &kc, 0);
+    br_hmac_update(&hc, msg, (size_t)mlen);
+    br_hmac_out(&hc, out);
+}
+static int mput(char *d, int cap, int at, const char *s)
+{ while (*s && at < cap - 1) d[at++] = *s++; if (at < cap) d[at] = 0; return at; }
+static int mtest_first_writable(void)
+{ int i, n = uno_fs_volumes(); for (i = 0; i < n; i++) if (uno_fs_writable(i)) return i; return -1; }
+
+/* Build a manifest for `caps`, signed with (keyid,key), into out; returns len.
+ * `tamper` flips one signature byte to forge the bad-signature case. */
+static int mtest_make(char *out, int cap, const char *caps, const char *keyid,
+                      const unsigned char key[32], int tamper)
+{
+    static const char HX[] = "0123456789abcdef";
+    unsigned char sig[32];
+    int at = 0, i, bodylen;
+    at = mput(out, cap, at, "UNOSEC-MANIFEST v1\nname: mbot\ncaps: ");
+    at = mput(out, cap, at, caps);
+    at = mput(out, cap, at, "\nkey: ");
+    at = mput(out, cap, at, keyid);
+    at = mput(out, cap, at, "\n");                 /* signed body ends here      */
+    bodylen = at;
+    mtest_hmac(key, out, bodylen, sig);
+    if (tamper) sig[0] ^= 0xFF;
+    at = mput(out, cap, at, "sig: ");
+    for (i = 0; i < 32 && at < cap - 3; i++) { out[at++] = HX[sig[i] >> 4]; out[at++] = HX[sig[i] & 15]; }
+    at = mput(out, cap, at, "\n");
+    return at;
+}
+
+int unoscript_mtest(void)
+{
+    static const unsigned char KEY[32] = {
+        0x5a,0x1c,0x9e,0x03,0x74,0xb8,0x2f,0xd1, 0x66,0x40,0xaa,0x11,0xc7,0x39,0x8b,0x52,
+        0x0e,0xf3,0x21,0x9d,0x4c,0x76,0xe5,0x88, 0xb0,0x17,0x63,0xca,0x2a,0x95,0xde,0x44 };
+    usc_uid_t tester;
+    usec_session_t as, ts;
+    usc_policy_t saved;
+    usc_proc_ent rows[4];
+    char mf[512];
+    int mlen, fails = 0, V, granted;
+
+    V = mtest_first_writable();
+    if (V < 0) return -1;                              /* nowhere to stage it     */
+
+    as = selftest_admin();                             /* shared throwaway admin  */
+    if (!as || !unosec_enter_session(as)) return -2;   /* provisioned store: skip */
+    saved = unosec_policy_get();
+    tester = unosec_account_create("musr", "muserpw", "guest");   /* no static proc.enum */
+    unosec_trust_add_key("mkey", KEY);                 /* trust our signer (admin holds policy.edit) */
+    unosec_leave();
+    if (!tester) return -4;
+
+    unosec_set_consent_provider(e2e_deny_consent, 0);  /* headless: never prompt  */
+
+    ts = unosec_login("musr", "muserpw", UNOSEC_TRUST_INTERACTIVE);
+    if (!ts || !unosec_enter_session(ts)) { pc64_consent_register(); return -5; }
+
+    /* POSITIVE: a validly-signed manifest grants proc.enum at launch. */
+    mlen = mtest_make(mf, (int)sizeof mf, "proc.enum", "mkey", KEY, 0);
+    uno_fs_write(V, "MBOT.MFT", (const unsigned char *)mf, mlen);
+    granted = unoscript_app_caps_begin(V, "MBOT.UNO");     /* opens child + applies */
+    if (granted != 1) fails |= 1 << 0;
+    if (usc_proc_list(rows, 4) < 0) fails |= 1 << 1;       /* granted -> allowed   */
+    unoscript_app_caps_end();                              /* drops the grants     */
+    if (usc_proc_list(rows, 4) != USC_EDENIED) fails |= 1 << 2;   /* gone again     */
+
+    /* NEGATIVE: a tampered signature grants nothing. */
+    mlen = mtest_make(mf, (int)sizeof mf, "proc.enum", "mkey", KEY, 1);   /* forge  */
+    uno_fs_write(V, "MBOT.MFT", (const unsigned char *)mf, mlen);
+    granted = unoscript_app_caps_begin(V, "MBOT.UNO");
+    if (granted != 0) fails |= 1 << 3;
+    if (usc_proc_list(rows, 4) != USC_EDENIED) fails |= 1 << 4;   /* still denied    */
+    unoscript_app_caps_end();
+
+    unosec_leave();                                    /* leave the tester        */
+    if (unosec_enter_session(as)) {
+        unosec_account_delete(tester);
+        unosec_policy_set(saved);
+        unosec_leave();
+    }
+    pc64_consent_register();
+    return fails;
+}
 #endif /* UNO_DEBUG */
 
+/* ===========================================================================
+ * Manifest-declared caps for automation apps.
+ * ---------------------------------------------------------------------------
+ * An automation app cannot answer a per-op consent prompt - it runs with no
+ * human at the keyboard.  So a trusted one ships a signed MANIFEST declaring the
+ * caps it needs, and the system grants that set at LAUNCH instead of prompting.
+ *
+ * A launched app runs under its OWN unosecure session (the acting user's id, but
+ * an INSTALLED trust class), opened here and logged out when the app closes - so
+ * the manifest's grants are isolated to that app and destroyed with it, never
+ * leaking into the desktop session.  The session is entered while the app is
+ * open; because it carries the SAME uid, the shell keeps its own authority
+ * (static role caps are uid-based), it only additionally holds the app's granted
+ * caps.  The manifest itself is a `<base>.MFT` sidecar next to the app image,
+ * signed (HMAC-SHA256) by a key in the trust store; unosec_manifest_apply()
+ * verifies it and grants the declared caps SESSION-scoped.  No signature, or an
+ * untrusted one, means no extra caps - the app runs with just the user's normal
+ * authority.  begin()/end() bracket the app in the launcher; see pc64_uui.c. */
+static usec_session_t g_app_sess;      /* the running automation app's session   */
+static int            g_app_entered;   /* is it currently on the enter stack?    */
+
+/* derive "<base>.MFT" from an app path: replace the last '.' extension, or
+ * append when there is none.  Bounded; result is root-relative like the input. */
+static void manifest_sidecar(const char *path, char *out, int cap)
+{
+    int i, dot = -1, n = 0;
+    for (i = 0; path[i]; i++) if (path[i] == '/') dot = -1; else if (path[i] == '.') dot = i;
+    if (dot < 0) dot = i;                          /* no extension: append       */
+    for (i = 0; i < dot && n < cap - 5; i++) out[n++] = path[i];
+    out[n++] = '.'; out[n++] = 'M'; out[n++] = 'F'; out[n++] = 'T';
+    out[n] = 0;
+}
+
+/* Open an isolated session for the app and, if it ships a trusted, signed
+ * manifest sidecar, grant its declared caps.  Returns the number of caps granted
+ * (0 = ran with no manifest / untrusted).  Enters the app session for its life. */
+int unoscript_app_caps_begin(int vol, const char *path)
+{
+    char sidecar[64];
+    unsigned char mf[1024];
+    long n;
+    int granted = 0;
+    usc_uid_t uid;
+
+    if (g_app_sess) unoscript_app_caps_end();      /* replace: end the previous  */
+    uid = unosec_current_user();
+    if (uid == UNOSEC_UID_NONE) return 0;          /* no identity -> no caps     */
+    g_app_sess = unosec_session_open(uid, UNOSEC_TRUST_INSTALLED);
+    if (!g_app_sess) return 0;
+
+    manifest_sidecar(path, sidecar, (int)sizeof sidecar);
+    n = uno_fs_read(vol, sidecar, mf, (long)sizeof mf - 1);
+    if (n > 0) {
+        mf[n] = 0;
+        if (unosec_enter_session(g_app_sess)) {
+            granted = unosec_manifest_apply((const char *)mf);   /* 0 / <0 / #caps */
+            if (granted < 0) granted = 0;
+            unosec_leave();
+        }
+    }
+    /* run the app under its own session for its lifetime. */
+    g_app_entered = unosec_enter_session(g_app_sess);
+    return granted;
+}
+
+/* Tear the app session down: leave it and log it out, dropping every grant. */
+void unoscript_app_caps_end(void)
+{
+    if (g_app_entered) { unosec_leave(); g_app_entered = 0; }
+    if (g_app_sess) { unosec_logout(g_app_sess); g_app_sess = 0; }
+}
+
+/* ---- trust store bring-up -------------------------------------------- *
+ * Load manifest-signing keys the machine trusts from a "TRUST.MFK" file (any
+ * mounted volume, first hit wins): one key per line, `<key-id> <64 hex chars>`.
+ * The boot volume is trusted, so this is the production way to enroll a signer;
+ * a running admin can also add keys live via unosec_trust_add_key.  Absent the
+ * file, no third-party manifest verifies (fail-closed). */
+static int hexnib(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static void unoscript_trust_boot(void)
+{
+    int v, nv = uno_fs_volumes();
+    unsigned char buf[4096];
+    for (v = 0; v < nv; v++) {
+        long n = uno_fs_read(v, "TRUST.MFK", buf, (long)sizeof buf - 1);
+        const char *p;
+        if (n <= 0) continue;
+        buf[n] = 0;
+        p = (const char *)buf;
+        while (*p) {                               /* one key per line           */
+            char id[32]; unsigned char key[32];
+            int i = 0, hi, lo, ok = 1;
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+            while (*p && *p != ' ' && *p != '\t' && i < (int)sizeof id - 1) id[i++] = *p++;
+            id[i] = 0;
+            while (*p == ' ' || *p == '\t') p++;
+            for (i = 0; i < 32 && ok; i++) {
+                if ((hi = hexnib(*p)) < 0) { ok = 0; break; } p++;
+                if ((lo = hexnib(*p)) < 0) { ok = 0; break; } p++;
+                key[i] = (unsigned char)((hi << 4) | lo);
+            }
+            if (ok && id[0] && i == 32) unosec_trust_add_key(id, key);
+            while (*p && *p != '\n') p++;           /* to end of line            */
+        }
+        return;                                     /* first TRUST.MFK wins       */
+    }
+}
+
 /* ---- Lifecycle -------------------------------------------------------- */
-void unoscript_boot(void) { /* nothing to bring up in the stub */ }
+void unoscript_boot(void) { unoscript_trust_boot(); }
 int  unoscript_available(void) { return 1; }
