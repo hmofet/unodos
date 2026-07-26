@@ -870,3 +870,29 @@ pattern §1/§2 used for ui.*/app.*. No `unosched` edit; no new subsystem row.
 Row shape: `pid`=app slot index, `tid`=0 (cooperative), `state`=open|focused
 bits, `name`=app title, `owner`=`unosec_current_user()`, `v1/v2`=draw cost
 (cyc / max_us) when the F11 profiler is compiled in, else 0.
+
+---
+
+## 2026-07-25 — CLAIM: unoscript fs.* user-scoped IO (roadmap step 4)
+
+Claiming the `fs` surface wiring in `unoscript` (UNOSCRIPT-NEXT-STEPS.md §4).
+Like §3, I hold the lane end-to-end and there is **no new unofs API** — the
+surface is composed in `unoscript.c` from unofs's existing public volume
+primitives (`uno_fs_read`/`_write`/`_mkdir`/`_kind`/`_writable`/`_volume_name`),
+so nothing in the unofs lane is edited.
+
+**Approach (deviation from §4's sketch):** §4 proposed a new `unofs_read_as(uid,
+…)` seam in the unofs owner; not needed. Path scheme (per the owner's decision
+2026-07-25): bare relative = the acting user's home `USERS/<uid>/…` on the primary
+writable native-FAT volume (fs.user); absolute `/label/rest` = a volume by label
+(fs.sys unless it's the user's own home). `..`/`.`/`//` rejected. The pure
+traversal/scope logic is `unoscript_path.c` (host-tested).
+
+- **Own this task:** `usc_fs_read`/`usc_fs_write` wiring (unoscript.c);
+  `unoscript_path.{c,h}` (new, pure); `u.fs.*` binding (mod_unoscript.c);
+  gates `tools/unoscript_path_test.c` + fs section of `tools/unoscript_qemu.py`.
+- **Consume, do NOT edit:** unofs's `uno_fs_*` primitives; the `usc_fs_*` cap
+  schema (unoscript.h, unchanged).
+- **Additive seam touches:** `build.sh` compile list (append `unoscript_path`);
+  `pc64_modload.c` kExports (append `KX(usc_fs_read)`, `KX(usc_fs_write)` — PYRT
+  now imports them); `mod_unoscript.c` module table (append the `fs` namespace).
