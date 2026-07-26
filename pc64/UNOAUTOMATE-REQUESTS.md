@@ -944,3 +944,30 @@ shim (no Python callback in kernel context) over the fixed fire set.
 This completes the §1–6 surface-wiring roadmap: every usc_* surface is wired or a
 documented non-goal. The only remaining item is the cross-cutting end-to-end
 authenticated gate (a logged-in unosecure session driving the surfaces).
+
+---
+
+## 2026-07-25 — DONE: end-to-end authenticated gate (u.e2e) — the last cross-cutting item
+
+The §1-6 wired+gated gate proves every surface DENIES unauthenticated; this proves
+the POSITIVE path. `unoscript_e2e_selftest` (debug-only, `u.e2e()`) logs in a
+REAL throwaway `unosecure` session and drives the surfaces in C:
+
+- **fs (tier 1):** guest DENIED -> `unosec_request` grants `fs.user` -> write+read
+  ROUND-TRIP 32 bytes exactly (the positive proof fs/proc/kernel gates couldn't reach).
+- **proc/io (tier 2):** under a dev AUTOGRANT policy, `proc.list` returns the running
+  apps and `io.in` reads a port.
+- **mem (tier 3):** STAYS denied under autogrant (covers <=ADMIN only) — boundary held.
+
+- **Own this task:** `unoscript_e2e_selftest` (unoscript.c/.h), the `u.e2e()` binding
+  (mod_unoscript.c), the e2e check in `tools/unoscript_qemu.py`. All debug-only.
+- **Consume, do NOT edit:** unosecure's public session/policy/consent API
+  (`unosec_bootstrap_admin`/`login`/`enter_session`/`account_create`/`account_delete`/
+  `policy_set`/`request`/`set_consent_provider`) + `pc64_consent_register`.
+- **Additive seam touch:** `pc64_modload.c` kExports — appended
+  `KX(unoscript_e2e_selftest)` under `#ifdef UNO_DEBUG`.
+
+Note: the test swaps in a headless deny-consent provider for its run (the KERNEL
+escalation would otherwise draw the interactive sheet and block a headless boot),
+then restores the UI provider via `pc64_consent_register()`. It needs a FRESH
+store (bootstrap_admin) — the QEMU gate's throwaway disk — else it returns <0 (skip).
