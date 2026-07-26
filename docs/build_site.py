@@ -1864,6 +1864,22 @@ py import unoscript as u; u.request("proc.enum"); print(u.proc.list())</code></p
 
 {note('The <code>unoscript</code> surface itself is <strong>production</strong> - a trusted, signed automation app can use it on a normal machine, always under the permission gate. Only <code>u.hook</code> is debug-only (a production tap on hot internal events would cost every machine that ships), and the deep <code>u.mem</code>/<code>u.io</code> surfaces are kernel-tier: strongest escalation, every use audited. The full capability list and tiers are in <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOSCRIPT.md" target="_blank" rel="noopener"><code>UNOSCRIPT.md</code></a>.', title="Production surface, gated by permission")}
 
+<h3 id="automation">Automation apps: caps without prompts (signed manifests)</h3>
+<p>Asking for a capability with <code>u.request()</code> works for a script <em>you</em> are driving - the
+system can draw a consent sheet and you click Allow. But an <strong>automation app</strong> runs with nobody
+watching, so there is no one to answer the prompt. A trusted one instead ships a <strong>signed manifest</strong>:
+a small <code>&lt;app&gt;.MFT</code> file next to its <code>.UNO</code> that declares the caps it needs, signed by a
+key the machine trusts. At launch UnoDOS verifies the signature and grants exactly those caps for the life of the
+app - no prompts - and drops them again the moment it closes.</p>
+<pre><code># once: make a signing key and the line that enrolls it on the machine
+python tools/uno_manifest.py keygen --key-id acme &gt; acme.line
+#   -&gt; prints  "acme &lt;64 hex&gt;"  ; append that line to \\TRUST.MFK on the boot disk
+
+# per app: sign a manifest declaring what it needs, beside the .UNO
+python tools/uno_manifest.py sign --name mybot --caps proc.enum,fs.sys \\
+    --key-id acme --secret &lt;64 hex&gt; -o MYBOT.MFT</code></pre>
+{note('The manifest is a convenience for <em>trusted</em> apps, never a way around the gate: an unsigned or untrusted-key manifest grants nothing (the app just runs with ordinary user authority), a kiosk machine refuses all of it, and every grant is audited. Enrolling a key in <code>TRUST.MFK</code> is what says &ldquo;I trust apps this key signs&rdquo; - guard it like any signing key.', title="Trust is the whole point")}
+
 <h2 id="ab">A/B updates: push a new build over the link</h2>
 <p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -
 <strong>A</strong>, the machine you are working on, and <strong>B</strong>, a spare - and push only a freshly
