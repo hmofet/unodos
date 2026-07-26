@@ -255,7 +255,22 @@ so the security store lands on a writable volume.
   # u.sys.power(1)                            # reboot (needs `power`, does not return)
   ```
 
-The remaining surface is the **hook registry** (`hook.*`, tier 2) — still
-`USC_EUNAVAIL` pending step 6. The privilege gate is live; the plumbing behind it
-lights up per-subsystem. Tiers 0–3 (UI + apps + proc + files + kernel mem/io/
-power) now give a genuinely capable scripting OS; only the tap registry trails.
+- **`hook.*` (tap registry, tier 2) — DONE 2026-07-25, debug-only by decision.**
+  `hook.add(point)` → id / `hook.remove(id)`. The tap registry is **not exposed
+  in production** (`USC_EUNAVAIL`) — a deliberate non-goal: the fire points
+  include `libc.malloc`, so a script-visible tap is a hot-path cost on every
+  allocation and reentrant, and production already compiles the hook machinery
+  away. In a `UNO_DEBUG` build it wires the real bounded, allocation-free
+  `unoauto_hook` registry with a safe LOG-emitting shim (no Python callback in
+  kernel context): `hook.add("fs.write")` → `hook: fs.write` on the SCRIPT LOG
+  channel over URC. Tappable points are the fixed fire set (`fs.read`/`fs.write`,
+  `libc.malloc`, `mod.load`/`mod.unload`, `uui.action`); an unknown point is
+  `EINVAL`. QEMU-verified tier 2 + gated (`tools/unoscript_qemu.py`).
+
+**The surface-wiring roadmap is complete** (`UNOSCRIPT-NEXT-STEPS.md` §1–6): every
+`usc_*` surface is wired or a documented non-goal, none is a bare stub. The
+privilege gate is live across tiers 0–3 (UI + apps + proc + files + kernel
+mem/io/power + the debug hook tap) — a genuinely capable scripting OS. What
+remains is not surface wiring but the cross-cutting **end-to-end authenticated
+gate** (drive the surfaces through a real logged-in `unosecure` session so a
+tier≥2 op returns real data after `u.request()`), which every step deferred.

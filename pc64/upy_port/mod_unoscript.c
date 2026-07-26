@@ -249,6 +249,24 @@ static const mp_rom_map_elem_t sys_tab[] = {
 static MP_DEFINE_CONST_DICT(sys_dict, sys_tab);
 static const mp_obj_module_t u_sys = { { &mp_type_module }, (mp_obj_dict_t *)&sys_dict };
 
+/* ======================= namespace: hook (tier 2) ====================== */
+/* add(point) -> id (>=0) ; remove(id). Debug builds tap a fixed set of fire
+ * points (fs.read/write, libc.malloc, mod.load/unload, uui.action) -> SCRIPT LOG
+ * lines; production reports "unsupported" (deliberate non-goal). */
+static mp_obj_t hook_add(mp_obj_t point)
+{ return usc_ret(usc_hook_add(mp_obj_str_get_str(point))); }
+static mp_obj_t hook_remove(mp_obj_t id)
+{ usc_hook_remove(mp_obj_get_int(id)); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_1(hook_add_obj, hook_add);
+static MP_DEFINE_CONST_FUN_OBJ_1(hook_remove_obj, hook_remove);
+static const mp_rom_map_elem_t hook_tab[] = {
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_hook) },
+    { MP_ROM_QSTR(MP_QSTR_add),      MP_ROM_PTR(&hook_add_obj) },
+    { MP_ROM_QSTR(MP_QSTR_remove),   MP_ROM_PTR(&hook_remove_obj) },
+};
+static MP_DEFINE_CONST_DICT(hook_dict, hook_tab);
+static const mp_obj_module_t u_hook = { { &mp_type_module }, (mp_obj_dict_t *)&hook_dict };
+
 /* ======================= the parent module ============================= */
 static const mp_rom_map_elem_t unoscript_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__),  MP_ROM_QSTR(MP_QSTR_unoscript) },
@@ -266,6 +284,7 @@ static const mp_rom_map_elem_t unoscript_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_mem),       MP_ROM_PTR(&u_mem) },
     { MP_ROM_QSTR(MP_QSTR_io),        MP_ROM_PTR(&u_io) },
     { MP_ROM_QSTR(MP_QSTR_sys),       MP_ROM_PTR(&u_sys) },
+    { MP_ROM_QSTR(MP_QSTR_hook),      MP_ROM_PTR(&u_hook) },
 };
 static MP_DEFINE_CONST_DICT(unoscript_globals, unoscript_globals_table);
 const mp_obj_module_t mp_module_unoscript = {

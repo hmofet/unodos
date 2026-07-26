@@ -354,14 +354,58 @@ int usc_proc_inspect(int pid, usc_proc_ent *out)
     return USC_OK;
 }
 
-/* -- hook (unoauto HOOK / subsystem taps) ------------------------------- */
+/* -- hook (unoauto tap registry) --------------------------------------- *
+ * DECISION (step 6): the tap registry stays DEBUG-ONLY.  In production
+ * usc_hook_add reports USC_EUNAVAIL - a deliberate non-goal, not a stub-in-
+ * waiting.  The fire points include libc.malloc (pc64_libc.c), so a
+ * script-visible tap there is a hot-path cost on EVERY allocation and reentrant
+ * (the observer would allocate inside the allocator).  Production already
+ * compiles the whole hook machinery away (unoauto.h no-op macros), matching that
+ * intent.  In a UNO_DEBUG build we wire the real bounded, allocation-free
+ * unoauto_hook registry with a LOG-emitting shim - a SAFE observability tap (no
+ * Python callback runs in kernel/driver context): a debug script says
+ * hook.add("fs.write") and sees "hook: fs.write" on the SCRIPT LOG channel over
+ * URC.  We pass the STABLE literal to the registry (it stores the pointer, so a
+ * transient Python string can't be used) - which also validates the point. */
+#ifdef UNO_DEBUG
+/* exactly the unoauto_hook_fire() sites in the tree; returns the stable literal
+ * (registry keeps the pointer) or 0 for an unknown / untappable point. */
+static const char *hook_known_point(const char *p)
+{
+    static const char *const PTS[] = { "fs.read", "fs.write", "libc.malloc",
+                                       "mod.load", "mod.unload", "uui.action", 0 };
+    int i;
+    for (i = 0; PTS[i]; i++) if (!strcmp(PTS[i], p)) return PTS[i];
+    return 0;
+}
+static void usc_hook_log_shim(const char *point, void *arg, void *user)
+{ (void)arg; (void)user; unoauto_log(UA_CH_SCRIPT, "hook: %s", point ? point : "?"); }
+#endif
+
 int usc_hook_add(const char *point)
 {
     if (!unoscript_guard(USC_CAP_HOOK, "hook.add")) return denied(USC_CAP_HOOK);
-    (void)point;
-    return USC_EUNAVAIL;   /* TODO: production-visible tap registry over unoauto_hook_* */
+    if (!point || !point[0]) return USC_EINVAL;
+#ifdef UNO_DEBUG
+    {
+        const char *lit = hook_known_point(point);
+        int id;
+        if (!lit) return USC_EINVAL;                 /* unknown fire point      */
+        id = unoauto_hook_add(lit, usc_hook_log_shim, 0);
+        return id >= 0 ? id : USC_EUNAVAIL;          /* table full -> unavail   */
+    }
+#else
+    return USC_EUNAVAIL;   /* deliberate non-goal in production (see above)      */
+#endif
 }
-void usc_hook_remove(int id) { (void)id; }
+void usc_hook_remove(int id)
+{
+#ifdef UNO_DEBUG
+    if (id >= 0) unoauto_hook_remove(id);
+#else
+    (void)id;
+#endif
+}
 
 /* -- mem (kernel) ------------------------------------------------------- *
  * pc64 is a single-address-space cooperative kernel: there is ONE flat address

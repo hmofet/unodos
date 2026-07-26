@@ -156,6 +156,25 @@ def main():
             except Exception as e:  # noqa: BLE001
                 check(False, "%s raised the expected guest error" % label, repr(e))
 
+        # 2d) hook surface (step 6): tier 2, debug-only tap registry. Over URC
+        #     with no session it is denied at the guard (wired + gated); the
+        #     production build reports EUNAVAIL by design (a deliberate non-goal).
+        try:
+            check(one_line(link, "u.cap_tier('hook')") == "2", "hook is tier 2 (ADMIN)")
+        except Exception as e:  # noqa: BLE001
+            check(False, "hook cap resolves", str(e))
+        try:
+            out = link.eval("import unoscript as u; print(u.hook.add('fs.write'))")
+            check(False, "hook.add denied unescalated", "returned %r (expected denial)" % out)
+        except RuntimeError as e:
+            txt = str(e).lower()
+            check("denied" in txt or "eperm" in txt, "hook.add is wired + gated",
+                  str(e).strip().replace("\n", " ")[:90])
+            check("not wired" not in txt and "notimplement" not in txt,
+                  "hook.add is no longer UNWIRED", "")
+        except Exception as e:  # noqa: BLE001
+            check(False, "hook.add raised the expected guest error", repr(e))
+
         # 3) regression: the step-2 app surface (tier 0) still answers
         try:
             n = one_line(link, "u.app.count()")
@@ -181,7 +200,7 @@ def main():
         time.sleep(1)
         vm.kill()
         link.close()
-    print(">> unoscript surface gate OK (proc + fs + kernel)" if not fails
+    print(">> unoscript surface gate OK (proc + fs + kernel + hook)" if not fails
           else ">> FAILED: " + "; ".join(fails))
     return 1 if fails else 0
 
