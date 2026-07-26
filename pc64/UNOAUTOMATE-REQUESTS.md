@@ -971,3 +971,35 @@ Note: the test swaps in a headless deny-consent provider for its run (the KERNEL
 escalation would otherwise draw the interactive sheet and block a headless boot),
 then restores the UI provider via `pc64_consent_register()`. It needs a FRESH
 store (bootstrap_admin) — the QEMU gate's throwaway disk — else it returns <0 (skip).
+
+---
+
+## 2026-07-26 — DONE: manifest-declared caps for automation apps
+
+Wires the "manifest-declared caps" cross-cutting follow-up. An automation app
+can't answer a per-op consent prompt, so a trusted one ships a signed `<base>.MFT`
+manifest and gets its declared caps at launch.
+
+- A launched Python app now runs under an ISOLATED unosecure session (acting
+  user's uid, INSTALLED trust) opened by `unoscript_app_caps_begin(vol,path)` and
+  logged out by `unoscript_app_caps_end()` - so the manifest grants are destroyed
+  with the app, never leaking to the desktop session.
+- `begin` reads the `<base>.MFT` sidecar and calls unosec_manifest_apply (verify
+  signature against the trust store -> grant declared caps SESSION-scoped).
+- Signing keys enroll from a `TRUST.MFK` file at boot (`unoscript_trust_boot`) or
+  live via `unosec_trust_add_key`. Host tool: `tools/uno_manifest.py`.
+
+- **Own this task:** `unoscript_app_caps_begin/end`, `unoscript_trust_boot`, the
+  `u.mtest` self-test (unoscript.c/.h); `u.mtest` binding (mod_unoscript.c);
+  `tools/uno_manifest.py`; the mtest check in `tools/unoscript_qemu.py`.
+- **Shell lane (I hold it this task):** 2 calls in `pc64_uui.c`
+  (`pc64_shell_run_python` + the pyapp close path) bracketing the app.
+- **Consume, do NOT edit:** unosecure's public session/manifest/trust API
+  (`unosec_session_open`/`logout`/`manifest_apply`/`trust_add_key`/
+  `set_consent_provider`).
+- **Additive seam touch:** `pc64_modload.c` kExports - `KX(unoscript_mtest)`
+  under `#ifdef UNO_DEBUG`.
+
+Gate: `u.mtest()` proves a signed manifest grants a guest proc.enum at launch,
+the grant drops on close, and a forged signature grants nothing
+(`tools/unoscript_qemu.py` asserts `u.mtest()==0`, alongside `u.e2e()==0`).
