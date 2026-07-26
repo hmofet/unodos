@@ -114,6 +114,16 @@ typedef struct unoui_widget {
 typedef void (*unoui_icon_fn)(int icon, unoui_rect r, const char *label, int flags);
 extern unoui_icon_fn unoui_icon_art;
 
+/* Optional desktop wallpaper hook. When set, it paints the whole-screen
+ * backdrop instead of the active theme's desktop painter. Return non-zero if it
+ * painted (theme desktop skipped), 0 to fall through to the theme's own desktop
+ * (the "theme default" wallpaper). Mirrors unoui_icon_art: a port supplies it,
+ * the toolkit calls it. Invalidate the cached backdrop via unoui_bg_invalidate()
+ * whenever the selection changes. */
+struct unoui_theme;           /* fwd (defined in unoui_theme.h) */
+typedef int (*unoui_wallpaper_fn)(const struct unoui_theme *t, int W, int H);
+extern unoui_wallpaper_fn unoui_wallpaper;
+
 #define UNOUI_MAX_WIDGETS 64
 
 /* ---- window flags (unoui_window.flags) ---------------------------------- *

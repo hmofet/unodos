@@ -11,6 +11,9 @@
 /* optional per-app icon artwork hook (NULL = use the theme's generic glyph) */
 unoui_icon_fn unoui_icon_art = 0;
 
+/* optional desktop wallpaper hook (NULL = each theme paints its own desktop) */
+unoui_wallpaper_fn unoui_wallpaper = 0;
+
 /* ---- font-derived metrics (see unoui_theme.h) ----------------------------- *
  * Every pitch keeps its historic value under the 8px bitmap font and scales
  * with a TTF. Floors preserve minimum touch-target sizes. */
@@ -906,10 +909,19 @@ static unoui_widget *first_canvas(unoui_window *win)
     return 0;
 }
 
+/* Paint the whole-screen backdrop: the shell's wallpaper hook first (if it
+ * claims the frame), else the active theme's desktop painter. Single seam so
+ * every desktop-paint path (cached, live, fullscreen restore) agrees. */
+static void paint_backdrop(const unoui_theme *t, const unoui_draw *d, int W, int H)
+{
+    if (unoui_wallpaper && unoui_wallpaper(t, W, H)) return;
+    PICK(desktop)(t, W, H);
+}
+
 void unoui_desktop(const unoui_theme *t, int W, int H)
 {
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
-    PICK(desktop)(t, W, H);
+    paint_backdrop(t, d, W, H);
 }
 
 /* ---- calendar (the reusable core of a date-picker) ----------------------- *
@@ -1015,7 +1027,7 @@ static void draw_desktop_cached(const unoui_theme *t, const unoui_draw *d, unoui
 {
     size_t px = (size_t)FB_W * (size_t)FB_H;
     if (g_bg_valid) { memcpy(fb, g_bg, px * sizeof(fb_px)); return; }
-    PICK(desktop)(t, ui->screen_w, ui->screen_h);
+    paint_backdrop(t, d, ui->screen_w, ui->screen_h);
     memcpy(g_bg, fb, px * sizeof(fb_px));
     g_bg_valid = 1;
 }
@@ -1051,7 +1063,7 @@ void unoui_render_ui(unoui_ui *ui)
 #ifdef UNO_BG_CACHE
     draw_desktop_cached(t, d, ui);
 #else
-    PICK(desktop)(t, ui->screen_w, ui->screen_h);
+    paint_backdrop(t, d, ui->screen_w, ui->screen_h);
 #endif
     for (wn = 0; wn < ui->nwin; wn++) {
         unoui_window *win = ui->win[wn];
