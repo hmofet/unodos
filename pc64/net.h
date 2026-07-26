@@ -79,4 +79,10 @@ u32  net_rx_frames(void);
 u32  net_rx_arp(void);
 u32  net_rx_ip(void);
 
+/* Negotiated link speed in Mbps (0 = unknown / not reported by the driver).
+ * A NIC driver publishes it from the PHY via net_set_link_speed_mbps(); the
+ * shell's LAN-chip tooltip reads it. */
+int  net_link_speed_mbps(void);
+void net_set_link_speed_mbps(int mbps);
+
 #endif

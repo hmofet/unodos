@@ -137,7 +137,16 @@ static void read_mac(void)
     g_mac[0]=(u8)lo; g_mac[1]=(u8)(lo>>8); g_mac[2]=(u8)(lo>>16); g_mac[3]=(u8)(lo>>24);
     g_mac[4]=(u8)hi; g_mac[5]=(u8)(hi>>8);
 }
-static int link_up(void){ return (r8(PHYstatus) & LinkStatus) ? 1 : 0; }
+/* net.c consumes the negotiated PHY speed for the shell's LAN tooltip. */
+void net_set_link_speed_mbps(int mbps);
+static int link_up(void){
+    int ps = r8(PHYstatus);
+    net_set_link_speed_mbps((ps & LinkStatus)
+                            ? ((ps & _1000bpsF) ? 1000 : (ps & _100bps) ? 100 :
+                               (ps & _10bps) ? 10 : 0)
+                            : 0);
+    return (ps & LinkStatus) ? 1 : 0;
+}
 
 /* ---- ring init ---------------------------------------------------------- */
 static void rings_init(void)
