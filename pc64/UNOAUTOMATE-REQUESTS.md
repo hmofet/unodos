@@ -896,3 +896,27 @@ traversal/scope logic is `unoscript_path.c` (host-tested).
 - **Additive seam touches:** `build.sh` compile list (append `unoscript_path`);
   `pc64_modload.c` kExports (append `KX(usc_fs_read)`, `KX(usc_fs_write)` — PYRT
   now imports them); `mod_unoscript.c` module table (append the `fs` namespace).
+
+---
+
+## 2026-07-25 — CLAIM: unoscript kernel surface (mem/io/power, roadmap step 5)
+
+Claiming the kernel surfaces in `unoscript` (UNOSCRIPT-NEXT-STEPS.md §5): `mem.*`,
+`io.*`, `sys.power` 1/2. As with §3/§4 there is no separate kernel-agent seam —
+pc64 is a single-address-space cooperative kernel, so the accessors compose in
+`unoscript.c` onto tiny platform primitives. I hold the platform lane this task
+(one new primitive in `pc64_native.c`) and flag it here per AGENTS §4.
+
+- **Own this task:** `usc_mem_read/write`, `usc_io_in/out`, `usc_power` 1/2
+  wiring (unoscript.c); new exported `uno_native_port_in`/`uno_native_port_out`
+  (pc64_native.c/.h — the existing `n_inb`/`n_outb` were file-local static
+  inline); the kernel section of `tools/unoscript_qemu.py`.
+- **Consume, do NOT edit:** `uno_pc64_shutdown` (shutdown), `uno_native_reset`
+  (CF9 reboot, already public), the `usc_*` cap schema (unoscript.h, unchanged).
+- **No shared-seam edits:** the mem/io/sys Python bindings + their `KX()` exports
+  already landed with the surface stubs — nothing appended in `mod_unoscript.c`
+  / `pc64_modload.c` / `build.sh`.
+
+`mem` is single-AS peek/poke (pid 0 only). `io` is raw port I/O (width 1/2/4).
+`power(2)` (suspend) reports EUNAVAIL — pc64 has no ACPI S3. syscall / unsigned
+module load (the "tier 3, later" bullet) stay out of scope.
