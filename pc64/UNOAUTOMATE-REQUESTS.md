@@ -920,3 +920,27 @@ pc64 is a single-address-space cooperative kernel, so the accessors compose in
 `mem` is single-AS peek/poke (pid 0 only). `io` is raw port I/O (width 1/2/4).
 `power(2)` (suspend) reports EUNAVAIL — pc64 has no ACPI S3. syscall / unsigned
 module load (the "tier 3, later" bullet) stay out of scope.
+
+---
+
+## 2026-07-25 — CLAIM/DECISION: unoscript hook.* is debug-only (roadmap step 6)
+
+Claiming + resolving the `hook` surface (UNOSCRIPT-NEXT-STEPS.md §6), which that
+section explicitly left as the unoscript/unoauto agent's own call. **Decision:
+keep the tap registry debug-only** — production `usc_hook_add` returns
+`USC_EUNAVAIL` (a script tap on the `libc.malloc` fire point is a hot-path cost on
+every allocation + reentrant; production already macro-away's the hook machinery).
+A UNO_DEBUG build wires the real `unoauto_hook` registry with a safe LOG-emitting
+shim (no Python callback in kernel context) over the fixed fire set.
+
+- **Own this task:** `usc_hook_add`/`usc_hook_remove` wiring (unoscript.c, using
+  the `#ifdef UNO_DEBUG` unoauto.h include already present); the `hook` Python
+  namespace (mod_unoscript.c); the hook section of `tools/unoscript_qemu.py`.
+- **Consume, do NOT edit:** `unoauto_hook_add`/`_remove` + `unoauto_log`
+  (unoauto.c/.h — unoautomate's, used through their public contract, debug-only).
+- **Additive seam touch:** `pc64_modload.c` kExports — append `KX(usc_hook_add)`,
+  `KX(usc_hook_remove)` (PYRT now imports them).
+
+This completes the §1–6 surface-wiring roadmap: every usc_* surface is wired or a
+documented non-goal. The only remaining item is the cross-cutting end-to-end
+authenticated gate (a logged-in unosecure session driving the surfaces).
