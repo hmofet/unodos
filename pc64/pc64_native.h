@@ -16,6 +16,10 @@ int uno_native_rtc_write(int y, int mo, int d, int h, int mi, int s);
 /* CF9 (+ i8042 pulse fallback) hard reset - does not return */
 void uno_native_reset(void);
 
+/* raw port I/O for the unoscript io.* surface; `width` is in bytes (1/2/4). */
+unsigned uno_native_port_in(unsigned port, int width);
+void     uno_native_port_out(unsigned port, int width, unsigned val);
+
 /* PS/2 i8042, polled.  present() is passive (safe while attached); init()
  * takes the controller and must only run once detached. */
 int  uno_ps2_present(void);
