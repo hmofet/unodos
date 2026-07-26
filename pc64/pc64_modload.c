@@ -217,7 +217,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(usc_io_in), KX(usc_io_out), KX(usc_power),
     KX(usc_hook_add), KX(usc_hook_remove),
 #ifdef UNO_DEBUG
-    KX(unoscript_e2e_selftest),   /* authenticated end-to-end self-test (u.e2e) */
+    KX(unoscript_e2e_selftest),      /* authenticated end-to-end self-test (u.e2e) */
+    KX(unoscript_mtest), /* manifest-caps self-test (u.mtest)          */
 #endif
 #ifdef UNO_DEBUG
     /* ---- unoautomate DRIVE surface (debug builds only) --------------------
