@@ -215,6 +215,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(usc_fs_read), KX(usc_fs_write),
     KX(usc_proc_list), KX(usc_mem_read), KX(usc_mem_write),
     KX(usc_io_in), KX(usc_io_out), KX(usc_power),
+    KX(usc_hook_add), KX(usc_hook_remove),
 #ifdef UNO_DEBUG
     /* ---- unoautomate DRIVE surface (debug builds only) --------------------
      * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these; the
