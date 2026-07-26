@@ -48,10 +48,15 @@ you land it. When you do, ping back via `UNOAUTOMATE-REQUESTS.md` and the
    2=suspend is `USC_EUNAVAIL` (no ACPI S3); syscall/unsigned-module-load left as
    the tier-3 "later". Wired + gated over URC with inert probes
    (`unoscript_qemu.py`). See §5.
-6. **unoauto (self) — production HOOK registry** (tier 2). The `hook` surface.
+6. ~~**unoauto (self) — production HOOK registry** (tier 2).~~ **DONE**
+   (2026-07-25) — resolved as **debug-only by decision**: production `hook.add`
+   is `USC_EUNAVAIL` (a script tap on the `libc.malloc` fire point is a hot-path
+   cost + reentrant), while a UNO_DEBUG build wires the real `unoauto_hook`
+   registry with a safe LOG-emitting shim over the fixed fire set. See §6.
 
-Tiers 0–1 give a genuinely useful scripting OS (UI + apps + files). Tiers 2–3 are
-the power-user/debugging surfaces and can trail.
+**All six surface-wiring steps are DONE.** Every `usc_*` surface is wired or a
+documented non-goal — none is a bare stub. What remains is the cross-cutting
+end-to-end authenticated gate (below), not surface wiring.
 
 ---
 
@@ -237,15 +242,34 @@ never the automated gate.
 
 **Unlocked:** `u.mem.read/write`, `u.io.in_/out`, `u.sys.power(0|1)` (2 = EUNAVAIL).
 
-## 6. unoauto (self) — production HOOK registry  ·  tier 2  ·  `hook`
+## 6. HOOK registry  ·  tier 2  ·  `hook`  ·  DONE (2026-07-25), debug-only by decision
 
-`usc_hook_add/remove` wants a *production*-visible tap registry. Today
-`unoauto_hook_*` is `UNO_DEBUG`-only. Decide: expose a slim production hook
-facility (a bounded, allocation-free tap table) or keep `hook` debug-only and have
-`usc_hook_add` return `USC_EUNAVAIL` in production. This one is the `unoscript`/
-`unoauto` agent's own call, not a cross-team dependency.
+The call to make (the section framed it as the `unoscript`/`unoauto` agent's own):
+expose a slim production tap facility, **or** keep `hook` debug-only with
+`usc_hook_add` → `USC_EUNAVAIL` in production.
 
-**Unlocks:** `u.hook.*` (if pursued).
+**Decision: keep it debug-only.** A production, script-visible tap on the existing
+fire points is the wrong design — the points include `libc.malloc` (pc64_libc.c),
+so a tap is (a) a hot-path cost on *every* allocation and (b) reentrant (the
+observer allocates inside the allocator). Production already compiles the whole
+`unoauto_hook_*` machinery away (unoauto.h no-op macros); `usc_hook_add` matching
+that with `USC_EUNAVAIL` is honest, not a deferral.
+
+**But debug-only ≠ dead.** In a `UNO_DEBUG` build `usc_hook_add(point)` wires the
+real bounded, allocation-free `unoauto_hook` registry with a **safe LOG-emitting
+shim** — no Python callback runs in kernel/driver context; the shim just emits
+`hook: <point>` on the SCRIPT LOG channel. So a debug script does
+`hook.add("fs.write")` and watches file writes stream over URC. The tappable set
+is exactly the fire sites (`fs.read`/`fs.write`, `libc.malloc`,
+`mod.load`/`mod.unload`, `uui.action`); the **stable literal** is handed to the
+registry (it stores the pointer, so a transient Python string can't be used),
+which doubles as validation — an unknown point is `USC_EINVAL`.
+
+**Verified** (`tools/unoscript_qemu.py`, over URC): `hook` is tier 2 and
+`hook.add` is denied unescalated (the guard, not the old "surface not wired"
+stub). prod + debug link green.
+
+**Unlocked:** `u.hook.add/remove` (debug builds; production reports unsupported).
 
 ---
 
