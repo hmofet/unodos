@@ -1895,22 +1895,19 @@ static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); 
 static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
 static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
 
-/* PHY_CONFIGURATION_CMD (v1: 12 bytes) */
-static void mvm_phy_cfg(void)
-{
-    struct { u32 phy_cfg, flow, event; } c;
-    c.phy_cfg = g_fw.phy_sku & 0x00FF00FF;   /* radio type/step/dash + chains subset */
-    c.flow = g_fw.calib_flow; c.event = g_fw.calib_event;
-    send_cmd(GRP_LONG, 0x6a, 0, &c, sizeof c); wait_cmd_done(200);
-}
-
 /* INIT_EXTENDED_CFG (SYSTEM 0x3) + NVM_ACCESS_COMPLETE (REGNVM 0x0) — unified */
 static void mvm_init_unified(void)
 {
     u32 init_flags = (1u<<1);                  /* BIT(IWL_INIT_NVM) */
     send_cmd(GRP_SYSTEM, 0x3, 0, &init_flags, 4); wait_cmd_done(100);
     { u32 z = 0; send_cmd(GRP_REGNVM, 0x0, 0, &z, 4); wait_cmd_done(100); }
-    mvm_phy_cfg();
+    /* NO PHY_CONFIGURATION_CMD here.  For unified-ucode devices (family >=
+     * 22000, which is every gen2 that reaches this path), Linux's
+     * iwl_send_phy_cfg_cmd returns early and sends nothing - only the legacy
+     * split-INIT ucode, or a tx_with_siso_diversity part, ever sends 0x6a.
+     * The fw runs its default calibrations off NVM_ACCESS_COMPLETE instead.
+     * Sending 0x6a here made the UMAC ADVANCED_SYSASSERT (error 0x201002fd,
+     * last-cmd 0x016a) - proven live with the iwl fwerr verb 2026-07-25. */
     wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
     /* NVM_GET_INFO for the MAC address */
     { u32 z = 0; int len=0; const u8 *r; send_cmd(GRP_REGNVM, 0x2, 0, &z, 4);
