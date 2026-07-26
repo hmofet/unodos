@@ -2070,19 +2070,28 @@ static void mvm_add_sta_key(const u8 *key, int keylen, int keyidx, int mcast, co
  * Returns the assigned qid, or -1 on no/short response. */
 static int mvm_txq_alloc(int sta_id, int tid, int size)
 {
+    /* SCD_QUEUE_CONFIG_CMD (DATA_PATH group 5 / cmd 0x17), the queue_alloc_cmd_ver
+       3 path. The old SCD_QUEUE_CFG (0x1d) got BAD_COMMAND on this QuZ-77 fw
+       (2026-07-25) - this fw only speaks the new iwl_scd_queue_cfg_cmd (36 B).
+       operation=IWL_SCD_QUEUE_ADD, sta_mask=BIT(sta_id); point the fw at our
+       TFD ring + bc table. Response iwl_tx_queue_cfg_rsp {queue_number, flags,
+       write_pointer}; adopt queue_number as g_data_qid. */
     struct __attribute__((packed)) {
-        u8 sta_id, tid; u16 flags; u32 cb_size; u64 bc_addr, tfdq_addr;
+        u32 operation; u32 sta_mask; u8 tid; u8 rsv[3]; u32 flags; u32 cb_size;
+        u64 bc_addr; u64 tfdq_addr;
     } c;
     const u8 *r; int len = 0, cb = 0, n = size;
     while (n > 8) { cb++; n >>= 1; }              /* cb_size = ilog2(size) - 3 */
     memset(&c, 0, sizeof c);
-    c.sta_id = (u8)sta_id; c.tid = (u8)tid;
-    c.flags = 1;                                  /* TX_QUEUE_CFG_ENABLE_QUEUE */
+    c.operation = 0;                              /* IWL_SCD_QUEUE_ADD */
+    c.sta_mask = (u32)(1u << sta_id);
+    c.tid = (u8)tid;
+    c.flags = 0;
     c.cb_size = (u32)cb;
     c.bc_addr = phys(g_tx_bc);
     c.tfdq_addr = phys(g_tx_ring);
-    send_cmd(GRP_LEGACY, 0x1d, 0, &c, (int)sizeof c);
-    r = wait_notif(GRP_LEGACY, 0x1d, &len, 300);
+    send_cmd(GRP_DATAPATH, 0x17, 0, &c, (int)sizeof c);
+    r = wait_notif(GRP_DATAPATH, 0x17, &len, 300);
     if (r && len >= 2) {
         g_data_qid = r[0] | (r[1] << 8);
         if (len >= 6) g_tx_wr = (r[4] | (r[5] << 8)) & (TXQ_N - 1);
@@ -3047,10 +3056,12 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         mvm_phy_ctxt(g_join_chan, 1);
         h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after phy_ctxt csr2808=%08x", h);
         mvm_mac_ctxt(g_bssid, 0, 0, 1);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after mac_ctxt csr2808=%08x", h);
         mvm_binding(1);
-        mvm_time_quota();
-        mvm_assoc_window();
-        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after mac/bind/quota/window csr2808=%08x", h);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after binding csr2808=%08x", h);
+        /* time_quota + assoc_window SKIPPED - both ADVANCED_SYSASSERT this fw and
+         * are only airtime/session scheduling; get add_sta + the TX queue working
+         * first, then revisit them (2026-07-25). */
         mvm_add_sta(g_bssid, 0, 0);
         h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after add_sta csr2808=%08x", h);
         q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
