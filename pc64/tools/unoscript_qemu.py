@@ -192,6 +192,21 @@ def main():
                   "%d window row(s)" % len(wins))
         except Exception as e:  # noqa: BLE001
             check(False, "launch -> window visible", str(e))
+
+        # 5) THE POSITIVE PATH (end-to-end authenticated). Everything above proves
+        #    the surfaces DENY without a session. u.e2e() logs in a throwaway
+        #    unosecure session in C and drives the surfaces WITH authority:
+        #    fs denies as a guest -> grants on request -> write+read ROUND-TRIP;
+        #    proc/io return real data under a dev autogrant policy; mem stays
+        #    denied (KERNEL > autogrant's ADMIN ceiling). It returns 0 on a full
+        #    pass, <0 on skip (non-fresh store), else a failure bitmask.
+        try:
+            out = one_line(link, "u.e2e()", timeout=40)
+            check(out == "0",
+                  "e2e authenticated pass (fs round-trip + proc/io real data + mem still denied)",
+                  "u.e2e() -> %s (0=pass, <0=skip, else fail-bitmask)" % out)
+        except Exception as e:  # noqa: BLE001
+            check(False, "e2e authenticated self-test ran", str(e))
     finally:
         try:
             link.command("poweroff", timeout=2)
@@ -200,7 +215,7 @@ def main():
         time.sleep(1)
         vm.kill()
         link.close()
-    print(">> unoscript surface gate OK (proc + fs + kernel + hook)" if not fails
+    print(">> unoscript surface gate OK (proc + fs + kernel + hook + e2e authenticated)" if not fails
           else ">> FAILED: " + "; ".join(fails))
     return 1 if fails else 0
 

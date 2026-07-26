@@ -80,6 +80,15 @@ static MP_DEFINE_CONST_FUN_OBJ_0(u_secured_obj, u_secured);
 static MP_DEFINE_CONST_FUN_OBJ_1(u_cap_tier_obj, u_cap_tier);
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(u_request_obj, 1, 3, u_request);
 
+#ifdef UNO_DEBUG
+/* e2e() -> 0 on a full authenticated end-to-end pass, <0 skip, else a failure
+ * bitmask (see unoscript.c).  Debug-only: it logs in a throwaway session to
+ * prove the POSITIVE path the wired+gated gate cannot reach unauthenticated. */
+int unoscript_e2e_selftest(void);
+static mp_obj_t u_e2e(void) { return mp_obj_new_int(unoscript_e2e_selftest()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(u_e2e_obj, u_e2e);
+#endif
+
 /* ======================= namespace: ui (tier 0) ======================== */
 static mp_obj_t ui_click(size_t n, const mp_obj_t *a)
 { return usc_ret(usc_ui_pointer(mp_obj_get_int(a[0]), mp_obj_get_int(a[1]),
@@ -276,6 +285,9 @@ static const mp_rom_map_elem_t unoscript_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_secured),   MP_ROM_PTR(&u_secured_obj) },
     { MP_ROM_QSTR(MP_QSTR_cap_tier),  MP_ROM_PTR(&u_cap_tier_obj) },
     { MP_ROM_QSTR(MP_QSTR_request),   MP_ROM_PTR(&u_request_obj) },
+#ifdef UNO_DEBUG
+    { MP_ROM_QSTR(MP_QSTR_e2e),       MP_ROM_PTR(&u_e2e_obj) },
+#endif
     /* namespaces */
     { MP_ROM_QSTR(MP_QSTR_ui),        MP_ROM_PTR(&u_ui) },
     { MP_ROM_QSTR(MP_QSTR_app),       MP_ROM_PTR(&u_app) },
