@@ -162,6 +162,10 @@ static const PyHost   *g_pyrt;
 static int             g_pyrt_tried, g_pyrt_present;
 static char            g_pyrt_gc[16 * 1024 * 1024];   /* MicroPython GC heap */
 static const UnoUuiApp *g_pyapp;                       /* the running Python app */
+/* automation-app caps (unoscript.c): a launched Python app runs under an
+ * isolated session carrying the caps its signed manifest declares. */
+int  unoscript_app_caps_begin(int vol, const char *path);
+void unoscript_app_caps_end(void);
 #ifdef UNO_DBGCON
 static void pdbg(const char *s){ while(*s) __asm__ volatile("outb %0,%1"::"a"((unsigned char)*s++),"Nd"((unsigned short)0x402)); }
 #else
@@ -1363,7 +1367,8 @@ static void close_focused(void)
         else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
         else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
         else if (i == EX_PHOTOS) { if (g_photos && g_photos->closed) g_photos->closed(); }
-        else if (i == EX_PYAPP)  { if (g_pyapp) { if (g_pyapp->closed) g_pyapp->closed();
+        else if (i == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
+                                     if (g_pyapp->closed) g_pyapp->closed();
                                      if (g_pyrt) g_pyrt->unload(); g_pyapp = 0; } }
         else if (i == EX_USERAPP) unoapp_user_close();
         else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
@@ -1713,6 +1718,7 @@ static int pc64_shell_run_python(int vol, const char *path)
     if (uno_mod_load_pyapp(vol, path, &src, &len) < 0) return -1;
     if (g_open[EX_PYAPP]) {                        /* replace any running app */
         remove_win(&g_win[EX_PYAPP]);
+        unoscript_app_caps_end();                 /* drop the replaced app's caps */
         if (g_pyapp && g_pyapp->closed) g_pyapp->closed();
         g_pyrt->unload();
         g_open[EX_PYAPP] = 0;
@@ -1723,6 +1729,7 @@ static int pc64_shell_run_python(int vol, const char *path)
     pdbg("pyrt: app loaded, opening window\n");
     g_built[EX_PYAPP] = 0;
     open_app(EX_PYAPP);
+    unoscript_app_caps_begin(vol, path);          /* grant its manifest-declared caps */
     return 0;
 }
 
