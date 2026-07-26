@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""unoscript proc-surface QEMU gate: prove `u.proc.list` is WIRED + GATED.
+"""unoscript surface QEMU gate: prove `u.proc.*` and `u.fs.*` are WIRED + GATED.
 
-Roadmap step 3 (UNOSCRIPT-NEXT-STEPS.md §3) wires `usc_proc_list`/`usc_proc_inspect`
-to the shell's running-app run-set (pc64 has no preemptive scheduler; a "process"
-is an open app slot). This gate drives the real Python surface over URC and asserts
-the observable transition the wiring produces:
+Roadmap steps 3-4 (UNOSCRIPT-NEXT-STEPS.md §3-4) wire the proc surface
+(`usc_proc_list`/`usc_proc_inspect` -> the shell's running-app run-set) and the
+user-scoped fs surface (`usc_fs_read`/`usc_fs_write` -> per-uid home + /vol paths).
+This gate drives the real Python surface over URC and asserts the observable
+transition the wiring produces (proc; fs is the same shape, section 2b):
 
   * `u.cap_tier('proc.enum') == 2`            - the binding resolves, cap is ADMIN
   * `u.proc.list()` UNESCALATED raises with   - the delegation is LIVE and the guard
@@ -98,6 +99,31 @@ def main():
         except Exception as e:  # noqa: BLE001
             check(False, "proc.list raised the expected guest error", repr(e))
 
+        # 2b) fs surface (step 4): wired + gated the same way. The FS_USER floor
+        #     (tier 1) denies the no-session URC context before the path even
+        #     resolves, so both a relative (home) and an absolute (/vol) path
+        #     raise "capability denied" - not the "surface not wired" stub.
+        try:
+            check(one_line(link, "u.cap_tier('fs.user')") == "1", "fs.user is tier 1")
+            check(one_line(link, "u.cap_tier('fs.sys')") == "2", "fs.sys is tier 2 (ADMIN)")
+        except Exception as e:  # noqa: BLE001
+            check(False, "fs caps resolve", str(e))
+        for expr, label in (("u.fs.read('todo.txt')", "fs.read (home)"),
+                            ("u.fs.write('todo.txt', b'x')", "fs.write (home)"),
+                            ("u.fs.read('/usb/x')", "fs.read (/vol)")):
+            try:
+                out = link.eval("import unoscript as u; print(%s)" % expr)
+                check(False, "%s denied unescalated" % label,
+                      "returned %r (expected denial)" % out)
+            except RuntimeError as e:
+                txt = str(e).lower()
+                check("denied" in txt or "eperm" in txt,
+                      "%s is wired + gated" % label, str(e).strip().replace("\n", " ")[:90])
+                check("not wired" not in txt and "notimplement" not in txt,
+                      "%s is no longer UNWIRED" % label, "")
+            except Exception as e:  # noqa: BLE001
+                check(False, "%s raised the expected guest error" % label, repr(e))
+
         # 3) regression: the step-2 app surface (tier 0) still answers
         try:
             n = one_line(link, "u.app.count()")
@@ -123,7 +149,7 @@ def main():
         time.sleep(1)
         vm.kill()
         link.close()
-    print(">> unoscript proc-surface gate OK" if not fails
+    print(">> unoscript surface gate OK (proc + fs)" if not fails
           else ">> FAILED: " + "; ".join(fails))
     return 1 if fails else 0
 

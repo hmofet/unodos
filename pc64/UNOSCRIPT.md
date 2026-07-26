@@ -214,10 +214,30 @@ so the security store lands on a writable volume.
   for pid, tid, state, name, owner in u.proc.list():
       print(pid, name, "focused" if state & 1 else "")
   ```
+- **`fs.*` (user-scoped IO, tier 1/2) — DONE 2026-07-25.** `fs.read(path)` /
+  `fs.write(path, data)` honour the acting identity. Path scheme: a **bare
+  relative path is the user's home** — `USERS/<uid>/…` on the primary writable
+  native-FAT volume, always `fs.user` (tier 1), parent dirs auto-provisioned on
+  write; an **absolute `/label/rest`** names a volume by label and is `fs.sys`
+  (tier 2) unless it lands back in that same home subtree. `..`/`.`/`//` are
+  rejected (`unoscript_path.c`), so a relative path can never leave home. The
+  path/scope logic is host-tested (`tools/unoscript_path_test.c`); the guarded
+  surface is QEMU-verified wired + gated (`tools/unoscript_qemu.py`). Composed in
+  `unoscript.c` from the existing `uno_fs_*` volume primitives — no new unofs
+  API. (Bound: `uid` is a FAT 8.3 dir component, fine for realistic uids; read
+  is capped at 4 KB; the authenticated read/write round-trip is the deferred
+  end-to-end gate below.) Example:
 
-The remaining **surface seams** (unofs user-scoped IO, kernel mem/io +
-reboot/suspend, the hook registry) are still `USC_EUNAVAIL` until each owner
-wires its accessor — so a *permitted* tier≥1 op returns NotImplementedError
-rather than OSError(EPERM). The privilege gate is live; the plumbing behind it
-lights up per-subsystem. Tiers 0–2 (UI + apps + proc) now give a genuinely
-useful scripting OS; the deeper fs/kernel/hook surfaces trail.
+  ```python
+  import unoscript as u
+  u.fs.write("notes/todo.txt", b"buy milk")   # -> USERS/<uid>/notes/todo.txt
+  print(u.fs.read("notes/todo.txt"))          # b"buy milk"  (fs.user, tier 1)
+  cfg = u.fs.read("/usb/BOOT.CFG")            # absolute -> fs.sys (tier 2)
+  ```
+
+The remaining **surface seams** (kernel mem/io + reboot/suspend, the hook
+registry) are still `USC_EUNAVAIL` until each owner wires its accessor — so a
+*permitted* tier≥1 op returns NotImplementedError rather than OSError(EPERM).
+The privilege gate is live; the plumbing behind it lights up per-subsystem.
+Tiers 0–2 (UI + apps + proc + files) now give a genuinely useful scripting OS;
+the deeper kernel/hook surfaces trail.
