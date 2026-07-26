@@ -266,6 +266,22 @@ static int g_desk_snap = 1;             /* snap dragged icons to the grid     */
 static int g_desk_lock;                 /* lock: no dragging at all           */
 static struct { short x, y; unsigned char placed; } g_icon_pos[32];
 
+/* ---- tray / wallpaper preferences (Control Panel) --------------------------
+ * All in-memory, like the desktop-arrangement settings above: they rebuild the
+ * live UI on change but are not persisted across a reboot. */
+static int g_wallpaper;                 /* index into g_wall_names (0 = theme default) */
+static int g_clock_12h;                 /* tray clock: 0 = 24-hour, 1 = 12-hour AM/PM  */
+enum { BATT_PCT, BATT_ICON, BATT_BOTH };
+static int g_batt_mode = BATT_BOTH;     /* tray battery: percent / icon / both */
+/* The built-in wallpapers.  Index 0 falls through to the active theme's own
+ * desktop painter; the rest are procedural (no image assets) so they work on
+ * every build and cost nothing to ship. pc64_wallpaper_paint() renders them. */
+static const char *g_wall_names[] = {
+    "Theme default", "Midnight", "Sunrise", "Evergreen",
+    "Aurora", "Graphite grid", "Slate"
+};
+#define NWALL ((int)(sizeof g_wall_names / sizeof g_wall_names[0]))
+
 /* the layout grid, shared by build_desktop and the drag snap */
 static int desk_cell_w(void) { return 20 + fb_text_w("MMMMMMMM"); }
 static int desk_cell_h(void) { return 34 + fb_text_h() + 8; }
@@ -276,7 +292,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
-       ID_LIC, ID_ACCT,
+       ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -285,7 +301,15 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
 static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_res_n;
 static char g_clock[40] = "Uptime 0 s";
 static char g_batt[12];      /* tray battery chip, "" = no battery reported */
+static int  g_batt_pct = -1; /* battery %, -1 = none (drives the tray icon)  */
 static char g_net[8];        /* tray LAN chip: "LAN"=lease, "LAN?"=up no IP, ""=down */
+/* LAN chip activity: sampled tx/rx frame counters drive a blinking dot -
+ * yellow while transmitting (upload), green while receiving (download). */
+static unsigned g_net_tx_last, g_net_rx_last;
+static int  g_net_act;       /* 0 idle, bit0 = upload, bit1 = download        */
+static int  g_net_blink;     /* toggled each sample so an active dot blinks    */
+static int  g_net_cx, g_net_cy, g_net_cw, g_net_ch;  /* LAN chip screen rect (for hover) */
+static int  g_net_hover;     /* pointer is over the LAN chip -> show tooltip   */
 
 /* UI scale choices (percent) - drives uno_font_set_ui_scale + a shell rebuild */
 static const char *g_scale_items[] = { "100%", "125%", "150%", "200%" };
@@ -379,6 +403,24 @@ static void build_ctrl(unoui_window *w)
       w->w[w->nw-1].id = ID_DLOCK;
       unoui_add_button(w, cw - bw - 8, y - 4, bw, "Auto-arrange", 0);
       w->w[w->nw-1].id = ID_DARRANGE; }
+    y += ch + 10;
+    /* wallpaper: procedural backdrops the shell paints behind the desktop */
+    { int lw = fb_text_w("Wallpaper:") + 8;
+      unoui_add_label(w, 8, y + lofs, "Wallpaper:");
+      unoui_add_dropdown(w, 8 + lw, y, cw - lw - 8 - 100, g_wall_names, NWALL, g_wallpaper);
+      w->w[w->nw-1].id = ID_WALL; }
+    y += ch + 8;
+    /* tray: clock format + battery display mode */
+    { static const char *cfmt[] = { "24-hour", "12-hour" };
+      static const char *bmode[] = { "Percent", "Icon", "Both" };
+      int lwc = fb_text_w("Clock:") + 8, lwb = fb_text_w("Battery:") + 8;
+      int half = cw / 2;
+      unoui_add_label(w, 8, y + lofs, "Clock:");
+      unoui_add_dropdown(w, 8 + lwc, y, half - lwc - 12, cfmt, 2, g_clock_12h);
+      w->w[w->nw-1].id = ID_CLOCKFMT;
+      unoui_add_label(w, half + 4, y + lofs, "Battery:");
+      unoui_add_dropdown(w, half + 4 + lwb, y, cw - half - lwb - 8, bmode, 3, g_batt_mode);
+      w->w[w->nw-1].id = ID_BATTMODE; }
     y += ch + 10;
     /* pointer speed - the trackpad's pad-to-screen ratio depends on physical
        sizes the HID descriptor does not report, so it is a setting */
@@ -536,6 +578,21 @@ static void fmt_net(void)
         p = ap_int(p, (int)net_rx_frames()); *p++ = ')';
     }
     *p = 0;
+}
+
+/* Sample the link frame counters and derive the LAN-chip activity state.  Runs
+ * on the ~0.5 s tray tick: a delta since the last sample means traffic this
+ * interval (bit0 = we transmitted, bit1 = we received), and g_net_blink flips
+ * every active sample so the dot visibly blinks while data moves. */
+static void net_activity_sample(void)
+{
+    unsigned tx = net_tx_frames(), rx = net_rx_frames();
+    int act = 0;
+    if (tx != g_net_tx_last) act |= 1;         /* upload  */
+    if (rx != g_net_rx_last) act |= 2;         /* download */
+    g_net_tx_last = tx; g_net_rx_last = rx;
+    g_net_act = act;
+    g_net_blink = act ? !g_net_blink : 0;      /* steady (on) when idle */
 }
 
 /* audio: which backend the Sound Manager voice reaches, for System */
@@ -884,6 +941,9 @@ static void menu_refresh(void);
 static void build_desktop(void);
 static void open_app(int a);
 static void fmt_clock(int uptime_secs);
+static void fmt_batt(void);
+static int  batt_icon_w(void);
+static void draw_batt_icon(int x, int y, int bh, int pct, fb_px outline);
 int pc64_write_canvas_index(void);    /* pc64_write.c: doc-canvas widget index */
 int pc64_files_canvas_index(void);    /* pc64_files.c: pane widget index      */
 
@@ -926,6 +986,58 @@ static void tb_panel(int x, int y, int w, int h, fb_px face, int pressed)
     }
 }
 
+/* Battery tray-chip content width (excluding chip padding) for the active
+ * display mode; 0 when there is no battery so the chip is hidden entirely. */
+static int tray_batt_cw(void)
+{
+    if (!g_batt[0]) return 0;
+    switch (g_batt_mode) {
+    case BATT_ICON: return batt_icon_w();
+    case BATT_PCT:  return fb_text_w(g_batt);
+    default:        return batt_icon_w() + 6 + fb_text_w(g_batt);   /* BATT_BOTH */
+    }
+}
+
+/* Hover tooltip for the LAN chip: current IP address + negotiated link speed,
+ * drawn as a small panel sitting just above the chip (chip_x = its left edge,
+ * bar_y = the taskbar's top). Link speed shows "n/a" until a driver reports it. */
+static void draw_net_tooltip(int chip_x, int bar_y)
+{
+    const unoui_theme *t = UI.theme;
+    char ipline[40], spline[32];
+    char *p; int mbps = net_link_speed_mbps();
+    int fh = fb_text_h(), pad = 6, lh = fh + 3;
+
+    p = ap_str(ipline, "IP: ");
+    if (net_dhcp_done()) {
+        const unsigned char *ip = net_ip();
+        p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
+        p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]);
+    } else p = ap_str(p, "(no lease)");
+    *p = 0;
+
+    p = ap_str(spline, "Link: ");
+    if (mbps >= 1000)    { p = ap_int(p, mbps / 1000); p = ap_str(p, " Gbps"); }
+    else if (mbps > 0)   { p = ap_int(p, mbps);        p = ap_str(p, " Mbps"); }
+    else                   p = ap_str(p, "up (speed n/a)");
+    *p = 0;
+
+    { int tw1 = fb_text_w(ipline), tw2 = fb_text_w(spline);
+      int bw = (tw1 > tw2 ? tw1 : tw2) + pad * 2;
+      int bhh = lh * 2 + pad * 2 - 3;
+      int bx = chip_x, byy = bar_y - bhh - 4;
+      if (bx + bw > FB_W) bx = FB_W - bw;      /* keep it on-screen */
+      if (bx < 0) bx = 0;
+      if (byy < 0) byy = 0;
+      /* the taskbar canvas is clipped to the bar; widen so the tooltip can sit
+         above it. draw_one restores the window clip after this callback. */
+      fb_set_clip(0, 0, FB_W, FB_H);
+      fb_round_rect_a(bx, byy, bw, bhh, 6, t->pal.win_bg, 250, FB_CORNER_ALL);
+      fb_text(bx + pad, byy + pad,      ipline, t->pal.text, -1);
+      fb_text(bx + pad, byy + pad + lh, spline, t->pal.text, -1);
+    }
+}
+
 static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     const unoui_theme *t = UI.theme;
@@ -954,8 +1066,9 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
        Chips stop before the tray (clock/battery) instead of colliding. */
     x = r.x + tb_chip_x();
     { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
+      int bcw = tray_batt_cw();
       int tray_x = r.x + r.w - (fb_text_w(g_clock) + 16) - 6
-                   - (g_batt[0] ? fb_text_w(g_batt) + 20 : 0)
+                   - (bcw ? bcw + 20 : 0)
                    - (g_net[0]  ? fb_text_w(g_net) + 16 + 12 : 0);
     for (i = 0; i < NAPPS; i++) {
         int d = (i == act) ? 1 : 0;
@@ -982,17 +1095,30 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
       if (modern) fb_round_rect_a(cxx, by, cw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
       else        tb_panel(cxx, by, cw, bh, t->pal.field_bg, 1);
       fb_text(cxx + 8, by + (bh - fh) / 2, g_clock, modern ? t->pal.text : t->pal.field_text, -1);
-      if (g_batt[0]) {
-          int bw = fb_text_w(g_batt) + 16, bx = cxx - bw - 4;
+      { int bcw = tray_batt_cw();        /* battery chip: icon / percent / both */
+        if (bcw) {
+          fb_px tc = modern ? t->pal.text : t->pal.field_text;
+          int bw = bcw + 16, bx = cxx - bw - 4, ix = bx + 8;
           if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
           else        tb_panel(bx, by, bw, bh, t->pal.field_bg, 1);
-          fb_text(bx + 8, by + (bh - fh) / 2, g_batt, modern ? t->pal.text : t->pal.field_text, -1);
+          if (g_batt_mode != BATT_PCT) {                 /* icon or both */
+              draw_batt_icon(ix, by, bh, g_batt_pct, tc);
+              ix += batt_icon_w() + 6;
+          }
+          if (g_batt_mode != BATT_ICON)                  /* percent or both */
+              fb_text(ix, by + (bh - fh) / 2, g_batt, tc, -1);
           cxx = bx;
-      }
+      } }
       if (g_net[0]) {                    /* LAN chip: activity dot + label */
           int lease = net_dhcp_done();
-          unsigned dot = lease ? FB_RGB(60, 200, 90)     /* green: got a lease */
-                               : FB_RGB(232, 170, 40);   /* amber: link, no IP */
+          /* Blink on traffic: yellow while uploading, green while downloading;
+             steady lease/no-lease colour when idle. */
+          unsigned dot;
+          if (g_net_act && !g_net_blink) dot = t->pal.win_bg;        /* blink off phase */
+          else if (g_net_act & 1)        dot = FB_RGB(232, 200, 40); /* upload  (tx) */
+          else if (g_net_act & 2)        dot = FB_RGB(60, 200, 90);  /* download(rx) */
+          else if (lease)                dot = FB_RGB(60, 200, 90);  /* green: lease */
+          else                           dot = FB_RGB(232, 170, 40); /* amber: no IP */
           int bw = fb_text_w(g_net) + 16 + 12, bx = cxx - bw - 4;
           int ds = 6, dy = by + (bh - ds) / 2;
           if (modern) fb_round_rect_a(bx, by, bw, bh, cr, t->pal.text, 16, FB_CORNER_ALL);
@@ -1000,6 +1126,8 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
           fb_fill_rect(bx + 8, dy, ds, ds, dot);
           fb_text(bx + 8 + ds + 5, by + (bh - fh) / 2, g_net,
                   modern ? t->pal.text : t->pal.field_text, -1);
+          g_net_cx = bx; g_net_cy = by; g_net_cw = bw; g_net_ch = bh;  /* for hover */
+          if (g_net_hover) draw_net_tooltip(bx, r.y);
       } }
 }
 
@@ -1043,6 +1171,57 @@ static void desk_order(int *out, int n)
         for (j = i; j > 0 && strcmp(app_short(out[j - 1]), app_short(v)) > 0; j--)
             out[j] = out[j - 1];
         out[j] = v;
+    }
+}
+
+/* ---- wallpaper painter (registered as unoui_wallpaper) --------------------
+ * Draws the whole-screen backdrop for the chosen wallpaper.  Returns 1 when it
+ * painted, 0 for "Theme default" so the toolkit falls back to the theme's own
+ * desktop.  All styles are procedural (no image assets) and the result is
+ * captured by the UNO_BG_CACHE, so the per-frame cost is one blit. */
+static int pc64_wallpaper_paint(const unoui_theme *t, int W, int H)
+{
+    switch (g_wallpaper) {
+    default:
+    case 0:                                     /* Theme default: fall through */
+        return 0;
+    case 1: {                                   /* Midnight: navy + starfield  */
+        unsigned s = 0x1234567u; int i;
+        fb_grad_v(0, 0, W, H, FB_RGB(0x0a, 0x0e, 0x24), FB_RGB(0x02, 0x03, 0x0b));
+        for (i = 0; i < 140; i++) {
+            int x, y, b;
+            s = s * 1664525u + 1013904223u; x = (int)((s >> 8) % (unsigned)W);
+            s = s * 1664525u + 1013904223u; y = (int)((s >> 8) % (unsigned)(H * 3 / 4));
+            s = s * 1664525u + 1013904223u; b = 90 + (int)((s >> 8) % 140u);
+            fb_blend_rect(x, y, 1 + (b > 200), 1 + (b > 200), FB_RGB(b, b, b + 20 > 255 ? 255 : b + 20), b);
+        }
+        return 1; }
+    case 2:                                     /* Sunrise: warm vertical wash  */
+        fb_grad_v(0, 0, W, H, FB_RGB(0x2a, 0x3a, 0x66), FB_RGB(0xff, 0x9a, 0x5a));
+        fb_round_rect_a(W * 2 / 3, H / 2, W / 2, H / 2, H / 4,
+                        FB_RGB(0xff, 0xe0, 0x9a), 40, FB_CORNER_ALL);
+        return 1;
+    case 3:                                     /* Evergreen: deep green depth  */
+        fb_grad_v(0, 0, W, H, FB_RGB(0x0c, 0x2b, 0x1e), FB_RGB(0x04, 0x12, 0x0d));
+        fb_round_rect_a(-W / 5, H / 3, W * 3 / 4, H * 3 / 4, H / 2,
+                        FB_RGB(0x3f, 0xc0, 0x7a), 10, FB_CORNER_ALL);
+        return 1;
+    case 4:                                     /* Aurora: accent blobs (any theme) */
+        fb_grad_v(0, 0, W, H, FB_RGB(0x16, 0x19, 0x22), FB_RGB(0x10, 0x14, 0x1d));
+        fb_round_rect_a(W - W * 3 / 5 - 30, -H / 5, W * 3 / 5, H * 3 / 5, H / 3,
+                        t->pal.accent, 16, FB_CORNER_ALL);
+        fb_round_rect_a(-W / 4, H / 2, W * 3 / 5, H * 3 / 5, H / 3,
+                        t->pal.accent, 9, FB_CORNER_ALL);
+        return 1;
+    case 5: {                                   /* Graphite grid                */
+        int gx;
+        fb_fill_rect(0, 0, W, H, FB_RGB(0x1b, 0x1e, 0x24));
+        for (gx = 0; gx < W; gx += 32) fb_blend_rect(gx, 0, 1, H, FB_RGB(0xff, 0xff, 0xff), 10);
+        for (gx = 0; gx < H; gx += 32) fb_blend_rect(0, gx, W, 1, FB_RGB(0xff, 0xff, 0xff), 10);
+        return 1; }
+    case 6:                                     /* Slate: flat neutral          */
+        fb_fill_rect(0, 0, W, H, FB_RGB(0x30, 0x36, 0x40));
+        return 1;
     }
 }
 
@@ -1846,6 +2025,11 @@ static void on_action(const unoui_action *a)
     /* desktop arrangement: rebuild the icon layer in place */
     case ID_DFLOW: g_desk_flow = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
     case ID_DSORT: g_desk_sort = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
+    case ID_WALL: if (a->value >= 0 && a->value < NWALL) {   /* desktop wallpaper */
+                      g_wallpaper = a->value; unoui_bg_invalidate(); g_dirty = 1; } break;
+    case ID_CLOCKFMT: g_clock_12h = a->value ? 1 : 0; fmt_clock(0); g_dirty = 1; break;
+    case ID_BATTMODE: if (a->value >= 0 && a->value <= BATT_BOTH) {
+                          g_batt_mode = a->value; fmt_batt(); g_dirty = 1; } break;
     case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
     case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; break;
     case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; break;
@@ -2078,14 +2262,25 @@ static int pump_input(void)
     return real ? 1 : (any ? 2 : 0);
 }
 
-/* system-tray clock: the firmware RTC wall time, HH:MM:SS */
+/* system-tray clock: the firmware RTC wall time.  24-hour "HH:MM:SS" by
+ * default, or 12-hour "H:MM:SS AM/PM" when g_clock_12h is set (Control Panel). */
 static void fmt_clock(int uptime_secs)
 {
     int h = 0, mi = 0, s = 0;
     if (uno_pc64_time(0, 0, 0, &h, &mi, &s)) {
-        g_clock[0]='0'+(h/10)%10;  g_clock[1]='0'+h%10;  g_clock[2]=':';
-        g_clock[3]='0'+(mi/10)%10; g_clock[4]='0'+mi%10; g_clock[5]=':';
-        g_clock[6]='0'+(s/10)%10;  g_clock[7]='0'+s%10;  g_clock[8]=0;
+        if (g_clock_12h) {
+            int pm = h >= 12, h12 = h % 12; if (h12 == 0) h12 = 12;   /* 0/12 -> 12 */
+            int j = 0;
+            if (h12 >= 10) g_clock[j++] = '0' + h12 / 10;             /* no leading 0 */
+            g_clock[j++] = '0' + h12 % 10;                g_clock[j++] = ':';
+            g_clock[j++] = '0'+(mi/10)%10; g_clock[j++] = '0'+mi%10;  g_clock[j++] = ':';
+            g_clock[j++] = '0'+(s/10)%10;  g_clock[j++] = '0'+s%10;   g_clock[j++] = ' ';
+            g_clock[j++] = pm ? 'P' : 'A';  g_clock[j++] = 'M';       g_clock[j] = 0;
+        } else {
+            g_clock[0]='0'+(h/10)%10;  g_clock[1]='0'+h%10;  g_clock[2]=':';
+            g_clock[3]='0'+(mi/10)%10; g_clock[4]='0'+mi%10; g_clock[5]=':';
+            g_clock[6]='0'+(s/10)%10;  g_clock[7]='0'+s%10;  g_clock[8]=0;
+        }
     } else {                              /* no RTC (e.g. bare QEMU): uptime */
         int j = 0, v = uptime_secs, k = 0; char t[12];
         strcpy(g_clock, "up ");
@@ -2100,6 +2295,7 @@ static void fmt_batt(void)
 {
 #ifdef UNO_ACPI
     int pct = acpi_battery_percent();
+    g_batt_pct = pct;
     if (pct >= 0) {
         int j = 0;
         if (pct >= 100) g_batt[j++] = '0' + (pct / 100) % 10;
@@ -2109,7 +2305,28 @@ static void fmt_batt(void)
         g_batt[j] = 0;
     } else
         g_batt[0] = 0;
+#else
+    g_batt_pct = -1;
 #endif
+}
+
+/* Draw a small battery glyph in [x,y] within a `bh`-tall chip: an outline body,
+ * a positive-terminal nub, and an inner fill bar proportional to `pct` (green
+ * when healthy, amber low, red critical).  Width is fixed at batt_icon_w(). */
+static int batt_icon_w(void) { return 22 + 2; }   /* body 22 + nub 2 */
+static void draw_batt_icon(int x, int y, int bh, int pct, fb_px outline)
+{
+    int bw = 22, bhh = fb_text_h() - 2; if (bhh < 8) bhh = 8;
+    int by = y + (bh - bhh) / 2, nub = bhh / 3;
+    fb_px fill = pct >= 40 ? FB_RGB(60, 200, 90)
+               : pct >= 15 ? FB_RGB(232, 200, 40)
+                           : FB_RGB(230, 70, 60);
+    fb_frame_rect(x, by, bw, bhh, outline);                 /* body outline */
+    fb_fill_rect(x + bw, by + (bhh - nub) / 2, 2, nub, outline);  /* + terminal */
+    if (pct > 0) {                                          /* charge level */
+        int iw = (bw - 4) * (pct > 100 ? 100 : pct) / 100; if (iw < 1) iw = 1;
+        fb_fill_rect(x + 2, by + 2, iw, bhh - 4, fill);
+    }
 }
 
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
@@ -2131,6 +2348,7 @@ int main(void)
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
+    unoui_wallpaper = pc64_wallpaper_paint;  /* Control Panel wallpaper picker */
     unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
     unoui_font_pop  = uno_font_pop;
     uno_mac_mouse   = uno_pc64_mac_mouse;   /* live pointer for Paint's drag spin */
@@ -2190,7 +2408,7 @@ int main(void)
                                            (armed by netdisc_boot) */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
-         * AND hard-disabled in pc64_stress.c so no STRESS.CFG value can revive
+         * AND hard-disabled in pc64_stress.c so no DEBUG.CFG value can revive
          * it. Conformance + net tests above are unaffected. */
         uno_pc64_poll();
 #ifdef UNO_ACPI
@@ -2218,9 +2436,16 @@ int main(void)
               idle = 0; g_dirty = 1;
               fmt_clock(++halfsecs / 2);
               fmt_batt();               /* AML _BST, self-cached ~2 s */
-              if ((halfsecs & 3) == 0) fmt_net();  /* LAN chip, ~2 s cadence */
+              net_activity_sample();    /* LAN chip blink: tx/rx delta this tick */
+              if ((halfsecs & 3) == 0) fmt_net();  /* LAN chip label, ~2 s cadence */
           }
         }
+        /* LAN chip hover -> tooltip (IP + link speed). Repaint only on the
+           edge so a still pointer over the chip keeps the last frame's tip. */
+        { int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb);
+          int over = g_net[0] && mx >= g_net_cx && mx < g_net_cx + g_net_cw &&
+                     my >= g_net_cy && my < g_net_cy + g_net_ch;
+          if (over != g_net_hover) { g_net_hover = over; g_dirty = 1; } }
         feed(&tick);                    /* advance the caret-blink timebase */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
         if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
@@ -2289,7 +2514,7 @@ int main(void)
                   int n = uno_dbg_hud(hud, sizeof hud);
                   int hx = FB_W - fb_text_w(hud) - 4; if (hx < 0) hx = 0;
                   if (n > 0) fb_text(hx, 3, hud,
-                                     FB_RGB(255, 245, 130), FB_RGB(28, 30, 48));
+                                     FB_RGB(255, 70, 60), FB_RGB(28, 30, 48));
                   /* run state under the HUD: the operator must be able to see
                      at a glance whether a bounded run has FINISHED (safe to
                      shut down) or is merely slow - guessing that is how a run
