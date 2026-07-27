@@ -8,11 +8,14 @@
  * in unomedia/um_qoi.c. The whole file is UNO_DEBUG-only, like URC.
  *
  * The encoder is factored into an incremental (begin / per-pixel / end) form so
- * BOTH the full keyframe grab and the delta strip feed the identical op stream -
- * the wire bytes a full grab emits are byte-for-byte what they were before this
- * split, so the C#/Python QOI decoders and the pixel-exact host tests are
- * unchanged. Delta dirty-detection is per-tile FNV hashing against a snapshot
- * kept in this file (g_tileh), so there is no multi-MB previous-frame buffer.
+ * every path feeds the identical op stream - a full grab's wire bytes are
+ * byte-for-byte what they were before delta streaming, so the C#/Python QOI
+ * decoders and the pixel-exact host tests are unchanged. Three consumers share
+ * it: the full keyframe grab, the delta grab (only the tiles that changed since
+ * the previous grab, per-tile FNV hashing against a snapshot kept here - no
+ * multi-MB previous-frame buffer, since fb[] is up to 1920x1200), and the
+ * server-side session recorder (captures keyframe+delta frames into a RAM ring
+ * on the shell tick, with its OWN snapshot so it never disturbs the live view).
  * ======================================================================== */
 #include "unoauto_screen.h"
 
@@ -20,6 +23,8 @@
 
 #include "fb.h"          /* fb[], uno_fb_w/uno_fb_h, FB_W/FB_H */
 #include <stdint.h>
+
+unsigned long long uno_dbg_uptime_ms(void);   /* uno_debug.c: capture clock */
 
 void uno_screen_size(int *w, int *h)
 {
@@ -141,43 +146,7 @@ static qpx emit_px(int x, int y, int scale)
     return p;
 }
 
-/* ---- full keyframe grab -------------------------------------------------- */
-static void scr_snapshot(int scale, int ew, int eh);   /* fwd */
-
-int uno_screen_grab_qoi(int scale, unsigned char *out, int cap, int *ow, int *oh)
-{
-    int W = FB_W, H = FB_H, x, y, ew, eh;
-    qenc e;
-
-    if (scale < 1) scale = 1;
-    ew = W / scale; eh = H / scale;
-    if (ew < 1) ew = 1;
-    if (eh < 1) eh = 1;
-    if (ow) *ow = ew;
-    if (oh) *oh = eh;
-
-    if (q_begin(&e, out, cap, ew, eh) < 0) return -1;
-    for (y = 0; y < eh; y++) {
-        const fb_px *row = &fb[(y * scale) * FB_W];
-        for (x = 0; x < ew; x++) {
-            fb_px v = row[x * scale];
-            qpx px;
-            px.r = (unsigned char)(v & 0xff);
-            px.g = (unsigned char)((v >> 8) & 0xff);
-            px.b = (unsigned char)((v >> 16) & 0xff);
-            px.a = (unsigned char)((v >> 24) & 0xff);
-            if (q_px(&e, px) < 0) return -1;
-        }
-    }
-    {
-        int tot = q_end(&e);
-        if (tot < 0) return -1;
-        scr_snapshot(scale, ew, eh);   /* baseline for subsequent deltas */
-        return tot;
-    }
-}
-
-/* ---- delta grab: per-tile hash snapshot ---------------------------------- */
+/* ---- geometry / tiling --------------------------------------------------- */
 #ifdef FB_MAX_W
 #  define SCR_MAX_W FB_MAX_W
 #  define SCR_MAX_H FB_MAX_H
@@ -189,11 +158,6 @@ int uno_screen_grab_qoi(int scale, unsigned char *out, int cap, int *ow, int *oh
 #define SCR_MAXCOLS  ((SCR_MAX_W + SCR_TILE - 1) / SCR_TILE)
 #define SCR_MAXROWS  ((SCR_MAX_H + SCR_TILE - 1) / SCR_TILE)
 #define SCR_MAXTILES (SCR_MAXCOLS * SCR_MAXROWS)
-
-static unsigned       g_tileh[SCR_MAXTILES];   /* per-tile FNV hash snapshot     */
-static unsigned short g_chg[SCR_MAXTILES];     /* changed tile indices, one pass */
-static int            g_have_snap;             /* a valid snapshot exists        */
-static int            g_snap_scale, g_snap_ew, g_snap_eh;   /* what it was taken at */
 
 /* FNV-1a over a tile's emitted pixels (folds the whole 32-bit fb word). A hash
  * collision would drop a real change (a stale tile) - astronomically unlikely
@@ -213,23 +177,118 @@ static unsigned tile_hash(int tc, int tr, int scale, int ew, int eh)
     return h;
 }
 
-/* Recompute the whole snapshot for the current frame. */
-static void scr_snapshot(int scale, int ew, int eh)
+/* Fill `snaph` with every tile's current hash. */
+static void snap_fill(unsigned *snaph, int scale, int ew, int eh)
 {
     int cols = (ew + SCR_TILE - 1) / SCR_TILE;
     int rows = (eh + SCR_TILE - 1) / SCR_TILE;
     int tr, tc;
     for (tr = 0; tr < rows; tr++)
         for (tc = 0; tc < cols; tc++)
-            g_tileh[tr * cols + tc] = tile_hash(tc, tr, scale, ew, eh);
-    g_have_snap = 1; g_snap_scale = scale; g_snap_ew = ew; g_snap_eh = eh;
+            snaph[tr * cols + tc] = tile_hash(tc, tr, scale, ew, eh);
+}
+
+/* Diff the frame against snapshot `snaph`, refreshing changed hashes in place
+ * and appending their row-major indices to `chg`. Returns the count, or -1 if it
+ * would exceed `maxch`. */
+static int scr_diff(unsigned *snaph, unsigned short *chg, int maxch,
+                    int scale, int ew, int eh)
+{
+    int cols = (ew + SCR_TILE - 1) / SCR_TILE;
+    int rows = (eh + SCR_TILE - 1) / SCR_TILE;
+    int tr, tc, nch = 0;
+    for (tr = 0; tr < rows; tr++) {
+        for (tc = 0; tc < cols; tc++) {
+            unsigned h = tile_hash(tc, tr, scale, ew, eh);
+            int t = tr * cols + tc;
+            if (h != snaph[t]) {
+                snaph[t] = h;
+                if (nch >= maxch) return -1;
+                chg[nch++] = (unsigned short)t;
+            }
+        }
+    }
+    return nch;
+}
+
+/* Encode changed tiles chg[0..nch) as one vertical QOI strip (width SCR_TILE,
+ * height nch*SCR_TILE), fed straight from fb[] in strip order - no scratch copy.
+ * Edge tiles are padded to a full cell (the client blits only the valid
+ * sub-rect). Returns strip byte count, or -1 on overflow. */
+static int scr_encode_strip(unsigned char *out, int cap, const unsigned short *chg,
+                            int nch, int cols, int scale, int ew, int eh)
+{
+    qenc e;
+    int i;
+    if (q_begin(&e, out, cap, SCR_TILE, nch * SCR_TILE) < 0) return -1;
+    for (i = 0; i < nch; i++) {
+        int t = chg[i], tcc = t % cols, trr = t / cols;
+        int bx = tcc * SCR_TILE, by = trr * SCR_TILE, cr;
+        for (cr = 0; cr < SCR_TILE; cr++) {
+            int yy = by + cr, x;
+            for (x = 0; x < SCR_TILE; x++) {
+                int sx = bx + x;
+                qpx p;
+                if (sx < ew && yy < eh) p = emit_px(sx, yy, scale);
+                else { p.r = p.g = p.b = 0; p.a = 0; }
+                if (q_px(&e, p) < 0) return -1;
+            }
+        }
+    }
+    return q_end(&e);
+}
+
+/* Encode the whole framebuffer as a QOI image; does NOT touch any snapshot.
+ * Returns the byte count (or -1), and the emitted dims in oew,oeh. */
+static int full_encode(int scale, unsigned char *out, int cap, int *oew, int *oeh)
+{
+    int W = FB_W, H = FB_H, x, y, ew, eh;
+    qenc e;
+    if (scale < 1) scale = 1;
+    ew = W / scale; eh = H / scale;
+    if (ew < 1) ew = 1;
+    if (eh < 1) eh = 1;
+    if (oew) *oew = ew;
+    if (oeh) *oeh = eh;
+    if (q_begin(&e, out, cap, ew, eh) < 0) return -1;
+    for (y = 0; y < eh; y++) {
+        const fb_px *row = &fb[(y * scale) * FB_W];
+        for (x = 0; x < ew; x++) {
+            fb_px v = row[x * scale];
+            qpx px;
+            px.r = (unsigned char)(v & 0xff);
+            px.g = (unsigned char)((v >> 8) & 0xff);
+            px.b = (unsigned char)((v >> 16) & 0xff);
+            px.a = (unsigned char)((v >> 24) & 0xff);
+            if (q_px(&e, px) < 0) return -1;
+        }
+    }
+    return q_end(&e);
+}
+
+/* ---- live-view grabs (full keyframe + delta) ----------------------------- */
+static unsigned       g_live_h[SCR_MAXTILES];  /* live-view per-tile hash snapshot */
+static unsigned short g_chg[SCR_MAXTILES];     /* changed tile scratch (live)       */
+static int            g_live_have;             /* a valid live snapshot exists      */
+static int            g_live_scale, g_live_ew, g_live_eh;   /* what it was taken at */
+
+int uno_screen_grab_qoi(int scale, unsigned char *out, int cap, int *ow, int *oh)
+{
+    int ew = 0, eh = 0;
+    int tot = full_encode(scale, out, cap, &ew, &eh);
+    if (ow) *ow = ew;
+    if (oh) *oh = eh;
+    if (tot < 0) return -1;
+    snap_fill(g_live_h, scale < 1 ? 1 : scale, ew, eh);      /* baseline for deltas */
+    g_live_have = 1; g_live_scale = (scale < 1 ? 1 : scale); g_live_ew = ew; g_live_eh = eh;
+    return tot;
 }
 
 int uno_screen_grab_delta(int scale, unsigned char *out, int cap,
                           int *ow, int *oh, int *ocols, int *otw, int *oth,
                           int *onch, int *ostrip)
 {
-    int W = FB_W, H = FB_H, ew, eh, cols, rows, tr, tc, nch = 0, i, strip, stripcap;
+    int W = FB_W, H = FB_H, ew, eh, cols, rows, nch, i, strip, stripcap;
 
     if (scale < 1) scale = 1;
     ew = W / scale; eh = H / scale;
@@ -241,64 +300,28 @@ int uno_screen_grab_delta(int scale, unsigned char *out, int cap,
     if (otw) *otw = SCR_TILE; if (oth) *oth = SCR_TILE;
     if (onch) *onch = 0; if (ostrip) *ostrip = 0;
 
-    /* Need a snapshot taken at the SAME scale/size to diff against; otherwise
+    /* Need a snapshot at the SAME scale/size to diff against; otherwise
      * establish one now and tell the caller to send a keyframe this round. */
-    if (!g_have_snap || g_snap_scale != scale || g_snap_ew != ew || g_snap_eh != eh) {
-        scr_snapshot(scale, ew, eh);
+    if (!g_live_have || g_live_scale != scale || g_live_ew != ew || g_live_eh != eh) {
+        snap_fill(g_live_h, scale, ew, eh);
+        g_live_have = 1; g_live_scale = scale; g_live_ew = ew; g_live_eh = eh;
         return -1;
     }
 
     /* Reserve room for the worst-case manifest (every tile changed) so the strip
      * encode can never crowd it out. */
     stripcap = cap - cols * rows * 2;
-    if (stripcap < 14 + 8) { scr_snapshot(scale, ew, eh); return -1; }
+    if (stripcap < 14 + 8) goto keyframe;
 
-    /* Collect changed tiles, refreshing their hashes in place. Unchanged tiles
-     * already match, so after a clean pass the snapshot is fully current. */
-    for (tr = 0; tr < rows; tr++) {
-        for (tc = 0; tc < cols; tc++) {
-            unsigned h = tile_hash(tc, tr, scale, ew, eh);
-            int t = tr * cols + tc;
-            if (h != g_tileh[t]) {
-                g_tileh[t] = h;
-                if (nch >= SCR_MAXTILES) { scr_snapshot(scale, ew, eh); return -1; }
-                g_chg[nch++] = (unsigned short)t;
-            }
-        }
-    }
+    nch = scr_diff(g_live_h, g_chg, SCR_MAXTILES, scale, ew, eh);
+    if (nch < 0) goto keyframe;                 /* too many tiles: keyframe */
     if (onch) *onch = nch;
-    if (nch == 0) return 0;                 /* static frame: empty payload */
+    if (nch == 0) return 0;                     /* static frame: empty payload */
 
-    /* Encode the changed tiles as one vertical strip (width SCR_TILE, height
-     * nch*SCR_TILE), fed straight from fb[] in strip order - no scratch copy. */
-    {
-        qenc e;
-        if (q_begin(&e, out, stripcap, SCR_TILE, nch * SCR_TILE) < 0) {
-            scr_snapshot(scale, ew, eh); return -1;
-        }
-        for (i = 0; i < nch; i++) {
-            int t = g_chg[i], tcc = t % cols, trr = t / cols;
-            int bx = tcc * SCR_TILE, by = trr * SCR_TILE, cr;
-            for (cr = 0; cr < SCR_TILE; cr++) {
-                int yy = by + cr, x;
-                for (x = 0; x < SCR_TILE; x++) {
-                    int sx = bx + x;
-                    qpx p;
-                    if (sx < ew && yy < eh) {
-                        p = emit_px(sx, yy, scale);
-                    } else {
-                        p.r = p.g = p.b = 0; p.a = 0;   /* pad partial edge tiles */
-                    }
-                    if (q_px(&e, p) < 0) { scr_snapshot(scale, ew, eh); return -1; }
-                }
-            }
-        }
-        strip = q_end(&e);
-        if (strip < 0) { scr_snapshot(scale, ew, eh); return -1; }
-    }
+    strip = scr_encode_strip(out, stripcap, g_chg, nch, cols, scale, ew, eh);
+    if (strip < 0) goto keyframe;
 
-    /* Append the manifest: nch tile indices, u16 little-endian, after the strip. */
-    {
+    {   /* append the manifest: nch tile indices, u16 little-endian, after the strip */
         int mo = strip;
         for (i = 0; i < nch; i++) {
             out[mo++] = (unsigned char)(g_chg[i] & 0xff);
@@ -307,6 +330,158 @@ int uno_screen_grab_delta(int scale, unsigned char *out, int cap,
         if (ostrip) *ostrip = strip;
         return mo;
     }
+
+keyframe:
+    /* Refresh the snapshot fully (the partial scr_diff pass may have updated some
+     * hashes) so the next delta is coherent, then let the caller send a keyframe. */
+    snap_fill(g_live_h, scale, ew, eh);
+    g_live_have = 1; g_live_scale = scale; g_live_ew = ew; g_live_eh = eh;
+    return -1;
+}
+
+/* ---- server-side session capture ----------------------------------------- *
+ * Records frames into a RAM ring on the shell tick (uno_screen_capture_tick),
+ * decoupled from the client's network poll rate, with its OWN snapshot so it
+ * never disturbs the live view. Each ring frame is a 12-byte header then a
+ * payload:
+ *     u8  type       0 = keyframe (payload = full-frame QOI)
+ *                    1 = delta    (payload = [QOI strip][manifest u16-LE * nch])
+ *     u8  pad
+ *     u16 nch        changed tiles (delta; 0 for keyframe / static frame)
+ *     u32 strip      strip byte count (keyframe: == payloadlen)
+ *     u32 payloadlen bytes of payload that follow
+ * ew/eh/cols/tw/th/fps are constant for a recording and reported at stop, so the
+ * client reconstructs frame-by-frame the same way the live view composites. */
+#define SCR_CAP_BYTES (4 * 1024 * 1024)
+#define SCR_CAP_HDR   12
+static unsigned char  g_cap[SCR_CAP_BYTES];
+static unsigned       g_cap_h[SCR_MAXTILES];   /* capture's OWN tile-hash snapshot  */
+static unsigned short g_cap_chg[SCR_MAXTILES];
+static int  g_cap_on, g_cap_have;
+static int  g_cap_len, g_cap_frames, g_cap_dropped;
+static int  g_cap_scale, g_cap_ew, g_cap_eh, g_cap_cols, g_cap_fps;
+static unsigned g_cap_interval, g_cap_next_ms;
+
+static void cap_write_hdr(unsigned char *h, int type, int nch, int strip, int payload)
+{
+    h[0] = (unsigned char)type; h[1] = 0;
+    h[2] = (unsigned char)(nch & 0xff);      h[3] = (unsigned char)((nch >> 8) & 0xff);
+    h[4] = (unsigned char)(strip & 0xff);    h[5] = (unsigned char)((strip >> 8) & 0xff);
+    h[6] = (unsigned char)((strip >> 16) & 0xff); h[7] = (unsigned char)((strip >> 24) & 0xff);
+    h[8] = (unsigned char)(payload & 0xff);  h[9] = (unsigned char)((payload >> 8) & 0xff);
+    h[10] = (unsigned char)((payload >> 16) & 0xff); h[11] = (unsigned char)((payload >> 24) & 0xff);
+}
+
+/* Append one captured frame to the ring; stops the recording if it won't fit or
+ * the desktop size changed out from under us. */
+static void cap_push_frame(void)
+{
+    unsigned char *base;
+    int avail, cols, rows, type, nch = 0, strip = 0, payload = 0;
+
+    if (FB_W / g_cap_scale != g_cap_ew || FB_H / g_cap_scale != g_cap_eh) {
+        g_cap_on = 0; return;                  /* resolution changed mid-record */
+    }
+    cols = g_cap_cols;
+    rows = (g_cap_eh + SCR_TILE - 1) / SCR_TILE;
+    if (g_cap_len + SCR_CAP_HDR + 64 > SCR_CAP_BYTES) { g_cap_dropped++; g_cap_on = 0; return; }
+    base  = g_cap + g_cap_len + SCR_CAP_HDR;
+    avail = SCR_CAP_BYTES - (g_cap_len + SCR_CAP_HDR);
+
+    if (!g_cap_have) {
+        int ew, eh;
+        strip = full_encode(g_cap_scale, base, avail, &ew, &eh);
+        if (strip < 0) { g_cap_dropped++; g_cap_on = 0; return; }
+        snap_fill(g_cap_h, g_cap_scale, g_cap_ew, g_cap_eh);
+        g_cap_have = 1;
+        type = 0; nch = 0; payload = strip;
+    } else {
+        int reserve = cols * rows * 2, scap = avail - reserve;
+        if (scap < 14 + 8) { g_cap_dropped++; g_cap_on = 0; return; }
+        nch = scr_diff(g_cap_h, g_cap_chg, SCR_MAXTILES, g_cap_scale, g_cap_ew, g_cap_eh);
+        if (nch == 0) { type = 1; strip = 0; payload = 0; }        /* static frame */
+        else if (nch < 0) goto cap_keyframe;                        /* too many tiles */
+        else {
+            strip = scr_encode_strip(base, scap, g_cap_chg, nch, cols,
+                                     g_cap_scale, g_cap_ew, g_cap_eh);
+            if (strip < 0) goto cap_keyframe;
+            {   int i, mo = strip;
+                for (i = 0; i < nch; i++) {
+                    base[mo++] = (unsigned char)(g_cap_chg[i] & 0xff);
+                    base[mo++] = (unsigned char)((g_cap_chg[i] >> 8) & 0xff);
+                }
+                type = 1; payload = mo;
+            }
+        }
+    }
+    cap_write_hdr(g_cap + g_cap_len, type, nch, strip, payload);
+    g_cap_len += SCR_CAP_HDR + payload;
+    g_cap_frames++;
+    return;
+
+cap_keyframe:
+    {
+        int ew, eh;
+        strip = full_encode(g_cap_scale, base, avail, &ew, &eh);
+        if (strip < 0) { g_cap_dropped++; g_cap_on = 0; return; }
+        snap_fill(g_cap_h, g_cap_scale, g_cap_ew, g_cap_eh);
+        cap_write_hdr(g_cap + g_cap_len, 0, 0, strip, strip);
+        g_cap_len += SCR_CAP_HDR + strip;
+        g_cap_frames++;
+    }
+}
+
+int uno_screen_capture_start(int scale, int fps)
+{
+    if (g_cap_on) return 0;
+    if (scale < 1) scale = 1;
+    if (fps < 1) fps = 1;
+    if (fps > 60) fps = 60;
+    g_cap_scale = scale;
+    g_cap_ew = FB_W / scale; g_cap_eh = FB_H / scale;
+    if (g_cap_ew < 1) g_cap_ew = 1;
+    if (g_cap_eh < 1) g_cap_eh = 1;
+    g_cap_cols = (g_cap_ew + SCR_TILE - 1) / SCR_TILE;
+    g_cap_len = 0; g_cap_frames = 0; g_cap_dropped = 0; g_cap_have = 0;
+    g_cap_fps = fps; g_cap_interval = 1000u / (unsigned)fps;
+    g_cap_next_ms = (unsigned)uno_dbg_uptime_ms();   /* capture the first frame now */
+    g_cap_on = 1;
+    return 1;
+}
+
+void uno_screen_capture_stop(void) { g_cap_on = 0; }
+
+void uno_screen_capture_tick(void)
+{
+    unsigned now;
+    if (!g_cap_on) return;
+    now = (unsigned)uno_dbg_uptime_ms();
+    if ((int)(now - g_cap_next_ms) < 0) return;
+    g_cap_next_ms = now + g_cap_interval;
+    cap_push_frame();
+}
+
+void uno_screen_capture_stat(int *frames, int *bytes, int *dropped, int *on,
+                             int *scale, int *ew, int *eh, int *cols, int *fps)
+{
+    if (frames) *frames = g_cap_frames;
+    if (bytes)  *bytes  = g_cap_len;
+    if (dropped)*dropped = g_cap_dropped;
+    if (on)     *on     = g_cap_on;
+    if (scale)  *scale  = g_cap_scale;
+    if (ew)     *ew     = g_cap_ew;
+    if (eh)     *eh     = g_cap_eh;
+    if (cols)   *cols   = g_cap_cols;
+    if (fps)    *fps    = g_cap_fps;
+}
+
+int uno_screen_capture_read(int off, unsigned char *dst, int len)
+{
+    int i;
+    if (off < 0 || off >= g_cap_len || len < 1) return 0;
+    if (off + len > g_cap_len) len = g_cap_len - off;
+    for (i = 0; i < len; i++) dst[i] = g_cap[off + i];
+    return len;
 }
 
 #endif /* UNO_DEBUG */

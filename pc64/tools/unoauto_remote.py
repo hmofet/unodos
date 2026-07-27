@@ -515,6 +515,83 @@ class UnoAutoLink:
                     rgba[do:do + vw * 4] = strip[so:so + vw * 4]
         return state["w"], state["h"], bytes(state["rgba"])
 
+    # ---- server-side session capture (the device records on its own tick) --
+    @staticmethod
+    def _rec_stat(lines):
+        """Parse a `frames N bytes B ...` record-status line into a dict."""
+        d = {}
+        if lines:
+            t = lines[0].split()
+            for i in range(0, len(t) - 1, 2):
+                try:
+                    d[t[i]] = int(t[i + 1])
+                except ValueError:
+                    pass
+        return d
+
+    def screen_record_start(self, scale=1, fps=10, **k):
+        """`screen record start [scale] [fps]` -> status dict."""
+        return self._rec_stat(self.command("screen", "record", "start",
+                                            int(scale), int(fps), **k))
+
+    def screen_record_stop(self, **k):
+        """`screen record stop` -> final status dict (ring retained for reading)."""
+        return self._rec_stat(self.command("screen", "record", "stop", **k))
+
+    def screen_record_status(self, **k):
+        """`screen record status` -> live status dict."""
+        return self._rec_stat(self.command("screen", "record", "status", **k))
+
+    def screen_record_read_all(self, nbytes, **k):
+        """Pull the whole recorded ring (`nbytes` from the stop/status stat)."""
+        import base64
+        to = k.pop("timeout", 20.0)
+        buf = bytearray()
+        while len(buf) < nbytes:
+            rd = self.command("screen", "record", "read", format(len(buf), "x"),
+                              self.SCREEN_READ_LEN, timeout=to)
+            part = base64.b64decode("".join(rd))
+            if not part:
+                break
+            buf += part
+        return bytes(buf[:nbytes])
+
+    def screen_record_frames(self, stat, **k):
+        """Pull the ring described by `stat` and reconstruct every recorded frame
+        to raw RGBA. Returns a list of (w, h, rgba). Mirrors the client
+        compositor: a keyframe replaces the canvas, a delta blits its tiles."""
+        data = self.screen_record_read_all(stat.get("bytes", 0), **k)
+        ew, eh, cols = stat["ew"], stat["eh"], stat["cols"]
+        tw, th = stat["tw"], stat["th"]
+        frames, canvas, p = [], None, 0
+        while p + 12 <= len(data):
+            typ = data[p]
+            nch = data[p + 2] | (data[p + 3] << 8)
+            strip = data[p + 4] | (data[p + 5] << 8) | (data[p + 6] << 16) | (data[p + 7] << 24)
+            payload = data[p + 8] | (data[p + 9] << 8) | (data[p + 10] << 16) | (data[p + 11] << 24)
+            p += 12
+            pl = data[p:p + payload]
+            p += payload
+            if typ == 0:                                     # keyframe
+                canvas = bytearray(qoi_decode(pl))
+            else:                                            # delta
+                if canvas is None:
+                    raise RuntimeError("delta before keyframe in recording")
+                if nch > 0 and strip > 0:
+                    st = qoi_decode(pl[:strip])
+                    man = pl[strip:]
+                    idx = [man[i * 2] | (man[i * 2 + 1] << 8) for i in range(nch)]
+                    for i, t in enumerate(idx):
+                        col, row = t % cols, t // cols
+                        dx, dy = col * tw, row * th
+                        vw, vh = min(tw, ew - dx), min(th, eh - dy)
+                        for yy in range(max(0, vh)):
+                            so = ((i * th + yy) * tw) * 4
+                            do = ((dy + yy) * ew + dx) * 4
+                            canvas[do:do + vw * 4] = st[so:so + vw * 4]
+            frames.append((ew, eh, bytes(canvas)))
+        return frames
+
     # ---- receiving --------------------------------------------------------
     def _accept_loop(self):
         while not self._stop:

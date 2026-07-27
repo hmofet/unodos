@@ -115,6 +115,9 @@ unchanged.
 | `screen grab [scale]` | snapshot + QOI-encode the WHOLE framebuffer (optional nearest-neighbour downscale by `scale`) and **stage** it on-device. The OUT half of remote desktop; pairs with `key`/`pointer` (the IN half) | `ok frame <w> <h> qoi <n>` then `end` / `err too-big (raise scale)` |
 | `screen grab delta [scale]` | like `grab`, but encodes only the **tiles that changed** since the previous grab (per-tile hashing), so a mostly-static desktop streams at a fraction of the bytes. Stages `[QOI strip of changed tiles][manifest]`. Falls back to a full `frame` keyframe on the first grab, a scale change, or when too much changed | `ok delta <ew> <eh> <cols> <tw> <th> <nch> <strip> <total>` then `end`, **or** the `frame …` keyframe reply above |
 | `screen read <off-hex> [len]` | read `len` (≤2880) bytes of the staged QOI frame at `<off>`, base64, streamed as `ok` lines (like `readsec`). A whole frame is far larger than one URC response, so the client pulls it in slices | base64 `ok` lines then `end` / `err no-frame` |
+| `screen record start [scale] [fps]` | begin **server-side capture**: the device records keyframe+delta frames into a RAM ring on its own shell tick at `fps` (1..60, default 10), decoupled from the client's poll rate, using its own delta snapshot so the live view is undisturbed | `ok frames <n> bytes <b> dropped <d> ew <ew> eh <eh> cols <c> tw <t> th <t> fps <f> on <0/1>` then `end` / `err already recording` |
+| `screen record stop` \| `screen record status` | stop (ring retained for reading) / query without stopping | the same `ok frames …` stat line then `end` |
+| `screen record read <off-hex> [len]` | read `len` (≤2880) bytes of the recorded ring at `<off>`, base64 (like `screen read`); the client pulls the whole ring and reconstructs each frame | base64 `ok` lines then `end` / `err no-data` |
 | `apps` | count of launchable apps | `ok <n>` |
 | `launch <n>` | launch app `n` | `ok launched` / `err no-app` |
 | `close` | close the top window | `ok` |
@@ -206,6 +209,17 @@ The GUI client is **`pc64/remote/`** (`UnoRemote.exe`, a WinForms single-exe bui
 by `build-remote.ps1`): live view, mouse/keyboard forwarding, session recording
 (ffmpeg → MP4, else a PNG frame sequence), and a raw-command box. See
 `pc64/remote/README.md`.
+
+**Server-side capture (`screen record`).** Client-side recording is limited to
+the poll FPS and sends every frame over the link. `screen record` instead records
+**on the device**, on its shell tick at a steady requested fps, into a RAM ring
+(keyframe+delta, same encoding as `grab delta` but with an independent snapshot,
+so recording never perturbs the live view). The client starts it, keeps viewing,
+then on stop pulls the ring once and reconstructs every frame locally (feeding the
+same `Recorder`). The recording fps is thus decoupled from the network: a smooth
+capture even when the live view is polling slowly. The ring is a fixed 4 MB
+budget; when it fills, capture stops and the stat line reports `dropped`. In the
+WinForms client, tick the **"on device"** box next to Record.
 
 ## The guard (dead-man's switch for risky verbs)
 
@@ -441,9 +455,12 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
   streaming**: `screen grab delta` returns a delta with in-range tile indices
   that suppresses most tiles, compositing that exact delta onto a seeded canvas
   reproduces a fresh full grab (tolerant of live clock/cursor drift), and a scale
-  change forces a keyframe. `qoi_decode` / `screen_grab_delta` / `screen_stream`
-  in `unoauto_remote.py` are the pure-Python decoder + delta helpers it (and any
-  script) uses.
+  change forces a keyframe. Finally it exercises **server-side capture**: records
+  for ~1.5 s, confirms a live grab still works mid-recording (snapshot
+  independence), stops, then pulls + reconstructs every recorded frame to a full
+  RGBA image. `qoi_decode` / `screen_grab_delta` / `screen_stream` /
+  `screen_record_*` in `unoauto_remote.py` are the pure-Python decoder + delta +
+  capture helpers it (and any script) uses.
 - **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
   boots with a `remote-serial` DEBUG.CFG and **no NIC device**, driven over the
   guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
