@@ -1,10 +1,87 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-27 (round 21 - SESSION_PROTECTION is the right cmd + right length
-(24 B) but LMAC-FATALs with data1=0x400; airtime mechanism is the wall).
+Status: 2026-07-27 (round 22 - ROOT CAUSE via working Linux association trace:
+this fw uses the NEW link-based command API; UnoDOS's legacy MVM association is
+the whole problem. SESSION_PROTECTION fails because there is no LINK_CONFIG link).
 Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
+
+## Round 22 (2026-07-27) — ROOT CAUSE: this fw drives association with the NEW link-based command API; UnoDOS uses the legacy MVM one
+
+Captured a **working Linux ASSOCIATION** command trace of THIS Yoga's AX201
+connecting to NimmuNet, and diffed the command IDs against what UnoDOS sends.
+This is the decisive artifact rounds 19-21 were missing.
+
+**Rig for the capture (reusable):** wrote Arch Linux (lightweight, has
+`CONFIG_IWLWIFI_DEVICE_TRACING`) to a USB stick (`devbuntu:~/archlinux.iso`, dd),
+booted it on the Yoga with the eth dongle. Gotcha: **archiso auto-loads the
+Broadcom `wl` module, which conflicts with iwlwifi and blocks the wlan netdev**
+(phy0 appears, no `wlanN`). Fix in the capture script: `modprobe -r wl`, reload
+iwlwifi, then `wpa_supplicant` to NimmuNet. Capture harness on devbuntu:
+`assoc_server.py` (:8080, serves `assoc_capture*.sh`, saves POSTs to
+`iwl_assoc_from_yoga.txt`); the Yoga runs `curl .../assoc_capture3.sh | bash`.
+The `iwlwifi_dev_hcmd` tracepoint logs `hcmd 0x<group>.0x<cmd>` (command IDs, not
+payloads). **Saved trace: `devbuntu:~/iwl_assoc_working_2026-07-27.txt`** (86
+hcmds; connection reached `type managed / ssid NimmuNet`, chan 149 / 5 GHz).
+
+**The working association sequence (MAC_CONF group = 0x03):**
+```
+0x03.0x08  MAC_CONFIG_CMD    (×10)
+0x03.0x09  LINK_CONFIG_CMD   (×10)
+0x03.0x0a  STA_CONFIG_CMD    (×4)
+0x03.0x05  SESSION_PROTECTION_CMD  (×2)  <- accepted, NO assert
+0x05.0x17  SCD_QUEUE_CONFIG_CMD          (TX queue - same as us)
+```
+**ZERO** legacy `0x01.0x18` ADD_STA, `0x01.0x28` MAC_CONTEXT, or `0x01.0x2b`
+BINDING in the entire trace. The working driver (iwlmvm on kernel 7.0 for this
+QuZ-77 fw) drives the whole mac/link/sta setup through the **new link-based
+command API**, not the legacy MVM contexts UnoDOS uses.
+
+**Why SESSION_PROTECTION LMAC-FATALs in UnoDOS (data1=0x400):** its
+`id_and_color` references a **fw_link_id** created by `LINK_CONFIG_CMD`. UnoDOS
+never sends `LINK_CONFIG_CMD` (it set up the mac via the legacy `MAC_CONTEXT_CMD`
+0x28), so the session-protection request points at a link the fw does not have →
+LMAC assert. The command, capability (capa54) and 24-byte length are all correct;
+what is missing is the link the new-API setup would have created. So airtime was
+never really the bug — the whole legacy association path is. The fw ACCEPTS the
+legacy mac_ctxt/add_sta (csr2808=0) but they don't build the link state the rest
+of the association (session-prot, and real auth/assoc RX) needs.
+
+### The real work (next session) — port the association path to the new command API
+
+Replace the legacy join commands with the MAC_CONF-group ones, in this order:
+1. **`MAC_CONFIG_CMD` (0x03/0x08)** — `struct iwl_mac_config_cmd`. Creates the MAC.
+   CMD_VERSIONS: ver 1 on this fw.
+2. **`LINK_CONFIG_CMD` (0x03/0x09)** — `struct iwl_link_config_cmd`. Creates the
+   link and returns/uses a **fw_link_id** — the id SESSION_PROTECTION needs.
+3. **`STA_CONFIG_CMD` (0x03/0x0a)** — `struct iwl_sta_config_cmd`. The AP peer STA
+   (replaces ADD_STA 0x18).
+4. **`SESSION_PROTECTION_CMD` (0x03/0x05)** — keep the 24-byte struct, but set
+   `id_and_color` to the **fw_link_id** from step 2 (not the raw mac id 0). This is
+   almost certainly what clears `data1=0x400`.
+5. `SCD_QUEUE_CONFIG_CMD` (0x05/0x17) — unchanged, already works.
+
+Structs live in Linux `drivers/net/wireless/intel/iwlwifi/fw/api/mac-cfg.h`
+(`iwl_mac_config_cmd`, `iwl_link_config_cmd`, `iwl_sta_config_cmd`) - fetch via
+raw.githubusercontent.com/torvalds/linux. Cross-check field/version handling in
+iwlmvm `mld-mac.c` / `mld-sta.c` (or iwlmld). The hcmd tracepoint did NOT log
+payloads, so the structs come from source, not the trace; the trace gives the
+exact command SEQUENCE + that it works. NOTE: this is a substantial rewrite of the
+`iwl join` path (`mvm_mac_ctxt`/`mvm_binding`/`mvm_add_sta` -> the three new cmds),
+not a one-liner - budget a focused session + a few metal reflash iterations.
+
+### Rig note carried forward — the box boots a READ-ONLY USB ESP
+
+The Yoga boots a USB stick whose ESP is firmware-SFS = **read-only in pc64_fs**, so
+the URC A/B kernel push CANNOT update the live boot kernel (`push 1 ...` hits the
+internal SSD, a non-boot disk). Every driver-code change is a full **USB reflash**:
+build on devbuntu (`~/unodos-yoga`, UNO_DEBUG=1) -> `tools/mkuefi.py 1024` ->
+dd `build/unodos-uefi.img` to the stick (model-guarded `/tmp/flash_ab.sh`;
+`blockdev --setrw` first - the write-blocker sets USB ro). Bake DEBUG.CFG
+(`remote=192.168.2.100:5098`, `net-eth-only`, NimmuNet creds) into `build/esp`
+before imaging. To get fast A/B push instead, boot a writable-ESP install (internal
+disk). Device nodes shuffle between sessions - ALWAYS re-identify by model.
 
 ## Round 21 (2026-07-27) — SESSION_PROTECTION verified on metal: right cmd, right length (24 B), but LMAC-FATALs (data1=0x400). Airtime is the wall.
 
