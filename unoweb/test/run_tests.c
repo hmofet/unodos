@@ -51,6 +51,30 @@ static void tdump(const char *name, const char *html, const char *expect)
     uw_doc_free(d);
 }
 
+/* ---- computed-style goldens ---------------------------------------------- */
+static void tstyle(const char *name, const char *html, const char *expect)
+{
+    char buf[8192];
+    uw_doc *d;
+    if (!want(name)) return;
+    run++;
+    d = uw_parse_string(html, -1, NULL);
+    if (!d) { printf("  FAIL %-22s (no doc)\n", name); fails++; return; }
+    uw_add_inline_sheets(d);
+    uw_style_document(d, 800, 600);
+    {   uw_node *c;
+        int off = 0;
+        buf[0] = 0;
+        for (c = uw_first_child(uw_body(d)); c; c = uw_next_sibling(c)) {
+            int k = uw_style_dump(d, c, buf + off, (int)sizeof buf - off);
+            off += k;
+            if (off >= (int)sizeof buf) break;
+        } }
+    if (strcmp(buf, expect)) { printf("  FAIL %-22s\n", name); show_diff(expect, buf); fails++; }
+    uw_doc_free(d);
+}
+
+
 /* ---- serialize round-trip ------------------------------------------------ */
 static void tserial(const char *name, const char *html, const char *expect)
 {
@@ -456,6 +480,108 @@ int main(int argc, char **argv)
         }
         uw_doc_free(d);
     }
+
+    /* ---- CSS: the cascade ---------------------------------------------- */
+    tstyle("css-ua-defaults", "<p>x</p>",
+           "p display=block font=14/400 color=#1e2028 margin=9,0,9,0\n");
+
+    tstyle("css-author-overrides",
+           "<style>p{color:red;font-size:20px}</style><p>x</p>",
+           "p display=block font=20/400 color=#ff0000 margin=9,0,9,0\n");
+
+    /* specificity: #id beats .class beats tag, regardless of source order */
+    tstyle("css-specificity",
+           "<style>p{color:red} .c{color:green} #i{color:blue}</style>"
+           "<p id=i class=c>x</p>",
+           "p display=block font=14/400 color=#0000ff margin=9,0,9,0\n");
+
+    /* equal specificity: the later rule wins */
+    tstyle("css-source-order",
+           "<style>.a{color:red} .b{color:lime}</style><p class='a b'>x</p>",
+           "p display=block font=14/400 color=#00ff00 margin=9,0,9,0\n");
+
+    /* !important outranks a more specific normal declaration */
+    tstyle("css-important",
+           "<style>#i{color:red} p{color:lime !important}</style><p id=i>x</p>",
+           "p display=block font=14/400 color=#00ff00 margin=9,0,9,0\n");
+
+    /* the style attribute outranks author rules */
+    tstyle("css-inline-attr",
+           "<style>p{color:red}</style><p style='color:blue'>x</p>",
+           "p display=block font=14/400 color=#0000ff margin=9,0,9,0\n");
+
+    /* inheritance: color and font descend, margin does not */
+    tstyle("css-inheritance",
+           "<style>div{color:teal;font-size:18px;margin:5px}</style><div><span>x</span></div>",
+           "div display=block font=18/400 color=#008080 margin=5,5,5,5\n"
+           "  span display=inline font=18/400 color=#008080\n");
+
+    tstyle("css-combinators",
+           "<style>div>p{color:red} div p{font-weight:700} b+i{color:lime}</style>"
+           "<div><p>a</p></div><b>x</b><i>y</i>",
+           "div display=block font=14/400 color=#1e2028\n"
+           "  p display=block font=14/700 color=#ff0000 margin=9,0,9,0\n"
+           "b display=inline font=14/700 color=#1e2028\n"
+           "i display=inline font=14/400i color=#00ff00\n");
+
+    tstyle("css-shorthands",
+           "<style>p{margin:1px 2px 3px 4px;padding:5px 6px;border:2px solid #abc}</style><p>x</p>",
+           "p display=block font=14/400 color=#1e2028 margin=1,2,3,4 padding=5,6,5,6"
+           " border0=2px#aabbcc border1=2px#aabbcc border2=2px#aabbcc border3=2px#aabbcc\n");
+
+    tstyle("css-units",
+           "<style>p{font-size:20px} p span{font-size:1.5em;margin-left:2em}"
+           "div{width:50%;height:30px}</style><p><span>x</span></p><div></div>",
+           "p display=block font=20/400 color=#1e2028 margin=9,0,9,0\n"
+           "  span display=inline font=30/400 color=#1e2028 margin=0,0,0,60\n"
+           "div display=block font=14/400 color=#1e2028 width=50% height=30\n");
+
+    tstyle("css-colors",
+           "<style>.a{color:#f00}.b{color:#ff0000}.c{color:rgb(0,128,0)}"
+           ".d{background:yellow}</style>"
+           "<i class=a>1</i><i class=b>2</i><i class=c>3</i><i class=d>4</i>",
+           "i display=inline font=14/400i color=#ff0000\n"
+           "i display=inline font=14/400i color=#ff0000\n"
+           "i display=inline font=14/400i color=#008000\n"
+           "i display=inline font=14/400i color=#1e2028 bg=#ffff00\n");
+
+    /* display:none on head content is what keeps <style> text off the page */
+    tstyle("css-display-none",
+           "<style>.hide{display:none}</style><p class=hide>x</p><p>y</p>",
+           "p display=none font=14/400 color=#1e2028 margin=9,0,9,0\n"
+           "p display=block font=14/400 color=#1e2028 margin=9,0,9,0\n");
+
+    /* pseudo-classes that need an interaction model must NOT match yet -
+     * styling :hover now would paint the page as if the pointer were
+     * everywhere at once */
+    tstyle("css-pseudo",
+           "<style>li:first-child{color:red} a:hover{color:lime}</style>"
+           "<ul><li>a</li><li>b</li></ul>",
+           "ul display=block font=14/400 color=#1e2028 margin=9,0,9,0 padding=0,0,0,24\n"
+           "  li display=list-item font=14/400 color=#ff0000 bullet=1\n"
+           "  li display=list-item font=14/400 color=#1e2028 bullet=1\n");
+
+    /* a malformed rule must not eat the ones after it */
+    tstyle("css-error-recovery",
+           "<style>p{color:@@@;;;} p{font-weight:700} @unknown{x:y} p{color:lime}</style><p>x</p>",
+           "p display=block font=14/700 color=#00ff00 margin=9,0,9,0\n");
+
+    if (want("css-matches")) {
+        uw_doc *d = uw_parse_string("<div class='a b' id=q><p>x</p></div>", -1, NULL);
+        uw_node *div = uw_get_element_by_id(d, "q");
+        run++;
+        if (!uw_matches(d, div, "div")     ||
+            !uw_matches(d, div, ".a")      ||
+            !uw_matches(d, div, "#q")      ||
+            !uw_matches(d, div, "div.a.b") ||
+            !uw_matches(d, div, "[class]") ||
+             uw_matches(d, div, "span")    ||
+             uw_matches(d, div, ".c")) {
+            printf("  FAIL css-matches\n"); fails++;
+        }
+        uw_doc_free(d);
+    }
+
 
     /* ---- limits: hostile input must degrade, never run away ------------- */
     if (want("limit-depth")) {

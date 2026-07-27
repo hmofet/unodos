@@ -75,7 +75,33 @@ struct uw_doc {
     /* id -> node, keyed by the interned id VALUE */
     uw_idslot *ids;
     u32        nids, idcap;
+
+    /* the cascade: UA sheet first, then author sheets in document order */
+    uw_sheet  *sheets, *sheets_tail;
+    int        styled;
+    int        vw, vh;                  /* viewport, for percentage roots */
 };
+
+/* ---- CSS internals (uw_css.c <-> uw_style.c) ------------------------------
+ * The rule/declaration structs stay private to uw_css.c; the cascade reaches
+ * them only through these accessors, so the selector representation can change
+ * without touching the property code. */
+typedef struct uw_rule uw_rule;
+typedef struct uw_decl uw_decl;
+
+uw_rule    *uw_sheet_rules(uw_sheet *s);
+uw_rule    *uw_rule_next(uw_rule *r);
+uw_decl    *uw_rule_decls(uw_rule *r);
+int         uw_rule_spec(uw_rule *r);
+int         uw_rule_order(uw_rule *r);
+int         uw_rule_matches(uw_doc *d, uw_node *n, uw_rule *r);
+uw_decl    *uw_decl_next(uw_decl *x);
+uw_atom     uw_decl_prop(uw_decl *x);
+const char *uw_decl_value(uw_decl *x);
+int         uw_decl_important(uw_decl *x);
+int         uw_sheet_origin(uw_sheet *s);
+uw_sheet   *uw_sheet_next(uw_sheet *s);
+void        uw_sheet_link(uw_sheet *s, uw_sheet *n);
 
 /* ---- internal API -------------------------------------------------------- */
 void *uw_arena(uw_doc *d, size_t n);          /* zeroed; NULL when capped */
