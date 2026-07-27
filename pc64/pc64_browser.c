@@ -344,6 +344,7 @@ static int uwm_lineh(void *u, const uw_style *s)
 
 static int  g_uw_w;                 /* width the current layout was built for */
 static int  g_uw_h;                 /* its resulting document height           */
+static int  g_link_sel = -1;        /* keyboard-selected link, or -1           */
 static unsigned g_uw_sig;
 
 static void render_uw(const char *src, unoui_rect r, int scroll)
@@ -680,6 +681,9 @@ static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     fb_fill_rect(r.x, r.y, r.w, 18, FB_RGB(40, 60, 110));
     fb_text(r.x + 8, r.y + 5, g_title, FB_RGB(255,255,255), -1);
     fb_text(r.x + r.w - 130, r.y + 5, "Bksp: files", FB_RGB(180,200,235), -1);
+#ifdef UW_ENGINE
+    if (g_status[0]) fb_text(r.x + 8, r.y + r.h - 14, g_status, PG_QUOTE, -1);
+#endif
     { unoui_rect body = { r.x, r.y + 20, r.w, r.h - 20 };
       if (g_is_html) render_html(g_doc, body, g_scroll);
       else           render_md(g_doc, body, g_scroll);
@@ -717,6 +721,56 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
         return 0;
     }
 #ifdef UW_ENGINE
+    /* KEYBOARD link navigation: Right/Left step through the document's links
+     * and Enter follows the selected one.
+     *
+     * This exists because the pointer path cannot be verified here at all -
+     * QEMU delivers no mouse input to this guest (no cursor appears even with
+     * a USB tablet), so a click test proves nothing either way. Keyboard
+     * activation is drivable by the same harness that works for everything
+     * else, and it is a better primary path regardless: it needs no pointing
+     * device, which matters on a machine whose trackpad may not be up yet.
+     * The mouse path below is kept and stays unverified until either the
+     * harness or real hardware can exercise it. */
+    if (e->kind == UI_EV_KEY && g_dom &&
+        (e->key == UI_KEY_RIGHT || e->key == UI_KEY_LEFT || e->key == UI_KEY_ENTER)) {
+        uw_node *links[64];
+        int n = uw_elements_by_tag(g_dom, NULL, "a", links, 64);
+        int i, have = 0;
+        for (i = 0; i < n && i < 64; i++) if (uw_attr(g_dom, links[i], "href")) have++;
+        if (have) {
+            if (e->key == UI_KEY_ENTER) {
+                if (g_link_sel >= 0 && g_link_sel < n) {
+                    const char *href = uw_attr(g_dom, links[g_link_sel], "href");
+                    if (href && *href && href[0] != '#') {
+                        strncpy(g_url, href, sizeof g_url - 1);
+                        g_url[sizeof g_url - 1] = 0;
+                        g_link_sel = -1;
+                        fetch_url();
+                        return 1;
+                    }
+                }
+            } else {
+                int step = (e->key == UI_KEY_RIGHT) ? 1 : -1;
+                int guard = 0;
+                do {
+                    g_link_sel += step;
+                    if (g_link_sel >= n) g_link_sel = 0;
+                    if (g_link_sel < 0) g_link_sel = n - 1;
+                } while (!uw_attr(g_dom, links[g_link_sel], "href") && ++guard < n);
+                {   const char *href = uw_attr(g_dom, links[g_link_sel], "href");
+                    char lb[128];
+                    int k = 0;
+                    const char *pfx = "Link: ";
+                    while (pfx[k] && k < (int)sizeof lb - 1) { lb[k] = pfx[k]; k++; }
+                    while (href && *href && k < (int)sizeof lb - 1) lb[k++] = *href++;
+                    lb[k] = 0;
+                    strncpy(g_status, lb, sizeof g_status - 1);
+                    g_status[sizeof g_status - 1] = 0; }
+                return 1;
+            }
+        }
+    }
     /* A click in the document: ask the engine what is under the pointer and
      * follow a link if that is what it turns out to be. The display list is
      * the ONE geometry source for both painting and pointing, so a link's
