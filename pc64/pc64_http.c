@@ -194,8 +194,58 @@ static int is_ipv4(const char *s, unsigned char out[4])
     return part == 4;
 }
 
+/* parse the numeric status code out of "HTTP/1.x NNN reason" */
+static int http_status_code(const char *raw)
+{
+    const char *s = raw;
+    while (*s && *s != ' ' && *s != '\r' && *s != '\n') s++;   /* skip HTTP/1.x */
+    while (*s == ' ') s++;
+    if (s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9' && s[2] >= '0' && s[2] <= '9')
+        return (s[0]-'0')*100 + (s[1]-'0')*10 + (s[2]-'0');
+    return 0;
+}
+
+/* find a header value by name (case-insensitive) within the header block of a
+ * raw response. Stops at the blank line so it never matches inside the body.
+ * Returns 1 and fills `out` (NUL-terminated, trimmed) if found, else 0. */
+static int http_header(const char *raw, int rawlen, const char *name, char *out, int outmax)
+{
+    int nl = (int)strlen(name);
+    const char *e = raw + rawlen, *ln = raw;
+    while (ln < e && *ln != '\n') ln++;               /* skip the status line */
+    if (ln < e) ln++;
+    for (; ln < e; ) {
+        const char *le = ln; while (le < e && *le != '\n') le++;
+        int ll = (int)(le - ln), k, m = 1;
+        if (ll == 0 || (ll == 1 && ln[0] == '\r')) break;   /* end of headers */
+        if (ll > nl && ln[nl] == ':') {
+            for (k = 0; k < nl; k++) {
+                char a = ln[k], b = name[k];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (b >= 'A' && b <= 'Z') b += 32;
+                if (a != b) { m = 0; break; }
+            }
+            if (m) {
+                const char *v = ln + nl + 1, *ve = le; int o = 0;
+                while (v < ve && (*v == ' ' || *v == '\t')) v++;
+                while (ve > v && (ve[-1] == '\r' || ve[-1] == ' ' || ve[-1] == '\t')) ve--;
+                while (v < ve && o < outmax-1) out[o++] = *v++;
+                out[o] = 0;
+                return 1;
+            }
+        }
+        ln = le + 1;
+    }
+    return 0;
+}
+
 /* ---- GET ----------------------------------------------------------------- */
-int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
+/* One request/response. On a 3xx with a Location, returns HTTP_REDIRECT and puts
+ * the resolved absolute next URL in `redir`; otherwise behaves like the public
+ * pc64_http_get (body length >=0, or a negative error). */
+#define HTTP_REDIRECT (-100)
+static int http_get_once(const char *url, char *body, int bodymax,
+                         char *status, int statusmax, char *redir, int redirmax)
 {
     char host[128], path[512];
     unsigned char ip[4];
@@ -277,6 +327,30 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
       if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
                            if (j==0) strncpy(status,"No response",statusmax-1); }
 
+      /* follow a redirect: 3xx + Location -> resolve to an absolute URL. Handles
+       * absolute Locations, root-relative ("/path"), and http<->https upgrades
+       * (google.com -> www.google.com, apex -> www, http -> https all land here). */
+      { int code = http_status_code(raw); char loc[512];
+        if (code >= 300 && code < 400 && redir && redirmax > 0 &&
+            http_header(raw, rn, "location", loc, sizeof loc) && loc[0]) {
+            int o = 0;
+            #define RPUT(s) do { const char *q=(s); while (*q && o<redirmax-1) redir[o++]=*q++; } while (0)
+            if (!strncmp(loc,"http://",7) || !strncmp(loc,"https://",8)) {
+                RPUT(loc);
+            } else {                                 /* relative to the current origin */
+                char pnum[8]; int v = port, k = 0, defport = secure ? 443 : 80;
+                RPUT(secure ? "https://" : "http://");
+                RPUT(host);
+                if (v != defport) { RPUT(":"); if(!v)pnum[k++]='0'; while(v){pnum[k++]=(char)('0'+v%10);v/=10;}
+                                    while (k && o<redirmax-1) redir[o++]=pnum[--k]; }
+                if (loc[0] != '/') RPUT("/");
+                RPUT(loc);
+            }
+            #undef RPUT
+            redir[o] = 0;
+            return HTTP_REDIRECT;
+        } }
+
       /* split headers from body at the blank line */
       { const char *bp = raw, *e = raw + rn; const char *split = 0;
         for (; bp + 3 < e; bp++) {
@@ -288,4 +362,19 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
           memcpy(body, split, bl); body[bl] = 0; return bl; }
       }
     }
+}
+
+/* Public entry: fetch `url`, following up to a few redirects. */
+int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
+{
+    char cur[512], nxt[512];
+    int hop, n;
+    strncpy(cur, url, sizeof cur - 1); cur[sizeof cur - 1] = 0;
+    for (hop = 0; hop < 6; hop++) {
+        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt);
+        if (n != HTTP_REDIRECT) return n;
+        strncpy(cur, nxt, sizeof cur - 1); cur[sizeof cur - 1] = 0;
+    }
+    if (statusmax > 0) strncpy(status, "Too many redirects", statusmax-1);
+    return -9;
 }
