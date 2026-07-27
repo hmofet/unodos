@@ -2910,6 +2910,7 @@ static int assoc_setup(void)
     q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
     h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
     uno_dbg_net_trace("wifi: join: txq_alloc -> qid=%d csr2808=%08x g_tx_wr=%d", q, h, g_tx_wr);
+    (void)h;                            /* the traces compile out in prod builds */
     return q;
 #undef TRACE_CSR
 }
