@@ -20,6 +20,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -51,6 +52,7 @@ namespace UnoRemote
         private Socket _disc;
         private Thread _discThread;
         private int _urcPort;
+        private HashSet<string> _localIps;   // our own addresses - don't answer our own probe
         private const int DiscPort = 5400;
 
         // ---- events (raised on the reader thread; marshal to UI yourself) ----
@@ -121,6 +123,8 @@ namespace UnoRemote
         private void StartDiscovery(int urcPort)
         {
             _urcPort = urcPort;
+            _localIps = new HashSet<string>();
+            foreach (var ip in LocalIPv4Addresses()) _localIps.Add(ip.ToString());
             try
             {
                 _disc = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -150,6 +154,10 @@ namespace UnoRemote
                 if (t.Length >= 3 && t[0] == "UNODISC" && t[2] == "PROBE")
                 {
                     var src = (IPEndPoint)any;
+                    if (_localIps != null && _localIps.Contains(src.Address.ToString())) continue;  // our own scan probe
+                    // a `host`-role probe is another client scanning (like us), not a
+                    // device looking for a host - don't answer it with our listener.
+                    if (t.Length >= 4 && t[3] == "host") continue;
                     string localIp = LocalIpToward(src.Address);
                     string offer = "UNODISC 1 OFFER host " + SafeHostName() + " 1 " + localIp + " " + _urcPort;
                     try { _disc.SendTo(Encoding.ASCII.GetBytes(offer), src); } catch { }
@@ -200,47 +208,94 @@ namespace UnoRemote
             public override string ToString() { return Name + "   " + Ip + ":" + Port; }
         }
 
+        /// <summary>Every up, non-loopback local IPv4 address. A scan broadcasts
+        /// out one socket per interface so it reaches ALL networks - a multi-homed
+        /// PC (LAN + WSL/Hyper-V virtual adapters) otherwise broadcasts out only
+        /// the default route and misses the LAN the boxes are on.</summary>
+        private static List<IPAddress> LocalIPv4Addresses()
+        {
+            var res = new List<IPAddress>();
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+                        if (ua.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ua.Address))
+                            res.Add(ua.Address);
+                }
+            }
+            catch { }
+            return res;
+        }
+
         /// <summary>Broadcast a UNODISC PROBE and collect the boxes that answer.
         /// Only boxes in LISTEN mode advertise a non-zero port (something to dial
         /// into); dial-out (`discover`) boxes advertise port 0 and are skipped.
-        /// Blocks up to ~timeoutMs. Uses its own ephemeral socket, so it coexists
-        /// with the discovery responder on :5400.</summary>
+        /// Blocks up to ~timeoutMs. Sends out every local interface so it reaches
+        /// the LAN even when the default route is a virtual adapter.</summary>
         public List<DiscoveredBox> Scan(int timeoutMs)
         {
             var found = new Dictionary<string, DiscoveredBox>();
             var sep = new[] { ' ', '\r', '\n', '\t' };
-            Socket s = null;
+            var socks = new List<Socket>();
+            foreach (var local in LocalIPv4Addresses())
+            {
+                try
+                {
+                    var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                    s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    s.EnableBroadcast = true;
+                    s.Bind(new IPEndPoint(local, 0));          // bind the interface -> probe goes out it
+                    socks.Add(s);
+                }
+                catch { }
+            }
+            if (socks.Count == 0)   // fallback: the default interface
+            {
+                try
+                {
+                    var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                    s.EnableBroadcast = true; s.Bind(new IPEndPoint(IPAddress.Any, 0));
+                    socks.Add(s);
+                }
+                catch { }
+            }
             try
             {
-                s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                s.EnableBroadcast = true;
-                s.Bind(new IPEndPoint(IPAddress.Any, 0));
-                s.ReceiveTimeout = 400;
                 byte[] probe = Encoding.ASCII.GetBytes("UNODISC 1 PROBE host " + SafeHostName() + " 1");
-                try { s.SendTo(probe, new IPEndPoint(IPAddress.Broadcast, DiscPort)); } catch { }
+                var bcast = new IPEndPoint(IPAddress.Broadcast, DiscPort);
+                foreach (var s in socks) { try { s.SendTo(probe, bcast); } catch { } }
                 int end = Environment.TickCount + timeoutMs;
                 var buf = new byte[512];
                 while (Environment.TickCount < end)
                 {
-                    EndPoint any = new IPEndPoint(IPAddress.Any, 0);
-                    int n;
-                    try { n = s.ReceiveFrom(buf, ref any); }
-                    catch (SocketException) { continue; }   // recv timeout - keep waiting
-                    catch { break; }
-                    if (n <= 0) continue;
-                    var t = Encoding.ASCII.GetString(buf, 0, n).Split(sep, StringSplitOptions.RemoveEmptyEntries);
-                    // UNODISC 1 OFFER pc64 <name> <api> <ip> <port>
-                    if (t.Length >= 8 && t[0] == "UNODISC" && t[2] == "OFFER" && t[3] == "pc64")
+                    bool got = false;
+                    foreach (var s in socks)
                     {
-                        int port;
-                        if (!int.TryParse(t[7], out port) || port <= 0) continue;   // 0 = not listening
-                        found[t[6] + ":" + t[7]] = new DiscoveredBox { Name = t[4], Ip = t[6], Port = port };
+                        try
+                        {
+                            if (!s.Poll(40000, SelectMode.SelectRead)) continue;   // 40 ms
+                            got = true;
+                            EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                            int n = s.ReceiveFrom(buf, ref from);
+                            if (n <= 0) continue;
+                            var t = Encoding.ASCII.GetString(buf, 0, n).Split(sep, StringSplitOptions.RemoveEmptyEntries);
+                            // UNODISC 1 OFFER pc64 <name> <api> <ip> <port>
+                            if (t.Length >= 8 && t[0] == "UNODISC" && t[2] == "OFFER" && t[3] == "pc64")
+                            {
+                                int port;
+                                if (!int.TryParse(t[7], out port) || port <= 0) continue;   // 0 = not listening
+                                found[t[6] + ":" + t[7]] = new DiscoveredBox { Name = t[4], Ip = t[6], Port = port };
+                            }
+                        }
+                        catch { }
                     }
+                    if (!got) Thread.Sleep(15);
                 }
             }
-            catch { }
-            finally { try { if (s != null) s.Close(); } catch { } }
+            finally { foreach (var s in socks) { try { s.Close(); } catch { } } }
             return new List<DiscoveredBox>(found.Values);
         }
 
