@@ -29,11 +29,28 @@ exactly the code a user's click would.
 | | |
 |---|---|
 | ZimaBlade | `192.168.2.118`, MAC `00:e0:4c:30:5b:d4`, r8169 gigabit |
-| driven from | `devbuntu`, via `~/urc_bridge.py` on port 5099 |
+| driven from | `devbuntu`, via `~/urc_bridge.py` |
 | install path | network install (URC `install <disk>`), no USB stick needed |
 
 Both were reachable when this was written (ping 3 ms; the bridge script is in
 place).
+
+**Check who else is on the bridge before you start.** As of 2026-07-27 the
+running instance is `urc_bridge.py 5098`, its state lives in `~/urc/`
+(`cmd.txt`, `session.log`), and its live link was to **192.168.2.254** - the
+iwlwifi WiFi bring-up session, not this box. Driving verbs into that link, or
+rebooting the box on the other end of it, would wreck another lane's work.
+
+master's `urc_bridge.py` takes a per-box directory as `argv[2]` exactly so
+boxes do not share state, so the correct move is a SECOND bridge:
+
+```
+python3 ~/urc_bridge.py 5099 ~/urc-zima
+```
+
+and the ZimaBlade dialing into that port. Confirm with `ss -tn | grep 5099`
+that the peer is 192.168.2.118 before sending anything - a bridge with the
+wrong box on it looks identical until the verbs land somewhere unexpected.
 
 ## The run
 
