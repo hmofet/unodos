@@ -469,7 +469,23 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
              * behind the same uw_images hook. */
             if (c->image) {
                 const imgent *e = (const imgent *)c->image;
-                fb_blit(x, y, e->w, e->h, (const fb_px *)e->px, e->w);
+                if (c->w == e->w && c->h == e->h) {
+                    fb_blit(x, y, e->w, e->h, (const fb_px *)e->px, e->w);
+                } else if (c->w > 0 && c->h > 0) {
+                    /* Layout scaled the box to fit the column, so the pixels
+                     * follow. Nearest neighbour, ONE ROW AT A TIME: it needs no
+                     * second full-size buffer, which matters when the decoded
+                     * frame is already megabytes. */
+                    static fb_px row[2048];
+                    int ry, rx;
+                    int w = c->w > 2048 ? 2048 : c->w;
+                    for (ry = 0; ry < c->h; ry++) {
+                        const um_px *srow = e->px + (long)((long)ry * e->h / c->h) * e->w;
+                        for (rx = 0; rx < w; rx++)
+                            row[rx] = (fb_px)srow[(long)rx * e->w / c->w];
+                        fb_blit(x, y + ry, w, 1, row, w);
+                    }
+                }
             } else fb_frame_rect(x, y, c->w, c->h, PG_RULE);
             break;
         case UW_CMD_TEXT: {
