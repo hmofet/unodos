@@ -1954,6 +1954,51 @@ static u32 fw_valid_rx_ant(void){ u32 a = (g_fw.phy_sku >> 20) & 0xf; return a ?
 
 static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); wait_cmd_done(50);}
 static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
+
+/* BT_CONFIG (LONG 0x9b, iwl_bt_coex_cmd, BT_COEX_CMD_API_S_VER_6 = 8 B).
+ * iwl_mvm_up() ALWAYS sends this and we never did. It matters here more than on
+ * a discrete card: the AX201 is CNVi, so WiFi and Bluetooth share one radio and
+ * the LMAC scheduler has to arbitrate between them. Without a coex config,
+ * bookkeeping commands are all fine but anything that asks the LMAC to reserve
+ * real airtime has no arbitration policy to reserve it under. This ucode
+ * advertises the command at ver 6 (LONG 0x9b in the cmd-version TLV). */
+static void mvm_bt_init(void)
+{
+    struct { u32 mode, enabled_modules; } c;
+    c.mode = 1;                         /* BT_COEX_NW */
+    c.enabled_modules = (1u<<2)         /* SYNC2SCO (IWL_MVM_BT_COEX_SYNC2SCO) */
+                      | (1u<<4);        /* HIGH_BAND_RET */
+    if (fw_has_capa(67)) c.enabled_modules |= (1u<<0);   /* MPLUT, capa 67 */
+    uno_dbg_net_trace("wifi: BT_CONFIG mode=%d modules=%02x len=%d",
+                      (int)c.mode, (unsigned)c.enabled_modules, (int)sizeof c);
+    send_cmd(GRP_LONG, 0x9b, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
+/* MCC_UPDATE_CMD (LONG 0xc8, iwl_mcc_update_cmd, LAR_UPDATE_MCC_CMD_API_S_VER_2
+ * = 28 B). Sets the regulatory domain. iwl_mvm_init_mcc() sends it during
+ * iwl_mvm_up(); we never did, so the fw has no regulatory state. Note a PASSIVE
+ * scan is legal in any domain, which is why scanning works and proves nothing
+ * about whether the fw will let us TRANSMIT on the channel we picked.
+ * "ZZ" is the world-roaming domain - the same default iwl_mvm_init_mcc falls
+ * back to when the BIOS/NVM gives no country. */
+static void mvm_mcc_update(const char *cc)
+{
+    struct { u16 mcc; u8 source_id, rsv; u32 key; u8 rsv2[20]; } c;
+    const u8 *r; int len = 0;
+    memset(&c, 0, sizeof c);
+    c.mcc = (u16)((cc[0] << 8) | cc[1]);
+    c.source_id = 7;                    /* MCC_SOURCE_DEFAULT */
+    uno_dbg_net_trace("wifi: MCC_UPDATE mcc=\"%c%c\" src=%d len=%d",
+                      cc[0], cc[1], c.source_id, (int)sizeof c);
+    send_cmd(GRP_LONG, 0xc8, 0, &c, (int)sizeof c);
+    r = wait_notif(GRP_LONG, 0xc8, &len, 200);
+    if (r && len >= 8)
+        uno_dbg_net_trace("wifi: MCC_UPDATE resp: status=%04x mcc=%c%c n_chan=%d",
+                          r[0] | (r[1]<<8), r[3], r[2], r[6] | (r[7]<<8));
+    else
+        uno_dbg_net_trace("wifi: MCC_UPDATE: no response (len=%d)", len);
+}
 static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
 
 /* INIT_EXTENDED_CFG (SYSTEM 0x3) + NVM_ACCESS_COMPLETE (REGNVM 0x0) — unified */
@@ -3470,8 +3515,19 @@ static int mvm_steps(int n, char *out, int cap)
           wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
           wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1; }
         strcpy(out, "ok mvm9d: wpa PMK/init returned"); break;
+    /* e/f: the two iwl_mvm_up() commands we never sent. Separate steps so metal
+     * can tell which (if either) is what SESSION_PROTECTION was missing. Run
+     * them after mvm 2 (tx_ant), matching Linux's order in iwl_mvm_up(). */
+    case 14: mvm_bt_init();
+        { u32 h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+          strcpy(out, h ? "err mvme: BT_CONFIG asserted the fw (iwl fwerr)"
+                        : "ok mvme: BT_CONFIG accepted"); } break;
+    case 15: mvm_mcc_update("ZZ");
+        { u32 h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+          strcpy(out, h ? "err mvmf: MCC_UPDATE asserted the fw (iwl fwerr)"
+                        : "ok mvmf: MCC_UPDATE accepted (detail in NET log)"); } break;
     default:
-        strcpy(out, "err usage: iwl mvm <1-9|a-d> (5scan 6phy 7mac 8bind 9=a+b+c+d: a quota b assoc-window c add-sta d wpa)"); break;
+        strcpy(out, "err usage: iwl mvm <1-9|a-f> (5scan 6phy 7mac 8bind 9=a+b+c+d: a quota b assoc-window c add-sta d wpa; e BT_CONFIG f MCC_UPDATE)"); break;
     }
     return (int)strlen(out);
 }
@@ -3793,7 +3849,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
             return mvm_steps(*q - 0x30, out, cap);
         }
-        if (*q >= 0x61 && *q <= 0x64) {              /* "iwl mvm a..d" - stage-9 split */
+        if (*q >= 0x61 && *q <= 0x66) {              /* "iwl mvm a..d" split, e/f extras */
             if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
             return mvm_steps(10 + (*q - 0x61), out, cap);
         }
