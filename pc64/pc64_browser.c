@@ -631,11 +631,16 @@ static void js_expand(void)
             int inlen = (int)(e - s); if (inlen > (int)sizeof(code)-1) inlen = sizeof(code)-1;
             memcpy(code, s, inlen); code[inlen] = 0;
             wbuf[0] = 0; lbuf[0] = 0;
-            js_run(code, wbuf, sizeof wbuf, lbuf, sizeof lbuf);
+            int jrc = js_run(code, wbuf, sizeof wbuf, lbuf, sizeof lbuf);
             int wl = (int)strlen(wbuf);
             if (wl > DOC_MAX-1-oi) wl = DOC_MAX-1-oi;
             memcpy(out+oi, wbuf, wl); oi += wl;
-            if (lbuf[0]) { int have=(int)strlen(logbuf), ll=(int)strlen(lbuf);
+            /* Only surface a console panel for scripts that RAN (rc==0): real web
+             * pages carry minified JS this tiny interpreter can't parse, and on a
+             * parse/oom error js_run leaves only a diagnostic in lbuf - dumping
+             * that made a script-heavy page (e.g. google.com) render as a wall of
+             * "JS parse error" instead of the page's own text. Skip those. */
+            if (jrc == 0 && lbuf[0]) { int have=(int)strlen(logbuf), ll=(int)strlen(lbuf);
                 if (have+ll < (int)sizeof(logbuf)-1) memcpy(logbuf+have, lbuf, ll+1); haslog = 1; }
             p = e; while (*p && *p!='>') p++; if (*p=='>') p++;
             continue;

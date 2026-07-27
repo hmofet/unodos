@@ -1,7 +1,8 @@
 /* pc64_http - a tiny HTTP/1.0 GET client for the browser, over the pc64 net
  * stack (e1000 + net.c). Brings the link up on demand (DHCP), resolves the
- * host by DNS (or accepts an IP literal), does one GET, and returns the body.
- * HTTPS is not supported yet (needs CA trust); an https:// URL reports that. */
+ * host by DNS (or accepts an IP literal), does a GET, and returns the body.
+ * HTTPS is CA-validated (TLS 1.2, bundled root store). 3xx redirects are
+ * followed (up to a few hops), including http<->https and apex->www upgrades. */
 #ifndef PC64_HTTP_H
 #define PC64_HTTP_H
 
