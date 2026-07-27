@@ -7,9 +7,12 @@ a GUI: a **live view** of the device screen, **mouse + keyboard forwarding**,
 command box.
 
 Remote desktop is just two URC halves working together: `key`/`pointer` (input,
-IN) and the `screen` verb (framebuffer out, OUT). This client polls `screen grab`
-VNC-style, decodes the QOI frame, and maps clicks/keystrokes back to framebuffer
-coordinates.
+IN) and the `screen` verb (framebuffer out, OUT). This client polls `screen grab
+delta` VNC-style — the device sends only the tiles that changed since the last
+grab — composites them onto a persistent canvas, and maps clicks/keystrokes back
+to framebuffer coordinates. (It seeds the canvas with one full `screen grab` on
+connect, then streams deltas; a scale change or a big change transparently comes
+back as a full keyframe.)
 
 ## Build
 
@@ -46,17 +49,18 @@ untrusted network.
 
 | File | Role |
 |---|---|
-| `Urc.cs` | C# port of `UnoAutoLink` (`../tools/unoauto_remote.py`): TCP listen, HELLO, CMD/RSP correlation, verb wrappers, `screen` grab reassembly |
+| `Urc.cs` | C# port of `UnoAutoLink` (`../tools/unoauto_remote.py`): TCP listen, HELLO, CMD/RSP correlation, verb wrappers, `screen` grab reassembly (full + `ScreenGrabDelta`) |
 | `Qoi.cs` | QOI decoder → `Bitmap`, matched to the encoder in `../unoauto_screen.c` |
 | `Recorder.cs` | Session recording: ffmpeg (raw BGRA → MP4/H.264) or a PNG frame sequence |
 | `RemoteMain.cs` | WinForms UI: live view, input mapping, log pane, command box, record toggle |
 | `build-remote.ps1` | csc build → `build/UnoRemote.exe` |
 | `app.manifest` | Per-monitor DPI aware so the live view stays crisp |
 
-## Follow-up slices (not in this first landing)
+## Follow-up slices
 
+- ~~Dirty-rect / delta frame streaming for higher FPS.~~ **Done** — `screen grab
+  delta` sends only changed tiles; the client composites onto a persistent canvas.
 - A clickable command-GUI for every URC verb (probe/vols/launch/install/push/
   guard/…), growing from the raw command box.
-- Dirty-rect / delta frame streaming for higher FPS.
 - Server-side capture (record on the device itself).
 - A macOS client (Avalonia) reusing `Urc.cs` / `Qoi.cs`.

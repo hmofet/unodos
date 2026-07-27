@@ -12,6 +12,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.Threading;
 using System.Windows.Forms;
@@ -123,10 +124,12 @@ namespace UnoRemote
 
         private Thread _screenThread;
         private volatile bool _pumping;
+        private volatile bool _needKeyframe;   // seed the canvas with a full grab
         private volatile int _scaleFactor = 1;
         private const double FpsTarget = 10.0;
         private readonly int _autoPort;
         private long _frames;
+        private Bitmap _canvas;   // composited full frame (screen thread only)
 
         public MainForm(int autoPort)
         {
@@ -178,7 +181,8 @@ namespace UnoRemote
             _link.OnConnected += () => BeginInvoke((Action)OnConnected);
             _link.OnDisconnected += () => BeginInvoke((Action)OnDisconnected);
 
-            FormClosing += (s, e) => { _pumping = false; _rec.Stop(); _link.Dispose(); };
+            FormClosing += (s, e) => { _pumping = false; _rec.Stop(); _link.Dispose();
+                                       var c = _canvas; _canvas = null; if (c != null) c.Dispose(); };
             Log("Put this PC's LAN ip:port in the device STRESS.CFG:  remote=<ip>:" + _port.Text);
         }
 
@@ -222,6 +226,7 @@ namespace UnoRemote
         private void StartScreenLoop()
         {
             _pumping = true;
+            _needKeyframe = true;   // a fresh connection has no canvas to delta against
             _screenThread = new Thread(ScreenLoop) { IsBackground = true, Name = "screen-pump" };
             _screenThread.Start();
         }
@@ -234,26 +239,81 @@ namespace UnoRemote
                 var t0 = DateTime.UtcNow;
                 try
                 {
-                    int w, h;
-                    byte[] qoi = _link.ScreenGrab(_scaleFactor, out w, out h);
-                    Bitmap bmp = Qoi.Decode(qoi);
-                    _rec.Frame(bmp);
+                    int w, h, nch; bool kf;
+                    Bitmap frame;
+                    if (_needKeyframe)
+                    {
+                        // Seed the canvas with a full grab. The device keeps its
+                        // delta snapshot across a TCP reconnect, so we can't start
+                        // from a delta - a full grab reseeds both ends in step.
+                        byte[] qoi = _link.ScreenGrab(_scaleFactor, out w, out h);
+                        ReplaceCanvas(Qoi.Decode(qoi));
+                        _needKeyframe = false;
+                        kf = true; nch = 0;
+                    }
+                    else
+                    {
+                        var u = _link.ScreenGrabDelta(_scaleFactor);
+                        ApplyUpdate(u);
+                        w = u.W; h = u.H; kf = u.Keyframe; nch = u.Nch;
+                    }
+                    frame = (Bitmap)_canvas.Clone();
+                    _rec.Frame(frame);
                     long fn = ++_frames;
-                    // hand a clone to the view; recorder read from bmp already
+                    // hand the clone to the view; recorder read from it already
+                    int fw = w, fh = h, fnch = nch; bool fkf = kf;
                     if (!IsDisposed) BeginInvoke((Action<Bitmap>)(b =>
                     {
                         _view.SetFrame(b);
-                        Text = "UnoDOS Remote Desktop - " + w + "x" + h + " - frame " + fn +
+                        Text = "UnoDOS Remote Desktop - " + fw + "x" + fh + " - frame " + fn +
+                               (fkf ? " [key]" : " [" + fnch + " tiles]") +
                                (_rec.Recording ? " - REC" : "");
-                    }), bmp);
+                    }), frame);
                 }
                 catch (Exception ex)
                 {
                     if (_pumping) AppendLog("screen: " + ex.Message);
+                    _needKeyframe = true;   // resync after any hiccup
                     Thread.Sleep(500);
                 }
                 double elapsed = (DateTime.UtcNow - t0).TotalMilliseconds;
                 if (elapsed < frameMs) Thread.Sleep((int)(frameMs - elapsed));
+            }
+        }
+
+        // Replace the persistent canvas with a decoded full frame.
+        private void ReplaceCanvas(Bitmap full)
+        {
+            var old = _canvas; _canvas = full;
+            if (old != null) old.Dispose();
+        }
+
+        // Composite one live-view update onto the persistent canvas: a keyframe
+        // replaces it; a delta blits only its changed tiles.
+        private void ApplyUpdate(UrcLink.ScreenUpdate u)
+        {
+            if (u.Keyframe) { ReplaceCanvas(Qoi.Decode(u.Qoi)); return; }
+            if (_canvas == null)                          // lost sync: force a reseed next loop
+            { _canvas = new Bitmap(Math.Max(1, u.W), Math.Max(1, u.H), PixelFormat.Format32bppArgb); }
+            if (u.Nch <= 0 || u.Qoi == null) return;      // static frame: nothing changed
+
+            using (var strip = Qoi.Decode(u.Qoi))         // Tw x (Nch*Th) tile strip
+            using (var g = Graphics.FromImage(_canvas))
+            {
+                g.CompositingMode = CompositingMode.SourceCopy;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                for (int i = 0; i < u.Nch; i++)
+                {
+                    int t = u.TileIdx[i];
+                    int col = t % u.Cols, row = t / u.Cols;
+                    int dx = col * u.Tw, dy = row * u.Th;
+                    int vw = Math.Min(u.Tw, u.W - dx);    // clamp partial edge tiles
+                    int vh = Math.Min(u.Th, u.H - dy);
+                    if (vw <= 0 || vh <= 0) continue;
+                    g.DrawImage(strip, new Rectangle(dx, dy, vw, vh),
+                                new Rectangle(0, i * u.Th, vw, vh), GraphicsUnit.Pixel);
+                }
             }
         }
 
