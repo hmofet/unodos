@@ -150,6 +150,12 @@ if [ "$1" != "legacy" ]; then
     for f in ujs_core ujs_math ujs_lex ujs_comp ujs_vm ujs_lib ujs_api; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unojs/$f.c"; OBJS="$OBJS build/$f.o"
     done
+    # unoweb: the web core (DOM + HTML parser today; CSS, layout and paint to
+    # come).  Its own subsystem - see unoweb/UNOWEB.md - and deliberately holds
+    # no JavaScript vocabulary: the browser is what joins it to unojs.
+    for f in uw_dom uw_html; do
+        pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unoweb/$f.c"; OBJS="$OBJS build/$f.o"
+    done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
     # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
     # NO sanitizer (its ud2 handler must not itself be instrumented).
