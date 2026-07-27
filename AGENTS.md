@@ -45,6 +45,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | pc64-python / PYRT | SDK docs | `upy_port/`, `apps/pyrt.c`, `pyhost.h` |
 | toolkits (uno3d / unoui / sound) | their headers | `uno3d*`, `pc64_uui*`, `snd_*`, `hdaudio/ac97` |
 | unojs (standalone JavaScript engine) | `unojs/UNOJS.md`, `unojs/unojs.h` | `unojs/*` |
+| unoweb (DOM / HTML / CSS / layout / paint) | `unoweb/UNOWEB.md`, `unoweb/unoweb.h` | `unoweb/*`, `pc64/webjs.c` |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
 
 Whoever is actively working a subsystem this session **claims it in the requests
