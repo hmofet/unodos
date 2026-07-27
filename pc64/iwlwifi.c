@@ -2269,15 +2269,25 @@ static void mld_mac_cfg(int action, int assoc, int aid)
  * single link ours is always MLD_LINK_ID (0).
  *
  * ADD is sent with phy_id = FW_CTXT_INVALID and no rates, exactly as
- * iwl_mvm_add_link does; the real parameters land on the MODIFY that activates
- * the link once a PHY context exists. */
-static void mld_link_cfg(int action, int active, int have_phy)
+ * iwl_mvm_add_link does.
+ *
+ * `modify_mask` is the caller's, and it MATTERS: the fw validates exactly the
+ * field groups the mask selects, and ADVANCED_SYSASSERTs (2010330f on cmd
+ * 0x0309, data2/3 = deadbeef, i.e. a content check rather than a length one) on
+ * groups it does not expect yet. Metal, 2026-07-27: activating with
+ * ACTIVE|RATES|PROTECT|QOS|BEACON_TIMING asserts; Linux activates with
+ * **ACTIVE | RATES_INFO only** (iwl_mvm_mld_assign_vif_chanctx), adds
+ * QOS_PARAMS later and only once associated and the AP advertises WMM
+ * (BSS_CHANGED_QOS), and in the STA path never sets BEACON_TIMING at all. So
+ * mirror that: fill a field group only when its mask bit is set. */
+static void mld_link_cfg(int action, int active, int have_phy, u32 modify_mask)
 {
     struct mld_link_cmd c;
     static const u16 cwmin[4] = { 15, 15, 7, 3 };    /* ucode AC order BK,BE,VI,VO */
     static const u16 cwmax[4] = { 1023, 1023, 15, 7 };
     static const u8  aifs[4]  = { 7, 3, 2, 2 };
-    static const u8  fifo[4]  = { 2, 4, 8, 16 };     /* BIT(gen2 EDCA fifo) per AC */
+    static const u8  fifo[4]  = { 2, 4, 8, 16 };     /* BIT(gen2 EDCA fifo) per AC:
+                                                        BK=1 BE=2 VI=3 VO=4 */
     int a;
     memset(&c, 0, sizeof c);
     c.action = (u32)action;
@@ -2289,24 +2299,31 @@ static void mld_link_cfg(int action, int active, int have_phy)
     c.spec_link_id = 0;                 /* the 802.11 link id (non-MLO: 0) */
     if (action == 2 /*MODIFY*/) {
         c.active = active ? 1 : 0;
-        c.modify_mask = LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO |
-                        LINK_MOD_PROTECT_FLAGS | LINK_MOD_QOS_PARAMS |
-                        LINK_MOD_BEACON_TIMING;
-        /* Basic/ACK rates — the same values the legacy mac_ctxt needed to avoid
-         * an ADVANCED_SYSASSERT: CCK 1/2/5.5/11 and the mandatory OFDM set. */
-        c.cck_rates = 0x0f;
-        c.ofdm_rates = 0x15;
-        c.qos_flags = 1;                /* MAC_QOS_FLG_UPDATE_EDCA */
-        for (a = 0; a < 4; a++) {
-            c.ac[a].cw_min = cwmin[a]; c.ac[a].cw_max = cwmax[a];
-            c.ac[a].aifsn = aifs[a];   c.ac[a].fifos_mask = fifo[a];
-        }
+        c.modify_mask = modify_mask;
+        /* iwl_mvm_link_changed fills bi unconditionally, but dtim_interval is
+         * beacon_int * dtim_period and dtim_period stays 0 until a beacon has
+         * been heard *after* association - so pre-assoc it really does send 0. */
         c.bi = g_join_bi;
-        c.dtim_interval = (u32)g_join_bi * (g_join_dtim ? g_join_dtim : 1);
+        if (modify_mask & LINK_MOD_RATES_INFO) {
+            /* basic/ACK rates: CCK 1/2/5.5/11 and the mandatory OFDM set - the
+             * same values the legacy mac_ctxt needed to avoid an assert */
+            c.cck_rates = 0x0f;
+            c.ofdm_rates = 0x15;
+        }
+        if (modify_mask & LINK_MOD_QOS_PARAMS) {
+            c.qos_flags = 1;            /* MAC_QOS_FLG_UPDATE_EDCA */
+            for (a = 0; a < 4; a++) {
+                c.ac[a].cw_min = cwmin[a]; c.ac[a].cw_max = cwmax[a];
+                c.ac[a].aifsn = aifs[a];   c.ac[a].fifos_mask = fifo[a];
+            }
+        }
+        if (modify_mask & LINK_MOD_BEACON_TIMING)
+            c.dtim_interval = (u32)g_join_bi * (g_join_dtim ? g_join_dtim : 1);
     }
-    uno_dbg_net_trace("wifi: LINK_CONFIG action=%d active=%d phy=%s bi=%d dtim=%d len=%d",
-                      action, active, have_phy ? "valid" : "INVALID",
-                      g_join_bi, g_join_dtim, (int)sizeof c);
+    uno_dbg_net_trace("wifi: LINK_CONFIG action=%d active=%d phy=%s mask=%02x "
+                      "bi=%d dtim_int=%d len=%d", action, active,
+                      have_phy ? "valid" : "INVALID", (unsigned)c.modify_mask,
+                      (int)c.bi, (int)c.dtim_interval, (int)sizeof c);
     send_cmd(GRP_MACCONF, MC_LINK_CONFIG, 0, &c, (int)sizeof c);
     wait_cmd_done(100);
 }
@@ -2896,10 +2913,12 @@ static int assoc_setup(void)
     if (fw_has_mld_api()) {
         mld_mac_cfg(1 /*ADD*/, 0 /*not assoc*/, 0);   TRACE_CSR("MAC_CONFIG");
         /* ADD the link with no PHY yet, exactly as iwl_mvm_add_link does */
-        mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/); TRACE_CSR("LINK_CONFIG ADD");
+        mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/, 0); TRACE_CSR("LINK_CONFIG ADD");
         mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
         /* now the link can be bound to the PHY and activated */
-        mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1);   TRACE_CSR("LINK_CONFIG MODIFY");
+        mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1,
+                     LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO);
+                                                       TRACE_CSR("LINK_CONFIG MODIFY");
         mld_sta_cfg(g_bssid, 0, 0);                    TRACE_CSR("STA_CONFIG");
     } else {
         mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
@@ -3462,11 +3481,12 @@ static int mld_steps(int n, char *out, int cap)
     switch (n) {
     case 1: mld_mac_cfg(1 /*ADD*/, 0, 0);
         strcpy(out, "ok mld1: MAC_CONFIG ADD returned"); break;
-    case 2: mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/);
+    case 2: mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/, 0);
         strcpy(out, "ok mld2: LINK_CONFIG ADD returned"); break;
     case 3: mvm_phy_ctxt(g_join_chan ? g_join_chan : 1, 1 /*ADD*/);
         strcpy(out, "ok mld3: PHY_CONTEXT ADD returned"); break;
-    case 4: mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/);
+    case 4: mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
+                         LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO);
         strcpy(out, "ok mld4: LINK_CONFIG MODIFY(active) returned"); break;
     case 5: mld_sta_cfg(g_bssid, 0, 0);
         strcpy(out, "ok mld5: STA_CONFIG (AP peer) returned"); break;
@@ -3492,8 +3512,20 @@ static int mld_steps(int n, char *out, int cap)
             strcpy(out, "err mld9: assoc failed (detail in NET log)");
         }
         break; }
+    /* 'a': the post-association link tune Linux sends on BSS_CHANGED_QOS (EDCA
+     * params, plus the beacon timing the STA path normally never sets). Kept OUT
+     * of the main path on purpose - the fw validates exactly the field groups the
+     * modify_mask selects, and these two groups are what asserted when they were
+     * folded into the activation MODIFY. Run it after 'iwl mld 9' to see whether
+     * this fw accepts them once associated. */
+    case 10: mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
+                          LINK_MOD_QOS_PARAMS | LINK_MOD_BEACON_TIMING);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: mlda: after LINK_CONFIG qos+beacon csr2808=%08x", h);
+        strcpy(out, h ? "err mlda: qos/beacon-timing MODIFY asserted the fw (iwl fwerr)"
+                      : "ok mlda: LINK_CONFIG qos+beacon-timing accepted"); break;
     default:
-        strcpy(out, "err usage: iwl mld <1-9> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc)");
+        strcpy(out, "err usage: iwl mld <1-9|a> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc a=post-assoc qos/beacon)");
         break;
     }
     return (int)strlen(out);
@@ -3664,6 +3696,15 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
                               i, g_scan_aps[i].bssid[0], g_scan_aps[i].bssid[1], g_scan_aps[i].bssid[2],
                               g_scan_aps[i].bssid[3], g_scan_aps[i].bssid[4], g_scan_aps[i].bssid[5],
                               g_scan_aps[i].chan, g_scan_aps[i].seen, g_scan_aps[i].ssid);
+        /* also pick the configured SSID so the 'iwl mld <n>' stepper has a real
+         * BSSID/channel to work with without going through 'iwl join' */
+        if (scan_pick() == 0)
+            uno_dbg_net_trace("wifi: scan: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
+                              "chan %d bi %d dtim %d", g_cfg_ssid,
+                              g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                              g_join_chan, g_join_bi, g_join_dtim);
+        else
+            uno_dbg_net_trace("wifi: scan: SSID \"%s\" not among the results", g_cfg_ssid);
         { char *o = out; const char *pre = "ok scan done: "; int v = n, j;
           char digs[8]; int m = 0;
           while (*pre) *o++ = *pre++;
@@ -3676,8 +3717,9 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         const char *q = line + 3;
         while (*q == 0x20) q++;
         if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+        if (*q == 0x61) return mld_steps(10, out, cap);      /* "iwl mld a" */
         if (*q < 0x31 || *q > 0x39) {
-            strcpy(out, "err usage: iwl mld <1-9> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc)");
+            strcpy(out, "err usage: iwl mld <1-9|a> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc a=post-assoc qos/beacon)");
             return (int)strlen(out);
         }
         return mld_steps(*q - 0x30, out, cap);
