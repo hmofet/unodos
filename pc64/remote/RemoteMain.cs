@@ -182,6 +182,7 @@ namespace UnoRemote
 
             _link.OnLog += (ch, t) => AppendLog("[" + ch + "] " + t);
             _link.OnMessage += t => AppendLog("<msg> " + t);
+            _link.OnDiscovery += t => AppendLog(t);
             _link.OnConnected += () => BeginInvoke((Action)OnConnected);
             _link.OnDisconnected += () => BeginInvoke((Action)OnDisconnected);
 
@@ -207,6 +208,7 @@ namespace UnoRemote
             _listening = true; _listen.Enabled = false; _port.Enabled = false;
             _status.Text = "listening on :" + port + " - boot the device";
             Log("listening on 0.0.0.0:" + port + "  (QEMU SLIRP guest: remote=10.0.2.2:" + port + ")");
+            Log("zero-config: set 'discover' in the device DEBUG.CFG and it will find this PC automatically.");
         }
 
         private void OnConnected()
