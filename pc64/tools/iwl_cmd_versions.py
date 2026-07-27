@@ -21,9 +21,14 @@ CMD_VERSIONS = 48
 UNKNOWN = 99
 
 # group ids (iwl-config.h) + a few command opcodes we care about for bring-up
+# Group ids per Linux iwl-config.h. NOTE (2026-07-27): this table used to map
+# 4->DATAPATH and 5->SCAN, which is wrong and cost a round of misanalysis - it
+# hid DATA_PATH entries under "SCAN" and made RLC_CONFIG_CMD (5/0x08) look like
+# it belonged to a group the fw never mentions. PHY_OPS is 4, DATA_PATH is 5,
+# SCAN is 6, LOCATION is 8, DEBUG is 0xf.
 GROUPS = {0x0: "LEGACY", 0x1: "LONG", 0x2: "SYSTEM", 0x3: "MACCONF",
-          0x4: "DATAPATH", 0x5: "SCAN", 0xb: "LOCATION", 0xc: "REGNVM",
-          0xe: "DEBUG", 0xf: "STATS"}
+          0x4: "PHY_OPS", 0x5: "DATAPATH", 0x6: "SCAN", 0x7: "NAN",
+          0x8: "LOCATION", 0xb: "PROT_OFF", 0xc: "REGNVM", 0xf: "DEBUG"}
 KNOWN = {(0x1, 0x0d): "SCAN_REQ_UMAC", (0x1, 0x18): "ADD_STA",
          (0x1, 0x08): "PHY_CONTEXT", (0x1, 0x28): "MAC_CONTEXT",
          (0x1, 0x2b): "BINDING", (0x1, 0x2c): "TIME_QUOTA",

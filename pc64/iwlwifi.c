@@ -1988,16 +1988,23 @@ static void mvm_mcc_update(const char *cc)
     const u8 *r; int len = 0;
     memset(&c, 0, sizeof c);
     c.mcc = (u16)((cc[0] << 8) | cc[1]);
-    c.source_id = 7;                    /* MCC_SOURCE_DEFAULT */
-    uno_dbg_net_trace("wifi: MCC_UPDATE mcc=\"%c%c\" src=%d len=%d",
+    /* MCC_SOURCE_GET_CURRENT (0x10) with "ZZ" is a QUERY - it asks the fw what
+     * regulatory domain it already booted with, which is what iwl_mvm_init_mcc
+     * does first. Metal, 2026-07-27: sending MCC_SOURCE_DEFAULT (7) instead got
+     * status 4 = MCC_RESP_ILLEGAL. */
+    c.source_id = 0x10;                 /* MCC_SOURCE_GET_CURRENT */
+    uno_dbg_net_trace("wifi: MCC_UPDATE mcc=\"%c%c\" src=%02x len=%d",
                       cc[0], cc[1], c.source_id, (int)sizeof c);
     send_cmd(GRP_LONG, 0xc8, 0, &c, (int)sizeof c);
     r = wait_notif(GRP_LONG, 0xc8, &len, 200);
-    if (r && len >= 8)
-        uno_dbg_net_trace("wifi: MCC_UPDATE resp: status=%04x mcc=%c%c n_chan=%d",
-                          r[0] | (r[1]<<8), r[3], r[2], r[6] | (r[7]<<8));
+    /* iwl_mcc_update_resp_v3: le32 status, le16 mcc, u8 cap, u8 source_id,
+     * le16 time, le16 geo_info, le32 n_channels. status/mcc offsets were wrong
+     * in the first cut (status read as u16, mcc taken from its high half). */
+    if (r && len >= 16)
+        uno_dbg_net_trace("wifi: MCC_UPDATE resp: status=%d mcc=%c%c src=%d n_chan=%d",
+                          (int)le32(r), r[5], r[4], r[7], (int)le32(r + 12));
     else
-        uno_dbg_net_trace("wifi: MCC_UPDATE: no response (len=%d)", len);
+        uno_dbg_net_trace("wifi: MCC_UPDATE: short/no response (len=%d)", len);
 }
 static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
 
@@ -2024,6 +2031,7 @@ static void mvm_init_unified(void)
 }
 
 /* PHY_CONTEXT_CMD ADD on a 2.4GHz channel (v3+, 32 bytes) */
+static void mvm_rlc_config(void);
 static u32 g_phy_id = 0x0000;   /* id 0, color 0 */
 static u32 g_mac_id = 0x0100;   /* id 1, color 1 (nonzero color) */
 static void mvm_phy_ctxt(int chan, int action)
@@ -2042,6 +2050,37 @@ static void mvm_phy_ctxt(int chan, int action)
     uno_dbg_net_trace("wifi: PHY_CONTEXT action=%d chan=%d band=2.4 rxchain=%08x len=%d",
                       action, chan, c.rxchain, (int)sizeof c);
     send_cmd(GRP_LONG, 0x8, 0, &c, sizeof c); wait_cmd_done(100);
+    if (action != 3 /*REMOVE*/) mvm_rlc_config();
+}
+
+/* RLC_CONFIG_CMD (DATA_PATH 0x08, iwl_rlc_config_cmd, 32 B, sent at cmd
+ * version 2 in the wide header).  Binds the radio-chain configuration to the
+ * PHY context - the layer between "a PHY context exists" and "the LMAC can
+ * actually schedule on it".
+ *
+ * The working Linux association trace of this exact fw sends 0x05.0x08
+ * IMMEDIATELY after every 0x01.0x08 (PHY_CONTEXT_CMD), twice.  Note that
+ * v6.7's iwl_mvm_phy_send_rlc gates this on the fw advertising DATA_PATH 0x08
+ * at cmd_ver >= 2, and this ucode's version TLV does NOT list it - yet the
+ * trace shows the working driver sending it anyway.  Ground truth from the
+ * device wins over the version gate of one kernel release. */
+static void mvm_rlc_config(void)
+{
+    struct __attribute__((packed)) {
+        u32 phy_id;
+        u32 rx_chain_info, rlc_reserved;          /* iwl_rlc_properties */
+        u32 sad_chain_a, sad_chain_b, sad_mac_id, sad_reserved;
+        u8  flags, reserved[3];
+    } c;
+    memset(&c, 0, sizeof c);
+    c.phy_id = g_phy_id;                /* the RAW phy id, as in ctxt->id */
+    /* same encoding as the PHY context's rxchain_info; the BUILD_BUG_ONs in
+     * iwl_mvm_phy_send_rlc assert the two field layouts are identical */
+    c.rx_chain_info = (fw_valid_rx_ant() << 1) | (1u << 10) | (1u << 12);
+    uno_dbg_net_trace("wifi: RLC_CONFIG phy=%d rx_chain_info=%08x len=%d",
+                      (int)c.phy_id, c.rx_chain_info, (int)sizeof c);
+    send_cmd(GRP_DATAPATH, 0x8, 2 /*cmd ver 2*/, &c, (int)sizeof c);
+    wait_cmd_done(100);
 }
 
 /* MAC_CONTEXT_CMD (BSS STA). Big struct; we fill the common + sta tail. */
