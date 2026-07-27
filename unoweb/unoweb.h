@@ -166,6 +166,82 @@ uw_node *uw_next_in_order(uw_node *n, uw_node *root);
 int uw_elements_by_tag(uw_doc *d, uw_node *root, const char *tag,
                        uw_node **out, int max);
 
+/* ---- computed style ------------------------------------------------------
+ * A FIXED struct, not a property map: every supported property has a slot, so
+ * a computed style is one flat record that inherits by copy and compares by
+ * memcmp. That is what makes restyle-damage detection cheap in M3's layout
+ * pass, and it is why unsupported properties are simply absent rather than
+ * carried around as unparsed strings. */
+typedef struct { unsigned char r, g, b, a; } uw_color;
+
+/* A length. `unit` decides how `v` is read. Percentages stay symbolic until
+ * layout, because they resolve against a containing block that is not known
+ * at computed-value time. */
+enum { UW_LEN_AUTO = 0, UW_LEN_PX, UW_LEN_PCT };
+typedef struct { int v; unsigned char unit; } uw_len;
+
+enum { UW_DISP_INLINE = 0, UW_DISP_BLOCK, UW_DISP_INLINE_BLOCK,
+       UW_DISP_LIST_ITEM, UW_DISP_NONE };
+enum { UW_FF_SANS = 0, UW_FF_SERIF, UW_FF_MONO };
+enum { UW_ALIGN_LEFT = 0, UW_ALIGN_CENTER, UW_ALIGN_RIGHT, UW_ALIGN_JUSTIFY };
+enum { UW_WS_NORMAL = 0, UW_WS_PRE, UW_WS_NOWRAP };
+enum { UW_BS_NONE = 0, UW_BS_SOLID };
+/* side order is CSS order: top, right, bottom, left */
+enum { UW_TOP = 0, UW_RIGHT, UW_BOTTOM, UW_LEFT };
+
+typedef struct {
+    unsigned char display;
+    unsigned char font_family;
+    unsigned char font_style;      /* 0 normal, 1 italic */
+    unsigned char text_align;
+    unsigned char white_space;
+    unsigned char underline;
+    unsigned char list_bullet;     /* 0 none, 1 disc, 2 decimal */
+    unsigned char has_bg;          /* background_color is meaningful */
+    int      font_size;            /* px, always resolved */
+    int      font_weight;          /* 400 normal, 700 bold */
+    int      line_height;          /* px; 0 = "normal" (derived from size) */
+    uw_color color, background_color;
+    uw_len   margin[4], padding[4];
+    int      border_width[4];
+    unsigned char border_style[4];
+    uw_color border_color[4];
+    uw_len   width, height;
+} uw_style;
+
+/* ---- stylesheets ---------------------------------------------------------
+ * Sheets are arena-allocated inside the document, so they die with it. */
+typedef struct uw_sheet uw_sheet;
+
+/* Parse CSS text. `origin` orders the cascade (see below). Returns NULL on a
+ * parse failure so severe nothing usable came out; ordinary syntax errors are
+ * recovered from per the CSS error rules (skip to the next rule). */
+enum { UW_ORIGIN_UA = 0, UW_ORIGIN_AUTHOR };
+uw_sheet *uw_css_parse(uw_doc *d, const char *css, int len, int origin);
+int       uw_css_nrules(uw_sheet *s);
+
+/* Add a sheet to the document's cascade, in author order. */
+int uw_add_sheet(uw_doc *d, uw_sheet *s);
+/* Collect and add every <style> element's text. Returns the count added. */
+int uw_add_inline_sheets(uw_doc *d);
+
+/* Compute styles for the whole tree: UA sheet, then author sheets in order,
+ * then each element's style="" attribute, resolving inheritance. Safe to call
+ * repeatedly; layout calls it when UW_DIRTY_STYLE is set. */
+int uw_style_document(uw_doc *d, int viewport_w, int viewport_h);
+
+/* The computed style of an element, or NULL if the tree has not been styled
+ * (or the node is not an element). */
+const uw_style *uw_computed(uw_node *n);
+
+/* Does `n` match the CSS selector text `sel`? This is the same matcher the
+ * cascade uses, exposed because querySelector needs it in M5. */
+int uw_matches(uw_doc *d, uw_node *n, const char *sel);
+
+/* An indented dump of the computed styles, one element per line. Like uw_dump,
+ * the format is part of the contract because the golden tests compare it. */
+int uw_style_dump(uw_doc *d, uw_node *n, char *out, int max);
+
 /* ---- serialization ------------------------------------------------------- */
 /* Serialize `n`'s children as HTML (this is innerHTML). Returns the length
  * written, or the length it WOULD need when that exceeds `max` (so a caller

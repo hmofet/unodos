@@ -153,7 +153,7 @@ if [ "$1" != "legacy" ]; then
     # unoweb: the web core (DOM + HTML parser today; CSS, layout and paint to
     # come).  Its own subsystem - see unoweb/UNOWEB.md - and deliberately holds
     # no JavaScript vocabulary: the browser is what joins it to unojs.
-    for f in uw_dom uw_html; do
+    for f in uw_dom uw_html uw_css uw_style; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unoweb/$f.c"; OBJS="$OBJS build/$f.o"
     done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
