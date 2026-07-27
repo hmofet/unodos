@@ -51,6 +51,47 @@ static void tdump(const char *name, const char *html, const char *expect)
     uw_doc_free(d);
 }
 
+/* ---- layout goldens ------------------------------------------------------ */
+static int fake_width(void *u, const uw_style *s, const char *t, int len)
+{ (void)u; (void)s; (void)t; return len * 10; }
+static int fake_lineh(void *u, const uw_style *s)
+{ (void)u; return s->font_size; }
+
+static void tlayout_w(const char *name, const char *html, int vw,
+                      const char *want_boxes, const char *want_paint)
+{
+    char buf[8192];
+    uw_doc *d;
+    uw_metrics m;
+    if (!want(name)) return;
+    run++;
+    d = uw_parse_string(html, -1, NULL);
+    if (!d) { printf("  FAIL %-22s (no doc)\n", name); fails++; return; }
+    uw_add_inline_sheets(d);
+    uw_style_document(d, vw, 600);
+    memset(&m, 0, sizeof m);
+    m.text_width = fake_width;
+    m.line_height = fake_lineh;
+    uw_layout(d, vw, 600, &m);
+    if (want_boxes) {
+        uw_layout_dump(d, buf, sizeof buf);
+        if (strcmp(buf, want_boxes)) {
+            printf("  FAIL %-22s (boxes)\n", name); show_diff(want_boxes, buf); fails++; }
+    }
+    if (want_paint) {
+        uw_paint(d);
+        uw_paint_dump(d, buf, sizeof buf);
+        if (strcmp(buf, want_paint)) {
+            printf("  FAIL %-22s (paint)\n", name); show_diff(want_paint, buf); fails++; }
+    }
+    uw_doc_free(d);
+}
+
+static void tlayout(const char *name, const char *html,
+                    const char *want_boxes, const char *want_paint)
+{ tlayout_w(name, html, 800, want_boxes, want_paint); }
+
+
 /* ---- computed-style goldens ---------------------------------------------- */
 static void tstyle(const char *name, const char *html, const char *expect)
 {
@@ -582,6 +623,85 @@ int main(int argc, char **argv)
         uw_doc_free(d);
     }
 
+
+    /* ---- layout + display list -------------------------------------------
+     * Metrics come from a FAKE FIXED-WIDTH font: 10px per char, line height =
+     * font-size. unoweb measures nothing itself, so supplying a deterministic
+     * font is what makes this geometry exact and reproducible off the OS - the
+     * same seam pc64 fills with its real font. Every number below was checked
+     * by hand against the box model, not blessed from the output. */
+
+    /* body: 8px margin all round in the UA sheet, so its border box is at
+     * (8,8) and 800-16 wide. p adds 9px top margin -> y=17. "ab"+space+"cd"
+     * = 20+10+20 = 50. */
+    tlayout("layout-single-block", "<p>ab cd</p>",
+            "block body (8,8 784x32)\n"
+            "  block p (8,17 784x14)\n"
+            "    line (8,17 50x14)\n"
+            "      text (8,17 20x14) \"ab\"\n"
+            "      text (38,17 20x14) \"cd\"\n",
+            "text (8,17 20x14) #1e2028 14/400 \"ab\"\n"
+            "text (38,17 20x14) #1e2028 14/400 \"cd\"\n");
+
+    tlayout("layout-text-lines", "<div>aaa bbb</div>",
+            "block body (8,8 784x14)\n"
+            "  block div (8,8 784x14)\n"
+            "    line (8,8 70x14)\n"
+            "      text (8,8 30x14) \"aaa\"\n"
+            "      text (48,8 30x14) \"bbb\"\n",
+            "text (8,8 30x14) #1e2028 14/400 \"aaa\"\n"
+            "text (48,8 30x14) #1e2028 14/400 \"bbb\"\n");
+
+    /* Wrapping at exactly the boundary: "aaa bbb" is 30+10+30 = 70 and fits a
+     * 70px box; adding " ccc" would need 110, so it breaks. The first line box
+     * must be 70 wide, NOT 80 - a trailing space at a line end is not drawn. */
+    tlayout_w("layout-wrap", "<div style='width:70px'>aaa bbb ccc</div>", 200,
+            "block body (8,8 184x28)\n"
+            "  block div (8,8 70x28)\n"
+            "    line (8,8 70x14)\n"
+            "      text (8,8 30x14) \"aaa\"\n"
+            "      text (48,8 30x14) \"bbb\"\n"
+            "    line (8,22 30x14)\n"
+            "      text (8,22 30x14) \"ccc\"\n",
+            NULL);
+
+    /* Margin collapsing: two <p>s each have 9px top AND bottom margins. The
+     * gap between them must be 9 (40 - 31), not 18. */
+    tlayout("layout-margin-collapse", "<p>a</p><p>b</p>",
+            "block body (8,8 784x55)\n"
+            "  block p (8,17 784x14)\n"
+            "    line (8,17 10x14)\n"
+            "      text (8,17 10x14) \"a\"\n"
+            "  block p (8,40 784x14)\n"
+            "    line (8,40 10x14)\n"
+            "      text (8,40 10x14) \"b\"\n",
+            NULL);
+
+    /* Border box 784 wide; content inset by border(2)+padding(10) to (20,20);
+     * height 14 + 2 + 2 + 10 + 10 = 38. Borders paint in CSS side order. */
+    tlayout("layout-padding-border",
+            "<div style='padding:10px;border:2px solid #f00;background:#eee'>x</div>",
+            "block body (8,8 784x38)\n"
+            "  block div (8,8 784x38)\n"
+            "    line (20,20 10x14)\n"
+            "      text (20,20 10x14) \"x\"\n",
+            "rect (8,8 784x38) #eeeeee\n"
+            "border (8,8 784x2) #ff0000\n"
+            "border (790,8 2x38) #ff0000\n"
+            "border (8,44 784x2) #ff0000\n"
+            "border (8,8 2x38) #ff0000\n"
+            "text (20,20 10x14) #1e2028 14/400 \"x\"\n");
+
+    /* A percentage width resolves against the PARENT's content width (200), so
+     * 50% is 100 - not 50% of the viewport. */
+    tlayout("layout-nested-width",
+            "<div style='width:200px'><div style='width:50%'>x</div></div>",
+            "block body (8,8 784x14)\n"
+            "  block div (8,8 200x14)\n"
+            "    block div (8,8 100x14)\n"
+            "      line (8,8 10x14)\n"
+            "        text (8,8 10x14) \"x\"\n",
+            NULL);
 
     /* ---- limits: hostile input must degrade, never run away ------------- */
     if (want("limit-depth")) {

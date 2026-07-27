@@ -78,6 +78,10 @@ struct uw_doc {
 
     /* the cascade: UA sheet first, then author sheets in document order */
     uw_sheet  *sheets, *sheets_tail;
+    struct uw_box *layout_root;
+    uw_metrics     metrics;
+    int            layout_w, layout_h;
+    struct uw_paint_list *paint;
     int        styled;
     int        vw, vh;                  /* viewport, for percentage roots */
 };

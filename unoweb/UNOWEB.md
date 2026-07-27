@@ -101,17 +101,47 @@ part of the contract:
         "hello"
 ```
 
+## Layout and paint
+
+Two passes, as the box model wants them: widths resolve **top-down** (a child's
+containing block is known before the child is laid out) and heights resolve
+**bottom-up** (a parent's auto height is the sum of what its children turned out
+to be). Doing both in one walk is the classic way to get percentage widths and
+auto heights subtly wrong.
+
+Geometry is in **document coordinates**, so the paint pass translates by the
+scroll offset at replay time and **scrolling never relayouts**.
+
+unoweb measures no text itself. Metrics arrive through `uw_metrics`, because a
+glyph's width is a property of the font system, not the document - hard-coding
+pc64's font here would make the web core untestable off the OS. The host tests
+pass a fixed-width fake font, which is exactly what makes the golden geometry
+exact and reproducible.
+
+### Layout gaps (beyond the parser gaps above)
+
+7. **No float/clear, no position** other than static. M6.
+8. **Inline formatting is greedy word wrap only.** Nested inline boxes do not
+   carry their own borders across a line break, and there is no
+   `vertical-align` or justification. M4.
+9. **Margin collapsing is siblings only** - a parent and its first/last child
+   do not collapse through the parent's edge.
+10. **No `box-sizing`**; `width` always sets the content box.
+11. **Tables lay out as plain blocks.** The parser builds a correct table tree;
+    nothing yet does column widths.
+
 ## Testing
 
 `unoweb/test/` builds with plain gcc and **no unojs** — if it ever needs the JS
 engine, the split has been broken.
 
 ```bash
-cd unoweb/test && make test     # 37 checks
+cd unoweb/test && make test     # 58 checks
 cd unoweb/test && make asan     # the merge gate
 ```
 
-37 checks cover golden tree dumps, serialization round-trips, entity decoding,
+58 checks cover golden tree dumps, computed-style goldens, box geometry and
+display lists, serialization round-trips, entity decoding,
 error recovery, streaming at every chunk size, the script hook and
 `document.write`, the DOM mutation/query API, and the limits. A
 malformed-input case walks 30-odd broken fragments (bare `<`, unterminated
@@ -124,8 +154,8 @@ passing tests will not reveal on their own.
 
 ## Changelog
 
-- **0.1** (2026-07-27) — first cut: DOM store, streaming HTML parser, and the
-  browser bridge. `pc64_browser.c` now renders by walking a real DOM instead of
+- **0.1** (2026-07-27) — first cut: DOM store, streaming HTML parser, the
+  browser bridge, CSS parsing/cascade, block layout and the display list. `pc64_browser.c` now renders by walking a real DOM instead of
   scanning tag text inline, which is what gives it correct nesting through
   unclosed tags, character references, quoted attributes containing `>`, and
   RAWTEXT so a `<` inside `<style>` is not mistaken for markup.
