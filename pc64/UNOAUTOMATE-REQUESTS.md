@@ -1568,3 +1568,11 @@ the fresh volume`, byte-exact read-back, `mkdir + push into a created subdir`.
    and dies with an unhandled `ConnectionRefusedError` on the QMP socket when it
    is absent, because QEMU exits at once and the script never checks. A fresh
    worktree always hits this. Worth a clear "run tools/mkuefi.py first" error.
+## 2026-07-27 — CLAIM: iwlwifi (AX201) association path — branch `iwlwifi-linkapi`
+
+Taking the `iwlwifi*` row of the ownership registry for the link-based (MLD)
+association port: `iwl join` moves off the legacy MAC_CONTEXT/BINDING/ADD_STA
+commands onto MAC_CONF `MAC_CONFIG_CMD` 0x08 / `LINK_CONFIG_CMD` 0x09 /
+`STA_CONFIG_CMD` 0x0a, which is what this QuZ-77 firmware actually drives
+association with (see `pc64/WIFI-F12-HANDOFF.md` round 22). Only `pc64/iwlwifi.c`
+and that handoff doc are touched; no shared choke-point edits.
