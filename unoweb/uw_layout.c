@@ -167,6 +167,11 @@ static void emit_image(inline_ctx *ic, uw_node *n, const uw_style *s)
     if (s->width.unit == UW_LEN_PX) iw = s->width.v;
     if (s->height.unit == UW_LEN_PX) ih = s->height.v;
     if (iw <= 0 && ih <= 0) return;
+    if (iw > ic->avail && ic->avail > 0) {
+        ih = (int)((long)ih * ic->avail / iw);
+        iw = ic->avail;
+        if (ih < 1) ih = 1;
+    }
     if (ic->x > 0 && ic->x + iw > ic->avail) line_break(ic);
     ensure_line(ic, s);
     if (!ic->line) return;
@@ -620,6 +625,9 @@ int uw_paint_dump(uw_doc *d, char *out, int max)
             break;
         case UW_CMD_BULLET:
             lp(&o, "bullet (%d,%d)\n", c->x, c->y);
+            break;
+        case UW_CMD_IMAGE:
+            lp(&o, "image (%d,%d %dx%d)\n", c->x, c->y, c->w, c->h);
             break;
         case UW_CMD_TEXT:
             lp(&o, "text (%d,%d %dx%d) #%02x%02x%02x %d/%d%s \"%.*s\"\n",

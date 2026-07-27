@@ -58,6 +58,9 @@ static int fake_lineh(void *u, const uw_style *s)
 { (void)u; return s->font_size; }
 static int fake_image(void *u, const char *src, int *w, int *h, void **handle)
 { (void)u; (void)src; *w = 50; *h = 40; *handle = (void *)0x1234; return 1; }
+static int big_image(void *u, const char *src, int *w, int *h, void **handle)
+{ (void)u; (void)src; *w = 512; *h = 430; *handle = (void *)0x1; return 1; }
+
 
 static void tlayout_w(const char *name, const char *html, int vw,
                       const char *want_boxes, const char *want_paint)
@@ -762,6 +765,34 @@ int main(int argc, char **argv)
         if (!n || !uw_has_attr(d, n, "id")) { printf("  FAIL hit-test/second\n"); fails++; }
         /* far outside the document */
         if (uw_hit_test(d, 5000, 5000)) { printf("  FAIL hit-test/outside\n"); fails++; }
+        uw_doc_free(d);
+    }
+
+
+    /* An image wider than its column scales down proportionally rather than
+     * overflowing. 512x430 into a 284px content box -> 284x238. Both the box
+     * AND the paint command are checked: uw_paint_dump had no case for
+     * UW_CMD_IMAGE, so every earlier golden was blind to images entirely and
+     * would have passed with the paint side completely broken. */
+    if (want("layout-image-scale")) {
+        char buf[4096];
+        uw_doc *d = uw_parse_string("<p>before <img src=x.png> after</p>", -1, NULL);
+        uw_metrics m;
+        uw_images im;
+        const char *expect_paint =
+            "text (8,17 60x14) #1e2028 14/400 \"before\"\n"
+            "image (8,31 284x238)\n"
+            "text (8,269 50x14) #1e2028 14/400 \"after\"\n";
+        run++;
+        uw_style_document(d, 300, 600);
+        memset(&m, 0, sizeof m); m.text_width = fake_width; m.line_height = fake_lineh;
+        memset(&im, 0, sizeof im); im.resolve = big_image;
+        uw_set_images(d, &im);
+        uw_layout(d, 300, 600, &m);
+        uw_paint(d);
+        uw_paint_dump(d, buf, sizeof buf);
+        if (strcmp(buf, expect_paint)) {
+            printf("  FAIL layout-image-scale\n"); show_diff(expect_paint, buf); fails++; }
         uw_doc_free(d);
     }
 
