@@ -91,3 +91,7 @@ build/unonet_test.exe
 # value once the .png exists. Committing them added ~18 MB of dead weight
 # before this rule. Keep the .png, never the .ppm.
 *.ppm
+
+# local Wi-Fi credentials / debug config (never commit - hold ssid+psk)
+DEBUG.CFG
+wifi.creds

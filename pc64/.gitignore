@@ -17,3 +17,7 @@ build/upyhost/
 wads/*.wad
 wads/*.WAD
 wads/*.zip
+
+# local Wi-Fi credentials / debug config (never commit - hold ssid+psk)
+DEBUG.CFG
+wifi.creds

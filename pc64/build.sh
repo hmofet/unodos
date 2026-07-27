@@ -537,6 +537,10 @@ if [ "$1" != "legacy" ]; then
           printf '# force-hang   self-test: force a freeze (proves the watchdog)\r\n'
           printf 'passes=3\r\n'
         } > build/esp/DEBUG.CFG
+        # append local Wi-Fi credentials if present (pc64/wifi.creds is
+        # .gitignored so the psk is never committed; the driver reads ssid=/psk=
+        # from DEBUG.CFG via firmware_volume). No file = no creds staged.
+        if [ -f wifi.creds ]; then cat wifi.creds >> build/esp/DEBUG.CFG; echo "[dbg] appended wifi.creds -> DEBUG.CFG"; fi
         # BUILD.TXT stamp so a report can be tied back to an exact image.
         # cfgver = the STRESS.CFG key generation this OS understands; the
         # flasher's Reconfigure refuses to write settings onto a disk stamped
