@@ -112,7 +112,8 @@ unchanged.
 | `key <scan> <uni> [ctrl]` | inject a keypress | `ok` |
 | `pointer <x> <y> <btn>` | inject a pointer event | `ok` |
 | `screen [info]` | desktop geometry for a remote-desktop client | `ok <w> <h> rgba` |
-| `screen grab [scale]` | snapshot + QOI-encode the framebuffer (optional nearest-neighbour downscale by `scale`) and **stage** it on-device. The OUT half of remote desktop; pairs with `key`/`pointer` (the IN half) | `ok frame <w> <h> qoi <n>` then `end` / `err too-big (raise scale)` |
+| `screen grab [scale]` | snapshot + QOI-encode the WHOLE framebuffer (optional nearest-neighbour downscale by `scale`) and **stage** it on-device. The OUT half of remote desktop; pairs with `key`/`pointer` (the IN half) | `ok frame <w> <h> qoi <n>` then `end` / `err too-big (raise scale)` |
+| `screen grab delta [scale]` | like `grab`, but encodes only the **tiles that changed** since the previous grab (per-tile hashing), so a mostly-static desktop streams at a fraction of the bytes. Stages `[QOI strip of changed tiles][manifest]`. Falls back to a full `frame` keyframe on the first grab, a scale change, or when too much changed | `ok delta <ew> <eh> <cols> <tw> <th> <nch> <strip> <total>` then `end`, **or** the `frame …` keyframe reply above |
 | `screen read <off-hex> [len]` | read `len` (≤2880) bytes of the staged QOI frame at `<off>`, base64, streamed as `ok` lines (like `readsec`). A whole frame is far larger than one URC response, so the client pulls it in slices | base64 `ok` lines then `end` / `err no-frame` |
 | `apps` | count of launchable apps | `ok <n>` |
 | `launch <n>` | launch app `n` | `ok launched` / `err no-app` |
@@ -186,6 +187,20 @@ link.pointer(W // 2, H // 2, 1)           # click the middle of the screen
 so a busy or hi-res screen still fits the device's 2 MB encode buffer; an
 overflow replies `err too-big (raise scale)`. **TCP only** — a frame is far too
 large for the 16-byte serial FIFO (see the transport note above).
+
+**Delta streaming (`screen grab delta`).** Polling a full frame every tick is
+wasteful on UnoDOS's near-static desktop. `grab delta` keeps a **per-tile hash
+snapshot** of the previous grab (32×32 emitted-pixel tiles; a hash array, *not* a
+multi-MB previous-frame buffer — `fb[]` is up to 1920×1200) and encodes only the
+tiles whose hash changed, as one vertical QOI strip, with a trailing manifest of
+their row-major indices (`col = idx % cols`, `row = idx / cols`). A static frame
+sends `nch 0` and zero payload. It **auto-sends a full `frame` keyframe** when it
+can't delta — the first grab, a scale change, or a change so large the strip
+won't fit — so the client's single reader handles both `frame …` and `delta …`
+replies, and the client keeps a persistent canvas it composites onto. Because the
+device refreshes its snapshot on every grab (full or delta), the client must seed
+its canvas with a full `grab` right after connecting (it can't delta against a
+snapshot it doesn't share) — the WinForms client does this automatically.
 
 The GUI client is **`pc64/remote/`** (`UnoRemote.exe`, a WinForms single-exe built
 by `build-remote.ps1`): live view, mouse/keyboard forwarding, session recording
@@ -422,8 +437,13 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
 - **`tools/screen_qemu.py`** - end-to-end gate for the `screen` verb: boots the
   debug image (reusing `remote_qemu.py`'s harness), asserts `screen info` returns
   a sane size and `screen grab` decodes to a non-blank `w*h*4` RGBA frame, and
-  drops it to `/tmp/urc_screen.ppm` to eyeball. `qoi_decode` in
-  `unoauto_remote.py` is the pure-Python decoder it (and any script) uses.
+  drops it to `/tmp/urc_screen.ppm` to eyeball. It then exercises **delta
+  streaming**: `screen grab delta` returns a delta with in-range tile indices
+  that suppresses most tiles, compositing that exact delta onto a seeded canvas
+  reproduces a fresh full grab (tolerant of live clock/cursor drift), and a scale
+  change forces a keyframe. `qoi_decode` / `screen_grab_delta` / `screen_stream`
+  in `unoauto_remote.py` are the pure-Python decoder + delta helpers it (and any
+  script) uses.
 - **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
   boots with a `remote-serial` DEBUG.CFG and **no NIC device**, driven over the
   guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport

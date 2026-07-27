@@ -19,7 +19,7 @@ import os, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import remote_qemu as rq              # reuse build_disk / boot_qemu / globals
-from unoauto_remote import UnoAutoLink
+from unoauto_remote import UnoAutoLink, qoi_decode
 
 
 def save_ppm(path, w, h, rgba):
@@ -72,6 +72,53 @@ def main():
                 print("     wrote /tmp/urc_screen.ppm (%dx%d)" % (W, H))
         except Exception as e:  # noqa: BLE001
             check(False, "screen grab + decode", str(e))
+
+        # ---- delta / dirty-rect streaming ----
+        try:
+            time.sleep(1.0)                       # let the desktop settle
+            W1, H1, base = link.screen_grab(1, timeout=25)   # seed the snapshot + canvas
+            canvas = bytearray(base)
+            u = link.screen_grab_delta(1, timeout=25)        # a delta vs that snapshot
+            check(not u["keyframe"], "grab delta returns a delta (snapshot exists)",
+                  "nch=%d" % u.get("nch", -1))
+            rows = (H1 + u["th"] - 1) // u["th"]
+            check(u["cols"] > 0 and u["th"] > 0, "delta grid sane",
+                  "cols=%d tw=%d th=%d" % (u["cols"], u["tw"], u["th"]))
+            check(all(0 <= t < u["cols"] * rows for t in u["idx"]),
+                  "delta tile indices in range")
+            check(u["nch"] <= (u["cols"] * rows) // 2 + 1,
+                  "delta suppresses most tiles (dirty detection)",
+                  "%d of %d tiles" % (u["nch"], u["cols"] * rows))
+
+            # Composite exactly this delta onto the seeded canvas (client<->device
+            # lockstep), then compare to a fresh full grab. A placement bug would
+            # corrupt large regions; a live clock/cursor drifts only a few pixels.
+            if u["nch"] > 0:
+                strip = qoi_decode(u["qoi"])      # tw x (nch*th) RGBA
+                tw, th, cols = u["tw"], u["th"], u["cols"]
+                for i, t in enumerate(u["idx"]):
+                    col, row = t % cols, t // cols
+                    dx, dy = col * tw, row * th
+                    vw, vh = min(tw, W1 - dx), min(th, H1 - dy)
+                    for yy in range(max(0, vh)):
+                        so = ((i * th + yy) * tw) * 4
+                        do = ((dy + yy) * W1 + dx) * 4
+                        canvas[do:do + vw * 4] = strip[so:so + vw * 4]
+            W2, H2, full2 = link.screen_grab(1, timeout=25)
+            check((W2, H2) == (W1, H1), "dims stable across grabs", "%dx%d" % (W2, H2))
+            if (W2, H2) == (W1, H1):
+                diff = sum(1 for i in range(0, len(canvas), 4)
+                           if canvas[i:i + 4] != full2[i:i + 4])
+                frac = diff / max(1, W1 * H1)
+                check(frac < 0.02, "delta reconstruct matches a full grab",
+                      "%.3f%% px differ" % (frac * 100))
+
+            uk = link.screen_grab_delta(2, timeout=25)        # new scale -> keyframe
+            check(uk["keyframe"], "a scale change forces a keyframe")
+            check(len(uk["qoi"]) > 0, "keyframe carries a full-frame QOI",
+                  "%d bytes" % len(uk["qoi"]))
+        except Exception as e:  # noqa: BLE001
+            check(False, "delta streaming", str(e))
     finally:
         link.close()
         try:

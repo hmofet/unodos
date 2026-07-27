@@ -432,21 +432,10 @@ class UnoAutoLink:
 
     SCREEN_READ_LEN = 2880               # matches SCREEN_READ_MAX on the device
 
-    def screen_grab(self, scale=1, **k):
-        """`screen grab [scale]` stages a frame on the device and returns its
-        `frame <w> <h> qoi <n>` header; the QOI payload is then pulled in bounded
-        `screen read <off> <len>` slices (a whole frame is far too big for one URC
-        response). Returns (width, height, rgba_bytes), decoded to raw RGBA
-        (4 bytes/pixel). Pure-Python, no deps."""
+    def _screen_pull(self, n, to=15.0):
+        """Pull `n` staged bytes with bounded `screen read <off> <len>` slices
+        (a whole frame is far too big for one URC response)."""
         import base64
-        to = k.pop("timeout", 15.0)
-        r = self.command("screen", "grab", int(scale), timeout=to, **k)
-        if not r:
-            raise RuntimeError("empty screen reply")
-        hdr = r[0].split()                       # frame W H qoi N
-        if len(hdr) < 5 or hdr[0] != "frame":
-            raise RuntimeError("bad frame header: %r" % r[0])
-        w, h, n = int(hdr[1]), int(hdr[2]), int(hdr[4])
         buf = bytearray()
         while len(buf) < n:
             rd = self.command("screen", "read", format(len(buf), "x"),
@@ -455,7 +444,76 @@ class UnoAutoLink:
             if not part:
                 raise RuntimeError("screen read returned nothing at off %d" % len(buf))
             buf += part
-        return w, h, qoi_decode(bytes(buf[:n]))
+        return bytes(buf[:n])
+
+    def screen_grab(self, scale=1, **k):
+        """`screen grab [scale]` stages a full frame on the device and returns its
+        `frame <w> <h> qoi <n>` header; the QOI payload is then pulled in bounded
+        `screen read <off> <len>` slices. Returns (width, height, rgba_bytes),
+        decoded to raw RGBA (4 bytes/pixel). Pure-Python, no deps."""
+        to = k.pop("timeout", 15.0)
+        r = self.command("screen", "grab", int(scale), timeout=to, **k)
+        if not r:
+            raise RuntimeError("empty screen reply")
+        hdr = r[0].split()                       # frame W H qoi N
+        if len(hdr) < 5 or hdr[0] != "frame":
+            raise RuntimeError("bad frame header: %r" % r[0])
+        w, h, n = int(hdr[1]), int(hdr[2]), int(hdr[4])
+        return w, h, qoi_decode(self._screen_pull(n, to))
+
+    def screen_grab_delta(self, scale=1, **k):
+        """`screen grab delta [scale]`: the device diffs against the previous grab
+        and returns either a full `frame` keyframe or a `delta` of the changed
+        tiles. Returns a dict describing the update:
+            {'keyframe':True,  'w','h', 'qoi':<full-frame QOI bytes>}
+            {'keyframe':False, 'w','h','cols','tw','th','nch','idx':[...],
+             'qoi':<changed-tile strip QOI bytes, b'' if nch==0>}
+        Feed it to `screen_stream` to reconstruct the current full frame."""
+        to = k.pop("timeout", 15.0)
+        r = self.command("screen", "grab", "delta", int(scale), timeout=to, **k)
+        if not r:
+            raise RuntimeError("empty screen reply")
+        hdr = r[0].split()
+        if hdr[0] == "frame":                    # frame W H qoi N
+            w, h, n = int(hdr[1]), int(hdr[2]), int(hdr[4])
+            return {"keyframe": True, "w": w, "h": h, "qoi": self._screen_pull(n, to)}
+        if hdr[0] == "delta":                    # delta ew eh cols tw th nch strip total
+            ew, eh, cols, tw, th, nch, strip, total = (int(x) for x in hdr[1:9])
+            u = {"keyframe": False, "w": ew, "h": eh, "cols": cols, "tw": tw,
+                 "th": th, "nch": nch, "idx": [], "qoi": b""}
+            if nch > 0 and total > 0:
+                blob = self._screen_pull(total, to)
+                u["qoi"] = blob[:strip]
+                man = blob[strip:]
+                u["idx"] = [man[i * 2] | (man[i * 2 + 1] << 8) for i in range(nch)]
+            return u
+        raise RuntimeError("unknown screen reply: %r" % r[0])
+
+    def screen_stream(self, state, scale=1, **k):
+        """Apply one `screen grab delta` update to `state` (a dict; pass {} to
+        start) and return (w, h, rgba) of the reconstructed full frame. Mirrors
+        the C# client's canvas compositor: a keyframe replaces the canvas, a delta
+        blits only its changed tiles."""
+        u = self.screen_grab_delta(scale, **k)
+        if u["keyframe"]:
+            state["w"], state["h"] = u["w"], u["h"]
+            state["rgba"] = bytearray(qoi_decode(u["qoi"]))
+            return u["w"], u["h"], bytes(state["rgba"])
+        if not state.get("rgba") or state.get("w") != u["w"] or state.get("h") != u["h"]:
+            raise RuntimeError("delta with no matching canvas (seed with a full grab first)")
+        if u["nch"] > 0:
+            strip = qoi_decode(u["qoi"])          # tw x (nch*th) RGBA
+            tw, th, cols = u["tw"], u["th"], u["cols"]
+            w, h, rgba = state["w"], state["h"], state["rgba"]
+            for i, t in enumerate(u["idx"]):
+                col, row = t % cols, t // cols
+                dx, dy = col * tw, row * th
+                vw, vh = min(tw, w - dx), min(th, h - dy)
+                for yy in range(max(0, vh)):
+                    so = ((i * th + yy) * tw) * 4
+                    do = ((dy + yy) * w + dx) * 4
+                    rgba[do:do + vw * 4] = strip[so:so + vw * 4]
+        return state["w"], state["h"], bytes(state["rgba"])
 
     # ---- receiving --------------------------------------------------------
     def _accept_loop(self):

@@ -808,19 +808,45 @@ static void do_screen(const char *id, char *args)
         sb_i(&b, w); sb_c(&b, ' '); sb_i(&b, h); sb_s(&b, " rgba"); t[b.len] = 0;
         rsp(id, "ok", t); rsp(id, "end", 0); return;
     }
-    if (!strcmp_(sub, "grab")) {                  /* `screen grab [scale]` - stage it */
-        char *sc = tok(&args);
-        int scale = sc ? (int)atol_(sc) : 1;
-        int n = uno_screen_grab_qoi(scale, g_screen, (int)sizeof g_screen, &w, &h);
-        if (n < 0) { g_screen_len = 0; rsp(id, "err", "too-big (raise scale)"); rsp(id, "end", 0); return; }
-        g_screen_len = n;
-        {   /* header only: frame <w> <h> qoi <nbytes>; payload via `screen read` */
-            char t[64]; SB b; sb_init(&b, t, sizeof t);
-            sb_s(&b, "frame "); sb_i(&b, w); sb_c(&b, ' '); sb_i(&b, h);
-            sb_s(&b, " qoi "); sb_i(&b, n); t[b.len] = 0;
-            rsp(id, "ok", t);
+    if (!strcmp_(sub, "grab")) {                  /* `screen grab [delta] [scale]` - stage it */
+        char *a1 = tok(&args);
+        int delta = 0, scale = 1;
+        if (a1 && !strcmp_(a1, "delta")) { char *a2 = tok(&args); delta = 1; scale = a2 ? (int)atol_(a2) : 1; }
+        else if (a1) scale = (int)atol_(a1);
+
+        /* Delta: stage [QOI strip][manifest] of the changed tiles. A -1 falls
+         * through to the full keyframe below (first grab, scale change, or a
+         * strip too big) - so the client's one reader handles both headers. */
+        if (delta) {
+            int ew = 0, eh = 0, cols = 0, tw = 0, th = 0, nch = 0, strip = 0;
+            int total = uno_screen_grab_delta(scale, g_screen, (int)sizeof g_screen,
+                                              &ew, &eh, &cols, &tw, &th, &nch, &strip);
+            if (total >= 0) {
+                g_screen_len = total;
+                {   /* delta <ew> <eh> <cols> <tw> <th> <nch> <strip> <total> */
+                    char t[96]; SB b; sb_init(&b, t, sizeof t);
+                    sb_s(&b, "delta "); sb_i(&b, ew); sb_c(&b, ' '); sb_i(&b, eh); sb_c(&b, ' ');
+                    sb_i(&b, cols); sb_c(&b, ' '); sb_i(&b, tw); sb_c(&b, ' '); sb_i(&b, th); sb_c(&b, ' ');
+                    sb_i(&b, nch); sb_c(&b, ' '); sb_i(&b, strip); sb_c(&b, ' '); sb_i(&b, total);
+                    t[b.len] = 0; rsp(id, "ok", t);
+                }
+                rsp(id, "end", 0); return;
+            }
+            /* else: fall through and send a full keyframe */
         }
-        rsp(id, "end", 0); return;
+
+        {   /* full keyframe (also the delta fallback) */
+            int n = uno_screen_grab_qoi(scale, g_screen, (int)sizeof g_screen, &w, &h);
+            if (n < 0) { g_screen_len = 0; rsp(id, "err", "too-big (raise scale)"); rsp(id, "end", 0); return; }
+            g_screen_len = n;
+            {   /* header only: frame <w> <h> qoi <nbytes>; payload via `screen read` */
+                char t[64]; SB b; sb_init(&b, t, sizeof t);
+                sb_s(&b, "frame "); sb_i(&b, w); sb_c(&b, ' '); sb_i(&b, h);
+                sb_s(&b, " qoi "); sb_i(&b, n); t[b.len] = 0;
+                rsp(id, "ok", t);
+            }
+            rsp(id, "end", 0); return;
+        }
     }
     if (!strcmp_(sub, "read")) {                  /* `screen read <off-hex> [len]` */
         char *ao = tok(&args), *al = tok(&args);
@@ -877,9 +903,10 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "close")) {
         pc64_shell_close_top(); rsp(id, "ok", 0); rsp(id, "end", 0); return;
     }
-    /* screen [info|grab [scale]] - the OUT half of remote desktop: QOI-encode
-     * the framebuffer and stream it base64 (like readsec). Read-only, no arm
-     * gate. Pairs with key/pointer (the IN half). See unoauto_screen.c. */
+    /* screen [info|grab [delta] [scale]|read <off> [len]] - the OUT half of
+     * remote desktop: QOI-encode the framebuffer (whole, or only the changed
+     * tiles with `grab delta`) and stream it base64 (like readsec). Read-only,
+     * no arm gate. Pairs with key/pointer (the IN half). See unoauto_screen.c. */
     if (!strcmp_(verb, "screen")) { do_screen(id, args); return; }
     if (!strcmp_(verb, "uptime")) {
         char t[24]; SB b; sb_init(&b, t, sizeof t); sb_i(&b, (long)uno_dbg_uptime_ms()); t[b.len] = 0;
