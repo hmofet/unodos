@@ -2063,18 +2063,18 @@ static void mvm_te_assoc(void)
 static void mvm_assoc_window(void)
 {
     if (fw_has_capa(54)) {
-        /* iwl_mvm_session_prot_cmd = SESSION_PROTECTION_CMD_API_S_VER_1, exactly
-         * 5 u32 (20 B): id_and_color, action, conf_id, duration_tu,
-         * repetition_interval. The prior 6-field (24 B) struct was 4 bytes too
-         * long; the fw validates command length and LMAC-FATALed (data1=0x400) on
-         * it regardless of the id value we tried. id_and_color is the RAW mac id
-         * for cmd ver<=2 (iwl_mvm_get_session_prot_id returns mvmvif->id = 0). */
-        struct { u32 id_color, action, conf_id, duration_tu, repetition_interval; } c;
+        /* iwl_session_prot_cmd (SESSION_PROTECTION_CMD_API_S_VER_1/2) = 6 u32
+         * (24 B): id_and_color, action, conf_id, duration_tu, repetition_count,
+         * interval. This fw LENGTH-asserts: a 20-byte send gave UMAC
+         * ADVANCED_SYSASSERT on cmd 0x0305 with data2=0x18 (expected 24) /
+         * data3=0x14 (got 20). id_and_color is the RAW mvmvif->id (0) for cmd
+         * ver<3 (iwl_mvm_get_session_prot_id). */
+        struct { u32 id_color, action, conf_id, duration_tu, repetition_count, interval; } c;
         memset(&c,0,sizeof c);
         c.id_color = 0;                 /* raw mvmvif->id (0), NOT color-encoded */
         c.action = 1;                   /* FW_CTXT_ACTION_ADD */
         c.conf_id = 0;                  /* SESSION_PROTECT_CONF_ASSOC */
-        c.duration_tu = 900;
+        c.duration_tu = 900;            /* repetition_count + interval stay 0 */
         uno_dbg_net_trace("wifi: session-prot: MAC_CONF 0x5 len=%d capa54=%d", (int)sizeof c, fw_has_capa(54));
         send_cmd(GRP_MACCONF, 0x5, 0, &c, (int)sizeof c);
         wait_notif(GRP_MACCONF, 0xFB, 0, 500);   /* SESSION_PROTECTION_NOTIF start */
