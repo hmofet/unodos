@@ -2915,10 +2915,18 @@ static int assoc_setup(void)
         /* ADD the link with no PHY yet, exactly as iwl_mvm_add_link does */
         mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/, 0); TRACE_CSR("LINK_CONFIG ADD");
         mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
-        /* now the link can be bound to the PHY and activated */
+        /* TWO modifies, not one: iwl_mvm_mld_assign_vif_chanctx binds the PHY
+         * first with an EMPTY mask while the link is still inactive ("send it
+         * first with phy context ID"), and only then activates it. phy_id sits
+         * outside the mask system and "can be modified only until the link
+         * becomes active" - collapsing the two into a single MODIFY makes the fw
+         * ADVANCED_SYSASSERT on cmd 0x0309 (metal, 2026-07-27). */
+        mld_link_cfg(2 /*MODIFY*/, 0 /*inactive*/, 1, 0);
+                                                       TRACE_CSR("LINK_CONFIG phy-bind");
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
         mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1,
                      LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO);
-                                                       TRACE_CSR("LINK_CONFIG MODIFY");
+                                                       TRACE_CSR("LINK_CONFIG activate");
         mld_sta_cfg(g_bssid, 0, 0);                    TRACE_CSR("STA_CONFIG");
     } else {
         mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
@@ -3485,9 +3493,18 @@ static int mld_steps(int n, char *out, int cap)
         strcpy(out, "ok mld2: LINK_CONFIG ADD returned"); break;
     case 3: mvm_phy_ctxt(g_join_chan ? g_join_chan : 1, 1 /*ADD*/);
         strcpy(out, "ok mld3: PHY_CONTEXT ADD returned"); break;
-    case 4: mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
-                         LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO);
-        strcpy(out, "ok mld4: LINK_CONFIG MODIFY(active) returned"); break;
+    /* two MODIFYs: bind the PHY while still inactive, then activate. Bail out
+     * between them if the first asserted, so the fwerr names the right one. */
+    case 4: mld_link_cfg(2 /*MODIFY*/, 0 /*inactive*/, 1 /*phy*/, 0);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: mld4: after LINK_CONFIG phy-bind csr2808=%08x", h);
+        if (h) { strcpy(out, "err mld4: LINK_CONFIG phy-bind asserted the fw (iwl fwerr)"); break; }
+        mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
+                     LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO);
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: mld4: after LINK_CONFIG activate csr2808=%08x", h);
+        strcpy(out, h ? "err mld4: LINK_CONFIG activate asserted the fw (iwl fwerr)"
+                      : "ok mld4: LINK_CONFIG phy-bind + activate accepted"); break;
     case 5: mld_sta_cfg(g_bssid, 0, 0);
         strcpy(out, "ok mld5: STA_CONFIG (AP peer) returned"); break;
     case 6: { int q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
