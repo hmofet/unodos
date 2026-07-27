@@ -119,6 +119,35 @@ def main():
                   "%d bytes" % len(uk["qoi"]))
         except Exception as e:  # noqa: BLE001
             check(False, "delta streaming", str(e))
+
+        # ---- server-side session capture ----
+        try:
+            st0 = link.screen_record_start(1, 10, timeout=10)
+            check(st0.get("on") == 1, "record started", "fps=%d" % st0.get("fps", -1))
+            time.sleep(1.5)                       # ~15 frames captured on the device tick
+            # the live view still works while recording - capture keeps its OWN
+            # snapshot, so a live full grab (which refreshes the live snapshot)
+            # doesn't disturb the recording
+            lw, lh, lrgba = link.screen_grab(1, timeout=25)
+            check(len(lrgba) == lw * lh * 4, "live grab works during recording")
+            st = link.screen_record_stop(timeout=10)
+            check(st.get("on") == 0, "record stopped")
+            check(st.get("frames", 0) >= 2, "recorder captured frames on its tick",
+                  "%d frames, %d bytes, %d dropped" %
+                  (st.get("frames", 0), st.get("bytes", 0), st.get("dropped", 0)))
+            frames = link.screen_record_frames(st, timeout=25)
+            check(len(frames) == st.get("frames", 0), "pulled + reconstructed all frames",
+                  "%d frames" % len(frames))
+            if frames:
+                fw, fh, frgba = frames[-1]
+                check(len(frgba) == fw * fh * 4, "recorded frame decodes to full RGBA",
+                      "%dx%d" % (fw, fh))
+                distinct = len(set(bytes(frgba[i:i + 4]) for i in range(0, len(frgba), 4)))
+                check(distinct > 1, "recorded frame is non-blank", "%d colours" % distinct)
+                save_ppm("/tmp/urc_record_last.ppm", fw, fh, frgba)
+                print("     wrote /tmp/urc_record_last.ppm (%dx%d)" % (fw, fh))
+        except Exception as e:  # noqa: BLE001
+            check(False, "server-side capture", str(e))
     finally:
         link.close()
         try:

@@ -797,6 +797,61 @@ static void rsp_b64_stream(const char *id, const unsigned char *data, int n)
     }
 }
 
+/* one `ok frames <n> bytes <b> dropped <d> ew <ew> eh <eh> cols <c> tw <t> th <t>
+ * fps <f> on <0/1>` line - the constant geometry a client needs to reconstruct
+ * the recorded ring, plus live counters. */
+static void screen_record_stat_line(const char *id)
+{
+    int frames = 0, bytes = 0, dropped = 0, on = 0, scale = 1, ew = 0, eh = 0, cols = 0, fps = 0;
+    char t[160]; SB b;
+    uno_screen_capture_stat(&frames, &bytes, &dropped, &on, &scale, &ew, &eh, &cols, &fps);
+    sb_init(&b, t, sizeof t);
+    sb_s(&b, "frames "); sb_i(&b, frames); sb_s(&b, " bytes "); sb_i(&b, bytes);
+    sb_s(&b, " dropped "); sb_i(&b, dropped); sb_s(&b, " ew "); sb_i(&b, ew);
+    sb_s(&b, " eh "); sb_i(&b, eh); sb_s(&b, " cols "); sb_i(&b, cols);
+    sb_s(&b, " tw "); sb_i(&b, UNO_SCREEN_TILE); sb_s(&b, " th "); sb_i(&b, UNO_SCREEN_TILE);
+    sb_s(&b, " fps "); sb_i(&b, fps); sb_s(&b, " on "); sb_i(&b, on);
+    t[b.len] = 0;
+    rsp(id, "ok", t);
+}
+
+/* screen record start|stop|status|read - server-side session capture. The
+ * device records keyframe+delta frames into a RAM ring on its shell tick (its
+ * own snapshot, so it never disturbs the live view); the client stops it, reads
+ * the ring (base64, like `screen read`), and reconstructs the frames. */
+static void do_screen_record(const char *id, char *args)
+{
+    static unsigned char rbuf[SCREEN_READ_MAX];
+    char *sub = tok(&args);
+    if (!sub) { rsp(id, "err", "usage: screen record start|stop|status|read <off> [len]"); rsp(id, "end", 0); return; }
+
+    if (!strcmp_(sub, "start")) {
+        char *a1 = tok(&args), *a2 = tok(&args);
+        int scale = a1 ? (int)atol_(a1) : 1;
+        int fps   = a2 ? (int)atol_(a2) : 10;
+        if (!uno_screen_capture_start(scale, fps)) {
+            rsp(id, "err", "already recording (stop first)"); rsp(id, "end", 0); return;
+        }
+        screen_record_stat_line(id); rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(sub, "stop"))   { uno_screen_capture_stop(); screen_record_stat_line(id); rsp(id, "end", 0); return; }
+    if (!strcmp_(sub, "status")) { screen_record_stat_line(id); rsp(id, "end", 0); return; }
+    if (!strcmp_(sub, "read")) {
+        char *ao = tok(&args), *al = tok(&args);
+        int off = ao ? (int)parse_hex(ao) : 0;
+        int len = al ? (int)atol_(al) : SCREEN_READ_MAX;
+        int n;
+        if (len < 1) len = 1;
+        if (len > SCREEN_READ_MAX) len = SCREEN_READ_MAX;
+        n = uno_screen_capture_read(off, rbuf, len);
+        if (n <= 0) { rsp(id, "err", "no-data (off past end / not recorded)"); rsp(id, "end", 0); return; }
+        rsp_b64_stream(id, rbuf, n);
+        rsp(id, "end", 0); return;
+    }
+    rsp(id, "err", "usage: screen record start|stop|status|read <off> [len]");
+    rsp(id, "end", 0);
+}
+
 static void do_screen(const char *id, char *args)
 {
     char *sub = tok(&args);
@@ -860,7 +915,9 @@ static void do_screen(const char *id, char *args)
         rsp_b64_stream(id, g_screen + off, len);
         rsp(id, "end", 0); return;
     }
-    rsp(id, "err", "usage: screen [info|grab [scale]|read <off> [len]]"); rsp(id, "end", 0);
+    if (!strcmp_(sub, "record")) { do_screen_record(id, args); return; }
+    rsp(id, "err", "usage: screen [info|grab [delta] [scale]|read <off> [len]|record ...]");
+    rsp(id, "end", 0);
 }
 
 static void dispatch_cmd(const char *id, char *verb, char *args)
