@@ -84,6 +84,31 @@ namespace UnoRemote
             CloseClient();
         }
 
+        /// <summary>Dial INTO a box running in URC listen mode (`listen=<port>` in
+        /// its DEBUG.CFG) - the reverse of Listen(): here WE open the connection.
+        /// The URC protocol is identical once connected. If this link was
+        /// listening, that is stopped first. Throws on connect failure.</summary>
+        public void Connect(string ip, int port)
+        {
+            _stop = false;
+            try { if (_listener != null) { _listener.Stop(); _listener = null; } } catch { }
+            CloseClient();
+            var c = new TcpClient();
+            c.Connect(ip, port);       // throws if the box isn't listening / unreachable
+            c.NoDelay = true;
+            _client = c;
+            _stream = c.GetStream();
+            Send("HELLO", "host 1");
+            var h = OnConnected; if (h != null) h();
+            _acceptThread = new Thread(() =>
+            {
+                try { Reader(_stream); } catch { }
+                CloseClient();
+                var d = OnDisconnected; if (d != null) d();
+            }) { IsBackground = true, Name = "urc-dialin" };
+            _acceptThread.Start();
+        }
+
         // ---- zero-config discovery (netdisc) ---------------------------------
         // A device booted with `discover` in DEBUG.CFG (instead of a static
         // `remote=<ip>:<port>`) broadcasts a UNODISC PROBE on the LAN; we answer
@@ -162,6 +187,61 @@ namespace UnoRemote
                 }
             }
             catch { return "127.0.0.1"; }
+        }
+
+        // ---- scan: find boxes in LISTEN mode you can dial into ---------------
+        /// <summary>A UnoDOS box discovered on the LAN that is in listen mode
+        /// (advertises a URC port you can dial into).</summary>
+        public sealed class DiscoveredBox
+        {
+            public string Name;
+            public string Ip;
+            public int Port;
+            public override string ToString() { return Name + "   " + Ip + ":" + Port; }
+        }
+
+        /// <summary>Broadcast a UNODISC PROBE and collect the boxes that answer.
+        /// Only boxes in LISTEN mode advertise a non-zero port (something to dial
+        /// into); dial-out (`discover`) boxes advertise port 0 and are skipped.
+        /// Blocks up to ~timeoutMs. Uses its own ephemeral socket, so it coexists
+        /// with the discovery responder on :5400.</summary>
+        public List<DiscoveredBox> Scan(int timeoutMs)
+        {
+            var found = new Dictionary<string, DiscoveredBox>();
+            var sep = new[] { ' ', '\r', '\n', '\t' };
+            Socket s = null;
+            try
+            {
+                s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                s.EnableBroadcast = true;
+                s.Bind(new IPEndPoint(IPAddress.Any, 0));
+                s.ReceiveTimeout = 400;
+                byte[] probe = Encoding.ASCII.GetBytes("UNODISC 1 PROBE host " + SafeHostName() + " 1");
+                try { s.SendTo(probe, new IPEndPoint(IPAddress.Broadcast, DiscPort)); } catch { }
+                int end = Environment.TickCount + timeoutMs;
+                var buf = new byte[512];
+                while (Environment.TickCount < end)
+                {
+                    EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+                    int n;
+                    try { n = s.ReceiveFrom(buf, ref any); }
+                    catch (SocketException) { continue; }   // recv timeout - keep waiting
+                    catch { break; }
+                    if (n <= 0) continue;
+                    var t = Encoding.ASCII.GetString(buf, 0, n).Split(sep, StringSplitOptions.RemoveEmptyEntries);
+                    // UNODISC 1 OFFER pc64 <name> <api> <ip> <port>
+                    if (t.Length >= 8 && t[0] == "UNODISC" && t[2] == "OFFER" && t[3] == "pc64")
+                    {
+                        int port;
+                        if (!int.TryParse(t[7], out port) || port <= 0) continue;   // 0 = not listening
+                        found[t[6] + ":" + t[7]] = new DiscoveredBox { Name = t[4], Ip = t[6], Port = port };
+                    }
+                }
+            }
+            catch { }
+            finally { try { if (s != null) s.Close(); } catch { } }
+            return new List<DiscoveredBox>(found.Values);
         }
 
         private void CloseClient()
