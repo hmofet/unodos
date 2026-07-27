@@ -137,7 +137,7 @@ for (;;) {
 toolkit computes that origin from the active theme, so hit-testing always matches what is drawn.</p>
 
 <h2 id="register">How an app reaches the desktop</h2>
-<p>Each app (the games, Paint, Tracker, the Network app, Studio) is a <code>.UNO</code> file in the
+<p>Each app (the games, Paint, Tracker, Music, Photos, Studio) is a <code>.UNO</code> file in the
 <code>APPS</code> folder of the disk, loaded the first time you open it. A <code>.UNO</code> is a small
 relocatable code module: the loader (<code>pc64_modload.c</code>) reads it, checks it, places it in memory,
 and resolves the kernel functions it calls by name against an export table - so the app carries no kernel

@@ -7,10 +7,12 @@ surface to shots/manual/<tag>.png at each scene.
 
   python3 docs_shots.py [scene ...]     run named scenes (default: all core)
 
-The desktop is deterministic, so the Start-menu order is fixed:
+The desktop is deterministic, so the Start-menu order is fixed. Network was
+dropped as a standalone app on 2026-07-26 (its status/self-test moved to the
+Control Panel's Network tab), so every app after Paint shifted down by one:
   0 Control 1 Editor 2 Files 3 System 4 Clock 5 Install 6 Music 7 Dostris
-  8 Pac-Man 9 OutLast 10 Tracker 11 Paint 12 Network 13 Runner3D 14 Browser
-  15 Studio  (present only when APPS\\STUDIO.UNO ships)
+  8 Pac-Man 9 OutLast 10 Tracker 11 Paint 12 Runner3D 13 Browser
+  14 Studio (present only when APPS\\STUDIO.UNO ships) 15 Photos (APPS\\PHOTOS.UNO)
 Launch app N: Ctrl-Esc, Down*N, Enter.  Close focused window: Ctrl-W.
 """
 import json, os, socket, subprocess, sys, time
@@ -181,18 +183,44 @@ def sc_startmenu(q):
     shot(q, "startmenu")
     combo(q, "ctrl", "esc"); time.sleep(0.3)
 
+# The Control Panel is a TABBED window (2026-07-26). Focus model: the first Tab
+# lands on the tab STRIP; with the strip focused, Left/Right switch tabs; a
+# further Tab steps into the active tab's controls. Tab order (from pc64_uui.c):
+#   0 Display        : Resolution, Font, UI scale, "Aurora lite"
+#   1 Personalization: Theme, Dark mode, Wallpaper, icon flow/sort, snap/lock
+#   2 Network        : read-only status + Refresh
+#   3 Audio          : Volume, Output device
+#   4 Date & Time    : time spinners, Set date, Clock format
+#   5 System         : Battery display, Restore session, Lid sleep, Pointer speed
+def cp_open_tab(q, tab_idx):
+    """Open the Control Panel and select tab tab_idx. Leaves focus on the tab
+    strip; a following Tab steps into that tab's first control. The Panel
+    reopens on its LAST-viewed tab, so clamp left to Display (tab 0) first, then
+    walk right - deterministic regardless of the remembered tab."""
+    close_all(q); launch(q, 0)
+    key(q, "tab"); time.sleep(0.3)                   # focus the tab strip
+    for _ in range(6):
+        key(q, "left", gap=0.12)                     # clamp at Display (tab 0)
+    for _ in range(tab_idx):
+        key(q, "right", gap=0.25)                    # walk to the target tab
+    time.sleep(0.4)
+
 def sc_controlpanel(q):
     close_all(q)
     launch(q, 0)
-    shot(q, "controlpanel")
+    shot(q, "controlpanel")                          # opens on the Display tab
+
+def sc_personalization(q):
+    cp_open_tab(q, 1)
+    shot(q, "cp_personalization")                    # Theme, Dark mode, Wallpaper
 
 def sc_themes(q):
-    # Keyboard-only: Tab focuses the Theme dropdown (first focusable widget);
+    # Personalization tab -> Theme dropdown (the first control after the strip);
     # Down cycles kThemes live, re-skinning the whole desktop. Order:
     # 0 Aurora Light 1 Aurora Dark 2 UnoDOS 3 Mac OS 7 4 Mac Plus 5 Windows 3.1
     # 6 Amiga 7 C64 8 Apple II 9 NeXTSTEP
-    close_all(q); launch(q, 0)
-    key(q, "tab"); time.sleep(0.3)                   # focus Theme dropdown
+    cp_open_tab(q, 1)
+    key(q, "tab"); time.sleep(0.3)                   # strip -> Theme dropdown
     shot(q, "theme_aurora_light")
     for tag in ["aurora_dark", "unodos", "macos7", "macplus",
                 "win31", "amiga", "c64", "apple2", "next"]:
@@ -202,33 +230,35 @@ def sc_themes(q):
         key(q, "up", gap=0.3)                        # later scenes match
 
 def sc_fonts(q):
-    # Tab x3 -> Font dropdown; Down picks a TrueType face (re-skins all UI text).
-    close_all(q); launch(q, 0)
-    key(q, "tab", "tab", "tab"); time.sleep(0.3)
+    # Display tab -> Font dropdown (2nd control: Resolution, Font, ...).
+    cp_open_tab(q, 0)
+    key(q, "tab", "tab"); time.sleep(0.3)            # strip -> Resolution -> Font
     key(q, "down"); time.sleep(0.5)                  # 1st TTF (Sans)
     shot(q, "font_ttf")
+    key(q, "up"); time.sleep(0.4)                    # restore the default face
 
 def sc_resolution(q):
-    # Tab x2 -> Resolution dropdown; Down bumps to the next mode.
-    close_all(q); launch(q, 0)
-    key(q, "tab", "tab"); time.sleep(0.3)
+    # Display tab -> Resolution dropdown (1st control after the strip).
+    cp_open_tab(q, 0)
+    key(q, "tab"); time.sleep(0.3)                   # strip -> Resolution
     key(q, "down"); time.sleep(0.6)
     shot(q, "resolution")
+    key(q, "up"); time.sleep(0.6)                    # restore the default mode
 
 def sc_uiscale(q):
-    # Tab x4 -> the UI scale dropdown (100/125/150/200%). Each change rescales
-    # every font and rebuilds the shell, so refocus (Tab x4) between steps.
-    # Ends by resetting to 100% so later scenes shoot at the normal scale.
-    close_all(q); launch(q, 0)
-    key(q, "tab", "tab", "tab", "tab"); time.sleep(0.3)
-    key(q, "down"); time.sleep(1.2)                  # 125% (shell rebuilds)
-    key(q, "tab", "tab", "tab", "tab"); time.sleep(0.3)
-    key(q, "down"); time.sleep(1.2)                  # 150%
+    # Display tab -> UI scale dropdown (3rd control after the strip). Each change
+    # rescales every font and rebuilds the window, moving focus - so re-open the
+    # Panel cleanly for each step (UI scale is a persisted global). Ends back at
+    # 100% so later scenes shoot at the normal scale.
+    def bump(step):
+        cp_open_tab(q, 0)
+        key(q, "tab", "tab", "tab"); time.sleep(0.3) # strip -> Res -> Font -> UI scale
+        key(q, step); time.sleep(1.2)                # commit + shell rebuild
+    bump("down")                                     # 100% -> 125%
+    bump("down")                                     # 125% -> 150%
     shot(q, "uiscale")
-    for _ in range(2):                               # back to 100%
-        key(q, "tab", gap=0.12); key(q, "tab", gap=0.12)
-        key(q, "tab", gap=0.12); key(q, "tab", gap=0.12)
-        key(q, "up"); time.sleep(1.2)
+    bump("up")                                       # 150% -> 125%
+    bump("up")                                       # 125% -> 100%
 
 def sc_editor(q):
     close_all(q); launch(q, 1)
@@ -290,13 +320,13 @@ def sc_paint(q):
     shot(q, "paint")
 
 def sc_runner3d(q):
-    close_all(q); launch(q, 13, settle=2.2)
+    close_all(q); launch(q, 12, settle=2.2)
     time.sleep(1.0)
     shot(q, "runner3d")
 
 def sc_studio(q):
-    # The IDE (Start-menu index 15). Greets with SDK\SAMPLE.C, syntax-lit.
-    close_all(q); launch(q, 15, settle=2.8)
+    # The IDE (Start-menu index 14). Greets with SDK\SAMPLE.C, syntax-lit.
+    close_all(q); launch(q, 14, settle=2.8)
     shot(q, "studio")
     combo(q, "ctrl", "b"); time.sleep(2.8)           # build -> SAMPLE.UNO
     shot(q, "studio_build")                          # build-output pane
@@ -311,7 +341,7 @@ def sc_studio_ai(q):
     key(q, "down", gap=0.5); key(q, "down", gap=0.5) # up two modes; shell reflows
     time.sleep(1.4)
     close_all(q)
-    launch(q, 15, settle=2.8)                        # Studio, now wide -> AI column shows
+    launch(q, 14, settle=2.8)                        # Studio, now wide -> AI column shows
     shot(q, "studio_ai")
     # back to the default resolution so later scenes match
     close_all(q); launch(q, 0)
@@ -320,14 +350,14 @@ def sc_studio_ai(q):
     time.sleep(1.0); close_all(q)
 
 def sc_browser_disk(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 13, settle=2.0)
     shot(q, "browser_files")
 
 def _browser_open(q, row, tag, settle=1.6):
     # Fresh browser each time. Entering the list from the address bar lands on
     # row 1 (Sample.html); Up from row 0 jumps BACK to the address bar, so we
     # navigate RELATIVE to row 1 and never go above row 0.
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 13, settle=2.0)
     key(q, "down"); time.sleep(0.3)                  # address bar -> list row 1
     delta = row - 1
     for _ in range(abs(delta)):
@@ -339,26 +369,34 @@ def sc_browser_docs(q):
     _browser_open(q, 1, "browser_html")              # Sample.html (HTML+CSS)
     _browser_open(q, 2, "browser_js", settle=2.0)    # Script.html (JavaScript)
 
-def sc_net_selftest(q):
-    # Needs a NIC (run with UNO_NIC=1). SLIRP provides DHCP/gw/TFTP.
-    close_all(q); launch(q, 12, settle=1.6)          # Network app
-    time.sleep(24)                                   # DHCP+ping+UDP+TCP+TLS
-    shot(q, "network")
+def sc_cp_network(q):
+    # The Control Panel's Network tab (the standalone Network app was dropped
+    # 2026-07-26). Needs a NIC (run with UNO_NIC=1). pc64 binds the NIC lazily -
+    # on first network use - so bring the link up by loading a page in the
+    # Browser first, then read the live status in the tab (Refresh to update it).
+    close_all(q); launch(q, 13, settle=2.0)          # Browser
+    text(q, "http://example.com/"); time.sleep(0.3)
+    key(q, "ret"); time.sleep(6.0)                   # DHCP+DNS+GET brings the link up
+    cp_open_tab(q, 2)                                # Display -> ... -> Network
+    key(q, "tab"); time.sleep(0.2)                   # strip -> Refresh button
+    key(q, "ret"); time.sleep(1.0)                   # click Refresh -> fresh status
+    shot(q, "cp_network")
 
 def sc_browser_http(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 13, settle=2.0)
     text(q, "http://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(5.0)                   # DHCP+DNS+TCP+GET+render
     shot(q, "browser_http")
 
 def sc_browser_https(q):
-    close_all(q); launch(q, 14, settle=2.0)
+    close_all(q); launch(q, 13, settle=2.0)
     text(q, "https://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
 
 SCENES = {
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
+    "personalization": sc_personalization,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
     "uiscale": sc_uiscale,
     "editor": sc_editor, "files": sc_files, "system": sc_system, "clock": sc_clock,
@@ -367,7 +405,7 @@ SCENES = {
     "paint": sc_paint, "runner3d": sc_runner3d,
     "studio": sc_studio, "studio_ai": sc_studio_ai,
     "browser_disk": sc_browser_disk,
-    "browser_docs": sc_browser_docs, "net_selftest": sc_net_selftest,
+    "browser_docs": sc_browser_docs, "cp_network": sc_cp_network,
     "browser_http": sc_browser_http, "browser_https": sc_browser_https,
 }
 CORE = list(SCENES.keys())

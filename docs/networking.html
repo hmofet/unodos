@@ -90,10 +90,12 @@ and browses the web, including secure sites.</p>
 <p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
 address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
 web over HTTP and HTTPS. Nothing else needs to be installed.</p>
-<p>A small <strong>network chip</strong> sits in the corner of the taskbar so you can see the state at a
+<p>A small <strong>network chip</strong> sits in the taskbar tray so you can see the state at a
 glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
-address has arrived yet, and nothing when the link is down. The <a href="apps.html#native">System</a> app
-spells it out in full, for example <code>Network: link up, IP 192.168.2.157</code>.</p>
+address has arrived yet, and nothing when the link is down. A dot beside it blinks on traffic - amber while
+sending, green while receiving - and hovering the chip shows a tooltip with the current address and link speed.
+The <a href="apps.html#native">System</a> app spells it out in full, for example
+<code>Network: link up, IP 192.168.2.157</code>.</p>
 
 <h3 id="wired">Wired network adapters</h3>
 <p>UnoDOS drives the common Intel Gigabit families directly - the built-in wired port on most PCs and
@@ -108,10 +110,12 @@ laptops with an Ethernet socket:</p>
 verified on hardware yet.</p>
 <div class="note"><b>Emulator-verified</b>The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.</div>
 
-<h2 id="selftest">The Network self-test</h2>
-<p>The Network app checks the whole connection step by step and shows the result. In an emulator it tests
-against the emulator's network; on a real PC it uses the real adapter.</p>
-<figure><button type="button" class="zoom" data-full="assets/img/network.png" aria-label="Enlarge: The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection."><img src="assets/img/network.png" alt="The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection." loading="lazy"></button><figcaption>The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection.</figcaption></figure>
+<h2 id="status">Checking the connection</h2>
+<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live
+connection in full: the status, the address and gateway from DHCP, the link speed, and a running count of the
+frames sent and received. A <strong>Refresh</strong> button re-reads it on demand.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/cp_network.png" aria-label="Enlarge: The Control Panel&#x27;s Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green LAN chip in the tray corner mirrors the same state."><img src="assets/img/cp_network.png" alt="The Control Panel&#x27;s Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green LAN chip in the tray corner mirrors the same state." loading="lazy"></button><figcaption>The Control Panel's Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green <b>LAN</b> chip in the tray corner mirrors the same state.</figcaption></figure>
+<div class="note"><b>Where the old self-test went</b>A standalone "Network" app used to run a scripted link/DHCP/ping/TLS self-test. That app was retired - its live status moved here to the Control Panel, and the automated self-test now runs at boot on debug builds (armed from <code>DEBUG.CFG</code>) and logs to <code>CRASH\\NETLOG.TXT</code>.</div>
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's

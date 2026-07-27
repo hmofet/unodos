@@ -655,7 +655,7 @@ python3 nettest.py         # headless network + TLS verification''')
 CODE_REMOTE_CFG = code('''remote=192.168.2.43:5099''')
 
 CODE_REMOTE_CLI = code('''$ python tools/unoauto_remote.py --listen 0.0.0.0:5099
-unoauto_remote listening on 0.0.0.0:5099. Set pc64 STRESS.CFG:
+unoauto_remote listening on 0.0.0.0:5099. Set pc64 DEBUG.CFG:
     remote=<this-machine-ip>:5099   (QEMU SLIRP guest: 10.0.2.2:5099)
 [SCRIPT ] remote: link up
 [NET    ] eth: DHCP lease 192.168.2.157
@@ -899,7 +899,10 @@ live clock. Every control works by keyboard or pointer.</p>
       <strong>right-click anywhere on the desktop</strong> opens the same menu at the pointer, and
       <kbd>Ctrl</kbd>+<kbd>Esc</kbd> toggles it from the keyboard.</li>
   <li>The <strong>taskbar</strong> along the bottom shows a button for each open window, to the right of the Start button; click one to bring it to the front.</li>
-  <li>The <strong>clock</strong> in the corner shows the current time (and the battery level, on laptops).</li>
+  <li>The <strong>system tray</strong> in the far corner holds, from left to right, a <strong>network chip</strong>
+      (see <a href="networking.html#online">Networking</a>), a <strong>battery gauge</strong> on laptops, and the
+      <strong>clock</strong>. The clock reads the current time in 24-hour or 12-hour form, and the battery gauge shows
+      a percentage, an icon, or both - all chosen in the <a href="appearance.html#datetime">Control Panel</a>.</li>
 </ul>
 
 {fig("startmenu.png", "The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.")}
@@ -932,17 +935,25 @@ or touchpad moves the pointer.</p>
 
 PAGES["appearance.html"] = ("Themes & appearance", f"""
 <h1>Themes &amp; appearance</h1>
-<p class="lede">Ten live themes, a Dark-mode toggle, TrueType fonts, and real resolution choice, all from
-the Control Panel and all without a reboot.</p>
+<p class="lede">Ten live themes, a Dark-mode toggle, procedural wallpapers, TrueType fonts, and real resolution
+choice, all from the Control Panel and all without a reboot.</p>
 
 <h2 id="control">The Control Panel</h2>
-<p>The Control Panel is where you change how UnoDOS looks: a <strong>Theme</strong> menu, a
-<strong>Dark mode</strong> toggle, a <strong>Resolution</strong> menu, a system-wide <strong>Font</strong>
-picker, a <strong>UI scale</strong> menu (100&ndash;200%), a <strong>Volume</strong> slider (it adjusts
-the sound output live, even mid-note, on machines with HD&nbsp;Audio or AC'97 audio), and the clock:
-the time is set with two spinners, and the date with the <strong>Set date&hellip;</strong> calendar
-picker &mdash; click a day and it is applied. It opens on first boot and from the Start menu.</p>
-{fig("controlpanel.png", "The Control Panel. Focus a menu with <kbd>Tab</kbd> and change it with <kbd>↑</kbd>/<kbd>↓</kbd>; the desktop re-skins instantly.")}
+<p>The Control Panel is where you change how UnoDOS looks and behaves. It opens on first boot and from
+the Start menu, and its settings are grouped into <strong>six tabs</strong>:</p>
+<div class="tw"><table>
+<thead><tr><th>Tab</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td><strong>Display</strong></td><td>Resolution, system-wide Font, UI scale (100&ndash;200%), and an "Aurora lite" switch that turns off live compositing on slower machines.</td></tr>
+<tr><td><strong>Personalization</strong></td><td>Theme, Dark mode, Wallpaper, and how the desktop icons arrange themselves.</td></tr>
+<tr><td><strong>Network</strong></td><td>Live connection status - address, gateway, link speed - with a Refresh button. See <a href="networking.html#status">Networking</a>.</td></tr>
+<tr><td><strong>Audio</strong></td><td>The Volume slider (it adjusts the output live, even mid-note, on HD&nbsp;Audio or AC'97 hardware) and the active output device.</td></tr>
+<tr><td><strong>Date &amp; Time</strong></td><td>Set the time and date, and choose a 24-hour or 12-hour clock.</td></tr>
+<tr><td><strong>System</strong></td><td>Battery display, session restore, lid-sleep, pointer speed, and buttons for accounts, licences and About.</td></tr>
+</tbody>
+</table></div>
+{fig("controlpanel.png", "The Control Panel's <b>Display</b> tab: resolution, font, UI scale. The tab strip runs across the top; the rest of this page walks through each tab.")}
+{note('Everything works by keyboard. <kbd>Tab</kbd> first focuses the tab strip - switch tabs with <kbd>←</kbd>/<kbd>→</kbd> - then a further <kbd>Tab</kbd> steps into the controls on that tab, which you change with <kbd>↑</kbd>/<kbd>↓</kbd>. The desktop re-skins instantly.', kind="tip")}
 
 <h2 id="themes">The ten themes</h2>
 <p>Aurora is the modern default, with soft shadows, rounded windows, a frosted taskbar and a coloured
@@ -961,6 +972,16 @@ instantly re-skins the whole desktop.</p>
   {fig("theme_next.png", "<b>NeXTSTEP</b>: greyscale, chiselled bezels.")}
 </div>
 
+<h2 id="wallpaper">Wallpapers</h2>
+<p>The <strong>Personalization</strong> tab holds the Theme and Dark-mode controls, and a
+<strong>Wallpaper</strong> menu with seven backdrops. They are drawn by the OS, so there are no image files
+to manage: <strong>Theme default</strong> (the theme's own desktop), <strong>Midnight</strong> (a navy sky
+with stars), <strong>Sunrise</strong> (a warm wash), <strong>Evergreen</strong>, <strong>Aurora</strong> (soft
+accent-coloured glows, tinted by the current theme), <strong>Graphite grid</strong> and <strong>Slate</strong>.
+This tab is also where you set how desktop icons arrange themselves - in columns or rows, in launcher order or
+by name - and whether they snap to a grid or stay locked in place.</p>
+{fig("cp_personalization.png", "The <b>Personalization</b> tab: Theme, Dark mode, Wallpaper and the desktop-icon arrangement, over the Aurora wallpaper.")}
+
 <h2 id="fonts">TrueType fonts</h2>
 <p>All the on-screen text is drawn by a TrueType engine with proper proportional spacing and kerning.
 Four faces are included: <strong>Chicago</strong> (the crisp bitmap-style default), <strong>Sans</strong>,
@@ -975,9 +996,19 @@ labels, buttons, lists &mdash; and the whole layout re-measures itself to fit th
 {fig("uiscale.png", "The desktop at <b>150%</b> UI scale: same resolution, larger text and controls everywhere.")}
 
 <h2 id="resolution">Resolution &amp; scaling</h2>
-<p>Pick a resolution from the Control Panel and the desktop resizes to match, scaled to fill your screen
-while keeping the correct proportions.</p>
+<p>Pick a resolution from the <strong>Display</strong> tab and the desktop resizes to match, scaled to fill your
+screen while keeping the correct proportions.</p>
 {fig("resolution.png", "A smaller desktop mode scaled to fit the panel.")}
+
+<h2 id="datetime">Date, time, battery and sessions</h2>
+<p>The <strong>Date &amp; Time</strong> tab sets the clock: two spinners for the time with a <strong>Set time</strong>
+button, a <strong>Set date&hellip;</strong> calendar picker (click a day and it applies), and a
+<strong>Clock format</strong> menu that switches the tray clock between 24-hour and 12-hour.</p>
+<p>The <strong>System</strong> tab covers the machine's behaviour. <strong>Battery display</strong> chooses whether
+the tray shows a percentage, an icon, or both. <strong>Restore last session at startup</strong> (on by default)
+reopens the windows you had open - the everyday apps and the Browser - the next time you boot. There is also a
+<strong>Lid sleep</strong> switch and a <strong>Pointer speed</strong> slider.</p>
+{note('Only the session-restore choice and the list of open windows are saved across a reboot (in a small <code>SHELL.CFG</code> file). The wallpaper, clock format, battery display, volume, pointer speed and icon layout are remembered for the current session but return to their defaults when you restart.', title="What persists across a reboot")}
 """)
 
 PAGES["apps.html"] = ("Applications", f"""
@@ -1109,10 +1140,12 @@ and browses the web, including secure sites.</p>
 <p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
 address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
 web over HTTP and HTTPS. Nothing else needs to be installed.</p>
-<p>A small <strong>network chip</strong> sits in the corner of the taskbar so you can see the state at a
+<p>A small <strong>network chip</strong> sits in the taskbar tray so you can see the state at a
 glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
-address has arrived yet, and nothing when the link is down. The <a href="apps.html#native">System</a> app
-spells it out in full, for example <code>Network: link up, IP 192.168.2.157</code>.</p>
+address has arrived yet, and nothing when the link is down. A dot beside it blinks on traffic - amber while
+sending, green while receiving - and hovering the chip shows a tooltip with the current address and link speed.
+The <a href="apps.html#native">System</a> app spells it out in full, for example
+<code>Network: link up, IP 192.168.2.157</code>.</p>
 
 <h3 id="wired">Wired network adapters</h3>
 <p>UnoDOS drives the common Intel Gigabit families directly - the built-in wired port on most PCs and
@@ -1127,10 +1160,12 @@ laptops with an Ethernet socket:</p>
 verified on hardware yet.</p>
 {note('The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="Emulator-verified")}
 
-<h2 id="selftest">The Network self-test</h2>
-<p>The Network app checks the whole connection step by step and shows the result. In an emulator it tests
-against the emulator's network; on a real PC it uses the real adapter.</p>
-{fig("network.png", "The Network self-test passing every step: network link, an automatic address, reaching the gateway, transferring data, and a secure (TLS) connection.")}
+<h2 id="status">Checking the connection</h2>
+<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live
+connection in full: the status, the address and gateway from DHCP, the link speed, and a running count of the
+frames sent and received. A <strong>Refresh</strong> button re-reads it on demand.</p>
+{fig("cp_network.png", "The Control Panel's Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green <b>LAN</b> chip in the tray corner mirrors the same state.")}
+{note('A standalone "Network" app used to run a scripted link/DHCP/ping/TLS self-test. That app was retired - its live status moved here to the Control Panel, and the automated self-test now runs at boot on debug builds (armed from <code>DEBUG.CFG</code>) and logs to <code>CRASH\\\\NETLOG.TXT</code>.', title="Where the old self-test went")}
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
@@ -1403,7 +1438,7 @@ you assigned:</p>
 toolkit computes that origin from the active theme, so hit-testing always matches what is drawn.</p>
 
 <h2 id="register">How an app reaches the desktop</h2>
-<p>Each app (the games, Paint, Tracker, the Network app, Studio) is a <code>.UNO</code> file in the
+<p>Each app (the games, Paint, Tracker, Music, Photos, Studio) is a <code>.UNO</code> file in the
 <code>APPS</code> folder of the disk, loaded the first time you open it. A <code>.UNO</code> is a small
 relocatable code module: the loader (<code>pc64_modload.c</code>) reads it, checks it, places it in memory,
 and resolves the kernel functions it calls by name against an export table - so the app carries no kernel
@@ -1745,15 +1780,15 @@ that is sitting on a bench across the room.</p>
 
 <h2 id="enable">Turning it on</h2>
 <p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
-than the other way round. You tell it where to dial with one line in the stick's <code>STRESS.CFG</code>
+than the other way round. You tell it where to dial with one line in the stick's <code>DEBUG.CFG</code>
 (the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
 {CODE_REMOTE_CFG}
 <p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
 your PC (below). If the link drops it reconnects on its own.</p>
-<p>You do not edit <code>STRESS.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
+<p>You do not edit <code>DEBUG.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
 turned on in the <a href="getting-started.html#flasher">UnoDOS flasher</a> (that is what selects the debug OS
 and writes the file), and set the remote address there. To point an existing debug stick at a different PC,
-use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>STRESS.CFG</code> in place without
+use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>DEBUG.CFG</code> in place without
 erasing the disk, so you are not reflashing the whole image just to change an IP.</p>
 <p>If you would rather not hardcode an address at all, set <code>discover</code> instead of <code>remote=</code>:
 the device broadcasts on the LAN and any PC running the listener answers with its address, so the box finds
@@ -1766,7 +1801,7 @@ are debugging - the link can ride a serial cable instead; see
 <p>The link normally rides TCP over the LAN - but that assumes a working NIC, and the hardest bring-up cases are
 exactly the ones where the machine's <em>only</em> network card is the one that does not work yet. For that, the
 same channel runs over a <strong>serial cable</strong> instead: no network required. Every command works
-identically; only the wire underneath changes. Arm it in <code>STRESS.CFG</code> with <code>remote-serial</code>
+identically; only the wire underneath changes. Arm it in <code>DEBUG.CFG</code> with <code>remote-serial</code>
 in place of <code>remote=</code>, and point the tool at the serial port:</p>
 <pre><code># on the stick: URC over COM1, or name another port (2f8 = COM2, 3e8 = COM3)
 remote-serial
@@ -1792,6 +1827,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>probe</code></td><td>A snapshot of what the system is doing: subsystems (heap/net/fs/shell), open windows, loaded apps.</td></tr>
 <tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
 <tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
+<tr><td><code>screen</code></td><td>Grab the desktop as a compressed image - the video feed behind the <a href="#unoremote">UnoRemote</a> remote-desktop client.</td></tr>
 <tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
 <tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
 <tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
@@ -1818,6 +1854,23 @@ the device can drive <em>your</em> PC in return:</p>
 {CODE_REMOTE_PY}
 <p>On the device side, an automation script written in Python (see <a href="dev-apps.html">Writing apps</a>) can
 talk back over the link with <code>unoauto.remote_send()</code> and <code>unoauto.remote_recv()</code>.</p>
+
+<h2 id="unoremote">Remote desktop (UnoRemote)</h2>
+<p>When you want to <em>see and drive</em> the machine rather than type commands at it, <strong>UnoRemote</strong>
+is a Windows app that gives you a live remote-desktop view over the same link. It shows the device's screen in a
+window, forwards your mouse and keyboard to it, and adds a log pane, a raw-command box and a session recorder - a
+VNC-style view built on the URC channel (the desktop image streams over the <code>screen</code> command; input goes
+back over <code>key</code> and <code>pointer</code>).</p>
+<ol>
+  <li>Build it once with <code>pc64\\remote\\build-remote.ps1</code> (it produces <code>UnoRemote.exe</code>), run it,
+      set the port (default <strong>5099</strong>) and click <strong>Listen</strong>.</li>
+  <li>On the device, point <code>DEBUG.CFG</code> at your PC with <code>remote=&lt;your-ip&gt;:5099</code> (or
+      <code>discover</code>) and boot a debug build, exactly as above. The UnoDOS desktop appears in the window.</li>
+  <li>Click and type on the view to drive the machine. A <strong>Scale</strong> control (1&times;&ndash;4&times;)
+      trades resolution for bandwidth, and <strong>Record</strong> saves the session to <code>Videos\\UnoRemote\\</code>
+      (an MP4 if <code>ffmpeg</code> is on your PATH, otherwise a sequence of PNG frames).</li>
+</ol>
+{note('UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.', kind="warn", title="Debug builds, LAN only")}
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
 <p>The <a href="dev-python.html#uno">

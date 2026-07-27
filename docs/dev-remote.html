@@ -93,15 +93,15 @@ that is sitting on a bench across the room.</p>
 
 <h2 id="enable">Turning it on</h2>
 <p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
-than the other way round. You tell it where to dial with one line in the stick's <code>STRESS.CFG</code>
+than the other way round. You tell it where to dial with one line in the stick's <code>DEBUG.CFG</code>
 (the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
 <pre><code>remote=192.168.2.43:5099</code></pre>
 <p>Boot a debug stick with that key and, once networking is up, it connects to the listener you run on
 your PC (below). If the link drops it reconnects on its own.</p>
-<p>You do not edit <code>STRESS.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
+<p>You do not edit <code>DEBUG.CFG</code> by hand. Flash a debug stick with <strong>Developer options</strong>
 turned on in the <a href="getting-started.html#flasher">UnoDOS flasher</a> (that is what selects the debug OS
 and writes the file), and set the remote address there. To point an existing debug stick at a different PC,
-use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>STRESS.CFG</code> in place without
+use the flasher's <strong>Reconfigure</strong> button: it rewrites <code>DEBUG.CFG</code> in place without
 erasing the disk, so you are not reflashing the whole image just to change an IP.</p>
 <p>If you would rather not hardcode an address at all, set <code>discover</code> instead of <code>remote=</code>:
 the device broadcasts on the LAN and any PC running the listener answers with its address, so the box finds
@@ -114,7 +114,7 @@ are debugging - the link can ride a serial cable instead; see
 <p>The link normally rides TCP over the LAN - but that assumes a working NIC, and the hardest bring-up cases are
 exactly the ones where the machine's <em>only</em> network card is the one that does not work yet. For that, the
 same channel runs over a <strong>serial cable</strong> instead: no network required. Every command works
-identically; only the wire underneath changes. Arm it in <code>STRESS.CFG</code> with <code>remote-serial</code>
+identically; only the wire underneath changes. Arm it in <code>DEBUG.CFG</code> with <code>remote-serial</code>
 in place of <code>remote=</code>, and point the tool at the serial port:</p>
 <pre><code># on the stick: URC over COM1, or name another port (2f8 = COM2, 3e8 = COM3)
 remote-serial
@@ -140,6 +140,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>probe</code></td><td>A snapshot of what the system is doing: subsystems (heap/net/fs/shell), open windows, loaded apps.</td></tr>
 <tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
 <tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
+<tr><td><code>screen</code></td><td>Grab the desktop as a compressed image - the video feed behind the <a href="#unoremote">UnoRemote</a> remote-desktop client.</td></tr>
 <tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
 <tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
 <tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
@@ -161,7 +162,7 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 a Python library you script against. Run it, and it prints the device's logs as they arrive and lets you type
 commands back:</p>
 <pre><code>$ python tools/unoauto_remote.py --listen 0.0.0.0:5099
-unoauto_remote listening on 0.0.0.0:5099. Set pc64 STRESS.CFG:
+unoauto_remote listening on 0.0.0.0:5099. Set pc64 DEBUG.CFG:
     remote=&lt;this-machine-ip&gt;:5099   (QEMU SLIRP guest: 10.0.2.2:5099)
 [SCRIPT ] remote: link up
 [NET    ] eth: DHCP lease 192.168.2.157
@@ -193,6 +194,23 @@ print(link.eval(&quot;print(6*7)&quot;))   # run Python on the device -&gt; [&#x
 link.on_command(&quot;save&quot;, lambda args: &quot;saved &quot; + args)</code></pre>
 <p>On the device side, an automation script written in Python (see <a href="dev-apps.html">Writing apps</a>) can
 talk back over the link with <code>unoauto.remote_send()</code> and <code>unoauto.remote_recv()</code>.</p>
+
+<h2 id="unoremote">Remote desktop (UnoRemote)</h2>
+<p>When you want to <em>see and drive</em> the machine rather than type commands at it, <strong>UnoRemote</strong>
+is a Windows app that gives you a live remote-desktop view over the same link. It shows the device's screen in a
+window, forwards your mouse and keyboard to it, and adds a log pane, a raw-command box and a session recorder - a
+VNC-style view built on the URC channel (the desktop image streams over the <code>screen</code> command; input goes
+back over <code>key</code> and <code>pointer</code>).</p>
+<ol>
+  <li>Build it once with <code>pc64\remote\build-remote.ps1</code> (it produces <code>UnoRemote.exe</code>), run it,
+      set the port (default <strong>5099</strong>) and click <strong>Listen</strong>.</li>
+  <li>On the device, point <code>DEBUG.CFG</code> at your PC with <code>remote=&lt;your-ip&gt;:5099</code> (or
+      <code>discover</code>) and boot a debug build, exactly as above. The UnoDOS desktop appears in the window.</li>
+  <li>Click and type on the view to drive the machine. A <strong>Scale</strong> control (1&times;&ndash;4&times;)
+      trades resolution for bandwidth, and <strong>Record</strong> saves the session to <code>Videos\UnoRemote\</code>
+      (an MP4 if <code>ffmpeg</code> is on your PATH, otherwise a sequence of PNG frames).</li>
+</ol>
+<div class="note warn"><b>Debug builds, LAN only</b>UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.</div>
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
 <p>The <a href="dev-python.html#uno">
