@@ -48,6 +48,22 @@ static const tcase cases[] = {
 { "num-int", "print(9007199254740991); print(-42); print(1e3);",
   "9007199254740991\n-42\n1000\n" },
 { "num-hex", "print(0xff); print(0b1010); print(0o17);", "255\n10\n15\n" },
+/* Shortest round-trip formatting, verified against V8. These are the cases
+ * that broke while digits were extracted in double arithmetic: a 17-digit
+ * value exceeds 2^53, so the scaling snapped to the neighbouring integer and
+ * sqrt(2) printed as ...952. Extraction is exact integer arithmetic now and
+ * these lock it down. */
+{ "num-roundtrip",
+  "print(Math.sqrt(2)); print(1/3); print(2/3); print(0.1+0.2); print(1e-7);"
+  "print(Math.PI); print(5e-324); print(123456789012345678); print(1e21); print(1e-21);",
+  "1.4142135623730951\n0.3333333333333333\n0.6666666666666666\n"
+  "0.30000000000000004\n1e-7\n3.141592653589793\n5e-324\n123456789012345680\n"
+  "1e+21\n1e-21\n" },
+{ "num-parse-exact",
+  /* adjacent doubles must NOT collapse onto one value when parsed */
+  "print(1.4142135623730951 === 1.4142135623730952);"
+  "print(0.1 + 0.2 === 0.3); print(9007199254740993 === 9007199254740992);",
+  "true\nfalse\ntrue\n" },
 
 /* ---- strings ------------------------------------------------------------ */
 { "str-cat", "print('a'+'b'); print('n='+5); print(1+'2');", "ab\nn=5\n12\n" },

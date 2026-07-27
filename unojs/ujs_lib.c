@@ -7,7 +7,6 @@
  * is what lets the engine build and pass its tests with no consumer linked.
  * ======================================================================== */
 #include "ujs_int.h"
-#include <math.h>
 #include <stdio.h>
 
 /* ---- argument helpers ---------------------------------------------------- */
@@ -21,23 +20,23 @@ static ujs_str *argstr(ujs_args *a, int i) { return ujs_tostr(a->vm, arg(a, i));
 static ujs_str *selfstr(ujs_args *a) { return ujs_tostr(a->vm, a->self); }
 
 /* ---- Math ---------------------------------------------------------------- */
-static ujs_val m_floor(ujs_args *a) { return ujs_number(floor(argnum(a,0))); }
-static ujs_val m_ceil (ujs_args *a) { return ujs_number(ceil (argnum(a,0))); }
-static ujs_val m_abs  (ujs_args *a) { return ujs_number(fabs (argnum(a,0))); }
-static ujs_val m_sqrt (ujs_args *a) { return ujs_number(sqrt (argnum(a,0))); }
-static ujs_val m_sin  (ujs_args *a) { return ujs_number(sin  (argnum(a,0))); }
-static ujs_val m_cos  (ujs_args *a) { return ujs_number(cos  (argnum(a,0))); }
-static ujs_val m_tan  (ujs_args *a) { return ujs_number(tan  (argnum(a,0))); }
-static ujs_val m_atan2(ujs_args *a) { return ujs_number(atan2(argnum(a,0), argnum(a,1))); }
-static ujs_val m_log  (ujs_args *a) { return ujs_number(log  (argnum(a,0))); }
-static ujs_val m_exp  (ujs_args *a) { return ujs_number(exp  (argnum(a,0))); }
-static ujs_val m_pow  (ujs_args *a) { return ujs_number(pow(argnum(a,0), argnum(a,1))); }
+static ujs_val m_floor(ujs_args *a) { return ujs_number(ujs_floor(argnum(a,0))); }
+static ujs_val m_ceil (ujs_args *a) { return ujs_number(ujs_ceil(argnum(a,0))); }
+static ujs_val m_abs  (ujs_args *a) { return ujs_number(ujs_fabs(argnum(a,0))); }
+static ujs_val m_sqrt (ujs_args *a) { return ujs_number(ujs_sqrt(argnum(a,0))); }
+static ujs_val m_sin  (ujs_args *a) { return ujs_number(ujs_sin(argnum(a,0))); }
+static ujs_val m_cos  (ujs_args *a) { return ujs_number(ujs_cos(argnum(a,0))); }
+static ujs_val m_tan  (ujs_args *a) { return ujs_number(ujs_tan(argnum(a,0))); }
+static ujs_val m_atan2(ujs_args *a) { return ujs_number(ujs_atan2(argnum(a,0), argnum(a,1))); }
+static ujs_val m_log  (ujs_args *a) { return ujs_number(ujs_log(argnum(a,0))); }
+static ujs_val m_exp  (ujs_args *a) { return ujs_number(ujs_exp(argnum(a,0))); }
+static ujs_val m_pow  (ujs_args *a) { return ujs_number(ujs_pow(argnum(a,0), argnum(a,1))); }
 
 static ujs_val m_round(ujs_args *a)
 {   /* JS rounds halves toward +Infinity, which is not C's round() for -0.5 */
     double d = argnum(a, 0);
     if (d != d) return ujs_number(d);
-    return ujs_number(floor(d + 0.5));
+    return ujs_number(ujs_floor(d + 0.5));
 }
 
 static ujs_val m_min(ujs_args *a)
@@ -673,12 +672,12 @@ static ujs_val n_toFixed(ujs_args *a)
     double scale = 1;
     if (p < 0 || p > 20) return ujs_throw_error(a->vm, "RangeError", "toFixed digits out of range");
     for (i = 0; i < p; i++) scale *= 10;
-    d = (d < 0 ? -1 : 1) * floor(fabs(d) * scale + 0.5) / scale;
+    d = (d < 0 ? -1 : 1) * ujs_floor(ujs_fabs(d) * scale + 0.5) / scale;
     if (!p) { ujs_num_to_str(d, buf, sizeof buf); return ujs_string(a->vm, buf, -1); }
     {   /* print with exactly p fractional digits */
-        double ad = fabs(d);
-        double ip = floor(ad);
-        double fr = floor((ad - ip) * scale + 0.5);
+        double ad = ujs_fabs(d);
+        double ip = ujs_floor(ad);
+        double fr = ujs_floor((ad - ip) * scale + 0.5);
         char ib[32], fb[32];
         int n = 0, k;
         u64 iv = (u64)ip, fv = (u64)fr;

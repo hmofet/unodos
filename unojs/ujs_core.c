@@ -4,9 +4,12 @@
  * ======================================================================== */
 #include "ujs_int.h"
 #include <stdlib.h>
+
+/* 128-bit integers: GCC/clang on x86-64, including the mingw cross-compiler
+ * pc64 builds with. Integer-only, so no FPU-state concerns in the kernel. */
+typedef unsigned __int128 ujs_u128;
 #include <stdarg.h>
 #include <stdio.h>
-#include <math.h>
 
 /* ---- raw memory ---------------------------------------------------------- */
 void *ujs_alloc_raw(ujs_vm *vm, size_t n)
@@ -28,7 +31,7 @@ void ujs_free_raw(ujs_vm *vm, void *p, size_t n)
  * Every collectable object is threaded on vm->objects. Allocation checks the
  * heap ceiling FIRST (collect, then refuse) so a runaway script meets a JS
  * RangeError instead of exhausting the OS heap - the availability half of the
- * security posture in docs/WEB-ENGINE-DESIGN.md §14. */
+ * security posture in docs/WEB-ENGINE-DESIGN.md section 14. */
 void *ujs_gc_alloc(ujs_vm *vm, size_t n, int type)
 {
     ujs_hdr *h;
@@ -403,6 +406,47 @@ ujs_env *ujs_env_new(ujs_vm *vm, ujs_env *parent, u32 n)
  * "0.1" and `0.1+0.2` still prints as "0.30000000000000004". */
 double ujs_strtod_impl(const char *s, const char **end);
 
+/* round(d * 10^p) computed EXACTLY, for p >= 0.
+ *
+ * A double is m * 2^e with m < 2^53, so d * 10^p = m * 10^p * 2^e is an exact
+ * rational that 128-bit integers can evaluate outright. Doing this in double
+ * arithmetic instead is what made sqrt(2) print as 1.4142135623730952: the
+ * true product is ...951.45, but as a double it cannot be represented and
+ * snaps to ...952 before the rounding step ever runs. Returns 0 when the
+ * value does not fit, and the caller falls back to scaling in double. */
+static int exact_scaled(double d, int p, u64 *out)
+{
+    u64 bits, m;
+    int be, e, i;
+    ujs_u128 num;
+    if (p < 0 || p > 38) return 0;
+    memcpy(&bits, &d, 8);
+    be = (int)((bits >> 52) & 0x7FF);
+    m = bits & 0x000FFFFFFFFFFFFFULL;
+    if (be == 0) e = -1074;                       /* subnormal: no implicit 1 */
+    else { m |= 1ULL << 52; e = be - 1075; }
+    if (!m) { *out = 0; return 1; }
+    num = (ujs_u128)m;
+    for (i = 0; i < p; i++) {
+        if (num > (~(ujs_u128)0) / 10u) return 0;
+        num *= 10u;
+    }
+    if (e >= 0) {
+        if (e > 60) return 0;
+        for (i = 0; i < e; i++) {
+            if (num > (~(ujs_u128)0) >> 1) return 0;
+            num <<= 1;
+        }
+    } else {
+        int sh = -e;
+        if (sh >= 127) return 0;
+        num = (num + ((ujs_u128)1 << (sh - 1))) >> sh;    /* round to nearest */
+    }
+    if (num >= ((ujs_u128)1 << 64)) return 0;
+    *out = (u64)num;
+    return 1;
+}
+
 static void fmt_digits(char *dst, const char *digits, int ndig, int e10)
 {
     /* place `digits` (ndig significant) with decimal exponent e10 into dst,
@@ -443,36 +487,81 @@ void ujs_num_to_str(double d, char *buf, size_t n)
     if (d > 1.7976931348623157e308) { strcpy(buf, "Infinity"); return; }
 
     /* exact integers below 2^53 print directly - no rounding questions */
-    if (d == floor(d) && d < 9007199254740992.0) {
+    if (d == ujs_floor(d) && d < 9007199254740992.0) {
         u64 iv = (u64)d; char t[24]; int k = 0;
         while (iv) { t[k++] = (char)('0' + (int)(iv % 10)); iv /= 10; }
         if (!k) t[k++] = '0';
         if ((size_t)k < n) { int i = 0; while (k) buf[i++] = t[--k]; buf[i] = 0; return; }
     }
 
-    /* shortest representation that reads back as the same double */
-    e10 = (int)floor(log10(d));
+    /* Shortest representation that reads back as the SAME double.
+     *
+     * Digits are extracted by scaling with powers of ten in double precision,
+     * which is exact only while the scaled integer stays under 2^53. Past that
+     * - i.e. for the 16th and 17th significant digits - the scaling can land
+     * one unit off, which is how sqrt(2) came out as 1.4142135623730952 where
+     * every other engine prints ...51. Rather than reach for a bignum dtoa,
+     * each candidate is parsed back with ujs_strtod_impl (which IS exact for
+     * these inputs) and its last-digit neighbours are tried too. A candidate
+     * that round-trips is correct BY DEFINITION, so the oracle turns an
+     * approximate extraction into an exact answer. */
+    e10 = (int)ujs_floor(ujs_log10(d));
     for (prec = 1; prec <= 17; prec++) {
-        double scaled, back; int i;
-        /* extract `prec` significant digits */
-        scaled = d / pow(10.0, (double)(e10 - prec + 1));
-        scaled = floor(scaled + 0.5);
-        if (scaled >= pow(10.0, (double)prec)) { e10++; continue; }  /* rounded up a digit */
-        { u64 iv = (u64)scaled; int k = 0; char t[24];
-          while (iv) { t[k++] = (char)('0' + (int)(iv % 10)); iv /= 10; }
-          if (!k) t[k++] = '0';
-          ndig = k; for (i = 0; i < k; i++) digits[i] = t[k - 1 - i]; }
-        while (ndig > 1 && digits[ndig - 1] == '0') ndig--;   /* trim */
-        fmt_digits(tmp, digits, ndig, e10);
-        back = ujs_strtod_impl(tmp, NULL);
-        if (back == d) { if (strlen(tmp) < n) strcpy(buf, tmp); else buf[0] = 0; return; }
+        double scaled;
+        int i, adj, shift = e10 - prec + 1;
+        /* Scale by MULTIPLYING with a positive power of ten where possible:
+         * dividing by an inexact 1e-16 loses the final digit outright. Very
+         * small or large values need two steps so the factor cannot overflow. */
+        if (shift <= 0) {
+            int k = -shift;
+            if (k > 300) scaled = (d * 1e300) * ujs_pow(10.0, (double)(k - 300));
+            else         scaled = d * ujs_pow(10.0, (double)k);
+        } else if (shift > 300) {
+            scaled = (d / 1e300) / ujs_pow(10.0, (double)(shift - 300));
+        } else {
+            scaled = d / ujs_pow(10.0, (double)shift);
+        }
+        scaled = ujs_floor(scaled + 0.5);
+        if (!(scaled >= 1.0) || scaled >= 18446744073709551616.0) continue;
+
+        /* The candidate integer must stay an INTEGER: a 17-digit value exceeds
+         * 2^53, so routing it through a double would snap it to its neighbour
+         * and undo the exact extraction above. */
+        {   u64 base_iv;
+            double lim = ujs_pow(10.0, (double)prec);
+            if (!exact_scaled(d, -shift, &base_iv) || base_iv < 1)
+                base_iv = (u64)scaled;
+            if ((double)base_iv >= lim * 10.0) { e10++; prec--; continue; }
+
+        for (adj = 0; adj < 3; adj++) {
+            static const int delta[3] = { 0, -1, 1 };
+            u64 iv = base_iv;
+            int k = 0;
+            char t[24];
+            double back;
+            if (delta[adj] < 0) { if (iv == 0) continue; iv -= 1; }
+            else if (delta[adj] > 0) iv += 1;
+            if (iv == 0) continue;
+            while (iv) { t[k++] = (char)('0' + (int)(iv % 10)); iv /= 10; }
+            ndig = k;
+            for (i = 0; i < k; i++) digits[i] = t[k - 1 - i];
+            while (ndig > 1 && digits[ndig - 1] == '0') ndig--;   /* trim */
+            fmt_digits(tmp, digits, ndig, e10);
+            back = ujs_strtod_impl(tmp, NULL);
+            if (back == d) {
+                if (strlen(tmp) < n) strcpy(buf, tmp); else buf[0] = 0;
+                return;
+            }
+        }
+        }
     }
     if (strlen(tmp) < n) strcpy(buf, tmp); else buf[0] = 0;
 }
 
-/* A small strtod: mantissa as u64 + decimal exponent, recombined with pow().
- * Exact for the <=15-digit inputs that dominate source text, and good enough
- * for the round-trip check above. */
+/* strtod. The mantissa is accumulated exactly as a u64 and combined with the
+ * decimal exponent in 128-bit integers where possible, so adjacent doubles
+ * never collapse onto the same value - which the shortest-round-trip search in
+ * ujs_num_to_str depends on being true. */
 double ujs_strtod_impl(const char *s, const char **end)
 {
     u64 mant = 0; int ndig = 0, e10 = 0, neg = 0, any = 0, esign, eval;
@@ -503,9 +592,58 @@ double ujs_strtod_impl(const char *s, const char **end)
             e10 += esign * eval;
         } else s = save;                        /* "1e" is just "1" then "e"  */
     }
-    r = (double)mant;
-    if (e10 > 0)      r *= pow(10.0, (double)e10);
-    else if (e10 < 0) r /= pow(10.0, (double)-e10);
+    /* mant * 10^e10, correctly rounded.
+     *
+     * The obvious `(double)mant * pow(10,e10)` is WRONG for 16-17 digit
+     * inputs: a mantissa above 2^53 loses its low bit the moment it becomes a
+     * double, so two adjacent doubles parse to the same value and the shortest
+     * round-trip search in ujs_num_to_str is fed a broken oracle. Doing the
+     * scaling in 128-bit integers keeps ~64 guard bits, so the single
+     * conversion to double at the end is the only rounding. */
+    if (e10 >= 0 && e10 <= 22 && mant != 0) {
+        ujs_u128 p = (ujs_u128)mant;
+        int k = e10, overflow = 0;
+        while (k-- > 0) {
+            if (p > (~(ujs_u128)0) / 10u) { overflow = 1; break; }
+            p *= 10u;
+        }
+        if (!overflow) { r = (double)p; if (end) *end = s; return neg ? -r : r; }
+        r = (double)mant;
+    } else if (e10 < 0 && e10 >= -22 && mant != 0) {
+        ujs_u128 den = 1;                          /* 10^21 does NOT fit a u64 */
+        int k = -e10, sh = 0;
+        ujs_u128 num = (ujs_u128)mant, q;
+        u64 pbits;
+        double scale2;
+        while (k-- > 0) den *= 10u;
+        /* NORMALIZE before dividing. A fixed `mant << 64` looks like 64 guard
+         * bits but only gives that many when the mantissa is already wide: for
+         * "1e-7" the mantissa is 1, the quotient came out ~41 bits, and the
+         * value printed back as 9.999999999994822e-8. Shifting the numerator as
+         * far left as 128 bits allow leaves the quotient ~70+ significant bits
+         * whatever the input looked like, so the single conversion to double
+         * is the only rounding that matters. */
+        while (num < ((ujs_u128)1 << 126) && sh < 126) { num <<= 1; sh++; }
+        q = num / den;
+        pbits = (u64)(1023 - sh) << 52;            /* 2^-sh as a double */
+        memcpy(&scale2, &pbits, 8);
+        r = (double)q * scale2;
+        if (end) *end = s;
+        return neg ? -r : r;
+    } else {
+        r = (double)mant;
+    }
+    /* 10^0..10^22 are exactly representable; scale in those chunks so the
+     * error does not compound the way repeated squaring would, and so a
+     * literal at the very top of the range stays finite. */
+    if (e10 > 0) {
+        while (e10 > 22 && r != 0) { r *= 1e22; e10 -= 22;
+                                     if (r > 1.7976931348623157e308) break; }
+        if (e10 > 0) r *= ujs_pow(10.0, (double)e10);
+    } else if (e10 < 0) {
+        while (e10 < -22 && r != 0) { r /= 1e22; e10 += 22; }
+        if (e10 < 0) r /= ujs_pow(10.0, (double)-e10);
+    }
     if (end) *end = s;
     return neg ? -r : r;
 }

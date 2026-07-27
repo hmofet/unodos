@@ -307,11 +307,11 @@ static void test_js(void)
      * and writes something". */
     { int r = js_run("document.write(2+3*4)", out, sizeof out, log, sizeof log);
       CHECK("S-JS-01", r == 0 && out[0] != 0); }
-    /* S-JS-02: string ops must not crash and must report success. NOTE: exact
-     * string OUTPUT diverges - `document.write("ab")` returns cleanly but does
-     * NOT put "ab" in `out` (document.write(number) does work: S-JS-01). Filed
-     * as the S-JS-05 string-literal divergence; the safety contract (clean
-     * return, no fault) is what's asserted here. */
+    /* S-JS-02: string ops must not crash and must report success. The old
+     * tree-walking js.c returned cleanly but did NOT put "ab" in `out` (the
+     * S-JS-05 string-literal divergence); the unojs engine writes it properly,
+     * so that divergence is gone. The assertion stays as the safety contract
+     * (clean return, no fault) - see unojs/UNOJS.md. */
     { int r = js_run("document.write(\"ab\")", out, sizeof out, log, sizeof log);
       CHECK("S-JS-02", r == 0); }
     /* S-JS-03: a syntax error reports, doesn't crash */

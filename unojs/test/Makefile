@@ -2,8 +2,8 @@
 # something from pc64/ or unoweb/, the separation has been broken.
 CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O1 -g
-SRC      = ../ujs_core.c ../ujs_lex.c ../ujs_comp.c ../ujs_vm.c ../ujs_lib.c ../ujs_api.c
-LDLIBS   = -lm
+SRC      = ../ujs_core.c ../ujs_math.c ../ujs_lex.c ../ujs_comp.c ../ujs_vm.c ../ujs_lib.c ../ujs_api.c
+LDLIBS   =
 
 run_tests: run_tests.c $(SRC) ../unojs.h ../ujs_int.h ../ujs_lex.h
 	$(CC) $(CFLAGS) -o $@ run_tests.c $(SRC) $(LDLIBS)

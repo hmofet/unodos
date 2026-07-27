@@ -328,6 +328,17 @@ const char *ujs_tok_name(int t)
         n[T_LPAREN]="("; n[T_RPAREN]=")"; n[T_LBRACE]="{"; n[T_RBRACE]="}";
         n[T_LBRACKET]="["; n[T_RBRACKET]="]"; n[T_SEMI]=";"; n[T_COMMA]=",";
         n[T_DOT]="."; n[T_COLON]=":"; n[T_ASSIGN]="="; n[T_ARROW]="=>";
+        n[T_PLUS]="+"; n[T_MINUS]="-"; n[T_STAR]="*"; n[T_SLASH]="/";
+        n[T_PERCENT]="%"; n[T_STARSTAR]="**"; n[T_PLUSPLUS]="++";
+        n[T_MINUSMINUS]="--"; n[T_EQ]="=="; n[T_NE]="!="; n[T_SEQ]="===";
+        n[T_SNE]="!=="; n[T_LT]="<"; n[T_LE]="<="; n[T_GT]=">"; n[T_GE]=">=";
+        n[T_ANDAND]="&&"; n[T_OROR]="||"; n[T_BANG]="!"; n[T_AMP]="&";
+        n[T_PIPE]="|"; n[T_CARET]="^"; n[T_TILDE]="~"; n[T_SHL]="<<";
+        n[T_SHR]=">>"; n[T_USHR]=">>>"; n[T_QUESTION]="?"; n[T_SPREAD]="...";
+        n[T_PLUSEQ]="+="; n[T_MINUSEQ]="-="; n[T_STAREQ]="*=";
+        n[T_SLASHEQ]="/="; n[T_PERCENTEQ]="%="; n[T_AMPEQ]="&=";
+        n[T_PIPEEQ]="|="; n[T_CARETEQ]="^="; n[T_SHLEQ]="<<=";
+        n[T_SHREQ]=">>="; n[T_USHREQ]=">>>="; n[T_ERROR]="bad input";
         for (i = 0; kw[i].w; i++) n[kw[i].t] = kw[i].w;
         init = 1;
     }
