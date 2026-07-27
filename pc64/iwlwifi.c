@@ -2023,7 +2023,8 @@ static void mvm_assoc_window(void)
     if (fw_has_capa(54)) {
         struct { u32 id_color, action, conf_id, dur, rep, interval; } c;
         memset(&c,0,sizeof c);
-        c.id_color = g_mac_id; c.action = 1 /*ADD*/; c.conf_id = 0 /*ASSOC*/; c.dur = 900;
+        c.id_color = 0;        /* ver<2: raw mac id (mvmvif->id), NOT color-encoded g_mac_id */
+        c.action = 1 /*ADD*/; c.conf_id = 0 /*ASSOC*/; c.dur = 900;
         send_cmd(GRP_MACCONF, 0x5, 0, &c, sizeof c);
         wait_notif(GRP_MACCONF, 0xFB, 0, 500);   /* SESSION_PROTECTION_NOTIF start */
     } else {
@@ -3183,13 +3184,15 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "auth", 4)) {
-        int r;
+        int r; u32 h;
         if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join first (need TX queue)"); return (int)strlen(out); }
-        /* NOTE: no session-protection here - SESSION_PROTECTION_CMD (0x5) LMAC-
-         * FATALs this fw, and TIME_QUOTA is skipped too (fw has DYNAMIC_QUOTA
-         * capa 44, so Linux sends neither). Airtime should be automatic; the
-         * open question is why the auth frame draws no response (TX-status
-         * visibility is the next diagnostic). */
+        /* session protection gives the binding a scheduled radio window so the
+         * auth exchange has airtime (join state saw 0 RX, not even beacons, so
+         * the radio was not parked). TIME_QUOTA stays skipped (DYNAMIC_QUOTA). */
+        mvm_assoc_window();
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: auth: after session-prot csr2808=%08x", h);
+        if (h) { strcpy(out, "err auth: session-prot asserted fw (iwl fwerr)"); return (int)strlen(out); }
         r = mvm_auth();
         uno_dbg_net_trace("wifi: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
         strcpy(out, r == 0 ? "ok auth: Open-System accepted" : (r < 0 ? "err auth: no response" : "err auth: AP rejected"));
