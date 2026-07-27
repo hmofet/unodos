@@ -1,10 +1,56 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-27 (round 20 - full setup works on metal; blocker isolated to the
-auth-window airtime command; SESSION_PROTECTION fix committed, unverified).
+Status: 2026-07-27 (round 21 - SESSION_PROTECTION is the right cmd + right length
+(24 B) but LMAC-FATALs with data1=0x400; airtime mechanism is the wall).
 Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
+
+## Round 21 (2026-07-27) — SESSION_PROTECTION verified on metal: right cmd, right length (24 B), but LMAC-FATALs (data1=0x400). Airtime is the wall.
+
+Reflashed the boot sticks (both, A/B) with each fix and re-drove the full chain.
+Two metal iterations pinned the airtime command precisely:
+
+1. **20-byte SESSION_PROTECTION → length assert.** `iwl auth` logs
+   `session-prot: MAC_CONF 0x5 len=20 capa54=1` then asserts; `iwl fwerr`: UMAC
+   ADVANCED_SYSASSERT `201002fd` on cmd `0x0305`, **`data2=0x18` (expected 24) /
+   `data3=0x14` (got 20)** — a pure length mismatch. So this fw wants **24 bytes**,
+   not the 20 of SESSION_PROTECTION_CMD_API_S_VER_1 as I'd first read. Linux
+   `struct iwl_session_prot_cmd` (VER_1 **and** VER_2) is in fact 6 u32 = 24 B
+   (id_and_color, action, conf_id, duration_tu, repetition_count, interval).
+2. **24-byte SESSION_PROTECTION → LMAC ADVANCED_SYSASSERT, `data1=0x400`.**
+   `len=24 capa54=1`, then LMAC `error_id=0x101f` (ADVANCED_SYSASSERT) pc
+   `004c0a3c`, cascading to UMAC `NMI_INTERRUPT_LMAC_FATAL` on cmd `0x0305` with
+   **`data1=0x00000400`**. This is the SAME `0x400` signature the original
+   session-prot attempts hit (85aeff9) — so the full real-join context did NOT
+   fix it, and the id was already ruled out then (both raw 0 and color-encoded
+   `g_mac_id` give `0x400`). Length + command + capability are all now correct;
+   the fw still rejects the request itself. `0x101f`/`0x400` are Intel-internal,
+   no open decode.
+
+**Where this leaves it:** the entire association SETUP is solid on metal (F12
+ALIVE, scan→24 APs→real BSSID, phy/mac/binding/add_sta/TX-queue all `csr2808=0`).
+The ONE remaining wall is reserving the on-channel auth window: TIME_EVENT_CMD
+is absent on this fw (SYSASSERT), and SESSION_PROTECTION_CMD — correct command,
+correct 24-byte length, capa54=1 — LMAC-FATALs with `data1=0x400`. Committed
+state: `iwlwifi.c` sends the correct 24-byte session-prot; it asserts.
+
+**Two candidate next steps (both need a fresh session; each metal iteration is a
+full USB reflash — the box boots a read-only USB ESP, see the rig note below):**
+1. **Test whether the auth window is even needed.** Make `iwl auth` SKIP
+   session-prot and just TX the auth frame, logging join-state RX counts. If the
+   radio is already parked on-channel by phy_ctxt+binding and auth draws a
+   response, session-prot was a red herring and association can proceed. If RX=0,
+   the window is genuinely required.
+2. **Ground-truth a full Linux ASSOCIATION trace on this Yoga** (not just the fw
+   load we already have): boot Ubuntu, arm `events/iwlwifi` (command trace, not
+   just iwlwifi_io), connect to NimmuNet, and capture the exact
+   SESSION_PROTECTION_CMD bytes + the mac-context/link state around it. Diff the
+   conf_id / id_and_color / duration and the preceding command sequence. The
+   `0x400` almost certainly means the mac-context or link is in a state the fw
+   won't schedule protection for — the association trace is the only way to see
+   what the working driver does differently. (git.kernel.org is Anubis-blocked;
+   use raw.githubusercontent.com/torvalds/linux for source.)
 
 ## Round 20 (2026-07-27) — association setup all works on metal; the wedge is the airtime command; SESSION_PROTECTION struct fixed (UNVERIFIED)
 
