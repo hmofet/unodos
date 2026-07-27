@@ -1121,6 +1121,7 @@ static void handle_eapol(const u8 *frame, int len);        /* fwd */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
 static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
 static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
+static int g_mgmt_diag, g_mgmt_diag_n;   /* log RX grp/cmd during auth/assoc wait */
 static int g_mgmt_rx_len;
 static u8  g_mgmt_rx_subtype;
 static int g_scanning;   /* beacons are only harvested while a scan is active */
@@ -1140,6 +1141,8 @@ static void rx_process_rb(const u8 *rb, int cap,
             if (g_scan_rb_total <= 12)
                 uno_dbg_net_trace("wifi: scan pkt#%d grp=%d cmd=%02x len=%d",
                                   g_scan_rb_total, pkt->group_id, pkt->cmd, plen); }
+        if (g_mgmt_diag && g_mgmt_diag_n < 20) { g_mgmt_diag_n++;
+            uno_dbg_net_trace("wifi: rxpkt grp=%d cmd=%02x len=%d", pkt->group_id, pkt->cmd, plen); }
         if (found && !*found && pkt->group_id == want_group && pkt->cmd == want_cmd) {
             *found = pkt->data; *found_len = plen - 4;
         }
@@ -2519,9 +2522,11 @@ static int mvm_auth(void)
     f[24] = 0; f[25] = 0;               /* auth algorithm = Open System */
     f[26] = 1; f[27] = 0;               /* auth transaction seq = 1 */
     f[28] = 0; f[29] = 0;               /* status code = 0 */
-    g_mgmt_rx_len = 0;
+    g_mgmt_rx_len = 0; g_mgmt_diag = 1; g_mgmt_diag_n = 0;
     tx_enqueue(f, 30, 1);
-    if (wait_mgmt(11, 800) < 0) return -1;
+    { int rc = wait_mgmt(11, 800); g_mgmt_diag = 0;
+      uno_dbg_net_trace("wifi: auth: %d rx pkts seen during wait, mgmt=%d", g_mgmt_diag_n, rc==0);
+      if (rc < 0) return -1; }
     return g_mgmt_rx[24 + 4] | (g_mgmt_rx[24 + 5] << 8);   /* auth resp status */
 }
 
@@ -3180,6 +3185,11 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     if (!strncmp(line, "auth", 4)) {
         int r;
         if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join first (need TX queue)"); return (int)strlen(out); }
+        /* NOTE: no session-protection here - SESSION_PROTECTION_CMD (0x5) LMAC-
+         * FATALs this fw, and TIME_QUOTA is skipped too (fw has DYNAMIC_QUOTA
+         * capa 44, so Linux sends neither). Airtime should be automatic; the
+         * open question is why the auth frame draws no response (TX-status
+         * visibility is the next diagnostic). */
         r = mvm_auth();
         uno_dbg_net_trace("wifi: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
         strcpy(out, r == 0 ? "ok auth: Open-System accepted" : (r < 0 ? "err auth: no response" : "err auth: AP rejected"));
