@@ -467,13 +467,30 @@ static void choose_firmware(void)
  * the documented name; WIFI.TXT is accepted too - it is what the flasher's
  * developer-options folder copy stages from the NAS creds template. */
 static char g_cfgname[12];
+/* true if the named file on `vol` contains an "ssid=" line (real credentials,
+ * not just a stress-only DEBUG.CFG). */
+static int file_has_ssid(int vol, const char *name)
+{
+    static u8 b[256]; long n = uno_fs_read(vol, name, b, (long)sizeof b - 1); int i;
+    if (n <= 0) return 0;
+    for (i = 0; i + 5 <= n; i++)
+        if (b[i]=='s' && b[i+1]=='s' && b[i+2]=='i' && b[i+3]=='d' && b[i+4]=='=')
+            return 1;
+    return 0;
+}
 static int firmware_volume(void)
 {
-    int n = uno_fs_volumes(), i;
+    /* DEBUG.CFG can carry the Wi-Fi creds too (debug builds); prefer whichever
+     * cfg file actually has an ssid= line so a stress-only DEBUG.CFG or an empty
+     * WIFI.CFG never shadows the real credentials. */
+    static const char *cand[3] = { "DEBUG.CFG", "WIFI.CFG", "WIFI.TXT" };
+    int n = uno_fs_volumes(), i, j;
     for (i = 0; i < n; i++)
         if (uno_fs_kind(i) == 2 || uno_fs_kind(i) == 1) {   /* firmware SFS / native FAT */
-            if (uno_fs_size(i, "WIFI.CFG") > 0) { strcpy(g_cfgname, "WIFI.CFG"); return i; }
-            if (uno_fs_size(i, "WIFI.TXT") > 0) { strcpy(g_cfgname, "WIFI.TXT"); return i; }
+            for (j = 0; j < 3; j++)
+                if (uno_fs_size(i, cand[j]) > 0 && file_has_ssid(i, cand[j])) {
+                    strcpy(g_cfgname, cand[j]); return i;
+                }
         }
     return -1;
 }
@@ -2018,6 +2035,30 @@ static void mvm_time_quota(void)
 }
 
 /* SESSION_PROTECTION_CMD (MAC_CONF 0x5) or TIME_EVENT_CMD — assoc window */
+/* TIME_EVENT_CMD (0x29) reserving an association window - the airtime path for
+ * fw that LMAC-FATALs on SESSION_PROTECTION_CMD. Field values mirror
+ * iwl_mvm_protect_session: id=TE_BSS_STA_AGGRESSIVE_ASSOC(0), interval=1,
+ * policy = HOST_EVENT START|END | START_IMMEDIATELY. Waits for
+ * TIME_EVENT_NOTIFICATION (LEGACY 0x2a) = the window has begun. */
+static void mvm_te_assoc(void)
+{
+    struct __attribute__((packed)) {
+        u32 id_color, action, id, apply_time, max_delay, depends, interval, duration;
+        u8 repeat, max_frags; u16 policy;
+    } c;
+    memset(&c, 0, sizeof c);
+    c.id_color = g_mac_id;                 /* FW_CMD_ID_AND_COLOR(mac id, color) */
+    c.action = 1;                          /* FW_CTXT_ACTION_ADD */
+    c.id = 0;                              /* TE_BSS_STA_AGGRESSIVE_ASSOC */
+    c.interval = 1;
+    c.duration = 900;                      /* TU */
+    c.repeat = 1;
+    c.max_frags = 0;                       /* TE_V2_FRAG_NONE */
+    c.policy = (1u<<0)|(1u<<1)|(1u<<11);   /* NOTIF START|END | START_IMMEDIATELY */
+    send_cmd(GRP_LONG, 0x29, 0, &c, (int)sizeof c);
+    wait_notif(GRP_LEGACY, 0x2a, 0, 500);
+}
+
 static void mvm_assoc_window(void)
 {
     if (fw_has_capa(54)) {
@@ -3186,13 +3227,13 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     if (!strncmp(line, "auth", 4)) {
         int r; u32 h;
         if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join first (need TX queue)"); return (int)strlen(out); }
-        /* NOTE: session protection (mvm_assoc_window) LMAC-FATALs this fw even
-         * with the raw-mac-id + ver-1 cmd, so it is NOT called here - it would
-         * crash the box (needs a power cycle). Consequence: the binding gets no
-         * scheduled radio window, the radio is not parked (0 RX in join state),
-         * so auth draws no response. Resolving the airtime/radio-scheduling is
-         * the open blocker (see WIFI handoff / memory). */
-        (void)h;
+        /* airtime for the auth window via TIME_EVENT_CMD (SESSION_PROTECTION_CMD
+         * LMAC-FATALs this fw). Without a scheduled window the radio is not
+         * parked (0 RX in join state). */
+        mvm_te_assoc();
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: auth: after time-event csr2808=%08x", h);
+        if (h) { strcpy(out, "err auth: time-event asserted fw (iwl fwerr)"); return (int)strlen(out); }
         r = mvm_auth();
         uno_dbg_net_trace("wifi: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
         strcpy(out, r == 0 ? "ok auth: Open-System accepted" : (r < 0 ? "err auth: no response" : "err auth: AP rejected"));
