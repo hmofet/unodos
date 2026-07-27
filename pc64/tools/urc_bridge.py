@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """urc_bridge - headless file-driven driver for the UnoDOS remote channel.
 
-    ~/urc/session.log   every LOG/MSG/RSP frame, timestamped
-    ~/urc/cmd.txt       append one command per line; the bridge sends it
+    <dir>/session.log   every LOG/MSG/RSP frame, timestamped
+    <dir>/cmd.txt       append one command per line; the bridge sends it
                           "/msg <text>"                    free-form message
                           "push <vol> <path> <localfile>"  A/B OS update (chunked)
                           anything else                    a URC command (iwl/reboot/vols/...)
-Usage: python3 urc_bridge.py [port]
+Usage: python3 urc_bridge.py [port] [dir]
+
+`dir` (default ~/urc) is this bridge's OWN session.log + cmd.txt, so several
+bridges can run at once - one per box - without sharing a command file (writing
+a command to a shared cmd.txt would drive every connected box). Give each box
+its own dir, e.g.  urc_bridge.py 5100 ~/urc-zima  and  urc_bridge.py 5098 ~/urc-yoga.
 
 Robustness note - recovering a link the box drops without a FIN
 ---------------------------------------------------------------
@@ -30,7 +35,7 @@ import os, sys, time, datetime, socket
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from unoauto_remote import UnoAutoLink
 
-HOME = os.path.expanduser("~/urc")
+HOME = os.path.expanduser("~/urc")   # default; overridden by argv[2] in main()
 LOG = os.path.join(HOME, "session.log")
 CMD = os.path.join(HOME, "cmd.txt")
 
@@ -64,7 +69,12 @@ def established_to_port(port):
 
 
 def main():
+    global HOME, LOG, CMD
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5099
+    if len(sys.argv) > 2:                 # per-box dir: own session.log + cmd.txt
+        HOME = os.path.expanduser(sys.argv[2])
+        LOG = os.path.join(HOME, "session.log")
+        CMD = os.path.join(HOME, "cmd.txt")
     os.makedirs(HOME, exist_ok=True)
     open(CMD, "a").close()
     link = UnoAutoLink("0.0.0.0", port)
