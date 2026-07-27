@@ -28,12 +28,22 @@ and break the `csc` single-exe model; WinForms keeps the repo's toolchain.)
 
 ## Use
 
-pc64 dials **out** to a listener, so the client **listens** and you point the
-device at it:
+Two ways to connect, depending on which end dials:
+
+**A. The device dials you (default).** pc64 dials **out** to a listener, so the
+client **listens**:
 
 1. Run `UnoRemote.exe`, set the port (default 5099), click **Listen**.
 2. On the device stick's `DEBUG.CFG` (formerly `STRESS.CFG`), set `remote=<this-pc-ip>:5099`
-   (QEMU SLIRP guest: `remote=10.0.2.2:5099`) and boot a **debug** build.
+   (QEMU SLIRP guest: `remote=10.0.2.2:5099`) — or just `discover` to skip the
+   address — and boot a **debug** build.
+
+**B. You dial the device (`Scan…`).** If the device's `DEBUG.CFG` has `listen`
+(server mode), click **Scan…**: the client broadcasts on the LAN, lists the
+boxes in listen mode, and dials the one you pick — no address to type, and you
+choose which box. (Then continue at step 3 below.)
+
+Once connected either way:
 3. The desktop appears. Click and type on the view to drive the device. Use
    **Scale** (1x…4x) to trade resolution for bandwidth on a busy/hi-res screen.
 4. **Record** captures the session to `Videos\UnoRemote\`: an `.mp4` if ffmpeg

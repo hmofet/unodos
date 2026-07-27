@@ -10,6 +10,7 @@
  *  device's DEBUG.CFG (`remote=<ip>:<port>`) and boot a debug build.
  */
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -115,6 +116,7 @@ namespace UnoRemote
         private readonly ScreenView _view = new ScreenView();
         private readonly TextBox _port = new TextBox { Text = "5099", Width = 60 };
         private readonly Button _listen = new Button { Text = "Listen", Width = 70 };
+        private readonly Button _scan = new Button { Text = "Scan…", Width = 60 };
         private readonly Button _record = new Button { Text = "Record", Width = 70, Enabled = false };
         private readonly CheckBox _srvCap = new CheckBox { Text = "on device", AutoSize = true, Padding = new Padding(4, 8, 2, 0) };
         private readonly ComboBox _scale = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -145,6 +147,7 @@ namespace UnoRemote
             bar.Controls.Add(new Label { Text = "Port:", AutoSize = true, Padding = new Padding(4, 8, 2, 0) });
             bar.Controls.Add(_port);
             bar.Controls.Add(_listen);
+            bar.Controls.Add(_scan);
             _scale.Items.AddRange(new object[] { "1x (full)", "2x (half)", "3x (third)", "4x (quarter)" });
             _scale.SelectedIndex = 0;
             bar.Controls.Add(new Label { Text = "Scale:", AutoSize = true, Padding = new Padding(8, 8, 2, 0) });
@@ -171,6 +174,7 @@ namespace UnoRemote
 
             // ---- wiring ----
             _listen.Click += (s, e) => ToggleListen();
+            _scan.Click += (s, e) => ScanAndConnect();
             _record.Click += (s, e) => ToggleRecord();
             _send.Click += (s, e) => SendRaw();
             _cmd.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { SendRaw(); e.SuppressKeyPress = true; } };
@@ -209,6 +213,62 @@ namespace UnoRemote
             _status.Text = "listening on :" + port + " - boot the device";
             Log("listening on 0.0.0.0:" + port + "  (QEMU SLIRP guest: remote=10.0.2.2:" + port + ")");
             Log("zero-config: set 'discover' in the device DEBUG.CFG and it will find this PC automatically.");
+        }
+
+        // ---- scan for boxes in LISTEN mode, then dial into the chosen one ----
+        // The reverse of Listen: a box with `listen` in its DEBUG.CFG waits for us
+        // to dial IN. Broadcast a probe, list the boxes that answer, and connect.
+        private void ScanAndConnect()
+        {
+            _scan.Enabled = false; _status.Text = "scanning...";
+            Log("scanning for UnoDOS boxes in listen mode (UDP :5400)...");
+            Fire(() =>
+            {
+                List<UrcLink.DiscoveredBox> boxes = null;
+                try { boxes = _link.Scan(1600); }
+                catch (Exception ex) { AppendLog("scan failed: " + ex.Message); }
+                if (IsDisposed) return;
+                BeginInvoke((Action)(() =>
+                {
+                    _scan.Enabled = true; _status.Text = _link.Connected ? "connected" : "idle";
+                    if (boxes == null) return;
+                    if (boxes.Count == 0)
+                    { Log("no listening boxes found - a box needs 'listen' in its DEBUG.CFG."); return; }
+                    Log("found " + boxes.Count + " listening box(es):");
+                    foreach (var b in boxes) Log("  " + b);
+                    var chosen = PickBox(boxes);
+                    if (chosen == null) return;
+                    Log("dialing in to " + chosen.Ip + ":" + chosen.Port + " ...");
+                    Fire(() =>
+                    {
+                        try { _link.Connect(chosen.Ip, chosen.Port); }
+                        catch (Exception ex) { AppendLog("connect failed: " + ex.Message); }
+                    });
+                }));
+            });
+        }
+
+        // A small modal picker for the discovered boxes.
+        private UrcLink.DiscoveredBox PickBox(List<UrcLink.DiscoveredBox> boxes)
+        {
+            using (var dlg = new Form())
+            {
+                dlg.Text = "Connect to a box"; dlg.Width = 400; dlg.Height = 280;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MinimizeBox = false; dlg.MaximizeBox = false;
+                var list = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+                foreach (var b in boxes) list.Items.Add(b);
+                if (list.Items.Count > 0) list.SelectedIndex = 0;
+                var row = new Panel { Dock = DockStyle.Bottom, Height = 38, Padding = new Padding(4) };
+                var ok = new Button { Text = "Connect", DialogResult = DialogResult.OK, Width = 90, Dock = DockStyle.Right };
+                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 90, Dock = DockStyle.Right };
+                row.Controls.Add(ok); row.Controls.Add(cancel);
+                list.DoubleClick += (s, e) => { dlg.DialogResult = DialogResult.OK; dlg.Close(); };
+                dlg.Controls.Add(list); dlg.Controls.Add(row);
+                dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+                return dlg.ShowDialog(this) == DialogResult.OK ? list.SelectedItem as UrcLink.DiscoveredBox : null;
+            }
         }
 
         private void OnConnected()
