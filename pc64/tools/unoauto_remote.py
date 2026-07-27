@@ -28,6 +28,47 @@ import socket, threading, itertools, sys
 from contextlib import contextmanager
 
 
+def qoi_decode(data):
+    """Decode a QOI byte string to raw RGBA (4 bytes/pixel), matching the encoder
+    in pc64/unoauto_screen.c. Used by `UnoAutoLink.screen_grab`. Pure-Python."""
+    import struct
+    if data[:4] != b"qoif":
+        raise ValueError("not a QOI stream")
+    w, h, _ch, _cs = struct.unpack(">IIBB", data[4:14])
+    out = bytearray(w * h * 4)
+    idx = [(0, 0, 0, 0)] * 64
+    r, g, b, a = 0, 0, 0, 255
+    p, end, o = 14, len(data) - 8, 0
+    total = w * h * 4
+    while o < total:
+        if p < end:
+            op = data[p]; p += 1
+            if op == 0xFE:                       # RGB
+                r, g, b = data[p], data[p + 1], data[p + 2]; p += 3
+            elif op == 0xFF:                     # RGBA
+                r, g, b, a = data[p], data[p + 1], data[p + 2], data[p + 3]; p += 4
+            elif (op & 0xC0) == 0x00:            # INDEX
+                r, g, b, a = idx[op & 0x3F]
+            elif (op & 0xC0) == 0x40:            # DIFF
+                r = (r + ((op >> 4) & 3) - 2) & 0xFF
+                g = (g + ((op >> 2) & 3) - 2) & 0xFF
+                b = (b + (op & 3) - 2) & 0xFF
+            elif (op & 0xC0) == 0x80:            # LUMA
+                b2 = data[p]; p += 1
+                vg = (op & 0x3F) - 32
+                r = (r + vg - 8 + ((b2 >> 4) & 0x0F)) & 0xFF
+                g = (g + vg) & 0xFF
+                b = (b + vg - 8 + (b2 & 0x0F)) & 0xFF
+            else:                                # RUN (length has a -1 bias)
+                for _ in range((op & 0x3F) + 1):
+                    out[o:o + 4] = bytes((r, g, b, a)); o += 4
+                idx[(r * 3 + g * 5 + b * 7 + a * 11) & 63] = (r, g, b, a)
+                continue
+            idx[(r * 3 + g * 5 + b * 7 + a * 11) & 63] = (r, g, b, a)
+        out[o:o + 4] = bytes((r, g, b, a)); o += 4
+    return bytes(out)
+
+
 class _SerialStream:
     """Adapt a pyserial Serial to the tiny socket-shaped interface the reader and
     writer use (recv()/sendall()/close()), so the exact same URC line protocol
@@ -381,6 +422,40 @@ class UnoAutoLink:
         import base64
         return self.command("writesec", disk, format(lba, "x"),
                             base64.b64encode(data).decode(), **k)
+
+    # ---- remote desktop: screen grab (the OUT half; key/pointer are the IN) --
+    def screen_info(self, **k):
+        """`screen info` -> (width, height) of the device desktop."""
+        r = self.command("screen", "info", **k)
+        p = r[0].split() if r else []
+        return (int(p[0]), int(p[1])) if len(p) >= 2 else (0, 0)
+
+    SCREEN_READ_LEN = 2880               # matches SCREEN_READ_MAX on the device
+
+    def screen_grab(self, scale=1, **k):
+        """`screen grab [scale]` stages a frame on the device and returns its
+        `frame <w> <h> qoi <n>` header; the QOI payload is then pulled in bounded
+        `screen read <off> <len>` slices (a whole frame is far too big for one URC
+        response). Returns (width, height, rgba_bytes), decoded to raw RGBA
+        (4 bytes/pixel). Pure-Python, no deps."""
+        import base64
+        to = k.pop("timeout", 15.0)
+        r = self.command("screen", "grab", int(scale), timeout=to, **k)
+        if not r:
+            raise RuntimeError("empty screen reply")
+        hdr = r[0].split()                       # frame W H qoi N
+        if len(hdr) < 5 or hdr[0] != "frame":
+            raise RuntimeError("bad frame header: %r" % r[0])
+        w, h, n = int(hdr[1]), int(hdr[2]), int(hdr[4])
+        buf = bytearray()
+        while len(buf) < n:
+            rd = self.command("screen", "read", format(len(buf), "x"),
+                              self.SCREEN_READ_LEN, timeout=to)
+            part = base64.b64decode("".join(rd))
+            if not part:
+                raise RuntimeError("screen read returned nothing at off %d" % len(buf))
+            buf += part
+        return w, h, qoi_decode(bytes(buf[:n]))
 
     # ---- receiving --------------------------------------------------------
     def _accept_loop(self):

@@ -1003,3 +1003,34 @@ manifest and gets its declared caps at launch.
 Gate: `u.mtest()` proves a signed manifest grants a guest proc.enum at launch,
 the grant drops on close, and a forged signature grants nothing
 (`tools/unoscript_qemu.py` asserts `u.mtest()==0`, alongside `u.e2e()==0`).
+
+---
+
+## 2026-07-26 — unoautomate: CLAIM remote-desktop `screen` verb + `pc64/remote/` client (I hold both this task)
+
+**CLAIM (AGENTS §4), no action needed from others.** Building remote desktop on
+URC. Both pieces are in-lane or mine this task, so this is a heads-up, not a
+request:
+
+- **`unoauto_remote.c`** — new **`screen [info|grab [scale]]`** verb: the OUT
+  half of remote desktop (`key`/`pointer` are the IN half). `screen grab`
+  QOI-encodes the framebuffer and streams it base64 via a new `rsp_b64_stream`
+  (360-byte binary chunks so each interior base64 line is padding-free and the
+  client can concatenate before decoding). Read-only, no `arm` gate.
+- **`unoauto_screen.c` / `.h`** — new in-lane files (the `unoauto*` glob): a
+  self-contained QOI *encoder* over `fb[]` (unomedia ships decoders only, and is
+  a different lane, so we don't reach into it). `UNO_DEBUG`-gated; appended to
+  `build.sh` next to `unoauto_serial.o`.
+- **`unoauto_remote.py`** — `screen_info`/`screen_grab` + a pure-Python
+  `qoi_decode`, mirroring the client so scripts can screenshot the device.
+- **`pc64/remote/`** — NEW subsystem `unoremote` (registry row added to AGENTS.md
+  this commit): the WinForms GUI client `UnoRemote.exe` (URC ported to C# in
+  `Urc.cs`, QOI decoder `Qoi.cs`, recording `Recorder.cs`). Wraps URC verbs in a
+  GUI; live view + input + session recording. Follow-up slices: clickable
+  command-GUI for every verb, dirty-rect delta streaming, server-side capture,
+  Mac (Avalonia) client.
+
+Verified host-side (no hardware): C encoder ↔ C# decoder ↔ Python decoder are
+pixel-exact, and a mock-device round-trip drives the C# `Urc` client through
+info + chunked grab + decode + pointer. On-device gate = `tools/screen_qemu.py`
+(needs `UNO_DEBUG=1 ./build.sh` + WSL/QEMU).

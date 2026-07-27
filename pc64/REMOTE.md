@@ -9,7 +9,8 @@ as the rest of unoautomate); in production every entry point compiles away.
 ## Shape
 
 **pc64 dials OUT** to a listener on the dev PC. You put the dev PC's address in
-the stick's `STRESS.CFG`:
+the stick's `DEBUG.CFG` (renamed from `STRESS.CFG` on 2026-07-26; the build ships
+a `DEBUG.CFG`, so put keys there — a `STRESS.CFG` is now shadowed by it):
 
 ```
 remote=<ip>:<port>       # static address (TCP over the LAN)
@@ -50,7 +51,7 @@ instead — a serial cable to the dev PC, no working network required. This is a
 transport backend (`unoauto_serial.c`) behind the same framing/dispatch/queue
 layer; every verb works identically over serial.
 
-Arm it from `STRESS.CFG` (instead of `remote=` / `discover`):
+Arm it from `DEBUG.CFG` (instead of `remote=` / `discover`):
 
 ```
 remote-serial            # URC over COM1 (0x3F8) @ 115200 8N1
@@ -110,6 +111,9 @@ unchanged.
 | `log <text>` | `unoauto_log(SCRIPT, …)` | `ok logged` |
 | `key <scan> <uni> [ctrl]` | inject a keypress | `ok` |
 | `pointer <x> <y> <btn>` | inject a pointer event | `ok` |
+| `screen [info]` | desktop geometry for a remote-desktop client | `ok <w> <h> rgba` |
+| `screen grab [scale]` | snapshot + QOI-encode the framebuffer (optional nearest-neighbour downscale by `scale`) and **stage** it on-device. The OUT half of remote desktop; pairs with `key`/`pointer` (the IN half) | `ok frame <w> <h> qoi <n>` then `end` / `err too-big (raise scale)` |
+| `screen read <off-hex> [len]` | read `len` (≤2880) bytes of the staged QOI frame at `<off>`, base64, streamed as `ok` lines (like `readsec`). A whole frame is far larger than one URC response, so the client pulls it in slices | base64 `ok` lines then `end` / `err no-frame` |
 | `apps` | count of launchable apps | `ok <n>` |
 | `launch <n>` | launch app `n` | `ok launched` / `err no-app` |
 | `close` | close the top window | `ok` |
@@ -160,6 +164,33 @@ unchanged.
 > (unodevices pending)` rather than `err unknown-verb`, and upgrades itself the
 > moment the strong symbol links in. The listing is capped at the 4 KB report
 > buffer. Read-only by construction: no `arm` gate, nothing is written.
+
+## Remote desktop (`screen` + `key`/`pointer`)
+
+URC already injects input (`key`, `pointer`); `screen` is the missing OUT half,
+so the whole loop — see the device screen, click and type on it — rides the one
+channel. `screen grab` snapshots the software framebuffer (`fb.h` `fb[]`),
+QOI-encodes it (lossless, tiny on UnoDOS's flat-colour desktop; encoder in
+`unoauto_screen.c`), and streams it base64 exactly like `readsec`. A client polls
+it VNC-style at a target FPS and maps view coordinates back to framebuffer
+coordinates for `pointer`/`key`.
+
+```python
+link = UnoAutoLink(port=5099); link.listen(); link.wait_connected()
+w, h = link.screen_info()                 # (640, 480)
+W, H, rgba = link.screen_grab(scale=1)    # decoded to raw RGBA, 4 bytes/pixel
+link.pointer(W // 2, H // 2, 1)           # click the middle of the screen
+```
+
+`scale` downsamples nearest-neighbour (`2` => half w/h, a quarter of the pixels)
+so a busy or hi-res screen still fits the device's 2 MB encode buffer; an
+overflow replies `err too-big (raise scale)`. **TCP only** — a frame is far too
+large for the 16-byte serial FIFO (see the transport note above).
+
+The GUI client is **`pc64/remote/`** (`UnoRemote.exe`, a WinForms single-exe built
+by `build-remote.ps1`): live view, mouse/keyboard forwarding, session recording
+(ffmpeg → MP4, else a PNG frame sequence), and a raw-command box. See
+`pc64/remote/README.md`.
 
 ## The guard (dead-man's switch for risky verbs)
 
@@ -388,8 +419,13 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
   the log stream, a `probe` round-trip, `py print(6*7)`→`42`, and `launch`→
   window. From a SLIRP guest the host is `10.0.2.2`, so that address reaches
   the listener on the host's loopback.
+- **`tools/screen_qemu.py`** - end-to-end gate for the `screen` verb: boots the
+  debug image (reusing `remote_qemu.py`'s harness), asserts `screen info` returns
+  a sane size and `screen grab` decodes to a non-blank `w*h*4` RGBA frame, and
+  drops it to `/tmp/urc_screen.ppm` to eyeball. `qoi_decode` in
+  `unoauto_remote.py` is the pure-Python decoder it (and any script) uses.
 - **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
-  boots with a `remote-serial` STRESS.CFG and **no NIC device**, driven over the
+  boots with a `remote-serial` DEBUG.CFG and **no NIC device**, driven over the
   guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
   (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2 — see the console-UART
   caveat under "NIC-independent transport" above.

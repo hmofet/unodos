@@ -32,6 +32,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | Subsystem | Contract / spec | Root files |
 |---|---|---|
 | unoautomate (harness + URC remote channel) | `HARNESS-POLICY.md`, `REMOTE.md`, `unoauto.h` | `unoauto*`, `unoauto_remote*`, `upy_port/mod_unoauto.c` |
+| unoremote (host GUI remote-desktop client) | `pc64/remote/README.md` | `pc64/remote/*` |
 | unonet (ARP/IP/TCP/UDP/DHCP/DNS/TLS/sockets/discovery) | `NETSTACK.md`, `NETWORK.md` | `net.*`, `tls.*`, `tls_ca.*`, `netsock.h`, `netdisc.*` |
 | NIC drivers (below the `uno_nic_t` seam) | per driver | `e1000*`, `e1000e*`, `igb*`, `r8169*`, `ax88179*`, `rtl8152*`, `iwlwifi*`, `rtwifi*`, `mrvlwifi*` |
 | unostorage (GPT/ESP/FAT authoring) | `STORAGE.md` | `unostorage.*`, `uno_fat_mkfs` in `fat.c` |

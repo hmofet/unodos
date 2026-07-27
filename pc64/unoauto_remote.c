@@ -15,6 +15,7 @@
 #include "iwlwifi.h"        /* iwl_dbg_cmd - the `iwl` verb (F12 live debug) */
 #include "unostorage.h"     /* disk authoring (brings blkdev.h): the disk verbs */
 #include "unoauto_serial.h" /* 16550 UART backend: the NIC-independent transport */
+#include "unoauto_screen.h" /* framebuffer QOI grab: the `screen` verb (remote desktop) */
 
 #ifdef UNO_DEBUG
 
@@ -767,6 +768,75 @@ __attribute__((weak)) int uno_hw_wdt_cmd(const char *line, char *out, int cap)
 static unsigned g_guard_token;
 
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
+/* ---- screen grab (remote desktop, OUT half) ------------------------------ */
+/* A frame is STAGED on-device by `screen grab`, then the client pulls it in
+ * bounded `screen read <off> <len>` slices - the readsec idiom. This is
+ * essential: dispatch_cmd runs to completion appending the whole reply to the
+ * 8 KB g_tx before flush_tx drains it, and tx_putn silently drops past 8 KB, so
+ * a whole frame's base64 (well over 8 KB) can NOT be streamed in one response.
+ * Each `read` slice stays comfortably inside g_tx. */
+#define SCREEN_MAX (2 * 1024 * 1024)   /* QOI scratch; flat desktop fits at native res */
+#define SCREEN_READ_MAX 2880           /* per-`read` payload cap (8*360): base64 fits g_tx */
+static unsigned char g_screen[SCREEN_MAX];   /* separate from g_put[] so a grab can't
+                                                clobber an in-flight A/B upload */
+static int g_screen_len;               /* staged frame size, 0 = none staged */
+
+/* Stream binary `data` as base64 in `ok` lines, 360 raw bytes -> 480 chars each
+ * (the same 480-char budget rsp_long uses). Each 360-byte chunk is a multiple
+ * of 3, so its base64 has no interior '=' padding and the client can just
+ * concatenate the lines before decoding. Mirrors do_readsec's b64 spill. */
+static void rsp_b64_stream(const char *id, const unsigned char *data, int n)
+{
+    char line[512]; int off = 0;
+    while (off < n) {
+        int chunk = n - off;
+        if (chunk > 360) chunk = 360;
+        if (b64_encode(data + off, chunk, line, (int)sizeof line) < 0) return;
+        rsp(id, "ok", line);
+        off += chunk;
+    }
+}
+
+static void do_screen(const char *id, char *args)
+{
+    char *sub = tok(&args);
+    int w = 0, h = 0;
+    if (!sub || !strcmp_(sub, "info")) {          /* `screen` / `screen info` */
+        char t[48]; SB b;
+        uno_screen_size(&w, &h);
+        sb_init(&b, t, sizeof t);
+        sb_i(&b, w); sb_c(&b, ' '); sb_i(&b, h); sb_s(&b, " rgba"); t[b.len] = 0;
+        rsp(id, "ok", t); rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(sub, "grab")) {                  /* `screen grab [scale]` - stage it */
+        char *sc = tok(&args);
+        int scale = sc ? (int)atol_(sc) : 1;
+        int n = uno_screen_grab_qoi(scale, g_screen, (int)sizeof g_screen, &w, &h);
+        if (n < 0) { g_screen_len = 0; rsp(id, "err", "too-big (raise scale)"); rsp(id, "end", 0); return; }
+        g_screen_len = n;
+        {   /* header only: frame <w> <h> qoi <nbytes>; payload via `screen read` */
+            char t[64]; SB b; sb_init(&b, t, sizeof t);
+            sb_s(&b, "frame "); sb_i(&b, w); sb_c(&b, ' '); sb_i(&b, h);
+            sb_s(&b, " qoi "); sb_i(&b, n); t[b.len] = 0;
+            rsp(id, "ok", t);
+        }
+        rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(sub, "read")) {                  /* `screen read <off-hex> [len]` */
+        char *ao = tok(&args), *al = tok(&args);
+        long off = ao ? (long)parse_hex(ao) : 0;
+        int len = al ? (int)atol_(al) : SCREEN_READ_MAX;
+        if (g_screen_len <= 0) { rsp(id, "err", "no-frame (grab first)"); rsp(id, "end", 0); return; }
+        if (off < 0 || off > g_screen_len) { rsp(id, "err", "bad-offset"); rsp(id, "end", 0); return; }
+        if (len < 1) len = 1;
+        if (len > SCREEN_READ_MAX) len = SCREEN_READ_MAX;
+        if (off + len > g_screen_len) len = (int)(g_screen_len - off);
+        rsp_b64_stream(id, g_screen + off, len);
+        rsp(id, "end", 0); return;
+    }
+    rsp(id, "err", "usage: screen [info|grab [scale]|read <off> [len]]"); rsp(id, "end", 0);
+}
+
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
     if (!verb) { rsp(id, "err", "empty"); rsp(id, "end", 0); return; }
@@ -807,6 +877,10 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "close")) {
         pc64_shell_close_top(); rsp(id, "ok", 0); rsp(id, "end", 0); return;
     }
+    /* screen [info|grab [scale]] - the OUT half of remote desktop: QOI-encode
+     * the framebuffer and stream it base64 (like readsec). Read-only, no arm
+     * gate. Pairs with key/pointer (the IN half). See unoauto_screen.c. */
+    if (!strcmp_(verb, "screen")) { do_screen(id, args); return; }
     if (!strcmp_(verb, "uptime")) {
         char t[24]; SB b; sb_init(&b, t, sizeof t); sb_i(&b, (long)uno_dbg_uptime_ms()); t[b.len] = 0;
         rsp(id, "ok", t); rsp(id, "end", 0); return;
