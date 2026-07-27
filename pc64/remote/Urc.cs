@@ -335,5 +335,50 @@ namespace UnoRemote
             }
             throw new Exception("unknown screen reply: " + r[0]);
         }
+
+        // ---- server-side session capture -------------------------------------
+        private static Dictionary<string, int> ParseStat(List<string> r)
+        {
+            var d = new Dictionary<string, int>();
+            if (r.Count > 0)
+            {
+                var t = r[0].Split(' ');
+                for (int i = 0; i + 1 < t.Length; i += 2)
+                { int v; if (int.TryParse(t[i + 1], out v)) d[t[i]] = v; }
+            }
+            return d;
+        }
+
+        /// <summary>`screen record start [scale] [fps]` -> status dict.</summary>
+        public Dictionary<string, int> ScreenRecordStart(int scale, int fps)
+        { return ParseStat(Command(10000, "screen", "record", "start", scale, fps)); }
+
+        /// <summary>`screen record stop` -> final status dict (ring kept for reading).</summary>
+        public Dictionary<string, int> ScreenRecordStop()
+        { return ParseStat(Command(10000, "screen", "record", "stop")); }
+
+        /// <summary>`screen record status` -> live status dict.</summary>
+        public Dictionary<string, int> ScreenRecordStatus()
+        { return ParseStat(Command(5000, "screen", "record", "status")); }
+
+        /// <summary>Pull the whole recorded ring (`nbytes` from the stop/status
+        /// stat) with bounded `screen record read` slices.</summary>
+        public byte[] ScreenRecordReadAll(int nbytes)
+        {
+            byte[] buf = new byte[nbytes];
+            int off = 0;
+            while (off < nbytes)
+            {
+                var rd = Command(20000, "screen", "record", "read", off.ToString("x"), ScreenReadLen);
+                var sb = new StringBuilder();
+                foreach (var l in rd) sb.Append(l);
+                byte[] part = Convert.FromBase64String(sb.ToString());
+                if (part.Length == 0) break;
+                int copy = Math.Min(part.Length, nbytes - off);
+                Array.Copy(part, 0, buf, off, copy);
+                off += copy;
+            }
+            return buf;
+        }
     }
 }

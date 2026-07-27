@@ -51,7 +51,7 @@ untrusted network.
 |---|---|
 | `Urc.cs` | C# port of `UnoAutoLink` (`../tools/unoauto_remote.py`): TCP listen, HELLO, CMD/RSP correlation, verb wrappers, `screen` grab reassembly (full + `ScreenGrabDelta`) |
 | `Qoi.cs` | QOI decoder → `Bitmap`, matched to the encoder in `../unoauto_screen.c` |
-| `Recorder.cs` | Session recording: ffmpeg (raw BGRA → MP4/H.264) or a PNG frame sequence |
+| `Recorder.cs` | Session recording: ffmpeg (raw BGRA → MP4/H.264) or a PNG frame sequence. Used for both live client-side recording and replaying a server-side `screen record` capture |
 | `RemoteMain.cs` | WinForms UI: live view, input mapping, log pane, command box, record toggle |
 | `build-remote.ps1` | csc build → `build/UnoRemote.exe` |
 | `app.manifest` | Per-monitor DPI aware so the live view stays crisp |
@@ -60,7 +60,9 @@ untrusted network.
 
 - ~~Dirty-rect / delta frame streaming for higher FPS.~~ **Done** — `screen grab
   delta` sends only changed tiles; the client composites onto a persistent canvas.
+- ~~Server-side capture (record on the device itself).~~ **Done** — the **"on
+  device"** box records on the device tick at a steady fps (its own snapshot);
+  Stop pulls the ring and reconstructs the frames into an MP4 / PNG sequence.
 - A clickable command-GUI for every URC verb (probe/vols/launch/install/push/
   guard/…), growing from the raw command box.
-- Server-side capture (record on the device itself).
 - A macOS client (Avalonia) reusing `Urc.cs` / `Qoi.cs`.
