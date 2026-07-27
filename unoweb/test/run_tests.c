@@ -56,6 +56,8 @@ static int fake_width(void *u, const uw_style *s, const char *t, int len)
 { (void)u; (void)s; (void)t; return len * 10; }
 static int fake_lineh(void *u, const uw_style *s)
 { (void)u; return s->font_size; }
+static int fake_image(void *u, const char *src, int *w, int *h, void **handle)
+{ (void)u; (void)src; *w = 50; *h = 40; *handle = (void *)0x1234; return 1; }
 
 static void tlayout_w(const char *name, const char *html, int vw,
                       const char *want_boxes, const char *want_paint)
@@ -702,6 +704,67 @@ int main(int argc, char **argv)
             "      line (8,8 10x14)\n"
             "        text (8,8 10x14) \"x\"\n",
             NULL);
+
+    /* ---- images + hit testing --------------------------------------------- */
+    if (want("layout-image")) {
+        char buf[4096];
+        uw_doc *d = uw_parse_string("<p>a<img src=x.png>b</p>", -1, NULL);
+        uw_metrics m;
+        uw_images im;
+        const char *expect =
+            "block body (8,8 784x58)\n"
+            "  block p (8,17 784x40)\n"
+            "    line (8,17 70x40)\n"
+            "      text (8,17 10x14) \"a\"\n"
+            "      image img (18,17 50x40)\n"
+            "      text (68,17 10x14) \"b\"\n";
+        run++;
+        uw_style_document(d, 800, 600);
+        memset(&m, 0, sizeof m); m.text_width = fake_width; m.line_height = fake_lineh;
+        memset(&im, 0, sizeof im); im.resolve = fake_image;
+        uw_set_images(d, &im);
+        uw_layout(d, 800, 600, &m);
+        uw_layout_dump(d, buf, sizeof buf);
+        if (strcmp(buf, expect)) { printf("  FAIL layout-image\n"); show_diff(expect, buf); fails++; }
+        uw_doc_free(d);
+    }
+
+    /* No resolve hook: the image occupies nothing and the text closes up.
+     * A broken or still-loading image must not reserve phantom space. */
+    tlayout("layout-image-unresolved", "<p>a<img src=x.png>b</p>",
+            "block body (8,8 784x32)\n"
+            "  block p (8,17 784x14)\n"
+            "    line (8,17 20x14)\n"
+            "      text (8,17 10x14) \"a\"\n"
+            "      text (18,17 10x14) \"b\"\n",
+            NULL);
+
+    if (want("hit-test")) {
+        uw_doc *d = uw_parse_string(
+            "<p>word <a href='/go'>link</a> tail</p><p id=second>below</p>", -1, NULL);
+        uw_metrics m;
+        uw_node *n, *a;
+        run++;
+        uw_style_document(d, 800, 600);
+        memset(&m, 0, sizeof m); m.text_width = fake_width; m.line_height = fake_lineh;
+        uw_layout(d, 800, 600, &m);
+        /* "word " = 50px from x=8, so the link occupies x 58..98 on line y=17 */
+        n = uw_hit_test(d, 60, 20);
+        a = uw_link_at(d, n);
+        if (!a || strcmp(uw_attr(d, a, "href"), "/go")) {
+            printf("  FAIL hit-test/link (%s)\n", a ? "wrong href" : "no link"); fails++;
+        }
+        /* a point on the plain text before it is NOT inside the link */
+        n = uw_hit_test(d, 12, 20);
+        if (uw_link_at(d, n)) { printf("  FAIL hit-test/not-link\n"); fails++; }
+        /* the second paragraph, well below */
+        n = uw_hit_test(d, 12, 45);
+        if (!n || !uw_has_attr(d, n, "id")) { printf("  FAIL hit-test/second\n"); fails++; }
+        /* far outside the document */
+        if (uw_hit_test(d, 5000, 5000)) { printf("  FAIL hit-test/outside\n"); fails++; }
+        uw_doc_free(d);
+    }
+
 
     /* ---- limits: hostile input must degrade, never run away ------------- */
     if (want("limit-depth")) {

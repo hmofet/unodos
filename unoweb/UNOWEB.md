@@ -118,6 +118,21 @@ pc64's font here would make the web core untestable off the OS. The host tests
 pass a fixed-width fake font, which is exactly what makes the golden geometry
 exact and reproducible.
 
+### Images and hit testing
+
+unoweb decodes nothing. `uw_images::resolve` hands back an intrinsic size and
+an opaque handle that comes straight back in `UW_CMD_IMAGE`; returning 0 makes
+the image an empty replaced box, which is what a broken or still-loading image
+should be. pc64 currently paints the reserved box as an outline - the layout is
+already right, only the pixels are missing, and unomedia lands behind the same
+hook.
+
+`uw_hit_test` walks the boxes in reverse paint order, so the topmost painted
+thing wins. Text boxes record the element that flowed them, which is what lets
+a click inside `<a>` resolve to the `<a>` rather than the enclosing block - one
+geometry source for painting and pointing, so a link's clickable area always
+matches its ink.
+
 ### Layout gaps (beyond the parser gaps above)
 
 7. **No float/clear, no position** other than static. M6.
@@ -136,11 +151,11 @@ exact and reproducible.
 engine, the split has been broken.
 
 ```bash
-cd unoweb/test && make test     # 58 checks
+cd unoweb/test && make test     # 61 checks
 cd unoweb/test && make asan     # the merge gate
 ```
 
-58 checks cover golden tree dumps, computed-style goldens, box geometry and
+61 checks cover golden tree dumps, computed-style goldens, box geometry and
 display lists, serialization round-trips, entity decoding,
 error recovery, streaming at every chunk size, the script hook and
 `document.write`, the DOM mutation/query API, and the limits. A
