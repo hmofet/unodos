@@ -63,6 +63,8 @@ untrusted network.
 - ~~Server-side capture (record on the device itself).~~ **Done** — the **"on
   device"** box records on the device tick at a steady fps (its own snapshot);
   Stop pulls the ring and reconstructs the frames into an MP4 / PNG sequence.
-- A clickable command-GUI for every URC verb (probe/vols/launch/install/push/
-  guard/…), growing from the raw command box.
+- ~~A clickable command-GUI for the URC verbs, growing from the raw command
+  box.~~ **Done** — a verb bar under the log runs read-only verbs immediately,
+  prefills the box for verbs that take an argument (`launch…`, `guard…`, …), and
+  confirms `reboot`/`poweroff`. The raw box remains for anything else.
 - A macOS client (Avalonia) reusing `Urc.cs` / `Qoi.cs`.
