@@ -242,6 +242,66 @@ int uw_matches(uw_doc *d, uw_node *n, const char *sel);
  * the format is part of the contract because the golden tests compare it. */
 int uw_style_dump(uw_doc *d, uw_node *n, char *out, int max);
 
+/* ---- layout ---------------------------------------------------------------
+ * unoweb measures nothing itself. Text metrics come from the embedder through
+ * uw_metrics, because the shape of a glyph is a property of the FONT SYSTEM,
+ * not of the document - and hard-coding pc64's font here would make the web
+ * core untestable off the OS and unusable anywhere else. The host tests pass a
+ * fixed-width fake font, which is also what makes the golden box geometry
+ * exact and reproducible. */
+typedef struct {
+    void *user;
+    /* Width in px of `len` bytes of text in style `s`. */
+    int (*text_width)(void *user, const uw_style *s, const char *t, int len);
+    /* Height of one line box in style `s` (ascent+descent+leading). */
+    int (*line_height)(void *user, const uw_style *s);
+} uw_metrics;
+
+/* A laid-out box. Geometry is in DOCUMENT coordinates (the page origin, not
+ * the viewport), so scrolling never invalidates layout - it only changes what
+ * the paint pass replays. */
+typedef struct uw_box uw_box;
+
+enum { UW_BOX_BLOCK = 0, UW_BOX_LINE, UW_BOX_TEXT, UW_BOX_BULLET };
+
+/* Lay the document out into `width` pixels. Styles are computed first if the
+ * tree is dirty. Returns the total content height, or -1 on failure. */
+int uw_layout(uw_doc *d, int width, int height, const uw_metrics *m);
+
+uw_box *uw_layout_root(uw_doc *d);
+int     uw_box_type(uw_box *b);
+void    uw_box_rect(uw_box *b, int *x, int *y, int *w, int *h);
+uw_node *uw_box_node(uw_box *b);
+const uw_style *uw_box_style(uw_box *b);
+const char *uw_box_text(uw_box *b, int *len);
+uw_box *uw_box_first_child(uw_box *b);
+uw_box *uw_box_next(uw_box *b);
+
+/* Golden dump of the box tree: one box per line with its geometry. */
+int uw_layout_dump(uw_doc *d, char *out, int max);
+
+/* ---- display list ---------------------------------------------------------
+ * Layout emits a flat, ordered list of paint commands. The canvas replays it
+ * translated by the scroll offset, so SCROLLING NEVER RELAYOUTS. */
+enum { UW_CMD_RECT = 1, UW_CMD_BORDER, UW_CMD_TEXT, UW_CMD_BULLET };
+
+typedef struct {
+    int      cmd;
+    int      x, y, w, h;
+    uw_color color;
+    /* UW_CMD_TEXT only */
+    const char *text;
+    int         len;
+    const uw_style *style;
+} uw_paint_cmd;
+
+/* Build the display list for the last layout. Returns the command count. */
+int uw_paint(uw_doc *d);
+int uw_paint_count(uw_doc *d);
+const uw_paint_cmd *uw_paint_at(uw_doc *d, int i);
+/* Golden dump of the display list. */
+int uw_paint_dump(uw_doc *d, char *out, int max);
+
 /* ---- serialization ------------------------------------------------------- */
 /* Serialize `n`'s children as HTML (this is innerHTML). Returns the length
  * written, or the length it WOULD need when that exceeds `max` (so a caller

@@ -3,7 +3,7 @@
 # Makefile ever needs unojs/, the M2 separation has been broken.
 CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O1 -g
-SRC      = ../uw_dom.c ../uw_html.c ../uw_css.c ../uw_style.c
+SRC      = ../uw_dom.c ../uw_html.c ../uw_css.c ../uw_style.c ../uw_layout.c
 
 run_tests: run_tests.c $(SRC) ../unoweb.h ../uw_int.h
 	$(CC) $(CFLAGS) -o $@ run_tests.c $(SRC)
