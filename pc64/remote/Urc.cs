@@ -244,21 +244,11 @@ namespace UnoRemote
 
         private const int ScreenReadLen = 2880;   // matches SCREEN_READ_MAX on the device
 
-        /// <summary>`screen grab [scale]` stages a frame on the device and returns
-        /// its `frame &lt;w&gt; &lt;h&gt; qoi &lt;n&gt;` header; the QOI payload is then
-        /// pulled in bounded `screen read &lt;off&gt; &lt;len&gt;` slices (the readsec idiom -
-        /// a whole frame is far too big for one URC response). Returns the raw
-        /// (still QOI-encoded) frame bytes plus its dimensions.</summary>
-        public byte[] ScreenGrab(int scale, out int w, out int h)
+        /// <summary>Pull `n` staged bytes with bounded `screen read &lt;off&gt; &lt;len&gt;`
+        /// slices (the readsec idiom - a whole frame is far too big for one URC
+        /// response, which caps at the device's 8 KB TX buffer).</summary>
+        private byte[] PullStaged(int n)
         {
-            w = h = 0; int n = 0;
-            var r = Command(8000, "screen", "grab", scale);
-            if (r.Count == 0) throw new Exception("empty screen reply");
-            var hdr = r[0].Split(' ');   // frame W H qoi N
-            if (hdr.Length >= 5 && hdr[0] == "frame")
-            { int.TryParse(hdr[1], out w); int.TryParse(hdr[2], out h); int.TryParse(hdr[4], out n); }
-            if (n <= 0) throw new Exception("bad frame header: " + r[0]);
-
             byte[] buf = new byte[n];
             int off = 0;
             while (off < n)
@@ -273,6 +263,77 @@ namespace UnoRemote
                 off += copy;
             }
             return buf;
+        }
+
+        /// <summary>`screen grab [scale]` stages a full frame on the device and
+        /// returns the raw (still QOI-encoded) frame bytes plus its dimensions.
+        /// This is the whole-frame path; prefer <see cref="ScreenGrabDelta"/> for
+        /// the live view (it sends only changed tiles).</summary>
+        public byte[] ScreenGrab(int scale, out int w, out int h)
+        {
+            w = h = 0; int n = 0;
+            var r = Command(8000, "screen", "grab", scale);
+            if (r.Count == 0) throw new Exception("empty screen reply");
+            var hdr = r[0].Split(' ');   // frame W H qoi N
+            if (hdr.Length >= 5 && hdr[0] == "frame")
+            { int.TryParse(hdr[1], out w); int.TryParse(hdr[2], out h); int.TryParse(hdr[4], out n); }
+            if (n <= 0) throw new Exception("bad frame header: " + r[0]);
+            return PullStaged(n);
+        }
+
+        /// <summary>One live-view update: a full keyframe or a set of changed
+        /// tiles. See <see cref="UrcLink.ScreenGrabDelta"/>.</summary>
+        public sealed class ScreenUpdate
+        {
+            public bool Keyframe;     // true: Qoi is a whole frame; false: a delta
+            public int W, H;          // emitted frame dimensions
+            public int Cols, Tw, Th;  // delta tile grid (delta only)
+            public int Nch;           // number of changed tiles (0 = nothing changed)
+            public int[] TileIdx;     // row-major changed tile indices (delta only)
+            public byte[] Qoi;        // keyframe: the frame; delta: the tile strip (null if Nch==0)
+        }
+
+        /// <summary>`screen grab delta [scale]`: the device compares against the
+        /// previous grab and returns either a full `frame` keyframe (first grab,
+        /// after a scale change, or when too much changed) or a `delta` of just
+        /// the changed tiles. The payload (keyframe QOI, or the delta's
+        /// [strip][manifest] blob) is pulled with the same bounded reader.</summary>
+        public ScreenUpdate ScreenGrabDelta(int scale)
+        {
+            var r = Command(8000, "screen", "grab", "delta", scale);
+            if (r.Count == 0) throw new Exception("empty screen reply");
+            var hdr = r[0].Split(' ');
+            var u = new ScreenUpdate();
+
+            if (hdr[0] == "frame")            // frame W H qoi N
+            {
+                int n = 0;
+                if (hdr.Length >= 5) { int.TryParse(hdr[1], out u.W); int.TryParse(hdr[2], out u.H); int.TryParse(hdr[4], out n); }
+                if (n <= 0) throw new Exception("bad frame header: " + r[0]);
+                u.Keyframe = true;
+                u.Qoi = PullStaged(n);
+                return u;
+            }
+            if (hdr[0] == "delta")            // delta ew eh cols tw th nch strip total
+            {
+                if (hdr.Length < 9) throw new Exception("bad delta header: " + r[0]);
+                int strip = 0, total = 0;
+                int.TryParse(hdr[1], out u.W);   int.TryParse(hdr[2], out u.H);
+                int.TryParse(hdr[3], out u.Cols); int.TryParse(hdr[4], out u.Tw);
+                int.TryParse(hdr[5], out u.Th);  int.TryParse(hdr[6], out u.Nch);
+                int.TryParse(hdr[7], out strip); int.TryParse(hdr[8], out total);
+                u.Keyframe = false;
+                if (u.Nch <= 0 || total <= 0) { u.Nch = 0; return u; }   // static frame
+
+                byte[] blob = PullStaged(total);
+                u.Qoi = new byte[strip];
+                Array.Copy(blob, 0, u.Qoi, 0, strip);
+                u.TileIdx = new int[u.Nch];
+                for (int i = 0; i < u.Nch; i++)
+                    u.TileIdx[i] = blob[strip + i * 2] | (blob[strip + i * 2 + 1] << 8);   // u16 LE
+                return u;
+            }
+            throw new Exception("unknown screen reply: " + r[0]);
         }
     }
 }
