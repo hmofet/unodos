@@ -1,8 +1,61 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-24 (round 19 - F12 done; post-ALIVE MVM bisected to ADD_STA). Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi,
-gen2 22000-family, QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is
-fully solved; this is the WiFi tail.
+Status: 2026-07-27 (round 20 - full setup works on metal; blocker isolated to the
+auth-window airtime command; SESSION_PROTECTION fix committed, unverified).
+Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
+QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
+is the WiFi tail.
+
+## Round 20 (2026-07-27) — association setup all works on metal; the wedge is the airtime command; SESSION_PROTECTION struct fixed (UNVERIFIED)
+
+Drove the Yoga live over URC (:5098). Reproduced the whole chain end to end:
+`iwl rerun` -> ALIVE (F12 confirmed solved), `iwl mvm 1/2/4` (init/tx_ant/power)
+-> `iwl join`: a UMAC **passive scan returns 24 APs / ~60 beacons**, picks the
+REAL NimmuNet BSSID `e8:d3:eb:51:4d:6f` chan 11, and phy_ctxt / mac_ctxt /
+binding / **add_sta / txq_alloc all return with `csr2808=0`** (no assert; TX
+queue qid=1). So every setup command works against real firmware with a real AP.
+This is well past round 19 (which wedged at ADD_STA on a broadcast BSSID — the
+real-scan path fixes that).
+
+**The blocker is now precisely the auth-window airtime command, and BOTH prior
+approaches were wrong for this fw:**
+
+- **TIME_EVENT_CMD (LONG 0x29) — what commit `3cd66d3` switched to — SYSASSERTs.**
+  `iwl auth` -> `csr2808=02000000`; `iwl fwerr` shows UMAC `error_id=201002ff`
+  (ADVANCED_SYSASSERT), **`cmd=000c0129`** (group 1 / opcode 0x29 = TIME_EVENT),
+  cascading to LMAC `NMI_INTERRUPT_UMAC_FATAL`. Crucially, **CMD_VERSIONS for
+  this ucode does NOT list TIME_EVENT_CMD at all** (`tools/iwl_cmd_versions.py`;
+  LONG group has 0x2c TIME_QUOTA but no 0x29), while it DOES advertise
+  `MAC_CONF 0xfb SESSION_PROT` (notif ver 2). This is a SESSION_PROTECTION-based
+  fw; the legacy TIME_EVENT_CMD is unsupported and the dispatcher asserts on it.
+- **SESSION_PROTECTION_CMD (MAC_CONF 0x5) is the right command; its earlier
+  LMAC-FATAL (85aeff9/2e740b2, data1=0x400) was a STRUCT-LENGTH bug, not the id.**
+  `iwl_mvm_session_prot_cmd` = SESSION_PROTECTION_CMD_API_S_VER_1 = exactly 5 u32
+  (20 B). `mvm_assoc_window` had a spurious 6th field and sent 24 B; the fw
+  validates command length. The prior attempts only toggled the id field, never
+  the length.
+
+**Fix committed (`iwlwifi.c`):** `mvm_assoc_window` session-prot struct -> 20 B
+(id raw 0 for cmd ver<=2); the `auth` path uses `mvm_assoc_window()` when capa 54
+and NEVER falls back to TIME_EVENT. **NOT yet metal-verified** (see rig note).
+
+**Rig gotcha that blocked verification (important for next session):** the Yoga
+booted from a **USB stick** this session. A USB stick's ESP enumerates as a
+**firmware-SFS volume, which pc64_fs makes READ-ONLY** — so the A/B kernel push
+CANNOT update the live boot kernel. `push 1 …` writes native-FAT vol 1 (the
+INTERNAL SSD's UNODOS, a non-boot disk here), which VERIFYs and persists but does
+not change what boots. `disks`: fw0 `is_boot=1` (the boot stick), fw1, fw2
+(238 GB internal). **For the A/B push loop to work, boot a writable-ESP install
+(the internal disk), OR physically reflash the stick** with the new build.
+Creds+STRESS.CFG+the fixed BOOTX64 are already staged on internal vol 1
+(remote=192.168.2.100:5098, net-eth-only). **Verify:** boot writable ESP ->
+rerun -> mvm 1/2/4 -> join -> auth; expect `csr2808=0` after session-prot (not
+02000000), then `assoc` / `eapol` for the 4-way handshake.
+
+Other rig notes: eth dongle DHCP frequently stalls (amber LAN) on each reboot and
+needs a physical re-seat to get a lease; the URC link also flaps. The software
+`guard <s> reboot` fires if no command is serviced within `<s>` — don't leave it
+armed while reading output (it rebooted the box mid-analysis once).
 
 ## TL;DR — the diagnosis was REFRAMED (Round 15)
 
