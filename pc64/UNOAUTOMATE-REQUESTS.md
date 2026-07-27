@@ -1034,3 +1034,30 @@ Verified host-side (no hardware): C encoder ↔ C# decoder ↔ Python decoder ar
 pixel-exact, and a mock-device round-trip drives the C# `Urc` client through
 info + chunked grab + decode + pointer. On-device gate = `tools/screen_qemu.py`
 (needs `UNO_DEBUG=1 ./build.sh` + WSL/QEMU).
+
+---
+
+## 2026-07-27 — unoautomate/unoremote: CLAIM remote-screen follow-ups (delta streaming, server-side capture, command GUI)
+
+**CLAIM (AGENTS §4), no action needed from others.** Continuing the remote-desktop
+feature (landed 4e244c0). All three pieces are in-lane this session:
+
+- **Slice 1 — delta/dirty-rect streaming.** `unoauto_screen.c`: per-tile FNV hash
+  dirty detection (no multi-MB prev buffer — fb[] is up to 1920x1200). New verb
+  form `screen grab delta [scale]` stages a changed-tile manifest + a single QOI
+  strip of the changed tiles (falls back to a full `frame` keyframe on first
+  grab, scale change, or when too many tiles changed). Client (`Urc.cs`/
+  `RemoteMain.cs`) keeps a persistent canvas and blits changed tiles. Wire is
+  additive: old clients still send plain `screen grab` (full frame unchanged).
+- **Slice 2 — server-side session capture.** Device captures keyframe+delta
+  frames into a RAM ring on its shell tick at a requested fps (own hash state,
+  independent of live view), decoupled from the client's poll rate. `screen
+  record start/stop/read`. Client pulls + reconstructs, feeds `Recorder.cs`.
+- **Slice 4 — clickable command GUI.** `RemoteMain.cs` grows the raw-command box
+  into clickable panels for the common verbs. Client-only C#, no device change.
+
+In-lane: `unoauto_screen.*` (own), the `screen` verb in `unoauto_remote.c`
+(unoautomate, mine this session), and all of `pc64/remote/` (unoremote, mine).
+Additive seam touch only: the `screen` verb dispatch already exists; slice 2 adds
+a per-shell-frame tick call appended at the end of the relevant block in
+`pc64_uui.c`. Gate: `tools/screen_qemu.py` extended for delta + record.
