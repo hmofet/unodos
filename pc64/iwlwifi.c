@@ -1943,6 +1943,15 @@ static void tx_start_gen1(void)
 static int fw_has_mld_api(void) { return fw_has_capa(110); }
 
 /* small init commands */
+/* Valid antenna masks, straight out of the firmware's PHY_SKU TLV - the same
+ * fw->valid_tx_ant / valid_rx_ant Linux derives in iwl_parse_tlv_firmware:
+ *   FW_PHY_CFG_TX_CHAIN = bits 16-19, FW_PHY_CFG_RX_CHAIN = bits 20-23.
+ * On this AX201 phy_sku = 0x00330018, so BOTH are 0x3 (a 2x2 part). Hardcoding
+ * antenna A only (0x1) told the PHY that half its chains do not exist, which
+ * nothing notices until something asks the LMAC to schedule real airtime. */
+static u32 fw_valid_tx_ant(void){ u32 a = (g_fw.phy_sku >> 16) & 0xf; return a ? a : 1; }
+static u32 fw_valid_rx_ant(void){ u32 a = (g_fw.phy_sku >> 20) & 0xf; return a ? a : 1; }
+
 static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); wait_cmd_done(50);}
 static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
 static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
@@ -1979,7 +1988,14 @@ static void mvm_phy_ctxt(int chan, int action)
     memset(&c, 0, sizeof c);
     c.id_color = g_phy_id; c.action = action;
     c.channel = chan; c.band = 1 /*PHY_BAND_24*/; c.width = 0 /*20MHz*/;
-    c.lmac_id = 0; c.rxchain = (1u<<1)|(1u<<10);   /* valid ant A, 1 chain */
+    c.lmac_id = 0;                      /* IWL_LMAC_24G_INDEX */
+    /* iwl_mvm_phy_ctxt_cmd_data: valid_rx_ant << VALID_POS(1) |
+     * idle_cnt << CNT_POS(10) | active_cnt << MIMO_CNT_POS(12). We were sending
+     * valid=1 and NO mimo_cnt; on this 2x2 part Linux sends valid=3, cnt=1,
+     * mimo_cnt=1 (0x1406). */
+    c.rxchain = (fw_valid_rx_ant() << 1) | (1u << 10) | (1u << 12);
+    uno_dbg_net_trace("wifi: PHY_CONTEXT action=%d chan=%d band=2.4 rxchain=%08x len=%d",
+                      action, chan, c.rxchain, (int)sizeof c);
     send_cmd(GRP_LONG, 0x8, 0, &c, sizeof c); wait_cmd_done(100);
 }
 
@@ -3244,7 +3260,7 @@ uno_nic_t *iwl_nic(void)
 
     /* post-alive init (unified path; AC split path adds INIT image + calib) */
     mvm_init_unified();
-    mvm_tx_ant(1);
+    mvm_tx_ant(fw_valid_tx_ant());
     if (fw_has_capa(12)) mvm_dqa_enable();
     mvm_power_table();
     uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power)");
@@ -3418,7 +3434,7 @@ static int mvm_steps(int n, char *out, int cap)
     switch (n) {
     case 1: mvm_init_unified();
         strcpy(out, "ok mvm1: init_unified returned (SYSTEM/NVM/INIT_COMPLETE, no phy_cfg)"); break;
-    case 2: mvm_tx_ant(1);
+    case 2: mvm_tx_ant(fw_valid_tx_ant());
         strcpy(out, "ok mvm2: tx_ant returned"); break;
     case 3: if (fw_has_capa(12)) { mvm_dqa_enable(); strcpy(out, "ok mvm3: dqa_enable returned"); }
             else strcpy(out, "ok mvm3: skipped (fw lacks DQA capa 12)"); break;
@@ -3545,6 +3561,34 @@ static int mld_steps(int n, char *out, int cap)
         strcpy(out, "err usage: iwl mld <1-9|a> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc a=post-assoc qos/beacon)");
         break;
     }
+    return (int)strlen(out);
+}
+
+/* Dump what the firmware told us about itself: the capability bits the join
+ * path branches on, the PHY_SKU-derived antenna masks, and the raw capa/api
+ * bitmaps. Cheap, read-only, and it answers "does this fw advertise X?" without
+ * costing a USB reflash - which is the whole reason it exists. */
+static int caps_dump(char *out, int cap)
+{
+    static const struct { int bit; const char *name; } t[] = {
+        { 12, "DQA" }, { 48, "ULTRA_HB_CHANNELS" }, { 54, "SESSION_PROT_CMD" },
+        { 56, "PROTECTED_TWT" }, { 100, "BIGTK" }, { 104, "DRAM_FRAG" },
+        { 110, "MLD_API" }, { 114, "STA_EXP_MFP" },
+    };
+    unsigned i;
+    (void)cap;
+    uno_dbg_net_trace("wifi: caps: phy_sku=%08x -> valid_tx_ant=%x valid_rx_ant=%x, "
+                      "alive_notif_ver=%d n_scan_ch=%d",
+                      g_fw.phy_sku, fw_valid_tx_ant(), fw_valid_rx_ant(),
+                      g_fw.alive_notif_ver, g_fw.n_scan_channels);
+    for (i = 0; i < sizeof t / sizeof t[0]; i++)
+        uno_dbg_net_trace("wifi: caps:   capa %3d %-18s = %d", t[i].bit, t[i].name,
+                          fw_has_capa(t[i].bit));
+    for (i = 0; i < 16; i += 4)
+        uno_dbg_net_trace("wifi: caps: capa[%2d..] %02x %02x %02x %02x   api[%2d..] %02x %02x %02x %02x",
+                          i*8, g_fw.capa[i], g_fw.capa[i+1], g_fw.capa[i+2], g_fw.capa[i+3],
+                          i*8, g_fw.api[i], g_fw.api[i+1], g_fw.api[i+2], g_fw.api[i+3]);
+    strcpy(out, "ok caps dumped to the NET log (capa bits + antenna masks)");
     return (int)strlen(out);
 }
 
@@ -3730,6 +3774,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
           pre = " APs (detail in NET log)"; while (*pre) *o++ = *pre++; *o = 0; }
         return (int)strlen(out);
     }
+    if (!strncmp(line, "caps", 4)) return caps_dump(out, cap);
     if (!strncmp(line, "mld", 3)) {              /* "iwl mld <n>" - link-API bisect */
         const char *q = line + 3;
         while (*q == 0x20) q++;
