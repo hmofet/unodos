@@ -197,19 +197,28 @@ talk back over the link with <code>unoauto.remote_send()</code> and <code>unoaut
 
 <h2 id="unoremote">Remote desktop (UnoRemote)</h2>
 <p>When you want to <em>see and drive</em> the machine rather than type commands at it, <strong>UnoRemote</strong>
-is a Windows app that gives you a live remote-desktop view over the same link. It shows the device's screen in a
-window, forwards your mouse and keyboard to it, and adds a log pane, a raw-command box and a session recorder - a
-VNC-style view built on the URC channel (the desktop image streams over the <code>screen</code> command; input goes
-back over <code>key</code> and <code>pointer</code>).</p>
+is a Windows app that gives you a live remote-desktop view over the same link: the device's screen in a window,
+your mouse and keyboard forwarded to it, a log pane, a clickable command bar, a raw-command box and a session
+recorder. It is VNC-style - the desktop streams over the <code>screen</code> command and input goes back over
+<code>key</code> and <code>pointer</code> - but tuned for UnoDOS's flat desktop: each frame sends only the tiles
+that changed since the last one, so the view stays responsive even at full resolution.</p>
 <ol>
   <li>Build it once with <code>pc64\remote\build-remote.ps1</code> (it produces <code>UnoRemote.exe</code>), run it,
       set the port (default <strong>5099</strong>) and click <strong>Listen</strong>.</li>
-  <li>On the device, point <code>DEBUG.CFG</code> at your PC with <code>remote=&lt;your-ip&gt;:5099</code> (or
-      <code>discover</code>) and boot a debug build, exactly as above. The UnoDOS desktop appears in the window.</li>
+  <li>On the device, either point <code>DEBUG.CFG</code> at your PC with <code>remote=&lt;your-ip&gt;:5099</code>, or
+      just set <code>discover</code> and let the device find your PC on its own (see the tip below); then boot a debug
+      build. The UnoDOS desktop appears in the window.</li>
   <li>Click and type on the view to drive the machine. A <strong>Scale</strong> control (1&times;&ndash;4&times;)
-      trades resolution for bandwidth, and <strong>Record</strong> saves the session to <code>Videos\UnoRemote\</code>
-      (an MP4 if <code>ffmpeg</code> is on your PATH, otherwise a sequence of PNG frames).</li>
+      trades resolution for bandwidth on a busy or high-resolution screen.</li>
+  <li>The <strong>command bar</strong> under the log runs the everyday remote actions with a click - list volumes and
+      disks, launch or close an app, check uptime, reboot or power off (these ask first) - while the box beside it
+      still takes any raw URC command line.</li>
 </ol>
+<p><strong>Recording.</strong> <strong>Record</strong> saves the session to <code>Videos\UnoRemote\</code> - an MP4
+if <code>ffmpeg</code> is on your PATH, otherwise a folder of PNG frames. Tick <strong>on device</strong> first to
+record <em>on the machine itself</em>: it captures at a steady frame rate independent of the network and UnoRemote
+pulls the finished recording when you stop, which is smoother than saving whatever trickled over a slow link.</p>
+<div class="note tip"><b>Zero-config discovery</b><strong>No address to type.</strong> With <code>discover</code> set in <code>DEBUG.CFG</code> (instead of a <code>remote=</code> address) the device broadcasts on the local network, and UnoRemote - or the <code>unoauto_remote.py</code> tool - answers with its own address, so the device connects with nothing configured. Both ends must be on the same LAN.</div>
 <div class="note warn"><b>Debug builds, LAN only</b>UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.</div>
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
