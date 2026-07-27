@@ -1921,6 +1921,27 @@ static void tx_start_gen1(void)
 #define GRP_DATAPATH 5
 #define GRP_REGNVM 0xc
 
+/* MAC_CONF-group opcodes.  0x8/0x9/0xa are the LINK-BASED ("MLD") association
+ * API that superseded the legacy MAC_CONTEXT/BINDING/ADD_STA trio.  A working
+ * Linux association trace of this exact QuZ-77 AX201 (2026-07-27) contains ONLY
+ * these - zero LONG-group 0x28/0x2b/0x18 - which is why SESSION_PROTECTION used
+ * to LMAC-FATAL here: it references a LINK that the legacy path never creates.
+ * See WIFI-F12-HANDOFF.md round 22. */
+#define MC_SESSION_PROT 0x05
+#define MC_MAC_CONFIG   0x08
+#define MC_LINK_CONFIG  0x09
+#define MC_STA_CONFIG   0x0a
+#define DP_SEC_KEY      0x18            /* DATA_PATH SEC_KEY_CMD (MLD key path) */
+
+#define FW_CTXT_INVALID 0xFFFFFFFFu
+#define MLD_MAC_ID   0                  /* our single MAC context (raw id, no color) */
+#define MLD_LINK_ID  0                  /* our single fw_link_id (driver-assigned) */
+
+/* IWL_UCODE_TLV_CAPA_MLD_API_SUPPORT.  When the fw advertises it, iwlmvm drives
+ * the whole mac/link/sta setup through MAC_CONF 0x8/0x9/0xa; when it does not,
+ * the legacy MAC_CONTEXT_CMD path below is the only one that exists. */
+static int fw_has_mld_api(void) { return fw_has_capa(110); }
+
 /* small init commands */
 static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); wait_cmd_done(50);}
 static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
@@ -2067,16 +2088,24 @@ static void mvm_assoc_window(void)
          * (24 B): id_and_color, action, conf_id, duration_tu, repetition_count,
          * interval. This fw LENGTH-asserts: a 20-byte send gave UMAC
          * ADVANCED_SYSASSERT on cmd 0x0305 with data2=0x18 (expected 24) /
-         * data3=0x14 (got 20). id_and_color is the RAW mvmvif->id (0) for cmd
-         * ver<3 (iwl_mvm_get_session_prot_id). */
+         * data3=0x14 (got 20).
+         *
+         * id_and_color per iwl_mvm_get_session_prot_id: the raw mvmvif->id for
+         * SESSION_PROTECTION_CMD ver < 2, the **fw_link_id** from ver 2 up. This
+         * ucode does not list MAC_CONF 0x5 in its cmd-version TLV, so it is ver 1
+         * -> the mac id. Both are 0 in our single-mac/single-link setup, which is
+         * why the LMAC-FATAL (data1=0x400) was never about this field: the id was
+         * fine, the LINK it implies simply did not exist because the join used the
+         * legacy MAC_CONTEXT path. mld_link_cfg() now creates it. */
         struct { u32 id_color, action, conf_id, duration_tu, repetition_count, interval; } c;
         memset(&c,0,sizeof c);
-        c.id_color = 0;                 /* raw mvmvif->id (0), NOT color-encoded */
+        c.id_color = fw_has_mld_api() ? MLD_LINK_ID : MLD_MAC_ID;
         c.action = 1;                   /* FW_CTXT_ACTION_ADD */
         c.conf_id = 0;                  /* SESSION_PROTECT_CONF_ASSOC */
         c.duration_tu = 900;            /* repetition_count + interval stay 0 */
-        uno_dbg_net_trace("wifi: session-prot: MAC_CONF 0x5 len=%d capa54=%d", (int)sizeof c, fw_has_capa(54));
-        send_cmd(GRP_MACCONF, 0x5, 0, &c, (int)sizeof c);
+        uno_dbg_net_trace("wifi: session-prot: MAC_CONF 0x5 len=%d capa54=%d id=%d mld=%d",
+                          (int)sizeof c, fw_has_capa(54), (int)c.id_color, fw_has_mld_api());
+        send_cmd(GRP_MACCONF, MC_SESSION_PROT, 0, &c, (int)sizeof c);
         wait_notif(GRP_MACCONF, 0xFB, 0, 500);   /* SESSION_PROTECTION_NOTIF start */
     } else {
         struct { u32 id_color, action, id, apply, max_delay, depends, interval, duration; u8 repeat, max_frags; u16 policy; } c;
@@ -2119,6 +2148,214 @@ static void mvm_add_sta_key(const u8 *key, int keylen, int keyidx, int mcast, co
     if (pn) memcpy(c+36, pn, 6);       /* rx_secur_seq_cnt (RSC) */
     /* v2+ struct: transmit_seq_cnt @68 (leave 0 for RX-side install) */
     send_cmd(GRP_LONG, 0x17, 0, c, 76);
+    wait_cmd_done(100);
+}
+
+/* =====================================================================
+ * 9b. The LINK-BASED (MLD) association API — MAC_CONF group 0x03
+ *
+ * Structs mirror Linux `fw/api/mac-cfg.h` at the command versions this ucode
+ * advertises (tools/iwl_cmd_versions.py against IWLAX201.UCO):
+ *   MAC_CONF 0x08 MAC_CONFIG_CMD  -> ver 1  (iwl_mac_config_cmd, 52 B)
+ *   MAC_CONF 0x09 LINK_CONFIG_CMD -> absent from the table = default ver 1
+ *                                    (iwl_link_config_cmd, 208 B)
+ *   MAC_CONF 0x0a STA_CONFIG_CMD  -> absent = default ver 1
+ *                                    (iwl_mvm_sta_cfg_cmd, 96 B)
+ * VER_1 layouts are the ones in kernel v6.7; later kernels only append/repurpose
+ * tail fields for _VER_2+. The compile-time size asserts below are the guard:
+ * this fw length-checks every command and ADVANCED_SYSASSERTs on a mismatch
+ * (that is exactly how the 20-vs-24-byte SESSION_PROTECTION bug surfaced).
+ *
+ * Flow (iwlmvm mld-mac.c / link.c / mld-sta.c):
+ *   MAC_CONFIG ADD -> LINK_CONFIG ADD (phy invalid) -> PHY_CONTEXT ADD ->
+ *   LINK_CONFIG MODIFY(active, phy, rates, qos, beacon timing) ->
+ *   STA_CONFIG (the AP peer) -> SESSION_PROTECTION -> auth/assoc.
+ * There is NO binding and NO time quota in this API: the link replaces both.
+ * ===================================================================== */
+
+/* iwl_ac_qos, 8 B — same shape the legacy MAC_CONTEXT_CMD uses */
+struct mld_ac_qos { u16 cw_min, cw_max; u8 aifsn, fifos_mask; u16 edca_txop; } __attribute__((packed));
+/* iwl_he_backoff_conf, 8 B (MU-EDCA; left zero, we advertise no HE) */
+struct mld_he_backoff { u16 cwmin, cwmax, aifsn, mu_time; } __attribute__((packed));
+
+struct mld_mac_cmd {
+    u32 id_and_color, action, mac_type;
+    u8  local_mld_addr[6]; u16 rsv_mld_addr;
+    u32 filter_flags;
+    u16 he_support, he_ap_support; u32 eht_support;
+    u32 nic_not_ack_enabled;
+    /* union iwl_mac_client_data (the largest member for a STA mac) */
+    u8  is_assoc, esr_transition_timeout; u16 medium_sync_delay;
+    u16 assoc_id, rsv1, data_policy, rsv2;
+    u32 ctwin;
+} __attribute__((packed));
+typedef char _mld_mac_sz[(sizeof(struct mld_mac_cmd) == 52) ? 1 : -1];
+
+struct mld_link_cmd {
+    u32 action, link_id, mac_id, phy_id;
+    u8  local_link_addr[6]; u16 rsv_link_addr;
+    u32 modify_mask, active, listen_lmac;
+    u32 cck_rates, ofdm_rates, cck_short_preamble, short_slot, protection_flags;
+    u32 qos_flags;
+    struct mld_ac_qos ac[5];
+    u8  htc_trig_based_pkt_ext, rand_alloc_ecwmin, rand_alloc_ecwmax, ndp_fdbk_buff_th_exp;
+    struct mld_he_backoff trig_based_txf[4];
+    u32 bi, dtim_interval;
+    u16 puncture_mask, frame_time_rts_th;
+    u32 flags, flags_mask;
+    u8  ref_bssid_addr[6]; u16 rsv_ref_bssid;
+    u8  bssid_index, bss_color, spec_link_id, rsv;
+    u8  ibss_bssid_addr[6]; u16 rsv_ibss_bssid;
+    u32 rsv_tail[8];
+} __attribute__((packed));
+typedef char _mld_link_sz[(sizeof(struct mld_link_cmd) == 208) ? 1 : -1];
+
+struct mld_sta_cmd {
+    u32 sta_id, link_id;
+    u8  peer_mld_address[6]; u16 rsv_mld_addr;
+    u8  peer_link_address[6]; u16 rsv_link_addr;
+    u32 station_type, assoc_id, beamform_flags, mfp, mimo, mimo_protection,
+        ack_enabled, trig_rnd_alloc, tx_ampdu_spacing, tx_ampdu_max_size,
+        sp_length, uapsd_acs;
+    u8  pkt_ext[20];                    /* iwl_he_pkt_ext_v2 (2 Nss x 5 BW x 2) */
+    u32 htc_flags;
+} __attribute__((packed));
+typedef char _mld_sta_sz[(sizeof(struct mld_sta_cmd) == 96) ? 1 : -1];
+
+/* LINK_CONTEXT_MODIFY_* (enum iwl_link_ctx_modify_flags) */
+#define LINK_MOD_ACTIVE        (1u<<0)
+#define LINK_MOD_RATES_INFO    (1u<<1)
+#define LINK_MOD_PROTECT_FLAGS (1u<<2)
+#define LINK_MOD_QOS_PARAMS    (1u<<3)
+#define LINK_MOD_BEACON_TIMING (1u<<4)
+
+/* Beacon timing learned from the picked AP's beacon (defaults if it had none) */
+static u16 g_join_bi = 100;             /* beacon interval, TU */
+static u8  g_join_dtim = 1;             /* DTIM period */
+
+/* MAC_CONFIG_CMD (MAC_CONF 0x8) — creates/updates the MAC context. Replaces the
+ * legacy MAC_CONTEXT_CMD (LONG 0x28). action: 1=ADD 2=MODIFY 3=REMOVE. */
+static void mld_mac_cfg(int action, int assoc, int aid)
+{
+    struct mld_mac_cmd c;
+    memset(&c, 0, sizeof c);
+    c.id_and_color = MLD_MAC_ID;        /* raw mvmvif->id, no color in this API */
+    c.action = (u32)action;
+    c.mac_type = 5;                     /* FW_MAC_TYPE_BSS_STA */
+    memcpy(c.local_mld_addr, g_mac, 6);
+    /* enum iwl_mac_config_filter_flags — NOTE these are NOT the legacy
+     * MAC_FILTER_* bits: ACCEPT_GRP is BIT(2) in both, but "hear beacons" is
+     * ACCEPT_BEACON BIT(3) here, where the legacy cmd used IN_BEACON BIT(6). */
+    c.filter_flags = (1u<<2);                       /* ACCEPT_GRP */
+    if (!assoc) c.filter_flags |= (1u<<3);          /* ACCEPT_BEACON while connecting */
+    /* he_support/eht_support stay 0: we associate as a plain HT-less STA.
+     * nic_not_ack_enabled = !iwl_mvm_is_nic_ack_enabled(); this part reports
+     * HE MAC CAP2 ACK_EN, so the working driver sends 0. */
+    c.nic_not_ack_enabled = 0;
+    c.is_assoc = assoc ? 1 : 0;
+    c.assoc_id = (u16)aid;
+    uno_dbg_net_trace("wifi: MAC_CONFIG action=%d assoc=%d aid=%d len=%d",
+                      action, assoc, aid, (int)sizeof c);
+    send_cmd(GRP_MACCONF, MC_MAC_CONFIG, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
+/* LINK_CONFIG_CMD (MAC_CONF 0x9) — creates the link the rest of the association
+ * hangs off (SESSION_PROTECTION's id, STA_CONFIG's link_id). Replaces the legacy
+ * BINDING_CONTEXT_CMD + TIME_QUOTA_CMD pair.
+ *
+ * Linux picks fw_link_id itself (ffz over a driver-side bitmap in
+ * iwl_mvm_get_free_fw_link_id) — the fw does NOT hand one back — so with a
+ * single link ours is always MLD_LINK_ID (0).
+ *
+ * ADD is sent with phy_id = FW_CTXT_INVALID and no rates, exactly as
+ * iwl_mvm_add_link does; the real parameters land on the MODIFY that activates
+ * the link once a PHY context exists. */
+static void mld_link_cfg(int action, int active, int have_phy)
+{
+    struct mld_link_cmd c;
+    static const u16 cwmin[4] = { 15, 15, 7, 3 };    /* ucode AC order BK,BE,VI,VO */
+    static const u16 cwmax[4] = { 1023, 1023, 15, 7 };
+    static const u8  aifs[4]  = { 7, 3, 2, 2 };
+    static const u8  fifo[4]  = { 2, 4, 8, 16 };     /* BIT(gen2 EDCA fifo) per AC */
+    int a;
+    memset(&c, 0, sizeof c);
+    c.action = (u32)action;
+    c.link_id = MLD_LINK_ID;
+    c.mac_id = MLD_MAC_ID;
+    c.phy_id = have_phy ? g_phy_id : FW_CTXT_INVALID;
+    memcpy(c.local_link_addr, g_mac, 6);
+    c.listen_lmac = 0;
+    c.spec_link_id = 0;                 /* the 802.11 link id (non-MLO: 0) */
+    if (action == 2 /*MODIFY*/) {
+        c.active = active ? 1 : 0;
+        c.modify_mask = LINK_MOD_ACTIVE | LINK_MOD_RATES_INFO |
+                        LINK_MOD_PROTECT_FLAGS | LINK_MOD_QOS_PARAMS |
+                        LINK_MOD_BEACON_TIMING;
+        /* Basic/ACK rates — the same values the legacy mac_ctxt needed to avoid
+         * an ADVANCED_SYSASSERT: CCK 1/2/5.5/11 and the mandatory OFDM set. */
+        c.cck_rates = 0x0f;
+        c.ofdm_rates = 0x15;
+        c.qos_flags = 1;                /* MAC_QOS_FLG_UPDATE_EDCA */
+        for (a = 0; a < 4; a++) {
+            c.ac[a].cw_min = cwmin[a]; c.ac[a].cw_max = cwmax[a];
+            c.ac[a].aifsn = aifs[a];   c.ac[a].fifos_mask = fifo[a];
+        }
+        c.bi = g_join_bi;
+        c.dtim_interval = (u32)g_join_bi * (g_join_dtim ? g_join_dtim : 1);
+    }
+    uno_dbg_net_trace("wifi: LINK_CONFIG action=%d active=%d phy=%s bi=%d dtim=%d len=%d",
+                      action, active, have_phy ? "valid" : "INVALID",
+                      g_join_bi, g_join_dtim, (int)sizeof c);
+    send_cmd(GRP_MACCONF, MC_LINK_CONFIG, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
+/* STA_CONFIG_CMD (MAC_CONF 0xa) — the AP peer station. Replaces ADD_STA
+ * (LONG 0x18); there is no add/modify flag, re-sending the command updates it.
+ * `authorized` gates the MFP-until-authorized bit the way iwl_mvm_mld_cfg_sta
+ * does (capa 114 = STA_EXP_MFP_SUPPORT). */
+static void mld_sta_cfg(const u8 addr[6], int aid, int authorized)
+{
+    struct mld_sta_cmd c;
+    memset(&c, 0, sizeof c);
+    c.sta_id = AP_STA_ID;
+    c.link_id = MLD_LINK_ID;
+    memcpy(c.peer_mld_address, addr, 6);
+    memcpy(c.peer_link_address, addr, 6);
+    c.station_type = 0;                 /* STATION_TYPE_PEER */
+    c.assoc_id = (u32)aid;              /* only meaningful once associated */
+    if (fw_has_capa(114) && !authorized) c.mfp = 1;
+    c.mimo = 0;                         /* 1 spatial stream, matching rxchain */
+    uno_dbg_net_trace("wifi: STA_CONFIG sta=%d link=%d aid=%d auth=%d "
+                      "peer=%02x:%02x:%02x:%02x:%02x:%02x len=%d",
+                      AP_STA_ID, MLD_LINK_ID, aid, authorized,
+                      addr[0],addr[1],addr[2],addr[3],addr[4],addr[5], (int)sizeof c);
+    send_cmd(GRP_MACCONF, MC_STA_CONFIG, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
+/* SEC_KEY_CMD (DATA_PATH 0x18) — the MLD key install path. The legacy
+ * ADD_STA_KEY (LONG 0x17) belongs to the ADD_STA world and has no station to
+ * attach to once the peer came from STA_CONFIG_CMD, so the 4-way handshake has
+ * to install its CCMP keys through here instead (iwl_mvm_mld_send_key). */
+static void mld_sec_key(const u8 *key, int keylen, int keyidx, int mcast)
+{
+    struct __attribute__((packed)) {
+        u32 action, sta_mask, key_id, key_flags;
+        u8 key[32], tkip_mic_rx[8], tkip_mic_tx[8];
+        u64 rx_seq, tx_seq;
+    } c;
+    memset(&c, 0, sizeof c);
+    c.action = 1;                       /* FW_CTXT_ACTION_ADD */
+    c.sta_mask = (u32)(1u << AP_STA_ID);
+    c.key_id = (u32)keyidx;
+    c.key_flags = 0x02;                 /* IWL_SEC_KEY_FLAG_CIPHER_CCMP */
+    if (mcast) c.key_flags |= 0x40 | 0x08;   /* MCAST_KEY | NO_TX */
+    memcpy(c.key, key, keylen < 32 ? keylen : 32);
+    uno_dbg_net_trace("wifi: SEC_KEY idx=%d mcast=%d flags=%02x len=%d",
+                      keyidx, mcast, (unsigned)c.key_flags, (int)sizeof c);
+    send_cmd(GRP_DATAPATH, DP_SEC_KEY, 0, &c, (int)sizeof c);
     wait_cmd_done(100);
 }
 
@@ -2207,6 +2444,7 @@ static int read_config(int vol)
  * ===================================================================== */
 static u8 g_bssid[6];
 static u16 g_seq_no;
+static u16 g_aid;                        /* association id, set by mvm_assoc() */
 
 /* build a QoS-data 802.11 header (ToDS) + LLC/SNAP for an Ethernet frame,
    returns total 802.11 payload length written to out (after the tx cmd). */
@@ -2282,10 +2520,20 @@ static void handle_eapol(const u8 *frame, int len)
       tx_enqueue(tx, n, 1 /*high priority*/);
     }
     if (g_wpa.state == WPA_ST_DONE && !g_keys_installed) {
-        mvm_add_sta_key(g_wpa.ptk + 32, 16, 0, 0, 0);          /* pairwise TK */
-        if (g_wpa.gtk_len) mvm_add_sta_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1, 0);
-        g_keys_installed = 1;
-        mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));            /* authorize */
+        if (fw_has_mld_api()) {
+            /* the link API installs keys via SEC_KEY_CMD and re-sends
+             * STA_CONFIG_CMD (now authorized, so the MFP bit drops) instead of
+             * ADD_STA_KEY + an ADD_STA MODIFY */
+            mld_sec_key(g_wpa.ptk + 32, 16, 0, 0);             /* pairwise TK */
+            if (g_wpa.gtk_len) mld_sec_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1);
+            g_keys_installed = 1;
+            mld_sta_cfg(g_bssid, g_aid, 1 /*authorized*/);
+        } else {
+            mvm_add_sta_key(g_wpa.ptk + 32, 16, 0, 0, 0);      /* pairwise TK */
+            if (g_wpa.gtk_len) mvm_add_sta_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1, 0);
+            g_keys_installed = 1;
+            mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));        /* authorize */
+        }
         g_joined = 1;
         uno_dbg_net_trace("wifi: 4-way handshake DONE - CCMP keys installed "
                           "(gtk_len=%d idx=%d), station authorized",
@@ -2320,13 +2568,15 @@ struct sc_umac  { u32 uid; u32 ooc; struct sc_reqp p; } __attribute__((packed));
 typedef char _sc_umac_sz_check[(sizeof(struct sc_umac) == 1940) ? 1 : -1];
 
 #define SCAN_AP_MAX 24
-static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen; } g_scan_aps[SCAN_AP_MAX];
+static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen;
+                        u16 bi; u8 dtim; } g_scan_aps[SCAN_AP_MAX];
 static int g_scan_ap_n;
 
 static void scan_record_beacon(const u8 *frame, int fl)
 {
     u16 fc; int subtype, ielen, i;
-    const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0;
+    const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0, dtim = 0;
+    u16 bi = 0;
     g_scan_beacon_calls++;
     if (g_scan_beacon_calls <= 4)
         uno_dbg_net_trace("wifi: scan rx#%d fl=%d fc=%04x", g_scan_beacon_calls, fl,
@@ -2337,20 +2587,24 @@ static void scan_record_beacon(const u8 *frame, int fl)
     subtype = (fc >> 4) & 0xF;
     if (subtype != 8 && subtype != 5) return;         /* beacon (8) / probe-resp (5) */
     bssid = frame + 16;                               /* addr3 */
+    bi = (u16)(frame[32] | (frame[33] << 8));         /* beacon interval, TU */
     ie = frame + 36; ielen = fl - 36;                 /* skip ts(8)+bint(2)+cap(2) after the 24 B hdr */
     for (i = 0; i + 2 <= ielen; ) {
         int id = ie[i], ln = ie[i + 1];
         if (i + 2 + ln > ielen) break;
         if (id == 0 && ln <= 32) { ssid = ie + i + 2; ssid_len = ln; }
         else if (id == 3 && ln >= 1) chan = ie[i + 2];
+        else if (id == 5 && ln >= 2) dtim = ie[i + 3];   /* TIM: count, PERIOD, ... */
         i += 2 + ln;
     }
     for (i = 0; i < g_scan_ap_n; i++)
         if (!memcmp(g_scan_aps[i].bssid, bssid, 6)) {
-            g_scan_aps[i].seen++; if (chan) g_scan_aps[i].chan = chan; return; }
+            g_scan_aps[i].seen++; if (chan) g_scan_aps[i].chan = chan;
+            if (bi) g_scan_aps[i].bi = bi; if (dtim) g_scan_aps[i].dtim = dtim; return; }
     if (g_scan_ap_n >= SCAN_AP_MAX) return;
     { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
       memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
+      a->bi = bi; a->dtim = dtim;
       if (ssid && ssid_len <= 32) { memcpy(a->ssid, ssid, ssid_len); a->ssid[ssid_len] = 0; }
       else a->ssid[0] = 0; }
 }
@@ -2519,6 +2773,10 @@ static int scan_pick(void)
     if (best < 0) return -1;
     memcpy(g_bssid, g_scan_aps[best].bssid, 6);
     g_join_chan = g_scan_aps[best].chan;
+    /* Beacon timing for LINK_CONFIG_CMD; fall back to the usual 100 TU / DTIM 1
+     * if the beacon carried no TIM (probe responses do not). */
+    g_join_bi = g_scan_aps[best].bi ? g_scan_aps[best].bi : 100;
+    g_join_dtim = g_scan_aps[best].dtim ? g_scan_aps[best].dtim : 1;
     return 0;
 }
 
@@ -2585,7 +2843,6 @@ static int mvm_auth(void)
 /* Build + TX an Association Request (capability + listen-interval + SSID +
  * supported/extended rates + WPA2 RSN IE) and wait for the Assoc Response.
  * Returns the AID on success, <0 on failure / timeout. */
-static u16 g_aid;
 static int mvm_assoc(void)
 {
     u8 f[128]; int n = 24;
@@ -2618,44 +2875,95 @@ static int mvm_assoc(void)
       return g_aid; }
 }
 
+/* Bring up the mac / link / station contexts for the AP already selected into
+ * g_bssid + g_join_chan, then allocate the data TX queue. Returns the fw-assigned
+ * qid, or <0. csr2808 is logged after each command so a metal trace names the
+ * exact one that asserted.
+ *
+ * Two shapes, chosen by what the fw advertises:
+ *  - LINK API (capa 110): MAC_CONFIG -> LINK_CONFIG(ADD) -> PHY_CONTEXT ->
+ *    LINK_CONFIG(MODIFY: active + phy + rates + qos) -> STA_CONFIG.
+ *  - legacy: PHY_CONTEXT -> MAC_CONTEXT -> BINDING -> ADD_STA.
+ * TIME_QUOTA is legacy-only; the link carries the fw's scheduling now. */
+static int assoc_setup(void)
+{
+    u32 h; int q;
+#define TRACE_CSR(what) do { h = r32(CSR_MSIX_HW_INT_CAUSES_AD); \
+        uno_dbg_net_trace("wifi: join: after " what " csr2808=%08x", h); } while (0)
+    if (fw_has_mld_api()) {
+        mld_mac_cfg(1 /*ADD*/, 0 /*not assoc*/, 0);   TRACE_CSR("MAC_CONFIG");
+        /* ADD the link with no PHY yet, exactly as iwl_mvm_add_link does */
+        mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/); TRACE_CSR("LINK_CONFIG ADD");
+        mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
+        /* now the link can be bound to the PHY and activated */
+        mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1);   TRACE_CSR("LINK_CONFIG MODIFY");
+        mld_sta_cfg(g_bssid, 0, 0);                    TRACE_CSR("STA_CONFIG");
+    } else {
+        mvm_phy_ctxt(g_join_chan, 1 /*ADD*/);          TRACE_CSR("phy_ctxt");
+        mvm_mac_ctxt(g_bssid, 0, 0, 1 /*ADD*/);        TRACE_CSR("mac_ctxt");
+        mvm_binding(1);                                TRACE_CSR("binding");
+        mvm_add_sta(g_bssid, 0, 0);                    TRACE_CSR("add_sta");
+    }
+    q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
+    h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+    uno_dbg_net_trace("wifi: join: txq_alloc -> qid=%d csr2808=%08x g_tx_wr=%d", q, h, g_tx_wr);
+    return q;
+#undef TRACE_CSR
+}
+
+/* Tell the fw we are now associated with aid, and arm the WPA2 supplicant. */
+static void assoc_mark_associated(int aid)
+{
+    u8 pmk[32];
+    if (fw_has_mld_api()) {
+        mld_mac_cfg(2 /*MODIFY*/, 1 /*assoc*/, aid);
+        mld_sta_cfg(g_bssid, aid, 0 /*not authorized until the 4-way ends*/);
+    } else {
+        mvm_mac_ctxt(g_bssid, 1, aid, 2 /*MODIFY*/);
+    }
+    wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+    wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
+    g_wpa_active = 1; g_keys_installed = 0;
+    strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+}
+
+/* Full connect on a stock boot: scan -> pick the configured SSID -> mac/link/sta
+ * setup -> auth window -> Open-System auth -> assoc. The 4-way handshake then
+ * runs from handle_eapol() as iwl_recv() pumps the RX ring. */
 static int find_and_join(void)
 {
-    int chan = 0;
-    /* A real scan issues SCAN_REQ_UMAC and collects beacons; here we drive the
-       config + request and let the connect flow proceed on the configured SSID.
-       Channel discovery from beacons is part of the metal bring-up. */
+    int q, r;
     mvm_scan_cfg();
-    /* State the scaffold boundary in the trace so a metal log is never read as
-       "the AP rejected us": everything below runs against a broadcast BSSID
-       and no auth/assoc exchange is performed yet. Reaching this line on metal
-       means card + firmware + command layer all work - the remaining tail is
-       MLME (beacon parse -> real BSSID/channel -> auth/assoc), not transport. */
-    uno_dbg_net_trace("wifi: join: scan cfg sent. KNOWN GAP: beacon parse + "
-                      "auth/assoc not implemented - bssid=broadcast, chan=1 "
-                      "assumed; a real join CANNOT complete yet");
-    /* (SCAN_REQ_UMAC build is family-version-specific; see fwapi ref §5.12.
-       On metal we parse the SCAN_COMPLETE + beacon RX to learn BSSID/channel.) */
-    if (chan == 0) chan = 1;           /* default until beacon parse fills it */
+    mvm_scan_passive(5000);
+    if (scan_pick() < 0) {
+        uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs",
+                          g_cfg_ssid, g_scan_ap_n);
+        return -1;
+    }
+    uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
+                      "chan %d bi %d dtim %d (link-api=%d)", g_cfg_ssid,
+                      g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                      g_join_chan, g_join_bi, g_join_dtim, fw_has_mld_api());
+    q = assoc_setup();
+    if (q < 0) { uno_dbg_net_trace("wifi: join: no TX queue - cannot auth"); return -1; }
 
-    /* assoc sequence (fwapi ref Part 11 / §8.1) */
-    mvm_phy_ctxt(chan, 1 /*ADD*/);
-    memset(g_bssid, 0xFF, 6);
-    mvm_mac_ctxt(g_bssid, 0, 0, 1 /*ADD*/);
-    mvm_binding(1);
-    mvm_time_quota();
+    /* Reserve on-channel airtime for the auth exchange. This fw has no
+     * TIME_EVENT_CMD (it SYSASSERTs); SESSION_PROTECTION_CMD is the one it
+     * speaks, and it now has a real link to reference. */
     mvm_assoc_window();
-    mvm_add_sta(g_bssid, 0, 0);        /* ADD the AP peer station */
-    /* auth + assoc frame exchange, then MAC ctxt MODIFY(assoc) — metal path.
-       The 4-way handshake then runs via handle_eapol() as EAPOL frames arrive. */
-
-    /* set up the WPA supplicant with the PMK */
-    { u8 pmk[32];
-      wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-      wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
-      g_wpa_active = 1; }
-    strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
-    uno_dbg_net_trace("wifi: join: phy/mac ctxt + binding + sta queued for "
-                      "\"%s\", WPA2 supplicant armed (PMK derived)", g_cfg_ssid);
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+        uno_dbg_net_trace("wifi: join: session-prot asserted the fw (iwl fwerr)");
+        return -1;
+    }
+    r = mvm_auth();
+    uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
+    if (r != 0) return -1;
+    r = mvm_assoc();
+    uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
+    if (r < 0) return -1;
+    assoc_mark_associated(r);
+    uno_dbg_net_trace("wifi: join: associated with \"%s\" aid=%d, WPA2 supplicant "
+                      "armed (PMK derived) - pumping RX for the 4-way", g_cfg_ssid, r);
     return 0;
 }
 
@@ -3121,6 +3429,67 @@ static int mvm_steps(int n, char *out, int cap)
     return (int)strlen(out);
 }
 
+/* Link-API association, one command per call: "iwl mld <n>". Same rationale as
+ * mvm_steps() - a wedge eats the in-flight URC log frames, so each command is its
+ * own round trip that completes and flushes, and the last step that DID return
+ * names the culprit. Run "iwl scan" first so g_bssid/g_join_chan are real.
+ *
+ *   1 MAC_CONFIG ADD   2 LINK_CONFIG ADD   3 PHY_CONTEXT ADD
+ *   4 LINK_CONFIG MODIFY(active)           5 STA_CONFIG (AP peer)
+ *   6 txq_alloc        7 SESSION_PROTECTION            8 auth   9 assoc
+ */
+static int mld_steps(int n, char *out, int cap)
+{
+    static const u8 zero6[6] = { 0, 0, 0, 0, 0, 0 };
+    u32 h;
+    (void)cap;
+    if (!g_bar || !g_alive) {
+        strcpy(out, "err fw not ALIVE - run 'iwl rerun' then 'iwl mvm 1'..'4'");
+        return (int)strlen(out);
+    }
+    if (!fw_has_mld_api() && n <= 5) {
+        strcpy(out, "err fw does not advertise the link API (capa 110) - use 'iwl mvm <n>'");
+        return (int)strlen(out);
+    }
+    if (n >= 3 && n <= 5 && !memcmp(g_bssid, zero6, 6)) {
+        strcpy(out, "err no AP picked - run 'iwl scan' first (needs a real BSSID/chan)");
+        return (int)strlen(out);
+    }
+    switch (n) {
+    case 1: mld_mac_cfg(1 /*ADD*/, 0, 0);
+        strcpy(out, "ok mld1: MAC_CONFIG ADD returned"); break;
+    case 2: mld_link_cfg(1 /*ADD*/, 0, 0 /*phy INVALID*/);
+        strcpy(out, "ok mld2: LINK_CONFIG ADD returned"); break;
+    case 3: mvm_phy_ctxt(g_join_chan ? g_join_chan : 1, 1 /*ADD*/);
+        strcpy(out, "ok mld3: PHY_CONTEXT ADD returned"); break;
+    case 4: mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/);
+        strcpy(out, "ok mld4: LINK_CONFIG MODIFY(active) returned"); break;
+    case 5: mld_sta_cfg(g_bssid, 0, 0);
+        strcpy(out, "ok mld5: STA_CONFIG (AP peer) returned"); break;
+    case 6: { int q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
+        uno_dbg_net_trace("wifi: mld6: txq_alloc -> qid=%d", q);
+        strcpy(out, q >= 0 ? "ok mld6: TX queue allocated (qid in NET log)"
+                           : "err mld6: txq_alloc gave no queue"); break; }
+    case 7: mvm_assoc_window();
+        h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        uno_dbg_net_trace("wifi: mld7: after session-prot csr2808=%08x", h);
+        strcpy(out, h ? "err mld7: session-prot asserted the fw (iwl fwerr)"
+                      : "ok mld7: SESSION_PROTECTION accepted"); break;
+    case 8: { int r = mvm_auth();
+        uno_dbg_net_trace("wifi: mld8: auth -> %d", r);
+        strcpy(out, r == 0 ? "ok mld8: Open-System auth accepted"
+                           : (r < 0 ? "err mld8: no auth response" : "err mld8: AP rejected auth")); break; }
+    case 9: { int r = mvm_assoc();
+        uno_dbg_net_trace("wifi: mld9: assoc -> %d", r);
+        if (r >= 0) { assoc_mark_associated(r); strcpy(out, "ok mld9: associated (run 'iwl eapol')"); }
+        else strcpy(out, "err mld9: assoc failed (detail in NET log)"); break; }
+    default:
+        strcpy(out, "err usage: iwl mld <1-9> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc)");
+        break;
+    }
+    return (int)strlen(out);
+}
+
 #if UNO_DEBUG
 /* Look up the short assert name for an fw error_id (mask off the CPU bits),
  * mirroring iwlwifi fw/img.c advanced_lookup[]. */
@@ -3209,22 +3578,12 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs", g_cfg_ssid, g_scan_ap_n);
             strcpy(out, "err SSID not in scan (detail in NET log)"); return (int)strlen(out);
         }
-        uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x chan %d",
-            g_cfg_ssid, g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5], g_join_chan);
-        mvm_phy_ctxt(g_join_chan, 1);
-        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after phy_ctxt csr2808=%08x", h);
-        mvm_mac_ctxt(g_bssid, 0, 0, 1);
-        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after mac_ctxt csr2808=%08x", h);
-        mvm_binding(1);
-        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after binding csr2808=%08x", h);
-        /* time_quota + assoc_window SKIPPED - both ADVANCED_SYSASSERT this fw and
-         * are only airtime/session scheduling; get add_sta + the TX queue working
-         * first, then revisit them (2026-07-25). */
-        mvm_add_sta(g_bssid, 0, 0);
-        h = r32(CSR_MSIX_HW_INT_CAUSES_AD); uno_dbg_net_trace("wifi: join: after add_sta csr2808=%08x", h);
-        q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
+        uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
+            "chan %d bi %d dtim %d (link-api=%d)",
+            g_cfg_ssid, g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+            g_join_chan, g_join_bi, g_join_dtim, fw_has_mld_api());
+        q = assoc_setup();
         h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
-        uno_dbg_net_trace("wifi: join: txq_alloc -> qid=%d csr2808=%08x g_tx_wr=%d", q, h, g_tx_wr);
         { char *o = out; const char *p = h ? "err join: fw ASSERTED (iwl fwerr); qid=" : "ok join setup: qid=";
           int v = q, m = 0, j; char d[8];
           while (*p) *o++ = *p++;
@@ -3262,11 +3621,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         r = mvm_assoc();
         uno_dbg_net_trace("wifi: assoc -> %d (>=0 AID, <0 fail)", r);
         if (r >= 0) {
-            mvm_mac_ctxt(g_bssid, 1, r, 2 /*MODIFY*/);   /* mark associated */
-            u8 pmk[32];
-            wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-            wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1;
-            strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+            assoc_mark_associated(r);
             strcpy(out, "ok assoc: associated, supplicant armed (pump RX for 4-way)");
         } else strcpy(out, "err assoc: failed (detail in NET log)");
         return (int)strlen(out);
@@ -3307,6 +3662,16 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
           for (j = m - 1; j >= 0; j--) *o++ = digs[j];
           pre = " APs (detail in NET log)"; while (*pre) *o++ = *pre++; *o = 0; }
         return (int)strlen(out);
+    }
+    if (!strncmp(line, "mld", 3)) {              /* "iwl mld <n>" - link-API bisect */
+        const char *q = line + 3;
+        while (*q == 0x20) q++;
+        if (!g_bar) { strcpy(out, "no BAR0 (run rerun first)"); return (int)strlen(out); }
+        if (*q < 0x31 || *q > 0x39) {
+            strcpy(out, "err usage: iwl mld <1-9> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc)");
+            return (int)strlen(out);
+        }
+        return mld_steps(*q - 0x30, out, cap);
     }
     if (!strncmp(line, "mvm", 3)) {
         const char *q = line + 3;
