@@ -4,8 +4,9 @@
  *  available (next to the exe as ffmpeg.exe, or on PATH) frames are piped to it
  *  as raw BGRA and muxed to an .mp4 (H.264).  If not, each frame is written as a
  *  PNG into a timestamped folder, which the user can convert later - so
- *  recording always produces something ("still land video").  Server-side
- *  capture is a later slice; this is the client end.
+ *  recording always produces something ("still land video").  The same recorder
+ *  also writes out a server-side `screen record` capture: RemoteMain pulls the
+ *  device ring, reconstructs each frame, and feeds them here.
  */
 using System;
 using System.Diagnostics;

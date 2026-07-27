@@ -116,6 +116,7 @@ namespace UnoRemote
         private readonly TextBox _port = new TextBox { Text = "5099", Width = 60 };
         private readonly Button _listen = new Button { Text = "Listen", Width = 70 };
         private readonly Button _record = new Button { Text = "Record", Width = 70, Enabled = false };
+        private readonly CheckBox _srvCap = new CheckBox { Text = "on device", AutoSize = true, Padding = new Padding(4, 8, 2, 0) };
         private readonly ComboBox _scale = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
         private readonly Label _status = new Label { AutoSize = true, Text = "idle" };
         private readonly TextBox _log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = false };
@@ -149,6 +150,7 @@ namespace UnoRemote
             bar.Controls.Add(new Label { Text = "Scale:", AutoSize = true, Padding = new Padding(8, 8, 2, 0) });
             bar.Controls.Add(_scale);
             bar.Controls.Add(_record);
+            bar.Controls.Add(_srvCap);
             bar.Controls.Add(_status);
 
             // ---- bottom: log + command box ----
@@ -219,7 +221,8 @@ namespace UnoRemote
             _status.Text = "disconnected - waiting for redial";
             _pumping = false;
             if (_rec.Recording) { Log("recording stopped (link dropped): " + _rec.Stop()); _record.Text = "Record"; }
-            _record.Enabled = false;
+            if (_srvRecording) { _srvRecording = false; Log("device recording lost (link dropped)"); _record.Text = "Record"; }
+            _record.Enabled = false; _srvCap.Enabled = true; _scale.Enabled = true;
         }
 
         // ---- screen pump ----
@@ -298,43 +301,157 @@ namespace UnoRemote
             if (u.Nch <= 0 || u.Qoi == null) return;      // static frame: nothing changed
 
             using (var strip = Qoi.Decode(u.Qoi))         // Tw x (Nch*Th) tile strip
-            using (var g = Graphics.FromImage(_canvas))
+                BlitTiles(_canvas, strip, u.TileIdx, u.Cols, u.Tw, u.Th, u.W, u.H);
+        }
+
+        // Blit a decoded tile strip (Tw x (n*Th)) onto a canvas at the tile
+        // positions given by their row-major indices. Shared by the live-view
+        // delta compositor and the server-capture reconstruction.
+        private static void BlitTiles(Bitmap canvas, Bitmap strip, int[] idx,
+                                      int cols, int tw, int th, int w, int h)
+        {
+            using (var g = Graphics.FromImage(canvas))
             {
                 g.CompositingMode = CompositingMode.SourceCopy;
                 g.InterpolationMode = InterpolationMode.NearestNeighbor;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
-                for (int i = 0; i < u.Nch; i++)
+                for (int i = 0; i < idx.Length; i++)
                 {
-                    int t = u.TileIdx[i];
-                    int col = t % u.Cols, row = t / u.Cols;
-                    int dx = col * u.Tw, dy = row * u.Th;
-                    int vw = Math.Min(u.Tw, u.W - dx);    // clamp partial edge tiles
-                    int vh = Math.Min(u.Th, u.H - dy);
+                    int t = idx[i];
+                    int col = t % cols, row = t / cols;
+                    int dx = col * tw, dy = row * th;
+                    int vw = Math.Min(tw, w - dx);        // clamp partial edge tiles
+                    int vh = Math.Min(th, h - dy);
                     if (vw <= 0 || vh <= 0) continue;
                     g.DrawImage(strip, new Rectangle(dx, dy, vw, vh),
-                                new Rectangle(0, i * u.Th, vw, vh), GraphicsUnit.Pixel);
+                                new Rectangle(0, i * th, vw, vh), GraphicsUnit.Pixel);
                 }
             }
         }
 
         // ---- recording ----
+        private volatile bool _srvRecording;
+        private static string VideosDir()
+        {
+            return System.IO.Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.MyVideos), "UnoRemote");
+        }
+
         private void ToggleRecord()
         {
+            if (_srvCap.Checked) { ToggleServerRecord(); return; }
+
             if (!_rec.Recording)
             {
-                string outDir = System.IO.Path.Combine(Environment.GetFolderPath(
-                    Environment.SpecialFolder.MyVideos), "UnoRemote");
-                string dst = _rec.Start(_view.DevW / _scaleFactor, _view.DevH / _scaleFactor, FpsTarget, outDir);
-                _record.Text = "Stop";
+                string dst = _rec.Start(_view.DevW / _scaleFactor, _view.DevH / _scaleFactor, FpsTarget, VideosDir());
+                _record.Text = "Stop"; _srvCap.Enabled = false;
                 Log((_rec.UsingFfmpeg ? "recording -> " : "recording frames -> ") + dst);
             }
             else
             {
                 string dst = _rec.Stop();
-                _record.Text = "Record";
+                _record.Text = "Record"; _srvCap.Enabled = true;
                 Log("recording saved: " + dst);
             }
         }
+
+        // Server-side capture: the device records on its own tick (steady fps,
+        // independent of our poll rate); on stop we pull the ring, reconstruct
+        // every frame, and write it out through a private Recorder (so it never
+        // mixes with a client-side recording on _rec).
+        private void ToggleServerRecord()
+        {
+            if (!_link.Connected) { Log("not connected"); return; }
+            if (!_srvRecording)
+            {
+                _record.Enabled = false;
+                Fire(() =>
+                {
+                    try
+                    {
+                        var st = _link.ScreenRecordStart(_scaleFactor, (int)FpsTarget);
+                        _srvRecording = true;
+                        BeginInvoke((Action)(() =>
+                        {
+                            _record.Text = "Stop (dev)"; _record.Enabled = true; _scale.Enabled = false;
+                            Log("device recording at " + Get(st, "fps") + " fps (scale " + _scaleFactor + ")");
+                        }));
+                    }
+                    catch (Exception ex) { AppendLog("record start: " + ex.Message);
+                                           BeginInvoke((Action)(() => _record.Enabled = true)); }
+                });
+            }
+            else
+            {
+                _record.Enabled = false;
+                Fire(RunServerCapture);
+            }
+        }
+
+        private void RunServerCapture()
+        {
+            try
+            {
+                var st = _link.ScreenRecordStop();
+                _srvRecording = false;
+                int nbytes = Get(st, "bytes"), ew = Get(st, "ew"), eh = Get(st, "eh");
+                int cols = Get(st, "cols"), tw = Get(st, "tw"), th = Get(st, "th");
+                int fps = Get(st, "fps"), nframes = Get(st, "frames"), dropped = Get(st, "dropped");
+                AppendLog("device captured " + nframes + " frames (" + nbytes + " bytes" +
+                          (dropped > 0 ? ", " + dropped + " dropped - ring full" : "") + "); pulling...");
+                byte[] data = _link.ScreenRecordReadAll(nbytes);
+
+                var rec = new Recorder();
+                string dst = rec.Start(ew, eh, fps > 0 ? fps : FpsTarget, VideosDir());
+                Bitmap canvas = null; int p = 0, emitted = 0;
+                try
+                {
+                    while (p + 12 <= data.Length)
+                    {
+                        int typ = data[p];
+                        int nch = data[p + 2] | (data[p + 3] << 8);
+                        int strip = data[p + 4] | (data[p + 5] << 8) | (data[p + 6] << 16) | (data[p + 7] << 24);
+                        int payload = data[p + 8] | (data[p + 9] << 8) | (data[p + 10] << 16) | (data[p + 11] << 24);
+                        p += 12;
+                        if (p + payload > data.Length) break;
+                        if (typ == 0)                                    // keyframe
+                        {
+                            byte[] q = new byte[payload]; Array.Copy(data, p, q, 0, payload);
+                            if (canvas != null) canvas.Dispose();
+                            canvas = Qoi.Decode(q);
+                        }
+                        else if (canvas != null && nch > 0 && strip > 0)  // delta
+                        {
+                            byte[] sq = new byte[strip]; Array.Copy(data, p, sq, 0, strip);
+                            int[] idx = new int[nch];
+                            for (int i = 0; i < nch; i++)
+                                idx[i] = data[p + strip + i * 2] | (data[p + strip + i * 2 + 1] << 8);
+                            using (var stbmp = Qoi.Decode(sq))
+                                BlitTiles(canvas, stbmp, idx, cols, tw, th, ew, eh);
+                        }
+                        p += payload;
+                        if (canvas != null)
+                        {
+                            using (var c = (Bitmap)canvas.Clone()) rec.Frame(c);
+                            emitted++;
+                        }
+                    }
+                }
+                finally { if (canvas != null) canvas.Dispose(); }
+                string saved = rec.Stop();
+                AppendLog("server recording: " + emitted + " frames -> " + saved);
+            }
+            catch (Exception ex) { AppendLog("server capture: " + ex.Message); }
+            finally
+            {
+                _srvRecording = false;
+                if (!IsDisposed) BeginInvoke((Action)(() =>
+                { _record.Text = "Record"; _record.Enabled = true; _scale.Enabled = true; }));
+            }
+        }
+
+        private static int Get(System.Collections.Generic.Dictionary<string, int> d, string k)
+        { int v; return d.TryGetValue(k, out v) ? v : 0; }
 
         // ---- keyboard forwarding ----
         // UEFI SimpleTextInput scan codes (uefi_main.c map_key handles the arrows,
