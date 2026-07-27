@@ -102,6 +102,8 @@ static int      g_pending_off;      /* shut down once the TX queue drains      *
 static unsigned g_uart_base;        /* serial transport: 16550 I/O base (or 0) */
 static unsigned g_hello_at;         /* serial: re-emit HELLO at this tick ...   */
 static int      g_rx_seen;          /* ... until the host is heard from once    */
+static int      g_listening;        /* URC SERVER mode (`listen`): host dials IN */
+static int      g_listen_sock = -1; /* the bound+listening socket (listen mode)  */
 
 /* outbound byte queue (linear, compacted on flush) */
 static char     g_tx[8192];
@@ -1237,6 +1239,44 @@ static const urc_transport TP_TCP = {
     "tcp", tcp_medium_up, tcp_open, tcp_state, tcp_send, tcp_recv, tcp_close, tcp_poll
 };
 
+/* --- TCP LISTEN backend: URC as a SERVER (the dev PC dials INTO the box) ---
+ * With `listen` in DEBUG.CFG the box binds+listens on g_port (netsock
+ * net_listen) and accepts one inbound URC connection, then speaks the identical
+ * line protocol over it. The listener PERSISTS across client reconnects, so
+ * unlike dial-out there is no connect timeout and no remote to retry - a dropped
+ * client just drops us back to waiting for the next accept. send/recv/poll are
+ * the TCP backend's (they act on g_sock = the accepted child). */
+static int  lst_medium_up(void) { return pc64_net_up(); }   /* need the NIC + an IP to bind */
+static int  lst_open(void)
+{
+    if (g_listen_sock < 0) {                        /* create the listener once */
+        g_listen_sock = net_socket(SOCK_TCP);
+        if (g_listen_sock < 0) return -1;
+        if (net_bind(g_listen_sock, g_port) < 0) { net_sock_close(g_listen_sock); g_listen_sock = -1; return -1; }
+        if (net_listen(g_listen_sock) < 0)       { net_sock_close(g_listen_sock); g_listen_sock = -1; return -1; }
+    }
+    if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; }   /* drop any prior child */
+    return 0;
+}
+static int  lst_state(void)
+{
+    if (g_sock >= 0) {                              /* a client is connected */
+        int st = net_sock_state(g_sock);
+        if (st == TCP_ESTABLISHED) return LINK_UP;
+        net_sock_close(g_sock); g_sock = -1;        /* it left - report the drop and */
+        return LINK_CONNECTING;                      /* accept the next one on a later tick */
+    }
+    if (g_listen_sock >= 0) {                       /* try to accept a dial-in */
+        int c = net_accept(g_listen_sock);
+        if (c >= 0) { g_sock = c; return LINK_UP; } /* freshly-established child */
+    }
+    return LINK_CONNECTING;                          /* still waiting for a client */
+}
+static void lst_close(void) { if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; } }
+static const urc_transport TP_TCP_LISTEN = {
+    "listen", lst_medium_up, lst_open, lst_state, tcp_send, tcp_recv, lst_close, tcp_poll
+};
+
 /* --- serial backend (16550 UART, unoauto_serial.c) ---
  * The UART is a point-to-point wire with no handshake: it is "up" as soon as it
  * is initialised.  The URC HELLO handshake still runs at the line-protocol
@@ -1293,6 +1333,27 @@ void unoauto_remote_boot(void)
 {
     char v[64]; char *p; int oct, i;
     if (g_state != RS_OFF) return;                 /* armed once */
+
+    /* URC SERVER mode: `listen` (bare = port 5099) or `listen=<port>` makes the
+     * box a LISTENER - the dev PC dials INTO it (netsock net_listen/net_accept),
+     * instead of the box dialing out. Also arms netdisc as a responder so a
+     * scanning client can discover the box and its listen port. Mutually
+     * exclusive with remote=/discover/remote-serial (all of which dial out);
+     * checked first. */
+    if (pc64_stress_cfg_flag("listen") > 0) {
+        char lb[16];
+        int lp = (pc64_stress_cfg_value("listen", lb, (int)sizeof lb) > 0) ? (int)atol_(lb) : 5099;
+        if (lp <= 0 || lp > 65535) lp = 5099;
+        g_port = (u16)lp;
+        g_listening = 1;
+        g_tp = &TP_TCP_LISTEN;
+        if (g_sink < 0)
+            g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
+        netdisc_listen((unsigned short)lp);        /* answer scans with our ip:port */
+        unoauto_log(UA_CH_SCRIPT, "remote: listening for a dev-PC dial-in on :%d", lp);
+        start_connect();                            /* binds+listens; then awaits accept */
+        return;
+    }
 
     /* NIC-independent transport (Request 2): a 16550 UART link, for a box whose
      * only network is the NIC being debugged.  `remote-serial` (bare flag) uses
@@ -1372,10 +1433,11 @@ void unoauto_remote_tick(void)
              * channel - this line flows straight back out as a LOG frame,
              * seeding the remote-log stream. */
             unoauto_log(UA_CH_SCRIPT, "remote: link up");
-        } else if (ls == LINK_DEAD || g_tick > g_deadline) {
+        } else if (!g_listening && (ls == LINK_DEAD || g_tick > g_deadline)) {
             g_tp->close();
             g_state = RS_DOWN; g_deadline = g_tick + 300;   /* retry ~5 s */
         }
+        /* listen mode: no timeout - stay here polling accept until a host dials in */
         break;
     case RS_UP:
         drain_rx();
@@ -1389,7 +1451,12 @@ void unoauto_remote_tick(void)
         flush_tx();
         if (ls != LINK_UP) {
             g_tp->close();
-            g_state = RS_DOWN; g_deadline = g_tick + 300;
+            if (g_listening) {                  /* keep the listener; await a re-dial */
+                g_txlen = 0; g_rxlen = 0; g_rx_seen = 0;
+                g_state = RS_CONNECTING; g_deadline = g_tick + 600;
+            } else {
+                g_state = RS_DOWN; g_deadline = g_tick + 300;
+            }
         } else if (g_pending_off && g_txlen == 0) {
             uno_fat_sync();                     /* flush write-back FAT lines so
                                                    remote put/mkdir writes reach

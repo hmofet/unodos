@@ -15,6 +15,8 @@ a `DEBUG.CFG`, so put keys there — a `STRESS.CFG` is now shadowed by it):
 ```
 remote=<ip>:<port>       # static address (TCP over the LAN)
 discover                 # OR zero-config: find the dev PC by broadcast
+listen                   # OR SERVER mode: the dev PC dials INTO us (port 5099)
+listen=<port>            #   ...on a specific port
 remote-serial            # OR NIC-independent: URC over a 16550 UART (COM1)
 remote-serial=3e8        #   ...on a specific UART base in hex (see "serial" below)
 ```
@@ -37,6 +39,22 @@ connection drops it reconnects with a short backoff.
 > legacy `net_tcp_*` slot — so the Browser / AI apps can hold a TCP connection
 > at the same time as an active link. The stack (`net.c`) supports many
 > simultaneous connections and can `listen`/`accept` inbound ones.
+
+> **Server / listen mode (`listen`).** URC normally has the box dial OUT, which
+> suits a headless box with a changing DHCP address (it calls home when ready).
+> But because the stack can `listen`/`accept`, the box can instead be a **server**
+> that the dev PC dials INTO — the "browse the LAN and connect to a box" model.
+> With `listen` (bare = port 5099) or `listen=<port>` the box binds+listens
+> (`net_listen`/`net_accept`, the `TP_TCP_LISTEN` transport in `unoauto_remote.c`)
+> and accepts one inbound URC connection; the listener **persists** across client
+> reconnects (a dropped client just returns it to waiting), so there is no
+> connect timeout and no address to dial. `listen` is mutually exclusive with
+> `remote=`/`discover`/`remote-serial` and takes precedence. It also arms
+> `netdisc` as a **responder** advertising the box's `ip:listen-port` (via
+> `netdisc_listen`), so a scanning client can **discover** which boxes it can
+> dial in to (a dial-out `discover` box advertises port `0` — nothing to dial).
+> The WinForms client's **Scan…** button broadcasts a PROBE, lists the listening
+> boxes, and dials the one you pick. Gate: `tools/listen_qemu.py`.
 
 > **Security.** Plaintext, **LAN-only by intent**. Do not expose the listener
 > to an untrusted network; it can drive input, launch apps, run Python, and
@@ -466,3 +484,7 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
   guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
   (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2 — see the console-UART
   caveat under "NIC-independent transport" above.
+- **`tools/listen_qemu.py`** - end-to-end gate for **listen mode**: boots a
+  `listen=5099` DEBUG.CFG, forwards a host port to the guest's listener with QEMU
+  hostfwd, dials INTO the box, drives it (uptime/probe), and reconnects to prove
+  the listener persists. The reverse-direction sibling of `remote_qemu.py`.
