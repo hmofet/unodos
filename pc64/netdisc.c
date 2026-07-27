@@ -15,6 +15,8 @@ extern int pc64_net_up(void);
 extern int unoauto_remote_active(void);
 
 static int  g_active, g_up, g_have_host;
+static int  g_responder_only;        /* listen mode: answer PROBEs, never probe */
+static u16  g_self_port;             /* our URC listen port advertised in OFFER (0 = dial-out) */
 static int  g_udp = -1;              /* UDP socket bound to DISC_PORT */
 static u8   g_host_ip[4];
 static u16  g_host_port;
@@ -69,7 +71,9 @@ static int fmt_probe(char *b, int cap)
   o = ap_s(b, cap, o, " 1"); return o; }
 static int fmt_offer_self(char *b, int cap)
 { int o = 0; o = ap_s(b, cap, o, "UNODISC 1 OFFER pc64 "); o = ap_s(b, cap, o, g_name);
-  o = ap_s(b, cap, o, " 1 "); o = ap_ip(b, cap, o, net_ip()); o = ap_s(b, cap, o, " 0"); return o; }
+  o = ap_s(b, cap, o, " 1 "); o = ap_ip(b, cap, o, net_ip());
+  o = ap_s(b, cap, o, " "); o = ap_i(b, cap, o, g_self_port);   /* URC listen port (0 = we dial out) */
+  return o; }
 static int fmt_gothost(char *b, int cap, const u8 ip[4], u16 port)
 { int o = 0; o = ap_s(b, cap, o, "UNODISC 1 GOTHOST "); o = ap_ip(b, cap, o, ip);
   o = ap_s(b, cap, o, " "); o = ap_i(b, cap, o, port); return o; }
@@ -100,15 +104,32 @@ static void handle_disc(char *s, const u8 src[4], u16 sp)
 }
 
 /* ---- public ------------------------------------------------------------- */
-void netdisc_boot(void)
+static void read_name(void)
 {
     char v[24];
-    if (pc64_stress_cfg_flag("discover") <= 0) return;
-    g_active = 1;
     if (pc64_stress_cfg_value("name", v, (int)sizeof v) > 0) {
         int i; for (i = 0; i < (int)sizeof g_name - 1 && v[i]; i++) g_name[i] = v[i];
         g_name[i] = 0;
     }
+}
+
+void netdisc_boot(void)
+{
+    if (pc64_stress_cfg_flag("discover") <= 0) return;
+    g_active = 1;
+    read_name();
+}
+
+/* Listen mode: arm netdisc as a responder only - answer a scanning host's PROBE
+ * with our URC listen port so it can dial in, but never broadcast a PROBE of our
+ * own (we are not looking for a host). Called by unoauto_remote_boot when the
+ * `listen` DEBUG.CFG key is set. */
+void netdisc_listen(unsigned short port)
+{
+    g_active = 1;
+    g_responder_only = 1;
+    g_self_port = port;
+    read_name();
 }
 
 void netdisc_tick(void)
@@ -125,8 +146,9 @@ void netdisc_tick(void)
         g_up = 1; g_next_probe = g_tick;                /* probe immediately */
     }
     if (!unoauto_remote_active()) net_poll();           /* pump RX if the link isn't */
-    /* broadcast a PROBE periodically until a host answers */
-    if (!g_have_host && (int)(g_tick - g_next_probe) >= 0) {
+    /* broadcast a PROBE periodically until a host answers - but NOT in listen
+     * (responder-only) mode: there we are the server and only ANSWER PROBEs. */
+    if (!g_responder_only && !g_have_host && (int)(g_tick - g_next_probe) >= 0) {
         char b[96]; int l = fmt_probe(b, (int)sizeof b);
         net_sendbcast(g_udp, DISC_PORT, b, l);
         g_next_probe = g_tick + 100;
