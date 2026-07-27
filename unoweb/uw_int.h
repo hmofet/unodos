@@ -80,6 +80,7 @@ struct uw_doc {
     uw_sheet  *sheets, *sheets_tail;
     struct uw_box *layout_root;
     uw_metrics     metrics;
+    uw_images      images;
     int            layout_w, layout_h;
     struct uw_paint_list *paint;
     int        styled;

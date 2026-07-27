@@ -26,6 +26,7 @@ struct uw_box {
     int bt, br, bb, bl;              /* border widths */
     int pt, pr, pb, pl;              /* padding */
     const char *text; int tlen;      /* UW_BOX_TEXT */
+    void *image;                     /* UW_BOX_IMAGE */
 };
 
 struct uw_paint_list {
@@ -88,6 +89,7 @@ typedef struct {
     int     line_h;
     int     content_x, content_y;
     int     pending_space;       /* a space is owed before the next word */
+    uw_node *cur_elem;           /* the element whose text is being flowed */
     uw_box *line;
 } inline_ctx;
 
@@ -130,6 +132,7 @@ static void emit_word(inline_ctx *ic, const uw_style *s, const char *t, int len)
     if (!ic->line) return;
     tb = box_new(ic->d, UW_BOX_TEXT, NULL, s);
     if (!tb) return;
+    tb->node = ic->cur_elem;     /* so hit testing can name the <a>, not the <p> */
     tb->text = t; tb->tlen = len;
     tb->x = ic->content_x + ic->x;
     tb->y = ic->content_y + ic->y;
@@ -141,6 +144,36 @@ static void emit_word(inline_ctx *ic, const uw_style *s, const char *t, int len)
 }
 
 static void flow_inline(inline_ctx *ic, uw_node *n, const uw_style *inherited);
+
+/* <img> is a REPLACED box: it occupies intrinsic size (overridden by CSS
+ * width/height) and paints opaquely. unoweb decodes nothing - the embedder's
+ * resolve hook supplies the size and an opaque handle. No hook, or a failed
+ * resolve, means zero size, which is what a broken image should be. */
+static void emit_image(inline_ctx *ic, uw_node *n, const uw_style *s)
+{
+    int iw = 0, ih = 0;
+    void *handle = NULL;
+    uw_box *b;
+    const char *src = uw_attr(ic->d, n, "src");
+    if (ic->d->images.resolve && src)
+        ic->d->images.resolve(ic->d->images.user, src, &iw, &ih, &handle);
+    if (s->width.unit == UW_LEN_PX) iw = s->width.v;
+    if (s->height.unit == UW_LEN_PX) ih = s->height.v;
+    if (iw <= 0 && ih <= 0) return;
+    if (ic->x > 0 && ic->x + iw > ic->avail) line_break(ic);
+    ensure_line(ic, s);
+    if (!ic->line) return;
+    b = box_new(ic->d, UW_BOX_IMAGE, n, s);
+    if (!b) return;
+    b->image = handle;
+    b->x = ic->content_x + ic->x;
+    b->y = ic->content_y + ic->y;
+    b->w = iw; b->h = ih;
+    box_add(ic->line, b);
+    ic->x += iw;
+    ic->pending_space = 0;
+    if (ih > ic->line_h) ic->line_h = ih;
+}
 
 static void flow_text(inline_ctx *ic, const char *t, int len, const uw_style *s)
 {
@@ -183,13 +216,17 @@ static void flow_inline(inline_ctx *ic, uw_node *n, const uw_style *inherited)
         if (uw_type(c) != UW_NODE_ELEMENT) continue;
         {   const uw_style *s = uw_computed(c);
             if (!s || s->display == UW_DISP_NONE) continue;
+            if (!strcmp(uw_tag_name(ic->d, c), "img")) { emit_image(ic, c, s); continue; }
             if (!strcmp(uw_tag_name(ic->d, c), "br")) {
                 if (!ic->line) ensure_line(ic, s);
                 if (!ic->line_h) ic->line_h = lineh(ic->d, s);
                 line_break(ic);
                 continue;
             }
-            flow_inline(ic, c, s);
+            {   uw_node *save = ic->cur_elem;
+                ic->cur_elem = c;
+                flow_inline(ic, c, s);
+                ic->cur_elem = save; }
         }
     }
 }
@@ -244,6 +281,7 @@ static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
         memset(&ic, 0, sizeof ic);
         ic.d = d; ic.block = b; ic.avail = content_w > 0 ? content_w : 1;
         ic.content_x = content_x; ic.content_y = content_y;
+        ic.cur_elem = b->node;
         flow_inline(&ic, b->node, b->style);
         if (ic.line) { ic.line->h = ic.line_h; ic.line->w = ic.x; ic.y += ic.line_h; }
         *out_h = ic.y;
@@ -355,6 +393,14 @@ static void paint_box(uw_doc *d, uw_box *b)
     uw_box *k;
     memset(&c, 0, sizeof c);
 
+    if (b->type == UW_BOX_IMAGE) {
+        c.cmd = UW_CMD_IMAGE;
+        c.x = b->x; c.y = b->y; c.w = b->w; c.h = b->h;
+        c.image = b->image;
+        c.style = s;
+        pl_push(d, &c);
+        return;
+    }
     if (b->type == UW_BOX_TEXT) {
         c.cmd = UW_CMD_TEXT;
         c.x = b->x; c.y = b->y; c.w = b->w; c.h = b->h;
@@ -424,6 +470,55 @@ const uw_paint_cmd *uw_paint_at(uw_doc *d, int i)
     return &d->paint->v[i];
 }
 
+void uw_set_images(uw_doc *d, const uw_images *im)
+{
+    if (!d) return;
+    if (im) d->images = *im;
+    else memset(&d->images, 0, sizeof d->images);
+}
+
+/* ---- hit testing ----------------------------------------------------------
+ * Walk the boxes in reverse paint order and take the first one containing the
+ * point, then attribute it to a DOM node. Text and image boxes carry no node
+ * of their own (they belong to whatever block flowed them), so the answer
+ * comes from the nearest ancestor box that does - which is how a click on a
+ * word inside <a> resolves to the <a>. */
+static uw_node *hit_box(uw_box *b, int x, int y, uw_node *inherited)
+{
+    uw_box *k;
+    uw_node *best = NULL;
+    if (x < b->x || y < b->y || x >= b->x + b->w || y >= b->y + b->h) {
+        /* a line box can be narrower than its block, so keep descending
+         * through boxes that do not themselves contain the point only when
+         * they are structural (blocks); a miss on a leaf really is a miss */
+        if (b->type != UW_BOX_BLOCK) return NULL;
+    }
+    if (b->node) inherited = b->node;
+    for (k = b->first; k; k = k->next) {
+        uw_node *r = hit_box(k, x, y, inherited);
+        if (r) best = r;                     /* later siblings paint on top */
+    }
+    if (best) return best;
+    if (x >= b->x && y >= b->y && x < b->x + b->w && y < b->y + b->h)
+        return inherited;
+    return NULL;
+}
+
+uw_node *uw_hit_test(uw_doc *d, int x, int y)
+{
+    if (!d || !d->layout_root) return NULL;
+    return hit_box(d->layout_root, x, y, NULL);
+}
+
+uw_node *uw_link_at(uw_doc *d, uw_node *n)
+{
+    for (; n; n = uw_parent(n)) {
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        if (!strcmp(uw_tag_name(d, n), "a") && uw_has_attr(d, n, "href")) return n;
+    }
+    return NULL;
+}
+
 /* ---- golden dumps ---------------------------------------------------------- */
 typedef struct { char *b; int max, n; } lob;
 
@@ -459,6 +554,11 @@ static void dump_box(uw_doc *d, uw_box *b, int depth, lob *o)
         break;
     case UW_BOX_TEXT:
         lp(o, "text (%d,%d %dx%d) \"%.*s\"\n", b->x, b->y, b->w, b->h, b->tlen, b->text);
+        break;
+    case UW_BOX_IMAGE:
+        lp(o, "image %s (%d,%d %dx%d)\n",
+           b->node ? uw_tag_name(d, b->node) : "?", b->x, b->y, b->w, b->h);
+        break;
         break;
     default:
         lp(o, "box (%d,%d %dx%d)\n", b->x, b->y, b->w, b->h);

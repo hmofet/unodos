@@ -262,7 +262,8 @@ typedef struct {
  * the paint pass replays. */
 typedef struct uw_box uw_box;
 
-enum { UW_BOX_BLOCK = 0, UW_BOX_LINE, UW_BOX_TEXT, UW_BOX_BULLET };
+enum { UW_BOX_BLOCK = 0, UW_BOX_LINE, UW_BOX_TEXT, UW_BOX_BULLET,
+       UW_BOX_IMAGE };
 
 /* Lay the document out into `width` pixels. Styles are computed first if the
  * tree is dirty. Returns the total content height, or -1 on failure. */
@@ -283,7 +284,8 @@ int uw_layout_dump(uw_doc *d, char *out, int max);
 /* ---- display list ---------------------------------------------------------
  * Layout emits a flat, ordered list of paint commands. The canvas replays it
  * translated by the scroll offset, so SCROLLING NEVER RELAYOUTS. */
-enum { UW_CMD_RECT = 1, UW_CMD_BORDER, UW_CMD_TEXT, UW_CMD_BULLET };
+enum { UW_CMD_RECT = 1, UW_CMD_BORDER, UW_CMD_TEXT, UW_CMD_BULLET,
+       UW_CMD_IMAGE };
 
 typedef struct {
     int      cmd;
@@ -293,12 +295,37 @@ typedef struct {
     const char *text;
     int         len;
     const uw_style *style;
+    void       *image;             /* UW_CMD_IMAGE: the embedder's handle */
 } uw_paint_cmd;
 
 /* Build the display list for the last layout. Returns the command count. */
 int uw_paint(uw_doc *d);
 int uw_paint_count(uw_doc *d);
 const uw_paint_cmd *uw_paint_at(uw_doc *d, int i);
+/* ---- images ---------------------------------------------------------------
+ * unoweb decodes nothing. An embedder that wants <img> to occupy space and
+ * paint supplies this hook: given the resolved src, hand back the intrinsic
+ * size and an opaque handle that comes straight back in UW_CMD_IMAGE. Return
+ * 0 and the image lays out as an empty replaced box, which is exactly what a
+ * broken or still-loading image should do. */
+typedef struct {
+    void *user;
+    int (*resolve)(void *user, const char *src, int *w, int *h, void **handle);
+} uw_images;
+
+void uw_set_images(uw_doc *d, const uw_images *im);
+
+/* ---- hit testing ----------------------------------------------------------
+ * Which node is at document point (x,y)? The display list is walked BACKWARDS,
+ * so the topmost painted thing wins - one geometry source for painting and for
+ * pointing, which is what keeps a link's clickable area matching its ink.
+ * Returns NULL when nothing is there. */
+uw_node *uw_hit_test(uw_doc *d, int x, int y);
+
+/* The nearest enclosing <a href> of `n` (or `n` itself), else NULL. Its href
+ * is read with uw_attr as usual. */
+uw_node *uw_link_at(uw_doc *d, uw_node *n);
+
 /* Golden dump of the display list. */
 int uw_paint_dump(uw_doc *d, char *out, int max);
 

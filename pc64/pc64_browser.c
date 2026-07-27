@@ -377,6 +377,13 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
         case UW_CMD_BULLET:
             fb_fill_rect(x, y, c->w, c->h, col);
             break;
+        case UW_CMD_IMAGE:
+            /* No decoder is wired in yet, so an image paints as its reserved
+             * box rather than silently occupying nothing - the layout is
+             * already correct, only the pixels are missing. unomedia lands
+             * behind the same uw_images hook. */
+            fb_frame_rect(x, y, c->w, c->h, PG_RULE);
+            break;
         case UW_CMD_TEXT: {
             char buf[256];
             int k = c->len < (int)sizeof buf - 1 ? c->len : (int)sizeof buf - 1;
@@ -709,6 +716,26 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
         }
         return 0;
     }
+#ifdef UW_ENGINE
+    /* A click in the document: ask the engine what is under the pointer and
+     * follow a link if that is what it turns out to be. The display list is
+     * the ONE geometry source for both painting and pointing, so a link's
+     * clickable area always matches its ink. */
+    if (e->kind == UI_EV_MOUSE_DOWN && g_dom) {
+        unoui_rect r = g_rect;
+        uw_node *n = uw_hit_test(g_dom, e->x - r.x, e->y - r.y + g_scroll);
+        uw_node *a = uw_link_at(g_dom, n);
+        if (a) {
+            const char *href = uw_attr(g_dom, a, "href");
+            if (href && *href && href[0] != '#') {
+                strncpy(g_url, href, sizeof g_url - 1);
+                g_url[sizeof g_url - 1] = 0;
+                fetch_url();
+                return 1;
+            }
+        }
+    }
+#endif
     if (e->kind == UI_EV_KEY) {                      /* document */
         if (e->key == UI_KEY_DOWN)      { g_scroll += 24; return 1; }
         if (e->key == UI_KEY_UP)        { g_scroll -= 24; if (g_scroll<0) g_scroll=0; return 1; }
