@@ -32,6 +32,7 @@ unsigned long long uno_native_rdtsc(void);
 #include "ax88179.h"         /* USB Ethernet adapter (ASIX) */
 #include "rtl8152.h"         /* USB Ethernet adapter (Realtek; docks/dongles) */
 #include "net.h"             /* net_link / net_ip / net_dhcp_done - tray LAN chip */
+#include "pc64_fs.h"         /* uno_fs_* - session persistence (SHELL.CFG) */
 #include "iwlwifi.h"         /* Intel AC/AX WiFi (firmware-driven) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
 #include "pc64_native.h"     /* PS/2 kbd/aux bind status (System readout)   */
@@ -237,7 +238,7 @@ static const unsigned char kNativeIcon[NNATIVE] = {
     PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC
 };
 static const unsigned char kBridgeIcon[UNOAPP_COUNT] = {
-    PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT, PCI_NETWORK
+    PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT
 };
 static int app_icon(int a)
 {
@@ -293,6 +294,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
+       ID_CPTAB, ID_NETREFRESH, ID_SESSION,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -354,102 +356,193 @@ static int win_h_for(int content_h)
     return content_h + m->title_h + 2 * m->pad + m->frame_w;
 }
 
+/* ---- Control Panel tabs ---------------------------------------------------
+ * The panel is organised into sections selected by a tab strip. Switching tabs
+ * rebuilds the window content (rebuild_ctrl_window). */
+enum { CT_DISPLAY, CT_PERSONAL, CT_NETWORK, CT_AUDIO, CT_DATETIME, CT_SYSTEM, CT_N };
+static const char *kCtrlTabs[CT_N] =
+    { "Display", "Personalization", "Network", "Audio", "Date & Time", "System" };
+static int g_ctrl_tab;
+static int g_session_restore = 1;   /* reopen last session's windows at boot */
+static int g_session_ready;         /* 1 once boot restore is done (gate saves) */
+static void session_save(void);
+/* Network-tab status lines (labels store the pointer, so these must persist). */
+static char g_cp_net[5][52];
+static char *ap_str(char *p, const char *s);   /* fwd (defined below) */
+static char *ap_int(char *p, int v);
+static void clamp_to_workarea(unoui_window *w);
+
 static void build_ctrl(unoui_window *w)
 {
     unoui_widget *x; int i;
-    int hh = 0, mi = 0;
     int fh = fb_text_h(), ch = ui_field_h(), bh = ui_ctl_h();
-    int row = ch + 8, y = 4, lw = fb_text_w("Resolution:") + 12, cw = 340;
+    int row = ch + 8, y = 4, lw = fb_text_w("Resolution:") + 12, cw = 356;
     int lofs = (ch - fh) / 2;                   /* label centred beside a control */
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
     build_font_items();
+    /* widen the panel if the tab strip (laid out by label width) needs it, so no
+       tab spills past the window edge under a wider font */
+    { int tabw = 8; for (i = 0; i < CT_N; i++) tabw += fb_text_w(kCtrlTabs[i]) + 16;
+      if (tabw > cw) cw = tabw; }
     unoui_window_init(w, "Control Panel", 150, 24, 1, 1);   /* sized below */
-    unoui_add_label(w, 8, y + lofs, "Theme:");
-    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
-    y += row;
-    unoui_add_label(w, 8, y + lofs, "Resolution:");
-    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_res_items, g_res_n, 0); x->id = ID_RES;
-    y += row;
-    unoui_add_label(w, 8, y + lofs, "Font:");
-    x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
-    y += row;
-    unoui_add_label(w, 8, y + lofs, "UI scale:");
-    { int cur = 0; for (i = 0; i < NSCALES; i++) if (g_scale_pcts[i] == uno_font_ui_scale()) cur = i;
-      x = unoui_add_dropdown(w, lw, y, 100, g_scale_items, NSCALES, cur); x->id = ID_SCALE; }
-    y += row;
-    unoui_add_check(w, 8, y, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
-    unoui_add_check(w, cw / 2, y, "Aurora lite", unoui_aurora_lite);
-    w->w[w->nw-1].id = ID_ALITE;
-    y += fh + 10;
-    unoui_add_check(w, 8, y, "Lid sleep", g_lidsleep);
-    w->w[w->nw-1].id = ID_LIDSLP;
-    y += fh + 10;
-    /* how the desktop icons lay out - flow direction and sort order */
-    { static const char *flow[] = { "Columns", "Rows" };
-      static const char *sort[] = { "Launcher order", "Name" };
-      int lw = fb_text_w("Desktop icons:") + 8;
-      unoui_add_label(w, 8, y + lofs, "Desktop icons:");
-      unoui_add_dropdown(w, 8 + lw, y, fb_text_w("Columns") + 30, flow, 2, g_desk_flow);
-      w->w[w->nw-1].id = ID_DFLOW;
-      unoui_add_dropdown(w, 8 + lw + fb_text_w("Columns") + 36, y,
-                         fb_text_w("Launcher order") + 30, sort, 2, g_desk_sort);
-      w->w[w->nw-1].id = ID_DSORT; }
-    y += ch + 8;
-    { int bw = fb_text_w("Auto-arrange") + 16;
-      unoui_add_check(w, 8, y, "Snap to grid", g_desk_snap);
-      w->w[w->nw-1].id = ID_DSNAP;
-      unoui_add_check(w, 8 + fb_text_w("Snap to grid") + 34, y, "Lock desktop", g_desk_lock);
-      w->w[w->nw-1].id = ID_DLOCK;
-      unoui_add_button(w, cw - bw - 8, y - 4, bw, "Auto-arrange", 0);
-      w->w[w->nw-1].id = ID_DARRANGE; }
-    y += ch + 10;
-    /* wallpaper: procedural backdrops the shell paints behind the desktop */
-    { int lw = fb_text_w("Wallpaper:") + 8;
-      unoui_add_label(w, 8, y + lofs, "Wallpaper:");
-      unoui_add_dropdown(w, 8 + lw, y, cw - lw - 8 - 100, g_wall_names, NWALL, g_wallpaper);
-      w->w[w->nw-1].id = ID_WALL; }
-    y += ch + 8;
-    /* tray: clock format + battery display mode */
-    { static const char *cfmt[] = { "24-hour", "12-hour" };
-      static const char *bmode[] = { "Percent", "Icon", "Both" };
-      int lwc = fb_text_w("Clock:") + 8, lwb = fb_text_w("Battery:") + 8;
-      int half = cw / 2;
-      unoui_add_label(w, 8, y + lofs, "Clock:");
-      unoui_add_dropdown(w, 8 + lwc, y, half - lwc - 12, cfmt, 2, g_clock_12h);
-      w->w[w->nw-1].id = ID_CLOCKFMT;
-      unoui_add_label(w, half + 4, y + lofs, "Battery:");
-      unoui_add_dropdown(w, half + 4 + lwb, y, cw - half - lwb - 8, bmode, 3, g_batt_mode);
-      w->w[w->nw-1].id = ID_BATTMODE; }
-    y += ch + 10;
-    /* pointer speed - the trackpad's pad-to-screen ratio depends on physical
-       sizes the HID descriptor does not report, so it is a setting */
-    { int lw = fb_text_w("Pointer speed:") + 8;
-      unoui_add_label(w, 8, y + lofs, "Pointer speed:");
-      unoui_add_slider(w, 8 + lw, y, cw - lw - 8, 25, 800,
-                       uno_pc64_pointer_speed_get());
-      w->w[w->nw-1].id = ID_PSPEED; }
-    y += ch + 12;
-    unoui_add_label(w, 8, y + lofs, "Volume");
-    x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, 70); x->id = ID_VOL;
-    y += row;
-    unoui_add_sep(w, 8, y, cw - 16); y += 8;
-    /* --- clock (firmware RTC): time spinners; the date is set via the
-       calendar picker only --- */
-    uno_pc64_time(0, 0, 0, &hh, &mi, 0);
-    unoui_add_label(w, 8, y + lofs, "Time:");
-    g_sp_h  = unoui_add_spinner(w, lw,      y, 52, 0, 23, hh);
-    unoui_add_label(w, lw + 56, y + lofs, ":");
-    g_sp_mi = unoui_add_spinner(w, lw + 66, y, 52, 0, 59, mi);
-    x = unoui_add_button(w, lw + 126, y, 92, "Set time", 0); x->id = ID_SETDT;
-    y += row;
-    x = unoui_add_button(w, 8, y, 120, "Set date...", 0); x->id = ID_CAL;
-    x = unoui_add_button(w, cw - 8 - 96, y, 96, "About", 0); x->id = ID_ABOUT;
-    y += bh + 8;
+    x = unoui_add_tabs(w, 4, y, cw - 4, kCtrlTabs, CT_N, g_ctrl_tab); x->id = ID_CPTAB;
+    y += UI_TAB_H + 10;
+
+    switch (g_ctrl_tab) {
+    case CT_DISPLAY:
+        unoui_add_label(w, 8, y + lofs, "Resolution:");
+        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_res_items, g_res_n, 0); x->id = ID_RES;
+        y += row;
+        unoui_add_label(w, 8, y + lofs, "Font:");
+        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
+        y += row;
+        unoui_add_label(w, 8, y + lofs, "UI scale:");
+        { int cur = 0; for (i = 0; i < NSCALES; i++) if (g_scale_pcts[i] == uno_font_ui_scale()) cur = i;
+          x = unoui_add_dropdown(w, lw, y, 100, g_scale_items, NSCALES, cur); x->id = ID_SCALE; }
+        y += row;
+        unoui_add_check(w, 8, y, "Aurora lite (no live compositing)", unoui_aurora_lite);
+        w->w[w->nw-1].id = ID_ALITE;
+        y += fh + 10;
+        break;
+
+    case CT_PERSONAL:
+        unoui_add_label(w, 8, y + lofs, "Theme:");
+        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
+        y += row;
+        unoui_add_check(w, 8, y, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
+        y += fh + 10;
+        { int lw2 = fb_text_w("Wallpaper:") + 8;
+          unoui_add_label(w, 8, y + lofs, "Wallpaper:");
+          unoui_add_dropdown(w, 8 + lw2, y, cw - lw2 - 8, g_wall_names, NWALL, g_wallpaper);
+          w->w[w->nw-1].id = ID_WALL; }
+        y += row;
+        unoui_add_sep(w, 8, y, cw - 16); y += 10;
+        { static const char *flow[] = { "Columns", "Rows" };
+          static const char *sort[] = { "Launcher order", "Name" };
+          int lw2 = fb_text_w("Desktop icons:") + 8;
+          unoui_add_label(w, 8, y + lofs, "Desktop icons:");
+          unoui_add_dropdown(w, 8 + lw2, y, fb_text_w("Columns") + 30, flow, 2, g_desk_flow);
+          w->w[w->nw-1].id = ID_DFLOW;
+          unoui_add_dropdown(w, 8 + lw2 + fb_text_w("Columns") + 36, y,
+                             fb_text_w("Launcher order") + 30, sort, 2, g_desk_sort);
+          w->w[w->nw-1].id = ID_DSORT; }
+        y += ch + 8;
+        { int bw = fb_text_w("Auto-arrange") + 16;
+          unoui_add_check(w, 8, y, "Snap to grid", g_desk_snap);
+          w->w[w->nw-1].id = ID_DSNAP;
+          unoui_add_check(w, 8 + fb_text_w("Snap to grid") + 34, y, "Lock desktop", g_desk_lock);
+          w->w[w->nw-1].id = ID_DLOCK;
+          unoui_add_button(w, cw - bw - 8, y - 4, bw, "Auto-arrange", 0);
+          w->w[w->nw-1].id = ID_DARRANGE; }
+        y += ch + 10;
+        break;
+
+    case CT_NETWORK: {
+        /* live status, formatted into persistent buffers (labels keep the ptr) */
+        char *p; int up = net_link(), mbps = net_link_speed_mbps();
+        p = ap_str(g_cp_net[0], "Status:  ");
+        p = ap_str(p, up ? (net_dhcp_done() ? "connected" : "link up, no DHCP lease")
+                         : "no link (no NIC bound)"); *p = 0;
+        p = ap_str(g_cp_net[1], "IP address:  ");
+        if (up && net_dhcp_done()) { const unsigned char *ip = net_ip();
+            p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
+            p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]); }
+        else { p = ap_str(p, "-"); }
+        *p = 0;
+        p = ap_str(g_cp_net[2], "Gateway:  ");
+        if (up && net_dhcp_done()) { const unsigned char *gw = net_gw();
+            p = ap_int(p, gw[0]); *p++='.'; p = ap_int(p, gw[1]); *p++='.';
+            p = ap_int(p, gw[2]); *p++='.'; p = ap_int(p, gw[3]); }
+        else { p = ap_str(p, "-"); }
+        *p = 0;
+        p = ap_str(g_cp_net[3], "Link speed:  ");
+        if (mbps >= 1000) { p = ap_int(p, mbps/1000); p = ap_str(p, " Gbps"); }
+        else if (mbps > 0){ p = ap_int(p, mbps);      p = ap_str(p, " Mbps"); }
+        else              { p = ap_str(p, up ? "negotiating / not reported" : "-"); }
+        *p = 0;
+        p = ap_str(g_cp_net[4], "Frames:  tx ");
+        p = ap_int(p, (int)net_tx_frames()); p = ap_str(p, "   rx ");
+        p = ap_int(p, (int)net_rx_frames());
+        *p = 0;
+        for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y + lofs, g_cp_net[i]); y += row; }
+        y += 2;
+        x = unoui_add_button(w, 8, y, 110, "Refresh", 0); x->id = ID_NETREFRESH;
+        unoui_add_label(w, 130, y + lofs, "DHCP is automatic; WiFi via WIFI.CFG");
+        y += bh + 8;
+        break; }
+
+    case CT_AUDIO:
+        unoui_add_label(w, 8, y + lofs, "Volume:");
+        x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, 70); x->id = ID_VOL;
+        y += row + 4;
+        unoui_add_label(w, 8, y + lofs, "Output device:");
+        unoui_add_label(w, lw, y + lofs,
+                        uno_snd_active() ? uno_snd_name() : "PC speaker (PIT)");
+        y += row;
+        break;
+
+    case CT_DATETIME: {
+        int hh = 0, mi = 0;
+        static const char *cfmt[] = { "24-hour", "12-hour" };
+        uno_pc64_time(0, 0, 0, &hh, &mi, 0);
+        unoui_add_label(w, 8, y + lofs, "Time:");
+        g_sp_h  = unoui_add_spinner(w, lw,      y, 52, 0, 23, hh);
+        unoui_add_label(w, lw + 56, y + lofs, ":");
+        g_sp_mi = unoui_add_spinner(w, lw + 66, y, 52, 0, 59, mi);
+        x = unoui_add_button(w, lw + 126, y, 92, "Set time", 0); x->id = ID_SETDT;
+        y += row;
+        x = unoui_add_button(w, 8, y, 120, "Set date...", 0); x->id = ID_CAL;
+        y += row + 4;
+        { int lwc = fb_text_w("Clock format:") + 8;
+          unoui_add_label(w, 8, y + lofs, "Clock format:");
+          unoui_add_dropdown(w, 8 + lwc, y, 120, cfmt, 2, g_clock_12h);
+          w->w[w->nw-1].id = ID_CLOCKFMT; }
+        y += row;
+        break; }
+
+    case CT_SYSTEM:
+        { static const char *bmode[] = { "Percent", "Icon", "Both" };
+          int lwb = fb_text_w("Battery display:") + 8;
+          unoui_add_label(w, 8, y + lofs, "Battery display:");
+          unoui_add_dropdown(w, 8 + lwb, y, 120, bmode, 3, g_batt_mode);
+          w->w[w->nw-1].id = ID_BATTMODE; }
+        y += row;
+        unoui_add_check(w, 8, y, "Restore last session at startup", g_session_restore);
+        w->w[w->nw-1].id = ID_SESSION;
+        y += fh + 8;
+        unoui_add_check(w, 8, y, "Lid sleep", g_lidsleep);
+        w->w[w->nw-1].id = ID_LIDSLP;
+        y += fh + 10;
+        { int lw2 = fb_text_w("Pointer speed:") + 8;
+          unoui_add_label(w, 8, y + lofs, "Pointer speed:");
+          unoui_add_slider(w, 8 + lw2, y, cw - lw2 - 8, 25, 800,
+                           uno_pc64_pointer_speed_get());
+          w->w[w->nw-1].id = ID_PSPEED; }
+        y += ch + 10;
+        unoui_add_sep(w, 8, y, cw - 16); y += 8;
+        x = unoui_add_button(w, 8, y, 110, "Accounts...", 0); x->id = ID_ACCT;
+        x = unoui_add_button(w, 126, y, 110, "Licenses", 0); x->id = ID_LIC;
+        x = unoui_add_button(w, cw - 8 - 96, y, 96, "About", 0); x->id = ID_ABOUT;
+        y += bh + 8;
+        break;
+    }
     w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
     w->r.h = win_h_for(y);
     w->min_w = w->r.w; w->min_h = w->r.h;
     w->flags |= UI_WIN_RESIZE;
+}
+
+/* Rebuild the Control Panel content in place (tab switch / network refresh)
+ * without moving the window from where the user put it. */
+static void rebuild_ctrl_window(void)
+{
+    int px = g_win[APP_CTRL].r.x, py = g_win[APP_CTRL].r.y;
+    build_ctrl(&g_win[APP_CTRL]);
+    g_win[APP_CTRL].r.x = px; g_win[APP_CTRL].r.y = py;
+    clamp_to_workarea(&g_win[APP_CTRL]);
+    UI.focus_wi = 0;
+    g_dirty = 1;
 }
 
 /* Editor (WordPad-style word processor) + Files (real file manager) live in
@@ -1401,6 +1494,7 @@ static void open_app(int a)
         else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
+        session_save();                 /* remember the open set for next boot */
     } else raise_win(&g_win[a]);
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
     /* focus the opened window + its canvas (closing the launcher above moved
@@ -1426,6 +1520,11 @@ static void toggle_launcher(void)
 {
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
     else { g_menu_scroll = 0; g_menu_hot = 0; menu_refresh();
+           /* anchor the menu bottom-left, flush with the Start button and
+              sitting directly on top of the taskbar (a real Start menu), rather
+              than floating at the old fixed (8,20). */
+           g_launch.r.x = 6;
+           g_launch.r.y = FB_H - TASKH - g_launch.r.h;
            clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch);
            UI.focus_wi = 0;                    /* focus the menu canvas for keys */
            g_launch_open = 1; }
@@ -1556,7 +1655,75 @@ static void close_focused(void)
     if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
     remove_win(win);
     rebuild_taskbar();
+    session_save();                     /* remember the open set for next boot */
     g_dirty = 1;
+}
+
+/* ---- session restore (SHELL.CFG) ------------------------------------------
+ * Persist the "restore" preference and the set of open, restorable windows so
+ * the next boot can reopen them. Only stable apps are saved (native apps + the
+ * Browser); games, transient user/Python slots and loadable modules are not.
+ * The file is a couple of `key=value` lines on the first writable volume. */
+static int app_restorable(int a)
+{ return (a >= 0 && a < NNATIVE) || a == EX_BROWSER; }
+
+static void session_save(void)
+{
+    unsigned char buf[160]; char *p = (char *)buf; int a, first = 1, v, n;
+    if (!g_session_ready) return;       /* don't write during boot restore */
+    p = ap_str(p, "restore="); *p++ = g_session_restore ? '1' : '0';
+    *p++ = '\r'; *p++ = '\n';
+    p = ap_str(p, "open=");
+    for (a = 0; a < NAPPS; a++) {
+        if (!g_open[a] || !app_restorable(a)) continue;
+        if (!first) *p++ = ',';
+        p = ap_int(p, a); first = 0;
+    }
+    *p++ = '\r'; *p++ = '\n'; *p = 0;
+    n = uno_fs_volumes();
+    for (v = 0; v < n; v++) if (uno_fs_writable(v)) {
+        uno_fs_write(v, "SHELL.CFG", buf, (long)(p - (char *)buf)); break; }
+}
+
+/* Find `key` at the start of a line in `buf`; return the pointer just past it. */
+static const char *cfg_line_val(const char *buf, const char *key)
+{
+    int kl = 0; const char *p = buf;
+    while (key[kl]) kl++;
+    while (*p) {
+        int i = 0; while (i < kl && p[i] == key[i]) i++;
+        if (i == kl) return p + kl;
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return 0;
+}
+
+/* Boot: reopen the saved session, or fall back to opening the Control Panel. */
+static void session_load(void)
+{
+    unsigned char buf[192]; long got = -1; int v, n = uno_fs_volumes();
+    const char *rp, *op;
+    for (v = 0; v < n && got < 0; v++)
+        got = uno_fs_read(v, "SHELL.CFG", buf, (long)sizeof buf - 1);
+    if (got < 0) { open_app(APP_CTRL); g_session_ready = 1; session_save(); return; }
+    buf[got] = 0;
+    rp = cfg_line_val((char *)buf, "restore=");
+    if (rp) g_session_restore = (*rp == '0') ? 0 : 1;
+    if (!g_session_restore) { open_app(APP_CTRL); g_session_ready = 1; return; }
+    op = cfg_line_val((char *)buf, "open=");
+    { int any = 0, val = 0, have = 0;
+      for (; op && *op && *op != '\r' && *op != '\n'; op++) {
+          if (*op >= '0' && *op <= '9') { val = val * 10 + (*op - '0'); have = 1; }
+          else if (*op == ',') {
+              if (have && app_restorable(val) && !app_hidden(val)) { open_app(val); any = 1; }
+              val = 0; have = 0;
+          }
+      }
+      if (have && app_restorable(val) && !app_hidden(val)) { open_app(val); any = 1; }
+      if (!any) open_app(APP_CTRL);
+    }
+    g_session_ready = 1;
 }
 
 /* ---- Start menu: a scrollable canvas (apps + Restart + Shut Down) --------- *
@@ -2030,6 +2197,10 @@ static void on_action(const unoui_action *a)
     case ID_CLOCKFMT: g_clock_12h = a->value ? 1 : 0; fmt_clock(0); g_dirty = 1; break;
     case ID_BATTMODE: if (a->value >= 0 && a->value <= BATT_BOTH) {
                           g_batt_mode = a->value; fmt_batt(); g_dirty = 1; } break;
+    case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
+                       g_ctrl_tab = a->value; rebuild_ctrl_window(); } break;
+    case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
+    case ID_SESSION: g_session_restore = a->value ? 1 : 0; session_save(); break;
     case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
     case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; break;
     case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; break;
@@ -2383,7 +2554,7 @@ int main(void)
     fmt_clock(0);                                    /* tray clock ready now */
     fmt_batt();                                      /* tray battery (ACPI)  */
     fmt_net();                                       /* tray LAN chip        */
-    open_app(APP_CTRL);                 /* start with Control Panel open */
+    session_load();                     /* reopen last session (or Control Panel) */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
 #ifdef UNO_DEBUG

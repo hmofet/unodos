@@ -9,7 +9,8 @@
 /* Music left this list: it is now a native unoui app (pc64_music.c) rather
  * than a legacy canvas, so it draws with the theme instead of the old fixed
  * four-colour palette. */
-#define UNOAPP_COUNT 6  /* Dostris, Pac-Man, OutLast, Tracker, Paint, Network */
+#define UNOAPP_COUNT 5  /* Dostris, Pac-Man, OutLast, Tracker, Paint
+                         * (Network removed 2026-07-26 -> Control Panel) */
 
 void        unoapp_setup(int *dirtyflag);        /* wire the KernelApi once   */
 const char *unoapp_name(int i);

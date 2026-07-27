@@ -208,11 +208,14 @@ static const AppInterface *iface(short proc)
  * bridge maps each to its proc id. Games prefer fullscreen. */
 #include "pc64_uui_apps.h"
 
+/* Network removed as a standalone app (2026-07-26): its status/settings live in
+ * the Control Panel's Network tab now. The APP_NETWORK proc stays in the module
+ * table but is no longer surfaced as a launchable app. */
 static const short kProc[UNOAPP_COUNT] =
-    { APP_DOSTRIS, APP_PACMAN, APP_OUTLAST, APP_TRACKER, APP_PAINT, APP_NETWORK };
-static const signed char kGame[UNOAPP_COUNT] = { 1, 1, 1, 0, 0, 0 };
+    { APP_DOSTRIS, APP_PACMAN, APP_OUTLAST, APP_TRACKER, APP_PAINT };
+static const signed char kGame[UNOAPP_COUNT] = { 1, 1, 1, 0, 0 };
 static const char *kName[UNOAPP_COUNT] =
-    { "Dostris", "Pac-Man", "OutLast", "Tracker", "Paint", "Network" };
+    { "Dostris", "Pac-Man", "OutLast", "Tracker", "Paint" };
 
 const char *unoapp_name(int i) { return (i >= 0 && i < UNOAPP_COUNT) ? kName[i] : "App"; }
 int unoapp_is_game(int i)      { return (i >= 0 && i < UNOAPP_COUNT) ? kGame[i] : 0; }
