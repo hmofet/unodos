@@ -2599,8 +2599,11 @@ static void scan_record_beacon(const u8 *frame, int fl)
     }
     for (i = 0; i < g_scan_ap_n; i++)
         if (!memcmp(g_scan_aps[i].bssid, bssid, 6)) {
-            g_scan_aps[i].seen++; if (chan) g_scan_aps[i].chan = chan;
-            if (bi) g_scan_aps[i].bi = bi; if (dtim) g_scan_aps[i].dtim = dtim; return; }
+            g_scan_aps[i].seen++;
+            if (chan) g_scan_aps[i].chan = chan;
+            if (bi) g_scan_aps[i].bi = bi;
+            if (dtim) g_scan_aps[i].dtim = dtim;
+            return; }
     if (g_scan_ap_n >= SCAN_AP_MAX) return;
     { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
       memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
@@ -3481,8 +3484,13 @@ static int mld_steps(int n, char *out, int cap)
                            : (r < 0 ? "err mld8: no auth response" : "err mld8: AP rejected auth")); break; }
     case 9: { int r = mvm_assoc();
         uno_dbg_net_trace("wifi: mld9: assoc -> %d", r);
-        if (r >= 0) { assoc_mark_associated(r); strcpy(out, "ok mld9: associated (run 'iwl eapol')"); }
-        else strcpy(out, "err mld9: assoc failed (detail in NET log)"); break; }
+        if (r >= 0) {
+            assoc_mark_associated(r);
+            strcpy(out, "ok mld9: associated (run 'iwl eapol')");
+        } else {
+            strcpy(out, "err mld9: assoc failed (detail in NET log)");
+        }
+        break; }
     default:
         strcpy(out, "err usage: iwl mld <1-9> (1mac 2link 3phy 4link-active 5sta 6txq 7sessprot 8auth 9assoc)");
         break;
