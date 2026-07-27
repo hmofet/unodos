@@ -4,7 +4,7 @@
  * `function` declarations, which JS semantics require to exist before the
  * statements that use them).
  *
- * DEVIATION from docs/WEB-ENGINE-DESIGN.md §3.1, recorded deliberately: the
+ * DEVIATION from docs/WEB-ENGINE-DESIGN.md section 3.1, recorded deliberately: the
  * design sketched source -> AST -> bytecode. There is no AST here. Nothing in
  * v1 needs a tree (no optimizer, no source maps), an AST would be several
  * thousand lines of node types and a second traversal, and the pre-scan covers

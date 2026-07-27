@@ -6,10 +6,9 @@
  * That is what lets the loop return UJS_YIELD to the host when its fuel runs
  * out and pick up exactly where it stopped on the next ujs_resume() - the
  * mechanism that keeps a hostile `while(1)` from wedging a single-threaded
- * ring-0 OS (docs/WEB-ENGINE-DESIGN.md §3.1, §14).
+ * ring-0 OS (docs/WEB-ENGINE-DESIGN.md section 3.1, section 14).
  * ======================================================================== */
 #include "ujs_int.h"
-#include <math.h>
 #include <stdio.h>
 
 /* ---- small helpers ------------------------------------------------------- */
@@ -30,7 +29,7 @@ static int to_int32(ujs_vm *vm, ujs_val v)
 {
     double d = ujs_num_of(vm, v);
     if (d != d || d == 0 || d > 1.7e308 || d < -1.7e308) return 0;
-    { double m = fmod(floor(fabs(d)) * (d < 0 ? -1 : 1), 4294967296.0);
+    { double m = ujs_fmod(ujs_floor(ujs_fabs(d)) * (d < 0 ? -1 : 1), 4294967296.0);
       if (m < 0) m += 4294967296.0;
       if (m >= 2147483648.0) m -= 4294967296.0;
       return (int)m; }
@@ -40,7 +39,7 @@ static unsigned to_uint32(ujs_vm *vm, ujs_val v)
 {
     double d = ujs_num_of(vm, v);
     if (d != d || d == 0 || d > 1.7e308 || d < -1.7e308) return 0;
-    { double m = fmod(floor(fabs(d)) * (d < 0 ? -1 : 1), 4294967296.0);
+    { double m = ujs_fmod(ujs_floor(ujs_fabs(d)) * (d < 0 ? -1 : 1), 4294967296.0);
       if (m < 0) m += 4294967296.0;
       return (unsigned)m; }
 }
@@ -56,7 +55,7 @@ static int index_of_val(ujs_vm *vm, ujs_val k, u32 *out)
 {
     if (IS_DOUBLE(k)) {
         double d = ujs_dbl(k);
-        if (d >= 0 && d < 4294967295.0 && d == floor(d)) { *out = (u32)d; return 1; }
+        if (d >= 0 && d < 4294967295.0 && d == ujs_floor(d)) { *out = (u32)d; return 1; }
         return 0;
     }
     if (ujs_is_string(k)) {
@@ -512,8 +511,8 @@ static ujs_result run(ujs_vm *vm, int base, ujs_val *out)
         case OP_SUB: BINNUM(x - y); break;
         case OP_MUL: BINNUM(x * y); break;
         case OP_DIV: BINNUM(x / y); break;
-        case OP_MOD: BINNUM(fmod(x, y)); break;
-        case OP_POW: BINNUM(pow(x, y)); break;
+        case OP_MOD: BINNUM(ujs_fmod(x, y)); break;
+        case OP_POW: BINNUM(ujs_pow(x, y)); break;
         case OP_NEG: { ujs_val a = pop(vm);
                        if (!push(vm, ujs_number(-ujs_num_of(vm,a)))) goto oom;
                        break; }

@@ -142,6 +142,14 @@ if [ "$1" != "legacy" ]; then
     for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
+    # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
+    # portable C99 with NO OS dependency and NO libm - it carries its own
+    # double-precision math because pc64's is float-only and the number
+    # formatter needs double exactness.  The browser reaches it only through
+    # the js_run() shim in js.c.
+    for f in ujs_core ujs_math ujs_lex ujs_comp ujs_vm ujs_lib ujs_api; do
+        pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unojs/$f.c"; OBJS="$OBJS build/$f.o"
+    done
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
     # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
     # NO sanitizer (its ud2 handler must not itself be instrumented).
@@ -219,6 +227,11 @@ if [ "$1" != "legacy" ]; then
     done
     pcwait                     # barrier: every kernel object above must exist before linking
     echo "[3/3] linking the unoui image..."
+    # -lgcc supplies the compiler-runtime helpers (__udivti3, __floatuntidf)
+    # that 128-bit integer arithmetic lowers to.  unojs uses __int128 in its
+    # decimal<->double conversion, where 64 bits cannot keep adjacent doubles
+    # distinct.  PYRT links it for the same reason (see [3d]); it is a static
+    # archive, so only the referenced helpers land in the image.
     LINK="-nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat"
     if [ "$UNO_DEBUG" != "0" ]; then
         # two-pass symbolization: link once with the empty stub, extract .text
@@ -226,12 +239,12 @@ if [ "$1" != "legacy" ]; then
         # table is const (.rdata, after .text), so .text RVAs are stable across
         # the relink - build.sh asserts this below.
         "$CC" $UCF -c -o "build/dbg_syms_stub.o" "tools/dbg_syms_stub.c"
-        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms_stub.o
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms_stub.o -lgcc
         NM="${NM:-x86_64-w64-mingw32-nm}"
         "$NM" -n build/BOOTX64.EFI | awk '$2=="T"||$2=="t"{print $1}' | sort > build/syms_pass1.txt
         "$PY" tools/mksyms.py build/BOOTX64.EFI build/dbg_syms.c build/SYMBOLS.TXT "$NM"
         "$CC" $UCF -c -o "build/dbg_syms.o" "build/dbg_syms.c"
-        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms.o
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms.o -lgcc
         # assert .text RVAs did not move (else the baked symbols are wrong)
         "$NM" -n build/BOOTX64.EFI | awk '$2=="T"||$2=="t"{print $1}' | sort > build/syms_pass2.txt
         if ! cmp -s build/syms_pass1.txt build/syms_pass2.txt; then
@@ -242,7 +255,7 @@ if [ "$1" != "legacy" ]; then
         fi
         mkdir -p build/esp/DOCS; cp build/SYMBOLS.TXT build/esp/DOCS/SYMBOLS.TXT
     else
-        "$CC" $LINK -o build/BOOTX64.EFI $OBJS
+        "$CC" $LINK -o build/BOOTX64.EFI $OBJS -lgcc
     fi
     mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
     # sample docs on the ESP (a real FAT volume) for the browser to open
@@ -570,7 +583,7 @@ done
 
 echo "[3/3] linking the UEFI image..."
 "$CC" -nostdlib -Wl,--subsystem,10 -e efi_main -Wl,--dynamicbase,--nxcompat \
-    -o build/BOOTX64.EFI $OBJS
+    -o build/BOOTX64.EFI $OBJS -lgcc
 
 mkdir -p build/esp/EFI/BOOT
 cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
