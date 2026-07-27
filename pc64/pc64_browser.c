@@ -19,6 +19,7 @@
 #include "pc64_font.h"
 #include "pc64_fs.h"
 #include "js.h"
+#include "../unoweb/unoweb.h"
 #include "pc64_http.h"
 #include <string.h>
 
@@ -167,63 +168,153 @@ static void render_md(const char *src, unoui_rect r, int scroll)
     }
 }
 
-/* ---- HTML (a pragmatic subset) ------------------------------------------- */
-static int tag_is(const char *t, int len, const char *name)
-{ int n=(int)strlen(name); return len>=n && !strncmp(t,name,n) && (len==n || t[n]==' ' || t[n]=='>' || t[n]=='/'); }
+/* ---- HTML: parsed by unoweb, painted by the flow above --------------------
+ * This used to be an inline tag scanner over the source text. It now walks a
+ * real DOM: unoweb parses the document once per load (uw_parse_string), and
+ * the walk below turns element nesting into the same style stack the flow
+ * painter always used. The gain is everything a scanner cannot do - correct
+ * nesting through unclosed tags, character references, quoted attributes with
+ * '>' inside them, comments, and RAWTEXT so a '<' in a <style> block is not
+ * mistaken for markup.
+ *
+ * The DOM is cached: br_draw runs every frame, and re-parsing per frame would
+ * be absurd, so dom_sync() re-parses only when the source actually changes. */
+static uw_doc  *g_dom;
+static unsigned g_dom_sig;
+
+/* Fingerprint the source rather than plumb an "invalidate" call through every
+ * loader: g_doc is refilled from several places (a built-in demo, a local
+ * file, a fetch, and the not-found page), and one missed call would leave a
+ * stale tree on screen. Hashing 32 KB once per frame is nothing next to
+ * painting it. */
+static unsigned doc_sig(const char *s)
+{
+    unsigned h = 2166136261u;
+    while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+    return h ? h : 1;
+}
+
+static void dom_sync(const char *src)
+{
+    uw_config c;
+    unsigned sig = doc_sig(src);
+    if (g_dom && sig == g_dom_sig) return;
+    if (g_dom) { uw_doc_free(g_dom); g_dom = NULL; }
+    memset(&c, 0, sizeof c);
+    c.arena_max = 2u << 20;          /* a page's tree, bounded */
+    c.max_depth = 96;
+    g_dom = uw_parse_string(src, -1, &c);
+    g_dom_sig = sig;
+}
+
+/* Emit a text node. Outside <pre>, every run of whitespace (including the
+ * newlines the source is wrapped with) collapses to one space; inside <pre>
+ * each source line is placed as its own row. */
+static void emit_text(const char *s, int len, int pre, int indent, bstyle *st)
+{
+    char buf[256];
+    int i = 0, n = 0;
+    if (pre) {
+        for (i = 0; i <= len; i++) {
+            if (i == len || s[i] == '\n') {
+                buf[n] = 0;
+                fx = fleft;
+                if (n) fl_word(buf, 12, st);
+                fl_nl();
+                n = 0;
+                continue;
+            }
+            if (n < (int)sizeof buf - 1) buf[n++] = s[i];
+        }
+        return;
+    }
+    for (i = 0; i < len; i++) {
+        char ch = s[i];
+        if (ch == '\n' || ch == '\t' || ch == '\r' || ch == '\f') ch = ' ';
+        if (ch == ' ' && (n == 0 || buf[n-1] == ' ')) continue;
+        if (n < (int)sizeof buf - 1) buf[n++] = ch;
+        if (n == (int)sizeof buf - 1) { buf[n] = 0; fl_text(buf, n, indent, st); n = 0; }
+    }
+    buf[n] = 0;
+    if (n) fl_text(buf, n, indent, st);
+}
+
+static void walk_dom(uw_doc *d, uw_node *parent, bstyle st, int li, int pre)
+{
+    uw_node *n;
+    for (n = uw_first_child(parent); n; n = uw_next_sibling(n)) {
+        if (uw_type(n) == UW_NODE_TEXT) {
+            int tl = 0;
+            const char *t = uw_text(n, &tl);
+            if (t && tl) emit_text(t, tl, pre, li, &st);
+            continue;
+        }
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;      /* comments, doctype */
+        {   const char *g = uw_tag_name(d, n);
+            bstyle s = st;
+            if (!strcmp(g,"head") || !strcmp(g,"title") ||
+                !strcmp(g,"style") || !strcmp(g,"script")) continue;
+            if (g[0]=='h' && g[1]>='1' && g[1]<='6' && !g[2]) {
+                int lvl = g[1]-'0';
+                s.scale = lvl <= 1 ? 3 : 2; s.bold = 1; s.color = PG_HEAD;
+                fl_gap(lvl <= 2 ? 8 : 4);
+                walk_dom(d, n, s, li, pre);
+                fl_gap(6);
+                continue;
+            }
+            if (!strcmp(g,"b") || !strcmp(g,"strong")) s.bold = 1;
+            else if (!strcmp(g,"i") || !strcmp(g,"em")) { s.ital = 1; s.color = FB_RGB(70,70,95); }
+            else if (!strcmp(g,"code") || !strcmp(g,"tt")) { s.mono = 1; s.color = PG_CODE; }
+            else if (!strcmp(g,"a")) { s.color = PG_LINK; s.under = 1; }
+            else if (!strcmp(g,"br")) { fl_nl(); continue; }
+            else if (!strcmp(g,"hr")) {
+                int yy;
+                fl_gap(6);
+                yy = fy - fscroll;
+                if (yy > fclip.y && yy < fclip.y + fclip.h)
+                    fb_hline(fleft, yy, fright - fleft, PG_RULE);
+                fl_gap(8);
+                continue;
+            }
+            else if (!strcmp(g,"pre")) {
+                s.mono = 1; s.color = PG_CODE;
+                fl_gap(6);
+                walk_dom(d, n, s, li, 1);
+                fl_gap(6);
+                continue;
+            }
+            else if (!strcmp(g,"p") || !strcmp(g,"div") || !strcmp(g,"section")) {
+                walk_dom(d, n, s, li, pre);
+                fl_gap(8);
+                continue;
+            }
+            else if (!strcmp(g,"ul") || !strcmp(g,"ol")) {
+                fl_gap(2);
+                walk_dom(d, n, s, li, pre);
+                fl_gap(6);
+                continue;
+            }
+            else if (!strcmp(g,"li")) {
+                int yy = fy - fscroll + 4;
+                fx = fleft;
+                if (yy > fclip.y && yy < fclip.y + fclip.h)
+                    fb_fill_rect(fleft + 6, yy, 3, 3, PG_TEXT);
+                walk_dom(d, n, s, 18, pre);
+                fl_nl();
+                continue;
+            }
+            walk_dom(d, n, s, li, pre);      /* unknown tag: text still shows */
+        }
+    }
+}
 
 static void render_html(const char *src, unoui_rect r, int scroll)
 {
-    const char *p = src; bstyle st[24]; int sp = 0, li = 0, pre = 0;
     bstyle base = { 1, 0, 0, 0, 0, PG_TEXT };
-    st[0] = base;
+    dom_sync(src);
     fl_reset(r, scroll, 10);
-    while (*p) {
-        if (*p == '<') {                                         /* a tag */
-            const char *ts = ++p; int close = 0;
-            if (*p == '/') { close = 1; p++; ts = p; }
-            while (*p && *p != '>') p++;
-            { int tl = (int)(p - ts); if (*p == '>') p++;
-              if (tl && ts[0] == '!') continue;                  /* comment/doctype */
-              #define PUSH(mod) do { if (sp<23){ st[sp+1]=st[sp]; sp++; mod; } } while(0)
-              #define POP()     do { if (sp>0) sp--; } while(0)
-              if (tag_is(ts,tl,"h1")||tag_is(ts,tl,"h2")||tag_is(ts,tl,"h3")||
-                  tag_is(ts,tl,"h4")||tag_is(ts,tl,"h5")||tag_is(ts,tl,"h6")) {
-                  if (close) { POP(); fl_gap(6); }
-                  else { int lvl = ts[1]-'0'; fl_gap(lvl<=2?8:4); PUSH(st[sp].scale=lvl<=1?3:2; st[sp].bold=1; st[sp].color=PG_HEAD); }
-              }
-              else if (tag_is(ts,tl,"b")||tag_is(ts,tl,"strong")) { if(close)POP(); else PUSH(st[sp].bold=1); }
-              else if (tag_is(ts,tl,"i")||tag_is(ts,tl,"em")) { if(close)POP(); else PUSH(st[sp].ital=1; st[sp].color=FB_RGB(70,70,95)); }
-              else if (tag_is(ts,tl,"code")||tag_is(ts,tl,"tt")) { if(close)POP(); else PUSH(st[sp].mono=1; st[sp].color=PG_CODE); }
-              else if (tag_is(ts,tl,"a")) { if(close){POP();} else PUSH(st[sp].color=PG_LINK; st[sp].under=1); }
-              else if (tag_is(ts,tl,"pre")) { pre = !close; fl_gap(6); if(!close) PUSH(st[sp].mono=1; st[sp].color=PG_CODE); else POP(); }
-              else if (tag_is(ts,tl,"p")||tag_is(ts,tl,"div")||tag_is(ts,tl,"section")) { fl_gap(close?8:0); }
-              else if (tag_is(ts,tl,"br")) { fl_nl(); }
-              else if (tag_is(ts,tl,"hr")) { fl_gap(6); { int yy=fy-fscroll; if(yy>fclip.y&&yy<fclip.y+fclip.h) fb_hline(fleft,yy,fright-fleft,PG_RULE);} fl_gap(8); }
-              else if (tag_is(ts,tl,"ul")||tag_is(ts,tl,"ol")) { fl_gap(close?6:2); }
-              else if (tag_is(ts,tl,"li")) { if(!close){ int yy=fy-fscroll+4; fx=fleft; if(yy>fclip.y&&yy<fclip.y+fclip.h) fb_fill_rect(fleft+6,yy,3,3,PG_TEXT); li=18; } else { fl_nl(); li=0; } }
-              else if (tag_is(ts,tl,"title")||tag_is(ts,tl,"head")||tag_is(ts,tl,"style")||tag_is(ts,tl,"script")) {
-                  if (!close) { const char *e=p; while(*e){ if(*e=='<'&&e[1]=='/') break; e++; } p=e; }  /* skip contents */
-              }
-              #undef PUSH
-              #undef POP
-            }
-            continue;
-        }
-        /* run of text until the next tag */
-        { const char *ts = p; while (*p && *p != '<') p++;
-          { int tl = (int)(p - ts), i, n = 0; char buf[256];
-            for (i = 0; i < tl; i++) {                           /* collapse whitespace + entities */
-                char c = ts[i];
-                if (!pre && (c=='\n'||c=='\t'||c=='\r')) c=' ';
-                if (!pre && c==' ' && (n==0 || buf[n-1]==' ')) continue;
-                if (c=='&') { if(!strncmp(ts+i,"&lt;",4)){c='<';i+=3;} else if(!strncmp(ts+i,"&gt;",4)){c='>';i+=3;}
-                              else if(!strncmp(ts+i,"&amp;",5)){c='&';i+=4;} else if(!strncmp(ts+i,"&nbsp;",6)){c=' ';i+=5;} }
-                if (n<255) buf[n++]=c;
-            }
-            buf[n]=0;
-            if (n) { if (pre) { fx=fleft; fl_word(buf,12,&st[sp]); fl_nl(); } else fl_text(buf,n,li,&st[sp]); } }
-        }
-    }
+    if (!g_dom) return;
+    walk_dom(g_dom, uw_body(g_dom) ? uw_body(g_dom) : uw_document(g_dom), base, 0, 0);
 }
 
 /* =================== the browser app (canvas) ============================= */
