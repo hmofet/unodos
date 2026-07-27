@@ -116,15 +116,76 @@ class UnoAutoLink:
         self._peer_hello = threading.Event()   # set when the guest's HELLO arrives
         self._guard_token = None
         self._stop = False
+        self._disc = None                       # discovery responder socket
+        self._disc_cb = None                    # cb(text) note on each offer
 
     # ---- lifecycle --------------------------------------------------------
-    def listen(self):
+    def listen(self, discover=True):
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind((self.host, self.port))
         self._srv.listen(1)
         threading.Thread(target=self._accept_loop, daemon=True).start()
+        if discover:
+            self._start_discovery(self.port)
         return self
+
+    def on_discovery(self, cb):   self._disc_cb = cb      # cb(text) per offer
+
+    # ---- zero-config discovery responder (netdisc, UDP :5400) -------------
+    # A device booted with `discover` in DEBUG.CFG broadcasts a UNODISC PROBE;
+    # we answer with an OFFER carrying this listener's ip:port and the device
+    # dials in with no address configured (see pc64/netdisc.h). Best-effort: if
+    # :5400 is taken, we skip it and a static remote= address still works.
+    def _start_discovery(self, urc_port):
+        try:
+            d = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            d.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            d.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            d.bind(("0.0.0.0", 5400))
+        except OSError:
+            return
+        d.settimeout(0.3)
+        self._disc = d
+        threading.Thread(target=self._disc_loop, args=(urc_port,), daemon=True).start()
+
+    def _disc_loop(self, urc_port):
+        name = (socket.gethostname() or "host").split()[0]
+        while not self._stop and self._disc:
+            try:
+                data, src = self._disc.recvfrom(512)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                t = data.decode("ascii", "replace").split()
+            except Exception:  # noqa: BLE001
+                continue
+            # UNODISC 1 PROBE <role> <name> <api> -> reply with our OFFER
+            if len(t) >= 3 and t[0] == "UNODISC" and t[2] == "PROBE":
+                ip = self._local_ip_toward(src[0])
+                offer = "UNODISC 1 OFFER host %s 1 %s %d" % (name, ip, urc_port)
+                try:
+                    self._disc.sendto(offer.encode(), src)
+                except OSError:
+                    pass
+                if self._disc_cb:
+                    who = t[4] if len(t) >= 5 else (t[3] if len(t) >= 4 else "a device")
+                    self._disc_cb("disc: offered %s:%d to %s (%s)" % (ip, urc_port, who, src[0]))
+
+    @staticmethod
+    def _local_ip_toward(dst):
+        """The local IP the device can reach us on: the egress interface toward
+        the prober (connect sends nothing, just resolves the route)."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((dst, 9))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+        finally:
+            s.close()
 
     def attach_stream(self, stream):
         """Drive the link over an already-open byte stream instead of listening
@@ -147,7 +208,7 @@ class UnoAutoLink:
 
     def close(self):
         self._stop = True
-        for s in (self._sock, self._srv):
+        for s in (self._sock, self._srv, self._disc):
             try:
                 if s: s.close()
             except OSError:
@@ -798,9 +859,11 @@ def _cli(argv):
             print("FAIL: cannot open serial %s: %s" % (dev, e)); return 1
         print("unoauto_remote on serial %s @ %d baud. Set pc64 STRESS.CFG: remote-serial" % (dev, baud))
     else:
+        link.on_discovery(lambda t: print(t))
         link.listen()
-        print("unoauto_remote listening on %s. Set pc64 STRESS.CFG:" % a.listen)
+        print("unoauto_remote listening on %s. Set pc64 DEBUG.CFG:" % a.listen)
         print("    remote=<this-machine-ip>:%s   (QEMU SLIRP guest: 10.0.2.2:%s)" % (port, port))
+        print("    or just `discover` - this tool answers UNODISC probes on UDP :5400.")
     print("Type a command line to send (probe / vols / launch 0 / py print(6*7) /")
     print("  uptime / reboot / bootnext <n>). Prefix /msg for a free-form message.")
     print("For an A/B OS push use: --push <vol> <path> <localfile> [--reboot]. Ctrl-D quits.\n")
