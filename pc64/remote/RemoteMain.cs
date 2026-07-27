@@ -1,0 +1,349 @@
+/*  RemoteMain.cs - UnoDOS Remote Desktop client (WinForms).
+ *
+ *  Wraps the URC channel (Urc.cs) in a GUI: a live view of the device screen
+ *  (polls `screen grab`, decodes QOI via Qoi.cs), mouse + keyboard forwarding
+ *  (URC `pointer` / `key`), session recording (Recorder.cs), a log pane fed by
+ *  the URC LOG stream, and a raw-command box (the seed the follow-up clickable
+ *  command-GUI grows from).  Built with csc as a single winexe, like the flasher.
+ *
+ *  pc64 dials OUT to us, so we LISTEN.  Put this machine's LAN ip:port in the
+ *  device's STRESS.CFG (`remote=<ip>:<port>`) and boot a debug build.
+ */
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace UnoRemote
+{
+    static class Program
+    {
+        [STAThread]
+        static void Main(string[] args)
+        {
+            int autoPort = 0;
+            if (args.Length > 0) int.TryParse(args[0], out autoPort);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm(autoPort));
+        }
+    }
+
+    /// <summary>Double-buffered live-view control that also captures input and
+    /// maps view coordinates back to device framebuffer coordinates.</summary>
+    sealed class ScreenView : Control
+    {
+        private Bitmap _frame;
+        private Rectangle _dest;              // where the frame is drawn (letterboxed)
+        public int DevW = 640, DevH = 480;    // device framebuffer size
+        public event Action<int, int, int> PointerEvent;   // (fbX, fbY, btn)
+
+        public ScreenView()
+        {
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
+                     ControlStyles.AllPaintingInWmPaint | ControlStyles.Selectable, true);
+            BackColor = Color.Black;
+            TabStop = true;
+        }
+
+        public void SetFrame(Bitmap b)
+        {
+            var old = _frame; _frame = b;
+            if (old != null) old.Dispose();
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+            if (_frame == null) return;
+            // letterbox: preserve aspect within the client area
+            double sx = (double)ClientSize.Width / _frame.Width;
+            double sy = (double)ClientSize.Height / _frame.Height;
+            double s = Math.Min(sx, sy);
+            if (s <= 0) return;
+            int w = (int)(_frame.Width * s), h = (int)(_frame.Height * s);
+            _dest = new Rectangle((ClientSize.Width - w) / 2, (ClientSize.Height - h) / 2, w, h);
+            e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+            e.Graphics.DrawImage(_frame, _dest);
+        }
+
+        private bool MapToFb(int mx, int my, out int fx, out int fy)
+        {
+            fx = fy = 0;
+            if (_dest.Width <= 0 || _dest.Height <= 0) return false;
+            if (mx < _dest.Left || mx >= _dest.Right || my < _dest.Top || my >= _dest.Bottom) return false;
+            fx = (int)((mx - _dest.Left) * (double)DevW / _dest.Width);
+            fy = (int)((my - _dest.Top) * (double)DevH / _dest.Height);
+            if (fx < 0) fx = 0; if (fx >= DevW) fx = DevW - 1;
+            if (fy < 0) fy = 0; if (fy >= DevH) fy = DevH - 1;
+            return true;
+        }
+
+        private DateTime _lastMove = DateTime.MinValue;
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            Focus();
+            int fx, fy; if (MapToFb(e.X, e.Y, out fx, out fy)) Emit(fx, fy, 1);
+        }
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            int fx, fy; if (MapToFb(e.X, e.Y, out fx, out fy)) Emit(fx, fy, 0);
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            // throttle moves to ~30 ms so we don't flood the link
+            if ((DateTime.UtcNow - _lastMove).TotalMilliseconds < 30) return;
+            _lastMove = DateTime.UtcNow;
+            int fx, fy; int btn = (e.Button == MouseButtons.Left) ? 1 : 0;
+            if (MapToFb(e.X, e.Y, out fx, out fy)) Emit(fx, fy, btn);
+        }
+        private void Emit(int x, int y, int btn)
+        {
+            var h = PointerEvent; if (h != null) h(x, y, btn);
+        }
+    }
+
+    sealed class MainForm : Form
+    {
+        private readonly UrcLink _link = new UrcLink();
+        private readonly Recorder _rec = new Recorder();
+        private readonly ScreenView _view = new ScreenView();
+        private readonly TextBox _port = new TextBox { Text = "5099", Width = 60 };
+        private readonly Button _listen = new Button { Text = "Listen", Width = 70 };
+        private readonly Button _record = new Button { Text = "Record", Width = 70, Enabled = false };
+        private readonly ComboBox _scale = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
+        private readonly Label _status = new Label { AutoSize = true, Text = "idle" };
+        private readonly TextBox _log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = false };
+        private readonly TextBox _cmd = new TextBox();
+        private readonly Button _send = new Button { Text = "Send", Width = 60 };
+
+        private Thread _screenThread;
+        private volatile bool _pumping;
+        private volatile int _scaleFactor = 1;
+        private const double FpsTarget = 10.0;
+        private readonly int _autoPort;
+        private long _frames;
+
+        public MainForm(int autoPort)
+        {
+            _autoPort = autoPort;
+            Text = "UnoDOS Remote Desktop";
+            Width = 1000; Height = 760;
+            StartPosition = FormStartPosition.CenterScreen;
+            KeyPreview = true;
+
+            // ---- top bar ----
+            var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(4), WrapContents = false };
+            bar.Controls.Add(new Label { Text = "Port:", AutoSize = true, Padding = new Padding(4, 8, 2, 0) });
+            bar.Controls.Add(_port);
+            bar.Controls.Add(_listen);
+            _scale.Items.AddRange(new object[] { "1x (full)", "2x (half)", "3x (third)", "4x (quarter)" });
+            _scale.SelectedIndex = 0;
+            bar.Controls.Add(new Label { Text = "Scale:", AutoSize = true, Padding = new Padding(8, 8, 2, 0) });
+            bar.Controls.Add(_scale);
+            bar.Controls.Add(_record);
+            bar.Controls.Add(_status);
+
+            // ---- bottom: log + command box ----
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 170 };
+            var cmdRow = new Panel { Dock = DockStyle.Bottom, Height = 28 };
+            _cmd.Dock = DockStyle.Fill; _send.Dock = DockStyle.Right;
+            cmdRow.Controls.Add(_cmd); cmdRow.Controls.Add(_send);
+            _log.Dock = DockStyle.Fill; _log.Font = new Font(FontFamily.GenericMonospace, 8.5f);
+            bottom.Controls.Add(_log); bottom.Controls.Add(cmdRow);
+
+            _view.Dock = DockStyle.Fill;
+
+            Controls.Add(_view);
+            Controls.Add(bottom);
+            Controls.Add(bar);
+
+            // ---- wiring ----
+            _listen.Click += (s, e) => ToggleListen();
+            _record.Click += (s, e) => ToggleRecord();
+            _send.Click += (s, e) => SendRaw();
+            _cmd.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { SendRaw(); e.SuppressKeyPress = true; } };
+            _scale.SelectedIndexChanged += (s, e) => _scaleFactor = _scale.SelectedIndex + 1;
+
+            _view.PointerEvent += (x, y, btn) => Fire(() => _link.Pointer(x, y, btn));
+            KeyDown += MainForm_KeyDown;
+            KeyPress += MainForm_KeyPress;
+
+            _link.OnLog += (ch, t) => AppendLog("[" + ch + "] " + t);
+            _link.OnMessage += t => AppendLog("<msg> " + t);
+            _link.OnConnected += () => BeginInvoke((Action)OnConnected);
+            _link.OnDisconnected += () => BeginInvoke((Action)OnDisconnected);
+
+            FormClosing += (s, e) => { _pumping = false; _rec.Stop(); _link.Dispose(); };
+            Log("Put this PC's LAN ip:port in the device STRESS.CFG:  remote=<ip>:" + _port.Text);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (_autoPort > 0) { _port.Text = _autoPort.ToString(); ToggleListen(); }
+        }
+
+        // ---- listen / connection ----
+        private bool _listening;
+        private void ToggleListen()
+        {
+            if (_listening) return;   // stop-listen is a follow-up nicety
+            int port; if (!int.TryParse(_port.Text, out port)) { Log("bad port"); return; }
+            try { _link.Listen("0.0.0.0", port); }
+            catch (Exception ex) { Log("listen failed: " + ex.Message); return; }
+            _listening = true; _listen.Enabled = false; _port.Enabled = false;
+            _status.Text = "listening on :" + port + " - boot the device";
+            Log("listening on 0.0.0.0:" + port + "  (QEMU SLIRP guest: remote=10.0.2.2:" + port + ")");
+        }
+
+        private void OnConnected()
+        {
+            _status.Text = "connected";
+            _record.Enabled = true;
+            try { int w, h; _link.ScreenInfo(out w, out h); if (w > 0) { _view.DevW = w; _view.DevH = h; Log("device screen " + w + "x" + h); } }
+            catch (Exception ex) { Log("screen info: " + ex.Message); }
+            StartScreenLoop();
+        }
+
+        private void OnDisconnected()
+        {
+            _status.Text = "disconnected - waiting for redial";
+            _pumping = false;
+            if (_rec.Recording) { Log("recording stopped (link dropped): " + _rec.Stop()); _record.Text = "Record"; }
+            _record.Enabled = false;
+        }
+
+        // ---- screen pump ----
+        private void StartScreenLoop()
+        {
+            _pumping = true;
+            _screenThread = new Thread(ScreenLoop) { IsBackground = true, Name = "screen-pump" };
+            _screenThread.Start();
+        }
+
+        private void ScreenLoop()
+        {
+            double frameMs = 1000.0 / FpsTarget;
+            while (_pumping && _link.Connected)
+            {
+                var t0 = DateTime.UtcNow;
+                try
+                {
+                    int w, h;
+                    byte[] qoi = _link.ScreenGrab(_scaleFactor, out w, out h);
+                    Bitmap bmp = Qoi.Decode(qoi);
+                    _rec.Frame(bmp);
+                    long fn = ++_frames;
+                    // hand a clone to the view; recorder read from bmp already
+                    if (!IsDisposed) BeginInvoke((Action<Bitmap>)(b =>
+                    {
+                        _view.SetFrame(b);
+                        Text = "UnoDOS Remote Desktop - " + w + "x" + h + " - frame " + fn +
+                               (_rec.Recording ? " - REC" : "");
+                    }), bmp);
+                }
+                catch (Exception ex)
+                {
+                    if (_pumping) AppendLog("screen: " + ex.Message);
+                    Thread.Sleep(500);
+                }
+                double elapsed = (DateTime.UtcNow - t0).TotalMilliseconds;
+                if (elapsed < frameMs) Thread.Sleep((int)(frameMs - elapsed));
+            }
+        }
+
+        // ---- recording ----
+        private void ToggleRecord()
+        {
+            if (!_rec.Recording)
+            {
+                string outDir = System.IO.Path.Combine(Environment.GetFolderPath(
+                    Environment.SpecialFolder.MyVideos), "UnoRemote");
+                string dst = _rec.Start(_view.DevW / _scaleFactor, _view.DevH / _scaleFactor, FpsTarget, outDir);
+                _record.Text = "Stop";
+                Log((_rec.UsingFfmpeg ? "recording -> " : "recording frames -> ") + dst);
+            }
+            else
+            {
+                string dst = _rec.Stop();
+                _record.Text = "Record";
+                Log("recording saved: " + dst);
+            }
+        }
+
+        // ---- keyboard forwarding ----
+        // UEFI SimpleTextInput scan codes (uefi_main.c map_key handles the arrows,
+        // Esc, Delete; the rest are harmless no-ops on the device today).
+        private static int ScanFor(Keys k)
+        {
+            switch (k)
+            {
+                case Keys.Up: return 0x01;   case Keys.Down: return 0x02;
+                case Keys.Right: return 0x03; case Keys.Left: return 0x04;
+                case Keys.Home: return 0x05; case Keys.End: return 0x06;
+                case Keys.Insert: return 0x07; case Keys.Delete: return 0x08;
+                case Keys.PageUp: return 0x09; case Keys.PageDown: return 0x0A;
+                case Keys.Escape: return 0x17;
+            }
+            if (k >= Keys.F1 && k <= Keys.F12) return 0x0B + (k - Keys.F1);
+            return 0;
+        }
+
+        private void MainForm_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (!_view.Focused) return;
+            int scan = ScanFor(e.KeyCode);
+            if (scan != 0)
+            {
+                int ctrl = e.Control ? 1 : 0;
+                Fire(() => _link.Key(scan, 0, ctrl));
+                e.SuppressKeyPress = true;   // don't also fire KeyPress
+            }
+        }
+
+        private void MainForm_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            if (!_view.Focused) return;
+            int ctrl = (Control.ModifierKeys & Keys.Control) != 0 ? 1 : 0;
+            int uni = e.KeyChar;
+            Fire(() => _link.Key(0, uni, ctrl));
+            e.Handled = true;
+        }
+
+        // ---- raw command box ----
+        private void SendRaw()
+        {
+            string line = _cmd.Text.Trim();
+            if (line.Length == 0) return;
+            _cmd.Clear();
+            if (!_link.Connected) { Log("not connected"); return; }
+            if (line.StartsWith("/msg ")) { _link.Message(line.Substring(5)); Log("> " + line); return; }
+            Log("> " + line);
+            string[] parts = line.Split(' ');
+            string verb = parts[0];
+            object[] args = new object[parts.Length - 1];
+            for (int i = 1; i < parts.Length; i++) args[i - 1] = parts[i];
+            Fire(() =>
+            {
+                try { var r = _link.Command(verb, args); foreach (var l in r) AppendLog("  " + l); AppendLog("  ok"); }
+                catch (Exception ex) { AppendLog("  ! " + ex.Message); }
+            });
+        }
+
+        // ---- helpers ----
+        private static void Fire(Action a) { ThreadPool.QueueUserWorkItem(_ => { try { a(); } catch { } }); }
+
+        private void Log(string s) { AppendLog(s); }
+        private void AppendLog(string s)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke((Action<string>)AppendLog, s); return; }
+            _log.AppendText(s + Environment.NewLine);
+        }
+    }
+}

@@ -174,6 +174,10 @@ if [ "$1" != "legacy" ]; then
         # still be driven live over serial.  See REMOTE.md / unoauto_serial.c.
         pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_serial.o" "unoauto_serial.c"
         OBJS="$OBJS build/unoauto_serial.o"
+        # UNOAUTOMATE screen grab: QOI-encode the framebuffer for the URC
+        # `screen` verb - the OUT half of remote desktop.  See unoauto_screen.c.
+        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_screen.o" "unoauto_screen.c"
+        OBJS="$OBJS build/unoauto_screen.o"
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # for the native Music app. The IMAGE half ships inside PHOTOS.UNO below,

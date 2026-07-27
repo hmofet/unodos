@@ -60,7 +60,11 @@ def build_disk():
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             sh(["mcopy", "-i", FAT, "-o", src, dst],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    sh(["mcopy", "-i", FAT, "-o", cfg, "::/STRESS.CFG"],
+    # The debug/test config was renamed STRESS.CFG -> DEBUG.CFG (2026-07-26) and
+    # the build now SHIPS a DEBUG.CFG, which shadows any STRESS.CFG (dbg_cfg_read
+    # reads DEBUG.CFG first). So the harness config must be written as DEBUG.CFG,
+    # overwriting the shipped one, or `remote=`/`nonet` are never seen.
+    sh(["mcopy", "-i", FAT, "-o", cfg, "::/DEBUG.CFG"],
        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(FAT, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(part_start * SECTOR)
