@@ -27,6 +27,7 @@ struct uw_box {
     int pt, pr, pb, pl;              /* padding */
     const char *text; int tlen;      /* UW_BOX_TEXT */
     void *image;                     /* UW_BOX_IMAGE */
+    unsigned char inline_bg;         /* run came from a nested inline element */
 };
 
 struct uw_paint_list {
@@ -133,6 +134,12 @@ static void emit_word(inline_ctx *ic, const uw_style *s, const char *t, int len)
     tb = box_new(ic->d, UW_BOX_TEXT, NULL, s);
     if (!tb) return;
     tb->node = ic->cur_elem;     /* so hit testing can name the <a>, not the <p> */
+    /* Only a run belonging to a NESTED inline element paints its own
+     * background. A run that is simply the block's own text already sits on
+     * the block's background - painting it again would double-draw it and,
+     * worse, draw it only under the words rather than across the box. */
+    tb->inline_bg = (unsigned char)(ic->cur_elem && ic->block &&
+                                    ic->cur_elem != ic->block->node);
     tb->text = t; tb->tlen = len;
     tb->x = ic->content_x + ic->x;
     tb->y = ic->content_y + ic->y;
@@ -191,6 +198,11 @@ static void flow_text(inline_ctx *ic, const char *t, int len, const uw_style *s)
         }
         return;
     }
+    /* Leading whitespace still separates words ACROSS an element boundary:
+     * "<code>span</code> here" is one text node ending at "span" and another
+     * beginning with a space, and dropping it rendered "spanhere". */
+    if (len && (t[0]==' '||t[0]=='\t'||t[0]=='\n'||t[0]=='\r') && ic->x > 0)
+        ic->pending_space = 1;
     while (i < len) {
         int start;
         while (i < len && (t[i]==' '||t[i]=='\t'||t[i]=='\n'||t[i]=='\r')) i++;
@@ -402,6 +414,17 @@ static void paint_box(uw_doc *d, uw_box *b)
         return;
     }
     if (b->type == UW_BOX_TEXT) {
+        /* An INLINE background paints behind the run itself. Blocks get theirs
+         * from the block branch below, but <code> and friends are inline and
+         * have no box of their own - without this their background-color would
+         * simply never appear. */
+        if (s && s->has_bg && b->inline_bg) {
+            c.cmd = UW_CMD_RECT;
+            c.x = b->x - 1; c.y = b->y - 1; c.w = b->w + 2; c.h = b->h + 2;
+            c.color = s->background_color;
+            pl_push(d, &c);
+            memset(&c, 0, sizeof c);
+        }
         c.cmd = UW_CMD_TEXT;
         c.x = b->x; c.y = b->y; c.w = b->w; c.h = b->h;
         c.color = s->color;
