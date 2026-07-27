@@ -3,11 +3,11 @@
  *  Wraps the URC channel (Urc.cs) in a GUI: a live view of the device screen
  *  (polls `screen grab`, decodes QOI via Qoi.cs), mouse + keyboard forwarding
  *  (URC `pointer` / `key`), session recording (Recorder.cs), a log pane fed by
- *  the URC LOG stream, and a raw-command box (the seed the follow-up clickable
- *  command-GUI grows from).  Built with csc as a single winexe, like the flasher.
+ *  the URC LOG stream, a clickable verb bar, and a raw-command box.  Built with
+ *  csc as a single winexe, like the flasher.
  *
  *  pc64 dials OUT to us, so we LISTEN.  Put this machine's LAN ip:port in the
- *  device's STRESS.CFG (`remote=<ip>:<port>`) and boot a debug build.
+ *  device's DEBUG.CFG (`remote=<ip>:<port>`) and boot a debug build.
  */
 using System;
 using System.Drawing;
@@ -153,13 +153,15 @@ namespace UnoRemote
             bar.Controls.Add(_srvCap);
             bar.Controls.Add(_status);
 
-            // ---- bottom: log + command box ----
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 170 };
+            // ---- bottom: log + verb bar + command box ----
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 224 };
             var cmdRow = new Panel { Dock = DockStyle.Bottom, Height = 28 };
             _cmd.Dock = DockStyle.Fill; _send.Dock = DockStyle.Right;
             cmdRow.Controls.Add(_cmd); cmdRow.Controls.Add(_send);
             _log.Dock = DockStyle.Fill; _log.Font = new Font(FontFamily.GenericMonospace, 8.5f);
-            bottom.Controls.Add(_log); bottom.Controls.Add(cmdRow);
+            bottom.Controls.Add(_log);      // Fill (top)
+            bottom.Controls.Add(cmdRow);    // Bottom (outermost)
+            BuildVerbBar(bottom);           // Bottom, stacks above the command row
 
             _view.Dock = DockStyle.Fill;
 
@@ -185,7 +187,7 @@ namespace UnoRemote
 
             FormClosing += (s, e) => { _pumping = false; _rec.Stop(); _link.Dispose();
                                        var c = _canvas; _canvas = null; if (c != null) c.Dispose(); };
-            Log("Put this PC's LAN ip:port in the device STRESS.CFG:  remote=<ip>:" + _port.Text);
+            Log("Put this PC's LAN ip:port in the device DEBUG.CFG:  remote=<ip>:" + _port.Text);
         }
 
         protected override void OnShown(EventArgs e)
@@ -498,6 +500,14 @@ namespace UnoRemote
             string line = _cmd.Text.Trim();
             if (line.Length == 0) return;
             _cmd.Clear();
+            Execute(line);
+        }
+
+        // Run one raw URC command line (from the box or a verb button).
+        private void Execute(string line)
+        {
+            line = line.Trim();
+            if (line.Length == 0) return;
             if (!_link.Connected) { Log("not connected"); return; }
             if (line.StartsWith("/msg ")) { _link.Message(line.Substring(5)); Log("> " + line); return; }
             Log("> " + line);
@@ -510,6 +520,45 @@ namespace UnoRemote
                 try { var r = _link.Command(verb, args); foreach (var l in r) AppendLog("  " + l); AppendLog("  ok"); }
                 catch (Exception ex) { AppendLog("  ! " + ex.Message); }
             });
+        }
+
+        // ---- clickable verb bar ----
+        // A verb button either runs immediately, prefills the command box for a
+        // verb that needs an argument (label ends "..."), or confirms first
+        // (label ends "!"). Grows from - and shares Execute() with - the raw box.
+        private void BuildVerbBar(Panel host)
+        {
+            var bar = new FlowLayoutPanel
+            { Dock = DockStyle.Bottom, Height = 52, WrapContents = true, AutoScroll = true,
+              Padding = new Padding(2, 2, 2, 0), BackColor = SystemColors.Control };
+            // label -> command line; "..." = prefill + focus, "!" = confirm first
+            var verbs = new[]
+            {
+                "probe", "vols", "disks", "devices", "apps", "uptime", "disc",
+                "screen info", "close",
+                "launch ...", "test ...", "py ...", "guard ...", "safe",
+                "arm ...", "install ...", "bootnext ...", "eth ...", "iwl ...",
+                "reboot !", "poweroff !",
+            };
+            foreach (var spec in verbs)
+            {
+                bool needsArg = spec.EndsWith(" ...");
+                bool confirm = spec.EndsWith(" !");
+                string cmd = needsArg ? spec.Substring(0, spec.Length - 4)
+                           : confirm ? spec.Substring(0, spec.Length - 2) : spec;
+                var b = new Button { Text = needsArg ? cmd + "…" : cmd, AutoSize = true, Margin = new Padding(2) };
+                string command = cmd;
+                b.Click += (s, e) =>
+                {
+                    if (!_link.Connected) { Log("not connected"); return; }
+                    if (needsArg) { _cmd.Text = command + " "; _cmd.Focus(); _cmd.SelectionStart = _cmd.Text.Length; return; }
+                    if (confirm && MessageBox.Show(this, "Send '" + command + "' to the device?",
+                            "Confirm", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+                    Execute(command);
+                };
+                bar.Controls.Add(b);
+            }
+            host.Controls.Add(bar);
         }
 
         // ---- helpers ----
