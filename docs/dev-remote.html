@@ -219,6 +219,17 @@ if <code>ffmpeg</code> is on your PATH, otherwise a folder of PNG frames. Tick <
 record <em>on the machine itself</em>: it captures at a steady frame rate independent of the network and UnoRemote
 pulls the finished recording when you stop, which is smoother than saving whatever trickled over a slow link.</p>
 <div class="note tip"><b>Zero-config discovery</b><strong>No address to type.</strong> With <code>discover</code> set in <code>DEBUG.CFG</code> (instead of a <code>remote=</code> address) the device broadcasts on the local network, and UnoRemote - or the <code>unoauto_remote.py</code> tool - answers with its own address, so the device connects with nothing configured. Both ends must be on the same LAN.</div>
+
+<p><strong>Which end dials - and the Scan button.</strong> By default the <em>device</em> dials your
+PC: you click <strong>Listen</strong> and it connects in. That suits a headless box whose address you
+do not know - it calls home when its network is up. You can also flip it: put <code>listen</code> (or
+<code>listen=&lt;port&gt;</code>) in the device's <code>DEBUG.CFG</code> and the box becomes a
+<strong>server</strong> that waits to be dialed. Then click <strong>Scan&hellip;</strong> in UnoRemote:
+it broadcasts on the LAN, lists every box in listen mode by name, and dials the one you pick. That is
+the "browse the network and connect to a box" model - you choose the machine, with no address typed on
+either end. (Give a box a friendly name with <code>name=&lt;label&gt;</code> so it is easy to spot in
+the list.)</p>
+<div class="note tip"><b>Networking is ready at boot</b>The network comes up <strong>at boot</strong> now, not only when an app first needs it: every device brings its NIC up early (skipping any that do not get a lease within a few seconds, so a dead or cableless port cannot hang boot), so a box is reachable - and discoverable - as soon as the desktop appears.</div>
 <div class="note warn"><b>Debug builds, LAN only</b>UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.</div>
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
