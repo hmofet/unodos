@@ -1,11 +1,68 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-27 (round 22 - ROOT CAUSE via working Linux association trace:
-this fw uses the NEW link-based command API; UnoDOS's legacy MVM association is
-the whole problem. SESSION_PROTECTION fails because there is no LINK_CONFIG link).
+Status: 2026-07-27 (round 23 - the link-based association API is IMPLEMENTED on
+branch `iwlwifi-linkapi`; both builds green, METAL-PENDING).
 Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
+
+## Round 23 (2026-07-27) — the link API is IMPLEMENTED (branch `iwlwifi-linkapi`), metal-pending
+
+Round 22's plan is written. `pc64/iwlwifi.c` now has the MAC_CONF-group
+association path and picks it whenever the fw advertises **capa 110**
+(`IWL_UCODE_TLV_CAPA_MLD_API_SUPPORT`), falling back to the legacy chain
+otherwise (AX200 and older still work).
+
+**Command versions actually advertised by `IWLAX201.UCO`** (`tools/iwl_cmd_versions.py`):
+`MAC_CONF 0x08` = **ver 1**; `0x09`, `0x0a` and `0x05` are **absent from the
+version TLV**, i.e. default ver 1. So the VER_1 layouts (kernel v6.7) are the
+right ones, and each struct carries a compile-time size assert because this fw
+length-checks every command:
+
+| cmd | struct | size |
+|---|---|---|
+| `MAC_CONFIG_CMD` 0x03/0x08 | `iwl_mac_config_cmd` | 52 B |
+| `LINK_CONFIG_CMD` 0x03/0x09 | `iwl_link_config_cmd` | 208 B |
+| `STA_CONFIG_CMD` 0x03/0x0a | `iwl_mvm_sta_cfg_cmd` | 96 B |
+| `SEC_KEY_CMD` 0x05/0x18 | `iwl_sec_key_cmd` | 80 B |
+
+**New `assoc_setup()` order** (mirrors iwlmvm `mld-mac.c` / `link.c` / `mld-sta.c`):
+`MAC_CONFIG(ADD)` → `LINK_CONFIG(ADD, phy=FW_CTXT_INVALID)` → `PHY_CONTEXT(ADD)`
+→ `LINK_CONFIG(MODIFY: active + phy + rates + qos + beacon timing)` →
+`STA_CONFIG(AP peer)` → `SCD_QUEUE_CONFIG`. **No BINDING, no TIME_QUOTA** — the
+link replaces both.
+
+**Correction to round 22's step 4.** `iwl_mvm_get_session_prot_id` uses the raw
+`mvmvif->id` for SESSION_PROTECTION_CMD **ver < 2** and the `fw_link_id` only
+from ver 2 up. This fw's 0x05 is ver 1, so the mac id is correct — and with one
+mac and one link both values are **0** anyway. The id was never the bug: the
+missing LINK was. Also worth knowing: the driver *chooses* `fw_link_id` itself
+(`iwl_mvm_get_free_fw_link_id`, ffz over a driver-side bitmap); the fw does not
+hand one back, so ours is always 0.
+
+Other pieces that had to move with it:
+- the 4-way handshake installs CCMP keys through **`SEC_KEY_CMD`** (DATA_PATH
+  0x18) and re-sends `STA_CONFIG` authorized, instead of `ADD_STA_KEY` +
+  `ADD_STA` MODIFY (those belong to the ADD_STA world).
+- `MAC_CONFIG`'s filter flags are a **different enum** from the legacy command:
+  ACCEPT_BEACON is BIT(3) here where the legacy `MAC_CONTEXT_CMD` used
+  IN_BEACON BIT(6).
+- the scan now records **beacon interval + DTIM period** so `LINK_CONFIG` carries
+  real beacon timing.
+- `find_and_join()` is no longer MLME-scaffolded: real scan → pick → setup →
+  auth window → Open-System auth → assoc → supplicant armed.
+
+**New bisect verb: `iwl mld <1-9>`** (mirrors `iwl mvm <n>`, same
+one-command-per-round-trip rationale — a wedge eats in-flight URC log frames):
+`1` MAC_CONFIG, `2` LINK_CONFIG ADD, `3` PHY_CONTEXT, `4` LINK_CONFIG
+MODIFY(active), `5` STA_CONFIG, `6` txq_alloc, `7` SESSION_PROTECTION, `8` auth,
+`9` assoc. Run `iwl scan` first so steps 3-5 have a real BSSID/channel.
+
+**Metal procedure for this branch:** `iwl rerun` → `iwl mvm 1`/`2`/`4` → `iwl
+scan` → `iwl mld 1`..`9` (or the one-shot `iwl join` → `iwl auth` → `iwl assoc`
+→ `iwl eapol`), `iwl fwerr` after any assert. The decisive observation is
+**step 7**: SESSION_PROTECTION should now return `csr2808=0` instead of the
+LMAC-FATAL `data1=0x400`, because the link it references finally exists.
 
 ## Round 22 (2026-07-27) — ROOT CAUSE: this fw drives association with the NEW link-based command API; UnoDOS uses the legacy MVM one
 
