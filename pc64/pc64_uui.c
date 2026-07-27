@@ -25,6 +25,7 @@
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
 #include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
+#include "unoauto_screen.h"  /* remote-desktop screen capture tick (no-op in prod) */
 #include "netdisc.h"         /* zero-config LAN discovery (no-op in prod) */
 #ifdef UNO_DEBUG
 unsigned long long uno_native_rdtsc(void);
@@ -2575,6 +2576,8 @@ int main(void)
                                            blocks this frame while it does */
         unoauto_remote_tick();          /* debug build: pump the dev-PC remote
                                            link (armed by unoauto_remote_boot) */
+        uno_screen_capture_tick();      /* debug build: server-side screen record
+                                           (armed by `screen record start`) */
         netdisc_tick();                 /* debug build: zero-config LAN discovery
                                            (armed by netdisc_boot) */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
