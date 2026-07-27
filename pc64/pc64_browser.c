@@ -308,9 +308,106 @@ static void walk_dom(uw_doc *d, uw_node *parent, bstyle st, int li, int pre)
     }
 }
 
+/* ---- the unoweb engine path (BROWSER_ENGINE=uw) ---------------------------
+ * Instead of walking the DOM and painting inline, run the real pipeline -
+ * cascade, block layout, display list - and replay the commands. The flow
+ * painter above stays the default until this has been through real pages;
+ * both paths are compiled so neither can rot.
+ *
+ * unoweb knows nothing about fonts, so the metrics hook is where pc64 tells it
+ * how wide text actually is. Getting this wrong does not crash anything - it
+ * just lays the page out for the wrong font, which is exactly why the hook
+ * exists rather than a hard-coded guess inside the engine. */
+#ifdef UW_ENGINE
+static int uw_slot(const uw_style *s)
+{ return s->font_family == UW_FF_MONO ? BR_MONO_SLOT : BR_BODY_SLOT; }
+
+static int uw_fstyle(const uw_style *s)
+{ return (s->font_weight >= 600 ? UNO_FS_BOLD : 0) | (s->font_style ? UNO_FS_ITALIC : 0); }
+
+static int uwm_width(void *u, const uw_style *s, const char *t, int len)
+{
+    char buf[256];
+    int n = len < (int)sizeof buf - 1 ? len : (int)sizeof buf - 1;
+    (void)u;
+    memcpy(buf, t, (size_t)n);
+    buf[n] = 0;
+    return uno_font_text_w_styled(uw_slot(s), s->font_size, uw_fstyle(s), buf);
+}
+
+static int uwm_lineh(void *u, const uw_style *s)
+{
+    int h = uno_font_height_px(uw_slot(s), s->font_size) + 3;
+    (void)u;
+    return s->line_height > h ? s->line_height : h;
+}
+
+static int  g_uw_w;                 /* width the current layout was built for */
+static int  g_uw_h;                 /* its resulting document height           */
+static unsigned g_uw_sig;
+
+static void render_uw(const char *src, unoui_rect r, int scroll)
+{
+    uw_metrics m;
+    int i, n, avail = r.w - 12;
+    unsigned sig;
+    dom_sync(src);
+    if (!g_dom) return;
+    sig = g_dom_sig;
+    if (sig != g_uw_sig || avail != g_uw_w) {
+        memset(&m, 0, sizeof m);
+        m.text_width = uwm_width;
+        m.line_height = uwm_lineh;
+        uw_add_inline_sheets(g_dom);
+        uw_style_document(g_dom, avail, r.h);
+        g_uw_h = uw_layout(g_dom, avail, r.h, &m);
+        uw_paint(g_dom);
+        g_uw_sig = sig;
+        g_uw_w = avail;
+    }
+    n = uw_paint_count(g_dom);
+    for (i = 0; i < n; i++) {
+        const uw_paint_cmd *c = uw_paint_at(g_dom, i);
+        int x = r.x + c->x, y = r.y + c->y - scroll;
+        fb_px col = FB_RGB(c->color.r, c->color.g, c->color.b);
+        if (y > r.y + r.h || y + c->h < r.y) continue;     /* off-screen */
+        switch (c->cmd) {
+        case UW_CMD_RECT:
+        case UW_CMD_BORDER:
+        case UW_CMD_BULLET:
+            fb_fill_rect(x, y, c->w, c->h, col);
+            break;
+        case UW_CMD_TEXT: {
+            char buf[256];
+            int k = c->len < (int)sizeof buf - 1 ? c->len : (int)sizeof buf - 1;
+            int slot = uw_slot(c->style), st = uw_fstyle(c->style);
+            memcpy(buf, c->text, (size_t)k);
+            buf[k] = 0;
+            uno_font_draw_styled(slot, c->style->font_size, st, x, y, buf, col, -1);
+            if (c->style->underline) {
+                int bl = uno_font_baseline_px(slot, c->style->font_size);
+                fb_hline(x, y + bl + 2, c->w, col);
+            }
+            break; }
+        default: break;
+        }
+    }
+    /* br_draw clamps the scroll from fy/flh, so hand it the laid-out height.
+     * This must be the height the REAL layout produced - calling uw_layout
+     * again here (with no metrics) would re-flow the whole page every frame
+     * against the wrong font. */
+    fy = r.y + g_uw_h;
+    flh = 0;
+}
+#endif /* UW_ENGINE */
+
 static void render_html(const char *src, unoui_rect r, int scroll)
 {
     bstyle base = { 1, 0, 0, 0, 0, PG_TEXT };
+#ifdef UW_ENGINE
+    render_uw(src, r, scroll);
+    return;
+#endif
     dom_sync(src);
     fl_reset(r, scroll, 10);
     if (!g_dom) return;

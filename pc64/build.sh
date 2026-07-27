@@ -139,6 +139,11 @@ if [ "$1" != "legacy" ]; then
     # together (unosecure's strong unosec_* symbols replace unoscript.c's weak
     # fail-closed fallbacks - the r8169 pattern), so tier>=1 script surfaces
     # light up.  See UNOSECURE-SPEC.md / UNOSCRIPT.md.
+    # BROWSER_ENGINE=uw switches the browser from the DOM-walk painter to the
+    # full unoweb pipeline (cascade -> block layout -> display list).  Both
+    # paths compile either way, so neither can rot; the flow painter stays
+    # the default until the engine path has been through real pages.
+    if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
     for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
