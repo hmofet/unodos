@@ -2530,6 +2530,23 @@ int main(void)
     /* Intel WiFi is bound lazily on first net use (pc64_net_up): it reads
        WIFI.CFG + firmware off the ESP and runs a scan/join that can take a
        few seconds - not something to do on the boot path. */
+    /* Proactive network bring-up at boot: try each device with a bounded
+       timeout and skip any that does not lease, so an installed OS has the
+       network ready without opening an app, and a dead/cableless NIC (e.g. the
+       ZimaBlade's RX-dead onboard Realtek) cannot hang boot. In a DEBUG build
+       the boot net test (pc64_nettest) already owns bring-up whenever a
+       DEBUG.CFG is present (and `nonet` disables networking), so run here only
+       when there is NO DEBUG.CFG - the installed-OS case that would otherwise
+       come up with the link down. Production always brings the network up. */
+    {
+        int pc64_net_boot(void);                    /* pc64_http.c */
+#ifdef UNO_DEBUG
+        int pc64_stress_cfg_flag(const char *key);  /* pc64_stress.c (-1 = no DEBUG.CFG) */
+        if (pc64_stress_cfg_flag("nonet") == -1) pc64_net_boot();
+#else
+        pc64_net_boot();
+#endif
+    }
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
