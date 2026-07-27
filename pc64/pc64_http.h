@@ -9,6 +9,14 @@
  * Returns 1 if a link is (or came) up, 0 if there is no e1000 NIC. */
 int pc64_net_up(void);
 
+/* Proactive boot-time bring-up: try EVERY network device in turn, each with a
+ * bounded timeout, and skip any that fails to get a DHCP lease - so a dead or
+ * cableless NIC can neither hang boot nor strand the stack on a leaseless link.
+ * Settles on the first device that actually leases. Idempotent (a no-op once
+ * the net is up). Returns 1 if some device leased, else 0. Called once at boot;
+ * the network is otherwise brought up lazily by pc64_net_up() on first use. */
+int pc64_net_boot(void);
+
 /* GET `url` (http://host[:port]/path, or bare host/path). On success returns
  * the body length (>=0) copied into `body` (NUL-terminated, capped at
  * bodymax-1); `status` gets a short human-readable status/result line. On

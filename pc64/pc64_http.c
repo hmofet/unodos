@@ -94,6 +94,77 @@ int pc64_net_up(void)
     return 0;                                    /* no NIC at all */
 }
 
+/* ---- boot-time proactive bring-up ---------------------------------------- *
+ * pc64_net_up() above is LAZY (first net use) and commits to the first link-up
+ * NIC. pc64_net_boot() is the eager boot-path variant: it walks the SAME device
+ * tables but treats each device as pass/fail on whether it actually LEASES
+ * within a shared time budget, so a link-up-but-receive-dead NIC (the ZimaBlade's
+ * onboard Realtek) or a cableless port is tried, skipped, and the next device
+ * gets its turn - and the whole thing is bounded, so it can never hang boot. It
+ * settles on the first device that leases and leaves the on-demand path intact
+ * for everything after. */
+
+#ifdef UNO_DEBUG
+void uno_dbg_log(const char *fmt, ...);
+#define NETBOOT_LOG(...) uno_dbg_log(__VA_ARGS__)
+#else
+#define NETBOOT_LOG(...) ((void)0)
+#endif
+
+/* Bring one NIC up and return 1 iff it obtains a DHCP lease before `*budget_ms`
+ * (approx, decremented as we wait) runs out. All waits are bounded by both a
+ * loop cap and the shared budget, so a stuck device just burns its slice and is
+ * skipped. Timeouts are tighter than pc64_net_up's since several NICs may be
+ * tried at boot. */
+static int net_try_lease(uno_nic_t *nic, const unsigned char *mac, int *budget)
+{
+    int i;
+    if (*budget <= 0) return 0;
+    net_init(nic, mac);
+    /* wait for link (autoneg) - up to ~1 s, but never past the shared budget */
+    if (nic->link)
+        for (i = 0; i < 200 && *budget > 0 && !nic->link(nic->ctx); i++) { uno_pc64_delay_ms(5); *budget -= 5; }
+    /* DHCP - up to ~3 s; net_poll retransmits DISCOVER/REQUEST as it pumps */
+    net_dhcp_start();
+    for (i = 0; i < 600 && *budget > 0 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); *budget -= 5; }
+    return net_dhcp_done();
+}
+
+int pc64_net_boot(void)
+{
+    int i, nw = (int)(sizeof g_wired / sizeof g_wired[0]);
+    int nf = (int)(sizeof g_wifi  / sizeof g_wifi[0]);
+    int budget = 8000;                           /* total ms across all devices */
+    uno_nic_t *nic;
+
+    if (g_net_inited || net_dhcp_done()) { g_net_inited = 1; return 1; }
+
+    /* Wired first (cheap to probe). The first device that LEASES wins; a device
+     * that links but never leases (dead RX / no server) is skipped. */
+    for (i = 0; i < nw && budget > 0; i++) {
+        nic = g_wired[i].n();
+        if (!nic) continue;
+        if (net_try_lease(nic, g_wired[i].m(), &budget)) {
+            NETBOOT_LOG("net-boot: wired[%d] leased (rx=%u tx=%u)", i, net_rx_frames(), net_tx_frames());
+            g_net_inited = 1; return 1;
+        }
+        NETBOOT_LOG("net-boot: wired[%d] no lease, skipping (rx=%u tx=%u)", i, net_rx_frames(), net_tx_frames());
+    }
+    /* Only if no wired device leased: WiFi (its probe is a multi-second bring-up,
+     * so it is deliberately last and reached only when nothing wired worked). */
+    for (i = 0; i < nf && budget > 0; i++) {
+        nic = g_wifi[i].n();
+        if (!nic) continue;
+        if (net_try_lease(nic, g_wifi[i].m(), &budget)) {
+            NETBOOT_LOG("net-boot: wifi[%d] leased", i);
+            g_net_inited = 1; return 1;
+        }
+        NETBOOT_LOG("net-boot: wifi[%d] no lease, skipping", i);
+    }
+    NETBOOT_LOG("net-boot: no device leased (budget %d ms left)", budget);
+    return 0;                                     /* on-demand pc64_net_up may retry later */
+}
+
 /* ---- tiny helpers -------------------------------------------------------- */
 static void set_tls_err(char *status, int statusmax, const char *what)
 {

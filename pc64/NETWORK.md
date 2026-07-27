@@ -26,6 +26,29 @@ the QEMU `e1000e`; igb needs a PHY autoneg kick over MDIC before QEMU raises
 `STATUS.LU` and un-gates RX. r8169 and all WiFi parts have no QEMU model and are
 verified by reference/inspection only (hardware-pending).
 
+## Bring-up: lazy on demand, and eager at boot
+
+`pc64_net_up()` is the **lazy** path: the first time anything needs the network
+(browser, discovery, the URC link) it probes the table above in order and commits
+to the first NIC that reports link, then leases. It is idempotent and stays the
+fast path for everything after boot.
+
+`pc64_net_boot()` ([pc64_http.c](pc64_http.c)) is the **eager boot** path, so an
+installed OS has the network ready without waiting for an app to ask. It walks the
+same table but treats each device as pass/fail on whether it actually **leases**
+within a shared time budget (~8 s total; ~1 s link + ~3 s DHCP per device), and
+**skips any that fails** - so a link-up-but-receive-dead NIC (e.g. the ZimaBlade's
+onboard Realtek under bring-up) or a cableless port is tried, skipped, and the
+next device gets its turn, and the whole thing is bounded so it can never hang
+boot. WiFi is reached only if no wired device leased (its probe is a multi-second
+join). It runs in **every production** boot; in a **debug** build it runs only
+when there is **no `DEBUG.CFG`** - because when one is present the debug boot net
+test ([pc64_nettest.c](pc64_nettest.c)) already owns bring-up, and running both
+would double-`net_init` a USB adapter and kill its RX. `nonet` suppresses it.
+Gate: [tools/netboot_qemu.py](tools/netboot_qemu.py) boots a debug e1000 image
+with `DEBUG.CFG` removed and asserts the guest leases at boot with nothing else
+armed.
+
 The USB NIC drivers have **two transports**. While the OS is firmware-attached
 they drive the adapter through the firmware's own `EFI_USB_IO` handles
 ([usbio.c](usbio.c)) - no xHCI takeover, so the firmware keeps the USB boot
