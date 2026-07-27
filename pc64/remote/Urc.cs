@@ -47,6 +47,12 @@ namespace UnoRemote
         private Thread _acceptThread;
         private volatile bool _stop;
 
+        // ---- zero-config discovery responder (netdisc, UDP :5400) ----
+        private Socket _disc;
+        private Thread _discThread;
+        private int _urcPort;
+        private const int DiscPort = 5400;
+
         // ---- events (raised on the reader thread; marshal to UI yourself) ----
         public event Action<string, string> OnLog;    // (chan, text)
         public event Action<string> OnMessage;         // (text)
@@ -66,13 +72,96 @@ namespace UnoRemote
             _listener.Start();
             _acceptThread = new Thread(AcceptLoop) { IsBackground = true, Name = "urc-accept" };
             _acceptThread.Start();
+            StartDiscovery(port);   // answer UNODISC probes so `discover` devices find us
         }
 
         public void Dispose()
         {
             _stop = true;
             try { if (_listener != null) _listener.Stop(); } catch { }
+            try { if (_disc != null) _disc.Close(); } catch { }
+            _disc = null;
             CloseClient();
+        }
+
+        // ---- zero-config discovery (netdisc) ---------------------------------
+        // A device booted with `discover` in DEBUG.CFG (instead of a static
+        // `remote=<ip>:<port>`) broadcasts a UNODISC PROBE on the LAN; we answer
+        // with an OFFER carrying THIS listener's ip:port, and the device dials us
+        // with no address configured. Protocol: UDP :5400, one ASCII datagram
+        // (see pc64/netdisc.h). Best-effort: if the port is taken, TCP listen
+        // still works - you just have to use a static remote= address.
+        public event Action<string> OnDiscovery;   // (human-readable note), UI thread marshals itself
+
+        private void StartDiscovery(int urcPort)
+        {
+            _urcPort = urcPort;
+            try
+            {
+                _disc = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                _disc.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _disc.EnableBroadcast = true;
+                _disc.Bind(new IPEndPoint(IPAddress.Any, DiscPort));
+            }
+            catch { _disc = null; return; }   // discovery is optional; don't fail Listen
+            _discThread = new Thread(DiscoveryLoop) { IsBackground = true, Name = "urc-disc" };
+            _discThread.Start();
+        }
+
+        private void DiscoveryLoop()
+        {
+            var buf = new byte[512];
+            var sep = new[] { ' ', '\r', '\n', '\t' };
+            while (!_stop && _disc != null)
+            {
+                int n; EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+                try { n = _disc.ReceiveFrom(buf, ref any); }
+                catch { break; }
+                if (n <= 0) continue;
+                string msg;
+                try { msg = Encoding.ASCII.GetString(buf, 0, n); } catch { continue; }
+                var t = msg.Split(sep, StringSplitOptions.RemoveEmptyEntries);
+                // UNODISC 1 PROBE <role> <name> <api>  -> reply with our OFFER
+                if (t.Length >= 3 && t[0] == "UNODISC" && t[2] == "PROBE")
+                {
+                    var src = (IPEndPoint)any;
+                    string localIp = LocalIpToward(src.Address);
+                    string offer = "UNODISC 1 OFFER host " + SafeHostName() + " 1 " + localIp + " " + _urcPort;
+                    try { _disc.SendTo(Encoding.ASCII.GetBytes(offer), src); } catch { }
+                    var h = OnDiscovery;
+                    if (h != null)
+                    {
+                        string who = (t.Length >= 5 ? t[4] : t.Length >= 4 ? t[3] : "a device");
+                        h("discovery: offered " + localIp + ":" + _urcPort + " to " + who + " (" + src.Address + ")");
+                    }
+                }
+            }
+        }
+
+        // netdisc parses space-separated tokens, so the advertised name must be a
+        // single token.
+        private static string SafeHostName()
+        {
+            string n = Environment.MachineName;
+            var sb = new StringBuilder();
+            foreach (char c in n) sb.Append(char.IsWhiteSpace(c) ? '-' : c);
+            return sb.Length > 0 ? sb.ToString() : "host";
+        }
+
+        // The local IP the device can reach us on: pick the egress interface
+        // toward the prober (a connect on a UDP socket sends nothing, it just
+        // resolves the route). Falls back to loopback.
+        private static string LocalIpToward(IPAddress dst)
+        {
+            try
+            {
+                using (var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    s.Connect(new IPEndPoint(dst, 9));
+                    return ((IPEndPoint)s.LocalEndPoint).Address.ToString();
+                }
+            }
+            catch { return "127.0.0.1"; }
         }
 
         private void CloseClient()
