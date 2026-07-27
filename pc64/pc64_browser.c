@@ -20,6 +20,8 @@
 #include "pc64_fs.h"
 #include "js.h"
 #include "../unoweb/unoweb.h"
+#include "../unomedia/unomedia.h"
+#include <stdlib.h>
 #include "pc64_http.h"
 #include <string.h>
 
@@ -179,6 +181,9 @@ static void render_md(const char *src, unoui_rect r, int scroll)
  *
  * The DOM is cached: br_draw runs every frame, and re-parsing per frame would
  * be absurd, so dom_sync() re-parses only when the source actually changes. */
+#ifdef UW_ENGINE
+static void img_cache_reset(void);   /* defined with the image cache below */
+#endif
 static uw_doc  *g_dom;
 static unsigned g_dom_sig;
 
@@ -200,6 +205,9 @@ static void dom_sync(const char *src)
     unsigned sig = doc_sig(src);
     if (g_dom && sig == g_dom_sig) return;
     if (g_dom) { uw_doc_free(g_dom); g_dom = NULL; }
+#ifdef UW_ENGINE
+    img_cache_reset();               /* decoded frames belong to the old page */
+#endif
     memset(&c, 0, sizeof c);
     c.arena_max = 2u << 20;          /* a page's tree, bounded */
     c.max_depth = 96;
@@ -345,6 +353,78 @@ static int uwm_lineh(void *u, const uw_style *s)
 static int  g_uw_w;                 /* width the current layout was built for */
 static int  g_uw_h;                 /* its resulting document height           */
 static int  g_link_sel = -1;        /* keyboard-selected link, or -1           */
+
+/* ---- images: unomedia behind the uw_images hook ---------------------------
+ * unoweb reserves the box; the decoding happens HERE, which is the whole
+ * point of the hook. Decoded frames are cached per document because layout
+ * asks for a size on every reflow and re-decoding a PNG per keystroke would
+ * be absurd.
+ *
+ * Only LOCAL files resolve today. A page fetched over the network references
+ * images by URL, and the fetch queue that would retrieve them is not built
+ * yet - such an image resolves to nothing and lays out as an empty box, which
+ * is the documented behaviour for an image that has not arrived. */
+#define IMG_CACHE   8
+#define IMG_MAX_PX  (4u * 1024u * 1024u)     /* 4 MP: a fuzzed header cannot
+                                              * talk us into a huge malloc   */
+typedef struct { char name[64]; um_px *px; int w, h; } imgent;
+static imgent g_imgs[IMG_CACHE];
+static int    g_nimgs;
+static int    g_img_vol;                     /* volume of the file being read */
+static char   g_img_file[64];
+
+static long img_src_read(void *ctx, long off, unsigned char *dst, long n)
+{ (void)ctx; return uno_fs_read_at(g_img_vol, g_img_file, off, dst, n); }
+
+static void img_cache_reset(void)
+{
+    int i;
+    for (i = 0; i < g_nimgs; i++) { free(g_imgs[i].px); g_imgs[i].px = 0; }
+    g_nimgs = 0;
+}
+
+static int uwi_resolve(void *user, const char *src, int *w, int *h, void **handle)
+{
+    um_src s;
+    um_image_info info;
+    int i, v, nv, delay = 0;
+    long sz = -1;
+    (void)user;
+    *w = *h = 0; *handle = 0;
+    if (!src || !*src) return 0;
+    for (i = 0; i < g_nimgs; i++)
+        if (!strcmp(g_imgs[i].name, src)) {
+            if (!g_imgs[i].px) return 0;
+            *w = g_imgs[i].w; *h = g_imgs[i].h; *handle = &g_imgs[i];
+            return 1;
+        }
+    if (g_nimgs >= IMG_CACHE) return 0;
+    { int k = 0; while (src[k] && k < 63) { g_img_file[k] = src[k]; k++; } g_img_file[k] = 0; }
+    nv = uno_fs_volumes();
+    for (v = 0; v < nv; v++) { sz = uno_fs_size(v, g_img_file); if (sz > 0) { g_img_vol = v; break; } }
+    if (sz <= 0) return 0;
+    um_set_alloc(malloc, free);
+    s.read = img_src_read; s.size = sz; s.ctx = 0;
+    if (!um_image_open(&s, g_img_file, &info)) return 0;
+    if (info.w < 1 || info.h < 1 ||
+        (unsigned)info.w * (unsigned)info.h > IMG_MAX_PX) { um_image_close(); return 0; }
+    {   imgent *e = &g_imgs[g_nimgs];
+        unsigned long bytes = (unsigned long)info.w * (unsigned long)info.h * 4ul;
+        int k = 0;
+        while (src[k] && k < 63) { e->name[k] = src[k]; k++; }
+        e->name[k] = 0;
+        e->px = (um_px *)malloc(bytes);
+        if (!e->px) { um_image_close(); return 0; }
+        memset(e->px, 0, bytes);
+        if (um_image_frame(e->px, &delay) != 1) { free(e->px); e->px = 0;
+                                                  um_image_close(); return 0; }
+        um_image_close();
+        e->w = info.w; e->h = info.h;
+        g_nimgs++;
+        *w = e->w; *h = e->h; *handle = e;
+        return 1;
+    }
+}
 static unsigned g_uw_sig;
 
 static void render_uw(const char *src, unoui_rect r, int scroll)
@@ -359,6 +439,10 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
         memset(&m, 0, sizeof m);
         m.text_width = uwm_width;
         m.line_height = uwm_lineh;
+        {   uw_images im;
+            memset(&im, 0, sizeof im);
+            im.resolve = uwi_resolve;
+            uw_set_images(g_dom, &im); }
         uw_add_inline_sheets(g_dom);
         uw_style_document(g_dom, avail, r.h);
         g_uw_h = uw_layout(g_dom, avail, r.h, &m);
@@ -383,7 +467,10 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
              * box rather than silently occupying nothing - the layout is
              * already correct, only the pixels are missing. unomedia lands
              * behind the same uw_images hook. */
-            fb_frame_rect(x, y, c->w, c->h, PG_RULE);
+            if (c->image) {
+                const imgent *e = (const imgent *)c->image;
+                fb_blit(x, y, e->w, e->h, (const fb_px *)e->px, e->w);
+            } else fb_frame_rect(x, y, c->w, c->h, PG_RULE);
             break;
         case UW_CMD_TEXT: {
             char buf[256];
@@ -487,8 +574,24 @@ static const char kScript[] =
 
 static long fs_load(int vol, const char *name, char *buf, long max);   /* fwd */
 
-static void detect_kind(const char *name) { int n=(int)strlen(name);
-    g_is_html = (n>5 && !strcmp(name+n-5,".html")) || (n>4 && !strcmp(name+n-4,".htm")); }
+/* Extensions are matched case-INSENSITIVELY: FAT hands back 8.3 names in
+ * upper case, so a case-sensitive compare recognised "page.html" but not the
+ * "PAGE.HTM" the file system actually reports - every local HTML file on a
+ * real disk rendered as plain text. */
+static int ext_is(const char *name, const char *ext)
+{
+    int n = (int)strlen(name), e = (int)strlen(ext), i;
+    if (n <= e) return 0;
+    for (i = 0; i < e; i++) {
+        char a = name[n - e + i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+static void detect_kind(const char *name)
+{ g_is_html = ext_is(name, ".html") || ext_is(name, ".htm"); }
 
 /* Run <script> blocks in g_doc: replace each with its document.write output and
  * collect console.log lines into a "console" panel appended at the end. A tiny

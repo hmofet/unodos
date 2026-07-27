@@ -204,6 +204,15 @@ if [ "$1" != "legacy" ]; then
     for u in unomedia um_audio um_wav um_midi um_mp3 um_aac; do
         pc "$CC" $UCF -c -o "build/uml_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/uml_$u.o"
     done
+    # unomedia IMAGE half - only for BROWSER_ENGINE=uw, where the browser
+    # decodes <img> behind unoweb's uw_images hook.  The default kernel does
+    # not carry the image decoders (Photos links its own copy into PHOTOS.UNO),
+    # so this costs the standard build nothing.
+    if [ "${BROWSER_ENGINE:-}" = "uw" ]; then
+        for u in um_image um_stub um_png um_inflate um_jpg um_gif um_bmp um_tga um_pnm um_qoi um_ico um_webp um_vp8; do
+            pc "$CC" $UCF -c -o "build/umi_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/umi_$u.o"
+        done
+    fi
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
     # vendored uACPI interpreter (third-party -> -w).
     for u in acpi_arena ec_handler smbus_handler acpi_power; do
