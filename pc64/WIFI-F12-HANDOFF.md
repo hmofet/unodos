@@ -1,9 +1,96 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-28 (round 24 - **THE WPA2 CONNECTION COMPLETES ON METAL**.
-auth -> assoc (AID 1) -> full 4-way handshake -> CCMP pairwise key + GTK
-installed -> station authorized. Remaining: no data path demonstrated yet, and
-the AP choice must be forced with `iwl pick`).
+Status: 2026-07-28 (round 25 - the encrypted DATA path is written and builds,
+**metal-pending**. Round 24's WPA2 connection completes: auth -> assoc (AID 1)
+-> full 4-way -> CCMP pairwise key + GTK -> station authorized).
+
+## Round 25 (2026-07-28) — the data path, written but NOT yet proven on metal
+
+Branch `iwlwifi-dhcp`. Everything below is source-level reasoning against the
+Linux driver plus the round-24 metal traces; **nothing here has run on the
+Yoga yet** (the boot stick was not available to reflash). Treat every claim as
+a hypothesis with its verification step attached.
+
+### What was wrong with the data path
+
+1. **RX dropped every encrypted data frame, silently.** With hardware CCMP the
+   firmware decrypts in place and strips **nothing**: the 8-byte CCMP header
+   stays between the MAC header and the LLC/SNAP (mac80211 removes it in
+   `ieee80211_crypto_ccmp_decrypt`; iwlwifi only sets `RX_FLAG_DECRYPTED` and
+   reports `crypt_len = IEEE80211_CCMP_HDR_LEN`), and the MIC is still on the
+   tail. The dispatch tested for the SNAP at `hdr+0` only, so every data frame
+   failed the test and fell out of the `if`. It now probes the SNAP at `hdr+0`
+   **and** `hdr+8`, so it works whichever the fw does.
+2. **Whether the MIC is on the tail is now LEARNED, not guessed.** Trim when it
+   is absent and you truncate a packet by 8 bytes; leave it when it is present
+   and every frame carries 8 stray bytes. An IPv4 `total_length` (or ARP's
+   fixed 28) settles it, so the first frame carrying a length sets `g_rx_mic`
+   and the rest follow. `iwl data` prints the learned value.
+3. **TX built QoS-data frames (subtype 8)** although the association request
+   carries no WMM/HT IE - the AP admits us as a **non-QoS** station, and the fw
+   data queue is allocated on TID 15, which is iwlwifi's non-QoS queue. Plain
+   data frames (subtype 0, 24-byte header) are the default now; `iwl qos 1`
+   flips it live, no reflash.
+4. **Nothing pumped RX while a caller waited for `link()`.** `ip_suite` and
+   `net_dhcp_after_link` poll `link()`, never `recv()`, so a 4-way left in
+   flight after assoc could never finish and the link could never come up.
+   `join_selected()` now pumps the handshake to completion itself, and
+   `link()` pumps while one is pending.
+5. **The nic service was published only by `iwl_nic()`.** A join driven by the
+   step-by-step verbs (`mld`/`auth`/`assoc`/`eapol`) never set `g_bound`, and
+   both `iwl_send` and `iwl_recv` gate on it - so after the round-24 procedure
+   the data path was switched off. It is published the moment the 4-way ends.
+
+### The three known gaps from round 24, closed
+
+- **Stale status.** `iwl_status_str()` returned `g_status`, which holds the last
+  bring-up STAGE message - hence "MVM bring-up gated" on a fully joined card. It
+  now composes the live state (ssid, bssid, channel, RSSI, AID, keys, tx/rx
+  counts) and falls back to `g_status` only when nothing is associated.
+- **Coin-flip AP choice.** `scan_pick()` picked by beacon count, a scan-timing
+  artefact. It picks the strongest **RSSI** now (`energy_a`/`energy_b` from the
+  RX descriptor, `rssi = -max`), band-filtered - 2.4 GHz by default, `iwl band
+  5|any` to widen. `PHY_CONTEXT` is band-aware (band 0 / LMAC 1 above ch 14),
+  so a 5 GHz pick is at least correctly programmed, though untested.
+- **Disagreeing scan channels.** The channel came from the DS Parameter Set,
+  which 5 GHz APs omit. The RX descriptor's `channel` byte (desc+34, the channel
+  the scanner was parked on) wins now; the DS IE is only a fallback.
+
+### How to prove it on metal (the point of the round)
+
+The IP stack binds ONE nic and on this rig that nic is the USB ethernet
+carrying URC - rebinding it to WiFi cuts the only line to the box. So:
+
+1. `iwl connect` (or the round-24 sequence) to associate. `iwl status` should
+   now show `WiFi joined "NimmuNet" bssid ... ch N -NNdBm aid 1 CCMP keys in`.
+2. `iwl data 192.168.2.1` - the encrypted path with the stack untouched. It
+   ARPs three times and listens. Watch for `RXDATA` lines (a data frame parsed:
+   `enc=1` means the CCMP header was there) or `RXDATA DROP` (parsed nothing -
+   the first 8 bytes after the header are dumped so the real layout is visible).
+   `TXRESP` says whether the AP ACKed our transmit.
+3. `iwl netup` - the REAL suite (DHCP, ping, DNS) over WiFi.
+   `pc64_wifi_ipsuite()` borrows the stack, runs it, and hands it back to the
+   exact adapter it came from (re-probing a USB NIC is what brings its RX up
+   dead - see `pc64_net_up`). URC is down for ~30 s, so the result is stashed:
+   read it with **`iwl netres`** once the link is back.
+4. `iwl netwifi` only after netup shows a lease: it leaves the stack on WiFi so
+   URC itself redials over the WiFi link. That is the end-to-end proof, and it
+   burns the ethernet bridge - do not run it first.
+
+If `iwl data` shows RX working but TX unanswered, try `iwl qos 1` and repeat
+before reflashing anything.
+
+### Also this round
+
+- **The Network app can join a network from the GUI**: Scan networks -> pick an
+  SSID (strongest BSS per SSID, with RSSI + channel) -> type the password ->
+  Join, then it leases over WiFi and shows the address. Backed by two new
+  exports, `iwl_scan_aps()` and `iwl_join_ssid()` (appended to the `KX()` seam).
+- A second join can NOT reuse the first one's fw contexts (PHY_CONTEXT ADD on a
+  live context asserts the LMAC), so `iwl_join_ssid()` restarts the radio when
+  contexts already exist.
+- `rtwifi.c` had the identical EAPOL-pointer bug at both call sites; fixed,
+  still **unverified** (no Realtek WiFi hardware here).
 
 ## Round 24 (2026-07-28) — TX fixed; the WPA2 connection COMPLETES on metal
 
