@@ -2085,6 +2085,7 @@ static void mvm_mcc_update(const char *cc)
 static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wait_cmd_done(50);}
 
 /* INIT_EXTENDED_CFG (SYSTEM 0x3) + NVM_ACCESS_COMPLETE (REGNVM 0x0) — unified */
+static void read_mac_addr(void);
 static void mvm_init_unified(void)
 {
     u32 init_flags = (1u<<1);                  /* BIT(IWL_INIT_NVM) */
@@ -2098,12 +2099,51 @@ static void mvm_init_unified(void)
      * Sending 0x6a here made the UMAC ADVANCED_SYSASSERT (error 0x201002fd,
      * last-cmd 0x016a) - proven live with the iwl fwerr verb 2026-07-25. */
     wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
-    /* NVM_GET_INFO for the MAC address */
+    /* NVM_GET_INFO (kept for the sku/phy info it returns; the MAC address does
+     * NOT come from here - Linux reads it from the CSR straps/OTP). */
     { u32 z = 0; int len=0; const u8 *r; send_cmd(GRP_REGNVM, 0x2, 0, &z, 4);
-      r = wait_notif(GRP_REGNVM, 0x2, &len, 200);
-      if (r && len >= 16) { /* general(8) + sku(4) + phy(8); mac addr sits later -
-                               varies by ver; leave g_mac from NVM read below */ }
+      r = wait_notif(GRP_REGNVM, 0x2, &len, 200); (void)r; (void)len; }
+    read_mac_addr();
+}
+
+/* Read our own MAC address out of the card, mirroring
+ * iwl_set_hw_address_from_csr(): try the OEM-fused STRAP pair first and fall
+ * back to the OTP pair, with the same byte flip (iwl_flip_hw_address).
+ *
+ *   family <  22000 : OTP 0x380/0x384,   STRAP 0x388/0x38c
+ *   family >= 22000 : OTP 0x30380/0x30384, STRAP 0x30388/0x3038c
+ *
+ * THIS WAS NEVER DONE. g_mac stayed all-zero, so every frame we transmitted
+ * carried source address 00:00:00:00:00:00, MAC_CONFIG/LINK_CONFIG programmed
+ * the card with a zero address, and mgmt_capture() compared each received
+ * frame's addr1 against zeros - so an auth response could never match even if
+ * the AP sent one. The AP still ACKs at the hardware level (an ACK is generated
+ * for any unicast frame addressed to it, whatever the source), which is exactly
+ * why metal showed TX_STATUS_SUCCESS and no reply. */
+static void read_mac_addr(void)
+{
+    u32 base = (g_family >= FAM_22000) ? 0x30380u : 0x380u;
+    u32 a[2];
+    int try_;
+    for (try_ = 0; try_ < 2; try_++) {
+        /* try 0 = STRAP (OEM fused), try 1 = OTP */
+        u32 off = base + (try_ == 0 ? 8 : 0);
+        const u8 *p0, *p1;
+        a[0] = r32(off); a[1] = r32(off + 4);
+        p0 = (const u8 *)&a[0]; p1 = (const u8 *)&a[1];
+        g_mac[0] = p0[3]; g_mac[1] = p0[2]; g_mac[2] = p0[1]; g_mac[3] = p0[0];
+        g_mac[4] = p1[1]; g_mac[5] = p1[0];
+        /* valid = not multicast, not all-zero */
+        if (!(g_mac[0] & 1) &&
+            (g_mac[0]|g_mac[1]|g_mac[2]|g_mac[3]|g_mac[4]|g_mac[5])) {
+            uno_dbg_net_trace("wifi: MAC %02x:%02x:%02x:%02x:%02x:%02x (from %s)",
+                              g_mac[0],g_mac[1],g_mac[2],g_mac[3],g_mac[4],g_mac[5],
+                              try_ == 0 ? "STRAP" : "OTP");
+            return;
+        }
     }
+    uno_dbg_net_trace("wifi: MAC address NOT readable from CSR straps/OTP "
+                      "(%08x %08x) - association cannot work", a[0], a[1]);
 }
 
 /* PHY_CONTEXT_CMD ADD on a 2.4GHz channel (v3+, 32 bytes) */
@@ -3753,6 +3793,8 @@ static int caps_dump(char *out, int cap)
                       "alive_notif_ver=%d n_scan_ch=%d",
                       g_fw.phy_sku, fw_valid_tx_ant(), fw_valid_rx_ant(),
                       g_fw.alive_notif_ver, g_fw.n_scan_channels);
+    uno_dbg_net_trace("wifi: caps: our MAC %02x:%02x:%02x:%02x:%02x:%02x",
+                      g_mac[0], g_mac[1], g_mac[2], g_mac[3], g_mac[4], g_mac[5]);
     for (i = 0; i < sizeof t / sizeof t[0]; i++)
         uno_dbg_net_trace("wifi: caps:   capa %3d %-18s = %d", t[i].bit, t[i].name,
                           fw_has_capa(t[i].bit));
