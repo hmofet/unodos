@@ -22,6 +22,10 @@
 
 #define MAXVOL   8
 #define SECT     512
+/* sectors per write when mkfs zeroes the FAT region (16 KB of .bss) - see the
+ * batching note in uno_fat_mkfs; 1 sector per call cannot format a large disk
+ * inside the freeze watchdog's window */
+#define MKFS_ZSECS 32
 #define CH_N     8                          /* sector cache lines            */
 #define MAXCLUS_WALK 0x100000               /* chain loop guard              */
 
@@ -906,13 +910,39 @@ int uno_fat_mkfs(uno_bdev *dev, unsigned long long first_lba,
     fat0    = first_lba + 32;                                      /* after reserved       */
     dataLba = fat0 + 2 * fatsz;                                    /* cluster 2            */
 
-    /* 1. zero the reserved + FAT region so every unused cluster reads free */
+    /* 1. zero the reserved + FAT region so every unused cluster reads free.
+     *
+     * Batched, and it pets the watchdog. This used to issue ONE 512-byte write
+     * per sector, which is fine on a stick but brutal on a whole-disk ESP: a
+     * 500 GB FAT32 carries ~15.3 M clusters => ~119 000 FAT sectors per copy,
+     * so ~238 000 single-sector writes. That blocks the shell's main loop for
+     * minutes, and the debug freeze watchdog (20 s) reset the box mid-format -
+     * leaving a disk whose GPT had been rewritten but whose volume was never
+     * formatted, i.e. the old install erased and nothing bootable in its place.
+     * Seen on the ZimaBlade 2026-07-28 when `install 1` targeted a 500 GB disk.
+     *
+     * Writing MKFS_ZSECS sectors per call cuts the call count by that factor,
+     * and uno_dbg_heartbeat() keeps the watchdog satisfied however long the
+     * rest takes (a no-op macro in production builds). */
+    {
+        static uint8_t zbuf[MKFS_ZSECS * SECT];   /* .bss - too big for the stack */
+        unsigned long long n;
+        memset(zbuf, 0, sizeof zbuf);
+        for (lba = first_lba; lba < dataLba; lba += n) {
+            n = dataLba - lba;
+            if (n > MKFS_ZSECS) n = MKFS_ZSECS;
+            if (!dev->write(dev, lba, (unsigned int)n, zbuf)) return 0;
+            uno_dbg_heartbeat();
+        }
+        /* ...and cluster 2 (the empty root directory) */
+        for (i = 0; i < spc; i += MKFS_ZSECS) {
+            unsigned int c = (unsigned int)(spc - i);
+            if (c > MKFS_ZSECS) c = MKFS_ZSECS;
+            if (!dev->write(dev, dataLba + (unsigned)i, c, zbuf)) return 0;
+        }
+        uno_dbg_heartbeat();
+    }
     memset(sec, 0, SECT);
-    for (lba = first_lba; lba < dataLba; lba++)
-        if (!dev->write(dev, lba, 1, sec)) return 0;
-    /* ...and cluster 2 (the empty root directory) */
-    for (i = 0; i < spc; i++)
-        if (!dev->write(dev, dataLba + (unsigned)i, 1, sec)) return 0;
 
     /* 2. FAT sector 0 of each copy: the three reserved entries (rest stays 0) */
     memset(sec, 0, SECT);
