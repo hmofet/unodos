@@ -296,6 +296,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_CPTAB, ID_NETREFRESH, ID_SESSION,
+       ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -372,6 +373,76 @@ static char g_cp_net[5][52];
 static char *ap_str(char *p, const char *s);   /* fwd (defined below) */
 static char *ap_int(char *p, int v);
 static void clamp_to_workarea(unoui_window *w);
+static void rebuild_ctrl_window(void);
+
+/* ---- Network tab: join a WiFi network -------------------------------------
+ * Scan -> pick an SSID -> type the passphrase -> Join. The driver calls block
+ * for seconds (a scan is a 5 s dwell; a join is association + the 4-way), and
+ * the shell loop is what would normally repaint - so each one paints its own
+ * "working" line first and presents it directly, the same trick the installer's
+ * progress uses. WIFI.CFG still works; this is the runtime alternative. */
+#define CP_WIFI_MAX 8
+static iwl_ap_t    g_cp_aps[CP_WIFI_MAX];
+static char        g_cp_ap_lbl[CP_WIFI_MAX][44];
+static const char *g_cp_ap_ptr[CP_WIFI_MAX];
+static int         g_cp_ap_n, g_cp_ap_sel;
+static char        g_cp_psk[72];
+static unoui_text  g_cp_psk_t;
+static char        g_cp_wifi_msg[72] = "Press Scan to look for networks.";
+static char        g_cp_wifi_stat[196];
+
+/* update the status line and paint it NOW (we are about to block) */
+static void cp_wifi_note(const char *s)
+{
+    char *p = g_cp_wifi_msg;
+    while (*s && p < g_cp_wifi_msg + sizeof g_cp_wifi_msg - 1) *p++ = *s++;
+    *p = 0;
+    unoui_render_ui(&UI);
+    uno_pc64_present();
+}
+
+static void cp_wifi_scan(void)
+{
+    int i;
+    cp_wifi_note("Scanning for networks...");
+    g_cp_ap_n = iwl_scan_aps(g_cp_aps, CP_WIFI_MAX);
+    for (i = 0; i < g_cp_ap_n; i++) {
+        char *p = ap_str(g_cp_ap_lbl[i], g_cp_aps[i].ssid);
+        p = ap_str(p, "   ");
+        if (g_cp_aps[i].rssi) { p = ap_int(p, g_cp_aps[i].rssi); p = ap_str(p, " dBm"); }
+        p = ap_str(p, "   ch "); p = ap_int(p, g_cp_aps[i].chan);
+        *p = 0;
+        g_cp_ap_ptr[i] = g_cp_ap_lbl[i];
+    }
+    g_cp_ap_sel = 0;
+    cp_wifi_note(g_cp_ap_n ? "Pick a network, type its password, then Join."
+                           : "No networks found - is the card blocked by rfkill?");
+    rebuild_ctrl_window();
+}
+
+static void cp_wifi_join(void)
+{
+    uno_nic_t *nic;
+    int i;
+    if (g_cp_ap_n <= 0) { cp_wifi_note("Scan first."); return; }
+    g_cp_psk[g_cp_psk_t.len] = 0;
+    cp_wifi_note("Joining...");
+    if (iwl_join_ssid(g_cp_aps[g_cp_ap_sel].ssid, g_cp_psk) != 0) {
+        cp_wifi_note("Join failed - check the password (details in the NET log).");
+    } else {
+        cp_wifi_note("Joined - asking for an address...");
+        nic = iwl_nic();
+        if (nic) {
+            net_init(nic, iwl_mac());       /* the stack binds one nic: WiFi now */
+            net_dhcp_start();
+            for (i = 0; i < 1800 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); }
+        }
+        cp_wifi_note(net_dhcp_done() ? "Connected." : "Joined, but no address yet.");
+    }
+    for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0;   /* do not keep it */
+    g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
+    rebuild_ctrl_window();
+}
 
 static void build_ctrl(unoui_window *w)
 {
@@ -469,8 +540,35 @@ static void build_ctrl(unoui_window *w)
         for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y + lofs, g_cp_net[i]); y += row; }
         y += 2;
         x = unoui_add_button(w, 8, y, 110, "Refresh", 0); x->id = ID_NETREFRESH;
-        unoui_add_label(w, 130, y + lofs, "DHCP is automatic; WiFi via WIFI.CFG");
+        unoui_add_label(w, 130, y + lofs, "DHCP is automatic.");
         y += bh + 8;
+        /* ---- WiFi: scan, pick, type the password, join ---- */
+        if (iwl_present()) {
+            int pw = fb_text_w("Password:") + 10;
+            unoui_add_sep(w, 8, y, cw - 16); y += 8;
+            iwl_status_str(g_cp_wifi_stat, sizeof g_cp_wifi_stat);
+            unoui_add_label(w, 8, y + lofs, "WiFi:");
+            unoui_add_label(w, 8 + fb_text_w("WiFi:") + 8, y + lofs,
+                            g_cp_wifi_stat[0] ? g_cp_wifi_stat : "Intel WiFi card present.");
+            y += fh + 8;
+            if (g_cp_ap_n > 0) {
+                x = unoui_add_list(w, 8, y, cw - 16, 5 * (fh + 4) + 6,
+                                   g_cp_ap_ptr, g_cp_ap_n, g_cp_ap_sel);
+                x->id = ID_WIFILIST;
+                y += 5 * (fh + 4) + 12;
+            }
+            unoui_add_label(w, 8, y + lofs, "Password:");
+            unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
+            g_cp_psk_t.len = (int)strlen(g_cp_psk);
+            g_cp_psk_t.caret = g_cp_psk_t.sel = g_cp_psk_t.len;
+            x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
+            y += row;
+            x = unoui_add_button(w, 8, y, 110, "Scan", 0); x->id = ID_WIFISCAN;
+            x = unoui_add_button(w, 126, y, 110, "Join", 0); x->id = ID_WIFIJOIN;
+            y += bh + 6;
+            unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
+            y += fh + 8;
+        }
         break; }
 
     case CT_AUDIO:
@@ -2260,6 +2358,10 @@ static void on_action(const unoui_action *a)
     case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
                        g_ctrl_tab = a->value; rebuild_ctrl_window(); } break;
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
+    case ID_WIFILIST:  if (a->value >= 0 && a->value < g_cp_ap_n) g_cp_ap_sel = a->value; break;
+    case ID_WIFISCAN:  cp_wifi_scan(); break;
+    case ID_WIFIJOIN:  cp_wifi_join(); break;
+    case ID_WIFIPSK:   break;                               /* typing; nothing to do */
     case ID_SESSION: g_session_restore = a->value ? 1 : 0; session_save(); break;
     case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
     case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; break;

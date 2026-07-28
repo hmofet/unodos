@@ -3725,7 +3725,12 @@ const unsigned char *iwl_mac(void) { return g_mac; }
  * ALIVE + the post-ALIVE MVM init. Idempotent. */
 static int radio_up(void)
 {
-    if (g_alive && g_mvm_done) return 0;
+    /* g_bound/g_joined mean the card is already up and initialised - by the
+     * step-by-step debug verbs, which do the same MVM init without setting
+     * g_mvm_done. Without this the GUI's Scan silently did nothing on a box
+     * that had been driven by hand (metal, round 25): iwl_nic() returns the
+     * cached nic immediately when bound, so g_mvm_done could never become 1. */
+    if (g_alive && (g_mvm_done || g_bound || g_joined)) return 0;
     g_mvm_arm = 1;                       /* past the boot-path MVM gate */
     g_no_join = 1;
     iwl_nic();
@@ -4117,6 +4122,11 @@ static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
     /* drain anything already queued so the counts below are about THIS probe */
     while (g_dq_tail != g_dq_head) g_dq_tail = (g_dq_tail + 1) % DATAQ;
     if (target_ip) {
+        /* Sender IP: an RFC-5227 probe (spa 0.0.0.0) is NOT reliably answered,
+         * which is exactly how the first metal run produced "no data frames"
+         * on a link that turned out to work perfectly under real DHCP. Use a
+         * link-local address derived from our MAC instead - a real address,
+         * off everyone's subnet, so a reply comes back and nothing collides. */
         memset(eth, 0xff, 6);                       /* broadcast */
         memcpy(eth + 6, g_mac, 6);
         eth[12] = 0x08; eth[13] = 0x06;             /* ARP */
@@ -4124,7 +4134,9 @@ static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
         eth[16] = 0x08; eth[17] = 0x00;             /* ptype IPv4 */
         eth[18] = 6; eth[19] = 4; eth[20] = 0; eth[21] = 1;   /* request */
         memcpy(eth + 22, g_mac, 6);
-        memset(eth + 28, 0, 4);                     /* spa 0.0.0.0 (ARP probe) */
+        eth[28] = 169; eth[29] = 254;               /* spa 169.254.x.y */
+        eth[30] = g_mac[4] ? g_mac[4] : 1;
+        eth[31] = g_mac[5] ? g_mac[5] : 2;
         memset(eth + 32, 0, 6);
         memcpy(eth + 38, target_ip, 4);
         for (i = 0; i < 3; i++) {
@@ -4269,6 +4281,11 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     u32 a, v;
     int i;
     if (!line || !out || cap < 12) return -1;
+    /* Drain the RX ring on every command. Once the card is joined but the IP
+     * stack is bound elsewhere (the debug rig: URC rides the ethernet), nothing
+     * calls iwl_recv, the fw runs out of free RBs and eventually ASSERTS - which
+     * is what happened minutes after the first successful DHCP run. */
+    if (g_bound && g_joined) rx_pump_once();
     if (!strncmp(line, "dmar off", 8)) { iommu_disable(out, cap); return (int)strlen(out); }
     if (!strncmp(line, "dmar", 4)) return dmar_check(out, cap);
     if (!strncmp(line, "rerun", 5)) {
@@ -4433,10 +4450,10 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         mvm_scan_cfg();
         n = mvm_scan_passive(5000);
         for (i = 0; i < n; i++)
-            uno_dbg_net_trace("wifi: scan[%d] %02x:%02x:%02x:%02x:%02x:%02x ch=%d seen=%d ssid=\"%s\"",
+            uno_dbg_net_trace("wifi: scan[%d] %02x:%02x:%02x:%02x:%02x:%02x ch=%d rssi=%d seen=%d ssid=\"%s\"",
                               i, g_scan_aps[i].bssid[0], g_scan_aps[i].bssid[1], g_scan_aps[i].bssid[2],
                               g_scan_aps[i].bssid[3], g_scan_aps[i].bssid[4], g_scan_aps[i].bssid[5],
-                              g_scan_aps[i].chan, g_scan_aps[i].seen, g_scan_aps[i].ssid);
+                              g_scan_aps[i].chan, g_scan_aps[i].rssi, g_scan_aps[i].seen, g_scan_aps[i].ssid);
         /* also pick the configured SSID so the 'iwl mld <n>' stepper has a real
          * BSSID/channel to work with without going through 'iwl join' */
         if (scan_pick() == 0)
@@ -4608,6 +4625,7 @@ void iwl_status_str(char *buf, int cap)
         ss_cat(buf, cap, &i, " tx ");   ss_dec(buf, cap, &i, (int)g_tx_data_n);
         ss_cat(buf, cap, &i, " rx ");   ss_dec(buf, cap, &i, (int)g_rx_data_n);
         if (g_rx_data_drop) { ss_cat(buf, cap, &i, " drop "); ss_dec(buf, cap, &i, (int)g_rx_data_drop); }
+        if (g_bar && r32(CSR_MSIX_HW_INT_CAUSES_AD)) ss_cat(buf, cap, &i, " [fw ASSERTED]");
         return;
     }
     while (g_status[i] && i < cap-1) { buf[i] = g_status[i]; i++; }
