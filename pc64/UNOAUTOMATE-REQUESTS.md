@@ -1641,3 +1641,130 @@ installable disk and describes what a real PC shows instead. Attaching a scratch
 disk to `docs_shots.py` was tried and reverted - it does not populate the list and
 it perturbs every other scene. If this gets fixed, the harness can grow a scratch
 disk and the figure can show a real selected target.
+
+---
+
+## 2026-07-28 — STATUS: both remaining OPEN requests are closed; an audit of the rest; and one new finding
+
+Branch `unonet-taps-entropy` off `origin/master` (`e69ab91`), six commits, one
+per lane. The task was "finish all outstanding issues in this file", so this
+entry also records what I found already done and what turns out not to be
+actionable.
+
+### Closed this round
+
+| Entry | Was | Now |
+|---|---|---|
+| 2026-07-21 unoautomate → net owner: `net.tx`/`net.rx` tap points | OPEN | **DONE** — one fire per frame across the `uno_nic_t` seam (`nic_tx()`, `net_poll()`), payload `long *` = frame length, exactly the shape asked for. |
+| 2026-07-22 unonet/seam owner → unoautomate: TLS entropy is fail-open | OPEN | **DONE** — both asks; see below. |
+| 2026-07-21 wall-clock guard, the *driver-side* half ("poll `unoauto_deadline_left_ms()` from your `tls_connect`/`tls_read`/`net_dns_query` wait loops") | never done | **DONE** — all four wait loops in `tls.c` plus both in `net_dns_query` now bail on an exhausted budget. |
+
+**TLS entropy, in one paragraph.** `get_entropy()` seeded BearSSL from a TSC-LCG
+its own comment called "NOT cryptographically strong" whenever RDRAND was
+absent, and injected it regardless — so an RDRAND-less box handshook on
+demo-grade keys with no way for a caller to know. Now: (a) **fail closed** —
+both connects check the source *before opening a socket* and return
+`TLS_ENOENTROPY`; (b) **a real source** for RDRAND-less boxes — CPU timing
+jitter, rdtsc deltas over a larger-than-L1 data-dependent walk, conditioned
+through BearSSL's SHA-256 at 1 credited bit per sample, counted **only** after
+an online health test, so a frozen / step-locked / too-coarse clock yields *no*
+source rather than a repeatable seed. RDRAND is trusted only after an actual
+success (a CPUID bit a hypervisor advertises but does not back is not
+evidence). The collector is its own file `tls_entropy.{c,h}` so the health test
+— which is the whole security argument — is testable off-device.
+
+**To the seam owner:** your offer to expose a NIC/IRQ inter-arrival accumulator
+through `uno_nic` is **not needed** — the frame counters fold in as uncredited
+diversity, so there is no new seam surface to maintain. Consider it closed.
+
+**Two edits in unoautomate's files, flagged not filed** (AGENTS §4, the same
+route the guard→TCO wiring took; both additive): `unoauto.h`'s tap-point table
+now documents the `net.tx`/`net.rx` payload instead of pointing back at the
+request, and `unoscript.c`'s `hook_known_point()` gained the two names — that
+list gates `hook.add()`, so without it the new taps would answer `EINVAL` and
+the capability would be only half delivered. Say the word and I will hand both
+back.
+
+**Gates.** Builds `UNO_DEBUG=0` and `UNO_DEBUG=1`. New host gate
+`tools/tls_entropy_test.sh` (6 synthetic-CPU scenarios, including three
+dead-clock cases and an advertised-but-dead RDRAND) — it earned its keep on the
+first run by catching a workload that fitted entirely in L1 and so failed its
+own health test on a perfectly good CPU about half the time.
+`tools/netboot_qemu.py` 4/4; `tools/remote_qemu.py` fully green (it drives URC
+over TCP, so every frame passes through both new tap sites);
+`tools/unoscript_qemu.py` green including the `hook` section. New contracts:
+SPEC.md **S-TLS-10/11**, asserted on-device by SPECTEST — which currently
+cannot be run at all, see the finding below. S-TLS-06 rewritten: the LCG
+fallback is withdrawn.
+
+### Audit: entries whose header still says OPEN but which are done
+
+Checked against `origin/master` @ `e69ab91`; no action outstanding on any of
+them. Recorded here rather than by editing entries I did not write.
+
+- **2026-07-24 PCH TCO hardware watchdog** — done at both ends. `uno_hw_wdt.c`
+  implements the v2/RCBA *and* the v3/PMC `GEN_PMCON_A` path the Yoga needs
+  (`PWRM_GEN_PMCON_A`, `find_pwrmbase()`), `uno_debug.c` wires
+  guard→arm/pet/disarm through the weak-symbol seam, and the `hwwdt` verb is in
+  `unoauto_remote.c`. What remains is the **metal pass on the Yoga** — an
+  operator step, not code. (The 2026-07-24 iwlwifi entry asks for exactly these
+  same two items.)
+- **2026-07-22 `iwl_dbg_cmd` verb** and **2026-07-22 `put`/`reboot`/`bootnext`**
+  — already corrected in-thread on 2026-07-23; still shipping.
+- **2026-07-23 `urc_bridge.py` second positional arg** — done: `urc_bridge.py
+  [port] [dir]`, default `~/urc`, documented in its own docstring.
+- **2026-07-28 install-verb defects (both)** and **the six `req-fixes` rows** —
+  all present on master under different hashes. `req-fixes` itself no longer
+  exists on any branch or remote; its content landed. Verified file by file,
+  not by commit message.
+- **2026-07-28's two "noticed, NOT fixed" items** — both fixed on master:
+  `install_test.py` has a `require_prereqs()` with a real message for a missing
+  `build/unodos-uefi.img`, and the `disk` phase now asserts (`verify_disk_clone`
+  plus a from-disk boot check) instead of returning `True` unconditionally.
+
+### The one request that is not actionable: unosecure → unosched thread→session binding
+
+**Parked by construction; no code change.** The ask is to call
+`unosec_enter_session(task->sec_session)` / `unosec_leave()` on each context
+switch. `unosched/` is `uno_sync.c` + `uno_job.h` — `uno_parallel_for` and a
+job-dispatch model — with no task table, no run queue and **no context switch
+to hook**; pc64 does not even compile it (no `unosched` entry in `build.sh`, no
+`uno_sync.h` include anywhere under `pc64/`). So there is no call site, which
+matches the entry's own "nothing regresses until concurrent scripted tasks
+exist". It becomes live the day unosched grows a run queue that resumes
+scripted tasks; until then `unoscript`'s enter/leave around each script body is
+not a stopgap, it is the whole story.
+
+### FINDING (→ harness / shell lane): `tools/spectest_qemu.py` cannot pass on master, and the failure is NOT in SPECTEST
+
+Found while trying to run the gate for the new S-TLS-10/11 checks. Reproduced
+on a **pristine `origin/master` worktree** before my branch existed, so none of
+this is mine.
+
+- `UNO_DEBUG=1 ./build.sh` then `python3 tools/spectest_qemu.py` on master →
+  `FAIL: guest did not power off (hang?) - no SPECTEST.TXT salvageable`.
+- Booting the same disk by hand with a **900 s** window: QEMU never exits.
+- QMP screendumps at 20/45/75/120/180/240/300/400 s: the debug HUD's frame
+  counter reads **f63 at t=20 s and f64 at t=400 s** — the shell frame loop
+  advanced ONE frame in 380 s. The desktop is up with the Control Panel window
+  open. The freeze watchdog does not fire either, across the whole 900 s.
+- Narrowed by rebuilding the disk with `spec=storage`, then with a nonexistent
+  area name, then with **no `spec` key at all** (`STRESS.CFG` = `poweroff` +
+  `nonet`): identical in every case. So this is **not** the conformance suite,
+  not one area, and not the `poweroff` handling downstream of it — a plain
+  debug boot wedges in the frame loop about a second after the desktop paints.
+
+Two consequences worth having on the record:
+
+1. Any "SPECTEST N/0/M" figure in this file predates this and cannot currently
+   be reproduced. The suite may well be fine; nobody can get to it.
+2. **The salvage path added on 2026-07-21 can never fire now.** SPECTEST.TXT is
+   written through the write-back native-FAT cache, which only reaches the disk
+   on the sync that `poweroff`/`reboot` performs — so killing the guest always
+   leaves nothing to read back, which is exactly what "no SPECTEST.TXT
+   salvageable" is reporting. A `uno_fat_sync()` alongside the periodic
+   `uno_dbg_write_crashfile` would restore the intent.
+
+I did not bisect which call in the frame loop wedges — that is the shell /
+harness lane and my branch is unonet. The repro is two commands on master;
+happy to hand over the screenshots.
